@@ -1,6 +1,6 @@
 # Status of openverse_store
 
-- Law: `project/harness/store_rollback_model.c`, pinned to openverse commit e89f1940b539.
+- Law: `project/harness/store_rollback_model.c`, pinned to openverse commit 7c0444b2117b.
 - `qp check`: native runs (ASan/UBSan, 3,000) ok; CompCert interpreter (20 runs) no stop; VST lint clean;
   mutants 26/40 killed (`CHECK.md`, read in `CHECK-NOTES.md`).
 - **Proof: `store_rollback_model` PROVED, `qp verify` PASS** (`VERIFY.md`); axioms: 12, standard + VST

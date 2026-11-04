@@ -1,31 +1,31 @@
 # qp verify of openverse_store
 
-Run by `scripts/check-quickproof.sh store` (with `QP_JOBS=3`) on 2026-11-04: a contract freshly assembled from the
+Run by `scripts/check-quickproof.sh --check store` (with `QP_JOBS=3`) on 2026-11-04: a contract freshly assembled from the
 pinned openverse commit, with `proof/src/` copied over it and committed, checked by `qp verify --brief`.
 
 ```
-[0:00] qp verify: a fresh clone of <work>/openverse_store-proof at 8a450d262fc6
+[0:00] qp verify: a fresh clone of <work>/openverse_store-proof at 51d12cc87e0b
 [0:00] framework: the 16 trusted files are identical to this verifier's
 [0:00] frozen files: 19 files changed since the contract (`contract`), none of them frozen
-[0:02] Clight generated again: identical to the committed files
-[3:06] build: 16/28 files
-[3:28] build: 17/28 files
-[3:56] build: 20/28 files
-[7:04] build: 23/28 files
-[10:11] build: 26/28 files
-[15:34] build: 28/28 files
-[15:43] build: 28/28 files, 940 s
-[15:44] statements and axioms: 1 theorem probed
-[16:26] the contract commit a28f06c47540: a clone, its statements built without the proof
-[16:39] build of the contract commit: 7/7 files, 12 s
-[16:41] statements and axioms of the contract commit: 1 theorem probed
-[16:52] statements compared with the contract: identical
-[16:52] Admitted, admit, Axiom, Parameter, Conjecture in the sources of the proof: none
+[0:00] Clight generated again: identical to the committed files
+[1:17] build: 16/28 files
+[1:28] build: 17/28 files
+[1:45] build: 20/28 files
+[3:06] build: 23/28 files
+[4:57] build: 26/28 files
+[8:24] build: 28/28 files
+[8:29] build: 28/28 files, 508 s
+[8:30] statements and axioms: 1 theorem probed
+[8:53] the contract commit 230cf5a1dc16: a clone, its statements built without the proof
+[9:01] build of the contract commit: 7/7 files, 6 s
+[9:01] statements and axioms of the contract commit: 1 theorem probed
+[9:09] statements compared with the contract: identical
+[9:09] Admitted, admit, Axiom, Parameter, Conjecture in the sources of the proof: none
 
 theorem               result  axioms
 store_rollback_model  PROVED  12: standard + VST malloc
 
-The full report: <work>/home/.cache/quickproof/verify/openverse_store-proof-8a450d262f/VERIFY.md
+The full report: <work>/home/.cache/quickproof/verify/openverse_store-proof-51d12cc87e/VERIFY.md
 Verdict: PASS (exit 0).
 ```
 

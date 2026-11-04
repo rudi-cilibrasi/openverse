@@ -1,26 +1,26 @@
 # qp verify of openverse_arith
 
-Run by `scripts/check-quickproof.sh arith` on 2026-11-03: a contract freshly assembled from the pinned
-openverse commit, with `proof/src/` copied over it and committed, checked by `qp verify --brief`.
+Run by `scripts/check-quickproof.sh --check arith` (with `QP_JOBS=3`) on 2026-11-04: a contract freshly assembled from the
+pinned openverse commit, with `proof/src/` copied over it and committed, checked by `qp verify --brief`.
 
 ```
-[0:00] qp verify: a fresh clone of <work>/openverse_arith-proof at 6a9b4511015e
+[0:00] qp verify: a fresh clone of <work>/openverse_arith-proof at df223980c124
 [0:00] framework: the 16 trusted files are identical to this verifier's
 [0:00] frozen files: 7 files changed since the contract (`contract`), none of them frozen
 [0:00] Clight generated again: identical to the committed files
-[1:50] build: 16/16 files
-[4:09] build: 16/16 files, 248 s
-[4:11] statements and axioms: 1 theorem probed
-[4:29] the contract commit 506258ac3db1: a clone, its statements built without the proof
-[4:36] build of the contract commit: 7/7 files, 6 s
-[4:38] statements and axioms of the contract commit: 1 theorem probed
-[4:47] statements compared with the contract: identical
-[4:47] Admitted, admit, Axiom, Parameter, Conjecture in the sources of the proof: none
+[1:12] build: 16/16 files
+[3:23] build: 16/16 files, 202 s
+[3:24] statements and axioms: 1 theorem probed
+[3:42] the contract commit c4ddcb0fd2e9: a clone, its statements built without the proof
+[3:49] build of the contract commit: 7/7 files, 6 s
+[3:50] statements and axioms of the contract commit: 1 theorem probed
+[3:58] statements compared with the contract: identical
+[3:59] Admitted, admit, Axiom, Parameter, Conjecture in the sources of the proof: none
 
 theorem      result  axioms
 arith_exact  PROVED  10: standard + VST malloc
 
-The full report: <work>/home/.cache/quickproof/verify/openverse_arith-proof-6a9b451101/VERIFY.md
+The full report: <work>/home/.cache/quickproof/verify/openverse_arith-proof-df223980c1/VERIFY.md
 Verdict: PASS (exit 0).
 ```
 

@@ -1,6 +1,6 @@
 # Status of openverse_loader
 
-- Law: `project/harness/loader_wellscoped.c`, pinned to openverse commit e89f1940b539.
+- Law: `project/harness/loader_wellscoped.c`, pinned to openverse commit 7c0444b2117b.
 - `qp check`: native runs (ASan/UBSan, 3,000) ok; CompCert interpreter (20 runs) no stop; VST lint clean;
   mutants 8/40 killed (`CHECK.md`, read in `CHECK-NOTES.md`).
 - **Proof: `loader_wellscoped` PROVED, `qp verify` PASS** (`VERIFY.md`); axioms: 13, standard + VST

@@ -1,6 +1,6 @@
 # Status of openverse_arith
 
-- Law: `project/harness/arith_exact.c`, pinned to openverse commit e89f1940b539.
+- Law: `project/harness/arith_exact.c`, pinned to openverse commit 7c0444b2117b.
 - `qp check`: native runs (ASan/UBSan, 3,000) ok; CompCert interpreter (20 runs) no stop; VST lint clean;
   mutants 29/40 killed (`CHECK.md`, read in `CHECK-NOTES.md`: 10 equivalent, 1 reachable only at
   `(INT64_MIN, -1)`).
