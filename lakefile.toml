@@ -1,0 +1,10 @@
+name = "openverse"
+version = "0.1.0"
+defaultTargets = ["OpenVerse", "openverse"]
+
+[[lean_lib]]
+name = "OpenVerse"
+
+[[lean_exe]]
+name = "openverse"
+root = "Main"

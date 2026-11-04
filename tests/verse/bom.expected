@@ -1,0 +1,3 @@
+a byte order mark at the start of a file is skipped
+café: other UTF-8 in strings is kept
+exit=0

@@ -1,0 +1,13 @@
+sorted: -2, 0, 3, 3, 5, 7, 9
+7 is at index 5
+4 is not there
+primes: 2, 3, 5, 7, 11, 13, 17, 19, 23, 29
+reversed: desserts
+Fizz
+Buzz
+11
+Fizz
+13
+14
+FizzBuzz
+exit=0

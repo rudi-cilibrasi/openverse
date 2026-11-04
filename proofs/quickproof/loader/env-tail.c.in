@@ -1,0 +1,31 @@
+
+static uint8_t env_buf[4096];
+static size_t env_len;
+
+size_t nondet_size(void) {
+    size_t i, s = (size_t)(quickproof_rnd() % NSAMPLES);
+    env_len = sizes[s];
+    for (i = 0; i < env_len; i++) env_buf[i] = samples[s][i];
+    switch (quickproof_rnd() % 6) {
+    case 0: /* one random byte */
+        if (env_len > 0) env_buf[quickproof_rnd() % env_len] = (uint8_t)quickproof_rnd();
+        break;
+    case 1: /* truncated */
+        if (env_len > 0) env_len = (size_t)(quickproof_rnd() % env_len);
+        break;
+    case 2: /* one byte bumped: off-by-one indices and counts */
+        if (env_len > 0) { size_t k = quickproof_rnd() % env_len; env_buf[k] = (uint8_t)(env_buf[k] + 1); }
+        break;
+    default: /* as written */
+        break;
+    }
+    return env_len;
+}
+
+void nondet_bytes(uint8_t *buf, size_t n) {
+    size_t i;
+    for (i = 0; i < n; i++) buf[i] = i < env_len ? env_buf[i] : (uint8_t)quickproof_rnd();
+}
+
+uint8_t nondet_u8(void) { return (uint8_t)quickproof_rnd(); }
+uint32_t nondet_u32(void) { return (uint32_t)quickproof_rnd(); }

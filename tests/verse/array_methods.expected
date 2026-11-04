@@ -1,0 +1,13 @@
+Slice[1, 3] = [20 30]
+Slice[3] = [40 50]
+Slice[4, 2] fails
+Find[30] = 2
+Find[31] fails
+RemoveElement[0] = [20 30 40 50]
+RemoveElement[5] fails
+ReplaceElement[4, 7] = [10 20 30 40 7]
+Insert[2, array{1, 2}] = [10 20 1 2 30 40 50]
+Insert[5, array{9}] = [10 20 30 40 50 9]
+Insert[6, …] fails
+Verse
+exit=0

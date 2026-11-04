@@ -1,0 +1,11 @@
+set C[0] succeeded
+set C[10] fails: out of range
+C has 4 elements, sum 19; D still sums to 6
+C[1] = 2
+C[4] fails
+Verse! has length 6
+strings compare by value
+order matters
+tuple: 1 two c
+empty: 0
+exit=0

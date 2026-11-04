@@ -1,0 +1,12 @@
+rolled back: Attempts = 0
+committed: Attempts = 1
+0 < 10 gives 0
+5 is a digit
+5 is not <= 3
+-3 is not positive
+or fallback: 42
+option holds 7
+empty option
+logic is true
+Count after not not: 0
+exit=0

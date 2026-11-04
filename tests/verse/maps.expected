@@ -1,0 +1,13 @@
+tomato is not a key, so += fails
+peach: 3000
+lookup of a missing key fails
+2 entries
+peach => 3000
+pelican => 17
+2: b
+1: c
+map equality is order-sensitive and holds here
+...and fails in the other order
+30
+40
+exit=0

@@ -1,0 +1,4 @@
+# The Verse tests are byte-exact (CR LF, lone CR, a byte order mark, control
+# characters, malformed UTF-8): never convert their line endings.
+tests/verse/* -text
+tests/errors/* -text
