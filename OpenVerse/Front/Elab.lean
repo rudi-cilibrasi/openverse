@@ -672,6 +672,8 @@ partial def elabApp (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (brack
           elabIndexLike ctx p ⟨.call s.idx [], s.ret⟩ args bracket
         else
           if s.decides && !bracket then eerr p s!"{name} is <decides>: call it with {name}[…]"
+          -- the call syntax marks failure (Book of Verse §8.1)
+          if !s.decides && bracket then eerr p s!"{name} cannot fail: call it with {name}(…)"
           if !s.tparams.isEmpty then return ← elabGenericCall ctx p s args exp
           let isNamed : SExpr → Bool
             | .decl _ n _ _ _ => n.startsWith "?"
