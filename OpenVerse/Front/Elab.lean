@@ -3102,14 +3102,15 @@ def elabProgramCore (allTops00 : List STop) (opts : Options := {}) : Except Stri
     reprStr (ps.map fun q => (q.named, if q.named then q.name else "", q.ty.substNames ρ))
   -- (per class hierarchy: classes and interfaces connected by inheritance,
   -- so unrelated classes' methods of one name are not overloads)
-  let classParents : List (String × List String) := (allTops00 ++ argsTop ++ entryTop).filterMap fun
-    | .classDef _ n _ _ parents _ _ _ _ => some (n, parents.filterMap fun
-        | .name q => some q | .app q _ => some q | _ => none)
-    | _ => none
-  let mut hier : List (String × String) := classParents.map fun (n, _) => (n, n)
-  for _ in [0:classParents.length + 1] do
-    for (n, qs) in classParents do
-      for q in qs do
+  let classDefs : List (String × List TParam × List STy × List STop) :=
+    (allTops00 ++ argsTop ++ entryTop).filterMap fun
+      | .classDef _ n tps _ parents _ _ _ methods => some (n, tps, parents, methods)
+      | _ => none
+  let parentName : STy → Option String := fun | .name q => some q | .app q _ => some q | _ => none
+  let mut hier : List (String × String) := classDefs.map fun (n, _) => (n, n)
+  for _ in [0:classDefs.length + 1] do
+    for (n, _, ps, _) in classDefs do
+      for q in ps.filterMap parentName do
         match hier.lookup n, hier.lookup q with
         | some a, some b =>
           if a != b then
@@ -3117,28 +3118,72 @@ def elabProgramCore (allTops00 : List STop) (opts : Options := {}) : Except Stri
             hier := hier.map fun (x, h) => if h == a || h == b then (x, r) else (x, h)
         | _, _ => pure ()
   let hierOf (n : String) : String := (hier.lookup n).getD n
-  let decls : List ((String × String) × String × Nat) := (allTops00 ++ argsTop ++ entryTop).flatMap fun
-    | .classDef _ cn ctps _ _ _ _ _ methods => methods.filterMap fun
+  -- each class's ancestors (itself first), each with its type parameters in
+  -- the class's terms
+  let infoOf (n : String) := (classDefs.find? (·.1 == n)).map fun (_, tps, ps, ms) => (tps, ps, ms)
+  let mut anc : List (String × List (String × List (String × STy))) :=
+    classDefs.map fun (n, _) => (n, [(n, [])])
+  for _ in [0:classDefs.length + 1] do
+    let mut changed := false
+    for (n, _, ps, _) in classDefs do
+      let mine := (anc.lookup n).getD []
+      let mut add : List (String × List (String × STy)) := []
+      for pty in ps do
+        let (q, args) := match pty with | .app q as => (q, as) | .name q => (q, []) | _ => ("", [])
+        let qtps := ((infoOf q).map (·.1)).getD []
+        let σq : List (String × STy) := (qtps.map (·.name)).zip args
+        for (y, σy) in (anc.lookup q).getD [] do
+          if !(mine ++ add).any (·.1 == y) then
+            let σ := if y == q then σq else σy.map fun (v, t) => (v, t.substNames σq)
+            add := add ++ [(y, σ)]
+      if !add.isEmpty then
+        anc := anc.map fun (x, a) => if x == n then (x, a ++ add) else (x, a)
+        changed := true
+    if !changed then break
+  -- the non-override declarations of a method in a class: its lists
+  let ownLists (y mn : String) : List (List TParam × List SParam) := ((infoOf y).map fun (_, _, ms) =>
+    ms.filterMap fun
+      | .fn _ x ps mtps effs .. => if x == mn && !effs.contains "override" then some (mtps, ps) else none
+      | _ => none).getD []
+  let decls : List ((String × String) × String) := classDefs.flatMap fun (cn, ctps, _, methods) =>
+    methods.filterMap fun
       -- (an override joins its method's list: only the others make lists)
       | .fn _ mn ps mtps effs .. =>
         if mn == "$block" || mn.startsWith "(" || effs.contains "override" then none
-        else some ((hierOf cn, mn), sigText ctps mtps ps, ps.length)
+        else some ((hierOf cn, mn), sigText ctps mtps ps)
       | _ => none
-    | _ => []
   let keys := (decls.map (·.1)).eraseDups
-  let mov : List ((String × String) × List (String × Nat)) := keys.filterMap fun key =>
+  -- (a name is overloaded where some class's ancestors declare two or more
+  -- of its lists: siblings' own lists are not overloads)
+  let listsSeen (n mn : String) : List String :=
+    (((anc.lookup n).getD []).flatMap fun (y, _) =>
+      let ytps := ((infoOf y).map (·.1)).getD []
+      (ownLists y mn).map fun (mtps, ps) => sigText ytps mtps ps).eraseDups
+  let mov : List ((String × String) × List String) := keys.filterMap fun key =>
     let sigs := ((decls.filter (·.1 == key)).map (·.2)).eraseDups
-    if sigs.length > 1 then some (key, sigs) else none
-  let mangle (cn mn : String) (ctps mtps : List TParam) (ps : List SParam) : String :=
+    if sigs.length > 1 && classDefs.any (fun (n, _) => hierOf n == key.1 && (listsSeen n key.2).length > 1) then
+      some (key, sigs)
+    else none
+  let mangle (cn mn : String) (ctps mtps : List TParam) (ps : List SParam) (isOverride : Bool) : String :=
     match mov.lookup (hierOf cn, mn) with
-    | some sigs => match sigs.findIdx? (·.1 == sigText ctps mtps ps) with
-      | some k => s!"{mn}$ov{k}"
-      -- (an override whose list differs in names only, as when its class
-      -- permutes its parent's type parameters: the one list of its length)
-      | none => match (sigs.zip (List.range sigs.length)).filter (·.1.2 == ps.length) with
-        | [(_, k)] => s!"{mn}$ov{k}"
-        | _ => mn   -- refused below
     | none => mn
+    | some sigs =>
+      if !isOverride then s!"{mn}$ov{(sigs.idxOf? (sigText ctps mtps ps)).getD 0}"
+      else
+        -- an override: the ancestor list it has, each in this class's terms
+        -- (through the type arguments the class gives its parents)
+        let mine := sigText ctps mtps ps
+        let cands : List (Nat × String × Nat) := (((anc.lookup cn).getD []).drop 1).flatMap fun (y, σ) =>
+          let ytps := ((infoOf y).map (·.1)).getD []
+          (ownLists y mn).filterMap fun (dmtps, dps) =>
+            (sigs.idxOf? (sigText ytps dmtps dps)).map fun k =>
+              (k, sigText ctps dmtps (dps.map fun q => { q with ty := q.ty.substNames σ }), dps.length)
+        match (cands.filter (·.2.1 == mine)).map (·.1) |>.eraseDups with
+        | [k] => s!"{mn}$ov{k}"
+        | _ =>
+          match (cands.filter (·.2.2 == ps.length)).map (·.1) |>.eraseDups with
+          | [k] => s!"{mn}$ov{k}"
+          | _ => mn   -- refused below
   let mut tops1 : Array STop := #[]
   for t in allTops00 ++ argsTop ++ entryTop do
     match t with
@@ -3151,7 +3196,7 @@ def elabProgramCore (allTops00 : List STop) (opts : Options := {}) : Except Stri
             if let [_, m'] := (mn.drop 1).toString.splitOn ":)" then
               if (mov.lookup (hierOf n, m')).isSome then
                 throw s!"{mp.show}: qualified implementations of the overloaded method {m'} are not supported yet"
-          ms := ms.push (.fn mp (mangle n mn tps mtps ps) ps mtps effs ret body)
+          ms := ms.push (.fn mp (mangle n mn tps mtps ps (effs.contains "override")) ps mtps effs ret body)
         | m => ms := ms.push m
       tops1 := tops1.push (.classDef cp n tps specs parents isI fields ovs ms.toList)
     | t => tops1 := tops1.push t
