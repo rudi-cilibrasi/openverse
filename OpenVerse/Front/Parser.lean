@@ -33,6 +33,9 @@ structure PSt where
   blocks : List String := []
   /-- The files imported with `using{"relative_path"}` (#27). -/
   imports : Array (Pos × String) := #[]
+  /-- The column of the definitions being parsed: 0 at the top level, the
+      body's column in a module (#112). A definition's body is indented more. -/
+  topCol : Nat := 0
 
 abbrev PM := StateT PSt (Except String)
 
@@ -174,6 +177,19 @@ partial def parseType : PM STy := do
     | none => perr t s!"expected a type, found {t.tok.describe}"
 
 def cmpOps : List String := ["=", "<>", "<", "<=", ">", ">="]
+
+/-- At a `(`: the qualifier of `(i:)M` or `(M.i:)M` (#70, #112), if one
+    starts here, and how many tokens it takes (through the `:)`). -/
+def peekQual : PM (Option (String × Nat)) := do
+  if !(← peekT).isSym "(" then return none
+  let some q0 := (← peekT 1).identName? | return none
+  let mut q := q0
+  let mut k := 2
+  while (← peekT k).isSym "." && ((← peekT (k + 1)).identName?).isSome do
+    q := q ++ "." ++ ((← peekT (k + 1)).identName?).getD ""
+    k := k + 2
+  if (← peekT k).isSym ":" && (← peekT (k + 1)).isSym ")" then return some (q, k + 2)
+  return none
 
 mutual
 /-- Lowest precedence: declarations, `set`, ranges. -/
@@ -339,10 +355,8 @@ partial def parsePostfix (stop : Nat) : PM SExpr := do
     else if t.isSym "." then
       bump
       -- `X.(i:)M`: the method `M` of `X` as an `i` (a qualified call)
-      if (← peekT).isSym "(" && (← peekT 2).isSym ":" && (← peekT 3).isSym ")" then
-        bump
-        let q ← expectIdent
-        bump; bump
+      if let some (q, k) ← peekQual then
+        for _ in [0:k] do bump
         e := .member t.pos e s!"({q}:){← expectIdent}"
       else
         e := .member t.pos e (← expectIdent)
@@ -622,6 +636,7 @@ partial def parseStructBody (p : Pos) : PM SExpr := do
   if o.isSym ":" then
     bump
     let n ← peekT
+    if n.isEof || (n.bol && n.col ≤ (← get).topCol) then perr n "expected the struct's fields, indented"
     let c := n.col
     fields ← withBlock n do
       let mut fields := #[← parseField c]
@@ -664,6 +679,7 @@ partial def parseEnumBody (p : Pos) : PM SExpr := do
   if o.isSym ":" then
     bump
     let n ← peekT
+    if n.isEof || (n.bol && n.col ≤ (← get).topCol) then perr n "expected the enum's values, indented"
     let c := n.col
     names ← withBlock n do
       let mut names := #[← expectIdent]
@@ -717,11 +733,9 @@ partial def parsePrimary (stop : Nat) : PM SExpr := do
       -- `(super:)M`: the parent's implementation of a method
       bump; bump; bump; bump
       return .member t.pos (.ident t.pos "(super:)") (← expectIdent)
-    if ((← peekT 1).identName?).isSome && (← peekT 2).isSym ":" && (← peekT 3).isSym ")" then
+    if let some (q, k) ← peekQual then
       -- `(i:)M`: `Self.(i:)M`, a qualified member of the current object (#70)
-      bump
-      let q ← expectIdent
-      bump; bump
+      for _ in [0:k] do bump
       return .member t.pos (.ident t.pos "Self") s!"({q}:){← expectIdent}"
     bump
     let (items, commas) ← parseParenItems
@@ -821,11 +835,12 @@ end
 /-- A function body after `=`: an indented block, a braced block, or an expression. -/
 def parseFnBody : PM SExpr := do
   let t ← peekT
+  let top := (← get).topCol
   if t.bol then
-    if t.col == 0 then perr t "expected an indented function body"
+    if t.col ≤ top then perr t "expected an indented function body"
     return .block t.pos (← parseIndented t.col)
   else if t.isSym "{" then bump; parseBraced t.pos
-  else parseExpr 0
+  else parseExpr top
 
 /-- Skip `<specifier>` lists (`<public>`, `<decides>`, …), returning their names. -/
 partial def parseSpecs : PM (List String) := do
@@ -898,9 +913,15 @@ partial def parseCtorItem (c : Nat) : PM SExpr := do
   if t.isKw "let" && (← peekT 1).isSym ":" then
     bump
     return .app t.pos (.ident t.pos "$let") [← parseBody c] false
-  if let some d := t.identName? then
-    if (← peekT 1).isSym "<" && (← peekT 2).isKw "constructor" && (← peekT 3).isSym ">" then
-      bump; bump; bump; bump
+  if let some d0 := t.identName? then
+    -- (`M.D<constructor>(…)`: a module's constructor, #112)
+    let mut k := 1
+    let mut d := d0
+    while (← peekT k).isSym "." && ((← peekT (k + 1)).identName?).isSome do
+      d := d ++ "." ++ ((← peekT (k + 1)).identName?).getD ""
+      k := k + 2
+    if (← peekT k).isSym "<" && (← peekT (k + 1)).isKw "constructor" && (← peekT (k + 2)).isSym ">" then
+      for _ in [0:k + 3] do bump
       let a ← peekT
       if a.isSym "(" then bump; return .app t.pos (.ident t.pos s!"$ctor:{d}") (← parseArgs ")") false
       if a.isSym "[" then bump; return .app t.pos (.ident t.pos s!"$ctor:{d}") (← parseArgs "]") true
@@ -951,11 +972,11 @@ partial def parseClassItem (c : Nat) :
   let isVar := t.isKw "var"
   if isVar then bump
   -- `(i:)M`: an implementation of interface `i`'s `M` only
-  let qual ← if !isVar && t.isSym "(" && (← peekT 2).isSym ":" && (← peekT 3).isSym ")" then do
-      bump
-      let q ← expectIdent
-      bump; bump
-      pure (some q)
+  let qual ← if !isVar then do
+      match ← peekQual with
+      | some (q, k) => do for _ in [0:k] do bump
+                          pure (some q)
+      | none => pure none
     else pure none
   let name ← match qual with
     | some q => do pure s!"({q}:){← expectIdent}"
@@ -998,8 +1019,8 @@ partial def parseClassBody (p : Pos) (name : String) (tps : List TParam) (isIfac
   if o.isSym ":" then
     bump
     let n ← peekT
-    if n.isEof || (n.bol && n.col == 0) then
-      perr n s!"expected the indented body of {if isIface then "interface" else "class"} {name}"
+    if n.isEof || (n.bol && n.col ≤ (← get).topCol) then
+      perr n s!"expected the indented body of {if isIface then "interface" else "class"} {name.replace "::" "."}"
     let c := n.col
     items ← withBlock n do
       let mut items := #[← parseClassItem c]
@@ -1035,17 +1056,25 @@ partial def parseClassBody (p : Pos) (name : String) (tps : List TParam) (isIfac
     enclosing modules, `A::B::`, #112). A module is flattened: its members
     are definitions of qualified names, and markers record the module
     (`$module:A`), its `<public>` members (`$public:A::F`) and its
-    `using{M}`s (`$open:A::|M`), for the names' resolution in Elab. -/
-partial def parseTopsIn (col : Nat) (pfx : String) : PM (List STop) := do
+    `using{M}`s (`$open:A::|M`), for the names' resolution in Elab. With
+    `braced`, the definitions of `module{…}`, through the `}`. -/
+partial def parseTopsIn (col : Nat) (pfx : String) (braced : Bool := false) : PM (List STop) := do
   let mut tops := #[]
   let marker (p : Pos) (m : String) : STop := .const p m none (.block p [])
+  let saved := (← get).topCol
+  modify fun st => { st with topCol := col }
   repeat
     let t ← peekT
-    if t.isEof then break
-    if col > 0 && t.bol && t.col < col then break
-    if !t.bol || t.col != col then
-      perr t (if col == 0 then "a top-level definition must start at column 0"
-        else "a definition in a module must start at the module body's column")
+    if braced then
+      if t.isEof then perr t "expected '}' to end the module"
+      if t.isSym "}" then bump; break
+      if t.isSym ";" then bump; continue
+    else
+      if t.isEof then break
+      if col > 0 && t.bol && t.col < col then break
+      if !t.bol || t.col != col then
+        perr t (if col == 0 then "a top-level definition must start at column 0"
+          else "a definition in a module must start at the module body's column")
     if t.isKw "using" || (t.isKw "import" && (← peekT 1).isSym "{") then
       -- `using{"relative_path"}` imports a file or directory (#27); other
       -- `using { /Verse.org/… }` module paths are accepted and ignored
@@ -1062,7 +1091,7 @@ partial def parseTopsIn (col : Nat) (pfx : String) : PM (List STop) := do
           tops := tops.push (marker t.pos s!"$open:{pfx}|{path}")
       repeat
         let n ← peekT
-        if n.isEof || (n.bol && n.col ≤ col) then break
+        if n.isEof || (n.bol && n.col ≤ col) || (braced && (n.isSym "}" || n.isSym ";")) then break
         bump
       continue
     let name0 ← expectIdent
@@ -1073,10 +1102,19 @@ partial def parseTopsIn (col : Nat) (pfx : String) : PM (List STop) := do
     -- `name := module:` and its definitions, indented (Book of Verse ch. 16)
     if n.isSym ":=" && (← peekT 1).isKw "module" then
       bump; bump
-      expectSym ":"
-      let b ← peekT
-      if !b.bol || b.col ≤ col then perr b "expected the module's definitions, indented"
-      let inner ← withBlock b (parseTopsIn b.col (name ++ "::"))
+      let o ← peekT
+      let inner ← if o.isSym ":" then do
+          bump
+          let b ← peekT
+          -- (an empty module has nothing indented after it)
+          if b.isEof || (b.bol && b.col ≤ col) then pure []
+          else if !b.bol then perr b "expected the module's definitions, indented on the following lines"
+          else withBlock b (parseTopsIn b.col (name ++ "::"))
+        else if o.isSym "{" then do
+          bump
+          let b ← peekT
+          parseTopsIn (if b.bol then b.col else col) (name ++ "::") (braced := true)
+        else perr o "expected ':' or '{' after module"
       tops := tops.push (marker t.pos s!"$module:{name}")
       tops := tops ++ inner.toArray
       continue
@@ -1095,7 +1133,10 @@ partial def parseTopsIn (col : Nat) (pfx : String) : PM (List STop) := do
         if !(← peekT).isSym ":=" then perr (← peekT) "expected ':=' and the class after a constructor's parameters"
         bump
         let ct ← peekT
-        let cls ← expectIdent
+        let mut cls ← expectIdent
+        -- (`:= M.c:`: a module's class, #112)
+        while (← peekT).isSym "." && ((← peekT 1).identName?).isSome && !(← peekT).bol do
+          bump; cls := cls ++ "." ++ (← expectIdent)
         -- `:= box(t):` for a parametric class: its type arguments
         let targs ← if (← peekT).isSym "(" && !(← peekT).bol then do
             bump
@@ -1165,6 +1206,7 @@ partial def parseTopsIn (col : Nat) (pfx : String) : PM (List STop) := do
       if a.isSym "=" || a.isSym ":=" then bump else perr a "expected '=' in a constant definition"
       tops := tops.push (.const t.pos name (some ty) (← parseFnBody))
     else perr n s!"expected '(', ':' or ':=' after '{name}'"
+  modify fun st => { st with topCol := saved }
   return tops.toList
 
 partial def parseTops : PM (List STop) := parseTopsIn 0 ""

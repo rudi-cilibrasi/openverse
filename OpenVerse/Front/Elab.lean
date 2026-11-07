@@ -3090,8 +3090,14 @@ def expandCtors (ctors : List (Pos × String × List SParam × List TParam × Li
 /-- Elaborate a parsed program into a Verse Core program that passes `Prog.check`
     and `Prog.checkTypes`. -/
 def elabProgramCore (allTops000 : List STop) (opts : Options := {}) : Except String Compiled := do
-  -- modules (#112): every reference to a member, qualified
-  let allTops00 ← resolveModules allTops000
+  -- modules (#112): every reference to a member, qualified (the entry
+  -- expression's too)
+  let rawEntry : List STop := match opts.entry with
+    | some e => [.fn e.pos "$Do" [] [] ["decides"] (.name "void") (.app e.pos (.ident e.pos "$Show") [e] false)]
+    | none => []
+  let resolved ← resolveModules (allTops000 ++ rawEntry)
+  let allTops00 := resolved.take (resolved.length - rawEntry.length)
+  let entryTop := resolved.drop (resolved.length - rawEntry.length)
   -- the command line (spec: expected tooling): `Args`, and an entry expression
   let defines (n : String) := allTops00.any fun
     | .fn _ m .. | .const _ m .. | .classDef _ m .. => m == n
@@ -3101,9 +3107,6 @@ def elabProgramCore (allTops000 : List STop) (opts : Options := {}) : Except Str
       if defines "Args" then []
       else [.const { line := 0, col := 0 } "Args" (some (.arr (.name "string")))
               (.arrayLit { line := 0, col := 0 } (as.map fun a => .str { line := 0, col := 0 } [.text a]))]
-    | none => []
-  let entryTop : List STop := match opts.entry with
-    | some e => [.fn e.pos "$Do" [] [] ["decides"] (.name "void") (.app e.pos (.ident e.pos "$Show") [e] false)]
     | none => []
   let allTops0 := allTops00 ++ argsTop ++ entryTop
   -- classes and interfaces (#14, #18): each is a struct whose fields are

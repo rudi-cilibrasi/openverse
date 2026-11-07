@@ -20,6 +20,7 @@
   here (elaboration's own check sees only the flat names).
 -/
 import OpenVerse.Front.Syntax
+import Std.Data.HashSet
 
 namespace OpenVerse.Front
 
@@ -42,30 +43,46 @@ partial def SExpr.identPath : SExpr → Option (List String)
   | .member _ e m => (e.identPath).map (· ++ [m])
   | _ => none
 
-/-- Rewrite the identifiers (`f`), type names (`ft`) and qualified accesses
-    (`q`: the qualified name a path names, if it names a module member). -/
-partial def SExpr.mapNamesM (f : Pos → String → Except String String) (ft : String → Except String String)
-    (q : Pos → List String → Except String (Option String)) : SExpr → Except String SExpr := fun e =>
-  let go := SExpr.mapNamesM f ft q
-  let goT := STy.mapNamesM ft
-  -- a binder: its name must not be a visible member's
-  let bind (p : Pos) (n : String) : Except String Unit := do
-    let r ← f p n
-    if r != n then
-      throw s!"{p.show}: '{n}' is already defined (as {".".intercalate (r.splitOn "::")}); Verse does not allow shadowing"
+/-- How the names of one scope resolve: values, binders (refused when they
+    would shadow a member), type names and paths `A.B.F`. -/
+structure Resolver where
+  val  : Pos → String → Except String String
+  bind : Pos → String → Except String Unit
+  ty   : Pos → String → Except String String
+  qual : Pos → List String → Except String (Option String)
+
+/-- A method name: `(i:)M`'s interface `i` (or `M.i`) resolved as a type. -/
+def Resolver.method (r : Resolver) (p : Pos) (m : String) : Except String String := do
+  if m.startsWith "(" then
+    if let [q, x] := (m.drop 1).toString.splitOn ":)" then return s!"({← r.ty p q}:){x}"
+  return m
+
+/-- Rewrite the names of an expression (see `Resolver`). -/
+partial def SExpr.mapNamesM (r : Resolver) : SExpr → Except String SExpr := fun e =>
+  let go := SExpr.mapNamesM r
+  let goT (p : Pos) := STy.mapNamesM (r.ty p)
   -- (a construction's `Field := v`: a field's name, not a binder)
   let goField : SExpr → Except String SExpr := fun
-    | .decl p n ty v x => do return .decl p n (← ty.mapM goT) v (← go x)
+    | .decl p n ty v x => do return .decl p n (← ty.mapM (goT p)) v (← go x)
     | a => go a
   match e with
   | .int .. | .char .. | .char32 .. | .brk _ => return e
   | .str p parts => return .str p (← parts.mapM fun | .text s => pure (.text s) | .code c => do return .code (← go c))
-  | .ident p n => return .ident p (← f p n)
+  | .ident p n => do
+    -- (`D<constructor>(…)`, a delegation: `D` or `M.D`)
+    if n.startsWith "$ctor:" then
+      let d := (n.drop "$ctor:".length).toString
+      if d.contains '.' then
+        match ← r.qual p (d.splitOn ".") with
+        | some qd => return .ident p s!"$ctor:{qd}"
+        | none => throw s!"{p.show}: unknown constructor {d}"
+      return .ident p s!"$ctor:{← r.val p d}"
+    return .ident p (← r.val p n)
   | .app p g args b => return .app p (← go g) (← args.mapM go) b
   | .member p x m => do
     if let some comps := x.identPath then
-      if let some qn ← q p (comps ++ [m]) then return .ident p qn
-    return .member p (← go x) m
+      if let some qn ← r.qual p (comps ++ [m]) then return .ident p qn
+    return .member p (← go x) (← r.method p m)
   | .query p x => return .query p (← go x)
   | .neg p x => return .neg p (← go x)
   | .notE p x => return .notE p (← go x)
@@ -82,20 +99,20 @@ partial def SExpr.mapNamesM (f : Pos → String → Except String String) (ft : 
   | .ite p cs t e' => return .ite p (← cs.mapM go) (← go t) (← e'.mapM go)
   | .forE p cs b => return .forE p (← cs.mapM go) (← go b)
   | .gen p x k s => do
-    bind p x
-    if let some k := k then bind p k
+    r.bind p x
+    if let some k := k then r.bind p k
     return .gen p x k (← go s)
   | .loop p b => return .loop p (← go b)
   | .ret p x => return .ret p (← x.mapM go)
   | .caseE p s arms => return .caseE p (← go s) (← arms.mapM fun (pat, v) => do return (← pat.mapM go, ← go v))
   | .decl p n ty v x => do
-    if !n.startsWith "?" then bind p n
-    return .decl p n (← ty.mapM goT) v (← go x)
-  | .set p l o r => return .set p (← go l) o (← go r)
+    if !n.startsWith "?" then r.bind p n
+    return .decl p n (← ty.mapM (goT p)) v (← go x)
+  | .set p l o rhs => return .set p (← go l) o (← go rhs)
   | .structDef p tps fs =>
-    return .structDef p tps (← fs.mapM fun (n, t, d, v) => do return (n, ← goT t, ← d.mapM go, v))
+    return .structDef p tps (← fs.mapM fun (n, t, d, v) => do return (n, ← goT p t, ← d.mapM go, v))
   | .enumDef .. => return e
-  | .construct p n ts fs => return .construct p (← ft n) (← ts.mapM goT) (← fs.mapM goField)
+  | .construct p n ts fs => return .construct p (← r.ty p n) (← ts.mapM (goT p)) (← fs.mapM goField)
   | .mapLit p kvs => return .mapLit p (← kvs.mapM fun (k, v) => do return (← go k, ← go v))
 
 /-- Resolve the modules of a parsed program (see the file's header). -/
@@ -112,112 +129,180 @@ def resolveModules (tops : List STop) : Except String (List STop) := do
   let publics := (markers "$public:").map (·.2)
   let defs : List String := real.map fun
     | .fn _ n .. | .const _ n .. | .classDef _ n .. => n
-  for (p, m) in markers "$module:" do
-    if defs.contains m then
-      throw s!"{p.show}: {".".intercalate (qualParts m)} is defined twice (a module and a definition)"
-    if (modules.filter (· == m)).length > 1 then
-      throw s!"{p.show}: module {".".intercalate (qualParts m)} is defined twice"
-  -- a module named from scope `sc` (its parts), innermost first
-  let findModule (sc : List String) (path : List String) : Option (List String) :=
-    ((List.range (sc.length + 1)).reverse.map fun k => sc.take k ++ path).find? fun m =>
-      modules.contains (qualJoin m)
+  let defsS : Std.HashSet String := Std.HashSet.ofList defs
+  let modsS : Std.HashSet String := Std.HashSet.ofList modules
+  let pubS : Std.HashSet String := Std.HashSet.ofList publics
   let shown (n : String) : String := ".".intercalate (qualParts n)
-  -- the modules opened, each with the scope it is open in
-  let opens : List (List String × List String) ← (markers "$open:").filterMapM fun (p, s) => do
-    match s.splitOn "|" with
-    | [sc, path] =>
-      let scParts := (qualParts sc).filter (· != "")
-      match findModule scParts (qualParts path) with
-      | some m => return some (scParts, m)
-      | none => throw s!"{p.show}: unknown module {shown path}"
-    | _ => return none
+  let shownP (ps : List String) : String := ".".intercalate ps
+  let mut seenM : Std.HashSet String := {}
+  for (p, m) in markers "$module:" do
+    if defsS.contains m then throw s!"{p.show}: {shown m} is defined twice (a module and a definition)"
+    if seenM.contains m then throw s!"{p.show}: module {shown m} is defined twice"
+    seenM := seenM.insert m
+  -- (one name's overloads share their visibility)
+  for (p, n) in markers "$public:" do
+    if (defs.filter (· == n)).length != (publics.filter (· == n)).length && defsS.contains n then
+      throw s!"{p.show}: the overloads of {shown n} must all be <public> or all internal"
   let inside (sc m : List String) : Bool := m.length ≤ sc.length && sc.take m.length == m
+  -- the definition or module a name gives from scope `sc`, the innermost
+  -- (`true`: a module)
+  let lookup (sc : List String) (n : String) : Option (Bool × List String) := Id.run do
+    for k in (List.range (sc.length + 1)).reverse do
+      let cand := sc.take k ++ [n]
+      if defsS.contains (qualJoin cand) then return some (false, cand)
+      if modsS.contains (qualJoin cand) then return some (true, cand)
+    return none
+  -- each level of `path` after its first `start` parts, used from `sc`, is
+  -- visible: public, or used inside its owner
+  let checkVis (sc : List String) (p : Pos) (path : List String) (start : Nat) : Except String Unit := do
+    for k in [start + 1 : path.length + 1] do
+      let lvl := path.take k
+      let owner := lvl.dropLast
+      if !inside sc owner && !pubS.contains (qualJoin lvl) then
+        throw s!"{p.show}: {shownP lvl} is internal to {shownP owner}: mark it <public> to use it outside"
+  -- the modules opened, each with the scope it is open in
+  let mut opens : List (List String × List String) := []
+  for (p, s) in markers "$open:" do
+    if let [sc0, path] := s.splitOn "|" then
+      let sc := (qualParts sc0).filter (· != "")
+      let comps := qualParts path
+      let base ← match lookup sc (comps.headD "") with
+        | some (true, b) => pure b
+        | _ => throw s!"{p.show}: unknown module {shown path}"
+      let mut cur := base
+      for c in comps.drop 1 do
+        if !modsS.contains (qualJoin (cur ++ [c])) then throw s!"{p.show}: unknown module {shown path}"
+        cur := cur ++ [c]
+      checkVis sc p cur base.length
+      opens := opens ++ [(sc, cur)]
+  -- what the modules open in `sc` give for `n`, visible from `sc`
+  -- (`true`: a module)
+  let openLookup (sc : List String) (n : String) : List (Bool × List String) :=
+    ((opens.filter fun (osc, _) => inside sc osc).filterMap fun (_, m) =>
+      let cand := m ++ [n]
+      let q := qualJoin cand
+      if !(pubS.contains q || inside sc m) then none
+      else if defsS.contains q then some (false, cand)
+      else if modsS.contains q then some (true, cand)
+      else none).eraseDups
+  -- a bare name, from scope `sc`: the innermost definition or module, or
+  -- else an open module's; both (or two open modules) is ambiguous
+  let resolve (what : String) (sc : List String) (p : Pos) (n : String) : Except String String := do
+    let opn := openLookup sc n
+    let found ← match lookup sc n with
+      | some (isMod, cand) =>
+        if let some (_, o) := opn.find? (·.2 != cand) then
+          throw s!"{p.show}: '{n}' is ambiguous: both {shownP cand} and {shownP o} are visible"
+        pure (some (isMod, cand))
+      | none => match opn with
+        | [x] => pure (some x)
+        | (_, a) :: (_, b) :: _ => throw s!"{p.show}: '{n}' is ambiguous: both {shownP a} and {shownP b} are open"
+        | [] => pure none
+    match found with
+    | some (true, cand) => throw s!"{p.show}: {shownP cand} is a module, not a {what}"
+    | some (false, cand) => return qualJoin cand
+    | none => return n
+  -- a binder: refused if it would shadow a module, or a member of a module
+  -- (the top level's names are the elaborator's to check)
+  let bind (sc : List String) (p : Pos) (n : String) : Except String Unit := do
+    let hit : Option (List String) := match lookup sc n with
+      | some (true, cand) => some cand
+      | some (false, cand) => if cand.length > 1 then some cand else none
+      | none => (openLookup sc n).head?.map (·.2)
+    if let some cand := hit then
+      throw s!"{p.show}: '{n}' is already defined (as {shownP cand}); Verse does not allow shadowing"
   -- a path (module parts, then a member), from scope `sc`
-  let qualified (sc : List String) (p : Pos) (comps : List String) : Except String (Option String) := do
+  let qual (sc : List String) (p : Pos) (comps : List String) : Except String (Option String) := do
     match comps with
     | head :: rest@(_ :: _) =>
-      -- (the head: a module from the scope outward, else a public submodule
-      -- of a module opened in scope)
-      let viaOpen : Option (List String) := (opens.filter fun (osc, _) => inside sc osc).findSome? fun (_, m) =>
-        if modules.contains (qualJoin (m ++ [head])) && publics.contains (qualJoin (m ++ [head])) then
-          some (m ++ [head]) else none
-      let some base := (findModule sc [head]).orElse fun _ => viaOpen | return none
-      let path := base ++ rest.dropLast
-      if !modules.contains (qualJoin path) then return none
-      let qn := qualJoin (path ++ [rest.getLast!])
-      if !defs.contains qn then
-        if modules.contains qn then throw s!"{p.show}: module {shown qn} is not a value"
-        throw s!"{p.show}: module {shown (qualJoin path)} has no member {rest.getLast!}"
-      -- (each level used from outside it is public: the member, and the
-      -- submodules on the way)
-      for k in [base.length + 1 : path.length + 2] do
-        let lvl := (path ++ [rest.getLast!]).take k
-        let owner := lvl.dropLast
-        if !inside sc owner && !publics.contains (qualJoin lvl) then
-          throw s!"{p.show}: {shown (qualJoin lvl)} is internal to {shown (qualJoin owner)}: mark it <public> to use it outside"
-      return some qn
+      let base? : Option (List String) ← match lookup sc head with
+        | some (true, cand) => pure (some cand)
+        | some (false, _) => pure none   -- a value: `X.F` is its field
+        | none => match (openLookup sc head).filter (·.1) with
+          | [(_, cand)] => pure (some cand)
+          | (_, a) :: (_, b) :: _ => throw s!"{p.show}: '{head}' is ambiguous: both {shownP a} and {shownP b} are open"
+          | [] => pure none
+      let some base := base? | return none
+      let mut path := base
+      for c in rest.dropLast do
+        -- (`M.v.F`: the field `F` of the member `M.v`, resolved as a prefix)
+        if !modsS.contains (qualJoin (path ++ [c])) then return none
+        path := path ++ [c]
+      let last := rest.getLast!
+      let qn := path ++ [last]
+      if !defsS.contains (qualJoin qn) then
+        if modsS.contains (qualJoin qn) then throw s!"{p.show}: module {shownP qn} is not a value"
+        throw s!"{p.show}: module {shownP path} has no member {last}"
+      checkVis sc p qn base.length
+      return some (qualJoin qn)
     | _ => return none
-  -- a bare name, from scope `sc`
-  let bare (sc : List String) (p : Pos) (n : String) : Except String String := do
-    for k in (List.range sc.length).reverse do
-      let qn := qualJoin (sc.take (k + 1) ++ [n])
-      if defs.contains qn then return qn
-    let opened : List String := (opens.filter fun (osc, _) => inside sc osc).filterMap fun (_, m) =>
-      let qn := qualJoin (m ++ [n])
-      if defs.contains qn && publics.contains qn then some qn else none
-    match opened.eraseDups with
-    | [qn] => return qn
-    | [] =>
-      if (findModule sc [n]).isSome then throw s!"{p.show}: {n} is a module, not a value"
-      return n
-    | a :: b :: _ => throw s!"{p.show}: '{n}' is ambiguous: both {shown a} and {shown b} are open"
-  let typeName (sc : List String) (p : Pos) (n : String) : Except String String := do
+  let tyName (sc excl : List String) (p : Pos) (n : String) : Except String String := do
+    if excl.contains n then return n
     if n.contains '.' then
-      match ← qualified sc p (n.splitOn ".") with
+      match ← qual sc p (n.splitOn ".") with
       | some qn => return qn
       | none => throw s!"{p.show}: unknown type '{n}'"
-    bare sc p n
+    resolve "type" sc p n
   let scopeOf (n : String) : List String := (qualParts n).dropLast
-  let bindAll (sc : List String) (p : Pos) (ns : List String) : Except String Unit := do
-    for n in ns do
-      let r ← bare sc p n
-      if r != n then
-        throw s!"{p.show}: '{n}' is already defined (as {shown r}); Verse does not allow shadowing"
+  let rAt (sc excl : List String) : Resolver :=
+    { val := resolve "value" sc, bind := bind sc, ty := tyName sc excl, qual := qual sc }
+  -- each class's members, its own and inherited (a method body sees them
+  -- bare, so none may be named like a visible member)
+  let classInfo : List (String × List String × List String) ← real.filterMapM fun
+    | .classDef p n tps _ parents _ fields _ methods => do
+      let r := rAt (scopeOf n) (tps.map (·.name))
+      let ps ← parents.mapM fun t => do
+        match ← t.mapNamesM (r.ty p) with
+        | .name q | .app q _ => pure q
+        | _ => pure ""
+      let own := fields.map (·.1) ++ methods.filterMap fun
+        | .fn _ mn .. => if mn.startsWith "(" || mn.startsWith "$" then none else some mn
+        | _ => none
+      return some (n, ps, own)
+    | _ => return none
+  let budget := 1 + classInfo.foldl (fun a (_, ps, _) => a + ps.length + 1) 0
+  let membersOf (c : String) : List String := Id.run do
+    let mut seen : List String := []
+    let mut todo := [c]
+    let mut out : List String := []
+    for _ in [0:budget] do
+      match todo with
+      | [] => break
+      | x :: rest =>
+        todo := rest
+        if !seen.contains x then
+          seen := x :: seen
+          if let some (_, ps, own) := classInfo.find? (·.1 == x) then
+            out := out ++ own
+            todo := todo ++ ps
+    return out.eraseDups
+  let params (r : Resolver) (p : Pos) (ps : List SParam) : Except String (List SParam) := do
+    for prm in ps do r.bind p prm.name
+    ps.mapM fun prm => do
+      return { prm with ty := ← prm.ty.mapNamesM (r.ty p), default := ← prm.default.mapM (·.mapNamesM r) }
   real.mapM fun t => do
     match t with
     | .fn p n ps tps effs ret body =>
-      let sc := scopeOf n
-      let f := bare sc
-      let ft := typeName sc p
-      let q := qualified sc
-      bindAll sc p (ps.map (·.name))
-      let ps ← ps.mapM fun prm => do
-        return { prm with ty := ← prm.ty.mapNamesM ft, default := ← prm.default.mapM (·.mapNamesM f ft q) }
+      let r := rAt (scopeOf n) (tps.map (·.name))
+      let ps ← params r p ps
       let effs ← effs.mapM fun e =>
-        if e.startsWith "$constructor:" then do return s!"$constructor:{← ft (e.drop "$constructor:".length).toString}"
+        if e.startsWith "$constructor:" then do return s!"$constructor:{← r.ty p (e.drop "$constructor:".length).toString}"
         else pure e
-      return .fn p n ps tps effs (← ret.mapNamesM ft) (← body.mapNamesM f ft q)
+      return .fn p n ps tps effs (← ret.mapNamesM (r.ty p)) (← body.mapNamesM r)
     | .const p n ty body =>
-      let sc := scopeOf n
-      return .const p n (← ty.mapM (·.mapNamesM (typeName sc p))) (← body.mapNamesM (bare sc) (typeName sc p) (qualified sc))
+      let r := rAt (scopeOf n) []
+      return .const p n (← ty.mapM (·.mapNamesM (r.ty p))) (← body.mapNamesM r)
     | .classDef p n tps specs parents isI fields ovs methods =>
-      let sc := scopeOf n
-      let f := bare sc
-      let ft := typeName sc p
-      let q := qualified sc
-      bindAll sc p (fields.map (·.1))
-      bindAll sc p (methods.filterMap fun
-        | .fn _ mn .. => if mn.startsWith "(" || mn.startsWith "$" then none else some mn
-        | _ => none)
-      let parents ← parents.mapM (·.mapNamesM ft)
-      let fields ← fields.mapM fun (fn, ty, d, v) => do return (fn, ← ty.mapNamesM ft, ← d.mapM (·.mapNamesM f ft q), v)
+      let r := rAt (scopeOf n) (tps.map (·.name))
+      for m in membersOf n do r.bind p m
+      let parents ← parents.mapM (·.mapNamesM (r.ty p))
+      let fields ← fields.mapM fun (fn, ty, d, v) => do return (fn, ← ty.mapNamesM (r.ty p), ← d.mapM (·.mapNamesM r), v)
       let methods ← methods.mapM fun m => do
         match m with
         | .fn mp mn mps mtps meffs mret mbody =>
-          bindAll sc mp (mps.map (·.name))
-          let mps ← mps.mapM fun prm => do
-            return { prm with ty := ← prm.ty.mapNamesM ft, default := ← prm.default.mapM (·.mapNamesM f ft q) }
-          return .fn mp mn mps mtps meffs (← mret.mapNamesM ft) (← mbody.mapNamesM f ft q)
+          let rm := rAt (scopeOf n) (tps.map (·.name) ++ mtps.map (·.name))
+          let mps ← params rm mp mps
+          return .fn mp (← rm.method mp mn) mps mtps meffs (← mret.mapNamesM (rm.ty mp)) (← mbody.mapNamesM rm)
         | m => pure m
       return .classDef p n tps specs parents isI fields ovs methods
 
