@@ -292,10 +292,11 @@ circle := class(shape, labelled):
 - **Not yet supported** (each rejected with a message):
   - constructor functions;
   - overrides in a subclass that fixes, repeats or adds type arguments
-    its parent (or an interface) leaves open, and a class that gives two
-    interfaces different type arguments;
-  - `set` of an interface field that sits at different places in the
-    classes implementing the interface (reading it works);
+    its parent (or an interface) leaves open, a class that gives two
+    interfaces different type arguments, an interface that gives a parent
+    interface other than its own type parameters, and a parametric class
+    below a non-parametric interface (or one that adds type parameters
+    below a parametric interface's implementation);
   - overriding a method with its own type parameters;
   - qualified `(i:)M` implementations;
   - named arguments to a method dispatched on the receiver's class;
