@@ -1,0 +1,8 @@
+?int empty
+?int full
+[]int empty
+[]int false
+map empty
+generic too
+string empty
+exit=0
