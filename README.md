@@ -10,7 +10,9 @@ are checked by differential testing and fuzzing.
 
 [![check](https://github.com/rudi-cilibrasi/openverse/actions/workflows/check.yml/badge.svg)](https://github.com/rudi-cilibrasi/openverse/actions/workflows/check.yml)
 **Try it** in the [online playground](https://rudi-cilibrasi.github.io/openverse-docs/demo/)
-(this compiler and runtime as WebAssembly, in your browser) · **Learn it** from
+(this compiler and runtime as WebAssembly, in your browser), or step inside your
+code in the [3D simulator](https://rudi-cilibrasi.github.io/openverse-docs/sim/)
+([openfort-sim](https://github.com/rudi-cilibrasi/openfort-sim)) · **Learn it** from
 two books, [*Verse Logic*](https://rudi-cilibrasi.github.io/openverse-docs/verse-logic/)
 and [*The Little Verser*](https://rudi-cilibrasi.github.io/openverse-docs/little-verser/),
 whose every program and Lean statement is checked against this repository
