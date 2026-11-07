@@ -7,6 +7,9 @@
 static vx_outcome last;
 
 /* Load p (consumed), run it with `fuel`, keep the outcome in `last`. */
+/* A heap limit for the next runs (0: the default). */
+static size_t t_max_heap = 0;
+
 static int run(tbuf *p, uint64_t fuel, size_t max_depth)
 {
     vx_program prog;
@@ -23,6 +26,8 @@ static int run(tbuf *p, uint64_t fuel, size_t max_depth)
     vx_default_opts(&o);
     o.fuel = fuel;
     o.max_depth = max_depth;
+    if (t_max_heap != 0)
+        o.max_heap = t_max_heap;
     vx_run(&prog, &o, &last);
     vx_free_program(&prog);
     return 1;
@@ -601,7 +606,8 @@ static void object_cases(void)
 
     /* objects outlive calls, and so do the values stored in them: F(O) stores
        a fresh string in O and returns an int, so F's cells are reclaimed
-       except the string's (the pin).  Repeated, then read back.
+       except the string's (a field written during the call is a root, #50).
+       Repeated, then read back.
        F(O) = set O.0 = ToString(7) + "!"; 0
        Main: O := new 0 [""]; loop 50 { F(O); garbage }; Print(O.0) */
     n_seq(&f, n_heap(&f, VX_H_SET, 0, 2, n_local(&f, 0),
@@ -628,6 +634,27 @@ static void object_cases(void)
     t_fn(&p, &f, 0, 0, "G", f.count - 1);
     t_fn(&p, &m, 0, 1, "Main", m.count - 1);
     OK_OUT(&p, "2\n");
+    /* a call that writes a field frees its other cells (#50): F(O, i) builds a
+       100-element temporary, then sets O.0 = array{i}; 5000 calls fit in a
+       heap of 50000 cells (keeping every temporary would need ~515000)
+       F(O, i) = range(1, 100); set O.0 = array{i}; 0
+       Main: O := new 0 [array{}]; i := 0; loop { i += 1; F(O, i); if i >= 5000 break }; O.0[0] */
+    n_seq(&f, n_prim(&f, VX_P_RANGE, 0, 2, n_int(&f, 1), n_int(&f, 100)),
+          n_seq(&f, n_heap(&f, VX_H_SET, 0, 2, n_local(&f, 0), n_prim(&f, VX_P_MKARR, 0, 1, n_local(&f, 1))),
+                n_int(&f, 0)));
+    a = n_seq(&m, n_assign(&m, 0, n_heap(&m, VX_H_NEW, 0, 1, n_prim(&m, VX_P_MKARR, 0, 0))),
+              n_assign(&m, 1, n_int(&m, 0)));
+    b = n_seq(&m, n_assign(&m, 1, n_prim(&m, VX_P_ADD, 0, 2, n_local(&m, 1), n_int(&m, 1))),
+              n_seq(&m, n_call(&m, 0, 2, n_local(&m, 0), n_local(&m, 1)),
+                    n_ite(&m, n_prim(&m, VX_P_GE, 0, 2, n_local(&m, 1), n_int(&m, 5000)), n_brk(&m), n_void(&m))));
+    c = n_print_int(&m, n_prim(&m, VX_P_INDEX, 0, 2, n_heap(&m, VX_H_GET, 0, 1, n_local(&m, 0)), n_int(&m, 0)));
+    n_seq(&m, a, n_seq(&m, n_loop(&m, b), c));
+    t_prog_header(&p, 2, 1);
+    t_fn(&p, &f, 2, 2, "F", f.count - 1);
+    t_fn(&p, &m, 0, 2, "Main", m.count - 1);
+    t_max_heap = 50000;
+    OK_OUT(&p, "5000\n");
+    t_max_heap = 0;
 }
 
 int main(void)

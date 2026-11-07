@@ -81,6 +81,11 @@ static inline vx_val *vx_obj_elems(const vx_heap *h, size_t o)
  * sliding the survivors down (root is updated).  Used when a call returns:
  * nothing else can refer to the callee's cells (see interp.c). */
 int  vx_heap_keep(vx_heap *h, size_t mark, vx_val *root);   /* VX_OK | VX_EFULL */
+/* The same with several roots (each updated). */
+/* roots[0] is the result, the others fields; *fieldkept (if not NULL) gets
+   the cells the fields reach in the region. */
+int  vx_heap_keep_roots(vx_heap *h, size_t mark, vx_val **roots, size_t n,
+                        size_t *fieldkept);                    /* VX_OK | VX_EFULL */
 /* Structural equality, `decide (a = b)` (iterative). */
 int  vx_equal(const vx_heap *h, const vx_val *a, const vx_val *b, int *eq);
 
@@ -103,10 +108,31 @@ typedef struct vx_oundo {
     vx_val old;
 } vx_oundo;
 
+/* The remembered fields (#50): each object cell that holds a value-heap
+ * reference has (at most) one entry, in the list of an active call at least
+ * as deep as the call whose heap region holds the value, so that when that
+ * call returns its compaction keeps what the field reaches.  The lists are
+ * buffers from a pool: atdepth[k] is the buffer of the call at depth k, and a
+ * returning call's buffer and its caller's merge, the smaller into the larger
+ * (which then serves the caller), so an entry moves O(log n) times.
+ * rbuf[cell] is 1 + the buffer holding the cell's entry (0: none),
+ * rindex[cell] its index there.  A call gets a buffer only when a field is
+ * first remembered at its depth (atdepth[k] is VX_NOBUF until then), so a
+ * call that writes no such field costs a store and a test. */
+#define VX_NOBUF ((size_t)-1)
+typedef struct vx_remlist {
+    size_t *cells; size_t n; size_t cap;
+    size_t  depth;    /* of the call it serves */
+} vx_remlist;
+
 typedef struct vx_objs {
     vx_obj   *objs;   size_t nobjs;  size_t ocap;
     vx_val   *cells;  size_t ncells; size_t ccap;
     vx_oundo *log;    size_t nlog;   size_t lcap;
+    size_t   *rbuf;   size_t *rindex; size_t pcap;
+    vx_remlist *bufs; size_t nbufs;  size_t bcap;
+    size_t   *freeb;  size_t nfree;  size_t fbcap;
+    size_t   *atdepth; size_t nlists; size_t dcap;
     size_t    max;    /* objects + cells allowed */
     size_t    max_log;
 } vx_objs;
@@ -133,6 +159,40 @@ void vx_objs_mark(const vx_objs *h, vx_objmark *m);
 void vx_objs_rollback(vx_objs *h, const vx_objmark *m);
 /* Drop the log (when the outermost failure context is left). */
 void vx_objs_forget(vx_objs *h);
+/* `cell` now holds a value-heap reference owned by the call at `depth`: its
+   entry goes to that call's list unless it is in a deeper one already. */
+int  vx_objs_remember(vx_objs *h, size_t cell, size_t depth);   /* OK | EFULL */
+/* A call starts (its list, empty, at depth h->nlists) or returns (its list
+   and its caller's merge). */
+int  vx_objs_call(vx_objs *h);                                  /* OK | EFULL */
+int  vx_objs_return(vx_objs *h);                                /* OK | EFULL */
+/* The top call's list: its entries, and dropping those whose cell no longer
+   holds a heap reference (only with no failure context open: a rollback may
+   restore one). */
+const vx_remlist *vx_objs_top(const vx_objs *h);
+void vx_objs_drop_stale(vx_objs *h);
+/* The common case inline: a call whose depth has no list. */
+static inline int vx_objs_call_fast(vx_objs *h)
+{
+    if (h->nlists < h->dcap) {
+        h->atdepth[h->nlists] = VX_NOBUF;
+        h->nlists = h->nlists + 1;
+        return VX_OK;
+    }
+    return vx_objs_call(h);
+}
+static inline int vx_objs_top_empty(const vx_objs *h)
+{
+    return h->nlists == 0 || h->atdepth[h->nlists - 1] == VX_NOBUF;
+}
+static inline int vx_objs_return_fast(vx_objs *h)
+{
+    if (vx_objs_top_empty(h) && h->nlists > 0) {
+        h->nlists = h->nlists - 1;
+        return VX_OK;
+    }
+    return vx_objs_return(h);
+}
 
 /* ------------------------------------------------------------------------
  * Outcomes (Res of Value.lean, plus LIMIT for Lean's `none` and for the C
@@ -203,8 +263,13 @@ typedef struct vx_ctx {
     vx_store  st;          /* slots of every live frame, journal, output */
     vx_heap   heap;
     vx_objs   objs;        /* class instances (Glob.heap)                */
-    size_t    pin;         /* heap cells below this may be reachable from
-                              an object field: never freed or moved      */
+    size_t   *hmarks;      /* the heap mark of each active call, by depth */
+    size_t   *dmax;        /* the largest block of cells a callee's
+                              compaction kept for fields in each active call's
+                              region (0 once such a field may have changed) */
+    size_t   *dlo, *dhi;   /* the heap cells that block lies in */
+    size_t    nframes;
+    size_t    fcap;
     size_t    top;         /* slots in use; the current frame ends here  */
     vx_val   *vs;          /* value stack: temporaries                   */
     size_t    vsp;

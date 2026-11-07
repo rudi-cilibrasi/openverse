@@ -16,6 +16,8 @@ echo "== differential fuzzing (${FUZZ:-1000} random programs)"
 scripts/fuzz-diff.sh "${FUZZ:-1000}" 1
 echo "== front-end mutation fuzzing (${FUZZ_FRONT:-500} mutants)"
 scripts/fuzz-front.sh "${FUZZ_FRONT:-500}" 1
+echo "== heap-reclamation fuzzing (${FUZZ_FIELDS:-60} programs with array fields)"
+scripts/fuzz-fields.sh "${FUZZ_FIELDS:-60}" 1
 echo "== QuickProof pins"
 scripts/check-quickproof-pins.sh
 echo "check.sh: all checks passed"
