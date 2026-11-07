@@ -426,7 +426,7 @@ theorem readSlot_typed {Γ : List VTy} {s : St} {i : Nat} {τ : VTy} (hf : Frame
 
 theorem writeSlot_typed {Γ : List VTy} {s : St} {i : Nat} {τ : VTy} {v : Value} (hf : FrameOK Γ s.fr)
     (hi : Γ[i]? = some τ) (hv : hasTy v τ = true) :
-    ∃ s', writeSlot s i v = some s' ∧ FrameOK Γ s'.fr ∧ s'.out = s.out := by
+    ∃ s', writeSlot s i v = some s' ∧ FrameOK Γ s'.fr ∧ s'.g = s.g := by
   have hlen := allTys_length hf
   have hlt : i < s.fr.length := by rw [hlen]; exact lt_of_getElem?_some hi
   refine ⟨{ s with fr := s.fr.set i v }, by simp [writeSlot, hlt], ?_, rfl⟩
@@ -510,7 +510,7 @@ end
     from a frame whose slots `k, …` hold values of their types under `θ`,
     with no more fuel. -/
 theorem eval_initPrefixE {P : Prog} {a : Nat} {Γ : List VTy} {θ : Nat → VTy} :
-    ∀ (ds : List Expr) (ts : List VTy) (n k : Nat) (fr : List Value) (o : List Nat) (b : Expr)
+    ∀ (ds : List Expr) (ts : List VTy) (n k : Nat) (fr : List Value) (o : Glob) (b : Expr)
       (x : Res × St), DefaultEL a Γ ds ts → a ≤ k → k + ds.length = fr.length →
       allTys (fr.take a) ((Γ.take a).map (VTy.subst θ)) = true →
       eval P n ⟨fr, o⟩ (initPrefixE k ds b) = some x →
@@ -732,6 +732,8 @@ theorem stepE {P : Prog} {S : Sigs} (hP : ProgTyped P S) (n : Nat)
         exact ⟨hf1, hv⟩
       · obtain ⟨hf1, hr1⟩ := IE _ _ _ _ _ _ hx he hf
         exact ⟨hf1, ResOK_retype hr hr1⟩
+  -- no typing rule mentions the heap yet (#20, step 2)
+  | heap op es => cases ht
   | print e =>
     cases ht with
     | print he =>
@@ -859,7 +861,7 @@ theorem Eval.typed {P : Prog} {S : Sigs} (hP : ProgTyped P S) {s e r s' Γ ρ τ
 theorem Runs.typed {P : Prog} {S : Sigs} (hP : ProgTyped P S) {τ r out}
     (hm : S[P.main]? = some ([], τ)) (h : Runs P r out) :
     r ≠ .err .type ∧ ∀ v, r = .ok v → hasTy v τ = true := by
-  obtain ⟨fr, h⟩ := h
+  obtain ⟨fr, heap, h⟩ := h
   have ht : Typed S [] τ (.call P.main []) τ := by
     simpa [VTy.subst_id] using Typed.call (Γ := []) (ρ := τ) VTy.var hm .nil
   obtain ⟨-, hr⟩ := Eval.typed hP h ht rfl

@@ -30,6 +30,7 @@ def litTy : Value → Option VTy
   | .tup vs => (litTys vs).map .tup
   | .none => none
   | .some v => (litTy v).map .opt
+  | .ref _ => none
 def litTys : List Value → Option (List VTy)
   | [] => some []
   | v :: vs => match litTy v, litTys vs with
@@ -39,6 +40,7 @@ end
 
 mutual
 theorem litTy_sound : ∀ {v : Value} {t : VTy}, litTy v = some t → hasTy v t = true
+  | .ref _, _, h => by simp [litTy] at h
   | .int _, t, h => by simp [litTy] at h; subst h; rfl
   | .logic _, t, h => by simp [litTy] at h; subst h; rfl
   | .char c, t, h => by
@@ -175,6 +177,8 @@ def tc : Expr → Option VTy → Option VTy
   | .ret e, some τ => if (tc e (some ρ)).isSome then some τ else none
   | .ret _, none => none
   | .print e, m => if (tc e (some VTy.str)).isSome then expect m VTy.void else none
+  -- no typing rule mentions the heap yet (#20, step 2)
+  | .heap _ _, _ => none
   | .prim op es, m => tcPrim op es m
 /-- `tc` for a primitive application. -/
 def tcPrim : Prim → List Expr → Option VTy → Option VTy
@@ -750,6 +754,7 @@ theorem tc_sound_aux : ∀ (n : Nat) (e : Expr), sizeOf e < n → TcOK S Γ ρ e
           simp only [Option.some.injEq] at h; subst h
           exact ⟨.ret (typed_of_check (IH e (by simp <;> omega)) hc), by simp⟩
         · simp at h
+    | heap op es => simp [tc] at h
     | print e =>
       simp only [tc] at h; split at h
       · next hc =>

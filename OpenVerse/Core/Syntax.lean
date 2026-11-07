@@ -42,6 +42,20 @@ inductive Prim where
   | userErr
   deriving Repr, DecidableEq, Inhabited
 
+/-- Operations on the heap (#20). Each is a function of the values of its
+    arguments and of the heap (`HeapOp.apply`). -/
+inductive HeapOp where
+  /-- Allocate an object of class `tag` with the arguments as its fields;
+      the result is a reference to it. -/
+  | new (tag : Nat)
+  /-- `[r]`: field `k` of the object `r` refers to. -/
+  | get (k : Nat)
+  /-- `[r, v]`: set field `k` of the object `r` refers to; the result is `v`. -/
+  | set (k : Nat)
+  /-- `[r]`: the class of the object `r` refers to, as an `int`. -/
+  | tag
+  deriving Repr, DecidableEq, Inhabited
+
 /-- Verse Core expressions. -/
 inductive Expr where
   /-- A literal value. -/
@@ -74,6 +88,8 @@ inductive Expr where
   | ret    : Expr → Expr
   /-- `Print(e)`: append the bytes of the string `e` and a newline to the output. -/
   | print  : Expr → Expr
+  /-- A heap operation applied to arguments evaluated left to right. -/
+  | heap   : HeapOp → List Expr → Expr
   deriving Repr, Inhabited
 
 /-- A function of the program. Its frame has `nslots` slots; the first

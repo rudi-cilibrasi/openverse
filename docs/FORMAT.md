@@ -35,6 +35,7 @@ function.
 | 9 | BRK | — | `.brk` |
 | 10 | RET | `e:u32` | `.ret e` |
 | 11 | PRINT | `e:u32` | `.print e` |
+| 12 | HEAP | `op:u8 k:u32 n:u32 args:u32[n]` | `.heap op args` (`op`: 0 `new k`, 1 `get k`, 2 `set k`, 3 `tag`); **reserved**: the loader does not accept it yet (#20) |
 
 ```
 Lit := 0 INT  i:i64
@@ -43,6 +44,7 @@ Lit := 0 INT  i:i64
      | 3 STR  n:u32 bytes:u8[n]       -- .arr of n chars (also the empty array)
      | 4 NONE                         -- the empty option (`false`)
      | 5 VOID                         -- .tup []
+     | 6 REF  a:u32                   -- .ref a; reserved, not accepted by the loader (#20)
 ```
 
 A literal that is not one of these (a non-string array, a non-empty tuple,

@@ -70,6 +70,13 @@ theorem eval_sound {P : Prog} : ∀ (n : Nat) {s e r s'},
         exact .prim_ok (evalList_sound n hx)
       · simp only [Prod.mk.injEq] at hy; obtain ⟨rfl, rfl⟩ := hy
         exact .prim_stop (evalList_sound n hx)
+    | heap op es =>
+      simp only [eval] at h
+      rcases bindL_some h with ⟨vs, s₁, hx, hk⟩ | ⟨r₁, s₁, hx, hy⟩
+      · simp only [Option.some.injEq, Prod.mk.injEq] at hk; obtain ⟨rfl, rfl⟩ := hk
+        exact .heap_ok (evalList_sound n hx)
+      · simp only [Prod.mk.injEq] at hy; obtain ⟨rfl, rfl⟩ := hy
+        exact .heap_stop (evalList_sound n hx)
     | call f es =>
       simp only [eval] at h
       rcases bindL_some h with ⟨vs, s₁, hx, hk⟩ | ⟨r₁, s₁, hx, hy⟩
@@ -238,6 +245,16 @@ theorem eval_complete {P : Prog} : ∀ {s e r s'}, Eval P s e r s' →
         obtain ⟨k, rfl, hk⟩ := succ_above hm
         simp only [eval, H k hk, bindL]⟩
   | _, _, _, _, .prim_stop h => by
+      obtain ⟨n, H⟩ := evalList_complete h
+      exact ⟨n+1, fun m hm => by
+        obtain ⟨k, rfl, hk⟩ := succ_above hm
+        simp only [eval, H k hk, bindL]⟩
+  | _, _, _, _, .heap_ok h => by
+      obtain ⟨n, H⟩ := evalList_complete h
+      exact ⟨n+1, fun m hm => by
+        obtain ⟨k, rfl, hk⟩ := succ_above hm
+        simp only [eval, H k hk, bindL]⟩
+  | _, _, _, _, .heap_stop h => by
       obtain ⟨n, H⟩ := evalList_complete h
       exact ⟨n+1, fun m hm => by
         obtain ⟨k, rfl, hk⟩ := succ_above hm
@@ -433,10 +450,10 @@ theorem Eval.det {P : Prog} {s e r₁ s₁ r₂ s₂}
 /-- A program run is deterministic: one outcome, one output. -/
 theorem Runs.det {P : Prog} {r₁ o₁ r₂ o₂} (h₁ : Runs P r₁ o₁) (h₂ : Runs P r₂ o₂) :
     r₁ = r₂ ∧ o₁ = o₂ := by
-  obtain ⟨_, h₁⟩ := h₁
-  obtain ⟨_, h₂⟩ := h₂
+  obtain ⟨_, _, h₁⟩ := h₁
+  obtain ⟨_, _, h₂⟩ := h₂
   obtain ⟨hr, hs⟩ := Eval.det h₁ h₂
-  exact ⟨hr, congrArg St.out hs⟩
+  exact ⟨hr, congrArg (fun s : St => s.g.out) hs⟩
 
 /-- `Prog.run` is correct: when it finishes, the program `Runs` to that outcome and output. -/
 theorem Prog.run_sound {P : Prog} {n r out} (h : P.run n = some (r, out)) : Runs P r out := by
@@ -445,12 +462,12 @@ theorem Prog.run_sound {P : Prog} {n r out} (h : P.run n = some (r, out)) : Runs
   · simp [hx] at h
   · simp only [hx, Option.map_some, Option.some.injEq, Prod.mk.injEq] at h
     obtain ⟨rfl, rfl⟩ := h
-    exact ⟨s'.fr, eval_sound n hx⟩
+    exact ⟨s'.fr, s'.g.heap, eval_sound n hx⟩
 
 /-- `Prog.run` is complete: a program that `Runs` is run correctly by enough fuel. -/
 theorem Prog.run_complete {P : Prog} {r out} (h : Runs P r out) :
     ∃ N, ∀ n, N ≤ n → P.run n = some (r, out) := by
-  obtain ⟨fr, h⟩ := h
+  obtain ⟨fr, heap, h⟩ := h
   obtain ⟨N, H⟩ := eval_complete h
   exact ⟨N, fun n hn => by simp [Prog.run, H n hn]⟩
 

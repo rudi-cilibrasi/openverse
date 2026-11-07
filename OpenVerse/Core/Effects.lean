@@ -29,6 +29,8 @@ def Expr.mayFail (P : Prog) : Expr → Bool
   | .loop e => e.mayFail P
   | .seq a b => a.mayFail P || b.mayFail P
   | .prim op es => op.failable || Expr.mayFailList P es
+  -- a heap operation never fails (`HeapOp.apply_res`)
+  | .heap _ es => Expr.mayFailList P es
   | .call f es =>
     (match P.fns[f]? with
       | some fn => fn.decides
@@ -74,6 +76,12 @@ theorem Eval.no_fail {P : Prog} (hP : P.EffectSound) : ∀ {s e r s'},
       have ih := EvalList.no_fail hP hl
       simp only [Expr.mayFail, Bool.or_eq_false_iff] at hm
       intro h; subst h; exact ih hm.2 rfl
+  | _, _, _, _, .heap_ok (op := op) (vs := vs) (s₁ := s₁) _, _ => by
+      rcases HeapOp.apply_res op vs s₁.g with ⟨v, hv⟩ | hv <;> simp [hv]
+  | _, _, _, _, .heap_stop hl, hm => by
+      have ih := EvalList.no_fail hP hl
+      simp only [Expr.mayFail] at hm
+      intro h; subst h; exact ih hm rfl
   | _, _, _, _, .call_ok (f := f) (fn := fn) _ hc hb, hm => by
       have ih := Eval.no_fail hP hb
       simp only [Expr.mayFail, Bool.or_eq_false_iff] at hm
@@ -149,7 +157,7 @@ theorem call_no_fail {P : Prog} (hP : P.EffectSound) {s f es r s' fn}
 /-- A program whose `Main` is not `<decides>` never ends in failure. -/
 theorem Runs.no_fail {P : Prog} (hP : P.EffectSound) {fn r out}
     (hm : P.fns[P.main]? = some fn) (hd : fn.decides = false) (h : Runs P r out) : r ≠ .fail := by
-  obtain ⟨_, h⟩ := h
+  obtain ⟨_, _, h⟩ := h
   exact call_no_fail hP hm hd rfl h
 
 end OpenVerse

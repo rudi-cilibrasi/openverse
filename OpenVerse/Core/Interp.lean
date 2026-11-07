@@ -46,12 +46,14 @@ def eval (P : Prog) : Nat → St → Expr → Option (Res × St)
       | none => some (.err .slot, s₁)
   | n+1, s, .seq a b => bindR (eval P n s a) fun _ s₁ => eval P n s₁ b
   | n+1, s, .prim op es => bindL (evalList P n s es) fun vs s₁ => some (op.apply vs, s₁)
+  | n+1, s, .heap op es => bindL (evalList P n s es) fun vs s₁ =>
+      some ((op.apply vs s₁.g).1, { s₁ with g := (op.apply vs s₁.g).2 })
   | n+1, s, .call f es => bindL (evalList P n s es) fun vs s₁ =>
       match P.callable f vs.length with
       | none => some (.err .call, s₁)
-      | some fn => match eval P n ⟨frameOf fn vs, s₁.out⟩ fn.body with
+      | some fn => match eval P n ⟨frameOf fn vs, s₁.g⟩ fn.body with
         | none => none
-        | some (r, s₂) => some (retOf r, ⟨s₁.fr, s₂.out⟩)
+        | some (r, s₂) => some (retOf r, ⟨s₁.fr, s₂.g⟩)
   | n+1, s, .ite c t e => match eval P n s c with
       | none => none
       | some (.ok _, s₁) => eval P n s₁ t
@@ -62,7 +64,7 @@ def eval (P : Prog) : Nat → St → Expr → Option (Res × St)
   | n+1, s, .forE i it filt body => bindR (eval P n s it) fun v s₁ =>
       match v with
       | .arr vs => evalFor P n i filt body s₁ vs []
-      | .int _ | .logic _ | .char _ | .tup _ | .none | .some _ => some (.err .type, s₁)
+      | .int _ | .logic _ | .char _ | .tup _ | .none | .some _ | .ref _ => some (.err .type, s₁)
   | n+1, s, .loop b => match eval P n s b with
       | none => none
       | some (.ok _, s₁) => eval P n s₁ (.loop b)
@@ -74,7 +76,7 @@ def eval (P : Prog) : Nat → St → Expr → Option (Res × St)
   | n+1, s, .ret e => bindR (eval P n s e) fun v s₁ => some (.ret v, s₁)
   | n+1, s, .print e => bindR (eval P n s e) fun v s₁ =>
       match printBytes v with
-      | some bs => some (.ok .void, { s₁ with out := s₁.out ++ bs })
+      | some bs => some (.ok .void, { s₁ with g := { s₁.g with out := s₁.g.out ++ bs } })
       | none => some (.err .type, s₁)
 
 /-- Evaluate an argument list, left to right, with fuel `n`. -/
@@ -117,6 +119,6 @@ end
 /-- Run `Main()` with fuel `n`: the outcome and the output, or `none` when the
     fuel runs out (both implementations report this as `limit: fuel exhausted`). -/
 def Prog.run (P : Prog) (n : Nat) : Option (Res × List Nat) :=
-  (eval P n Prog.initSt (.call P.main [])).map fun (r, s) => (r, s.out)
+  (eval P n Prog.initSt (.call P.main [])).map fun (r, s) => (r, s.g.out)
 
 end OpenVerse

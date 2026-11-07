@@ -25,6 +25,7 @@ def Expr.brkSafe (inLoop : Bool) : Expr → Bool
   | .loop b => b.brkSafe true
   | .seq a b => a.brkSafe inLoop && b.brkSafe inLoop
   | .prim _ es => Expr.brkSafeList inLoop es
+  | .heap _ es => Expr.brkSafeList inLoop es
   | .call _ es => Expr.brkSafeList inLoop es
   | .ite c t e => c.brkSafe inLoop && t.brkSafe inLoop && e.brkSafe inLoop
   | .forE _ it filt body => it.brkSafe inLoop && filt.brkSafe inLoop && body.brkSafe inLoop
@@ -87,6 +88,9 @@ theorem Eval.no_control {P : Prog} (hP : P.checkControl = true) : ∀ {s e r s'}
       simp only [Expr.brkSafe, Bool.and_eq_true] at hb; exact ih _ hb.1
   | _, _, _, _, .prim_ok _, _, _ => apply_ctlOK _ _ _
   | _, _, _, _, .prim_stop hl, _, hb => EvalList.no_control hP hl _ _ rfl hb
+  | _, _, _, _, .heap_ok (op := op) (vs := vs) (s₁ := s₁) _, _, _ => by
+      rcases HeapOp.apply_res op vs s₁.g with ⟨v, hv⟩ | hv <;> simp [hv, Res.ctlOK]
+  | _, _, _, _, .heap_stop hl, _, hb => EvalList.no_control hP hl _ _ rfl hb
   | _, _, _, _, .call_ok (fn := fn) _ hc hb', _, _ => by
       have ih := Eval.no_control hP hb'
       unfold Prog.callable at hc
@@ -161,7 +165,7 @@ end
     ends with a control error. -/
 theorem Runs.no_control {P : Prog} (hP : P.checkControl = true) {r out} (h : Runs P r out) :
     r ≠ .err .control := by
-  obtain ⟨_, h⟩ := h
+  obtain ⟨_, _, h⟩ := h
   have := Eval.no_control hP h false (by simp [Expr.brkSafe, Expr.brkSafeList])
   intro he; subst he; exact this
 
