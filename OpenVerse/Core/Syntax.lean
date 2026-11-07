@@ -103,6 +103,9 @@ structure Fn where
   /-- `<decides>`: calls may fail (and must be written `F[…]`). -/
   decides : Bool
   body    : Expr
+  /-- Calls may change an existing object (#35): `false` for a function
+      whose effects exclude `writes` (`<computes>`, `<reads>`, `<allocates>`). -/
+  writes  : Bool := true
   deriving Repr, Inhabited
 
 /-- A program: its functions, and the index of `Main`. -/

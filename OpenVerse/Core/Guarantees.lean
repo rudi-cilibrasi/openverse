@@ -36,4 +36,13 @@ theorem Prog.accepted {P : Prog} {S : Sigs} {Γs : List (List VTy)} {τ : VTy}
   obtain ⟨hty, hv⟩ := Runs.typed (Prog.checkTypes_sound ht) hm hr
   exact ⟨hs, hty, Runs.no_control hctl hr, hv, hf, fun r' out' h' => Runs.det h' hr⟩
 
+/-- **What a function without `writes` guarantees** (#35). In a program
+    that passes `Prog.check`, a call of a function marked as not writing
+    (`<computes>`, `<reads>`, `<allocates>`), with arguments that do not
+    write, leaves every existing object, at its address, with its fields. -/
+theorem Prog.accepted_no_writes {P : Prog} (hc : P.check = true) {s f es r s' fn}
+    (hf : P.fns[f]? = some fn) (hw : fn.writes = false) (hes : Expr.writesHeapList P es = false)
+    (h : Eval P s (.call f es) r s') : s.g.keeps s'.g :=
+  call_no_writes (Prog.check_writeSound hc) hf hw hes h
+
 end OpenVerse
