@@ -1,0 +1,13 @@
+3 3
+popped 3, 2 left
+hello
+empty
+3: 1 2 3 .
+3: 3 2 1 .
+1: 1 .
+2
+2 1
+qp
+a token is itself
+two tokens differ, with equal payloads
+exit=0

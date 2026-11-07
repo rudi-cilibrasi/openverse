@@ -131,10 +131,11 @@ polymorphic recursion.
 
 ## Classes as references
 
-Verse classes are references (#34). A non-parametric class or interface `T`
-is `VTy.ref ts` in Verse Core, where `ts` are the tags of the concrete
+Verse classes are references (#34). A class or interface `T(args)` is
+`VTy.ref ts args` in Verse Core, where `ts` are the tags of the concrete
 classes at or below `T`; a class's tag is its index in definition order,
-and the class table of the certificate gives each tag its fields' types.
+and the class table of the certificate gives each tag its fields' types,
+in terms of its type parameters (#39).
 Fields are laid out with the inherited ones first, so a field has the same
 position in every class below the one that declares it.
 
@@ -159,10 +160,14 @@ position in every class below the one that declares it.
   (`DefaultE.new`). The generic witness of a class type argument is a slot
   of exactly that type, so that the checker infers the instantiation
   exactly.
-- **Parametric classes stay values** (#18): one option holding the fields.
-  They cannot be in a hierarchy, and their field types mention type
-  variables, which the class table may not. So they have no `var` fields and
-  are not `<unique>`.
+- **Parametric classes** (#39) are references with type arguments. Their
+  objects record no type arguments; the heap typing of the proofs does
+  (`HeapTy`). A construction goes through a temporary of its type, so that
+  the checker takes the type arguments from it rather than inferring them
+  from the fields. A parametric class has no prototype (a prototype has
+  fixed type arguments), so a slot of its type starts as a new placeholder
+  object, built from defaults at the slot's type arguments: one allocation
+  per call. They are not in hierarchies yet.
 
 ## Typing the heap
 

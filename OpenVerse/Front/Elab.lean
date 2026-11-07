@@ -167,11 +167,10 @@ def TyEnv.concreteBelow (env : TyEnv) (T : String) : List String :=
     let i := env.info d
     !i.isIface && !i.isAbstract && env.isSub d T
 
-/-- A class represented by references to heap objects (#34): every
-    non-parametric class and interface. A parametric class is a value (#18),
-    and cannot be in a hierarchy. -/
+/-- A class represented by references to heap objects (#34): every class
+    and interface, parametric ones too (#39), with a concrete class below. -/
 def TyEnv.isRefClass (env : TyEnv) (n : String) : Bool :=
-  env.classes.contains n && (env.sparams.lookup n).isNone &&
+  env.classes.contains n &&
     -- with no concrete class below, `n` has no instance: it stays the (empty)
     -- value of #18, so a variable of its type needs no placeholder
     env.classes.any fun d => let i := env.info d; !i.isIface && !i.isAbstract && (env.supers d).contains n
@@ -186,7 +185,7 @@ def TyEnv.refTags (env : TyEnv) (T : String) : List Nat := (env.concreteBelow T)
 /-- A class or interface with no concrete class below it: no value of its
     type can exist, so code that uses one is unreachable. -/
 def TyEnv.isEmptyClass (env : TyEnv) (n : String) : Bool :=
-  env.classes.contains n && (env.sparams.lookup n).isNone && !env.isRefClass n
+  env.classes.contains n && !env.isRefClass n
 
 /-- Whether field `f` of class `c` is a `var`. -/
 def TyEnv.isVarField (env : TyEnv) (c f : String) : Bool := env.varFields.contains (c, f)
@@ -200,11 +199,11 @@ partial def Ty.holdsMutable (env : TyEnv) (t : Ty) (seen : List String := []) : 
   | .tup ts => ts.any (·.holdsMutable env seen)
   | .map k v => k.holdsMutable env seen || v.holdsMutable env seen
   | .struct n ts =>
-    if env.classes.contains n && (env.sparams.lookup n).isNone then
+    if env.classes.contains n then
       -- an object below `n`, or one its fields reach
       (env.concreteBelow n).any fun d =>
         (env.supers d).any env.uniques.contains ||
-        (env.fields d).any fun (f, ft, _) =>
+        (env.fields d (if d == n then ts else [])).any fun (f, ft, _) =>
           env.varFields.contains (d, f) || (!seen.contains d && ft.holdsMutable env (d :: seen))
     else (env.fields n ts).any fun (_, t, _) => t.holdsMutable env seen
   | _ => false
@@ -257,7 +256,7 @@ partial def Ty.toVTy (env : TyEnv) : Ty → VTy
   | .opt t => .opt (t.toVTy env)
   | .tup ts => .tup (ts.map (Ty.toVTy env))
   | .struct n ts =>
-    if env.isRefClass n then .ref (env.refTags n) []
+    if env.isRefClass n then .ref (env.refTags n) (ts.map (Ty.toVTy env))
     else if env.classes.contains n then
       -- one option per concrete class at or below `n`
       .tup ((env.concreteBelow n).map fun d =>
@@ -618,8 +617,10 @@ partial def protoValue (env : TyEnv) (done : List (String × Nat)) : Ty → Opti
     below it, wherever that is (prototypes may form cycles, so classes that
     require each other have them too). -/
 def TyEnv.makeProtos (env : TyEnv) : List (String × Nat × List Value) :=
+  -- (a parametric class has none: a prototype has fixed type arguments)
   let concrete := env.classes.filter fun d =>
-    let i := env.info d; env.isRefClass d && !i.isIface && !i.isAbstract
+    let i := env.info d
+    env.isRefClass d && !i.isIface && !i.isAbstract && (env.sparams.lookup d).isNone
   let addrs := concrete.zipIdx
   concrete.filterMap fun d =>
     ((env.fields d).mapM fun (f : String × Ty × Option SExpr) => protoValue env addrs f.2.1).map
@@ -638,7 +639,8 @@ partial def _root_.OpenVerse.VTy.hasRef : VTy → Bool
     mentions a type variable or a reference), the hidden parameter of a type
     parameter, a parameter of a subtype, a placeholder object of the first
     concrete class below a class (#34), or a tuple of such. `visiting` are
-    the classes whose placeholders are being built. -/
+    the class types (with their type arguments, #39) whose placeholders are
+    being built. -/
 partial def slotDefault (env : TyEnv) (dictBase : Nat) (params : List Ty) (visiting : List String)
     (t : Ty) : Except String Expr := do
   let vt := t.toVTy env
@@ -661,9 +663,14 @@ partial def slotDefault (env : TyEnv) (dictBase : Nat) (params : List Ty) (visit
       -- the first class below `n` whose placeholder needs no instance of a
       -- class whose placeholder is being built
       let mut lastErr := s!"no class at or below {n} can be constructed without an instance of itself, so a variable or temporary of type {n} has no initial value"
+      -- (instantiations that grow without end are cut off)
+      if visiting.length > 32 then throw lastErr
       for d in env.concreteBelow n do
-        if visiting.contains d then continue
-        match (env.fields d).mapM fun (_, ft, _) => slotDefault env dictBase params (d :: visiting) ft with
+        let dargs := if d == n then ts else []
+        let key := (Ty.struct d dargs).show
+        if visiting.contains key then continue
+        match (env.fields d dargs).mapM fun (_, ft, _) =>
+            slotDefault env dictBase params (key :: visiting) ft with
         | .ok fs => return .heap (.new (env.tagOf d)) fs
         | .error msg => lastErr := msg
       throw lastErr
@@ -1619,7 +1626,8 @@ partial def elabSet (ctx : Ctx) (p : Pos) (lhs0 : SExpr) (op : Option String) (r
     if let some l := ctx.lookup n then
       if let .struct sn _ := l.ty then
         if ctx.types.isRefClass sn then
-          let some (k, t) := fieldIndex (ctx.types.fields sn []) f
+          let targs := match l.ty with | .struct _ ts => ts | _ => []
+          let some (k, t) := fieldIndex (ctx.types.fields sn targs) f
             | eerr p s!"class {sn} has no field '{f}'"
           if !ctx.types.isVarField sn f then eerr p (classSetMsg sn f)
           let ds := ctx.types.concreteBelow sn
@@ -1858,7 +1866,12 @@ partial def elabConstruct (ctx : Ctx) (p : Pos) (name : String) (targs : List ST
       -- then the `block:` clauses of its class chain, from the top
       let chain := ((ctx.types.supers name).filter fun d => !(ctx.types.info d).isIface).reverse
       let blocks := chain.filterMap fun d => (ctx.sig? s!"{d}.$block").map (d, ·)
-      if blocks.isEmpty then return ⟨.heap (.new (ctx.types.tagOf name)) es, ty⟩
+      if blocks.isEmpty then
+        -- a parametric class's object goes through a temporary of its type,
+        -- which gives the checker its type arguments (#39)
+        if tas.isEmpty then return ⟨.heap (.new (ctx.types.tagOf name)) es, ty⟩
+        let x ← fresh ty
+        return ⟨.assign x (.heap (.new (ctx.types.tagOf name)) es), ty⟩
       let x ← fresh ty
       let mut calls : List Expr := []
       for (d, s) in blocks do
@@ -2035,8 +2048,6 @@ def elabProgram (allTops00 : List STop) (opts : Options := {}) : Except String C
     let p := cd.pos
     for sp in cd.specs do
       match sp with
-      | "unique" =>
-        if !cd.tps.isEmpty then throw s!"{p.show}: a parametric class cannot be <unique> (it is a value, #34)"
       | "persistable" | "final_super" => throw s!"{p.show}: <{sp}> classes are not supported yet (#11)"
       | _ => pure ()
     let mut parent : Option String := none
@@ -2112,8 +2123,6 @@ def elabProgram (allTops00 : List STop) (opts : Options := {}) : Except String C
             fs := fs ++ [(f, sty, d, isVar)]
       for (f, sty, d, isVar) in cd.fields do
         if f == "Self" then throw s!"{cd.pos.show}: a field of {cd.name} cannot be called Self"
-        if isVar && !cd.tps.isEmpty then
-          throw s!"{cd.pos.show}: var field '{f}' of the parametric class {cd.name}: a parametric class is a value, so its fields cannot change (#34)"
         if ((henv.supers cd.name).drop 1).any (declares · f) then
           throw s!"{cd.pos.show}: field '{f}' of {cd.name} has the name of an inherited method"
         match fs.findIdx? (fun (g : String × STy × Option SExpr × Bool) => g.1 == f) with
@@ -2247,8 +2256,6 @@ def elabProgram (allTops00 : List STop) (opts : Options := {}) : Except String C
   env := { env with structs := structs.toList }
   env := { env with protos := env.makeProtos }
   if let some n := env.recursiveStruct? then
-    if henv.classes.contains n then
-      throw s!"the parametric class {n} contains itself (a parametric class is a value; only other classes can be recursive, #34)"
     throw s!"struct {n} contains itself (recursive struct types are not supported)"
   -- map keys in field types, now that every struct's fields are known
   -- (a key type can be a struct that holds a class)
@@ -2547,8 +2554,10 @@ def elabProgram (allTops00 : List STop) (opts : Options := {}) : Except String C
       ((g.params ++ g.tparams.map fun (v, c) => Ty.param v c).map (Ty.toVTy genv), g.ret.toVTy genv)
   let fsigs := if protoList.isEmpty then fsigs else fsigs ++ [([], mainSig.ret.toVTy env)]
   -- the class table: the fields of each class, by tag (#34); the prototypes (#37)
+  -- (a parametric class's field types mention its type parameters, #39)
   let classTable := env.classes.map fun d =>
-    if env.isRefClass d then (env.fields d).map (·.2.1.toVTy env) else []
+    let cenv := { env with tvars := ((env.sparams.lookup d).getD []).map fun (v, c) => (v, Ty.param v c) }
+    if env.isRefClass d then (env.fields d).map (·.2.1.toVTy cenv) else []
   let S : Sigs := { fns := fsigs, classes := classTable, protos := protoList.map fun (t, _) => (t, []) }
   if !P.checkTypes S slotTys.toList then
     throw "internal error: the elaborated program does not pass Prog.checkTypes"
