@@ -35,6 +35,15 @@ namespace OpenVerse
   | some (.stop r, s) => some (r, s)
 
 mutual
+/-- The elements a primitive builds before any of them is used: a range's
+    length (else nothing). The interpreter gives up, as out of fuel, rather
+    than build more than its remaining fuel could ever visit (#102), which
+    `eval_sound` allows (giving up claims nothing) and `eval_complete` pays
+    for with more fuel. -/
+def Prim.cost : Prim → List Value → Nat
+  | .range, [.int a, .int b] => (b + 1 - a).toNat
+  | _, _ => 0
+
 /-- Evaluate one expression with fuel `n`. -/
 def eval (P : Prog) : Nat → St → Expr → Option (Res × St)
   | 0, _, _ => none
@@ -45,7 +54,8 @@ def eval (P : Prog) : Nat → St → Expr → Option (Res × St)
       | some s₂ => some (.ok v, s₂)
       | none => some (.err .slot, s₁)
   | n+1, s, .seq a b => bindR (eval P n s a) fun _ s₁ => eval P n s₁ b
-  | n+1, s, .prim op es => bindL (evalList P n s es) fun vs s₁ => some (op.apply vs, s₁)
+  | n+1, s, .prim op es => bindL (evalList P n s es) fun vs s₁ =>
+      if n < op.cost vs then none else some (op.apply vs, s₁)
   | n+1, s, .heap op es => bindL (evalList P n s es) fun vs s₁ => some (St.heapStep op vs s₁)
   | n+1, s, .call f es => bindL (evalList P n s es) fun vs s₁ =>
       match P.callable f vs.length with
