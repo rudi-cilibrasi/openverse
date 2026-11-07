@@ -715,6 +715,8 @@ partial def parsePrimary (stop : Nat) : PM SExpr := do
   | .ident "for" => parseFor stop
   | .ident "case" => parseCase stop
   | .ident "loop" => bump; return .loop t.pos (← parseBody stop)
+  -- `defer:` (Book of Verse ch. 7): runs when its scope exits; `$defer(body)`
+  | .ident "defer" => bump; return .app t.pos (.ident t.pos "$defer") [← parseBody stop] false
   | .ident "block" => bump; parseBody stop
   | .ident "let" =>
     if (← peekT 1).isSym "(" then
