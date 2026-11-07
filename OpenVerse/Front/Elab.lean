@@ -83,13 +83,30 @@ partial def Ty.subst (σ : List (String × Ty)) : Ty → Ty
   | .struct n ts => .struct n (ts.map (Ty.subst σ))
   | t => t
 
+/-- Where a class or interface sits in the hierarchy (#18). -/
+structure ClassInfo where
+  /-- The superclass of a class (single inheritance). -/
+  parent : Option String := none
+  /-- The interfaces a class implements, or an interface extends. -/
+  ifaces : List String := []
+  isIface : Bool := false
+  isAbstract : Bool := false
+  isFinal : Bool := false
+  deriving Inhabited
+
 /-- The user-defined types of a program. -/
 structure TyEnv where
   /-- Each struct: its fields in order (name, type, default value). The
       field types of a parametric struct mention its parameters as `Ty.param`. -/
   structs : List (String × List (String × Ty × Option SExpr)) := []
-  /-- The structs that are classes (Book of Verse ch. 10): not comparable. -/
+  /-- The structs that are classes or interfaces (Book of Verse ch. 10), in
+      definition order: not comparable. -/
   classes : List String := []
+  /-- The hierarchy of each class and interface. -/
+  cinfo : List (String × ClassInfo) := []
+  /-- The abstract methods (class or interface, method): their functions are
+      never called. -/
+  abstracts : List (String × String) := []
   /-- The type parameters of each parametric struct (name, declared comparable). -/
   sparams : List (String × List (String × Bool)) := []
   /-- Each enum: its enumerators in order. -/
@@ -110,6 +127,45 @@ def TyEnv.fields (env : TyEnv) (n : String) (args : List Ty := []) : List (Strin
     fs.map fun (f, t, d) => (f, t.subst σ, d)
   | none => fs
 
+def TyEnv.info (env : TyEnv) (c : String) : ClassInfo := (env.cinfo.lookup c).getD {}
+
+/-- A class or interface and everything above it: its class chain first,
+    nearest first, then the interfaces of the chain, breadth first. This is
+    also the order in which a method's implementation is looked up. -/
+def TyEnv.supers (env : TyEnv) (c : String) : List String := Id.run do
+  let mut chain := [c]
+  let mut cur := c
+  for _ in [0:env.cinfo.length] do
+    match (env.info cur).parent with
+    | some q => if chain.contains q then break else chain := chain ++ [q]; cur := q
+    | none => break
+  let mut out := chain
+  let mut frontier := chain.flatMap fun k => (env.info k).ifaces
+  for _ in [0:env.cinfo.length + 1] do
+    let new := (frontier.filter (!out.contains ·)).eraseDups
+    if new.isEmpty then break
+    out := out ++ new
+    frontier := new.flatMap fun k => (env.info k).ifaces
+  return out
+
+/-- `d` is `T` or below it. -/
+def TyEnv.isSub (env : TyEnv) (d T : String) : Bool := (env.supers d).contains T
+
+/-- The concrete classes at or below `T`, in definition order: a value of
+    static type `T` holds an instance of one of them. In Verse Core it is the
+    tuple of one option per such class, holding that class's fields (#18). -/
+def TyEnv.concreteBelow (env : TyEnv) (T : String) : List String :=
+  env.classes.filter fun d =>
+    let i := env.info d
+    !i.isIface && !i.isAbstract && env.isSub d T
+
+/-- The field types a value of struct or class type `n` holds in Verse Core:
+    a struct's, or those of every concrete class below a class. -/
+def TyEnv.repFieldTys (env : TyEnv) (n : String) (args : List Ty) : List Ty :=
+  if env.classes.contains n then
+    (env.concreteBelow n).flatMap fun d => (env.fields d (if d == n then args else [])).map (·.2.1)
+  else (env.fields n args).map (·.2.1)
+
 /-- The struct names a type mentions (not looking inside those structs). -/
 partial def Ty.structNames : Ty → List String
   | .struct n ts => n :: ts.flatMap Ty.structNames
@@ -122,7 +178,7 @@ partial def Ty.structNames : Ty → List String
     types are finite trees, so such a struct has no representation). -/
 def TyEnv.recursiveStruct? (env : TyEnv) : Option String :=
   let deps (n : String) : List String :=
-    (env.fields n).flatMap fun (_, t, _) => t.structNames
+    (env.repFieldTys n []).flatMap Ty.structNames
   -- the structs reachable from `n` in at most `env.structs.length` steps
   let reach (n : String) : List String := Id.run do
     let mut seen : List String := []
@@ -145,7 +201,12 @@ partial def Ty.toVTy (env : TyEnv) : Ty → VTy
   | .arr t => .arr (t.toVTy env)
   | .opt t => .opt (t.toVTy env)
   | .tup ts => .tup (ts.map (Ty.toVTy env))
-  | .struct n ts => .tup ((env.fields n ts).map fun (_, t, _) => t.toVTy env)
+  | .struct n ts =>
+    if env.classes.contains n then
+      -- one option per concrete class at or below `n`
+      .tup ((env.concreteBelow n).map fun d =>
+        .opt (.tup ((env.fields d (if d == n then ts else [])).map fun (_, t, _) => t.toVTy env)))
+    else .tup ((env.fields n ts).map fun (_, t, _) => t.toVTy env)
   | .enum _ => .int
   | .map k v => .arr (.tup [k.toVTy env, v.toVTy env])
   -- the j-th type parameter of the generic function being elaborated
@@ -199,8 +260,9 @@ where
       let kids := match t with
         | .arr u | .opt u => [u]
         | .tup us => us
-        -- a struct is the tuple of its fields in Verse Core
-        | .struct n us => (env.fields n us).map (·.2.1)
+        -- a struct is the tuple of its fields in Verse Core, a class the
+        -- options of the classes below it
+        | .struct n us => env.repFieldTys n us
         | .map k v => [k, v]
         | _ => []
       1 + go b (kids ++ rest)
@@ -275,6 +337,8 @@ structure Ctx where
   selfClass : Option String := none
 
 structure ESt where
+  /-- The program's types, for conversions between class types (`coerce`). -/
+  env : TyEnv := {}
   nslots : Nat := 0
   /-- The type of each slot allocated so far (the certificate for `Prog.checkTypes`). -/
   slotTys : Array Ty := #[]
@@ -365,6 +429,21 @@ partial def resolveTy (env : TyEnv) (p : Pos) : STy → EM Ty
 def Ctx.lookup (ctx : Ctx) (n : String) : Option Local := ctx.locals.find? (·.name == n)
 def Ctx.sig? (ctx : Ctx) (n : String) : Option Sig := ctx.sigs.find? (·.name == n)
 
+/-- Class or interface `c` has method `m`, its own or inherited. -/
+def Ctx.hasMethod (ctx : Ctx) (c m : String) : Bool :=
+  (ctx.types.supers c).any fun e => (ctx.sig? s!"{e}.{m}").isSome
+
+/-- Where the method `m` of `c` is declared (its signature): the nearest of
+    `c` and the classes and interfaces above it. -/
+def Ctx.methodDecl? (ctx : Ctx) (c m : String) : Option String :=
+  (ctx.types.supers c).find? fun e => (ctx.sig? s!"{e}.{m}").isSome
+
+/-- The implementation of method `m` for an instance of class `d`: the
+    nearest non-abstract definition above it. -/
+def Ctx.implOf? (ctx : Ctx) (d m : String) : Option String :=
+  (ctx.types.supers d).find? fun e =>
+    (ctx.sig? s!"{e}.{m}").isSome && !ctx.types.abstracts.contains (e, m)
+
 def p2 (op : Prim) (a b : Expr) : Expr := .prim op [a, b]
 
 /-- The slot of the hidden parameter for type parameter `n`. -/
@@ -384,7 +463,14 @@ partial def witness (env : TyEnv) (dictBase : Nat) (dictVars : List String) : Ty
   | .opt t => .prim .mkSome [witness env dictBase dictVars t]
   | .tup ts => .prim .mkTup (ts.map (witness env dictBase dictVars))
   | .map k v => .prim .mkArr [.prim .mkTup [witness env dictBase dictVars k, witness env dictBase dictVars v]]
-  | .struct n ts => .prim .mkTup ((env.fields n ts).map fun (_, t, _) => witness env dictBase dictVars t)
+  | .struct n ts =>
+    if env.classes.contains n then
+      -- every option set, so that the checker infers the type (the value is
+      -- never observed)
+      .prim .mkTup ((env.concreteBelow n).map fun d =>
+        .prim .mkSome [.prim .mkTup ((env.fields d (if d == n then ts else [])).map fun (_, t, _) =>
+          witness env dictBase dictVars t)])
+    else .prim .mkTup ((env.fields n ts).map fun (_, t, _) => witness env dictBase dictVars t)
   -- a type parameter of the enclosing function: its hidden parameter (an
   -- unknown one cannot occur; the checker would reject the program)
   | .param n _ => match dictVars.idxOf? n with
@@ -410,25 +496,72 @@ partial def slotDefault (env : TyEnv) (dictBase : Nat) (t : Ty) : Expr :=
     | some d => .local d
     | none => .lit vt.default
   | .tup ts => .prim .mkTup (ts.map (slotDefault env dictBase))
-  | .struct n ts => .prim .mkTup ((env.fields n ts).map fun (_, t, _) => slotDefault env dictBase t)
+  | .struct n ts =>
+    -- a class starts with no option set, which has every such type
+    if env.classes.contains n then .lit vt.default
+    else .prim .mkTup ((env.fields n ts).map fun (_, t, _) => slotDefault env dictBase t)
   | _ => .lit vt.default
 
-/-- Convert `r` to type `target`: equal types, `false` (bottom) to anything,
-    and anything to `void` (Book of Verse: "void accepts any value"). -/
-def coerce (p : Pos) (r : R) (target : Ty) : EM Expr :=
-  if r.ty == target || r.ty == .never then pure r.e
-  else if target == .void then pure (.seq r.e (.lit .void))
-  else eerr p s!"expected {target.show}, found {r.ty.show}"
+/-- An instance of class `d` (its fields `rep`) as a value of static type
+    `T` above it: `rep` in `d`'s option, the others empty. -/
+def classWrap (env : TyEnv) (T d : String) (rep : Expr) : Expr :=
+  .prim .mkTup ((env.concreteBelow T).map fun e => if e == d then .prim .mkSome [rep] else .lit .none)
 
-/-- The type of a two-branch construct. -/
-def join (p : Pos) (a b : Ty) (exp : Option Ty) : EM Ty :=
+/-- The Verse Core type of the fields of class `d`, as a front-end type. -/
+def classRepTy (env : TyEnv) (d : String) (args : List Ty := []) : Ty :=
+  .tup ((env.fields d args).map (·.2.1))
+
+/-- Convert a value `e` of type `a` to the supertype `b`, when `a` is a class
+    below the class or interface `b`, or an array or option of such (arrays
+    and options are covariant): the options of the classes below `a` move to
+    their places among those below `b`. -/
+partial def convert (env : TyEnv) (e : Expr) (a b : Ty) : EM (Option Expr) := do
+  match a, b with
+  | .struct S [], .struct T [] =>
+    if env.classes.contains S && env.classes.contains T && S != T && env.isSub S T then
+      let x ← modifyGet fun s => (s.nslots, { s with nslots := s.nslots + 1, slotTys := s.slotTys.push a })
+      let below := env.concreteBelow S
+      let parts := (env.concreteBelow T).map fun d => match below.idxOf? d with
+        | some j => Expr.prim (.tupGet j) [.local x]
+        | none => .lit .none
+      return some (.seq (.assign x e) (.prim .mkTup parts))
+    else return none
+  | .arr a', .arr b' =>
+    let i ← modifyGet fun s => (s.nslots, { s with nslots := s.nslots + 1, slotTys := s.slotTys.push a' })
+    match ← convert env (.local i) a' b' with
+    | some c => return some (.forE i e (.lit (.logic true)) c)
+    | none => return none
+  | .opt a', .opt b' =>
+    let i ← modifyGet fun s => (s.nslots, { s with nslots := s.nslots + 1, slotTys := s.slotTys.push a' })
+    match ← convert env (.local i) a' b' with
+    | some c => return some (.ite (.assign i (.prim .query [e])) (.prim .mkSome [c]) (.lit .none))
+    | none => return none
+  | _, _ => return none
+
+/-- Convert `r` to type `target`: equal types, `false` (bottom) to anything,
+    anything to `void` (Book of Verse: "void accepts any value"), and a
+    class to a class or interface above it (`convert`). -/
+def coerce (p : Pos) (r : R) (target : Ty) : EM Expr := do
+  if r.ty == target || r.ty == .never then return r.e
+  if target == .void then return .seq r.e (.lit .void)
+  match ← convert (← get).env r.e r.ty target with
+  | some e => return e
+  | none => eerr p s!"expected {target.show}, found {r.ty.show}"
+
+/-- The type of a two-branch construct: two classes join at their nearest
+    common supertype. -/
+def join (p : Pos) (a b : Ty) (exp : Option Ty) : EM Ty := do
   match exp with
-  | some .void => pure .void
+  | some .void => return .void
   | _ =>
-    if a == .never then pure b
-    else if b == .never then pure a
-    else if a == b then pure a
-    else eerr p s!"the branches have different types: {a.show} and {b.show}"
+    if a == .never then return b
+    if b == .never then return a
+    if a == b then return a
+    let env := (← get).env
+    if let (.struct S [], .struct T []) := (a, b) then
+      if env.classes.contains S && env.classes.contains T then
+        if let some U := (env.supers S).find? (env.isSub T ·) then return .struct U []
+    eerr p s!"the branches have different types: {a.show} and {b.show}"
 
 
 /-- `M[k]` on the map in slot `tm` with the key in slot `tk`: the value of the
@@ -495,7 +628,7 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
         if let some c := ctx.selfClass then
           if (ctx.types.fields c).any (·.1 == n) then
             return ← elabE ctx (.member p (.ident p "Self") n) exp
-          if (ctx.sig? s!"{c}.{n}").isSome then
+          if ctx.hasMethod c n then
             eerr p s!"'{n}' is a method: call it with {n}(…)"
         match ctx.sig? n with
         | some s =>
@@ -635,7 +768,7 @@ partial def elabStmt (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM (R × Ctx) 
       if (ctx.sig? n).isSome || builtins.contains n then
         eerr p s!"'{n}' is already the name of a function or constant"
       if let some c := ctx.selfClass then
-        if (ctx.types.fields c).any (·.1 == n) || (ctx.sig? s!"{c}.{n}").isSome then
+        if (ctx.types.fields c).any (·.1 == n) || ctx.hasMethod c n then
           eerr p s!"'{n}' is already a field or method of {c}; Verse does not allow shadowing"
       let ty? ← sty.mapM (resolveTy ctx.types p)
       let r ← elabE ctx rhs ty?
@@ -680,10 +813,12 @@ partial def elabApp (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (brack
     | none =>
     -- in a method, a method of `Self`, or a field of `Self` indexed
     let selfMember? : Bool := match ctx.selfClass with
-      | some c => (ctx.sig? s!"{c}.{name}").isSome ||
+      | some c => ctx.hasMethod c name ||
           ((ctx.types.fields c).any (·.1 == name) && !builtins.contains name)
       | none => false
     if selfMember? then elabApp ctx p (.member p (.ident p "Self") name) args bracket exp else
+    -- `T[X]`, `T(X)`: a cast to class or interface `T`
+    if ctx.types.classes.contains name && (ctx.sig? name).isNone then elabCast ctx p name args bracket else
     match name with
     | "Print" =>
       let es ← elabArgs ctx p args [Ty.string]
@@ -765,21 +900,63 @@ partial def elabApp (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (brack
           let call := Expr.call s.idx (slots.toList.map fun o => Expr.local o.get!)
           return ⟨steps.toList.foldr Expr.seq call, s.ret⟩
       | none => eerr p s!"unknown function '{name}'"
+  | .member mp (.ident _ "(super:)") m =>
+    -- `(super:)M(…)`: the implementation the current method's class inherits
+    let some c := ctx.selfClass | eerr p "(super:) can only be used in a method"
+    let some impl := ((ctx.types.supers c).drop 1).find? fun e =>
+        (ctx.sig? s!"{e}.{m}").isSome && !ctx.types.abstracts.contains (e, m)
+      | eerr p s!"nothing above {c} implements '{m}'"
+    elabApp ctx p (.ident mp s!"{impl}.{m}") (.ident mp "Self" :: args) bracket exp
   | .member mp obj m =>
     let r ← elabE ctx obj none
     match r.ty with
     | .struct c targs =>
-      if let (true, some ms) := (ctx.types.classes.contains c, ctx.sig? s!"{c}.{m}") then
+      let env := ctx.types
+      if let (true, some owner) := (env.classes.contains c, ctx.methodDecl? c m) then
+        let ms := (ctx.sig? s!"{owner}.{m}").get!
         if ms.decides && !bracket then eerr p s!"{m} is <decides>: call it with {m}[…]"
         if !ms.decides && bracket then eerr p s!"{m} cannot fail: call it with {m}(…)"
         if ms.named.isEmpty && args.length + 1 != ms.params.length then
           eerr p s!"{m} takes {ms.params.length - 1} argument(s), found {args.length}"
-        -- `Obj.M(…)`: the receiver is evaluated first, then passed as `Self`
         let slot ← fresh r.ty
         let recv := s!"$recv{slot}"
-        let ctx' := { ctx with locals := { name := recv, slot, ty := r.ty, mutable := false } :: ctx.locals }
-        let rc ← elabApp ctx' p (.ident mp s!"{c}.{m}") (.ident mp recv :: args) bracket exp
-        return ⟨.seq (.assign slot r.e) rc.e, rc.ty⟩
+        let ds := env.concreteBelow c
+        -- one implementation for every class below the receiver's type, above
+        -- that type: a direct call (the receiver evaluated first, as `Self`)
+        let direct : Option String := match (ds.map (ctx.implOf? · m)).eraseDups with
+          | [some e] => if env.isSub c e then some e else none
+          | _ => none
+        if let some e := direct then
+          let ctx' := { ctx with locals := { name := recv, slot, ty := r.ty, mutable := false } :: ctx.locals }
+          let rc ← elabApp ctx' p (.ident mp s!"{e}.{m}") (.ident mp recv :: args) bracket exp
+          return ⟨.seq (.assign slot r.e) rc.e, rc.ty⟩
+        -- otherwise dispatch on the class of the receiver's value: the
+        -- receiver, then the arguments, once each, then the implementation of
+        -- the class whose option is set
+        if !ms.tparams.isEmpty then
+          eerr p s!"{m} has type parameters, so it cannot be dispatched on the class of the receiver (#18)"
+        if args.any (fun | .decl _ n _ _ _ => n.startsWith "?" | _ => false) then
+          eerr p s!"named arguments to a method dispatched on the class of the receiver are not supported (#18)"
+        let mut pre : Array Expr := #[.assign slot r.e]
+        let mut locs : List Local := [{ name := recv, slot, ty := r.ty, mutable := false }]
+        let mut argIds : Array SExpr := #[]
+        for (a, t) in args.zip (ms.params.drop 1) do
+          let ta ← fresh t
+          pre := pre.push (.assign ta (← coerce a.pos (← elabE ctx a (some t)) t))
+          locs := { name := s!"$arg{ta}", slot := ta, ty := t, mutable := false } :: locs
+          argIds := argIds.push (.ident mp s!"$arg{ta}")
+        let mut acc : Expr := .prim .userErr []   -- no option set: unreachable
+        let mut rty : Ty := ms.ret
+        for (d, j) in (ds.zip (List.range ds.length)).reverse do
+          let some e := ctx.implOf? d m | eerr p s!"class {d} does not implement '{m}'"
+          let td ← fresh (classRepTy env d)
+          let sd ← fresh (.struct d [])
+          let ctx' := { ctx with locals := { name := s!"$self{sd}", slot := sd, ty := .struct d [], mutable := false } :: (locs ++ ctx.locals) }
+          let rc ← elabApp ctx' p (.ident mp s!"{e}.{m}") (.ident mp s!"$self{sd}" :: argIds.toList) bracket exp
+          rty := rc.ty
+          acc := .ite (.assign td (.prim .query [.prim (.tupGet j) [.local slot]]))
+            (.seq (.assign sd (classWrap env d d (.local td))) rc.e) acc
+        return ⟨pre.toList.foldr Expr.seq acc, rty⟩
       else if (ctx.types.fields c targs).any (·.1 == m) then
         -- `S.F[i]`, `S.F(k)`: a field, indexed
         elabIndexLike ctx p (← elabMember ctx p r m) args bracket
@@ -787,6 +964,31 @@ partial def elabApp (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (brack
       else eerr p s!"struct {c} has no field '{m}' (structs have no methods)"
     | _ => elabMethod ctx p r m args bracket
   | _ => elabIndexLike ctx p (← elabE ctx f none) args bracket
+
+/-- `T[X]`: `X` as a value of class or interface `T`, failing unless its class
+    is below `T`; `T(X)`: an upcast, which cannot fail (Book of Verse ch. 10). -/
+partial def elabCast (ctx : Ctx) (p : Pos) (T : String) (args : List SExpr) (bracket : Bool) : EM R := do
+  let env := ctx.types
+  if (env.sparams.lookup T).isSome then eerr p s!"cannot cast to the parametric class {T}"
+  let [a] := args | eerr p s!"a cast {T}[X] takes one value"
+  let r ← elabE ctx a none
+  let S ← match r.ty with
+    | .struct S [] => if env.classes.contains S then pure S else eerr p s!"cannot cast a {S} to {T}"
+    | t => eerr p s!"cannot cast a {t.show} to {T}"
+  if !bracket then
+    if !env.isSub S T then
+      eerr p s!"{T}(…) converts to a supertype, and {S} is not below {T}: use {T}[…] to cast down"
+    return ⟨← coerce p r (.struct T []), .struct T []⟩
+  let below := env.concreteBelow S
+  let common := below.filter (env.isSub · T)
+  if common.isEmpty then eerr p s!"no class is below both {S} and {T}, so {T}[…] would always fail"
+  let x ← fresh r.ty
+  let mut acc : Expr := .prim .fail []
+  for d in common.reverse do
+    let j := (below.idxOf? d).getD 0
+    let td ← fresh (classRepTy env d)
+    acc := .ite (.assign td (.prim .query [.prim (.tupGet j) [.local x]])) (classWrap env T d (.local td)) acc
+  return ⟨.seq (.assign x r.e) acc, .struct T []⟩
 
 /-- A call of a generic function. Its type arguments are inferred by matching
     its signature: the result type against the expected type (unless that is
@@ -1253,10 +1455,21 @@ partial def elabMember (ctx : Ctx) (p : Pos) (r : R) (m : String) : EM R := do
   | .map _ _, "Length" => return ⟨.prim .len [r.e], .int⟩
   | .struct sn targs, f =>
     match fieldIndex (ctx.types.fields sn targs) f with
-    | some (k, t) => return ⟨.prim (.tupGet k) [r.e], t⟩
+    | some (k, t) =>
+      if ctx.types.classes.contains sn then
+        -- a class: the field of whichever option is set (inherited fields come
+        -- first, so it has the same position in all of them)
+        let ds := ctx.types.concreteBelow sn
+        let x ← fresh r.ty
+        let mut acc : Expr := .prim .userErr []   -- no option set: unreachable
+        for (d, j) in (ds.zip (List.range ds.length)).reverse do
+          let td ← fresh (classRepTy ctx.types d (if d == sn then targs else []))
+          acc := .ite (.assign td (.prim .query [.prim (.tupGet j) [.local x]])) (.prim (.tupGet k) [.local td]) acc
+        return ⟨.seq (.assign x r.e) acc, t⟩
+      return ⟨.prim (.tupGet k) [r.e], t⟩
     | none =>
       if ctx.types.classes.contains sn then
-        if (ctx.sig? s!"{sn}.{f}").isSome then eerr p s!"'{f}' is a method of {sn}: call it with {f}(…)"
+        if ctx.hasMethod sn f then eerr p s!"'{f}' is a method of {sn}: call it with {f}(…)"
         eerr p s!"class {sn} has no field '{f}'"
       eerr p s!"struct {sn} has no field '{f}'"
   | t, m => eerr p s!"{t.show} has no member '{m}'"
@@ -1290,6 +1503,11 @@ partial def elabConstruct (ctx : Ctx) (p : Pos) (name : String) (targs : List ST
         eerr p s!"the default of field '{f}' of {name} depends on itself"
       coerce p (← elabE { dctx with defaults := (name, f) :: dctx.defaults } d (some t)) t
     | none, none => eerr p s!"field '{f}' of {name} has no default value and must be given"
+  if ctx.types.classes.contains name then
+    let i := ctx.types.info name
+    if i.isIface then eerr p s!"{name} is an interface: it cannot be constructed"
+    if i.isAbstract then eerr p s!"{name} is <abstract>: it cannot be constructed"
+    return ⟨classWrap ctx.types name name (.prim .mkTup es), ty⟩
   return ⟨.prim .mkTup es, ty⟩
 
 /-- `map{k₁ => v₁, …}`: entries are evaluated in order; a key given twice
@@ -1399,50 +1617,174 @@ def checkTParams (env : TyEnv) (tps : List TParam) : Except String (List (String
     | c => throw s!"{tp.pos.show}: unknown constraint subtype({c}) (openverse supports {tp.name}:type and {tp.name}:subtype(comparable))"
   return out.toList
 
+/-- A class or interface definition, as parsed. -/
+structure CDef where
+  pos : Pos
+  name : String
+  tps : List TParam
+  specs : List String
+  parents : List String
+  isIface : Bool
+  fields : List (String × STy × Option SExpr × Bool)
+  overrides : List String
+  methods : List STop
+
 /-- Elaborate a parsed program into a Verse Core program that passes `Prog.check`
     and `Prog.checkTypes`. -/
 def elabProgram (allTops0 : List STop) : Except String Compiled := do
-  -- a class (phase 1, #14) is a struct, and each method `M` of class `c` a
-  -- function `c.M` whose first parameter is `Self`, generic over the class's
-  -- type parameters and then its own
-  let mut classes : Array String := #[]
+  -- classes and interfaces (#14, #18): each is a struct whose fields are
+  -- those inherited first, then its own; each method `M` of `c` a function
+  -- `c.M` whose first parameter is `Self`, generic over the class's type
+  -- parameters and then its own; an abstract method one whose body is
+  -- unreachable
+  let cdefs : List CDef := allTops0.filterMap fun
+    | .classDef p n tps specs parents isIface fields overrides methods =>
+      some { pos := p, name := n, tps, specs, parents, isIface, fields, overrides, methods }
+    | _ => none
+  let cdef? (n : String) : Option CDef := cdefs.find? (·.name == n)
+  let methodNamed (cd : CDef) (m : String) : Option STop := cd.methods.find? fun
+    | .fn _ x .. => x == m
+    | _ => false
+  let declares (n m : String) : Bool := ((cdef? n).bind (methodNamed · m)).isSome
+  let hasBody (n m : String) : Bool := match (cdef? n).bind (methodNamed · m) with
+    | some (.fn _ _ _ _ effs _ _) => !effs.contains "$abstract"
+    | _ => false
+  -- the hierarchy
+  let mut cinfo : Array (String × ClassInfo) := #[]
+  for cd in cdefs do
+    let p := cd.pos
+    for sp in cd.specs do
+      match sp with
+      | "unique" => throw s!"{p.show}: <unique> classes are not supported yet (#11 phase 3)"
+      | "persistable" | "final_super" => throw s!"{p.show}: <{sp}> classes are not supported yet (#11)"
+      | _ => pure ()
+    if cd.isIface && !cd.fields.isEmpty then
+      throw s!"{p.show}: interface fields are not supported yet (#18)"
+    let mut parent : Option String := none
+    let mut ifaces : Array String := #[]
+    for q in cd.parents do
+      let some qd := cdef? q | throw s!"{p.show}: unknown class or interface '{q}'"
+      if !qd.tps.isEmpty || !cd.tps.isEmpty then
+        throw s!"{p.show}: parametric classes cannot inherit, be inherited from or implement interfaces yet (#18)"
+      if qd.isIface then ifaces := ifaces.push q
+      else
+        if cd.isIface then throw s!"{p.show}: interface {cd.name} cannot extend class {q}"
+        if parent.isSome then throw s!"{p.show}: class {cd.name} has two superclasses (a class inherits from at most one)"
+        if qd.specs.contains "final" then throw s!"{p.show}: class {q} is <final>: it cannot be inherited from"
+        parent := some q
+    let info : ClassInfo := { parent, ifaces := ifaces.toList, isIface := cd.isIface,
+                              isAbstract := cd.specs.contains "abstract", isFinal := cd.specs.contains "final" }
+    cinfo := cinfo.push (cd.name, info)
+  let henv : TyEnv := { classes := cdefs.map (·.name), cinfo := cinfo.toList }
+  let directUp (n : String) : List String := (henv.info n).parent.toList ++ (henv.info n).ifaces
+  for cd in cdefs do
+    let mut seen : List String := []
+    let mut frontier := directUp cd.name
+    for _ in [0:cdefs.length + 1] do
+      let new := frontier.filter (!seen.contains ·)
+      seen := seen ++ new
+      frontier := new.flatMap directUp
+    if seen.contains cd.name then throw s!"{cd.pos.show}: {cd.name} inherits from itself"
+  -- the fields of each class: its superclass's, then its own (an
+  -- `<override>` field gives an inherited one a new default)
+  let mut full : Array (String × List (String × STy × Option SExpr × Bool)) := #[]
+  let mut fieldOverrides : Array (Pos × String × String × STy) := #[]
+  for _ in [0:cdefs.length + 1] do
+    for cd in cdefs do
+      if (full.find? (·.1 == cd.name)).isSome then continue
+      let inherited? : Option (List (String × STy × Option SExpr × Bool)) :=
+        match (henv.info cd.name).parent with
+        | none => some []
+        | some q => (full.find? (·.1 == q)).map (·.2)
+      let some inh := inherited? | continue
+      let mut fs : List (String × STy × Option SExpr × Bool) := inh
+      for (f, sty, d, isVar) in cd.fields do
+        if f == "Self" then throw s!"{cd.pos.show}: a field of {cd.name} cannot be called Self"
+        if isVar then
+          throw s!"{cd.pos.show}: var field '{f}': mutable class fields need reference semantics, not supported yet (#11 phase 3)"
+        match fs.findIdx? (fun (g : String × STy × Option SExpr × Bool) => g.1 == f) with
+        | some k =>
+          if !cd.overrides.contains f then
+            throw s!"{cd.pos.show}: field '{f}' of {cd.name} has the name of an inherited field (write {f}<override>:t = … to give it a new default)"
+          let (_, sty0, _, v0) := fs[k]!
+          fs := fs.set k (f, sty0, d, v0)
+          fieldOverrides := fieldOverrides.push (cd.pos, cd.name, f, sty)
+        | none =>
+          if cd.overrides.contains f then
+            throw s!"{cd.pos.show}: {f}<override> in {cd.name} does not override an inherited field"
+          fs := fs ++ [(f, sty, d, isVar)]
+      full := full.push (cd.name, fs)
+  let fullOf (n : String) := ((full.find? (·.1 == n)).map (·.2)).getD []
+  -- the methods
   let mut expanded : Array STop := #[]
+  let mut abstracts : Array (String × String) := #[]
+  let mut overridePairs : Array (Pos × String × String) := #[]
   for t in allTops0 do
     match t with
-    | .classDef p n tps specs fields methods =>
-      for sp in specs do
-        match sp with
-        | "unique" => throw s!"{p.show}: <unique> classes are not supported yet (#11 phase 3)"
-        | "abstract" | "castable" => throw s!"{p.show}: <{sp}> classes are not supported yet (#11 phase 2)"
-        | "persistable" | "final_super" => throw s!"{p.show}: <{sp}> classes are not supported yet (#11)"
-        | _ => pure ()
-      if fields.any (·.1 == "Self") then throw s!"{p.show}: a field of {n} cannot be called Self"
-      for (f, _, _, isVar) in fields do
-        if isVar then
-          throw s!"{p.show}: var field '{f}': mutable class fields need reference semantics, not supported yet (#11 phase 3)"
-      classes := classes.push n
-      expanded := expanded.push (.const p n none (.structDef p tps fields))
-      let selfTy : STy := if tps.isEmpty then .name n else .app n (tps.map fun tp => STy.name tp.name)
-      for m in methods do
-        match m with
-        | .fn mp mn ps mtps effs ret body =>
-          if (fields.any (·.1 == mn)) then throw s!"{mp.show}: '{mn}' is both a field and a method of {n}"
-          if ps.any (·.name == "Self") then throw s!"{mp.show}: a method parameter cannot be called Self"
-          if builtins.contains mn then throw s!"{mp.show}: a method cannot be called {mn}, the name of a built-in function"
-          for prm in ps do
-            if fields.any (·.1 == prm.name) || methods.any (fun | .fn _ m .. => m == prm.name | _ => false) then
-              throw s!"{mp.show}: parameter '{prm.name}' of {mn} is already a field or method of {n}; Verse does not allow shadowing"
-          expanded := expanded.push
-            (.fn mp s!"{n}.{mn}" ({ name := "Self", ty := selfTy } :: ps) (tps ++ mtps) effs ret body)
-        | _ => pure ()
+    | .classDef .. => pure ()
     | t => expanded := expanded.push t
+  for cd in cdefs do
+    let n := cd.name
+    let fs := fullOf n
+    expanded := expanded.push (.const cd.pos n none (.structDef cd.pos cd.tps fs))
+    let selfTy : STy := if cd.tps.isEmpty then .name n else .app n (cd.tps.map fun tp => STy.name tp.name)
+    for m in cd.methods do
+      match m with
+      | .fn mp mn ps mtps effs ret body =>
+        if fs.any (·.1 == mn) then throw s!"{mp.show}: '{mn}' is both a field and a method of {n}"
+        if ps.any (·.name == "Self") then throw s!"{mp.show}: a method parameter cannot be called Self"
+        if builtins.contains mn then throw s!"{mp.show}: a method cannot be called {mn}, the name of a built-in function"
+        for prm in ps do
+          if fs.any (·.1 == prm.name) || (henv.supers n).any (declares · prm.name) then
+            throw s!"{mp.show}: parameter '{prm.name}' of {mn} is already a field or method of {n}; Verse does not allow shadowing"
+        -- overriding (Book of Verse ch. 10: `M<override>`, the same signature)
+        let isOverride := effs.contains "override"
+        match ((henv.supers n).drop 1).find? (declares · mn) with
+        | some q =>
+          if !isOverride then throw s!"{mp.show}: {mn} is inherited from {q}: mark it {mn}<override> to override it"
+          match (cdef? q).bind (methodNamed · mn) with
+          | some (.fn _ _ _ qtps qeffs _ _) =>
+            if qeffs.contains "final" then throw s!"{mp.show}: {q}.{mn} is <final>: it cannot be overridden"
+            if !qtps.isEmpty || !mtps.isEmpty then
+              throw s!"{mp.show}: a method with its own type parameters cannot be overridden yet (#18)"
+          | _ => pure ()
+          overridePairs := overridePairs.push (mp, s!"{n}.{mn}", s!"{q}.{mn}")
+        | none =>
+          if isOverride then throw s!"{mp.show}: {mn}<override> does not override an inherited method"
+        let body ← if effs.contains "$abstract" then do
+            if !cd.isIface && !cd.specs.contains "abstract" then
+              throw s!"{mp.show}: {mn} has no body: give it one, or make {n} <abstract>"
+            abstracts := abstracts.push (n, mn)
+            pure (SExpr.app mp (.ident mp "Err") [] false)   -- never called
+          else pure body
+        expanded := expanded.push
+          (.fn mp s!"{n}.{mn}" ({ name := "Self", ty := selfTy } :: ps) (cd.tps ++ mtps) effs ret body)
+      | _ => pure ()
+  -- a concrete class implements every method it has, each unambiguously
+  for cd in cdefs do
+    let i := henv.info cd.name
+    if i.isIface || i.isAbstract then continue
+    let ups := henv.supers cd.name
+    let names := (ups.flatMap fun u => ((cdef? u).map (·.methods)).getD [] |>.filterMap fun
+      | .fn _ x .. => some x
+      | _ => none).eraseDups
+    for mn in names do
+      let impls := ups.filter (hasBody · mn)
+      match impls with
+      | [] =>
+        let q := (ups.find? (declares · mn)).getD cd.name
+        throw s!"{cd.pos.show}: {cd.name} must implement {mn} (declared abstract in {q})"
+      | first :: rest =>
+        if (henv.info first).isIface then
+          if let some other := rest.find? fun o => (henv.info o).isIface && !henv.isSub first o && !henv.isSub o first then
+            throw s!"{cd.pos.show}: {cd.name} inherits {mn} from both {first} and {other}: override it in {cd.name}"
   let allTops := expanded.toList
   -- the type definitions: `name := struct …` and `name := enum …`
   let isTypeDef : STop → Bool
     | .const _ _ none (.structDef ..) | .const _ _ none (.enumDef ..) => true
     | _ => false
   let tops := allTops.filter (!isTypeDef ·)
-  let mut env : TyEnv := { classes := classes.toList }
+  let mut env : TyEnv := { classes := henv.classes, cinfo := henv.cinfo, abstracts := abstracts.toList }
   for t in allTops do
     match t with
     | .const _ n none (.enumDef _ vals) => env := { env with enums := env.enums ++ [(n, vals)] }
@@ -1467,7 +1809,7 @@ def elabProgram (allTops0 : List STop) : Except String Compiled := do
     | _ => pure ()
   env := { env with structs := structs.toList }
   if let some n := env.recursiveStruct? then
-    if classes.contains n then
+    if henv.classes.contains n then
       throw s!"class {n} contains itself (recursive classes need references, not supported yet: #11 phase 3)"
     throw s!"struct {n} contains itself (recursive struct types are not supported)"
   -- map keys in field types, now that every struct's fields are known
@@ -1547,7 +1889,7 @@ def elabProgram (allTops0 : List STop) : Except String Compiled := do
       match top with
       | .const _ _ _ body =>
         let ctx : Ctx := { sigs := sigs.toList ++ gsigs.toList, sigProg := mkSigProg sigs, types := env }
-        match (elabE ctx body none).run {} with
+        match (elabE ctx body none).run { env } with
         | .ok (r, _) =>
           if r.ty == .never then left := left.push (top, idx)
           else sigs := sigs.set! idx { sigs[idx]! with ret := r.ty }
@@ -1560,11 +1902,25 @@ def elabProgram (allTops0 : List STop) : Except String Compiled := do
     match top with
     | .const p n _ body =>
       let ctx : Ctx := { sigs := sigs.toList ++ gsigs.toList, sigProg := mkSigProg sigs, types := env }
-      let (r, _) ← (elabE ctx body none).run {}
+      let (r, _) ← (elabE ctx body none).run { env }
       if r.ty == .never then throw s!"{p.show}: cannot infer the type of '{n}'"
     | _ => pure ()
   let sigProg := mkSigProg sigs
   let allSigs := sigs.toList ++ gsigs.toList
+  -- an override has the signature of the method it overrides, and an
+  -- overriding field the inherited field's type (Book of Verse ch. 10)
+  for (mp, mine, theirs) in overridePairs do
+    match allSigs.find? (·.name == mine), allSigs.find? (·.name == theirs) with
+    | some a, some b =>
+      if !((a.params.drop 1) == (b.params.drop 1) && a.ret == b.ret && a.decides == b.decides) then
+        throw s!"{mp.show}: {mine} must have the signature of {theirs}, which it overrides"
+    | _, _ => pure ()
+  for (fp, cname, f, sty) in fieldOverrides do
+    let (t, _) ← (resolveTy env fp sty).run {}
+    match fieldIndex (env.fields cname) f with
+    | some (_, t0) =>
+      if !(t == t0) then throw s!"{fp.show}: {f}<override> in {cname} must have the inherited type {t0.show}"
+    | none => pure ()
   -- check every field default once, with its struct's type parameters opaque
   -- (a default is elaborated again, at its field's type, at each construction
   -- that omits the field)
@@ -1576,7 +1932,7 @@ def elabProgram (allTops0 : List STop) : Except String Compiled := do
       for (f, ft, d) in (env.structs.lookup n).getD [] do
         if let some d := d then
           let ctx := { ctx with defaults := [(n, f)] }
-          match (do coerce d.pos (← elabE ctx d (some ft)) ft : EM Expr).run {} with
+          match (do coerce d.pos (← elabE ctx d (some ft)) ft : EM Expr).run { env } with
           | .ok _ => pure ()
           | .error msg => throw s!"{msg} (in the default of field '{f}' of {n})"
     | _ => pure ()
@@ -1600,7 +1956,7 @@ def elabProgram (allTops0 : List STop) : Except String Compiled := do
     let hidden := tps.map fun (v, c) => Ty.param v c
     let arity := ps.length + hidden.length
     let ((r, _), st) ← (elabStmt ctx body (some ret)).run
-      { nslots := arity, slotTys := (ptys ++ hidden).toArray }
+      { env, nslots := arity, slotTys := (ptys ++ hidden).toArray }
     let (e, st) ← (coerce p r ret).run st
     let e := if ret == .void then Expr.seq e (.lit .void) else e
     let inits := (st.slotTys.toList.drop arity).map (slotDefault env ps.length)
@@ -1618,7 +1974,7 @@ def elabProgram (allTops0 : List STop) : Except String Compiled := do
       slotTys := slotTys.push tys
     | .const p n _ body =>
       let ctx : Ctx := { sigs := allSigs, sigProg, types := env }
-      let (r, st) ← (elabStmt ctx body (some sig.ret)).run {}
+      let (r, st) ← (elabStmt ctx body (some sig.ret)).run { env }
       let (e, st) ← (coerce p r.1 sig.ret).run st
       let tys := st.slotTys.toList.map (Ty.toVTy env)
       fns := fns.push { name := n, arity := 0, nslots := st.nslots, decides := false,

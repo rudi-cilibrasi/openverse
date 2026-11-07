@@ -596,6 +596,10 @@ partial def parsePrimary (stop : Nat) : PM SExpr := do
   | .char c => bump; return .char t.pos c
   | .str parts => bump; return .str t.pos (← parseInterp parts)
   | .sym "(" =>
+    if (← peekT 1).isKw "super" && (← peekT 2).isSym ":" && (← peekT 3).isSym ")" then
+      -- `(super:)M`: the parent's implementation of a method
+      bump; bump; bump; bump
+      return .member t.pos (.ident t.pos "(super:)") (← expectIdent)
     bump
     let (items, commas) ← parseParenItems
     match items with
@@ -713,26 +717,45 @@ def parseFnBodyAt (c : Nat) : PM SExpr := do
 /-- One item of a class body at column `c`: a field `[var] Name:type [= e]`
     or a method `Name(params)<effects>:type = body`. -/
 partial def parseClassItem (c : Nat) :
-    PM (Sum (String × STy × Option SExpr × Bool) STop) := do
+    PM (Sum ((String × STy × Option SExpr × Bool) × Bool) STop) := do
   let t ← peekT
-  if t.isKw "block" then perr t "block: initialisers in classes are not supported yet (#11)"
-  if t.isKw "var" || (← peekT 1).isSym ":" then return .inl (← parseField c)
+  if t.isKw "block" then perr t "block: initialisers in classes are not supported yet (#11 phase 3)"
+  let isVar := t.isKw "var"
+  if isVar then bump
   let name ← expectIdent
   let pre ← parseSpecs
+  if (← peekT).isSym ":" then
+    -- a field, `Name<override>:t = e` giving an inherited field a new default
+    bump
+    let ty ← parseType
+    let a ← peekT
+    let d ← if a.isSym "=" || a.isSym ":=" then do bump; pure (some (← parseExpr c)) else pure none
+    return .inl ((name, ty, d, isVar), pre.contains "override")
+  if isVar then perr t "expected a field after var"
   expectSym "("
   let (ps, tps) ← parseParamList
   let effs ← parseSpecs
   expectSym ":"
   let ret ← parseType
   let a ← peekT
-  if a.isSym "=" || a.isSym ":=" then bump else perr a "expected '=' before the method body"
-  return .inr (.fn t.pos name ps.toList tps.toList (pre ++ effs) ret (← parseFnBodyAt c))
+  if a.isSym "=" || a.isSym ":=" then
+    bump
+    return .inr (.fn t.pos name ps.toList tps.toList (pre ++ effs) ret (← parseFnBodyAt c))
+  -- no body: an abstract method
+  return .inr (.fn t.pos name ps.toList tps.toList (pre ++ effs ++ ["$abstract"]) ret (.block t.pos []))
 
-/-- `class` (after the keyword): specifiers, then `:` + items or `{ items }`. -/
-partial def parseClassBody (p : Pos) (name : String) (tps : List TParam) : PM STop := do
+/-- `class` or `interface` (after the keyword): specifiers, the parents
+    `(base, interface₁, …)`, then `:` + items or `{ items }`. -/
+partial def parseClassBody (p : Pos) (name : String) (tps : List TParam) (isIface : Bool) : PM STop := do
   let specs ← parseSpecs
+  let mut parents := #[]
+  if (← peekT).isSym "(" then
+    bump
+    repeat
+      parents := parents.push (← expectIdent)
+      if (← peekT).isSym "," then bump else break
+    expectSym ")"
   let o ← peekT
-  if o.isSym "(" then perr o "class inheritance is not supported yet (#11 phase 2)"
   let mut items := #[]
   if o.isSym ":" then
     bump
@@ -755,10 +778,11 @@ partial def parseClassBody (p : Pos) (name : String) (tps : List TParam) : PM ST
       if a.isSym "}" then bump; break
       if a.isSym "," || a.isSym ";" then bump; continue
       items := items.push (← parseClassItem 0)
-  else perr o "expected ':' or '{' after class"
-  let fields := items.toList.filterMap fun | .inl f => some f | .inr _ => none
+  else perr o s!"expected ':' or '\{' after {if isIface then "interface" else "class"}"
+  let fields := items.toList.filterMap fun | .inl (f, _) => some f | .inr _ => none
+  let overrides := items.toList.filterMap fun | .inl ((n, _), true) => some n | _ => none
   let methods := items.toList.filterMap fun | .inr m => some m | .inl _ => none
-  return .classDef p name tps specs fields methods
+  return .classDef p name tps specs parents.toList isIface fields overrides methods
 
 partial def parseTops : PM (List STop) := do
   let mut tops := #[]
@@ -792,7 +816,7 @@ partial def parseTops : PM (List STop) := do
             | false, none, .app "subtype" [.name c] => pure c
             | _, _, _ => perr n s!"a parameter of a parametric type is written {prm.name}:type or {prm.name}:subtype(…)"
           pure ({ pos := t.pos, name := prm.name, constraint := c } : TParam)
-        tops := tops.push (← parseClassBody t.pos name tparams)
+        tops := tops.push (← parseClassBody t.pos name tparams false)
         continue
       if (← peekT).isSym ":=" && (← peekT 1).isKw "struct" then
         -- `name(t:type, …) := struct …`: a parametric struct
@@ -816,10 +840,11 @@ partial def parseTops : PM (List STop) := do
       if a.isSym "=" || a.isSym ":=" then bump else perr a "expected '=' before the function body"
       tops := tops.push (.fn t.pos name ps.toList tps.toList (pre ++ effs) ret (← parseFnBody))
     else if n.isSym ":=" && (← peekT 1).isKw "interface" then
-      perr n "interfaces are not supported yet (#11 phase 2)"
+      bump; bump
+      tops := tops.push (← parseClassBody t.pos name [] true)
     else if n.isSym ":=" && (← peekT 1).isKw "class" then
       bump; bump
-      tops := tops.push (← parseClassBody t.pos name [])
+      tops := tops.push (← parseClassBody t.pos name [] false)
     else if n.isSym ":=" then
       bump
       tops := tops.push (.const t.pos name none (← parseFnBody))
