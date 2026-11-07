@@ -1801,7 +1801,32 @@ partial def elabArgs (ctx : Ctx) (p : Pos) (args : List SExpr) (tys : List Ty) :
 partial def elabInts (ctx : Ctx) (p : Pos) (args : List SExpr) : EM (List Expr) :=
   elabArgs ctx p args (args.map fun _ => .int)
 
+/-- A call. One tuple argument that a call cannot take as it is is expanded
+    into several (Book of Verse ch. 3, #140): of a method, an overloaded or a
+    generic function as of any other (`elabAppBase` does plain calls). -/
 partial def elabApp (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (bracket : Bool)
+    (exp : Option Ty) : EM R := do
+  match args with
+  | [a] =>
+    if ctx.retries ≥ 3 then return ← elabAppBase ctx p f args bracket exp
+    let saved ← get
+    tryCatch (elabAppBase ctx p f args bracket exp) fun err => do
+      set saved
+      let c2 := { ctx with retries := ctx.retries + 1 }
+      match ← tryCatch (some <$> elabE c2 a none) (fun _ => pure none) with
+      | some ⟨e, .tup ts⟩ =>
+        if ts.length < 2 then set saved; throw err
+        let tt ← fresh (.tup ts)
+        let nm := s!"$tuple{tt}"
+        let c3 := { c2 with locals := { name := nm, slot := tt, ty := .tup ts, mutable := false } :: c2.locals }
+        let parts := (List.range ts.length).map fun (i : Nat) => SExpr.app a.pos (.ident a.pos nm) [.int a.pos (i : Int)] false
+        match ← tryCatch (some <$> elabAppBase c3 p f parts bracket exp) (fun _ => pure none) with
+        | some r => return ⟨.seq (.assign tt e) r.e, r.ty⟩
+        | none => set saved; throw err
+      | _ => set saved; throw err
+  | _ => elabAppBase ctx p f args bracket exp
+
+partial def elabAppBase (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (bracket : Bool)
     (exp : Option Ty) : EM R := do
   let needBracket (name : String) : EM Unit := do
     if !bracket then eerr p s!"{name} can fail: call it with {name}[…]"
