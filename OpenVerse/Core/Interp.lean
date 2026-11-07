@@ -37,7 +37,7 @@ namespace OpenVerse
 mutual
 /-- The elements a primitive builds before any of them is used: a range's
     length (else nothing). The interpreter gives up, as out of fuel, rather
-    than build more than its remaining fuel could ever visit (#101), which
+    than build more than its remaining fuel could ever visit (#102), which
     `eval_sound` allows (giving up claims nothing) and `eval_complete` pays
     for with more fuel. -/
 def Prim.cost : Prim → List Value → Nat
