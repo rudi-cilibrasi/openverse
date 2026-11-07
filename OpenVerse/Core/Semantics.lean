@@ -4,11 +4,12 @@
   `Eval P s e r s'` : in program `P`, from state `s`, expression `e`
   evaluates to outcome `r` and leaves state `s'`.
 
-  The state is the frame of the current call (its slots) and the output
-  written so far. Both are transactional: a failure context (`if`
-  condition, `for` filter) that fails restores the state it started from.
-  This is Verse's rollback of speculative execution: a failed condition
-  leaves no trace, not even in the output.
+  The state is the frame of the current call (its slots) and the global
+  part that calls share: the output written so far and the heap of objects
+  (#20). All of it is transactional: a failure context (`if` condition,
+  `for` filter) that fails restores the state it started from. This is
+  Verse's rollback of speculative execution: a failed condition leaves no
+  trace, not in the output and not in the heap.
 
   Every rule is deterministic in the sense of `OpenVerse.Core.Adequacy`
   (`Eval.det`): the relation is the graph of a partial function, which the
@@ -18,11 +19,67 @@ import OpenVerse.Core.Prims
 
 namespace OpenVerse
 
-/-- Machine state: the current frame and the output (bytes). -/
-structure St where
-  fr  : List Value
-  out : List Nat
+/-- An object of the heap: its class (a tag the front end assigns) and its fields. -/
+structure Obj where
+  tag    : Nat
+  fields : List Value
   deriving Repr, DecidableEq, Inhabited
+
+/-- The part of the state that survives a call: the output (bytes) and the heap. -/
+structure Glob where
+  out  : List Nat
+  heap : List Obj
+  deriving Repr, DecidableEq, Inhabited
+
+/-- Machine state: the current frame and the global part. -/
+structure St where
+  fr : List Value
+  g  : Glob
+  deriving Repr, DecidableEq, Inhabited
+
+/-- A heap operation on argument values: its outcome and the new global
+    state. A reference to no object, or a field out of range, is a type
+    error (the type checker excludes it). -/
+def HeapOp.apply : HeapOp → List Value → Glob → Res × Glob
+  | .new t, vs, g => (.ok (.ref g.heap.length), { g with heap := g.heap ++ [⟨t, vs⟩] })
+  | .get k, [.ref a], g => match g.heap[a]? with
+    | some o => match o.fields[k]? with
+      | some v => (.ok v, g)
+      | none => (.err .type, g)
+    | none => (.err .type, g)
+  | .set k, [.ref a, v], g => match g.heap[a]? with
+    | some o =>
+      if k < o.fields.length then (.ok v, { g with heap := g.heap.set a { o with fields := o.fields.set k v } })
+      else (.err .type, g)
+    | none => (.err .type, g)
+  | .tag, [.ref a], g => match g.heap[a]? with
+    | some o => (.ok (.int o.tag), g)
+    | none => (.err .type, g)
+  | _, _, g => (.err .type, g)
+
+/-- Reading a field just written gives the value written. -/
+theorem HeapOp.get_set {g : Glob} {a k : Nat} {v : Value} {o : Obj}
+    (ho : g.heap[a]? = some o) (hk : k < o.fields.length) :
+    (HeapOp.get k).apply [.ref a] ((HeapOp.set k).apply [.ref a, v] g).2 =
+      (.ok v, ((HeapOp.set k).apply [.ref a, v] g).2) := by
+  obtain ⟨ha, rfl⟩ := List.getElem?_eq_some_iff.mp ho
+  simp [HeapOp.apply, hk, ha, List.getElem?_set_self]
+
+/-- The fields of a new object are the arguments it was allocated with. -/
+theorem HeapOp.get_new {g : Glob} {t k : Nat} {vs : List Value} {v : Value} (hv : vs[k]? = some v) :
+    (HeapOp.get k).apply [.ref g.heap.length] ((HeapOp.new t).apply vs g).2 =
+      (.ok v, ((HeapOp.new t).apply vs g).2) := by
+  simp [HeapOp.apply, hv]
+
+/-- A heap operation succeeds or raises a type error: it never fails,
+    breaks, returns, or raises a slot, call or control error. -/
+theorem HeapOp.apply_res (op : HeapOp) (vs : List Value) (g : Glob) :
+    (∃ v, (op.apply vs g).1 = .ok v) ∨ (op.apply vs g).1 = .err .type := by
+  unfold HeapOp.apply
+  split
+  all_goals first
+    | (simp; done)
+    | (split <;> first | (simp; done) | (split <;> simp))
 
 /-- Read slot `i`: its value, or a slot error outside the frame. -/
 def readSlot (s : St) (i : Nat) : Res :=
@@ -86,8 +143,8 @@ inductive Eval (P : Prog) : St → Expr → Res → St → Prop
       Eval P s (.prim op es) r s₁
   | call_ok {s s₁ s₂ f es vs fn r} :
       EvalList P s es (.ok vs) s₁ → P.callable f vs.length = some fn →
-      Eval P ⟨frameOf fn vs, s₁.out⟩ fn.body r s₂ →
-      Eval P s (.call f es) (retOf r) ⟨s₁.fr, s₂.out⟩
+      Eval P ⟨frameOf fn vs, s₁.g⟩ fn.body r s₂ →
+      Eval P s (.call f es) (retOf r) ⟨s₁.fr, s₂.g⟩
   | call_bad {s s₁ f es vs} :
       EvalList P s es (.ok vs) s₁ → P.callable f vs.length = none →
       Eval P s (.call f es) (.err .call) s₁
@@ -131,13 +188,19 @@ inductive Eval (P : Prog) : St → Expr → Res → St → Prop
       Eval P s (.ret e) r s₁
   | print_ok {s s₁ e v bs} :
       Eval P s e (.ok v) s₁ → printBytes v = some bs →
-      Eval P s (.print e) (.ok .void) { s₁ with out := s₁.out ++ bs }
+      Eval P s (.print e) (.ok .void) { s₁ with g := { s₁.g with out := s₁.g.out ++ bs } }
   | print_bad {s s₁ e v} :
       Eval P s e (.ok v) s₁ → printBytes v = none →
       Eval P s (.print e) (.err .type) s₁
   | print_stop {s s₁ e r} :
       Eval P s e r s₁ → r.isOk = false →
       Eval P s (.print e) r s₁
+  | heap_ok {s s₁ op es vs} :
+      EvalList P s es (.ok vs) s₁ →
+      Eval P s (.heap op es) (op.apply vs s₁.g).1 { s₁ with g := (op.apply vs s₁.g).2 }
+  | heap_stop {s s₁ op es r} :
+      EvalList P s es (.stop r) s₁ →
+      Eval P s (.heap op es) r s₁
 
 /-- Big-step evaluation of an argument list, left to right. -/
 inductive EvalList (P : Prog) : St → List Expr → LRes → St → Prop
@@ -180,10 +243,10 @@ end
 
 /-- Running a program: call `Main()` with an empty output. The result is the
     outcome of `Main` and the bytes it printed. -/
-def Prog.initSt : St := ⟨[], []⟩
+def Prog.initSt : St := ⟨[], ⟨[], []⟩⟩
 
 /-- `P` run to completion gives outcome `r` and output `out`. -/
 def Runs (P : Prog) (r : Res) (out : List Nat) : Prop :=
-  ∃ fr, Eval P Prog.initSt (.call P.main []) r ⟨fr, out⟩
+  ∃ fr heap, Eval P Prog.initSt (.call P.main []) r ⟨fr, ⟨out, heap⟩⟩
 
 end OpenVerse

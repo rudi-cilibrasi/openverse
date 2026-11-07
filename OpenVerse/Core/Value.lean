@@ -35,6 +35,8 @@ inductive Value where
   | none  : Value
   /-- `option{v}`. -/
   | some  : Value → Value
+  /-- A reference to object `a` of the heap (a class instance, #20). -/
+  | ref   : Nat → Value
   deriving Repr, Inhabited
 
 namespace Value
@@ -64,6 +66,12 @@ def decEq : (a b : Value) → Decidable (a = b)
   | .some x, .some y => match decEq x y with
     | isTrue h => isTrue (by subst h; rfl)
     | isFalse h => isFalse (by intro h'; cases h'; exact h rfl)
+  | .ref x, .ref y =>
+    if h : x = y then isTrue (by subst h; rfl) else isFalse (by intro h'; cases h'; exact h rfl)
+  | .int _, .ref _ | .logic _, .ref _ | .char _, .ref _ | .arr _, .ref _ | .tup _, .ref _ | .none, .ref _
+  | .some _, .ref _ => isFalse (by intro h; cases h)
+  | .ref _, .int _ | .ref _, .logic _ | .ref _, .char _ | .ref _, .arr _ | .ref _, .tup _ | .ref _, .none
+  | .ref _, .some _ => isFalse (by intro h; cases h)
   | .int _, .logic _ | .int _, .char _ | .int _, .arr _ | .int _, .tup _ | .int _, .none | .int _, .some _ => isFalse (by intro h; cases h)
   | .logic _, .int _ | .logic _, .char _ | .logic _, .arr _ | .logic _, .tup _ | .logic _, .none | .logic _, .some _ => isFalse (by intro h; cases h)
   | .char _, .int _ | .char _, .logic _ | .char _, .arr _ | .char _, .tup _ | .char _, .none | .char _, .some _ => isFalse (by intro h; cases h)
@@ -96,6 +104,7 @@ partial def render : Value → String
   | .tup vs => "(" ++ ", ".intercalate (vs.map render) ++ ")"
   | .none => "false"
   | .some v => "option{" ++ render v ++ "}"
+  | .ref a => s!"ref {a}"
 
 end Value
 

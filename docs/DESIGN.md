@@ -32,9 +32,11 @@ primitives are one Lean function (`Prim.apply`) and one C file
 
 Verse's failure is not an exception. A failable expression in a failure
 context either succeeds, or fails and leaves no trace. The semantics makes
-this literal. The state is the current frame together with the output, and
-the rules for a failure context (`Eval.ite_fail`, `EvalFor.skip`) restart from
-the state *before* the context.
+this literal. The state is the current frame together with a global part
+that calls share, the output and the heap (#20), and the rules for a failure
+context (`Eval.ite_fail`, `EvalFor.skip`) restart from the state *before* the
+context. So writes to slots and to the heap, and allocations, are rolled back
+by the same rule, with no journal in the semantics.
 
 Output is rolled back as well. A `Print` in a condition that fails is not
 observed, which is the reading of "nothing changes" in Book §6.3.

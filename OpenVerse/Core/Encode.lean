@@ -56,6 +56,9 @@ def encLit : Value → EncM Nat
   | .tup [] => emit (u8 0 ++ u8 5)
   | .tup (v :: vs) => do let ids ← encLits (v :: vs); emitPrim .mkTup ids
   | .some v => do let i ← encLit v; emitPrim .mkSome [i]
+  -- a reference (#20; no program has one as a literal, and the loader does
+  -- not accept this kind yet)
+  | .ref a => emit (u8 0 ++ u8 6 ++ u32 a)
 def encLits : List Value → EncM (List Nat)
   | [] => pure []
   | v :: vs => do let i ← encLit v; let is ← encLits vs; pure (i :: is)
@@ -81,6 +84,12 @@ def encExpr : Expr → EncM Nat
   | .brk => emit (u8 9)
   | .ret e => do let x ← encExpr e; emit (u8 10 ++ u32 x)
   | .print e => do let x ← encExpr e; emit (u8 11 ++ u32 x)
+  -- heap operations (#20; the loader does not accept this tag yet)
+  | .heap op es => do
+    let ids ← encExprs es
+    let (c, k) := match op with
+      | .new t => (0, t) | .get k => (1, k) | .set k => (2, k) | .tag => (3, 0)
+    emit (u8 12 ++ u8 c ++ u32 k ++ u32 ids.length ++ ids.foldl (fun b a => b ++ u32 a) .empty)
 def encExprs : List Expr → EncM (List Nat)
   | [] => pure []
   | e :: es => do let i ← encExpr e; let is ← encExprs es; pure (i :: is)
