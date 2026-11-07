@@ -167,7 +167,10 @@ def TyEnv.concreteBelow (env : TyEnv) (T : String) : List String :=
     non-parametric class and interface. A parametric class is a value (#18),
     and cannot be in a hierarchy. -/
 def TyEnv.isRefClass (env : TyEnv) (n : String) : Bool :=
-  env.classes.contains n && (env.sparams.lookup n).isNone
+  env.classes.contains n && (env.sparams.lookup n).isNone &&
+    -- with no concrete class below, `n` has no instance: it stays the (empty)
+    -- value of #18, so a variable of its type needs no placeholder
+    env.classes.any fun d => let i := env.info d; !i.isIface && !i.isAbstract && (env.supers d).contains n
 
 /-- The class tag of class `d` in Verse Core: its index in definition order. -/
 def TyEnv.tagOf (env : TyEnv) (d : String) : Nat := (env.classes.idxOf? d).getD 0
@@ -175,6 +178,11 @@ def TyEnv.tagOf (env : TyEnv) (d : String) : Nat := (env.classes.idxOf? d).getD 
 /-- The tags of the concrete classes at or below `T`: a reference of static
     type `T` refers to an object of one of them. -/
 def TyEnv.refTags (env : TyEnv) (T : String) : List Nat := (env.concreteBelow T).map env.tagOf
+
+/-- A class or interface with no concrete class below it: no value of its
+    type can exist, so code that uses one is unreachable. -/
+def TyEnv.isEmptyClass (env : TyEnv) (n : String) : Bool :=
+  env.classes.contains n && (env.sparams.lookup n).isNone && !env.isRefClass n
 
 /-- Whether field `f` of class `c` is a `var`. -/
 def TyEnv.isVarField (env : TyEnv) (c f : String) : Bool := env.varFields.contains (c, f)
@@ -561,12 +569,15 @@ partial def slotDefault (env : TyEnv) (dictBase : Nat) (params : List Ty) (visit
   | .tup ts => return .prim .mkTup (← ts.mapM (slotDefault env dictBase params visiting))
   | .struct n ts =>
     if env.isRefClass n then
-      let some d := (env.concreteBelow n).head?
-        | throw s!"no class at or below {n} can be constructed, so a variable of type {n} has no initial value"
-      if visiting.contains d then
-        throw s!"class {d} has a field that needs an instance of {d} to be constructed, so a variable of type {n} has no initial value"
-      return .heap (.new (env.tagOf d)) (← (env.fields d).mapM fun (_, ft, _) =>
-        slotDefault env dictBase params (d :: visiting) ft)
+      -- the first class below `n` whose placeholder needs no instance of a
+      -- class whose placeholder is being built
+      let mut lastErr := s!"no class at or below {n} can be constructed without an instance of itself, so a variable or temporary of type {n} has no initial value"
+      for d in env.concreteBelow n do
+        if visiting.contains d then continue
+        match (env.fields d).mapM fun (_, ft, _) => slotDefault env dictBase params (d :: visiting) ft with
+        | .ok fs => return .heap (.new (env.tagOf d)) fs
+        | .error msg => lastErr := msg
+      throw lastErr
     -- a parametric class starts with no option set, which has every such type
     if env.classes.contains n then return .lit vt.default
     return .prim .mkTup (← (env.fields n ts).mapM fun (_, t, _) => slotDefault env dictBase params visiting t)
@@ -1056,8 +1067,7 @@ partial def elabApp (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (brack
             let rc ← elabApp ctx' p (.ident mp s!"{e}.{m}") (.ident mp s!"$self{sd}" :: argIds.toList) bracket exp
             acc := .ite (.assign sd (.heap (.isTag (cls.toList.map env.tagOf)) [.local slot]))
               (← coerce p rc ms.ret) acc
-          let y ← fresh ms.ret
-          return ⟨pre.toList.foldr Expr.seq (.assign y acc), ms.ret⟩
+          return ⟨pre.toList.foldr Expr.seq acc, ms.ret⟩
         for (d, j) in (ds.zip (List.range ds.length)).reverse do
           let some e := ctx.implOf? d m | eerr p s!"class {d} does not implement '{m}'"
           let td ← fresh (classRepTy env d)
@@ -1333,7 +1343,6 @@ partial def elabSet (ctx : Ctx) (p : Pos) (lhs0 : SExpr) (op : Option String) (r
       | some "?", _, .opt t => keys := keys.push none; ty := t
       | some "?", _, t => eerr sp s!"'?' in a set needs an option, found {t.show}"
       | some f, _, .struct sn targs =>
-        if ctx.types.classes.contains sn && !ctx.types.isRefClass sn then eerr sp (classSetMsg sn f)
         match fieldIndex (ctx.types.fields sn targs) f with
         | some (_, ft) => keys := keys.push none; ty := ft
         | none => eerr sp s!"{ty.show} has no field '{f}'"
@@ -1368,16 +1377,30 @@ partial def elabSet (ctx : Ctx) (p : Pos) (lhs0 : SExpr) (op : Option String) (r
         if ds.any fun d => ((fieldIndex (ctx.types.fields d []) f).map (·.1)).getD k0 != k0 then
           eerr sp s!"set of field '{f}' of interface {sn}, which is at different places in the classes that implement it, is not supported yet"
       | _, _ => eerr p "internal: set path"
+    -- a value of a class with no instance cannot exist: the set is unreachable
+    if tysA.any fun | .struct sn _ => ctx.types.isEmptyClass sn | _ => false then
+      let tu ← fresh leafTy
+      return ⟨.assign tu (.prim .userErr []), leafTy⟩
     if refLevel?.isNone && !l.mutable then
       eerr p s!"'{root}' is not a var; declare it with var {root}:t = …"
+    -- the values below the object (or all of them) are rebuilt: a parametric
+    -- class among them would change, but it is a value with no var field
+    for k in [0:steps.length] do
+      if refLevel?.all (k > ·) then
+        if let .struct sn _ := tysA[k]! then
+          if ctx.types.classes.contains sn && !ctx.types.isRefClass sn then
+            let (sp, f?, _) := steps.toArray[k]!
+            eerr sp s!"field '{f?.getD "?"}' of the parametric class {sn} cannot be set: a parametric class is a value (#34)"
     -- read one step of the container in slot `c` of type `cty`
     let readStep (c : Nat) (cty : Ty) (step : Option String) (key : Option (Nat × Ty)) : EM Expr := do
       match step, key, cty with
       | some "?", _, .opt _ => pure (.prim .query [.local c])
       | some f, _, .struct sn targs =>
+        -- a class's field as when it is read (an interface field may sit at
+        -- different places in different classes)
+        if ctx.types.classes.contains sn then return (← elabMember ctx p ⟨.local c, cty⟩ f).e
         let (j, _) := (fieldIndex (ctx.types.fields sn targs) f).get!
-        if ctx.types.isRefClass sn then pure (.heap (.get j) [.local c])
-        else pure (.prim (.tupGet j) [.local c])
+        pure (.prim (.tupGet j) [.local c])
       | none, some (ti, _), .arr _ => pure (p2 .index (.local c) (.local ti))
       | none, some (tk, kt), .map _ vt =>
         let tp ← fresh (.tup [kt, vt])
@@ -1390,9 +1413,22 @@ partial def elabSet (ctx : Ctx) (p : Pos) (lhs0 : SExpr) (op : Option String) (r
     pre := pre.push (.assign c0 (.local l.slot))
     cur := c0
     let stepsA := steps.toArray
+    -- with an object on the path, the right-hand side runs once the path has
+    -- reached it, before the values in the object are read (#34): a write it
+    -- makes through the object is not lost. Without, it runs after every
+    -- container is read, as for `set A[i] = e`.
+    let rhsAfter : Nat := match refLevel? with
+      | some kr => kr
+      | none => stepsA.size
+    let mut rhsVal : Option R := none
     for k in [0:stepsA.size] do
       let (sp, f?, _) := stepsA[k]!
       levels := levels.push (cur, tys[k]!, sp, f?, keys[k]!)
+      if k == rhsAfter then
+        let r ← elabE ctx rhs (some leafTy)
+        let tr ← fresh r.ty
+        pre := pre.push (.assign tr r.e)
+        rhsVal := some ⟨.local tr, r.ty⟩
       if k + 1 < stepsA.size then
         let c ← fresh tys[k + 1]!
         pre := pre.push (.assign c (← readStep cur tys[k]! f? keys[k]!))
@@ -1401,7 +1437,9 @@ partial def elabSet (ctx : Ctx) (p : Pos) (lhs0 : SExpr) (op : Option String) (r
     -- a last `?` step also needs the option to be set
     if lf == some "?" then pre := pre.push (.seq (.prim .query [.local lc]) (.lit .void))
     -- the new leaf value
-    let r ← elabE ctx rhs (some leafTy)
+    let r ← match rhsVal with
+      | some r => pure r
+      | none => elabE ctx rhs (some leafTy)
     let leaf ← match op with
       | none => coerce p r leafTy
       | some o => combine (← readStep lc lty lf lkey) leafTy o r
@@ -1495,6 +1533,15 @@ partial def elabSet (ctx : Ctx) (p : Pos) (lhs0 : SExpr) (op : Option String) (r
             | none => coerce p r t
             | some o => combine (.heap (.get k) [.local l.slot]) t o r
           return ⟨.heap (.set k) [.local l.slot, v], t⟩
+    if let some l := ctx.lookup n then
+      if let .struct sn targs := l.ty then
+        if ctx.types.isEmptyClass sn then
+          -- no instance can exist: unreachable
+          let some (_, t) := fieldIndex (ctx.types.fields sn targs) f | eerr p s!"class {sn} has no field '{f}'"
+          let tu ← fresh t
+          return ⟨.assign tu (.prim .userErr []), t⟩
+        if ctx.types.classes.contains sn && !ctx.types.isRefClass sn then
+          eerr p s!"field '{f}' of the parametric class {sn} cannot be set: a parametric class is a value (#34)"
     let l ← mutableLocal n
     match l.ty with
     | .struct sn targs =>
@@ -1513,7 +1560,7 @@ partial def elabSet (ctx : Ctx) (p : Pos) (lhs0 : SExpr) (op : Option String) (r
         return ⟨.seq (.assign l.slot (.prim .mkTup parts)) (.local tv), t⟩
       | none => eerr p s!"struct {sn} has no field '{f}'"
     | ty => eerr p s!"{ty.show} has no field '{f}'"
-  | _ => eerr p "openverse supports set X = …, and set on a path of fields, indices and keys from a var (set S.F[i].G = …); not through a tuple element or a call result"
+  | _ => eerr p "openverse supports set X = …, and set on a path of fields, indices and keys from a variable (set S.F[i].G = …); not through a tuple element or a call result"
 
 /-- `for`: clauses are generators, bindings and filters; each generator opens
     a nested `forE`, and nested results are flattened (cartesian product,
@@ -1962,6 +2009,8 @@ def elabProgram (allTops00 : List STop) (opts : Options := {}) : Except String C
           if !cd.overrides.contains f then
             throw s!"{cd.pos.show}: field '{f}' of {cd.name} has the name of an inherited field (write {f}<override>:t = … to give it a new default)"
           let (_, sty0, _, v0) := fs[k]!
+          if isVar != v0 then
+            throw s!"{cd.pos.show}: {f}<override> cannot change whether the field is a var"
           fs := fs.set k (f, sty0, d, v0)
           fieldOverrides := fieldOverrides.push (cd.pos, cd.name, f, sty)
         | none =>

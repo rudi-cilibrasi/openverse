@@ -190,7 +190,16 @@ circle := class(shape, labelled):
     is an error.
   - Every variable of a class type starts as a placeholder object (or as a
     parameter of the function whose type is below it) until it is set, which
-    Verse code always does before reading it.
+    Verse code always does before reading it. A placeholder costs an
+    allocation on each call of the function, and objects are never freed;
+    #37 removes the cost.
+  - A `set` path that reaches an object evaluates the right-hand side once
+    it has reached the object, and then reads the values inside it, so that
+    a write the right-hand side makes through the object is kept
+    (`set O.P.X = O.SetY()`). A path without an object reads every
+    container first, as `set A[i] = e` does.
+  - A class or interface with no concrete class below it has no instance,
+    so code that uses a value of its type is unreachable, and accepted.
 - **Methods.** A method `M` of class `c` is a function `c.M` whose first
   parameter is `Self`. In its body, a name that is not a local is looked up
   among the fields, then the methods, inherited ones included. A local or
@@ -241,8 +250,7 @@ circle := class(shape, labelled):
   fields or be `<unique>`.
 - **Comparability.** Other classes and interfaces are not comparable (Book §4.9), nor
   is a struct or container that holds one.
-- **Not yet supported** (each rejected with a message that names its phase
-  of #11):
+- **Not yet supported** (each rejected with a message):
   - `block:` initialisers and constructor functions;
   - parametric classes in hierarchies, `var` fields of parametric classes,
     and parametric `<unique>` classes;
@@ -315,7 +323,7 @@ openverse has no module namespaces yet, so the readings are flat:
 ## Not supported in v1
 
 `float` and `rational` values (only `Floor(X/Y)` and `Ceil(X/Y)` of ints),
-`char32`, classes beyond phase 1 (see [Classes](#classes)), interfaces, open enums, struct methods (Verse structs have none; classes do), `ConcatenateMaps`,
+`char32`, the class features listed under [Classes](#classes), open enums, struct methods (Verse structs have none; classes do), `ConcatenateMaps`,
 `weak_map`, module namespaces (`using{"relative_path"}` imports flatly, see [Programs of several files](#programs-of-several-files)), overloading, defaults that refer to earlier parameters, nested
 functions, `first`, `defer`, refinement types, concurrency (`spawn`, `sync`,
 `race`, `rush`, `branch`, `<suspends>`), `weak_map`, and effect checking for
