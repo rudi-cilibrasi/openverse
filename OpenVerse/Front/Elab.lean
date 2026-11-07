@@ -1166,23 +1166,20 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
     | e :: rest =>
       let r ← elabE ctx e elemExp
       let t := elemExp.getD r.ty
-      -- without an expected type, the elements' types join (classes at a
-      -- common supertype, #32): each is elaborated against the first's
-      let rs ← rest.mapM fun e' => match elemExp with
-        | some _ => elabE ctx e' (some t)
-        | none =>
-          if ctx.retries ≥ 3 then elabE ctx e' (some t)
-          else
-            let c2 := { ctx with retries := ctx.retries + 1 }
-            tryCatch (elabE c2 e' (some t)) fun _ => elabE c2 e' none
-      let jt ← match elemExp with
-        | some t => pure t
-        | none => (rest.zip rs).foldlM (fun acc ((e', x) : SExpr × R) => do
-            match joinTy (← get).env acc x.ty none with
+      let rs ← rest.mapM fun e' => elabE ctx e' (some t)
+      let all := (e :: rest).zip (r :: rs)
+      -- the expected element type (or the first's), when every element
+      -- converts to it; else the join of their types (classes at a common
+      -- supertype, #67), with no element elaborated again
+      match ← tryCatch (some <$> all.mapM fun (e', x) => coerce e'.pos x t) (fun _ => pure none) with
+      | some es => return ⟨.prim .mkArr es, .arr t⟩
+      | none =>
+        let jt ← (rest.zip rs).foldlM (fun acc ((e', x) : SExpr × R) => do
+            match joinTy (← get).env acc x.ty elemExp with
             | some j => pure j
             | none => eerr e'.pos s!"the elements of this array have different types: {acc.show} and {x.ty.show}") r.ty
-      let es ← ((e :: rest).zip (r :: rs)).mapM fun (e', x) => coerce e'.pos x jt
-      return ⟨.prim .mkArr es, .arr jt⟩
+        let es ← all.mapM fun (e', x) => coerce e'.pos x jt
+        return ⟨.prim .mkArr es, .arr jt⟩
   | .optionLit _ e =>
     let inner : Option Ty := match exp with
       | some (.opt t) => some t
