@@ -1908,7 +1908,7 @@ partial def elabApp (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (brack
       if name == "IsFinite" then needBracket name
       else if bracket then eerr p s!"{name} cannot fail: call it with {name}(…)"
       let fl (a : SExpr) : EM Expr := do
-        let r ← elabE ctx a (some .float)
+        let r := widenR ctx.types (← elabE ctx a (some .float))
         if r.ty != .float then eerr a.pos s!"{name} takes floats, found {r.ty.show}"
         return r.e
       let unary : String → Option Prim
@@ -1936,7 +1936,7 @@ partial def elabApp (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (brack
       needBracket name
       match args with
       | [a] =>
-        let r ← elabE ctx a (some .float)
+        let r := widenR ctx.types (← elabE ctx a (some .float))
         if r.ty != .float then eerr p s!"{name} takes a float, found {r.ty.show}"
         return ⟨.prim (if name == "Round" then .fround else .ftrunc) [r.e], .int⟩
       | _ => eerr p s!"{name} takes one argument"
