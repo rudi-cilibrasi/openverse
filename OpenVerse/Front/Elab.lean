@@ -2590,6 +2590,29 @@ def elabProgram (allTops00 : List STop) (opts : Options := {}) : Except String C
               changed := true
           | .error _ => pure ()
       | _ => pure ()
+    -- and so do those of a parametric class, generic (#39)
+    for (top, gi) in generics.zip (List.range generics.length) do
+      match top with
+      | .fn _ n ps _ _ _ body =>
+        if n.endsWith ".$block" then
+          let g := gsigs[gi]!
+          let locals := (ps.zip (List.range ps.length)).zip g.params |>.map fun ((prm, i), t) =>
+            ({ name := prm.name, slot := i, ty := t, mutable := false } : Local)
+          let hidden := g.tparams.map fun (v, c) => Ty.param v c
+          let genv := { env with tvars := g.tparams.map fun (v, c) => (v, Ty.param v c) }
+          let ctx : Ctx := { sigs := sigs.toList ++ gsigs.toList, sigProg := mkSigProg sigs, types := genv,
+                             locals := locals.reverse, retTy := .void, dictBase := ps.length,
+                             dictVars := g.tparams.map (·.1),
+                             selfClass := some (n.dropRight ".$block".length) }
+          match (elabStmt ctx body (some .void)).run
+              { env, nslots := ps.length + hidden.length, slotTys := (g.params ++ hidden).toArray } with
+          | .ok (_, st) =>
+            let fx := heapFx.filter fun k => st.fx.any (·.1 == k)
+            if fx != g.fx then
+              gsigs := gsigs.set! gi { g with fx }
+              changed := true
+          | .error _ => pure ()
+      | _ => pure ()
     if !changed then break
   let sigProg := mkSigProg sigs
   let allSigs := sigs.toList ++ gsigs.toList

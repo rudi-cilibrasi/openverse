@@ -279,8 +279,7 @@ circle := class(shape, labelled):
   constructed, after its fields are given, those of the classes above it
   first, each class's in order; they see the fields by name, as a method
   does, and their effects are those of their code (a parametric class's
-  are taken to be all of them: they are not inferred yet). Interfaces have
-  none.
+  too). Interfaces have none.
 - **`<unique>`.** A `<unique>` class (and every class below it) is
   comparable: `=` and `<>` test identity, so two instances with equal
   fields differ, and an alias equals its original.
