@@ -122,6 +122,9 @@ partial def parseType : PM STy := do
     return .map k (← parseType)
   else if t.isSym "?" then
     bump; return .opt (← parseType)
+  else if t.isKw "logic" && !(← peekT 1).isSym "{" then
+    -- `logic` is a keyword (for `logic{…}`) and a type name
+    bump; return .name "logic"
   else if t.isKw "tuple" && (← peekT 1).isSym "(" then
     bump; bump
     let mut ts := #[]
