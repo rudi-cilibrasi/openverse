@@ -253,6 +253,13 @@ def TyEnv.argsBelow (env : TyEnv) (T : String) (targs : List Ty) (d : String) : 
     | some j => cs.getD j Ty.void
     | none => Ty.void
 
+/-- `d`'s Verse Core type arguments are `T`'s, up to renaming: code generic
+    over `T` can treat a `d` at its own type arguments (#39, #53). -/
+def TyEnv.sameCore (env : TyEnv) (d T : String) : Bool :=
+  let core (c : String) := env.coreArgs c (((env.sparams.lookup c).getD []).map fun (v, k) => Ty.param v k)
+  let (cd, cT) := (core d, core T)
+  cd.length == cT.length && ((cT.zip cd).foldlM (fun m (a, b) => Ty.alpha m a b) []).isSome
+
 /-- The type arguments of class `D`, above or below `T`, for an instance of
     `T(targs)` (#39). -/
 def TyEnv.argsAt (env : TyEnv) (T : String) (targs : List Ty) (D : String) : List Ty :=
@@ -922,11 +929,13 @@ def fieldIndex (fs : List (String × Ty × Option SExpr)) (f : String) : Option 
     field has that position in every class below, otherwise after a test of
     the object's class, as a read does (an interface's field can sit at
     different positions in the classes implementing it). The value is `v`. -/
-def setFieldAt (env : TyEnv) (sn : String) (targs : List Ty) (obj : Nat) (f : String) (k : Nat) (t : Ty)
+def setFieldAt (env : TyEnv) (p : Pos) (sn : String) (targs : List Ty) (obj : Nat) (f : String) (k : Nat) (t : Ty)
     (v : Expr) : EM Expr := do
   let ds := env.concreteBelow sn
   let pos := ds.map fun d => ((fieldIndex (env.fields d []) f).map (·.1)).getD k
   if pos.all (· == k) then return .heap (.set k) [.local obj, v]
+  if let some d := ds.find? (!env.sameCore · sn) then
+    eerr p s!"field '{f}' of {sn} sits at different places in the classes below it, and {d} fixes or repeats its type arguments: setting it is not supported yet (#53)"
   let tv ← fresh t
   let mut acc : Expr := .prim .userErr []   -- no class: unreachable
   for (d, kd) in (ds.zip pos).reverse do
@@ -1782,7 +1791,7 @@ partial def elabSet (ctx : Ctx) (p : Pos) (lhs0 : SExpr) (op : Option String) (r
       | some f, _, .struct sn targs =>
         if ctx.types.isRefClass sn then
           let (j, ft) := (fieldIndex (ctx.types.fields sn targs) f).get!
-          pre := pre.push (← setFieldAt ctx.types sn targs c f j ft newVal)
+          pre := pre.push (← setFieldAt ctx.types p sn targs c f j ft newVal)
           noteFx p ["writes"]
           wroteObject := true
         else
@@ -1858,7 +1867,7 @@ partial def elabSet (ctx : Ctx) (p : Pos) (lhs0 : SExpr) (op : Option String) (r
             | none => coerce p r t
             -- (the current value, read as a read does)
             | some o => combine (← elabMember ctx p ⟨.local l.slot, l.ty⟩ f).e t o r
-          return ⟨← setFieldAt ctx.types sn targs l.slot f k t v, t⟩
+          return ⟨← setFieldAt ctx.types p sn targs l.slot f k t v, t⟩
     if let some l := ctx.lookup n then
       if let .struct sn targs := l.ty then
         if ctx.types.isEmptyClass sn then
@@ -2017,6 +2026,8 @@ partial def elabMember (ctx : Ctx) (p : Pos) (r : R) (m : String) : EM R := do
         let pos := ds.map fun d => ((fieldIndex (ctx.types.fields d []) f).map (·.1)).getD k
         if ctx.types.isVarField sn f then noteFx p ["reads"]
         if pos.all (· == k) then return ⟨.heap (.get k) [r.e], t⟩
+        if let some d := ds.find? (!ctx.types.sameCore · sn) then
+          eerr p s!"field '{f}' of {sn} sits at different places in the classes below it, and {d} fixes or repeats its type arguments: reading it is not supported yet (#53)"
         let x ← fresh r.ty
         let mut acc : Expr := .prim .userErr []   -- no class: unreachable
         for (d, kd) in (ds.zip pos).reverse do
@@ -2780,10 +2791,20 @@ def elabProgram (allTops00 : List STop) (opts : Options := {}) : Except String C
   for (cp, c, impl, decl) in implChecks do
     -- code generic over the declaring class or interface calls `c`'s
     -- implementation only at its own type arguments (#39, #53)
+    -- (judged at the class that holds the implementation, whose Verse Core
+    -- type arguments must be the declaring one's, and with the same
+    -- signature at those type arguments)
     let q := clsOf decl
-    let (cc, cq) := (core c, core q)
-    if cc.length != cq.length || ((cq.zip cc).foldlM (fun m (a, b) => Ty.alpha m a b) []).isNone then
-      throw s!"{cp.show}: {c} fixes, repeats or adds type arguments that {q} leaves open, so code generic over {q} could not call its implementation of {(decl.splitOn ".").getLast!} ({impl}) (#39)"
+    let e := clsOf impl
+    let atCore (cls : String) (sg : Sig) : List VTy × VTy :=
+      let cenv := { env with tvars := env.coreVars cls }
+      ((sg.params.drop 1).map (·.toVTy cenv), sg.ret.toVTy cenv)
+    let sigOk : Bool := match allSigs.find? (·.name == impl), allSigs.find? (·.name == decl) with
+      | some a, some b =>
+        let ca := atCore e a
+        let cb := atCore q b
+        ca.1 == cb.1 && VTy.sub ca.2 cb.2
+      | _, _ => true
     match allSigs.find? (·.name == impl), allSigs.find? (·.name == decl) with
     | some a, some b =>
       if !sameSigIn c a b then
@@ -2791,6 +2812,10 @@ def elabProgram (allTops00 : List STop) (opts : Options := {}) : Except String C
       if let some k := fxOver a b then
         throw s!"{cp.show}: in {c}, {impl} allows the effect <{k}>, which {decl} does not"
     | _, _ => pure ()
+    if !env.sameCore e q then
+      throw s!"{cp.show}: {c} uses {impl} for {decl}, but {e} fixes, repeats or adds type arguments that {q} leaves open, so code generic over {q} could not call it (#39)"
+    if !sigOk then
+      throw s!"{cp.show}: {c} uses {impl} for {decl}, but their types differ at {q}'s type arguments (as code generic over {q} sees them), so it could not call it (#53)"
   for (fp, cname, f, sty) in fieldOverrides do
     let cenv := { env with tvars := ((env.sparams.lookup cname).getD []).map fun (v, c) => (v, Ty.param v c) }
     let (t, _) ← (resolveTy cenv fp sty).run {}

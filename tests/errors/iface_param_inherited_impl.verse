@@ -1,4 +1,4 @@
-# expect: fixes, repeats or adds type arguments that container leaves open
+# expect: mycell uses cell.Get for container.Get, but their types differ
 container(t:type) := interface:
     Get():t
 cell(t:type) := class:
