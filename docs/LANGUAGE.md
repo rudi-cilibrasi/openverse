@@ -307,9 +307,7 @@ circle := class(shape, labelled):
     interfaces different type arguments, an interface that gives a parent
     interface other than its own type parameters, and a parametric class
     below a non-parametric interface (or one that adds type parameters
-    below a parametric interface's implementation);
-  - subtyping through `+` on arrays, through tuples and through maps, and an
-    array literal of different classes without an expected type.
+    below a parametric interface's implementation).
 
 ## From the spec draft: mutation, macros, tooling
 
