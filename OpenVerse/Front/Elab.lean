@@ -3277,7 +3277,9 @@ def elabProgramCore (allTops000 : List STop) (opts : Options := {}) : Except Str
             else none
           match qual with
           | some (q, m') =>
-            if (mov.lookup (hierOf n, m')).isSome then
+            -- (`q` above the class: otherwise the check below explains)
+            let isAbove := (((anc.lookup n).getD []).drop 1).any (·.1 == q)
+            if isAbove && (mov.lookup (hierOf n, m')).isSome then
               let k := mangle n m' tps mtps ps true (some q)
               if k == m' then
                 throw s!"{mp.show}: ({q}:){m'} must have the parameters of one of {q}'s overloads of {m'}"
