@@ -110,9 +110,14 @@ Combine(A:t1, B:t2 where t1:type, t2:type):tuple(t1, t2) = (A, B)
   exactly the code that was checked, and it behaves the same way at every
   type argument. Polymorphic recursion, where a function calls itself at a
   larger type, is allowed.
-- **Limits.** Named parameters, a generic `Main`, several constraints on one
-  type parameter (also unsupported in the Book), explicit type arguments to
-  a generic function, and generic constants are not supported.
+- **Named parameters** (#119) work as for other functions: positional
+  arguments, then named ones as written, then the defaults of those
+  omitted. The type arguments are inferred from every argument given. A
+  default has its parameter's type at them, and may itself determine a type
+  parameter nothing else does (`Pick(A:t, ?Other:t = A where t:type):t`).
+- **Limits.** A generic `Main`, several constraints on one type parameter
+  (also unsupported in the Book), explicit type arguments to a generic
+  function, and generic constants are not supported.
 
 ## defer
 
