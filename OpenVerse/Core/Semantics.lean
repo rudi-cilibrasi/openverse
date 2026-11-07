@@ -25,10 +25,12 @@ structure Obj where
   fields : List Value
   deriving Repr, DecidableEq, Inhabited
 
-/-- The part of the state that survives a call: the output (bytes) and the heap. -/
+/-- The part of the state that survives a call: the output (bytes) and the
+    heap (an array, so that the reference interpreter allocates and reads
+    objects in constant time, #37). -/
 structure Glob where
   out  : List Nat
-  heap : List Obj
+  heap : Array Obj
   deriving Repr, DecidableEq, Inhabited
 
 /-- Machine state: the current frame and the global part. -/
@@ -41,7 +43,7 @@ structure St where
     state. A reference to no object, or a field out of range, is a type
     error (the type checker excludes it). -/
 def HeapOp.apply : HeapOp → List Value → Glob → Res × Glob
-  | .new t, vs, g => (.ok (.ref g.heap.length), { g with heap := g.heap ++ [⟨t, vs⟩] })
+  | .new t, vs, g => (.ok (.ref g.heap.size), { g with heap := g.heap.push ⟨t, vs⟩ })
   | .get k, [.ref a], g => match g.heap[a]? with
     | some o => match o.fields[k]? with
       | some v => (.ok v, g)
@@ -49,7 +51,8 @@ def HeapOp.apply : HeapOp → List Value → Glob → Res × Glob
     | none => (.err .type, g)
   | .set k, [.ref a, v], g => match g.heap[a]? with
     | some o =>
-      if k < o.fields.length then (.ok v, { g with heap := g.heap.set a { o with fields := o.fields.set k v } })
+      if k < o.fields.length then
+        (.ok v, { g with heap := g.heap.setIfInBounds a { o with fields := o.fields.set k v } })
       else (.err .type, g)
     | none => (.err .type, g)
   | .tag, [.ref a], g => match g.heap[a]? with
@@ -65,12 +68,12 @@ theorem HeapOp.get_set {g : Glob} {a k : Nat} {v : Value} {o : Obj}
     (ho : g.heap[a]? = some o) (hk : k < o.fields.length) :
     (HeapOp.get k).apply [.ref a] ((HeapOp.set k).apply [.ref a, v] g).2 =
       (.ok v, ((HeapOp.set k).apply [.ref a, v] g).2) := by
-  obtain ⟨ha, rfl⟩ := List.getElem?_eq_some_iff.mp ho
-  simp [HeapOp.apply, hk, ha, List.getElem?_set_self]
+  obtain ⟨ha, rfl⟩ := Array.getElem?_eq_some_iff.mp ho
+  simp [HeapOp.apply, hk, ha]
 
 /-- The fields of a new object are the arguments it was allocated with. -/
 theorem HeapOp.get_new {g : Glob} {t k : Nat} {vs : List Value} {v : Value} (hv : vs[k]? = some v) :
-    (HeapOp.get k).apply [.ref g.heap.length] ((HeapOp.new t).apply vs g).2 =
+    (HeapOp.get k).apply [.ref g.heap.size] ((HeapOp.new t).apply vs g).2 =
       (.ok v, ((HeapOp.new t).apply vs g).2) := by
   simp [HeapOp.apply, hv]
 
@@ -260,7 +263,7 @@ end
 
 /-- Running a program: call `Main()` with an empty output. The result is the
     outcome of `Main` and the bytes it printed. -/
-def Prog.initSt : St := ⟨[], ⟨[], []⟩⟩
+def Prog.initSt : St := ⟨[], ⟨[], #[]⟩⟩
 
 /-- `P` run to completion gives outcome `r` and output `out`. -/
 def Runs (P : Prog) (r : Res) (out : List Nat) : Prop :=

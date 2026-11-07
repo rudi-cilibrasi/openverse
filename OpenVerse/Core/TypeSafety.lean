@@ -650,53 +650,60 @@ theorem hasTy_ref {v : Value} {ts : List Nat} (h : hasTy Ξ v (.ref ts) = true) 
     · simp at h
   | _ => simp [hasTy] at h
 
-theorem tagsOf_getElem? {h : List Obj} {a : Nat} {o : Obj} (ho : h[a]? = some o) :
+theorem tagsOf_getElem? {h : Array Obj} {a : Nat} {o : Obj} (ho : h[a]? = some o) :
     (tagsOf h)[a]? = some o.tag := by
   simp [tagsOf, ho]
 
-theorem tagsOf_getElem?_inv {h : List Obj} {a t : Nat} (ht : (tagsOf h)[a]? = some t) :
+theorem tagsOf_getElem?_inv {h : Array Obj} {a t : Nat} (ht : (tagsOf h)[a]? = some t) :
     ∃ o, h[a]? = some o ∧ o.tag = t := by
-  simp only [tagsOf, List.getElem?_map] at ht
+  simp only [tagsOf, List.getElem?_map, Array.getElem?_toList] at ht
   rcases ho : h[a]? with _ | o
   · simp [ho] at ht
   · simp only [ho, Option.map_some, Option.some.injEq] at ht
     exact ⟨o, rfl, ht⟩
 
-theorem HeapOK.new {S : Sigs} {h : List Obj} (hH : HeapOK S h) {t : Nat} {vs : List Value} {fs : List VTy}
+theorem tagsOf_push (h : Array Obj) (o : Obj) : tagsOf (h.push o) = tagsOf h ++ [o.tag] := by
+  simp [tagsOf, Array.toList_push]
+
+theorem HeapOK.new {S : Sigs} {h : Array Obj} (hH : HeapOK S h) {t : Nat} {vs : List Value} {fs : List VTy}
     (hc : S.classes[t]? = some fs) (hvs : allTys (tagsOf h) vs fs = true) :
-    HeapOK S (h ++ [⟨t, vs⟩]) := by
-  have hx : tagsOf h <+: tagsOf (h ++ [⟨t, vs⟩]) := by simp [tagsOf]
+    HeapOK S (h.push ⟨t, vs⟩) := by
+  have hx : tagsOf h <+: tagsOf (h.push ⟨t, vs⟩) := by simp [tagsOf_push]
   refine ⟨fun a o ho => ?_, hH.2.trans hx⟩
-  rcases Nat.lt_or_ge a h.length with ha | ha
+  rw [Array.toList_push] at ho
+  rcases Nat.lt_or_ge a h.toList.length with ha | ha
   · rw [List.getElem?_append_left ha] at ho
     obtain ⟨fs', hc', hf⟩ := hH.1 a o ho
     exact ⟨fs', hc', allTys_mono hx _ _ hf⟩
   · rw [List.getElem?_append_right ha] at ho
-    rcases hk : a - h.length with _ | k
+    rcases hk : a - h.toList.length with _ | k
     · rw [hk] at ho
       simp only [List.getElem?_cons_zero, Option.some.injEq] at ho; subst ho
       exact ⟨fs, hc, allTys_mono hx _ _ hvs⟩
     · rw [hk] at ho; simp at ho
 
-theorem tagsOf_set {h : List Obj} {a : Nat} {o o' : Obj} (ho : h[a]? = some o) (ht : o'.tag = o.tag) :
-    tagsOf (h.set a o') = tagsOf h := by
+theorem tagsOf_set {h : Array Obj} {a : Nat} {o o' : Obj} (ho₀ : h[a]? = some o) (ht : o'.tag = o.tag) :
+    tagsOf (h.setIfInBounds a o') = tagsOf h := by
+  have ho : h.toList[a]? = some o := by rw [Array.getElem?_toList]; exact ho₀
   obtain ⟨ha, hoa⟩ := List.getElem?_eq_some_iff.mp ho
   apply List.ext_getElem?
   intro i
-  simp only [tagsOf, List.map_set]
+  simp only [tagsOf, Array.toList_setIfInBounds, List.map_set]
   by_cases hi : a = i
   · subst hi
     rw [List.getElem?_set_self (by simpa using ha)]
-    simp [ha, hoa, ht]
+    simp [ho₀, ht]
   · rw [List.getElem?_set_ne hi]
 
-theorem HeapOK.set {S : Sigs} {h : List Obj} (hH : HeapOK S h) {a k : Nat} {o : Obj} {v : Value}
-    {fs : List VTy} {τ : VTy} (ho : h[a]? = some o) (hc : S.classes[o.tag]? = some fs)
+theorem HeapOK.set {S : Sigs} {h : Array Obj} (hH : HeapOK S h) {a k : Nat} {o : Obj} {v : Value}
+    {fs : List VTy} {τ : VTy} (ho₀ : h[a]? = some o) (hc : S.classes[o.tag]? = some fs)
     (hk : fs[k]? = some τ) (hv : hasTy (tagsOf h) v τ = true) :
-    HeapOK S (h.set a { o with fields := o.fields.set k v }) := by
-  have htg := tagsOf_set (o' := { o with fields := o.fields.set k v }) ho rfl
+    HeapOK S (h.setIfInBounds a { o with fields := o.fields.set k v }) := by
+  have htg := tagsOf_set (o' := { o with fields := o.fields.set k v }) ho₀ rfl
+  have ho : h.toList[a]? = some o := by rw [Array.getElem?_toList]; exact ho₀
   refine ⟨fun b ob hob => ?_, by rw [htg]; exact hH.2⟩
   rw [htg]
+  rw [Array.toList_setIfInBounds] at hob
   by_cases hab : b = a
   · subst hab
     obtain ⟨ha, -⟩ := List.getElem?_eq_some_iff.mp ho
@@ -792,7 +799,7 @@ theorem DefaultE.eval_ok {P : Prog} {S : Sigs} (hS : S.ClosedClasses) {a : Nat} 
       obtain ⟨rfl, rfl⟩ := hvs
       simp only [Option.some.injEq] at hk
       rw [VTy.closed_map_subst θ (hS _ _ hc)] at hft
-      have hx2 : tagsOf s1.g.heap <+: tagsOf (s1.g.heap ++ [⟨t, vs⟩]) := by simp [tagsOf]
+      have hx2 : tagsOf s1.g.heap <+: tagsOf (s1.g.heap.push ⟨t, vs⟩) := by simp [tagsOf_push]
       refine ⟨_, _, hk.symm, hfr, HeapOK.new hH1 hc hft, hx1.trans hx2, ?_⟩
       simp [HeapOp.apply, hasTy, tagsOf, ht]
     · obtain ⟨vs', s1', hvs, -⟩ := DefaultEL.eval_ok hS n hds hp hH hx
@@ -972,7 +979,7 @@ theorem heap_args {S : Sigs} {Γ : List VTy} {ρ : VTy} {op : HeapOp} {es : List
   | heap_isTag he => exact ⟨_, .cons he .nil⟩
 
 /-- A reference argument: the object it refers to, of a class in its type. -/
-theorem ref_arg {Ξ : List Nat} {h : List Obj} (hΞ : Ξ = tagsOf h) {v : Value} {ts : List Nat}
+theorem ref_arg {Ξ : List Nat} {h : Array Obj} (hΞ : Ξ = tagsOf h) {v : Value} {ts : List Nat}
     (hv : hasTy Ξ v (.ref ts) = true) : ∃ a o, v = .ref a ∧ h[a]? = some o ∧ o.tag ∈ ts := by
   obtain ⟨a, t, rfl, hta, htin⟩ := hasTy_ref hv
   subst hΞ
@@ -1155,12 +1162,12 @@ theorem stepE_rule {P : Prog} {S : Sigs} (hP : ProgTyped P S) (n : Nat)
       | heap_new hc htt hes =>
         rename_i t fs ts
         obtain ⟨hf1, hvs, hH1, hp1⟩ := IL _ _ _ _ _ _ hx hes hf hH
-        have hx2 : s1.tags <+: tagsOf (s1.g.heap ++ [⟨t, vs⟩]) := by simp [St.tags, tagsOf]
+        have hx2 : s1.tags <+: tagsOf (s1.g.heap.push ⟨t, vs⟩) := by simp [St.tags, tagsOf_push]
         have happ : (HeapOp.new t).apply vs s1.g =
-            (.ok (.ref s1.g.heap.length), { s1.g with heap := s1.g.heap ++ [⟨t, vs⟩] }) := rfl
+            (.ok (.ref s1.g.heap.size), { s1.g with heap := s1.g.heap.push ⟨t, vs⟩ }) := rfl
         simp only [happ]
         refine ⟨allTys_mono hx2 _ _ hf1, ?_, HeapOK.new hH1 hc hvs, hp1.trans hx2⟩
-        simp [ResOK, hasTy, tagsOf, htt]
+        simp [ResOK, hasTy, tagsOf_push, tagsOf, htt]
       | heap_get he hft =>
         rename_i k e₀ ts
         obtain ⟨hf1, hvs, hH1, hp1⟩ := IL _ _ _ _ _ _ hx (.cons he .nil) hf hH
@@ -1168,7 +1175,7 @@ theorem stepE_rule {P : Prog} {S : Sigs} (hP : ProgTyped P S) (n : Nat)
           rcases vs with _ | ⟨v, _ | ⟨_, _⟩⟩ <;> simp [LResOK, allTys] at hvs
           exact ⟨v, rfl, hvs⟩
         obtain ⟨a, o, rfl, ho, htin⟩ := ref_arg rfl hv
-        obtain ⟨fs, hc, hfs⟩ := hH1.1 a o ho
+        obtain ⟨fs, hc, hfs⟩ := hH1.1 a o (by rw [Array.getElem?_toList]; exact ho)
         obtain ⟨fs', hc', hk⟩ := hft.2 _ htin
         rw [hc] at hc'; simp only [Option.some.injEq] at hc'; rw [← hc'] at hk
         obtain ⟨w, hw, hwt⟩ := allTys_get hfs hk
@@ -1184,21 +1191,21 @@ theorem stepE_rule {P : Prog} {S : Sigs} (hP : ProgTyped P S) (n : Nat)
           rcases vs with _ | ⟨r, _ | ⟨w, _ | ⟨_, _⟩⟩⟩ <;> simp [LResOK, allTys] at hvs
           exact ⟨r, w, rfl, hvs.1, hvs.2⟩
         obtain ⟨a, o, rfl, ho, htin⟩ := ref_arg rfl hr
-        obtain ⟨fs, hc, hfs⟩ := hH1.1 a o ho
+        obtain ⟨fs, hc, hfs⟩ := hH1.1 a o (by rw [Array.getElem?_toList]; exact ho)
         obtain ⟨fs', hc', hk⟩ := hft.2 _ htin
         rw [hc] at hc'; simp only [Option.some.injEq] at hc'; rw [← hc'] at hk
         have hklt : k < o.fields.length := by rw [allTys_length hfs]; exact lt_of_getElem?_some hk
         have htg := tagsOf_set (o' := { o with fields := o.fields.set k w }) ho rfl
         have happ : (HeapOp.set k).apply [.ref a, w] s1.g =
-            (.ok w, { s1.g with heap := s1.g.heap.set a { o with fields := o.fields.set k w } }) := by
+            (.ok w, { s1.g with heap := s1.g.heap.setIfInBounds a { o with fields := o.fields.set k w } }) := by
           simp [HeapOp.apply, ho, hklt]
         simp only [happ]
         refine ⟨?_, ?_, HeapOK.set hH1 ho hc hk hw, ?_⟩
-        · show allTys (tagsOf (s1.g.heap.set a _)) s1.fr Γ = true
+        · show allTys (tagsOf (s1.g.heap.setIfInBounds a _)) s1.fr Γ = true
           rw [htg]; exact hf1
-        · show hasTy (tagsOf (s1.g.heap.set a _)) w τ = true
+        · show hasTy (tagsOf (s1.g.heap.setIfInBounds a _)) w τ = true
           rw [htg]; exact hw
-        · show s.tags <+: tagsOf (s1.g.heap.set a _)
+        · show s.tags <+: tagsOf (s1.g.heap.setIfInBounds a _)
           rw [htg]; exact hp1
       | heap_tag he =>
         rename_i e₀ ts
@@ -1477,7 +1484,7 @@ theorem Runs.typed {P : Prog} {S : Sigs} (hP : ProgTyped P S) {τ r out}
       rw [hbody] at hb
       have hb' := Eval.of_protoPrelude objs hb
       have hfr : frameOf fn [] = [] := by simp [frameOf, har, hns]
-      simp only [Prog.initSt, hfr, List.nil_append] at hb'
+      simp only [Prog.initSt, hfr, Array.empty_append] at hb'
       obtain ⟨-, hr, hH, -⟩ := Eval.typed hP hb' ht rfl hHo
       refine ⟨?_, hH, ?_⟩
       · intro he
