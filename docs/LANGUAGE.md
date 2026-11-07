@@ -271,9 +271,15 @@ circle := class(shape, labelled):
   - **Construction.** Fields not set take their defaults, and a field
     without one must be set. The class's own `block:` clauses then run, as
     for `player{…}`. A constructor sees no `Self`.
+  - **Parametric classes.** The archetype names the class's type
+    arguments: `MakeBox<constructor>(V:t where t:type) := box(t):` is a
+    generic constructor, and `:= box(int):` a fixed one. Delegating to a
+    generic constructor instantiates it. As for generic functions, its type
+    parameters must appear in its parameters, and it takes no named ones.
   - **Lowering.** `K` becomes `K$init`, which runs the items and gives the
     fields as a struct, and `K`, which constructs the class from them. A
-    delegation calls the delegate's `$init`.
+    delegation calls the delegate's `$init`. For a generic constructor both
+    are generic, and the struct is parametric over its type parameters.
 - **Qualified implementations.** A class that implements two interfaces
   declaring the same method can give each its own: `(i1:)M<override>()`
   and `(i2:)M<override>()`. Each declaration that overrides nothing (a
@@ -351,8 +357,7 @@ circle := class(shape, labelled):
 - **Comparability.** Other classes and interfaces are not comparable (Book §4.9), nor
   is a struct or container that holds one.
 - **Not yet supported** (each rejected with a message):
-  - constructor functions of parametric classes, generic ones, and two
-    constructors of one name;
+  - two constructors of one name;
   - overrides in a subclass that fixes, repeats or adds type arguments
     its parent (or an interface) leaves open, a class that gives two
     interfaces different type arguments, an interface that gives a parent

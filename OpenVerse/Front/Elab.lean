@@ -2627,6 +2627,13 @@ structure CDef where
   overrides : List String
   methods : List STop
 
+/-- The type names `n` (a type parameter, say) somewhere. -/
+partial def STy.mentions (t : STy) (n : String) : Bool := match t with
+  | .name m => m == n
+  | .arr u | .opt u => u.mentions n
+  | .tup ts | .app _ ts => ts.any (·.mentions n)
+  | .map a b => a.mentions n || b.mentions n
+
 /-- Constructor functions (#11, Book of Verse ch. 10). `K<constructor>(ps) :=
     c:` with items becomes two functions with K's parameters and effects:
     - `K$init` runs the items in order and gives the fields they set, as the
@@ -2638,7 +2645,7 @@ structure CDef where
     A constructor sees no `Self`. -/
 def expandCtors (ctors : List (Pos × String × List SParam × List TParam × List String × String × List SExpr))
     (cdef? : String → Option CDef) (fullOf : String → List (String × STy × Option SExpr × Bool))
-    (supers : String → List String) : Except String (List STop) := do
+    (supers : String → List String) (targsOf : String → List STy) : Except String (List STop) := do
   let directOf (items : List SExpr) : List (Pos × String) := items.filterMap fun
     | .decl p f none false _ => some (p, f)
     | _ => none
@@ -2649,11 +2656,19 @@ def expandCtors (ctors : List (Pos × String × List SParam × List TParam × Li
   for ((p, k, _, _, _, _, _), i) in ctors.zip (List.range ctors.length) do
     if (ctors.take i).any (·.2.1 == k) then
       throw s!"{p.show}: constructor {k} is defined twice (overloaded constructors are not supported yet)"
-  for (p, k, _, tps, _, c, items) in ctors do
+  for (p, k, ps, tps, _, c, items) in ctors do
     let some cd := cdef? c | throw s!"{p.show}: constructor {k}: {c} is not a class"
     if cd.isIface then throw s!"{p.show}: constructor {k}: {c} is an interface"
-    if !cd.tps.isEmpty then throw s!"{p.show}: constructor functions of parametric classes ({c}) are not supported yet"
-    if !tps.isEmpty then throw s!"{p.show}: generic constructor functions are not supported yet"
+    -- a parametric class's constructor names its type arguments, `:= box(t):`
+    let targs := targsOf k
+    if cd.tps.length != targs.length then
+      if cd.tps.isEmpty then throw s!"{p.show}: constructor {k}: {c} takes no type arguments"
+      else if targs.isEmpty then
+        throw s!"{p.show}: constructor {k}: {c} takes {cd.tps.length} type argument(s): write {c}(…) after :="
+      else throw s!"{p.show}: constructor {k}: {c} takes {cd.tps.length} type argument(s), not {targs.length}"
+    -- a call infers the constructor's type parameters from its arguments
+    if let some tp := tps.find? fun tp => !ps.any (·.ty.mentions tp.name) then
+      throw s!"{p.show}: the type parameter {tp.name} of {k} appears in none of its parameters, so a call could not infer it"
     let direct := directOf items
     for ((fp, f), i) in direct.zip (List.range direct.length) do
       if !(fullOf c).any (·.1 == f) then throw s!"{fp.show}: {k}: {c} has no field {f}"
@@ -2707,12 +2722,21 @@ def expandCtors (ctors : List (Pos × String × List SParam × List TParam × Li
       throw s!"{p.show}: {k} does not set {f}, a field of {c} without a default"
   -- the functions
   let mut out : Array STop := #[]
-  for (p, k, ps, _, effs, c, items) in ctors do
+  for (p, k, ps, tps, effs, c, items) in ctors do
     let fs := (setBy.lookup k).getD []
     let fieldsTy := s!"{k}$fields"
-    let tyOf (f : String) : STy := (((fullOf c).find? (·.1 == f)).map (·.2.1)).getD (.name "void")
+    -- the class's type parameters are the archetype's type arguments, which
+    -- may mention the constructor's own (a generic constructor, `where`)
+    let targs := targsOf k
+    let ctps : List TParam := ((cdef? c).map (fun cd => cd.tps)).getD []
+    let σ : List (String × STy) := (ctps.map (fun tp => tp.name)).zip targs
+    let tyOf (f : String) : STy :=
+      let t0 : STy := (((fullOf c).find? (·.1 == f)).map (·.2.1)).getD (.name "void")
+      t0.substNames σ
+    let tpTys : List STy := tps.map fun tp => STy.name tp.name
+    let fieldsSTy : STy := if tps.isEmpty then .name fieldsTy else .app fieldsTy tpTys
     if !fs.isEmpty then
-      out := out.push (.const p fieldsTy none (.structDef p [] (fs.map fun f => (f, tyOf f, none, false))))
+      out := out.push (.const p fieldsTy none (.structDef p tps (fs.map fun f => (f, tyOf f, none, false))))
     let mut body : Array SExpr := #[]
     let mut di := 0
     for it in items do
@@ -2733,23 +2757,23 @@ def expandCtors (ctors : List (Pos × String × List SParam × List TParam × Li
           di := di + 1
           body := body.push (.decl ip tmp none false call)
           for f in dfs do
-            body := body.push (.decl ip s!"{f}$v" none false (.member ip (.ident ip tmp) f))
+            body := body.push (.decl ip s!"{f}$v" (some (tyOf f)) false (.member ip (.ident ip tmp) f))
       | it => body := body.push (.app p (.ident p "$nofail") [it] false)   -- a `block:` clause
     let initRet : SExpr :=
       if fs.isEmpty then .block p []
-      else .construct p fieldsTy [] (fs.map fun f => .decl p f none false (.ident p s!"{f}$v"))
-    out := out.push (.fn p s!"{k}$init" ps [] effs (if fs.isEmpty then .name "void" else .name fieldsTy)
+      else .construct p fieldsTy tpTys (fs.map fun f => .decl p f none false (.ident p s!"{f}$v"))
+    out := out.push (.fn p s!"{k}$init" ps tps effs (if fs.isEmpty then .name "void" else fieldsSTy)
       (.block p (body.toList ++ [initRet])))
     let args := ps.map fun prm =>
       if prm.named then SExpr.decl p s!"?{prm.name}" none false (.ident p prm.name) else .ident p prm.name
     let callInit := SExpr.app p (.ident p s!"{k}$init") args (effs.contains "decides")
     let kbody : SExpr :=
-      if fs.isEmpty then .block p [callInit, .construct p c [] []]
+      if fs.isEmpty then .block p [callInit, .construct p c targs []]
       else .block p [.decl p "$fields" none false callInit,
-        .construct p c [] (fs.map fun f => .decl p f none false (.member p (.ident p "$fields") f))]
+        .construct p c targs (fs.map fun f => .decl p f none false (.member p (.ident p "$fields") f))]
     -- (an abstract class is only constructed by delegating to its constructors)
     if !((cdef? c).map (·.specs.contains "abstract")).getD false then
-      out := out.push (.fn p k ps [] effs (.name c) kbody)
+      out := out.push (.fn p k ps tps effs (if targs.isEmpty then .name c else .app c targs) kbody)
   return out.toList
 
 /-- Elaborate a parsed program into a Verse Core program that passes `Prog.check`
@@ -2940,7 +2964,11 @@ def elabProgramCore (allTops00 : List STop) (opts : Options := {}) : Except Stri
     match t with
     | .classDef .. => pure ()
     | t => if (ctorOf t).isNone then expanded := expanded.push t
-  expanded := expanded ++ (← expandCtors ctors cdef? fullOf (fun c => henv.supers c)).toArray
+  let ctorTargs : List (String × List STy) := allTops0.filterMap fun
+    | t@(.fn _ k _ _ _ (.app _ ts) _) => if (ctorOf t).isSome then some (k, ts) else none
+    | _ => none
+  expanded := expanded ++
+    (← expandCtors ctors cdef? fullOf (fun c => henv.supers c) (fun k => (ctorTargs.lookup k).getD [])).toArray
   for cd in cdefs do
     let n := cd.name
     let fs := fullOf n

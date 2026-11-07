@@ -1048,11 +1048,18 @@ partial def parseTops : PM (List STop) := do
         bump
         let ct ← peekT
         let cls ← expectIdent
-        if (← peekT).isSym "(" then
-          perr (← peekT) "constructor functions of parametric classes are not supported yet"
+        -- `:= box(t):` for a parametric class: its type arguments
+        let targs ← if (← peekT).isSym "(" && !(← peekT).bol then do
+            bump
+            let mut ts := #[← parseType]
+            while (← peekT).isSym "," do bump; ts := ts.push (← parseType)
+            expectSym ")"
+            pure ts.toList
+          else pure []
         let items ← parseCtorBody t.col
         tops := tops.push (.fn t.pos name ps.toList tps.toList
-          ((pre.filter (· != "constructor")) ++ effs ++ [s!"$constructor:{cls}"]) (.name cls) (.block ct.pos items))
+          ((pre.filter (· != "constructor")) ++ effs ++ [s!"$constructor:{cls}"])
+          (if targs.isEmpty then .name cls else .app cls targs) (.block ct.pos items))
         continue
       if (← peekT).isSym ":=" && ((← peekT 1).isKw "class" || (← peekT 1).isKw "interface") then
         -- `name(t:type, …) := class …`: a parametric class (or interface, #53)
