@@ -273,6 +273,9 @@ def VTy.nvarsL : List VTy → Nat
   | t :: ts => max (VTy.nvars t) (VTy.nvarsL ts)
 end
 
+/-- The first of two proposals that passes `ok` (else the second). -/
+def firstOk (ok : List VTy → Bool) (a b : List VTy) : List VTy := if ok a then a else b
+
 /-- The type arguments `tc` proposes for a `new` of a class with field
     types `fs`: those of the expected type, else the bindings `acc ()` from
     the fields, `void` where none (it then checks the fields against them).
@@ -348,8 +351,11 @@ def tc : Expr → Option VTy → Option VTy
   | .print e, m => if (tc e (some VTy.str)).isSome then expect m VTy.void else none
   | .heap (.new t) es, m => match S.classes[t]? with
     | some fs =>
-      -- propose type arguments (#39), then check the fields against them
-      let args := newArgs (fun _ => bindArgs fs es []) fs m
+      -- propose type arguments (#39), then check the fields against them; the
+      -- type arguments of a prototype of the class when the fields do not
+      -- determine them (`Main`'s prelude allocates the prototypes, #37)
+      let args := firstOk (fun a => tcL es (fs.map (VTy.inst a))) (newArgs (fun _ => bindArgs fs es []) fs m)
+        (((S.protos.find? (·.1 == t)).map (·.2)).getD [])
       if tcL es (fs.map (VTy.inst args)) then expect m (.ref [t] args) else none
     | none => none
   | .heap (.get k) [e], m => match tc e none with
