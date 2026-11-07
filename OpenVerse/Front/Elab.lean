@@ -2793,7 +2793,8 @@ def expandCtors (ctors : List (Pos × String × List SParam × List TParam × Li
         -- (in a function of its own: the default sees no parameter of K)
         let helper := s!"{k}$default${f}"
         if !out.any (fun | .fn _ n .. => n == helper | _ => false) then
-          out := out.push (.fn p helper [] [] [] (tyOf f) d)
+          -- (with the constructor's effects: a default cannot fail)
+          out := out.push (.fn p helper [] [] (effs.filter (· != "decides")) (tyOf f) d)
         body := body.push (.decl p s!"{f}$v" (some (tyOf f)) false (.app p (.ident p helper) [] false))
     let initRet : SExpr :=
       if fs.isEmpty then .block p []
@@ -3673,7 +3674,14 @@ def elabProgramCore (allTops00 : List STop) (opts : Options := {}) : Except Stri
   return { prog := P, sigs := S, slotTys := slotTys.toList }
 
 /-- `F$ovN` (an overload, #74) shown as `F`: every `$ov` and the digits after it removed. -/
-def stripOv (msg : String) : String := Id.run do
+def stripOv (msg0 : String) : String := Id.run do
+  -- `K$default$F` (a default an overloaded constructor fills in) is "the default of F"
+  let msg := match msg0.splitOn "$default$" with
+    | [] | [_] => msg0
+    | first :: rest =>
+      let dropName (x : String) : String :=
+        String.mk (x.toList.reverse.dropWhile (fun (c : Char) => c.isAlphanum || c == '_')).reverse
+      rest.foldl (fun acc part => dropName acc ++ "the default of " ++ part) first
   let cs := msg.toList
   let mut out : List Char := []
   let mut i := 0
