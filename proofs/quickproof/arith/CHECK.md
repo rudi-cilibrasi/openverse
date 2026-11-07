@@ -1,6 +1,6 @@
 # openverse_arith: harness check
 
-By `tools/qp check` on 2026-11-07 21:18: upstream 4006a49d863c, quickproof fab76ef.
+By `tools/qp check` on 2026-11-07 22:31: upstream 7336cd864b97, quickproof fab76ef.
 
 ## Native runs (ASan/UBSan, 3000 runs per harness)
 
@@ -29,8 +29,8 @@ Killed by some harness: **29/40**; 0 of the others only hang (the laws do not cl
 
 Survivors (an equivalent mutant, behaviour no law checks, or a failure the native runs did not reach):
 
-- `runtime/src/arith.c:90` in `vx_floordiv`: `if (r != 0 && ((r < 0) != (b < 0)))` with `1`
 - `runtime/src/arith.c:33` in `vx_sub`: `if (b > 0 ? a < INT64_MIN + b : a > INT64_MAX + b)` with `>=`
+- `runtime/src/arith.c:90` in `vx_floordiv`: `if (r != 0 && ((r < 0) != (b < 0)))` with `1`
 - `runtime/src/arith.c:149` in `vx_modulo`: `if (b > 0)` with `1`
 - `runtime/src/arith.c:107` in `vx_ceildiv`: `if (r != 0 && ((r < 0) == (b < 0)))` with `1`
 - `runtime/src/arith.c:149` in `vx_modulo`: `if (b > 0)` with `>=`
