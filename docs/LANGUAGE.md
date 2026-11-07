@@ -294,7 +294,6 @@ circle := class(shape, labelled):
     classes implementing the interface (reading it works);
   - overriding a method with its own type parameters;
   - qualified `(i:)M` implementations;
-  - named arguments to a method dispatched on the receiver's class;
   - subtyping through `+` on arrays, through tuples and through maps, and an
     array literal of different classes without an expected type.
 
