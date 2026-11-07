@@ -1,4 +1,4 @@
-# expect: Peek calls Shared, which has the effect <reads>
+# expect: Peek uses the constant Shared, which has the effect <reads>
 counter := class:
     var Count:int = 0
 Fresh()<reads>:int = 7

@@ -819,6 +819,11 @@ partial def parseTops : PM (List STop) := do
     let name ← expectIdent
     let pre ← parseSpecs
     let n ← peekT
+    -- a constant has the effects of its initialiser (#35)
+    if !n.isSym "(" then
+      if let some e := pre.find? (["computes", "reads", "writes", "allocates", "transacts", "decides",
+          "converges"].contains ·) then
+        perr n s!"a constant cannot have the effect specifier <{e}>: it has the effects of its initialiser"
     if n.isSym "(" then
       bump
       let (ps, tps) ← parseParamList

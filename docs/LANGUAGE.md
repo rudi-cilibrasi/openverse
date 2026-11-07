@@ -246,11 +246,16 @@ circle := class(shape, labelled):
   function's specifiers allow a set of heap effects: all of them when it has
   none or `<transacts>`, none with `<computes>`, and those named by
   `<reads>`, `<writes>` and `<allocates>`. Reading a `var` field *reads*,
-  setting one *writes*, and constructing an object of a class with a `var`
-  field or a `<unique>` one *allocates*; a call has its callee's effects,
-  and a constant those of its initialiser. A body with an effect its
-  function does not allow is an error, and so is an override that allows
-  more than what it overrides. Variables and values are not the heap:
+  setting one *writes* (`set C.F op= e`, and a path that goes on past a
+  `var` field, such as `set O.Arr[0] = e`, also *read* it), and
+  constructing an object of a class with a `var` field or a `<unique>` one
+  *allocates*; a call has its callee's declared effects (a call dispatched
+  on the receiver's class, those of every implementation it may run), and
+  a constant those of its initialiser: a constant takes no effect
+  specifier. Field and argument defaults count where they are used. A
+  body with an effect its function does not allow is an error, and so is
+  an override that allows more than what it overrides, and a field that
+  is a `var` through one parent and not through another. Variables and values are not the heap:
   `var` locals and immutable classes have no effect. Lean proves that a
   function without `writes` keeps every existing object as it was
   (`Prog.accepted_no_writes`). A constant cannot hold an object with `var`

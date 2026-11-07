@@ -190,15 +190,19 @@ def TyEnv.isVarField (env : TyEnv) (c f : String) : Bool := env.varFields.contai
 /-- Whether a value of type `t` can hold an object that can change or has
     an identity: one of a class below a reference class with a `var` field,
     or `<unique>`. -/
-partial def Ty.holdsMutable (env : TyEnv) : Ty → Bool
-  | .arr t | .opt t => t.holdsMutable env
-  | .tup ts => ts.any (Ty.holdsMutable env)
-  | .map k v => k.holdsMutable env || v.holdsMutable env
+partial def Ty.holdsMutable (env : TyEnv) (t : Ty) (seen : List String := []) : Bool :=
+  match t with
+  | .arr t | .opt t => t.holdsMutable env seen
+  | .tup ts => ts.any (·.holdsMutable env seen)
+  | .map k v => k.holdsMutable env seen || v.holdsMutable env seen
   | .struct n ts =>
     if env.classes.contains n && (env.sparams.lookup n).isNone then
+      -- an object below `n`, or one its fields reach
       (env.concreteBelow n).any fun d =>
-        (env.supers d).any env.uniques.contains || (env.fields d).any fun (f, _, _) => env.varFields.contains (d, f)
-    else (env.fields n ts).any fun (_, t, _) => t.holdsMutable env
+        (env.supers d).any env.uniques.contains ||
+        (env.fields d).any fun (f, ft, _) =>
+          env.varFields.contains (d, f) || (!seen.contains d && ft.holdsMutable env (d :: seen))
+    else (env.fields n ts).any fun (_, t, _) => t.holdsMutable env seen
   | _ => false
 
 /-- Whether `c` or a class or interface above it is `<unique>`. -/
@@ -416,6 +420,14 @@ def allowedFx (effs : List String) : List String :=
     if !named.isEmpty then named
     else if effs.contains "computes" then []
     else heapFx
+
+/-- Run `m`, attributing the heap effects it records first to `p` (a field
+    or argument default: the effect is the construction's or the call's). -/
+def fxAt (p : Pos) (m : EM α) : EM α := do
+  let before := (← get).fx.length
+  let r ← m
+  modify fun st => { st with fx := st.fx.take before ++ (st.fx.drop before).map fun (k, _, v) => (k, p, v) }
+  return r
 
 /-- Record heap effects at `p` (of a call of `via`). -/
 def noteFx (p : Pos) (ks : List String) (via : Option String := none) : EM Unit :=
@@ -770,7 +782,7 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
         match ctx.sig? n with
         | some s =>
           if s.isConst then
-            noteFx p s.fx (some n)
+            noteFx p s.fx (some s!"uses the constant {n}")
             return ⟨.call s.idx [], s.ret⟩
           else eerr p s!"'{n}' is a function: call it with {n}(…)"
         | none => eerr p s!"unknown identifier '{n}'"
@@ -997,7 +1009,7 @@ partial def elabApp (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (brack
       match ctx.sig? name with
       | some s =>
         -- a call has its callee's effects
-        noteFx p s.fx (some name)
+        noteFx p s.fx (some (if s.isConst then s!"uses the constant {name}" else s!"calls {name}"))
         if s.isConst then
           elabIndexLike ctx p ⟨.call s.idx [], s.ret⟩ args bracket
         else
@@ -1046,7 +1058,7 @@ partial def elabApp (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (brack
               let some d := dflt | eerr p s!"{name} needs the argument ?{n}, which has no default"
               let t := ptys[k]!
               let ta ← fresh t
-              steps := steps.push (.assign ta (← coerce p (← elabE { ctx with locals := [], selfClass := none } d (some t)) t))
+              steps := steps.push (.assign ta (← fxAt p (do coerce p (← elabE { ctx with locals := [], selfClass := none } d (some t)) t)))
               slots := slots.set! k (some ta)
           let call := Expr.call s.idx (slots.toList.map fun o => Expr.local o.get!)
           return ⟨steps.toList.foldr Expr.seq call, s.ret⟩
@@ -1792,7 +1804,7 @@ partial def elabConstruct (ctx : Ctx) (p : Pos) (name : String) (targs : List ST
     | none, some d =>
       if dctx.defaults.contains (name, f) then
         eerr p s!"the default of field '{f}' of {name} depends on itself"
-      coerce p (← elabE { dctx with defaults := (name, f) :: dctx.defaults } d (some t)) t
+      fxAt p (do coerce p (← elabE { dctx with defaults := (name, f) :: dctx.defaults } d (some t)) t)
     | none, none => eerr p s!"field '{f}' of {name} has no default value and must be given"
   if ctx.types.classes.contains name then
     let i := ctx.types.info name
@@ -2030,8 +2042,11 @@ def elabProgram (allTops00 : List STop) (opts : Options := {}) : Except String C
         for (f, sty, _, isVar) in ((full.find? (·.1 == i)).map (·.2)).getD [] do
           if ((henv.supers cd.name).drop 1).any (declares · f) then
             throw s!"{cd.pos.show}: field '{f}' of {cd.name} has the name of an inherited method"
-          if fs.any (·.1 == f) then
-            -- reached again: its type must agree (checked once types are resolved)
+          if let some (_, _, _, v0) := fs.find? (·.1 == f) then
+            -- reached again: its type must agree (checked once types are
+            -- resolved), and whether it is a var
+            if v0 != isVar then
+              throw s!"{cd.pos.show}: {cd.name} inherits field '{f}' as a var from one parent and not from another"
             fieldOverrides := fieldOverrides.push (cd.pos, cd.name, f, sty)
           else
             -- the interfaces that give the field a default themselves (an
@@ -2214,8 +2229,8 @@ def elabProgram (allTops00 : List STop) (opts : Options := {}) : Except String C
     match top with
     | .fn p n ps _ effs ret _ =>
       let (tys, rt) ← fnTypes env p n ps effs ret
-      if effs.contains "computes" && heapFx.any effs.contains then
-        throw s!"{p.show}: <computes> excludes the heap effects (<reads>, <writes>, <allocates>) that {n} also has"
+      if effs.contains "computes" && ("transacts" :: heapFx).any effs.contains then
+        throw s!"{p.show}: <computes> excludes the heap effects (<reads>, <writes>, <allocates>, <transacts>) that {n} also has"
       sigs := sigs.push { idx, name := n, params := tys, ret := rt, decides := effs.contains "decides",
                           fx := allowedFx effs,
                           isConst := false,
@@ -2238,6 +2253,8 @@ def elabProgram (allTops00 : List STop) (opts : Options := {}) : Except String C
       let tparams ← checkTParams env tps
       let genv := { env with tvars := tparams.map fun (v, c) => (v, Ty.param v c) }
       let (tys, rt) ← fnTypes genv p n ps effs ret
+      if effs.contains "computes" && ("transacts" :: heapFx).any effs.contains then
+        throw s!"{p.show}: <computes> excludes the heap effects (<reads>, <writes>, <allocates>, <transacts>) that {n} also has"
       -- generic functions come after the others
       gsigs := gsigs.push { idx := tops.length + gidx, name := n, params := tys, ret := rt,
                             decides := effs.contains "decides", isConst := false, fx := allowedFx effs,
@@ -2358,13 +2375,17 @@ def elabProgram (allTops00 : List STop) (opts : Options := {}) : Except String C
     | "allocates" => "constructs an object that has a var field or is <unique>"
     | k => k
   let fxCheck (name : String) (allowed : List String) (st : ESt) : Except String Unit := do
-    for (k, kp, via) in st.fx do
-      if !allowed.contains k then
-        let what := match via with
-          | some f => s!"calls {f}, which has the effect <{k}>"
-          | none => fxWhat k
-        let spec := if allowed.isEmpty then "<computes>" else String.intercalate "" (allowed.map (s!"<{·}>"))
-        throw s!"{kp.show}: {name} {what}, which its effects ({spec}) do not allow: add <{k}> or <transacts>"
+    -- writes first, then reads, then allocations
+    let order := ["writes", "reads", "allocates"]
+    for k in order do
+      for (k', kp, via) in st.fx do
+        if k' == k && !allowed.contains k then
+          let what := match via with
+            | some f => s!"{f}, which has the effect <{k}>"
+            | none => fxWhat k
+          let spec := if allowed.isEmpty then "<computes>" else String.intercalate "" (allowed.map (s!"<{·}>"))
+          let fix := if allowed.isEmpty then "remove <computes>" else s!"add <{k}> or <transacts>"
+          throw s!"{kp.show}: {name} {what}, which its effects ({spec}) do not allow: {fix}"
   let elabFn (env : TyEnv) (p : Pos) (name : String) (ps : List SParam) (ptys : List Ty) (ret : Ty)
       (decides : Bool) (allowed : List String) (tps : List (String × Bool)) (body : SExpr) :
       Except String (Fn × List VTy) := do

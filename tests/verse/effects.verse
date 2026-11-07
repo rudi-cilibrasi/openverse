@@ -32,7 +32,7 @@ Swap(A:counter, B:counter)<reads><writes>:void =
 
 # a constant has the effects of its initialiser
 Origin:point = point{X := 0}
-Half<computes>:int = Twice(Origin.X + 5)
+Half:int = Twice(Origin.X + 5)
 
 Main():void =
     C := Make()
