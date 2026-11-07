@@ -564,6 +564,8 @@ structure Ctx where
   selfClass : Option String := none
   /-- In a method `c.M` (or `c.(r:)M`): `M` (or `(r:)M`), for `(super:)`. -/
   selfMethod : Option String := none
+  /-- In a constructor's items (the function `K$init`, #72): no `return`. -/
+  inCtor : Bool := false
 
 structure ESt where
   /-- The program's types, for conversions between class types (`coerce`). -/
@@ -1257,10 +1259,12 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
     if !ctx.inLoop then eerr p "break is only allowed inside loop (not for)"
     return ⟨.brk, .never⟩
   | .ret p none =>
+    if ctx.inCtor then eerr p "return is not allowed in a constructor (it would skip the items after it)"
     if ctx.inBlock then eerr p "return is not allowed in a block: clause (it would skip the clauses after it)"
     if ctx.retTy != .void then eerr p s!"return needs a value of type {ctx.retTy.show}"
     return ⟨.ret (.lit .void), .never⟩
   | .ret p (some e) =>
+    if ctx.inCtor then eerr p "return is not allowed in a constructor (it would skip the items after it)"
     if ctx.inBlock then eerr p "return is not allowed in a block: clause (it would skip the clauses after it)"
     let r ← elabE ctx e (some ctx.retTy)
     return ⟨.ret (← coerce p r ctx.retTy), .never⟩
@@ -3319,6 +3323,7 @@ def elabProgramCore (allTops00 : List STop) (opts : Options := {}) : Except Stri
                        canFail := decides, retTy := ret, dictBase := ps.length,
                        dictVars := tps.map (·.1),
                        inBlock := name.endsWith ".$block",
+                       inCtor := name.endsWith "$init",
                        selfClass := match name.splitOn "." with
                          | [c, _] => some c
                          | _ => none

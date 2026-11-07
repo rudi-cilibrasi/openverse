@@ -1,4 +1,4 @@
-# expect: return is not allowed in a block: clause
+# expect: return is not allowed in a constructor
 p := class:
     A:int = 0
 MkP<constructor>() := p:
