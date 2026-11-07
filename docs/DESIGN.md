@@ -154,6 +154,32 @@ declares it.
 - **Translation validation.** Everything is ordinary Verse Core, checked by
   `Prog.checkTypes`.
 
+## Typing the heap
+
+Phase 3 (#20) adds a heap of objects, each with a class tag and fields
+(`HeapOp`). Its typing (#29) keeps the class hierarchy out of Core:
+
+- **Reference types are tag sets.** `VTy.ref ts` is a reference to an object
+  whose tag is in `ts`; the front end will use the concrete classes below a
+  static class. Subtyping is inclusion, used when a local is read
+  (`Typed.local_sub`), and a cast `isTag us` (which fails when the tag is not
+  in `us`) narrows to `ref us`.
+- **Value typing sees the tags.** `hasTy Ξ v t` takes `Ξ`, the tag of each
+  heap object. Objects are only ever appended and their tags never change,
+  so a typing survives every step (`hasTy_mono`, for `Ξ` a prefix of `Ξ'`).
+- **The class table** is part of the certificate (`Sigs.classes`): the field
+  types of each tag. `HeapOK` says each object's fields have the types of its
+  class. A field read through `ref ts` has the type that every class in `ts`
+  gives that field (`FieldTy`), which the field layout of the previous
+  section makes common. The table must mention no type variable, so that
+  `Typed.subst` holds.
+- **Preservation** (`Eval.typed`) carries, beyond the frame typing, `HeapOK`
+  and the extension of the tags. Rollback needs nothing new: a failure
+  context restores the heap it started from, which satisfies both.
+
+The front end does not produce heap operations yet; `HeapExamples.lean`
+checks hand-written programs at build time.
+
 ## Why every slot starts with a typed default
 
 The semantics starts a call's non-parameter slots as `void`, which keeps the

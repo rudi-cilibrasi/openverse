@@ -2130,10 +2130,12 @@ def elabProgram (allTops00 : List STop) (opts : Options := {}) : Except String C
   let P : Prog := { fns := fns.toList, main }
   if !P.check then throw "internal error: the elaborated program does not pass Prog.check"
   if !P.checkControl then throw "internal error: the elaborated program does not pass Prog.checkControl"
-  let S : Sigs := sigs.toList.map (fun s => (s.params.map (Ty.toVTy env), s.ret.toVTy env)) ++
+  let fsigs := sigs.toList.map (fun s => (s.params.map (Ty.toVTy env), s.ret.toVTy env)) ++
     gsigs.toList.map fun g =>
       let genv := genvOf g
       ((g.params ++ g.tparams.map fun (v, c) => Ty.param v c).map (Ty.toVTy genv), g.ret.toVTy genv)
+  -- no class is a heap object yet (#20, step 5)
+  let S : Sigs := { fns := fsigs }
   if !P.checkTypes S slotTys.toList then
     throw "internal error: the elaborated program does not pass Prog.checkTypes"
   return { prog := P, sigs := S, slotTys := slotTys.toList }

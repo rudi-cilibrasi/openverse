@@ -35,7 +35,7 @@ function.
 | 9 | BRK | — | `.brk` |
 | 10 | RET | `e:u32` | `.ret e` |
 | 11 | PRINT | `e:u32` | `.print e` |
-| 12 | HEAP | `op:u8 k:u32 n:u32 args:u32[n]` | `.heap op args` (`op`: 0 `new k`, 1 `get k`, 2 `set k`, 3 `tag`); **reserved**: the loader does not accept it yet (#20) |
+| 12 | HEAP | `op:u8 k:u32 n:u32 args:u32[n]`, or for `op` 4 `op:u8 m:u32 us:u32[m] n:u32 args:u32[n]` | `.heap op args` (`op`: 0 `new k`, 1 `get k`, 2 `set k`, 3 `tag` with `k = 0`, 4 `isTag us`); **reserved**: the loader does not accept it yet (#20) |
 
 ```
 Lit := 0 INT  i:i64

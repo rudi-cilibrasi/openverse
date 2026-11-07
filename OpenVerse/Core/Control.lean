@@ -89,7 +89,7 @@ theorem Eval.no_control {P : Prog} (hP : P.checkControl = true) : ∀ {s e r s'}
   | _, _, _, _, .prim_ok _, _, _ => apply_ctlOK _ _ _
   | _, _, _, _, .prim_stop hl, _, hb => EvalList.no_control hP hl _ _ rfl hb
   | _, _, _, _, .heap_ok (op := op) (vs := vs) (s₁ := s₁) _, _, _ => by
-      rcases HeapOp.apply_res op vs s₁.g with ⟨v, hv⟩ | hv <;> simp [hv, Res.ctlOK]
+      rcases HeapOp.apply_res op vs s₁.g with ⟨v, hv⟩ | hv | hv <;> simp [hv, Res.ctlOK]
   | _, _, _, _, .heap_stop hl, _, hb => EvalList.no_control hP hl _ _ rfl hb
   | _, _, _, _, .call_ok (fn := fn) _ hc hb', _, _ => by
       have ih := Eval.no_control hP hb'

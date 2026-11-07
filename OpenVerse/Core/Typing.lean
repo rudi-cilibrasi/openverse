@@ -32,6 +32,8 @@ inductive VTy where
   | opt : VTy → VTy
   /-- The `j`-th type parameter of the current (generic) function. -/
   | var : Nat → VTy
+  /-- A reference to an object whose class tag is one of `ts` (#29). -/
+  | ref : List Nat → VTy
   deriving Repr, Inhabited
 
 namespace VTy
@@ -56,6 +58,12 @@ def decEq : (a b : VTy) → Decidable (a = b)
     | isFalse h => isFalse (by intro h'; cases h'; exact h rfl)
   | .var a, .var b => if h : a = b then isTrue (by subst h; rfl)
     else isFalse (by intro h'; cases h'; exact h rfl)
+  | .ref a, .ref b => if h : a = b then isTrue (by subst h; rfl)
+    else isFalse (by intro h'; cases h'; exact h rfl)
+  | .int, .ref _ | .logic, .ref _ | .char, .ref _ | .arr _, .ref _ | .tup _, .ref _ | .opt _, .ref _
+  | .var _, .ref _
+  | .ref _, .int | .ref _, .logic | .ref _, .char | .ref _, .arr _ | .ref _, .tup _ | .ref _, .opt _
+  | .ref _, .var _ => isFalse (by intro h; cases h)
   | .int, .var _ | .logic, .var _ | .char, .var _ | .arr _, .var _ | .tup _, .var _ | .opt _, .var _
   | .var _, .int | .var _, .logic | .var _, .char | .var _, .arr _ | .var _, .tup _ | .var _, .opt _
   | .int, .logic | .int, .char | .int, .arr _ | .int, .tup _ | .int, .opt _
@@ -89,6 +97,8 @@ def default : VTy → Value
   -- no value has a type variable as its type; slots of such types are
   -- initialised from parameters instead (`DefaultE`)
   | .var _ => .void
+  -- no literal is a reference; the front end does not give slots such types
+  | .ref _ => .void
 def defaults : List VTy → List Value
   | [] => []
   | t :: ts => default t :: defaults ts
@@ -104,6 +114,7 @@ def subst (θ : Nat → VTy) : VTy → VTy
   | .opt t => .opt (subst θ t)
   | .tup ts => .tup (substL θ ts)
   | .var j => θ j
+  | .ref ts => .ref ts
 def substL (θ : Nat → VTy) : List VTy → List VTy
   | [] => []
   | t :: ts => subst θ t :: substL θ ts
@@ -121,36 +132,55 @@ theorem substL_eq_map (θ : Nat → VTy) : ∀ ts : List VTy, substL θ ts = ts.
 @[simp] theorem subst_logic (θ : Nat → VTy) : subst θ .logic = .logic := by simp [subst]
 @[simp] theorem subst_char (θ : Nat → VTy) : subst θ .char = .char := by simp [subst]
 @[simp] theorem subst_var (θ : Nat → VTy) (j : Nat) : subst θ (.var j) = θ j := by simp [subst]
+@[simp] theorem subst_ref (θ : Nat → VTy) (ts : List Nat) : subst θ (.ref ts) = .ref ts := by simp [subst]
 @[simp] theorem subst_void (θ : Nat → VTy) : subst θ void = void := by simp [void]
 @[simp] theorem subst_str (θ : Nat → VTy) : subst θ str = str := by simp [str]
+
+mutual
+/-- A type without type variables. -/
+def closed : VTy → Bool
+  | .var _ => false
+  | .arr t | .opt t => closed t
+  | .tup ts => closedL ts
+  | _ => true
+def closedL : List VTy → Bool
+  | [] => true
+  | t :: ts => closed t && closedL ts
+end
 
 end VTy
 
 mutual
-/-- `v` has type `t`. -/
-def hasTy : Value → VTy → Bool
+/-- `v` has type `t`, in a heap whose objects have the class tags `Ξ`. -/
+def hasTy (Ξ : List Nat) : Value → VTy → Bool
   | .int _, .int => true
   | .logic _, .logic => true
   | .char c, .char => decide (c < 256)
-  | .arr vs, .arr t => allTy vs t
-  | .tup vs, .tup ts => allTys vs ts
+  | .arr vs, .arr t => allTy Ξ vs t
+  | .tup vs, .tup ts => allTys Ξ vs ts
   | .none, .opt _ => true
-  | .some v, .opt t => hasTy v t
+  | .some v, .opt t => hasTy Ξ v t
+  | .ref a, .ref ts => match Ξ[a]? with
+    | some t => ts.contains t
+    | none => false
   | _, _ => false
 /-- Every element of `vs` has type `t`. -/
-def allTy : List Value → VTy → Bool
+def allTy (Ξ : List Nat) : List Value → VTy → Bool
   | [], _ => true
-  | v :: vs, t => hasTy v t && allTy vs t
+  | v :: vs, t => hasTy Ξ v t && allTy Ξ vs t
 /-- The elements of `vs` have the types `ts`, pointwise. -/
-def allTys : List Value → List VTy → Bool
+def allTys (Ξ : List Nat) : List Value → List VTy → Bool
   | [], [] => true
-  | v :: vs, t :: ts => hasTy v t && allTys vs ts
+  | v :: vs, t :: ts => hasTy Ξ v t && allTys Ξ vs ts
   | [], _ :: _ => false
   | _ :: _, [] => false
 end
 
-/-- Function signatures: parameter types and result type, by function index. -/
-abbrev Sigs := List (List VTy × VTy)
+/-- The certificate of a program's types: each function's parameter types and
+    result type, by function index, and each class's field types, by tag. -/
+structure Sigs where
+  fns : List (List VTy × VTy)
+  classes : List (List VTy) := []
 
 /-- The typing of primitives: `PrimTy op ts τ` when `op` applied to values
     of types `ts` gives a value of type `τ`. -/
@@ -180,18 +210,25 @@ inductive PrimTy : Prim → List VTy → VTy → Prop
   | fail {t} : PrimTy .fail [] t
   | userErr {t} : PrimTy .userErr [] t
 
+/-- Field `k` has type `τ` in every class of `ts`. -/
+def FieldTy (S : Sigs) (ts : List Nat) (k : Nat) (τ : VTy) : Prop :=
+  τ.closed = true ∧ ∀ t ∈ ts, ∃ fs, S.classes[t]? = some fs ∧ fs[k]? = some τ
+
 mutual
 /-- `Typed S Γ ρ e τ`: in a function whose slots have types `Γ` and whose
     result type is `ρ`, `e` has type `τ`. `break`, `return`, `false?` and
     `Err()` have every type. -/
 inductive Typed (S : Sigs) (Γ : List VTy) (ρ : VTy) : Expr → VTy → Prop
-  | lit {v τ} : hasTy v τ = true → Typed S Γ ρ (.lit v) τ
+  /-- No literal is a reference, so its type does not depend on the heap. -/
+  | lit {v τ} : hasTy [] v τ = true → Typed S Γ ρ (.lit v) τ
   | local {i τ} : Γ[i]? = some τ → Typed S Γ ρ (.local i) τ
+  /-- A reference read at a larger set of classes (subtyping). -/
+  | local_sub {i ts us} : Γ[i]? = some (.ref ts) → (∀ t ∈ ts, t ∈ us) → Typed S Γ ρ (.local i) (.ref us)
   | assign {i e τ} : Γ[i]? = some τ → Typed S Γ ρ e τ → Typed S Γ ρ (.assign i e) τ
   | seq {a b σ τ} : Typed S Γ ρ a σ → Typed S Γ ρ b τ → Typed S Γ ρ (.seq a b) τ
   | prim {op es ts τ} : TypedL S Γ ρ es ts → PrimTy op ts τ → Typed S Γ ρ (.prim op es) τ
   /-- A call instantiates the callee's type variables with any `θ`. -/
-  | call {f es ps τ} (θ : Nat → VTy) : S[f]? = some (ps, τ) → TypedL S Γ ρ es (ps.map (VTy.subst θ)) →
+  | call {f es ps τ} (θ : Nat → VTy) : S.fns[f]? = some (ps, τ) → TypedL S Γ ρ es (ps.map (VTy.subst θ)) →
       Typed S Γ ρ (.call f es) (τ.subst θ)
   | ite {c t e σ τ} : Typed S Γ ρ c σ → Typed S Γ ρ t τ → Typed S Γ ρ e τ →
       Typed S Γ ρ (.ite c t e) τ
@@ -201,6 +238,16 @@ inductive Typed (S : Sigs) (Γ : List VTy) (ρ : VTy) : Expr → VTy → Prop
   | brk {τ} : Typed S Γ ρ .brk τ
   | ret {e τ} : Typed S Γ ρ e ρ → Typed S Γ ρ (.ret e) τ
   | print {e} : Typed S Γ ρ e VTy.str → Typed S Γ ρ (.print e) VTy.void
+  /-- A new object of class `t`, its fields given in order. -/
+  | heap_new {t es fs ts} : S.classes[t]? = some fs → t ∈ ts → TypedL S Γ ρ es fs →
+      Typed S Γ ρ (.heap (.new t) es) (.ref ts)
+  | heap_get {k e ts τ} : Typed S Γ ρ e (.ref ts) → FieldTy S ts k τ →
+      Typed S Γ ρ (.heap (.get k) [e]) τ
+  | heap_set {k e v ts τ} : Typed S Γ ρ e (.ref ts) → FieldTy S ts k τ → Typed S Γ ρ v τ →
+      Typed S Γ ρ (.heap (.set k) [e, v]) τ
+  | heap_tag {e ts} : Typed S Γ ρ e (.ref ts) → Typed S Γ ρ (.heap .tag [e]) .int
+  /-- A cast: it fails unless the object's class is one of `us`. -/
+  | heap_isTag {e ts us} : Typed S Γ ρ e (.ref ts) → Typed S Γ ρ (.heap (.isTag us) [e]) (.ref us)
 inductive TypedL (S : Sigs) (Γ : List VTy) (ρ : VTy) : List Expr → List VTy → Prop
   | nil : TypedL S Γ ρ [] []
   | cons {e es τ ts} : Typed S Γ ρ e τ → TypedL S Γ ρ es ts → TypedL S Γ ρ (e :: es) (τ :: ts)
@@ -222,7 +269,7 @@ mutual
     evaluates without failing to a value of type `t.subst θ` whenever the
     parameters hold values of their types under `θ`. -/
 inductive DefaultE (a : Nat) (Γ : List VTy) : Expr → VTy → Prop
-  | lit {v t} : hasTy v t = true → DefaultE a Γ (.lit v) t
+  | lit {v t} : hasTy [] v t = true → DefaultE a Γ (.lit v) t
   | param {i t} : i < a → Γ[i]? = some t → DefaultE a Γ (.local i) t
   | tup {ds ts} : DefaultEL a Γ ds ts → DefaultE a Γ (.prim .mkTup ds) (.tup ts)
 inductive DefaultEL (a : Nat) (Γ : List VTy) : List Expr → List VTy → Prop
@@ -238,26 +285,38 @@ structure FnTyped (S : Sigs) (fn : Fn) (ps : List VTy) (ρ : VTy) (Γ : List VTy
   body : ∃ b ds, fn.body = initPrefixE fn.arity ds b ∧ DefaultEL fn.arity Γ ds (Γ.drop fn.arity) ∧
     Typed S Γ ρ b ρ
 
+/-- The field types of the classes mention no type variable (so a typing
+    with type variables holds at every instance, `Typed.subst`). -/
+def Sigs.ClosedClasses (S : Sigs) : Prop :=
+  ∀ (t : Nat) (fs : List VTy), S.classes[t]? = some fs → ∀ f ∈ fs, f.closed = true
+
 /-- Every function of `P` is typed with its signature in `S`. -/
 def ProgTyped (P : Prog) (S : Sigs) : Prop :=
-  P.fns.length = S.length ∧
-  ∀ (f : Nat) (fn : Fn) (ps : List VTy) (τ : VTy), P.fns[f]? = some fn → S[f]? = some (ps, τ) →
+  S.ClosedClasses ∧ P.fns.length = S.fns.length ∧
+  ∀ (f : Nat) (fn : Fn) (ps : List VTy) (τ : VTy), P.fns[f]? = some fn → S.fns[f]? = some (ps, τ) →
     ∃ Γ, FnTyped S fn ps τ Γ
 
+/-- The class tags of a heap's objects. -/
+def tagsOf (h : List Obj) : List Nat := h.map (·.tag)
+
+/-- Every object of the heap has the field types of its class. -/
+def HeapOK (S : Sigs) (h : List Obj) : Prop :=
+  ∀ (a : Nat) (o : Obj), h[a]? = some o → ∃ fs, S.classes[o.tag]? = some fs ∧ allTys (tagsOf h) o.fields fs = true
+
 /-- A frame agrees with slot types `Γ`. -/
-def FrameOK (Γ : List VTy) (fr : List Value) : Prop := allTys fr Γ = true
+def FrameOK (Ξ : List Nat) (Γ : List VTy) (fr : List Value) : Prop := allTys Ξ fr Γ = true
 
 /-- What a typed expression's outcome can be: a value of its type, a
     `return` of a value of the result type, anything else but a type error. -/
-def ResOK (τ ρ : VTy) : Res → Prop
-  | .ok v => hasTy v τ = true
-  | .ret v => hasTy v ρ = true
+def ResOK (Ξ : List Nat) (τ ρ : VTy) : Res → Prop
+  | .ok v => hasTy Ξ v τ = true
+  | .ret v => hasTy Ξ v ρ = true
   | .err k => k ≠ .type
   | .fail => True
   | .brk => True
 
-def LResOK (ts : List VTy) (ρ : VTy) : LRes → Prop
-  | .ok vs => allTys vs ts = true
-  | .stop r => ResOK VTy.void ρ r ∧ r.isOk = false
+def LResOK (Ξ : List Nat) (ts : List VTy) (ρ : VTy) : LRes → Prop
+  | .ok vs => allTys Ξ vs ts = true
+  | .stop r => ResOK Ξ VTy.void ρ r ∧ r.isOk = false
 
 end OpenVerse

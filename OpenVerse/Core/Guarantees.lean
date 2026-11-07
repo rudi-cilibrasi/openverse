@@ -25,8 +25,9 @@ namespace OpenVerse
 
 theorem Prog.accepted {P : Prog} {S : Sigs} {Γs : List (List VTy)} {τ : VTy}
     (hc : P.check = true) (ht : P.checkTypes S Γs = true) (hctl : P.checkControl = true)
-    (hm : S[P.main]? = some ([], τ)) {r : Res} {out : List Nat} (hr : Runs P r out) :
-    r.scopeErr = false ∧ r ≠ .err .type ∧ r ≠ .err .control ∧ (∀ v, r = .ok v → hasTy v τ = true) ∧
+    (hm : S.fns[P.main]? = some ([], τ)) {r : Res} {out : List Nat} (hr : Runs P r out) :
+    r.scopeErr = false ∧ r ≠ .err .type ∧ r ≠ .err .control ∧
+    (∀ v, r = .ok v → ∃ Ξ, hasTy Ξ v τ = true) ∧
     (∀ fn, P.fns[P.main]? = some fn → fn.decides = false → r ≠ .fail) ∧
     (∀ r' out', Runs P r' out' → r' = r ∧ out' = out) := by
   obtain ⟨hs, hf⟩ := Prog.check_ok hc hr
