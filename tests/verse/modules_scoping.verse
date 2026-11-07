@@ -31,6 +31,10 @@ Q := module:
         Both<public>():int = 10 * (i1:)M() + (i2:)M()
 Braced := module {
     X<public>:int = 1; Y<public>:int = 2
+    Inner<public> := module { Z<public>:int = 3 }
+    using{Inner}
+    using { /Verse.org/Simulation }
+    W<public>:int = Z + 1
 }
 Empty := module:
 Main():void =
@@ -41,4 +45,4 @@ Main():void =
     X := Q.c{}
     A:Q.i1 = X
     Print("{A.M()} {X.Both()} {X.(Q.i1:)M()} {X.(Q.i2:)M()}")
-    Print("{Braced.X + Braced.Y}")
+    Print("{Braced.X + Braced.Y} {Braced.W}")

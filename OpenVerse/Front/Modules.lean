@@ -141,7 +141,7 @@ def resolveModules (tops : List STop) : Except String (List STop) := do
     seenM := seenM.insert m
   -- (one name's overloads share their visibility)
   for (p, n) in markers "$public:" do
-    if (defs.filter (· == n)).length != (publics.filter (· == n)).length && defsS.contains n then
+    if n.contains ':' && (defs.filter (· == n)).length != (publics.filter (· == n)).length && defsS.contains n then
       throw s!"{p.show}: the overloads of {shown n} must all be <public> or all internal"
   let inside (sc m : List String) : Bool := m.length ≤ sc.length && sc.take m.length == m
   -- the definition or module a name gives from scope `sc`, the innermost
@@ -166,9 +166,16 @@ def resolveModules (tops : List STop) : Except String (List STop) := do
     if let [sc0, path] := s.splitOn "|" then
       let sc := (qualParts sc0).filter (· != "")
       let comps := qualParts path
-      let base ← match lookup sc (comps.headD "") with
-        | some (true, b) => pure b
-        | _ => throw s!"{p.show}: unknown module {shown path}"
+      let head := comps.headD ""
+      -- (the head: a module in scope, or a public submodule of a module
+      -- opened before, in scope)
+      let viaOpen : Option (List String) := opens.findSome? fun (osc, m) =>
+        if inside sc osc && modsS.contains (qualJoin (m ++ [head])) &&
+            (pubS.contains (qualJoin (m ++ [head])) || inside sc m) then some (m ++ [head]) else none
+      let base ← match lookup sc head, viaOpen with
+        | some (true, b), _ => pure b
+        | none, some b => pure b
+        | _, _ => throw s!"{p.show}: unknown module {shown path}"
       let mut cur := base
       for c in comps.drop 1 do
         if !modsS.contains (qualJoin (cur ++ [c])) then throw s!"{p.show}: unknown module {shown path}"
@@ -278,10 +285,19 @@ def resolveModules (tops : List STop) : Except String (List STop) := do
     | .fn p n ps tps effs ret body =>
       let r := rAt (scopeOf n) (tps.map (·.name))
       let ps ← params r p ps
+      let isCtor := effs.any (·.startsWith "$constructor:")
       let effs ← effs.mapM fun e =>
         if e.startsWith "$constructor:" then do return s!"$constructor:{← r.ty p (e.drop "$constructor:".length).toString}"
         else pure e
-      return .fn p n ps tps effs (← ret.mapNamesM (r.ty p)) (← body.mapNamesM r)
+      -- (a constructor's `F := e` items initialise fields: not binders)
+      let body ← match isCtor, body with
+        | true, .block bp items => do
+          let items ← items.mapM fun
+            | .decl dp dn ty v x => do return .decl dp dn (← ty.mapM (·.mapNamesM (r.ty dp))) v (← x.mapNamesM r)
+            | it => it.mapNamesM r
+          pure (SExpr.block bp items)
+        | _, _ => body.mapNamesM r
+      return .fn p n ps tps effs (← ret.mapNamesM (r.ty p)) body
     | .const p n ty body =>
       let r := rAt (scopeOf n) []
       return .const p n (← ty.mapM (·.mapNamesM (r.ty p))) (← body.mapNamesM r)

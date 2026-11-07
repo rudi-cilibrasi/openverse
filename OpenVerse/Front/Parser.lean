@@ -1088,10 +1088,20 @@ partial def parseTopsIn (col : Nat) (pfx : String) (braced : Bool := false) : PM
           bump
           let mut path := ← expectIdent
           while (← peekT).isSym "." do bump; path := path ++ "::" ++ (← expectIdent)
+          expectSym "}"
           tops := tops.push (marker t.pos s!"$open:{pfx}|{path}")
+      -- (the rest of the `using{…}`, through its own `}`)
+      let mut depth : Nat := 0
       repeat
         let n ← peekT
-        if n.isEof || (n.bol && n.col ≤ col) || (braced && (n.isSym "}" || n.isSym ";")) then break
+        if n.isEof || (n.bol && n.col ≤ col && depth == 0) then break
+        if depth == 0 && braced && (n.isSym "}" || n.isSym ";") then break
+        if n.isSym "{" then depth := depth + 1
+        if n.isSym "}" then
+          depth := depth - 1
+          bump
+          if depth == 0 then break
+          continue
         bump
       continue
     let name0 ← expectIdent
