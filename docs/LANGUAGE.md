@@ -249,9 +249,14 @@ circle := class(shape, labelled):
   - `first{c}` fails when `c` does, else it is `c`'s value; `first(c){b}`
     runs `b`, which sees `c`'s names, once `c` succeeds, and fails when `c`
     does. Without a body after it, `first(…)` is a call.
-  - `assert{c}` is a runtime error (as `Err()`) unless `c` succeeds.
+  - `assert{c}` is a runtime error (as `Err()`, without the spec's message)
+    unless `c` succeeds.
   With no generators (`choice` is not supported), `first` is the first and
-  only success.
+  only success, and `first{c}` can only fail when `c` can. These macros
+  take no body (`for{c} {b}` is refused), and `first` and `assert` before
+  `{` are the macros, not a struct of that name. A void branch makes an
+  `if` void (void accepts any value), so `if{X := e} else {Print("none")}`
+  is a statement.
 - **The command line** (the spec's expected tooling):
   - `openverse run FILE [ARG…] [do EXPR]`, and likewise `emit`. The
     arguments are the program's `Args:[]string`, unless it defines `Args`

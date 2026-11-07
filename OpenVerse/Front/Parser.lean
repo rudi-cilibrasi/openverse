@@ -97,6 +97,12 @@ def Token.identName? (t : Token) : Option String :=
   | .ident x => if keywords.contains x then none else some x
   | _ => none
 
+/-- A spec macro `kw{…}` has no body: refuse what looks like one after it
+    (a `:`, a `{` even on the next line, `then`, or `else` after `assert`). -/
+def noMacroBody (kw : String) (n : Token) (hint : String) : PM Unit := do
+  if n.isSym ":" || n.isSym "{" || n.isKw "then" || (kw == "assert" && n.isKw "else") then
+    perr n s!"'{kw}\{…}' has no body: {hint}"
+
 /-- The clauses of a spec macro whose value is that of its last clause
     (`if{…} else`, `for{…}`, `first{…}`): the clauses, the last bound to a
     fresh name unless it is a binding already, and that name. -/
@@ -435,14 +441,13 @@ partial def parseIf (stop : Nat) : PM SExpr := do
     let b ← peekT
     bump
     let cs ← parseBracedItems parseExpr
+    if cs.isEmpty then perr b "'if{}' needs a clause"
     if (← peekT).isKw "else" then
       bump
       let (cs, v) := clausesValue cs
       if (← peekT).isKw "if" then return .ite t.pos cs v (some (← parseIf stop))
       return .ite t.pos cs v (some (← parseBranch stop))
-    let n ← peekT
-    if !n.bol && (n.isSym ":" || n.isSym "{") then
-      perr n "'if{…}' has no body: its value is its last clause's; write 'if (…):' for a body"
+    noMacroBody "if" (← peekT) "its value is its last clause's; write 'if (…):' for a body"
     return .ite t.pos cs (.block b.pos []) none
   let conds ← if (← peekT).isSym ":" then do
       -- `if:` followed by an indented block of conditions, then `then:`
@@ -497,8 +502,12 @@ partial def parseFor (stop : Nat) : PM SExpr := do
   if (← peekT).isSym "{" then
     -- `for{c}` (spec: ForMacro): the value of `c`'s last clause, for each
     -- way the clauses succeed
+    let b ← peekT
     bump
-    let (cs, v) := clausesValue (← parseBracedItems (fun c => parseClause c))
+    let cs ← parseBracedItems (fun c => parseClause c)
+    if cs.isEmpty then perr b "'for{}' needs a generator"
+    noMacroBody "for" (← peekT) "its value is its last clause's; write 'for (…):' for a body"
+    let (cs, v) := clausesValue cs
     return .forE t.pos cs v
   expectSym "("
   let mut clauses := #[]
@@ -683,18 +692,25 @@ partial def parsePrimary (stop : Nat) : PM SExpr := do
     if (← peekT 1).isSym "{" then
       -- `first{c}` (spec: FirstMacro): fails if `c` does, else the value of
       -- its last clause
-      bump; bump
-      let (cs, v) := clausesValue (← parseBracedItems parseExpr)
+      bump
+      let b ← peekT
+      bump
+      let cs ← parseBracedItems parseExpr
+      if cs.isEmpty then perr b "'first{}' needs a clause"
+      noMacroBody "first" (← peekT) "its value is its last clause's; write 'first(…) {…}' for a body"
+      let (cs, v) := clausesValue cs
       return .block t.pos (cs ++ [v])
     else if (← peekT 1).isSym "(" then
       -- `first(c){b}` (spec: FirstDoMacro): `b`, with `c`'s names, once `c`
-      -- succeeds; fails if `c` does. Otherwise `first(…)` is a call.
+      -- succeeds; fails if `c` does. Otherwise (no body on the same line, or
+      -- what is in the parentheses is not clauses) `first(…)` is a call.
       let saved ← get
       bump; bump
-      let (cs, _) ← parseParenItems
+      let cs? ← (some <$> parseParenItems) <|> pure none
       let n ← peekT
-      if n.isSym "{" || n.isSym ":" then
-        return .block t.pos (cs ++ [.block t.pos [← parseBody stop]])
+      if let some (cs, _) := cs? then
+        if !n.bol && (n.isSym "{" || n.isSym ":") then
+          return .block t.pos (cs ++ [.block t.pos [← parseBody stop]])
       set saved
       bump; return .ident t.pos "first"
     else
@@ -702,8 +718,12 @@ partial def parsePrimary (stop : Nat) : PM SExpr := do
   | .ident "assert" =>
     if (← peekT 1).isSym "{" then
       -- `assert{c}` (spec: AssertMacro): a runtime error unless `c` succeeds
-      bump; bump
+      bump
+      let b ← peekT
+      bump
       let cs ← parseBracedItems parseExpr
+      if cs.isEmpty then perr b "'assert{}' needs a clause"
+      noMacroBody "assert" (← peekT) "it only checks its clauses"
       return .ite t.pos cs (.block t.pos []) (some (.app t.pos (.ident t.pos "Err") [] false))
     else
       bump; return .ident t.pos "assert"
