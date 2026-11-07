@@ -229,13 +229,21 @@ partial def parseOr (stop : Nat) : PM SExpr := do
   return a
 
 partial def parseAnd (stop : Nat) : PM SExpr := do
-  let mut a ← parseCmp stop
+  let mut a ← parseNot stop
   repeat
     let t ← peekT
     if t.isKw "and" && !t.offside stop then
-      bump; a := .andE t.pos a (← parseCmp stop)
+      bump; a := .andE t.pos a (← parseNot stop)
     else break
   return a
+
+/-- `not e`, below the comparisons and above `and` (spec grammar: `Not :=
+    Eq | "not" Not`): `not X = Y` is `not (X = Y)`. -/
+partial def parseNot (stop : Nat) : PM SExpr := do
+  let t ← peekT
+  if t.isKw "not" then
+    bump; return .notE t.pos (← parseNot stop)
+  parseCmp stop
 
 partial def parseCmp (stop : Nat) : PM SExpr := do
   let a ← parseAdd stop
@@ -282,8 +290,6 @@ partial def parseUnary (stop : Nat) : PM SExpr := do
     | e => return .neg t.pos e
   else if t.isSym "+" then
     bump; parseUnary stop
-  else if t.isKw "not" then
-    bump; return .notE t.pos (← parseUnary stop)
   else parsePostfix stop
 
 partial def parsePostfix (stop : Nat) : PM SExpr := do
