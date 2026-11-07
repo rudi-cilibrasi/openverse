@@ -1397,11 +1397,16 @@ partial def elabApp (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (brack
         -- receiver, then the arguments, once each, then the implementation of
         -- the class whose option is set
         let ownerTps := ((env.sparams.lookup owner).getD []).map (·.1)
-        if ms.tparams.length > ownerTps.length then
-          eerr p s!"{m} has type parameters, so it cannot be dispatched on the class of the receiver (#18)"
-        -- the declaration's types at the receiver's type arguments
+        -- the declaration's types at the receiver's type arguments, its own
+        -- type parameters renamed apart (they are inferred from the
+        -- arguments below, as for a generic call)
+        let ownTps := ms.tparams.drop ownerTps.length
+        let ownσ : List (String × Ty) := (ownTps.zip (List.range ownTps.length)).map fun ((v, k), i) =>
+          (v, Ty.param s!"$own{i}" k)
+        let ownNames := (List.range ownTps.length).map fun i => s!"$own{i}"
         let σ := ownerTps.zip (argsAt owner)
-        let msRet := ms.ret.subst σ
+        let declTy (t : Ty) : Ty := (t.subst ownσ).subst σ
+        let mut σu : List (String × Ty) := []
         -- the arguments, once each: positional ones left to right, then named
         -- ones as written (Book of Verse §2.5), passed to every implementation;
         -- those omitted take the default of the implementation that runs, as
@@ -1419,21 +1424,61 @@ partial def elabApp (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (brack
         let mut pre : Array Expr := #[.assign slot r.e]
         let mut locs : List Local := [{ name := recv, slot, ty := r.ty, mutable := false }]
         let mut argIds : Array SExpr := #[]
-        for (a, t0) in posArgs.zip ((ms.params.drop 1).take (npos - 1)) do
-          let t := t0.subst σ
+        -- the method's own type parameters, from the expected result type
+        -- (unless void), then from the arguments, as for a generic call: an
+        -- argument is checked against its parameter's type once the own type
+        -- parameters it mentions are bound, else inferred from; `false`,
+        -- `array{}` and `map{}` take their type from context, so they wait
+        -- for the others (they are still evaluated in order)
+        let showT (t : Ty) : String :=
+          (t.subst ((ownNames.zip ownTps).map fun (n, (v, k)) => (n, Ty.param v k))).show
+        let own? (σ' : List (String × Ty)) := σ'.filter fun (v, _) => ownNames.contains v
+        if let some et := exp then
+          if !(et == .void) then
+            if let some σ' := (declTy ms.ret).matchArg ctx.types σu et then σu := own? σ'
+        let fromContext : SExpr → Bool
+          | .ident _ "false" | .arrayLit _ [] | .mapLit _ [] => true
+          | _ => false
+        let posPs := (ms.params.drop 1).take (npos - 1)
+        let mut done : Array (Option (Expr × Ty)) := Array.replicate posArgs.length none
+        let mut deferred : Array Bool := (posArgs.map fromContext).toArray
+        for pass in [0, 1] do
+          for ((a, t0), i) in (posArgs.zip posPs).zip (List.range posArgs.length) do
+            if (pass == 0) == deferred[i]! then continue
+            let t := (declTy t0).subst σu
+            if t.params.any ownNames.contains then
+              if fromContext a then
+                eerr a.pos s!"cannot infer the type parameters of {m} from the arguments of this call"
+              let r ← elabE ctx a none
+              match t.matchArg ctx.types σu r.ty with
+              | some σ' =>
+                σu := own? σ'
+                let t' := t.subst σu
+                if t'.params.any ownNames.contains then
+                  if pass == 0 then deferred := deferred.set! i true
+                  else eerr a.pos s!"cannot infer the type parameters of {m} from this argument"
+                else done := done.set! i (some (← coerce a.pos r t', t'))
+              | none => eerr a.pos s!"expected {showT t}, found {r.ty.show} (in a call of {m})"
+            else
+              done := done.set! i (some (← coerce a.pos (← elabE ctx a (some t)) t, t))
+        for d in done do
+          let some (e, t) := d | eerr p s!"cannot infer the type parameters of {m} from the arguments of this call"
           let ta ← fresh t
-          pre := pre.push (.assign ta (← coerce a.pos (← elabE ctx a (some t)) t))
+          pre := pre.push (.assign ta e)
           locs := { name := s!"$arg{ta}", slot := ta, ty := t, mutable := false } :: locs
           argIds := argIds.push (.ident mp s!"$arg{ta}")
         let mut namedSlots : List (String × Nat) := []
         for (ap, n, rhs) in namedArgs do
-          let t := (ms.params[npos + (ms.named.findIdx? (·.1 == n)).get!]!).subst σ
+          let t := declTy (ms.params[npos + (ms.named.findIdx? (·.1 == n)).get!]!)
           let ta ← fresh t
           pre := pre.push (.assign ta (← coerce ap (← elabE ctx rhs (some t)) t))
           locs := { name := s!"$arg{ta}", slot := ta, ty := t, mutable := false } :: locs
           namedSlots := namedSlots ++ [(n, ta)]
         for (n, ta) in namedSlots do
           argIds := argIds.push (.decl mp s!"?{n}" none false (.ident mp s!"$arg{ta}"))
+        let msRet := (declTy ms.ret).subst σu
+        if msRet.params.any ownNames.contains then
+          eerr p s!"cannot infer the type parameters of {m} from the arguments of this call"
         let mut acc : Expr := .prim .userErr []   -- no option set: unreachable
         if env.isRefClass c then
           -- a reference: one test of the object's class per implementation (#34)
@@ -1457,9 +1502,9 @@ partial def elabApp (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (brack
           let ctx' := { ctx with locals := { name := s!"$self{sd}", slot := sd, ty := .struct d [], mutable := false } :: (locs ++ ctx.locals) }
           let rc ← elabApp ctx' p (.ident mp s!"{e}.{m}") (.ident mp s!"$self{sd}" :: argIds.toList) bracket exp
           acc := .ite (.assign td (.prim .query [.prim (.tupGet j) [.local slot]]))
-            (.seq (.assign sd (classWrap env d d (.local td))) (← coerce p rc ms.ret)) acc
-        let y ← fresh ms.ret
-        return ⟨pre.toList.foldr Expr.seq (.assign y acc), ms.ret⟩
+            (.seq (.assign sd (classWrap env d d (.local td))) (← coerce p rc msRet)) acc
+        let y ← fresh msRet
+        return ⟨pre.toList.foldr Expr.seq (.assign y acc), msRet⟩
       else if (ctx.types.fields c targs).any (·.1 == m) then
         -- `S.F[i]`, `S.F(k)`: a field, indexed
         elabIndexLike ctx p (← elabMember ctx p r m) args bracket
@@ -2548,8 +2593,10 @@ def elabProgram (allTops00 : List STop) (opts : Options := {}) : Except String C
             match (cdef? q).bind (methodNamed · mn) with
             | some (.fn _ _ _ qtps qeffs _ _) =>
               if qeffs.contains "final" then throw s!"{mp.show}: {q}.{mn} is <final>: it cannot be overridden"
-              if !qtps.isEmpty || !mtps.isEmpty then
-                throw s!"{mp.show}: a method with its own type parameters cannot be overridden yet (#18)"
+              -- (a method with its own type parameters overrides one with as
+              -- many, compared up to their names below)
+              if qtps.length != mtps.length then
+                throw s!"{mp.show}: {mn} has {mtps.length} type parameter(s) of its own, and {q}.{mn}, which it overrides, {qtps.length}"
             | _ => pure ()
             overridePairs := overridePairs.push (mp, s!"{n}.{mn}", s!"{q}.{mn}")
         let body ← if effs.contains "$abstract" then do
@@ -2865,8 +2912,19 @@ def elabProgram (allTops00 : List STop) (opts : Options := {}) : Except String C
   let sameSigIn (c : String) (a b : Sig) : Bool :=
     let ea := clsOf a.name
     let eb := clsOf b.name
-    ((a.params.drop 1).map (inC c ea)) == ((b.params.drop 1).map (inC c eb)) &&
-      retBelow (inC c ea a.ret) (inC c eb b.ret) && a.decides == b.decides &&
+    -- the methods' own type parameters, after their classes', renamed to the
+    -- declaration's (and declared comparable alike)
+    let own (sg : Sig) (cls : String) := sg.tparams.drop ((env.sparams.lookup cls).getD []).length
+    let (oa, ob) := (own a ea, own b eb)
+    -- (renamed apart first, so that a class's type arguments, mapped into
+    -- `c`'s, cannot capture them)
+    let apart (os : List (String × Bool)) : List (String × Ty) :=
+      (os.zip (List.range os.length)).map fun ((x, k), i) => (x, Ty.param s!"$o{i}" k)
+    let inA (t : Ty) : Ty := inC c ea (t.subst (apart oa))
+    let inB (t : Ty) : Ty := inC c eb (t.subst (apart ob))
+    oa.length == ob.length && (oa.map (·.2)) == (ob.map (·.2)) &&
+    ((a.params.drop 1).map inA) == ((b.params.drop 1).map inB) &&
+      retBelow (inA a.ret) (inB b.ret) && a.decides == b.decides &&
       a.named.map (·.1) == b.named.map (·.1)
   -- an implementation has no heap effect its declaration does not allow
   let fxOver (a b : Sig) : Option String := a.fx.find? (!b.fx.contains ·)
