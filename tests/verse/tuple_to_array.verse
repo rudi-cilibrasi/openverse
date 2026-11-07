@@ -11,6 +11,8 @@ Sum(Xs:[]int):int =
     for (X : Xs) { set S += X }
     S
 
+Len(Xs:[]t where t:type):int = Xs.Length
+
 Main():void =
     A:[]int = (1, 2, 3)
     Print("{A.Length} {Sum(A)} {Sum((4, 5))}")
@@ -21,3 +23,15 @@ Main():void =
     for (Sh : Shapes) { Print("{Sh.N}") }
     S:string = ('h', 'i')
     Print(S)
+    # (#108 review) chains, element types from the array, inference, joins
+    T := array{1, 2}
+    if (T = (1, 2) = T) then Print("chain equal") else Print("chain unequal")
+    O:[]?int = (false, option{3})
+    N:[][]int = (array{}, array{1})
+    Print("{O.Length} {N.Length}")
+    Print("{Len((7, 8, 9))}")
+    B:logic = true
+    J:[]int = if (B?) then (1, 2) else array{3}
+    Print("{J.Length}")
+    P:tuple(int, []int) = (1, (2, 3))
+    Print("{P(1).Length}")

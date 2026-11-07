@@ -509,6 +509,8 @@ partial def Ty.matchArg (env : TyEnv) (σ : List (String × Ty)) : Ty → Ty →
     -- a type with `false` inside, like that of `array{Err()}`, binds nothing either
     | none => if a.hasNever then some σ else some ((v, a) :: σ)
   | .arr p, .arr a | .opt p, .opt a => Ty.matchArg env σ p a
+  -- (a tuple converts to an array: each element at the element pattern)
+  | .arr p, .tup as => as.foldlM (fun σ a => Ty.matchArg env σ p a) σ
   | .tup ps, .tup as =>
     if ps.length != as.length then none
     else (ps.zip as).foldlM (fun σ (p, a) => Ty.matchArg env σ p a) σ
@@ -985,6 +987,18 @@ partial def convert (env : TyEnv) (e : Expr) (a b : Ty) : EM (Option Expr) := do
     match ← convert env (.local i) a' b' with
     | some c => return some (.ite (.assign i (.prim .query [e])) (.prim .mkSome [c]) (.lit .none))
     | none => return none
+  -- a tuple of convertible elements is a tuple of the converted ones
+  | .tup ts, .tup us =>
+    if ts.length != us.length then return none
+    let x ← modifyGet fun s => (s.nslots, { s with nslots := s.nslots + 1, slotTys := s.slotTys.push a })
+    let mut es : Array Expr := #[]
+    for ((ti, ui), i) in (ts.zip us).zip (List.range ts.length) do
+      let ei := Expr.prim (.tupGet i) [.local x]
+      if ti == ui || ti == .never then es := es.push ei
+      else match ← convert env ei ti ui with
+        | some c => es := es.push c
+        | none => return none
+    return some (.seq (.assign x e) (.prim .mkTup es.toList))
   -- a tuple is an array of its elements (Book of Verse ch. 3), each at the
   -- element type
   | .tup ts, .arr t =>
@@ -1044,8 +1058,16 @@ partial def joinTy (env : TyEnv) (a b : Ty) (exp : Option Ty) (inner : Bool := f
     else none
   | .arr x, .arr y => (joinTy env x y (match exp with | some (.arr e) => some e | _ => none) true).map .arr
   | .opt x, .opt y => (joinTy env x y (match exp with | some (.opt e) => some e | _ => none) true).map .opt
+  -- (a tuple and an array join as an array, as do tuples of different
+  -- lengths where an array is expected: a tuple converts to one)
+  | .tup xs, .arr y | .arr y, .tup xs =>
+    let e := match exp with | some (.arr e) => some e | _ => none
+    (xs.foldlM (fun acc x => joinTy env acc x e true) y).map .arr
   | .tup xs, .tup ys =>
-    if xs.length != ys.length then none
+    if xs.length != ys.length then
+      match exp with
+      | some (.arr e) => ((xs ++ ys).foldlM (fun acc x => joinTy env acc x (some e) true) e).map .arr
+      | _ => none
     else
       let es : List (Option Ty) := match exp with
         | some (.tup ets) => if ets.length == xs.length then ets.map some else xs.map fun _ => none
@@ -1280,6 +1302,9 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
   | .tuple _ es =>
     let exps : List (Option Ty) := match exp with
       | some (.tup ts) => if ts.length == es.length then ts.map some else es.map fun _ => none
+      -- (a tuple where an array is expected becomes one: its elements at
+      -- the element type)
+      | some (.arr t) => es.map fun _ => some t
       | _ => es.map fun _ => none
     let rs ← (es.zip exps).mapM fun (e, t) => elabE ctx e t
     return ⟨.prim .mkTup (rs.map (·.e)), .tup (rs.map (·.ty))⟩
@@ -2155,10 +2180,15 @@ partial def elabCmp (ctx : Ctx) (p : Pos) (a : SExpr) (rest : List (String × SE
     let mut steps : Array Expr := #[.assign t0 ra.e]
     for (op, b) in rest do
       let rb ← elabE ctx b (some prevTy)
-      checkTys op prevTy rb.ty
+      let rb ← asArr rb prevTy
+      -- (the previous operand, as an array when this one is)
+      let prevE ← match prevTy, rb.ty with
+        | .tup _, .arr _ => coerce p ⟨.local prev, prevTy⟩ rb.ty
+        | _, _ => pure (.local prev)
+      checkTys op (match prevTy, rb.ty with | .tup _, .arr _ => rb.ty | _, _ => prevTy) rb.ty
       let tb ← fresh rb.ty
       steps := steps.push (.assign tb rb.e)
-      steps := steps.push (p2 (opOf op) (.local prev) (.local tb))
+      steps := steps.push (p2 (opOf op) prevE (.local tb))
       prev := tb
       prevTy := rb.ty
     return ⟨steps.foldr Expr.seq (.local t0), ra.ty⟩
