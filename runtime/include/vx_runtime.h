@@ -263,6 +263,7 @@ typedef struct vx_ctx {
     size_t   *hmarks;      /* the heap mark of each active call, by depth */
     size_t   *dmax;        /* the largest block a callee's compaction left
                               in each active call's region */
+    size_t   *skipped;     /* the cells skipped callees left there, unchecked */
     size_t    nframes;
     size_t    fcap;
     size_t    top;         /* slots in use; the current frame ends here  */

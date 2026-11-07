@@ -347,14 +347,17 @@ static void call_fn(vx_ctx *c, uint32_t f, size_t sp0, size_t nargs, uint64_t n,
         size_t cap = c->fcap ? 2 * c->fcap : 64;
         size_t *hm = realloc(c->hmarks, cap * sizeof(size_t));
         size_t *dm = hm == NULL ? NULL : realloc(c->dmax, cap * sizeof(size_t));
+        size_t *sk = dm == NULL ? NULL : realloc(c->skipped, cap * sizeof(size_t));
         if (hm != NULL)
             c->hmarks = hm;
-        if (dm == NULL) {
+        if (dm != NULL)
+            c->dmax = dm;
+        if (sk == NULL) {
             c->top = top0;
             set_limit(r, VX_L_MEMORY);
             return;
         }
-        c->dmax = dm;
+        c->skipped = sk;
         c->fcap = cap;
     }
     if (vx_objs_call_fast(&c->objs) != VX_OK) {
@@ -364,6 +367,7 @@ static void call_fn(vx_ctx *c, uint32_t f, size_t sp0, size_t nargs, uint64_t n,
     }
     c->hmarks[c->nframes] = hmark;
     c->dmax[c->nframes] = 0;
+    c->skipped[c->nframes] = 0;
     c->nframes++;
 
     eval(c, g, nb, g->root, n, r);                  /* eval P n ⟨frameOf fn vs, s₁.out⟩ fn.body */
@@ -385,11 +389,13 @@ static void call_fn(vx_ctx *c, uint32_t f, size_t sp0, size_t nargs, uint64_t n,
        written during the call and the field log made during it reach */
     if (r->kind == VX_R_OK) {
         /* compact, unless the region is less than twice the largest block a
-           callee's compaction left in it (live then): skipping keeps more,
-           never less, the garbage it leaves is bounded by that block, and
-           the work stays linear in what is allocated where each return
-           compacting would be quadratic (a recursion building a linked
-           structure re-compacting its survivors) */
+           callee's compaction left in it (live then) and the caller has room
+           for it among the cells skipped callees left it (unchecked, as the
+           block may have died): skipping keeps more, never less, a caller
+           gets at most about one such block of garbage from all its callees,
+           and the work stays linear where each return compacting would be
+           quadratic (a recursion building a linked structure re-compacting
+           its survivors at every level) */
         size_t k = c->nframes - 1;
         size_t region = c->heap.len - hmark;
         if (c->dmax[k] == 0 && vx_objs_top_empty(&c->objs)) {
@@ -398,15 +404,18 @@ static void call_fn(vx_ctx *c, uint32_t f, size_t sp0, size_t nargs, uint64_t n,
                 set_limit(r, VX_L_MEMORY);
             else if (k > 0 && c->heap.len - hmark > c->dmax[k - 1])
                 c->dmax[k - 1] = c->heap.len - hmark;
-        } else if (region >= 2 * c->dmax[k]) {
+        } else if (region >= 2 * c->dmax[k] ||
+                   (k > 0 && c->skipped[k - 1] + region > 2 * c->dmax[k])) {
             if (c->st.depth == 0)
                 vx_objs_drop_stale(&c->objs);
             if (reclaim(c, hmark, &r->v) != VX_OK)
                 set_limit(r, VX_L_MEMORY);
             else if (k > 0 && c->heap.len - hmark > c->dmax[k - 1])
                 c->dmax[k - 1] = c->heap.len - hmark;
-        } else if (k > 0 && c->dmax[k] > c->dmax[k - 1]) {
-            c->dmax[k - 1] = c->dmax[k];
+        } else if (k > 0) {
+            if (c->dmax[k] > c->dmax[k - 1])
+                c->dmax[k - 1] = c->dmax[k];
+            c->skipped[k - 1] += region;
         }
     } else if (r->kind == VX_R_FAIL) {
         /* the failure reaches a context that rolls the fields back (or ends
@@ -1032,6 +1041,7 @@ void vx_run(const vx_program *p, const vx_opts *o, vx_outcome *res)
     vx_objs_free(&c.objs);
     free(c.hmarks);
     free(c.dmax);
+    free(c.skipped);
 }
 
 void vx_outcome_free(vx_outcome *res)
