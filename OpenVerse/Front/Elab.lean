@@ -906,6 +906,9 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
       | some (.opt t) => some t
       | _ => none
     let r ← elabE { ctx with canFail := true } e inner
+    -- an expression that cannot fail needs no failure context (and no
+    -- saved state to roll back to: the interpreter's heap is not copied)
+    if !(r.e.mayFail ctx.sigProg) then return ⟨.prim .mkSome [r.e], .opt r.ty⟩
     let t ← fresh r.ty
     return ⟨Expr.optionE t r.e, .opt r.ty⟩
   | .logicLit p e =>

@@ -41,7 +41,7 @@ out of date. The proofs are in `OpenVerse/Core/`.
 
 ## `Prog.run_sound`: Prog.run is sound
 
-`OpenVerse/Core/Adequacy.lean`; axioms: [propext]
+`OpenVerse/Core/Adequacy.lean`; axioms: [propext, Quot.sound]
 
 ```lean
 @Prog.run_sound : ∀ {P : Prog} {n : Nat} {r : Res} {out : List Nat}, P.run n = some (r, out) → Runs P r out
