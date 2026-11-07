@@ -2952,6 +2952,8 @@ def expandCtors (ctors : List (Pos × String × List SParam × List TParam × Li
     for f in fs.filter (!mine.contains ·) do
       if let some (_, _, some d, _) := (fullOf c).find? (·.1 == f) then
         -- (in a function of its own: the default sees no parameter of K)
+        if tps.any (fun tp => (tyOf f).mentions tp.name) then
+          throw s!"{p.show}: {k} leaves {f} to another overload, and its default's type mentions a type parameter of {k}: give {f} in every overload of a generic constructor"
         let helper := s!"{k}$default${f}"
         if !out.any (fun | .fn _ n .. => n == helper | _ => false) then
           -- (with the constructor's effects: a default cannot fail)
