@@ -1904,7 +1904,7 @@ partial def elabGenericCall (ctx : Ctx) (p : Pos) (s : Sig) (args : List SExpr) 
 
 /-- The failable array methods of the Book of Verse (§9.1):
     `A.Slice[i, j]`, `A.Slice[i]`, `A.Find[x]`, `A.RemoveElement[i]`,
-    `A.ReplaceElement[i, x]`, `A.Insert[i, B]`. Each fails when an index is
+    `A.ReplaceElement[i, x]`, `A.Insert[i, B]`, `A.Last[]`, `A.Last[n]`. Each fails when an index is
     out of range (or, for `Find`, when there is no such element). -/
 partial def elabMethod (ctx : Ctx) (p : Pos) (r : R) (m : String) (args : List SExpr) (bracket : Bool) :
     EM R := do
@@ -1942,6 +1942,12 @@ partial def elabMethod (ctx : Ctx) (p : Pos) (r : R) (m : String) (args : List S
     let found := Expr.forE ti (.prim .range [int 0, p2 .sub len (int 1)])
       (p2 .eq (p2 .index (.local ta) (.local ti)) (.local tx)) (.local ti)
     return ⟨.seq start (.seq (.assign tx (← coerce p rx t)) (p2 .index found (int 0))), .int⟩
+  -- `A.Last[]` is the last element, `A.Last[N]` the one N before it (Book of
+  -- Verse ch. 3): failing when there is none
+  | "Last", [] => return ⟨.seq start (p2 .index (.local ta) (p2 .sub len (int 1))), t⟩
+  | "Last", [n] =>
+    let es ← elabInts ctx p [n]
+    return ⟨.seq start (p2 .index (.local ta) (p2 .sub (p2 .sub len (int 1)) es[0]!)), t⟩
   | "RemoveElement", [i] =>
     let es ← elabInts ctx p [i]
     let tk ← fresh .int
