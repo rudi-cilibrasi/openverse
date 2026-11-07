@@ -100,13 +100,17 @@ Combine(A:t1, B:t2 where t1:type, t2:type):tuple(t1, t2) = (A, B)
   from context. A type parameter that is still unknown is an error. Arguments
   are still evaluated left to right.
 - **Monomorphised.** Each distinct list of type arguments becomes its own
-  Verse Core function, named like `Find(string)`. Verse Core, the OVBC format
-  and the C runtime know nothing of generics, and every instance is checked by
+  Verse Core function, named like `Find(string)`: the body elaborated by the
+  generic check, with the type arguments substituted into its slot types. So
+  every instance runs exactly the code that was checked, and behaves the same
+  way at every type argument. Verse Core, the OVBC format and the C runtime
+  know nothing of generics, and every instance is checked by
   `Prog.checkTypes` like any other function (see [`DESIGN.md`](DESIGN.md)).
 - **Limits.** A function that calls itself at ever larger types
   (polymorphic recursion) is rejected, as are named parameters, a generic
-  `Main`, and several constraints on one type parameter (also unsupported in
-  the Book).
+  `Main`, several constraints on one type parameter (also unsupported in the
+  Book), explicit type arguments to a generic function, and generic
+  constants.
 
 ## Readings openverse takes
 

@@ -109,12 +109,16 @@ no change to Core, the proofs, the binary format or the C runtime.
 
 Monomorphising alone would check a body only at the types it is used at, as
 C++ templates do. Verse checks a generic body once, for every type argument.
-So the elaborator first checks it with each type parameter as an opaque type
-(`Ty.param`), on which only the operations valid for every type are defined.
-Only then does it elaborate the instances, from a worklist, because an
-instance's body can request further instances. An instance that fails to
-elaborate after the generic check passed is an elaborator bug, reported as
-an internal error.
+So the elaborator elaborates it once, with each type parameter as an opaque
+type (`Ty.param`), on which only the operations valid for every type are
+defined. An instance is that same Core body: the type arguments are
+substituted into its slot types (which fixes the initialisation prefix), and
+its calls of generic functions are renumbered to the instances at the
+substituted type arguments. A worklist builds them, because an instance can
+request further instances. Re-elaborating each instance from source instead
+would let inference take different paths at different types (at `void`, for
+example), so an instance could fail, or behave differently, although the
+generic body was checked.
 
 The cost is code size, and no polymorphic recursion. A bound on the size of
 type arguments turns polymorphic recursion into an error rather than a loop.

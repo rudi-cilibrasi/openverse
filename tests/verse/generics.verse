@@ -55,6 +55,25 @@ Dedup(Items:[]t where t:subtype(comparable)):[]t =
             set Out += array{X}
     Out
 
+# a helper of any type, used by generic code instantiated at void
+Fail(Msg:string where t:type):t =
+    Print(Msg)
+    Err()
+
+Checked(X:t, Ok:int where t:type):t =
+    if (Ok > 0) then X else Fail("not ok")
+
+Log():void = Print("logged")
+
+# instances are the generically checked body: = against a literal means the
+# same at every type argument
+IsTrue(X:t where t:subtype(comparable))<decides>:void = X = true
+
+# constants may call generic functions, and refer to constants defined later
+Answer := Identity(Later)
+Later := 42
+Names:[]string = Repeat("n", 2)
+
 point := struct:
     X:int = 0
     Y:int = 0
@@ -91,6 +110,11 @@ Main():void =
     Print("{Lookup(M, "b", 0)} {Lookup(M, "z", -1)}")
     Print(ShowInts(Dedup(array{3, 1, 3, 2, 1})))
     Print(Dedup("mississippi"))
+    Print("{Checked(7, 1)}")
+    Checked(Log(), 1)
+    if (IsTrue[true]) then Print("true is true")
+    if (not IsTrue[1], not IsTrue[option{true}]) then Print("1 and an option are not")
+    Print("{Answer} {Names.Length}")
     # an instance that fails rolls back like any <decides> call
     var Count:int = 0
     if (set Count += 1, First[Repeat(0, 0)]) then Print("unreachable")

@@ -142,6 +142,14 @@ partial def Ty.params : Ty → List String
   | .map k v => k.params ++ v.params
   | _ => []
 
+/-- Whether `false` (the bottom type) occurs in a type. -/
+partial def Ty.hasNever : Ty → Bool
+  | .never => true
+  | .arr t | .opt t => t.hasNever
+  | .tup ts => ts.any Ty.hasNever
+  | .map k v => k.hasNever || v.hasNever
+  | _ => false
+
 /-- First-order matching of a generic signature's type `pat` against the type
     `act` of an argument, extending the binding `σ` of the callee's type
     parameters. `false` (the bottom type) matches anything and binds nothing. -/
@@ -150,7 +158,8 @@ partial def Ty.matchArg (σ : List (String × Ty)) : Ty → Ty → Option (List 
   | .param v _, a =>
     match σ.lookup v with
     | some b => if b.eqv a then some σ else none
-    | none => some ((v, a) :: σ)
+    -- a type with `false` inside, like that of `array{Err()}`, binds nothing either
+    | none => if a.hasNever then some σ else some ((v, a) :: σ)
   | .arr p, .arr a | .opt p, .opt a => Ty.matchArg σ p a
   | .tup ps, .tup as =>
     if ps.length != as.length then none
@@ -227,6 +236,7 @@ structure Inst where
   params  : List Ty
   ret     : Ty
   decides : Bool
+  deriving Inhabited
 
 structure ESt where
   nslots : Nat := 0
@@ -236,6 +246,7 @@ structure ESt where
       program: instance `k` is function `nBase + k`, where `nBase` is the
       number of non-generic functions and constants. -/
   insts : Array Inst := #[]
+  deriving Inhabited
 
 abbrev EM := StateT ESt (Except String)
 
@@ -301,26 +312,46 @@ partial def resolveTy (env : TyEnv) (p : Pos) : STy → EM Ty
 def Ctx.lookup (ctx : Ctx) (n : String) : Option Local := ctx.locals.find? (·.name == n)
 def Ctx.sig? (ctx : Ctx) (n : String) : Option Sig := ctx.sigs.find? (·.name == n)
 
-/-- The function number of the instance of generic `s` at `targs`, created
-    on first use. -/
-def instIndex (ctx : Ctx) (p : Pos) (s : Sig) (targs : List Ty) : EM Nat := do
-  let st ← get
-  let base := ctx.sigProg.fns.length
+/-- The position in `insts` of the instance of generic `s` at `targs`,
+    added when it is new. -/
+def findOrAddInst (insts : Array Inst) (s : Sig) (targs : List Ty) : Except String (Nat × Array Inst) := do
   let same (i : Inst) := i.gen == s.gidx && i.targs.length == targs.length &&
     (i.targs.zip targs).all fun (a, b) => a.eqv b
-  match st.insts.findIdx? same with
-  | some k => return base + k
+  match insts.findIdx? same with
+  | some k => return (k, insts)
   | none =>
     if targs.any (·.sizeUpTo (maxTyArgSize + 1) > maxTyArgSize) then
-      eerr p s!"{s.name} is instantiated at ever larger types {polyRecMsg}"
-    if st.insts.size ≥ maxInsts then
-      eerr p s!"more than {maxInsts} instances of generic functions {polyRecMsg}"
+      throw s!"{s.name} is instantiated at ever larger types {polyRecMsg}"
+    if insts.size ≥ maxInsts then
+      throw s!"more than {maxInsts} instances of generic functions"
     let σ := (s.tparams.map (·.1)).zip targs
     let name := s!"{s.name}({", ".intercalate (targs.map Ty.show)})"
     let inst : Inst := { gen := s.gidx, name, targs, params := s.params.map (·.subst σ),
                          ret := s.ret.subst σ, decides := s.decides }
-    set { st with insts := st.insts.push inst }
-    return base + st.insts.size
+    return (insts.size, insts.push inst)
+
+/-- The function number of the instance of generic `s` at `targs`, created
+    on first use: instance `k` is function `base + k`. -/
+def instIndex (ctx : Ctx) (p : Pos) (s : Sig) (targs : List Ty) : EM Nat := do
+  let st ← get
+  match findOrAddInst st.insts s targs with
+  | .ok (k, insts) =>
+    set { st with insts }
+    return ctx.sigProg.fns.length + k
+  | .error msg => eerr p msg
+
+/-- Renumber the calls of an expression. -/
+partial def _root_.OpenVerse.Expr.mapCalls (f : Nat → Nat) : Expr → Expr
+  | .call g es => .call (f g) (es.map (Expr.mapCalls f))
+  | .assign i e => .assign i (e.mapCalls f)
+  | .seq a b => .seq (a.mapCalls f) (b.mapCalls f)
+  | .prim op es => .prim op (es.map (Expr.mapCalls f))
+  | .ite c t e => .ite (c.mapCalls f) (t.mapCalls f) (e.mapCalls f)
+  | .forE i it filt body => .forE i (it.mapCalls f) (filt.mapCalls f) (body.mapCalls f)
+  | .loop b => .loop (b.mapCalls f)
+  | .ret e => .ret (e.mapCalls f)
+  | .print e => .print (e.mapCalls f)
+  | e => e
 
 def p2 (op : Prim) (a b : Expr) : Expr := .prim op [a, b]
 
@@ -678,18 +709,30 @@ partial def elabGenericCall (ctx : Ctx) (p : Pos) (s : Sig) (args : List SExpr) 
     | .ident _ "false" | .arrayLit _ [] | .mapLit _ [] => true
     | _ => false
   let mut es : Array Expr := Array.replicate args.length (.lit .void)
+  -- arguments left for the second pass; an argument whose type contains
+  -- `false` (like `array{Err()}`) binds nothing, so it joins them
+  let mut deferred : Array Bool := (args.map fromContext).toArray
   for pass in [0, 1] do
     for ((a, pt), i) in (args.zip s.params).zip (List.range args.length) do
-      if (pass == 0) == fromContext a then continue
+      if (pass == 0) == deferred[i]! then continue
       if bound σ pt then
         let t := pt.subst σ
-        es := es.set! i (← coerce a.pos (← elabE ctx a (some t)) t)
+        let r ← elabE ctx a (some t)
+        if !(r.ty == t || r.ty == .never || t == .void) then
+          eerr a.pos s!"expected {t.show}, found {r.ty.show} (in a call of {s.name})"
+        es := es.set! i (← coerce a.pos r t)
       else
+        if fromContext a then
+          let v := (pt.params.filter fun v => (σ.lookup v).isNone).headD "t"
+          eerr a.pos s!"cannot infer type parameter {v} of {s.name} from the arguments of this call"
         let r ← elabE ctx a none
         match pt.matchArg σ r.ty with
         | some σ' =>
           σ := σ'
-          es := es.set! i (← coerce a.pos r (pt.subst σ))
+          if pass == 0 && !bound σ pt then
+            deferred := deferred.set! i true
+          else
+            es := es.set! i (← coerce a.pos r (pt.subst σ))
         | none => eerr a.pos s!"expected {(pt.subst σ).show}, found {r.ty.show} (in a call of {s.name})"
   let mut targs : Array Ty := #[]
   for (v, cmp) in s.tparams do
@@ -1208,14 +1251,33 @@ def elabProgram (allTops : List STop) : Except String Compiled := do
     { fns := sigs.toList.map fun s =>
         { name := s.name, arity := s.params.length, nslots := 0, decides := s.decides, body := .lit .void },
       main := 0 }
-  -- infer the types of unannotated constants, in order
-  for (top, idx) in tops.zip (List.range tops.length) do
+  -- infer the types of unannotated constants: in order, in rounds, so that a
+  -- constant may use one defined after it (until a round makes no progress)
+  let unannotated := (tops.zip (List.range tops.length)).filter fun
+    | (.const _ _ none _, _) => true
+    | _ => false
+  let mut todo := unannotated
+  for _ in [0:unannotated.length + 1] do
+    let mut left := #[]
+    for (top, idx) in todo do
+      match top with
+      | .const _ _ _ body =>
+        let ctx : Ctx := { sigs := sigs.toList ++ gsigs.toList, sigProg := mkSigProg sigs, types := env }
+        match (elabE ctx body none).run {} with
+        | .ok (r, _) =>
+          if r.ty == .never then left := left.push (top, idx)
+          else sigs := sigs.set! idx { sigs[idx]! with ret := r.ty }
+        | .error _ => left := left.push (top, idx)
+      | _ => pure ()
+    if left.size == todo.length then break
+    todo := left.toList
+  -- the first constant still unknown gives its own error
+  for (top, _) in todo do
     match top with
-    | .const p n none body =>
+    | .const p n _ body =>
       let ctx : Ctx := { sigs := sigs.toList ++ gsigs.toList, sigProg := mkSigProg sigs, types := env }
       let (r, _) ← (elabE ctx body none).run {}
       if r.ty == .never then throw s!"{p.show}: cannot infer the type of '{n}'"
-      sigs := sigs.set! idx { sigs[idx]! with ret := r.ty }
     | _ => pure ()
   let sigProg := mkSigProg sigs
   let allSigs := sigs.toList ++ gsigs.toList
@@ -1233,14 +1295,18 @@ def elabProgram (allTops : List STop) : Except String Compiled := do
       { nslots := ps.length, slotTys := ptys.toArray, insts }
     let (e, st) ← (coerce p r ret).run st
     return (if ret == .void then Expr.seq e (.lit .void) else e, st)
-  -- check each generic function once, with its type parameters opaque, as
-  -- Verse does: its instances are then elaborated from a body known to be
-  -- well typed for every type argument
+  -- elaborate each generic function once, with its type parameters opaque,
+  -- as Verse checks it; its instances are this very body, with the type
+  -- arguments substituted into its slot types and its calls of generic
+  -- functions renumbered (instance k of its own table is function base + k)
+  let base := sigProg.fns.length
+  let mut gbodies : Array (Pos × Expr × ESt) := #[]
   for (top, g) in generics.zip gsigs.toList do
     match top with
     | .fn p _ ps _ _ _ body =>
       let genv := { env with tvars := g.tparams.map fun (v, c) => (v, Ty.param v c) }
-      discard <| elabBody genv p ps g.params g.ret g.decides body #[]
+      let (e, st) ← elabBody genv p ps g.params g.ret g.decides body #[]
+      gbodies := gbodies.push (p, e, st)
     | _ => pure ()
   let mut fns : Array Fn := #[]
   let mut slotTys : Array (List VTy) := #[]
@@ -1265,28 +1331,27 @@ def elabProgram (allTops : List STop) : Except String Compiled := do
       fns := fns.push { name := n, arity := 0, nslots := st.nslots, decides := false,
                         body := initPrefix 0 tys e }
       slotTys := slotTys.push tys
-  -- the instances, in the order they were first requested; elaborating one
-  -- may request more (`instIndex` bounds how many)
+  -- the instances, in the order they were first requested; building one may
+  -- request more (`findOrAddInst` bounds how many)
   let mut k := 0
   for _ in [0:maxInsts + 1] do
     if h : k < insts.size then
       let inst := insts[k]
       let g := gsigs[inst.gen]!
-      match generics[inst.gen]! with
-      | .fn p _ ps _ _ _ body =>
-        let ienv := { env with tvars := (g.tparams.map (·.1)).zip inst.targs }
-        match elabBody ienv p ps inst.params inst.ret inst.decides body insts with
-        | .error msg =>
-          if (msg.splitOn polyRecMsg).length > 1 then throw msg
-          throw s!"internal error: the instance {inst.name} does not elaborate, although {g.name} type-checks for every type argument: {msg}"
-        | .ok (e, st) =>
-          insts := st.insts
-          let tys := st.slotTys.toList.map (Ty.toVTy env)
-          let e := initPrefix ps.length (tys.drop ps.length) e
-          fns := fns.push { name := inst.name, arity := ps.length, nslots := st.nslots,
-                            decides := inst.decides, body := e }
-          slotTys := slotTys.push tys
-      | _ => pure ()
+      let (p, body, st) := gbodies[inst.gen]!
+      let σ := (g.tparams.map (·.1)).zip inst.targs
+      -- the generic function's own instance table, at these type arguments
+      let mut remap : Array Nat := #[]
+      for li in st.insts do
+        match findOrAddInst insts gsigs[li.gen]! (li.targs.map (·.subst σ)) with
+        | .ok (j, insts') => insts := insts'; remap := remap.push (base + j)
+        | .error msg => throw s!"{p.show}: {msg}"
+      let body := body.mapCalls fun f => if f < base then f else remap[f - base]!
+      let tys := st.slotTys.toList.map fun t => (t.subst σ).toVTy env
+      fns := fns.push { name := inst.name, arity := inst.params.length, nslots := st.nslots,
+                        decides := inst.decides, body := initPrefix inst.params.length
+                          (tys.drop inst.params.length) body }
+      slotTys := slotTys.push tys
       k := k + 1
     else break
   let main ← match sigs.toList.find? (·.name == "Main") with
