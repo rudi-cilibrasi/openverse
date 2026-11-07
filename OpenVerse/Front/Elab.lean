@@ -225,7 +225,8 @@ partial def TyEnv.disjoint (env : TyEnv) : Ty → Ty → Bool
   | .void, _ | _, .void | .param .., _ | _, .param .. | .never, _ | _, .never => false
   | .tup as, .tup bs => as.length != bs.length || (as.zip bs).any fun (a, b) => env.disjoint a b
   | .arr _, .arr _ | .arr _, .map .. | .map .., .arr _ | .map .., .map .. | .opt _, .opt _ => false
-  | .opt _, .logic | .logic, .opt _ => false
+  -- `false` is also an empty array, an empty option and a logic
+  | .opt _, .logic | .logic, .opt _ | .arr _, .opt _ | .opt _, .arr _ | .arr _, .logic | .logic, .arr _ => false
   | .tup _, .arr _ | .arr _, .tup _ | .tup _, .map .. | .map .., .tup _ | .tup _, .opt _ | .opt _, .tup _ => false
   | .struct a as, .struct b bs =>
     let isCls (x : String) := env.classes.contains x
@@ -610,6 +611,10 @@ structure ESt where
       `writes`, each with where it first occurs and the function called
       there, if it comes from a call. -/
   fx : List (String × Pos × Option String) := []
+  /-- The type of each argument of an overloaded call elaborated alone, by
+      its position and text (#74): computed once, so nested overloaded calls
+      take polynomial time (it survives the trials' state being restored). -/
+  natTys : List (String × Option Ty) := []
   deriving Inhabited
 
 abbrev EM := StateT ESt (Except String)
@@ -1140,7 +1145,10 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
             noteFx p s.fx (some s!"uses the constant {n}")
             return ⟨.call s.idx [], s.ret⟩
           else eerr p s!"'{n}' is a function: call it with {n}(…)"
-        | none => eerr p s!"unknown identifier '{n}'"
+        | none =>
+          if (ctx.types.overloads.lookup n).isSome then
+            eerr p s!"{n} is overloaded: an overloaded function cannot be used as a value (Book of Verse ch. 6)"
+          eerr p s!"unknown identifier '{n}'"
   | .app p f args bracket => elabApp ctx p f args bracket exp
   | .member p (.ident _ n) m =>
     match ctx.lookup n, ctx.types.enums.lookup n with
@@ -1369,6 +1377,29 @@ partial def elabApp (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (brack
       -- an overloaded function (#74): the one overload whose parameters the
       -- arguments fit (each elaborated at the parameter's type, in a trial)
       let cands := ovs.filter fun o => ((ctx.sig? o).map (·.params.length == args.length)).getD false
+      -- each argument's type alone, once (none: it needs an expected type)
+      let natTy (a : SExpr) : EM (Option Ty) := do
+        let key := s!"{a.pos.line}:{a.pos.col}:{a.pos.file}:{reprStr a}"
+        if let some r := (← get).natTys.lookup key then return r
+        let st ← get
+        let r ← tryCatch (do return some (← elabE ctx a none).ty) (fun _ => pure none)
+        let cache := (← get).natTys
+        set { st with natTys := (key, r) :: cache }
+        return r
+      let coercible (t u : Ty) : EM Bool := do
+        let st ← get
+        let ok ← tryCatch (do discard <| coerce p ⟨.lit .void, t⟩ u; pure true) (fun _ => pure false)
+        set { st with natTys := (← get).natTys }
+        return ok
+      let nats ← if cands.length > 1 then args.mapM natTy else pure (args.map fun _ => none)
+      let mut byNat : List String := []
+      for o in cands do
+        let ps := ((ctx.sig? o).map (·.params)).getD []
+        let mut ok := true
+        for (t?, u) in nats.zip ps do
+          if let some t := t? then
+            if !(← coercible t u) then ok := false
+        if ok then byNat := byNat ++ [o]
       let fits (o : String) : EM Bool := do
         let s := (ctx.sig? o).get!
         let st ← get
@@ -1377,11 +1408,15 @@ partial def elabApp (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (brack
               let r ← elabE ctx a (some t)
               discard <| coerce a.pos r t
             pure true) (fun _ => pure false)
-        set st
+        set { st with natTys := (← get).natTys }
         return ok
+      -- the overloads the arguments' own types fit, then those the arguments
+      -- elaborated at each one's parameter types fit
       let mut ok : List String := []
-      for o in cands do
-        if ← fits o then ok := ok ++ [o]
+      if byNat.length == 1 then ok := byNat
+      else
+        for o in byNat do
+          if ← fits o then ok := ok ++ [o]
       let call (o : String) : EM R :=
         tryCatch (elabApp ctx p (.ident p o) args bracket exp) fun msg => throw (msg.replace o name)
       match ok, cands with
@@ -2745,7 +2780,7 @@ def elabProgram (allTops00 : List STop) (opts : Options := {}) : Except String C
       | .fn mp mn ps mtps effs ret body =>
         if fs.any (·.1 == mn) then throw s!"{mp.show}: '{mn}' is both a field and a method of {n}"
         if mn != "$block" && (cd.methods.take mi).any (fun | .fn _ x .. => x == mn | _ => false) then
-          throw s!"{mp.show}: {n} defines {mn} twice (openverse v1 has no overloading)"
+          throw s!"{mp.show}: {n} defines {mn} twice (methods cannot be overloaded yet)"
         if ps.any (·.name == "Self") then throw s!"{mp.show}: a method parameter cannot be called Self"
         if builtins.contains mn then throw s!"{mp.show}: a method cannot be called {mn}, the name of a built-in function"
         for prm in ps do
@@ -2970,6 +3005,10 @@ def elabProgram (allTops00 : List STop) (opts : Options := {}) : Except String C
     | .fn p n ps tps effs ret body =>
       if ovNames.contains n then
         if n == "Main" then throw s!"{p.show}: Main cannot be overloaded"
+        if builtins.contains n then throw s!"{p.show}: '{n}' is a built-in function"
+        if tops.any (fun | .const _ m .. | .classDef _ m .. => m == n | _ => false) ||
+            env.classes.contains n || (env.structs.lookup n).isSome || (env.enums.lookup n).isSome then
+          throw s!"{p.show}: '{n}' is defined twice (only functions can be overloaded)"
         if !tps.isEmpty then throw s!"{p.show}: generic functions cannot be overloaded yet ({n})"
         if ps.any (·.named) then throw s!"{p.show}: overloads with named parameters are not supported yet ({n})"
         let prev := (ovMap.lookup n).getD []
@@ -2989,7 +3028,7 @@ def elabProgram (allTops00 : List STop) (opts : Options := {}) : Except String C
   let names := tops.map fun | .fn _ n .. => n | .const _ n .. => n | .classDef _ n .. => n
   let tops := tops.filter (!isGeneric ·)
   for (n, i) in names.zip (List.range names.length) do
-    if names.take i |>.contains n then throw s!"'{n}' is defined twice (openverse v1 has no overloading)"
+    if names.take i |>.contains n then throw s!"'{n}' is defined twice (only functions can be overloaded)"
     if builtins.contains n then throw s!"'{n}' is a built-in function"
   -- a function's parameter and result types
   let fnTypes (env : TyEnv) (p : Pos) (n : String) (ps : List SParam) (effs : List String) (ret : STy) :

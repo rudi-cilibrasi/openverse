@@ -19,12 +19,16 @@ Describe(C:circle):string = "circle {C.R}"
 Describe(K:color):string = "color"
 Describe(X:int, Y:int):string = "two {X + Y}"
 Describe():string = "nothing"
-Describe(O:?int):string = if (V := O?) then "some {V}" else "none"
 
 Half(X:int)<decides>:int =
     X > 0
     Floor(X / 2)
 Half(S:string):string = "half of {S}"
+
+# nested overloaded calls resolve in polynomial time
+Depth(X:int):int = X + 1
+Depth(S:string):int = 0
+Depth(C:char):int = 2
 
 Main():void =
     Print(Describe(3))
@@ -34,7 +38,7 @@ Main():void =
     Print(Describe(color.Red))
     Print(Describe(2, 5))
     Print(Describe())
-    Print(Describe(option{7}))
     Print(Describe(Describe(1)))
     if (H := Half[8]) then Print("{H}")
     Print(Half("x"))
+    Print("{Depth(Depth(Depth(Depth(Depth(Depth(Depth(Depth(Depth(Depth(Depth(Depth(Depth(Depth(Depth(Depth(Depth(Depth(Depth(Depth(Depth(Depth(Depth(Depth(1))))))))))))))))))))))))}")

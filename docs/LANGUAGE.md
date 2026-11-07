@@ -121,13 +121,15 @@ Verse ch. 6): `Describe(X:int)`, `Describe(S:string)`, `Describe(X:int, Y:int)`.
   disjoint types at some position. A single tuple parameter counts as many
   parameters as its elements.
 - **Overlapping types:** `void`, a type parameter, two array, map or option
-  types (they share the empty one, or `false`), `?t` and `logic`, a tuple and
-  an array, map or option, and a class or interface with an interface or a
-  class above or below it. A pair that overlaps is refused where the later
+  types (they share the empty one), an array, option or `logic` with
+  another (`false` is each), a tuple and an array, map or option, and a
+  class or interface with an interface or a class above or below it. A pair that overlaps is refused where the later
   one is defined.
 - **Calls.** A call takes the overload whose parameter types its arguments
-  fit, each argument elaborated at the parameter's type. With subtyping, a
-  `square` fits `Describe(B:shape)`.
+  fit. With subtyping, a `square` fits `Describe(B:shape)`. Each argument's
+  own type is found once, and the arguments are elaborated at a
+  candidate's parameter types only when that leaves several, so nested
+  overloaded calls stay cheap. An overloaded name is not a value.
 - **Lowering.** Each overload is a separate function (`F$ov0`, `F$ov1`, …).
 - **Not yet supported:** overloading generic functions, overloads with named
   parameters, overloaded methods and constructors, and overloading `Main`.
