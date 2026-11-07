@@ -312,19 +312,22 @@ gets the same index as in Lean.
 
 The two heaps meet when an object field holds an array. A callee can store a
 fresh array in an older object, and then its result no longer reaches
-everything that must survive. So a field written with a value-heap
-reference is remembered (`vx_objs_remember`), in a list whose entries from a
-call's start are that call's; when the call returns, its compaction takes
-as roots its result, the remembered fields of the call, and the old field
-values its failure contexts logged (which a rollback may restore), and
-updates them all (#50). The call's entries then become its caller's, without
-the ones that no longer hold a reference or that a newer entry replaces. A
-rollback drops the entries made in its context: a value it restores was
-written before, with an older entry. So a call keeps only what its result
-and fields reach. As with any call-scoped reclamation, a field's array
-replaced over and over keeps every old copy in the caller's region until the
-caller returns (as a loop that replaces a local's array already does), so
-memory can run out where Lean, which has no limit, would finish. The object store is unproved, like the
+everything that must survive. So an object cell that holds a value-heap
+reference has one entry, in the list of an active call at least as deep as
+the call whose region holds the value (`vx_objs_remember`; the owner is the
+deepest call whose heap mark is at most the reference, and a value older
+than every call needs none). When a call returns, its compaction takes as
+roots its result and the cells in its list, updates them, and hands the list
+to its caller: the values it keeps now lie in the caller's region (#50). An
+entry leaves only when its cell no longer holds a reference and no failure
+context is open, or when a rollback drops its object: what a rollback
+restores was written before its context, so its entry is in a list at least
+as deep as its owner. Old values in the field log need no root, since what
+a rollback finally restores predates the context. As with any call-scoped
+reclamation, a field's array replaced over and over keeps every old copy in
+the caller's region until the caller returns (as a loop that replaces a
+local's array already does), so memory can run out where Lean, which has no
+limit, would finish. The object store is unproved, like the
 value heap, and kept out of the proved `store.c`, whose law
 (`store_rollback_model`) is unchanged.
 

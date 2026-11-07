@@ -105,16 +105,22 @@ typedef struct vx_oundo {
     vx_val old;
 } vx_oundo;
 
-/* The remembered fields (#50): cells written with a value-heap reference,
- * newest last, so that a call returning reclaims its cells except those a
- * field written during it refers to (the entries from the call's start
- * on).  rpos[cell] is 1 + the position of the cell's newest entry, or 0. */
+/* The remembered fields (#50): each object cell that holds a value-heap
+ * reference has (at most) one entry, in the list of an active call at least
+ * as deep as the call whose heap region holds the value, so that when that
+ * call returns its compaction keeps what the field reaches.  rdepth[cell] is
+ * 1 + the depth of the list holding the cell's entry (0: none), rindex[cell]
+ * its index there. */
+typedef struct vx_remlist {
+    size_t *cells; size_t n; size_t cap;
+} vx_remlist;
+
 typedef struct vx_objs {
     vx_obj   *objs;   size_t nobjs;  size_t ocap;
     vx_val   *cells;  size_t ncells; size_t ccap;
     vx_oundo *log;    size_t nlog;   size_t lcap;
-    size_t   *rem;    size_t nrem;   size_t rcap;
-    size_t   *rpos;   size_t pcap;
+    size_t   *rdepth; size_t *rindex; size_t pcap;
+    vx_remlist *lists; size_t nlists; size_t lscap;
     size_t    max;    /* objects + cells allowed */
     size_t    max_log;
 } vx_objs;
@@ -123,7 +129,6 @@ typedef struct vx_objmark {
     size_t nobjs;
     size_t ncells;
     size_t nlog;
-    size_t nrem;
 } vx_objmark;
 
 void vx_objs_init(vx_objs *h, size_t max, size_t max_log);
@@ -142,9 +147,14 @@ void vx_objs_mark(const vx_objs *h, vx_objmark *m);
 void vx_objs_rollback(vx_objs *h, const vx_objmark *m);
 /* Drop the log (when the outermost failure context is left). */
 void vx_objs_forget(vx_objs *h);
-/* Remember that `cell` now holds a value-heap reference: an entry at or
-   after position `seg0` (the current call's first). */
-int  vx_objs_remember(vx_objs *h, size_t cell, size_t seg0);   /* OK | EFULL */
+/* `cell` now holds a value-heap reference owned by the call at `depth`: its
+   entry goes to that call's list unless it is in a deeper one already. */
+int  vx_objs_remember(vx_objs *h, size_t cell, size_t depth);   /* OK | EFULL */
+/* A call starts (its list, empty, at depth h->nlists) or returns (its
+   entries move to its caller's list; without `keep`, those whose cell no
+   longer holds a heap reference are dropped). */
+int  vx_objs_call(vx_objs *h);                                  /* OK | EFULL */
+int  vx_objs_return(vx_objs *h, int keep);                      /* OK | EFULL */
 
 /* ------------------------------------------------------------------------
  * Outcomes (Res of Value.lean, plus LIMIT for Lean's `none` and for the C
@@ -215,7 +225,9 @@ typedef struct vx_ctx {
     vx_store  st;          /* slots of every live frame, journal, output */
     vx_heap   heap;
     vx_objs   objs;        /* class instances (Glob.heap)                */
-    size_t    remseg;      /* the current call's first remembered field  */
+    size_t   *hmarks;      /* the heap mark of each active call, by depth */
+    size_t    nframes;
+    size_t    fcap;
     size_t    top;         /* slots in use; the current frame ends here  */
     vx_val   *vs;          /* value stack: temporaries                   */
     size_t    vsp;

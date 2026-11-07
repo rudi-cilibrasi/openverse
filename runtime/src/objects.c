@@ -24,8 +24,14 @@ void vx_objs_free(vx_objs *h)
     free(h->objs);
     free(h->cells);
     free(h->log);
-    free(h->rem);
-    free(h->rpos);
+    {
+        size_t i;
+        for (i = 0; i < h->lscap; i++)
+            free(h->lists[i].cells);
+    }
+    free(h->lists);
+    free(h->rdepth);
+    free(h->rindex);
     memset(h, 0, sizeof *h);
 }
 
@@ -87,7 +93,34 @@ void vx_objs_mark(const vx_objs *h, vx_objmark *m)
     m->nobjs = h->nobjs;
     m->ncells = h->ncells;
     m->nlog = h->nlog;
-    m->nrem = h->nrem;
+}
+
+/* Remove cell's entry from its list (swap with the last). */
+static void unremember(vx_objs *h, size_t cell)
+{
+    vx_remlist *l;
+    size_t i, last;
+    if (cell >= h->pcap || h->rdepth[cell] == 0)
+        return;
+    l = &h->lists[h->rdepth[cell] - 1];
+    i = h->rindex[cell];
+    last = l->cells[l->n - 1];
+    l->cells[i] = last;
+    h->rindex[last] = i;
+    l->n = l->n - 1;
+    h->rdepth[cell] = 0;
+}
+
+static int list_push(vx_objs *h, size_t depth, size_t cell)
+{
+    vx_remlist *l = &h->lists[depth];
+    if (!reserve((void **)&l->cells, &l->cap, l->n + 1, sizeof(size_t), h->max))
+        return 0;
+    l->cells[l->n] = cell;
+    h->rdepth[cell] = depth + 1;
+    h->rindex[cell] = l->n;
+    l->n = l->n + 1;
+    return 1;
 }
 
 void vx_objs_rollback(vx_objs *h, const vx_objmark *m)
@@ -96,34 +129,65 @@ void vx_objs_rollback(vx_objs *h, const vx_objmark *m)
         h->nlog = h->nlog - 1;
         h->cells[h->log[h->nlog].cell] = h->log[h->nlog].old;
     }
-    /* the entries made in the context go: a value rollback restores was
-       written before it, and its entry is older */
-    while (h->nrem > m->nrem) {
+    /* the cells of the objects dropped lose their entries; the others keep
+       theirs (a value rollback restores is older than the context, and its
+       entry is in a list at least as deep as its owner) */
+    {
         size_t cell;
-        h->nrem = h->nrem - 1;
-        cell = h->rem[h->nrem];
-        if (cell < h->pcap && h->rpos[cell] == h->nrem + 1)
-            h->rpos[cell] = 0;
+        for (cell = m->ncells; cell < h->ncells; cell++)
+            unremember(h, cell);
     }
     h->nobjs = m->nobjs;
     h->ncells = m->ncells;
 }
 
-int vx_objs_remember(vx_objs *h, size_t cell, size_t seg0)
+int vx_objs_remember(vx_objs *h, size_t cell, size_t depth)
 {
+    if (depth >= h->nlists)
+        return VX_OK;   /* not owned by an active call */
     if (cell >= h->pcap) {
-        size_t old = h->pcap;
-        if (!reserve((void **)&h->rpos, &h->pcap, cell + 1, sizeof(size_t), h->max))
+        size_t old = h->pcap, cap1 = h->pcap;
+        if (!reserve((void **)&h->rindex, &cap1, cell + 1, sizeof(size_t), h->max) ||
+            !reserve((void **)&h->rdepth, &h->pcap, cell + 1, sizeof(size_t), h->max))
             return VX_EFULL;
-        memset(&h->rpos[old], 0, (h->pcap - old) * sizeof(size_t));
+        memset(&h->rdepth[old], 0, (h->pcap - old) * sizeof(size_t));
     }
-    if (h->rpos[cell] != 0 && h->rpos[cell] - 1 >= seg0)
-        return VX_OK;   /* already in this call's entries */
-    if (!reserve((void **)&h->rem, &h->rcap, h->nrem + 1, sizeof(size_t), h->max))
+    if (h->rdepth[cell] != 0 && h->rdepth[cell] - 1 >= depth)
+        return VX_OK;   /* in a list at least as deep already */
+    unremember(h, cell);
+    return list_push(h, depth, cell) ? VX_OK : VX_EFULL;
+}
+
+int vx_objs_call(vx_objs *h)
+{
+    size_t old = h->lscap;
+    if (!reserve((void **)&h->lists, &h->lscap, h->nlists + 1, sizeof(vx_remlist), h->max))
         return VX_EFULL;
-    h->rem[h->nrem] = cell;
-    h->nrem = h->nrem + 1;
-    h->rpos[cell] = h->nrem;
+    if (h->lscap > old)
+        memset(&h->lists[old], 0, (h->lscap - old) * sizeof(vx_remlist));
+    h->nlists = h->nlists + 1;
+    return VX_OK;
+}
+
+int vx_objs_return(vx_objs *h, int keep)
+{
+    vx_remlist *l;
+    size_t i, top;
+    if (h->nlists == 0)
+        return VX_OK;
+    top = h->nlists - 1;
+    l = &h->lists[top];
+    for (i = 0; i < l->n; i++) {
+        size_t cell = l->cells[i];
+        const vx_val *v = &h->cells[cell];
+        h->rdepth[cell] = 0;
+        if (top == 0 || (!keep && (!vx_isref(v) || v->bits == 0)))
+            continue;
+        if (!list_push(h, top - 1, cell))
+            return VX_EFULL;
+    }
+    l->n = 0;
+    h->nlists = top;
     return VX_OK;
 }
 
