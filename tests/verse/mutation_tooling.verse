@@ -1,5 +1,5 @@
 #!/usr/bin/env openverse run
-# Items from the spec draft's mutation syntax, macros and tooling (#25).
+# Small items of mutation syntax, macros and tooling (#25).
 # The first line is a shebang, which is a `#` comment.
 
 score := struct:

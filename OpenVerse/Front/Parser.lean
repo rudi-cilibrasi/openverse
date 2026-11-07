@@ -98,13 +98,13 @@ def Token.identName? (t : Token) : Option String :=
   | .ident x => if keywords.contains x then none else some x
   | _ => none
 
-/-- A spec macro `kw{…}` has no body: refuse what looks like one after it
+/-- A clause macro `kw{…}` has no body: refuse what looks like one after it
     (a `:`, a `{` even on the next line, `then`, or `else` after `assert`). -/
 def noMacroBody (kw : String) (n : Token) (hint : String) : PM Unit := do
   if n.isSym ":" || n.isSym "{" || n.isKw "then" || (kw == "assert" && n.isKw "else") then
     perr n s!"'{kw}\{…}' has no body: {hint}"
 
-/-- The clauses of a spec macro whose value is that of its last clause
+/-- The clauses of a clause macro whose value is that of its last clause
     (`if{…} else`, `for{…}`, `first{…}`): the clauses, the last bound to a
     fresh name unless it is a binding already, and that name. -/
 def clausesValue (cs : List SExpr) : List SExpr × SExpr :=
@@ -239,8 +239,8 @@ partial def parseAnd (stop : Nat) : PM SExpr := do
     else break
   return a
 
-/-- `not e`, below the comparisons and above `and` (spec grammar: `Not :=
-    Eq | "not" Not`): `not X = Y` is `not (X = Y)`. -/
+/-- `not e`, below the comparisons and above `and`: `not X = Y` is
+    `not (X = Y)`. -/
 partial def parseNot (stop : Nat) : PM SExpr := do
   let t ← peekT
   if t.isKw "not" then
@@ -410,8 +410,7 @@ partial def parseBraced (p : Pos) : PM SExpr := do
   return .block p stmts.toList
 
 /-- Items after a `{`, up to the `}` (consumed), separated by `;`, `,` or
-    new lines: the clauses of the spec's `if{…}`, `for{…}`, `first{…}` and
-    `assert{…}`. -/
+    new lines: the clauses of `if{…}`, `for{…}`, `first{…}` and `assert{…}`. -/
 partial def parseBracedItems (item : Nat → PM SExpr) : PM (List SExpr) := do
   if (← peekT).isSym "}" then bump; return []
   let c := (← peekT).col
@@ -455,7 +454,7 @@ partial def parseIf (stop : Nat) : PM SExpr := do
   let t ← peekT
   bump
   if (← peekT).isSym "{" then
-    -- `if{c}` and `if{c} else e` (spec: IfMacro, IfElseMacro): `c` in a
+    -- `if{c}` and `if{c} else e`: `c` in a
     -- failure context; with `else`, the value is that of `c`'s last clause
     -- when `c` succeeds, else `e`'s
     let b ← peekT
@@ -520,7 +519,7 @@ partial def parseFor (stop : Nat) : PM SExpr := do
   let t ← peekT
   bump
   if (← peekT).isSym "{" then
-    -- `for{c}` (spec: ForMacro): the value of `c`'s last clause, for each
+    -- `for{c}`: the value of `c`'s last clause, for each
     -- way the clauses succeed
     let b ← peekT
     bump
@@ -726,7 +725,7 @@ partial def parsePrimary (stop : Nat) : PM SExpr := do
   | .ident "let" =>
     if (← peekT 1).isSym "(" then
       -- `let(defs){body}`: the definitions are visible in the body only, and
-      -- the value is the body's (spec: LetMacro)
+      -- the value is the body's
       bump; bump
       let (defs, _) ← parseParenItems
       let body ← parseBody stop
@@ -735,7 +734,7 @@ partial def parsePrimary (stop : Nat) : PM SExpr := do
       bump; return .ident t.pos "let"
   | .ident "first" =>
     if (← peekT 1).isSym "{" then
-      -- `first{c}` (spec: FirstMacro): fails if `c` does, else the value of
+      -- `first{c}`: fails if `c` does, else the value of
       -- its last clause
       bump
       let b ← peekT
@@ -746,7 +745,7 @@ partial def parsePrimary (stop : Nat) : PM SExpr := do
       let (cs, v) := clausesValue cs
       return .block t.pos (cs ++ [v])
     else if (← peekT 1).isSym "(" then
-      -- `first(c){b}` (spec: FirstDoMacro): `b`, with `c`'s names, once `c`
+      -- `first(c){b}`: `b`, with `c`'s names, once `c`
       -- succeeds; fails if `c` does. Otherwise (no body on the same line, or
       -- what is in the parentheses is not clauses) `first(…)` is a call.
       let saved ← get
@@ -762,7 +761,7 @@ partial def parsePrimary (stop : Nat) : PM SExpr := do
       bump; return .ident t.pos "first"
   | .ident "assert" =>
     if (← peekT 1).isSym "{" then
-      -- `assert{c}` (spec: AssertMacro): a runtime error unless `c` succeeds
+      -- `assert{c}`: a runtime error unless `c` succeeds
       bump
       let b ← peekT
       bump

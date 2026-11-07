@@ -1,4 +1,4 @@
-# char32 (the spec grammar's Char32): 0u literals, Unicode scalar values;
+# char32: 0u literals, Unicode scalar values;
 # ints in Verse Core, printed as UTF-8 (1 to 4 bytes).
 
 Next(C:char32):char32 = if (C = 0u41) then 0u42 else C

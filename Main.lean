@@ -61,7 +61,7 @@ def withProg (file : String) (k : Prog → IO UInt32) : IO UInt32 := do
   | .error e => IO.eprintln s!"{file}:{e}"; return 4
   | .ok P => k P
 
-/-- The shell arguments of `run`/`emit` (spec: expected tooling): the ARGs,
+/-- The shell arguments of `run`/`emit`: the ARGs,
     then `do` and an expression to run instead of `Main`. -/
 def splitDo (rest : List String) : List String × Option String :=
   match rest.span (· != "do") with
