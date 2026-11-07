@@ -41,7 +41,7 @@ out of date. The proofs are in `OpenVerse/Core/`.
 
 ## `Prog.run_sound`: Prog.run is sound
 
-`OpenVerse/Core/Adequacy.lean`; axioms: [propext]
+`OpenVerse/Core/Adequacy.lean`; axioms: [propext, Quot.sound]
 
 ```lean
 @Prog.run_sound : ∀ {P : Prog} {n : Nat} {r : Res} {out : List Nat}, P.run n = some (r, out) → Runs P r out
@@ -206,6 +206,16 @@ out of date. The proofs are in `OpenVerse/Core/`.
   P.checkControl = true → ∀ {r : Res} {out : List Nat}, Runs P r out → r ≠ Res.err ErrKind.control
 ```
 
+## `Eval.no_writes`: an expression that does not write keeps every existing object
+
+`OpenVerse/Core/Writes.lean`; axioms: [propext]
+
+```lean
+@Eval.no_writes : ∀ {P : Prog},
+  P.WriteSound →
+    ∀ {s : St} {e : Expr} {r : Res} {s' : St}, Eval P s e r s' → Expr.writesHeap P e = false → s.g.keeps s'.g
+```
+
 ## `Prog.check_ok`: Prog.check establishes the hypotheses of no_fail and scoped_ok
 
 `OpenVerse/Core/Check.lean`; axioms: [propext, Classical.choice, Quot.sound]
@@ -237,6 +247,18 @@ out of date. The proofs are in `OpenVerse/Core/`.
                           HeapOK S heap ∧ ∀ (v : Value), r = Res.ok v → hasTy (tagsOf heap) v τ = true) ∧
                       (∀ (fn : Fn), P.fns[P.main]? = some fn → fn.decides = false → r ≠ Res.fail) ∧
                         ∀ (r' : Res) (out' : List Nat), Runs P r' out' → r' = r ∧ out' = out
+```
+
+## `Prog.accepted_no_writes`: a function without writes keeps every existing object
+
+`OpenVerse/Core/Guarantees.lean`; axioms: [propext, Quot.sound]
+
+```lean
+@Prog.accepted_no_writes : ∀ {P : Prog},
+  P.check = true →
+    ∀ {s : St} {f : Nat} {es : List Expr} {r : Res} {s' : St} {fn : Fn},
+      P.fns[f]? = some fn →
+        fn.writes = false → Expr.writesHeapList P es = false → Eval P s (Expr.call f es) r s' → s.g.keeps s'.g
 ```
 
 ## `apply_mul`: int multiplication in the terms of the C law

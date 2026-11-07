@@ -46,8 +46,7 @@ def eval (P : Prog) : Nat → St → Expr → Option (Res × St)
       | none => some (.err .slot, s₁)
   | n+1, s, .seq a b => bindR (eval P n s a) fun _ s₁ => eval P n s₁ b
   | n+1, s, .prim op es => bindL (evalList P n s es) fun vs s₁ => some (op.apply vs, s₁)
-  | n+1, s, .heap op es => bindL (evalList P n s es) fun vs s₁ =>
-      some ((op.apply vs s₁.g).1, { s₁ with g := (op.apply vs s₁.g).2 })
+  | n+1, s, .heap op es => bindL (evalList P n s es) fun vs s₁ => some (St.heapStep op vs s₁)
   | n+1, s, .call f es => bindL (evalList P n s es) fun vs s₁ =>
       match P.callable f vs.length with
       | none => some (.err .call, s₁)

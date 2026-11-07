@@ -44,7 +44,7 @@ Lit := 0 INT  i:i64
      | 3 STR  n:u32 bytes:u8[n]       -- .arr of n chars (also the empty array)
      | 4 NONE                         -- the empty option (`false`)
      | 5 VOID                         -- .tup []
-     | 6 REF  a:u32                   -- .ref a (only fuzzing makes these: no typed program has one)
+     | 6 REF  a:u32                   -- .ref a: the prototype at address a (#37)
 ```
 
 A literal that is not one of these (a non-string array, a non-empty tuple,
@@ -94,8 +94,8 @@ the wrong values, those are type errors at run time (`HeapOp.apply`), which
 typed programs never have. Class tags, field indices and REF literals are
 `u32`: `Prog.encode` writes a larger number modulo 2^32, so the encoding of
 a Core program with one is not that program. The front end numbers classes
-and fields from 0, and no typed program has a REF literal, so no compiled
-program needs more. The QuickProof law `loader_wellscoped`
+and fields from 0, and a REF literal is the address of a prototype, so no
+compiled program needs more. The QuickProof law `loader_wellscoped`
 (`proofs/quickproof/loader`) proves that the C loader enforces conditions 1–7
 for every input buffer, and reads only inside the buffer.
 
@@ -110,3 +110,7 @@ for every input buffer, and reads only inside the buffer.
 | 4 | the program could not be loaded or compiled | the reason |
 
 stdout is exactly the bytes the program printed.
+
+The format does not carry `Fn.writes` (#35): it is a fact the front end
+proves about a program (`Prog.checkWriteSound`), not part of its meaning,
+and the runtime never needs it.

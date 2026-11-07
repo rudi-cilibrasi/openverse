@@ -225,6 +225,75 @@ example : (VTy.tup [.ref [1], .int]).sub (.tup [.ref [0, 1], .int]) = true := by
 example : (VTy.tup [.ref [1]]).sub (.tup [.ref [0, 1], .int]) = false := by native_decide
 end
 
+/-! ### Functions that do not write (#35) -/
+
+/-- `Show` only reads its object, so it may be marked as not writing;
+    `castOutside`'s `Show` may too. `heapDemo`'s `Show` writes `P.X`. -/
+def readsOnly : Prog :=
+  { subDemo with fns := subDemo.fns.set 2 { subDemo.fns[2]! with writes := false } }
+example : readsOnly.check = true := by native_decide
+def writesMarkedReads : Prog :=
+  { heapDemo with fns := heapDemo.fns.set 0 { heapDemo.fns[0]! with writes := false } }
+example : writesMarkedReads.check = false := by native_decide
+-- a call of a writing function writes, also in a failure context
+example : (Expr.ite (.call 0 [.local 0]) (.lit .void) (.lit .void)).writesHeap heapDemo = true := by
+  native_decide
+-- `castOutside`'s `Show` only reads, so it may be marked as not writing
+example : ({ castOutside with fns := castOutside.fns.set 0 { castOutside.fns[0]! with writes := false } }
+    : Prog).checkWriteSound = true := by native_decide
+-- a function that only calls functions that do not write does not write either: `SumX` marked,
+-- and `Main` (which calls only `Make3`, `SumX` and `Show`) marked too once `Make3` is
+def readsOnly2 : Prog :=
+  let mark (fs : List Fn) (i : Nat) : List Fn := fs.set i { fs[i]! with writes := false }
+  { readsOnly with fns := mark (mark (mark readsOnly.fns 1) 0) 3 }
+example : readsOnly2.check = true := by native_decide
+-- ... but a function that calls a writing one, unmarked, cannot be marked
+def callsWriter : Prog :=
+  { heapDemo with fns := heapDemo.fns.set 1 { heapDemo.fns[1]! with writes := false } }
+example : callsWriter.check = false := by native_decide
+
+/-! ### Prototypes (#37) -/
+
+/-- `$Main` allocates a `point3` prototype (address 0), then calls `Main`,
+    whose `point3` slot starts as a reference to it: no allocation.
+    `Show` prints a `point3`'s `Z`. -/
+def protoDemo : Prog where
+  fns := [
+    { name := "Show", arity := 1, nslots := 1, decides := false,
+      body := printInt (.heap (.get 2) [.local 0]) },
+    { name := "Main", arity := 0, nslots := 1, decides := false,
+      body := .seq (.assign 0 (.lit (.ref 0)))
+        (.seq (.assign 0 (.heap (.new 1) [int 7, int 8, int 9]))
+        (.seq (.call 0 [.local 0]) (.call 0 [.lit (.ref 0)]))) },
+    { name := "$Main", arity := 0, nslots := 0, decides := false,
+      body := protoPrelude [(1, [.int 0, .int 0, .int 0])] (.call 1 []) }]
+  main := 2
+
+def protoSigs : Sigs := { fns := [([.ref [1]], .void), ([], .void), ([], .void)], classes, protos := [1] }
+def protoSlots : List (List VTy) := [[.ref [1]], [.ref [1]], []]
+
+example : protoDemo.check = true := by native_decide
+example : protoDemo.checkTypes protoSigs protoSlots = true := by native_decide
+example : outOf protoDemo = some (.ok .void, "9\n0\n") := by native_decide
+-- the prelude must allocate exactly the prototypes, well typed
+example : protoDemo.checkTypes { protoSigs with protos := [0] } protoSlots = false := by native_decide
+example : ({ protoDemo with fns := protoDemo.fns.set 2 { protoDemo.fns[2]! with
+    body := protoPrelude [(1, [.int 0, .int 0])] (.call 1 []) } } : Prog).checkTypes protoSigs protoSlots = false := by
+  native_decide
+-- without prototypes, a reference literal has no type
+example : protoDemo.checkTypes { protoSigs with protos := [] } protoSlots = false := by native_decide
+-- a prototype's type is inferred where nothing is expected (a field read's receiver)
+example : tc protoSigs [.ref [1]] .void (.heap (.get 2) [.lit (.ref 0)]) none = some .int := by native_decide
+-- prototypes may refer to each other in a cycle: a `point3` prototype whose class table says
+-- its fields are a `point` and a `point3` reference (no instance needs to be built first)
+example :
+    let S : Sigs := { fns := [([], .void), ([], .void)], classes := [[.ref [1]], [.ref [0]]], protos := [0, 1] }
+    let P : Prog := { fns := [
+      { name := "Main", arity := 0, nslots := 0, decides := false, body := .lit .void },
+      { name := "$Main", arity := 0, nslots := 0, decides := false,
+        body := protoPrelude [(0, [.ref 1]), (1, [.ref 0])] (.call 0 []) }], main := 1 }
+    P.checkTypes S [[], []] = true := by native_decide
+
 -- a class table with a type variable is refused (so `Typed.subst` holds)
 example : heapDemo.checkTypes { heapSigs with classes := [[.var 0], [.int, .int, .int]] } heapSlots = false := by
   native_decide
