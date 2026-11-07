@@ -2313,8 +2313,12 @@ def elabProgram (allTops00 : List STop) (opts : Options := {}) : Except String C
       let (r, st) ← (elabStmt ctx body (some sig.ret)).run { env }
       let (e, st) ← (coerce p r.1 sig.ret).run st
       let tys := st.slotTys.toList.map (Ty.toVTy env)
+      -- slots start like a function's (a class-typed one as a placeholder)
+      let inits ← match st.slotTys.toList.mapM (slotDefault env 0 [] []) with
+        | .ok ds => pure ds
+        | .error msg => throw s!"{p.show}: in {n}: {msg}"
       fns := fns.push { name := n, arity := 0, nslots := st.nslots, decides := false,
-                        body := initPrefix 0 tys e }
+                        body := initPrefixE 0 inits e }
       slotTys := slotTys.push tys
     | .classDef .. => pure ()   -- expanded above
   -- each generic function is elaborated once, with its type parameters

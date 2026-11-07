@@ -50,7 +50,14 @@ Haunt(G:ghost):string =
     set G.N = 3
     "{G.N} {G.Boo()}"
 
+# a constant whose initialiser uses an object (in a temporary)
+point := class:
+    X:int
+    Twice():int = 2 * X
+Six:int = point{X := 3}.Twice()
+
 Main():void =
+    Print("{Six}")
     X := b{Inner := counter{}}
     H:hasc = X
     set H.Inner.Count = 5
