@@ -1,6 +1,6 @@
 # named arguments to a method dispatched on the receiver's class: evaluated
-# once each, positional then named as written, then the declaration's
-# defaults; every implementation gets them all
+# once each, positional then named as written, and passed to every
+# implementation; omitted ones take the running implementation's default
 
 shape := class<abstract>:
     Scale(K:int, ?By:int = 1, ?Plus:int = 0):int
@@ -9,7 +9,8 @@ square := class(shape):
     Scale<override>(K:int, ?By:int = 1, ?Plus:int = 0):int = Side * K * By + Plus
 circle := class(shape):
     R:int
-    Scale<override>(K:int, ?By:int = 1, ?Plus:int = 0):int = 3 * R * K * By + Plus
+    # (its own default for Plus)
+    Scale<override>(K:int, ?By:int = 1, ?Plus:int = 100):int = 3 * R * K * By + Plus
 Note(S:string, X:int):int =
     Print(S)
     X

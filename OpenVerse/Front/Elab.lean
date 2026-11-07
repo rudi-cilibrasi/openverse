@@ -1315,8 +1315,9 @@ partial def elabApp (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (brack
         let σ := ownerTps.zip (argsAt owner)
         let msRet := ms.ret.subst σ
         -- the arguments, once each: positional ones left to right, then named
-        -- ones as written, then the declaration's defaults of those omitted
-        -- (Book of Verse §2.5); every implementation gets them all by name
+        -- ones as written (Book of Verse §2.5), passed to every implementation;
+        -- those omitted take the default of the implementation that runs, as
+        -- in a call without named arguments
         let isNamed : SExpr → Bool := fun | .decl _ n _ _ _ => n.startsWith "?" | _ => false
         let posArgs := args.filter (!isNamed ·)
         let namedArgs := args.filterMap fun a => match a with
@@ -1343,14 +1344,6 @@ partial def elabApp (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (brack
           pre := pre.push (.assign ta (← coerce ap (← elabE ctx rhs (some t)) t))
           locs := { name := s!"$arg{ta}", slot := ta, ty := t, mutable := false } :: locs
           namedSlots := namedSlots ++ [(n, ta)]
-        for ((n, dflt), j) in ms.named.zip (List.range ms.named.length) do
-          if (namedSlots.lookup n).isNone then
-            let some d := dflt | eerr p s!"{m} needs the argument ?{n}, which has no default"
-            let t := (ms.params[npos + j]!).subst σ
-            let ta ← fresh t
-            pre := pre.push (.assign ta (← fxAt p (do coerce p (← elabE { ctx with locals := [], selfClass := none } d (some t)) t)))
-            locs := { name := s!"$arg{ta}", slot := ta, ty := t, mutable := false } :: locs
-            namedSlots := namedSlots ++ [(n, ta)]
         for (n, ta) in namedSlots do
           argIds := argIds.push (.decl mp s!"?{n}" none false (.ident mp s!"$arg{ta}"))
         let mut acc : Expr := .prim .userErr []   -- no option set: unreachable
