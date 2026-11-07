@@ -509,6 +509,10 @@ structure Sig where
   deriving Inhabited
 
 structure Ctx where
+  /-- How many retries without an expected type enclose this point: a later
+      branch is elaborated against the first's type, else on its own (to
+      join), at most a few levels deep (so nested ones stay linear). -/
+  retries : Nat := 0
   sigs    : List Sig
   /-- The functions' `<decides>` flags, as a program, for `Expr.mayFail`. -/
   sigProg : Prog
@@ -831,6 +835,8 @@ def classRepTy (env : TyEnv) (d : String) (args : List Ty := []) : Ty :=
 /-- `a` is a reference class below the class or interface `b`, or an array
     or option of such. -/
 partial def refUp (env : TyEnv) : Ty → Ty → Bool
+  -- `false` (no value) is below every type, also inside a container
+  | .never, _ => true
   | .struct S as, .struct T bs =>
     env.isRefClass S && env.isRefClass T && env.isSub S T && env.upArgs S as T == bs
   | .arr a, .arr b | .opt a, .opt b => refUp env a b
@@ -884,34 +890,44 @@ def coerce (p : Pos) (r : R) (target : Ty) : EM Expr := do
 /-- A type above both `a` and `b` (the expected one when it is, #32): two
     classes join at their nearest common supertype, and arrays, options,
     tuples and maps' values join covariantly. -/
-partial def joinTy (env : TyEnv) (a b : Ty) (exp : Option Ty) : Option Ty :=
+partial def joinTy (env : TyEnv) (a b : Ty) (exp : Option Ty) (inner : Bool := false) : Option Ty :=
   if a == .never then some b
   else if b == .never then some a
   else if a == b then some a
   else match a, b with
   | .struct S as, .struct T bs =>
-    if env.classes.contains S && env.classes.contains T then
-      -- the expected type, when both are below it, else the nearest
-      -- common supertype (at the same type arguments, #39)
+    -- (inside a container, only references convert for free)
+    if env.classes.contains S && env.classes.contains T &&
+        (!inner || (env.isRefClass S && env.isRefClass T)) then
+      -- the expected type, when both are below it, else the nearest common
+      -- class above both, else the one interface above both that no other
+      -- common one is below (at the same type arguments, #39)
       let up (U : String) (us : List Ty) : Bool :=
         env.isSub S U && env.isSub T U && env.upArgs S as U == us && env.upArgs T bs U == us
+      let atU (U : String) : Ty := .struct U (env.upArgs S as U)
+      let cands := (env.supers S).filter fun U => up U (env.upArgs S as U)
+      let common : Option Ty :=
+        match cands.find? fun U => !(env.info U).isIface with
+        | some U => some (atU U)
+        | none =>
+          match cands.filter (fun U => !cands.any fun U' => U' != U && env.isSub U' U) with
+          | [U] => some (atU U)
+          | _ => none
       match exp with
-      | some (.struct U us) =>
-        if env.classes.contains U && up U us then some (.struct U us)
-        else ((env.supers S).find? fun U => up U (env.upArgs S as U)).map fun U => .struct U (env.upArgs S as U)
-      | _ => ((env.supers S).find? fun U => up U (env.upArgs S as U)).map fun U => .struct U (env.upArgs S as U)
+      | some (.struct U us) => if env.classes.contains U && up U us then some (.struct U us) else common
+      | _ => common
     else none
-  | .arr x, .arr y => (joinTy env x y (match exp with | some (.arr e) => some e | _ => none)).map .arr
-  | .opt x, .opt y => (joinTy env x y (match exp with | some (.opt e) => some e | _ => none)).map .opt
+  | .arr x, .arr y => (joinTy env x y (match exp with | some (.arr e) => some e | _ => none) true).map .arr
+  | .opt x, .opt y => (joinTy env x y (match exp with | some (.opt e) => some e | _ => none) true).map .opt
   | .tup xs, .tup ys =>
     if xs.length != ys.length then none
     else
       let es : List (Option Ty) := match exp with
         | some (.tup ets) => if ets.length == xs.length then ets.map some else xs.map fun _ => none
         | _ => xs.map fun _ => none
-      ((xs.zip ys).zip es).mapM (fun ((x, y), e) => joinTy env x y e) |>.map .tup
+      ((xs.zip ys).zip es).mapM (fun ((x, y), e) => joinTy env x y e true) |>.map .tup
   | .map k x, .map k' y =>
-    if k == k' then (joinTy env x y (match exp with | some (.map _ e) => some e | _ => none)).map (.map k) else none
+    if k == k' then (joinTy env x y (match exp with | some (.map _ e) => some e | _ => none) true).map (.map k) else none
   | _, _ => none
 
 /-- The type of a two-branch construct (`joinTy`; a void branch makes it void). -/
@@ -1090,7 +1106,14 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
     eerr p "integer '/' gives a rational; write Floor(X / Y), Ceil(X / Y) or Quotient[X, Y]"
   | .bin p op a b =>
     let ra ← elabE ctx a none
-    let rb ← elabE ctx b (some ra.ty)
+    let rb ← match op, ra.ty with
+      | "+", .arr _ =>
+        -- (an array of other classes, to join, #67)
+        if ctx.retries ≥ 3 then elabE ctx b (some ra.ty)
+        else
+          let c2 := { ctx with retries := ctx.retries + 1 }
+          tryCatch (elabE c2 b (some ra.ty)) fun _ => elabE c2 b none
+      | _, _ => elabE ctx b (some ra.ty)
     match op, ra.ty, rb.ty with
     | "+", .int, .int => return ⟨p2 .add ra.e rb.e, .int⟩
     | "-", .int, .int => return ⟨p2 .sub ra.e rb.e, .int⟩
@@ -1113,7 +1136,11 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
     let ra ← elabE { ctx with canFail := true } a exp
     let rb ← match exp with
       | some _ => elabE ctx b exp
-      | none => tryCatch (elabE ctx b (some ra.ty)) fun _ => elabE ctx b none
+      | none =>
+        if ctx.retries ≥ 3 then elabE ctx b (some ra.ty)
+        else
+          let c2 := { ctx with retries := ctx.retries + 1 }
+          tryCatch (elabE c2 b (some ra.ty)) fun _ => elabE c2 b none
     let ty ← join p ra.ty rb.ty exp
     let t ← fresh ty
     return ⟨Expr.orE t (← coerce p ra ty) (← coerce p rb ty), ty⟩
@@ -1143,13 +1170,17 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
       -- common supertype, #32): each is elaborated against the first's
       let rs ← rest.mapM fun e' => match elemExp with
         | some _ => elabE ctx e' (some t)
-        | none => tryCatch (elabE ctx e' (some t)) fun _ => elabE ctx e' none
+        | none =>
+          if ctx.retries ≥ 3 then elabE ctx e' (some t)
+          else
+            let c2 := { ctx with retries := ctx.retries + 1 }
+            tryCatch (elabE c2 e' (some t)) fun _ => elabE c2 e' none
       let jt ← match elemExp with
         | some t => pure t
-        | none => (r :: rs).foldlM (fun acc (x : R) => do
+        | none => (rest.zip rs).foldlM (fun acc ((e', x) : SExpr × R) => do
             match joinTy (← get).env acc x.ty none with
             | some j => pure j
-            | none => eerr p s!"the elements of this array have different types: {acc.show} and {x.ty.show}") r.ty
+            | none => eerr e'.pos s!"the elements of this array have different types: {acc.show} and {x.ty.show}") r.ty
       let es ← ((e :: rest).zip (r :: rs)).mapM fun (e', x) => coerce e'.pos x jt
       return ⟨.prim .mkArr es, .arr jt⟩
   | .optionLit _ e =>
@@ -1181,7 +1212,11 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
       -- `false`), else on its own, to join with it (#32)
       let re ← match exp with
         | some _ => elabE ctx ee exp
-        | none => tryCatch (elabE ctx ee (some rt.ty)) fun _ => elabE ctx ee none
+        | none =>
+          if ctx.retries ≥ 3 then elabE ctx ee (some rt.ty)
+          else
+            let c2 := { ctx with retries := ctx.retries + 1 }
+            tryCatch (elabE c2 ee (some rt.ty)) fun _ => elabE c2 ee none
       let ty ← join p rt.ty re.ty exp
       return ⟨.ite rc.e (← coerce p rt ty) (← coerce p re ty), ty⟩
   | .forE p clauses body => elabFor ctx p clauses body
