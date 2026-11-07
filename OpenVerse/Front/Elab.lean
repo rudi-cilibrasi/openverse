@@ -577,6 +577,9 @@ def join (p : Pos) (a b : Ty) (exp : Option Ty) : EM Ty := do
     if a == .never then return b
     if b == .never then return a
     if a == b then return a
+    -- void accepts any value (Book of Verse), so a void branch makes the
+    -- construct void: `if{X := e} else {Print("none")}` (spec: IfElseMacro)
+    if a == .void || b == .void then return .void
     let env := (← get).env
     if let (.struct S [], .struct T []) := (a, b) then
       if env.classes.contains S && env.classes.contains T then
