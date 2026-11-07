@@ -267,6 +267,7 @@ typedef struct vx_ctx {
     size_t   *dmax;        /* the largest block of cells a callee's
                               compaction kept for fields in each active call's
                               region (0 once such a field may have changed) */
+    size_t   *dlo, *dhi;   /* the heap cells that block lies in */
     size_t    nframes;
     size_t    fcap;
     size_t    top;         /* slots in use; the current frame ends here  */

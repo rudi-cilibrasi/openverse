@@ -351,14 +351,17 @@ static void call_fn(vx_ctx *c, uint32_t f, size_t sp0, size_t nargs, uint64_t n,
         size_t cap = c->fcap ? 2 * c->fcap : 64;
         size_t *hm = realloc(c->hmarks, cap * sizeof(size_t));
         size_t *dm = hm == NULL ? NULL : realloc(c->dmax, cap * sizeof(size_t));
-        if (hm != NULL)
-            c->hmarks = hm;
-        if (dm == NULL) {
+        size_t *dl = dm == NULL ? NULL : realloc(c->dlo, cap * sizeof(size_t));
+        size_t *dh = dl == NULL ? NULL : realloc(c->dhi, cap * sizeof(size_t));
+        if (hm != NULL) c->hmarks = hm;
+        if (dm != NULL) c->dmax = dm;
+        if (dl != NULL) c->dlo = dl;
+        if (dh == NULL) {
             c->top = top0;
             set_limit(r, VX_L_MEMORY);
             return;
         }
-        c->dmax = dm;
+        c->dhi = dh;
         c->fcap = cap;
     }
     if (vx_objs_call_fast(&c->objs) != VX_OK) {
@@ -408,10 +411,18 @@ static void call_fn(vx_ctx *c, uint32_t f, size_t sp0, size_t nargs, uint64_t n,
                 vx_objs_drop_stale(&c->objs);
             if (reclaim(c, hmark, &r->v, &fk) != VX_OK)
                 set_limit(r, VX_L_MEMORY);
-            else if (k > 0 && fk > c->dmax[k - 1])
+            else if (k > 0 && fk > c->dmax[k - 1]) {
+                /* the survivors lie in [hmark, len): a field change there may
+                   kill the block */
                 c->dmax[k - 1] = fk;
+                c->dlo[k - 1] = hmark;
+                c->dhi[k - 1] = c->heap.len;
+            }
         } else if (k > 0 && c->dmax[k] > c->dmax[k - 1]) {
+            /* the block stays where it is, in the caller's region now */
             c->dmax[k - 1] = c->dmax[k];
+            c->dlo[k - 1] = c->dlo[k];
+            c->dhi[k - 1] = c->dhi[k];
         }
     } else if (r->kind == VX_R_FAIL) {
         /* the failure reaches a context that rolls the fields back (or ends
@@ -652,14 +663,15 @@ static int remember(vx_ctx *c, size_t cell, const vx_val *v)
     return k == c->nframes ? VX_OK : vx_objs_remember(&c->objs, cell, k);
 }
 
-/* Field cell `cell` is about to change: a block a compaction kept for it
-   may die, so the call whose region holds its value counts no block. */
+/* Field cell `cell` is about to change: when its value lies in the block a
+   compaction kept for fields of the call whose region holds it, the block
+   may die, so that call counts no block. */
 static void field_changes(vx_ctx *c, size_t cell)
 {
     const vx_val *old = &c->objs.cells[cell];
     if (vx_isref(old)) {
         size_t k = owner_of(c, old->bits);
-        if (k < c->nframes)
+        if (k < c->nframes && c->dmax[k] != 0 && old->bits >= c->dlo[k] && old->bits < c->dhi[k])
             c->dmax[k] = 0;
     }
 }
@@ -1060,6 +1072,8 @@ void vx_run(const vx_program *p, const vx_opts *o, vx_outcome *res)
     vx_objs_free(&c.objs);
     free(c.hmarks);
     free(c.dmax);
+    free(c.dlo);
+    free(c.dhi);
 }
 
 void vx_outcome_free(vx_outcome *res)
