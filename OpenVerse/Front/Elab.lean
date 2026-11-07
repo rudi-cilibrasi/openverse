@@ -1863,6 +1863,27 @@ partial def elabApp (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (brack
             | .decl _ n _ _ _ => n.startsWith "?"
             | _ => false
           if s.named.isEmpty && !args.any isNamed then
+            -- a tuple for several parameters is expanded into them (Book of
+            -- Verse ch. 3: `Describe(MyTuple)` is `Describe(1, "two")`)
+            if let [a] := args then
+              if s.params.length > 1 then
+                let r ← elabE ctx a (some (.tup s.params))
+                if let .tup ts := r.ty then
+                  if ts.length == s.params.length then
+                    let tt ← fresh r.ty
+                    let parts ← ((s.params.zip ts).zip (List.range ts.length)).mapM fun ((pt, et), i) =>
+                      coerce a.pos ⟨.prim (.tupGet i) [.local tt], et⟩ pt
+                    return ⟨.seq (.assign tt r.e) (.call s.idx parts), s.ret⟩
+                let (shown, off) := match name.splitOn "." with
+                  | [_, m] => if s.pnames.head? == some "Self" then (m, 1) else (name, 0)
+                  | _ => (name, 0)
+                eerr p s!"{shown} takes {s.params.length - off} argument(s), found 1 (of type {r.ty.show})"
+            -- several arguments for one array parameter make the array
+            -- (`Sum(1, 2, 3, 4)`, as a tuple converts to an array)
+            if let [.arr et] := s.params then
+              if args.length > 1 then
+                let es ← elabArgs ctx p args (args.map fun _ => et)
+                return ⟨.call s.idx [.prim .mkArr es], s.ret⟩
             let es ← elabArgs ctx p args s.params
             return ⟨.call s.idx es, s.ret⟩
           -- named arguments: evaluate positional arguments left to right, then named ones as
