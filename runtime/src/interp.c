@@ -384,11 +384,12 @@ static void call_fn(vx_ctx *c, uint32_t f, size_t sp0, size_t nargs, uint64_t n,
     /* reclaim the callee's heap cells, except what the result, the fields
        written during the call and the field log made during it reach */
     if (r->kind == VX_R_OK) {
-        /* compact, unless the region is mostly one block a callee's
-           compaction left (live then) and the list's fields: skipping keeps
-           more, never less, and keeps the work linear in what is allocated
-           where each return compacting would be quadratic (a recursion
-           building a linked structure re-compacting its survivors) */
+        /* compact, unless the region is less than twice the largest block a
+           callee's compaction left in it (live then): skipping keeps more,
+           never less, the garbage it leaves is bounded by that block, and
+           the work stays linear in what is allocated where each return
+           compacting would be quadratic (a recursion building a linked
+           structure re-compacting its survivors) */
         size_t k = c->nframes - 1;
         size_t region = c->heap.len - hmark;
         if (c->dmax[k] == 0 && vx_objs_top_empty(&c->objs)) {
@@ -397,8 +398,7 @@ static void call_fn(vx_ctx *c, uint32_t f, size_t sp0, size_t nargs, uint64_t n,
                 set_limit(r, VX_L_MEMORY);
             else if (k > 0 && c->heap.len - hmark > c->dmax[k - 1])
                 c->dmax[k - 1] = c->heap.len - hmark;
-        } else if (region >= 2 * c->dmax[k] +
-                   (vx_objs_top_empty(&c->objs) ? 0 : vx_objs_top(&c->objs)->n)) {
+        } else if (region >= 2 * c->dmax[k]) {
             if (c->st.depth == 0)
                 vx_objs_drop_stale(&c->objs);
             if (reclaim(c, hmark, &r->v) != VX_OK)

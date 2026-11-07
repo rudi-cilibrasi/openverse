@@ -38,6 +38,10 @@ void vx_objs_free(vx_objs *h)
 }
 
 /* Room for `need` elements of `size` bytes in *buf (capacity *cap, at most max). */
+/* The per-call arrays (a list and a buffer per active call) grow with the
+   recursion depth, which the interpreter bounds itself: not with the heap. */
+#define DEPTH_MAX ((size_t)1 << 40)
+
 static int reserve(void **buf, size_t *cap, size_t need, size_t size, size_t max)
 {
     size_t ncap;
@@ -154,8 +158,8 @@ static int buf_for(vx_objs *h, size_t depth)
         /* a new buffer; the free list can then hold every buffer, so a
            return never needs memory to free one */
         size_t old = h->bcap;
-        if (!reserve((void **)&h->bufs, &h->bcap, h->nbufs + 1, sizeof(vx_remlist), h->max) ||
-            !reserve((void **)&h->freeb, &h->fbcap, h->nbufs + 1, sizeof(size_t), h->max))
+        if (!reserve((void **)&h->bufs, &h->bcap, h->nbufs + 1, sizeof(vx_remlist), DEPTH_MAX) ||
+            !reserve((void **)&h->freeb, &h->fbcap, h->nbufs + 1, sizeof(size_t), DEPTH_MAX))
             return 0;
         if (h->bcap > old)
             memset(&h->bufs[old], 0, (h->bcap - old) * sizeof(vx_remlist));
@@ -197,7 +201,7 @@ int vx_objs_remember(vx_objs *h, size_t cell, size_t depth)
 int vx_objs_call(vx_objs *h)
 {
     if (h->nlists == h->dcap &&
-        !reserve((void **)&h->atdepth, &h->dcap, h->nlists + 1, sizeof(size_t), h->max))
+        !reserve((void **)&h->atdepth, &h->dcap, h->nlists + 1, sizeof(size_t), DEPTH_MAX))
         return VX_EFULL;
     h->atdepth[h->nlists] = VX_NOBUF;
     h->nlists = h->nlists + 1;
