@@ -21,6 +21,7 @@ import OpenVerse.Core.Derived
 import OpenVerse.Core.TypeCheck
 import OpenVerse.Core.Control
 import OpenVerse.Front.Parser
+import OpenVerse.Front.Modules
 import Std.Data.HashMap
 
 namespace OpenVerse.Front
@@ -3122,7 +3123,15 @@ def expandCtors (ctors : List (Pos × String × List SParam × List TParam × Li
 
 /-- Elaborate a parsed program into a Verse Core program that passes `Prog.check`
     and `Prog.checkTypes`. -/
-def elabProgramCore (allTops00 : List STop) (opts : Options := {}) : Except String Compiled := do
+def elabProgramCore (allTops000 : List STop) (opts : Options := {}) : Except String Compiled := do
+  -- modules (#112): every reference to a member, qualified (the entry
+  -- expression's too)
+  let rawEntry : List STop := match opts.entry with
+    | some e => [.fn e.pos "$Do" [] [] ["decides"] (.name "void") (.app e.pos (.ident e.pos "$Show") [e] false)]
+    | none => []
+  let resolved ← resolveModules (allTops000 ++ rawEntry)
+  let allTops00 := resolved.take (resolved.length - rawEntry.length)
+  let entryTop := resolved.drop (resolved.length - rawEntry.length)
   -- the command line: `Args`, and an entry expression
   let defines (n : String) := allTops00.any fun
     | .fn _ m .. | .const _ m .. | .classDef _ m .. => m == n
@@ -3132,9 +3141,6 @@ def elabProgramCore (allTops00 : List STop) (opts : Options := {}) : Except Stri
       if defines "Args" then []
       else [.const { line := 0, col := 0 } "Args" (some (.arr (.name "string")))
               (.arrayLit { line := 0, col := 0 } (as.map fun a => .str { line := 0, col := 0 } [.text a]))]
-    | none => []
-  let entryTop : List STop := match opts.entry with
-    | some e => [.fn e.pos "$Do" [] [] ["decides"] (.name "void") (.app e.pos (.ident e.pos "$Show") [e] false)]
     | none => []
   -- overloaded methods (#106): a method name declared with two or more
   -- parameter lists is renamed, in every class and interface, by its list
@@ -4168,7 +4174,8 @@ def stripOv (msg0 : String) : String := Id.run do
     functions a constructor or an overload becomes shown as written: `K$init`
     is `K<constructor>`, `F$ov1` is `F` (names with `$` are never the user's). -/
 def elabProgram (allTops00 : List STop) (opts : Options := {}) : Except String Compiled :=
-  (elabProgramCore allTops00 opts).mapError fun msg => stripOv (msg.replace "$init" "<constructor>")
+  (elabProgramCore allTops00 opts).mapError fun msg =>
+    (stripOv (msg.replace "$init" "<constructor>")).replace "::" "."
 
 /-- Parse and elaborate Verse source text. -/
 def compileChecked (src : String) (opts : Options := {}) : Except String Compiled := do
