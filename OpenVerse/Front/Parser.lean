@@ -731,7 +731,10 @@ def parseFnBodyAt (c : Nat) : PM SExpr := do
 partial def parseClassItem (c : Nat) :
     PM (Sum ((String × STy × Option SExpr × Bool) × Bool) STop) := do
   let t ← peekT
-  if t.isKw "block" then perr t "block: initialisers in classes are not supported yet (#11 phase 3)"
+  -- `block:` runs when an instance is constructed: the method `$block`
+  if t.isKw "block" then
+    let body ← parseExpr c
+    return .inr (.fn t.pos "$block" [] [] [] (.name "void") body)
   let isVar := t.isKw "var"
   if isVar then bump
   let name ← expectIdent
@@ -795,6 +798,12 @@ partial def parseClassBody (p : Pos) (name : String) (tps : List TParam) (isIfac
   let fields := items.toList.filterMap fun | .inl (f, _) => some f | .inr _ => none
   let overrides := items.toList.filterMap fun | .inl ((n, _), true) => some n | _ => none
   let methods := items.toList.filterMap fun | .inr m => some m | .inl _ => none
+  -- the `block:` clauses, in order, as one method
+  let isBlock : STop → Bool := fun | .fn _ "$block" .. => true | _ => false
+  let blocks := methods.filterMap fun | .fn _ "$block" _ _ _ _ b => some b | _ => none
+  if isIface && !blocks.isEmpty then perr o s!"interface {name} cannot have a block: clause"
+  let methods := methods.filter (!isBlock ·) ++
+    (if blocks.isEmpty then [] else [.fn p "$block" [] [] [] (.name "void") (.block p blocks)])
   return .classDef p name tps specs parents.toList isIface fields overrides methods
 
 partial def parseTops : PM (List STop) := do

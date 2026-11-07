@@ -260,6 +260,11 @@ circle := class(shape, labelled):
   function without `writes` keeps every existing object as it was
   (`Prog.accepted_no_writes`). A constant cannot hold an object with `var`
   fields or of a `<unique>` class, since it is computed at each use.
+- **`block:`.** A class's `block:` clauses run when an instance is
+  constructed, after its fields are given, those of the classes above it
+  first, each class's in order; they see the fields by name, as a method
+  does, and their effects are those of their code. Interfaces and
+  parametric classes have none.
 - **`<unique>`.** A `<unique>` class (and every class below it) is
   comparable: `=` and `<>` test identity, so two instances with equal
   fields differ, and an alias equals its original.
@@ -269,7 +274,7 @@ circle := class(shape, labelled):
 - **Comparability.** Other classes and interfaces are not comparable (Book §4.9), nor
   is a struct or container that holds one.
 - **Not yet supported** (each rejected with a message):
-  - `block:` initialisers and constructor functions;
+  - constructor functions;
   - parametric classes in hierarchies, `var` fields of parametric classes,
     and parametric `<unique>` classes;
   - `set` of an interface field that sits at different places in the

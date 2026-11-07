@@ -46,6 +46,7 @@ safety depend on are proved with **QuickProof** (VST + CompCert in Coq).
 | `tc_sound`, `Prog.checkTypes_sound` | `Core/TypeCheck.lean` | the bidirectional type checker that the front end runs on every program it emits is sound |
 | `Prog.check_ok` | `Core/Check.lean` | `Prog.check` establishes the hypotheses of `<decides>` soundness and scoping |
 | `Eval.no_control`, `Runs.no_control` | `Core/Control.lean` | a `break` never escapes its loop (no control errors) |
+| `Eval.no_writes`, `Prog.accepted_no_writes` | `Core/Writes.lean`, `Core/Guarantees.lean` | **heap effects**: a function without `<writes>` (`<computes>`, `<reads>`, `<allocates>`) leaves every existing object as it was |
 | **`Prog.accepted`** | `Core/Guarantees.lean` | **every program the front end accepts** has one outcome and one output; it never raises a slot, call, type or control error, so the only runtime errors left are integer overflow and `Err()`; `Main`'s value has its type; and it never fails unless `Main` is `<decides>` |
 | `add_seam` … `modulo_seam`, `apply_*` | `Core/Seams.lean` | each int operation equals the C99 formula that the QuickProof law `arith_exact` asserts |
 

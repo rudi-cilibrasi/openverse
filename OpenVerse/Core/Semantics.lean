@@ -27,7 +27,9 @@ structure Obj where
 
 /-- The part of the state that survives a call: the output (bytes) and the
     heap (an array, so that the reference interpreter allocates and reads
-    objects in constant time, #37). -/
+    objects in constant time, #37 — except that the first write or
+    allocation inside a failure context copies the heap, which the context
+    keeps to roll back to). -/
 structure Glob where
   out  : List Nat
   heap : Array Obj
