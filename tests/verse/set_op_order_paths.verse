@@ -1,0 +1,55 @@
+# set P op= e and set P = P + e agree, also when e changes the option, map or array (#58 review)
+sub := struct:
+    F:int = 0
+    G:int = 0
+hold := class:
+    var O:?int = false
+    var M:[int]int = map{}
+    var A:[]int = array{1, 2}
+    var Sub:sub = sub{}
+FillO(H:hold)<transacts>:int =
+    set H.O = option{10}
+    1
+EmptyO(H:hold)<transacts>:int =
+    set H.O = false
+    1
+ClearM(H:hold)<transacts>:int =
+    set H.M = map{}
+    1
+FillM(H:hold)<transacts>:int =
+    set H.M = map{5 => 50}
+    1
+GrowA(H:hold)<transacts>:int =
+    set H.A = array{1, 2, 3, 4, 5, 6}
+    1
+ShrinkA(H:hold)<transacts>:int =
+    set H.A = array{}
+    1
+NewSub(H:hold)<transacts>:int =
+    set H.Sub = sub{F := 100, G := 200}
+    1
+Show(T:string, H:hold, Ok:logic):void =
+    Print("{T} {if (Ok?) then "ok" else "fail"} {H.O? or -1} {H.M[5] or -1} {H.A.Length} {H.A[4] or -1} {H.Sub.F} {H.Sub.G}")
+Main():void =
+    for (D := 0..1):
+        H := hold{}
+        Ok1 := logic{if (D = 0) then (set H.O? += FillO(H)) else (set H.O? = H.O? + FillO(H))}
+        Show("fillO{D}", H, Ok1)
+        H2 := hold{O := option{3}}
+        Ok2 := logic{if (D = 0) then (set H2.O? += EmptyO(H2)) else (set H2.O? = H2.O? + EmptyO(H2))}
+        Show("emptyO{D}", H2, Ok2)
+        H3 := hold{M := map{5 => 7}}
+        Ok3 := logic{if (D = 0) then (set H3.M[5] += ClearM(H3)) else (set H3.M[5] = H3.M[5] + ClearM(H3))}
+        Show("clearM{D}", H3, Ok3)
+        H4 := hold{}
+        Ok4 := logic{if (D = 0) then (set H4.M[5] += FillM(H4)) else (set H4.M[5] = H4.M[5] + FillM(H4))}
+        Show("fillM{D}", H4, Ok4)
+        H5 := hold{}
+        Ok5 := logic{if (D = 0) then (set H5.A[4] += GrowA(H5)) else (set H5.A[4] = H5.A[4] + GrowA(H5))}
+        Show("growA{D}", H5, Ok5)
+        H6 := hold{}
+        Ok6 := logic{if (D = 0) then (set H6.A[1] += ShrinkA(H6)) else (set H6.A[1] = H6.A[1] + ShrinkA(H6))}
+        Show("shrinkA{D}", H6, Ok6)
+        H7 := hold{Sub := sub{F := 1, G := 2}}
+        if (D = 0) then (set H7.Sub.F += NewSub(H7)) else (set H7.Sub.F = H7.Sub.F + NewSub(H7))
+        Show("newSub{D}", H7, true)

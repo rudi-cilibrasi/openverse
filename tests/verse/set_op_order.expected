@@ -1,0 +1,14 @@
+rhs
+direct= 7
+rhs
+direct+= 7
+plain direct+= 7
+rhs
+path+= 7
+plain path+= 7
+swap
+swap: old 3 new 0
+idx
+rhs
+arr 7
+exit=0
