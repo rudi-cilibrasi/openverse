@@ -243,6 +243,17 @@ partial def TyEnv.disjoint (env : TyEnv) : Ty → Ty → Bool
   | .int, .int | .logic, .logic | .char, .char | .char32, .char32 => false
   | _, _ => true
 
+/-- Whether two overloads (their positional parameters, then named ones:
+    name, has a default, type) are distinct: their positional parameters
+    are, or a call cannot give both what they need, as some named parameter
+    one of them requires is missing from the other or takes disjoint types in
+    the two (Book of Verse ch. 6: order and defaults do not distinguish). -/
+def TyEnv.namedDistinct (env : TyEnv) (na nb : List (String × Bool × Ty)) : Bool :=
+  let req := ((na.filter (!·.2.1)).map (·.1)) ++ ((nb.filter (!·.2.1)).map (·.1))
+  !(req.all fun x => match na.find? (·.1 == x), nb.find? (·.1 == x) with
+    | some (_, _, ta), some (_, _, tb) => !env.disjoint ta tb
+    | _, _ => false)
+
 /-- Two overloads' parameters: no call fits both. They differ in number (a
     single tuple parameter overlaps as many parameters as it has elements),
     or some position's types are disjoint. -/
@@ -1438,7 +1449,23 @@ partial def elabApp (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (brack
     if let some ovs := ctx.types.overloads.lookup name then do
       -- an overloaded function (#74): the one overload whose parameters the
       -- arguments fit (each elaborated at the parameter's type, in a trial)
-      let cands := ovs.filter fun o => ((ctx.sig? o).map (·.params.length == args.length)).getD false
+      -- the overloads the call's shape fits: as many positional arguments, and
+      -- named ones the overload has, every one it needs given
+      let isNamedArg : SExpr → Bool := fun | .decl _ n _ _ _ => n.startsWith "?" | _ => false
+      let posArgs := args.filter (!isNamedArg ·)
+      let namedArgs : List (String × SExpr) := args.filterMap fun
+        | .decl _ n _ _ rhs => if n.startsWith "?" then some ((n.drop 1).toString, rhs) else none
+        | _ => none
+      let fitsShape (s : Sig) : Bool :=
+        posArgs.length == s.params.length - s.named.length &&
+        namedArgs.all (fun (g, _) => s.named.any (·.1 == g)) &&
+        s.named.all fun (n, d) => d.isSome || namedArgs.any (·.1 == n)
+      -- each argument expression with the type of its parameter in `s`
+      let argTys (s : Sig) : List (SExpr × Ty) :=
+        let npos := s.params.length - s.named.length
+        (posArgs.zip (s.params.take npos)) ++ namedArgs.filterMap fun (n, rhs) =>
+          (s.named.findIdx? (·.1 == n)).map fun j => (rhs, (s.params.drop npos).getD j .void)
+      let cands := ovs.filter fun o => ((ctx.sig? o).map fitsShape).getD false
       -- each argument's type alone, once (none: it needs an expected type)
       let natTy (a : SExpr) : EM (Option Ty) := do
         -- (by position and shallow shape: a wrong hit could only make the
@@ -1466,20 +1493,20 @@ partial def elabApp (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (brack
         let ok ← tryCatch (do discard <| coerce p ⟨.lit .void, t⟩ u; pure true) (fun _ => pure false)
         set { st with natTys := (← get).natTys }
         return ok
-      let nats ← if cands.length > 1 then args.mapM natTy else pure (args.map fun _ => none)
       let mut byNat : List String := []
       for o in cands do
-        let ps := ((ctx.sig? o).map (·.params)).getD []
+        let some so := ctx.sig? o | continue
         let mut ok := true
-        for (t?, u) in nats.zip ps do
-          if let some t := t? then
-            if !(← coercible t u) then ok := false
+        if cands.length > 1 then
+          for (a, u) in argTys so do
+            if let some t ← natTy a then
+              if !(← coercible t u) then ok := false
         if ok then byNat := byNat ++ [o]
       let fits (o : String) : EM Bool := do
         let s := (ctx.sig? o).get!
         let st ← get
         let ok ← tryCatch (do
-            for (a, t) in args.zip s.params do
+            for (a, t) in argTys s do
               let r ← elabE ctx a (some t)
               discard <| coerce a.pos r t
             pure true) (fun _ => pure false)
@@ -1499,10 +1526,19 @@ partial def elabApp (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (brack
       match ok, cands with
       | [o], _ => call o
       | [], [o] => call o   -- its error
-      | [], [] => eerr p s!"no overload of {name} takes {args.length} argument(s)"
+      | [], [] =>
+        let nm := if namedArgs.isEmpty then "" else s!" and {", ".intercalate (namedArgs.map fun (n, _) => s!"?{n}")}"
+        let shown := ovs.filterMap fun o => (ctx.sig? o).map fun so =>
+          let npos := so.params.length - so.named.length
+          "(" ++ ", ".intercalate ((so.params.take npos).map Ty.show ++
+            (so.named.zip (so.params.drop npos)).map fun ((n, d), t) =>
+              s!"?{n}:{t.show}" ++ (if d.isSome then " = …" else "")) ++ ")"
+        eerr p s!"no overload of {name} fits a call with {posArgs.length} positional argument(s){nm}; its overloads take {" and ".intercalate shown}"
       | [], _ =>
         let st ← get
-        let tys ← args.mapM fun a => do return (← elabE ctx a none).ty.show
+        let tys ← posArgs.mapM fun a => do return (← elabE ctx a none).ty.show
+        let ntys ← namedArgs.mapM fun (n, a) => do return s!"?{n}:{(← elabE ctx a none).ty.show}"
+        let tys := tys ++ ntys
         set st
         eerr p s!"no overload of {name} takes ({", ".intercalate tys})"
       | _ :: _ :: _, _ =>
@@ -1620,8 +1656,9 @@ partial def elabApp (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (brack
               | [_, m] => (m, 1)
               | _ => (name, 0)
             eerr p s!"{shown} takes {npos - off} positional argument(s), found {pos.length - off}"
-          for (ap, n, _) in named do
+          for ((ap, n, _), i) in named.zip (List.range named.length) do
             if (s.named.find? (·.1 == n)).isNone then eerr ap s!"{name} has no parameter ?{n}"
+            if (named.take i).any (·.2.1 == n) then eerr ap s!"?{n} is given twice"
           let ptys := s.params.toArray
           let mut steps : Array Expr := #[]
           let mut slots : Array (Option Nat) := Array.replicate s.params.length none
@@ -3372,7 +3409,6 @@ def elabProgramCore (allTops00 : List STop) (opts : Options := {}) : Except Stri
             env.classes.contains n || (env.structs.lookup n).isSome || (env.enums.lookup n).isSome then
           throw s!"{p.show}: '{n}' is defined twice (only functions can be overloaded)"
         if !tps.isEmpty then throw s!"{p.show}: generic functions cannot be overloaded yet ({n})"
-        if ps.any (·.named) then throw s!"{p.show}: overloads with named parameters are not supported yet ({n})"
         let prev := (ovMap.lookup n).getD []
         let m := s!"{n}$ov{prev.length}"
         ovMap := (ovMap.filter (·.1 != n)) ++ [(n, prev ++ [m])]
@@ -3538,14 +3574,23 @@ def elabProgramCore (allTops00 : List STop) (opts : Options := {}) : Except Stri
   let sigProg := mkSigProg sigs
   let allSigs := sigs.toList ++ gsigs.toList
   -- overloads take parameters no call fits both of (Book of Verse ch. 6)
+  let sigNamed (s : Sig) : List (String × Bool × Ty) :=
+    let npos := s.params.length - s.named.length
+    (s.named.zip (s.params.drop npos)).map fun ((n, d), t) => (n, d.isSome, t)
+  let sigsDistinct (sa sb : Sig) : Bool :=
+    let pa := sa.params.take (sa.params.length - sa.named.length)
+    let pb := sb.params.take (sb.params.length - sb.named.length)
+    env.paramsDistinct pa pb || env.namedDistinct (sigNamed sa) (sigNamed sb)
   for (n, ms) in env.overloads do
     for (a, i) in ms.zip (List.range ms.length) do
       for b in ms.take i do
         match allSigs.find? (·.name == a), allSigs.find? (·.name == b) with
         | some sa, some sb =>
-          if !env.paramsDistinct sa.params sb.params then
+          if !sigsDistinct sa sb then
             let pos := (tops.findSome? fun | .fn q m .. => if m == a then some q else none | _ => none).getD { line := 0, col := 0 }
-            let sh (s : Sig) := ", ".intercalate (s.params.map Ty.show)
+            let sh (s : Sig) := ", ".intercalate ((s.params.zip (List.range s.params.length)).map fun (t, i) =>
+              let npos := s.params.length - s.named.length
+              if i < npos then t.show else s!"?{((s.named.drop (i - npos)).head?.map (·.1)).getD "?"}:{t.show}")
             throw s!"{pos.show}: {n} is defined twice with parameters a call cannot tell apart, ({sh sb}) and ({sh sa}): overloads must take disjoint types"
         | _, _ => pure ()
   -- an override has the signature of the method it overrides, and an
