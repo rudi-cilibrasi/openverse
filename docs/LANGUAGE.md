@@ -482,6 +482,12 @@ Main():void =
   `ArcSin` and `ArcCos` clamp their argument to [-1, 1] (the Book leaves
   that case to the engine). `IsFinite[F]` fails on `Inf`, `-Inf` and NaN,
   and is `F` otherwise. `PiFloat`, `Inf` and `NaN` are constants (#132).
+  `Log` divides `Ln`s, so `Log(10.0, 1000.0)` is `2.9999999999999996`.
+- A program may define functions named `Round`, `Int` or any of these
+  (and constants named `PiFloat`, `Inf`, `NaN`): its definition then
+  replaces the built-in for every call, whatever the argument types. A local
+  or a method may not take those names; a field may, and in its class's
+  methods the name still means the built-in.
 - `ToString` gives the shortest decimal that reads back as the float, laid
   out as Python's `repr` (`98.5`, `1.0`, `1e+16`, `1.5e-07`), and `Inf`,
   `-Inf`, `NaN`.

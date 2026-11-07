@@ -51,6 +51,15 @@ def lit():
     return t, canon(float(t))
 
 
+def fdiv(x, y):
+    """IEEE division (Python raises on a zero divisor; there is no -0 here)."""
+    if y == 0.0:
+        if math.isnan(x) or x == 0.0:
+            return math.nan
+        return math.copysign(math.inf, x)
+    return x / y
+
+
 def eq(a, b):
     return (math.isnan(a) and math.isnan(b)) or a == b
 
@@ -130,9 +139,16 @@ def pick():
 
 n = rng.randint(4, 8)
 for i in range(n):
+    name = f"V{i}"
+    if rng.random() < 0.12:
+        # a constant (#132)
+        c, v = rng.choice([("PiFloat", math.pi), ("Inf", math.inf), ("-Inf", -math.inf), ("NaN", math.nan)])
+        lines.append(f"    {name}:float = {c}")
+        env[name] = canon(v)
+        names.append(name)
+        continue
     t, v = lit()
     neg = rng.random() < 0.3
-    name = f"V{i}"
     lines.append(f"    {name}:float = {'-' if neg else ''}{t}")
     env[name] = canon(-v if neg else v)
     names.append(name)
@@ -142,7 +158,7 @@ for i in range(rng.randint(10, 25)):
     a, b = pick(), pick()
     x, y = env[a], env[b]
     name = f"W{i}"
-    if k < 0.5:
+    if k < 0.45:
         op = rng.choice(["+", "-", "*", "/"])
         if op == "+":
             v = x + y
@@ -156,17 +172,21 @@ for i in range(rng.randint(10, 25)):
             else:
                 v = x / y
         lines.append(f"    {name}:float = {a} {op} {b}")
-    elif k < 0.6:
+    elif k < 0.52:
         m = rng.randint(-50, 50)
         v = m * x
         lines.append(f"    {name}:float = {m} * {a}")
-    elif k < 0.7:
+    elif k < 0.58:
         v = -x
         lines.append(f"    {name}:float = -{a}")
     elif k < 0.75:
         # a mathematical function (#132)
-        f = rng.choice(sorted(MATH1) + ["Pow", "ArcTan2"])
-        if f == "Pow":
+        f = rng.choice(sorted(MATH1) + ["Pow", "ArcTan2", "Log"])
+        if f == "Log":
+            # (Log(Base, X) is Ln(X) / Ln(Base))
+            v = fdiv(c_log(y), c_log(x))
+            lines.append(f"    {name}:float = Log({a}, {b})")
+        elif f == "Pow":
             v = c_pow(x, y)
             lines.append(f"    {name}:float = Pow({a}, {b})")
         elif f == "ArcTan2":
@@ -183,6 +203,14 @@ for i in range(rng.randint(10, 25)):
         else:
             v = fmin(x, y) if f == "Min" else fmax(x, y)
             lines.append(f"    {name}:float = {f}({a}, {b})")
+    elif k < 0.86:
+        # IsFinite (#132), in a failure context
+        if math.isnan(x) or math.isinf(x):
+            out.append("not finite")
+        else:
+            out.append(f"finite {show(x)}")
+        lines.append(f'    if (F := IsFinite[{a}]) then Print("finite {{F}}") else Print("not finite")')
+        continue
     else:
         # a conversion, in a failure context
         f = rng.choice(["Floor", "Ceil", "Round", "Int"])

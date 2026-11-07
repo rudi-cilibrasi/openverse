@@ -1482,7 +1482,8 @@ partial def elabStmt (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM (R × Ctx) 
       if let .app dp (.ident _ "$defer") _ _ := rhs then eerr dp "defer: is a statement: it has no value"
       if ctx.lookup n |>.isSome then
         eerr p s!"'{n}' is already defined; Verse does not allow shadowing (use set {n} = … for a var)"
-      if (ctx.sig? n).isSome || builtins.contains n then
+      -- (nor a soft built-in's: a local cannot hide one, #132)
+      if (ctx.sig? n).isSome || builtins.contains n || softBuiltins.contains n then
         eerr p s!"'{n}' is already the name of a function or constant"
       if let some c := ctx.selfClass then
         if (ctx.types.fields c).any (·.1 == n) || ctx.hasMethod c n ||
@@ -1677,7 +1678,7 @@ partial def elabApp (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (brack
     let selfMember? : Bool := match ctx.selfClass with
       | some c => ctx.hasMethod c name ||
           ((ctx.types.methodOverloads.lookup name).map (·.any (ctx.hasMethod c ·))).getD false ||
-          ((ctx.types.fields c).any (·.1 == name) && !builtins.contains name)
+          ((ctx.types.fields c).any (·.1 == name) && !builtins.contains name && !softBuiltins.contains name)
       | none => false
     if selfMember? then elabApp ctx p (.member p (.ident p "Self") name) args bracket exp else
     -- `T[X]`, `T(X)`: a cast to class or interface `T`
@@ -1775,7 +1776,7 @@ partial def elabApp (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (brack
         match unary n with
         | some op => return ⟨.prim op [← fl a], .float⟩
         | none => eerr p s!"{name} takes two floats"
-      | _, _ => eerr p s!"{name} takes {if name == "Pow" || name == "Log" then "two floats" else "one float"}"
+      | _, _ => eerr p s!"{name} takes {if name == "Pow" || name == "Log" then "two floats" else if name == "ArcTan" then "one or two floats" else "one float"}"
     | "Round" | "Int" =>
       -- a float to an int (#127): `Round` ties to even, `Int` towards zero;
       -- failing on NaN, an infinity or out of range
@@ -3810,7 +3811,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
         if mn != "$block" && (cd.methods.take mi).any (fun | .fn _ x .. => x == mn | _ => false) then
           throw s!"{mp.show}: {n} defines {mn} twice with the same parameters"
         if ps.any (·.name == "Self") then throw s!"{mp.show}: a method parameter cannot be called Self"
-        if builtins.contains (methodBase mn) then throw s!"{mp.show}: a method cannot be called {methodBase mn}, the name of a built-in function"
+        if builtins.contains (methodBase mn) || softBuiltins.contains (methodBase mn) then throw s!"{mp.show}: a method cannot be called {methodBase mn}, the name of a built-in function"
         for prm in ps do
           if fs.any (·.1 == prm.name) || (henv.supers n).any (declaresBase · prm.name) then
             throw s!"{mp.show}: parameter '{prm.name}' of {mn} is already a field or method of {n}; Verse does not allow shadowing"
