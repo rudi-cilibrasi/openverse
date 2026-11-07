@@ -2552,7 +2552,7 @@ def elabProgram (allTops00 : List STop) (opts : Options := {}) : Except String C
   -- the class table: the fields of each class, by tag (#34); the prototypes (#37)
   let classTable := env.classes.map fun d =>
     if env.isRefClass d then (env.fields d).map (·.2.1.toVTy env) else []
-  let S : Sigs := { fns := fsigs, classes := classTable, protos := protoList.map (·.1) }
+  let S : Sigs := { fns := fsigs, classes := classTable, protos := protoList.map fun (t, _) => (t, []) }
   if !P.checkTypes S slotTys.toList then
     throw "internal error: the elaborated program does not pass Prog.checkTypes"
   return { prog := P, sigs := S, slotTys := slotTys.toList }
