@@ -625,8 +625,14 @@ partial def parseStructBody (p : Pos) : PM SExpr := do
 
 /-- `enum` (after the keyword): `:` + values or `{ values }`. -/
 partial def parseEnumBody (p : Pos) : PM SExpr := do
+  let mut isOpen := false
   while (← peekT).isSym "<" do
-    bump; bump; expectSym ">"
+    bump
+    let st ← peekT
+    let sp ← expectIdent
+    expectSym ">"
+    if sp == "open" then isOpen := true
+    else if sp != "closed" then perr st s!"an enum's specifier is <open> or <closed>, not <{sp}>"
   let o ← peekT
   let mut names := #[]
   if o.isSym ":" then
@@ -650,7 +656,7 @@ partial def parseEnumBody (p : Pos) : PM SExpr := do
       if a.isSym "," || a.isSym ";" then bump; continue
       names := names.push (← expectIdent)
   else perr o "expected ':' or '{' after enum"
-  return .enumDef p names.toList
+  return .enumDef p names.toList isOpen
 
 partial def parseInterp (parts : List StrPart) : PM (List SPart) := do
   let mut out := #[]
