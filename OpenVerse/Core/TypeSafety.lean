@@ -639,17 +639,6 @@ theorem LResOK_mono {Ξ₁ Ξ₂ : List Nat} (hx : Ξ₁ <+: Ξ₂) {ts : List V
   · exact allTys_mono hx _ _ h
   · exact ⟨ResOK_mono hx h.1, h.2⟩
 
-/-- A reference typed at a set of classes is typed at any larger set. -/
-theorem hasTy_ref_sub {v : Value} {ts us : List Nat} (h : hasTy Ξ v (.ref ts) = true)
-    (hsub : ∀ t ∈ ts, t ∈ us) : hasTy Ξ v (.ref us) = true := by
-  cases v with
-  | ref a =>
-    simp only [hasTy] at h ⊢
-    split at h
-    · next t ht => have := hsub t (by simpa using h); simpa [ht] using this
-    · simp at h
-  | _ => simp [hasTy] at h
-
 /-- A value of a reference type is a reference to an object whose tag is in the set. -/
 theorem hasTy_ref {v : Value} {ts : List Nat} (h : hasTy Ξ v (.ref ts) = true) :
     ∃ a t, v = .ref a ∧ Ξ[a]? = some t ∧ t ∈ ts := by
@@ -1288,6 +1277,8 @@ theorem stepE_d {P : Prog} {S : Sigs} (hP : ProgTyped P S) (n : Nat)
   | _, _, .heap_set a b c, _, _, h, hf, hH => stepE_rule hP n ih h (.heap_set a b c) hf hH
   | _, _, .heap_tag a, _, _, h, hf, hH => stepE_rule hP n ih h (.heap_tag a) hf hH
   | _, _, .heap_isTag a, _, _, h, hf, hH => stepE_rule hP n ih h (.heap_isTag a) hf hH
+/-- `stepE_d`'s partner over `TypedL` (Lean recurses structurally on a
+    mutual inductive only through a mutual block). -/
 theorem stepE_dL {S : Sigs} {Γ : List VTy} {ρ : VTy} :
     ∀ {es : List Expr} {ts : List VTy}, TypedL S Γ ρ es ts → True
   | _, _, _ => trivial
