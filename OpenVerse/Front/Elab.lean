@@ -2268,9 +2268,17 @@ partial def elabSet (ctx : Ctx) (p : Pos) (lhs0 : SExpr) (op : Option String) (r
         c := c'
       -- (the right-hand side never runs, but is checked, and the field set
       -- at the empty class must be a var, as on any path)
-      if let (.struct sn _, (sp, some f, _)) := (tysA[ke]!, stepsA[ke]!) then
-        if f != "?" && !ctx.types.isVarField sn f then eerr sp (classSetMsg sn f)
-      discard <| elabE ctx rhs (some leafTy)
+      let lastCls := (List.range steps.length).reverse.find? fun k =>
+        match tysA[k]!, stepsA[k]! with
+        | .struct sn _, (_, some f, _) => f != "?" && ctx.types.classes.contains sn
+        | _, _ => false
+      if let some kc := lastCls then
+        if let (.struct sn _, (sp, some f, _)) := (tysA[kc]!, stepsA[kc]!) then
+          if !ctx.types.isVarField sn f then eerr sp (classSetMsg sn f)
+      let r ← elabE ctx rhs (some leafTy)
+      match op with
+      | none => discard <| coerce p r leafTy
+      | some o => discard <| combine (.prim .userErr []) leafTy o r
       let tu ← fresh leafTy
       return ⟨pre.toList.foldr Expr.seq (.assign tu (.prim .userErr [])), leafTy⟩
     -- the intermediate containers: level 0 is a copy of the variable, taken
