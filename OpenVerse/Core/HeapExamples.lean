@@ -252,6 +252,48 @@ def callsWriter : Prog :=
   { heapDemo with fns := heapDemo.fns.set 1 { heapDemo.fns[1]! with writes := false } }
 example : callsWriter.check = false := by native_decide
 
+/-! ### Prototypes (#37) -/
+
+/-- `$Main` allocates a `point3` prototype (address 0), then calls `Main`,
+    whose `point3` slot starts as a reference to it: no allocation.
+    `Show` prints a `point3`'s `Z`. -/
+def protoDemo : Prog where
+  fns := [
+    { name := "Show", arity := 1, nslots := 1, decides := false,
+      body := printInt (.heap (.get 2) [.local 0]) },
+    { name := "Main", arity := 0, nslots := 1, decides := false,
+      body := .seq (.assign 0 (.lit (.ref 0)))
+        (.seq (.assign 0 (.heap (.new 1) [int 7, int 8, int 9]))
+        (.seq (.call 0 [.local 0]) (.call 0 [.lit (.ref 0)]))) },
+    { name := "$Main", arity := 0, nslots := 0, decides := false,
+      body := protoPrelude [(1, [.int 0, .int 0, .int 0])] (.call 1 []) }]
+  main := 2
+
+def protoSigs : Sigs := { fns := [([.ref [1]], .void), ([], .void), ([], .void)], classes, protos := [1] }
+def protoSlots : List (List VTy) := [[.ref [1]], [.ref [1]], []]
+
+example : protoDemo.check = true := by native_decide
+example : protoDemo.checkTypes protoSigs protoSlots = true := by native_decide
+example : outOf protoDemo = some (.ok .void, "9\n0\n") := by native_decide
+-- the prelude must allocate exactly the prototypes, well typed
+example : protoDemo.checkTypes { protoSigs with protos := [0] } protoSlots = false := by native_decide
+example : ({ protoDemo with fns := protoDemo.fns.set 2 { protoDemo.fns[2]! with
+    body := protoPrelude [(1, [.int 0, .int 0])] (.call 1 []) } } : Prog).checkTypes protoSigs protoSlots = false := by
+  native_decide
+-- without prototypes, a reference literal has no type
+example : protoDemo.checkTypes { protoSigs with protos := [] } protoSlots = false := by native_decide
+-- a prototype's type is inferred where nothing is expected (a field read's receiver)
+example : tc protoSigs [.ref [1]] .void (.heap (.get 2) [.lit (.ref 0)]) none = some .int := by native_decide
+-- prototypes may refer to each other in a cycle: a `point3` prototype whose class table says
+-- its fields are a `point` and a `point3` reference (no instance needs to be built first)
+example :
+    let S : Sigs := { fns := [([], .void), ([], .void)], classes := [[.ref [1]], [.ref [0]]], protos := [0, 1] }
+    let P : Prog := { fns := [
+      { name := "Main", arity := 0, nslots := 0, decides := false, body := .lit .void },
+      { name := "$Main", arity := 0, nslots := 0, decides := false,
+        body := protoPrelude [(0, [.ref 1]), (1, [.ref 0])] (.call 0 []) }], main := 1 }
+    P.checkTypes S [[], []] = true := by native_decide
+
 -- a class table with a type variable is refused (so `Typed.subst` holds)
 example : heapDemo.checkTypes { heapSigs with classes := [[.var 0], [.int, .int, .int]] } heapSlots = false := by
   native_decide

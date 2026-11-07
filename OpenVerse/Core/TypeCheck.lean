@@ -237,7 +237,9 @@ mutual
 /-- `tc e none` infers a type of `e`; `tc e (some τ)` checks `e` against `τ`,
     up to subtyping. -/
 def tc : Expr → Option VTy → Option VTy
-  | .lit v, some τ => if hasTy [] v τ then some τ else none
+  | .lit v, some τ => if hasTy S.protos v τ then some τ else none
+  -- a reference literal: to a prototype (#37)
+  | .lit (.ref a), none => S.protos[a]?.map fun t => .ref [t]
   | .lit v, none => litTy v
   | .local i, m => match Γ[i]? with
     | some t => expect m t
@@ -828,7 +830,13 @@ theorem tc_sound_aux : ∀ (n : Nat) (e : Expr), sizeOf e < n → TcOK S Γ ρ e
     cases e with
     | lit v =>
       cases m with
-      | none => simp only [tc] at h; exact ⟨.lit (litTy_sound h), by simp⟩
+      | none =>
+        cases v with
+        | ref a =>
+          simp only [tc] at h
+          obtain ⟨t, ht, rfl⟩ := Option.map_eq_some_iff.mp h
+          exact ⟨.lit (by simp [hasTy, ht]), by simp⟩
+        | _ => simp only [tc] at h; exact ⟨.lit (hasTy_mono List.nil_prefix _ _ (litTy_sound h)), by simp⟩
       | some τ' =>
         simp only [tc] at h; split at h
         · next hv => simp only [Option.some.injEq] at h; subst h; exact ⟨.lit hv, by simp⟩
@@ -987,7 +995,7 @@ end
 mutual
 /-- `d` is a default expression of type `t` (`DefaultE S a Γ d t`). -/
 def checkDefault (S : Sigs) (a : Nat) (Γ : List VTy) : Expr → VTy → Bool
-  | .lit v, t => hasTy [] v t
+  | .lit v, t => hasTy S.protos v t
   | .local i, t => decide (i < a) && match Γ[i]? with
     | some t' => t'.sub t
     | none => false
@@ -1092,8 +1100,102 @@ theorem checkFn_sound {S fn ps τ Γ} (h : checkFn S fn ps τ Γ = true) : FnTyp
     exact ⟨ha, hs, hp, b, ds, hbody, hds, ht.1⟩
   · simp at hb
 
+/-- The literals of a list of expressions. -/
+def litsOf : List Expr → Option (List Value)
+  | [] => some []
+  | .lit v :: es => (litsOf es).map (v :: ·)
+  | _ => none
+
+theorem litsOf_sound : ∀ {es : List Expr} {vs : List Value}, litsOf es = some vs → es = vs.map .lit
+  | [], vs, h => by simp [litsOf] at h; subst h; rfl
+  | e :: es, vs, h => by
+    cases e with
+    | lit v =>
+      simp only [litsOf] at h
+      obtain ⟨vs', h', rfl⟩ := Option.map_eq_some_iff.mp h
+      simp [litsOf_sound h']
+    | _ => simp [litsOf] at h
+
+/-- A prelude of prototypes then a call without arguments (#37). -/
+def matchPrelude : Expr → Option (List (Nat × List Value) × Nat)
+  | .call m [] => some ([], m)
+  | .seq (.heap (.new t) es) rest => match litsOf es, matchPrelude rest with
+    | some vs, some (objs, m) => some ((t, vs) :: objs, m)
+    | _, _ => none
+  | _ => none
+
+theorem matchPrelude_sound : ∀ {e : Expr} {objs m}, matchPrelude e = some (objs, m) →
+    e = protoPrelude objs (.call m [])
+  | .call m' [], objs, m, h => by
+    simp only [matchPrelude, Option.some.injEq, Prod.mk.injEq] at h
+    obtain ⟨rfl, rfl⟩ := h; rfl
+  | .seq a rest, objs, m, h => by
+    cases a with
+    | heap op es =>
+      cases op with
+      | new t =>
+        simp only [matchPrelude] at h
+        split at h
+        · next vs objs' m' hl hr =>
+          simp only [Option.some.injEq, Prod.mk.injEq] at h
+          obtain ⟨rfl, rfl⟩ := h
+          rw [litsOf_sound hl, matchPrelude_sound hr]; rfl
+        · simp at h
+      | _ => simp [matchPrelude] at h
+    | _ => simp [matchPrelude] at h
+  | .lit _, _, _, h | .local _, _, _, h | .assign .., _, _, h | .prim .., _, _, h | .ite .., _, _, h
+  | .forE .., _, _, h | .loop _, _, _, h | .brk, _, _, h | .ret _, _, _, h | .print _, _, _, h
+  | .heap .., _, _, h => by simp [matchPrelude] at h
+  | .call _ (_ :: _), _, _, h => by simp [matchPrelude] at h
+
+/-- Every object has the field types of its class, and the heap starts with
+    the prototypes. -/
+def checkHeapOK (S : Sigs) (h : List Obj) : Bool :=
+  h.all (fun o => match S.classes[o.tag]? with
+    | some fs => allTys (tagsOf h) o.fields fs
+    | none => false) && S.protos.isPrefixOf (tagsOf h)
+
+theorem checkHeapOK_sound {S : Sigs} {h : List Obj} (hc : checkHeapOK S h = true) : HeapOK S h := by
+  simp only [checkHeapOK, Bool.and_eq_true, List.all_eq_true] at hc
+  refine ⟨fun a o ho => ?_, List.isPrefixOf_iff_prefix.mp hc.2⟩
+  have := hc.1 o (List.mem_of_getElem? ho)
+  split at this
+  · next fs hfs => exact ⟨fs, hfs, this⟩
+  · simp at this
+
+/-- `Main` is a prelude of prototypes (#37), or there are none. -/
+def checkPrelude (P : Prog) (S : Sigs) : Bool :=
+  S.protos.isEmpty ||
+  match P.fns[P.main]? with
+  | some fn =>
+    decide (fn.arity = 0) && decide (fn.nslots = 0) &&
+    match matchPrelude fn.body with
+    | some (objs, m) => decide (tagsOf (protoObjs objs) = S.protos) && checkHeapOK S (protoObjs objs) &&
+        decide (S.fns[m]? = S.fns[P.main]?)
+    | none => false
+  | none => false
+
+theorem checkPrelude_sound {P : Prog} {S : Sigs} (h : checkPrelude P S = true) :
+    S.protos = [] ∨ PreludeOK P S := by
+  unfold checkPrelude at h
+  simp only [Bool.or_eq_true, List.isEmpty_iff] at h
+  rcases h with h | h
+  · exact .inl h
+  · right
+    split at h
+    · next fn hfn =>
+      simp only [Bool.and_eq_true, decide_eq_true_eq] at h
+      obtain ⟨⟨ha, hn⟩, h⟩ := h
+      split at h
+      · next objs m hmatch =>
+        simp only [Bool.and_eq_true, decide_eq_true_eq] at h
+        exact ⟨fn, objs, m, hfn, ha, hn, matchPrelude_sound hmatch, h.1.1, checkHeapOK_sound h.1.2, h.2⟩
+      · simp at h
+    · simp at h
+
 /-- Check a whole program against signatures `S` and slot types `Γs`. -/
 def Prog.checkTypes (P : Prog) (S : Sigs) (Γs : List (List VTy)) : Bool :=
+  checkPrelude P S &&
   S.classes.all (·.all VTy.closed) &&
   decide (P.fns.length = S.fns.length) &&
   (List.range P.fns.length).all fun f =>
@@ -1107,10 +1209,11 @@ theorem Prog.checkTypes_sound {P : Prog} {S : Sigs} {Γs} (h : P.checkTypes S Γ
     ProgTyped P S := by
   unfold Prog.checkTypes at h
   simp only [Bool.and_eq_true, decide_eq_true_eq, List.all_eq_true, List.mem_range] at h
-  refine ⟨fun t fs hc f hf => h.1.1 fs (List.mem_of_getElem? hc) f hf, h.1.2,
-    fun f fn ps τ hf hs => ?_⟩
+  obtain ⟨⟨⟨hpre, hcl⟩, hlen⟩, h⟩ := h
+  refine ⟨fun t fs hc f hf => hcl fs (List.mem_of_getElem? hc) f hf, hlen,
+    fun f fn ps τ hf hs => ?_, checkPrelude_sound hpre⟩
   have hlt := lt_of_getElem?_some hf
-  have := h.2 f hlt
+  have := h f hlt
   rw [hf, hs] at this
   split at this
   · next fn' ps' τ' Γ heq1 heq2 heq3 =>
