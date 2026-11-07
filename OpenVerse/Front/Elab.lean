@@ -237,7 +237,7 @@ partial def TyEnv.disjoint (env : TyEnv) : Ty → Ty → Bool
     let iface (x : String) := isCls x && (env.info x).isIface
     if isCls a && isCls b then
       -- one parametric class at disjoint type arguments
-      if a == b then as.length == bs.length && (as.zip bs).any fun (x, y) => env.disjoint x y
+      if a == b && !iface a then as.length == bs.length && (as.zip bs).any fun (x, y) => env.disjoint x y
       else if iface a || iface b then
         -- a <final> class, which nothing is below, and an interface it does
         -- not implement (#100)
@@ -1759,7 +1759,9 @@ partial def elabApp (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (brack
     let (r, m) ← match r0.ty, m0.startsWith "(", (m0.drop 1).toString.splitOn ":)" with
       | .struct c ts, true, [q, mq] =>
         if !(ctx.types.isSub c q) then eerr p s!"{c} is not below {q}"
-        pure (⟨r0.e, .struct q (ctx.types.upArgs c ts q)⟩, mq)
+        -- (converted: a receiver of a type with no instance is unreachable)
+        let qt : Ty := .struct q (ctx.types.upArgs c ts q)
+        pure (⟨← coerce p r0 qt, qt⟩, mq)
       | _, _, _ => pure (r0, m0)
     match r.ty with
     | .struct c targs =>
@@ -2264,16 +2266,13 @@ partial def elabSet (ctx : Ctx) (p : Pos) (lhs0 : SExpr) (op : Option String) (r
         let c' ← fresh tysA[k + 1]!
         pre := pre.push (.assign c' (← readStep c tysA[k]! f? keys[k]!))
         c := c'
+      -- (the right-hand side never runs, but is checked, and the field set
+      -- at the empty class must be a var, as on any path)
+      if let (.struct sn _, (sp, some f, _)) := (tysA[ke]!, stepsA[ke]!) then
+        if f != "?" && !ctx.types.isVarField sn f then eerr sp (classSetMsg sn f)
+      discard <| elabE ctx rhs (some leafTy)
       let tu ← fresh leafTy
       return ⟨pre.toList.foldr Expr.seq (.assign tu (.prim .userErr [])), leafTy⟩
-    -- the values below the object (or all of them) are rebuilt: a parametric
-    -- class among them would change, but it is a value with no var field
-    for k in [0:steps.length] do
-      if refLevel?.all (k > ·) then
-        if let .struct sn _ := tysA[k]! then
-          if ctx.types.classes.contains sn && !ctx.types.isRefClass sn then
-            let (sp, f?, _) := steps.toArray[k]!
-            eerr sp s!"field '{f?.getD "?"}' of the parametric class {sn} cannot be set: a parametric class is a value (#34)"
     -- the intermediate containers: level 0 is a copy of the variable, taken
     -- after the indices, so that the right-hand side cannot change what is
     -- rebuilt (as for `set A[i] = e`); the variable is written once, last
