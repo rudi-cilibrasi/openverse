@@ -53,7 +53,9 @@ A literal that is not one of these (a non-string array, a non-empty tuple,
 (`Prim.apply .mkArr vs = .ok (.arr vs.toArray)`), and it keeps every node flat, so the
 loader needs no recursion. A float (#127) is `fofBits` of an INT literal of
 its bits: the bits of a canonical double are their own float, so this too
-evaluates to the literal, and the literal kinds stay as they are.
+evaluates to the literal (the front end emits only canonical bits; a
+hand-written Core literal of other bits, such as -0, would differ), and the
+literal kinds stay as they are.
 
 ## Primitive codes
 

@@ -43,7 +43,7 @@ inductive Prim where
   -- floats (#127): IEEE arithmetic, canonical results; `Min`/`Max` (NaN if
   -- either is); orderings (failable, as `lt`…: fail on NaN); `int` to
   -- `float`; and `Floor`, `Ceil`, `Round` (ties to even), `Int` to `int`
-  -- (failable: NaN, an infinity, out of range)
+  -- (failable: NaN, an infinity; out of range, the overflow error)
   | fadd | fsub | fmul | fdiv | fneg | fabs | fmin | fmax
   | flt | fle | fgt | fge
   | fofInt | ffloor | fceil | fround | ftrunc

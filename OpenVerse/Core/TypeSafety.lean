@@ -606,7 +606,8 @@ theorem prim_typed {op ts τ ρ} {vs : List Value} (hp : PrimTy op ts τ) (hv : 
     all_goals
       obtain ⟨x, rfl⟩ := hasTy_float hv
       simp only [List.mem_cons, List.mem_nil_iff, or_false] at hop
-      rcases hop with rfl | rfl | rfl | rfl <;> simp only [Prim.apply, VFloat.toIntRes] <;> split <;> simp [ResOK, hasTy]
+      rcases hop with rfl | rfl | rfl | rfl <;> simp only [Prim.apply, VFloat.toIntRes] <;>
+        (repeat' split) <;> simp [ResOK, hasTy]
   | toStrFloat =>
     rcases vs with _ | ⟨a, _ | ⟨_, _⟩⟩ <;> simp only [allTys, Bool.and_eq_true, Bool.false_eq_true, and_false, and_true] at hv
     all_goals

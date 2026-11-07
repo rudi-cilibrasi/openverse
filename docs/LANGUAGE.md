@@ -17,7 +17,7 @@ surface Verse is elaborated (`OpenVerse/Front/Elab.lean`) into Verse Core
 | Area | Supported | Book |
 |---|---|---|
 | Comments | `#` to the end of the line, nested `<# … #>`, `<#>` indented comments (the rest of the line and every following line indented more than it; see [Source text](#source-text)) | ch. 0 |
-| Literals | `int` (decimal, `0x` hex; must fit in 64 bits), `'c'` `char` (`c` printable ASCII U+0020–U+007E, or an escape), `0oHH` `char` code unit (one or two hex digits, not octal: `0o41` is `'A'`, `0o9` is a tab), strings with escapes and `{expr}` interpolation, `true`, `false`, `0uHHHHHH` `char32` (a Unicode scalar value, up to `0u10FFFF`, no surrogates), `float` `1.5`, `2.0e-7` (digits, a point and digits, then an optional exponent; the nearest double) | §1.3–1.7 |
+| Literals | `int` (decimal, `0x` hex; must fit in 64 bits), `'c'` `char` (`c` printable ASCII U+0020–U+007E, or an escape), `0oHH` `char` code unit (one or two hex digits, not octal: `0o41` is `'A'`, `0o9` is a tab), strings with escapes and `{expr}` interpolation, `true`, `false`, `0uHHHHHH` `char32` (a Unicode scalar value, up to `0u10FFFF`, no surrogates), `float` `1.5`, `2.0e-7`, `1e3` (digits, then a point and digits or an exponent or both; the nearest double) | §1.3–1.7 |
 | Types | `int`, `logic`, `char`, `char32`, `rational` (see [rational](#rational)), `float` (see [float](#float)), `string` (= `[]char`), `[]t`, `?t`, `tuple(…)`, `void`; a tuple converts to an array of its elements where an array is expected, and compares with an array as one (`array{1,2} = (1,2)`) | ch. 2–3 |
 | Definitions | top-level functions `F(X:t, …)<effects>:t = body`, top-level constants `C:t = e` / `C := e`; locals `X := e`, `X:t = e`, `var X:t = e`; no shadowing | §3.1–3.4 |
 | Mutation | `set X = e`, `set X += e` (`-=`, `*=`), `set A[i] = e` (fails out of range; returns `e`), and paths `set S.F.G = e`, `set A[i][j] op= e`, `set M[k].F = e`: indices and keys evaluated once, left to right, then the new value (for `op=`, after the old one is read: `set X += e` is `set X = X + e`), then the variable rebuilt; an index out of range or a missing intermediate key fails, while the last key of a path inserts | §3.3, §3.5, §9.3 |
@@ -471,8 +471,8 @@ Main():void =
 - `=`, `<>`, `<`, `<=`, `>`, `>=`. NaN equals NaN, but orders with nothing:
   `NaN < 1.0` fails.
 - `Floor[F]`, `Ceil[F]`, `Round[F]` (ties to even) and `Int[F]` (towards
-  zero) give an int. They fail on NaN, an infinity, or a result out of the
-  int range. `Abs`, `Min` and `Max` take floats too; `Min` and `Max` give NaN
+  zero) give an int. They fail on NaN or an infinity; a result out of the
+  int range is the overflow error (the API's integer-bounds error). `Abs`, `Min` and `Max` take floats too; `Min` and `Max` give NaN
   when either is NaN.
 - `ToString` gives the shortest decimal that reads back as the float, laid
   out as Python's `repr` (`98.5`, `1.0`, `1e+16`, `1.5e-07`), and `Inf`,

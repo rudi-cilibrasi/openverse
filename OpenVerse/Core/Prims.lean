@@ -49,11 +49,13 @@ theorem asBytesTR_go (vs : List Value) (acc : List Nat) :
 /-- Decimal rendering of an int, as bytes (ASCII). -/
 def intBytes (i : Int) : List Nat := (toString i).toUTF8.toList.map (·.toNat)
 
-/-- A float to an int (#127): fails on NaN, an infinity or out of range. -/
+/-- A float to an int (#127): fails on NaN or an infinity; a result out of
+    the int range is the overflow error (the API's integer-bounds error). -/
 def VFloat.toIntRes (r : VFloat.Rounding) (b : UInt64) : Res :=
-  match VFloat.toInt? r b with
-  | some i => .ok (.int i)
-  | none => .fail
+  if !VFloat.isFinite b then .fail
+  else match VFloat.toInt? r b with
+    | some i => .ok (.int i)
+    | none => .err .overflow
 
 /-- The string value of `ToString(v)`. -/
 def toStrValue : Value → Res

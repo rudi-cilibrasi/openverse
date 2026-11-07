@@ -155,7 +155,8 @@ Two things are computed exactly from the bits, in Lean with integers and in
 C with integer arithmetic and correctly rounded `printf`/`strtod`:
 
 - the conversions to int (`Floor`, `Ceil`, `Round` with ties to even,
-  `Int`), which fail on NaN, an infinity or out of range;
+  `Int`), which fail on NaN or an infinity, and raise the overflow error out
+  of range;
 - `ToString`: for each length `p`, the correctly rounded `p`-digit decimal
   or its neighbour on the other side of the value, the first that reads
   back as it, laid out as Python's `repr`.

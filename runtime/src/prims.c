@@ -126,14 +126,16 @@ static void ok_float(vx_res *r, double d)
     ok_val(r, VX_T_FLOAT, vx_fcanon(d));
 }
 
-/* VFloat.toIntRes */
+/* VFloat.toIntRes: NaN or an infinity fails; out of range is the overflow error */
 static void to_int(vx_res *r, int mode, const vx_val *v)
 {
     int64_t i;
-    if (vx_ftoint(mode, v->bits, &i) == VX_OK)
+    if (((v->bits >> 52) & 2047u) == 2047u)
+        fail(r);
+    else if (vx_ftoint(mode, v->bits, &i) == VX_OK)
         ok_val(r, VX_T_INT, vx_bits_of(i));
     else
-        fail(r);
+        err(r, VX_E_OVERFLOW);
 }
 
 /* intBytes i: decimal, '-' for negatives (Lean's toString on Int). */

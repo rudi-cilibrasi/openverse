@@ -320,20 +320,28 @@ partial def lexAll (acc : Array Token) : LexM (Array Token) := do
         lexAll (← emit (.char32 v))
       else
         let d ← readWhile Char.isDigit ""
-        if (← peekC) == some '.' && ((← peekC 1).map Char.isDigit).getD false then
-          -- a float (#127): digits, `.`, digits, and an exponent `e±N`;
-          -- the nearest double (`Float.ofScientific` rounds correctly)
-          advance
-          let f ← readWhile Char.isDigit ""
+        let digitAt (k : Nat) : LexM Bool := do return ((← peekC k).map Char.isDigit).getD false
+        let isE : LexM Bool := do return (← peekC) == some 'e' || (← peekC) == some 'E'
+        let expAhead : LexM Bool := do
+          return (← isE) && ((← digitAt 1) || (((← peekC 1) == some '+' || (← peekC 1) == some '-') && (← digitAt 2)))
+        let frac := (← peekC) == some '.' && (← digitAt 1)
+        if frac || (← expAhead) then
+          -- a float (#127): digits, then `.` and digits, or an exponent `e±N`,
+          -- or both (`1e3` too, as in shipped Verse); the nearest double
+          -- (`Float.ofScientific` rounds correctly)
+          let mut f := ""
+          if frac then
+            advance
+            f ← readWhile Char.isDigit ""
           let mut ex : Int := 0
-          let isE := (← peekC) == some 'e' || (← peekC) == some 'E'
-          let digitAt (k : Nat) : LexM Bool := do return ((← peekC k).map Char.isDigit).getD false
-          if isE && ((← digitAt 1) || (((← peekC 1) == some '+' || (← peekC 1) == some '-') && (← digitAt 2))) then
+          if ← expAhead then
             advance
             let neg := (← peekC) == some '-'
             if (← peekC) == some '+' || (← peekC) == some '-' then advance
             let es ← readWhile Char.isDigit ""
             ex := if neg then -(es.toNat! : Int) else es.toNat!
+          if ((← peekC).map isIdChar).getD false then
+            lexErr "a float literal is digits, a point and digits, then an optional exponent (1.5, 2.0e-7, 1e3)"
           let m := (d ++ f).toNat!
           let e10 : Int := ex - f.length
           let x : Float := if e10 < 0 then Float.ofScientific m true e10.natAbs else Float.ofScientific m false e10.toNat

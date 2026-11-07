@@ -2,7 +2,8 @@
 """Generate a random Verse program over floats (#127) and the output Verse
 gives it, computed by Python's IEEE doubles under Verse's rules: one NaN,
 equal to itself; no negative zero; Min/Max NaN when either is; Round ties to
-even; Floor/Ceil/Round/Int fail on NaN, an infinity or out of the int range;
+even; Floor/Ceil/Round/Int fail on NaN or an infinity (a result out of the int
+range is a runtime error, so the generator leaves those out);
 ToString the shortest repr ("Inf", "-Inf", "NaN").
 
 usage: gen-floats.py SEED OUT.verse OUT.expected
@@ -127,6 +128,8 @@ for i in range(rng.randint(10, 25)):
         # a conversion, in a failure context
         f = rng.choice(["Floor", "Ceil", "Round", "Int"])
         r = to_int(f, x)
+        if r is None and not (math.isnan(x) or math.isinf(x)):
+            continue   # out of range: the overflow error, which ends the program
         lines.append(f'    if (I := {f}[{a}]) then Print("{f} {{I}}") else Print("{f} fails")')
         out.append(f"{f} {r}" if r is not None else f"{f} fails")
         continue

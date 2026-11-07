@@ -1276,7 +1276,11 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
     | .logic => return ⟨.prim .query [r.e], .logic⟩
     | t => eerr p s!"'?' needs an option or logic, found {t.show}"
   | .neg p e =>
-    let r ← elabE ctx e (some .int)
+    -- (the expected type, a float or an int, as a hint: `-Id(2.5)`)
+    let hint : Option Ty := match exp with
+      | some .float => some .float
+      | _ => none
+    let r ← elabE ctx e hint
     if r.ty == .float then return ⟨.prim .fneg [r.e], .float⟩
     if r.ty != .int then eerr p s!"unary '-' needs an int or a float, found {r.ty.show}"
     return ⟨.prim .neg [r.e], .int⟩
@@ -1285,8 +1289,8 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
     return ⟨Expr.notE r.e, .void⟩
   | .bin p "/" a b =>
     -- `X / Y` on ints: a rational, failing when `Y = 0` (#116)
-    let ra ← elabE ctx a (some .int)
-    let rb ← elabE ctx b (some .int)
+    let ra ← elabE ctx a none
+    let rb ← elabE ctx b (if ra.ty == .float then some .float else none)
     -- (on floats, IEEE division: by zero an infinity or NaN, #127)
     if ra.ty == .float && rb.ty == .float then return ⟨p2 .fdiv ra.e rb.e, .float⟩
     if ra.ty == .float || rb.ty == .float then
@@ -1300,6 +1304,12 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
     let rb ← match op, ra.ty with
       | "+", .arr _ =>
         -- (an array of other classes, to join, #67)
+        if ctx.retries ≥ 3 then elabE ctx b (some ra.ty)
+        else
+          let c2 := { ctx with retries := ctx.retries + 1 }
+          tryCatch (elabE c2 b (some ra.ty)) fun _ => elabE c2 b none
+      | "*", .int | "*", .float =>
+        -- (an int times a float, either way round: `2 * Id(1.5)`)
         if ctx.retries ≥ 3 then elabE ctx b (some ra.ty)
         else
           let c2 := { ctx with retries := ctx.retries + 1 }
@@ -1718,11 +1728,13 @@ partial def elabApp (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (brack
       | [a] => return ⟨← toStringOf p (← elabE ctx a none), Ty.string⟩
       | _ => eerr p "ToString takes one argument"
     | "Abs" =>
-      -- (of a float, #127)
-      if let [a] := args then
+      -- (of a float, #127; each argument elaborated once)
+      match args with
+      | [a] =>
         let r ← elabE ctx a none
         if r.ty == .float then return ⟨.prim .fabs [r.e], .float⟩
-      return ⟨.prim .abs (← elabInts ctx p args), .int⟩
+        return ⟨.prim .abs [← coerce a.pos r .int], .int⟩
+      | _ => eerr p "Abs takes one argument"
     | "Round" | "Int" =>
       -- a float to an int (#127): `Round` ties to even, `Int` towards zero;
       -- failing on NaN, an infinity or out of range
@@ -1734,21 +1746,18 @@ partial def elabApp (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (brack
         return ⟨.prim (if name == "Round" then .fround else .ftrunc) [r.e], .int⟩
       | _ => eerr p s!"{name} takes one argument"
     | "Floor" | "Ceil" =>
-      -- (of a float, #127: failable, so with brackets)
-      let floatArg : Option SExpr := match args with
-        | [a] => some a
-        | _ => none
-      if let some a := floatArg then
-        if bracket then
-          let r ← elabE ctx a (some .float)
-          if r.ty != .float then eerr p s!"{name}[…] takes a float, found {r.ty.show} (write {name}(…) of a rational or an int)"
-          return ⟨.prim (if name == "Floor" then .ffloor else .fceil) [r.e], .int⟩
+      -- (of a float, #127: failable, so with brackets; of a rational or
+      -- an int, with either, as the Book writes both)
+      let ofFloat (r : R) : EM R := do
+        if !bracket then eerr p s!"{name} of a float can fail: call it with {name}[…]"
+        return ⟨.prim (if name == "Floor" then .ffloor else .fceil) [r.e], .int⟩
       match args with
       | [.bin bp "/" a b] =>
-        let ra ← elabE ctx a (some .int)
-        let rb ← elabE ctx b (some .int)
+        let ra ← elabE ctx a none
+        let rb ← elabE ctx b (if ra.ty == .float then some .float else none)
+        if ra.ty == .float && rb.ty == .float then return ← ofFloat ⟨p2 .fdiv ra.e rb.e, .float⟩
         if ra.ty == .float || rb.ty == .float then
-          eerr p s!"{name} of a float can fail: call it with {name}[…]"
+          eerr bp s!"no operator '/' for {ra.ty.show} and {rb.ty.show} (an int is not a float: write X * 1.0)"
         if ra.ty == .rational || rb.ty == .rational then
           eerr bp "'/' divides ints: openverse has no arithmetic on rationals (only Floor, Ceil and comparisons)"
         let es := [← coerce a.pos ra .int, ← coerce b.pos rb .int]
@@ -1759,7 +1768,7 @@ partial def elabApp (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (brack
         let r ← elabE ctx e none
         match r.ty with
         | .int => return r
-        | .float => eerr p s!"{name} of a float can fail: call it with {name}[…]"
+        | .float => ofFloat r
         | .rational =>
           let tr ← fresh .rational
           let tz ← fresh .int
@@ -1772,13 +1781,14 @@ partial def elabApp (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (brack
     | "Mod" => needBracket name; return ⟨.prim .modulo (← elabInts ctx p args), .int⟩
     | "Min" | "Max" =>
       -- (of floats, #127: NaN when either is)
-      if let [a, b] := args then
-        let ra ← elabE ctx a none
-        if ra.ty == .float then
-          let rb ← elabE ctx b (some .float)
-          if rb.ty != .float then eerr p s!"{name} takes two floats or two ints, found float and {rb.ty.show}"
-          return ⟨p2 (if name == "Min" then .fmin else .fmax) ra.e rb.e, .float⟩
-      let es ← elabInts ctx p args
+      -- (each argument elaborated once)
+      let [a, b] := args | eerr p s!"{name} takes two arguments"
+      let ra ← elabE ctx a none
+      let rb ← elabE ctx b (if ra.ty == .float || ra.ty == .int then some ra.ty else none)
+      if ra.ty == .float then
+        if rb.ty != .float then eerr p s!"{name} takes two floats or two ints, found float and {rb.ty.show}"
+        return ⟨p2 (if name == "Min" then .fmin else .fmax) ra.e rb.e, .float⟩
+      let es := [← coerce a.pos ra .int, ← coerce b.pos rb .int]
       let ta ← fresh .int
       let tb ← fresh .int
       let op := if name == "Min" then Prim.le else Prim.ge
@@ -2484,6 +2494,12 @@ partial def elabCmp (ctx : Ctx) (p : Pos) (a : SExpr) (rest : List (String × SE
     return ⟨steps.foldr Expr.seq (.local t0), ra.ty⟩
 
 partial def elabSet (ctx : Ctx) (p : Pos) (lhs0 : SExpr) (op : Option String) (rhs : SExpr) : EM R := do
+  -- the right side at the target's type; for `set F *= N` of a float, an
+  -- int too (#127), so without it when that fails
+  let rhsAt (t : Ty) : EM R :=
+    if op == some "*" && t == .float then
+      tryCatch (elabE ctx rhs (some t)) fun _ => elabE ctx rhs none
+    else elabE ctx rhs (some t)
   -- in a method, a path from a field of `Self` (as when one is read)
   let rec selfRoot : SExpr → SExpr
     | .ident ip n =>
@@ -2620,7 +2636,7 @@ partial def elabSet (ctx : Ctx) (p : Pos) (lhs0 : SExpr) (op : Option String) (r
       if let some kc := lastCls then
         if let (.struct sn _, (sp, some f, _)) := (tysA[kc]!, stepsA[kc]!) then
           if !ctx.types.isVarField sn f then eerr sp (classSetMsg sn f)
-      let r ← elabE ctx rhs (some leafTy)
+      let r ← rhsAt leafTy
       match op with
       | none => discard <| coerce p r leafTy
       | some o => discard <| combine (.prim .userErr []) leafTy o r
@@ -2659,7 +2675,7 @@ partial def elabSet (ctx : Ctx) (p : Pos) (lhs0 : SExpr) (op : Option String) (r
             pre := pre.push (.assign c3 (← readStep c2 tys[k2]! f2 keys[k2]!))
             c2 := c3
           oldLeaf := some c2
-        let r ← elabE ctx rhs (some leafTy)
+        let r ← rhsAt leafTy
         let tr ← fresh r.ty
         pre := pre.push (.assign tr r.e)
         rhsVal := some ⟨.local tr, r.ty⟩
@@ -2673,7 +2689,7 @@ partial def elabSet (ctx : Ctx) (p : Pos) (lhs0 : SExpr) (op : Option String) (r
     -- the new leaf value
     let r ← match rhsVal with
       | some r => pure r
-      | none => elabE ctx rhs (some leafTy)
+      | none => rhsAt leafTy
     let leaf ← match op with
       | none => coerce p r leafTy
       | some o =>
@@ -2721,7 +2737,7 @@ partial def elabSet (ctx : Ctx) (p : Pos) (lhs0 : SExpr) (op : Option String) (r
   match lhs with
   | .ident _ n =>
     let l ← mutableLocal n
-    let r ← elabE ctx rhs (some l.ty)
+    let r ← rhsAt l.ty
     let v ← match op with
       | none => coerce p r l.ty
       | some o => combine (.local l.slot) l.ty o r
@@ -2733,7 +2749,7 @@ partial def elabSet (ctx : Ctx) (p : Pos) (lhs0 : SExpr) (op : Option String) (r
       let rk ← elabE ctx k (some kt)
       let tk ← fresh kt
       let tp ← fresh (.tup [kt, vt])
-      let r ← elabE ctx rhs (some vt)
+      let r ← rhsAt vt
       let v ← match op with
         | none => coerce p r vt
         -- `set M[k] op= v` fails when k is not a key (Book of Verse §9.3)
@@ -2749,7 +2765,7 @@ partial def elabSet (ctx : Ctx) (p : Pos) (lhs0 : SExpr) (op : Option String) (r
       if ri.ty != .int then eerr p "an array index must be an int"
       let ti ← fresh .int
       let tv ← fresh t
-      let r ← elabE ctx rhs (some t)
+      let r ← rhsAt t
       let v ← match op with
         | none => coerce p r t
         | some o => combine (p2 .index (.local l.slot) (.local ti)) t o r
@@ -2766,7 +2782,7 @@ partial def elabSet (ctx : Ctx) (p : Pos) (lhs0 : SExpr) (op : Option String) (r
           let some (k, t) := fieldIndex (ctx.types.fields sn targs) f
             | eerr p s!"class {sn} has no field '{f}'"
           if !ctx.types.isVarField sn f then eerr p (classSetMsg sn f)
-          let r ← elabE ctx rhs (some t)
+          let r ← rhsAt t
           noteFx p (if op.isSome then ["reads", "writes"] else ["writes"])
           let v ← match op with
             | none => coerce p r t
@@ -2789,7 +2805,7 @@ partial def elabSet (ctx : Ctx) (p : Pos) (lhs0 : SExpr) (op : Option String) (r
       let fs := ctx.types.fields sn targs
       match fieldIndex fs f with
       | some (k, t) =>
-        let r ← elabE ctx rhs (some t)
+        let r ← rhsAt t
         let v ← match op with
           | none => coerce p r t
           | some o => combine (.prim (.tupGet k) [.local l.slot]) t o r
