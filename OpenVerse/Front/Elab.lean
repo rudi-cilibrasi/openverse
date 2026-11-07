@@ -696,7 +696,7 @@ where
   | [] => s!"{what} must be comparable, and {t.show} is not"
 
 def builtins : List String :=
-  ["Print", "ToString", "Floor", "Ceil", "Abs", "Min", "Max", "Quotient", "Mod", "Err"]
+  ["Print", "ToString", "Floor", "Ceil", "Abs", "Min", "Max", "Quotient", "Mod", "Err", "ConcatenateMaps"]
 
 partial def resolveTy (env : TyEnv) (p : Pos) : STy → EM Ty
   | .name "int" => pure .int
@@ -1506,6 +1506,33 @@ partial def elabApp (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (brack
     | "Print" =>
       let es ← elabArgs ctx p args [Ty.string]
       return ⟨.print es.head!, .void⟩
+    | "ConcatenateMaps" =>
+      -- the entries of every map, a later map's value winning for a key (Book
+      -- of Verse ch. 9): the first copied, then each other's pairs put in turn
+      let some a0 := args.head? | eerr p "ConcatenateMaps takes at least one map"
+      let r0 ← elabE ctx a0 (match exp with | some t@(.map ..) => some t | _ => none)
+      let .map _ _ := r0.ty | eerr a0.pos s!"ConcatenateMaps takes maps, not {r0.ty.show}"
+      let mut rs : Array R := #[r0]
+      let mut jt := r0.ty
+      for a in args.tail do
+        let r ← elabE ctx a (some r0.ty)
+        let .map _ _ := r.ty | eerr a.pos s!"ConcatenateMaps takes maps, not {r.ty.show}"
+        jt ← join a.pos jt r.ty exp
+        rs := rs.push r
+      let .map kt vt := jt | eerr p s!"ConcatenateMaps takes maps, not {jt.show}"
+      let tm ← fresh jt
+      let mut code : Expr := .assign tm (← coerce a0.pos r0 jt)
+      for (r, a) in rs.toList.tail.zip args.tail do
+        let ts ← fresh jt
+        let tpair ← fresh (.tup [kt, vt])
+        let tk ← fresh kt
+        let tv ← fresh vt
+        let ti ← fresh .int
+        let tidx ← fresh .int
+        let put := Expr.seq (.assign tk (.prim (.tupGet 0) [.local tpair]))
+          (.seq (.assign tv (.prim (.tupGet 1) [.local tpair])) (mapPut tm tk tv ti tidx))
+        code := .seq code (.seq (.assign ts (← coerce a.pos r jt)) (.forE tpair (.local ts) (.lit (.logic true)) put))
+      return ⟨.seq code (.local tm), jt⟩
     | "ToString" =>
       match args with
       | [a] => return ⟨← toStringOf p (← elabE ctx a none), Ty.string⟩
