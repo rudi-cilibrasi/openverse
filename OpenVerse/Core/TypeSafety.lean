@@ -211,6 +211,123 @@ theorem VTy.closed_map_subst (θ : Nat → VTy) {fs : List VTy} (h : ∀ f ∈ f
   conv => rhs; rw [← List.map_id fs]
   exact List.map_congr_left fun f hf => VTy.closed_subst θ f (h f hf)
 
+/-! ### Subtyping (#32) -/
+
+mutual
+theorem VTy.sub_refl : ∀ t : VTy, t.sub t = true
+  | .ref ts => by simp [VTy.sub]
+  | .arr t => by simp only [VTy.sub]; exact VTy.sub_refl t
+  | .opt t => by simp only [VTy.sub]; exact VTy.sub_refl t
+  | .tup ts => by simp only [VTy.sub]; exact VTy.subL_refl ts
+  | .int | .logic | .char | .var _ => by simp [VTy.sub]
+theorem VTy.subL_refl : ∀ ts : List VTy, VTy.subL ts ts = true
+  | [] => rfl
+  | t :: ts => by simp [VTy.subL, VTy.sub_refl t, VTy.subL_refl ts]
+end
+
+mutual
+theorem VTy.sub_trans : ∀ (t u w : VTy), t.sub u = true → u.sub w = true → t.sub w = true
+  | .ref ts, u, w, h1, h2 => by
+    cases u <;> simp [VTy.sub] at h1
+    cases w <;> simp [VTy.sub] at h2 ⊢
+    exact fun x hx => h2 x (h1 x hx)
+  | .arr t, u, w, h1, h2 => by
+    cases u <;> simp [VTy.sub] at h1
+    cases w <;> simp [VTy.sub] at h2 ⊢
+    exact VTy.sub_trans _ _ _ h1 h2
+  | .opt t, u, w, h1, h2 => by
+    cases u <;> simp [VTy.sub] at h1
+    cases w <;> simp [VTy.sub] at h2 ⊢
+    exact VTy.sub_trans _ _ _ h1 h2
+  | .tup ts, u, w, h1, h2 => by
+    cases u <;> simp [VTy.sub] at h1
+    cases w <;> simp [VTy.sub] at h2 ⊢
+    exact VTy.subL_trans _ _ _ h1 h2
+  | .int, u, w, h1, h2 | .logic, u, w, h1, h2 | .char, u, w, h1, h2 | .var _, u, w, h1, h2 => by
+    cases u <;> simp [VTy.sub] at h1 <;> subst_vars <;> exact h2
+theorem VTy.subL_trans : ∀ (ts us ws : List VTy), VTy.subL ts us = true → VTy.subL us ws = true →
+    VTy.subL ts ws = true
+  | [], [], [], _, _ => rfl
+  | t :: ts, u :: us, w :: ws, h1, h2 => by
+    simp only [VTy.subL, Bool.and_eq_true] at h1 h2 ⊢
+    exact ⟨VTy.sub_trans _ _ _ h1.1 h2.1, VTy.subL_trans _ _ _ h1.2 h2.2⟩
+  | [], [], _ :: _, _, h | [], _ :: _, _, h, _ | _ :: _, [], _, h, _ | _ :: _, _ :: _, [], _, h => by
+    simp [VTy.subL] at h
+end
+
+mutual
+/-- Subtyping is stable under substitution. -/
+theorem VTy.sub_subst (θ : Nat → VTy) : ∀ (t u : VTy), t.sub u = true → (t.subst θ).sub (u.subst θ) = true
+  | .ref ts, u, h => by cases u <;> simp [VTy.sub] at h ⊢; exact h
+  | .arr t, u, h => by
+    cases u <;> simp [VTy.sub] at h
+    simpa [VTy.sub] using VTy.sub_subst θ _ _ h
+  | .opt t, u, h => by
+    cases u <;> simp [VTy.sub] at h
+    simpa [VTy.sub] using VTy.sub_subst θ _ _ h
+  | .tup ts, u, h => by
+    cases u <;> simp [VTy.sub] at h
+    simpa [VTy.sub] using VTy.subL_subst θ _ _ h
+  | .int, u, h | .logic, u, h | .char, u, h | .var _, u, h => by
+    cases u <;> simp [VTy.sub] at h <;> subst_vars <;> exact VTy.sub_refl _
+theorem VTy.subL_subst (θ : Nat → VTy) : ∀ (ts us : List VTy), VTy.subL ts us = true →
+    VTy.subL (ts.map (VTy.subst θ)) (us.map (VTy.subst θ)) = true
+  | [], [], _ => rfl
+  | t :: ts, u :: us, h => by
+    simp only [VTy.subL, Bool.and_eq_true, List.map_cons] at h ⊢
+    exact ⟨VTy.sub_subst θ _ _ h.1, VTy.subL_subst θ _ _ h.2⟩
+  | [], _ :: _, h | _ :: _, [], h => by simp [VTy.subL] at h
+end
+
+mutual
+/-- **Subsumption is sound**: a value of a type is a value of every type above it. -/
+theorem hasTy_sub : ∀ (t u : VTy) (v : Value), t.sub u = true → hasTy Ξ v t = true → hasTy Ξ v u = true
+  | .ref ts, u, v, hs, hv => by
+    cases u <;> simp [VTy.sub] at hs
+    rename_i us
+    cases v with
+    | ref a =>
+      simp only [hasTy] at hv ⊢
+      split at hv
+      · next t' ht => have := hs t' (by simpa using hv); simpa [ht] using this
+      · simp at hv
+    | _ => simp [hasTy] at hv
+  | .arr t, u, v, hs, hv => by
+    cases u <;> simp [VTy.sub] at hs
+    cases v with
+    | arr vs =>
+      simp only [hasTy] at hv ⊢
+      rw [allTy_iff] at hv ⊢
+      exact fun w hw => hasTy_sub _ _ w hs (hv w hw)
+    | _ => simp [hasTy] at hv
+  | .opt t, u, v, hs, hv => by
+    cases u <;> simp [VTy.sub] at hs
+    cases v with
+    | none => rfl
+    | some w => simp only [hasTy] at hv ⊢; exact hasTy_sub _ _ w hs hv
+    | _ => simp [hasTy] at hv
+  | .tup ts, u, v, hs, hv => by
+    cases u <;> simp [VTy.sub] at hs
+    cases v with
+    | tup vs => simp only [hasTy] at hv ⊢; exact allTys_sub _ _ vs hs hv
+    | _ => simp [hasTy] at hv
+  | .int, u, v, hs, hv | .logic, u, v, hs, hv | .char, u, v, hs, hv | .var _, u, v, hs, hv => by
+    cases u <;> simp [VTy.sub] at hs <;> subst_vars <;> exact hv
+theorem allTys_sub : ∀ (ts us : List VTy) (vs : List Value), VTy.subL ts us = true →
+    allTys Ξ vs ts = true → allTys Ξ vs us = true
+  | [], [], [], _, _ => rfl
+  | t :: ts, u :: us, v :: vs, hs, hv => by
+    simp only [VTy.subL, allTys, Bool.and_eq_true] at hs hv ⊢
+    exact ⟨hasTy_sub _ _ _ hs.1 hv.1, allTys_sub _ _ _ hs.2 hv.2⟩
+  | [], _ :: _, _, h, _ | _ :: _, [], _, h, _ => by simp [VTy.subL] at h
+  | [], [], _ :: _, _, h | _ :: _, _ :: _, [], _, h => by simp [allTys] at h
+end
+
+theorem ResOK_sub {t u ρ : VTy} {r : Res} (hs : t.sub u = true) (h : ResOK Ξ t ρ r) : ResOK Ξ u ρ r := by
+  cases r <;> simp only [ResOK] at h ⊢
+  · exact hasTy_sub _ _ _ hs h
+  all_goals exact h
+
 section
 variable {S : Sigs} {Γ : List VTy} {ρ : VTy}
 
@@ -238,10 +355,7 @@ theorem Typed.subst (hS : S.ClosedClasses) (θ : Nat → VTy) : ∀ {e τ}, Type
   | _, _, .brk => .brk
   | _, _, .ret he => .ret (Typed.subst hS θ he)
   | _, _, .print he => by simpa using Typed.print (by simpa using Typed.subst hS θ he)
-  | _, _, .local_sub hi hsub => by
-    have h1 := getElem?_map_some (VTy.subst θ) hi
-    simp only [VTy.subst_ref] at h1
-    simpa using Typed.local_sub (S := S) (ρ := ρ.subst θ) h1 hsub
+  | _, _, .sub he hs => .sub (Typed.subst hS θ he) (VTy.sub_subst θ _ _ hs)
   | _, _, .heap_new hc ht hes => by
     have h := TypedL.subst hS θ hes
     rw [VTy.closed_map_subst θ (hS _ _ hc)] at h
@@ -696,7 +810,7 @@ theorem DefaultE.eval_ok {P : Prog} {S : Sigs} (hS : S.ClosedClasses) {a : Nat} 
       simp at hvs
   | _, _, n, s, _, .sub hd hsub, hp, hH, h => by
     obtain ⟨v, s', hx, hfr, hH', hx', hv⟩ := DefaultE.eval_ok hS n hd hp hH h
-    exact ⟨v, s', hx, hfr, hH', hx', by simpa using hasTy_ref_sub (by simpa using hv) hsub⟩
+    exact ⟨v, s', hx, hfr, hH', hx', hasTy_sub _ _ _ (VTy.sub_subst θ _ _ hsub) hv⟩
 theorem DefaultEL.eval_ok {P : Prog} {S : Sigs} (hS : S.ClosedClasses) {a : Nat} {Γ : List VTy}
     {θ : Nat → VTy} :
     ∀ {ds ts} (n : Nat) {s : St} {x}, DefaultEL S a Γ ds ts →
@@ -831,9 +945,36 @@ end
 
 theorem hasTy_void : hasTy Ξ Value.void VTy.void = true := rfl
 
+/-- The rules of `Typed` but subsumption, over `Typed` premises: the last
+    step of a derivation, once subsumption is peeled off (`stepE_d`). -/
+inductive TypedR (S : Sigs) (Γ : List VTy) (ρ : VTy) : Expr → VTy → Prop
+  | lit {v τ} : hasTy [] v τ = true → TypedR S Γ ρ (.lit v) τ
+  | local {i τ} : Γ[i]? = some τ → TypedR S Γ ρ (.local i) τ
+  | assign {i e τ} : Γ[i]? = some τ → Typed S Γ ρ e τ → TypedR S Γ ρ (.assign i e) τ
+  | seq {a b σ τ} : Typed S Γ ρ a σ → Typed S Γ ρ b τ → TypedR S Γ ρ (.seq a b) τ
+  | prim {op es ts τ} : TypedL S Γ ρ es ts → PrimTy op ts τ → TypedR S Γ ρ (.prim op es) τ
+  | call {f es ps τ} (θ : Nat → VTy) : S.fns[f]? = some (ps, τ) → TypedL S Γ ρ es (ps.map (VTy.subst θ)) →
+      TypedR S Γ ρ (.call f es) (τ.subst θ)
+  | ite {c t e σ τ} : Typed S Γ ρ c σ → Typed S Γ ρ t τ → Typed S Γ ρ e τ →
+      TypedR S Γ ρ (.ite c t e) τ
+  | forE {i it filt body τe σ τb} : Γ[i]? = some τe → Typed S Γ ρ it (.arr τe) →
+      Typed S Γ ρ filt σ → Typed S Γ ρ body τb → TypedR S Γ ρ (.forE i it filt body) (.arr τb)
+  | loop {b σ} : Typed S Γ ρ b σ → TypedR S Γ ρ (.loop b) VTy.void
+  | brk {τ} : TypedR S Γ ρ .brk τ
+  | ret {e τ} : Typed S Γ ρ e ρ → TypedR S Γ ρ (.ret e) τ
+  | print {e} : Typed S Γ ρ e VTy.str → TypedR S Γ ρ (.print e) VTy.void
+  | heap_new {t es fs ts} : S.classes[t]? = some fs → t ∈ ts → TypedL S Γ ρ es fs →
+      TypedR S Γ ρ (.heap (.new t) es) (.ref ts)
+  | heap_get {k e ts τ} : Typed S Γ ρ e (.ref ts) → FieldTy S ts k τ →
+      TypedR S Γ ρ (.heap (.get k) [e]) τ
+  | heap_set {k e v ts τ} : Typed S Γ ρ e (.ref ts) → FieldTy S ts k τ → Typed S Γ ρ v τ →
+      TypedR S Γ ρ (.heap (.set k) [e, v]) τ
+  | heap_tag {e ts} : Typed S Γ ρ e (.ref ts) → TypedR S Γ ρ (.heap .tag [e]) .int
+  | heap_isTag {e ts us} : Typed S Γ ρ e (.ref ts) → TypedR S Γ ρ (.heap (.isTag us) [e]) (.ref us)
+
 /-- The arguments of a heap operation are typed. -/
 theorem heap_args {S : Sigs} {Γ : List VTy} {ρ : VTy} {op : HeapOp} {es : List Expr} {τ : VTy}
-    (ht : Typed S Γ ρ (.heap op es) τ) : ∃ ts, TypedL S Γ ρ es ts := by
+    (ht : TypedR S Γ ρ (.heap op es) τ) : ∃ ts, TypedL S Γ ρ es ts := by
   cases ht with
   | heap_new _ _ hes => exact ⟨_, hes⟩
   | heap_get he _ => exact ⟨_, .cons he .nil⟩
@@ -849,12 +990,20 @@ theorem ref_arg {Ξ : List Nat} {h : List Obj} (hΞ : Ξ = tagsOf h) {v : Value}
   obtain ⟨o, ho, rfl⟩ := tagsOf_getElem?_inv hta
   exact ⟨a, o, rfl, ho, htin⟩
 
-theorem stepE {P : Prog} {S : Sigs} (hP : ProgTyped P S) (n : Nat)
-    (ih : ∀ m ≤ n, StmtE P S m ∧ StmtL P S m ∧ StmtF P S m) : StmtE P S (n + 1) := by
+/-- The conclusion of `StmtE`. -/
+def StmtE.post (S : Sigs) (s : St) (x : Res × St) (Γ : List VTy) (ρ τ : VTy) : Prop :=
+  FrameOK x.2.tags Γ x.2.fr ∧ ResOK x.2.tags τ ρ x.1 ∧ HeapOK S x.2.g.heap ∧ s.tags <+: x.2.tags
+
+/-- Preservation for a derivation that does not end with subsumption. -/
+theorem stepE_rule {P : Prog} {S : Sigs} (hP : ProgTyped P S) (n : Nat)
+    (ih : ∀ m ≤ n, StmtE P S m ∧ StmtL P S m ∧ StmtF P S m) {s : St} {e : Expr} {x : Res × St}
+    {Γ : List VTy} {ρ τ : VTy} (h : eval P (n + 1) s e = some x) (ht : TypedR S Γ ρ e τ)
+    (hf : FrameOK s.tags Γ s.fr) (hH : HeapOK S s.g.heap) :
+    StmtE.post S s x Γ ρ τ := by
   have IE := (ih n (Nat.le_refl _)).1
   have IL := (ih n (Nat.le_refl _)).2.1
   have IF := (ih n (Nat.le_refl _)).2.2
-  intro s e x Γ ρ τ h ht hf hH
+  unfold StmtE.post
   cases e with
   | lit v =>
     simp only [eval, Option.some.injEq] at h; subst h
@@ -866,9 +1015,6 @@ theorem stepE {P : Prog} {S : Sigs} (hP : ProgTyped P S) (n : Nat)
     | «local» hi =>
       obtain ⟨v, hv, ht⟩ := readSlot_typed hf hi
       exact ⟨hf, by simp [hv, ResOK, ht], hH, List.prefix_refl _⟩
-    | local_sub hi hsub =>
-      obtain ⟨v, hv, ht⟩ := readSlot_typed hf hi
-      exact ⟨hf, by simp only [hv, ResOK]; exact hasTy_ref_sub ht hsub, hH, List.prefix_refl _⟩
   | assign i e =>
     cases ht with
     | assign hi he =>
@@ -1114,6 +1260,42 @@ theorem stepE {P : Prog} {S : Sigs} (hP : ProgTyped P S) (n : Nat)
           · simp [hab] at hp
       · obtain ⟨hf1, hr1, hH1, hp1⟩ := IE _ _ _ _ _ _ hx he hf hH
         exact ⟨hf1, ResOK_retype hr hr1, hH1, hp1⟩
+
+mutual
+/-- Preservation at fuel `n + 1`, by recursion on the typing derivation for
+    subsumption (the rest is `stepE_rule`). -/
+theorem stepE_d {P : Prog} {S : Sigs} (hP : ProgTyped P S) (n : Nat)
+    (ih : ∀ m ≤ n, StmtE P S m ∧ StmtL P S m ∧ StmtF P S m) {Γ : List VTy} {ρ : VTy} :
+    ∀ {e : Expr} {τ : VTy}, Typed S Γ ρ e τ → ∀ {s : St} {x : Res × St}, eval P (n + 1) s e = some x →
+      FrameOK s.tags Γ s.fr → HeapOK S s.g.heap → StmtE.post S s x Γ ρ τ
+  | _, _, .sub ht hs, _, _, h, hf, hH => by
+    obtain ⟨a, b, c, d⟩ := stepE_d hP n ih ht h hf hH
+    exact ⟨a, ResOK_sub hs b, c, d⟩
+  | _, _, .lit a, _, _, h, hf, hH => stepE_rule hP n ih h (.lit a) hf hH
+  | _, _, .local a, _, _, h, hf, hH => stepE_rule hP n ih h (.local a) hf hH
+  | _, _, .assign a b, _, _, h, hf, hH => stepE_rule hP n ih h (.assign a b) hf hH
+  | _, _, .seq a b, _, _, h, hf, hH => stepE_rule hP n ih h (.seq a b) hf hH
+  | _, _, .prim a b, _, _, h, hf, hH => stepE_rule hP n ih h (.prim a b) hf hH
+  | _, _, .call θ a b, _, _, h, hf, hH => stepE_rule hP n ih h (.call θ a b) hf hH
+  | _, _, .ite a b c, _, _, h, hf, hH => stepE_rule hP n ih h (.ite a b c) hf hH
+  | _, _, .forE a b c d, _, _, h, hf, hH => stepE_rule hP n ih h (.forE a b c d) hf hH
+  | _, _, .loop a, _, _, h, hf, hH => stepE_rule hP n ih h (.loop a) hf hH
+  | _, _, .brk, _, _, h, hf, hH => stepE_rule hP n ih h .brk hf hH
+  | _, _, .ret a, _, _, h, hf, hH => stepE_rule hP n ih h (.ret a) hf hH
+  | _, _, .print a, _, _, h, hf, hH => stepE_rule hP n ih h (.print a) hf hH
+  | _, _, .heap_new a b c, _, _, h, hf, hH => stepE_rule hP n ih h (.heap_new a b c) hf hH
+  | _, _, .heap_get a b, _, _, h, hf, hH => stepE_rule hP n ih h (.heap_get a b) hf hH
+  | _, _, .heap_set a b c, _, _, h, hf, hH => stepE_rule hP n ih h (.heap_set a b c) hf hH
+  | _, _, .heap_tag a, _, _, h, hf, hH => stepE_rule hP n ih h (.heap_tag a) hf hH
+  | _, _, .heap_isTag a, _, _, h, hf, hH => stepE_rule hP n ih h (.heap_isTag a) hf hH
+theorem stepE_dL {S : Sigs} {Γ : List VTy} {ρ : VTy} :
+    ∀ {es : List Expr} {ts : List VTy}, TypedL S Γ ρ es ts → True
+  | _, _, _ => trivial
+end
+
+theorem stepE {P : Prog} {S : Sigs} (hP : ProgTyped P S) (n : Nat)
+    (ih : ∀ m ≤ n, StmtE P S m ∧ StmtL P S m ∧ StmtF P S m) : StmtE P S (n + 1) :=
+  fun _ _ _ _ _ _ h ht hf hH => stepE_d hP n ih ht h hf hH
 
 theorem stepL {P : Prog} {S : Sigs} (n : Nat)
     (ih : ∀ m ≤ n, StmtE P S m ∧ StmtL P S m ∧ StmtF P S m) : StmtL P S (n + 1) := by

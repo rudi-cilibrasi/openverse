@@ -79,19 +79,27 @@ theorem litTys_sound : ∀ {vs : List Value} {ts : List VTy}, litTys vs = some t
     · simp at h
 end
 
-/-- In check mode, the type must be the expected one. -/
+/-- In check mode, the type must be below the expected one (#32), and the
+    result is the expected type. -/
 def expect : Option VTy → VTy → Option VTy
   | none, t => some t
-  | some τ, t => if τ = t then some t else none
+  | some τ, t => if t.sub τ then some τ else none
 
 theorem expect_sound {m : Option VTy} {t τ : VTy} (h : expect m t = some τ) :
-    τ = t ∧ ∀ τ', m = some τ' → τ = τ' := by
+    t.sub τ = true ∧ ∀ τ', m = some τ' → τ = τ' := by
   cases m with
-  | none => simp [expect] at h; subst h; simp
+  | none => simp [expect] at h; subst h; simp [VTy.sub_refl]
   | some τ' =>
     simp only [expect] at h; split at h
-    · simp only [Option.some.injEq] at h; subst h; subst_vars; simp
+    · next hs => simp only [Option.some.injEq] at h; subst h; simp [hs]
     · simp at h
+
+/-- What `expect` promises, for an expression of type `t`. -/
+theorem expect_typed {S : Sigs} {Γ : List VTy} {ρ : VTy} {e : Expr} {m : Option VTy} {t τ : VTy}
+    (h : expect m t = some τ) (ht : Typed S Γ ρ e t) :
+    Typed S Γ ρ e τ ∧ ∀ τ', m = some τ' → τ = τ' :=
+  let ⟨hs, hm⟩ := expect_sound h
+  ⟨.sub ht hs, hm⟩
 
 mutual
 /-- Bind type variables by first-order matching of `p` against `a` (no
@@ -119,42 +127,6 @@ def VTy.unboundL (acc : List (Nat × VTy)) : List VTy → Bool
   | [] => false
   | t :: ts => VTy.unbound acc t || VTy.unboundL acc ts
 end
-
-/-- `expect`, but a reference also has every type with more classes. -/
-def expectSub : Option VTy → VTy → Option VTy
-  | some (.ref us), .ref ts => if ts.all us.contains then some (.ref us) else none
-  | m, t => expect m t
-
-theorem expectSub_sound {m : Option VTy} {t τ : VTy} (h : expectSub m t = some τ) :
-    ((τ = t ∧ ∀ τ', m = some τ' → τ = τ') ∨
-      ∃ ts us, t = .ref ts ∧ τ = .ref us ∧ m = some τ ∧ ∀ u ∈ ts, u ∈ us) := by
-  unfold expectSub at h
-  split at h
-  · next us ts =>
-    split at h
-    · next hsub =>
-      simp only [Option.some.injEq] at h; subst h
-      simp only [List.all_eq_true, List.contains_iff_mem] at hsub
-      exact .inr ⟨ts, us, rfl, rfl, rfl, hsub⟩
-    · simp at h
-  · exact .inl (expect_sound h)
-
-/-- The type of `new t` in mode `m`: a reference to any classes including `t`. -/
-def expectNew : Option VTy → Nat → Option VTy
-  | some (.ref ts), t => if ts.contains t then some (.ref ts) else none
-  | some _, _ => none
-  | none, t => some (.ref [t])
-
-theorem expectNew_sound {m : Option VTy} {t : Nat} {τ : VTy} (h : expectNew m t = some τ) :
-    ∃ ts, τ = .ref ts ∧ t ∈ ts ∧ ∀ τ', m = some τ' → τ = τ' := by
-  unfold expectNew at h
-  split at h
-  · next ts =>
-    split at h
-    · next ht => simp only [Option.some.injEq] at h; subst h; exact ⟨ts, rfl, by simpa using ht, by simp⟩
-    · simp at h
-  · simp at h
-  · simp only [Option.some.injEq] at h; subst h; exact ⟨[t], rfl, by simp, by simp⟩
 
 /-- The type of field `k` of the classes `ts`, when they all have one, the
     same, without type variables (`FieldTy`). -/
@@ -201,7 +173,7 @@ def tc : Expr → Option VTy → Option VTy
   | .lit v, some τ => if hasTy [] v τ then some τ else none
   | .lit v, none => litTy v
   | .local i, m => match Γ[i]? with
-    | some t => expectSub m t
+    | some t => expect m t
     | none => none
   | .assign i e, m => match Γ[i]? with
     | some t => if (tc e (some t)).isSome then expect m t else none
@@ -243,7 +215,7 @@ def tc : Expr → Option VTy → Option VTy
   | .print e, m => if (tc e (some VTy.str)).isSome then expect m VTy.void else none
   | .heap (.new t) es, m => match S.classes[t]? with
     | some fs =>
-      if tcL es fs then expectNew m t else none
+      if tcL es fs then expect m (.ref [t]) else none
     | none => none
   | .heap (.get k) [e], m => match tc e none with
     | some (.ref ts) => match fieldTy S ts k with
@@ -431,7 +403,7 @@ theorem tcPrim_sound_of {op : Prim} {es : List Expr} {m τ} (ih : ∀ e ∈ es, 
   -- the two-int-argument operations
   have arith2 : ∀ {a b}, es = [a, b] →
       (if (tc S Γ ρ a (some .int)).isSome && (tc S Γ ρ b (some .int)).isSome then expect m .int else none)
-        = some τ → TypedL S Γ ρ es [.int, .int] ∧ τ = .int ∧ ∀ τ', m = some τ' → τ = τ' := by
+        = some τ → TypedL S Γ ρ es [.int, .int] ∧ VTy.int.sub τ = true ∧ ∀ τ', m = some τ' → τ = τ' := by
     intro a b hes hh
     subst hes
     split at hh
@@ -444,15 +416,14 @@ theorem tcPrim_sound_of {op : Prim} {es : List Expr} {m τ} (ih : ∀ e ∈ es, 
   | add | sub | mul | floorDiv | ceilDiv | quotient | modulo =>
     rcases es with _ | ⟨a, _ | ⟨b, _ | ⟨c, rest⟩⟩⟩ <;> simp only [tcPrim] at h <;> try (simp at h; done)
     all_goals
-      obtain ⟨hl, rfl, hm⟩ := arith2 rfl h
-      exact ⟨.prim hl (.arith (by simp)), hm⟩
+      obtain ⟨hl, hs, hm⟩ := arith2 rfl h
+      exact ⟨.sub (.prim hl (.arith (by simp))) hs, hm⟩
   | neg | abs =>
     rcases es with _ | ⟨a, _ | ⟨b, rest⟩⟩ <;> simp only [tcPrim] at h <;> try (simp at h; done)
     all_goals
       split at h
       · next hc =>
-        obtain ⟨rfl, hm⟩ := expect_sound h
-        exact ⟨.prim (.cons (chk (by simp) hc) .nil) (.unary (by simp)), hm⟩
+        exact expect_typed h (.prim (.cons (chk (by simp) hc) .nil) (.unary (by simp)))
       · simp at h
   | lt | le | gt | ge =>
     rcases es with _ | ⟨a, _ | ⟨b, _ | ⟨c, rest⟩⟩⟩ <;> simp only [tcPrim] at h <;> try (simp at h; done)
@@ -461,14 +432,12 @@ theorem tcPrim_sound_of {op : Prim} {es : List Expr} {m τ} (ih : ∀ e ∈ es, 
       · next ha =>
         split at h
         · next hb =>
-          obtain ⟨rfl, hm⟩ := expect_sound h
-          exact ⟨.prim (.cons (inf (by simp) ha) (.cons (chk (by simp) hb) .nil)) (.cmpInt (by simp)), hm⟩
+          exact expect_typed h (.prim (.cons (inf (by simp) ha) (.cons (chk (by simp) hb) .nil)) (.cmpInt (by simp)))
         · simp at h
       · next ha =>
         split at h
         · next hb =>
-          obtain ⟨rfl, hm⟩ := expect_sound h
-          exact ⟨.prim (.cons (inf (by simp) ha) (.cons (chk (by simp) hb) .nil)) (.cmpChar (by simp)), hm⟩
+          exact expect_typed h (.prim (.cons (inf (by simp) ha) (.cons (chk (by simp) hb) .nil)) (.cmpChar (by simp)))
         · simp at h
       · simp at h
   | eq | ne =>
@@ -609,16 +578,14 @@ theorem tcPrim_sound_of {op : Prim} {es : List Expr} {m τ} (ih : ∀ e ∈ es, 
     · next t ha =>
       split at h
       · next hb =>
-        obtain ⟨rfl, hm⟩ := expect_sound h
-        exact ⟨.prim (.cons (inf (by simp) ha) (.cons (chk (by simp) hb) .nil)) .index, hm⟩
+        exact expect_typed h (.prim (.cons (inf (by simp) ha) (.cons (chk (by simp) hb) .nil)) .index)
       · simp at h
     · simp at h
   | len =>
     rcases es with _ | ⟨a, _ | ⟨b, rest⟩⟩ <;> simp only [tcPrim] at h <;> try (simp at h; done)
     split at h
     · next t ha =>
-      obtain ⟨rfl, hm⟩ := expect_sound h
-      exact ⟨.prim (.cons (inf (by simp) ha) .nil) .len, hm⟩
+      exact expect_typed h (.prim (.cons (inf (by simp) ha) .nil) .len)
     · simp at h
   | arrSet =>
     rcases es with _ | ⟨a, _ | ⟨b, _ | ⟨c, _ | ⟨d, rest⟩⟩⟩⟩ <;> simp only [tcPrim] at h <;>
@@ -628,25 +595,22 @@ theorem tcPrim_sound_of {op : Prim} {es : List Expr} {m τ} (ih : ∀ e ∈ es, 
       split at h
       · next hc =>
         simp only [Bool.and_eq_true] at hc
-        obtain ⟨rfl, hm⟩ := expect_sound h
-        exact ⟨.prim (.cons (inf (by simp) ha) (.cons (chk (by simp) hc.1) (.cons (chk (by simp) hc.2) .nil)))
-          .arrSet, hm⟩
+        exact expect_typed h (.prim (.cons (inf (by simp) ha) (.cons (chk (by simp) hc.1)
+          (.cons (chk (by simp) hc.2) .nil))) .arrSet)
       · simp at h
     · simp at h
   | flatten =>
     rcases es with _ | ⟨a, _ | ⟨b, rest⟩⟩ <;> simp only [tcPrim] at h <;> try (simp at h; done)
     split at h
     · next t ha =>
-      obtain ⟨rfl, hm⟩ := expect_sound h
-      exact ⟨.prim (.cons (inf (by simp) ha) .nil) .flatten, hm⟩
+      exact expect_typed h (.prim (.cons (inf (by simp) ha) .nil) .flatten)
     · simp at h
   | range =>
     rcases es with _ | ⟨a, _ | ⟨b, _ | ⟨c, rest⟩⟩⟩ <;> simp only [tcPrim] at h <;> try (simp at h; done)
     split at h
     · next hc =>
       simp only [Bool.and_eq_true] at hc
-      obtain ⟨rfl, hm⟩ := expect_sound h
-      exact ⟨.prim (.cons (chk (by simp) hc.1) (.cons (chk (by simp) hc.2) .nil)) .range, hm⟩
+      exact expect_typed h (.prim (.cons (chk (by simp) hc.1) (.cons (chk (by simp) hc.2) .nil)) .range)
     · simp at h
   | tupGet k =>
     rcases es with _ | ⟨a, _ | ⟨b, rest⟩⟩ <;> simp only [tcPrim] at h <;> try (simp at h; done)
@@ -654,22 +618,18 @@ theorem tcPrim_sound_of {op : Prim} {es : List Expr} {m τ} (ih : ∀ e ∈ es, 
     · next ts ha =>
       split at h
       · next t hk =>
-        obtain ⟨rfl, hm⟩ := expect_sound h
-        exact ⟨.prim (.cons (inf (by simp) ha) .nil) (.tupGet hk), hm⟩
+        exact expect_typed h (.prim (.cons (inf (by simp) ha) .nil) (.tupGet hk))
       · simp at h
     · simp at h
   | toStr =>
     rcases es with _ | ⟨a, _ | ⟨b, rest⟩⟩ <;> simp only [tcPrim] at h <;> try (simp at h; done)
     split at h
     · next ha =>
-      obtain ⟨rfl, hm⟩ := expect_sound h
-      exact ⟨.prim (.cons (inf (by simp) ha) .nil) .toStrInt, hm⟩
+      exact expect_typed h (.prim (.cons (inf (by simp) ha) .nil) .toStrInt)
     · next ha =>
-      obtain ⟨rfl, hm⟩ := expect_sound h
-      exact ⟨.prim (.cons (inf (by simp) ha) .nil) .toStrChar, hm⟩
+      exact expect_typed h (.prim (.cons (inf (by simp) ha) .nil) .toStrChar)
     · next ha =>
-      obtain ⟨rfl, hm⟩ := expect_sound h
-      exact ⟨.prim (.cons (inf (by simp) ha) .nil) .toStrStr, hm⟩
+      exact expect_typed h (.prim (.cons (inf (by simp) ha) .nil) .toStrStr)
     · simp at h
   | fail =>
     rcases es with _ | ⟨a, rest⟩ <;> cases m <;> simp [tcPrim] at h
@@ -691,8 +651,7 @@ theorem tcHeap_sound_of {op : HeapOp} {es : List Expr} {m τ} (ih : ∀ e ∈ es
     · next fs hc =>
       split at h
       · next hes =>
-        obtain ⟨ts, rfl, ht, hm⟩ := expectNew_sound h
-        exact ⟨.heap_new hc ht (tcL_sound_of ih hes), hm⟩
+        exact expect_typed h (.heap_new hc (List.mem_singleton_self t) (tcL_sound_of ih hes))
       · simp at h
     · simp at h
   | get k =>
@@ -701,8 +660,7 @@ theorem tcHeap_sound_of {op : HeapOp} {es : List Expr} {m τ} (ih : ∀ e ∈ es
     · next ts he =>
       split at h
       · next τ' hf =>
-        obtain ⟨rfl, hm⟩ := expect_sound h
-        exact ⟨.heap_get (inf (by simp) he) (fieldTy_sound hf), hm⟩
+        exact expect_typed h (.heap_get (inf (by simp) he) (fieldTy_sound hf))
       · simp at h
     · simp at h
   | set k =>
@@ -713,9 +671,8 @@ theorem tcHeap_sound_of {op : HeapOp} {es : List Expr} {m τ} (ih : ∀ e ∈ es
       · next τ' hf =>
         split at h
         · next hv =>
-          obtain ⟨rfl, hm⟩ := expect_sound h
-          exact ⟨.heap_set (inf (by simp) he) (fieldTy_sound hf)
-            (typed_of_check (ih v (by simp)) hv), hm⟩
+          exact expect_typed h (.heap_set (inf (by simp) he) (fieldTy_sound hf)
+            (typed_of_check (ih v (by simp)) hv))
         · simp at h
       · simp at h
     · simp at h
@@ -723,15 +680,13 @@ theorem tcHeap_sound_of {op : HeapOp} {es : List Expr} {m τ} (ih : ∀ e ∈ es
     rcases es with _ | ⟨e, _ | ⟨_, _⟩⟩ <;> simp only [tc] at h <;> try (simp at h; done)
     split at h
     · next ts he =>
-      obtain ⟨rfl, hm⟩ := expect_sound h
-      exact ⟨.heap_tag (inf (by simp) he), hm⟩
+      exact expect_typed h (.heap_tag (inf (by simp) he))
     · simp at h
   | isTag us =>
     rcases es with _ | ⟨e, _ | ⟨_, _⟩⟩ <;> simp only [tc] at h <;> try (simp at h; done)
     split at h
     · next ts he =>
-      obtain ⟨rfl, hm⟩ := expect_sound h
-      exact ⟨.heap_isTag (inf (by simp) he), hm⟩
+      exact expect_typed h (.heap_isTag (inf (by simp) he))
     · simp at h
 
 end
@@ -771,17 +726,14 @@ theorem tc_sound_aux : ∀ (n : Nat) (e : Expr), sizeOf e < n → TcOK S Γ ρ e
     | «local» i =>
       simp only [tc] at h; split at h
       · next t hi =>
-        rcases expectSub_sound h with ⟨rfl, hm⟩ | ⟨ts, us, rfl, rfl, rfl, hsub⟩
-        · exact ⟨.local hi, hm⟩
-        · exact ⟨.local_sub hi hsub, by simp⟩
+        exact expect_typed h (.local hi)
       · simp at h
     | assign i e =>
       simp only [tc] at h; split at h
       · next t hi =>
         split at h
         · next hc =>
-          obtain ⟨rfl, hm⟩ := expect_sound h
-          exact ⟨.assign hi (typed_of_check (IH e (by simp <;> omega)) hc), hm⟩
+          exact expect_typed h (.assign hi (typed_of_check (IH e (by simp <;> omega)) hc))
         · simp at h
       · simp at h
     | seq a b =>
@@ -796,8 +748,7 @@ theorem tc_sound_aux : ∀ (n : Nat) (e : Expr), sizeOf e < n → TcOK S Γ ρ e
       · next ps t hf =>
         split at h
         · next hc =>
-          obtain ⟨rfl, hm⟩ := expect_sound h
-          exact ⟨.call _ hf (tcL_sound_of (fun e he => IH e (sizeOf_lt_of_mem_call he)) hc), hm⟩
+          exact expect_typed h (.call _ hf (tcL_sound_of (fun e he => IH e (sizeOf_lt_of_mem_call he)) hc))
         · simp at h
       · simp at h
     | ite c t e =>
@@ -884,8 +835,7 @@ theorem tc_sound_aux : ∀ (n : Nat) (e : Expr), sizeOf e < n → TcOK S Γ ρ e
       simp only [tc] at h; split at h
       · next hw =>
         obtain ⟨σ, hσ⟩ := typed_of_wt (IH b (by simp <;> omega)) hw
-        obtain ⟨rfl, hm⟩ := expect_sound h
-        exact ⟨.loop hσ, hm⟩
+        exact expect_typed h (.loop hσ)
       · simp at h
     | brk =>
       cases m with
@@ -905,8 +855,7 @@ theorem tc_sound_aux : ∀ (n : Nat) (e : Expr), sizeOf e < n → TcOK S Γ ρ e
     | print e =>
       simp only [tc] at h; split at h
       · next hc =>
-        obtain ⟨rfl, hm⟩ := expect_sound h
-        exact ⟨.print (typed_of_check (IH e (by simp <;> omega)) hc), hm⟩
+        exact expect_typed h (.print (typed_of_check (IH e (by simp <;> omega)) hc))
       · simp at h
     | prim op es =>
       simp only [tc] at h
@@ -920,26 +869,12 @@ end
 
 /-! ### Programs -/
 
-/-- `t` is a reference type with fewer classes than `u`. -/
-def VTy.refSub : VTy → VTy → Bool
-  | .ref ts, .ref us => ts.all us.contains
-  | _, _ => false
-
-theorem VTy.refSub_sound {t u : VTy} (h : t.refSub u = true) :
-    ∃ ts us, t = .ref ts ∧ u = .ref us ∧ ∀ x ∈ ts, x ∈ us := by
-  unfold VTy.refSub at h
-  split at h
-  · next ts us =>
-    simp only [List.all_eq_true, List.contains_iff_mem] at h
-    exact ⟨ts, us, rfl, rfl, h⟩
-  · simp at h
-
 mutual
 /-- `d` is a default expression of type `t` (`DefaultE S a Γ d t`). -/
 def checkDefault (S : Sigs) (a : Nat) (Γ : List VTy) : Expr → VTy → Bool
   | .lit v, t => hasTy [] v t
   | .local i, t => decide (i < a) && match Γ[i]? with
-    | some t' => decide (t' = t) || t'.refSub t
+    | some t' => t'.sub t
     | none => false
   | .prim .mkTup ds, .tup ts => checkDefaultL S a Γ ds ts
   | .heap (.new c) ds, .ref ts => ts.contains c && match S.classes[c]? with
@@ -960,12 +895,7 @@ theorem checkDefault_sound {S : Sigs} {a : Nat} {Γ : List VTy} : ∀ (d : Expr)
     simp only [checkDefault, Bool.and_eq_true, decide_eq_true_eq] at h
     obtain ⟨hi, h⟩ := h
     split at h
-    · next t' hΓ =>
-      simp only [Bool.or_eq_true, decide_eq_true_eq] at h
-      rcases h with rfl | hs
-      · exact .param hi hΓ
-      · obtain ⟨ts, us, rfl, rfl, hsub⟩ := VTy.refSub_sound hs
-        exact .sub (.param hi hΓ) hsub
+    · next t' hΓ => exact .sub (.param hi hΓ) h
     · simp at h
   | .prim op ds, t, h => by
     cases op <;> try (simp [checkDefault] at h; done)

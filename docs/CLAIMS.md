@@ -172,6 +172,14 @@ out of date. The proofs are in `OpenVerse/Core/`.
       Typed S Γ ρ e τ → Typed S (List.map (VTy.subst θ) Γ) (VTy.subst θ ρ) e (VTy.subst θ τ)
 ```
 
+## `hasTy_sub`: subtyping is sound: a value of a type is a value of every type above it
+
+`OpenVerse/Core/TypeSafety.lean`; axioms: [propext, Quot.sound]
+
+```lean
+@hasTy_sub : ∀ {Ξ : List Nat} (t u : VTy) (v : Value), t.sub u = true → hasTy Ξ v t = true → hasTy Ξ v u = true
+```
+
 ## `tc_sound`: the type checker is sound
 
 `OpenVerse/Core/TypeCheck.lean`; axioms: [propext, Classical.choice, Quot.sound]

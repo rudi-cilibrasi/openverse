@@ -118,6 +118,84 @@ example : checkDefault heapSigs 1 [.ref [0, 1], .ref [1]] (.local 0) (.ref [1]) 
 -- a default reads only parameters
 example : checkDefault heapSigs 1 [.ref [0, 1], .ref [0, 1]] (.local 1) (.ref [0, 1]) = false := by native_decide
 
+/-! ### Subtyping (#32) -/
+
+/-- ```verse
+    Make3(X:int):point3 = point3{X := X, Y := X + 1, Z := X + 2}
+    SumX(Ps:[]point):int =
+        var T:int = 0
+        for (P : Ps) { set T += P.X }
+        T
+    Show(P:point):void = Print("{P.X}")
+    Main():void =
+        Show(Make3(5))                    # a call result, widened
+        Ps:[]point = array{Make3(1), Make3(2)}
+        Print("{SumX(Ps)}")
+        Qs:[]point3 = array{Make3(10)}
+        Print("{SumX(Qs)}")               # []point3 is a []point
+        O:?point = option{Make3(7)}
+        if (Show(O?)) {}
+        if (Show(point3[Ps[0]])) {}       # a cast, widened
+    ``` -/
+def subDemo : Prog where
+  fns := [
+    { name := "Make3", arity := 1, nslots := 1, decides := false,
+      body := .heap (.new 1) [.local 0, p .add [.local 0, int 1], p .add [.local 0, int 2]] },
+    { name := "SumX", arity := 1, nslots := 3, decides := false,
+      body := .seq (.assign 1 (.heap (.new 0) [int 0, int 0]))
+        (.seq (.assign 2 (int 0))
+        (.seq (.forE 1 (.local 0) (.lit (.logic true))
+                (.assign 2 (p .add [.local 2, .heap (.get 0) [.local 1]])))
+          (.local 2))) },
+    { name := "Show", arity := 1, nslots := 1, decides := false,
+      body := printInt (.heap (.get 0) [.local 0]) },
+    { name := "Main", arity := 0, nslots := 3, decides := false,
+      body := .seq (.assign 0 (.lit (.arr []))) (.seq (.assign 1 (.lit (.arr []))) (.seq (.assign 2 (.lit .none))
+        (.seq (.call 2 [.call 0 [int 5]])
+        (.seq (.assign 0 (p .mkArr [.call 0 [int 1], .call 0 [int 2]]))
+        (.seq (printInt (.call 1 [.local 0]))
+        (.seq (.assign 1 (p .mkArr [.call 0 [int 10]]))
+        (.seq (printInt (.call 1 [.local 1]))
+        (.seq (.assign 2 (p .mkSome [.call 0 [int 7]]))
+        (.seq (.ite (.call 2 [p .query [.local 2]]) (.lit .void) (.lit .void))
+          (.ite (.call 2 [.heap (.isTag [1]) [p .index [.local 0, int 0]]]) (.lit .void) (.lit .void))))))))))) }]
+  main := 3
+
+def subSigs : Sigs :=
+  { fns := [([.int], .ref [1]), ([.arr (.ref [0, 1])], .int), ([.ref [0, 1]], .void), ([], .void)], classes }
+def subSlots : List (List VTy) :=
+  [[.int], [.arr (.ref [0, 1]), .ref [0, 1], .int], [.ref [0, 1]],
+   [.arr (.ref [0, 1]), .arr (.ref [1]), .opt (.ref [0, 1])]]
+
+example : subDemo.check = true := by native_decide
+example : subDemo.checkTypes subSigs subSlots = true := by native_decide
+example : outOf subDemo = some (.ok .void, "5\n3\n10\n7\n1\n") := by native_decide
+
+section
+/-- `tc` in `Main`'s context. -/
+def tcMain (e : Expr) (m : Option VTy) : Option VTy :=
+  tc subSigs [.arr (.ref [0, 1]), .arr (.ref [1]), .opt (.ref [0, 1])] .void e m
+
+-- a call result, a cast, an option and an array widen ...
+example : tcMain (.call 0 [int 1]) (some (.ref [0, 1])) = some (.ref [0, 1]) := by native_decide
+example : tcMain (.heap (.isTag [1]) [p .index [.local 0, int 0]]) (some (.ref [0, 1])) = some (.ref [0, 1]) := by
+  native_decide
+example : tcMain (.local 1) (some (.arr (.ref [0, 1]))) = some (.arr (.ref [0, 1])) := by native_decide
+example : tcMain (p .mkSome [.call 0 [int 1]]) (some (.opt (.ref [0, 1]))) = some (.opt (.ref [0, 1])) := by
+  native_decide
+-- ... but nothing narrows: a []point is not a []point3, a point3 result is not a `ref [0]`
+example : tcMain (.local 0) (some (.arr (.ref [1]))) = none := by native_decide
+example : tcMain (.call 0 [int 1]) (some (.ref [0])) = none := by native_decide
+-- an array updated with a `point` is no longer a []point3, so it cannot go back into `Qs`
+example : tcMain (.assign 1 (p .arrSet [.local 1, int 0, .heap (.new 0) [int 0, int 0]])) none = none := by
+  native_decide
+example : tcMain (.assign 0 (p .arrSet [.local 0, int 0, .heap (.new 0) [int 0, int 0]])) none =
+    some (.arr (.ref [0, 1])) := by native_decide
+-- tuples widen pointwise, with the same length
+example : (VTy.tup [.ref [1], .int]).sub (.tup [.ref [0, 1], .int]) = true := by native_decide
+example : (VTy.tup [.ref [1]]).sub (.tup [.ref [0, 1], .int]) = false := by native_decide
+end
+
 -- a class table with a type variable is refused (so `Typed.subst` holds)
 example : heapDemo.checkTypes { heapSigs with classes := [[.var 0], [.int, .int, .int]] } heapSlots = false := by
   native_decide

@@ -22,6 +22,7 @@ thms=(
   "TypeSafety:Eval.typed:preservation"
   "TypeSafety:Runs.typed:type safety of programs"
   "TypeSafety:Typed.subst:the substitution lemma: a typing with type variables holds at every instance"
+  "TypeSafety:hasTy_sub:subtyping is sound: a value of a type is a value of every type above it"
   "TypeCheck:tc_sound:the type checker is sound"
   "TypeCheck:Prog.checkTypes_sound:checkTypes establishes ProgTyped"
   "Control:Runs.no_control:break never escapes its loop"
