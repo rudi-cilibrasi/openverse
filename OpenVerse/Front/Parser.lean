@@ -664,6 +664,101 @@ partial def parseSpecs : PM (List String) := do
     else break
   return specs.toList
 
+/-- A parameter list after its `(`, through the `)`: the parameters, and the
+    type parameters of a `where` clause that ends it. -/
+partial def parseParamList : PM (Array SParam × Array TParam) := do
+  let mut ps := #[]
+  if !(← peekT).isSym ")" && !(← peekT).isKw "where" then
+    repeat
+      let named := (← peekT).isSym "?"
+      if named then bump
+      let pn ← expectIdent
+      expectSym ":"
+      let pty ← parseType
+      let dflt ← if (← peekT).isSym "=" then do bump; pure (some (← parseExpr 0)) else pure none
+      ps := ps.push { name := pn, ty := pty, named, default := dflt }
+      if (← peekT).isSym "," then bump else break
+  -- `where t₁:type, t₂:subtype(comparable)` ends the parameter list
+  let mut tps := #[]
+  if (← peekT).isKw "where" then
+    bump
+    repeat
+      let vt ← peekT
+      let v ← expectIdent
+      expectSym ":"
+      let kt ← peekT
+      let k ← expectIdent
+      let c ← if k == "subtype" then do
+          expectSym "("
+          let a ← expectIdent
+          expectSym ")"
+          pure a
+        else if k == "type" then pure "type"
+        else perr kt s!"expected 'type' or 'subtype(…)' for type parameter {v}, found {kt.tok.describe}"
+      tps := tps.push { pos := vt.pos, name := v, constraint := c }
+      if (← peekT).isSym "," then bump else break
+  expectSym ")"
+  return (ps, tps)
+
+/-- The body of a method defined at column `c`: on the following lines,
+    indented more than `c`, or inline. -/
+def parseFnBodyAt (c : Nat) : PM SExpr := do
+  let t ← peekT
+  if t.bol then
+    if t.col ≤ c then perr t "expected an indented method body"
+    return .block t.pos (← parseIndented t.col)
+  else if t.isSym "{" then bump; parseBraced t.pos
+  else parseExpr c
+
+/-- One item of a class body at column `c`: a field `[var] Name:type [= e]`
+    or a method `Name(params)<effects>:type = body`. -/
+partial def parseClassItem (c : Nat) :
+    PM (Sum (String × STy × Option SExpr × Bool) STop) := do
+  let t ← peekT
+  if t.isKw "block" then perr t "block: initialisers in classes are not supported yet (#11)"
+  if t.isKw "var" || (← peekT 1).isSym ":" then return .inl (← parseField c)
+  let name ← expectIdent
+  let pre ← parseSpecs
+  expectSym "("
+  let (ps, tps) ← parseParamList
+  let effs ← parseSpecs
+  expectSym ":"
+  let ret ← parseType
+  let a ← peekT
+  if a.isSym "=" || a.isSym ":=" then bump else perr a "expected '=' before the method body"
+  return .inr (.fn t.pos name ps.toList tps.toList (pre ++ effs) ret (← parseFnBodyAt c))
+
+/-- `class` (after the keyword): specifiers, then `:` + items or `{ items }`. -/
+partial def parseClassBody (p : Pos) (name : String) (tps : List TParam) : PM STop := do
+  let specs ← parseSpecs
+  let o ← peekT
+  if o.isSym "(" then perr o "class inheritance is not supported yet (#11 phase 2)"
+  let mut items := #[]
+  if o.isSym ":" then
+    bump
+    let n ← peekT
+    let c := n.col
+    items ← withBlock n do
+      let mut items := #[← parseClassItem c]
+      repeat
+        let a ← peekT
+        checkIndent a
+        if a.isSym ";" then bump; items := items.push (← parseClassItem c)
+        else if a.bol && a.col == c && !a.isEof then items := items.push (← parseClassItem c)
+        else break
+      return items
+  else if o.isSym "{" then
+    bump
+    repeat
+      let a ← peekT
+      if a.isSym "}" then bump; break
+      if a.isSym "," || a.isSym ";" then bump; continue
+      items := items.push (← parseClassItem 0)
+  else perr o "expected ':' or '{' after class"
+  let fields := items.toList.filterMap fun | .inl f => some f | .inr _ => none
+  let methods := items.toList.filterMap fun | .inr m => some m | .inl _ => none
+  return .classDef p name tps specs fields methods
+
 partial def parseTops : PM (List STop) := do
   let mut tops := #[]
   repeat
@@ -683,37 +778,19 @@ partial def parseTops : PM (List STop) := do
     let n ← peekT
     if n.isSym "(" then
       bump
-      let mut ps := #[]
-      if !(← peekT).isSym ")" && !(← peekT).isKw "where" then
-        repeat
-          let named := (← peekT).isSym "?"
-          if named then bump
-          let pn ← expectIdent
-          expectSym ":"
-          let pty ← parseType
-          let dflt ← if (← peekT).isSym "=" then do bump; pure (some (← parseExpr 0)) else pure none
-          ps := ps.push { name := pn, ty := pty, named, default := dflt }
-          if (← peekT).isSym "," then bump else break
-      -- `where t₁:type, t₂:subtype(comparable)` ends the parameter list
-      let mut tps := #[]
-      if (← peekT).isKw "where" then
-        bump
-        repeat
-          let vt ← peekT
-          let v ← expectIdent
-          expectSym ":"
-          let kt ← peekT
-          let k ← expectIdent
-          let c ← if k == "subtype" then do
-              expectSym "("
-              let a ← expectIdent
-              expectSym ")"
-              pure a
-            else if k == "type" then pure "type"
-            else perr kt s!"expected 'type' or 'subtype(…)' for type parameter {v}, found {kt.tok.describe}"
-          tps := tps.push { pos := vt.pos, name := v, constraint := c }
-          if (← peekT).isSym "," then bump else break
-      expectSym ")"
+      let (ps, tps) ← parseParamList
+      if (← peekT).isSym ":=" && (← peekT 1).isKw "class" then
+        -- `name(t:type, …) := class …`: a parametric class
+        bump; bump
+        if !tps.isEmpty then perr n "a parametric type takes its parameters without a where clause"
+        let tparams ← ps.toList.mapM fun prm => do
+          let c ← match prm.named, prm.default, prm.ty with
+            | false, none, .name "type" => pure "type"
+            | false, none, .app "subtype" [.name c] => pure c
+            | _, _, _ => perr n s!"a parameter of a parametric type is written {prm.name}:type or {prm.name}:subtype(…)"
+          pure ({ pos := t.pos, name := prm.name, constraint := c } : TParam)
+        tops := tops.push (← parseClassBody t.pos name tparams)
+        continue
       if (← peekT).isSym ":=" && (← peekT 1).isKw "struct" then
         -- `name(t:type, …) := struct …`: a parametric struct
         let d ← peekT
@@ -735,6 +812,9 @@ partial def parseTops : PM (List STop) := do
       let a ← peekT
       if a.isSym "=" || a.isSym ":=" then bump else perr a "expected '=' before the function body"
       tops := tops.push (.fn t.pos name ps.toList tps.toList (pre ++ effs) ret (← parseFnBody))
+    else if n.isSym ":=" && (← peekT 1).isKw "class" then
+      bump; bump
+      tops := tops.push (← parseClassBody t.pos name [])
     else if n.isSym ":=" then
       bump
       tops := tops.push (.const t.pos name none (← parseFnBody))

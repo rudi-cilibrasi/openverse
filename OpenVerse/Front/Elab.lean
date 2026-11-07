@@ -88,6 +88,8 @@ structure TyEnv where
   /-- Each struct: its fields in order (name, type, default value). The
       field types of a parametric struct mention its parameters as `Ty.param`. -/
   structs : List (String × List (String × Ty × Option SExpr)) := []
+  /-- The structs that are classes (Book of Verse ch. 10): not comparable. -/
+  classes : List String := []
   /-- The type parameters of each parametric struct (name, declared comparable). -/
   sparams : List (String × List (String × Bool)) := []
   /-- Each enum: its enumerators in order. -/
@@ -211,18 +213,19 @@ def maxTySize : Nat := 100000
 /-- Whether `=` and `<>` are defined on values of type `t`: every openverse
     type is comparable except a type parameter not declared
     `subtype(comparable)`, and the containers of one (Book of Verse §4.9). -/
-partial def Ty.comparable : Ty → Bool
+partial def Ty.comparable (env : TyEnv) : Ty → Bool
   | .param _ c => c
-  | .arr t | .opt t => t.comparable
-  | .tup ts => ts.all Ty.comparable
-  | .map k v => k.comparable && v.comparable
-  -- a field's type can only be non-comparable through a type argument
-  | .struct _ ts => ts.all Ty.comparable
+  | .arr t | .opt t => t.comparable env
+  | .tup ts => ts.all (Ty.comparable env)
+  | .map k v => k.comparable env && v.comparable env
+  -- a class is not comparable (only `<unique>` ones are); a struct field's
+  -- type can only be non-comparable through a type argument
+  | .struct n ts => !env.classes.contains n && ts.all (Ty.comparable env)
   | _ => true
 
-def isComparable : Ty → Bool
+def isComparable (env : TyEnv) : Ty → Bool
   | .never => false
-  | t => t.comparable
+  | t => t.comparable env
 
 structure Local where
   name    : String
@@ -266,6 +269,9 @@ structure Ctx where
       still come from the enclosing function's. -/
   dictBase : Nat := 0
   dictVars : List String := []
+  /-- In a method of class `c` (the function `c.M`): `c`. A bare name that is
+      not a local is then looked up among the fields and methods of `Self`. -/
+  selfClass : Option String := none
 
 structure ESt where
   nslots : Nat := 0
@@ -288,7 +294,15 @@ def fresh (t : Ty) : EM Nat :=
 def eerr (p : Pos) (msg : String) : EM α := throw s!"{p.show}: {msg}"
 
 /-- Why values of type `t` cannot be used where equality is needed. -/
-def notComparable (t : Ty) (what : String) : String :=
+def notComparable (env : TyEnv) (t : Ty) (what : String) : String :=
+  match t with
+  | .struct n _ =>
+    if env.classes.contains n then
+      s!"{what} must be comparable, and {t.show} is a class (only <unique> classes are comparable, which openverse does not support yet)"
+    else notComparable.params t what
+  | _ => notComparable.params t what
+where
+  params (t : Ty) (what : String) : String :=
   match t.params with
   | v :: _ => s!"{what} must be comparable, and {t.show} is not: declare {v}:subtype(comparable)"
   | [] => s!"{what} must be comparable, and {t.show} is not"
@@ -317,7 +331,7 @@ partial def resolveTy (env : TyEnv) (p : Pos) : STy → EM Ty
   | .tup ts => return .tup (← ts.mapM (resolveTy env p))
   | .map k v => do
     let kt ← resolveTy env p k
-    if !kt.comparable then eerr p (notComparable kt "a map key")
+    if !kt.comparable env then eerr p (notComparable env kt "a map key")
     return .map kt (← resolveTy env p v)
   | .app n args => do
     let ts ← args.mapM (resolveTy env p)
@@ -325,7 +339,7 @@ partial def resolveTy (env : TyEnv) (p : Pos) : STy → EM Ty
     | some ps =>
       if ps.length != ts.length then eerr p s!"{n} takes {ps.length} type argument(s), found {ts.length}"
       for ((v, c), t) in ps.zip ts do
-        if c && !t.comparable then eerr p (notComparable t s!"type argument {v} of {n}")
+        if c && !t.comparable env then eerr p (notComparable env t s!"type argument {v} of {n}")
       let t := Ty.struct n ts
       if t.sizeUpTo env (maxTySize + 1) > maxTySize then
         eerr p s!"the type {n}(…) is too large: its Verse Core representation has more than {maxTySize} nodes"
@@ -462,7 +476,14 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
     | _ =>
       match ctx.lookup n with
       | some l => return ⟨.local l.slot, l.ty⟩
-      | none => match ctx.sig? n with
+      | none =>
+        -- in a method, a field of `Self`
+        if let some c := ctx.selfClass then
+          if (ctx.types.fields c).any (·.1 == n) then
+            return ← elabE ctx (.member p (.ident p "Self") n) exp
+          if (ctx.sig? s!"{c}.{n}").isSome then
+            eerr p s!"'{n}' is a method: call it with {n}(…)"
+        match ctx.sig? n with
         | some s =>
           if s.isConst then return ⟨.call s.idx [], s.ret⟩
           else eerr p s!"'{n}' is a function: call it with {n}(…)"
@@ -640,6 +661,11 @@ partial def elabApp (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (brack
     match ctx.lookup name with
     | some l => elabIndexLike ctx p ⟨.local l.slot, l.ty⟩ args bracket
     | none =>
+    -- in a method, a method of `Self`, or a field of `Self` indexed
+    let selfMember? : Bool := match ctx.selfClass with
+      | some c => (ctx.sig? s!"{c}.{name}").isSome || (ctx.types.fields c).any (·.1 == name)
+      | none => false
+    if selfMember? then elabApp ctx p (.member p (.ident p "Self") name) args bracket exp else
     match name with
     | "Print" =>
       let es ← elabArgs ctx p args [Ty.string]
@@ -716,7 +742,23 @@ partial def elabApp (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (brack
           let call := Expr.call s.idx (slots.toList.map fun o => Expr.local o.get!)
           return ⟨steps.toList.foldr Expr.seq call, s.ret⟩
       | none => eerr p s!"unknown function '{name}'"
-  | .member _ obj m => elabMethod ctx p (← elabE ctx obj none) m args bracket
+  | .member mp obj m =>
+    let r ← elabE ctx obj none
+    match r.ty with
+    | .struct c targs =>
+      if ctx.types.classes.contains c && (ctx.sig? s!"{c}.{m}").isSome then
+        -- `Obj.M(…)`: the receiver is evaluated first, then passed as `Self`
+        let slot ← fresh r.ty
+        let recv := s!"$recv{slot}"
+        let ctx' := { ctx with locals := { name := recv, slot, ty := r.ty, mutable := false } :: ctx.locals }
+        let rc ← elabApp ctx' p (.ident mp s!"{c}.{m}") (.ident mp recv :: args) bracket exp
+        return ⟨.seq (.assign slot r.e) rc.e, rc.ty⟩
+      else if (ctx.types.fields c targs).any (·.1 == m) then
+        -- `S.F[i]`, `S.F(k)`: a field, indexed
+        elabIndexLike ctx p (← elabMember ctx p r m) args bracket
+      else if ctx.types.classes.contains c then eerr p s!"class {c} has no method '{m}'"
+      else eerr p s!"struct {c} has no field '{m}' (structs have no methods)"
+    | _ => elabMethod ctx p r m args bracket
   | _ => elabIndexLike ctx p (← elabE ctx f none) args bracket
 
 /-- A call of a generic function. Its type arguments are inferred by matching
@@ -770,7 +812,7 @@ partial def elabGenericCall (ctx : Ctx) (p : Pos) (s : Sig) (args : List SExpr) 
   for (v, cmp) in s.tparams do
     let some t := σ.lookup v
       | eerr p s!"cannot infer type parameter {v} of {s.name} from the arguments of this call"
-    if cmp && !t.comparable then eerr p (notComparable t s!"type parameter {v} of {s.name}")
+    if cmp && !t.comparable ctx.types then eerr p (notComparable ctx.types t s!"type parameter {v} of {s.name}")
     targs := targs.push t
   -- the hidden arguments: a value of each type argument
   let dicts := targs.toList.map (witness ctx.types ctx.dictBase ctx.dictVars)
@@ -809,7 +851,7 @@ partial def elabMethod (ctx : Ctx) (p : Pos) (r : R) (m : String) (args : List S
     let chk := Expr.seq (p2 .le (int 0) (.local tlo)) (p2 .le (.local tlo) len)
     return ⟨.seq start (.seq (.assign tlo es[0]!) (.seq chk (← slice (.local tlo) len))), r.ty⟩
   | "Find", [x] =>
-    if !t.comparable then eerr p (notComparable t "the element type of Find")
+    if !t.comparable ctx.types then eerr p (notComparable ctx.types t "the element type of Find")
     let rx ← elabE ctx x (some t)
     let tx ← fresh t
     let ti ← fresh .int
@@ -859,9 +901,9 @@ partial def elabCmp (ctx : Ctx) (p : Pos) (a : SExpr) (rest : List (String × SE
     | "=" => .eq | "<>" => .ne | "<" => .lt | "<=" => .le | ">" => .gt | _ => .ge
   let checkTys (op : String) (ta tb : Ty) : EM Unit := do
     if op == "=" || op == "<>" then
-      if !isComparable ta || !isComparable tb then
-        if !ta.comparable then eerr p (notComparable ta s!"an operand of '{op}'")
-        if !tb.comparable then eerr p (notComparable tb s!"an operand of '{op}'")
+      if !isComparable ctx.types ta || !isComparable ctx.types tb then
+        if !ta.comparable ctx.types then eerr p (notComparable ctx.types ta s!"an operand of '{op}'")
+        if !tb.comparable ctx.types then eerr p (notComparable ctx.types tb s!"an operand of '{op}'")
         eerr p "these values cannot be compared"
     else if !((ta == .int && tb == .int) || (ta == .char && tb == .char)) then
       eerr p s!"'{op}' compares ints or chars, found {ta.show} and {tb.show}"
@@ -1233,7 +1275,7 @@ partial def elabMapLit (ctx : Ctx) (p : Pos) (entries : List (SExpr × SExpr)) (
     let rk0 ← elabE ctx k0 kt?
     let rv0 ← elabE ctx v0 vt?
     let kt := kt?.getD rk0.ty
-    if !kt.comparable then eerr p (notComparable kt "a map key")
+    if !kt.comparable ctx.types then eerr p (notComparable ctx.types kt "a map key")
     let vt := vt?.getD rv0.ty
     let mut steps : Array Expr := #[]
     let mut slots : Array (Nat × Nat) := #[]
@@ -1326,13 +1368,40 @@ def checkTParams (env : TyEnv) (tps : List TParam) : Except String (List (String
 
 /-- Elaborate a parsed program into a Verse Core program that passes `Prog.check`
     and `Prog.checkTypes`. -/
-def elabProgram (allTops : List STop) : Except String Compiled := do
+def elabProgram (allTops0 : List STop) : Except String Compiled := do
+  -- a class (phase 1, #14) is a struct, and each method `M` of class `c` a
+  -- function `c.M` whose first parameter is `Self`, generic over the class's
+  -- type parameters and then its own
+  let mut classes : Array String := #[]
+  let mut expanded : Array STop := #[]
+  for t in allTops0 do
+    match t with
+    | .classDef p n tps specs fields methods =>
+      for sp in specs do
+        if ["unique", "abstract", "castable", "persistable", "final_super"].contains sp then
+          throw s!"{p.show}: <{sp}> classes are not supported yet (#11)"
+      for (f, _, _, isVar) in fields do
+        if isVar then
+          throw s!"{p.show}: var field '{f}': mutable class fields need reference semantics, not supported yet (#11 phase 3)"
+      classes := classes.push n
+      expanded := expanded.push (.const p n none (.structDef p tps fields))
+      let selfTy : STy := if tps.isEmpty then .name n else .app n (tps.map fun tp => STy.name tp.name)
+      for m in methods do
+        match m with
+        | .fn mp mn ps mtps effs ret body =>
+          if (fields.any (·.1 == mn)) then throw s!"{mp.show}: '{mn}' is both a field and a method of {n}"
+          if ps.any (·.name == "Self") then throw s!"{mp.show}: a method parameter cannot be called Self"
+          expanded := expanded.push
+            (.fn mp s!"{n}.{mn}" ({ name := "Self", ty := selfTy } :: ps) (tps ++ mtps) effs ret body)
+        | _ => pure ()
+    | t => expanded := expanded.push t
+  let allTops := expanded.toList
   -- the type definitions: `name := struct …` and `name := enum …`
   let isTypeDef : STop → Bool
     | .const _ _ none (.structDef ..) | .const _ _ none (.enumDef ..) => true
     | _ => false
   let tops := allTops.filter (!isTypeDef ·)
-  let mut env : TyEnv := {}
+  let mut env : TyEnv := { classes := classes.toList }
   for t in allTops do
     match t with
     | .const _ n none (.enumDef _ vals) => env := { env with enums := env.enums ++ [(n, vals)] }
@@ -1357,6 +1426,8 @@ def elabProgram (allTops : List STop) : Except String Compiled := do
     | _ => pure ()
   env := { env with structs := structs.toList }
   if let some n := env.recursiveStruct? then
+    if classes.contains n then
+      throw s!"class {n} contains itself (recursive classes need references, not supported yet: #11 phase 3)"
     throw s!"struct {n} contains itself (recursive struct types are not supported)"
   -- generic functions (those with a `where` clause) are numbered after the
   -- other functions and constants
@@ -1364,7 +1435,7 @@ def elabProgram (allTops : List STop) : Except String Compiled := do
     | .fn _ _ _ (_ :: _) .. => true
     | _ => false
   let generics := tops.filter isGeneric
-  let names := tops.map fun | .fn _ n .. => n | .const _ n .. => n
+  let names := tops.map fun | .fn _ n .. => n | .const _ n .. => n | .classDef _ n .. => n
   let tops := tops.filter (!isGeneric ·)
   for (n, i) in names.zip (List.range names.length) do
     if names.take i |>.contains n then throw s!"'{n}' is defined twice (openverse v1 has no overloading)"
@@ -1395,6 +1466,7 @@ def elabProgram (allTops : List STop) : Except String Compiled := do
         | some t => do let (rt, _) ← (resolveTy env p t).run {}; pure rt
         | none => pure .never   -- inferred below
       sigs := sigs.push { idx, name := n, params := [], ret := rt, decides := false, isConst := true }
+    | .classDef .. => pure ()   -- expanded above
   -- the signatures of the generic functions, over their type parameters
   let mut gsigs : Array Sig := #[]
   for (top, gidx) in generics.zip (List.range generics.length) do
@@ -1474,7 +1546,10 @@ def elabProgram (allTops : List STop) : Except String Compiled := do
       if ps.take i |>.any (·.name == prm.name) then throw s!"{p.show}: duplicate parameter '{prm.name}'"
     let ctx : Ctx := { sigs := allSigs, sigProg, locals := locals.reverse, types := env,
                        canFail := decides, retTy := ret, dictBase := ps.length,
-                       dictVars := tps.map (·.1) }
+                       dictVars := tps.map (·.1),
+                       selfClass := match name.splitOn "." with
+                         | [c, _] => some c
+                         | _ => none }
     let hidden := tps.map fun (v, c) => Ty.param v c
     let arity := ps.length + hidden.length
     let ((r, _), st) ← (elabStmt ctx body (some ret)).run
@@ -1502,6 +1577,7 @@ def elabProgram (allTops : List STop) : Except String Compiled := do
       fns := fns.push { name := n, arity := 0, nslots := st.nslots, decides := false,
                         body := initPrefix 0 tys e }
       slotTys := slotTys.push tys
+    | .classDef .. => pure ()   -- expanded above
   -- each generic function is elaborated once, with its type parameters
   -- opaque, as Verse checks it, into one Verse Core function whose types
   -- mention type variables; `Prog.checkTypes` checks it once, for every
