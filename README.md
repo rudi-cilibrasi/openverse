@@ -40,7 +40,8 @@ safety depend on are proved with **QuickProof** (VST + CompCert in Coq).
 | `optionE_none`, `optionE_some`, `orE_right`, `logicE_ne_fail` | `Core/Derived.lean` | `option{}`, `or` and `logic{}` behave as the book says, including rollback |
 | `Eval.no_fail`, `call_no_fail`, `Runs.no_fail` | `Core/Effects.lean` | **`<decides>` soundness**: a function without `<decides>` never fails |
 | `Eval.scoped_ok`, `Runs.scoped_ok` | `Core/Scoping.lean` | a program that the C loader accepts never raises a slot or call error, and frames keep their size |
-| `Eval.typed`, `Runs.typed` | `Core/TypeSafety.lean` | **type safety**: a typed program never raises a type error, and `Main` returns a value of its declared type |
+| `Eval.typed`, `Runs.typed` | `Core/TypeSafety.lean` | **type safety**: a typed program never raises a type error, and `Main` returns a value of its declared type. Types may contain type variables, and each call instantiates its callee's |
+| `Typed.subst` | `Core/TypeSafety.lean` | **the substitution lemma**: a typing with type variables holds at every instance, so a generic function is checked once, not once per instantiation |
 | `tc_sound`, `Prog.checkTypes_sound` | `Core/TypeCheck.lean` | the bidirectional type checker that the front end runs on every program it emits is sound |
 | `Prog.check_ok` | `Core/Check.lean` | `Prog.check` establishes the hypotheses of `<decides>` soundness and scoping |
 | `Eval.no_control`, `Runs.no_control` | `Core/Control.lean` | a `break` never escapes its loop (no control errors) |

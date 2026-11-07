@@ -1,6 +1,6 @@
 # Parametric functions (Book of Verse, Types: where clauses). Each generic
-# function is checked once with its type parameters opaque, then elaborated
-# once per instantiation.
+# function is checked once with its type parameters opaque, and compiled to
+# one Verse Core function with type variables.
 
 Identity(X:t where t:type):t = X
 
@@ -29,9 +29,17 @@ Reverse(Items:[]t where t:type):[]t =
         set Out = array{X} + Out
     Out
 
-# recursion within one instance
+# recursion at the same type
 Repeat(X:t, N:int where t:type):[]t =
     if (N <= 0) then array{} else array{X} + Repeat(X, N - 1)
+
+# polymorphic recursion: each call is at a larger type
+Depth(X:t, N:int where t:type):int =
+    if (N > 0) then 1 + Depth((X, X), N - 1) else 0
+
+Flatten(X:t, N:int where t:type):[]t =
+    if (N <= 0) then array{X}
+    else for (P : Flatten((X, X), N - 1), Y : array{P(0), P(1)}) { Y }
 
 # generic code calling generic code
 Twice(X:t where t:type):tuple(t, t) = Combine(Identity(X), X)
@@ -65,7 +73,7 @@ Checked(X:t, Ok:int where t:type):t =
 
 Log():void = Print("logged")
 
-# instances are the generically checked body: = against a literal means the
+# a generic body is checked and compiled once: = against a literal means the
 # same at every type argument
 IsTrue(X:t where t:subtype(comparable))<decides>:void = X = true
 
@@ -95,7 +103,7 @@ Main():void =
     if (not Find[array{1, 2, 3}, 7]) then Print("no 7")
     if (Contains[array{point{X := 1}, point{Y := 2}}, point{Y := 2}]) then Print("found a point")
     if (F := First[array{10, 20, 30}], L := Last[array{10, 20, 30}]) then Print("{F} .. {L}")
-    if (not First[Reverse(Repeat(1, 0))]) then Print("an empty instance")
+    if (not First[Reverse(Repeat(1, 0))]) then Print("an empty array")
     Print(ShowInts(Reverse(array{1, 2, 3, 4})))
     Print(Reverse("stressed"))
     for (P : Pairs(array{5, 6})) { Print("{P(0)}{P(1)}") }
@@ -115,7 +123,10 @@ Main():void =
     if (IsTrue[true]) then Print("true is true")
     if (not IsTrue[1], not IsTrue[option{true}]) then Print("1 and an option are not")
     Print("{Answer} {Names.Length}")
-    # an instance that fails rolls back like any <decides> call
+    Print("depth {Depth('x', 10)}, {Flatten(7, 3).Length} leaves")
+    # deeply nested calls: the Core checker checks each argument once
+    Print("{Identity(Identity(Identity(Identity(Identity(Identity(Identity(Identity(Identity(Identity(Identity(Identity(Identity(Identity(Identity(Identity(Identity(Identity(Identity(Identity(Identity(Identity(Identity(Identity(Identity(Identity(Identity(Identity(Identity(Identity(30))))))))))))))))))))))))))))))}")
+    # a failing generic call rolls back like any <decides> call
     var Count:int = 0
     if (set Count += 1, First[Repeat(0, 0)]) then Print("unreachable")
     Print("Count = {Count}")

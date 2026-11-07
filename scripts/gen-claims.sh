@@ -21,6 +21,7 @@ thms=(
   "Scoping:Eval.scoped_ok:well-scoped programs raise no slot or call error and keep frame sizes"
   "TypeSafety:Eval.typed:preservation"
   "TypeSafety:Runs.typed:type safety of programs"
+  "TypeSafety:Typed.subst:the substitution lemma: a typing with type variables holds at every instance"
   "TypeCheck:tc_sound:the type checker is sound"
   "TypeCheck:Prog.checkTypes_sound:checkTypes establishes ProgTyped"
   "Control:Runs.no_control:break never escapes its loop"

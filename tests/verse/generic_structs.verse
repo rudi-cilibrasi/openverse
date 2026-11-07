@@ -39,6 +39,26 @@ Put(K:keyed(k, v), Key:k, Value:v where k:subtype(comparable), v:type):keyed(k, 
 
 Firsts(Ps:[]pair(t, u) where t:type, u:type):[]t = for (P : Ps) { P.First }
 
+# polymorphic recursion through a parametric struct: d(t), d(d(t)), …
+d(t:type) := struct:
+    A:t
+    B:t
+
+Nest(X:t, N:int where t:type):int =
+    if (N > 0) then 1 + Nest(d(t){A := X, B := X}, N - 1) else 0
+
+# a field default that calls a generic function, constructed in generic code
+# with type parameter names different from the struct's
+Empty(N:int where e:type):[]e = array{}
+
+listing(a:type, b:type) := struct:
+    Firsts:[]a = Empty(0)
+    Seconds:[]b = Empty(0)
+
+MakeListing(X:b, Y:a where a:type, b:type):listing(b, a) =
+    L := listing(b, a){Firsts := array{X}}
+    L
+
 Main():void =
     P := pair(int, string){First := 1, Second := "one"}
     Print("{P.First} {P.Second}")
@@ -69,3 +89,6 @@ Main():void =
     var Cache:[pair(int, int)]string = map{}
     set Cache[MakePair(1, 2)] = "one-two"
     if (V := Cache[pair(int, int){First := 1, Second := 2}]) then Print(V)
+    Print("nested {Nest(1, 12)} deep")
+    Li := MakeListing("x", 7)
+    Print("{Li.Firsts.Length} {Li.Seconds.Length}")
