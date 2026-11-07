@@ -126,6 +126,20 @@ fuzzer (`scripts/fuzz-front.sh`) mutates real sources to look for such
 rejections and for crashes. It found one, a stack overflow on recursive
 structs, now rejected.
 
+## Modules: a renaming before elaboration
+
+Modules (#112) never reach Verse Core. The parser flattens
+`name := module:` into definitions of qualified names (`A::B::F`). It
+leaves markers for the modules, their `<public>` members and their
+`using{M}`s. `Front/Modules.lean` then rewrites every reference by lexical
+scope. It walks from the definition's module outward; at each scope it
+looks first at the scope's own definitions, then at the modules opened
+there. It also checks visibility, and that no binder shadows a module or a
+member. Elaboration's own shadowing check can't do that second check: after
+flattening, a local `X` and the member `m::X` have different names. The
+elaborator sees an ordinary flat program, so nothing behind it changes:
+Core, the checks, the proofs and the C runtime.
+
 ## Rationals: helpers written in Verse
 
 A `rational` (#116) is a front-end type whose Verse Core form is the tuple

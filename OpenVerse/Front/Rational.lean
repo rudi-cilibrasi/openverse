@@ -15,8 +15,12 @@ import OpenVerse.Front.Parser
 
 namespace OpenVerse.Front
 
-/-- The helpers' names; each becomes `$name`, which no program can write. -/
-def ratNames : List String := ["ratGcd", "ratMake", "ratLt"]
+/-- The helpers' names, and their parameters' and locals' (which must not
+    collide with a program's definitions): each becomes `$name`, which no
+    program can write. -/
+def ratNames : List String :=
+  ["ratGcd", "ratMake", "ratLt", "A", "B", "D", "G", "N", "P", "Q", "R", "S", "X", "Y",
+   "Less", "Q1", "Q2", "R1", "R2"]
 
 def ratPrelude : String := "
 ratGcd(A:int, B:int):int =
