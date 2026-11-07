@@ -613,24 +613,17 @@ partial def protoValue (env : TyEnv) (done : List (String × Nat)) : Ty → Opti
     else ((env.fields n ts).mapM fun (f : String × Ty × Option SExpr) => protoValue env done f.2.1).map .tup
   | .param .. => none
 
-/-- One prototype per concrete class whose fields can be given (#37), in an
-    order where each refers only to earlier ones: their class, tag and
-    fields. -/
-def TyEnv.makeProtos (env : TyEnv) : List (String × Nat × List Value) := Id.run do
+/-- One prototype per concrete class (#37), in definition order: its class,
+    tag and fields. A field of a class type refers to a prototype of a class
+    below it, wherever that is (prototypes may form cycles, so classes that
+    require each other have them too). -/
+def TyEnv.makeProtos (env : TyEnv) : List (String × Nat × List Value) :=
   let concrete := env.classes.filter fun d =>
     let i := env.info d; env.isRefClass d && !i.isIface && !i.isAbstract
-  let mut out : Array (String × Nat × List Value) := #[]
-  let mut done : List (String × Nat) := []
-  for _ in [0:concrete.length + 1] do
-    let mut progress := false
-    for d in concrete do
-      if (done.lookup d).isSome then continue
-      if let some vs := (env.fields d).mapM fun (f : String × Ty × Option SExpr) => protoValue env done f.2.1 then
-        done := done ++ [(d, out.size)]
-        out := out.push (d, env.tagOf d, vs)
-        progress := true
-    if !progress then break
-  return out.toList
+  let addrs := concrete.zipIdx
+  concrete.filterMap fun d =>
+    ((env.fields d).mapM fun (f : String × Ty × Option SExpr) => protoValue env addrs f.2.1).map
+      fun vs => (d, env.tagOf d, vs)
 
 /-- Whether a Verse Core type mentions a reference. -/
 partial def _root_.OpenVerse.VTy.hasRef : VTy → Bool

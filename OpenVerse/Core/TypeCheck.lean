@@ -238,6 +238,8 @@ mutual
     up to subtyping. -/
 def tc : Expr → Option VTy → Option VTy
   | .lit v, some τ => if hasTy S.protos v τ then some τ else none
+  -- a reference literal: to a prototype (#37)
+  | .lit (.ref a), none => S.protos[a]?.map fun t => .ref [t]
   | .lit v, none => litTy v
   | .local i, m => match Γ[i]? with
     | some t => expect m t
@@ -828,7 +830,13 @@ theorem tc_sound_aux : ∀ (n : Nat) (e : Expr), sizeOf e < n → TcOK S Γ ρ e
     cases e with
     | lit v =>
       cases m with
-      | none => simp only [tc] at h; exact ⟨.lit (hasTy_mono List.nil_prefix _ _ (litTy_sound h)), by simp⟩
+      | none =>
+        cases v with
+        | ref a =>
+          simp only [tc] at h
+          obtain ⟨t, ht, rfl⟩ := Option.map_eq_some_iff.mp h
+          exact ⟨.lit (by simp [hasTy, ht]), by simp⟩
+        | _ => simp only [tc] at h; exact ⟨.lit (hasTy_mono List.nil_prefix _ _ (litTy_sound h)), by simp⟩
       | some τ' =>
         simp only [tc] at h; split at h
         · next hv => simp only [Option.some.injEq] at h; subst h; exact ⟨.lit hv, by simp⟩
