@@ -1206,10 +1206,11 @@ partial def elabCmp (ctx : Ctx) (p : Pos) (a : SExpr) (rest : List (String × SE
         if !ta.comparable ctx.types then eerr p (notComparable ctx.types ta s!"an operand of '{op}'")
         if !tb.comparable ctx.types then eerr p (notComparable ctx.types tb s!"an operand of '{op}'")
         eerr p "these values cannot be compared"
-      -- a char32 and an enum are ints in Verse Core: compared with another
-      -- type, they would equal an int of their code or index
-      let intRep : Ty → Bool := fun | .char32 | .enum _ => true | _ => false
-      if !(ta == tb) && ta != .never && tb != .never && (intRep ta || intRep tb) then
+      -- different types with the same Verse Core type (a char32 or an enum
+      -- and an int, two structs with the same fields, also inside
+      -- containers) would compare equal there
+      if !(ta == tb) && ta != .never && tb != .never &&
+          ta.toVTy ctx.types == tb.toVTy ctx.types then
         eerr p s!"'{op}' compares values of different types, {ta.show} and {tb.show}"
     else if !((ta == .int && tb == .int) || (ta == .char && tb == .char) || (ta == .char32 && tb == .char32)) then
       eerr p s!"'{op}' compares ints, chars or char32s, found {ta.show} and {tb.show}"

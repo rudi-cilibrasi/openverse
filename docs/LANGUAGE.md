@@ -273,9 +273,10 @@ literals). It is an `int` in Verse Core, so it needs no new value, and the
 proofs and the C runtime are unchanged. `=`, `<>`, `<`, `<=`, `>`, `>=` and
 `case` work on it, and it has no arithmetic. `ToString` and string
 interpolation encode it as UTF-8, its one to four bytes, by code that the
-elaborator generates (Core has no conversion from int to char). A `char32`
-or an enum compared with a value of another type is an error, since both
-are ints in Core and would equal an int of their code or index. A
+elaborator generates (Core has no conversion from int to char). `=` and `<>`
+between values of different types that are the same in Core are an error
+(a `char32` or an enum and an `int`, two structs with the same fields, or
+containers of such), since they would compare equal there. A
 non-ASCII character in quotes is refused, with the `0u` literal to write
 instead: the spec's CharLit is ASCII.
 
