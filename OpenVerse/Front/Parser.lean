@@ -851,6 +851,48 @@ def parseFnBodyAt (c : Nat) : PM SExpr := do
   else if t.isSym "{" then bump; parseBraced t.pos
   else parseExpr c
 
+/-- An item of a constructor function's body (Book of Verse ch. 10): a field
+    initializer `F := e`, `let:` declarations, a `block:` clause, or a
+    delegation `D<constructor>(args)` to another constructor of the class or
+    of a class above it. A `let:` is `$let(block)`, a delegation the call of
+    `$ctor:D`. -/
+partial def parseCtorItem (c : Nat) : PM SExpr := do
+  let t ← peekT
+  if t.isKw "let" && (← peekT 1).isSym ":" then
+    bump
+    return .app t.pos (.ident t.pos "$let") [← parseBody c] false
+  if let some d := t.identName? then
+    if (← peekT 1).isSym "<" && (← peekT 2).isKw "constructor" && (← peekT 3).isSym ">" then
+      bump; bump; bump; bump
+      let a ← peekT
+      if a.isSym "(" then bump; return .app t.pos (.ident t.pos s!"$ctor:{d}") (← parseArgs ")") false
+      if a.isSym "[" then bump; return .app t.pos (.ident t.pos s!"$ctor:{d}") (← parseArgs "]") true
+      perr a s!"expected the arguments of {d}<constructor>"
+  match ← parseExpr c with
+  | e@(.decl _ _ none false _) => return e
+  | e@(.block ..) => return e
+  | _ => perr t "a constructor's body has field initializers F := e, let:, block: and delegations D<constructor>(…)"
+
+/-- The items of a constructor function's body, after its class name. -/
+partial def parseCtorBody (stop : Nat) : PM (List SExpr) := do
+  let t ← peekT
+  if !t.isSym ":" then perr t s!"expected ':' after the constructor's class, found {t.tok.describe}"
+  bump
+  let n ← peekT
+  if !n.bol || n.col ≤ stop then perr n "expected the constructor's body, indented"
+  let c := n.col
+  withBlock n do
+    let mut items := #[← parseCtorItem c]
+    repeat
+      let t ← peekT
+      checkIndent t
+      if t.isSym ";" then bump; items := items.push (← parseCtorItem c)
+      else if t.isEof then break
+      else if t.bol && t.col == c then items := items.push (← parseCtorItem c)
+      else if t.bol && t.col > c then perr t "unexpected indentation"
+      else break
+    return items.toList
+
 /-- One item of a class body at column `c`: a field `[var] Name:type [= e]`
     or a method `Name(params)<effects>:type = body`. -/
 partial def parseClassItem (c : Nat) :
@@ -974,7 +1016,19 @@ partial def parseTops : PM (List STop) := do
       bump
       let (ps, tps) ← parseParamList
       if pre.contains "constructor" then
-        perr n "constructor functions are not supported yet (#11)"
+        -- `Name<constructor>(params)<effects> := cls:` and its items (#11):
+        -- an `fn` with the effect `$constructor:cls`, expanded with the classes
+        let effs ← parseSpecs
+        if !(← peekT).isSym ":=" then perr (← peekT) "expected ':=' and the class after a constructor's parameters"
+        bump
+        let ct ← peekT
+        let cls ← expectIdent
+        if (← peekT).isSym "(" then
+          perr (← peekT) "constructor functions of parametric classes are not supported yet"
+        let items ← parseCtorBody t.col
+        tops := tops.push (.fn t.pos name ps.toList tps.toList
+          ((pre.filter (· != "constructor")) ++ effs ++ [s!"$constructor:{cls}"]) (.name cls) (.block ct.pos items))
+        continue
       if (← peekT).isSym ":=" && ((← peekT 1).isKw "class" || (← peekT 1).isKw "interface") then
         -- `name(t:type, …) := class …`: a parametric class (or interface, #53)
         let isIface := (← peekT 1).isKw "interface"

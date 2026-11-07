@@ -236,6 +236,19 @@ circle := class(shape, labelled):
     dispatch, also inside a method; `(super:)` uses the same rule.
   - An implementation must have the signature of every declaration it
     satisfies.
+- **Constructor functions** (Book of Verse ch. 10). A constructor is written
+  `MakeP<constructor>(N:string)<effects> := player:` followed by indented
+  items, and called as `MakeP("a")`, or `MakeP["a"]` when `<decides>`.
+  - **Items** run in order. `F := e` sets a field of the class. `let:` gives
+    declarations later items see. A `block:` runs, and cannot fail.
+    `D<constructor>(args)` delegates to a constructor of the class (which
+    then sets all fields) or of a class above it (which sets its fields).
+  - **Construction.** Fields not set take their defaults, and a field
+    without one must be set. The class's own `block:` clauses then run, as
+    for `player{…}`. A constructor sees no `Self`.
+  - **Lowering.** `K` becomes `K$init`, which runs the items and gives the
+    fields as a struct, and `K`, which constructs the class from them. A
+    delegation calls the delegate's `$init`.
 - **Qualified implementations.** A class that implements two interfaces
   declaring the same method can give each its own: `(i1:)M<override>()`
   and `(i2:)M<override>()`. Each declaration that overrides nothing (a
@@ -313,7 +326,7 @@ circle := class(shape, labelled):
 - **Comparability.** Other classes and interfaces are not comparable (Book §4.9), nor
   is a struct or container that holds one.
 - **Not yet supported** (each rejected with a message):
-  - constructor functions;
+  - constructor functions of parametric classes, and generic ones;
   - overrides in a subclass that fixes, repeats or adds type arguments
     its parent (or an interface) leaves open, a class that gives two
     interfaces different type arguments, an interface that gives a parent
