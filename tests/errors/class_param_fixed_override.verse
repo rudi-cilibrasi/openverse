@@ -1,4 +1,4 @@
-# expect: intbox fixes or repeats the type arguments of base, so it cannot override Get
+# expect: intbox fixes or repeats type arguments that base leaves open, so it cannot override Get
 base(t:type) := class:
     Value:t
     Get():t = Value

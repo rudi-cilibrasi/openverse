@@ -245,9 +245,13 @@ circle := class(shape, labelled):
   type parameters (`square(t) := class(shape(t))`, in any order:
   `swap(a, b) := class(pair(b, a))`), fixed ones
   (`intcell := class(cell(int))`), and it may have type parameters of its
-  own (`named(t, n) := class(cell(t))`). A class that fixes, repeats or adds
-  type arguments cannot override a method, since code generic over the
-  parent could not call it. A cast `square[S]` takes its type arguments
+  own (`named(t, n) := class(cell(t))`). A class overrides a method only
+  if its type arguments are those of the class that declares it, up to
+  renaming: one that fixes, repeats or adds type arguments the declaring
+  class leaves open cannot, since code generic over that class could not
+  call it. A class with type arguments (its own or fixed for a parent)
+  cannot implement an interface yet. Inherited field defaults see their
+  own class's type parameters. A cast `square[S]` takes its type arguments
   from `S`'s, and is refused when it would need more. A method
   of a parametric class is generic over the class's type parameters, then
   its own. The type arguments come from the receiver, and the body is
@@ -284,8 +288,9 @@ circle := class(shape, labelled):
   is a struct or container that holds one.
 - **Not yet supported** (each rejected with a message):
   - constructor functions;
-  - overrides in a subclass that fixes, repeats or adds type arguments,
-    and parametric classes with interfaces;
+  - overrides in a subclass that fixes, repeats or adds type arguments
+    its parent leaves open, and classes with type arguments below
+    interfaces;
   - `set` of an interface field that sits at different places in the
     classes implementing the interface (reading it works);
   - overriding a method with its own type parameters;
