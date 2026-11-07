@@ -1150,12 +1150,12 @@ theorem matchPrelude_sound : ∀ {e : Expr} {objs m}, matchPrelude e = some (obj
 
 /-- Every object has the field types of its class, and the heap starts with
     the prototypes. -/
-def checkHeapOK (S : Sigs) (h : List Obj) : Bool :=
-  h.all (fun o => match S.classes[o.tag]? with
+def checkHeapOK (S : Sigs) (h : Array Obj) : Bool :=
+  h.toList.all (fun o => match S.classes[o.tag]? with
     | some fs => allTys (tagsOf h) o.fields fs
     | none => false) && S.protos.isPrefixOf (tagsOf h)
 
-theorem checkHeapOK_sound {S : Sigs} {h : List Obj} (hc : checkHeapOK S h = true) : HeapOK S h := by
+theorem checkHeapOK_sound {S : Sigs} {h : Array Obj} (hc : checkHeapOK S h = true) : HeapOK S h := by
   simp only [checkHeapOK, Bool.and_eq_true, List.all_eq_true] at hc
   refine ⟨fun a o ho => ?_, List.isPrefixOf_iff_prefix.mp hc.2⟩
   have := hc.1 o (List.mem_of_getElem? ho)
