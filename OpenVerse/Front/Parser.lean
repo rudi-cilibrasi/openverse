@@ -612,6 +612,16 @@ partial def parsePrimary (stop : Nat) : PM SExpr := do
   | .ident "case" => parseCase stop
   | .ident "loop" => bump; return .loop t.pos (← parseBody stop)
   | .ident "block" => bump; parseBody stop
+  | .ident "let" =>
+    if (← peekT 1).isSym "(" then
+      -- `let(defs){body}`: the definitions are visible in the body only, and
+      -- the value is the body's (spec: LetMacro)
+      bump; bump
+      let (defs, _) ← parseParenItems
+      let body ← parseBody stop
+      return .block t.pos (defs ++ [.block t.pos [body]])
+    else
+      bump; return .ident t.pos "let"
   | .ident "break" => bump; return .brk t.pos
   | .ident "return" =>
     bump
@@ -857,6 +867,15 @@ partial def parseTops : PM (List STop) := do
       tops := tops.push (.const t.pos name (some ty) (← parseFnBody))
     else perr n s!"expected '(', ':' or ':=' after '{name}'"
   return tops.toList
+
+/-- Parse one expression (for `openverse run FILE do EXPR`). -/
+def parseExprText (src : String) : Except String SExpr := do
+  let toks ← lexSource src
+  (do
+    let e ← parseExpr 0
+    let t ← peekT
+    if !t.isEof then perr t s!"unexpected {t.tok.describe} after the expression"
+    return e : PM SExpr).run' { toks }
 
 /-- Parse a whole Verse source file. -/
 def parseProgram (src : String) : Except String (List STop) := do

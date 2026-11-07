@@ -868,6 +868,16 @@ partial def elabApp (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (brack
       return ⟨.seq (.assign ta es[0]!) (.seq (.assign tb es[1]!)
         (.ite (p2 op (.local ta) (.local tb)) (.local ta) (.local tb))), .int⟩
     | "Err" => return ⟨.prim .userErr [], .never⟩
+    | "$Show" =>
+      -- the entry of `openverse run FILE do EXPR`: print the value when it
+      -- has a ToString, else just evaluate it
+      match args with
+      | [a] =>
+        let r ← elabE ctx a none
+        match r.ty with
+        | .int | .char | .arr .char => return ⟨.print (← toStringOf p r), .void⟩
+        | _ => return ⟨.seq r.e (.lit .void), .void⟩
+      | _ => eerr p "internal: $Show"
     | _ =>
       match ctx.sig? name with
       | some s =>
@@ -1201,8 +1211,13 @@ partial def elabSet (ctx : Ctx) (p : Pos) (lhs : SExpr) (op : Option String) (rh
     | .ident _ n => some (n, [])
     | .member sp e f => (path e).map fun (n, ss) => (n, ss ++ [(sp, some f, none)])
     | .app sp e [k] true => (path e).map fun (n, ss) => (n, ss ++ [(sp, none, some k)])
+    -- `X?`: the value inside an option (spec: DeoptionSet); fails when empty
+    | .query sp e => (path e).map fun (n, ss) => (n, ss ++ [(sp, some "?", none)])
     | _ => none
-  if let some (root, steps@(_ :: _ :: _)) := path lhs then
+  let general : List (Pos × Option String × Option SExpr) → Bool
+    | steps@(_ :: _ :: _) => !steps.isEmpty
+    | steps => steps.any (·.2.1 == some "?")
+  if let some (root, steps) := path lhs then if general steps then
     -- `set X.p = e` with a path of two or more steps (Book of Verse §3.5, §9.3):
     -- the indices and keys are evaluated once, left to right; then each
     -- intermediate container is read (an index or an intermediate key that
@@ -1220,6 +1235,8 @@ partial def elabSet (ctx : Ctx) (p : Pos) (lhs : SExpr) (op : Option String) (rh
     for (sp, f?, k?) in steps do
       tys := tys.push ty
       match f?, k?, ty with
+      | some "?", _, .opt t => keys := keys.push none; ty := t
+      | some "?", _, t => eerr sp s!"'?' in a set needs an option, found {t.show}"
       | some f, _, .struct sn targs =>
         if ctx.types.classes.contains sn then eerr sp (classSetMsg sn f)
         match fieldIndex (ctx.types.fields sn targs) f with
@@ -1242,6 +1259,7 @@ partial def elabSet (ctx : Ctx) (p : Pos) (lhs : SExpr) (op : Option String) (rh
     -- read one step of the container in slot `c` of type `cty`
     let readStep (c : Nat) (cty : Ty) (step : Option String) (key : Option (Nat × Ty)) : EM Expr := do
       match step, key, cty with
+      | some "?", _, .opt _ => pure (.prim .query [.local c])
       | some f, _, .struct sn targs =>
         let (j, _) := (fieldIndex (ctx.types.fields sn targs) f).get!
         pure (.prim (.tupGet j) [.local c])
@@ -1264,9 +1282,11 @@ partial def elabSet (ctx : Ctx) (p : Pos) (lhs : SExpr) (op : Option String) (rh
         let c ← fresh tys[k + 1]!
         pre := pre.push (.assign c (← readStep cur tys[k]! f? keys[k]!))
         cur := c
+    let (lc, lty, _, lf, lkey) := levels[levels.size - 1]!
+    -- a last `?` step also needs the option to be set
+    if lf == some "?" then pre := pre.push (.seq (.prim .query [.local lc]) (.lit .void))
     -- the new leaf value
     let r ← elabE ctx rhs (some leafTy)
-    let (lc, lty, _, lf, lkey) := levels[levels.size - 1]!
     let leaf ← match op with
       | none => coerce p r leafTy
       | some o => combine (← readStep lc lty lf lkey) leafTy o r
@@ -1278,6 +1298,7 @@ partial def elabSet (ctx : Ctx) (p : Pos) (lhs : SExpr) (op : Option String) (rh
       let k := levels.size - 1 - k'
       let (c, cty, _, f?, key) := levels[k]!
       match f?, key, cty with
+      | some "?", _, .opt _ => pre := pre.push (.assign c (.prim .mkSome [newVal]))
       | some f, _, .struct sn targs =>
         let fs := ctx.types.fields sn targs
         let (j, _) := (fieldIndex fs f).get!
@@ -1645,6 +1666,13 @@ def checkTParams (env : TyEnv) (tps : List TParam) : Except String (List (String
     | c => throw s!"{tp.pos.show}: unknown constraint subtype({c}) (openverse supports {tp.name}:type and {tp.name}:subtype(comparable))"
   return out.toList
 
+/-- How a program is compiled from the command line (spec: expected
+    tooling): its shell arguments, bound to `Args : []string` (unless the
+    program defines `Args`), and an expression to run instead of `Main`. -/
+structure Options where
+  args : Option (List String) := none
+  entry : Option SExpr := none
+
 /-- A class or interface definition, as parsed. -/
 structure CDef where
   pos : Pos
@@ -1659,7 +1687,21 @@ structure CDef where
 
 /-- Elaborate a parsed program into a Verse Core program that passes `Prog.check`
     and `Prog.checkTypes`. -/
-def elabProgram (allTops0 : List STop) : Except String Compiled := do
+def elabProgram (allTops00 : List STop) (opts : Options := {}) : Except String Compiled := do
+  -- the command line (spec: expected tooling): `Args`, and an entry expression
+  let defines (n : String) := allTops00.any fun
+    | .fn _ m .. | .const _ m .. | .classDef _ m .. => m == n
+  let argsTop : List STop :=
+    match opts.args with
+    | some as =>
+      if defines "Args" then []
+      else [.const ⟨0, 0⟩ "Args" (some (.arr (.name "string")))
+              (.arrayLit ⟨0, 0⟩ (as.map fun a => .str ⟨0, 0⟩ [.text a]))]
+    | none => []
+  let entryTop : List STop := match opts.entry with
+    | some e => [.fn e.pos "$Do" [] [] ["decides"] (.name "void") (.app e.pos (.ident e.pos "$Show") [e] false)]
+    | none => []
+  let allTops0 := allTops00 ++ argsTop ++ entryTop
   -- classes and interfaces (#14, #18): each is a struct whose fields are
   -- those inherited first, then its own; each method `M` of `c` a function
   -- `c.M` whose first parameter is `Self`, generic over the class's type
@@ -2080,7 +2122,7 @@ def elabProgram (allTops0 : List STop) : Except String Compiled := do
       fns := fns.push fn
       slotTys := slotTys.push tys
     | _ => pure ()
-  let main ← match sigs.toList.find? (·.name == "Main") with
+  let main ← match sigs.toList.find? (·.name == (if opts.entry.isSome then "$Do" else "Main")) with
     | some s =>
       if s.isConst || !s.params.isEmpty then throw "Main must be a function with no parameters"
       pure s.idx
@@ -2097,11 +2139,20 @@ def elabProgram (allTops0 : List STop) : Except String Compiled := do
   return { prog := P, sigs := S, slotTys := slotTys.toList }
 
 /-- Parse and elaborate Verse source text. -/
-def compileChecked (src : String) : Except String Compiled := do
-  elabProgram (← parseProgram src)
+def compileChecked (src : String) (opts : Options := {}) : Except String Compiled := do
+  elabProgram (← parseProgram src) opts
 
 /-- Parse and elaborate Verse source text. -/
-def compile (src : String) : Except String Prog := do
-  return (← compileChecked src).prog
+def compile (src : String) (opts : Options := {}) : Except String Prog := do
+  return (← compileChecked src opts).prog
+
+/-- Compile with shell arguments (bound to `Args` when given or used) and an
+    optional `do` expression, as `openverse run FILE ARG… do EXPR` does. -/
+def compileWith (src : String) (args : List String) (doExpr : Option String) : Except String Prog := do
+  let entry ← match doExpr with
+    | some t => some <$> parseExprText t
+    | none => pure none
+  let useArgs := !args.isEmpty || (src.splitOn "Args").length > 1
+  compile src { args := if useArgs then some args else none, entry }
 
 end OpenVerse.Front
