@@ -587,6 +587,8 @@ structure Ctx where
   locals  : List Local := []
   canFail : Bool := false
   inLoop  : Bool := false
+  /-- In a named parameter's default, elaborated at a call: no `return`. -/
+  inParamDefault : Bool := false
   /-- In a class's `block:` clauses (one method, `$block`), where a `return`
       would skip the clauses after it. -/
   inBlock : Bool := false
@@ -1309,11 +1311,13 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
     if !ctx.inLoop then eerr p "break is only allowed inside loop (not for)"
     return ⟨.brk, .never⟩
   | .ret p none =>
+    if ctx.inParamDefault then eerr p "return is not allowed in a parameter's default"
     if ctx.inCtor then eerr p "return is not allowed in a constructor (it would skip the items after it)"
     if ctx.inBlock then eerr p "return is not allowed in a block: clause (it would skip the clauses after it)"
     if ctx.retTy != .void then eerr p s!"return needs a value of type {ctx.retTy.show}"
     return ⟨.ret (.lit .void), .never⟩
   | .ret p (some e) =>
+    if ctx.inParamDefault then eerr p "return is not allowed in a parameter's default"
     if ctx.inCtor then eerr p "return is not allowed in a constructor (it would skip the items after it)"
     if ctx.inBlock then eerr p "return is not allowed in a block: clause (it would skip the clauses after it)"
     let r ← elabE ctx e (some ctx.retTy)
@@ -1554,7 +1558,18 @@ partial def elabApp (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (brack
               -- (a method's: its receiver's fields too, through `Self`)
               let selfC : Option String :=
                 if s.pnames.head? == some "Self" then (s.name.splitOn ".").head? else none
-              steps := steps.push (.assign ta (← fxAt p (do coerce p (← elabE { ctx with locals := earlier, selfClass := selfC } d (some t)) t)))
+              -- (its own context: no return or break into the caller, failure
+              -- only for a <decides> callee, and not its own default again)
+              let key := (s.name, s!"?{n}")
+              if ctx.defaults.contains key then
+                eerr p s!"the default of ?{n} of {name} uses itself (a call of {name} that omits ?{n})"
+              let dctx := { ctx with locals := earlier, selfClass := selfC, inParamDefault := true,
+                                     inLoop := false, canFail := ctx.canFail && s.decides,
+                                     defaults := key :: ctx.defaults }
+              let rd ← fxAt p (do coerce p (← elabE dctx d (some t)) t)
+              if !s.decides && rd.mayFail ctx.sigProg then
+                eerr p s!"the default of ?{n} of {name} can fail, but {name} is not <decides>"
+              steps := steps.push (.assign ta rd)
               slots := slots.set! k (some ta)
           let call := Expr.call s.idx (slots.toList.map fun o => Expr.local o.get!)
           return ⟨steps.toList.foldr Expr.seq call, s.ret⟩
