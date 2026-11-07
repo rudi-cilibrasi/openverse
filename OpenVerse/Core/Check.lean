@@ -59,7 +59,8 @@ def Prog.check (P : Prog) : Bool :=
 
 /-- **What a checked program guarantees.** A program that passes `Prog.check`
     never raises a slot or call error, and never fails unless its `Main` is
-    `<decides>`. -/
+    `<decides>`. (Its functions marked as not writing keep every object:
+    `Prog.check_writeSound`, `Eval.no_writes`.) -/
 theorem Prog.check_ok {P : Prog} (h : P.check = true) {r out} (hr : Runs P r out) :
     r.scopeErr = false ∧
     (∀ fn, P.fns[P.main]? = some fn → fn.decides = false → r ≠ .fail) := by
