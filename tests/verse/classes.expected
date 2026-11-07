@@ -10,5 +10,6 @@ b steps by 2
 option holds c
 first x
 one
+config max 10
 2
 exit=0

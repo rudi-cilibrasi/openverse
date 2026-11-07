@@ -167,16 +167,21 @@ stack(t:type) := class:
 
 - Without `var` fields an instance cannot change, so reference semantics
   cannot be observed. A class is the tuple of its fields in Verse Core, like
-  a struct, and is constructed like one: `stack(int){}`.
+  a struct, and is constructed like one: `stack(int){}`. For the same reason
+  `set` cannot reach a class field, not even through a path.
 - A method `M` of class `c` is a function `c.M` whose first parameter is
   `Self`. In its body, a name that is not a local is looked up among the
-  fields, then the methods. `Obj.M(…)` evaluates `Obj` before the arguments.
+  fields, then the methods. A local or parameter with the name of a field
+  or method is an error (no shadowing), and so is a method named like a
+  built-in function. Field defaults are elaborated where they are defined,
+  never as part of the method that constructs the value. `Obj.M(…)`
+  evaluates `Obj` before the arguments.
 - A method of a parametric class is generic over the class's type
   parameters, then its own. The type arguments come from the receiver, and
   the body is checked once in Verse Core (see
   [Parametric functions](#parametric-functions)).
-- A class is not comparable (Book §4.9): `=`, `<>`, `Find` and map keys
-  reject class values.
+- A class is not comparable (Book §4.9), nor is a struct or container that
+  holds one: `=`, `<>`, `Find` and map keys reject them.
 - Not yet supported, each rejected with a message naming its phase of #11:
   `var` fields, `<unique>`, `<abstract>`, `<castable>`, inheritance
   `class(parent)`, interfaces, `block:` initialisers, constructor functions,

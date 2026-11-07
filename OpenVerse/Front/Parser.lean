@@ -737,6 +737,7 @@ partial def parseClassBody (p : Pos) (name : String) (tps : List TParam) : PM ST
   if o.isSym ":" then
     bump
     let n ← peekT
+    if n.isEof || (n.bol && n.col == 0) then perr n s!"expected the indented body of class {name}"
     let c := n.col
     items ← withBlock n do
       let mut items := #[← parseClassItem c]
@@ -779,6 +780,8 @@ partial def parseTops : PM (List STop) := do
     if n.isSym "(" then
       bump
       let (ps, tps) ← parseParamList
+      if pre.contains "constructor" then
+        perr n "constructor functions are not supported yet (#11)"
       if (← peekT).isSym ":=" && (← peekT 1).isKw "class" then
         -- `name(t:type, …) := class …`: a parametric class
         bump; bump
@@ -812,6 +815,8 @@ partial def parseTops : PM (List STop) := do
       let a ← peekT
       if a.isSym "=" || a.isSym ":=" then bump else perr a "expected '=' before the function body"
       tops := tops.push (.fn t.pos name ps.toList tps.toList (pre ++ effs) ret (← parseFnBody))
+    else if n.isSym ":=" && (← peekT 1).isKw "interface" then
+      perr n "interfaces are not supported yet (#11 phase 2)"
     else if n.isSym ":=" && (← peekT 1).isKw "class" then
       bump; bump
       tops := tops.push (← parseClassBody t.pos name [])

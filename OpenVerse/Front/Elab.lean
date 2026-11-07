@@ -218,9 +218,10 @@ partial def Ty.comparable (env : TyEnv) : Ty → Bool
   | .arr t | .opt t => t.comparable env
   | .tup ts => ts.all (Ty.comparable env)
   | .map k v => k.comparable env && v.comparable env
-  -- a class is not comparable (only `<unique>` ones are); a struct field's
-  -- type can only be non-comparable through a type argument
-  | .struct n ts => !env.classes.contains n && ts.all (Ty.comparable env)
+  -- a class is not comparable (only `<unique>` ones are), nor a struct with
+  -- a field that is not (one holding a class, or a type argument)
+  | .struct n ts => !env.classes.contains n && ts.all (Ty.comparable env) &&
+      (env.fields n ts).all fun (_, t, _) => t.comparable env
   | _ => true
 
 def isComparable (env : TyEnv) : Ty → Bool
@@ -292,6 +293,19 @@ def fresh (t : Ty) : EM Nat :=
   modifyGet fun s => (s.nslots, { s with nslots := s.nslots + 1, slotTys := s.slotTys.push t })
 
 def eerr (p : Pos) (msg : String) : EM α := throw s!"{p.show}: {msg}"
+
+/-- A class's fields cannot be set: they are immutable until `var` fields,
+    which need reference semantics, are supported. Setting one would make
+    the tuple representation observable. -/
+def classSetMsg (c f : String) : String :=
+  s!"field '{f}' of class {c} cannot be set: class fields are immutable until var fields are supported (#11 phase 3)"
+
+/-- Whether every map key type inside `t` is comparable. -/
+partial def Ty.mapKeysOK (env : TyEnv) : Ty → Bool
+  | .map k v => k.comparable env && k.mapKeysOK env && v.mapKeysOK env
+  | .arr t | .opt t => t.mapKeysOK env
+  | .tup ts | .struct _ ts => ts.all (Ty.mapKeysOK env)
+  | _ => true
 
 /-- Why values of type `t` cannot be used where equality is needed. -/
 def notComparable (env : TyEnv) (t : Ty) (what : String) : String :=
@@ -620,6 +634,9 @@ partial def elabStmt (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM (R × Ctx) 
         eerr p s!"'{n}' is already defined; Verse does not allow shadowing (use set {n} = … for a var)"
       if (ctx.sig? n).isSome || builtins.contains n then
         eerr p s!"'{n}' is already the name of a function or constant"
+      if let some c := ctx.selfClass then
+        if (ctx.types.fields c).any (·.1 == n) || (ctx.sig? s!"{c}.{n}").isSome then
+          eerr p s!"'{n}' is already a field or method of {c}; Verse does not allow shadowing"
       let ty? ← sty.mapM (resolveTy ctx.types p)
       let r ← elabE ctx rhs ty?
       let ty := ty?.getD r.ty
@@ -663,7 +680,8 @@ partial def elabApp (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (brack
     | none =>
     -- in a method, a method of `Self`, or a field of `Self` indexed
     let selfMember? : Bool := match ctx.selfClass with
-      | some c => (ctx.sig? s!"{c}.{name}").isSome || (ctx.types.fields c).any (·.1 == name)
+      | some c => (ctx.sig? s!"{c}.{name}").isSome ||
+          ((ctx.types.fields c).any (·.1 == name) && !builtins.contains name)
       | none => false
     if selfMember? then elabApp ctx p (.member p (.ident p "Self") name) args bracket exp else
     match name with
@@ -714,7 +732,12 @@ partial def elabApp (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (brack
           let named := args.filterMap fun a => match a with
             | .decl ap n _ _ rhs => if n.startsWith "?" then some (ap, (n.drop 1).toString, rhs) else none
             | _ => none
-          if pos.length != npos then eerr p s!"{name} takes {npos} positional argument(s), found {pos.length}"
+          if pos.length != npos then
+            -- a method's receiver is its first positional argument
+            let (shown, off) := match name.splitOn "." with
+              | [_, m] => (m, 1)
+              | _ => (name, 0)
+            eerr p s!"{shown} takes {npos - off} positional argument(s), found {pos.length - off}"
           for (ap, n, _) in named do
             if (s.named.find? (·.1 == n)).isNone then eerr ap s!"{name} has no parameter ?{n}"
           let ptys := s.params.toArray
@@ -737,7 +760,7 @@ partial def elabApp (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (brack
               let some d := dflt | eerr p s!"{name} needs the argument ?{n}, which has no default"
               let t := ptys[k]!
               let ta ← fresh t
-              steps := steps.push (.assign ta (← coerce p (← elabE { ctx with locals := [] } d (some t)) t))
+              steps := steps.push (.assign ta (← coerce p (← elabE { ctx with locals := [], selfClass := none } d (some t)) t))
               slots := slots.set! k (some ta)
           let call := Expr.call s.idx (slots.toList.map fun o => Expr.local o.get!)
           return ⟨steps.toList.foldr Expr.seq call, s.ret⟩
@@ -746,7 +769,11 @@ partial def elabApp (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (brack
     let r ← elabE ctx obj none
     match r.ty with
     | .struct c targs =>
-      if ctx.types.classes.contains c && (ctx.sig? s!"{c}.{m}").isSome then
+      if let (true, some ms) := (ctx.types.classes.contains c, ctx.sig? s!"{c}.{m}") then
+        if ms.decides && !bracket then eerr p s!"{m} is <decides>: call it with {m}[…]"
+        if !ms.decides && bracket then eerr p s!"{m} cannot fail: call it with {m}(…)"
+        if ms.named.isEmpty && args.length + 1 != ms.params.length then
+          eerr p s!"{m} takes {ms.params.length - 1} argument(s), found {args.length}"
         -- `Obj.M(…)`: the receiver is evaluated first, then passed as `Self`
         let slot ← fresh r.ty
         let recv := s!"$recv{slot}"
@@ -970,6 +997,7 @@ partial def elabSet (ctx : Ctx) (p : Pos) (lhs : SExpr) (op : Option String) (rh
       tys := tys.push ty
       match f?, k?, ty with
       | some f, _, .struct sn targs =>
+        if ctx.types.classes.contains sn then eerr sp (classSetMsg sn f)
         match fieldIndex (ctx.types.fields sn targs) f with
         | some (_, ft) => keys := keys.push none; ty := ft
         | none => eerr sp s!"{ty.show} has no field '{f}'"
@@ -1088,6 +1116,7 @@ partial def elabSet (ctx : Ctx) (p : Pos) (lhs : SExpr) (op : Option String) (rh
     let l ← mutableLocal n
     match l.ty with
     | .struct sn targs =>
+      if ctx.types.classes.contains sn then eerr p (classSetMsg sn f)
       let fs := ctx.types.fields sn targs
       match fieldIndex fs f with
       | some (k, t) =>
@@ -1225,7 +1254,11 @@ partial def elabMember (ctx : Ctx) (p : Pos) (r : R) (m : String) : EM R := do
   | .struct sn targs, f =>
     match fieldIndex (ctx.types.fields sn targs) f with
     | some (k, t) => return ⟨.prim (.tupGet k) [r.e], t⟩
-    | none => eerr p s!"struct {sn} has no field '{f}'"
+    | none =>
+      if ctx.types.classes.contains sn then
+        if (ctx.sig? s!"{sn}.{f}").isSome then eerr p s!"'{f}' is a method of {sn}: call it with {f}(…)"
+        eerr p s!"class {sn} has no field '{f}'"
+      eerr p s!"struct {sn} has no field '{f}'"
   | t, m => eerr p s!"{t.show} has no member '{m}'"
 
 /-- `name{F := e, …}` or `name(t₁, …){F := e, …}`: the struct's fields in
@@ -1243,7 +1276,7 @@ partial def elabConstruct (ctx : Ctx) (p : Pos) (name : String) (targs : List ST
   let fs := ctx.types.fields name tas
   -- a default is elaborated with the struct's own type parameters in scope
   let σ := ((ctx.types.sparams.lookup name).getD [] |>.map (·.1)).zip tas
-  let dctx := { ctx with locals := [], types := { ctx.types with tvars := σ } }
+  let dctx := { ctx with locals := [], types := { ctx.types with tvars := σ }, selfClass := none }
   let given ← args.mapM fun a => match a with
     | .decl _ f none false rhs => pure (f, rhs)
     | a => eerr a.pos "a struct field is given as Name := value"
@@ -1378,8 +1411,12 @@ def elabProgram (allTops0 : List STop) : Except String Compiled := do
     match t with
     | .classDef p n tps specs fields methods =>
       for sp in specs do
-        if ["unique", "abstract", "castable", "persistable", "final_super"].contains sp then
-          throw s!"{p.show}: <{sp}> classes are not supported yet (#11)"
+        match sp with
+        | "unique" => throw s!"{p.show}: <unique> classes are not supported yet (#11 phase 3)"
+        | "abstract" | "castable" => throw s!"{p.show}: <{sp}> classes are not supported yet (#11 phase 2)"
+        | "persistable" | "final_super" => throw s!"{p.show}: <{sp}> classes are not supported yet (#11)"
+        | _ => pure ()
+      if fields.any (·.1 == "Self") then throw s!"{p.show}: a field of {n} cannot be called Self"
       for (f, _, _, isVar) in fields do
         if isVar then
           throw s!"{p.show}: var field '{f}': mutable class fields need reference semantics, not supported yet (#11 phase 3)"
@@ -1391,6 +1428,10 @@ def elabProgram (allTops0 : List STop) : Except String Compiled := do
         | .fn mp mn ps mtps effs ret body =>
           if (fields.any (·.1 == mn)) then throw s!"{mp.show}: '{mn}' is both a field and a method of {n}"
           if ps.any (·.name == "Self") then throw s!"{mp.show}: a method parameter cannot be called Self"
+          if builtins.contains mn then throw s!"{mp.show}: a method cannot be called {mn}, the name of a built-in function"
+          for prm in ps do
+            if fields.any (·.1 == prm.name) || methods.any (fun | .fn _ m .. => m == prm.name | _ => false) then
+              throw s!"{mp.show}: parameter '{prm.name}' of {mn} is already a field or method of {n}; Verse does not allow shadowing"
           expanded := expanded.push
             (.fn mp s!"{n}.{mn}" ({ name := "Self", ty := selfTy } :: ps) (tps ++ mtps) effs ret body)
         | _ => pure ()
@@ -1429,6 +1470,12 @@ def elabProgram (allTops0 : List STop) : Except String Compiled := do
     if classes.contains n then
       throw s!"class {n} contains itself (recursive classes need references, not supported yet: #11 phase 3)"
     throw s!"struct {n} contains itself (recursive struct types are not supported)"
+  -- map keys in field types, now that every struct's fields are known
+  -- (a key type can be a struct that holds a class)
+  for (sn, fs) in env.structs do
+    for (f, ft, _) in fs do
+      if !ft.mapKeysOK env then
+        throw s!"field '{f}' of {sn}: a map key must be comparable, and {ft.show} has a key that is not"
   -- generic functions (those with a `where` clause) are numbered after the
   -- other functions and constants
   let isGeneric : STop → Bool

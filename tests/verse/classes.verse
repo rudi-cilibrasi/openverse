@@ -30,6 +30,16 @@ stack(t:type) := class:
     Peek()<decides>:t = Items[Items.Length - 1]
     Size():int = Items.Length
 
+# a field default is elaborated where it is defined, not in the method that
+# constructs the struct (whose class has a field of the same name)
+Limit:int = 10
+config := struct:
+    Max:int = Limit
+
+widget := class:
+    Limit:int = 99
+    Make():config = config{}
+
 record := struct:
     Pair:tuple(int, string)
 
@@ -60,5 +70,6 @@ Main():void =
     if (First := S.Items[0]) then Print("first {First}")
     R := record{Pair := (1, "one")}
     Print(R.Pair(1))
+    Print("config max {widget{}.Make().Max}")
     # receivers are evaluated once, before the arguments
     Print("{counter{Name := "e"}.Rename("f").Twice(0)}")
