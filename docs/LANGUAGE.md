@@ -113,6 +113,27 @@ Combine(A:t1, B:t2 where t1:type, t2:type):tuple(t1, t2) = (A, B)
   type parameter (also unsupported in the Book), explicit type arguments to
   a generic function, and generic constants are not supported.
 
+## Overloading
+
+Several functions may share a name when no call could fit two of them (Book of
+Verse ch. 6): `Describe(X:int)`, `Describe(S:string)`, `Describe(X:int, Y:int)`.
+- **Distinct overloads.** Overloads take different numbers of parameters, or
+  disjoint types at some position. A single tuple parameter counts as many
+  parameters as its elements.
+- **Overlapping types:** `void`, a type parameter, two array, map or option
+  types (they share the empty one), an array, option or `logic` with
+  another (`false` is each), a tuple and an array, map or option, and a
+  class or interface with an interface or a class above or below it. A pair that overlaps is refused where the later
+  one is defined.
+- **Calls.** A call takes the overload whose parameter types its arguments
+  fit. With subtyping, a `square` fits `Describe(B:shape)`. Each argument's
+  own type is found once, and the arguments are elaborated at a
+  candidate's parameter types only when that leaves several, so nested
+  overloaded calls stay cheap. An overloaded name is not a value.
+- **Lowering.** Each overload is a separate function (`F$ov0`, `F$ov1`, …).
+- **Not yet supported:** overloading generic functions, overloads with named
+  parameters, overloaded methods and constructors, and overloading `Main`.
+
 ## Parametric structs
 
 A struct with parameters is a family of struct types:
@@ -436,7 +457,7 @@ openverse has no module namespaces yet, so the readings are flat:
 
 `float` and `rational` values (only `Floor(X/Y)` and `Ceil(X/Y)` of ints),
 the class features listed under [Classes](#classes), struct methods (Verse structs have none; classes do), `ConcatenateMaps`,
-`weak_map`, module namespaces (`using{"relative_path"}` imports flatly, see [Programs of several files](#programs-of-several-files)), overloading, defaults that refer to earlier parameters, nested
+`weak_map`, module namespaces (`using{"relative_path"}` imports flatly, see [Programs of several files](#programs-of-several-files)), overloading beyond [Overloading](#overloading), defaults that refer to earlier parameters, nested
 functions, `last`, `defer`, refinement types, concurrency (`spawn`, `sync`,
 `race`, `rush`, `branch`, `<suspends>`), `weak_map`, and effect checking
 other than `<decides>` and the heap effects (`<converges>` is accepted and
