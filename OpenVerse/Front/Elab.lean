@@ -32,8 +32,9 @@ inductive Ty where
   | arr : Ty → Ty
   | opt : Ty → Ty
   | tup : List Ty → Ty
-  /-- A struct type (nominal): its value is the tuple of its fields. -/
-  | struct : String → Ty
+  /-- A struct type (nominal), with the type arguments of a parametric
+      struct: its value is the tuple of its fields. -/
+  | struct : String → List Ty → Ty
   /-- An enum type (nominal): its value is the index of the enumerator. -/
   | enum : String → Ty
   /-- `[k]v`: in Verse Core, the array of its (key, value) pairs in insertion order. -/
@@ -49,7 +50,8 @@ partial def Ty.eqv : Ty → Ty → Bool
   | .arr a, .arr b => a.eqv b
   | .opt a, .opt b => a.eqv b
   | .tup as, .tup bs => as.length == bs.length && (as.zip bs).all fun (a, b) => a.eqv b
-  | .struct a, .struct b => a == b
+  | .struct a as, .struct b bs =>
+    a == b && as.length == bs.length && (as.zip bs).all fun (x, y) => x.eqv y
   | .enum a, .enum b => a == b
   | .map a b, .map c d => a.eqv c && b.eqv d
   | .param a _, .param b _ => a == b
@@ -63,17 +65,31 @@ partial def Ty.show : Ty → String
   | .arr t => "[]" ++ t.show
   | .opt t => "?" ++ t.show
   | .tup ts => "tuple(" ++ ", ".intercalate (ts.map Ty.show) ++ ")"
-  | .struct n => n
+  | .struct n [] => n
+  | .struct n ts => n ++ "(" ++ ", ".intercalate (ts.map Ty.show) ++ ")"
   | .enum n => n
   | .map k v => "[" ++ k.show ++ "]" ++ v.show
   | .param n _ => n
 
 def Ty.string : Ty := .arr .char
 
+/-- Substitute type arguments for type parameters. -/
+partial def Ty.subst (σ : List (String × Ty)) : Ty → Ty
+  | .param n c => (σ.lookup n).getD (.param n c)
+  | .arr t => .arr (t.subst σ)
+  | .opt t => .opt (t.subst σ)
+  | .tup ts => .tup (ts.map (Ty.subst σ))
+  | .map k v => .map (k.subst σ) (v.subst σ)
+  | .struct n ts => .struct n (ts.map (Ty.subst σ))
+  | t => t
+
 /-- The user-defined types of a program. -/
 structure TyEnv where
-  /-- Each struct: its fields in order (name, type, default value). -/
+  /-- Each struct: its fields in order (name, type, default value). The
+      field types of a parametric struct mention its parameters as `Ty.param`. -/
   structs : List (String × List (String × Ty × Option SExpr)) := []
+  /-- The type parameters of each parametric struct (name, declared comparable). -/
+  sparams : List (String × List (String × Bool)) := []
   /-- Each enum: its enumerators in order. -/
   enums : List (String × List String) := []
   /-- The type parameters in scope and what they stand for: themselves
@@ -82,12 +98,18 @@ structure TyEnv where
   tvars : List (String × Ty) := []
   deriving Inhabited
 
-def TyEnv.fields (env : TyEnv) (n : String) : List (String × Ty × Option SExpr) :=
-  (env.structs.lookup n).getD []
+/-- The fields of struct `n` applied to the type arguments `args`. -/
+def TyEnv.fields (env : TyEnv) (n : String) (args : List Ty := []) : List (String × Ty × Option SExpr) :=
+  let fs := (env.structs.lookup n).getD []
+  match env.sparams.lookup n with
+  | some ps =>
+    let σ := (ps.map (·.1)).zip args
+    fs.map fun (f, t, d) => (f, t.subst σ, d)
+  | none => fs
 
 /-- The struct names a type mentions (not looking inside those structs). -/
 partial def Ty.structNames : Ty → List String
-  | .struct n => [n]
+  | .struct n ts => n :: ts.flatMap Ty.structNames
   | .arr t | .opt t => t.structNames
   | .tup ts => ts.flatMap Ty.structNames
   | .map k v => k.structNames ++ v.structNames
@@ -120,25 +142,16 @@ partial def Ty.toVTy (env : TyEnv) : Ty → VTy
   | .arr t => .arr (t.toVTy env)
   | .opt t => .opt (t.toVTy env)
   | .tup ts => .tup (ts.map (Ty.toVTy env))
-  | .struct n => .tup ((env.fields n).map fun (_, t, _) => t.toVTy env)
+  | .struct n ts => .tup ((env.fields n ts).map fun (_, t, _) => t.toVTy env)
   | .enum _ => .int
   | .map k v => .arr (.tup [k.toVTy env, v.toVTy env])
   | .param _ _ => VTy.void
-
-/-- Substitute type arguments for type parameters. -/
-partial def Ty.subst (σ : List (String × Ty)) : Ty → Ty
-  | .param n c => (σ.lookup n).getD (.param n c)
-  | .arr t => .arr (t.subst σ)
-  | .opt t => .opt (t.subst σ)
-  | .tup ts => .tup (ts.map (Ty.subst σ))
-  | .map k v => .map (k.subst σ) (v.subst σ)
-  | t => t
 
 /-- The type parameters a type mentions. -/
 partial def Ty.params : Ty → List String
   | .param n _ => [n]
   | .arr t | .opt t => t.params
-  | .tup ts => ts.flatMap Ty.params
+  | .tup ts | .struct _ ts => ts.flatMap Ty.params
   | .map k v => k.params ++ v.params
   | _ => []
 
@@ -165,6 +178,9 @@ partial def Ty.matchArg (σ : List (String × Ty)) : Ty → Ty → Option (List 
     if ps.length != as.length then none
     else (ps.zip as).foldlM (fun σ (p, a) => Ty.matchArg σ p a) σ
   | .map pk pv, .map ak av => do Ty.matchArg (← Ty.matchArg σ pk ak) pv av
+  | .struct n ps, .struct m as =>
+    if n != m || ps.length != as.length then none
+    else (ps.zip as).foldlM (fun σ (p, a) => Ty.matchArg σ p a) σ
   | p, a => if p.eqv a then some σ else none
 
 /-- At most `cap` nodes of the tree of `t` (to bound polymorphic recursion
@@ -176,7 +192,7 @@ where
     | b + 1, t :: rest =>
       let kids := match t with
         | .arr u | .opt u => [u]
-        | .tup us => us
+        | .tup us | .struct _ us => us
         | .map k v => [k, v]
         | _ => []
       1 + go b (kids ++ rest)
@@ -189,6 +205,8 @@ partial def Ty.comparable : Ty → Bool
   | .arr t | .opt t => t.comparable
   | .tup ts => ts.all Ty.comparable
   | .map k v => k.comparable && v.comparable
+  -- a field's type can only be non-comparable through a type argument
+  | .struct _ ts => ts.all Ty.comparable
   | _ => true
 
 def isComparable : Ty → Bool
@@ -297,7 +315,10 @@ partial def resolveTy (env : TyEnv) (p : Pos) : STy → EM Ty
   | .name "float" => eerr p "float is not supported by openverse v1"
   | .name n =>
     if let some t := env.tvars.lookup n then pure t
-    else if (env.structs.lookup n).isSome then pure (.struct n)
+    else if (env.structs.lookup n).isSome then
+      match env.sparams.lookup n with
+      | some ps => eerr p s!"{n} is parametric: write {n}(…) with {ps.length} type argument(s)"
+      | none => pure (.struct n [])
     else if (env.enums.lookup n).isSome then pure (.enum n)
     else eerr p s!"unknown type '{n}' (supported: int, logic, char, string, void, []t, ?t, tuple(…), and structs and enums)"
   | .arr t => return .arr (← resolveTy env p t)
@@ -308,6 +329,17 @@ partial def resolveTy (env : TyEnv) (p : Pos) : STy → EM Ty
     let kt ← resolveTy env p k
     if !kt.comparable then eerr p (notComparable kt "a map key")
     return .map kt (← resolveTy env p v)
+  | .app n args => do
+    let ts ← args.mapM (resolveTy env p)
+    match env.sparams.lookup n with
+    | some ps =>
+      if ps.length != ts.length then eerr p s!"{n} takes {ps.length} type argument(s), found {ts.length}"
+      for ((v, c), t) in ps.zip ts do
+        if c && !t.comparable then eerr p (notComparable t s!"type argument {v} of {n}")
+      return .struct n ts
+    | none =>
+      if (env.structs.lookup n).isSome then eerr p s!"struct {n} takes no type arguments"
+      else eerr p s!"unknown parametric type '{n}' (only structs can be parametric)"
 
 def Ctx.lookup (ctx : Ctx) (n : String) : Option Local := ctx.locals.find? (·.name == n)
 def Ctx.sig? (ctx : Ctx) (n : String) : Option Sig := ctx.sigs.find? (·.name == n)
@@ -447,9 +479,9 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
       | none => eerr p s!"enum {n} has no value '{m}'"
     | _, _ => elabMember ctx p (← elabE ctx (.ident p n) none) m
   | .member p e m => elabMember ctx p (← elabE ctx e none) m
-  | .construct p name args => elabConstruct ctx p name args
+  | .construct p name targs args => elabConstruct ctx p name targs args exp
   | .mapLit p entries => elabMapLit ctx p entries exp
-  | .structDef p _ | .enumDef p _ => eerr p "struct and enum definitions must be at the top level"
+  | .structDef p _ _ | .enumDef p _ => eerr p "struct and enum definitions must be at the top level"
   | .query p e =>
     let r ← elabE ctx e none
     match r.ty with
@@ -911,8 +943,8 @@ partial def elabSet (ctx : Ctx) (p : Pos) (lhs : SExpr) (op : Option String) (rh
   | .member _ (.ident _ n) f =>
     let l ← mutableLocal n
     match l.ty with
-    | .struct sn =>
-      let fs := ctx.types.fields sn
+    | .struct sn targs =>
+      let fs := ctx.types.fields sn targs
       match fieldIndex fs f with
       | some (k, t) =>
         let r ← elabE ctx rhs (some t)
@@ -1046,17 +1078,28 @@ partial def elabMember (ctx : Ctx) (p : Pos) (r : R) (m : String) : EM R := do
   match r.ty, m with
   | .arr _, "Length" => return ⟨.prim .len [r.e], .int⟩
   | .map _ _, "Length" => return ⟨.prim .len [r.e], .int⟩
-  | .struct sn, f =>
-    match fieldIndex (ctx.types.fields sn) f with
+  | .struct sn targs, f =>
+    match fieldIndex (ctx.types.fields sn targs) f with
     | some (k, t) => return ⟨.prim (.tupGet k) [r.e], t⟩
     | none => eerr p s!"struct {sn} has no field '{f}'"
   | t, m => eerr p s!"{t.show} has no member '{m}'"
 
-/-- `name{F := e, …}`: the struct's fields in declaration order; omitted
-    fields take their default values. -/
-partial def elabConstruct (ctx : Ctx) (p : Pos) (name : String) (args : List SExpr) : EM R := do
-  let some fs := ctx.types.structs.lookup name
-    | eerr p s!"unknown struct '{name}'"
+/-- `name{F := e, …}` or `name(t₁, …){F := e, …}`: the struct's fields in
+    declaration order; omitted fields take their default values. The type
+    arguments of a parametric struct are written, or are those of the
+    expected type. -/
+partial def elabConstruct (ctx : Ctx) (p : Pos) (name : String) (targs : List STy) (args : List SExpr)
+    (exp : Option Ty) : EM R := do
+  if (ctx.types.structs.lookup name).isNone then eerr p s!"unknown struct '{name}'"
+  let ty ← match targs, exp with
+    | [], some (.struct n ts) => if n == name then pure (.struct n ts) else resolveTy ctx.types p (.name name)
+    | [], _ => resolveTy ctx.types p (.name name)
+    | ts, _ => resolveTy ctx.types p (.app name ts)
+  let tas := match ty with | .struct _ tas => tas | _ => []
+  let fs := ctx.types.fields name tas
+  -- a default is elaborated with the struct's own type parameters in scope
+  let σ := ((ctx.types.sparams.lookup name).getD [] |>.map (·.1)).zip tas
+  let dctx := { ctx with locals := [], types := { ctx.types with tvars := σ } }
   let given ← args.mapM fun a => match a with
     | .decl _ f none false rhs => pure (f, rhs)
     | a => eerr a.pos "a struct field is given as Name := value"
@@ -1065,9 +1108,9 @@ partial def elabConstruct (ctx : Ctx) (p : Pos) (name : String) (args : List SEx
   let es ← fs.mapM fun (f, t, dflt) => do
     match given.lookup f, dflt with
     | some rhs, _ => coerce p (← elabE ctx rhs (some t)) t
-    | none, some d => coerce p (← elabE { ctx with locals := [] } d (some t)) t
+    | none, some d => coerce p (← elabE dctx d (some t)) t
     | none, none => eerr p s!"field '{f}' of {name} has no default value and must be given"
-  return ⟨.prim .mkTup es, .struct name⟩
+  return ⟨.prim .mkTup es, ty⟩
 
 /-- `map{k₁ => v₁, …}`: entries are evaluated in order; a key given twice
     keeps its last value, at the position of its last occurrence (Book of
@@ -1156,6 +1199,26 @@ structure Compiled where
   sigs    : Sigs
   slotTys : List (List VTy)
 
+/-- Names a type parameter cannot have. -/
+def typeNames : List String :=
+  ["int", "logic", "char", "string", "void", "float", "rational", "any", "comparable", "type", "subtype"]
+
+/-- The type parameters of a generic function or a parametric struct: name,
+    and whether declared `subtype(comparable)`. -/
+def checkTParams (env : TyEnv) (tps : List TParam) : Except String (List (String × Bool)) := do
+  let mut out : Array (String × Bool) := #[]
+  for tp in tps do
+    if out.any (·.1 == tp.name) then
+      throw s!"{tp.pos.show}: type parameter {tp.name} is declared twice (several constraints on one type parameter are not supported)"
+    if typeNames.contains tp.name || (env.structs.lookup tp.name).isSome ||
+        (env.enums.lookup tp.name).isSome then
+      throw s!"{tp.pos.show}: type parameter {tp.name} has the name of a type"
+    match tp.constraint with
+    | "type" => out := out.push (tp.name, false)
+    | "comparable" => out := out.push (tp.name, true)
+    | c => throw s!"{tp.pos.show}: unknown constraint subtype({c}) (openverse supports {tp.name}:type and {tp.name}:subtype(comparable))"
+  return out.toList
+
 /-- Elaborate a parsed program into a Verse Core program that passes `Prog.check`
     and `Prog.checkTypes`. -/
 def elabProgram (allTops : List STop) : Except String Compiled := do
@@ -1168,15 +1231,22 @@ def elabProgram (allTops : List STop) : Except String Compiled := do
   for t in allTops do
     match t with
     | .const _ n none (.enumDef _ vals) => env := { env with enums := env.enums ++ [(n, vals)] }
-    | .const _ n none (.structDef _ _) => env := { env with structs := env.structs ++ [(n, [])] }
+    | .const _ n none (.structDef _ _ _) => env := { env with structs := env.structs ++ [(n, [])] }
+    | _ => pure ()
+  -- the type parameters of parametric structs
+  for t in allTops do
+    match t with
+    | .const _ n none (.structDef _ tps@(_ :: _) _) =>
+      env := { env with sparams := env.sparams ++ [(n, ← checkTParams env tps)] }
     | _ => pure ()
   let shell := env
   let mut structs := #[]
   for t in allTops do
     match t with
-    | .const p n none (.structDef _ fs) =>
+    | .const p n none (.structDef _ _ fs) =>
+      let senv := { shell with tvars := (shell.sparams.lookup n).getD [] |>.map fun (v, c) => (v, Ty.param v c) }
       let fields ← fs.mapM fun (f, sty, d, _) => do
-        let (ty, _) ← (resolveTy shell p sty).run {}
+        let (ty, _) ← (resolveTy senv p sty).run {}
         pure (f, ty, d)
       structs := structs.push (n, fields)
     | _ => pure ()
@@ -1221,8 +1291,6 @@ def elabProgram (allTops : List STop) : Except String Compiled := do
         | none => pure .never   -- inferred below
       sigs := sigs.push { idx, name := n, params := [], ret := rt, decides := false, isConst := true }
   -- the signatures of the generic functions, over their type parameters
-  let typeNames := ["int", "logic", "char", "string", "void", "float", "rational", "any",
-                    "comparable", "type", "subtype"]
   let mut gsigs : Array Sig := #[]
   for (top, gidx) in generics.zip (List.range generics.length) do
     match top with
@@ -1230,22 +1298,12 @@ def elabProgram (allTops : List STop) : Except String Compiled := do
       if n == "Main" then throw s!"{p.show}: Main cannot be generic"
       if ps.any (·.named) then
         throw s!"{p.show}: {n} is generic: openverse does not support named parameters in generic functions"
-      let mut tparams : Array (String × Bool) := #[]
-      for tp in tps do
-        if tparams.any (·.1 == tp.name) then
-          throw s!"{tp.pos.show}: type parameter {tp.name} is declared twice (several constraints on one type parameter are not supported)"
-        if typeNames.contains tp.name || (env.structs.lookup tp.name).isSome ||
-            (env.enums.lookup tp.name).isSome then
-          throw s!"{tp.pos.show}: type parameter {tp.name} has the name of a type"
-        match tp.constraint with
-        | "type" => tparams := tparams.push (tp.name, false)
-        | "comparable" => tparams := tparams.push (tp.name, true)
-        | c => throw s!"{tp.pos.show}: unknown constraint subtype({c}) (openverse supports {tp.name}:type and {tp.name}:subtype(comparable))"
-      let genv := { env with tvars := tparams.toList.map fun (v, c) => (v, Ty.param v c) }
+      let tparams ← checkTParams env tps
+      let genv := { env with tvars := tparams.map fun (v, c) => (v, Ty.param v c) }
       let (tys, rt) ← fnTypes genv p n ps effs ret
       gsigs := gsigs.push { idx := 0, name := n, params := tys, ret := rt,
                             decides := effs.contains "decides", isConst := false,
-                            tparams := tparams.toList, gidx }
+                            tparams, gidx }
     | _ => pure ()
   let mkSigProg (sigs : Array Sig) : Prog :=
     { fns := sigs.toList.map fun s =>
@@ -1281,6 +1339,18 @@ def elabProgram (allTops : List STop) : Except String Compiled := do
     | _ => pure ()
   let sigProg := mkSigProg sigs
   let allSigs := sigs.toList ++ gsigs.toList
+  -- check every field default once, with its struct's type parameters opaque
+  -- (a default is elaborated again, at its field's type, at each construction
+  -- that omits the field)
+  for t in allTops do
+    match t with
+    | .const p n none (.structDef _ _ _) =>
+      let senv := { env with tvars := (env.sparams.lookup n).getD [] |>.map fun (v, c) => (v, Ty.param v c) }
+      let ctx : Ctx := { sigs := allSigs, sigProg, types := senv, canFail := true }
+      for (_, ft, d) in (env.structs.lookup n).getD [] do
+        if let some d := d then
+          discard <| (do coerce p (← elabE ctx d (some ft)) ft : EM Expr).run {}
+    | _ => pure ()
   -- the body of a function, under the type environment `env` (which binds
   -- the type parameters of a generic function), given the instances so far
   let elabBody (env : TyEnv) (p : Pos) (ps : List SParam) (ptys : List Ty) (ret : Ty) (decides : Bool)
