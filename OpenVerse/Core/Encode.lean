@@ -34,6 +34,11 @@ def primCode : Prim → Nat × Nat
   | .concat => (19, 0) | .index => (20, 0) | .len => (21, 0) | .arrSet => (22, 0)
   | .flatten => (23, 0) | .range => (24, 0) | .tupGet k => (25, k) | .toStr => (26, 0)
   | .fail => (27, 0) | .userErr => (28, 0)
+  | .fadd => (29, 0) | .fsub => (30, 0) | .fmul => (31, 0) | .fdiv => (32, 0)
+  | .fneg => (33, 0) | .fabs => (34, 0) | .fmin => (35, 0) | .fmax => (36, 0)
+  | .flt => (37, 0) | .fle => (38, 0) | .fgt => (39, 0) | .fge => (40, 0)
+  | .fofInt => (41, 0) | .ffloor => (42, 0) | .fceil => (43, 0) | .fround => (44, 0)
+  | .ftrunc => (45, 0)
 
 /-- The node table under construction. -/
 abbrev EncM := StateM (Array ByteArray)
@@ -49,6 +54,8 @@ def encLit : Value → EncM Nat
   | .int i => emit (u8 0 ++ u8 0 ++ i64 i)
   | .logic b => emit (u8 0 ++ u8 1 ++ u8 (if b then 1 else 0))
   | .char c => emit (u8 0 ++ u8 2 ++ u8 c)
+  -- a float (#127): its bits
+  | .float b => emit (u8 0 ++ u8 7 ++ i64 b.toNat)
   | .none => emit (u8 0 ++ u8 4)
   | .arr ⟨vs⟩ => match asBytes vs with
     | some bs => emit (u8 0 ++ u8 3 ++ u32 bs.length ++ bytes bs)

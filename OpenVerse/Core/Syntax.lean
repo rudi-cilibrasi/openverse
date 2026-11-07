@@ -40,6 +40,13 @@ inductive Prim where
   | fail
   -- `Err()` : runtime error
   | userErr
+  -- floats (#127): IEEE arithmetic, canonical results; `Min`/`Max` (NaN if
+  -- either is); orderings (failable, as `lt`…: fail on NaN); `int` to
+  -- `float`; and `Floor`, `Ceil`, `Round` (ties to even), `Int` to `int`
+  -- (failable: NaN, an infinity, out of range)
+  | fadd | fsub | fmul | fdiv | fneg | fabs | fmin | fmax
+  | flt | fle | fgt | fge
+  | fofInt | ffloor | fceil | fround | ftrunc
   deriving Repr, DecidableEq, Inhabited
 
 /-- Operations on the heap (#20). Each is a function of the values of its

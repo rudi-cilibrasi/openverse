@@ -57,8 +57,10 @@ theorem Prim.apply_scopeErr (p : Prim) (vs : List Value) : (p.apply vs).scopeErr
   have h2 : ∀ b v, (cmpRes b v).scopeErr = false := by intro b v; unfold cmpRes; split <;> rfl
   have h3 : ∀ v, (toStrValue v).scopeErr = false := by
     intro v; unfold toStrValue; split <;> (try split) <;> rfl
+  have h4 : ∀ r a, (VFloat.toIntRes r a).scopeErr = false := by
+    intro r a; unfold VFloat.toIntRes; split <;> rfl
   unfold Prim.apply
-  split <;> (repeat' split) <;> first | rfl | exact h1 _ | exact h2 _ _ | exact h3 _
+  split <;> (repeat' split) <;> first | rfl | exact h1 _ | exact h2 _ _ | exact h3 _ | exact h4 _ _
 
 theorem retOf_scopeErr {r : Res} (h : r.scopeErr = false) : (retOf r).scopeErr = false := by
   cases r <;> simp_all [retOf, Res.scopeErr]

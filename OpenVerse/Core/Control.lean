@@ -66,8 +66,10 @@ theorem apply_ctlOK (op : Prim) (vs : List Value) (b : Bool) : (op.apply vs).ctl
   have h2 : ∀ c v, (cmpRes c v).ctlOK b := by intro c v; unfold cmpRes; split <;> simp [Res.ctlOK]
   have h3 : ∀ v, (toStrValue v).ctlOK b := by
     intro v; unfold toStrValue; split <;> (try split) <;> simp [Res.ctlOK]
+  have h4 : ∀ r a, (VFloat.toIntRes r a).ctlOK b := by
+    intro r a; unfold VFloat.toIntRes; split <;> simp [Res.ctlOK]
   unfold Prim.apply
-  split <;> (repeat' split) <;> first | exact h1 _ | exact h2 _ _ | exact h3 _ | simp [Res.ctlOK]
+  split <;> (repeat' split) <;> first | exact h1 _ | exact h2 _ _ | exact h3 _ | exact h4 _ _ | simp [Res.ctlOK]
 
 theorem readSlot_ctlOK (s : St) (i : Nat) (b : Bool) : (readSlot s i).ctlOK b := by
   unfold readSlot; split <;> simp [Res.ctlOK]

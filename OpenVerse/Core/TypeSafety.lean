@@ -104,7 +104,7 @@ theorem allTy_reverse {xs : List Value} {t} (h : allTy Ξ xs t = true) : allTy �
 
 mutual
 theorem VTy.closed_subst (θ : Nat → VTy) : ∀ t : VTy, t.closed = true → t.subst θ = t
-  | .int, _ | .logic, _ | .char, _ => by simp
+  | .int, _ | .logic, _ | .char, _ | .float, _ => by simp
   | .ref _ args, h => by simp only [VTy.closed] at h; simpa using VTy.closedL_subst θ args h
   | .var _, h => by simp [VTy.closed] at h
   | .arr t, h => by simp only [VTy.closed] at h; simp [VTy.closed_subst θ t h]
@@ -127,7 +127,7 @@ mutual
     occurs where the value is `[]` or the empty option. -/
 theorem hasTy_subst (hΞ : ∀ p ∈ Ξ, VTy.closedL p.2 = true) (θ : Nat → VTy) :
     ∀ (t : VTy) (v : Value), hasTy Ξ v t = true → hasTy Ξ v (t.subst θ) = true
-  | .int, _, h | .logic, _, h | .char, _, h => by simpa using h
+  | .int, _, h | .logic, _, h | .char, _, h | .float, _, h => by simpa using h
   | .ref ts args, v, h => by
     cases v
     case ref a =>
@@ -172,7 +172,7 @@ end
 mutual
 theorem VTy.subst_comp (θ₁ θ₂ : Nat → VTy) : ∀ t : VTy,
     (t.subst θ₁).subst θ₂ = t.subst (fun j => (θ₁ j).subst θ₂)
-  | .int | .logic | .char | .var _ => by simp
+  | .int | .logic | .char | .float | .var _ => by simp
   | .ref _ args => by simpa using VTy.substL_comp θ₁ θ₂ args
   | .arr t => by simp [VTy.subst_comp θ₁ θ₂ t]
   | .opt t => by simp [VTy.subst_comp θ₁ θ₂ t]
@@ -185,7 +185,7 @@ end
 
 mutual
 theorem VTy.subst_id : ∀ t : VTy, t.subst VTy.var = t
-  | .int | .logic | .char | .var _ => by simp
+  | .int | .logic | .char | .float | .var _ => by simp
   | .ref _ args => by simpa using VTy.substL_id args
   | .arr t => by simp [VTy.subst_id t]
   | .opt t => by simp [VTy.subst_id t]
@@ -218,7 +218,7 @@ mutual
 /-- Substitutions that agree below `n` agree on a type whose variables are below `n`. -/
 theorem VTy.subst_congr {σ σ' : Nat → VTy} {n : Nat} (hσ : ∀ j < n, σ j = σ' j) :
     ∀ t : VTy, t.varsBelow n = true → t.subst σ = t.subst σ'
-  | .int, _ | .logic, _ | .char, _ => by simp
+  | .int, _ | .logic, _ | .char, _ | .float, _ => by simp
   | .var j, h => by simp only [VTy.varsBelow, decide_eq_true_eq] at h; simp [hσ j h]
   | .arr t, h => by simp only [VTy.varsBelow] at h; simp [VTy.subst_congr hσ t h]
   | .opt t, h => by simp only [VTy.varsBelow] at h; simp [VTy.subst_congr hσ t h]
@@ -269,6 +269,12 @@ theorem PrimTy.subst (θ : Nat → VTy) {op ts τ} (h : PrimTy op ts τ) :
   | toStrInt => simpa using PrimTy.toStrInt
   | toStrChar => simpa using PrimTy.toStrChar
   | toStrStr => simpa using PrimTy.toStrStr
+  | farith hop => simpa using PrimTy.farith hop
+  | funary hop => simpa using PrimTy.funary hop
+  | fcmp hop => simpa using PrimTy.fcmp hop
+  | fofInt => simpa using PrimTy.fofInt
+  | ftoInt hop => simpa using PrimTy.ftoInt hop
+  | toStrFloat => simpa using PrimTy.toStrFloat
   | fail => exact .fail
   | userErr => exact .userErr
 
@@ -284,7 +290,7 @@ theorem VTy.sub_refl : ∀ t : VTy, t.sub t = true
   | .arr t => by simp only [VTy.sub]; exact VTy.sub_refl t
   | .opt t => by simp only [VTy.sub]; exact VTy.sub_refl t
   | .tup ts => by simp only [VTy.sub]; exact VTy.subL_refl ts
-  | .int | .logic | .char | .var _ => by simp [VTy.sub]
+  | .int | .logic | .char | .float | .var _ => by simp [VTy.sub]
 theorem VTy.subL_refl : ∀ ts : List VTy, VTy.subL ts ts = true
   | [] => rfl
   | t :: ts => by simp [VTy.subL, VTy.sub_refl t, VTy.subL_refl ts]
@@ -308,7 +314,7 @@ theorem VTy.sub_trans : ∀ (t u w : VTy), t.sub u = true → u.sub w = true →
     cases u <;> simp [VTy.sub] at h1
     cases w <;> simp [VTy.sub] at h2 ⊢
     exact VTy.subL_trans _ _ _ h1 h2
-  | .int, u, w, h1, h2 | .logic, u, w, h1, h2 | .char, u, w, h1, h2 | .var _, u, w, h1, h2 => by
+  | .int, u, w, h1, h2 | .logic, u, w, h1, h2 | .char, u, w, h1, h2 | .float, u, w, h1, h2 | .var _, u, w, h1, h2 => by
     cases u <;> simp [VTy.sub] at h1 <;> subst_vars <;> exact h2
 theorem VTy.subL_trans : ∀ (ts us ws : List VTy), VTy.subL ts us = true → VTy.subL us ws = true →
     VTy.subL ts ws = true
@@ -335,7 +341,7 @@ theorem VTy.sub_subst (θ : Nat → VTy) : ∀ (t u : VTy), t.sub u = true → (
   | .tup ts, u, h => by
     cases u <;> simp [VTy.sub] at h
     simpa [VTy.sub] using VTy.subL_subst θ _ _ h
-  | .int, u, h | .logic, u, h | .char, u, h | .var _, u, h => by
+  | .int, u, h | .logic, u, h | .char, u, h | .float, u, h | .var _, u, h => by
     cases u <;> simp [VTy.sub] at h <;> subst_vars <;> exact VTy.sub_refl _
 theorem VTy.subL_subst (θ : Nat → VTy) : ∀ (ts us : List VTy), VTy.subL ts us = true →
     VTy.subL (ts.map (VTy.subst θ)) (us.map (VTy.subst θ)) = true
@@ -378,7 +384,7 @@ theorem hasTy_sub : ∀ (t u : VTy) (v : Value), t.sub u = true → hasTy Ξ v t
     cases v with
     | tup vs => simp only [hasTy] at hv ⊢; exact allTys_sub _ _ vs hs hv
     | _ => simp [hasTy] at hv
-  | .int, u, v, hs, hv | .logic, u, v, hs, hv | .char, u, v, hs, hv | .var _, u, v, hs, hv => by
+  | .int, u, v, hs, hv | .logic, u, v, hs, hv | .char, u, v, hs, hv | .float, u, v, hs, hv | .var _, u, v, hs, hv => by
     cases u <;> simp [VTy.sub] at hs <;> subst_vars <;> exact hv
 theorem allTys_sub : ∀ (ts us : List VTy) (vs : List Value), VTy.subL ts us = true →
     allTys Ξ vs ts = true → allTys Ξ vs us = true
@@ -501,6 +507,18 @@ theorem intBytes_typed (i : Int) : allTy Ξ ((intBytes i).map Value.char) .char 
   show hasTy Ξ (Value.char b.toNat) VTy.char = true
   simp only [hasTy, decide_eq_true_eq]; omega
 
+theorem hasTy_float {v} (h : hasTy Ξ v .float = true) : ∃ b, v = .float b := by
+  cases v <;> simp_all [hasTy]
+
+theorem ofString_typed (s : String) : hasTy Ξ (Value.ofString s) VTy.str = true := by
+  simp only [Value.ofString, hasTy, VTy.str, List.toList_toArray]
+  rw [allTy_iff]; intro v hv
+  simp only [List.mem_map] at hv
+  obtain ⟨b, _, rfl⟩ := hv
+  have := b.toNat_lt
+  show hasTy Ξ (Value.char b.toNat) VTy.char = true
+  simp only [hasTy, decide_eq_true_eq]; omega
+
 theorem toStr_typed {v t} (ht : PrimTy .toStr [t] VTy.str) (hv : hasTy Ξ v t = true) {ρ} :
     ResOK Ξ VTy.str ρ (toStrValue v) := by
   cases ht with
@@ -515,6 +533,10 @@ theorem toStr_typed {v t} (ht : PrimTy .toStr [t] VTy.str) (hv : hasTy Ξ v t = 
     rcases hb : asBytes vs.toList with _ | bs
     · simp [hb] at this
     · simp [ResOK, hasTy, VTy.str, hvs]
+  | toStrFloat =>
+    obtain ⟨b, rfl⟩ := hasTy_float hv
+    simp only [toStrValue, ResOK]
+    exact ofString_typed _
 
 theorem cmpRes_ok {b : Bool} {v : Value} {τ ρ} (h : hasTy Ξ v τ = true) : ResOK Ξ τ ρ (cmpRes b v) := by
   unfold cmpRes; split <;> simp [ResOK, h]
@@ -550,6 +572,39 @@ theorem prim_typed {op ts τ ρ} {vs : List Value} (hp : PrimTy op ts τ) (hv : 
       obtain ⟨x, rfl, hx⟩ := hasTy_char hv.1; obtain ⟨y, rfl, _⟩ := hasTy_char hv.2
       simp only [List.mem_cons, List.mem_nil_iff, or_false] at hop
       rcases hop with rfl | rfl | rfl | rfl <;> exact cmpRes_ok (by simp [hasTy, hx])
+  | farith hop =>
+    rcases vs with _ | ⟨a, _ | ⟨b, _ | ⟨_, _⟩⟩⟩ <;> simp only [allTys, Bool.and_eq_true, Bool.false_eq_true, and_false, and_true] at hv
+    all_goals
+      obtain ⟨x, rfl⟩ := hasTy_float hv.1; obtain ⟨y, rfl⟩ := hasTy_float hv.2
+      simp only [List.mem_cons, List.mem_nil_iff, or_false] at hop
+      rcases hop with rfl | rfl | rfl | rfl | rfl | rfl <;> simp [Prim.apply, ResOK, hasTy]
+  | funary hop =>
+    rcases vs with _ | ⟨a, _ | ⟨_, _⟩⟩ <;> simp only [allTys, Bool.and_eq_true, Bool.false_eq_true, and_false, and_true] at hv
+    all_goals
+      obtain ⟨x, rfl⟩ := hasTy_float hv
+      simp only [List.mem_cons, List.mem_nil_iff, or_false] at hop
+      rcases hop with rfl | rfl <;> simp [Prim.apply, ResOK, hasTy]
+  | fcmp hop =>
+    rcases vs with _ | ⟨a, _ | ⟨b, _ | ⟨_, _⟩⟩⟩ <;> simp only [allTys, Bool.and_eq_true, Bool.false_eq_true, and_false, and_true] at hv
+    all_goals
+      obtain ⟨x, rfl⟩ := hasTy_float hv.1; obtain ⟨y, rfl⟩ := hasTy_float hv.2
+      simp only [List.mem_cons, List.mem_nil_iff, or_false] at hop
+      rcases hop with rfl | rfl | rfl | rfl <;> exact cmpRes_ok (by simp [hasTy])
+  | fofInt =>
+    rcases vs with _ | ⟨a, _ | ⟨_, _⟩⟩ <;> simp only [allTys, Bool.and_eq_true, Bool.false_eq_true, and_false, and_true] at hv
+    all_goals
+      obtain ⟨x, rfl⟩ := hasTy_int hv
+      simp [Prim.apply, ResOK, hasTy]
+  | ftoInt hop =>
+    rcases vs with _ | ⟨a, _ | ⟨_, _⟩⟩ <;> simp only [allTys, Bool.and_eq_true, Bool.false_eq_true, and_false, and_true] at hv
+    all_goals
+      obtain ⟨x, rfl⟩ := hasTy_float hv
+      simp only [List.mem_cons, List.mem_nil_iff, or_false] at hop
+      rcases hop with rfl | rfl | rfl | rfl <;> simp only [Prim.apply, VFloat.toIntRes] <;> split <;> simp [ResOK, hasTy]
+  | toStrFloat =>
+    rcases vs with _ | ⟨a, _ | ⟨_, _⟩⟩ <;> simp only [allTys, Bool.and_eq_true, Bool.false_eq_true, and_false, and_true] at hv
+    all_goals
+      exact toStr_typed .toStrFloat hv
   | eq =>
     rcases vs with _ | ⟨a, _ | ⟨b, _ | ⟨_, _⟩⟩⟩ <;> simp only [allTys, Bool.and_eq_true, Bool.false_eq_true, and_false, and_true] at hv
     all_goals exact cmpRes_ok hv.1
@@ -652,7 +707,7 @@ mutual
 /-- Typings survive the growth of the heap typing: objects are only added. -/
 theorem hasTy_mono {Ξ₁ Ξ₂ : HeapTy} (hx : Ξ₁ <+: Ξ₂) : ∀ (t : VTy) (v : Value),
     hasTy Ξ₁ v t = true → hasTy Ξ₂ v t = true
-  | .int, v, hv | .logic, v, hv | .char, v, hv | .var _, v, hv => by cases v <;> simp_all [hasTy]
+  | .int, v, hv | .logic, v, hv | .char, v, hv | .float, v, hv | .var _, v, hv => by cases v <;> simp_all [hasTy]
   | .arr t, v, hv => by
     cases v
     case arr vs =>

@@ -49,10 +49,17 @@ theorem asBytesTR_go (vs : List Value) (acc : List Nat) :
 /-- Decimal rendering of an int, as bytes (ASCII). -/
 def intBytes (i : Int) : List Nat := (toString i).toUTF8.toList.map (·.toNat)
 
+/-- A float to an int (#127): fails on NaN, an infinity or out of range. -/
+def VFloat.toIntRes (r : VFloat.Rounding) (b : UInt64) : Res :=
+  match VFloat.toInt? r b with
+  | some i => .ok (.int i)
+  | none => .fail
+
 /-- The string value of `ToString(v)`. -/
 def toStrValue : Value → Res
   | .int i => .ok (.arr ((intBytes i).map Value.char).toArray)
   | .char c => .ok (.arr #[.char c])
+  | .float b => .ok (Value.ofString (VFloat.render b))
   | .arr vs => match asBytes vs.toList with
     | some _ => .ok (.arr vs)
     | none => .err .type
@@ -134,6 +141,23 @@ def Prim.apply : Prim → List Value → Res
     | some v => .ok v
     | none => .err .type
   | .toStr, [v] => toStrValue v
+  | .fadd, [.float a, .float b] => .ok (.float (VFloat.canon (VFloat.ofBits a + VFloat.ofBits b)))
+  | .fsub, [.float a, .float b] => .ok (.float (VFloat.canon (VFloat.ofBits a - VFloat.ofBits b)))
+  | .fmul, [.float a, .float b] => .ok (.float (VFloat.canon (VFloat.ofBits a * VFloat.ofBits b)))
+  | .fdiv, [.float a, .float b] => .ok (.float (VFloat.canon (VFloat.ofBits a / VFloat.ofBits b)))
+  | .fneg, [.float a] => .ok (.float (VFloat.canon (-VFloat.ofBits a)))
+  | .fabs, [.float a] => .ok (.float (VFloat.canon (VFloat.ofBits a).abs))
+  | .fmin, [.float a, .float b] => .ok (.float (VFloat.fmin a b))
+  | .fmax, [.float a, .float b] => .ok (.float (VFloat.fmax a b))
+  | .flt, [.float a, .float b] => cmpRes (decide (VFloat.ofBits a < VFloat.ofBits b)) (.float a)
+  | .fle, [.float a, .float b] => cmpRes (decide (VFloat.ofBits a ≤ VFloat.ofBits b)) (.float a)
+  | .fgt, [.float a, .float b] => cmpRes (decide (VFloat.ofBits b < VFloat.ofBits a)) (.float a)
+  | .fge, [.float a, .float b] => cmpRes (decide (VFloat.ofBits b ≤ VFloat.ofBits a)) (.float a)
+  | .fofInt, [.int i] => .ok (.float (VFloat.canon (Float.ofInt i)))
+  | .ffloor, [.float a] => VFloat.toIntRes .floor a
+  | .fceil, [.float a] => VFloat.toIntRes .ceil a
+  | .fround, [.float a] => VFloat.toIntRes .round a
+  | .ftrunc, [.float a] => VFloat.toIntRes .trunc a
   | .fail, [] => .fail
   | .userErr, [] => .err .user
   | _, _ => .err .type
@@ -143,8 +167,10 @@ def Prim.failable : Prim → Bool
   | .floorDiv | .ceilDiv | .quotient | .modulo => true
   | .lt | .le | .gt | .ge | .eq | .ne => true
   | .query | .index | .arrSet | .fail => true
+  | .flt | .fle | .fgt | .fge | .ffloor | .fceil | .fround | .ftrunc => true
   | _ => false
 
+set_option maxHeartbeats 4000000 in
 /-- A primitive that is not `failable` never fails, on any arguments. -/
 theorem Prim.apply_ne_fail {p : Prim} (h : p.failable = false) (vs : List Value) :
     p.apply vs ≠ .fail := by

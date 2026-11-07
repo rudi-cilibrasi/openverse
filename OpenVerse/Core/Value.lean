@@ -1,3 +1,4 @@
+import OpenVerse.Core.Float
 /-
   OpenVerse — values of Verse Core.
 
@@ -27,6 +28,10 @@ inductive Value where
   | logic : Bool → Value
   /-- `char`: one UTF-8 code unit, `0 ≤ c < 256`. -/
   | char  : Nat → Value
+  /-- `float` (#127): the bits of an IEEE 64-bit float, canonical (one NaN,
+      no negative zero: `Float.canon`), so that equality of values is Verse's
+      equality of floats. -/
+  | float : UInt64 → Value
   /-- `[]t`, including `string = []char`. An `Array`, so that the
       reference interpreter indexes in constant time (#110); proofs reason
       about its `toList`. -/
@@ -58,6 +63,8 @@ def decEq : (a b : Value) → Decidable (a = b)
     if h : x = y then isTrue (by subst h; rfl) else isFalse (by intro h'; cases h'; exact h rfl)
   | .char x, .char y =>
     if h : x = y then isTrue (by subst h; rfl) else isFalse (by intro h'; cases h'; exact h rfl)
+  | .float x, .float y =>
+    if h : x = y then isTrue (by subst h; rfl) else isFalse (by intro h'; cases h'; exact h rfl)
   | .arr a, .arr b =>
     -- (the sizes first, in constant time: arrays of different lengths are
     -- told apart without walking them)
@@ -86,6 +93,10 @@ def decEq : (a b : Value) → Decidable (a = b)
   | .tup _, .int _ | .tup _, .logic _ | .tup _, .char _ | .tup _, .arr _ | .tup _, .none | .tup _, .some _ => isFalse (by intro h; cases h)
   | .none, .int _ | .none, .logic _ | .none, .char _ | .none, .arr _ | .none, .tup _ | .none, .some _ => isFalse (by intro h; cases h)
   | .some _, .int _ | .some _, .logic _ | .some _, .char _ | .some _, .arr _ | .some _, .tup _ | .some _, .none => isFalse (by intro h; cases h)
+  | .float _, .int _ | .float _, .logic _ | .float _, .char _ | .float _, .arr _ | .float _, .tup _
+  | .float _, .none | .float _, .some _ | .float _, .ref _
+  | .int _, .float _ | .logic _, .float _ | .char _, .float _ | .arr _, .float _ | .tup _, .float _
+  | .none, .float _ | .some _, .float _ | .ref _, .float _ => isFalse (by intro h; cases h)
 def decEqList : (as bs : List Value) → Decidable (as = bs)
   | [], [] => isTrue rfl
   | [], _ :: _ => isFalse (by intro h; cases h)
@@ -103,6 +114,7 @@ partial def render : Value → String
   | .int i => toString i
   | .logic b => if b then "true" else "false"
   | .char c => String.singleton (Char.ofNat c)
+  | .float b => VFloat.render b
   | .arr vs =>
     if vs.all (fun v => match v with | .char _ => true | _ => false) && !vs.isEmpty then
       String.fromUTF8! (ByteArray.mk (vs.map (fun v => match v with
