@@ -319,11 +319,12 @@ def Sigs.ClosedClasses (S : Sigs) : Prop :=
   ∀ (t : Nat) (fs : List VTy), S.classes[t]? = some fs → ∀ f ∈ fs, f.closed = true
 
 /-- The class tags of a heap's objects. -/
-def tagsOf (h : List Obj) : List Nat := h.map (·.tag)
+def tagsOf (h : Array Obj) : List Nat := h.toList.map (·.tag)
 
 /-- Every object of the heap has the field types of its class. -/
-def HeapOK (S : Sigs) (h : List Obj) : Prop :=
-  (∀ (a : Nat) (o : Obj), h[a]? = some o → ∃ fs, S.classes[o.tag]? = some fs ∧ allTys (tagsOf h) o.fields fs = true) ∧
+def HeapOK (S : Sigs) (h : Array Obj) : Prop :=
+  (∀ (a : Nat) (o : Obj), h.toList[a]? = some o →
+    ∃ fs, S.classes[o.tag]? = some fs ∧ allTys (tagsOf h) o.fields fs = true) ∧
   -- the heap starts with the prototypes (#37)
   S.protos <+: tagsOf h
 
@@ -337,7 +338,7 @@ def protoPrelude : List (Nat × List Value) → Expr → Expr
   | (t, vs) :: rest, e => .seq (.heap (.new t) (vs.map .lit)) (protoPrelude rest e)
 
 /-- The objects a prelude allocates. -/
-def protoObjs (objs : List (Nat × List Value)) : List Obj := objs.map fun (t, vs) => ⟨t, vs⟩
+def protoObjs (objs : List (Nat × List Value)) : Array Obj := (objs.map fun (t, vs) => ⟨t, vs⟩).toArray
 
 /-- `P`'s `Main` is a prelude that allocates the prototypes (well typed),
     then calls a function `m` of `Main`'s signature (#37). -/

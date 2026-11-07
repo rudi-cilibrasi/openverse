@@ -48,7 +48,7 @@ def Prog.WriteSound (P : Prog) : Prop :=
 
 /-- Every object of `g` is in `g'`, at the same address, with the same fields. -/
 def Glob.keeps (g g' : Glob) : Prop :=
-  ∀ (a : Nat) (o : Obj), g.heap[a]? = some o → g'.heap[a]? = some o
+  ∀ (a : Nat) (o : Obj), g.heap.toList[a]? = some o → g'.heap.toList[a]? = some o
 
 theorem Glob.keeps_refl (g : Glob) : g.keeps g := fun _ _ h => h
 
@@ -59,21 +59,21 @@ theorem Glob.keeps_of_heap {g g' : Glob} (h : g'.heap = g.heap) : g.keeps g' := 
   intro a o ho; rw [h]; exact ho
 
 /-- An expression that keeps every object only appends to the heap. -/
-theorem Glob.keeps.prefix {g g' : Glob} (h : g.keeps g') : g.heap <+: g'.heap := by
-  have hlen : g.heap.length ≤ g'.heap.length := by
-    rcases Nat.eq_zero_or_pos g.heap.length with h0 | hpos
+theorem Glob.keeps.prefix {g g' : Glob} (h : g.keeps g') : g.heap.toList <+: g'.heap.toList := by
+  have hlen : g.heap.toList.length ≤ g'.heap.toList.length := by
+    rcases Nat.eq_zero_or_pos g.heap.toList.length with h0 | hpos
     · omega
-    · have hl := h (g.heap.length - 1) g.heap[g.heap.length - 1] (List.getElem?_eq_getElem (by omega))
+    · have hl := h (g.heap.toList.length - 1) g.heap.toList[g.heap.toList.length - 1] (List.getElem?_eq_getElem (by omega))
       have := (List.getElem?_eq_some_iff.mp hl).1
       omega
-  refine ⟨g'.heap.drop g.heap.length, ?_⟩
-  conv => rhs; rw [← List.take_append_drop g.heap.length g'.heap]
+  refine ⟨g'.heap.toList.drop g.heap.toList.length, ?_⟩
+  conv => rhs; rw [← List.take_append_drop g.heap.toList.length g'.heap.toList]
   congr 1
   apply List.ext_getElem?
   intro i
-  rcases Nat.lt_or_ge i g.heap.length with hi | hi
-  · rw [List.getElem?_take_of_lt hi, h i g.heap[i] (List.getElem?_eq_getElem hi), List.getElem?_eq_getElem hi]
-  · rw [List.getElem?_eq_none hi, List.getElem?_eq_none (by simp; omega)]
+  rcases Nat.lt_or_ge i g.heap.toList.length with hi | hi
+  · rw [List.getElem?_take_of_lt hi, h i g.heap.toList[i] (List.getElem?_eq_getElem hi), List.getElem?_eq_getElem hi]
+  · rw [List.getElem?_eq_none hi, List.getElem?_eq_none (by simp only [List.length_take]; omega)]
 
 theorem writeSlot_g {s s' : St} {i : Nat} {v : Value} (h : writeSlot s i v = some s') : s'.g = s.g := by
   unfold writeSlot at h; split at h
@@ -87,8 +87,8 @@ theorem HeapOp.apply_keeps {op : HeapOp} (h : op.writes = false) (vs : List Valu
   | set k => simp [HeapOp.writes] at h
   | new t =>
     intro a o ho
-    show (g.heap ++ [⟨t, vs⟩])[a]? = some o
-    rw [List.getElem?_append_left (lt_of_getElem?_some ho)]; exact ho
+    show (g.heap.push ⟨t, vs⟩).toList[a]? = some o
+    rw [Array.toList_push, List.getElem?_append_left (lt_of_getElem?_some ho)]; exact ho
   | get k | tag | isTag us =>
     apply Glob.keeps_of_heap
     unfold HeapOp.apply
