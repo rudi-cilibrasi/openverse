@@ -1550,7 +1550,7 @@ partial def elabApp (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (brack
           let call := Expr.call s.idx (slots.toList.map fun o => Expr.local o.get!)
           return ⟨steps.toList.foldr Expr.seq call, s.ret⟩
       | none =>
-        if (ctx.sig? s!"{name}$init").isSome then
+        if (ctx.sig? s!"{name}$init").isSome || (ctx.types.overloads.lookup s!"{name}$init").isSome then
           eerr p s!"{name} constructs an abstract class: it can only be delegated to, as {name}<constructor>(…) in a constructor of a class below it"
         eerr p s!"unknown function '{name}'"
   | .member mp (.ident _ "(super:)") m =>
@@ -2653,9 +2653,11 @@ def expandCtors (ctors : List (Pos × String × List SParam × List TParam × Li
     | .app p (.ident _ d) _ _ => if d.startsWith "$ctor:" then some (p, (d.drop "$ctor:".length).toString) else none
     | _ => none
   -- the checks of each constructor on its own
-  for ((p, k, _, _, _, _, _), i) in ctors.zip (List.range ctors.length) do
-    if (ctors.take i).any (·.2.1 == k) then
-      throw s!"{p.show}: constructor {k} is defined twice (overloaded constructors are not supported yet)"
+  -- overloaded constructors (Book of Verse ch. 10, #74): one class, and the
+  -- same fields, so a delegation to any of them sets the same ones
+  for ((p, k, _, _, _, c, _), i) in ctors.zip (List.range ctors.length) do
+    if let some (_, _, _, _, _, c', _) := (ctors.take i).find? (·.2.1 == k) then
+      if c' != c then throw s!"{p.show}: the overloads of constructor {k} construct {c'} and {c}: they must construct one class"
   for (p, k, ps, tps, _, c, items) in ctors do
     let some cd := cdef? c | throw s!"{p.show}: constructor {k}: {c} is not a class"
     if cd.isIface then throw s!"{p.show}: constructor {k}: {c} is an interface"
@@ -2691,15 +2693,22 @@ def expandCtors (ctors : List (Pos × String × List SParam × List TParam × Li
         throw s!"{fp.show}: {k} sets {f} after delegating to {d}: set the fields of {c} first, then delegate"
     | _ :: (dp, _) :: _ => throw s!"{dp.show}: {k} delegates to more than one constructor"
   -- the fields each sets: its own, and its delegate's
+  -- (of a name's overloads, all their fields: one that does not set a field
+  -- gives it its default, below)
   let mut setBy : List (String × List String) := []
   for _ in [0:ctors.length + 1] do
-    for (_, k, _, _, _, _, items) in ctors do
+    for (_, k, _, _, _, _, _) in ctors do
       if setBy.any (·.1 == k) then continue
-      let own := (directOf items).map (·.2)
-      match delegsOf items with
-      | [] => setBy := setBy ++ [(k, own)]
-      | (_, d) :: _ =>
-        if let some ds := setBy.lookup d then setBy := setBy ++ [(k, own ++ ds)]
+      let sets : List (Option (List String)) := (ctors.filter (·.2.1 == k)).map fun (_, _, _, _, _, _, items) =>
+        let own := (directOf items).map (·.2)
+        match delegsOf items with
+        | [] => some own
+        -- (to another overload of the name: it adds none of its own)
+        | (_, d) :: _ => if d == k then some own else (setBy.lookup d).map (own ++ ·)
+      if sets.all (·.isSome) then
+        let all := sets.filterMap id
+        let first := all.headD []
+        setBy := setBy ++ [(k, first ++ ((all.flatMap id).filter (!first.contains ·)).eraseDups)]
   for (p, k, _, _, _, _, items) in ctors do
     let some fs := setBy.lookup k | do
       -- on a cycle, or delegating into one
@@ -2714,11 +2723,12 @@ def expandCtors (ctors : List (Pos × String × List SParam × List TParam × Li
       let d := ((delegsOf items).map (·.2)).headD k
       if onCycle then throw s!"{p.show}: {k} delegates to itself, through {d}"
       else throw s!"{p.show}: {k} delegates to {d}, which delegates in a cycle"
-    if let some f := fs.find? fun f => (fs.filter (· == f)).length > 1 then
+    let mine := (directOf items).map (·.2) ++ (((delegsOf items).head?.bind fun (_, d) => setBy.lookup d).getD [])
+    if let some f := mine.find? fun f => (mine.filter (· == f)).length > 1 then
       throw s!"{p.show}: {k} sets {f} twice: itself, and by delegating"
-  for (p, k, _, _, _, c, _) in ctors do
-    let fs := (setBy.lookup k).getD []
-    if let some (f, _) := (fullOf c).find? fun (f, _, d, _) => d.isNone && !fs.contains f then
+  for (p, k, _, _, _, c, items) in ctors do
+    let mine := (directOf items).map (·.2) ++ (((delegsOf items).head?.bind fun (_, d) => setBy.lookup d).getD [])
+    if let some (f, _) := (fullOf c).find? fun (f, _, d, _) => d.isNone && !mine.contains f then
       throw s!"{p.show}: {k} does not set {f}, a field of {c} without a default"
   -- the functions
   let mut out : Array STop := #[]
@@ -2735,7 +2745,7 @@ def expandCtors (ctors : List (Pos × String × List SParam × List TParam × Li
       t0.substNames σ
     let tpTys : List STy := tps.map fun tp => STy.name tp.name
     let fieldsSTy : STy := if tps.isEmpty then .name fieldsTy else .app fieldsTy tpTys
-    if !fs.isEmpty then
+    if !fs.isEmpty && !out.any (fun | .const _ n _ _ => n == fieldsTy | _ => false) then
       out := out.push (.const p fieldsTy none (.structDef p tps (fs.map fun f => (f, tyOf f, none, false))))
     let mut body : Array SExpr := #[]
     let mut di := 0
@@ -2759,6 +2769,12 @@ def expandCtors (ctors : List (Pos × String × List SParam × List TParam × Li
           for f in dfs do
             body := body.push (.decl ip s!"{f}$v" (some (tyOf f)) false (.member ip (.ident ip tmp) f))
       | it => body := body.push (.app p (.ident p "$nofail") [it] false)   -- a `block:` clause
+    -- the name's fields this overload does not set (another overload does):
+    -- their defaults, as construction would give them
+    let mine := (directOf items).map (·.2) ++ (((delegsOf items).head?.bind fun (_, d) => setBy.lookup d).getD [])
+    for f in fs.filter (!mine.contains ·) do
+      if let some (_, _, some d, _) := (fullOf c).find? (·.1 == f) then
+        body := body.push (.decl p s!"{f}$v" (some (tyOf f)) false d)
     let initRet : SExpr :=
       if fs.isEmpty then .block p []
       else .construct p fieldsTy tpTys (fs.map fun f => .decl p f none false (.ident p s!"{f}$v"))
