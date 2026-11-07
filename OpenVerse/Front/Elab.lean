@@ -257,7 +257,7 @@ partial def Ty.toVTy (env : TyEnv) : Ty → VTy
   | .opt t => .opt (t.toVTy env)
   | .tup ts => .tup (ts.map (Ty.toVTy env))
   | .struct n ts =>
-    if env.isRefClass n then .ref (env.refTags n)
+    if env.isRefClass n then .ref (env.refTags n) []
     else if env.classes.contains n then
       -- one option per concrete class at or below `n`
       .tup ((env.concreteBelow n).map fun d =>
@@ -627,7 +627,7 @@ def TyEnv.makeProtos (env : TyEnv) : List (String × Nat × List Value) :=
 
 /-- Whether a Verse Core type mentions a reference. -/
 partial def _root_.OpenVerse.VTy.hasRef : VTy → Bool
-  | .ref _ => true
+  | .ref _ _ => true
   | .arr t | .opt t => t.hasRef
   | .tup ts => ts.any VTy.hasRef
   | _ => false
@@ -2549,7 +2549,7 @@ def elabProgram (allTops00 : List STop) (opts : Options := {}) : Except String C
   -- the class table: the fields of each class, by tag (#34); the prototypes (#37)
   let classTable := env.classes.map fun d =>
     if env.isRefClass d then (env.fields d).map (·.2.1.toVTy env) else []
-  let S : Sigs := { fns := fsigs, classes := classTable, protos := protoList.map (·.1) }
+  let S : Sigs := { fns := fsigs, classes := classTable, protos := protoList.map fun (t, _) => (t, []) }
   if !P.checkTypes S slotTys.toList then
     throw "internal error: the elaborated program does not pass Prog.checkTypes"
   return { prog := P, sigs := S, slotTys := slotTys.toList }
