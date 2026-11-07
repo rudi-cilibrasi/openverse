@@ -86,6 +86,18 @@ partial def Ty.subst (σ : List (String × Ty)) : Ty → Ty
   | .struct n ts => .struct n (ts.map (Ty.subst σ))
   | t => t
 
+/-- `a` and `b` are equal up to a one-to-one renaming of type parameters,
+    extending `m` (from `a`'s to `b`'s). -/
+partial def Ty.alpha (m : List (String × String)) : Ty → Ty → Option (List (String × String))
+  | .param x _, .param y _ => match m.lookup x with
+    | some y' => if y' == y then some m else none
+    | none => if m.any (·.2 == y) then none else some ((x, y) :: m)
+  | .arr a, .arr b | .opt a, .opt b => Ty.alpha m a b
+  | .tup as, .tup bs | .struct _ as, .struct _ bs =>
+    if as.length != bs.length then none else (as.zip bs).foldlM (fun m (a, b) => Ty.alpha m a b) m
+  | .map k v, .map k' v' => do Ty.alpha (← Ty.alpha m k k') v v'
+  | a, b => if a.eqv b then some m else none
+
 /-- Where a class or interface sits in the hierarchy (#18). -/
 structure ClassInfo where
   /-- The superclass of a class (single inheritance). -/
@@ -122,6 +134,13 @@ structure TyEnv where
       class each one is of, with its tag and fields. A slot of class type
       starts as a reference to one. -/
   protos : List (String × Nat × List Value) := []
+  /-- The type arguments of each class's parametric superclass (#39), in
+      terms of the class's own type parameters: `sub(t) := class(base(t))`
+      gives `base ↦ [t]`. -/
+  pargs : List (String × List Ty) := []
+  /-- The class whose code each field default is, by (class, field): its
+      type parameters are those the default mentions (#39). -/
+  defaultHome : List ((String × String) × String) := []
   /-- The type parameters in scope, in order (the j-th is `VTy.var j` in
       Verse Core), and what they stand for: themselves (`Ty.param`) in a
       generic function or struct definition, the type arguments of a struct
@@ -139,6 +158,63 @@ def TyEnv.fields (env : TyEnv) (n : String) (args : List Ty := []) : List (Strin
   | none => fs
 
 def TyEnv.info (env : TyEnv) (c : String) : ClassInfo := (env.cinfo.lookup c).getD {}
+
+/-- The type arguments of the superclass `T` of `d(args)` (along the class
+    chain), or `[]` when `T` is not a parametric class above `d`. -/
+partial def TyEnv.upArgs (env : TyEnv) (d : String) (args : List Ty) (T : String) : List Ty :=
+  if d == T then args
+  else match (env.info d).parent, env.pargs.lookup d with
+    | some q, some qargs =>
+      let σ := (((env.sparams.lookup d).getD []).map (·.1)).zip args
+      env.upArgs q (qargs.map (·.subst σ)) T
+    | some q, none => env.upArgs q [] T
+    | none, _ => []
+
+/-- The root of `d`'s class chain. -/
+partial def TyEnv.rootOf (env : TyEnv) (d : String) : String :=
+  match (env.info d).parent with
+  | some q => env.rootOf q
+  | none => d
+
+/-- The type parameters of class `d` that are not among its parent's type
+    arguments (#39): `u`, for `pair(t, u) := class(base(t))`. -/
+def TyEnv.extraParams (env : TyEnv) (d : String) : List String :=
+  let ps := ((env.sparams.lookup d).getD []).map (·.1)
+  let qargs := (env.pargs.lookup d).getD []
+  ps.filter fun p => !qargs.any fun | .param v _ => v == p | _ => false
+
+/-- The type arguments of `d(args)` in Verse Core (#39): its parent's, then
+    its own type parameters that are not among them. So a class's are an
+    extension of every class's above it, and objects of `pair(int, string)
+    := class(base(int))` are also `base(int)`s (Core's prefix subtyping). -/
+partial def TyEnv.coreArgs (env : TyEnv) (d : String) (args : List Ty) : List Ty :=
+  let ps := ((env.sparams.lookup d).getD []).map (·.1)
+  let σ := ps.zip args
+  let extras := (env.extraParams d).map fun p => (σ.lookup p).getD Ty.void
+  match (env.info d).parent with
+  | some q => env.coreArgs q (((env.pargs.lookup d).getD []).map (·.subst σ)) ++ extras
+  | none => args
+
+/-- Where each type parameter of class `d` sits among its Verse Core type
+    arguments (`coreArgs`): the type variables of its class table entry. -/
+def TyEnv.coreVars (env : TyEnv) (d : String) : List (String × Ty) :=
+  let ps := (env.sparams.lookup d).getD []
+  (env.coreArgs d (ps.map fun (v, c) => Ty.param v c)).zipIdx.map fun
+    | (.param v c, _) => (v, Ty.param v c)
+    | (_, j) => (s!"$arg{j}", Ty.void)
+
+/-- The type arguments of `d` below `T`, for an instance of `T(targs)`: its
+    type parameters at their places among the Verse Core type arguments. -/
+def TyEnv.argsBelow (env : TyEnv) (T : String) (targs : List Ty) (d : String) : List Ty :=
+  if d == T then targs else
+  let cs := env.coreArgs T targs
+  let vars := env.coreVars d
+  ((env.sparams.lookup d).getD []).map fun (v, _) =>
+    match vars.findIdx? (·.1 == v) with
+    | some j => cs.getD j Ty.void
+    | none => Ty.void
+
+
 
 /-- A class or interface and everything above it: its class chain first,
     nearest first, then the interfaces of the chain, breadth first. This is
@@ -162,6 +238,27 @@ def TyEnv.supers (env : TyEnv) (c : String) : List String := Id.run do
 /-- `d` is `T` or below it. -/
 def TyEnv.isSub (env : TyEnv) (d T : String) : Bool := (env.supers d).contains T
 
+/-- The type arguments of class `D`, above or below `T`, for an instance of
+    `T(targs)` (#39). -/
+def TyEnv.argsAt (env : TyEnv) (T : String) (targs : List Ty) (D : String) : List Ty :=
+  if env.isSub T D then env.upArgs T targs D else env.argsBelow T targs D
+
+/-- The fields of class `d`, below `T`, with the types they have in an
+    object that is a `T(targs)`: each as the topmost class that has it gives
+    it, at that class's type arguments there. They are the types of the
+    class table at the Verse Core type arguments of `T(targs)`, also for a
+    `d` whose own type arguments differ (a placeholder, never read). -/
+def TyEnv.fieldsSeen (env : TyEnv) (T : String) (targs : List Ty) (d : String) :
+    List (String × Ty × Option SExpr) :=
+  let chain := ((env.supers d).filter fun x => !(env.info x).isIface).reverse
+  (env.fields d).map fun (f, t, dflt) =>
+    match chain.find? fun D => (env.fields D).any (·.1 == f) with
+    | some D =>
+      let tD := (((env.fields D).find? (·.1 == f)).map (·.2.1)).getD t
+      let σ := (((env.sparams.lookup D).getD []).map (·.1)).zip (env.argsAt T targs D)
+      (f, tD.subst σ, dflt)
+    | none => (f, t, dflt)
+
 /-- The concrete classes at or below `T`, in definition order: a value of
     static type `T` holds an instance of one of them. In Verse Core it is the
     tuple of one option per such class, holding that class's fields (#18). -/
@@ -170,11 +267,10 @@ def TyEnv.concreteBelow (env : TyEnv) (T : String) : List String :=
     let i := env.info d
     !i.isIface && !i.isAbstract && env.isSub d T
 
-/-- A class represented by references to heap objects (#34): every
-    non-parametric class and interface. A parametric class is a value (#18),
-    and cannot be in a hierarchy. -/
+/-- A class represented by references to heap objects (#34): every class
+    and interface, parametric ones too (#39), with a concrete class below. -/
 def TyEnv.isRefClass (env : TyEnv) (n : String) : Bool :=
-  env.classes.contains n && (env.sparams.lookup n).isNone &&
+  env.classes.contains n &&
     -- with no concrete class below, `n` has no instance: it stays the (empty)
     -- value of #18, so a variable of its type needs no placeholder
     env.classes.any fun d => let i := env.info d; !i.isIface && !i.isAbstract && (env.supers d).contains n
@@ -189,7 +285,7 @@ def TyEnv.refTags (env : TyEnv) (T : String) : List Nat := (env.concreteBelow T)
 /-- A class or interface with no concrete class below it: no value of its
     type can exist, so code that uses one is unreachable. -/
 def TyEnv.isEmptyClass (env : TyEnv) (n : String) : Bool :=
-  env.classes.contains n && (env.sparams.lookup n).isNone && !env.isRefClass n
+  env.classes.contains n && !env.isRefClass n
 
 /-- Whether field `f` of class `c` is a `var`. -/
 def TyEnv.isVarField (env : TyEnv) (c f : String) : Bool := env.varFields.contains (c, f)
@@ -203,12 +299,15 @@ partial def Ty.holdsMutable (env : TyEnv) (t : Ty) (seen : List String := []) : 
   | .tup ts => ts.any (·.holdsMutable env seen)
   | .map k v => k.holdsMutable env seen || v.holdsMutable env seen
   | .struct n ts =>
-    if env.classes.contains n && (env.sparams.lookup n).isNone then
-      -- an object below `n`, or one its fields reach
-      (env.concreteBelow n).any fun d =>
+    if env.classes.contains n then
+      -- an object below `n`, or one its fields reach (by instantiation, #39;
+      -- one that grows without end is taken to)
+      let key := (Ty.struct n ts).show
+      if seen.length > 16 || key.length > 400 then true
+      else (env.concreteBelow n).any fun d =>
         (env.supers d).any env.uniques.contains ||
-        (env.fields d).any fun (f, ft, _) =>
-          env.varFields.contains (d, f) || (!seen.contains d && ft.holdsMutable env (d :: seen))
+        (env.fieldsSeen n ts d).any fun (f, ft, _) =>
+          env.varFields.contains (d, f) || (!seen.contains key && ft.holdsMutable env (key :: seen))
     else (env.fields n ts).any fun (_, t, _) => t.holdsMutable env seen
   | _ => false
 
@@ -260,7 +359,7 @@ partial def Ty.toVTy (env : TyEnv) : Ty → VTy
   | .opt t => .opt (t.toVTy env)
   | .tup ts => .tup (ts.map (Ty.toVTy env))
   | .struct n ts =>
-    if env.isRefClass n then .ref (env.refTags n) []
+    if env.isRefClass n then .ref (env.refTags n) ((env.coreArgs n ts).map (Ty.toVTy env))
     else if env.classes.contains n then
       -- one option per concrete class at or below `n`
       .tup ((env.concreteBelow n).map fun d =>
@@ -292,21 +391,23 @@ partial def Ty.hasNever : Ty → Bool
 /-- First-order matching of a generic signature's type `pat` against the type
     `act` of an argument, extending the binding `σ` of the callee's type
     parameters. `false` (the bottom type) matches anything and binds nothing. -/
-partial def Ty.matchArg (σ : List (String × Ty)) : Ty → Ty → Option (List (String × Ty))
+partial def Ty.matchArg (env : TyEnv) (σ : List (String × Ty)) : Ty → Ty → Option (List (String × Ty))
   | _, .never => some σ
   | .param v _, a =>
     match σ.lookup v with
     | some b => if b.eqv a then some σ else none
     -- a type with `false` inside, like that of `array{Err()}`, binds nothing either
     | none => if a.hasNever then some σ else some ((v, a) :: σ)
-  | .arr p, .arr a | .opt p, .opt a => Ty.matchArg σ p a
+  | .arr p, .arr a | .opt p, .opt a => Ty.matchArg env σ p a
   | .tup ps, .tup as =>
     if ps.length != as.length then none
-    else (ps.zip as).foldlM (fun σ (p, a) => Ty.matchArg σ p a) σ
-  | .map pk pv, .map ak av => do Ty.matchArg (← Ty.matchArg σ pk ak) pv av
+    else (ps.zip as).foldlM (fun σ (p, a) => Ty.matchArg env σ p a) σ
+  | .map pk pv, .map ak av => do Ty.matchArg env (← Ty.matchArg env σ pk ak) pv av
   | .struct n ps, .struct m as =>
-    if n != m || ps.length != as.length then none
-    else (ps.zip as).foldlM (fun σ (p, a) => Ty.matchArg σ p a) σ
+    -- an instance of a class below `n` is one of `n`, at its type arguments there (#39)
+    let as := if n != m && env.classes.contains m && env.isSub m n then env.upArgs m as n else as
+    if (n != m && !(env.classes.contains m && env.isSub m n)) || ps.length != as.length then none
+    else (ps.zip as).foldlM (fun σ (p, a) => Ty.matchArg env σ p a) σ
   | p, a => if p.eqv a then some σ else none
 
 /-- At most `cap` nodes of the Verse Core tree of `t` (to bound the size of
@@ -615,7 +716,8 @@ partial def protoValue (env : TyEnv) (done : List (String × Nat)) : Ty → Opti
   | .tup ts => (ts.mapM (protoValue env done)).map .tup
   | t@(.struct n ts) =>
     if env.isRefClass n then
-      ((env.concreteBelow n).findSome? fun d => (done.lookup d).map Value.ref)
+      ((env.concreteBelow n).findSome? fun d =>
+        if env.coreArgs d [] == env.coreArgs n ts then (done.lookup d).map Value.ref else none)
     else if env.classes.contains n then some (t.toVTy env).default
     else ((env.fields n ts).mapM fun (f : String × Ty × Option SExpr) => protoValue env done f.2.1).map .tup
   | .param .. => none
@@ -625,8 +727,10 @@ partial def protoValue (env : TyEnv) (done : List (String × Nat)) : Ty → Opti
     below it, wherever that is (prototypes may form cycles, so classes that
     require each other have them too). -/
 def TyEnv.makeProtos (env : TyEnv) : List (String × Nat × List Value) :=
+  -- (a parametric class has none: a prototype has fixed type arguments)
   let concrete := env.classes.filter fun d =>
-    let i := env.info d; env.isRefClass d && !i.isIface && !i.isAbstract
+    let i := env.info d
+    env.isRefClass d && !i.isIface && !i.isAbstract && (env.sparams.lookup d).isNone
   let addrs := concrete.zipIdx
   concrete.filterMap fun d =>
     ((env.fields d).mapM fun (f : String × Ty × Option SExpr) => protoValue env addrs f.2.1).map
@@ -645,7 +749,8 @@ partial def _root_.OpenVerse.VTy.hasRef : VTy → Bool
     mentions a type variable or a reference), the hidden parameter of a type
     parameter, a parameter of a subtype, a placeholder object of the first
     concrete class below a class (#34), or a tuple of such. `visiting` are
-    the classes whose placeholders are being built. -/
+    the class types (with their type arguments, #39) whose placeholders are
+    being built. -/
 partial def slotDefault (env : TyEnv) (dictBase : Nat) (params : List Ty) (visiting : List String)
     (t : Ty) : Except String Expr := do
   let vt := t.toVTy env
@@ -662,15 +767,22 @@ partial def slotDefault (env : TyEnv) (dictBase : Nat) (params : List Ty) (visit
     -- a prototype of a class below `n` (#37): no allocation
     if env.isRefClass n then
       let addrs := env.protos.zipIdx.filterMap fun (x : (String × Nat × List Value) × Nat) =>
-        if (env.concreteBelow n).contains x.1.1 then some x.2 else none
+        if (env.concreteBelow n).contains x.1.1 && env.coreArgs x.1.1 [] == env.coreArgs n ts then some x.2
+        else none
       if let some a := addrs.head? then return .lit (.ref a)
     if env.isRefClass n then
       -- the first class below `n` whose placeholder needs no instance of a
       -- class whose placeholder is being built
       let mut lastErr := s!"no class at or below {n} can be constructed without an instance of itself, so a variable or temporary of type {n} has no initial value"
+      -- (instantiations that grow without end are cut off)
+      let key := (Ty.struct n ts).show
+      if visiting.length > 16 || key.length > 400 then throw lastErr
       for d in env.concreteBelow n do
-        if visiting.contains d then continue
-        match (env.fields d).mapM fun (_, ft, _) => slotDefault env dictBase params (d :: visiting) ft with
+        let dkey := s!"{d} as {key}"
+        if visiting.contains dkey then continue
+        -- (its fields at the slot's type arguments, #39)
+        match (env.fieldsSeen n ts d).mapM fun (_, ft, _) =>
+            slotDefault env dictBase params (dkey :: visiting) ft with
         | .ok fs => return .heap (.new (env.tagOf d)) fs
         | .error msg => lastErr := msg
       throw lastErr
@@ -692,7 +804,8 @@ def classRepTy (env : TyEnv) (d : String) (args : List Ty := []) : Ty :=
 /-- `a` is a reference class below the class or interface `b`, or an array
     or option of such. -/
 partial def refUp (env : TyEnv) : Ty → Ty → Bool
-  | .struct S [], .struct T [] => env.isRefClass S && env.isRefClass T && env.isSub S T
+  | .struct S as, .struct T bs =>
+    env.isRefClass S && env.isRefClass T && env.isSub S T && env.upArgs S as T == bs
   | .arr a, .arr b | .opt a, .opt b => refUp env a b
   | _, _ => false
 
@@ -751,13 +864,16 @@ def join (p : Pos) (a b : Ty) (exp : Option Ty) : EM Ty := do
     -- construct void: `if{X := e} else {Print("none")}` (spec: IfElseMacro)
     if a == .void || b == .void then return .void
     let env := (← get).env
-    if let (.struct S [], .struct T []) := (a, b) then
+    if let (.struct S as, .struct T bs) := (a, b) then
       if env.classes.contains S && env.classes.contains T then
         -- the expected type, when both are below it, else the nearest
-        -- common supertype
-        if let some (.struct U []) := exp then
-          if env.classes.contains U && env.isSub S U && env.isSub T U then return .struct U []
-        if let some U := (env.supers S).find? (env.isSub T ·) then return .struct U []
+        -- common supertype (at the same type arguments, #39)
+        let up (U : String) (us : List Ty) : Bool :=
+          env.isSub S U && env.isSub T U && env.upArgs S as U == us && env.upArgs T bs U == us
+        if let some (.struct U us) := exp then
+          if env.classes.contains U && up U us then return .struct U us
+        if let some U := (env.supers S).find? fun U => up U (env.upArgs S as U) then
+          return .struct U (env.upArgs S as U)
     eerr p s!"the branches have different types: {a.show} and {b.show}"
 
 
@@ -1182,21 +1298,29 @@ partial def elabApp (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (brack
         let direct : Option String := match (ds.map (ctx.implOf? · m)).eraseDups with
           | [some e] => if env.isSub c e then some e else none
           | _ => none
+        -- the receiver as an instance of class `e`, above or below `c` (#39)
+        let argsAt (e : String) : List Ty :=
+          if env.isSub c e then env.upArgs c targs e else env.argsBelow c targs e
         if let some e := direct then
-          let ctx' := { ctx with locals := { name := recv, slot, ty := r.ty, mutable := false } :: ctx.locals }
+          let ctx' := { ctx with locals := { name := recv, slot, ty := .struct e (argsAt e), mutable := false } :: ctx.locals }
           let rc ← elabApp ctx' p (.ident mp s!"{e}.{m}") (.ident mp recv :: args) bracket exp
           return ⟨.seq (.assign slot r.e) rc.e, rc.ty⟩
         -- otherwise dispatch on the class of the receiver's value: the
         -- receiver, then the arguments, once each, then the implementation of
         -- the class whose option is set
-        if !ms.tparams.isEmpty then
+        let ownerTps := ((env.sparams.lookup owner).getD []).map (·.1)
+        if ms.tparams.length > ownerTps.length then
           eerr p s!"{m} has type parameters, so it cannot be dispatched on the class of the receiver (#18)"
+        -- the declaration's types at the receiver's type arguments
+        let σ := ownerTps.zip (argsAt owner)
+        let msRet := ms.ret.subst σ
         if args.any (fun | .decl _ n _ _ _ => n.startsWith "?" | _ => false) then
           eerr p s!"named arguments to a method dispatched on the class of the receiver are not supported (#18)"
         let mut pre : Array Expr := #[.assign slot r.e]
         let mut locs : List Local := [{ name := recv, slot, ty := r.ty, mutable := false }]
         let mut argIds : Array SExpr := #[]
-        for (a, t) in args.zip (ms.params.drop 1) do
+        for (a, t0) in args.zip (ms.params.drop 1) do
+          let t := t0.subst σ
           let ta ← fresh t
           pre := pre.push (.assign ta (← coerce a.pos (← elabE ctx a (some t)) t))
           locs := { name := s!"$arg{ta}", slot := ta, ty := t, mutable := false } :: locs
@@ -1211,12 +1335,12 @@ partial def elabApp (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (brack
             | some gi => groups := groups.modify gi fun (e', cls) => (e', cls.push d)
             | none => groups := groups.push (e, #[d])
           for (e, cls) in groups.toList.reverse do
-            let sd ← fresh (.struct e [])
-            let ctx' := { ctx with locals := { name := s!"$self{sd}", slot := sd, ty := .struct e [], mutable := false } :: (locs ++ ctx.locals) }
+            let sd ← fresh (.struct e (argsAt e))
+            let ctx' := { ctx with locals := { name := s!"$self{sd}", slot := sd, ty := .struct e (argsAt e), mutable := false } :: (locs ++ ctx.locals) }
             let rc ← elabApp ctx' p (.ident mp s!"{e}.{m}") (.ident mp s!"$self{sd}" :: argIds.toList) bracket exp
             acc := .ite (.assign sd (.heap (.isTag (cls.toList.map env.tagOf)) [.local slot]))
-              (← coerce p rc ms.ret) acc
-          return ⟨pre.toList.foldr Expr.seq acc, ms.ret⟩
+              (← coerce p rc msRet) acc
+          return ⟨pre.toList.foldr Expr.seq acc, msRet⟩
         for (d, j) in (ds.zip (List.range ds.length)).reverse do
           let some e := ctx.implOf? d m | eerr p s!"class {d} does not implement '{m}'"
           let td ← fresh (classRepTy env d)
@@ -1239,21 +1363,32 @@ partial def elabApp (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (brack
     is below `T`; `T(X)`: an upcast, which cannot fail (Book of Verse ch. 10). -/
 partial def elabCast (ctx : Ctx) (p : Pos) (T : String) (args : List SExpr) (bracket : Bool) : EM R := do
   let env := ctx.types
-  if (env.sparams.lookup T).isSome then eerr p s!"cannot cast to the parametric class {T}"
   let [a] := args | eerr p s!"a cast {T}[X] takes one value"
   let r ← elabE ctx a none
-  let S ← match r.ty with
-    | .struct S [] => if env.classes.contains S then pure S else eerr p s!"cannot cast a {S} to {T}"
+  let (S, sargs) ← match r.ty with
+    | .struct S sargs => if env.classes.contains S then pure (S, sargs) else eerr p s!"cannot cast a {S} to {T}"
     | t => eerr p s!"cannot cast a {t.show} to {T}"
+  -- a parametric class's type arguments are those of the value (#39), in the
+  -- same hierarchy
+  let parametric := (env.sparams.lookup T).isSome || !(env.coreArgs T []).isEmpty
+  if parametric && env.rootOf S != env.rootOf T then
+    eerr p s!"cannot cast a {S} to {T}: {T}'s type arguments would be unknown (they are not {S}'s)"
+  let targs := if env.isSub S T then env.upArgs S sargs T else env.argsBelow S sargs T
+  if parametric && (env.coreArgs T targs).length > (env.coreArgs S sargs).length then
+    eerr p s!"cannot cast a {r.ty.show} to {T}: {T} has type parameters that {S} does not have, which would be unknown"
+  let tty : Ty := .struct T targs
   if !bracket then
     if !env.isSub S T then
       eerr p s!"{T}(…) converts to a supertype, and {S} is not below {T}: use {T}[…] to cast down"
-    return ⟨← coerce p r (.struct T []), .struct T []⟩
+    return ⟨← coerce p r tty, tty⟩
   let below := env.concreteBelow S
   let common := below.filter (env.isSub · T)
-  if common.isEmpty then eerr p s!"no class is below both {S} and {T}, so {T}[…] would always fail"
+  if common.isEmpty then
+    eerr p s!"no class is below both {r.ty.show} and {T}, so {T}[…] would always fail"
+  if parametric && env.coreArgs T targs != env.coreArgs S sargs then
+    eerr p s!"a {r.ty.show} is never a {T}: their type arguments differ, so {T}[…] would always fail"
   -- a reference: a test of its object's class (#34)
-  if env.isRefClass S then return ⟨.heap (.isTag (common.map env.tagOf)) [r.e], .struct T []⟩
+  if env.isRefClass S then return ⟨.heap (.isTag (common.map env.tagOf)) [r.e], tty⟩
   let x ← fresh r.ty
   let mut acc : Expr := .prim .fail []
   for d in common.reverse do
@@ -1277,7 +1412,7 @@ partial def elabGenericCall (ctx : Ctx) (p : Pos) (s : Sig) (args : List SExpr) 
   let mut σ : List (String × Ty) := []
   if let some et := exp then
     if !(et == .void) then
-      if let some σ' := s.ret.matchArg σ et then σ := σ'
+      if let some σ' := s.ret.matchArg ctx.types σ et then σ := σ'
   let bound (σ : List (String × Ty)) (t : Ty) := t.params.all fun v => (σ.lookup v).isSome
   -- `false`, `array{}` and `map{}` take their type from context, so they are
   -- elaborated after the other arguments (they are still evaluated in order)
@@ -1301,7 +1436,7 @@ partial def elabGenericCall (ctx : Ctx) (p : Pos) (s : Sig) (args : List SExpr) 
           let v := (pt.params.filter fun v => (σ.lookup v).isNone).headD "t"
           eerr a.pos s!"cannot infer type parameter {v} of {s.name} from the arguments of this call"
         let r ← elabE ctx a none
-        match pt.matchArg σ r.ty with
+        match pt.matchArg ctx.types σ r.ty with
         | some σ' =>
           σ := σ'
           if pass == 0 && !bound σ pt then
@@ -1683,7 +1818,8 @@ partial def elabSet (ctx : Ctx) (p : Pos) (lhs0 : SExpr) (op : Option String) (r
     if let some l := ctx.lookup n then
       if let .struct sn _ := l.ty then
         if ctx.types.isRefClass sn then
-          let some (k, t) := fieldIndex (ctx.types.fields sn []) f
+          let targs := match l.ty with | .struct _ ts => ts | _ => []
+          let some (k, t) := fieldIndex (ctx.types.fields sn targs) f
             | eerr p s!"class {sn} has no field '{f}'"
           if !ctx.types.isVarField sn f then eerr p (classSetMsg sn f)
           let ds := ctx.types.concreteBelow sn
@@ -1907,6 +2043,10 @@ partial def elabConstruct (ctx : Ctx) (p : Pos) (name : String) (targs : List ST
     match given.lookup f, dflt with
     | some rhs, _ => coerce p (← elabE ctx rhs (some t)) t
     | none, some d =>
+      -- the default is code of its home class, at its type arguments here
+      let home := (ctx.types.defaultHome.lookup (name, f)).getD name
+      let hσ := (((ctx.types.sparams.lookup home).getD []).map (·.1)).zip (ctx.types.argsAt name tas home)
+      let dctx := { dctx with types := { ctx.types with tvars := hσ } }
       if dctx.defaults.contains (name, f) then
         eerr p s!"the default of field '{f}' of {name} depends on itself"
       fxAt p (do coerce p (← elabE { dctx with defaults := (name, f) :: dctx.defaults } d (some t)) t)
@@ -1922,12 +2062,26 @@ partial def elabConstruct (ctx : Ctx) (p : Pos) (name : String) (targs : List ST
       -- then the `block:` clauses of its class chain, from the top
       let chain := ((ctx.types.supers name).filter fun d => !(ctx.types.info d).isIface).reverse
       let blocks := chain.filterMap fun d => (ctx.sig? s!"{d}.$block").map (d, ·)
-      if blocks.isEmpty then return ⟨.heap (.new (ctx.types.tagOf name)) es, ty⟩
+      if blocks.isEmpty then
+        -- a parametric class's object goes through a temporary of its type,
+        -- which gives the checker its type arguments (#39)
+        if tas.isEmpty then return ⟨.heap (.new (ctx.types.tagOf name)) es, ty⟩
+        let x ← fresh ty
+        return ⟨.assign x (.heap (.new (ctx.types.tagOf name)) es), ty⟩
       let x ← fresh ty
       let mut calls : List Expr := []
       for (d, s) in blocks do
         noteFx p s.fx (some s!"constructs {name}, whose block: (in {d})")
-        calls := calls ++ [.call s.idx [.local x]]
+        if s.tparams.isEmpty then
+          calls := calls ++ [.call s.idx [.local x]]
+        else
+          -- a parametric class's `block:` is generic (#39): called as a
+          -- method, on the new object at its type arguments as a `d`
+          let self := s!"$new{x}"
+          let dty := Ty.struct d (ctx.types.upArgs name tas d)
+          let ctx' := { ctx with locals := { name := self, slot := x, ty := dty, mutable := false } :: ctx.locals }
+          let rc ← elabApp ctx' p (.ident p s!"{d}.$block") [.ident p self] false none
+          calls := calls ++ [rc.e]
       return ⟨.seq (.assign x (.heap (.new (ctx.types.tagOf name)) es)) (calls.foldr .seq (.local x)), ty⟩
     let x ← fresh ty
     return ⟨.assign x (classWrap ctx.types name name (.prim .mkTup es)), ty⟩
@@ -2054,6 +2208,8 @@ structure CDef where
   tps : List TParam
   specs : List String
   parents : List String
+  /-- Each parent's type arguments (#39), in terms of this class's type parameters. -/
+  parentArgs : List (List STy) := []
   isIface : Bool
   fields : List (String × STy × Option SExpr × Bool)
   overrides : List String
@@ -2083,7 +2239,10 @@ def elabProgram (allTops00 : List STop) (opts : Options := {}) : Except String C
   -- unreachable
   let cdefs : List CDef := allTops0.filterMap fun
     | .classDef p n tps specs parents isIface fields overrides methods =>
-      some { pos := p, name := n, tps, specs, parents, isIface, fields, overrides, methods }
+      let names := parents.map fun | .name q => q | .app q _ => q | _ => "?"
+      let args := parents.map fun | .app _ as => as | _ => []
+      some { pos := p, name := n, tps, specs, parents := names, parentArgs := args, isIface, fields,
+             overrides, methods }
     | _ => none
   let cdef? (n : String) : Option CDef := cdefs.find? (·.name == n)
   let methodNamed (cd : CDef) (m : String) : Option STop := cd.methods.find? fun
@@ -2099,19 +2258,23 @@ def elabProgram (allTops00 : List STop) (opts : Options := {}) : Except String C
     let p := cd.pos
     for sp in cd.specs do
       match sp with
-      | "unique" =>
-        if !cd.tps.isEmpty then throw s!"{p.show}: a parametric class cannot be <unique> (it is a value, #34)"
       | "persistable" | "final_super" => throw s!"{p.show}: <{sp}> classes are not supported yet (#11)"
       | _ => pure ()
     let mut parent : Option String := none
     let mut ifaces : Array String := #[]
-    for q in cd.parents do
+    for (q, qargs) in cd.parents.zip cd.parentArgs do
       let some qd := cdef? q
         | if allTops0.any (fun | .const _ n' none (.structDef ..) => n' == q | _ => false) then
             throw s!"{p.show}: {q} is a struct: only classes and interfaces can be inherited from"
           else throw s!"{p.show}: unknown class or interface '{q}'"
-      if !qd.tps.isEmpty || !cd.tps.isEmpty then
-        throw s!"{p.show}: parametric classes cannot inherit, be inherited from or implement interfaces yet (#18)"
+      if qd.isIface && !qargs.isEmpty then
+        throw s!"{p.show}: interface {q} takes no type arguments"
+      if qd.isIface && (!qd.tps.isEmpty || !cd.tps.isEmpty) then
+        throw s!"{p.show}: parametric classes cannot implement interfaces yet (#39)"
+      if !qd.isIface then
+        if qargs.length != qd.tps.length then
+          throw s!"{p.show}: {q} takes {qd.tps.length} type argument(s), found {qargs.length}"
+
       if qd.isIface then ifaces := ifaces.push q
       else
         if cd.isIface then throw s!"{p.show}: interface {cd.name} cannot extend class {q}"
@@ -2143,7 +2306,11 @@ def elabProgram (allTops00 : List STop) (opts : Options := {}) : Except String C
       let inherited? : Option (List (String × STy × Option SExpr × Bool)) :=
         match (henv.info cd.name).parent with
         | none => some []
-        | some q => (full.find? (·.1 == q)).map (·.2)
+        | some q =>
+          -- in terms of this class's type parameters (#39)
+          let qargs := ((cd.parents.zip cd.parentArgs).lookup q).getD []
+          let σ := ((((cdef? q).map (·.tps)).getD []).map (·.name)).zip qargs
+          (full.find? (·.1 == q)).map fun (_, fs) => fs.map fun (f, sty, d, v) => (f, sty.substNames σ, d, v)
       let some inh := inherited? | continue
       -- the interfaces above must be resolved first
       let ifacesUp := ((henv.supers cd.name).drop 1).filter (henv.info · |>.isIface)
@@ -2176,8 +2343,6 @@ def elabProgram (allTops00 : List STop) (opts : Options := {}) : Except String C
             fs := fs ++ [(f, sty, d, isVar)]
       for (f, sty, d, isVar) in cd.fields do
         if f == "Self" then throw s!"{cd.pos.show}: a field of {cd.name} cannot be called Self"
-        if isVar && !cd.tps.isEmpty then
-          throw s!"{cd.pos.show}: var field '{f}' of the parametric class {cd.name}: a parametric class is a value, so its fields cannot change (#34)"
         if ((henv.supers cd.name).drop 1).any (declares · f) then
           throw s!"{cd.pos.show}: field '{f}' of {cd.name} has the name of an inherited method"
         match fs.findIdx? (fun (g : String × STy × Option SExpr × Bool) => g.1 == f) with
@@ -2226,8 +2391,6 @@ def elabProgram (allTops00 : List STop) (opts : Options := {}) : Except String C
             throw s!"{mp.show}: parameter '{prm.name}' of {mn} is already a field or method of {n}; Verse does not allow shadowing"
         -- a class's `block:` clauses: run at construction, after those of the
         -- classes above it, so never overridden
-        if mn == "$block" && !cd.tps.isEmpty then
-          throw s!"{mp.show}: the parametric class {n} cannot have a block: clause (it is a value, #34)"
         -- overriding (Book of Verse ch. 10: `M<override>`, the same signature)
         let isOverride := effs.contains "override"
         match if mn == "$block" then [] else ((henv.supers n).drop 1).filter (declares · mn) with
@@ -2286,6 +2449,13 @@ def elabProgram (allTops00 : List STop) (opts : Options := {}) : Except String C
   let uniques : List String := (cdefs.filter (·.specs.contains "unique")).map (·.name)
   let mut env : TyEnv := { classes := henv.classes, cinfo := henv.cinfo, abstracts := abstracts.toList }
   env := { env with varFields := varFields, uniques := uniques }
+  -- the class whose code each inherited field default is (#39): the nearest
+  -- one, the class's own first, that gives the field a default itself
+  let homeOf (c f : String) : String :=
+    ((henv.supers c).find? fun x =>
+      ((cdef? x).map fun xd => xd.fields.any fun (g, _, d, _) => g == f && d.isSome).getD false).getD c
+  env := { env with defaultHome := cdefs.flatMap fun cd =>
+    (fullOf cd.name).filterMap fun (f, _, d, _) => d.map fun _ => ((cd.name, f), homeOf cd.name f) }
   for t in allTops do
     match t with
     | .const _ n none (.enumDef _ vals) => env := { env with enums := env.enums ++ [(n, vals)] }
@@ -2309,10 +2479,46 @@ def elabProgram (allTops00 : List STop) (opts : Options := {}) : Except String C
       structs := structs.push (n, fields)
     | _ => pure ()
   env := { env with structs := structs.toList }
+  -- the type arguments of each class's parametric superclass (#39)
+  let mut pargs : Array (String × List Ty) := #[]
+  for cd in cdefs do
+    if let some q := (henv.info cd.name).parent then
+      let qargs := ((cd.parents.zip cd.parentArgs).lookup q).getD []
+      if !qargs.isEmpty then
+        let cenv := { env with tvars := ((env.sparams.lookup cd.name).getD []).map fun (v, c) => (v, Ty.param v c) }
+        let tys ← qargs.mapM fun sty => do
+          let (ty, _) ← (resolveTy cenv cd.pos sty).run {}
+          pure ty
+        -- a type argument the parent requires to be comparable is
+        for (ty, (v, needComp)) in tys.zip ((env.sparams.lookup q).getD []) do
+          if needComp && !ty.comparable env then
+            throw s!"{cd.pos.show}: {cd.name} gives {q} the type argument {ty.show} for {v}, which must be comparable"
+        pargs := pargs.push (cd.name, tys)
+  env := { env with pargs := pargs.toList }
+  -- a class overrides a method only if its Verse Core type arguments are its
+  -- own distinct type parameters, as many as the declaring class's: code
+  -- generic over that class can then call its implementation (it could not
+  -- give it a type argument it fixes, nor one it adds)
+  let core (c : String) : List Ty :=
+    env.coreArgs c (((env.sparams.lookup c).getD []).map fun (v, k) => Ty.param v k)
+  for (mp, dm, qm) in overridePairs do
+    let d := (dm.splitOn ".").head!
+    let q := (qm.splitOn ".").head!
+    let mn := (dm.splitOn ".").getLast!
+    let (cd', cq) := (core d, core q)
+    if cd'.length != cq.length then
+      throw s!"{mp.show}: {d} has type parameters that {q} does not have, so it cannot override {mn} yet: code generic over {q} could not give them (#39)"
+    -- its Verse Core type arguments are {q}'s, up to renaming
+    if ((cq.zip cd').foldlM (fun m (a, b) => Ty.alpha m a b) []).isNone then
+      throw s!"{mp.show}: {d} fixes or repeats type arguments that {q} leaves open, so it cannot override {mn} yet: code generic over {q} could not call it (#39)"
+  -- a class with Verse Core type arguments cannot be below an interface:
+  -- an interface's references have none (C2 of the #39 review)
+  for cd in cdefs do
+    if !cd.isIface && !(core cd.name).isEmpty then
+      if let some i := (env.supers cd.name).find? (env.info · |>.isIface) then
+        throw s!"{cd.pos.show}: {cd.name} has type arguments (its own or fixed for a parent), so it cannot implement the interface {i} yet (#39)"
   env := { env with protos := env.makeProtos }
   if let some n := env.recursiveStruct? then
-    if henv.classes.contains n then
-      throw s!"the parametric class {n} contains itself (a parametric class is a value; only other classes can be recursive, #34)"
     throw s!"struct {n} contains itself (recursive struct types are not supported)"
   -- map keys in field types, now that every struct's fields are known
   -- (a key type can be a struct that holds a class)
@@ -2379,7 +2585,9 @@ def elabProgram (allTops00 : List STop) (opts : Options := {}) : Except String C
         throw s!"{p.show}: <computes> excludes the heap effects (<reads>, <writes>, <allocates>, <transacts>) that {n} also has"
       -- generic functions come after the others
       gsigs := gsigs.push { idx := tops.length + gidx, name := n, params := tys, ret := rt,
-                            decides := effs.contains "decides", isConst := false, fx := allowedFx effs,
+                            decides := effs.contains "decides", isConst := false,
+                            -- (a parametric class's `block:`: inferred from none, #41)
+                            fx := if n.endsWith ".$block" then [] else allowedFx effs,
                             tparams }
     | _ => pure ()
   let mkSigProg (sigs : Array Sig) : Prog :=
@@ -2447,6 +2655,29 @@ def elabProgram (allTops00 : List STop) (opts : Options := {}) : Except String C
               changed := true
           | .error _ => pure ()
       | _ => pure ()
+    -- and so do those of a parametric class, generic (#39)
+    for (top, gi) in generics.zip (List.range generics.length) do
+      match top with
+      | .fn _ n ps _ _ _ body =>
+        if n.endsWith ".$block" then
+          let g := gsigs[gi]!
+          let locals := (ps.zip (List.range ps.length)).zip g.params |>.map fun ((prm, i), t) =>
+            ({ name := prm.name, slot := i, ty := t, mutable := false } : Local)
+          let hidden := g.tparams.map fun (v, c) => Ty.param v c
+          let genv := { env with tvars := g.tparams.map fun (v, c) => (v, Ty.param v c) }
+          let ctx : Ctx := { sigs := sigs.toList ++ gsigs.toList, sigProg := mkSigProg sigs, types := genv,
+                             locals := locals.reverse, retTy := .void, dictBase := ps.length,
+                             dictVars := g.tparams.map (·.1),
+                             selfClass := some (n.dropRight ".$block".length) }
+          match (elabStmt ctx body (some .void)).run
+              { env, nslots := ps.length + hidden.length, slotTys := (g.params ++ hidden).toArray } with
+          | .ok (_, st) =>
+            let fx := heapFx.filter fun k => st.fx.any (·.1 == k)
+            if fx != g.fx then
+              gsigs := gsigs.set! gi { g with fx }
+              changed := true
+          | .error _ => pure ()
+      | _ => pure ()
     if !changed then break
   let sigProg := mkSigProg sigs
   let allSigs := sigs.toList ++ gsigs.toList
@@ -2454,17 +2685,27 @@ def elabProgram (allTops00 : List STop) (opts : Options := {}) : Except String C
   -- overriding field the inherited field's type (Book of Verse ch. 10)
   -- an override may return a class below the declared one (covariant results)
   let retBelow (a b : Ty) : Bool := a == b || match a, b with
-    | .struct S [], .struct T [] => env.classes.contains S && env.classes.contains T && env.isSub S T
+    | .struct S as, .struct T bs => env.classes.contains S && env.classes.contains T && env.isSub S T &&
+        env.upArgs S as T == bs
     | _, _ => false
-  let sameSig (a b : Sig) : Bool :=
-    (a.params.drop 1) == (b.params.drop 1) && retBelow a.ret b.ret && a.decides == b.decides &&
+  -- the two methods' types as an instance of class `c` sees them: each
+  -- class's type parameters at its type arguments there (#39)
+  let inC (c e : String) (t : Ty) : Ty :=
+    let cps := ((env.sparams.lookup c).getD []).map fun (v, k) => Ty.param v k
+    t.subst ((((env.sparams.lookup e).getD []).map (·.1)).zip (env.upArgs c cps e))
+  let clsOf (n : String) : String := (n.splitOn ".").head!
+  let sameSigIn (c : String) (a b : Sig) : Bool :=
+    let ea := clsOf a.name
+    let eb := clsOf b.name
+    ((a.params.drop 1).map (inC c ea)) == ((b.params.drop 1).map (inC c eb)) &&
+      retBelow (inC c ea a.ret) (inC c eb b.ret) && a.decides == b.decides &&
       a.named.map (·.1) == b.named.map (·.1)
   -- an implementation has no heap effect its declaration does not allow
   let fxOver (a b : Sig) : Option String := a.fx.find? (!b.fx.contains ·)
   for (mp, mine, theirs) in overridePairs do
     match allSigs.find? (·.name == mine), allSigs.find? (·.name == theirs) with
     | some a, some b =>
-      if !sameSig a b then throw s!"{mp.show}: {mine} must have the signature of {theirs}, which it overrides"
+      if !sameSigIn (clsOf mine) a b then throw s!"{mp.show}: {mine} must have the signature of {theirs}, which it overrides"
       if let some k := fxOver a b then
         throw s!"{mp.show}: {mine} allows the effect <{k}>, which {theirs}, which it overrides, does not"
     | _, _ => pure ()
@@ -2473,13 +2714,14 @@ def elabProgram (allTops00 : List STop) (opts : Options := {}) : Except String C
   for (cp, c, impl, decl) in implChecks do
     match allSigs.find? (·.name == impl), allSigs.find? (·.name == decl) with
     | some a, some b =>
-      if !sameSig a b then
+      if !sameSigIn c a b then
         throw s!"{cp.show}: in {c}, {impl} does not have the signature of {decl}"
       if let some k := fxOver a b then
         throw s!"{cp.show}: in {c}, {impl} allows the effect <{k}>, which {decl} does not"
     | _, _ => pure ()
   for (fp, cname, f, sty) in fieldOverrides do
-    let (t, _) ← (resolveTy env fp sty).run {}
+    let cenv := { env with tvars := ((env.sparams.lookup cname).getD []).map fun (v, c) => (v, Ty.param v c) }
+    let (t, _) ← (resolveTy cenv fp sty).run {}
     match fieldIndex (env.fields cname) f with
     | some (_, t0) =>
       if !(t == t0) then
@@ -2492,11 +2734,15 @@ def elabProgram (allTops00 : List STop) (opts : Options := {}) : Except String C
   for t in allTops do
     match t with
     | .const p n none (.structDef _ _ _) =>
+      let nps := ((env.sparams.lookup n).getD []).map fun (v, c) => Ty.param v c
       let senv := { env with tvars := (env.sparams.lookup n).getD [] |>.map fun (v, c) => (v, Ty.param v c) }
       let ctx : Ctx := { sigs := allSigs, sigProg, types := senv, canFail := true }
       for (f, ft, d) in (env.structs.lookup n).getD [] do
         if let some d := d then
-          let ctx := { ctx with defaults := [(n, f)] }
+          -- (an inherited default sees its home class's type parameters, #39)
+          let home := (env.defaultHome.lookup (n, f)).getD n
+          let hσ := (((env.sparams.lookup home).getD []).map (·.1)).zip (env.argsAt n nps home)
+          let ctx := { ctx with defaults := [(n, f)], types := { senv with tvars := hσ } }
           match (do coerce d.pos (← elabE ctx d (some ft)) ft : EM Expr).run { env } with
           | .ok _ => pure ()
           | .error msg => throw s!"{msg} (in the default of field '{f}' of {n})"
@@ -2614,11 +2860,31 @@ def elabProgram (allTops00 : List STop) (opts : Options := {}) : Except String C
       ((g.params ++ g.tparams.map fun (v, c) => Ty.param v c).map (Ty.toVTy genv), g.ret.toVTy genv)
   let fsigs := if protoList.isEmpty then fsigs else fsigs ++ [([], mainSig.ret.toVTy env)]
   -- the class table: the fields of each class, by tag (#34); the prototypes (#37)
+  -- (a parametric class's field types mention its type parameters, #39)
+  -- each field as the topmost class in the chain that has it gives it, in
+  -- terms of the Verse Core type arguments the hierarchy shares: an
+  -- `intbox := class(base(int))`'s inherited `Value` is `var 0`, as in `base`
   let classTable := env.classes.map fun d =>
-    if env.isRefClass d then (env.fields d).map (·.2.1.toVTy env) else []
-  let S : Sigs := { fns := fsigs, classes := classTable, protos := protoList.map fun (t, _) => (t, []) }
+    let chain := ((env.supers d).filter fun x => !(env.info x).isIface).reverse
+    if env.isRefClass d then (env.fields d).map fun (f, t, _) =>
+      match chain.find? fun D => (env.fields D).any (·.1 == f) with
+      | some D =>
+        let tD := (((env.fields D).find? (·.1 == f)).map (·.2.1)).getD t
+        tD.toVTy { env with tvars := env.coreVars D }
+      | none => t.toVTy { env with tvars := env.coreVars d }
+    else []
+  let S : Sigs := { fns := fsigs, classes := classTable,
+                    protos := env.protos.map fun (d, t, _) => (t, (env.coreArgs d []).map (Ty.toVTy env)) }
   if !P.checkTypes S slotTys.toList then
-    throw "internal error: the elaborated program does not pass Prog.checkTypes"
+    -- name what fails, for a bug report
+    let bad := (List.range P.fns.length).find? fun f =>
+      match P.fns[f]?, S.fns[f]?, slotTys[f]? with
+      | some fn, some (ps, τ), some Γ => !checkFn S fn ps τ Γ
+      | _, _, _ => true
+    let which := match bad with
+      | some f => s!" (in {((P.fns[f]?).map Fn.name).getD "?"})"
+      | none => if !checkPrelude P S then " (the prototypes)" else ""
+    throw s!"internal error: the elaborated program does not pass Prog.checkTypes{which}"
   return { prog := P, sigs := S, slotTys := slotTys.toList }
 
 /-- Parse and elaborate Verse source text. -/

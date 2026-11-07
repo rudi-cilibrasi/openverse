@@ -238,9 +238,24 @@ circle := class(shape, labelled):
     satisfies.
 - **Casts.** `T[X]` is `X` as a `T`, failing unless `X`'s class is below
   `T`. `T(X)` converts to a supertype and cannot fail.
-- **Parametric classes.** A method of a parametric class is generic over the
-  class's type parameters, then its own. The type arguments come from the
-  receiver, and the body is checked once in Verse Core (see
+- **Parametric classes.** A parametric class is a reference like any other
+  (#39): `stack(t)` can have `var` fields, be `<unique>`, and refer to
+  itself (`node(t) := class: Value:t; var Next:?node(t) = false`). It can be
+  in a hierarchy: a subclass gives its parent type arguments, from its own
+  type parameters (`square(t) := class(shape(t))`, in any order:
+  `swap(a, b) := class(pair(b, a))`), fixed ones
+  (`intcell := class(cell(int))`), and it may have type parameters of its
+  own (`named(t, n) := class(cell(t))`). A class overrides a method only
+  if its type arguments are those of the class that declares it, up to
+  renaming: one that fixes, repeats or adds type arguments the declaring
+  class leaves open cannot, since code generic over that class could not
+  call it. A class with type arguments (its own or fixed for a parent)
+  cannot implement an interface yet. Inherited field defaults see their
+  own class's type parameters. A cast `square[S]` takes its type arguments
+  from `S`'s, and is refused when it would need more. A method
+  of a parametric class is generic over the class's type parameters, then
+  its own. The type arguments come from the receiver, and the body is
+  checked once in Verse Core (see
   [Parametric functions](#parametric-functions)).
 - **Heap effects** (#35; the spec draft's transactional effects). A
   function's specifiers allow a set of heap effects: all of them when it has
@@ -263,20 +278,18 @@ circle := class(shape, labelled):
 - **`block:`.** A class's `block:` clauses run when an instance is
   constructed, after its fields are given, those of the classes above it
   first, each class's in order; they see the fields by name, as a method
-  does, and their effects are those of their code. Interfaces and
-  parametric classes have none.
+  does, and their effects are those of their code (a parametric class's
+  too). Interfaces have none.
 - **`<unique>`.** A `<unique>` class (and every class below it) is
   comparable: `=` and `<>` test identity, so two instances with equal
   fields differ, and an alias equals its original.
-- **Parametric classes are values.** A parametric class cannot be in a
-  hierarchy, and is represented as its fields (#18), so it cannot have `var`
-  fields or be `<unique>`.
 - **Comparability.** Other classes and interfaces are not comparable (Book §4.9), nor
   is a struct or container that holds one.
 - **Not yet supported** (each rejected with a message):
   - constructor functions;
-  - parametric classes in hierarchies, `var` fields of parametric classes,
-    and parametric `<unique>` classes;
+  - overrides in a subclass that fixes, repeats or adds type arguments
+    its parent leaves open, and classes with type arguments below
+    interfaces;
   - `set` of an interface field that sits at different places in the
     classes implementing the interface (reading it works);
   - overriding a method with its own type parameters;
