@@ -1814,7 +1814,16 @@ partial def elabConstruct (ctx : Ctx) (p : Pos) (name : String) (targs : List ST
     if ctx.types.isRefClass name then
       if ctx.types.isUnique name || fs.any (fun (f, _, _) => ctx.types.isVarField name f) then
         noteFx p ["allocates"]
-      return ⟨.heap (.new (ctx.types.tagOf name)) es, ty⟩
+      -- then the `block:` clauses of its class chain, from the top
+      let chain := ((ctx.types.supers name).filter fun d => !(ctx.types.info d).isIface).reverse
+      let blocks := chain.filterMap fun d => (ctx.sig? s!"{d}.$block").map (d, ·)
+      if blocks.isEmpty then return ⟨.heap (.new (ctx.types.tagOf name)) es, ty⟩
+      let x ← fresh ty
+      let mut calls : List Expr := []
+      for (d, s) in blocks do
+        noteFx p s.fx (some s!"constructs {name}, whose block: (in {d})")
+        calls := calls ++ [.call s.idx [.local x]]
+      return ⟨.seq (.assign x (.heap (.new (ctx.types.tagOf name)) es)) (calls.foldr .seq (.local x)), ty⟩
     let x ← fresh ty
     return ⟨.assign x (classWrap ctx.types name name (.prim .mkTup es)), ty⟩
   return ⟨.prim .mkTup es, ty⟩
@@ -2110,9 +2119,13 @@ def elabProgram (allTops00 : List STop) (opts : Options := {}) : Except String C
         for prm in ps do
           if fs.any (·.1 == prm.name) || (henv.supers n).any (declares · prm.name) then
             throw s!"{mp.show}: parameter '{prm.name}' of {mn} is already a field or method of {n}; Verse does not allow shadowing"
+        -- a class's `block:` clauses: run at construction, after those of the
+        -- classes above it, so never overridden
+        if mn == "$block" && !cd.tps.isEmpty then
+          throw s!"{mp.show}: the parametric class {n} cannot have a block: clause (it is a value, #34)"
         -- overriding (Book of Verse ch. 10: `M<override>`, the same signature)
         let isOverride := effs.contains "override"
-        match ((henv.supers n).drop 1).filter (declares · mn) with
+        match if mn == "$block" then [] else ((henv.supers n).drop 1).filter (declares · mn) with
         | [] =>
           if isOverride then throw s!"{mp.show}: {mn}<override> does not override an inherited method"
         | qs@(q :: _) =>
@@ -2142,7 +2155,8 @@ def elabProgram (allTops00 : List STop) (opts : Options := {}) : Except String C
     let names := (ups.flatMap fun u => ((cdef? u).map (·.methods)).getD [] |>.filterMap fun
       | .fn _ x .. => some x
       | _ => none).eraseDups
-    for mn in names do
+    -- (a `block:` is not a method: each class runs its own)
+    for mn in names.filter (· != "$block") do
       -- the implementation: the nearest in the class chain, else the most
       -- specific interface default (as `Ctx.implOf?` chooses at a call)
       let impls := ups.filter (hasBody · mn)
@@ -2308,6 +2322,22 @@ def elabProgram (allTops00 : List STop) (opts : Options := {}) : Except String C
             sigs := sigs.set! idx { sigs[idx]! with fx }
             changed := true
         | .error _ => pure ()
+      -- a class's `block:` clauses have the effects of their code
+      | .fn _ n ps _ _ _ body =>
+        if n.endsWith ".$block" then
+          let s := sigs[idx]!
+          let locals := (ps.zip (List.range ps.length)).zip s.params |>.map fun ((prm, i), t) =>
+            ({ name := prm.name, slot := i, ty := t, mutable := false } : Local)
+          let ctx : Ctx := { sigs := sigs.toList ++ gsigs.toList, sigProg := mkSigProg sigs, types := env,
+                             locals := locals.reverse, retTy := .void,
+                             selfClass := some (n.dropRight ".$block".length) }
+          match (elabStmt ctx body (some .void)).run { env, nslots := ps.length, slotTys := s.params.toArray } with
+          | .ok (_, st) =>
+            let fx := heapFx.filter fun k => st.fx.any (·.1 == k)
+            if fx != s.fx then
+              sigs := sigs.set! idx { s with fx }
+              changed := true
+          | .error _ => pure ()
       | _ => pure ()
     if !changed then break
   let sigProg := mkSigProg sigs
