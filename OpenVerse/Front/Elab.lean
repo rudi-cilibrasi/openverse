@@ -34,6 +34,10 @@ inductive Ty where
   | char32
   /-- `float` (#127): an IEEE 64-bit float, `VTy.float` in Verse Core. -/
   | float
+  /-- `any` (Book of Verse ch. 11, #138): the top type. Nothing can be done
+      with its values (no equality, no cast, no ToString), so in Verse Core
+      it is `void`: a value becomes an `any` by being evaluated. -/
+  | any
   /-- `rational`, the type of `X / Y` on ints (Book of Verse ch. 2): in
       Verse Core the tuple of its numerator and denominator, in lowest
       terms with a positive denominator (so tuple equality is equality). -/
@@ -58,6 +62,7 @@ inductive Ty where
 
 partial def Ty.eqv : Ty → Ty → Bool
   | .int, .int | .logic, .logic | .char, .char | .char32, .char32 | .rational, .rational | .float, .float | .void, .void | .never, .never => true
+  | .any, .any => true
   | .arr a, .arr b => a.eqv b
   | .opt a, .opt b => a.eqv b
   | .tup as, .tup bs => as.length == bs.length && (as.zip bs).all fun (a, b) => a.eqv b
@@ -72,6 +77,7 @@ instance : BEq Ty := ⟨Ty.eqv⟩
 
 partial def Ty.show : Ty → String
   | .int => "int" | .logic => "logic" | .char => "char" | .char32 => "char32" | .rational => "rational" | .float => "float" | .void => "void"
+  | .any => "any"
   | .never => "false"
   | .arr .char => "string"
   | .arr t => "[]" ++ t.show
@@ -474,6 +480,7 @@ def TyEnv.recursiveStruct? (env : TyEnv) : Option String :=
     no values; slots and signatures never have it). -/
 partial def Ty.toVTy (env : TyEnv) : Ty → VTy
   | .int | .char32 => .int
+  | .any => VTy.void
   | .rational => .tup [.int, .int]
   | .float => .float
   | .logic => .logic
@@ -564,6 +571,8 @@ def maxTySize : Nat := 100000
     `subtype(comparable)`, and the containers of one (Book of Verse §4.9). -/
 partial def Ty.comparable (env : TyEnv) : Ty → Bool
   | .param _ c => c
+  -- (`any` is not: no equality, no map key, #138)
+  | .any => false
   | .arr t | .opt t => t.comparable env
   | .tup ts => ts.all (Ty.comparable env)
   | .map k v => k.comparable env && v.comparable env
@@ -756,6 +765,7 @@ partial def resolveTy (env : TyEnv) (p : Pos) : STy → EM Ty
   | .name "string" => pure Ty.string
   | .name "void" => pure .void
   | .name "float" => pure .float
+  | .name "any" => pure .any
   | .name n =>
     if let some t := env.tvars.lookup n then pure t
     else if (env.structs.lookup n).isSome then
@@ -841,6 +851,7 @@ partial def witness (env : TyEnv) (dictBase : Nat) (dictVars : List String) : Ty
   | .int | .char32 | .enum _ => pure (.lit (.int 0))
   | .rational => pure (.lit (.tup [.int 0, .int 1]))
   | .float => pure (.lit (.float 0))
+  | .any => pure (.lit .void)
   | .logic => pure (.lit (.logic false))
   | .char => pure (.lit (.char 0))
   | .void | .never => pure (.lit .void)
@@ -876,6 +887,7 @@ partial def protoValue (env : TyEnv) (done : List (String × Nat)) : Ty → Opti
   | .int | .char32 | .enum _ => some (.int 0)
   | .rational => some (.tup [.int 0, .int 1])
   | .float => some (.float 0)
+  | .any => some .void
   | .logic => some (.logic false)
   | .char => some (.char 0)
   | .void | .never => some .void
@@ -999,6 +1011,8 @@ partial def convert (env : TyEnv) (e : Expr) (a b : Ty) : EM (Option Expr) := do
   match a, b with
   -- `int` is a subtype of `rational` (#116): `X` is `X / 1`
   | .int, .rational => return some (.prim .mkTup [e, .lit (.int 1)])
+  -- every value is an `any`, evaluated (#138)
+  | _, .any => return some (.seq e (.lit .void))
   | .struct S [], .struct T [] =>
     if env.classes.contains S && env.classes.contains T && S != T && env.isSub S T then
       let x ← modifyGet fun s => (s.nslots, { s with nslots := s.nslots + 1, slotTys := s.slotTys.push a })
@@ -1109,6 +1123,11 @@ partial def joinTy (env : TyEnv) (a b : Ty) (exp : Option Ty) (inner : Bool := f
     if k == k' then (joinTy env x y (match exp with | some (.map _ e) => some e | _ => none) true).map (.map k) else none
   | _, _ => none
 
+/-- A class or interface type (whose failed joins are ambiguities). -/
+def isClassTy (env : TyEnv) : Ty → Bool
+  | .struct n _ => env.classes.contains n
+  | _ => false
+
 /-- The type of a two-branch construct (`joinTy`; a void branch makes it void). -/
 def join (p : Pos) (a b : Ty) (exp : Option Ty) : EM Ty := do
   match exp with
@@ -1119,7 +1138,11 @@ def join (p : Pos) (a b : Ty) (exp : Option Ty) : EM Ty := do
     if a != .never && b != .never && !(a == b) && (a == .void || b == .void) then return .void
     match joinTy (← get).env a b exp with
     | some t => return t
-    | none => eerr p s!"the branches have different types: {a.show} and {b.show}"
+    | none =>
+      -- (types with nothing in common join at `any`, when nothing else is
+      -- expected, #138; classes with two common supertypes stay ambiguous)
+      if (exp.isNone || exp == some .any) && !(isClassTy (← get).env a && isClassTy (← get).env b) then return .any
+      eerr p s!"the branches have different types: {a.show} and {b.show}"
 
 
 /-- `M[k]` on the map in slot `tm` with the key in slot `tk`: the value of the
@@ -1398,7 +1421,10 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
         let jt ← (rest.zip rs).foldlM (fun acc ((e', x) : SExpr × R) => do
             match joinTy (← get).env acc x.ty elemExp with
             | some j => pure j
-            | none => eerr e'.pos s!"the elements of this array have different types: {acc.show} and {x.ty.show}") r.ty
+            | none =>
+              if (elemExp.isNone || elemExp == some .any) && !(isClassTy (← get).env acc && isClassTy (← get).env x.ty) then
+                pure .any
+              else eerr e'.pos s!"the elements of this array have different types: {acc.show} and {x.ty.show}") r.ty
         let es ← all.mapM fun (e', x) => coerce e'.pos x jt
         return ⟨.prim .mkArr es, .arr jt⟩
   | .optionLit _ e =>
@@ -1689,6 +1715,11 @@ partial def elabApp (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (brack
     -- (a soft built-in the program defines is the program's)
     let builtinName := if softBuiltins.contains name && (ctx.sig? name).isSome then "$program" else name
     match builtinName with
+    | "any" =>
+      -- `any(X)`: X as an `any` (#138), evaluated
+      let [a] := args | eerr p "any(…) takes one value"
+      let r ← elabE ctx a none
+      return ⟨← coerce a.pos r .any, .any⟩
     | "Print" =>
       let es ← elabArgs ctx p args [Ty.string]
       return ⟨.print es.head!, .void⟩
