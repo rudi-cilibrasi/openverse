@@ -184,12 +184,16 @@ circle := class(shape, labelled):
   they are defined. `Obj.M(…)` evaluates `Obj` before the arguments.
 - **Inheritance.** `c := class(parent, i₁, …)` has at most one class parent
   and any number of interfaces, and `i := interface(j, …)` extends
-  interfaces. A class inherits its parent's fields, first, and its methods:
+  interfaces. Interfaces may declare fields, with or without defaults. A
+  class inherits its parent's fields, then those of the interfaces above it
+  that are not there yet (once, along a diamond), then its own, and its
+  methods:
   - `Name<override>:t = e` gives an inherited field a new default; any
     other field with an inherited name is an error;
-  - `M<override>(…)` overrides an inherited method with exactly its
-    signature. Overriding without `<override>`, or `<override>` that
-    overrides nothing, is an error;
+  - `M<override>(…)` overrides an inherited method with its signature, except
+    that it may return a class below the declared one (covariant results).
+    Overriding without `<override>`, or `<override>` that overrides nothing,
+    is an error;
   - `<final>` methods cannot be overridden, and `<final>` classes cannot be
     inherited from;
   - `(super:)M(…)` calls the implementation inherited from above.
@@ -222,8 +226,6 @@ circle := class(shape, labelled):
     and recursive classes, which need references (phase 3);
   - parametric classes in hierarchies;
   - overriding a method with its own type parameters;
-  - covariant return types;
-  - interface fields;
   - qualified `(i:)M` implementations;
   - named arguments to a method dispatched on the receiver's class;
   - subtyping through `+` on arrays, through tuples and through maps, and an

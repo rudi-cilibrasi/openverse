@@ -1475,8 +1475,12 @@ partial def elabMember (ctx : Ctx) (p : Pos) (r : R) (m : String) : EM R := do
         let x ← fresh r.ty
         let mut acc : Expr := .prim .userErr []   -- no option set: unreachable
         for (d, j) in (ds.zip (List.range ds.length)).reverse do
-          let td ← fresh (classRepTy ctx.types d (if d == sn then targs else []))
-          acc := .ite (.assign td (.prim .query [.prim (.tupGet j) [.local x]])) (.prim (.tupGet k) [.local td]) acc
+          let dargs := if d == sn then targs else []
+          -- the field's position in `d` (the same in all the classes below a
+          -- class, but not below an interface)
+          let kd := ((fieldIndex (ctx.types.fields d dargs) f).map (·.1)).getD k
+          let td ← fresh (classRepTy ctx.types d dargs)
+          acc := .ite (.assign td (.prim .query [.prim (.tupGet j) [.local x]])) (.prim (.tupGet kd) [.local td]) acc
         let y ← fresh t
         return ⟨.seq (.assign x r.e) (.assign y acc), t⟩
       return ⟨.prim (.tupGet k) [r.e], t⟩
@@ -1672,8 +1676,6 @@ def elabProgram (allTops0 : List STop) : Except String Compiled := do
       | "unique" => throw s!"{p.show}: <unique> classes are not supported yet (#11 phase 3)"
       | "persistable" | "final_super" => throw s!"{p.show}: <{sp}> classes are not supported yet (#11)"
       | _ => pure ()
-    if cd.isIface && !cd.fields.isEmpty then
-      throw s!"{p.show}: interface fields are not supported yet (#18)"
     let mut parent : Option String := none
     let mut ifaces : Array String := #[]
     for q in cd.parents do
@@ -1702,8 +1704,9 @@ def elabProgram (allTops0 : List STop) : Except String Compiled := do
       seen := seen ++ new
       frontier := new.flatMap directUp
     if seen.contains cd.name then throw s!"{cd.pos.show}: {cd.name} inherits from itself"
-  -- the fields of each class: its superclass's, then its own (an
-  -- `<override>` field gives an inherited one a new default)
+  -- the fields of each class: its superclass's, then those of the
+  -- interfaces above it that are not there yet (once, along a diamond), then
+  -- its own (an `<override>` field gives an inherited one a new default)
   let mut full : Array (String × List (String × STy × Option SExpr × Bool)) := #[]
   let mut fieldOverrides : Array (Pos × String × String × STy) := #[]
   for _ in [0:cdefs.length + 1] do
@@ -1715,6 +1718,15 @@ def elabProgram (allTops0 : List STop) : Except String Compiled := do
         | some q => (full.find? (·.1 == q)).map (·.2)
       let some inh := inherited? | continue
       let mut fs : List (String × STy × Option SExpr × Bool) := inh
+      for i in (henv.supers cd.name).drop 1 do
+        if !(henv.info i).isIface then continue
+        for (f, sty, d, isVar) in ((cdef? i).map (·.fields)).getD [] do
+          if isVar then
+            throw s!"{cd.pos.show}: var field '{f}' of {i}: mutable fields need reference semantics, not supported yet (#11 phase 3)"
+          if fs.any (·.1 == f) then
+            -- reached again: its type must agree (checked once types are resolved)
+            fieldOverrides := fieldOverrides.push (cd.pos, cd.name, f, sty)
+          else fs := fs ++ [(f, sty, d, isVar)]
       for (f, sty, d, isVar) in cd.fields do
         if f == "Self" then throw s!"{cd.pos.show}: a field of {cd.name} cannot be called Self"
         if isVar then
@@ -1936,8 +1948,12 @@ def elabProgram (allTops0 : List STop) : Except String Compiled := do
   let allSigs := sigs.toList ++ gsigs.toList
   -- an override has the signature of the method it overrides, and an
   -- overriding field the inherited field's type (Book of Verse ch. 10)
+  -- an override may return a class below the declared one (covariant results)
+  let retBelow (a b : Ty) : Bool := a == b || match a, b with
+    | .struct S [], .struct T [] => env.classes.contains S && env.classes.contains T && env.isSub S T
+    | _, _ => false
   let sameSig (a b : Sig) : Bool :=
-    (a.params.drop 1) == (b.params.drop 1) && a.ret == b.ret && a.decides == b.decides &&
+    (a.params.drop 1) == (b.params.drop 1) && retBelow a.ret b.ret && a.decides == b.decides &&
       a.named.map (·.1) == b.named.map (·.1)
   for (mp, mine, theirs) in overridePairs do
     match allSigs.find? (·.name == mine), allSigs.find? (·.name == theirs) with
@@ -1956,7 +1972,8 @@ def elabProgram (allTops0 : List STop) : Except String Compiled := do
     let (t, _) ← (resolveTy env fp sty).run {}
     match fieldIndex (env.fields cname) f with
     | some (_, t0) =>
-      if !(t == t0) then throw s!"{fp.show}: {f}<override> in {cname} must have the inherited type {t0.show}"
+      if !(t == t0) then
+        throw s!"{fp.show}: field '{f}' of {cname} must have the type it inherits, {t0.show}, not {t.show}"
     | none => pure ()
   -- check every field default once, with its struct's type parameters opaque
   -- (a default is elaborated again, at its field's type, at each construction
