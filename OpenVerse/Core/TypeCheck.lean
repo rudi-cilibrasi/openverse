@@ -920,36 +920,72 @@ end
 
 /-! ### Programs -/
 
-mutual
-/-- `d` is a default expression of type `t` (`DefaultE a Γ d t`). -/
-def checkDefault (a : Nat) (Γ : List VTy) : Expr → VTy → Bool
-  | .lit v, t => hasTy [] v t
-  | .local i, t => decide (i < a) && decide (Γ[i]? = some t)
-  | .prim .mkTup ds, .tup ts => checkDefaultL a Γ ds ts
+/-- `t` is a reference type with fewer classes than `u`. -/
+def VTy.refSub : VTy → VTy → Bool
+  | .ref ts, .ref us => ts.all us.contains
   | _, _ => false
-def checkDefaultL (a : Nat) (Γ : List VTy) : List Expr → List VTy → Bool
+
+theorem VTy.refSub_sound {t u : VTy} (h : t.refSub u = true) :
+    ∃ ts us, t = .ref ts ∧ u = .ref us ∧ ∀ x ∈ ts, x ∈ us := by
+  unfold VTy.refSub at h
+  split at h
+  · next ts us =>
+    simp only [List.all_eq_true, List.contains_iff_mem] at h
+    exact ⟨ts, us, rfl, rfl, h⟩
+  · simp at h
+
+mutual
+/-- `d` is a default expression of type `t` (`DefaultE S a Γ d t`). -/
+def checkDefault (S : Sigs) (a : Nat) (Γ : List VTy) : Expr → VTy → Bool
+  | .lit v, t => hasTy [] v t
+  | .local i, t => decide (i < a) && match Γ[i]? with
+    | some t' => decide (t' = t) || t'.refSub t
+    | none => false
+  | .prim .mkTup ds, .tup ts => checkDefaultL S a Γ ds ts
+  | .heap (.new c) ds, .ref ts => ts.contains c && match S.classes[c]? with
+    | some fs => checkDefaultL S a Γ ds fs
+    | none => false
+  | _, _ => false
+def checkDefaultL (S : Sigs) (a : Nat) (Γ : List VTy) : List Expr → List VTy → Bool
   | [], [] => true
-  | d :: ds, t :: ts => checkDefault a Γ d t && checkDefaultL a Γ ds ts
+  | d :: ds, t :: ts => checkDefault S a Γ d t && checkDefaultL S a Γ ds ts
   | _, _ => false
 end
 
 mutual
-theorem checkDefault_sound {a : Nat} {Γ : List VTy} : ∀ (d : Expr) (t : VTy),
-    checkDefault a Γ d t = true → DefaultE a Γ d t
+theorem checkDefault_sound {S : Sigs} {a : Nat} {Γ : List VTy} : ∀ (d : Expr) (t : VTy),
+    checkDefault S a Γ d t = true → DefaultE S a Γ d t
   | .lit v, t, h => .lit (by simpa [checkDefault] using h)
   | .local i, t, h => by
     simp only [checkDefault, Bool.and_eq_true, decide_eq_true_eq] at h
-    exact .param h.1 h.2
+    obtain ⟨hi, h⟩ := h
+    split at h
+    · next t' hΓ =>
+      simp only [Bool.or_eq_true, decide_eq_true_eq] at h
+      rcases h with rfl | hs
+      · exact .param hi hΓ
+      · obtain ⟨ts, us, rfl, rfl, hsub⟩ := VTy.refSub_sound hs
+        exact .sub (.param hi hΓ) hsub
+    · simp at h
   | .prim op ds, t, h => by
     cases op <;> try (simp [checkDefault] at h; done)
     cases t <;> try (simp [checkDefault] at h; done)
     rename_i ts
     simp only [checkDefault] at h
     exact .tup (checkDefaultL_sound ds ts h)
+  | .heap op ds, t, h => by
+    cases op <;> try (simp [checkDefault] at h; done)
+    cases t <;> try (simp [checkDefault] at h; done)
+    rename_i c ts
+    simp only [checkDefault, Bool.and_eq_true] at h
+    obtain ⟨hc, h⟩ := h
+    split at h
+    · next fs hfs => exact .new hfs (by simpa using hc) (checkDefaultL_sound ds fs h)
+    · simp at h
   | .assign .., _, h | .seq .., _, h | .call .., _, h | .ite .., _, h | .forE .., _, h
   | .loop _, _, h | .brk, _, h | .ret _, _, h | .print _, _, h => by simp [checkDefault] at h
-theorem checkDefaultL_sound {a : Nat} {Γ : List VTy} : ∀ (ds : List Expr) (ts : List VTy),
-    checkDefaultL a Γ ds ts = true → DefaultEL a Γ ds ts
+theorem checkDefaultL_sound {S : Sigs} {a : Nat} {Γ : List VTy} : ∀ (ds : List Expr) (ts : List VTy),
+    checkDefaultL S a Γ ds ts = true → DefaultEL S a Γ ds ts
   | [], [], _ => .nil
   | d :: ds, t :: ts, h => by
     simp only [checkDefaultL, Bool.and_eq_true] at h
@@ -960,17 +996,17 @@ end
 /-- Recognise the initialisation prefix of slots `k, …` of types `ts`, in a
     function with `a` parameters and slot types `Γ`: the default expressions
     and the rest of the body. -/
-def stripPrefix (a : Nat) (Γ : List VTy) (k : Nat) : List VTy → Expr → Option (List Expr × Expr)
+def stripPrefix (S : Sigs) (a : Nat) (Γ : List VTy) (k : Nat) : List VTy → Expr → Option (List Expr × Expr)
   | [], e => some ([], e)
   | t :: ts, e => match e with
     | .seq (.assign i d) rest =>
-      if i = k && checkDefault a Γ d t then
-        (stripPrefix a Γ (k + 1) ts rest).map fun (ds, b) => (d :: ds, b)
+      if i = k && checkDefault S a Γ d t then
+        (stripPrefix S a Γ (k + 1) ts rest).map fun (ds, b) => (d :: ds, b)
       else none
     | _ => none
 
-theorem stripPrefix_sound {a : Nat} {Γ : List VTy} : ∀ (ts : List VTy) (k : Nat) (e b : Expr) (ds : List Expr),
-    stripPrefix a Γ k ts e = some (ds, b) → e = initPrefixE k ds b ∧ DefaultEL a Γ ds ts
+theorem stripPrefix_sound {S : Sigs} {a : Nat} {Γ : List VTy} : ∀ (ts : List VTy) (k : Nat) (e b : Expr) (ds : List Expr),
+    stripPrefix S a Γ k ts e = some (ds, b) → e = initPrefixE k ds b ∧ DefaultEL S a Γ ds ts
   | [], k, e, b, ds, h => by
     simp only [stripPrefix, Option.some.injEq, Prod.mk.injEq] at h
     obtain ⟨rfl, rfl⟩ := h
@@ -994,7 +1030,7 @@ theorem stripPrefix_sound {a : Nat} {Γ : List VTy} : ∀ (ts : List VTy) (k : N
 /-- Check one function against its signature and slot types. -/
 def checkFn (S : Sigs) (fn : Fn) (ps : List VTy) (τ : VTy) (Γ : List VTy) : Bool :=
   decide (fn.arity = ps.length) && decide (Γ.length = fn.nslots) && decide (Γ.take fn.arity = ps) &&
-  match stripPrefix fn.arity Γ fn.arity (Γ.drop fn.arity) fn.body with
+  match stripPrefix S fn.arity Γ fn.arity (Γ.drop fn.arity) fn.body with
   | some (_, b) => (tc S Γ τ b (some τ)).isSome
   | none => false
 

@@ -97,7 +97,8 @@ def default : VTy → Value
   -- no value has a type variable as its type; slots of such types are
   -- initialised from parameters instead (`DefaultE`)
   | .var _ => .void
-  -- no literal is a reference; the front end does not give slots such types
+  -- no literal is a reference; slots of such types start as a new object
+  -- or a parameter instead (`DefaultE`)
   | .ref _ => .void
 def defaults : List VTy → List Value
   | [] => []
@@ -263,18 +264,25 @@ def initPrefix (k : Nat) (ts : List VTy) (e : Expr) : Expr :=
   initPrefixE k (ts.map fun t => .lit t.default) e
 
 mutual
-/-- `DefaultE a Γ d t`: `d` initialises a slot of type `t` in a function
+/-- `DefaultE S a Γ d t`: `d` initialises a slot of type `t` in a function
     whose first `a` slots are its parameters: a literal of type `t`, a
-    parameter of type `t`, or a tuple of such. It reads only parameters, and
-    evaluates without failing to a value of type `t.subst θ` whenever the
-    parameters hold values of their types under `θ`. -/
-inductive DefaultE (a : Nat) (Γ : List VTy) : Expr → VTy → Prop
-  | lit {v t} : hasTy [] v t = true → DefaultE a Γ (.lit v) t
-  | param {i t} : i < a → Γ[i]? = some t → DefaultE a Γ (.local i) t
-  | tup {ds ts} : DefaultEL a Γ ds ts → DefaultE a Γ (.prim .mkTup ds) (.tup ts)
-inductive DefaultEL (a : Nat) (Γ : List VTy) : List Expr → List VTy → Prop
-  | nil : DefaultEL a Γ [] []
-  | cons {d ds t ts} : DefaultE a Γ d t → DefaultEL a Γ ds ts → DefaultEL a Γ (d :: ds) (t :: ts)
+    parameter of type `t`, a tuple of such, or (for a reference type) a new
+    object of one of its classes, with defaults as fields. It reads only
+    parameters, may allocate, and evaluates without failing to a value of
+    type `t.subst θ` whenever the parameters hold values of their types
+    under `θ`. -/
+inductive DefaultE (S : Sigs) (a : Nat) (Γ : List VTy) : Expr → VTy → Prop
+  | lit {v t} : hasTy [] v t = true → DefaultE S a Γ (.lit v) t
+  | param {i t} : i < a → Γ[i]? = some t → DefaultE S a Γ (.local i) t
+  | tup {ds ts} : DefaultEL S a Γ ds ts → DefaultE S a Γ (.prim .mkTup ds) (.tup ts)
+  | new {t ds fs ts} : S.classes[t]? = some fs → t ∈ ts → DefaultEL S a Γ ds fs →
+      DefaultE S a Γ (.heap (.new t) ds) (.ref ts)
+  /-- A reference is also of any type with more classes. -/
+  | sub {d ts us} : DefaultE S a Γ d (.ref ts) → (∀ t ∈ ts, t ∈ us) → DefaultE S a Γ d (.ref us)
+inductive DefaultEL (S : Sigs) (a : Nat) (Γ : List VTy) : List Expr → List VTy → Prop
+  | nil : DefaultEL S a Γ [] []
+  | cons {d ds t ts} : DefaultE S a Γ d t → DefaultEL S a Γ ds ts →
+      DefaultEL S a Γ (d :: ds) (t :: ts)
 end
 
 /-- A function of signature `(ps, ρ)` is typed with slot types `Γ`. -/
@@ -282,7 +290,7 @@ structure FnTyped (S : Sigs) (fn : Fn) (ps : List VTy) (ρ : VTy) (Γ : List VTy
   arity : fn.arity = ps.length
   slots : Γ.length = fn.nslots
   params : Γ.take fn.arity = ps
-  body : ∃ b ds, fn.body = initPrefixE fn.arity ds b ∧ DefaultEL fn.arity Γ ds (Γ.drop fn.arity) ∧
+  body : ∃ b ds, fn.body = initPrefixE fn.arity ds b ∧ DefaultEL S fn.arity Γ ds (Γ.drop fn.arity) ∧
     Typed S Γ ρ b ρ
 
 /-- The field types of the classes mention no type variable (so a typing

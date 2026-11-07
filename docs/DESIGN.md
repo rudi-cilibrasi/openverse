@@ -161,9 +161,10 @@ Phase 3 (#20) adds a heap of objects, each with a class tag and fields
 
 - **Reference types are tag sets.** `VTy.ref ts` is a reference to an object
   whose tag is in `ts`; the front end will use the concrete classes below a
-  static class. Subtyping is inclusion, used when a local is read
-  (`Typed.local_sub`), and a cast `isTag us` (which fails when the tag is not
-  in `us`) narrows to `ref us`.
+  static class, sorted and without repeats, since types are compared as
+  lists. Subtyping is inclusion, used when a local is read
+  (`Typed.local_sub`), so a value is widened by going through a local. A
+  cast `isTag us` fails when the tag is not in `us`, and has type `ref us`.
 - **Value typing sees the tags.** `hasTy Ξ v t` takes `Ξ`, the tag of each
   heap object. Objects are only ever appended and their tags never change,
   so a typing survives every step (`hasTy_mono`, for `Ξ` a prefix of `Ξ'`).
@@ -176,6 +177,12 @@ Phase 3 (#20) adds a heap of objects, each with a class tag and fields
 - **Preservation** (`Eval.typed`) carries, beyond the frame typing, `HeapOK`
   and the extension of the tags. Rollback needs nothing new: a failure
   context restores the heap it started from, which satisfies both.
+  `Runs.typed` states the result's type in the final heap, which is well
+  typed.
+- **Defaults.** No literal is a reference, so a slot of class type starts as
+  a new object of one of its classes with default fields (`DefaultE.new`),
+  or as a parameter with fewer classes (`DefaultE.sub`). Placeholders cost an
+  allocation per call; a parameter is preferred when there is one.
 
 The front end does not produce heap operations yet; `HeapExamples.lean`
 checks hand-written programs at build time.
@@ -190,8 +197,8 @@ model rollback.
 
 Instead, the elaborator begins every body with an initialisation prefix that
 stores a value of each slot's type (`initPrefixE`): the default literal of a
-closed type, or a default expression built from the hidden parameters of a
-generic function (previous section). The type checker recognises the prefix
+closed type, a default expression built from the hidden parameters of a
+generic function, or a placeholder object (previous sections). The type checker recognises the prefix
 (`stripPrefix`). This needs no change to the format or to the C runtime. It
 costs a few stores per call.
 

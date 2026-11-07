@@ -154,7 +154,11 @@ out of date. The proofs are in `OpenVerse/Core/`.
   ProgTyped P S →
     ∀ {τ : VTy} {r : Res} {out : List Nat},
       S.fns[P.main]? = some ([], τ) →
-        Runs P r out → r ≠ Res.err ErrKind.type ∧ ∀ (v : Value), r = Res.ok v → ∃ Ξ, hasTy Ξ v τ = true
+        Runs P r out →
+          r ≠ Res.err ErrKind.type ∧
+            ∃ fr heap,
+              Eval P Prog.initSt (Expr.call P.main []) r { fr := fr, g := { out := out, heap := heap } } ∧
+                HeapOK S heap ∧ ∀ (v : Value), r = Res.ok v → hasTy (tagsOf heap) v τ = true
 ```
 
 ## `Typed.subst`: the substitution lemma: a typing with type variables holds at every instance
@@ -220,7 +224,9 @@ out of date. The proofs are in `OpenVerse/Core/`.
               r.scopeErr = false ∧
                 r ≠ Res.err ErrKind.type ∧
                   r ≠ Res.err ErrKind.control ∧
-                    (∀ (v : Value), r = Res.ok v → ∃ Ξ, hasTy Ξ v τ = true) ∧
+                    (∃ fr heap,
+                        Eval P Prog.initSt (Expr.call P.main []) r { fr := fr, g := { out := out, heap := heap } } ∧
+                          HeapOK S heap ∧ ∀ (v : Value), r = Res.ok v → hasTy (tagsOf heap) v τ = true) ∧
                       (∀ (fn : Fn), P.fns[P.main]? = some fn → fn.decides = false → r ≠ Res.fail) ∧
                         ∀ (r' : Res) (out' : List Nat), Runs P r' out' → r' = r ∧ out' = out
 ```
