@@ -27,8 +27,10 @@ inductive Value where
   | logic : Bool → Value
   /-- `char`: one UTF-8 code unit, `0 ≤ c < 256`. -/
   | char  : Nat → Value
-  /-- `[]t`, including `string = []char`. -/
-  | arr   : List Value → Value
+  /-- `[]t`, including `string = []char`. An `Array`, so that the
+      reference interpreter indexes in constant time (#110); proofs reason
+      about its `toList`. -/
+  | arr   : Array Value → Value
   /-- `tuple(t₁, …, tₙ)`; `tup []` is the value of `void`. -/
   | tup   : List Value → Value
   /-- The empty option, written `false` in Verse. -/
@@ -45,7 +47,7 @@ namespace Value
 def void : Value := .tup []
 
 /-- Build a Verse string from a Lean string (UTF-8 bytes). -/
-def ofString (s : String) : Value := .arr (s.toUTF8.toList.map fun b => .char b.toNat)
+def ofString (s : String) : Value := .arr (s.toUTF8.toList.map fun b => .char b.toNat).toArray
 
 mutual
 /-- Decidable equality, written by hand: Lean cannot derive it for a nested inductive. -/
@@ -56,7 +58,7 @@ def decEq : (a b : Value) → Decidable (a = b)
     if h : x = y then isTrue (by subst h; rfl) else isFalse (by intro h'; cases h'; exact h rfl)
   | .char x, .char y =>
     if h : x = y then isTrue (by subst h; rfl) else isFalse (by intro h'; cases h'; exact h rfl)
-  | .arr xs, .arr ys => match decEqList xs ys with
+  | .arr ⟨xs⟩, .arr ⟨ys⟩ => match decEqList xs ys with
     | isTrue h => isTrue (by subst h; rfl)
     | isFalse h => isFalse (by intro h'; cases h'; exact h rfl)
   | .tup xs, .tup ys => match decEqList xs ys with
@@ -99,8 +101,8 @@ partial def render : Value → String
   | .arr vs =>
     if vs.all (fun v => match v with | .char _ => true | _ => false) && !vs.isEmpty then
       String.fromUTF8! (ByteArray.mk (vs.map (fun v => match v with
-        | .char c => c.toUInt8 | _ => 0)).toArray)
-    else "array{" ++ ", ".intercalate (vs.map render) ++ "}"
+        | .char c => c.toUInt8 | _ => 0)))
+    else "array{" ++ ", ".intercalate (vs.toList.map render) ++ "}"
   | .tup vs => "(" ++ ", ".intercalate (vs.map render) ++ ")"
   | .none => "false"
   | .some v => "option{" ++ render v ++ "}"
