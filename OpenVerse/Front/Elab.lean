@@ -3226,7 +3226,12 @@ def elabProgramCore (allTops00 : List STop) (opts : Options := {}) : Except Stri
           let ytps := ((infoOf y).map (·.1)).getD []
           (ownLists y mn).filterMap fun (dmtps, dps) =>
             (sigs.idxOf? (sigText ytps dmtps dps)).map fun k =>
-              (k, sigText ctps dmtps (dps.map fun q => { q with ty := q.ty.substNames σ }), dps.length)
+              -- (its own type parameters renamed apart first: the class's
+              -- arguments must not capture them)
+              let apart : List (String × STy) := (dmtps.zip (List.range dmtps.length)).map fun (tp, i) =>
+                (tp.name, STy.name s!"$own{i}")
+              let dmtps' := (dmtps.zip (List.range dmtps.length)).map fun (tp, i) => { tp with name := s!"$own{i}" }
+              (k, sigText ctps dmtps' (dps.map fun q => { q with ty := (q.ty.substNames apart).substNames σ }), dps.length)
         match (cands.filter (·.2.1 == mine)).map (·.1) |>.eraseDups with
         | [k] => s!"{mn}$ov{k}"
         | _ =>
