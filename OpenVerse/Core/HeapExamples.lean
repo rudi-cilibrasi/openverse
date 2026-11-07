@@ -225,6 +225,33 @@ example : (VTy.tup [.ref [1], .int]).sub (.tup [.ref [0, 1], .int]) = true := by
 example : (VTy.tup [.ref [1]]).sub (.tup [.ref [0, 1], .int]) = false := by native_decide
 end
 
+/-! ### Functions that do not write (#35) -/
+
+/-- `Show` only reads its object, so it may be marked as not writing;
+    `castOutside`'s `Show` may too. `heapDemo`'s `Show` writes `P.X`. -/
+def readsOnly : Prog :=
+  { subDemo with fns := subDemo.fns.set 2 { subDemo.fns[2]! with writes := false } }
+example : readsOnly.check = true := by native_decide
+def writesMarkedReads : Prog :=
+  { heapDemo with fns := heapDemo.fns.set 0 { heapDemo.fns[0]! with writes := false } }
+example : writesMarkedReads.check = false := by native_decide
+-- a call of a writing function writes, also in a failure context
+example : (Expr.ite (.call 0 [.local 0]) (.lit .void) (.lit .void)).writesHeap heapDemo = true := by
+  native_decide
+-- `castOutside`'s `Show` only reads, so it may be marked as not writing
+example : ({ castOutside with fns := castOutside.fns.set 0 { castOutside.fns[0]! with writes := false } }
+    : Prog).checkWriteSound = true := by native_decide
+-- a function that only calls functions that do not write does not write either: `SumX` marked,
+-- and `Main` (which calls only `Make3`, `SumX` and `Show`) marked too once `Make3` is
+def readsOnly2 : Prog :=
+  let mark (fs : List Fn) (i : Nat) : List Fn := fs.set i { fs[i]! with writes := false }
+  { readsOnly with fns := mark (mark (mark readsOnly.fns 1) 0) 3 }
+example : readsOnly2.check = true := by native_decide
+-- ... but a function that calls a writing one, unmarked, cannot be marked
+def callsWriter : Prog :=
+  { heapDemo with fns := heapDemo.fns.set 1 { heapDemo.fns[1]! with writes := false } }
+example : callsWriter.check = false := by native_decide
+
 -- a class table with a type variable is refused (so `Typed.subst` holds)
 example : heapDemo.checkTypes { heapSigs with classes := [[.var 0], [.int, .int, .int]] } heapSlots = false := by
   native_decide

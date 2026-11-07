@@ -23,3 +23,4 @@ import OpenVerse.Core.TypeCheck
 import OpenVerse.Core.Guarantees
 import OpenVerse.Core.Control
 import OpenVerse.Core.HeapExamples
+import OpenVerse.Core.Writes
