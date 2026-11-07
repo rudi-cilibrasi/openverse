@@ -81,6 +81,19 @@ trophy := class(titled):
 
 Hello(T:titled):string = "{T.Greeting}, {T.Title2}"
 
+# the most specific default of an interface field wins, whatever the order
+# of the parents; an interface may narrow a method's result
+basic := interface:
+    Level:int = 0
+    Reward():pet = pet{}
+advanced := interface(basic):
+    Level<override>:int = 1
+    Reward<override>():cat = cat{Age := 2}
+course1 := class(basic, advanced):
+    Hours:int = 3
+course2 := class(advanced, basic):
+    Hours:int = 4
+
 # a covariant result: an override may return a class below the declared one
 maker := class:
     Make():pet = pet{}
@@ -140,6 +153,7 @@ Main():void =
     for (T : Ts) { Print(Hello(T)) }
     M := medal{}
     Print("{M.Code} {M.Colour} {M.Weight}")
+    Print("levels {course1{}.Level} {course2{}.Level}, reward {course1{}.Reward().Title()}")
     Mk:maker = catmaker{}
     Print("made a pet of age {Mk.Make().Age}")
     C2 := catmaker{}.Make()

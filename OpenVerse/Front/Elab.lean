@@ -433,10 +433,20 @@ def Ctx.sig? (ctx : Ctx) (n : String) : Option Sig := ctx.sigs.find? (·.name ==
 def Ctx.hasMethod (ctx : Ctx) (c m : String) : Bool :=
   (ctx.types.supers c).any fun e => (ctx.sig? s!"{e}.{m}").isSome
 
-/-- Where the method `m` of `c` is declared (its signature): the nearest of
-    `c` and the classes and interfaces above it. -/
+/-- Where the method `m` of `c` is declared, for the signature of a call: the
+    most specific of the declarations at or above `c` and, among several,
+    one whose result is below the others' (overrides may narrow it). -/
 def Ctx.methodDecl? (ctx : Ctx) (c m : String) : Option String :=
-  (ctx.types.supers c).find? fun e => (ctx.sig? s!"{e}.{m}").isSome
+  let env := ctx.types
+  let cands := (env.supers c).filter fun e => (ctx.sig? s!"{e}.{m}").isSome
+  let best := cands.filter fun e => !cands.any fun e' => e' != e && env.isSub e' e
+  let retOf (e : String) : Ty := ((ctx.sig? s!"{e}.{m}").map (·.ret)).getD .void
+  let below (a b : Ty) : Bool := a == b || match a, b with
+    | .struct S [], .struct T [] => env.isSub S T
+    | _, _ => false
+  match best.find? (fun e => best.all fun e' => below (retOf e) (retOf e')) with
+  | some e => some e
+  | none => best.head?
 
 /-- The most specific of the non-abstract definitions of method `m` among
     `ups`: one that no other is below (the class chain comes first in
@@ -1709,6 +1719,7 @@ def elabProgram (allTops0 : List STop) : Except String Compiled := do
   -- its own (an `<override>` field gives an inherited one a new default)
   let mut full : Array (String × List (String × STy × Option SExpr × Bool)) := #[]
   let mut fieldOverrides : Array (Pos × String × String × STy) := #[]
+  let mut defaultClashes : Array String := #[]
   for _ in [0:cdefs.length + 1] do
     for cd in cdefs do
       if (full.find? (·.1 == cd.name)).isSome then continue
@@ -1717,16 +1728,34 @@ def elabProgram (allTops0 : List STop) : Except String Compiled := do
         | none => some []
         | some q => (full.find? (·.1 == q)).map (·.2)
       let some inh := inherited? | continue
+      -- the interfaces above must be resolved first
+      let ifacesUp := ((henv.supers cd.name).drop 1).filter (henv.info · |>.isIface)
+      if ifacesUp.any (fun i => (full.find? (·.1 == i)).isNone) then continue
       let mut fs : List (String × STy × Option SExpr × Bool) := inh
-      for i in (henv.supers cd.name).drop 1 do
-        if !(henv.info i).isIface then continue
-        for (f, sty, d, isVar) in ((cdef? i).map (·.fields)).getD [] do
+      -- each interface field not inherited through the class chain, once; its
+      -- default is that of the most specific interface that gives one (as for
+      -- methods, whatever the order of the parents)
+      for i in ifacesUp do
+        for (f, sty, _, isVar) in ((full.find? (·.1 == i)).map (·.2)).getD [] do
           if isVar then
             throw s!"{cd.pos.show}: var field '{f}' of {i}: mutable fields need reference semantics, not supported yet (#11 phase 3)"
+          if ((henv.supers cd.name).drop 1).any (declares · f) then
+            throw s!"{cd.pos.show}: field '{f}' of {cd.name} has the name of an inherited method"
           if fs.any (·.1 == f) then
             -- reached again: its type must agree (checked once types are resolved)
             fieldOverrides := fieldOverrides.push (cd.pos, cd.name, f, sty)
-          else fs := fs ++ [(f, sty, d, isVar)]
+          else
+            -- the interfaces that give the field a default themselves (an
+            -- inherited default is its declaring interface's)
+            let ownDefault (j : String) : Option SExpr :=
+              (((cdef? j).map (·.fields)).getD []).findSome? fun (g, _, d, _) => if g == f then d else none
+            let withDefault := ifacesUp.filter fun j => (ownDefault j).isSome
+            let best := withDefault.filter fun j => !withDefault.any fun j' => j' != j && henv.isSub j' j
+            if best.length > 1 && !cd.overrides.contains f then
+              defaultClashes := defaultClashes.push
+                s!"{cd.pos.show}: {cd.name} inherits a default for field '{f}' from both {best[0]!} and {best[1]!}: give it one with {f}<override>:t = e"
+            let d := best.head?.bind ownDefault
+            fs := fs ++ [(f, sty, d, isVar)]
       for (f, sty, d, isVar) in cd.fields do
         if f == "Self" then throw s!"{cd.pos.show}: a field of {cd.name} cannot be called Self"
         if isVar then
@@ -1748,6 +1777,10 @@ def elabProgram (allTops0 : List STop) : Except String Compiled := do
           fs := fs ++ [(f, sty, d, isVar)]
       full := full.push (cd.name, fs)
   let fullOf (n : String) := ((full.find? (·.1 == n)).map (·.2)).getD []
+  for cd in cdefs do
+    for (f, _, _, _) in fullOf cd.name do
+      if (henv.supers cd.name).any (declares · f) then
+        throw s!"{cd.pos.show}: '{f}' is both a field and a method of {cd.name}"
   -- the methods
   let mut expanded : Array STop := #[]
   let mut abstracts : Array (String × String) := #[]
@@ -1975,6 +2008,7 @@ def elabProgram (allTops0 : List STop) : Except String Compiled := do
       if !(t == t0) then
         throw s!"{fp.show}: field '{f}' of {cname} must have the type it inherits, {t0.show}, not {t.show}"
     | none => pure ()
+  if let some msg := defaultClashes[0]? then throw msg
   -- check every field default once, with its struct's type parameters opaque
   -- (a default is elaborated again, at its field's type, at each construction
   -- that omits the field)
