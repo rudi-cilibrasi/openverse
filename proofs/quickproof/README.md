@@ -18,9 +18,9 @@ Coq proof; `qp verify` checks it.**
 
 | Project | Law | Claim (summary) | Status |
 |---|---|---|---|
-| `arith` | `arith_exact` | for all `int64` a, b, the nine int operations return exactly `Prim.apply` (via `Seams.lean`) | **PROVED** at 4006a49d863c — `qp verify` PASS (`arith/VERIFY.md`) |
-| `store` | `store_rollback_model` | for any 32 operations on up to 3 nested contexts, 4 slots, and journal and output capacities up to 8, rollback restores the slots, output length and output bytes, and commit keeps them, against a naive snapshot model | **PROVED** at 4006a49d863c — `qp verify` PASS (`store/VERIFY.md`) |
-| `loader` | `loader_wellscoped` | for every buffer of up to 4 KiB, `vx_load` reads in bounds; when it accepts, the program is well formed (HEAP nodes and REF literals included) and `Prog.WellScoped` | **PROVED** at 4006a49d863c — `qp verify` PASS (`loader/VERIFY.md`) |
+| `arith` | `arith_exact` | for all `int64` a, b, the nine int operations return exactly `Prim.apply` (via `Seams.lean`) | **PROVED** at 7336cd864b97 — `qp verify` PASS (`arith/VERIFY.md`) |
+| `store` | `store_rollback_model` | for any 32 operations on up to 3 nested contexts, 4 slots, and journal and output capacities up to 8, rollback restores the slots, output length and output bytes, and commit keeps them, against a naive snapshot model | **PROVED** at 7336cd864b97 — `qp verify` PASS (`store/VERIFY.md`) |
+| `loader` | `loader_wellscoped` | for every buffer of up to 4 KiB, `vx_load` reads in bounds; when it accepts, the program is well formed (HEAP nodes and REF literals included) and `Prog.WellScoped` | **PROVED** at 7336cd864b97 — `qp verify` PASS (`loader/VERIFY.md`) |
 
 Each `STATUS.md` records the result of `qp check` (native runs under
 ASan/UBSan, CompCert's interpreter, mutants) and, for a finished proof, the

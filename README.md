@@ -118,7 +118,9 @@ Trusted, besides Lean's kernel:
   which is the reference;
 - for floats (#127), Lean's `Float`, whose operations are C's `double`
   arithmetic (`@[extern]`): the semantics of `+ - * /` and the orderings on
-  floats is IEEE's as the machine computes it;
+  floats is IEEE's as the machine computes it, and that of `Sqrt`, `Exp`,
+  `Ln`, `Pow` and the trigonometric functions is the C library's (`libm`),
+  which the reference interpreter and `cverse` share on one machine;
 - the front end. It is not verified, but each of its outputs is checked by
   `Prog.check` and `Prog.checkTypes`, with a certificate of slot and function
   types. Both checks are proved to establish what the theorems assume, so

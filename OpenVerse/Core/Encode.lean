@@ -39,6 +39,9 @@ def primCode : Prim → Nat × Nat
   | .flt => (37, 0) | .fle => (38, 0) | .fgt => (39, 0) | .fge => (40, 0)
   | .fofInt => (41, 0) | .ffloor => (42, 0) | .fceil => (43, 0) | .fround => (44, 0)
   | .ftrunc => (45, 0) | .fofBits => (46, 0)
+  | .fsqrt => (47, 0) | .fexp => (48, 0) | .fln => (49, 0) | .fsin => (50, 0) | .fcos => (51, 0)
+  | .ftan => (52, 0) | .fasin => (53, 0) | .facos => (54, 0) | .fatan => (55, 0) | .fpow => (56, 0)
+  | .fatan2 => (57, 0) | .fisFinite => (58, 0)
 
 /-- The node table under construction. -/
 abbrev EncM := StateM (Array ByteArray)

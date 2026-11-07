@@ -189,7 +189,20 @@ int    vx_store_move_out(vx_store *s, uint8_t *out, size_t ocap);
 #define VX_P_FROUND   44
 #define VX_P_FTRUNC   45
 #define VX_P_FOFBITS  46   /* a float literal: PRIM fofBits [LIT int bits] */
-#define VX_P_LAST     46
+/* the mathematical functions (#132) */
+#define VX_P_FSQRT    47
+#define VX_P_FEXP     48
+#define VX_P_FLN      49
+#define VX_P_FSIN     50
+#define VX_P_FCOS     51
+#define VX_P_FTAN     52
+#define VX_P_FASIN    53
+#define VX_P_FACOS    54
+#define VX_P_FATAN    55
+#define VX_P_FPOW     56
+#define VX_P_FATAN2   57
+#define VX_P_FISFINITE 58
+#define VX_P_LAST     58
 
 /*
  * One node.  Child indices are into the node table of the same function.

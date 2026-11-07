@@ -739,7 +739,13 @@ where
 def methodBase (x : String) : String := (x.splitOn "$ov").headD x
 
 def builtins : List String :=
-  ["Print", "ToString", "Floor", "Ceil", "Round", "Int", "Abs", "Min", "Max", "Quotient", "Mod", "Err", "ConcatenateMaps"]
+  ["Print", "ToString", "Floor", "Ceil", "Abs", "Min", "Max", "Quotient", "Mod", "Err", "ConcatenateMaps"]
+
+/-- Built-in functions a program may also define (#127, #132): its own
+    definition, if any, is the one a call means. -/
+def softBuiltins : List String :=
+  ["Round", "Int", "Sqrt", "Exp", "Ln", "Log", "Pow", "Sin", "Cos", "Tan", "ArcSin", "ArcCos", "ArcTan",
+   "IsFinite"]
 
 partial def resolveTy (env : TyEnv) (p : Pos) : STy → EM Ty
   | .name "int" => pure .int
@@ -1252,7 +1258,12 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
         | none =>
           if (ctx.types.overloads.lookup n).isSome then
             eerr p s!"{n} is overloaded: an overloaded function cannot be used as a value (Book of Verse ch. 6)"
-          eerr p s!"unknown identifier '{n}'"
+          -- the float constants (#132), unless the program defines them
+          match n with
+          | "PiFloat" => return ⟨.lit (.float (VFloat.canon 3.141592653589793)), .float⟩
+          | "Inf" => return ⟨.lit (.float 0x7FF0000000000000), .float⟩
+          | "NaN" => return ⟨.lit (.float VFloat.nanBits), .float⟩
+          | _ => eerr p s!"unknown identifier '{n}'"
   -- a constructor's `block:` (#11): it cannot fail, as a class's cannot
   | .app _ (.ident _ "$nofail") [e] false => elabE { ctx with canFail := false, inBlock := true } e exp
   | .app p (.ident _ "$defer") _ _ => eerr p "defer: is a statement: it has no value"
@@ -1471,7 +1482,8 @@ partial def elabStmt (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM (R × Ctx) 
       if let .app dp (.ident _ "$defer") _ _ := rhs then eerr dp "defer: is a statement: it has no value"
       if ctx.lookup n |>.isSome then
         eerr p s!"'{n}' is already defined; Verse does not allow shadowing (use set {n} = … for a var)"
-      if (ctx.sig? n).isSome || builtins.contains n then
+      -- (nor a soft built-in's: a local cannot hide one, #132)
+      if (ctx.sig? n).isSome || builtins.contains n || softBuiltins.contains n then
         eerr p s!"'{n}' is already the name of a function or constant"
       if let some c := ctx.selfClass then
         if (ctx.types.fields c).any (·.1 == n) || ctx.hasMethod c n ||
@@ -1666,7 +1678,7 @@ partial def elabApp (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (brack
     let selfMember? : Bool := match ctx.selfClass with
       | some c => ctx.hasMethod c name ||
           ((ctx.types.methodOverloads.lookup name).map (·.any (ctx.hasMethod c ·))).getD false ||
-          ((ctx.types.fields c).any (·.1 == name) && !builtins.contains name)
+          ((ctx.types.fields c).any (·.1 == name) && !builtins.contains name && !softBuiltins.contains name)
       | none => false
     if selfMember? then elabApp ctx p (.member p (.ident p "Self") name) args bracket exp else
     -- `T[X]`, `T(X)`: a cast to class or interface `T`
@@ -1674,7 +1686,9 @@ partial def elabApp (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (brack
     if let some ovs := ctx.types.overloads.lookup name then
       resolveOverload ctx p name ovs ctx.sig? (fun o => elabApp ctx p (.ident p o) args bracket exp) args
     else
-    match name with
+    -- (a soft built-in the program defines is the program's)
+    let builtinName := if softBuiltins.contains name && (ctx.sig? name).isSome then "$program" else name
+    match builtinName with
     | "Print" =>
       let es ← elabArgs ctx p args [Ty.string]
       return ⟨.print es.head!, .void⟩
@@ -1735,6 +1749,34 @@ partial def elabApp (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (brack
         if r.ty == .float then return ⟨.prim .fabs [r.e], .float⟩
         return ⟨.prim .abs [← coerce a.pos r .int], .int⟩
       | _ => eerr p "Abs takes one argument"
+    | "Sqrt" | "Exp" | "Ln" | "Log" | "Pow" | "Sin" | "Cos" | "Tan" | "ArcSin" | "ArcCos" | "ArcTan"
+    | "IsFinite" =>
+      -- the mathematical functions of floats (#132); only IsFinite fails
+      if name == "IsFinite" then needBracket name
+      else if bracket then eerr p s!"{name} cannot fail: call it with {name}(…)"
+      let fl (a : SExpr) : EM Expr := do
+        let r ← elabE ctx a (some .float)
+        if r.ty != .float then eerr a.pos s!"{name} takes floats, found {r.ty.show}"
+        return r.e
+      let unary : String → Option Prim
+        | "Sqrt" => some .fsqrt | "Exp" => some .fexp | "Ln" => some .fln | "Sin" => some .fsin
+        | "Cos" => some .fcos | "Tan" => some .ftan | "ArcSin" => some .fasin | "ArcCos" => some .facos
+        | "ArcTan" => some .fatan | "IsFinite" => some .fisFinite
+        | _ => none
+      match name, args with
+      | "Pow", [a, b] => return ⟨p2 .fpow (← fl a) (← fl b), .float⟩
+      | "ArcTan", [y, x] => return ⟨p2 .fatan2 (← fl y) (← fl x), .float⟩
+      | "Log", [b, x] =>
+        -- (`Log(Base, X)` is `Ln(X) / Ln(Base)`, the base evaluated first)
+        let tb ← fresh .float
+        let eb ← fl b
+        let ex ← fl x
+        return ⟨.seq (.assign tb eb) (p2 .fdiv (.prim .fln [ex]) (.prim .fln [.local tb])), .float⟩
+      | n, [a] =>
+        match unary n with
+        | some op => return ⟨.prim op [← fl a], .float⟩
+        | none => eerr p s!"{name} takes two floats"
+      | _, _ => eerr p s!"{name} takes {if name == "Pow" || name == "Log" then "two floats" else if name == "ArcTan" then "one or two floats" else "one float"}"
     | "Round" | "Int" =>
       -- a float to an int (#127): `Round` ties to even, `Int` towards zero;
       -- failing on NaN, an infinity or out of range
@@ -3769,7 +3811,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
         if mn != "$block" && (cd.methods.take mi).any (fun | .fn _ x .. => x == mn | _ => false) then
           throw s!"{mp.show}: {n} defines {mn} twice with the same parameters"
         if ps.any (·.name == "Self") then throw s!"{mp.show}: a method parameter cannot be called Self"
-        if builtins.contains (methodBase mn) then throw s!"{mp.show}: a method cannot be called {methodBase mn}, the name of a built-in function"
+        if builtins.contains (methodBase mn) || softBuiltins.contains (methodBase mn) then throw s!"{mp.show}: a method cannot be called {methodBase mn}, the name of a built-in function"
         for prm in ps do
           if fs.any (·.1 == prm.name) || (henv.supers n).any (declaresBase · prm.name) then
             throw s!"{mp.show}: parameter '{prm.name}' of {mn} is already a field or method of {n}; Verse does not allow shadowing"

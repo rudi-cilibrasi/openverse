@@ -468,12 +468,26 @@ Main():void =
 - `+ - * /`, unary `-`, and `set +=, -=, *=, /=`. Dividing by zero gives
   `Inf`, `-Inf` or `NaN`; it does not fail.
 - No int converts to a float implicitly. The one mix is `*`: `Count * 1.5`.
-- `=`, `<>`, `<`, `<=`, `>`, `>=`. NaN equals NaN, but orders with nothing:
-  `NaN < 1.0` fails.
+- `=`, `<>`, `<`, `<=`, `>`, `>=`. NaN equals NaN, and so `NaN <= NaN` and
+  `NaN >= NaN` succeed (the API's reading, #132); otherwise NaN orders with
+  nothing: `NaN < NaN` and `NaN <= 1.0` fail.
 - `Floor[F]`, `Ceil[F]`, `Round[F]` (ties to even) and `Int[F]` (towards
   zero) give an int. They fail on NaN or an infinity; a result out of the
   int range is the overflow error (the API's integer-bounds error). `Abs`, `Min` and `Max` take floats too; `Min` and `Max` give NaN
   when either is NaN.
+- `Sqrt`, `Exp`, `Ln`, `Log(Base, X)` (`Ln(X) / Ln(Base)`), `Pow(Base, E)`,
+  `Sin`, `Cos`, `Tan`, `ArcSin`, `ArcCos`, `ArcTan` and `ArcTan(Y, X)` never
+  fail; their special values are C's (`Sqrt(-1.0)` and `Ln(-1.0)` are NaN,
+  `Ln(0.0)` is `-Inf`, `Pow(0.0, 0.0)` is `1.0`, `Sin(Inf)` is NaN).
+  `ArcSin` and `ArcCos` clamp their argument to [-1, 1] (the Book leaves
+  that case to the engine). `IsFinite[F]` fails on `Inf`, `-Inf` and NaN,
+  and is `F` otherwise. `PiFloat`, `Inf` and `NaN` are constants (#132).
+  `Log` divides `Ln`s, so `Log(10.0, 1000.0)` is `2.9999999999999996`.
+- A program may define functions named `Round`, `Int` or any of these
+  (and constants named `PiFloat`, `Inf`, `NaN`): its definition then
+  replaces the built-in for every call, whatever the argument types. A local
+  or a method may not take those names; a field may, and in its class's
+  methods the name still means the built-in.
 - `ToString` gives the shortest decimal that reads back as the float, laid
   out as Python's `repr` (`98.5`, `1.0`, `1e+16`, `1.5e-07`), and `Inf`,
   `-Inf`, `NaN`.
@@ -619,7 +633,7 @@ the readings are flat:
 
 ## Not supported in v1
 
-arithmetic on rationals (see [rational](#rational)), float functions other than those of [float](#float) (`Sqrt`, `IsFinite`, …),
+arithmetic on rationals (see [rational](#rational)), float functions beyond those of [float](#float),
 the class features listed under [Classes](#classes), struct methods (Verse structs have none; classes do),
 `weak_map`, qualified names `(M:)F` and module paths `using{/Verse.org/…}` (accepted and ignored), overloading beyond [Overloading](#overloading), nested
 functions, refinement types, concurrency (`spawn`, `sync`,

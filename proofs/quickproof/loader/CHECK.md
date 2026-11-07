@@ -1,6 +1,6 @@
 # openverse_loader: harness check
 
-By `tools/qp check` on 2026-11-07 20:48: upstream 4006a49d863c, quickproof fab76ef.
+By `tools/qp check` on 2026-11-07 21:52: upstream 7336cd864b97, quickproof fab76ef.
 
 ## Native runs (ASan/UBSan, 3000 runs per harness)
 
@@ -30,8 +30,8 @@ Killed by some harness: **6/40**; 0 of the others only hang (the laws do not cla
 Survivors (an equivalent mutant, behaviour no law checks, or a failure the native runs did not reach):
 
 - `runtime/src/load.c:208` in `load_prim`: `if (rd_u8(r, &code) != VX_LOAD_OK)` with `==`
-- `runtime/src/load.c:451` in `load_header`: `p->args = malloc((rest / 4) * sizeof(uint32_t));` with `5`
 - `runtime/src/load.c:526` in `prog_clear`: `p->nargs = 0;` with `1`
+- `runtime/src/load.c:451` in `load_header`: `p->args = malloc((rest / 4) * sizeof(uint32_t));` with `5`
 - `runtime/src/load.c:176` in `load_lit`: `if (rd_i64(r, &i) != VX_LOAD_OK)` with `==`
 - `runtime/src/load.c:96` in `rd_bytes`: `if (n > VX_MAX_STR)` with `>=`
 - `runtime/src/load.c:295` in `load_for`: `if (rc != VX_LOAD_OK)` with `==`
@@ -55,8 +55,8 @@ Survivors (an equivalent mutant, behaviour no law checks, or a failure the nativ
 - `runtime/src/load.c:243` in `load_heap`: `rc = rd_bytes(r, p, 4 * k, &nd->a);` with `5`
 - `runtime/src/load.c:247` in `load_heap`: `if (k != 0 && op == VX_H_TAG)` with `==`
 - `runtime/src/load.c:435` in `load_header`: `if (ver != 1)` with `0`
-- `runtime/src/load.c:66` in `rd_u32`: `v = v | ((uint32_t)r->buf[r->pos + 1] << 8);` with `9`
 - `runtime/src/load.c:437` in `load_header`: `if (rd_u32(r, &nfns) != VX_LOAD_OK)` with `==`
+- `runtime/src/load.c:66` in `rd_u32`: `v = v | ((uint32_t)r->buf[r->pos + 1] << 8);` with `9`
 - `runtime/src/load.c:454` in `load_header`: `r->acap = rest / 4;` with `3`
 - `runtime/src/load.c:68` in `rd_u32`: `v = v | ((uint32_t)r->buf[r->pos + 3] << 24);` with `2`
 - `runtime/src/load.c:161` in `node_clear`: `nd->lit = 0;` with `1`
