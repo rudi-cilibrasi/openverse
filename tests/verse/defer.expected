@@ -1,0 +1,18 @@
+start
+end
+deferred 2
+deferred 1
+leaving Early(1)
+leaving Early(5)
+1 50
+after computing 5
+6
+iteration 1 done
+iteration 2 done
+iteration 3 done
+in block
+inner
+after block
+outer
+failed, no defer
+exit=0

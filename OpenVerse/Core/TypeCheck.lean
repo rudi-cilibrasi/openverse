@@ -400,7 +400,10 @@ def tcPrim : Prim → List Expr → Option VTy → Option VTy
     | some .logic => some .logic
     | some (.opt t) => some t
     | _ => none
-  | .query, [a], some τ => if (tc a (some (.opt τ))).isSome then some τ else none
+  | .query, [a], some τ =>
+    if (tc a (some (.opt τ))).isSome then some τ
+    -- `X?` of a logic, at type logic
+    else if τ = .logic ∧ (tc a (some .logic)).isSome then some τ else none
   | .mkArr, es, some (.arr t) => if tcAll es t then some (.arr t) else none
   | .mkArr, a :: rest, none => match tc a none with
     | some t => if tcAll rest t then some (.arr t) else none
@@ -631,7 +634,12 @@ theorem tcPrim_sound_of {op : Prim} {es : List Expr} {m τ} (ih : ∀ e ∈ es, 
       split at h
       · next hc => simp only [Option.some.injEq] at h; subst h
                    exact ⟨.prim (.cons (chk (by simp) hc) .nil) .queryOpt, by simp⟩
-      · simp at h
+      · split at h
+        · next hc =>
+          obtain ⟨rfl, hc⟩ := hc
+          simp only [Option.some.injEq] at h; subst h
+          exact ⟨.prim (.cons (chk (by simp) hc) .nil) .queryLogic, by simp⟩
+        · simp at h
   | mkArr =>
     cases m with
     | none =>

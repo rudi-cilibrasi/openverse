@@ -90,7 +90,8 @@ def Token.pos (t : Token) : Pos := { line := t.line, col := t.col, file := t.fil
 
 def keywords : List String :=
   ["if", "then", "else", "for", "do", "loop", "break", "return", "var", "set", "and", "or",
-   "not", "case", "block", "option", "logic", "array", "using", "struct", "enum", "map", "where"]
+   "not", "case", "block", "option", "logic", "array", "using", "struct", "enum", "map", "where",
+   "defer"]
 
 def Token.identName? (t : Token) : Option String :=
   match t.tok with
@@ -444,7 +445,11 @@ partial def parseBody (stop : Nat) : PM SExpr := do
 /-- `then` / `else` / `do` parts: a body, or an inline expression. -/
 partial def parseBranch (stop : Nat) : PM SExpr := do
   let t ← peekT
-  if t.isSym ":" || t.isSym "{" then parseBody stop else parseExpr stop
+  if t.isSym ":" || t.isSym "{" then parseBody stop else
+  -- (a branch that is only a `defer` is its own scope)
+  match ← parseExpr stop with
+  | e@(.app _ (.ident _ "$defer") _ _) => return .block t.pos [e]
+  | e => return e
 
 partial def parseIf (stop : Nat) : PM SExpr := do
   let t ← peekT
@@ -715,6 +720,8 @@ partial def parsePrimary (stop : Nat) : PM SExpr := do
   | .ident "for" => parseFor stop
   | .ident "case" => parseCase stop
   | .ident "loop" => bump; return .loop t.pos (← parseBody stop)
+  -- `defer:` (Book of Verse ch. 7): runs when its scope exits; `$defer(body)`
+  | .ident "defer" => bump; return .app t.pos (.ident t.pos "$defer") [← parseBody stop] false
   | .ident "block" => bump; parseBody stop
   | .ident "let" =>
     if (← peekT 1).isSym "(" then
