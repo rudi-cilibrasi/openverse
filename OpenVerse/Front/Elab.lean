@@ -1497,7 +1497,7 @@ partial def elabApp (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (brack
       for o in cands do
         let some so := ctx.sig? o | continue
         let mut ok := true
-        if cands.length > 1 then
+        if cands.length > 1 && so.tparams.isEmpty then
           for (a, u) in argTys so do
             if let some t ← natTy a then
               if !(← coercible t u) then ok := false
@@ -1505,6 +1505,10 @@ partial def elabApp (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (brack
       let fits (o : String) : EM Bool := do
         let s := (ctx.sig? o).get!
         let st ← get
+        if !s.tparams.isEmpty then
+          let ok ← tryCatch (do discard <| elabApp ctx p (.ident p o) args bracket exp; pure true) (fun _ => pure false)
+          set { st with natTys := (← get).natTys }
+          return ok
         let ok ← tryCatch (do
             for (a, t) in argTys s do
               let r ← elabE ctx a (some t)
@@ -3408,7 +3412,6 @@ def elabProgramCore (allTops00 : List STop) (opts : Options := {}) : Except Stri
         if tops.any (fun | .const _ m .. | .classDef _ m .. => m == n | _ => false) ||
             env.classes.contains n || (env.structs.lookup n).isSome || (env.enums.lookup n).isSome then
           throw s!"{p.show}: '{n}' is defined twice (only functions can be overloaded)"
-        if !tps.isEmpty then throw s!"{p.show}: generic functions cannot be overloaded yet ({n})"
         let prev := (ovMap.lookup n).getD []
         let m := s!"{n}$ov{prev.length}"
         ovMap := (ovMap.filter (·.1 != n)) ++ [(n, prev ++ [m])]

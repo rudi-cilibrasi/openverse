@@ -149,8 +149,10 @@ Verse ch. 6): `Describe(X:int)`, `Describe(S:string)`, `Describe(X:int, Y:int)`.
   two overloads are distinct only if their positional parameters are, or
   some named parameter one requires is missing from the other or has a
   disjoint type there.
-- **Not yet supported:** overloading generic functions, overloaded methods,
-  and overloading `Main`.
+- **Generic overloads.** A type parameter overlaps every type, so a generic
+  overload is told apart from the others by its parameters' number (or
+  named ones); a call infers its type arguments as for any generic call.
+- **Not yet supported:** overloaded methods, and overloading `Main`.
 
 ## Parametric structs
 
