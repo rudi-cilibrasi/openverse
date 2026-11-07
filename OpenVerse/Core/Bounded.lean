@@ -82,7 +82,8 @@ def evalB (P : Prog) : Nat → Nat → St → Expr → Bounded (Res × St)
       | some s₂ => .res (.ok v, s₂)
       | none => .res (.err .slot, s₁)
   | n+1, d+1, s, .seq a b => bindRB (evalB P n d s a) fun _ s₁ => evalB P n (d+1) s₁ b
-  | n+1, d+1, s, .prim op es => bindLB (evalListB P n d s es) fun vs s₁ => .res (op.apply vs, s₁)
+  | n+1, d+1, s, .prim op es => bindLB (evalListB P n d s es) fun vs s₁ =>
+      if n < op.cost vs then .fuel else .res (op.apply vs, s₁)
   | n+1, d+1, s, .heap op es => bindLB (evalListB P n d s es) fun vs s₁ =>
       .res (St.heapStep op vs s₁)
   | n+1, d+1, s, .call f es => bindLB (evalListB P n d s es) fun vs s₁ =>
@@ -248,7 +249,7 @@ theorem evalB_rel (P : Prog) (b : Bool) : ∀ n,
           exact bindRB_rel (ihE d (Nat.le_refl _) s a) fun _ s₁ => ihE (d+1) (Nat.le_succ _) s₁ b
         | prim op es =>
           simp only [evalB, eval]
-          exact bindLB_rel (ihL d (Nat.le_refl _) s es) fun _ _ => by agree_leaf
+          exact bindLB_rel (ihL d (Nat.le_refl _) s es) fun _ _ => by split <;> agree_leaf
         | heap op es =>
           simp only [evalB, eval]
           exact bindLB_rel (ihL d (Nat.le_refl _) s es) fun _ _ => by agree_leaf
