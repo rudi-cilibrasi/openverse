@@ -126,6 +126,19 @@ fuzzer (`scripts/fuzz-front.sh`) mutates real sources to look for such
 rejections and for crashes. It found one, a stack overflow on recursive
 structs, now rejected.
 
+## Rationals: helpers written in Verse
+
+A `rational` (#116) is a front-end type whose Verse Core form is the tuple
+(numerator, denominator), in lowest terms with a positive denominator. Tuple
+equality is then rational equality, and nothing changes in Core, the proofs
+or the C runtime.
+
+`Front/Rational.lean` holds the helpers as Verse source: normalising
+`X / Y`, and ordering. A program whose source has `/` or `rational` gets
+them added. They are parsed with their names renamed to `$ratMake` etc.,
+which no program can write. The ordering compares the continued fractions of
+the two rationals rather than cross-multiplying, so no step overflows.
+
 ## Generic functions: polymorphic Verse Core
 
 A generic function `F(X:t where t:type)` is elaborated once, with each type

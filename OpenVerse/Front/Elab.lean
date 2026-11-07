@@ -21,6 +21,7 @@ import OpenVerse.Core.Derived
 import OpenVerse.Core.TypeCheck
 import OpenVerse.Core.Control
 import OpenVerse.Front.Parser
+import OpenVerse.Front.Rational
 import Std.Data.HashMap
 
 namespace OpenVerse.Front
@@ -30,6 +31,10 @@ inductive Ty where
   | int | logic | char | void
   /-- A Unicode scalar value (spec: Char32); an `int` in Verse Core. -/
   | char32
+  /-- `rational`, the type of `X / Y` on ints (Book of Verse ch. 2): in
+      Verse Core the tuple of its numerator and denominator, in lowest
+      terms with a positive denominator (so tuple equality is equality). -/
+  | rational
   /-- The bottom type, of `break`, `return` and `Err()`. -/
   | never
   | arr : Ty → Ty
@@ -49,7 +54,7 @@ inductive Ty where
   deriving Repr, Inhabited
 
 partial def Ty.eqv : Ty → Ty → Bool
-  | .int, .int | .logic, .logic | .char, .char | .char32, .char32 | .void, .void | .never, .never => true
+  | .int, .int | .logic, .logic | .char, .char | .char32, .char32 | .rational, .rational | .void, .void | .never, .never => true
   | .arr a, .arr b => a.eqv b
   | .opt a, .opt b => a.eqv b
   | .tup as, .tup bs => as.length == bs.length && (as.zip bs).all fun (a, b) => a.eqv b
@@ -63,7 +68,7 @@ partial def Ty.eqv : Ty → Ty → Bool
 instance : BEq Ty := ⟨Ty.eqv⟩
 
 partial def Ty.show : Ty → String
-  | .int => "int" | .logic => "logic" | .char => "char" | .char32 => "char32" | .void => "void"
+  | .int => "int" | .logic => "logic" | .char => "char" | .char32 => "char32" | .rational => "rational" | .void => "void"
   | .never => "false"
   | .arr .char => "string"
   | .arr t => "[]" ++ t.show
@@ -250,7 +255,7 @@ partial def TyEnv.disjoint (env : TyEnv) : Ty → Ty → Bool
     else if isCls a || isCls b then true
     else a != b || (as.length == bs.length && (as.zip bs).any fun (x, y) => env.disjoint x y)
   | .enum a, .enum b => a != b
-  | .int, .int | .logic, .logic | .char, .char | .char32, .char32 => false
+  | .int, .int | .logic, .logic | .char, .char | .char32, .char32 | .rational, .rational => false
   | _, _ => true
 
 /-- Whether two overloads (their positional parameters, then named ones:
@@ -464,6 +469,7 @@ def TyEnv.recursiveStruct? (env : TyEnv) : Option String :=
     no values; slots and signatures never have it). -/
 partial def Ty.toVTy (env : TyEnv) : Ty → VTy
   | .int | .char32 => .int
+  | .rational => .tup [.int, .int]
   | .logic => .logic
   | .char => .char
   | .void => VTy.void
@@ -734,6 +740,7 @@ partial def resolveTy (env : TyEnv) (p : Pos) : STy → EM Ty
   | .name "logic" => pure .logic
   | .name "char" => pure .char
   | .name "char32" => pure .char32
+  | .name "rational" => pure .rational
   | .name "string" => pure Ty.string
   | .name "void" => pure .void
   | .name "float" => eerr p "float is not supported by openverse v1"
@@ -820,6 +827,7 @@ def TyEnv.dictSlot? (env : TyEnv) (dictBase : Nat) (n : String) : Option Nat :=
     the class constructed), which starts as a placeholder. -/
 partial def witness (env : TyEnv) (dictBase : Nat) (dictVars : List String) : Ty → EM Expr
   | .int | .char32 | .enum _ => pure (.lit (.int 0))
+  | .rational => pure (.lit (.tup [.int 0, .int 1]))
   | .logic => pure (.lit (.logic false))
   | .char => pure (.lit (.char 0))
   | .void | .never => pure (.lit .void)
@@ -853,6 +861,7 @@ partial def _root_.OpenVerse.VTy.hasVar : VTy → Bool
     reference to a prototype already allocated (`done`: class, address). -/
 partial def protoValue (env : TyEnv) (done : List (String × Nat)) : Ty → Option Value
   | .int | .char32 | .enum _ => some (.int 0)
+  | .rational => some (.tup [.int 0, .int 1])
   | .logic => some (.logic false)
   | .char => some (.char 0)
   | .void | .never => some .void
@@ -974,6 +983,8 @@ partial def convert (env : TyEnv) (e : Expr) (a b : Ty) : EM (Option Expr) := do
         (env.concreteBelow S).isEmpty then
       return some (.seq e (.prim .userErr []))
   match a, b with
+  -- `int` is a subtype of `rational` (#116): `X` is `X / 1`
+  | .int, .rational => return some (.prim .mkTup [e, .lit (.int 1)])
   | .struct S [], .struct T [] =>
     if env.classes.contains S && env.classes.contains T && S != T && env.isSub S T then
       let x ← modifyGet fun s => (s.nslots, { s with nslots := s.nslots + 1, slotTys := s.slotTys.push a })
@@ -1040,6 +1051,7 @@ partial def joinTy (env : TyEnv) (a b : Ty) (exp : Option Ty) (inner : Bool := f
   else if b == .never then some a
   else if a == b then some a
   else match a, b with
+  | .int, .rational | .rational, .int => if inner then none else some .rational
   | .struct S as, .struct T bs =>
     -- (inside a container, only references convert for free)
     if env.classes.contains S && env.classes.contains T &&
@@ -1261,8 +1273,14 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
   | .notE _ e =>
     let r ← elabE { ctx with canFail := true } e none
     return ⟨Expr.notE r.e, .void⟩
-  | .bin p "/" _ _ =>
-    eerr p "integer '/' gives a rational; write Floor(X / Y), Ceil(X / Y) or Quotient[X, Y]"
+  | .bin p "/" a b =>
+    -- `X / Y` on ints: a rational, failing when `Y = 0` (#116)
+    let ra ← elabE ctx a (some .int)
+    let rb ← elabE ctx b (some .int)
+    if ra.ty == .rational || rb.ty == .rational then
+      eerr p "'/' divides ints: openverse has no arithmetic on rationals (only Floor, Ceil and comparisons)"
+    let es := [← coerce a.pos ra .int, ← coerce b.pos rb .int]
+    return ⟨← ratCall ctx p "$ratMake" es, .rational⟩
   | .bin p op a b =>
     let ra ← elabE ctx a none
     let rb ← match op, ra.ty with
@@ -1685,7 +1703,20 @@ partial def elabApp (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (brack
       | [.bin _ "/" a b] =>
         let es ← elabInts ctx p [a, b]
         return ⟨.prim (if name == "Floor" then .floorDiv else .ceilDiv) es, .int⟩
-      | _ => eerr p s!"openverse v1 supports {name}(X / Y) on ints only"
+      | [e] =>
+        -- (of a rational, #116: its denominator is positive, so this never
+        -- fails; of an int, the int)
+        let r ← elabE ctx e none
+        match r.ty with
+        | .int => return r
+        | .rational =>
+          let tr ← fresh .rational
+          let tz ← fresh .int
+          let op := if name == "Floor" then Prim.floorDiv else .ceilDiv
+          let parts := [Expr.prim (.tupGet 0) [.local tr], .prim (.tupGet 1) [.local tr]]
+          return ⟨.seq (.assign tr r.e) (Expr.orE tz (.prim op parts) (.lit (.int 0))), .int⟩
+        | t => eerr p s!"{name} takes a rational or an int, found {t.show}"
+      | _ => eerr p s!"{name} takes one argument"
     | "Quotient" => needBracket name; return ⟨.prim .quotient (← elabInts ctx p args), .int⟩
     | "Mod" => needBracket name; return ⟨.prim .modulo (← elabInts ctx p args), .int⟩
     | "Min" | "Max" =>
@@ -2170,6 +2201,30 @@ partial def elabIndexLike (ctx : Ctx) (p : Pos) (r : R) (args : List SExpr) (bra
     return ⟨.prim (.tupGet k.toNat) [r.e], ts[k.toNat]!⟩
   | t, _, _ => eerr p s!"cannot call or index a value of type {t.show}"
 
+/-- A call of a rational helper (#116), `$ratMake` or `$ratLt`. -/
+partial def ratCall (ctx : Ctx) (p : Pos) (f : String) (args : List Expr) : EM Expr := do
+  let some s := ctx.sig? f | eerr p "internal error: the rational helpers are missing"
+  return .call s.idx args
+
+/-- The test of `x op y`, where one operand is a rational and the other an
+    int or a rational (#116): it fails when the comparison does not hold.
+    Rationals are in lowest terms, so `=` and `<>` are the tuples'; an
+    ordering is `$ratLt`'s. -/
+partial def ratTest (ctx : Ctx) (p : Pos) (op : String) (x y : R) : EM Expr := do
+  let asRat (r : R) : EM Expr := match r.ty with
+    | .rational => pure r.e
+    | .int => pure (.prim .mkTup [r.e, .lit (.int 1)])
+    | t => eerr p s!"'{op}' compares a rational with an int or a rational, not with {t.show}"
+  let xa ← asRat x
+  let ya ← asRat y
+  match op with
+  | "=" => return p2 .eq xa ya
+  | "<>" => return p2 .ne xa ya
+  | "<" => ratCall ctx p "$ratLt" [xa, ya]
+  | ">" => ratCall ctx p "$ratLt" [ya, xa]
+  | "<=" => return Expr.notE (← ratCall ctx p "$ratLt" [ya, xa])
+  | _ => return Expr.notE (← ratCall ctx p "$ratLt" [xa, ya])
+
 partial def elabCmp (ctx : Ctx) (p : Pos) (a : SExpr) (rest : List (String × SExpr)) : EM R := do
   let opOf : String → Prim
     | "=" => .eq | "<>" => .ne | "<" => .lt | "<=" => .le | ">" => .gt | _ => .ge
@@ -2201,6 +2256,11 @@ partial def elabCmp (ctx : Ctx) (p : Pos) (a : SExpr) (rest : List (String × SE
   match rest with
   | [(op, b)] =>
     let rb ← elabE ctx b (some ra.ty)
+    if ra.ty == .rational || rb.ty == .rational then
+      let ta ← fresh ra.ty
+      let tb ← fresh rb.ty
+      let test ← ratTest ctx p op ⟨.local ta, ra.ty⟩ ⟨.local tb, rb.ty⟩
+      return ⟨.seq (.assign ta ra.e) (.seq (.assign tb rb.e) (.seq test (.local ta))), ra.ty⟩
     let ra ← asArr ra rb.ty
     let rb ← asArr rb ra.ty
     checkTys op ra.ty rb.ty
@@ -2219,10 +2279,14 @@ partial def elabCmp (ctx : Ctx) (p : Pos) (a : SExpr) (rest : List (String × SE
       let prevE ← match prevTy, rb.ty with
         | .tup _, .arr _ => coerce p ⟨.local prev, prevTy⟩ rb.ty
         | _, _ => pure (.local prev)
-      checkTys op (match prevTy, rb.ty with | .tup _, .arr _ => rb.ty | _, _ => prevTy) rb.ty
       let tb ← fresh rb.ty
-      steps := steps.push (.assign tb rb.e)
-      steps := steps.push (p2 (opOf op) prevE (.local tb))
+      if prevTy == .rational || rb.ty == .rational then
+        steps := steps.push (.assign tb rb.e)
+        steps := steps.push (← ratTest ctx p op ⟨.local prev, prevTy⟩ ⟨.local tb, rb.ty⟩)
+      else
+        checkTys op (match prevTy, rb.ty with | .tup _, .arr _ => rb.ty | _, _ => prevTy) rb.ty
+        steps := steps.push (.assign tb rb.e)
+        steps := steps.push (p2 (opOf op) prevE (.local tb))
       prev := tb
       prevTy := rb.ty
     return ⟨steps.foldr Expr.seq (.local t0), ra.ty⟩
@@ -3122,7 +3186,12 @@ def expandCtors (ctors : List (Pos × String × List SParam × List TParam × Li
 
 /-- Elaborate a parsed program into a Verse Core program that passes `Prog.check`
     and `Prog.checkTypes`. -/
-def elabProgramCore (allTops00 : List STop) (opts : Options := {}) : Except String Compiled := do
+def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except String Compiled := do
+  -- rationals (#116): the helpers, for a program that may use them
+  let isRatMarker : STop → Bool := fun | .const _ n _ _ => n == ratMarker | _ => false
+  let usesRat := allTops0r.any isRatMarker || opts.entry.isSome
+  let helpers ← if usesRat then ratTops else pure []
+  let allTops00 := allTops0r.filter (!isRatMarker ·) ++ helpers
   -- the command line (spec: expected tooling): `Args`, and an entry expression
   let defines (n : String) := allTops00.any fun
     | .fn _ m .. | .const _ m .. | .classDef _ m .. => m == n

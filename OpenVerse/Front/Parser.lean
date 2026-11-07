@@ -1129,6 +1129,17 @@ def parseExprText (src : String) : Except String SExpr := do
     if !t.isEof then perr t s!"unexpected {t.tok.describe} after the expression"
     return e : PM SExpr).run' { toks }
 
+/-- A marker that the source may use rationals (`/` or the type
+    `rational`): the elaborator then adds the rational helpers (#116). -/
+def ratMarker : String := "$uses:rational"
+
+def usesRational (toks : Array Token) : Bool :=
+  toks.any fun t => t.isSym "/" || t.identName? == some "rational"
+
+def withRatMarker (toks : Array Token) (tops : List STop) : List STop :=
+  let p : Pos := { line := 0, col := 0 }
+  if usesRational toks then tops ++ [.const p ratMarker none (.block p [])] else tops
+
 /-- Parse a source file: its definitions, and the files it imports. `file`
     names it in error positions (empty for the main file). -/
 def parseProgramImports (src : String) (file : String := "") :
@@ -1136,11 +1147,20 @@ def parseProgramImports (src : String) (file : String := "") :
   let toks ← lexSource src
   let toks := if file.isEmpty then toks else toks.map fun t => { t with file }
   let (tops, st) ← parseTops.run { toks }
-  return (tops, st.imports.toList)
+  return (withRatMarker toks tops, st.imports.toList)
 
 /-- Parse a whole Verse source file. -/
 def parseProgram (src : String) : Except String (List STop) := do
   let toks ← lexSource src
+  return withRatMarker toks (← parseTops.run' { toks })
+
+/-- Parse the source of built-in helpers, renaming the given names to
+    `$name`, which no program can write or define. -/
+def parsePrelude (src : String) (names : List String) : Except String (List STop) := do
+  let toks ← lexSource src
+  let toks := toks.map fun t => match t.tok with
+    | .ident x => if names.contains x then { t with tok := .ident ("$" ++ x) } else t
+    | _ => t
   parseTops.run' { toks }
 
 end OpenVerse.Front
