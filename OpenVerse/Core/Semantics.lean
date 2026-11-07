@@ -55,6 +55,9 @@ def HeapOp.apply : HeapOp → List Value → Glob → Res × Glob
   | .tag, [.ref a], g => match g.heap[a]? with
     | some o => (.ok (.int o.tag), g)
     | none => (.err .type, g)
+  | .isTag us, [.ref a], g => match g.heap[a]? with
+    | some o => (if us.contains o.tag then .ok (.ref a) else .fail, g)
+    | none => (.err .type, g)
   | _, _, g => (.err .type, g)
 
 /-- Reading a field just written gives the value written. -/
@@ -71,10 +74,24 @@ theorem HeapOp.get_new {g : Glob} {t k : Nat} {vs : List Value} {v : Value} (hv 
       (.ok v, ((HeapOp.new t).apply vs g).2) := by
   simp [HeapOp.apply, hv]
 
-/-- A heap operation succeeds or raises a type error: it never fails,
-    breaks, returns, or raises a slot, call or control error. -/
+/-- Only a cast can fail. -/
+def HeapOp.failable : HeapOp → Bool
+  | .isTag _ => true
+  | _ => false
+
+theorem HeapOp.apply_ne_fail {op : HeapOp} (h : op.failable = false) (vs : List Value) (g : Glob) :
+    (op.apply vs g).1 ≠ .fail := by
+  intro hf
+  cases op with
+  | isTag us => simp [HeapOp.failable] at h
+  | _ =>
+    unfold HeapOp.apply at hf
+    split at hf <;> (try split at hf) <;> (try split at hf) <;> simp_all
+
+/-- A heap operation succeeds, fails (only a cast), or raises a type error:
+    it never breaks, returns, or raises a slot, call or control error. -/
 theorem HeapOp.apply_res (op : HeapOp) (vs : List Value) (g : Glob) :
-    (∃ v, (op.apply vs g).1 = .ok v) ∨ (op.apply vs g).1 = .err .type := by
+    (∃ v, (op.apply vs g).1 = .ok v) ∨ (op.apply vs g).1 = .err .type ∨ (op.apply vs g).1 = .fail := by
   unfold HeapOp.apply
   split
   all_goals first

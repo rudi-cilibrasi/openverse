@@ -29,8 +29,8 @@ def Expr.mayFail (P : Prog) : Expr → Bool
   | .loop e => e.mayFail P
   | .seq a b => a.mayFail P || b.mayFail P
   | .prim op es => op.failable || Expr.mayFailList P es
-  -- a heap operation never fails (`HeapOp.apply_res`)
-  | .heap _ es => Expr.mayFailList P es
+  -- only a cast fails (`HeapOp.apply_ne_fail`)
+  | .heap op es => op.failable || Expr.mayFailList P es
   | .call f es =>
     (match P.fns[f]? with
       | some fn => fn.decides
@@ -76,12 +76,13 @@ theorem Eval.no_fail {P : Prog} (hP : P.EffectSound) : ∀ {s e r s'},
       have ih := EvalList.no_fail hP hl
       simp only [Expr.mayFail, Bool.or_eq_false_iff] at hm
       intro h; subst h; exact ih hm.2 rfl
-  | _, _, _, _, .heap_ok (op := op) (vs := vs) (s₁ := s₁) _, _ => by
-      rcases HeapOp.apply_res op vs s₁.g with ⟨v, hv⟩ | hv <;> simp [hv]
+  | _, _, _, _, .heap_ok (op := op) (vs := vs) (s₁ := s₁) _, hm => by
+      simp only [Expr.mayFail, Bool.or_eq_false_iff] at hm
+      exact HeapOp.apply_ne_fail hm.1 vs s₁.g
   | _, _, _, _, .heap_stop hl, hm => by
       have ih := EvalList.no_fail hP hl
-      simp only [Expr.mayFail] at hm
-      intro h; subst h; exact ih hm rfl
+      simp only [Expr.mayFail, Bool.or_eq_false_iff] at hm
+      intro h; subst h; exact ih hm.2 rfl
   | _, _, _, _, .call_ok (f := f) (fn := fn) _ hc hb, hm => by
       have ih := Eval.no_fail hP hb
       simp only [Expr.mayFail, Bool.or_eq_false_iff] at hm

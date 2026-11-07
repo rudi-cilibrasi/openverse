@@ -54,6 +54,8 @@ inductive HeapOp where
   | set (k : Nat)
   /-- `[r]`: the class of the object `r` refers to, as an `int`. -/
   | tag
+  /-- `[r]`: `r`, if its object's class is one of `us`; fails otherwise (a cast). -/
+  | isTag (us : List Nat)
   deriving Repr, DecidableEq, Inhabited
 
 /-- Verse Core expressions. -/

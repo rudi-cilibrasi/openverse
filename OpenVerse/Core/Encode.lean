@@ -88,8 +88,10 @@ def encExpr : Expr → EncM Nat
   | .heap op es => do
     let ids ← encExprs es
     let (c, k) := match op with
-      | .new t => (0, t) | .get k => (1, k) | .set k => (2, k) | .tag => (3, 0)
-    emit (u8 12 ++ u8 c ++ u32 k ++ u32 ids.length ++ ids.foldl (fun b a => b ++ u32 a) .empty)
+      | .new t => (0, [t]) | .get k => (1, [k]) | .set k => (2, [k]) | .tag => (3, [0])
+      | .isTag us => (4, us.length :: us)
+    emit (u8 12 ++ u8 c ++ k.foldl (fun b a => b ++ u32 a) .empty ++ u32 ids.length ++
+      ids.foldl (fun b a => b ++ u32 a) .empty)
 def encExprs : List Expr → EncM (List Nat)
   | [] => pure []
   | e :: es => do let i ← encExpr e; let is ← encExprs es; pure (i :: is)

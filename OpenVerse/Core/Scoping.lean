@@ -121,7 +121,7 @@ theorem Eval.scoped_ok {P : Prog} (hP : P.WellScoped) : ∀ {s e r s'},
   | _, _, _, _, .heap_ok (op := op) (vs := vs) (s₁ := s₁) hl, hs => by
       have ih := EvalList.scoped_ok hP hl
       refine ⟨?_, (ih hs).2⟩
-      rcases HeapOp.apply_res op vs s₁.g with ⟨v, hv⟩ | hv <;> simp [hv, Res.scopeErr]
+      rcases HeapOp.apply_res op vs s₁.g with ⟨v, hv⟩ | hv | hv <;> simp [hv, Res.scopeErr]
   | _, _, _, _, .heap_stop hl, hs => by
       have ih := EvalList.scoped_ok hP hl
       exact ⟨(ih hs).1 _ rfl, (ih hs).2⟩

@@ -139,7 +139,10 @@ out of date. The proofs are in `OpenVerse/Core/`.
 @Eval.typed : ∀ {P : Prog} {S : Sigs},
   ProgTyped P S →
     ∀ {s : St} {e : Expr} {r : Res} {s' : St} {Γ : List VTy} {ρ τ : VTy},
-      Eval P s e r s' → Typed S Γ ρ e τ → FrameOK Γ s.fr → FrameOK Γ s'.fr ∧ ResOK τ ρ r
+      Eval P s e r s' →
+        Typed S Γ ρ e τ →
+          FrameOK s.tags Γ s.fr →
+            HeapOK S s.g.heap → FrameOK s'.tags Γ s'.fr ∧ ResOK s'.tags τ ρ r ∧ HeapOK S s'.g.heap ∧ s.tags <+: s'.tags
 ```
 
 ## `Runs.typed`: type safety of programs
@@ -150,8 +153,12 @@ out of date. The proofs are in `OpenVerse/Core/`.
 @Runs.typed : ∀ {P : Prog} {S : Sigs},
   ProgTyped P S →
     ∀ {τ : VTy} {r : Res} {out : List Nat},
-      S[P.main]? = some ([], τ) →
-        Runs P r out → r ≠ Res.err ErrKind.type ∧ ∀ (v : Value), r = Res.ok v → hasTy v τ = true
+      S.fns[P.main]? = some ([], τ) →
+        Runs P r out →
+          r ≠ Res.err ErrKind.type ∧
+            ∃ fr heap,
+              Eval P Prog.initSt (Expr.call P.main []) r { fr := fr, g := { out := out, heap := heap } } ∧
+                HeapOK S heap ∧ ∀ (v : Value), r = Res.ok v → hasTy (tagsOf heap) v τ = true
 ```
 
 ## `Typed.subst`: the substitution lemma: a typing with type variables holds at every instance
@@ -159,8 +166,10 @@ out of date. The proofs are in `OpenVerse/Core/`.
 `OpenVerse/Core/TypeSafety.lean`; axioms: [propext, Quot.sound]
 
 ```lean
-@Typed.subst : ∀ {S : Sigs} {Γ : List VTy} {ρ : VTy} (θ : Nat → VTy) {e : Expr} {τ : VTy},
-  Typed S Γ ρ e τ → Typed S (List.map (VTy.subst θ) Γ) (VTy.subst θ ρ) e (VTy.subst θ τ)
+@Typed.subst : ∀ {S : Sigs} {Γ : List VTy} {ρ : VTy},
+  S.ClosedClasses →
+    ∀ (θ : Nat → VTy) {e : Expr} {τ : VTy},
+      Typed S Γ ρ e τ → Typed S (List.map (VTy.subst θ) Γ) (VTy.subst θ ρ) e (VTy.subst θ τ)
 ```
 
 ## `tc_sound`: the type checker is sound
@@ -209,13 +218,15 @@ out of date. The proofs are in `OpenVerse/Core/`.
   P.check = true →
     P.checkTypes S Γs = true →
       P.checkControl = true →
-        S[P.main]? = some ([], τ) →
+        S.fns[P.main]? = some ([], τ) →
           ∀ {r : Res} {out : List Nat},
             Runs P r out →
               r.scopeErr = false ∧
                 r ≠ Res.err ErrKind.type ∧
                   r ≠ Res.err ErrKind.control ∧
-                    (∀ (v : Value), r = Res.ok v → hasTy v τ = true) ∧
+                    (∃ fr heap,
+                        Eval P Prog.initSt (Expr.call P.main []) r { fr := fr, g := { out := out, heap := heap } } ∧
+                          HeapOK S heap ∧ ∀ (v : Value), r = Res.ok v → hasTy (tagsOf heap) v τ = true) ∧
                       (∀ (fn : Fn), P.fns[P.main]? = some fn → fn.decides = false → r ≠ Res.fail) ∧
                         ∀ (r' : Res) (out' : List Nat), Runs P r' out' → r' = r ∧ out' = out
 ```
