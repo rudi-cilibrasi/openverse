@@ -246,6 +246,13 @@ def TyEnv.slotImpls (env : TyEnv) (impl : String → Option String) (ups : List 
     enums and unrelated classes are disjoint. -/
 partial def TyEnv.disjoint (env : TyEnv) : Ty → Ty → Bool
   | .void, _ | _, .void | .param .., _ | _, .param .. | .never, _ | _, .never => false
+  -- (a refinement overlaps what its base does, #136)
+  | .refine n, b => match env.refines.lookup n with
+    | some (base, _) => env.disjoint base b
+    | none => false
+  | a, .refine n => match env.refines.lookup n with
+    | some (base, _) => env.disjoint a base
+    | none => false
   -- (an int is also a rational, #116)
   | .int, .rational | .rational, .int => false
   | .tup as, .tup bs => as.length != bs.length || (as.zip bs).any fun (a, b) => env.disjoint a b
@@ -1027,6 +1034,17 @@ def refineHolds (conds : List (String × Value)) (v : Value) : Bool :=
       | "<" => fx < fy | "<=" => fx ≤ fy | ">" => fy < fx | _ => fy ≤ fx
     | _, _ => false
 
+/-- A literal where a refinement is expected (#136): of that refinement
+    when it meets its conditions (so that `if (C?) then 5 else 6`,
+    `option{5}` and `(5, 1)` take it from their context). -/
+def litAt (env : TyEnv) (exp : Option Ty) (r : R) : R :=
+  match exp with
+  | some (.refine n) =>
+    match env.refines.lookup n, litValue? r.e with
+    | some (base, conds), some v => if base == r.ty && refineHolds conds v then ⟨r.e, .refine n⟩ else r
+    | _, _ => r
+  | _ => r
+
 /-- A refinement's value as its base (#136): operators, comparisons and
     ToString see the base type. -/
 def widenR (env : TyEnv) (r : R) : R :=
@@ -1042,10 +1060,13 @@ def refineConds (p : Pos) (v : String) (base : Ty) (conds : List SExpr) :
     Except String (List (String × Value)) := do
   if !(base == .int || base == .float) then
     throw s!"{p.show}: a refinement type refines an int or a float, not {base.show}"
+  let intBound (n : Int) : Except String Value :=
+    if Int64.inRange n then pure (.int n)
+    else throw s!"{p.show}: the bound {n} does not fit in 64 bits"
   let bound : SExpr → Except String Value := fun
-    | .int _ n => if base == .int then pure (.int n)
+    | .int _ n => if base == .int then intBound n
       else throw s!"{p.show}: a float refinement's bound is a float literal (write {n}.0)"
-    | .neg _ (.int _ n) => if base == .int then pure (.int (-n))
+    | .neg _ (.int _ n) => if base == .int then intBound (-n)
       else throw s!"{p.show}: a float refinement's bound is a float literal (write -{n}.0)"
     | .float _ b => if base == .float then pure (.float b)
       else throw s!"{p.show}: an int refinement's bound is an int literal"
@@ -1095,7 +1116,7 @@ partial def convert (env : TyEnv) (e : Expr) (a b : Ty) : EM (Option Expr) := do
   -- literal that meets its conditions (else a cast, `age[X]`)
   | .refine n, b =>
     match env.refines.lookup n with
-    | some (base, _) => if base == b then return some e else return none
+    | some (base, _) => if base == b then return some e else convert env e base b
     | none => return none
   | a, .refine n =>
     match env.refines.lookup n, litValue? e with
@@ -1332,10 +1353,10 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
   match se with
   | .int p n =>
     if !Int64.inRange n then eerr p s!"integer literal {n} does not fit in 64 bits"
-    return ⟨.lit (.int n), .int⟩
+    return litAt ctx.types exp ⟨.lit (.int n), .int⟩
   | .char _ c => return ⟨.lit (.char c), .char⟩
   | .char32 _ c => return ⟨.lit (.int c), .char32⟩
-  | .float _ b => return ⟨.lit (.float b), .float⟩
+  | .float _ b => return litAt ctx.types exp ⟨.lit (.float b), .float⟩
   | .str p parts =>
     let pieces ← parts.mapM fun part => match part with
       | .text s => pure (Expr.lit (Value.ofString s))
@@ -1406,9 +1427,9 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
       | some .float => some .float
       | _ => none
     let r := widenR ctx.types (← elabE ctx e hint)
-    if r.ty == .float then return ⟨.prim .fneg [r.e], .float⟩
+    if r.ty == .float then return litAt ctx.types exp ⟨.prim .fneg [r.e], .float⟩
     if r.ty != .int then eerr p s!"unary '-' needs an int or a float, found {r.ty.show}"
-    return ⟨.prim .neg [r.e], .int⟩
+    return litAt ctx.types exp ⟨.prim .neg [r.e], .int⟩
   | .notE _ e =>
     let r ← elabE { ctx with canFail := true } e none
     return ⟨Expr.notE r.e, .void⟩
@@ -1939,7 +1960,7 @@ partial def elabApp (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (brack
       | [e] =>
         -- (of a rational, #116: its denominator is positive, so this never
         -- fails; of an int, the int)
-        let r ← elabE ctx e none
+        let r := widenR ctx.types (← elabE ctx e none)
         match r.ty with
         | .int => return r
         | .float => ofFloat r
@@ -2545,7 +2566,7 @@ partial def elabMethod (ctx : Ctx) (p : Pos) (r : R) (m : String) (args : List S
 partial def elabIndexLike (ctx : Ctx) (p : Pos) (r : R) (args : List SExpr) (bracket : Bool) : EM R := do
   match r.ty, args, bracket with
   | .arr t, [i], true =>
-    let ri ← elabE ctx i (some .int)
+    let ri := widenR ctx.types (← elabE ctx i (some .int))
     if ri.ty != .int then eerr p s!"an array index must be an int, found {ri.ty.show}"
     return ⟨p2 .index r.e ri.e, t⟩
   | .map kt vt, [k], true =>
@@ -2961,7 +2982,7 @@ partial def elabSet (ctx : Ctx) (p : Pos) (lhs0 : SExpr) (op : Option String) (r
         (.seq (mapPut l.slot tk tv ti tidx) (.local tv))), vt⟩
     | .arr t =>
       let i := k
-      let ri ← elabE ctx i (some .int)
+      let ri := widenR ctx.types (← elabE ctx i (some .int))
       if ri.ty != .int then eerr p "an array index must be an int"
       let ti ← fresh .int
       let tv ← fresh t
