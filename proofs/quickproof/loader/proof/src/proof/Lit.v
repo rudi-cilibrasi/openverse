@@ -118,7 +118,25 @@ Proof.
            intros E. subst rc3.
            match goal with H: 0 = 0 -> _ |- _ => destruct (H eq_refl) as [Hlen' Hva]; clear H end.
            subst va. split; [ reflexivity | node_ok_tac ].
-        -- forward. Exists 0 p1. entailer!.
+        -- forward.
+           forward_if (EX lit: Z, EX pos': Z,
+             PROP (0 <= pos' <= Zlength bs; Int64.min_signed <= lit <= Int64.max_signed; (k = 1 -> lit = 0 \/ lit = 1))
+             LOCAL (lvar _i tlong v_i; lvar _x tuint v_x; lvar _kind tuint v_kind; temp _r r; temp _p p; temp _nd nd)
+             SEP (data_at Tsh t_ld (LD buf (Zlength bs) pos' acap bcap) r; buf_rep shb bs buf;
+                  data_at_ Tsh tuint v_kind; data_at_ Tsh tlong v_i; data_at_ Tsh tuint v_x;
+                  data_at Tsh t_prog (PRG nfns entry fns args (Zlength al) bytes (Zlength bl)) p;
+                  args_pool args acap al; bytes_pool bytes bcap bl;
+                  data_at Ews t_node (z, (Vint (Int.repr k), (z, (z, (z, (z, Vlong (Int64.repr lit))))))) nd))%assert.
+           ++ (* REF *)
+              forward_call (r, buf, shb, bs, p1, acap, bcap, v_x, Tsh).
+              Intros vret. destruct vret as [[[rc2 p2] xr] vr]. cbn [fst snd] in *.
+              forward_if.
+              { forward. Exists 1 p2 (@nil Z) bl (mkN 0 0 0 0 0 0 0). ex_node nd.
+                rewrite app_nil_r. entailer!. apply npp_err; auto; lia. }
+              use_rc0.
+              forward. forward. Exists xr p2.
+              rewrite Int.unsigned_repr by rep_lia. entailer!.
+           ++ forward. Exists 0 p1. entailer!.
   - Intros lit pos'. forward.
     Exists 0 pos' (@nil Z) bl (mkN 0 k 0 0 0 0 lit). ex_node nd.
     rewrite app_nil_r. entailer!. apply npp_ok; auto; try lia.

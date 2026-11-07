@@ -87,7 +87,7 @@ Qed.
 
 Ltac qp_ok :=
   try (match goal with |- False => match goal with H: _ = Int.zero |- _ => revert H end end);
-  rewrite ?int_sub_repr', ?int_add_repr;
+  rewrite ?mul_repr, ?shl_1_22, ?int_sub_repr', ?int_add_repr;
   try unfold Int.ltu; try unfold Int.eq; try unfold Int64.eq; try unfold Int64.ltu; try unfold Int.lt;
   rewrite ?Int.unsigned_repr by rep_lia; rewrite ?Int64.unsigned_repr by rep_lia;
   rewrite ?Int.signed_repr by rep_lia; rewrite ?Int64.signed_repr by rep_lia;
@@ -156,6 +156,13 @@ Ltac or_left_false E :=
         | (match goal with H: Int64.eq _ _ = false |- _ => rewrite E in H; discriminate H end)
         | (rewrite E in *; congruence) ].
 
+(* The facts of node_ok are implications on the tag. In the context as they are, every lia call (also inside
+   VST's tactics) splits cases on each of them; hidden, they cost nothing until the branch of a tag uses one. *)
+Definition hide (P: Prop) : Prop := P.
+Arguments hide : simpl never.
+Lemma hide_intro: forall P: Prop, P -> hide P.
+Proof. auto. Qed.
+
 Ltac close_nd j nn bodyx qx y :=
   try forward;
   sep_apply (SingletonHole.array_with_hole_elim Ews t_node j nn (NT y) (map node_val bodyx) qx);
@@ -201,7 +208,7 @@ Proof.
   all: try (solve [ unfold bytes_ok; repeat split; auto; rep_lia ]).
   Intros rc.
   forward_if (temp _t'5 (Vint (Int.repr 1))).
-  { forward. entailer!. destruct (zlt 20 rc); [ lia | reflexivity ]. }
+  { forward. entailer!. destruct (zlt 21 rc); [ lia | reflexivity ]. }
   { exfalso. lia. }
   qpa.
   forward_if (PROP () LOCAL (temp _buf q; lvar _p t_prog v_p; gvars gv)
@@ -312,7 +319,10 @@ Proof.
         assert (Ey: node_val y = NT y) by reflexivity. rewrite Ey.
         assert (NOK: node_ok nfns (f_nslots x) al (Zlength bl) j y) by (apply X10; lia).
         assert (COK: call_ok F y) by (apply (proj1 (Forall_Znth _ _) Ocx); lia).
-        destruct NOK as ((W1 & W2 & W3 & W4 & W5 & W6 & W7) & T & N0 & N1 & N2 & N3 & N4 & N5 & N6 & N7 & N8).
+        destruct NOK as ((W1 & W2 & W3 & W4 & W5 & W6 & W7) & T & N0 & N1 & N2 & N3 & N4 & N5 & N6 & N7 & N8 & N9).
+        apply hide_intro in N0. apply hide_intro in N1. apply hide_intro in N2. apply hide_intro in N3.
+        apply hide_intro in N4. apply hide_intro in N5. apply hide_intro in N6. apply hide_intro in N7.
+        apply hide_intro in N8. apply hide_intro in N9.
         forward. qpa.
         forward_if.
         { (* LIT *)
@@ -353,17 +363,27 @@ Proof.
           forward. qpa.
           forward. qpa.
           close_nd j nn (f_body x) (f_q x) y. }
-        forward_if (temp _t'10 (Vint (Int.repr (if Z.eq_dec (n_tag y) 4 then 1 else
+        forward_if (temp _t'11 (Vint (Int.repr (if Z.eq_dec (n_tag y) 4 then 1 else
                                                 if Z.eq_dec (n_tag y) 5 then 1 else 0)))).
         { forward. entailer!. rewrite if_true by auto. auto. }
         { forward. entailer!. rewrite if_false by auto.
           destruct (Z.eq_dec (n_tag y) 5), (zeq (n_tag y) 5); try congruence; reflexivity. }
+        forward_if (temp _t'12 (Vint (Int.repr (if Z.eq_dec (n_tag y) 4 then 1 else
+                                                if Z.eq_dec (n_tag y) 5 then 1 else
+                                                if Z.eq_dec (n_tag y) 12 then 1 else 0)))).
+        { forward. entailer!.
+          destruct (Z.eq_dec (n_tag y) 4); [ auto | ]. destruct (Z.eq_dec (n_tag y) 5); [ auto | ].
+          exfalso. auto. }
+        { forward. entailer!.
+          destruct (Z.eq_dec (n_tag y) 4); [ discriminate | ]. destruct (Z.eq_dec (n_tag y) 5); [ discriminate | ].
+          destruct (Z.eq_dec (n_tag y) 12), (zeq (n_tag y) 12); try congruence; reflexivity. }
         forward_if.
-        { (* PRIM or CALL *)
-          assert (T45: n_tag y = 4 \/ n_tag y = 5).
+        { (* PRIM, CALL or HEAP *)
+          assert (T45: n_tag y = 4 \/ n_tag y = 5 \/ n_tag y = 12).
           { destruct (Z.eq_dec (n_tag y) 4); [ auto | ]. destruct (Z.eq_dec (n_tag y) 5); [ auto | ].
-            exfalso. auto. }
-          assert (AOK: args_ok al j y) by (destruct T45 as [E | E]; [ apply N4 | apply N5 ]; auto).
+            destruct (Z.eq_dec (n_tag y) 12); [ auto | ]. exfalso. auto. }
+          assert (AOK: args_ok al j y)
+            by (destruct T45 as [E | [E | E]]; [ apply (N4 E) | apply (N5 E) | apply (N9 E) ]).
           destruct AOK as (AO1 & AO2 & AO3).
           forward_if (temp _t (Vint (Int.repr (n_tag y)))).
           { (* PRIM *)
@@ -376,24 +396,46 @@ Proof.
               destruct P2 as [E | E]; [ or_left_false E | rewrite E; reflexivity ]. }
             qpa.
             entailer!. }
-          { (* CALL *)
-            assert (E5: n_tag y = 5) by (destruct T45; auto; contradiction).
-            destruct (N5 E5) as (C1 & _).
-            specialize (COK E5).
-            forward. forward. qpa.
-            sep_apply (SingletonHole.array_with_hole_elim Ews t_fn f nfns (FT x) (map fn_val F) fns).
-            rewrite upd_Znth_triv by (rewrite ?Zlength_map; try lia; rewrite Znth_map by lia; reflexivity).
-            assert (Oa: fn_ok nfns al (Zlength bl) (Znth (n_a y) F)) by (apply (proj1 (Forall_Znth _ _) Hok); lia).
-            destruct Oa as (Oa1 & Oa2 & _).
-            assert (EA: forall d, @Znth _ d (n_a y) (map fn_val F) = fn_val (Znth (n_a y) F)).
-            { intros d. rewrite Znth_map by lia. reflexivity. }
-            forward. forward. forward.
-            { entailer!. rewrite EA. simpl. auto. }
-            rewrite EA. unfold fn_val at 1. cbn [fst snd].
-            forward. qpa.
-            sep_apply (SingletonHole.array_with_hole_intro Ews t_fn f nfns (map fn_val F) fns ltac:(lia)).
-            rewrite Znth_map by lia. fold x. rewrite Ex.
-            entailer!. }
+          { forward_if.
+            { (* CALL *)
+              assert (E5: n_tag y = 5) by auto.
+              destruct (N5 E5) as (C1 & _).
+              specialize (COK E5).
+              forward. forward. qpa.
+              sep_apply (SingletonHole.array_with_hole_elim Ews t_fn f nfns (FT x) (map fn_val F) fns).
+              rewrite upd_Znth_triv by (rewrite ?Zlength_map; try lia; rewrite Znth_map by lia; reflexivity).
+              assert (Oa: fn_ok nfns al (Zlength bl) (Znth (n_a y) F)) by (apply (proj1 (Forall_Znth _ _) Hok); lia).
+              destruct Oa as (Oa1 & Oa2 & _).
+              assert (EA: forall d, @Znth _ d (n_a y) (map fn_val F) = fn_val (Znth (n_a y) F)).
+              { intros d. rewrite Znth_map by lia. reflexivity. }
+              forward. forward. forward.
+              { entailer!. rewrite EA. simpl. auto. }
+              rewrite EA. unfold fn_val at 1. cbn [fst snd].
+              forward. qpa.
+              sep_apply (SingletonHole.array_with_hole_intro Ews t_fn f nfns (map fn_val F) fns ltac:(lia)).
+              rewrite Znth_map by lia. fold x. rewrite Ex.
+              entailer!. }
+            { (* HEAP *)
+              assert (E12: n_tag y = 12) by (destruct T45 as [E | [E | E]]; auto; contradiction).
+              destruct (N9 E12) as (Hh1 & Hh2 & _ & Hh4). apply hide_intro in Hh4.
+              forward. qpa.
+              forward.
+              forward_if (temp _t'8 (Vint (Int.repr 1))).
+              { forward. entailer!. }
+              { forward. forward. entailer!.
+                destruct Hh2 as [E | E]; [ or_left_false E | ].
+                assert (Eop: n_op y = 0 \/ n_op y = 1 \/ n_op y = 2 \/ n_op y = 4) by lia.
+                destruct Eop as [E' | [E' | [E' | E']]]; rewrite E'; reflexivity. }
+              qpa.
+              forward.
+              forward_if.
+              { (* isTag: its tags lie in the bytes pool *)
+                destruct (Hh4 ltac:(auto)) as (Ht1 & Ht2 & Ht3).
+                forward. qpa.
+                forward. forward. qpa.
+                forward. forward. forward. qpa.
+                entailer!. }
+              { forward. entailer!. } } }
           forward. forward. qpa.
           forward. forward. forward. qpa.
           forward.
@@ -469,14 +511,14 @@ Proof.
           forward. qpa.
           forward. qpa.
           close_nd j nn (f_body x) (f_q x) y. }
-        forward_if (temp _t'8 (Vint (Int.repr (if Z.eq_dec (n_tag y) 8 then 1 else
+        forward_if (temp _t'9 (Vint (Int.repr (if Z.eq_dec (n_tag y) 8 then 1 else
                                                if Z.eq_dec (n_tag y) 10 then 1 else 0)))).
         { forward. entailer!. rewrite if_true by auto. auto. }
         { forward. entailer!. rewrite if_false by auto.
           destruct (Z.eq_dec (n_tag y) 10), (zeq (n_tag y) 10); try congruence; reflexivity. }
-        forward_if (temp _t'9 (Vint (Int.repr (if Z.eq_dec (n_tag y) 8 then 1 else
-                                               if Z.eq_dec (n_tag y) 10 then 1 else
-                                               if Z.eq_dec (n_tag y) 11 then 1 else 0)))).
+        forward_if (temp _t'10 (Vint (Int.repr (if Z.eq_dec (n_tag y) 8 then 1 else
+                                                if Z.eq_dec (n_tag y) 10 then 1 else
+                                                if Z.eq_dec (n_tag y) 11 then 1 else 0)))).
         { forward. entailer!.
           destruct (Z.eq_dec (n_tag y) 8); [ auto | ]. destruct (Z.eq_dec (n_tag y) 10); [ auto | ].
           exfalso. auto. }
@@ -537,9 +579,9 @@ Definition CSlaw : compspecs. make_compspecs cprog. Defined.
 Definition G : funspecs :=
   [(_main, QPmain_spec_ext' p tt main_post_TT);
    rd_u8_spec; rd_u32_spec; rd_i64_spec; rd_bytes_spec; rd_child_spec; rd_slot_spec; rd_args_spec;
-   node_clear_spec; load_lit_spec; load_prim_spec; load_call_spec; load_three_spec; load_for_spec;
-   load_node_spec; load_fn_spec; check_calls_spec; load_header_spec; trim_args_spec; trim_bytes_spec;
-   prog_clear_spec; load_all_spec; vx_free_program_spec; vx_load_spec;
+   node_clear_spec; load_lit_spec; load_prim_spec; load_call_spec; load_heap_spec; load_three_spec;
+   load_for_spec; load_node_spec; load_fn_spec; check_calls_spec; load_header_spec; trim_args_spec;
+   trim_bytes_spec; prog_clear_spec; load_all_spec; vx_free_program_spec; vx_load_spec;
    nondet_size_spec; gp_assume_spec; (_quickproof_malloc, @malloc_spec' CSlaw);
    (_quickproof_free, @free_spec' CSlaw); @nondet_bytes_spec CSlaw; gp_assert_spec].
 
@@ -559,6 +601,7 @@ Proof.
     entry_shared OpenverseLoader.proof.Lit.body_load_lit.
     entry_shared OpenverseLoader.proof.Args.body_load_prim.
     entry_shared OpenverseLoader.proof.Args.body_load_call.
+    entry_shared OpenverseLoader.proof.Args.body_load_heap.
     entry_shared OpenverseLoader.proof.Nodes.body_load_three.
     entry_shared OpenverseLoader.proof.Nodes.body_load_for.
     entry_shared OpenverseLoader.proof.Node.body_load_node.

@@ -59,17 +59,20 @@ def withProgArgs (file : String) (rest : List String) (k : Prog → IO UInt32) :
 
 def defaultFuel : Nat := 100000000
 
+/-- The hand-written Core programs (`tests/core` holds their encodings). -/
+def allExamples : List (String × Prog) := Examples.all ++ HeapExamples.all
+
 def main (args : List String) : IO UInt32 := do
   match args with
   | ["examples"] =>
-    for (n, _) in Examples.all do IO.println n
+    for (n, _) in allExamples do IO.println n
     return 0
   | ["example", name] =>
-    match Examples.all.lookup name with
+    match allExamples.lookup name with
     | some P => runProg P defaultFuel
     | none => IO.eprintln s!"no example {name}"; return 4
   | ["example", name, "--emit", file] =>
-    match Examples.all.lookup name with
+    match allExamples.lookup name with
     | some P => IO.FS.writeBinFile file P.encode; return 0
     | none => IO.eprintln s!"no example {name}"; return 4
   | "run" :: file :: "--fuel" :: n :: rest => withProgArgs file rest (runProg · n.toNat!)
