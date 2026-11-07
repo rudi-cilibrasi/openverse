@@ -563,6 +563,9 @@ structure Sig where
   isConst : Bool
   /-- The named parameters (the last ones of `params`): name and default. -/
   named   : List (String × Option SExpr) := []
+  /-- Every parameter's name, in order: a named one's default may use those
+      before it. -/
+  pnames  : List String := []
   /-- A generic function's type parameters (name, declared comparable). Its
       `params` and `ret` mention them as `Ty.param`. Its Verse Core function
       takes one more hidden parameter per type parameter, after these: a
@@ -1545,7 +1548,13 @@ partial def elabApp (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (brack
               let some d := dflt | eerr p s!"{name} needs the argument ?{n}, which has no default"
               let t := ptys[k]!
               let ta ← fresh t
-              steps := steps.push (.assign ta (← fxAt p (do coerce p (← elabE { ctx with locals := [], selfClass := none } d (some t)) t)))
+              -- (the default sees the parameters before it, in their temporaries)
+              let earlier : List Local := ((s.pnames.zip (List.range k)).filterMap fun (pn, j) =>
+                (slots[j]!).map fun sl => ({ name := pn, slot := sl, ty := ptys[j]!, mutable := false } : Local)).reverse
+              -- (a method's: its receiver's fields too, through `Self`)
+              let selfC : Option String :=
+                if s.pnames.head? == some "Self" then (s.name.splitOn ".").head? else none
+              steps := steps.push (.assign ta (← fxAt p (do coerce p (← elabE { ctx with locals := earlier, selfClass := selfC } d (some t)) t)))
               slots := slots.set! k (some ta)
           let call := Expr.call s.idx (slots.toList.map fun o => Expr.local o.get!)
           return ⟨steps.toList.foldr Expr.seq call, s.ret⟩
@@ -3297,7 +3306,8 @@ def elabProgramCore (allTops00 : List STop) (opts : Options := {}) : Except Stri
                           -- constant's: blocks that construct each other's classes)
                           fx := if n.endsWith ".$block" then [] else allowedFx effs,
                           isConst := false,
-                          named := (ps.filter (·.named)).map fun q => (q.name, q.default) }
+                          named := (ps.filter (·.named)).map fun q => (q.name, q.default),
+                          pnames := ps.map (·.name) }
     | .const p n sty _ =>
       let rt ← match sty with
         | some t => do let (rt, _) ← (resolveTy env p t).run {}; pure rt
