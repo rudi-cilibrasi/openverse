@@ -985,6 +985,18 @@ partial def convert (env : TyEnv) (e : Expr) (a b : Ty) : EM (Option Expr) := do
     match ← convert env (.local i) a' b' with
     | some c => return some (.ite (.assign i (.prim .query [e])) (.prim .mkSome [c]) (.lit .none))
     | none => return none
+  -- a tuple is an array of its elements (Book of Verse ch. 3), each at the
+  -- element type
+  | .tup ts, .arr t =>
+    let x ← modifyGet fun s => (s.nslots, { s with nslots := s.nslots + 1, slotTys := s.slotTys.push a })
+    let mut es : Array Expr := #[]
+    for (ti, i) in ts.zip (List.range ts.length) do
+      let ei := Expr.prim (.tupGet i) [.local x]
+      if ti == t || ti == .never then es := es.push ei
+      else match ← convert env ei ti t with
+        | some c => es := es.push c
+        | none => return none
+    return some (.seq (.assign x e) (.prim .mkArr es.toList))
   | _, _ => return none
 
 /-- Convert `r` to type `target`: equal types, `false` (bottom) to anything,
@@ -2122,9 +2134,16 @@ partial def elabCmp (ctx : Ctx) (p : Pos) (a : SExpr) (rest : List (String × SE
     else if !((ta == .int && tb == .int) || (ta == .char && tb == .char) || (ta == .char32 && tb == .char32)) then
       eerr p s!"'{op}' compares ints, chars or char32s, found {ta.show} and {tb.show}"
   let ra ← elabE ctx a none
+  -- (an array and a tuple compare as arrays: the tuple is converted)
+  let asArr (r : R) (other : Ty) : EM R := do
+    match r.ty, other with
+    | .tup _, .arr _ => return ⟨← coerce p r other, other⟩
+    | _, _ => return r
   match rest with
   | [(op, b)] =>
     let rb ← elabE ctx b (some ra.ty)
+    let ra ← asArr ra rb.ty
+    let rb ← asArr rb ra.ty
     checkTys op ra.ty rb.ty
     return ⟨p2 (opOf op) ra.e rb.e, ra.ty⟩
   | _ =>
