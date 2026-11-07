@@ -22,7 +22,7 @@ surface Verse is elaborated (`OpenVerse/Front/Elab.lean`) into Verse Core
 | Definitions | top-level functions `F(X:t, …)<effects>:t = body`, top-level constants `C:t = e` / `C := e`; locals `X := e`, `X:t = e`, `var X:t = e`; no shadowing | §3.1–3.4 |
 | Mutation | `set X = e`, `set X += e` (`-=`, `*=`), `set A[i] = e` (fails out of range; returns `e`), and paths `set S.F.G = e`, `set A[i][j] op= e`, `set M[k].F = e`: indices and keys evaluated once, left to right, then the new value, then the variable rebuilt; an index out of range or a missing intermediate key fails, while the last key of a path inserts | §3.3, §3.5, §9.3 |
 | Blocks | indented (`:`), braced (`{ }`), inline (`then`/`do`), `block:`, `( a; b )` sequences | §2.2–2.4 |
-| Operators | `* + -`, unary `-`, comparisons `= <> < <= > >=` (failable, return the left operand, chains check every pair), `and`, `or`, `not`, `?`, `.Length`, `A[i]`, `T(k)` | ch. 4 |
+| Operators | `* + -`, unary `-`, comparisons `= <> < <= > >=` (failable, return the left operand, chains check every pair), `and`, `or`, `not` (below the comparisons, above `and`: `not X = Y` is `not (X = Y)`), `?`, `.Length`, `A[i]`, `T(k)` | ch. 4 |
 | Failure | failure contexts (`if` conditions, `for` clauses, `option{}`, `logic{}`, `not`, left of `or`, `<decides>` bodies) with rollback of `var` writes **and output** | ch. 8 |
 | Control | `if`/`else if`/`else` (all styles, `if:`…`then:`), `for` with `X : array`, `I -> X : array`, `X := a..b`, filters, bindings, several generators (cartesian product), `loop`/`break`, `return`, `case` with literal patterns and `_` | ch. 7 |
 | Functions | recursion, mutual recursion, `<decides>` (called with `F[…]`; other functions with `F(…)`), named parameters `?P:t = default` passed as `?P := e` (positional, then named as written, then defaults), the heap effects `<computes>`, `<reads>`, `<writes>`, `<allocates>`, `<transacts>` (checked, see [Classes](#classes)), other effect specifiers accepted and ignored | ch. 6, 13 |
@@ -292,6 +292,25 @@ circle := class(shape, labelled):
   path, as in `set S.Best? *= 7` and `set M[k]? = v`.
 - **`let(defs){body}`** (the spec's LetMacro) makes `defs` visible in `body`
   only. Its value is the body's.
+- **Clause macros** (the spec's IfMacro, IfElseMacro, ForMacro, FirstMacro,
+  FirstDoMacro and AssertMacro). Each takes clauses in braces, separated by
+  `;`, `,` or new lines, run in a failure context; their value is the last
+  clause's: a binding's name, or the expression's value.
+  - `if{c}` runs `c` and has no value; `if{c} else e` (also `else if{…}`) is
+    the value of `c` when it succeeds, else `e`'s.
+  - `for{c}` is the array of `c`'s values, for each way its generators,
+    filters and bindings succeed: `for{X := 1..4; X * X}`.
+  - `first{c}` fails when `c` does, else it is `c`'s value; `first(c){b}`
+    runs `b`, which sees `c`'s names, once `c` succeeds, and fails when `c`
+    does. Without a body after it, `first(…)` is a call.
+  - `assert{c}` is a runtime error (as `Err()`, without the spec's message)
+    unless `c` succeeds.
+  With no generators (`choice` is not supported), `first` is the first and
+  only success, and `first{c}` can only fail when `c` can. These macros
+  take no body (`for{c} {b}` is refused), and `first` and `assert` before
+  `{` are the macros, not a struct of that name. A void branch makes an
+  `if` void (void accepts any value), so `if{X := e} else {Print("none")}`
+  is a statement.
 - **The command line** (the spec's expected tooling):
   - `openverse run FILE [ARG…] [do EXPR]`, and likewise `emit`. The
     arguments are the program's `Args:[]string`, unless it defines `Args`
@@ -348,7 +367,7 @@ openverse has no module namespaces yet, so the readings are flat:
 `float` and `rational` values (only `Floor(X/Y)` and `Ceil(X/Y)` of ints),
 `char32`, the class features listed under [Classes](#classes), open enums, struct methods (Verse structs have none; classes do), `ConcatenateMaps`,
 `weak_map`, module namespaces (`using{"relative_path"}` imports flatly, see [Programs of several files](#programs-of-several-files)), overloading, defaults that refer to earlier parameters, nested
-functions, `first`, `defer`, refinement types, concurrency (`spawn`, `sync`,
+functions, `last`, `defer`, refinement types, concurrency (`spawn`, `sync`,
 `race`, `rush`, `branch`, `<suspends>`), `weak_map`, and effect checking
 other than `<decides>` and the heap effects (`<converges>` is accepted and
 ignored). Comparing arrays with tuples (`array{1,2}
