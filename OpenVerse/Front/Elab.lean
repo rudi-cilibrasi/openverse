@@ -179,6 +179,20 @@ def TyEnv.refTags (env : TyEnv) (T : String) : List Nat := (env.concreteBelow T)
 /-- Whether field `f` of class `c` is a `var`. -/
 def TyEnv.isVarField (env : TyEnv) (c f : String) : Bool := env.varFields.contains (c, f)
 
+/-- Whether a value of type `t` can hold an object that can change or has
+    an identity: one of a class below a reference class with a `var` field,
+    or `<unique>`. -/
+partial def Ty.holdsMutable (env : TyEnv) : Ty → Bool
+  | .arr t | .opt t => t.holdsMutable env
+  | .tup ts => ts.any (Ty.holdsMutable env)
+  | .map k v => k.holdsMutable env || v.holdsMutable env
+  | .struct n ts =>
+    if env.classes.contains n && (env.sparams.lookup n).isNone then
+      (env.concreteBelow n).any fun d =>
+        (env.supers d).any env.uniques.contains || (env.fields d).any fun (f, _, _) => env.varFields.contains (d, f)
+    else (env.fields n ts).any fun (_, t, _) => t.holdsMutable env
+  | _ => false
+
 /-- Whether `c` or a class or interface above it is `<unique>`. -/
 def TyEnv.isUnique (env : TyEnv) (c : String) : Bool := (env.supers c).any env.uniques.contains
 
@@ -325,6 +339,9 @@ structure Local where
   ty      : Ty
   mutable : Bool
 
+/-- The heap effects (the spec draft's TransactFx). -/
+def heapFx : List String := ["allocates", "reads", "writes"]
+
 structure Sig where
   idx     : Nat
   name    : String
@@ -340,6 +357,8 @@ structure Sig where
       value of that type (`witness`), from which its slots of that type are
       initialised (`slotDefault`). -/
   tparams : List (String × Bool) := []
+  /-- The heap effects its specifiers allow (#35). -/
+  fx : List String := heapFx
   deriving Inhabited
 
 structure Ctx where
@@ -371,9 +390,29 @@ structure ESt where
   nslots : Nat := 0
   /-- The type of each slot allocated so far (the certificate for `Prog.checkTypes`). -/
   slotTys : Array Ty := #[]
+  /-- The heap effects of the function so far (#35): `allocates`, `reads`,
+      `writes`, each with where it first occurs and the function called
+      there, if it comes from a call. -/
+  fx : List (String × Pos × Option String) := []
   deriving Inhabited
 
 abbrev EM := StateT ESt (Except String)
+
+/-- The heap effects a function's specifiers allow: all of them by default
+    and with `<transacts>`, none with `<computes>`, those named by
+    `<allocates>`, `<reads>`, `<writes>`. -/
+def allowedFx (effs : List String) : List String :=
+  if effs.contains "transacts" then heapFx
+  else
+    let named := heapFx.filter effs.contains
+    if !named.isEmpty then named
+    else if effs.contains "computes" then []
+    else heapFx
+
+/-- Record heap effects at `p` (of a call of `via`). -/
+def noteFx (p : Pos) (ks : List String) (via : Option String := none) : EM Unit :=
+  modify fun st => { st with fx := ks.foldl (fun acc k =>
+    if acc.any (·.1 == k) then acc else acc ++ [(k, p, via)]) st.fx }
 
 /-- An elaborated expression and its type. -/
 structure R where
@@ -719,7 +758,9 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
             eerr p s!"'{n}' is a method: call it with {n}(…)"
         match ctx.sig? n with
         | some s =>
-          if s.isConst then return ⟨.call s.idx [], s.ret⟩
+          if s.isConst then
+            noteFx p s.fx (some n)
+            return ⟨.call s.idx [], s.ret⟩
           else eerr p s!"'{n}' is a function: call it with {n}(…)"
         | none => eerr p s!"unknown identifier '{n}'"
   | .app p f args bracket => elabApp ctx p f args bracket exp
@@ -944,6 +985,8 @@ partial def elabApp (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (brack
     | _ =>
       match ctx.sig? name with
       | some s =>
+        -- a call has its callee's effects
+        noteFx p s.fx (some name)
         if s.isConst then
           elabIndexLike ctx p ⟨.call s.idx [], s.ret⟩ args bracket
         else
@@ -1376,7 +1419,9 @@ partial def elabSet (ctx : Ctx) (p : Pos) (lhs0 : SExpr) (op : Option String) (r
       | some "?", _, .opt _ => pure (.prim .query [.local c])
       | some f, _, .struct sn targs =>
         let (j, _) := (fieldIndex (ctx.types.fields sn targs) f).get!
-        if ctx.types.isRefClass sn then pure (.heap (.get j) [.local c])
+        if ctx.types.isRefClass sn then
+          if ctx.types.isVarField sn f then noteFx p ["reads"]
+          pure (.heap (.get j) [.local c])
         else pure (.prim (.tupGet j) [.local c])
       | none, some (ti, _), .arr _ => pure (p2 .index (.local c) (.local ti))
       | none, some (tk, kt), .map _ vt =>
@@ -1420,6 +1465,7 @@ partial def elabSet (ctx : Ctx) (p : Pos) (lhs0 : SExpr) (op : Option String) (r
         if ctx.types.isRefClass sn then
           let (j, _) := (fieldIndex (ctx.types.fields sn targs) f).get!
           pre := pre.push (.heap (.set j) [.local c, newVal])
+          noteFx p ["writes"]
           wroteObject := true
         else
           let fs := ctx.types.fields sn targs
@@ -1491,6 +1537,7 @@ partial def elabSet (ctx : Ctx) (p : Pos) (lhs0 : SExpr) (op : Option String) (r
           if ds.any fun d => ((fieldIndex (ctx.types.fields d []) f).map (·.1)).getD k != k then
             eerr mp s!"set of field '{f}' of interface {sn}, which is at different places in the classes that implement it, is not supported yet"
           let r ← elabE ctx rhs (some t)
+          noteFx p (if op.isSome then ["reads", "writes"] else ["writes"])
           let v ← match op with
             | none => coerce p r t
             | some o => combine (.heap (.get k) [.local l.slot]) t o r
@@ -1642,6 +1689,7 @@ partial def elabMember (ctx : Ctx) (p : Pos) (r : R) (m : String) : EM R := do
         -- not below an interface: then one test of the object's class each
         let ds := ctx.types.concreteBelow sn
         let pos := ds.map fun d => ((fieldIndex (ctx.types.fields d []) f).map (·.1)).getD k
+        if ctx.types.isVarField sn f then noteFx p ["reads"]
         if pos.all (· == k) then return ⟨.heap (.get k) [r.e], t⟩
         let x ← fresh r.ty
         let mut acc : Expr := .prim .userErr []   -- no class: unreachable
@@ -1705,8 +1753,11 @@ partial def elabConstruct (ctx : Ctx) (p : Pos) (name : String) (targs : List ST
     let i := ctx.types.info name
     if i.isIface then eerr p s!"{name} is an interface: it cannot be constructed"
     if i.isAbstract then eerr p s!"{name} is <abstract>: it cannot be constructed"
-    -- a new object (#34)
-    if ctx.types.isRefClass name then return ⟨.heap (.new (ctx.types.tagOf name)) es, ty⟩
+    -- a new object (#34); one that can change, or has an identity, allocates
+    if ctx.types.isRefClass name then
+      if ctx.types.isUnique name || fs.any (fun (f, _, _) => ctx.types.isVarField name f) then
+        noteFx p ["allocates"]
+      return ⟨.heap (.new (ctx.types.tagOf name)) es, ty⟩
     let x ← fresh ty
     return ⟨.assign x (classWrap ctx.types name name (.prim .mkTup es)), ty⟩
   return ⟨.prim .mkTup es, ty⟩
@@ -2116,14 +2167,18 @@ def elabProgram (allTops00 : List STop) (opts : Options := {}) : Except String C
     match top with
     | .fn p n ps _ effs ret _ =>
       let (tys, rt) ← fnTypes env p n ps effs ret
+      if effs.contains "computes" && heapFx.any effs.contains then
+        throw s!"{p.show}: <computes> excludes the heap effects (<reads>, <writes>, <allocates>) that {n} also has"
       sigs := sigs.push { idx, name := n, params := tys, ret := rt, decides := effs.contains "decides",
+                          fx := allowedFx effs,
                           isConst := false,
                           named := (ps.filter (·.named)).map fun q => (q.name, q.default) }
     | .const p n sty _ =>
       let rt ← match sty with
         | some t => do let (rt, _) ← (resolveTy env p t).run {}; pure rt
         | none => pure .never   -- inferred below
-      sigs := sigs.push { idx, name := n, params := [], ret := rt, decides := false, isConst := true }
+      -- a constant's heap effects are inferred below, from none
+      sigs := sigs.push { idx, name := n, params := [], ret := rt, decides := false, isConst := true, fx := [] }
     | .classDef .. => pure ()   -- expanded above
   -- the signatures of the generic functions, over their type parameters
   let mut gsigs : Array Sig := #[]
@@ -2138,13 +2193,13 @@ def elabProgram (allTops00 : List STop) (opts : Options := {}) : Except String C
       let (tys, rt) ← fnTypes genv p n ps effs ret
       -- generic functions come after the others
       gsigs := gsigs.push { idx := tops.length + gidx, name := n, params := tys, ret := rt,
-                            decides := effs.contains "decides", isConst := false,
+                            decides := effs.contains "decides", isConst := false, fx := allowedFx effs,
                             tparams }
     | _ => pure ()
   let mkSigProg (sigs : Array Sig) : Prog :=
     { fns := (sigs ++ gsigs).toList.map fun s =>
         { name := s.name, arity := s.params.length + s.tparams.length, nslots := 0,
-          decides := s.decides, body := .lit .void },
+          decides := s.decides, writes := s.fx.contains "writes", body := .lit .void },
       main := 0 }
   -- infer the types of unannotated constants: in order, in rounds, so that a
   -- constant may use one defined after it (until a round makes no progress)
@@ -2174,6 +2229,23 @@ def elabProgram (allTops00 : List STop) (opts : Options := {}) : Except String C
       let (r, _) ← (elabE ctx body none).run { env }
       if r.ty == .never then throw s!"{p.show}: cannot infer the type of '{n}'"
     | _ => pure ()
+  -- the heap effects of a constant are those of its initialiser (#35), which
+  -- runs at each use: in rounds, from none, since constants use each other
+  for _ in [0:tops.length + 1] do
+    let mut changed := false
+    for (top, idx) in tops.zip (List.range tops.length) do
+      match top with
+      | .const _ _ _ body =>
+        let ctx : Ctx := { sigs := sigs.toList ++ gsigs.toList, sigProg := mkSigProg sigs, types := env }
+        match (elabStmt ctx body (some sigs[idx]!.ret)).run { env } with
+        | .ok (_, st) =>
+          let fx := heapFx.filter fun k => st.fx.any (·.1 == k)
+          if fx != sigs[idx]!.fx then
+            sigs := sigs.set! idx { sigs[idx]! with fx }
+            changed := true
+        | .error _ => pure ()
+      | _ => pure ()
+    if !changed then break
   let sigProg := mkSigProg sigs
   let allSigs := sigs.toList ++ gsigs.toList
   -- an override has the signature of the method it overrides, and an
@@ -2185,10 +2257,14 @@ def elabProgram (allTops00 : List STop) (opts : Options := {}) : Except String C
   let sameSig (a b : Sig) : Bool :=
     (a.params.drop 1) == (b.params.drop 1) && retBelow a.ret b.ret && a.decides == b.decides &&
       a.named.map (·.1) == b.named.map (·.1)
+  -- an implementation has no heap effect its declaration does not allow
+  let fxOver (a b : Sig) : Option String := a.fx.find? (!b.fx.contains ·)
   for (mp, mine, theirs) in overridePairs do
     match allSigs.find? (·.name == mine), allSigs.find? (·.name == theirs) with
     | some a, some b =>
       if !sameSig a b then throw s!"{mp.show}: {mine} must have the signature of {theirs}, which it overrides"
+      if let some k := fxOver a b then
+        throw s!"{mp.show}: {mine} allows the effect <{k}>, which {theirs}, which it overrides, does not"
     | _, _ => pure ()
   -- the implementation a concrete class uses has the signature of every
   -- declaration of the method above it
@@ -2197,6 +2273,8 @@ def elabProgram (allTops00 : List STop) (opts : Options := {}) : Except String C
     | some a, some b =>
       if !sameSig a b then
         throw s!"{cp.show}: in {c}, {impl} does not have the signature of {decl}"
+      if let some k := fxOver a b then
+        throw s!"{cp.show}: in {c}, {impl} allows the effect <{k}>, which {decl} does not"
     | _, _ => pure ()
   for (fp, cname, f, sty) in fieldOverrides do
     let (t, _) ← (resolveTy env fp sty).run {}
@@ -2226,8 +2304,23 @@ def elabProgram (allTops00 : List STop) (opts : Options := {}) : Except String C
   -- initialisation of every non-parameter slot (OpenVerse.Core.Typing); its
   -- frame starts with its parameters, then one hidden parameter per type
   -- parameter, holding a value of that type
+  -- what each heap effect is, for messages
+  let fxWhat : String → String
+    | "reads" => "reads a var field"
+    | "writes" => "sets a var field"
+    | "allocates" => "constructs an object that has a var field or is <unique>"
+    | k => k
+  let fxCheck (name : String) (allowed : List String) (st : ESt) : Except String Unit := do
+    for (k, kp, via) in st.fx do
+      if !allowed.contains k then
+        let what := match via with
+          | some f => s!"calls {f}, which has the effect <{k}>"
+          | none => fxWhat k
+        let spec := if allowed.isEmpty then "<computes>" else String.intercalate "" (allowed.map (s!"<{·}>"))
+        throw s!"{kp.show}: {name} {what}, which its effects ({spec}) do not allow: add <{k}> or <transacts>"
   let elabFn (env : TyEnv) (p : Pos) (name : String) (ps : List SParam) (ptys : List Ty) (ret : Ty)
-      (decides : Bool) (tps : List (String × Bool)) (body : SExpr) : Except String (Fn × List VTy) := do
+      (decides : Bool) (allowed : List String) (tps : List (String × Bool)) (body : SExpr) :
+      Except String (Fn × List VTy) := do
     let locals := (ps.zip (List.range ps.length)).zip ptys |>.map fun ((prm, i), t) =>
       ({ name := prm.name, slot := i, ty := t, mutable := false } : Local)
     for (prm, i) in ps.zip (List.range ps.length) do
@@ -2247,7 +2340,9 @@ def elabProgram (allTops00 : List STop) (opts : Options := {}) : Except String C
     let inits ← match (st.slotTys.toList.drop arity).mapM (slotDefault env ps.length (ptys ++ hidden) []) with
       | .ok ds => pure ds
       | .error msg => throw s!"{p.show}: in {name}: {msg}"
-    return ({ name, arity, nslots := st.nslots, decides, body := initPrefixE arity inits e },
+    fxCheck name allowed st
+    return ({ name, arity, nslots := st.nslots, decides, writes := allowed.contains "writes",
+              body := initPrefixE arity inits e },
       st.slotTys.toList.map (Ty.toVTy env))
   let genvOf (g : Sig) : TyEnv := { env with tvars := g.tparams.map fun (v, c) => (v, Ty.param v c) }
   let mut fns : Array Fn := #[]
@@ -2256,16 +2351,25 @@ def elabProgram (allTops00 : List STop) (opts : Options := {}) : Except String C
     let sig := sigs[idx]!
     match top with
     | .fn p n ps _ _ _ body =>
-      let (fn, tys) ← elabFn env p n ps sig.params sig.ret sig.decides [] body
+      let (fn, tys) ← elabFn env p n ps sig.params sig.ret sig.decides sig.fx [] body
       fns := fns.push fn
       slotTys := slotTys.push tys
     | .const p n _ body =>
+      -- a constant is computed at each use, so it would be a new object each
+      -- time (until Verse Core has global state)
+      if sig.ret.holdsMutable env then
+        throw s!"{p.show}: the constant {n} would hold an object with var fields or of a <unique> class, which would be a new one at each use: make it a function"
       let ctx : Ctx := { sigs := allSigs, sigProg, types := env }
       let (r, st) ← (elabStmt ctx body (some sig.ret)).run { env }
       let (e, st) ← (coerce p r.1 sig.ret).run st
       let tys := st.slotTys.toList.map (Ty.toVTy env)
+      -- slots start like a function's (a class-typed one as a placeholder)
+      let inits ← match st.slotTys.toList.mapM (slotDefault env 0 [] []) with
+        | .ok ds => pure ds
+        | .error msg => throw s!"{p.show}: in {n}: {msg}"
+      fxCheck n sig.fx st
       fns := fns.push { name := n, arity := 0, nslots := st.nslots, decides := false,
-                        body := initPrefix 0 tys e }
+                        writes := sig.fx.contains "writes", body := initPrefixE 0 inits e }
       slotTys := slotTys.push tys
     | .classDef .. => pure ()   -- expanded above
   -- each generic function is elaborated once, with its type parameters
@@ -2275,7 +2379,7 @@ def elabProgram (allTops00 : List STop) (opts : Options := {}) : Except String C
   for (top, g) in generics.zip gsigs.toList do
     match top with
     | .fn p n ps _ _ _ body =>
-      let (fn, tys) ← elabFn (genvOf g) p n ps g.params g.ret g.decides g.tparams body
+      let (fn, tys) ← elabFn (genvOf g) p n ps g.params g.ret g.decides g.fx g.tparams body
       fns := fns.push fn
       slotTys := slotTys.push tys
     | _ => pure ()
