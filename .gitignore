@@ -3,3 +3,5 @@
 /runtime/build/
 *.o
 *.vbc.tmp
+fuzz-classes-*.verse
+fuzz-fields-*.verse

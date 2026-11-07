@@ -236,7 +236,14 @@ partial def TyEnv.disjoint (env : TyEnv) : Ty → Ty → Bool
     let isCls (x : String) := env.classes.contains x
     let iface (x : String) := isCls x && (env.info x).isIface
     if isCls a && isCls b then
-      if iface a || iface b then false else !(env.isSub a b || env.isSub b a)
+      -- one parametric class at disjoint type arguments
+      if a == b && !iface a then as.length == bs.length && (as.zip bs).any fun (x, y) => env.disjoint x y
+      else if iface a || iface b then
+        -- a <final> class, which nothing is below, and an interface it does
+        -- not implement (#100)
+        let finalNot (c i : String) : Bool := !iface c && (env.info c).isFinal && !env.isSub c i
+        (iface a && finalNot b a) || (iface b && finalNot a b)
+      else !(env.isSub a b || env.isSub b a)
     else if isCls a || isCls b then true
     else a != b || (as.length == bs.length && (as.zip bs).any fun (x, y) => env.disjoint x y)
   | .enum a, .enum b => a != b
@@ -951,6 +958,13 @@ partial def refUp (env : TyEnv) : Ty → Ty → Bool
 partial def convert (env : TyEnv) (e : Expr) (a b : Ty) : EM (Option Expr) := do
   -- references: the same value has both types (Verse Core subtyping, #32)
   if refUp env a b then return some e
+  -- no value has a class type with no concrete class below it (an interface
+  -- nothing implements, an abstract class with no subclass): the conversion
+  -- to a type above it is unreachable (#98)
+  if let (.struct S _, .struct T _) := (a, b) then
+    if env.classes.contains S && env.classes.contains T && S != T && env.isSub S T &&
+        (env.concreteBelow S).isEmpty then
+      return some (.seq e (.prim .userErr []))
   match a, b with
   | .struct S [], .struct T [] =>
     if env.classes.contains S && env.classes.contains T && S != T && env.isSub S T then
@@ -1498,13 +1512,28 @@ partial def elabApp (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (brack
         let some so := ctx.sig? o | continue
         let mut ok := true
         if cands.length > 1 then
+          -- (a generic one's patterns, by the matching that infers its type
+          -- arguments: no whole-call trial at every level of a nested call)
+          let mut σ : List (String × Ty) := []
           for (a, u) in argTys so do
             if let some t ← natTy a then
-              if !(← coercible t u) then ok := false
+              if so.tparams.isEmpty then
+                if !(← coercible t u) then ok := false
+              else match u.matchArg ctx.types σ t with
+                | some σ' => σ := σ'
+                | none =>
+                  -- (against nothing bound: the pattern cannot take it; a
+                  -- conflict with earlier bindings only may be a subtype the
+                  -- call reconciles, so the candidate stays for the trial)
+                  if (u.matchArg ctx.types [] t).isNone && !(← coercible t u) then ok := false
         if ok then byNat := byNat ++ [o]
       let fits (o : String) : EM Bool := do
         let s := (ctx.sig? o).get!
         let st ← get
+        if !s.tparams.isEmpty then
+          let ok ← tryCatch (do discard <| elabApp ctx p (.ident p o) args bracket exp; pure true) (fun _ => pure false)
+          set { st with natTys := (← get).natTys }
+          return ok
         let ok ← tryCatch (do
             for (a, t) in argTys s do
               let r ← elabE ctx a (some t)
@@ -1730,7 +1759,9 @@ partial def elabApp (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (brack
     let (r, m) ← match r0.ty, m0.startsWith "(", (m0.drop 1).toString.splitOn ":)" with
       | .struct c ts, true, [q, mq] =>
         if !(ctx.types.isSub c q) then eerr p s!"{c} is not below {q}"
-        pure (⟨r0.e, .struct q (ctx.types.upArgs c ts q)⟩, mq)
+        -- (converted: a receiver of a type with no instance is unreachable)
+        let qt : Ty := .struct q (ctx.types.upArgs c ts q)
+        pure (⟨← coerce p r0 qt, qt⟩, mq)
       | _, _, _ => pure (r0, m0)
     match r.ty with
     | .struct c targs =>
@@ -2206,20 +2237,8 @@ partial def elabSet (ctx : Ctx) (p : Pos) (lhs0 : SExpr) (op : Option String) (r
       | .struct sn _, some f =>
         if !ctx.types.isVarField sn f then eerr sp (classSetMsg sn f)
       | _, _ => eerr p "internal: set path"
-    -- a value of a class with no instance cannot exist: the set is unreachable
-    if tysA.any fun | .struct sn _ => ctx.types.isEmptyClass sn | _ => false then
-      let tu ← fresh leafTy
-      return ⟨.assign tu (.prim .userErr []), leafTy⟩
     if refLevel?.isNone && !l.mutable then
       eerr p s!"'{root}' is not a var; declare it with var {root}:t = …"
-    -- the values below the object (or all of them) are rebuilt: a parametric
-    -- class among them would change, but it is a value with no var field
-    for k in [0:steps.length] do
-      if refLevel?.all (k > ·) then
-        if let .struct sn _ := tysA[k]! then
-          if ctx.types.classes.contains sn && !ctx.types.isRefClass sn then
-            let (sp, f?, _) := steps.toArray[k]!
-            eerr sp s!"field '{f?.getD "?"}' of the parametric class {sn} cannot be set: a parametric class is a value (#34)"
     -- read one step of the container in slot `c` of type `cty`
     let readStep (c : Nat) (cty : Ty) (step : Option String) (key : Option (Nat × Ty)) : EM Expr := do
       match step, key, cty with
@@ -2235,6 +2254,33 @@ partial def elabSet (ctx : Ctx) (p : Pos) (lhs0 : SExpr) (op : Option String) (r
         let tp ← fresh (.tup [kt, vt])
         pure (mapLookup c tk tp)
       | _, _, _ => eerr p "internal: set path"
+    -- a value of a class with no instance cannot exist, so the set is
+    -- unreachable once the path reaches one; but the steps before it (the
+    -- indices and keys, then the containers read) may fail first (#104)
+    if let some ke := (List.range steps.length).find? fun k =>
+        match tysA[k]! with | .struct sn _ => ctx.types.isEmptyClass sn | _ => false then
+      let stepsA := steps.toArray
+      let mut c := l.slot
+      for k in [0:ke] do
+        let (_, f?, _) := stepsA[k]!
+        let c' ← fresh tysA[k + 1]!
+        pre := pre.push (.assign c' (← readStep c tysA[k]! f? keys[k]!))
+        c := c'
+      -- (the right-hand side never runs, but is checked, and the field set
+      -- at the empty class must be a var, as on any path)
+      let lastCls := (List.range steps.length).reverse.find? fun k =>
+        match tysA[k]!, stepsA[k]! with
+        | .struct sn _, (_, some f, _) => f != "?" && ctx.types.classes.contains sn
+        | _, _ => false
+      if let some kc := lastCls then
+        if let (.struct sn _, (sp, some f, _)) := (tysA[kc]!, stepsA[kc]!) then
+          if !ctx.types.isVarField sn f then eerr sp (classSetMsg sn f)
+      let r ← elabE ctx rhs (some leafTy)
+      match op with
+      | none => discard <| coerce p r leafTy
+      | some o => discard <| combine (.prim .userErr []) leafTy o r
+      let tu ← fresh leafTy
+      return ⟨pre.toList.foldr Expr.seq (.assign tu (.prim .userErr [])), leafTy⟩
     -- the intermediate containers: level 0 is a copy of the variable, taken
     -- after the indices, so that the right-hand side cannot change what is
     -- rebuilt (as for `set A[i] = e`); the variable is written once, last
@@ -2784,6 +2830,14 @@ structure CDef where
   overrides : List String
   methods : List STop
 
+/-- The names a type mentions, in order of first occurrence. -/
+partial def STy.names : STy → List String
+  | .name m => [m]
+  | .arr u | .opt u => u.names
+  | .tup ts => (ts.flatMap STy.names).eraseDups
+  | .app n ts => (n :: ts.flatMap STy.names).eraseDups
+  | .map a b => (a.names ++ b.names).eraseDups
+
 /-- The type names `n` (a type parameter, say) somewhere. -/
 partial def STy.mentions (t : STy) (n : String) : Bool := match t with
   | .name m => m == n
@@ -2816,14 +2870,21 @@ def expandCtors (ctors : List (Pos × String × List SParam × List TParam × Li
   for ((p, k, _, _, _, c, _), i) in ctors.zip (List.range ctors.length) do
     if let some (_, _, _, _, _, c', _) := (ctors.take i).find? (·.2.1 == k) then
       if c' != c then throw s!"{p.show}: the overloads of constructor {k} construct {c'} and {c}: they must construct one class"
-      let ts := (allTargs.filter (·.1 == k)).map fun (_, t) => reprStr t
-      if ts.eraseDups.length > 1 then
+      -- (up to the names of their type parameters: each renamed by its place)
+      let norm (j : Nat) : String :=
+        let ts := ((allTargs.drop j).head?.map (·.2)).getD []
+        let tps := ((ctors.drop j).head?.map fun (_, _, _, t, _, _, _) => t).getD []
+        let vs := (ts.flatMap STy.names).eraseDups.filter fun n => tps.any (·.name == n)
+        let ρ := (vs.zip (List.range vs.length)).map fun (n, q) => (n, STy.name s!"${q}")
+        reprStr (ts.map (·.substNames ρ))
+      let mine := (List.range ctors.length).filter fun j => ((ctors.drop j).head?.map (·.2.1)) == some k
+      if (mine.map norm).eraseDups.length > 1 then
         throw s!"{p.show}: the overloads of constructor {k} construct {c} at different type arguments: they must construct one type"
-  for (p, k, ps, tps, _, c, items) in ctors do
+  for ((p, k, ps, tps, _, c, items), ci) in ctors.zip (List.range ctors.length) do
     let some cd := cdef? c | throw s!"{p.show}: constructor {k}: {c} is not a class"
     if cd.isIface then throw s!"{p.show}: constructor {k}: {c} is an interface"
     -- a parametric class's constructor names its type arguments, `:= box(t):`
-    let targs := targsOf k
+    let targs := ((allTargs.drop ci).head?.map (·.2)).getD (targsOf k)
     if cd.tps.length != targs.length then
       if cd.tps.isEmpty then throw s!"{p.show}: constructor {k}: {c} takes no type arguments"
       else if targs.isEmpty then
@@ -2905,21 +2966,24 @@ def expandCtors (ctors : List (Pos × String × List SParam × List TParam × Li
       throw s!"{p.show}: {k} does not set {f}, a field of {c} without a default"
   -- the functions
   let mut out : Array STop := #[]
-  for (p, k, ps, tps, effs, c, items) in ctors do
+  for ((p, k, ps, tps, effs, c, items), ci) in ctors.zip (List.range ctors.length) do
     let fs := (setBy.lookup k).getD []
     let fieldsTy := s!"{k}$fields"
     -- the class's type parameters are the archetype's type arguments, which
     -- may mention the constructor's own (a generic constructor, `where`)
-    let targs := targsOf k
+    let targs := ((allTargs.drop ci).head?.map (·.2)).getD (targsOf k)
     let ctps : List TParam := ((cdef? c).map (fun cd => cd.tps)).getD []
     let σ : List (String × STy) := (ctps.map (fun tp => tp.name)).zip targs
     let tyOf (f : String) : STy :=
       let t0 : STy := (((fullOf c).find? (·.1 == f)).map (·.2.1)).getD (.name "void")
       t0.substNames σ
-    let tpTys : List STy := tps.map fun tp => STy.name tp.name
-    let fieldsSTy : STy := if tps.isEmpty then .name fieldsTy else .app fieldsTy tpTys
+    -- (K$fields is parametric over the type parameters the class's type
+    -- arguments mention, in order: the same for every overload of K)
+    let sparams : List TParam := ((targs.flatMap STy.names).eraseDups).filterMap fun n => tps.find? (·.name == n)
+    let tpTys : List STy := sparams.map fun tp => STy.name tp.name
+    let fieldsSTy : STy := if sparams.isEmpty then .name fieldsTy else .app fieldsTy tpTys
     if !fs.isEmpty && !out.any (fun | .const _ n _ _ => n == fieldsTy | _ => false) then
-      out := out.push (.const p fieldsTy none (.structDef p tps (fs.map fun f => (f, tyOf f, none, false))))
+      out := out.push (.const p fieldsTy none (.structDef p sparams (fs.map fun f => (f, tyOf f, none, false))))
     let mut body : Array SExpr := #[]
     let mut di := 0
     for it in items do
@@ -2948,10 +3012,13 @@ def expandCtors (ctors : List (Pos × String × List SParam × List TParam × Li
     for f in fs.filter (!mine.contains ·) do
       if let some (_, _, some d, _) := (fullOf c).find? (·.1 == f) then
         -- (in a function of its own: the default sees no parameter of K)
+        if tps.any (fun tp => (tyOf f).mentions tp.name) then
+          throw s!"{p.show}: {k} leaves {f} to another overload, and its default's type mentions a type parameter of {k}: give {f} in every overload of a generic constructor"
         let helper := s!"{k}$default${f}"
         if !out.any (fun | .fn _ n .. => n == helper | _ => false) then
-          -- (with the constructor's effects: a default cannot fail)
-          out := out.push (.fn p helper [] [] (effs.filter (· != "decides")) (tyOf f) d)
+          -- (its effects are its code's, inferred as a `block:`'s are: every
+          -- overload that leaves F to it then pays for what it does)
+          out := out.push (.fn p helper [] [] [] (tyOf f) d)
         body := body.push (.decl p s!"{f}$v" (some (tyOf f)) false (.app p (.ident p helper) [] false))
     let initRet : SExpr :=
       if fs.isEmpty then .block p []
@@ -3408,7 +3475,6 @@ def elabProgramCore (allTops00 : List STop) (opts : Options := {}) : Except Stri
         if tops.any (fun | .const _ m .. | .classDef _ m .. => m == n | _ => false) ||
             env.classes.contains n || (env.structs.lookup n).isSome || (env.enums.lookup n).isSome then
           throw s!"{p.show}: '{n}' is defined twice (only functions can be overloaded)"
-        if !tps.isEmpty then throw s!"{p.show}: generic functions cannot be overloaded yet ({n})"
         let prev := (ovMap.lookup n).getD []
         let m := s!"{n}$ov{prev.length}"
         ovMap := (ovMap.filter (·.1 != n)) ++ [(n, prev ++ [m])]
@@ -3451,7 +3517,7 @@ def elabProgramCore (allTops00 : List STop) (opts : Options := {}) : Except Stri
       sigs := sigs.push { idx, name := n, params := tys, ret := rt, decides := effs.contains "decides",
                           -- (a `block:`'s effects are inferred below, from none, as a
                           -- constant's: blocks that construct each other's classes)
-                          fx := if n.endsWith ".$block" then [] else allowedFx effs,
+                          fx := if n.endsWith ".$block" || (n.splitOn "$default$").length > 1 then [] else allowedFx effs,
                           isConst := false,
                           named := (ps.filter (·.named)).map fun q => (q.name, q.default),
                           pnames := ps.map (·.name) }
@@ -3530,9 +3596,19 @@ def elabProgramCore (allTops00 : List STop) (opts : Options := {}) : Except Stri
             sigs := sigs.set! idx { sigs[idx]! with fx }
             changed := true
         | .error _ => pure ()
-      -- a class's `block:` clauses have the effects of their code
+      -- a class's `block:` clauses have the effects of their code, and so
+      -- does a default an overloaded constructor fills in (#99)
       | .fn _ n ps _ _ _ body =>
-        if n.endsWith ".$block" then
+        if (n.splitOn "$default$").length > 1 then
+          let ctx : Ctx := { sigs := sigs.toList ++ gsigs.toList, sigProg := mkSigProg sigs, types := env }
+          match (elabStmt ctx body (some sigs[idx]!.ret)).run { env } with
+          | .ok (_, st) =>
+            let fx := heapFx.filter fun k => st.fx.any (·.1 == k)
+            if fx != sigs[idx]!.fx then
+              sigs := sigs.set! idx { sigs[idx]! with fx }
+              changed := true
+          | .error _ => pure ()
+        else if n.endsWith ".$block" then
           let s := sigs[idx]!
           let locals := (ps.zip (List.range ps.length)).zip s.params |>.map fun ((prm, i), t) =>
             ({ name := prm.name, slot := i, ty := t, mutable := false } : Local)
@@ -3587,7 +3663,7 @@ def elabProgramCore (allTops00 : List STop) (opts : Options := {}) : Except Stri
         match allSigs.find? (·.name == a), allSigs.find? (·.name == b) with
         | some sa, some sb =>
           if !sigsDistinct sa sb then
-            let pos := (tops.findSome? fun | .fn q m .. => if m == a then some q else none | _ => none).getD { line := 0, col := 0 }
+            let pos := ((tops ++ generics).findSome? fun | .fn q m .. => if m == a then some q else none | _ => none).getD { line := 0, col := 0 }
             let sh (s : Sig) := ", ".intercalate ((s.params.zip (List.range s.params.length)).map fun (t, i) =>
               let npos := s.params.length - s.named.length
               if i < npos then t.show else s!"?{((s.named.drop (i - npos)).head?.map (·.1)).getD "?"}:{t.show}")
