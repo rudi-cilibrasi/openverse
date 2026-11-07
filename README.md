@@ -114,6 +114,9 @@ The binary format and exit codes are in [`docs/FORMAT.md`](docs/FORMAT.md).
 Trusted, besides Lean's kernel:
 - the statement of the semantics (`Core/Semantics.lean`, `Core/Prims.lean`),
   which is the reference;
+- for floats (#127), Lean's `Float`, whose operations are C's `double`
+  arithmetic (`@[extern]`): the semantics of `+ - * /` and the orderings on
+  floats is IEEE's as the machine computes it;
 - the front end. It is not verified, but each of its outputs is checked by
   `Prog.check` and `Prog.checkTypes`, with a certificate of slot and function
   types. Both checks are proved to establish what the theorems assume, so
