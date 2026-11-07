@@ -1,0 +1,8 @@
+# Keep the CI workflow's actions current (weekly). Lean itself is pinned in
+# lean-toolchain and moved by hand, since a new Lean can break proofs.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

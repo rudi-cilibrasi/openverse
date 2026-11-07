@@ -17,7 +17,7 @@ surface Verse is elaborated (`OpenVerse/Front/Elab.lean`) into Verse Core
 | Area | Supported | Book |
 |---|---|---|
 | Comments | `#` to the end of the line, nested `<# … #>`, `<#>` indented comments (the rest of the line and every following line indented more than it; see [Source text](#source-text)) | ch. 0 |
-| Literals | `int` (decimal, `0x` hex; must fit in 64 bits), `'c'` `char` (`c` printable ASCII U+0020–U+007E, or an escape), `0oHH` `char` code unit (one or two hex digits, not octal: `0o41` is `'A'`, `0o9` is a tab), strings with escapes and `{expr}` interpolation, `true`, `false`, `0uHHHHHH` `char32` (a Unicode scalar value, up to `0u10FFFF`, no surrogates; the spec grammar's Char32) | §1.3–1.7 |
+| Literals | `int` (decimal, `0x` hex; must fit in 64 bits), `'c'` `char` (`c` printable ASCII U+0020–U+007E, or an escape), `0oHH` `char` code unit (one or two hex digits, not octal: `0o41` is `'A'`, `0o9` is a tab), strings with escapes and `{expr}` interpolation, `true`, `false`, `0uHHHHHH` `char32` (a Unicode scalar value, up to `0u10FFFF`, no surrogates) | §1.3–1.7 |
 | Types | `int`, `logic`, `char`, `char32`, `rational` (see [rational](#rational)), `string` (= `[]char`), `[]t`, `?t`, `tuple(…)`, `void`; a tuple converts to an array of its elements where an array is expected, and compares with an array as one (`array{1,2} = (1,2)`) | ch. 2–3 |
 | Definitions | top-level functions `F(X:t, …)<effects>:t = body`, top-level constants `C:t = e` / `C := e`; locals `X := e`, `X:t = e`, `var X:t = e`; no shadowing | §3.1–3.4 |
 | Mutation | `set X = e`, `set X += e` (`-=`, `*=`), `set A[i] = e` (fails out of range; returns `e`), and paths `set S.F.G = e`, `set A[i][j] op= e`, `set M[k].F = e`: indices and keys evaluated once, left to right, then the new value (for `op=`, after the old one is read: `set X += e` is `set X = X + e`), then the variable rebuilt; an index out of range or a missing intermediate key fails, while the last key of a path inserts | §3.3, §3.5, §9.3 |
@@ -372,7 +372,7 @@ circle := class(shape, labelled):
   its own. The type arguments come from the receiver, and the body is
   checked once in Verse Core (see
   [Parametric functions](#parametric-functions)).
-- **Heap effects** (#35; the spec draft's transactional effects). A
+- **Heap effects** (#35). A
   function's specifiers allow a set of heap effects: all of them when it has
   none or `<transacts>`, none with `<computes>`, and those named by
   `<reads>`, `<writes>` and `<allocates>`. Reading a `var` field *reads*,
@@ -408,15 +408,15 @@ circle := class(shape, labelled):
     below a non-parametric interface (or one that adds type parameters
     below a parametric interface's implementation).
 
-## From the spec draft: mutation, macros, tooling
+## Mutation, macros, tooling
 
-- **`set X? = v`** (the spec's DeoptionSet) sets the value inside an option
+- **`set X? = v`** sets the value inside an option
   variable, and fails when the option is empty. It also works as a step of a
   path, as in `set S.Best? *= 7` and `set M[k]? = v`.
-- **`let(defs){body}`** (the spec's LetMacro) makes `defs` visible in `body`
+- **`let(defs){body}`** makes `defs` visible in `body`
   only. Its value is the body's.
-- **Clause macros** (the spec's IfMacro, IfElseMacro, ForMacro, FirstMacro,
-  FirstDoMacro and AssertMacro). Each takes clauses in braces, separated by
+- **Clause macros** (`if{…}`, `for{…}`, `first{…}`, `first(…){…}` and
+  `assert{…}`). Each takes clauses in braces, separated by
   `;`, `,` or new lines, run in a failure context; their value is the last
   clause's: a binding's name, or the expression's value.
   - `if{c}` runs `c` and has no value; `if{c} else e` (also `else if{…}`) is
@@ -426,15 +426,15 @@ circle := class(shape, labelled):
   - `first{c}` fails when `c` does, else it is `c`'s value; `first(c){b}`
     runs `b`, which sees `c`'s names, once `c` succeeds, and fails when `c`
     does. Without a body after it, `first(…)` is a call.
-  - `assert{c}` is a runtime error (as `Err()`, without the spec's message)
-    unless `c` succeeds.
+  - `assert{c}` is a runtime error (as `Err()`, with no message) unless
+    `c` succeeds.
   With no generators (`choice` is not supported), `first` is the first and
   only success, and `first{c}` can only fail when `c` can. These macros
   take no body (`for{c} {b}` is refused), and `first` and `assert` before
   `{` are the macros, not a struct of that name. A void branch makes an
   `if` void (void accepts any value), so `if{X := e} else {Print("none")}`
   is a statement.
-- **The command line** (the spec's expected tooling):
+- **The command line**:
   - `openverse run FILE [ARG…] [do EXPR]`, and likewise `emit`. The
     arguments are the program's `Args:[]string`, unless it defines `Args`
     itself.
@@ -474,8 +474,7 @@ denominator is out of range, as in `(-2^63) / -3` or `1 / (-2^63)`.
 
 ## char32
 
-A `char32` is a Unicode scalar value (spec grammar: Char32, `0u…`
-literals). It is an `int` in Verse Core, so it needs no new value, and the
+A `char32` is a Unicode scalar value (`0u…` literals). It is an `int` in Verse Core, so it needs no new value, and the
 proofs and the C runtime are unchanged. `=`, `<>`, `<`, `<=`, `>`, `>=` and
 `case` work on it, and it has no arithmetic. `ToString` and string
 interpolation encode it as UTF-8, its one to four bytes, by code that the
@@ -486,7 +485,7 @@ containers of such), since they would compare equal there; so are those
 between two type parameters, or between one and a type with an `int` or a
 tuple, which an instance could make the same. A
 non-ASCII character in quotes is refused, with the `0u` literal to write
-instead: the spec's CharLit is ASCII.
+instead: a `'c'` literal is ASCII.
 
 ## Modules
 
@@ -537,15 +536,14 @@ its qualified name before elaboration, and messages show it as `M.F`.
 ## Programs of several files
 
 `using{"relative_path"}` (or `import{"relative_path"}`) imports a file or a
-directory, relative to the importing file (#27; from the spec draft's
-tooling). `openverse run|emit|check PATH` takes a file or a directory. A
+directory, relative to the importing file (#27). `openverse run|emit|check PATH` takes a file or a directory. A
 directory is assembled from its entries in sorted order:
 
 - names starting with `.`, names containing `.ignore`, and files with no `.`
   are skipped;
 - `Self.verse` and every other `.verse` file contribute their definitions;
 - `Name.txt` gives `Name:string`, `Name.value` gives `Name := (contents)`,
-  and `Name.bin` gives `Name:[]int` of its bytes (the spec's `[]nat8`).
+  and `Name.bin` gives `Name:[]int` of its bytes.
 
 A file or directory is not a module (write `name := module:` for one), so
 the readings are flat:

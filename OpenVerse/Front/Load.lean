@@ -1,9 +1,9 @@
 /-
   OpenVerse front end — programs of several files (#27).
 
-  The spec draft's expected tooling imports a file or directory with
-  `using{"relative_path"}`, relative to the importing file, and makes a
-  directory one module, assembled from its entries in sorted order. openverse
+  `using{"relative_path"}` imports a file or a directory, relative to the
+  importing file; a directory is one module, assembled from its entries in
+  sorted order. openverse
   has no module namespaces yet, so it reads both flatly: every loaded file's
   definitions join one top level, each file is loaded once (import cycles are
   harmless), and subdirectories are flattened.
@@ -14,7 +14,7 @@
   * `Self.verse` and every other `.verse` file contribute their definitions;
   * `Name.txt` is the constant `Name:string`, `Name.value` the constant
     `Name := (contents)`, `Name.bin` the constant `Name:[]int` of its bytes
-    (the spec's `[]nat8`; openverse has no `nat8`);
+    (openverse has no `nat8`);
   * other files are ignored.
 -/
 import OpenVerse.Front.Parser
