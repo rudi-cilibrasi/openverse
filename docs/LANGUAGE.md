@@ -150,8 +150,11 @@ Verse ch. 6): `Describe(X:int)`, `Describe(S:string)`, `Describe(X:int, Y:int)`.
   some named parameter one requires is missing from the other or has a
   disjoint type there.
 - **Generic overloads.** A type parameter overlaps every type, so a generic
-  overload is told apart from the others by its parameters' number (or
-  named ones); a call infers its type arguments as for any generic call.
+  overload is told apart from the others by its number of parameters, or
+  by a type its pattern cannot take (`?t` against `int`). A call matches
+  the arguments' types against its patterns as inference does, and infers
+  its type arguments as for any generic call. (Generic functions take no
+  named parameters.)
 - **Not yet supported:** overloaded methods, and overloading `Main`.
 
 ## Parametric structs

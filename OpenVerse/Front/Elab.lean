@@ -1497,10 +1497,17 @@ partial def elabApp (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (brack
       for o in cands do
         let some so := ctx.sig? o | continue
         let mut ok := true
-        if cands.length > 1 && so.tparams.isEmpty then
+        if cands.length > 1 then
+          -- (a generic one's patterns, by the matching that infers its type
+          -- arguments: no whole-call trial at every level of a nested call)
+          let mut σ : List (String × Ty) := []
           for (a, u) in argTys so do
             if let some t ← natTy a then
-              if !(← coercible t u) then ok := false
+              if so.tparams.isEmpty then
+                if !(← coercible t u) then ok := false
+              else match u.matchArg ctx.types σ t with
+                | some σ' => σ := σ'
+                | none => if !(← coercible t u) then ok := false
         if ok then byNat := byNat ++ [o]
       let fits (o : String) : EM Bool := do
         let s := (ctx.sig? o).get!
@@ -2788,6 +2795,14 @@ structure CDef where
   overrides : List String
   methods : List STop
 
+/-- The names a type mentions, in order of first occurrence. -/
+partial def STy.names : STy → List String
+  | .name m => [m]
+  | .arr u | .opt u => u.names
+  | .tup ts => (ts.flatMap STy.names).eraseDups
+  | .app n ts => (n :: ts.flatMap STy.names).eraseDups
+  | .map a b => (a.names ++ b.names).eraseDups
+
 /-- The type names `n` (a type parameter, say) somewhere. -/
 partial def STy.mentions (t : STy) (n : String) : Bool := match t with
   | .name m => m == n
@@ -2820,14 +2835,21 @@ def expandCtors (ctors : List (Pos × String × List SParam × List TParam × Li
   for ((p, k, _, _, _, c, _), i) in ctors.zip (List.range ctors.length) do
     if let some (_, _, _, _, _, c', _) := (ctors.take i).find? (·.2.1 == k) then
       if c' != c then throw s!"{p.show}: the overloads of constructor {k} construct {c'} and {c}: they must construct one class"
-      let ts := (allTargs.filter (·.1 == k)).map fun (_, t) => reprStr t
-      if ts.eraseDups.length > 1 then
+      -- (up to the names of their type parameters: each renamed by its place)
+      let norm (j : Nat) : String :=
+        let ts := ((allTargs.drop j).head?.map (·.2)).getD []
+        let tps := ((ctors.drop j).head?.map fun (_, _, _, t, _, _, _) => t).getD []
+        let vs := (ts.flatMap STy.names).eraseDups.filter fun n => tps.any (·.name == n)
+        let ρ := (vs.zip (List.range vs.length)).map fun (n, q) => (n, STy.name s!"${q}")
+        reprStr (ts.map (·.substNames ρ))
+      let mine := (List.range ctors.length).filter fun j => ((ctors.drop j).head?.map (·.2.1)) == some k
+      if (mine.map norm).eraseDups.length > 1 then
         throw s!"{p.show}: the overloads of constructor {k} construct {c} at different type arguments: they must construct one type"
-  for (p, k, ps, tps, _, c, items) in ctors do
+  for ((p, k, ps, tps, _, c, items), ci) in ctors.zip (List.range ctors.length) do
     let some cd := cdef? c | throw s!"{p.show}: constructor {k}: {c} is not a class"
     if cd.isIface then throw s!"{p.show}: constructor {k}: {c} is an interface"
     -- a parametric class's constructor names its type arguments, `:= box(t):`
-    let targs := targsOf k
+    let targs := ((allTargs.drop ci).head?.map (·.2)).getD (targsOf k)
     if cd.tps.length != targs.length then
       if cd.tps.isEmpty then throw s!"{p.show}: constructor {k}: {c} takes no type arguments"
       else if targs.isEmpty then
@@ -2909,21 +2931,24 @@ def expandCtors (ctors : List (Pos × String × List SParam × List TParam × Li
       throw s!"{p.show}: {k} does not set {f}, a field of {c} without a default"
   -- the functions
   let mut out : Array STop := #[]
-  for (p, k, ps, tps, effs, c, items) in ctors do
+  for ((p, k, ps, tps, effs, c, items), ci) in ctors.zip (List.range ctors.length) do
     let fs := (setBy.lookup k).getD []
     let fieldsTy := s!"{k}$fields"
     -- the class's type parameters are the archetype's type arguments, which
     -- may mention the constructor's own (a generic constructor, `where`)
-    let targs := targsOf k
+    let targs := ((allTargs.drop ci).head?.map (·.2)).getD (targsOf k)
     let ctps : List TParam := ((cdef? c).map (fun cd => cd.tps)).getD []
     let σ : List (String × STy) := (ctps.map (fun tp => tp.name)).zip targs
     let tyOf (f : String) : STy :=
       let t0 : STy := (((fullOf c).find? (·.1 == f)).map (·.2.1)).getD (.name "void")
       t0.substNames σ
-    let tpTys : List STy := tps.map fun tp => STy.name tp.name
-    let fieldsSTy : STy := if tps.isEmpty then .name fieldsTy else .app fieldsTy tpTys
+    -- (K$fields is parametric over the type parameters the class's type
+    -- arguments mention, in order: the same for every overload of K)
+    let sparams : List TParam := ((targs.flatMap STy.names).eraseDups).filterMap fun n => tps.find? (·.name == n)
+    let tpTys : List STy := sparams.map fun tp => STy.name tp.name
+    let fieldsSTy : STy := if sparams.isEmpty then .name fieldsTy else .app fieldsTy tpTys
     if !fs.isEmpty && !out.any (fun | .const _ n _ _ => n == fieldsTy | _ => false) then
-      out := out.push (.const p fieldsTy none (.structDef p tps (fs.map fun f => (f, tyOf f, none, false))))
+      out := out.push (.const p fieldsTy none (.structDef p sparams (fs.map fun f => (f, tyOf f, none, false))))
     let mut body : Array SExpr := #[]
     let mut di := 0
     for it in items do
@@ -3592,7 +3617,7 @@ def elabProgramCore (allTops00 : List STop) (opts : Options := {}) : Except Stri
         match allSigs.find? (·.name == a), allSigs.find? (·.name == b) with
         | some sa, some sb =>
           if !sigsDistinct sa sb then
-            let pos := (tops.findSome? fun | .fn q m .. => if m == a then some q else none | _ => none).getD { line := 0, col := 0 }
+            let pos := ((tops ++ generics).findSome? fun | .fn q m .. => if m == a then some q else none | _ => none).getD { line := 0, col := 0 }
             let sh (s : Sig) := ", ".intercalate ((s.params.zip (List.range s.params.length)).map fun (t, i) =>
               let npos := s.params.length - s.named.length
               if i < npos then t.show else s!"?{((s.named.drop (i - npos)).head?.map (·.1)).getD "?"}:{t.show}")
