@@ -110,3 +110,7 @@ for every input buffer, and reads only inside the buffer.
 | 4 | the program could not be loaded or compiled | the reason |
 
 stdout is exactly the bytes the program printed.
+
+The format does not carry `Fn.writes` (#35): it is a fact the front end
+proves about a program (`Prog.checkWriteSound`), not part of its meaning,
+and the runtime never needs it.

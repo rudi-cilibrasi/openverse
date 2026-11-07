@@ -58,6 +58,23 @@ theorem Glob.keeps_trans {g₁ g₂ g₃ : Glob} (h₁ : g₁.keeps g₂) (h₂ 
 theorem Glob.keeps_of_heap {g g' : Glob} (h : g'.heap = g.heap) : g.keeps g' := by
   intro a o ho; rw [h]; exact ho
 
+/-- An expression that keeps every object only appends to the heap. -/
+theorem Glob.keeps.prefix {g g' : Glob} (h : g.keeps g') : g.heap <+: g'.heap := by
+  have hlen : g.heap.length ≤ g'.heap.length := by
+    rcases Nat.eq_zero_or_pos g.heap.length with h0 | hpos
+    · omega
+    · have hl := h (g.heap.length - 1) g.heap[g.heap.length - 1] (List.getElem?_eq_getElem (by omega))
+      have := (List.getElem?_eq_some_iff.mp hl).1
+      omega
+  refine ⟨g'.heap.drop g.heap.length, ?_⟩
+  conv => rhs; rw [← List.take_append_drop g.heap.length g'.heap]
+  congr 1
+  apply List.ext_getElem?
+  intro i
+  rcases Nat.lt_or_ge i g.heap.length with hi | hi
+  · rw [List.getElem?_take_of_lt hi, h i g.heap[i] (List.getElem?_eq_getElem hi), List.getElem?_eq_getElem hi]
+  · rw [List.getElem?_eq_none hi, List.getElem?_eq_none (by simp; omega)]
+
 theorem writeSlot_g {s s' : St} {i : Nat} {v : Value} (h : writeSlot s i v = some s') : s'.g = s.g := by
   unfold writeSlot at h; split at h
   · simp only [Option.some.injEq] at h; subst h; rfl
