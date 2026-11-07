@@ -2645,7 +2645,8 @@ partial def STy.mentions (t : STy) (n : String) : Bool := match t with
     A constructor sees no `Self`. -/
 def expandCtors (ctors : List (Pos × String × List SParam × List TParam × List String × String × List SExpr))
     (cdef? : String → Option CDef) (fullOf : String → List (String × STy × Option SExpr × Bool))
-    (supers : String → List String) (targsOf : String → List STy) : Except String (List STop) := do
+    (supers : String → List String) (targsOf : String → List STy)
+    (allTargs : List (String × List STy)) : Except String (List STop) := do
   let directOf (items : List SExpr) : List (Pos × String) := items.filterMap fun
     | .decl p f none false _ => some (p, f)
     | _ => none
@@ -2658,6 +2659,9 @@ def expandCtors (ctors : List (Pos × String × List SParam × List TParam × Li
   for ((p, k, _, _, _, c, _), i) in ctors.zip (List.range ctors.length) do
     if let some (_, _, _, _, _, c', _) := (ctors.take i).find? (·.2.1 == k) then
       if c' != c then throw s!"{p.show}: the overloads of constructor {k} construct {c'} and {c}: they must construct one class"
+      let ts := (allTargs.filter (·.1 == k)).map fun (_, t) => reprStr t
+      if ts.eraseDups.length > 1 then
+        throw s!"{p.show}: the overloads of constructor {k} construct {c} at different type arguments: they must construct one type"
   for (p, k, ps, tps, _, c, items) in ctors do
     let some cd := cdef? c | throw s!"{p.show}: constructor {k}: {c} is not a class"
     if cd.isIface then throw s!"{p.show}: constructor {k}: {c} is an interface"
@@ -2693,41 +2697,53 @@ def expandCtors (ctors : List (Pos × String × List SParam × List TParam × Li
         throw s!"{fp.show}: {k} sets {f} after delegating to {d}: set the fields of {c} first, then delegate"
     | _ :: (dp, _) :: _ => throw s!"{dp.show}: {k} delegates to more than one constructor"
   -- the fields each sets: its own, and its delegate's
-  -- (of a name's overloads, all their fields: one that does not set a field
-  -- gives it its default, below)
-  let mut setBy : List (String × List String) := []
+  -- the fields each name's constructors set (#80, overloads: all their
+  -- fields; one that does not set a field gives it its default, below): the
+  -- least fixpoint of their own and their delegates'
+  let names := (ctors.map (·.2.1)).eraseDups
+  let overloaded (k : String) : Bool := (ctors.filter (·.2.1 == k)).length > 1
+  let mut setBy : List (String × List String) := names.map fun k =>
+    (k, ((ctors.filter (·.2.1 == k)).flatMap fun (_, _, _, _, _, _, items) => (directOf items).map (·.2)).eraseDups)
   for _ in [0:ctors.length + 1] do
-    for (_, k, _, _, _, _, _) in ctors do
-      if setBy.any (·.1 == k) then continue
-      let sets : List (Option (List String)) := (ctors.filter (·.2.1 == k)).map fun (_, _, _, _, _, _, items) =>
-        let own := (directOf items).map (·.2)
-        match delegsOf items with
-        | [] => some own
-        -- (to another overload of the name: it adds none of its own)
-        | (_, d) :: _ => if d == k then some own else (setBy.lookup d).map (own ++ ·)
-      if sets.all (·.isSome) then
-        let all := sets.filterMap id
-        let first := all.headD []
-        setBy := setBy ++ [(k, first ++ ((all.flatMap id).filter (!first.contains ·)).eraseDups)]
+    let mut changed := false
+    for (_, k, _, _, _, _, items) in ctors do
+      if let some (_, d) := (delegsOf items).head? then
+        if d != k then
+          let cur := (setBy.lookup k).getD []
+          let add := ((setBy.lookup d).getD []).filter (!cur.contains ·)
+          if !add.isEmpty then
+            setBy := setBy.map fun (n, fs) => if n == k then (n, fs ++ add) else (n, fs)
+            changed := true
+    if !changed then break
+  -- a delegation cycle through names that are not overloaded never ends (one
+  -- through an overloaded name is resolved by its arguments, and may)
   for (p, k, _, _, _, _, items) in ctors do
-    let some fs := setBy.lookup k | do
-      -- on a cycle, or delegating into one
-      let next (x : String) : Option String :=
-        (ctors.find? (·.2.1 == x)).bind fun (_, _, _, _, _, _, its) => ((delegsOf its).map (·.2)).head?
-      let mut cur := next k
-      let mut onCycle := false
-      for _ in [0:ctors.length] do
-        match cur with
-        | some x => if x == k then onCycle := true; break else cur := next x
-        | none => break
-      let d := ((delegsOf items).map (·.2)).headD k
-      if onCycle then throw s!"{p.show}: {k} delegates to itself, through {d}"
-      else throw s!"{p.show}: {k} delegates to {d}, which delegates in a cycle"
-    let mine := (directOf items).map (·.2) ++ (((delegsOf items).head?.bind fun (_, d) => setBy.lookup d).getD [])
+    if overloaded k then continue
+    let next (x : String) : Option String :=
+      if overloaded x then none else
+      (ctors.find? (·.2.1 == x)).bind fun (_, _, _, _, _, _, its) => ((delegsOf its).map (·.2)).head?
+    let mut cur := next k
+    let mut onCycle := false
+    let mut intoCycle := false
+    let mut seen : List String := []
+    for _ in [0:ctors.length] do
+      match cur with
+      | some x =>
+        if x == k then onCycle := true; break
+        if seen.contains x then intoCycle := true; break
+        seen := seen ++ [x]
+        cur := next x
+      | none => break
+    let d := ((delegsOf items).map (·.2)).headD k
+    if onCycle then throw s!"{p.show}: {k} delegates to itself, through {d}"
+    if intoCycle then throw s!"{p.show}: {k} delegates to {d}, which delegates in a cycle"
+  for (p, k, _, _, _, _, items) in ctors do
+    let fs := (setBy.lookup k).getD []
+    let mine := (directOf items).map (·.2) ++ (((delegsOf items).head?.bind fun (_, d) => if d == k then none else setBy.lookup d).getD [])
     if let some f := mine.find? fun f => (mine.filter (· == f)).length > 1 then
       throw s!"{p.show}: {k} sets {f} twice: itself, and by delegating"
   for (p, k, _, _, _, c, items) in ctors do
-    let mine := (directOf items).map (·.2) ++ (((delegsOf items).head?.bind fun (_, d) => setBy.lookup d).getD [])
+    let mine := (directOf items).map (·.2) ++ (((delegsOf items).head?.bind fun (_, d) => if d == k then none else setBy.lookup d).getD [])
     if let some (f, _) := (fullOf c).find? fun (f, _, d, _) => d.isNone && !mine.contains f then
       throw s!"{p.show}: {k} does not set {f}, a field of {c} without a default"
   -- the functions
@@ -2771,10 +2787,14 @@ def expandCtors (ctors : List (Pos × String × List SParam × List TParam × Li
       | it => body := body.push (.app p (.ident p "$nofail") [it] false)   -- a `block:` clause
     -- the name's fields this overload does not set (another overload does):
     -- their defaults, as construction would give them
-    let mine := (directOf items).map (·.2) ++ (((delegsOf items).head?.bind fun (_, d) => setBy.lookup d).getD [])
+    let mine := (directOf items).map (·.2) ++ (((delegsOf items).head?.bind fun (_, d) => if d == k then none else setBy.lookup d).getD [])
     for f in fs.filter (!mine.contains ·) do
       if let some (_, _, some d, _) := (fullOf c).find? (·.1 == f) then
-        body := body.push (.decl p s!"{f}$v" (some (tyOf f)) false d)
+        -- (in a function of its own: the default sees no parameter of K)
+        let helper := s!"{k}$default${f}"
+        if !out.any (fun | .fn _ n .. => n == helper | _ => false) then
+          out := out.push (.fn p helper [] [] [] (tyOf f) d)
+        body := body.push (.decl p s!"{f}$v" (some (tyOf f)) false (.app p (.ident p helper) [] false))
     let initRet : SExpr :=
       if fs.isEmpty then .block p []
       else .construct p fieldsTy tpTys (fs.map fun f => .decl p f none false (.ident p s!"{f}$v"))
@@ -2984,7 +3004,11 @@ def elabProgramCore (allTops00 : List STop) (opts : Options := {}) : Except Stri
     | t@(.fn _ k _ _ _ (.app _ ts) _) => if (ctorOf t).isSome then some (k, ts) else none
     | _ => none
   expanded := expanded ++
-    (← expandCtors ctors cdef? fullOf (fun c => henv.supers c) (fun k => (ctorTargs.lookup k).getD [])).toArray
+    (← expandCtors ctors cdef? fullOf (fun c => henv.supers c) (fun k => (ctorTargs.lookup k).getD [])
+      (allTops0.filterMap fun t => match t, ctorOf t with
+        | .fn _ k _ _ _ (.app _ ts) _, some _ => some (k, ts)
+        | .fn _ k _ _ _ _ _, some _ => some (k, [])
+        | _, _ => none)).toArray
   for cd in cdefs do
     let n := cd.name
     let fs := fullOf n

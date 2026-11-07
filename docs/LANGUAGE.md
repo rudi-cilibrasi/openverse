@@ -276,11 +276,17 @@ circle := class(shape, labelled):
     generic constructor, and `:= box(int):` a fixed one. Delegating to a
     generic constructor instantiates it. As for generic functions, its type
     parameters must appear in its parameters, and it takes no named ones.
-  - **Overloads.** Constructors of one name construct one class and take
-    parameters no call fits two of, as overloaded functions do. Each sets
-    the fields it names (an overload that leaves one to another gives it
-    its default), and a call or a delegation, even to another overload of
-    the name, takes the one its arguments fit.
+  - **Overloads.** Constructors of one name construct one class (at the
+    same type arguments) and take parameters no call fits two of, as
+    overloaded functions do. A call or a delegation, even to another
+    overload of the name, takes the one its arguments fit.
+    - *Fields.* Each overload sets the fields it names. An overload that
+      leaves a field to another gives it its default, evaluated when its
+      items run (outside its parameters' scope).
+    - *Delegation.* A constructor that delegates to an overloaded name
+      cannot set a field that any overload of that name sets.
+    - *Cycles.* A delegation cycle through overloads is decided at run time,
+      as recursion is.
   - **Lowering.** `K` becomes `K$init`, which runs the items and gives the
     fields as a struct, and `K`, which constructs the class from them. A
     delegation calls the delegate's `$init`. For a generic constructor both
