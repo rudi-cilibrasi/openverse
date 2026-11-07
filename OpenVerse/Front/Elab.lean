@@ -2499,6 +2499,13 @@ structure CDef where
   overrides : List String
   methods : List STop
 
+/-- The type names `n` (a type parameter, say) somewhere. -/
+partial def STy.mentions (t : STy) (n : String) : Bool := match t with
+  | .name m => m == n
+  | .arr u | .opt u => u.mentions n
+  | .tup ts | .app _ ts => ts.any (·.mentions n)
+  | .map a b => a.mentions n || b.mentions n
+
 /-- Constructor functions (#11, Book of Verse ch. 10). `K<constructor>(ps) :=
     c:` with items becomes two functions with K's parameters and effects:
     - `K$init` runs the items in order and gives the fields they set, as the
@@ -2521,14 +2528,19 @@ def expandCtors (ctors : List (Pos × String × List SParam × List TParam × Li
   for ((p, k, _, _, _, _, _), i) in ctors.zip (List.range ctors.length) do
     if (ctors.take i).any (·.2.1 == k) then
       throw s!"{p.show}: constructor {k} is defined twice (overloaded constructors are not supported yet)"
-  for (p, k, _, tps, _, c, items) in ctors do
+  for (p, k, ps, tps, _, c, items) in ctors do
     let some cd := cdef? c | throw s!"{p.show}: constructor {k}: {c} is not a class"
     if cd.isIface then throw s!"{p.show}: constructor {k}: {c} is an interface"
     -- a parametric class's constructor names its type arguments, `:= box(t):`
     let targs := targsOf k
     if cd.tps.length != targs.length then
       if cd.tps.isEmpty then throw s!"{p.show}: constructor {k}: {c} takes no type arguments"
-      else throw s!"{p.show}: constructor {k}: {c} takes {cd.tps.length} type argument(s): write {c}(…) after :="
+      else if targs.isEmpty then
+        throw s!"{p.show}: constructor {k}: {c} takes {cd.tps.length} type argument(s): write {c}(…) after :="
+      else throw s!"{p.show}: constructor {k}: {c} takes {cd.tps.length} type argument(s), not {targs.length}"
+    -- a call infers the constructor's type parameters from its arguments
+    if let some tp := tps.find? fun tp => !ps.any (·.ty.mentions tp.name) then
+      throw s!"{p.show}: the type parameter {tp.name} of {k} appears in none of its parameters, so a call could not infer it"
     let direct := directOf items
     for ((fp, f), i) in direct.zip (List.range direct.length) do
       if !(fullOf c).any (·.1 == f) then throw s!"{fp.show}: {k}: {c} has no field {f}"
@@ -2617,7 +2629,7 @@ def expandCtors (ctors : List (Pos × String × List SParam × List TParam × Li
           di := di + 1
           body := body.push (.decl ip tmp none false call)
           for f in dfs do
-            body := body.push (.decl ip s!"{f}$v" none false (.member ip (.ident ip tmp) f))
+            body := body.push (.decl ip s!"{f}$v" (some (tyOf f)) false (.member ip (.ident ip tmp) f))
       | it => body := body.push (.app p (.ident p "$nofail") [it] false)   -- a `block:` clause
     let initRet : SExpr :=
       if fs.isEmpty then .block p []

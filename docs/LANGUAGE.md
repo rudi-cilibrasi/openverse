@@ -253,7 +253,8 @@ circle := class(shape, labelled):
   - **Parametric classes.** The archetype names the class's type
     arguments: `MakeBox<constructor>(V:t where t:type) := box(t):` is a
     generic constructor, and `:= box(int):` a fixed one. Delegating to a
-    generic constructor instantiates it.
+    generic constructor instantiates it. As for generic functions, its type
+    parameters must appear in its parameters, and it takes no named ones.
   - **Lowering.** `K` becomes `K$init`, which runs the items and gives the
     fields as a struct, and `K`, which constructs the class from them. A
     delegation calls the delegate's `$init`. For a generic constructor both
