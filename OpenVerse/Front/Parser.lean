@@ -97,6 +97,25 @@ def Token.identName? (t : Token) : Option String :=
   | .ident x => if keywords.contains x then none else some x
   | _ => none
 
+/-- A spec macro `kw{…}` has no body: refuse what looks like one after it
+    (a `:`, a `{` even on the next line, `then`, or `else` after `assert`). -/
+def noMacroBody (kw : String) (n : Token) (hint : String) : PM Unit := do
+  if n.isSym ":" || n.isSym "{" || n.isKw "then" || (kw == "assert" && n.isKw "else") then
+    perr n s!"'{kw}\{…}' has no body: {hint}"
+
+/-- The clauses of a spec macro whose value is that of its last clause
+    (`if{…} else`, `for{…}`, `first{…}`): the clauses, the last bound to a
+    fresh name unless it is a binding already, and that name. -/
+def clausesValue (cs : List SExpr) : List SExpr × SExpr :=
+  match cs.getLast? with
+  | none => ([], .tuple { line := 0, col := 0 } [])
+  | some (.decl q x _ _ _) => (cs, .ident q x)
+  | some (.gen q x _ _) => (cs, .ident q x)
+  | some e =>
+    let q := e.pos
+    let v := s!"$v{q.line}_{q.col}"
+    (cs.dropLast ++ [.decl q v none false e], .ident q v)
+
 /-- `t` cannot continue an expression whose statement column is `stop`. -/
 def Token.offside (t : Token) (stop : Nat) : Bool := (t.bol && t.col ≤ stop) || t.isEof
 
@@ -210,13 +229,21 @@ partial def parseOr (stop : Nat) : PM SExpr := do
   return a
 
 partial def parseAnd (stop : Nat) : PM SExpr := do
-  let mut a ← parseCmp stop
+  let mut a ← parseNot stop
   repeat
     let t ← peekT
     if t.isKw "and" && !t.offside stop then
-      bump; a := .andE t.pos a (← parseCmp stop)
+      bump; a := .andE t.pos a (← parseNot stop)
     else break
   return a
+
+/-- `not e`, below the comparisons and above `and` (spec grammar: `Not :=
+    Eq | "not" Not`): `not X = Y` is `not (X = Y)`. -/
+partial def parseNot (stop : Nat) : PM SExpr := do
+  let t ← peekT
+  if t.isKw "not" then
+    bump; return .notE t.pos (← parseNot stop)
+  parseCmp stop
 
 partial def parseCmp (stop : Nat) : PM SExpr := do
   let a ← parseAdd stop
@@ -263,8 +290,6 @@ partial def parseUnary (stop : Nat) : PM SExpr := do
     | e => return .neg t.pos e
   else if t.isSym "+" then
     bump; parseUnary stop
-  else if t.isKw "not" then
-    bump; return .notE t.pos (← parseUnary stop)
   else parsePostfix stop
 
 partial def parsePostfix (stop : Nat) : PM SExpr := do
@@ -374,6 +399,25 @@ partial def parseBraced (p : Pos) : PM SExpr := do
   bump
   return .block p stmts.toList
 
+/-- Items after a `{`, up to the `}` (consumed), separated by `;`, `,` or
+    new lines: the clauses of the spec's `if{…}`, `for{…}`, `first{…}` and
+    `assert{…}`. -/
+partial def parseBracedItems (item : Nat → PM SExpr) : PM (List SExpr) := do
+  if (← peekT).isSym "}" then bump; return []
+  let c := (← peekT).col
+  let items ← withBlock (← peekT) do
+    let mut items := #[← item c]
+    repeat
+      let t ← peekT
+      checkIndent t
+      if t.isSym ";" || t.isSym "," then bump; items := items.push (← item c)
+      else if t.isSym "}" then break
+      else if t.bol && !t.isEof then items := items.push (← item c)
+      else perr t s!"expected ';', a new line or '}', found {t.tok.describe}"
+    return items
+  bump
+  return items.toList
+
 /-- The body of a construct: `: block`, `:` + inline expression, or `{ block }`. -/
 partial def parseBody (stop : Nat) : PM SExpr := do
   let t ← peekT
@@ -396,6 +440,21 @@ partial def parseBranch (stop : Nat) : PM SExpr := do
 partial def parseIf (stop : Nat) : PM SExpr := do
   let t ← peekT
   bump
+  if (← peekT).isSym "{" then
+    -- `if{c}` and `if{c} else e` (spec: IfMacro, IfElseMacro): `c` in a
+    -- failure context; with `else`, the value is that of `c`'s last clause
+    -- when `c` succeeds, else `e`'s
+    let b ← peekT
+    bump
+    let cs ← parseBracedItems parseExpr
+    if cs.isEmpty then perr b "'if{}' needs a clause"
+    if (← peekT).isKw "else" then
+      bump
+      let (cs, v) := clausesValue cs
+      if (← peekT).isKw "if" then return .ite t.pos cs v (some (← parseIf stop))
+      return .ite t.pos cs v (some (← parseBranch stop))
+    noMacroBody "if" (← peekT) "its value is its last clause's; write 'if (…):' for a body"
+    return .ite t.pos cs (.block b.pos []) none
   let conds ← if (← peekT).isSym ":" then do
       -- `if:` followed by an indented block of conditions, then `then:`
       bump
@@ -415,8 +474,9 @@ partial def parseIf (stop : Nat) : PM SExpr := do
     return .ite t.pos conds thenE (some (← parseBranch stop))
   return .ite t.pos conds thenE none
 
-/-- One `for` clause: a generator, a binding, or a filter. -/
-partial def parseClause : PM SExpr := do
+/-- One `for` clause: a generator, a binding, or a filter (an expression
+    ends at a line starting at column `stop` or before). -/
+partial def parseClause (stop : Nat := 0) : PM SExpr := do
   let t ← peekT
   let t1 ← peekT 1
   match t.identName? with
@@ -425,7 +485,7 @@ partial def parseClause : PM SExpr := do
       bump; bump
       let x ← expectIdent
       expectSym ":"
-      return .gen t.pos x (some i) (← parseExpr 0)
+      return .gen t.pos x (some i) (← parseExpr stop)
     else if t1.isSym ":" then
       -- `X:t = e` is a typed binding; otherwise `X : src` is a generator
       let saved ← get
@@ -435,16 +495,26 @@ partial def parseClause : PM SExpr := do
           let a ← peekT
           if a.isSym "=" || a.isSym ":=" then bump; return some ty else return none) <|> pure none
       match typed with
-      | some ty => return .decl t.pos i (some ty) false (← parseExpr 0)
+      | some ty => return .decl t.pos i (some ty) false (← parseExpr stop)
       | none =>
         set saved; bump; bump
-        return .gen t.pos i none (← parseExpr 0)
-    else parseExpr 0
-  | none => parseExpr 0
+        return .gen t.pos i none (← parseExpr stop)
+    else parseExpr stop
+  | none => parseExpr stop
 
 partial def parseFor (stop : Nat) : PM SExpr := do
   let t ← peekT
   bump
+  if (← peekT).isSym "{" then
+    -- `for{c}` (spec: ForMacro): the value of `c`'s last clause, for each
+    -- way the clauses succeed
+    let b ← peekT
+    bump
+    let cs ← parseBracedItems (fun c => parseClause c)
+    if cs.isEmpty then perr b "'for{}' needs a generator"
+    noMacroBody "for" (← peekT) "its value is its last clause's; write 'for (…):' for a body"
+    let (cs, v) := clausesValue cs
+    return .forE t.pos cs v
   expectSym "("
   let mut clauses := #[]
   if !(← peekT).isSym ")" then
@@ -624,6 +694,45 @@ partial def parsePrimary (stop : Nat) : PM SExpr := do
       return .block t.pos (defs ++ [.block t.pos [body]])
     else
       bump; return .ident t.pos "let"
+  | .ident "first" =>
+    if (← peekT 1).isSym "{" then
+      -- `first{c}` (spec: FirstMacro): fails if `c` does, else the value of
+      -- its last clause
+      bump
+      let b ← peekT
+      bump
+      let cs ← parseBracedItems parseExpr
+      if cs.isEmpty then perr b "'first{}' needs a clause"
+      noMacroBody "first" (← peekT) "its value is its last clause's; write 'first(…) {…}' for a body"
+      let (cs, v) := clausesValue cs
+      return .block t.pos (cs ++ [v])
+    else if (← peekT 1).isSym "(" then
+      -- `first(c){b}` (spec: FirstDoMacro): `b`, with `c`'s names, once `c`
+      -- succeeds; fails if `c` does. Otherwise (no body on the same line, or
+      -- what is in the parentheses is not clauses) `first(…)` is a call.
+      let saved ← get
+      bump; bump
+      let cs? ← (some <$> parseParenItems) <|> pure none
+      let n ← peekT
+      if let some (cs, _) := cs? then
+        if !n.bol && (n.isSym "{" || n.isSym ":") then
+          return .block t.pos (cs ++ [.block t.pos [← parseBody stop]])
+      set saved
+      bump; return .ident t.pos "first"
+    else
+      bump; return .ident t.pos "first"
+  | .ident "assert" =>
+    if (← peekT 1).isSym "{" then
+      -- `assert{c}` (spec: AssertMacro): a runtime error unless `c` succeeds
+      bump
+      let b ← peekT
+      bump
+      let cs ← parseBracedItems parseExpr
+      if cs.isEmpty then perr b "'assert{}' needs a clause"
+      noMacroBody "assert" (← peekT) "it only checks its clauses"
+      return .ite t.pos cs (.block t.pos []) (some (.app t.pos (.ident t.pos "Err") [] false))
+    else
+      bump; return .ident t.pos "assert"
   | .ident "break" => bump; return .brk t.pos
   | .ident "return" =>
     bump

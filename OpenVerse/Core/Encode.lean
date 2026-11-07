@@ -56,8 +56,7 @@ def encLit : Value → EncM Nat
   | .tup [] => emit (u8 0 ++ u8 5)
   | .tup (v :: vs) => do let ids ← encLits (v :: vs); emitPrim .mkTup ids
   | .some v => do let i ← encLit v; emitPrim .mkSome [i]
-  -- a reference (#20; no program has one as a literal, and the loader does
-  -- not accept this kind yet)
+  -- a reference: to a prototype (#37)
   | .ref a => emit (u8 0 ++ u8 6 ++ u32 a)
 def encLits : List Value → EncM (List Nat)
   | [] => pure []

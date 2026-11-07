@@ -71,7 +71,7 @@ theorem eval_sound {P : Prog} : ∀ (n : Nat) {s e r s'},
       · simp only [Prod.mk.injEq] at hy; obtain ⟨rfl, rfl⟩ := hy
         exact .prim_stop (evalList_sound n hx)
     | heap op es =>
-      simp only [eval] at h
+      simp only [eval, St.heapStep_eq] at h
       rcases bindL_some h with ⟨vs, s₁, hx, hk⟩ | ⟨r₁, s₁, hx, hy⟩
       · simp only [Option.some.injEq, Prod.mk.injEq] at hk; obtain ⟨rfl, rfl⟩ := hk
         exact .heap_ok (evalList_sound n hx)
@@ -253,7 +253,7 @@ theorem eval_complete {P : Prog} : ∀ {s e r s'}, Eval P s e r s' →
       obtain ⟨n, H⟩ := evalList_complete h
       exact ⟨n+1, fun m hm => by
         obtain ⟨k, rfl, hk⟩ := succ_above hm
-        simp only [eval, H k hk, bindL]⟩
+        simp only [eval, H k hk, bindL, St.heapStep_eq]⟩
   | _, _, _, _, .heap_stop h => by
       obtain ⟨n, H⟩ := evalList_complete h
       exact ⟨n+1, fun m hm => by

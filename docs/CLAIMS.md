@@ -41,7 +41,7 @@ out of date. The proofs are in `OpenVerse/Core/`.
 
 ## `Prog.run_sound`: Prog.run is sound
 
-`OpenVerse/Core/Adequacy.lean`; axioms: [propext]
+`OpenVerse/Core/Adequacy.lean`; axioms: [propext, Quot.sound]
 
 ```lean
 @Prog.run_sound : ∀ {P : Prog} {n : Nat} {r : Res} {out : List Nat}, P.run n = some (r, out) → Runs P r out
@@ -138,11 +138,11 @@ out of date. The proofs are in `OpenVerse/Core/`.
 ```lean
 @Eval.typed : ∀ {P : Prog} {S : Sigs},
   ProgTyped P S →
-    ∀ {s : St} {e : Expr} {r : Res} {s' : St} {Γ : List VTy} {ρ τ : VTy},
+    ∀ {s : St} {e : Expr} {r : Res} {s' : St} {Γ : List VTy} {ρ τ : VTy} {Ξ : HeapTy},
       Eval P s e r s' →
         Typed S Γ ρ e τ →
-          FrameOK s.tags Γ s.fr →
-            HeapOK S s.g.heap → FrameOK s'.tags Γ s'.fr ∧ ResOK s'.tags τ ρ r ∧ HeapOK S s'.g.heap ∧ s.tags <+: s'.tags
+          FrameOK Ξ Γ s.fr →
+            HeapOK S Ξ s.g.heap → ∃ Ξ', FrameOK Ξ' Γ s'.fr ∧ ResOK Ξ' τ ρ r ∧ HeapOK S Ξ' s'.g.heap ∧ Ξ <+: Ξ'
 ```
 
 ## `Runs.typed`: type safety of programs
@@ -158,7 +158,7 @@ out of date. The proofs are in `OpenVerse/Core/`.
           r ≠ Res.err ErrKind.type ∧
             ∃ fr heap,
               Eval P Prog.initSt (Expr.call P.main []) r { fr := fr, g := { out := out, heap := heap } } ∧
-                HeapOK S heap ∧ ∀ (v : Value), r = Res.ok v → hasTy (tagsOf heap) v τ = true
+                ∃ Ξ, HeapOK S Ξ heap ∧ ∀ (v : Value), r = Res.ok v → hasTy Ξ v τ = true
 ```
 
 ## `Typed.subst`: the substitution lemma: a typing with type variables holds at every instance
@@ -167,9 +167,17 @@ out of date. The proofs are in `OpenVerse/Core/`.
 
 ```lean
 @Typed.subst : ∀ {S : Sigs} {Γ : List VTy} {ρ : VTy},
-  S.ClosedClasses →
+  S.ClosedProtos →
     ∀ (θ : Nat → VTy) {e : Expr} {τ : VTy},
       Typed S Γ ρ e τ → Typed S (List.map (VTy.subst θ) Γ) (VTy.subst θ ρ) e (VTy.subst θ τ)
+```
+
+## `hasTy_sub`: subtyping is sound: a value of a type is a value of every type above it
+
+`OpenVerse/Core/TypeSafety.lean`; axioms: [propext, Quot.sound]
+
+```lean
+@hasTy_sub : ∀ {Ξ : HeapTy} (t u : VTy) (v : Value), t.sub u = true → hasTy Ξ v t = true → hasTy Ξ v u = true
 ```
 
 ## `tc_sound`: the type checker is sound
@@ -196,6 +204,16 @@ out of date. The proofs are in `OpenVerse/Core/`.
 ```lean
 @Runs.no_control : ∀ {P : Prog},
   P.checkControl = true → ∀ {r : Res} {out : List Nat}, Runs P r out → r ≠ Res.err ErrKind.control
+```
+
+## `Eval.no_writes`: an expression that does not write keeps every existing object
+
+`OpenVerse/Core/Writes.lean`; axioms: [propext]
+
+```lean
+@Eval.no_writes : ∀ {P : Prog},
+  P.WriteSound →
+    ∀ {s : St} {e : Expr} {r : Res} {s' : St}, Eval P s e r s' → Expr.writesHeap P e = false → s.g.keeps s'.g
 ```
 
 ## `Prog.check_ok`: Prog.check establishes the hypotheses of no_fail and scoped_ok
@@ -226,9 +244,21 @@ out of date. The proofs are in `OpenVerse/Core/`.
                   r ≠ Res.err ErrKind.control ∧
                     (∃ fr heap,
                         Eval P Prog.initSt (Expr.call P.main []) r { fr := fr, g := { out := out, heap := heap } } ∧
-                          HeapOK S heap ∧ ∀ (v : Value), r = Res.ok v → hasTy (tagsOf heap) v τ = true) ∧
+                          ∃ Ξ, HeapOK S Ξ heap ∧ ∀ (v : Value), r = Res.ok v → hasTy Ξ v τ = true) ∧
                       (∀ (fn : Fn), P.fns[P.main]? = some fn → fn.decides = false → r ≠ Res.fail) ∧
                         ∀ (r' : Res) (out' : List Nat), Runs P r' out' → r' = r ∧ out' = out
+```
+
+## `Prog.accepted_no_writes`: a function without writes keeps every existing object
+
+`OpenVerse/Core/Guarantees.lean`; axioms: [propext, Quot.sound]
+
+```lean
+@Prog.accepted_no_writes : ∀ {P : Prog},
+  P.check = true →
+    ∀ {s : St} {f : Nat} {es : List Expr} {r : Res} {s' : St} {fn : Fn},
+      P.fns[f]? = some fn →
+        fn.writes = false → Expr.writesHeapList P es = false → Eval P s (Expr.call f es) r s' → s.g.keeps s'.g
 ```
 
 ## `apply_mul`: int multiplication in the terms of the C law
