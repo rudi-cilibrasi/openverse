@@ -32,7 +32,7 @@ surface Verse is elaborated (`OpenVerse/Front/Elab.lean`) into Verse Core
 | Classes | `name := class:` and `name(t:type) := class:` with fields and methods; `class(parent, interface, …)`, `interface`, `<abstract>`, `<override>`, `<final>`, `(super:)`, virtual dispatch, casts `T[X]` and `T(X)`; no `var` fields; see [Classes](#classes) | ch. 10 |
 | Enums | `name := enum:` / `enum{A, B}`, `name.A`, equality, `case` that needs no `_` when every value is named (an enumerator is its index in Verse Core); `enum<open>` may gain values, so a `case` on one needs `_` or a failure context (`<closed>` is the default) | ch. 9 |
 | Maps | `[k]v`, `map{k => v, …}` (a key given twice keeps its last value, at its last position), `M[k]` (fails on a missing key), `set M[k] = v` (insert or update, never fails), `set M[k] op= v` (fails on a missing key), `.Length`, `for (V : M)`, `for (K -> V : M)` in insertion order, `ConcatenateMaps(M1, M2, …)` (a later map's value wins for a key, which keeps its first position), order-sensitive equality (a map is the array of its pairs in Verse Core) | §3, §9.3 |
-| Array methods | `A.Slice[i, j]`, `A.Slice[i]`, `A.Find[x]`, `A.RemoveElement[i]`, `A.ReplaceElement[i, x]`, `A.Insert[i, B]` (all failable) | §9.1 |
+| Array methods | `A.Slice[i, j]`, `A.Slice[i]`, `A.Find[x]`, `A.RemoveElement[i]`, `A.ReplaceElement[i, x]`, `A.Insert[i, B]`, `A.Last[]`, `A.Last[n]` (the element n before the last) (all failable) | §9.1 |
 | Built-ins | `Print(s)`, `ToString(x)` (int, char, string), `Floor(X / Y)`, `Ceil(X / Y)`, `Quotient[X, Y]`, `Mod[X, Y]` (Euclidean), `Abs`, `Min`, `Max`, `Err()` | API reference |
 | Program entry | `Main()` — see the exit protocol in [`FORMAT.md`](FORMAT.md) | (not in the book) |
 
@@ -484,7 +484,7 @@ openverse has no module namespaces yet, so the readings are flat:
 `float` and `rational` values (only `Floor(X/Y)` and `Ceil(X/Y)` of ints),
 the class features listed under [Classes](#classes), struct methods (Verse structs have none; classes do),
 `weak_map`, module namespaces (`using{"relative_path"}` imports flatly, see [Programs of several files](#programs-of-several-files)), overloading beyond [Overloading](#overloading), defaults that refer to earlier parameters, nested
-functions, `last`, refinement types, concurrency (`spawn`, `sync`,
+functions, refinement types, concurrency (`spawn`, `sync`,
 `race`, `rush`, `branch`, `<suspends>`), `weak_map`, and effect checking
 other than `<decides>` and the heap effects (`<converges>` is accepted and
 ignored). Comparing arrays with tuples (`array{1,2}
