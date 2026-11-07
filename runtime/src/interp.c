@@ -293,7 +293,7 @@ static void eval_list(vx_ctx *c, const vx_fn *fn, size_t base, uint32_t off, uin
 static int reclaim(vx_ctx *c, size_t hmark, vx_val *res)
 {
     vx_objs *ob = &c->objs;
-    const vx_remlist *l = ob->nlists > 0 ? &ob->lists[ob->nlists - 1] : NULL;
+    const vx_remlist *l = vx_objs_top(ob);
     size_t j, nr = 0;
     vx_val **roots;
     int rc;
@@ -346,27 +346,32 @@ static void call_fn(vx_ctx *c, uint32_t f, size_t sp0, size_t nargs, uint64_t n,
     if (c->nframes == c->fcap) {
         size_t cap = c->fcap ? 2 * c->fcap : 64;
         size_t *hm = realloc(c->hmarks, cap * sizeof(size_t));
-        if (hm == NULL) {
+        size_t *dm = hm == NULL ? NULL : realloc(c->dmax, cap * sizeof(size_t));
+        if (hm != NULL)
+            c->hmarks = hm;
+        if (dm == NULL) {
             c->top = top0;
             set_limit(r, VX_L_MEMORY);
             return;
         }
-        c->hmarks = hm;
+        c->dmax = dm;
         c->fcap = cap;
     }
-    if (vx_objs_call(&c->objs) != VX_OK) {
+    if (vx_objs_call_fast(&c->objs) != VX_OK) {
         c->top = top0;
         set_limit(r, VX_L_MEMORY);
         return;
     }
-    c->hmarks[c->nframes++] = hmark;
+    c->hmarks[c->nframes] = hmark;
+    c->dmax[c->nframes] = 0;
+    c->nframes++;
 
     eval(c, g, nb, g->root, n, r);                  /* eval P n ⟨frameOf fn vs, s₁.out⟩ fn.body */
 
     c->top = top0;                                  /* ⟨s₁.fr, s₂.out⟩ */
     if (r->kind == VX_R_LIMIT) {
         c->nframes--;
-        vx_objs_return(&c->objs, 1);
+        vx_objs_return_fast(&c->objs);
         return;
     }
     vx_store_forget(&c->st, jlen0);
@@ -379,17 +384,38 @@ static void call_fn(vx_ctx *c, uint32_t f, size_t sp0, size_t nargs, uint64_t n,
     /* reclaim the callee's heap cells, except what the result, the fields
        written during the call and the field log made during it reach */
     if (r->kind == VX_R_OK) {
-        if (reclaim(c, hmark, &r->v) != VX_OK)
-            set_limit(r, VX_L_MEMORY);
+        /* compact, unless the region is mostly one block a callee's
+           compaction left (live then) and the list's fields: skipping keeps
+           more, never less, and keeps the work linear in what is allocated
+           where each return compacting would be quadratic (a recursion
+           building a linked structure re-compacting its survivors) */
+        size_t k = c->nframes - 1;
+        size_t region = c->heap.len - hmark;
+        if (c->dmax[k] == 0 && vx_objs_top_empty(&c->objs)) {
+            /* no field roots and no block left by a callee: the result only */
+            if (vx_heap_keep(&c->heap, hmark, &r->v) != VX_OK)
+                set_limit(r, VX_L_MEMORY);
+            else if (k > 0 && c->heap.len - hmark > c->dmax[k - 1])
+                c->dmax[k - 1] = c->heap.len - hmark;
+        } else if (region >= 2 * c->dmax[k] +
+                   (vx_objs_top_empty(&c->objs) ? 0 : vx_objs_top(&c->objs)->n)) {
+            if (c->st.depth == 0)
+                vx_objs_drop_stale(&c->objs);
+            if (reclaim(c, hmark, &r->v) != VX_OK)
+                set_limit(r, VX_L_MEMORY);
+            else if (k > 0 && c->heap.len - hmark > c->dmax[k - 1])
+                c->dmax[k - 1] = c->heap.len - hmark;
+        } else if (k > 0 && c->dmax[k] > c->dmax[k - 1]) {
+            c->dmax[k - 1] = c->dmax[k];
+        }
     } else if (r->kind == VX_R_FAIL) {
         /* the failure reaches a context that rolls the fields back (or ends
            the program) before anything reads them */
         c->heap.len = hmark;
     }
-    /* the list goes to the caller (its entries stay while a failure context
-       is open: a rollback may restore a reference) */
+    /* the list goes to the caller */
     c->nframes--;
-    if (vx_objs_return(&c->objs, c->st.depth > 0) != VX_OK)
+    if (vx_objs_return_fast(&c->objs) != VX_OK)
         set_limit(r, VX_L_MEMORY);
 }
 
@@ -1005,6 +1031,7 @@ void vx_run(const vx_program *p, const vx_opts *o, vx_outcome *res)
     vx_heap_free(&c.heap);
     vx_objs_free(&c.objs);
     free(c.hmarks);
+    free(c.dmax);
 }
 
 void vx_outcome_free(vx_outcome *res)

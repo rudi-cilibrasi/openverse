@@ -318,7 +318,16 @@ the call whose region holds the value (`vx_objs_remember`; the owner is the
 deepest call whose heap mark is at most the reference, and a value older
 than every call needs none). When a call returns, its compaction takes as
 roots its result and the cells in its list, updates them, and hands the list
-to its caller: the values it keeps now lie in the caller's region (#50). An
+to its caller: the values it keeps now lie in the caller's region (#50).
+The lists are buffers from a pool, and on a return the smaller of the
+callee's and the caller's moves into the larger, which then serves the
+caller, so an entry moves O(log n) times. A call also skips its compaction
+when its region is less than twice the largest block a callee's compaction
+left in it (all live then) plus its list's entries. Skipping keeps more,
+never less, and is what keeps the work linear: a recursion building a linked
+structure would otherwise re-compact all its survivors at every level. A
+loop of calls that each replace a field's array still compacts, since each
+leaves a small block. An
 entry leaves only when its cell no longer holds a reference and no failure
 context is open, or when a rollback drops its object: what a rollback
 restores was written before its context, so its entry is in a list at least

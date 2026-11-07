@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # Differential fuzzing of the C runtime's heap reclamation (#50): random Verse
-# programs (scripts/gen-fields.py) whose objects hold arrays in fields, written
-# across calls, failure contexts, <decides> callees, for filters and
-# recursion, run by the Lean reference interpreter and by cverse; stdout and
-# exit codes must agree.   usage: scripts/fuzz-fields.sh [COUNT [FIRST_SEED [CVERSE]]]
+# programs whose objects hold arrays in fields, written across calls, failure
+# contexts, <decides> callees, for filters and recursion (scripts/gen-fields.py
+# for odd seeds, scripts/gen-fields2.py for even ones), run by the Lean
+# reference interpreter and by cverse; stdout and exit codes must agree.
+#   usage: scripts/fuzz-fields.sh [COUNT [FIRST_SEED [CVERSE]]]
 set -uo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 n="${1:-100}"; first="${2:-1}"; cv="${3:-$root/runtime/build/cverse}"
@@ -11,7 +12,8 @@ ov="$root/.lake/build/bin/openverse"
 tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
 ran=0; bad=0; mm=0
 for ((s=first; s<first+n; s++)); do
-  python3 -I "$root/scripts/gen-fields.py" "$s" > "$tmp/p.verse"
+  gen="$root/scripts/gen-fields.py"; (( s % 2 == 0 )) && gen="$root/scripts/gen-fields2.py"
+  python3 -I "$gen" "$s" > "$tmp/p.verse"
   timeout 60 "$ov" run "$tmp/p.verse" > "$tmp/l.out" 2>/dev/null; le=$?
   if [[ $le -ne 0 ]] || ! "$ov" emit "$tmp/p.verse" -o "$tmp/p.vbc" 2>/dev/null; then bad=$((bad+1)); continue; fi
   ran=$((ran+1))
