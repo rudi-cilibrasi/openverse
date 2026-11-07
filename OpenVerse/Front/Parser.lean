@@ -672,6 +672,9 @@ partial def parseInterp (parts : List StrPart) : PM (List SPart) := do
 
 partial def parsePrimary (stop : Nat) : PM SExpr := do
   let t ← peekT
+  if let .ident d := t.tok then
+    if (← peekT 1).isSym "<" && (← peekT 2).isKw "constructor" && (← peekT 3).isSym ">" then
+      perr t s!"{d}<constructor>(…) delegates to a constructor: it can only be an item of a constructor's body; call it as {d}(…)"
   match t.tok with
   | .int n => bump; return .int t.pos n
   | .char c => bump; return .char t.pos c
@@ -870,16 +873,25 @@ partial def parseCtorItem (c : Nat) : PM SExpr := do
       perr a s!"expected the arguments of {d}<constructor>"
   match ← parseExpr c with
   | e@(.decl _ _ none false _) => return e
-  | e@(.block ..) => return e
+  | e@(.block ..) => if t.isKw "block" then return e else perr t "a constructor's body has field initializers F := e, let:, block: and delegations D<constructor>(…)"
   | _ => perr t "a constructor's body has field initializers F := e, let:, block: and delegations D<constructor>(…)"
 
-/-- The items of a constructor function's body, after its class name. -/
+/-- The items of a constructor function's body, after its class name: an
+    indented block after `:`, items on the line after `:` (separated by `;`),
+    or `{…}`. -/
 partial def parseCtorBody (stop : Nat) : PM (List SExpr) := do
   let t ← peekT
-  if !t.isSym ":" then perr t s!"expected ':' after the constructor's class, found {t.tok.describe}"
+  if t.isSym "{" then
+    bump
+    return ← parseBracedItems parseCtorItem
+  if !t.isSym ":" then perr t s!"expected ':' or '\{' after the constructor's class, found {t.tok.describe}"
   bump
   let n ← peekT
-  if !n.bol || n.col ≤ stop then perr n "expected the constructor's body, indented"
+  if !n.bol then
+    let mut items := #[← parseCtorItem stop]
+    while (← peekT).isSym ";" do bump; items := items.push (← parseCtorItem stop)
+    return items.toList
+  if n.col ≤ stop then perr n "expected the constructor's body, indented"
   let c := n.col
   withBlock n do
     let mut items := #[← parseCtorItem c]

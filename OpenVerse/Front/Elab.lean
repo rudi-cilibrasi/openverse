@@ -1107,7 +1107,7 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
           else eerr p s!"'{n}' is a function: call it with {n}(…)"
         | none => eerr p s!"unknown identifier '{n}'"
   -- a constructor's `block:` (#11): it cannot fail, as a class's cannot
-  | .app _ (.ident _ "$nofail") [e] false => elabE { ctx with canFail := false } e exp
+  | .app _ (.ident _ "$nofail") [e] false => elabE { ctx with canFail := false, inBlock := true } e exp
   | .app p f args bracket => elabApp ctx p f args bracket exp
   | .member p (.ident _ n) m =>
     match ctx.lookup n, ctx.types.enums.lookup n with
@@ -1424,7 +1424,10 @@ partial def elabApp (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (brack
               slots := slots.set! k (some ta)
           let call := Expr.call s.idx (slots.toList.map fun o => Expr.local o.get!)
           return ⟨steps.toList.foldr Expr.seq call, s.ret⟩
-      | none => eerr p s!"unknown function '{name}'"
+      | none =>
+        if (ctx.sig? s!"{name}$init").isSome then
+          eerr p s!"{name} constructs an abstract class: it can only be delegated to, as {name}<constructor>(…) in a constructor of a class below it"
+        eerr p s!"unknown function '{name}'"
   | .member mp (.ident _ "(super:)") m =>
     -- `(super:)M(…)`: the implementation the current method's class inherits
     let some c := ctx.selfClass | eerr p "(super:) can only be used in a method"
@@ -2511,6 +2514,9 @@ def expandCtors (ctors : List (Pos × String × List SParam × List TParam × Li
     | .app p (.ident _ d) _ _ => if d.startsWith "$ctor:" then some (p, (d.drop "$ctor:".length).toString) else none
     | _ => none
   -- the checks of each constructor on its own
+  for ((p, k, _, _, _, _, _), i) in ctors.zip (List.range ctors.length) do
+    if (ctors.take i).any (·.2.1 == k) then
+      throw s!"{p.show}: constructor {k} is defined twice (overloaded constructors are not supported yet)"
   for (p, k, _, tps, _, c, items) in ctors do
     let some cd := cdef? c | throw s!"{p.show}: constructor {k}: {c} is not a class"
     if cd.isIface then throw s!"{p.show}: constructor {k}: {c} is an interface"
@@ -2529,6 +2535,13 @@ def expandCtors (ctors : List (Pos × String × List SParam × List TParam × Li
         throw s!"{dp.show}: {k} constructs {c}, and {d} constructs {dc}, which is not {c} or a class above it"
       if dc == c && !direct.isEmpty then
         throw s!"{dp.show}: {k} delegates to {d}, which constructs {c} itself and so sets its fields: {k} cannot set fields too"
+      -- (the Book: a subclass's fields first, then the parent's constructor)
+      let dIdx := items.findIdx? fun | .app _ (.ident _ x) _ _ => x.startsWith "$ctor:" | _ => false
+      let late := items.zip (List.range items.length) |>.filterMap fun
+        | (.decl fp f none false _, j) => if dIdx.any (· < j) then some (fp, f) else none
+        | _ => none
+      if let some (fp, f) := late.head? then
+        throw s!"{fp.show}: {k} sets {f} after delegating to {d}: set the fields of {c} first, then delegate"
     | _ :: (dp, _) :: _ => throw s!"{dp.show}: {k} delegates to more than one constructor"
   -- the fields each sets: its own, and its delegate's
   let mut setBy : List (String × List String) := []
@@ -2541,8 +2554,19 @@ def expandCtors (ctors : List (Pos × String × List SParam × List TParam × Li
       | (_, d) :: _ =>
         if let some ds := setBy.lookup d then setBy := setBy ++ [(k, own ++ ds)]
   for (p, k, _, _, _, _, items) in ctors do
-    let some fs := setBy.lookup k
-      | throw s!"{p.show}: {k} delegates to itself, through {((delegsOf items).map (·.2)).headD k}"
+    let some fs := setBy.lookup k | do
+      -- on a cycle, or delegating into one
+      let next (x : String) : Option String :=
+        (ctors.find? (·.2.1 == x)).bind fun (_, _, _, _, _, _, its) => ((delegsOf its).map (·.2)).head?
+      let mut cur := next k
+      let mut onCycle := false
+      for _ in [0:ctors.length] do
+        match cur with
+        | some x => if x == k then onCycle := true; break else cur := next x
+        | none => break
+      let d := ((delegsOf items).map (·.2)).headD k
+      if onCycle then throw s!"{p.show}: {k} delegates to itself, through {d}"
+      else throw s!"{p.show}: {k} delegates to {d}, which delegates in a cycle"
     if let some f := fs.find? fun f => (fs.filter (· == f)).length > 1 then
       throw s!"{p.show}: {k} sets {f} twice: itself, and by delegating"
   for (p, k, _, _, _, c, _) in ctors do
@@ -2561,7 +2585,7 @@ def expandCtors (ctors : List (Pos × String × List SParam × List TParam × Li
     let mut di := 0
     for it in items do
       match it with
-      | .decl ip f none false e => body := body.push (.decl ip s!"{f}$v" none false e)
+      | .decl ip f none false e => body := body.push (.decl ip s!"{f}$v" (some (tyOf f)) false e)
       | .app ip (.ident _ "$let") [.block _ ds] _ =>
         for d in ds do
           match d with
@@ -2591,12 +2615,14 @@ def expandCtors (ctors : List (Pos × String × List SParam × List TParam × Li
       if fs.isEmpty then .block p [callInit, .construct p c [] []]
       else .block p [.decl p "$fields" none false callInit,
         .construct p c [] (fs.map fun f => .decl p f none false (.member p (.ident p "$fields") f))]
-    out := out.push (.fn p k ps [] effs (.name c) kbody)
+    -- (an abstract class is only constructed by delegating to its constructors)
+    if !((cdef? c).map (·.specs.contains "abstract")).getD false then
+      out := out.push (.fn p k ps [] effs (.name c) kbody)
   return out.toList
 
 /-- Elaborate a parsed program into a Verse Core program that passes `Prog.check`
     and `Prog.checkTypes`. -/
-def elabProgram (allTops00 : List STop) (opts : Options := {}) : Except String Compiled := do
+def elabProgramCore (allTops00 : List STop) (opts : Options := {}) : Except String Compiled := do
   -- the command line (spec: expected tooling): `Args`, and an entry expression
   let defines (n : String) := allTops00.any fun
     | .fn _ m .. | .const _ m .. | .classDef _ m .. => m == n
@@ -3406,6 +3432,12 @@ def elabProgram (allTops00 : List STop) (opts : Options := {}) : Except String C
       | none => if !checkPrelude P S then " (the prototypes)" else ""
     throw s!"internal error: the elaborated program does not pass Prog.checkTypes{which}"
   return { prog := P, sigs := S, slotTys := slotTys.toList }
+
+/-- Elaborate a parsed program (`elabProgramCore`), with the names of the
+    functions a constructor becomes shown as written: `K$init` is
+    `K<constructor>` (names with `$` are never the user's). -/
+def elabProgram (allTops00 : List STop) (opts : Options := {}) : Except String Compiled :=
+  (elabProgramCore allTops00 opts).mapError fun msg => msg.replace "$init" "<constructor>"
 
 /-- Parse and elaborate Verse source text. -/
 def compileChecked (src : String) (opts : Options := {}) : Except String Compiled := do
