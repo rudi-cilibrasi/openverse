@@ -1,9 +1,13 @@
 # Status of openverse_loader
 
-- Law: `project/harness/loader_wellscoped.c`, pinned to openverse commit 8faa3ffa5a6e (the heap commit,
-  #31). That commit added HEAP nodes (tag 12) and REF literals (kind 6) to `load.c`; the law claims for a
-  HEAP node an op `<= VX_H_LAST`, `k == 0` for tag, its arguments as for PRIM and CALL, and for an isTag at
-  most `VX_MAX_TAGS` class tags whose 4m bytes lie inside the bytes pool.
+- Law: `project/harness/loader_wellscoped.c`, pinned to openverse commit 4006a49d863c (floats,
+  #127). That commit left `load.c` unchanged and raised `VX_P_LAST` in `openverse.h` from 28 to 46 (the
+  float primitives; a float literal is `PRIM fofBits` of an INT literal, so the literal kinds are
+  unchanged); the specification's bound on a PRIM code in `proof/src/proof/Specs.v` follows, and the
+  rest of the proof replays unchanged. The heap commit (8faa3ffa5a6e, #31) before it added HEAP nodes
+  (tag 12) and REF literals (kind 6) to `load.c`; the law claims for a HEAP node an op `<= VX_H_LAST`,
+  `k == 0` for tag, its arguments as for PRIM and CALL, and for an isTag at most `VX_MAX_TAGS` class
+  tags whose 4m bytes lie inside the bytes pool.
 - `qp check`: native runs (ASan/UBSan, 3,000) ok; CompCert interpreter (20 runs) no stop; VST lint clean;
   mutants 6/40 killed (`CHECK.md`, read in `CHECK-NOTES.md`).
 - **Proof: `loader_wellscoped` PROVED, `qp verify` PASS** (`VERIFY.md`); axioms: 13, standard + VST

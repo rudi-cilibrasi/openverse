@@ -1,7 +1,8 @@
 # Status of openverse_arith
 
-- Law: `project/harness/arith_exact.c`, pinned to openverse commit 8faa3ffa5a6e (the heap commit, #31).
-  That commit changed only `openverse.h` among the pinned files; the proof replays unchanged.
+- Law: `project/harness/arith_exact.c`, pinned to openverse commit 4006a49d863c (floats, #127).
+  That commit changed only `openverse.h` among the pinned files (the float prim codes 29-46); the proof
+  replays unchanged.
 - `qp check`: native runs (ASan/UBSan, 3,000) ok; CompCert interpreter (20 runs) no stop; VST lint clean;
   mutants 29/40 killed (`CHECK.md`, read in `CHECK-NOTES.md`: 10 equivalent, 1 reachable only at
   `(INT64_MIN, -1)`).
