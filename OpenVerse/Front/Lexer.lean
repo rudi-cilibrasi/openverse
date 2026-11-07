@@ -59,6 +59,8 @@ structure Token where
   bol  : Bool
   /-- When `bol`: the indentation (leading tabs and spaces) of the token's line. -/
   indent : String := ""
+  /-- The file the token comes from, when it is not the main one (#27). -/
+  file : String := ""
   deriving Repr, Inhabited
 
 def Tok.describe : Tok → String

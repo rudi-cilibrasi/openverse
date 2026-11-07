@@ -247,6 +247,28 @@ circle := class(shape, labelled):
     or `string`. The expression may fail, which gives exit code 1.
   - A `#!` first line is a `#` comment.
 
+## Programs of several files
+
+`using{"relative_path"}` (or `import{"relative_path"}`) imports a file or a
+directory, relative to the importing file (#27; from the spec draft's
+tooling). `openverse run|emit|check PATH` takes a file or a directory. A
+directory is assembled from its entries in sorted order:
+
+- names starting with `.`, names containing `.ignore`, and files with no `.`
+  are skipped;
+- `Self.verse` and every other `.verse` file contribute their definitions;
+- `Name.txt` gives `Name:string`, `Name.value` gives `Name := (contents)`,
+  and `Name.bin` gives `Name:[]int` of its bytes (the spec's `[]nat8`).
+
+openverse has no module namespaces yet, so the readings are flat:
+
+- all the definitions join one top level, so a name defined in two files is
+  an error;
+- each file is loaded once, so import cycles are harmless;
+- subdirectories are flattened;
+- other extensions, and `.zip`, are ignored;
+- errors in an imported file show its path.
+
 ## Readings openverse takes
 
 | Question | Book | openverse |
@@ -271,8 +293,7 @@ circle := class(shape, labelled):
 
 `float` and `rational` values (only `Floor(X/Y)` and `Ceil(X/Y)` of ints),
 `char32`, classes beyond phase 1 (see [Classes](#classes)), interfaces, open enums, struct methods (Verse structs have none; classes do), `ConcatenateMaps`,
-`weak_map`, modules beyond
-ignoring `using`, overloading, defaults that refer to earlier parameters, nested
+`weak_map`, module namespaces (`using{"relative_path"}` imports flatly, see [Programs of several files](#programs-of-several-files)), overloading, defaults that refer to earlier parameters, nested
 functions, `first`, `defer`, refinement types, concurrency (`spawn`, `sync`,
 `race`, `rush`, `branch`, `<suspends>`), `weak_map`, and effect checking for
 `<reads>`/`<writes>`/`<computes>`. Comparing arrays with tuples (`array{1,2}

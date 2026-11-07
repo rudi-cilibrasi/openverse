@@ -6,9 +6,12 @@ namespace OpenVerse.Front
 structure Pos where
   line : Nat
   col  : Nat
+  /-- The file, for a definition imported from another file (#27). -/
+  file : String := ""
   deriving Repr, Inhabited
 
-def Pos.show (p : Pos) : String := s!"{p.line}:{p.col}"
+def Pos.show (p : Pos) : String :=
+  if p.file.isEmpty then s!"{p.line}:{p.col}" else s!"{p.file}:{p.line}:{p.col}"
 
 /-- Surface types. -/
 inductive STy where

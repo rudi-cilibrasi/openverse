@@ -1695,8 +1695,8 @@ def elabProgram (allTops00 : List STop) (opts : Options := {}) : Except String C
     match opts.args with
     | some as =>
       if defines "Args" then []
-      else [.const ⟨0, 0⟩ "Args" (some (.arr (.name "string")))
-              (.arrayLit ⟨0, 0⟩ (as.map fun a => .str ⟨0, 0⟩ [.text a]))]
+      else [.const { line := 0, col := 0 } "Args" (some (.arr (.name "string")))
+              (.arrayLit { line := 0, col := 0 } (as.map fun a => .str { line := 0, col := 0 } [.text a]))]
     | none => []
   let entryTop : List STop := match opts.entry with
     | some e => [.fn e.pos "$Do" [] [] ["decides"] (.name "void") (.app e.pos (.ident e.pos "$Show") [e] false)]
@@ -2145,6 +2145,16 @@ def compileChecked (src : String) (opts : Options := {}) : Except String Compile
 /-- Parse and elaborate Verse source text. -/
 def compile (src : String) (opts : Options := {}) : Except String Prog := do
   return (← compileChecked src opts).prog
+
+/-- Compile loaded definitions (`Front.loadProgram`) with shell arguments,
+    bound to `Args` when given or mentioned, and an optional `do` expression. -/
+def compileTops (tops : List STop) (args : List String) (mentionsArgs : Bool) (doExpr : Option String) :
+    Except String Prog := do
+  let entry ← match doExpr with
+    | some t => some <$> parseExprText t
+    | none => pure none
+  let useArgs := !args.isEmpty || mentionsArgs
+  return (← elabProgram tops { args := if useArgs then some args else none, entry }).prog
 
 /-- Compile with shell arguments (bound to `Args` when given or used) and an
     optional `do` expression, as `openverse run FILE ARG… do EXPR` does. -/

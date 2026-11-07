@@ -10,7 +10,10 @@ cv="$root/runtime/build/cverse"
 withc=0; [[ "${1:-}" == "--c" ]] && withc=1
 tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
 pass=0; fail=0
-for f in "$root"/tests/verse/*.verse; do
+# the programs: the files, and the directories with a Self.verse (#27)
+progs=("$root"/tests/verse/*.verse)
+for d in "$root"/tests/verse/*/; do [[ -f "$d/Self.verse" ]] && progs+=("${d%/}"); done
+for f in "${progs[@]}"; do
   n="$(basename "$f" .verse)"
   # NAME.args: command-line arguments, one per line (Args, `do EXPR`)
   extra=(); [[ -f "$root/tests/verse/$n.args" ]] && mapfile -t extra <"$root/tests/verse/$n.args"
