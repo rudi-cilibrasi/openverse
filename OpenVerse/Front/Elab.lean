@@ -1750,10 +1750,24 @@ partial def elabSet (ctx : Ctx) (p : Pos) (lhs0 : SExpr) (op : Option String) (r
       | some kr => kr
       | none => stepsA.size
     let mut rhsVal : Option R := none
+    let mut oldLeaf : Option Nat := none
     for k in [0:stepsA.size] do
       let (sp, f?, _) := stepsA[k]!
       levels := levels.push (cur, tys[k]!, sp, f?, keys[k]!)
       if k == rhsAfter then
+        -- `set P op= e` reads P before e, as the direct form does (Book of
+        -- Verse: `set X += e` is `set X = X + e`; #58): the rest of the path,
+        -- read now, gives the old leaf (the reads have no effect, and the
+        -- path is read again for the rebuild below)
+        if op.isSome then
+          let mut c2 := cur
+          for k2 in [k:stepsA.size] do
+            let (_, f2, _) := stepsA[k2]!
+            let t2 := if k2 + 1 < stepsA.size then tys[k2 + 1]! else leafTy
+            let c3 ← fresh t2
+            pre := pre.push (.assign c3 (← readStep c2 tys[k2]! f2 keys[k2]!))
+            c2 := c3
+          oldLeaf := some c2
         let r ← elabE ctx rhs (some leafTy)
         let tr ← fresh r.ty
         pre := pre.push (.assign tr r.e)
@@ -1769,9 +1783,12 @@ partial def elabSet (ctx : Ctx) (p : Pos) (lhs0 : SExpr) (op : Option String) (r
     let r ← match rhsVal with
       | some r => pure r
       | none => elabE ctx rhs (some leafTy)
+    let old ← match oldLeaf with
+      | some t => pure (Expr.local t)
+      | none => readStep lc lty lf lkey
     let leaf ← match op with
       | none => coerce p r leafTy
-      | some o => combine (← readStep lc lty lf lkey) leafTy o r
+      | some o => combine old leafTy o r
     let tv ← fresh leafTy
     pre := pre.push (.assign tv leaf)
     -- rebuild, from the leaf up, as far as the object written in place
