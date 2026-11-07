@@ -587,7 +587,7 @@ structure Ctx where
   /-- The `defer:` bodies of the function's enclosing scopes, innermost first
       (#80): a `return` runs them all, a `break` those registered inside its
       loop (all but the first `loopDefers`). -/
-  defers  : List SExpr := []
+  defers  : List (SExpr × List Local) := []
   loopDefers : Nat := 0
   /-- In a `defer:` body, which cannot `return`. -/
   inDefer : Bool := false
@@ -1164,7 +1164,8 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
           eerr p s!"unknown identifier '{n}'"
   -- a constructor's `block:` (#11): it cannot fail, as a class's cannot
   | .app _ (.ident _ "$nofail") [e] false => elabE { ctx with canFail := false, inBlock := true } e exp
-  | .app p (.ident _ "$defer") _ _ => eerr p "defer: is a statement: it has no value"
+  -- (a branch or body that is only a defer: its own scope, so it runs there)
+  | .app _ (.ident _ "$defer") _ _ => return (← elabSeq ctx [se] exp).1
   | .app p f args bracket => elabApp ctx p f args bracket exp
   | .member p (.ident _ n) m =>
     match ctx.lookup n, ctx.types.enums.lookup n with
@@ -1312,7 +1313,8 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
     return ⟨.loop r.e, .void⟩
   | .brk p =>
     if !ctx.inLoop then
-      eerr p (if ctx.inDefer then "break cannot leave a defer: block" else "break is only allowed inside loop (not for)")
+      eerr p (if ctx.inDefer then "break is only allowed inside loop (not for), and cannot leave a defer: block"
+              else "break is only allowed inside loop (not for)")
     -- the defers of the scopes it leaves, inside its loop
     let ds ← elabDefers ctx (ctx.defers.take (ctx.defers.length - ctx.loopDefers))
     return ⟨.seq ds .brk, .never⟩
@@ -1344,6 +1346,7 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
 partial def elabStmt (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM (R × Ctx) := do
   let (r, ctx') ← match se with
     | .decl p n sty isVar rhs => do
+      if let .app dp (.ident _ "$defer") _ _ := rhs then eerr dp "defer: is a statement: it has no value"
       if ctx.lookup n |>.isSome then
         eerr p s!"'{n}' is already defined; Verse does not allow shadowing (use set {n} = … for a var)"
       if (ctx.sig? n).isSome || builtins.contains n then
@@ -1368,10 +1371,12 @@ partial def elabStmt (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM (R × Ctx) 
 /-- `defer:` bodies, run in order (innermost first): each cannot fail, return
     or break out of itself, and sees the locals in scope where it is
     registered (Verse has no shadowing, so those at an exit include them). -/
-partial def elabDefers (ctx : Ctx) (ds : List SExpr) : EM Expr := do
-  let dctx := { ctx with canFail := false, inDefer := true, inLoop := false, defers := [], loopDefers := 0 }
+partial def elabDefers (ctx : Ctx) (ds : List (SExpr × List Local)) : EM Expr := do
   let mut acc : Expr := .lit .void
-  for d in ds.reverse do
+  for (d, locs) in ds.reverse do
+    -- (with the locals where it was registered: their slots still hold them)
+    let dctx := { ctx with canFail := false, inDefer := true, inLoop := false, defers := [], loopDefers := 0,
+                           locals := locs }
     let r ← elabE dctx d none
     acc := .seq r.e acc
   return acc
@@ -1384,8 +1389,8 @@ partial def elabSeq (ctx : Ctx) (ss : List SExpr) (exp : Option Ty) : EM (R × C
     -- `defer: D` then the rest of the scope (Book of Verse ch. 7): the rest,
     -- with D pending for its returns and breaks, then D, then the rest's value
     if let .block _ [] := body then eerr p "a defer: block cannot be empty"
-    let (r2, ctx2) ← elabSeq { ctx with defers := body :: ctx.defers } rest exp
-    let d ← elabDefers ctx [body]
+    let (r2, ctx2) ← elabSeq { ctx with defers := (body, ctx.locals) :: ctx.defers } rest exp
+    let d ← elabDefers ctx [(body, ctx.locals)]
     let ctx2 := { ctx2 with defers := ctx.defers, loopDefers := ctx.loopDefers }
     match r2.ty with
     | .never => return (r2, ctx2)

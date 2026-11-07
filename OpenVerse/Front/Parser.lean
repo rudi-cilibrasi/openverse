@@ -90,7 +90,8 @@ def Token.pos (t : Token) : Pos := { line := t.line, col := t.col, file := t.fil
 
 def keywords : List String :=
   ["if", "then", "else", "for", "do", "loop", "break", "return", "var", "set", "and", "or",
-   "not", "case", "block", "option", "logic", "array", "using", "struct", "enum", "map", "where"]
+   "not", "case", "block", "option", "logic", "array", "using", "struct", "enum", "map", "where",
+   "defer"]
 
 def Token.identName? (t : Token) : Option String :=
   match t.tok with

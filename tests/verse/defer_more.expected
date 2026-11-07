@@ -1,0 +1,11 @@
+d
+ok
+failed
+defer Z=10
+3
+defer Z=10
+4
+x
+query ok
+y
+exit=0
