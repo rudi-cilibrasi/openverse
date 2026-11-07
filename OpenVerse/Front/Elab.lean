@@ -2254,7 +2254,7 @@ partial def elabSet (ctx : Ctx) (p : Pos) (lhs0 : SExpr) (op : Option String) (r
       | _, _, _ => eerr p "internal: set path"
     -- a value of a class with no instance cannot exist, so the set is
     -- unreachable once the path reaches one; but the steps before it (the
-    -- indices and keys, then the containers read) may fail first (104)
+    -- indices and keys, then the containers read) may fail first (#104)
     if let some ke := (List.range steps.length).find? fun k =>
         match tysA[k]! with | .struct sn _ => ctx.types.isEmptyClass sn | _ => false then
       let stepsA := steps.toArray
