@@ -450,6 +450,33 @@ circle := class(shape, labelled):
     or `string`. The expression may fail, which gives exit code 1.
   - A `#!` first line is a `#` comment.
 
+## Refinement types
+
+A refinement type is an int or a float that meets conditions (Book of Verse
+ch. 11, #136):
+
+```verse
+age := type{_X:int where 0 <= _X, _X <= 120}
+finite := type{_X:float where -Inf < _X, _X < Inf}
+
+Main():void =
+    A:age = 25                       # a literal: checked when compiled
+    if (B := age[A + 1]) then Print("{B}")   # a cast: fails if not an age
+    if (not age[150]) then Print("150 is not an age")
+```
+
+- The base is `int` or `float`. Each condition compares the variable with a
+  literal number by `<`, `<=`, `>` or `>=` (a float bound has a point;
+  `Inf` and `-Inf` may bound a float, NaN may not).
+- A literal of the base type is a refined value if it meets the conditions,
+  checked when the program is compiled (`A:age = 150` is refused). Any other
+  value becomes one by the cast `age[X]`, which fails when `X` is not one.
+- A refined value is a value of its base: arithmetic, comparisons, `case`,
+  `ToString` and the built-ins see the base, and their results are of the
+  base type. `set X op= …` of a refined variable needs a cast.
+- Not supported: negation keeping a refinement (with its bounds flipped),
+  and overloads on disjoint refinements (refinements of one base overlap).
+
 ## float
 
 A `float` is an IEEE 64-bit float (Book of Verse ch. 2, #127), except that
@@ -636,7 +663,7 @@ the readings are flat:
 arithmetic on rationals (see [rational](#rational)), float functions beyond those of [float](#float),
 the class features listed under [Classes](#classes), struct methods (Verse structs have none; classes do),
 `weak_map`, qualified names `(M:)F` and module paths `using{/Verse.org/…}` (accepted and ignored), overloading beyond [Overloading](#overloading), nested
-functions, refinement types, concurrency (`spawn`, `sync`,
+functions, concurrency (`spawn`, `sync`,
 `race`, `rush`, `branch`, `<suspends>`), and effect checking
 other than `<decides>` and the heap effects (`<converges>` is accepted and
 ignored).
