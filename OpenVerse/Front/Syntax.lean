@@ -113,6 +113,9 @@ structure SParam where
 inductive STop where
   | fn    : Pos → String → List SParam → List TParam → List String → STy → SExpr → STop
   | const : Pos → String → Option STy → SExpr → STop
+  /-- `name(t:type, …) := class<specs>: fields and methods` (each method an `fn`). -/
+  | classDef : Pos → String → List TParam → List String →
+      List (String × STy × Option SExpr × Bool) → List STop → STop
   deriving Repr, Inhabited
 
 end OpenVerse.Front
