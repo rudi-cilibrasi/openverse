@@ -18,7 +18,7 @@ surface Verse is elaborated (`OpenVerse/Front/Elab.lean`) into Verse Core
 |---|---|---|
 | Comments | `#` to the end of the line, nested `<# … #>`, `<#>` indented comments (the rest of the line and every following line indented more than it; see [Source text](#source-text)) | ch. 0 |
 | Literals | `int` (decimal, `0x` hex; must fit in 64 bits), `'c'` `char` (`c` printable ASCII U+0020–U+007E, or an escape), `0oHH` `char` code unit (one or two hex digits, not octal: `0o41` is `'A'`, `0o9` is a tab), strings with escapes and `{expr}` interpolation, `true`, `false`, `0uHHHHHH` `char32` (a Unicode scalar value, up to `0u10FFFF`, no surrogates), `float` `1.5`, `2.0e-7`, `1e3` (digits, then a point and digits or an exponent or both; the nearest double) | §1.3–1.7 |
-| Types | `int`, `logic`, `char`, `char32`, `rational` (see [rational](#rational)), `float` (see [float](#float)), `string` (= `[]char`), `[]t`, `?t`, `tuple(…)`, `void`; a tuple converts to an array of its elements where an array is expected, and compares with an array as one (`array{1,2} = (1,2)`) | ch. 2–3 |
+| Types | `int`, `logic`, `char`, `char32`, `any` (see [any](#any)), `rational` (see [rational](#rational)), `float` (see [float](#float)), `string` (= `[]char`), `[]t`, `?t`, `tuple(…)`, `void`; a tuple converts to an array of its elements where an array is expected, and compares with an array as one (`array{1,2} = (1,2)`) | ch. 2–3 |
 | Definitions | top-level functions `F(X:t, …)<effects>:t = body`, top-level constants `C:t = e` / `C := e`; locals `X := e`, `X:t = e`, `var X:t = e`; no shadowing | §3.1–3.4 |
 | Mutation | `set X = e`, `set X += e` (`-=`, `*=`), `set A[i] = e` (fails out of range; returns `e`), and paths `set S.F.G = e`, `set A[i][j] op= e`, `set M[k].F = e`: indices and keys evaluated once, left to right, then the new value (for `op=`, after the old one is read: `set X += e` is `set X = X + e`), then the variable rebuilt; an index out of range or a missing intermediate key fails, while the last key of a path inserts | §3.3, §3.5, §9.3 |
 | Blocks | indented (`:`), braced (`{ }`), inline (`then`/`do`), `block:`, `( a; b )` sequences | §2.2–2.4 |
@@ -450,6 +450,46 @@ circle := class(shape, labelled):
     or `string`. The expression may fail, which gives exit code 1.
   - A `#!` first line is a `#` comment.
 
+## any
+
+`any` is the top type (Book of Verse ch. 11, #138): every value is an
+`any`, and `any(X)` makes one explicitly. Where no type is expected, two
+types with nothing in common join at `any`: `if (C?) then 42 else "text"`,
+`array{15.61, "Message", 3}` (a `[]any`). Classes with two common
+supertypes are still an ambiguity, and an expected type still decides
+(`X:int = if (C?) then 1 else "a"` is refused).
+
+Nothing can be done with an `any`: it has no equality (so it is no map
+key), no `ToString`, and no cast back. So in Verse Core it is `void`: a
+value becomes an `any` by being evaluated.
+
+## Refinement types
+
+A refinement type is an int or a float that meets conditions (Book of Verse
+ch. 11, #136):
+
+```verse
+age := type{_X:int where 0 <= _X, _X <= 120}
+finite := type{_X:float where -Inf < _X, _X < Inf}
+
+Main():void =
+    A:age = 25                       # a literal: checked when compiled
+    if (B := age[A + 1]) then Print("{B}")   # a cast: fails if not an age
+    if (not age[150]) then Print("150 is not an age")
+```
+
+- The base is `int` or `float`. Each condition compares the variable with a
+  literal number by `<`, `<=`, `>` or `>=` (a float bound has a point;
+  `Inf` and `-Inf` may bound a float, NaN may not).
+- A literal of the base type is a refined value if it meets the conditions,
+  checked when the program is compiled (`A:age = 150` is refused). Any other
+  value becomes one by the cast `age[X]`, which fails when `X` is not one.
+- A refined value is a value of its base: arithmetic, comparisons, `case`,
+  `ToString` and the built-ins see the base, and their results are of the
+  base type. `set X op= …` of a refined variable needs a cast.
+- Not supported: negation keeping a refinement (with its bounds flipped),
+  and overloads on disjoint refinements (refinements of one base overlap).
+
 ## float
 
 A `float` is an IEEE 64-bit float (Book of Verse ch. 2, #127), except that
@@ -636,7 +676,7 @@ the readings are flat:
 arithmetic on rationals (see [rational](#rational)), float functions beyond those of [float](#float),
 the class features listed under [Classes](#classes), struct methods (Verse structs have none; classes do),
 `weak_map`, qualified names `(M:)F` and module paths `using{/Verse.org/…}` (accepted and ignored), overloading beyond [Overloading](#overloading), nested
-functions, refinement types, concurrency (`spawn`, `sync`,
+functions, concurrency (`spawn`, `sync`,
 `race`, `rush`, `branch`, `<suspends>`), and effect checking
 other than `<decides>` and the heap effects (`<converges>` is accepted and
 ignored).

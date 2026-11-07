@@ -719,6 +719,20 @@ partial def parseInterp (parts : List StrPart) : PM (List SPart) := do
 
 partial def parsePrimary (stop : Nat) : PM SExpr := do
   let t ← peekT
+  -- `type{_X:t where c, …}`: a refinement type (Book of Verse ch. 11)
+  if t.identName? == some "type" && (← peekT 1).isSym "{" then
+    bump; bump
+    let v ← expectIdent
+    expectSym ":"
+    let base ← parseType
+    if !(← peekT).isKw "where" then perr (← peekT) "expected 'where' and the conditions of the refinement"
+    bump
+    let mut conds := #[← parseExpr 0]
+    while (← peekT).isSym "," do
+      bump
+      conds := conds.push (← parseExpr 0)
+    expectSym "}"
+    return .refineDef t.pos v base conds.toList
   if let .ident d := t.tok then
     if (← peekT 1).isSym "<" && (← peekT 2).isKw "constructor" && (← peekT 3).isSym ">" then
       perr t s!"{d}<constructor>(…) delegates to a constructor: it can only be an item of a constructor's body; call it as {d}(…)"
@@ -1206,7 +1220,7 @@ partial def parseTopsIn (col : Nat) (pfx : String) (braced : Bool := false) : PM
       -- (a module's data states its type, Book of Verse ch. 16)
       if !pfx.isEmpty then
         match b with
-        | .structDef .. | .enumDef .. => pure ()
+        | .structDef .. | .enumDef .. | .refineDef .. => pure ()
         | _ => perr n s!"a constant in a module needs its type: write {name0}:t = …"
       tops := tops.push (.const t.pos name none b)
     else if n.isSym ":" then

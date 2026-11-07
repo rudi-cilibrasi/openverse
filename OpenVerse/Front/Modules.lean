@@ -111,7 +111,7 @@ partial def SExpr.mapNamesM (r : Resolver) : SExpr → Except String SExpr := fu
   | .set p l o rhs => return .set p (← go l) o (← go rhs)
   | .structDef p tps fs =>
     return .structDef p tps (← fs.mapM fun (n, t, d, v) => do return (n, ← goT p t, ← d.mapM go, v))
-  | .enumDef .. => return e
+  | .enumDef .. | .refineDef .. => return e
   | .construct p n ts fs => return .construct p (← r.ty p n) (← ts.mapM (goT p)) (← fs.mapM goField)
   | .mapLit p kvs => return .mapLit p (← kvs.mapM fun (k, v) => do return (← go k, ← go v))
 
