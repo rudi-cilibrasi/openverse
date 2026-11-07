@@ -238,6 +238,20 @@ circle := class(shape, labelled):
   path, as in `set S.Best? *= 7` and `set M[k]? = v`.
 - **`let(defs){body}`** (the spec's LetMacro) makes `defs` visible in `body`
   only. Its value is the body's.
+- **Clause macros** (the spec's IfMacro, IfElseMacro, ForMacro, FirstMacro,
+  FirstDoMacro and AssertMacro). Each takes clauses in braces, separated by
+  `;`, `,` or new lines, run in a failure context; their value is the last
+  clause's: a binding's name, or the expression's value.
+  - `if{c}` runs `c` and has no value; `if{c} else e` (also `else if{…}`) is
+    the value of `c` when it succeeds, else `e`'s.
+  - `for{c}` is the array of `c`'s values, for each way its generators,
+    filters and bindings succeed: `for{X := 1..4; X * X}`.
+  - `first{c}` fails when `c` does, else it is `c`'s value; `first(c){b}`
+    runs `b`, which sees `c`'s names, once `c` succeeds, and fails when `c`
+    does. Without a body after it, `first(…)` is a call.
+  - `assert{c}` is a runtime error (as `Err()`) unless `c` succeeds.
+  With no generators (`choice` is not supported), `first` is the first and
+  only success.
 - **The command line** (the spec's expected tooling):
   - `openverse run FILE [ARG…] [do EXPR]`, and likewise `emit`. The
     arguments are the program's `Args:[]string`, unless it defines `Args`
@@ -294,7 +308,7 @@ openverse has no module namespaces yet, so the readings are flat:
 `float` and `rational` values (only `Floor(X/Y)` and `Ceil(X/Y)` of ints),
 `char32`, classes beyond phase 1 (see [Classes](#classes)), interfaces, open enums, struct methods (Verse structs have none; classes do), `ConcatenateMaps`,
 `weak_map`, module namespaces (`using{"relative_path"}` imports flatly, see [Programs of several files](#programs-of-several-files)), overloading, defaults that refer to earlier parameters, nested
-functions, `first`, `defer`, refinement types, concurrency (`spawn`, `sync`,
+functions, `last`, `defer`, refinement types, concurrency (`spawn`, `sync`,
 `race`, `rush`, `branch`, `<suspends>`), `weak_map`, and effect checking for
 `<reads>`/`<writes>`/`<computes>`. Comparing arrays with tuples (`array{1,2}
 = (1,2)` succeeds in the book) is not supported: arrays and tuples are
