@@ -2585,7 +2585,9 @@ def elabProgram (allTops00 : List STop) (opts : Options := {}) : Except String C
         throw s!"{p.show}: <computes> excludes the heap effects (<reads>, <writes>, <allocates>, <transacts>) that {n} also has"
       -- generic functions come after the others
       gsigs := gsigs.push { idx := tops.length + gidx, name := n, params := tys, ret := rt,
-                            decides := effs.contains "decides", isConst := false, fx := allowedFx effs,
+                            decides := effs.contains "decides", isConst := false,
+                            -- (a parametric class's `block:`: inferred from none, #41)
+                            fx := if n.endsWith ".$block" then [] else allowedFx effs,
                             tparams }
     | _ => pure ()
   let mkSigProg (sigs : Array Sig) : Prog :=
