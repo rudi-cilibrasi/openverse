@@ -2235,20 +2235,8 @@ partial def elabSet (ctx : Ctx) (p : Pos) (lhs0 : SExpr) (op : Option String) (r
       | .struct sn _, some f =>
         if !ctx.types.isVarField sn f then eerr sp (classSetMsg sn f)
       | _, _ => eerr p "internal: set path"
-    -- a value of a class with no instance cannot exist: the set is unreachable
-    if tysA.any fun | .struct sn _ => ctx.types.isEmptyClass sn | _ => false then
-      let tu ← fresh leafTy
-      return ⟨.assign tu (.prim .userErr []), leafTy⟩
     if refLevel?.isNone && !l.mutable then
       eerr p s!"'{root}' is not a var; declare it with var {root}:t = …"
-    -- the values below the object (or all of them) are rebuilt: a parametric
-    -- class among them would change, but it is a value with no var field
-    for k in [0:steps.length] do
-      if refLevel?.all (k > ·) then
-        if let .struct sn _ := tysA[k]! then
-          if ctx.types.classes.contains sn && !ctx.types.isRefClass sn then
-            let (sp, f?, _) := steps.toArray[k]!
-            eerr sp s!"field '{f?.getD "?"}' of the parametric class {sn} cannot be set: a parametric class is a value (#34)"
     -- read one step of the container in slot `c` of type `cty`
     let readStep (c : Nat) (cty : Ty) (step : Option String) (key : Option (Nat × Ty)) : EM Expr := do
       match step, key, cty with
@@ -2264,6 +2252,28 @@ partial def elabSet (ctx : Ctx) (p : Pos) (lhs0 : SExpr) (op : Option String) (r
         let tp ← fresh (.tup [kt, vt])
         pure (mapLookup c tk tp)
       | _, _, _ => eerr p "internal: set path"
+    -- a value of a class with no instance cannot exist, so the set is
+    -- unreachable once the path reaches one; but the steps before it (the
+    -- indices and keys, then the containers read) may fail first (104)
+    if let some ke := (List.range steps.length).find? fun k =>
+        match tysA[k]! with | .struct sn _ => ctx.types.isEmptyClass sn | _ => false then
+      let stepsA := steps.toArray
+      let mut c := l.slot
+      for k in [0:ke] do
+        let (_, f?, _) := stepsA[k]!
+        let c' ← fresh tysA[k + 1]!
+        pre := pre.push (.assign c' (← readStep c tysA[k]! f? keys[k]!))
+        c := c'
+      let tu ← fresh leafTy
+      return ⟨pre.toList.foldr Expr.seq (.assign tu (.prim .userErr [])), leafTy⟩
+    -- the values below the object (or all of them) are rebuilt: a parametric
+    -- class among them would change, but it is a value with no var field
+    for k in [0:steps.length] do
+      if refLevel?.all (k > ·) then
+        if let .struct sn _ := tysA[k]! then
+          if ctx.types.classes.contains sn && !ctx.types.isRefClass sn then
+            let (sp, f?, _) := steps.toArray[k]!
+            eerr sp s!"field '{f?.getD "?"}' of the parametric class {sn} cannot be set: a parametric class is a value (#34)"
     -- the intermediate containers: level 0 is a copy of the variable, taken
     -- after the indices, so that the right-hand side cannot change what is
     -- rebuilt (as for `set A[i] = e`); the variable is written once, last

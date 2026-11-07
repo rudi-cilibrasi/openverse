@@ -5,7 +5,8 @@
 # implementations, parametric classes, overloaded functions and defer, run by
 # the Lean reference interpreter and by cverse. Stdout and exit codes must
 # agree, and no program may hit an internal error (a lowering that fails
-# Prog.checkTypes) or be refused: the generator writes valid programs.
+# Prog.checkTypes), be refused (the generator writes valid programs), or run
+# unreachable code (it writes no Err()).
 #   usage: scripts/fuzz-classes.sh [COUNT [FIRST_SEED]]
 set -uo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -16,7 +17,9 @@ ran=0; bad=0
 for ((s=first; s<first+n; s++)); do
   python3 -I "$root/scripts/gen-classes.py" "$s" > "$tmp/p.verse"
   timeout 60 "$ov" run "$tmp/p.verse" > "$tmp/l.out" 2> "$tmp/l.err"; le=$?
-  if [[ $le -ne 0 ]] && [[ $le -ne 3 ]]; then
+  # (the generator writes no Err(), so a user error is unreachable code run:
+  # a lowering bug; other runtime errors are compared with C)
+  if [[ $le -ne 0 && $le -ne 3 && $le -ne 2 ]] || grep -q "error: user" "$tmp/l.err"; then
     bad=$((bad+1)); cp "$tmp/p.verse" "$root/fuzz-classes-$s.verse"
     echo "REFUSED or INTERNAL seed $s (exit $le, saved fuzz-classes-$s.verse): $(head -c 200 "$tmp/l.err")"
     continue
