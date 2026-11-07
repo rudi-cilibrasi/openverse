@@ -6,7 +6,7 @@ out of date. The proofs are in `OpenVerse/Core/`.
 
 ## `eval_iff`: the reference interpreter computes exactly the big-step semantics
 
-`OpenVerse/Core/Adequacy.lean`; axioms: [propext, Quot.sound]
+`OpenVerse/Core/Adequacy.lean`; axioms: [propext, Classical.choice, Quot.sound]
 
 ```lean
 @eval_iff : ∀ {P : Prog} {s : St} {e : Expr} {r : Res} {s' : St}, Eval P s e r s' ↔ ∃ n, eval P n s e = some (r, s')
@@ -14,7 +14,7 @@ out of date. The proofs are in `OpenVerse/Core/`.
 
 ## `eval_fuel_irrelevant`: fuel never changes a finished answer
 
-`OpenVerse/Core/Adequacy.lean`; axioms: [propext, Quot.sound]
+`OpenVerse/Core/Adequacy.lean`; axioms: [propext, Classical.choice, Quot.sound]
 
 ```lean
 @eval_fuel_irrelevant : ∀ {P : Prog} {n₁ n₂ : Nat} {s : St} {e : Expr} {x₁ x₂ : Res × St},
@@ -23,7 +23,7 @@ out of date. The proofs are in `OpenVerse/Core/`.
 
 ## `Eval.det`: Verse Core is deterministic
 
-`OpenVerse/Core/Adequacy.lean`; axioms: [propext, Quot.sound]
+`OpenVerse/Core/Adequacy.lean`; axioms: [propext, Classical.choice, Quot.sound]
 
 ```lean
 @Eval.det : ∀ {P : Prog} {s : St} {e : Expr} {r₁ : Res} {s₁ : St} {r₂ : Res} {s₂ : St},
@@ -32,7 +32,7 @@ out of date. The proofs are in `OpenVerse/Core/`.
 
 ## `Runs.det`: a program run has one outcome and one output
 
-`OpenVerse/Core/Adequacy.lean`; axioms: [propext, Quot.sound]
+`OpenVerse/Core/Adequacy.lean`; axioms: [propext, Classical.choice, Quot.sound]
 
 ```lean
 @Runs.det : ∀ {P : Prog} {r₁ : Res} {o₁ : List Nat} {r₂ : Res} {o₂ : List Nat},
@@ -41,7 +41,7 @@ out of date. The proofs are in `OpenVerse/Core/`.
 
 ## `Prog.run_sound`: Prog.run is sound
 
-`OpenVerse/Core/Adequacy.lean`; axioms: [propext, Quot.sound]
+`OpenVerse/Core/Adequacy.lean`; axioms: [propext, Classical.choice, Quot.sound]
 
 ```lean
 @Prog.run_sound : ∀ {P : Prog} {n : Nat} {r : Res} {out : List Nat}, P.run n = some (r, out) → Runs P r out
@@ -49,7 +49,7 @@ out of date. The proofs are in `OpenVerse/Core/`.
 
 ## `Prog.run_complete`: Prog.run is complete
 
-`OpenVerse/Core/Adequacy.lean`; axioms: [propext, Quot.sound]
+`OpenVerse/Core/Adequacy.lean`; axioms: [propext, Classical.choice, Quot.sound]
 
 ```lean
 @Prog.run_complete : ∀ {P : Prog} {r : Res} {out : List Nat},
@@ -58,7 +58,7 @@ out of date. The proofs are in `OpenVerse/Core/`.
 
 ## `evalB_sound`: the depth-bounded interpreter of openverse run is eval whenever it does not stop for depth
 
-`OpenVerse/Core/Bounded.lean`; axioms: [propext, Quot.sound]
+`OpenVerse/Core/Bounded.lean`; axioms: [propext, Classical.choice, Quot.sound]
 
 ```lean
 @evalB_sound : ∀ {P : Prog} {n d : Nat} {s : St} {e : Expr},
@@ -67,7 +67,7 @@ out of date. The proofs are in `OpenVerse/Core/`.
 
 ## `evalB_complete`: with a depth budget at least the fuel, the bounded interpreter is eval
 
-`OpenVerse/Core/Bounded.lean`; axioms: [propext, Quot.sound]
+`OpenVerse/Core/Bounded.lean`; axioms: [propext, Classical.choice, Quot.sound]
 
 ```lean
 @evalB_complete : ∀ {P : Prog} {n d : Nat} {s : St} {e : Expr},
@@ -76,7 +76,7 @@ out of date. The proofs are in `OpenVerse/Core/`.
 
 ## `Prog.runB_sound`: openverse run computes Prog.run whenever it does not hit its depth bound
 
-`OpenVerse/Core/Bounded.lean`; axioms: [propext, Quot.sound]
+`OpenVerse/Core/Bounded.lean`; axioms: [propext, Classical.choice, Quot.sound]
 
 ```lean
 @Prog.runB_sound : ∀ {P : Prog} {n d : Nat}, P.runB n d ≠ Bounded.deep → P.runB n d = Bounded.ofOption (P.run n)
@@ -84,7 +84,7 @@ out of date. The proofs are in `OpenVerse/Core/`.
 
 ## `ite_rollback`: a failed if condition is rolled back
 
-`OpenVerse/Core/Derived.lean`; axioms: [propext, Quot.sound]
+`OpenVerse/Core/Derived.lean`; axioms: [propext, Classical.choice, Quot.sound]
 
 ```lean
 @ite_rollback : ∀ {P : Prog} {s s₁ : St} {c t e : Expr} {r : Res} {s' : St},
@@ -93,7 +93,7 @@ out of date. The proofs are in `OpenVerse/Core/`.
 
 ## `notE_ok`: a successful not e discards the effects of e
 
-`OpenVerse/Core/Derived.lean`; axioms: [propext]
+`OpenVerse/Core/Derived.lean`; axioms: [propext, Classical.choice, Quot.sound]
 
 ```lean
 @notE_ok : ∀ {P : Prog} {s : St} {e : Expr} {v : Value} {s' : St},
@@ -102,7 +102,7 @@ out of date. The proofs are in `OpenVerse/Core/`.
 
 ## `notE_notE_ok`: not not e is a pure test
 
-`OpenVerse/Core/Derived.lean`; axioms: [propext]
+`OpenVerse/Core/Derived.lean`; axioms: [propext, Classical.choice, Quot.sound]
 
 ```lean
 @notE_notE_ok : ∀ {P : Prog} {s : St} {e : Expr} {v : Value} {s' : St},
@@ -111,7 +111,7 @@ out of date. The proofs are in `OpenVerse/Core/`.
 
 ## `optionE_none`: option{} of a failure is empty and effect-free
 
-`OpenVerse/Core/Derived.lean`; axioms: [propext]
+`OpenVerse/Core/Derived.lean`; axioms: [propext, Classical.choice, Quot.sound]
 
 ```lean
 @optionE_none : ∀ {P : Prog} {s : St} {t : Nat} {e : Expr} {s' : St},
@@ -120,7 +120,7 @@ out of date. The proofs are in `OpenVerse/Core/`.
 
 ## `orE_right`: a or b with a failing a is b from the original state
 
-`OpenVerse/Core/Derived.lean`; axioms: [propext, Quot.sound]
+`OpenVerse/Core/Derived.lean`; axioms: [propext, Classical.choice, Quot.sound]
 
 ```lean
 @orE_right : ∀ {P : Prog} {s s₁ : St} {t : Nat} {a b : Expr} {r : Res} {s' : St},
@@ -129,7 +129,7 @@ out of date. The proofs are in `OpenVerse/Core/`.
 
 ## `Eval.no_fail`: <decides> soundness for expressions
 
-`OpenVerse/Core/Effects.lean`; axioms: [propext, Quot.sound]
+`OpenVerse/Core/Effects.lean`; axioms: [propext, Classical.choice, Quot.sound]
 
 ```lean
 @Eval.no_fail : ∀ {P : Prog},
@@ -138,7 +138,7 @@ out of date. The proofs are in `OpenVerse/Core/`.
 
 ## `Runs.no_fail`: a program whose Main is not <decides> never fails
 
-`OpenVerse/Core/Effects.lean`; axioms: [propext, Quot.sound]
+`OpenVerse/Core/Effects.lean`; axioms: [propext, Classical.choice, Quot.sound]
 
 ```lean
 @Runs.no_fail : ∀ {P : Prog},
@@ -148,7 +148,7 @@ out of date. The proofs are in `OpenVerse/Core/`.
 
 ## `Eval.scoped_ok`: well-scoped programs raise no slot or call error and keep frame sizes
 
-`OpenVerse/Core/Scoping.lean`; axioms: [propext, Quot.sound]
+`OpenVerse/Core/Scoping.lean`; axioms: [propext, Classical.choice, Quot.sound]
 
 ```lean
 @Eval.scoped_ok : ∀ {P : Prog},
@@ -159,7 +159,7 @@ out of date. The proofs are in `OpenVerse/Core/`.
 
 ## `Eval.typed`: preservation
 
-`OpenVerse/Core/TypeSafety.lean`; axioms: [propext, Quot.sound]
+`OpenVerse/Core/TypeSafety.lean`; axioms: [propext, Classical.choice, Quot.sound]
 
 ```lean
 @Eval.typed : ∀ {P : Prog} {S : Sigs},
@@ -173,7 +173,7 @@ out of date. The proofs are in `OpenVerse/Core/`.
 
 ## `Runs.typed`: type safety of programs
 
-`OpenVerse/Core/TypeSafety.lean`; axioms: [propext, Quot.sound]
+`OpenVerse/Core/TypeSafety.lean`; axioms: [propext, Classical.choice, Quot.sound]
 
 ```lean
 @Runs.typed : ∀ {P : Prog} {S : Sigs},
@@ -225,7 +225,7 @@ out of date. The proofs are in `OpenVerse/Core/`.
 
 ## `Runs.no_control`: break never escapes its loop
 
-`OpenVerse/Core/Control.lean`; axioms: [propext, Quot.sound]
+`OpenVerse/Core/Control.lean`; axioms: [propext, Classical.choice, Quot.sound]
 
 ```lean
 @Runs.no_control : ∀ {P : Prog},
@@ -234,7 +234,7 @@ out of date. The proofs are in `OpenVerse/Core/`.
 
 ## `Eval.no_writes`: an expression that does not write keeps every existing object
 
-`OpenVerse/Core/Writes.lean`; axioms: [propext]
+`OpenVerse/Core/Writes.lean`; axioms: [propext, Classical.choice, Quot.sound]
 
 ```lean
 @Eval.no_writes : ∀ {P : Prog},
@@ -277,7 +277,7 @@ out of date. The proofs are in `OpenVerse/Core/`.
 
 ## `Prog.accepted_no_writes`: a function without writes keeps every existing object
 
-`OpenVerse/Core/Guarantees.lean`; axioms: [propext, Quot.sound]
+`OpenVerse/Core/Guarantees.lean`; axioms: [propext, Classical.choice, Quot.sound]
 
 ```lean
 @Prog.accepted_no_writes : ∀ {P : Prog},
@@ -325,7 +325,7 @@ out of date. The proofs are in `OpenVerse/Core/`.
 
 ## `apply_min_neg_one`: the (INT64_MIN, -1) cases
 
-`OpenVerse/Core/Seams.lean`; axioms: [propext]
+`OpenVerse/Core/Seams.lean`; axioms: [propext, Classical.choice, Quot.sound]
 
 ```lean
 apply_min_neg_one : Prim.floorDiv.apply [Value.int Int64.minV, Value.int (-1)] = Res.err ErrKind.overflow ∧

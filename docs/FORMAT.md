@@ -51,7 +51,9 @@ A literal that is not one of these (a non-string array, a non-empty tuple,
 `some v`) is encoded as the `PRIM` node that builds it (`mkArr`, `mkTup`,
 `mkSome`) applied to literal children. That evaluates to the same value
 (`Prim.apply .mkArr vs = .ok (.arr vs.toArray)`), and it keeps every node flat, so the
-loader needs no recursion.
+loader needs no recursion. A float (#127) is `fofBits` of an INT literal of
+its bits: the bits of a canonical double are their own float, so this too
+evaluates to the literal, and the literal kinds stay as they are.
 
 ## Primitive codes
 
@@ -68,6 +70,17 @@ loader needs no recursion.
 | 8 | modulo | 18 | mkSome | 28 | userErr |
 | 9 | lt | 19 | concat | | |
 
+Floats (#127):
+
+| code | prim | code | prim | code | prim |
+|---|---|---|---|---|---|
+| 29 | fadd | 35 | fmin | 41 | fofInt |
+| 30 | fsub | 36 | fmax | 42 | ffloor |
+| 31 | fmul | 37 | flt | 43 | fceil |
+| 32 | fdiv | 38 | fle | 44 | fround |
+| 33 | fneg | 39 | fgt | 45 | ftrunc |
+| 34 | fabs | 40 | fge | 46 | fofBits |
+
 ## What the loader accepts
 
 `vx_load` (`runtime/src/load.c`) accepts a buffer exactly when it parses to
@@ -78,7 +91,7 @@ the end with no bytes left over and:
 3. every child index of node `j` is `< j`;
 4. every slot (LOCAL, ASSIGN, FOR) is `< nslots` of its function;
 5. every CALL names a function `< nfns` whose `arity` equals the call's `n`;
-6. every PRIM code is `≤ 28`, `k = 0` unless the code is 25, every LIT
+6. every PRIM code is `≤ 46`, `k = 0` unless the code is 25, every LIT
    tag is `≤ 6` with LOGIC `≤ 1`, and every HEAP op is `≤ 4`, with `k = 0`
    for `tag`;
 7. the counts stay within the limits in `runtime/include/openverse.h`.

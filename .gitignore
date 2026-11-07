@@ -5,3 +5,4 @@
 *.vbc.tmp
 fuzz-classes-*.verse
 fuzz-fields-*.verse
+fuzz-floats-*.verse

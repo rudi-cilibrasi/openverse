@@ -2365,6 +2365,21 @@ partial def ratMismatch : Ty → Ty → Bool
   | .struct a as, .struct b bs => a == b && as.length == bs.length && (as.zip bs).any fun (x, y) => ratMismatch x y
   | _, _ => false
 
+/-- Two different scalar types at the same place inside two types (#127):
+    `1 = 1.0` or `array{1} = array{'a'}` would compare values Verse Core
+    holds differently, always unequal. -/
+partial def scalarMismatch : Ty → Ty → Bool
+  | .arr a, .arr b | .opt a, .opt b => scalarMismatch a b
+  | .tup as, .tup bs => as.length == bs.length && (as.zip bs).any fun (a, b) => scalarMismatch a b
+  | .tup as, .arr b | .arr b, .tup as => as.any (scalarMismatch · b)
+  | .map k v, .map k' v' => scalarMismatch k k' || scalarMismatch v v'
+  | .struct a as, .struct b bs => a == b && as.length == bs.length && (as.zip bs).any fun (x, y) => scalarMismatch x y
+  | a, b =>
+    let scalar : Ty → Bool := fun
+      | .int | .logic | .char | .char32 | .rational | .float | .enum _ => true
+      | _ => false
+    scalar a && scalar b && !(a == b)
+
 /-- A call of a rational helper (#116), `$ratMake` or `$ratLt`. -/
 partial def ratCall (ctx : Ctx) (p : Pos) (f : String) (args : List Expr) : EM Expr := do
   let some s := ctx.sig? f | eerr p "internal error: the rational helpers are missing"
@@ -2419,6 +2434,8 @@ partial def elabCmp (ctx : Ctx) (p : Pos) (a : SExpr) (rest : List (String × SE
       -- that Verse Core holds differently, `1` and `(1, 1)`)
       if ratMismatch ta tb then
         eerr p s!"'{op}' compares values of different types, {ta.show} and {tb.show} (an int and a rational inside them: convert the ints first)"
+      if scalarMismatch ta tb then
+        eerr p s!"'{op}' compares values of different types, {ta.show} and {tb.show}"
     else if !((ta == .int && tb == .int) || (ta == .char && tb == .char) || (ta == .char32 && tb == .char32) ||
         (ta == .float && tb == .float)) then
       eerr p s!"'{op}' compares ints, chars, char32s or floats, found {ta.show} and {tb.show}"
