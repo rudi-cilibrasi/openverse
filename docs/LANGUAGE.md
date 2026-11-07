@@ -239,12 +239,14 @@ circle := class(shape, labelled):
 - **Qualified implementations.** A class that implements two interfaces
   declaring the same method can give each its own: `(i1:)M<override>()`
   and `(i2:)M<override>()`. Each declaration that overrides nothing (a
-  *root*) is a separate slot. The qualifier names the root: the interface
-  that introduces `M`.
+  *root*) is a separate slot. The qualifier names the root: the interface,
+  or class, that introduces `M`.
   - **Choosing.** For an object, a slot's implementation is the most
-    specific `(r:)M` or plain `M` above its class that is below `r` or in its
-    class chain. A class's method implements an interface that a subclass
-    adds; an interface's default implements only the slots above it.
+    specific `(r:)M` or plain `M` above its class that is below `r` or
+    reached through a class of its chain that is not below `r`. As in Java,
+    what a class has (its own method, or a default it inherits) implements an
+    interface that a subclass adds. A default of the class's own interfaces
+    implements only the slots above it.
   - **Calls.** A call through an `i1` uses slot `i1`. `X.(i1:)M()` names it,
     and inside a method a bare `(i1:)M()` is `Self.(i1:)M()`. A call through
     a type whose slots some class below implements differently is refused as

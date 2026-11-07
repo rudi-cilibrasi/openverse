@@ -198,14 +198,16 @@ def TyEnv.rootsOf (env : TyEnv) (declares : String → Bool) (c : String) : List
 /-- The implementations of slot `r` of a method among `ups` (the classes and
     interfaces above an instance's class, most specific first), given each
     one's implementation of the slot (`impl e`: its `(r:)M`, else a plain
-    `M`): the most specific of those below `r` or in the class chain (a
-    class's method implements an interface a subclass adds; an interface's
-    default only the slots above it). The class chain's wins over interface
-    defaults (no interface is below a class); several interface defaults are
-    ambiguous. -/
+    `M`): the most specific of those below `r` or reached through a class of
+    the chain that is not below `r` (what such a class has, its own or a
+    default it inherits, implements an interface a subclass adds, as in Java;
+    a default of the instance's own interfaces implements only the slots above
+    it). The class chain's wins over interface defaults (no interface is below
+    a class); several interface defaults are ambiguous. -/
 def TyEnv.slotImpls (env : TyEnv) (impl : String → Option String) (ups : List String) (r : String) :
     List String :=
-  let cands := ups.filter fun e => (env.isSub e r || !(env.info e).isIface) && (impl e).isSome
+  let outside := ups.filter fun x => !(env.info x).isIface && !env.isSub x r
+  let cands := ups.filter fun e => (env.isSub e r || outside.any (env.isSub · e)) && (impl e).isSome
   let best := cands.filter fun e => !cands.any fun e' => e' != e && env.isSub e' e
   (match best.find? (fun e => !(env.info e).isIface) with
    | some e => [e]
@@ -2694,8 +2696,8 @@ def elabProgram (allTops00 : List STop) (opts : Options := {}) : Except String C
             | _ => none
           else none
         if let some (q, m') := qual? then
-          if !((henv.supers n).drop 1).contains q || !(henv.info q).isIface then
-            throw s!"{mp.show}: ({q}:){m'}: {q} is not an interface above {n}"
+          if !((henv.supers n).drop 1).contains q then
+            throw s!"{mp.show}: ({q}:){m'}: {q} is not a class or interface above {n}"
           let roots := henv.rootsOf (declares · m') q
           let qualify := " or ".intercalate (roots.map fun r => s!"({r}:)")
           if roots.isEmpty then throw s!"{mp.show}: ({q}:){m'}: {q} has no method {m'}"

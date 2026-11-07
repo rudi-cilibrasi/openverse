@@ -1,4 +1,4 @@
-# expect: (i2:)M: i2 is not an interface above c
+# expect: (i2:)M: i2 is not a class or interface above c
 i1 := interface:
     M():int
 i2 := interface:
