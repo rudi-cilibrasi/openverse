@@ -44,6 +44,26 @@ dog := class(animal):
     Legs<override>():int = 4
     Fetch():string = "fetching"
 
+# the most specific implementation wins, whatever the order of the parents
+greeter := interface:
+    Greet():string = "hello"
+polite := interface(greeter):
+    Greet<override>():string = "good day"
+host := class(greeter, polite):
+    Name:string = "host"
+
+# a class parent and an interface, both above two classes
+named := interface:
+    Title():string
+pet := class:
+    Age:int = 1
+cat := class(pet, named):
+    Title<override>():string = "cat"
+bird := class(pet, named):
+    Title<override>():string = "bird"
+
+Identity(X:t where t:type):t = X
+
 # classes and interfaces in generic code, and as parameters
 Labels(Items:[]labelled):[]string = for (I : Items) { I.Label() }
 
@@ -83,6 +103,16 @@ Main():void =
         if (A.Walks[]) then Print("walks on {A.Legs()} legs") else Print("swims")
     for (A : Animals, D := dog[A]) { Print(D.Fetch()) }
     Print("{Count(Animals)} animals")
+    Print(host{}.Greet())
+    G:greeter = host{}
+    Print(G.Greet())
+    # the expected type of an if: a common interface, not the common class
+    N:named = if (Count(Animals) > 1) then cat{} else bird{}
+    Print(N.Title())
+    # a cast used only as a condition, and a subclass passed to a generic function
+    if (dog[Animals[1]]) then Print("the second animal is a dog")
+    A2:animal = Identity(dog{})
+    Print("{A2.Legs()} legs")
     # a failing cast inside a failure context rolls back
     var Seen:int = 0
     if (set Seen += 1, D := dog[Animals[0]]) then Print("unreachable")

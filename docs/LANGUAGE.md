@@ -197,11 +197,17 @@ circle := class(shape, labelled):
   without a body and cannot be constructed. A concrete class must implement
   every method it has, and must override a method that two unrelated
   interfaces both provide.
-- **Subtyping and dispatch.** A value of a class can be used wherever a
-  class or interface above it is expected, and so can arrays and options of
-  them. Two `if` branches of different classes join at their nearest common
-  supertype. A method call runs the implementation of the value's own class
-  (virtual dispatch), also inside a method and through `(super:)`.
+- **Subtyping and dispatch.**
+  - A value of a class can be used wherever a class or interface above it is
+    expected, and so can arrays and options of them.
+  - Two `if` branches of different classes take the expected type when both
+    are below it, else their nearest common supertype.
+  - A method call runs the most specific implementation for the value's own
+    class: the nearest in its class chain, else the most specific interface
+    default, whatever order the parents are listed in. This is virtual
+    dispatch, also inside a method; `(super:)` uses the same rule.
+  - An implementation must have the signature of every declaration it
+    satisfies.
 - **Casts.** `T[X]` is `X` as a `T`, failing unless `X`'s class is below
   `T`. `T(X)` converts to a supertype and cannot fail.
 - **Parametric classes.** A method of a parametric class is generic over the
@@ -218,7 +224,10 @@ circle := class(shape, labelled):
   - overriding a method with its own type parameters;
   - covariant return types;
   - interface fields;
-  - qualified `(i:)M` implementations.
+  - qualified `(i:)M` implementations;
+  - named arguments to a method dispatched on the receiver's class;
+  - subtyping through `+` on arrays, through tuples and through maps, and an
+    array literal of different classes without an expected type.
 
 ## Readings openverse takes
 

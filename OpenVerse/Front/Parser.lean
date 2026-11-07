@@ -760,7 +760,8 @@ partial def parseClassBody (p : Pos) (name : String) (tps : List TParam) (isIfac
   if o.isSym ":" then
     bump
     let n ← peekT
-    if n.isEof || (n.bol && n.col == 0) then perr n s!"expected the indented body of class {name}"
+    if n.isEof || (n.bol && n.col == 0) then
+      perr n s!"expected the indented body of {if isIface then "interface" else "class"} {name}"
     let c := n.col
     items ← withBlock n do
       let mut items := #[← parseClassItem c]
