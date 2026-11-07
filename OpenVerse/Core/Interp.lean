@@ -73,7 +73,7 @@ def eval (P : Prog) : Nat → St → Expr → Option (Res × St)
   | n+1, s, .forE i it filt body => bindR (eval P n s it) fun v s₁ =>
       match v with
       | .arr vs => evalFor P n i filt body s₁ vs.toList []
-      | .int _ | .logic _ | .char _ | .tup _ | .none | .some _ | .ref _ => some (.err .type, s₁)
+      | .int _ | .logic _ | .char _ | .float _ | .tup _ | .none | .some _ | .ref _ => some (.err .type, s₁)
   | n+1, s, .loop b => match eval P n s b with
       | none => none
       | some (.ok _, s₁) => eval P n s₁ (.loop b)

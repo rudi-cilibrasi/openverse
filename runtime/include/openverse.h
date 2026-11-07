@@ -170,7 +170,26 @@ int    vx_store_move_out(vx_store *s, uint8_t *out, size_t ocap);
 #define VX_P_TOSTR    26
 #define VX_P_FAIL     27
 #define VX_P_USERERR  28
-#define VX_P_LAST     28
+/* floats (#127) */
+#define VX_P_FADD     29
+#define VX_P_FSUB     30
+#define VX_P_FMUL     31
+#define VX_P_FDIV     32
+#define VX_P_FNEG     33
+#define VX_P_FABS     34
+#define VX_P_FMIN     35
+#define VX_P_FMAX     36
+#define VX_P_FLT      37
+#define VX_P_FLE      38
+#define VX_P_FGT      39
+#define VX_P_FGE      40
+#define VX_P_FOFINT   41
+#define VX_P_FFLOOR   42
+#define VX_P_FCEIL    43
+#define VX_P_FROUND   44
+#define VX_P_FTRUNC   45
+#define VX_P_FOFBITS  46   /* a float literal: PRIM fofBits [LIT int bits] */
+#define VX_P_LAST     46
 
 /*
  * One node.  Child indices are into the node table of the same function.

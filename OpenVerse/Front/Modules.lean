@@ -66,7 +66,7 @@ partial def SExpr.mapNamesM (r : Resolver) : SExpr → Except String SExpr := fu
     | .decl p n ty v x => do return .decl p n (← ty.mapM (goT p)) v (← go x)
     | a => go a
   match e with
-  | .int .. | .char .. | .char32 .. | .brk _ => return e
+  | .int .. | .char .. | .char32 .. | .float .. | .brk _ => return e
   | .str p parts => return .str p (← parts.mapM fun | .text s => pure (.text s) | .code c => do return .code (← go c))
   | .ident p n => do
     -- (`D<constructor>(…)`, a delegation: `D` or `M.D`)

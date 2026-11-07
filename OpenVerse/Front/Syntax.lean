@@ -44,6 +44,8 @@ inductive SExpr where
   | char     : Pos → Nat → SExpr
   /-- A `0u` char32 literal. -/
   | char32   : Pos → Nat → SExpr
+  /-- A float literal (#127): its canonical bits. -/
+  | float    : Pos → UInt64 → SExpr
   | str      : Pos → List SPart → SExpr
   | ident    : Pos → String → SExpr
   /-- `e(args)` (`bracket = false`) or `e[args]` (`bracket = true`). -/
@@ -97,7 +99,7 @@ inductive SPart where
 end
 
 def SExpr.pos : SExpr → Pos
-  | .int p _ | .char p _ | .char32 p _ | .str p _ | .ident p _ | .app p _ _ _ | .member p _ _
+  | .int p _ | .char p _ | .char32 p _ | .float p _ | .str p _ | .ident p _ | .app p _ _ _ | .member p _ _
   | .query p _ | .neg p _ | .notE p _ | .bin p _ _ _ | .cmp p _ _ | .andE p _ _
   | .orE p _ _ | .range p _ _ | .tuple p _ | .block p _ | .arrayLit p _
   | .optionLit p _ | .logicLit p _ | .ite p _ _ _ | .forE p _ _ | .gen p _ _ _

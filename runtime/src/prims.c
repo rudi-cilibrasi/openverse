@@ -99,6 +99,45 @@ static int new_from(vx_ctx *c, uint64_t tag, const vx_val *src, size_t n, vx_res
     return 1;
 }
 
+/* A string value of the ASCII text s[0..n). */
+static void str_of(vx_ctx *c, const char *s, size_t n, vx_res *r)
+{
+    size_t k, o;
+    vx_val *e;
+    if (vx_heap_alloc(&c->heap, n, &o) != VX_OK) {
+        nomem(r);
+        return;
+    }
+    e = vx_obj_elems(&c->heap, o);
+    for (k = 0; k < n; k++) {
+        e[k].tag = VX_T_CHAR;
+        e[k].bits = (uint64_t)(unsigned char)s[k];
+    }
+    ok_val(r, VX_T_ARR, o);
+}
+
+static double F(const vx_val *v)
+{
+    return vx_fval(v->bits);
+}
+
+static void ok_float(vx_res *r, double d)
+{
+    ok_val(r, VX_T_FLOAT, vx_fcanon(d));
+}
+
+/* VFloat.toIntRes: NaN or an infinity fails; out of range is the overflow error */
+static void to_int(vx_res *r, int mode, const vx_val *v)
+{
+    int64_t i;
+    if (((v->bits >> 52) & 2047u) == 2047u)
+        fail(r);
+    else if (vx_ftoint(mode, v->bits, &i) == VX_OK)
+        ok_val(r, VX_T_INT, vx_bits_of(i));
+    else
+        err(r, VX_E_OVERFLOW);
+}
+
 /* intBytes i: decimal, '-' for negatives (Lean's toString on Int). */
 static void int_to_str(vx_ctx *c, int64_t i, vx_res *r)
 {
@@ -227,6 +266,9 @@ void vx_prim_apply(vx_ctx *c, uint32_t op, uint32_t k, const vx_val *a, size_t n
     int ii = n == 2 && is(&a[0], VX_T_INT) && is(&a[1], VX_T_INT);
     int cc = n == 2 && is(&a[0], VX_T_CHAR) && is(&a[1], VX_T_CHAR);
     int i1 = n == 1 && is(&a[0], VX_T_INT);
+    int ff = n == 2 && is(&a[0], VX_T_FLOAT) && is(&a[1], VX_T_FLOAT);
+    int f1 = n == 1 && is(&a[0], VX_T_FLOAT);
+    char fb[48];
 
     switch (op) {
     /* | .add, [.int a, .int b] => Res.ofInt (a + b) */
@@ -375,6 +417,9 @@ void vx_prim_apply(vx_ctx *c, uint32_t op, uint32_t k, const vx_val *a, size_t n
                 int_to_str(c, I(&a[0]), r);
             else if (is(&a[0], VX_T_CHAR))
                 new_from(c, VX_T_ARR, &a[0], 1, r);
+            /* toStrValue (.float b) = .ok (Value.ofString (VFloat.render b)) */
+            else if (is(&a[0], VX_T_FLOAT))
+                str_of(c, fb, vx_fmt(a[0].bits, fb), r);
             else if (is(&a[0], VX_T_ARR) && all_chars(&c->heap, a[0].bits))
                 ok_copy(r, &a[0]);
             else
@@ -389,6 +434,70 @@ void vx_prim_apply(vx_ctx *c, uint32_t op, uint32_t k, const vx_val *a, size_t n
     /* | .userErr, [] => .err .user */
     case VX_P_USERERR:
         if (n == 0) { err(r, VX_E_USER); return; }
+        break;
+    /* floats (#127): | .fadd, [.float a, .float b] => .ok (.float (canon (a + b))), … */
+    case VX_P_FADD:
+        if (ff) { ok_float(r, F(&a[0]) + F(&a[1])); return; }
+        break;
+    case VX_P_FSUB:
+        if (ff) { ok_float(r, F(&a[0]) - F(&a[1])); return; }
+        break;
+    case VX_P_FMUL:
+        if (ff) { ok_float(r, F(&a[0]) * F(&a[1])); return; }
+        break;
+    case VX_P_FDIV:
+        if (ff) { ok_float(r, F(&a[0]) / F(&a[1])); return; }
+        break;
+    case VX_P_FNEG:
+        if (f1) { ok_float(r, -F(&a[0])); return; }
+        break;
+    case VX_P_FABS:
+        if (f1) { double x = F(&a[0]); ok_float(r, x < 0 ? -x : x); return; }
+        break;
+    /* | .fmin, [.float a, .float b] => .ok (.float (VFloat.fmin a b)) (NaN if either is) */
+    case VX_P_FMIN:
+    case VX_P_FMAX:
+        if (ff) {
+            double x = F(&a[0]), y = F(&a[1]);
+            if (x != x || y != y) ok_val(r, VX_T_FLOAT, vx_fcanon(x != x ? x : y));
+            else if (op == VX_P_FMIN) ok_copy(r, y < x ? &a[1] : &a[0]);
+            else ok_copy(r, x < y ? &a[1] : &a[0]);
+            return;
+        }
+        break;
+    /* | .flt, [.float a, .float b] => cmpRes (decide (a < b)) (.float a), and fle, fgt, fge */
+    case VX_P_FLT:
+        if (ff) { cmp(r, F(&a[0]) < F(&a[1]), &a[0]); return; }
+        break;
+    case VX_P_FLE:
+        if (ff) { cmp(r, F(&a[0]) <= F(&a[1]), &a[0]); return; }
+        break;
+    case VX_P_FGT:
+        if (ff) { cmp(r, F(&a[1]) < F(&a[0]), &a[0]); return; }
+        break;
+    case VX_P_FGE:
+        if (ff) { cmp(r, F(&a[1]) <= F(&a[0]), &a[0]); return; }
+        break;
+    /* | .fofInt, [.int i] => .ok (.float (canon (Float.ofInt i))) */
+    case VX_P_FOFINT:
+        if (i1) { ok_float(r, (double)I(&a[0])); return; }
+        break;
+    /* | .ffloor, [.float a] => VFloat.toIntRes .floor a, and fceil, fround, ftrunc */
+    case VX_P_FFLOOR:
+        if (f1) { to_int(r, VX_FFLOOR, &a[0]); return; }
+        break;
+    case VX_P_FCEIL:
+        if (f1) { to_int(r, VX_FCEIL, &a[0]); return; }
+        break;
+    case VX_P_FROUND:
+        if (f1) { to_int(r, VX_FROUND, &a[0]); return; }
+        break;
+    case VX_P_FTRUNC:
+        if (f1) { to_int(r, VX_FTRUNC, &a[0]); return; }
+        break;
+    /* | .fofBits, [.int i] => .ok (.float (canon (ofBits i))) (a float literal) */
+    case VX_P_FOFBITS:
+        if (i1) { ok_val(r, VX_T_FLOAT, vx_fcanon(vx_fval(a[0].bits))); return; }
         break;
     default:
         break;

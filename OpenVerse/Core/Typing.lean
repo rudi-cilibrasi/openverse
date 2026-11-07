@@ -27,6 +27,8 @@ namespace OpenVerse
 
 inductive VTy where
   | int | logic | char
+  /-- `float` (#127): an IEEE 64-bit float. -/
+  | float
   | arr : VTy → VTy
   | tup : List VTy → VTy
   | opt : VTy → VTy
@@ -49,6 +51,7 @@ def decEq : (a b : VTy) → Decidable (a = b)
   | .int, .int => isTrue rfl
   | .logic, .logic => isTrue rfl
   | .char, .char => isTrue rfl
+  | .float, .float => isTrue rfl
   | .arr a, .arr b => match decEq a b with
     | isTrue h => isTrue (by subst h; rfl)
     | isFalse h => isFalse (by intro h'; cases h'; exact h rfl)
@@ -76,7 +79,11 @@ def decEq : (a b : VTy) → Decidable (a = b)
   | .char, .int | .char, .logic | .char, .arr _ | .char, .tup _ | .char, .opt _
   | .arr _, .int | .arr _, .logic | .arr _, .char | .arr _, .tup _ | .arr _, .opt _
   | .tup _, .int | .tup _, .logic | .tup _, .char | .tup _, .arr _ | .tup _, .opt _
-  | .opt _, .int | .opt _, .logic | .opt _, .char | .opt _, .arr _ | .opt _, .tup _ =>
+  | .opt _, .int | .opt _, .logic | .opt _, .char | .opt _, .arr _ | .opt _, .tup _
+  | .float, .int | .float, .logic | .float, .char | .float, .arr _ | .float, .tup _ | .float, .opt _
+  | .float, .var _ | .float, .ref _ _
+  | .int, .float | .logic, .float | .char, .float | .arr _, .float | .tup _, .float | .opt _, .float
+  | .var _, .float | .ref _ _, .float =>
     isFalse (by intro h; cases h)
 def decEqList : (as bs : List VTy) → Decidable (as = bs)
   | [], [] => isTrue rfl
@@ -96,6 +103,7 @@ def default : VTy → Value
   | .int => .int 0
   | .logic => .logic false
   | .char => .char 0
+  | .float => .float 0
   | .arr _ => .arr #[]
   | .opt _ => .none
   | .tup ts => .tup (defaults ts)
@@ -116,6 +124,7 @@ def subst (θ : Nat → VTy) : VTy → VTy
   | .int => .int
   | .logic => .logic
   | .char => .char
+  | .float => .float
   | .arr t => .arr (subst θ t)
   | .opt t => .opt (subst θ t)
   | .tup ts => .tup (substL θ ts)
@@ -137,6 +146,7 @@ theorem substL_eq_map (θ : Nat → VTy) : ∀ ts : List VTy, substL θ ts = ts.
 @[simp] theorem subst_int (θ : Nat → VTy) : subst θ .int = .int := by simp [subst]
 @[simp] theorem subst_logic (θ : Nat → VTy) : subst θ .logic = .logic := by simp [subst]
 @[simp] theorem subst_char (θ : Nat → VTy) : subst θ .char = .char := by simp [subst]
+@[simp] theorem subst_float (θ : Nat → VTy) : subst θ .float = .float := by simp [subst]
 @[simp] theorem subst_var (θ : Nat → VTy) (j : Nat) : subst θ (.var j) = θ j := by simp [subst]
 @[simp] theorem subst_ref (θ : Nat → VTy) (ts : List Nat) (args : List VTy) :
     subst θ (.ref ts args) = .ref ts (args.map (subst θ)) := by simp [subst, substL_eq_map]
@@ -206,6 +216,7 @@ def hasTy (Ξ : HeapTy) : Value → VTy → Bool
   | .int _, .int => true
   | .logic _, .logic => true
   | .char c, .char => decide (c < 256)
+  | .float _, .float => true
   | .arr vs, .arr t => allTy Ξ vs.toList t
   | .tup vs, .tup ts => allTys Ξ vs ts
   | .none, .opt _ => true
@@ -263,6 +274,13 @@ inductive PrimTy : Prim → List VTy → VTy → Prop
   | toStrInt : PrimTy .toStr [.int] VTy.str
   | toStrChar : PrimTy .toStr [.char] VTy.str
   | toStrStr : PrimTy .toStr [VTy.str] VTy.str
+  | farith {op} : op ∈ [Prim.fadd, .fsub, .fmul, .fdiv, .fmin, .fmax] → PrimTy op [.float, .float] .float
+  | funary {op} : op ∈ [Prim.fneg, .fabs] → PrimTy op [.float] .float
+  | fcmp {op} : op ∈ [Prim.flt, .fle, .fgt, .fge] → PrimTy op [.float, .float] .float
+  | fofInt : PrimTy .fofInt [.int] .float
+  | fofBits : PrimTy .fofBits [.int] .float
+  | ftoInt {op} : op ∈ [Prim.ffloor, .fceil, .fround, .ftrunc] → PrimTy op [.float] .int
+  | toStrFloat : PrimTy .toStr [.float] VTy.str
   | fail {t} : PrimTy .fail [] t
   | userErr {t} : PrimTy .userErr [] t
 

@@ -140,6 +140,32 @@ flattening, a local `X` and the member `m::X` have different names. The
 elaborator sees an ordinary flat program, so nothing behind it changes:
 Core, the checks, the proofs and the C runtime.
 
+## Floats: canonical bits
+
+A `float` (#127) is `Value.float b`, the bits of an IEEE double. Every
+operation makes its result canonical (one NaN, `+0` for `-0`), so equality
+of values is Verse's equality of floats (NaN equals itself). Arithmetic is
+Lean's `Float`, which is C's `double`, so both implementations compute the
+same bits. The proofs need only that each operation gives a float. Lean's
+`Float` operations rest on `Classical.choice` (that is how Lean defines
+them), so the theorems' axioms now include it besides `propext` and
+`Quot.sound` (`docs/CLAIMS.md`).
+
+Two things are computed exactly from the bits, in Lean with integers and in
+C with integer arithmetic and correctly rounded `printf`/`strtod`:
+
+- the conversions to int (`Floor`, `Ceil`, `Round` with ties to even,
+  `Int`), which fail on NaN or an infinity, and raise the overflow error out
+  of range;
+- `ToString`: for each length `p`, the correctly rounded `p`-digit decimal
+  or its neighbour on the other side of the value, the first that reads
+  back as it, laid out as Python's `repr`.
+
+`scripts/fuzz-floats.sh` checks both implementations against Python's
+doubles. In the binary format a float literal is the primitive `fofBits` of
+an int literal of its bits, so the loader (`load.c`, QuickProof-proved) is
+unchanged; only its bound on primitive codes grows.
+
 ## Rationals: helpers written in Verse
 
 A `rational` (#116) is a front-end type whose Verse Core form is the tuple

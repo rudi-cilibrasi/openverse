@@ -1,0 +1,13 @@
+Score: 98.5
+1.0 0.30000000000000004 1e+16 1.5e-07 0.6666666666666666 0.0 Inf -Inf NaN
+7.5 10.0 12.56636
+NaN equals itself
+NaN is not less
+ordered
+2 4 -2 -1 -1
+Floor of Inf fails
+Int of NaN fails
+2.5 1.0 2.0 NaN NaN
+5.0 -5.0
+7.5 Inf
+exit=0

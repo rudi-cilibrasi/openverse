@@ -20,6 +20,7 @@
  *   VX_T_NONE  .none          0
  *   VX_T_SOME  .some v        heap index of a one-element object
  *   VX_T_REF   .ref a         a, the index of an object of the object store
+ *   VX_T_FLOAT .float b       b, the bits of a canonical double (#127)
  *
  * Strings are arrays of chars, as in Lean.  `void` = .tup [] = (TUP, 0).
  * ------------------------------------------------------------------------ */
@@ -31,6 +32,17 @@
 #define VX_T_NONE   5
 #define VX_T_SOME   6
 #define VX_T_REF    7
+#define VX_T_FLOAT  8
+
+/* floats.c (#127): canonical bits, the conversions to int, ToString. */
+#define VX_FFLOOR 0
+#define VX_FCEIL  1
+#define VX_FROUND 2
+#define VX_FTRUNC 3
+double   vx_fval(uint64_t b);
+uint64_t vx_fcanon(double d);
+int      vx_ftoint(int mode, uint64_t b, int64_t *out);
+size_t   vx_fmt(uint64_t b, char *out);
 
 static inline int vx_isref(const vx_val *v)
 {

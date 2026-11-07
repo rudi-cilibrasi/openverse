@@ -102,7 +102,7 @@ def evalB (P : Prog) : Nat → Nat → St → Expr → Bounded (Res × St)
   | n+1, d+1, s, .forE i it filt body => bindRB (evalB P n d s it) fun v s₁ =>
       match v with
       | .arr vs => evalForB P n d i filt body s₁ vs.toList []
-      | .int _ | .logic _ | .char _ | .tup _ | .none | .some _ | .ref _ => .res (.err .type, s₁)
+      | .int _ | .logic _ | .char _ | .float _ | .tup _ | .none | .some _ | .ref _ => .res (.err .type, s₁)
   | n+1, d+1, s, .loop b => (evalB P n d s b).bind fun
       | none => .fuel
       | some (.ok _, s₁) => evalB P n (d+1) s₁ (.loop b)

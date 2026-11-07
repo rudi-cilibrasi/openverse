@@ -20,6 +20,8 @@ echo "== heap-reclamation fuzzing (${FUZZ_FIELDS:-60} programs with array fields
 scripts/fuzz-fields.sh "${FUZZ_FIELDS:-60}" 1
 echo "== class-feature fuzzing (${FUZZ_CLASSES:-200} programs)"
 scripts/fuzz-classes.sh "${FUZZ_CLASSES:-200}" 1
+echo "== float fuzzing (${FUZZ_FLOATS:-200} programs, against Python's doubles)"
+scripts/fuzz-floats.sh "${FUZZ_FLOATS:-200}" 1
 echo "== QuickProof pins"
 scripts/check-quickproof-pins.sh
 echo "check.sh: all checks passed"

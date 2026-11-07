@@ -27,6 +27,7 @@ def litTy : Value → Option VTy
   | .int _ => some .int
   | .logic _ => some .logic
   | .char c => if c < 256 then some .char else none
+  | .float _ => some .float
   | .arr ⟨[]⟩ => none
   | .arr ⟨v :: vs⟩ => match litTy v with
     | some t => if allTy [] vs t then some (.arr t) else none
@@ -47,6 +48,7 @@ theorem litTy_sound : ∀ {v : Value} {t : VTy}, litTy v = some t → hasTy [] v
   | .ref _, _, h => by simp [litTy] at h
   | .int _, t, h => by simp [litTy] at h; subst h; rfl
   | .logic _, t, h => by simp [litTy] at h; subst h; rfl
+  | .float _, t, h => by simp [litTy] at h; subst h; rfl
   | .char c, t, h => by
     simp only [litTy] at h; split at h
     · simp only [Option.some.injEq] at h; subst h; simp [hasTy, *]
@@ -162,7 +164,7 @@ theorem VTy.join_sub : ∀ (t u j : VTy), VTy.join t u = some j → t.sub j = tr
     cases u <;> simp [VTy.join] at h
     obtain ⟨js, hj, rfl⟩ := h
     simpa [VTy.sub] using VTy.joinL_sub _ _ _ hj
-  | .int, u, j, h | .logic, u, j, h | .char, u, j, h | .var _, u, j, h => by
+  | .int, u, j, h | .logic, u, j, h | .char, u, j, h | .float, u, j, h | .var _, u, j, h => by
     cases u <;> simp [VTy.join] at h <;> (try obtain ⟨rfl, rfl⟩ := h) <;> (try subst h) <;>
       exact ⟨VTy.sub_refl _, VTy.sub_refl _⟩
 theorem VTy.joinL_sub : ∀ (ts us js : List VTy), VTy.joinL ts us = some js →
@@ -452,8 +454,19 @@ def tcPrim : Prim → List Expr → Option VTy → Option VTy
   | .toStr, [a], m => match tc a none with
     | some .int => expect m VTy.str
     | some .char => expect m VTy.str
+    | some .float => expect m VTy.str
     | some (.arr .char) => expect m VTy.str
     | _ => none
+  -- floats (#127)
+  | .fadd, [a, b], m | .fsub, [a, b], m | .fmul, [a, b], m | .fdiv, [a, b], m
+  | .fmin, [a, b], m | .fmax, [a, b], m =>
+    if (tc a (some .float)).isSome && (tc b (some .float)).isSome then expect m .float else none
+  | .flt, [a, b], m | .fle, [a, b], m | .fgt, [a, b], m | .fge, [a, b], m =>
+    if (tc a (some .float)).isSome && (tc b (some .float)).isSome then expect m .float else none
+  | .fneg, [a], m | .fabs, [a], m => if (tc a (some .float)).isSome then expect m .float else none
+  | .fofInt, [a], m | .fofBits, [a], m => if (tc a (some .int)).isSome then expect m .float else none
+  | .ffloor, [a], m | .fceil, [a], m | .fround, [a], m | .ftrunc, [a], m =>
+    if (tc a (some .float)).isSome then expect m .int else none
   | .fail, [], some τ => some τ
   | .userErr, [], some τ => some τ
   | _, _, _ => none
@@ -820,8 +833,50 @@ theorem tcPrim_sound_of {op : Prim} {es : List Expr} {m τ} (ih : ∀ e ∈ es, 
     · next ha =>
       exact expect_typed h (.prim (.cons (inf (by simp) ha) .nil) .toStrChar)
     · next ha =>
+      exact expect_typed h (.prim (.cons (inf (by simp) ha) .nil) .toStrFloat)
+    · next ha =>
       exact expect_typed h (.prim (.cons (inf (by simp) ha) .nil) .toStrStr)
     · simp at h
+  | fadd | fsub | fmul | fdiv | fmin | fmax =>
+    rcases es with _ | ⟨a, _ | ⟨b, _ | ⟨c, rest⟩⟩⟩ <;> simp only [tcPrim] at h <;> try (simp at h; done)
+    all_goals
+      split at h
+      · next hc =>
+        simp only [Bool.and_eq_true] at hc
+        exact expect_typed h (.prim (.cons (chk (by simp) hc.1) (.cons (chk (by simp) hc.2) .nil)) (.farith (by simp)))
+      · simp at h
+  | flt | fle | fgt | fge =>
+    rcases es with _ | ⟨a, _ | ⟨b, _ | ⟨c, rest⟩⟩⟩ <;> simp only [tcPrim] at h <;> try (simp at h; done)
+    all_goals
+      split at h
+      · next hc =>
+        simp only [Bool.and_eq_true] at hc
+        exact expect_typed h (.prim (.cons (chk (by simp) hc.1) (.cons (chk (by simp) hc.2) .nil)) (.fcmp (by simp)))
+      · simp at h
+  | fneg | fabs =>
+    rcases es with _ | ⟨a, _ | ⟨b, rest⟩⟩ <;> simp only [tcPrim] at h <;> try (simp at h; done)
+    all_goals
+      split at h
+      · next hc => exact expect_typed h (.prim (.cons (chk (by simp) hc) .nil) (.funary (by simp)))
+      · simp at h
+  | fofInt =>
+    rcases es with _ | ⟨a, _ | ⟨b, rest⟩⟩ <;> simp only [tcPrim] at h <;> try (simp at h; done)
+    all_goals
+      split at h
+      · next hc => exact expect_typed h (.prim (.cons (chk (by simp) hc) .nil) .fofInt)
+      · simp at h
+  | fofBits =>
+    rcases es with _ | ⟨a, _ | ⟨b, rest⟩⟩ <;> simp only [tcPrim] at h <;> try (simp at h; done)
+    all_goals
+      split at h
+      · next hc => exact expect_typed h (.prim (.cons (chk (by simp) hc) .nil) .fofBits)
+      · simp at h
+  | ffloor | fceil | fround | ftrunc =>
+    rcases es with _ | ⟨a, _ | ⟨b, rest⟩⟩ <;> simp only [tcPrim] at h <;> try (simp at h; done)
+    all_goals
+      split at h
+      · next hc => exact expect_typed h (.prim (.cons (chk (by simp) hc) .nil) (.ftoInt (by simp)))
+      · simp at h
   | fail =>
     rcases es with _ | ⟨a, rest⟩ <;> cases m <;> simp [tcPrim] at h
     subst h; exact ⟨.prim .nil .fail, by simp⟩
