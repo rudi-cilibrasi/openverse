@@ -956,7 +956,12 @@ partial def elabSet (ctx : Ctx) (p : Pos) (lhs : SExpr) (op : Option String) (rh
         let tp ← fresh (.tup [kt, vt])
         pure (mapLookup c tk tp)
       | _, _, _ => eerr p "internal: set path"
-    -- the intermediate containers: level 0 is the variable itself
+    -- the intermediate containers: level 0 is a copy of the variable, taken
+    -- after the indices, so that the right-hand side cannot change what is
+    -- rebuilt (as for `set A[i] = e`); the variable is written once, last
+    let c0 ← fresh l.ty
+    pre := pre.push (.assign c0 (.local l.slot))
+    cur := c0
     let stepsA := steps.toArray
     for k in [0:stepsA.size] do
       let (sp, f?, _) := stepsA[k]!
@@ -996,6 +1001,7 @@ partial def elabSet (ctx : Ctx) (p : Pos) (lhs : SExpr) (op : Option String) (rh
         pre := pre.push (mapPut c tk tvk ti tidx)
       | _, _, _ => eerr p "internal: set path"
       newVal := .local c
+    pre := pre.push (.assign l.slot (.local c0))
     return ⟨pre.toList.foldr Expr.seq (.local tv), leafTy⟩
   match lhs with
   | .ident _ n =>
@@ -1054,7 +1060,7 @@ partial def elabSet (ctx : Ctx) (p : Pos) (lhs : SExpr) (op : Option String) (rh
         return ⟨.seq (.assign l.slot (.prim .mkTup parts)) (.local tv), t⟩
       | none => eerr p s!"struct {sn} has no field '{f}'"
     | ty => eerr p s!"{ty.show} has no field '{f}'"
-  | _ => eerr p "openverse v1 supports set X = …, set A[i] = … and set S.F = …"
+  | _ => eerr p "openverse supports set X = …, and set on a path of fields, indices and keys from a var (set S.F[i].G = …); not through a tuple element or a call result"
 
 /-- `for`: clauses are generators, bindings and filters; each generator opens
     a nested `forE`, and nested results are flattened (cartesian product,
