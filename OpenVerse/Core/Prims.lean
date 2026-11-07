@@ -171,13 +171,19 @@ def Prim.failable : Prim → Bool
   | .flt | .fle | .fgt | .fge | .ffloor | .fceil | .fround | .ftrunc => true
   | _ => false
 
-set_option maxHeartbeats 4000000 in
 /-- A primitive that is not `failable` never fails, on any arguments. -/
 theorem Prim.apply_ne_fail {p : Prim} (h : p.failable = false) (vs : List Value) :
     p.apply vs ≠ .fail := by
+  have h1 : ∀ i, Res.ofInt i ≠ .fail := by intro i; unfold Res.ofInt; split <;> simp
+  have h3 : ∀ v, toStrValue v ≠ .fail := by
+    intro v; unfold toStrValue; split <;> (try split) <;> simp
   intro hf
-  cases p <;> simp [Prim.failable] at h <;> simp [Prim.apply] at hf <;>
-    (repeat (first | split at hf | simp_all [Res.ofInt, toStrValue]))
-  all_goals (try simp_all [Res.ofInt, toStrValue]; try split at hf <;> simp_all)
+  unfold Prim.apply at hf
+  split at hf <;> first
+    | (simp [Prim.failable] at h; done)
+    | exact h1 _ hf
+    | exact h3 _ hf
+    | (split at hf <;> simp at hf)
+    | simp at hf
 
 end OpenVerse
