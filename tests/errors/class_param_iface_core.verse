@@ -1,4 +1,4 @@
-# expect: so it cannot implement the interface
+# expect: intcell gives titled the type arguments none, but its own are int
 titled := interface:
     Title:string = "t"
 cell(t:type) := class:

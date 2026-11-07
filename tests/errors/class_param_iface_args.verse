@@ -1,4 +1,4 @@
-# expect: interface named takes no type arguments
+# expect: named takes 0 type argument(s), found 1
 named := interface:
     Name():string = "d"
 sub := class(named(int)):

@@ -249,8 +249,16 @@ circle := class(shape, labelled):
   if its type arguments are those of the class that declares it, up to
   renaming: one that fixes, repeats or adds type arguments the declaring
   class leaves open cannot, since code generic over that class could not
-  call it. A class with type arguments (its own or fixed for a parent)
-  cannot implement an interface yet. Inherited field defaults see their
+  call it. An interface can be parametric too (#53):
+  `container(t) := interface: Get():t`, with `box(t) := class(container(t))`.
+  A class gives the interfaces above it exactly its own Verse Core type
+  arguments (`box(t)` gives `container` `t`; a class implementing
+  `container(t)` and `sink(u)` cannot), so code generic over `container(t)`
+  dispatches to `box(t)`'s methods and casts `container(t)` to `box(t)`.
+  An interface's fields are typed as it gives them: a class that fixes or
+  repeats its type arguments (`intbox := class(holder(int))`) can still
+  implement an interface whose members it does not override. An interface
+  that extends a parametric interface gives it its own type parameters. Inherited field defaults see their
   own class's type parameters. A cast `square[S]` takes its type arguments
   from `S`'s, and is refused when it would need more. A method
   of a parametric class is generic over the class's type parameters, then
@@ -288,8 +296,11 @@ circle := class(shape, labelled):
 - **Not yet supported** (each rejected with a message):
   - constructor functions;
   - overrides in a subclass that fixes, repeats or adds type arguments
-    its parent leaves open, and classes with type arguments below
-    interfaces;
+    its parent (or an interface) leaves open, a class that gives two
+    interfaces different type arguments, an interface that gives a parent
+    interface other than its own type parameters, and a parametric class
+    below a non-parametric interface (or one that adds type parameters
+    below a parametric interface's implementation);
   - overriding a method with its own type parameters;
   - qualified `(i:)M` implementations;
   - subtyping through `+` on arrays, through tuples and through maps, and an
