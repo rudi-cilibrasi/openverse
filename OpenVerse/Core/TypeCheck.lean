@@ -339,7 +339,10 @@ def tc : Expr → Option VTy → Option VTy
         match m with
         | some (.arr tb) => if (tc body (some tb)).isSome then some (.arr tb) else none
         | some _ => none
-        | none => (tc body none).map .arr
+        | none => match tc body none with
+          | some tb => some (.arr tb)
+          -- a body with no type of its own (`return e`, `break`): checked at void
+          | none => if (tc body (some VTy.void)).isSome then some (.arr VTy.void) else none
       else none
     | none => none
   | .loop b, m =>
@@ -397,7 +400,10 @@ def tcPrim : Prim → List Expr → Option VTy → Option VTy
     | some .logic => some .logic
     | some (.opt t) => some t
     | _ => none
-  | .query, [a], some τ => if (tc a (some (.opt τ))).isSome then some τ else none
+  | .query, [a], some τ =>
+    if (tc a (some (.opt τ))).isSome then some τ
+    -- `X?` of a logic, at type logic
+    else if τ = .logic ∧ (tc a (some .logic)).isSome then some τ else none
   | .mkArr, es, some (.arr t) => if tcAll es t then some (.arr t) else none
   | .mkArr, a :: rest, none => match tc a none with
     | some t => if tcAll rest t then some (.arr t) else none
@@ -628,7 +634,12 @@ theorem tcPrim_sound_of {op : Prim} {es : List Expr} {m τ} (ih : ∀ e ∈ es, 
       split at h
       · next hc => simp only [Option.some.injEq] at h; subst h
                    exact ⟨.prim (.cons (chk (by simp) hc) .nil) .queryOpt, by simp⟩
-      · simp at h
+      · split at h
+        · next hc =>
+          obtain ⟨rfl, hc⟩ := hc
+          simp only [Option.some.injEq] at h; subst h
+          exact ⟨.prim (.cons (chk (by simp) hc) .nil) .queryLogic, by simp⟩
+        · simp at h
   | mkArr =>
     cases m with
     | none =>
@@ -998,8 +1009,12 @@ theorem tc_sound_aux : ∀ (n : Nat) (e : Expr), sizeOf e < n → TcOK S Γ ρ e
           · next hc =>
             obtain ⟨hit, σ, hσ⟩ := common te hi hc
             rcases hb : tc S Γ ρ body none with _ | tb
-            · simp [hb] at h
-            · simp only [hb, Option.map_some, Option.some.injEq] at h; subst h
+            · simp only [hb] at h
+              split at h
+              · next hv => simp only [Option.some.injEq] at h; subst h
+                           exact ⟨.forE hi hit hσ (typed_of_check Ib hv), by simp⟩
+              · simp at h
+            · simp only [hb, Option.some.injEq] at h; subst h
               exact ⟨.forE hi hit hσ (Ib _ _ hb).1, by simp⟩
           · simp at h
         · simp at h

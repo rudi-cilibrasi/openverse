@@ -113,6 +113,17 @@ Combine(A:t1, B:t2 where t1:type, t2:type):tuple(t1, t2) = (A, B)
   type parameter (also unsupported in the Book), explicit type arguments to
   a generic function, and generic constants are not supported.
 
+## defer
+
+`defer:` followed by a block runs that block when its scope exits (Book of
+Verse ch. 7): at the scope's end, after its value is computed, or on a
+`return` or `break` that leaves it. Several run last registered first. A
+scope that fails runs none, since its effects are rolled back. A `defer:`
+block cannot be empty, fail, `return`, or `break` out of itself, and it is a
+statement, not a value. Lowering: the deferred block is placed after the
+rest of its scope, and before each `return` (after its value) and `break`
+that leaves it.
+
 ## Overloading
 
 Several functions may share a name when no call could fit two of them (Book of
@@ -473,7 +484,7 @@ openverse has no module namespaces yet, so the readings are flat:
 `float` and `rational` values (only `Floor(X/Y)` and `Ceil(X/Y)` of ints),
 the class features listed under [Classes](#classes), struct methods (Verse structs have none; classes do), `ConcatenateMaps`,
 `weak_map`, module namespaces (`using{"relative_path"}` imports flatly, see [Programs of several files](#programs-of-several-files)), overloading beyond [Overloading](#overloading), nested
-functions, `last`, `defer`, refinement types, concurrency (`spawn`, `sync`,
+functions, `last`, refinement types, concurrency (`spawn`, `sync`,
 `race`, `rush`, `branch`, `<suspends>`), `weak_map`, and effect checking
 other than `<decides>` and the heap effects (`<converges>` is accepted and
 ignored). Comparing arrays with tuples (`array{1,2}

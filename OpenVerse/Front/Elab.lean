@@ -589,6 +589,13 @@ structure Ctx where
   inLoop  : Bool := false
   /-- In a named parameter's default, elaborated at a call: no `return`. -/
   inParamDefault : Bool := false
+  /-- The `defer:` bodies of the function's enclosing scopes, innermost first
+      (#80): a `return` runs them all, a `break` those registered inside its
+      loop (all but the first `loopDefers`). -/
+  defers  : List (SExpr × List Local) := []
+  loopDefers : Nat := 0
+  /-- In a `defer:` body, which cannot `return`. -/
+  inDefer : Bool := false
   /-- In a class's `block:` clauses (one method, `$block`), where a `return`
       would skip the clauses after it. -/
   inBlock : Bool := false
@@ -1162,6 +1169,7 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
           eerr p s!"unknown identifier '{n}'"
   -- a constructor's `block:` (#11): it cannot fail, as a class's cannot
   | .app _ (.ident _ "$nofail") [e] false => elabE { ctx with canFail := false, inBlock := true } e exp
+  | .app p (.ident _ "$defer") _ _ => eerr p "defer: is a statement: it has no value"
   | .app p f args bracket => elabApp ctx p f args bracket exp
   | .member p (.ident _ n) m =>
     match ctx.lookup n, ctx.types.enums.lookup n with
@@ -1305,23 +1313,33 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
   | .forE p clauses body => elabFor ctx p clauses body
   | .gen p _ _ _ => eerr p "a generator X : source can only appear in a for clause"
   | .loop _ body =>
-    let r ← elabE { ctx with inLoop := true } body none
+    let r ← elabE { ctx with inLoop := true, loopDefers := ctx.defers.length } body none
     return ⟨.loop r.e, .void⟩
   | .brk p =>
-    if !ctx.inLoop then eerr p "break is only allowed inside loop (not for)"
-    return ⟨.brk, .never⟩
+    if !ctx.inLoop then
+      eerr p (if ctx.inDefer then "break is only allowed inside loop (not for), and cannot leave a defer: block"
+              else "break is only allowed inside loop (not for)")
+    -- the defers of the scopes it leaves, inside its loop
+    let ds ← elabDefers ctx (ctx.defers.take (ctx.defers.length - ctx.loopDefers))
+    return ⟨.seq ds .brk, .never⟩
   | .ret p none =>
     if ctx.inParamDefault then eerr p "return is not allowed in a parameter's default"
+    if ctx.inDefer then eerr p "return is not allowed in a defer: block"
     if ctx.inCtor then eerr p "return is not allowed in a constructor (it would skip the items after it)"
     if ctx.inBlock then eerr p "return is not allowed in a block: clause (it would skip the clauses after it)"
     if ctx.retTy != .void then eerr p s!"return needs a value of type {ctx.retTy.show}"
-    return ⟨.ret (.lit .void), .never⟩
+    return ⟨.seq (← elabDefers ctx ctx.defers) (.ret (.lit .void)), .never⟩
   | .ret p (some e) =>
     if ctx.inParamDefault then eerr p "return is not allowed in a parameter's default"
+    if ctx.inDefer then eerr p "return is not allowed in a defer: block"
     if ctx.inCtor then eerr p "return is not allowed in a constructor (it would skip the items after it)"
     if ctx.inBlock then eerr p "return is not allowed in a block: clause (it would skip the clauses after it)"
     let r ← elabE ctx e (some ctx.retTy)
-    return ⟨.ret (← coerce p r ctx.retTy), .never⟩
+    let v ← coerce p r ctx.retTy
+    if ctx.defers.isEmpty then return ⟨.ret v, .never⟩
+    -- the value first, then the defers of every scope it leaves
+    let t ← fresh ctx.retTy
+    return ⟨.seq (.assign t v) (.seq (← elabDefers ctx ctx.defers) (.ret (.local t))), .never⟩
   | .caseE p scrut arms => elabCase ctx p scrut arms exp
   | .decl p _ _ _ _ =>
     let (r, _) ← elabStmt ctx se exp
@@ -1334,6 +1352,7 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
 partial def elabStmt (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM (R × Ctx) := do
   let (r, ctx') ← match se with
     | .decl p n sty isVar rhs => do
+      if let .app dp (.ident _ "$defer") _ _ := rhs then eerr dp "defer: is a statement: it has no value"
       if ctx.lookup n |>.isSome then
         eerr p s!"'{n}' is already defined; Verse does not allow shadowing (use set {n} = … for a var)"
       if (ctx.sig? n).isSome || builtins.contains n then
@@ -1355,10 +1374,36 @@ partial def elabStmt (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM (R × Ctx) 
       "condition, a for clause, option{…}, logic{…}, not, the left of or, or a <decides> function)")
   return (r, ctx')
 
+/-- `defer:` bodies, run in order (innermost first): each cannot fail, return
+    or break out of itself, and sees the locals in scope where it is
+    registered (Verse has no shadowing, so those at an exit include them). -/
+partial def elabDefers (ctx : Ctx) (ds : List (SExpr × List Local)) : EM Expr := do
+  let mut acc : Expr := .lit .void
+  for (d, locs) in ds.reverse do
+    -- (with the locals where it was registered: their slots still hold them)
+    let dctx := { ctx with canFail := false, inDefer := true, inLoop := false, defers := [], loopDefers := 0,
+                           locals := locs }
+    let r ← elabE dctx d none
+    acc := .seq r.e acc
+  return acc
+
 /-- A sequence of statements, threading the scope; the value is the last one's. -/
 partial def elabSeq (ctx : Ctx) (ss : List SExpr) (exp : Option Ty) : EM (R × Ctx) := do
   match ss with
   | [] => return (⟨.lit .void, .void⟩, ctx)
+  | .app p (.ident _ "$defer") [body] false :: rest =>
+    -- `defer: D` then the rest of the scope (Book of Verse ch. 7): the rest,
+    -- with D pending for its returns and breaks, then D, then the rest's value
+    if let .block _ [] := body then eerr p "a defer: block cannot be empty"
+    let (r2, ctx2) ← elabSeq { ctx with defers := (body, ctx.locals) :: ctx.defers } rest exp
+    let d ← elabDefers ctx [(body, ctx.locals)]
+    let ctx2 := { ctx2 with defers := ctx.defers, loopDefers := ctx.loopDefers }
+    match r2.ty with
+    | .never => return (r2, ctx2)
+    | .void => return (⟨.seq r2.e (.seq d (.lit .void)), .void⟩, ctx2)
+    | ty =>
+      let t ← fresh ty
+      return (⟨.seq (.assign t r2.e) (.seq d (.local t)), ty⟩, ctx2)
   | [s] => elabStmt ctx s exp
   | s :: rest =>
     let (r, ctx') ← elabStmt ctx s none
