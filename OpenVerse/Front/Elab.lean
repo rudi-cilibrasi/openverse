@@ -1331,17 +1331,38 @@ partial def elabApp (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (brack
         -- the declaration's types at the receiver's type arguments
         let σ := ownerTps.zip (argsAt owner)
         let msRet := ms.ret.subst σ
-        if args.any (fun | .decl _ n _ _ _ => n.startsWith "?" | _ => false) then
-          eerr p s!"named arguments to a method dispatched on the class of the receiver are not supported (#18)"
+        -- the arguments, once each: positional ones left to right, then named
+        -- ones as written (Book of Verse §2.5), passed to every implementation;
+        -- those omitted take the default of the implementation that runs, as
+        -- in a call without named arguments
+        let isNamed : SExpr → Bool := fun | .decl _ n _ _ _ => n.startsWith "?" | _ => false
+        let posArgs := args.filter (!isNamed ·)
+        let namedArgs := args.filterMap fun a => match a with
+          | .decl ap n _ _ rhs => if n.startsWith "?" then some (ap, (n.drop 1).toString, rhs) else none
+          | _ => none
+        let npos := ms.params.length - ms.named.length
+        if posArgs.length + 1 != npos then
+          eerr p s!"{m} takes {npos - 1} positional argument(s), found {posArgs.length}"
+        for (ap, n, _) in namedArgs do
+          if (ms.named.find? (·.1 == n)).isNone then eerr ap s!"{m} has no parameter ?{n}"
         let mut pre : Array Expr := #[.assign slot r.e]
         let mut locs : List Local := [{ name := recv, slot, ty := r.ty, mutable := false }]
         let mut argIds : Array SExpr := #[]
-        for (a, t0) in args.zip (ms.params.drop 1) do
+        for (a, t0) in posArgs.zip ((ms.params.drop 1).take (npos - 1)) do
           let t := t0.subst σ
           let ta ← fresh t
           pre := pre.push (.assign ta (← coerce a.pos (← elabE ctx a (some t)) t))
           locs := { name := s!"$arg{ta}", slot := ta, ty := t, mutable := false } :: locs
           argIds := argIds.push (.ident mp s!"$arg{ta}")
+        let mut namedSlots : List (String × Nat) := []
+        for (ap, n, rhs) in namedArgs do
+          let t := (ms.params[npos + (ms.named.findIdx? (·.1 == n)).get!]!).subst σ
+          let ta ← fresh t
+          pre := pre.push (.assign ta (← coerce ap (← elabE ctx rhs (some t)) t))
+          locs := { name := s!"$arg{ta}", slot := ta, ty := t, mutable := false } :: locs
+          namedSlots := namedSlots ++ [(n, ta)]
+        for (n, ta) in namedSlots do
+          argIds := argIds.push (.decl mp s!"?{n}" none false (.ident mp s!"$arg{ta}"))
         let mut acc : Expr := .prim .userErr []   -- no option set: unreachable
         if env.isRefClass c then
           -- a reference: one test of the object's class per implementation (#34)
