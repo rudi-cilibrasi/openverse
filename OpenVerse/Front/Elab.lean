@@ -603,7 +603,7 @@ partial def _root_.OpenVerse.VTy.hasVar : VTy → Bool
 /-- The value of a prototype's field of type `t`: its type's default, or a
     reference to a prototype already allocated (`done`: class, address). -/
 partial def protoValue (env : TyEnv) (done : List (String × Nat)) : Ty → Option Value
-  | .int | .enum _ => some (.int 0)
+  | .int | .char32 | .enum _ => some (.int 0)
   | .logic => some (.logic false)
   | .char => some (.char 0)
   | .void | .never => some .void
