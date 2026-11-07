@@ -21,6 +21,7 @@ import OpenVerse.Core.Derived
 import OpenVerse.Core.TypeCheck
 import OpenVerse.Core.Control
 import OpenVerse.Front.Parser
+import OpenVerse.Front.Rational
 import OpenVerse.Front.Modules
 import Std.Data.HashMap
 
@@ -31,6 +32,10 @@ inductive Ty where
   | int | logic | char | void
   /-- A Unicode scalar value; an `int` in Verse Core. -/
   | char32
+  /-- `rational`, the type of `X / Y` on ints (Book of Verse ch. 2): in
+      Verse Core the tuple of its numerator and denominator, in lowest
+      terms with a positive denominator (so tuple equality is equality). -/
+  | rational
   /-- The bottom type, of `break`, `return` and `Err()`. -/
   | never
   | arr : Ty → Ty
@@ -50,7 +55,7 @@ inductive Ty where
   deriving Repr, Inhabited
 
 partial def Ty.eqv : Ty → Ty → Bool
-  | .int, .int | .logic, .logic | .char, .char | .char32, .char32 | .void, .void | .never, .never => true
+  | .int, .int | .logic, .logic | .char, .char | .char32, .char32 | .rational, .rational | .void, .void | .never, .never => true
   | .arr a, .arr b => a.eqv b
   | .opt a, .opt b => a.eqv b
   | .tup as, .tup bs => as.length == bs.length && (as.zip bs).all fun (a, b) => a.eqv b
@@ -64,7 +69,7 @@ partial def Ty.eqv : Ty → Ty → Bool
 instance : BEq Ty := ⟨Ty.eqv⟩
 
 partial def Ty.show : Ty → String
-  | .int => "int" | .logic => "logic" | .char => "char" | .char32 => "char32" | .void => "void"
+  | .int => "int" | .logic => "logic" | .char => "char" | .char32 => "char32" | .rational => "rational" | .void => "void"
   | .never => "false"
   | .arr .char => "string"
   | .arr t => "[]" ++ t.show
@@ -231,6 +236,8 @@ def TyEnv.slotImpls (env : TyEnv) (impl : String → Option String) (ups : List 
     enums and unrelated classes are disjoint. -/
 partial def TyEnv.disjoint (env : TyEnv) : Ty → Ty → Bool
   | .void, _ | _, .void | .param .., _ | _, .param .. | .never, _ | _, .never => false
+  -- (an int is also a rational, #116)
+  | .int, .rational | .rational, .int => false
   | .tup as, .tup bs => as.length != bs.length || (as.zip bs).any fun (a, b) => env.disjoint a b
   | .arr _, .arr _ | .arr _, .map .. | .map .., .arr _ | .map .., .map .. | .opt _, .opt _ => false
   -- `false` is also an empty array, an empty option and a logic
@@ -251,7 +258,7 @@ partial def TyEnv.disjoint (env : TyEnv) : Ty → Ty → Bool
     else if isCls a || isCls b then true
     else a != b || (as.length == bs.length && (as.zip bs).any fun (x, y) => env.disjoint x y)
   | .enum a, .enum b => a != b
-  | .int, .int | .logic, .logic | .char, .char | .char32, .char32 => false
+  | .int, .int | .logic, .logic | .char, .char | .char32, .char32 | .rational, .rational => false
   | _, _ => true
 
 /-- Whether two overloads (their positional parameters, then named ones:
@@ -465,6 +472,7 @@ def TyEnv.recursiveStruct? (env : TyEnv) : Option String :=
     no values; slots and signatures never have it). -/
 partial def Ty.toVTy (env : TyEnv) : Ty → VTy
   | .int | .char32 => .int
+  | .rational => .tup [.int, .int]
   | .logic => .logic
   | .char => .char
   | .void => VTy.void
@@ -735,6 +743,7 @@ partial def resolveTy (env : TyEnv) (p : Pos) : STy → EM Ty
   | .name "logic" => pure .logic
   | .name "char" => pure .char
   | .name "char32" => pure .char32
+  | .name "rational" => pure .rational
   | .name "string" => pure Ty.string
   | .name "void" => pure .void
   | .name "float" => eerr p "float is not supported by openverse v1"
@@ -821,6 +830,7 @@ def TyEnv.dictSlot? (env : TyEnv) (dictBase : Nat) (n : String) : Option Nat :=
     the class constructed), which starts as a placeholder. -/
 partial def witness (env : TyEnv) (dictBase : Nat) (dictVars : List String) : Ty → EM Expr
   | .int | .char32 | .enum _ => pure (.lit (.int 0))
+  | .rational => pure (.lit (.tup [.int 0, .int 1]))
   | .logic => pure (.lit (.logic false))
   | .char => pure (.lit (.char 0))
   | .void | .never => pure (.lit .void)
@@ -854,6 +864,7 @@ partial def _root_.OpenVerse.VTy.hasVar : VTy → Bool
     reference to a prototype already allocated (`done`: class, address). -/
 partial def protoValue (env : TyEnv) (done : List (String × Nat)) : Ty → Option Value
   | .int | .char32 | .enum _ => some (.int 0)
+  | .rational => some (.tup [.int 0, .int 1])
   | .logic => some (.logic false)
   | .char => some (.char 0)
   | .void | .never => some .void
@@ -975,6 +986,8 @@ partial def convert (env : TyEnv) (e : Expr) (a b : Ty) : EM (Option Expr) := do
         (env.concreteBelow S).isEmpty then
       return some (.seq e (.prim .userErr []))
   match a, b with
+  -- `int` is a subtype of `rational` (#116): `X` is `X / 1`
+  | .int, .rational => return some (.prim .mkTup [e, .lit (.int 1)])
   | .struct S [], .struct T [] =>
     if env.classes.contains S && env.classes.contains T && S != T && env.isSub S T then
       let x ← modifyGet fun s => (s.nslots, { s with nslots := s.nslots + 1, slotTys := s.slotTys.push a })
@@ -1041,6 +1054,7 @@ partial def joinTy (env : TyEnv) (a b : Ty) (exp : Option Ty) (inner : Bool := f
   else if b == .never then some a
   else if a == b then some a
   else match a, b with
+  | .int, .rational | .rational, .int => if inner then none else some .rational
   | .struct S as, .struct T bs =>
     -- (inside a container, only references convert for free)
     if env.classes.contains S && env.classes.contains T &&
@@ -1262,8 +1276,14 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
   | .notE _ e =>
     let r ← elabE { ctx with canFail := true } e none
     return ⟨Expr.notE r.e, .void⟩
-  | .bin p "/" _ _ =>
-    eerr p "integer '/' gives a rational; write Floor(X / Y), Ceil(X / Y) or Quotient[X, Y]"
+  | .bin p "/" a b =>
+    -- `X / Y` on ints: a rational, failing when `Y = 0` (#116)
+    let ra ← elabE ctx a (some .int)
+    let rb ← elabE ctx b (some .int)
+    if ra.ty == .rational || rb.ty == .rational then
+      eerr p "'/' divides ints: openverse has no arithmetic on rationals (only Floor, Ceil and comparisons)"
+    let es := [← coerce a.pos ra .int, ← coerce b.pos rb .int]
+    return ⟨← ratCall ctx p "$ratMake" es, .rational⟩
   | .bin p op a b =>
     let ra ← elabE ctx a none
     let rb ← match op, ra.ty with
@@ -1683,10 +1703,27 @@ partial def elabApp (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (brack
     | "Abs" => return ⟨.prim .abs (← elabInts ctx p args), .int⟩
     | "Floor" | "Ceil" =>
       match args with
-      | [.bin _ "/" a b] =>
-        let es ← elabInts ctx p [a, b]
+      | [.bin bp "/" a b] =>
+        let ra ← elabE ctx a (some .int)
+        let rb ← elabE ctx b (some .int)
+        if ra.ty == .rational || rb.ty == .rational then
+          eerr bp "'/' divides ints: openverse has no arithmetic on rationals (only Floor, Ceil and comparisons)"
+        let es := [← coerce a.pos ra .int, ← coerce b.pos rb .int]
         return ⟨.prim (if name == "Floor" then .floorDiv else .ceilDiv) es, .int⟩
-      | _ => eerr p s!"openverse v1 supports {name}(X / Y) on ints only"
+      | [e] =>
+        -- (of a rational, #116: its denominator is positive, so this never
+        -- fails; of an int, the int)
+        let r ← elabE ctx e none
+        match r.ty with
+        | .int => return r
+        | .rational =>
+          let tr ← fresh .rational
+          let tz ← fresh .int
+          let op := if name == "Floor" then Prim.floorDiv else .ceilDiv
+          let parts := [Expr.prim (.tupGet 0) [.local tr], .prim (.tupGet 1) [.local tr]]
+          return ⟨.seq (.assign tr r.e) (Expr.orE tz (.prim op parts) (.lit (.int 0))), .int⟩
+        | t => eerr p s!"{name} takes a rational or an int, found {t.show}"
+      | _ => eerr p s!"{name} takes one argument"
     | "Quotient" => needBracket name; return ⟨.prim .quotient (← elabInts ctx p args), .int⟩
     | "Mod" => needBracket name; return ⟨.prim .modulo (← elabInts ctx p args), .int⟩
     | "Min" | "Max" =>
@@ -1836,8 +1873,15 @@ partial def elabApp (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (brack
         let sigOf (o : String) : Option Sig := (ctx.methodDecl? c o).bind fun owner =>
           (ctx.sig? s!"{owner}.{o}").map fun sg => { sg with params := sg.params.drop 1 }
         let vis := ms.filter fun o => (ctx.methodDecl? c o).isSome
+        -- (a qualified call stays qualified: `X.(q:)M$ovK(…)`, #125)
+        let qualOf (o : String) : String :=
+          if m0.startsWith "(" then
+            match (m0.drop 1).toString.splitOn ":)" with
+            | [q, _] => s!"({q}:){o}"
+            | _ => o
+          else o
         if !vis.isEmpty then
-          return ← resolveOverload ctx p m vis sigOf (fun o => elabApp ctx p (.member mp obj o) args bracket exp) args
+          return ← resolveOverload ctx p m vis sigOf (fun o => elabApp ctx p (.member mp obj (qualOf o)) args bracket exp) args
       if let (true, some owner) := (env.classes.contains c, ctx.methodDecl? c m) then
         -- the slots the call covers (#70): every class below `c` must implement
         -- them alike, or the call must say which
@@ -1945,9 +1989,27 @@ partial def elabApp (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (brack
           argIds := argIds.push (.ident mp s!"$arg{ta}")
         let mut namedSlots : List (String × Nat) := []
         for (ap, n, rhs) in namedArgs do
-          let t := declTy (ms.params[npos + (ms.named.findIdx? (·.1 == n)).get!]!)
+          -- (at the own type parameters inferred so far; one it mentions
+          -- that is not yet bound is inferred from it, #119)
+          let t0 := (declTy (ms.params[npos + (ms.named.findIdx? (·.1 == n)).get!]!)).subst σu
+          let mut t := t0
+          let mut e : Expr := .lit .void
+          if t0.params.any ownNames.contains then
+            if fromContext rhs then
+              eerr ap s!"cannot infer the type parameters of {m} from the arguments of this call"
+            let r ← elabE ctx rhs none
+            match t0.matchArg ctx.types σu r.ty with
+            | some σ' =>
+              σu := own? σ'
+              t := t0.subst σu
+              if t.params.any ownNames.contains then
+                eerr ap s!"cannot infer the type parameters of {m} from this argument"
+              e ← coerce ap r t
+            | none => eerr ap s!"expected {showT t0}, found {r.ty.show} (in a call of {m})"
+          else
+            e ← coerce ap (← elabE ctx rhs (some t0)) t0
           let ta ← fresh t
-          pre := pre.push (.assign ta (← coerce ap (← elabE ctx rhs (some t)) t))
+          pre := pre.push (.assign ta e)
           locs := { name := s!"$arg{ta}", slot := ta, ty := t, mutable := false } :: locs
           namedSlots := namedSlots ++ [(n, ta)]
         for (n, ta) in namedSlots do
@@ -2038,10 +2100,33 @@ partial def elabCast (ctx : Ctx) (p : Pos) (T : String) (args : List SExpr) (bra
     determined is elaborated against it, so `array{}` and `false` work. -/
 partial def elabGenericCall (ctx : Ctx) (p : Pos) (s : Sig) (args : List SExpr) (exp : Option Ty) :
     EM R := do
-  if args.any fun | .decl _ n _ _ _ => n.startsWith "?" | _ => false then
-    eerr p s!"{s.name} is generic: openverse does not support named arguments to generic functions"
-  if args.length != s.params.length then
-    eerr p s!"{s.name} takes {s.params.length} argument(s), found {args.length}"
+  -- named arguments (#119): positional ones, then named ones as written,
+  -- then the defaults of those omitted, as for other functions
+  let isNamed : SExpr → Bool := fun | .decl _ n _ _ _ => n.startsWith "?" | _ => false
+  let npos := s.params.length - s.named.length
+  let pos := args.filter (!isNamed ·)
+  let named : List (Pos × String × SExpr) := args.filterMap fun
+    | .decl ap n _ _ rhs => if n.startsWith "?" then some (ap, (n.drop 1).toString, rhs) else none
+    | _ => none
+  let plain := s.named.isEmpty && named.isEmpty
+  if plain then
+    if args.length != s.params.length then
+      eerr p s!"{s.name} takes {s.params.length} argument(s), found {args.length}"
+  else
+    if pos.length != npos then
+      -- (a method's receiver is its first positional argument)
+      let (shown, off) := match s.name.splitOn "." with
+        | [_, m] => if s.pnames.head? == some "Self" then (m, 1) else (s.name, 0)
+        | _ => (s.name, 0)
+      eerr p s!"{shown} takes {npos - off} positional argument(s), found {pos.length - off}"
+    for ((ap, n, _), i) in named.zip (List.range named.length) do
+      if (s.named.find? (·.1 == n)).isNone then eerr ap s!"{s.name} has no parameter ?{n}"
+      if (named.take i).any (·.2.1 == n) then eerr ap s!"?{n} is given twice"
+  -- the arguments given, in the order they are evaluated, each with the
+  -- index of its parameter
+  let given : List (SExpr × Nat) := (pos.zip (List.range npos)) ++ named.map fun (_, n, rhs) =>
+    (rhs, npos + (s.named.findIdx? (·.1 == n)).getD 0)
+  let ptys := s.params.toArray
   let mut σ : List (String × Ty) := []
   if let some et := exp then
     if !(et == .void) then
@@ -2052,12 +2137,13 @@ partial def elabGenericCall (ctx : Ctx) (p : Pos) (s : Sig) (args : List SExpr) 
   let fromContext : SExpr → Bool
     | .ident _ "false" | .arrayLit _ [] | .mapLit _ [] => true
     | _ => false
-  let mut es : Array Expr := Array.replicate args.length (.lit .void)
+  let mut es : Array Expr := Array.replicate given.length (.lit .void)
   -- arguments left for the second pass; an argument whose type contains
   -- `false` (like `array{Err()}`) binds nothing, so it joins them
-  let mut deferred : Array Bool := (args.map fromContext).toArray
+  let mut deferred : Array Bool := (given.map (fromContext ·.1)).toArray
   for pass in [0, 1] do
-    for ((a, pt), i) in (args.zip s.params).zip (List.range args.length) do
+    for ((a, k), i) in given.zip (List.range given.length) do
+      let pt := ptys[k]!
       if (pass == 0) == deferred[i]! then continue
       if bound σ pt then
         let t := pt.subst σ
@@ -2077,6 +2163,50 @@ partial def elabGenericCall (ctx : Ctx) (p : Pos) (s : Sig) (args : List SExpr) 
           else
             es := es.set! i (← coerce a.pos r (pt.subst σ))
         | none => eerr a.pos s!"expected {(pt.subst σ).show}, found {r.ty.show} (in a call of {s.name})"
+  -- the arguments, in their temporaries, then the defaults
+  let mut steps : Array Expr := #[]
+  let mut slots : Array (Option Nat) := Array.replicate s.params.length none
+  if !plain then
+    for ((_, k), i) in given.zip (List.range given.length) do
+      let ta ← fresh (ptys[k]!.subst σ)
+      steps := steps.push (.assign ta es[i]!)
+      slots := slots.set! k (some ta)
+    for ((n, dflt), j) in s.named.zip (List.range s.named.length) do
+      let k := npos + j
+      if slots[k]!.isNone then
+        let some d := dflt | eerr p s!"{s.name} needs the argument ?{n}, which has no default"
+        let pt := ptys[k]!
+        -- (the default sees the parameters before it, in their temporaries)
+        let earlier : List Local := ((s.pnames.zip (List.range k)).filterMap fun (pn, j) =>
+          (slots[j]!).map fun sl => ({ name := pn, slot := sl, ty := ptys[j]!.subst σ, mutable := false } : Local)).reverse
+        let key := (s.name, s!"?{n}")
+        if ctx.defaults.contains key then
+          eerr p s!"the default of ?{n} of {s.name} uses itself (a call of {s.name} that omits ?{n})"
+        -- (a method's: its receiver's fields too, through `Self`)
+        let selfC : Option String :=
+          if s.pnames.head? == some "Self" then (s.name.splitOn ".").head? else none
+        let dctx := { ctx with locals := earlier, selfClass := selfC, inParamDefault := true,
+                               inLoop := false, canFail := ctx.canFail && s.decides,
+                               defaults := key :: ctx.defaults }
+        -- (its type: the parameter's, or what the default gives a type
+        -- parameter nothing else determined)
+        let σ0 := σ
+        if !bound σ0 pt && fromContext d then
+          let v := (pt.params.filter fun v => (σ0.lookup v).isNone).headD "t"
+          eerr p s!"cannot infer type parameter {v} of {s.name} from the arguments of this call"
+        let (rd, σ1) ← fxAt p (do
+          let r ← elabE dctx d (if bound σ0 pt then some (pt.subst σ0) else none)
+          let σ1 ← if bound σ0 pt then pure σ0 else
+            match pt.matchArg ctx.types σ0 r.ty with
+            | some σ' => pure σ'
+            | none => eerr p s!"the default of ?{n} of {s.name} is a {r.ty.show}, not a {(pt.subst σ0).show}"
+          return (← coerce p r (pt.subst σ1), σ1))
+        σ := σ1
+        if !s.decides && rd.mayFail ctx.sigProg then
+          eerr p s!"the default of ?{n} of {s.name} can fail, but {s.name} is not <decides>"
+        let ta ← fresh (pt.subst σ)
+        steps := steps.push (.assign ta rd)
+        slots := slots.set! k (some ta)
   let mut targs : Array Ty := #[]
   for (v, cmp) in s.tparams do
     let some t := σ.lookup v
@@ -2085,7 +2215,9 @@ partial def elabGenericCall (ctx : Ctx) (p : Pos) (s : Sig) (args : List SExpr) 
     targs := targs.push t
   -- the hidden arguments: a value of each type argument
   let dicts ← targs.toList.mapM (witness ctx.types ctx.dictBase ctx.dictVars)
-  return ⟨.call s.idx (es.toList ++ dicts), s.ret.subst σ⟩
+  if plain then return ⟨.call s.idx (es.toList ++ dicts), s.ret.subst σ⟩
+  let call := Expr.call s.idx (slots.toList.map (fun o => Expr.local o.get!) ++ dicts)
+  return ⟨steps.toList.foldr Expr.seq call, s.ret.subst σ⟩
 
 /-- The failable array methods of the Book of Verse (§9.1):
     `A.Slice[i, j]`, `A.Slice[i]`, `A.Find[x]`, `A.RemoveElement[i]`,
@@ -2171,6 +2303,41 @@ partial def elabIndexLike (ctx : Ctx) (p : Pos) (r : R) (args : List SExpr) (bra
     return ⟨.prim (.tupGet k.toNat) [r.e], ts[k.toNat]!⟩
   | t, _, _ => eerr p s!"cannot call or index a value of type {t.show}"
 
+/-- Two types with an int in one where the other has a rational, at the
+    same place inside them (#116). -/
+partial def ratMismatch : Ty → Ty → Bool
+  | .int, .rational | .rational, .int => true
+  | .arr a, .arr b | .opt a, .opt b => ratMismatch a b
+  | .tup as, .tup bs => as.length == bs.length && (as.zip bs).any fun (a, b) => ratMismatch a b
+  | .tup as, .arr b | .arr b, .tup as => as.any (ratMismatch · b)
+  | .map k v, .map k' v' => ratMismatch k k' || ratMismatch v v'
+  | .struct a as, .struct b bs => a == b && as.length == bs.length && (as.zip bs).any fun (x, y) => ratMismatch x y
+  | _, _ => false
+
+/-- A call of a rational helper (#116), `$ratMake` or `$ratLt`. -/
+partial def ratCall (ctx : Ctx) (p : Pos) (f : String) (args : List Expr) : EM Expr := do
+  let some s := ctx.sig? f | eerr p "internal error: the rational helpers are missing"
+  return .call s.idx args
+
+/-- The test of `x op y`, where one operand is a rational and the other an
+    int or a rational (#116): it fails when the comparison does not hold.
+    Rationals are in lowest terms, so `=` and `<>` are the tuples'; an
+    ordering is `$ratLt`'s. -/
+partial def ratTest (ctx : Ctx) (p : Pos) (op : String) (x y : R) : EM Expr := do
+  let asRat (r : R) : EM Expr := match r.ty with
+    | .rational => pure r.e
+    | .int => pure (.prim .mkTup [r.e, .lit (.int 1)])
+    | t => eerr p s!"'{op}' compares a rational with an int or a rational, not with {t.show}"
+  let xa ← asRat x
+  let ya ← asRat y
+  match op with
+  | "=" => return p2 .eq xa ya
+  | "<>" => return p2 .ne xa ya
+  | "<" => ratCall ctx p "$ratLt" [xa, ya]
+  | ">" => ratCall ctx p "$ratLt" [ya, xa]
+  | "<=" => return Expr.notE (← ratCall ctx p "$ratLt" [ya, xa])
+  | _ => return Expr.notE (← ratCall ctx p "$ratLt" [xa, ya])
+
 partial def elabCmp (ctx : Ctx) (p : Pos) (a : SExpr) (rest : List (String × SExpr)) : EM R := do
   let opOf : String → Prim
     | "=" => .eq | "<>" => .ne | "<" => .lt | "<=" => .le | ">" => .gt | _ => .ge
@@ -2191,6 +2358,10 @@ partial def elabCmp (ctx : Ctx) (p : Pos) (a : SExpr) (rest : List (String × SE
       if !(ta == tb) && ta != .never && tb != .never &&
           (va == vb || (pa && pb) || (pa && vb.shared) || (pb && va.shared)) then
         eerr p s!"'{op}' compares values of different types, {ta.show} and {tb.show}"
+      -- (nor an int with a rational inside containers, #116: equal values
+      -- that Verse Core holds differently, `1` and `(1, 1)`)
+      if ratMismatch ta tb then
+        eerr p s!"'{op}' compares values of different types, {ta.show} and {tb.show} (an int and a rational inside them: convert the ints first)"
     else if !((ta == .int && tb == .int) || (ta == .char && tb == .char) || (ta == .char32 && tb == .char32)) then
       eerr p s!"'{op}' compares ints, chars or char32s, found {ta.show} and {tb.show}"
   let ra ← elabE ctx a none
@@ -2202,6 +2373,11 @@ partial def elabCmp (ctx : Ctx) (p : Pos) (a : SExpr) (rest : List (String × SE
   match rest with
   | [(op, b)] =>
     let rb ← elabE ctx b (some ra.ty)
+    if ra.ty == .rational || rb.ty == .rational then
+      let ta ← fresh ra.ty
+      let tb ← fresh rb.ty
+      let test ← ratTest ctx p op ⟨.local ta, ra.ty⟩ ⟨.local tb, rb.ty⟩
+      return ⟨.seq (.assign ta ra.e) (.seq (.assign tb rb.e) (.seq test (.local ta))), ra.ty⟩
     let ra ← asArr ra rb.ty
     let rb ← asArr rb ra.ty
     checkTys op ra.ty rb.ty
@@ -2220,10 +2396,14 @@ partial def elabCmp (ctx : Ctx) (p : Pos) (a : SExpr) (rest : List (String × SE
       let prevE ← match prevTy, rb.ty with
         | .tup _, .arr _ => coerce p ⟨.local prev, prevTy⟩ rb.ty
         | _, _ => pure (.local prev)
-      checkTys op (match prevTy, rb.ty with | .tup _, .arr _ => rb.ty | _, _ => prevTy) rb.ty
       let tb ← fresh rb.ty
-      steps := steps.push (.assign tb rb.e)
-      steps := steps.push (p2 (opOf op) prevE (.local tb))
+      if prevTy == .rational || rb.ty == .rational then
+        steps := steps.push (.assign tb rb.e)
+        steps := steps.push (← ratTest ctx p op ⟨.local prev, prevTy⟩ ⟨.local tb, rb.ty⟩)
+      else
+        checkTys op (match prevTy, rb.ty with | .tup _, .arr _ => rb.ty | _, _ => prevTy) rb.ty
+        steps := steps.push (.assign tb rb.e)
+        steps := steps.push (p2 (opOf op) prevE (.local tb))
       prev := tb
       prevTy := rb.ty
     return ⟨steps.foldr Expr.seq (.local t0), ra.ty⟩
@@ -3123,14 +3303,26 @@ def expandCtors (ctors : List (Pos × String × List SParam × List TParam × Li
 
 /-- Elaborate a parsed program into a Verse Core program that passes `Prog.check`
     and `Prog.checkTypes`. -/
-def elabProgramCore (allTops000 : List STop) (opts : Options := {}) : Except String Compiled := do
+def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except String Compiled := do
+  -- rationals (#116): the helpers, for a program that may use them
+  let isRatMarker : STop → Bool := fun | .const _ n _ _ => n == ratMarker | _ => false
+  let usesRat := allTops0r.any isRatMarker || opts.entry.isSome
+  -- (a type of the program's own cannot take a built-in type's name)
+  for t in allTops0r do
+    match t with
+    | .const p n _ (.structDef ..) | .const p n _ (.enumDef ..) | .classDef p n .. =>
+      if ("char32" :: typeNames).contains n then throw s!"{p.show}: {n} is a built-in type"
+    | _ => pure ()
+  let helpers ← if usesRat then ratTops else pure []
+  let allTops000 := allTops0r.filter (!isRatMarker ·)
   -- modules (#112): every reference to a member, qualified (the entry
   -- expression's too)
   let rawEntry : List STop := match opts.entry with
     | some e => [.fn e.pos "$Do" [] [] ["decides"] (.name "void") (.app e.pos (.ident e.pos "$Show") [e] false)]
     | none => []
   let resolved ← resolveModules (allTops000 ++ rawEntry)
-  let allTops00 := resolved.take (resolved.length - rawEntry.length)
+  -- (the helpers after: they name nothing of the program's)
+  let allTops00 := resolved.take (resolved.length - rawEntry.length) ++ helpers
   let entryTop := resolved.drop (resolved.length - rawEntry.length)
   -- the command line: `Args`, and an entry expression
   let defines (n : String) := allTops00.any fun
@@ -3219,7 +3411,8 @@ def elabProgramCore (allTops000 : List STop) (opts : Options := {}) : Except Str
     if sigs.length > 1 && classDefs.any (fun (n, _) => hierOf n == key.1 && (listsSeen n key.2).length > 1) then
       some (key, sigs)
     else none
-  let mangle (cn mn : String) (ctps mtps : List TParam) (ps : List SParam) (isOverride : Bool) : String :=
+  let mangle (cn mn : String) (ctps mtps : List TParam) (ps : List SParam) (isOverride : Bool)
+      (within : Option String) : String :=
     match mov.lookup (hierOf cn, mn) with
     | none => mn
     | some sigs =>
@@ -3228,7 +3421,15 @@ def elabProgramCore (allTops000 : List STop) (opts : Options := {}) : Except Str
         -- an override: the ancestor list it has, each in this class's terms
         -- (through the type arguments the class gives its parents)
         let mine := sigText ctps mtps ps
-        let cands : List (Nat × String × Nat) := (((anc.lookup cn).getD []).drop 1).flatMap fun (y, σ) =>
+        -- (a qualified `(q:)M`: only `q`'s lists, and those above it)
+        let none' : List (String × List (String × STy)) := []
+        let ups0 : List (String × List (String × STy)) := ((anc.lookup cn).getD none').drop 1
+        let ups : List (String × List (String × STy)) := match within with
+          | some q =>
+            let above : List String := ((anc.lookup q).getD none').map Prod.fst
+            ups0.filter fun u => u.1 == q || above.contains u.1
+          | none => ups0
+        let cands : List (Nat × String × Nat) := ups.flatMap fun (y, σ) =>
           let ytps := ((infoOf y).map (·.1)).getD []
           (ownLists y mn).filterMap fun (dmtps, dps) =>
             (sigs.idxOf? (sigText ytps dmtps dps)).map fun k =>
@@ -3252,11 +3453,25 @@ def elabProgramCore (allTops000 : List STop) (opts : Options := {}) : Except Str
       for m in methods do
         match m with
         | .fn mp mn ps mtps effs ret body =>
-          if mn.startsWith "(" then
-            if let [_, m'] := (mn.drop 1).toString.splitOn ":)" then
-              if (mov.lookup (hierOf n, m')).isSome then
-                throw s!"{mp.show}: qualified implementations of the overloaded method {m'} are not supported yet"
-          ms := ms.push (.fn mp (mangle n mn tps mtps ps (effs.contains "override")) ps mtps effs ret body)
+          -- `(q:)M`, implementing `q`'s overload of `M` that has its list
+          -- (#125): `(q:)M$ovK`
+          let qual : Option (String × String) := if mn.startsWith "(" then
+              match (mn.drop 1).toString.splitOn ":)" with
+              | [q, m'] => some (q, m')
+              | _ => none
+            else none
+          match qual with
+          | some (q, m') =>
+            -- (`q` above the class: otherwise the check below explains)
+            let isAbove := (((anc.lookup n).getD []).drop 1).any (·.1 == q)
+            if isAbove && (mov.lookup (hierOf n, m')).isSome then
+              let k := mangle n m' tps mtps ps true (some q)
+              if k == m' then
+                throw s!"{mp.show}: ({q}:){m'} must have the parameters of one of {q}'s overloads of {m'}"
+              ms := ms.push (.fn mp s!"({q}:){k}" ps mtps effs ret body)
+            else ms := ms.push (.fn mp mn ps mtps effs ret body)
+          | none =>
+            ms := ms.push (.fn mp (mangle n mn tps mtps ps (effs.contains "override") none) ps mtps effs ret body)
         | m => ms := ms.push m
       tops1 := tops1.push (.classDef cp n tps specs parents isI fields ovs ms.toList)
     | t => tops1 := tops1.push t
@@ -3754,8 +3969,6 @@ def elabProgramCore (allTops000 : List STop) (opts : Options := {}) : Except Str
     match top with
     | .fn p n ps tps effs ret _ =>
       if n == "Main" then throw s!"{p.show}: Main cannot be generic"
-      if ps.any (·.named) then
-        throw s!"{p.show}: {n} is generic: openverse does not support named parameters in generic functions"
       let tparams ← checkTParams env tps
       let genv := { env with tvars := tparams.map fun (v, c) => (v, Ty.param v c) }
       let (tys, rt) ← fnTypes genv p n ps effs ret
@@ -3766,7 +3979,9 @@ def elabProgramCore (allTops000 : List STop) (opts : Options := {}) : Except Str
                             decides := effs.contains "decides", isConst := false,
                             -- (a parametric class's `block:`: inferred from none, #41)
                             fx := if n.endsWith ".$block" then [] else allowedFx effs,
-                            tparams }
+                            tparams,
+                            named := (ps.filter (·.named)).map fun q => (q.name, q.default),
+                            pnames := ps.map (·.name) }
     | _ => pure ()
   let mkSigProg (sigs : Array Sig) : Prog :=
     { fns := (sigs ++ gsigs).toList.map fun s =>

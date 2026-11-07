@@ -90,7 +90,11 @@ partial def loadDir (main d : System.FilePath) : LoadM Unit := do
       let bytes ← (IO.FS.readBinFile e.path : IO ByteArray)
       let some text := String.fromUTF8? bytes | loadErr s!"{pos.file}: not UTF-8"
       match parseExprText text.trimAscii.toString with
-      | .ok v => modify fun st => { st with tops := st.tops.push (.const pos name none v) }
+      | .ok v =>
+        modify fun st => { st with tops := st.tops.push (.const pos name none v) }
+        -- (an expression with `/`: the rational helpers, #116)
+        if textUsesRational text then
+          modify fun st => { st with tops := st.tops.push (.const pos ratMarker none (.block pos [])) }
       | .error err => loadErr s!"{pos.file}:{err}"
     | "bin" =>
       let bytes ← (IO.FS.readBinFile e.path : IO ByteArray)
