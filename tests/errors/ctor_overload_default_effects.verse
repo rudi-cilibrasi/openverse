@@ -1,4 +1,4 @@
-# expect: the default of A calls G
+# expect: K<constructor> calls the default of A, which has the effect
 G()<transacts>:int = 1
 p := class:
     A:int = G()

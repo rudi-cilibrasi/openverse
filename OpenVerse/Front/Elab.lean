@@ -236,7 +236,14 @@ partial def TyEnv.disjoint (env : TyEnv) : Ty → Ty → Bool
     let isCls (x : String) := env.classes.contains x
     let iface (x : String) := isCls x && (env.info x).isIface
     if isCls a && isCls b then
-      if iface a || iface b then false else !(env.isSub a b || env.isSub b a)
+      -- one parametric class at disjoint type arguments
+      if a == b && !iface a then as.length == bs.length && (as.zip bs).any fun (x, y) => env.disjoint x y
+      else if iface a || iface b then
+        -- a <final> class, which nothing is below, and an interface it does
+        -- not implement (#100)
+        let finalNot (c i : String) : Bool := !iface c && (env.info c).isFinal && !env.isSub c i
+        (iface a && finalNot b a) || (iface b && finalNot a b)
+      else !(env.isSub a b || env.isSub b a)
     else if isCls a || isCls b then true
     else a != b || (as.length == bs.length && (as.zip bs).any fun (x, y) => env.disjoint x y)
   | .enum a, .enum b => a != b
@@ -951,6 +958,13 @@ partial def refUp (env : TyEnv) : Ty → Ty → Bool
 partial def convert (env : TyEnv) (e : Expr) (a b : Ty) : EM (Option Expr) := do
   -- references: the same value has both types (Verse Core subtyping, #32)
   if refUp env a b then return some e
+  -- no value has a class type with no concrete class below it (an interface
+  -- nothing implements, an abstract class with no subclass): the conversion
+  -- to a type above it is unreachable (#98)
+  if let (.struct S _, .struct T _) := (a, b) then
+    if env.classes.contains S && env.classes.contains T && S != T && env.isSub S T &&
+        (env.concreteBelow S).isEmpty then
+      return some (.seq e (.prim .userErr []))
   match a, b with
   | .struct S [], .struct T [] =>
     if env.classes.contains S && env.classes.contains T && S != T && env.isSub S T then
@@ -1745,7 +1759,9 @@ partial def elabApp (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (brack
     let (r, m) ← match r0.ty, m0.startsWith "(", (m0.drop 1).toString.splitOn ":)" with
       | .struct c ts, true, [q, mq] =>
         if !(ctx.types.isSub c q) then eerr p s!"{c} is not below {q}"
-        pure (⟨r0.e, .struct q (ctx.types.upArgs c ts q)⟩, mq)
+        -- (converted: a receiver of a type with no instance is unreachable)
+        let qt : Ty := .struct q (ctx.types.upArgs c ts q)
+        pure (⟨← coerce p r0 qt, qt⟩, mq)
       | _, _, _ => pure (r0, m0)
     match r.ty with
     | .struct c targs =>
@@ -2221,20 +2237,8 @@ partial def elabSet (ctx : Ctx) (p : Pos) (lhs0 : SExpr) (op : Option String) (r
       | .struct sn _, some f =>
         if !ctx.types.isVarField sn f then eerr sp (classSetMsg sn f)
       | _, _ => eerr p "internal: set path"
-    -- a value of a class with no instance cannot exist: the set is unreachable
-    if tysA.any fun | .struct sn _ => ctx.types.isEmptyClass sn | _ => false then
-      let tu ← fresh leafTy
-      return ⟨.assign tu (.prim .userErr []), leafTy⟩
     if refLevel?.isNone && !l.mutable then
       eerr p s!"'{root}' is not a var; declare it with var {root}:t = …"
-    -- the values below the object (or all of them) are rebuilt: a parametric
-    -- class among them would change, but it is a value with no var field
-    for k in [0:steps.length] do
-      if refLevel?.all (k > ·) then
-        if let .struct sn _ := tysA[k]! then
-          if ctx.types.classes.contains sn && !ctx.types.isRefClass sn then
-            let (sp, f?, _) := steps.toArray[k]!
-            eerr sp s!"field '{f?.getD "?"}' of the parametric class {sn} cannot be set: a parametric class is a value (#34)"
     -- read one step of the container in slot `c` of type `cty`
     let readStep (c : Nat) (cty : Ty) (step : Option String) (key : Option (Nat × Ty)) : EM Expr := do
       match step, key, cty with
@@ -2250,6 +2254,33 @@ partial def elabSet (ctx : Ctx) (p : Pos) (lhs0 : SExpr) (op : Option String) (r
         let tp ← fresh (.tup [kt, vt])
         pure (mapLookup c tk tp)
       | _, _, _ => eerr p "internal: set path"
+    -- a value of a class with no instance cannot exist, so the set is
+    -- unreachable once the path reaches one; but the steps before it (the
+    -- indices and keys, then the containers read) may fail first (#104)
+    if let some ke := (List.range steps.length).find? fun k =>
+        match tysA[k]! with | .struct sn _ => ctx.types.isEmptyClass sn | _ => false then
+      let stepsA := steps.toArray
+      let mut c := l.slot
+      for k in [0:ke] do
+        let (_, f?, _) := stepsA[k]!
+        let c' ← fresh tysA[k + 1]!
+        pre := pre.push (.assign c' (← readStep c tysA[k]! f? keys[k]!))
+        c := c'
+      -- (the right-hand side never runs, but is checked, and the field set
+      -- at the empty class must be a var, as on any path)
+      let lastCls := (List.range steps.length).reverse.find? fun k =>
+        match tysA[k]!, stepsA[k]! with
+        | .struct sn _, (_, some f, _) => f != "?" && ctx.types.classes.contains sn
+        | _, _ => false
+      if let some kc := lastCls then
+        if let (.struct sn _, (sp, some f, _)) := (tysA[kc]!, stepsA[kc]!) then
+          if !ctx.types.isVarField sn f then eerr sp (classSetMsg sn f)
+      let r ← elabE ctx rhs (some leafTy)
+      match op with
+      | none => discard <| coerce p r leafTy
+      | some o => discard <| combine (.prim .userErr []) leafTy o r
+      let tu ← fresh leafTy
+      return ⟨pre.toList.foldr Expr.seq (.assign tu (.prim .userErr [])), leafTy⟩
     -- the intermediate containers: level 0 is a copy of the variable, taken
     -- after the indices, so that the right-hand side cannot change what is
     -- rebuilt (as for `set A[i] = e`); the variable is written once, last
@@ -2985,8 +3016,9 @@ def expandCtors (ctors : List (Pos × String × List SParam × List TParam × Li
           throw s!"{p.show}: {k} leaves {f} to another overload, and its default's type mentions a type parameter of {k}: give {f} in every overload of a generic constructor"
         let helper := s!"{k}$default${f}"
         if !out.any (fun | .fn _ n .. => n == helper | _ => false) then
-          -- (with the constructor's effects: a default cannot fail)
-          out := out.push (.fn p helper [] [] (effs.filter (· != "decides")) (tyOf f) d)
+          -- (its effects are its code's, inferred as a `block:`'s are: every
+          -- overload that leaves F to it then pays for what it does)
+          out := out.push (.fn p helper [] [] [] (tyOf f) d)
         body := body.push (.decl p s!"{f}$v" (some (tyOf f)) false (.app p (.ident p helper) [] false))
     let initRet : SExpr :=
       if fs.isEmpty then .block p []
@@ -3485,7 +3517,7 @@ def elabProgramCore (allTops00 : List STop) (opts : Options := {}) : Except Stri
       sigs := sigs.push { idx, name := n, params := tys, ret := rt, decides := effs.contains "decides",
                           -- (a `block:`'s effects are inferred below, from none, as a
                           -- constant's: blocks that construct each other's classes)
-                          fx := if n.endsWith ".$block" then [] else allowedFx effs,
+                          fx := if n.endsWith ".$block" || (n.splitOn "$default$").length > 1 then [] else allowedFx effs,
                           isConst := false,
                           named := (ps.filter (·.named)).map fun q => (q.name, q.default),
                           pnames := ps.map (·.name) }
@@ -3564,9 +3596,19 @@ def elabProgramCore (allTops00 : List STop) (opts : Options := {}) : Except Stri
             sigs := sigs.set! idx { sigs[idx]! with fx }
             changed := true
         | .error _ => pure ()
-      -- a class's `block:` clauses have the effects of their code
+      -- a class's `block:` clauses have the effects of their code, and so
+      -- does a default an overloaded constructor fills in (#99)
       | .fn _ n ps _ _ _ body =>
-        if n.endsWith ".$block" then
+        if (n.splitOn "$default$").length > 1 then
+          let ctx : Ctx := { sigs := sigs.toList ++ gsigs.toList, sigProg := mkSigProg sigs, types := env }
+          match (elabStmt ctx body (some sigs[idx]!.ret)).run { env } with
+          | .ok (_, st) =>
+            let fx := heapFx.filter fun k => st.fx.any (·.1 == k)
+            if fx != sigs[idx]!.fx then
+              sigs := sigs.set! idx { sigs[idx]! with fx }
+              changed := true
+          | .error _ => pure ()
+        else if n.endsWith ".$block" then
           let s := sigs[idx]!
           let locals := (ps.zip (List.range ps.length)).zip s.params |>.map fun ((prm, i), t) =>
             ({ name := prm.name, slot := i, ty := t, mutable := false } : Local)
