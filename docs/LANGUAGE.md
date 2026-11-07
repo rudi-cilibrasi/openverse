@@ -34,6 +34,7 @@ surface Verse is elaborated (`OpenVerse/Front/Elab.lean`) into Verse Core
 | Maps | `[k]v`, `map{k => v, …}` (a key given twice keeps its last value, at its last position), `M[k]` (fails on a missing key), `set M[k] = v` (insert or update, never fails), `set M[k] op= v` (fails on a missing key), `.Length`, `for (V : M)`, `for (K -> V : M)` in insertion order, `ConcatenateMaps(M1, M2, …)` (a later map's value wins for a key, which keeps its first position), order-sensitive equality (a map is the array of its pairs in Verse Core) | §3, §9.3 |
 | Array methods | `A.Slice[i, j]`, `A.Slice[i]`, `A.Find[x]`, `A.RemoveElement[i]`, `A.ReplaceElement[i, x]`, `A.Insert[i, B]`, `A.Last[]`, `A.Last[n]` (the element n before the last) (all failable) | §9.1 |
 | Built-ins | `Print(s)`, `ToString(x)` (int, char, string), `Floor(X / Y)`, `Ceil(X / Y)`, `Quotient[X, Y]`, `Mod[X, Y]` (Euclidean), `Abs`, `Min`, `Max`, `Err()` | API reference |
+| Modules | `name := module:` (nested), `M.F`, `A.B.F`, the types `M.c` and values `M.c{…}`, `using{M}` at file or module scope, `<public>` members (`<internal>` is the default); see [Modules](#modules) | ch. 16 |
 | Program entry | `Main()` — see the exit protocol in [`FORMAT.md`](FORMAT.md) | (not in the book) |
 
 ## Source text
@@ -451,6 +452,48 @@ tuple, which an instance could make the same. A
 non-ASCII character in quotes is refused, with the `0u` literal to write
 instead: the spec's CharLit is ASCII.
 
+## Modules
+
+A module groups definitions under a name (#112):
+
+```verse
+spell := module:
+    Bonus<public>:int = 3
+    Base:int = 10                         # internal: only spell sees it
+    Inner<public> := module:
+        Factor<public>:int = 7
+        Scale<public>(X:int):int = X * Factor
+    wand<public> := class:
+        Power:int
+        Cast<public>():int = Power * Inner.Factor + Base
+
+using{spell}
+
+Main():void =
+    Print("{spell.Bonus} {spell.Inner.Scale(2)} {Inner.Scale(3)}")
+    W:spell.wand = spell.wand{Power := 2}
+    Print("{W.Cast()}")
+```
+
+- A module holds functions, constants, structs, enums, classes, interfaces
+  and other modules. A constant in a module states its type (`X:int = 1`,
+  not `X := 1`). A module is not a value.
+- A bare name is looked up in its definition's module, then outward through
+  the enclosing modules, then among the `<public>` members of the modules
+  opened with `using{M}` in scope, then at the top level. If two open
+  modules give a name, the use is ambiguous and an error.
+- `M.F`, `A.B.F`, the type `M.c` and the value `M.c{…}` name a member. `M`
+  is found from the definition's module outward, or as a public submodule
+  of an open module. Each level used from outside it must be `<public>`.
+  Members are `<internal>` by default: visible in their module and its
+  submodules.
+- Verse does not allow shadowing, so a local, parameter, field or method
+  named like a visible member (one of its module or of an open module) is
+  an error.
+
+Modules exist only in the front end. Each member becomes a definition of
+its qualified name before elaboration, and messages show it as `M.F`.
+
 ## Programs of several files
 
 `using{"relative_path"}` (or `import{"relative_path"}`) imports a file or a
@@ -464,10 +507,12 @@ directory is assembled from its entries in sorted order:
 - `Name.txt` gives `Name:string`, `Name.value` gives `Name := (contents)`,
   and `Name.bin` gives `Name:[]int` of its bytes (the spec's `[]nat8`).
 
-openverse has no module namespaces yet, so the readings are flat:
+A file or directory is not a module (write `name := module:` for one), so
+the readings are flat:
 
 - all the definitions join one top level, so a name defined in two files is
   an error;
+- a file's `using{M}` opens `M` for the whole program, not just that file;
 - each file is loaded once, so import cycles are harmless;
 - subdirectories are flattened;
 - other extensions, and `.zip`, are ignored;
@@ -491,14 +536,15 @@ openverse has no module namespaces yet, so the readings are flat:
 | Scope of the operands of `A and B` | "Variable bindings do not escape from logical operations" (§3.4) | each operand is its own scope: names defined in `A` are not visible in `B`, and names from neither side escape the `and` |
 | Comparability | `comparable` covers the primitive types, enums, structs and containers of comparable types (§4.9) | so is every openverse type, except a type parameter not declared `subtype(comparable)` and the containers of one |
 | Inferring type arguments | not described | first-order matching against the expected result type, then the arguments; no subtyping other than `false` (matches anything) and `void` (accepts anything) |
+| Access specifiers other than `<public>` | `<internal>` (the default), `<private>`, `<protected>`, … (ch. 16) | a module member is `<public>` or internal (visible in its module and its submodules); other specifiers, and a struct field's, are accepted and not enforced |
 | Extent of a `<#>` comment | "everything indented by four spaces on subsequent lines" (§1.1) | the rest of the `<#>` line and every following line indented more than that line, whatever the amount (blank lines included); `<#>` may also follow code on a line |
 
 ## Not supported in v1
 
 `float` and `rational` values (only `Floor(X/Y)` and `Ceil(X/Y)` of ints),
 the class features listed under [Classes](#classes), struct methods (Verse structs have none; classes do),
-`weak_map`, module namespaces (`using{"relative_path"}` imports flatly, see [Programs of several files](#programs-of-several-files)), overloading beyond [Overloading](#overloading), nested
+`weak_map`, qualified names `(M:)F` and module paths `using{/Verse.org/…}` (accepted and ignored), overloading beyond [Overloading](#overloading), nested
 functions, refinement types, concurrency (`spawn`, `sync`,
-`race`, `rush`, `branch`, `<suspends>`), `weak_map`, and effect checking
+`race`, `rush`, `branch`, `<suspends>`), and effect checking
 other than `<decides>` and the heap effects (`<converges>` is accepted and
 ignored).

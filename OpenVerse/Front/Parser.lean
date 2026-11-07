@@ -156,8 +156,12 @@ partial def parseType : PM STy := do
     expectSym ")"
     return .tup ts.toList
   else match t.identName? with
-    | some n =>
+    | some n0 =>
       bump
+      -- `M.c`: a type of module `M` (#112)
+      let mut n := n0
+      while (← peekT).isSym "." && ((← peekT 1).identName?).isSome && !(← peekT).bol do
+        bump; n := n ++ "." ++ (← expectIdent)
       if (← peekT).isSym "(" && !(← peekT).bol then
         -- `pair(int, string)`: a parametric struct applied to type arguments
         -- (a `(` starting a line starts the next item, such as `(i:)M`)
@@ -294,6 +298,13 @@ partial def parseUnary (stop : Nat) : PM SExpr := do
     bump; parseUnary stop
   else parsePostfix stop
 
+/-- The dotted name a chain of identifiers `A.B.c` spells (a module's
+    class or struct, #112). -/
+partial def SExpr.dottedName? : SExpr → Option String
+  | .ident _ n => some n
+  | .member _ x m => if m.startsWith "(" then none else (SExpr.dottedName? x).map (· ++ "." ++ m)
+  | _ => none
+
 partial def parsePostfix (stop : Nat) : PM SExpr := do
   let mut e ← parsePrimary stop
   repeat
@@ -301,8 +312,8 @@ partial def parsePostfix (stop : Nat) : PM SExpr := do
     if t.offside stop || t.bol then break
     if t.isSym "(" then
       -- `pair(int, string){…}`: type arguments then a struct value; otherwise a call
-      let cons? ← match e with
-        | .ident _ n => do
+      let cons? ← match e.dottedName? with
+        | some n => do
           let saved ← get
           let r ← (do
               bump
@@ -318,10 +329,10 @@ partial def parsePostfix (stop : Nat) : PM SExpr := do
       match cons? with
       | some (n, ts) => e := .construct t.pos n ts (← parseArgs "}")
       | none => bump; e := .app t.pos e (← parseArgs ")") false
-    else if t.isSym "{" && (match e with | .ident _ _ => true | _ => false) then
-      -- `point{X := 1, Y := 2}`: a struct value
+    else if t.isSym "{" && e.dottedName?.isSome then
+      -- `point{X := 1, Y := 2}`: a struct value (`M.point{…}`: a module's)
       bump
-      let name := match e with | .ident _ n => n | _ => ""
+      let name := e.dottedName?.getD ""
       e := .construct t.pos name [] (← parseArgs "}")
     else if t.isSym "[" then
       bump; e := .app t.pos e (← parseArgs "]") true
@@ -591,6 +602,9 @@ partial def parseField (c : Nat) : PM (String × STy × Option SExpr × Bool) :=
   let isVar := (← peekT).isKw "var"
   if isVar then bump
   let n ← expectIdent
+  -- (`X<public>:int`: a field's access specifiers, accepted, not enforced)
+  while (← peekT).isSym "<" && ((← peekT 1).identName?).isSome && (← peekT 2).isSym ">" do
+    bump; bump; bump
   expectSym ":"
   let ty ← parseType
   let a ← peekT
@@ -1017,12 +1031,21 @@ partial def parseClassBody (p : Pos) (name : String) (tps : List TParam) (isIfac
     (if blocks.isEmpty then [] else [.fn p "$block" [] [] [] (.name "void") (.block p blocks)])
   return .classDef p name tps specs parents.toList isIface fields overrides methods
 
-partial def parseTops : PM (List STop) := do
+/-- The definitions at column `col`, their names qualified by `pfx` (the
+    enclosing modules, `A::B::`, #112). A module is flattened: its members
+    are definitions of qualified names, and markers record the module
+    (`$module:A`), its `<public>` members (`$public:A::F`) and its
+    `using{M}`s (`$open:A::|M`), for the names' resolution in Elab. -/
+partial def parseTopsIn (col : Nat) (pfx : String) : PM (List STop) := do
   let mut tops := #[]
+  let marker (p : Pos) (m : String) : STop := .const p m none (.block p [])
   repeat
     let t ← peekT
     if t.isEof then break
-    if !t.bol || t.col != 0 then perr t "a top-level definition must start at column 0"
+    if col > 0 && t.bol && t.col < col then break
+    if !t.bol || t.col != col then
+      perr t (if col == 0 then "a top-level definition must start at column 0"
+        else "a definition in a module must start at the module body's column")
     if t.isKw "using" || (t.isKw "import" && (← peekT 1).isSym "{") then
       -- `using{"relative_path"}` imports a file or directory (#27); other
       -- `using { /Verse.org/… }` module paths are accepted and ignored
@@ -1031,14 +1054,32 @@ partial def parseTops : PM (List STop) := do
         if let .str parts := (← peekT 1).tok then
           let path := String.join (parts.filterMap fun | .text s => some s | _ => none)
           modify fun st => { st with imports := st.imports.push (t.pos, path) }
+        else if ((← peekT 1).identName?).isSome then
+          -- `using{M}`, `using{A.B}`: a module's public members, unqualified
+          bump
+          let mut path := ← expectIdent
+          while (← peekT).isSym "." do bump; path := path ++ "::" ++ (← expectIdent)
+          tops := tops.push (marker t.pos s!"$open:{pfx}|{path}")
       repeat
         let n ← peekT
-        if n.isEof || (n.bol && n.col == 0) then break
+        if n.isEof || (n.bol && n.col ≤ col) then break
         bump
       continue
-    let name ← expectIdent
+    let name0 ← expectIdent
+    let name := pfx ++ name0
     let pre ← parseSpecs
     let n ← peekT
+    if pre.contains "public" then tops := tops.push (marker t.pos s!"$public:{name}")
+    -- `name := module:` and its definitions, indented (Book of Verse ch. 16)
+    if n.isSym ":=" && (← peekT 1).isKw "module" then
+      bump; bump
+      expectSym ":"
+      let b ← peekT
+      if !b.bol || b.col ≤ col then perr b "expected the module's definitions, indented"
+      let inner ← withBlock b (parseTopsIn b.col (name ++ "::"))
+      tops := tops.push (marker t.pos s!"$module:{name}")
+      tops := tops ++ inner.toArray
+      continue
     -- a constant has the effects of its initialiser (#35)
     if !n.isSym "(" then
       if let some e := pre.find? (["computes", "reads", "writes", "allocates", "transacts", "decides",
@@ -1110,7 +1151,13 @@ partial def parseTops : PM (List STop) := do
       tops := tops.push (← parseClassBody t.pos name [] false)
     else if n.isSym ":=" then
       bump
-      tops := tops.push (.const t.pos name none (← parseFnBody))
+      let b ← parseFnBody
+      -- (a module's data states its type, Book of Verse ch. 16)
+      if !pfx.isEmpty then
+        match b with
+        | .structDef .. | .enumDef .. => pure ()
+        | _ => perr n s!"a constant in a module needs its type: write {name0}:t = …"
+      tops := tops.push (.const t.pos name none b)
     else if n.isSym ":" then
       bump
       let ty ← parseType
@@ -1119,6 +1166,8 @@ partial def parseTops : PM (List STop) := do
       tops := tops.push (.const t.pos name (some ty) (← parseFnBody))
     else perr n s!"expected '(', ':' or ':=' after '{name}'"
   return tops.toList
+
+partial def parseTops : PM (List STop) := parseTopsIn 0 ""
 
 /-- Parse one expression (for `openverse run FILE do EXPR`). -/
 def parseExprText (src : String) : Except String SExpr := do

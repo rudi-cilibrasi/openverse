@@ -126,6 +126,17 @@ fuzzer (`scripts/fuzz-front.sh`) mutates real sources to look for such
 rejections and for crashes. It found one, a stack overflow on recursive
 structs, now rejected.
 
+## Modules: a renaming before elaboration
+
+Modules (#112) never reach Verse Core. The parser flattens
+`name := module:` into definitions of qualified names (`A::B::F`). It
+leaves markers for the modules, their `<public>` members and their
+`using{M}`s. `Front/Modules.lean` then rewrites every reference by lexical
+scope: the definition's module outward, then the open modules, then the top
+level. It also checks visibility, and that no binder shadows a member. The
+elaborator sees an ordinary flat program, so nothing behind it changes:
+Core, the checks, the proofs and the C runtime.
+
 ## Generic functions: polymorphic Verse Core
 
 A generic function `F(X:t where t:type)` is elaborated once, with each type
