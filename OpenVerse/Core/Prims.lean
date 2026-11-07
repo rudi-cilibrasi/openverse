@@ -51,9 +51,9 @@ def intBytes (i : Int) : List Nat := (toString i).toUTF8.toList.map (·.toNat)
 
 /-- The string value of `ToString(v)`. -/
 def toStrValue : Value → Res
-  | .int i => .ok (.arr ((intBytes i).map .char))
-  | .char c => .ok (.arr [.char c])
-  | .arr vs => match asBytes vs with
+  | .int i => .ok (.arr ((intBytes i).map Value.char).toArray)
+  | .char c => .ok (.arr #[.char c])
+  | .arr vs => match asBytes vs.toList with
     | some _ => .ok (.arr vs)
     | none => .err .type
   | _ => .err .type
@@ -61,7 +61,7 @@ def toStrValue : Value → Res
 /-- Concatenate a list of arrays (the result of nested `for` generators). -/
 def flattenArrs : List Value → Option (List Value)
   | [] => some []
-  | .arr xs :: rest => (flattenArrs rest).map (xs ++ ·)
+  | .arr xs :: rest => (flattenArrs rest).map (xs.toList ++ ·)
   | _ :: _ => none
 
 /-- `flattenArrs` with an accumulator, compiled as a loop (#97): the definition
@@ -70,7 +70,7 @@ def flattenArrsTR (vs : List Value) : Option (List Value) := go vs []
 where
   go : List Value → List Value → Option (List Value)
     | [], acc => some acc.reverse
-    | .arr xs :: rest, acc => go rest (xs.reverse ++ acc)
+    | .arr xs :: rest, acc => go rest (xs.toList.reverse ++ acc)
     | _ :: _, _ => none
 
 theorem flattenArrsTR_go (vs acc : List Value) :
@@ -114,22 +114,22 @@ def Prim.apply : Prim → List Value → Res
   | .query, [.logic b] => if b then .ok (.logic true) else .fail
   | .query, [.none] => .fail
   | .query, [.some v] => .ok v
-  | .mkArr, vs => .ok (.arr vs)
+  | .mkArr, vs => .ok (.arr vs.toArray)
   | .mkTup, vs => .ok (.tup vs)
   | .mkSome, [v] => .ok (.some v)
   | .concat, [.arr xs, .arr ys] => .ok (.arr (xs ++ ys))
-  | .flatten, [.arr xss] => match flattenArrs xss with
-    | some vs => .ok (.arr vs)
+  | .flatten, [.arr xss] => match flattenArrs xss.toList with
+    | some vs => .ok (.arr vs.toArray)
     | none => .err .type
-  | .range, [.int a, .int b] => .ok (.arr (rangeVals a b))
+  | .range, [.int a, .int b] => .ok (.arr (rangeVals a b).toArray)
   | .index, [.arr xs, .int i] =>
     if 0 ≤ i then match xs[i.toNat]? with
       | some v => .ok v
       | none => .fail
     else .fail
-  | .len, [.arr xs] => .ok (.int xs.length)
+  | .len, [.arr xs] => .ok (.int xs.size)
   | .arrSet, [.arr xs, .int i, v] =>
-    if 0 ≤ i ∧ i.toNat < xs.length then .ok (.arr (xs.set i.toNat v)) else .fail
+    if 0 ≤ i ∧ i.toNat < xs.size then .ok (.arr (xs.setIfInBounds i.toNat v)) else .fail
   | .tupGet k, [.tup vs] => match vs[k]? with
     | some v => .ok v
     | none => .err .type

@@ -150,7 +150,7 @@ def subDemo : Prog where
     { name := "Show", arity := 1, nslots := 1, decides := false,
       body := printInt (.heap (.get 0) [.local 0]) },
     { name := "Main", arity := 0, nslots := 3, decides := false,
-      body := .seq (.assign 0 (.lit (.arr []))) (.seq (.assign 1 (.lit (.arr []))) (.seq (.assign 2 (.lit .none))
+      body := .seq (.assign 0 (.lit (.arr #[]))) (.seq (.assign 1 (.lit (.arr #[]))) (.seq (.assign 2 (.lit .none))
         (.seq (.call 2 [.call 0 [int 5]])
         (.seq (.assign 0 (p .mkArr [.call 0 [int 1], .call 0 [int 2]]))
         (.seq (printInt (.call 1 [.local 0]))
@@ -315,7 +315,7 @@ def boxDemo : Prog where
     { name := "Get", arity := 1, nslots := 1, decides := false, body := .heap (.get 0) [.local 0] },
     { name := "Main", arity := 0, nslots := 2, decides := false,
       body := .seq (.assign 0 (.heap (.new 0) [int 0]))
-        (.seq (.assign 1 (.heap (.new 0) [.lit (.arr [])]))
+        (.seq (.assign 1 (.heap (.new 0) [.lit (.arr #[])]))
         (.seq (.assign 0 (.heap (.new 0) [int 5]))
         (.seq (.assign 1 (.heap (.new 0) [str "five"]))
         (.seq (.heap (.set 0) [.local 0, p .add [.call 0 [.local 0], int 1]])
@@ -344,7 +344,7 @@ example : tcBox (.assign 1 (.local 0)) none = none := by native_decide
 -- `new` takes its type arguments from the expected type, else from the fields
 example : tcBox (.heap (.new 0) [int 1]) none = some (.ref [0] [.int]) := by native_decide
 example : tcBox (.heap (.new 0) [int 1]) (some (.ref [0] [VTy.str])) = none := by native_decide
-example : tcBox (.heap (.new 0) [.lit (.arr [])]) (some (.ref [0] [VTy.str])) = some (.ref [0] [VTy.str]) := by
+example : tcBox (.heap (.new 0) [.lit (.arr #[])]) (some (.ref [0] [VTy.str])) = some (.ref [0] [VTy.str]) := by
   native_decide
 -- branches join at the common prefix of their type arguments: here none, so `Value`'s type
 -- is unknown and it cannot be read
@@ -373,7 +373,7 @@ def hierDemo : Prog where
     { name := "Show", arity := 1, nslots := 1, decides := false,
       body := printInt (.heap (.get 0) [.local 0]) },
     { name := "Main", arity := 0, nslots := 2, decides := false,
-      body := .seq (.assign 0 (.heap (.new 1) [int 0, .lit (.arr [])]))
+      body := .seq (.assign 0 (.heap (.new 1) [int 0, .lit (.arr #[])]))
         (.seq (.assign 1 (.heap (.new 2) [int 0]))
         (.seq (.assign 0 (.heap (.new 1) [int 1, str "one"]))
         (.seq (.assign 1 (.heap (.new 2) [int 2]))
@@ -418,7 +418,7 @@ def boxProto : Prog :=
       { name := "Main", arity := 0, nslots := 1, decides := false,
         body := .seq (.assign 0 (.lit (.ref 0))) (.print (str "ok")) },
       { name := "$Main", arity := 0, nslots := 0, decides := false,
-        body := protoPrelude [(0, [.arr []])] (.call 0 []) }], main := 1 }
+        body := protoPrelude [(0, [.arr #[]])] (.call 0 []) }], main := 1 }
 def boxProtoSigs (args : List VTy) : Sigs :=
   { fns := [([], .void), ([], .void)], classes := [[.arr (.var 0)]], protos := [(0, args)] }
 example : boxProto.checkTypes (boxProtoSigs [.int]) [[.ref [0] [.int]], []] = true := by native_decide

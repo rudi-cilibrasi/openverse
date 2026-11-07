@@ -101,7 +101,7 @@ def evalB (P : Prog) : Nat → Nat → St → Expr → Bounded (Res × St)
       | some (.err k, s₁) => .res (.err k, s₁)
   | n+1, d+1, s, .forE i it filt body => bindRB (evalB P n d s it) fun v s₁ =>
       match v with
-      | .arr vs => evalForB P n d i filt body s₁ vs []
+      | .arr vs => evalForB P n d i filt body s₁ vs.toList []
       | .int _ | .logic _ | .char _ | .tup _ | .none | .some _ | .ref _ => .res (.err .type, s₁)
   | n+1, d+1, s, .loop b => (evalB P n d s b).bind fun
       | none => .fuel
@@ -138,7 +138,7 @@ def evalForB (P : Prog) : Nat → Nat → Nat → Expr → Expr → St → List 
     Bounded (Res × St)
   | 0, _, _, _, _, _, _, _ => .fuel
   | _+1, 0, _, _, _, _, _, _ => .deep
-  | _+1, _+1, _, _, _, s, [], acc => .res (.ok (.arr acc.reverse), s)
+  | _+1, _+1, _, _, _, s, [], acc => .res (.ok (.arr acc.reverse.toArray), s)
   | n+1, d+1, i, filt, body, s, v :: vs, acc => match writeSlot s i v with
     | none => .res (.err .slot, s)
     | some s₀ => (evalB P n d s₀ filt).bind fun

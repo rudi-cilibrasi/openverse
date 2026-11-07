@@ -50,7 +50,7 @@ def encLit : Value → EncM Nat
   | .logic b => emit (u8 0 ++ u8 1 ++ u8 (if b then 1 else 0))
   | .char c => emit (u8 0 ++ u8 2 ++ u8 c)
   | .none => emit (u8 0 ++ u8 4)
-  | .arr vs => match asBytes vs with
+  | .arr ⟨vs⟩ => match asBytes vs with
     | some bs => emit (u8 0 ++ u8 3 ++ u32 bs.length ++ bytes bs)
     | none => do let ids ← encLits vs; emitPrim .mkArr ids
   | .tup [] => emit (u8 0 ++ u8 5)
