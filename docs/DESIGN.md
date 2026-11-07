@@ -129,30 +129,36 @@ instantiation lets inference take different paths at different types (at
 but checks each instance separately, multiplies code, and cannot express
 polymorphic recursion.
 
-## Classes without references
+## Classes as references
 
-Verse classes are references, but without `var` fields an instance cannot
-change, so a value representation is observationally the same (#14). Verse
-Core has neither references nor variants, so a class value is a finite
-tuple. A value of *static* class or interface type `T` is the tuple of one
-option per concrete class below `T`, in definition order, exactly one of
-them set to that class's fields. Fields are laid out with the inherited ones
-first, so a field has the same position in every class below the one that
-declares it.
+Verse classes are references (#34). A non-parametric class or interface `T`
+is `VTy.ref ts` in Verse Core, where `ts` are the tags of the concrete
+classes at or below `T`; a class's tag is its index in definition order,
+and the class table of the certificate gives each tag its fields' types.
+Fields are laid out with the inherited ones first, so a field has the same
+position in every class below the one that declares it.
 
-- **Operations.** An upcast moves the options to their places in the larger
-  tuple, a cast `T[X]` keeps those of the classes below `T` (failing when
-  none is set), and a field access or a method call picks the option that is
-  set.
-- **Direct calls.** When every concrete class below the receiver's type
-  shares one implementation of a method, the call is direct, so classes
-  without subclasses pay nothing for dispatch.
-- **Finite encodings.** The encoding is per static type, so
-  `person := class: Pet:?animal` is finite as long as no class below
-  `animal` holds a `person`. A class whose encoding would contain itself is
-  rejected; recursive classes need the heap of phase 3 (#11).
-- **Translation validation.** Everything is ordinary Verse Core, checked by
-  `Prog.checkTypes`.
+- **Operations.** Construction is `new`, a field `get` or `set` at the
+  field's position, a cast `T[X]` an `isTag` of the classes below both, an
+  upcast nothing at all (Verse Core subtyping, #32). A field of an interface
+  can sit at different positions in the classes implementing it; reading it
+  tests the object's class first.
+- **Dispatch.** When every concrete class below the receiver's type shares
+  one implementation of a method, the call is direct. Otherwise one `isTag`
+  per distinct implementation picks it.
+- **Mutation.** `set` on a path writes the object it reaches in place and
+  rebuilds only the values (structs, arrays, maps) between it and the leaf;
+  rollback is the heap's (#20).
+- **Initial values.** A slot of a class type starts as a parameter whose
+  type is below it, or else as a placeholder object of the first concrete
+  class below it, with default fields (`DefaultE.new`). That costs an
+  allocation per call for such slots; the generic witness of a class type
+  argument is such a slot, so that the checker infers the instantiation
+  exactly.
+- **Parametric classes stay values** (#18): one option holding the fields.
+  They cannot be in a hierarchy, and their field types mention type
+  variables, which the class table may not. So they have no `var` fields and
+  are not `<unique>`.
 
 ## Typing the heap
 
@@ -220,8 +226,8 @@ Phase 3 (#20) adds a heap of objects, each with a class tag and fields
   or as a parameter of a subtype (`DefaultE.sub`). Placeholders cost an
   allocation per call; a parameter is preferred when there is one.
 
-The front end does not produce heap operations yet; `HeapExamples.lean`
-checks hand-written programs at build time.
+The front end produces heap operations for classes (#34); `HeapExamples.lean`
+also checks hand-written programs at build time.
 
 ## Why every slot starts with a typed default
 
