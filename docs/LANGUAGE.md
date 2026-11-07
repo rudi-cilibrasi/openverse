@@ -157,7 +157,14 @@ Verse ch. 6): `Describe(X:int)`, `Describe(S:string)`, `Describe(X:int, Y:int)`.
   the arguments' types against its patterns as inference does, and infers
   its type arguments as for any generic call. (Generic functions take no
   named parameters.)
-- **Not yet supported:** overloaded methods, and overloading `Main`.
+- **Methods.** A class or interface may declare a method with several
+  parameter lists, and a subclass may override one overload (with its
+  list) and add others. A call takes the overload visible at the
+  receiver's type that its arguments fit, then dispatches as usual; the
+  overloads a class sees must be distinct. Each list is a method of its
+  own (`M$ovN`, up to the names of type parameters).
+- **Not yet supported:** overloading `Main`, and qualified `(i:)M`
+  implementations of an overloaded method.
 
 ## Parametric structs
 
