@@ -76,6 +76,33 @@ The C runtime counts fuel exactly as Lean does. On every program of the
 test suite, the smallest fuel that does not run out is the same in both
 implementations.
 
+Fuel bounds the *depth* of an evaluation, not its length: each recursive
+call gets one unit less, and both sides of a `seq` get the same fuel. So the
+native recursion of the compiled interpreter grows with the fuel, and with
+`openverse run`'s default fuel (10^8) a program that recurses forever would
+overflow the machine stack (1 GiB, or `LEAN_STACK_SIZE_KB`) long before
+running out (#97). `openverse run` therefore runs `evalB`
+(`Core/Bounded.lean`), which is `eval` with a second budget for the calls the
+compiled code really nests (those not in tail position; tail positions are
+loops there, as in the C runtime's `eval_node`, and `tests/verse/long_loop`
+checks that they stay so). When it runs out, the run ends with
+`limit: recursion depth`, exit 3, as `cverse` does past its own bound
+(`max_depth`, plus a stack budget). `evalB_sound` proves that whenever
+`evalB` does not stop for depth it returns exactly what `eval` returns, so
+the bound can only turn an answer into a resource limit; `evalB_complete`,
+that with a budget at least the fuel it never stops for depth. The budget is
+the stack size divided by 270 bytes (`maxDepth` in `Main.lean`: 4 million
+calls on the default stack, just under a million levels of ordinary Verse
+recursion), measured against programs that recurse forever in two dozen
+ways, the worst of which needed about 147 bytes a call. The primitives that
+recursed once per element (`asBytes`, `flattenArrs`) are compiled from
+accumulator versions (`@[csimp]`), so that long strings and long `for`s do
+not overflow the stack either. The bounds of the two implementations count
+different things (the C interpreter evaluates argument lists in a loop and
+allows 10 million nested evaluations on a 4 GiB stack), so a program that
+recurses deeply enough to reach one of them may get a limit from one
+implementation and an answer from the other.
+
 ## Translation validation instead of a verified front end
 
 The parser and elaborator are ordinary code (`partial def`) and are not
