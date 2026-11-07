@@ -71,6 +71,9 @@ def fmin (a b : UInt64) : UInt64 :=
   if a == nanBits || b == nanBits then nanBits
   else if ofBits b < ofBits a then b else a
 
+/-- The argument of `ArcSin` and `ArcCos`, clamped to [-1, 1] (NaN stays). -/
+def clamp1 (x : Float) : Float := if x < -1.0 then -1.0 else if 1.0 < x then 1.0 else x
+
 def fmax (a b : UInt64) : UInt64 :=
   if a == nanBits || b == nanBits then nanBits
   else if ofBits a < ofBits b then b else a

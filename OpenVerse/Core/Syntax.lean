@@ -49,6 +49,11 @@ inductive Prim where
   | fofInt | ffloor | fceil | fround | ftrunc
   -- a float literal in the binary format: the float of an int's bits
   | fofBits
+  -- the mathematical functions (#132): `Sqrt`, `Exp`, `Ln`, `Sin`, `Cos`,
+  -- `Tan`, `ArcSin`, `ArcCos` (clamping to [-1, 1]), `ArcTan`; `Pow`,
+  -- `ArcTan(Y, X)`; `IsFinite[F]` (failable)
+  | fsqrt | fexp | fln | fsin | fcos | ftan | fasin | facos | fatan
+  | fpow | fatan2 | fisFinite
   deriving Repr, DecidableEq, Inhabited
 
 /-- Operations on the heap (#20). Each is a function of the values of its

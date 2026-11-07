@@ -66,6 +66,53 @@ def fmin(a, b):
     return math.nan if math.isnan(a) or math.isnan(b) else (b if b < a else a)
 
 
+def c1(f):
+    """A one-argument libm function with C's special values (Python raises)."""
+    def g(x):
+        try:
+            return f(x)
+        except OverflowError:
+            return math.inf
+        except ValueError:
+            return math.nan
+    return g
+
+
+def c_log(x):
+    if math.isnan(x) or x < 0:
+        return math.nan
+    if x == 0.0:
+        return -math.inf
+    return math.log(x)
+
+
+def c_sqrt(x):
+    return math.nan if (math.isnan(x) or x < 0) else math.sqrt(x)
+
+
+def c_pow(x, y):
+    try:
+        return math.pow(x, y)
+    except OverflowError:
+        return math.inf
+    except (ValueError, ZeroDivisionError):
+        # (C: pow(±0, y<0) = ±Inf; a negative base to a non-integer power is NaN)
+        if x == 0.0 and y < 0:
+            return math.inf
+        return math.nan
+
+
+def clamp1(x):
+    return x if math.isnan(x) else max(-1.0, min(1.0, x))
+
+
+MATH1 = {
+    "Sqrt": c_sqrt, "Exp": c1(math.exp), "Ln": c_log, "Sin": c1(math.sin), "Cos": c1(math.cos),
+    "Tan": c1(math.tan), "ArcSin": lambda x: math.asin(clamp1(x)), "ArcCos": lambda x: math.acos(clamp1(x)),
+    "ArcTan": math.atan,
+}
+
+
 def fmax(a, b):
     return math.nan if math.isnan(a) or math.isnan(b) else (b if a < b else a)
 
@@ -116,6 +163,18 @@ for i in range(rng.randint(10, 25)):
     elif k < 0.7:
         v = -x
         lines.append(f"    {name}:float = -{a}")
+    elif k < 0.75:
+        # a mathematical function (#132)
+        f = rng.choice(sorted(MATH1) + ["Pow", "ArcTan2"])
+        if f == "Pow":
+            v = c_pow(x, y)
+            lines.append(f"    {name}:float = Pow({a}, {b})")
+        elif f == "ArcTan2":
+            v = math.atan2(x, y)
+            lines.append(f"    {name}:float = ArcTan({a}, {b})")
+        else:
+            v = MATH1[f](x)
+            lines.append(f"    {name}:float = {f}({a})")
     elif k < 0.8:
         f = rng.choice(["Abs", "Min", "Max"])
         if f == "Abs":
@@ -141,7 +200,9 @@ for i in range(rng.randint(10, 25)):
         c, d = pick(), pick()
         op = rng.choice(["=", "<>", "<", "<=", ">", ">="])
         p, q = env[c], env[d]
-        res = {"=": eq(p, q), "<>": not eq(p, q), "<": p < q, "<=": p <= q, ">": p > q, ">=": p >= q}[op]
+        # (NaN <= NaN and NaN >= NaN succeed, #132)
+        res = {"=": eq(p, q), "<>": not eq(p, q), "<": p < q, "<=": p <= q or eq(p, q), ">": p > q,
+               ">=": p >= q or eq(p, q)}[op]
         lines.append(f'    if ({c} {op} {d}) then Print("{c} {op} {d}") else Print("not {c} {op} {d}")')
         out.append(f"{c} {op} {d}" if res else f"not {c} {op} {d}")
 

@@ -459,11 +459,13 @@ def tcPrim : Prim → List Expr → Option VTy → Option VTy
     | _ => none
   -- floats (#127)
   | .fadd, [a, b], m | .fsub, [a, b], m | .fmul, [a, b], m | .fdiv, [a, b], m
-  | .fmin, [a, b], m | .fmax, [a, b], m =>
+  | .fmin, [a, b], m | .fmax, [a, b], m | .fpow, [a, b], m | .fatan2, [a, b], m =>
     if (tc a (some .float)).isSome && (tc b (some .float)).isSome then expect m .float else none
   | .flt, [a, b], m | .fle, [a, b], m | .fgt, [a, b], m | .fge, [a, b], m =>
     if (tc a (some .float)).isSome && (tc b (some .float)).isSome then expect m .float else none
-  | .fneg, [a], m | .fabs, [a], m => if (tc a (some .float)).isSome then expect m .float else none
+  | .fneg, [a], m | .fabs, [a], m | .fsqrt, [a], m | .fexp, [a], m | .fln, [a], m | .fsin, [a], m
+  | .fcos, [a], m | .ftan, [a], m | .fasin, [a], m | .facos, [a], m | .fatan, [a], m
+  | .fisFinite, [a], m => if (tc a (some .float)).isSome then expect m .float else none
   | .fofInt, [a], m | .fofBits, [a], m => if (tc a (some .int)).isSome then expect m .float else none
   | .ffloor, [a], m | .fceil, [a], m | .fround, [a], m | .ftrunc, [a], m =>
     if (tc a (some .float)).isSome then expect m .int else none
@@ -837,7 +839,7 @@ theorem tcPrim_sound_of {op : Prim} {es : List Expr} {m τ} (ih : ∀ e ∈ es, 
     · next ha =>
       exact expect_typed h (.prim (.cons (inf (by simp) ha) .nil) .toStrStr)
     · simp at h
-  | fadd | fsub | fmul | fdiv | fmin | fmax =>
+  | fadd | fsub | fmul | fdiv | fmin | fmax | fpow | fatan2 =>
     rcases es with _ | ⟨a, _ | ⟨b, _ | ⟨c, rest⟩⟩⟩ <;> simp only [tcPrim] at h <;> try (simp at h; done)
     all_goals
       split at h
@@ -853,7 +855,7 @@ theorem tcPrim_sound_of {op : Prim} {es : List Expr} {m τ} (ih : ∀ e ∈ es, 
         simp only [Bool.and_eq_true] at hc
         exact expect_typed h (.prim (.cons (chk (by simp) hc.1) (.cons (chk (by simp) hc.2) .nil)) (.fcmp (by simp)))
       · simp at h
-  | fneg | fabs =>
+  | fneg | fabs | fsqrt | fexp | fln | fsin | fcos | ftan | fasin | facos | fatan | fisFinite =>
     rcases es with _ | ⟨a, _ | ⟨b, rest⟩⟩ <;> simp only [tcPrim] at h <;> try (simp at h; done)
     all_goals
       split at h

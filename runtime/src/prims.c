@@ -10,6 +10,7 @@
  * primitive changes; heap cells, however, move when the heap grows, so
  * element pointers are taken only after the last allocation.
  */
+#include <math.h>
 #include <string.h>
 #include "vx_runtime.h"
 
@@ -469,14 +470,15 @@ void vx_prim_apply(vx_ctx *c, uint32_t op, uint32_t k, const vx_val *a, size_t n
     case VX_P_FLT:
         if (ff) { cmp(r, F(&a[0]) < F(&a[1]), &a[0]); return; }
         break;
+    /* (NaN <= NaN and NaN >= NaN succeed: canonical bits, a == b) */
     case VX_P_FLE:
-        if (ff) { cmp(r, F(&a[0]) <= F(&a[1]), &a[0]); return; }
+        if (ff) { cmp(r, a[0].bits == a[1].bits || F(&a[0]) <= F(&a[1]), &a[0]); return; }
         break;
     case VX_P_FGT:
         if (ff) { cmp(r, F(&a[1]) < F(&a[0]), &a[0]); return; }
         break;
     case VX_P_FGE:
-        if (ff) { cmp(r, F(&a[1]) <= F(&a[0]), &a[0]); return; }
+        if (ff) { cmp(r, a[0].bits == a[1].bits || F(&a[1]) <= F(&a[0]), &a[0]); return; }
         break;
     /* | .fofInt, [.int i] => .ok (.float (canon (Float.ofInt i))) */
     case VX_P_FOFINT:
@@ -494,6 +496,33 @@ void vx_prim_apply(vx_ctx *c, uint32_t op, uint32_t k, const vx_val *a, size_t n
         break;
     case VX_P_FTRUNC:
         if (f1) { to_int(r, VX_FTRUNC, &a[0]); return; }
+        break;
+    /* the mathematical functions (#132): | .fsqrt, [.float a] => .ok (.float (canon a.sqrt)), … */
+    case VX_P_FSQRT: if (f1) { ok_float(r, sqrt(F(&a[0]))); return; } break;
+    case VX_P_FEXP:  if (f1) { ok_float(r, exp(F(&a[0]))); return; } break;
+    case VX_P_FLN:   if (f1) { ok_float(r, log(F(&a[0]))); return; } break;
+    case VX_P_FSIN:  if (f1) { ok_float(r, sin(F(&a[0]))); return; } break;
+    case VX_P_FCOS:  if (f1) { ok_float(r, cos(F(&a[0]))); return; } break;
+    case VX_P_FTAN:  if (f1) { ok_float(r, tan(F(&a[0]))); return; } break;
+    /* ArcSin, ArcCos: the argument clamped to [-1, 1] (VFloat.clamp1; NaN stays) */
+    case VX_P_FASIN:
+    case VX_P_FACOS:
+        if (f1) {
+            double x = F(&a[0]);
+            if (x < -1.0) x = -1.0; else if (1.0 < x) x = 1.0;
+            ok_float(r, op == VX_P_FASIN ? asin(x) : acos(x));
+            return;
+        }
+        break;
+    case VX_P_FATAN:  if (f1) { ok_float(r, atan(F(&a[0]))); return; } break;
+    case VX_P_FPOW:   if (ff) { ok_float(r, pow(F(&a[0]), F(&a[1]))); return; } break;
+    case VX_P_FATAN2: if (ff) { ok_float(r, atan2(F(&a[0]), F(&a[1]))); return; } break;
+    /* | .fisFinite, [.float a] => if isFinite a then .ok (.float a) else .fail */
+    case VX_P_FISFINITE:
+        if (f1) {
+            if (((a[0].bits >> 52) & 2047u) == 2047u) fail(r); else ok_copy(r, &a[0]);
+            return;
+        }
         break;
     /* | .fofBits, [.int i] => .ok (.float (canon (ofBits i))) (a float literal) */
     case VX_P_FOFBITS:

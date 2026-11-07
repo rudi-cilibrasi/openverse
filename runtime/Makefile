@@ -41,15 +41,15 @@ $(B)/obj-san/%.o: tests/%.c | $(B)/obj-san
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(SANFLAGS) -MMD -MP -c $< -o $@
 
 $(B)/cverse: $(OBJ) $(B)/obj/main.o
-	$(CC) $(CFLAGS) -pthread -o $@ $^
+	$(CC) $(CFLAGS) -pthread -o $@ $^ -lm
 $(B)/cverse-asan: $(OBJ_SAN) $(B)/obj-san/main.o
-	$(CC) $(CFLAGS) $(SANFLAGS) -pthread -o $@ $^
+	$(CC) $(CFLAGS) $(SANFLAGS) -pthread -o $@ $^ -lm
 
 # Unit tests and the fuzz driver link the library objects, sanitized.
 $(B)/test_%: $(B)/obj-san/test_%.o $(OBJ_SAN)
-	$(CC) $(CFLAGS) $(SANFLAGS) -o $@ $^
+	$(CC) $(CFLAGS) $(SANFLAGS) -o $@ $^ -lm
 $(B)/fuzz_smoke: $(B)/obj-san/fuzz_smoke.o $(OBJ_SAN)
-	$(CC) $(CFLAGS) $(SANFLAGS) -o $@ $^
+	$(CC) $(CFLAGS) $(SANFLAGS) -o $@ $^ -lm
 
 $(B)/obj $(B)/obj-san:
 	mkdir -p $@

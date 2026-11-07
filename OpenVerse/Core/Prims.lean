@@ -152,14 +152,27 @@ def Prim.apply : Prim → List Value → Res
   | .fmin, [.float a, .float b] => .ok (.float (VFloat.fmin a b))
   | .fmax, [.float a, .float b] => .ok (.float (VFloat.fmax a b))
   | .flt, [.float a, .float b] => cmpRes (decide (VFloat.ofBits a < VFloat.ofBits b)) (.float a)
-  | .fle, [.float a, .float b] => cmpRes (decide (VFloat.ofBits a ≤ VFloat.ofBits b)) (.float a)
+  -- (`NaN <= NaN` and `NaN >= NaN` succeed, as NaN equals itself, #132)
+  | .fle, [.float a, .float b] => cmpRes (a == b || decide (VFloat.ofBits a ≤ VFloat.ofBits b)) (.float a)
   | .fgt, [.float a, .float b] => cmpRes (decide (VFloat.ofBits b < VFloat.ofBits a)) (.float a)
-  | .fge, [.float a, .float b] => cmpRes (decide (VFloat.ofBits b ≤ VFloat.ofBits a)) (.float a)
+  | .fge, [.float a, .float b] => cmpRes (a == b || decide (VFloat.ofBits b ≤ VFloat.ofBits a)) (.float a)
   | .fofInt, [.int i] => .ok (.float (VFloat.canon (Float.ofInt i)))
   | .ffloor, [.float a] => VFloat.toIntRes .floor a
   | .fceil, [.float a] => VFloat.toIntRes .ceil a
   | .fround, [.float a] => VFloat.toIntRes .round a
   | .ftrunc, [.float a] => VFloat.toIntRes .trunc a
+  | .fsqrt, [.float a] => .ok (.float (VFloat.canon (VFloat.ofBits a).sqrt))
+  | .fexp, [.float a] => .ok (.float (VFloat.canon (VFloat.ofBits a).exp))
+  | .fln, [.float a] => .ok (.float (VFloat.canon (VFloat.ofBits a).log))
+  | .fsin, [.float a] => .ok (.float (VFloat.canon (VFloat.ofBits a).sin))
+  | .fcos, [.float a] => .ok (.float (VFloat.canon (VFloat.ofBits a).cos))
+  | .ftan, [.float a] => .ok (.float (VFloat.canon (VFloat.ofBits a).tan))
+  | .fasin, [.float a] => .ok (.float (VFloat.canon (VFloat.clamp1 (VFloat.ofBits a)).asin))
+  | .facos, [.float a] => .ok (.float (VFloat.canon (VFloat.clamp1 (VFloat.ofBits a)).acos))
+  | .fatan, [.float a] => .ok (.float (VFloat.canon (VFloat.ofBits a).atan))
+  | .fpow, [.float a, .float b] => .ok (.float (VFloat.canon (Float.pow (VFloat.ofBits a) (VFloat.ofBits b))))
+  | .fatan2, [.float a, .float b] => .ok (.float (VFloat.canon (Float.atan2 (VFloat.ofBits a) (VFloat.ofBits b))))
+  | .fisFinite, [.float a] => if VFloat.isFinite a then .ok (.float a) else .fail
   | .fofBits, [.int i] => .ok (.float (VFloat.canon (VFloat.ofBits (UInt64.ofNat (i % (2 ^ 64 : Int)).toNat))))
   | .fail, [] => .fail
   | .userErr, [] => .err .user
@@ -170,7 +183,7 @@ def Prim.failable : Prim → Bool
   | .floorDiv | .ceilDiv | .quotient | .modulo => true
   | .lt | .le | .gt | .ge | .eq | .ne => true
   | .query | .index | .arrSet | .fail => true
-  | .flt | .fle | .fgt | .fge | .ffloor | .fceil | .fround | .ftrunc => true
+  | .flt | .fle | .fgt | .fge | .ffloor | .fceil | .fround | .ftrunc | .fisFinite => true
   | _ => false
 
 /-- A primitive that is not `failable` never fails, on any arguments. -/
