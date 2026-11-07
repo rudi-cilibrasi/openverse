@@ -8,8 +8,12 @@
   applies to every program the front end accepts.
 
   `tc e m` is bidirectional: with `m = none` it infers a type of `e`, with
-  `m = some τ` it checks `e` against `τ` (needed for the polymorphic forms:
-  `false` and `array{}` literals, `break`, `return`, `false?`, `Err()`).
+  `m = some τ` it checks `e` against `τ` up to subtyping (needed for the
+  polymorphic forms: `false` and `array{}` literals, `break`, `return`,
+  `false?`, `Err()`). It is sound, not complete: in infer mode, the branches
+  of an `if` and the operands of `+` join (`VTy.join`), but the elements of
+  an array literal must have the first one's type, and a generic call takes
+  its instantiation from the arguments, right to left.
   Every recursive call is on a strict subterm, so the soundness proof
   `tc_sound` follows the definition case by case.
 -/
@@ -94,6 +98,68 @@ theorem expect_sound {m : Option VTy} {t τ : VTy} (h : expect m t = some τ) :
     · next hs => simp only [Option.some.injEq] at h; subst h; simp [hs]
     · simp at h
 
+mutual
+/-- A type above both `t` and `u`, when the two have the same shape (the
+    union of the classes of references; `if` branches and the operands of
+    `+` in infer mode, #32). -/
+def VTy.join : VTy → VTy → Option VTy
+  | .ref ts, .ref us => some (.ref (ts ++ us.filter (fun x => !ts.contains x)))
+  | .arr t, .arr u => (VTy.join t u).map .arr
+  | .opt t, .opt u => (VTy.join t u).map .opt
+  | .tup ts, .tup us => (VTy.joinL ts us).map .tup
+  | t, u => if t = u then some t else none
+def VTy.joinL : List VTy → List VTy → Option (List VTy)
+  | [], [] => some []
+  | t :: ts, u :: us => match VTy.join t u, VTy.joinL ts us with
+    | some j, some js => some (j :: js)
+    | _, _ => none
+  | _, _ => none
+end
+
+mutual
+theorem VTy.join_sub : ∀ (t u j : VTy), VTy.join t u = some j → t.sub j = true ∧ u.sub j = true
+  | .ref ts, u, j, h => by
+    cases u <;> simp [VTy.join] at h
+    rename_i us
+    subst h
+    constructor
+    · simp only [VTy.sub, List.all_eq_true, List.contains_iff_mem, List.mem_append]
+      exact fun x hx => .inl hx
+    · simp only [VTy.sub, List.all_eq_true, List.contains_iff_mem, List.mem_append, List.mem_filter]
+      intro x hx
+      by_cases hxt : x ∈ ts
+      · exact .inl hxt
+      · exact .inr ⟨hx, by simpa using hxt⟩
+  | .arr t, u, j, h => by
+    cases u <;> simp [VTy.join] at h
+    obtain ⟨j', hj, rfl⟩ := h
+    simpa [VTy.sub] using VTy.join_sub _ _ _ hj
+  | .opt t, u, j, h => by
+    cases u <;> simp [VTy.join] at h
+    obtain ⟨j', hj, rfl⟩ := h
+    simpa [VTy.sub] using VTy.join_sub _ _ _ hj
+  | .tup ts, u, j, h => by
+    cases u <;> simp [VTy.join] at h
+    obtain ⟨js, hj, rfl⟩ := h
+    simpa [VTy.sub] using VTy.joinL_sub _ _ _ hj
+  | .int, u, j, h | .logic, u, j, h | .char, u, j, h | .var _, u, j, h => by
+    cases u <;> simp [VTy.join] at h <;> (try obtain ⟨rfl, rfl⟩ := h) <;> (try subst h) <;>
+      exact ⟨VTy.sub_refl _, VTy.sub_refl _⟩
+theorem VTy.joinL_sub : ∀ (ts us js : List VTy), VTy.joinL ts us = some js →
+    VTy.subL ts js = true ∧ VTy.subL us js = true
+  | [], [], js, h => by simp [VTy.joinL] at h; subst h; exact ⟨rfl, rfl⟩
+  | t :: ts, u :: us, js, h => by
+    simp only [VTy.joinL] at h
+    split at h
+    · next j js' hj hjs =>
+      simp only [Option.some.injEq] at h; subst h
+      obtain ⟨h1, h2⟩ := VTy.join_sub _ _ _ hj
+      obtain ⟨h3, h4⟩ := VTy.joinL_sub _ _ _ hjs
+      simp [VTy.subL, h1, h2, h3, h4]
+    · simp at h
+  | [], _ :: _, _, h | _ :: _, [], _, h => by simp [VTy.joinL] at h
+end
+
 /-- What `expect` promises, for an expression of type `t`. -/
 theorem expect_typed {S : Sigs} {Γ : List VTy} {ρ : VTy} {e : Expr} {m : Option VTy} {t τ : VTy}
     (h : expect m t = some τ) (ht : Typed S Γ ρ e t) :
@@ -168,7 +234,8 @@ section
 variable (S : Sigs) (Γ : List VTy) (ρ : VTy)
 
 mutual
-/-- `tc e none` infers a type of `e`; `tc e (some τ)` checks `e` against `τ`. -/
+/-- `tc e none` infers a type of `e`; `tc e (some τ)` checks `e` against `τ`,
+    up to subtyping. -/
 def tc : Expr → Option VTy → Option VTy
   | .lit v, some τ => if hasTy [] v τ then some τ else none
   | .lit v, none => litTy v
@@ -191,7 +258,11 @@ def tc : Expr → Option VTy → Option VTy
       match m with
       | some τ => if (tc t (some τ)).isSome && (tc e (some τ)).isSome then some τ else none
       | none => match tc t none with
-        | some τ => if (tc e (some τ)).isSome then some τ else none
+        | some τ =>
+          if (tc e (some τ)).isSome then some τ
+          else match tc e none with
+            | some τ' => VTy.join τ τ'
+            | none => none
         | none => match tc e none with
           | some τ => if (tc t (some τ)).isSome then some τ else none
           | none => none
@@ -268,7 +339,11 @@ def tcPrim : Prim → List Expr → Option VTy → Option VTy
   | .concat, [a, b], some (.arr t) =>
     if (tc a (some (.arr t))).isSome && (tc b (some (.arr t))).isSome then some (.arr t) else none
   | .concat, [a, b], none => match tc a none with
-    | some (.arr t) => if (tc b (some (.arr t))).isSome then some (.arr t) else none
+    | some (.arr t) =>
+      if (tc b (some (.arr t))).isSome then some (.arr t)
+      else match tc b none with
+        | some (.arr u) => (VTy.join t u).map .arr
+        | _ => none
     | _ => match tc b none with
       | some (.arr t) => if (tc a (some (.arr t))).isSome then some (.arr t) else none
       | _ => none
@@ -278,6 +353,12 @@ def tcPrim : Prim → List Expr → Option VTy → Option VTy
   | .len, [a], m => match tc a none with
     | some (.arr _) => expect m .int
     | _ => none
+  -- with an expected array type, the operands are checked against it (so a
+  -- narrower array can be updated with a wider element)
+  | .arrSet, [a, i, v], some (.arr t) =>
+    if (tc a (some (.arr t))).isSome && (tc i (some .int)).isSome && (tc v (some t)).isSome then
+      some (.arr t)
+    else none
   | .arrSet, [a, i, v], m => match tc a none with
     | some (.arr t) =>
       if (tc i (some .int)).isSome && (tc v (some t)).isSome then expect m (.arr t) else none
@@ -552,7 +633,13 @@ theorem tcPrim_sound_of {op : Prim} {es : List Expr} {m τ} (ih : ∀ e ∈ es, 
         · next hb =>
           simp only [Option.some.injEq] at h; subst h
           exact ⟨.prim (.cons (inf (by simp) ha) (.cons (chk (by simp) hb) .nil)) .concat, by simp⟩
-        · simp at h
+        · split at h
+          · next u hb =>
+            obtain ⟨j, hj, rfl⟩ := Option.map_eq_some_iff.mp h
+            obtain ⟨h1, h2⟩ := VTy.join_sub _ _ _ hj
+            exact ⟨.prim (.cons (.sub (inf (by simp) ha) (by simpa [VTy.sub] using h1))
+              (.cons (.sub (inf (by simp) hb) (by simpa [VTy.sub] using h2)) .nil)) .concat, by simp⟩
+          · simp at h
       · split at h
         · next t hb =>
           split at h
@@ -588,17 +675,40 @@ theorem tcPrim_sound_of {op : Prim} {es : List Expr} {m τ} (ih : ∀ e ∈ es, 
       exact expect_typed h (.prim (.cons (inf (by simp) ha) .nil) .len)
     · simp at h
   | arrSet =>
-    rcases es with _ | ⟨a, _ | ⟨b, _ | ⟨c, _ | ⟨d, rest⟩⟩⟩⟩ <;> simp only [tcPrim] at h <;>
-      try (simp at h; done)
-    split at h
-    · next t ha =>
-      split at h
+    rcases es with _ | ⟨a, _ | ⟨b, _ | ⟨c, _ | ⟨d, rest⟩⟩⟩⟩ <;> try (cases m <;> simp [tcPrim] at h; done)
+    -- with an expected array type, the operands are checked against it
+    have viaCheck : ∀ t, (if (tc S Γ ρ a (some (.arr t))).isSome && (tc S Γ ρ b (some .int)).isSome &&
+        (tc S Γ ρ c (some t)).isSome then some (VTy.arr t) else none) = some τ →
+        Typed S Γ ρ (.prim .arrSet [a, b, c]) τ ∧ ∀ τ', some (VTy.arr t) = some τ' → τ = τ' := by
+      intro t hh
+      split at hh
       · next hc =>
         simp only [Bool.and_eq_true] at hc
-        exact expect_typed h (.prim (.cons (inf (by simp) ha) (.cons (chk (by simp) hc.1)
-          (.cons (chk (by simp) hc.2) .nil))) .arrSet)
-      · simp at h
-    · simp at h
+        simp only [Option.some.injEq] at hh; subst hh
+        exact ⟨.prim (.cons (chk (by simp) hc.1.1) (.cons (chk (by simp) hc.1.2)
+          (.cons (chk (by simp) hc.2) .nil))) .arrSet, by simp⟩
+      · simp at hh
+    have viaInfer : (match tc S Γ ρ a none with
+        | some (.arr t) =>
+          if (tc S Γ ρ b (some .int)).isSome && (tc S Γ ρ c (some t)).isSome then expect m (.arr t) else none
+        | _ => none) = some τ →
+        Typed S Γ ρ (.prim .arrSet [a, b, c]) τ ∧ ∀ τ', m = some τ' → τ = τ' := by
+      intro hh
+      split at hh
+      · next t ha =>
+        split at hh
+        · next hc =>
+          simp only [Bool.and_eq_true] at hc
+          exact expect_typed hh (.prim (.cons (inf (by simp) ha) (.cons (chk (by simp) hc.1)
+            (.cons (chk (by simp) hc.2) .nil))) .arrSet)
+        · simp at hh
+      · simp at hh
+    cases m with
+    | none => simp only [tcPrim] at h; exact viaInfer h
+    | some τ' =>
+      cases τ' with
+      | arr t => simp only [tcPrim] at h; exact viaCheck t h
+      | _ => simp only [tcPrim] at h; exact viaInfer h
   | flatten =>
     rcases es with _ | ⟨a, _ | ⟨b, rest⟩⟩ <;> simp only [tcPrim] at h <;> try (simp at h; done)
     split at h
@@ -777,7 +887,12 @@ theorem tc_sound_aux : ∀ (n : Nat) (e : Expr), sizeOf e < n → TcOK S Γ ρ e
             · next hc =>
               simp only [Option.some.injEq] at h; subst h
               exact ⟨.ite hσ (It _ _ ht1).1 (typed_of_check Ie hc), by simp⟩
-            · simp at h
+            · split at h
+              · next τ2 he2 =>
+                -- the branches infer different types: their join
+                obtain ⟨h1, h2⟩ := VTy.join_sub _ _ _ h
+                exact ⟨.ite hσ (.sub (It _ _ ht1).1 h1) (.sub (Ie _ _ he2).1 h2), by simp⟩
+              · simp at h
           · split at h
             · next τ1 he1 =>
               split at h

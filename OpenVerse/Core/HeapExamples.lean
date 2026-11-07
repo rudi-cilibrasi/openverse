@@ -186,11 +186,40 @@ example : tcMain (p .mkSome [.call 0 [int 1]]) (some (.opt (.ref [0, 1]))) = som
 -- ... but nothing narrows: a []point is not a []point3, a point3 result is not a `ref [0]`
 example : tcMain (.local 0) (some (.arr (.ref [1]))) = none := by native_decide
 example : tcMain (.call 0 [int 1]) (some (.ref [0])) = none := by native_decide
--- an array updated with a `point` is no longer a []point3, so it cannot go back into `Qs`
+-- an array updated with a `point` is no longer a []point3, so it cannot go back into `Qs`,
+-- but it is a []point
 example : tcMain (.assign 1 (p .arrSet [.local 1, int 0, .heap (.new 0) [int 0, int 0]])) none = none := by
   native_decide
-example : tcMain (.assign 0 (p .arrSet [.local 0, int 0, .heap (.new 0) [int 0, int 0]])) none =
+example : tcMain (.assign 0 (p .arrSet [.local 1, int 0, .heap (.new 0) [int 0, int 0]])) none =
     some (.arr (.ref [0, 1])) := by native_decide
+-- branches of different classes join, in either order, also where only inference is possible
+-- (the receiver of a field read or write)
+example : tcMain (.ite (.lit (.logic true)) (.call 0 [int 1]) (.heap (.new 0) [int 0, int 0])) none =
+    some (.ref [1, 0]) := by native_decide
+example : tcMain (.ite (.lit (.logic true)) (.heap (.new 0) [int 0, int 0]) (.call 0 [int 1])) none =
+    some (.ref [0, 1]) := by native_decide
+example : tcMain (.heap (.get 0) [.ite (.lit (.logic true)) (.call 0 [int 1]) (.heap (.new 0) [int 0, int 0])])
+    none = some .int := by native_decide
+example : tcMain (.heap (.set 1) [.ite (.lit (.logic true)) (.call 0 [int 1]) (.heap (.new 0) [int 0, int 0]),
+    int 5]) none = some .int := by native_decide
+-- ... but `Z` is not a field of the join
+example : tcMain (.heap (.get 2) [.ite (.lit (.logic true)) (.call 0 [int 1]) (.heap (.new 0) [int 0, int 0])])
+    none = none := by native_decide
+example : tcMain (p .concat [.local 1, .local 0]) none = some (.arr (.ref [1, 0])) := by native_decide
+-- a `for` over a []point3 with a `point` slot
+example : tc subSigs [.arr (.ref [1]), .ref [0, 1], .int] .int
+    (.forE 1 (.local 0) (.lit (.logic true)) (.heap (.get 0) [.local 1])) none = some (.arr .int) := by
+  native_decide
+-- a default of a container type from a parameter of a narrower one
+example : checkDefault subSigs 1 [.arr (.ref [1]), .arr (.ref [0, 1])] (.local 0) (.arr (.ref [0, 1])) = true := by
+  native_decide
+-- a generic call: its type argument comes from the last argument (the front end's hidden
+-- argument), and the others may be narrower; without it, the first argument found decides
+def idSigs : Sigs := { fns := [([.var 0, .var 0], .var 0)], classes }
+example : tc idSigs [.ref [1], .ref [0, 1]] .void (.call 0 [.local 0, .local 1]) none = some (.ref [0, 1]) := by
+  native_decide
+example : tc idSigs [.ref [1], .ref [0, 1]] .void (.call 0 [.local 1, .local 0]) none = none := by
+  native_decide
 -- tuples widen pointwise, with the same length
 example : (VTy.tup [.ref [1], .int]).sub (.tup [.ref [0, 1], .int]) = true := by native_decide
 example : (VTy.tup [.ref [1]]).sub (.tup [.ref [0, 1], .int]) = false := by native_decide
