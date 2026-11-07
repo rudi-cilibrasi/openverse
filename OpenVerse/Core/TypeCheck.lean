@@ -98,12 +98,29 @@ theorem expect_sound {m : Option VTy} {t τ : VTy} (h : expect m t = some τ) :
     · next hs => simp only [Option.some.injEq] at h; subst h; simp [hs]
     · simp at h
 
+/-- The longest common prefix of two lists of type arguments. -/
+def commonPrefix : List VTy → List VTy → List VTy
+  | a :: as, b :: bs => if a = b then a :: commonPrefix as bs else []
+  | _, _ => []
+
+theorem commonPrefix_prefix : ∀ (as bs : List VTy), commonPrefix as bs <+: as ∧ commonPrefix as bs <+: bs
+  | a :: as, b :: bs => by
+    unfold commonPrefix
+    split
+    · next h =>
+      subst h
+      obtain ⟨h1, h2⟩ := commonPrefix_prefix as bs
+      exact ⟨List.cons_prefix_cons.mpr ⟨rfl, h1⟩, List.cons_prefix_cons.mpr ⟨rfl, h2⟩⟩
+    · exact ⟨List.nil_prefix, List.nil_prefix⟩
+  | [], _ => by simp [commonPrefix]
+  | _ :: _, [] => by simp [commonPrefix]
+
 mutual
 /-- A type above both `t` and `u`, when the two have the same shape (the
-    union of the classes of references; `if` branches and the operands of
-    `+` in infer mode, #32). -/
+    union of the classes of references, at the common prefix of their type
+    arguments; `if` branches and the operands of `+` in infer mode, #32). -/
 def VTy.join : VTy → VTy → Option VTy
-  | .ref ts, .ref us => some (.ref (ts ++ us.filter (fun x => !ts.contains x)))
+  | .ref ts as, .ref us bs => some (.ref (ts ++ us.filter (fun x => !ts.contains x)) (commonPrefix as bs))
   | .arr t, .arr u => (VTy.join t u).map .arr
   | .opt t, .opt u => (VTy.join t u).map .opt
   | .tup ts, .tup us => (VTy.joinL ts us).map .tup
@@ -118,15 +135,18 @@ end
 
 mutual
 theorem VTy.join_sub : ∀ (t u j : VTy), VTy.join t u = some j → t.sub j = true ∧ u.sub j = true
-  | .ref ts, u, j, h => by
+  | .ref ts as, u, j, h => by
     cases u <;> simp [VTy.join] at h
-    rename_i us
+    rename_i us bs
     subst h
+    obtain ⟨hp1, hp2⟩ := commonPrefix_prefix as bs
     constructor
-    · simp only [VTy.sub, List.all_eq_true, List.contains_iff_mem, List.mem_append]
-      exact fun x hx => .inl hx
-    · simp only [VTy.sub, List.all_eq_true, List.contains_iff_mem, List.mem_append, List.mem_filter]
-      intro x hx
+    · simp only [VTy.sub, Bool.and_eq_true, List.all_eq_true, List.contains_iff_mem, List.mem_append,
+        List.isPrefixOf_iff_prefix]
+      exact ⟨fun x hx => .inl hx, hp1⟩
+    · simp only [VTy.sub, Bool.and_eq_true, List.all_eq_true, List.contains_iff_mem, List.mem_append,
+        List.mem_filter, List.isPrefixOf_iff_prefix]
+      refine ⟨fun x hx => ?_, hp2⟩
       by_cases hxt : x ∈ ts
       · exact .inl hxt
       · exact .inr ⟨hx, by simpa using hxt⟩
@@ -175,6 +195,7 @@ def VTy.bindVars : VTy → VTy → List (Nat × VTy) → List (Nat × VTy)
   | .arr p, .arr a, acc => VTy.bindVars p a acc
   | .opt p, .opt a, acc => VTy.bindVars p a acc
   | .tup ps, .tup as, acc => VTy.bindVarsL ps as acc
+  | .ref _ ps, .ref _ as, acc => VTy.bindVarsL ps as acc
   | _, _, acc => acc
 def VTy.bindVarsL : List VTy → List VTy → List (Nat × VTy) → List (Nat × VTy)
   | p :: ps, a :: as, acc => VTy.bindVarsL ps as (VTy.bindVars p a acc)
@@ -188,25 +209,45 @@ def VTy.unbound (acc : List (Nat × VTy)) : VTy → Bool
   | .arr t => VTy.unbound acc t
   | .opt t => VTy.unbound acc t
   | .tup ts => VTy.unboundL acc ts
+  | .ref _ ts => VTy.unboundL acc ts
   | _ => false
 def VTy.unboundL (acc : List (Nat × VTy)) : List VTy → Bool
   | [] => false
   | t :: ts => VTy.unbound acc t || VTy.unboundL acc ts
 end
 
-/-- The type of field `k` of the classes `ts`, when they all have one, the
-    same, without type variables (`FieldTy`). -/
-def fieldTy (S : Sigs) (ts : List Nat) (k : Nat) : Option VTy :=
+/-- Field `k` of class `t`, at the type arguments `args`, if it mentions
+    no type parameter past them. -/
+def classField (S : Sigs) (args : List VTy) (k t : Nat) : Option VTy :=
+  match S.classes[t]?.bind (·[k]?) with
+  | some f => if f.varsBelow args.length then some (f.inst args) else none
+  | none => none
+
+theorem classField_sound {S : Sigs} {args : List VTy} {k t : Nat} {τ : VTy}
+    (h : classField S args k t = some τ) :
+    ∃ fs f, S.classes[t]? = some fs ∧ fs[k]? = some f ∧ f.varsBelow args.length = true ∧ f.inst args = τ := by
+  unfold classField at h
+  split at h
+  · next f hf =>
+    split at h
+    · next hv =>
+      simp only [Option.some.injEq] at h
+      obtain ⟨fs, hfs, hk⟩ := Option.bind_eq_some_iff.mp hf
+      exact ⟨fs, f, hfs, hk, hv, h⟩
+    · simp at h
+  · simp at h
+
+/-- The type of field `k` of the classes `ts` at the type arguments `args`,
+    when they all have one, the same (`FieldTy`). -/
+def fieldTy (S : Sigs) (ts : List Nat) (args : List VTy) (k : Nat) : Option VTy :=
   match ts with
   | [] => none
-  | t :: _ => match S.classes[t]?.bind (·[k]?) with
-    | some τ =>
-      if τ.closed && ts.all (fun u => decide (S.classes[u]?.bind (·[k]?) = some τ)) then some τ
-      else none
+  | t :: _ => match classField S args k t with
+    | some τ => if ts.all (fun u => decide (classField S args k u = some τ)) then some τ else none
     | none => none
 
-theorem fieldTy_sound {S : Sigs} {ts : List Nat} {k : Nat} {τ : VTy} (h : fieldTy S ts k = some τ) :
-    FieldTy S ts k τ := by
+theorem fieldTy_sound {S : Sigs} {ts : List Nat} {args : List VTy} {k : Nat} {τ : VTy}
+    (h : fieldTy S ts args k = some τ) : FieldTy S ts args k τ := by
   unfold fieldTy at h
   split at h
   · simp at h
@@ -215,12 +256,31 @@ theorem fieldTy_sound {S : Sigs} {ts : List Nat} {k : Nat} {τ : VTy} (h : field
       split at h
       · next hc =>
         simp only [Option.some.injEq] at h; subst h
-        simp only [Bool.and_eq_true, List.all_eq_true, decide_eq_true_eq] at hc
-        refine ⟨hc.1, fun u hu => ?_⟩
-        obtain ⟨fs, hfs, hk⟩ := Option.bind_eq_some_iff.mp (hc.2 u hu)
-        exact ⟨fs, hfs, hk⟩
+        simp only [List.all_eq_true, decide_eq_true_eq] at hc
+        exact fun u hu => classField_sound (hc u hu)
       · simp at h
     · simp at h
+
+mutual
+/-- One more than the largest type variable of `t` (none: 0). -/
+def VTy.nvars : VTy → Nat
+  | .var j => j + 1
+  | .arr t | .opt t => VTy.nvars t
+  | .tup ts | .ref _ ts => VTy.nvarsL ts
+  | _ => 0
+def VTy.nvarsL : List VTy → Nat
+  | [] => 0
+  | t :: ts => max (VTy.nvars t) (VTy.nvarsL ts)
+end
+
+/-- The type arguments `tc` proposes for a `new` of a class with field
+    types `fs`: those of the expected type, else the bindings `acc ()` from
+    the fields, `void` where none (it then checks the fields against them).
+    `acc` is only computed when needed, so that checking nested `new`s
+    against their types takes linear time. -/
+def newArgs (acc : Unit → List (Nat × VTy)) (fs : List VTy) : Option VTy → List VTy
+  | some (.ref _ args) => args
+  | _ => (List.range (VTy.nvarsL fs)).map fun j => ((acc ()).lookup j).getD VTy.void
 
 /-- The instantiation `tc` proposes for a call with result type `t`: the
     bindings `acc` from the arguments, completed from the expected type. -/
@@ -239,7 +299,7 @@ mutual
 def tc : Expr → Option VTy → Option VTy
   | .lit v, some τ => if hasTy S.protos v τ then some τ else none
   -- a reference literal: to a prototype (#37)
-  | .lit (.ref a), none => S.protos[a]?.map fun t => .ref [t]
+  | .lit (.ref a), none => S.protos[a]?.map fun (t, args) => .ref [t] args
   | .lit v, none => litTy v
   | .local i, m => match Γ[i]? with
     | some t => expect m t
@@ -288,23 +348,25 @@ def tc : Expr → Option VTy → Option VTy
   | .print e, m => if (tc e (some VTy.str)).isSome then expect m VTy.void else none
   | .heap (.new t) es, m => match S.classes[t]? with
     | some fs =>
-      if tcL es fs then expect m (.ref [t]) else none
+      -- propose type arguments (#39), then check the fields against them
+      let args := newArgs (fun _ => bindArgs fs es []) fs m
+      if tcL es (fs.map (VTy.inst args)) then expect m (.ref [t] args) else none
     | none => none
   | .heap (.get k) [e], m => match tc e none with
-    | some (.ref ts) => match fieldTy S ts k with
+    | some (.ref ts args) => match fieldTy S ts args k with
       | some τ => expect m τ
       | none => none
     | _ => none
   | .heap (.set k) [e, v], m => match tc e none with
-    | some (.ref ts) => match fieldTy S ts k with
+    | some (.ref ts args) => match fieldTy S ts args k with
       | some τ => if (tc v (some τ)).isSome then expect m τ else none
       | none => none
     | _ => none
   | .heap .tag [e], m => match tc e none with
-    | some (.ref _) => expect m .int
+    | some (.ref _ _) => expect m .int
     | _ => none
   | .heap (.isTag us) [e], m => match tc e none with
-    | some (.ref _) => expect m (.ref us)
+    | some (.ref _ args) => expect m (.ref us args)
     | _ => none
   | .heap _ _, _ => none
   | .prim op es, m => tcPrim op es m
@@ -769,7 +831,7 @@ theorem tcHeap_sound_of {op : HeapOp} {es : List Expr} {m τ} (ih : ∀ e ∈ es
   | get k =>
     rcases es with _ | ⟨e, _ | ⟨_, _⟩⟩ <;> simp only [tc] at h <;> try (simp at h; done)
     split at h
-    · next ts he =>
+    · next ts args he =>
       split at h
       · next τ' hf =>
         exact expect_typed h (.heap_get (inf (by simp) he) (fieldTy_sound hf))
@@ -778,7 +840,7 @@ theorem tcHeap_sound_of {op : HeapOp} {es : List Expr} {m τ} (ih : ∀ e ∈ es
   | set k =>
     rcases es with _ | ⟨e, _ | ⟨v, _ | ⟨_, _⟩⟩⟩ <;> simp only [tc] at h <;> try (simp at h; done)
     split at h
-    · next ts he =>
+    · next ts args he =>
       split at h
       · next τ' hf =>
         split at h
@@ -791,13 +853,13 @@ theorem tcHeap_sound_of {op : HeapOp} {es : List Expr} {m τ} (ih : ∀ e ∈ es
   | tag =>
     rcases es with _ | ⟨e, _ | ⟨_, _⟩⟩ <;> simp only [tc] at h <;> try (simp at h; done)
     split at h
-    · next ts he =>
+    · next ts args he =>
       exact expect_typed h (.heap_tag (inf (by simp) he))
     · simp at h
   | isTag us =>
     rcases es with _ | ⟨e, _ | ⟨_, _⟩⟩ <;> simp only [tc] at h <;> try (simp at h; done)
     split at h
-    · next ts he =>
+    · next ts args he =>
       exact expect_typed h (.heap_isTag (inf (by simp) he))
     · simp at h
 
@@ -1000,8 +1062,8 @@ def checkDefault (S : Sigs) (a : Nat) (Γ : List VTy) : Expr → VTy → Bool
     | some t' => t'.sub t
     | none => false
   | .prim .mkTup ds, .tup ts => checkDefaultL S a Γ ds ts
-  | .heap (.new c) ds, .ref ts => ts.contains c && match S.classes[c]? with
-    | some fs => checkDefaultL S a Γ ds fs
+  | .heap (.new c) ds, .ref ts args => ts.contains c && match S.classes[c]? with
+    | some fs => checkDefaultL S a Γ ds (fs.map (VTy.inst args))
     | none => false
   | _, _ => false
 def checkDefaultL (S : Sigs) (a : Nat) (Γ : List VTy) : List Expr → List VTy → Bool
@@ -1029,11 +1091,11 @@ theorem checkDefault_sound {S : Sigs} {a : Nat} {Γ : List VTy} : ∀ (d : Expr)
   | .heap op ds, t, h => by
     cases op <;> try (simp [checkDefault] at h; done)
     cases t <;> try (simp [checkDefault] at h; done)
-    rename_i c ts
+    rename_i c ts args
     simp only [checkDefault, Bool.and_eq_true] at h
     obtain ⟨hc, h⟩ := h
     split at h
-    · next fs hfs => exact .new hfs (by simpa using hc) (checkDefaultL_sound ds fs h)
+    · next fs hfs => exact .new hfs (by simpa using hc) (checkDefaultL_sound ds _ h)
     · simp at h
   | .assign .., _, h | .seq .., _, h | .call .., _, h | .ite .., _, h | .forE .., _, h
   | .loop _, _, h | .brk, _, h | .ret _, _, h | .print _, _, h => by simp [checkDefault] at h
@@ -1148,20 +1210,31 @@ theorem matchPrelude_sound : ∀ {e : Expr} {objs m}, matchPrelude e = some (obj
   | .heap .., _, _, h => by simp [matchPrelude] at h
   | .call _ (_ :: _), _, _, h => by simp [matchPrelude] at h
 
-/-- Every object has the field types of its class, and the heap starts with
-    the prototypes. -/
-def checkHeapOK (S : Sigs) (h : Array Obj) : Bool :=
-  h.toList.all (fun o => match S.classes[o.tag]? with
-    | some fs => allTys (tagsOf h) o.fields fs
-    | none => false) && S.protos.isPrefixOf (tagsOf h)
+/-- The heap typing `Ξ` has one entry per object, its class, and the
+    object's fields have the class's types at its arguments; the heap
+    typing starts with the prototypes'. -/
+def checkHeapOK (S : Sigs) (Ξ : HeapTy) (h : Array Obj) : Bool :=
+  decide (Ξ.length = h.size) &&
+  (List.range h.size).all (fun a => match h.toList[a]?, Ξ[a]? with
+    | some o, some (t, args) => decide (t = o.tag) && match S.classes[o.tag]? with
+      | some fs => allTys Ξ o.fields (fs.map (VTy.inst args))
+      | none => false
+    | _, _ => false) && S.protos.isPrefixOf Ξ
 
-theorem checkHeapOK_sound {S : Sigs} {h : Array Obj} (hc : checkHeapOK S h = true) : HeapOK S h := by
-  simp only [checkHeapOK, Bool.and_eq_true, List.all_eq_true] at hc
-  refine ⟨fun a o ho => ?_, List.isPrefixOf_iff_prefix.mp hc.2⟩
-  have := hc.1 o (List.mem_of_getElem? ho)
-  split at this
-  · next fs hfs => exact ⟨fs, hfs, this⟩
-  · simp at this
+theorem checkHeapOK_sound {S : Sigs} {Ξ : HeapTy} {h : Array Obj} (hc : checkHeapOK S Ξ h = true) :
+    HeapOK S Ξ h := by
+  simp only [checkHeapOK, Bool.and_eq_true, List.all_eq_true, List.mem_range, decide_eq_true_eq] at hc
+  obtain ⟨⟨hl, hc⟩, hp⟩ := hc
+  refine ⟨hl, fun a o ho => ?_, List.isPrefixOf_iff_prefix.mp hp⟩
+  have ha : a < h.size := by simpa using lt_of_getElem?_some ho
+  have := hc a ha
+  rcases hΞ : Ξ[a]? with _ | ⟨t, args⟩
+  · simp [ho, hΞ] at this
+  · simp only [ho, hΞ, Bool.and_eq_true, decide_eq_true_eq] at this
+    obtain ⟨rfl, this⟩ := this
+    split at this
+    · next fs hfs => exact ⟨args, fs, rfl, hfs, this⟩
+    · simp at this
 
 /-- `Main` is a prelude of prototypes (#37), or there are none. -/
 def checkPrelude (P : Prog) (S : Sigs) : Bool :=
@@ -1170,8 +1243,7 @@ def checkPrelude (P : Prog) (S : Sigs) : Bool :=
   | some fn =>
     decide (fn.arity = 0) && decide (fn.nslots = 0) &&
     match matchPrelude fn.body with
-    | some (objs, m) => decide (tagsOf (protoObjs objs) = S.protos) && checkHeapOK S (protoObjs objs) &&
-        decide (S.fns[m]? = S.fns[P.main]?)
+    | some (objs, m) => checkHeapOK S S.protos (protoObjs objs) && decide (S.fns[m]? = S.fns[P.main]?)
     | none => false
   | none => false
 
@@ -1189,14 +1261,14 @@ theorem checkPrelude_sound {P : Prog} {S : Sigs} (h : checkPrelude P S = true) :
       split at h
       · next objs m hmatch =>
         simp only [Bool.and_eq_true, decide_eq_true_eq] at h
-        exact ⟨fn, objs, m, hfn, ha, hn, matchPrelude_sound hmatch, h.1.1, checkHeapOK_sound h.1.2, h.2⟩
+        exact ⟨fn, objs, m, hfn, ha, hn, matchPrelude_sound hmatch, checkHeapOK_sound h.1, h.2⟩
       · simp at h
     · simp at h
 
 /-- Check a whole program against signatures `S` and slot types `Γs`. -/
 def Prog.checkTypes (P : Prog) (S : Sigs) (Γs : List (List VTy)) : Bool :=
   checkPrelude P S &&
-  S.classes.all (·.all VTy.closed) &&
+  S.protos.all (VTy.closedL ·.2) &&
   decide (P.fns.length = S.fns.length) &&
   (List.range P.fns.length).all fun f =>
     match P.fns[f]?, S.fns[f]?, Γs[f]? with
@@ -1210,7 +1282,7 @@ theorem Prog.checkTypes_sound {P : Prog} {S : Sigs} {Γs} (h : P.checkTypes S Γ
   unfold Prog.checkTypes at h
   simp only [Bool.and_eq_true, decide_eq_true_eq, List.all_eq_true, List.mem_range] at h
   obtain ⟨⟨⟨hpre, hcl⟩, hlen⟩, h⟩ := h
-  refine ⟨fun t fs hc f hf => hcl fs (List.mem_of_getElem? hc) f hf, hlen,
+  refine ⟨hcl, hlen,
     fun f fn ps τ hf hs => ?_, checkPrelude_sound hpre⟩
   have hlt := lt_of_getElem?_some hf
   have := h f hlt
