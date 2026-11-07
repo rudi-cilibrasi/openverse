@@ -1989,9 +1989,27 @@ partial def elabApp (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (brack
           argIds := argIds.push (.ident mp s!"$arg{ta}")
         let mut namedSlots : List (String × Nat) := []
         for (ap, n, rhs) in namedArgs do
-          let t := declTy (ms.params[npos + (ms.named.findIdx? (·.1 == n)).get!]!)
+          -- (at the own type parameters inferred so far; one it mentions
+          -- that is not yet bound is inferred from it, #119)
+          let t0 := (declTy (ms.params[npos + (ms.named.findIdx? (·.1 == n)).get!]!)).subst σu
+          let mut t := t0
+          let mut e : Expr := .lit .void
+          if t0.params.any ownNames.contains then
+            if fromContext rhs then
+              eerr ap s!"cannot infer the type parameters of {m} from the arguments of this call"
+            let r ← elabE ctx rhs none
+            match t0.matchArg ctx.types σu r.ty with
+            | some σ' =>
+              σu := own? σ'
+              t := t0.subst σu
+              if t.params.any ownNames.contains then
+                eerr ap s!"cannot infer the type parameters of {m} from this argument"
+              e ← coerce ap r t
+            | none => eerr ap s!"expected {showT t0}, found {r.ty.show} (in a call of {m})"
+          else
+            e ← coerce ap (← elabE ctx rhs (some t0)) t0
           let ta ← fresh t
-          pre := pre.push (.assign ta (← coerce ap (← elabE ctx rhs (some t)) t))
+          pre := pre.push (.assign ta e)
           locs := { name := s!"$arg{ta}", slot := ta, ty := t, mutable := false } :: locs
           namedSlots := namedSlots ++ [(n, ta)]
         for (n, ta) in namedSlots do
@@ -2082,10 +2100,33 @@ partial def elabCast (ctx : Ctx) (p : Pos) (T : String) (args : List SExpr) (bra
     determined is elaborated against it, so `array{}` and `false` work. -/
 partial def elabGenericCall (ctx : Ctx) (p : Pos) (s : Sig) (args : List SExpr) (exp : Option Ty) :
     EM R := do
-  if args.any fun | .decl _ n _ _ _ => n.startsWith "?" | _ => false then
-    eerr p s!"{s.name} is generic: openverse does not support named arguments to generic functions"
-  if args.length != s.params.length then
-    eerr p s!"{s.name} takes {s.params.length} argument(s), found {args.length}"
+  -- named arguments (#119): positional ones, then named ones as written,
+  -- then the defaults of those omitted, as for other functions
+  let isNamed : SExpr → Bool := fun | .decl _ n _ _ _ => n.startsWith "?" | _ => false
+  let npos := s.params.length - s.named.length
+  let pos := args.filter (!isNamed ·)
+  let named : List (Pos × String × SExpr) := args.filterMap fun
+    | .decl ap n _ _ rhs => if n.startsWith "?" then some (ap, (n.drop 1).toString, rhs) else none
+    | _ => none
+  let plain := s.named.isEmpty && named.isEmpty
+  if plain then
+    if args.length != s.params.length then
+      eerr p s!"{s.name} takes {s.params.length} argument(s), found {args.length}"
+  else
+    if pos.length != npos then
+      -- (a method's receiver is its first positional argument)
+      let (shown, off) := match s.name.splitOn "." with
+        | [_, m] => if s.pnames.head? == some "Self" then (m, 1) else (s.name, 0)
+        | _ => (s.name, 0)
+      eerr p s!"{shown} takes {npos - off} positional argument(s), found {pos.length - off}"
+    for ((ap, n, _), i) in named.zip (List.range named.length) do
+      if (s.named.find? (·.1 == n)).isNone then eerr ap s!"{s.name} has no parameter ?{n}"
+      if (named.take i).any (·.2.1 == n) then eerr ap s!"?{n} is given twice"
+  -- the arguments given, in the order they are evaluated, each with the
+  -- index of its parameter
+  let given : List (SExpr × Nat) := (pos.zip (List.range npos)) ++ named.map fun (_, n, rhs) =>
+    (rhs, npos + (s.named.findIdx? (·.1 == n)).getD 0)
+  let ptys := s.params.toArray
   let mut σ : List (String × Ty) := []
   if let some et := exp then
     if !(et == .void) then
@@ -2096,12 +2137,13 @@ partial def elabGenericCall (ctx : Ctx) (p : Pos) (s : Sig) (args : List SExpr) 
   let fromContext : SExpr → Bool
     | .ident _ "false" | .arrayLit _ [] | .mapLit _ [] => true
     | _ => false
-  let mut es : Array Expr := Array.replicate args.length (.lit .void)
+  let mut es : Array Expr := Array.replicate given.length (.lit .void)
   -- arguments left for the second pass; an argument whose type contains
   -- `false` (like `array{Err()}`) binds nothing, so it joins them
-  let mut deferred : Array Bool := (args.map fromContext).toArray
+  let mut deferred : Array Bool := (given.map (fromContext ·.1)).toArray
   for pass in [0, 1] do
-    for ((a, pt), i) in (args.zip s.params).zip (List.range args.length) do
+    for ((a, k), i) in given.zip (List.range given.length) do
+      let pt := ptys[k]!
       if (pass == 0) == deferred[i]! then continue
       if bound σ pt then
         let t := pt.subst σ
@@ -2121,6 +2163,50 @@ partial def elabGenericCall (ctx : Ctx) (p : Pos) (s : Sig) (args : List SExpr) 
           else
             es := es.set! i (← coerce a.pos r (pt.subst σ))
         | none => eerr a.pos s!"expected {(pt.subst σ).show}, found {r.ty.show} (in a call of {s.name})"
+  -- the arguments, in their temporaries, then the defaults
+  let mut steps : Array Expr := #[]
+  let mut slots : Array (Option Nat) := Array.replicate s.params.length none
+  if !plain then
+    for ((_, k), i) in given.zip (List.range given.length) do
+      let ta ← fresh (ptys[k]!.subst σ)
+      steps := steps.push (.assign ta es[i]!)
+      slots := slots.set! k (some ta)
+    for ((n, dflt), j) in s.named.zip (List.range s.named.length) do
+      let k := npos + j
+      if slots[k]!.isNone then
+        let some d := dflt | eerr p s!"{s.name} needs the argument ?{n}, which has no default"
+        let pt := ptys[k]!
+        -- (the default sees the parameters before it, in their temporaries)
+        let earlier : List Local := ((s.pnames.zip (List.range k)).filterMap fun (pn, j) =>
+          (slots[j]!).map fun sl => ({ name := pn, slot := sl, ty := ptys[j]!.subst σ, mutable := false } : Local)).reverse
+        let key := (s.name, s!"?{n}")
+        if ctx.defaults.contains key then
+          eerr p s!"the default of ?{n} of {s.name} uses itself (a call of {s.name} that omits ?{n})"
+        -- (a method's: its receiver's fields too, through `Self`)
+        let selfC : Option String :=
+          if s.pnames.head? == some "Self" then (s.name.splitOn ".").head? else none
+        let dctx := { ctx with locals := earlier, selfClass := selfC, inParamDefault := true,
+                               inLoop := false, canFail := ctx.canFail && s.decides,
+                               defaults := key :: ctx.defaults }
+        -- (its type: the parameter's, or what the default gives a type
+        -- parameter nothing else determined)
+        let σ0 := σ
+        if !bound σ0 pt && fromContext d then
+          let v := (pt.params.filter fun v => (σ0.lookup v).isNone).headD "t"
+          eerr p s!"cannot infer type parameter {v} of {s.name} from the arguments of this call"
+        let (rd, σ1) ← fxAt p (do
+          let r ← elabE dctx d (if bound σ0 pt then some (pt.subst σ0) else none)
+          let σ1 ← if bound σ0 pt then pure σ0 else
+            match pt.matchArg ctx.types σ0 r.ty with
+            | some σ' => pure σ'
+            | none => eerr p s!"the default of ?{n} of {s.name} is a {r.ty.show}, not a {(pt.subst σ0).show}"
+          return (← coerce p r (pt.subst σ1), σ1))
+        σ := σ1
+        if !s.decides && rd.mayFail ctx.sigProg then
+          eerr p s!"the default of ?{n} of {s.name} can fail, but {s.name} is not <decides>"
+        let ta ← fresh (pt.subst σ)
+        steps := steps.push (.assign ta rd)
+        slots := slots.set! k (some ta)
   let mut targs : Array Ty := #[]
   for (v, cmp) in s.tparams do
     let some t := σ.lookup v
@@ -2129,7 +2215,9 @@ partial def elabGenericCall (ctx : Ctx) (p : Pos) (s : Sig) (args : List SExpr) 
     targs := targs.push t
   -- the hidden arguments: a value of each type argument
   let dicts ← targs.toList.mapM (witness ctx.types ctx.dictBase ctx.dictVars)
-  return ⟨.call s.idx (es.toList ++ dicts), s.ret.subst σ⟩
+  if plain then return ⟨.call s.idx (es.toList ++ dicts), s.ret.subst σ⟩
+  let call := Expr.call s.idx (slots.toList.map (fun o => Expr.local o.get!) ++ dicts)
+  return ⟨steps.toList.foldr Expr.seq call, s.ret.subst σ⟩
 
 /-- The failable array methods of the Book of Verse (§9.1):
     `A.Slice[i, j]`, `A.Slice[i]`, `A.Find[x]`, `A.RemoveElement[i]`,
@@ -3881,8 +3969,6 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     match top with
     | .fn p n ps tps effs ret _ =>
       if n == "Main" then throw s!"{p.show}: Main cannot be generic"
-      if ps.any (·.named) then
-        throw s!"{p.show}: {n} is generic: openverse does not support named parameters in generic functions"
       let tparams ← checkTParams env tps
       let genv := { env with tvars := tparams.map fun (v, c) => (v, Ty.param v c) }
       let (tys, rt) ← fnTypes genv p n ps effs ret
@@ -3893,7 +3979,9 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
                             decides := effs.contains "decides", isConst := false,
                             -- (a parametric class's `block:`: inferred from none, #41)
                             fx := if n.endsWith ".$block" then [] else allowedFx effs,
-                            tparams }
+                            tparams,
+                            named := (ps.filter (·.named)).map fun q => (q.name, q.default),
+                            pnames := ps.map (·.name) }
     | _ => pure ()
   let mkSigProg (sigs : Array Sig) : Prog :=
     { fns := (sigs ++ gsigs).toList.map fun s =>
