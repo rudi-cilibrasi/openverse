@@ -117,6 +117,10 @@ theorem VTy.closedL_subst (θ : Nat → VTy) : ∀ ts : List VTy, VTy.closedL ts
     simp [VTy.closed_subst θ t h.1, VTy.closedL_subst θ ts h.2]
 end
 
+theorem VTy.closedL_iff : ∀ {ts : List VTy}, VTy.closedL ts = true ↔ ∀ t ∈ ts, t.closed = true
+  | [] => by simp [VTy.closedL]
+  | t :: ts => by rw [VTy.closedL, Bool.and_eq_true, VTy.closedL_iff]; simp
+
 mutual
 /-- Values keep their types under any substitution, in a heap typing
     without type variables: a type variable has no values, so it only
@@ -130,9 +134,12 @@ theorem hasTy_subst (hΞ : ∀ p ∈ Ξ, VTy.closedL p.2 = true) (θ : Nat → V
       simp only [hasTy, VTy.subst_ref] at h ⊢
       rcases ha : Ξ[a]? with _ | ⟨t, args'⟩
       · simp [ha] at h
-      · simp only [ha, Bool.and_eq_true, decide_eq_true_eq] at h ⊢
-        obtain ⟨h1, rfl⟩ := h
-        exact ⟨h1, (VTy.closedL_subst θ args' (hΞ _ (List.mem_of_getElem? ha))).symm⟩
+      · simp only [ha, Bool.and_eq_true, List.isPrefixOf_iff_prefix] at h ⊢
+        obtain ⟨h1, hp⟩ := h
+        have hc : VTy.closedL args = true := VTy.closedL_iff.mpr fun x hx =>
+          VTy.closedL_iff.mp (hΞ _ (List.mem_of_getElem? ha)) x (hp.subset hx)
+        rw [VTy.closedL_subst θ args hc]
+        exact ⟨h1, hp⟩
     all_goals simp [hasTy] at h
   | .var _, v, h => by cases v <;> simp [hasTy] at h
   | .arr t, v, h => by
@@ -204,13 +211,35 @@ theorem VTy.map_inst_subst (θ : Nat → VTy) (args fs : List VTy) :
 theorem FieldTy.subst {S : Sigs} {ts : List Nat} {args : List VTy} {k : Nat} {τ : VTy} (θ : Nat → VTy)
     (h : FieldTy S ts args k τ) : FieldTy S ts (args.map (VTy.subst θ)) k (τ.subst θ) := by
   intro t ht
-  obtain ⟨fs, hc, hk⟩ := h t ht
-  refine ⟨fs, hc, ?_⟩
-  cases hf : fs[k]? with
-  | none => simp [hf] at hk
-  | some f =>
-    simp only [hf, Option.map_some, Option.some.injEq] at hk ⊢
-    rw [← hk, VTy.inst_subst]
+  obtain ⟨fs, f, hc, hk, hv, rfl⟩ := h t ht
+  exact ⟨fs, f, hc, hk, by simpa using hv, (VTy.inst_subst θ args f).symm⟩
+
+mutual
+/-- Substitutions that agree below `n` agree on a type whose variables are below `n`. -/
+theorem VTy.subst_congr {σ σ' : Nat → VTy} {n : Nat} (hσ : ∀ j < n, σ j = σ' j) :
+    ∀ t : VTy, t.varsBelow n = true → t.subst σ = t.subst σ'
+  | .int, _ | .logic, _ | .char, _ => by simp
+  | .var j, h => by simp only [VTy.varsBelow, decide_eq_true_eq] at h; simp [hσ j h]
+  | .arr t, h => by simp only [VTy.varsBelow] at h; simp [VTy.subst_congr hσ t h]
+  | .opt t, h => by simp only [VTy.varsBelow] at h; simp [VTy.subst_congr hσ t h]
+  | .tup ts, h => by simp only [VTy.varsBelow] at h; simp [VTy.substL_congr hσ ts h]
+  | .ref _ ts, h => by simp only [VTy.varsBelow] at h; simp [VTy.substL_congr hσ ts h]
+theorem VTy.substL_congr {σ σ' : Nat → VTy} {n : Nat} (hσ : ∀ j < n, σ j = σ' j) :
+    ∀ ts : List VTy, VTy.varsBelowL n ts = true → ts.map (VTy.subst σ) = ts.map (VTy.subst σ')
+  | [], _ => rfl
+  | t :: ts, h => by
+    simp only [VTy.varsBelowL, Bool.and_eq_true] at h
+    simp [VTy.subst_congr hσ t h.1, VTy.substL_congr hσ ts h.2]
+end
+
+/-- A field type mentioning only the first `args.length` type parameters
+    has the same instance at every extension of `args` (#39). -/
+theorem VTy.inst_prefix {args args' : List VTy} (hp : args <+: args') {f : VTy}
+    (hf : f.varsBelow args.length = true) : f.inst args' = f.inst args := by
+  unfold VTy.inst
+  refine VTy.subst_congr (n := args.length) (fun j hj => ?_) f hf
+  obtain ⟨r, rfl⟩ := hp
+  simp [List.getD_eq_getElem?_getD, List.getElem?_append_left hj]
 
 theorem PrimTy.subst (θ : Nat → VTy) {op ts τ} (h : PrimTy op ts τ) :
     PrimTy op (ts.map (VTy.subst θ)) (τ.subst θ) := by
@@ -266,9 +295,7 @@ theorem VTy.sub_trans : ∀ (t u w : VTy), t.sub u = true → u.sub w = true →
   | .ref ts as, u, w, h1, h2 => by
     cases u <;> simp [VTy.sub] at h1
     cases w <;> simp [VTy.sub] at h2 ⊢
-    obtain ⟨h1, rfl⟩ := h1
-    obtain ⟨h2, rfl⟩ := h2
-    exact ⟨fun x hx => h2 x (h1 x hx), rfl⟩
+    exact ⟨fun x hx => h2.1 x (h1.1 x hx), h2.2.trans h1.2⟩
   | .arr t, u, w, h1, h2 => by
     cases u <;> simp [VTy.sub] at h1
     cases w <;> simp [VTy.sub] at h2 ⊢
@@ -298,8 +325,7 @@ mutual
 theorem VTy.sub_subst (θ : Nat → VTy) : ∀ (t u : VTy), t.sub u = true → (t.subst θ).sub (u.subst θ) = true
   | .ref ts as, u, h => by
     cases u <;> simp [VTy.sub] at h ⊢
-    obtain ⟨h, rfl⟩ := h
-    exact ⟨h, rfl⟩
+    exact ⟨h.1, h.2.map _⟩
   | .arr t, u, h => by
     cases u <;> simp [VTy.sub] at h
     simpa [VTy.sub] using VTy.sub_subst θ _ _ h
@@ -325,14 +351,13 @@ mutual
 theorem hasTy_sub : ∀ (t u : VTy) (v : Value), t.sub u = true → hasTy Ξ v t = true → hasTy Ξ v u = true
   | .ref ts as, u, v, hs, hv => by
     cases u <;> simp [VTy.sub] at hs
-    obtain ⟨hs, rfl⟩ := hs
     cases v with
     | ref a =>
       simp only [hasTy] at hv ⊢
       rcases ha : Ξ[a]? with _ | ⟨t, args'⟩
       · simp [ha] at hv
-      · simp only [ha, Bool.and_eq_true, decide_eq_true_eq] at hv ⊢
-        exact ⟨by simpa using hs t (by simpa using hv.1), hv.2⟩
+      · simp only [ha, Bool.and_eq_true, List.isPrefixOf_iff_prefix] at hv ⊢
+        exact ⟨by simpa using hs.1 t (by simpa using hv.1), hs.2.trans hv.2⟩
     | _ => simp [hasTy] at hv
   | .arr t, u, v, hs, hv => by
     cases u <;> simp [VTy.sub] at hs
@@ -679,32 +704,32 @@ theorem LResOK_mono {Ξ₁ Ξ₂ : HeapTy} (hx : Ξ₁ <+: Ξ₂) {ts : List VTy
   · exact ⟨ResOK_mono hx h.1, h.2⟩
 
 /-- A value of a reference type is a reference to an object of a class in
-    the set, at the type's arguments. -/
+    the set, whose type arguments extend the type's. -/
 theorem hasTy_ref {v : Value} {ts : List Nat} {args : List VTy} (h : hasTy Ξ v (.ref ts args) = true) :
-    ∃ a t, v = .ref a ∧ Ξ[a]? = some (t, args) ∧ t ∈ ts := by
+    ∃ a t args', v = .ref a ∧ Ξ[a]? = some (t, args') ∧ t ∈ ts ∧ args <+: args' := by
   cases v with
   | ref a =>
     simp only [hasTy] at h
     rcases ha : Ξ[a]? with _ | ⟨t, args'⟩
     · simp [ha] at h
-    · simp only [ha, Bool.and_eq_true, decide_eq_true_eq] at h
-      exact ⟨a, t, rfl, by rw [ha, h.2], by simpa using h.1⟩
+    · simp only [ha, Bool.and_eq_true, List.isPrefixOf_iff_prefix] at h
+      exact ⟨a, t, args', rfl, ha, by simpa using h.1, h.2⟩
   | _ => simp [hasTy] at h
 
 /-- A reference, in a well-typed heap: the object it refers to, of a class
     in its type, whose fields have the class's types at its arguments. -/
 theorem ref_arg {S : Sigs} {h : Array Obj} (hH : HeapOK S Ξ h) {v : Value} {ts : List Nat}
     {args : List VTy} (hv : hasTy Ξ v (.ref ts args) = true) :
-    ∃ a o fs, v = .ref a ∧ h[a]? = some o ∧ o.tag ∈ ts ∧ Ξ[a]? = some (o.tag, args) ∧
-      S.classes[o.tag]? = some fs ∧ allTys Ξ o.fields (fs.map (VTy.inst args)) = true := by
-  obtain ⟨a, t, rfl, hta, htin⟩ := hasTy_ref hv
+    ∃ a o args' fs, v = .ref a ∧ h[a]? = some o ∧ o.tag ∈ ts ∧ Ξ[a]? = some (o.tag, args') ∧
+      args <+: args' ∧ S.classes[o.tag]? = some fs ∧ allTys Ξ o.fields (fs.map (VTy.inst args')) = true := by
+  obtain ⟨a, t, args', rfl, hta, htin, hpre⟩ := hasTy_ref hv
   have hlt : a < h.size := by rw [← hH.1]; exact lt_of_getElem?_some hta
   have ho : h[a]? = some h[a] := by simp [hlt]
-  obtain ⟨args', fs, hΞ, hc, hf⟩ := hH.2.1 a h[a] (by rw [Array.getElem?_toList]; exact ho)
+  obtain ⟨args'', fs, hΞ, hc, hf⟩ := hH.2.1 a h[a] (by rw [Array.getElem?_toList]; exact ho)
   rw [hta] at hΞ
   simp only [Option.some.injEq, Prod.mk.injEq] at hΞ
   obtain ⟨rfl, rfl⟩ := hΞ
-  exact ⟨a, h[a], fs, rfl, ho, htin, hta, hc, hf⟩
+  exact ⟨a, h[a], args', fs, rfl, ho, htin, hta, hpre, hc, hf⟩
 
 /-- The empty heap is typed by the empty heap typing, if there are no prototypes. -/
 theorem HeapOK.empty {S : Sigs} (hp : S.protos = []) : HeapOK S [] #[] :=
@@ -1192,10 +1217,11 @@ theorem stepE_rule {P : Prog} {S : Sigs} (hP : ProgTyped P S) (n : Nat)
         obtain ⟨v, rfl, hv⟩ : ∃ v, vs = [v] ∧ hasTy Ξ1 v (.ref ts args) = true := by
           rcases vs with _ | ⟨v, _ | ⟨_, _⟩⟩ <;> simp [LResOK, allTys] at hvs
           exact ⟨v, rfl, hvs⟩
-        obtain ⟨a, o, fs, rfl, ho, htin, -, hc, hfs⟩ := ref_arg hH1 hv
-        obtain ⟨fs', hc', hk⟩ := hft _ htin
+        obtain ⟨a, o, args', fs, rfl, ho, htin, -, hpre, hc, hfs⟩ := ref_arg hH1 hv
+        obtain ⟨fs', f, hc', hk, hvb, hfτ⟩ := hft _ htin
         rw [hc] at hc'; simp only [Option.some.injEq] at hc'; subst hc'
-        have hk' : (fs.map (VTy.inst args))[k]? = some τ := by rw [List.getElem?_map]; exact hk
+        have hk' : (fs.map (VTy.inst args'))[k]? = some τ := by
+          rw [List.getElem?_map, hk, Option.map_some, VTy.inst_prefix hpre hvb, hfτ]
         obtain ⟨w, hw, hwt⟩ := allTys_get hfs hk'
         have happ : (HeapOp.get k).apply [.ref a] s1.g = (.ok w, s1.g) := by
           simp [HeapOp.apply, ho, hw]
@@ -1208,10 +1234,11 @@ theorem stepE_rule {P : Prog} {S : Sigs} (hP : ProgTyped P S) (n : Nat)
             hasTy Ξ1 w τ = true := by
           rcases vs with _ | ⟨r, _ | ⟨w, _ | ⟨_, _⟩⟩⟩ <;> simp [LResOK, allTys] at hvs
           exact ⟨r, w, rfl, hvs.1, hvs.2⟩
-        obtain ⟨a, o, fs, rfl, ho, htin, hΞa, hc, hfs⟩ := ref_arg hH1 hr
-        obtain ⟨fs', hc', hk⟩ := hft _ htin
+        obtain ⟨a, o, args', fs, rfl, ho, htin, hΞa, hpre, hc, hfs⟩ := ref_arg hH1 hr
+        obtain ⟨fs', f, hc', hk, hvb, hfτ⟩ := hft _ htin
         rw [hc] at hc'; simp only [Option.some.injEq] at hc'; subst hc'
-        have hk' : (fs.map (VTy.inst args))[k]? = some τ := by rw [List.getElem?_map]; exact hk
+        have hk' : (fs.map (VTy.inst args'))[k]? = some τ := by
+          rw [List.getElem?_map, hk, Option.map_some, VTy.inst_prefix hpre hvb, hfτ]
         have hklt : k < o.fields.length := by rw [allTys_length hfs]; exact lt_of_getElem?_some hk'
         have happ : (HeapOp.set k).apply [.ref a, w] s1.g =
             (.ok w, { s1.g with heap := s1.g.heap.setIfInBounds a { o with fields := o.fields.set k w } }) := by
@@ -1224,7 +1251,7 @@ theorem stepE_rule {P : Prog} {S : Sigs} (hP : ProgTyped P S) (n : Nat)
         obtain ⟨v, rfl, hv⟩ : ∃ v, vs = [v] ∧ hasTy Ξ1 v (.ref ts args) = true := by
           rcases vs with _ | ⟨v, _ | ⟨_, _⟩⟩ <;> simp [LResOK, allTys] at hvs
           exact ⟨v, rfl, hvs⟩
-        obtain ⟨a, o, -, rfl, ho, -⟩ := ref_arg hH1 hv
+        obtain ⟨a, o, -, -, rfl, ho, -⟩ := ref_arg hH1 hv
         have happ : HeapOp.tag.apply [.ref a] s1.g = (.ok (.int o.tag), s1.g) := by
           simp [HeapOp.apply, ho]
         simp only [happ]
@@ -1235,7 +1262,7 @@ theorem stepE_rule {P : Prog} {S : Sigs} (hP : ProgTyped P S) (n : Nat)
         obtain ⟨v, rfl, hv⟩ : ∃ v, vs = [v] ∧ hasTy Ξ1 v (.ref ts args) = true := by
           rcases vs with _ | ⟨v, _ | ⟨_, _⟩⟩ <;> simp [LResOK, allTys] at hvs
           exact ⟨v, rfl, hvs⟩
-        obtain ⟨a, o, -, rfl, ho, -, hΞa, -⟩ := ref_arg hH1 hv
+        obtain ⟨a, o, args', fs, rfl, ho, -, hΞa, hpre, -⟩ := ref_arg hH1 hv
         have happ : (HeapOp.isTag us).apply [.ref a] s1.g =
             (if us.contains o.tag then .ok (.ref a) else .fail, s1.g) := by
           simp [HeapOp.apply, ho]
@@ -1244,7 +1271,8 @@ theorem stepE_rule {P : Prog} {S : Sigs} (hP : ProgTyped P S) (n : Nat)
         split
         · next hu =>
           show hasTy Ξ1 (.ref a) (.ref us args) = true
-          simpa [hasTy, hΞa] using hu
+          simp only [hasTy, hΞa, Bool.and_eq_true, List.isPrefixOf_iff_prefix]
+          exact ⟨hu, hpre⟩
         · trivial
     · obtain ⟨_, hes⟩ := heap_args ht
       obtain ⟨Ξ1, hf1, ⟨hr1, hok⟩, hH1, hp1⟩ := IL _ _ _ _ _ _ hx hes hf hH

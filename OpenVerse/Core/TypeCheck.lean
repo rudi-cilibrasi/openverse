@@ -98,13 +98,29 @@ theorem expect_sound {m : Option VTy} {t τ : VTy} (h : expect m t = some τ) :
     · next hs => simp only [Option.some.injEq] at h; subst h; simp [hs]
     · simp at h
 
+/-- The longest common prefix of two lists of type arguments. -/
+def commonPrefix : List VTy → List VTy → List VTy
+  | a :: as, b :: bs => if a = b then a :: commonPrefix as bs else []
+  | _, _ => []
+
+theorem commonPrefix_prefix : ∀ (as bs : List VTy), commonPrefix as bs <+: as ∧ commonPrefix as bs <+: bs
+  | a :: as, b :: bs => by
+    unfold commonPrefix
+    split
+    · next h =>
+      subst h
+      obtain ⟨h1, h2⟩ := commonPrefix_prefix as bs
+      exact ⟨List.cons_prefix_cons.mpr ⟨rfl, h1⟩, List.cons_prefix_cons.mpr ⟨rfl, h2⟩⟩
+    · exact ⟨List.nil_prefix, List.nil_prefix⟩
+  | [], _ => by simp [commonPrefix]
+  | _ :: _, [] => by simp [commonPrefix]
+
 mutual
 /-- A type above both `t` and `u`, when the two have the same shape (the
-    union of the classes of references; `if` branches and the operands of
-    `+` in infer mode, #32). -/
+    union of the classes of references, at the common prefix of their type
+    arguments; `if` branches and the operands of `+` in infer mode, #32). -/
 def VTy.join : VTy → VTy → Option VTy
-  | .ref ts as, .ref us bs =>
-    if as = bs then some (.ref (ts ++ us.filter (fun x => !ts.contains x)) as) else none
+  | .ref ts as, .ref us bs => some (.ref (ts ++ us.filter (fun x => !ts.contains x)) (commonPrefix as bs))
   | .arr t, .arr u => (VTy.join t u).map .arr
   | .opt t, .opt u => (VTy.join t u).map .opt
   | .tup ts, .tup us => (VTy.joinL ts us).map .tup
@@ -122,14 +138,15 @@ theorem VTy.join_sub : ∀ (t u j : VTy), VTy.join t u = some j → t.sub j = tr
   | .ref ts as, u, j, h => by
     cases u <;> simp [VTy.join] at h
     rename_i us bs
-    obtain ⟨rfl, rfl⟩ := h
+    subst h
+    obtain ⟨hp1, hp2⟩ := commonPrefix_prefix as bs
     constructor
-    · simp only [VTy.sub, List.all_eq_true, List.contains_iff_mem, List.mem_append, decide_true,
-        Bool.and_true]
-      exact fun x hx => .inl hx
-    · simp only [VTy.sub, List.all_eq_true, List.contains_iff_mem, List.mem_append, List.mem_filter,
-        decide_true, Bool.and_true]
-      intro x hx
+    · simp only [VTy.sub, Bool.and_eq_true, List.all_eq_true, List.contains_iff_mem, List.mem_append,
+        List.isPrefixOf_iff_prefix]
+      exact ⟨fun x hx => .inl hx, hp1⟩
+    · simp only [VTy.sub, Bool.and_eq_true, List.all_eq_true, List.contains_iff_mem, List.mem_append,
+        List.mem_filter, List.isPrefixOf_iff_prefix]
+      refine ⟨fun x hx => ?_, hp2⟩
       by_cases hxt : x ∈ ts
       · exact .inl hxt
       · exact .inr ⟨hx, by simpa using hxt⟩
@@ -199,9 +216,26 @@ def VTy.unboundL (acc : List (Nat × VTy)) : List VTy → Bool
   | t :: ts => VTy.unbound acc t || VTy.unboundL acc ts
 end
 
-/-- Field `k` of class `t`, at the type arguments `args`. -/
+/-- Field `k` of class `t`, at the type arguments `args`, if it mentions
+    no type parameter past them. -/
 def classField (S : Sigs) (args : List VTy) (k t : Nat) : Option VTy :=
-  (S.classes[t]?.bind (·[k]?)).map (VTy.inst args)
+  match S.classes[t]?.bind (·[k]?) with
+  | some f => if f.varsBelow args.length then some (f.inst args) else none
+  | none => none
+
+theorem classField_sound {S : Sigs} {args : List VTy} {k t : Nat} {τ : VTy}
+    (h : classField S args k t = some τ) :
+    ∃ fs f, S.classes[t]? = some fs ∧ fs[k]? = some f ∧ f.varsBelow args.length = true ∧ f.inst args = τ := by
+  unfold classField at h
+  split at h
+  · next f hf =>
+    split at h
+    · next hv =>
+      simp only [Option.some.injEq] at h
+      obtain ⟨fs, hfs, hk⟩ := Option.bind_eq_some_iff.mp hf
+      exact ⟨fs, f, hfs, hk, hv, h⟩
+    · simp at h
+  · simp at h
 
 /-- The type of field `k` of the classes `ts` at the type arguments `args`,
     when they all have one, the same (`FieldTy`). -/
@@ -223,10 +257,7 @@ theorem fieldTy_sound {S : Sigs} {ts : List Nat} {args : List VTy} {k : Nat} {τ
       · next hc =>
         simp only [Option.some.injEq] at h; subst h
         simp only [List.all_eq_true, decide_eq_true_eq] at hc
-        intro u hu
-        obtain ⟨f, hf, rfl⟩ := Option.map_eq_some_iff.mp (hc u hu)
-        obtain ⟨fs, hfs, hk⟩ := Option.bind_eq_some_iff.mp hf
-        exact ⟨fs, hfs, by simp [hk]⟩
+        exact fun u hu => classField_sound (hc u hu)
       · simp at h
     · simp at h
 
@@ -243,11 +274,13 @@ def VTy.nvarsL : List VTy → Nat
 end
 
 /-- The type arguments `tc` proposes for a `new` of a class with field
-    types `fs`: those of the expected type, else the bindings `acc` from the
-    fields (it then checks the fields against them). -/
-def newArgs (acc : List (Nat × VTy)) (fs : List VTy) : Option VTy → List VTy
+    types `fs`: those of the expected type, else the bindings `acc ()` from
+    the fields, `void` where none (it then checks the fields against them).
+    `acc` is only computed when needed, so that checking nested `new`s
+    against their types takes linear time. -/
+def newArgs (acc : Unit → List (Nat × VTy)) (fs : List VTy) : Option VTy → List VTy
   | some (.ref _ args) => args
-  | _ => (List.range (VTy.nvarsL fs)).map fun j => (acc.lookup j).getD VTy.void
+  | _ => (List.range (VTy.nvarsL fs)).map fun j => ((acc ()).lookup j).getD VTy.void
 
 /-- The instantiation `tc` proposes for a call with result type `t`: the
     bindings `acc` from the arguments, completed from the expected type. -/
@@ -316,7 +349,7 @@ def tc : Expr → Option VTy → Option VTy
   | .heap (.new t) es, m => match S.classes[t]? with
     | some fs =>
       -- propose type arguments (#39), then check the fields against them
-      let args := newArgs (bindArgs fs es []) fs m
+      let args := newArgs (fun _ => bindArgs fs es []) fs m
       if tcL es (fs.map (VTy.inst args)) then expect m (.ref [t] args) else none
     | none => none
   | .heap (.get k) [e], m => match tc e none with

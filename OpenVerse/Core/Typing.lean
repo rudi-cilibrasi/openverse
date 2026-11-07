@@ -32,8 +32,9 @@ inductive VTy where
   | opt : VTy → VTy
   /-- The `j`-th type parameter of the current (generic) function. -/
   | var : Nat → VTy
-  /-- A reference to an object whose class tag is one of `ts` (#29), with the
-      classes' type parameters instantiated at `args` (#39). -/
+  /-- A reference to an object whose class tag is one of `ts` (#29), whose
+      type arguments start with `args` (#39): a subclass may have more
+      parameters than its parent, after the parent's. -/
   | ref : List Nat → List VTy → VTy
   deriving Repr, Inhabited
 
@@ -156,17 +157,32 @@ def closedL : List VTy → Bool
 end
 
 /-- A class's field type at the type arguments `args`: its `j`-th type
-    parameter is `args[j]` (and `void` past them, which no typed program
-    has, so that instantiating commutes with substitution). -/
+    parameter is `args[j]`, and `void` past them (so that instantiating
+    commutes with substitution, `VTy.inst_subst`; a field read only uses
+    field types whose variables are below `args.length`, `FieldTy`). -/
 def inst (args : List VTy) (t : VTy) : VTy := t.subst fun j => args.getD j void
 
 mutual
+/-- `t` mentions only the type variables below `n`. -/
+def varsBelow (n : Nat) : VTy → Bool
+  | .var j => decide (j < n)
+  | .arr t | .opt t => varsBelow n t
+  | .tup ts => varsBelowL n ts
+  | .ref _ args => varsBelowL n args
+  | _ => true
+def varsBelowL (n : Nat) : List VTy → Bool
+  | [] => true
+  | t :: ts => varsBelow n t && varsBelowL n ts
+end
+
+mutual
 /-- Subtyping, `t ≤ u` (#32): every value of `t` is a value of `u`. A
-    reference type with fewer classes is below one with more; arrays,
-    options and tuples are covariant (they are immutable values); otherwise
-    the types are equal. -/
+    reference type with fewer classes is below one with more, and with more
+    type arguments below one with a prefix of them (#39: a `sub(t, u)` is a
+    `base(t)`); arrays, options and tuples are covariant (they are immutable
+    values); otherwise the types are equal. -/
 def sub : VTy → VTy → Bool
-  | .ref ts as, .ref us bs => ts.all us.contains && decide (as = bs)
+  | .ref ts as, .ref us bs => ts.all us.contains && bs.isPrefixOf as
   | .arr t, .arr u => sub t u
   | .opt t, .opt u => sub t u
   | .tup ts, .tup us => subL ts us
@@ -195,7 +211,7 @@ def hasTy (Ξ : HeapTy) : Value → VTy → Bool
   | .none, .opt _ => true
   | .some v, .opt t => hasTy Ξ v t
   | .ref a, .ref ts args => match Ξ[a]? with
-    | some (t, args') => ts.contains t && decide (args' = args)
+    | some (t, args') => ts.contains t && args.isPrefixOf args'
     | none => false
   | _, _ => false
 /-- Every element of `vs` has type `t`. -/
@@ -212,8 +228,9 @@ end
 
 /-- The certificate of a program's types: each function's parameter types and
     result type, by function index, each class's field types, by tag, and the
-    tags of the prototype objects that `Main`'s prelude allocates first
-    (#37): a literal may refer to them, as every heap starts with them. -/
+    classes and type arguments of the prototype objects that `Main`'s
+    prelude allocates first (#37): a literal may refer to them, as every
+    heap starts with them. -/
 structure Sigs where
   fns : List (List VTy × VTy)
   /-- Each class's field types, in terms of its type parameters (#39). -/
@@ -250,9 +267,11 @@ inductive PrimTy : Prim → List VTy → VTy → Prop
   | userErr {t} : PrimTy .userErr [] t
 
 /-- Field `k` has type `τ` in every class of `ts`, at the type arguments
-    `args`. -/
+    `args`, mentioning no type parameter past them (so that it has that type
+    in every object whose arguments extend `args`). -/
 def FieldTy (S : Sigs) (ts : List Nat) (args : List VTy) (k : Nat) (τ : VTy) : Prop :=
-  ∀ t ∈ ts, ∃ fs, S.classes[t]? = some fs ∧ (fs[k]?).map (VTy.inst args) = some τ
+  ∀ t ∈ ts, ∃ fs f, S.classes[t]? = some fs ∧ fs[k]? = some f ∧ f.varsBelow args.length = true ∧
+    f.inst args = τ
 
 mutual
 /-- `Typed S Γ ρ e τ`: in a function whose slots have types `Γ` and whose

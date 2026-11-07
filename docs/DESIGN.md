@@ -160,17 +160,22 @@ Phase 3 (#20) adds a heap of objects, each with a class tag and fields
 (`HeapOp`). Its typing (#29) keeps the class hierarchy out of Core:
 
 - **Reference types are tag sets, with type arguments.** `VTy.ref ts args`
-  is a reference to an object whose tag is in `ts`, of classes
-  instantiated at `args` (#39; `[]` for a class without type parameters).
-  The front end uses the concrete classes below a static class. A cast
-  `isTag us` fails when the tag is not in `us`, and has type `ref us args`.
-  Field types are compared exactly (`FieldTy`), so the front end gives a
-  class's tag sets one canonical order: definition order.
+  is a reference to an object whose tag is in `ts` and whose type
+  arguments start with `args` (#39; `[]` for classes without type
+  parameters). The front end uses the concrete classes below a static
+  class. A subclass's type parameters come after its parent's: a
+  `pair(t, u) := class(base(t))` object has the arguments `[t, u]`, and is
+  a `base(t)`; an `intbox := class(base(int))` object has `[int]`. A cast
+  `isTag us` fails when the tag is not in `us`, and has type `ref us args`
+  (it cannot recover a subclass's own arguments, so fields that mention
+  them cannot be read after a cast). Field types are compared exactly
+  (`FieldTy`), so the front end gives a class's tag sets one canonical
+  order: definition order.
 - **Subtyping** (#32) is structural (`VTy.sub`): a reference type with
-  fewer classes is below one with more, at the same type arguments
-  (invariant: an object's fields can be written as well as read), and
-  arrays, options and tuples are covariant, which is sound because they
-  are immutable values. One rule,
+  fewer classes is below one with more, and one with more type arguments
+  below one with a prefix of them; the arguments themselves are invariant
+  (an object's fields can be written as well as read). Arrays, options and
+  tuples are covariant, which is sound because they are immutable values. One rule,
   `Typed.sub`, gives an expression every type above its own, so widening is
   free and needs no node. Preservation peels subsumption off a derivation by
   recursion (`stepE_d`) and handles the last real rule (`TypedR`). The
@@ -178,9 +183,12 @@ Phase 3 (#20) adds a heap of objects, each with a class tag and fields
   expected one (`expect`), joins `if` branches and `+` operands of different
   types (`VTy.join`), and checks `arrSet` against an expected array type.
   It is still incomplete: an array literal's elements must have the first
-  one's type unless there is an expected type, and a generic call's
+  one's type unless there is an expected type, a generic call's
   instantiation comes from its last arguments (where the front end passes
-  its type arguments).
+  its type arguments), and a `new`'s type arguments come from the expected
+  type, else from matching its fields' types against its arguments' (with
+  `void` for a parameter they do not determine). References join at the
+  common prefix of their type arguments.
 - **Value typing sees a heap typing.** `hasTy Ξ v t` takes `Ξ : HeapTy`,
   the class and type arguments of each heap object. Objects do not record
   their type arguments, so `Ξ` is a ghost: no function of the heap gives it,
@@ -192,13 +200,15 @@ Phase 3 (#20) adds a heap of objects, each with a class tag and fields
   says `Ξ` has an entry per object, its class, and each object's fields
   have its class's types at its arguments (`VTy.inst`). A field read
   through `ref ts args` has the type that every class in `ts` gives that
-  field at `args` (`FieldTy`), which the field layout of the previous
-  section makes common. Instantiation puts `void` past the arguments, so
-  it commutes with substitution (`VTy.inst_subst`) whatever the table
-  says, and `Typed.subst` holds for a generic function that allocates or
-  reads objects of its type parameters. Only the prototypes' type
-  arguments must be closed (`Sigs.ClosedProtos`), as a literal's typing is
-  checked once.
+  field at `args`, and that mentions no type parameter past them
+  (`FieldTy`, so the field has that type in every object whose arguments
+  extend `args`, `VTy.inst_prefix`); the field layout of the previous
+  section makes the field common. Instantiation puts `void` past the
+  arguments, so it commutes with substitution (`VTy.inst_subst`) whatever
+  the table says, and `Typed.subst` holds for a generic function that
+  allocates or reads objects of its type parameters. Only the prototypes'
+  type arguments must be closed (`Sigs.ClosedProtos`), as a literal's
+  typing is checked once.
 - **Preservation** (`Eval.typed`) says that from a frame and heap typed
   under `Ξ`, evaluation reaches a frame and heap typed under an extension
   `Ξ'` of `Ξ`, with the outcome typed under `Ξ'`. Rollback needs nothing

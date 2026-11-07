@@ -338,7 +338,7 @@ def tcBox (e : Expr) (m : Option VTy) : Option VTy :=
 example : tcBox (.heap (.get 0) [.local 0]) none = some .int := by native_decide
 example : tcBox (.heap (.get 0) [.local 1]) none = some VTy.str := by native_decide
 example : tcBox (.heap (.set 0) [.local 0, str "six"]) none = none := by native_decide
--- type arguments are invariant: a box(int) is not a box(string), nor a box of anything else
+-- type arguments are not covariant: a box(int) is not a box(string)
 example : tcBox (.local 0) (some (.ref [0] [VTy.str])) = none := by native_decide
 example : tcBox (.assign 1 (.local 0)) none = none := by native_decide
 -- `new` takes its type arguments from the expected type, else from the fields
@@ -346,24 +346,86 @@ example : tcBox (.heap (.new 0) [int 1]) none = some (.ref [0] [.int]) := by nat
 example : tcBox (.heap (.new 0) [int 1]) (some (.ref [0] [VTy.str])) = none := by native_decide
 example : tcBox (.heap (.new 0) [.lit (.arr [])]) (some (.ref [0] [VTy.str])) = some (.ref [0] [VTy.str]) := by
   native_decide
--- branches join only at the same type arguments
-example : tcBox (.ite (.lit (.logic true)) (.local 0) (.local 1)) none = none := by native_decide
+-- branches join at the common prefix of their type arguments: here none, so `Value`'s type
+-- is unknown and it cannot be read
+example : tcBox (.ite (.lit (.logic true)) (.local 0) (.local 1)) none = some (.ref [0] []) := by native_decide
+example : tcBox (.heap (.get 0) [.ite (.lit (.logic true)) (.local 0) (.local 1)]) none = none := by
+  native_decide
 -- a generic call instantiates its type parameter from the reference's arguments
 example : tcBox (.call 0 [.local 1]) none = some VTy.str := by native_decide
 end
 
--- a prototype carries its type arguments, which must be closed (so `Typed.subst` holds)
+/-- A parametric hierarchy: `base(t)` (tag 0, `Value:t`), `pair(t, u) :=
+    class(base(t))` (tag 1, `Value:t, Other:u`: its own parameter comes after
+    its parent's), and `intbox := class(base(int))` (tag 2, `Value:int`,
+    whose objects have the type arguments `[int]` of its parent).
+    ```verse
+    Show(B:base(int)):void = Print("{B.Value}")
+    Main():void =
+        P := pair(int, string){Value := 1, Other := "one"}
+        I := intbox{Value := 2}
+        Show(P)
+        Show(I)
+        Print(P.Other)
+    ``` -/
+def hierDemo : Prog where
+  fns := [
+    { name := "Show", arity := 1, nslots := 1, decides := false,
+      body := printInt (.heap (.get 0) [.local 0]) },
+    { name := "Main", arity := 0, nslots := 2, decides := false,
+      body := .seq (.assign 0 (.heap (.new 1) [int 0, .lit (.arr [])]))
+        (.seq (.assign 1 (.heap (.new 2) [int 0]))
+        (.seq (.assign 0 (.heap (.new 1) [int 1, str "one"]))
+        (.seq (.assign 1 (.heap (.new 2) [int 2]))
+        (.seq (.call 0 [.local 0])
+        (.seq (.call 0 [.local 1])
+          (.print (.heap (.get 1) [.local 0]))))))) }]
+  main := 1
+
+def hierSigs : Sigs :=
+  { fns := [([.ref [0, 1, 2] [.int]], .void), ([], .void)],
+    classes := [[.var 0], [.var 0, .var 1], [.int]] }
+def hierSlots : List (List VTy) := [[.ref [0, 1, 2] [.int]], [.ref [1] [.int, VTy.str], .ref [2] [.int]]]
+
+example : hierDemo.check = true := by native_decide
+example : hierDemo.checkTypes hierSigs hierSlots = true := by native_decide
+example : outOf hierDemo = some (.ok .void, "1\n2\none\n") := by native_decide
+
+section
+def tcHier (e : Expr) (m : Option VTy) : Option VTy :=
+  tc hierSigs [.ref [1] [.int, VTy.str], .ref [2] [.int]] .void e m
+
+-- a pair(int, string) is a base(int), but not a base(string)
+example : tcHier (.local 0) (some (.ref [0, 1, 2] [.int])) = some (.ref [0, 1, 2] [.int]) := by native_decide
+example : tcHier (.local 0) (some (.ref [0, 1, 2] [VTy.str])) = none := by native_decide
+-- `Other` is read at the pair's second argument, which a base(int) does not have: after a
+-- cast to `pair`, the second argument is unknown, so `Other` cannot be read
+example : tcHier (.heap (.get 1) [.local 0]) none = some VTy.str := by native_decide
+example : tc hierSigs [.ref [0, 1, 2] [.int]] .void (.heap (.get 1) [.heap (.isTag [1]) [.local 0]]) none = none := by
+  native_decide
+example : tc hierSigs [.ref [0, 1, 2] [.int]] .void (.heap (.get 0) [.heap (.isTag [1]) [.local 0]]) none =
+    some .int := by native_decide
+-- a pair and an intbox join as a base(int)
+example : tcHier (.heap (.get 0) [.ite (.lit (.logic true)) (.local 0) (.local 1)]) none = some .int := by
+  native_decide
+end
+
+-- a prototype carries its type arguments, which must be closed (so `Typed.subst` holds):
+-- `box(t)` here has the field `Items:[]t`, and its prototype `box(int){Items := array{}}`
 section
 def boxProto : Prog :=
   { fns := [
       { name := "Main", arity := 0, nslots := 1, decides := false,
-        body := .seq (.assign 0 (.lit (.ref 0))) (printInt (.heap (.get 0) [.local 0])) },
+        body := .seq (.assign 0 (.lit (.ref 0))) (.print (str "ok")) },
       { name := "$Main", arity := 0, nslots := 0, decides := false,
-        body := protoPrelude [(0, [.int 4])] (.call 0 []) }], main := 1 }
+        body := protoPrelude [(0, [.arr []])] (.call 0 []) }], main := 1 }
 def boxProtoSigs (args : List VTy) : Sigs :=
-  { fns := [([], .void), ([], .void)], classes := [[.var 0]], protos := [(0, args)] }
+  { fns := [([], .void), ([], .void)], classes := [[.arr (.var 0)]], protos := [(0, args)] }
 example : boxProto.checkTypes (boxProtoSigs [.int]) [[.ref [0] [.int]], []] = true := by native_decide
-example : outOf boxProto = some (.ok .void, "4\n") := by native_decide
+example : outOf boxProto = some (.ok .void, "ok\n") := by native_decide
+-- with a type variable as the prototype's argument, the prelude is fine but the closedness
+-- check refuses it
+example : checkPrelude boxProto (boxProtoSigs [.var 0]) = true := by native_decide
 example : boxProto.checkTypes (boxProtoSigs [.var 0]) [[.ref [0] [.var 0]], []] = false := by native_decide
 end
 
