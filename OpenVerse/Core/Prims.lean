@@ -25,6 +25,27 @@ def asBytes : List Value → Option (List Nat)
   | .char c :: vs => (asBytes vs).map (c :: ·)
   | _ :: _ => none
 
+/-- `asBytes` with an accumulator, so that the compiled code is a loop: the
+    definition above recurses once per character, natively, and a long
+    `Print` overflowed the stack (#97). Proofs use `asBytes`; the compiler
+    uses this (`asBytes_eq_asBytesTR`). -/
+def asBytesTR (vs : List Value) : Option (List Nat) := go vs []
+where
+  go : List Value → List Nat → Option (List Nat)
+    | [], acc => some acc.reverse
+    | .char c :: vs, acc => go vs (c :: acc)
+    | _ :: _, _ => none
+
+theorem asBytesTR_go (vs : List Value) (acc : List Nat) :
+    asBytesTR.go vs acc = (asBytes vs).map (acc.reverse ++ ·) := by
+  induction vs generalizing acc with
+  | nil => simp [asBytesTR.go, asBytes]
+  | cons v vs ih =>
+    cases v <;> simp [asBytesTR.go, asBytes, ih, Option.map_map, Function.comp_def]
+
+@[csimp] theorem asBytes_eq_asBytesTR : @asBytes = @asBytesTR := by
+  funext vs; simp [asBytesTR, asBytesTR_go]
+
 /-- Decimal rendering of an int, as bytes (ASCII). -/
 def intBytes (i : Int) : List Nat := (toString i).toUTF8.toList.map (·.toNat)
 
@@ -42,6 +63,25 @@ def flattenArrs : List Value → Option (List Value)
   | [] => some []
   | .arr xs :: rest => (flattenArrs rest).map (xs ++ ·)
   | _ :: _ => none
+
+/-- `flattenArrs` with an accumulator, compiled as a loop (#97): the definition
+    above recurses once per outer `for` iteration. -/
+def flattenArrsTR (vs : List Value) : Option (List Value) := go vs []
+where
+  go : List Value → List Value → Option (List Value)
+    | [], acc => some acc.reverse
+    | .arr xs :: rest, acc => go rest (xs.reverse ++ acc)
+    | _ :: _, _ => none
+
+theorem flattenArrsTR_go (vs acc : List Value) :
+    flattenArrsTR.go vs acc = (flattenArrs vs).map (acc.reverse ++ ·) := by
+  induction vs generalizing acc with
+  | nil => simp [flattenArrsTR.go, flattenArrs]
+  | cons v vs ih =>
+    cases v <;> simp [flattenArrsTR.go, flattenArrs, ih, Option.map_map, Function.comp_def]
+
+@[csimp] theorem flattenArrs_eq_flattenArrsTR : @flattenArrs = @flattenArrsTR := by
+  funext vs; simp [flattenArrsTR, flattenArrsTR_go]
 
 /-- The elements of the inclusive range `a..b` (empty when `a > b`). -/
 def rangeVals (a b : Int) : List Value :=

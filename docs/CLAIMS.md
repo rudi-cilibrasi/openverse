@@ -56,21 +56,30 @@ out of date. The proofs are in `OpenVerse/Core/`.
   Runs P r out → ∃ N, ∀ (n : Nat), N ≤ n → P.run n = some (r, out)
 ```
 
-## `evalB_done`: the depth-bounded interpreter of openverse run computes eval whenever it finishes
+## `evalB_sound`: the depth-bounded interpreter of openverse run is eval whenever it does not stop for depth
 
 `OpenVerse/Core/Bounded.lean`; axioms: [propext, Quot.sound]
 
 ```lean
-@evalB_done : ∀ {P : Prog} {n d : Nat} {s : St} {e : Expr} {x : Option (Res × St)},
-  evalB P n d s e = Bounded.done x → eval P n s e = x
+@evalB_sound : ∀ {P : Prog} {n d : Nat} {s : St} {e : Expr},
+  evalB P n d s e ≠ Bounded.deep → evalB P n d s e = Bounded.ofOption (eval P n s e)
 ```
 
-## `Prog.runB_done`: openverse run computes Prog.run whenever it does not hit its depth bound
+## `evalB_complete`: with a depth budget at least the fuel, the bounded interpreter is eval
 
 `OpenVerse/Core/Bounded.lean`; axioms: [propext, Quot.sound]
 
 ```lean
-@Prog.runB_done : ∀ {P : Prog} {n d : Nat} {x : Option (Res × List Nat)}, P.runB n d = Bounded.done x → P.run n = x
+@evalB_complete : ∀ {P : Prog} {n d : Nat} {s : St} {e : Expr},
+  n ≤ d → evalB P n d s e = Bounded.ofOption (eval P n s e)
+```
+
+## `Prog.runB_sound`: openverse run computes Prog.run whenever it does not hit its depth bound
+
+`OpenVerse/Core/Bounded.lean`; axioms: [propext, Quot.sound]
+
+```lean
+@Prog.runB_sound : ∀ {P : Prog} {n d : Nat}, P.runB n d ≠ Bounded.deep → P.runB n d = Bounded.ofOption (P.run n)
 ```
 
 ## `ite_rollback`: a failed if condition is rolled back

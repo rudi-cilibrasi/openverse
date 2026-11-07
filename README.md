@@ -35,7 +35,7 @@ safety depend on are proved with **QuickProof** (VST + CompCert in Coq).
 | `eval_fuel_irrelevant` | `Core/Adequacy.lean` | fuel decides only *whether* the interpreter finishes, never *what* it returns |
 | `Eval.det`, `Runs.det` | `Core/Adequacy.lean` | Verse Core is deterministic: one outcome, one output |
 | `Prog.run_sound`, `Prog.run_complete` | `Core/Adequacy.lean` | running `Main` with enough fuel is exactly `Runs` |
-| `evalB_done`, `Prog.runB_done` | `Core/Bounded.lean` | `openverse run` runs `eval` with a bound on its native recursion depth, and whenever it does not hit that bound it computes exactly `eval` (so a program that recurses forever ends in `limit: recursion depth`, not a stack overflow) |
+| `evalB_sound`, `evalB_complete`, `Prog.runB_sound` | `Core/Bounded.lean` | `openverse run` runs `evalB`, which is `eval` with a bound on its native recursion depth: whenever it does not stop for depth it computes exactly `eval`, and with a bound at least the fuel it never stops for depth |
 | `ite_rollback` | `Core/Derived.lean` | once an `if` condition fails, the `if` behaves as its `else` branch from the **original** state (rollback) |
 | `notE_ok`, `notE_notE_ok` | `Core/Derived.lean` | `not e` always discards `e`'s effects; `not not e` is a pure test (Book of Verse §5.5) |
 | `optionE_none`, `optionE_some`, `orE_right`, `logicE_ne_fail` | `Core/Derived.lean` | `option{}`, `or` and `logic{}` behave as the book says, including rollback |

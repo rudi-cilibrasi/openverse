@@ -7,22 +7,27 @@ def errName : ErrKind → String
 
 /-- The depth budget of `openverse run` (#97): how many non-tail calls the
     compiled interpreter may nest (`evalB`, `Core/Bounded.lean`). Each is one
-    native frame of about 150 bytes, and the Lean runtime runs `main` on a
-    stack of about 1 GiB whatever `ulimit -s` says. Programs that recurse
-    forever (through calls, arguments, conditions, `for` bodies, sequences and
-    methods) overflowed it at 7.2 to 8.4 million; 4 million leaves a margin of
-    1.8. Beyond it, `openverse run` reports `limit: recursion depth`, as
-    `cverse` does past its own bound. -/
-def maxDepth : Nat := 4000000
+    native frame of at most about 150 bytes. The Lean runtime runs `main` on a
+    stack of 1 GiB, or `LEAN_STACK_SIZE_KB` KiB when that is set, whatever
+    `ulimit -s` says. On the 1 GiB stack, programs that recurse forever
+    (through calls, arguments, conditions, `for` bodies and filters,
+    sequences, methods, constructions, …) overflowed it at 7.2 to 8.4 million
+    calls, about 147 bytes each at worst; the budget allows 270 bytes a call,
+    a margin of 1.8 (4 million calls on the default stack, just under a
+    million levels of ordinary Verse recursion). Beyond it, `openverse run`
+    reports `limit: recursion depth`, as `cverse` does past its own bound. -/
+def maxDepth : IO Nat := do
+  let kib := ((← IO.getEnv "LEAN_STACK_SIZE_KB").bind String.toNat?).getD 1048576
+  return kib * 1024 / 270
 
 /-- Run a program and report per the exit protocol of docs/FORMAT.md. -/
 def runProg (P : Prog) (fuel : Nat) : IO UInt32 := do
-  match P.runB fuel maxDepth with
+  match P.runB fuel (← maxDepth) with
   | .deep =>
     IO.eprintln "limit: recursion depth"; return 3
-  | .done none =>
+  | .fuel =>
     IO.eprintln "limit: fuel exhausted"; return 3
-  | .done (some (r, out)) =>
+  | .res (r, out) =>
     let stdout ← IO.getStdout
     stdout.write (ByteArray.mk (out.map (·.toUInt8)).toArray)
     stdout.flush
