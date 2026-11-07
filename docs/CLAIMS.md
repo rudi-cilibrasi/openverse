@@ -154,6 +154,15 @@ out of date. The proofs are in `OpenVerse/Core/`.
         Runs P r out → r ≠ Res.err ErrKind.type ∧ ∀ (v : Value), r = Res.ok v → hasTy v τ = true
 ```
 
+## `Typed.subst`: the substitution lemma: a typing with type variables holds at every instance
+
+`OpenVerse/Core/TypeSafety.lean`; axioms: [propext, Quot.sound]
+
+```lean
+@Typed.subst : ∀ {S : Sigs} {Γ : List VTy} {ρ : VTy} (θ : Nat → VTy) {e : Expr} {τ : VTy},
+  Typed S Γ ρ e τ → Typed S (List.map (VTy.subst θ) Γ) (VTy.subst θ ρ) e (VTy.subst θ τ)
+```
+
 ## `tc_sound`: the type checker is sound
 
 `OpenVerse/Core/TypeCheck.lean`; axioms: [propext, Classical.choice, Quot.sound]

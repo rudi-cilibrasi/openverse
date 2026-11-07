@@ -96,17 +96,131 @@ theorem allTy_set {xs : List Value} {t : VTy} {n : Nat} {v : Value} (h : allTy x
 theorem allTy_reverse {xs : List Value} {t} (h : allTy xs t = true) : allTy xs.reverse t = true := by
   rw [allTy_iff] at *; intro v hv; exact h v (List.mem_reverse.mp hv)
 
+/-! ### Substitution of type variables -/
+
 mutual
-theorem hasTy_default : ∀ t : VTy, hasTy t.default t = true
-  | .int => rfl
-  | .logic => rfl
-  | .char => by decide
-  | .arr _ => rfl
-  | .opt _ => rfl
-  | .tup ts => by simp only [VTy.default, hasTy]; exact allTys_defaults ts
-theorem allTys_defaults : ∀ ts : List VTy, allTys (VTy.defaults ts) ts = true
+/-- Values keep their types under any substitution: a type variable has no
+    values, so it only occurs where the value is `[]` or the empty option. -/
+theorem hasTy_subst (θ : Nat → VTy) : ∀ (t : VTy) (v : Value), hasTy v t = true → hasTy v (t.subst θ) = true
+  | .int, _, h | .logic, _, h | .char, _, h => by simpa using h
+  | .var _, v, h => by cases v <;> simp [hasTy] at h
+  | .arr t, v, h => by
+    cases v
+    case arr vs =>
+      simp only [hasTy, VTy.subst_arr] at h ⊢
+      rw [allTy_iff] at h ⊢
+      exact fun w hw => hasTy_subst θ t w (h w hw)
+    all_goals simp [hasTy] at h
+  | .opt t, v, h => by
+    cases v
+    case none => simp [hasTy]
+    case some w => simp only [hasTy, VTy.subst_opt] at h ⊢; exact hasTy_subst θ t w h
+    all_goals simp [hasTy] at h
+  | .tup ts, v, h => by
+    cases v
+    case tup vs => simp only [hasTy, VTy.subst_tup] at h ⊢; exact allTys_subst θ ts vs h
+    all_goals simp [hasTy] at h
+theorem allTys_subst (θ : Nat → VTy) : ∀ (ts : List VTy) (vs : List Value), allTys vs ts = true →
+    allTys vs (ts.map (VTy.subst θ)) = true
+  | [], [], _ => rfl
+  | [], _ :: _, h => by simp [allTys] at h
+  | _ :: _, [], h => by simp [allTys] at h
+  | t :: ts, v :: vs, h => by
+    simp only [allTys, Bool.and_eq_true, List.map_cons] at h ⊢
+    exact ⟨hasTy_subst θ t v h.1, allTys_subst θ ts vs h.2⟩
+end
+
+mutual
+theorem VTy.subst_comp (θ₁ θ₂ : Nat → VTy) : ∀ t : VTy,
+    (t.subst θ₁).subst θ₂ = t.subst (fun j => (θ₁ j).subst θ₂)
+  | .int | .logic | .char | .var _ => by simp
+  | .arr t => by simp [VTy.subst_comp θ₁ θ₂ t]
+  | .opt t => by simp [VTy.subst_comp θ₁ θ₂ t]
+  | .tup ts => by simpa using VTy.substL_comp θ₁ θ₂ ts
+theorem VTy.substL_comp (θ₁ θ₂ : Nat → VTy) : ∀ ts : List VTy,
+    ts.map (fun t => (t.subst θ₁).subst θ₂) = ts.map (VTy.subst fun j => (θ₁ j).subst θ₂)
   | [] => rfl
-  | t :: ts => by simp [VTy.defaults, allTys, hasTy_default t, allTys_defaults ts]
+  | t :: ts => by simp only [List.map_cons, VTy.subst_comp θ₁ θ₂ t, VTy.substL_comp θ₁ θ₂ ts]
+end
+
+mutual
+theorem VTy.subst_id : ∀ t : VTy, t.subst VTy.var = t
+  | .int | .logic | .char | .var _ => by simp
+  | .arr t => by simp [VTy.subst_id t]
+  | .opt t => by simp [VTy.subst_id t]
+  | .tup ts => by simpa using VTy.substL_id ts
+theorem VTy.substL_id : ∀ ts : List VTy, ts.map (VTy.subst VTy.var) = ts
+  | [] => rfl
+  | t :: ts => by simp only [List.map_cons, VTy.subst_id t, VTy.substL_id ts]
+end
+
+theorem PrimTy.subst (θ : Nat → VTy) {op ts τ} (h : PrimTy op ts τ) :
+    PrimTy op (ts.map (VTy.subst θ)) (τ.subst θ) := by
+  cases h with
+  | arith hop => simpa using PrimTy.arith hop
+  | unary hop => simpa using PrimTy.unary hop
+  | cmpInt hop => simpa using PrimTy.cmpInt hop
+  | cmpChar hop => simpa using PrimTy.cmpChar hop
+  | eq => exact .eq
+  | ne => exact .ne
+  | queryLogic => simpa using PrimTy.queryLogic
+  | queryOpt => simpa using PrimTy.queryOpt
+  | mkArr hall =>
+    simp only [VTy.subst_arr]
+    exact .mkArr fun u hu => by
+      obtain ⟨w, hw, rfl⟩ := List.mem_map.mp hu
+      rw [hall w hw]
+  | mkTup => simpa using PrimTy.mkTup
+  | mkSome => simpa using PrimTy.mkSome
+  | concat => simpa using PrimTy.concat
+  | index => simpa using PrimTy.index
+  | len => simpa using PrimTy.len
+  | arrSet => simpa using PrimTy.arrSet
+  | flatten => simpa using PrimTy.flatten
+  | range => simpa using PrimTy.range
+  | tupGet hk => simpa using PrimTy.tupGet (by simp [hk] : (_ : List VTy)[_]? = _)
+  | toStrInt => simpa using PrimTy.toStrInt
+  | toStrChar => simpa using PrimTy.toStrChar
+  | toStrStr => simpa using PrimTy.toStrStr
+  | fail => exact .fail
+  | userErr => exact .userErr
+
+theorem getElem?_map_some {α β} {l : List α} {i : Nat} {a : α} (f : α → β) (h : l[i]? = some a) :
+    (l.map f)[i]? = some (f a) := by
+  simp [h]
+
+section
+variable {S : Sigs} {Γ : List VTy} {ρ : VTy}
+
+mutual
+/-- **The substitution lemma.** A typing with type variables holds at every
+    instance: this is what lets a generic function be checked once. -/
+theorem Typed.subst (θ : Nat → VTy) : ∀ {e τ}, Typed S Γ ρ e τ →
+    Typed S (Γ.map (VTy.subst θ)) (ρ.subst θ) e (τ.subst θ)
+  | _, _, .lit hv => .lit (hasTy_subst θ _ _ hv)
+  | _, _, .local hi => .local (getElem?_map_some _ hi)
+  | _, _, .assign hi he => .assign (getElem?_map_some _ hi) (Typed.subst θ he)
+  | _, _, .seq ha hb => .seq (Typed.subst θ ha) (Typed.subst θ hb)
+  | _, _, .prim hes hp => .prim (TypedL.subst θ hes) (hp.subst θ)
+  | _, _, .call θ' hs hes => by
+    have h := TypedL.subst θ hes
+    rw [List.map_map] at h
+    have h' := Typed.call (fun j => (θ' j).subst θ) hs
+      (by rw [← VTy.substL_comp]; simpa [Function.comp_def] using h)
+    rwa [← VTy.subst_comp] at h'
+  | _, _, .ite hc ht he => .ite (Typed.subst θ hc) (Typed.subst θ ht) (Typed.subst θ he)
+  | _, _, .forE hi hit hfl hb => by
+    simpa using Typed.forE (getElem?_map_some _ hi) (by simpa using Typed.subst θ hit)
+      (Typed.subst θ hfl) (Typed.subst θ hb)
+  | _, _, .loop hb => by simpa using Typed.loop (Typed.subst θ hb)
+  | _, _, .brk => .brk
+  | _, _, .ret he => .ret (Typed.subst θ he)
+  | _, _, .print he => by simpa using Typed.print (by simpa using Typed.subst θ he)
+theorem TypedL.subst (θ : Nat → VTy) : ∀ {es ts}, TypedL S Γ ρ es ts →
+    TypedL S (Γ.map (VTy.subst θ)) (ρ.subst θ) es (ts.map (VTy.subst θ))
+  | _, _, .nil => .nil
+  | _, _, .cons he hes => .cons (Typed.subst θ he) (TypedL.subst θ hes)
+end
 end
 
 theorem hasTy_int {v} (h : hasTy v .int = true) : ∃ a, v = .int a := by
@@ -326,40 +440,129 @@ theorem take_set_succ {α} : ∀ (l : List α) (k : Nat) (d : α), k < l.length 
     simp only [List.set_cons_succ, List.take_succ_cons, List.cons_append, List.cons.injEq, true_and]
     exact take_set_succ l k d (by simpa using h)
 
+theorem DefaultEL.length {a Γ} : ∀ {ds ts}, DefaultEL a Γ ds ts → ds.length = ts.length
+  | _, _, .nil => rfl
+  | _, _, .cons _ h => by simp [DefaultEL.length h]
+
+mutual
+/-- A default expression evaluates, without failing and without changing the
+    state, to a value of its type under `θ`, once the parameters (the first
+    `a` slots) hold values of their types under `θ`. -/
+theorem DefaultE.eval_ok {P : Prog} {a : Nat} {Γ : List VTy} {θ : Nat → VTy} {s : St}
+    (hp : allTys (s.fr.take a) ((Γ.take a).map (VTy.subst θ)) = true) :
+    ∀ {d t} (n : Nat) {x}, DefaultE a Γ d t → eval P n s d = some x →
+      ∃ v, x = (.ok v, s) ∧ hasTy v (t.subst θ) = true
+  | _, _, 0, _, _, h => by simp [eval] at h
+  | _, _, _ + 1, _, .lit hv, h => by
+    simp only [eval, Option.some.injEq] at h
+    exact ⟨_, h.symm, hasTy_subst θ _ _ hv⟩
+  | _, _, _ + 1, _, .param (i := i) hi hΓ, h => by
+    simp only [eval, Option.some.injEq] at h
+    have hΓ' : ((Γ.take a).map (VTy.subst θ))[i]? = some (VTy.subst θ _) :=
+      getElem?_map_some _ (by rw [List.getElem?_take_of_lt hi]; exact hΓ)
+    obtain ⟨v, hv, ht⟩ := allTys_get hp hΓ'
+    rw [List.getElem?_take_of_lt hi] at hv
+    exact ⟨v, by rw [← h]; simp [readSlot, hv], ht⟩
+  | _, _, n + 1, _, .tup hds, h => by
+    simp only [eval] at h
+    rcases bindL_some h with ⟨vs, s1, hx, hk⟩ | ⟨r1, s1, hx, rfl⟩
+    · obtain ⟨vs', hvs, ht⟩ := DefaultEL.eval_ok hp n hds hx
+      simp only [Option.some.injEq, Prod.mk.injEq, LRes.ok.injEq] at hvs
+      obtain ⟨rfl, rfl⟩ := hvs
+      simp only [Option.some.injEq] at hk
+      exact ⟨_, by rw [← hk]; rfl, by simpa [hasTy] using ht⟩
+    · obtain ⟨vs', hvs, -⟩ := DefaultEL.eval_ok hp n hds hx
+      simp at hvs
+theorem DefaultEL.eval_ok {P : Prog} {a : Nat} {Γ : List VTy} {θ : Nat → VTy} {s : St}
+    (hp : allTys (s.fr.take a) ((Γ.take a).map (VTy.subst θ)) = true) :
+    ∀ {ds ts} (n : Nat) {x}, DefaultEL a Γ ds ts → evalList P n s ds = some x →
+      ∃ vs, x = (.ok vs, s) ∧ allTys vs (ts.map (VTy.subst θ)) = true
+  | _, _, 0, _, _, h => by simp [evalList] at h
+  | _, _, _ + 1, _, .nil, h => by
+    simp only [evalList, Option.some.injEq] at h
+    exact ⟨[], h.symm, rfl⟩
+  | _, _, n + 1, _, .cons hd hds, h => by
+    simp only [evalList] at h
+    split at h
+    · simp at h
+    · next v s1 hx =>
+      obtain ⟨v', hv, ht⟩ := DefaultE.eval_ok hp n hd hx
+      simp only [Option.some.injEq, Prod.mk.injEq, Res.ok.injEq] at hv
+      obtain ⟨rfl, rfl⟩ := hv
+      split at h
+      · simp at h
+      · next vs s2 hxs =>
+        obtain ⟨vs', hvs, hts⟩ := DefaultEL.eval_ok hp n hds hxs
+        simp only [Option.some.injEq, Prod.mk.injEq, LRes.ok.injEq] at hvs
+        obtain ⟨rfl, rfl⟩ := hvs
+        simp only [Option.some.injEq] at h
+        exact ⟨_, h.symm, by simp [allTys, ht, hts]⟩
+      · next r s2 hxs =>
+        obtain ⟨vs', hvs, -⟩ := DefaultEL.eval_ok hp n hds hxs
+        simp at hvs
+    all_goals
+      next hx =>
+      obtain ⟨v', hv, -⟩ := DefaultE.eval_ok hp n hd hx
+      simp at hv
+end
+
 /-- Running the initialisation prefix: what is left is the rest of the body,
-    from the frame whose slots `k, …` hold the defaults, with no more fuel. -/
-theorem eval_initPrefix {P : Prog} : ∀ (ts : List VTy) (n k : Nat) (fr : List Value) (o : List Nat)
-    (b : Expr) (x : Res × St), eval P n ⟨fr, o⟩ (initPrefix k ts b) = some x →
-    k + ts.length = fr.length → ∃ m ≤ n, eval P m ⟨fr.take k ++ VTy.defaults ts, o⟩ b = some x
-  | [], n, k, fr, o, b, x, h, hl => by
-    refine ⟨n, Nat.le_refl _, ?_⟩
+    from a frame whose slots `k, …` hold values of their types under `θ`,
+    with no more fuel. -/
+theorem eval_initPrefixE {P : Prog} {a : Nat} {Γ : List VTy} {θ : Nat → VTy} :
+    ∀ (ds : List Expr) (ts : List VTy) (n k : Nat) (fr : List Value) (o : List Nat) (b : Expr)
+      (x : Res × St), DefaultEL a Γ ds ts → a ≤ k → k + ds.length = fr.length →
+      allTys (fr.take a) ((Γ.take a).map (VTy.subst θ)) = true →
+      eval P n ⟨fr, o⟩ (initPrefixE k ds b) = some x →
+      ∃ m ≤ n, ∃ ws, allTys ws (ts.map (VTy.subst θ)) = true ∧ eval P m ⟨fr.take k ++ ws, o⟩ b = some x
+  | [], _, n, k, fr, o, b, x, .nil, _, hl, _, h => by
+    refine ⟨n, Nat.le_refl _, [], rfl, ?_⟩
     simp only [List.length_nil, Nat.add_zero] at hl
-    rw [List.take_of_length_le (by omega)]
-    simpa [VTy.defaults, initPrefix] using h
-  | t :: ts, n, k, fr, o, b, x, h, hl => by
+    rw [List.take_of_length_le (by omega), List.append_nil]
+    simpa [initPrefixE] using h
+  | d :: ds, t :: ts, n, k, fr, o, b, x, .cons hd hds, hak, hl, hp, h => by
     have hk : k < fr.length := by simp at hl; omega
     match n, h with
     | n + 1, h =>
-      simp only [initPrefix, eval] at h
+      simp only [initPrefixE, eval] at h
       rcases bindR_some h with ⟨v, s1, hx, hk'⟩ | ⟨r1, s1, hx, hr, _⟩
       · match n, hx, hk' with
-        | n' + 2, hx, hk' =>
-          simp only [eval, bindR, writeSlot, hk, ite_true, Option.some.injEq, Prod.mk.injEq] at hx
-          obtain ⟨-, rfl⟩ := hx
-          obtain ⟨m, hm, hm'⟩ := eval_initPrefix ts (n' + 2) (k + 1) (fr.set k t.default) o b x hk'
-            (by simp at hl ⊢; omega)
-          refine ⟨m, by omega, ?_⟩
-          rw [take_set_succ fr k _ hk] at hm'
-          simpa [VTy.defaults] using hm'
+        | n' + 1, hx, hk' =>
+          simp only [eval] at hx
+          rcases bindR_some hx with ⟨w, s2, hw, hw'⟩ | ⟨r2, s2, hw, hr2, hw'⟩
+          · obtain ⟨w', hwv, hwt⟩ := DefaultE.eval_ok (s := ⟨fr, o⟩) hp n' hd hw
+            simp only [Option.some.injEq, Prod.mk.injEq, Res.ok.injEq] at hwv
+            obtain ⟨rfl, rfl⟩ := hwv
+            simp only [writeSlot, hk, ite_true, Option.some.injEq, Prod.mk.injEq, Res.ok.injEq] at hw'
+            obtain ⟨rfl, rfl⟩ := hw'
+            have hp' : allTys ((fr.set k w).take a) ((Γ.take a).map (VTy.subst θ)) = true := by
+              rwa [List.take_set_of_le hak]
+            obtain ⟨m, hm, ws, hws, hm'⟩ :=
+              eval_initPrefixE ds ts (n' + 1) (k + 1) (fr.set k w) o b x hds (by omega)
+                (by simp at hl ⊢; omega) hp' hk'
+            refine ⟨m, by omega, w :: ws, by simp [allTys, hwt, hws], ?_⟩
+            rw [take_set_succ fr k _ hk] at hm'
+            simpa using hm'
+          · obtain ⟨w', hwv, -⟩ := DefaultE.eval_ok (s := ⟨fr, o⟩) hp n' hd hw
+            simp only [Option.some.injEq, Prod.mk.injEq] at hwv
+            obtain ⟨rfl, -⟩ := hwv
+            simp at hr2
         | 0, hx, _ => simp [eval] at hx
-        | 1, hx, _ => simp [eval, bindR] at hx
       · match n, hx with
-        | n' + 2, hx =>
-          simp only [eval, bindR, writeSlot, hk, ite_true, Option.some.injEq, Prod.mk.injEq] at hx
-          obtain ⟨rfl, rfl⟩ := hx
-          simp at hr
+        | n' + 1, hx =>
+          simp only [eval] at hx
+          rcases bindR_some hx with ⟨w, s2, hw, hw'⟩ | ⟨r2, s2, hw, hr2, hw'⟩
+          · obtain ⟨w', hwv, -⟩ := DefaultE.eval_ok (s := ⟨fr, o⟩) hp n' hd hw
+            simp only [Option.some.injEq, Prod.mk.injEq, Res.ok.injEq] at hwv
+            obtain ⟨rfl, rfl⟩ := hwv
+            simp only [writeSlot, hk, ite_true, Option.some.injEq, Prod.mk.injEq] at hw'
+            obtain ⟨rfl, -⟩ := hw'
+            simp at hr
+          · obtain ⟨w', hwv, -⟩ := DefaultE.eval_ok (s := ⟨fr, o⟩) hp n' hd hw
+            simp only [Option.some.injEq, Prod.mk.injEq] at hwv
+            obtain ⟨rfl, -⟩ := hwv
+            simp at hr2
         | 0, hx => simp [eval] at hx
-        | 1, hx => simp [eval, bindR] at hx
 
 /-! ### Preservation, by strong induction on fuel -/
 
@@ -430,8 +633,8 @@ theorem stepE {P : Prog} {S : Sigs} (hP : ProgTyped P S) (n : Nat)
         exact ⟨hf1, ResOK_retype hok hr1⟩
   | call f es =>
     cases ht with
-    | call hsig hes =>
-      rename_i ps
+    | call θ hsig hes =>
+      rename_i ps τ₀
       simp only [eval] at h
       rcases bindL_some h with ⟨vs, s1, hx, hk⟩ | ⟨r1, s1, hx, rfl⟩
       · obtain ⟨hf1, hvs⟩ := IL _ _ _ _ _ _ hx hes hf
@@ -450,21 +653,28 @@ theorem stepE {P : Prog} {S : Sigs} (hP : ProgTyped P S) (n : Nat)
               split at hc
               · next har =>
                 simp only [Option.some.injEq] at hc; subst hc
-                obtain ⟨Γ', hft⟩ := hP.2 f fn' ps τ hfn hsig
-                obtain ⟨b, hbody, hbt⟩ := hft.body
+                obtain ⟨Γ', hft⟩ := hP.2 f fn' ps τ₀ hfn hsig
+                obtain ⟨b, ds, hbody, hds, hbt⟩ := hft.body
                 have hlen := allTys_length hvs
                 rw [hbody] at hb
-                have hl : fn'.arity + (Γ'.drop fn'.arity).length = (frameOf fn' vs).length := by
-                  simp [frameOf, hft.slots]; omega
-                obtain ⟨m, hm, hm'⟩ := eval_initPrefix _ _ _ _ _ _ _ hb hl
                 have hfr : (frameOf fn' vs).take fn'.arity = vs := by
                   simp [frameOf, ← har]
+                -- the arguments have the callee's parameter types under θ
+                have hp : allTys ((frameOf fn' vs).take fn'.arity)
+                    ((Γ'.take fn'.arity).map (VTy.subst θ)) = true := by
+                  rw [hfr, hft.params]; exact hvs
+                have hl : fn'.arity + ds.length = (frameOf fn' vs).length := by
+                  rw [DefaultEL.length hds]
+                  simp [frameOf, hft.slots]; omega
+                obtain ⟨m, hm, ws, hws, hm'⟩ :=
+                  eval_initPrefixE _ _ _ _ _ _ _ _ hds (Nat.le_refl _) hl hp hb
                 rw [hfr] at hm'
-                have hf' : FrameOK Γ' (vs ++ VTy.defaults (Γ'.drop fn'.arity)) := by
-                  have := allTys_append hvs (allTys_defaults (Γ'.drop fn'.arity))
-                  rw [← hft.params, List.take_append_drop] at this
+                -- so the callee runs from a frame typed by its slot types under θ
+                have hf' : FrameOK (Γ'.map (VTy.subst θ)) (vs ++ ws) := by
+                  have := allTys_append hvs hws
+                  rw [← hft.params, ← List.map_append, List.take_append_drop] at this
                   exact this
-                obtain ⟨-, hres⟩ := ((ih m hm).1) _ _ _ _ _ _ hm' hbt hf'
+                obtain ⟨-, hres⟩ := ((ih m hm).1) _ _ _ _ _ _ hm' (Typed.subst θ hbt) hf'
                 refine ⟨hf1, ?_⟩
                 cases r2 <;> simp_all [retOf, ResOK]
               · simp at hc
@@ -650,7 +860,8 @@ theorem Runs.typed {P : Prog} {S : Sigs} (hP : ProgTyped P S) {τ r out}
     (hm : S[P.main]? = some ([], τ)) (h : Runs P r out) :
     r ≠ .err .type ∧ ∀ v, r = .ok v → hasTy v τ = true := by
   obtain ⟨fr, h⟩ := h
-  have ht : Typed S [] τ (.call P.main []) τ := .call hm .nil
+  have ht : Typed S [] τ (.call P.main []) τ := by
+    simpa [VTy.subst_id] using Typed.call (Γ := []) (ρ := τ) VTy.var hm .nil
   obtain ⟨-, hr⟩ := Eval.typed hP h ht rfl
   refine ⟨?_, ?_⟩
   · intro he; subst he; exact hr rfl

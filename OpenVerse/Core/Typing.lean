@@ -7,11 +7,19 @@
   and result types, `Γ` the type of each slot of the current frame, `ρ` the
   result type of the current function (for `return`).
 
+  Types may mention type variables (`var j`, the j-th type parameter of a
+  generic function). No value has a type variable as its type; a call
+  instantiates its callee's signature with any substitution `θ`.
+
   A function is typed when its body starts by initialising every
-  non-parameter slot with the default value of its type (`initPrefix`), and
-  the rest of the body has the function's result type. The elaborator emits
-  that prefix, so the invariant "every slot holds a value of its type" holds
-  throughout the rest of the body: `OpenVerse.Core.TypeSafety`.
+  non-parameter slot with a value of its type (`initPrefixE`), and the rest
+  of the body has the function's result type. For a slot of a closed type
+  that value is the type's default literal; a slot whose type mentions a type
+  variable is initialised from the parameters (`DefaultE`): a generic
+  function receives a value of each of its type parameters as a hidden
+  argument. The elaborator emits that prefix, so the invariant "every slot
+  holds a value of its type" holds throughout the rest of the body:
+  `OpenVerse.Core.TypeSafety`.
 -/
 import OpenVerse.Core.Semantics
 
@@ -22,6 +30,8 @@ inductive VTy where
   | arr : VTy → VTy
   | tup : List VTy → VTy
   | opt : VTy → VTy
+  /-- The `j`-th type parameter of the current (generic) function. -/
+  | var : Nat → VTy
   deriving Repr, Inhabited
 
 namespace VTy
@@ -44,6 +54,10 @@ def decEq : (a b : VTy) → Decidable (a = b)
   | .tup as, .tup bs => match decEqList as bs with
     | isTrue h => isTrue (by subst h; rfl)
     | isFalse h => isFalse (by intro h'; cases h'; exact h rfl)
+  | .var a, .var b => if h : a = b then isTrue (by subst h; rfl)
+    else isFalse (by intro h'; cases h'; exact h rfl)
+  | .int, .var _ | .logic, .var _ | .char, .var _ | .arr _, .var _ | .tup _, .var _ | .opt _, .var _
+  | .var _, .int | .var _, .logic | .var _, .char | .var _, .arr _ | .var _, .tup _ | .var _, .opt _
   | .int, .logic | .int, .char | .int, .arr _ | .int, .tup _ | .int, .opt _
   | .logic, .int | .logic, .char | .logic, .arr _ | .logic, .tup _ | .logic, .opt _
   | .char, .int | .char, .logic | .char, .arr _ | .char, .tup _ | .char, .opt _
@@ -72,10 +86,43 @@ def default : VTy → Value
   | .arr _ => .arr []
   | .opt _ => .none
   | .tup ts => .tup (defaults ts)
+  -- no value has a type variable as its type; slots of such types are
+  -- initialised from parameters instead (`DefaultE`)
+  | .var _ => .void
 def defaults : List VTy → List Value
   | [] => []
   | t :: ts => default t :: defaults ts
 end
+
+mutual
+/-- Substitute `θ j` for each type variable `var j`. -/
+def subst (θ : Nat → VTy) : VTy → VTy
+  | .int => .int
+  | .logic => .logic
+  | .char => .char
+  | .arr t => .arr (subst θ t)
+  | .opt t => .opt (subst θ t)
+  | .tup ts => .tup (substL θ ts)
+  | .var j => θ j
+def substL (θ : Nat → VTy) : List VTy → List VTy
+  | [] => []
+  | t :: ts => subst θ t :: substL θ ts
+end
+
+theorem substL_eq_map (θ : Nat → VTy) : ∀ ts : List VTy, substL θ ts = ts.map (subst θ)
+  | [] => rfl
+  | t :: ts => by simp [substL, substL_eq_map θ ts]
+
+@[simp] theorem subst_tup (θ : Nat → VTy) (ts : List VTy) : subst θ (.tup ts) = .tup (ts.map (subst θ)) := by
+  simp [subst, substL_eq_map]
+@[simp] theorem subst_arr (θ : Nat → VTy) (t : VTy) : subst θ (.arr t) = .arr (subst θ t) := by simp [subst]
+@[simp] theorem subst_opt (θ : Nat → VTy) (t : VTy) : subst θ (.opt t) = .opt (subst θ t) := by simp [subst]
+@[simp] theorem subst_int (θ : Nat → VTy) : subst θ .int = .int := by simp [subst]
+@[simp] theorem subst_logic (θ : Nat → VTy) : subst θ .logic = .logic := by simp [subst]
+@[simp] theorem subst_char (θ : Nat → VTy) : subst θ .char = .char := by simp [subst]
+@[simp] theorem subst_var (θ : Nat → VTy) (j : Nat) : subst θ (.var j) = θ j := by simp [subst]
+@[simp] theorem subst_void (θ : Nat → VTy) : subst θ void = void := by simp [void]
+@[simp] theorem subst_str (θ : Nat → VTy) : subst θ str = str := by simp [str]
 
 end VTy
 
@@ -143,7 +190,9 @@ inductive Typed (S : Sigs) (Γ : List VTy) (ρ : VTy) : Expr → VTy → Prop
   | assign {i e τ} : Γ[i]? = some τ → Typed S Γ ρ e τ → Typed S Γ ρ (.assign i e) τ
   | seq {a b σ τ} : Typed S Γ ρ a σ → Typed S Γ ρ b τ → Typed S Γ ρ (.seq a b) τ
   | prim {op es ts τ} : TypedL S Γ ρ es ts → PrimTy op ts τ → Typed S Γ ρ (.prim op es) τ
-  | call {f es ps τ} : S[f]? = some (ps, τ) → TypedL S Γ ρ es ps → Typed S Γ ρ (.call f es) τ
+  /-- A call instantiates the callee's type variables with any `θ`. -/
+  | call {f es ps τ} (θ : Nat → VTy) : S[f]? = some (ps, τ) → TypedL S Γ ρ es (ps.map (VTy.subst θ)) →
+      Typed S Γ ρ (.call f es) (τ.subst θ)
   | ite {c t e σ τ} : Typed S Γ ρ c σ → Typed S Γ ρ t τ → Typed S Γ ρ e τ →
       Typed S Γ ρ (.ite c t e) τ
   | forE {i it filt body τe σ τb} : Γ[i]? = some τe → Typed S Γ ρ it (.arr τe) →
@@ -157,17 +206,37 @@ inductive TypedL (S : Sigs) (Γ : List VTy) (ρ : VTy) : List Expr → List VTy 
   | cons {e es τ ts} : Typed S Γ ρ e τ → TypedL S Γ ρ es ts → TypedL S Γ ρ (e :: es) (τ :: ts)
 end
 
-/-- The initialisation of slots `k, k+1, …` with the defaults of `ts`, before `e`. -/
-def initPrefix (k : Nat) : List VTy → Expr → Expr
+/-- The initialisation of slots `k, k+1, …` with the values of `ds`, before `e`. -/
+def initPrefixE (k : Nat) : List Expr → Expr → Expr
   | [], e => e
-  | t :: ts, e => .seq (.assign k (.lit t.default)) (initPrefix (k + 1) ts e)
+  | d :: ds, e => .seq (.assign k d) (initPrefixE (k + 1) ds e)
+
+/-- The initialisation of slots `k, k+1, …` with the default literals of `ts`. -/
+def initPrefix (k : Nat) (ts : List VTy) (e : Expr) : Expr :=
+  initPrefixE k (ts.map fun t => .lit t.default) e
+
+mutual
+/-- `DefaultE a Γ d t`: `d` initialises a slot of type `t` in a function
+    whose first `a` slots are its parameters: a literal of type `t`, a
+    parameter of type `t`, or a tuple of such. It reads only parameters, and
+    evaluates without failing to a value of type `t.subst θ` whenever the
+    parameters hold values of their types under `θ`. -/
+inductive DefaultE (a : Nat) (Γ : List VTy) : Expr → VTy → Prop
+  | lit {v t} : hasTy v t = true → DefaultE a Γ (.lit v) t
+  | param {i t} : i < a → Γ[i]? = some t → DefaultE a Γ (.local i) t
+  | tup {ds ts} : DefaultEL a Γ ds ts → DefaultE a Γ (.prim .mkTup ds) (.tup ts)
+inductive DefaultEL (a : Nat) (Γ : List VTy) : List Expr → List VTy → Prop
+  | nil : DefaultEL a Γ [] []
+  | cons {d ds t ts} : DefaultE a Γ d t → DefaultEL a Γ ds ts → DefaultEL a Γ (d :: ds) (t :: ts)
+end
 
 /-- A function of signature `(ps, ρ)` is typed with slot types `Γ`. -/
 structure FnTyped (S : Sigs) (fn : Fn) (ps : List VTy) (ρ : VTy) (Γ : List VTy) : Prop where
   arity : fn.arity = ps.length
   slots : Γ.length = fn.nslots
   params : Γ.take fn.arity = ps
-  body : ∃ b, fn.body = initPrefix fn.arity (Γ.drop fn.arity) b ∧ Typed S Γ ρ b ρ
+  body : ∃ b ds, fn.body = initPrefixE fn.arity ds b ∧ DefaultEL fn.arity Γ ds (Γ.drop fn.arity) ∧
+    Typed S Γ ρ b ρ
 
 /-- Every function of `P` is typed with its signature in `S`. -/
 def ProgTyped (P : Prog) (S : Sigs) : Prop :=

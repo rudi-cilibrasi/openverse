@@ -21,7 +21,8 @@ reads and writes, sequencing, 29 primitives, calls, `if`, single-generator
 - comparison chains use temporaries, so each operand is evaluated once;
 - structs are tuples, enums are ints, and maps are arrays of pairs in
   insertion order;
-- a generic function is one Core function per instantiation.
+- a generic function is one Core function with type variables, and a
+  hidden argument per type parameter.
 
 Keeping Core small keeps the proofs and the C runtime small. All 29
 primitives are one Lean function (`Prim.apply`) and one C file
@@ -96,32 +97,35 @@ fuzzer (`scripts/fuzz-front.sh`) mutates real sources to look for such
 rejections and for crashes. It found one, a stack overflow on recursive
 structs, now rejected.
 
-## Generic functions: checked once, then monomorphised
+## Generic functions: polymorphic Verse Core
 
-Verse Core is first-order: its types (`VTy`) have no variables. A generic
-function `F(X:t where t:type)` could be given polymorphic Core types, but then
-the type-safety proof would need a substitution lemma, and the initialisation
-prefix below would need a default value for a slot of type `t`, which no
-value has. Instead the elaborator monomorphises: each distinct list of type
-arguments becomes its own Core function, and `Prog.checkTypes` checks each
-one like any other function. So `Prog.accepted` covers generic programs with
-no change to Core, the proofs, the binary format or the C runtime.
+A generic function `F(X:t where t:type)` is elaborated once, with each type
+parameter as an opaque type (`Ty.param`), on which only the operations valid
+for every type are defined. That is how Verse checks it. The result is one
+Verse Core function whose slot types mention type variables (`VTy.var j`).
+`Typed.call` lets each call instantiate its callee's signature with any
+substitution `θ`, and the substitution lemma `Typed.subst` says that a typing
+with type variables holds at every instance. So `Prog.checkTypes` checks a
+generic function once, and type safety covers every call. The checker
+proposes `θ` at a call by matching, and then checks the arguments against
+the instantiated signature, so only that check needs a soundness proof.
 
-Monomorphising alone would check a body only at the types it is used at, as
-C++ templates do. Verse checks a generic body once, for every type argument.
-So the elaborator elaborates it once, with each type parameter as an opaque
-type (`Ty.param`), on which only the operations valid for every type are
-defined. An instance is that same Core body: the type arguments are
-substituted into its slot types (which fixes the initialisation prefix), and
-its calls of generic functions are renumbered to the instances at the
-substituted type arguments. A worklist builds them, because an instance can
-request further instances. Re-elaborating each instance from source instead
-would let inference take different paths at different types (at `void`, for
-example), so an instance could fail, or behave differently, although the
-generic body was checked.
+The difficulty is the initialisation prefix (next section): a slot of type
+`t` has no default value. So a generic function takes one hidden parameter
+per type parameter, after its own, holding a value of that type. Its prefix
+may store a *default expression* (`DefaultE`): a literal, a parameter, or a
+tuple of such, so a slot of type `tuple(t, int)` starts as `(D_t, 0)`. A
+caller passes a value of each type argument, built so that the checker can
+infer its type exactly (`[]int` is passed as `array{0}`, not `array{}`). The
+value is never observed, because Verse code assigns every variable before
+reading it. The semantics, the binary format and the C runtime are
+unchanged: the hidden arguments are ordinary arguments.
 
-The cost is code size, and no polymorphic recursion. A bound on the size of
-type arguments turns polymorphic recursion into an error rather than a loop.
+Two simpler designs were set aside. Re-elaborating a generic function at each
+instantiation lets inference take different paths at different types (at
+`void`, for example). Monomorphising the generically checked body is sound,
+but checks each instance separately, multiplies code, and cannot express
+polymorphic recursion.
 
 ## Why every slot starts with a typed default
 
@@ -132,9 +136,11 @@ alternative, a flow-sensitive definite-assignment analysis, would have to
 model rollback.
 
 Instead, the elaborator begins every body with an initialisation prefix that
-stores the default of each slot's type (`initPrefix`), and the type checker
-recognises the prefix (`stripPrefix`). This needs no change to the format
-or to the C runtime. It costs a few stores per call.
+stores a value of each slot's type (`initPrefixE`): the default literal of a
+closed type, or a default expression built from the hidden parameters of a
+generic function (previous section). The type checker recognises the prefix
+(`stripPrefix`). This needs no change to the format or to the C runtime. It
+costs a few stores per call.
 
 ## The binary format and the loader
 

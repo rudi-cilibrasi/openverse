@@ -39,9 +39,9 @@ inductive Ty where
   | enum : String → Ty
   /-- `[k]v`: in Verse Core, the array of its (key, value) pairs in insertion order. -/
   | map : Ty → Ty → Ty
-  /-- A type parameter of the generic function being checked, opaque there
-      (`comparable` when declared `t:subtype(comparable)`). Generic functions
-      are monomorphised, so no Verse Core program mentions one. -/
+  /-- A type parameter of the generic function (or parametric struct) being
+      elaborated, opaque there (`comparable` when declared
+      `t:subtype(comparable)`). In Verse Core it is a type variable `VTy.var`. -/
   | param : String → (comparable : Bool) → Ty
   deriving Repr, Inhabited
 
@@ -92,9 +92,10 @@ structure TyEnv where
   sparams : List (String × List (String × Bool)) := []
   /-- Each enum: its enumerators in order. -/
   enums : List (String × List String) := []
-  /-- The type parameters in scope and what they stand for: themselves
-      (`Ty.param`) while a generic function is checked, its type arguments
-      while an instance is elaborated. -/
+  /-- The type parameters in scope, in order (the j-th is `VTy.var j` in
+      Verse Core), and what they stand for: themselves (`Ty.param`) in a
+      generic function or struct definition, the type arguments of a struct
+      construction when its field defaults are elaborated. -/
   tvars : List (String × Ty) := []
   deriving Inhabited
 
@@ -145,7 +146,10 @@ partial def Ty.toVTy (env : TyEnv) : Ty → VTy
   | .struct n ts => .tup ((env.fields n ts).map fun (_, t, _) => t.toVTy env)
   | .enum _ => .int
   | .map k v => .arr (.tup [k.toVTy env, v.toVTy env])
-  | .param _ _ => VTy.void
+  -- the j-th type parameter of the generic function being elaborated
+  | .param n _ => match env.tvars.findIdx? (·.1 == n) with
+    | some j => .var j
+    | none => VTy.void
 
 /-- The type parameters a type mentions. -/
 partial def Ty.params : Ty → List String
@@ -183,8 +187,8 @@ partial def Ty.matchArg (σ : List (String × Ty)) : Ty → Ty → Option (List 
     else (ps.zip as).foldlM (fun σ (p, a) => Ty.matchArg σ p a) σ
   | p, a => if p.eqv a then some σ else none
 
-/-- At most `cap` nodes of the tree of `t` (to bound polymorphic recursion
-    without walking a type that doubles at each step). -/
+/-- At most `cap` nodes of the Verse Core tree of `t` (to bound the size of
+    a type without walking one that doubles at each level). -/
 def Ty.sizeUpTo (env : TyEnv) (cap : Nat) (t : Ty) : Nat := go cap [t]
 where
   go : Nat → List Ty → Nat
@@ -236,10 +240,11 @@ structure Sig where
   /-- The named parameters (the last ones of `params`): name and default. -/
   named   : List (String × Option SExpr) := []
   /-- A generic function's type parameters (name, declared comparable). Its
-      `params` and `ret` mention them as `Ty.param`; `idx` is unused, and
-      `gidx` is its position among the generic functions. -/
+      `params` and `ret` mention them as `Ty.param`. Its Verse Core function
+      takes one more hidden parameter per type parameter, after these: a
+      value of that type (`witness`), from which its slots of that type are
+      initialised (`slotDefault`). -/
   tparams : List (String × Bool) := []
-  gidx    : Nat := 0
   deriving Inhabited
 
 structure Ctx where
@@ -254,26 +259,18 @@ structure Ctx where
   /-- The field defaults being elaborated (struct, field), to reject a default
       that depends on itself. -/
   defaults : List (String × String) := []
-
-/-- An instance of a generic function: the Verse Core function elaborated
-    from its body with concrete type arguments. -/
-structure Inst where
-  gen     : Nat
-  name    : String
-  targs   : List Ty
-  params  : List Ty
-  ret     : Ty
-  decides : Bool
-  deriving Inhabited
+  /-- In a generic function, the slot of the hidden parameter that holds a
+      value of its first type parameter (the others follow), and the names of
+      its type parameters, in order. A field default is elaborated with its
+      struct's type parameters in `types.tvars`, but its hidden arguments
+      still come from the enclosing function's. -/
+  dictBase : Nat := 0
+  dictVars : List String := []
 
 structure ESt where
   nslots : Nat := 0
   /-- The type of each slot allocated so far (the certificate for `Prog.checkTypes`). -/
   slotTys : Array Ty := #[]
-  /-- The instances of generic functions requested so far, for the whole
-      program: instance `k` is function `nBase + k`, where `nBase` is the
-      number of non-generic functions and constants. -/
-  insts : Array Inst := #[]
   deriving Inhabited
 
 abbrev EM := StateT ESt (Except String)
@@ -283,23 +280,6 @@ structure R where
   e  : Expr
   ty : Ty
 
-/-- `Expr.mayFail` for an expression that may call instances: `ctx.sigProg`
-    holds the `<decides>` flags of the non-generic functions, `insts` those
-    of the instances, which come after them. -/
-def mayFailM (sigProg : Prog) (e : Expr) : EM Bool := do
-  let st ← get
-  if st.insts.isEmpty then return e.mayFail sigProg
-  let extra := st.insts.toList.map fun i =>
-    ({ name := i.name, arity := i.params.length, nslots := 0, decides := i.decides,
-       body := .lit .void } : Fn)
-  return e.mayFail { sigProg with fns := sigProg.fns ++ extra }
-
-/-- Bounds on monomorphisation: the number of instances, and the size of a
-    type argument. A function that calls itself at ever larger types
-    (polymorphic recursion) reaches the second. -/
-def maxInsts : Nat := 1000
-def maxTyArgSize : Nat := 1000
-def polyRecMsg : String := "(polymorphic recursion is not supported)"
 
 /-- A new slot of the current frame, holding values of type `t`. -/
 def fresh (t : Ty) : EM Nat :=
@@ -357,49 +337,53 @@ partial def resolveTy (env : TyEnv) (p : Pos) : STy → EM Ty
 def Ctx.lookup (ctx : Ctx) (n : String) : Option Local := ctx.locals.find? (·.name == n)
 def Ctx.sig? (ctx : Ctx) (n : String) : Option Sig := ctx.sigs.find? (·.name == n)
 
-/-- The position in `insts` of the instance of generic `s` at `targs`,
-    added when it is new. -/
-def findOrAddInst (env : TyEnv) (insts : Array Inst) (s : Sig) (targs : List Ty) :
-    Except String (Nat × Array Inst) := do
-  let same (i : Inst) := i.gen == s.gidx && i.targs.length == targs.length &&
-    (i.targs.zip targs).all fun (a, b) => a.eqv b
-  match insts.findIdx? same with
-  | some k => return (k, insts)
-  | none =>
-    if targs.any (·.sizeUpTo env (maxTyArgSize + 1) > maxTyArgSize) then
-      throw s!"{s.name} is instantiated at ever larger types {polyRecMsg}"
-    if insts.size ≥ maxInsts then
-      throw s!"more than {maxInsts} instances of generic functions"
-    let σ := (s.tparams.map (·.1)).zip targs
-    let name := s!"{s.name}({", ".intercalate (targs.map Ty.show)})"
-    let inst : Inst := { gen := s.gidx, name, targs, params := s.params.map (·.subst σ),
-                         ret := s.ret.subst σ, decides := s.decides }
-    return (insts.size, insts.push inst)
-
-/-- The function number of the instance of generic `s` at `targs`, created
-    on first use: instance `k` is function `base + k`. -/
-def instIndex (ctx : Ctx) (p : Pos) (s : Sig) (targs : List Ty) : EM Nat := do
-  let st ← get
-  match findOrAddInst ctx.types st.insts s targs with
-  | .ok (k, insts) =>
-    set { st with insts }
-    return ctx.sigProg.fns.length + k
-  | .error msg => eerr p msg
-
-/-- Renumber the calls of an expression. -/
-partial def _root_.OpenVerse.Expr.mapCalls (f : Nat → Nat) : Expr → Expr
-  | .call g es => .call (f g) (es.map (Expr.mapCalls f))
-  | .assign i e => .assign i (e.mapCalls f)
-  | .seq a b => .seq (a.mapCalls f) (b.mapCalls f)
-  | .prim op es => .prim op (es.map (Expr.mapCalls f))
-  | .ite c t e => .ite (c.mapCalls f) (t.mapCalls f) (e.mapCalls f)
-  | .forE i it filt body => .forE i (it.mapCalls f) (filt.mapCalls f) (body.mapCalls f)
-  | .loop b => .loop (b.mapCalls f)
-  | .ret e => .ret (e.mapCalls f)
-  | .print e => .print (e.mapCalls f)
-  | e => e
-
 def p2 (op : Prim) (a b : Expr) : Expr := .prim op [a, b]
+
+/-- The slot of the hidden parameter for type parameter `n`. -/
+def TyEnv.dictSlot? (env : TyEnv) (dictBase : Nat) (n : String) : Option Nat :=
+  (env.tvars.findIdx? (·.1 == n)).map (dictBase + ·)
+
+/-- A value of type `t`, built by an expression whose Verse Core type the
+    checker infers exactly (`tc e none`): the hidden argument a call of a
+    generic function passes for a type argument `t`. It is only ever used to
+    initialise slots, so which value it is does not matter. -/
+partial def witness (env : TyEnv) (dictBase : Nat) (dictVars : List String) : Ty → Expr
+  | .int | .enum _ => .lit (.int 0)
+  | .logic => .lit (.logic false)
+  | .char => .lit (.char 0)
+  | .void | .never => .lit .void
+  | .arr t => .prim .mkArr [witness env dictBase dictVars t]
+  | .opt t => .prim .mkSome [witness env dictBase dictVars t]
+  | .tup ts => .prim .mkTup (ts.map (witness env dictBase dictVars))
+  | .map k v => .prim .mkArr [.prim .mkTup [witness env dictBase dictVars k, witness env dictBase dictVars v]]
+  | .struct n ts => .prim .mkTup ((env.fields n ts).map fun (_, t, _) => witness env dictBase dictVars t)
+  -- a type parameter of the enclosing function: its hidden parameter (an
+  -- unknown one cannot occur; the checker would reject the program)
+  | .param n _ => match dictVars.idxOf? n with
+    | some j => .local (dictBase + j)
+    | none => .lit .void
+
+/-- Whether a Verse Core type mentions a type variable. -/
+partial def _root_.OpenVerse.VTy.hasVar : VTy → Bool
+  | .var _ => true
+  | .arr t | .opt t => t.hasVar
+  | .tup ts => ts.any VTy.hasVar
+  | _ => false
+
+/-- The value a slot of type `t` starts with (`DefaultE`): the default
+    literal of its Verse Core type (also when only `[]` or the empty option
+    mentions a type variable), the hidden parameter of a type parameter, or a
+    tuple of such. -/
+partial def slotDefault (env : TyEnv) (dictBase : Nat) (t : Ty) : Expr :=
+  let vt := t.toVTy env
+  if !vt.hasVar then .lit vt.default else
+  match t with
+  | .param n _ => match env.dictSlot? dictBase n with
+    | some d => .local d
+    | none => .lit vt.default
+  | .tup ts => .prim .mkTup (ts.map (slotDefault env dictBase))
+  | .struct n ts => .prim .mkTup ((env.fields n ts).map fun (_, t, _) => slotDefault env dictBase t)
+  | _ => .lit vt.default
 
 /-- Convert `r` to type `target`: equal types, `false` (bottom) to anything,
     and anything to `void` (Book of Verse: "void accepts any value"). -/
@@ -569,11 +553,11 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
     return ⟨Expr.optionE t r.e, .opt r.ty⟩
   | .logicLit p e =>
     let r ← elabE { ctx with canFail := true } e none
-    if !(← mayFailM ctx.sigProg r.e) then eerr p "logic{…} needs an expression that can fail"
+    if !(r.e.mayFail ctx.sigProg) then eerr p "logic{…} needs an expression that can fail"
     return ⟨Expr.logicE r.e, .logic⟩
   | .ite p conds thenE elseE =>
     let (rc, ctxT) ← elabSeq { ctx with canFail := true } conds none
-    if !(← mayFailM ctx.sigProg rc.e) then
+    if !(rc.e.mayFail ctx.sigProg) then
       eerr p "the condition of this if cannot fail (Verse requires a failable condition)"
     let thenCtx := { ctxT with canFail := ctx.canFail }
     match elseE with
@@ -624,7 +608,7 @@ partial def elabStmt (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM (R × Ctx) 
       pure (⟨.assign slot e, ty⟩,
         { ctx with locals := { name := n, slot, ty, mutable := isVar } :: ctx.locals })
     | _ => do pure (← elabE ctx se exp, ctx)
-  if !ctx.canFail && (← mayFailM ctx.sigProg r.e) then
+  if !ctx.canFail && (r.e.mayFail ctx.sigProg) then
     eerr se.pos ("this expression can fail, but it is not in a failure context (an if " ++
       "condition, a for clause, option{…}, logic{…}, not, the left of or, or a <decides> function)")
   return (r, ctx')
@@ -786,8 +770,9 @@ partial def elabGenericCall (ctx : Ctx) (p : Pos) (s : Sig) (args : List SExpr) 
       | eerr p s!"cannot infer type parameter {v} of {s.name} from the arguments of this call"
     if cmp && !t.comparable then eerr p (notComparable t s!"type parameter {v} of {s.name}")
     targs := targs.push t
-  let f ← instIndex ctx p s targs.toList
-  return ⟨.call f es.toList, s.ret.subst σ⟩
+  -- the hidden arguments: a value of each type argument
+  let dicts := targs.toList.map (witness ctx.types ctx.dictBase ctx.dictVars)
+  return ⟨.call s.idx (es.toList ++ dicts), s.ret.subst σ⟩
 
 /-- The failable array methods of the Book of Verse (§9.1):
     `A.Slice[i, j]`, `A.Slice[i]`, `A.Find[x]`, `A.RemoveElement[i]`,
@@ -1021,7 +1006,7 @@ partial def elabFor (ctx : Ctx) (p : Pos) (clauses : List SExpr) (body : SExpr) 
           | .map kt vt =>
             -- `for (V : M)` and `for (K -> V : M)`: over the (key, value) pairs
             let tmp ← fresh rs.ty
-            let src := if (← mayFailM ctx.sigProg rs.e) then
+            let src := if (rs.e.mayFail ctx.sigProg) then
                 Expr.orE tmp rs.e (.lit (.arr [])) else rs.e
             let tp ← fresh (.tup [kt, vt])
             let (pre, c1) ← match idx with
@@ -1042,7 +1027,7 @@ partial def elabFor (ctx : Ctx) (p : Pos) (clauses : List SExpr) (body : SExpr) 
               | .arr t => pure t
               | t => eerr gp s!"a for generator needs an array, string or map, found {t.show}"
             let tmp ← fresh rs.ty
-            let src0 := if (← mayFailM ctx.sigProg rs.e) then
+            let src0 := if (rs.e.mayFail ctx.sigProg) then
                 Expr.orE tmp rs.e (.lit (.arr [])) else rs.e
             let ta ← fresh rs.ty
             let (islot, c1) ← declare c i .int
@@ -1055,7 +1040,7 @@ partial def elabFor (ctx : Ctx) (p : Pos) (clauses : List SExpr) (body : SExpr) 
             | .arr t => pure t
             | t => eerr gp s!"a for generator needs an array, string or map, found {t.show}"
           let tmp ← fresh rs.ty
-          let src := if (← mayFailM ctx.sigProg rs.e) then
+          let src := if (rs.e.mayFail ctx.sigProg) then
               Expr.orE tmp rs.e (.lit (.arr [])) else rs.e
           let (slot, c1) ← declare c x ty
           pure (slot, src, c1, Expr.lit (.logic true))
@@ -1270,8 +1255,8 @@ def elabProgram (allTops : List STop) : Except String Compiled := do
   env := { env with structs := structs.toList }
   if let some n := env.recursiveStruct? then
     throw s!"struct {n} contains itself (recursive struct types are not supported)"
-  -- generic functions (those with a `where` clause) are monomorphised: they
-  -- get no function number of their own, their instances do
+  -- generic functions (those with a `where` clause) are numbered after the
+  -- other functions and constants
   let isGeneric : STop → Bool
     | .fn _ _ _ (_ :: _) .. => true
     | _ => false
@@ -1318,13 +1303,15 @@ def elabProgram (allTops : List STop) : Except String Compiled := do
       let tparams ← checkTParams env tps
       let genv := { env with tvars := tparams.map fun (v, c) => (v, Ty.param v c) }
       let (tys, rt) ← fnTypes genv p n ps effs ret
-      gsigs := gsigs.push { idx := 0, name := n, params := tys, ret := rt,
+      -- generic functions come after the others
+      gsigs := gsigs.push { idx := tops.length + gidx, name := n, params := tys, ret := rt,
                             decides := effs.contains "decides", isConst := false,
-                            tparams, gidx }
+                            tparams }
     | _ => pure ()
   let mkSigProg (sigs : Array Sig) : Prog :=
-    { fns := sigs.toList.map fun s =>
-        { name := s.name, arity := s.params.length, nslots := 0, decides := s.decides, body := .lit .void },
+    { fns := (sigs ++ gsigs).toList.map fun s =>
+        { name := s.name, arity := s.params.length + s.tparams.length, nslots := 0,
+          decides := s.decides, body := .lit .void },
       main := 0 }
   -- infer the types of unannotated constants: in order, in rounds, so that a
   -- constant may use one defined after it (until a round makes no progress)
@@ -1371,79 +1358,58 @@ def elabProgram (allTops : List STop) : Except String Compiled := do
           | .ok _ => pure ()
           | .error msg => throw s!"{msg} (in the default of field '{f}' of {n})"
     | _ => pure ()
-  -- the body of a function, under the type environment `env` (which binds
-  -- the type parameters of a generic function), given the instances so far
-  let elabBody (env : TyEnv) (p : Pos) (ps : List SParam) (ptys : List Ty) (ret : Ty) (decides : Bool)
-      (body : SExpr) (insts : Array Inst) : Except String (Expr × ESt) := do
+  -- a function: its body under the type environment `env` (which binds the
+  -- type parameters `tps` of a generic function to themselves), after the
+  -- initialisation of every non-parameter slot (OpenVerse.Core.Typing); its
+  -- frame starts with its parameters, then one hidden parameter per type
+  -- parameter, holding a value of that type
+  let elabFn (env : TyEnv) (p : Pos) (name : String) (ps : List SParam) (ptys : List Ty) (ret : Ty)
+      (decides : Bool) (tps : List (String × Bool)) (body : SExpr) : Except String (Fn × List VTy) := do
     let locals := (ps.zip (List.range ps.length)).zip ptys |>.map fun ((prm, i), t) =>
       ({ name := prm.name, slot := i, ty := t, mutable := false } : Local)
     for (prm, i) in ps.zip (List.range ps.length) do
       if ps.take i |>.any (·.name == prm.name) then throw s!"{p.show}: duplicate parameter '{prm.name}'"
     let ctx : Ctx := { sigs := allSigs, sigProg, locals := locals.reverse, types := env,
-                       canFail := decides, retTy := ret }
+                       canFail := decides, retTy := ret, dictBase := ps.length,
+                       dictVars := tps.map (·.1) }
+    let hidden := tps.map fun (v, c) => Ty.param v c
+    let arity := ps.length + hidden.length
     let ((r, _), st) ← (elabStmt ctx body (some ret)).run
-      { nslots := ps.length, slotTys := ptys.toArray, insts }
+      { nslots := arity, slotTys := (ptys ++ hidden).toArray }
     let (e, st) ← (coerce p r ret).run st
-    return (if ret == .void then Expr.seq e (.lit .void) else e, st)
-  -- elaborate each generic function once, with its type parameters opaque,
-  -- as Verse checks it; its instances are this very body, with the type
-  -- arguments substituted into its slot types and its calls of generic
-  -- functions renumbered (instance k of its own table is function base + k)
-  let base := sigProg.fns.length
-  let mut gbodies : Array (Pos × Expr × ESt) := #[]
-  for (top, g) in generics.zip gsigs.toList do
-    match top with
-    | .fn p _ ps _ _ _ body =>
-      let genv := { env with tvars := g.tparams.map fun (v, c) => (v, Ty.param v c) }
-      let (e, st) ← elabBody genv p ps g.params g.ret g.decides body #[]
-      gbodies := gbodies.push (p, e, st)
-    | _ => pure ()
+    let e := if ret == .void then Expr.seq e (.lit .void) else e
+    let inits := (st.slotTys.toList.drop arity).map (slotDefault env ps.length)
+    return ({ name, arity, nslots := st.nslots, decides, body := initPrefixE arity inits e },
+      st.slotTys.toList.map (Ty.toVTy env))
+  let genvOf (g : Sig) : TyEnv := { env with tvars := g.tparams.map fun (v, c) => (v, Ty.param v c) }
   let mut fns : Array Fn := #[]
   let mut slotTys : Array (List VTy) := #[]
-  let mut insts : Array Inst := #[]
   for (top, idx) in tops.zip (List.range tops.length) do
     let sig := sigs[idx]!
     match top with
     | .fn p n ps _ _ _ body =>
-      let (e, st) ← elabBody env p ps sig.params sig.ret sig.decides body insts
-      insts := st.insts
-      let tys := st.slotTys.toList.map (Ty.toVTy env)
-      -- every non-parameter slot starts with the default of its type (OpenVerse.Core.Typing)
-      let e := initPrefix ps.length (tys.drop ps.length) e
-      fns := fns.push { name := n, arity := ps.length, nslots := st.nslots, decides := sig.decides, body := e }
+      let (fn, tys) ← elabFn env p n ps sig.params sig.ret sig.decides [] body
+      fns := fns.push fn
       slotTys := slotTys.push tys
     | .const p n _ body =>
       let ctx : Ctx := { sigs := allSigs, sigProg, types := env }
-      let (r, st) ← (elabStmt ctx body (some sig.ret)).run { insts }
+      let (r, st) ← (elabStmt ctx body (some sig.ret)).run {}
       let (e, st) ← (coerce p r.1 sig.ret).run st
-      insts := st.insts
       let tys := st.slotTys.toList.map (Ty.toVTy env)
       fns := fns.push { name := n, arity := 0, nslots := st.nslots, decides := false,
                         body := initPrefix 0 tys e }
       slotTys := slotTys.push tys
-  -- the instances, in the order they were first requested; building one may
-  -- request more (`findOrAddInst` bounds how many)
-  let mut k := 0
-  for _ in [0:maxInsts + 1] do
-    if h : k < insts.size then
-      let inst := insts[k]
-      let g := gsigs[inst.gen]!
-      let (p, body, st) := gbodies[inst.gen]!
-      let σ := (g.tparams.map (·.1)).zip inst.targs
-      -- the generic function's own instance table, at these type arguments
-      let mut remap : Array Nat := #[]
-      for li in st.insts do
-        match findOrAddInst env insts gsigs[li.gen]! (li.targs.map (·.subst σ)) with
-        | .ok (j, insts') => insts := insts'; remap := remap.push (base + j)
-        | .error msg => throw s!"{p.show}: {msg}"
-      let body := body.mapCalls fun f => if f < base then f else remap[f - base]!
-      let tys := st.slotTys.toList.map fun t => (t.subst σ).toVTy env
-      fns := fns.push { name := inst.name, arity := inst.params.length, nslots := st.nslots,
-                        decides := inst.decides, body := initPrefix inst.params.length
-                          (tys.drop inst.params.length) body }
+  -- each generic function is elaborated once, with its type parameters
+  -- opaque, as Verse checks it, into one Verse Core function whose types
+  -- mention type variables; `Prog.checkTypes` checks it once, for every
+  -- instantiation (`Typed.subst`)
+  for (top, g) in generics.zip gsigs.toList do
+    match top with
+    | .fn p n ps _ _ _ body =>
+      let (fn, tys) ← elabFn (genvOf g) p n ps g.params g.ret g.decides g.tparams body
+      fns := fns.push fn
       slotTys := slotTys.push tys
-      k := k + 1
-    else break
+    | _ => pure ()
   let main ← match sigs.toList.find? (·.name == "Main") with
     | some s =>
       if s.isConst || !s.params.isEmpty then throw "Main must be a function with no parameters"
@@ -1453,7 +1419,9 @@ def elabProgram (allTops : List STop) : Except String Compiled := do
   if !P.check then throw "internal error: the elaborated program does not pass Prog.check"
   if !P.checkControl then throw "internal error: the elaborated program does not pass Prog.checkControl"
   let S : Sigs := sigs.toList.map (fun s => (s.params.map (Ty.toVTy env), s.ret.toVTy env)) ++
-    insts.toList.map fun i => (i.params.map (Ty.toVTy env), i.ret.toVTy env)
+    gsigs.toList.map fun g =>
+      let genv := genvOf g
+      ((g.params ++ g.tparams.map fun (v, c) => Ty.param v c).map (Ty.toVTy genv), g.ret.toVTy genv)
   if !P.checkTypes S slotTys.toList then
     throw "internal error: the elaborated program does not pass Prog.checkTypes"
   return { prog := P, sigs := S, slotTys := slotTys.toList }

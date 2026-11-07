@@ -91,6 +91,41 @@ theorem expect_sound {m : Option VTy} {t τ : VTy} (h : expect m t = some τ) :
     · simp only [Option.some.injEq] at h; subst h; subst_vars; simp
     · simp at h
 
+mutual
+/-- Bind type variables by first-order matching of `p` against `a` (no
+    proof obligation: `tc` checks the call against whatever this proposes). -/
+def VTy.bindVars : VTy → VTy → List (Nat × VTy) → List (Nat × VTy)
+  | .var j, a, acc => if (acc.lookup j).isSome then acc else (j, a) :: acc
+  | .arr p, .arr a, acc => VTy.bindVars p a acc
+  | .opt p, .opt a, acc => VTy.bindVars p a acc
+  | .tup ps, .tup as, acc => VTy.bindVarsL ps as acc
+  | _, _, acc => acc
+def VTy.bindVarsL : List VTy → List VTy → List (Nat × VTy) → List (Nat × VTy)
+  | p :: ps, a :: as, acc => VTy.bindVarsL ps as (VTy.bindVars p a acc)
+  | _, _, acc => acc
+end
+
+mutual
+/-- Whether `p` mentions a type variable that `acc` does not bind. -/
+def VTy.unbound (acc : List (Nat × VTy)) : VTy → Bool
+  | .var j => (acc.lookup j).isNone
+  | .arr t => VTy.unbound acc t
+  | .opt t => VTy.unbound acc t
+  | .tup ts => VTy.unboundL acc ts
+  | _ => false
+def VTy.unboundL (acc : List (Nat × VTy)) : List VTy → Bool
+  | [] => false
+  | t :: ts => VTy.unbound acc t || VTy.unboundL acc ts
+end
+
+/-- The instantiation `tc` proposes for a call with result type `t`: the
+    bindings `acc` from the arguments, completed from the expected type. -/
+def callInst (acc : List (Nat × VTy)) (t : VTy) (m : Option VTy) : Nat → VTy :=
+  let acc := match m with
+    | some τ => if t.unbound acc then t.bindVars τ acc else acc
+    | none => acc
+  fun j => (acc.lookup j).getD (.var j)
+
 section
 variable (S : Sigs) (Γ : List VTy) (ρ : VTy)
 
@@ -107,7 +142,11 @@ def tc : Expr → Option VTy → Option VTy
     | none => none
   | .seq a b, m => if (tc a none).isSome || (tc a (some VTy.void)).isSome then tc b m else none
   | .call f es, m => match S[f]? with
-    | some (ps, t) => if tcL es ps then expect m t else none
+    | some (ps, t) =>
+      -- propose an instantiation (from the arguments, then the expected type),
+      -- then check against it: only the check needs a proof
+      let θ := callInst (bindArgs ps es []) t m
+      if tcL es (ps.map (VTy.subst θ)) then expect m (t.subst θ) else none
     | none => none
   | .ite c t e, m =>
     if (tc c none).isSome || (tc c (some VTy.void)).isSome then
@@ -207,6 +246,20 @@ def tcL : List Expr → List VTy → Bool
 def tcAll : List Expr → VTy → Bool
   | [], _ => true
   | e :: es, t => (tc e (some t)).isSome && tcAll es t
+/-- Bind the type variables of parameter types `ps` from arguments `es`,
+    right to left, inferring an argument only while its parameter type has an
+    unbound variable. A generic function's hidden arguments come last and
+    bind them all, and a call of a function without type variables infers
+    nothing, so each argument is checked once. -/
+def bindArgs : List VTy → List Expr → List (Nat × VTy) → List (Nat × VTy)
+  | p :: ps, e :: es, acc =>
+    let acc := bindArgs ps es acc
+    if p.unbound acc then
+      match tc e none with
+      | some a => p.bindVars a acc
+      | none => acc
+    else acc
+  | _, _, acc => acc
 /-- Infer the types of a list. -/
 def inferL : List Expr → Option (List VTy)
   | [] => some []
@@ -584,7 +637,7 @@ theorem tc_sound_aux : ∀ (n : Nat) (e : Expr), sizeOf e < n → TcOK S Γ ρ e
         split at h
         · next hc =>
           obtain ⟨rfl, hm⟩ := expect_sound h
-          exact ⟨.call hf (tcL_sound_of (fun e he => IH e (sizeOf_lt_of_mem_call he)) hc), hm⟩
+          exact ⟨.call _ hf (tcL_sound_of (fun e he => IH e (sizeOf_lt_of_mem_call he)) hc), hm⟩
         · simp at h
       · simp at h
     | ite c t e =>
@@ -705,45 +758,82 @@ end
 
 /-! ### Programs -/
 
-/-- `a` is `slot k := default of t`. -/
-def isInit (k : Nat) (t : VTy) : Expr → Bool
-  | .assign i (.lit v) => decide (i = k) && decide (v = t.default)
-  | _ => false
+mutual
+/-- `d` is a default expression of type `t` (`DefaultE a Γ d t`). -/
+def checkDefault (a : Nat) (Γ : List VTy) : Expr → VTy → Bool
+  | .lit v, t => hasTy v t
+  | .local i, t => decide (i < a) && decide (Γ[i]? = some t)
+  | .prim .mkTup ds, .tup ts => checkDefaultL a Γ ds ts
+  | _, _ => false
+def checkDefaultL (a : Nat) (Γ : List VTy) : List Expr → List VTy → Bool
+  | [], [] => true
+  | d :: ds, t :: ts => checkDefault a Γ d t && checkDefaultL a Γ ds ts
+  | _, _ => false
+end
 
-theorem isInit_sound {k t a} (h : isInit k t a = true) : a = .assign k (.lit t.default) := by
-  unfold isInit at h
-  split at h
-  · next i v =>
-    simp only [Bool.and_eq_true, decide_eq_true_eq] at h
-    obtain ⟨rfl, rfl⟩ := h; rfl
-  · simp at h
+mutual
+theorem checkDefault_sound {a : Nat} {Γ : List VTy} : ∀ (d : Expr) (t : VTy),
+    checkDefault a Γ d t = true → DefaultE a Γ d t
+  | .lit v, t, h => .lit (by simpa [checkDefault] using h)
+  | .local i, t, h => by
+    simp only [checkDefault, Bool.and_eq_true, decide_eq_true_eq] at h
+    exact .param h.1 h.2
+  | .prim op ds, t, h => by
+    cases op <;> try (simp [checkDefault] at h; done)
+    cases t <;> try (simp [checkDefault] at h; done)
+    rename_i ts
+    simp only [checkDefault] at h
+    exact .tup (checkDefaultL_sound ds ts h)
+  | .assign .., _, h | .seq .., _, h | .call .., _, h | .ite .., _, h | .forE .., _, h
+  | .loop _, _, h | .brk, _, h | .ret _, _, h | .print _, _, h => by simp [checkDefault] at h
+theorem checkDefaultL_sound {a : Nat} {Γ : List VTy} : ∀ (ds : List Expr) (ts : List VTy),
+    checkDefaultL a Γ ds ts = true → DefaultEL a Γ ds ts
+  | [], [], _ => .nil
+  | d :: ds, t :: ts, h => by
+    simp only [checkDefaultL, Bool.and_eq_true] at h
+    exact .cons (checkDefault_sound d t h.1) (checkDefaultL_sound ds ts h.2)
+  | [], _ :: _, h | _ :: _, [], h => by simp [checkDefaultL] at h
+end
 
-/-- Recognise the initialisation prefix of slots `k, …` with the defaults of `ts`. -/
-def stripPrefix (k : Nat) : List VTy → Expr → Option Expr
-  | [], e => some e
+/-- Recognise the initialisation prefix of slots `k, …` of types `ts`, in a
+    function with `a` parameters and slot types `Γ`: the default expressions
+    and the rest of the body. -/
+def stripPrefix (a : Nat) (Γ : List VTy) (k : Nat) : List VTy → Expr → Option (List Expr × Expr)
+  | [], e => some ([], e)
   | t :: ts, e => match e with
-    | .seq a rest => if isInit k t a then stripPrefix (k + 1) ts rest else none
+    | .seq (.assign i d) rest =>
+      if i = k && checkDefault a Γ d t then
+        (stripPrefix a Γ (k + 1) ts rest).map fun (ds, b) => (d :: ds, b)
+      else none
     | _ => none
 
-theorem stripPrefix_sound : ∀ (ts : List VTy) (k : Nat) (e b : Expr),
-    stripPrefix k ts e = some b → e = initPrefix k ts b
-  | [], k, e, b, h => by simp [stripPrefix] at h; subst h; rfl
-  | t :: ts, k, e, b, h => by
+theorem stripPrefix_sound {a : Nat} {Γ : List VTy} : ∀ (ts : List VTy) (k : Nat) (e b : Expr) (ds : List Expr),
+    stripPrefix a Γ k ts e = some (ds, b) → e = initPrefixE k ds b ∧ DefaultEL a Γ ds ts
+  | [], k, e, b, ds, h => by
+    simp only [stripPrefix, Option.some.injEq, Prod.mk.injEq] at h
+    obtain ⟨rfl, rfl⟩ := h
+    exact ⟨rfl, .nil⟩
+  | t :: ts, k, e, b, ds, h => by
     simp only [stripPrefix] at h
     split at h
-    · next a rest =>
+    · next i d rest =>
       split at h
       · next hc =>
-        rw [isInit_sound hc, stripPrefix_sound ts (k + 1) rest b h]
-        rfl
+        simp only [Bool.and_eq_true, decide_eq_true_eq] at hc
+        obtain ⟨rfl, hd⟩ := hc
+        obtain ⟨⟨ds', b'⟩, hrest, heq⟩ := Option.map_eq_some_iff.mp h
+        simp only [Prod.mk.injEq] at heq
+        obtain ⟨rfl, rfl⟩ := heq
+        obtain ⟨hb, hds⟩ := stripPrefix_sound ts (i + 1) rest _ ds' hrest
+        exact ⟨by rw [hb]; rfl, .cons (checkDefault_sound d t hd) hds⟩
       · simp at h
     · simp at h
 
 /-- Check one function against its signature and slot types. -/
 def checkFn (S : Sigs) (fn : Fn) (ps : List VTy) (τ : VTy) (Γ : List VTy) : Bool :=
   decide (fn.arity = ps.length) && decide (Γ.length = fn.nslots) && decide (Γ.take fn.arity = ps) &&
-  match stripPrefix fn.arity (Γ.drop fn.arity) fn.body with
-  | some b => (tc S Γ τ b (some τ)).isSome
+  match stripPrefix fn.arity Γ fn.arity (Γ.drop fn.arity) fn.body with
+  | some (_, b) => (tc S Γ τ b (some τ)).isSome
   | none => false
 
 theorem checkFn_sound {S fn ps τ Γ} (h : checkFn S fn ps τ Γ = true) : FnTyped S fn ps τ Γ := by
@@ -751,11 +841,12 @@ theorem checkFn_sound {S fn ps τ Γ} (h : checkFn S fn ps τ Γ = true) : FnTyp
   simp only [Bool.and_eq_true, decide_eq_true_eq] at h
   obtain ⟨⟨⟨ha, hs⟩, hp⟩, hb⟩ := h
   split at hb
-  · next b hstrip =>
+  · next ds b hstrip =>
     obtain ⟨τ', hτ'⟩ := Option.isSome_iff_exists.mp hb
     have ht := (tc_sound_aux _ b (Nat.lt_succ_self _) _ _ hτ')
     rw [ht.2 τ rfl] at ht
-    exact ⟨ha, hs, hp, b, stripPrefix_sound _ _ _ _ hstrip, ht.1⟩
+    obtain ⟨hbody, hds⟩ := stripPrefix_sound _ _ _ _ _ hstrip
+    exact ⟨ha, hs, hp, b, ds, hbody, hds, ht.1⟩
   · simp at hb
 
 /-- Check a whole program against signatures `S` and slot types `Γs`. -/
