@@ -1,0 +1,8 @@
+i1 int 1
+i1 string a
+i2 int 3
+i1 int 4
+i2 int 5
+i1 string b
+i1 int 1 / i2 int 2 / i1 string s
+exit=0

@@ -164,8 +164,10 @@ Verse ch. 6): `Describe(X:int)`, `Describe(S:string)`, `Describe(X:int, Y:int)`.
   receiver's type that its arguments fit, then dispatches as usual; the
   overloads a class sees must be distinct. Each list is a method of its
   own (`M$ovN`, up to the names of type parameters).
-- **Not yet supported:** overloading `Main`, and qualified `(i:)M`
-  implementations of an overloaded method.
+- **Qualified implementations** (#125). `(i:)M<override>(…)` implements
+  the overload of `i`'s `M` with its parameter list (as an override takes
+  its method's), and `X.(i:)M(…)` picks among `i`'s overloads.
+- **Not yet supported:** overloading `Main`.
 
 ## Parametric structs
 
