@@ -688,6 +688,19 @@ def Ctx.mostSpecific? (ctx : Ctx) (ups : List String) (m : String) : Option Stri
 def Ctx.implOf? (ctx : Ctx) (d m : String) : Option String :=
   ctx.mostSpecific? (ctx.types.supers d) m
 
+/-- The function that implements `owner`'s method `m` for an instance of
+    class `d`: the most specific of the classes above `d` that implement it,
+    by a qualified `(owner:)m` (which wins within one class) or a plain `m`. -/
+def Ctx.implFor? (ctx : Ctx) (d owner m : String) : Option String :=
+  let env := ctx.types
+  let qn := s!"({owner}:){m}"
+  let cand (e : String) : Option String :=
+    if (ctx.sig? s!"{e}.{qn}").isSome then some s!"{e}.{qn}"
+    else if (ctx.sig? s!"{e}.{m}").isSome && !env.abstracts.contains (e, m) then some s!"{e}.{m}"
+    else none
+  let cands := (env.supers d).filter fun e => (cand e).isSome
+  (cands.find? fun e => !cands.any fun e' => e' != e && env.isSub e' e).bind cand
+
 def p2 (op : Prim) (a b : Expr) : Expr := .prim op [a, b]
 
 /-- The slot of the hidden parameter for type parameter `n`. -/
@@ -1325,12 +1338,26 @@ partial def elabApp (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (brack
     let some impl := ctx.mostSpecific? ((ctx.types.supers c).drop 1) m
       | eerr p s!"nothing above {c} implements '{m}'"
     elabApp ctx p (.ident mp s!"{impl}.{m}") (.ident mp "Self" :: args) bracket exp
-  | .member mp obj m =>
-    let r ← elabE ctx obj none
+  | .member mp obj m0 =>
+    let r0 ← elabE ctx obj none
+    -- `X.(i:)M(…)`: `X` as an `i`, so `i`'s `M` (a qualified call)
+    let (r, m) ← match r0.ty, m0.startsWith "(", (m0.drop 1).toString.splitOn ":)" with
+      | .struct c ts, true, [q, mq] =>
+        if !(ctx.types.isSub c q) then eerr p s!"{c} is not below {q}"
+        pure (⟨r0.e, .struct q (ctx.types.upArgs c ts q)⟩, mq)
+      | _, _, _ => pure (r0, m0)
     match r.ty with
     | .struct c targs =>
       let env := ctx.types
       if let (true, some owner) := (env.classes.contains c, ctx.methodDecl? c m) then
+        -- an implementation given separately for two interfaces that declare
+        -- `m`: the call must say which
+        let owners := (env.supers c).filter fun e => (ctx.sig? s!"{e}.{m}").isSome
+        let minimal := owners.filter fun e => !owners.any fun e' => e' != e && env.isSub e' e
+        for d in env.concreteBelow c do
+          for o in minimal do
+            if ctx.implFor? d o m != ctx.implFor? d owner m then
+              eerr p s!"{d} implements {m} separately for {owner} and {o}: call it as X.({owner}:){m}(…) or X.({o}:){m}(…)"
         let ms := (ctx.sig? s!"{owner}.{m}").get!
         if ms.decides && !bracket then eerr p s!"{m} is <decides>: call it with {m}[…]"
         if !ms.decides && bracket then eerr p s!"{m} cannot fail: call it with {m}(…)"
@@ -1341,15 +1368,17 @@ partial def elabApp (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (brack
         let ds := env.concreteBelow c
         -- one implementation for every class below the receiver's type, above
         -- that type: a direct call (the receiver evaluated first, as `Self`)
-        let direct : Option String := match (ds.map (ctx.implOf? · m)).eraseDups with
-          | [some e] => if env.isSub c e then some e else none
+        let clsOf (fname : String) : String := (fname.splitOn ".").head!
+        let direct : Option String := match (ds.map (ctx.implFor? · owner m)).eraseDups with
+          | [some fname] => if env.isSub c (clsOf fname) then some fname else none
           | _ => none
         -- the receiver as an instance of class `e`, above or below `c` (#39)
         let argsAt (e : String) : List Ty :=
           if env.isSub c e then env.upArgs c targs e else env.argsBelow c targs e
-        if let some e := direct then
+        if let some fname := direct then
+          let e := clsOf fname
           let ctx' := { ctx with locals := { name := recv, slot, ty := .struct e (argsAt e), mutable := false } :: ctx.locals }
-          let rc ← elabApp ctx' p (.ident mp s!"{e}.{m}") (.ident mp recv :: args) bracket exp
+          let rc ← elabApp ctx' p (.ident mp fname) (.ident mp recv :: args) bracket exp
           return ⟨.seq (.assign slot r.e) rc.e, rc.ty⟩
         -- otherwise dispatch on the class of the receiver's value: the
         -- receiver, then the arguments, once each, then the implementation of
@@ -1442,23 +1471,24 @@ partial def elabApp (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (brack
           -- a reference: one test of the object's class per implementation (#34)
           let mut groups : Array (String × Array String) := #[]
           for d in ds do
-            let some e := ctx.implOf? d m | eerr p s!"class {d} does not implement '{m}'"
-            match groups.findIdx? (·.1 == e) with
+            let some fname := ctx.implFor? d owner m | eerr p s!"class {d} does not implement '{m}'"
+            match groups.findIdx? (·.1 == fname) with
             | some gi => groups := groups.modify gi fun (e', cls) => (e', cls.push d)
-            | none => groups := groups.push (e, #[d])
-          for (e, cls) in groups.toList.reverse do
+            | none => groups := groups.push (fname, #[d])
+          for (fname, cls) in groups.toList.reverse do
+            let e := clsOf fname
             let sd ← fresh (.struct e (argsAt e))
             let ctx' := { ctx with locals := { name := s!"$self{sd}", slot := sd, ty := .struct e (argsAt e), mutable := false } :: (locs ++ ctx.locals) }
-            let rc ← elabApp ctx' p (.ident mp s!"{e}.{m}") (.ident mp s!"$self{sd}" :: argIds.toList) bracket exp
+            let rc ← elabApp ctx' p (.ident mp fname) (.ident mp s!"$self{sd}" :: argIds.toList) bracket exp
             acc := .ite (.assign sd (.heap (.isTag (cls.toList.map env.tagOf)) [.local slot]))
               (← coerce p rc msRet) acc
           return ⟨pre.toList.foldr Expr.seq acc, msRet⟩
         for (d, j) in (ds.zip (List.range ds.length)).reverse do
-          let some e := ctx.implOf? d m | eerr p s!"class {d} does not implement '{m}'"
+          let some fname := ctx.implFor? d owner m | eerr p s!"class {d} does not implement '{m}'"
           let td ← fresh (classRepTy env d)
           let sd ← fresh (.struct d [])
           let ctx' := { ctx with locals := { name := s!"$self{sd}", slot := sd, ty := .struct d [], mutable := false } :: (locs ++ ctx.locals) }
-          let rc ← elabApp ctx' p (.ident mp s!"{e}.{m}") (.ident mp s!"$self{sd}" :: argIds.toList) bracket exp
+          let rc ← elabApp ctx' p (.ident mp fname) (.ident mp s!"$self{sd}" :: argIds.toList) bracket exp
           acc := .ite (.assign td (.prim .query [.prim (.tupGet j) [.local slot]]))
             (.seq (.assign sd (classWrap env d d (.local td))) (← coerce p rc msRet)) acc
         let y ← fresh msRet
@@ -2540,8 +2570,24 @@ def elabProgram (allTops00 : List STop) (opts : Options := {}) : Except String C
         -- classes above it, so never overridden
         -- overriding (Book of Verse ch. 10: `M<override>`, the same signature)
         let isOverride := effs.contains "override"
-        match if mn == "$block" then [] else ((henv.supers n).drop 1).filter (declares · mn) with
+        -- `(q:)M`: implements interface q's M, which q declares itself
+        let qual? : Option (String × String) :=
+          if mn.startsWith "(" then match (mn.drop 1).toString.splitOn ":)" with
+            | [q, m'] => some (q, m')
+            | _ => none
+          else none
+        if let some (q, m') := qual? then
+          if !((henv.supers n).drop 1).contains q || !(henv.info q).isIface then
+            throw s!"{mp.show}: ({q}:){m'}: {q} is not an interface above {n}"
+          if !declares q m' then
+            let d := (((henv.supers q).drop 1).find? (declares · m')).getD q
+            throw s!"{mp.show}: ({q}:){m'}: {q} does not declare {m'} itself; qualify it with ({d}:)"
+          if !isOverride then throw s!"{mp.show}: ({q}:){m'} must be marked <override>"
+          if effs.contains "$abstract" then throw s!"{mp.show}: ({q}:){m'} needs a body"
+          overridePairs := overridePairs.push (mp, s!"{n}.{mn}", s!"{q}.{m'}")
+        match if mn == "$block" || qual?.isSome then [] else ((henv.supers n).drop 1).filter (declares · mn) with
         | [] =>
+          if qual?.isSome then pure () else
           if isOverride then throw s!"{mp.show}: {mn}<override> does not override an inherited method"
         | qs@(q :: _) =>
           if !isOverride then throw s!"{mp.show}: {mn} is inherited from {q}: mark it {mn}<override> to override it"
@@ -2572,21 +2618,35 @@ def elabProgram (allTops00 : List STop) (opts : Options := {}) : Except String C
     let names := (ups.flatMap fun u => ((cdef? u).map (·.methods)).getD [] |>.filterMap fun
       | .fn _ x .. => some x
       | _ => none).eraseDups
-    -- (a `block:` is not a method: each class runs its own)
-    for mn in names.filter (· != "$block") do
+    -- (a `block:` is not a method: each class runs its own; a qualified
+    -- `(q:)M` implements q's M, below)
+    for mn in names.filter (fun x => x != "$block" && !x.startsWith "(") do
+      let decls := ups.filter (declares · mn)
+      -- the qualified implementation of q's `mn`, the most specific
+      let qualImpl (q : String) : Option String :=
+        let qs := ups.filter (hasBody · s!"({q}:){mn}")
+        (qs.find? fun e => !qs.any fun e' => e' != e && henv.isSub e' e).map fun e => s!"{e}.({q}:){mn}"
       -- the implementation: the nearest in the class chain, else the most
-      -- specific interface default (as `Ctx.implOf?` chooses at a call)
+      -- specific interface default (as `Ctx.implFor?` chooses at a call)
       let impls := ups.filter (hasBody · mn)
       let classImpl := impls.find? fun e => !(henv.info e).isIface
       let ms := impls.filter fun e => !impls.any fun e' => e' != e && henv.isSub e' e
-      if impls.isEmpty then
-        let q := (ups.find? (declares · mn)).getD cd.name
-        throw s!"{cd.pos.show}: {cd.name} must implement {mn} (declared abstract in {q})"
-      if classImpl.isNone && ms.length > 1 then
-        throw s!"{cd.pos.show}: {cd.name} inherits {mn} from both {ms[0]!} and {ms[1]!}: override it in {cd.name}"
-      let impl := classImpl.getD ms.head!
-      for q in ups.filter (declares · mn) do
-        if q != impl then implChecks := implChecks.push (cd.pos, cd.name, s!"{impl}.{mn}", s!"{q}.{mn}")
+      for q in decls do
+        -- (a plain implementation more specific than q's qualified one wins)
+        let general : Option String := if impls.isEmpty then none else some (classImpl.getD ms.head!)
+        let chosen : Option String := match qualImpl q, general with
+          | some qi, some g =>
+            let qe := (qi.splitOn ".").head!
+            if henv.isSub g qe && g != qe then some s!"{g}.{mn}" else some qi
+          | some qi, none => some qi
+          | none, some g => some s!"{g}.{mn}"
+          | none, none => none
+        match chosen with
+        | none => throw s!"{cd.pos.show}: {cd.name} must implement {mn} (declared abstract in {q})"
+        | some fname =>
+          if (qualImpl q).isNone && classImpl.isNone && ms.length > 1 then
+            throw s!"{cd.pos.show}: {cd.name} inherits {mn} from both {ms[0]!} and {ms[1]!}: override it in {cd.name}"
+          if fname != s!"{q}.{mn}" then implChecks := implChecks.push (cd.pos, cd.name, fname, s!"{q}.{mn}")
   let allTops := expanded.toList
   -- the type definitions: `name := struct …` and `name := enum …`
   let isTypeDef : STop → Bool

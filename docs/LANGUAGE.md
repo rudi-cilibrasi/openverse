@@ -236,6 +236,13 @@ circle := class(shape, labelled):
     dispatch, also inside a method; `(super:)` uses the same rule.
   - An implementation must have the signature of every declaration it
     satisfies.
+- **Qualified implementations.** A class that implements two interfaces
+  declaring the same method can give each its own: `(i1:)M<override>()`
+  and `(i2:)M<override>()`. A call through an `i1` uses `i1`'s, and
+  `X.(i1:)M()` names it; an unqualified call on the class is then
+  ambiguous and refused. The qualifier is the interface that declares the
+  method. A plain `M<override>` implements every declaration, and a more
+  specific one (in a subclass) wins over a qualified one above it.
 - **Casts.** `T[X]` is `X` as a `T`, failing unless `X`'s class is below
   `T`. `T(X)` converts to a supertype and cannot fail.
 - **Parametric classes.** A parametric class is a reference like any other
@@ -301,7 +308,6 @@ circle := class(shape, labelled):
     interface other than its own type parameters, and a parametric class
     below a non-parametric interface (or one that adds type parameters
     below a parametric interface's implementation);
-  - qualified `(i:)M` implementations;
   - subtyping through `+` on arrays, through tuples and through maps, and an
     array literal of different classes without an expected type.
 
