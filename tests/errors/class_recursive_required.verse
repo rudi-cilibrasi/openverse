@@ -1,4 +1,4 @@
-# expect: class node has a field that needs an instance of node
+# expect: no class at or below node can be constructed without an instance of itself
 # A class whose required field is of its own type has no initial value
 # for a variable of its type (and no instance can ever be built).
 node := class:

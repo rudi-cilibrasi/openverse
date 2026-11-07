@@ -202,8 +202,8 @@ Phase 3 (#20) adds a heap of objects, each with a class tag and fields
   or as a parameter of a subtype (`DefaultE.sub`). Placeholders cost an
   allocation per call; a parameter is preferred when there is one.
 
-The front end does not produce heap operations yet; `HeapExamples.lean`
-checks hand-written programs at build time.
+The front end produces heap operations for classes (#34); `HeapExamples.lean`
+also checks hand-written programs at build time.
 
 ## Why every slot starts with a typed default
 
