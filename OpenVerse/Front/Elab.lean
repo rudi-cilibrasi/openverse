@@ -138,6 +138,9 @@ structure TyEnv where
       terms of the class's own type parameters: `sub(t) := class(base(t))`
       gives `base ↦ [t]`. -/
   pargs : List (String × List Ty) := []
+  /-- The type arguments each class or interface gives each interface it
+      lists as a parent (#53), in terms of its own type parameters. -/
+  iargs : List ((String × String) × List Ty) := []
   /-- The class whose code each field default is, by (class, field): its
       type parameters are those the default mentions (#39). -/
   defaultHome : List ((String × String) × String) := []
@@ -159,16 +162,45 @@ def TyEnv.fields (env : TyEnv) (n : String) (args : List Ty := []) : List (Strin
 
 def TyEnv.info (env : TyEnv) (c : String) : ClassInfo := (env.cinfo.lookup c).getD {}
 
-/-- The type arguments of the superclass `T` of `d(args)` (along the class
-    chain), or `[]` when `T` is not a parametric class above `d`. -/
+
+
+
+
+/-- A class or interface and everything above it: its class chain first,
+    nearest first, then the interfaces of the chain, breadth first. This is
+    also the order in which a method's implementation is looked up. -/
+def TyEnv.supers (env : TyEnv) (c : String) : List String := Id.run do
+  let mut chain := [c]
+  let mut cur := c
+  for _ in [0:env.cinfo.length] do
+    match (env.info cur).parent with
+    | some q => if chain.contains q then break else chain := chain ++ [q]; cur := q
+    | none => break
+  let mut out := chain
+  let mut frontier := chain.flatMap fun k => (env.info k).ifaces
+  for _ in [0:env.cinfo.length + 1] do
+    let new := (frontier.filter (!out.contains ·)).eraseDups
+    if new.isEmpty then break
+    out := out ++ new
+    frontier := new.flatMap fun k => (env.info k).ifaces
+  return out
+
+/-- `d` is `T` or below it. -/
+def TyEnv.isSub (env : TyEnv) (d T : String) : Bool := (env.supers d).contains T
+
+/-- The type arguments of the class or interface `T` above `d(args)` (along
+    the parents, #39, #53), or `[]` when `T` is not above `d`. -/
 partial def TyEnv.upArgs (env : TyEnv) (d : String) (args : List Ty) (T : String) : List Ty :=
   if d == T then args
-  else match (env.info d).parent, env.pargs.lookup d with
-    | some q, some qargs =>
-      let σ := (((env.sparams.lookup d).getD []).map (·.1)).zip args
-      env.upArgs q (qargs.map (·.subst σ)) T
-    | some q, none => env.upArgs q [] T
-    | none, _ => []
+  else
+    let σ := (((env.sparams.lookup d).getD []).map (·.1)).zip args
+    -- the parent class, then the interfaces: whichever leads to `T`
+    let ups : List (String × List Ty) :=
+      ((env.info d).parent.toList.map fun q => (q, ((env.pargs.lookup d).getD []).map (·.subst σ))) ++
+      ((env.info d).ifaces.map fun i => (i, ((env.iargs.lookup (d, i)).getD []).map (·.subst σ)))
+    match ups.find? fun (u, _) => env.isSub u T with
+    | some (u, uargs) => env.upArgs u uargs T
+    | none => []
 
 /-- The root of `d`'s class chain. -/
 partial def TyEnv.rootOf (env : TyEnv) (d : String) : String :=
@@ -213,30 +245,6 @@ def TyEnv.argsBelow (env : TyEnv) (T : String) (targs : List Ty) (d : String) : 
     match vars.findIdx? (·.1 == v) with
     | some j => cs.getD j Ty.void
     | none => Ty.void
-
-
-
-/-- A class or interface and everything above it: its class chain first,
-    nearest first, then the interfaces of the chain, breadth first. This is
-    also the order in which a method's implementation is looked up. -/
-def TyEnv.supers (env : TyEnv) (c : String) : List String := Id.run do
-  let mut chain := [c]
-  let mut cur := c
-  for _ in [0:env.cinfo.length] do
-    match (env.info cur).parent with
-    | some q => if chain.contains q then break else chain := chain ++ [q]; cur := q
-    | none => break
-  let mut out := chain
-  let mut frontier := chain.flatMap fun k => (env.info k).ifaces
-  for _ in [0:env.cinfo.length + 1] do
-    let new := (frontier.filter (!out.contains ·)).eraseDups
-    if new.isEmpty then break
-    out := out ++ new
-    frontier := new.flatMap fun k => (env.info k).ifaces
-  return out
-
-/-- `d` is `T` or below it. -/
-def TyEnv.isSub (env : TyEnv) (d T : String) : Bool := (env.supers d).contains T
 
 /-- The type arguments of class `D`, above or below `T`, for an instance of
     `T(targs)` (#39). -/
@@ -2262,13 +2270,8 @@ def elabProgram (allTops00 : List STop) (opts : Options := {}) : Except String C
         | if allTops0.any (fun | .const _ n' none (.structDef ..) => n' == q | _ => false) then
             throw s!"{p.show}: {q} is a struct: only classes and interfaces can be inherited from"
           else throw s!"{p.show}: unknown class or interface '{q}'"
-      if qd.isIface && !qargs.isEmpty then
-        throw s!"{p.show}: interface {q} takes no type arguments"
-      if qd.isIface && (!qd.tps.isEmpty || !cd.tps.isEmpty) then
-        throw s!"{p.show}: parametric classes cannot implement interfaces yet (#39)"
-      if !qd.isIface then
-        if qargs.length != qd.tps.length then
-          throw s!"{p.show}: {q} takes {qd.tps.length} type argument(s), found {qargs.length}"
+      if qargs.length != qd.tps.length then
+        throw s!"{p.show}: {q} takes {qd.tps.length} type argument(s), found {qargs.length}"
 
       if qd.isIface then ifaces := ifaces.push q
       else
