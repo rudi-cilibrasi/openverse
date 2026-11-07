@@ -650,64 +650,71 @@ theorem hasTy_ref {v : Value} {ts : List Nat} (h : hasTy Ξ v (.ref ts) = true) 
     · simp at h
   | _ => simp [hasTy] at h
 
-theorem tagsOf_getElem? {h : List Obj} {a : Nat} {o : Obj} (ho : h[a]? = some o) :
+theorem tagsOf_getElem? {h : Array Obj} {a : Nat} {o : Obj} (ho : h[a]? = some o) :
     (tagsOf h)[a]? = some o.tag := by
   simp [tagsOf, ho]
 
-theorem tagsOf_getElem?_inv {h : List Obj} {a t : Nat} (ht : (tagsOf h)[a]? = some t) :
+theorem tagsOf_getElem?_inv {h : Array Obj} {a t : Nat} (ht : (tagsOf h)[a]? = some t) :
     ∃ o, h[a]? = some o ∧ o.tag = t := by
-  simp only [tagsOf, List.getElem?_map] at ht
+  simp only [tagsOf, List.getElem?_map, Array.getElem?_toList] at ht
   rcases ho : h[a]? with _ | o
   · simp [ho] at ht
   · simp only [ho, Option.map_some, Option.some.injEq] at ht
     exact ⟨o, rfl, ht⟩
 
-theorem HeapOK.new {S : Sigs} {h : List Obj} (hH : HeapOK S h) {t : Nat} {vs : List Value} {fs : List VTy}
+theorem tagsOf_push (h : Array Obj) (o : Obj) : tagsOf (h.push o) = tagsOf h ++ [o.tag] := by
+  simp [tagsOf, Array.toList_push]
+
+theorem HeapOK.new {S : Sigs} {h : Array Obj} (hH : HeapOK S h) {t : Nat} {vs : List Value} {fs : List VTy}
     (hc : S.classes[t]? = some fs) (hvs : allTys (tagsOf h) vs fs = true) :
-    HeapOK S (h ++ [⟨t, vs⟩]) := by
-  have hx : tagsOf h <+: tagsOf (h ++ [⟨t, vs⟩]) := by simp [tagsOf]
-  intro a o ho
-  rcases Nat.lt_or_ge a h.length with ha | ha
+    HeapOK S (h.push ⟨t, vs⟩) := by
+  have hx : tagsOf h <+: tagsOf (h.push ⟨t, vs⟩) := by simp [tagsOf_push]
+  refine ⟨fun a o ho => ?_, hH.2.trans hx⟩
+  rw [Array.toList_push] at ho
+  rcases Nat.lt_or_ge a h.toList.length with ha | ha
   · rw [List.getElem?_append_left ha] at ho
-    obtain ⟨fs', hc', hf⟩ := hH a o ho
+    obtain ⟨fs', hc', hf⟩ := hH.1 a o ho
     exact ⟨fs', hc', allTys_mono hx _ _ hf⟩
   · rw [List.getElem?_append_right ha] at ho
-    rcases hk : a - h.length with _ | k
+    rcases hk : a - h.toList.length with _ | k
     · rw [hk] at ho
       simp only [List.getElem?_cons_zero, Option.some.injEq] at ho; subst ho
       exact ⟨fs, hc, allTys_mono hx _ _ hvs⟩
     · rw [hk] at ho; simp at ho
 
-theorem tagsOf_set {h : List Obj} {a : Nat} {o o' : Obj} (ho : h[a]? = some o) (ht : o'.tag = o.tag) :
-    tagsOf (h.set a o') = tagsOf h := by
+theorem tagsOf_set {h : Array Obj} {a : Nat} {o o' : Obj} (ho₀ : h[a]? = some o) (ht : o'.tag = o.tag) :
+    tagsOf (h.setIfInBounds a o') = tagsOf h := by
+  have ho : h.toList[a]? = some o := by rw [Array.getElem?_toList]; exact ho₀
   obtain ⟨ha, hoa⟩ := List.getElem?_eq_some_iff.mp ho
   apply List.ext_getElem?
   intro i
-  simp only [tagsOf, List.map_set]
+  simp only [tagsOf, Array.toList_setIfInBounds, List.map_set]
   by_cases hi : a = i
   · subst hi
     rw [List.getElem?_set_self (by simpa using ha)]
-    simp [ha, hoa, ht]
+    simp [ho₀, ht]
   · rw [List.getElem?_set_ne hi]
 
-theorem HeapOK.set {S : Sigs} {h : List Obj} (hH : HeapOK S h) {a k : Nat} {o : Obj} {v : Value}
-    {fs : List VTy} {τ : VTy} (ho : h[a]? = some o) (hc : S.classes[o.tag]? = some fs)
+theorem HeapOK.set {S : Sigs} {h : Array Obj} (hH : HeapOK S h) {a k : Nat} {o : Obj} {v : Value}
+    {fs : List VTy} {τ : VTy} (ho₀ : h[a]? = some o) (hc : S.classes[o.tag]? = some fs)
     (hk : fs[k]? = some τ) (hv : hasTy (tagsOf h) v τ = true) :
-    HeapOK S (h.set a { o with fields := o.fields.set k v }) := by
-  have htg := tagsOf_set (o' := { o with fields := o.fields.set k v }) ho rfl
-  intro b ob hob
+    HeapOK S (h.setIfInBounds a { o with fields := o.fields.set k v }) := by
+  have htg := tagsOf_set (o' := { o with fields := o.fields.set k v }) ho₀ rfl
+  have ho : h.toList[a]? = some o := by rw [Array.getElem?_toList]; exact ho₀
+  refine ⟨fun b ob hob => ?_, by rw [htg]; exact hH.2⟩
   rw [htg]
+  rw [Array.toList_setIfInBounds] at hob
   by_cases hab : b = a
   · subst hab
     obtain ⟨ha, -⟩ := List.getElem?_eq_some_iff.mp ho
     rw [List.getElem?_set_self ha] at hob
     simp only [Option.some.injEq] at hob; subst hob
-    obtain ⟨fs', hc', hf⟩ := hH b o ho
+    obtain ⟨fs', hc', hf⟩ := hH.1 b o ho
     rw [hc] at hc'; simp only [Option.some.injEq] at hc'
     rw [← hc'] at hf
     exact ⟨fs, hc, allTys_set hf hk hv⟩
   · rw [List.getElem?_set_ne (Ne.symm hab)] at hob
-    exact hH b ob hob
+    exact hH.1 b ob hob
 
 /-! ### Frames -/
 
@@ -766,7 +773,7 @@ theorem DefaultE.eval_ok {P : Prog} {S : Sigs} (hS : S.ClosedClasses) {a : Nat} 
   | _, _, 0, _, _, _, _, _, h => by simp [eval] at h
   | _, _, _ + 1, _, _, .lit hv, _, hH, h => by
     simp only [eval, Option.some.injEq] at h
-    exact ⟨_, _, h.symm, rfl, hH, List.prefix_refl _, hasTy_subst θ _ _ (hasTy_mono (List.nil_prefix) _ _ hv)⟩
+    exact ⟨_, _, h.symm, rfl, hH, List.prefix_refl _, hasTy_subst θ _ _ (hasTy_mono hH.2 _ _ hv)⟩
   | _, _, _ + 1, s, _, .param (i := i) hi hΓ, hp, hH, h => by
     simp only [eval, Option.some.injEq] at h
     have hΓ' : ((Γ.take a).map (VTy.subst θ))[i]? = some (VTy.subst θ _) :=
@@ -792,7 +799,7 @@ theorem DefaultE.eval_ok {P : Prog} {S : Sigs} (hS : S.ClosedClasses) {a : Nat} 
       obtain ⟨rfl, rfl⟩ := hvs
       simp only [Option.some.injEq] at hk
       rw [VTy.closed_map_subst θ (hS _ _ hc)] at hft
-      have hx2 : tagsOf s1.g.heap <+: tagsOf (s1.g.heap ++ [⟨t, vs⟩]) := by simp [tagsOf]
+      have hx2 : tagsOf s1.g.heap <+: tagsOf (s1.g.heap.push ⟨t, vs⟩) := by simp [tagsOf_push]
       refine ⟨_, _, hk.symm, hfr, HeapOK.new hH1 hc hft, hx1.trans hx2, ?_⟩
       simp [HeapOp.apply, hasTy, tagsOf, ht]
     · obtain ⟨vs', s1', hvs, -⟩ := DefaultEL.eval_ok hS n hds hp hH hx
@@ -937,7 +944,7 @@ theorem hasTy_void : hasTy Ξ Value.void VTy.void = true := rfl
 /-- The rules of `Typed` but subsumption, over `Typed` premises: the last
     step of a derivation, once subsumption is peeled off (`stepE_d`). -/
 inductive TypedR (S : Sigs) (Γ : List VTy) (ρ : VTy) : Expr → VTy → Prop
-  | lit {v τ} : hasTy [] v τ = true → TypedR S Γ ρ (.lit v) τ
+  | lit {v τ} : hasTy S.protos v τ = true → TypedR S Γ ρ (.lit v) τ
   | local {i τ} : Γ[i]? = some τ → TypedR S Γ ρ (.local i) τ
   | assign {i e τ} : Γ[i]? = some τ → Typed S Γ ρ e τ → TypedR S Γ ρ (.assign i e) τ
   | seq {a b σ τ} : Typed S Γ ρ a σ → Typed S Γ ρ b τ → TypedR S Γ ρ (.seq a b) τ
@@ -972,7 +979,7 @@ theorem heap_args {S : Sigs} {Γ : List VTy} {ρ : VTy} {op : HeapOp} {es : List
   | heap_isTag he => exact ⟨_, .cons he .nil⟩
 
 /-- A reference argument: the object it refers to, of a class in its type. -/
-theorem ref_arg {Ξ : List Nat} {h : List Obj} (hΞ : Ξ = tagsOf h) {v : Value} {ts : List Nat}
+theorem ref_arg {Ξ : List Nat} {h : Array Obj} (hΞ : Ξ = tagsOf h) {v : Value} {ts : List Nat}
     (hv : hasTy Ξ v (.ref ts) = true) : ∃ a o, v = .ref a ∧ h[a]? = some o ∧ o.tag ∈ ts := by
   obtain ⟨a, t, rfl, hta, htin⟩ := hasTy_ref hv
   subst hΞ
@@ -997,7 +1004,7 @@ theorem stepE_rule {P : Prog} {S : Sigs} (hP : ProgTyped P S) (n : Nat)
   | lit v =>
     simp only [eval, Option.some.injEq] at h; subst h
     cases ht with
-    | lit hv => exact ⟨hf, hasTy_mono List.nil_prefix _ _ hv, hH, List.prefix_refl _⟩
+    | lit hv => exact ⟨hf, hasTy_mono hH.2 _ _ hv, hH, List.prefix_refl _⟩
   | «local» i =>
     simp only [eval, Option.some.injEq] at h; subst h
     cases ht with
@@ -1057,7 +1064,7 @@ theorem stepE_rule {P : Prog} {S : Sigs} (hP : ProgTyped P S) (n : Nat)
               split at hc
               · next har =>
                 simp only [Option.some.injEq] at hc; subst hc
-                obtain ⟨Γ', hft⟩ := hP.2.2 f fn' ps τ₀ hfn hsig
+                obtain ⟨Γ', hft⟩ := hP.2.2.1 f fn' ps τ₀ hfn hsig
                 obtain ⟨b, ds, hbody, hds, hbt⟩ := hft.body
                 have hlen := allTys_length hvs
                 rw [hbody] at hb
@@ -1148,19 +1155,19 @@ theorem stepE_rule {P : Prog} {S : Sigs} (hP : ProgTyped P S) (n : Nat)
       · obtain ⟨hf1, hr1, hH1, hp1⟩ := IE _ _ _ _ _ _ hx he hf hH
         exact ⟨hf1, ResOK_retype hr hr1, hH1, hp1⟩
   | heap op es =>
-    simp only [eval] at h
+    simp only [eval, St.heapStep_eq] at h
     rcases bindL_some h with ⟨vs, s1, hx, hk⟩ | ⟨r1, s1, hx, rfl⟩
     · simp only [Option.some.injEq] at hk; subst hk
       cases ht with
       | heap_new hc htt hes =>
         rename_i t fs ts
         obtain ⟨hf1, hvs, hH1, hp1⟩ := IL _ _ _ _ _ _ hx hes hf hH
-        have hx2 : s1.tags <+: tagsOf (s1.g.heap ++ [⟨t, vs⟩]) := by simp [St.tags, tagsOf]
+        have hx2 : s1.tags <+: tagsOf (s1.g.heap.push ⟨t, vs⟩) := by simp [St.tags, tagsOf_push]
         have happ : (HeapOp.new t).apply vs s1.g =
-            (.ok (.ref s1.g.heap.length), { s1.g with heap := s1.g.heap ++ [⟨t, vs⟩] }) := rfl
+            (.ok (.ref s1.g.heap.size), { s1.g with heap := s1.g.heap.push ⟨t, vs⟩ }) := rfl
         simp only [happ]
         refine ⟨allTys_mono hx2 _ _ hf1, ?_, HeapOK.new hH1 hc hvs, hp1.trans hx2⟩
-        simp [ResOK, hasTy, tagsOf, htt]
+        simp [ResOK, hasTy, tagsOf_push, tagsOf, htt]
       | heap_get he hft =>
         rename_i k e₀ ts
         obtain ⟨hf1, hvs, hH1, hp1⟩ := IL _ _ _ _ _ _ hx (.cons he .nil) hf hH
@@ -1168,7 +1175,7 @@ theorem stepE_rule {P : Prog} {S : Sigs} (hP : ProgTyped P S) (n : Nat)
           rcases vs with _ | ⟨v, _ | ⟨_, _⟩⟩ <;> simp [LResOK, allTys] at hvs
           exact ⟨v, rfl, hvs⟩
         obtain ⟨a, o, rfl, ho, htin⟩ := ref_arg rfl hv
-        obtain ⟨fs, hc, hfs⟩ := hH1 a o ho
+        obtain ⟨fs, hc, hfs⟩ := hH1.1 a o (by rw [Array.getElem?_toList]; exact ho)
         obtain ⟨fs', hc', hk⟩ := hft.2 _ htin
         rw [hc] at hc'; simp only [Option.some.injEq] at hc'; rw [← hc'] at hk
         obtain ⟨w, hw, hwt⟩ := allTys_get hfs hk
@@ -1184,21 +1191,21 @@ theorem stepE_rule {P : Prog} {S : Sigs} (hP : ProgTyped P S) (n : Nat)
           rcases vs with _ | ⟨r, _ | ⟨w, _ | ⟨_, _⟩⟩⟩ <;> simp [LResOK, allTys] at hvs
           exact ⟨r, w, rfl, hvs.1, hvs.2⟩
         obtain ⟨a, o, rfl, ho, htin⟩ := ref_arg rfl hr
-        obtain ⟨fs, hc, hfs⟩ := hH1 a o ho
+        obtain ⟨fs, hc, hfs⟩ := hH1.1 a o (by rw [Array.getElem?_toList]; exact ho)
         obtain ⟨fs', hc', hk⟩ := hft.2 _ htin
         rw [hc] at hc'; simp only [Option.some.injEq] at hc'; rw [← hc'] at hk
         have hklt : k < o.fields.length := by rw [allTys_length hfs]; exact lt_of_getElem?_some hk
         have htg := tagsOf_set (o' := { o with fields := o.fields.set k w }) ho rfl
         have happ : (HeapOp.set k).apply [.ref a, w] s1.g =
-            (.ok w, { s1.g with heap := s1.g.heap.set a { o with fields := o.fields.set k w } }) := by
+            (.ok w, { s1.g with heap := s1.g.heap.setIfInBounds a { o with fields := o.fields.set k w } }) := by
           simp [HeapOp.apply, ho, hklt]
         simp only [happ]
         refine ⟨?_, ?_, HeapOK.set hH1 ho hc hk hw, ?_⟩
-        · show allTys (tagsOf (s1.g.heap.set a _)) s1.fr Γ = true
+        · show allTys (tagsOf (s1.g.heap.setIfInBounds a _)) s1.fr Γ = true
           rw [htg]; exact hf1
-        · show hasTy (tagsOf (s1.g.heap.set a _)) w τ = true
+        · show hasTy (tagsOf (s1.g.heap.setIfInBounds a _)) w τ = true
           rw [htg]; exact hw
-        · show s.tags <+: tagsOf (s1.g.heap.set a _)
+        · show s.tags <+: tagsOf (s1.g.heap.setIfInBounds a _)
           rw [htg]; exact hp1
       | heap_tag he =>
         rename_i e₀ ts
@@ -1402,6 +1409,45 @@ theorem Eval.typed {P : Prog} {S : Sigs} (hP : ProgTyped P S) {s e r s' Γ ρ τ
   obtain ⟨n, hn⟩ := eval_iff.mp h
   exact (typed_all hP n n (Nat.le_refl _)).1 s e (r, s') Γ ρ τ hn ht hf hH
 
+/-- Literals evaluate to their values, in place. -/
+theorem EvalList.lits {P : Prog} : ∀ {vs : List Value} {s lr s'}, EvalList P s (vs.map .lit) lr s' →
+    lr = .ok vs ∧ s' = s
+  | [], _, _, _, h => by cases h; exact ⟨rfl, rfl⟩
+  | v :: vs, _, _, _, h => by
+    cases h with
+    | cons_ok h₁ h₂ =>
+      cases h₁
+      obtain ⟨h₃, rfl⟩ := EvalList.lits h₂
+      cases h₃
+      exact ⟨rfl, rfl⟩
+    | cons_stop h₁ hr => cases h₁; simp at hr
+    | cons_stop_tail h₁ h₂ => cases h₁; obtain ⟨h, -⟩ := EvalList.lits h₂; cases h
+
+/-- **The prelude** (#37): after it, the heap has the prototypes appended,
+    and nothing else has changed. -/
+theorem Eval.of_protoPrelude {P : Prog} : ∀ (objs : List (Nat × List Value)) {s : St} {e : Expr} {r s'},
+    Eval P s (protoPrelude objs e) r s' →
+    Eval P ⟨s.fr, { s.g with heap := s.g.heap ++ protoObjs objs }⟩ e r s'
+  | [], s, e, r, s', h => by simpa [protoPrelude, protoObjs] using h
+  | (t, vs) :: rest, s, e, r, s', h => by
+    simp only [protoPrelude] at h
+    cases h with
+    | seq_ok hn hrest =>
+      cases hn with
+      | heap_ok hl =>
+        obtain ⟨h₁, rfl⟩ := EvalList.lits hl
+        cases h₁
+        have := Eval.of_protoPrelude rest hrest
+        simpa [HeapOp.apply, protoObjs, List.append_assoc] using this
+      | heap_stop hl => obtain ⟨h₁, -⟩ := EvalList.lits hl; cases h₁
+    | seq_stop hn hr =>
+      cases hn with
+      | heap_ok hl =>
+        obtain ⟨h₁, rfl⟩ := EvalList.lits hl
+        cases h₁
+        simp [HeapOp.apply] at hr
+      | heap_stop hl => obtain ⟨h₁, -⟩ := EvalList.lits hl; cases h₁
+
 /-- **Type safety of programs.** In a typed program whose `Main` takes no
     parameters and returns `τ`, no run raises a type error, and every run
     ends with a well-typed heap in which a successful run's value has type
@@ -1411,11 +1457,44 @@ theorem Runs.typed {P : Prog} {S : Sigs} (hP : ProgTyped P S) {τ r out}
     r ≠ .err .type ∧ ∃ fr heap, Eval P Prog.initSt (.call P.main []) r ⟨fr, ⟨out, heap⟩⟩ ∧
       HeapOK S heap ∧ ∀ v, r = .ok v → hasTy (tagsOf heap) v τ = true := by
   obtain ⟨fr, heap, h⟩ := h
-  have ht : Typed S [] τ (.call P.main []) τ := by
-    simpa [VTy.subst_id] using Typed.call (Γ := []) (ρ := τ) VTy.var hm .nil
-  obtain ⟨-, hr, hH, -⟩ := Eval.typed hP h ht rfl (fun a o h => by simp [Prog.initSt] at h)
-  refine ⟨?_, fr, heap, h, hH, ?_⟩
-  · intro he; subst he; exact hr rfl
-  · intro v hv; subst hv; exact hr
+  rcases hP.2.2.2 with hnil | ⟨fn, objs, m, hfn, har, hns, hbody, htags, hHo, hsm⟩
+  · -- no prototypes: the empty heap is well typed
+    have ht : Typed S [] τ (.call P.main []) τ := by
+      simpa [VTy.subst_id] using Typed.call (Γ := []) (ρ := τ) VTy.var hm .nil
+    have hH0 : HeapOK S Prog.initSt.g.heap :=
+      ⟨fun a o h => by simp [Prog.initSt] at h, by simp [Prog.initSt, tagsOf, hnil]⟩
+    obtain ⟨-, hr, hH, -⟩ := Eval.typed hP h ht rfl hH0
+    refine ⟨?_, fr, heap, h, hH, ?_⟩
+    · intro he; subst he; exact hr rfl
+    · intro v hv; subst hv; exact hr
+  · -- `Main` is the prelude, then a call of `m` from the heap of prototypes
+    have hm' : S.fns[m]? = some ([], τ) := hsm.trans hm
+    have ht : Typed S [] τ (.call m []) τ := by
+      simpa [VTy.subst_id] using Typed.call (Γ := []) (ρ := τ) VTy.var hm' .nil
+    suffices key : ∀ {s'}, Eval P Prog.initSt (.call P.main []) r s' →
+        r ≠ .err .type ∧ HeapOK S s'.g.heap ∧ ∀ v, r = .ok v → hasTy (tagsOf s'.g.heap) v τ = true by
+      obtain ⟨h1, h2, h3⟩ := key h
+      exact ⟨h1, fr, heap, h, h2, h3⟩
+    intro s' hcall
+    cases hcall with
+    | @call_ok _ _ _ _ _ _ _ r₀ hl hc hb =>
+      cases hl
+      have hc' : P.callable P.main ([] : List Value).length = some fn := by simp [Prog.callable, hfn, har]
+      rw [hc'] at hc; cases hc
+      rw [hbody] at hb
+      have hb' := Eval.of_protoPrelude objs hb
+      have hfr : frameOf fn [] = [] := by simp [frameOf, har, hns]
+      simp only [Prog.initSt, hfr, Array.empty_append] at hb'
+      obtain ⟨-, hr, hH, -⟩ := Eval.typed hP hb' ht rfl hHo
+      refine ⟨?_, hH, ?_⟩
+      · intro he
+        cases r₀ <;> simp_all [retOf, ResOK]
+      · intro v hv
+        cases r₀ <;> simp_all [retOf, ResOK]
+    | call_bad hl hc =>
+      cases hl
+      have hc' : P.callable P.main 0 = some fn := by simp [Prog.callable, hfn, har]
+      simp [hc'] at hc
+    | call_stop hl => cases hl
 
 end OpenVerse
