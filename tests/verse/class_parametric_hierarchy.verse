@@ -1,6 +1,7 @@
 # Parametric classes in hierarchies (#39). A subclass passes its type
-# parameters to its parent (in any order), or fixes the parent's type
-# arguments; it cannot add type parameters of its own yet.
+# parameters to its parent (in any order), fixes the parent's type
+# arguments, or adds type parameters of its own; one that fixes or adds
+# cannot override.
 
 shape(t:type) := class<abstract>:
     Label:t
@@ -40,6 +41,11 @@ swap(a:type, b:type) := class(pair(b, a)):
     Mine:a
     Flip():pair(a, b) = pair(a, b){First := Mine, Second := First}
 
+# a subclass that adds a type parameter
+named(t:type, n:type) := class(cell(t)):
+    Name:n
+    Both():tuple(t, n) = (Value, Name)
+
 Kind(S:shape(string)):string =
     if (Q := square[S]) then "square of side {Q.Side}"
     else if (R := rect[S]) then "rect {R.W} by {R.H}"
@@ -71,3 +77,8 @@ Main():void =
     C:cell(int) = I
     Print("{C.Get()}")
     if (I2 := intcell[C]) then Print("an intcell")
+    N := named(int, string){Value := 1, Name := "one"}
+    set N.Value = 2
+    Cs:[]cell(int) = array{N, I}
+    for (Ci : Cs) { Print("{Ci.Get()}") }
+    Print("{N.Both()(0)} {N.Both()(1)}")

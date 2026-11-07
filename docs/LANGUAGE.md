@@ -241,12 +241,14 @@ circle := class(shape, labelled):
 - **Parametric classes.** A parametric class is a reference like any other
   (#39): `stack(t)` can have `var` fields, be `<unique>`, and refer to
   itself (`node(t) := class: Value:t; var Next:?node(t) = false`). It can be
-  in a hierarchy: a subclass gives its parent type arguments,
-  `square(t) := class(shape(t))`, and each of its own type parameters must
-  be one of them (in any order: `swap(a, b) := class(pair(b, a))`), or it
-  fixes them, `intcell := class(cell(int))`. A class that fixes or repeats
-  them cannot override a method, since code generic over the parent could
-  not call it. A cast `square[S]` takes its type arguments from `S`'s. A method
+  in a hierarchy: a subclass gives its parent type arguments, from its own
+  type parameters (`square(t) := class(shape(t))`, in any order:
+  `swap(a, b) := class(pair(b, a))`), fixed ones
+  (`intcell := class(cell(int))`), and it may have type parameters of its
+  own (`named(t, n) := class(cell(t))`). A class that fixes, repeats or adds
+  type arguments cannot override a method, since code generic over the
+  parent could not call it. A cast `square[S]` takes its type arguments
+  from `S`'s, and is refused when it would need more. A method
   of a parametric class is generic over the class's type parameters, then
   its own. The type arguments come from the receiver, and the body is
   checked once in Verse Core (see
@@ -282,9 +284,8 @@ circle := class(shape, labelled):
   is a struct or container that holds one.
 - **Not yet supported** (each rejected with a message):
   - constructor functions;
-  - a subclass with type parameters of its own (`pair(t, u) :=
-    class(base(t))`), overrides in a subclass that fixes its parent's type
-    arguments, and parametric classes with interfaces;
+  - overrides in a subclass that fixes, repeats or adds type arguments,
+    and parametric classes with interfaces;
   - `set` of an interface field that sits at different places in the
     classes implementing the interface (reading it works);
   - overriding a method with its own type parameters;

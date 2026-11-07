@@ -158,11 +158,24 @@ partial def TyEnv.rootOf (env : TyEnv) (d : String) : String :=
   | some q => env.rootOf q
   | none => d
 
-/-- The type arguments of `d(args)` in Verse Core (#39): those of the root
-    of its class chain, so that every class in a hierarchy has the same ones
-    (a subclass's type parameters are among its parent's type arguments). -/
-def TyEnv.coreArgs (env : TyEnv) (d : String) (args : List Ty) : List Ty :=
-  env.upArgs d args (env.rootOf d)
+/-- The type parameters of class `d` that are not among its parent's type
+    arguments (#39): `u`, for `pair(t, u) := class(base(t))`. -/
+def TyEnv.extraParams (env : TyEnv) (d : String) : List String :=
+  let ps := ((env.sparams.lookup d).getD []).map (·.1)
+  let qargs := (env.pargs.lookup d).getD []
+  ps.filter fun p => !qargs.any fun | .param v _ => v == p | _ => false
+
+/-- The type arguments of `d(args)` in Verse Core (#39): its parent's, then
+    its own type parameters that are not among them. So a class's are an
+    extension of every class's above it, and objects of `pair(int, string)
+    := class(base(int))` are also `base(int)`s (Core's prefix subtyping). -/
+partial def TyEnv.coreArgs (env : TyEnv) (d : String) (args : List Ty) : List Ty :=
+  let ps := ((env.sparams.lookup d).getD []).map (·.1)
+  let σ := ps.zip args
+  let extras := (env.extraParams d).map fun p => (σ.lookup p).getD Ty.void
+  match (env.info d).parent with
+  | some q => env.coreArgs q (((env.pargs.lookup d).getD []).map (·.subst σ)) ++ extras
+  | none => args
 
 /-- Where each type parameter of class `d` sits among its Verse Core type
     arguments (`coreArgs`): the type variables of its class table entry. -/
@@ -1264,6 +1277,8 @@ partial def elabCast (ctx : Ctx) (p : Pos) (T : String) (args : List SExpr) (bra
   if parametric && env.rootOf S != env.rootOf T then
     eerr p s!"cannot cast a {S} to the parametric class {T}: its type arguments would be unknown"
   let targs := if env.isSub S T then env.upArgs S sargs T else env.argsBelow S sargs T
+  if parametric && (env.coreArgs T targs).length > (env.coreArgs S sargs).length then
+    eerr p s!"cannot cast a {r.ty.show} to {T}: {T} has type parameters that {S} does not have, which would be unknown"
   let tty : Ty := .struct T targs
   if !bracket then
     if !env.isSub S T then
@@ -2143,11 +2158,7 @@ def elabProgram (allTops00 : List STop) (opts : Options := {}) : Except String C
       if !qd.isIface then
         if qargs.length != qd.tps.length then
           throw s!"{p.show}: {q} takes {qd.tps.length} type argument(s), found {qargs.length}"
-        -- each of the class's own type parameters is one of its parent's type
-        -- arguments, so the class has the same Verse Core type arguments (#39)
-        for tp in cd.tps do
-          if !qargs.any (fun | .name x => x == tp.name | _ => false) then
-            throw s!"{p.show}: type parameter {tp.name} of {cd.name} must be one of {q}'s type arguments, as in class({q}({tp.name})) (a subclass cannot add type parameters yet, #39)"
+
       if qd.isIface then ifaces := ifaces.push q
       else
         if cd.isIface then throw s!"{p.show}: interface {cd.name} cannot extend class {q}"
@@ -2357,19 +2368,22 @@ def elabProgram (allTops00 : List STop) (opts : Options := {}) : Except String C
           pure ty
         pargs := pargs.push (cd.name, tys)
   env := { env with pargs := pargs.toList }
-  -- a class whose Verse Core type arguments are not its own distinct type
-  -- parameters (it fixes or repeats its parent's) cannot override: code
-  -- generic over the hierarchy could not call its implementation
-  for cd in cdefs do
-    let ps := ((env.sparams.lookup cd.name).getD []).map fun (v, c) => Ty.param v c
-    let cs := env.coreArgs cd.name ps
+  -- a class overrides a method only if its Verse Core type arguments are its
+  -- own distinct type parameters, as many as the declaring class's: code
+  -- generic over that class can then call its implementation (it could not
+  -- give it a type argument it fixes, nor one it adds)
+  for (mp, dm, qm) in overridePairs do
+    let d := (dm.splitOn ".").head!
+    let q := (qm.splitOn ".").head!
+    let mn := (dm.splitOn ".").getLast!
+    let core (c : String) : List Ty :=
+      env.coreArgs c (((env.sparams.lookup c).getD []).map fun (v, k) => Ty.param v k)
+    let cs := core d
     let ownVars := cs.all (fun | .param .. => true | _ => false) && (cs.map Ty.show).eraseDups.length == cs.length
     if !ownVars then
-      for m in cd.methods do
-        if let .fn mp mn _ _ effs _ _ := m then
-          if effs.contains "override" then
-            let r := env.rootOf cd.name
-            throw s!"{mp.show}: {cd.name} fixes or repeats the type arguments of {r}, so it cannot override {mn} yet: code generic over {r} could not call it (#39)"
+      throw s!"{mp.show}: {d} fixes or repeats the type arguments of {env.rootOf d}, so it cannot override {mn} yet: code generic over {q} could not call it (#39)"
+    if cs.length != (core q).length then
+      throw s!"{mp.show}: {d} has type parameters that {q} does not have, so it cannot override {mn} yet: code generic over {q} could not give them (#39)"
   env := { env with protos := env.makeProtos }
   if let some n := env.recursiveStruct? then
     throw s!"struct {n} contains itself (recursive struct types are not supported)"
