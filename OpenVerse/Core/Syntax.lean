@@ -47,6 +47,8 @@ inductive Prim where
   | fadd | fsub | fmul | fdiv | fneg | fabs | fmin | fmax
   | flt | fle | fgt | fge
   | fofInt | ffloor | fceil | fround | ftrunc
+  -- a float literal in the binary format: the float of an int's bits
+  | fofBits
   deriving Repr, DecidableEq, Inhabited
 
 /-- Operations on the heap (#20). Each is a function of the values of its

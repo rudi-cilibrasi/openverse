@@ -273,6 +273,7 @@ theorem PrimTy.subst (θ : Nat → VTy) {op ts τ} (h : PrimTy op ts τ) :
   | funary hop => simpa using PrimTy.funary hop
   | fcmp hop => simpa using PrimTy.fcmp hop
   | fofInt => simpa using PrimTy.fofInt
+  | fofBits => simpa using PrimTy.fofBits
   | ftoInt hop => simpa using PrimTy.ftoInt hop
   | toStrFloat => simpa using PrimTy.toStrFloat
   | fail => exact .fail
@@ -591,6 +592,11 @@ theorem prim_typed {op ts τ ρ} {vs : List Value} (hp : PrimTy op ts τ) (hv : 
       simp only [List.mem_cons, List.mem_nil_iff, or_false] at hop
       rcases hop with rfl | rfl | rfl | rfl <;> exact cmpRes_ok (by simp [hasTy])
   | fofInt =>
+    rcases vs with _ | ⟨a, _ | ⟨_, _⟩⟩ <;> simp only [allTys, Bool.and_eq_true, Bool.false_eq_true, and_false, and_true] at hv
+    all_goals
+      obtain ⟨x, rfl⟩ := hasTy_int hv
+      simp [Prim.apply, ResOK, hasTy]
+  | fofBits =>
     rcases vs with _ | ⟨a, _ | ⟨_, _⟩⟩ <;> simp only [allTys, Bool.and_eq_true, Bool.false_eq_true, and_false, and_true] at hv
     all_goals
       obtain ⟨x, rfl⟩ := hasTy_int hv

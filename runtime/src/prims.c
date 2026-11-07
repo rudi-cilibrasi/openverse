@@ -493,6 +493,10 @@ void vx_prim_apply(vx_ctx *c, uint32_t op, uint32_t k, const vx_val *a, size_t n
     case VX_P_FTRUNC:
         if (f1) { to_int(r, VX_FTRUNC, &a[0]); return; }
         break;
+    /* | .fofBits, [.int i] => .ok (.float (canon (ofBits i))) (a float literal) */
+    case VX_P_FOFBITS:
+        if (i1) { ok_val(r, VX_T_FLOAT, vx_fcanon(vx_fval(a[0].bits))); return; }
+        break;
     default:
         break;
     }

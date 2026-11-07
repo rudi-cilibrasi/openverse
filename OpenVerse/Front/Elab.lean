@@ -32,6 +32,8 @@ inductive Ty where
   | int | logic | char | void
   /-- A Unicode scalar value; an `int` in Verse Core. -/
   | char32
+  /-- `float` (#127): an IEEE 64-bit float, `VTy.float` in Verse Core. -/
+  | float
   /-- `rational`, the type of `X / Y` on ints (Book of Verse ch. 2): in
       Verse Core the tuple of its numerator and denominator, in lowest
       terms with a positive denominator (so tuple equality is equality). -/
@@ -55,7 +57,7 @@ inductive Ty where
   deriving Repr, Inhabited
 
 partial def Ty.eqv : Ty → Ty → Bool
-  | .int, .int | .logic, .logic | .char, .char | .char32, .char32 | .rational, .rational | .void, .void | .never, .never => true
+  | .int, .int | .logic, .logic | .char, .char | .char32, .char32 | .rational, .rational | .float, .float | .void, .void | .never, .never => true
   | .arr a, .arr b => a.eqv b
   | .opt a, .opt b => a.eqv b
   | .tup as, .tup bs => as.length == bs.length && (as.zip bs).all fun (a, b) => a.eqv b
@@ -69,7 +71,7 @@ partial def Ty.eqv : Ty → Ty → Bool
 instance : BEq Ty := ⟨Ty.eqv⟩
 
 partial def Ty.show : Ty → String
-  | .int => "int" | .logic => "logic" | .char => "char" | .char32 => "char32" | .rational => "rational" | .void => "void"
+  | .int => "int" | .logic => "logic" | .char => "char" | .char32 => "char32" | .rational => "rational" | .float => "float" | .void => "void"
   | .never => "false"
   | .arr .char => "string"
   | .arr t => "[]" ++ t.show
@@ -258,7 +260,7 @@ partial def TyEnv.disjoint (env : TyEnv) : Ty → Ty → Bool
     else if isCls a || isCls b then true
     else a != b || (as.length == bs.length && (as.zip bs).any fun (x, y) => env.disjoint x y)
   | .enum a, .enum b => a != b
-  | .int, .int | .logic, .logic | .char, .char | .char32, .char32 | .rational, .rational => false
+  | .int, .int | .logic, .logic | .char, .char | .char32, .char32 | .rational, .rational | .float, .float => false
   | _, _ => true
 
 /-- Whether two overloads (their positional parameters, then named ones:
@@ -473,6 +475,7 @@ def TyEnv.recursiveStruct? (env : TyEnv) : Option String :=
 partial def Ty.toVTy (env : TyEnv) : Ty → VTy
   | .int | .char32 => .int
   | .rational => .tup [.int, .int]
+  | .float => .float
   | .logic => .logic
   | .char => .char
   | .void => VTy.void
@@ -736,7 +739,7 @@ where
 def methodBase (x : String) : String := (x.splitOn "$ov").headD x
 
 def builtins : List String :=
-  ["Print", "ToString", "Floor", "Ceil", "Abs", "Min", "Max", "Quotient", "Mod", "Err", "ConcatenateMaps"]
+  ["Print", "ToString", "Floor", "Ceil", "Round", "Int", "Abs", "Min", "Max", "Quotient", "Mod", "Err", "ConcatenateMaps"]
 
 partial def resolveTy (env : TyEnv) (p : Pos) : STy → EM Ty
   | .name "int" => pure .int
@@ -746,7 +749,7 @@ partial def resolveTy (env : TyEnv) (p : Pos) : STy → EM Ty
   | .name "rational" => pure .rational
   | .name "string" => pure Ty.string
   | .name "void" => pure .void
-  | .name "float" => eerr p "float is not supported by openverse v1"
+  | .name "float" => pure .float
   | .name n =>
     if let some t := env.tvars.lookup n then pure t
     else if (env.structs.lookup n).isSome then
@@ -831,6 +834,7 @@ def TyEnv.dictSlot? (env : TyEnv) (dictBase : Nat) (n : String) : Option Nat :=
 partial def witness (env : TyEnv) (dictBase : Nat) (dictVars : List String) : Ty → EM Expr
   | .int | .char32 | .enum _ => pure (.lit (.int 0))
   | .rational => pure (.lit (.tup [.int 0, .int 1]))
+  | .float => pure (.lit (.float 0))
   | .logic => pure (.lit (.logic false))
   | .char => pure (.lit (.char 0))
   | .void | .never => pure (.lit .void)
@@ -865,6 +869,7 @@ partial def _root_.OpenVerse.VTy.hasVar : VTy → Bool
 partial def protoValue (env : TyEnv) (done : List (String × Nat)) : Ty → Option Value
   | .int | .char32 | .enum _ => some (.int 0)
   | .rational => some (.tup [.int 0, .int 1])
+  | .float => some (.float 0)
   | .logic => some (.logic false)
   | .char => some (.char 0)
   | .void | .never => some .void
@@ -1198,9 +1203,9 @@ def toStringOf (p : Pos) (r : R) : EM Expr :=
   | .char32 => do
     let tc ← fresh .int
     return .seq (.assign tc r.e) (← utf8Of tc)
-  | .int | .char => pure (.prim .toStr [r.e])
+  | .int | .char | .float => pure (.prim .toStr [r.e])
   | .arr .char => pure r.e
-  | t => eerr p s!"no ToString for {t.show} (Verse defines it for int, char, char32 and string)"
+  | t => eerr p s!"no ToString for {t.show} (Verse defines it for int, float, char, char32 and string)"
 
 mutual
 partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
@@ -1210,6 +1215,7 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
     return ⟨.lit (.int n), .int⟩
   | .char _ c => return ⟨.lit (.char c), .char⟩
   | .char32 _ c => return ⟨.lit (.int c), .char32⟩
+  | .float _ b => return ⟨.lit (.float b), .float⟩
   | .str p parts =>
     let pieces ← parts.mapM fun part => match part with
       | .text s => pure (Expr.lit (Value.ofString s))
@@ -1271,7 +1277,8 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
     | t => eerr p s!"'?' needs an option or logic, found {t.show}"
   | .neg p e =>
     let r ← elabE ctx e (some .int)
-    if r.ty != .int then eerr p s!"unary '-' needs an int, found {r.ty.show}"
+    if r.ty == .float then return ⟨.prim .fneg [r.e], .float⟩
+    if r.ty != .int then eerr p s!"unary '-' needs an int or a float, found {r.ty.show}"
     return ⟨.prim .neg [r.e], .int⟩
   | .notE _ e =>
     let r ← elabE { ctx with canFail := true } e none
@@ -1280,6 +1287,10 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
     -- `X / Y` on ints: a rational, failing when `Y = 0` (#116)
     let ra ← elabE ctx a (some .int)
     let rb ← elabE ctx b (some .int)
+    -- (on floats, IEEE division: by zero an infinity or NaN, #127)
+    if ra.ty == .float && rb.ty == .float then return ⟨p2 .fdiv ra.e rb.e, .float⟩
+    if ra.ty == .float || rb.ty == .float then
+      eerr p s!"no operator '/' for {ra.ty.show} and {rb.ty.show} (an int is not a float: write X * 1.0)"
     if ra.ty == .rational || rb.ty == .rational then
       eerr p "'/' divides ints: openverse has no arithmetic on rationals (only Floor, Ceil and comparisons)"
     let es := [← coerce a.pos ra .int, ← coerce b.pos rb .int]
@@ -1298,6 +1309,12 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
     | "+", .int, .int => return ⟨p2 .add ra.e rb.e, .int⟩
     | "-", .int, .int => return ⟨p2 .sub ra.e rb.e, .int⟩
     | "*", .int, .int => return ⟨p2 .mul ra.e rb.e, .int⟩
+    -- floats (#127): no implicit int to float, except in `*` (`Count * 1.0`)
+    | "+", .float, .float => return ⟨p2 .fadd ra.e rb.e, .float⟩
+    | "-", .float, .float => return ⟨p2 .fsub ra.e rb.e, .float⟩
+    | "*", .float, .float => return ⟨p2 .fmul ra.e rb.e, .float⟩
+    | "*", .int, .float => return ⟨p2 .fmul (.prim .fofInt [ra.e]) rb.e, .float⟩
+    | "*", .float, .int => return ⟨p2 .fmul ra.e (.prim .fofInt [rb.e]), .float⟩
     | "+", .arr t, .arr u =>
       if t == u then return ⟨p2 .concat ra.e rb.e, .arr t⟩
       -- arrays of classes concatenate at a common supertype (#32)
@@ -1700,12 +1717,38 @@ partial def elabApp (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (brack
       match args with
       | [a] => return ⟨← toStringOf p (← elabE ctx a none), Ty.string⟩
       | _ => eerr p "ToString takes one argument"
-    | "Abs" => return ⟨.prim .abs (← elabInts ctx p args), .int⟩
+    | "Abs" =>
+      -- (of a float, #127)
+      if let [a] := args then
+        let r ← elabE ctx a none
+        if r.ty == .float then return ⟨.prim .fabs [r.e], .float⟩
+      return ⟨.prim .abs (← elabInts ctx p args), .int⟩
+    | "Round" | "Int" =>
+      -- a float to an int (#127): `Round` ties to even, `Int` towards zero;
+      -- failing on NaN, an infinity or out of range
+      needBracket name
+      match args with
+      | [a] =>
+        let r ← elabE ctx a (some .float)
+        if r.ty != .float then eerr p s!"{name} takes a float, found {r.ty.show}"
+        return ⟨.prim (if name == "Round" then .fround else .ftrunc) [r.e], .int⟩
+      | _ => eerr p s!"{name} takes one argument"
     | "Floor" | "Ceil" =>
+      -- (of a float, #127: failable, so with brackets)
+      let floatArg : Option SExpr := match args with
+        | [a] => some a
+        | _ => none
+      if let some a := floatArg then
+        if bracket then
+          let r ← elabE ctx a (some .float)
+          if r.ty != .float then eerr p s!"{name}[…] takes a float, found {r.ty.show} (write {name}(…) of a rational or an int)"
+          return ⟨.prim (if name == "Floor" then .ffloor else .fceil) [r.e], .int⟩
       match args with
       | [.bin bp "/" a b] =>
         let ra ← elabE ctx a (some .int)
         let rb ← elabE ctx b (some .int)
+        if ra.ty == .float || rb.ty == .float then
+          eerr p s!"{name} of a float can fail: call it with {name}[…]"
         if ra.ty == .rational || rb.ty == .rational then
           eerr bp "'/' divides ints: openverse has no arithmetic on rationals (only Floor, Ceil and comparisons)"
         let es := [← coerce a.pos ra .int, ← coerce b.pos rb .int]
@@ -1716,6 +1759,7 @@ partial def elabApp (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (brack
         let r ← elabE ctx e none
         match r.ty with
         | .int => return r
+        | .float => eerr p s!"{name} of a float can fail: call it with {name}[…]"
         | .rational =>
           let tr ← fresh .rational
           let tz ← fresh .int
@@ -1727,6 +1771,13 @@ partial def elabApp (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (brack
     | "Quotient" => needBracket name; return ⟨.prim .quotient (← elabInts ctx p args), .int⟩
     | "Mod" => needBracket name; return ⟨.prim .modulo (← elabInts ctx p args), .int⟩
     | "Min" | "Max" =>
+      -- (of floats, #127: NaN when either is)
+      if let [a, b] := args then
+        let ra ← elabE ctx a none
+        if ra.ty == .float then
+          let rb ← elabE ctx b (some .float)
+          if rb.ty != .float then eerr p s!"{name} takes two floats or two ints, found float and {rb.ty.show}"
+          return ⟨p2 (if name == "Min" then .fmin else .fmax) ra.e rb.e, .float⟩
       let es ← elabInts ctx p args
       let ta ← fresh .int
       let tb ← fresh .int
@@ -1741,7 +1792,7 @@ partial def elabApp (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (brack
       | [a] =>
         let r ← elabE ctx a none
         match r.ty with
-        | .int | .char | .arr .char => return ⟨.print (← toStringOf p r), .void⟩
+        | .int | .char | .float | .arr .char => return ⟨.print (← toStringOf p r), .void⟩
         | _ => return ⟨.seq r.e (.lit .void), .void⟩
       | _ => eerr p "internal: $Show"
     | _ =>
@@ -2341,6 +2392,12 @@ partial def ratTest (ctx : Ctx) (p : Pos) (op : String) (x y : R) : EM Expr := d
 partial def elabCmp (ctx : Ctx) (p : Pos) (a : SExpr) (rest : List (String × SExpr)) : EM R := do
   let opOf : String → Prim
     | "=" => .eq | "<>" => .ne | "<" => .lt | "<=" => .le | ">" => .gt | _ => .ge
+  -- (the orderings of floats are IEEE's, #127: false on NaN)
+  let ordOf (op : String) (t : Ty) : Prim :=
+    if t == .float then
+      match op with
+      | "<" => .flt | "<=" => .fle | ">" => .fgt | ">=" => .fge | _ => opOf op
+    else opOf op
   let checkTys (op : String) (ta tb : Ty) : EM Unit := do
     if op == "=" || op == "<>" then
       if !isComparable ctx.types ta || !isComparable ctx.types tb then
@@ -2362,8 +2419,9 @@ partial def elabCmp (ctx : Ctx) (p : Pos) (a : SExpr) (rest : List (String × SE
       -- that Verse Core holds differently, `1` and `(1, 1)`)
       if ratMismatch ta tb then
         eerr p s!"'{op}' compares values of different types, {ta.show} and {tb.show} (an int and a rational inside them: convert the ints first)"
-    else if !((ta == .int && tb == .int) || (ta == .char && tb == .char) || (ta == .char32 && tb == .char32)) then
-      eerr p s!"'{op}' compares ints, chars or char32s, found {ta.show} and {tb.show}"
+    else if !((ta == .int && tb == .int) || (ta == .char && tb == .char) || (ta == .char32 && tb == .char32) ||
+        (ta == .float && tb == .float)) then
+      eerr p s!"'{op}' compares ints, chars, char32s or floats, found {ta.show} and {tb.show}"
   let ra ← elabE ctx a none
   -- (an array and a tuple compare as arrays: the tuple is converted)
   let asArr (r : R) (other : Ty) : EM R := do
@@ -2381,7 +2439,7 @@ partial def elabCmp (ctx : Ctx) (p : Pos) (a : SExpr) (rest : List (String × SE
     let ra ← asArr ra rb.ty
     let rb ← asArr rb ra.ty
     checkTys op ra.ty rb.ty
-    return ⟨p2 (opOf op) ra.e rb.e, ra.ty⟩
+    return ⟨p2 (ordOf op ra.ty) ra.e rb.e, ra.ty⟩
   | _ =>
     -- a chain: each operand is evaluated once, every adjacent pair is checked,
     -- and the result is the leftmost operand (Book of Verse §5.4)
@@ -2403,7 +2461,7 @@ partial def elabCmp (ctx : Ctx) (p : Pos) (a : SExpr) (rest : List (String × SE
       else
         checkTys op (match prevTy, rb.ty with | .tup _, .arr _ => rb.ty | _, _ => prevTy) rb.ty
         steps := steps.push (.assign tb rb.e)
-        steps := steps.push (p2 (opOf op) prevE (.local tb))
+        steps := steps.push (p2 (ordOf op prevTy) prevE (.local tb))
       prev := tb
       prevTy := rb.ty
     return ⟨steps.foldr Expr.seq (.local t0), ra.ty⟩
@@ -2429,6 +2487,12 @@ partial def elabSet (ctx : Ctx) (p : Pos) (lhs0 : SExpr) (op : Option String) (r
         if t == u then pure (p2 .concat old new.e)
         else if refUp (← get).env (.arr u) (.arr t) then pure (p2 .concat old (← coerce p new (.arr t)))
         else eerr p s!"cannot concatenate {ty.show} and {new.ty.show}"
+    -- floats (#127)
+    | "+", .float, .float => pure (p2 .fadd old new.e)
+    | "-", .float, .float => pure (p2 .fsub old new.e)
+    | "*", .float, .float => pure (p2 .fmul old new.e)
+    | "*", .float, .int => pure (p2 .fmul old (.prim .fofInt [new.e]))
+    | "/", .float, .float => pure (p2 .fdiv old new.e)
     | "/", .int, _ => eerr p "set /= is not defined on int (integer division can fail)"
     | _, _, _ => eerr p s!"no operator '{o}=' for {ty.show} and {new.ty.show}"
   let mutableLocal (n : String) : EM Local := do

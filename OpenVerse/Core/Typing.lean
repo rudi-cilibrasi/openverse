@@ -278,6 +278,7 @@ inductive PrimTy : Prim → List VTy → VTy → Prop
   | funary {op} : op ∈ [Prim.fneg, .fabs] → PrimTy op [.float] .float
   | fcmp {op} : op ∈ [Prim.flt, .fle, .fgt, .fge] → PrimTy op [.float, .float] .float
   | fofInt : PrimTy .fofInt [.int] .float
+  | fofBits : PrimTy .fofBits [.int] .float
   | ftoInt {op} : op ∈ [Prim.ffloor, .fceil, .fround, .ftrunc] → PrimTy op [.float] .int
   | toStrFloat : PrimTy .toStr [.float] VTy.str
   | fail {t} : PrimTy .fail [] t

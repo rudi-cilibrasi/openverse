@@ -464,7 +464,7 @@ def tcPrim : Prim → List Expr → Option VTy → Option VTy
   | .flt, [a, b], m | .fle, [a, b], m | .fgt, [a, b], m | .fge, [a, b], m =>
     if (tc a (some .float)).isSome && (tc b (some .float)).isSome then expect m .float else none
   | .fneg, [a], m | .fabs, [a], m => if (tc a (some .float)).isSome then expect m .float else none
-  | .fofInt, [a], m => if (tc a (some .int)).isSome then expect m .float else none
+  | .fofInt, [a], m | .fofBits, [a], m => if (tc a (some .int)).isSome then expect m .float else none
   | .ffloor, [a], m | .fceil, [a], m | .fround, [a], m | .ftrunc, [a], m =>
     if (tc a (some .float)).isSome then expect m .int else none
   | .fail, [], some τ => some τ
@@ -864,6 +864,12 @@ theorem tcPrim_sound_of {op : Prim} {es : List Expr} {m τ} (ih : ∀ e ∈ es, 
     all_goals
       split at h
       · next hc => exact expect_typed h (.prim (.cons (chk (by simp) hc) .nil) .fofInt)
+      · simp at h
+  | fofBits =>
+    rcases es with _ | ⟨a, _ | ⟨b, rest⟩⟩ <;> simp only [tcPrim] at h <;> try (simp at h; done)
+    all_goals
+      split at h
+      · next hc => exact expect_typed h (.prim (.cons (chk (by simp) hc) .nil) .fofBits)
       · simp at h
   | ffloor | fceil | fround | ftrunc =>
     rcases es with _ | ⟨a, _ | ⟨b, rest⟩⟩ <;> simp only [tcPrim] at h <;> try (simp at h; done)

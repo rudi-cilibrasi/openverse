@@ -130,8 +130,7 @@ int    vx_store_move_out(vx_store *s, uint8_t *out, size_t ocap);
 #define VX_LIT_NONE   4
 #define VX_LIT_VOID   5
 #define VX_LIT_REF    6
-#define VX_LIT_FLOAT  7   /* the bits of a canonical double (#127) */
-#define VX_LIT_LAST   7
+#define VX_LIT_LAST   6
 
 /* Heap operations (the op of a HEAP node). */
 #define VX_H_NEW    0
@@ -189,7 +188,8 @@ int    vx_store_move_out(vx_store *s, uint8_t *out, size_t ocap);
 #define VX_P_FCEIL    43
 #define VX_P_FROUND   44
 #define VX_P_FTRUNC   45
-#define VX_P_LAST     45
+#define VX_P_FOFBITS  46   /* a float literal: PRIM fofBits [LIT int bits] */
+#define VX_P_LAST     46
 
 /*
  * One node.  Child indices are into the node table of the same function.

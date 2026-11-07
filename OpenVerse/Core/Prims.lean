@@ -158,6 +158,7 @@ def Prim.apply : Prim → List Value → Res
   | .fceil, [.float a] => VFloat.toIntRes .ceil a
   | .fround, [.float a] => VFloat.toIntRes .round a
   | .ftrunc, [.float a] => VFloat.toIntRes .trunc a
+  | .fofBits, [.int i] => .ok (.float (VFloat.canon (VFloat.ofBits (UInt64.ofNat (i % (2 ^ 64 : Int)).toNat))))
   | .fail, [] => .fail
   | .userErr, [] => .err .user
   | _, _ => .err .type
