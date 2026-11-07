@@ -149,11 +149,15 @@ position in every class below the one that declares it.
 - **Mutation.** `set` on a path writes the object it reaches in place and
   rebuilds only the values (structs, arrays, maps) between it and the leaf;
   rollback is the heap's (#20).
-- **Initial values.** A slot of a class type starts as a parameter whose
-  type is below it, or else as a placeholder object of the first concrete
-  class below it, with default fields (`DefaultE.new`). That costs an
-  allocation per call for such slots; the generic witness of a class type
-  argument is such a slot, so that the checker infers the instantiation
+- **Initial values.** A slot of a class type starts as a reference to a
+  *prototype* (#37): `Main` becomes a prelude that allocates one object per
+  concrete class, in an order where each refers only to earlier ones, then
+  calls `Main`. Literals are typed against the prototypes (`Sigs.protos`),
+  which every heap starts with (`HeapOK`), and `Runs.typed` evaluates the
+  prelude before preservation takes over. A class without a prototype
+  falls back to a parameter of a subtype or a new placeholder object
+  (`DefaultE.new`). The generic witness of a class type argument is a slot
+  of exactly that type, so that the checker infers the instantiation
   exactly.
 - **Parametric classes stay values** (#18): one option holding the fields.
   They cannot be in a hierarchy, and their field types mention type

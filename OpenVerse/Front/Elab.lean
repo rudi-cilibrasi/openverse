@@ -115,6 +115,10 @@ structure TyEnv where
   varFields : List (String × String) := []
   /-- The `<unique>` classes: compared by identity (#34). -/
   uniques : List String := []
+  /-- The prototype objects `Main`'s prelude allocates, in order (#37): the
+      class each one is of, with its tag and fields. A slot of class type
+      starts as a reference to one. -/
+  protos : List (String × Nat × List Value) := []
   /-- The type parameters in scope, in order (the j-th is `VTy.var j` in
       Verse Core), and what they stand for: themselves (`Ty.param`) in a
       generic function or struct definition, the type arguments of a struct
@@ -592,6 +596,42 @@ partial def _root_.OpenVerse.VTy.hasVar : VTy → Bool
   | .tup ts => ts.any VTy.hasVar
   | _ => false
 
+/-- The value of a prototype's field of type `t`: its type's default, or a
+    reference to a prototype already allocated (`done`: class, address). -/
+partial def protoValue (env : TyEnv) (done : List (String × Nat)) : Ty → Option Value
+  | .int | .enum _ => some (.int 0)
+  | .logic => some (.logic false)
+  | .char => some (.char 0)
+  | .void | .never => some .void
+  | .arr _ | .map _ _ => some (.arr [])
+  | .opt _ => some .none
+  | .tup ts => (ts.mapM (protoValue env done)).map .tup
+  | t@(.struct n ts) =>
+    if env.isRefClass n then
+      ((env.concreteBelow n).findSome? fun d => (done.lookup d).map Value.ref)
+    else if env.classes.contains n then some (t.toVTy env).default
+    else ((env.fields n ts).mapM fun (f : String × Ty × Option SExpr) => protoValue env done f.2.1).map .tup
+  | .param .. => none
+
+/-- One prototype per concrete class whose fields can be given (#37), in an
+    order where each refers only to earlier ones: their class, tag and
+    fields. -/
+def TyEnv.makeProtos (env : TyEnv) : List (String × Nat × List Value) := Id.run do
+  let concrete := env.classes.filter fun d =>
+    let i := env.info d; env.isRefClass d && !i.isIface && !i.isAbstract
+  let mut out : Array (String × Nat × List Value) := #[]
+  let mut done : List (String × Nat) := []
+  for _ in [0:concrete.length + 1] do
+    let mut progress := false
+    for d in concrete do
+      if (done.lookup d).isSome then continue
+      if let some vs := (env.fields d).mapM fun (f : String × Ty × Option SExpr) => protoValue env done f.2.1 then
+        done := done ++ [(d, out.size)]
+        out := out.push (d, env.tagOf d, vs)
+        progress := true
+    if !progress then break
+  return out.toList
+
 /-- Whether a Verse Core type mentions a reference. -/
 partial def _root_.OpenVerse.VTy.hasRef : VTy → Bool
   | .ref _ => true
@@ -619,6 +659,11 @@ partial def slotDefault (env : TyEnv) (dictBase : Nat) (params : List Ty) (visit
     | none => return .lit vt.default
   | .tup ts => return .prim .mkTup (← ts.mapM (slotDefault env dictBase params visiting))
   | .struct n ts =>
+    -- a prototype of a class below `n` (#37): no allocation
+    if env.isRefClass n then
+      let addrs := env.protos.zipIdx.filterMap fun (x : (String × Nat × List Value) × Nat) =>
+        if (env.concreteBelow n).contains x.1.1 then some x.2 else none
+      if let some a := addrs.head? then return .lit (.ref a)
     if env.isRefClass n then
       -- the first class below `n` whose placeholder needs no instance of a
       -- class whose placeholder is being built
@@ -2190,6 +2235,7 @@ def elabProgram (allTops00 : List STop) (opts : Options := {}) : Except String C
       structs := structs.push (n, fields)
     | _ => pure ()
   env := { env with structs := structs.toList }
+  env := { env with protos := env.makeProtos }
   if let some n := env.recursiveStruct? then
     if henv.classes.contains n then
       throw s!"the parametric class {n} contains itself (a parametric class is a value; only other classes can be recursive, #34)"
@@ -2451,11 +2497,21 @@ def elabProgram (allTops00 : List STop) (opts : Options := {}) : Except String C
       fns := fns.push fn
       slotTys := slotTys.push tys
     | _ => pure ()
-  let main ← match sigs.toList.find? (·.name == (if opts.entry.isSome then "$Do" else "Main")) with
+  let mainSig ← match sigs.toList.find? (·.name == (if opts.entry.isSome then "$Do" else "Main")) with
     | some s =>
       if s.isConst || !s.params.isEmpty then throw "Main must be a function with no parameters"
-      pure s.idx
+      pure s
     | none => throw "the program has no Main() function"
+  -- with prototypes, the program starts with a prelude that allocates them
+  -- and then calls `Main` (#37)
+  let protoList := env.protos.map fun (_, t, vs) => (t, vs)
+  let mut main := mainSig.idx
+  if !protoList.isEmpty then
+    main := fns.size
+    fns := fns.push { name := "$Main", arity := 0, nslots := 0, decides := mainSig.decides,
+                      writes := mainSig.fx.contains "writes",
+                      body := protoPrelude protoList (.call mainSig.idx []) }
+    slotTys := slotTys.push []
   let P : Prog := { fns := fns.toList, main }
   if !P.check then throw "internal error: the elaborated program does not pass Prog.check"
   if !P.checkControl then throw "internal error: the elaborated program does not pass Prog.checkControl"
@@ -2463,9 +2519,11 @@ def elabProgram (allTops00 : List STop) (opts : Options := {}) : Except String C
     gsigs.toList.map fun g =>
       let genv := genvOf g
       ((g.params ++ g.tparams.map fun (v, c) => Ty.param v c).map (Ty.toVTy genv), g.ret.toVTy genv)
-  -- the class table: the fields of each class, by tag (#34)
-  let S : Sigs := { fns := fsigs, classes := env.classes.map fun d =>
-    if env.isRefClass d then (env.fields d).map (·.2.1.toVTy env) else [] }
+  let fsigs := if protoList.isEmpty then fsigs else fsigs ++ [([], mainSig.ret.toVTy env)]
+  -- the class table: the fields of each class, by tag (#34); the prototypes (#37)
+  let classTable := env.classes.map fun d =>
+    if env.isRefClass d then (env.fields d).map (·.2.1.toVTy env) else []
+  let S : Sigs := { fns := fsigs, classes := classTable, protos := protoList.map (·.1) }
   if !P.checkTypes S slotTys.toList then
     throw "internal error: the elaborated program does not pass Prog.checkTypes"
   return { prog := P, sigs := S, slotTys := slotTys.toList }

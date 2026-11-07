@@ -188,11 +188,11 @@ circle := class(shape, labelled):
     (`node := class: var Next:?node = false`). A class that *requires* an
     instance of itself can never be constructed, and a variable of its type
     is an error.
-  - Every variable of a class type starts as a placeholder object (or as a
-    parameter of the function whose type is below it) until it is set, which
-    Verse code always does before reading it. A placeholder costs an
-    allocation on each call of the function, and objects are never freed;
-    #37 removes the cost.
+  - Every variable of a class type starts as a *prototype* until it is set,
+    which Verse code always does before reading it: one object per class,
+    made once before `Main` with default field values (#37), so it costs
+    nothing per call. A class whose only instances need an instance of
+    itself has no prototype, and a variable of its type is an error.
   - A `set` path that reaches an object evaluates the right-hand side once
     it has reached the object, and then reads the values inside it, so that
     a write the right-hand side makes through the object is kept
