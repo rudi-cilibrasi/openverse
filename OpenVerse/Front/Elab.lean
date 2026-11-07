@@ -1164,8 +1164,7 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
           eerr p s!"unknown identifier '{n}'"
   -- a constructor's `block:` (#11): it cannot fail, as a class's cannot
   | .app _ (.ident _ "$nofail") [e] false => elabE { ctx with canFail := false, inBlock := true } e exp
-  -- (a branch or body that is only a defer: its own scope, so it runs there)
-  | .app _ (.ident _ "$defer") _ _ => return (← elabSeq ctx [se] exp).1
+  | .app p (.ident _ "$defer") _ _ => eerr p "defer: is a statement: it has no value"
   | .app p f args bracket => elabApp ctx p f args bracket exp
   | .member p (.ident _ n) m =>
     match ctx.lookup n, ctx.types.enums.lookup n with

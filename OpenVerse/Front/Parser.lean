@@ -445,7 +445,11 @@ partial def parseBody (stop : Nat) : PM SExpr := do
 /-- `then` / `else` / `do` parts: a body, or an inline expression. -/
 partial def parseBranch (stop : Nat) : PM SExpr := do
   let t ← peekT
-  if t.isSym ":" || t.isSym "{" then parseBody stop else parseExpr stop
+  if t.isSym ":" || t.isSym "{" then parseBody stop else
+  -- (a branch that is only a `defer` is its own scope)
+  match ← parseExpr stop with
+  | e@(.app _ (.ident _ "$defer") _ _) => return .block t.pos [e]
+  | e => return e
 
 partial def parseIf (stop : Nat) : PM SExpr := do
   let t ← peekT
