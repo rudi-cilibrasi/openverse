@@ -145,6 +145,11 @@ Proof.
     Exists 0 p1 (@nil Z) bl (mkN 9 0 0 0 0 0 0). ex_node nd.
     rewrite app_nil_r. entailer!. apply npp_ok; auto; try lia.
     intros _. split; [ reflexivity | node_ok_tac ]. }
+  forward. forward_if.
+  { (* HEAP *) subst tg.
+    change (Vint (Int.repr 12), (z, (z, (z, (z, (z, l0)))))) with (node_val (mkN 12 0 0 0 0 0 0)).
+    forward_call (r, buf, shb, bs, p1, acap, bcap, p, nfns, entry, fns, args, al, bytes, bl, nslots, j, nd).
+    ret_loader. }
   forward.
   Exists 13 p1 (@nil Z) bl (mkN 0 0 0 0 0 0 0). ex_node nd.
   rewrite app_nil_r. entailer!. apply npp_err; auto; lia.
