@@ -701,7 +701,7 @@ where
   | [] => s!"{what} must be comparable, and {t.show} is not"
 
 def builtins : List String :=
-  ["Print", "ToString", "Floor", "Ceil", "Abs", "Min", "Max", "Quotient", "Mod", "Err"]
+  ["Print", "ToString", "Floor", "Ceil", "Abs", "Min", "Max", "Quotient", "Mod", "Err", "ConcatenateMaps"]
 
 partial def resolveTy (env : TyEnv) (p : Pos) : STy → EM Ty
   | .name "int" => pure .int
@@ -1513,6 +1513,51 @@ partial def elabApp (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (brack
     | "Print" =>
       let es ← elabArgs ctx p args [Ty.string]
       return ⟨.print es.head!, .void⟩
+    | "ConcatenateMaps" =>
+      -- the entries of every map, a later map's value winning for a key (Book
+      -- of Verse ch. 9): the first copied, then each other's pairs put in turn
+      let some a0 := args.head? | eerr p "ConcatenateMaps takes at least one map"
+      -- the maps' type: the expected one, else the first argument's that has
+      -- one alone (an empty map{} has none)
+      let mapExp : Option Ty ← match exp with
+        | some t@(.map ..) => pure (some t)
+        | _ =>
+          let st ← get
+          let mut found : Option Ty := none
+          for a in args do
+            if found.isNone then
+              found ← tryCatch (do let r ← elabE ctx a none; pure (match r.ty with | t@(.map ..) => some t | _ => none))
+                (fun _ => pure none)
+          set st
+          pure found
+      let mut rs : Array R := #[]
+      let mut jt? : Option Ty := none
+      for a in args do
+        let r ← elabE ctx a mapExp
+        let .map _ _ := r.ty | eerr a.pos s!"ConcatenateMaps takes maps, not {r.ty.show}"
+        match jt? with
+        | none => jt? := some r.ty
+        | some j =>
+          let j' ← tryCatch (join a.pos j r.ty mapExp) (fun _ =>
+            eerr a.pos s!"ConcatenateMaps takes maps of one type, not {j.show} and {r.ty.show}")
+          jt? := some j'
+        rs := rs.push r
+      let some jt := jt? | eerr p "ConcatenateMaps takes at least one map"
+      let .map kt vt := jt | eerr p s!"ConcatenateMaps takes maps, not {jt.show}"
+      let tm ← fresh jt
+      let some r0 := rs[0]? | eerr p "ConcatenateMaps takes at least one map"
+      let mut code : Expr := .assign tm (← coerce a0.pos r0 jt)
+      for (r, a) in rs.toList.tail.zip args.tail do
+        let ts ← fresh jt
+        let tpair ← fresh (.tup [kt, vt])
+        let tk ← fresh kt
+        let tv ← fresh vt
+        let ti ← fresh .int
+        let tidx ← fresh .int
+        let put := Expr.seq (.assign tk (.prim (.tupGet 0) [.local tpair]))
+          (.seq (.assign tv (.prim (.tupGet 1) [.local tpair])) (mapPut tm tk tv ti tidx))
+        code := .seq code (.seq (.assign ts (← coerce a.pos r jt)) (.forE tpair (.local ts) (.lit (.logic true)) put))
+      return ⟨.seq code (.local tm), jt⟩
     | "ToString" =>
       match args with
       | [a] => return ⟨← toStringOf p (← elabE ctx a none), Ty.string⟩
