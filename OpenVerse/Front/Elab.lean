@@ -1873,8 +1873,15 @@ partial def elabApp (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (brack
         let sigOf (o : String) : Option Sig := (ctx.methodDecl? c o).bind fun owner =>
           (ctx.sig? s!"{owner}.{o}").map fun sg => { sg with params := sg.params.drop 1 }
         let vis := ms.filter fun o => (ctx.methodDecl? c o).isSome
+        -- (a qualified call stays qualified: `X.(q:)M$ovK(…)`, #125)
+        let qualOf (o : String) : String :=
+          if m0.startsWith "(" then
+            match (m0.drop 1).toString.splitOn ":)" with
+            | [q, _] => s!"({q}:){o}"
+            | _ => o
+          else o
         if !vis.isEmpty then
-          return ← resolveOverload ctx p m vis sigOf (fun o => elabApp ctx p (.member mp obj o) args bracket exp) args
+          return ← resolveOverload ctx p m vis sigOf (fun o => elabApp ctx p (.member mp obj (qualOf o)) args bracket exp) args
       if let (true, some owner) := (env.classes.contains c, ctx.methodDecl? c m) then
         -- the slots the call covers (#70): every class below `c` must implement
         -- them alike, or the call must say which
@@ -3404,7 +3411,8 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     if sigs.length > 1 && classDefs.any (fun (n, _) => hierOf n == key.1 && (listsSeen n key.2).length > 1) then
       some (key, sigs)
     else none
-  let mangle (cn mn : String) (ctps mtps : List TParam) (ps : List SParam) (isOverride : Bool) : String :=
+  let mangle (cn mn : String) (ctps mtps : List TParam) (ps : List SParam) (isOverride : Bool)
+      (within : Option String) : String :=
     match mov.lookup (hierOf cn, mn) with
     | none => mn
     | some sigs =>
@@ -3413,7 +3421,15 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
         -- an override: the ancestor list it has, each in this class's terms
         -- (through the type arguments the class gives its parents)
         let mine := sigText ctps mtps ps
-        let cands : List (Nat × String × Nat) := (((anc.lookup cn).getD []).drop 1).flatMap fun (y, σ) =>
+        -- (a qualified `(q:)M`: only `q`'s lists, and those above it)
+        let none' : List (String × List (String × STy)) := []
+        let ups0 : List (String × List (String × STy)) := ((anc.lookup cn).getD none').drop 1
+        let ups : List (String × List (String × STy)) := match within with
+          | some q =>
+            let above : List String := ((anc.lookup q).getD none').map Prod.fst
+            ups0.filter fun u => u.1 == q || above.contains u.1
+          | none => ups0
+        let cands : List (Nat × String × Nat) := ups.flatMap fun (y, σ) =>
           let ytps := ((infoOf y).map (·.1)).getD []
           (ownLists y mn).filterMap fun (dmtps, dps) =>
             (sigs.idxOf? (sigText ytps dmtps dps)).map fun k =>
@@ -3437,11 +3453,25 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       for m in methods do
         match m with
         | .fn mp mn ps mtps effs ret body =>
-          if mn.startsWith "(" then
-            if let [_, m'] := (mn.drop 1).toString.splitOn ":)" then
-              if (mov.lookup (hierOf n, m')).isSome then
-                throw s!"{mp.show}: qualified implementations of the overloaded method {m'} are not supported yet"
-          ms := ms.push (.fn mp (mangle n mn tps mtps ps (effs.contains "override")) ps mtps effs ret body)
+          -- `(q:)M`, implementing `q`'s overload of `M` that has its list
+          -- (#125): `(q:)M$ovK`
+          let qual : Option (String × String) := if mn.startsWith "(" then
+              match (mn.drop 1).toString.splitOn ":)" with
+              | [q, m'] => some (q, m')
+              | _ => none
+            else none
+          match qual with
+          | some (q, m') =>
+            -- (`q` above the class: otherwise the check below explains)
+            let isAbove := (((anc.lookup n).getD []).drop 1).any (·.1 == q)
+            if isAbove && (mov.lookup (hierOf n, m')).isSome then
+              let k := mangle n m' tps mtps ps true (some q)
+              if k == m' then
+                throw s!"{mp.show}: ({q}:){m'} must have the parameters of one of {q}'s overloads of {m'}"
+              ms := ms.push (.fn mp s!"({q}:){k}" ps mtps effs ret body)
+            else ms := ms.push (.fn mp mn ps mtps effs ret body)
+          | none =>
+            ms := ms.push (.fn mp (mangle n mn tps mtps ps (effs.contains "override") none) ps mtps effs ret body)
         | m => ms := ms.push m
       tops1 := tops1.push (.classDef cp n tps specs parents isI fields ovs ms.toList)
     | t => tops1 := tops1.push t
