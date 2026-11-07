@@ -20,7 +20,8 @@ reads and writes, sequencing, 29 primitives, calls, `if`, single-generator
 - multi-generator `for` is nested single-generator `for` plus `flatten`;
 - comparison chains use temporaries, so each operand is evaluated once;
 - structs are tuples, enums are ints, and maps are arrays of pairs in
-  insertion order.
+  insertion order;
+- a generic function is one Core function per instantiation.
 
 Keeping Core small keeps the proofs and the C runtime small. All 29
 primitives are one Lean function (`Prim.apply`) and one C file
@@ -94,6 +95,29 @@ theorem: such a program is rejected with "internal error". The front-end
 fuzzer (`scripts/fuzz-front.sh`) mutates real sources to look for such
 rejections and for crashes. It found one, a stack overflow on recursive
 structs, now rejected.
+
+## Generic functions: checked once, then monomorphised
+
+Verse Core is first-order: its types (`VTy`) have no variables. A generic
+function `F(X:t where t:type)` could be given polymorphic Core types, but then
+the type-safety proof would need a substitution lemma, and the initialisation
+prefix below would need a default value for a slot of type `t`, which no
+value has. Instead the elaborator monomorphises: each distinct list of type
+arguments becomes its own Core function, and `Prog.checkTypes` checks each
+one like any other function. So `Prog.accepted` covers generic programs with
+no change to Core, the proofs, the binary format or the C runtime.
+
+Monomorphising alone would check a body only at the types it is used at, as
+C++ templates do. Verse checks a generic body once, for every type argument.
+So the elaborator first checks it with each type parameter as an opaque type
+(`Ty.param`), on which only the operations valid for every type are defined.
+Only then does it elaborate the instances, from a worklist, because an
+instance's body can request further instances. An instance that fails to
+elaborate after the generic check passed is an elaborator bug, reported as
+an internal error.
+
+The cost is code size, and no polymorphic recursion. A bound on the size of
+type arguments turns polymorphic recursion into an error rather than a loop.
 
 ## Why every slot starts with a typed default
 

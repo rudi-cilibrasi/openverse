@@ -26,6 +26,7 @@ surface Verse is elaborated (`OpenVerse/Front/Elab.lean`) into Verse Core
 | Failure | failure contexts (`if` conditions, `for` clauses, `option{}`, `logic{}`, `not`, left of `or`, `<decides>` bodies) with rollback of `var` writes **and output** | ch. 8 |
 | Control | `if`/`else if`/`else` (all styles, `if:`…`then:`), `for` with `X : array`, `I -> X : array`, `X := a..b`, filters, bindings, several generators (cartesian product), `loop`/`break`, `return`, `case` with literal patterns and `_` | ch. 7 |
 | Functions | recursion, mutual recursion, `<decides>` (called with `F[…]`), named parameters `?P:t = default` passed as `?P := e` (positional, then named as written, then defaults), other effect specifiers accepted and ignored | ch. 6, 13 |
+| Parametric functions | `F(X:t, … where t:type, u:subtype(comparable))`: type parameters in parameter types, the result type and local declarations; type arguments inferred at each call (see [Parametric functions](#parametric-functions)) | Types: where clauses |
 | Structs | `name := struct:` with typed fields and defaults, `name{F := e, …}`, `S.F`, `set S.F = e` / `op=`, structural equality (a struct is the tuple of its fields in Verse Core) | ch. 9 |
 | Enums | `name := enum:` / `enum{A, B}`, `name.A`, equality, `case` that needs no `_` when every value is named (an enumerator is its index in Verse Core) | ch. 9 |
 | Maps | `[k]v`, `map{k => v, …}` (a key given twice keeps its last value, at its last position), `M[k]` (fails on a missing key), `set M[k] = v` (insert or update, never fails), `set M[k] op= v` (fails on a missing key), `.Length`, `for (V : M)`, `for (K -> V : M)` in insertion order, order-sensitive equality (a map is the array of its pairs in Verse Core) | §3, §9.3 |
@@ -75,6 +76,38 @@ lines are exempt. Indented blocks are those after `:` (and a function's
 brackets, or a braced block that starts on the line of its `{`, are checked
 against the enclosing indented block.
 
+## Parametric functions
+
+A function with a `where` clause is generic. The clause ends the parameter
+list and declares each type parameter as `t:type` or
+`t:subtype(comparable)`:
+
+```verse
+Find(Items:[]t, Target:t where t:subtype(comparable))<decides>:int = ...
+Combine(A:t1, B:t2 where t1:type, t2:type):tuple(t1, t2) = (A, B)
+```
+
+- **Checked once.** The body is type-checked once, with every type parameter
+  opaque. A value of type `t` can be bound, passed, returned, stored in
+  arrays, options, tuples and maps, and iterated over in a `[]t`. `=`, `<>`,
+  `Find` and map keys need `t:subtype(comparable)`. Anything else, such as
+  arithmetic, `ToString` or `.Length` on a bare `t`, is a type error, even if
+  the function is never called.
+- **Inferred type arguments.** At a call, the result type is matched against
+  the expected type (unless that is `void`), then each parameter type against
+  its argument's type. Arguments are matched left to right, except that
+  `false`, `array{}` and `map{}` are matched last, because they take their type
+  from context. A type parameter that is still unknown is an error. Arguments
+  are still evaluated left to right.
+- **Monomorphised.** Each distinct list of type arguments becomes its own
+  Verse Core function, named like `Find(string)`. Verse Core, the OVBC format
+  and the C runtime know nothing of generics, and every instance is checked by
+  `Prog.checkTypes` like any other function (see [`DESIGN.md`](DESIGN.md)).
+- **Limits.** A function that calls itself at ever larger types
+  (polymorphic recursion) is rejected, as are named parameters, a generic
+  `Main`, and several constraints on one type parameter (also unsupported in
+  the Book).
+
 ## Readings openverse takes
 
 | Question | Book | openverse |
@@ -91,6 +124,8 @@ against the enclosing indented block.
 | `Main` failing | (no entry point in the book) | exit code 1; output already printed stays |
 | `return` inside a failure context | unspecified | leaves the function; no rollback of what the condition did |
 | Scope of the operands of `A and B` | "Variable bindings do not escape from logical operations" (§3.4) | each operand is its own scope: names defined in `A` are not visible in `B`, and names from neither side escape the `and` |
+| Comparability | `comparable` covers the primitive types, enums, structs and containers of comparable types (§4.9) | so is every openverse type, except a type parameter not declared `subtype(comparable)` and the containers of one |
+| Inferring type arguments | not described | first-order matching against the expected result type, then the arguments; no subtyping other than `false` (matches anything) and `void` (accepts anything) |
 | Extent of a `<#>` comment | "everything indented by four spaces on subsequent lines" (§1.1) | the rest of the `<#>` line and every following line indented more than that line, whatever the amount (blank lines included); `<#>` may also follow code on a line |
 
 ## Not supported in v1
