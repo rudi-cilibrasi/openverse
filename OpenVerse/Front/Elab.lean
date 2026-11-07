@@ -574,6 +574,9 @@ structure Sig where
   isConst : Bool
   /-- The named parameters (the last ones of `params`): name and default. -/
   named   : List (String × Option SExpr) := []
+  /-- Every parameter's name, in order: a named one's default may use those
+      before it. -/
+  pnames  : List String := []
   /-- A generic function's type parameters (name, declared comparable). Its
       `params` and `ret` mention them as `Ty.param`. Its Verse Core function
       takes one more hidden parameter per type parameter, after these: a
@@ -595,6 +598,8 @@ structure Ctx where
   locals  : List Local := []
   canFail : Bool := false
   inLoop  : Bool := false
+  /-- In a named parameter's default, elaborated at a call: no `return`. -/
+  inParamDefault : Bool := false
   /-- The `defer:` bodies of the function's enclosing scopes, innermost first
       (#80): a `return` runs them all, a `break` those registered inside its
       loop (all but the first `loopDefers`). -/
@@ -707,7 +712,7 @@ where
   | [] => s!"{what} must be comparable, and {t.show} is not"
 
 def builtins : List String :=
-  ["Print", "ToString", "Floor", "Ceil", "Abs", "Min", "Max", "Quotient", "Mod", "Err"]
+  ["Print", "ToString", "Floor", "Ceil", "Abs", "Min", "Max", "Quotient", "Mod", "Err", "ConcatenateMaps"]
 
 partial def resolveTy (env : TyEnv) (p : Pos) : STy → EM Ty
   | .name "int" => pure .int
@@ -1329,12 +1334,14 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
     let ds ← elabDefers ctx (ctx.defers.take (ctx.defers.length - ctx.loopDefers))
     return ⟨.seq ds .brk, .never⟩
   | .ret p none =>
+    if ctx.inParamDefault then eerr p "return is not allowed in a parameter's default"
     if ctx.inDefer then eerr p "return is not allowed in a defer: block"
     if ctx.inCtor then eerr p "return is not allowed in a constructor (it would skip the items after it)"
     if ctx.inBlock then eerr p "return is not allowed in a block: clause (it would skip the clauses after it)"
     if ctx.retTy != .void then eerr p s!"return needs a value of type {ctx.retTy.show}"
     return ⟨.seq (← elabDefers ctx ctx.defers) (.ret (.lit .void)), .never⟩
   | .ret p (some e) =>
+    if ctx.inParamDefault then eerr p "return is not allowed in a parameter's default"
     if ctx.inDefer then eerr p "return is not allowed in a defer: block"
     if ctx.inCtor then eerr p "return is not allowed in a constructor (it would skip the items after it)"
     if ctx.inBlock then eerr p "return is not allowed in a block: clause (it would skip the clauses after it)"
@@ -1535,6 +1542,51 @@ partial def elabApp (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (brack
     | "Print" =>
       let es ← elabArgs ctx p args [Ty.string]
       return ⟨.print es.head!, .void⟩
+    | "ConcatenateMaps" =>
+      -- the entries of every map, a later map's value winning for a key (Book
+      -- of Verse ch. 9): the first copied, then each other's pairs put in turn
+      let some a0 := args.head? | eerr p "ConcatenateMaps takes at least one map"
+      -- the maps' type: the expected one, else the first argument's that has
+      -- one alone (an empty map{} has none)
+      let mapExp : Option Ty ← match exp with
+        | some t@(.map ..) => pure (some t)
+        | _ =>
+          let st ← get
+          let mut found : Option Ty := none
+          for a in args do
+            if found.isNone then
+              found ← tryCatch (do let r ← elabE ctx a none; pure (match r.ty with | t@(.map ..) => some t | _ => none))
+                (fun _ => pure none)
+          set st
+          pure found
+      let mut rs : Array R := #[]
+      let mut jt? : Option Ty := none
+      for a in args do
+        let r ← elabE ctx a mapExp
+        let .map _ _ := r.ty | eerr a.pos s!"ConcatenateMaps takes maps, not {r.ty.show}"
+        match jt? with
+        | none => jt? := some r.ty
+        | some j =>
+          let j' ← tryCatch (join a.pos j r.ty mapExp) (fun _ =>
+            eerr a.pos s!"ConcatenateMaps takes maps of one type, not {j.show} and {r.ty.show}")
+          jt? := some j'
+        rs := rs.push r
+      let some jt := jt? | eerr p "ConcatenateMaps takes at least one map"
+      let .map kt vt := jt | eerr p s!"ConcatenateMaps takes maps, not {jt.show}"
+      let tm ← fresh jt
+      let some r0 := rs[0]? | eerr p "ConcatenateMaps takes at least one map"
+      let mut code : Expr := .assign tm (← coerce a0.pos r0 jt)
+      for (r, a) in rs.toList.tail.zip args.tail do
+        let ts ← fresh jt
+        let tpair ← fresh (.tup [kt, vt])
+        let tk ← fresh kt
+        let tv ← fresh vt
+        let ti ← fresh .int
+        let tidx ← fresh .int
+        let put := Expr.seq (.assign tk (.prim (.tupGet 0) [.local tpair]))
+          (.seq (.assign tv (.prim (.tupGet 1) [.local tpair])) (mapPut tm tk tv ti tidx))
+        code := .seq code (.seq (.assign ts (← coerce a.pos r jt)) (.forE tpair (.local ts) (.lit (.logic true)) put))
+      return ⟨.seq code (.local tm), jt⟩
     | "ToString" =>
       match args with
       | [a] => return ⟨← toStringOf p (← elabE ctx a none), Ty.string⟩
@@ -1619,7 +1671,24 @@ partial def elabApp (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (brack
               let some d := dflt | eerr p s!"{name} needs the argument ?{n}, which has no default"
               let t := ptys[k]!
               let ta ← fresh t
-              steps := steps.push (.assign ta (← fxAt p (do coerce p (← elabE { ctx with locals := [], selfClass := none } d (some t)) t)))
+              -- (the default sees the parameters before it, in their temporaries)
+              let earlier : List Local := ((s.pnames.zip (List.range k)).filterMap fun (pn, j) =>
+                (slots[j]!).map fun sl => ({ name := pn, slot := sl, ty := ptys[j]!, mutable := false } : Local)).reverse
+              -- (a method's: its receiver's fields too, through `Self`)
+              let selfC : Option String :=
+                if s.pnames.head? == some "Self" then (s.name.splitOn ".").head? else none
+              -- (its own context: no return or break into the caller, failure
+              -- only for a <decides> callee, and not its own default again)
+              let key := (s.name, s!"?{n}")
+              if ctx.defaults.contains key then
+                eerr p s!"the default of ?{n} of {name} uses itself (a call of {name} that omits ?{n})"
+              let dctx := { ctx with locals := earlier, selfClass := selfC, inParamDefault := true,
+                                     inLoop := false, canFail := ctx.canFail && s.decides,
+                                     defaults := key :: ctx.defaults }
+              let rd ← fxAt p (do coerce p (← elabE dctx d (some t)) t)
+              if !s.decides && rd.mayFail ctx.sigProg then
+                eerr p s!"the default of ?{n} of {name} can fail, but {name} is not <decides>"
+              steps := steps.push (.assign ta rd)
               slots := slots.set! k (some ta)
           let call := Expr.call s.idx (slots.toList.map fun o => Expr.local o.get!)
           return ⟨steps.toList.foldr Expr.seq call, s.ret⟩
@@ -3376,7 +3445,8 @@ def elabProgramCore (allTops00 : List STop) (opts : Options := {}) : Except Stri
                           -- constant's: blocks that construct each other's classes)
                           fx := if n.endsWith ".$block" then [] else allowedFx effs,
                           isConst := false,
-                          named := (ps.filter (·.named)).map fun q => (q.name, q.default) }
+                          named := (ps.filter (·.named)).map fun q => (q.name, q.default),
+                          pnames := ps.map (·.name) }
     | .const p n sty _ =>
       let rt ← match sty with
         | some t => do let (rt, _) ← (resolveTy env p t).run {}; pure rt
