@@ -122,6 +122,8 @@ structure TyEnv where
   /-- The abstract methods (class or interface, method): their functions are
       never called. -/
   abstracts : List (String × String) := []
+  /-- Each overloaded function (#74): its overloads, renamed `F$ov0`, `F$ov1`, … -/
+  overloads : List (String × List String) := []
   /-- The type parameters of each parametric struct (name, declared comparable). -/
   sparams : List (String × List (String × Bool)) := []
   /-- Each enum: its enumerators in order. -/
@@ -212,6 +214,39 @@ def TyEnv.slotImpls (env : TyEnv) (impl : String → Option String) (ups : List 
   (match best.find? (fun e => !(env.info e).isIface) with
    | some e => [e]
    | none => best).filterMap impl
+
+/-- No value has both types (Book of Verse ch. 6, overloading): `void`, a
+    type parameter and `never` overlap everything; two arrays, maps or options
+    share the empty one (and `?t` and `logic` share `false`); a tuple overlaps
+    an array, map or option; a class or interface overlaps an interface and
+    the classes above and below it; otherwise different kinds, structs,
+    enums and unrelated classes are disjoint. -/
+partial def TyEnv.disjoint (env : TyEnv) : Ty → Ty → Bool
+  | .void, _ | _, .void | .param .., _ | _, .param .. | .never, _ | _, .never => false
+  | .tup as, .tup bs => as.length != bs.length || (as.zip bs).any fun (a, b) => env.disjoint a b
+  | .arr _, .arr _ | .arr _, .map .. | .map .., .arr _ | .map .., .map .. | .opt _, .opt _ => false
+  | .opt _, .logic | .logic, .opt _ => false
+  | .tup _, .arr _ | .arr _, .tup _ | .tup _, .map .. | .map .., .tup _ | .tup _, .opt _ | .opt _, .tup _ => false
+  | .struct a as, .struct b bs =>
+    let isCls (x : String) := env.classes.contains x
+    let iface (x : String) := isCls x && (env.info x).isIface
+    if isCls a && isCls b then
+      if iface a || iface b then false else !(env.isSub a b || env.isSub b a)
+    else if isCls a || isCls b then true
+    else a != b || (as.length == bs.length && (as.zip bs).any fun (x, y) => env.disjoint x y)
+  | .enum a, .enum b => a != b
+  | .int, .int | .logic, .logic | .char, .char | .char32, .char32 => false
+  | _, _ => true
+
+/-- Two overloads' parameters: no call fits both. They differ in number (a
+    single tuple parameter overlaps as many parameters as it has elements),
+    or some position's types are disjoint. -/
+def TyEnv.paramsDistinct (env : TyEnv) (as bs : List Ty) : Bool :=
+  let flat (xs ys : List Ty) : Bool := match xs with
+    | [.tup ts] => ts.length == ys.length
+    | _ => false
+  if as.length != bs.length then !(flat as bs || flat bs as)
+  else (as.zip bs).any fun (a, b) => env.disjoint a b
 
 /-- The type arguments of the class or interface `T` above `d(args)` (along
     the parents, #39, #53), or `[]` when `T` is not above `d`. -/
@@ -1330,6 +1365,38 @@ partial def elabApp (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (brack
     if selfMember? then elabApp ctx p (.member p (.ident p "Self") name) args bracket exp else
     -- `T[X]`, `T(X)`: a cast to class or interface `T`
     if ctx.types.classes.contains name && (ctx.sig? name).isNone then elabCast ctx p name args bracket else
+    if let some ovs := ctx.types.overloads.lookup name then do
+      -- an overloaded function (#74): the one overload whose parameters the
+      -- arguments fit (each elaborated at the parameter's type, in a trial)
+      let cands := ovs.filter fun o => ((ctx.sig? o).map (·.params.length == args.length)).getD false
+      let fits (o : String) : EM Bool := do
+        let s := (ctx.sig? o).get!
+        let st ← get
+        let ok ← tryCatch (do
+            for (a, t) in args.zip s.params do
+              let r ← elabE ctx a (some t)
+              discard <| coerce a.pos r t
+            pure true) (fun _ => pure false)
+        set st
+        return ok
+      let mut ok : List String := []
+      for o in cands do
+        if ← fits o then ok := ok ++ [o]
+      let call (o : String) : EM R :=
+        tryCatch (elabApp ctx p (.ident p o) args bracket exp) fun msg => throw (msg.replace o name)
+      match ok, cands with
+      | [o], _ => call o
+      | [], [o] => call o   -- its error
+      | [], [] => eerr p s!"no overload of {name} takes {args.length} argument(s)"
+      | [], _ =>
+        let st ← get
+        let tys ← args.mapM fun a => do return (← elabE ctx a none).ty.show
+        set st
+        eerr p s!"no overload of {name} takes ({", ".intercalate tys})"
+      | _ :: _ :: _, _ =>
+        let shown := ok.map fun o => s!"({", ".intercalate (((ctx.sig? o).map (·.params)).getD [] |>.map Ty.show)})"
+        eerr p s!"this call of {name} fits more than one overload: {" and ".intercalate shown}"
+    else
     match name with
     | "Print" =>
       let es ← elabArgs ctx p args [Ty.string]
@@ -2892,6 +2959,27 @@ def elabProgram (allTops00 : List STop) (opts : Options := {}) : Except String C
     for (f, ft, _) in fs do
       if !ft.mapKeysOK env then
         throw s!"field '{f}' of {sn}: a map key must be comparable, and {ft.show} has a key that is not"
+  -- overloading (#74): functions of one name, each renamed `F$ovN`; a call
+  -- takes the one its arguments fit (`elabApp`), and no call fits two
+  let fnNames := tops.filterMap fun | .fn _ n .. => some n | _ => none
+  let ovNames := (fnNames.filter fun n => (fnNames.filter (· == n)).length > 1 && !n.contains '.').eraseDups
+  let mut ovMap : List (String × List String) := []
+  let mut renamed : Array STop := #[]
+  for t in tops do
+    match t with
+    | .fn p n ps tps effs ret body =>
+      if ovNames.contains n then
+        if n == "Main" then throw s!"{p.show}: Main cannot be overloaded"
+        if !tps.isEmpty then throw s!"{p.show}: generic functions cannot be overloaded yet ({n})"
+        if ps.any (·.named) then throw s!"{p.show}: overloads with named parameters are not supported yet ({n})"
+        let prev := (ovMap.lookup n).getD []
+        let m := s!"{n}$ov{prev.length}"
+        ovMap := (ovMap.filter (·.1 != n)) ++ [(n, prev ++ [m])]
+        renamed := renamed.push (.fn p m ps tps effs ret body)
+      else renamed := renamed.push t
+    | t => renamed := renamed.push t
+  let tops := renamed.toList
+  env := { env with overloads := ovMap }
   -- generic functions (those with a `where` clause) are numbered after the
   -- other functions and constants
   let isGeneric : STop → Bool
@@ -3047,6 +3135,17 @@ def elabProgram (allTops00 : List STop) (opts : Options := {}) : Except String C
     if !changed then break
   let sigProg := mkSigProg sigs
   let allSigs := sigs.toList ++ gsigs.toList
+  -- overloads take parameters no call fits both of (Book of Verse ch. 6)
+  for (n, ms) in env.overloads do
+    for (a, i) in ms.zip (List.range ms.length) do
+      for b in ms.take i do
+        match allSigs.find? (·.name == a), allSigs.find? (·.name == b) with
+        | some sa, some sb =>
+          if !env.paramsDistinct sa.params sb.params then
+            let pos := (tops.findSome? fun | .fn q m .. => if m == a then some q else none | _ => none).getD { line := 0, col := 0 }
+            let sh (s : Sig) := ", ".intercalate (s.params.map Ty.show)
+            throw s!"{pos.show}: {n} is defined twice with parameters a call cannot tell apart, ({sh sb}) and ({sh sa}): overloads must take disjoint types"
+        | _, _ => pure ()
   -- an override has the signature of the method it overrides, and an
   -- overriding field the inherited field's type (Book of Verse ch. 10)
   -- an override may return a class below the declared one (covariant results)
