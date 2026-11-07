@@ -13,6 +13,8 @@
  *       every slot of a LOCAL, ASSIGN or FOR node is < nslots of its function;
  *       every CALL names a function < nfns whose arity is the call's argument count;
  *       every PRIM has a code <= VX_P_LAST and k == 0 unless it is tupGet;
+ *       every HEAP has an op <= VX_H_LAST and k == 0 if it is tag, and an isTag's m class
+ *       tags (4m bytes) lie inside the bytes pool;
  *       every argument list lies inside the args pool, and every string literal inside the
  *       bytes pool; every literal kind is <= VX_LIT_LAST, and a LOGIC literal is 0 or 1;
  *     the slot, arity and call conditions are Prog.WellScoped of OpenVerse/Core/Scoping.lean,
@@ -76,13 +78,21 @@ int main(void) {
                 } else if (t == VX_N_SEQ) {
                     qp_assert(nd->a < j);
                     qp_assert(nd->b < j);
-                } else if (t == VX_N_PRIM || t == VX_N_CALL) {
+                } else if (t == VX_N_PRIM || t == VX_N_CALL || t == VX_N_HEAP) {
                     if (t == VX_N_PRIM) {
                         qp_assert(nd->op <= VX_P_LAST);
                         qp_assert(nd->a == 0 || nd->op == VX_P_TUPGET);
-                    } else {
+                    } else if (t == VX_N_CALL) {
                         qp_assert(nd->a < p.nfns);
                         qp_assert(p.fns[nd->a].arity == nd->b);
+                    } else {
+                        qp_assert(nd->op <= VX_H_LAST);
+                        qp_assert(nd->a == 0 || nd->op != VX_H_TAG);
+                        if (nd->op == VX_H_ISTAG) {
+                            qp_assert(nd->d <= VX_MAX_TAGS);
+                            qp_assert(4 * nd->d <= p.nbytes);
+                            qp_assert(nd->a <= p.nbytes - 4 * nd->d);
+                        }
                     }
                     qp_assert(nd->b <= p.nargs);
                     qp_assert(nd->c <= p.nargs - nd->b);

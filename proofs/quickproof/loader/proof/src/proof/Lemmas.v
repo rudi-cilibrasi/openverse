@@ -28,7 +28,7 @@ Proof. intros. apply (proj1 (Forall_Znth _ _) H); auto. Qed.
 Lemma Zlength_vints: forall l, Zlength (vints l) = Zlength l.
 Proof. intros. unfold vints. apply Zlength_map. Qed.
 
-Lemma rc_zero: forall rc, 0 <= rc <= 20 -> Int.repr rc = Int.repr 0 -> rc = 0.
+Lemma rc_zero: forall rc, 0 <= rc <= 21 -> Int.repr rc = Int.repr 0 -> rc = 0.
 Proof. intros. apply repr_inj_unsigned in H0; rep_lia. Qed.
 
 Lemma buf_rep_nonnull: forall sh bs buf, buf <> nullval ->
@@ -106,7 +106,7 @@ Lemma node_ok_mono: forall nfns nslots al ext nb nb' j x,
   node_ok nfns nslots al nb j x -> nb <= nb' -> node_ok nfns nslots (al ++ ext) nb' j x.
 Proof.
   intros nfns nslots al ext nb nb' j x H Hnb.
-  unfold node_ok in *. destruct H as (W & T & H0 & H1 & H2 & H3 & H4 & H5 & H6 & H7 & H8).
+  unfold node_ok in *. destruct H as (W & T & H0 & H1 & H2 & H3 & H4 & H5 & H6 & H7 & H8 & H9).
   split; [ auto | ]. split; [ auto | ].
   split. { intros E. destruct (H0 E) as (A1 & A2 & A3). split; [ auto | ]. split; [ auto | ].
            intros E3; specialize (A3 E3); lia. }
@@ -114,7 +114,10 @@ Proof.
   split. { intros E. destruct (H4 E) as (A1 & A2 & A3). split; [ auto | ]. split; [ auto | ].
            apply args_ok_mono; auto. }
   split. { intros E. destruct (H5 E) as (A1 & A2). split; [ auto | ]. apply args_ok_mono; auto. }
-  split; [ auto | ]. split; [ auto | ]. auto.
+  split; [ auto | ]. split; [ auto | ]. split; [ auto | ].
+  intros E. destruct (H9 E) as (A1 & A2 & A3 & A4). split; [ auto | ]. split; [ auto | ].
+  split; [ apply args_ok_mono; auto | ].
+  intros E4; specialize (A4 E4); lia.
 Qed.
 
 (* Comparing malloc's result with NULL is defined, also for malloc(0). *)
