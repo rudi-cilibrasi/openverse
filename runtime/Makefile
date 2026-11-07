@@ -18,7 +18,7 @@ CORE     := $(ROOT)/tests/core
 FUZZ_N   ?= 5000
 FUZZ_SEED ?= 1
 
-LIBSRC   := src/arith.c src/store.c src/load.c src/value.c src/prims.c src/interp.c
+LIBSRC   := src/arith.c src/store.c src/load.c src/value.c src/objects.c src/prims.c src/interp.c
 OBJ      := $(LIBSRC:src/%.c=$(B)/obj/%.o)
 OBJ_SAN  := $(LIBSRC:src/%.c=$(B)/obj-san/%.o)
 TESTS    := test_arith test_store test_load test_interp

@@ -53,7 +53,7 @@ Definition node_wf (x: node) : Prop :=
   0 <= n_b x <= Int.max_unsigned /\ 0 <= n_c x <= Int.max_unsigned /\ 0 <= n_d x <= Int.max_unsigned /\
   Int64.min_signed <= n_lit x <= Int64.max_signed.
 
-(* The argument list of a PRIM or CALL node j lies in the args pool and names nodes < j. *)
+(* The argument list of a PRIM, CALL or HEAP node j lies in the args pool and names nodes < j. *)
 Definition args_ok (al: list Z) (j: Z) (x: node) : Prop :=
   n_b x <= Zlength al /\ n_c x <= Zlength al - n_b x /\
   forall k, 0 <= k < n_b x -> Znth (n_c x + k) al < j.
@@ -61,8 +61,8 @@ Definition args_ok (al: list Z) (j: Z) (x: node) : Prop :=
 (* Node j of a function with nslots slots, in a program of nfns functions whose pools hold al and nb bytes:
    what the forward pass checks (conditions 3, 4, 6 and the first half of 5). *)
 Definition node_ok (nfns nslots: Z) (al: list Z) (nb: Z) (j: Z) (x: node) : Prop :=
-  node_wf x /\ n_tag x <= 11 /\
-  (n_tag x = 0 -> n_op x <= 5 /\ (n_op x = 1 -> n_lit x = 0 \/ n_lit x = 1) /\
+  node_wf x /\ n_tag x <= 12 /\
+  (n_tag x = 0 -> n_op x <= 6 /\ (n_op x = 1 -> n_lit x = 0 \/ n_lit x = 1) /\
                   (n_op x = 3 -> n_b x <= nb /\ n_a x <= nb - n_b x)) /\
   (n_tag x = 1 -> n_a x < nslots) /\
   (n_tag x = 2 -> n_a x < nslots /\ n_b x < j) /\
@@ -71,7 +71,9 @@ Definition node_ok (nfns nslots: Z) (al: list Z) (nb: Z) (j: Z) (x: node) : Prop
   (n_tag x = 5 -> n_a x < nfns /\ args_ok al j x) /\
   (n_tag x = 6 -> n_a x < j /\ n_b x < j /\ n_c x < j) /\
   (n_tag x = 7 -> n_a x < nslots /\ n_b x < j /\ n_c x < j /\ n_d x < j) /\
-  (n_tag x = 8 \/ n_tag x = 10 \/ n_tag x = 11 -> n_a x < j).
+  (n_tag x = 8 \/ n_tag x = 10 \/ n_tag x = 11 -> n_a x < j) /\
+  (n_tag x = 12 -> n_op x <= 4 /\ (n_a x = 0 \/ n_op x <> 3) /\ args_ok al j x /\
+                   (n_op x = 4 -> n_d x <= 4194304 /\ 4 * n_d x <= nb /\ n_a x <= nb - 4 * n_d x)).
 
 (* ------------------------------------------------------------- functions *)
 
@@ -303,7 +305,7 @@ Definition node_pre_props (shb: share) (bs: list Z) (pos acap bcap nfns entry: Z
 
 Definition node_post_props (bs: list Z) (acap bcap nfns: Z) (al bl: list Z) (nslots j: Z)
     (rc pos': Z) (xs bl': list Z) (x: node) (v: reptype t_node) : Prop :=
-  0 <= rc <= 20 /\ 0 <= pos' <= Zlength bs /\ Zlength al + Zlength xs <= acap /\
+  0 <= rc <= 21 /\ 0 <= pos' <= Zlength bs /\ Zlength al + Zlength xs <= acap /\
   Forall (fun y => 0 <= y < j) xs /\ Zlength bl <= Zlength bl' <= bcap /\ bytes_ok bl' /\
   (rc = 0 -> v = node_val x /\ node_ok nfns nslots (al ++ xs) (Zlength bl') j x).
 
@@ -361,6 +363,28 @@ Definition load_call_spec :=
         data_at Tsh t_prog (PRG nfns entry fns args (Zlength al) bytes (Zlength bl)) p;
         args_pool args acap al; bytes_pool bytes bcap bl;
         data_at Ews t_node (node_val (mkN 5 0 0 0 0 0 0)) nd)
+ POST [ tint ]
+   EX rc: Z, EX pos': Z, EX xs: list Z, EX bl': list Z, EX x: node, EX v: reptype t_node,
+   PROP (node_post_props bs acap bcap nfns al bl nslots j rc pos' xs bl' x v)
+   RETURN (Vint (Int.repr rc))
+   SEP (data_at Tsh t_ld (LD buf (Zlength bs) pos' acap bcap) r; buf_rep shb bs buf;
+        data_at Tsh t_prog (PRG nfns entry fns args (Zlength (al ++ xs)) bytes (Zlength bl')) p;
+        args_pool args acap (al ++ xs); bytes_pool bytes bcap bl';
+        data_at Ews t_node v nd).
+
+(* HEAP: the tags of an isTag go into the bytes pool, as a string literal's bytes do. *)
+Definition load_heap_spec :=
+ DECLARE _load_heap
+ WITH r: val, buf: val, shb: share, bs: list Z, pos: Z, acap: Z, bcap: Z,
+      p: val, nfns: Z, entry: Z, fns: val, args: val, al: list Z, bytes: val, bl: list Z,
+      nslots: Z, j: Z, nd: val
+ PRE [ tptr t_ld, tptr t_prog, tuint, tptr t_node ]
+   PROP (node_pre_props shb bs pos acap bcap nfns entry al bl nslots j)
+   PARAMS (r; p; Vint (Int.repr j); nd)
+   SEP (data_at Tsh t_ld (LD buf (Zlength bs) pos acap bcap) r; buf_rep shb bs buf;
+        data_at Tsh t_prog (PRG nfns entry fns args (Zlength al) bytes (Zlength bl)) p;
+        args_pool args acap al; bytes_pool bytes bcap bl;
+        data_at Ews t_node (node_val (mkN 12 0 0 0 0 0 0)) nd)
  POST [ tint ]
    EX rc: Z, EX pos': Z, EX xs: list Z, EX bl': list Z, EX x: node, EX v: reptype t_node,
    PROP (node_post_props bs acap bcap nfns al bl nslots j rc pos' xs bl' x v)
@@ -453,7 +477,7 @@ Definition load_fn_spec :=
         mem_mgr gv)
  POST [ tint ]
    EX rc: Z, EX pos': Z, EX xs: list Z, EX bl': list Z, EX x: fnr, EX fv: reptype t_fn, EX k: Z,
-   PROP (0 <= rc <= 20; 0 <= pos' <= Zlength bs; (Zlength al + Zlength xs <= acap)%Z; u32_ok xs;
+   PROP (0 <= rc <= 21; 0 <= pos' <= Zlength bs; (Zlength al + Zlength xs <= acap)%Z; u32_ok xs;
          Zlength bl <= Zlength bl' <= bcap; bytes_ok bl';
          rc = 0 -> fv = fn_val x /\ fn_ok nfns (al ++ xs) (Zlength bl') x)
    RETURN (Vint (Int.repr rc))
@@ -547,7 +571,7 @@ Definition load_all_spec :=
         mem_mgr gv)
  POST [ tint ]
    EX rc: Z, EX rv: reptype t_ld,
-   PROP (0 <= rc <= 20)
+   PROP (0 <= rc <= 21)
    RETURN (Vint (Int.repr rc))
    SEP (data_at Tsh t_ld rv r; buf_rep shb bs buf; mem_mgr gv;
         if Z.eq_dec rc 0 then prog_rep p else freeable p).
@@ -569,7 +593,7 @@ Definition vx_load_spec :=
    SEP (buf_rep shb bs buf; data_at_ Tsh t_prog out; mem_mgr gv)
  POST [ tint ]
    EX rc: Z,
-   PROP (0 <= rc <= 20)
+   PROP (0 <= rc <= 21)
    RETURN (Vint (Int.repr rc))
    SEP (buf_rep shb bs buf; mem_mgr gv;
         if Z.eq_dec rc 0 then prog_rep out else data_at Tsh t_prog PRG0 out).
@@ -577,6 +601,6 @@ Definition vx_load_spec :=
 Definition Gprog : funspecs :=
   [(_quickproof_malloc, malloc_spec'); (_quickproof_free, free_spec');
    rd_u8_spec; rd_u32_spec; rd_i64_spec; rd_bytes_spec; rd_child_spec; rd_slot_spec; rd_args_spec;
-   node_clear_spec; load_lit_spec; load_prim_spec; load_call_spec; load_three_spec; load_for_spec;
-   load_node_spec; load_fn_spec; check_calls_spec; load_header_spec; trim_args_spec; trim_bytes_spec;
-   prog_clear_spec; load_all_spec; vx_free_program_spec; vx_load_spec].
+   node_clear_spec; load_lit_spec; load_prim_spec; load_call_spec; load_heap_spec; load_three_spec;
+   load_for_spec; load_node_spec; load_fn_spec; check_calls_spec; load_header_spec; trim_args_spec;
+   trim_bytes_spec; prog_clear_spec; load_all_spec; vx_free_program_spec; vx_load_spec].

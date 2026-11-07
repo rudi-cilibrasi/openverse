@@ -1,6 +1,7 @@
 /*
  * vx_runtime.h -- the unproved part of the C runtime: heap values (value.c),
- * the primitives (prims.c), the interpreter (interp.c) and the CLI (main.c).
+ * class instances (objects.c), the primitives (prims.c), the interpreter
+ * (interp.c) and the CLI (main.c).
  */
 #ifndef VX_RUNTIME_H
 #define VX_RUNTIME_H
@@ -18,6 +19,7 @@
  *   VX_T_TUP   .tup vs        heap index of an object with the elements
  *   VX_T_NONE  .none          0
  *   VX_T_SOME  .some v        heap index of a one-element object
+ *   VX_T_REF   .ref a         a, the index of an object of the object store
  *
  * Strings are arrays of chars, as in Lean.  `void` = .tup [] = (TUP, 0).
  * ------------------------------------------------------------------------ */
@@ -28,6 +30,7 @@
 #define VX_T_TUP    4
 #define VX_T_NONE   5
 #define VX_T_SOME   6
+#define VX_T_REF    7
 
 static inline int vx_isref(const vx_val *v)
 {
@@ -80,6 +83,56 @@ static inline vx_val *vx_obj_elems(const vx_heap *h, size_t o)
 int  vx_heap_keep(vx_heap *h, size_t mark, vx_val *root);   /* VX_OK | VX_EFULL */
 /* Structural equality, `decide (a = b)` (iterative). */
 int  vx_equal(const vx_heap *h, const vx_val *a, const vx_val *b, int *eq);
+
+/* ------------------------------------------------------------------------
+ * Object store (objects.c): the heap of class instances, Glob.heap of
+ * OpenVerse/Core/Semantics.lean.  Object a has a class tag and the fields
+ * cells[off .. off + n).  Objects are appended and never freed or moved, as
+ * in Lean.  A field write inside a failure context is logged (cell, old
+ * value); a mark records (objects, cells, log length), rollback undoes the
+ * log newest first and drops the objects allocated since the mark.
+ * ------------------------------------------------------------------------ */
+typedef struct vx_obj {
+    uint64_t tag;
+    size_t   off;
+    size_t   n;
+} vx_obj;
+
+typedef struct vx_oundo {
+    size_t cell;
+    vx_val old;
+} vx_oundo;
+
+typedef struct vx_objs {
+    vx_obj   *objs;   size_t nobjs;  size_t ocap;
+    vx_val   *cells;  size_t ncells; size_t ccap;
+    vx_oundo *log;    size_t nlog;   size_t lcap;
+    size_t    max;    /* objects + cells allowed */
+    size_t    max_log;
+} vx_objs;
+
+typedef struct vx_objmark {
+    size_t nobjs;
+    size_t ncells;
+    size_t nlog;
+} vx_objmark;
+
+void vx_objs_init(vx_objs *h, size_t max, size_t max_log);
+void vx_objs_free(vx_objs *h);
+/* A new object of class `tag` with fields f[0..n); *a is its index. */
+int  vx_objs_new(vx_objs *h, uint64_t tag, const vx_val *f, size_t n, size_t *a); /* OK | EFULL */
+/* Object a, if it exists. */
+static inline const vx_obj *vx_objs_get(const vx_objs *h, uint64_t a)
+{
+    return a < (uint64_t)h->nobjs ? &h->objs[a] : NULL;
+}
+/* Write field k of object a (which exists, k < its n), logging the old
+   value when `log`. */
+int  vx_objs_set(vx_objs *h, uint64_t a, size_t k, const vx_val *v, int log);   /* OK | EFULL */
+void vx_objs_mark(const vx_objs *h, vx_objmark *m);
+void vx_objs_rollback(vx_objs *h, const vx_objmark *m);
+/* Drop the log (when the outermost failure context is left). */
+void vx_objs_forget(vx_objs *h);
 
 /* ------------------------------------------------------------------------
  * Outcomes (Res of Value.lean, plus LIMIT for Lean's `none` and for the C
@@ -149,6 +202,9 @@ typedef struct vx_ctx {
     const vx_opts    *o;
     vx_store  st;          /* slots of every live frame, journal, output */
     vx_heap   heap;
+    vx_objs   objs;        /* class instances (Glob.heap)                */
+    size_t    pin;         /* heap cells below this may be reachable from
+                              an object field: never freed or moved      */
     size_t    top;         /* slots in use; the current frame ends here  */
     vx_val   *vs;          /* value stack: temporaries                   */
     size_t    vsp;

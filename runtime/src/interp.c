@@ -27,9 +27,16 @@
  * Heap.  When a call returns, the heap cells it allocated are freed except
  * those its result reaches (vx_heap_keep).  That is sound because nothing
  * else can refer to them: the caller's frame and temporaries were made
- * before the call, the callee's frame is gone, and the journal entries the
+ * before the call, the callee's frame is gone, the journal entries the
  * callee logged are dropped (vx_store_forget: they are all for slots of
- * frames that no longer exist).
+ * frames that no longer exist), and no object field refers to them: storing
+ * a value in a field raises the watermark `pin` to the heap's length, and a
+ * call frees only cells above both its mark and `pin`.
+ *
+ * Objects.  Class instances live in the object store (objects.c), Glob.heap
+ * of the Lean state: they outlive calls, and a failure context marks and
+ * rolls back the object store along with the vx_store (fc_enter, fc_fail,
+ * fc_keep).
  */
 #include <stdlib.h>
 #include <string.h>
@@ -139,6 +146,38 @@ static int vpush(vx_ctx *c, const vx_val *v)
     }
     c->vs[c->vsp++] = *v;
     return 1;
+}
+
+/* ----------------------------------------------- failure contexts */
+
+/* The state a failure context restarts from: slots and output (vx_store)
+   and objects. */
+typedef struct {
+    vx_mark    st;
+    vx_objmark ob;
+} fc_mark;
+
+static void fc_enter(vx_ctx *c, fc_mark *m)
+{
+    vx_store_mark(&c->st, &m->st);
+    vx_objs_mark(&c->objs, &m->ob);
+}
+
+/* The context failed: back to the state at the mark. */
+static void fc_fail(vx_ctx *c, const fc_mark *m)
+{
+    vx_store_rollback(&c->st, &m->st);
+    vx_objs_rollback(&c->objs, &m->ob);
+    if (c->st.depth == 0)
+        vx_objs_forget(&c->objs);
+}
+
+/* The context succeeded (or stopped): keep its effects. */
+static void fc_keep(vx_ctx *c, const fc_mark *m)
+{
+    vx_store_commit(&c->st, &m->st);
+    if (c->st.depth == 0)
+        vx_objs_forget(&c->objs);
 }
 
 /* writeSlot through the journal; 0 when the journal cannot grow. */
@@ -288,7 +327,10 @@ static void call_fn(vx_ctx *c, uint32_t f, size_t sp0, size_t nargs, uint64_t n,
         r->kind = VX_R_OK;
     else if (r->kind == VX_R_BRK)
         set_err(r, VX_E_CONTROL);
-    /* reclaim the callee's heap cells */
+    /* reclaim the callee's heap cells, except those an object field may
+       refer to (below pin) */
+    if (hmark < c->pin)
+        hmark = c->pin;
     if (r->kind == VX_R_OK) {
         if (vx_heap_keep(&c->heap, hmark, &r->v) != VX_OK)
             set_limit(r, VX_L_MEMORY);
@@ -347,7 +389,7 @@ static void eval_for_iter(vx_ctx *c, const vx_fn *fn, size_t base, const vx_node
     size_t sp0 = c->vsp, o, cnt;
     uint64_t k;
     vx_val v;
-    vx_mark m;
+    fc_mark m;
     for (k = 0;; k++) {
         if (fuel == 0) {                            /* | 0, ... => none */
             c->vsp = sp0;
@@ -384,11 +426,11 @@ static void eval_for_iter(vx_ctx *c, const vx_fn *fn, size_t base, const vx_node
             return;
         }
         /* match eval P n s₀ filt with -- the filter is a failure context */
-        vx_store_mark(&c->st, &m);
+        fc_enter(c, &m);
         eval(c, fn, base, nd->c, fuel - 1, r);
         if (r->kind == VX_R_FAIL) {
             /* | some (.fail, _) => evalFor P n i filt body s₀ vs acc  (EvalFor.skip) */
-            vx_store_rollback(&c->st, &m);
+            fc_fail(c, &m);
             fuel = fuel - 1;
             continue;
         }
@@ -396,7 +438,7 @@ static void eval_for_iter(vx_ctx *c, const vx_fn *fn, size_t base, const vx_node
             c->vsp = sp0;
             return;
         }
-        vx_store_commit(&c->st, &m);
+        fc_keep(c, &m);
         if (r->kind != VX_R_OK) {                   /* | some (.brk | .ret v | .err k, s₁) */
             c->vsp = sp0;
             return;
@@ -483,8 +525,111 @@ static void lit_value(const vx_ctx *c, const vx_fn *fn, uint32_t e, const vx_nod
         set_ok(r, VX_T_ARR, c->strlit[fn - c->p->fns][e]);
     else if (nd->op == VX_LIT_NONE)
         set_ok(r, VX_T_NONE, 0);
+    else if (nd->op == VX_LIT_REF)
+        set_ok(r, VX_T_REF, (uint64_t)nd->lit);
     else
         set_void(r);
+}
+
+/* ------------------------------------------------------------ the heap */
+
+/* The object a value refers to: `.ref a` with `g.heap[a]? = some o`. */
+static const vx_obj *obj_of(const vx_ctx *c, const vx_val *v)
+{
+    return v->tag == VX_T_REF ? vx_objs_get(&c->objs, v->bits) : NULL;
+}
+
+/* A value about to be stored in an object field: the cells it reaches must
+   survive every call return from now on (the shared empty object, cell 0,
+   always does). */
+static void pin_value(vx_ctx *c, const vx_val *v)
+{
+    if (vx_isref(v) && v->bits != 0)
+        c->pin = c->heap.len;
+}
+
+/* Whether class tag t is one of the m tags of an ISTAG node (4m bytes of the
+   bytes pool, little-endian u32s). */
+static int tag_in(const vx_ctx *c, const vx_node *nd, uint64_t t)
+{
+    uint32_t i;
+    for (i = 0; i < nd->d; i++) {
+        const uint8_t *b = &c->p->bytes[nd->a + 4 * i];
+        uint64_t u = (uint64_t)b[0] | (uint64_t)b[1] << 8 | (uint64_t)b[2] << 16 | (uint64_t)b[3] << 24;
+        if (u == t)
+            return 1;
+    }
+    return 0;
+}
+
+/*
+ * (op.apply vs s₁.g).1 and the new object store, with vs = a[0..n):
+ *
+ *   | .new t, vs, g => (.ok (.ref g.heap.length), { g with heap := g.heap ++ [⟨t, vs⟩] })
+ *   | .get k, [.ref a], g => match g.heap[a]? with
+ *     | some o => match o.fields[k]? with | some v => (.ok v, g) | none => (.err .type, g)
+ *     | none => (.err .type, g)
+ *   | .set k, [.ref a, v], g => match g.heap[a]? with
+ *     | some o => if k < o.fields.length then (.ok v, { g with heap := g.heap.set a … })
+ *                 else (.err .type, g)
+ *     | none => (.err .type, g)
+ *   | .tag, [.ref a], g => match g.heap[a]? with
+ *     | some o => (.ok (.int o.tag), g) | none => (.err .type, g)
+ *   | .isTag us, [.ref a], g => match g.heap[a]? with
+ *     | some o => (if us.contains o.tag then .ok (.ref a) else .fail, g)
+ *     | none => (.err .type, g)
+ *   | _, _, g => (.err .type, g)
+ */
+static void heap_apply(vx_ctx *c, const vx_node *nd, const vx_val *a, size_t n, vx_res *r)
+{
+    const vx_obj *o;
+    size_t k, idx;
+    if (nd->op == VX_H_NEW) {
+        for (k = 0; k < n; k++)
+            pin_value(c, &a[k]);
+        if (vx_objs_new(&c->objs, nd->a, a, n, &idx) != VX_OK) {
+            set_limit(r, VX_L_MEMORY);
+            return;
+        }
+        set_ok(r, VX_T_REF, idx);
+        return;
+    }
+    if (n != (nd->op == VX_H_SET ? 2u : 1u) || (o = obj_of(c, &a[0])) == NULL) {
+        set_err(r, VX_E_TYPE);
+        return;
+    }
+    switch (nd->op) {
+    case VX_H_GET:
+        if ((size_t)nd->a >= o->n) {
+            set_err(r, VX_E_TYPE);
+            return;
+        }
+        set_ok(r, c->objs.cells[o->off + nd->a].tag, c->objs.cells[o->off + nd->a].bits);
+        return;
+    case VX_H_SET:
+        if ((size_t)nd->a >= o->n) {
+            set_err(r, VX_E_TYPE);
+            return;
+        }
+        pin_value(c, &a[1]);
+        if (vx_objs_set(&c->objs, a[0].bits, nd->a, &a[1], c->st.depth > 0) != VX_OK) {
+            set_limit(r, VX_L_MEMORY);
+            return;
+        }
+        set_ok(r, a[1].tag, a[1].bits);
+        return;
+    case VX_H_TAG:
+        set_ok(r, VX_T_INT, vx_bits_of((int64_t)o->tag));
+        return;
+    default: /* VX_H_ISTAG */
+        if (tag_in(c, nd, o->tag)) {
+            set_ok(r, VX_T_REF, a[0].bits);
+        } else {
+            r->kind = VX_R_FAIL;
+            r->code = 0;
+        }
+        return;
+    }
 }
 
 /* eval P fuel s e, for node e of fn whose frame starts at slot `base`. */
@@ -493,7 +638,7 @@ static void eval_node(vx_ctx *c, const vx_fn *fn, size_t base, uint32_t e, uint6
     for (;;) {
         const vx_node *nd;
         uint64_t n;
-        vx_mark m;
+        fc_mark m;
 
         if (fuel == 0) {                            /* | 0, _, _ => none */
             set_limit(r, VX_L_FUEL);
@@ -573,22 +718,22 @@ static void eval_node(vx_ctx *c, const vx_fn *fn, size_t base, uint32_t e, uint6
                  | some (.ok _, s₁) => eval P n s₁ t
                  | some (.fail, _) => eval P n s e          -- rollback (Eval.ite_fail)
                  | some (.brk | .ret v | .err k, s₁) => pass on, with s₁ */
-            vx_store_mark(&c->st, &m);
+            fc_enter(c, &m);
             eval(c, fn, base, nd->a, n, r);
             if (r->kind == VX_R_OK) {
-                vx_store_commit(&c->st, &m);
+                fc_keep(c, &m);
                 e = nd->b;
                 fuel = n;
                 continue;
             }
             if (r->kind == VX_R_FAIL) {
-                vx_store_rollback(&c->st, &m);
+                fc_fail(c, &m);
                 e = nd->c;
                 fuel = n;
                 continue;
             }
             if (r->kind != VX_R_LIMIT)
-                vx_store_commit(&c->st, &m);
+                fc_keep(c, &m);
             return;
 
         case VX_N_FOR:
@@ -649,8 +794,20 @@ static void eval_node(vx_ctx *c, const vx_fn *fn, size_t base, uint32_t e, uint6
             return;
         }
 
+        case VX_N_HEAP: {
+            /* | n+1, s, .heap op es => bindL (evalList P n s es) fun vs s₁ =>
+                   some ((op.apply vs s₁.g).1, { s₁ with g := (op.apply vs s₁.g).2 }) */
+            size_t sp0 = c->vsp;
+            eval_list(c, fn, base, nd->c, nd->b, n, r);
+            if (r->kind != VX_R_OK)
+                return;
+            heap_apply(c, nd, &c->vs[sp0], nd->b, r);
+            c->vsp = sp0;
+            return;
+        }
+
         default:
-            /* not reachable: the loader accepts tags 0..11 only */
+            /* not reachable: the loader accepts tags 0..12 only */
             set_err(r, VX_E_TYPE);
             return;
         }
@@ -750,6 +907,7 @@ void vx_run(const vx_program *p, const vx_opts *o, vx_outcome *res)
     c.o = o;
     c.stack_base = (uintptr_t)__builtin_frame_address(0);
     vx_store_init(&c.st, slots, INIT_SLOTS, jour, INIT_JOURNAL, out, INIT_OUT);
+    vx_objs_init(&c.objs, o->max_heap, o->max_journal);
     c.vs = malloc(INIT_VSTACK * sizeof(vx_val));
     c.vcap = INIT_VSTACK;
     r.kind = VX_R_LIMIT;
@@ -779,6 +937,7 @@ void vx_run(const vx_program *p, const vx_opts *o, vx_outcome *res)
         free(c.strlit);
     }
     vx_heap_free(&c.heap);
+    vx_objs_free(&c.objs);
 }
 
 void vx_outcome_free(vx_outcome *res)
@@ -818,12 +977,13 @@ const char *vx_load_reason(int rc)
         "a call's argument count differs from the callee's arity",
         "unknown node tag",
         "unknown primitive code",
-        "a tupGet index on another primitive",
+        "a tupGet index on another primitive, or on the heap operation tag",
         "unknown literal kind",
         "a logic literal is not 0 or 1",
         "trailing bytes after the last function",
         "a count exceeds a limit of the loader",
         "out of memory",
+        "unknown heap operation",
     };
     return rc >= 0 && rc <= VX_LOAD_LAST ? reasons[rc] : "?";
 }
