@@ -126,6 +126,9 @@ structure TyEnv where
   sparams : List (String × List (String × Bool)) := []
   /-- Each enum: its enumerators in order. -/
   enums : List (String × List String) := []
+  /-- The enums declared `enum<open>` (Book of Verse ch. 9): a `case` on one
+      needs `_`, as it may gain values. -/
+  openEnums : List String := []
   /-- The `var` fields of each class, inherited ones included (#34). -/
   varFields : List (String × String) := []
   /-- The `<unique>` classes: compared by identity (#34). -/
@@ -1122,7 +1125,7 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
   | .member p e m => elabMember ctx p (← elabE ctx e none) m
   | .construct p name targs args => elabConstruct ctx p name targs args exp
   | .mapLit p entries => elabMapLit ctx p entries exp
-  | .structDef p _ _ | .enumDef p _ => eerr p "struct and enum definitions must be at the top level"
+  | .structDef p _ _ | .enumDef p _ _ => eerr p "struct and enum definitions must be at the top level"
   | .query p e =>
     let r ← elabE ctx e none
     match r.ty with
@@ -2428,9 +2431,11 @@ partial def elabCase (ctx : Ctx) (p : Pos) (scrut : SExpr) (arms : List (Option 
     let mut ty : Ty := .never
     for (_, rv) in results do ty ← join p ty rv.ty exp
     let hasDefault := results.any (·.1.isNone)
-    -- an enum case that names every enumerator needs no `_` (Book of Verse §7.6)
+    -- an enum case that names every enumerator needs no `_` (Book of Verse
+    -- §7.6), unless the enum is open: it may gain values (ch. 9)
     let exhaustive := match rs.ty with
       | .enum n =>
+        !ctx.types.openEnums.contains n &&
         let k := ((ctx.types.enums.lookup n).getD []).length
         (List.range k).all fun i => results.any fun (pat, _) => match pat with
           | some (.lit (.int j)) => j == i
@@ -2439,7 +2444,12 @@ partial def elabCase (ctx : Ctx) (p : Pos) (scrut : SExpr) (arms : List (Option 
     let mut acc : Expr ← if hasDefault then pure (.lit .void) else
       if exhaustive then pure (.prim .userErr [])   -- unreachable
       else if ctx.canFail then pure (.prim .fail [])
-      else eerr p "a case without _ is only allowed where failure is (e.g. a <decides> function), or on an enum when every value is named"
+      else match rs.ty with
+        | .enum n =>
+          if ctx.types.openEnums.contains n then
+            eerr p s!"a case on the open enum {n} needs _ (it may gain values), unless failure is allowed (e.g. in a <decides> function)"
+          else eerr p "a case without _ is only allowed where failure is (e.g. a <decides> function), or on an enum when every value is named"
+        | _ => eerr p "a case without _ is only allowed where failure is (e.g. a <decides> function), or on an enum when every value is named"
     for (pat, rv) in results.reverse do
       let v ← coerce p rv ty
       match pat with
@@ -2975,7 +2985,9 @@ def elabProgramCore (allTops00 : List STop) (opts : Options := {}) : Except Stri
     (fullOf cd.name).filterMap fun (f, _, d, _) => d.map fun _ => ((cd.name, f), homeOf cd.name f) }
   for t in allTops do
     match t with
-    | .const _ n none (.enumDef _ vals) => env := { env with enums := env.enums ++ [(n, vals)] }
+    | .const _ n none (.enumDef _ vals isOpen) =>
+      env := { env with enums := env.enums ++ [(n, vals)],
+                        openEnums := if isOpen then env.openEnums ++ [n] else env.openEnums }
     | .const _ n none (.structDef _ _ _) => env := { env with structs := env.structs ++ [(n, [])] }
     | _ => pure ()
   -- the type parameters of parametric structs
