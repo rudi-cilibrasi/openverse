@@ -623,6 +623,8 @@ static void lit_value(const vx_ctx *c, const vx_fn *fn, uint32_t e, const vx_nod
         set_ok(r, VX_T_NONE, 0);
     else if (nd->op == VX_LIT_REF)
         set_ok(r, VX_T_REF, (uint64_t)nd->lit);
+    else if (nd->op == VX_LIT_FLOAT)
+        set_ok(r, VX_T_FLOAT, vx_bits_of(nd->lit));
     else
         set_void(r);
 }

@@ -10,8 +10,8 @@
  *   4. every slot (LOCAL, ASSIGN, FOR) is < nslots        rd_slot
  *   5. CALL fn < nfns                                     load_call
  *      ... and n == arity of fn                           check_calls
- *   6. prim code <= 28, k == 0 unless tupGet,             load_prim
- *      lit kind <= 6, LOGIC byte <= 1                     load_lit
+ *   6. prim code <= 45, k == 0 unless tupGet,             load_prim
+ *      lit kind <= 7, LOGIC byte <= 1                     load_lit
  *      heap op <= 4, k == 0 for tag                       load_heap
  *   7. counts within the VX_MAX_* limits of openverse.h   throughout
  *
@@ -172,7 +172,7 @@ static int load_lit(vx_ld *r, vx_program *p, vx_node *nd)
     if (kind > VX_LIT_LAST)
         return VX_LOAD_LIT;
     nd->op = kind;
-    if (kind == VX_LIT_INT) {
+    if (kind == VX_LIT_INT || kind == VX_LIT_FLOAT) {
         if (rd_i64(r, &i) != VX_LOAD_OK)
             return VX_LOAD_TRUNCATED;
         nd->lit = i;
