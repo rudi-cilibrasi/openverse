@@ -101,7 +101,7 @@ Proof.
           by reflexivity.
         rewrite Ey.
         assert (NOK: node_ok nfns (f_nslots x) al nb j y) by (apply Ok10; lia).
-        destruct NOK as (W & T & N0 & N1 & N2 & N3 & N4 & N5 & N6 & N7 & N8).
+        destruct NOK as (W & T & _ & _ & _ & _ & _ & N5 & _ & _ & _ & _).
         destruct W as (W1 & W2 & W3 & W4 & W5 & W6 & W7).
         forward.
         forward_if (temp _t'1 (Vint (Int.repr (if Z.eq_dec (n_tag y) 5 then

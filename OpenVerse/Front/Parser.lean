@@ -666,6 +666,7 @@ partial def parsePrimary (stop : Nat) : PM SExpr := do
   match t.tok with
   | .int n => bump; return .int t.pos n
   | .char c => bump; return .char t.pos c
+  | .char32 c => bump; return .char32 t.pos c
   | .str parts => bump; return .str t.pos (← parseInterp parts)
   | .sym "(" =>
     if (← peekT 1).isKw "super" && (← peekT 2).isSym ":" && (← peekT 3).isSym ")" then

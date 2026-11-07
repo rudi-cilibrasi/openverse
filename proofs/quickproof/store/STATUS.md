@@ -1,6 +1,7 @@
 # Status of openverse_store
 
-- Law: `project/harness/store_rollback_model.c`, pinned to openverse commit 7c0444b2117b.
+- Law: `project/harness/store_rollback_model.c`, pinned to openverse commit 8faa3ffa5a6e (the heap commit,
+  #31). That commit changed only `openverse.h` among the pinned files; the proof replays unchanged.
 - `qp check`: native runs (ASan/UBSan, 3,000) ok; CompCert interpreter (20 runs) no stop; VST lint clean;
   mutants 26/40 killed (`CHECK.md`, read in `CHECK-NOTES.md`).
 - **Proof: `store_rollback_model` PROVED, `qp verify` PASS** (`VERIFY.md`); axioms: 12, standard + VST
@@ -16,7 +17,7 @@
     one for the checks after a step, joined by the invariant of the 32-step loop.
   - `contracts/store_rollback_model.v`: the theorem.
 
-  `qp verify` checks them in about 17 minutes with 3 build jobs.
+  `qp verify` checks them in about 12 minutes with 4 build jobs.
 - Coverage, noted by the proof: every journal entry names a slot below `nslots`, so under this law the
   `sl < s->nslots` test in `vx_store_rollback` is never false. The test only defends against a corrupted
   journal, and the theorem says nothing about that branch.
