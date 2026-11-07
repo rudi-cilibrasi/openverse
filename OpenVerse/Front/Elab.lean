@@ -383,6 +383,9 @@ structure Ctx where
   locals  : List Local := []
   canFail : Bool := false
   inLoop  : Bool := false
+  /-- In a class's `block:` clauses (one method, `$block`), where a `return`
+      would skip the clauses after it. -/
+  inBlock : Bool := false
   retTy   : Ty := .void
   types   : TyEnv := {}
   /-- The field defaults being elaborated (struct, field), to reject a default
@@ -945,9 +948,11 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
     if !ctx.inLoop then eerr p "break is only allowed inside loop (not for)"
     return ⟨.brk, .never⟩
   | .ret p none =>
+    if ctx.inBlock then eerr p "return is not allowed in a block: clause (it would skip the clauses after it)"
     if ctx.retTy != .void then eerr p s!"return needs a value of type {ctx.retTy.show}"
     return ⟨.ret (.lit .void), .never⟩
   | .ret p (some e) =>
+    if ctx.inBlock then eerr p "return is not allowed in a block: clause (it would skip the clauses after it)"
     let r ← elabE ctx e (some ctx.retTy)
     return ⟨.ret (← coerce p r ctx.retTy), .never⟩
   | .caseE p scrut arms => elabCase ctx p scrut arms exp
@@ -2305,7 +2310,9 @@ def elabProgram (allTops00 : List STop) (opts : Options := {}) : Except String C
       if effs.contains "computes" && ("transacts" :: heapFx).any effs.contains then
         throw s!"{p.show}: <computes> excludes the heap effects (<reads>, <writes>, <allocates>, <transacts>) that {n} also has"
       sigs := sigs.push { idx, name := n, params := tys, ret := rt, decides := effs.contains "decides",
-                          fx := allowedFx effs,
+                          -- (a `block:`'s effects are inferred below, from none, as a
+                          -- constant's: blocks that construct each other's classes)
+                          fx := if n.endsWith ".$block" then [] else allowedFx effs,
                           isConst := false,
                           named := (ps.filter (·.named)).map fun q => (q.name, q.default) }
     | .const p n sty _ =>
@@ -2389,7 +2396,7 @@ def elabProgram (allTops00 : List STop) (opts : Options := {}) : Except String C
             ({ name := prm.name, slot := i, ty := t, mutable := false } : Local)
           let ctx : Ctx := { sigs := sigs.toList ++ gsigs.toList, sigProg := mkSigProg sigs, types := env,
                              locals := locals.reverse, retTy := .void,
-                             selfClass := some (n.dropRight ".$block".length) }
+                             inBlock := true, selfClass := some (n.dropRight ".$block".length) }
           match (elabStmt ctx body (some .void)).run { env, nslots := ps.length, slotTys := s.params.toArray } with
           | .ok (_, st) =>
             let fx := heapFx.filter fun k => st.fx.any (·.1 == k)
@@ -2485,6 +2492,7 @@ def elabProgram (allTops00 : List STop) (opts : Options := {}) : Except String C
     let ctx : Ctx := { sigs := allSigs, sigProg, locals := locals.reverse, types := env,
                        canFail := decides, retTy := ret, dictBase := ps.length,
                        dictVars := tps.map (·.1),
+                       inBlock := name.endsWith ".$block",
                        selfClass := match name.splitOn "." with
                          | [c, _] => some c
                          | _ => none }
