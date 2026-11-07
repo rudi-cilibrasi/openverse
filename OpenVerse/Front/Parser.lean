@@ -131,7 +131,16 @@ partial def parseType : PM STy := do
     expectSym ")"
     return .tup ts.toList
   else match t.identName? with
-    | some n => bump; return .name n
+    | some n =>
+      bump
+      if (← peekT).isSym "(" then
+        -- `pair(int, string)`: a parametric struct applied to type arguments
+        bump
+        let mut ts := #[← parseType]
+        while (← peekT).isSym "," do bump; ts := ts.push (← parseType)
+        expectSym ")"
+        return .app n ts.toList
+      return .name n
     | none => perr t s!"expected a type, found {t.tok.describe}"
 
 def cmpOps : List String := ["=", "<>", "<", "<=", ">", ">="]
@@ -259,12 +268,29 @@ partial def parsePostfix (stop : Nat) : PM SExpr := do
     let t ← peekT
     if t.offside stop || t.bol then break
     if t.isSym "(" then
-      bump; e := .app t.pos e (← parseArgs ")") false
+      -- `pair(int, string){…}`: type arguments then a struct value; otherwise a call
+      let cons? ← match e with
+        | .ident _ n => do
+          let saved ← get
+          let r ← (do
+              bump
+              let mut ts := #[← parseType]
+              while (← peekT).isSym "," do bump; ts := ts.push (← parseType)
+              expectSym ")"
+              let b ← peekT
+              if b.isSym "{" && !b.offside stop && !b.bol then bump; return some (n, ts.toList)
+              return none) <|> pure none
+          if r.isNone then set saved
+          pure r
+        | _ => pure none
+      match cons? with
+      | some (n, ts) => e := .construct t.pos n ts (← parseArgs "}")
+      | none => bump; e := .app t.pos e (← parseArgs ")") false
     else if t.isSym "{" && (match e with | .ident _ _ => true | _ => false) then
       -- `point{X := 1, Y := 2}`: a struct value
       bump
       let name := match e with | .ident _ n => n | _ => ""
-      e := .construct t.pos name (← parseArgs "}")
+      e := .construct t.pos name [] (← parseArgs "}")
     else if t.isSym "[" then
       bump; e := .app t.pos e (← parseArgs "]") true
     else if t.isSym "." then
@@ -511,7 +537,7 @@ partial def parseStructBody (p : Pos) : PM SExpr := do
       if a.isSym "," || a.isSym ";" then bump; continue
       fields := fields.push (← parseField 0)
   else perr o "expected ':' or '{' after struct"
-  return .structDef p fields.toList
+  return .structDef p [] fields.toList
 
 /-- `enum` (after the keyword): `:` + values or `{ values }`. -/
 partial def parseEnumBody (p : Pos) : PM SExpr := do
@@ -685,6 +711,21 @@ partial def parseTops : PM (List STop) := do
           tps := tps.push { pos := vt.pos, name := v, constraint := c }
           if (← peekT).isSym "," then bump else break
       expectSym ")"
+      if (← peekT).isSym ":=" && (← peekT 1).isKw "struct" then
+        -- `name(t:type, …) := struct …`: a parametric struct
+        let d ← peekT
+        bump
+        if !tps.isEmpty then perr d "a parametric type takes its parameters without a where clause"
+        let tparams ← ps.toList.mapM fun prm => do
+          let c ← match prm.named, prm.default, prm.ty with
+            | false, none, .name "type" => pure "type"
+            | false, none, .app "subtype" [.name c] => pure c
+            | _, _, _ => perr n s!"a parameter of a parametric type is written {prm.name}:type or {prm.name}:subtype(…)"
+          pure ({ pos := t.pos, name := prm.name, constraint := c } : TParam)
+        match ← parseFnBody with
+        | .structDef bp [] fs => tops := tops.push (.const t.pos name none (.structDef bp tparams fs))
+        | _ => perr d s!"only structs can be parametric in openverse ({name})"
+        continue
       let effs ← parseSpecs
       expectSym ":"
       let ret ← parseType

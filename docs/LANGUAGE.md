@@ -28,6 +28,7 @@ surface Verse is elaborated (`OpenVerse/Front/Elab.lean`) into Verse Core
 | Functions | recursion, mutual recursion, `<decides>` (called with `F[…]`), named parameters `?P:t = default` passed as `?P := e` (positional, then named as written, then defaults), other effect specifiers accepted and ignored | ch. 6, 13 |
 | Parametric functions | `F(X:t, … where t:type, u:subtype(comparable))`: type parameters in parameter types, the result type and local declarations; type arguments inferred at each call (see [Parametric functions](#parametric-functions)) | Types: where clauses |
 | Structs | `name := struct:` with typed fields and defaults, `name{F := e, …}`, `S.F`, `set S.F = e` / `op=`, structural equality (a struct is the tuple of its fields in Verse Core) | ch. 9 |
+| Parametric structs | `pair(t:type, u:type) := struct:`, the type `pair(int, string)`, values `pair(int, string){First := 1, Second := "a"}` (or `pair{…}` where the expected type gives the type arguments); see [Parametric structs](#parametric-structs) | ch. 9 |
 | Enums | `name := enum:` / `enum{A, B}`, `name.A`, equality, `case` that needs no `_` when every value is named (an enumerator is its index in Verse Core) | ch. 9 |
 | Maps | `[k]v`, `map{k => v, …}` (a key given twice keeps its last value, at its last position), `M[k]` (fails on a missing key), `set M[k] = v` (insert or update, never fails), `set M[k] op= v` (fails on a missing key), `.Length`, `for (V : M)`, `for (K -> V : M)` in insertion order, order-sensitive equality (a map is the array of its pairs in Verse Core) | §3, §9.3 |
 | Array methods | `A.Slice[i, j]`, `A.Slice[i]`, `A.Find[x]`, `A.RemoveElement[i]`, `A.ReplaceElement[i, x]`, `A.Insert[i, B]` (all failable) | §9.1 |
@@ -111,6 +112,46 @@ Combine(A:t1, B:t2 where t1:type, t2:type):tuple(t1, t2) = (A, B)
   `Main`, several constraints on one type parameter (also unsupported in the
   Book), explicit type arguments to a generic function, and generic
   constants.
+
+## Parametric structs
+
+A struct with parameters is a family of struct types:
+
+```verse
+pair(t:type, u:type) := struct:
+    First:t
+    Second:u
+
+Swap(P:pair(t, u) where t:type, u:type):pair(u, t) =
+    pair(u, t){First := P.Second, Second := P.First}
+```
+
+- A parameter is `t:type` or `t:subtype(comparable)`. The field types and
+  field defaults may use it.
+- `pair(int, string)` is a type. A parametric struct used without type
+  arguments, or with the wrong number of them, is an error, and so is a
+  non-parametric struct used with type arguments.
+- A value is written `pair(int, string){…}`, or `pair{…}` where the expected
+  type supplies the type arguments, as in `R:pair(string, int) = pair{…}`.
+  Type arguments are not inferred from the fields.
+- Each field default is type-checked once, at its definition, with the
+  parameters opaque (`Value:t = 0` is an error). It is elaborated again, at
+  the field's type, wherever a construction omits the field. That second
+  elaboration can still fail in one corner case: a default that calls a
+  generic function whose type parameter is inferred only from the expected
+  type, at a `void` type argument. A default that depends on itself, directly
+  or through another struct's default, is an error.
+- A type whose Verse Core representation would exceed 100000 nodes is
+  rejected. A struct with two fields of its parameter doubles in size at each
+  level of nesting.
+- In Verse Core a struct is the tuple of its fields, so `pair(int, string)`
+  is a `tuple(int, []char)`. Two instantiations are the same type when their
+  type arguments are, and struct equality is by value.
+- A struct that contains itself, directly or through a type argument (as in
+  `b := struct: Y:?wrapper(b)`), has no finite representation and is
+  rejected.
+- An instantiation counts as comparable when all its type arguments are
+  comparable.
 
 ## Readings openverse takes
 

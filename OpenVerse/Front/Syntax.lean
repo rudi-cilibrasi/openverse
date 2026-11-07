@@ -22,6 +22,17 @@ inductive STy where
   | tup  : List STy → STy
   /-- `[k]v` -/
   | map  : STy → STy → STy
+  /-- `name(t₁, …)`: a parametric struct applied to type arguments. -/
+  | app  : String → List STy → STy
+  deriving Repr, Inhabited
+
+/-- A type parameter from a `where` clause (`t:type` or
+    `t:subtype(comparable)`), or of a parametric struct `name(t:type) := struct`. -/
+structure TParam where
+  pos  : Pos
+  name : String
+  /-- The constraint as written: `type`, or the argument of `subtype(…)`. -/
+  constraint : String
   deriving Repr, Inhabited
 
 mutual
@@ -64,12 +75,13 @@ inductive SExpr where
   | decl     : Pos → String → Option STy → Bool → SExpr → SExpr
   /-- `set lhs = e` or `set lhs op= e`. -/
   | set      : Pos → SExpr → Option String → SExpr → SExpr
-  /-- `struct: fields` — each field: name, type, default value, `var`. -/
-  | structDef : Pos → List (String × STy × Option SExpr × Bool) → SExpr
+  /-- `struct: fields` — each field: name, type, default value, `var`; the
+      type parameters of a parametric struct `name(t:type) := struct: …`. -/
+  | structDef : Pos → List TParam → List (String × STy × Option SExpr × Bool) → SExpr
   /-- `enum: values`. -/
   | enumDef  : Pos → List String → SExpr
-  /-- `Name{F := e, …}`: a struct value. -/
-  | construct : Pos → String → List SExpr → SExpr
+  /-- `Name{F := e, …}` or `name(t₁, …){F := e, …}`: a struct value. -/
+  | construct : Pos → String → List STy → List SExpr → SExpr
   /-- `map{k => v, …}`. -/
   | mapLit   : Pos → List (SExpr × SExpr) → SExpr
   deriving Repr, Inhabited
@@ -85,7 +97,7 @@ def SExpr.pos : SExpr → Pos
   | .orE p _ _ | .range p _ _ | .tuple p _ | .block p _ | .arrayLit p _
   | .optionLit p _ | .logicLit p _ | .ite p _ _ _ | .forE p _ _ | .gen p _ _ _
   | .loop p _ | .brk p | .ret p _ | .caseE p _ _ | .decl p _ _ _ _ | .set p _ _ _
-  | .structDef p _ | .enumDef p _ | .construct p _ _ | .mapLit p _ => p
+  | .structDef p _ _ | .enumDef p _ | .construct p _ _ _ | .mapLit p _ => p
 
 structure SParam where
   name : String
@@ -94,14 +106,6 @@ structure SParam where
   named : Bool := false
   /-- `?Name:t = e`: the value when the call omits it. -/
   default : Option SExpr := none
-  deriving Repr, Inhabited
-
-/-- A type parameter from a `where` clause: `t:type` or `t:subtype(comparable)`. -/
-structure TParam where
-  pos  : Pos
-  name : String
-  /-- The constraint as written: `type`, or the argument of `subtype(…)`. -/
-  constraint : String
   deriving Repr, Inhabited
 
 /-- A top-level definition. A function's type parameters are those of its
