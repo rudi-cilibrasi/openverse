@@ -252,6 +252,8 @@ def TyEnv.slotImpls (env : TyEnv) (impl : String → Option String) (ups : List 
     enums and unrelated classes are disjoint. -/
 partial def TyEnv.disjoint (env : TyEnv) : Ty → Ty → Bool
   | .void, _ | _, .void | .param .., _ | _, .param .. | .never, _ | _, .never => false
+  -- (every value is an any, #138)
+  | .any, _ | _, .any => false
   -- (a refinement overlaps what its base does, #136)
   | .refine n, b => match env.refines.lookup n with
     | some (base, _) => env.disjoint base b
@@ -1257,10 +1259,17 @@ partial def joinTy (env : TyEnv) (a b : Ty) (exp : Option Ty) (inner : Bool := f
     if k == k' then (joinTy env x y (match exp with | some (.map _ e) => some e | _ => none) true).map (.map k) else none
   | _, _ => none
 
-/-- A class or interface type (whose failed joins are ambiguities). -/
+/-- A class or interface type. -/
 def isClassTy (env : TyEnv) : Ty → Bool
   | .struct n _ => env.classes.contains n
   | _ => false
+
+/-- Two classes or interfaces with a supertype in common, whose failed join
+    is an ambiguity (two of them), not unrelated types joining at `any`. -/
+def ambiguousJoin (env : TyEnv) : Ty → Ty → Bool
+  | .struct a _, .struct b _ =>
+    env.classes.contains a && env.classes.contains b && (env.supers a).any (env.supers b).contains
+  | _, _ => false
 
 /-- The type of a two-branch construct (`joinTy`; a void branch makes it void). -/
 def join (p : Pos) (a b : Ty) (exp : Option Ty) : EM Ty := do
@@ -1275,7 +1284,7 @@ def join (p : Pos) (a b : Ty) (exp : Option Ty) : EM Ty := do
     | none =>
       -- (types with nothing in common join at `any`, when nothing else is
       -- expected, #138; classes with two common supertypes stay ambiguous)
-      if (exp.isNone || exp == some .any) && !(isClassTy (← get).env a && isClassTy (← get).env b) then return .any
+      if (exp.isNone || exp == some .any) && !ambiguousJoin (← get).env a b then return .any
       eerr p s!"the branches have different types: {a.show} and {b.show}"
 
 
@@ -1558,7 +1567,7 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
             match joinTy (← get).env acc x.ty elemExp with
             | some j => pure j
             | none =>
-              if (elemExp.isNone || elemExp == some .any) && !(isClassTy (← get).env acc && isClassTy (← get).env x.ty) then
+              if (elemExp.isNone || elemExp == some .any) && !ambiguousJoin (← get).env acc x.ty then
                 pure .any
               else eerr e'.pos s!"the elements of this array have different types: {acc.show} and {x.ty.show}") r.ty
         let es ← all.mapM fun (e', x) => coerce e'.pos x jt
@@ -1866,7 +1875,7 @@ partial def elabApp (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (brack
       resolveOverload ctx p name ovs ctx.sig? (fun o => elabApp ctx p (.ident p o) args bracket exp) args
     else
     -- (a soft built-in the program defines is the program's)
-    let builtinName := if softBuiltins.contains name && (ctx.sig? name).isSome then "$program" else name
+    let builtinName := if (softBuiltins.contains name || name == "any") && (ctx.sig? name).isSome then "$program" else name
     match builtinName with
     | "any" =>
       -- `any(X)`: X as an `any` (#138), evaluated
@@ -2367,8 +2376,8 @@ partial def elabCast (ctx : Ctx) (p : Pos) (T : String) (args : List SExpr) (bra
   let [a] := args | eerr p s!"a cast {T}[X] takes one value"
   let r ← elabE ctx a none
   let (S, sargs) ← match r.ty with
-    | .struct S sargs => if env.classes.contains S then pure (S, sargs) else eerr p s!"cannot cast a {S} to {T}"
-    | t => eerr p s!"cannot cast a {t.show} to {T}"
+    | .struct S sargs => if env.classes.contains S then pure (S, sargs) else eerr p s!"cannot cast {withArticle S} to {T}"
+    | t => eerr p s!"cannot cast {withArticle t.show} to {T}"
   -- a parametric class's type arguments are those of the value (#39), in the
   -- same hierarchy
   let parametric := (env.sparams.lookup T).isSome || !(env.coreArgs T []).isEmpty
