@@ -64,6 +64,42 @@ bird := class(pet, named):
 
 Identity(X:t where t:type):t = X
 
+# interface fields (#23): inherited by the classes below, read through an
+# interface-typed value, reached once along a diamond
+titled := interface:
+    Title2:string
+    Greeting:string = "hi"
+badge := interface(titled):
+    Code:int = 7
+ribbon := interface(titled):
+    Colour:string = "red"
+medal := class(badge, ribbon):
+    Weight:int = 3
+    Title2<override>:string = "gold"
+trophy := class(titled):
+    Height:int = 10
+
+Hello(T:titled):string = "{T.Greeting}, {T.Title2}"
+
+# the most specific default of an interface field wins, whatever the order
+# of the parents; an interface may narrow a method's result
+basic := interface:
+    Level:int = 0
+    Reward():pet = pet{}
+advanced := interface(basic):
+    Level<override>:int = 1
+    Reward<override>():cat = cat{Age := 2}
+course1 := class(basic, advanced):
+    Hours:int = 3
+course2 := class(advanced, basic):
+    Hours:int = 4
+
+# a covariant result: an override may return a class below the declared one
+maker := class:
+    Make():pet = pet{}
+catmaker := class(maker):
+    Make<override>():cat = cat{Age := 9}
+
 # classes and interfaces in generic code, and as parameters
 Labels(Items:[]labelled):[]string = for (I : Items) { I.Label() }
 
@@ -113,6 +149,15 @@ Main():void =
     if (dog[Animals[1]]) then Print("the second animal is a dog")
     A2:animal = Identity(dog{})
     Print("{A2.Legs()} legs")
+    Ts:[]titled = array{medal{}, trophy{Title2 := "silver"}}
+    for (T : Ts) { Print(Hello(T)) }
+    M := medal{}
+    Print("{M.Code} {M.Colour} {M.Weight}")
+    Print("levels {course1{}.Level} {course2{}.Level}, reward {course1{}.Reward().Title()}")
+    Mk:maker = catmaker{}
+    Print("made a pet of age {Mk.Make().Age}")
+    C2 := catmaker{}.Make()
+    Print("a {C2.Title()}")
     # a failing cast inside a failure context rolls back
     var Seen:int = 0
     if (set Seen += 1, D := dog[Animals[0]]) then Print("unreachable")
