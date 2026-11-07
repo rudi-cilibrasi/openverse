@@ -253,7 +253,7 @@ partial def Ty.toVTy (env : TyEnv) : Ty → VTy
   | .opt t => .opt (t.toVTy env)
   | .tup ts => .tup (ts.map (Ty.toVTy env))
   | .struct n ts =>
-    if env.isRefClass n then .ref (env.refTags n)
+    if env.isRefClass n then .ref (env.refTags n) []
     else if env.classes.contains n then
       -- one option per concrete class at or below `n`
       .tup ((env.concreteBelow n).map fun d =>
@@ -594,7 +594,7 @@ partial def _root_.OpenVerse.VTy.hasVar : VTy → Bool
 
 /-- Whether a Verse Core type mentions a reference. -/
 partial def _root_.OpenVerse.VTy.hasRef : VTy → Bool
-  | .ref _ => true
+  | .ref _ _ => true
   | .arr t | .opt t => t.hasRef
   | .tup ts => ts.any VTy.hasRef
   | _ => false
@@ -702,6 +702,9 @@ def join (p : Pos) (a b : Ty) (exp : Option Ty) : EM Ty := do
     if a == .never then return b
     if b == .never then return a
     if a == b then return a
+    -- void accepts any value (Book of Verse), so a void branch makes the
+    -- construct void: `if{X := e} else {Print("none")}` (spec: IfElseMacro)
+    if a == .void || b == .void then return .void
     let env := (← get).env
     if let (.struct S [], .struct T []) := (a, b) then
       if env.classes.contains S && env.classes.contains T then
