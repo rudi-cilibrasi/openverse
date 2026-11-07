@@ -2309,12 +2309,21 @@ partial def elabMapLit (ctx : Ctx) (p : Pos) (entries : List (SExpr × SExpr)) (
     let rv0 ← elabE ctx v0 vt?
     let kt := kt?.getD rk0.ty
     if !kt.comparable ctx.types then eerr p (notComparable ctx.types kt "a map key")
-    let vt := vt?.getD rv0.ty
+    let vt0 := vt?.getD rv0.ty
+    let mut rs : Array (SExpr × R × SExpr × R) := #[]
+    for (k, v) in entries do
+      rs := rs.push (k, ← elabE ctx k (some kt), v, ← elabE ctx v (some vt0))
+    -- the values' type: the expected one (or the first's) when every value
+    -- converts to it, else their join, as for an array literal (#67)
+    let vt ← match ← tryCatch (some <$> rs.toList.mapM fun (_, _, v, rv) => coerce v.pos rv vt0) (fun _ => pure none) with
+      | some _ => pure vt0
+      | none => rs.toList.foldlM (fun acc (_, _, v, rv) => do
+          match joinTy (← get).env acc rv.ty vt? with
+          | some j => pure j
+          | none => eerr v.pos s!"the values of this map have different types: {acc.show} and {rv.ty.show}") rv0.ty
     let mut steps : Array Expr := #[]
     let mut slots : Array (Nat × Nat) := #[]
-    for (k, v) in entries do
-      let rk ← elabE ctx k (some kt)
-      let rv ← elabE ctx v (some vt)
+    for (k, rk, v, rv) in rs do
       let tk ← fresh kt
       let tv ← fresh vt
       steps := steps.push (.assign tk (← coerce k.pos rk kt))
