@@ -238,11 +238,21 @@ circle := class(shape, labelled):
     satisfies.
 - **Qualified implementations.** A class that implements two interfaces
   declaring the same method can give each its own: `(i1:)M<override>()`
-  and `(i2:)M<override>()`. A call through an `i1` uses `i1`'s, and
-  `X.(i1:)M()` names it; an unqualified call on the class is then
-  ambiguous and refused. The qualifier is the interface that declares the
-  method. A plain `M<override>` implements every declaration, and a more
-  specific one (in a subclass) wins over a qualified one above it.
+  and `(i2:)M<override>()`. Each declaration that overrides nothing (a
+  *root*) is a separate slot. The qualifier names the root: the interface
+  that introduces `M`.
+  - **Choosing.** For an object, a slot's implementation is the most
+    specific `(r:)M` or plain `M` above its class that is below `r` or in its
+    class chain. A class's method implements an interface that a subclass
+    adds; an interface's default implements only the slots above it.
+  - **Calls.** A call through an `i1` uses slot `i1`. `X.(i1:)M()` names it,
+    and inside a method a bare `(i1:)M()` is `Self.(i1:)M()`. A call through
+    a type whose slots some class below implements differently is refused as
+    ambiguous, so every static path to a slot reaches the same code.
+  - **`(super:)M()`** in `(r:)M` is slot `r`'s implementation above. In a
+    plain `M` it is refused when the slots above differ.
+  - **Restrictions.** A class gives `M` plainly or qualified, not both. A
+    plain `M<override>` in a subclass implements all its slots.
 - **Casts.** `T[X]` is `X` as a `T`, failing unless `X`'s class is below
   `T`. `T(X)` converts to a supertype and cannot fail.
 - **Parametric classes.** A parametric class is a reference like any other

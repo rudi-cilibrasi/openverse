@@ -157,8 +157,9 @@ partial def parseType : PM STy := do
   else match t.identName? with
     | some n =>
       bump
-      if (← peekT).isSym "(" then
+      if (← peekT).isSym "(" && !(← peekT).bol then
         -- `pair(int, string)`: a parametric struct applied to type arguments
+        -- (a `(` starting a line starts the next item, such as `(i:)M`)
         bump
         let mut ts := #[← parseType]
         while (← peekT).isSym "," do bump; ts := ts.push (← parseType)
@@ -681,6 +682,12 @@ partial def parsePrimary (stop : Nat) : PM SExpr := do
       -- `(super:)M`: the parent's implementation of a method
       bump; bump; bump; bump
       return .member t.pos (.ident t.pos "(super:)") (← expectIdent)
+    if ((← peekT 1).identName?).isSome && (← peekT 2).isSym ":" && (← peekT 3).isSym ")" then
+      -- `(i:)M`: `Self.(i:)M`, a qualified member of the current object (#70)
+      bump
+      let q ← expectIdent
+      bump; bump
+      return .member t.pos (.ident t.pos "Self") s!"({q}:){← expectIdent}"
     bump
     let (items, commas) ← parseParenItems
     match items with
