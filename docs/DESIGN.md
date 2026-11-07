@@ -129,6 +129,31 @@ instantiation lets inference take different paths at different types (at
 but checks each instance separately, multiplies code, and cannot express
 polymorphic recursion.
 
+## Classes without references
+
+Verse classes are references, but without `var` fields an instance cannot
+change, so a value representation is observationally the same (#14). Verse
+Core has neither references nor variants, so a class value is a finite
+tuple. A value of *static* class or interface type `T` is the tuple of one
+option per concrete class below `T`, in definition order, exactly one of
+them set to that class's fields. Fields are laid out with the inherited ones
+first, so a field has the same position in every class below the one that
+declares it.
+
+- **Operations.** An upcast moves the options to their places in the larger
+  tuple, a cast `T[X]` keeps those of the classes below `T` (failing when
+  none is set), and a field access or a method call picks the option that is
+  set.
+- **Direct calls.** When every concrete class below the receiver's type
+  shares one implementation of a method, the call is direct, so classes
+  without subclasses pay nothing for dispatch.
+- **Finite encodings.** The encoding is per static type, so
+  `person := class: Pet:?animal` is finite as long as no class below
+  `animal` holds a `person`. A class whose encoding would contain itself is
+  rejected; recursive classes need the heap of phase 3 (#11).
+- **Translation validation.** Everything is ordinary Verse Core, checked by
+  `Prog.checkTypes`.
+
 ## Why every slot starts with a typed default
 
 The semantics starts a call's non-parameter slots as `void`, which keeps the

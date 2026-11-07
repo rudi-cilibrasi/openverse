@@ -113,9 +113,14 @@ structure SParam where
 inductive STop where
   | fn    : Pos → String → List SParam → List TParam → List String → STy → SExpr → STop
   | const : Pos → String → Option STy → SExpr → STop
-  /-- `name(t:type, …) := class<specs>: fields and methods` (each method an `fn`). -/
-  | classDef : Pos → String → List TParam → List String →
-      List (String × STy × Option SExpr × Bool) → List STop → STop
+  /-- `name(t:type, …) := class<specs>(parents): fields and methods`, or
+      `name := interface(parents): methods`. Each method is an `fn`; an
+      abstract one (no body) has the effect `$abstract`. `overrides` are the
+      fields declared `Name<override>:t = e`, which give an inherited field a
+      new default. -/
+  | classDef : Pos → String → List TParam → (specs : List String) → (parents : List String) →
+      (isInterface : Bool) → (fields : List (String × STy × Option SExpr × Bool)) →
+      (overrides : List String) → (methods : List STop) → STop
   deriving Repr, Inhabited
 
 end OpenVerse.Front

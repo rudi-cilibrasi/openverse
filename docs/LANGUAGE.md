@@ -29,7 +29,7 @@ surface Verse is elaborated (`OpenVerse/Front/Elab.lean`) into Verse Core
 | Parametric functions | `F(X:t, … where t:type, u:subtype(comparable))`: type parameters in parameter types, the result type and local declarations; type arguments inferred at each call (see [Parametric functions](#parametric-functions)) | Types: where clauses |
 | Structs | `name := struct:` with typed fields and defaults, `name{F := e, …}`, `S.F`, `set S.F = e` / `op=`, structural equality (a struct is the tuple of its fields in Verse Core) | ch. 9 |
 | Parametric structs | `pair(t:type, u:type) := struct:`, the type `pair(int, string)`, values `pair(int, string){First := 1, Second := "a"}` (or `pair{…}` where the expected type gives the type arguments); see [Parametric structs](#parametric-structs) | ch. 9 |
-| Classes (phase 1) | `name := class:` and `name(t:type) := class:` with fields and methods; in a method, fields and methods by bare name and `Self`; `Obj.M(…)`, `Obj.M[…]` for `<decides>` methods; methods with their own `where` parameters; see [Classes](#classes) | ch. 10 |
+| Classes | `name := class:` and `name(t:type) := class:` with fields and methods; `class(parent, interface, …)`, `interface`, `<abstract>`, `<override>`, `<final>`, `(super:)`, virtual dispatch, casts `T[X]` and `T(X)`; no `var` fields; see [Classes](#classes) | ch. 10 |
 | Enums | `name := enum:` / `enum{A, B}`, `name.A`, equality, `case` that needs no `_` when every value is named (an enumerator is its index in Verse Core) | ch. 9 |
 | Maps | `[k]v`, `map{k => v, …}` (a key given twice keeps its last value, at its last position), `M[k]` (fails on a missing key), `set M[k] = v` (insert or update, never fails), `set M[k] op= v` (fails on a missing key), `.Length`, `for (V : M)`, `for (K -> V : M)` in insertion order, order-sensitive equality (a map is the array of its pairs in Verse Core) | §3, §9.3 |
 | Array methods | `A.Slice[i, j]`, `A.Slice[i]`, `A.Find[x]`, `A.RemoveElement[i]`, `A.ReplaceElement[i, x]`, `A.Insert[i, B]` (all failable) | §9.1 |
@@ -155,37 +155,79 @@ Swap(P:pair(t, u) where t:type, u:type):pair(u, t) =
 
 ## Classes
 
-Phase 1 of classes (#14): fields, methods and parametric classes, without
-`var` fields or inheritance.
+Classes without `var` fields (#14, #18): fields and methods, parametric
+classes, single inheritance, interfaces and virtual dispatch.
 
 ```verse
-stack(t:type) := class:
-    Items:[]t = array{}
-    Push(X:t):stack(t) = stack(t){Items := Items + array{X}}
-    Peek()<decides>:t = Items[Items.Length - 1]
+shape := class<abstract>:
+    Name:string = "shape"
+    Area():int
+    Describe():string = "{Name} of area {Area()}"
+
+circle := class(shape, labelled):
+    Name<override>:string = "circle"
+    R:int
+    Area<override>():int = 3 * R * R
+    Label<override>():string = "a circle"
+    Describe<override>():string = "round: {(super:)Describe()}"
 ```
 
-- Without `var` fields an instance cannot change, so reference semantics
-  cannot be observed. A class is the tuple of its fields in Verse Core, like
-  a struct, and is constructed like one: `stack(int){}`. For the same reason
-  `set` cannot reach a class field, not even through a path.
-- A method `M` of class `c` is a function `c.M` whose first parameter is
-  `Self`. In its body, a name that is not a local is looked up among the
-  fields, then the methods. A local or parameter with the name of a field
-  or method is an error (no shadowing), and so is a method named like a
-  built-in function. Field defaults are elaborated where they are defined,
-  never as part of the method that constructs the value. `Obj.M(…)`
-  evaluates `Obj` before the arguments.
-- A method of a parametric class is generic over the class's type
-  parameters, then its own. The type arguments come from the receiver, and
-  the body is checked once in Verse Core (see
+- **Values.** Without `var` fields an instance cannot change, so reference
+  semantics cannot be observed. A class is constructed like a struct
+  (`circle{R := 1}`), and `set` cannot reach a class field, not even
+  through a path.
+- **Methods.** A method `M` of class `c` is a function `c.M` whose first
+  parameter is `Self`. In its body, a name that is not a local is looked up
+  among the fields, then the methods, inherited ones included. A local or
+  parameter with the name of a field or method is an error, and so is a
+  method named like a built-in function. Field defaults are elaborated where
+  they are defined. `Obj.M(…)` evaluates `Obj` before the arguments.
+- **Inheritance.** `c := class(parent, i₁, …)` has at most one class parent
+  and any number of interfaces, and `i := interface(j, …)` extends
+  interfaces. A class inherits its parent's fields, first, and its methods:
+  - `Name<override>:t = e` gives an inherited field a new default; any
+    other field with an inherited name is an error;
+  - `M<override>(…)` overrides an inherited method with exactly its
+    signature. Overriding without `<override>`, or `<override>` that
+    overrides nothing, is an error;
+  - `<final>` methods cannot be overridden, and `<final>` classes cannot be
+    inherited from;
+  - `(super:)M(…)` calls the implementation inherited from above.
+- **Abstract.** An `<abstract>` class, or an interface, may declare methods
+  without a body and cannot be constructed. A concrete class must implement
+  every method it has, and must override a method that two unrelated
+  interfaces both provide.
+- **Subtyping and dispatch.**
+  - A value of a class can be used wherever a class or interface above it is
+    expected, and so can arrays and options of them.
+  - Two `if` branches of different classes take the expected type when both
+    are below it, else their nearest common supertype.
+  - A method call runs the most specific implementation for the value's own
+    class: the nearest in its class chain, else the most specific interface
+    default, whatever order the parents are listed in. This is virtual
+    dispatch, also inside a method; `(super:)` uses the same rule.
+  - An implementation must have the signature of every declaration it
+    satisfies.
+- **Casts.** `T[X]` is `X` as a `T`, failing unless `X`'s class is below
+  `T`. `T(X)` converts to a supertype and cannot fail.
+- **Parametric classes.** A method of a parametric class is generic over the
+  class's type parameters, then its own. The type arguments come from the
+  receiver, and the body is checked once in Verse Core (see
   [Parametric functions](#parametric-functions)).
-- A class is not comparable (Book §4.9), nor is a struct or container that
-  holds one: `=`, `<>`, `Find` and map keys reject them.
-- Not yet supported, each rejected with a message naming its phase of #11:
-  `var` fields, `<unique>`, `<abstract>`, `<castable>`, inheritance
-  `class(parent)`, interfaces, `block:` initialisers, constructor functions,
-  and recursive classes.
+- **Comparability.** A class or interface is not comparable (Book §4.9), nor
+  is a struct or container that holds one.
+- **Not yet supported** (each rejected with a message that names its phase
+  of #11):
+  - `var` fields, `<unique>`, `block:` initialisers, constructor functions,
+    and recursive classes, which need references (phase 3);
+  - parametric classes in hierarchies;
+  - overriding a method with its own type parameters;
+  - covariant return types;
+  - interface fields;
+  - qualified `(i:)M` implementations;
+  - named arguments to a method dispatched on the receiver's class;
+  - subtyping through `+` on arrays, through tuples and through maps, and an
+    array literal of different classes without an expected type.
 
 ## Readings openverse takes
 
