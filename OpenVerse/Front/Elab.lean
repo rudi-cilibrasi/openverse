@@ -34,6 +34,9 @@ inductive Ty where
   | char32
   /-- `float` (#127): an IEEE 64-bit float, `VTy.float` in Verse Core. -/
   | float
+  /-- A refinement type (Book of Verse ch. 11, #136): an int or a float that
+      meets its conditions; in Verse Core, its base type. -/
+  | refine : String → Ty
   /-- `rational`, the type of `X / Y` on ints (Book of Verse ch. 2): in
       Verse Core the tuple of its numerator and denominator, in lowest
       terms with a positive denominator (so tuple equality is equality). -/
@@ -58,6 +61,7 @@ inductive Ty where
 
 partial def Ty.eqv : Ty → Ty → Bool
   | .int, .int | .logic, .logic | .char, .char | .char32, .char32 | .rational, .rational | .float, .float | .void, .void | .never, .never => true
+  | .refine a, .refine b => a == b
   | .arr a, .arr b => a.eqv b
   | .opt a, .opt b => a.eqv b
   | .tup as, .tup bs => as.length == bs.length && (as.zip bs).all fun (a, b) => a.eqv b
@@ -72,6 +76,7 @@ instance : BEq Ty := ⟨Ty.eqv⟩
 
 partial def Ty.show : Ty → String
   | .int => "int" | .logic => "logic" | .char => "char" | .char32 => "char32" | .rational => "rational" | .float => "float" | .void => "void"
+  | .refine n => n
   | .never => "false"
   | .arr .char => "string"
   | .arr t => "[]" ++ t.show
@@ -140,6 +145,9 @@ structure TyEnv where
   sparams : List (String × List (String × Bool)) := []
   /-- Each enum: its enumerators in order. -/
   enums : List (String × List String) := []
+  /-- The refinement types (#136): each one's base type (int or float) and
+      conditions, `_X op bound` (op `<`, `<=`, `>` or `>=`). -/
+  refines : List (String × Ty × List (String × Value)) := []
   /-- The enums declared `enum<open>` (Book of Verse ch. 9): a `case` on one
       needs `_`, as it may gain values. -/
   openEnums : List String := []
@@ -474,6 +482,7 @@ def TyEnv.recursiveStruct? (env : TyEnv) : Option String :=
     no values; slots and signatures never have it). -/
 partial def Ty.toVTy (env : TyEnv) : Ty → VTy
   | .int | .char32 => .int
+  | .refine n => ((env.refines.lookup n).map fun (b, _) => b.toVTy env).getD .int
   | .rational => .tup [.int, .int]
   | .float => .float
   | .logic => .logic
@@ -763,6 +772,7 @@ partial def resolveTy (env : TyEnv) (p : Pos) : STy → EM Ty
       | some ps => eerr p s!"{n} is parametric: write {n}(…) with {ps.length} type argument(s)"
       | none => pure (.struct n [])
     else if (env.enums.lookup n).isSome then pure (.enum n)
+    else if (env.refines.lookup n).isSome then pure (.refine n)
     else eerr p s!"unknown type '{n}' (supported: int, logic, char, string, void, []t, ?t, tuple(…), and structs and enums)"
   | .arr t => return .arr (← resolveTy env p t)
   | .opt t => return .opt (← resolveTy env p t)
@@ -840,6 +850,9 @@ def TyEnv.dictSlot? (env : TyEnv) (dictBase : Nat) (n : String) : Option Nat :=
 partial def witness (env : TyEnv) (dictBase : Nat) (dictVars : List String) : Ty → EM Expr
   | .int | .char32 | .enum _ => pure (.lit (.int 0))
   | .rational => pure (.lit (.tup [.int 0, .int 1]))
+  | .refine n => match env.refines.lookup n with
+    | some (.float, _) => pure (.lit (.float 0))
+    | _ => pure (.lit (.int 0))
   | .float => pure (.lit (.float 0))
   | .logic => pure (.lit (.logic false))
   | .char => pure (.lit (.char 0))
@@ -876,6 +889,9 @@ partial def protoValue (env : TyEnv) (done : List (String × Nat)) : Ty → Opti
   | .int | .char32 | .enum _ => some (.int 0)
   | .rational => some (.tup [.int 0, .int 1])
   | .float => some (.float 0)
+  | .refine n => match env.refines.lookup n with
+    | some (.float, _) => some (.float 0)
+    | _ => some (.int 0)
   | .logic => some (.logic false)
   | .char => some (.char 0)
   | .void | .never => some .void
@@ -982,6 +998,82 @@ partial def refUp (env : TyEnv) : Ty → Ty → Bool
   | .map k a, .map k' b => k == k' && (a == b || refUp env a b)
   | _, _ => false
 
+/-- The value of a literal expression: a number, or a negated one. -/
+def litValue? : Expr → Option Value
+  | .lit (.int n) => some (.int n)
+  | .lit (.float b) => some (.float b)
+  | .prim .neg [.lit (.int n)] => some (.int (-n))
+  | .prim .fneg [.lit (.float b)] => some (.float (VFloat.canon (-(VFloat.ofBits b))))
+  | _ => none
+
+/-- `a x` or `an x`. -/
+def withArticle (x : String) : String :=
+  if ["a", "e", "i", "o", "u"].any (x.startsWith ·) then s!"an {x}" else s!"a {x}"
+
+def showLit (e : Expr) : String :=
+  match litValue? e with
+  | some v => v.render
+  | none => "the value"
+
+/-- `v` meets the conditions `_X op bound` of a refinement (#136). -/
+def refineHolds (conds : List (String × Value)) (v : Value) : Bool :=
+  conds.all fun (op, bound) =>
+    match v, bound with
+    | .int x, .int y => match op with
+      | "<" => x < y | "<=" => x ≤ y | ">" => x > y | _ => x ≥ y
+    | .float x, .float y =>
+      let (fx, fy) := (VFloat.ofBits x, VFloat.ofBits y)
+      match op with
+      | "<" => fx < fy | "<=" => fx ≤ fy | ">" => fy < fx | _ => fy ≤ fx
+    | _, _ => false
+
+/-- A refinement's value as its base (#136): operators, comparisons and
+    ToString see the base type. -/
+def widenR (env : TyEnv) (r : R) : R :=
+  match r.ty with
+  | .refine n => match env.refines.lookup n with
+    | some (base, _) => ⟨r.e, base⟩
+    | none => r
+  | _ => r
+
+/-- The conditions of `type{_X:base where c, …}` as `_X op bound`: each
+    compares the variable with a literal number (Book of Verse ch. 11). -/
+def refineConds (p : Pos) (v : String) (base : Ty) (conds : List SExpr) :
+    Except String (List (String × Value)) := do
+  if !(base == .int || base == .float) then
+    throw s!"{p.show}: a refinement type refines an int or a float, not {base.show}"
+  let bound : SExpr → Except String Value := fun
+    | .int _ n => if base == .int then pure (.int n)
+      else throw s!"{p.show}: a float refinement's bound is a float literal (write {n}.0)"
+    | .neg _ (.int _ n) => if base == .int then pure (.int (-n))
+      else throw s!"{p.show}: a float refinement's bound is a float literal (write -{n}.0)"
+    | .float _ b => if base == .float then pure (.float b)
+      else throw s!"{p.show}: an int refinement's bound is an int literal"
+    | .neg _ (.float _ b) => if base == .float then pure (.float (VFloat.canon (-(VFloat.ofBits b))))
+      else throw s!"{p.show}: an int refinement's bound is an int literal"
+    | .ident _ "Inf" => if base == .float then pure (.float 0x7FF0000000000000)
+      else throw s!"{p.show}: an int refinement's bound is an int literal"
+    | .neg _ (.ident _ "Inf") => if base == .float then pure (.float 0xFFF0000000000000)
+      else throw s!"{p.show}: an int refinement's bound is an int literal"
+    | .ident _ "NaN" => throw s!"{p.show}: NaN cannot bound a refinement"
+    | _ => throw s!"{p.show}: a refinement's bound is a literal number, not a variable or an expression"
+  let flip : String → String := fun | "<" => ">" | "<=" => ">=" | ">" => "<" | _ => "<="
+  conds.mapM fun c => do
+    match c with
+    | .cmp _ a [(op, b)] =>
+      if !["<", "<=", ">", ">="].contains op then
+        throw s!"{p.show}: a refinement's condition is <, <=, > or >=, not {op}"
+      match a, b with
+      | .ident _ x, rhs => if x == v then return (op, ← bound rhs) else
+          match rhs with
+          | .ident _ y => if y == v then return (flip op, ← bound a) else
+              throw s!"{p.show}: a refinement's condition compares {v} with a literal number"
+          | _ => throw s!"{p.show}: a refinement's condition compares {v} with a literal number"
+      | lhs, .ident _ y => if y == v then return (flip op, ← bound lhs) else
+          throw s!"{p.show}: a refinement's condition compares {v} with a literal number"
+      | _, _ => throw s!"{p.show}: a refinement's condition compares {v} with a literal number"
+    | _ => throw s!"{p.show}: a refinement's condition is a comparison of {v} with a literal number"
+
 /-- Convert a value `e` of type `a` to the supertype `b`, when `a` is a class
     below the class or interface `b`, or an array or option of such (arrays
     and options are covariant): the options of the classes below `a` move to
@@ -999,6 +1091,16 @@ partial def convert (env : TyEnv) (e : Expr) (a b : Ty) : EM (Option Expr) := do
   match a, b with
   -- `int` is a subtype of `rational` (#116): `X` is `X / 1`
   | .int, .rational => return some (.prim .mkTup [e, .lit (.int 1)])
+  -- a refinement is its base (#136); the base is the refinement only for a
+  -- literal that meets its conditions (else a cast, `age[X]`)
+  | .refine n, b =>
+    match env.refines.lookup n with
+    | some (base, _) => if base == b then return some e else return none
+    | none => return none
+  | a, .refine n =>
+    match env.refines.lookup n, litValue? e with
+    | some (base, conds), some v => if base == a && refineHolds conds v then return some e else return none
+    | _, _ => return none
   | .struct S [], .struct T [] =>
     if env.classes.contains S && env.classes.contains T && S != T && env.isSub S T then
       let x ← modifyGet fun s => (s.nslots, { s with nslots := s.nslots + 1, slotTys := s.slotTys.push a })
@@ -1055,7 +1157,13 @@ def coerce (p : Pos) (r : R) (target : Ty) : EM Expr := do
     -- a typed temporary: the checker cannot infer the type of an empty option
     let x ← modifyGet fun s => (s.nslots, { s with nslots := s.nslots + 1, slotTys := s.slotTys.push target })
     return .assign x e
-  | none => eerr p s!"expected {target.show}, found {r.ty.show}"
+  | none =>
+    if let .refine n := target then
+      if let some (base, _) := (← get).env.refines.lookup n then
+        if r.ty == base then
+          if (litValue? r.e).isSome then eerr p s!"{showLit r.e} is not {withArticle n}: it does not meet its conditions"
+          eerr p s!"{withArticle base.show} is {withArticle n} only after a cast: write {n}[X], which fails when X is not one"
+    eerr p s!"expected {target.show}, found {r.ty.show}"
 
 /-- A type above both `a` and `b` (the expected one when it is, #32): two
     classes join at their nearest common supertype, and arrays, options,
@@ -1066,6 +1174,11 @@ partial def joinTy (env : TyEnv) (a b : Ty) (exp : Option Ty) (inner : Bool := f
   else if a == b then some a
   else match a, b with
   | .int, .rational | .rational, .int => if inner then none else some .rational
+  | .refine n, b | b, .refine n =>
+    match env.refines.lookup n, b with
+    | some (base, _), .refine m => if (env.refines.lookup m).map (·.1) == some base then some base else none
+    | some (base, _), b => if base == b then some base else none
+    | none, _ => none
   | .struct S as, .struct T bs =>
     -- (inside a container, only references convert for free)
     if env.classes.contains S && env.classes.contains T &&
@@ -1204,7 +1317,8 @@ partial def _root_.OpenVerse.VTy.shared : VTy → Bool
   | _ => false
 
 /-- `ToString` for interpolation. -/
-def toStringOf (p : Pos) (r : R) : EM Expr :=
+def toStringOf (p : Pos) (r0 : R) : EM Expr := do
+  let r := widenR (← get).env r0
   match r.ty with
   | .char32 => do
     let tc ← fresh .int
@@ -1279,7 +1393,7 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
   | .member p e m => elabMember ctx p (← elabE ctx e none) m
   | .construct p name targs args => elabConstruct ctx p name targs args exp
   | .mapLit p entries => elabMapLit ctx p entries exp
-  | .structDef p _ _ | .enumDef p _ _ => eerr p "struct and enum definitions must be at the top level"
+  | .structDef p _ _ | .enumDef p _ _ | .refineDef p _ _ _ => eerr p "struct, enum and type definitions must be at the top level"
   | .query p e =>
     let r ← elabE ctx e none
     match r.ty with
@@ -1291,7 +1405,7 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
     let hint : Option Ty := match exp with
       | some .float => some .float
       | _ => none
-    let r ← elabE ctx e hint
+    let r := widenR ctx.types (← elabE ctx e hint)
     if r.ty == .float then return ⟨.prim .fneg [r.e], .float⟩
     if r.ty != .int then eerr p s!"unary '-' needs an int or a float, found {r.ty.show}"
     return ⟨.prim .neg [r.e], .int⟩
@@ -1300,8 +1414,8 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
     return ⟨Expr.notE r.e, .void⟩
   | .bin p "/" a b =>
     -- `X / Y` on ints: a rational, failing when `Y = 0` (#116)
-    let ra ← elabE ctx a none
-    let rb ← elabE ctx b (if ra.ty == .float then some .float else none)
+    let ra := widenR ctx.types (← elabE ctx a none)
+    let rb := widenR ctx.types (← elabE ctx b (if ra.ty == .float then some .float else none))
     -- (on floats, IEEE division: by zero an infinity or NaN, #127)
     if ra.ty == .float && rb.ty == .float then return ⟨p2 .fdiv ra.e rb.e, .float⟩
     if ra.ty == .float || rb.ty == .float then
@@ -1311,7 +1425,7 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
     let es := [← coerce a.pos ra .int, ← coerce b.pos rb .int]
     return ⟨← ratCall ctx p "$ratMake" es, .rational⟩
   | .bin p op a b =>
-    let ra ← elabE ctx a none
+    let ra := widenR ctx.types (← elabE ctx a none)
     let rb ← match op, ra.ty with
       | "+", .arr _ =>
         -- (an array of other classes, to join, #67)
@@ -1326,6 +1440,7 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
           let c2 := { ctx with retries := ctx.retries + 1 }
           tryCatch (elabE c2 b (some ra.ty)) fun _ => elabE c2 b none
       | _, _ => elabE ctx b (some ra.ty)
+    let rb := widenR ctx.types rb
     match op, ra.ty, rb.ty with
     | "+", .int, .int => return ⟨p2 .add ra.e rb.e, .int⟩
     | "-", .int, .int => return ⟨p2 .sub ra.e rb.e, .int⟩
@@ -1683,6 +1798,23 @@ partial def elabApp (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (brack
     if selfMember? then elabApp ctx p (.member p (.ident p "Self") name) args bracket exp else
     -- `T[X]`, `T(X)`: a cast to class or interface `T`
     if ctx.types.classes.contains name && (ctx.sig? name).isNone then elabCast ctx p name args bracket else
+    if let some (base, conds) := ctx.types.refines.lookup name then
+      -- `age[X]` (#136): `X`, if it meets the conditions; failing otherwise
+      if !bracket then eerr p s!"a cast to {name} can fail: write {name}[X]"
+      let [a] := args | eerr p s!"a cast to {name} takes one value"
+      let r ← elabE ctx a (some base)
+      let r := widenR ctx.types r
+      if r.ty != base then eerr p s!"a cast to {name} takes {withArticle base.show}, found {r.ty.show}"
+      let tv ← fresh base
+      let isF := base == .float
+      let test (c : String × Value) : Expr :=
+        let op : Prim := match c.1, isF with
+          | "<", false => .lt | "<=", false => .le | ">", false => .gt | _, false => .ge
+          | "<", true => .flt | "<=", true => .fle | ">", true => .fgt | _, true => .fge
+        p2 op (.local tv) (.lit c.2)
+      let checks := conds.foldr (fun c acc => Expr.seq (test c) acc) (.local tv)
+      return ⟨.seq (.assign tv r.e) checks, .refine name⟩
+    else
     if let some ovs := ctx.types.overloads.lookup name then
       resolveOverload ctx p name ovs ctx.sig? (fun o => elabApp ctx p (.ident p o) args bracket exp) args
     else
@@ -2509,7 +2641,7 @@ partial def elabCmp (ctx : Ctx) (p : Pos) (a : SExpr) (rest : List (String × SE
     else if !((ta == .int && tb == .int) || (ta == .char && tb == .char) || (ta == .char32 && tb == .char32) ||
         (ta == .float && tb == .float)) then
       eerr p s!"'{op}' compares ints, chars, char32s or floats, found {ta.show} and {tb.show}"
-  let ra ← elabE ctx a none
+  let ra := widenR ctx.types (← elabE ctx a none)
   -- (an array and a tuple compare as arrays: the tuple is converted)
   let asArr (r : R) (other : Ty) : EM R := do
     match r.ty, other with
@@ -2517,7 +2649,7 @@ partial def elabCmp (ctx : Ctx) (p : Pos) (a : SExpr) (rest : List (String × SE
     | _, _ => return r
   match rest with
   | [(op, b)] =>
-    let rb ← elabE ctx b (some ra.ty)
+    let rb := widenR ctx.types (← elabE ctx b (some ra.ty))
     if ra.ty == .rational || rb.ty == .rational then
       let ta ← fresh ra.ty
       let tb ← fresh rb.ty
@@ -2535,7 +2667,7 @@ partial def elabCmp (ctx : Ctx) (p : Pos) (a : SExpr) (rest : List (String × SE
     let mut prevTy := ra.ty
     let mut steps : Array Expr := #[.assign t0 ra.e]
     for (op, b) in rest do
-      let rb ← elabE ctx b (some prevTy)
+      let rb := widenR ctx.types (← elabE ctx b (some prevTy))
       let rb ← asArr rb prevTy
       -- (the previous operand, as an array when this one is)
       let prevE ← match prevTy, rb.ty with
@@ -2571,7 +2703,12 @@ partial def elabSet (ctx : Ctx) (p : Pos) (lhs0 : SExpr) (op : Option String) (r
     | .query sp e => .query sp (selfRoot e)
     | e => e
   let lhs := selfRoot lhs0
-  let combine (old : Expr) (ty : Ty) (o : String) (new : R) : EM Expr :=
+  let combine (old : Expr) (ty : Ty) (o : String) (new0 : R) : EM Expr := do
+    -- (a refinement's value is its base; a refined variable is set only
+    -- through a cast, #136)
+    let new := widenR (← get).env new0
+    if let .refine n := ty then
+      eerr p s!"set {o}= on {withArticle n} needs a cast: write set X = {n}[X {o} …], which fails when the result is not one"
     match o, ty, new.ty with
     | "+", .int, .int => pure (p2 .add old new.e)
     | "-", .int, .int => pure (p2 .sub old new.e)
@@ -3155,7 +3292,7 @@ partial def elabMapLit (ctx : Ctx) (p : Pos) (entries : List (SExpr × SExpr)) (
 
 partial def elabCase (ctx : Ctx) (p : Pos) (scrut : SExpr) (arms : List (Option SExpr × SExpr))
     (exp : Option Ty) : EM R := do
-  let rs ← elabE ctx scrut none
+  let rs := widenR ctx.types (← elabE ctx scrut none)
   match rs.ty with
   | .int | .logic | .char | .char32 | .arr .char | .enum _ => pure ()
   | t => eerr p s!"case works on int, logic, char, char32, string and enums, not {t.show}"
@@ -3938,7 +4075,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   let allTops := expanded.toList
   -- the type definitions: `name := struct …` and `name := enum …`
   let isTypeDef : STop → Bool
-    | .const _ _ none (.structDef ..) | .const _ _ none (.enumDef ..) => true
+    | .const _ _ none (.structDef ..) | .const _ _ none (.enumDef ..) | .const _ _ none (.refineDef ..) => true
     | _ => false
   let tops := allTops.filter (!isTypeDef ·)
   let varFields : List (String × String) := cdefs.flatMap fun cd =>
@@ -3959,6 +4096,10 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       env := { env with enums := env.enums ++ [(n, vals)],
                         openEnums := if isOpen then env.openEnums ++ [n] else env.openEnums }
     | .const _ n none (.structDef _ _ _) => env := { env with structs := env.structs ++ [(n, [])] }
+    | .const p n none (.refineDef _ v sty conds) =>
+      -- a refinement type (#136)
+      let (base, _) ← (resolveTy env p sty).run {}
+      env := { env with refines := env.refines ++ [(n, base, ← refineConds p v base conds)] }
     | _ => pure ()
   -- the type parameters of parametric structs
   for t in allTops do
