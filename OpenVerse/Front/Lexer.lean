@@ -25,7 +25,7 @@
   `'c'` char literals (`c` printable ASCII U+0020–U+007E, or an escape),
   `0oHH` char literals (one or two hex digits: that UTF-8 code unit, so
   `0o41` is 'A'; `0o` is not octal), `0uHHHHHH` char32 literals (a Unicode
-  scalar value, up to `0u10FFFF`: the spec grammar's Char32), string
+  scalar value, up to `0u10FFFF`), string
   literals with escapes and `{…}` interpolation, and the operator symbols
   of ch. 4. Not supported: float literals, path literals.
 
@@ -304,7 +304,7 @@ partial def lexAll (acc : Array Token) : LexM (Array Token) := do
           errHere "a 0o char literal needs one or two hex digits, not followed by a letter, digit or '_' (0o41 is 'A')"
         lexAll (← emit (.char (h.foldl (fun n c => n * 16 + hexVal c) 0)))
       else if c == '0' && (← peekC 1) == some 'u' then
-        -- `0uHHHHHH`: a char32, a Unicode scalar value (spec: Char32)
+        -- `0uHHHHHH`: a char32, a Unicode scalar value
         advance; advance
         let h ← readWhile isHex ""
         let trailing := ((← peekC).map isIdChar).getD false

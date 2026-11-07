@@ -1,5 +1,5 @@
-# The spec draft's intrinsic macros whose value is a clause list's
-# (IfMacro, IfElseMacro, ForMacro, FirstMacro, FirstDoMacro, AssertMacro).
+# The clause macros, whose value is a clause list's
+# (if{…} else, for{…}, first{…}, first(…){…}, assert{…}).
 # The value of a clause list is its last clause's: a binding's name, or the
 # expression's value.
 

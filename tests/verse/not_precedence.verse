@@ -1,5 +1,5 @@
 # `not` binds more loosely than the comparisons and more tightly than `and`
-# and `or` (spec grammar: Not := Eq | "not" Not; And := Not {and And}).
+# and `or`.
 Main():void =
     X := 1
     Y := 2

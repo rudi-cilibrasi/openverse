@@ -29,7 +29,7 @@ open OpenVerse
 
 inductive Ty where
   | int | logic | char | void
-  /-- A Unicode scalar value (spec: Char32); an `int` in Verse Core. -/
+  /-- A Unicode scalar value; an `int` in Verse Core. -/
   | char32
   /-- The bottom type, of `break`, `return` and `Err()`. -/
   | never
@@ -575,7 +575,7 @@ structure Local where
   ty      : Ty
   mutable : Bool
 
-/-- The heap effects (the spec draft's TransactFx). -/
+/-- The heap effects (`<transacts>` allows all of them). -/
 def heapFx : List String := ["allocates", "reads", "writes"]
 
 structure Sig where
@@ -1090,7 +1090,7 @@ def join (p : Pos) (a b : Ty) (exp : Option Ty) : EM Ty := do
   | some .void => return .void
   | _ =>
     -- void accepts any value (Book of Verse), so a void branch makes the
-    -- construct void: `if{X := e} else {Print("none")}` (spec: IfElseMacro)
+    -- construct void: `if{X := e} else {Print("none")}`
     if a != .never && b != .never && !(a == b) && (a == .void || b == .void) then return .void
     match joinTy (← get).env a b exp with
     | some t => return t
@@ -2261,7 +2261,7 @@ partial def elabSet (ctx : Ctx) (p : Pos) (lhs0 : SExpr) (op : Option String) (r
     | .ident _ n => some (n, [])
     | .member sp e f => (path e).map fun (n, ss) => (n, ss ++ [(sp, some f, none)])
     | .app sp e [k] true => (path e).map fun (n, ss) => (n, ss ++ [(sp, none, some k)])
-    -- `X?`: the value inside an option (spec: DeoptionSet); fails when empty
+    -- `X?`: the value inside an option; fails when empty
     | .query sp e => (path e).map fun (n, ss) => (n, ss ++ [(sp, some "?", none)])
     | _ => none
   let general : List (Pos × Option String × Option SExpr) → Bool
@@ -2893,9 +2893,9 @@ def checkTParams (env : TyEnv) (tps : List TParam) : Except String (List (String
     | c => throw s!"{tp.pos.show}: unknown constraint subtype({c}) (openverse supports {tp.name}:type and {tp.name}:subtype(comparable))"
   return out.toList
 
-/-- How a program is compiled from the command line (spec: expected
-    tooling): its shell arguments, bound to `Args : []string` (unless the
-    program defines `Args`), and an expression to run instead of `Main`. -/
+/-- How a program is compiled from the command line: its shell arguments,
+    bound to `Args : []string` (unless the program defines `Args`), and an
+    expression to run instead of `Main`. -/
 structure Options where
   args : Option (List String) := none
   entry : Option SExpr := none
@@ -3132,7 +3132,7 @@ def elabProgramCore (allTops000 : List STop) (opts : Options := {}) : Except Str
   let resolved ← resolveModules (allTops000 ++ rawEntry)
   let allTops00 := resolved.take (resolved.length - rawEntry.length)
   let entryTop := resolved.drop (resolved.length - rawEntry.length)
-  -- the command line (spec: expected tooling): `Args`, and an entry expression
+  -- the command line: `Args`, and an entry expression
   let defines (n : String) := allTops00.any fun
     | .fn _ m .. | .const _ m .. | .classDef _ m .. => m == n
   let argsTop : List STop :=
