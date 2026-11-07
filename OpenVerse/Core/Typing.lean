@@ -195,10 +195,13 @@ def allTys (Ξ : List Nat) : List Value → List VTy → Bool
 end
 
 /-- The certificate of a program's types: each function's parameter types and
-    result type, by function index, and each class's field types, by tag. -/
+    result type, by function index, each class's field types, by tag, and the
+    tags of the prototype objects that `Main`'s prelude allocates first
+    (#37): a literal may refer to them, as every heap starts with them. -/
 structure Sigs where
   fns : List (List VTy × VTy)
   classes : List (List VTy) := []
+  protos : List Nat := []
 
 /-- The typing of primitives: `PrimTy op ts τ` when `op` applied to values
     of types `ts` gives a value of type `τ`. -/
@@ -237,8 +240,8 @@ mutual
     result type is `ρ`, `e` has type `τ`. `break`, `return`, `false?` and
     `Err()` have every type. -/
 inductive Typed (S : Sigs) (Γ : List VTy) (ρ : VTy) : Expr → VTy → Prop
-  /-- No literal is a reference, so its type does not depend on the heap. -/
-  | lit {v τ} : hasTy [] v τ = true → Typed S Γ ρ (.lit v) τ
+  /-- A literal may refer only to the prototypes, which every heap starts with. -/
+  | lit {v τ} : hasTy S.protos v τ = true → Typed S Γ ρ (.lit v) τ
   | local {i τ} : Γ[i]? = some τ → Typed S Γ ρ (.local i) τ
   /-- Subsumption: an expression of a type has every type above it (#32). -/
   | sub {e t u} : Typed S Γ ρ e t → t.sub u = true → Typed S Γ ρ e u
@@ -289,7 +292,7 @@ mutual
     type `t.subst θ` whenever the parameters hold values of their types
     under `θ`. -/
 inductive DefaultE (S : Sigs) (a : Nat) (Γ : List VTy) : Expr → VTy → Prop
-  | lit {v t} : hasTy [] v t = true → DefaultE S a Γ (.lit v) t
+  | lit {v t} : hasTy S.protos v t = true → DefaultE S a Γ (.lit v) t
   | param {i t} : i < a → Γ[i]? = some t → DefaultE S a Γ (.local i) t
   | tup {ds ts} : DefaultEL S a Γ ds ts → DefaultE S a Γ (.prim .mkTup ds) (.tup ts)
   | new {t ds fs ts} : S.classes[t]? = some fs → t ∈ ts → DefaultEL S a Γ ds fs →
@@ -315,18 +318,40 @@ structure FnTyped (S : Sigs) (fn : Fn) (ps : List VTy) (ρ : VTy) (Γ : List VTy
 def Sigs.ClosedClasses (S : Sigs) : Prop :=
   ∀ (t : Nat) (fs : List VTy), S.classes[t]? = some fs → ∀ f ∈ fs, f.closed = true
 
-/-- Every function of `P` is typed with its signature in `S`. -/
-def ProgTyped (P : Prog) (S : Sigs) : Prop :=
-  S.ClosedClasses ∧ P.fns.length = S.fns.length ∧
-  ∀ (f : Nat) (fn : Fn) (ps : List VTy) (τ : VTy), P.fns[f]? = some fn → S.fns[f]? = some (ps, τ) →
-    ∃ Γ, FnTyped S fn ps τ Γ
-
 /-- The class tags of a heap's objects. -/
 def tagsOf (h : List Obj) : List Nat := h.map (·.tag)
 
 /-- Every object of the heap has the field types of its class. -/
 def HeapOK (S : Sigs) (h : List Obj) : Prop :=
-  ∀ (a : Nat) (o : Obj), h[a]? = some o → ∃ fs, S.classes[o.tag]? = some fs ∧ allTys (tagsOf h) o.fields fs = true
+  (∀ (a : Nat) (o : Obj), h[a]? = some o → ∃ fs, S.classes[o.tag]? = some fs ∧ allTys (tagsOf h) o.fields fs = true) ∧
+  -- the heap starts with the prototypes (#37)
+  S.protos <+: tagsOf h
+
+/-- `Main`'s prelude (#37): allocate the prototype objects, in order, each
+    with its fields as literals, then run `e`. -/
+def protoPrelude : List (Nat × List Value) → Expr → Expr
+  | [], e => e
+  | (t, vs) :: rest, e => .seq (.heap (.new t) (vs.map .lit)) (protoPrelude rest e)
+
+/-- The objects a prelude allocates. -/
+def protoObjs (objs : List (Nat × List Value)) : List Obj := objs.map fun (t, vs) => ⟨t, vs⟩
+
+/-- `P`'s `Main` is a prelude that allocates the prototypes (well typed),
+    then calls a function `m` of `Main`'s signature (#37). -/
+def PreludeOK (P : Prog) (S : Sigs) : Prop :=
+  ∃ fn objs m, P.fns[P.main]? = some fn ∧ fn.arity = 0 ∧ fn.nslots = 0 ∧
+    fn.body = protoPrelude objs (.call m []) ∧ tagsOf (protoObjs objs) = S.protos ∧
+    HeapOK S (protoObjs objs) ∧ S.fns[m]? = S.fns[P.main]?
+
+/-- Every function of `P` is typed with its signature in `S`. -/
+def ProgTyped (P : Prog) (S : Sigs) : Prop :=
+  S.ClosedClasses ∧ P.fns.length = S.fns.length ∧
+  (∀ (f : Nat) (fn : Fn) (ps : List VTy) (τ : VTy), P.fns[f]? = some fn → S.fns[f]? = some (ps, τ) →
+    ∃ Γ, FnTyped S fn ps τ Γ) ∧
+  -- the heap starts with the prototypes when the program starts (#37)
+  (S.protos = [] ∨ PreludeOK P S)
+
+
 
 /-- A frame agrees with slot types `Γ`. -/
 def FrameOK (Ξ : List Nat) (Γ : List VTy) (fr : List Value) : Prop := allTys Ξ fr Γ = true
