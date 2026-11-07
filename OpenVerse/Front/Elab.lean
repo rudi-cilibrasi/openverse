@@ -1527,11 +1527,18 @@ partial def elabApp (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (brack
       | [o], _ => call o
       | [], [o] => call o   -- its error
       | [], [] =>
-        let nm := if namedArgs.isEmpty then "" else s!" and the named ones {", ".intercalate (namedArgs.map fun (n, _) => s!"?{n}")}"
-        eerr p s!"no overload of {name} takes {posArgs.length} positional argument(s){nm}"
+        let nm := if namedArgs.isEmpty then "" else s!" and {", ".intercalate (namedArgs.map fun (n, _) => s!"?{n}")}"
+        let shown := ovs.filterMap fun o => (ctx.sig? o).map fun so =>
+          let npos := so.params.length - so.named.length
+          "(" ++ ", ".intercalate ((so.params.take npos).map Ty.show ++
+            (so.named.zip (so.params.drop npos)).map fun ((n, d), t) =>
+              s!"?{n}:{t.show}" ++ (if d.isSome then " = …" else "")) ++ ")"
+        eerr p s!"no overload of {name} fits a call with {posArgs.length} positional argument(s){nm}; its overloads take {" and ".intercalate shown}"
       | [], _ =>
         let st ← get
         let tys ← posArgs.mapM fun a => do return (← elabE ctx a none).ty.show
+        let ntys ← namedArgs.mapM fun (n, a) => do return s!"?{n}:{(← elabE ctx a none).ty.show}"
+        let tys := tys ++ ntys
         set st
         eerr p s!"no overload of {name} takes ({", ".intercalate tys})"
       | _ :: _ :: _, _ =>
@@ -1649,8 +1656,9 @@ partial def elabApp (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (brack
               | [_, m] => (m, 1)
               | _ => (name, 0)
             eerr p s!"{shown} takes {npos - off} positional argument(s), found {pos.length - off}"
-          for (ap, n, _) in named do
+          for ((ap, n, _), i) in named.zip (List.range named.length) do
             if (s.named.find? (·.1 == n)).isNone then eerr ap s!"{name} has no parameter ?{n}"
+            if (named.take i).any (·.2.1 == n) then eerr ap s!"?{n} is given twice"
           let ptys := s.params.toArray
           let mut steps : Array Expr := #[]
           let mut slots : Array (Option Nat) := Array.replicate s.params.length none
