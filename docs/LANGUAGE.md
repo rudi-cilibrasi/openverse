@@ -231,6 +231,22 @@ circle := class(shape, labelled):
   - subtyping through `+` on arrays, through tuples and through maps, and an
     array literal of different classes without an expected type.
 
+## From the spec draft: mutation, macros, tooling
+
+- **`set X? = v`** (the spec's DeoptionSet) sets the value inside an option
+  variable, and fails when the option is empty. It also works as a step of a
+  path, as in `set S.Best? *= 7` and `set M[k]? = v`.
+- **`let(defs){body}`** (the spec's LetMacro) makes `defs` visible in `body`
+  only. Its value is the body's.
+- **The command line** (the spec's expected tooling):
+  - `openverse run FILE [ARG…] [do EXPR]`, and likewise `emit`. The
+    arguments are the program's `Args:[]string`, unless it defines `Args`
+    itself.
+  - With `do EXPR`, `EXPR` runs instead of `Main`, in the context of the
+    file's definitions, and its value is printed when it is an `int`, `char`
+    or `string`. The expression may fail, which gives exit code 1.
+  - A `#!` first line is a `#` comment.
+
 ## Readings openverse takes
 
 | Question | Book | openverse |
