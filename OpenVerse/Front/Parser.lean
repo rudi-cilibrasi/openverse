@@ -911,7 +911,9 @@ partial def parseClassBody (p : Pos) (name : String) (tps : List TParam) (isIfac
   -- the `block:` clauses, in order, as one method
   let isBlock : STop → Bool := fun | .fn _ "$block" .. => true | _ => false
   let blocks := methods.filterMap fun | .fn _ "$block" _ _ _ _ b => some b | _ => none
-  if isIface && !blocks.isEmpty then perr o s!"interface {name} cannot have a block: clause"
+  if isIface then
+    if let some (.fn q _ ..) := methods.find? isBlock then
+      throw s!"{q.line}:{q.col}: interface {name} cannot have a block: clause"
   let methods := methods.filter (!isBlock ·) ++
     (if blocks.isEmpty then [] else [.fn p "$block" [] [] [] (.name "void") (.block p blocks)])
   return .classDef p name tps specs parents.toList isIface fields overrides methods
