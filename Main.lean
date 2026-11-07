@@ -30,13 +30,17 @@ def usage : String :=
   "       openverse core FILE.verse               print the elaborated Verse Core\n" ++
   "       openverse example NAME [--emit FILE.vbc] | openverse examples"
 
-/-- Read a source file as bytes: malformed UTF-8 is a front-end error (exit 4). -/
-def loadSrc (file : String) : IO (Except String Prog) := do
-  let bytes ← IO.FS.readBinFile file
-  return Front.decodeSource bytes >>= Front.compile
+/-- Load a program, a file or a directory with everything it imports, and
+    compile it: malformed UTF-8 is a front-end error (exit 4), as is any
+    other front-end error. -/
+def loadAndCompile (file : String) (args : List String) (doExpr : Option String) :
+    IO (Except String Prog) := do
+  match ← Front.loadProgram file with
+  | .error e => return .error e
+  | .ok (tops, mentionsArgs) => return Front.compileTops tops args mentionsArgs doExpr
 
 def withProg (file : String) (k : Prog → IO UInt32) : IO UInt32 := do
-  match ← loadSrc file with
+  match ← loadAndCompile file [] none with
   | .error e => IO.eprintln s!"{file}:{e}"; return 4
   | .ok P => k P
 
@@ -49,8 +53,7 @@ def splitDo (rest : List String) : List String × Option String :=
 
 def withProgArgs (file : String) (rest : List String) (k : Prog → IO UInt32) : IO UInt32 := do
   let (as, e) := splitDo rest
-  let bytes ← IO.FS.readBinFile file
-  match Front.decodeSource bytes >>= fun src => Front.compileWith src as e with
+  match ← loadAndCompile file as e with
   | .error err => IO.eprintln s!"{file}:{err}"; return 4
   | .ok P => k P
 

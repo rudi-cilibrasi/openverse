@@ -31,6 +31,8 @@ structure PSt where
   /-- The indentation of the enclosing indented blocks, innermost first
       (the top level, `""`, is not on the stack). -/
   blocks : List String := []
+  /-- The files imported with `using{"relative_path"}` (#27). -/
+  imports : Array (Pos × String) := #[]
 
 abbrev PM := StateT PSt (Except String)
 
@@ -84,7 +86,7 @@ def Token.isSym (t : Token) (s : String) : Bool :=
 def Token.isKw (t : Token) (k : String) : Bool :=
   match t.tok with | .ident x => x == k | _ => false
 
-def Token.pos (t : Token) : Pos := ⟨t.line, t.col⟩
+def Token.pos (t : Token) : Pos := { line := t.line, col := t.col, file := t.file }
 
 def keywords : List String :=
   ["if", "then", "else", "for", "do", "loop", "break", "return", "var", "set", "and", "or",
@@ -801,9 +803,14 @@ partial def parseTops : PM (List STop) := do
     let t ← peekT
     if t.isEof then break
     if !t.bol || t.col != 0 then perr t "a top-level definition must start at column 0"
-    if t.isKw "using" then
-      -- `using { /Verse.org/… }`: module imports are accepted and ignored
+    if t.isKw "using" || (t.isKw "import" && (← peekT 1).isSym "{") then
+      -- `using{"relative_path"}` imports a file or directory (#27); other
+      -- `using { /Verse.org/… }` module paths are accepted and ignored
       bump
+      if (← peekT).isSym "{" then
+        if let .str parts := (← peekT 1).tok then
+          let path := String.join (parts.filterMap fun | .text s => some s | _ => none)
+          modify fun st => { st with imports := st.imports.push (t.pos, path) }
       repeat
         let n ← peekT
         if n.isEof || (n.bol && n.col == 0) then break
@@ -876,6 +883,15 @@ def parseExprText (src : String) : Except String SExpr := do
     let t ← peekT
     if !t.isEof then perr t s!"unexpected {t.tok.describe} after the expression"
     return e : PM SExpr).run' { toks }
+
+/-- Parse a source file: its definitions, and the files it imports. `file`
+    names it in error positions (empty for the main file). -/
+def parseProgramImports (src : String) (file : String := "") :
+    Except String (List STop × List (Pos × String)) := do
+  let toks ← lexSource src
+  let toks := if file.isEmpty then toks else toks.map fun t => { t with file }
+  let (tops, st) ← parseTops.run { toks }
+  return (tops, st.imports.toList)
 
 /-- Parse a whole Verse source file. -/
 def parseProgram (src : String) : Except String (List STop) := do
