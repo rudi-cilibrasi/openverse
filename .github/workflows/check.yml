@@ -18,13 +18,13 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # the pin check diffs QuickProof-pinned files against older commits
           fetch-depth: 0
 
       - name: Cache elan and the Lean build
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.elan

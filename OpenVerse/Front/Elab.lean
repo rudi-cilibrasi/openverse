@@ -3922,7 +3922,7 @@ def elabProgramCore (allTops000 : List STop) (opts : Options := {}) : Except Str
             ({ name := prm.name, slot := i, ty := t, mutable := false } : Local)
           let ctx : Ctx := { sigs := sigs.toList ++ gsigs.toList, sigProg := mkSigProg sigs, types := env,
                              locals := locals.reverse, retTy := .void,
-                             inBlock := true, selfClass := some (n.dropRight ".$block".length) }
+                             inBlock := true, selfClass := some ((n.dropEnd ".$block".length).toString) }
           match (elabStmt ctx body (some .void)).run { env, nslots := ps.length, slotTys := s.params.toArray } with
           | .ok (_, st) =>
             let fx := heapFx.filter fun k => st.fx.any (·.1 == k)
@@ -3944,7 +3944,7 @@ def elabProgramCore (allTops000 : List STop) (opts : Options := {}) : Except Str
           let ctx : Ctx := { sigs := sigs.toList ++ gsigs.toList, sigProg := mkSigProg sigs, types := genv,
                              locals := locals.reverse, retTy := .void, dictBase := ps.length,
                              dictVars := g.tparams.map (·.1),
-                             selfClass := some (n.dropRight ".$block".length) }
+                             selfClass := some ((n.dropEnd ".$block".length).toString) }
           match (elabStmt ctx body (some .void)).run
               { env, nslots := ps.length + hidden.length, slotTys := (g.params ++ hidden).toArray } with
           | .ok (_, st) =>
@@ -4244,7 +4244,7 @@ def stripOv (msg0 : String) : String := Id.run do
     | [] | [_] => msg0
     | first :: rest =>
       let dropName (x : String) : String :=
-        String.mk (x.toList.reverse.dropWhile (fun (c : Char) => c.isAlphanum || c == '_')).reverse
+        String.ofList (x.toList.reverse.dropWhile (fun (c : Char) => c.isAlphanum || c == '_')).reverse
       rest.foldl (fun acc part => dropName acc ++ "the default of " ++ part) first
   let cs := msg.toList
   let mut out : List Char := []
@@ -4256,7 +4256,7 @@ def stripOv (msg0 : String) : String := Id.run do
     else
       out := cs[i]! :: out
       i := i + 1
-  return String.mk out.reverse
+  return String.ofList out.reverse
 
 /-- Elaborate a parsed program (`elabProgramCore`), with the names of the
     functions a constructor or an overload becomes shown as written: `K$init`
