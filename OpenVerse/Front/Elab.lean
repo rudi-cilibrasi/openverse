@@ -1945,9 +1945,27 @@ partial def elabApp (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (brack
           argIds := argIds.push (.ident mp s!"$arg{ta}")
         let mut namedSlots : List (String × Nat) := []
         for (ap, n, rhs) in namedArgs do
-          let t := declTy (ms.params[npos + (ms.named.findIdx? (·.1 == n)).get!]!)
+          -- (at the own type parameters inferred so far; one it mentions
+          -- that is not yet bound is inferred from it, #119)
+          let t0 := (declTy (ms.params[npos + (ms.named.findIdx? (·.1 == n)).get!]!)).subst σu
+          let mut t := t0
+          let mut e : Expr := .lit .void
+          if t0.params.any ownNames.contains then
+            if fromContext rhs then
+              eerr ap s!"cannot infer the type parameters of {m} from the arguments of this call"
+            let r ← elabE ctx rhs none
+            match t0.matchArg ctx.types σu r.ty with
+            | some σ' =>
+              σu := own? σ'
+              t := t0.subst σu
+              if t.params.any ownNames.contains then
+                eerr ap s!"cannot infer the type parameters of {m} from this argument"
+              e ← coerce ap r t
+            | none => eerr ap s!"expected {showT t0}, found {r.ty.show} (in a call of {m})"
+          else
+            e ← coerce ap (← elabE ctx rhs (some t0)) t0
           let ta ← fresh t
-          pre := pre.push (.assign ta (← coerce ap (← elabE ctx rhs (some t)) t))
+          pre := pre.push (.assign ta e)
           locs := { name := s!"$arg{ta}", slot := ta, ty := t, mutable := false } :: locs
           namedSlots := namedSlots ++ [(n, ta)]
         for (n, ta) in namedSlots do
@@ -2052,7 +2070,11 @@ partial def elabGenericCall (ctx : Ctx) (p : Pos) (s : Sig) (args : List SExpr) 
       eerr p s!"{s.name} takes {s.params.length} argument(s), found {args.length}"
   else
     if pos.length != npos then
-      eerr p s!"{s.name} takes {npos} positional argument(s), found {pos.length}"
+      -- (a method's receiver is its first positional argument)
+      let (shown, off) := match s.name.splitOn "." with
+        | [_, m] => if s.pnames.head? == some "Self" then (m, 1) else (s.name, 0)
+        | _ => (s.name, 0)
+      eerr p s!"{shown} takes {npos - off} positional argument(s), found {pos.length - off}"
     for ((ap, n, _), i) in named.zip (List.range named.length) do
       if (s.named.find? (·.1 == n)).isNone then eerr ap s!"{s.name} has no parameter ?{n}"
       if (named.take i).any (·.2.1 == n) then eerr ap s!"?{n} is given twice"
