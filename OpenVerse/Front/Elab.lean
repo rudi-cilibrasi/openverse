@@ -1874,7 +1874,10 @@ partial def elabApp (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (brack
                     let parts ← ((s.params.zip ts).zip (List.range ts.length)).mapM fun ((pt, et), i) =>
                       coerce a.pos ⟨.prim (.tupGet i) [.local tt], et⟩ pt
                     return ⟨.seq (.assign tt r.e) (.call s.idx parts), s.ret⟩
-                eerr p s!"expected {s.params.length} argument(s), found 1 (a {r.ty.show})"
+                let (shown, off) := match name.splitOn "." with
+                  | [_, m] => if s.pnames.head? == some "Self" then (m, 1) else (name, 0)
+                  | _ => (name, 0)
+                eerr p s!"{shown} takes {s.params.length - off} argument(s), found 1 (of type {r.ty.show})"
             -- several arguments for one array parameter make the array
             -- (`Sum(1, 2, 3, 4)`, as a tuple converts to an array)
             if let [.arr et] := s.params then
