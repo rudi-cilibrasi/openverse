@@ -9,4 +9,5 @@ string int 1
 4
 half of x
 25
+none int 3 pair int
 exit=0

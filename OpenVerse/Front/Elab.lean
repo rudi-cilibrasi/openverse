@@ -21,6 +21,7 @@ import OpenVerse.Core.Derived
 import OpenVerse.Core.TypeCheck
 import OpenVerse.Core.Control
 import OpenVerse.Front.Parser
+import Std.Data.HashMap
 
 namespace OpenVerse.Front
 open OpenVerse
@@ -616,7 +617,7 @@ structure ESt where
   /-- The type of each argument of an overloaded call elaborated alone, by
       its position and text (#74): computed once, so nested overloaded calls
       take polynomial time (it survives the trials' state being restored). -/
-  natTys : List (String × Option Ty) := []
+  natTys : Std.HashMap String (Option Ty) := {}
   deriving Inhabited
 
 abbrev EM := StateT ESt (Except String)
@@ -1385,12 +1386,25 @@ partial def elabApp (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (brack
       let cands := ovs.filter fun o => ((ctx.sig? o).map (·.params.length == args.length)).getD false
       -- each argument's type alone, once (none: it needs an expected type)
       let natTy (a : SExpr) : EM (Option Ty) := do
-        let key := s!"{a.pos.line}:{a.pos.col}:{a.pos.file}:{reprStr a}"
-        if let some r := (← get).natTys.lookup key then return r
+        -- (by position and shallow shape: a wrong hit could only make the
+        -- call below fail to elaborate, never take an overload the arguments
+        -- do not fit, as no call fits two)
+        let shape : String := match a with
+          | .app _ (.ident _ f) as b => s!"app {f} {as.length} {b}"
+          | .ident _ n => s!"id {n}"
+          | .int _ v => s!"int {v}"
+          | .member _ _ m => s!"mem {m}"
+          | .construct _ n _ fs => s!"new {n} {fs.length}"
+          | .tuple _ es => s!"tup {es.length}"
+          | .arrayLit _ es => s!"arr {es.length}"
+          | .bin _ o _ _ => s!"bin {o}"
+          | _ => "_"
+        let key := s!"{a.pos.line}:{a.pos.col}:{a.pos.file}:{shape}"
+        if let some r := (← get).natTys[key]? then return r
         let st ← get
         let r ← tryCatch (do return some (← elabE ctx a none).ty) (fun _ => pure none)
         let cache := (← get).natTys
-        set { st with natTys := (key, r) :: cache }
+        set { st with natTys := cache.insert key r }
         return r
       let coercible (t u : Ty) : EM Bool := do
         let st ← get
@@ -1421,7 +1435,9 @@ partial def elabApp (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (brack
       let mut ok : List String := []
       if byNat.length == 1 then ok := byNat
       else
-        for o in byNat do
+        -- (none: an argument's own type can differ from its type at a
+        -- parameter, `false` is a logic and also fits `?t`)
+        for o in (if byNat.isEmpty then cands else byNat) do
           if ← fits o then ok := ok ++ [o]
       let call (o : String) : EM R :=
         tryCatch (elabApp ctx p (.ident p o) args bracket exp) fun msg => throw (msg.replace o name)

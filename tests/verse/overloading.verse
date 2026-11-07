@@ -30,6 +30,12 @@ Depth(X:int):int = X + 1
 Depth(S:string):int = 0
 Depth(C:char):int = 2
 
+# arguments whose own type differs from their type at the parameter
+Opt(O:?int):string = if (V := O?) then "some {V}" else "none"
+Opt(X:int):string = "int {X}"
+Pair(T:tuple(int, ?int)):string = "pair"
+Pair(X:int):string = "int"
+
 Main():void =
     Print(Describe(3))
     Print(Describe("hi"))
@@ -42,3 +48,4 @@ Main():void =
     if (H := Half[8]) then Print("{H}")
     Print(Half("x"))
     Print("{Depth(Depth(Depth(Depth(Depth(Depth(Depth(Depth(Depth(Depth(Depth(Depth(Depth(Depth(Depth(Depth(Depth(Depth(Depth(Depth(Depth(Depth(Depth(Depth(1))))))))))))))))))))))))}")
+    Print("{Opt(false)} {Opt(3)} {Pair((1, false))} {Pair(2)}")
