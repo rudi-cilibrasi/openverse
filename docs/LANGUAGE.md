@@ -142,8 +142,15 @@ Verse ch. 6): `Describe(X:int)`, `Describe(S:string)`, `Describe(X:int, Y:int)`.
   candidate's parameter types only when that leaves several, so nested
   overloaded calls stay cheap. An overloaded name is not a value.
 - **Lowering.** Each overload is a separate function (`F$ov0`, `F$ov1`, …).
-- **Not yet supported:** overloading generic functions, overloads with named
-  parameters, overloaded methods and constructors, and overloading `Main`.
+- **Named parameters.** Overloads may have named parameters. A call fits an
+  overload when it gives as many positional arguments, names only
+  parameters the overload has, and gives every one it requires. The order
+  of named parameters and their defaults do not tell overloads apart, so
+  two overloads are distinct only if their positional parameters are, or
+  some named parameter one requires is missing from the other or has a
+  disjoint type there.
+- **Not yet supported:** overloading generic functions, overloaded methods,
+  and overloading `Main`.
 
 ## Parametric structs
 
