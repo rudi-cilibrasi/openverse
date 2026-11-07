@@ -43,18 +43,20 @@ structure St where
     state. A reference to no object, or a field out of range, is a type
     error (the type checker excludes it). -/
 def HeapOp.apply : HeapOp → List Value → Glob → Res × Glob
-  | .new t, vs, g => (.ok (.ref g.heap.size), { g with heap := g.heap.push ⟨t, vs⟩ })
+  -- (the state is taken apart so that the heap is not shared and is
+  -- updated in place by the interpreter)
+  | .new t, vs, ⟨out, heap⟩ => (.ok (.ref heap.size), ⟨out, heap.push ⟨t, vs⟩⟩)
   | .get k, [.ref a], g => match g.heap[a]? with
     | some o => match o.fields[k]? with
       | some v => (.ok v, g)
       | none => (.err .type, g)
     | none => (.err .type, g)
-  | .set k, [.ref a, v], g => match g.heap[a]? with
+  | .set k, [.ref a, v], ⟨out, heap⟩ => match heap[a]? with
     | some o =>
       if k < o.fields.length then
-        (.ok v, { g with heap := g.heap.setIfInBounds a { o with fields := o.fields.set k v } })
-      else (.err .type, g)
-    | none => (.err .type, g)
+        (.ok v, ⟨out, heap.setIfInBounds a { o with fields := o.fields.set k v }⟩)
+      else (.err .type, ⟨out, heap⟩)
+    | none => (.err .type, ⟨out, heap⟩)
   | .tag, [.ref a], g => match g.heap[a]? with
     | some o => (.ok (.int o.tag), g)
     | none => (.err .type, g)
@@ -76,6 +78,16 @@ theorem HeapOp.get_new {g : Glob} {t k : Nat} {vs : List Value} {v : Value} (hv 
     (HeapOp.get k).apply [.ref g.heap.size] ((HeapOp.new t).apply vs g).2 =
       (.ok v, ((HeapOp.new t).apply vs g).2) := by
   simp [HeapOp.apply, hv]
+
+/-- A heap operation on a state, computed once, from a state taken apart so
+    that its heap is not shared and is updated in place (#37). -/
+def St.heapStep (op : HeapOp) (vs : List Value) : St → Res × St
+  | ⟨fr, g⟩ => match op.apply vs g with
+    | (r, g') => (r, ⟨fr, g'⟩)
+
+theorem St.heapStep_eq (op : HeapOp) (vs : List Value) (s : St) :
+    St.heapStep op vs s = ((op.apply vs s.g).1, { s with g := (op.apply vs s.g).2 }) := by
+  rcases s with ⟨fr, g⟩; rfl
 
 /-- Only a cast can fail. -/
 def HeapOp.failable : HeapOp → Bool

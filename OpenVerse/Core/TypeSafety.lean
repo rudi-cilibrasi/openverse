@@ -1155,7 +1155,7 @@ theorem stepE_rule {P : Prog} {S : Sigs} (hP : ProgTyped P S) (n : Nat)
       · obtain ⟨hf1, hr1, hH1, hp1⟩ := IE _ _ _ _ _ _ hx he hf hH
         exact ⟨hf1, ResOK_retype hr hr1, hH1, hp1⟩
   | heap op es =>
-    simp only [eval] at h
+    simp only [eval, St.heapStep_eq] at h
     rcases bindL_some h with ⟨vs, s1, hx, hk⟩ | ⟨r1, s1, hx, rfl⟩
     · simp only [Option.some.injEq] at hk; subst hk
       cases ht with
