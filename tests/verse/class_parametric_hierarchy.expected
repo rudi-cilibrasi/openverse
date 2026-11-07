@@ -1,0 +1,12 @@
+a: 4 shape, square of side 2
+b: 6 rect, rect 2 by 3
+total 10
+total after widening 13
+total 9
+7 9
+s 2
+9 s
+a swap with 9
+5
+an intcell
+exit=0

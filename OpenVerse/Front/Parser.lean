@@ -767,7 +767,7 @@ partial def parseClassBody (p : Pos) (name : String) (tps : List TParam) (isIfac
   if (← peekT).isSym "(" then
     bump
     repeat
-      parents := parents.push (← expectIdent)
+      parents := parents.push (← parseType)
       if (← peekT).isSym "," then bump else break
     expectSym ")"
   let o ← peekT

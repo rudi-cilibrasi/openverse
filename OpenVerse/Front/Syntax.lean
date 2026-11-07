@@ -120,10 +120,20 @@ inductive STop where
       `name := interface(parents): methods`. Each method is an `fn`; an
       abstract one (no body) has the effect `$abstract`. `overrides` are the
       fields declared `Name<override>:t = e`, which give an inherited field a
-      new default. -/
-  | classDef : Pos → String → List TParam → (specs : List String) → (parents : List String) →
+      new default. A parent is a type: `base(t)` for a parametric one (#39). -/
+  | classDef : Pos → String → List TParam → (specs : List String) → (parents : List STy) →
       (isInterface : Bool) → (fields : List (String × STy × Option SExpr × Bool)) →
       (overrides : List String) → (methods : List STop) → STop
   deriving Repr, Inhabited
+
+/-- Substitute type names: a parent's type parameters by the type arguments
+    a subclass gives it (#39). -/
+partial def STy.substNames (σ : List (String × STy)) : STy → STy
+  | .name n => (σ.lookup n).getD (.name n)
+  | .arr t => .arr (t.substNames σ)
+  | .opt t => .opt (t.substNames σ)
+  | .tup ts => .tup (ts.map (STy.substNames σ))
+  | .map k v => .map (k.substNames σ) (v.substNames σ)
+  | .app n ts => .app n (ts.map (STy.substNames σ))
 
 end OpenVerse.Front

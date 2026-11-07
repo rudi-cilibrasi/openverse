@@ -240,7 +240,13 @@ circle := class(shape, labelled):
   `T`. `T(X)` converts to a supertype and cannot fail.
 - **Parametric classes.** A parametric class is a reference like any other
   (#39): `stack(t)` can have `var` fields, be `<unique>`, and refer to
-  itself (`node(t) := class: Value:t; var Next:?node(t) = false`). A method
+  itself (`node(t) := class: Value:t; var Next:?node(t) = false`). It can be
+  in a hierarchy: a subclass gives its parent type arguments,
+  `square(t) := class(shape(t))`, and each of its own type parameters must
+  be one of them (in any order: `swap(a, b) := class(pair(b, a))`), or it
+  fixes them, `intcell := class(cell(int))`. A class that fixes or repeats
+  them cannot override a method, since code generic over the parent could
+  not call it. A cast `square[S]` takes its type arguments from `S`'s. A method
   of a parametric class is generic over the class's type parameters, then
   its own. The type arguments come from the receiver, and the body is
   checked once in Verse Core (see
@@ -275,8 +281,10 @@ circle := class(shape, labelled):
   is a struct or container that holds one.
 - **Not yet supported** (each rejected with a message):
   - constructor functions;
-  - parametric classes in hierarchies, casts to a parametric class, and
-    `block:` in a parametric class;
+  - a subclass with type parameters of its own (`pair(t, u) :=
+    class(base(t))`), overrides in a subclass that fixes its parent's type
+    arguments, parametric classes with interfaces, and `block:` in a
+    parametric class;
   - `set` of an interface field that sits at different places in the
     classes implementing the interface (reading it works);
   - overriding a method with its own type parameters;

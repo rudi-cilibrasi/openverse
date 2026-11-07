@@ -167,7 +167,21 @@ position in every class below the one that declares it.
   from the fields. A parametric class has no prototype (a prototype has
   fixed type arguments), so a slot of its type starts as a new placeholder
   object, built from defaults at the slot's type arguments: one allocation
-  per call. They are not in hierarchies yet.
+  per call.
+- **Parametric hierarchies.** Every class in a hierarchy has the Verse Core
+  type arguments of its root (`TyEnv.coreArgs`): a subclass's type
+  parameters are among its parent's type arguments, so a
+  `swap(a, b) := class(pair(b, a))` is `ref … [b, a]` and an
+  `intcell := class(cell(int))` is `ref … [int]`. A class's table entry
+  gives each field the type the topmost class that has it gives it, at
+  that class's variable positions (`TyEnv.coreVars`), so a field has one
+  type through every reference of the hierarchy. Dispatch passes the
+  receiver as an instance of the implementing class at the arguments it
+  has there (`upArgs`, `argsBelow`). A class that fixes or repeats the
+  type arguments cannot override: from code generic over `cell(t)`, an
+  `intcell`'s implementation would need `t = int`, which Verse Core cannot
+  express. Core allows a subclass more type arguments than its parent
+  (#42), which a subclass with its own type parameters will use.
 
 ## Typing the heap
 
