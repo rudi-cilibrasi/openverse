@@ -506,6 +506,130 @@ static void heap_cases(void)
     EXPECT(&p, VX_R_LIMIT, VX_L_MEMORY, NULL);
 }
 
+/* Objects (HeapOp.apply), #31. */
+static void object_cases(void)
+{
+    tbuf p = { 0 };
+    tfn f = { 0 }, m = { 0 };
+    uint32_t a, b, c, d;
+    static const uint32_t t1[] = { 1 }, t02[] = { 0, 2 };
+
+    /* new, get, set, tag: O := new 7 [10, "s"]; set O.0 = 11; O.0, O.1, tag O, the set's value */
+    a = n_assign(&m, 0, n_heap(&m, VX_H_NEW, 7, 2, n_int(&m, 10), n_str(&m, "s")));
+    b = n_print_int(&m, n_heap(&m, VX_H_SET, 0, 2, n_local(&m, 0), n_int(&m, 11)));
+    c = n_seq(&m, n_print_int(&m, n_heap(&m, VX_H_GET, 0, 1, n_local(&m, 0))),
+              n_print(&m, n_heap(&m, VX_H_GET, 1, 1, n_local(&m, 0))));
+    d = n_print_int(&m, n_heap(&m, VX_H_TAG, 0, 1, n_local(&m, 0)));
+    n_seq(&m, a, n_seq(&m, b, n_seq(&m, c, d)));
+    main_only(&p, &m, 1, m.count - 1);
+    OK_OUT(&p, "11\n11\ns\n7\n");
+
+    /* type errors: a field out of range (get, set), a non-reference, a
+       dangling reference literal, the wrong number of arguments */
+    n_heap(&m, VX_H_GET, 2, 1, n_heap(&m, VX_H_NEW, 0, 2, n_int(&m, 1), n_int(&m, 2)));
+    main_only(&p, &m, 0, m.count - 1);
+    EXPECT(&p, VX_R_ERR, VX_E_TYPE, "");
+    n_heap(&m, VX_H_SET, 2, 2, n_heap(&m, VX_H_NEW, 0, 2, n_int(&m, 1), n_int(&m, 2)), n_int(&m, 3));
+    main_only(&p, &m, 0, m.count - 1);
+    EXPECT(&p, VX_R_ERR, VX_E_TYPE, "");
+    n_heap(&m, VX_H_TAG, 0, 1, n_int(&m, 0));
+    main_only(&p, &m, 0, m.count - 1);
+    EXPECT(&p, VX_R_ERR, VX_E_TYPE, "");
+    n_seq(&m, n_heap(&m, VX_H_NEW, 0, 0), n_heap(&m, VX_H_TAG, 0, 1, n_ref(&m, 1)));
+    main_only(&p, &m, 0, m.count - 1);
+    EXPECT(&p, VX_R_ERR, VX_E_TYPE, "");
+    n_seq(&m, n_heap(&m, VX_H_NEW, 0, 0), n_print_int(&m, n_heap(&m, VX_H_TAG, 0, 1, n_ref(&m, 0))));
+    main_only(&p, &m, 0, m.count - 1);
+    OK_OUT(&p, "0\n");
+    a = n_heap(&m, VX_H_NEW, 0, 1, n_int(&m, 1));
+    n_heap(&m, VX_H_GET, 0, 2, a, a);
+    main_only(&p, &m, 0, m.count - 1);
+    EXPECT(&p, VX_R_ERR, VX_E_TYPE, "");
+    n_heap(&m, VX_H_SET, 0, 1, n_heap(&m, VX_H_NEW, 0, 1, n_int(&m, 1)));
+    main_only(&p, &m, 0, m.count - 1);
+    EXPECT(&p, VX_R_ERR, VX_E_TYPE, "");
+    /* a reference is not printable and not an int */
+    n_prim(&m, VX_P_TOSTR, 0, 1, n_heap(&m, VX_H_NEW, 0, 0));
+    main_only(&p, &m, 0, m.count - 1);
+    EXPECT(&p, VX_R_ERR, VX_E_TYPE, "");
+
+    /* isTag: succeeds with the reference, fails otherwise; references are
+       equal when they are the same object
+       O := new 1 []; if (isTag [1] O = O) "yes" else "no"; if (isTag [0, 2] O) "yes" else "no";
+       if (O = new 1 []) "same" else "different" */
+    a = n_assign(&m, 0, n_heap(&m, VX_H_NEW, 1, 0));
+    b = n_ite(&m, n_prim(&m, VX_P_EQ, 0, 2, n_istag(&m, 1, t1, n_local(&m, 0)), n_local(&m, 0)),
+              n_print(&m, n_str(&m, "yes")), n_print(&m, n_str(&m, "no")));
+    c = n_ite(&m, n_istag(&m, 2, t02, n_local(&m, 0)), n_print(&m, n_str(&m, "yes")), n_print(&m, n_str(&m, "no")));
+    d = n_ite(&m, n_prim(&m, VX_P_EQ, 0, 2, n_local(&m, 0), n_heap(&m, VX_H_NEW, 1, 0)),
+              n_print(&m, n_str(&m, "same")), n_print(&m, n_str(&m, "different")));
+    n_seq(&m, a, n_seq(&m, b, n_seq(&m, c, d)));
+    main_only(&p, &m, 1, m.count - 1);
+    OK_OUT(&p, "yes\nno\ndifferent\n");
+    /* an empty tag set always fails; outside a context, that is Main's failure */
+    n_istag(&m, 0, NULL, n_heap(&m, VX_H_NEW, 1, 0));
+    main_only(&p, &m, 0, m.count - 1);
+    EXPECT(&p, VX_R_FAIL, 0, "");
+
+    /* rollback: a failed condition undoes field writes and allocations, so
+       the next object gets the index again
+       O := new 0 [1]; if (set O.0 = 2, new 0 [], false?) {}; O.0; tag (ref 1) after new 5 [] */
+    a = n_assign(&m, 0, n_heap(&m, VX_H_NEW, 0, 1, n_int(&m, 1)));
+    b = n_ite(&m, n_seq(&m, n_heap(&m, VX_H_SET, 0, 2, n_local(&m, 0), n_int(&m, 2)),
+                        n_seq(&m, n_heap(&m, VX_H_NEW, 9, 0), FAILP(&m))),
+              n_void(&m), n_void(&m));
+    c = n_print_int(&m, n_heap(&m, VX_H_GET, 0, 1, n_local(&m, 0)));
+    d = n_seq(&m, n_heap(&m, VX_H_NEW, 5, 0), n_print_int(&m, n_heap(&m, VX_H_TAG, 0, 1, n_ref(&m, 1))));
+    n_seq(&m, a, n_seq(&m, b, n_seq(&m, c, d)));
+    main_only(&p, &m, 1, m.count - 1);
+    OK_OUT(&p, "1\n5\n");
+    /* nested contexts: the inner one commits, the outer one fails: both undone;
+       a for filter that fails undoes its writes too */
+    a = n_assign(&m, 0, n_heap(&m, VX_H_NEW, 0, 1, n_int(&m, 1)));
+    b = n_ite(&m, n_seq(&m, n_ite(&m, n_heap(&m, VX_H_SET, 0, 2, n_local(&m, 0), n_int(&m, 2)), n_void(&m), n_void(&m)),
+                        FAILP(&m)),
+              n_void(&m), n_void(&m));
+    c = n_for(&m, 1, n_prim(&m, VX_P_RANGE, 0, 2, n_int(&m, 1), n_int(&m, 3)),
+              n_seq(&m, n_heap(&m, VX_H_SET, 0, 2, n_local(&m, 0), n_local(&m, 1)),
+                    n_prim(&m, VX_P_GT, 0, 2, n_local(&m, 1), n_int(&m, 1))),
+              n_void(&m));
+    d = n_print_int(&m, n_heap(&m, VX_H_GET, 0, 1, n_local(&m, 0)));
+    n_seq(&m, a, n_seq(&m, b, n_seq(&m, n_print_int(&m, n_heap(&m, VX_H_GET, 0, 1, n_local(&m, 0))),
+                                     n_seq(&m, c, d))));
+    main_only(&p, &m, 2, m.count - 1);
+    OK_OUT(&p, "1\n3\n");
+
+    /* objects outlive calls, and so do the values stored in them: F(O) stores
+       a fresh string in O and returns an int, so F's cells are reclaimed
+       except the string's (the pin).  Repeated, then read back.
+       F(O) = set O.0 = ToString(7) + "!"; 0
+       Main: O := new 0 [""]; loop 50 { F(O); garbage }; Print(O.0) */
+    n_seq(&f, n_heap(&f, VX_H_SET, 0, 2, n_local(&f, 0),
+                     n_prim(&f, VX_P_CONCAT, 0, 2, n_prim(&f, VX_P_TOSTR, 0, 1, n_int(&f, 7)), n_str(&f, "!"))),
+          n_int(&f, 0));
+    a = n_seq(&m, n_assign(&m, 0, n_heap(&m, VX_H_NEW, 0, 1, n_str(&m, ""))), n_assign(&m, 1, n_int(&m, 0)));
+    b = n_seq(&m, n_assign(&m, 1, n_prim(&m, VX_P_ADD, 0, 2, n_local(&m, 1), n_int(&m, 1))),
+              n_seq(&m, n_call(&m, 0, 1, n_local(&m, 0)),
+                    n_seq(&m, n_prim(&m, VX_P_CONCAT, 0, 2, n_str(&m, "junk"), n_str(&m, "junk")),
+                          n_ite(&m, n_prim(&m, VX_P_GE, 0, 2, n_local(&m, 1), n_int(&m, 50)), n_brk(&m), n_void(&m)))));
+    n_seq(&m, a, n_seq(&m, n_loop(&m, b), n_print(&m, n_heap(&m, VX_H_GET, 0, 1, n_local(&m, 0)))));
+    t_prog_header(&p, 2, 1);
+    t_fn(&p, &f, 1, 1, "F", f.count - 1);
+    t_fn(&p, &m, 0, 2, "Main", m.count - 1);
+    OK_OUT(&p, "7!\n");
+    /* a callee that returns an object whose field holds its fresh array
+       G() = new 3 [array{1, 2}];  Main: X := G(); "junk"; X.0[1] */
+    n_heap(&f, VX_H_NEW, 3, 1, n_prim(&f, VX_P_MKARR, 0, 2, n_int(&f, 1), n_int(&f, 2)));
+    a = n_assign(&m, 0, n_call(&m, 0, 0));
+    b = n_prim(&m, VX_P_CONCAT, 0, 2, n_str(&m, "junk"), n_str(&m, "junk"));
+    c = n_print_int(&m, n_prim(&m, VX_P_INDEX, 0, 2, n_heap(&m, VX_H_GET, 0, 1, n_local(&m, 0)), n_int(&m, 1)));
+    n_seq(&m, a, n_seq(&m, b, c));
+    t_prog_header(&p, 2, 1);
+    t_fn(&p, &f, 0, 0, "G", f.count - 1);
+    t_fn(&p, &m, 0, 1, "Main", m.count - 1);
+    OK_OUT(&p, "2\n");
+}
+
 int main(void)
 {
     rollback_cases();
@@ -513,6 +637,7 @@ int main(void)
     control_cases();
     fuel_cases();
     heap_cases();
+    object_cases();
     vx_outcome_free(&last);
     return t_report("test_interp");
 }

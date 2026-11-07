@@ -11,7 +11,8 @@
  *   5. CALL fn < nfns                                     load_call
  *      ... and n == arity of fn                           check_calls
  *   6. prim code <= 28, k == 0 unless tupGet,             load_prim
- *      lit kind <= 5, LOGIC byte <= 1                     load_lit
+ *      lit kind <= 6, LOGIC byte <= 1                     load_lit
+ *      heap op <= 4, k == 0 for tag                       load_heap
  *   7. counts within the VX_MAX_* limits of openverse.h   throughout
  *
  * One forward pass over the input.  The arity half of condition 5 is
@@ -23,7 +24,7 @@
  * Memory: the function table and each node table are malloc'd with the
  * exact count from the header, after checking the count against the limit
  * and against the bytes left.  Child lists and bytes go into two pools sized
- * by the input (an argument takes 4 input bytes, a string byte 1), which are
+ * by the input (an argument takes 4 input bytes, a string or isTag byte 1), which are
  * trimmed to their exact size at the end.  On any error everything is freed.
  *
  * QuickProof subset: no goto, no recursion, no switch, no struct assignment
@@ -190,6 +191,10 @@ static int load_lit(vx_ld *r, vx_program *p, vx_node *nd)
             return VX_LOAD_TRUNCATED;
         nd->b = x;
         return rd_bytes(r, p, x, &nd->a);
+    } else if (kind == VX_LIT_REF) {
+        if (rd_u32(r, &x) != VX_LOAD_OK)
+            return VX_LOAD_TRUNCATED;
+        nd->lit = (int64_t)x;
     }
     return VX_LOAD_OK;   /* NONE, VOID: no payload */
 }
@@ -212,6 +217,39 @@ static int load_prim(vx_ld *r, vx_program *p, uint32_t j, vx_node *nd)
         return VX_LOAD_TRUNCATED;
     nd->op = code;
     nd->a = k;
+    nd->b = n;
+    return rd_args(r, p, j, n, &nd->c);
+}
+
+/* HEAP: op, then k (for ISTAG: m and m tags, into the bytes pool), n, args
+   (condition 6). */
+static int load_heap(vx_ld *r, vx_program *p, uint32_t j, vx_node *nd)
+{
+    uint32_t op;
+    uint32_t k;
+    uint32_t n;
+    int rc;
+    if (rd_u8(r, &op) != VX_LOAD_OK)
+        return VX_LOAD_TRUNCATED;
+    if (op > VX_H_LAST)
+        return VX_LOAD_HEAP;
+    if (rd_u32(r, &k) != VX_LOAD_OK)
+        return VX_LOAD_TRUNCATED;
+    nd->op = op;
+    if (op == VX_H_ISTAG) {
+        if (k > VX_MAX_TAGS)
+            return VX_LOAD_LIMIT;
+        nd->d = k;
+        rc = rd_bytes(r, p, 4 * k, &nd->a);
+        if (rc != VX_LOAD_OK)
+            return rc;
+    } else {
+        if (k != 0 && op == VX_H_TAG)
+            return VX_LOAD_K;
+        nd->a = k;
+    }
+    if (rd_u32(r, &n) != VX_LOAD_OK)
+        return VX_LOAD_TRUNCATED;
     nd->b = n;
     return rd_args(r, p, j, n, &nd->c);
 }
@@ -296,6 +334,8 @@ static int load_node(vx_ld *r, vx_program *p, uint32_t nslots, uint32_t j, vx_no
         return rd_child(r, j, &nd->a);
     if (tag == VX_N_BRK)
         return VX_LOAD_OK;
+    if (tag == VX_N_HEAP)
+        return load_heap(r, p, j, nd);
     return VX_LOAD_TAG;
 }
 

@@ -184,6 +184,39 @@ static inline uint32_t n_prim(tfn *f, uint32_t code, uint32_t k, uint32_t n, ...
     va_end(ap);
     return i;
 }
+static inline uint32_t n_ref(tfn *f, uint32_t a)
+{
+    uint32_t i = tn_begin(f, VX_N_LIT);
+    tb_u8(&f->nodes, VX_LIT_REF);
+    tb_u32(&f->nodes, a);
+    return i;
+}
+/* n_heap(f, op, k, n, arg0, ..., argn-1), for every op but ISTAG */
+static inline uint32_t n_heap(tfn *f, uint32_t op, uint32_t k, uint32_t n, ...)
+{
+    uint32_t i = tn_begin(f, VX_N_HEAP), j;
+    va_list ap;
+    tb_u8(&f->nodes, op);
+    tb_u32(&f->nodes, k);
+    tb_u32(&f->nodes, n);
+    va_start(ap, n);
+    for (j = 0; j < n; j++)
+        tb_u32(&f->nodes, va_arg(ap, uint32_t));
+    va_end(ap);
+    return i;
+}
+/* isTag us [e], with us = tags[0..m) */
+static inline uint32_t n_istag(tfn *f, uint32_t m, const uint32_t *tags, uint32_t e)
+{
+    uint32_t i = tn_begin(f, VX_N_HEAP), j;
+    tb_u8(&f->nodes, VX_H_ISTAG);
+    tb_u32(&f->nodes, m);
+    for (j = 0; j < m; j++)
+        tb_u32(&f->nodes, tags[j]);
+    tb_u32(&f->nodes, 1);
+    tb_u32(&f->nodes, e);
+    return i;
+}
 static inline uint32_t n_call(tfn *f, uint32_t fn, uint32_t n, ...)
 {
     uint32_t i = tn_begin(f, VX_N_CALL), j;

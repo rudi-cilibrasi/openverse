@@ -35,7 +35,7 @@ function.
 | 9 | BRK | — | `.brk` |
 | 10 | RET | `e:u32` | `.ret e` |
 | 11 | PRINT | `e:u32` | `.print e` |
-| 12 | HEAP | `op:u8 k:u32 n:u32 args:u32[n]`, or for `op` 4 `op:u8 m:u32 us:u32[m] n:u32 args:u32[n]` | `.heap op args` (`op`: 0 `new k`, 1 `get k`, 2 `set k`, 3 `tag` with `k = 0`, 4 `isTag us`); **reserved**: the loader does not accept it yet (#20) |
+| 12 | HEAP | `op:u8 k:u32 n:u32 args:u32[n]`, or for `op` 4 `op:u8 m:u32 us:u32[m] n:u32 args:u32[n]` | `.heap op args` (`op`: 0 `new k`, 1 `get k`, 2 `set k`, 3 `tag` with `k = 0`, 4 `isTag us`) |
 
 ```
 Lit := 0 INT  i:i64
@@ -44,7 +44,7 @@ Lit := 0 INT  i:i64
      | 3 STR  n:u32 bytes:u8[n]       -- .arr of n chars (also the empty array)
      | 4 NONE                         -- the empty option (`false`)
      | 5 VOID                         -- .tup []
-     | 6 REF  a:u32                   -- .ref a; reserved, not accepted by the loader (#20)
+     | 6 REF  a:u32                   -- .ref a (only fuzzing makes these: no typed program has one)
 ```
 
 A literal that is not one of these (a non-string array, a non-empty tuple,
@@ -78,8 +78,9 @@ the end with no bytes left over and:
 3. every child index of node `j` is `< j`;
 4. every slot (LOCAL, ASSIGN, FOR) is `< nslots` of its function;
 5. every CALL names a function `< nfns` whose `arity` equals the call's `n`;
-6. every PRIM code is `≤ 28`, `k = 0` unless the code is 25, and every LIT
-   tag is `≤ 5` with LOGIC `≤ 1`;
+6. every PRIM code is `≤ 28`, `k = 0` unless the code is 25, every LIT
+   tag is `≤ 6` with LOGIC `≤ 1`, and every HEAP op is `≤ 4`, with `k = 0`
+   for `tag`;
 7. the counts stay within the limits in `runtime/include/openverse.h`.
 
 Conditions 2, 4 and 5 are `OpenVerse.Prog.WellScoped`
@@ -87,7 +88,14 @@ Conditions 2, 4 and 5 are `OpenVerse.Prog.WellScoped`
 accepts never raises a slot or call error and never changes the size of a
 frame.
 Condition 3 means every node's children come before it, so the node graph is
-acyclic. The QuickProof law `loader_accepts_only_wellscoped`
+acyclic. The loader does not check the number of arguments of a HEAP node,
+nor the number of fields of `new` against a class: like a PRIM applied to
+the wrong values, those are type errors at run time (`HeapOp.apply`), which
+typed programs never have. Class tags, field indices and REF literals are
+`u32`: `Prog.encode` writes a larger number modulo 2^32, so the encoding of
+a Core program with one is not that program. The front end numbers classes
+and fields from 0, and no typed program has a REF literal, so no compiled
+program needs more. The QuickProof law `loader_wellscoped`
 (`proofs/quickproof/loader`) proves that the C loader enforces conditions 1–7
 for every input buffer, and reads only inside the buffer.
 
