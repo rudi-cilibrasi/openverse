@@ -236,7 +236,14 @@ partial def TyEnv.disjoint (env : TyEnv) : Ty → Ty → Bool
     let isCls (x : String) := env.classes.contains x
     let iface (x : String) := isCls x && (env.info x).isIface
     if isCls a && isCls b then
-      if iface a || iface b then false else !(env.isSub a b || env.isSub b a)
+      -- one parametric class at disjoint type arguments
+      if a == b then as.length == bs.length && (as.zip bs).any fun (x, y) => env.disjoint x y
+      else if iface a || iface b then
+        -- a <final> class, which nothing is below, and an interface it does
+        -- not implement (#100)
+        let finalNot (c i : String) : Bool := !iface c && (env.info c).isFinal && !env.isSub c i
+        (iface a && finalNot b a) || (iface b && finalNot a b)
+      else !(env.isSub a b || env.isSub b a)
     else if isCls a || isCls b then true
     else a != b || (as.length == bs.length && (as.zip bs).any fun (x, y) => env.disjoint x y)
   | .enum a, .enum b => a != b
@@ -951,6 +958,13 @@ partial def refUp (env : TyEnv) : Ty → Ty → Bool
 partial def convert (env : TyEnv) (e : Expr) (a b : Ty) : EM (Option Expr) := do
   -- references: the same value has both types (Verse Core subtyping, #32)
   if refUp env a b then return some e
+  -- no value has a class type with no concrete class below it (an interface
+  -- nothing implements, an abstract class with no subclass): the conversion
+  -- to a type above it is unreachable (#98)
+  if let (.struct S _, .struct T _) := (a, b) then
+    if env.classes.contains S && env.classes.contains T && S != T && env.isSub S T &&
+        (env.concreteBelow S).isEmpty then
+      return some (.seq e (.prim .userErr []))
   match a, b with
   | .struct S [], .struct T [] =>
     if env.classes.contains S && env.classes.contains T && S != T && env.isSub S T then
@@ -2985,8 +2999,9 @@ def expandCtors (ctors : List (Pos × String × List SParam × List TParam × Li
           throw s!"{p.show}: {k} leaves {f} to another overload, and its default's type mentions a type parameter of {k}: give {f} in every overload of a generic constructor"
         let helper := s!"{k}$default${f}"
         if !out.any (fun | .fn _ n .. => n == helper | _ => false) then
-          -- (with the constructor's effects: a default cannot fail)
-          out := out.push (.fn p helper [] [] (effs.filter (· != "decides")) (tyOf f) d)
+          -- (its effects are its code's, inferred as a `block:`'s are: every
+          -- overload that leaves F to it then pays for what it does)
+          out := out.push (.fn p helper [] [] [] (tyOf f) d)
         body := body.push (.decl p s!"{f}$v" (some (tyOf f)) false (.app p (.ident p helper) [] false))
     let initRet : SExpr :=
       if fs.isEmpty then .block p []
@@ -3485,7 +3500,7 @@ def elabProgramCore (allTops00 : List STop) (opts : Options := {}) : Except Stri
       sigs := sigs.push { idx, name := n, params := tys, ret := rt, decides := effs.contains "decides",
                           -- (a `block:`'s effects are inferred below, from none, as a
                           -- constant's: blocks that construct each other's classes)
-                          fx := if n.endsWith ".$block" then [] else allowedFx effs,
+                          fx := if n.endsWith ".$block" || (n.splitOn "$default$").length > 1 then [] else allowedFx effs,
                           isConst := false,
                           named := (ps.filter (·.named)).map fun q => (q.name, q.default),
                           pnames := ps.map (·.name) }
@@ -3564,9 +3579,19 @@ def elabProgramCore (allTops00 : List STop) (opts : Options := {}) : Except Stri
             sigs := sigs.set! idx { sigs[idx]! with fx }
             changed := true
         | .error _ => pure ()
-      -- a class's `block:` clauses have the effects of their code
+      -- a class's `block:` clauses have the effects of their code, and so
+      -- does a default an overloaded constructor fills in (#99)
       | .fn _ n ps _ _ _ body =>
-        if n.endsWith ".$block" then
+        if (n.splitOn "$default$").length > 1 then
+          let ctx : Ctx := { sigs := sigs.toList ++ gsigs.toList, sigProg := mkSigProg sigs, types := env }
+          match (elabStmt ctx body (some sigs[idx]!.ret)).run { env } with
+          | .ok (_, st) =>
+            let fx := heapFx.filter fun k => st.fx.any (·.1 == k)
+            if fx != sigs[idx]!.fx then
+              sigs := sigs.set! idx { sigs[idx]! with fx }
+              changed := true
+          | .error _ => pure ()
+        else if n.endsWith ".$block" then
           let s := sigs[idx]!
           let locals := (ps.zip (List.range ps.length)).zip s.params |>.map fun ((prm, i), t) =>
             ({ name := prm.name, slot := i, ty := t, mutable := false } : Local)

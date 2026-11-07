@@ -134,7 +134,9 @@ Verse ch. 6): `Describe(X:int)`, `Describe(S:string)`, `Describe(X:int, Y:int)`.
 - **Overlapping types:** `void`, a type parameter, two array, map or option
   types (they share the empty one), an array, option or `logic` with
   another (`false` is each), a tuple and an array, map or option, and a
-  class or interface with an interface or a class above or below it. A pair that overlaps is refused where the later
+  class or interface with an interface or a class above or below it (but a
+  `<final>` class and an interface it does not implement are disjoint, and
+  so are one parametric class's instances at disjoint type arguments). A pair that overlaps is refused where the later
   one is defined.
 - **Calls.** A call takes the overload whose parameter types its arguments
   fit. With subtyping, a `square` fits `Describe(B:shape)`. Each argument's
