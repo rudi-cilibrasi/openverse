@@ -282,6 +282,17 @@ example : ({ protoDemo with fns := protoDemo.fns.set 2 { protoDemo.fns[2]! with
   native_decide
 -- without prototypes, a reference literal has no type
 example : protoDemo.checkTypes { protoSigs with protos := [] } protoSlots = false := by native_decide
+-- a prototype's type is inferred where nothing is expected (a field read's receiver)
+example : tc protoSigs [.ref [1]] .void (.heap (.get 2) [.lit (.ref 0)]) none = some .int := by native_decide
+-- prototypes may refer to each other in a cycle: a `point3` prototype whose class table says
+-- its fields are a `point` and a `point3` reference (no instance needs to be built first)
+example :
+    let S : Sigs := { fns := [([], .void), ([], .void)], classes := [[.ref [1]], [.ref [0]]], protos := [0, 1] }
+    let P : Prog := { fns := [
+      { name := "Main", arity := 0, nslots := 0, decides := false, body := .lit .void },
+      { name := "$Main", arity := 0, nslots := 0, decides := false,
+        body := protoPrelude [(0, [.ref 1]), (1, [.ref 0])] (.call 0 []) }], main := 1 }
+    P.checkTypes S [[], []] = true := by native_decide
 
 -- a class table with a type variable is refused (so `Typed.subst` holds)
 example : heapDemo.checkTypes { heapSigs with classes := [[.var 0], [.int, .int, .int]] } heapSlots = false := by

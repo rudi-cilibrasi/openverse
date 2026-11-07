@@ -44,7 +44,7 @@ Lit := 0 INT  i:i64
      | 3 STR  n:u32 bytes:u8[n]       -- .arr of n chars (also the empty array)
      | 4 NONE                         -- the empty option (`false`)
      | 5 VOID                         -- .tup []
-     | 6 REF  a:u32                   -- .ref a; reserved, not accepted by the loader (#20)
+     | 6 REF  a:u32                   -- .ref a: the prototype at address a (#37)
 ```
 
 A literal that is not one of these (a non-string array, a non-empty tuple,

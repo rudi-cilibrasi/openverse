@@ -97,8 +97,8 @@ def default : VTy → Value
   -- no value has a type variable as its type; slots of such types are
   -- initialised from parameters instead (`DefaultE`)
   | .var _ => .void
-  -- no literal is a reference; slots of such types start as a new object
-  -- or a parameter instead (`DefaultE`)
+  -- a reference has no default of its own: slots of such types start as a
+  -- prototype, a new object or a parameter instead (`DefaultE`, #37)
   | .ref _ => .void
 def defaults : List VTy → List Value
   | [] => []
@@ -328,7 +328,10 @@ def HeapOK (S : Sigs) (h : List Obj) : Prop :=
   S.protos <+: tagsOf h
 
 /-- `Main`'s prelude (#37): allocate the prototype objects, in order, each
-    with its fields as literals, then run `e`. -/
+    with its fields as literals, then run `e`. A field may refer to any
+    prototype, also one allocated after it (evaluating a literal does not
+    look at the heap): prototypes may form cycles. They are shared and can
+    be written; the front end only ever reads a slot after assigning it. -/
 def protoPrelude : List (Nat × List Value) → Expr → Expr
   | [], e => e
   | (t, vs) :: rest, e => .seq (.heap (.new t) (vs.map .lit)) (protoPrelude rest e)
@@ -350,7 +353,6 @@ def ProgTyped (P : Prog) (S : Sigs) : Prop :=
     ∃ Γ, FnTyped S fn ps τ Γ) ∧
   -- the heap starts with the prototypes when the program starts (#37)
   (S.protos = [] ∨ PreludeOK P S)
-
 
 
 /-- A frame agrees with slot types `Γ`. -/
