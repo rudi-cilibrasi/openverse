@@ -323,14 +323,14 @@ The lists are buffers from a pool, and on a return the smaller of the
 callee's and the caller's moves into the larger, which then serves the
 caller, so an entry moves O(log n) times. A call also skips its compaction
 when its region is less than twice the largest block a callee's compaction
-left in it (all live then), and its caller has room for it: the cells
-skipped callees left the caller, unchecked since a block may have died,
-stay within twice that block. Skipping keeps more, never less; a caller gets
-at most about one block of garbage from all its callees; and it is what
-keeps the work linear: a recursion
-building a linked structure would otherwise re-compact all its survivors at
-every level. A loop of calls that each replace a field's array still
-compacts, since each leaves a small block. A compaction scans its list,
+kept for fields (`dmax`, counted while marking from the fields before the
+result). Objects are never reclaimed, so such a block stays live until a
+field that held it changes or a rollback restores fields or drops objects,
+and each of those zeroes the block of the call whose region it is in. A block
+only a result kept does not count, since a caller may drop it. Skipping keeps
+more, never less, and what it keeps is mostly live; it is what keeps the work
+linear, since a recursion building a linked structure would otherwise
+re-compact all its survivors at every level. A compaction scans its list,
 whose entries the writes during the call made. An
 entry leaves only when its cell no longer holds a reference and no failure
 context is open, or when a rollback drops its object: what a rollback

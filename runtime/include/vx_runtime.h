@@ -82,7 +82,10 @@ static inline vx_val *vx_obj_elems(const vx_heap *h, size_t o)
  * nothing else can refer to the callee's cells (see interp.c). */
 int  vx_heap_keep(vx_heap *h, size_t mark, vx_val *root);   /* VX_OK | VX_EFULL */
 /* The same with several roots (each updated). */
-int  vx_heap_keep_roots(vx_heap *h, size_t mark, vx_val **roots, size_t n);   /* VX_OK | VX_EFULL */
+/* roots[0] is the result, the others fields; *fieldkept (if not NULL) gets
+   the cells the fields reach in the region. */
+int  vx_heap_keep_roots(vx_heap *h, size_t mark, vx_val **roots, size_t n,
+                        size_t *fieldkept);                    /* VX_OK | VX_EFULL */
 /* Structural equality, `decide (a = b)` (iterative). */
 int  vx_equal(const vx_heap *h, const vx_val *a, const vx_val *b, int *eq);
 
@@ -261,9 +264,9 @@ typedef struct vx_ctx {
     vx_heap   heap;
     vx_objs   objs;        /* class instances (Glob.heap)                */
     size_t   *hmarks;      /* the heap mark of each active call, by depth */
-    size_t   *dmax;        /* the largest block a callee's compaction left
-                              in each active call's region */
-    size_t   *skipped;     /* the cells skipped callees left there, unchecked */
+    size_t   *dmax;        /* the largest block of cells a callee's
+                              compaction kept for fields in each active call's
+                              region (0 once such a field may have changed) */
     size_t    nframes;
     size_t    fcap;
     size_t    top;         /* slots in use; the current frame ends here  */

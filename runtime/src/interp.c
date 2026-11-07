@@ -169,6 +169,9 @@ static void fc_enter(vx_ctx *c, fc_mark *m)
 /* The context failed: back to the state at the mark. */
 static void fc_fail(vx_ctx *c, const fc_mark *m)
 {
+    /* fields restored or objects dropped: a block kept for them may die */
+    if (c->nframes > 0 && (c->objs.nlog > m->ob.nlog || c->objs.nobjs > m->ob.nobjs))
+        c->dmax[c->nframes - 1] = 0;
     vx_store_rollback(&c->st, &m->st);
     vx_objs_rollback(&c->objs, &m->ob);
     if (c->st.depth == 0)
@@ -290,13 +293,14 @@ static void eval_list(vx_ctx *c, const vx_fn *fn, size_t base, uint32_t off, uin
  */
 /* Reclaim the cells allocated since `hmark` (the top call returning with
    *res), keeping what *res and the fields in the call's list reach. */
-static int reclaim(vx_ctx *c, size_t hmark, vx_val *res)
+static int reclaim(vx_ctx *c, size_t hmark, vx_val *res, size_t *fieldkept)
 {
     vx_objs *ob = &c->objs;
     const vx_remlist *l = vx_objs_top(ob);
     size_t j, nr = 0;
     vx_val **roots;
     int rc;
+    *fieldkept = 0;
     if (l == NULL || l->n == 0)
         return vx_heap_keep(&c->heap, hmark, res);
     roots = malloc((1 + l->n) * sizeof(vx_val *));
@@ -308,7 +312,7 @@ static int reclaim(vx_ctx *c, size_t hmark, vx_val *res)
         if (vx_isref(v) && v->bits >= hmark)
             roots[nr++] = v;
     }
-    rc = vx_heap_keep_roots(&c->heap, hmark, roots, nr);
+    rc = vx_heap_keep_roots(&c->heap, hmark, roots, nr, fieldkept);
     free(roots);
     return rc;
 }
@@ -347,17 +351,14 @@ static void call_fn(vx_ctx *c, uint32_t f, size_t sp0, size_t nargs, uint64_t n,
         size_t cap = c->fcap ? 2 * c->fcap : 64;
         size_t *hm = realloc(c->hmarks, cap * sizeof(size_t));
         size_t *dm = hm == NULL ? NULL : realloc(c->dmax, cap * sizeof(size_t));
-        size_t *sk = dm == NULL ? NULL : realloc(c->skipped, cap * sizeof(size_t));
         if (hm != NULL)
             c->hmarks = hm;
-        if (dm != NULL)
-            c->dmax = dm;
-        if (sk == NULL) {
+        if (dm == NULL) {
             c->top = top0;
             set_limit(r, VX_L_MEMORY);
             return;
         }
-        c->skipped = sk;
+        c->dmax = dm;
         c->fcap = cap;
     }
     if (vx_objs_call_fast(&c->objs) != VX_OK) {
@@ -367,7 +368,6 @@ static void call_fn(vx_ctx *c, uint32_t f, size_t sp0, size_t nargs, uint64_t n,
     }
     c->hmarks[c->nframes] = hmark;
     c->dmax[c->nframes] = 0;
-    c->skipped[c->nframes] = 0;
     c->nframes++;
 
     eval(c, g, nb, g->root, n, r);                  /* eval P n ⟨frameOf fn vs, s₁.out⟩ fn.body */
@@ -389,33 +389,29 @@ static void call_fn(vx_ctx *c, uint32_t f, size_t sp0, size_t nargs, uint64_t n,
        written during the call and the field log made during it reach */
     if (r->kind == VX_R_OK) {
         /* compact, unless the region is less than twice the largest block a
-           callee's compaction left in it (live then) and the caller has room
-           for it among the cells skipped callees left it (unchecked, as the
-           block may have died): skipping keeps more, never less, a caller
-           gets at most about one such block of garbage from all its callees,
-           and the work stays linear where each return compacting would be
-           quadratic (a recursion building a linked structure re-compacting
-           its survivors at every level) */
+           callee's compaction kept for fields that still hold it: skipping
+           keeps more, never less, and what it keeps is mostly live (objects
+           are never reclaimed, and a field's change or a rollback zeroes the
+           block, below), while the work stays linear where each return
+           compacting would be quadratic (a recursion building a linked
+           structure re-compacting its survivors at every level). A block
+           only a result kept does not count: a caller may drop it. */
         size_t k = c->nframes - 1;
         size_t region = c->heap.len - hmark;
+        size_t fk = 0;
         if (c->dmax[k] == 0 && vx_objs_top_empty(&c->objs)) {
-            /* no field roots and no block left by a callee: the result only */
+            /* no field roots and no block: the result only */
             if (vx_heap_keep(&c->heap, hmark, &r->v) != VX_OK)
                 set_limit(r, VX_L_MEMORY);
-            else if (k > 0 && c->heap.len - hmark > c->dmax[k - 1])
-                c->dmax[k - 1] = c->heap.len - hmark;
-        } else if (region >= 2 * c->dmax[k] ||
-                   (k > 0 && c->skipped[k - 1] + region > 2 * c->dmax[k])) {
+        } else if (region >= 2 * c->dmax[k]) {
             if (c->st.depth == 0)
                 vx_objs_drop_stale(&c->objs);
-            if (reclaim(c, hmark, &r->v) != VX_OK)
+            if (reclaim(c, hmark, &r->v, &fk) != VX_OK)
                 set_limit(r, VX_L_MEMORY);
-            else if (k > 0 && c->heap.len - hmark > c->dmax[k - 1])
-                c->dmax[k - 1] = c->heap.len - hmark;
-        } else if (k > 0) {
-            if (c->dmax[k] > c->dmax[k - 1])
-                c->dmax[k - 1] = c->dmax[k];
-            c->skipped[k - 1] += region;
+            else if (k > 0 && fk > c->dmax[k - 1])
+                c->dmax[k - 1] = fk;
+        } else if (k > 0 && c->dmax[k] > c->dmax[k - 1]) {
+            c->dmax[k - 1] = c->dmax[k];
         }
     } else if (r->kind == VX_R_FAIL) {
         /* the failure reaches a context that rolls the fields back (or ends
@@ -633,17 +629,39 @@ static const vx_obj *obj_of(const vx_ctx *c, const vx_val *v)
    the cell in that call's list, so that its return keeps what it reaches
    (#50; older cells, such as literals and the shared empty object, never
    move). */
-static int remember(vx_ctx *c, size_t cell, const vx_val *v)
+/* The active call whose region holds heap cell `bits` (the last frame k
+   with hmarks[k] <= bits: the marks never decrease), or nframes if none. */
+static size_t owner_of(const vx_ctx *c, uint64_t bits)
 {
     size_t lo = 0, hi = c->nframes;
-    if (!vx_isref(v) || v->bits == 0 || c->nframes == 0 || v->bits < c->hmarks[0])
-        return VX_OK;
-    /* the last frame k with hmarks[k] <= bits (the marks never decrease) */
+    if (c->nframes == 0 || bits == 0 || bits < c->hmarks[0])
+        return c->nframes;
     while (hi - lo > 1) {
         size_t mid = lo + (hi - lo) / 2;
-        if (c->hmarks[mid] <= v->bits) lo = mid; else hi = mid;
+        if (c->hmarks[mid] <= bits) lo = mid; else hi = mid;
     }
-    return vx_objs_remember(&c->objs, cell, lo);
+    return lo;
+}
+
+static int remember(vx_ctx *c, size_t cell, const vx_val *v)
+{
+    size_t k;
+    if (!vx_isref(v))
+        return VX_OK;
+    k = owner_of(c, v->bits);
+    return k == c->nframes ? VX_OK : vx_objs_remember(&c->objs, cell, k);
+}
+
+/* Field cell `cell` is about to change: a block a compaction kept for it
+   may die, so the call whose region holds its value counts no block. */
+static void field_changes(vx_ctx *c, size_t cell)
+{
+    const vx_val *old = &c->objs.cells[cell];
+    if (vx_isref(old)) {
+        size_t k = owner_of(c, old->bits);
+        if (k < c->nframes)
+            c->dmax[k] = 0;
+    }
 }
 
 /* Whether class tag t is one of the m tags of an ISTAG node (4m bytes of the
@@ -712,6 +730,7 @@ static void heap_apply(vx_ctx *c, const vx_node *nd, const vx_val *a, size_t n, 
             set_err(r, VX_E_TYPE);
             return;
         }
+        field_changes(c, o->off + nd->a);
         if (vx_objs_set(&c->objs, a[0].bits, nd->a, &a[1], c->st.depth > 0) != VX_OK ||
             remember(c, o->off + nd->a, &a[1]) != VX_OK) {
             set_limit(r, VX_L_MEMORY);
@@ -1041,7 +1060,6 @@ void vx_run(const vx_program *p, const vx_opts *o, vx_outcome *res)
     vx_objs_free(&c.objs);
     free(c.hmarks);
     free(c.dmax);
-    free(c.skipped);
 }
 
 void vx_outcome_free(vx_outcome *res)
