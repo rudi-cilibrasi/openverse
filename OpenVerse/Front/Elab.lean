@@ -902,6 +902,101 @@ partial def elabSet (ctx : Ctx) (p : Pos) (lhs : SExpr) (op : Option String) (rh
     match ctx.lookup n with
     | some l => if l.mutable then pure l else eerr p s!"'{n}' is not a var; declare it with var {n}:t = …"
     | none => eerr p s!"unknown variable '{n}'"
+  -- a path `X.F[i]…`: the root variable and its steps (`some f` a field,
+  -- `none` with an expression an index or key)
+  let rec path : SExpr → Option (String × List (Pos × Option String × Option SExpr))
+    | .ident _ n => some (n, [])
+    | .member sp e f => (path e).map fun (n, ss) => (n, ss ++ [(sp, some f, none)])
+    | .app sp e [k] true => (path e).map fun (n, ss) => (n, ss ++ [(sp, none, some k)])
+    | _ => none
+  if let some (root, steps@(_ :: _ :: _)) := path lhs then
+    -- `set X.p = e` with a path of two or more steps (Book of Verse §3.5, §9.3):
+    -- the indices and keys are evaluated once, left to right; then each
+    -- intermediate container is read (an index or an intermediate key that
+    -- is missing makes the set fail); then the new leaf; then the
+    -- containers are rebuilt from the leaf up, ending with the variable
+    let l ← mutableLocal root
+    let mut pre : Array Expr := #[]
+    -- per step: the container's slot and type, and the step
+    let mut levels : Array (Nat × Ty × Pos × Option String × Option (Nat × Ty)) := #[]
+    let mut cur := l.slot
+    let mut ty := l.ty
+    -- first the indices and keys
+    let mut keys : Array (Option (Nat × Ty)) := #[]
+    let mut tys : Array Ty := #[]
+    for (sp, f?, k?) in steps do
+      tys := tys.push ty
+      match f?, k?, ty with
+      | some f, _, .struct sn targs =>
+        match fieldIndex (ctx.types.fields sn targs) f with
+        | some (_, ft) => keys := keys.push none; ty := ft
+        | none => eerr sp s!"{ty.show} has no field '{f}'"
+      | some f, _, t => eerr sp s!"{t.show} has no field '{f}'"
+      | none, some k, .arr t =>
+        let ri ← elabE ctx k (some .int)
+        if ri.ty != .int then eerr sp "an array index must be an int"
+        let ti ← fresh .int
+        pre := pre.push (.assign ti ri.e)
+        keys := keys.push (some (ti, .int)); ty := t
+      | none, some k, .map kt vt =>
+        let rk ← elabE ctx k (some kt)
+        let tk ← fresh kt
+        pre := pre.push (.assign tk (← coerce sp rk kt))
+        keys := keys.push (some (tk, kt)); ty := vt
+      | _, _, t => eerr sp s!"cannot index a value of type {t.show}"
+    let leafTy := ty
+    -- read one step of the container in slot `c` of type `cty`
+    let readStep (c : Nat) (cty : Ty) (step : Option String) (key : Option (Nat × Ty)) : EM Expr := do
+      match step, key, cty with
+      | some f, _, .struct sn targs =>
+        let (j, _) := (fieldIndex (ctx.types.fields sn targs) f).get!
+        pure (.prim (.tupGet j) [.local c])
+      | none, some (ti, _), .arr _ => pure (p2 .index (.local c) (.local ti))
+      | none, some (tk, kt), .map _ vt =>
+        let tp ← fresh (.tup [kt, vt])
+        pure (mapLookup c tk tp)
+      | _, _, _ => eerr p "internal: set path"
+    -- the intermediate containers: level 0 is the variable itself
+    let stepsA := steps.toArray
+    for k in [0:stepsA.size] do
+      let (sp, f?, _) := stepsA[k]!
+      levels := levels.push (cur, tys[k]!, sp, f?, keys[k]!)
+      if k + 1 < stepsA.size then
+        let c ← fresh tys[k + 1]!
+        pre := pre.push (.assign c (← readStep cur tys[k]! f? keys[k]!))
+        cur := c
+    -- the new leaf value
+    let r ← elabE ctx rhs (some leafTy)
+    let (lc, lty, _, lf, lkey) := levels[levels.size - 1]!
+    let leaf ← match op with
+      | none => coerce p r leafTy
+      | some o => combine (← readStep lc lty lf lkey) leafTy o r
+    let tv ← fresh leafTy
+    pre := pre.push (.assign tv leaf)
+    -- rebuild, from the leaf up
+    let mut newVal : Expr := .local tv
+    for k' in [0:levels.size] do
+      let k := levels.size - 1 - k'
+      let (c, cty, _, f?, key) := levels[k]!
+      match f?, key, cty with
+      | some f, _, .struct sn targs =>
+        let fs := ctx.types.fields sn targs
+        let (j, _) := (fieldIndex fs f).get!
+        let parts := (List.range fs.length).map fun i =>
+          if i == j then newVal else Expr.prim (.tupGet i) [.local c]
+        pre := pre.push (.assign c (.prim .mkTup parts))
+      | none, some (ti, _), .arr _ =>
+        pre := pre.push (.assign c (.prim .arrSet [.local c, .local ti, newVal]))
+      | none, some (tk, _), .map _ vt =>
+        -- the last key inserts or updates; an intermediate one was read above, so it exists
+        let tvk ← fresh vt
+        let ti ← fresh .int
+        let tidx ← fresh .int
+        pre := pre.push (.assign tvk newVal)
+        pre := pre.push (mapPut c tk tvk ti tidx)
+      | _, _, _ => eerr p "internal: set path"
+      newVal := .local c
+    return ⟨pre.toList.foldr Expr.seq (.local tv), leafTy⟩
   match lhs with
   | .ident _ n =>
     let l ← mutableLocal n
