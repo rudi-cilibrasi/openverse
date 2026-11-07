@@ -236,6 +236,25 @@ circle := class(shape, labelled):
     dispatch, also inside a method; `(super:)` uses the same rule.
   - An implementation must have the signature of every declaration it
     satisfies.
+- **Qualified implementations.** A class that implements two interfaces
+  declaring the same method can give each its own: `(i1:)M<override>()`
+  and `(i2:)M<override>()`. Each declaration that overrides nothing (a
+  *root*) is a separate slot. The qualifier names the root: the interface,
+  or class, that introduces `M`.
+  - **Choosing.** For an object, a slot's implementation is the most
+    specific `(r:)M` or plain `M` above its class that is below `r` or
+    reached through a class of its chain that is not below `r`. As in Java,
+    what a class has (its own method, or a default it inherits) implements an
+    interface that a subclass adds. A default of the class's own interfaces
+    implements only the slots above it.
+  - **Calls.** A call through an `i1` uses slot `i1`. `X.(i1:)M()` names it,
+    and inside a method a bare `(i1:)M()` is `Self.(i1:)M()`. A call through
+    a type whose slots some class below implements differently is refused as
+    ambiguous, so every static path to a slot reaches the same code.
+  - **`(super:)M()`** in `(r:)M` is slot `r`'s implementation above. In a
+    plain `M` it is refused when the slots above differ.
+  - **Restrictions.** A class gives `M` plainly or qualified, not both. A
+    plain `M<override>` in a subclass implements all its slots.
 - **Casts.** `T[X]` is `X` as a `T`, failing unless `X`'s class is below
   `T`. `T(X)` converts to a supertype and cannot fail.
 - **Parametric classes.** A parametric class is a reference like any other
@@ -300,8 +319,7 @@ circle := class(shape, labelled):
     interfaces different type arguments, an interface that gives a parent
     interface other than its own type parameters, and a parametric class
     below a non-parametric interface (or one that adds type parameters
-    below a parametric interface's implementation);
-  - qualified `(i:)M` implementations.
+    below a parametric interface's implementation).
 
 ## From the spec draft: mutation, macros, tooling
 

@@ -157,8 +157,9 @@ partial def parseType : PM STy := do
   else match t.identName? with
     | some n =>
       bump
-      if (← peekT).isSym "(" then
+      if (← peekT).isSym "(" && !(← peekT).bol then
         -- `pair(int, string)`: a parametric struct applied to type arguments
+        -- (a `(` starting a line starts the next item, such as `(i:)M`)
         bump
         let mut ts := #[← parseType]
         while (← peekT).isSym "," do bump; ts := ts.push (← parseType)
@@ -324,7 +325,15 @@ partial def parsePostfix (stop : Nat) : PM SExpr := do
     else if t.isSym "[" then
       bump; e := .app t.pos e (← parseArgs "]") true
     else if t.isSym "." then
-      bump; e := .member t.pos e (← expectIdent)
+      bump
+      -- `X.(i:)M`: the method `M` of `X` as an `i` (a qualified call)
+      if (← peekT).isSym "(" && (← peekT 2).isSym ":" && (← peekT 3).isSym ")" then
+        bump
+        let q ← expectIdent
+        bump; bump
+        e := .member t.pos e s!"({q}:){← expectIdent}"
+      else
+        e := .member t.pos e (← expectIdent)
     else if t.isSym "?" then
       bump; e := .query t.pos e
     else break
@@ -673,6 +682,12 @@ partial def parsePrimary (stop : Nat) : PM SExpr := do
       -- `(super:)M`: the parent's implementation of a method
       bump; bump; bump; bump
       return .member t.pos (.ident t.pos "(super:)") (← expectIdent)
+    if ((← peekT 1).identName?).isSome && (← peekT 2).isSym ":" && (← peekT 3).isSym ")" then
+      -- `(i:)M`: `Self.(i:)M`, a qualified member of the current object (#70)
+      bump
+      let q ← expectIdent
+      bump; bump
+      return .member t.pos (.ident t.pos "Self") s!"({q}:){← expectIdent}"
     bump
     let (items, commas) ← parseParenItems
     match items with
@@ -847,8 +862,18 @@ partial def parseClassItem (c : Nat) :
     return .inr (.fn t.pos "$block" [] [] [] (.name "void") body)
   let isVar := t.isKw "var"
   if isVar then bump
-  let name ← expectIdent
+  -- `(i:)M`: an implementation of interface `i`'s `M` only
+  let qual ← if !isVar && t.isSym "(" && (← peekT 2).isSym ":" && (← peekT 3).isSym ")" then do
+      bump
+      let q ← expectIdent
+      bump; bump
+      pure (some q)
+    else pure none
+  let name ← match qual with
+    | some q => do pure s!"({q}:){← expectIdent}"
+    | none => expectIdent
   let pre ← parseSpecs
+  if qual.isSome && (← peekT).isSym ":" then perr (← peekT) "only a method can be qualified with (interface:)"
   if (← peekT).isSym ":" then
     -- a field, `Name<override>:t = e` giving an inherited field a new default
     bump
