@@ -16,8 +16,8 @@ namespace OpenVerse.HeapExamples
 open Expr OpenVerse.Examples
 
 /-- Two classes: `point` (tag 0) with fields `X, Y : int`, and its subclass
-    `point3` (tag 1) with `X, Y, Z : int`. A reference of type `.ref [0, 1]`
-    is a `point` that may be a `point3`. -/
+    `point3` (tag 1) with `X, Y, Z : int`. A reference of type `.ref [0, 1] []`
+    (no type arguments) is a `point` that may be a `point3`. -/
 def classes : List (List VTy) := [[.int, .int], [.int, .int, .int]]
 
 /-- ```verse
@@ -58,8 +58,8 @@ def heapDemo : Prog where
   main := 1
 
 /-- The signatures and class table of `heapDemo`. -/
-def heapSigs : Sigs := { fns := [([.ref [0, 1]], .void), ([], .void)], classes }
-def heapSlots : List (List VTy) := [[.ref [0, 1], .ref [1]], [.ref [0, 1]]]
+def heapSigs : Sigs := { fns := [([.ref [0, 1] []], .void), ([], .void)], classes }
+def heapSlots : List (List VTy) := [[.ref [0, 1] [], .ref [1] []], [.ref [0, 1] []]]
 
 example : heapDemo.check = true := by native_decide
 example : heapDemo.checkControl = true := by native_decide
@@ -83,7 +83,7 @@ example : castOutside.checkTypes heapSigs heapSlots = true := by native_decide
 section
 /-- `tc` in `Show`'s context: slot 0 is a `point` that may be a `point3`. -/
 def tcShow (e : Expr) (m : Option VTy) : Option VTy :=
-  tc heapSigs [.ref [0, 1], .ref [1]] .void e m
+  tc heapSigs [.ref [0, 1] [], .ref [1] []] .void e m
 
 -- `point` has no field `Z`: reading it needs a cast to `point3`
 example : tcShow (.heap (.get 2) [.local 0]) none = none := by native_decide
@@ -91,14 +91,14 @@ example : tcShow (.heap (.get 2) [.heap (.isTag [1]) [.local 0]]) none = some .i
 -- a field keeps its type
 example : tcShow (.heap (.set 0) [.local 0, str "ten"]) none = none := by native_decide
 -- a `point` is not known to be a `point3` (no implicit downcast) ...
-example : tcShow (.local 0) (some (.ref [1])) = none := by native_decide
+example : tcShow (.local 0) (some (.ref [1] [])) = none := by native_decide
 -- ... but it is anything that includes `point` and `point3` (upcast)
-example : tcShow (.local 0) (some (.ref [0, 1, 2])) = some (.ref [0, 1, 2]) := by native_decide
+example : tcShow (.local 0) (some (.ref [0, 1, 2] [])) = some (.ref [0, 1, 2] []) := by native_decide
 -- `new` checks the fields against the class
 example : tcShow (.heap (.new 0) [int 1]) none = none := by native_decide
 example : tcShow (.heap (.new 0) [int 1, str "y"]) none = none := by native_decide
-example : tcShow (.heap (.new 0) [int 1, int 2]) none = some (.ref [0]) := by native_decide
-example : tcShow (.heap (.new 0) [int 1, int 2]) (some (.ref [1])) = none := by native_decide
+example : tcShow (.heap (.new 0) [int 1, int 2]) none = some (.ref [0] []) := by native_decide
+example : tcShow (.heap (.new 0) [int 1, int 2]) (some (.ref [1] [])) = none := by native_decide
 -- a slot keeps its type: `P3` cannot hold a `point`
 example : tcShow (.assign 1 (.local 0)) none = none := by native_decide
 -- a reference is not an int
@@ -107,16 +107,16 @@ end
 
 -- defaults: a new object of a class of the slot's type, with default fields,
 -- or a parameter of fewer classes
-example : checkDefault heapSigs 1 [.ref [0, 1], .ref [1]] (.heap (.new 1) [int 0, int 0, int 0]) (.ref [1]) = true := by
+example : checkDefault heapSigs 1 [.ref [0, 1] [], .ref [1] []] (.heap (.new 1) [int 0, int 0, int 0]) (.ref [1] []) = true := by
   native_decide
-example : checkDefault heapSigs 1 [.ref [0, 1], .ref [1]] (.heap (.new 0) [int 0, int 0]) (.ref [1]) = false := by
+example : checkDefault heapSigs 1 [.ref [0, 1] [], .ref [1] []] (.heap (.new 0) [int 0, int 0]) (.ref [1] []) = false := by
   native_decide
-example : checkDefault heapSigs 1 [.ref [0, 1], .ref [1]] (.heap (.new 1) [int 0, int 0]) (.ref [1]) = false := by
+example : checkDefault heapSigs 1 [.ref [0, 1] [], .ref [1] []] (.heap (.new 1) [int 0, int 0]) (.ref [1] []) = false := by
   native_decide
-example : checkDefault heapSigs 1 [.ref [1], .ref [0, 1]] (.local 0) (.ref [0, 1]) = true := by native_decide
-example : checkDefault heapSigs 1 [.ref [0, 1], .ref [1]] (.local 0) (.ref [1]) = false := by native_decide
+example : checkDefault heapSigs 1 [.ref [1] [], .ref [0, 1] []] (.local 0) (.ref [0, 1] []) = true := by native_decide
+example : checkDefault heapSigs 1 [.ref [0, 1] [], .ref [1] []] (.local 0) (.ref [1] []) = false := by native_decide
 -- a default reads only parameters
-example : checkDefault heapSigs 1 [.ref [0, 1], .ref [0, 1]] (.local 1) (.ref [0, 1]) = false := by native_decide
+example : checkDefault heapSigs 1 [.ref [0, 1] [], .ref [0, 1] []] (.local 1) (.ref [0, 1] []) = false := by native_decide
 
 /-! ### Subtyping (#32) -/
 
@@ -162,10 +162,10 @@ def subDemo : Prog where
   main := 3
 
 def subSigs : Sigs :=
-  { fns := [([.int], .ref [1]), ([.arr (.ref [0, 1])], .int), ([.ref [0, 1]], .void), ([], .void)], classes }
+  { fns := [([.int], .ref [1] []), ([.arr (.ref [0, 1] [])], .int), ([.ref [0, 1] []], .void), ([], .void)], classes }
 def subSlots : List (List VTy) :=
-  [[.int], [.arr (.ref [0, 1]), .ref [0, 1], .int], [.ref [0, 1]],
-   [.arr (.ref [0, 1]), .arr (.ref [1]), .opt (.ref [0, 1])]]
+  [[.int], [.arr (.ref [0, 1] []), .ref [0, 1] [], .int], [.ref [0, 1] []],
+   [.arr (.ref [0, 1] []), .arr (.ref [1] []), .opt (.ref [0, 1] [])]]
 
 example : subDemo.check = true := by native_decide
 example : subDemo.checkTypes subSigs subSlots = true := by native_decide
@@ -174,30 +174,30 @@ example : outOf subDemo = some (.ok .void, "5\n3\n10\n7\n1\n") := by native_deci
 section
 /-- `tc` in `Main`'s context. -/
 def tcMain (e : Expr) (m : Option VTy) : Option VTy :=
-  tc subSigs [.arr (.ref [0, 1]), .arr (.ref [1]), .opt (.ref [0, 1])] .void e m
+  tc subSigs [.arr (.ref [0, 1] []), .arr (.ref [1] []), .opt (.ref [0, 1] [])] .void e m
 
 -- a call result, a cast, an option and an array widen ...
-example : tcMain (.call 0 [int 1]) (some (.ref [0, 1])) = some (.ref [0, 1]) := by native_decide
-example : tcMain (.heap (.isTag [1]) [p .index [.local 0, int 0]]) (some (.ref [0, 1])) = some (.ref [0, 1]) := by
+example : tcMain (.call 0 [int 1]) (some (.ref [0, 1] [])) = some (.ref [0, 1] []) := by native_decide
+example : tcMain (.heap (.isTag [1]) [p .index [.local 0, int 0]]) (some (.ref [0, 1] [])) = some (.ref [0, 1] []) := by
   native_decide
-example : tcMain (.local 1) (some (.arr (.ref [0, 1]))) = some (.arr (.ref [0, 1])) := by native_decide
-example : tcMain (p .mkSome [.call 0 [int 1]]) (some (.opt (.ref [0, 1]))) = some (.opt (.ref [0, 1])) := by
+example : tcMain (.local 1) (some (.arr (.ref [0, 1] []))) = some (.arr (.ref [0, 1] [])) := by native_decide
+example : tcMain (p .mkSome [.call 0 [int 1]]) (some (.opt (.ref [0, 1] []))) = some (.opt (.ref [0, 1] [])) := by
   native_decide
 -- ... but nothing narrows: a []point is not a []point3, a point3 result is not a `ref [0]`
-example : tcMain (.local 0) (some (.arr (.ref [1]))) = none := by native_decide
-example : tcMain (.call 0 [int 1]) (some (.ref [0])) = none := by native_decide
+example : tcMain (.local 0) (some (.arr (.ref [1] []))) = none := by native_decide
+example : tcMain (.call 0 [int 1]) (some (.ref [0] [])) = none := by native_decide
 -- an array updated with a `point` is no longer a []point3, so it cannot go back into `Qs`,
 -- but it is a []point
 example : tcMain (.assign 1 (p .arrSet [.local 1, int 0, .heap (.new 0) [int 0, int 0]])) none = none := by
   native_decide
 example : tcMain (.assign 0 (p .arrSet [.local 1, int 0, .heap (.new 0) [int 0, int 0]])) none =
-    some (.arr (.ref [0, 1])) := by native_decide
+    some (.arr (.ref [0, 1] [])) := by native_decide
 -- branches of different classes join, in either order, also where only inference is possible
 -- (the receiver of a field read or write)
 example : tcMain (.ite (.lit (.logic true)) (.call 0 [int 1]) (.heap (.new 0) [int 0, int 0])) none =
-    some (.ref [1, 0]) := by native_decide
+    some (.ref [1, 0] []) := by native_decide
 example : tcMain (.ite (.lit (.logic true)) (.heap (.new 0) [int 0, int 0]) (.call 0 [int 1])) none =
-    some (.ref [0, 1]) := by native_decide
+    some (.ref [0, 1] []) := by native_decide
 example : tcMain (.heap (.get 0) [.ite (.lit (.logic true)) (.call 0 [int 1]) (.heap (.new 0) [int 0, int 0])])
     none = some .int := by native_decide
 example : tcMain (.heap (.set 1) [.ite (.lit (.logic true)) (.call 0 [int 1]) (.heap (.new 0) [int 0, int 0]),
@@ -205,24 +205,24 @@ example : tcMain (.heap (.set 1) [.ite (.lit (.logic true)) (.call 0 [int 1]) (.
 -- ... but `Z` is not a field of the join
 example : tcMain (.heap (.get 2) [.ite (.lit (.logic true)) (.call 0 [int 1]) (.heap (.new 0) [int 0, int 0])])
     none = none := by native_decide
-example : tcMain (p .concat [.local 1, .local 0]) none = some (.arr (.ref [1, 0])) := by native_decide
+example : tcMain (p .concat [.local 1, .local 0]) none = some (.arr (.ref [1, 0] [])) := by native_decide
 -- a `for` over a []point3 with a `point` slot
-example : tc subSigs [.arr (.ref [1]), .ref [0, 1], .int] .int
+example : tc subSigs [.arr (.ref [1] []), .ref [0, 1] [], .int] .int
     (.forE 1 (.local 0) (.lit (.logic true)) (.heap (.get 0) [.local 1])) none = some (.arr .int) := by
   native_decide
 -- a default of a container type from a parameter of a narrower one
-example : checkDefault subSigs 1 [.arr (.ref [1]), .arr (.ref [0, 1])] (.local 0) (.arr (.ref [0, 1])) = true := by
+example : checkDefault subSigs 1 [.arr (.ref [1] []), .arr (.ref [0, 1] [])] (.local 0) (.arr (.ref [0, 1] [])) = true := by
   native_decide
 -- a generic call: its type argument comes from the last argument (the front end's hidden
 -- argument), and the others may be narrower; without it, the first argument found decides
 def idSigs : Sigs := { fns := [([.var 0, .var 0], .var 0)], classes }
-example : tc idSigs [.ref [1], .ref [0, 1]] .void (.call 0 [.local 0, .local 1]) none = some (.ref [0, 1]) := by
+example : tc idSigs [.ref [1] [], .ref [0, 1] []] .void (.call 0 [.local 0, .local 1]) none = some (.ref [0, 1] []) := by
   native_decide
-example : tc idSigs [.ref [1], .ref [0, 1]] .void (.call 0 [.local 1, .local 0]) none = none := by
+example : tc idSigs [.ref [1] [], .ref [0, 1] []] .void (.call 0 [.local 1, .local 0]) none = none := by
   native_decide
 -- tuples widen pointwise, with the same length
-example : (VTy.tup [.ref [1], .int]).sub (.tup [.ref [0, 1], .int]) = true := by native_decide
-example : (VTy.tup [.ref [1]]).sub (.tup [.ref [0, 1], .int]) = false := by native_decide
+example : (VTy.tup [.ref [1] [], .int]).sub (.tup [.ref [0, 1] [], .int]) = true := by native_decide
+example : (VTy.tup [.ref [1] []]).sub (.tup [.ref [0, 1] [], .int]) = false := by native_decide
 end
 
 /-! ### Functions that do not write (#35) -/
@@ -269,33 +269,102 @@ def protoDemo : Prog where
       body := protoPrelude [(1, [.int 0, .int 0, .int 0])] (.call 1 []) }]
   main := 2
 
-def protoSigs : Sigs := { fns := [([.ref [1]], .void), ([], .void), ([], .void)], classes, protos := [1] }
-def protoSlots : List (List VTy) := [[.ref [1]], [.ref [1]], []]
+def protoSigs : Sigs := { fns := [([.ref [1] []], .void), ([], .void), ([], .void)], classes, protos := [(1, [])] }
+def protoSlots : List (List VTy) := [[.ref [1] []], [.ref [1] []], []]
 
 example : protoDemo.check = true := by native_decide
 example : protoDemo.checkTypes protoSigs protoSlots = true := by native_decide
 example : outOf protoDemo = some (.ok .void, "9\n0\n") := by native_decide
 -- the prelude must allocate exactly the prototypes, well typed
-example : protoDemo.checkTypes { protoSigs with protos := [0] } protoSlots = false := by native_decide
+example : protoDemo.checkTypes { protoSigs with protos := [(0, [])] } protoSlots = false := by native_decide
 example : ({ protoDemo with fns := protoDemo.fns.set 2 { protoDemo.fns[2]! with
     body := protoPrelude [(1, [.int 0, .int 0])] (.call 1 []) } } : Prog).checkTypes protoSigs protoSlots = false := by
   native_decide
 -- without prototypes, a reference literal has no type
 example : protoDemo.checkTypes { protoSigs with protos := [] } protoSlots = false := by native_decide
 -- a prototype's type is inferred where nothing is expected (a field read's receiver)
-example : tc protoSigs [.ref [1]] .void (.heap (.get 2) [.lit (.ref 0)]) none = some .int := by native_decide
+example : tc protoSigs [.ref [1] []] .void (.heap (.get 2) [.lit (.ref 0)]) none = some .int := by native_decide
 -- prototypes may refer to each other in a cycle: a `point3` prototype whose class table says
 -- its fields are a `point` and a `point3` reference (no instance needs to be built first)
 example :
-    let S : Sigs := { fns := [([], .void), ([], .void)], classes := [[.ref [1]], [.ref [0]]], protos := [0, 1] }
+    let S : Sigs := { fns := [([], .void), ([], .void)], classes := [[.ref [1] []], [.ref [0] []]], protos := [(0, []), (1, [])] }
     let P : Prog := { fns := [
       { name := "Main", arity := 0, nslots := 0, decides := false, body := .lit .void },
       { name := "$Main", arity := 0, nslots := 0, decides := false,
         body := protoPrelude [(0, [.ref 1]), (1, [.ref 0])] (.call 0 []) }], main := 1 }
     P.checkTypes S [[], []] = true := by native_decide
 
--- a class table with a type variable is refused (so `Typed.subst` holds)
-example : heapDemo.checkTypes { heapSigs with classes := [[.var 0], [.int, .int, .int]] } heapSlots = false := by
+/-! ### Parametric classes (#39) -/
+
+/-- `box(t)` (tag 0) has one field, `Value : t`: its field types mention
+    its type parameter. A reference type carries the type arguments.
+    ```verse
+    box(t:type) := class:
+        var Value:t
+    Get(t:type, B:box(t)):t = B.Value
+    Main():void =
+        I := box(int){Value := 5}
+        S := box(string){Value := "five"}
+        set I.Value = Get(I) + 1
+        Print("{Get(I)}")
+        Print(Get(S))
+    ```
+    (`Get`'s type parameter is inferred from its argument here.) -/
+def boxDemo : Prog where
+  fns := [
+    { name := "Get", arity := 1, nslots := 1, decides := false, body := .heap (.get 0) [.local 0] },
+    { name := "Main", arity := 0, nslots := 2, decides := false,
+      body := .seq (.assign 0 (.heap (.new 0) [int 0]))
+        (.seq (.assign 1 (.heap (.new 0) [.lit (.arr [])]))
+        (.seq (.assign 0 (.heap (.new 0) [int 5]))
+        (.seq (.assign 1 (.heap (.new 0) [str "five"]))
+        (.seq (.heap (.set 0) [.local 0, p .add [.call 0 [.local 0], int 1]])
+        (.seq (printInt (.call 0 [.local 0]))
+          (.print (.call 0 [.local 1]))))))) }]
+  main := 1
+
+def boxSigs : Sigs := { fns := [([.ref [0] [.var 0]], .var 0), ([], .void)], classes := [[.var 0]] }
+def boxSlots : List (List VTy) := [[.ref [0] [.var 0]], [.ref [0] [.int], .ref [0] [VTy.str]]]
+
+example : boxDemo.check = true := by native_decide
+example : boxDemo.checkTypes boxSigs boxSlots = true := by native_decide
+example : outOf boxDemo = some (.ok .void, "6\nfive\n") := by native_decide
+
+section
+def tcBox (e : Expr) (m : Option VTy) : Option VTy :=
+  tc boxSigs [.ref [0] [.int], .ref [0] [VTy.str]] .void e m
+
+-- a field has the type of the instance
+example : tcBox (.heap (.get 0) [.local 0]) none = some .int := by native_decide
+example : tcBox (.heap (.get 0) [.local 1]) none = some VTy.str := by native_decide
+example : tcBox (.heap (.set 0) [.local 0, str "six"]) none = none := by native_decide
+-- type arguments are invariant: a box(int) is not a box(string), nor a box of anything else
+example : tcBox (.local 0) (some (.ref [0] [VTy.str])) = none := by native_decide
+example : tcBox (.assign 1 (.local 0)) none = none := by native_decide
+-- `new` takes its type arguments from the expected type, else from the fields
+example : tcBox (.heap (.new 0) [int 1]) none = some (.ref [0] [.int]) := by native_decide
+example : tcBox (.heap (.new 0) [int 1]) (some (.ref [0] [VTy.str])) = none := by native_decide
+example : tcBox (.heap (.new 0) [.lit (.arr [])]) (some (.ref [0] [VTy.str])) = some (.ref [0] [VTy.str]) := by
   native_decide
+-- branches join only at the same type arguments
+example : tcBox (.ite (.lit (.logic true)) (.local 0) (.local 1)) none = none := by native_decide
+-- a generic call instantiates its type parameter from the reference's arguments
+example : tcBox (.call 0 [.local 1]) none = some VTy.str := by native_decide
+end
+
+-- a prototype carries its type arguments, which must be closed (so `Typed.subst` holds)
+section
+def boxProto : Prog :=
+  { fns := [
+      { name := "Main", arity := 0, nslots := 1, decides := false,
+        body := .seq (.assign 0 (.lit (.ref 0))) (printInt (.heap (.get 0) [.local 0])) },
+      { name := "$Main", arity := 0, nslots := 0, decides := false,
+        body := protoPrelude [(0, [.int 4])] (.call 0 []) }], main := 1 }
+def boxProtoSigs (args : List VTy) : Sigs :=
+  { fns := [([], .void), ([], .void)], classes := [[.var 0]], protos := [(0, args)] }
+example : boxProto.checkTypes (boxProtoSigs [.int]) [[.ref [0] [.int]], []] = true := by native_decide
+example : outOf boxProto = some (.ok .void, "4\n") := by native_decide
+example : boxProto.checkTypes (boxProtoSigs [.var 0]) [[.ref [0] [.var 0]], []] = false := by native_decide
+end
 
 end OpenVerse.HeapExamples
