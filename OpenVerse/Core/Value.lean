@@ -58,9 +58,14 @@ def decEq : (a b : Value) → Decidable (a = b)
     if h : x = y then isTrue (by subst h; rfl) else isFalse (by intro h'; cases h'; exact h rfl)
   | .char x, .char y =>
     if h : x = y then isTrue (by subst h; rfl) else isFalse (by intro h'; cases h'; exact h rfl)
-  | .arr ⟨xs⟩, .arr ⟨ys⟩ => match decEqList xs ys with
-    | isTrue h => isTrue (by subst h; rfl)
-    | isFalse h => isFalse (by intro h'; cases h'; exact h rfl)
+  | .arr a, .arr b =>
+    -- (the sizes first, in constant time: arrays of different lengths are
+    -- told apart without walking them)
+    if hl : a.size = b.size then
+      match decEqList a.toList b.toList with
+      | isTrue h => isTrue (congrArg Value.arr (Array.toList_inj.mp h))
+      | isFalse h => isFalse (by intro h'; cases h'; exact h rfl)
+    else isFalse (by intro h'; cases h'; exact hl rfl)
   | .tup xs, .tup ys => match decEqList xs ys with
     | isTrue h => isTrue (by subst h; rfl)
     | isFalse h => isFalse (by intro h'; cases h'; exact h rfl)
