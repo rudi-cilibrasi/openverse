@@ -24,9 +24,10 @@
   indented comments, identifiers, decimal and `0x` hex integer literals,
   `'c'` char literals (`c` printable ASCII U+0020–U+007E, or an escape),
   `0oHH` char literals (one or two hex digits: that UTF-8 code unit, so
-  `0o41` is 'A'; `0o` is not octal), string literals with escapes and `{…}`
-  interpolation, and the operator symbols of ch. 4. Not supported: float
-  literals, `0u` char32 literals, path literals.
+  `0o41` is 'A'; `0o` is not octal), `0uHHHHHH` char32 literals (a Unicode
+  scalar value, up to `0u10FFFF`: the spec grammar's Char32), string
+  literals with escapes and `{…}` interpolation, and the operator symbols
+  of ch. 4. Not supported: float literals, path literals.
 
   A `<#>` indented comment is the rest of its line and every following line
   indented more than the line that contains the `<#>` (blank lines included).
@@ -46,6 +47,8 @@ inductive Tok where
   | ident : String → Tok
   | int   : Int → Tok
   | char  : Nat → Tok
+  /-- A `0u` char32 literal: a Unicode scalar value. -/
+  | char32 : Nat → Tok
   | str   : List StrPart → Tok
   | sym   : String → Tok
   | eof   : Tok
@@ -67,6 +70,7 @@ def Tok.describe : Tok → String
   | .ident s => s!"'{s}'"
   | .int i => s!"{i}"
   | .char c => s!"char {c}"
+  | .char32 c => s!"char32 {c}"
   | .str _ => "string literal"
   | .sym s => s!"'{s}'"
   | .eof => "end of file"
@@ -299,6 +303,17 @@ partial def lexAll (acc : Array Token) : LexM (Array Token) := do
         if h.isEmpty || h.length > 2 || trailing then
           errHere "a 0o char literal needs one or two hex digits, not followed by a letter, digit or '_' (0o41 is 'A')"
         lexAll (← emit (.char (h.foldl (fun n c => n * 16 + hexVal c) 0)))
+      else if c == '0' && (← peekC 1) == some 'u' then
+        -- `0uHHHHHH`: a char32, a Unicode scalar value (spec: Char32)
+        advance; advance
+        let h ← readWhile isHex ""
+        let trailing := ((← peekC).map isIdChar).getD false
+        let v := h.foldl (fun n c => n * 16 + hexVal c) 0
+        if h.isEmpty || h.length > 6 || trailing then
+          errHere "a 0u char32 literal needs one to six hex digits, not followed by a letter, digit or '_' (0u1F600)"
+        if v > 0x10FFFF then errHere s!"0u{h} is past the last Unicode code point, 0u10FFFF"
+        if 0xD800 ≤ v && v ≤ 0xDFFF then errHere s!"0u{h} is a UTF-16 surrogate, not a Unicode scalar value"
+        lexAll (← emit (.char32 v))
       else
         let d ← readWhile Char.isDigit ""
         if (← peekC) == some '.' && ((← peekC 1).map Char.isDigit).getD false then
@@ -317,7 +332,8 @@ partial def lexAll (acc : Array Token) : LexM (Array Token) := do
           | some e => advance; pure e
           | none => lexErr "bad escape in char literal"
         | some ch => do
-          if ch.toNat ≥ 128 then lexErr "non-ASCII char literals (char32) are not supported by openverse v1"
+          if ch.toNat ≥ 128 then
+            lexErr s!"a char literal must be ASCII: write {uPlus ch.toNat} as the char32 literal 0u{(Nat.toDigits 16 ch.toNat).asString.toUpper}"
           if ch.toNat < 0x20 || ch.toNat == 0x7F then
             let hint := if ch == '\t' then " (write '\\t' for a tab)" else ""
             lexErr s!"a char literal must be a printable ASCII character or an escape, not {uPlus ch.toNat}{hint}"

@@ -27,6 +27,8 @@ open OpenVerse
 
 inductive Ty where
   | int | logic | char | void
+  /-- A Unicode scalar value (spec: Char32); an `int` in Verse Core. -/
+  | char32
   /-- The bottom type, of `break`, `return` and `Err()`. -/
   | never
   | arr : Ty → Ty
@@ -46,7 +48,7 @@ inductive Ty where
   deriving Repr, Inhabited
 
 partial def Ty.eqv : Ty → Ty → Bool
-  | .int, .int | .logic, .logic | .char, .char | .void, .void | .never, .never => true
+  | .int, .int | .logic, .logic | .char, .char | .char32, .char32 | .void, .void | .never, .never => true
   | .arr a, .arr b => a.eqv b
   | .opt a, .opt b => a.eqv b
   | .tup as, .tup bs => as.length == bs.length && (as.zip bs).all fun (a, b) => a.eqv b
@@ -60,7 +62,8 @@ partial def Ty.eqv : Ty → Ty → Bool
 instance : BEq Ty := ⟨Ty.eqv⟩
 
 partial def Ty.show : Ty → String
-  | .int => "int" | .logic => "logic" | .char => "char" | .void => "void" | .never => "false"
+  | .int => "int" | .logic => "logic" | .char => "char" | .char32 => "char32" | .void => "void"
+  | .never => "false"
   | .arr .char => "string"
   | .arr t => "[]" ++ t.show
   | .opt t => "?" ++ t.show
@@ -244,7 +247,7 @@ def TyEnv.recursiveStruct? (env : TyEnv) : Option String :=
 /-- The Verse Core type of a front-end type (`false`, the bottom type, has
     no values; slots and signatures never have it). -/
 partial def Ty.toVTy (env : TyEnv) : Ty → VTy
-  | .int => .int
+  | .int | .char32 => .int
   | .logic => .logic
   | .char => .char
   | .void => VTy.void
@@ -480,6 +483,7 @@ partial def resolveTy (env : TyEnv) (p : Pos) : STy → EM Ty
   | .name "int" => pure .int
   | .name "logic" => pure .logic
   | .name "char" => pure .char
+  | .name "char32" => pure .char32
   | .name "string" => pure Ty.string
   | .name "void" => pure .void
   | .name "float" => eerr p "float is not supported by openverse v1"
@@ -562,7 +566,7 @@ def TyEnv.dictSlot? (env : TyEnv) (dictBase : Nat) (n : String) : Option Nat :=
     reference is a fresh slot of exactly its type (`new` would infer only
     the class constructed), which starts as a placeholder. -/
 partial def witness (env : TyEnv) (dictBase : Nat) (dictVars : List String) : Ty → EM Expr
-  | .int | .enum _ => pure (.lit (.int 0))
+  | .int | .char32 | .enum _ => pure (.lit (.int 0))
   | .logic => pure (.lit (.logic false))
   | .char => pure (.lit (.char 0))
   | .void | .never => pure (.lit .void)
@@ -741,12 +745,52 @@ def mapPut (tm tk tv ti tidx : Nat) : Expr :=
 def fieldIndex (fs : List (String × Ty × Option SExpr)) (f : String) : Option (Nat × Ty) :=
   ((fs.zip (List.range fs.length)).find? (·.1.1 == f)).map fun ((_, t, _), k) => (k, t)
 
+/-- The UTF-8 encoding of the char32 in slot `tc`, a Unicode scalar value:
+    its one to four bytes as chars, each looked up in the table of the 256
+    byte values (Verse Core has no conversion from int to char; the lookups
+    and the divisions cannot fail, but are guarded so that the checker sees
+    no failure). -/
+def utf8Of (tc : Nat) : EM Expr := do
+  let table : Expr := .lit (.arr ((List.range 256).map Value.char))
+  let int (i : Int) : Expr := .lit (.int i)
+  let chr (b : Expr) : EM Expr := do
+    let tch ← fresh .char
+    return .ite (.assign tch (p2 .index table b)) (.local tch) (.prim .userErr [])
+  let c := Expr.local tc
+  let (a, b, d, e, r, r2) := (← fresh .int, ← fresh .int, ← fresh .int, ← fresh .int, ← fresh .int, ← fresh .int)
+  let q (x : Expr) (n : Int) := p2 .quotient x (int n)
+  let m (x : Expr) (n : Int) := p2 .modulo x (int n)
+  let seqs : List Expr → Expr := fun es => (es.dropLast).foldr .seq (es.getLast?.getD (.lit .void))
+  let plus (k : Int) (x : Nat) := p2 .add (int k) (.local x)
+  let one := Expr.prim .mkArr [← chr c]
+  let two := Expr.prim .mkArr [← chr (plus 192 a), ← chr (plus 128 b)]
+  let three := Expr.prim .mkArr [← chr (plus 224 a), ← chr (plus 128 b), ← chr (plus 128 d)]
+  let four := Expr.prim .mkArr [← chr (plus 240 a), ← chr (plus 128 b), ← chr (plus 128 d), ← chr (plus 128 e)]
+  return .ite (p2 .lt c (int 0x80)) one
+    (.ite (seqs [p2 .lt c (int 0x800), .assign a (q c 64), .assign b (m c 64)]) two
+    (.ite (seqs [p2 .lt c (int 0x10000), .assign a (q c 4096), .assign r (m c 4096),
+        .assign b (q (.local r) 64), .assign d (m (.local r) 64)]) three
+    (.ite (seqs [.assign a (q c 262144), .assign r (m c 262144), .assign b (q (.local r) 4096),
+        .assign r2 (m (.local r) 4096), .assign d (q (.local r2) 64), .assign e (m (.local r2) 64)]) four
+      (.prim .userErr []))))
+
+/-- A Verse Core type that several front-end types have: one with an
+    `int` (also a char32 or an enum), a tuple (also a struct), or a type
+    variable. -/
+partial def _root_.OpenVerse.VTy.shared : VTy → Bool
+  | .int | .tup _ | .var _ => true
+  | .arr t | .opt t => t.shared
+  | _ => false
+
 /-- `ToString` for interpolation. -/
 def toStringOf (p : Pos) (r : R) : EM Expr :=
   match r.ty with
+  | .char32 => do
+    let tc ← fresh .int
+    return .seq (.assign tc r.e) (← utf8Of tc)
   | .int | .char => pure (.prim .toStr [r.e])
   | .arr .char => pure r.e
-  | t => eerr p s!"no ToString for {t.show} (Verse defines it for int, char and string)"
+  | t => eerr p s!"no ToString for {t.show} (Verse defines it for int, char, char32 and string)"
 
 mutual
 partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
@@ -755,6 +799,7 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
     if !Int64.inRange n then eerr p s!"integer literal {n} does not fit in 64 bits"
     return ⟨.lit (.int n), .int⟩
   | .char _ c => return ⟨.lit (.char c), .char⟩
+  | .char32 _ c => return ⟨.lit (.int c), .char32⟩
   | .str p parts =>
     let pieces ← parts.mapM fun part => match part with
       | .text s => pure (Expr.lit (Value.ofString s))
@@ -1315,8 +1360,19 @@ partial def elabCmp (ctx : Ctx) (p : Pos) (a : SExpr) (rest : List (String × SE
         if !ta.comparable ctx.types then eerr p (notComparable ctx.types ta s!"an operand of '{op}'")
         if !tb.comparable ctx.types then eerr p (notComparable ctx.types tb s!"an operand of '{op}'")
         eerr p "these values cannot be compared"
-    else if !((ta == .int && tb == .int) || (ta == .char && tb == .char)) then
-      eerr p s!"'{op}' compares ints or chars, found {ta.show} and {tb.show}"
+      -- different types with the same Verse Core type (a char32 or an enum
+      -- and an int, two structs with the same fields, also inside
+      -- containers) would compare equal there
+      -- (or could be, at some instance of the type parameters they mention:
+      -- two different ones, or one and a type that several types share in
+      -- Core, one with an int or a tuple)
+      let (va, vb) := (ta.toVTy ctx.types, tb.toVTy ctx.types)
+      let (pa, pb) := (!ta.params.isEmpty, !tb.params.isEmpty)
+      if !(ta == tb) && ta != .never && tb != .never &&
+          (va == vb || (pa && pb) || (pa && vb.shared) || (pb && va.shared)) then
+        eerr p s!"'{op}' compares values of different types, {ta.show} and {tb.show}"
+    else if !((ta == .int && tb == .int) || (ta == .char && tb == .char) || (ta == .char32 && tb == .char32)) then
+      eerr p s!"'{op}' compares ints, chars or char32s, found {ta.show} and {tb.show}"
   let ra ← elabE ctx a none
   match rest with
   | [(op, b)] =>
@@ -1872,8 +1928,8 @@ partial def elabCase (ctx : Ctx) (p : Pos) (scrut : SExpr) (arms : List (Option 
     (exp : Option Ty) : EM R := do
   let rs ← elabE ctx scrut none
   match rs.ty with
-  | .int | .logic | .char | .arr .char | .enum _ => pure ()
-  | t => eerr p s!"case works on int, logic, char, string and enums, not {t.show}"
+  | .int | .logic | .char | .char32 | .arr .char | .enum _ => pure ()
+  | t => eerr p s!"case works on int, logic, char, char32, string and enums, not {t.show}"
   let t ← fresh rs.ty
   let elabArms : List (Option SExpr × SExpr) → EM (Expr × Ty) := fun arms => do
     let mut results : Array (Option Expr × R) := #[]
@@ -1883,7 +1939,7 @@ partial def elabCase (ctx : Ctx) (p : Pos) (scrut : SExpr) (arms : List (Option 
       | none => results := results.push (none, rv)
       | some pe =>
         let rp ← elabE ctx pe (some rs.ty)
-        if rp.ty != rs.ty then eerr pe.pos s!"pattern of type {rp.ty.show} for a {rs.ty.show}"
+        if rp.ty != rs.ty then eerr pe.pos s!"pattern of type {rp.ty.show} for a value of type {rs.ty.show}"
         results := results.push (some rp.e, rv)
     let mut ty : Ty := .never
     for (_, rv) in results do ty ← join p ty rv.ty exp

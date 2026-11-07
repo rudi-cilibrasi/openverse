@@ -9,12 +9,18 @@ Require Import OpenverseLoader.proof.Fields.
 #[local] Existing Instance Specs.CS.
 
 Lemma npp_err: forall bs acap bcap nfns al bl nslots j rc pos' x v,
-  1 <= rc <= 20 -> 0 <= pos' <= Zlength bs -> Zlength al <= acap -> Zlength bl <= bcap -> bytes_ok bl ->
+  1 <= rc <= 21 -> 0 <= pos' <= Zlength bs -> Zlength al <= acap -> Zlength bl <= bcap -> bytes_ok bl ->
   node_post_props bs acap bcap nfns al bl nslots j rc pos' [] bl x v.
 Proof. intros. unfold node_post_props. rewrite Zlength_nil. repeat split; try lia; auto. Qed.
 
+(* An error after the bytes pool grew (load_heap's isTag tags). *)
+Lemma npp_err_bl: forall bs acap bcap nfns al bl bl' nslots j rc pos' x v,
+  1 <= rc <= 21 -> 0 <= pos' <= Zlength bs -> Zlength al <= acap -> Zlength bl <= Zlength bl' <= bcap ->
+  bytes_ok bl' -> node_post_props bs acap bcap nfns al bl nslots j rc pos' [] bl' x v.
+Proof. intros. unfold node_post_props. rewrite Zlength_nil. repeat split; try lia; auto. Qed.
+
 Lemma npp_ok: forall bs acap bcap nfns al bl nslots j rc pos' x v,
-  0 <= rc <= 20 -> 0 <= pos' <= Zlength bs -> Zlength al <= acap -> Zlength bl <= bcap -> bytes_ok bl ->
+  0 <= rc <= 21 -> 0 <= pos' <= Zlength bs -> Zlength al <= acap -> Zlength bl <= bcap -> bytes_ok bl ->
   (rc = 0 -> v = node_val x /\ node_ok nfns nslots al (Zlength bl) j x) ->
   node_post_props bs acap bcap nfns al bl nslots j rc pos' [] bl x v.
 Proof.
