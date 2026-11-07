@@ -649,6 +649,14 @@ def utf8Of (tc : Nat) : EM Expr := do
         .assign r2 (m (.local r) 4096), .assign d (q (.local r2) 64), .assign e (m (.local r2) 64)]) four
       (.prim .userErr []))))
 
+/-- A Verse Core type that several front-end types have: one with an
+    `int` (also a char32 or an enum), a tuple (also a struct), or a type
+    variable. -/
+partial def _root_.OpenVerse.VTy.shared : VTy → Bool
+  | .int | .tup _ | .var _ => true
+  | .arr t | .opt t => t.shared
+  | _ => false
+
 /-- `ToString` for interpolation. -/
 def toStringOf (p : Pos) (r : R) : EM Expr :=
   match r.ty with
@@ -1209,8 +1217,13 @@ partial def elabCmp (ctx : Ctx) (p : Pos) (a : SExpr) (rest : List (String × SE
       -- different types with the same Verse Core type (a char32 or an enum
       -- and an int, two structs with the same fields, also inside
       -- containers) would compare equal there
+      -- (or could be, at some instance of the type parameters they mention:
+      -- two different ones, or one and a type that several types share in
+      -- Core, one with an int or a tuple)
+      let (va, vb) := (ta.toVTy ctx.types, tb.toVTy ctx.types)
+      let (pa, pb) := (!ta.params.isEmpty, !tb.params.isEmpty)
       if !(ta == tb) && ta != .never && tb != .never &&
-          ta.toVTy ctx.types == tb.toVTy ctx.types then
+          (va == vb || (pa && pb) || (pa && vb.shared) || (pb && va.shared)) then
         eerr p s!"'{op}' compares values of different types, {ta.show} and {tb.show}"
     else if !((ta == .int && tb == .int) || (ta == .char && tb == .char) || (ta == .char32 && tb == .char32)) then
       eerr p s!"'{op}' compares ints, chars or char32s, found {ta.show} and {tb.show}"
@@ -1657,7 +1670,7 @@ partial def elabCase (ctx : Ctx) (p : Pos) (scrut : SExpr) (arms : List (Option 
       | none => results := results.push (none, rv)
       | some pe =>
         let rp ← elabE ctx pe (some rs.ty)
-        if rp.ty != rs.ty then eerr pe.pos s!"pattern of type {rp.ty.show} for a {rs.ty.show}"
+        if rp.ty != rs.ty then eerr pe.pos s!"pattern of type {rp.ty.show} for a value of type {rs.ty.show}"
         results := results.push (some rp.e, rv)
     let mut ty : Ty := .never
     for (_, rv) in results do ty ← join p ty rv.ty exp
