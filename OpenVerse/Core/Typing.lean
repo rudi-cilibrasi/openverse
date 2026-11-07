@@ -149,6 +149,23 @@ def closedL : List VTy → Bool
   | t :: ts => closed t && closedL ts
 end
 
+mutual
+/-- Subtyping, `t ≤ u` (#32): every value of `t` is a value of `u`. A
+    reference type with fewer classes is below one with more; arrays,
+    options and tuples are covariant (they are immutable values); otherwise
+    the types are equal. -/
+def sub : VTy → VTy → Bool
+  | .ref ts, .ref us => ts.all us.contains
+  | .arr t, .arr u => sub t u
+  | .opt t, .opt u => sub t u
+  | .tup ts, .tup us => subL ts us
+  | t, u => decide (t = u)
+def subL : List VTy → List VTy → Bool
+  | [], [] => true
+  | t :: ts, u :: us => sub t u && subL ts us
+  | _, _ => false
+end
+
 end VTy
 
 mutual
@@ -223,8 +240,8 @@ inductive Typed (S : Sigs) (Γ : List VTy) (ρ : VTy) : Expr → VTy → Prop
   /-- No literal is a reference, so its type does not depend on the heap. -/
   | lit {v τ} : hasTy [] v τ = true → Typed S Γ ρ (.lit v) τ
   | local {i τ} : Γ[i]? = some τ → Typed S Γ ρ (.local i) τ
-  /-- A reference read at a larger set of classes (subtyping). -/
-  | local_sub {i ts us} : Γ[i]? = some (.ref ts) → (∀ t ∈ ts, t ∈ us) → Typed S Γ ρ (.local i) (.ref us)
+  /-- Subsumption: an expression of a type has every type above it (#32). -/
+  | sub {e t u} : Typed S Γ ρ e t → t.sub u = true → Typed S Γ ρ e u
   | assign {i e τ} : Γ[i]? = some τ → Typed S Γ ρ e τ → Typed S Γ ρ (.assign i e) τ
   | seq {a b σ τ} : Typed S Γ ρ a σ → Typed S Γ ρ b τ → Typed S Γ ρ (.seq a b) τ
   | prim {op es ts τ} : TypedL S Γ ρ es ts → PrimTy op ts τ → Typed S Γ ρ (.prim op es) τ
@@ -277,8 +294,8 @@ inductive DefaultE (S : Sigs) (a : Nat) (Γ : List VTy) : Expr → VTy → Prop
   | tup {ds ts} : DefaultEL S a Γ ds ts → DefaultE S a Γ (.prim .mkTup ds) (.tup ts)
   | new {t ds fs ts} : S.classes[t]? = some fs → t ∈ ts → DefaultEL S a Γ ds fs →
       DefaultE S a Γ (.heap (.new t) ds) (.ref ts)
-  /-- A reference is also of any type with more classes. -/
-  | sub {d ts us} : DefaultE S a Γ d (.ref ts) → (∀ t ∈ ts, t ∈ us) → DefaultE S a Γ d (.ref us)
+  /-- A default is also one of every type above its own. -/
+  | sub {d t u} : DefaultE S a Γ d t → t.sub u = true → DefaultE S a Γ d u
 inductive DefaultEL (S : Sigs) (a : Nat) (Γ : List VTy) : List Expr → List VTy → Prop
   | nil : DefaultEL S a Γ [] []
   | cons {d ds t ts} : DefaultE S a Γ d t → DefaultEL S a Γ ds ts →

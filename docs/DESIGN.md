@@ -161,10 +161,22 @@ Phase 3 (#20) adds a heap of objects, each with a class tag and fields
 
 - **Reference types are tag sets.** `VTy.ref ts` is a reference to an object
   whose tag is in `ts`; the front end will use the concrete classes below a
-  static class, sorted and without repeats, since types are compared as
-  lists. Subtyping is inclusion, used when a local is read
-  (`Typed.local_sub`), so a value is widened by going through a local. A
-  cast `isTag us` fails when the tag is not in `us`, and has type `ref us`.
+  static class. A cast `isTag us` fails when the tag is not in `us`, and has
+  type `ref us`. Field types are compared exactly (`FieldTy`), so the front
+  end gives a class's tag sets one canonical order: definition order.
+- **Subtyping** (#32) is structural (`VTy.sub`): a reference type with
+  fewer classes is below one with more, and arrays, options and tuples are
+  covariant, which is sound because they are immutable values. One rule,
+  `Typed.sub`, gives an expression every type above its own, so widening is
+  free and needs no node. Preservation peels subsumption off a derivation by
+  recursion (`stepE_d`) and handles the last real rule (`TypedR`). The
+  checker accepts a subtype wherever it compares an inferred type with an
+  expected one (`expect`), joins `if` branches and `+` operands of different
+  types (`VTy.join`), and checks `arrSet` against an expected array type.
+  It is still incomplete: an array literal's elements must have the first
+  one's type unless there is an expected type, and a generic call's
+  instantiation comes from its last arguments (where the front end passes
+  its type arguments).
 - **Value typing sees the tags.** `hasTy Ξ v t` takes `Ξ`, the tag of each
   heap object. Objects are only ever appended and their tags never change,
   so a typing survives every step (`hasTy_mono`, for `Ξ` a prefix of `Ξ'`).
@@ -181,7 +193,7 @@ Phase 3 (#20) adds a heap of objects, each with a class tag and fields
   typed.
 - **Defaults.** No literal is a reference, so a slot of class type starts as
   a new object of one of its classes with default fields (`DefaultE.new`),
-  or as a parameter with fewer classes (`DefaultE.sub`). Placeholders cost an
+  or as a parameter of a subtype (`DefaultE.sub`). Placeholders cost an
   allocation per call; a parameter is preferred when there is one.
 
 The front end does not produce heap operations yet; `HeapExamples.lean`
