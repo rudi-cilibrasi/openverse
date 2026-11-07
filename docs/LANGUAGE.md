@@ -20,7 +20,7 @@ surface Verse is elaborated (`OpenVerse/Front/Elab.lean`) into Verse Core
 | Literals | `int` (decimal, `0x` hex; must fit in 64 bits), `'c'` `char` (`c` printable ASCII U+0020–U+007E, or an escape), `0oHH` `char` code unit (one or two hex digits, not octal: `0o41` is `'A'`, `0o9` is a tab), strings with escapes and `{expr}` interpolation, `true`, `false`, `0uHHHHHH` `char32` (a Unicode scalar value, up to `0u10FFFF`, no surrogates; the spec grammar's Char32) | §1.3–1.7 |
 | Types | `int`, `logic`, `char`, `char32`, `string` (= `[]char`), `[]t`, `?t`, `tuple(…)`, `void` | ch. 2–3 |
 | Definitions | top-level functions `F(X:t, …)<effects>:t = body`, top-level constants `C:t = e` / `C := e`; locals `X := e`, `X:t = e`, `var X:t = e`; no shadowing | §3.1–3.4 |
-| Mutation | `set X = e`, `set X += e` (`-=`, `*=`), `set A[i] = e` (fails out of range; returns `e`), and paths `set S.F.G = e`, `set A[i][j] op= e`, `set M[k].F = e`: indices and keys evaluated once, left to right, then the new value, then the variable rebuilt; an index out of range or a missing intermediate key fails, while the last key of a path inserts | §3.3, §3.5, §9.3 |
+| Mutation | `set X = e`, `set X += e` (`-=`, `*=`), `set A[i] = e` (fails out of range; returns `e`), and paths `set S.F.G = e`, `set A[i][j] op= e`, `set M[k].F = e`: indices and keys evaluated once, left to right, then the new value (for `op=`, after the old one is read: `set X += e` is `set X = X + e`), then the variable rebuilt; an index out of range or a missing intermediate key fails, while the last key of a path inserts | §3.3, §3.5, §9.3 |
 | Blocks | indented (`:`), braced (`{ }`), inline (`then`/`do`), `block:`, `( a; b )` sequences | §2.2–2.4 |
 | Operators | `* + -`, unary `-`, comparisons `= <> < <= > >=` (failable, return the left operand, chains check every pair), `and`, `or`, `not` (below the comparisons, above `and`: `not X = Y` is `not (X = Y)`), `?`, `.Length`, `A[i]`, `T(k)` | ch. 4 |
 | Failure | failure contexts (`if` conditions, `for` clauses, `option{}`, `logic{}`, `not`, left of `or`, `<decides>` bodies) with rollback of `var` writes **and output** | ch. 8 |
@@ -249,8 +249,16 @@ circle := class(shape, labelled):
   if its type arguments are those of the class that declares it, up to
   renaming: one that fixes, repeats or adds type arguments the declaring
   class leaves open cannot, since code generic over that class could not
-  call it. A class with type arguments (its own or fixed for a parent)
-  cannot implement an interface yet. Inherited field defaults see their
+  call it. An interface can be parametric too (#53):
+  `container(t) := interface: Get():t`, with `box(t) := class(container(t))`.
+  A class gives the interfaces above it exactly its own Verse Core type
+  arguments (`box(t)` gives `container` `t`; a class implementing
+  `container(t)` and `sink(u)` cannot), so code generic over `container(t)`
+  dispatches to `box(t)`'s methods and casts `container(t)` to `box(t)`.
+  An interface's fields are typed as it gives them: a class that fixes or
+  repeats its type arguments (`intbox := class(holder(int))`) can still
+  implement an interface whose members it does not override. An interface
+  that extends a parametric interface gives it its own type parameters. Inherited field defaults see their
   own class's type parameters. A cast `square[S]` takes its type arguments
   from `S`'s, and is refused when it would need more. A method
   of a parametric class is generic over the class's type parameters, then
@@ -288,8 +296,11 @@ circle := class(shape, labelled):
 - **Not yet supported** (each rejected with a message):
   - constructor functions;
   - overrides in a subclass that fixes, repeats or adds type arguments
-    its parent leaves open, and classes with type arguments below
-    interfaces;
+    its parent (or an interface) leaves open, a class that gives two
+    interfaces different type arguments, an interface that gives a parent
+    interface other than its own type parameters, and a parametric class
+    below a non-parametric interface (or one that adds type parameters
+    below a parametric interface's implementation);
   - overriding a method with its own type parameters;
   - qualified `(i:)M` implementations;
   - subtyping through `+` on arrays, through tuples and through maps, and an

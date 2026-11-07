@@ -950,8 +950,9 @@ partial def parseTops : PM (List STop) := do
       let (ps, tps) ← parseParamList
       if pre.contains "constructor" then
         perr n "constructor functions are not supported yet (#11)"
-      if (← peekT).isSym ":=" && (← peekT 1).isKw "class" then
-        -- `name(t:type, …) := class …`: a parametric class
+      if (← peekT).isSym ":=" && ((← peekT 1).isKw "class" || (← peekT 1).isKw "interface") then
+        -- `name(t:type, …) := class …`: a parametric class (or interface, #53)
+        let isIface := (← peekT 1).isKw "interface"
         bump; bump
         if !tps.isEmpty then perr n "a parametric type takes its parameters without a where clause"
         let tparams ← ps.toList.mapM fun prm => do
@@ -960,7 +961,7 @@ partial def parseTops : PM (List STop) := do
             | false, none, .app "subtype" [.name c] => pure c
             | _, _, _ => perr n s!"a parameter of a parametric type is written {prm.name}:type or {prm.name}:subtype(…)"
           pure ({ pos := t.pos, name := prm.name, constraint := c } : TParam)
-        tops := tops.push (← parseClassBody t.pos name tparams false)
+        tops := tops.push (← parseClassBody t.pos name tparams isIface)
         continue
       if (← peekT).isSym ":=" && (← peekT 1).isKw "struct" then
         -- `name(t:type, …) := struct …`: a parametric struct
