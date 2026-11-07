@@ -25,7 +25,7 @@ surface Verse is elaborated (`OpenVerse/Front/Elab.lean`) into Verse Core
 | Operators | `* + -`, unary `-`, comparisons `= <> < <= > >=` (failable, return the left operand, chains check every pair), `and`, `or`, `not`, `?`, `.Length`, `A[i]`, `T(k)` | ch. 4 |
 | Failure | failure contexts (`if` conditions, `for` clauses, `option{}`, `logic{}`, `not`, left of `or`, `<decides>` bodies) with rollback of `var` writes **and output** | ch. 8 |
 | Control | `if`/`else if`/`else` (all styles, `if:`…`then:`), `for` with `X : array`, `I -> X : array`, `X := a..b`, filters, bindings, several generators (cartesian product), `loop`/`break`, `return`, `case` with literal patterns and `_` | ch. 7 |
-| Functions | recursion, mutual recursion, `<decides>` (called with `F[…]`; other functions with `F(…)`), named parameters `?P:t = default` passed as `?P := e` (positional, then named as written, then defaults), other effect specifiers accepted and ignored | ch. 6, 13 |
+| Functions | recursion, mutual recursion, `<decides>` (called with `F[…]`; other functions with `F(…)`), named parameters `?P:t = default` passed as `?P := e` (positional, then named as written, then defaults), the heap effects `<computes>`, `<reads>`, `<writes>`, `<allocates>`, `<transacts>` (checked, see [Classes](#classes)), other effect specifiers accepted and ignored | ch. 6, 13 |
 | Parametric functions | `F(X:t, … where t:type, u:subtype(comparable))`: type parameters in parameter types, the result type and local declarations; type arguments inferred at each call (see [Parametric functions](#parametric-functions)) | Types: where clauses |
 | Structs | `name := struct:` with typed fields and defaults, `name{F := e, …}`, `S.F`, `set S.F = e` / `op=`, structural equality (a struct is the tuple of its fields in Verse Core) | ch. 9 |
 | Parametric structs | `pair(t:type, u:type) := struct:`, the type `pair(int, string)`, values `pair(int, string){First := 1, Second := "a"}` (or `pair{…}` where the expected type gives the type arguments); see [Parametric structs](#parametric-structs) | ch. 9 |
@@ -242,6 +242,19 @@ circle := class(shape, labelled):
   class's type parameters, then its own. The type arguments come from the
   receiver, and the body is checked once in Verse Core (see
   [Parametric functions](#parametric-functions)).
+- **Heap effects** (#35; the spec draft's transactional effects). A
+  function's specifiers allow a set of heap effects: all of them when it has
+  none or `<transacts>`, none with `<computes>`, and those named by
+  `<reads>`, `<writes>` and `<allocates>`. Reading a `var` field *reads*,
+  setting one *writes*, and constructing an object of a class with a `var`
+  field or a `<unique>` one *allocates*; a call has its callee's effects,
+  and a constant those of its initialiser. A body with an effect its
+  function does not allow is an error, and so is an override that allows
+  more than what it overrides. Variables and values are not the heap:
+  `var` locals and immutable classes have no effect. Lean proves that a
+  function without `writes` keeps every existing object as it was
+  (`Prog.accepted_no_writes`). A constant cannot hold an object with `var`
+  fields or of a `<unique>` class, since it is computed at each use.
 - **`<unique>`.** A `<unique>` class (and every class below it) is
   comparable: `=` and `<>` test identity, so two instances with equal
   fields differ, and an alias equals its original.
@@ -326,7 +339,8 @@ openverse has no module namespaces yet, so the readings are flat:
 `char32`, the class features listed under [Classes](#classes), open enums, struct methods (Verse structs have none; classes do), `ConcatenateMaps`,
 `weak_map`, module namespaces (`using{"relative_path"}` imports flatly, see [Programs of several files](#programs-of-several-files)), overloading, defaults that refer to earlier parameters, nested
 functions, `first`, `defer`, refinement types, concurrency (`spawn`, `sync`,
-`race`, `rush`, `branch`, `<suspends>`), `weak_map`, and effect checking for
-`<reads>`/`<writes>`/`<computes>`. Comparing arrays with tuples (`array{1,2}
+`race`, `rush`, `branch`, `<suspends>`), `weak_map`, and effect checking
+other than `<decides>` and the heap effects (`<converges>` is accepted and
+ignored). Comparing arrays with tuples (`array{1,2}
 = (1,2)` succeeds in the book) is not supported: arrays and tuples are
 different values and compare unequal.
