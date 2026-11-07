@@ -83,8 +83,8 @@ inductive SExpr where
   /-- `struct: fields` — each field: name, type, default value, `var`; the
       type parameters of a parametric struct `name(t:type) := struct: …`. -/
   | structDef : Pos → List TParam → List (String × STy × Option SExpr × Bool) → SExpr
-  /-- `enum: values`. -/
-  | enumDef  : Pos → List String → SExpr
+  /-- `enum:` (closed) or `enum<open>:`, which may gain values (Book of Verse ch. 9). -/
+  | enumDef  : Pos → List String → (isOpen : Bool) → SExpr
   /-- `Name{F := e, …}` or `name(t₁, …){F := e, …}`: a struct value. -/
   | construct : Pos → String → List STy → List SExpr → SExpr
   /-- `map{k => v, …}`. -/
@@ -102,7 +102,7 @@ def SExpr.pos : SExpr → Pos
   | .orE p _ _ | .range p _ _ | .tuple p _ | .block p _ | .arrayLit p _
   | .optionLit p _ | .logicLit p _ | .ite p _ _ _ | .forE p _ _ | .gen p _ _ _
   | .loop p _ | .brk p | .ret p _ | .caseE p _ _ | .decl p _ _ _ _ | .set p _ _ _
-  | .structDef p _ _ | .enumDef p _ | .construct p _ _ _ | .mapLit p _ => p
+  | .structDef p _ _ | .enumDef p _ _ | .construct p _ _ _ | .mapLit p _ => p
 
 structure SParam where
   name : String
