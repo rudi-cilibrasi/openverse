@@ -290,8 +290,6 @@ circle := class(shape, labelled):
   - overrides in a subclass that fixes, repeats or adds type arguments
     its parent leaves open, and classes with type arguments below
     interfaces;
-  - `set` of an interface field that sits at different places in the
-    classes implementing the interface (reading it works);
   - overriding a method with its own type parameters;
   - qualified `(i:)M` implementations;
   - named arguments to a method dispatched on the receiver's class;

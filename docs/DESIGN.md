@@ -142,8 +142,8 @@ position in every class below the one that declares it.
 - **Operations.** Construction is `new`, a field `get` or `set` at the
   field's position, a cast `T[X]` an `isTag` of the classes below both, an
   upcast nothing at all (Verse Core subtyping, #32). A field of an interface
-  can sit at different positions in the classes implementing it; reading it
-  tests the object's class first.
+  can sit at different positions in the classes implementing it; reading
+  or writing it tests the object's class first.
 - **Dispatch.** When every concrete class below the receiver's type shares
   one implementation of a method, the call is direct. Otherwise one `isTag`
   per distinct implementation picks it.

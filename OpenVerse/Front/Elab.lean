@@ -902,6 +902,23 @@ def mapPut (tm tk tv ti tidx : Nat) : Expr :=
 def fieldIndex (fs : List (String × Ty × Option SExpr)) (f : String) : Option (Nat × Ty) :=
   ((fs.zip (List.range fs.length)).find? (·.1.1 == f)).map fun ((_, t, _), k) => (k, t)
 
+/-- Write `v` to field `f` (of type `t`, at position `k` in `sn`) of the
+    object in slot `obj`, of static type `sn(targs)`: in place at `k` when the
+    field has that position in every class below, otherwise after a test of
+    the object's class, as a read does (an interface's field can sit at
+    different positions in the classes implementing it). The value is `v`. -/
+def setFieldAt (env : TyEnv) (sn : String) (targs : List Ty) (obj : Nat) (f : String) (k : Nat) (t : Ty)
+    (v : Expr) : EM Expr := do
+  let ds := env.concreteBelow sn
+  let pos := ds.map fun d => ((fieldIndex (env.fields d []) f).map (·.1)).getD k
+  if pos.all (· == k) then return .heap (.set k) [.local obj, v]
+  let tv ← fresh t
+  let mut acc : Expr := .prim .userErr []   -- no class: unreachable
+  for (d, kd) in (ds.zip pos).reverse do
+    let yd ← fresh (.struct d (env.argsAt sn targs d))
+    acc := .ite (.assign yd (.heap (.isTag [env.tagOf d]) [.local obj])) (.heap (.set kd) [.local yd, .local tv]) acc
+  return .seq (.assign tv v) acc
+
 /-- The UTF-8 encoding of the char32 in slot `tc`, a Unicode scalar value:
     its one to four bytes as chars, each looked up in the table of the 256
     byte values (Verse Core has no conversion from int to char; the lookups
@@ -1667,10 +1684,6 @@ partial def elabSet (ctx : Ctx) (p : Pos) (lhs0 : SExpr) (op : Option String) (r
       match tysA[kr]!, f? with
       | .struct sn _, some f =>
         if !ctx.types.isVarField sn f then eerr sp (classSetMsg sn f)
-        let ds := ctx.types.concreteBelow sn
-        let k0 := ((fieldIndex (ctx.types.fields sn []) f).map (·.1)).getD 0
-        if ds.any fun d => ((fieldIndex (ctx.types.fields d []) f).map (·.1)).getD k0 != k0 then
-          eerr sp s!"set of field '{f}' of interface {sn}, which is at different places in the classes that implement it, is not supported yet"
       | _, _ => eerr p "internal: set path"
     -- a value of a class with no instance cannot exist: the set is unreachable
     if tysA.any fun | .struct sn _ => ctx.types.isEmptyClass sn | _ => false then
@@ -1751,8 +1764,8 @@ partial def elabSet (ctx : Ctx) (p : Pos) (lhs0 : SExpr) (op : Option String) (r
       | some "?", _, .opt _ => pre := pre.push (.assign c (.prim .mkSome [newVal]))
       | some f, _, .struct sn targs =>
         if ctx.types.isRefClass sn then
-          let (j, _) := (fieldIndex (ctx.types.fields sn targs) f).get!
-          pre := pre.push (.heap (.set j) [.local c, newVal])
+          let (j, ft) := (fieldIndex (ctx.types.fields sn targs) f).get!
+          pre := pre.push (← setFieldAt ctx.types sn targs c f j ft newVal)
           noteFx p ["writes"]
           wroteObject := true
         else
@@ -1822,15 +1835,13 @@ partial def elabSet (ctx : Ctx) (p : Pos) (lhs0 : SExpr) (op : Option String) (r
           let some (k, t) := fieldIndex (ctx.types.fields sn targs) f
             | eerr p s!"class {sn} has no field '{f}'"
           if !ctx.types.isVarField sn f then eerr p (classSetMsg sn f)
-          let ds := ctx.types.concreteBelow sn
-          if ds.any fun d => ((fieldIndex (ctx.types.fields d []) f).map (·.1)).getD k != k then
-            eerr mp s!"set of field '{f}' of interface {sn}, which is at different places in the classes that implement it, is not supported yet"
           let r ← elabE ctx rhs (some t)
           noteFx p (if op.isSome then ["reads", "writes"] else ["writes"])
           let v ← match op with
             | none => coerce p r t
-            | some o => combine (.heap (.get k) [.local l.slot]) t o r
-          return ⟨.heap (.set k) [.local l.slot, v], t⟩
+            -- (the current value, read as a read does)
+            | some o => combine (← elabMember ctx p ⟨.local l.slot, l.ty⟩ f).e t o r
+          return ⟨← setFieldAt ctx.types sn targs l.slot f k t v, t⟩
     if let some l := ctx.lookup n then
       if let .struct sn targs := l.ty then
         if ctx.types.isEmptyClass sn then
