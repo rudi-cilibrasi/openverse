@@ -1757,8 +1757,8 @@ partial def elabSet (ctx : Ctx) (p : Pos) (lhs0 : SExpr) (op : Option String) (r
       if k == rhsAfter then
         -- `set P op= e` reads P before e, as the direct form does (Book of
         -- Verse: `set X += e` is `set X = X + e`; #58): the rest of the path,
-        -- read now, gives the old leaf (the reads have no effect, and the
-        -- path is read again for the rebuild below)
+        -- read now, gives the old leaf (it fails as `P` would, and is read
+        -- again for the rebuild below)
         if op.isSome then
           let mut c2 := cur
           for k2 in [k:stepsA.size] do
@@ -1783,12 +1783,14 @@ partial def elabSet (ctx : Ctx) (p : Pos) (lhs0 : SExpr) (op : Option String) (r
     let r ← match rhsVal with
       | some r => pure r
       | none => elabE ctx rhs (some leafTy)
-    let old ← match oldLeaf with
-      | some t => pure (Expr.local t)
-      | none => readStep lc lty lf lkey
     let leaf ← match op with
       | none => coerce p r leafTy
-      | some o => combine old leafTy o r
+      | some o =>
+        -- (only an `op=` reads the old value: a read can have an effect)
+        let old ← match oldLeaf with
+          | some t => pure (Expr.local t)
+          | none => readStep lc lty lf lkey
+        combine old leafTy o r
     let tv ← fresh leafTy
     pre := pre.push (.assign tv leaf)
     -- rebuild, from the leaf up, as far as the object written in place
