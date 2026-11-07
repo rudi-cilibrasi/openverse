@@ -30,7 +30,7 @@ surface Verse is elaborated (`OpenVerse/Front/Elab.lean`) into Verse Core
 | Structs | `name := struct:` with typed fields and defaults, `name{F := e, …}`, `S.F`, `set S.F = e` / `op=`, structural equality (a struct is the tuple of its fields in Verse Core) | ch. 9 |
 | Parametric structs | `pair(t:type, u:type) := struct:`, the type `pair(int, string)`, values `pair(int, string){First := 1, Second := "a"}` (or `pair{…}` where the expected type gives the type arguments); see [Parametric structs](#parametric-structs) | ch. 9 |
 | Classes | `name := class:` and `name(t:type) := class:` with fields and methods; `class(parent, interface, …)`, `interface`, `<abstract>`, `<override>`, `<final>`, `(super:)`, virtual dispatch, casts `T[X]` and `T(X)`; no `var` fields; see [Classes](#classes) | ch. 10 |
-| Enums | `name := enum:` / `enum{A, B}`, `name.A`, equality, `case` that needs no `_` when every value is named (an enumerator is its index in Verse Core) | ch. 9 |
+| Enums | `name := enum:` / `enum{A, B}`, `name.A`, equality, `case` that needs no `_` when every value is named (an enumerator is its index in Verse Core); `enum<open>` may gain values, so a `case` on one needs `_` or a failure context (`<closed>` is the default) | ch. 9 |
 | Maps | `[k]v`, `map{k => v, …}` (a key given twice keeps its last value, at its last position), `M[k]` (fails on a missing key), `set M[k] = v` (insert or update, never fails), `set M[k] op= v` (fails on a missing key), `.Length`, `for (V : M)`, `for (K -> V : M)` in insertion order, order-sensitive equality (a map is the array of its pairs in Verse Core) | §3, §9.3 |
 | Array methods | `A.Slice[i, j]`, `A.Slice[i]`, `A.Find[x]`, `A.RemoveElement[i]`, `A.ReplaceElement[i, x]`, `A.Insert[i, B]` (all failable) | §9.1 |
 | Built-ins | `Print(s)`, `ToString(x)` (int, char, string), `Floor(X / Y)`, `Ceil(X / Y)`, `Quotient[X, Y]`, `Mod[X, Y]` (Euclidean), `Abs`, `Min`, `Max`, `Err()` | API reference |
@@ -236,6 +236,23 @@ circle := class(shape, labelled):
     dispatch, also inside a method; `(super:)` uses the same rule.
   - An implementation must have the signature of every declaration it
     satisfies.
+- **Constructor functions** (Book of Verse ch. 10). A constructor is written
+  `MakeP<constructor>(N:string)<effects> := player:` followed by indented
+  items, and called as `MakeP("a")`, or `MakeP["a"]` when `<decides>`.
+  - **Items** run in order: an indented block, items on the same line
+    separated by `;`, or `{…}`. `F := e` sets a field of the class, `e`
+    elaborated at the field's type. `let:` gives declarations later items
+    see. A `block:` runs, and can neither fail nor `return`.
+    `D<constructor>(args)` delegates to a constructor of the class (which
+    then sets all fields) or of a class above it (which sets its fields;
+    the class's own fields are set before it). A constructor of an
+    `<abstract>` class can only be delegated to.
+  - **Construction.** Fields not set take their defaults, and a field
+    without one must be set. The class's own `block:` clauses then run, as
+    for `player{…}`. A constructor sees no `Self`.
+  - **Lowering.** `K` becomes `K$init`, which runs the items and gives the
+    fields as a struct, and `K`, which constructs the class from them. A
+    delegation calls the delegate's `$init`.
 - **Qualified implementations.** A class that implements two interfaces
   declaring the same method can give each its own: `(i1:)M<override>()`
   and `(i2:)M<override>()`. Each declaration that overrides nothing (a
@@ -313,7 +330,8 @@ circle := class(shape, labelled):
 - **Comparability.** Other classes and interfaces are not comparable (Book §4.9), nor
   is a struct or container that holds one.
 - **Not yet supported** (each rejected with a message):
-  - constructor functions;
+  - constructor functions of parametric classes, generic ones, and two
+    constructors of one name;
   - overrides in a subclass that fixes, repeats or adds type arguments
     its parent (or an interface) leaves open, a class that gives two
     interfaces different type arguments, an interface that gives a parent
@@ -417,7 +435,7 @@ openverse has no module namespaces yet, so the readings are flat:
 ## Not supported in v1
 
 `float` and `rational` values (only `Floor(X/Y)` and `Ceil(X/Y)` of ints),
-the class features listed under [Classes](#classes), open enums, struct methods (Verse structs have none; classes do), `ConcatenateMaps`,
+the class features listed under [Classes](#classes), struct methods (Verse structs have none; classes do), `ConcatenateMaps`,
 `weak_map`, module namespaces (`using{"relative_path"}` imports flatly, see [Programs of several files](#programs-of-several-files)), overloading, defaults that refer to earlier parameters, nested
 functions, `last`, `defer`, refinement types, concurrency (`spawn`, `sync`,
 `race`, `rush`, `branch`, `<suspends>`), `weak_map`, and effect checking
