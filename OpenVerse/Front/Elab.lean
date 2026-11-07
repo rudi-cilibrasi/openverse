@@ -126,6 +126,9 @@ structure TyEnv where
   abstracts : List (String × String) := []
   /-- Each overloaded function (#74): its overloads, renamed `F$ov0`, `F$ov1`, … -/
   overloads : List (String × List String) := []
+  /-- Each overloaded method name (#106): its overloads, one per parameter
+      list, renamed `M$ov0`, `M$ov1`, … in every class that declares it. -/
+  methodOverloads : List (String × List String) := []
   /-- The type parameters of each parametric struct (name, declared comparable). -/
   sparams : List (String × List (String × Bool)) := []
   /-- Each enum: its enumerators in order. -/
@@ -720,6 +723,9 @@ where
   match t.params with
   | v :: _ => s!"{what} must be comparable, and {t.show} is not: declare {v}:subtype(comparable)"
   | [] => s!"{what} must be comparable, and {t.show} is not"
+
+/-- A method's name as written: `M` for an overload `M$ovN` (#106). -/
+def methodBase (x : String) : String := (x.splitOn "$ov").headD x
 
 def builtins : List String :=
   ["Print", "ToString", "Floor", "Ceil", "Abs", "Min", "Max", "Quotient", "Mod", "Err", "ConcatenateMaps"]
@@ -1421,7 +1427,8 @@ partial def elabStmt (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM (R × Ctx) 
       if (ctx.sig? n).isSome || builtins.contains n then
         eerr p s!"'{n}' is already the name of a function or constant"
       if let some c := ctx.selfClass then
-        if (ctx.types.fields c).any (·.1 == n) || ctx.hasMethod c n then
+        if (ctx.types.fields c).any (·.1 == n) || ctx.hasMethod c n ||
+            ((ctx.types.methodOverloads.lookup n).map (·.any (ctx.hasMethod c ·))).getD false then
           eerr p s!"'{n}' is already a field or method of {c}; Verse does not allow shadowing"
       let ty? ← sty.mapM (resolveTy ctx.types p)
       let r ← elabE ctx rhs ty?
@@ -1449,6 +1456,124 @@ partial def elabDefers (ctx : Ctx) (ds : List (SExpr × List Local)) : EM Expr :
     let r ← elabE dctx d none
     acc := .seq r.e acc
   return acc
+
+/-- A call of an overloaded function or method (#74): the one overload
+    (`ovs`, each with its signature `sigOf`, a method's without `Self`) the
+    call's shape and arguments fit, then `call` it. -/
+partial def resolveOverload (ctx : Ctx) (p : Pos) (name : String) (ovs : List String)
+    (sigOf : String → Option Sig) (call : String → EM R) (args : List SExpr) : EM R := do
+  -- an overloaded function (#74): the one overload whose parameters the
+  -- arguments fit (each elaborated at the parameter's type, in a trial)
+  -- the overloads the call's shape fits: as many positional arguments, and
+  -- named ones the overload has, every one it needs given
+  let isNamedArg : SExpr → Bool := fun | .decl _ n _ _ _ => n.startsWith "?" | _ => false
+  let posArgs := args.filter (!isNamedArg ·)
+  let namedArgs : List (String × SExpr) := args.filterMap fun
+    | .decl _ n _ _ rhs => if n.startsWith "?" then some ((n.drop 1).toString, rhs) else none
+    | _ => none
+  let fitsShape (s : Sig) : Bool :=
+    posArgs.length == s.params.length - s.named.length &&
+    namedArgs.all (fun (g, _) => s.named.any (·.1 == g)) &&
+    s.named.all fun (n, d) => d.isSome || namedArgs.any (·.1 == n)
+  -- each argument expression with the type of its parameter in `s`
+  let argTys (s : Sig) : List (SExpr × Ty) :=
+    let npos := s.params.length - s.named.length
+    (posArgs.zip (s.params.take npos)) ++ namedArgs.filterMap fun (n, rhs) =>
+      (s.named.findIdx? (·.1 == n)).map fun j => (rhs, (s.params.drop npos).getD j .void)
+  let cands := ovs.filter fun o => ((sigOf o).map fitsShape).getD false
+  -- each argument's type alone, once (none: it needs an expected type)
+  let natTy (a : SExpr) : EM (Option Ty) := do
+    -- (by position and shallow shape: a wrong hit could only make the
+    -- call below fail to elaborate, never take an overload the arguments
+    -- do not fit, as no call fits two)
+    let shape : String := match a with
+      | .app _ (.ident _ f) as b => s!"app {f} {as.length} {b}"
+      | .ident _ n => s!"id {n}"
+      | .int _ v => s!"int {v}"
+      | .member _ _ m => s!"mem {m}"
+      | .construct _ n _ fs => s!"new {n} {fs.length}"
+      | .tuple _ es => s!"tup {es.length}"
+      | .arrayLit _ es => s!"arr {es.length}"
+      | .bin _ o _ _ => s!"bin {o}"
+      | _ => "_"
+    let key := s!"{a.pos.line}:{a.pos.col}:{a.pos.file}:{shape}"
+    if let some r := (← get).natTys[key]? then return r
+    let st ← get
+    let r ← tryCatch (do return some (← elabE ctx a none).ty) (fun _ => pure none)
+    let cache := (← get).natTys
+    set { st with natTys := cache.insert key r }
+    return r
+  let coercible (t u : Ty) : EM Bool := do
+    let st ← get
+    let ok ← tryCatch (do discard <| coerce p ⟨.lit .void, t⟩ u; pure true) (fun _ => pure false)
+    set { st with natTys := (← get).natTys }
+    return ok
+  let mut byNat : List String := []
+  for o in cands do
+    let some so := sigOf o | continue
+    let mut ok := true
+    if cands.length > 1 then
+      -- (a generic one's patterns, by the matching that infers its type
+      -- arguments: no whole-call trial at every level of a nested call)
+      let mut σ : List (String × Ty) := []
+      for (a, u) in argTys so do
+        if let some t ← natTy a then
+          if so.tparams.isEmpty then
+            if !(← coercible t u) then ok := false
+          else match u.matchArg ctx.types σ t with
+            | some σ' => σ := σ'
+            | none =>
+              -- (against nothing bound: the pattern cannot take it; a
+              -- conflict with earlier bindings only may be a subtype the
+              -- call reconciles, so the candidate stays for the trial)
+              if (u.matchArg ctx.types [] t).isNone && !(← coercible t u) then ok := false
+    if ok then byNat := byNat ++ [o]
+  let fits (o : String) : EM Bool := do
+    let s := (sigOf o).get!
+    let st ← get
+    if !s.tparams.isEmpty then
+      let ok ← tryCatch (do discard <| call o; pure true) (fun _ => pure false)
+      set { st with natTys := (← get).natTys }
+      return ok
+    let ok ← tryCatch (do
+        for (a, t) in argTys s do
+          let r ← elabE ctx a (some t)
+          discard <| coerce a.pos r t
+        pure true) (fun _ => pure false)
+    set { st with natTys := (← get).natTys }
+    return ok
+  -- the overloads the arguments' own types fit, then those the arguments
+  -- elaborated at each one's parameter types fit
+  let mut ok : List String := []
+  if byNat.length == 1 then ok := byNat
+  else
+    -- (none: an argument's own type can differ from its type at a
+    -- parameter, `false` is a logic and also fits `?t`)
+    for o in (if byNat.isEmpty then cands else byNat) do
+      if ← fits o then ok := ok ++ [o]
+  let call' (o : String) : EM R :=
+    tryCatch (call o) fun msg => throw (msg.replace o name)
+  match ok, cands with
+  | [o], _ => call' o
+  | [], [o] => call' o   -- its error
+  | [], [] =>
+    let nm := if namedArgs.isEmpty then "" else s!" and {", ".intercalate (namedArgs.map fun (n, _) => s!"?{n}")}"
+    let shown := ovs.filterMap fun o => (sigOf o).map fun so =>
+      let npos := so.params.length - so.named.length
+      "(" ++ ", ".intercalate ((so.params.take npos).map Ty.show ++
+        (so.named.zip (so.params.drop npos)).map fun ((n, d), t) =>
+          s!"?{n}:{t.show}" ++ (if d.isSome then " = …" else "")) ++ ")"
+    eerr p s!"no overload of {name} fits a call with {posArgs.length} positional argument(s){nm}; its overloads take {" and ".intercalate shown}"
+  | [], _ =>
+    let st ← get
+    let tys ← posArgs.mapM fun a => do return (← elabE ctx a none).ty.show
+    let ntys ← namedArgs.mapM fun (n, a) => do return s!"?{n}:{(← elabE ctx a none).ty.show}"
+    let tys := tys ++ ntys
+    set st
+    eerr p s!"no overload of {name} takes ({", ".intercalate tys})"
+  | _ :: _ :: _, _ =>
+    let shown := ok.map fun o => s!"({", ".intercalate (((sigOf o).map (·.params)).getD [] |>.map Ty.show)})"
+    eerr p s!"this call of {name} fits more than one overload: {" and ".intercalate shown}"
 
 /-- A sequence of statements, threading the scope; the value is the last one's. -/
 partial def elabSeq (ctx : Ctx) (ss : List SExpr) (exp : Option Ty) : EM (R × Ctx) := do
@@ -1493,124 +1618,14 @@ partial def elabApp (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (brack
     -- in a method, a method of `Self`, or a field of `Self` indexed
     let selfMember? : Bool := match ctx.selfClass with
       | some c => ctx.hasMethod c name ||
+          ((ctx.types.methodOverloads.lookup name).map (·.any (ctx.hasMethod c ·))).getD false ||
           ((ctx.types.fields c).any (·.1 == name) && !builtins.contains name)
       | none => false
     if selfMember? then elabApp ctx p (.member p (.ident p "Self") name) args bracket exp else
     -- `T[X]`, `T(X)`: a cast to class or interface `T`
     if ctx.types.classes.contains name && (ctx.sig? name).isNone then elabCast ctx p name args bracket else
-    if let some ovs := ctx.types.overloads.lookup name then do
-      -- an overloaded function (#74): the one overload whose parameters the
-      -- arguments fit (each elaborated at the parameter's type, in a trial)
-      -- the overloads the call's shape fits: as many positional arguments, and
-      -- named ones the overload has, every one it needs given
-      let isNamedArg : SExpr → Bool := fun | .decl _ n _ _ _ => n.startsWith "?" | _ => false
-      let posArgs := args.filter (!isNamedArg ·)
-      let namedArgs : List (String × SExpr) := args.filterMap fun
-        | .decl _ n _ _ rhs => if n.startsWith "?" then some ((n.drop 1).toString, rhs) else none
-        | _ => none
-      let fitsShape (s : Sig) : Bool :=
-        posArgs.length == s.params.length - s.named.length &&
-        namedArgs.all (fun (g, _) => s.named.any (·.1 == g)) &&
-        s.named.all fun (n, d) => d.isSome || namedArgs.any (·.1 == n)
-      -- each argument expression with the type of its parameter in `s`
-      let argTys (s : Sig) : List (SExpr × Ty) :=
-        let npos := s.params.length - s.named.length
-        (posArgs.zip (s.params.take npos)) ++ namedArgs.filterMap fun (n, rhs) =>
-          (s.named.findIdx? (·.1 == n)).map fun j => (rhs, (s.params.drop npos).getD j .void)
-      let cands := ovs.filter fun o => ((ctx.sig? o).map fitsShape).getD false
-      -- each argument's type alone, once (none: it needs an expected type)
-      let natTy (a : SExpr) : EM (Option Ty) := do
-        -- (by position and shallow shape: a wrong hit could only make the
-        -- call below fail to elaborate, never take an overload the arguments
-        -- do not fit, as no call fits two)
-        let shape : String := match a with
-          | .app _ (.ident _ f) as b => s!"app {f} {as.length} {b}"
-          | .ident _ n => s!"id {n}"
-          | .int _ v => s!"int {v}"
-          | .member _ _ m => s!"mem {m}"
-          | .construct _ n _ fs => s!"new {n} {fs.length}"
-          | .tuple _ es => s!"tup {es.length}"
-          | .arrayLit _ es => s!"arr {es.length}"
-          | .bin _ o _ _ => s!"bin {o}"
-          | _ => "_"
-        let key := s!"{a.pos.line}:{a.pos.col}:{a.pos.file}:{shape}"
-        if let some r := (← get).natTys[key]? then return r
-        let st ← get
-        let r ← tryCatch (do return some (← elabE ctx a none).ty) (fun _ => pure none)
-        let cache := (← get).natTys
-        set { st with natTys := cache.insert key r }
-        return r
-      let coercible (t u : Ty) : EM Bool := do
-        let st ← get
-        let ok ← tryCatch (do discard <| coerce p ⟨.lit .void, t⟩ u; pure true) (fun _ => pure false)
-        set { st with natTys := (← get).natTys }
-        return ok
-      let mut byNat : List String := []
-      for o in cands do
-        let some so := ctx.sig? o | continue
-        let mut ok := true
-        if cands.length > 1 then
-          -- (a generic one's patterns, by the matching that infers its type
-          -- arguments: no whole-call trial at every level of a nested call)
-          let mut σ : List (String × Ty) := []
-          for (a, u) in argTys so do
-            if let some t ← natTy a then
-              if so.tparams.isEmpty then
-                if !(← coercible t u) then ok := false
-              else match u.matchArg ctx.types σ t with
-                | some σ' => σ := σ'
-                | none =>
-                  -- (against nothing bound: the pattern cannot take it; a
-                  -- conflict with earlier bindings only may be a subtype the
-                  -- call reconciles, so the candidate stays for the trial)
-                  if (u.matchArg ctx.types [] t).isNone && !(← coercible t u) then ok := false
-        if ok then byNat := byNat ++ [o]
-      let fits (o : String) : EM Bool := do
-        let s := (ctx.sig? o).get!
-        let st ← get
-        if !s.tparams.isEmpty then
-          let ok ← tryCatch (do discard <| elabApp ctx p (.ident p o) args bracket exp; pure true) (fun _ => pure false)
-          set { st with natTys := (← get).natTys }
-          return ok
-        let ok ← tryCatch (do
-            for (a, t) in argTys s do
-              let r ← elabE ctx a (some t)
-              discard <| coerce a.pos r t
-            pure true) (fun _ => pure false)
-        set { st with natTys := (← get).natTys }
-        return ok
-      -- the overloads the arguments' own types fit, then those the arguments
-      -- elaborated at each one's parameter types fit
-      let mut ok : List String := []
-      if byNat.length == 1 then ok := byNat
-      else
-        -- (none: an argument's own type can differ from its type at a
-        -- parameter, `false` is a logic and also fits `?t`)
-        for o in (if byNat.isEmpty then cands else byNat) do
-          if ← fits o then ok := ok ++ [o]
-      let call (o : String) : EM R :=
-        tryCatch (elabApp ctx p (.ident p o) args bracket exp) fun msg => throw (msg.replace o name)
-      match ok, cands with
-      | [o], _ => call o
-      | [], [o] => call o   -- its error
-      | [], [] =>
-        let nm := if namedArgs.isEmpty then "" else s!" and {", ".intercalate (namedArgs.map fun (n, _) => s!"?{n}")}"
-        let shown := ovs.filterMap fun o => (ctx.sig? o).map fun so =>
-          let npos := so.params.length - so.named.length
-          "(" ++ ", ".intercalate ((so.params.take npos).map Ty.show ++
-            (so.named.zip (so.params.drop npos)).map fun ((n, d), t) =>
-              s!"?{n}:{t.show}" ++ (if d.isSome then " = …" else "")) ++ ")"
-        eerr p s!"no overload of {name} fits a call with {posArgs.length} positional argument(s){nm}; its overloads take {" and ".intercalate shown}"
-      | [], _ =>
-        let st ← get
-        let tys ← posArgs.mapM fun a => do return (← elabE ctx a none).ty.show
-        let ntys ← namedArgs.mapM fun (n, a) => do return s!"?{n}:{(← elabE ctx a none).ty.show}"
-        let tys := tys ++ ntys
-        set st
-        eerr p s!"no overload of {name} takes ({", ".intercalate tys})"
-      | _ :: _ :: _, _ =>
-        let shown := ok.map fun o => s!"({", ".intercalate (((ctx.sig? o).map (·.params)).getD [] |>.map Ty.show)})"
-        eerr p s!"this call of {name} fits more than one overload: {" and ".intercalate shown}"
+    if let some ovs := ctx.types.overloads.lookup name then
+      resolveOverload ctx p name ovs ctx.sig? (fun o => elabApp ctx p (.ident p o) args bracket exp) args
     else
     match name with
     | "Print" =>
@@ -1774,6 +1789,16 @@ partial def elabApp (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (brack
   | .member mp (.ident _ "(super:)") m =>
     -- `(super:)M(…)`: the implementation the current method's class inherits
     let some c := ctx.selfClass | eerr p "(super:) can only be used in a method"
+    if let some ms := (if (ctx.methodDecl? c m).isNone then ctx.types.methodOverloads.lookup m else none) then
+      -- (the overloads above `c`)
+      let above := (ctx.types.supers c).drop 1
+      let declAbove (o : String) : Option String := above.find? fun e => (ctx.sig? s!"{e}.{o}").isSome
+      let sigOf (o : String) : Option Sig := (declAbove o).bind fun owner =>
+        (ctx.sig? s!"{owner}.{o}").map fun sg => { sg with params := sg.params.drop 1 }
+      let vis := ms.filter fun o => (declAbove o).isSome
+      if !vis.isEmpty then
+        return ← resolveOverload ctx p m vis sigOf
+          (fun o => elabApp ctx p (.member mp (.ident mp "(super:)") o) args bracket exp) args
     -- in `(r:)m`, slot r; otherwise every slot of `m` (#70): what is above `c`
     -- implements them alike, or the class chain's implementation is the one
     let slots := match ctx.selfMethod with
@@ -1804,6 +1829,15 @@ partial def elabApp (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (brack
     match r.ty with
     | .struct c targs =>
       let env := ctx.types
+      -- an overloaded method (#106): the overload visible at `c` the call
+      -- fits, then that method
+      if let some ms := (if env.classes.contains c && (ctx.methodDecl? c m).isNone then
+          env.methodOverloads.lookup m else none) then
+        let sigOf (o : String) : Option Sig := (ctx.methodDecl? c o).bind fun owner =>
+          (ctx.sig? s!"{owner}.{o}").map fun sg => { sg with params := sg.params.drop 1 }
+        let vis := ms.filter fun o => (ctx.methodDecl? c o).isSome
+        if !vis.isEmpty then
+          return ← resolveOverload ctx p m vis sigOf (fun o => elabApp ctx p (.member mp obj o) args bracket exp) args
       if let (true, some owner) := (env.classes.contains c, ctx.methodDecl? c m) then
         -- the slots the call covers (#70): every class below `c` must implement
         -- them alike, or the call must say which
@@ -3108,7 +3142,125 @@ def elabProgramCore (allTops000 : List STop) (opts : Options := {}) : Except Str
       else [.const { line := 0, col := 0 } "Args" (some (.arr (.name "string")))
               (.arrayLit { line := 0, col := 0 } (as.map fun a => .str { line := 0, col := 0 } [.text a]))]
     | none => []
-  let allTops0 := allTops00 ++ argsTop ++ entryTop
+  -- overloaded methods (#106): a method name declared with two or more
+  -- parameter lists is renamed, in every class and interface, by its list
+  -- (`M$ovN`): an override has its method's list, so its name too
+  -- (up to the names of type parameters: the class's and the method's own,
+  -- each by its place, so a generic override that renames them has its
+  -- method's list)
+  let sigText (ctps : List TParam) (mtps : List TParam) (ps : List SParam) : String :=
+    let ρ : List (String × STy) :=
+      ((ctps.zip (List.range ctps.length)).map fun (tp, i) => (tp.name, STy.name s!"$c{i}")) ++
+      ((mtps.zip (List.range mtps.length)).map fun (tp, i) => (tp.name, STy.name s!"$m{i}"))
+    -- (and `string` is `[]char`)
+    let ρ := ρ ++ [("string", STy.arr (.name "char"))]
+    reprStr (ps.map fun q => (q.named, if q.named then q.name else "", q.ty.substNames ρ))
+  -- (per class hierarchy: classes and interfaces connected by inheritance,
+  -- so unrelated classes' methods of one name are not overloads)
+  let classDefs : List (String × List TParam × List STy × List STop) :=
+    (allTops00 ++ argsTop ++ entryTop).filterMap fun
+      | .classDef _ n tps _ parents _ _ _ methods => some (n, tps, parents, methods)
+      | _ => none
+  let parentName : STy → Option String := fun | .name q => some q | .app q _ => some q | _ => none
+  let mut hier : List (String × String) := classDefs.map fun (n, _) => (n, n)
+  for _ in [0:classDefs.length + 1] do
+    for (n, _, ps, _) in classDefs do
+      for q in ps.filterMap parentName do
+        match hier.lookup n, hier.lookup q with
+        | some a, some b =>
+          if a != b then
+            let r := if a < b then a else b
+            hier := hier.map fun (x, h) => if h == a || h == b then (x, r) else (x, h)
+        | _, _ => pure ()
+  let hierOf (n : String) : String := (hier.lookup n).getD n
+  -- each class's ancestors (itself first), each with its type parameters in
+  -- the class's terms
+  let infoOf (n : String) := (classDefs.find? (·.1 == n)).map fun (_, tps, ps, ms) => (tps, ps, ms)
+  let mut anc : List (String × List (String × List (String × STy))) :=
+    classDefs.map fun (n, _) => (n, [(n, [])])
+  for _ in [0:classDefs.length + 1] do
+    let mut changed := false
+    for (n, _, ps, _) in classDefs do
+      let mine := (anc.lookup n).getD []
+      let mut add : List (String × List (String × STy)) := []
+      for pty in ps do
+        let (q, args) := match pty with | .app q as => (q, as) | .name q => (q, []) | _ => ("", [])
+        let qtps := ((infoOf q).map (·.1)).getD []
+        let σq : List (String × STy) := (qtps.map (·.name)).zip args
+        for (y, σy) in (anc.lookup q).getD [] do
+          if !(mine ++ add).any (·.1 == y) then
+            let σ := if y == q then σq else σy.map fun (v, t) => (v, t.substNames σq)
+            add := add ++ [(y, σ)]
+      if !add.isEmpty then
+        anc := anc.map fun (x, a) => if x == n then (x, a ++ add) else (x, a)
+        changed := true
+    if !changed then break
+  -- the non-override declarations of a method in a class: its lists
+  let ownLists (y mn : String) : List (List TParam × List SParam) := ((infoOf y).map fun (_, _, ms) =>
+    ms.filterMap fun
+      | .fn _ x ps mtps effs .. => if x == mn && !effs.contains "override" then some (mtps, ps) else none
+      | _ => none).getD []
+  let decls : List ((String × String) × String) := classDefs.flatMap fun (cn, ctps, _, methods) =>
+    methods.filterMap fun
+      -- (an override joins its method's list: only the others make lists)
+      | .fn _ mn ps mtps effs .. =>
+        if mn == "$block" || mn.startsWith "(" || effs.contains "override" then none
+        else some ((hierOf cn, mn), sigText ctps mtps ps)
+      | _ => none
+  let keys := (decls.map (·.1)).eraseDups
+  -- (a name is overloaded where some class's ancestors declare two or more
+  -- of its lists: siblings' own lists are not overloads)
+  let listsSeen (n mn : String) : List String :=
+    (((anc.lookup n).getD []).flatMap fun (y, _) =>
+      let ytps := ((infoOf y).map (·.1)).getD []
+      (ownLists y mn).map fun (mtps, ps) => sigText ytps mtps ps).eraseDups
+  let mov : List ((String × String) × List String) := keys.filterMap fun key =>
+    let sigs := ((decls.filter (·.1 == key)).map (·.2)).eraseDups
+    if sigs.length > 1 && classDefs.any (fun (n, _) => hierOf n == key.1 && (listsSeen n key.2).length > 1) then
+      some (key, sigs)
+    else none
+  let mangle (cn mn : String) (ctps mtps : List TParam) (ps : List SParam) (isOverride : Bool) : String :=
+    match mov.lookup (hierOf cn, mn) with
+    | none => mn
+    | some sigs =>
+      if !isOverride then s!"{mn}$ov{(sigs.idxOf? (sigText ctps mtps ps)).getD 0}"
+      else
+        -- an override: the ancestor list it has, each in this class's terms
+        -- (through the type arguments the class gives its parents)
+        let mine := sigText ctps mtps ps
+        let cands : List (Nat × String × Nat) := (((anc.lookup cn).getD []).drop 1).flatMap fun (y, σ) =>
+          let ytps := ((infoOf y).map (·.1)).getD []
+          (ownLists y mn).filterMap fun (dmtps, dps) =>
+            (sigs.idxOf? (sigText ytps dmtps dps)).map fun k =>
+              -- (its own type parameters renamed apart first: the class's
+              -- arguments must not capture them)
+              let apart : List (String × STy) := (dmtps.zip (List.range dmtps.length)).map fun (tp, i) =>
+                (tp.name, STy.name s!"$own{i}")
+              let dmtps' := (dmtps.zip (List.range dmtps.length)).map fun (tp, i) => { tp with name := s!"$own{i}" }
+              (k, sigText ctps dmtps' (dps.map fun q => { q with ty := (q.ty.substNames apart).substNames σ }), dps.length)
+        match (cands.filter (·.2.1 == mine)).map (·.1) |>.eraseDups with
+        | [k] => s!"{mn}$ov{k}"
+        | _ =>
+          match (cands.filter (·.2.2 == ps.length)).map (·.1) |>.eraseDups with
+          | [k] => s!"{mn}$ov{k}"
+          | _ => mn   -- refused below
+  let mut tops1 : Array STop := #[]
+  for t in allTops00 ++ argsTop ++ entryTop do
+    match t with
+    | .classDef cp n tps specs parents isI fields ovs methods =>
+      let mut ms : Array STop := #[]
+      for m in methods do
+        match m with
+        | .fn mp mn ps mtps effs ret body =>
+          if mn.startsWith "(" then
+            if let [_, m'] := (mn.drop 1).toString.splitOn ":)" then
+              if (mov.lookup (hierOf n, m')).isSome then
+                throw s!"{mp.show}: qualified implementations of the overloaded method {m'} are not supported yet"
+          ms := ms.push (.fn mp (mangle n mn tps mtps ps (effs.contains "override")) ps mtps effs ret body)
+        | m => ms := ms.push m
+      tops1 := tops1.push (.classDef cp n tps specs parents isI fields ovs ms.toList)
+    | t => tops1 := tops1.push t
+  let allTops0 := tops1.toList
   -- classes and interfaces (#14, #18): each is a struct whose fields are
   -- those inherited first, then its own; each method `M` of `c` a function
   -- `c.M` whose first parameter is `Self`, generic over the class's type
@@ -3126,6 +3278,10 @@ def elabProgramCore (allTops000 : List STop) (opts : Options := {}) : Except Str
     | .fn _ x .. => x == m
     | _ => false
   let declares (n m : String) : Bool := ((cdef? n).bind (methodNamed · m)).isSome
+  -- (by the name as written: an overload's is its method's, #106)
+  let declaresBase (n m : String) : Bool := ((cdef? n).map fun cd => cd.methods.any fun
+    | .fn _ x .. => methodBase x == m
+    | _ => false).getD false
   let hasBody (n m : String) : Bool := match (cdef? n).bind (methodNamed · m) with
     | some (.fn _ _ _ _ effs _ _) => !effs.contains "$abstract"
     | _ => false
@@ -3259,7 +3415,7 @@ def elabProgramCore (allTops000 : List STop) (opts : Options := {}) : Except Str
   let fullOf (n : String) := ((full.find? (·.1 == n)).map (·.2)).getD []
   for cd in cdefs do
     for (f, _, _, _) in fullOf cd.name do
-      if (henv.supers cd.name).any (declares · f) then
+      if (henv.supers cd.name).any (declaresBase · f) then
         throw s!"{cd.pos.show}: '{f}' is both a field and a method of {cd.name}"
   -- the methods
   let mut expanded : Array STop := #[]
@@ -3297,13 +3453,13 @@ def elabProgramCore (allTops000 : List STop) (opts : Options := {}) : Except Str
     for (m, mi) in cd.methods.zip (List.range cd.methods.length) do
       match m with
       | .fn mp mn ps mtps effs ret body =>
-        if fs.any (·.1 == mn) then throw s!"{mp.show}: '{mn}' is both a field and a method of {n}"
+        if fs.any (·.1 == methodBase mn) then throw s!"{mp.show}: '{methodBase mn}' is both a field and a method of {n}"
         if mn != "$block" && (cd.methods.take mi).any (fun | .fn _ x .. => x == mn | _ => false) then
-          throw s!"{mp.show}: {n} defines {mn} twice (methods cannot be overloaded yet)"
+          throw s!"{mp.show}: {n} defines {mn} twice with the same parameters"
         if ps.any (·.name == "Self") then throw s!"{mp.show}: a method parameter cannot be called Self"
-        if builtins.contains mn then throw s!"{mp.show}: a method cannot be called {mn}, the name of a built-in function"
+        if builtins.contains (methodBase mn) then throw s!"{mp.show}: a method cannot be called {methodBase mn}, the name of a built-in function"
         for prm in ps do
-          if fs.any (·.1 == prm.name) || (henv.supers n).any (declares · prm.name) then
+          if fs.any (·.1 == prm.name) || (henv.supers n).any (declaresBase · prm.name) then
             throw s!"{mp.show}: parameter '{prm.name}' of {mn} is already a field or method of {n}; Verse does not allow shadowing"
         -- a class's `block:` clauses: run at construction, after those of the
         -- classes above it, so never overridden
@@ -3345,7 +3501,11 @@ def elabProgramCore (allTops000 : List STop) (opts : Options := {}) : Except Str
                 if declares e s!"({r}:){mn}" then some (e, s!"({r}:){mn}") else none
         match overridden with
         | [] =>
-          if isOverride then throw s!"{mp.show}: {mn}<override> does not override an inherited method"
+          if isOverride then
+            if (henv.supers n).any (fun e => ((cdef? e).map fun ed => ed.methods.any fun
+                | .fn _ x .. => x.startsWith s!"{mn}$ov" | _ => false).getD false) then
+              throw s!"{mp.show}: {mn}<override> has the parameters of no overload of {mn} above {n}"
+            throw s!"{mp.show}: {mn}<override> does not override an inherited method"
         | qs@((q, _) :: _) =>
           if !isOverride then throw s!"{mp.show}: {mn} is inherited from {q}: mark it {mn}<override> to override it"
           for (q, x) in qs do
@@ -3537,7 +3697,12 @@ def elabProgramCore (allTops000 : List STop) (opts : Options := {}) : Except Str
       else renamed := renamed.push t
     | t => renamed := renamed.push t
   let tops := renamed.toList
-  env := { env with overloads := ovMap }
+  env := { env with overloads := ovMap,
+                    methodOverloads :=
+                      let bases := (mov.map (·.1.2)).eraseDups
+                      bases.map fun mn =>
+                        let n := (mov.filter (·.1.2 == mn)).foldl (fun acc (_, sigs) => max acc sigs.length) 0
+                        (mn, (List.range n).map fun k => s!"{mn}$ov{k}") }
   -- generic functions (those with a `where` clause) are numbered after the
   -- other functions and constants
   let isGeneric : STop → Bool
@@ -3724,6 +3889,20 @@ def elabProgramCore (allTops000 : List STop) (opts : Options := {}) : Except Str
               if i < npos then t.show else s!"?{((s.named.drop (i - npos)).head?.map (·.1)).getD "?"}:{t.show}")
             throw s!"{pos.show}: {n} is defined twice with parameters a call cannot tell apart, ({sh sb}) and ({sh sa}): overloads must take disjoint types"
         | _, _ => pure ()
+  -- the overloads of a method a class sees take parameters no call fits two
+  -- of (#106: a subclass's new overload too; an override has its method's)
+  for c in env.classes do
+    for (mn, ms) in env.methodOverloads do
+      let vis : List (String × Sig) := ms.filterMap fun o =>
+        ((env.supers c).find? fun e => allSigs.any (·.name == s!"{e}.{o}")).bind fun e =>
+          (allSigs.find? (·.name == s!"{e}.{o}")).map fun sg => (s!"{e}.{o}", { sg with params := sg.params.drop 1 })
+      for ((a, sa), i) in vis.zip (List.range vis.length) do
+        for (b, sb) in vis.take i do
+          if !sigsDistinct sa sb then
+            let sh (s : Sig) := ", ".intercalate (s.params.map Ty.show)
+            let owner (x : String) := (x.splitOn ".").head!
+            let cp := ((cdefs.find? (·.name == c)).map (·.pos)).getD { line := 0, col := 0 }
+            throw s!"{cp.show}: {c} has overloads of {mn} a call cannot tell apart, ({sh sb}) in {owner b} and ({sh sa}) in {owner a}: overloads must take disjoint types (an override has the same parameters as its method)"
   -- an override has the signature of the method it overrides, and an
   -- overriding field the inherited field's type (Book of Verse ch. 10)
   -- an override may return a class below the declared one (covariant results)

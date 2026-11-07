@@ -175,54 +175,47 @@ def resolveModules (tops : List STop) : Except String (List STop) := do
         cur := cur ++ [c]
       checkVis sc p cur base.length
       opens := opens ++ [(sc, cur)]
-  -- what the modules open in `sc` give for `n`, visible from `sc`
-  -- (`true`: a module)
-  let openLookup (sc : List String) (n : String) : List (Bool × List String) :=
-    ((opens.filter fun (osc, _) => inside sc osc).filterMap fun (_, m) =>
-      let cand := m ++ [n]
-      let q := qualJoin cand
-      if !(pubS.contains q || inside sc m) then none
-      else if defsS.contains q then some (false, cand)
-      else if modsS.contains q then some (true, cand)
-      else none).eraseDups
-  -- a bare name, from scope `sc`: the innermost definition or module, or
-  -- else an open module's; both (or two open modules) is ambiguous
+  -- the definition or module a name gives from scope `sc`: at each level,
+  -- innermost first, the level's own definitions, then the members of the
+  -- modules opened there (two of them giving it: ambiguous) (`true`: a module)
+  let find (sc : List String) (p : Pos) (n : String) : Except String (Option (Bool × List String)) := do
+    for k in (List.range (sc.length + 1)).reverse do
+      let pre := sc.take k
+      let cand := pre ++ [n]
+      if defsS.contains (qualJoin cand) then return some (false, cand)
+      if modsS.contains (qualJoin cand) then return some (true, cand)
+      let here : List (Bool × List String) := ((opens.filter (·.1 == pre)).filterMap fun (_, m) =>
+        let c := m ++ [n]
+        let q := qualJoin c
+        if !(pubS.contains q || inside sc m) then none
+        else if defsS.contains q then some (false, c)
+        else if modsS.contains q then some (true, c)
+        else none).eraseDups
+      match here with
+      | [x] => return some x
+      | (_, a) :: (_, b) :: _ => throw s!"{p.show}: '{n}' is ambiguous: both {shownP a} and {shownP b} are open"
+      | [] => pure ()
+    return none
   let resolve (what : String) (sc : List String) (p : Pos) (n : String) : Except String String := do
-    let opn := openLookup sc n
-    let found ← match lookup sc n with
-      | some (isMod, cand) =>
-        if let some (_, o) := opn.find? (·.2 != cand) then
-          throw s!"{p.show}: '{n}' is ambiguous: both {shownP cand} and {shownP o} are visible"
-        pure (some (isMod, cand))
-      | none => match opn with
-        | [x] => pure (some x)
-        | (_, a) :: (_, b) :: _ => throw s!"{p.show}: '{n}' is ambiguous: both {shownP a} and {shownP b} are open"
-        | [] => pure none
-    match found with
+    match ← find sc p n with
     | some (true, cand) => throw s!"{p.show}: {shownP cand} is a module, not a {what}"
     | some (false, cand) => return qualJoin cand
     | none => return n
   -- a binder: refused if it would shadow a module, or a member of a module
   -- (the top level's names are the elaborator's to check)
   let bind (sc : List String) (p : Pos) (n : String) : Except String Unit := do
-    let hit : Option (List String) := match lookup sc n with
+    let hit : Option (List String) := match ← find sc p n with
       | some (true, cand) => some cand
       | some (false, cand) => if cand.length > 1 then some cand else none
-      | none => (openLookup sc n).head?.map (·.2)
+      | none => none
     if let some cand := hit then
       throw s!"{p.show}: '{n}' is already defined (as {shownP cand}); Verse does not allow shadowing"
   -- a path (module parts, then a member), from scope `sc`
   let qual (sc : List String) (p : Pos) (comps : List String) : Except String (Option String) := do
     match comps with
     | head :: rest@(_ :: _) =>
-      let base? : Option (List String) ← match lookup sc head with
-        | some (true, cand) => pure (some cand)
-        | some (false, _) => pure none   -- a value: `X.F` is its field
-        | none => match (openLookup sc head).filter (·.1) with
-          | [(_, cand)] => pure (some cand)
-          | (_, a) :: (_, b) :: _ => throw s!"{p.show}: '{head}' is ambiguous: both {shownP a} and {shownP b} are open"
-          | [] => pure none
-      let some base := base? | return none
+      -- (a value's name: `X.F` is its field)
+      let some (true, base) ← find sc p head | return none
       let mut path := base
       for c in rest.dropLast do
         -- (`M.v.F`: the field `F` of the member `M.v`, resolved as a prefix)

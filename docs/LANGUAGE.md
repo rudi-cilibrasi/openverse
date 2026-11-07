@@ -158,7 +158,14 @@ Verse ch. 6): `Describe(X:int)`, `Describe(S:string)`, `Describe(X:int, Y:int)`.
   the arguments' types against its patterns as inference does, and infers
   its type arguments as for any generic call. (Generic functions take no
   named parameters.)
-- **Not yet supported:** overloaded methods, and overloading `Main`.
+- **Methods.** A class or interface may declare a method with several
+  parameter lists, and a subclass may override one overload (with its
+  list) and add others. A call takes the overload visible at the
+  receiver's type that its arguments fit, then dispatches as usual; the
+  overloads a class sees must be distinct. Each list is a method of its
+  own (`M$ovN`, up to the names of type parameters).
+- **Not yet supported:** overloading `Main`, and qualified `(i:)M`
+  implementations of an overloaded method.
 
 ## Parametric structs
 
@@ -475,21 +482,25 @@ Main():void =
     Print("{W.Cast()}")
 ```
 
-- A module holds functions, constants, structs, enums, classes, interfaces
-  and other modules. A constant in a module states its type (`X:int = 1`,
-  not `X := 1`). A module is not a value.
-- A bare name is looked up in its definition's module, then outward through
-  the enclosing modules, then among the `<public>` members of the modules
-  opened with `using{M}` in scope, then at the top level. If two open
-  modules give a name, the use is ambiguous and an error.
-- `M.F`, `A.B.F`, the type `M.c` and the value `M.c{…}` name a member. `M`
-  is found from the definition's module outward, or as a public submodule
-  of an open module. Each level used from outside it must be `<public>`.
-  Members are `<internal>` by default: visible in their module and its
-  submodules.
-- Verse does not allow shadowing, so a local, parameter, field or method
-  named like a visible member (one of its module or of an open module) is
-  an error.
+- A module is `name := module:` with its definitions indented, or
+  `name := module{…}`. It holds functions, constants, structs, enums,
+  classes, interfaces and other modules. A constant in a module states its
+  type (`X:int = 1`, not `X := 1`). A module is not a value.
+- A name is looked up from its definition's module outward, one scope at a
+  time, up to the top level. At each scope, the scope's own definitions
+  come first, then the members of the modules it opens with `using{M}`.
+  If two modules opened at the same scope give the name, it is ambiguous
+  and an error. The first definition or module found is the one meant.
+- `M.F`, `A.B.F`, the type `M.c`, the value `M.c{…}`, a delegation
+  `M.D<constructor>(…)` and a qualifier `X.(M.i:)F()` name a member. `M`
+  is looked up like any name; if a value is found instead, `.F` is its
+  field. Each level used from outside it must be `<public>`, including
+  each module of a `using{A.B}`. Members are `<internal>` by default:
+  visible in their module and its submodules. A name's overloads are all
+  `<public>` or all internal.
+- Verse does not allow shadowing. A local, parameter or class member
+  (inherited ones included) named like a visible module or module member
+  (its own module's, or an open module's) is an error.
 
 Modules exist only in the front end. Each member becomes a definition of
 its qualified name before elaboration, and messages show it as `M.F`.
@@ -512,7 +523,8 @@ the readings are flat:
 
 - all the definitions join one top level, so a name defined in two files is
   an error;
-- a file's `using{M}` opens `M` for the whole program, not just that file;
+- a file's `using{M}` opens `M` at the top level, for the whole program, not
+  just that file;
 - each file is loaded once, so import cycles are harmless;
 - subdirectories are flattened;
 - other extensions, and `.zip`, are ignored;
