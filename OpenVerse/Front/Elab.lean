@@ -1403,6 +1403,8 @@ partial def elabCast (ctx : Ctx) (p : Pos) (T : String) (args : List SExpr) (bra
   -- a parametric class's type arguments are those of the value (#39), in the
   -- same hierarchy
   let parametric := (env.sparams.lookup T).isSome || !(env.coreArgs T []).isEmpty
+  if (env.concreteBelow S).all (fun d => !env.isSub d T) then
+    eerr p s!"no class is below both {r.ty.show} and {T}, so {T}[…] would always fail"
   if parametric && !(env.isSub S T || env.isSub T S) then
     eerr p s!"cannot cast a {S} to {T}: {T}'s type arguments would be unknown (they are not {S}'s)"
   let targs := if env.isSub S T then env.upArgs S sargs T else env.argsBelow S sargs T
@@ -2018,7 +2020,7 @@ partial def elabMember (ctx : Ctx) (p : Pos) (r : R) (m : String) : EM R := do
         let x ← fresh r.ty
         let mut acc : Expr := .prim .userErr []   -- no class: unreachable
         for (d, kd) in (ds.zip pos).reverse do
-          let yd ← fresh (.struct d [])
+          let yd ← fresh (.struct d (ctx.types.argsAt sn targs d))
           acc := .ite (.assign yd (.heap (.isTag [ctx.types.tagOf d]) [.local x])) (.heap (.get kd) [.local yd]) acc
         return ⟨.seq (.assign x r.e) acc, t⟩
       if ctx.types.classes.contains sn then
@@ -2295,6 +2297,13 @@ def elabProgram (allTops00 : List STop) (opts : Options := {}) : Except String C
           else throw s!"{p.show}: unknown class or interface '{q}'"
       if qargs.length != qd.tps.length then
         throw s!"{p.show}: {q} takes {qd.tps.length} type argument(s), found {qargs.length}"
+      -- (an interface's type arguments are its references'; one that extends
+      -- a parametric interface gives it its own, unchanged, #53)
+      if cd.isIface && qd.isIface && !qargs.isEmpty then
+        let own := cd.tps.map (·.name)
+        let given := qargs.map fun | .name x => x | _ => "?"
+        if given != own then
+          throw s!"{p.show}: interface {cd.name} must give {q} its own type parameters, in order, as in interface({q}({", ".intercalate own})) (#53)"
 
       if qd.isIface then ifaces := ifaces.push q
       else
@@ -2769,6 +2778,12 @@ def elabProgram (allTops00 : List STop) (opts : Options := {}) : Except String C
   -- the implementation a concrete class uses has the signature of every
   -- declaration of the method above it
   for (cp, c, impl, decl) in implChecks do
+    -- code generic over the declaring class or interface calls `c`'s
+    -- implementation only at its own type arguments (#39, #53)
+    let q := clsOf decl
+    let (cc, cq) := (core c, core q)
+    if cc.length != cq.length || ((cq.zip cc).foldlM (fun m (a, b) => Ty.alpha m a b) []).isNone then
+      throw s!"{cp.show}: {c} fixes, repeats or adds type arguments that {q} leaves open, so code generic over {q} could not call its implementation of {(decl.splitOn ".").getLast!} ({impl}) (#39)"
     match allSigs.find? (·.name == impl), allSigs.find? (·.name == decl) with
     | some a, some b =>
       if !sameSigIn c a b then
@@ -2923,8 +2938,13 @@ def elabProgram (allTops00 : List STop) (opts : Options := {}) : Except String C
   -- `intbox := class(base(int))`'s inherited `Value` is `var 0`, as in `base`
   let classTable := env.classes.map fun d =>
     let chain := ((env.supers d).filter fun x => !(env.info x).isIface).reverse
+    -- (a field an interface declares is typed as the interface gives it, at
+    -- the type arguments its references and implementations share, #53)
+    let ifaceSrc (f : String) : Option String :=
+      let has := (env.supers d).filter fun x => (env.info x).isIface && (env.fields x).any (·.1 == f)
+      has.find? fun x => !has.any fun y => y != x && env.isSub x y
     if env.isRefClass d then (env.fields d).map fun (f, t, _) =>
-      match chain.find? fun D => (env.fields D).any (·.1 == f) with
+      match (ifaceSrc f).orElse fun _ => chain.find? fun D => (env.fields D).any (·.1 == f) with
       | some D =>
         let tD := (((env.fields D).find? (·.1 == f)).map (·.2.1)).getD t
         tD.toVTy { env with tvars := env.coreVars D }

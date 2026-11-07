@@ -254,7 +254,11 @@ circle := class(shape, labelled):
   A class gives the interfaces above it exactly its own Verse Core type
   arguments (`box(t)` gives `container` `t`; a class implementing
   `container(t)` and `sink(u)` cannot), so code generic over `container(t)`
-  dispatches to `box(t)`'s methods and casts `container(t)` to `box(t)`. Inherited field defaults see their
+  dispatches to `box(t)`'s methods and casts `container(t)` to `box(t)`.
+  An interface's fields are typed as it gives them: a class that fixes or
+  repeats its type arguments (`intbox := class(holder(int))`) can still
+  implement an interface whose members it does not override. An interface
+  that extends a parametric interface gives it its own type parameters. Inherited field defaults see their
   own class's type parameters. A cast `square[S]` takes its type arguments
   from `S`'s, and is refused when it would need more. A method
   of a parametric class is generic over the class's type parameters, then
