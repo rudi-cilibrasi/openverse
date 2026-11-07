@@ -11,6 +11,8 @@ thms=(
   "Adequacy:Runs.det:a program run has one outcome and one output"
   "Adequacy:Prog.run_sound:Prog.run is sound"
   "Adequacy:Prog.run_complete:Prog.run is complete"
+  "Bounded:evalB_done:the depth-bounded interpreter of openverse run computes eval whenever it finishes"
+  "Bounded:Prog.runB_done:openverse run computes Prog.run whenever it does not hit its depth bound"
   "Derived:ite_rollback:a failed if condition is rolled back"
   "Derived:notE_ok:a successful not e discards the effects of e"
   "Derived:notE_notE_ok:not not e is a pure test"

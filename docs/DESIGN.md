@@ -76,6 +76,23 @@ The C runtime counts fuel exactly as Lean does. On every program of the
 test suite, the smallest fuel that does not run out is the same in both
 implementations.
 
+Fuel bounds the *depth* of an evaluation, not its length: each recursive
+call gets one unit less, and both sides of a `seq` get the same fuel. So the
+native recursion of the compiled interpreter grows with the fuel, and with
+`openverse run`'s default fuel (10^8) a program that recurses forever would
+overflow the machine stack (about 1 GiB) long before running out (#97).
+`openverse run` therefore runs `evalB` (`Core/Bounded.lean`), which is `eval`
+with a second budget for the calls the compiled code really nests (those not
+in tail position; tail positions are loops there, as in the C runtime's
+`eval_node`). When it runs out, the run ends with `limit: recursion depth`,
+exit 3, as `cverse` does past its own bound (`max_depth`, plus a stack
+budget). `evalB_done` proves that whenever `evalB` finishes it returns
+exactly what `eval` returns, so the bound can only turn an answer into a
+resource limit. The two bounds differ: `openverse run` allows 4 million
+nested calls (`maxDepth` in `Main.lean`, about a million levels of ordinary
+Verse recursion), `cverse` 10 million nested evaluations on a 4 GiB stack;
+only programs that recurse between the two get different exit codes.
+
 ## Translation validation instead of a verified front end
 
 The parser and elaborator are ordinary code (`partial def`) and are not
