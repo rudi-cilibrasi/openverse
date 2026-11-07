@@ -356,8 +356,13 @@ partial def Ty.structNames : Ty → List String
 /-- A struct that contains itself, through any chain of fields (Verse Core
     types are finite trees, so such a struct has no representation). -/
 def TyEnv.recursiveStruct? (env : TyEnv) : Option String :=
+  -- a struct's fields, and a reference class's Verse Core type arguments
+  -- (#63: `loopy := class(cell(?loopy))` would be an infinite type)
   let deps (n : String) : List String :=
-    (env.repFieldTys n []).flatMap Ty.structNames
+    (env.repFieldTys n []).flatMap Ty.structNames ++
+      (if env.isRefClass n then
+        (env.coreArgs n (((env.sparams.lookup n).getD []).map fun (v, k) => Ty.param v k)).flatMap Ty.structNames
+      else [])
   -- the structs reachable from `n` in at most `env.structs.length` steps
   let reach (n : String) : List String := Id.run do
     let mut seen : List String := []
@@ -2636,6 +2641,8 @@ def elabProgram (allTops00 : List STop) (opts : Options := {}) : Except String C
       throw s!"{mp.show}: {d} fixes or repeats type arguments that {q} leaves open, so it cannot override {mn} yet: code generic over {q} could not call it (#39)"
   env := { env with protos := env.makeProtos }
   if let some n := env.recursiveStruct? then
+    if env.classes.contains n then
+      throw s!"the Verse Core type of class {n} would contain itself, through its type arguments (#63)"
     throw s!"struct {n} contains itself (recursive struct types are not supported)"
   -- map keys in field types, now that every struct's fields are known
   -- (a key type can be a struct that holds a class)
