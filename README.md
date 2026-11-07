@@ -8,6 +8,14 @@ program loading, and the rollback of variables and output are proved with
 **QuickProof** (VST + CompCert in Coq); the object store and the value heap
 are checked by differential testing and fuzzing.
 
+[![check](https://github.com/rudi-cilibrasi/openverse/actions/workflows/check.yml/badge.svg)](https://github.com/rudi-cilibrasi/openverse/actions/workflows/check.yml)
+**Try it** in the [online playground](https://rudi-cilibrasi.github.io/openverse-docs/demo/)
+(this compiler and runtime as WebAssembly, in your browser) · **Learn it** from
+two books, [*Verse Logic*](https://rudi-cilibrasi.github.io/openverse-docs/verse-logic/)
+and [*The Little Verser*](https://rudi-cilibrasi.github.io/openverse-docs/little-verser/),
+whose every program and Lean statement is checked against this repository
+([openverse-docs](https://github.com/rudi-cilibrasi/openverse-docs)).
+
 ```
              Verse source (.verse)
                     │  OpenVerse/Front: lexer, offside-rule parser,
@@ -117,5 +125,7 @@ Trusted, besides Lean's kernel:
 - the gap between CompCert's C and the GCC build of `cverse`.
 
 Verse, Unreal Engine and Fortnite are trademarks of Epic Games. openverse is
-an independent implementation written from the public Book of Verse and the
-Verse Calculus paper (Augustsson et al., ICFP 2023), and uses no Epic code.
+an independent implementation written from the public
+[Book of Verse](https://verselang.github.io/book/) and the
+[Verse Calculus paper](https://doi.org/10.1145/3607845) (Augustsson et al., ICFP 2023),
+and uses no Epic code.
