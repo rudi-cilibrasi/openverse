@@ -1,6 +1,5 @@
-# expect: field 'N' of class counter cannot be set
-# Setting a class field would make the tuple representation observable
-# (D := C; set C.N = 10 would leave D.N at 0).
+# expect: field 'N' of class counter is not a var
+# Only var fields of a class can be set (#34): the object is shared.
 counter := class:
     N:int = 0
 Main():void =

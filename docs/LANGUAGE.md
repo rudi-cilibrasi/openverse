@@ -155,8 +155,9 @@ Swap(P:pair(t, u) where t:type, u:type):pair(u, t) =
 
 ## Classes
 
-Classes without `var` fields (#14, #18): fields and methods, parametric
-classes, single inheritance, interfaces and virtual dispatch.
+Classes (#14, #18, #34): fields and methods, `var` fields, `<unique>`
+classes, recursive classes, parametric classes, single inheritance,
+interfaces and virtual dispatch.
 
 ```verse
 shape := class<abstract>:
@@ -172,10 +173,24 @@ circle := class(shape, labelled):
     Describe<override>():string = "round: {(super:)Describe()}"
 ```
 
-- **Values.** Without `var` fields an instance cannot change, so reference
-  semantics cannot be observed. A class is constructed like a struct
-  (`circle{R := 1}`), and `set` cannot reach a class field, not even
-  through a path.
+- **References.** An instance is an object, constructed like a struct
+  (`circle{R := 1}`). A class value is a reference to it, so every alias sees
+  the object's `var` fields change.
+  - `var F:t = e` declares a field that `set` can change: `set C.F = e`,
+    also through a path (`set H.C.F = e`, `set Cs[i].F = e`) and through any
+    variable, `var` or not, because the reference does not change. The
+    object is written in place; the containers on the path above it are not
+    rebuilt. Other fields cannot be set. In a method, `set F = e` sets a
+    field of `Self`.
+  - A failure context undoes the field writes and the constructions it made
+    (`if (set C.N = 1, Fails[]) …`), as for variables.
+  - A class may hold itself, through an option or an array
+    (`node := class: var Next:?node = false`). A class that *requires* an
+    instance of itself can never be constructed, and a variable of its type
+    is an error.
+  - Every variable of a class type starts as a placeholder object (or as a
+    parameter of the function whose type is below it) until it is set, which
+    Verse code always does before reading it.
 - **Methods.** A method `M` of class `c` is a function `c.M` whose first
   parameter is `Self`. In its body, a name that is not a local is looked up
   among the fields, then the methods, inherited ones included. A local or
@@ -218,13 +233,21 @@ circle := class(shape, labelled):
   class's type parameters, then its own. The type arguments come from the
   receiver, and the body is checked once in Verse Core (see
   [Parametric functions](#parametric-functions)).
-- **Comparability.** A class or interface is not comparable (Book §4.9), nor
+- **`<unique>`.** A `<unique>` class (and every class below it) is
+  comparable: `=` and `<>` test identity, so two instances with equal
+  fields differ, and an alias equals its original.
+- **Parametric classes are values.** A parametric class cannot be in a
+  hierarchy, and is represented as its fields (#18), so it cannot have `var`
+  fields or be `<unique>`.
+- **Comparability.** Other classes and interfaces are not comparable (Book §4.9), nor
   is a struct or container that holds one.
 - **Not yet supported** (each rejected with a message that names its phase
   of #11):
-  - `var` fields, `<unique>`, `block:` initialisers, constructor functions,
-    and recursive classes, which need references (phase 3);
-  - parametric classes in hierarchies;
+  - `block:` initialisers and constructor functions;
+  - parametric classes in hierarchies, `var` fields of parametric classes,
+    and parametric `<unique>` classes;
+  - `set` of an interface field that sits at different places in the
+    classes implementing the interface (reading it works);
   - overriding a method with its own type parameters;
   - qualified `(i:)M` implementations;
   - named arguments to a method dispatched on the receiver's class;
