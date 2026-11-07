@@ -169,14 +169,23 @@ position in every class below the one that declares it.
 Phase 3 (#20) adds a heap of objects, each with a class tag and fields
 (`HeapOp`). Its typing (#29) keeps the class hierarchy out of Core:
 
-- **Reference types are tag sets.** `VTy.ref ts` is a reference to an object
-  whose tag is in `ts`; the front end will use the concrete classes below a
-  static class. A cast `isTag us` fails when the tag is not in `us`, and has
-  type `ref us`. Field types are compared exactly (`FieldTy`), so the front
-  end gives a class's tag sets one canonical order: definition order.
+- **Reference types are tag sets, with type arguments.** `VTy.ref ts args`
+  is a reference to an object whose tag is in `ts` and whose type
+  arguments start with `args` (#39; `[]` for classes without type
+  parameters). The front end uses the concrete classes below a static
+  class. A subclass's type parameters come after its parent's: a
+  `pair(t, u) := class(base(t))` object has the arguments `[t, u]`, and is
+  a `base(t)`; an `intbox := class(base(int))` object has `[int]`. A cast
+  `isTag us` fails when the tag is not in `us`, and has type `ref us args`
+  (it cannot recover a subclass's own arguments, so fields that mention
+  them cannot be read after a cast). Field types are compared exactly
+  (`FieldTy`), so the front end gives a class's tag sets one canonical
+  order: definition order.
 - **Subtyping** (#32) is structural (`VTy.sub`): a reference type with
-  fewer classes is below one with more, and arrays, options and tuples are
-  covariant, which is sound because they are immutable values. One rule,
+  fewer classes is below one with more, and one with more type arguments
+  below one with a prefix of them; the arguments themselves are invariant
+  (an object's fields can be written as well as read). Arrays, options and
+  tuples are covariant, which is sound because they are immutable values. One rule,
   `Typed.sub`, gives an expression every type above its own, so widening is
   free and needs no node. Preservation peels subsumption off a derivation by
   recursion (`stepE_d`) and handles the last real rule (`TypedR`). The
@@ -184,23 +193,38 @@ Phase 3 (#20) adds a heap of objects, each with a class tag and fields
   expected one (`expect`), joins `if` branches and `+` operands of different
   types (`VTy.join`), and checks `arrSet` against an expected array type.
   It is still incomplete: an array literal's elements must have the first
-  one's type unless there is an expected type, and a generic call's
+  one's type unless there is an expected type, a generic call's
   instantiation comes from its last arguments (where the front end passes
-  its type arguments).
-- **Value typing sees the tags.** `hasTy Ξ v t` takes `Ξ`, the tag of each
-  heap object. Objects are only ever appended and their tags never change,
-  so a typing survives every step (`hasTy_mono`, for `Ξ` a prefix of `Ξ'`).
+  its type arguments), and a `new`'s type arguments come from the expected
+  type, else from matching its fields' types against its arguments' (with
+  `void` for a parameter they do not determine). References join at the
+  common prefix of their type arguments.
+- **Value typing sees a heap typing.** `hasTy Ξ v t` takes `Ξ : HeapTy`,
+  the class and type arguments of each heap object. Objects do not record
+  their type arguments, so `Ξ` is a ghost: no function of the heap gives it,
+  and the theorems say that one exists (the standard store typing). Objects
+  are only ever appended, and their classes never change, so a typing
+  survives every step (`hasTy_mono`, for `Ξ` a prefix of `Ξ'`).
 - **The class table** is part of the certificate (`Sigs.classes`): the field
-  types of each tag. `HeapOK` says each object's fields have the types of its
-  class. A field read through `ref ts` has the type that every class in `ts`
-  gives that field (`FieldTy`), which the field layout of the previous
-  section makes common. The table must mention no type variable, so that
-  `Typed.subst` holds.
-- **Preservation** (`Eval.typed`) carries, beyond the frame typing, `HeapOK`
-  and the extension of the tags. Rollback needs nothing new: a failure
-  context restores the heap it started from, which satisfies both.
-  `Runs.typed` states the result's type in the final heap, which is well
-  typed.
+  types of each tag, in terms of its type parameters (`var j`). `HeapOK S Ξ h`
+  says `Ξ` has an entry per object, its class, and each object's fields
+  have its class's types at its arguments (`VTy.inst`). A field read
+  through `ref ts args` has the type that every class in `ts` gives that
+  field at `args`, and that mentions no type parameter past them
+  (`FieldTy`, so the field has that type in every object whose arguments
+  extend `args`, `VTy.inst_prefix`); the field layout of the previous
+  section makes the field common. Instantiation puts `void` past the
+  arguments, so it commutes with substitution (`VTy.inst_subst`) whatever
+  the table says, and `Typed.subst` holds for a generic function that
+  allocates or reads objects of its type parameters. Only the prototypes'
+  type arguments must be closed (`Sigs.ClosedProtos`), as a literal's
+  typing is checked once.
+- **Preservation** (`Eval.typed`) says that from a frame and heap typed
+  under `Ξ`, evaluation reaches a frame and heap typed under an extension
+  `Ξ'` of `Ξ`, with the outcome typed under `Ξ'`. Rollback needs nothing
+  new: a failure context restores the heap it started from, which `Ξ`
+  types. `Runs.typed` states the result's type in the final heap, under
+  some heap typing of it.
 - **Defaults.** No literal is a reference, so a slot of class type starts as
   a new object of one of its classes with default fields (`DefaultE.new`),
   or as a parameter of a subtype (`DefaultE.sub`). Placeholders cost an
