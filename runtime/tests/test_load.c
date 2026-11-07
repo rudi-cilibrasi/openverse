@@ -81,6 +81,19 @@ static int wellscoped(const vx_program *p)
                 break;
             case VX_N_BRK:
                 break;
+            case VX_N_HEAP:
+                if ((uint64_t)nd->c + nd->b > p->nargs || nd->b > VX_MAX_ARGS)
+                    return 0;
+                for (k = 0; k < nd->b; k++)
+                    if (p->args[nd->c + k] >= j)
+                        return 0;
+                if (nd->op > VX_H_LAST || (nd->op == VX_H_TAG && nd->a != 0))
+                    return 0;
+                if (nd->op == VX_H_ISTAG && (uint64_t)nd->a + 4 * (uint64_t)nd->d > p->nbytes)
+                    return 0;
+                if (nd->op != VX_H_ISTAG && nd->d != 0)
+                    return 0;
+                break;
             default:
                 return 0;
             }
@@ -302,7 +315,7 @@ static void violations(void)
     }
 
     /* 6. codes */
-    tn_begin(&f, 12);
+    tn_begin(&f, 13);
     CHECK_EQ(load_one(&f, 0, 0, 0), VX_LOAD_TAG);
     tn_begin(&f, 255);
     CHECK_EQ(load_one(&f, 0, 0, 0), VX_LOAD_TAG);
@@ -324,6 +337,58 @@ static void violations(void)
     CHECK_EQ(load_one(&f, 0, 0, 0), VX_LOAD_LOGIC);
     n_char(&f, 255);
     CHECK_EQ(load_one(&f, 0, 0, 0), VX_LOAD_OK);
+    /* heap operations and reference literals (#31) */
+    n_ref(&f, 0xffffffffu);
+    CHECK_EQ(load_one(&f, 0, 0, 0), VX_LOAD_OK);
+    n_heap(&f, VX_H_LAST + 1, 0, 0);
+    CHECK_EQ(load_one(&f, 0, 0, 0), VX_LOAD_HEAP);
+    n_heap(&f, VX_H_NEW, 0xffffffffu, 0);
+    CHECK_EQ(load_one(&f, 0, 0, 0), VX_LOAD_OK);
+    a = n_int(&f, 1);
+    n_heap(&f, VX_H_GET, 9, 1, a);
+    CHECK_EQ(load_one(&f, 0, 0, 1), VX_LOAD_OK);
+    a = n_int(&f, 1);
+    n_heap(&f, VX_H_TAG, 0, 1, a);
+    CHECK_EQ(load_one(&f, 0, 0, 1), VX_LOAD_OK);
+    a = n_int(&f, 1);
+    n_heap(&f, VX_H_TAG, 1, 1, a);
+    CHECK_EQ(load_one(&f, 0, 0, 1), VX_LOAD_K);
+    n_heap(&f, VX_H_SET, 0, 1, 0);                   /* the child is the node itself */
+    CHECK_EQ(load_one(&f, 0, 0, 0), VX_LOAD_CHILD);
+    {
+        static const uint32_t tags[] = { 3, 0x01020304u };
+        vx_program pr;
+        a = n_int(&f, 1);
+        n_istag(&f, 2, tags, a);
+        t_prog_header(&p, 1, 0);
+        t_fn(&p, &f, 0, 0, "Main", 1);
+        CHECK_EQ(vx_load(p.b, p.n, &pr), VX_LOAD_OK);
+        if (pr.nfns == 1) {
+            const vx_node *nd = &pr.fns[0].nodes[1];
+            CHECK(nd->tag == VX_N_HEAP && nd->op == VX_H_ISTAG && nd->d == 2 && nd->b == 1);
+            CHECK((uint64_t)nd->a + 8 <= pr.nbytes);
+            if ((uint64_t)nd->a + 8 <= pr.nbytes) {
+                CHECK(pr.bytes[nd->a] == 3 && pr.bytes[nd->a + 4] == 4 && pr.bytes[nd->a + 7] == 1);
+            }
+            CHECK(pr.args[nd->c] == 0);
+        }
+        vx_free_program(&pr);
+        free(p.b);
+        memset(&p, 0, sizeof p);
+    }
+    /* isTag: the tag list may be empty; it is bounded and must be complete */
+    a = n_int(&f, 1);
+    n_istag(&f, 0, NULL, a);
+    CHECK_EQ(load_one(&f, 0, 0, 1), VX_LOAD_OK);
+    tn_begin(&f, VX_N_HEAP);
+    tb_u8(&f.nodes, VX_H_ISTAG);
+    tb_u32(&f.nodes, VX_MAX_TAGS + 1);
+    CHECK_EQ(load_one(&f, 0, 0, 0), VX_LOAD_LIMIT);
+    tn_begin(&f, VX_N_HEAP);
+    tb_u8(&f.nodes, VX_H_ISTAG);
+    tb_u32(&f.nodes, 1000);
+    tb_u32(&f.nodes, 5);
+    CHECK_EQ(load_one(&f, 0, 0, 0), VX_LOAD_TRUNCATED);
     n_int(&f, INT64_MIN);
     CHECK_EQ(load_one(&f, 0, 0, 0), VX_LOAD_OK);
     n_str(&f, "");

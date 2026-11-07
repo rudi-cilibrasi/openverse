@@ -6,8 +6,8 @@
  *   load.c   the OVBC loader                    (docs/FORMAT.md)
  *
  * Everything here is plain C11 over fixed-width integers, so a QuickProof law
- * (a C harness) can call each function directly.  The interpreter, the heap
- * and the CLI are declared in vx_runtime.h.
+ * (a C harness) can call each function directly.  The interpreter, the
+ * value heap, the object store and the CLI are declared in vx_runtime.h.
  */
 #ifndef OPENVERSE_H
 #define OPENVERSE_H
@@ -104,6 +104,7 @@ int    vx_store_move_out(vx_store *s, uint8_t *out, size_t ocap);
 #define VX_MAX_SLOTS   (1u << 16)  /* nslots of one function               */
 #define VX_MAX_ARGS    (1u << 16)  /* arguments of one PRIM or CALL node   */
 #define VX_MAX_STR     (1u << 24)  /* bytes of one name or string literal  */
+#define VX_MAX_TAGS    (1u << 22)  /* class tags of one isTag (4 bytes each) */
 
 /* Node tags (FORMAT.md table). */
 #define VX_N_LIT     0
@@ -118,7 +119,8 @@ int    vx_store_move_out(vx_store *s, uint8_t *out, size_t ocap);
 #define VX_N_BRK     9
 #define VX_N_RET    10
 #define VX_N_PRINT  11
-#define VX_N_LAST   11
+#define VX_N_HEAP   12
+#define VX_N_LAST   12
 
 /* Literal kinds. */
 #define VX_LIT_INT    0
@@ -127,7 +129,16 @@ int    vx_store_move_out(vx_store *s, uint8_t *out, size_t ocap);
 #define VX_LIT_STR    3
 #define VX_LIT_NONE   4
 #define VX_LIT_VOID   5
-#define VX_LIT_LAST   5
+#define VX_LIT_REF    6
+#define VX_LIT_LAST   6
+
+/* Heap operations (the op of a HEAP node). */
+#define VX_H_NEW    0
+#define VX_H_GET    1
+#define VX_H_SET    2
+#define VX_H_TAG    3
+#define VX_H_ISTAG  4
+#define VX_H_LAST   4
 
 /* Primitive codes. */
 #define VX_P_ADD       0
@@ -165,7 +176,7 @@ int    vx_store_move_out(vx_store *s, uint8_t *out, size_t ocap);
  * One node.  Child indices are into the node table of the same function.
  *
  *   tag     op         a          b          c          d       lit
- *   LIT     lit kind   STR: off   STR: len   -          -       INT/LOGIC/CHAR value
+ *   LIT     lit kind   STR: off   STR: len   -          -       INT/LOGIC/CHAR/REF value
  *   LOCAL   -          slot
  *   ASSIGN  -          slot       e
  *   SEQ     -          a          b
@@ -177,9 +188,12 @@ int    vx_store_move_out(vx_store *s, uint8_t *out, size_t ocap);
  *   BRK     -
  *   RET     -          e
  *   PRINT   -          e
+ *   HEAP    heap op    k          n          args off   -
+ *   HEAP    ISTAG      tags off   n          args off   m
  *
- * "args off" indexes vx_program.args (n child indices); "STR: off" indexes
- * vx_program.bytes.  Unused fields are 0.
+ * "args off" indexes vx_program.args (n child indices); "STR: off" and
+ * "tags off" index vx_program.bytes (an ISTAG's m class tags are 4m bytes
+ * there, each a little-endian u32).  Unused fields are 0.
  */
 typedef struct vx_node {
     uint32_t tag;
@@ -223,15 +237,17 @@ typedef struct vx_program {
 #define VX_LOAD_SLOT       10  /* a slot is >= nslots                      */
 #define VX_LOAD_CALL       11  /* a CALL names a function >= nfns          */
 #define VX_LOAD_CALLARITY  12  /* a CALL's n differs from the callee arity */
-#define VX_LOAD_TAG        13  /* node tag > 11                            */
+#define VX_LOAD_TAG        13  /* node tag > 12                            */
 #define VX_LOAD_PRIM       14  /* prim code > 28                           */
-#define VX_LOAD_K          15  /* k != 0 on a prim other than tupGet       */
-#define VX_LOAD_LIT        16  /* literal kind > 5                         */
+#define VX_LOAD_K          15  /* k != 0 on a prim other than tupGet, or on
+                                  the heap op tag                          */
+#define VX_LOAD_LIT        16  /* literal kind > 6                         */
 #define VX_LOAD_LOGIC      17  /* LOGIC byte > 1                           */
 #define VX_LOAD_TRAILING   18  /* bytes left after the last function      */
 #define VX_LOAD_LIMIT      19  /* a count exceeds a VX_MAX_* limit         */
 #define VX_LOAD_NOMEM      20  /* malloc failed                            */
-#define VX_LOAD_LAST       20
+#define VX_LOAD_HEAP       21  /* heap op > 4                              */
+#define VX_LOAD_LAST       21
 
 /* Parse and check buf[0..len).  Reads only inside the buffer.  On
  * VX_LOAD_OK, *out owns a program satisfying FORMAT.md conditions 1-7;

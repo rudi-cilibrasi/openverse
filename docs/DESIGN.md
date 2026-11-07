@@ -240,6 +240,31 @@ suite, on thousands of random Core programs that exercise every node and
 every outcome kind (`OpenVerse/Core/Gen.lean`), and on front-end mutants. It
 also runs under ASan/UBSan.
 
+## Objects in the C runtime
+
+The C runtime keeps two heaps. The value heap (`value.c`) holds arrays,
+tuples and options. They are immutable, so a call's garbage is freed when it
+returns, except what its result reaches. The object store (`objects.c`)
+holds class instances, which are mutable and outlive calls. It is `Glob.heap`
+of the Lean state: objects are appended, never moved or freed, and a REF is
+an object's index, the address Lean gives it. A failure context marks the
+object store along with the slots and the output. Rollback undoes the field
+writes logged since the mark and drops the newer objects, so the next object
+gets the same index as in Lean.
+
+The two heaps meet when an object field holds an array. A callee can store a
+fresh array in an older object, and then its result no longer reaches
+everything that must survive. So storing a value-heap reference in a field
+raises a watermark, `pin`, to the value heap's length, and a call frees only
+the cells above both its own mark and `pin`. This is conservative, but
+nothing below `pin` ever moves. The cost is the garbage a call made before
+its last field write, which is then kept until the run ends. Like any
+call-scoped reclamation, replacing a field's array over and over keeps
+every old copy (as a loop that replaces a local's array already does), so
+memory can run out where Lean, which has no limit, would finish. The object store is unproved, like the
+value heap, and kept out of the proved `store.c`, whose law
+(`store_rollback_model`) is unchanged.
+
 ## Readings of the Book
 
 Where the Book of Verse is silent or contradicts itself, openverse takes

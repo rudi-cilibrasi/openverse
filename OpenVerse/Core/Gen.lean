@@ -51,7 +51,7 @@ partial def genInt (env : Env) (d : Nat) : G Expr := do
   if d == 0 then
     if env.slots > 0 && (← chance 50) then return .local (← below env.slots)
     return .lit (.int (← smallInt))
-  match ← below 20 with
+  match ← below 23 with
   | 0 | 1 => return .lit (.int (← smallInt))
   | 2 | 3 => if env.slots > 0 then return .local (← below env.slots) else genInt env 0
   | 4 => return p (← pick [.add, .sub, .mul]) [← genInt env (d-1), ← genInt env (d-1)]
@@ -76,17 +76,58 @@ partial def genInt (env : Env) (d : Nat) : G Expr := do
   | 16 => return p .query [p .mkSome [← genInt env (d-1)]]
   | 17 => return p (← pick [.lt, .le, .gt, .ge, .eq, .ne]) [← genInt env (d-1), ← genInt env (d-1)]
   | 18 => return .ite (← genCond env (d-1)) (← genInt env (d-1)) (.ret (← genInt env (d-1)))
+  | 19 | 20 | 21 =>
+    -- the heap (#31): a field, a field write, or a class tag
+    match ← below 7 with
+    | 0 | 1 => return .heap (.get (← below 2)) [← genRef env (d-1)]
+    | 2 | 3 => return .heap (.set (← below 2)) [← genRef env (d-1), ← genInt env (d-1)]
+    -- a field holding an array (values of the value heap in objects)
+    | 4 => return p .len [.heap (.get (← below 2)) [← genRef env (d-1)]]
+    | 5 => return p .index [.heap (.get (← below 2)) [← genRef env (d-1)], ← genInt env (d-1)]
+    | _ => return .heap .tag [← genRef env (d-1)]
   | _ => if (← chance 15) then genIllTyped env (d-1) else return .lit (.int (← smallInt))
+
+/-- A reference (often): a new object of class 0–2 with 0–3 int fields, a
+    slot (which may hold one), a cast, or a reference literal (which may
+    dangle). -/
+partial def genRef (env : Env) (d : Nat) : G Expr := do
+  match ← below 8 with
+  | 0 | 1 | 2 =>
+    let many ← chance 85
+    let k ← below 2
+    let n := if many then 2 + k else k
+    let mut es := #[]
+    for _ in [0:n] do
+      let d' := if d == 0 then 0 else d-1
+      es := es.push (← if (← chance 25) then genArr env d' else genInt env d')
+    return .heap (.new (← below 3)) es.toList
+  | 3 | 4 | 5 => if env.slots > 0 then return .local (← below env.slots) else genRef env 0
+  | 6 => if d == 0 then genRef env 0 else return .heap (.isTag (← genTags)) [← genRef env (d-1)]
+  | _ => return .lit (.ref (← below 4))
+
+/-- A set of class tags, for a cast. -/
+partial def genTags : G (List Nat) := do
+  match ← below 4 with
+  | 0 => return []
+  | 1 => return [← below 3]
+  | 2 => return [← below 3, ← below 3]
+  | _ => return [0, 1, 2]
 
 /-- A failable condition. -/
 partial def genCond (env : Env) (d : Nat) : G Expr := do
   if d == 0 then return p .lt [← genInt env 0, ← genInt env 0]
-  match ← below 8 with
+  match ← below 10 with
   | 0 | 1 | 2 => return p (← pick [.lt, .le, .gt, .ge, .eq, .ne]) [← genInt env (d-1), ← genInt env (d-1)]
   | 3 => return .seq (← genStmt env (d-1)) (← genCond env (d-1))
   | 4 => return .ite (← genCond env (d-1)) (p .fail []) (.lit .void)  -- `not`
   | 5 => return p .query [.lit (.logic (← chance 50))]
   | 6 => return p .index [← genArr env (d-1), ← genInt env (d-1)]
+  | 7 =>
+    -- a cast, or a field write then a cast: rolled back when it fails
+    if (← chance 50) then return .heap (.isTag (← genTags)) [← genRef env (d-1)]
+    return .seq (.heap (.set (← below 2)) [← genRef env (d-1), ← genInt env (d-1)])
+      (.heap (.isTag (← genTags)) [← genRef env (d-1)])
+  | 8 => return p .eq [← genRef env (d-1), ← genRef env (d-1)]
   | _ => return .seq (← genCond env (d-1)) (← genCond env (d-1))
 
 /-- An int array. -/
@@ -99,7 +140,9 @@ partial def genArr (env : Env) (d : Nat) : G Expr := do
     let mut es := #[]
     for _ in [0:n] do es := es.push (← genInt env (d-1))
     return p .mkArr es.toList
-  | 2 => return p .concat [← genArr env (d-1), ← genArr env (d-1)]
+  | 2 =>
+    if (← chance 30) then return .heap (.get (← below 2)) [← genRef env (d-1)]
+    return p .concat [← genArr env (d-1), ← genArr env (d-1)]
   | 3 | 4 =>
     if env.slots > 0 then
       return .forE (← below env.slots) (← genArr env (d-1)) (← genCond env (d-1)) (← genInt env (d-1))
@@ -109,7 +152,7 @@ partial def genArr (env : Env) (d : Nat) : G Expr := do
 /-- A statement (its value is not interesting). -/
 partial def genStmt (env : Env) (d : Nat) : G Expr := do
   if d == 0 then return .print (p .toStr [← genInt env 0])
-  match ← below 11 with
+  match ← below 13 with
   | 0 | 1 | 2 => return .print (p .toStr [← genInt env (d-1)])
   | 3 => return .print (p .concat [.lit (Value.ofString "s:"), p .toStr [← genInt env (d-1)]])
   | 4 =>
@@ -131,6 +174,12 @@ partial def genStmt (env : Env) (d : Nat) : G Expr := do
         (.seq (.assign c (p .add [.local c, .lit (.int 1)])) (.seq body brkE))))
   | 8 => return .seq (← genStmt env (d-1)) (← genStmt env (d-1))
   | 9 => if (← chance 30) then return .brk else return .ret (← genInt env (d-1))
+  | 10 =>
+    -- keep a reference in a slot, so later code reads and writes its object
+    if env.slots > 0 then return .assign (← below env.slots) (← genRef env (d-1)) else genStmt env 0
+  | 11 =>
+    -- store a fresh array in a field (maybe of an object the caller passed)
+    return .heap (.set (← below 2)) [← genRef env (d-1), ← genArr env (d-1)]
   | _ => return .print (.lit (Value.ofString (← pick ["a", "", "rolled?", "x y"])))
 
 /-- A primitive applied to values of the wrong shape (a type error), or a
@@ -161,9 +210,12 @@ def program (seed : Nat) : Prog := Id.run do
                          nextCounter := slots }
       let body ← genStmt env 4
       let tail ← genInt env 2
-      -- start the non-parameter slots as ints (they begin as `void`)
-      let init := (List.range extra).foldr (fun k e => Expr.seq (.assign (arity + k) (.lit (.int k))) e)
-        (.lit .void)
+      -- start the non-parameter slots as ints or objects (they begin as `void`)
+      let mut init := Expr.lit .void
+      for k in (List.range extra).reverse do
+        let v ← if (← chance 35) then pure (Expr.heap (.new (← below 3)) [.lit (.int k), .lit (.int (k + 1))])
+          else pure (.lit (.int k))
+        init := .seq (.assign (arity + k) v) init
       -- at most 12 nested loops per function: reserve that many counter slots
       fns := fns.push { name := s!"f{i}", arity, nslots := slots + 12, decides := ← chance 30,
                         body := .seq init (.seq body tail) }
