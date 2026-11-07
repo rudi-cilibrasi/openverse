@@ -312,14 +312,35 @@ gets the same index as in Lean.
 
 The two heaps meet when an object field holds an array. A callee can store a
 fresh array in an older object, and then its result no longer reaches
-everything that must survive. So storing a value-heap reference in a field
-raises a watermark, `pin`, to the value heap's length, and a call frees only
-the cells above both its own mark and `pin`. This is conservative, but
-nothing below `pin` ever moves. The cost is the garbage a call made before
-its last field write, which is then kept until the run ends. Like any
-call-scoped reclamation, replacing a field's array over and over keeps
-every old copy (as a loop that replaces a local's array already does), so
-memory can run out where Lean, which has no limit, would finish. The object store is unproved, like the
+everything that must survive. So an object cell that holds a value-heap
+reference has one entry, in the list of an active call at least as deep as
+the call whose region holds the value (`vx_objs_remember`; the owner is the
+deepest call whose heap mark is at most the reference, and a value older
+than every call needs none). When a call returns, its compaction takes as
+roots its result and the cells in its list, updates them, and hands the list
+to its caller: the values it keeps now lie in the caller's region (#50).
+The lists are buffers from a pool, and on a return the smaller of the
+callee's and the caller's moves into the larger, which then serves the
+caller, so an entry moves O(log n) times. A call also skips its compaction
+when its region is less than twice the largest block a callee's compaction
+kept for fields (`dmax`, counted while marking from the fields before the
+result). Objects are never reclaimed, so such a block stays live until a
+field that held it changes or a rollback restores fields or drops objects,
+and each of those zeroes the block of the call whose region it is in. A block
+only a result kept does not count, since a caller may drop it. Skipping keeps
+more, never less, and what it keeps is mostly live; it is what keeps the work
+linear, since a recursion building a linked structure would otherwise
+re-compact all its survivors at every level. A compaction scans its list,
+whose entries the writes during the call made. An
+entry leaves only when its cell no longer holds a reference and no failure
+context is open, or when a rollback drops its object: what a rollback
+restores was written before its context, so its entry is in a list at least
+as deep as its owner. Old values in the field log need no root, since what
+a rollback finally restores predates the context. As with any call-scoped
+reclamation, a field's array replaced over and over keeps every old copy in
+the caller's region until the caller returns (as a loop that replaces a
+local's array already does), so memory can run out where Lean, which has no
+limit, would finish. The object store is unproved, like the
 value heap, and kept out of the proved `store.c`, whose law
 (`store_rollback_model`) is unchanged.
 
