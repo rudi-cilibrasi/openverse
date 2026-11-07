@@ -186,8 +186,12 @@ def tcPrim : Prim → List Expr → Option VTy → Option VTy
     | some .int => if (tc b (some .int)).isSome then expect m .int else none
     | some .char => if (tc b (some .char)).isSome then expect m .char else none
     | _ => none
+  -- the right operand is checked against the left's type first, so that
+  -- `O = false` and `E = array{}` type-check (`PrimTy.eq` allows any types)
   | .eq, [a, b], m | .ne, [a, b], m => match tc a m with
-    | some ta => if (tc b none).isSome || (tc b (some VTy.void)).isSome then some ta else none
+    | some ta =>
+      if (tc b (some ta)).isSome || (tc b none).isSome || (tc b (some VTy.void)).isSome then some ta
+      else none
     | none => none
   | .query, [a], none => match tc a none with
     | some .logic => some .logic
@@ -388,7 +392,13 @@ theorem tcPrim_sound_of {op : Prim} {es : List Expr} {m τ} (ih : ∀ e ∈ es, 
         split at h
         · next hb =>
           simp only [Option.some.injEq] at h; subst h
-          obtain ⟨σ, hσ⟩ := wt (by simp) hb
+          have hb' : ∃ σ, Typed S Γ ρ b σ := by
+            simp only [Bool.or_eq_true] at hb
+            rcases hb with (hb | hb) | hb
+            · exact ⟨_, chk (by simp) hb⟩
+            · exact wt (by simp) (by simp [hb])
+            · exact wt (by simp) (by simp [hb])
+          obtain ⟨σ, hσ⟩ := hb'
           obtain ⟨hta, hm⟩ := ih a (by simp) _ _ ha
           first
           | exact ⟨.prim (.cons hta (.cons hσ .nil)) .eq, hm⟩
