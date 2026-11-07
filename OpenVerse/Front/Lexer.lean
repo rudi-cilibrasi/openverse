@@ -333,7 +333,7 @@ partial def lexAll (acc : Array Token) : LexM (Array Token) := do
           | none => lexErr "bad escape in char literal"
         | some ch => do
           if ch.toNat ≥ 128 then
-            lexErr s!"a char literal must be ASCII: write {uPlus ch.toNat} as the char32 literal 0u{(Nat.toDigits 16 ch.toNat).asString.toUpper}"
+            lexErr s!"a char literal must be ASCII: write {uPlus ch.toNat} as the char32 literal 0u{(String.ofList (Nat.toDigits 16 ch.toNat)).toUpper}"
           if ch.toNat < 0x20 || ch.toNat == 0x7F then
             let hint := if ch == '\t' then " (write '\\t' for a tab)" else ""
             lexErr s!"a char literal must be a printable ASCII character or an escape, not {uPlus ch.toNat}{hint}"
