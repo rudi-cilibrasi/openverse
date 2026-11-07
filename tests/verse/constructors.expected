@@ -1,0 +1,19 @@
+entity block
+e 3
+entity block
+c 4 400
+making pq
+entity block
+pq 2 200 5
+entity block
+valid 7
+invalid
+entity block
+anon 9
+node 3
+node 2
+node 1
+node 0
+entity block
+t
+exit=0
