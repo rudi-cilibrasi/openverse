@@ -81,6 +81,8 @@ static inline vx_val *vx_obj_elems(const vx_heap *h, size_t o)
  * sliding the survivors down (root is updated).  Used when a call returns:
  * nothing else can refer to the callee's cells (see interp.c). */
 int  vx_heap_keep(vx_heap *h, size_t mark, vx_val *root);   /* VX_OK | VX_EFULL */
+/* The same with several roots (each updated). */
+int  vx_heap_keep_roots(vx_heap *h, size_t mark, vx_val **roots, size_t n);   /* VX_OK | VX_EFULL */
 /* Structural equality, `decide (a = b)` (iterative). */
 int  vx_equal(const vx_heap *h, const vx_val *a, const vx_val *b, int *eq);
 
@@ -103,10 +105,16 @@ typedef struct vx_oundo {
     vx_val old;
 } vx_oundo;
 
+/* The remembered fields (#50): cells written with a value-heap reference,
+ * newest last, so that a call returning reclaims its cells except those a
+ * field written during it refers to (the entries from the call's start
+ * on).  rpos[cell] is 1 + the position of the cell's newest entry, or 0. */
 typedef struct vx_objs {
     vx_obj   *objs;   size_t nobjs;  size_t ocap;
     vx_val   *cells;  size_t ncells; size_t ccap;
     vx_oundo *log;    size_t nlog;   size_t lcap;
+    size_t   *rem;    size_t nrem;   size_t rcap;
+    size_t   *rpos;   size_t pcap;
     size_t    max;    /* objects + cells allowed */
     size_t    max_log;
 } vx_objs;
@@ -115,6 +123,7 @@ typedef struct vx_objmark {
     size_t nobjs;
     size_t ncells;
     size_t nlog;
+    size_t nrem;
 } vx_objmark;
 
 void vx_objs_init(vx_objs *h, size_t max, size_t max_log);
@@ -133,6 +142,9 @@ void vx_objs_mark(const vx_objs *h, vx_objmark *m);
 void vx_objs_rollback(vx_objs *h, const vx_objmark *m);
 /* Drop the log (when the outermost failure context is left). */
 void vx_objs_forget(vx_objs *h);
+/* Remember that `cell` now holds a value-heap reference: an entry at or
+   after position `seg0` (the current call's first). */
+int  vx_objs_remember(vx_objs *h, size_t cell, size_t seg0);   /* OK | EFULL */
 
 /* ------------------------------------------------------------------------
  * Outcomes (Res of Value.lean, plus LIMIT for Lean's `none` and for the C
@@ -203,8 +215,7 @@ typedef struct vx_ctx {
     vx_store  st;          /* slots of every live frame, journal, output */
     vx_heap   heap;
     vx_objs   objs;        /* class instances (Glob.heap)                */
-    size_t    pin;         /* heap cells below this may be reachable from
-                              an object field: never freed or moved      */
+    size_t    remseg;      /* the current call's first remembered field  */
     size_t    top;         /* slots in use; the current frame ends here  */
     vx_val   *vs;          /* value stack: temporaries                   */
     size_t    vsp;

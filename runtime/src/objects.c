@@ -24,6 +24,8 @@ void vx_objs_free(vx_objs *h)
     free(h->objs);
     free(h->cells);
     free(h->log);
+    free(h->rem);
+    free(h->rpos);
     memset(h, 0, sizeof *h);
 }
 
@@ -85,6 +87,7 @@ void vx_objs_mark(const vx_objs *h, vx_objmark *m)
     m->nobjs = h->nobjs;
     m->ncells = h->ncells;
     m->nlog = h->nlog;
+    m->nrem = h->nrem;
 }
 
 void vx_objs_rollback(vx_objs *h, const vx_objmark *m)
@@ -93,8 +96,35 @@ void vx_objs_rollback(vx_objs *h, const vx_objmark *m)
         h->nlog = h->nlog - 1;
         h->cells[h->log[h->nlog].cell] = h->log[h->nlog].old;
     }
+    /* the entries made in the context go: a value rollback restores was
+       written before it, and its entry is older */
+    while (h->nrem > m->nrem) {
+        size_t cell;
+        h->nrem = h->nrem - 1;
+        cell = h->rem[h->nrem];
+        if (cell < h->pcap && h->rpos[cell] == h->nrem + 1)
+            h->rpos[cell] = 0;
+    }
     h->nobjs = m->nobjs;
     h->ncells = m->ncells;
+}
+
+int vx_objs_remember(vx_objs *h, size_t cell, size_t seg0)
+{
+    if (cell >= h->pcap) {
+        size_t old = h->pcap;
+        if (!reserve((void **)&h->rpos, &h->pcap, cell + 1, sizeof(size_t), h->max))
+            return VX_EFULL;
+        memset(&h->rpos[old], 0, (h->pcap - old) * sizeof(size_t));
+    }
+    if (h->rpos[cell] != 0 && h->rpos[cell] - 1 >= seg0)
+        return VX_OK;   /* already in this call's entries */
+    if (!reserve((void **)&h->rem, &h->rcap, h->nrem + 1, sizeof(size_t), h->max))
+        return VX_EFULL;
+    h->rem[h->nrem] = cell;
+    h->nrem = h->nrem + 1;
+    h->rpos[cell] = h->nrem;
+    return VX_OK;
 }
 
 void vx_objs_forget(vx_objs *h)

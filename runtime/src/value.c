@@ -90,26 +90,34 @@ static int ix_push(idxstack *s, size_t x)
 }
 
 /*
- * Sliding compaction of [mark, len): mark what *root reaches inside the
+ * Sliding compaction of [mark, len): mark what the roots reach inside the
  * region, give each marked object its new index (header.bits), redirect the
- * references, then slide the objects down in order.  Objects below mark
- * never refer into the region (they are older and immutable), and the
- * interpreter guarantees nothing else does when it calls this (interp.c,
- * call_fn), so everything unmarked is garbage.
+ * references (the roots' too), then slide the objects down in order.
+ * Objects below mark never refer into the region (they are older and
+ * immutable), and the interpreter passes as roots everything else that may
+ * (interp.c, call_fn), so everything unmarked is garbage.
  */
-int vx_heap_keep(vx_heap *h, size_t mark, vx_val *root)
+int vx_heap_keep_roots(vx_heap *h, size_t mark, vx_val **roots, size_t nr)
 {
     idxstack st = { NULL, 0, 0 };
     vx_val *cells = h->cells;
-    size_t o, n, k, dst;
+    size_t o, n, k, dst, i;
+    int any = 0;
 
-    if (!vx_isref(root) || root->bits < mark) {
+    for (i = 0; i < nr; i++)
+        if (vx_isref(roots[i]) && roots[i]->bits >= mark)
+            any = 1;
+    if (!any) {
         h->len = mark;
         return VX_OK;
     }
-    /* 1. mark */
-    if (!ix_push(&st, (size_t)root->bits))
-        return VX_EFULL;
+    /* 1. mark, from every root in the region */
+    for (i = 0; i < nr; i++) {
+        if (vx_isref(roots[i]) && roots[i]->bits >= mark && !ix_push(&st, (size_t)roots[i]->bits)) {
+            free(st.a);
+            return VX_EFULL;
+        }
+    }
     while (st.n > 0) {
         o = st.a[--st.n];
         if (cells[o].bits != 0)
@@ -139,7 +147,7 @@ int vx_heap_keep(vx_heap *h, size_t mark, vx_val *root)
             dst += 1 + n;
         }
     }
-    /* 3. redirect references into the region */
+    /* 3. redirect references into the region, the roots' too */
     for (o = mark; o < h->len; o += 1 + n) {
         n = (size_t)cells[o].tag;
         if (cells[o].bits != 0) {
@@ -150,7 +158,9 @@ int vx_heap_keep(vx_heap *h, size_t mark, vx_val *root)
             }
         }
     }
-    root->bits = cells[root->bits].bits;
+    for (i = 0; i < nr; i++)
+        if (vx_isref(roots[i]) && roots[i]->bits >= mark)
+            roots[i]->bits = cells[roots[i]->bits].bits;
     /* 4. slide down, in index order (destination <= source) */
     for (o = mark; o < h->len; o += 1 + n) {
         size_t to;
@@ -163,6 +173,11 @@ int vx_heap_keep(vx_heap *h, size_t mark, vx_val *root)
     }
     h->len = dst;
     return VX_OK;
+}
+
+int vx_heap_keep(vx_heap *h, size_t mark, vx_val *root)
+{
+    return vx_heap_keep_roots(h, mark, &root, 1);
 }
 
 /* -------------------------------------------------------------- equality */
