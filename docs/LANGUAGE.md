@@ -272,8 +272,9 @@ circle := class(shape, labelled):
 - **`block:`.** A class's `block:` clauses run when an instance is
   constructed, after its fields are given, those of the classes above it
   first, each class's in order; they see the fields by name, as a method
-  does, and their effects are those of their code. Interfaces and
-  parametric classes have none.
+  does, and their effects are those of their code (a parametric class's
+  are taken to be all of them: they are not inferred yet). Interfaces have
+  none.
 - **`<unique>`.** A `<unique>` class (and every class below it) is
   comparable: `=` and `<>` test identity, so two instances with equal
   fields differ, and an alias equals its original.
@@ -283,8 +284,7 @@ circle := class(shape, labelled):
   - constructor functions;
   - a subclass with type parameters of its own (`pair(t, u) :=
     class(base(t))`), overrides in a subclass that fixes its parent's type
-    arguments, parametric classes with interfaces, and `block:` in a
-    parametric class;
+    arguments, and parametric classes with interfaces;
   - `set` of an interface field that sits at different places in the
     classes implementing the interface (reading it works);
   - overriding a method with its own type parameters;

@@ -1943,7 +1943,16 @@ partial def elabConstruct (ctx : Ctx) (p : Pos) (name : String) (targs : List ST
       let mut calls : List Expr := []
       for (d, s) in blocks do
         noteFx p s.fx (some s!"constructs {name}, whose block: (in {d})")
-        calls := calls ++ [.call s.idx [.local x]]
+        if s.tparams.isEmpty then
+          calls := calls ++ [.call s.idx [.local x]]
+        else
+          -- a parametric class's `block:` is generic (#39): called as a
+          -- method, on the new object at its type arguments as a `d`
+          let self := s!"$new{x}"
+          let dty := Ty.struct d (ctx.types.upArgs name tas d)
+          let ctx' := { ctx with locals := { name := self, slot := x, ty := dty, mutable := false } :: ctx.locals }
+          let rc ← elabApp ctx' p (.ident p s!"{d}.$block") [.ident p self] false none
+          calls := calls ++ [rc.e]
       return ⟨.seq (.assign x (.heap (.new (ctx.types.tagOf name)) es)) (calls.foldr .seq (.local x)), ty⟩
     let x ← fresh ty
     return ⟨.assign x (classWrap ctx.types name name (.prim .mkTup es)), ty⟩
@@ -2255,8 +2264,6 @@ def elabProgram (allTops00 : List STop) (opts : Options := {}) : Except String C
             throw s!"{mp.show}: parameter '{prm.name}' of {mn} is already a field or method of {n}; Verse does not allow shadowing"
         -- a class's `block:` clauses: run at construction, after those of the
         -- classes above it, so never overridden
-        if mn == "$block" && !cd.tps.isEmpty then
-          throw s!"{mp.show}: the parametric class {n} cannot have a block: clause (it is a value, #34)"
         -- overriding (Book of Verse ch. 10: `M<override>`, the same signature)
         let isOverride := effs.contains "override"
         match if mn == "$block" then [] else ((henv.supers n).drop 1).filter (declares · mn) with
