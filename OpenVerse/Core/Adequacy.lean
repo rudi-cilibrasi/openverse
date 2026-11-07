@@ -66,8 +66,10 @@ theorem eval_sound {P : Prog} : ∀ (n : Nat) {s e r s'},
     | prim op es =>
       simp only [eval] at h
       rcases bindL_some h with ⟨vs, s₁, hx, hk⟩ | ⟨r₁, s₁, hx, hy⟩
-      · simp only [Option.some.injEq, Prod.mk.injEq] at hk; obtain ⟨rfl, rfl⟩ := hk
-        exact .prim_ok (evalList_sound n hx)
+      · split at hk
+        · simp at hk
+        · simp only [Option.some.injEq, Prod.mk.injEq] at hk; obtain ⟨rfl, rfl⟩ := hk
+          exact .prim_ok (evalList_sound n hx)
       · simp only [Prod.mk.injEq] at hy; obtain ⟨rfl, rfl⟩ := hy
         exact .prim_stop (evalList_sound n hx)
     | heap op es =>
@@ -239,11 +241,13 @@ theorem eval_complete {P : Prog} : ∀ {s e r s'}, Eval P s e r s' →
       exact ⟨n+1, fun m hm => by
         obtain ⟨k, rfl, hk⟩ := succ_above hm
         simp only [eval, H k hk, bindR_stop hr]⟩
-  | _, _, _, _, .prim_ok h => by
+  | _, _, _, _, .prim_ok (op := op) (vs := vs) h => by
       obtain ⟨n, H⟩ := evalList_complete h
-      exact ⟨n+1, fun m hm => by
+      exact ⟨max n (op.cost vs) + 1, fun m hm => by
         obtain ⟨k, rfl, hk⟩ := succ_above hm
-        simp only [eval, H k hk, bindL]⟩
+        have h1 : n ≤ k := Nat.le_trans (Nat.le_max_left _ _) hk
+        have h2 : ¬ k < op.cost vs := Nat.not_lt.mpr (Nat.le_trans (Nat.le_max_right _ _) hk)
+        simp only [eval, H k h1, bindL, h2, ite_false]⟩
   | _, _, _, _, .prim_stop h => by
       obtain ⟨n, H⟩ := evalList_complete h
       exact ⟨n+1, fun m hm => by

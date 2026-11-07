@@ -842,6 +842,8 @@ theorem DefaultE.eval_ok {P : Prog} {S : Sigs} (hS : S.ClosedProtos) {a : Nat} {
     · obtain ⟨vs', s1', Ξ1, hvs, hfr, hH1, hx1, ht⟩ := DefaultEL.eval_ok hS n hds hp hH hx
       simp only [Option.some.injEq, Prod.mk.injEq, LRes.ok.injEq] at hvs
       obtain ⟨rfl, rfl⟩ := hvs
+      split at hk
+      · simp at hk
       simp only [Option.some.injEq] at hk
       exact ⟨_, s1, Ξ1, by rw [← hk]; rfl, hfr, hH1, hx1, by simpa [hasTy] using ht⟩
     · obtain ⟨vs', s1', Ξ1, hvs, -⟩ := DefaultEL.eval_ok hS n hds hp hH hx
@@ -1080,7 +1082,9 @@ theorem stepE_rule {P : Prog} {S : Sigs} (hP : ProgTyped P S) (n : Nat)
     | prim hes hp =>
       simp only [eval] at h
       rcases bindL_some h with ⟨vs, s1, hx, hk⟩ | ⟨r1, s1, hx, rfl⟩
-      · simp only [Option.some.injEq] at hk; subst hk
+      · split at hk
+        · simp at hk
+        simp only [Option.some.injEq] at hk; subst hk
         obtain ⟨Ξ1, hf1, hvs, hH1, hp1⟩ := IL _ _ _ _ _ _ hx hes hf hH
         exact ⟨_, hf1, prim_typed hp hvs, hH1, hp1⟩
       · obtain ⟨Ξ1, hf1, ⟨hr1, hok⟩, hH1, hp1⟩ := IL _ _ _ _ _ _ hx hes hf hH
