@@ -146,7 +146,7 @@ def retOf : Res → Res
 
 /-- The bytes printed by `Print(v)`: the string, then a newline. -/
 def printBytes : Value → Option (List Nat)
-  | .arr vs => (asBytes vs).map (· ++ [10])
+  | .arr vs => (asBytes vs.toList).map (· ++ [10])
   | _ => none
 
 mutual
@@ -196,7 +196,7 @@ inductive Eval (P : Prog) : St → Expr → Res → St → Prop
       Eval P s c r s₁ → r.isOk = false → r ≠ .fail →
       Eval P s (.ite c t e) r s₁
   | for_ok {s s₁ s₂ i it filt body vs r} :
-      Eval P s it (.ok (.arr vs)) s₁ → EvalFor P i filt body s₁ vs [] r s₂ →
+      Eval P s it (.ok (.arr vs)) s₁ → EvalFor P i filt body s₁ vs.toList [] r s₂ →
       Eval P s (.forE i it filt body) r s₂
   | for_type {s s₁ i it filt body v} :
       Eval P s it (.ok v) s₁ → (∀ vs, v ≠ .arr vs) →
@@ -253,7 +253,7 @@ inductive EvalList (P : Prog) : St → List Expr → LRes → St → Prop
     elements still to visit and the results so far (in reverse). -/
 inductive EvalFor (P : Prog) : Nat → Expr → Expr → St → List Value → List Value → Res → St → Prop
   | done {i filt body s acc} :
-      EvalFor P i filt body s [] acc (.ok (.arr acc.reverse)) s
+      EvalFor P i filt body s [] acc (.ok (.arr acc.reverse.toArray)) s
   | bad_slot {i filt body s v vs acc} :
       writeSlot s i v = none →
       EvalFor P i filt body s (v :: vs) acc (.err .slot) s

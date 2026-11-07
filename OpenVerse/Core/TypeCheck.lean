@@ -27,8 +27,8 @@ def litTy : Value → Option VTy
   | .int _ => some .int
   | .logic _ => some .logic
   | .char c => if c < 256 then some .char else none
-  | .arr [] => none
-  | .arr (v :: vs) => match litTy v with
+  | .arr ⟨[]⟩ => none
+  | .arr ⟨v :: vs⟩ => match litTy v with
     | some t => if allTy [] vs t then some (.arr t) else none
     | none => none
   | .tup vs => (litTys vs).map .tup
@@ -51,8 +51,8 @@ theorem litTy_sound : ∀ {v : Value} {t : VTy}, litTy v = some t → hasTy [] v
     simp only [litTy] at h; split at h
     · simp only [Option.some.injEq] at h; subst h; simp [hasTy, *]
     · simp at h
-  | .arr [], _, h => by simp [litTy] at h
-  | .arr (v :: vs), t, h => by
+  | .arr ⟨[]⟩, _, h => by simp [litTy] at h
+  | .arr ⟨v :: vs⟩, t, h => by
     simp only [litTy] at h
     split at h
     · next t' hv =>

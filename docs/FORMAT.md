@@ -50,7 +50,7 @@ Lit := 0 INT  i:i64
 A literal that is not one of these (a non-string array, a non-empty tuple,
 `some v`) is encoded as the `PRIM` node that builds it (`mkArr`, `mkTup`,
 `mkSome`) applied to literal children. That evaluates to the same value
-(`Prim.apply .mkArr vs = .ok (.arr vs)`), and it keeps every node flat, so the
+(`Prim.apply .mkArr vs = .ok (.arr vs.toArray)`), and it keeps every node flat, so the
 loader needs no recursion.
 
 ## Primitive codes

@@ -456,7 +456,7 @@ theorem hasTy_logic {v} (h : hasTy Ξ v .logic = true) : ∃ b, v = .logic b := 
   cases v <;> simp_all [hasTy]
 theorem hasTy_char {v} (h : hasTy Ξ v .char = true) : ∃ c, v = .char c ∧ c < 256 := by
   cases v <;> simp_all [hasTy]
-theorem hasTy_arr {v t} (h : hasTy Ξ v (.arr t) = true) : ∃ vs, v = .arr vs ∧ allTy Ξ vs t = true := by
+theorem hasTy_arr {v t} (h : hasTy Ξ v (.arr t) = true) : ∃ vs, v = .arr vs ∧ allTy Ξ vs.toList t = true := by
   cases v <;> simp_all [hasTy]
 theorem hasTy_tup {v ts} (h : hasTy Ξ v (.tup ts) = true) : ∃ vs, v = .tup vs ∧ allTys Ξ vs ts = true := by
   cases v <;> simp_all [hasTy]
@@ -475,7 +475,7 @@ theorem flattenArrs_typed : ∀ {xss : List Value} {t}, allTy Ξ xss (.arr t) = 
     simp only [allTy, Bool.and_eq_true] at h
     obtain ⟨xs, rfl, hx⟩ := hasTy_arr h.1
     obtain ⟨vs, hvs, hv⟩ := flattenArrs_typed h.2
-    exact ⟨xs ++ vs, by simp [flattenArrs, hvs], allTy_append hx hv⟩
+    exact ⟨xs.toList ++ vs, by simp [flattenArrs, hvs], allTy_append hx hv⟩
 
 theorem rangeVals_typed (a b : Int) : allTy Ξ (rangeVals a b) .int = true := by
   rw [allTy_iff]; intro v hv
@@ -512,7 +512,7 @@ theorem toStr_typed {v t} (ht : PrimTy .toStr [t] VTy.str) (hv : hasTy Ξ v t = 
     obtain ⟨vs, rfl, hvs⟩ := hasTy_arr hv
     have := asBytes_of_char hvs
     simp only [toStrValue]
-    rcases hb : asBytes vs with _ | bs
+    rcases hb : asBytes vs.toList with _ | bs
     · simp [hb] at this
     · simp [ResOK, hasTy, VTy.str, hvs]
 
@@ -584,7 +584,7 @@ theorem prim_typed {op ts τ ρ} {vs : List Value} (hp : PrimTy op ts τ) (hv : 
       simp only [Prim.apply]
       split
       · split
-        · next v hv' => exact allTy_get hx hv'
+        · next v hv' => exact allTy_get hx (by simpa using hv')
         · simp [ResOK]
       · simp [ResOK]
   | len =>
@@ -1294,7 +1294,7 @@ theorem stepE_rule {P : Prog} {S : Sigs} (hP : ProgTyped P S) (n : Nat)
           exact ⟨_, hf1, hasTy_void, hH1, hp1⟩
         · next hp =>
           simp only [printBytes] at hp
-          rcases hab : asBytes vs with _ | bs
+          rcases hab : asBytes vs.toList with _ | bs
           · simp [hab] at hb
           · simp [hab] at hp
       · obtain ⟨Ξ1, hf1, hr1, hH1, hp1⟩ := IE _ _ _ _ _ _ hx he hf hH

@@ -96,7 +96,7 @@ def default : VTy → Value
   | .int => .int 0
   | .logic => .logic false
   | .char => .char 0
-  | .arr _ => .arr []
+  | .arr _ => .arr #[]
   | .opt _ => .none
   | .tup ts => .tup (defaults ts)
   -- no value has a type variable as its type; slots of such types are
@@ -206,7 +206,7 @@ def hasTy (Ξ : HeapTy) : Value → VTy → Bool
   | .int _, .int => true
   | .logic _, .logic => true
   | .char c, .char => decide (c < 256)
-  | .arr vs, .arr t => allTy Ξ vs t
+  | .arr vs, .arr t => allTy Ξ vs.toList t
   | .tup vs, .tup ts => allTys Ξ vs ts
   | .none, .opt _ => true
   | .some v, .opt t => hasTy Ξ v t
