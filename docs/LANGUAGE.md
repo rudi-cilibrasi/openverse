@@ -17,8 +17,8 @@ surface Verse is elaborated (`OpenVerse/Front/Elab.lean`) into Verse Core
 | Area | Supported | Book |
 |---|---|---|
 | Comments | `#` to the end of the line, nested `<# … #>`, `<#>` indented comments (the rest of the line and every following line indented more than it; see [Source text](#source-text)) | ch. 0 |
-| Literals | `int` (decimal, `0x` hex; must fit in 64 bits), `'c'` `char` (`c` printable ASCII U+0020–U+007E, or an escape), `0oHH` `char` code unit (one or two hex digits, not octal: `0o41` is `'A'`, `0o9` is a tab), strings with escapes and `{expr}` interpolation, `true`, `false` | §1.3–1.7 |
-| Types | `int`, `logic`, `char`, `string` (= `[]char`), `[]t`, `?t`, `tuple(…)`, `void` | ch. 2–3 |
+| Literals | `int` (decimal, `0x` hex; must fit in 64 bits), `'c'` `char` (`c` printable ASCII U+0020–U+007E, or an escape), `0oHH` `char` code unit (one or two hex digits, not octal: `0o41` is `'A'`, `0o9` is a tab), strings with escapes and `{expr}` interpolation, `true`, `false`, `0uHHHHHH` `char32` (a Unicode scalar value, up to `0u10FFFF`, no surrogates; the spec grammar's Char32) | §1.3–1.7 |
+| Types | `int`, `logic`, `char`, `char32`, `string` (= `[]char`), `[]t`, `?t`, `tuple(…)`, `void` | ch. 2–3 |
 | Definitions | top-level functions `F(X:t, …)<effects>:t = body`, top-level constants `C:t = e` / `C := e`; locals `X := e`, `X:t = e`, `var X:t = e`; no shadowing | §3.1–3.4 |
 | Mutation | `set X = e`, `set X += e` (`-=`, `*=`), `set A[i] = e` (fails out of range; returns `e`), and paths `set S.F.G = e`, `set A[i][j] op= e`, `set M[k].F = e`: indices and keys evaluated once, left to right, then the new value, then the variable rebuilt; an index out of range or a missing intermediate key fails, while the last key of a path inserts | §3.3, §3.5, §9.3 |
 | Blocks | indented (`:`), braced (`{ }`), inline (`then`/`do`), `block:`, `( a; b )` sequences | §2.2–2.4 |
@@ -266,6 +266,22 @@ circle := class(shape, labelled):
     or `string`. The expression may fail, which gives exit code 1.
   - A `#!` first line is a `#` comment.
 
+## char32
+
+A `char32` is a Unicode scalar value (spec grammar: Char32, `0u…`
+literals). It is an `int` in Verse Core, so it needs no new value, and the
+proofs and the C runtime are unchanged. `=`, `<>`, `<`, `<=`, `>`, `>=` and
+`case` work on it, and it has no arithmetic. `ToString` and string
+interpolation encode it as UTF-8, its one to four bytes, by code that the
+elaborator generates (Core has no conversion from int to char). `=` and `<>`
+between values of different types that are the same in Core are an error
+(a `char32` or an enum and an `int`, two structs with the same fields, or
+containers of such), since they would compare equal there; so are those
+between two type parameters, or between one and a type with an `int` or a
+tuple, which an instance could make the same. A
+non-ASCII character in quotes is refused, with the `0u` literal to write
+instead: the spec's CharLit is ASCII.
+
 ## Programs of several files
 
 `using{"relative_path"}` (or `import{"relative_path"}`) imports a file or a
@@ -311,7 +327,7 @@ openverse has no module namespaces yet, so the readings are flat:
 ## Not supported in v1
 
 `float` and `rational` values (only `Floor(X/Y)` and `Ceil(X/Y)` of ints),
-`char32`, classes beyond phase 1 (see [Classes](#classes)), interfaces, open enums, struct methods (Verse structs have none; classes do), `ConcatenateMaps`,
+classes beyond phase 1 (see [Classes](#classes)), interfaces, open enums, struct methods (Verse structs have none; classes do), `ConcatenateMaps`,
 `weak_map`, module namespaces (`using{"relative_path"}` imports flatly, see [Programs of several files](#programs-of-several-files)), overloading, defaults that refer to earlier parameters, nested
 functions, `last`, `defer`, refinement types, concurrency (`spawn`, `sync`,
 `race`, `rush`, `branch`, `<suspends>`), `weak_map`, and effect checking for
