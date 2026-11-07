@@ -40,12 +40,14 @@ void vx_objs_free(vx_objs *h)
 /* Room for `need` elements of `size` bytes in *buf (capacity *cap, at most max). */
 /* The per-call arrays (a list and a buffer per active call) grow with the
    recursion depth, which the interpreter bounds itself: not with the heap. */
-#define DEPTH_MAX ((size_t)1 << 40)
+#define DEPTH_MAX ((size_t)(SIZE_MAX < (UINT64_C(1) << 40) ? SIZE_MAX : (UINT64_C(1) << 40)))
 
 static int reserve(void **buf, size_t *cap, size_t need, size_t size, size_t max)
 {
     size_t ncap;
     void *b;
+    if (max > SIZE_MAX / size)
+        max = SIZE_MAX / size;
     if (need <= *cap)
         return 1;
     if (need > max)
