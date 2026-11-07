@@ -88,7 +88,7 @@ def Token.pos (t : Token) : Pos := ⟨t.line, t.col⟩
 
 def keywords : List String :=
   ["if", "then", "else", "for", "do", "loop", "break", "return", "var", "set", "and", "or",
-   "not", "case", "block", "option", "logic", "array", "using", "struct", "enum", "map"]
+   "not", "case", "block", "option", "logic", "array", "using", "struct", "enum", "map", "where"]
 
 def Token.identName? (t : Token) : Option String :=
   match t.tok with
@@ -655,7 +655,7 @@ partial def parseTops : PM (List STop) := do
     if n.isSym "(" then
       bump
       let mut ps := #[]
-      if !(← peekT).isSym ")" then
+      if !(← peekT).isSym ")" && !(← peekT).isKw "where" then
         repeat
           let named := (← peekT).isSym "?"
           if named then bump
@@ -665,13 +665,32 @@ partial def parseTops : PM (List STop) := do
           let dflt ← if (← peekT).isSym "=" then do bump; pure (some (← parseExpr 0)) else pure none
           ps := ps.push { name := pn, ty := pty, named, default := dflt }
           if (← peekT).isSym "," then bump else break
+      -- `where t₁:type, t₂:subtype(comparable)` ends the parameter list
+      let mut tps := #[]
+      if (← peekT).isKw "where" then
+        bump
+        repeat
+          let vt ← peekT
+          let v ← expectIdent
+          expectSym ":"
+          let kt ← peekT
+          let k ← expectIdent
+          let c ← if k == "subtype" then do
+              expectSym "("
+              let a ← expectIdent
+              expectSym ")"
+              pure a
+            else if k == "type" then pure "type"
+            else perr kt s!"expected 'type' or 'subtype(…)' for type parameter {v}, found {kt.tok.describe}"
+          tps := tps.push { pos := vt.pos, name := v, constraint := c }
+          if (← peekT).isSym "," then bump else break
       expectSym ")"
       let effs ← parseSpecs
       expectSym ":"
       let ret ← parseType
       let a ← peekT
       if a.isSym "=" || a.isSym ":=" then bump else perr a "expected '=' before the function body"
-      tops := tops.push (.fn t.pos name ps.toList (pre ++ effs) ret (← parseFnBody))
+      tops := tops.push (.fn t.pos name ps.toList tps.toList (pre ++ effs) ret (← parseFnBody))
     else if n.isSym ":=" then
       bump
       tops := tops.push (.const t.pos name none (← parseFnBody))

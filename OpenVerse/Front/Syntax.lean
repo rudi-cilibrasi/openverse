@@ -96,9 +96,18 @@ structure SParam where
   default : Option SExpr := none
   deriving Repr, Inhabited
 
-/-- A top-level definition. -/
+/-- A type parameter from a `where` clause: `t:type` or `t:subtype(comparable)`. -/
+structure TParam where
+  pos  : Pos
+  name : String
+  /-- The constraint as written: `type`, or the argument of `subtype(…)`. -/
+  constraint : String
+  deriving Repr, Inhabited
+
+/-- A top-level definition. A function's type parameters are those of its
+    `where` clause (`F(X:t where t:type):t`); a function with any is generic. -/
 inductive STop where
-  | fn    : Pos → String → List SParam → List String → STy → SExpr → STop
+  | fn    : Pos → String → List SParam → List TParam → List String → STy → SExpr → STop
   | const : Pos → String → Option STy → SExpr → STop
   deriving Repr, Inhabited
 
