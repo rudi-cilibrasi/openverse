@@ -1507,7 +1507,11 @@ partial def elabApp (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (brack
                 if !(← coercible t u) then ok := false
               else match u.matchArg ctx.types σ t with
                 | some σ' => σ := σ'
-                | none => if !(← coercible t u) then ok := false
+                | none =>
+                  -- (against nothing bound: the pattern cannot take it; a
+                  -- conflict with earlier bindings only may be a subtype the
+                  -- call reconciles, so the candidate stays for the trial)
+                  if (u.matchArg ctx.types [] t).isNone && !(← coercible t u) then ok := false
         if ok then byNat := byNat ++ [o]
       let fits (o : String) : EM Bool := do
         let s := (ctx.sig? o).get!
