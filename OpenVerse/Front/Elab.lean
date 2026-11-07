@@ -2739,11 +2739,11 @@ def expandCtors (ctors : List (Pos × String × List SParam × List TParam × Li
     if intoCycle then throw s!"{p.show}: {k} delegates to {d}, which delegates in a cycle"
   for (p, k, _, _, _, _, items) in ctors do
     let fs := (setBy.lookup k).getD []
-    let mine := (directOf items).map (·.2) ++ (((delegsOf items).head?.bind fun (_, d) => if d == k then none else setBy.lookup d).getD [])
+    let mine := (directOf items).map (·.2) ++ (((delegsOf items).head?.bind fun (_, d) => setBy.lookup d).getD [])
     if let some f := mine.find? fun f => (mine.filter (· == f)).length > 1 then
       throw s!"{p.show}: {k} sets {f} twice: itself, and by delegating"
   for (p, k, _, _, _, c, items) in ctors do
-    let mine := (directOf items).map (·.2) ++ (((delegsOf items).head?.bind fun (_, d) => if d == k then none else setBy.lookup d).getD [])
+    let mine := (directOf items).map (·.2) ++ (((delegsOf items).head?.bind fun (_, d) => setBy.lookup d).getD [])
     if let some (f, _) := (fullOf c).find? fun (f, _, d, _) => d.isNone && !mine.contains f then
       throw s!"{p.show}: {k} does not set {f}, a field of {c} without a default"
   -- the functions
@@ -2787,7 +2787,7 @@ def expandCtors (ctors : List (Pos × String × List SParam × List TParam × Li
       | it => body := body.push (.app p (.ident p "$nofail") [it] false)   -- a `block:` clause
     -- the name's fields this overload does not set (another overload does):
     -- their defaults, as construction would give them
-    let mine := (directOf items).map (·.2) ++ (((delegsOf items).head?.bind fun (_, d) => if d == k then none else setBy.lookup d).getD [])
+    let mine := (directOf items).map (·.2) ++ (((delegsOf items).head?.bind fun (_, d) => setBy.lookup d).getD [])
     for f in fs.filter (!mine.contains ·) do
       if let some (_, _, some d, _) := (fullOf c).find? (·.1 == f) then
         -- (in a function of its own: the default sees no parameter of K)
