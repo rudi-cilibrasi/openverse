@@ -302,9 +302,7 @@ circle := class(shape, labelled):
     below a non-parametric interface (or one that adds type parameters
     below a parametric interface's implementation);
   - overriding a method with its own type parameters;
-  - qualified `(i:)M` implementations;
-  - subtyping through `+` on arrays, through tuples and through maps, and an
-    array literal of different classes without an expected type.
+  - qualified `(i:)M` implementations.
 
 ## From the spec draft: mutation, macros, tooling
 

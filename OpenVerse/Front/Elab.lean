@@ -834,6 +834,9 @@ partial def refUp (env : TyEnv) : Ty → Ty → Bool
   | .struct S as, .struct T bs =>
     env.isRefClass S && env.isRefClass T && env.isSub S T && env.upArgs S as T == bs
   | .arr a, .arr b | .opt a, .opt b => refUp env a b
+  -- tuples pointwise, maps in their values (Core subtyping is covariant there)
+  | .tup as, .tup bs => as.length == bs.length && (as.zip bs).all fun (a, b) => a == b || refUp env a b
+  | .map k a, .map k' b => k == k' && (a == b || refUp env a b)
   | _, _ => false
 
 /-- Convert a value `e` of type `a` to the supertype `b`, when `a` is a class
@@ -878,30 +881,50 @@ def coerce (p : Pos) (r : R) (target : Ty) : EM Expr := do
     return .assign x e
   | none => eerr p s!"expected {target.show}, found {r.ty.show}"
 
-/-- The type of a two-branch construct: two classes join at their nearest
-    common supertype. -/
+/-- A type above both `a` and `b` (the expected one when it is, #32): two
+    classes join at their nearest common supertype, and arrays, options,
+    tuples and maps' values join covariantly. -/
+partial def joinTy (env : TyEnv) (a b : Ty) (exp : Option Ty) : Option Ty :=
+  if a == .never then some b
+  else if b == .never then some a
+  else if a == b then some a
+  else match a, b with
+  | .struct S as, .struct T bs =>
+    if env.classes.contains S && env.classes.contains T then
+      -- the expected type, when both are below it, else the nearest
+      -- common supertype (at the same type arguments, #39)
+      let up (U : String) (us : List Ty) : Bool :=
+        env.isSub S U && env.isSub T U && env.upArgs S as U == us && env.upArgs T bs U == us
+      match exp with
+      | some (.struct U us) =>
+        if env.classes.contains U && up U us then some (.struct U us)
+        else ((env.supers S).find? fun U => up U (env.upArgs S as U)).map fun U => .struct U (env.upArgs S as U)
+      | _ => ((env.supers S).find? fun U => up U (env.upArgs S as U)).map fun U => .struct U (env.upArgs S as U)
+    else none
+  | .arr x, .arr y => (joinTy env x y (match exp with | some (.arr e) => some e | _ => none)).map .arr
+  | .opt x, .opt y => (joinTy env x y (match exp with | some (.opt e) => some e | _ => none)).map .opt
+  | .tup xs, .tup ys =>
+    if xs.length != ys.length then none
+    else
+      let es : List (Option Ty) := match exp with
+        | some (.tup ets) => if ets.length == xs.length then ets.map some else xs.map fun _ => none
+        | _ => xs.map fun _ => none
+      ((xs.zip ys).zip es).mapM (fun ((x, y), e) => joinTy env x y e) |>.map .tup
+  | .map k x, .map k' y =>
+    if k == k' then (joinTy env x y (match exp with | some (.map _ e) => some e | _ => none)).map (.map k) else none
+  | _, _ => none
+
+/-- The type of a two-branch construct (`joinTy`; a void branch makes it void). -/
 def join (p : Pos) (a b : Ty) (exp : Option Ty) : EM Ty := do
   match exp with
   | some .void => return .void
   | _ =>
-    if a == .never then return b
-    if b == .never then return a
-    if a == b then return a
     -- void accepts any value (Book of Verse), so a void branch makes the
     -- construct void: `if{X := e} else {Print("none")}` (spec: IfElseMacro)
-    if a == .void || b == .void then return .void
-    let env := (← get).env
-    if let (.struct S as, .struct T bs) := (a, b) then
-      if env.classes.contains S && env.classes.contains T then
-        -- the expected type, when both are below it, else the nearest
-        -- common supertype (at the same type arguments, #39)
-        let up (U : String) (us : List Ty) : Bool :=
-          env.isSub S U && env.isSub T U && env.upArgs S as U == us && env.upArgs T bs U == us
-        if let some (.struct U us) := exp then
-          if env.classes.contains U && up U us then return .struct U us
-        if let some U := (env.supers S).find? fun U => up U (env.upArgs S as U) then
-          return .struct U (env.upArgs S as U)
-    eerr p s!"the branches have different types: {a.show} and {b.show}"
+    if a != .never && b != .never && !(a == b) && (a == .void || b == .void) then return .void
+    match joinTy (← get).env a b exp with
+    | some t => return t
+    | none => eerr p s!"the branches have different types: {a.show} and {b.show}"
 
 
 /-- `M[k]` on the map in slot `tm` with the key in slot `tk`: the value of the
@@ -1074,7 +1097,10 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
     | "*", .int, .int => return ⟨p2 .mul ra.e rb.e, .int⟩
     | "+", .arr t, .arr u =>
       if t == u then return ⟨p2 .concat ra.e rb.e, .arr t⟩
-      else eerr p s!"cannot concatenate {ra.ty.show} and {rb.ty.show}"
+      -- arrays of classes concatenate at a common supertype (#32)
+      match joinTy (← get).env (.arr t) (.arr u) exp with
+      | some jt => return ⟨p2 .concat (← coerce p ra jt) (← coerce p rb jt), jt⟩
+      | none => eerr p s!"cannot concatenate {ra.ty.show} and {rb.ty.show}"
     | _, ta, tb => eerr p s!"no operator '{op}' for {ta.show} and {tb.show}"
   | .cmp p a rest => elabCmp ctx p a rest
   | .andE _ a b =>
@@ -1085,7 +1111,9 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
     return ⟨Expr.andE ra.e rb.e, rb.ty⟩
   | .orE p a b =>
     let ra ← elabE { ctx with canFail := true } a exp
-    let rb ← elabE ctx b (exp.getD ra.ty)
+    let rb ← match exp with
+      | some _ => elabE ctx b exp
+      | none => tryCatch (elabE ctx b (some ra.ty)) fun _ => elabE ctx b none
     let ty ← join p ra.ty rb.ty exp
     let t ← fresh ty
     return ⟨Expr.orE t (← coerce p ra ty) (← coerce p rb ty), ty⟩
@@ -1111,9 +1139,19 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
     | e :: rest =>
       let r ← elabE ctx e elemExp
       let t := elemExp.getD r.ty
-      let first ← coerce e.pos r t
-      let others ← rest.mapM fun e' => do coerce e'.pos (← elabE ctx e' (some t)) t
-      return ⟨.prim .mkArr (first :: others), .arr t⟩
+      -- without an expected type, the elements' types join (classes at a
+      -- common supertype, #32): each is elaborated against the first's
+      let rs ← rest.mapM fun e' => match elemExp with
+        | some _ => elabE ctx e' (some t)
+        | none => tryCatch (elabE ctx e' (some t)) fun _ => elabE ctx e' none
+      let jt ← match elemExp with
+        | some t => pure t
+        | none => (r :: rs).foldlM (fun acc (x : R) => do
+            match joinTy (← get).env acc x.ty none with
+            | some j => pure j
+            | none => eerr p s!"the elements of this array have different types: {acc.show} and {x.ty.show}") r.ty
+      let es ← ((e :: rest).zip (r :: rs)).mapM fun (e', x) => coerce e'.pos x jt
+      return ⟨.prim .mkArr es, .arr jt⟩
   | .optionLit _ e =>
     let inner : Option Ty := match exp with
       | some (.opt t) => some t
@@ -1139,7 +1177,11 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
       return ⟨.ite rc.e (← coerce p rt .void) (.lit .void), .void⟩
     | some ee =>
       let rt ← elabE thenCtx thenE exp
-      let re ← elabE ctx ee (exp.getD rt.ty)
+      -- the else branch against the then branch's type (for `array{}`,
+      -- `false`), else on its own, to join with it (#32)
+      let re ← match exp with
+        | some _ => elabE ctx ee exp
+        | none => tryCatch (elabE ctx ee (some rt.ty)) fun _ => elabE ctx ee none
       let ty ← join p rt.ty re.ty exp
       return ⟨.ite rc.e (← coerce p rt ty) (← coerce p re ty), ty⟩
   | .forE p clauses body => elabFor ctx p clauses body
@@ -1663,7 +1705,9 @@ partial def elabSet (ctx : Ctx) (p : Pos) (lhs0 : SExpr) (op : Option String) (r
     | "+", .int, .int => pure (p2 .add old new.e)
     | "-", .int, .int => pure (p2 .sub old new.e)
     | "*", .int, .int => pure (p2 .mul old new.e)
-    | "+", .arr t, .arr u => if t == u then pure (p2 .concat old new.e)
+    | "+", .arr t, .arr u => do
+        if t == u then pure (p2 .concat old new.e)
+        else if refUp (← get).env (.arr u) (.arr t) then pure (p2 .concat old (← coerce p new (.arr t)))
         else eerr p s!"cannot concatenate {ty.show} and {new.ty.show}"
     | "/", .int, _ => eerr p "set /= is not defined on int (integer division can fail)"
     | _, _, _ => eerr p s!"no operator '{o}=' for {ty.show} and {new.ty.show}"
