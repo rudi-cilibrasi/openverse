@@ -18,7 +18,7 @@ surface Verse is elaborated (`OpenVerse/Front/Elab.lean`) into Verse Core
 |---|---|---|
 | Comments | `#` to the end of the line, nested `<# … #>`, `<#>` indented comments (the rest of the line and every following line indented more than it; see [Source text](#source-text)) | ch. 0 |
 | Literals | `int` (decimal, `0x` hex; must fit in 64 bits), `'c'` `char` (`c` printable ASCII U+0020–U+007E, or an escape), `0oHH` `char` code unit (one or two hex digits, not octal: `0o41` is `'A'`, `0o9` is a tab), strings with escapes and `{expr}` interpolation, `true`, `false`, `0uHHHHHH` `char32` (a Unicode scalar value, up to `0u10FFFF`, no surrogates) | §1.3–1.7 |
-| Types | `int`, `logic`, `char`, `char32`, `string` (= `[]char`), `[]t`, `?t`, `tuple(…)`, `void`; a tuple converts to an array of its elements where an array is expected, and compares with an array as one (`array{1,2} = (1,2)`) | ch. 2–3 |
+| Types | `int`, `logic`, `char`, `char32`, `rational` (see [rational](#rational)), `string` (= `[]char`), `[]t`, `?t`, `tuple(…)`, `void`; a tuple converts to an array of its elements where an array is expected, and compares with an array as one (`array{1,2} = (1,2)`) | ch. 2–3 |
 | Definitions | top-level functions `F(X:t, …)<effects>:t = body`, top-level constants `C:t = e` / `C := e`; locals `X := e`, `X:t = e`, `var X:t = e`; no shadowing | §3.1–3.4 |
 | Mutation | `set X = e`, `set X += e` (`-=`, `*=`), `set A[i] = e` (fails out of range; returns `e`), and paths `set S.F.G = e`, `set A[i][j] op= e`, `set M[k].F = e`: indices and keys evaluated once, left to right, then the new value (for `op=`, after the old one is read: `set X += e` is `set X = X + e`), then the variable rebuilt; an index out of range or a missing intermediate key fails, while the last key of a path inserts | §3.3, §3.5, §9.3 |
 | Blocks | indented (`:`), braced (`{ }`), inline (`then`/`do`), `block:`, `( a; b )` sequences | §2.2–2.4 |
@@ -33,7 +33,7 @@ surface Verse is elaborated (`OpenVerse/Front/Elab.lean`) into Verse Core
 | Enums | `name := enum:` / `enum{A, B}`, `name.A`, equality, `case` that needs no `_` when every value is named (an enumerator is its index in Verse Core); `enum<open>` may gain values, so a `case` on one needs `_` or a failure context (`<closed>` is the default) | ch. 9 |
 | Maps | `[k]v`, `map{k => v, …}` (a key given twice keeps its last value, at its last position), `M[k]` (fails on a missing key), `set M[k] = v` (insert or update, never fails), `set M[k] op= v` (fails on a missing key), `.Length`, `for (V : M)`, `for (K -> V : M)` in insertion order, `ConcatenateMaps(M1, M2, …)` (a later map's value wins for a key, which keeps its first position), order-sensitive equality (a map is the array of its pairs in Verse Core) | §3, §9.3 |
 | Array methods | `A.Slice[i, j]`, `A.Slice[i]`, `A.Find[x]`, `A.RemoveElement[i]`, `A.ReplaceElement[i, x]`, `A.Insert[i, B]`, `A.Last[]`, `A.Last[n]` (the element n before the last) (all failable) | §9.1 |
-| Built-ins | `Print(s)`, `ToString(x)` (int, char, string), `Floor(X / Y)`, `Ceil(X / Y)`, `Quotient[X, Y]`, `Mod[X, Y]` (Euclidean), `Abs`, `Min`, `Max`, `Err()` | API reference |
+| Built-ins | `Print(s)`, `ToString(x)` (int, char, string), `Floor(R)`, `Ceil(R)` (of a rational or an int, never failing; `Floor(X / Y)` fails when `Y = 0`, as `X / Y` does), `Quotient[X, Y]`, `Mod[X, Y]` (Euclidean), `Abs`, `Min`, `Max`, `Err()` | API reference |
 | Modules | `name := module:` (nested), `M.F`, `A.B.F`, the types `M.c` and values `M.c{…}`, `using{M}` at file or module scope, `<public>` members (`<internal>` is the default); see [Modules](#modules) | ch. 16 |
 | Program entry | `Main()` — see the exit protocol in [`FORMAT.md`](FORMAT.md) | (not in the book) |
 
@@ -443,6 +443,35 @@ circle := class(shape, labelled):
     or `string`. The expression may fail, which gives exit code 1.
   - A `#!` first line is a `#` comment.
 
+## rational
+
+`X / Y` on ints is a `rational`, and fails when `Y = 0` (Book of Verse
+ch. 2, #116):
+
+```verse
+Half(X:int)<decides>:rational = X / 2
+
+Main():void =
+    if (R := 7 / 2, R = 14 / 4, 3 < R, R < 4) then
+        Print("{Floor(R)} {Ceil(R)}")    # 3 4
+```
+
+- `int` is a subtype of `rational`: an int passes as one, and an int joins
+  a rational to a rational. The reverse needs `Floor` or `Ceil`, which never
+  fail on a rational.
+- `=` and `<>` compare rationals in lowest terms (`6 / 4 = 3 / 2`). The
+  orderings `<`, `<=`, `>` and `>=` compare them exactly; an operand may be
+  an int.
+- `rational` is a type of variables, parameters, results, fields and
+  containers. It is comparable, so it can be a map key.
+- There are no rational literals, no arithmetic on rationals (`R + 1`,
+  `R / 2`), and no `ToString` of one.
+
+In Verse Core a rational is the tuple of its numerator and denominator, in
+lowest terms with a positive denominator. Its parts are 64-bit ints, so
+`X / Y` raises the overflow error when the result's numerator or
+denominator is out of range, as in `(-2^63) / -3` or `1 / (-2^63)`.
+
 ## char32
 
 A `char32` is a Unicode scalar value (`0u…` literals). It is an `int` in Verse Core, so it needs no new value, and the
@@ -547,11 +576,12 @@ the readings are flat:
 | Comparability | `comparable` covers the primitive types, enums, structs and containers of comparable types (§4.9) | so is every openverse type, except a type parameter not declared `subtype(comparable)` and the containers of one |
 | Inferring type arguments | not described | first-order matching against the expected result type, then the arguments; no subtyping other than `false` (matches anything) and `void` (accepts anything) |
 | Access specifiers other than `<public>` | `<internal>` (the default), `<private>`, `<protected>`, … (ch. 16) | a module member is `<public>` or internal (visible in its module and its submodules); other specifiers, and a struct field's, are accepted and not enforced |
+| Ordering of rationals | not stated (§2 lists `<` … for `int` and `float`) | exact (by continued fractions, so it cannot overflow), and an int compares with a rational |
 | Extent of a `<#>` comment | "everything indented by four spaces on subsequent lines" (§1.1) | the rest of the `<#>` line and every following line indented more than that line, whatever the amount (blank lines included); `<#>` may also follow code on a line |
 
 ## Not supported in v1
 
-`float` and `rational` values (only `Floor(X/Y)` and `Ceil(X/Y)` of ints),
+`float` values, arithmetic on rationals (see [rational](#rational)),
 the class features listed under [Classes](#classes), struct methods (Verse structs have none; classes do),
 `weak_map`, qualified names `(M:)F` and module paths `using{/Verse.org/…}` (accepted and ignored), overloading beyond [Overloading](#overloading), nested
 functions, refinement types, concurrency (`spawn`, `sync`,

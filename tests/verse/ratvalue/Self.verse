@@ -1,0 +1,1 @@
+Main():void = Print("{Num}")
