@@ -3,8 +3,10 @@
 A clean-room **reference implementation of Verse**, the functional logic
 programming language of Epic Games (Unreal Editor for Fortnite, Unreal Engine
 6). The semantics is defined and proved in **Lean 4**, and a C runtime is
-checked against it. The handwritten C components that rollback and memory
-safety depend on are proved with **QuickProof** (VST + CompCert in Coq).
+checked against it. The handwritten C components for integer arithmetic,
+program loading, and the rollback of variables and output are proved with
+**QuickProof** (VST + CompCert in Coq); the object store and the value heap
+are checked by differential testing and fuzzing.
 
 ```
              Verse source (.verse)
