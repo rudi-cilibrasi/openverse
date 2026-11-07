@@ -711,7 +711,7 @@ partial def parseTops : PM (List STop) := do
           tps := tps.push { pos := vt.pos, name := v, constraint := c }
           if (← peekT).isSym "," then bump else break
       expectSym ")"
-      if (← peekT).isSym ":=" then
+      if (← peekT).isSym ":=" && (← peekT 1).isKw "struct" then
         -- `name(t:type, …) := struct …`: a parametric struct
         let d ← peekT
         bump

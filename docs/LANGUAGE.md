@@ -136,7 +136,14 @@ Swap(P:pair(t, u) where t:type, u:type):pair(u, t) =
   Type arguments are not inferred from the fields.
 - Each field default is type-checked once, at its definition, with the
   parameters opaque (`Value:t = 0` is an error). It is elaborated again, at
-  the field's type, wherever a construction omits the field.
+  the field's type, wherever a construction omits the field. That second
+  elaboration can still fail in one corner case: a default that calls a
+  generic function whose type parameter is inferred only from the expected
+  type, at a `void` type argument. A default that depends on itself, directly
+  or through another struct's default, is an error.
+- A type whose Verse Core representation would exceed 100000 nodes is
+  rejected. A struct with two fields of its parameter doubles in size at each
+  level of nesting.
 - In Verse Core a struct is the tuple of its fields, so `pair(int, string)`
   is a `tuple(int, []char)`. Two instantiations are the same type when their
   type arguments are, and struct equality is by value.

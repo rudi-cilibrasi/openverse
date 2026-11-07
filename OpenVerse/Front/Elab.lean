@@ -185,17 +185,24 @@ partial def Ty.matchArg (σ : List (String × Ty)) : Ty → Ty → Option (List 
 
 /-- At most `cap` nodes of the tree of `t` (to bound polymorphic recursion
     without walking a type that doubles at each step). -/
-def Ty.sizeUpTo (cap : Nat) (t : Ty) : Nat := go cap [t]
+def Ty.sizeUpTo (env : TyEnv) (cap : Nat) (t : Ty) : Nat := go cap [t]
 where
   go : Nat → List Ty → Nat
     | 0, _ | _, [] => 0
     | b + 1, t :: rest =>
       let kids := match t with
         | .arr u | .opt u => [u]
-        | .tup us | .struct _ us => us
+        | .tup us => us
+        -- a struct is the tuple of its fields in Verse Core
+        | .struct n us => (env.fields n us).map (·.2.1)
         | .map k v => [k, v]
         | _ => []
       1 + go b (kids ++ rest)
+
+/-- The largest Verse Core representation of a type that openverse accepts:
+    a parametric struct with two fields of its parameter doubles at each
+    level of nesting. -/
+def maxTySize : Nat := 100000
 
 /-- Whether `=` and `<>` are defined on values of type `t`: every openverse
     type is comparable except a type parameter not declared
@@ -244,6 +251,9 @@ structure Ctx where
   inLoop  : Bool := false
   retTy   : Ty := .void
   types   : TyEnv := {}
+  /-- The field defaults being elaborated (struct, field), to reject a default
+      that depends on itself. -/
+  defaults : List (String × String) := []
 
 /-- An instance of a generic function: the Verse Core function elaborated
     from its body with concrete type arguments. -/
@@ -288,7 +298,7 @@ def mayFailM (sigProg : Prog) (e : Expr) : EM Bool := do
     type argument. A function that calls itself at ever larger types
     (polymorphic recursion) reaches the second. -/
 def maxInsts : Nat := 1000
-def maxTyArgSize : Nat := 64
+def maxTyArgSize : Nat := 1000
 def polyRecMsg : String := "(polymorphic recursion is not supported)"
 
 /-- A new slot of the current frame, holding values of type `t`. -/
@@ -336,7 +346,10 @@ partial def resolveTy (env : TyEnv) (p : Pos) : STy → EM Ty
       if ps.length != ts.length then eerr p s!"{n} takes {ps.length} type argument(s), found {ts.length}"
       for ((v, c), t) in ps.zip ts do
         if c && !t.comparable then eerr p (notComparable t s!"type argument {v} of {n}")
-      return .struct n ts
+      let t := Ty.struct n ts
+      if t.sizeUpTo env (maxTySize + 1) > maxTySize then
+        eerr p s!"the type {n}(…) is too large: its Verse Core representation has more than {maxTySize} nodes"
+      return t
     | none =>
       if (env.structs.lookup n).isSome then eerr p s!"struct {n} takes no type arguments"
       else eerr p s!"unknown parametric type '{n}' (only structs can be parametric)"
@@ -346,13 +359,14 @@ def Ctx.sig? (ctx : Ctx) (n : String) : Option Sig := ctx.sigs.find? (·.name ==
 
 /-- The position in `insts` of the instance of generic `s` at `targs`,
     added when it is new. -/
-def findOrAddInst (insts : Array Inst) (s : Sig) (targs : List Ty) : Except String (Nat × Array Inst) := do
+def findOrAddInst (env : TyEnv) (insts : Array Inst) (s : Sig) (targs : List Ty) :
+    Except String (Nat × Array Inst) := do
   let same (i : Inst) := i.gen == s.gidx && i.targs.length == targs.length &&
     (i.targs.zip targs).all fun (a, b) => a.eqv b
   match insts.findIdx? same with
   | some k => return (k, insts)
   | none =>
-    if targs.any (·.sizeUpTo (maxTyArgSize + 1) > maxTyArgSize) then
+    if targs.any (·.sizeUpTo env (maxTyArgSize + 1) > maxTyArgSize) then
       throw s!"{s.name} is instantiated at ever larger types {polyRecMsg}"
     if insts.size ≥ maxInsts then
       throw s!"more than {maxInsts} instances of generic functions"
@@ -366,7 +380,7 @@ def findOrAddInst (insts : Array Inst) (s : Sig) (targs : List Ty) : Except Stri
     on first use: instance `k` is function `base + k`. -/
 def instIndex (ctx : Ctx) (p : Pos) (s : Sig) (targs : List Ty) : EM Nat := do
   let st ← get
-  match findOrAddInst st.insts s targs with
+  match findOrAddInst ctx.types st.insts s targs with
   | .ok (k, insts) =>
     set { st with insts }
     return ctx.sigProg.fns.length + k
@@ -1108,7 +1122,10 @@ partial def elabConstruct (ctx : Ctx) (p : Pos) (name : String) (targs : List ST
   let es ← fs.mapM fun (f, t, dflt) => do
     match given.lookup f, dflt with
     | some rhs, _ => coerce p (← elabE ctx rhs (some t)) t
-    | none, some d => coerce p (← elabE dctx d (some t)) t
+    | none, some d =>
+      if dctx.defaults.contains (name, f) then
+        eerr p s!"the default of field '{f}' of {name} depends on itself"
+      coerce p (← elabE { dctx with defaults := (name, f) :: dctx.defaults } d (some t)) t
     | none, none => eerr p s!"field '{f}' of {name} has no default value and must be given"
   return ⟨.prim .mkTup es, ty⟩
 
@@ -1347,9 +1364,12 @@ def elabProgram (allTops : List STop) : Except String Compiled := do
     | .const p n none (.structDef _ _ _) =>
       let senv := { env with tvars := (env.sparams.lookup n).getD [] |>.map fun (v, c) => (v, Ty.param v c) }
       let ctx : Ctx := { sigs := allSigs, sigProg, types := senv, canFail := true }
-      for (_, ft, d) in (env.structs.lookup n).getD [] do
+      for (f, ft, d) in (env.structs.lookup n).getD [] do
         if let some d := d then
-          discard <| (do coerce p (← elabE ctx d (some ft)) ft : EM Expr).run {}
+          let ctx := { ctx with defaults := [(n, f)] }
+          match (do coerce d.pos (← elabE ctx d (some ft)) ft : EM Expr).run {} with
+          | .ok _ => pure ()
+          | .error msg => throw s!"{msg} (in the default of field '{f}' of {n})"
     | _ => pure ()
   -- the body of a function, under the type environment `env` (which binds
   -- the type parameters of a generic function), given the instances so far
@@ -1413,7 +1433,7 @@ def elabProgram (allTops : List STop) : Except String Compiled := do
       -- the generic function's own instance table, at these type arguments
       let mut remap : Array Nat := #[]
       for li in st.insts do
-        match findOrAddInst insts gsigs[li.gen]! (li.targs.map (·.subst σ)) with
+        match findOrAddInst env insts gsigs[li.gen]! (li.targs.map (·.subst σ)) with
         | .ok (j, insts') => insts := insts'; remap := remap.push (base + j)
         | .error msg => throw s!"{p.show}: {msg}"
       let body := body.mapCalls fun f => if f < base then f else remap[f - base]!
