@@ -2208,6 +2208,17 @@ partial def elabIndexLike (ctx : Ctx) (p : Pos) (r : R) (args : List SExpr) (bra
     return ⟨.prim (.tupGet k.toNat) [r.e], ts[k.toNat]!⟩
   | t, _, _ => eerr p s!"cannot call or index a value of type {t.show}"
 
+/-- Two types with an int in one where the other has a rational, at the
+    same place inside them (#116). -/
+partial def ratMismatch : Ty → Ty → Bool
+  | .int, .rational | .rational, .int => true
+  | .arr a, .arr b | .opt a, .opt b => ratMismatch a b
+  | .tup as, .tup bs => as.length == bs.length && (as.zip bs).any fun (a, b) => ratMismatch a b
+  | .tup as, .arr b | .arr b, .tup as => as.any (ratMismatch · b)
+  | .map k v, .map k' v' => ratMismatch k k' || ratMismatch v v'
+  | .struct a as, .struct b bs => a == b && as.length == bs.length && (as.zip bs).any fun (x, y) => ratMismatch x y
+  | _, _ => false
+
 /-- A call of a rational helper (#116), `$ratMake` or `$ratLt`. -/
 partial def ratCall (ctx : Ctx) (p : Pos) (f : String) (args : List Expr) : EM Expr := do
   let some s := ctx.sig? f | eerr p "internal error: the rational helpers are missing"
@@ -2252,11 +2263,10 @@ partial def elabCmp (ctx : Ctx) (p : Pos) (a : SExpr) (rest : List (String × SE
       if !(ta == tb) && ta != .never && tb != .never &&
           (va == vb || (pa && pb) || (pa && vb.shared) || (pb && va.shared)) then
         eerr p s!"'{op}' compares values of different types, {ta.show} and {tb.show}"
-      -- (nor values of types with no value in common: `array{1} =
-      -- array{"a"}` would be false whatever they hold)
-      if !(ta == tb) && ta != .never && tb != .never && !pa && !pb &&
-          (joinTy ctx.types ta tb none).isNone && (joinTy ctx.types tb ta none).isNone then
-        eerr p s!"'{op}' compares values of different types, {ta.show} and {tb.show}"
+      -- (nor an int with a rational inside containers, #116: equal values
+      -- that Verse Core holds differently, `1` and `(1, 1)`)
+      if ratMismatch ta tb then
+        eerr p s!"'{op}' compares values of different types, {ta.show} and {tb.show} (an int and a rational inside them: convert the ints first)"
     else if !((ta == .int && tb == .int) || (ta == .char && tb == .char) || (ta == .char32 && tb == .char32)) then
       eerr p s!"'{op}' compares ints, chars or char32s, found {ta.show} and {tb.show}"
   let ra ← elabE ctx a none
