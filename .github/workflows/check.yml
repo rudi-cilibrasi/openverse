@@ -1,0 +1,45 @@
+# Runs everything scripts/check.sh checks: the Lean proofs and front end (no sorry), docs/CLAIMS.md,
+# the C runtime and its unit tests under ASan/UBSan, the Verse suite on both implementations,
+# differential and front-end fuzzing, and the QuickProof pins. QuickProof itself needs Docker
+# and stays a local check (scripts/check-quickproof.sh --check).
+name: check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # the pin check diffs QuickProof-pinned files against older commits
+          fetch-depth: 0
+
+      - name: Cache elan and the Lean build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.elan
+            .lake
+          key: lean-${{ runner.os }}-${{ hashFiles('lean-toolchain', 'lake-manifest.json') }}-${{ hashFiles('**/*.lean') }}
+          restore-keys: |
+            lean-${{ runner.os }}-${{ hashFiles('lean-toolchain', 'lake-manifest.json') }}-
+
+      - name: Install elan
+        run: |
+          if [ ! -x "$HOME/.elan/bin/elan" ]; then
+            curl -sSfL https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh \
+              | sh -s -- -y --default-toolchain none
+          fi
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+
+      - name: scripts/check.sh
+        run: scripts/check.sh
