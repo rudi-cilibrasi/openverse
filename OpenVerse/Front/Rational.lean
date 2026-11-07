@@ -5,7 +5,8 @@
   terms with a positive denominator, so tuple equality is rational equality.
   `X / Y` calls `$ratMake`, which divides by a gcd of either sign (Euclid
   with the Euclidean `Mod`), then makes the denominator positive: it
-  overflows only when the result's numerator is out of range. An ordering
+  overflows only when the result's numerator or denominator is out of
+  range. An ordering
   `A < B` calls `$ratLt`, which compares two rationals by their continued
   fractions: every number it computes is bounded by the operands' parts, so
   it never overflows (cross multiplication would). The elaborator adds these definitions to a program
@@ -23,7 +24,7 @@ def ratNames : List String :=
    "Less", "Q1", "Q2", "R1", "R2"]
 
 def ratPrelude : String := "
-ratGcd(A:int, B:int):int =
+ratGcd(A:int, B:int)<computes>:int =
     var X:int = A
     var Y:int = B
     loop:
@@ -34,14 +35,14 @@ ratGcd(A:int, B:int):int =
             break
     X
 
-ratMake(N:int, D:int)<decides>:tuple(int, int) =
+ratMake(N:int, D:int)<computes><decides>:tuple(int, int) =
     D <> 0
     G := ratGcd(N, D)
     P := Quotient[N, G]
     Q := Quotient[D, G]
     if (Q < 0) then (-P, -Q) else (P, Q)
 
-ratLt(A:tuple(int, int), B:tuple(int, int))<decides>:void =
+ratLt(A:tuple(int, int), B:tuple(int, int))<computes><decides>:void =
     var P:int = A(0)
     var Q:int = A(1)
     var R:int = B(0)

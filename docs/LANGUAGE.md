@@ -469,8 +469,8 @@ Main():void =
 
 In Verse Core a rational is the tuple of its numerator and denominator, in
 lowest terms with a positive denominator. Its parts are 64-bit ints, so
-`X / Y` raises the overflow error when the result's numerator is out of
-range, as in `(-2^63) / -3`.
+`X / Y` raises the overflow error when the result's numerator or
+denominator is out of range, as in `(-2^63) / -3` or `1 / (-2^63)`.
 
 ## char32
 

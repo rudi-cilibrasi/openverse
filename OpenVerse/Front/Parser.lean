@@ -1234,8 +1234,21 @@ def parseExprText (src : String) : Except String SExpr := do
     `rational`): the elaborator then adds the rational helpers (#116). -/
 def ratMarker : String := "$uses:rational"
 
-def usesRational (toks : Array Token) : Bool :=
-  toks.any fun t => t.isSym "/" || t.identName? == some "rational"
+def usesRational (toks : Array Token) : Bool := Id.run do
+  -- (not the `/` of a module path, `using { /Verse.org/… }`)
+  let mut inUsing := false
+  for t in toks do
+    if t.isKw "using" then inUsing := true
+    else if inUsing && t.isSym "}" then inUsing := false
+    else if !inUsing && (t.isSym "/" || t.identName? == some "rational") then return true
+  return false
+
+/-- Whether a source text may use rationals (for an expression read from a
+    file, as a `.value`'s). -/
+def textUsesRational (src : String) : Bool :=
+  match lexSource src with
+  | .ok toks => usesRational toks
+  | .error _ => false
 
 def withRatMarker (toks : Array Token) (tops : List STop) : List STop :=
   let p : Pos := { line := 0, col := 0 }

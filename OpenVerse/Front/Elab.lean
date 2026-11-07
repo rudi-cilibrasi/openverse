@@ -236,6 +236,8 @@ def TyEnv.slotImpls (env : TyEnv) (impl : String → Option String) (ups : List 
     enums and unrelated classes are disjoint. -/
 partial def TyEnv.disjoint (env : TyEnv) : Ty → Ty → Bool
   | .void, _ | _, .void | .param .., _ | _, .param .. | .never, _ | _, .never => false
+  -- (an int is also a rational, #116)
+  | .int, .rational | .rational, .int => false
   | .tup as, .tup bs => as.length != bs.length || (as.zip bs).any fun (a, b) => env.disjoint a b
   | .arr _, .arr _ | .arr _, .map .. | .map .., .arr _ | .map .., .map .. | .opt _, .opt _ => false
   -- `false` is also an empty array, an empty option and a logic
@@ -1701,8 +1703,12 @@ partial def elabApp (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (brack
     | "Abs" => return ⟨.prim .abs (← elabInts ctx p args), .int⟩
     | "Floor" | "Ceil" =>
       match args with
-      | [.bin _ "/" a b] =>
-        let es ← elabInts ctx p [a, b]
+      | [.bin bp "/" a b] =>
+        let ra ← elabE ctx a (some .int)
+        let rb ← elabE ctx b (some .int)
+        if ra.ty == .rational || rb.ty == .rational then
+          eerr bp "'/' divides ints: openverse has no arithmetic on rationals (only Floor, Ceil and comparisons)"
+        let es := [← coerce a.pos ra .int, ← coerce b.pos rb .int]
         return ⟨.prim (if name == "Floor" then .floorDiv else .ceilDiv) es, .int⟩
       | [e] =>
         -- (of a rational, #116: its denominator is positive, so this never
@@ -2245,6 +2251,11 @@ partial def elabCmp (ctx : Ctx) (p : Pos) (a : SExpr) (rest : List (String × SE
       let (pa, pb) := (!ta.params.isEmpty, !tb.params.isEmpty)
       if !(ta == tb) && ta != .never && tb != .never &&
           (va == vb || (pa && pb) || (pa && vb.shared) || (pb && va.shared)) then
+        eerr p s!"'{op}' compares values of different types, {ta.show} and {tb.show}"
+      -- (nor values of types with no value in common: `array{1} =
+      -- array{"a"}` would be false whatever they hold)
+      if !(ta == tb) && ta != .never && tb != .never && !pa && !pb &&
+          (joinTy ctx.types ta tb none).isNone && (joinTy ctx.types tb ta none).isNone then
         eerr p s!"'{op}' compares values of different types, {ta.show} and {tb.show}"
     else if !((ta == .int && tb == .int) || (ta == .char && tb == .char) || (ta == .char32 && tb == .char32)) then
       eerr p s!"'{op}' compares ints, chars or char32s, found {ta.show} and {tb.show}"
@@ -3191,6 +3202,12 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   -- rationals (#116): the helpers, for a program that may use them
   let isRatMarker : STop → Bool := fun | .const _ n _ _ => n == ratMarker | _ => false
   let usesRat := allTops0r.any isRatMarker || opts.entry.isSome
+  -- (a type of the program's own cannot take a built-in type's name)
+  for t in allTops0r do
+    match t with
+    | .const p n _ (.structDef ..) | .const p n _ (.enumDef ..) | .classDef p n .. =>
+      if ("char32" :: typeNames).contains n then throw s!"{p.show}: {n} is a built-in type"
+    | _ => pure ()
   let helpers ← if usesRat then ratTops else pure []
   let allTops000 := allTops0r.filter (!isRatMarker ·)
   -- modules (#112): every reference to a member, qualified (the entry
