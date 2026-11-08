@@ -1,0 +1,16 @@
+arr
+head once 10
+head once 20
+head first 10
+receiver first 10
+field first 10
+op= old value first: 1
+false 1
+false 2
+array 1
+array 2
+generic 1
+generic 2
+refined 1
+refined 2
+exit=0

@@ -874,6 +874,10 @@ structure Ctx where
       (#208), inside a `loop`: a `break` there would leave the loop they are
       compiled to, not that one. -/
   inChoice : Bool := false
+  /-- In the clauses of a failure context that takes a choice's values
+      (#208): a choice that reaches the elaborator here is in a place it
+      cannot be lifted from. -/
+  inTaking : Bool := false
 
 structure ESt where
   /-- The program's types, for conversions between class types (`coerce`). -/
@@ -1716,6 +1720,21 @@ def toStringOf (p : Pos) (r0 : R) : EM Expr := do
   | .arr .char => pure r.e
   | t => eerr p s!"no ToString for {t.show} (Verse defines it for int, float, char, char32 and string)"
 
+/-- The names that are values here, for lifting choices (#208): variables
+    in scope, `Self` and its fields. -/
+def choiceValues (ctx : Ctx) (n : String) : Bool :=
+  (ctx.lookup n).isSome || n == "Self" ||
+    (match ctx.selfClass with | some c => (ctx.types.fields c).any (·.1 == n) | none => false)
+
+/-- `n.m` reads a field here (a variable or `Self` of a class or struct
+    type that has one), for lifting choices: the field is read whole before
+    the choice, while a method call's receiver only is (#208). -/
+def choiceField (ctx : Ctx) (n m : String) : Bool :=
+  let ty? : Option Ty := if n == "Self" then ctx.selfClass.map (fun c => .struct c []) else (ctx.lookup n).map (·.ty)
+  match ty? with
+  | some (.struct c _) => (ctx.types.fields c).any (·.1 == m)
+  | _ => false
+
 /-- A local named `n` may be declared here: Verse has no shadowing. -/
 def checkNewLocal (ctx : Ctx) (p : Pos) (n : String) : EM Unit := do
   if ctx.lookup n |>.isSome then
@@ -1843,9 +1862,10 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
   | .app p (.ident _ "$spawn") [body] false => elabSpawn ctx p body
   | .app p (.ident _ "$branch") [body] false => elabBranch ctx p body
   | .app p (.ident _ "$choice") _ false =>
-    if ctx.canFail then
-      eerr p ("a choice (a | b) cannot be taken from here: not from inside a block, a branch, a struct " ++
-        "construction, a named argument or another choice's alternative, for now (#208)")
+    if ctx.inTaking then
+      eerr p ("a choice (a | b) cannot be lifted from here, for now (#208): not from a block, a branch, a struct " ++
+        "construction, a named argument, another choice's alternative, the right of and or or, a range, or " ++
+        "a set whose old value it would change")
     eerr p ("a choice (a | b) has several values, so it must be in a failure context that takes them: " ++
       "an if condition, a for's clauses, first{…}, option{…}, logic{…}, not, or the left of or (#208)")
   | .app p (.ident _ "$first") [.block _ items] false =>
@@ -1896,7 +1916,7 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
   | .notE _ e =>
     -- (with a choice, its first success, #208)
     let e := (Choice.takeFirst? e).getD e
-    let r ← elabE { ctx with canFail := true } e none
+    let r ← elabE { ctx with canFail := true, inTaking := true } e none
     return ⟨Expr.notE r.e, .void⟩
   | .bin p "/" a b =>
     -- `X / Y` on ints: a rational, failing when `Y = 0` (#116)
@@ -1953,7 +1973,7 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
     return ⟨Expr.andE ra.e rb.e, rb.ty⟩
   | .orE p a b =>
     let a := (Choice.takeFirst? a).getD a
-    let ra ← elabE { ctx with canFail := true } a exp
+    let ra ← elabE { ctx with canFail := true, inTaking := true } a exp
     let rb ← match exp with
       | some _ => elabE ctx b exp
       | none =>
@@ -2011,7 +2031,7 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
     let inner : Option Ty := match exp with
       | some (.opt t) => some t
       | _ => none
-    let r ← elabE { ctx with canFail := true } e inner
+    let r ← elabE { ctx with canFail := true, inTaking := true } e inner
     -- an expression that cannot fail needs no failure context (and no
     -- saved state to roll back to: the interpreter's heap is not copied)
     if !(r.e.mayFail ctx.sigProg) then return ⟨.prim .mkSome [r.e], .opt r.ty⟩
@@ -2019,12 +2039,12 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
     return ⟨Expr.optionE t r.e, .opt r.ty⟩
   | .logicLit p e =>
     let e := (Choice.takeFirst? e).getD e
-    let r ← elabE { ctx with canFail := true } e none
+    let r ← elabE { ctx with canFail := true, inTaking := true } e none
     if !(r.e.mayFail ctx.sigProg) then eerr p "logic{…} needs an expression that can fail"
     return ⟨Expr.logicE r.e, .logic⟩
   | .ite p conds thenE elseE =>
     let (rc, ctxT) ← if Choice.hasChoice conds then elabOneClauses { ctx with canFail := true } conds
-      else elabSeq { ctx with canFail := true } conds none
+      else elabSeq { ctx with canFail := true, inTaking := true } conds none
     if !(rc.e.mayFail ctx.sigProg) then
       eerr p "the condition of this if cannot fail (Verse requires a failable condition)"
     let thenCtx := { ctxT with canFail := ctx.canFail }
@@ -2053,7 +2073,7 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
     return ⟨.loop r.e, .void⟩
   | .brk p =>
     if ctx.inChoice then
-      eerr p "break cannot leave an if condition or first{…} that has a choice (#208)"
+      eerr p "break cannot leave the clauses of a failure context that has a choice (an if condition, first{…}, option{…}, …) (#208)"
     if !ctx.inLoop then
       eerr p (if ctx.inDefer then "break is only allowed inside loop (not for), and cannot leave a defer: block"
               else "break is only allowed inside loop (not for)")
@@ -2097,7 +2117,8 @@ partial def elabStmt (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM (R × Ctx) 
       let ty? ← sty.mapM (resolveTy ctx.types p)
       let r ← elabE ctx rhs ty?
       let ty := ty?.getD r.ty
-      if ty == .never then eerr p s!"cannot infer the type of '{n}'"
+      if ty == .never then
+        eerr p (if n.startsWith "$" then "cannot infer the type of this clause's value" else s!"cannot infer the type of '{n}'")
       let e ← coerce p r ty
       let slot ← fresh ty
       pure (⟨.assign slot e, ty⟩,
@@ -3586,7 +3607,12 @@ partial def elabCmp (ctx : Ctx) (p : Pos) (a : SExpr) (rest : List (String × SE
       prevTy := rb.ty
     return ⟨steps.foldr Expr.seq (.local t0), ra.ty⟩
 
-partial def elabSet (ctx : Ctx) (p : Pos) (lhs0 : SExpr) (op : Option String) (rhs : SExpr) : EM R := do
+partial def elabSet (ctx : Ctx) (p : Pos) (lhs0 : SExpr) (op : Option String) (rhs0 : SExpr) : EM R := do
+  -- (`$withOld(O, R)`: for `op=`, the old value was read into `O` before
+  -- the code that computes `R`, as `set` evaluates, #208)
+  let (rhs, oldIn) : SExpr × Option Expr := match rhs0 with
+    | .app _ (.ident _ "$withOld") [.ident _ o, r] false => (r, (ctx.lookup o).map (fun l => Expr.local l.slot))
+    | r => (r, none)
   -- the right side at the target's type; for `set F *= N` of a float, an
   -- int too (#127), so without it when that fails
   let rhsAt (t : Ty) : EM R :=
@@ -3604,7 +3630,8 @@ partial def elabSet (ctx : Ctx) (p : Pos) (lhs0 : SExpr) (op : Option String) (r
     | .query sp e => .query sp (selfRoot e)
     | e => e
   let lhs := selfRoot lhs0
-  let combine (old : Expr) (ty : Ty) (o : String) (new0 : R) : EM Expr := do
+  let combine (old0 : Expr) (ty : Ty) (o : String) (new0 : R) : EM Expr := do
+    let old := oldIn.getD old0
     -- (a refinement's value is its base; a refined variable is set only
     -- through a cast, #136)
     let new := widenR (← get).env new0
@@ -3921,7 +3948,7 @@ partial def elabSet (ctx : Ctx) (p : Pos) (lhs0 : SExpr) (op : Option String) (r
     leftmost outermost). The clauses are a failure context; the body is not. -/
 partial def elabFor (ctx : Ctx) (p : Pos) (clauses : List SExpr) (body : SExpr) : EM R := do
   -- (a choice is a generator over its alternatives, #208)
-  let clauses := Choice.prepare clauses
+  let clauses := Choice.prepare clauses (choiceValues ctx) (choiceField ctx)
   -- split into groups: [filters before the first generator], then (generator, filters)…
   let isGen : SExpr → Bool
     | .gen .. => true
@@ -3941,7 +3968,7 @@ partial def elabFor (ctx : Ctx) (p : Pos) (clauses : List SExpr) (body : SExpr) 
     match fs with
     | [] => return (.lit (.logic true), c)
     | _ =>
-      let (r, c') ← elabSeq { c with canFail := true } fs none
+      let (r, c') ← elabSeq { c with canFail := true, inTaking := true } fs none
       return (r.e, c')
   let rec build (c : Ctx) (gs : List (SExpr × List SExpr)) : EM R := do
     match gs with
@@ -3956,11 +3983,11 @@ partial def elabFor (ctx : Ctx) (p : Pos) (clauses : List SExpr) (body : SExpr) 
       -- the source: evaluated before the iterations; a failing source gives no iterations
       let (slot, src, c1, pre) ← match g with
         | .decl gp n none false (.range _ lo hi) => do
-          let es ← elabInts { c with canFail := true } gp [lo, hi]
+          let es ← elabInts { c with canFail := true, inTaking := true } gp [lo, hi]
           let (slot, c1) ← declare c n .int
           pure (slot, Expr.prim .range es, c1, Expr.lit (.logic true))
         | .gen gp x idx srcE => do
-          let rs ← elabE { c with canFail := true } srcE none
+          let rs ← elabE { c with canFail := true, inTaking := true } srcE none
           match rs.ty with
           | .map kt vt =>
             -- `for (V : M)` and `for (K -> V : M)`: over the (key, value) pairs
@@ -4074,8 +4101,9 @@ partial def elabAlts (ctx : Ctx) (p : Pos) (b : Choice.Binding) : EM (Ty × List
     `void`: an `if` and `first{…}` read their clauses' values through names. -/
 partial def elabOneClauses (ctx : Ctx) (cs : List SExpr) : EM (R × Ctx) := do
   -- (a `break` here would leave `firstE`'s loop, not the program's)
-  let (code, ctx') ← elabOneGo { ctx with inLoop := false, inChoice := ctx.inLoop } (Choice.prepare cs)
-  return (⟨Expr.firstE code, .void⟩, { ctx' with inLoop := ctx.inLoop, inChoice := ctx.inChoice })
+  let (code, ctx') ← elabOneGo { ctx with inLoop := false, inChoice := ctx.inLoop, inTaking := true }
+    (Choice.prepare cs (choiceValues ctx) (choiceField ctx))
+  return (⟨Expr.firstE code, .void⟩, { ctx' with inLoop := ctx.inLoop, inChoice := ctx.inChoice, inTaking := ctx.inTaking })
 
 partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
   | [] => return (Expr.brkV, ctx)

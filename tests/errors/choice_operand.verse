@@ -1,4 +1,4 @@
-# expect: 6:23: a choice (a | b) cannot be taken from here: not from inside a block, a branch, a struct construction
+# expect: 6:23: a choice (a | b) cannot be lifted from here
 pt := struct:
     X:int = 0
 Main():void =

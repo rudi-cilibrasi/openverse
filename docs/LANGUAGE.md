@@ -587,16 +587,31 @@ Main():void =
   if (H := Half[3 | 5 | 8]) then …     # the first argument Half succeeds with
   ```
 
-  Lifting goes through arithmetic, comparisons, calls (the receiver
-  first), member access, `?`, tuples, arrays, maps and string
-  interpolation. A name before a choice is read where it is written, before
-  the choice, even if an alternative changes it (a `set`, or a method
-  changing a field). A choice inside a block, a branch, a struct
-  construction (whose fields are evaluated in declaration order, not as
-  written), a named argument or another choice's alternative is refused
-  for now, and so is a choice anywhere else (outside these failure
-  contexts). A `break` in the clauses of an `if` or `first{…}` with a
-  choice is refused. `first{…}` with a choice can fail, so it must be in a
+  Lifting goes through arithmetic, comparisons, calls and indexing,
+  member access, `?`, tuples, arrays, maps and string interpolation, in the
+  order they are evaluated:
+  - a call's or an index's head is evaluated before its arguments: a
+    variable holding an array, map or function, a field (read whole), a
+    method's receiver, or any other expression (`Arr()[0 | 1]` calls `Arr`
+    once);
+  - a name that is no value (a function, class, module, enumerator, `true`,
+    `false`) and a literal, `array{}` or `map{}` stay in place, so they keep
+    the type their place expects;
+  - every other operand before a choice is bound to a name first, so it is
+    read where it is written, even if an alternative changes it (a `set`,
+    or a method changing a field);
+  - `set L op= R` evaluates `L`'s indices, then for `op=` its old value, then
+    `R`'s lifted code, as `set` does.
+
+  Refused for now: a choice inside a block, a branch, a struct construction
+  (whose fields are evaluated in declaration order, not as written), a
+  named argument, a call where a named argument comes before the choice,
+  another choice's alternative, the right of `and` or `or`, or a range; and
+  a choice anywhere outside these failure contexts. (A field reached
+  through a receiver that is not a variable or `Self`, as `F().Items[…]`,
+  is read after the choice, since only the receiver's value is bound
+  first.) A `break` in the clauses of an `if` or `first{…}` with a choice
+  is refused. `first{…}` with a choice can fail, so it must be in a
   failure context.
 - **Precedence.** `|` binds looser than arithmetic and tighter than the
   comparisons: `X = 1 | 2` is `X = (1 | 2)`.
