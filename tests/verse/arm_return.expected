@@ -1,0 +1,14 @@
+race loser unwound
+Find 1 defer
+found 1
+race loser unwound
+Find 0 defer
+not found
+arm a defer
+sync sibling unwound
+Both defer
+100
+inner sibling unwound
+outer sibling unwound
+7
+exit=0
