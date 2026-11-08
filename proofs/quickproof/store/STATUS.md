@@ -7,7 +7,7 @@
   mutants 26/40 killed (`CHECK.md`, read in `CHECK-NOTES.md`).
 - **Proof: `store_rollback_model` PROVED, `qp verify` PASS** (`VERIFY.md`); axioms: 12, standard + VST
   malloc.
-- Proof sources: `proof/src/` — 2,287 lines of Coq in 19 files, written by an AI agent in about 6 h:
+- Proof sources: `proof/src/` — 2,287 lines of Rocq in 19 files, written by an AI agent in about 6 h:
   - `Model.v`: the rollback rule as a pure invariant (`chain`). A functional `undo` replays the journal
     newest first. Each open context's snapshot is the current state with the journal undone back to its
     mark, and each outer context's snapshot relates to the state at that mark in the same way.

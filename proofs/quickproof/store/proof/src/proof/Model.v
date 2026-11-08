@@ -1,5 +1,5 @@
 (* The functional model of the transactional store (runtime/src/store.c) and of the harness's
-   failure contexts.  Pure Coq: no separation logic.
+   failure contexts.  Pure Rocq: no separation logic.
 
    A value is a pair of 64-bit words (tag, bits); a journal entry is (slot, old value).  undo
    replays a journal segment newest first, exactly as vx_store_rollback's loop does.  chain is

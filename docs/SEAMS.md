@@ -48,7 +48,7 @@ What each side proves:
   `apply_modulo` state `Prim.apply` itself in these terms, for instance
   `Prim.apply .add [.int a, .int b] = if cAddFits a b then .ok (.int (a + b))
   else .err .overflow`.
-- **Coq (QuickProof)**: for every pair of `int64_t` values, `vx_add`, …,
+- **Rocq (QuickProof)**: for every pair of `int64_t` values, `vx_add`, …,
   `vx_modulo` return the status and the value that the formula gives, and
   leave `*out` alone when they do not return `VX_OK`.
 
@@ -71,7 +71,7 @@ What each side proves:
 - **Lean**: `Eval.scoped_ok` says that in a well-scoped program, evaluation
   never produces `err .slot` or `err .call` and never changes the size of a
   frame.
-- **Coq**: for every input buffer, `vx_load` reads only inside it. When it
+- **Rocq**: for every input buffer, `vx_load` reads only inside it. When it
   accepts, the node tables it returns satisfy the conditions in the C column.
 
 The link between them is `Prog.encode`, which writes each `Expr` tree in

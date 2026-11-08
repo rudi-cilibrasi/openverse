@@ -13,7 +13,7 @@
   mutants 6/40 killed (`CHECK.md`, read in `CHECK-NOTES.md`).
 - **Proof: `loader_wellscoped` PROVED, `qp verify` PASS** (`VERIFY.md`); axioms: 13, standard + VST
   malloc.
-- Proof sources: `proof/src/` — 3,910 lines of Coq in 18 files, written by an AI agent in about 9 h 20 min
+- Proof sources: `proof/src/` — 3,910 lines of Rocq in 18 files, written by an AI agent in about 9 h 20 min
   and extended for the heap commit in about 4 h:
   - `Specs.v`: one specification for each function of `load.c`. The readers return some value with
     its range facts; the node checks give `node_ok`, `check_calls` gives `call_ok`, and a `freeable`
@@ -36,7 +36,7 @@
   took over 25 minutes to check. The proof of `main` also wraps the ten facts of `node_ok` in `hide`
   before it uses them: `lia`, which VST's tactics call at every step, splits cases on each implication in
   the context. With the HEAP fact added and nothing hidden, one `qp_assert` step took about 7 minutes and
-  `main` up to the end of its SEQ branch 22 minutes (in `coqtop`); hidden, a few seconds and 4 minutes.
+  `main` up to the end of its SEQ branch 22 minutes (in Rocq's interactive toplevel); hidden, a few seconds and 4 minutes.
 
 So for every input of up to 4 KiB, `vx_load` reads only inside the buffer. When it accepts, the program
 satisfies every condition of `docs/FORMAT.md` (HEAP nodes and REF literals included), which includes

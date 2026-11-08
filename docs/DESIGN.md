@@ -407,12 +407,12 @@ anyway).
 ## Two semantics, one seam
 
 The C runtime is proved under CompCert's semantics of C, with QuickProof.
-Lean cannot reason about C, and Coq does not know the Lean definitions.
+Lean cannot reason about C, and Rocq does not know the Lean definitions.
 Following LeanOS (ADR 0030), each seam is a formula that both sides state.
 
 The arithmetic seam is the tightest. `Seams.lean` restates the C law's
 formulas symbol for symbol and proves in Lean that each one is `Prim.apply`.
-QuickProof proves in Coq that the C functions compute those formulas. The
+QuickProof proves in Rocq that the C functions compute those formulas. The
 remaining trusted step is reading that the two texts are the same formula
 (`docs/SEAMS.md`).
 
@@ -423,7 +423,7 @@ flowchart LR
         lf["the formulas<br/>cAddFits, cFloorDiv, …<br/>(Seams.lean)"]
         apply -- "apply_add … apply_modulo" --- lf
     end
-    subgraph coq["Coq: QuickProof qp verify"]
+    subgraph rocq["Rocq: QuickProof qp verify"]
         cf["arith_exact.c<br/>the formulas, in C"]
         ac["arith.c<br/>vx_add … vx_modulo"]
         cf -- "arith_exact" --- ac
