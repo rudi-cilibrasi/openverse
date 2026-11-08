@@ -147,8 +147,43 @@ def expectIdent : PM String := do
   | some n => bump; return n
   | none => perr t s!"expected an identifier, found {t.tok.describe}"
 
+mutual
 partial def parseType : PM STy := do
+  let t ← parseTypeAtom
+  -- `t->r`: a function type of one parameter, or of a tuple's elements
+  -- (they flatten into parameters, Book of Verse ch. 6), #210
+  if (← peekT).isSym "->" && !(← peekT).bol then
+    bump
+    let r ← parseType
+    return match t with
+      | .tup ts => .fn ts [] r
+      | _ => .fn [t] [] r
+  return t
+
+partial def parseTypeAtom : PM STy := do
   let t ← peekT
+  -- `type{_(:t₁, …)<effects>:r}`: a function type (#210)
+  if t.identName? == some "type" && (← peekT 1).isSym "{" && (← peekT 2).identName? == some "_" &&
+      (← peekT 3).isSym "(" then
+    bump; bump; bump; bump
+    let mut ps := #[]
+    if !(← peekT).isSym ")" then
+      repeat
+        -- (a parameter may be named, `X:t`; the name is not part of the type)
+        if ((← peekT).identName?).isSome && (← peekT 1).isSym ":" then bump
+        expectSym ":"
+        ps := ps.push (← parseType)
+        if (← peekT).isSym "," then bump else break
+    expectSym ")"
+    let mut effs := #[]
+    while (← peekT).isSym "<" do
+      bump
+      effs := effs.push (← expectIdent)
+      expectSym ">"
+    expectSym ":"
+    let r ← parseType
+    expectSym "}"
+    return .fn ps.toList effs.toList r
   -- `(M:)c`: the type `M.c` (#147)
   if t.isSym "(" && ((← peekT 1).identName?).isSome then
     let mut q := ((← peekT 1).identName?).getD ""
@@ -160,14 +195,21 @@ partial def parseType : PM STy := do
       for _ in [0:k + 2] do bump
       let c ← expectIdent
       return .name s!"{q}.{c}"
+  -- `(t)`: a type in parentheses, `?(int->int)` (#210)
+  if t.isSym "(" then
+    bump
+    let ty ← parseType
+    expectSym ")"
+    return ty
+  -- (`->` binds loosest: `[]int->int` takes an array, #210)
   if t.isSym "[" then
     bump
-    if (← peekT).isSym "]" then bump; return .arr (← parseType)
+    if (← peekT).isSym "]" then bump; return .arr (← parseTypeAtom)
     let k ← parseType
     expectSym "]"
-    return .map k (← parseType)
+    return .map k (← parseTypeAtom)
   else if t.isSym "?" then
-    bump; return .opt (← parseType)
+    bump; return .opt (← parseTypeAtom)
   else if t.isKw "logic" && !(← peekT 1).isSym "{" then
     -- `logic` is a keyword (for `logic{…}`) and a type name
     bump; return .name "logic"
@@ -199,6 +241,7 @@ partial def parseType : PM STy := do
         return .app n ts.toList
       return .name n
     | none => perr t s!"expected a type, found {t.tok.describe}"
+end
 
 def cmpOps : List String := ["=", "<>", "<", "<=", ">", ">="]
 
