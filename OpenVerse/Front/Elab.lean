@@ -6025,9 +6025,11 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
         armSigs := armSigs.push (frameTy j :: schedTy :: ps, .int)
         armSigs := armSigs.push (frameTy j :: schedTy :: ps, VTy.void)
       -- its refined calls' helpers (#171), whose slots are their parameters
+      -- (one calling a <decides> method can fail too, #179)
       for ((body, vps, vτ), i) in low.vias.zipIdx do
+        let canFail := (Suspend.callsOf body).any fun (g, _) => ((fns[g]?).map (·.decides)).getD false
         armFns := armFns.push { name := s!"{gname}$via{i}", arity := vps.length, nslots := vps.length,
-                                decides := false, writes := true, body }
+                                decides := canFail, writes := true, body }
         armTys := armTys.push vps
         armSigs := armSigs.push (vps, vτ)
     -- each root's trampoline, which resumes it with its parameters from its
