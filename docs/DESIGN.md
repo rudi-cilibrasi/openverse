@@ -295,6 +295,25 @@ its slots before each and reloading them after, so the arms share
 variables. A `race`'s winner cancels the arms that started and are pending,
 last first.
 
+**Tasks.** A `spawn` gets a root: a suspends function `$spawnK(T, args…)`
+that the pass makes from the spawned call. It runs the call and fills the
+task `T` (a `task(t)`, below a non-generic `$taskBase` with a done flag).
+The spawn site calls `$spawnK$start(sched, $spawnK$new(sched, T, args…))`,
+which adds the root's frame to the scheduler's `Roots` and runs it up to
+its first suspension point.
+
+Each pass resumes `Main`'s frame, then every root whose suspension point
+is not -1 (done). It reaches a root through a test of its class
+(`Typed.dispatch` again, at a type that covers every root frame) and a
+trampoline that passes the root's parameters from its frame. A root that
+ends makes the scheduler pass again in the same tick. `T.Await()` is a
+helper written in Verse: it waits at the leaf `$WaitDone` (whose frame
+tests the done flag, non-generically), then takes the result.
+
+Between ticks, the roots that are done are dropped once they are more
+than half, since every spawn copies the array. In C, each task's frame
+and task object stay in memory.
+
 **Cancellation.** Every region, a function body or an arm, also gets a
 cancel function. It cancels what the region waits at (a callee's frame,
 through the callee's own cancel function, or a `sync`'s or `race`'s

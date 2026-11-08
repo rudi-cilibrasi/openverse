@@ -1,0 +1,11 @@
+spawned
+a 1
+b 1
+main awake
+a 2
+b 2
+b gave 200
+a 3
+a gave 300
+again 300
+exit=0

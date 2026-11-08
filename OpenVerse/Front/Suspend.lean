@@ -150,15 +150,31 @@ partial def hasSusp (isS : Nat → Bool) : Expr → Bool
 
 /-- The number of suspension points in `e`; `own`: not counting those in
     the arms of a `sync` or `race` (a mark `m`). -/
-partial def countSusp (isS : Nat → Bool) (m : Nat → Bool := fun _ => false) (own : Bool := false) : Expr → Nat
+partial def countSusp (isS : Nat → Bool) (m : Nat → Bool := fun _ => false) (own : Bool := false)
+    (sk : Nat → Bool := fun _ => false) : Expr → Nat
   | .call f es =>
-    (if isS f then 1 else 0) + (if own && m f then 0 else (es.map (countSusp isS m own)).sum)
-  | .assign _ e | .ret e | .print e | .loop e => countSusp isS m own e
-  | .seq a b => countSusp isS m own a + countSusp isS m own b
-  | .prim _ es | .heap _ es => (es.map (countSusp isS m own)).sum
-  | .ite c t e => countSusp isS m own c + countSusp isS m own t + countSusp isS m own e
-  | .forE _ it f b => countSusp isS m own it + countSusp isS m own f + countSusp isS m own b
+    if sk f then 0 else
+    (if isS f then 1 else 0) + (if own && m f then 0 else (es.map (countSusp isS m own sk)).sum)
+  | .assign _ e | .ret e | .print e | .loop e => countSusp isS m own sk e
+  | .seq a b => countSusp isS m own sk a + countSusp isS m own sk b
+  | .prim _ es | .heap _ es => (es.map (countSusp isS m own sk)).sum
+  | .ite c t e => countSusp isS m own sk c + countSusp isS m own sk t + countSusp isS m own sk e
+  | .forE _ it f b => countSusp isS m own sk it + countSusp isS m own sk f + countSusp isS m own sk b
   | _ => 0
+
+/-- The `spawn`s (calls of the mark `m` on `array{F(…), T}`) in `e`, in the
+    order the lowering meets them: the callee, its arguments, `T`'s slot. -/
+partial def spawnSites (m : Nat) : Expr → List (Nat × List Expr × Nat)
+  | .call f es =>
+    match f == m, es with
+    | true, [.prim .mkArr [.seq (.call g gs) _, .seq (.local t) _]] => [(g, gs, t)]
+    | _, _ => (es.map (spawnSites m)).flatten
+  | .assign _ e | .ret e | .print e | .loop e => spawnSites m e
+  | .seq a b => spawnSites m a ++ spawnSites m b
+  | .prim _ es | .heap _ es => (es.map (spawnSites m)).flatten
+  | .ite c t e => spawnSites m c ++ spawnSites m t ++ spawnSites m e
+  | .forE _ it f b => spawnSites m it ++ spawnSites m f ++ spawnSites m b
+  | _ => []
 
 /-- The number of arms of the `sync`s and `race`s (marks `m`) in `e`. -/
 partial def countArms (m : Nat → Bool) : Expr → Nat
@@ -234,6 +250,10 @@ structure Env where
   fnBase : Nat
   /-- The scheduler's class. -/
   schedTag : Nat
+  /-- The `spawn` mark, and for each `spawn` in the function, in order, its
+      root's `new` and `start` functions. -/
+  spawnMark : Nat
+  spawns : Array (Nat × Nat)
   /-- The region being lowered: the field of its suspension point, the flag
       set while seeking it, and its own suspension points. -/
   pcFld : Nat
@@ -256,6 +276,8 @@ structure St where
   sites : Array Site := #[]
   /-- The `defer:` blocks active at the suspension points being lowered. -/
   defers : Expr := vd
+  /-- `spawn`s met so far. -/
+  spawnNext : Nat := 0
 
 abbrev M := ReaderT Env (StateT St (Except String))
 
@@ -272,7 +294,7 @@ def isMark (env : Env) (f : Nat) : Bool := f == env.syncMark || f == env.raceMar
 
 def hasS (e : Expr) : M Bool := do
   let env ← read
-  return hasSusp (fun f => (env.callee f).isSome || isMark env f) e
+  return hasSusp (fun f => (env.callee f).isSome || isMark env f || f == env.spawnMark) e
 
 /-- The region's suspension point, `lo ≤ pc ≤ hi`, as a condition. -/
 def inRange (lo hi : Nat) : M Expr := do
@@ -381,6 +403,16 @@ partial def block (e : Expr) (k : Option (Expr → Expr)) : M (List Expr) := do
         (.seq (.loop (.ite elem (.seq next (.ite filt (.seq add vd) vd)) .brk)) (.local acc))))) (some k)
   | .call g es =>
     let env ← read
+    if g == env.spawnMark then
+      -- a new task root, started now (not a suspension point)
+      let [.prim .mkArr [.seq (.call h hs) _, .seq (.local t) _]] := es
+        | throw "internal error: a malformed spawn"
+      let i := (← get).spawnNext
+      modify fun st => { st with spawnNext := i + 1 }
+      let some (newFn, startFn) := env.spawns[i]? | throw "internal error: spawns miscounted"
+      let start : Expr := .call startFn [.local schS, .call newFn (.local schS :: .local t :: hs.map retToDone)]
+      let _ := h
+      return [← emit (pure (app k (.seq start vd)))]
     if isMark env g then
       let [.prim .mkArr arms] := es | throw "internal error: a malformed sync or race"
       let s ← emit (concAt (g == env.syncMark) arms)
@@ -534,7 +566,8 @@ partial def region (pcFld : Nat) (done : Option (Expr → Expr)) (body : Expr) :
   let rS ← fresh .int
   let saved ← get
   modify fun st => { st with regionNext := 0, sites := #[], defers := vd }
-  let regionTotal := countSusp (fun f => (env.callee f).isSome || isMark env f) (isMark env) true body
+  let regionTotal := countSusp (fun f => (env.callee f).isSome || isMark env f) (isMark env) true
+    (· == env.spawnMark) body
   let stmts ← withReader (fun e => { e with pcFld, rS, regionTotal }) (block body done)
   let st ← get
   if st.regionNext != regionTotal then
@@ -601,17 +634,17 @@ structure Lowered where
 /-- Lower the body `b` (initialisations stripped) of a suspends function
     with `arity` parameters, slot types `Γ` and result type `ρ`, whose frame
     type is `frameTy`; its arm functions are numbered from `fnBase`. -/
-def lower (S : Sigs) (callee : Nat → Option Callee) (syncMark raceMark : Nat) (arity : Nat) (Γ : List VTy)
-    (ρ : VTy) (frameTy : VTy) (schedTag : Nat) (fnBase : Nat) (b : Expr) : Except String Lowered := do
+def lower (S : Sigs) (callee : Nat → Option Callee) (syncMark raceMark spawnMark : Nat) (spawns : Array (Nat × Nat))
+    (arity : Nat) (Γ : List VTy) (ρ : VTy) (frameTy : VTy) (schedTag : Nat) (fnBase : Nat) (b : Expr) :
+    Except String Lowered := do
   let schedTy : VTy := .ref [schedTag] []
   let isM := fun f => f == syncMark || f == raceMark
   let isS := fun f => (callee f).isSome || isM f
-  let sites := countSusp isS
-  let sites := sites b
+  let sites := countSusp isS (fun _ => false) false (· == spawnMark) b
   let armsTotal := countArms isM b
   let b := shift 2 b
   let Γ0 := #[frameTy, schedTy] ++ Γ.toArray
-  let env : Env := { S, ρ, callee, syncMark, raceMark, arity, sites, armsTotal, fnBase, schedTag,
+  let env : Env := { S, ρ, callee, syncMark, raceMark, arity, sites, armsTotal, fnBase, schedTag, spawnMark, spawns,
                      pcFld := pcF, rS := 0, regionTotal := 0 }
   let done : Expr → Expr := fun v => .seq (fset resF v) (.ret (int 1))
   let ((res, can), st) ← ((region pcF (some done) b).run env).run { Γ := Γ0 }

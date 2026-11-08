@@ -676,8 +676,8 @@ the readings are flat:
 ## Concurrency
 
 A function marked `<suspends>` can wait (Book of Verse ch. 14, #156).
-openverse supports such functions, `Sleep`, calls between them, `sync` and
-`race`; `rush`, `branch`, `spawn`, `task` and `event` come next.
+openverse supports such functions, `Sleep`, calls between them, `sync`,
+`race`, `spawn` and `task`; `rush`, `branch` and `event` come next.
 
 ```verse
 Countdown(N:int)<suspends>:int =
@@ -720,6 +720,25 @@ Main()<suspends>:void =
               "timeout"
       Print(Result)    # fetch cancelled or done, then timeout
   ```
+- **`spawn`.** `spawn{F(…)}` starts a task running the call, which must be
+  of a suspends function. Its arguments are evaluated at once, and the
+  task runs at once up to its first wait. The value is a `task(t)`, where
+  `t` is `F`'s result type, and `T.Await()` waits for the task to end and
+  gives its result (at once if it has ended). A task is not tied to the
+  code that spawned it: it runs until it ends or the program does. For
+  now, `spawn` is allowed only in a suspends function that is not generic.
+
+  ```verse
+  Fetch(Name:string, D:float)<suspends>:string =
+      Sleep(D)
+      "{Name} data"
+
+  Main()<suspends>:void =
+      A := spawn{Fetch("a", 2.0)}
+      B := spawn{Fetch("b", 1.0)}
+      Print(B.Await())    # after 1 second: b data
+      Print(A.Await())    # after 2 seconds: a data
+  ```
 - **Arms.** Arms share the enclosing function's variables. An arm is a
   scope of its own: `return` in an arm is not supported yet, and `break`
   cannot leave it.
@@ -731,13 +750,16 @@ Main()<suspends>:void =
   constructor. `<suspends>` combines with the heap effects
   (`<computes>`, `<reads>`, …): waiting has none.
 - **Time.** The schedule is deterministic: a virtual clock counts ticks, 30
-  per second, and ticks in which nothing can run are skipped. Arms that can
-  go on in the same tick do so in source order. `Sleep(S)`
+  per second, and ticks in which nothing can run are skipped. In each tick,
+  `Main` goes on first, then each task in the order they were spawned, then
+  again while a task ended (so that those waiting for it go on in the same
+  tick). Arms that can go on in the same tick do so in source order. `Sleep(S)`
   resumes after `Round(30·S)` ticks, at least one, so it always yields;
   `Sleep(Inf)` never resumes; a negative or NaN `S` returns at once.
 - **The program.** A suspends `Main` runs under the scheduler. The program
-  ends when `Main` does. If `Main` waits and no task can run again (for
-  example after `Sleep(Inf)`), it ends as `Err()` does: exit 2.
+  ends when `Main` does, even if tasks are still running. If `Main` waits
+  and no task can run again (for example after `Sleep(Inf)`, or awaiting a
+  task that never ends), it ends as `Err()` does: exit 2.
 - **Lowering.** The front end compiles each suspends function into Verse Core:
   a frame object holds its variables, and a resume function runs it from
   one suspension point to the next (see DESIGN.md). Nothing changes in
@@ -777,7 +799,7 @@ Main()<suspends>:void =
 arithmetic on rationals (see [rational](#rational)), float functions beyond those of [float](#float),
 the class features listed under [Classes](#classes), struct methods (Verse structs have none; classes do),
 `weak_map`, module paths `using{/Verse.org/…}` (accepted and ignored), overloading beyond [Overloading](#overloading), nested
-functions, concurrency beyond [Concurrency](#concurrency) (`spawn`, `rush`,
-`branch`, `task`, `event`, `return` in arms, `<suspends>` methods; #156), and effect checking
+functions, concurrency beyond [Concurrency](#concurrency) (`rush`, `branch`,
+`event`, `spawn` outside suspends functions, cancelling a task, `return` in arms, `<suspends>` methods; #156), and effect checking
 other than `<decides>` and the heap effects (`<converges>` is accepted and
 ignored).

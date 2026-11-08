@@ -1,0 +1,14 @@
+quick 42
+w3 done
+w2 done
+w1 done
+watcher got w1
+main waits for w1: w1
+7 seven
+arm two done
+in arm done
+in arm arm two
+tick
+tick
+main ends
+exit=0
