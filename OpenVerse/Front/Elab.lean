@@ -4756,7 +4756,7 @@ def specialise (fns0 : Array Fn) (slotTys0 : Array (List VTy)) (S0 : Sigs) (ntpO
         let some θ := (witTys S Γ ρ g es).mapM id | continue
         if θ.any (·.mentionsVar) || θ.any (·.size > 40) then continue
         if !specKeys.contains (g, θ) then
-          if softCopies ≥ 200 || specKeys.size ≥ 500 then continue
+          if softCopies ≥ 200 then continue
           let σ : Nat → VTy := fun i => θ.getD i (.var i)
           let fn := fns[g]!
           let Γc := slotTys[g]!.map (VTy.subst σ)
@@ -4778,7 +4778,8 @@ def specialise (fns0 : Array Fn) (slotTys0 : Array (List VTy)) (S0 : Sigs) (ntpO
         throw (inFn fns[gi]!.name s!"{fns[g]!.name} would be compiled at a type of more than 2000 parts, as if at ever bigger types: a generic function with branch, rush or spawn, or one using such a function at its own type parameters, cannot call itself at bigger types (#174)")
       if θ.any (·.mentionsVar) then throw s!"internal error: specialising a call of {fns[g]!.name} in {fns[gi]!.name}"
       if !specKeys.contains (g, θ) then
-        if specKeys.size ≥ 500 then
+        -- (the soft copies, #225, have their own budget)
+        if specKeys.size - softCopies ≥ 500 then
           throw (inFn fns[gi]!.name s!"more than 500 copies of generic functions with branch, rush or spawn, one per type each is used at (last {fns[g]!.name}): a function calling itself at ever bigger types, or many nested generic uses, cannot be compiled (#174)")
         let σ : Nat → VTy := fun i => θ.getD i (.var i)
         let fn := fns[g]!
