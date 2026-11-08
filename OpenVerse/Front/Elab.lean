@@ -881,23 +881,53 @@ def fnFits (env : TyEnv) (s : Sig) (t : Ty) : Bool :=
   | .struct m ts =>
     match FnValues.parseName m with
     | some (k, effs) =>
-      let sh : FnValues.Shape := ⟨s.params.length, s.decides, s.suspends, s.fx⟩
-      let qs := ts.take k
+      -- (the effects only: a tuple parameter may be flattened, #231)
+      let sh : FnValues.Shape := ⟨k, s.decides, s.suspends, s.fx⟩
+      let qs0 := ts.take k
       let u := (ts.drop k).headD .void
       let subAt (a b : Ty) : Bool := a == b || (a == .int && b == .rational) || match a, b with
         | .struct x [], .struct y [] => x != y && env.isSub x y
         | _, _ => false
-      k == s.params.length && sh.within (FnValues.shapeOf k effs) &&
+      -- (#231) the parameters as the type wants them: as they are, a single
+      -- tuple parameter unflattened into the type's, or the parameters
+      -- flattened into the type's single tuple parameter
+      let reshaped : Option (List Ty × List Ty) :=
+        if k == s.params.length then some (s.params, qs0)
+        else match s.params, qs0 with
+          | [.tup es], _ => if es.length == k then some (es, qs0) else none
+          | _, [.tup es] => if es.length == s.params.length then some (s.params, es) else none
+          | _, _ => none
+      match reshaped with
+      | none => false
+      | some (ps, qs) =>
+      sh.within (FnValues.shapeOf k effs) &&
         if s.tparams.isEmpty then
-          (qs.zip s.params).all (fun (q, p) => subAt q p) && subAt s.ret u
+          (qs.zip ps).all (fun (q, p) => subAt q p) && subAt s.ret u
         else
-          match ((s.params ++ [s.ret]).zip (qs ++ [u])).foldlM (fun σ (a, b) => a.matchArg env σ b) [] with
+          match ((ps ++ [s.ret]).zip (qs ++ [u])).foldlM (fun σ (a, b) => a.matchArg env σ b) [] with
           | some σ => s.tparams.all fun (v, cmp) => match σ.lookup v with
             | some x => !cmp || x.plainComparable
             | none => false
           | none => false
     | none => false
   | _ => false
+
+/-- A value of function type `own` (a shape's interface at its arguments)
+    fits function type `t` by variance (#231): the same arity, effects among
+    `t`'s, contravariant parameters and a covariant result. -/
+def fnTyFits (env : TyEnv) (own t : Ty) : Bool :=
+  match own, t with
+  | .struct om ots, .struct tm tts =>
+    match FnValues.parseName om, FnValues.parseName tm with
+    | some (k, oe), some (k', te) =>
+      let subAt (a b : Ty) : Bool := a == b || (a == .int && b == .rational) || match a, b with
+        | .struct x [], .struct y [] => x != y && env.isSub x y
+        | _, _ => false
+      k == k' && (FnValues.shapeOf k oe).within (FnValues.shapeOf k te) &&
+        ((tts.take k).zip (ots.take k)).all (fun (q, p) => subAt q p) &&
+        subAt ((ots.drop k).headD .void) ((tts.drop k).headD .void)
+    | _, _ => false
+  | _, _ => false
 
 structure Ctx where
   /-- How many retries without an expected type enclose this point: a later
@@ -1879,7 +1909,8 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
             | some t@(.struct m ts) =>
               match FnValues.parseName m with
               | some (k, _) =>
-                if k == s.params.length && (ts.all fun u => u.params.isEmpty) &&
+                let _ := k
+                if (ts.all fun u => u.params.isEmpty) &&
                     !ctx.types.fnRequests.contains (n, t) && fnFits ctx.types s t then some t else none
               | none => none
             | _ => none
@@ -4386,6 +4417,31 @@ partial def elabMember (ctx : Ctx) (p : Pos) (r : R) (m : String) (exp : Option 
             let σ := (((env.sparams.lookup cls).getD []).map (·.1)).zip (env.argsAt sn targs x)
             .struct i (((env.iargs.lookup (cls, i)).getD []).map (Ty.subst σ))
           let candidates := (env.supers sn).filter fun x => env.classes.contains s!"{x}${f}$fn"
+          -- (#231) wanted at a closed function type that no value class of
+          -- it gives but that it fits by variance: a class made for that type,
+          -- `{x}${f}$fn${k}` (the nearest class's, without type parameters),
+          -- holding the receiver; asked for the first time (a placeholder,
+          -- and the program is elaborated again with the class made)
+          if let some t@(.struct tm tts) := exp then
+            if (FnValues.parseName tm).isSome && (tts.all fun u => u.params.isEmpty) &&
+                !(candidates.any fun x => typeOf x == t) then
+              if let some x0 := candidates.head? then
+                if ((env.sparams.lookup s!"{x0}${f}$fn").getD []).isEmpty then
+                  let variantTy (c : String) : Ty :=
+                    let i := (env.info c).ifaces.headD ""
+                    .struct i ((env.iargs.lookup (c, i)).getD [])
+                  match env.classes.find? (fun c => c.startsWith s!"{x0}${f}$fn$" && variantTy c == t) with
+                  | some vc =>
+                    let tv ← fresh r.ty
+                    let nm := s!"$recv{tv}"
+                    let ctx' := { ctx with locals := { name := nm, slot := tv, ty := r.ty, mutable := false } :: ctx.locals }
+                    let rv ← elabConstruct ctx' p vc [] [.decl p "$self" none false (.ident p nm)] (some (.struct vc []))
+                    return ⟨.seq (.assign tv r.e) (← coerce p rv t), t⟩
+                  | none =>
+                    let key := s!".{x0}${f}"
+                    if !env.fnRequests.contains (key, t) && fnTyFits env (typeOf x0) t then
+                      modify fun st => { st with fnNeeds := st.fnNeeds ++ [(key, t)] }
+                      return ⟨.seq r.e (.prim .userErr []), t⟩
           let some x := (candidates.find? fun x => exp == some (typeOf x)).orElse fun _ => candidates.head?
             | eerr p s!"'{f}' is a method of {sn} that cannot be used as a value: call it with {f}(…) (a generic method, one with named parameters, and one whose type does not mention each of its class's type parameters once, as a whole parameter or result type, are no values, #210)"
           let cls := s!"{x}${f}$fn"
