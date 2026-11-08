@@ -1,5 +1,6 @@
 # a choice in the branches of an if (#235): the branch the conditions pick,
 # once, then its alternatives; names a condition binds are seen in its branch
+TakeOpt(O:?int):int = if (V := O?) then V else -1
 Main():void =
     var N:int = 3
     for (X := if (N > 2) then (1 | 2) else (10 | 20)) { Print("a {X}") }
@@ -13,3 +14,8 @@ Main():void =
     if (W := if (Print("cond"); N > 2) then (1 | 2 | 3) else 0, W = 3) then Print("f {W}")
     # in a for, with a range before
     for (I := 1..2, Z := if (I = 1) then (I | 100) else -I) { Print("g {Z}") }
+    # the alternatives take the written type, the set's place, or each other's
+    for (A:[]int = if (N > 2) then (array{} | array{1}) else array{2}) { Print("typed {A.Length}") }
+    for (O := if (N > 2) then (option{1} | false) else false) { Print("context {TakeOpt(O)}") }
+    var C:[]int = array{9}
+    if (set C = if (N > 2) then (array{} | array{1, 2}) else array{}, C.Length > 1) then Print("set {C.Length}")

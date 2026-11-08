@@ -45,13 +45,20 @@ def binding? : SExpr → Option Binding
   | .decl p x ty false (.app _ (.ident _ "$choice") as false) => some ⟨p, x, ty, as, none, none⟩
   | .decl p x ty false (.app _ (.ident _ "$choiceAt") (l :: as) false) => some ⟨p, x, ty, as, some l, none⟩
   | .decl p x ty false (.app _ (.ident _ "$branchChoice") [i] false) => some ⟨p, x, ty, [], none, some i⟩
+  | .decl p x ty false (.app _ (.ident _ "$branchChoiceAt") [l, i] false) => some ⟨p, x, ty, [], some l, some i⟩
   | _ => none
 
 /-- An `if … else …` with a choice in a branch (the branches of an `else if`
     chain included): it has the values of the branch its conditions pick. -/
 partial def isBranchy : SExpr → Bool
-  | .ite _ _ t (some e) => isChoice t || isChoice e || isBranchy t || isBranchy e
+  | i@(.ite _ _ t (some e)) => complete i && (isChoice t || isChoice e || isBranchy t || isBranchy e)
   | _ => false
+where
+  /-- Every `else if` of the chain has an `else`. -/
+  complete : SExpr → Bool
+    | .ite _ _ _ (some e@(.ite ..)) => complete e
+    | .ite _ _ _ (some _) => true
+    | _ => false
 
 /-- The branches of an `if … else if … else …` chain: each one's conditions
     (none for the last `else`) and its expression. -/
@@ -360,6 +367,24 @@ def liftClause (isVal : String → Bool) (isField : String → String → Bool) 
     st.pre.toList ++ [c']
   match c with
   | .app _ (.ident _ "$choice") _ false => [c]
+  -- (an `if` with choices in its branches as a binding's value: at its
+  -- written type, #235)
+  | .decl p x ty false rhs@(.ite ..) =>
+    if isBranchy rhs then [.decl p x ty false (.app p (.ident p "$branchChoice") [rhs] false)] else
+      if !hasLiftable rhs then [c] else run do return .decl p x ty false (← liftE isVal isField rhs)
+  | .decl p x ty true rhs@(.ite ..) =>
+    if isBranchy rhs then
+      let n := s!"$c{p.line}_{p.col}"
+      [.decl p n ty false (.app p (.ident p "$branchChoice") [rhs] false), .decl p x ty true (.ident p n)]
+    else if !hasLiftable rhs then [c] else run do return .decl p x ty true (← liftE isVal isField rhs)
+  | .set p l none rhs@(.ite ..) =>
+    if isBranchy rhs then
+      let (h, _, l') := setPrefix p l none
+      let n := s!"$c{p.line}_{p.col}"
+      h ++ [.decl p n none false (.app p (.ident p "$branchChoiceAt") [l', rhs] false), .set p l' none (.ident p n)]
+    else if !hasLiftable rhs then [c] else
+      let (h, o?, l') := setPrefix p l none
+      h ++ run do return .set p l' none (withOld p o? (← liftE isVal isField rhs))
   -- (`set L = …` as the last clause of a macro, which names its value)
   | .decl p x ty v (.set q l op r) =>
     if isChoice r || !hasLiftable r then [c] else

@@ -2047,7 +2047,7 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
       else elabSeq { ctx with canFail := true, inTaking := true } conds none
     if !(rc.e.mayFail ctx.sigProg) then
       eerr p "the condition of this if cannot fail (Verse requires a failable condition)"
-    let thenCtx := { ctxT with canFail := ctx.canFail }
+    let thenCtx := { ctxT with canFail := ctx.canFail, inTaking := ctx.inTaking }
     match elseE with
     | none =>
       let rt ← elabE thenCtx thenE (some .void)
@@ -4036,7 +4036,7 @@ partial def elabFor (ctx : Ctx) (p : Pos) (clauses : List SExpr) (body : SExpr) 
           let some b := Choice.binding? g | eerr g.pos "bad for clause"
           -- (an `if` with choices in its branches picks its branch first, once, #235)
           let (pre, ty, es) ← match b.branchy with
-            | some i => elabBranchAlts { c with canFail := true, inTaking := true } gp i b.ty
+            | some i => elabBranchAlts { c with canFail := true, inTaking := true } gp i b.ty b.place
             | none => do let (ty, es) ← elabAlts { c with canFail := true } gp b; pure (none, ty, es)
           checkNewLocal c gp n
           let k ← fresh .int
@@ -4076,7 +4076,7 @@ partial def elabFor (ctx : Ctx) (p : Pos) (clauses : List SExpr) (body : SExpr) 
     context of its own, tried when the ones before failed), and every
     branch's alternatives guarded by it (`B = j; a`), each seeing the names
     its conditions bind, at their written type or their join. -/
-partial def elabBranchAlts (ctx : Ctx) (p : Pos) (i : SExpr) (sty : Option STy) :
+partial def elabBranchAlts (ctx : Ctx) (p : Pos) (i : SExpr) (sty : Option STy) (place : Option SExpr := none) :
     EM (Option Expr × Ty × List Expr) := do
   let arms := Choice.arms i
   let bi ← fresh .int
@@ -4090,7 +4090,7 @@ partial def elabBranchAlts (ctx : Ctx) (p : Pos) (i : SExpr) (sty : Option STy) 
       if !(rc.e.mayFail ctx.sigProg) then
         eerr p "the condition of this if cannot fail (Verse requires a failable condition)"
       conds := conds.push (some rc.e)
-      ctxs := ctxs.push { cT with canFail := ctx.canFail }
+      ctxs := ctxs.push { cT with canFail := ctx.canFail, inTaking := ctx.inTaking }
     | none =>
       conds := conds.push none
       ctxs := ctxs.push ctx
@@ -4099,12 +4099,27 @@ partial def elabBranchAlts (ctx : Ctx) (p : Pos) (i : SExpr) (sty : Option STy) 
   let pick := (conds.toList.zipIdx).foldr (fun (c?, j) acc => match c? with
     | some c => Expr.ite c (setB j) acc
     | none => setB j) (.lit .void)
-  let t? ← sty.mapM (resolveTy ctx.types p)
+  -- (the written type, or for `set L = if …` the type of `L`)
+  let t? ← match ← sty.mapM (resolveTy ctx.types p) with
+    | some t => pure (some t)
+    | none => match place with
+      | some l => tryCatch (do pure (some (← elabE ctx l none).ty)) fun _ => pure none
+      | none => pure none
   let mut rs : Array (Nat × SExpr × R) := #[]
   for ((_, arm), j) in arms.zipIdx do
     let c := ctxs.getD j ctx
     for a in (Choice.alts? arm).getD [arm] do
-      rs := rs.push (j, a, ← elabE c a t?)
+      -- (without a type, each later one against the first's, else on its
+      -- own, as `elabAlts` does, #32)
+      let r ← match t?, rs[0]? with
+        | some t, _ => elabE c a (some t)
+        | none, none => elabE c a none
+        | none, some (_, _, r0) =>
+          if c.retries ≥ 3 then tryCatch (elabE c a none) fun _ => elabE c a (some r0.ty)
+          else
+            let c2 := { c with retries := c.retries + 1 }
+            tryCatch (elabE c2 a (some r0.ty)) fun _ => elabE c2 a none
+      rs := rs.push (j, a, r)
   let some (_, _, r0) := rs[0]? | eerr p "internal: an if without branches"
   let ty ← match t? with
     | some t => pure t
@@ -4162,7 +4177,7 @@ partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
       let p := b.pos
       let n := b.name
       let (pre, ty, es) ← match b.branchy with
-        | some i => elabBranchAlts ctx p i b.ty
+        | some i => elabBranchAlts ctx p i b.ty b.place
         | none => do let (ty, es) ← elabAlts ctx p b; pure (none, ty, es)
       checkNewLocal ctx p n
       let k ← fresh .int

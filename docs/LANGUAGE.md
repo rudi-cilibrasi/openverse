@@ -606,8 +606,8 @@ Main():void =
   - `set L op= R` evaluates `L`'s indices, then for `op=` its old value, then
     `R`'s lifted code, as `set` does.
 
-  An `if … else if … else …` whose branches are choices or plain values is
-  itself a choice (#235). Its conditions run once and pick a branch, whose
+  An `if … else if … else …` whose branches are choices or plain values
+  (not blocks) is itself a choice (#235). Its conditions run once and pick a branch, whose
   alternatives are then its values, seeing the names its conditions bind:
 
   ```verse
