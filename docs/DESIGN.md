@@ -299,10 +299,19 @@ flowchart LR
   repeat or nest them in its shape's type arguments, so such methods are
   no values (#171).
 - **`subscribable_event(t)`** is Verse code in a prelude (`subPrelude`):
-  `event(t)` with an array of handlers of type `type{_(:t):void}`, called
-  under the refinement in `Signal`, and a non-generic subscription object
-  holding a flag per handler, as a generic class cannot implement the
-  non-generic `cancelable` (#53).
+  `event(t)` with an array of (subscription, handler) pairs, the handlers
+  of type `type{_(:t):void}`, called under the refinement in `Signal`. A
+  subscription is a non-generic object with a live flag, as a generic
+  class cannot implement the non-generic `cancelable` (#53); `Signal`
+  drops the cancelled ones, so the array holds the live subscriptions and
+  those cancelled since the last `Signal`.
+- **Over-approximation.** The pass makes a method's value class whenever
+  `X.M` is written outside a call for some `X` and a class declares `M`,
+  as it cannot tell a method from a field, or from an array's `Length`.
+  An unused value class changes the bytecode, not the behaviour. The class
+  is made only when the class's type parameters each occur once in the
+  shape's type arguments, as whole types, so that it is always a valid
+  class (#53, #171).
 - **The cost of that choice.** A class implements an interface at one
   instantiation, so parameter and result types are matched exactly and the
   Book's variance applies to effects only. A generic function as a value

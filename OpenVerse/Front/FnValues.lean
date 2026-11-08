@@ -96,7 +96,7 @@ def pretty (msg : String) : String :=
   let word (w : String) : String :=
     if !(w.splitOn "$call").tail.isEmpty then
       match w.splitOn "$fn.$call" with
-      | f :: _ :: _ => s!"{f} (called as a function value)"
+      | f :: _ :: _ => s!"{f.replace "$" "."} (called as a function value)"
       | _ => "a function value"
     else if w.startsWith "$fn" then "a function type"
     else w
@@ -158,6 +158,9 @@ partial def _root_.OpenVerse.Front.SExpr.tyNames : SExpr → List String
   | .caseE _ e arms => e.tyNames ++ arms.flatMap fun (q, v) => (q.map SExpr.tyNames).getD [] ++ v.tyNames
   | .set _ l _ e => l.tyNames ++ e.tyNames
   | .mapLit _ kvs => kvs.flatMap fun (k, v) => k.tyNames ++ v.tyNames
+  | .structDef _ _ fs => fs.flatMap fun (_, t, d, _) => t.allNames ++ (d.map SExpr.tyNames).getD []
+  | .refineDef _ _ t cs => t.allNames ++ cs.flatMap SExpr.tyNames
+  | .str _ parts => parts.flatMap fun | .code e => e.tyNames | .text _ => []
   | _ => []
 
 /-- Whether a definition mentions the type `n`. -/
@@ -236,8 +239,10 @@ partial def _root_.OpenVerse.Front.STop.scan (bound : List String := []) (meths 
     let ms := methods.map (STop.scan bound)
     let (s, n) := scanL (fields.filterMap (·.2.2.1))
     let self (x : String) : String := if meths.contains x then "." ++ x else x
+    -- (a field's default is elaborated without `Self`: it names the
+    -- top-level function, not a method or field of the class)
     (parents.flatMap STy.fnShapes ++ fields.flatMap (·.2.1.fnShapes) ++ s ++ ms.flatMap (·.1),
-      (n.filter (!bound.contains ·) ++ ms.flatMap (·.2)).map self)
+      n ++ (ms.flatMap (·.2)).map self)
 
 /-- Add the shapes' interfaces and the value classes of the functions used
     as values (#210). A function is used as a value when its name occurs
@@ -290,9 +295,12 @@ def desugar (tops : List STop) (extra : List STop := []) : List STop := Id.run d
             | .name _ => true
             | t => !tpn.any t.hasName
           let overloaded := (ms.filter fun | .fn _ m' .. => m' == m | _ => false).length > 1
+          -- (and every one of them: the class's type arguments must be
+          -- recoverable from the shape's, #53)
+          let complete := tpn.all bare.contains
           if members.contains m && !overloaded && mtps.isEmpty && ps.all (!·.named) && !m.contains '$' &&
               !m.startsWith "(" &&
-              !effs.contains "override" && whole && bare.eraseDups.length == bare.length then
+              !effs.contains "override" && whole && complete && bare.eraseDups.length == bare.length then
             some (mp, c, tps, m, ps, effs, r)
           else none
         | _ => none

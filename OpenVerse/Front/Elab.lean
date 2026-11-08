@@ -3929,12 +3929,21 @@ partial def elabMember (ctx : Ctx) (p : Pos) (r : R) (m : String) : EM R := do
       return ⟨.prim (.tupGet k) [r.e], t⟩
     | none =>
       if ctx.types.classes.contains sn then
+        if f.startsWith "(" then
+          eerr p s!"X.{f}, a qualified method, cannot be used as a value: call it with X.{f}(…) (#210)"
         if ctx.hasMethod sn f then
           -- a method as a value (#210): an object of its declaring class's
           -- value class, holding the receiver, of its own function type
           let env := ctx.types
+          -- (one implementation per class below, as a call needs, #70)
+          let roots := ctx.rootsOf sn f
+          if let some root := roots.head? then
+            for d in env.concreteBelow sn do
+              for o in roots do
+                if ctx.implFor? d o f != ctx.implFor? d root f then
+                  eerr p s!"{d} implements {f} separately for {root} and {o}, so the value {f} would not say which: call it as X.({root}:){f}(…) or X.({o}:){f}(…)"
           let some x := (env.supers sn).find? (fun x => env.classes.contains s!"{x}${f}$fn")
-            | eerr p s!"'{f}' is a method of {sn} that cannot be used as a value: call it with {f}(…) (a generic method, one with named parameters, and one whose type repeats or nests its class's type parameters are no values, #210)"
+            | eerr p s!"'{f}' is a method of {sn} that cannot be used as a value: call it with {f}(…) (a generic method, one with named parameters, and one whose type does not mention each of its class's type parameters once, as a whole parameter or result type, are no values, #210)"
           let cls := s!"{x}${f}$fn"
           let xargs := env.argsAt sn targs x
           let t ← fresh r.ty
@@ -4508,29 +4517,26 @@ def concTops : Except String (List STop) :=
 def subPrelude : String := "
 cancelable := interface:
     Cancel():void
-subLive := class:
-    var Live:[]logic = array{}
 subscription := class(cancelable):
-    L:subLive
-    K:int
+    var Live:logic = true
     Cancel<override>():void =
-        if (set L.Live[K] = false) {}
+        set Live = false
 subscribable_event(t:type) := class(event(t)):
-    var Handlers:[]type{_(:t):void} = array{}
-    Subs:subLive = subLive{}
+    var Handlers:[]tuple(subscription, type{_(:t):void}) = array{}
     Signal<override>(X:t):void =
         if (Head?) then signalAll(Self, X)
-        for (I -> F : Handlers, Subs.Live[I]?):
-            F(X)
+        Hs := Handlers
+        set Handlers = for (H : Hs, H(0).Live?) { H }
+        for (H : Hs, H(0).Live?):
+            H(1)(X)
     Subscribe(F:type{_(:t):void}):cancelable =
-        set Handlers += array{F}
-        set Subs.Live += array{true}
-        subscription{L := Subs, K := Handlers.Length - 1}
+        S := subscription{}
+        set Handlers += array{(S, F)}
+        S
 "
 
 def subTops : Except String (List STop) :=
-  parsePrelude subPrelude ["subscription", "subLive", "Live", "Subs", "Handlers", "L", "K", "F", "I", "X", "t", "Head",
-    "signalAll"]
+  parsePrelude subPrelude ["subscription", "Live", "Handlers", "Hs", "H", "S", "F", "X", "t", "Head", "signalAll"]
 
 /-- The number of constructors in a Verse Core type (to bound the types a
     specialisation is made at, #174). -/
@@ -5308,7 +5314,13 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   -- concurrency (#156): the helpers, for a program with a <suspends> function
   -- (and `subscribable_event`, which extends the concurrency prelude's
   -- `event`, #210)
-  let usesSub := allTops0r.any (·.usesType "subscribable_event")
+  -- (unless the program defines its own)
+  let defines0 (n : String) : Option Pos := allTops0r.findSome? fun
+    | .classDef p m .. | .fn p m .. | .const p m .. => if m == n then some p else none
+  let usesSub := (defines0 "subscribable_event").isNone && allTops0r.any (·.usesType "subscribable_event")
+  if usesSub then
+    if let some p := defines0 "cancelable" then
+      throw s!"{p.show}: cancelable is the type subscribable_event's Subscribe gives: a program that uses subscribable_event cannot define its own (#210)"
   let usesConc := usesSub || allTops0r.any fun
     | .fn _ _ _ _ effs _ _ => effs.contains "suspends"
     | .classDef _ _ _ _ _ _ _ _ ms => ms.any fun
