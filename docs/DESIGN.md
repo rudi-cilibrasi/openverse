@@ -356,9 +356,9 @@ flowchart LR
   `$self.M(…)`, dispatched as any call of `M` is. The value takes the
   class nearest the receiver's static class whose type is the one
   expected, else the nearest (#219). A
-  generic class's value class has the class's type parameters; it cannot
-  repeat or nest them in its shape's type arguments, so such methods are
-  no values (#171).
+  generic class's value class has the class's type parameters; one that
+  repeats or nests them in its shape's type arguments is not built yet,
+  so such methods are no values (#171, #209).
 - **`subscribable_event(t)`** is Verse code in a prelude (`subPrelude`):
   `event(t)` with an array of (subscription, handler) pairs, the handlers
   of type `type{_(:t):void}`, called under the refinement in `Signal`. A
@@ -398,8 +398,9 @@ flowchart LR
   another by variance (that would need a wrapper object made at the
   conversion), and variance applies only where a closed type is written.
   A generic function as a value at open types would need a class that
-  repeats type arguments (`Identity$fn(t)` implementing `$fn1(t, t)`),
-  which needs the unifying refinement of #171.
+  repeats type arguments (`Identity$fn(t)` implementing `$fn1(t, t)`);
+  the refinement that unifies is there now (#209), the value classes are
+  not yet.
 
 ## Concurrency: suspends functions as frames
 
@@ -760,15 +761,24 @@ The front end's pins (`TyEnv.pinsOf`) name the argument positions
 `$pos j`: an argument is unpinned where it is a type parameter met there
 first, and pinned to its type over those first places otherwise. Every
 type parameter of a class is one of its Verse Core type arguments
-(`coreArgs` appends those its parent's do not mention), so arguments
-that agree with the pins are an instance of the class's: they determine
-its type arguments, and an override needs only as many as the declaring
-class. The elaborator types a refined call under `Ty.unifyEqs`, which
-unifies the same equations in the same order as `unify`, in its own
-types; the checker computes the refinement with `unify`. A dispatch rule
-also asks that the tested classes' pins on the receiver's arguments
+(`coreArgs` appends those that are not themselves one of its parent's),
+so arguments that agree with the pins are an instance of the class's:
+they determine its type arguments, and an override needs only as many as
+the declaring class. The elaborator types a refined call under
+`Ty.unifyEqs`, which unifies the same equations as `unify`, in the same
+order, in its own types (it splits a class type by its Verse arguments,
+and skips equations that already hold, so its result can differ by a
+renaming); the checker computes the refinement with `unify`. A dispatch
+rule also asks that the tested classes' pins on the receiver's arguments
 mention only those (`VTy.pinsBelow`): an object's arguments extend the
-receiver's, and the pins on the shared ones must agree on both.
+receiver's, and the pins on the shared ones must agree on both. The
+front end keeps to that: where a class's pin would mention an argument
+past its parent's (`wrapint(w) := class(pint([]w))`, below
+`pint(u) := class(pair(int, u))`), it takes its parent's pin there; an
+implementation at or above the receiver's class, or one that fixes none
+of its arguments, is called without a refinement; and a dispatch whose
+pins still relate the receiver's arguments to others is refused, until
+a dispatch can open those (#209, step 2).
 
 ## Typing the heap
 

@@ -1632,6 +1632,8 @@ class Gen:
         refinement that unifies the receiver's type arguments with the pins."""
         L, M = [], []
         q2, qd, qo, qn, qi = (self.fresh(x) for x in ['q2', 'qd', 'qo', 'qn', 'qi'])
+        qp, qs, qw = (self.fresh(x) for x in ['qp', 'qs', 'qw'])
+        C = self.fresh('QC')
         A, B, N = (self.fresh(x) for x in ['QA', 'QB', 'QN'])
         g1, g2, tag, mix, pk = (self.fresh(x) for x in ['G1', 'G2', 'QTag', 'Mix', 'Pk'])
         fs, ss, sw = (self.fresh(x) for x in ['Firsts', 'Sames', 'Swaps'])
@@ -1648,6 +1650,7 @@ class Gen:
         L.append('        set %s += 1' % N)
         L.append('        if (%s > %s) then X else %s' % (N, k, A))
         have_qo, have_qn, have_qi = chance(0.7), chance(0.5), chance(0.6)
+        have_qp, have_qw = chance(0.5), chance(0.5)
         L.append('%s(t:type) := class(%s(t, t)):' % (qd, q2))
         if chance(0.7):
             L.append('    %s<override>():t = %s' % (g1, B))
@@ -1675,6 +1678,17 @@ class Gen:
             L.append('%s(t:type) := class(%s([]t, t)):' % (qn, q2))
             L.append('    %s<override>():[]t = array{%s, %s}' % (g1, B, B))
             L.append('    %s<override>():string = "qn"' % tag)
+        if have_qp:
+            # a class below a closed fixer that wraps its own parameter (it
+            # takes the fixer's pins where its own would point past them)
+            L.append('%s(u:type) := class(%s(int, u)):' % (qp, q2))
+            L.append('    %s<override>():string = "qp {%s}"' % (tag, A))
+            L.append('%s(w:type) := class(%s([]w)):' % (qs, qp))
+            L.append('    %s:w' % C)
+        if have_qw:
+            # a class below a repeating one that wraps its own parameter
+            L.append('%s(u:type) := class(%s(?u)):' % (qw, qd))
+            L.append('    %s:u' % C)
         L.append('%s(Xs:[]%s(t, u) where t:type, u:type):[]t = for (X : Xs) { X.%s() }' % (fs, q2, g1))
         L.append('%s(Xs:[]%s(t, t) where t:type):[]t = for (X : Xs) { X.%s() }' % (ss, q2, g2))
         L.append('%s(Xs:[]%s(t, u), Y:t, Z:u where t:type, u:type):[]tuple(t, u) =' % (sw, q2))
@@ -1714,6 +1728,21 @@ class Gen:
                      (x, os_, v, x, g1, x, tag, v, x, tag))
             x, v = tmpname('X'), tmpname('V')
             M.append('for (%s : %s(%s)) { Print(if (%s := %s?) then "of {%s}" else "of none") }' % (x, fs, os_, v, x, v))
+        if have_qp:
+            ps_ = tmpname('Qp')
+            M.append('%s:[]%s(int, []int) = array{%s(int){%s := %s, %s := array{%s}, %s := %s}, %s([]int){%s := %s, %s := array{}}}' %
+                     (ps_, q2, qs, A, lit(), B, lit(), C, lit(), qp, A, lit(), B))
+            x = tmpname('X')
+            M.append('for (%s : %s) { Print("p {%s.%s()} {%s.%s()} {%s.%s().Length}") }' % (x, ps_, x, tag, x, g1, x, g2))
+            x = tmpname('X')
+            M.append('for (%s : %s(%s)) { Print("pf {%s}") }' % (x, fs, ps_, x))
+        if have_qw:
+            ws = tmpname('Qw')
+            M.append('%s:[]%s(?int, ?int) = array{%s(int){%s := false, %s := option{%s}, %s := %s}, %s(?int){%s := option{%s}, %s := false}}' %
+                     (ws, q2, qw, A, B, lit(), C, lit(), qd, A, lit(), B))
+            x, v = tmpname('X'), tmpname('V')
+            M.append('for (%s : %s) { Print(if (%s := %s.%s()?) then "wq {%s.%s()} {%s}" else "wq {%s.%s()} none") }' %
+                     (x, ws, v, x, g1, x, tag, v, x, tag))
         if have_qn:
             ns = tmpname('Qn')
             M.append('%s:[]%s([]int, int) = array{%s(int){%s := array{}, %s := %s}, %s([]int, int){%s := array{%s}, %s := 0}}' %

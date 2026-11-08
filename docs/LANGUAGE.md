@@ -172,7 +172,7 @@ Main():void =
 - Generic methods, overloaded functions and methods and ones with named
   parameters cannot be used as values, nor can a method whose type repeats,
   nests or leaves out one of its class's type parameters (`box(t)`'s
-  `Same(X:t):t` needs #171; its `Size():int` leaves `t` out). Lambdas and
+  `Same(X:t):t` is not done yet, #209; its `Size():int` leaves `t` out). Lambdas and
   nested functions are not released in Verse, so there are none.
 
 ## defer
@@ -418,7 +418,9 @@ circle := class(shape, labelled):
   `swap(a, b) := class(pair(b, a))`), fixed ones
   (`intcell := class(cell(int))`), and it may have type parameters of its
   own (`named(t, n) := class(cell(t))`). A class overrides a method if
-  it has as many type arguments as the class that declares it. It may fix
+  it has as many Verse Core type arguments as the class that declares it
+  (its parent's, then its own type parameters that are not one of them:
+  `dup(t)` has `pair`'s two, `t` and `t`). It may fix
   some of them to closed types (#142): `int_box := class(box(int))`
   overrides `box(t)`'s `Get():t` with `Get():int`, and code generic over
   `box(t)` (or over an interface `box` implements) runs it, typed under

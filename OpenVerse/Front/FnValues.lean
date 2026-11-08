@@ -383,8 +383,8 @@ def desugar (tops : List STop) (extra : List STop := []) (requests : List (Strin
             | none => true
           let tpn := tps.map (·.name)
           -- (a class's type parameters only as whole, distinct type
-          -- arguments of the shape: a class that repeats or nests them
-          -- could not implement it, #171)
+          -- arguments of the shape: one that repeats or nests them would
+          -- implement it under a refinement, not done yet, #209)
           let bare := targs.filterMap fun | .name x => if tpn.contains x then some x else none | _ => none
           let whole := targs.all fun t => match t with
             | .name _ => true

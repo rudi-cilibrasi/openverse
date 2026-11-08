@@ -637,21 +637,39 @@ def pinArg (j : Nat) : String := s!"$pos{j}"
     A pin is closed (`intbox := class(box(int))` gives `[some int]`) or
     relates the argument to others (`dup(t) := class(pair(t, t))` gives
     `[none, some $pos0]`). Every type parameter of `d` is one of its Verse
-    Core type arguments (`coreArgs` adds those its parent's do not
-    mention), so arguments that agree with the pins are an instance of
-    `d`'s: they determine `d`'s type arguments. -/
-def TyEnv.pinsOf (env : TyEnv) (d : String) : List (Option Ty) :=
+    Core type arguments (`coreArgs` adds those that are not themselves one
+    of its parent's), so arguments that agree with the pins are an
+    instance of `d`'s: they determine `d`'s type arguments. Where a pin
+    would mention an argument past its parent's (`sub(w) :=
+    class(pint([]w))` relates its second to its third), `d` takes its
+    parent's pin there instead: a dispatch on a receiver with its
+    parent's arguments could not name that one (#209). -/
+partial def TyEnv.pinsOf (env : TyEnv) (d : String) : List (Option Ty) :=
   let cs := env.coreArgs d (((env.sparams.lookup d).getD []).map fun (v, k) => Ty.param v k)
   let first (v : String) : Option Nat := cs.findIdx? fun | .param w _ => w == v | _ => false
   let σ := (cs.flatMap Ty.params).filterMap fun v => (first v).map fun j => (v, Ty.param (pinArg j) false)
-  cs.zipIdx.map fun (t, i) => match t with
+  let own := cs.zipIdx.map fun (t, i) => match t with
     | .param v _ => if first v == some i then none else some (t.subst σ)
     | _ => if t.params.all fun v => (first v).isSome then some (t.subst σ) else none
+  match (env.info d).parent with
+  | some q =>
+    let pq := env.pinsOf q
+    let low := lowerPins env own
+    own.zipIdx.map fun (o, i) =>
+      if ((low.getD i none).all (·.varsBelow pq.length)) then o else pq.getD i none
+  | none => own
+where
+  /-- Pins in Verse Core (as `TyEnv.lowerPins`): `pinArg j` is `var j`,
+      also past the pins' length (on a prefix of a class's arguments). -/
+  lowerPins (env : TyEnv) (ps : List (Option Ty)) : List (Option VTy) :=
+    let idx (v : String) : Nat := if v.startsWith "$pos" then ((v.drop 4).toNat?.getD 0) + 1 else 0
+    let n := ((ps.filterMap id).flatMap Ty.params).foldl (fun m v => max m (idx v)) ps.length
+    let penv := { env with tvars := (List.range n).map fun j => (pinArg j, Ty.param (pinArg j) false) }
+    ps.map (·.map (Ty.toVTy penv))
 
 /-- Pins in Verse Core: `pinArg j` is the type variable `var j`. -/
 def TyEnv.lowerPins (env : TyEnv) (ps : List (Option Ty)) : List (Option VTy) :=
-  let penv := { env with tvars := (List.range ps.length).map fun j => (pinArg j, Ty.param (pinArg j) false) }
-  ps.map (·.map (Ty.toVTy penv))
+  TyEnv.pinsOf.lowerPins env ps
 
 /-- The pins Verse Core records for class `d` (#142): its fixed type
     arguments if it is `pinned`, none otherwise (so that a placeholder of a
@@ -3075,7 +3093,9 @@ partial def elabAppBase (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (b
             -- class is called at the receiver's own type arguments, without
             -- the refinement: its frame is made by a call typed without it)
             let plainSusp := ms.suspends && env.isSub c e && !((ctx.sig? fname).map (·.tparams.isEmpty)).getD true
-            if !plainSusp && cls.any fun d => !(needOf (env.corePins d)).isEmpty then
+            -- (an implementation at or above the receiver's class is called
+            -- at the receiver's type arguments, which it takes as they are)
+            if !plainSusp && !env.isSub c e && cls.any fun d => !(needOf (env.corePins d)).isEmpty then
               -- one test per set of pins among the classes using `e`'s
               -- implementation: `Typed.dispatch` refines by the pins all the
               -- tested classes share, which may fix more than `e`'s (and it
@@ -3088,6 +3108,19 @@ partial def elabAppBase (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (b
                 | some pi => parts := parts.modify pi fun (k, ds') => (k, ds'.push d)
                 | none => parts := parts.push (key, #[d])
               for (pins, part) in parts.toList.reverse do
+                if !VTy.pinsBelow (env.lowerPins pins) rargs.length then
+                  -- (pins that relate the receiver's type arguments to ones
+                  -- it does not have: no refinement, so `e`'s implementation
+                  -- must take the receiver as it is)
+                  if !(needOf (env.corePins e)).isEmpty then
+                    eerr p s!"cannot dispatch {m} on {withArticle (Ty.struct c targs).show} to class {part[0]!} yet: its type arguments there relate to ones that {c} does not have (#209)"
+                  let sd ← fresh (.struct e (argsAt e))
+                  let ctx' := { ctx with locals := { name := s!"$self{sd}", slot := sd, ty := .struct e (argsAt e), mutable := false } :: (locs ++ ctx.locals) }
+                  let rc ← elabApp ctx' p (.ident mp fname) (.ident mp s!"$self{sd}" :: argIds.toList) bracket exp
+                  acc := .ite (.assign sd (.heap (.isTag (part.toList.map env.tagOf)) [.local slot]))
+                    (← coerce p rc msRet) acc
+                  emitted := true
+                  continue
                 -- (no instance of the receiver's type arguments agrees with
                 -- the pins: no object of `part` is the receiver)
                 let some μF := Ty.unifyEqs [] (needOf pins) | continue
@@ -3189,6 +3222,8 @@ partial def elabCast (ctx : Ctx) (p : Pos) (T : String) (args : List SExpr) (bra
   if common.isEmpty then
     eerr p s!"no class is below both {r.ty.show} and {T}, so {T}[…] would always fail"
   if parametric && env.coreArgs T targs != env.coreArgs S sargs then
+    if (Ty.unifyEqs [] ((env.coreArgs S sargs).zip (env.coreArgs T targs))).isSome then
+      eerr p s!"cannot cast a {r.ty.show} to {(Ty.struct T targs).show} yet: their type arguments agree only under a refinement, which a cast does not give (#209)"
     eerr p s!"a {r.ty.show} is never a {T}: their type arguments differ, so {T}[…] would always fail"
   -- a reference: a test of its object's class (#34)
   if env.isRefClass S then return ⟨.heap (.isTag (common.map env.tagOf)) [r.e], tty⟩
