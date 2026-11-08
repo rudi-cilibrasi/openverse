@@ -43,6 +43,16 @@ def peekT (k : Nat := 0) : PM Token := do
   let s ← get
   return s.toks[s.pos + k]?.getD (s.toks.back?.getD default)
 
+/-- The column of the first token on the line of token `i`: the line's
+    indentation. -/
+def lineColAt (i : Nat) : PM Nat := do
+  let s ← get
+  let some t := s.toks[i]? | return 0
+  let mut j := i
+  while j > 0 && (s.toks[j - 1]?.map fun u => u.line == t.line && u.file == t.file) == some true do
+    j := j - 1
+  return (s.toks[j]?.map (·.col)).getD 0
+
 def perr (t : Token) (msg : String) : PM α :=
   throw s!"{t.line}:{t.col}: {msg}"
 
@@ -488,6 +498,7 @@ partial def parseBranch (stop : Nat) : PM SExpr := do
 
 partial def parseIf (stop : Nat) : PM SExpr := do
   let t ← peekT
+  let ifLine ← lineColAt (← get).pos
   bump
   if (← peekT).isSym "{" then
     -- `if{c}` and `if{c} else e`: `c` in a
@@ -517,7 +528,9 @@ partial def parseIf (stop : Nat) : PM SExpr := do
       pure items
   let thenE ← if (← peekT).isKw "then" then do bump; parseBranch stop else parseBody stop
   let e ← peekT
-  if e.isKw "else" then
+  -- an `else` that starts a line belongs to the `if` whose line has its
+  -- indentation, not to a more indented one (#159)
+  if e.isKw "else" && !(e.bol && e.col < ifLine) then
     bump
     if (← peekT).isKw "if" then return .ite t.pos conds thenE (some (← parseIf stop))
     return .ite t.pos conds thenE (some (← parseBranch stop))
