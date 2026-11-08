@@ -292,9 +292,11 @@ flowchart LR
   why the shapes are generic per arity rather than one interface per
   function type: a `type{_(:int):int}` variable is then also a
   `type{_(:t):u}` at `t = u = int`.
-- **A method as a value** is an object of the declaring class's value
-  class `C$M$fn`, which holds the receiver in a field `$self` and whose
-  `$call…` calls `$self.M(…)`, dispatched as any call of `M` is. A
+- **A method as a value** is an object of a value class `C$M$fn`, made
+  for each class that declares or overrides `M`, which holds the receiver
+  in a field `$self` and whose `$call…` calls `$self.M(…)`, dispatched as
+  any call of `M` is. The value takes the class nearest the receiver's
+  static class, so an override's narrower result is the value's (#219). A
   generic class's value class has the class's type parameters; it cannot
   repeat or nest them in its shape's type arguments, so such methods are
   no values (#171).

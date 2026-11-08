@@ -908,6 +908,9 @@ partial def resolveTy (env : TyEnv) (p : Pos) : STy → EM Ty
     return .map kt (← resolveTy env p v)
   | .app n args => do
     let ts ← args.mapM (resolveTy env p)
+    -- (#220: its handlers take the value, so an event without one has none)
+    if n == "subscribable_event" && ts == [.void] then
+      eerr p "subscribable_event(void), an event without a value, is not supported: give it a type, subscribable_event(t)"
     match env.sparams.lookup n with
     | some ps =>
       if ps.length != ts.length then eerr p s!"{n} takes {ps.length} type argument(s), found {ts.length}"
@@ -1656,8 +1659,10 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
         if let some c := ctx.selfClass then
           if (ctx.types.fields c).any (·.1 == n) then
             return ← elabE ctx (.member p (.ident p "Self") n) exp
-          if ctx.hasMethod c n then
-            -- (a method of `Self` as a value, #210)
+          if ctx.hasMethod c n ||
+              ((ctx.types.methodOverloads.lookup n).map (·.any (ctx.hasMethod c ·))).getD false then
+            -- (a method of `Self` as a value, #210, also an overloaded one,
+            -- which the member says is no value)
             return ← elabE ctx (.member p (.ident p "Self") n) exp
         match ctx.sig? n with
         | some s =>
@@ -1704,6 +1709,8 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
   | .app p (.ident _ "$branch") [body] false => elabBranch ctx p body
   | .app p f args bracket => elabApp ctx p f args bracket exp
   | .member p (.ident _ n) m =>
+    if n == "(super:)" then
+      eerr p s!"(super:){m} cannot be used as a value: call it with (super:){m}(…), or name a method that calls it"
     match ctx.lookup n, ctx.types.enums.lookup n with
     | none, some vals =>
       -- `color.Red`: an enumerator
@@ -3936,9 +3943,16 @@ partial def elabMember (ctx : Ctx) (p : Pos) (r : R) (m : String) : EM R := do
       if ctx.types.classes.contains sn then
         if f.startsWith "(" then
           eerr p s!"X.{f}, a qualified method, cannot be used as a value: call it with X.{f}(…) (#210)"
-        if ctx.hasMethod sn f then
-          -- a method as a value (#210): an object of its declaring class's
-          -- value class, holding the receiver, of its own function type
+        -- (a method that a class below overloads is renamed, #106: one
+        -- overload visible here is still a value; more are overloaded)
+        let visibleOv := ((ctx.types.methodOverloads.lookup f).getD []).filter (ctx.hasMethod sn ·)
+        if visibleOv.length > 1 then
+          eerr p s!"'{f}' is an overloaded method of {sn}: an overloaded method cannot be used as a value (Book of Verse ch. 6)"
+        let hasValue := (ctx.types.supers sn).any fun x => ctx.types.classes.contains s!"{x}${f}$fn"
+        if ctx.hasMethod sn f || (visibleOv.length == 1 && hasValue) then
+          -- a method as a value (#210): an object of the value class of the
+          -- nearest class that declares or overrides it (#219: an override
+          -- may narrow the result), holding the receiver, of its type
           let env := ctx.types
           -- (one implementation per class below, as a call needs, #70)
           let roots := ctx.rootsOf sn f

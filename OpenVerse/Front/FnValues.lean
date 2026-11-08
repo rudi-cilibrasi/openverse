@@ -300,7 +300,7 @@ def desugar (tops : List STop) (extra : List STop := []) : List STop := Id.run d
           let complete := tpn.all bare.contains
           if members.contains m && !overloaded && mtps.isEmpty && ps.all (!·.named) && !m.contains '$' &&
               !m.startsWith "(" &&
-              !effs.contains "override" && whole && complete && bare.eraseDups.length == bare.length then
+              whole && complete && bare.eraseDups.length == bare.length then
             some (mp, c, tps, m, ps, effs, r)
           else none
         | _ => none
