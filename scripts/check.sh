@@ -22,6 +22,8 @@ echo "== class-feature fuzzing (${FUZZ_CLASSES:-200} programs)"
 scripts/fuzz-classes.sh "${FUZZ_CLASSES:-200}" 1
 echo "== float fuzzing (${FUZZ_FLOATS:-200} programs, against Python's doubles)"
 scripts/fuzz-floats.sh "${FUZZ_FLOATS:-200}" 1
+echo "== concurrency fuzzing (${FUZZ_CONC:-100} programs)"
+scripts/fuzz-conc.sh "${FUZZ_CONC:-100}" 1
 echo "== QuickProof pins"
 scripts/check-quickproof-pins.sh
 echo "check.sh: all checks passed"

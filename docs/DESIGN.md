@@ -168,7 +168,11 @@ An elaborator bug therefore cannot make a program that runs violate a
 theorem: such a program is rejected with "internal error". The front-end
 fuzzer (`scripts/fuzz-front.sh`) mutates real sources to look for such
 rejections and for crashes. It found one, a stack overflow on recursive
-structs, now rejected.
+structs, now rejected. The concurrency fuzzer (`scripts/fuzz-conc.sh`, #196)
+writes random programs combining the features of the suspends lowering
+(generic functions with roots, refined dispatch, spawned dispatches, nested
+spawns, events, cancellation) and checks that none is rejected and that
+Lean and C agree.
 
 ## Modules: a renaming before elaboration
 
