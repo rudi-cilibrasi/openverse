@@ -978,11 +978,12 @@ partial def witness (env : TyEnv) (dictBase : Nat) (dictVars : List String) : Ty
     | some j => .local (dictBase + j)
     | none => .lit .void
 
-/-- Whether a Verse Core type mentions a type variable. -/
+/-- Whether a Verse Core type mentions a type variable, also as a type
+    argument of a reference type (a task's result, #204). -/
 partial def _root_.OpenVerse.VTy.mentionsVar : VTy → Bool
   | .var _ => true
   | .arr t | .opt t => t.mentionsVar
-  | .tup ts => ts.any VTy.mentionsVar
+  | .tup ts | .ref _ ts => ts.any VTy.mentionsVar
   | _ => false
 
 /-- The value of a prototype's field of type `t`: its type's default, or a

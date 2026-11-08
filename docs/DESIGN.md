@@ -449,8 +449,10 @@ know their type arguments.
 
 **Specialising generic functions with roots.** A generic function whose
 roots would depend on its type parameters (a `branch` or `rush`; a
-`spawn` whose call's arguments or task have such types, or a spawned
-dispatch reading values of such types; any `spawn` in an immediate one,
+`spawn` whose call's arguments or task have such types, also as the type
+arguments of a class or of the task itself (a spawned `E.Eval()` on an
+`expr(t)` whose classes all fix `t`, #204), or a spawned dispatch reading
+values of such types; any `spawn` in an immediate one,
 whose roots are made only for non-generic functions; or a call of such a
 function at such types) is specialised before the lowering (`specialise`, #174). Verse Core
 is first-order and a generic call passes one witness argument per type
