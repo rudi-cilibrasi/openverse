@@ -450,7 +450,11 @@ def tc : Expr → Option VTy → Option VTy
       -- propose type arguments (#39), then check the fields against them; the
       -- type arguments of a prototype of the class when the fields do not
       -- determine them (`Main`'s prelude allocates the prototypes, #37)
-      let args := firstOk (fun a => tcL es (fs.map (VTy.inst a))) (newArgs (fun _ => bindArgs fs es []) fs m)
+      -- (the proposal must also agree with the class's pins, #142: an
+      -- `an_box := class(box(animal))`'s prototype holds an `animal`, whose
+      -- fields propose `ref [animal] []`, not the pinned `ref [animal, dog] []`)
+      let args := firstOk (fun a => tcL es (fs.map (VTy.inst a)) && VTy.pinsOK (S.pinsOf t) a)
+        (newArgs (fun _ => bindArgs fs es []) fs m)
         (((S.protos.find? (·.1 == t)).map (·.2)).getD [])
       if tcL es (fs.map (VTy.inst args)) && VTy.pinsOK (S.pinsOf t) args then expect m (.ref [t] args)
       else none
