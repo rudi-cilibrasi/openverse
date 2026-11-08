@@ -908,6 +908,9 @@ partial def resolveTy (env : TyEnv) (p : Pos) : STy → EM Ty
     return .map kt (← resolveTy env p v)
   | .app n args => do
     let ts ← args.mapM (resolveTy env p)
+    -- (#220: its handlers take the value, so an event without one has none)
+    if n == "subscribable_event" && ts == [.void] && env.classes.contains "$subscription" then
+      eerr p "subscribable_event(void), an event without a value, is not supported: give it a type, subscribable_event(t)"
     match env.sparams.lookup n with
     | some ps =>
       if ps.length != ts.length then eerr p s!"{n} takes {ps.length} type argument(s), found {ts.length}"
@@ -1656,8 +1659,10 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
         if let some c := ctx.selfClass then
           if (ctx.types.fields c).any (·.1 == n) then
             return ← elabE ctx (.member p (.ident p "Self") n) exp
-          if ctx.hasMethod c n then
-            -- (a method of `Self` as a value, #210)
+          if ctx.hasMethod c n ||
+              ((ctx.types.methodOverloads.lookup n).map (·.any (ctx.hasMethod c ·))).getD false then
+            -- (a method of `Self` as a value, #210, also an overloaded one,
+            -- which the member says is no value)
             return ← elabE ctx (.member p (.ident p "Self") n) exp
         match ctx.sig? n with
         | some s =>
@@ -1704,14 +1709,16 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
   | .app p (.ident _ "$branch") [body] false => elabBranch ctx p body
   | .app p f args bracket => elabApp ctx p f args bracket exp
   | .member p (.ident _ n) m =>
+    if n == "(super:)" then
+      eerr p s!"(super:){m} cannot be used as a value: call it with (super:){m}(…), or name a method that calls it"
     match ctx.lookup n, ctx.types.enums.lookup n with
     | none, some vals =>
       -- `color.Red`: an enumerator
       match vals.idxOf? m with
       | some k => return ⟨.lit (.int k), .enum n⟩
       | none => eerr p s!"enum {n} has no value '{m}'"
-    | _, _ => elabMember ctx p (← elabE ctx (.ident p n) none) m
-  | .member p e m => elabMember ctx p (← elabE ctx e none) m
+    | _, _ => elabMember ctx p (← elabE ctx (.ident p n) none) m exp
+  | .member p e m => elabMember ctx p (← elabE ctx e none) m exp
   | .construct p name targs args => elabConstruct ctx p name targs args exp
   | .mapLit p entries => elabMapLit ctx p entries exp
   | .structDef p _ _ | .enumDef p _ _ | .refineDef p _ _ _ => eerr p "struct, enum and type definitions must be at the top level"
@@ -3873,7 +3880,7 @@ partial def elabFor (ctx : Ctx) (p : Pos) (clauses : List SExpr) (body : SExpr) 
       | _ => eerr p "internal: nested for"
 
 /-- `e.m`: `.Length` of an array or string, or a field of a struct. -/
-partial def elabMember (ctx : Ctx) (p : Pos) (r : R) (m : String) : EM R := do
+partial def elabMember (ctx : Ctx) (p : Pos) (r : R) (m : String) (exp : Option Ty := none) : EM R := do
   match r.ty, m with
   | .arr _, "Length" => return ⟨.prim .len [r.e], .int⟩
   | .map _ _, "Length" => return ⟨.prim .len [r.e], .int⟩
@@ -3936,18 +3943,34 @@ partial def elabMember (ctx : Ctx) (p : Pos) (r : R) (m : String) : EM R := do
       if ctx.types.classes.contains sn then
         if f.startsWith "(" then
           eerr p s!"X.{f}, a qualified method, cannot be used as a value: call it with X.{f}(…) (#210)"
-        if ctx.hasMethod sn f then
-          -- a method as a value (#210): an object of its declaring class's
-          -- value class, holding the receiver, of its own function type
+        -- (a method that a class below overloads is renamed, #106: one
+        -- overload visible here is still a value; more are overloaded)
+        let visibleOv := ((ctx.types.methodOverloads.lookup f).getD []).filter (ctx.hasMethod sn ·)
+        if visibleOv.length > 1 then
+          eerr p s!"'{f}' is an overloaded method of {sn}: an overloaded method cannot be used as a value (Book of Verse ch. 6)"
+        let hasValue := (ctx.types.supers sn).any fun x => ctx.types.classes.contains s!"{x}${f}$fn"
+        if ctx.hasMethod sn f || (visibleOv.length == 1 && hasValue) then
+          -- a method as a value (#210): an object of the value class of the
+          -- nearest class that declares or overrides it (#219: an override
+          -- may narrow the result), holding the receiver, of its type, or
+          -- of a class further up whose type is the one expected
           let env := ctx.types
-          -- (one implementation per class below, as a call needs, #70)
-          let roots := ctx.rootsOf sn f
+          -- (one implementation per class below, as a call needs, #70; of
+          -- the overload visible here, as a class below renamed it, #106)
+          let fv := if ctx.hasMethod sn f then f else visibleOv.headD f
+          let roots := ctx.rootsOf sn fv
           if let some root := roots.head? then
             for d in env.concreteBelow sn do
               for o in roots do
-                if ctx.implFor? d o f != ctx.implFor? d root f then
+                if ctx.implFor? d o fv != ctx.implFor? d root fv then
                   eerr p s!"{d} implements {f} separately for {root} and {o}, so the value {f} would not say which: call it as X.({root}:){f}(…) or X.({o}:){f}(…)"
-          let some x := (env.supers sn).find? (fun x => env.classes.contains s!"{x}${f}$fn")
+          let typeOf (x : String) : Ty :=
+            let cls := s!"{x}${f}$fn"
+            let i := (env.info cls).ifaces.headD ""
+            let σ := (((env.sparams.lookup cls).getD []).map (·.1)).zip (env.argsAt sn targs x)
+            .struct i (((env.iargs.lookup (cls, i)).getD []).map (Ty.subst σ))
+          let candidates := (env.supers sn).filter fun x => env.classes.contains s!"{x}${f}$fn"
+          let some x := (candidates.find? fun x => exp == some (typeOf x)).orElse fun _ => candidates.head?
             | eerr p s!"'{f}' is a method of {sn} that cannot be used as a value: call it with {f}(…) (a generic method, one with named parameters, and one whose type does not mention each of its class's type parameters once, as a whole parameter or result type, are no values, #210)"
           let cls := s!"{x}${f}$fn"
           let xargs := env.argsAt sn targs x
@@ -3955,12 +3978,10 @@ partial def elabMember (ctx : Ctx) (p : Pos) (r : R) (m : String) : EM R := do
           let nm := s!"$recv{t}"
           let ctx' := { ctx with locals := { name := nm, slot := t, ty := r.ty, mutable := false } :: ctx.locals }
           let rv ← elabConstruct ctx' p cls [] [.decl p "$self" none false (.ident p nm)] (some (.struct cls xargs))
-          let i := (env.info cls).ifaces.headD ""
-          let σ := (((env.sparams.lookup cls).getD []).map (·.1)).zip xargs
-          let own : Ty := .struct i (((env.iargs.lookup (cls, i)).getD []).map (Ty.subst σ))
+          let own := typeOf x
           return ⟨.seq (.assign t r.e) (← coerce p rv own), own⟩
-        if ((ctx.types.methodOverloads.lookup f).map (·.any (ctx.hasMethod sn ·))).getD false then
-          eerr p s!"'{f}' is an overloaded method of {sn}: an overloaded method cannot be used as a value (Book of Verse ch. 6)"
+        if visibleOv.length == 1 then
+          eerr p s!"'{f}' is a method of {sn} that cannot be used as a value: call it with {f}(…) (a generic method, one with named parameters, and one whose type does not mention each of its class's type parameters once, as a whole parameter or result type, are no values, #210)"
         eerr p s!"class {sn} has no field '{f}'"
       eerr p s!"struct {sn} has no field '{f}'"
   | t, m => eerr p s!"{t.show} has no member '{m}'"
