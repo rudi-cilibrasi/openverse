@@ -426,7 +426,8 @@ def TyEnv.concreteBelow (env : TyEnv) (T : String) : List String :=
     !i.isIface && !i.isAbstract && env.isSub d T
 
 /-- A class represented by references to heap objects (#34): every class
-    and interface, parametric ones too (#39), with a concrete class below. -/
+    and interface, parametric ones too (#39), with a concrete class below,
+    and the hidden placeholder classes (#157). -/
 def TyEnv.isRefClass (env : TyEnv) (n : String) : Bool :=
   env.classes.contains n && env.phs.contains n ||
   env.classes.contains n &&
@@ -437,8 +438,9 @@ def TyEnv.isRefClass (env : TyEnv) (n : String) : Bool :=
 /-- The class tag of class `d` in Verse Core: its index in definition order. -/
 def TyEnv.tagOf (env : TyEnv) (d : String) : Nat := (env.classes.idxOf? d).getD 0
 
-/-- The tags of the concrete classes at or below `T`: a reference of static
-    type `T` refers to an object of one of them. -/
+/-- The class tags of `T`'s Verse Core reference type: the concrete classes
+    at or below it (a reference of static type `T` refers to an object of
+    one of them), then the hidden placeholder classes below it (#157). -/
 def TyEnv.refTags (env : TyEnv) (T : String) : List Nat :=
   (env.concreteBelow T).map env.tagOf ++ (env.phs.filter (env.isSub · T)).map env.tagOf
 
@@ -1085,13 +1087,19 @@ partial def slotDefault (env : TyEnv) (dictBase : Nat) (params : List Ty) (visit
         | .ok fs => return .heap (.new (env.tagOf d)) fs
         | .error msg => lastErr := msg
       if !pinnedOut.isEmpty && pinnedOut.length == (env.concreteBelow n).length then
-        -- (its hidden placeholder class, which fixes nothing, #157)
-        let h := s!"{n}$placeholder"
-        if env.phs.contains h && !visiting.contains h then
-          match (env.fields h ts).mapM fun (_, ft, _) => slotDefault env dictBase params (h :: visiting) ft with
-          | .ok fs => return .heap (.new (env.tagOf h)) fs
-          | .error msg => throw msg
-        throw s!"a variable or temporary of type {key} needs an initial value, and every class below {n} ({", ".intercalate pinnedOut}) fixes type arguments that {key} does not have, so none can be it (#142)"
+        -- (its hidden placeholder class, or another's below it, which fix
+        -- no more than it does, #157)
+        let h0 := s!"{n}$placeholder"
+        let hs := (if env.phs.contains h0 then [h0] else []) ++ env.phs.filter fun h => h != h0 && env.isSub h n
+        for h in hs do
+          if !visiting.contains h then
+            match (env.fieldsSeen n ts h).mapM fun (_, ft, _) => slotDefault env dictBase params (h :: visiting) ft with
+            | .ok fs => return .heap (.new (env.tagOf h)) fs
+            | .error msg => lastErr := msg
+        if !hs.isEmpty then throw lastErr
+        let why := if (env.info n).isIface && (env.supers n).any (fun x => !(env.fields x).isEmpty)
+          then s!" (an interface that declares fields, or is below one, gets no placeholder object, #157)" else " (#142)"
+        throw s!"a variable or temporary of type {key} needs an initial value, and every class below {n} ({", ".intercalate pinnedOut}) fixes type arguments that {key} does not have, so none can be it{why}"
       throw lastErr
     -- a parametric class starts with no option set, which has every such type
     if env.classes.contains n then return .lit vt.default
@@ -5114,14 +5122,13 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   -- concrete classes all fix some of its type arguments: a variable of its
   -- type at other type arguments starts as one. It has the class's fields
   -- (an interface's: none, so only for interfaces whose own and inherited
-  -- interfaces declare no fields), and the program never makes one
+  -- interfaces declare no fields; a class's include its interfaces'), and
+  -- the program never makes one
   let needsPh (n : String) : Bool :=
     let i := env.info n
-    (env.sparams.lookup n).isSome && env.isRefClass n && !env.pinned.contains n &&
+    (env.sparams.lookup n).isSome && env.isRefClass n &&
     (env.concreteBelow n).all (fun d => env.pinned.contains d && (env.corePins d).any Option.isSome) &&
-    (if i.isIface then (env.supers n).all fun x => (env.fields x).isEmpty
-     else (env.supers n).all fun x => !(env.info x).isIface ||
-       (env.fields x).all fun (f, _, _) => (env.fields n).any (·.1 == f))
+    (!i.isIface || (env.supers n).all fun x => (env.fields x).isEmpty)
   for n in env.classes.filter needsPh do
     let h := s!"{n}$placeholder"
     let i := env.info n
@@ -5135,7 +5142,9 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
                                    ifaces := if i.isIface then [n] else [], isAbstract := true })],
       pargs := if i.isIface then env.pargs else env.pargs ++ [(h, own)],
       iargs := if i.isIface then env.iargs ++ [((h, n), own)] else env.iargs,
-      phs := env.phs ++ [h] }
+      phs := env.phs ++ [h],
+      -- (below a class that records pins, it records the same)
+      pinned := if env.pinned.contains n then env.pinned ++ [h] else env.pinned }
   env := { env with protos := env.makeProtos }
   if let some n := env.recursiveStruct? then
     if env.classes.contains n then

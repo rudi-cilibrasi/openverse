@@ -1,4 +1,4 @@
-# expect: every class below named (ints) fixes type arguments that named(t) does not have, so none can be it
+# expect: (an interface that declares fields, or is below one, gets no placeholder object, #157)
 named(t:type) := interface:
     Name:string
     Get():t

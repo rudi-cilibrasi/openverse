@@ -522,9 +522,11 @@ position in every class below the one that declares it.
   initial value. So the front end adds a hidden abstract class below it,
   `n$placeholder`, with its fields and no pins (#157). Its tag is in every
   reference type the class is in, a slot starts as one of its objects, and
-  no dispatch test names it. An interface gets one only when neither it nor
-  the interfaces above it declare fields, since a field read through an
-  interface needs the field at the same place in every class.
+  no dispatch test names it. Below a class that records pins it records
+  the same. An interface gets one of its own only when neither it nor the
+  interfaces above it declare fields (its fields would have to sit where
+  every class has them); otherwise a placeholder of a class below it
+  serves, when there is one.
   A class that repeats type arguments cannot override yet (that would
   need unification), nor can one that adds its own, as a `named`'s
   implementation needs an `n` the caller does not have.
