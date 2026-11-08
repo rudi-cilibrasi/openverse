@@ -77,7 +77,8 @@ flowchart RL
 | 2 | `04 00 00000000 02000000 00000000 01000000` | PRIM `add` (code 0), k 0, 2 args: nodes 0 and 1 |
 | 3 | `02 00000000 02000000` | ASSIGN slot 0, node 2 |
 
-followed by `root:u32` = 3. These are the bytes `Encode.encFn` writes.
+followed by `root:u32` = 3. These are the bytes `Encode.encFn` writes after
+the function's header (whose `nnodes` is 4).
 
 ## Primitive codes
 

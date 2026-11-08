@@ -68,7 +68,7 @@ sequenceDiagram
     I->>S: vx_store_out_append: print
     alt the context fails
         I->>S: vx_store_rollback: undo the logged writes, newest first, and cut the output back
-    else it succeeds
+    else it ends any other way (a value, break, return)
         I->>S: vx_store_commit: keep everything (enclosing contexts keep the log)
     end
 ```
@@ -140,17 +140,18 @@ flowchart LR
 
 The parser and elaborator are ordinary code (`partial def`) and are not
 proved correct. Each program they produce is checked by decidable functions
-that are proved to establish the hypotheses of the core theorems:
+that are proved to establish the hypotheses of the core theorems.
 
 ```mermaid
 flowchart LR
     src(["Verse source"]) --> fe["front end<br/>parser and elaborator<br/>(not proved)"]
     fe --> P["Verse Core program<br/>+ certificate: function<br/>signatures, slot types"]
     P --> chk{"Prog.check<br/>Prog.checkTypes<br/>Prog.checkControl"}
-    chk -- "all pass" --> acc["Prog.accepted holds:<br/>one outcome, one output;<br/>no slot, call, type or control error;<br/>Main's value has its type;<br/>no failure unless Main is #lt;decides#gt;"]
+    chk -- "all pass" --> acc["Prog.accepted applies:<br/>one outcome, one output;<br/>no slot, call, type or control error;<br/>Main's value has its type;<br/>no failure unless Main is #lt;decides#gt;"]
     chk -- "one fails" --> ie["rejected:<br/>internal error"]
 ```
 
+The checks, and what each is proved to give:
 
 | Check | Proved to give | Used by |
 |---|---|---|
@@ -418,9 +419,9 @@ remaining trusted step is reading that the two texts are the same formula
 ```mermaid
 flowchart LR
     subgraph lean["Lean: lake build"]
-        apply["Prim.apply<br/>(the semantics)"]
-        lf["Seams.lean<br/>cAddFits, cFloorDiv, …"]
-        apply -- "add_seam … modulo_seam" --- lf
+        apply["Prim.apply<br/>(the semantics, Prims.lean)"]
+        lf["the formulas<br/>cAddFits, cFloorDiv, …<br/>(Seams.lean)"]
+        apply -- "apply_add … apply_modulo" --- lf
     end
     subgraph coq["Coq: QuickProof qp verify"]
         cf["arith_exact.c<br/>the formulas, in C"]

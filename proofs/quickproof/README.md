@@ -17,7 +17,7 @@ flowchart LR
     law["law<br/>a C harness: nondet inputs,<br/>qp_assume, qp_assert"] --> check
     comp["component<br/>load.c, arith.c or store.c"] --> check
     check["qp check<br/>native runs under ASan/UBSan,<br/>CompCert's interpreter, mutants"] --> verify["qp verify<br/>Coq checks the VST proof"]
-    verify --> thm["Theorem LAW :<br/>harness_safe whole_prog<br/>no undefined behaviour,<br/>for any input the law allows"]
+    verify --> thm["Theorem LAW :<br/>harness_safe whole_prog<br/>read through VST's adequacy:<br/>no undefined behaviour,<br/>for any input the law allows"]
     thm --> pin["project.conf pins the commit;<br/>check-quickproof-pins.sh fails<br/>when a pinned file changes"]
 ```
 

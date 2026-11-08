@@ -38,14 +38,16 @@ flowchart TD
         interp -- "adequacy: eval_iff, Eval.det<br/>(Adequacy.lean)" --> sem
     end
     subgraph c["C runtime: runtime/ (cverse FILE.vbc)"]
+        direction LR
         load["load.c: validating loader<br/>QuickProof law (WellScoped)"]
         store["store.c: frame + undo journal<br/>QuickProof law (rollback)"]
         arith["arith.c: int64 operations<br/>QuickProof law + Lean seam (Seams.lean)"]
         cint["interp.c: transcription of Interp.lean<br/>differential tests and fuzzing"]
+        load ~~~ store ~~~ arith ~~~ cint
     end
     src --> front
     front --> core
-    core -- "Prog.check (Check.lean), then<br/>Prog.encode → OVBC (docs/FORMAT.md)" --> c
+    core -- "checked: Prog.check, Prog.checkTypes,<br/>Prog.checkControl; then Prog.encode<br/>writes OVBC (docs/FORMAT.md)" --> c
 ```
 
 ## What is proved

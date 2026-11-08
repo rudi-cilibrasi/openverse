@@ -10,7 +10,7 @@ that no tool checks is reading that the two formulas below are the same.
 ```mermaid
 flowchart LR
     subgraph lean["Lean (OpenVerse/Core)"]
-        L1["Prim.apply on int64<br/>(Seams.lean)"]
+        L1["Prim.apply on int64,<br/>as formulas (Seams.lean)"]
         L2["Prog.WellScoped ⟹ Eval.scoped_ok<br/>(Scoping.lean)"]
         L3["a failed context restarts<br/>from the saved state<br/>(Eval.ite_fail, EvalFor.skip)"]
     end
