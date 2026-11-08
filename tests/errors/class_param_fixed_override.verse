@@ -1,7 +1,8 @@
-# expect: intbox fixes or repeats type arguments that base leaves open, so it cannot override Get
-base(t:type) := class:
-    Value:t
-    Get():t = Value
-intbox := class(base(int)):
-    Get<override>():int = 0
+# expect: dup repeats type arguments that pair leaves open, or fixes them to types that mention type parameters, so it cannot override Get
+pair(t:type, u:type) := class:
+    A:t
+    B:u
+    Get():t = A
+dup(t:type) := class(pair(t, t)):
+    Get<override>():t = B
 Main():void = Print("x")

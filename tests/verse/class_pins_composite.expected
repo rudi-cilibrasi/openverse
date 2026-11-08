@@ -1,0 +1,7 @@
+arr_box 3
+opt_box x
+opt_box none
+box
+arr_box 1
+box
+exit=0

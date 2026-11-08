@@ -302,11 +302,23 @@ position in every class below the one that declares it.
   that class's variable positions (`TyEnv.coreVars`), so a field has one
   type through every reference of the hierarchy. Dispatch passes the
   receiver as an instance of the implementing class at the arguments it
-  has there (`upArgs`, `argsBelow`). A class that fixes or repeats the
-  type arguments cannot override yet: from code generic over `cell(t)`, an
-  `intcell`'s implementation needs `t = int`, which Verse Core expresses
-  only under a dispatch's refinement (see "Pins and dispatch" below, #142),
-  and a `named`'s an `n` the caller does not have.
+  has there (`upArgs`, `argsBelow`). From code generic over `cell(t)`,
+  an `intcell`'s implementation needs `t = int`: the elaborator matches
+  the receiver's type arguments against the ones `intcell` fixes, checks
+  the call with the matched variables replaced by them, and emits a
+  dispatch that `Typed.dispatch` types under that refinement (see "Pins
+  and dispatch" below, #142). One test covers the classes that share an
+  implementation and fix the same arguments; a class whose fixed
+  arguments the receiver's rule out (an `intcell` from code over
+  `cell(string)`) gets none. A chain with such a test is assigned to a
+  slot of the method's result type, as the rule needs an expected type.
+  Only the classes at or below one whose implementation fixes arguments
+  its declaring class leaves open record pins (`TyEnv.pinned`): every
+  object agrees with its class's pins, and a placeholder of another class
+  may have any type arguments.
+  A class that repeats type arguments cannot override yet (that would
+  need unification), nor can one that adds its own, as a `named`'s
+  implementation needs an `n` the caller does not have.
 
 ## Typing the heap
 
@@ -378,8 +390,8 @@ Phase 3 (#20) adds a heap of objects, each with a class tag and fields
   to it has that position. Code generic over `box(t)` cannot call
   `int_box`'s override with the ordinary call rule, since it needs
   `t = int`. `Typed.dispatch` types a dispatch
-  `if (isTag us Y) then F(Y, …) else E` (the shape the elaborator is to
-  emit for such overrides, step 2 of #142) by a substitution `μ` that makes
+  `if (isTag us Y) then F(Y, …) else E`, the shape the elaborator emits
+  for such overrides, by a substitution `μ` that makes
   `Y`'s type arguments agree with the pins of the classes `us`, applied to
   both sides of the call: the arguments against the parameters, and the
   result against the expected type. When the call runs, the object's

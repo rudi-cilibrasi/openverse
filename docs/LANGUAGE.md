@@ -366,11 +366,17 @@ circle := class(shape, labelled):
   type parameters (`square(t) := class(shape(t))`, in any order:
   `swap(a, b) := class(pair(b, a))`), fixed ones
   (`intcell := class(cell(int))`), and it may have type parameters of its
-  own (`named(t, n) := class(cell(t))`). A class overrides a method only
-  if its type arguments are those of the class that declares it, up to
-  renaming: one that fixes, repeats or adds type arguments the declaring
-  class leaves open cannot, since code generic over that class could not
-  call it. An interface can be parametric too (#53):
+  own (`named(t, n) := class(cell(t))`). A class overrides a method if
+  its type arguments are those of the class that declares it, up to
+  renaming, except that it may fix some of them to closed types (#142):
+  `int_box := class(box(int))` overrides `box(t)`'s `Get():t` with
+  `Get():int`, and code generic over `box(t)` (or over an interface
+  `box` implements) runs it, typed under `t = int`; the dispatch skips
+  the classes whose fixed arguments the receiver's type rules out. One
+  that repeats type arguments (`dup(t) := class(pair(t, t))`), fixes them
+  to types that mention type parameters, or adds type parameters of its
+  own cannot override yet: code generic over the declaring class could
+  not call it. An interface can be parametric too (#53):
   `container(t) := interface: Get():t`, with `box(t) := class(container(t))`.
   A class gives the interfaces above it exactly its own Verse Core type
   arguments (`box(t)` gives `container` `t`; a class implementing
@@ -415,8 +421,13 @@ circle := class(shape, labelled):
 - **Comparability.** Other classes and interfaces are not comparable (Book §4.9), nor
   is a struct or container that holds one.
 - **Not yet supported** (each rejected with a message):
-  - overrides in a subclass that fixes, repeats or adds type arguments
-    its parent (or an interface) leaves open, a class that gives two
+  - overrides in a subclass that repeats or adds type arguments its
+    parent (or an interface) leaves open, or fixes them to types that
+    mention type parameters; a variable of a class type at type arguments
+    that every concrete class below it fixes otherwise (`cell(t)` in
+    generic code, when `cell` is abstract and its only class below is
+    `intcell := class(cell(int))` with an override): it would have no
+    initial value; a class that gives two
     interfaces different type arguments, an interface that gives a parent
     interface other than its own type parameters, and a parametric class
     below a non-parametric interface (or one that adds type parameters

@@ -165,6 +165,10 @@ structure TyEnv where
       class each one is of, with its tag and fields. A slot of class type
       starts as a reference to one. -/
   protos : List (String × Nat × List Value) := []
+  /-- The classes whose fixed type arguments Verse Core records as pins
+      (#142): those at or below a class whose implementation of a method
+      fixes type arguments that the method's declaring class leaves open. -/
+  pinned : List String := []
   /-- The type arguments of each class's parametric superclass (#39), in
       terms of the class's own type parameters: `sub(t) := class(base(t))`
       gives `base ↦ [t]`. -/
@@ -529,6 +533,26 @@ partial def Ty.params : Ty → List String
   | .tup ts | .struct _ ts => ts.flatMap Ty.params
   | .map k v => k.params ++ v.params
   | _ => []
+
+/-- The Verse Core type arguments class `d` fixes to closed types, by
+    position: its pins (#142). -/
+def TyEnv.pinsOf (env : TyEnv) (d : String) : List (Option Ty) :=
+  (env.coreArgs d (((env.sparams.lookup d).getD []).map fun (v, k) => Ty.param v k)).map fun t =>
+    if t.params.isEmpty then some t else none
+
+/-- The pins Verse Core records for class `d` (#142): its fixed type
+    arguments if it is `pinned`, none otherwise (so that a placeholder of a
+    class that needs no refined dispatch can have any type arguments). -/
+def TyEnv.corePins (env : TyEnv) (d : String) : List (Option Ty) :=
+  if env.pinned.contains d then env.pinsOf d else []
+
+/-- `d`'s Verse Core type arguments are `T`'s, up to renaming, except where
+    `d` fixes them to closed types (#142). -/
+def TyEnv.sameCorePinned (env : TyEnv) (d T : String) : Bool :=
+  let core (c : String) := env.coreArgs c (((env.sparams.lookup c).getD []).map fun (v, k) => Ty.param v k)
+  let (cd, cT) := (core d, core T)
+  let open' := (cT.zip cd).filter fun (_, b) => !b.params.isEmpty
+  cd.length == cT.length && (open'.foldlM (fun m (a, b) => Ty.alpha m a b) []).isSome
 
 /-- Whether `false` (the bottom type) occurs in a type. -/
 partial def Ty.hasNever : Ty → Bool
@@ -982,14 +1006,24 @@ partial def slotDefault (env : TyEnv) (dictBase : Nat) (params : List Ty) (visit
       -- (instantiations that grow without end are cut off)
       let key := (Ty.struct n ts).show
       if visiting.length > 16 || key.length > 400 then throw lastErr
+      let args := (env.coreArgs n ts).map (Ty.toVTy env)
+      let mut pinnedOut : List String := []
       for d in env.concreteBelow n do
         let dkey := s!"{d} as {key}"
         if visiting.contains dkey then continue
+        -- (an object agrees with its class's pins, #142)
+        if ((env.corePins d).zip args).any (fun (pin, a) => match pin with
+            | some pt => pt.toVTy env != a
+            | none => false) then
+          pinnedOut := pinnedOut ++ [d]
+          continue
         -- (its fields at the slot's type arguments, #39)
         match (env.fieldsSeen n ts d).mapM fun (_, ft, _) =>
             slotDefault env dictBase params (dkey :: visiting) ft with
         | .ok fs => return .heap (.new (env.tagOf d)) fs
         | .error msg => lastErr := msg
+      if !pinnedOut.isEmpty && pinnedOut.length == (env.concreteBelow n).length then
+        throw s!"a variable or temporary of type {key} needs an initial value, and every class below {n} ({", ".intercalate pinnedOut}) fixes type arguments that {key} does not have, so none can be it (#142)"
       throw lastErr
     -- a parametric class starts with no option set, which has every such type
     if env.classes.contains n then return .lit vt.default
@@ -2486,13 +2520,55 @@ partial def elabAppBase (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (b
             match groups.findIdx? (·.1 == fname) with
             | some gi => groups := groups.modify gi fun (e', cls) => (e', cls.push d)
             | none => groups := groups.push (fname, #[d])
+          let mut pinned := false
           for (fname, cls) in groups.toList.reverse do
             let e := clsOf fname
+            -- (#142) the type arguments `e` fixes that the receiver's may not
+            -- have: matched against the receiver's, they refine the call,
+            -- which `Typed.dispatch` types under that refinement
+            let rargs := env.coreArgs c targs
+            let needOf (pins : List (Option Ty)) := (rargs.zip pins).filterMap fun (a, pin) => match pin with
+              | some pt => if a == pt then none else some (a, pt)
+              | none => none
+            if !(needOf (env.corePins e)).isEmpty then
+              -- one test per set of pins among the classes using `e`'s
+              -- implementation: `Typed.dispatch` refines by the pins all the
+              -- tested classes share, which may fix more than `e`'s
+              let mut parts : Array (List (Option Ty) × Array String) := #[]
+              for d in cls do
+                let key := (env.corePins d).take rargs.length
+                match parts.findIdx? (·.1 == key) with
+                | some pi => parts := parts.modify pi fun (k, ds') => (k, ds'.push d)
+                | none => parts := parts.push (key, #[d])
+              for (pins, part) in parts.toList.reverse do
+                let need := needOf pins
+                -- closed type arguments other than the fixed ones, or ones
+                -- that match no instance of them: no object of `part` is the
+                -- receiver
+                if need.any (·.1.params.isEmpty) then continue
+                let some μF := need.foldlM (fun σ (a, pt) => a.matchArg env σ pt) [] | continue
+                let selfName := s!"$self{slot}"
+                let locsF := locs.map fun l => { l with ty := l.ty.subst μF }
+                let selfL : Local := { name := selfName, slot, ty := .struct e ((argsAt e).map (·.subst μF)), mutable := false }
+                let ctx' := { ctx with locals := selfL :: (locsF ++ ctx.locals) }
+                let rc ← elabApp ctx' p (.ident mp fname) (.ident mp selfName :: argIds.toList) bracket
+                  (some (msRet.subst μF))
+                let .call fi (.local s0 :: es) := rc.e
+                  | eerr p s!"cannot dispatch {m} to class {e}, which fixes type arguments of {c} (#142)"
+                if s0 != slot then eerr p s!"cannot dispatch {m} to class {e}, which fixes type arguments of {c} (#142)"
+                acc := .ite (.heap (.isTag (part.toList.map env.tagOf)) [.local slot]) (.call fi (.local slot :: es)) acc
+                pinned := true
+              continue
             let sd ← fresh (.struct e (argsAt e))
             let ctx' := { ctx with locals := { name := s!"$self{sd}", slot := sd, ty := .struct e (argsAt e), mutable := false } :: (locs ++ ctx.locals) }
             let rc ← elabApp ctx' p (.ident mp fname) (.ident mp s!"$self{sd}" :: argIds.toList) bracket exp
             acc := .ite (.assign sd (.heap (.isTag (cls.toList.map env.tagOf)) [.local slot]))
               (← coerce p rc msRet) acc
+          if pinned then
+            -- (checked against the method's result type, as the refined
+            -- calls need an expected type)
+            let y ← fresh msRet
+            return ⟨pre.toList.foldr Expr.seq (.assign y acc), msRet⟩
           return ⟨pre.toList.foldr Expr.seq acc, msRet⟩
         for (d, j) in (ds.zip (List.range ds.length)).reverse do
           let some fname := ctx.implFor? d root m | eerr p s!"class {d} does not implement '{m}'"
@@ -4438,9 +4514,22 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     let (cd', cq) := (core d, core q)
     if cd'.length != cq.length then
       throw s!"{mp.show}: {d} has type parameters that {q} does not have, so it cannot override {mn} yet: code generic over {q} could not give them (#39)"
-    -- its Verse Core type arguments are {q}'s, up to renaming
-    if ((cq.zip cd').foldlM (fun m (a, b) => Ty.alpha m a b) []).isNone then
-      throw s!"{mp.show}: {d} fixes or repeats type arguments that {q} leaves open, so it cannot override {mn} yet: code generic over {q} could not call it (#39)"
+    -- its Verse Core type arguments are {q}'s, up to renaming, except where
+    -- it fixes them to closed types: dispatch is then typed under the
+    -- refinement the fixed ones give (#142)
+    let open' := (cq.zip cd').filter fun (_, b) => !b.params.isEmpty
+    if (open'.foldlM (fun m (a, b) => Ty.alpha m a b) []).isNone then
+      throw s!"{mp.show}: {d} repeats type arguments that {q} leaves open, or fixes them to types that mention type parameters, so it cannot override {mn} yet: code generic over {q} could not call it (#39, #142)"
+  -- the classes whose implementations fix type arguments their declaring
+  -- class leaves open, and the classes below them, are dispatched to under
+  -- a refinement, so Verse Core records their pins (#142)
+  let fixes (e q : String) : Bool := ((core q).zip (core e)).any fun (a, b) => !a.params.isEmpty && b.params.isEmpty
+  let headOf (f : String) : String := (f.splitOn ".").head!
+  let fixers := (overridePairs.toList.filterMap fun (_, dm, qm) =>
+      if fixes (headOf dm) (headOf qm) then some (headOf dm) else none) ++
+    (implChecks.toList.filterMap fun (_, _, impl, decl) =>
+      if fixes (headOf impl) (headOf decl) then some (headOf impl) else none)
+  env := { env with pinned := env.classes.filter fun d => fixers.any fun f => d == f || (env.supers d).contains f }
   env := { env with protos := env.makeProtos }
   if let some n := env.recursiveStruct? then
     if env.classes.contains n then
@@ -4736,11 +4825,16 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     let atCore (cls : String) (sg : Sig) : List VTy × VTy :=
       let cenv := { env with tvars := env.coreVars cls }
       ((sg.params.drop 1).map (·.toVTy cenv), sg.ret.toVTy cenv)
+    -- (at the type arguments `e` fixes, #142, the declaration's types are
+    -- taken at the fixed ones)
+    let pinσ : Nat → VTy := fun j => match (env.pinsOf e)[j]? with
+      | some (some t) => t.toVTy env
+      | _ => .var j
     let sigOk : Bool := match allSigs.find? (·.name == impl), allSigs.find? (·.name == decl) with
       | some a, some b =>
         let ca := atCore e a
         let cb := atCore q b
-        ca.1 == cb.1 && VTy.sub ca.2 cb.2
+        ca.1 == cb.1.map (VTy.subst pinσ) && VTy.sub ca.2 (cb.2.subst pinσ)
       | _, _ => true
     match allSigs.find? (·.name == impl), allSigs.find? (·.name == decl) with
     | some a, some b =>
@@ -4749,8 +4843,8 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       if let some k := fxOver a b then
         throw s!"{cp.show}: in {c}, {impl} allows the effect <{k}>, which {decl} does not"
     | _, _ => pure ()
-    if !env.sameCore e q then
-      throw s!"{cp.show}: {c} uses {impl} for {decl}, but {e} fixes, repeats or adds type arguments that {q} leaves open, so code generic over {q} could not call it (#39)"
+    if !env.sameCorePinned e q then
+      throw s!"{cp.show}: {c} uses {impl} for {decl}, but {e} repeats or adds type arguments that {q} leaves open, or fixes them to types that mention type parameters, so code generic over {q} could not call it (#39, #142)"
     if !sigOk then
       throw s!"{cp.show}: {c} uses {impl} for {decl}, but their types differ at {q}'s type arguments (as code generic over {q} sees them), so it could not call it (#53)"
   for (fp, cname, f, sty) in fieldOverrides do
@@ -4917,7 +5011,9 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       | none => t.toVTy { env with tvars := env.coreVars d }
     else []
   let S : Sigs := { fns := fsigs, classes := classTable,
-                    protos := env.protos.map fun (d, t, _) => (t, (env.coreArgs d []).map (Ty.toVTy env)) }
+                    protos := env.protos.map fun (d, t, _) => (t, (env.coreArgs d []).map (Ty.toVTy env)),
+                    pins := env.classes.map fun d =>
+                      if env.isRefClass d then (env.corePins d).map (·.map (Ty.toVTy env)) else [] }
   if !P.checkTypes S slotTys.toList then
     -- name what fails, for a bug report
     let bad := (List.range P.fns.length).find? fun f =>
