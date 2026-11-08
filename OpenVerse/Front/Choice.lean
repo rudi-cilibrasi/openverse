@@ -37,11 +37,34 @@ structure Binding where
   alts : List SExpr
   /-- For `set L = a | b`: `L`, at whose type the alternatives are taken. -/
   place : Option SExpr := none
+  /-- For an `if` with choices in its branches (#235): the `if`, whose
+      branches' alternatives the elaborator guards by the branch taken. -/
+  branchy : Option SExpr := none
 
 def binding? : SExpr → Option Binding
-  | .decl p x ty false (.app _ (.ident _ "$choice") as false) => some ⟨p, x, ty, as, none⟩
-  | .decl p x ty false (.app _ (.ident _ "$choiceAt") (l :: as) false) => some ⟨p, x, ty, as, some l⟩
+  | .decl p x ty false (.app _ (.ident _ "$choice") as false) => some ⟨p, x, ty, as, none, none⟩
+  | .decl p x ty false (.app _ (.ident _ "$choiceAt") (l :: as) false) => some ⟨p, x, ty, as, some l, none⟩
+  | .decl p x ty false (.app _ (.ident _ "$branchChoice") [i] false) => some ⟨p, x, ty, [], none, some i⟩
+  | .decl p x ty false (.app _ (.ident _ "$branchChoiceAt") [l, i] false) => some ⟨p, x, ty, [], some l, some i⟩
   | _ => none
+
+/-- An `if … else …` with a choice in a branch (the branches of an `else if`
+    chain included): it has the values of the branch its conditions pick. -/
+partial def isBranchy : SExpr → Bool
+  | i@(.ite _ _ t (some e)) => complete i && (isChoice t || isChoice e || isBranchy t || isBranchy e)
+  | _ => false
+where
+  /-- Every `else if` of the chain has an `else`. -/
+  complete : SExpr → Bool
+    | .ite _ _ _ (some e@(.ite ..)) => complete e
+    | .ite _ _ _ (some _) => true
+    | _ => false
+
+/-- The branches of an `if … else if … else …` chain: each one's conditions
+    (none for the last `else`) and its expression. -/
+partial def arms : SExpr → List (Option (List SExpr) × SExpr)
+  | .ite _ cs t (some e) => (some cs, t) :: arms e
+  | e => [(none, e)]
 
 /-- The indices of a `set` path bound to names, in order (unless literals),
     and the path with those names in their places: `set` evaluates them
@@ -193,6 +216,7 @@ partial def headHas (hasL : SExpr → Bool) : SExpr → Bool
 /-- Whether `e` has a choice that lifting reaches. -/
 partial def hasLiftable : SExpr → Bool
   | .app _ (.ident _ "$choice") _ false => true
+  | e@(.ite ..) => isBranchy e
   | .app _ f args _ => headHas hasLiftable f || args.any fun a =>
       (match a with | .decl _ n _ _ _ => !n.startsWith "?" | _ => true) && hasLiftable a
   | .bin _ _ a b => hasLiftable a || hasLiftable b
@@ -241,6 +265,7 @@ partial def liftE (isVal : String → Bool) (isField : String → String → Boo
   if !hasLiftable e then return e
   match e with
   | .app p (.ident _ "$choice") _ false => LM.bind p "c" e
+  | .ite p .. => LM.bind p "c" (.app p (.ident p "$branchChoice") [e] false)
   | .app p f args br =>
     let (hs, whole) := headOps isVal isField f
     let ops := hs ++ args
@@ -342,6 +367,24 @@ def liftClause (isVal : String → Bool) (isField : String → String → Bool) 
     st.pre.toList ++ [c']
   match c with
   | .app _ (.ident _ "$choice") _ false => [c]
+  -- (an `if` with choices in its branches as a binding's value: at its
+  -- written type, #235)
+  | .decl p x ty false rhs@(.ite ..) =>
+    if isBranchy rhs then [.decl p x ty false (.app p (.ident p "$branchChoice") [rhs] false)] else
+      if !hasLiftable rhs then [c] else run do return .decl p x ty false (← liftE isVal isField rhs)
+  | .decl p x ty true rhs@(.ite ..) =>
+    if isBranchy rhs then
+      let n := s!"$c{p.line}_{p.col}"
+      [.decl p n ty false (.app p (.ident p "$branchChoice") [rhs] false), .decl p x ty true (.ident p n)]
+    else if !hasLiftable rhs then [c] else run do return .decl p x ty true (← liftE isVal isField rhs)
+  | .set p l none rhs@(.ite ..) =>
+    if isBranchy rhs then
+      let (h, _, l') := setPrefix p l none
+      let n := s!"$c{p.line}_{p.col}"
+      h ++ [.decl p n none false (.app p (.ident p "$branchChoiceAt") [l', rhs] false), .set p l' none (.ident p n)]
+    else if !hasLiftable rhs then [c] else
+      let (h, o?, l') := setPrefix p l none
+      h ++ run do return .set p l' none (withOld p o? (← liftE isVal isField rhs))
   -- (`set L = …` as the last clause of a macro, which names its value)
   | .decl p x ty v (.set q l op r) =>
     if isChoice r || !hasLiftable r then [c] else

@@ -1931,9 +1931,9 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
   | .app p (.ident _ "$branch") [body] false => elabBranch ctx p body
   | .app p (.ident _ "$choice") _ false =>
     if ctx.inTaking then
-      eerr p ("a choice (a | b) cannot be lifted from here, for now (#208): not from a block, a branch, a struct " ++
-        "construction, a named argument, another choice's alternative, the right of and or or, a range, or " ++
-        "a set whose old value it would change")
+      eerr p ("a choice (a | b) cannot be lifted from here, for now (#208): not from a block, a struct " ++
+        "construction, a named argument, another choice's alternative, the right of and or or, a range, " ++
+        "nor from the branch of an if without else or one that is more than a choice or a value")
     eerr p ("a choice (a | b) has several values, so it must be in a failure context that takes them: " ++
       "an if condition, a for's clauses, first{…}, option{…}, logic{…}, not, or the left of or (#208)")
   | .app p (.ident _ "$first") [.block _ items] false =>
@@ -2115,7 +2115,7 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
       else elabSeq { ctx with canFail := true, inTaking := true } conds none
     if !(rc.e.mayFail ctx.sigProg) then
       eerr p "the condition of this if cannot fail (Verse requires a failable condition)"
-    let thenCtx := { ctxT with canFail := ctx.canFail }
+    let thenCtx := { ctxT with canFail := ctx.canFail, inTaking := ctx.inTaking }
     match elseE with
     | none =>
       let rt ← elabE thenCtx thenE (some .void)
@@ -4123,11 +4123,15 @@ partial def elabFor (ctx : Ctx) (p : Pos) (clauses : List SExpr) (body : SExpr) 
           -- `X := a₁ | … | aₙ` (#208): over the alternatives' indices, each
           -- alternative bound in the filter (so a failing one is skipped)
           let some b := Choice.binding? g | eerr g.pos "bad for clause"
-          let (ty, es) ← elabAlts { c with canFail := true } gp b
+          -- (an `if` with choices in its branches picks its branch first, once, #235)
+          let (pre, ty, es) ← match b.branchy with
+            | some i => elabBranchAlts { c with canFail := true, inTaking := true } gp i b.ty b.place
+            | none => do let (ty, es) ← elabAlts { c with canFail := true } gp b; pure (none, ty, es)
           checkNewLocal c gp n
           let k ← fresh .int
           let (xs, c1) ← declare c n ty
-          pure (k, Expr.lit (.arr (choiceIdx es.length)), c1, Expr.assign xs (Expr.altE k es))
+          let idx := Expr.lit (.arr (choiceIdx es.length))
+          pure (k, (pre.map (Expr.seq · idx)).getD idx, c1, Expr.assign xs (Expr.altE k es))
         | _ => eerr g.pos "bad for clause"
       let (filt, c2) ← elabFilters c1 fs
       let filt := if fs.isEmpty then pre else
@@ -4155,6 +4159,64 @@ partial def elabFor (ctx : Ctx) (p : Pos) (clauses : List SExpr) (body : SExpr) 
       match inner.ty with
       | .arr t => return ⟨.prim .flatten [.forE slot (.lit (.arr #[.tup []])) filt inner.e], .arr t⟩
       | _ => eerr p "internal: nested for"
+
+/-- An `if … else if … else …` with choices in its branches (#235): code that
+    picks the branch, once, into a fresh slot (each condition a failure
+    context of its own, tried when the ones before failed), and every
+    branch's alternatives guarded by it (`B = j; a`), each seeing the names
+    its conditions bind, at their written type or their join. -/
+partial def elabBranchAlts (ctx : Ctx) (p : Pos) (i : SExpr) (sty : Option STy) (place : Option SExpr := none) :
+    EM (Option Expr × Ty × List Expr) := do
+  let arms := Choice.arms i
+  let bi ← fresh .int
+  let mut conds : Array (Option Expr) := #[]
+  let mut ctxs : Array Ctx := #[]
+  for (cs?, _) in arms do
+    match cs? with
+    | some cs =>
+      let (rc, cT) ← if Choice.hasChoice cs then elabOneClauses { ctx with canFail := true } cs
+        else elabSeq { ctx with canFail := true, inTaking := true } cs none
+      if !(rc.e.mayFail ctx.sigProg) then
+        eerr p "the condition of this if cannot fail (Verse requires a failable condition)"
+      conds := conds.push (some rc.e)
+      ctxs := ctxs.push { cT with canFail := ctx.canFail, inTaking := ctx.inTaking }
+    | none =>
+      conds := conds.push none
+      ctxs := ctxs.push ctx
+  -- (from the last branch back: `if (c₀) then B := 0 else if (c₁) then B := 1 … else B := n`)
+  let setB (j : Nat) : Expr := .assign bi (.lit (.int j))
+  let pick := (conds.toList.zipIdx).foldr (fun (c?, j) acc => match c? with
+    | some c => Expr.ite c (setB j) acc
+    | none => setB j) (.lit .void)
+  -- (the written type, or for `set L = if …` the type of `L`)
+  let t? ← match ← sty.mapM (resolveTy ctx.types p) with
+    | some t => pure (some t)
+    | none => match place with
+      | some l => tryCatch (do pure (some (← elabE ctx l none).ty)) fun _ => pure none
+      | none => pure none
+  let mut rs : Array (Nat × SExpr × R) := #[]
+  for ((_, arm), j) in arms.zipIdx do
+    let c := ctxs.getD j ctx
+    for a in (Choice.alts? arm).getD [arm] do
+      -- (without a type, each later one against the first's, else on its
+      -- own, as `elabAlts` does, #32)
+      let r ← match t?, rs[0]? with
+        | some t, _ => elabE c a (some t)
+        | none, none => elabE c a none
+        | none, some (_, _, r0) =>
+          if c.retries ≥ 3 then tryCatch (elabE c a none) fun _ => elabE c a (some r0.ty)
+          else
+            let c2 := { c with retries := c.retries + 1 }
+            tryCatch (elabE c2 a (some r0.ty)) fun _ => elabE c2 a none
+      rs := rs.push (j, a, r)
+  let some (_, _, r0) := rs[0]? | eerr p "internal: an if without branches"
+  let ty ← match t? with
+    | some t => pure t
+    | none => rs.toList.foldlM (fun acc (_, _, r) => join p acc r.ty none) r0.ty
+  if ty == .never then eerr p "cannot infer the type of this if's choices"
+  let es ← rs.toList.mapM fun (j, a, r) => do
+    return Expr.seq (.prim .eq [.local bi, .lit (.int j)]) (← coerce a.pos r ty)
+  return (some pick, ty, es)
 
 /-- The alternatives of a choice (#208), at its written type or at their
     join (each one against the first's type, else on its own, as `if`'s
@@ -4203,13 +4265,16 @@ partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
     | some b =>
       let p := b.pos
       let n := b.name
-      let (ty, es) ← elabAlts ctx p b
+      let (pre, ty, es) ← match b.branchy with
+        | some i => elabBranchAlts ctx p i b.ty b.place
+        | none => do let (ty, es) ← elabAlts ctx p b; pure (none, ty, es)
       checkNewLocal ctx p n
       let k ← fresh .int
       let x ← fresh ty
       let c1 := { ctx with locals := { name := n, slot := x, ty, mutable := false } :: ctx.locals }
       let (inner, c2) ← elabOneGo c1 rest
-      return (Expr.chooseFirst k x es inner, c2)
+      let code := Expr.chooseFirst k x es inner
+      return ((pre.map (Expr.seq · code)).getD code, c2)
     | none =>
       let (r, c1) ← elabStmt ctx cl none
       let (inner, c2) ← elabOneGo c1 rest
