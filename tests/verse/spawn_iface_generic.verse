@@ -23,7 +23,14 @@ First(A:src(t), B:src(t) where t:type)<suspends>:t =
 Sp(S:src(t) where t:type)<suspends>:t =
     T := spawn{S.Next()}
     T.Await()
+# (at a type no class implements, the copy's spawn has no test left)
+Count(Ss:[]src(t) where t:type)<suspends>:int =
+    for (S : Ss):
+        T := spawn{S.Next()}
+    Ss.Length
 Main()<suspends>:void =
+    None:[]src(float) = array{}
+    Print("{Count(None)} {Count(array{ints{N := 0}})}")
     Print("{Sp(ints{N := 5})} {Sp(strs{S := "z"})}")
     Is := Both(ints{N := 1}, ints{N := 2})
     for (X : Is) { Print("{X}") }
