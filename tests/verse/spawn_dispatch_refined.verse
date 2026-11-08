@@ -1,4 +1,4 @@
-# expect: a spawned call whose arguments' types mention the function's type parameters is not supported yet
+# formerly refused: a spawned dispatch refined by #142 in a generic function, now specialised (#174)
 box(t:type) := class:
     V:t
     Size()<suspends>:int = 0

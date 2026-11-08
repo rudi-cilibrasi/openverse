@@ -1886,7 +1886,6 @@ partial def elabConc (ctx : Ctx) (p : Pos) (isSync : Bool) (arms : List SExpr) (
   if ctx.canFail then eerr p s!"{kw} suspends, and a failure context (a condition, a filter, or a <decides> call's arguments) cannot (#156)"
   if isRush && ctx.inRepeat then
     eerr p "rush cannot be in a loop or for body (Book of Verse ch. 14): call a function that rushes"
-  if isRush && !ctx.dictVars.isEmpty then eerr p "rush in a generic function is not supported yet (#156)"
   let some mark := ctx.sig? (if isSync then "$syncMark" else if isRush then "$rushMark" else "$raceMark")
     | eerr p s!"internal error: no {kw} helper"
   -- (an arm is a scope of its own: its defers are its own, and break and
@@ -1981,10 +1980,6 @@ partial def elabSpawn (ctx : Ctx) (p : Pos) (body : SExpr) : EM R := do
   -- (a spawn among them does not wait)
   if (pre ++ es).any (fun x => Suspend.countSusp isS (fun _ => false) false (· == mark.idx) x > 0) then
     eerr p "the arguments of a spawned call cannot suspend (#156)"
-  -- (in a generic function, the task's root must not depend on the type
-  -- parameters: the scheduler holds roots of no type arguments)
-  if !ctx.dictVars.isEmpty && !r.ty.params.isEmpty then
-    eerr p "spawn in a generic function of a call whose result type mentions its type parameters is not supported yet (#156)"
   let ty : Ty := .struct "task" [r.ty]
   let tagT := ctx.types.tagOf "task"
   let t ← fresh ty
@@ -2004,7 +1999,6 @@ partial def elabBranch (ctx : Ctx) (p : Pos) (body : SExpr) : EM R := do
   if ctx.inDefer then eerr p "branch in a defer is not supported (#156)"
   if ctx.canFail then eerr p "branch cannot be in a failure context (a condition, a filter, or a <decides> call's arguments) (#156)"
   if ctx.inRepeat then eerr p "branch cannot be in a loop or for body (Book of Verse ch. 14): call a function that branches"
-  if !ctx.dictVars.isEmpty then eerr p "branch in a generic function is not supported yet (#156)"
   let some mark := ctx.sig? "$branchMark" | eerr p "internal error: no branch helper"
   let armCtx := { ctx with defers := [], loopDefers := 0, inLoop := false, inArm := true, inBranch := true }
   let r ← elabE armCtx body none
@@ -4377,6 +4371,87 @@ def concTops : Except String (List STop) :=
     "WaitDone", "Await", "spawnMark", "t", "Sch", "Dead", "evrec", "Got", "Next", "Head", "Tail", "Cur", "W", "L", "V",
     "EvAwait", "E", "branchMark", "rushMark", "signalAll", "H", "StickyAwait", "Last", "CancelCur", "Cancelled", "Running", "Root", "cancelMark"]
 
+/-- (#174) Specialise the generic functions whose tasks' roots would depend
+    on their type parameters: those with a `branch` or `rush` (marks
+    `branchMark`, `rushMark`), or a `spawn` (`spawnMark`) reading values of
+    such types, and those calling one at such types. Each call of one at
+    closed type arguments, read off the call's witnesses (its last
+    `ntpOf g` arguments, whose types the checker infers exactly), goes to a
+    copy at those types (appended to `fns`, `slotTys`), whose own calls are
+    handled the same way. The originals are then never called and keep only
+    their parameters. Gives the functions, their slot types, the copies'
+    signatures, and each copy's original and type arguments. -/
+def specialise (fns0 : Array Fn) (slotTys0 : Array (List VTy)) (S0 : Sigs) (ntpOf : Nat → Nat)
+    (branchMark rushMark spawnMark : Nat) :
+    Except String (Array Fn × Array (List VTy) × Array (List VTy × VTy) × Array (Nat × List VTy)) := do
+  let mut fns := fns0
+  let mut slotTys := slotTys0
+  let nOrig := fns.size
+  let mut specSigs : Array (List VTy × VTy) := #[]
+  let mut needy : Array Bool := #[]
+  for gi in List.range nOrig do
+    let Γ := slotTys[gi]!
+    let openSlot (j : Nat) : Bool := ((Γ[j]?).map (·.mentionsVar)).getD false
+    needy := needy.push (ntpOf gi > 0 && (Suspend.callsOf fns[gi]!.body).any fun (g, es) =>
+      g == branchMark || g == rushMark || (g == spawnMark && (Suspend.slotsOf (.prim .mkTup es)).any openSlot))
+  let witTys (S : Sigs) (Γ : List VTy) (ρ : VTy) (g : Nat) (es : List Expr) : List (Option VTy) :=
+    (es.drop (es.length - ntpOf g)).map fun e => tc S Γ ρ e none
+  let resTy (S : Sigs) (gi : Nat) : VTy := ((S.fns[gi]?).map (·.2)).getD .void
+  -- (a call of one at types that mention the caller's type parameters: the
+  -- caller needs specialising too)
+  let mut changed := true
+  while changed do
+    changed := false
+    for gi in List.range nOrig do
+      if needy[gi]! || ntpOf gi == 0 then continue
+      if (Suspend.callsOf fns[gi]!.body).any (fun (g, es) => (needy[g]?.getD false) &&
+          (witTys S0 slotTys[gi]! (resTy S0 gi) g es).any (·.all (·.mentionsVar))) then
+        needy := needy.set! gi true
+        changed := true
+  let mut specKeys : Array (Nat × List VTy) := #[]
+  let mut queue : Array Nat := ((List.range nOrig).filter fun gi => !needy[gi]!).toArray
+  let mut qi := 0
+  while qi < queue.size do
+    let gi := queue[qi]!
+    qi := qi + 1
+    let S : Sigs := { S0 with fns := S0.fns ++ specSigs.toList }
+    let Γ := slotTys[gi]!
+    let ρ := resTy S gi
+    let calls := (Suspend.callsOf fns[gi]!.body).filter fun (g, _) => needy[g]?.getD false
+    if calls.isEmpty then continue
+    for (g, es) in calls do
+      let some θ := (witTys S Γ ρ g es).mapM id
+        | throw s!"in {fns[gi]!.name}: a type argument of a call of {fns[g]!.name} has no type of its own (#174)"
+      if θ.any (·.mentionsVar) then throw s!"internal error: specialising a call of {fns[g]!.name} in {fns[gi]!.name}"
+      if !specKeys.contains (g, θ) then
+        if specKeys.size ≥ 500 then
+          throw s!"{fns[g]!.name} is used at too many types: a generic function with branch, rush or spawn cannot call itself at ever bigger types (#174)"
+        let σ : Nat → VTy := fun i => θ.getD i (.var i)
+        let fn := fns[g]!
+        fns := fns.push { fn with name := s!"{fn.name}$at{specKeys.size}" }
+        slotTys := slotTys.push (slotTys[g]!.map (VTy.subst σ))
+        let (ps, τ) := (S0.fns[g]?).getD ([], .void)
+        specSigs := specSigs.push (ps.map (VTy.subst σ), τ.subst σ)
+        needy := needy.push false
+        queue := queue.push (nOrig + specKeys.size)
+        specKeys := specKeys.push (g, θ)
+    let keys := specKeys
+    let isNeedy := needy
+    let S : Sigs := { S0 with fns := S0.fns ++ specSigs.toList }
+    let body := Suspend.redirectCalls (fun g es =>
+      if isNeedy[g]?.getD false then
+        match (witTys S Γ ρ g es).mapM id with
+        | some θ => (keys.idxOf? (g, θ)).map (nOrig + ·)
+        | none => none
+      else none) fns[gi]!.body
+    fns := fns.set! gi { fns[gi]! with body }
+  for gi in List.range nOrig do
+    if needy[gi]! then
+      let fn := fns[gi]!
+      fns := fns.set! gi { fn with nslots := fn.arity, body := .prim .userErr [] }
+      slotTys := slotTys.set! gi (slotTys[gi]!.take fn.arity)
+  return (fns, slotTys, specSigs, specKeys)
+
 /-- Elaborate a parsed program into a Verse Core program that passes `Prog.check`
     and `Prog.checkTypes`. -/
 def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except String Compiled := do
@@ -5522,6 +5597,26 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     let isMark (f : Nat) : Bool := f == syncMark || f == raceMark || f == rushMark
     let leaves := ["$Sleep", "$WaitDone", "$syncMark", "$raceMark", "$rushMark", "$spawnMark", "$branchMark",
       "$cancelMark"]
+    -- (#174) the generic functions whose tasks' roots would depend on their
+    -- type parameters, specialised at the types they are called at
+    let sigOf (f : Nat) : Option Sig := allS.find? (·.idx == f)
+    let nOrig := fns.size
+    let (fns1, slotTys1, specSigs, specKeys) ← specialise fns slotTys
+      { fns := fsigs0, classes := classTable, protos, pins }
+      (fun f => ((sigOf f).map (·.tparams.length)).getD 0) branchMark rushMark spawnMark
+    fns := fns1
+    slotTys := slotTys1
+    let fsigs0 := fsigs0 ++ specSigs.toList
+    fsigs := fsigs ++ specSigs.toList
+    let specUser : List (Nat × String × Nat) := specKeys.toList.zipIdx.filterMap fun ((g, _), k) =>
+      if ((sigOf g).map (fun s => s.suspends && !leaves.contains s.name)).getD false then
+        some (nOrig + k, fns[nOrig + k]!.name, 0)
+      else none
+    let specImm : List (Nat × String × Nat) := specKeys.toList.zipIdx.filterMap fun ((g, _), k) =>
+      if ((sigOf g).map (fun s => !s.suspends && !s.isConst)).getD false &&
+          !(Suspend.spawnSites spawnMark fns[nOrig + k]!.body).isEmpty then
+        some (nOrig + k, fns[nOrig + k]!.name, 0)
+      else none
     -- each `spawn` of a method with several implementations (#173): its
     -- dispatch chain becomes a suspends function `$dispatchK` of the slots
     -- it uses (the receiver, the arguments, and the slots its tests bind the
@@ -5556,7 +5651,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     let fsigs0 := fsigs0 ++ dispSigs.toList
     fsigs := fsigs ++ dispSigs.toList
     let user := (allS.filter fun s => s.suspends && !leaves.contains s.name).map (fun s =>
-      (s.idx, s.name, s.tparams.length)) ++ disps
+      (s.idx, s.name, s.tparams.length)) ++ specUser ++ disps
     let tagBase := env.classes.length
     let schedTag := env.tagOf "$sched"
     let schedTy : VTy := .ref [schedTag] []
@@ -5569,8 +5664,8 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     let nFns0 := fns.size
     -- (immediate functions may spawn too: their spawns start the task on
     -- the scheduler, which is its class's prototype, a literal)
-    let imm := (sigs.toList.filter fun s => !s.suspends && !s.isConst && s.tparams.isEmpty &&
-      !(Suspend.spawnSites spawnMark fns[s.idx]!.body).isEmpty).map fun s => (s.idx, s.name, 0)
+    let imm := ((sigs.toList.filter fun s => !s.suspends && !s.isConst && s.tparams.isEmpty &&
+      !(Suspend.spawnSites spawnMark fns[s.idx]!.body).isEmpty).map fun s => (s.idx, s.name, 0)) ++ specImm
     let mut immSpawns : Array (Nat × List Nat) := #[]
     for (gi, gname, _) in user ++ imm do
       let fn := fns[gi]!
@@ -5579,6 +5674,12 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       for (h, hs, t) in Suspend.spawnSites spawnMark fn.body do
         let some ttyT := Γ[t]? | throw s!"internal error: lowering {gname}: a spawn's task"
         let mut atys : Array VTy := #[]
+        -- (the callee's type arguments, from its witnesses)
+        let ntpH := ((sigOf h).map (·.tparams.length)).getD 0
+        let wit := (hs.drop (hs.length - ntpH)).map fun w => tc Sorig Γ (fsigs0[gi]!).2 w none
+        let θh : Nat → VTy := fun i => match wit[i]? with
+          | some (some τ) => τ
+          | _ => .var i
         for (e, i) in hs.zipIdx do
           match tc Sorig Γ (fsigs0[gi]!).2 e none with
           | some τ =>
@@ -5587,8 +5688,8 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
             atys := atys.push τ
           | none =>
             -- (`array{}` or `false` has no type of its own: the callee's
-            -- parameter type, when it mentions no type parameter)
-            let pt := ((fsigs0[h]?).bind (·.1[i]?)).getD (.var 0)
+            -- parameter type at its type arguments, when that is closed)
+            let pt := (((fsigs0[h]?).bind (·.1[i]?)).getD (.var 0)).subst θh
             if pt.mentionsVar then
               throw s!"in {gname}: the arguments of a spawned call of a generic function must have types of their own (#156)"
             atys := atys.push pt

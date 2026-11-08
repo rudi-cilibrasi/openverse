@@ -1,4 +1,4 @@
-# expect: rush in a generic function is not supported yet
+# formerly refused; generic functions with task roots are specialised (#174)
 W(X:t where t:type)<suspends>:t =
     rush:
         block:

@@ -1,4 +1,4 @@
-# expect: branch in a generic function is not supported yet
+# formerly refused; generic functions with task roots are specialised (#174)
 G(X:t where t:type)<suspends>:t =
     branch:
         Sleep(1.0)
