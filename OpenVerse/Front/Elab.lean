@@ -1961,13 +1961,22 @@ partial def elabSpawn (ctx : Ctx) (p : Pos) (body : SExpr) : EM R := do
     | e => e
   -- (statements before the call, such as a method call's receiver, run
   -- now, as the arguments are evaluated)
+  -- (a method with several implementations: the dispatch on the
+  -- receiver's class, a chain of tests that the lowering makes a function
+  -- of the slots it uses, #173)
   let rec peel : Expr → Option (List Expr × Expr)
     | .call g es => some ([], .call g es)
     | .seq a b => (peel b).map fun (ps, c) => (a :: ps, c)
+    | e@(.ite ..) => (Suspend.dispatchChain e).map fun _ => ([], e)
+    -- (one refined by #142, through a temporary of the result type)
+    | .assign _ e@(.ite ..) => (Suspend.dispatchChain e).map fun _ => ([], e)
     | _ => none
-  let some (pre, .call g es) := peel e
-    | eerr p "spawn{…} takes one call of a <suspends> function, with its arguments (a method with several implementations is not supported yet) (#156)"
-  if !isS g then eerr p "spawn{…} takes a call of a <suspends> function (#156)"
+  let some (pre, callE) := peel e
+    | eerr p "spawn{…} takes one call of a <suspends> function, with its arguments (#156)"
+  let (callees, es) := match callE with
+    | .call g es => ([g], es)
+    | ch => (Suspend.chainCallees ch, [])
+  if callees.isEmpty || !callees.all isS then eerr p "spawn{…} takes a call of a <suspends> function (#156)"
   -- (a spawn among them does not wait)
   if (pre ++ es).any (fun x => Suspend.countSusp isS (fun _ => false) false (· == mark.idx) x > 0) then
     eerr p "the arguments of a spawned call cannot suspend (#156)"
@@ -1982,7 +1991,7 @@ partial def elabSpawn (ctx : Ctx) (p : Pos) (body : SExpr) : EM R := do
   let fieldVals := (ctx.types.fields "task" [r.ty]).map fun (_, ft, _) =>
     if ft == .logic then Expr.lit (.logic false) else Expr.lit .none
   let spawnE : Expr := .seq (.assign t (.heap (.new tagT) fieldVals))
-    (.seq (.call mark.idx [.prim .mkArr [.seq (.call g es) (.lit .void), .seq (.local t) (.lit .void)]]) (.local t))
+    (.seq (.call mark.idx [.prim .mkArr [.seq callE (.lit .void), .seq (.local t) (.lit .void)]]) (.local t))
   return ⟨pre.foldr Expr.seq spawnE, ty⟩
 
 /-- `branch:` (#156): its body runs as a background task over the enclosing
@@ -5512,8 +5521,41 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     let isMark (f : Nat) : Bool := f == syncMark || f == raceMark || f == rushMark
     let leaves := ["$Sleep", "$WaitDone", "$syncMark", "$raceMark", "$rushMark", "$spawnMark", "$branchMark",
       "$cancelMark"]
-    let user := (allS.filter fun s => s.suspends && !leaves.contains s.name).map fun s =>
-      (s.idx, s.name, s.tparams.length)
+    -- each `spawn` of a method with several implementations (#173): its
+    -- dispatch chain becomes a suspends function `$dispatchK` of the slots
+    -- it uses (the receiver, the arguments, and the slots its tests bind the
+    -- narrowed receiver to, which start as the caller's), which the spawn
+    -- calls
+    let dispBase := fns.size
+    let mut lifted : Array (Expr × List Nat × Nat) := #[]
+    let mut liftedIn : Array Nat := #[]
+    for gi in List.range dispBase do
+      let n0 := lifted.size
+      let (body, acc) := (Suspend.liftChains spawnMark dispBase fns[gi]!.body).run lifted
+      if acc.size > n0 then
+        fns := fns.set! gi { fns[gi]! with body }
+        lifted := acc
+        liftedIn := liftedIn ++ (List.replicate (acc.size - n0) gi).toArray
+    let mut disps : List (Nat × String × Nat) := []
+    let mut dispSigs : Array (List VTy × VTy) := #[]
+    for ((ch, ops, t), k) in lifted.toList.zipIdx do
+      let gi := liftedIn[k]!
+      let Γ := slotTys[gi]!
+      let tys := ops.map fun o => (Γ[o]?).getD .int
+      if tys.any (·.mentionsVar) then
+        throw s!"in {fns[gi]!.name}: a spawned call whose arguments' types mention the function's type parameters is not supported yet (#156)"
+      let ρ ← match Γ[t]? with
+        | some (.ref _ [ρ]) => pure ρ
+        | _ => throw s!"internal error: lowering {fns[gi]!.name}: a spawn's task"
+      fns := fns.push { name := s!"$dispatch{k}", arity := ops.length, nslots := ops.length, decides := false,
+                        writes := true, body := Suspend.renumber (fun j => (ops.idxOf? j).getD 0) ch }
+      slotTys := slotTys.push tys
+      dispSigs := dispSigs.push (tys, ρ)
+      disps := disps ++ [(dispBase + k, s!"$dispatch{k}", 0)]
+    let fsigs0 := fsigs0 ++ dispSigs.toList
+    fsigs := fsigs ++ dispSigs.toList
+    let user := (allS.filter fun s => s.suspends && !leaves.contains s.name).map (fun s =>
+      (s.idx, s.name, s.tparams.length)) ++ disps
     let tagBase := env.classes.length
     let schedTag := env.tagOf "$sched"
     let schedTy : VTy := .ref [schedTag] []
