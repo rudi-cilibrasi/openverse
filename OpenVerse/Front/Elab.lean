@@ -5123,14 +5123,21 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
   let cellTag := tagBase + L + B
   let cellTy : VTy := .ref [cellTag] []
   let nextF := 1
+  -- (the last cell is read in the condition and written after it: a write
+  -- in a condition makes the reference interpreter keep the heap as it
+  -- was, for the rollback, and so copy it, once per root, #215; the slot
+  -- it is read into starts as a cell of its own, as a slot of a reference
+  -- type must)
   let linkBody : Expr := Suspend.seqVoid [
-    .ite (.heap (.set nextF) [.prim .query [.heap (.get tailF) [.local 0]], .prim .mkSome [.local 2]]) Suspend.vd
+    .ite (.assign 3 (.prim .query [.heap (.get tailF) [.local 0]]))
+      (.seq (.heap (.set nextF) [.local 3, .prim .mkSome [.local 2]]) Suspend.vd)
       (.seq (.heap (.set headF) [.local 0, .prim .mkSome [.local 2]]) Suspend.vd),
     .heap (.set tailF) [.local 0, .prim .mkSome [.local 2]]]
-  let linkFn : Fn := { name := "$link", arity := 2, nslots := 3, decides := false, writes := true,
-                       body := initPrefixE 2 [.heap (.new cellTag) [.local 1, .lit .none]] linkBody }
+  let linkFn : Fn := { name := "$link", arity := 2, nslots := 4, decides := false, writes := true,
+                       body := initPrefixE 2 [.heap (.new cellTag) [.local 1, .lit .none],
+                         .heap (.new cellTag) [.local 1, .lit .none]] linkBody }
   fns := fns ++ newFns ++ selfFns ++ rootFns ++ [linkFn] ++ branchFns ++ armFns
-  slotTys := slotTys ++ newTys ++ selfTys ++ rootTys ++ [[schedTy, rootAny, cellTy]] ++ branchTys ++ armTys
+  slotTys := slotTys ++ newTys ++ selfTys ++ rootTys ++ [[schedTy, rootAny, cellTy, cellTy]] ++ branchTys ++ armTys
   fsigs := fsigs ++ extraSigs.toList ++ selfSigs.toList ++ rootSigs.toList ++ [([schedTy, rootAny], VTy.void)] ++
     branchSigs.toList ++ armSigs.toList
   -- the wrappers' classes, after the frames', then the cells'
