@@ -321,10 +321,13 @@ flowchart LR
   class (#53, #171).
 - **Variance and generic functions, where a closed type is written**
   (#214). The pass also collects the closed function types the program
-  writes. For a value that fits one by variance (contravariant parameters
-  and a covariant result, through `int` below `rational` and class
-  subtyping only, the conversions the elaborator makes at a call), or a
-  generic function that matches one, it makes a further class `F$fn$k`
+  writes, and the uses of functions as values where such a type is
+  written for them (a declared type, a parameter's or field's type, the
+  result type). For a value so used that fits the type by variance
+  (contravariant parameters and a covariant result, through `int` below
+  `rational` and non-generic class subtyping only, the conversions the
+  elaborator makes at a call), or a generic function that matches it, it
+  makes a further class `F$fn$k`
   implementing that type's shape at the type's own arguments, whose
   `$call…` calls `F`, converting. A function named as a value where such
   a type is expected is an object of that class.

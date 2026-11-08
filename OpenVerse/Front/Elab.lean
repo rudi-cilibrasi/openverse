@@ -1699,7 +1699,7 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
             | some e => return ⟨e, ty⟩
             | none => return r
           else if !s.tparams.isEmpty then
-            eerr p s!"'{n}' is generic: a generic function is a value only where a closed function type it fits is expected, written in the program (`F:int->int = {n}`), #214"
+            eerr p s!"'{n}' is generic: a generic function is a value only at a closed function type that is an instance of its type, written where the value is given (a declared type, as in X:type\{…} = {n}, or a parameter's type), #214"
           else if !s.named.isEmpty then
             eerr p s!"'{n}' has named parameters: such a function cannot be used as a value (a function type has no named parameters)"
           else eerr p s!"'{n}' is a function: call it with {n}(…)"
