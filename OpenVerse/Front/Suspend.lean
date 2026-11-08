@@ -71,6 +71,13 @@ structure Callee where
   newSched : Bool := false
   /-- A non-generic callee's result getter, `g$result(frame)`. -/
   resultFn : Option Nat := none
+  /-- For a method of a class that fixes type arguments, called through
+      `Typed.dispatch` (#142): helpers taking the receiver first, so that
+      the code depending on the refinement keeps the rule's shape —
+      `arrive(self, args…, frame, sched)` (resets the frame, or makes one),
+      `take(self, frame)` (the result), and `resume(frame, sched)` and
+      `cancel(frame, sched)` (with the parameters from the frame). -/
+  selfFns : Option (Nat × Nat × Nat × Nat) := none
   deriving Inhabited
 
 /-- Slots of a resume function: the frame, the scheduler. -/
@@ -310,6 +317,11 @@ structure Env where
   pcFld : Nat
   /-- The region is an arm of a `sync`, `race` or `rush`. -/
   inArmR : Bool := false
+  /-- The index of the function's first refined call helper (after its arms). -/
+  viaBase : Nat := 0
+  /-- The type the value being lowered is checked against (a slot's, or
+      the function's result), when known: a refined call's result needs it. -/
+  expTy : Option VTy := none
   rS : Nat
   regionTotal : Nat
 
@@ -319,6 +331,9 @@ structure St where
   /-- Which slots are transient: used only within one resumption (so real
       slots), not kept in the frame. -/
   trans : Array Bool := #[]
+  /-- The helpers of the calls under a refinement (#171): each one's body,
+      parameter types and result type (functions `viaBase + i`). -/
+  vias : Array (Expr × List VTy × VTy) := #[]
   /-- Suspension points numbered so far, in order (from 1). -/
   next : Nat := 0
   /-- The region's own suspension points so far. -/
@@ -465,6 +480,18 @@ partial def loopify (e : Expr) (used : Bool := true) : M Expr := do
   | .print x => return .print (← loopify x)
   | e => return e
 
+/-- A call through `Typed.dispatch`'s shape, `ite (isTag us [local y])
+    (call g (local y :: es)) _`, of a callee with receiver-first helpers
+    (#142): the classes, the receiver's slot, the callee, the arguments. -/
+def refined? (c t : Expr) : M (Option (List Nat × Nat × Callee × List Expr)) := do
+  match c, t with
+  | .heap (.isTag us) [.local y], .call g (.local y' :: es) =>
+    if y != y' then return none
+    match (← read).callee g with
+    | some cal => return if cal.selfFns.isSome then some (us, y, cal, es) else none
+    | none => return none
+  | _, _ => return none
+
 mutual
 /-- The statements of `e`, each guarded, with the continuation `k` applied
     to its value (none: the value is discarded). -/
@@ -483,13 +510,17 @@ partial def block (e : Expr) (k : Option (Expr → Expr)) : M (List Expr) := do
     modify fun st => { st with defers := saved }
     return r
   | .seq a b => return (← block a none) ++ (← block b k)
-  | .assign i e1 => block e1 (some fun v => app k (.assign i v))
+  | .assign i e1 =>
+    let τ := (← get).Γ[i]?
+    withReader (fun env => { env with expTy := τ }) (block e1 (some fun v => app k (.assign i v)))
   | .ite c t e2 =>
     if ← hasS c then throw "internal error: a suspending call in a failure context"
     return [← emit do
       let b ← freshT .int
       let lo := (← get).next + 1
-      let tb ← block t k
+      let tb ← match ← refined? c t with
+        | some (us, y, cal, es) => selfCall us y cal es k
+        | none => block t k
       let mid := (← get).next
       let eb ← block e2 k
       let sel : Expr := .ite (← seeking) (.ite (← inRange lo mid) (int 1) (int 0)) (.ite (retToDone (← read).inArmR c) (int 1) (int 0))
@@ -589,7 +620,8 @@ partial def block (e : Expr) (k : Option (Expr → Expr)) : M (List Expr) := do
     return pre ++ [← emit (pure (app k (.print rs.head!)))]
   | .ret e1 =>
     let arm := (← read).inArmR
-    block e1 (some fun v => .seq (fset resF v) (if arm then .ret (int 2) else .seq killMark (.ret (int 1))))
+    withReader (fun env => { env with expTy := some env.ρ })
+      (block e1 (some fun v => .seq (fset resF v) (if arm then .ret (int 2) else .seq killMark (.ret (int 1)))))
   | e =>
     let e ← loopify e k.isSome
     return [← emit (pure (app k (retToDone (← read).inArmR e)))]
@@ -668,6 +700,59 @@ partial def suspendAt (g : Nat) (c : Callee) (rs : List Expr) : M (Expr × Expr)
     let t ← fresh (← infer (.call g rs))
     let take : Expr := .assign t (.ite isC (.call rfn [.local y]) (.prim .userErr []))
     return (seqVoid [arrive, found, poll, pend, take], .local t)
+  | _, _ => return (seqVoid [arrive, found, poll, pend], vd)
+
+/-- A call of a method of a class that fixes type arguments, through
+    `Typed.dispatch` on the receiver in slot `y` (classes `us`, #142). -/
+partial def selfCall (us : List Nat) (y : Nat) (c : Callee) (es : List Expr) (k : Option (Expr → Expr)) :
+    M (List Expr) := do
+  let (pre, rs) ← operands es
+  let (s, v) ← emitWith (suspendSelf us y c rs k.isSome)
+  match k with
+  | none => return pre ++ [s]
+  | some k => return pre ++ [s, ← emit (pure (k v))]
+
+/-- `suspendAt` for a call through `Typed.dispatch`: what depends on the
+    refinement (the arguments, the result) goes through the callee's
+    receiver-first helpers, each called in the rule's shape by a helper of
+    this call site whose first parameter is the receiver (`arriveVia(recv,
+    args…, frame, sched)`, `takeVia(recv, frame)`), as the receiver's slot
+    may be a frame field. The frame is kept as a non-generic callee's, and
+    resumed and cancelled with its parameters from itself. Gives the
+    statement and the call's value. -/
+partial def suspendSelf (us : List Nat) (y : Nat) (c : Callee) (rs : List Expr) (valued : Bool) : M (Expr × Expr) := do
+  let env ← read
+  let some (arriveFn, takeFn, resumeFn, cancelFn) := c.selfFns
+    | throw "internal error: a refined call without helpers"
+  let some ty := (← get).Γ[y]? | throw "internal error: a refined call's receiver"
+  let σs ← rs.mapM infer
+  let wide : VTy := .ref [c.tag, env.schedTag] []
+  let k ← newSite wide
+  let cf := childF k
+  let w ← freshT wide
+  let own : Callee := { c with resumeFn, cancelFn := some cancelFn, passFields := [] }
+  modify fun st => { st with sites := st.sites.push { id := k, waits := .callee k own w [], defers := st.defers } }
+  let isR : Expr := .heap (.isTag us) [.local 0]
+  let n := rs.length
+  let via (body : Expr) (ps : List VTy) (τ : VTy) : M Nat := do
+    let i := (← get).vias.size
+    modify fun st => { st with vias := st.vias.push (body, ps, τ) }
+    return env.viaBase + i
+  let arriveV ← via (.ite isR (.call arriveFn ((List.range (n + 3)).map Expr.local)) (.prim .userErr []))
+    (ty :: σs ++ [wide, .ref [env.schedTag] []]) wide
+  let st ← freshT .int
+  let arrive : Expr := .ite (← seeking) vd (seqVoid [
+    fset cf (.call arriveV (.local y :: rs ++ [fget cf, .local schS])),
+    fset env.pcFld (int k)])
+  let poll : Expr := seqVoid [.assign w (fget cf),
+    .assign st (.ite (.heap (.isTag [c.tag]) [.local w]) (.call resumeFn [.local w, .local schS]) (.prim .userErr []))]
+  let pend : Expr := .ite (.prim .eq [.local st, int 0]) (.seq spillMark (.ret (int 0))) vd
+  let found : Expr := .assign env.rS (int 0)
+  match c.resField, valued with
+  | some _, true =>
+    let some τ := env.expTy | throw "internal error: a refined call's value has no expected type"
+    let takeV ← via (.ite isR (.call takeFn [.local 0, .local 1]) (.prim .userErr [])) [ty, wide] τ
+    return (seqVoid [arrive, found, poll, pend], .call takeV [.local y, .local w])
   | _, _ => return (seqVoid [arrive, found, poll, pend], vd)
 
 /-- The statement of a `sync` (`isSync`) or `race` with arms `arms` (each
@@ -810,6 +895,17 @@ partial def fill (spill reload : Expr) (kill : Expr := vd) : Expr → Expr
   | .print e => .print (fill spill reload kill e)
   | e => e
 
+/-- The functions among `isT` that `e` calls in `Typed.dispatch`'s shape. -/
+partial def dispatchTargets (isT : Nat → Bool) : Expr → List Nat
+  | .ite (.heap (.isTag _) [.local y]) (.call g (.local y' :: es)) e =>
+    (if y == y' && isT g then [g] else []) ++ (es.map (dispatchTargets isT)).flatten ++ dispatchTargets isT e
+  | .assign _ e | .ret e | .print e | .loop e => dispatchTargets isT e
+  | .forE _ it f b => dispatchTargets isT it ++ dispatchTargets isT f ++ dispatchTargets isT b
+  | .seq a b => dispatchTargets isT a ++ dispatchTargets isT b
+  | .prim _ es | .call _ es | .heap _ es => (es.map (dispatchTargets isT)).flatten
+  | .ite c t e => dispatchTargets isT c ++ dispatchTargets isT t ++ dispatchTargets isT e
+  | _ => []
+
 /-- The element slots of the `for`s in `e`. -/
 partial def forBinders : Expr → List Nat
   | .forE i it f b => i :: forBinders it ++ forBinders f ++ forBinders b
@@ -883,10 +979,14 @@ structure Lowered where
   /-- Each `branch`'s (and `rush` arm's) arm resume function, done field,
       and whether its wrapper runs it at once, in their numbering order. -/
   branchArms : List (Nat × Nat × Bool) := []
+  /-- The refined calls' helpers (#171): each one's body, parameter types and
+      result type, after the arms' functions. -/
+  vias : List (Expr × List VTy × VTy) := []
 
 /-- Lower the body `b` (initialisations stripped) of a suspends function
     with `arity` parameters, slot types `Γ` and result type `ρ`, whose frame
-    type is `frameTy`; its arm functions are numbered from `fnBase`. -/
+    type is `frameTy`; its arm functions are numbered from `fnBase`, then its
+    refined calls' helpers. -/
 def lower (S : Sigs) (callee : Nat → Option Callee) (syncMark raceMark rushMark spawnMark : Nat) (spawns : Array (Nat × Nat))
     (branchMark : Nat) (branches : Array (Nat × Nat × Nat))
     (arity : Nat) (Γ : List VTy) (ρ : VTy) (frameTy : VTy) (schedTag : Nat) (fnBase : Nat) (b : Expr) :
@@ -901,7 +1001,7 @@ def lower (S : Sigs) (callee : Nat → Option Callee) (syncMark raceMark rushMar
   let Γ0 := #[frameTy, schedTy] ++ Γ.toArray
   let trans0 := #[true, true] ++ (List.replicate Γ.length false).toArray
   let env : Env := { S, ρ, callee, syncMark, raceMark, rushMark, arity, sites, armsTotal, fnBase, schedTag, spawnMark, spawns,
-                     branchMark, branches,
+                     branchMark, branches, viaBase := fnBase + 2 * armsTotal, expTy := some ρ,
                      pcFld := pcF, rS := 0, regionTotal := 0 }
   let done : Expr → Expr := fun v => .seq (fset resF v) (.seq killMark (.ret (int 1)))
   let ((res, can), st) ← ((region pcF (some done) b).run env).run { Γ := Γ0, trans := trans0 }
@@ -931,7 +1031,7 @@ def lower (S : Sigs) (callee : Nat → Option Callee) (syncMark raceMark rushMar
     let ren (j : Nat) : Nat := if j < 2 + arity then j else 2 + arity + ((used.idxOf? j).getD 0)
     { body := renumber ren e, slots := st.Γ.toList.take (2 + arity) ++ used.map fun j => (st.Γ[j]?).getD .int }
   return { body := finish res, cancel := finish can, arms := st.arms.toList.map fun (r, c) => (finish r, finish c),
-           branchArms := st.branchArms.toList,
+           branchArms := st.branchArms.toList, vias := st.vias.toList,
            fields := [.int, ρ] ++ st.children.toList ++ List.replicate (2 * armsTotal) .int ++
              (st.Γ.toList.drop 2) }
 
