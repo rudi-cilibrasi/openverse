@@ -264,10 +264,11 @@ partial def liftChains (m base : Nat) : Expr → StateM (Array (Expr × List Nat
 
 /-- `e` without the tests in `Typed.dispatch`'s shape that no object can
     pass at the slot types `Γ`: the receiver's type arguments are closed and
-    disagree with the tested classes' pins (#142). A copy of a generic
-    function at closed types has such tests where the generic one had a
-    refinement (#174), and the checker types a dispatch only when its pins
-    can agree. -/
+    disagree with every tested class's pins (#142). The checker types a
+    dispatch only when its pins can agree, and such tests arise in a copy
+    of a generic function at closed types, where the generic one had a
+    refinement (#174), and in #157's field accessors on closed receivers;
+    every function is pruned before the lowering (#186). -/
 partial def pruneDead (S : Sigs) (Γ : List VTy) : Expr → Expr
   | .ite c@(.heap (.isTag us) [.local y]) t@(.call _ (.local y' :: _)) e =>
     let dead := y == y' && !us.isEmpty && match Γ[y]? with
