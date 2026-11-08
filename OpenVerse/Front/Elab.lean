@@ -564,15 +564,18 @@ def TyEnv.sameCorePinned (env : TyEnv) (d T : String) : Bool :=
 
 /-- `seq (assign t₁ v₁) (… (call f es))` as the call with each `vᵢ` (a
     literal or a slot) in place of `tᵢ` in its arguments: a call whose
-    named arguments went through temporaries (#142). -/
-partial def Expr.inlineArgTemps : Expr → Option Expr
+    named arguments went through temporaries (#142). `typed` gives, for
+    some temporaries, what to put instead of their literal. -/
+partial def Expr.inlineArgTemps (e : Expr) (typed : List (Nat × Expr) := []) : Option Expr :=
+  match e with
   | .call f es => some (.call f es)
-  | .seq (.assign t v) rest =>
-    let simple := match v with
+  | .seq (.assign t v0) rest =>
+    let simple := match v0 with
       | .lit _ | .local _ => true
       | _ => false
     if !simple then none else
-    (Expr.inlineArgTemps rest).map fun
+    let v := (typed.lookup t).getD v0
+    (Expr.inlineArgTemps rest typed).map fun
       | .call f es => .call f (es.map fun a => match a with
         | .local t' => if t' == t then v else a
         | _ => a)
@@ -2822,7 +2825,22 @@ partial def elabAppBase (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (b
                 let rcE : Expr := match rc.e with
                   | .seq (.ite (.prim .fail []) _ (.lit .void)) b => b
                   | e => e
-                let some (.call fi (.local s0 :: es)) := Expr.inlineArgTemps rcE
+                -- (an omitted named argument's default with no type of its
+                -- own, `false`, `array{}` or `map{}`, goes in as `if (fail)
+                -- then T else false`, with `T` its temporary, whose type is
+                -- the parameter's, so that the checker infers it, as the rule
+                -- infers the other arguments' types, #175)
+                let rec untyped : Expr → List Nat
+                  | .seq (.assign t (.lit .none)) rest => t :: untyped rest
+                  | .seq (.assign t (.lit (.arr a))) rest => if a.isEmpty then t :: untyped rest else untyped rest
+                  | .seq _ rest => untyped rest
+                  | _ => []
+                let rec litOf (t : Nat) : Expr → Expr
+                  | .seq (.assign t' v) rest => if t' == t then v else litOf t rest
+                  | _ => .lit .none
+                let typed : List (Nat × Expr) := (untyped rcE).map fun t =>
+                  (t, .ite (.prim .fail []) (.local t) (litOf t rcE))
+                let some (.call fi (.local s0 :: es)) := Expr.inlineArgTemps rcE typed
                   | eerr p s!"cannot dispatch {m} to class {e}, which fixes type arguments of {c}, when a named argument's default is computed (#142)"
                 if s0 != slot then eerr p s!"cannot dispatch {m} to class {e}, which fixes type arguments of {c} (#142)"
                 acc := .ite (.heap (.isTag (part.toList.map env.tagOf)) [.local slot]) (.call fi (.local slot :: es)) acc
