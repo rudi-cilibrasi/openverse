@@ -9,7 +9,7 @@ against it. This page records the decisions behind the shape of the code.
 **Contents**
 
 - Semantics: [Two languages, one semantics](#two-languages-one-semantics) · [Failure and rollback](#failure-and-rollback) · [Fuel](#fuel)
-- Front end: [Translation validation](#translation-validation-instead-of-a-verified-front-end) · [Modules](#modules-a-renaming-before-elaboration) · [Floats](#floats-canonical-bits) · [Rationals](#rationals-helpers-written-in-verse) · [Generic functions](#generic-functions-polymorphic-verse-core)
+- Front end: [Translation validation](#translation-validation-instead-of-a-verified-front-end) · [Modules](#modules-a-renaming-before-elaboration) · [Floats](#floats-canonical-bits) · [Rationals](#rationals-helpers-written-in-verse) · [Generic functions](#generic-functions-polymorphic-verse-core) · [Concurrency](#concurrency-suspends-functions-as-frames)
 - Classes and the heap: [Classes as references](#classes-as-references) · [Typing the heap](#typing-the-heap) · [Typed defaults](#why-every-slot-starts-with-a-typed-default)
 - C runtime: [The binary format and the loader](#the-binary-format-and-the-loader) · [Two semantics, one seam](#two-semantics-one-seam) · [Objects in the C runtime](#objects-in-the-c-runtime)
 - [Readings of the Book](#readings-of-the-book)
@@ -252,6 +252,60 @@ instantiation lets inference take different paths at different types (at
 `void`, for example). Monomorphising the generically checked body is sound,
 but checks each instance separately, multiplies code, and cannot express
 polymorphic recursion.
+
+## Concurrency: suspends functions as frames
+
+Verse Core has no suspension, and giving it one would change the evaluator,
+every preservation case, and a C interpreter that recurses on the C stack.
+So the front end lowers concurrency into ordinary Verse Core (#156), the
+classic coroutine transformation. A `<suspends>` function `g` becomes:
+
+- a frame class: the suspension point it is at, its `?result`, one `?frame`
+  per suspension point for the callee's frame, and one field per slot;
+- `g$new(params…)`, which allocates a frame, `g$reset(frame, params…)`, which
+  readies it for another call, and `g$resume(frame, sched, params…)`, which
+  runs from the frame's suspension point to the next one (result 0) or the
+  end (result 1). The parameters are passed again only so that the slots'
+  initial values (`DefaultE`) can refer to them.
+
+`Front/Suspend.lean` turns `g`'s elaborated body into `g$resume`'s:
+
+1. **Slots and returns.** The slots move up two places, for the frame and the
+   scheduler, and `return e` stores `e` and returns 1.
+2. **A-normal form.** Each call of a suspends function becomes a statement of
+   its own. Values computed before it in the same expression go to
+   temporaries first, typed by Core's checker (`tc … none`).
+3. **Resume guards.** While seeking the suspension point to resume at, a flag
+   is set, and a statement that cannot contain that point is skipped. An
+   `if` picks the branch that holds it instead of testing its condition
+   again, and a `loop` stays a loop. A `for` whose body suspends becomes a
+   loop over an index.
+
+At a suspension point, the caller resumes the callee's frame. If the callee
+is pending, the caller stores its slots in its own frame and returns 0;
+resuming reloads them. Failure contexts never contain a suspension, so a
+rollback never spans one. The result is ordinary Verse Core, which
+`Prog.checkTypes` checks, and Lean and C run.
+
+**Avoiding allocation.**
+- A frame is kept per call site and reset rather than replaced. The C runtime
+  never frees an object, but a loop of 100,000 suspending calls still runs
+  in constant memory.
+- Children are reached through option fields, unwrapped in an `if`
+  condition, so no slot has a frame type. A frame-typed slot would need a
+  new placeholder at every resume.
+
+**The scheduler.** The scheduler and `Sleep` are helpers written in Verse
+(`concPrelude`, added to a program with a suspends function, as the
+rationals' are). A suspends `Main` starts a loop of passes, one per tick,
+each resuming `Main`'s frame. A sleeping frame reports the tick it waits
+for, and the clock then moves to the earliest of them, so idle ticks cost
+nothing.
+
+The scheduler only ever holds non-generic task roots. Core has no
+existential types, so a queue of frames whose type arguments it has forgotten
+could not be typed; generic frames are always resumed by their callers, who
+know their type arguments.
 
 ## Classes as references
 

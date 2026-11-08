@@ -21,6 +21,7 @@ import OpenVerse.Core.Derived
 import OpenVerse.Core.TypeCheck
 import OpenVerse.Core.Control
 import OpenVerse.Front.Parser
+import OpenVerse.Front.Suspend
 import OpenVerse.Front.Rational
 import OpenVerse.Front.Modules
 import Std.Data.HashMap
@@ -677,6 +678,8 @@ structure Sig where
   tparams : List (String × Bool) := []
   /-- The heap effects its specifiers allow (#35). -/
   fx : List String := heapFx
+  /-- `<suspends>` (#156): lowered to a frame and a resume function. -/
+  suspends : Bool := false
   deriving Inhabited
 
 structure Ctx where
@@ -721,6 +724,8 @@ structure Ctx where
   selfMethod : Option String := none
   /-- In a constructor's items (the function `K$init`, #72): no `return`. -/
   inCtor : Bool := false
+  /-- In a `<suspends>` function (#156): calls of suspends functions allowed. -/
+  suspends : Bool := false
 
 structure ESt where
   /-- The program's types, for conversions between class types (`coerce`). -/
@@ -2235,6 +2240,10 @@ partial def elabAppBase (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (b
         | _ => return ⟨.seq r.e (.lit .void), .void⟩
       | _ => eerr p "internal: $Show"
     | _ =>
+      -- `Sleep` (#156): the concurrency helpers' unless the program has its own
+      let name := if name == "Sleep" && (ctx.sig? "Sleep").isNone then "$Sleep" else name
+      if name == "$Sleep" && (ctx.sig? name).isNone then
+        eerr p "Sleep suspends: it can only be called in a <suspends> function (#156)"
       match ctx.sig? name with
       | some s =>
         -- a call has its callee's effects
@@ -2245,6 +2254,11 @@ partial def elabAppBase (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (b
           if s.decides && !bracket then eerr p s!"{name} is <decides>: call it with {name}[…]"
           -- the call syntax marks failure (Book of Verse §8.1)
           if !s.decides && bracket then eerr p s!"{name} cannot fail: call it with {name}(…)"
+          if s.suspends then
+            let shown := if name == "$Sleep" then "Sleep" else name
+            if !ctx.suspends then eerr p s!"{shown} suspends: it can only be called in a <suspends> function (#156)"
+            if ctx.inDefer then eerr p s!"{shown} suspends, and a defer cannot suspend (#156)"
+            if ctx.canFail then eerr p s!"{shown} suspends, and a failure context (a condition, a filter, or a <decides> call's arguments) cannot (#156)"
           if !s.tparams.isEmpty then return ← elabGenericCall ctx p s args exp
           let isNamed : SExpr → Bool
             | .decl _ n _ _ _ => n.startsWith "?"
@@ -3958,6 +3972,49 @@ def expandCtors (ctors : List (Pos × String × List SParam × List TParam × Li
       out := out.push (.fn p k ps tps effs (if targs.isEmpty then .name c else .app c targs) kbody)
   return out.toList
 
+/-- The concurrency helpers (#156), written in Verse: the scheduler's
+    state (the clock, in ticks of 1/30 s, and the earliest tick a sleeping
+    task waits for), and `Sleep`'s frame with its `new`, `init` and `resume`.
+    `Sleep` itself is a stub that only marks the suspension point: the
+    lowering (`Suspend.lean`) calls the others in its place. -/
+def concPrelude : String := "
+sched := class:
+    var Now:int = 0
+    var Next:int = -1
+sleep := class:
+    var Pc:int = 0
+    var Secs:float = 0.0
+    var Wake:int = 0
+sleepNew(S:float):sleep = sleep{Secs := S}
+sleepInit(F:sleep, S:float):void =
+    set F.Pc = 0
+    set F.Secs = S
+sleepResume(F:sleep, C:sched):int =
+    if (F.Pc = 0):
+        set F.Pc = 1
+        if (F.Secs >= 0.0, F.Secs < 1000000000000000.0):
+            N:int = if (R := Round[F.Secs * 30.0], R >= 1) then R else 1
+            set F.Wake = C.Now + N
+        else if (F.Secs >= 0.0):
+            set F.Wake = -1
+        else:
+            return 1
+    if (F.Wake < 0):
+        return 0
+    if (C.Now >= F.Wake):
+        return 1
+    if (C.Next < 0):
+        set C.Next = F.Wake
+    else if (F.Wake < C.Next):
+        set C.Next = F.Wake
+    0
+Sleep(S:float)<suspends>:void = {}
+"
+
+def concTops : Except String (List STop) :=
+  parsePrelude concPrelude ["sched", "Now", "Next", "sleep", "Pc", "Secs", "Wake", "sleepNew",
+    "sleepInit", "sleepResume", "Sleep", "S", "F", "C", "N", "R"]
+
 /-- Elaborate a parsed program into a Verse Core program that passes `Prog.check`
     and `Prog.checkTypes`. -/
 def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except String Compiled := do
@@ -3975,6 +4032,11 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     | _ => pure ()
   let helpers ← if usesRat then ratTops else pure []
   let helpers := helpers ++ (← if usesReplaceAll then replaceAllTops else pure [])
+  -- concurrency (#156): the helpers, for a program with a <suspends> function
+  let usesConc := allTops0r.any fun
+    | .fn _ _ _ _ effs _ _ => effs.contains "suspends"
+    | _ => false
+  let helpers := helpers ++ (← if usesConc then concTops else pure [])
   let allTops000 := allTops0r.filter (!isRatMarker ·)
   -- modules (#112): every reference to a member, qualified (the entry
   -- expression's too)
@@ -4612,7 +4674,11 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   -- a function's parameter and result types
   let fnTypes (env : TyEnv) (p : Pos) (n : String) (ps : List SParam) (effs : List String) (ret : STy) :
       Except String (List Ty × Ty) := do
-    if effs.contains "suspends" then throw s!"{p.show}: <suspends> (concurrency) is not supported by openverse v1"
+    if effs.contains "suspends" then
+      if effs.contains "decides" then
+        throw s!"{p.show}: {n} is both <suspends> and <decides>, which exclude each other"
+      if n.contains '.' then
+        throw s!"{p.show}: a <suspends> method ({n}) is not supported yet (#156)"
     let (tys, _) ← ((ps.mapM fun prm => resolveTy env p prm.ty).run {})
     let (rt, _) ← (resolveTy env p ret).run {}
     -- named parameters come last (Book of Verse §8.2)
@@ -4632,6 +4698,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       if effs.contains "computes" && ("transacts" :: heapFx).any effs.contains then
         throw s!"{p.show}: <computes> excludes the heap effects (<reads>, <writes>, <allocates>, <transacts>) that {n} also has"
       sigs := sigs.push { idx, name := n, params := tys, ret := rt, decides := effs.contains "decides",
+                          suspends := effs.contains "suspends",
                           -- (a `block:`'s effects are inferred below, from none, as a
                           -- constant's: blocks that construct each other's classes)
                           fx := if n.endsWith ".$block" || (n.splitOn "$default$").length > 1 then [] else allowedFx effs,
@@ -4661,6 +4728,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       -- generic functions come after the others
       gsigs := gsigs.push { idx := tops.length + gidx, name := n, params := tys, ret := rt,
                             decides := effs.contains "decides", isConst := false,
+                            suspends := effs.contains "suspends",
                             -- (a parametric class's `block:`: inferred from none, #41)
                             fx := if n.endsWith ".$block" then [] else allowedFx effs,
                             tparams,
@@ -4928,14 +4996,15 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
           let fix := if allowed.isEmpty then "remove <computes>" else s!"add <{k}> or <transacts>"
           throw s!"{kp.show}: {name} {what}, which its effects ({spec}) do not allow: {fix}"
   let elabFn (env : TyEnv) (p : Pos) (name : String) (ps : List SParam) (ptys : List Ty) (ret : Ty)
-      (decides : Bool) (allowed : List String) (tps : List (String × Bool)) (body : SExpr) :
+      (decides : Bool) (allowed : List String) (tps : List (String × Bool)) (body : SExpr)
+      (suspends : Bool := false) :
       Except String (Fn × List VTy) := do
     let locals := (ps.zip (List.range ps.length)).zip ptys |>.map fun ((prm, i), t) =>
       ({ name := prm.name, slot := i, ty := t, mutable := false } : Local)
     for (prm, i) in ps.zip (List.range ps.length) do
       if ps.take i |>.any (·.name == prm.name) then throw s!"{p.show}: duplicate parameter '{prm.name}'"
     let ctx : Ctx := { sigs := allSigs, sigProg, locals := locals.reverse, types := env,
-                       canFail := decides, retTy := ret, dictBase := ps.length,
+                       canFail := decides, retTy := ret, dictBase := ps.length, suspends,
                        dictVars := tps.map (·.1),
                        inBlock := name.endsWith ".$block",
                        inCtor := name.endsWith "$init",
@@ -4965,7 +5034,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     let sig := sigs[idx]!
     match top with
     | .fn p n ps _ _ _ body =>
-      let (fn, tys) ← elabFn env p n ps sig.params sig.ret sig.decides sig.fx [] body
+      let (fn, tys) ← elabFn env p n ps sig.params sig.ret sig.decides sig.fx [] body sig.suspends
       fns := fns.push fn
       slotTys := slotTys.push tys
     | .const p n _ body =>
@@ -4993,7 +5062,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   for (top, g) in generics.zip gsigs.toList do
     match top with
     | .fn p n ps _ _ _ body =>
-      let (fn, tys) ← elabFn (genvOf g) p n ps g.params g.ret g.decides g.fx g.tparams body
+      let (fn, tys) ← elabFn (genvOf g) p n ps g.params g.ret g.decides g.fx g.tparams body g.suspends
       fns := fns.push fn
       slotTys := slotTys.push tys
     | _ => pure ()
@@ -5005,21 +5074,10 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   -- with prototypes, the program starts with a prelude that allocates them
   -- and then calls `Main` (#37)
   let protoList := env.protos.map fun (_, t, vs) => (t, vs)
-  let mut main := mainSig.idx
-  if !protoList.isEmpty then
-    main := fns.size
-    fns := fns.push { name := "$Main", arity := 0, nslots := 0, decides := mainSig.decides,
-                      writes := mainSig.fx.contains "writes",
-                      body := protoPrelude protoList (.call mainSig.idx []) }
-    slotTys := slotTys.push []
-  let P : Prog := { fns := fns.toList, main }
-  if !P.check then throw "internal error: the elaborated program does not pass Prog.check"
-  if !P.checkControl then throw "internal error: the elaborated program does not pass Prog.checkControl"
-  let fsigs := sigs.toList.map (fun s => (s.params.map (Ty.toVTy env), s.ret.toVTy env)) ++
+  let fsigs0 := sigs.toList.map (fun s => (s.params.map (Ty.toVTy env), s.ret.toVTy env)) ++
     gsigs.toList.map fun g =>
       let genv := genvOf g
       ((g.params ++ g.tparams.map fun (v, c) => Ty.param v c).map (Ty.toVTy genv), g.ret.toVTy genv)
-  let fsigs := if protoList.isEmpty then fsigs else fsigs ++ [([], mainSig.ret.toVTy env)]
   -- the class table: the fields of each class, by tag (#34); the prototypes (#37)
   -- (a parametric class's field types mention its type parameters, #39)
   -- each field as the topmost class in the chain that has it gives it, in
@@ -5039,10 +5097,123 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
         tD.toVTy { env with tvars := env.coreVars D }
       | none => t.toVTy { env with tvars := env.coreVars d }
     else []
-  let S : Sigs := { fns := fsigs, classes := classTable,
-                    protos := env.protos.map fun (d, t, _) => (t, (env.coreArgs d []).map (Ty.toVTy env)),
-                    pins := env.classes.map fun d =>
-                      if env.isRefClass d then (env.corePins d).map (·.map (Ty.toVTy env)) else [] }
+  let protos := env.protos.map fun (d, t, _) => (t, (env.coreArgs d []).map (Ty.toVTy env))
+  let pins := env.classes.map fun d =>
+    if env.isRefClass d then (env.corePins d).map (·.map (Ty.toVTy env)) else []
+  -- concurrency (#156): each <suspends> function `g` becomes a frame class
+  -- and the functions `g$new`, `g$reset` and `g$resume` (`Suspend.lean`);
+  -- `g`'s own index is `g$resume`'s, as only suspends code calls it
+  let mut fsigs := fsigs0
+  let mut frameClasses : Array (List VTy) := #[]
+  let mut extraSigs : Array (List VTy × VTy) := #[]
+  let mut mainCall : Expr := .call mainSig.idx []
+  if usesConc then
+    let allS := sigs.toList ++ gsigs.toList
+    let idxOf (n : String) : Nat := ((allS.find? (·.name == n)).map (·.idx)).getD 0
+    let sleepIdx := idxOf "$Sleep"
+    let conc := (allS.filter fun s => s.suspends && s.name != "$Sleep").toArray
+    let tagBase := env.classes.length
+    let nFns := fns.size
+    let isS : Nat → Bool := fun f => f == sleepIdx || conc.any (·.idx == f)
+    let schedTy : VTy := .ref [env.tagOf "$sched"] []
+    -- each one's body (initialisations stripped) and number of suspension points
+    let mut parts : Array (List Expr × Expr × Nat) := #[]
+    for g in conc do
+      let fn := fns[g.idx]!
+      let some (ds, b) := Suspend.stripInits (fn.nslots - fn.arity) fn.body
+        | throw s!"internal error: lowering {g.name}: unexpected initialisations"
+      parts := parts.push (ds, b, Suspend.countSusp isS b)
+    let frameTy (j : Nat) : VTy :=
+      .ref [tagBase + j] ((List.range conc[j]!.tparams.length).map VTy.var)
+    let callee : Nat → Option Suspend.Callee := fun f =>
+      if f == sleepIdx then
+        some { tag := env.tagOf "$sleep", newFn := idxOf "$sleepNew", initFn := idxOf "$sleepInit",
+               resumeFn := idxOf "$sleepResume", passFields := [], resField := none }
+      else match conc.toList.zipIdx.find? (·.1.idx == f) with
+        | some (g, j) =>
+          some { tag := tagBase + j, newFn := nFns + 2 * j, initFn := nFns + 2 * j + 1, resumeFn := g.idx,
+                 passFields := (List.range fns[g.idx]!.arity).map fun i => Suspend.slotF parts[j]!.2.2 (i + 2),
+                 resField := some Suspend.resF }
+        | none => none
+    -- `new` and `reset` of each, for inferring the frames' type arguments
+    for (g, j) in conc.toList.zipIdx do
+      let ps := slotTys[g.idx]!.take fns[g.idx]!.arity
+      extraSigs := extraSigs.push (ps, frameTy j)
+      extraSigs := extraSigs.push (frameTy j :: ps, VTy.void)
+    let Sinf : Sigs := { fns := fsigs0 ++ extraSigs.toList, classes := classTable, protos, pins }
+    let mut newFns : Array Fn := #[]
+    let mut newTys : Array (List VTy) := #[]
+    for (g, j) in conc.toList.zipIdx do
+      let fn := fns[g.idx]!
+      let Γ := slotTys[g.idx]!
+      let a := fn.arity
+      let (ds, b, total) := parts[j]!
+      let ρ := (fsigs0[g.idx]!).2
+      let low ← (Suspend.lower Sinf callee Γ ρ (frameTy j) schedTy b).mapError fun e => s!"in {g.name}: {e}"
+      let ps := Γ.take a
+      let tempTys := low.slots.drop (2 + fn.nslots)
+      let dflt (params : List VTy) (τ : VTy) : Except String Expr :=
+        match Suspend.coreDefault Sinf params 0 τ with
+        | some d => pure d
+        | none => throw s!"internal error: lowering {g.name}: no initial value for a temporary of type {repr τ}"
+      let resumeInits := ds.map (Suspend.shift 2) ++ (← tempTys.mapM (dflt (low.slots.take (a + 2))))
+      fns := fns.set! g.idx { name := g.name, arity := a + 2, nslots := low.slots.length, decides := false,
+                              writes := true, body := initPrefixE (a + 2) resumeInits low.body }
+      slotTys := slotTys.set! g.idx low.slots
+      fsigs := fsigs.set g.idx (frameTy j :: schedTy :: ps, .int)
+      frameClasses := frameClasses.push low.fields
+      -- `g$new(params…)`: the frame, with the arguments and initial values
+      let newBody : Expr := .heap (.new (tagBase + j))
+        ([Suspend.int 0, .lit .none] ++ List.replicate total (.lit .none) ++
+          (List.range a).map Expr.local ++ ds ++ (← tempTys.mapM (dflt ps)))
+      newFns := newFns.push { name := s!"{g.name}$new", arity := a, nslots := a, decides := false,
+                              writes := true, body := newBody }
+      newTys := newTys.push ps
+      -- `g$reset(frame, params…)`: the frame, made ready for another call
+      let resetBody := Suspend.seqVoid (.heap (.set Suspend.pcF) [.local 0, Suspend.int 0] ::
+        (List.range a).map fun i => .heap (.set (Suspend.slotF total (i + 2))) [.local 0, .local (i + 1)])
+      newFns := newFns.push { name := s!"{g.name}$reset", arity := a + 1, nslots := a + 1, decides := false,
+                              writes := true, body := resetBody }
+      newTys := newTys.push (frameTy j :: ps)
+    fns := fns ++ newFns
+    slotTys := slotTys ++ newTys
+    fsigs := fsigs ++ extraSigs.toList
+    -- a suspends `Main` runs under the scheduler: a loop of passes, one per
+    -- tick, each resuming `Main`; between passes the clock moves to the
+    -- earliest tick a sleeping task waits for (none: no task can go on)
+    if mainSig.suspends then
+      let some j := conc.toList.findIdx? (·.idx == mainSig.idx) | throw "internal error: Main is not lowered"
+      let runIdx := fns.size
+      let sch : Expr := .local 0
+      let run : Expr := Suspend.seqVoid [.loop (Suspend.seqVoid [
+        .heap (.set 1) [sch, Suspend.int (-1)],
+        .assign 2 (.call mainSig.idx [.local 1, sch]),
+        .ite (.prim .eq [.local 2, Suspend.int 1]) .brk Suspend.vd,
+        .ite (.prim .lt [.heap (.get 1) [sch], Suspend.int 0]) (.seq (.prim .userErr []) Suspend.vd) Suspend.vd,
+        .heap (.set 0) [sch, .heap (.get 1) [sch]]])]
+      fns := fns.push { name := "$Run", arity := 2, nslots := 3, decides := false, writes := true,
+                        body := initPrefixE 2 [Suspend.int 0] run }
+      slotTys := slotTys.push [schedTy, frameTy j, .int]
+      fsigs := fsigs ++ [([schedTy, frameTy j], VTy.void)]
+      -- (the prelude calls a function without arguments, `checkPrelude`)
+      fns := fns.push { name := "$Start", arity := 0, nslots := 0, decides := false, writes := true,
+                        body := .call runIdx [.heap (.new (env.tagOf "$sched")) [Suspend.int 0, Suspend.int (-1)],
+                          .call (nFns + 2 * j) []] }
+      slotTys := slotTys.push []
+      fsigs := fsigs ++ [([], VTy.void)]
+      mainCall := .call (runIdx + 1) []
+  let mut main := mainSig.idx
+  if !protoList.isEmpty || mainSig.suspends then
+    main := fns.size
+    fns := fns.push { name := "$Main", arity := 0, nslots := 0, decides := mainSig.decides,
+                      writes := mainSig.fx.contains "writes" || mainSig.suspends,
+                      body := protoPrelude protoList mainCall }
+    slotTys := slotTys.push []
+    fsigs := fsigs ++ [([], if mainSig.suspends then VTy.void else mainSig.ret.toVTy env)]
+  let P : Prog := { fns := fns.toList, main }
+  if !P.check then throw "internal error: the elaborated program does not pass Prog.check"
+  if !P.checkControl then throw "internal error: the elaborated program does not pass Prog.checkControl"
+  let S : Sigs := { fns := fsigs, classes := classTable ++ frameClasses.toList, protos, pins }
   if !P.checkTypes S slotTys.toList then
     -- name what fails, for a bug report
     let bad := (List.range P.fns.length).find? fun f =>

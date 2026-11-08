@@ -16,7 +16,7 @@ surface Verse is elaborated (`OpenVerse/Front/Elab.lean`) into Verse Core
 
 - The language: [Supported](#supported) · [Source text](#source-text) · [Parametric functions](#parametric-functions) · [defer](#defer) · [Overloading](#overloading) · [Parametric structs](#parametric-structs) · [Classes](#classes) · [Mutation, macros, tooling](#mutation-macros-tooling)
 - More types: [any](#any) · [Refinement types](#refinement-types) · [float](#float) · [rational](#rational) · [char32](#char32)
-- Programs: [Modules](#modules) · [Programs of several files](#programs-of-several-files)
+- Programs: [Modules](#modules) · [Programs of several files](#programs-of-several-files) · [Concurrency](#concurrency)
 - [Readings openverse takes](#readings-openverse-takes) · [Not supported in v1](#not-supported-in-v1)
 
 ## Supported
@@ -42,6 +42,7 @@ surface Verse is elaborated (`OpenVerse/Front/Elab.lean`) into Verse Core
 | Array methods | `A.Slice[i, j]`, `A.Slice[i]`, `A.Find[x]`, `A.RemoveElement[i]`, `A.RemoveFirstElement[x]`, `A.Remove[i, j]` (half-open), `A.ReplaceElement[i, x]`, `A.ReplaceFirstElement[x, y]`, `A.Insert[i, B]`, `A.Last[]`, `A.Last[n]` (the element n before the last) (all failable); `A.RemoveAllElements(x)`, `A.ReplaceAllElements(x, y)`, `A.ReplaceAll(Pattern, Replacement)` (contiguous subarrays, left to right, not overlapping; an empty pattern changes nothing), `Concatenate(A, B, …)` or `Concatenate(Arrays)` (#150) (never failing) | §9.1 |
 | Built-ins | `Print(s)`, `ToString(x)` (int, float, char, string), `Floor[F]`, `Ceil[F]`, `Round[F]`, `Int[F]` (of a float, failable), `Floor(R)`, `Ceil(R)` (of a rational or an int, never failing; `Floor(X / Y)` fails when `Y = 0`, as `X / Y` does), `Quotient[X, Y]`, `Mod[X, Y]` (Euclidean), `Abs`, `Min`, `Max`, `Err()` | API reference |
 | Modules | `name := module:` (nested), `M.F`, `A.B.F`, the types `M.c` and values `M.c{…}`, `(M:)F`, `using{M}` at file or module scope, `<public>` members (`<internal>` is the default); see [Modules](#modules) | ch. 16 |
+| Concurrency | `<suspends>` functions, `Sleep`, a suspends `Main`, under a deterministic scheduler; see [Concurrency](#concurrency) | ch. 14 |
 | Program entry | `Main()` — see the exit protocol in [`FORMAT.md`](FORMAT.md) | (not in the book) |
 
 ## Source text
@@ -672,6 +673,45 @@ the readings are flat:
 - other extensions, and `.zip`, are ignored;
 - errors in an imported file show its path.
 
+## Concurrency
+
+A function marked `<suspends>` can wait (Book of Verse ch. 14, #156). This
+first step supports such functions, `Sleep`, and calls between them; `sync`,
+`race`, `rush`, `branch`, `spawn`, `task` and `event` come next.
+
+```verse
+Countdown(N:int)<suspends>:int =
+    var I:int = N
+    loop:
+        if (I <= 0) then break
+        Print("{I}")
+        Sleep(1.0)
+        set I -= 1
+    N
+
+Main()<suspends>:void =
+    Total := Countdown(3)   # prints 3 2 1, one second apart
+    Print("done after {Total} seconds")
+```
+
+- **Effects.** `<suspends>` and `<decides>` exclude each other. A suspends
+  function, and `Sleep`, can be called only in a suspends function, and not
+  in a failure context (an `if` condition, a `for` filter, a `<decides>`
+  call's arguments) nor in a `defer`. A `<suspends>` method is not
+  supported yet.
+- **Time.** The schedule is deterministic: a virtual clock counts ticks, 30
+  per second, and ticks in which nothing can run are skipped. `Sleep(S)`
+  resumes after `Round(30·S)` ticks, at least one, so it always yields;
+  `Sleep(Inf)` never resumes; a negative or NaN `S` returns at once.
+- **The program.** A suspends `Main` runs under the scheduler. The program
+  ends when `Main` does. If `Main` waits and no task can run again (for
+  example after `Sleep(Inf)`), it ends as `Err()` does: exit 2.
+- **Lowering.** The front end compiles each suspends function into Verse Core:
+  a frame object holds its variables, and a resume function runs it from
+  one suspension point to the next (see DESIGN.md). Nothing changes in
+  Verse Core, the proofs or the C runtime. A call site keeps its callee's
+  frame, so a loop of calls allocates once.
+
 ## Readings openverse takes
 
 | Question | Book | openverse |
@@ -695,6 +735,9 @@ the readings are flat:
 | `NaN < X` | not stated | fails (IEEE: NaN orders with nothing); `NaN = NaN` succeeds (the Book) |
 | `=` between different types | not stated | refused when two scalar types (int, float, char, …) meet at the same place, also inside containers (`array{1} = array{1.0}`), as Verse Core holds them differently |
 | Ordering of rationals | not stated (§2 lists `<` … for `int` and `float`) | exact (by continued fractions, so it cannot overflow), and an int compares with a rational |
+| `Sleep(0.0)` | "may resume in the same tick" (ch. 14); the API reference: it always yields | always yields: resumes in the next tick (#156) |
+| `Sleep(S)` rounding | rounded up to whole ticks (ch. 14) | `Round(30·S)` ticks, at least one: rounding to the nearest keeps `Sleep(0.1)` at 3 ticks despite binary floats (#156) |
+| End of a program with tasks | not stated | the program ends when `Main` does; a `Main` that waits with no task able to run is an error (exit 2) (#156) |
 | Extent of a `<#>` comment | "everything indented by four spaces on subsequent lines" (§1.1) | the rest of the `<#>` line and every following line indented more than that line, whatever the amount (blank lines included); `<#>` may also follow code on a line |
 
 ## Not supported in v1
@@ -702,7 +745,7 @@ the readings are flat:
 arithmetic on rationals (see [rational](#rational)), float functions beyond those of [float](#float),
 the class features listed under [Classes](#classes), struct methods (Verse structs have none; classes do),
 `weak_map`, module paths `using{/Verse.org/…}` (accepted and ignored), overloading beyond [Overloading](#overloading), nested
-functions, concurrency (`spawn`, `sync`,
-`race`, `rush`, `branch`, `<suspends>`), and effect checking
+functions, concurrency beyond [Concurrency](#concurrency) (`spawn`, `sync`,
+`race`, `rush`, `branch`, `task`, `event`, `<suspends>` methods; #156), and effect checking
 other than `<decides>` and the heap effects (`<converges>` is accepted and
 ignored).
