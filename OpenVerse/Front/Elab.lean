@@ -2545,6 +2545,10 @@ partial def elabAppBase (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (b
     elabApp ctx p (.ident mp impl) (.ident mp "Self" :: args) bracket exp
   | .member mp obj m0 =>
     -- `T.Await()` of a task (#156): the helper `$Await(T)`
+    -- `E.Signal()` of an `event()` (#156): with the value `void`
+    if m0 == "Signal" && args.isEmpty then
+      if let .struct "event" [.void] := (← elabE ctx obj none).ty then
+        return ← elabApp ctx p (.member mp obj "Signal") [.tuple p []] bracket exp
     if m0 == "Await" && args.isEmpty then
       match (← elabE ctx obj none).ty with
       | .struct "task" [_] => return ← elabApp ctx p (.ident mp "$Await") [obj] false exp
