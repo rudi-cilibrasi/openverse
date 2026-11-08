@@ -180,7 +180,8 @@ partial def countSusp (isS : Nat → Bool) (m : Nat → Bool := fun _ => false) 
 partial def spawnSites (m : Nat) : Expr → List (Nat × List Expr × Nat)
   | .call f es =>
     match f == m, es with
-    | true, [.prim .mkArr [.seq (.call g gs) _, .seq (.local t) _]] => [(g, gs, t)]
+    -- (the spawns in its arguments first: they start first, #180)
+    | true, [.prim .mkArr [.seq (.call g gs) _, .seq (.local t) _]] => (gs.map (spawnSites m)).flatten ++ [(g, gs, t)]
     | _, _ => (es.map (spawnSites m)).flatten
   | .assign _ e | .ret e | .print e | .loop e => spawnSites m e
   | .seq a b => spawnSites m a ++ spawnSites m b
@@ -245,6 +246,9 @@ partial def liftChains (m base : Nat) : Expr → StateM (Array (Expr × List Nat
         let i := (← get).size
         modify (·.push (ch, ops, t))
         return .call f [.prim .mkArr [.seq (.call (base + i) (ops.map Expr.local)) v, .seq (.local t) v2]]
+      | .call g gs =>
+        let gs ← gs.mapM (liftChains m base)
+        return .call f [.prim .mkArr [.seq (.call g gs) v, .seq (.local t) v2]]
       | _ => return .call f es
     | _, _ => return .call f (← es.mapM (liftChains m base))
   | .assign i x => return .assign i (← liftChains m base x)
@@ -321,6 +325,7 @@ where
   | .call f es => do
     match f == m, es with
     | true, [.prim .mkArr [.seq (.call g gs) _, .seq (.local t) _]] =>
+      let gs ← gs.mapM go
       let i ← get
       set (i + 1)
       return repl i g gs t
@@ -669,12 +674,14 @@ partial def block (e : Expr) (k : Option (Expr → Expr)) : M (List Expr) := do
       -- a new task root, started now (not a suspension point)
       let [.prim .mkArr [.seq (.call h hs) _, .seq (.local t) _]] := es
         | throw "internal error: a malformed spawn"
+      -- (its arguments now, a spawn among them first, #180)
+      let (pre, hs) ← operands hs
       let i := (← get).spawnNext
       modify fun st => { st with spawnNext := i + 1 }
       let some (newFn, startFn) := env.spawns[i]? | throw "internal error: spawns miscounted"
       let start : Expr := .call startFn [.local schS, .call newFn (.local schS :: .local t :: hs.map (retToDone false))]
       let _ := h
-      return [← emit (pure (app k (.seq start vd)))]
+      return pre ++ [← emit (pure (app k (.seq start vd)))]
     if g == env.branchMark then
       -- an arm over this frame, run as a task root through a wrapper
       -- (`start`), stopped when the function exits (`killMark`)
