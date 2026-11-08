@@ -766,9 +766,12 @@ so arguments that agree with the pins are an instance of the class's:
 they determine its type arguments, and an override needs only as many as
 the declaring class. The elaborator types a refined call under
 `Ty.unifyEqs`, which unifies the same equations as `unify`, in the same
-order, in its own types (it splits a class type by its Verse arguments,
-and skips equations that already hold, so its result can differ by a
-renaming); the checker computes the refinement with `unify`. A dispatch
+order, in its own types (it skips equations that already hold, so its
+result can differ by a renaming), comparing a value struct by its
+fields as Verse Core does (`tag(t) := struct: N:int` says nothing of
+`t`); the checker computes the refinement with `unify`. Whether an
+object of the tested classes can be the receiver at all is decided by
+Verse's types, which compare struct type arguments as they are. A dispatch
 rule also asks that the tested classes' pins on the receiver's arguments
 mention only those (`VTy.pinsBelow`): an object's arguments extend the
 receiver's, and the pins on the shared ones must agree on both. The

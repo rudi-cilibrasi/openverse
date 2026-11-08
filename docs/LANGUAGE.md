@@ -488,7 +488,11 @@ circle := class(shape, labelled):
   - overrides in a subclass that adds type arguments its parent (or an
     interface) leaves open, such as a type parameter that only occurs
     inside a type it gives the parent (`pairE(a, b) :=
-    class(expr(tuple(a, b)))`, #209); a variable, in generic code, of a class or
+    class(expr(tuple(a, b)))`, #209); a dispatch, in code generic over a
+    class, to a subclass whose fixed type arguments relate to ones the
+    receiver's type does not have (#209); a cast `T[X]` whose type
+    arguments agree with `X`'s only under a refinement (`dup[P]` for
+    `P:pair(a, b)`, #209); a variable, in generic code, of a class or
     interface type that requires an instance of itself (`Next:node(t)`)
     at type arguments that every class below it fixes otherwise: its
     hidden placeholder object (#157) would have to hold itself; a class

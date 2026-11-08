@@ -740,25 +740,34 @@ partial def Ty.matchArg (env : TyEnv) (σ : List (String × Ty)) : Ty → Ty →
     parameters the variables (#209), extending `σ`: the refinement that
     `Typed.dispatch` gives by pins, in the front end's types, found as the
     checker's `unify` finds it (each equation in turn; a variable on the
-    left is bound first). Its bindings are fully applied. -/
-partial def Ty.unifyEqs (σ : List (String × Ty)) : List (Ty × Ty) → Option (List (String × Ty))
+    left is bound first). Its bindings are fully applied. `fieldsOf n ts`
+    gives the field types a struct type `n(ts)` is compared by, when it is
+    not compared by its type arguments: as Verse Core compares a value
+    struct, the tuple of its fields, which need not mention every type
+    argument (`tag(t) := struct: N:int`). -/
+partial def Ty.unifyEqs (fieldsOf : String → List Ty → Option (List Ty)) (σ : List (String × Ty)) :
+    List (Ty × Ty) → Option (List (String × Ty))
   | [] => some σ
   | (a, b) :: rest =>
     let bind (v : String) (t : Ty) : Option (List (String × Ty)) :=
       if t.params.contains v then none
       else
         let s := [(v, t)]
-        Ty.unifyEqs ((v, t) :: σ.map fun (w, u) => (w, u.subst s)) (rest.map fun (x, y) => (x.subst s, y.subst s))
+        Ty.unifyEqs fieldsOf ((v, t) :: σ.map fun (w, u) => (w, u.subst s))
+          (rest.map fun (x, y) => (x.subst s, y.subst s))
     match a, b with
-    | .param v _, .param w _ => if v == w then Ty.unifyEqs σ rest else bind v b
+    | .param v _, .param w _ => if v == w then Ty.unifyEqs fieldsOf σ rest else bind v b
     | .param v _, t => bind v t
     | t, .param v _ => bind v t
-    | .arr x, .arr y | .opt x, .opt y => Ty.unifyEqs σ ((x, y) :: rest)
-    | .tup xs, .tup ys => if xs.length == ys.length then Ty.unifyEqs σ (xs.zip ys ++ rest) else none
-    | .map k v, .map k' v' => Ty.unifyEqs σ ((k, k') :: (v, v') :: rest)
+    | .arr x, .arr y | .opt x, .opt y => Ty.unifyEqs fieldsOf σ ((x, y) :: rest)
+    | .tup xs, .tup ys => if xs.length == ys.length then Ty.unifyEqs fieldsOf σ (xs.zip ys ++ rest) else none
+    | .map k v, .map k' v' => Ty.unifyEqs fieldsOf σ ((k, k') :: (v, v') :: rest)
     | .struct n xs, .struct m ys =>
-      if n == m && xs.length == ys.length then Ty.unifyEqs σ (xs.zip ys ++ rest) else none
-    | x, y => if x.eqv y then Ty.unifyEqs σ rest else none
+      if n != m || xs.length != ys.length then none
+      else match fieldsOf n xs, fieldsOf n ys with
+        | some fx, some fy => Ty.unifyEqs fieldsOf σ (fx.zip fy ++ rest)
+        | _, _ => Ty.unifyEqs fieldsOf σ (xs.zip ys ++ rest)
+    | x, y => if x.eqv y then Ty.unifyEqs fieldsOf σ rest else none
 
 /-- At most `cap` nodes of the Verse Core tree of `t` (to bound the size of
     a type without walking one that doubles at each level). -/
@@ -3123,7 +3132,13 @@ partial def elabAppBase (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (b
                   continue
                 -- (no instance of the receiver's type arguments agrees with
                 -- the pins: no object of `part` is the receiver)
-                let some μF := Ty.unifyEqs [] (needOf pins) | continue
+                -- (whether an object of `part` can be the receiver, by
+                -- Verse's types; the refinement, as Verse Core has it: a
+                -- value struct by its fields, #209)
+                if (Ty.unifyEqs (fun _ _ => none) [] (needOf pins)).isNone then continue
+                let coreFields (n : String) (ts : List Ty) : Option (List Ty) :=
+                  if env.classes.contains n then none else some ((env.fields n ts).map (·.2.1))
+                let some μF := Ty.unifyEqs coreFields [] (needOf pins) | continue
                 let selfName := s!"$self{slot}"
                 let locsF := locs.map fun l => { l with ty := l.ty.subst μF }
                 let selfL : Local := { name := selfName, slot, ty := .struct e ((argsAt e).map (·.subst μF)), mutable := false }
@@ -3222,8 +3237,8 @@ partial def elabCast (ctx : Ctx) (p : Pos) (T : String) (args : List SExpr) (bra
   if common.isEmpty then
     eerr p s!"no class is below both {r.ty.show} and {T}, so {T}[…] would always fail"
   if parametric && env.coreArgs T targs != env.coreArgs S sargs then
-    if (Ty.unifyEqs [] ((env.coreArgs S sargs).zip (env.coreArgs T targs))).isSome then
-      eerr p s!"cannot cast a {r.ty.show} to {(Ty.struct T targs).show} yet: their type arguments agree only under a refinement, which a cast does not give (#209)"
+    if (Ty.unifyEqs (fun _ _ => none) [] ((env.coreArgs S sargs).zip (env.coreArgs T targs))).isSome then
+      eerr p s!"cannot cast {withArticle r.ty.show} to {(Ty.struct T targs).show} yet: their type arguments agree only under a refinement, which a cast does not give (#209)"
     eerr p s!"a {r.ty.show} is never a {T}: their type arguments differ, so {T}[…] would always fail"
   -- a reference: a test of its object's class (#34)
   if env.isRefClass S then return ⟨.heap (.isTag (common.map env.tagOf)) [r.e], tty⟩
@@ -6272,6 +6287,12 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     if cd'.length != cq.length then
       if ((env.sparams.lookup d).getD []).isEmpty then
         throw s!"{mp.show}: {d} has more Verse Core type arguments than {q} (a class between them has type parameters of its own), so it cannot override {mn} yet: code generic over {q} could not give them (#39)"
+      -- (one that occurs inside the type arguments it gives its parent, but
+      -- is not one of them, `nest(t) := class(pair(?t, ?t))`)
+      let inside := (env.extraParams d).filter fun v =>
+        ((env.pargs.lookup d).getD []).any fun a => a.params.contains v
+      if let some v := inside.head? then
+        throw s!"{mp.show}: type parameter {v} of {d} occurs only inside the type arguments {d} gives its parent, not as one of them, so {d} cannot override {mn} yet: code generic over {q} could not give it (#39, #209)"
       throw s!"{mp.show}: {d} has type parameters that {q} does not have, so it cannot override {mn} yet: code generic over {q} could not give them (#39)"
     -- (its Verse Core type arguments are {q}'s, except where it fixes them
     -- or relates them to each other: dispatch is then typed under the
