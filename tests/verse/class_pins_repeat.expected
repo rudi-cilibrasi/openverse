@@ -1,0 +1,5 @@
+pair 1 1
+dup 4 4
+dupint 11 11
+3
+exit=0

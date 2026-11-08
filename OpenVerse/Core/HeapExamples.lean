@@ -117,6 +117,58 @@ example : pinDemo.checkTypes { pinSigs with pins := [] } pinSlots = false := by 
 example : (tc pinSigs [] .void (.heap (.new 1) [str "x"]) none) = none := by native_decide
 example : (tc pinSigs [] .void (.heap (.new 1) [int 1]) none) = some (.ref [1] [.int]) := by native_decide
 
+/-! ### Pins that relate type arguments (#209)
+
+```verse
+pair(t:type, u:type) := class:
+    A:t
+    B:u
+    Get():t = A
+dup(t:type) := class(pair(t, t)):
+    Get<override>():t = B
+First(P:pair(t, u) where t:type, u:type):t = P.Get()
+Main():void =
+    Print("{First(dup(int){A := 1, B := 2})}")
+    Print("{First(pair(int, int){A := 3, B := 4})}")
+```
+
+`pair` is tag 0, `dup` tag 1; both have the fields `A : var 0` and
+`B : var 1`, and `dup` pins its second type argument to its first:
+`[none, some (var 0)]`. In `First`, the call of `dup`'s `Get` returns its
+`B`, a `u`, where a `t` is expected: `Typed.dispatch` types it under
+`u := t`, the most general unifier of `u` with the pin. -/
+def relDemo : Prog where
+  fns := [
+    { name := "pair.Get", arity := 1, nslots := 1, decides := false,
+      body := .heap (.get 0) [.local 0] },
+    { name := "dup.Get", arity := 1, nslots := 1, decides := false,
+      body := .heap (.get 1) [.local 0] },
+    { name := "First", arity := 1, nslots := 1, decides := false,
+      body := .ite (.heap (.isTag [1]) [.local 0]) (.call 1 [.local 0])
+        (.ite (.heap (.isTag [0]) [.local 0]) (.call 0 [.local 0]) (p .userErr [])) },
+    { name := "Main", arity := 0, nslots := 0, decides := false,
+      body := .seq (printInt (.call 2 [.heap (.new 1) [int 1, int 2]]))
+        (printInt (.call 2 [.heap (.new 0) [int 3, int 4]])) }]
+  main := 3
+
+def relSigs : Sigs where
+  fns := [([.ref [0] [.var 0, .var 1]], .var 0), ([.ref [1] [.var 0, .var 0]], .var 0),
+    ([.ref [0, 1] [.var 0, .var 1]], .var 0), ([], .void)]
+  classes := [[.var 0, .var 1], [.var 0, .var 1]]
+  pins := [[], [none, some (.var 0)]]
+def relSlots : List (List VTy) :=
+  [[.ref [0] [.var 0, .var 1]], [.ref [1] [.var 0, .var 0]], [.ref [0, 1] [.var 0, .var 1]], []]
+
+example : relDemo.check = true := by native_decide
+example : relDemo.checkTypes relSigs relSlots = true := by native_decide
+example : outOf relDemo = some (.ok .void, "2\n3\n") := by native_decide
+/-- Without the pin, `First` does not type: `dup`'s `Get` returns a `u`, not a `t`. -/
+example : relDemo.checkTypes { relSigs with pins := [] } relSlots = false := by native_decide
+/-- A `dup`'s type arguments are equal. -/
+example : (tc relSigs [] .void (.heap (.new 1) [int 1, str "x"]) none) = none := by native_decide
+example : (tc relSigs [] .void (.heap (.new 1) [int 1, int 2]) none) = some (.ref [1] [.int, .int]) := by
+  native_decide
+
 /-- A chain of `n` dispatch-shaped tests ending in an ill-typed literal. -/
 def pinChain (tag f : Nat) : Nat → Expr
   | 0 => str "x"

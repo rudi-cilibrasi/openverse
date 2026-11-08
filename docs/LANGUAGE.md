@@ -418,29 +418,31 @@ circle := class(shape, labelled):
   `swap(a, b) := class(pair(b, a))`), fixed ones
   (`intcell := class(cell(int))`), and it may have type parameters of its
   own (`named(t, n) := class(cell(t))`). A class overrides a method if
-  its type arguments are those of the class that declares it, up to
-  renaming, except that it may fix some of them to closed types (#142):
-  `int_box := class(box(int))` overrides `box(t)`'s `Get():t` with
-  `Get():int`, and code generic over `box(t)` (or over an interface
-  `box` implements) runs it, typed under `t = int`; the dispatch skips
-  the classes whose fixed arguments the receiver's type rules out. One
-  that repeats type arguments (`dup(t) := class(pair(t, t))`), fixes them
-  to types that mention type parameters, or has more type arguments than
-  the declaring class (type parameters of its own, or of a class between
-  them) cannot override yet: code generic over the declaring class could
-  not call it. An interface can be parametric too (#53):
+  it has as many type arguments as the class that declares it. It may fix
+  some of them to closed types (#142): `int_box := class(box(int))`
+  overrides `box(t)`'s `Get():t` with `Get():int`, and code generic over
+  `box(t)` (or over an interface `box` implements) runs it, typed under
+  `t = int`. It may also repeat them or fix them to types over its others
+  (#209): `dup(t) := class(pair(t, t))` overrides `pair(t, u)`'s
+  `Get():t` with one that returns its `u` field, run under `u = t`, and
+  `optpair(t) := class(pair(?t, t))` overrides it with `Get():?t`. The
+  refinement is the most general one that makes the receiver's type
+  arguments fit the class (so a type-equality witness `refl(t) :=
+  class(eqw(t, t))` casts an `a` to a `b` through any `eqw(a, b)`), and
+  the dispatch skips the classes that no instance of the receiver's type
+  fits. One that has more type arguments than the declaring class (type
+  parameters of its own, or of a class between them) cannot override
+  yet: code generic over the declaring class could not give them. An
+  interface can be parametric too (#53):
   `container(t) := interface: Get():t`, with `box(t) := class(container(t))`.
   A class gives the interfaces above it exactly its own Verse Core type
   arguments (`box(t)` gives `container` `t`; a class implementing
   `container(t)` and `sink(u)` cannot), so code generic over `container(t)`
   dispatches to `box(t)`'s methods and casts `container(t)` to `box(t)`.
-  An interface's fields are typed as it gives them: a class that fixes or
-  repeats its type arguments (`intbox := class(holder(int))`) can still
-  implement an interface whose members it does not override. Code generic
-  over the interface reads and writes a field that sits at different
-  places in its classes also when a class fixes its type arguments (to
-  closed types), under the refinement those give (#157); a class that
-  repeats them makes such a field unreadable there. The same goes for a
+  An interface's fields are typed as it gives them. Code generic over the
+  interface reads and writes a field that sits at different places in its
+  classes also when a class fixes or repeats its type arguments, under
+  the refinement that gives (#157, #209). The same goes for a
   field two interfaces both declare, `x(t)`'s `F:t` and `y(t)`'s `F:int`,
   in a class that fixes `t` to `int`: it is read and set through either
   interface, and through a class below `y` whose subclass also
@@ -481,9 +483,10 @@ circle := class(shape, labelled):
 - **Comparability.** Other classes and interfaces are not comparable (Book §4.9), nor
   is a struct or container that holds one.
 - **Not yet supported** (each rejected with a message):
-  - overrides in a subclass that repeats or adds type arguments its
-    parent (or an interface) leaves open, or fixes them to types that
-    mention type parameters; a variable, in generic code, of a class or
+  - overrides in a subclass that adds type arguments its parent (or an
+    interface) leaves open, such as a type parameter that only occurs
+    inside a type it gives the parent (`pairE(a, b) :=
+    class(expr(tuple(a, b)))`, #209); a variable, in generic code, of a class or
     interface type that requires an instance of itself (`Next:node(t)`)
     at type arguments that every class below it fixes otherwise: its
     hidden placeholder object (#157) would have to hold itself; a class
@@ -936,8 +939,9 @@ Main()<suspends>:void =
   filter, a `case` pattern, a `<decides>` call's arguments) nor in a
   `defer`. A method may be `<suspends>` (an override must be too, and
   only when what it overrides is). Code generic over a class can call one
-  that a subclass fixing its type arguments overrides (`int_box :=
-  class(box(int))`), under the refinement that gives (#142, #171), also
+  that a subclass fixing or repeating its type arguments overrides
+  (`int_box := class(box(int))`, `dup(t) := class(pair(t, t))`), under
+  the refinement that gives (#142, #171, #209), also
   when the override has type parameters of its own or of its class
   (`ipair(b) := class(pair(int, b))`). A `<suspends>` constructor is not
   supported. `<suspends>` combines with the heap effects

@@ -17,7 +17,7 @@
   Every recursive call is on a strict subterm, so the soundness proof
   `tc_sound` follows the definition case by case.
 -/
-import OpenVerse.Core.Unify
+import OpenVerse.Core.TypeSafety
 
 namespace OpenVerse
 
@@ -283,56 +283,32 @@ def callInst (acc : List (Nat × VTy)) (t : VTy) (m : Option VTy) : Nat → VTy 
     | none => acc
   fun j => (acc.lookup j).getD (.var j)
 
-/-- The refinement `tc` proposes for type arguments `a` by pins `ps` (#142):
-    each variable of the pinned arguments bound by matching them against the
-    pins (to `void` if that gives no closed type: the check then fails), the
-    others left alone. -/
-def pinRefinement (ps : List (Option VTy)) (a : List VTy) : Nat → VTy :=
-  let acc := (VTy.pinPairs ps a).foldl (fun acc p => VTy.bindVars p.1 p.2 acc) []
-  fun j => if (VTy.pinned ps a).any (VTy.hasVar j) then
-      (match acc.lookup j with
-       | some v => if v.closed then v else VTy.void
-       | none => VTy.void)
-    else .var j
-
 /-- The common pins of classes `us` on type arguments of length `n`. -/
 def commonPins (S : Sigs) (us : List Nat) (n : Nat) : List (Option VTy) :=
   match us with
   | [] => []
   | u :: _ => (S.pinsOf u).take n
 
-theorem pinRefinement_refines {ps : List (Option VTy)} {a : List VTy}
-    (hc : ps.all (fun o => o.all VTy.closed) = true)
-    (hok : VTy.pinsOK ps (a.map (VTy.subst (pinRefinement ps a))) = true) :
-    PinRefines ps a (pinRefinement ps a) := by
-  refine ⟨fun c hcm => ?_, hok, fun j => ⟨fun hj => ?_, fun hj => ?_⟩⟩
-  · have := List.all_eq_true.mp hc _ hcm
-    simpa using this
-  · simp only [pinRefinement, hj, ite_true]
-    split
-    · split
-      · assumption
-      · rfl
-    · rfl
-  · unfold pinRefinement
-    simp only [hj, Bool.false_eq_true, ite_false]
-
-/-- The dispatch check of `tc` (#142), given the inferred types of the
-    call's other arguments and whether `e` checks against `τ'`. -/
+/-- The dispatch check of `tc` (#142, #209), given the inferred types of the
+    call's other arguments and whether `e` checks against `τ'`: the
+    receiver's type arguments refined by a most general unifier of the
+    tested classes' pins. -/
 def tcDispatch (S : Sigs) (Γ : List VTy) (us : List Nat) (y y' f : Nat) (m : Option VTy)
     (σs? : Option (List VTy)) (eOK : Bool) : Option VTy :=
   if y = y' then
     match m, Γ[y]?, S.fns[f]?, σs? with
     | some τ', some (.ref _ a), some (ps, τ), some σs =>
       let P := commonPins S us a.length
-      let μ := pinRefinement P a
-      let θ := callInst (VTy.bindVarsL ps ((VTy.ref us a :: σs).map (VTy.subst μ)) []) τ
-        (some (τ'.subst μ))
-      if us.all (fun u => decide ((S.pinsOf u).take a.length = P)) &&
-          P.all (fun o => o.all VTy.closed) && VTy.pinsOK P (a.map (VTy.subst μ)) &&
-          VTy.subL ((VTy.ref us a :: σs).map (VTy.subst μ)) (ps.map (VTy.subst θ)) &&
-          (τ.subst θ).sub (τ'.subst μ) && eOK then some τ'
-      else none
+      match unify (VTy.pinEqs P a) with
+      | some μ =>
+        let θ := callInst (VTy.bindVarsL ps ((VTy.ref us a :: σs).map (VTy.subst μ)) []) τ
+          (some (τ'.subst μ))
+        if us.all (fun u => decide ((S.pinsOf u).take a.length = P)) &&
+            VTy.pinsBelow P a.length &&
+            VTy.subL ((VTy.ref us a :: σs).map (VTy.subst μ)) (ps.map (VTy.subst θ)) &&
+            (τ.subst θ).sub (τ'.subst μ) && eOK then some τ'
+        else none
+      | none => none
     | _, _, _, _ => none
   else none
 
@@ -340,6 +316,7 @@ theorem tcDispatch_sound {S : Sigs} {Γ : List VTy} {us : List Nat} {y y' f : Na
     {σs? : Option (List VTy)} {eOK : Bool} {τ : VTy} (h : tcDispatch S Γ us y y' f m σs? eOK = some τ) :
     y = y' ∧ m = some τ ∧ eOK = true ∧ ∃ ts a ps τ0 σs P μ θ, Γ[y]? = some (.ref ts a) ∧
       S.fns[f]? = some (ps, τ0) ∧ σs? = some σs ∧ (∀ u ∈ us, (S.pinsOf u).take a.length = P) ∧
+      VTy.pinsBelow P a.length = true ∧
       PinRefines P a μ ∧ VTy.subL ((VTy.ref us a :: σs).map (VTy.subst μ)) (ps.map (VTy.subst θ)) = true ∧
       (τ0.subst θ).sub (τ.subst μ) = true := by
   simp only [tcDispatch] at h
@@ -348,14 +325,17 @@ theorem tcDispatch_sound {S : Sigs} {Γ : List VTy} {us : List Nat} {y y' f : Na
     split at h
     · next τ' ts a ps τ0 σs hy hf =>
       split at h
-      · next hc =>
-        simp only [Bool.and_eq_true] at hc
-        obtain ⟨⟨⟨⟨⟨hus, hPc⟩, hok⟩, hsub⟩, hres⟩, heOK⟩ := hc
-        have hus' : ∀ u ∈ us, (S.pinsOf u).take a.length = commonPins S us a.length := by
-          intro u hu; simpa using List.all_eq_true.mp hus u hu
-        simp only [Option.some.injEq] at h; subst h
-        exact ⟨hyy, rfl, heOK, ts, a, ps, τ0, σs, _, _, _, hy, hf, rfl, hus',
-          pinRefinement_refines hPc hok, hsub, hres⟩
+      · next μ hu =>
+        split at h
+        · next hc =>
+          simp only [Bool.and_eq_true] at hc
+          obtain ⟨⟨⟨⟨hus, hb⟩, hsub⟩, hres⟩, heOK⟩ := hc
+          have hus' : ∀ u ∈ us, (S.pinsOf u).take a.length = commonPins S us a.length := by
+            intro u hu; simpa using List.all_eq_true.mp hus u hu
+          simp only [Option.some.injEq] at h; subst h
+          exact ⟨hyy, rfl, heOK, ts, a, ps, τ0, σs, _, _, _, hy, hf, rfl, hus', hb,
+            PinRefines.of_unify hu, hsub, hres⟩
+        · simp at h
       · simp at h
     · simp at h
   · simp at h
@@ -1127,11 +1107,11 @@ theorem tc_sound_aux : ∀ (n : Nat) (e : Expr), sizeOf e < n → TcOK S Γ ρ e
             · next hc =>
               split at h
               · next f y' es =>
-                obtain ⟨rfl, hm, heOK, ts, a, ps, τ0, σs, P, μ, θ, hy, hf, hσs, hus, hμ, hsub, hres⟩ :=
+                obtain ⟨rfl, hm, heOK, ts, a, ps, τ0, σs, P, μ, θ, hy, hf, hσs, hus, hb, hμ, hsub, hres⟩ :=
                   tcDispatch_sound h
                 simp only [Option.some.injEq] at hm; subst hm
                 have Iargs : TypedL S Γ ρ es σs := inferL_sound_of (Isz rfl) hσs
-                exact ⟨Typed.dispatch θ μ hy hus hμ hf Iargs hsub hres (typed_of_check Ie heOK), by simp⟩
+                exact ⟨Typed.dispatch θ μ hy hus hb hμ hf Iargs hsub hres (typed_of_check Ie heOK), by simp⟩
               · simp at h
             · simp at h
           · simp at h
@@ -1475,7 +1455,6 @@ theorem checkPrelude_sound {P : Prog} {S : Sigs} (h : checkPrelude P S = true) :
 def Prog.checkTypes (P : Prog) (S : Sigs) (Γs : List (List VTy)) : Bool :=
   checkPrelude P S &&
   S.protos.all (VTy.closedL ·.2) &&
-  S.pins.all (fun ps => ps.all fun o => o.all VTy.closed) &&
   decide (P.fns.length = S.fns.length) &&
   (List.range P.fns.length).all fun f =>
     match P.fns[f]?, S.fns[f]?, Γs[f]? with
@@ -1488,8 +1467,8 @@ theorem Prog.checkTypes_sound {P : Prog} {S : Sigs} {Γs} (h : P.checkTypes S Γ
     ProgTyped P S := by
   unfold Prog.checkTypes at h
   simp only [Bool.and_eq_true, decide_eq_true_eq, List.all_eq_true, List.mem_range] at h
-  obtain ⟨⟨⟨⟨hpre, hcl⟩, hpins⟩, hlen⟩, h⟩ := h
-  refine ⟨⟨hcl, fun ps hps c hc => by simpa using hpins ps hps _ hc⟩, hlen,
+  obtain ⟨⟨⟨hpre, hcl⟩, hlen⟩, h⟩ := h
+  refine ⟨hcl, hlen,
     fun f fn ps τ hf hs => ?_, checkPrelude_sound hpre⟩
   have hlt := lt_of_getElem?_some hf
   have := h f hlt

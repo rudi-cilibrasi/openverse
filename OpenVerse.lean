@@ -19,9 +19,10 @@ import OpenVerse.Front.Load
 import OpenVerse.Core.Gen
 import OpenVerse.Core.Seams
 import OpenVerse.Core.Typing
+import OpenVerse.Core.Subst
+import OpenVerse.Core.Unify
 import OpenVerse.Core.TypeSafety
 import OpenVerse.Core.TypeCheck
-import OpenVerse.Core.Unify
 import OpenVerse.Core.Guarantees
 import OpenVerse.Core.Control
 import OpenVerse.Core.HeapExamples
