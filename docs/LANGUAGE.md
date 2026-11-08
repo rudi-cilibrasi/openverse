@@ -726,8 +726,10 @@ Main()<suspends>:void =
 - **Effects.** `<suspends>` and `<decides>` exclude each other. A suspends
   function, `Sleep`, `sync` and `race` can be used only in a suspends
   function, and not in a failure context (an `if` condition, a `for`
-  filter, a `<decides>` call's arguments) nor in a `defer`. A `<suspends>`
-  method is not supported yet.
+  filter, a `case` pattern, a `<decides>` call's arguments) nor in a
+  `defer`. A `<suspends>` method is not supported yet, nor a `<suspends>`
+  constructor. `<suspends>` combines with the heap effects
+  (`<computes>`, `<reads>`, …): waiting has none.
 - **Time.** The schedule is deterministic: a virtual clock counts ticks, 30
   per second, and ticks in which nothing can run are skipped. Arms that can
   go on in the same tick do so in source order. `Sleep(S)`

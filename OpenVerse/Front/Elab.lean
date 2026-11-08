@@ -1267,7 +1267,11 @@ partial def convert (env : TyEnv) (e : Expr) (a b : Ty) : EM (Option Expr) := do
   | .opt a', .opt b' =>
     let i ← modifyGet fun s => (s.nslots, { s with nslots := s.nslots + 1, slotTys := s.slotTys.push a' })
     match ← convert env (.local i) a' b' with
-    | some c => return some (.ite (.assign i (.prim .query [e])) (.prim .mkSome [c]) (.lit .none))
+    | some c =>
+      -- (the option first, so that its code is not in the condition: it may
+      -- suspend, #156)
+      let x ← modifyGet fun s => (s.nslots, { s with nslots := s.nslots + 1, slotTys := s.slotTys.push a })
+      return some (.seq (.assign x e) (.ite (.assign i (.prim .query [.local x])) (.prim .mkSome [c]) (.lit .none)))
     | none => return none
   -- a tuple of convertible elements is a tuple of the converted ones
   | .tup ts, .tup us =>
@@ -2411,6 +2415,7 @@ partial def elabAppBase (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (b
                 eerr p s!"the default of ?{n} of {name} uses itself (a call of {name} that omits ?{n})"
               let dctx := { ctx with locals := earlier, selfClass := selfC, inParamDefault := true,
                                      inLoop := false, canFail := ctx.canFail && s.decides,
+                                     suspends := ctx.suspends && s.suspends,
                                      defaults := key :: ctx.defaults }
               let rd ← fxAt p (do coerce p (← elabE dctx d (some t)) t)
               if !s.decides && rd.mayFail ctx.sigProg then
@@ -2840,6 +2845,7 @@ partial def elabGenericCall (ctx : Ctx) (p : Pos) (s : Sig) (args : List SExpr) 
           if s.pnames.head? == some "Self" then (s.name.splitOn ".").head? else none
         let dctx := { ctx with locals := earlier, selfClass := selfC, inParamDefault := true,
                                inLoop := false, canFail := ctx.canFail && s.decides,
+                               suspends := ctx.suspends && s.suspends,
                                defaults := key :: ctx.defaults }
         -- (its type: the parameter's, or what the default gives a type
         -- parameter nothing else determined)
@@ -3759,6 +3765,9 @@ partial def elabCase (ctx : Ctx) (p : Pos) (scrut : SExpr) (arms : List (Option 
       | some pe =>
         let rp ← elabE ctx pe (some rs.ty)
         if rp.ty != rs.ty then eerr pe.pos s!"pattern of type {rp.ty.show} for a value of type {rs.ty.show}"
+        -- (a pattern is tested in a condition, #156)
+        if Suspend.hasSusp (fun f => ctx.sigs.any fun s => s.idx == f && s.suspends) rp.e then
+          eerr pe.pos "a case pattern cannot suspend: it is tested as a condition (#156)"
         results := results.push (some rp.e, rv)
     let mut ty : Ty := .never
     for (_, rv) in results do ty ← join p ty rv.ty exp
@@ -4084,9 +4093,9 @@ sleepResume(F:sleep, C:sched):int =
     else if (F.Wake < C.Next):
         set C.Next = F.Wake
     0
-Sleep(S:float)<suspends>:void = {}
-syncMark(A:[]void)<suspends>:void = {}
-raceMark(A:[]void)<suspends>:void = {}
+Sleep(S:float)<suspends><computes>:void = {}
+syncMark(A:[]void)<suspends><computes>:void = {}
+raceMark(A:[]void)<suspends><computes>:void = {}
 "
 
 def concTops : Except String (List STop) :=
@@ -4757,6 +4766,8 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
         throw s!"{p.show}: {n} is both <suspends> and <decides>, which exclude each other"
       if n.contains '.' then
         throw s!"{p.show}: a <suspends> method ({n}) is not supported yet (#156)"
+      if n.endsWith "$init" then
+        throw s!"{p.show}: a <suspends> constructor is not supported (#156)"
     let (tys, _) ← ((ps.mapM fun prm => resolveTy env p prm.ty).run {})
     let (rt, _) ← (resolveTy env p ret).run {}
     -- named parameters come last (Book of Verse §8.2)
@@ -5196,7 +5207,8 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     let tagBase := env.classes.length
     let nFns := fns.size
     let isS : Nat → Bool := fun f => f == sleepIdx || isMark f || conc.any (·.idx == f)
-    let schedTy : VTy := .ref [env.tagOf "$sched"] []
+    let schedTag := env.tagOf "$sched"
+    let schedTy : VTy := .ref [schedTag] []
     -- each one's body (initialisations stripped), suspension points and arms
     let mut parts : Array (List Expr × Expr × Nat × Nat) := #[]
     for g in conc do
@@ -5206,8 +5218,8 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       parts := parts.push (ds, b, Suspend.countSusp isS isMark false b, Suspend.countArms isMark b)
     let frameTy (j : Nat) : VTy :=
       .ref [tagBase + j] ((List.range conc[j]!.tparams.length).map VTy.var)
-    -- each one's `new`, `reset` and `cancel` (fixed indices), then the arms'
-    -- functions
+    -- each one's `new`, `reset`, `cancel` and `result` (fixed indices), then
+    -- the arms' functions
     let callee : Nat → Option Suspend.Callee := fun f =>
       if f == sleepIdx then
         some { tag := env.tagOf "$sleep", newFn := idxOf "$sleepNew", initFn := idxOf "$sleepInit",
@@ -5215,23 +5227,25 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       else match conc.toList.zipIdx.find? (·.1.idx == f) with
         | some (g, j) =>
           let (_, _, sites, arms) := parts[j]!
-          some { tag := tagBase + j, newFn := nFns + 3 * j, initFn := nFns + 3 * j + 1, resumeFn := g.idx,
-                 cancelFn := some (nFns + 3 * j + 2),
+          some { tag := tagBase + j, newFn := nFns + 4 * j, initFn := nFns + 4 * j + 1, resumeFn := g.idx,
+                 cancelFn := some (nFns + 4 * j + 2),
                  passFields := (List.range fns[g.idx]!.arity).map fun i => Suspend.slotBaseOf sites arms + i,
-                 resField := some Suspend.resF }
+                 resField := some Suspend.resF, generic := !g.tparams.isEmpty, newSched := true,
+                 resultFn := if g.tparams.isEmpty then some (nFns + 4 * j + 3) else none }
         | none => none
     for (g, j) in conc.toList.zipIdx do
       let ps := slotTys[g.idx]!.take fns[g.idx]!.arity
-      extraSigs := extraSigs.push (ps, frameTy j)
+      extraSigs := extraSigs.push (schedTy :: ps, frameTy j)
       extraSigs := extraSigs.push (frameTy j :: ps, VTy.void)
       extraSigs := extraSigs.push (frameTy j :: schedTy :: ps, VTy.void)
+      extraSigs := extraSigs.push ([frameTy j], (fsigs0[g.idx]!).2)
     let Sinf : Sigs := { fns := fsigs0 ++ extraSigs.toList, classes := classTable, protos, pins }
     let mut newFns : Array Fn := #[]
     let mut newTys : Array (List VTy) := #[]
     let mut armFns : Array Fn := #[]
     let mut armTys : Array (List VTy) := #[]
     let mut armSigs : Array (List VTy × VTy) := #[]
-    let armBase := nFns + 3 * conc.size
+    let armBase := nFns + 4 * conc.size
     for (g, j) in conc.toList.zipIdx do
       let fn := fns[g.idx]!
       let Γ := slotTys[g.idx]!
@@ -5239,7 +5253,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       let (ds, b, sites, arms) := parts[j]!
       let ρ := (fsigs0[g.idx]!).2
       let fnBase := armBase + armFns.size
-      let low ← (Suspend.lower Sinf callee syncMark raceMark a Γ ρ (frameTy j) schedTy fnBase b).mapError
+      let low ← (Suspend.lower Sinf callee syncMark raceMark a Γ ρ (frameTy j) schedTag fnBase b).mapError
         fun e => s!"in {g.name}: {e}"
       let ps := Γ.take a
       let tempTys := low.slots.drop (2 + fn.nslots)
@@ -5255,15 +5269,20 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       slotTys := slotTys.set! g.idx low.slots
       fsigs := fsigs.set g.idx (frameTy j :: schedTy :: ps, .int)
       frameClasses := frameClasses.push low.fields
-      -- `g$new(params…)`: the frame, with the arguments and initial values
+      -- `g$new(sched, params…)`: the frame, with the arguments and initial
+      -- values (a non-generic callee's frame field starts as the scheduler)
       let childTys := low.fields.drop 2 |>.take sites
+      let nps := schedTy :: ps
       let newBody : Expr := .heap (.new (tagBase + j))
-        ([Suspend.int 0, .lit .none] ++ childTys.map (fun τ => Expr.lit τ.default) ++
+        ([Suspend.int 0, ← dflt nps ρ] ++ childTys.map (fun τ => match τ with
+            | .ref _ _ => Expr.local 0
+            | τ => Expr.lit τ.default) ++
           List.replicate (2 * arms) (Suspend.int 0) ++
-          (List.range a).map Expr.local ++ ds ++ (← tempTys.mapM (dflt ps)))
-      newFns := newFns.push { name := s!"{g.name}$new", arity := a, nslots := a, decides := false,
+          (List.range a).map (fun i => Expr.local (i + 1)) ++ ds.map (Suspend.shift 1) ++
+          (← tempTys.mapM (dflt nps)))
+      newFns := newFns.push { name := s!"{g.name}$new", arity := a + 1, nslots := a + 1, decides := false,
                               writes := true, body := newBody }
-      newTys := newTys.push ps
+      newTys := newTys.push nps
       -- `g$reset(frame, params…)`: the frame, made ready for another call
       let resetBody := Suspend.seqVoid (.heap (.set Suspend.pcF) [.local 0, Suspend.int 0] ::
         (List.range a).map fun i => .heap (.set (Suspend.slotBaseOf sites arms + i)) [.local 0, .local (i + 1)])
@@ -5273,6 +5292,10 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       -- `g$cancel(frame, sched, params…)`: unwinds it
       newFns := newFns.push (resumeLike s!"{g.name}$cancel" low.cancel)
       newTys := newTys.push low.slots
+      -- `g$result(frame)`
+      newFns := newFns.push { name := s!"{g.name}$result", arity := 1, nslots := 1, decides := false,
+                              writes := false, body := .heap (.get Suspend.resF) [.local 0] }
+      newTys := newTys.push [frameTy j]
       -- the arms of its `sync`s and `race`s
       for ((res, can), i) in low.arms.zipIdx do
         armFns := armFns.push (resumeLike s!"{g.name}$arm{i}" res)
@@ -5302,10 +5325,13 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       slotTys := slotTys.push [schedTy, frameTy j, .int]
       fsigs := fsigs ++ [([schedTy, frameTy j], VTy.void)]
       -- (the prelude calls a function without arguments, `checkPrelude`)
-      fns := fns.push { name := "$Start", arity := 0, nslots := 0, decides := false, writes := true,
-                        body := .call runIdx [.heap (.new (env.tagOf "$sched")) [Suspend.int 0, Suspend.int (-1)],
-                          .call (nFns + 3 * j) []] }
-      slotTys := slotTys.push []
+      let some schedInit := Suspend.coreDefault Sinf [] 0 schedTy
+        | throw "internal error: no initial value for the scheduler"
+      fns := fns.push { name := "$Start", arity := 0, nslots := 1, decides := false, writes := true,
+                        body := initPrefixE 0 [schedInit] (.seq
+                          (.assign 0 (.heap (.new schedTag) [Suspend.int 0, Suspend.int (-1)]))
+                          (.call runIdx [.local 0, .call (nFns + 4 * j) [.local 0]])) }
+      slotTys := slotTys.push [schedTy]
       fsigs := fsigs ++ [([], VTy.void)]
       mainCall := .call (runIdx + 1) []
   let mut main := mainSig.idx

@@ -304,13 +304,28 @@ records those blocks at each suspension point in a branch that never runs
 rollback never spans one. The result is ordinary Verse Core, which
 `Prog.checkTypes` checks, and Lean and C run.
 
-**Avoiding allocation.**
-- A frame is kept per call site and reset rather than replaced. The C runtime
-  never frees an object, but a loop of 100,000 suspending calls still runs
-  in constant memory.
-- Children are reached through option fields, unwrapped in an `if`
-  condition, so no slot has a frame type. A frame-typed slot would need a
-  new placeholder at every resume.
+**Avoiding allocation and journaling.** The C runtime never frees an object
+and journals every write made in a condition (for rollback). So:
+
+- A frame is kept per call site and reset rather than replaced. The result
+  field holds the value itself, not an option, so a loop of 300,000
+  suspending calls runs in constant memory in C.
+- A non-generic callee's frame sits in a field of type
+  `ref [callee, sched] []`, first set to the scheduler. A call site copies
+  it into a slot of that type, whose initial value is the scheduler
+  parameter, so it costs no allocation. It then resumes the callee after a
+  test of its class (`if (isTag [callee] Y) then resume(Y, …)`), the shape
+  `Typed.dispatch` types (#154), so the callee runs outside any condition.
+  The call's arguments stay in the caller's slots for each resumption.
+- A generic callee's frame has type arguments that this narrowing cannot
+  recover. It sits in an option field, unwrapped in a condition, so C
+  journals what a generic suspends function writes during one resumption,
+  until that resumption returns.
+
+Values stored in a frame, such as strings or arrays in slots, are kept
+like any object's fields (see "Objects in the C runtime"). Each pass
+resumes a whole chain of suspended calls from its root, so a recursion of
+depth N that waits at every level costs O(N²) calls per tick.
 
 **The scheduler.** The scheduler and `Sleep` are helpers written in Verse
 (`concPrelude`, added to a program with a suspends function, as the

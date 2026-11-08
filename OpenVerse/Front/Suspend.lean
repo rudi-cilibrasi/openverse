@@ -60,8 +60,17 @@ structure Callee where
   /-- The frame fields `resume` and `cancel` take after the frame and the
       scheduler. -/
   passFields : List Nat
-  /-- The frame's `?result` field; none when the call's value is `void`. -/
+  /-- The frame's result field; none when the call's value is `void`. -/
   resField : Option Nat
+  /-- A generic callee's frame has type arguments: it is kept in an option
+      field, unwrapped (and resumed) in a condition. Another's is kept in a
+      field of type `ref [tag, sched] []`, first the scheduler, and resumed
+      by a test of its class (`Typed.dispatch`), outside any condition. -/
+  generic : Bool := false
+  /-- `new` takes the scheduler first (to fill its frame's child fields). -/
+  newSched : Bool := false
+  /-- A non-generic callee's result getter, `g$result(frame)`. -/
+  resultFn : Option Nat := none
   deriving Inhabited
 
 /-- Slots of a resume function: the frame, the scheduler. -/
@@ -116,7 +125,7 @@ partial def shift (d : Nat) : Expr → Expr
 
 /-- `return e` as: store `e` as the result, return 1 (done). -/
 partial def retToDone : Expr → Expr
-  | .ret e => .seq (fset resF (.prim .mkSome [retToDone e])) (.ret (int 1))
+  | .ret e => .seq (fset resF (retToDone e)) (.ret (int 1))
   | .assign i e => .assign i (retToDone e)
   | .forE i it f b => .forE i (retToDone it) (retToDone f) (retToDone b)
   | .seq a b => .seq (retToDone a) (retToDone b)
@@ -194,8 +203,9 @@ partial def coreDefault (S : Sigs) (params : List VTy) (depth : Nat) (τ : VTy) 
 
 /-- What a suspension point waits for, for cancelling it. -/
 inductive Waits where
-  /-- A callee's frame. -/
-  | callee (k : Nat) (c : Callee)
+  /-- A callee's frame (for a non-generic callee: the slot its frame is read
+      into, and the slots holding its arguments). -/
+  | callee (k : Nat) (c : Callee) (y : Nat) (as : List Nat)
   /-- The arms of a `sync` or `race`: each one's resume and cancel functions
       and its two fields. -/
   | arms (as : List (Nat × Nat × Nat × Nat))
@@ -222,6 +232,8 @@ structure Env where
   armsTotal : Nat
   /-- The index of the function's first arm function. -/
   fnBase : Nat
+  /-- The scheduler's class. -/
+  schedTag : Nat
   /-- The region being lowered: the field of its suspension point, the flag
       set while seeking it, and its own suspension points. -/
   pcFld : Nat
@@ -317,7 +329,9 @@ mutual
 /-- The statements of `e`, each guarded, with the continuation `k` applied
     to its value (none: the value is discarded). -/
 partial def block (e : Expr) (k : Option (Expr → Expr)) : M (List Expr) := do
-  if !(← hasS e) then return [← emit (pure (app k e))]
+  -- (`return` becomes "store the result, give 1" only here, as the user's
+  -- code is emitted: inference sees the code as written)
+  if !(← hasS e) then return [← emit (pure (app k (retToDone e)))]
   match e with
   -- the defers active at the suspension points of `b` (`withDeferMark`)
   | .seq (.ite (.prim .fail []) d (.lit .void)) b =>
@@ -336,7 +350,7 @@ partial def block (e : Expr) (k : Option (Expr → Expr)) : M (List Expr) := do
       let tb ← block t k
       let mid := (← get).next
       let eb ← block e2 k
-      let sel : Expr := .ite (← seeking) (.ite (← inRange lo mid) (int 1) (int 0)) (.ite c (int 1) (int 0))
+      let sel : Expr := .ite (← seeking) (.ite (← inRange lo mid) (int 1) (int 0)) (.ite (retToDone c) (int 1) (int 0))
       pure (.seq (.assign b sel) (.ite (.prim .eq [.local b, int 1]) (seqVoid tb) (seqVoid eb)))]
   | .loop body =>
     let l ← emit do pure (.loop (seqVoid (← block body none)))
@@ -349,7 +363,7 @@ partial def block (e : Expr) (k : Option (Expr → Expr)) : M (List Expr) := do
       -- only the array suspends: compute it first
       let a ← fresh (← infer it)
       let pre ← block it (some (.assign a ·))
-      return pre ++ [← emit (pure (app k (.forE i (.local a) filt body)))]
+      return pre ++ [← emit (pure (app k (.forE i (.local a) (retToDone filt) (retToDone body))))]
     -- a loop over an index (and the array of the body's values, when used)
     let a ← fresh (← infer it)
     let ix ← fresh .int
@@ -390,8 +404,8 @@ partial def block (e : Expr) (k : Option (Expr → Expr)) : M (List Expr) := do
   | .print e1 =>
     let (pre, rs) ← operands [e1]
     return pre ++ [← emit (pure (app k (.print rs.head!)))]
-  | .ret e1 => block e1 (some (.ret ·))
-  | e => return [← emit (pure (app k e))]
+  | .ret e1 => block e1 (some fun v => .seq (fset resF v) (.ret (int 1)))
+  | e => return [← emit (pure (app k (retToDone e)))]
 
 /-- Operands evaluated left to right, some of which suspend: those before
     the last that suspends go to temporaries first. -/
@@ -403,7 +417,7 @@ partial def operands (es : List Expr) : M (List Expr × List Expr) := do
     let mut pre : Array Expr := #[]
     let mut rs : Array Expr := #[]
     for (e, i) in es.zipIdx do
-      if i > j || (i < j && stable e) then rs := rs.push e
+      if i > j || (i < j && stable e) then rs := rs.push (retToDone e)
       else
         let t ← fresh (← infer e)
         pre := pre ++ (← block e (some (.assign t ·)))
@@ -415,25 +429,59 @@ partial def operands (es : List Expr) : M (List Expr × List Expr) := do
     pending, store the slots and return 0; else take its result. Gives the
     statement and the call's value. -/
 partial def suspendAt (g : Nat) (c : Callee) (rs : List Expr) : M (Expr × Expr) := do
-  let fty ← infer (.call c.newFn rs)
-  let k ← newSite (.opt fty)
   let env ← read
-  modify fun st => { st with sites := st.sites.push { id := k, waits := .callee k c, defers := st.defers } }
+  let newArgs (as : List Expr) : List Expr := if c.newSched then .local schS :: as else as
+  if c.generic then
+    -- an option field, unwrapped in conditions
+    let fty ← infer (.call c.newFn (newArgs rs))
+    let k ← newSite (.opt fty)
+    modify fun st => { st with sites := st.sites.push { id := k, waits := .callee k c 0 [], defers := st.defers } }
+    let cf := childF k
+    let q : Expr := .prim .query [fget cf]
+    let create : Expr := .ite (.call c.initFn (q :: rs)) vd (.seq (fset cf (.prim .mkSome [.call c.newFn (newArgs rs)])) vd)
+    let st ← fresh .int
+    let arrive : Expr := .ite (← seeking) vd (.seq create (.seq (fset env.pcFld (int k)) vd))
+    let poll : Expr := .ite (.assign st (.call c.resumeFn ([q, .local schS] ++ c.passFields.map fun f => .heap (.get f) [q])))
+      vd (.seq (.prim .userErr []) vd)
+    let pend : Expr := .ite (.prim .eq [.local st, int 0]) (.seq spillMark (.ret (int 0))) vd
+    let found : Expr := .assign env.rS (int 0)
+    match c.resField with
+    | some rf =>
+      let t ← fresh (← infer (.call g rs))
+      let take : Expr := .ite (.assign t (.heap (.get rf) [q])) vd (.seq (.prim .userErr []) vd)
+      return (seqVoid [arrive, found, poll, pend, take], .local t)
+    | none => return (seqVoid [arrive, found, poll, pend], vd)
+  -- a field of type `ref [tag, sched] []` (first the scheduler), copied to a
+  -- slot of that type (whose initial value is the scheduler parameter) and
+  -- resumed after a test of its class, so not in a condition: C journals
+  -- the writes made in a condition. The arguments stay in slots, for each
+  -- resumption.
+  let wide : VTy := .ref [c.tag, env.schedTag] []
+  let k ← newSite wide
   let cf := childF k
-  let q : Expr := .prim .query [fget cf]
-  let create : Expr := .ite (.call c.initFn (q :: rs)) vd (.seq (fset cf (.prim .mkSome [.call c.newFn rs])) vd)
+  let ptys := ((env.S.fns[g]?).map (·.1)).getD []
+  let argSlots ← ptys.mapM fresh
+  let as := argSlots.map Expr.local
+  let y ← fresh wide
+  modify fun st => { st with sites := st.sites.push { id := k, waits := .callee k c y argSlots, defers := st.defers } }
+  let isC : Expr := .heap (.isTag [c.tag]) [.local y]
   let st ← fresh .int
-  let arrive : Expr := .ite (← seeking) vd (.seq create (.seq (fset env.pcFld (int k)) vd))
-  let poll : Expr := .ite (.assign st (.call c.resumeFn ([q, .local schS] ++ c.passFields.map fun f => .heap (.get f) [q])))
-    vd (.seq (.prim .userErr []) vd)
+  let arrive : Expr := .ite (← seeking) vd (seqVoid (
+    (argSlots.zip rs).map (fun (a, r) => .assign a r) ++
+    [.assign y (fget cf),
+     .ite isC (.call c.initFn (.local y :: as)) (.seq (fset cf (.call c.newFn (newArgs as))) vd),
+     fset env.pcFld (int k)]))
+  let pass := if c.passFields.isEmpty then [] else as
+  let poll : Expr := seqVoid [.assign y (fget cf),
+    .assign st (.ite isC (.call c.resumeFn (.local y :: .local schS :: pass)) (.prim .userErr []))]
   let pend : Expr := .ite (.prim .eq [.local st, int 0]) (.seq spillMark (.ret (int 0))) vd
   let found : Expr := .assign env.rS (int 0)
-  match c.resField with
-  | some rf =>
+  match c.resField, c.resultFn with
+  | some _, some rfn =>
     let t ← fresh (← infer (.call g rs))
-    let take : Expr := .ite (.assign t (.prim .query [.heap (.get rf) [q]])) vd (.seq (.prim .userErr []) vd)
+    let take : Expr := .assign t (.ite isC (.call rfn [.local y]) (.prim .userErr []))
     return (seqVoid [arrive, found, poll, pend, take], .local t)
-  | none => return (seqVoid [arrive, found, poll, pend], vd)
+  | _, _ => return (seqVoid [arrive, found, poll, pend], vd)
 
 /-- The statement of a `sync` (`isSync`) or `race` with arms `arms` (each
     a statement that leaves the arm's value in a slot). -/
@@ -500,10 +548,17 @@ partial def region (pcFld : Nat) (done : Option (Expr → Expr)) (body : Expr) :
   let args ← armArgs
   let cancelAt (s : Site) : Expr :=
     let child : Expr := match s.waits with
-      | .callee k c => match c.cancelFn with
+      | .callee k c y as => match c.cancelFn with
         | some cf =>
-          let q : Expr := .prim .query [fget (childF k)]
-          .ite (.call cf ([q, .local schS] ++ c.passFields.map fun f => .heap (.get f) [q])) vd vd
+          if c.generic then
+            let q : Expr := .prim .query [fget (childF k)]
+            .ite (.call cf ([q, .local schS] ++ c.passFields.map fun f => .heap (.get f) [q])) vd vd
+          else
+            -- (the child's frame, as `suspendAt` reads it: through a slot
+            -- of its field's type, and with its parameters from its frame)
+            let pass := if c.passFields.isEmpty then [] else as.map Expr.local
+            .seq (.assign y (fget (childF k)))
+              (.seq (.ite (.heap (.isTag [c.tag]) [.local y]) (.call cf (.local y :: .local schS :: pass)) vd) vd)
         | none => vd
       | .arms as => seqVoid (as.reverse.map fun (_, can, pcA, doneA) =>
           .ite (allOf [.prim .ne [fget pcA, int 0], .prim .eq [fget doneA, int 0]])
@@ -547,17 +602,18 @@ structure Lowered where
     with `arity` parameters, slot types `Γ` and result type `ρ`, whose frame
     type is `frameTy`; its arm functions are numbered from `fnBase`. -/
 def lower (S : Sigs) (callee : Nat → Option Callee) (syncMark raceMark : Nat) (arity : Nat) (Γ : List VTy)
-    (ρ : VTy) (frameTy schedTy : VTy) (fnBase : Nat) (b : Expr) : Except String Lowered := do
+    (ρ : VTy) (frameTy : VTy) (schedTag : Nat) (fnBase : Nat) (b : Expr) : Except String Lowered := do
+  let schedTy : VTy := .ref [schedTag] []
   let isM := fun f => f == syncMark || f == raceMark
   let isS := fun f => (callee f).isSome || isM f
   let sites := countSusp isS
   let sites := sites b
   let armsTotal := countArms isM b
-  let b := retToDone (shift 2 b)
+  let b := shift 2 b
   let Γ0 := #[frameTy, schedTy] ++ Γ.toArray
-  let env : Env := { S, ρ, callee, syncMark, raceMark, arity, sites, armsTotal, fnBase,
+  let env : Env := { S, ρ, callee, syncMark, raceMark, arity, sites, armsTotal, fnBase, schedTag,
                      pcFld := pcF, rS := 0, regionTotal := 0 }
-  let done : Expr → Expr := fun v => .seq (fset resF (.prim .mkSome [v])) (.ret (int 1))
+  let done : Expr → Expr := fun v => .seq (fset resF v) (.ret (int 1))
   let ((res, can), st) ← ((region pcF (some done) b).run env).run { Γ := Γ0 }
   if st.next != sites || st.armsNext != armsTotal then
     throw "internal error: lowering a <suspends> function: suspension points miscounted"
@@ -568,7 +624,7 @@ def lower (S : Sigs) (callee : Nat → Option Callee) (syncMark raceMark : Nat) 
   let f := fill spill reload
   return { body := f res, cancel := f can, arms := st.arms.toList.map fun (r, c) => (f r, f c),
            slots := st.Γ.toList,
-           fields := [.int, .opt ρ] ++ st.children.toList ++ List.replicate (2 * armsTotal) .int ++
+           fields := [.int, ρ] ++ st.children.toList ++ List.replicate (2 * armsTotal) .int ++
              (st.Γ.toList.drop 2) }
 
 end OpenVerse.Front.Suspend
