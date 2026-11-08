@@ -905,7 +905,7 @@ partial def concAt (isSync : Bool) (arms : List Expr) (isRush : Bool := false) :
   let returning : Expr := seqVoid (
     info.toList.reverse.map (fun (_, can, pcA, doneA) =>
       Expr.ite (allOf [.prim .ne [fget pcA, int 0], .prim .eq [fget doneA, int 0]])
-        (.seq (.call can args) vd) vd) ++
+        (.seq (seqVoid [.call can args, fset doneA (int 2)]) vd) vd) ++
     [defersHere, if env.pcFld == pcF then .seq killMark (.ret (int 1)) else .ret (int 2)])
   let run (res doneA : Nat) : Expr := seqVoid [spillMark, .assign st (.call res args),
     .ite (.prim .eq [.local st, int 1]) (.seq (fset doneA (int 1)) vd) vd,
@@ -937,7 +937,7 @@ partial def concAt (isSync : Bool) (arms : List Expr) (isRush : Bool := false) :
     -- the winner cancels the arms that started and are pending, last first
     let cancels := info.toList.zipIdx.reverse.map fun ((_, can, pcA, doneA), i) =>
       Expr.ite (allOf [.prim .ne [.local w, int i], .prim .ne [fget pcA, int 0], .prim .eq [fget doneA, int 0]])
-        (.seq (seqVoid [spillMark, .call can args, reloadMark]) vd) vd
+        (.seq (seqVoid [spillMark, .call can args, reloadMark, fset doneA (int 2)]) vd) vd
     return seqVoid ([arrive, found, .assign w (int (-1))] ++ polls ++ [wait] ++ cancels)
 
 /-- Lower `body` as a region whose suspension point is in field `pcFld`:
@@ -975,9 +975,11 @@ partial def region (pcFld : Nat) (done : Option (Expr → Expr)) (body : Expr) :
             .seq (.assign y (fget (childF k)))
               (.seq (.ite (.heap (.isTag [c.tag]) [.local y]) (.call cf (.local y :: .local schS :: pass)) vd) vd)
         | none => vd
+      -- (each marked cancelled, 2, so that stopping a `rush`'s arm wrappers
+      -- after does not cancel it again, #181)
       | .arms as => seqVoid (as.reverse.map fun (_, can, pcA, doneA) =>
           .ite (allOf [.prim .ne [fget pcA, int 0], .prim .eq [fget doneA, int 0]])
-            (.seq (seqVoid [spillMark, .call can args, reloadMark]) vd) vd)
+            (.seq (seqVoid [spillMark, .call can args, reloadMark, fset doneA (int 2)]) vd) vd)
     .ite (.prim .eq [fget pcFld, int s.id]) (.seq (seqVoid [child, s.defers]) vd) vd
   -- (a function's cancel also stops its branches, before the rest)
   -- (a function's branches are stopped last, after its own defers, as when

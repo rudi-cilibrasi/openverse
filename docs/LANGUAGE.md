@@ -727,8 +727,9 @@ Main()<suspends>:void =
 - **`rush`.** As `race`, but the arms that started and have not ended when
   the first ends go on, as tasks of their own, until they end or the
   function that contains the `rush` exits (which cancels them, running
-  their defers). A `rush` cannot be in a `loop` or `for` body (the Book's
-  rule).
+  their defers). A `return` in such an arm, once the `rush` has ended,
+  ends that arm only: the function has gone on, and the value is dropped.
+  A `rush` cannot be in a `loop` or `for` body (the Book's rule).
 - **`branch`.** The body of a `branch:` runs as a task of its own, at once
   up to its first wait, while the code after it goes on. It shares the
   enclosing function's variables, and it is cancelled (running its active
