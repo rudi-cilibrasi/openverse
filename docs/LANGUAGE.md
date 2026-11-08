@@ -429,11 +429,7 @@ circle := class(shape, labelled):
 - **Not yet supported** (each rejected with a message):
   - overrides in a subclass that repeats or adds type arguments its
     parent (or an interface) leaves open, or fixes them to types that
-    mention type parameters; a variable of an interface type at type
-    arguments that every class below it fixes otherwise, when the interface
-    (or one above it) declares fields: it would have no initial value (for
-    a class, or an interface without fields, a hidden placeholder class
-    provides one, #157); a class that gives two
+    mention type parameters; a class that gives two
     interfaces different type arguments, an interface that gives a parent
     interface other than its own type parameters, and a parametric class
     below a non-parametric interface (or one that adds type parameters

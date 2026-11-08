@@ -1102,9 +1102,7 @@ partial def slotDefault (env : TyEnv) (dictBase : Nat) (params : List Ty) (visit
             | .ok fs => return .heap (.new (env.tagOf h)) fs
             | .error msg => lastErr := msg
         if !hs.isEmpty then throw lastErr
-        let why := if (env.info n).isIface && (env.supers n).any (fun x => !(env.fields x).isEmpty)
-          then s!" (an interface that declares fields, or is below one, gets no placeholder object, #157)" else " (#142)"
-        throw s!"a variable or temporary of type {key} needs an initial value, and every class below {n} ({", ".intercalate pinnedOut}) fixes type arguments that {key} does not have, so none can be it{why}"
+        throw s!"a variable or temporary of type {key} needs an initial value, and every class below {n} ({", ".intercalate pinnedOut}) fixes type arguments that {key} does not have, so none can be it (#142)"
       throw lastErr
     -- a parametric class starts with no option set, which has every such type
     if env.classes.contains n then return .lit vt.default
@@ -5779,11 +5777,34 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   -- (an interface's: none, so only for interfaces whose own and inherited
   -- interfaces declare no fields; a class's include its interfaces'), and
   -- the program never makes one
+  -- (an interface's placeholder is laid out like the interface: each field
+  -- of the interfaces at or above it where every class below that interface
+  -- has it, when they agree, as a read through the interface goes there,
+  -- else after them, as such a read tests the class first; padding between)
+  let ifaceLayout (n : String) : Option (List (String × Ty × Option SExpr)) := do
+    let ifs := (env.supers n).filter fun x => (env.info x).isIface && !(env.fields x).isEmpty
+    let mut seen : List String := []
+    let mut fixed : List (Nat × String × Ty) := []
+    let mut free : List (String × Ty) := []
+    for x in ifs do
+      for (f, t, _) in env.fields x do
+        if seen.contains f then continue
+        seen := seen ++ [f]
+        let pos := (env.concreteBelow x).map fun d => ((fieldIndex (env.fields d) f).map (·.1)).getD 0
+        match pos.head? with
+        | some p0 => if pos.all (· == p0) then fixed := fixed ++ [(p0, f, t)] else free := free ++ [(f, t)]
+        | none => free := free ++ [(f, t)]
+    if (fixed.map (·.1)).eraseDups.length != fixed.length then none
+    let size := (fixed.map (·.1 + 1)).foldl max 0
+    let laid := (List.range size).map fun k => match fixed.find? (·.1 == k) with
+      | some (_, f, t) => (f, t, (none : Option SExpr))
+      | none => (s!"$pad{k}", Ty.void, none)
+    return laid ++ free.map fun (f, t) => (f, t, none)
   let needsPh (n : String) : Bool :=
     let i := env.info n
     (env.sparams.lookup n).isSome && env.isRefClass n &&
     (env.concreteBelow n).all (fun d => env.pinned.contains d && (env.corePins d).any Option.isSome) &&
-    (!i.isIface || (env.supers n).all fun x => (env.fields x).isEmpty)
+    (!i.isIface || (ifaceLayout n).isSome)
   for n in env.classes.filter needsPh do
     let h := s!"{n}$placeholder"
     let i := env.info n
@@ -5791,7 +5812,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     let own := ps.map fun (v, c) => Ty.param v c
     env := { env with
       classes := env.classes ++ [h],
-      structs := env.structs ++ [(h, if i.isIface then [] else (env.structs.lookup n).getD [])],
+      structs := env.structs ++ [(h, if i.isIface then (ifaceLayout n).getD [] else (env.structs.lookup n).getD [])],
       sparams := env.sparams ++ [(h, ps)],
       cinfo := env.cinfo ++ [(h, { parent := if i.isIface then none else some n,
                                    ifaces := if i.isIface then [n] else [], isAbstract := true })],
