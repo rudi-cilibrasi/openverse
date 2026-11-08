@@ -22,7 +22,7 @@ A program combines
   - a stand-alone qualified (i:)M module;
   - a field two parametric interfaces declare, as the type parameter and as
     int, in classes that fix it to int (#205);
-  - function values: functions passed, stored and called (#210);
+  - function values: functions and methods passed, stored and called (#210);
   - a parametric hierarchy pb(t) with renaming, fixing and extending subclasses,
     a parametric interface, generic and fixed constructors, generic methods with
     overrides, generic functions;
@@ -1411,6 +1411,8 @@ class Gen:
                 M.append('%s := %s{}' % (h, hc))
                 M.append('set %s.Op = %s' % (h, R.choice(fs)))
                 M.append('Print("fh {%s.Run(%s)} {%s.Op(%s)}")' % (h, lit(), h, lit()))
+                # (a method as a value, holding its receiver)
+                M.append('Print("fmv {%s(%s.Run, %s)}")' % (tw, h, lit()))
             else:
                 a, y = tmpname('FA'), tmpname('FY')
                 M.append('%s:[](int->int) = array{%s}' % (a, ', '.join(R.sample(fs, min(len(fs), 2)))))

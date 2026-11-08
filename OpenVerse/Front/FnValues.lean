@@ -125,14 +125,62 @@ partial def _root_.OpenVerse.Front.STy.fnShapes : STy → List Shape
     let s := shapeOf ps.length es
     (if s.decides && s.suspends then [] else [s]) ++ ps.flatMap STy.fnShapes ++ r.fnShapes
 
+/-- Whether a type mentions the type name `x`. -/
+partial def _root_.OpenVerse.Front.STy.hasName (x : String) : STy → Bool
+  | .name n => n == x
+  | .arr t | .opt t => t.hasName x
+  | .tup ts | .app _ ts => ts.any (·.hasName x)
+  | .map a b => a.hasName x || b.hasName x
+  | .fn ps _ r => ps.any (·.hasName x) || r.hasName x
+
+/-- The type names a type mentions. -/
+partial def _root_.OpenVerse.Front.STy.allNames : STy → List String
+  | .name n => [n]
+  | .arr t | .opt t => t.allNames
+  | .tup ts => ts.flatMap STy.allNames
+  | .app n ts => n :: ts.flatMap STy.allNames
+  | .map a b => a.allNames ++ b.allNames
+  | .fn ps _ r => ps.flatMap STy.allNames ++ r.allNames
+
+/-- The type names an expression mentions: in its types and constructions. -/
+partial def _root_.OpenVerse.Front.SExpr.tyNames : SExpr → List String
+  | .decl _ _ t _ e => (t.map STy.allNames).getD [] ++ e.tyNames
+  | .construct _ n ts args => n :: ts.flatMap STy.allNames ++ args.flatMap SExpr.tyNames
+  | .app _ f args _ => f.tyNames ++ args.flatMap SExpr.tyNames
+  | .member _ e _ | .query _ e | .neg _ e | .notE _ e | .optionLit _ e | .logicLit _ e | .loop _ e
+  | .gen _ _ _ e => e.tyNames
+  | .bin _ _ a b | .andE _ a b | .orE _ a b | .range _ a b => a.tyNames ++ b.tyNames
+  | .cmp _ a rest => a.tyNames ++ rest.flatMap (·.2.tyNames)
+  | .tuple _ es | .block _ es | .arrayLit _ es => es.flatMap SExpr.tyNames
+  | .ite _ cs t e => cs.flatMap SExpr.tyNames ++ t.tyNames ++ (e.map SExpr.tyNames).getD []
+  | .forE _ cs b => cs.flatMap SExpr.tyNames ++ b.tyNames
+  | .ret _ e => (e.map SExpr.tyNames).getD []
+  | .caseE _ e arms => e.tyNames ++ arms.flatMap fun (q, v) => (q.map SExpr.tyNames).getD [] ++ v.tyNames
+  | .set _ l _ e => l.tyNames ++ e.tyNames
+  | .mapLit _ kvs => kvs.flatMap fun (k, v) => k.tyNames ++ v.tyNames
+  | _ => []
+
+/-- Whether a definition mentions the type `n`. -/
+partial def _root_.OpenVerse.Front.STop.usesType (n : String) : STop → Bool
+  | .fn _ _ ps _ _ r body =>
+    (ps.flatMap (·.ty.allNames) ++ r.allNames ++ body.tyNames).contains n
+  | .const _ _ t e => ((t.map STy.allNames).getD [] ++ e.tyNames).contains n
+  | .classDef _ _ _ _ parents _ fields _ methods =>
+    (parents.flatMap STy.allNames ++ fields.flatMap (fun (_, t, d, _) => t.allNames ++ (d.map SExpr.tyNames).getD [])).contains n ||
+      methods.any (STop.usesType n)
+
 mutual
 /-- The function types written in an expression, and the names it uses as
-    values (not as the head of a call). -/
+    values (not as the head of a call): `.M` for a member `X.M`. -/
 partial def _root_.OpenVerse.Front.SExpr.scan : SExpr → List Shape × List String
   | .ident _ n => ([], [n])
   | .app _ (.ident _ _) args _ => scanL args
+  | .app _ (.member _ e _) args _ => scanL (e :: args)
   | .app _ f args _ => scanL (f :: args)
-  | .member _ e _ | .query _ e | .neg _ e | .notE _ e | .optionLit _ e | .logicLit _ e | .loop _ e
+  | .member _ e m =>
+    let (s, n) := e.scan
+    (s, n ++ ["." ++ m])
+  | .query _ e | .neg _ e | .notE _ e | .optionLit _ e | .logicLit _ e | .loop _ e
   | .gen _ _ _ e => e.scan
   | .bin _ _ a b | .andE _ a b | .orE _ a b | .range _ a b => scanL [a, b]
   | .cmp _ a rest => scanL (a :: rest.map (·.2))
@@ -171,8 +219,11 @@ partial def _root_.OpenVerse.Front.SParam.scan (q : SParam) : List Shape × List
 
 /-- The function types a definition writes, and the names it uses as
     values, but for its parameters' names and `bound` (the fields of the
-    classes, in a method: a parameter or a field of that name is meant). -/
-partial def _root_.OpenVerse.Front.STop.scan (bound : List String := []) : STop → List Shape × List String
+    classes, in a method: a parameter or a field of that name is meant). A
+    name in `meths` (a method of the class, in its methods) is `Self`'s
+    method, `.M`. -/
+partial def _root_.OpenVerse.Front.STop.scan (bound : List String := []) (meths : List String := []) :
+    STop → List Shape × List String
   | .fn _ _ ps _ _ r body =>
     let (s, n) := scanL [body]
     let pss := ps.map SParam.scan
@@ -184,8 +235,9 @@ partial def _root_.OpenVerse.Front.STop.scan (bound : List String := []) : STop 
   | .classDef _ _ _ _ parents _ fields _ methods =>
     let ms := methods.map (STop.scan bound)
     let (s, n) := scanL (fields.filterMap (·.2.2.1))
+    let self (x : String) : String := if meths.contains x then "." ++ x else x
     (parents.flatMap STy.fnShapes ++ fields.flatMap (·.2.1.fnShapes) ++ s ++ ms.flatMap (·.1),
-      n.filter (!bound.contains ·) ++ ms.flatMap (·.2))
+      (n.filter (!bound.contains ·) ++ ms.flatMap (·.2)).map self)
 
 /-- Add the shapes' interfaces and the value classes of the functions used
     as values (#210). A function is used as a value when its name occurs
@@ -196,16 +248,22 @@ partial def _root_.OpenVerse.Front.STop.scan (bound : List String := []) : STop 
 def desugar (tops : List STop) (extra : List STop := []) : List STop := Id.run do
   -- (each class's fields, its own and its parents', in its methods: a
   -- field of that name is meant there)
-  let defs : List (String × List STy × List String) := tops.filterMap fun
-    | .classDef _ n _ _ ps _ fs _ _ => some (n, ps, fs.map (·.1))
+  let defs : List (String × List STy × List String × List String) := tops.filterMap fun
+    | .classDef _ n _ _ ps _ fs _ ms => some (n, ps, fs.map (·.1), ms.filterMap fun
+        | .fn _ m .. => some m
+        | _ => none)
     | _ => none
   let parentName : STy → Option String := fun | .name q | .app q _ => some q | _ => none
   let rec fieldsOf (fuel : Nat) (c : String) : List String :=
     match fuel, defs.find? (·.1 == c) with
-    | fuel + 1, some (_, ps, fs) => fs ++ (ps.filterMap parentName).flatMap (fieldsOf fuel)
+    | fuel + 1, some (_, ps, fs, _) => fs ++ (ps.filterMap parentName).flatMap (fieldsOf fuel)
+    | _, _ => []
+  let rec methodsOf (fuel : Nat) (c : String) : List String :=
+    match fuel, defs.find? (·.1 == c) with
+    | fuel + 1, some (_, ps, _, ms) => ms ++ (ps.filterMap parentName).flatMap (methodsOf fuel)
     | _, _ => []
   let scans := (tops ++ extra).map fun t => match t with
-    | .classDef _ n .. => t.scan (fieldsOf (defs.length + 1) n)
+    | .classDef _ n .. => t.scan (fieldsOf (defs.length + 1) n) (methodsOf (defs.length + 1) n)
     | _ => t.scan
   let named := (scans.flatMap (·.2)).eraseDups
   let fnNames := tops.filterMap fun | .fn _ n .. => some n | _ => none
@@ -215,11 +273,36 @@ def desugar (tops : List STop) (extra : List STop := []) : List STop := Id.run d
           (fnNames.filter (· == n)).length == 1 then some (p, n, ps, effs, r)
       else none
     | _ => none
-  if values.isEmpty && (scans.all fun (s, _) => s.isEmpty) then return tops
+  -- methods used as values (`X.M`, or `M` in the class's methods): each
+  -- declaring class's method, its receiver a field `$self` (#210)
+  let members := named.filterMap fun n => if n.startsWith "." then some (n.drop 1).toString else none
+  let mvalues : List (Pos × String × List TParam × String × List SParam × List String × STy) :=
+    tops.flatMap fun
+      | .classDef _ c tps _ _ _ _ _ ms => ms.filterMap fun
+        | .fn mp m ps mtps effs r _ =>
+          let targs := ps.map (·.ty) ++ [r]
+          let tpn := tps.map (·.name)
+          -- (a class's type parameters only as whole, distinct type
+          -- arguments of the shape: a class that repeats or nests them
+          -- could not implement it, #171)
+          let bare := targs.filterMap fun | .name x => if tpn.contains x then some x else none | _ => none
+          let whole := targs.all fun t => match t with
+            | .name _ => true
+            | t => !tpn.any t.hasName
+          let overloaded := (ms.filter fun | .fn _ m' .. => m' == m | _ => false).length > 1
+          if members.contains m && !overloaded && mtps.isEmpty && ps.all (!·.named) && !m.contains '$' &&
+              !m.startsWith "(" &&
+              !effs.contains "override" && whole && bare.eraseDups.length == bare.length then
+            some (mp, c, tps, m, ps, effs, r)
+          else none
+        | _ => none
+      | _ => []
+  if values.isEmpty && mvalues.isEmpty && (scans.all fun (s, _) => s.isEmpty) then return tops
   -- every shape written, and each value's own (a value's type when nothing
   -- else gives one)
   let mut shapes : List Shape := []
-  for s in scans.flatMap (·.1) ++ values.map (fun (_, _, ps, effs, _) => shapeOf ps.length effs) do
+  for s in scans.flatMap (·.1) ++ values.map (fun (_, _, ps, effs, _) => shapeOf ps.length effs) ++
+      mvalues.map (fun (_, _, _, _, ps, effs, _) => shapeOf ps.length effs) do
     if !shapes.contains s then shapes := shapes ++ [s]
   let p0 : Pos := match tops.head? with
     | some (.fn p ..) | some (.const p ..) | some (.classDef p ..) => p
@@ -247,6 +330,18 @@ def desugar (tops : List STop) (extra : List STop := []) : List STop := Id.run d
     -- (its own shape first: the value's type when nothing else gives one)
     let fits := own :: fits.filter (· != own)
     out := out ++ [.classDef p s!"{n}$fn" [] [] (fits.map fun s => STy.app s.name targs) false [] [] methods]
+  for (p, c, ctps, m, ps, effs, r) in mvalues do
+    let own := shapeOf ps.length effs
+    let fits := shapes.filter (own.within ·)
+    let targs := ps.map (·.ty) ++ [r]
+    let args := (List.range ps.length).map fun i => SExpr.ident p s!"$X{i}"
+    let selfTy : STy := if ctps.isEmpty then .name c else .app c (ctps.map fun tp => .name tp.name)
+    let methods := fits.map fun s =>
+      STop.fn p s.call (params (ps.map (·.ty))) [] (s.effs ++ ["override"]) r
+        (.app p (.member p (.ident p "$self") m) args own.decides)
+    let fits := own :: fits.filter (· != own)
+    out := out ++ [.classDef p s!"{c}${m}$fn" ctps [] (fits.map fun s => STy.app s.name targs) false
+      [("$self", selfTy, none, false)] [] methods]
   return tops ++ out
 
 end FnValues
