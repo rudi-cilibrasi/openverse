@@ -672,6 +672,24 @@ position in every class below the one that declares it.
   need unification), nor can one that adds its own, as a `named`'s
   implementation needs an `n` the caller does not have.
 
+## Unification (#209)
+
+A refinement by pins that fix type arguments to closed types (#142) is a
+matching: the pinned arguments' variables are bound to parts of the pins.
+A class that repeats its parent's type arguments, `dup(t) :=
+class(pair(t, t))`, needs pins that relate arguments to each other, and
+its refinement is then a most general unifier of the arguments under the
+pins. `Core/Unify.lean` is Robinson's algorithm on equations between Verse
+Core types, proved sound (`unify_sound`), most general (`unify_mgu`: every
+unifier `R` factors through it, `(σ j).subst R = R j`, so it is also
+idempotent) and complete (`unify_complete`). Its termination is
+lexicographic in the number of variables the equations mention and their
+size: eliminating a variable for a type without it removes the variable
+and adds none, and every other step keeps the variables and shrinks the
+equations. Completeness is what the substitution lemma needs: at every
+instance of the receiver's type arguments, a refinement exists exactly
+when some substitution satisfies the pins.
+
 ## Typing the heap
 
 Phase 3 (#20) adds a heap of objects, each with a class tag and fields

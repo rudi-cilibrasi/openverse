@@ -223,6 +223,31 @@ out of date. The proofs are in `OpenVerse/Core/`.
 @Prog.checkTypes_sound : ∀ {P : Prog} {S : Sigs} {Γs : List (List VTy)}, P.checkTypes S Γs = true → ProgTyped P S
 ```
 
+## `unify_sound`: first-order unification of Verse Core types gives a unifier (#209)
+
+`OpenVerse/Core/Unify.lean`; axioms: [propext, Classical.choice, Quot.sound]
+
+```lean
+@unify_sound : ∀ {eqs : Eqs} {σ : Nat → VTy}, unify eqs = some σ → Eqs.Unifies σ eqs
+```
+
+## `unify_mgu`: every unifier factors through it: a most general unifier (#209)
+
+`OpenVerse/Core/Unify.lean`; axioms: [propext, Classical.choice, Quot.sound]
+
+```lean
+@unify_mgu : ∀ {eqs : Eqs} {σ R : Nat → VTy},
+  unify eqs = some σ → Eqs.Unifies R eqs → ∀ (j : Nat), VTy.subst R (σ j) = R j
+```
+
+## `unify_complete`: it finds a unifier whenever there is one (#209)
+
+`OpenVerse/Core/Unify.lean`; axioms: [propext, Classical.choice, Quot.sound]
+
+```lean
+@unify_complete : ∀ {eqs : Eqs} {R : Nat → VTy}, Eqs.Unifies R eqs → ∃ σ, unify eqs = some σ
+```
+
 ## `Runs.no_control`: break never escapes its loop
 
 `OpenVerse/Core/Control.lean`; axioms: [propext, Classical.choice, Quot.sound]
