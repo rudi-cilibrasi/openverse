@@ -401,21 +401,25 @@ def TyEnv.sameCore (env : TyEnv) (d T : String) : Bool :=
 def TyEnv.argsAt (env : TyEnv) (T : String) (targs : List Ty) (D : String) : List Ty :=
   if env.isSub T D then env.upArgs T targs D else env.argsBelow T targs D
 
+/-- The class or interface whose declaration of field `f` gives its type in
+    class `d`'s Verse Core layout: the topmost interface above `d` that
+    declares it (#53), else the topmost class in `d`'s chain that has it.
+    Two unrelated interfaces may both declare it: the first `d` lists. -/
+def TyEnv.fieldSrc (env : TyEnv) (d f : String) : Option String :=
+  let has := (env.supers d).filter fun x => (env.info x).isIface && (env.fields x).any (·.1 == f)
+  let chain := ((env.supers d).filter fun x => !(env.info x).isIface).reverse
+  (has.find? fun x => !has.any fun y => y != x && env.isSub x y).orElse fun _ =>
+    chain.find? fun D => (env.fields D).any (·.1 == f)
+
 /-- The fields of class `d`, below `T`, with the types they have in an
-    object that is a `T(targs)`: each as the topmost class that has it gives
-    it, at that class's type arguments there. They are the types of the
-    class table at the Verse Core type arguments of `T(targs)`, also for a
-    `d` whose own type arguments differ (a placeholder, never read). -/
+    object that is a `T(targs)`: each as `fieldSrc` gives it, at that
+    class's type arguments there. They are the types of the class table at
+    the Verse Core type arguments of `T(targs)`, also for a `d` whose own
+    type arguments differ (a placeholder, never read). -/
 def TyEnv.fieldsSeen (env : TyEnv) (T : String) (targs : List Ty) (d : String) :
     List (String × Ty × Option SExpr) :=
-  let chain := ((env.supers d).filter fun x => !(env.info x).isIface).reverse
-  -- (a field an interface declares as the interface gives it, as in the
-  -- class table)
-  let ifaceSrc (f : String) : Option String :=
-    let has := (env.supers d).filter fun x => (env.info x).isIface && (env.fields x).any (·.1 == f)
-    has.find? fun x => !has.any fun y => y != x && env.isSub x y
   (env.fields d).map fun (f, t, dflt) =>
-    match (ifaceSrc f).orElse fun _ => chain.find? fun D => (env.fields D).any (·.1 == f) with
+    match env.fieldSrc d f with
     | some D =>
       let tD := (((env.fields D).find? (·.1 == f)).map (·.2.1)).getD t
       let σ := (((env.sparams.lookup D).getD []).map (·.1)).zip (env.argsAt T targs D)
@@ -547,6 +551,25 @@ partial def Ty.toVTy (env : TyEnv) : Ty → VTy
   | .param n _ => match env.tvars.findIdx? (·.1 == n) with
     | some j => .var j
     | none => VTy.void
+
+/-- Field `f`'s type in class `d`'s Verse Core layout, the class table's,
+    over the Verse Core type arguments the hierarchy shares. -/
+def TyEnv.coreFieldTy (env : TyEnv) (d f : String) : Option VTy := do
+  let D ← env.fieldSrc d f
+  let (_, t, _) ← (env.fields D).find? (·.1 == f)
+  return t.toVTy { env with tvars := env.coreVars D }
+
+/-- Whether field `f` has one Verse Core type in every class below `sn`,
+    `sn`'s own, at the type arguments of `sn(targs)`, as a read through `sn`
+    that goes straight to the field needs. A class that fixes type
+    arguments can take the field from another interface than `sn` does,
+    with a type that agrees with `sn`'s only at the fixed ones (#205). -/
+def TyEnv.fieldTyAgrees (env : TyEnv) (sn : String) (targs : List Ty) (f : String) : Bool :=
+  let cargs := match (Ty.struct sn targs).toVTy env with
+    | .ref _ args => args
+    | _ => []
+  let τ := (env.coreFieldTy sn f).map (VTy.inst cargs)
+  (env.concreteBelow sn).all fun d => (env.coreFieldTy d f).map (VTy.inst cargs) == τ
 
 /-- The type parameters a type mentions. -/
 partial def Ty.params : Ty → List String
@@ -1523,10 +1546,14 @@ def setFieldAt (env : TyEnv) (p : Pos) (sn : String) (targs : List Ty) (obj : Na
     (v : Expr) : EM Expr := do
   let ds := env.concreteBelow sn
   let pos := ds.map fun d => ((fieldIndex (env.fields d []) f).map (·.1)).getD k
-  -- (where every class below has it, so does every placeholder below, #157)
+  -- (where every class below has it, so does every placeholder below, #157,
+  -- and with one type in all of them, #205)
   let p0 := pos.headD k
-  if pos.all (· == p0) then return .heap (.set p0) [.local obj, v]
+  let tyOK := env.fieldTyAgrees sn targs f
+  if tyOK && pos.all (· == p0) then return .heap (.set p0) [.local obj, v]
   if let some d := ds.find? fun d => !env.sameCore d sn && (env.fieldAcc.idxOf? (d, f)).isNone then
+    if !tyOK then
+      eerr p s!"field '{f}' of {sn} has another type in {d}, which takes it from another interface, and {d} repeats its type arguments or fixes them to types that mention type parameters: setting it through {sn} is not supported yet (#205)"
     eerr p s!"field '{f}' of {sn} sits at different places in the classes below it, and {d} repeats its type arguments or fixes them to types that mention type parameters: setting it is not supported yet (#53, #157)"
   let tv ← fresh t
   let mut acc : Expr := .prim .userErr []   -- no class: unreachable
@@ -3816,11 +3843,15 @@ partial def elabMember (ctx : Ctx) (p : Pos) (r : R) (m : String) : EM R := do
         let pos := ds.map fun d => ((fieldIndex (ctx.types.fields d []) f).map (·.1)).getD k
         if ctx.types.isVarField sn f then noteFx p ["reads"]
         -- (where every class below has it, so does every placeholder below,
-        -- even when that is not `k`: an interface listed after another, #157)
-        let p0 := pos.headD k
-        if pos.all (· == p0) then return ⟨.heap (.get p0) [r.e], t⟩
+        -- even when that is not `k`: an interface listed after another,
+        -- #157; and with one type in all of them, #205)
         let env := ctx.types
+        let p0 := pos.headD k
+        let tyOK := env.fieldTyAgrees sn targs f
+        if tyOK && pos.all (· == p0) then return ⟨.heap (.get p0) [r.e], t⟩
         if let some d := ds.find? fun d => !env.sameCore d sn && (env.fieldAcc.idxOf? (d, f)).isNone then
+          if !tyOK then
+            eerr p s!"field '{f}' of {sn} has another type in {d}, which takes it from another interface, and {d} repeats its type arguments or fixes them to types that mention type parameters: reading it through {sn} is not supported yet (#205)"
           eerr p s!"field '{f}' of {sn} sits at different places in the classes below it, and {d} repeats its type arguments or fixes them to types that mention type parameters: reading it is not supported yet (#53, #157)"
         let x ← fresh r.ty
         let mut acc : Expr := .prim .userErr []   -- no class: unreachable
@@ -5777,18 +5808,36 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       if fixes (headOf impl) (headOf decl) then some (headOf impl) else none)
   -- (and the classes that fix an interface's type arguments, below an
   -- interface whose fields sit at different places in its classes: its
-  -- fields are reached through accessors, under the refinement, #157)
+  -- fields are reached through accessors, under the refinement, #157; so
+  -- is a field such a class types otherwise than a class or interface
+  -- above it, taking it from another interface, #205)
   let mut fieldAcc : Array (String × String) := #[]
+  let mut accFixers : Array String := #[]
   for i in env.classes do
-    if (env.info i).isIface then
-      let ds := env.concreteBelow i
-      for (f, _, _) in env.fields i do
-        let pos := ds.map fun d => ((fieldIndex (env.fields d) f).map (·.1)).getD 0
-        if !pos.all (· == pos.headD 0) then
-          for d in ds do
-            if fixes d i && env.sameCorePinned d i && !fieldAcc.contains (d, f) then
-              fieldAcc := fieldAcc.push (d, f)
-  let fixers := fixers ++ fieldAcc.toList.map (·.1)
+    let ds := env.concreteBelow i
+    for (f, _, _) in env.fields i do
+      let pos := ds.map fun d => ((fieldIndex (env.fields d) f).map (·.1)).getD 0
+      let moved := (env.info i).isIface && !pos.all (· == pos.headD 0)
+      let τi := env.coreFieldTy i f
+      -- (a read that tests the class first needs an accessor for each class
+      -- that fixes type arguments, also one that types the field as `i`)
+      let retyped := ds.any fun d => env.coreFieldTy d f != τi
+      for d in ds do
+        if (moved || retyped) && fixes d i && env.sameCorePinned d i &&
+            !fieldAcc.contains (d, f) then
+          fieldAcc := fieldAcc.push (d, f)
+          accFixers := accFixers.push d
+  -- (and a concrete class with a class below it that types one of its
+  -- fields otherwise: a read that tests for it reaches the field through
+  -- its accessor, whose receiver is of exactly its class, as a temporary
+  -- of its type also holds the classes below it, #205)
+  for d in env.classes.filter (fun d => let i := env.info d; !i.isIface && !i.isAbstract) do
+    for (f, _, _) in env.fields d do
+      let τ := env.coreFieldTy d f
+      if (env.concreteBelow d).any (fun d' => d' != d && env.coreFieldTy d' f != τ) &&
+          !fieldAcc.contains (d, f) then
+        fieldAcc := fieldAcc.push (d, f)
+  let fixers := fixers ++ accFixers.toList
   env := { env with pinned := env.classes.filter fun d => fixers.any fun f => d == f || (env.supers d).contains f,
                     fieldAcc := fieldAcc.toList }
   -- (#157) a hidden class below each generic class or interface whose
@@ -6299,22 +6348,13 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       ((g.params ++ g.tparams.map fun (v, c) => Ty.param v c).map (Ty.toVTy genv), g.ret.toVTy genv)
   -- the class table: the fields of each class, by tag (#34); the prototypes (#37)
   -- (a parametric class's field types mention its type parameters, #39)
-  -- each field as the topmost class in the chain that has it gives it, in
+  -- each field as `TyEnv.fieldSrc` gives it (the topmost interface that
+  -- declares it, else the topmost class in the chain that has it), in
   -- terms of the Verse Core type arguments the hierarchy shares: an
   -- `intbox := class(base(int))`'s inherited `Value` is `var 0`, as in `base`
   let mut classTable := env.classes.map fun d =>
-    let chain := ((env.supers d).filter fun x => !(env.info x).isIface).reverse
-    -- (a field an interface declares is typed as the interface gives it, at
-    -- the type arguments its references and implementations share, #53)
-    let ifaceSrc (f : String) : Option String :=
-      let has := (env.supers d).filter fun x => (env.info x).isIface && (env.fields x).any (·.1 == f)
-      has.find? fun x => !has.any fun y => y != x && env.isSub x y
     if env.isRefClass d then (env.fields d).map fun (f, t, _) =>
-      match (ifaceSrc f).orElse fun _ => chain.find? fun D => (env.fields D).any (·.1 == f) with
-      | some D =>
-        let tD := (((env.fields D).find? (·.1 == f)).map (·.2.1)).getD t
-        tD.toVTy { env with tvars := env.coreVars D }
-      | none => t.toVTy { env with tvars := env.coreVars d }
+      (env.coreFieldTy d f).getD (t.toVTy { env with tvars := env.coreVars d })
     else []
   let protos := env.protos.map fun (d, t, _) => (t, (env.coreArgs d []).map (Ty.toVTy env))
   let pins := env.classes.map fun d =>

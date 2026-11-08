@@ -392,8 +392,12 @@ circle := class(shape, labelled):
   over the interface reads and writes a field that sits at different
   places in its classes also when a class fixes its type arguments (to
   closed types), under the refinement those give (#157); a class that
-  repeats them makes such a field unreadable there. An interface
-  that extends a parametric interface gives it its own type parameters. Inherited field defaults see their
+  repeats them makes such a field unreadable there. The same goes for a
+  field two interfaces both declare, `x(t)`'s `F:t` and `y(t)`'s `F:int`,
+  in a class that fixes `t` to `int`: it is read and set through either
+  interface, and through a class below `y` whose subclass also
+  implements `x` (#205). An interface that extends a parametric interface
+  gives it its own type parameters. Inherited field defaults see their
   own class's type parameters. A cast `square[S]` takes its type arguments
   from `S`'s, and is refused when it would need more. A method
   of a parametric class is generic over the class's type parameters, then
