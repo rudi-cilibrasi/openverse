@@ -1949,7 +1949,10 @@ partial def elabSpawn (ctx : Ctx) (p : Pos) (body : SExpr) : EM R := do
   -- (a spawn among them does not wait)
   if (pre ++ es).any (fun x => Suspend.countSusp isS (fun _ => false) false (· == mark.idx) x > 0) then
     eerr p "the arguments of a spawned call cannot suspend (#156)"
-  if !ctx.dictVars.isEmpty then eerr p "spawn in a generic function is not supported yet (#156)"
+  -- (in a generic function, the task's root must not depend on the type
+  -- parameters: the scheduler holds roots of no type arguments)
+  if !ctx.dictVars.isEmpty && !r.ty.params.isEmpty then
+    eerr p "spawn in a generic function of a call whose result type mentions its type parameters is not supported yet (#156)"
   let ty : Ty := .struct "task" [r.ty]
   let tagT := ctx.types.tagOf "task"
   let t ← fresh ty
@@ -5438,7 +5441,10 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
         let mut atys : Array VTy := #[]
         for (e, i) in hs.zipIdx do
           match tc Sorig Γ (fsigs0[gi]!).2 e none with
-          | some τ => atys := atys.push τ
+          | some τ =>
+            if τ.mentionsVar then
+              throw s!"in {gname}: a spawned call whose arguments' types mention the function's type parameters is not supported yet (#156)"
+            atys := atys.push τ
           | none =>
             -- (`array{}` or `false` has no type of its own: the callee's
             -- parameter type, when it mentions no type parameter)
