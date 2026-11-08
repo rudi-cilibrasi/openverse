@@ -589,8 +589,9 @@ Main():void =
 
   Lifting goes through arithmetic, comparisons, calls (the receiver
   first), member access, `?`, tuples, arrays, maps and string
-  interpolation. A variable is read where it is written: before the choice
-  if the clause sets it after. A choice inside a block, a branch, a struct
+  interpolation. A name before a choice is read where it is written, before
+  the choice, even if an alternative changes it (a `set`, or a method
+  changing a field). A choice inside a block, a branch, a struct
   construction (whose fields are evaluated in declaration order, not as
   written), a named argument or another choice's alternative is refused
   for now, and so is a choice anywhere else (outside these failure

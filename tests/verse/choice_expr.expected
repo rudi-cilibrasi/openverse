@@ -27,4 +27,5 @@ read before: 2 0
 a
 b
 v 3
+field read first: -1
 exit=0

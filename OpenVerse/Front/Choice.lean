@@ -150,11 +150,11 @@ partial def hasLiftable : SExpr → Bool
   | .mapLit _ kvs => kvs.any fun (k, v) => hasLiftable k || hasLiftable v
   | _ => false
 
-/-- Literals, and names that the clause does not `set`: the same whenever
-    they are evaluated, so not bound to a name of their own. -/
-def stable (sets : List String) : SExpr → Bool
+/-- Literals: the same whenever they are evaluated, so not bound to a name
+    of their own. (Not names: a bare name may be a field of `Self` that an
+    alternative's method call changes, which no `set` in the clause shows.) -/
+def stable (_sets : List String) : SExpr → Bool
   | .int .. | .char .. | .char32 .. | .float .. => true
-  | .ident _ n => !sets.contains n
   | _ => false
 
 structure LiftSt where

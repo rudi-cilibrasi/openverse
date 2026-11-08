@@ -7,6 +7,14 @@ Tell(S:string):int =
     1
 pt := struct:
     X:int = 0
+counter := class:
+    var N:int = 0
+    Bump()<transacts>:int =
+        set N += 100
+        1
+    # a field read before a choice whose alternative changes it: read first
+    Try()<transacts>:int =
+        if (V := N + (Bump() | 2), V > 50) then V else -1
 Main():void =
     # VC's example: the leftmost choice slowest
     Xs := for{(1 | 2) + (10 | 20)}
@@ -42,3 +50,4 @@ Main():void =
     if (Y := M + ((set M = 5; 1) | 2), Y > 1) then Print("read before: {Y} {M}") else Print("none {M}")
     # the code before a choice, once and in order
     if (V := Tell("a") + Tell("b") * (1 | 2 | 3), V > 2) then Print("v {V}")
+    Print("field read first: {counter{}.Try()}")
