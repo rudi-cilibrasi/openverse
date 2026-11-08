@@ -195,6 +195,30 @@ partial def countArms (m : Nat → Bool) : Expr → Nat
   | .forE _ it f b => countArms m it + countArms m f + countArms m b
   | _ => 0
 
+/-- `e` with its `spawn`s (calls of the mark `m`, in `spawnSites`' order)
+    replaced: the `i`-th by `repl i callee args taskSlot`. -/
+partial def substSpawns (m : Nat) (repl : Nat → Nat → List Expr → Nat → Expr) (e : Expr) : Expr :=
+  (go e).run' 0
+where
+  go : Expr → StateM Nat Expr
+  | .call f es => do
+    match f == m, es with
+    | true, [.prim .mkArr [.seq (.call g gs) _, .seq (.local t) _]] =>
+      let i ← get
+      set (i + 1)
+      return repl i g gs t
+    | _, _ => return .call f (← es.mapM go)
+  | .assign i x => return .assign i (← go x)
+  | .ret x => return .ret (← go x)
+  | .print x => return .print (← go x)
+  | .loop x => return .loop (← go x)
+  | .seq a b => return .seq (← go a) (← go b)
+  | .prim p es => return .prim p (← es.mapM go)
+  | .heap op es => return .heap op (← es.mapM go)
+  | .ite c t x => return .ite (← go c) (← go t) (← go x)
+  | .forE i it f b => return .forE i (← go it) (← go f) (← go b)
+  | x => return x
+
 /-- Split `k` slot initialisations off the front of a function body
     (`initPrefixE`). -/
 def stripInits : Nat → Expr → Option (List Expr × Expr)

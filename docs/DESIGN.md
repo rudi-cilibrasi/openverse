@@ -312,7 +312,9 @@ defers active there, and returns from the function (or, in an arm, gives
 **Tasks.** A `spawn` gets a root: a suspends function `$spawnK(T, args…)`
 that the pass makes from the spawned call. It runs the call and fills the
 task `T` (a `task(t)`, below a non-generic `$taskBase` with a done flag).
-The spawn site calls `$spawnK$start(sched, $spawnK$new(sched, T, args…))`,
+The scheduler is its class's prototype, a literal any code can name, so
+an immediate function can spawn too. The spawn site calls
+`$spawnK$start(sched, $spawnK$new(sched, T, args…))`,
 which adds the root's frame to the scheduler's `Roots` and runs it up to
 its first suspension point.
 

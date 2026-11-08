@@ -1919,14 +1919,15 @@ partial def elabConc (ctx : Ctx) (p : Pos) (isSync : Bool) (arms : List SExpr) (
     the task, a `task(t)`. The lowering (`Suspend.lean`) turns the marker
     `$spawnMark(array{F(…), T})` into a new task root. -/
 partial def elabSpawn (ctx : Ctx) (p : Pos) (body : SExpr) : EM R := do
-  if !ctx.suspends then eerr p "spawn is supported only in a <suspends> function for now (#156)"
   if ctx.inDefer then eerr p "spawn in a defer is not supported (#156)"
   if ctx.canFail then eerr p "spawn cannot be in a failure context (a condition, a filter, or a <decides> call's arguments) (#156)"
   let some mark := ctx.sig? "$spawnMark" | eerr p "internal error: no spawn helper"
   let call := match body with
     | .block _ [e] => e
     | e => e
-  let r ← elabE { ctx with defers := [] } call none
+  -- (the call runs in the new task, which may wait, also when spawned from
+  -- an immediate function; its arguments may not)
+  let r ← elabE { ctx with defers := [], suspends := true } call none
   let isS : Nat → Bool := fun f => ctx.sigs.any fun s => s.idx == f && s.suspends
   let e := match r.e with
     | .seq (.ite (.prim .fail []) _ (.lit .void)) e => e
@@ -5388,7 +5389,12 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     let mut roots : Array (Nat × String × Nat) := #[]
     let mut spawnOf : Array (List Nat) := #[]   -- each user function's spawns' root numbers
     let nFns0 := fns.size
-    for (gi, gname, _) in user do
+    -- (immediate functions may spawn too: their spawns start the task on
+    -- the scheduler, which is its class's prototype, a literal)
+    let imm := (sigs.toList.filter fun s => !s.suspends && !s.isConst && s.tparams.isEmpty &&
+      !(Suspend.spawnSites spawnMark fns[s.idx]!.body).isEmpty).map fun s => (s.idx, s.name, 0)
+    let mut immSpawns : Array (Nat × List Nat) := #[]
+    for (gi, gname, _) in user ++ imm do
       let fn := fns[gi]!
       let Γ := slotTys[gi]!
       let mut mine : List Nat := []
@@ -5416,7 +5422,8 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
         slotTys := slotTys.push Γk
         roots := roots.push (nFns0 + k, s!"$spawn{k}", 0)
         mine := mine ++ [k]
-      spawnOf := spawnOf.push mine
+      if imm.any (·.1 == gi) then immSpawns := immSpawns.push (gi, mine)
+      else spawnOf := spawnOf.push mine
     let fsigs0 := fsigs0 ++ roots.toList.map fun (ri, _, _) => (slotTys[ri]!, VTy.void)
     fsigs := fsigs ++ roots.toList.map fun (ri, _, _) => (slotTys[ri]!, VTy.void)
     let lows := user ++ roots.toList
@@ -5437,6 +5444,16 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     -- root's trampoline and `start`, then the arms' functions
     let L := lows.length
     let trampOf (k : Nat) : Nat := nFns + 4 * L + 2 * k
+    -- the scheduler: its class's prototype
+    let some schedLit := Suspend.coreDefault Sorig [] 0 schedTy
+      | throw "internal error: no prototype for the scheduler"
+    -- an immediate function's spawns: start the task now
+    for (gi, ks) in immSpawns do
+      let fn := fns[gi]!
+      let body := Suspend.substSpawns spawnMark (fun i _ hs t =>
+        let k := (ks[i]?).getD 0
+        .call (trampOf k + 1) [schedLit, .call (nFns + 4 * (user.length + k)) (schedLit :: .local t :: hs)]) fn.body
+      fns := fns.set! gi { fn with writes := true, body }
     -- each `branch` (numbered across the functions, in order) gets a
     -- wrapper class `[pc, frame]` and its `tramp`, `start` and `stop`
     let mut branchOf : Array (List Nat) := #[]
@@ -5720,14 +5737,11 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       slotTys := slotTys.push [schedTy, frameTy j, .int, .int, .int, rootAny, .opt cellTy, cellTy, cellTy]
       fsigs := fsigs ++ [([schedTy, frameTy j], VTy.void)]
       -- (the prelude calls a function without arguments, `checkPrelude`)
-      let some schedInit := Suspend.coreDefault Sinf [] 0 schedTy
-        | throw "internal error: no initial value for the scheduler"
-      fns := fns.push { name := "$Start", arity := 0, nslots := 1, decides := false, writes := true,
-                        body := initPrefixE 0 [schedInit] (.seq
-                          (.assign 0 (.heap (.new schedTag) [Suspend.int 0, Suspend.int (-1), .lit (.logic false),
-                            .lit .none, .lit .none, .lit (.logic false)]))
-                          (.call runIdx [.local 0, .call (nFns + 4 * j) [.local 0]])) }
-      slotTys := slotTys.push [schedTy]
+      -- (the scheduler is its class's prototype, so that immediate code can
+      -- spawn on it)
+      fns := fns.push { name := "$Start", arity := 0, nslots := 0, decides := false, writes := true,
+                        body := .call runIdx [schedLit, .call (nFns + 4 * j) [schedLit]] }
+      slotTys := slotTys.push []
       fsigs := fsigs ++ [([], VTy.void)]
       mainCall := .call (runIdx + 1) []
   let mut main := mainSig.idx
