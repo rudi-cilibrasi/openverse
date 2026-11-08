@@ -2007,7 +2007,10 @@ partial def elabAppBase (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (b
       | [a] =>
         let r ← elabE ctx a (match exp with | some t => some (.arr t) | none => none)
         match r.ty with
-        | .arr (.arr t) => return ⟨.prim .flatten [r.e], .arr t⟩
+        | .arr (.arr t) =>
+          -- (through a typed temporary: an empty literal has no type of its own)
+          let tv ← fresh r.ty
+          return ⟨.seq (.assign tv r.e) (.prim .flatten [.local tv]), .arr t⟩
         | t => eerr p s!"Concatenate takes arrays, or an array of arrays, found {t.show}"
       | a :: rest =>
         let r0 ← elabE ctx a exp
@@ -3859,7 +3862,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   let isRatMarker : STop → Bool := fun
     | .const _ n _ _ => n == ratMarker || n == replaceAllMarker
     | _ => false
-  let usesReplaceAll := allTops0r.any fun | .const _ n _ _ => n == replaceAllMarker | _ => false
+  let usesReplaceAll := allTops0r.any (fun | .const _ n _ _ => n == replaceAllMarker | _ => false) || opts.entry.isSome
   let usesRat := allTops0r.any isRatMarker || opts.entry.isSome
   -- (a type of the program's own cannot take a built-in type's name)
   for t in allTops0r do
@@ -4953,7 +4956,7 @@ def stripOv (msg0 : String) : String := Id.run do
     is `K<constructor>`, `F$ov1` is `F` (names with `$` are never the user's). -/
 def elabProgram (allTops00 : List STop) (opts : Options := {}) : Except String Compiled :=
   (elabProgramCore allTops00 opts).mapError fun msg =>
-    (stripOv (msg.replace "$init" "<constructor>")).replace "::" "."
+    ((stripOv (msg.replace "$init" "<constructor>")).replace "::" ".").replace "$replaceAll" "ReplaceAll"
 
 /-- Parse and elaborate Verse source text. -/
 def compileChecked (src : String) (opts : Options := {}) : Except String Compiled := do

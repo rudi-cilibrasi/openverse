@@ -73,7 +73,7 @@ def ratTops : Except String (List STop) := parsePrelude ratPrelude ratNames
     occurrence of the pattern, left to right, replaced; an empty pattern
     changes nothing. -/
 def replaceAllPrelude : String := "
-replaceAll(A:[]t, P:[]t, R:[]t where t:subtype(comparable)):[]t =
+replaceAll(A:[]t, P:[]t, R:[]t where t:subtype(comparable))<computes>:[]t =
     var Out:[]t = array{}
     var I:int = 0
     if (P.Length = 0):
