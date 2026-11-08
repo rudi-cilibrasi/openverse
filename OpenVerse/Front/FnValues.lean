@@ -255,111 +255,6 @@ partial def _root_.OpenVerse.Front.STy.fnTypes : STy → List (List STy × List 
     (if es.contains "decides" && es.contains "suspends" then [] else [(ps, es, r)]) ++
       ps.flatMap STy.fnTypes ++ r.fnTypes
 
-/-- The types an expression writes. -/
-partial def _root_.OpenVerse.Front.SExpr.tys : SExpr → List STy
-  | .decl _ _ t _ e => t.toList ++ e.tys
-  | .construct _ _ ts args => ts ++ args.flatMap SExpr.tys
-  | .app _ f args _ => f.tys ++ args.flatMap SExpr.tys
-  | .member _ e _ | .query _ e | .neg _ e | .notE _ e | .optionLit _ e | .logicLit _ e | .loop _ e
-  | .gen _ _ _ e => e.tys
-  | .bin _ _ a b | .andE _ a b | .orE _ a b | .range _ a b => a.tys ++ b.tys
-  | .cmp _ a rest => a.tys ++ rest.flatMap (·.2.tys)
-  | .tuple _ es | .block _ es | .arrayLit _ es => es.flatMap SExpr.tys
-  | .ite _ cs t e => cs.flatMap SExpr.tys ++ t.tys ++ (e.map SExpr.tys).getD []
-  | .forE _ cs b => cs.flatMap SExpr.tys ++ b.tys
-  | .ret _ e => (e.map SExpr.tys).getD []
-  | .caseE _ e arms => e.tys ++ arms.flatMap fun (q, v) => (q.map SExpr.tys).getD [] ++ v.tys
-  | .set _ l _ e => l.tys ++ e.tys
-  | .mapLit _ kvs => kvs.flatMap fun (k, v) => k.tys ++ v.tys
-  | .structDef _ _ fs => fs.flatMap fun (_, t, d, _) => t :: (d.map SExpr.tys).getD []
-  | .refineDef _ _ t cs => t :: cs.flatMap SExpr.tys
-  | .str _ parts => parts.flatMap fun | .code e => e.tys | .text _ => []
-  | _ => []
-
-/-- The closed function types a definition writes: those that mention no
-    type parameter in scope (#214). -/
-partial def _root_.OpenVerse.Front.STop.closedFnTypes (scope : List String := []) :
-    STop → List (List STy × List String × STy)
-  | .fn _ _ ps tps _ r body =>
-    let sc := scope ++ tps.map (·.name)
-    ((ps.map (·.ty) ++ [r] ++ body.tys ++ ps.flatMap fun q => (q.default.map SExpr.tys).getD []).flatMap
-      STy.fnTypes).filter fun (qs, _, u) => !(qs ++ [u]).any fun t => sc.any t.hasName
-  | .const _ _ t e =>
-    -- (a parametric struct's type parameters are in scope in its fields)
-    let sc := scope ++ (match e with | .structDef _ tps _ => tps.map (·.name) | _ => [])
-    ((t.toList ++ e.tys).flatMap STy.fnTypes).filter fun (qs, _, u) => !(qs ++ [u]).any fun t => sc.any t.hasName
-  | .classDef _ _ tps _ parents _ fields _ methods =>
-    let sc := scope ++ tps.map (·.name)
-    (((parents ++ fields.flatMap fun (_, t, d, _) => t :: (d.map SExpr.tys).getD []).flatMap STy.fnTypes).filter
-      fun (qs, _, u) => !(qs ++ [u]).any fun t => sc.any t.hasName) ++ methods.flatMap (STop.closedFnTypes sc)
-
-/-- What a use of a value expects: a function's parameter types by name, a
-    method's (every class's of that name), a struct's or class's field type. -/
-structure Expect where
-  fnParams : String → Option (List STy) := fun _ => none
-  methodParams : String → List (List STy) := fun _ => []
-  fieldTy : String → String → Option STy := fun _ _ => none
-
-/-- The names an expression gives where a type is expected, with that type:
-    `F` in `X:t = F`, `G(F)` (`G`'s parameter type), `array{F}` where an
-    array is expected, a branch's or block's value (#214). -/
-partial def expectAt (t : STy) : SExpr → List (STy × String)
-  | .ident _ f => [(t, f)]
-  | .arrayLit _ es => match t with
-    | .arr u => es.flatMap (expectAt u)
-    | _ => []
-  | .optionLit _ x => match t with
-    | .opt u => expectAt u x
-    | _ => []
-  | .tuple _ es => match t with
-    | .tup us => (us.zip es).flatMap fun (u, e) => expectAt u e
-    | _ => []
-  | .block _ es => match es.getLast? with
-    | some e => expectAt t e
-    | none => []
-  | .ite _ _ a b => expectAt t a ++ (b.map (expectAt t)).getD []
-  | _ => []
-
-/-- The uses of names as values where a type is written for them (#214):
-    declarations, arguments of calls of functions and methods, fields of
-    constructions. -/
-partial def _root_.OpenVerse.Front.SExpr.uses (x : Expect) : SExpr → List (STy × String)
-  | .decl _ _ t _ e => (t.map (expectAt · e)).getD [] ++ e.uses x
-  | .app _ f args _ =>
-    let here := match f with
-      | .ident _ g => match x.fnParams g with
-        | some ps => (ps.zip args).flatMap fun (t, a) => expectAt t a
-        | none => []
-      | .member _ _ m => (x.methodParams m).flatMap fun ps => (ps.zip args).flatMap fun (t, a) => expectAt t a
-      | _ => []
-    here ++ f.uses x ++ args.flatMap (SExpr.uses x)
-  | .construct _ c _ args => args.flatMap fun a => match a with
-    | .decl _ fld none _ e => ((x.fieldTy c fld).map (expectAt · e)).getD [] ++ e.uses x
-    | a => a.uses x
-  | .member _ e _ | .query _ e | .neg _ e | .notE _ e | .optionLit _ e | .logicLit _ e | .loop _ e
-  | .gen _ _ _ e => e.uses x
-  | .bin _ _ a b | .andE _ a b | .orE _ a b | .range _ a b => a.uses x ++ b.uses x
-  | .cmp _ a rest => a.uses x ++ rest.flatMap (·.2.uses x)
-  | .tuple _ es | .block _ es | .arrayLit _ es => es.flatMap (SExpr.uses x)
-  | .ite _ cs t e => cs.flatMap (SExpr.uses x) ++ t.uses x ++ (e.map (SExpr.uses x)).getD []
-  | .forE _ cs b => cs.flatMap (SExpr.uses x) ++ b.uses x
-  | .ret _ e => (e.map (SExpr.uses x)).getD []
-  | .caseE _ e arms => e.uses x ++ arms.flatMap fun (q, v) => (q.map (SExpr.uses x)).getD [] ++ v.uses x
-  | .set _ l _ e => l.uses x ++ e.uses x
-  | .mapLit _ kvs => kvs.flatMap fun (k, v) => k.uses x ++ v.uses x
-  | .structDef _ _ fs => fs.flatMap fun (_, t, d, _) => (d.map fun e => expectAt t e ++ e.uses x).getD []
-  | .str _ parts => parts.flatMap fun | .code e => e.uses x | .text _ => []
-  | _ => []
-
-partial def _root_.OpenVerse.Front.STop.uses (x : Expect) : STop → List (STy × String)
-  | .fn _ _ ps _ _ r body =>
-    -- (the body's value is the result)
-    expectAt r body ++ body.uses x ++ ps.flatMap fun q => (q.default.map (SExpr.uses x)).getD []
-  | .const _ _ t e => (t.map (expectAt · e)).getD [] ++ e.uses x
-  | .classDef _ _ _ _ _ _ fields _ methods =>
-    fields.flatMap (fun (_, t, d, _) => (d.map fun e => expectAt t e ++ e.uses x).getD []) ++
-      methods.flatMap (STop.uses x)
-
 /-- Whether a type is comparable whatever the classes: built from the
     primitive comparable types (a generic function's `subtype(comparable)`
     parameter is matched only to such, #214). -/
@@ -410,7 +305,8 @@ where
     that name may be meant, and then the class is never used). Generic and
     overloaded functions, functions with named parameters and hidden ones
     get none (the elaborator explains why such a function is no value). -/
-def desugar (tops : List STop) (extra : List STop := []) : List STop := Id.run do
+def desugar (tops : List STop) (extra : List STop := []) (requests : List (String × STy) := []) :
+    List STop := Id.run do
   -- (each class's fields, its own and its parents', in its methods: a
   -- field of that name is meant there)
   let defs : List (String × List STy × List String × List String) := tops.filterMap fun
@@ -504,41 +400,24 @@ def desugar (tops : List STop) (extra : List STop := []) : List STop := Id.run d
           else none
         | _ => none
       | _ => []
-  -- (#214) the closed function types written, and the functions used as
-  -- values that fit one other than at their own types: by variance, or a
-  -- generic one at an instance
-  let written := ((tops ++ extra).flatMap (STop.closedFnTypes [])).foldl
-    (fun acc w => if acc.any (reprStr · == reprStr w) then acc else acc ++ [w]) []
   let gvalues : List (Pos × String × List SParam × List TParam × List String × STy) := tops.filterMap fun
     | .fn p n ps tps effs r _ =>
       if named.contains n && !tps.isEmpty && ps.all (!·.named) && !n.contains '$' &&
           (fnNames.filter (· == n)).length == 1 then some (p, n, ps, tps, effs, r)
       else none
     | _ => none
-  -- (#214) the uses with a written closed function type expected: a value
-  -- class is made only for a function so used, not for every function and
-  -- type it fits (that would make classes, and dispatch, without end)
-  let expect : Expect := {
-    fnParams := fun g => tops.findSome? fun
-      | .fn _ n ps _ _ _ _ => if n == g then some (ps.map (·.ty)) else none
+  -- (#214) the function types each function is asked for at: where the
+  -- elaborator wanted it as a value and no class of its fitted
+  let requested (n : String) : List (List STy × List String × STy) := requests.filterMap fun (f, t) =>
+    if f == n then match t with
+      | .fn qs es u => some (qs, es, u)
       | _ => none
-    methodParams := fun m => tops.flatMap fun
-      | .classDef _ _ _ _ _ _ _ _ ms => ms.filterMap fun
-        | .fn _ m' ps _ _ _ _ => if m' == m then some (ps.map (·.ty)) else none
-        | _ => none
-      | _ => []
-    fieldTy := fun c f => tops.findSome? fun
-      | .classDef _ n _ _ _ _ fs _ _ => if n == c then (fs.find? (·.1 == f)).map (·.2.1) else none
-      | .const _ n _ (.structDef _ _ fs) => if n == c then (fs.find? (·.1 == f)).map (·.2.1) else none
-      | _ => none }
-  let usedAt : List (STy × String) := (tops ++ extra).flatMap (STop.uses expect)
-  let isUse (n : String) (w : List STy × List String × STy) : Bool :=
-    let (qs, es, u) := w
-    usedAt.any fun (t, f) => f == n && reprStr t == reprStr (STy.fn qs es u)
+    else none
   let rec ancOf (fuel : Nat) (c : String) : List String :=
     match fuel, defs.find? (·.1 == c) with
     | fuel + 1, some (_, ps, _, _) =>
-      let up := ps.filterMap fun | .name q => some q | _ => none
+      -- (through generic parents too: subtyping is by name, #214)
+      let up := ps.filterMap parentName
       up ++ up.flatMap (ancOf fuel)
     | _, _ => []
   let anc := ancOf (defs.length + 1)
@@ -575,8 +454,8 @@ def desugar (tops : List STop) (extra : List STop := []) : List STop := Id.run d
     -- (its own shape first: the value's type when nothing else gives one)
     let fits := own :: fits.filter (· != own)
     out := out ++ [.classDef p s!"{n}$fn" [] [] (fits.map fun s => STy.app s.name targs) false [] [] methods]
-  -- (#214) a value class per written closed function type that a value
-  -- fits other than at its own types, `F$fn$k`, implementing that type's
+  -- (#214) a value class per closed function type a value is asked for at
+  -- and fits other than at its own types, `F$fn$k`, implementing that type's
   -- shape (and those with more effects) at the type's own arguments
   let variant (p : Pos) (n : String) (own : Shape) (k : Nat) (qs : List STy) (es : List String) (u : STy) :
       Option STop :=
@@ -591,7 +470,7 @@ def desugar (tops : List STop) (extra : List STop := []) : List STop := Id.run d
   for (p, n, ps, effs, r) in values do
     let own := shapeOf ps.length effs
     let mut k := 0
-    for (qs, es, u) in written.filter (isUse n) do
+    for (qs, es, u) in requested n do
       let exact := qs.length == ps.length && ((ps.map (·.ty)).zip qs).all (fun (a, b) => reprStr a == reprStr b) &&
         reprStr r == reprStr u
       -- (contravariant parameters, a covariant result)
@@ -604,7 +483,7 @@ def desugar (tops : List STop) (extra : List STop := []) : List STop := Id.run d
     let own := shapeOf ps.length effs
     let tpn := tps.map (·.name)
     let mut k := 0
-    for (qs, es, u) in written.filter (isUse n) do
+    for (qs, es, u) in requested n do
       if qs.length != ps.length then continue
       let θ := ((ps.map (·.ty) ++ [r]).zip (qs ++ [u])).foldlM (fun θ (a, b) => matchTy tpn θ a b) []
       if let some θ := θ then

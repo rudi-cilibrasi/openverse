@@ -319,18 +319,19 @@ flowchart LR
   is made only when the class's type parameters each occur once in the
   shape's type arguments, as whole types, so that it is always a valid
   class (#53, #171).
-- **Variance and generic functions, where a closed type is written**
-  (#214). The pass also collects the closed function types the program
-  writes, and the uses of functions as values where such a type is
-  written for them (a declared type, a parameter's or field's type, the
-  result type). For a value so used that fits the type by variance
-  (contravariant parameters and a covariant result, through `int` below
-  `rational` and non-generic class subtyping only, the conversions the
-  elaborator makes at a call), or a generic function that matches it, it
-  makes a further class `F$fn$k`
-  implementing that type's shape at the type's own arguments, whose
-  `$call…` calls `F`, converting. A function named as a value where such
-  a type is expected is an object of that class.
+- **Variance and generic functions, by request** (#214). The pass cannot
+  tell every place the elaborator expects a function type, so the
+  elaborator asks. Where it expects a closed function type that a function
+  named as a value fits by variance (contravariant parameters and a
+  covariant result, through `int` below `rational` and class subtyping,
+  the conversions it makes at a call), or a generic function matches, and
+  no class of the function's gives that type, it records the pair and puts
+  a placeholder there. A program with such requests is elaborated again
+  (`elabProgram`), with a further class `F$fn$k` made for each, which
+  implements that type's shape at the type's own arguments and whose
+  `$call…` calls `F`, converting. A program with a placeholder left is
+  never given out. Only programs that need such a class are elaborated
+  twice.
 - **The cost of that choice.** A class implements an interface at one
   instantiation, so a value of one function type does not convert to
   another by variance (that would need a wrapper object made at the

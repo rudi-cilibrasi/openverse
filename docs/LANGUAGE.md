@@ -149,16 +149,12 @@ Main():void =
 - A function fits a function type with at least its effects: a function
   without `<decides>` is also a `type{_(:int)<decides>:int}` (fewer
   effects make a subtype). Its parameter and result types must match,
-  except that a function is also a value of a closed function type written
-  in the program that it fits by variance (#214): its parameters may be
+  except that a function named where a closed function type is expected
+  is a value of it if it fits it by variance (#214): its parameters may be
   above the type's (`Describe(A:animal)` is a `type{_(:dog):string}`) and
   its result below (`Count():int` is a `type{_():rational}`), with `int`
-  below `rational` and a class below the non-generic classes above it.
-  The type must be written where the function is given: as a declared
-  type (`F:type{_(:dog):string} = Describe`, also of an array or option
-  of such), a parameter's type (`OnDog(Describe, D)`), a field's type or
-  the function's result type. A value of one function type does not
-  convert to another by variance.
+  below `rational` and a class below the classes above it. A value of one
+  function type does not convert to another by variance.
 - Function values are not comparable and have no `ToString`.
 - A method as a value, `C.Add` (or `Add` in a method of the class), holds
   its receiver: calling it calls `C.Add`, the receiver's class's
@@ -167,11 +163,11 @@ Main():void =
   is the value's (#219), or, where a function type is expected, that of
   the class above that declares or overrides it with that type.
 - A generic function is a value where a closed function type that is an
-  instance of its type is expected and written in the same way
-  (`F:int->int = Identity`, or an `int->int` parameter); a
-  `subtype(comparable)` type parameter only at a type built from the
-  primitive comparable types. Not where the type mentions type parameters
-  (`Map(Xs, Identity)` with `Map` over `type{_(:t):u}`).
+  instance of its type is expected (`F:int->int = Identity`, or an
+  `int->int` parameter); a `subtype(comparable)` type parameter only at a
+  type built from the primitive comparable types. Not where the type
+  mentions type parameters (`Map(Xs, Identity)` with `Map` over
+  `type{_(:t):u}`).
 - Generic methods, overloaded functions and methods and ones with named
   parameters cannot be used as values, nor can a method whose type repeats
   or nests its class's type parameters (`box(t)`'s `Same(X:t):t`: that

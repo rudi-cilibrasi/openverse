@@ -1,4 +1,4 @@
-# expect: 'Id' is generic: a generic function is a value only at a closed function type that is an instance of its type
+# expect: 'Id' is generic: a generic function is a value only where a closed function type that is an instance of its type is expected
 # (with no type expected, or a type over type parameters, it has no instance)
 Id(X:t where t:type):t = X
 Map(Xs:[]t, F:type{_(:t):u} where t:type, u:type):[]u = for (X : Xs) { F(X) }
