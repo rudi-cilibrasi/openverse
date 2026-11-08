@@ -414,6 +414,14 @@ and journals every write made in a condition (for rollback). So:
   The callee is resumed and cancelled through `resumeOwn(frame, sched)`
   and `cancelOwn(frame, sched)`, which read its parameters from its frame,
   as the caller has no slots of the callee's (refined) parameter types.
+  A generic override (`ipair(b) := class(pair(int, b))`, or one with a
+  type parameter of its own) keeps its frame in an option field like any
+  generic callee's, at the type arguments the dispatch gives: the
+  receiver's, refined by the pins, matched against its parameters as the
+  checker does. It is resumed and cancelled like any generic callee's;
+  arriving and taking the result go through `arriveVia`/`takeVia` again,
+  the latter passing a value of the expected type that the callee's `take`
+  gives back were the frame missing (it unwraps the frame in a condition).
 - A refined call that does not suspend (an immediate method, or a #157
   field accessor) has the same problem once its receiver's slot is a frame
   field. Before the slots become fields, each such test gets a helper of
