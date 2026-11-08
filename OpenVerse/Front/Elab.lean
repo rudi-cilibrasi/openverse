@@ -409,8 +409,13 @@ def TyEnv.argsAt (env : TyEnv) (T : String) (targs : List Ty) (D : String) : Lis
 def TyEnv.fieldsSeen (env : TyEnv) (T : String) (targs : List Ty) (d : String) :
     List (String × Ty × Option SExpr) :=
   let chain := ((env.supers d).filter fun x => !(env.info x).isIface).reverse
+  -- (a field an interface declares as the interface gives it, as in the
+  -- class table)
+  let ifaceSrc (f : String) : Option String :=
+    let has := (env.supers d).filter fun x => (env.info x).isIface && (env.fields x).any (·.1 == f)
+    has.find? fun x => !has.any fun y => y != x && env.isSub x y
   (env.fields d).map fun (f, t, dflt) =>
-    match chain.find? fun D => (env.fields D).any (·.1 == f) with
+    match (ifaceSrc f).orElse fun _ => chain.find? fun D => (env.fields D).any (·.1 == f) with
     | some D =>
       let tD := (((env.fields D).find? (·.1 == f)).map (·.2.1)).getD t
       let σ := (((env.sparams.lookup D).getD []).map (·.1)).zip (env.argsAt T targs D)
