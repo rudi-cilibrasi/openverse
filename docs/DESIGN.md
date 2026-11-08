@@ -308,7 +308,10 @@ flowchart LR
 - **Over-approximation.** The pass makes a method's value class whenever
   `X.M` is written outside a call for some `X` and a class declares `M`,
   as it cannot tell a method from a field, or from an array's `Length`.
-  An unused value class changes the bytecode, not the behaviour. The class
+  An unused value class changes the bytecode, not the behaviour: a call
+  through a function type may dispatch to it, so a value class's `$call…`
+  demands no comparable type argument of the caller, as its type arguments
+  are its receiver's, checked when the value was made (#218). The class
   is made only when the class's type parameters each occur once in the
   shape's type arguments, as whole types, so that it is always a valid
   class (#53, #171).

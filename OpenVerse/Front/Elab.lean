@@ -3132,7 +3132,12 @@ partial def elabGenericCall (ctx : Ctx) (p : Pos) (s : Sig) (args : List SExpr) 
   for (v, cmp) in s.tparams do
     let some t := σ.lookup v
       | eerr p s!"cannot infer type parameter {v} of {s.name} from the arguments of this call"
-    if cmp && !t.comparable ctx.types then eerr p (notComparable ctx.types t s!"type parameter {v} of {s.name}")
+    -- (not of a value class's `$call…`, #218: the class's type arguments
+    -- are its receiver's, fixed, and checked, when the value was made; a
+    -- call through a function type only dispatches to it)
+    let valueCall := !(s.name.splitOn ".$call").tail.isEmpty
+    if cmp && !valueCall && !t.comparable ctx.types then
+      eerr p (notComparable ctx.types t s!"type parameter {v} of {s.name}")
     targs := targs.push t
   -- the hidden arguments: a value of each type argument
   let dicts ← targs.toList.mapM (witness ctx.types ctx.dictBase ctx.dictVars)
