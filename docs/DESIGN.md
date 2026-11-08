@@ -538,6 +538,15 @@ position in every class below the one that declares it.
   reached the same way in a class that fixes the interface's type
   arguments: through an accessor pair `get`/`set` generated for the class
   and the field (`TyEnv.fieldAcc`), called under the refinement (#157).
+  So is a field that such a class types otherwise than a class or
+  interface above it (`TyEnv.fieldTyAgrees`), as two unrelated interfaces
+  may declare it, `x(t)`'s `F:t` and `y(t)`'s `F:int`, and the class table
+  takes the type of the first one the class lists (`TyEnv.fieldSrc`): in
+  `class(x(int), y(int))` it is the type argument, pinned to `int`, while
+  code over `y(t)` reads an `int`. A concrete class with a class below it
+  that types one of its fields otherwise gets accessors for it too, whose
+  receivers are of exactly its class, as a temporary of its type would
+  also hold the classes below it (#205).
   Only the classes at or below one whose implementation fixes arguments
   its declaring class leaves open record pins (`TyEnv.pinned`): every
   object agrees with its class's pins, and a placeholder of another class
@@ -552,7 +561,7 @@ position in every class below the one that declares it.
   the same. A read of an interface's field goes straight to it when every
   concrete class below the interface has it at one place (which need not
   be its place in the interface: a class can list another parent first),
-  and tests the class first otherwise. So an interface's placeholder puts
+  with one type (#205), and tests the class first otherwise. So an interface's placeholder puts
   each of its fields, inherited ones too, where every concrete class below
   it has it, when they agree, and the others after those, with padding
   between. A read through an interface above it goes straight to a field

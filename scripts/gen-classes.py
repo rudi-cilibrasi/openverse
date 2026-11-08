@@ -20,6 +20,8 @@ A program combines
     one-line and braced bodies, <decides>, overloads with disjoint parameters,
     delegation to an earlier overload or to an ancestor's constructor;
   - a stand-alone qualified (i:)M module;
+  - a field two parametric interfaces declare, as the type parameter and as
+    int, in classes that fix it to int (#205);
   - a parametric hierarchy pb(t) with renaming, fixing and extending subclasses,
     a parametric interface, generic and fixed constructors, generic methods with
     overrides, generic functions;
@@ -1256,6 +1258,55 @@ class Gen:
             M.append('Print("qe {%s{}.%s()} {%s{}.(%s:)%s()}")' % (qe, m, qf, qa, m))
         self.main += M
 
+    # --- a field two parametric interfaces declare (#205)
+
+    def gen_shared_field(self):
+        """A var field declared as the type parameter by one interface and as
+        int by another, in classes that fix the parameter to int (listed in
+        either order), and in a generic class below the second whose subclass
+        also implements the first: read and set through each type."""
+        L, M = [], []
+        sx, sy, sb = self.fresh('sx'), self.fresh('sy'), self.fresh('sb')
+        f = self.fresh('SF')
+        L.append('%s(t:type) := interface:' % sx)
+        L.append('    var %s:t' % f)
+        L.append('%s(t:type) := interface:' % sy)
+        L.append('    var %s:int' % f)
+        sc = self.fresh('sc')
+        L.append('%s := class(%s):' % (sc, '%s(int), %s(int)' % ((sx, sy) if chance(0.5) else (sy, sx))))
+        L.append('    %s:int = %s' % (self.fresh('SG'), lit()))
+        L.append('%s(t:type) := class(%s(t)):' % (sb, sy))
+        L.append('    %s:int = %s' % (self.fresh('SK'), lit()))
+        sd = self.fresh('sd')
+        L.append('%s := class(%s(int), %s(int)):' % (sd, sb, sx))
+        L.append('    %s:int = %s' % (self.fresh('SL'), lit()))
+        gx, gy, gb = self.fresh('SFx'), self.fresh('SFy'), self.fresh('SFb')
+        L.append('%s(N:%s(t) where t:type):t = N.%s' % (gx, sx, f))
+        L.append('%s(N:%s(t) where t:type):int = N.%s' % (gy, sy, f))
+        L.append('%s(N:%s(t) where t:type):int = N.%s' % (gb, sb, f))
+        tx, ty, tb = self.fresh('SSx'), self.fresh('SSy'), self.fresh('SSb')
+        for (fn, iface, vt) in ((tx, sx, 't'), (ty, sy, 'int'), (tb, sb, 'int')):
+            L.append('%s(N:%s(t), V:%s where t:type):void =' % (fn, iface, vt))
+            L.append('    set N.%s = V' % f)
+        self.out += L
+        c, d = tmpname('SC'), tmpname('SD')
+        M.append('%s := %s{%s := %s}' % (c, sc, f, lit()))
+        M.append('%s := %s{%s := %s}' % (d, sd, f, lit()))
+        for _ in range(R.randint(2, 6)):
+            k = R.randrange(4)
+            o = R.choice([c, d])
+            if k == 0:
+                M.append('Print("sf {%s(%s)} {%s(%s)} {%s.%s}")' % (gx, o, gy, o, o, f))
+            elif k == 1:
+                M.append('Print("sb {%s(%s)} {%s(%s{%s := %s})}")' % (gb, d, gb, sb + '(string)', f, lit()))
+            elif k == 2:
+                fn = R.choice([tx, ty] + ([tb] if o == d else []))
+                M.append('%s(%s, %s)' % (fn, o, lit(10, 99)))
+            else:
+                M.append('set %s.%s = %s' % (o, f, lit(100, 199)))
+        M.append('Print("sf end {%s.%s} {%s.%s}")' % (c, f, d, f))
+        self.main += M
+
     # --- the parametric hierarchy
 
     def gen_parametric(self):
@@ -1737,6 +1788,8 @@ class Gen:
                 self.out += k['lines']
         if chance(0.4):
             self.gen_qualified()
+        if chance(0.3):
+            self.gen_shared_field()
         if chance(0.5):
             self.gen_parametric()
         if chance(0.5):
