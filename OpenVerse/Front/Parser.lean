@@ -191,7 +191,7 @@ partial def parseType : PM STy := do
         -- (a `(` starting a line starts the next item, such as `(i:)M`)
         bump
         -- (`event()`: an event without a value, `event(void)`, #156)
-        if (← peekT).isSym ")" && n == "event" then
+        if (← peekT).isSym ")" && (n == "event" || n == "sticky_event") then
           bump; return .app n [.name "void"]
         let mut ts := #[← parseType]
         while (← peekT).isSym "," do bump; ts := ts.push (← parseType)
@@ -361,7 +361,7 @@ partial def parsePostfix (stop : Nat) : PM SExpr := do
               bump
               -- (`event(){}`: an event without a value, `event(void)`, #156)
               let mut ts : Array STy := #[]
-              if (← peekT).isSym ")" && n == "event" then
+              if (← peekT).isSym ")" && (n == "event" || n == "sticky_event") then
                 ts := #[.name "void"]
               else
                 ts := #[← parseType]

@@ -738,9 +738,9 @@ Main()<suspends>:void =
   `t` is `F`'s result type, and `T.Await()` waits for the task to end and
   gives its result (at once if it has ended). A task is not tied to the
   code that spawned it: it runs until it ends or the program does. `spawn`
-  is allowed in any function that is not generic, immediate ones too (not
-  yet in a field's default); without a suspends `Main`, a task runs only up
-  to its first wait.
+  is allowed in any function that is not generic, immediate ones too, and
+  in a field's default (a task per construction that omits the field);
+  without a suspends `Main`, a task runs only up to its first wait.
 
   ```verse
   Fetch(Name:string, D:float)<suspends>:string =
@@ -760,8 +760,10 @@ Main()<suspends>:void =
   scheduler's order (`Main`, then tasks in the order they were started,
   arms in source order), not in the order they began waiting. A `Signal` with no one waiting is lost, and `Signal`
   itself never waits. `event()` is an event without a value (`event(void)`),
-  with `E.Signal()` and `E.Await()`. `sticky_event` and
-  `subscribable_event` are not supported.
+  with `E.Signal()` and `E.Await()`. A `sticky_event(t)` (or
+  `sticky_event()`) is an event that keeps its last signal: an `Await`
+  after a `Signal` gives that value at once. `subscribable_event` is not
+  supported (openverse has no function values).
 - **Arms.** Arms share the enclosing function's variables. An arm is a
   scope of its own, which `break` cannot leave. A `return` in an arm
   returns from the enclosing function: the arm's defers run, then the other
@@ -828,6 +830,6 @@ arithmetic on rationals (see [rational](#rational)), float functions beyond thos
 the class features listed under [Classes](#classes), struct methods (Verse structs have none; classes do),
 `weak_map`, module paths `using{/Verse.org/…}` (accepted and ignored), overloading beyond [Overloading](#overloading), nested
 functions, concurrency beyond [Concurrency](#concurrency) (`spawn`
-in generic functions or field defaults, cancelling a task; #156), and effect checking
+in generic functions, `subscribable_event`, cancelling a task; #156), and effect checking
 other than `<decides>` and the heap effects (`<converges>` is accepted and
 ignored).
