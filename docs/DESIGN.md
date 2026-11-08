@@ -336,7 +336,12 @@ wrapper `[pc, frame]`. The wrapper's trampoline resumes the arm unless the
 function stopped it. Every exit of the function, and its cancel function,
 stops its branches: it marks each wrapper done (through a test of its
 class, kept in a frame field) and cancels each arm still pending. A frame
-reused for another call so never shares an arm with an old wrapper. A
+reused for another call so never shares an arm with an old wrapper. They
+are stopped last started first: each branch and `rush` arm records a
+start number (a counter in the frame) when it starts, and the stop is a
+loop that picks the highest recorded number, stops that one and clears
+it (#187), as a nested branch starts only when its parent's code reaches
+it. A
 `rush` is a `race` whose arms each get such a wrapper: when the first arm
 ends, the others that are pending are registered as roots (not run again
 at once) instead of cancelled.
