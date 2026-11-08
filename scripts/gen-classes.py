@@ -22,6 +22,7 @@ A program combines
   - a stand-alone qualified (i:)M module;
   - a field two parametric interfaces declare, as the type parameter and as
     int, in classes that fix it to int (#205);
+  - function values: functions passed, stored and called (#210);
   - a parametric hierarchy pb(t) with renaming, fixing and extending subclasses,
     a parametric interface, generic and fixed constructors, generic methods with
     overrides, generic functions;
@@ -1331,6 +1332,89 @@ class Gen:
             else:
                 M.append('set %s.%s = %s' % (o, f, lit(100, 199)))
         M.append('Print("sf end {%s.%s} {%s.%s}")' % (c, f, d, f))
+    # --- function values (#210)
+
+    def gen_fn_values(self):
+        """Top-level functions passed, stored and called as values: a generic
+        map over a function type (called under the refinement), a <decides>
+        function type that also takes plain functions, a function-typed
+        field, an array and an option of functions."""
+        L, M = [], []
+        fs = []
+        for _ in range(R.randint(2, 4)):
+            f = self.fresh('Fv')
+            k = R.randrange(3)
+            if k == 0:
+                L.append('%s(X:int):int = X * %s + %s' % (f, lit(1, 3), lit()))
+            elif k == 1:
+                L.append('%s(X:int):int = X - %s' % (f, lit()))
+            else:
+                L.append('%s(X:int):int = if (X > %s) then X else %s' % (f, lit(), lit()))
+            fs.append(f)
+        d = self.fresh('Fd')
+        L.append('%s(X:int)<decides>:int =' % d)
+        L.append('    X > %s' % lit(0, 5))
+        L.append('    X + 100')
+        sh = self.fresh('Fshow')
+        L.append('%s(X:int):string = "s{X}"' % sh)
+        mp, fl, tw = self.fresh('FMap'), self.fresh('FKeep'), self.fresh('FTwice')
+        L.append('%s(Xs:[]t, F:type{_(:t):u} where t:type, u:type):[]u = for (X : Xs) { F(X) }' % mp)
+        L.append('%s(Xs:[]int, F:type{_(:int)<decides>:int}):[]int = for (X : Xs, Y := F[X]) { Y }' % fl)
+        L.append('%s(F:int->int, X:int):int = F(F(X))' % tw)
+        pu = self.fresh('Fpure')
+        L.append('%s(X:int)<computes>:int = X + %s' % (pu, lit()))
+        hc = self.fresh('fholder')
+        L.append('%s := class:' % hc)
+        L.append('    var Op:int->int = %s' % R.choice(fs))
+        L.append('    Run(X:int):int = Op(X)')
+        self.out += L
+        xs = 'array{%s}' % ', '.join(lit() for _ in range(R.randint(1, 4)))
+        for _ in range(R.randint(2, 6)):
+            k = R.randrange(9)
+            if k == 6:
+                # (effect subtyping between variables)
+                a, b, c = tmpname('FP'), tmpname('FR'), tmpname('FQ')
+                M.append('%s:type{_(:int)<computes>:int} = %s' % (a, pu))
+                M.append('%s:type{_(:int)<reads>:int} = %s' % (b, a))
+                M.append('%s:type{_(:int)<decides>:int} = %s' % (c, b))
+                M.append('if (V := %s[%s]) then Print("fe {%s(1)} {V}")' % (c, lit(), a))
+                continue
+            if k == 7:
+                # (a var holding a function, rolled back)
+                v = tmpname('FV')
+                M.append('var %s:int->int = %s' % (v, R.choice(fs)))
+                M.append('if (set %s = %s, %s[%s]) then Print("fs") else Print("fr")' % (v, R.choice(fs + [pu]), d, lit(0, 6)))
+                M.append('Print("fv {%s(%s)}")' % (v, lit()))
+                continue
+            if k == 8:
+                # (options and maps of functions, joined whatever the order)
+                o, m = tmpname('FO'), tmpname('FM')
+                M.append('%s:?(int->int) = option{%s}' % (o, R.choice(fs)))
+                M.append('if (G := %s?) then Print("fo {G(%s)}")' % (o, lit()))
+                ks = R.sample(fs + [pu], 2)
+                M.append('%s := map{1 => %s, 2 => %s}' % (m, ks[0], ks[1]))
+                M.append('if (G := %s[%s]) then Print("fq {G(%s)}")' % (m, R.choice(['1', '2']), lit()))
+                continue
+            if k == 0:
+                y = tmpname('FY')
+                M.append('for (%s : %s(%s, %s)) { Print("fm {%s}") }' % (y, mp, xs, R.choice(fs), y))
+            elif k == 1:
+                y = tmpname('FY')
+                M.append('for (%s : %s(%s, %s)) { Print(%s) }' % (y, mp, xs, sh, y))
+            elif k == 2:
+                y = tmpname('FY')
+                M.append('for (%s : %s(%s, %s)) { Print("fk {%s}") }' % (y, fl, xs, R.choice([d] + fs), y))
+            elif k == 3:
+                M.append('Print("ft {%s(%s, %s)}")' % (tw, R.choice(fs), lit()))
+            elif k == 4:
+                h = tmpname('FH')
+                M.append('%s := %s{}' % (h, hc))
+                M.append('set %s.Op = %s' % (h, R.choice(fs)))
+                M.append('Print("fh {%s.Run(%s)} {%s.Op(%s)}")' % (h, lit(), h, lit()))
+            else:
+                a, y = tmpname('FA'), tmpname('FY')
+                M.append('%s:[](int->int) = array{%s}' % (a, ', '.join(R.sample(fs, min(len(fs), 2)))))
+                M.append('for (%s : %s) { Print("fa {%s(%s)}") }' % (y, a, y, lit()))
         self.main += M
 
     # --- the parametric hierarchy
@@ -1816,6 +1900,8 @@ class Gen:
             self.gen_qualified()
         if chance(0.3):
             self.gen_shared_field()
+        if chance(0.3):
+            self.gen_fn_values()
         if chance(0.5):
             self.gen_parametric()
         if chance(0.5):

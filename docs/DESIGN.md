@@ -9,7 +9,7 @@ against it. This page records the decisions behind the shape of the code.
 **Contents**
 
 - Semantics: [Two languages, one semantics](#two-languages-one-semantics) · [Failure and rollback](#failure-and-rollback) · [Fuel](#fuel)
-- Front end: [Translation validation](#translation-validation-instead-of-a-verified-front-end) · [Modules](#modules-a-renaming-before-elaboration) · [Floats](#floats-canonical-bits) · [Rationals](#rationals-helpers-written-in-verse) · [Generic functions](#generic-functions-polymorphic-verse-core) · [Concurrency](#concurrency-suspends-functions-as-frames)
+- Front end: [Translation validation](#translation-validation-instead-of-a-verified-front-end) · [Modules](#modules-a-renaming-before-elaboration) · [Floats](#floats-canonical-bits) · [Rationals](#rationals-helpers-written-in-verse) · [Generic functions](#generic-functions-polymorphic-verse-core) · [Function values](#function-values-hidden-interfaces-and-classes) · [Concurrency](#concurrency-suspends-functions-as-frames)
 - Classes and the heap: [Classes as references](#classes-as-references) · [Typing the heap](#typing-the-heap) · [Typed defaults](#why-every-slot-starts-with-a-typed-default)
 - C runtime: [The binary format and the loader](#the-binary-format-and-the-loader) · [Two semantics, one seam](#two-semantics-one-seam) · [Objects in the C runtime](#objects-in-the-c-runtime)
 - [Readings of the Book](#readings-of-the-book)
@@ -256,6 +256,47 @@ instantiation lets inference take different paths at different types (at
 `void`, for example). Monomorphising the generically checked body is sound,
 but checks each instance separately, multiplies code, and cannot express
 polymorphic recursion.
+
+## Function values: hidden interfaces and classes
+
+Verse Core is first-order: it has no function values. The front end
+defunctionalises them before elaboration (`FnValues.lean`, #210), so the
+semantics, the proofs, the format and the C runtime are unchanged.
+
+```mermaid
+flowchart LR
+  T["type{_(:int)#lt;decides#gt;:int}"] -->|resolveTy| S["$fn1:decides(int, int)"]
+  P["type{_(:int):int}"] -->|resolveTy| Q["$fn1(int, int)"]
+  Q -->|extends| S
+  D["Double$fn"] -->|implements| Q
+  D -->|implements| S
+```
+
+- **A function type is an instance of a shape.** The shape is the hidden
+  generic interface of its arity and effects, `$fnK:effects`, with one type
+  parameter per parameter and one for the result. Its abstract method is
+  `$call:effects`. A shape extends each shape with more effects of the
+  same arity, at the same type arguments. So a function type with fewer
+  effects is a subtype, as the Book has it, through ordinary interface
+  subtyping.
+- **A function used as a value is an object of a hidden class.** Each
+  top-level function named outside a call's head gets `F$fn`. That class
+  implements every shape of the program it fits, at `F`'s own parameter and
+  result types, and each `$call…` calls `F`. A value elaborates as
+  `F$fn{}`, typed as the function type expected, else as its own.
+- **A call of a value is a method call** of its shape's `$call…`. It is
+  dispatched like any interface method, by the class's tag.
+- **Generic code comes free.** A class like `F$fn` fixes its shapes' type
+  arguments. So `Map(Xs:[]t, F:type{_(:t):u})` calls `Double` under the
+  refinement of #142, and its Verse Core type stays `$fn1(t, u)`. That is
+  why the shapes are generic per arity rather than one interface per
+  function type: a `type{_(:int):int}` variable is then also a
+  `type{_(:t):u}` at `t = u = int`.
+- **The cost of that choice.** A class implements an interface at one
+  instantiation, so parameter and result types are matched exactly and the
+  Book's variance applies to effects only. A generic function as a value
+  would need a class that repeats type arguments (`Identity$fn(t)`
+  implementing `$fn1(t, t)`), which needs the unifying refinement of #171.
 
 ## Concurrency: suspends functions as frames
 

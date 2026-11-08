@@ -24,6 +24,7 @@ import OpenVerse.Front.Parser
 import OpenVerse.Front.Suspend
 import OpenVerse.Front.Rational
 import OpenVerse.Front.Modules
+import OpenVerse.Front.FnValues
 import Std.Data.HashMap
 
 namespace OpenVerse.Front
@@ -90,7 +91,11 @@ partial def Ty.show : Ty → String
   | .opt t => "?" ++ t.show
   | .tup ts => "tuple(" ++ ", ".intercalate (ts.map Ty.show) ++ ")"
   | .struct n [] => n
-  | .struct n ts => n ++ "(" ++ ", ".intercalate (ts.map Ty.show) ++ ")"
+  | .struct n ts =>
+    -- (a function type, #210)
+    match FnValues.parseName n with
+    | some (k, effs) => FnValues.showFn effs ((ts.take k).map Ty.show) ((ts.drop k).headD .void).show
+    | none => n ++ "(" ++ ", ".intercalate (ts.map Ty.show) ++ ")"
   | .enum n => n
   | .map k v => "[" ++ k.show ++ "]" ++ v.show
   | .param n _ => n
@@ -703,7 +708,6 @@ structure Local where
   mutable : Bool
 
 /-- The heap effects (`<transacts>` allows all of them). -/
-def heapFx : List String := ["allocates", "reads", "writes"]
 
 structure Sig where
   idx     : Nat
@@ -804,17 +808,6 @@ structure ESt where
 
 abbrev EM := StateT ESt (Except String)
 
-/-- The heap effects a function's specifiers allow: all of them by default
-    and with `<transacts>`, none with `<computes>`, those named by
-    `<allocates>`, `<reads>`, `<writes>`. -/
-def allowedFx (effs : List String) : List String :=
-  if effs.contains "transacts" then heapFx
-  else
-    let named := heapFx.filter effs.contains
-    if !named.isEmpty then named
-    else if effs.contains "computes" then []
-    else heapFx
-
 /-- Run `m`, attributing the heap effects it records first to `p` (a field
     or argument default: the effect is the construction's or the call's). -/
 def fxAt (p : Pos) (m : EM α) : EM α := do
@@ -857,7 +850,9 @@ partial def Ty.mapKeysOK (env : TyEnv) : Ty → Bool
 def notComparable (env : TyEnv) (t : Ty) (what : String) : String :=
   match t with
   | .struct n _ =>
-    if env.classes.contains n then
+    if (FnValues.parseName n).isSome then
+      s!"{what} must be comparable, and {t.show} is a function type (Book of Verse ch. 4: functions are not comparable)"
+    else if env.classes.contains n then
       s!"{what} must be comparable, and {t.show} is a class (only <unique> classes are comparable, by identity)"
     else notComparable.params t what
   | _ => notComparable.params t what
@@ -902,6 +897,11 @@ partial def resolveTy (env : TyEnv) (p : Pos) : STy → EM Ty
   | .opt t => return .opt (← resolveTy env p t)
   | .tup [] => pure .void
   | .tup ts => return .tup (← ts.mapM (resolveTy env p))
+  -- a function type: its shape's interface (#210)
+  | .fn ps es r => do
+    if es.contains "decides" && es.contains "suspends" then
+      eerr p "a function type cannot be both <suspends> and <decides>, which exclude each other"
+    resolveTy env p (.app (FnValues.shapeOf ps.length es).name (ps ++ [r]))
   | .map k v => do
     let kt ← resolveTy env p k
     if !kt.comparable env then eerr p (notComparable env kt "a map key")
@@ -1663,6 +1663,26 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
           if s.isConst then
             noteFx p s.fx (some s!"uses the constant {n}")
             return ⟨.call s.idx [], s.ret⟩
+          else if ctx.types.classes.contains s!"{n}$fn" then
+            -- a function as a value (#210): its class's object, of the
+            -- function type expected, else of its own
+            let sh : FnValues.Shape := ⟨s.params.length, s.decides, s.suspends, s.fx⟩
+            let own : Ty := .struct sh.name (s.params ++ [s.ret])
+            let ty := match exp with
+              | some t@(.struct m _) => if (FnValues.parseName m).isSome then t else own
+              | _ => own
+            -- (through its own type; when the expected one does not fit, as
+            -- its own, which the caller then joins or names in a mismatch)
+            let r ← elabE ctx (.construct p s!"{n}$fn" [] []) none
+            let r : R := ⟨← coerce p r own, own⟩
+            if ty == own then return r
+            match ← tryCatch (some <$> coerce p r ty) (fun _ => pure none) with
+            | some e => return ⟨e, ty⟩
+            | none => return r
+          else if !s.tparams.isEmpty then
+            eerr p s!"'{n}' is generic: a generic function cannot be used as a value yet (#210)"
+          else if !s.named.isEmpty then
+            eerr p s!"'{n}' has named parameters: such a function cannot be used as a value (a function type has no named parameters)"
           else eerr p s!"'{n}' is a function: call it with {n}(…)"
         | none =>
           if (ctx.types.overloads.lookup n).isSome then
@@ -3239,6 +3259,24 @@ partial def elabMethod (ctx : Ctx) (p : Pos) (r : R) (m : String) (args : List S
 
 /-- `A[i]` on an array (failable) or `T(k)` on a tuple. -/
 partial def elabIndexLike (ctx : Ctx) (p : Pos) (r : R) (args : List SExpr) (bracket : Bool) : EM R := do
+  -- a call of a function value (#210): of its shape's method
+  if let .struct n _ := r.ty then
+    if let some (_, effs) := FnValues.parseName n then
+      if effs.contains "decides" && !bracket then
+        eerr p s!"a value of type {r.ty.show} can fail: call it with […]"
+      if !effs.contains "decides" && bracket then
+        eerr p s!"a value of type {r.ty.show} cannot fail: call it with (…)"
+      if effs.contains "suspends" && !ctx.suspends then
+        eerr p s!"a value of type {r.ty.show} suspends: it can only be called in a <suspends> function (#156)"
+      -- (one tuple argument flattens into several parameters)
+      let k := (FnValues.parseName n).elim 0 (·.1)
+      if args.length != k && !(args.length == 1 && k > 1) then
+        eerr p s!"a value of type {r.ty.show} takes {k} argument(s), found {args.length}"
+      let t ← fresh r.ty
+      let nm := s!"$fnval{t}"
+      let ctx' := { ctx with locals := { name := nm, slot := t, ty := r.ty, mutable := false } :: ctx.locals }
+      let rc ← elabApp ctx' p (.member p (.ident p nm) (FnValues.callOf n)) args bracket none
+      return ⟨.seq (.assign t r.e) rc.e, rc.ty⟩
   match r.ty, args, bracket with
   | .arr t, [i], true =>
     let ri := widenR ctx.types (← elabE ctx i (some .int))
@@ -4117,6 +4155,7 @@ partial def STy.names : STy → List String
   | .tup ts => (ts.flatMap STy.names).eraseDups
   | .app n ts => (n :: ts.flatMap STy.names).eraseDups
   | .map a b => (a.names ++ b.names).eraseDups
+  | .fn ps _ r => ((ps ++ [r]).flatMap STy.names).eraseDups
 
 /-- The type names `n` (a type parameter, say) somewhere. -/
 partial def STy.mentions (t : STy) (n : String) : Bool := match t with
@@ -4124,6 +4163,7 @@ partial def STy.mentions (t : STy) (n : String) : Bool := match t with
   | .arr u | .opt u => u.mentions n
   | .tup ts | .app _ ts => ts.any (·.mentions n)
   | .map a b => a.mentions n || b.mentions n
+  | .fn ps _ r => ps.any (·.mentions n) || r.mentions n
 
 /-- Constructor functions (#11, Book of Verse ch. 10). `K<constructor>(ps) :=
     c:` with items becomes two functions with K's parameters and effects:
@@ -5231,7 +5271,11 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     | none => []
   let resolved ← resolveModules (allTops000 ++ rawEntry)
   -- (the helpers after: they name nothing of the program's)
-  let allTops00 := resolved.take (resolved.length - rawEntry.length) ++ helpers
+  -- function values (#210): the function types' interfaces, and a class
+  -- for each function used as a value
+  -- (the entry expression is scanned too)
+  let allTops00 := FnValues.desugar (resolved.take (resolved.length - rawEntry.length) ++ helpers)
+    (resolved.drop (resolved.length - rawEntry.length))
   let entryTop := resolved.drop (resolved.length - rawEntry.length)
   -- the command line: `Args`, and an entry expression
   let defines (n : String) := allTops00.any fun
@@ -6451,7 +6495,7 @@ def stripOv (msg0 : String) : String := Id.run do
     is `K<constructor>`, `F$ov1` is `F` (names with `$` are never the user's). -/
 def elabProgram (allTops00 : List STop) (opts : Options := {}) : Except String Compiled :=
   (elabProgramCore allTops00 opts).mapError fun msg =>
-    ((stripOv (msg.replace "$init" "<constructor>")).replace "::" ".").replace "$replaceAll" "ReplaceAll"
+    FnValues.pretty (((stripOv (msg.replace "$init" "<constructor>")).replace "::" ".").replace "$replaceAll" "ReplaceAll")
 
 /-- Parse and elaborate Verse source text. -/
 def compileChecked (src : String) (opts : Options := {}) : Except String Compiled := do

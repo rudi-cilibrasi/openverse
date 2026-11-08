@@ -36,6 +36,7 @@ partial def STy.mapNamesM (f : String → Except String String) : STy → Except
   | .tup ts => return .tup (← ts.mapM (·.mapNamesM f))
   | .map a b => return .map (← a.mapNamesM f) (← b.mapNamesM f)
   | .app n ts => return .app (← f n) (← ts.mapM (·.mapNamesM f))
+  | .fn ps es r => return .fn (← ps.mapM (·.mapNamesM f)) es (← r.mapNamesM f)
 
 /-- The names an expression `A.B.C` is a chain of. -/
 partial def SExpr.identPath : SExpr → Option (List String)

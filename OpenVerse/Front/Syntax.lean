@@ -27,6 +27,9 @@ inductive STy where
   | map  : STy → STy → STy
   /-- `name(t₁, …)`: a parametric struct applied to type arguments. -/
   | app  : String → List STy → STy
+  /-- `type{_(:t₁, …)<effects>:r}` or `t₁->r`: a function type (#210), its
+      parameter types, effect specifiers and result type. -/
+  | fn   : List STy → List String → STy → STy
   deriving Repr, Inhabited
 
 /-- A type parameter from a `where` clause (`t:type` or
@@ -142,5 +145,6 @@ partial def STy.substNames (σ : List (String × STy)) : STy → STy
   | .tup ts => .tup (ts.map (STy.substNames σ))
   | .map k v => .map (k.substNames σ) (v.substNames σ)
   | .app n ts => .app n (ts.map (STy.substNames σ))
+  | .fn ps es r => .fn (ps.map (STy.substNames σ)) es (r.substNames σ)
 
 end OpenVerse.Front
