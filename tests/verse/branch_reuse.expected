@@ -1,0 +1,18 @@
+p1 short branch done
+p1 pulse 1
+p1 pulse 2
+p1 exits after 2
+p2 short branch done
+p2 pulse 1
+p2 pulse 2
+p2 exits after 2
+p3 short branch done
+p3 pulse 1
+p3 pulse 2
+p3 exits after 2
+loser short branch done
+loser pulse 1
+loser pulse 2
+winner
+end
+exit=0

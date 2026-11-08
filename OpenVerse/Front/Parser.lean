@@ -796,6 +796,15 @@ partial def parsePrimary (stop : Nat) : PM SExpr := do
   | .ident "defer" => bump; return .app t.pos (.ident t.pos "$defer") [← parseBody stop] false
   | .ident "block" => bump; parseBody stop
   -- `sync:` and `race:` (#156): each statement of the block is an arm
+  -- `branch:` (#156): a background task over the enclosing function's frame
+  | .ident "branch" =>
+    let n ← peekT 1
+    if n.isSym ":" || n.isSym "{" then
+      bump
+      let b ← parseBody stop
+      return .app t.pos (.ident t.pos "$branch") [b] false
+    else
+      bump; return .ident t.pos "branch"
   -- `spawn{F(…)}` (#156)
   | .ident "spawn" =>
     if (← peekT 1).isSym "{" then

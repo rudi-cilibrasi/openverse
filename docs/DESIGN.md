@@ -310,6 +310,13 @@ ends makes the scheduler pass again in the same tick. `T.Await()` is a
 helper written in Verse: it waits at the leaf `$WaitDone` (whose frame
 tests the done flag, non-generically), then takes the result.
 
+A `branch` is an arm over the enclosing frame, run as a root through a
+wrapper `[pc, frame]`. The wrapper's trampoline resumes the arm unless the
+function stopped it. Every exit of the function, and its cancel function,
+stops its branches: it marks each wrapper done (through a test of its
+class, kept in a frame field) and cancels each arm still pending. A frame
+reused for another call so never shares an arm with an old wrapper.
+
 An `event(t)` keeps a list of waiter records (each an `$evrec(t)`, also
 below `$taskBase`). `E.Await()` appends one and waits at `$WaitDone`.
 `E.Signal(X)` gives `X` to every record in the list, marks it done, and

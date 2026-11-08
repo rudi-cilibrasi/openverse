@@ -728,6 +728,9 @@ structure Ctx where
   suspends : Bool := false
   /-- In an arm of `sync` or `race` (#156): no `return` yet. -/
   inArm : Bool := false
+  /-- In the body of a `loop` or `for`, also through arms (#156): a
+      `branch` there would start again before the last one ended. -/
+  inRepeat : Bool := false
 
 structure ESt where
   /-- The program's types, for conversions between class types (`coerce`). -/
@@ -1567,6 +1570,7 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
   | .app p (.ident _ "$sync") arms false => elabConc ctx p true arms exp
   | .app p (.ident _ "$race") arms false => elabConc ctx p false arms exp
   | .app p (.ident _ "$spawn") [body] false => elabSpawn ctx p body
+  | .app p (.ident _ "$branch") [body] false => elabBranch ctx p body
   | .app p f args bracket => elabApp ctx p f args bracket exp
   | .member p (.ident _ n) m =>
     match ctx.lookup n, ctx.types.enums.lookup n with
@@ -1751,7 +1755,7 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
   | .forE p clauses body => elabFor ctx p clauses body
   | .gen p _ _ _ => eerr p "a generator X : source can only appear in a for clause"
   | .loop _ body =>
-    let r ← elabE { ctx with inLoop := true, loopDefers := ctx.defers.length } body none
+    let r ← elabE { ctx with inLoop := true, inRepeat := true, loopDefers := ctx.defers.length } body none
     return ⟨.loop r.e, .void⟩
   | .brk p =>
     if !ctx.inLoop then
@@ -1914,6 +1918,21 @@ partial def elabSpawn (ctx : Ctx) (p : Pos) (body : SExpr) : EM R := do
     if ft == .logic then Expr.lit (.logic false) else Expr.lit .none
   return ⟨.seq (.assign t (.heap (.new tagT) fieldVals))
     (.seq (.call mark.idx [.prim .mkArr [.seq (.call g es) (.lit .void), .seq (.local t) (.lit .void)]]) (.local t)), ty⟩
+
+/-- `branch:` (#156): its body runs as a background task over the enclosing
+    function's frame, at once up to its first wait, and is cancelled when
+    the function exits. The lowering (`Suspend.lean`) turns the marker
+    `$branchMark(array{body})` into an arm run as a task root. -/
+partial def elabBranch (ctx : Ctx) (p : Pos) (body : SExpr) : EM R := do
+  if !ctx.suspends then eerr p "branch suspends: it can only be used in a <suspends> function (#156)"
+  if ctx.inDefer then eerr p "branch in a defer is not supported (#156)"
+  if ctx.canFail then eerr p "branch cannot be in a failure context (a condition, a filter, or a <decides> call's arguments) (#156)"
+  if ctx.inRepeat then eerr p "branch cannot be in a loop or for body (Book of Verse ch. 14): call a function that branches"
+  if !ctx.dictVars.isEmpty then eerr p "branch in a generic function is not supported yet (#156)"
+  let some mark := ctx.sig? "$branchMark" | eerr p "internal error: no branch helper"
+  let armCtx := { ctx with defers := [], loopDefers := 0, inLoop := false, inArm := true }
+  let r ← elabE armCtx body none
+  return ⟨.call mark.idx [.prim .mkArr [.seq r.e (.lit .void)]], .void⟩
 
 partial def elabDefersCore (ctx : Ctx) (ds : List (SExpr × List Local)) : EM Expr := do
   let mut acc : Expr := .lit .void
@@ -3530,7 +3549,7 @@ partial def elabFor (ctx : Ctx) (p : Pos) (clauses : List SExpr) (body : SExpr) 
       let fs := cs.takeWhile (!isGen ·)
       (g, fs) :: groups (cs.dropWhile (!isGen ·))
   let gs := groups rest
-  let bodyCtx (c : Ctx) : Ctx := { c with canFail := ctx.canFail, inLoop := false }
+  let bodyCtx (c : Ctx) : Ctx := { c with canFail := ctx.canFail, inLoop := false, inRepeat := true }
   -- elaborate the filters of one generator (in a failure context)
   let elabFilters (c : Ctx) (fs : List SExpr) : EM (Expr × Ctx) := do
     match fs with
@@ -4130,6 +4149,7 @@ Await(T:task(t) where t:type)<suspends>:t =
     WaitDone(T)
     if (R := T.Result?) then R else Err()
 spawnMark(A:[]void)<computes>:void = {}
+branchMark(A:[]void)<computes>:void = {}
 evrec(t:type) := class(taskBase):
     var Got:?t = false
     var Next:?evrec(t) = false
@@ -4191,7 +4211,7 @@ def concTops : Except String (List STop) :=
     "sleepInit", "sleepResume", "Sleep", "syncMark", "raceMark", "S", "F", "C", "N", "R", "A",
     "Progress", "Roots", "taskBase", "Done", "Result", "waitf", "T", "X", "waitNew", "waitInit", "waitResume",
     "WaitDone", "Await", "spawnMark", "t", "Sch", "evrec", "Got", "Next", "Head", "Tail", "Cur", "W", "L", "V",
-    "EvAwait", "E"]
+    "EvAwait", "E", "branchMark"]
 
 /-- Elaborate a parsed program into a Verse Core program that passes `Prog.check`
     and `Prog.checkTypes`. -/
@@ -5295,8 +5315,9 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     let syncMark := idxOf "$syncMark"
     let raceMark := idxOf "$raceMark"
     let spawnMark := idxOf "$spawnMark"
+    let branchMark := idxOf "$branchMark"
     let isMark (f : Nat) : Bool := f == syncMark || f == raceMark
-    let leaves := ["$Sleep", "$WaitDone", "$syncMark", "$raceMark", "$spawnMark"]
+    let leaves := ["$Sleep", "$WaitDone", "$syncMark", "$raceMark", "$spawnMark", "$branchMark"]
     let user := (allS.filter fun s => s.suspends && !leaves.contains s.name).map fun s =>
       (s.idx, s.name, s.tparams.length)
     let tagBase := env.classes.length
@@ -5343,13 +5364,26 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       let fn := fns[gi]!
       let some (ds, b) := Suspend.stripInits (fn.nslots - fn.arity) fn.body
         | throw s!"internal error: lowering {gname}: unexpected initialisations"
-      parts := parts.push (ds, b, Suspend.countSusp isS isMark false (· == spawnMark) b, Suspend.countArms isMark b)
+      parts := parts.push (ds, b, Suspend.countSusp (fun f => isS f || f == branchMark) (fun _ => false) false (· == spawnMark) b,
+        Suspend.countArms (fun f => isMark f || f == branchMark) b)
     let frameTy (j : Nat) : VTy :=
       .ref [tagBase + j] ((List.range lows[j]!.2.2).map VTy.var)
     -- each one's `new`, `reset`, `cancel` and `result` (fixed indices), each
     -- root's trampoline and `start`, then the arms' functions
     let L := lows.length
     let trampOf (k : Nat) : Nat := nFns + 4 * L + 2 * k
+    -- each `branch` (numbered across the functions, in order) gets a
+    -- wrapper class `[pc, frame]` and its `tramp`, `start` and `stop`
+    let mut branchOf : Array (List Nat) := #[]
+    let mut branchHome : Array Nat := #[]
+    for (j, part) in (List.range L).zip parts.toList do
+      let n := Suspend.countSusp (· == branchMark) (fun _ => false) false (fun _ => false) part.2.1
+      branchOf := branchOf.push ((List.range n).map (· + branchHome.size))
+      branchHome := branchHome ++ (List.replicate n j).toArray
+    let B := branchHome.size
+    let wrapFnBase := nFns + 4 * L + 2 * roots.size
+    let wrapTag (K : Nat) : Nat := tagBase + L + K
+    let wrapTy (K : Nat) : VTy := .ref [wrapTag K] []
     let callee : Nat → Option Suspend.Callee := fun f =>
       if f == sleepIdx then
         some { tag := env.tagOf "$sleep", newFn := idxOf "$sleepNew", initFn := idxOf "$sleepInit",
@@ -5373,7 +5407,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       extraSigs := extraSigs.push (frameTy j :: schedTy :: ps, VTy.void)
       extraSigs := extraSigs.push ([frameTy j], (fsigs0[gi]!).2)
     let rootJ (k : Nat) : Nat := user.length + k
-    let rootTags := (List.range roots.size).map fun k => tagBase + rootJ k
+    let rootTags := (List.range roots.size).map (fun k => tagBase + rootJ k) ++ (List.range B).map wrapTag
     let mainJ := (lows.findIdx? (·.1 == mainSig.idx)).getD 0
     let rootAny : VTy := .ref ((tagBase + mainJ) :: rootTags) []
     -- each root's trampoline (frame, sched) and `start(sched, frame)`
@@ -5387,7 +5421,12 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     let mut armFns : Array Fn := #[]
     let mut armTys : Array (List VTy) := #[]
     let mut armSigs : Array (List VTy × VTy) := #[]
-    let armBase := nFns + 4 * L + 2 * roots.size
+    let armBase := wrapFnBase + 3 * B
+    let mut branchFns : Array Fn := #[]
+    let mut branchTys : Array (List VTy) := #[]
+    let mut branchSigs : Array (List VTy × VTy) := #[]
+    let progressF := fieldIdx "$sched" "$Progress"
+    let rootsF := fieldIdx "$sched" "$Roots"
     for ((gi, gname, _), j) in lows.zipIdx do
       let fn := fns[gi]!
       let Γ := slotTys[gi]!
@@ -5397,8 +5436,43 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       let fnBase := armBase + armFns.size
       let spawns : Array (Nat × Nat) := ((spawnOf[j]?).getD []).toArray.map fun k =>
         (nFns + 4 * rootJ k, trampOf k + 1)
-      let low ← (Suspend.lower Sinf callee syncMark raceMark spawnMark spawns a Γ ρ (frameTy j) schedTag fnBase b).mapError
-        fun e => s!"in {gname}: {e}"
+      let branches : Array (Nat × Nat × Nat) := ((branchOf[j]?).getD []).toArray.map fun K =>
+        (wrapFnBase + 3 * K + 1, wrapFnBase + 3 * K + 2, wrapTag K)
+      let low ← (Suspend.lower Sinf callee syncMark raceMark spawnMark spawns branchMark branches a Γ ρ (frameTy j)
+        schedTag fnBase b).mapError fun e => s!"in {gname}: {e}"
+      -- its branches' wrappers: `tramp(w, sched)` resumes the arm (with the
+      -- function's parameters from its frame) unless the function stopped
+      -- it; `start(sched, frame)` makes the wrapper, registers it and runs
+      -- it once; `stop(w)` marks it done
+      let (_, _, sitesJ, armsJ) := parts[j]!
+      for (K, (armRes, doneA)) in ((branchOf[j]?).getD []).zip low.branchArms do
+        let fr : Expr := .heap (.get 1) [.local 0]
+        let pass := (List.range a).map fun i => Expr.heap (.get (Suspend.slotBaseOf sitesJ armsJ + i)) [fr]
+        let tramp : Expr := .seq (.ite (.prim .eq [.heap (.get doneA) [fr], Suspend.int 0])
+            (.seq (Suspend.seqVoid [.assign 2 (.call armRes (fr :: .local 1 :: pass)),
+              .ite (.prim .eq [.local 2, Suspend.int 1]) (.seq (.heap (.set doneA) [fr, Suspend.int 1]) Suspend.vd) Suspend.vd])
+              Suspend.vd)
+            (.seq (.assign 2 (Suspend.int 1)) Suspend.vd)) (.local 2)
+        branchFns := branchFns.push { name := s!"$branch{K}$tramp", arity := 2, nslots := 3, decides := false,
+                                      writes := true, body := initPrefixE 2 [Suspend.int 0] tramp }
+        branchTys := branchTys.push [wrapTy K, schedTy, .int]
+        branchSigs := branchSigs.push ([wrapTy K, schedTy], .int)
+        let start : Expr := .seq (Suspend.seqVoid [
+          .heap (.set rootsF) [.local 0, .prim .concat [.heap (.get rootsF) [.local 0], .prim .mkArr [.local 2]]],
+          .assign 3 (.call (wrapFnBase + 3 * K) [.local 2, .local 0]),
+          .ite (.prim .eq [.local 3, Suspend.int 1])
+            (.seq (Suspend.seqVoid [.heap (.set Suspend.pcF) [.local 2, Suspend.int (-1)],
+              .heap (.set progressF) [.local 0, .lit (.logic true)]]) Suspend.vd) Suspend.vd]) (.local 2)
+        let startFn : Fn := { name := s!"$branch{K}$start", arity := 2, nslots := 4, decides := false, writes := true,
+                              body := initPrefixE 2 [.heap (.new (wrapTag K)) [Suspend.int 0, .local 1], Suspend.int 0] start }
+        branchFns := branchFns.push startFn
+        branchTys := branchTys.push [schedTy, frameTy j, wrapTy K, .int]
+        branchSigs := branchSigs.push ([schedTy, frameTy j], wrapTy K)
+        let stopFn : Fn := { name := s!"$branch{K}$stop", arity := 1, nslots := 1, decides := false, writes := true,
+                             body := .seq (.heap (.set Suspend.pcF) [.local 0, Suspend.int (-1)]) Suspend.vd }
+        branchFns := branchFns.push stopFn
+        branchTys := branchTys.push [wrapTy K]
+        branchSigs := branchSigs.push ([wrapTy K], VTy.void)
       let ps := Γ.take a
       let tempTys := low.slots.drop (2 + fn.nslots)
       let dflt (params : List VTy) (τ : VTy) : Except String Expr :=
@@ -5453,8 +5527,6 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     -- up to its first suspension point (a root that is done has its
     -- suspension point set to -1, and a done root lets the scheduler make
     -- another pass in the same tick, for the tasks waiting for it)
-    let progressF := fieldIdx "$sched" "$Progress"
-    let rootsF := fieldIdx "$sched" "$Roots"
     let mut rootFns : Array Fn := #[]
     let mut rootTys : Array (List VTy) := #[]
     for k in List.range roots.size do
@@ -5475,11 +5547,14 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       rootFns := rootFns.push { name := s!"$spawn{k}$start", arity := 2, nslots := 3, decides := false, writes := true,
                                 body := initPrefixE 2 [Suspend.int 0] start }
       rootTys := rootTys.push [schedTy, frameTy j, .int]
-    fns := fns ++ newFns ++ rootFns ++ armFns
-    slotTys := slotTys ++ newTys ++ rootTys ++ armTys
-    fsigs := fsigs ++ extraSigs.toList ++ rootSigs.toList ++ armSigs.toList
+    fns := fns ++ newFns ++ rootFns ++ branchFns ++ armFns
+    slotTys := slotTys ++ newTys ++ rootTys ++ branchTys ++ armTys
+    fsigs := fsigs ++ extraSigs.toList ++ rootSigs.toList ++ branchSigs.toList ++ armSigs.toList
+    -- the wrappers' classes, after the frames'
+    for K in List.range B do
+      frameClasses := frameClasses.push [.int, frameTy branchHome[K]!]
     -- the scheduler's roots: the type of its `Roots` field
-    if !roots.isEmpty then
+    if !rootTags.isEmpty then
       classTable := classTable.set schedTag ((classTable[schedTag]!).set rootsF (.arr rootAny))
     -- a suspends `Main` runs under the scheduler: a loop of ticks; in each,
     -- passes that resume `Main` and then every root that is not done, again
@@ -5496,11 +5571,13 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       let ix := 4
       let r := 5
       let dead := 6
-      let dispatch : Expr := (List.range roots.size).foldr (fun k acc =>
+      let dispatch : Expr := ((List.range roots.size).foldr (fun k acc =>
         Expr.ite (.heap (.isTag [tagBase + rootJ k]) [.local r]) (.call (trampOf k) [.local r, sch]) acc)
-        (.prim .userErr [])
+        ((List.range B).foldr (fun K acc =>
+          Expr.ite (.heap (.isTag [wrapTag K]) [.local r]) (.call (wrapFnBase + 3 * K) [.local r, sch]) acc)
+          (.prim .userErr [])))
       let rootsArr : Expr := .heap (.get rootsF) [sch]
-      let pollRoots : List Expr := if roots.isEmpty then [] else [
+      let pollRoots : List Expr := if rootTags.isEmpty then [] else [
         .assign ix (Suspend.int 0),
         .loop (Suspend.seqVoid [
           .ite (.seq (.prim .lt [.local ix, .prim .len [rootsArr]]) (.assign r (.prim .index [rootsArr, .local ix])))
@@ -5520,7 +5597,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
         [.ite (.prim .query [.heap (.get progressF) [sch]]) Suspend.vd .brk]))
       -- (between ticks, the roots that are done are dropped once they are
       -- more than half: each spawn copies the array, and C keeps every copy)
-      let compact : List Expr := if roots.isEmpty then [] else [
+      let compact : List Expr := if rootTags.isEmpty then [] else [
         .assign dead (Suspend.int 0),
         .assign ix (Suspend.int 0),
         .loop (Suspend.seqVoid [

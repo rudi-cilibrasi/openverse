@@ -92,6 +92,8 @@ def slotBaseOf (sites arms : Nat) : Nat := 2 + sites + 2 * arms
     from it", filled in once the number of slots is known. -/
 def spillMark : Expr := .heap (.get 1000000007) []
 def reloadMark : Expr := .heap (.get 1000000009) []
+/-- "Stop the function's branches", filled in once they are known. -/
+def killMark : Expr := .heap (.get 1000000011) []
 
 def int (i : Int) : Expr := .lit (.int i)
 def vd : Expr := .lit .void
@@ -125,7 +127,7 @@ partial def shift (d : Nat) : Expr → Expr
 
 /-- `return e` as: store `e` as the result, return 1 (done). -/
 partial def retToDone : Expr → Expr
-  | .ret e => .seq (fset resF (retToDone e)) (.ret (int 1))
+  | .ret e => .seq (fset resF (retToDone e)) (.seq killMark (.ret (int 1)))
   | .assign i e => .assign i (retToDone e)
   | .forE i it f b => .forE i (retToDone it) (retToDone f) (retToDone b)
   | .seq a b => .seq (retToDone a) (retToDone b)
@@ -254,6 +256,10 @@ structure Env where
       root's `new` and `start` functions. -/
   spawnMark : Nat
   spawns : Array (Nat × Nat)
+  /-- The `branch` mark, and for each `branch` in the function, in order,
+      its wrapper's `start` and `stop` functions and class. -/
+  branchMark : Nat
+  branches : Array (Nat × Nat × Nat)
   /-- The region being lowered: the field of its suspension point, the flag
       set while seeking it, and its own suspension points. -/
   pcFld : Nat
@@ -278,6 +284,13 @@ structure St where
   defers : Expr := vd
   /-- `spawn`s met so far. -/
   spawnNext : Nat := 0
+  /-- `branch`es met so far; for each, what stopping it needs (its wrapper's
+      field, class, `stop` function, a slot to read the wrapper into, the
+      arm's fields and cancel function) and what its trampoline needs (the
+      arm's resume function and done field). -/
+  branchNext : Nat := 0
+  kills : Array (Nat × Nat × Nat × Nat × Nat × Nat × Nat) := #[]
+  branchArms : Array (Nat × Nat) := #[]
 
 abbrev M := ReaderT Env (StateT St (Except String))
 
@@ -294,7 +307,7 @@ def isMark (env : Env) (f : Nat) : Bool := f == env.syncMark || f == env.raceMar
 
 def hasS (e : Expr) : M Bool := do
   let env ← read
-  return hasSusp (fun f => (env.callee f).isSome || isMark env f || f == env.spawnMark) e
+  return hasSusp (fun f => (env.callee f).isSome || isMark env f || f == env.spawnMark || f == env.branchMark) e
 
 /-- The region's suspension point, `lo ≤ pc ≤ hi`, as a condition. -/
 def inRange (lo hi : Nat) : M Expr := do
@@ -413,6 +426,34 @@ partial def block (e : Expr) (k : Option (Expr → Expr)) : M (List Expr) := do
       let start : Expr := .call startFn [.local schS, .call newFn (.local schS :: .local t :: hs.map retToDone)]
       let _ := h
       return [← emit (pure (app k (.seq start vd)))]
+    if g == env.branchMark then
+      -- an arm over this frame, run as a task root through a wrapper
+      -- (`start`), stopped when the function exits (`killMark`)
+      let [.prim .mkArr [arm]] := es | throw "internal error: a malformed branch"
+      let i := (← get).branchNext
+      modify fun st => { st with branchNext := i + 1 }
+      let some (startFn, stopFn, wrapTag) := env.branches[i]? | throw "internal error: branches miscounted"
+      let wide : VTy := .ref [wrapTag, env.schedTag] []
+      let s ← emit do
+        let site := (← get).next + 1
+        modify fun st => { st with next := site, children := st.children.push wide }
+        let a := (← get).armsNext
+        modify fun st => { st with armsNext := a + 1, arms := st.arms.push (vd, vd) }
+        let pcA := armPcF env.sites a
+        let doneA := armDoneF env.sites a
+        let (res, can) ← region pcA none arm
+        let y ← fresh wide
+        let killInfo := (childF site, wrapTag, stopFn, y, pcA, doneA, env.fnBase + 2 * a + 1)
+        modify fun st => { st with arms := st.arms.set! a (res, can) }
+        modify fun st => { st with kills := st.kills.push killInfo }
+        modify fun st => { st with branchArms := st.branchArms.push (env.fnBase + 2 * a, doneA) }
+        -- (`start(sched, frame)` makes the wrapper, registers it, runs the
+        -- arm once and gives the wrapper, kept in the frame for `stop`)
+        pure (seqVoid [fset pcA (int 0), fset doneA (int 0), spillMark,
+          fset (childF site) (.call startFn [.local schS, fr]), reloadMark])
+      match k with
+      | some k => return [s, ← emit (pure (k vd))]
+      | none => return [s]
     if isMark env g then
       let [.prim .mkArr arms] := es | throw "internal error: a malformed sync or race"
       let s ← emit (concAt (g == env.syncMark) arms)
@@ -436,7 +477,7 @@ partial def block (e : Expr) (k : Option (Expr → Expr)) : M (List Expr) := do
   | .print e1 =>
     let (pre, rs) ← operands [e1]
     return pre ++ [← emit (pure (app k (.print rs.head!)))]
-  | .ret e1 => block e1 (some fun v => .seq (fset resF v) (.ret (int 1)))
+  | .ret e1 => block e1 (some fun v => .seq (fset resF v) (.seq killMark (.ret (int 1))))
   | e => return [← emit (pure (app k (retToDone e)))]
 
 /-- Operands evaluated left to right, some of which suspend: those before
@@ -566,8 +607,8 @@ partial def region (pcFld : Nat) (done : Option (Expr → Expr)) (body : Expr) :
   let rS ← fresh .int
   let saved ← get
   modify fun st => { st with regionNext := 0, sites := #[], defers := vd }
-  let regionTotal := countSusp (fun f => (env.callee f).isSome || isMark env f) (isMark env) true
-    (· == env.spawnMark) body
+  let regionTotal := countSusp (fun f => (env.callee f).isSome || isMark env f)
+    (fun f => isMark env f || f == env.branchMark) true (· == env.spawnMark) body
   let stmts ← withReader (fun e => { e with pcFld, rS, regionTotal }) (block body done)
   let st ← get
   if st.regionNext != regionTotal then
@@ -597,25 +638,28 @@ partial def region (pcFld : Nat) (done : Option (Expr → Expr)) (body : Expr) :
           .ite (allOf [.prim .ne [fget pcA, int 0], .prim .eq [fget doneA, int 0]])
             (.seq (seqVoid [spillMark, .call can args, reloadMark]) vd) vd)
     .ite (.prim .eq [fget pcFld, int s.id]) (.seq (seqVoid [child, s.defers]) vd) vd
-  let cancel := seqVoid ([reloadMark] ++ st.sites.toList.map cancelAt ++ [spillMark])
+  -- (a function's cancel also stops its branches, before the rest)
+  let cancel := seqVoid ([reloadMark] ++ (if pcFld == pcF then [killMark] else []) ++
+    st.sites.toList.map cancelAt ++ [spillMark])
   modify fun st => { st with regionNext := saved.regionNext, sites := saved.sites, defers := saved.defers }
   return (resume, cancel)
 end
 
 /-- Replace the spill and reload placeholders. -/
-partial def fill (spill reload : Expr) : Expr → Expr
+partial def fill (spill reload : Expr) (kill : Expr := vd) : Expr → Expr
   | .heap (.get 1000000007) [] => spill
   | .heap (.get 1000000009) [] => reload
-  | .assign i e => .assign i (fill spill reload e)
-  | .forE i it f b => .forE i (fill spill reload it) (fill spill reload f) (fill spill reload b)
-  | .seq a b => .seq (fill spill reload a) (fill spill reload b)
-  | .prim p es => .prim p (es.map (fill spill reload))
-  | .call f es => .call f (es.map (fill spill reload))
-  | .heap op es => .heap op (es.map (fill spill reload))
-  | .ite c t e => .ite (fill spill reload c) (fill spill reload t) (fill spill reload e)
-  | .loop b => .loop (fill spill reload b)
-  | .ret e => .ret (fill spill reload e)
-  | .print e => .print (fill spill reload e)
+  | .heap (.get 1000000011) [] => fill spill reload vd kill
+  | .assign i e => .assign i (fill spill reload kill e)
+  | .forE i it f b => .forE i (fill spill reload kill it) (fill spill reload kill f) (fill spill reload kill b)
+  | .seq a b => .seq (fill spill reload kill a) (fill spill reload kill b)
+  | .prim p es => .prim p (es.map (fill spill reload kill))
+  | .call f es => .call f (es.map (fill spill reload kill))
+  | .heap op es => .heap op (es.map (fill spill reload kill))
+  | .ite c t e => .ite (fill spill reload kill c) (fill spill reload kill t) (fill spill reload kill e)
+  | .loop b => .loop (fill spill reload kill b)
+  | .ret e => .ret (fill spill reload kill e)
+  | .print e => .print (fill spill reload kill e)
   | e => e
 
 /-- A lowered suspends function. -/
@@ -630,23 +674,27 @@ structure Lowered where
   slots : List VTy
   /-- The frame's field types. -/
   fields : List VTy
+  /-- Each `branch`'s arm resume function and done field, in order. -/
+  branchArms : List (Nat × Nat) := []
 
 /-- Lower the body `b` (initialisations stripped) of a suspends function
     with `arity` parameters, slot types `Γ` and result type `ρ`, whose frame
     type is `frameTy`; its arm functions are numbered from `fnBase`. -/
 def lower (S : Sigs) (callee : Nat → Option Callee) (syncMark raceMark spawnMark : Nat) (spawns : Array (Nat × Nat))
+    (branchMark : Nat) (branches : Array (Nat × Nat × Nat))
     (arity : Nat) (Γ : List VTy) (ρ : VTy) (frameTy : VTy) (schedTag : Nat) (fnBase : Nat) (b : Expr) :
     Except String Lowered := do
   let schedTy : VTy := .ref [schedTag] []
   let isM := fun f => f == syncMark || f == raceMark
   let isS := fun f => (callee f).isSome || isM f
-  let sites := countSusp isS (fun _ => false) false (· == spawnMark) b
-  let armsTotal := countArms isM b
+  let sites := countSusp (fun f => isS f || f == branchMark) (fun _ => false) false (· == spawnMark) b
+  let armsTotal := countArms (fun f => isM f || f == branchMark) b
   let b := shift 2 b
   let Γ0 := #[frameTy, schedTy] ++ Γ.toArray
   let env : Env := { S, ρ, callee, syncMark, raceMark, arity, sites, armsTotal, fnBase, schedTag, spawnMark, spawns,
+                     branchMark, branches,
                      pcFld := pcF, rS := 0, regionTotal := 0 }
-  let done : Expr → Expr := fun v => .seq (fset resF v) (.ret (int 1))
+  let done : Expr → Expr := fun v => .seq (fset resF v) (.seq killMark (.ret (int 1)))
   let ((res, can), st) ← ((region pcF (some done) b).run env).run { Γ := Γ0 }
   if st.next != sites || st.armsNext != armsTotal then
     throw "internal error: lowering a <suspends> function: suspension points miscounted"
@@ -654,8 +702,17 @@ def lower (S : Sigs) (callee : Nat → Option Callee) (syncMark raceMark spawnMa
   let base := slotBaseOf sites armsTotal
   let spill := seqVoid ((List.range (n - 2)).map fun j => fset (base + j) (.local (j + 2)))
   let reload := seqVoid ((List.range (n - 2)).map fun j => .assign (j + 2) (fget (base + j)))
-  let f := fill spill reload
+  -- stopping the branches: each wrapper marked done (through a test of its
+  -- class), each arm still pending cancelled and marked dead
+  let args : List Expr := [fr, .local schS] ++ (List.range arity).map fun i => .local (i + 2)
+  let kill := seqVoid (st.kills.toList.map fun (wf, wrapTag, stopFn, y, pcA, doneA, can) =>
+    seqVoid [.assign y (fget wf),
+      .ite (.heap (.isTag [wrapTag]) [.local y]) (.call stopFn [.local y]) vd,
+      .ite (allOf [.prim .ne [fget pcA, int 0], .prim .eq [fget doneA, int 0]])
+        (.seq (seqVoid [spillMark, .call can args, reloadMark, fset doneA (int 2)]) vd) vd])
+  let f := fill spill reload kill
   return { body := f res, cancel := f can, arms := st.arms.toList.map fun (r, c) => (f r, f c),
+           branchArms := st.branchArms.toList,
            slots := st.Γ.toList,
            fields := [.int, ρ] ++ st.children.toList ++ List.replicate (2 * armsTotal) .int ++
              (st.Γ.toList.drop 2) }
