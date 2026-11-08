@@ -162,6 +162,19 @@ structure TyEnv where
   classes : List String := []
   /-- The hierarchy of each class and interface. -/
   cinfo : List (String × ClassInfo) := []
+  /-- `cinfo` by name, for speed (a class missing here is looked up in
+      `cinfo`: list lookups made the class queries quadratic and their
+      users cubic in the number of classes). -/
+  cinfoMap : Std.HashMap String ClassInfo := {}
+  /-- Each class's place in `classes`, for speed (one missing here is
+      looked up in `classes`). -/
+  classIx : Std.HashMap String Nat := {}
+  /-- The concrete classes at or below each class, in definition order,
+      once the classes are known (`belowReady`): the classes added later,
+      the placeholders, are never concrete. Computing them for each class
+      made the class queries quadratic, and their users cubic. -/
+  belowMap : Std.HashMap String (List String) := {}
+  belowReady : Bool := false
   /-- The abstract methods (class or interface, method): their functions are
       never called. -/
   abstracts : List (String × String) := []
@@ -232,7 +245,10 @@ def TyEnv.fields (env : TyEnv) (n : String) (args : List Ty := []) : List (Strin
     fs.map fun (f, t, d) => (f, t.subst σ, d)
   | none => fs
 
-def TyEnv.info (env : TyEnv) (c : String) : ClassInfo := (env.cinfo.lookup c).getD {}
+def TyEnv.info (env : TyEnv) (c : String) : ClassInfo :=
+  match env.cinfoMap[c]? with
+  | some i => i
+  | none => (env.cinfo.lookup c).getD {}
 
 
 
@@ -454,6 +470,7 @@ def TyEnv.fieldsSeen (env : TyEnv) (T : String) (targs : List Ty) (d : String) :
     static type `T` holds an instance of one of them. In Verse Core it is the
     tuple of one option per such class, holding that class's fields (#18). -/
 def TyEnv.concreteBelow (env : TyEnv) (T : String) : List String :=
+  if env.belowReady then env.belowMap[T]?.getD [] else
   env.classes.filter fun d =>
     let i := env.info d
     !i.isIface && !i.isAbstract && env.isSub d T
@@ -462,6 +479,9 @@ def TyEnv.concreteBelow (env : TyEnv) (T : String) : List String :=
     and interface, parametric ones too (#39), with a concrete class below,
     and the hidden placeholder classes (#157). -/
 def TyEnv.isRefClass (env : TyEnv) (n : String) : Bool :=
+  if env.belowReady then
+    (env.classIx.contains n || env.classes.contains n) && (env.phs.contains n || !(env.concreteBelow n).isEmpty)
+  else
   env.classes.contains n && env.phs.contains n ||
   env.classes.contains n &&
     -- with no concrete class below, `n` has no instance: it stays the (empty)
@@ -469,7 +489,10 @@ def TyEnv.isRefClass (env : TyEnv) (n : String) : Bool :=
     env.classes.any fun d => let i := env.info d; !i.isIface && !i.isAbstract && (env.supers d).contains n
 
 /-- The class tag of class `d` in Verse Core: its index in definition order. -/
-def TyEnv.tagOf (env : TyEnv) (d : String) : Nat := (env.classes.idxOf? d).getD 0
+def TyEnv.tagOf (env : TyEnv) (d : String) : Nat :=
+  match env.classIx[d]? with
+  | some i => i
+  | none => (env.classes.idxOf? d).getD 0
 
 /-- The class tags of `T`'s Verse Core reference type: the concrete classes
     at or below it (a reference of static type `T` refers to an object of
@@ -1151,10 +1174,13 @@ partial def slotDefault (env : TyEnv) (dictBase : Nat) (params : List Ty) (visit
   | .struct n ts =>
     -- a prototype of a class below `n` (#37): no allocation
     if env.isRefClass n then
-      let addrs := env.protos.zipIdx.filterMap fun (x : (String × Nat × List Value) × Nat) =>
-        if (env.concreteBelow n).contains x.1.1 && env.coreArgs x.1.1 [] == env.coreArgs n ts then some x.2
-        else none
-      if let some a := addrs.head? then return .lit (.ref a)
+      -- (the classes below and the type arguments once, not per prototype:
+      -- a dispatch over n classes makes n such slots)
+      let below := env.concreteBelow n
+      let args := env.coreArgs n ts
+      if let some (_, a) := env.protos.zipIdx.find? fun (x : (String × Nat × List Value) × Nat) =>
+          below.contains x.1.1 && env.coreArgs x.1.1 [] == args then
+        return .lit (.ref a)
     if env.isRefClass n then
       -- the first class below `n` whose placeholder needs no instance of a
       -- class whose placeholder is being built
@@ -5505,6 +5531,8 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   let parentName : STy → Option String := fun | .name q => some q | .app q _ => some q | _ => none
   let mut hier : List (String × String) := classDefs.map fun (n, _) => (n, n)
   for _ in [0:classDefs.length + 1] do
+    -- (until a pass joins nothing: a pass per class made it cubic)
+    let mut joined := false
     for (n, _, ps, _) in classDefs do
       for q in ps.filterMap parentName do
         match hier.lookup n, hier.lookup q with
@@ -5512,7 +5540,9 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
           if a != b then
             let r := if a < b then a else b
             hier := hier.map fun (x, h) => if h == a || h == b then (x, r) else (x, h)
+            joined := true
         | _, _ => pure ()
+    if !joined then break
   let hierOf (n : String) : String := (hier.lookup n).getD n
   -- each class's ancestors (itself first), each with its type parameters in
   -- the class's terms
@@ -5683,7 +5713,8 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     let info : ClassInfo := { parent, ifaces := ifaces.toList, isIface := cd.isIface,
                               isAbstract := cd.specs.contains "abstract", isFinal := cd.specs.contains "final" }
     cinfo := cinfo.push (cd.name, info)
-  let henv : TyEnv := { classes := cdefs.map (·.name), cinfo := cinfo.toList }
+  let henv : TyEnv := { classes := cdefs.map (·.name), cinfo := cinfo.toList,
+                        cinfoMap := cinfo.foldl (fun m (n, i) => m.insert n i) {} }
   let directUp (n : String) : List String := (henv.info n).parent.toList ++ (henv.info n).ifaces
   for cd in cdefs do
     let mut seen : List String := []
@@ -5712,9 +5743,14 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   let mut full : Array (String × List (String × STy × Option SExpr × Bool)) := #[]
   let mut fieldOverrides : Array (Pos × String × String × STy) := #[]
   let mut defaultClashes : Array String := #[]
+  -- (each class's fields by name too: lookups in `full` made this cubic)
+  let mut fullMap : Std.HashMap String (List (String × STy × Option SExpr × Bool)) := {}
   for _ in [0:cdefs.length + 1] do
+    -- (until a pass resolves nothing more, or every class is resolved)
+    if full.size == cdefs.length then break
+    let before := full.size
     for cd in cdefs do
-      if (full.find? (·.1 == cd.name)).isSome then continue
+      if fullMap.contains cd.name then continue
       let inherited? : Option (List (String × STy × Option SExpr × Bool)) :=
         match (henv.info cd.name).parent with
         | none => some []
@@ -5722,11 +5758,11 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
           -- in terms of this class's type parameters (#39)
           let qargs := ((cd.parents.zip cd.parentArgs).lookup q).getD []
           let σ := ((((cdef? q).map (·.tps)).getD []).map (·.name)).zip qargs
-          (full.find? (·.1 == q)).map fun (_, fs) => fs.map fun (f, sty, d, v) => (f, sty.substNames σ, d, v)
+          fullMap[q]?.map fun fs => fs.map fun (f, sty, d, v) => (f, sty.substNames σ, d, v)
       let some inh := inherited? | continue
       -- the interfaces above must be resolved first
       let ifacesUp := ((henv.supers cd.name).drop 1).filter (henv.info · |>.isIface)
-      if ifacesUp.any (fun i => (full.find? (·.1 == i)).isNone) then continue
+      if ifacesUp.any (fun i => !fullMap.contains i) then continue
       let mut fs : List (String × STy × Option SExpr × Bool) := inh
       -- each interface field not inherited through the class chain, once; its
       -- default is that of the most specific interface that gives one (as for
@@ -5734,7 +5770,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       for i in ifacesUp do
         -- (in terms of this class's type parameters, #53)
         let iσ := ((((cdef? i).map (·.tps)).getD []).map (·.name)).zip ((supArgsSTy cd.name i).getD [])
-        for (f, sty0, _, isVar) in ((full.find? (·.1 == i)).map (·.2)).getD [] do
+        for (f, sty0, _, isVar) in fullMap[i]?.getD [] do
           let sty := sty0.substNames iσ
           if ((henv.supers cd.name).drop 1).any (declares · f) then
             throw s!"{cd.pos.show}: field '{f}' of {cd.name} has the name of an inherited method"
@@ -5776,7 +5812,9 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
             throw s!"{cd.pos.show}: {f}<override> in {cd.name} does not override an inherited field"
           fs := fs ++ [(f, sty, d, isVar)]
       full := full.push (cd.name, fs)
-  let fullOf (n : String) := ((full.find? (·.1 == n)).map (·.2)).getD []
+      fullMap := fullMap.insert cd.name fs
+    if full.size == before then break
+  let fullOf (n : String) := fullMap[n]?.getD []
   for cd in cdefs do
     for (f, _, _, _) in fullOf cd.name do
       if (henv.supers cd.name).any (declaresBase · f) then
@@ -5936,8 +5974,14 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   let varFields : List (String × String) := cdefs.flatMap fun cd =>
     (fullOf cd.name).filterMap fun (f, _, _, isVar) => if isVar then some (cd.name, f) else none
   let uniques : List String := (cdefs.filter (·.specs.contains "unique")).map (·.name)
-  let mut env : TyEnv := { classes := henv.classes, cinfo := henv.cinfo, abstracts := abstracts.toList,
-                           fnRequests := opts.fnRequests }
+  let mut env : TyEnv := { classes := henv.classes, cinfo := henv.cinfo, cinfoMap := henv.cinfoMap,
+                           classIx := henv.classes.zipIdx.foldl (fun m (n, i) => m.insert n i) {},
+                           belowReady := true,
+                           belowMap := henv.classes.foldl (fun m d =>
+                             let i := henv.info d
+                             if i.isIface || i.isAbstract then m else
+                             (henv.supers d).foldl (fun m T => m.insert T ((m[T]?.getD []) ++ [d])) m) {},
+                           abstracts := abstracts.toList, fnRequests := opts.fnRequests }
   env := { env with varFields := varFields, uniques := uniques }
   -- the class whose code each inherited field default is (#39): the nearest
   -- one, the class's own first, that gives the field a default itself
