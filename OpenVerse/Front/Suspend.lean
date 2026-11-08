@@ -1016,6 +1016,52 @@ partial def dispatchTargets (isT : Nat → Bool) : Expr → List Nat
   | .ite c t e => dispatchTargets isT c ++ dispatchTargets isT t ++ dispatchTargets isT e
   | _ => []
 
+/-- (#179) `e` with each test in `Typed.dispatch`'s shape (a refined call,
+    #142, or a #157 field accessor) whose receiver slot is kept in the frame
+    (`resident`) made a call of a helper whose first parameter is the
+    receiver, `via(recv, args…) = if (isTag us [local 0]) then f(local 0,
+    args…) else userErr`, typed at the type `exp` the value is checked
+    against: once the slot is a frame field, the test would lose the rule's
+    shape. The helpers (body, parameter types, result type) are collected,
+    numbered from `base`. -/
+partial def fixRefined (S : Sigs) (Γ : Array VTy) (ρ : VTy) (resident : Nat → Bool) (base : Nat)
+    (exp : Option VTy) : Expr → StateM (Array (Expr × List VTy × VTy)) Expr
+  | .ite c@(.heap (.isTag us) [.local y]) (.call f (.local y' :: es)) e => do
+    let e' ← fixRefined S Γ ρ resident base exp e
+    let es' ← es.mapM (fixRefined S Γ ρ resident base none)
+    let keep : Expr := .ite c (.call f (.local y' :: es')) e'
+    if y != y' || !resident y then return keep
+    match exp, Γ[y]?, es'.mapM (fun a => tc S Γ.toList ρ a none) with
+    | some τ, some ty, some σs =>
+      let i := (← get).size
+      let n := es'.length
+      modify (·.push (.ite (.heap (.isTag us) [.local 0]) (.call f ((List.range (n + 1)).map Expr.local))
+        (.prim .userErr []), ty :: σs, τ))
+      return .ite c (.call (base + i) (.local y :: es')) e'
+    | _, _, _ => return keep
+  | .assign i x => return .assign i (← fixRefined S Γ ρ resident base (Γ[i]?) x)
+  | .heap (.set k) [.local 0, v] => do
+    let v' ← fixRefined S Γ ρ resident base (if k == resF then some ρ else none) v
+    return .heap (.set k) [.local 0, v']
+  | .seq a b => return .seq (← fixRefined S Γ ρ resident base none a) (← fixRefined S Γ ρ resident base exp b)
+  | .ite c t e => do
+    let c' ← fixRefined S Γ ρ resident base none c
+    let t' ← fixRefined S Γ ρ resident base exp t
+    let e' ← fixRefined S Γ ρ resident base exp e
+    return .ite c' t' e'
+  | .call f es => return .call f (← es.mapM (fixRefined S Γ ρ resident base none))
+  | .prim p es => return .prim p (← es.mapM (fixRefined S Γ ρ resident base none))
+  | .heap op es => return .heap op (← es.mapM (fixRefined S Γ ρ resident base none))
+  | .ret x => return .ret (← fixRefined S Γ ρ resident base none x)
+  | .print x => return .print (← fixRefined S Γ ρ resident base none x)
+  | .loop x => return .loop (← fixRefined S Γ ρ resident base none x)
+  | .forE i it f b => do
+    let it' ← fixRefined S Γ ρ resident base none it
+    let f' ← fixRefined S Γ ρ resident base none f
+    let b' ← fixRefined S Γ ρ resident base none b
+    return .forE i it' f' b'
+  | x => return x
+
 /-- The element slots of the `for`s in `e`. -/
 partial def forBinders : Expr → List Nat
   | .forE i it f b => i :: forBinders it ++ forBinders f ++ forBinders b
@@ -1120,17 +1166,26 @@ def lower (S : Sigs) (callee : Nat → Option Callee) (syncMark raceMark rushMar
   -- and writes become the frame's (so nothing is stored or reloaded), except
   -- a `for`'s element slot, bound by the `for` itself; each function then
   -- keeps only the transient slots it uses, renumbered after its parameters
-  let finish (e : Expr) : LFn :=
+  let residentIn (e : Expr) (j : Nat) : Bool :=
+    j ≥ 2 + arity && !((st.trans[j]?).getD false) && !(forBinders e).contains j
+  -- (the refined tests on slots that become frame fields go through helpers
+  -- of their own, after the refined suspending calls', #179)
+  let prep (e : Expr) : StateM (Array (Expr × List VTy × VTy)) Expr :=
     let e := fill vd vd kill e
-    let binders := forBinders e
-    let resident (j : Nat) : Bool :=
-      j ≥ 2 + arity && !((st.trans[j]?).getD false) && !binders.contains j
+    fixRefined S st.Γ ρ (residentIn e) (env.viaBase + st.vias.size) none e
+  let ((res, can, arms), more) := (do
+      let r ← prep res
+      let c ← prep can
+      let as ← st.arms.toList.mapM fun (r, c) => do return (← prep r, ← prep c)
+      return (r, c, as) : StateM _ _).run #[]
+  let finish (e : Expr) : LFn :=
+    let resident := residentIn e
     let e := toFields (fun j => if resident j then some (base + (j - 2)) else none) e
     let used := ((slotsOf e).filter (· ≥ 2 + arity)).eraseDups.mergeSort
     let ren (j : Nat) : Nat := if j < 2 + arity then j else 2 + arity + ((used.idxOf? j).getD 0)
     { body := renumber ren e, slots := st.Γ.toList.take (2 + arity) ++ used.map fun j => (st.Γ[j]?).getD .int }
-  return { body := finish res, cancel := finish can, arms := st.arms.toList.map fun (r, c) => (finish r, finish c),
-           branchArms := st.branchArms.toList, vias := st.vias.toList,
+  return { body := finish res, cancel := finish can, arms := arms.map fun (r, c) => (finish r, finish c),
+           branchArms := st.branchArms.toList, vias := st.vias.toList ++ more.toList,
            fields := [.int, ρ] ++ st.children.toList ++ List.replicate (2 * armsTotal) .int ++
              (st.Γ.toList.drop 2) }
 

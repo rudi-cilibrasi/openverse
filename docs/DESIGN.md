@@ -405,6 +405,12 @@ and journals every write made in a condition (for rollback). So:
   The callee is resumed and cancelled through `resumeOwn(frame, sched)`
   and `cancelOwn(frame, sched)`, which read its parameters from its frame,
   as the caller has no slots of the callee's (refined) parameter types.
+- A refined call that does not suspend (an immediate method, or a #157
+  field accessor) has the same problem once its receiver's slot is a frame
+  field. Before the slots become fields, each such test gets a helper of
+  its own, `via(recv, args…) = if (isTag us [local 0]) then f(local 0,
+  args…) else userErr`, typed at the type its value is checked against
+  (#179).
 
 Values stored in a frame, such as strings or arrays in slots, are kept
 like any object's fields (see "Objects in the C runtime"). Each pass
