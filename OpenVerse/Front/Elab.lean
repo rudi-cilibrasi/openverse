@@ -4438,9 +4438,10 @@ def specialise (fns0 : Array Fn) (slotTys0 : Array (List VTy)) (S0 : Sigs) (ntpO
     for (g, es) in calls do
       let some θ := (witTys S Γ ρ g es).mapM id
         | throw s!"in {fns[gi]!.name}: a type argument of a call of {fns[g]!.name} has no type of its own (#174)"
-      -- (types that grow at each copy: polymorphic recursion)
-      if θ.any (·.size > 40) then
-        throw s!"{fns[g]!.name} would be compiled at ever bigger types: a generic function with branch, rush or spawn, or one using such a function at its own type parameters, cannot call itself at bigger types (#174)"
+      -- (types that grow at each copy, doubling for instance: polymorphic
+      -- recursion; linear growth meets the bound on copies first)
+      if θ.any (·.size > 2000) then
+        throw s!"{fns[g]!.name} would be compiled at a type of more than 2000 parts, as if at ever bigger types: a generic function with branch, rush or spawn, or one using such a function at its own type parameters, cannot call itself at bigger types (#174)"
       if θ.any (·.mentionsVar) then throw s!"internal error: specialising a call of {fns[g]!.name} in {fns[gi]!.name}"
       if !specKeys.contains (g, θ) then
         if specKeys.size ≥ 500 then

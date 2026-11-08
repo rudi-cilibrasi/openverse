@@ -266,9 +266,9 @@ partial def liftChains (m base : Nat) : Expr → StateM (Array (Expr × List Nat
     can agree. -/
 partial def pruneDead (S : Sigs) (Γ : List VTy) : Expr → Expr
   | .ite c@(.heap (.isTag us) [.local y]) t@(.call _ (.local y' :: _)) e =>
-    let dead := y == y' && match Γ[y]?, us.head? with
-      | some (.ref _ a), some u => a.all VTy.closed && !VTy.pinsOK ((S.pinsOf u).take a.length) a
-      | _, _ => false
+    let dead := y == y' && !us.isEmpty && match Γ[y]? with
+      | some (.ref _ a) => a.all VTy.closed && us.all fun u => !VTy.pinsOK ((S.pinsOf u).take a.length) a
+      | _ => false
     if dead then pruneDead S Γ e else .ite c (pruneDead S Γ t) (pruneDead S Γ e)
   | .assign i x => .assign i (pruneDead S Γ x)
   | .ret x => .ret (pruneDead S Γ x)

@@ -1,4 +1,4 @@
-# expect: Grow would be compiled at ever bigger types
+# expect: more than 500 copies of generic functions with branch, rush or spawn
 Grow(X:t, N:int where t:type)<suspends>:int =
     branch:
         Sleep(1.0)

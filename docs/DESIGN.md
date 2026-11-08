@@ -437,8 +437,9 @@ substituted. The copies' own calls are handled the same way, from a
 worklist. In a copy, a refined dispatch test (#142) whose classes' pins
 its closed types rule out is dropped, as the checker types such a test
 only when the pins can agree. The generic originals are then never called;
-they keep only their parameters and are not lowered. Bounds on the size of
-the types and on the number of copies turn polymorphic recursion into an
+they keep only their parameters and are not lowered. Bounds on the number
+of copies (500) and on the size of the types (2000 parts, which types that
+double at each call reach quickly) turn polymorphic recursion into an
 error.
 
 ## Classes as references

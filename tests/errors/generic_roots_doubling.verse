@@ -1,4 +1,4 @@
-# expect: Grow would be compiled at ever bigger types
+# expect: would be compiled at a type of more than 2000 parts
 # polymorphic recursion, doubling
 Grow(X:t, N:int where t:type)<suspends>:int =
     branch:
