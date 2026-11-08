@@ -5653,6 +5653,13 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   let mut frameClasses : Array (List VTy) := #[]
   let mut extraSigs : Array (List VTy × VTy) := #[]
   let mut mainCall : Expr := .call mainSig.idx []
+  -- (a refined test, #142, of classes whose pins the receiver's closed type
+  -- arguments rule out can never pass, and the checker types such a test
+  -- only when the pins can agree: it goes, #186)
+  let S00 : Sigs := { fns := fsigs0, classes := classTable, protos, pins }
+  for gi in List.range fns.size do
+    let fn := fns[gi]!
+    fns := fns.set! gi { fn with body := Suspend.pruneDead S00 ((slotTys[gi]?).getD []) fn.body }
   if usesConc then
     let allS := sigs.toList ++ gsigs.toList
     let idxOf (n : String) : Nat := ((allS.find? (·.name == n)).map (·.idx)).getD 0
