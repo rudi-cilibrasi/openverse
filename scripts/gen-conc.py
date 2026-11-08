@@ -13,7 +13,9 @@ A program combines
     defer (specialised at each type they are used at, #174);
   - spawns of plain calls and of dispatched methods (#173), awaited and
     cancelled, nested spawns (#180);
-  - rush losers that outlive the rush, branches nested in branches (#187).
+  - rush losers that outlive the rush, branches nested in branches (#187);
+  - a class keeping one type argument and fixing another, overriding with a
+    narrower result (#198).
 Main prints everything it computes. Every program ends: sleeps are short,
 and nothing waits forever.
 """
@@ -104,6 +106,33 @@ emit(1, f"Sleep({dur()})")
 emit(1, "set S.Item = X")
 emit(1, f"Sleep({dur()})")
 emit(1, "S.Item")
+# a class that fixes one type argument and keeps the other, overriding with
+# a narrower result (#198)
+emit(0, "pr(a:type, b:type) := class:")
+emit(1, "A:a")
+emit(1, "B:b")
+emit(1, "First()<suspends>:a = A")
+emit(1, "Me()<suspends>:pr(a, b) = Self")
+emit(0, "ipr(b:type) := class(pr(int, b)):")
+emit(1, "First<override>()<suspends>:int =")
+if R.random() < 0.5:
+    emit(2, "defer:")
+    emit(3, 'Print("ipr first defer")')
+emit(2, f"Sleep({dur()})")
+emit(2, "A + 1")
+emit(1, "Me<override>()<suspends>:ipr(b) =")
+emit(2, f"Sleep({dur()})")
+emit(2, "Self")
+emit(0, "PrUse(P:pr(a, b), X:a where a:type, b:type)<suspends>:a =")
+emit(1, "Q := P.Me()")
+if R.random() < 0.5:
+    emit(1, "race:")
+    emit(2, "Q.First()")
+    emit(2, "block:")
+    emit(3, f"Sleep({dur()})")
+    emit(3, "X")
+else:
+    emit(1, "Q.First()")
 # events
 emit(0, "Waiter(E:event(int), K:int)<suspends>:int =")
 emit(1, "V := E.Await()")
@@ -242,7 +271,14 @@ emit(0, "Main()<suspends>:void =")
 receivers = [("int", "int_box{V := %d}"), ("int", "sub(int){V := %d}"), ("int", "box(int){V := %d}"),
              ("string", 'box(string){V := "s%d"}'), ("string", 'sub(string){V := "t%d"}')]
 for _ in range(R.randint(2, 6)):
-    c = R.randrange(8)
+    c = R.randrange(9)
+    if c == 8:
+        n = R.randint(1, 9)
+        if R.random() < 0.5:
+            emit(1, f'Print("pr {{PrUse(ipr(string){{A := {n}, B := "x"}}, 0)}}")')
+        else:
+            emit(1, f'Print("pr {{PrUse(pr(int, logic){{A := {n}, B := true}}, 0)}}")')
+        continue
     if c == 4:
         n = R.randint(1, 9)
         emit(1, f'Print("evalall {{EvalAll(array{{lit{{N := {n}}}, neg{{E := lit{{N := {n + 1}}}}}}}, 0)}}")')
