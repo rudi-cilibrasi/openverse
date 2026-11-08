@@ -1059,6 +1059,54 @@ def litAt (env : TyEnv) (exp : Option Ty) (r : R) : R :=
     | _, _ => r
   | _ => r
 
+/-- `v < w` on numbers of one base. -/
+def numLt : Value → Value → Bool
+  | .int x, .int y => x < y
+  | .float x, .float y => VFloat.ofBits x < VFloat.ofBits y
+  | _, _ => false
+
+def numNeg : Value → Value
+  | .int x => .int (-x)
+  | .float x => .float (VFloat.canon (-(VFloat.ofBits x)))
+  | v => v
+
+/-- A refinement's interval: its tightest lower and upper bounds, each with
+    whether it is strict (#143). -/
+def refineInterval (conds : List (String × Value)) : Option (Value × Bool) × Option (Value × Bool) :=
+  conds.foldl (fun (lo, hi) (op0, b0) =>
+    -- (an int's strict bound is the next one, not strict: `< 10` is `<= 9`)
+    let (op, b) : String × Value := match op0, b0 with
+      | "<", .int x => ("<=", .int (x - 1))
+      | ">", .int x => (">=", .int (x + 1))
+      | o, v => (o, v)
+    let strict := op == "<" || op == ">"
+    if op == ">" || op == ">=" then
+      let lo' := match lo with
+        | none => some (b, strict)
+        | some (l, ls) => if numLt l b || (l == b && strict && !ls) then some (b, strict) else some (l, ls)
+      (lo', hi)
+    else
+      let hi' := match hi with
+        | none => some (b, strict)
+        | some (h, hs) => if numLt b h || (h == b && strict && !hs) then some (b, strict) else some (h, hs)
+      (lo, hi')) (none, none)
+
+/-- Interval `a` lies within `b`. -/
+def intervalWithin (a b : Option (Value × Bool) × Option (Value × Bool)) : Bool :=
+  let lowOk := match a.1, b.1 with
+    | _, none => true
+    | none, some _ => false
+    | some (al, as), some (bl, bs) => numLt bl al || (al == bl && (as || !bs))
+  let highOk := match a.2, b.2 with
+    | _, none => true
+    | none, some _ => false
+    | some (ah, as), some (bh, bs) => numLt ah bh || (ah == bh && (as || !bs))
+  lowOk && highOk
+
+/-- The interval of `-X` for `X` in `i`. -/
+def intervalNeg (i : Option (Value × Bool) × Option (Value × Bool)) : Option (Value × Bool) × Option (Value × Bool) :=
+  (i.2.map fun (v, s) => (numNeg v, s), i.1.map fun (v, s) => (numNeg v, s))
+
 /-- A refinement's value as its base (#136): operators, comparisons and
     ToString see the base type. -/
 def widenR (env : TyEnv) (r : R) : R :=
@@ -1130,6 +1178,12 @@ partial def convert (env : TyEnv) (e : Expr) (a b : Ty) : EM (Option Expr) := do
   | _, .any => return some (.seq e (.lit .void))
   -- a refinement is its base (#136); the base is the refinement only for a
   -- literal that meets its conditions (else a cast, `age[X]`)
+  -- (a refinement within another's interval is one of it, #143)
+  | .refine n, .refine m =>
+    match env.refines.lookup n, env.refines.lookup m with
+    | some (bn, cn), some (bm, cm) =>
+      if bn == bm && intervalWithin (refineInterval cn) (refineInterval cm) then return some e else return none
+    | _, _ => return none
   | .refine n, b =>
     match env.refines.lookup n with
     | some (base, _) => if base == b then return some e else convert env e base b
@@ -1211,6 +1265,20 @@ partial def joinTy (env : TyEnv) (a b : Ty) (exp : Option Ty) (inner : Bool := f
   else if a == b then some a
   else match a, b with
   | .int, .rational | .rational, .int => if inner then none else some .rational
+  -- (refinements join at an expected refinement holding both, or at the
+  -- wider of the two, #143)
+  | .refine n, .refine m =>
+    let within (x y : String) : Bool := match env.refines.lookup x, env.refines.lookup y with
+      | some (bx, cx), some (by_, cy) => bx == by_ && intervalWithin (refineInterval cx) (refineInterval cy)
+      | _, _ => false
+    match exp with
+    | some (.refine e) => if within n e && within m e then some (.refine e)
+      else if within n m then some (.refine m) else if within m n then some (.refine n)
+      else (env.refines.lookup n).map (·.1)
+    | _ => if within n m then some (.refine m) else if within m n then some (.refine n)
+      else match env.refines.lookup n, env.refines.lookup m with
+        | some (bn, _), some (bm, _) => if bn == bm then some bn else none
+        | _, _ => none
   | .refine n, b | b, .refine n =>
     match env.refines.lookup n, b with
     | some (base, _), .refine m => if (env.refines.lookup m).map (·.1) == some base then some base else none
@@ -1458,7 +1526,14 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
     let hint : Option Ty := match exp with
       | some .float => some .float
       | _ => none
-    let r := widenR ctx.types (← elabE ctx e hint)
+    let r0 ← elabE ctx e hint
+    let r := widenR ctx.types r0
+    -- (the negation of a refined value is of an expected refinement whose
+    -- interval holds the flipped one, #143)
+    if let (.refine n, some (.refine m)) := (r0.ty, exp) then
+      if let (some (bn, cn), some (bm, cm)) := (ctx.types.refines.lookup n, ctx.types.refines.lookup m) then
+        if bn == bm && intervalWithin (intervalNeg (refineInterval cn)) (refineInterval cm) then
+          return ⟨.prim (if bn == .float then .fneg else .neg) [r.e], .refine m⟩
     if r.ty == .float then return litAt ctx.types exp ⟨.prim .fneg [r.e], .float⟩
     if r.ty != .int then eerr p s!"unary '-' needs an int or a float, found {r.ty.show}"
     return litAt ctx.types exp ⟨.prim .neg [r.e], .int⟩
@@ -4354,6 +4429,8 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     match top with
     | .fn p n ps _ effs ret _ =>
       let (tys, rt) ← fnTypes env p n ps effs ret
+      if (["converges", "computes", "transacts"].filter effs.contains).length > 1 then
+        throw s!"{p.show}: {n} has more than one of <converges>, <computes> and <transacts> (they exclude each other)"
       if effs.contains "computes" && ("transacts" :: heapFx).any effs.contains then
         throw s!"{p.show}: <computes> excludes the heap effects (<reads>, <writes>, <allocates>, <transacts>) that {n} also has"
       sigs := sigs.push { idx, name := n, params := tys, ret := rt, decides := effs.contains "decides",
@@ -4379,6 +4456,8 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       let tparams ← checkTParams env tps
       let genv := { env with tvars := tparams.map fun (v, c) => (v, Ty.param v c) }
       let (tys, rt) ← fnTypes genv p n ps effs ret
+      if (["converges", "computes", "transacts"].filter effs.contains).length > 1 then
+        throw s!"{p.show}: {n} has more than one of <converges>, <computes> and <transacts> (they exclude each other)"
       if effs.contains "computes" && ("transacts" :: heapFx).any effs.contains then
         throw s!"{p.show}: <computes> excludes the heap effects (<reads>, <writes>, <allocates>, <transacts>) that {n} also has"
       -- generic functions come after the others

@@ -487,8 +487,13 @@ Main():void =
 - A refined value is a value of its base: arithmetic, comparisons, `case`,
   `ToString` and the built-ins see the base, and their results are of the
   base type. `set X op= …` of a refined variable needs a cast.
-- Not supported: negation keeping a refinement (with its bounds flipped),
-  and overloads on disjoint refinements (refinements of one base overlap).
+- A refinement whose interval lies within another's is one of it (#143):
+  a `percent` in [0, 1] is a `finite`. An int's strict bound counts as the
+  next one (`_X < 10` is `_X <= 9`). The negation of a refined value is of
+  an expected refinement whose interval holds the flipped one
+  (`NegValue:negative_percent = -MakePercent()`).
+- Not supported: overloads on disjoint refinements (refinements of one base
+  overlap).
 
 ## float
 
