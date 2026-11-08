@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Mutation fuzzing of the front end: mutate the lines and tokens of tests/verse/*.verse at random.
 # Every mutant must be either rejected with an ordinary error (exit 4, not "internal error"), or
-# accepted, in which case the Lean interpreter and the C runtime must agree on it.
+# accepted, in which case the Lean interpreter and the C runtime must agree on it. At fuel 200000 the
+# default run compares the same mutants as at ten times more, and a runaway one stops in about a
+# second, where nested spawns could keep Lean busy until the 20 s timeout (#215).
 #   usage: scripts/fuzz-front.sh [COUNT [SEED]]
 set -uo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -38,8 +40,8 @@ for f in "$tmp"/m*.verse; do
   timeout 20 "$ov" emit "$f" -o "$f.vbc" >/dev/null 2>"$f.err"; e=$?
   if [[ $e -eq 4 ]] && ! grep -q "internal error" "$f.err"; then rej=$((rej+1)); continue; fi
   if [[ $e -ne 0 ]]; then echo "FRONT END BUG ($e) on $(basename "$f"): $(head -3 "$f.err")"; cp "$f" "$root/build/" 2>/dev/null; bad=$((bad+1)); continue; fi
-  timeout 20 "$ov" run "$f" --fuel 2000000 >"$f.l" 2>"$f.le"; le=$?
-  timeout 20 "$cv" "$f.vbc" --fuel 2000000 >"$f.c" 2>"$f.ce"; ce=$?
+  timeout 20 "$ov" run "$f" --fuel 200000 >"$f.l" 2>"$f.le"; le=$?
+  timeout 20 "$cv" "$f.vbc" --fuel 200000 >"$f.c" 2>"$f.ce"; ce=$?
   if [[ $le -ne 3 && $le -ne 124 ]] && { [[ $le -ne $ce ]] || ! cmp -s "$f.l" "$f.c" || ! cmp -s "$f.le" "$f.ce"; }; then
     echo "MISMATCH on $(basename "$f"): lean $le, C $ce"; bad=$((bad+1)); continue
   fi
