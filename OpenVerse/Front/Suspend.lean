@@ -1223,8 +1223,11 @@ def lower (S : Sigs) (callee : Nat → Option Callee) (syncMark raceMark rushMar
   -- stopped, #187: a loop picking the highest, in two transient slots)
   let bestS := st.Γ.size
   let whichS := bestS + 1
-  let st := { st with Γ := st.Γ ++ #[VTy.int, VTy.int], trans := st.trans ++ #[true, true] }
   let entries := st.kills.toList.zipIdx
+  -- (only in a function that has some, so that the others' frames stay as
+  -- they were)
+  let st := if entries.isEmpty then st else
+    { st with Γ := st.Γ ++ #[VTy.int, VTy.int], trans := st.trans ++ #[true, true] }
   let pick : List Expr := [.assign bestS (int 0), .assign whichS (int (-1))] ++ entries.map fun ((_, _, _, _, _, _, _, sk), j) =>
     .ite (.prim .lt [.local bestS, .local sk]) (.seq (seqVoid [.assign bestS (.local sk), .assign whichS (int (j : Nat))]) vd) vd
   let stopOne : List Expr := entries.map fun ((wf, wrapTag, stopFn, y, pcA, doneA, can, sk), j) =>

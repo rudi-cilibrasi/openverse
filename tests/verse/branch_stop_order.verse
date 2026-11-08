@@ -36,7 +36,7 @@ G(N:int)<suspends>:int =
     X
 Main()<suspends>:void =
     Print("{F()}")
-    # the same call site twice: each call's starts counted afresh
+    # the same call site twice: the frame is reused, its stopped sites cleared
     var I:int = 0
     loop:
         if (I = 2) then break
