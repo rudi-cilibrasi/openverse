@@ -1,0 +1,13 @@
+w tick 1
+w tick 2
+work done, count 4
+w ticker stopped
+got 4
+again
+w tick 1
+w tick 2
+work done, count 4
+w ticker stopped
+got 4
+end
+exit=0

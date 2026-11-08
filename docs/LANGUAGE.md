@@ -16,7 +16,7 @@ surface Verse is elaborated (`OpenVerse/Front/Elab.lean`) into Verse Core
 
 - The language: [Supported](#supported) · [Source text](#source-text) · [Parametric functions](#parametric-functions) · [defer](#defer) · [Overloading](#overloading) · [Parametric structs](#parametric-structs) · [Classes](#classes) · [Mutation, macros, tooling](#mutation-macros-tooling)
 - More types: [any](#any) · [Refinement types](#refinement-types) · [float](#float) · [rational](#rational) · [char32](#char32)
-- Programs: [Modules](#modules) · [Programs of several files](#programs-of-several-files)
+- Programs: [Modules](#modules) · [Programs of several files](#programs-of-several-files) · [Concurrency](#concurrency)
 - [Readings openverse takes](#readings-openverse-takes) · [Not supported in v1](#not-supported-in-v1)
 
 ## Supported
@@ -42,6 +42,7 @@ surface Verse is elaborated (`OpenVerse/Front/Elab.lean`) into Verse Core
 | Array methods | `A.Slice[i, j]`, `A.Slice[i]`, `A.Find[x]`, `A.RemoveElement[i]`, `A.RemoveFirstElement[x]`, `A.Remove[i, j]` (half-open), `A.ReplaceElement[i, x]`, `A.ReplaceFirstElement[x, y]`, `A.Insert[i, B]`, `A.Last[]`, `A.Last[n]` (the element n before the last) (all failable); `A.RemoveAllElements(x)`, `A.ReplaceAllElements(x, y)`, `A.ReplaceAll(Pattern, Replacement)` (contiguous subarrays, left to right, not overlapping; an empty pattern changes nothing), `Concatenate(A, B, …)` or `Concatenate(Arrays)` (#150) (never failing) | §9.1 |
 | Built-ins | `Print(s)`, `ToString(x)` (int, float, char, string), `Floor[F]`, `Ceil[F]`, `Round[F]`, `Int[F]` (of a float, failable), `Floor(R)`, `Ceil(R)` (of a rational or an int, never failing; `Floor(X / Y)` fails when `Y = 0`, as `X / Y` does), `Quotient[X, Y]`, `Mod[X, Y]` (Euclidean), `Abs`, `Min`, `Max`, `Err()` | API reference |
 | Modules | `name := module:` (nested), `M.F`, `A.B.F`, the types `M.c` and values `M.c{…}`, `(M:)F`, `using{M}` at file or module scope, `<public>` members (`<internal>` is the default); see [Modules](#modules) | ch. 16 |
+| Concurrency | `<suspends>` functions, `Sleep`, a suspends `Main`, under a deterministic scheduler; see [Concurrency](#concurrency) | ch. 14 |
 | Program entry | `Main()` — see the exit protocol in [`FORMAT.md`](FORMAT.md) | (not in the book) |
 
 ## Source text
@@ -672,6 +673,121 @@ the readings are flat:
 - other extensions, and `.zip`, are ignored;
 - errors in an imported file show its path.
 
+## Concurrency
+
+A function marked `<suspends>` can wait (Book of Verse ch. 14, #156).
+openverse supports such functions, `Sleep`, calls between them, `sync`,
+`race`, `rush`, `branch`, `spawn`, `task` and `event`.
+
+```verse
+Countdown(N:int)<suspends>:int =
+    var I:int = N
+    loop:
+        if (I <= 0) then break
+        Print("{I}")
+        Sleep(1.0)
+        set I -= 1
+    N
+
+Main()<suspends>:void =
+    Total := Countdown(3)   # prints 3 2 1, one second apart
+    Print("done after {Total} seconds")
+```
+
+- **`sync`.** Each statement of a `sync:` block is an arm. The arms start in
+  source order, each running until it waits or ends before the next starts,
+  and the `sync` ends when all have, with the tuple of their values. At
+  least two arms must be able to wait.
+- **`race`.** The arms start in source order; the first to end wins, and its
+  value is the `race`'s (of the arms' common type). An arm that ends without
+  waiting wins at once, and the arms after it never start. The losers that
+  started are cancelled at once, last started first: each unwinds from where
+  it waits, running the `defer:` blocks active there, those of the functions
+  it called first.
+
+  ```verse
+  Fetch()<suspends>:string =
+      defer:
+          Print("fetch cancelled or done")
+      Sleep(5.0)
+      "data"
+
+  Main()<suspends>:void =
+      Result := race:
+          Fetch()
+          block:
+              Sleep(1.0)
+              "timeout"
+      Print(Result)    # fetch cancelled or done, then timeout
+  ```
+- **`rush`.** As `race`, but the arms that started and have not ended when
+  the first ends go on, as tasks of their own, until they end or the
+  function that contains the `rush` exits (which cancels them, running
+  their defers). A `rush` cannot be in a `loop` or `for` body (the Book's
+  rule), nor in a generic function for now.
+- **`branch`.** The body of a `branch:` runs as a task of its own, at once
+  up to its first wait, while the code after it goes on. It shares the
+  enclosing function's variables, and it is cancelled (running its active
+  `defer:` blocks) when that function exits, by returning, ending or being
+  cancelled: after the function's own `defer:` blocks, the last started
+  branch first. A `branch` cannot be in a `loop` or `for` body (the Book's
+  rule), even through an arm, nor in a generic function for now.
+- **`spawn`.** `spawn{F(…)}` starts a task running the call, which must be
+  of a suspends function. Its arguments are evaluated at once, and the
+  task runs at once up to its first wait. The value is a `task(t)`, where
+  `t` is `F`'s result type, and `T.Await()` waits for the task to end and
+  gives its result (at once if it has ended). A task is not tied to the
+  code that spawned it: it runs until it ends or the program does. For
+  now, `spawn` is allowed only in a suspends function that is not generic.
+
+  ```verse
+  Fetch(Name:string, D:float)<suspends>:string =
+      Sleep(D)
+      "{Name} data"
+
+  Main()<suspends>:void =
+      A := spawn{Fetch("a", 2.0)}
+      B := spawn{Fetch("b", 1.0)}
+      Print(B.Await())    # after 1 second: b data
+      Print(A.Await())    # after 2 seconds: a data
+  ```
+- **`event`.** An `event(t){}` has `E.Await()`, which waits for the next
+  `E.Signal(X)` and gives `X`, and `E.Signal(X)`, which wakes every task
+  waiting at that moment, each with `X` (the API's reading; the Book's text
+  says both "each awaiter" and "exactly one"). The woken tasks go on in the
+  scheduler's order (`Main`, then tasks in the order they were started,
+  arms in source order), not in the order they began waiting. A `Signal` with no one waiting is lost, and `Signal`
+  itself never waits. `event()` without a type, `sticky_event` and
+  `subscribable_event` are not supported.
+- **Arms.** Arms share the enclosing function's variables. An arm is a
+  scope of its own: `return` in an arm is not supported yet, and `break`
+  cannot leave it.
+- **Effects.** `<suspends>` and `<decides>` exclude each other. A suspends
+  function, `Sleep`, `sync` and `race` can be used only in a suspends
+  function, and not in a failure context (an `if` condition, a `for`
+  filter, a `case` pattern, a `<decides>` call's arguments) nor in a
+  `defer`. A method may be `<suspends>` (an override must be too, and
+  only when what it overrides is); dispatching one to a class that fixes
+  type arguments (#142) is not supported yet, nor a `<suspends>`
+  constructor. `<suspends>` combines with the heap effects
+  (`<computes>`, `<reads>`, …): waiting has none.
+- **Time.** The schedule is deterministic: a virtual clock counts ticks, 30
+  per second, and ticks in which nothing can run are skipped. In each tick,
+  `Main` goes on first, then each task in the order they were spawned, then
+  again while a task ended (so that those waiting for it go on in the same
+  tick). Arms that can go on in the same tick do so in source order. `Sleep(S)`
+  resumes after `Round(30·S)` ticks, at least one, so it always yields;
+  `Sleep(Inf)` never resumes; a negative or NaN `S` returns at once.
+- **The program.** A suspends `Main` runs under the scheduler. The program
+  ends when `Main` does, even if tasks are still running. If `Main` waits
+  and no task can run again (for example after `Sleep(Inf)`, or awaiting a
+  task that never ends), it ends as `Err()` does: exit 2.
+- **Lowering.** The front end compiles each suspends function into Verse Core:
+  a frame object holds its variables, and a resume function runs it from
+  one suspension point to the next (see DESIGN.md). Nothing changes in
+  Verse Core, the proofs or the C runtime. A call site keeps its callee's
+  frame, so a loop of calls allocates once.
+
 ## Readings openverse takes
 
 | Question | Book | openverse |
@@ -695,6 +811,9 @@ the readings are flat:
 | `NaN < X` | not stated | fails (IEEE: NaN orders with nothing); `NaN = NaN` succeeds (the Book) |
 | `=` between different types | not stated | refused when two scalar types (int, float, char, …) meet at the same place, also inside containers (`array{1} = array{1.0}`), as Verse Core holds them differently |
 | Ordering of rationals | not stated (§2 lists `<` … for `int` and `float`) | exact (by continued fractions, so it cannot overflow), and an int compares with a rational |
+| `Sleep(0.0)` | "may resume in the same tick" (ch. 14); the API reference: it always yields | always yields: resumes in the next tick (#156) |
+| `Sleep(S)` rounding | rounded up to whole ticks (ch. 14) | `Round(30·S)` ticks, at least one: rounding to the nearest keeps `Sleep(0.1)` at 3 ticks despite binary floats (#156) |
+| End of a program with tasks | not stated | the program ends when `Main` does; a `Main` that waits with no task able to run is an error (exit 2) (#156) |
 | Extent of a `<#>` comment | "everything indented by four spaces on subsequent lines" (§1.1) | the rest of the `<#>` line and every following line indented more than that line, whatever the amount (blank lines included); `<#>` may also follow code on a line |
 
 ## Not supported in v1
@@ -702,7 +821,7 @@ the readings are flat:
 arithmetic on rationals (see [rational](#rational)), float functions beyond those of [float](#float),
 the class features listed under [Classes](#classes), struct methods (Verse structs have none; classes do),
 `weak_map`, module paths `using{/Verse.org/…}` (accepted and ignored), overloading beyond [Overloading](#overloading), nested
-functions, concurrency (`spawn`, `sync`,
-`race`, `rush`, `branch`, `<suspends>`), and effect checking
+functions, concurrency beyond [Concurrency](#concurrency) (`spawn`
+outside suspends functions, `event()` without a type argument, cancelling a task, `return` in arms; #156), and effect checking
 other than `<decides>` and the heap effects (`<converges>` is accepted and
 ignored).

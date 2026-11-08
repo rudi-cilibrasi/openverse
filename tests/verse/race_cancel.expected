@@ -1,0 +1,15 @@
+inner a unwound
+outer a unwound
+race 7
+left sees 1
+right sees 11
+count 11
+x tick 1
+y tick 1
+x tick 2
+y tick 2
+timeout
+1 2
+first arm
+second arm
+exit=0

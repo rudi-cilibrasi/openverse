@@ -241,7 +241,9 @@ partial def parseExpr (stop : Nat) : PM SExpr := do
   else if t.identName?.isSome && t1.isSym ":=" then
     bump; bump
     return .decl t.pos t.identName?.get! none false (← parseExpr stop)
-  else if t.identName?.isSome && t1.isSym ":" then
+  else if t.identName?.isSome && t1.isSym ":" && !(← peekT 2).bol then
+    -- (a typed declaration has its type on the line of its `:`; `sync:`
+    -- and the like start an indented block)
     let saved ← get
     let typed ← (do
         bump; bump
@@ -795,6 +797,35 @@ partial def parsePrimary (stop : Nat) : PM SExpr := do
   -- `defer:` (Book of Verse ch. 7): runs when its scope exits; `$defer(body)`
   | .ident "defer" => bump; return .app t.pos (.ident t.pos "$defer") [← parseBody stop] false
   | .ident "block" => bump; parseBody stop
+  -- `sync:` and `race:` (#156): each statement of the block is an arm
+  -- `branch:` (#156): a background task over the enclosing function's frame
+  | .ident "branch" =>
+    let n ← peekT 1
+    if n.isSym ":" || n.isSym "{" then
+      bump
+      let b ← parseBody stop
+      return .app t.pos (.ident t.pos "$branch") [b] false
+    else
+      bump; return .ident t.pos "branch"
+  -- `spawn{F(…)}` (#156)
+  | .ident "spawn" =>
+    if (← peekT 1).isSym "{" then
+      bump
+      let b ← parseBody stop
+      return .app t.pos (.ident t.pos "$spawn") [b] false
+    else
+      bump; return .ident t.pos "spawn"
+  | .ident "sync" | .ident "race" | .ident "rush" =>
+    let n ← peekT 1
+    if n.isSym ":" || n.isSym "{" then
+      bump
+      let kw := if t.isKw "sync" then "$sync" else if t.isKw "race" then "$race" else "$rush"
+      let arms := match ← parseBody stop with
+        | .block _ es => es
+        | e => [e]
+      return .app t.pos (.ident t.pos kw) arms false
+    else
+      bump; return .ident t.pos (t.identName?.getD "sync")
   | .ident "let" =>
     if (← peekT 1).isSym "(" then
       -- `let(defs){body}`: the definitions are visible in the body only, and

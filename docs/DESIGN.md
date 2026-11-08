@@ -9,7 +9,7 @@ against it. This page records the decisions behind the shape of the code.
 **Contents**
 
 - Semantics: [Two languages, one semantics](#two-languages-one-semantics) · [Failure and rollback](#failure-and-rollback) · [Fuel](#fuel)
-- Front end: [Translation validation](#translation-validation-instead-of-a-verified-front-end) · [Modules](#modules-a-renaming-before-elaboration) · [Floats](#floats-canonical-bits) · [Rationals](#rationals-helpers-written-in-verse) · [Generic functions](#generic-functions-polymorphic-verse-core)
+- Front end: [Translation validation](#translation-validation-instead-of-a-verified-front-end) · [Modules](#modules-a-renaming-before-elaboration) · [Floats](#floats-canonical-bits) · [Rationals](#rationals-helpers-written-in-verse) · [Generic functions](#generic-functions-polymorphic-verse-core) · [Concurrency](#concurrency-suspends-functions-as-frames)
 - Classes and the heap: [Classes as references](#classes-as-references) · [Typing the heap](#typing-the-heap) · [Typed defaults](#why-every-slot-starts-with-a-typed-default)
 - C runtime: [The binary format and the loader](#the-binary-format-and-the-loader) · [Two semantics, one seam](#two-semantics-one-seam) · [Objects in the C runtime](#objects-in-the-c-runtime)
 - [Readings of the Book](#readings-of-the-book)
@@ -252,6 +252,141 @@ instantiation lets inference take different paths at different types (at
 `void`, for example). Monomorphising the generically checked body is sound,
 but checks each instance separately, multiplies code, and cannot express
 polymorphic recursion.
+
+## Concurrency: suspends functions as frames
+
+Verse Core has no suspension, and giving it one would change the evaluator,
+every preservation case, and a C interpreter that recurses on the C stack.
+So the front end lowers concurrency into ordinary Verse Core (#156), the
+classic coroutine transformation. A `<suspends>` function `g` becomes:
+
+- a frame class: the suspension point it is at, its `?result`, one `?frame`
+  per suspension point for the callee's frame, and one field per slot;
+- `g$new(params…)`, which allocates a frame, `g$reset(frame, params…)`, which
+  readies it for another call, and `g$resume(frame, sched, params…)`, which
+  runs from the frame's suspension point to the next one (result 0) or the
+  end (result 1). The parameters are passed again only so that the slots'
+  initial values (`DefaultE`) can refer to them.
+
+`Front/Suspend.lean` turns `g`'s elaborated body into `g$resume`'s:
+
+1. **Slots and returns.** The slots move up two places, for the frame and the
+   scheduler, and `return e` stores `e` and returns 1.
+2. **A-normal form.** Each call of a suspends function becomes a statement of
+   its own. Values computed before it in the same expression go to
+   temporaries first, typed by Core's checker (`tc … none`).
+3. **Resume guards.** While seeking the suspension point to resume at, a flag
+   is set, and a statement that cannot contain that point is skipped. An
+   `if` picks the branch that holds it instead of testing its condition
+   again, and a `loop` stays a loop. A `for` whose body suspends becomes a
+   loop over an index.
+4. **Slots in the frame.** The slots whose values must outlive a suspension
+   point live in the frame: their reads and writes become the frame's.
+   These are the function's own and the pass's temporaries. The slots used
+   only within one resumption stay real slots: the seeking flag, a branch
+   choice, a callee's status, a `for`'s element. Each generated function
+   keeps only those, renumbered after its parameters, so there is nothing
+   to store or reload, and code size grows linearly with the function.
+
+At a suspension point, the caller resumes the callee's frame and returns 0
+if the callee is pending. Failure contexts never contain a suspension, so a
+rollback never spans one, and the frame's fields roll back with the heap
+like any object's. The result is ordinary Verse Core, which
+`Prog.checkTypes` checks, and Lean and C run.
+
+**`sync` and `race`.** In the elaborated Core, a `sync` or `race` is a call
+of the marker `$syncMark` or `$raceMark` on the array of its arms. Each arm
+is a statement that leaves the arm's value in a slot (for `race`, the one
+slot of the arms' common type). The pass makes each arm a function of its
+own over the same frame, with its own suspension point and done flag in
+fields of the frame. The enclosing code resumes the arms in order; as the
+variables live in the frame, the arms share them. A `race`'s winner cancels the arms that started and are pending,
+last first.
+
+**Tasks.** A `spawn` gets a root: a suspends function `$spawnK(T, args…)`
+that the pass makes from the spawned call. It runs the call and fills the
+task `T` (a `task(t)`, below a non-generic `$taskBase` with a done flag).
+The spawn site calls `$spawnK$start(sched, $spawnK$new(sched, T, args…))`,
+which adds the root's frame to the scheduler's `Roots` and runs it up to
+its first suspension point.
+
+Each pass resumes `Main`'s frame, then every root whose suspension point
+is not -1 (done). It reaches a root through a test of its class
+(`Typed.dispatch` again, at a type that covers every root frame) and a
+trampoline that passes the root's parameters from its frame. A root that
+ends makes the scheduler pass again in the same tick. `T.Await()` is a
+helper written in Verse: it waits at the leaf `$WaitDone` (whose frame
+tests the done flag, non-generically), then takes the result.
+
+A `branch` is an arm over the enclosing frame, run as a root through a
+wrapper `[pc, frame]`. The wrapper's trampoline resumes the arm unless the
+function stopped it. Every exit of the function, and its cancel function,
+stops its branches: it marks each wrapper done (through a test of its
+class, kept in a frame field) and cancels each arm still pending. A frame
+reused for another call so never shares an arm with an old wrapper. A
+`rush` is a `race` whose arms each get such a wrapper: when the first arm
+ends, the others that are pending are registered as roots (not run again
+at once) instead of cancelled.
+
+An `event(t)` keeps a list of waiter records (each an `$evrec(t)`, also
+below `$taskBase`). `E.Await()` first drops the records at the head that are
+done (woken, or of waits that were cancelled, which mark their record in a
+`defer:`), then appends one and waits at `$WaitDone`. `E.Signal(X)` gives
+`X` to every record in the list, marks it done, and empties the list. A record learns the scheduler on its first poll, so
+`Signal`, which has no scheduler of its own, can make the scheduler pass
+again in the same tick.
+
+The roots are a list of cells `[root, next]` (adding one costs a cell; an
+array would be copied at each spawn, and C keeps every copy). A pass follows
+the list, reading each cell's next after its root ran, so a root added
+during the pass runs in it. After a root ended or was stopped, the cells of
+the roots that are done are unlinked between ticks. In C, what a task or a
+branch allocates (its frame, wrapper, cell, task object, waiter record)
+stays in memory, a few hundred bytes each.
+
+**Cancellation.** Every region, a function body or an arm, also gets a
+cancel function. It cancels what the region waits at (a callee's frame,
+through the callee's own cancel function, or a `sync`'s or `race`'s
+pending arms), then runs the `defer:` blocks active there. The elaborator
+records those blocks at each suspension point in a branch that never runs
+(`if (false) defers`), and the pass moves them into the cancel function. Failure contexts never contain a suspension, so a
+rollback never spans one. The result is ordinary Verse Core, which
+`Prog.checkTypes` checks, and Lean and C run.
+
+**Avoiding allocation and journaling.** The C runtime never frees an object
+and journals every write made in a condition (for rollback). So:
+
+- A frame is kept per call site and reset rather than replaced. The result
+  field holds the value itself, not an option, so a loop of 300,000
+  suspending calls runs in constant memory in C.
+- A non-generic callee's frame sits in a field of type
+  `ref [callee, sched] []`, first set to the scheduler. A call site copies
+  it into a slot of that type, whose initial value is the scheduler
+  parameter, so it costs no allocation. It then resumes the callee after a
+  test of its class (`if (isTag [callee] Y) then resume(Y, …)`), the shape
+  `Typed.dispatch` types (#154), so the callee runs outside any condition.
+  The call's arguments stay in the caller's slots for each resumption.
+- A generic callee's frame has type arguments that this narrowing cannot
+  recover. It sits in an option field, unwrapped in a condition, so C
+  journals what a generic suspends function writes during one resumption,
+  until that resumption returns.
+
+Values stored in a frame, such as strings or arrays in slots, are kept
+like any object's fields (see "Objects in the C runtime"). Each pass
+resumes a whole chain of suspended calls from its root, so a recursion of
+depth N that waits at every level costs O(N²) calls per tick.
+
+**The scheduler.** The scheduler and `Sleep` are helpers written in Verse
+(`concPrelude`, added to a program with a suspends function, as the
+rationals' are). A suspends `Main` starts a loop of passes, one per tick,
+each resuming `Main`'s frame. A sleeping frame reports the tick it waits
+for, and the clock then moves to the earliest of them, so idle ticks cost
+nothing.
+
+The scheduler only ever holds non-generic task roots. Core has no
+existential types, so a queue of frames whose type arguments it has forgotten
+could not be typed; generic frames are always resumed by their callers, who
+know their type arguments.
 
 ## Classes as references
 
