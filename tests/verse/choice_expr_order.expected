@@ -13,4 +13,11 @@ generic 1
 generic 2
 refined 1
 refined 2
+chain stops
+field receiver 10
+field receiver 11
+query path 6
+macro set 2 12
+typed structure 2
+typed structure 3
 exit=0

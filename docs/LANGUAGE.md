@@ -594,9 +594,12 @@ Main():void =
     variable holding an array, map or function, a field (read whole), a
     method's receiver, or any other expression (`Arr()[0 | 1]` calls `Arr`
     once);
+  - in a comparison chain, the pairs before the choice are checked first,
+    so the chain stops before it when one fails;
   - a name that is no value (a function, class, module, enumerator, `true`,
     `false`) and a literal, `array{}` or `map{}` stay in place, so they keep
-    the type their place expects;
+    the type their place expects, and so do arrays, tuples, maps and
+    options made of them;
   - every other operand before a choice is bound to a name first, so it is
     read where it is written, even if an alternative changes it (a `set`,
     or a method changing a field);
@@ -606,7 +609,8 @@ Main():void =
   Refused for now: a choice inside a block, a branch, a struct construction
   (whose fields are evaluated in declaration order, not as written), a
   named argument, a call where a named argument comes before the choice,
-  another choice's alternative, the right of `and` or `or`, or a range; and
+  another choice's alternative, either side of `and`, the right of `or`, a
+  range, or a `set`'s path (`set A[0 | 1] = …`); and
   a choice anywhere outside these failure contexts. (A field reached
   through a receiver that is not a variable or `Self`, as `F().Items[…]`,
   is read after the choice, since only the receiver's value is bound

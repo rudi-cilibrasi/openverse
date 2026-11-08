@@ -58,6 +58,9 @@ partial def hoistPath (q : Pos) (l : SExpr) : List SExpr × SExpr :=
     | .member r base f =>
       let (h, base', n) := go n base
       (h, .member r base' f, n)
+    | .query r base =>
+      let (h, base', n) := go n base
+      (h, .query r base', n)
     | e => ([], e, n)
   let (h, l', _) := go 0 l
   (h, l')
@@ -171,13 +174,14 @@ def recvOf : SExpr → SExpr
     says which names are), the receiver of a method or field (unless a
     module, class or other name that is no value), or any other expression;
     not a function's or class's name. -/
-def headOps (isVal : String → Bool) (isField : String → String → Bool) : SExpr → List SExpr
-  | f@(.ident _ n) => if isVal n then [f] else []
+def headOps (isVal : String → Bool) (isField : String → String → Bool) : SExpr → List SExpr × Bool
+  | f@(.ident _ n) => if isVal n then ([f], true) else ([], true)
   -- (a field holding an array, map or function is read whole, first; a
   -- method's receiver only)
-  | f@(.member _ (.ident _ n) m) => if isField n m then [f] else if isVal n then [recvOf f] else []
-  | f@(.member _ _ _) => [recvOf f]
-  | f => [f]
+  | f@(.member _ (.ident _ n) m) =>
+    if isField n m then ([f], true) else if isVal n then ([recvOf f], false) else ([], false)
+  | f@(.member _ _ _) => ([recvOf f], false)
+  | f => ([f], true)
 
 
 /-- Whether a call's head has a choice that lifting reaches. -/
@@ -209,7 +213,9 @@ partial def stable (isVal : String → Bool) : SExpr → Bool
   | .int .. | .char .. | .char32 .. | .float .. => true
   | .neg _ e => stable isVal e
   | .str _ ps => ps.all fun | .text _ => true | .code _ => false
-  | .arrayLit _ [] | .mapLit _ [] => true
+  | .arrayLit _ es | .tuple _ es => es.all (stable isVal)
+  | .mapLit _ kvs => kvs.all fun (k, v) => stable isVal k && stable isVal v
+  | .optionLit _ (.block _ [e]) => stable isVal e
   | .ident _ n => !isVal n
   | .member _ (.ident _ n) _ => !isVal n
   | _ => false
@@ -236,10 +242,7 @@ partial def liftE (isVal : String → Bool) (isField : String → String → Boo
   match e with
   | .app p (.ident _ "$choice") _ false => LM.bind p "c" e
   | .app p f args br =>
-    let hs := headOps isVal isField f
-    let whole := match f, hs with
-      | .member .., [h] => match h with | .member .. => true | _ => false
-      | _, _ => true
+    let (hs, whole) := headOps isVal isField f
     let ops := hs ++ args
     -- (named arguments are evaluated after the positional ones: one before
     -- the last choice would change places, so then no lifting)
@@ -258,9 +261,7 @@ partial def liftE (isVal : String → Bool) (isField : String → String → Boo
   | .bin p o a b => match ← liftOps isVal isField [a, b] with
     | [a', b'] => return .bin p o a' b'
     | _ => return e
-  | .cmp p a rest => match ← liftOps isVal isField (a :: rest.map (·.2)) with
-    | a' :: bs => return .cmp p a' ((rest.map (·.1)).zip bs)
-    | [] => return e
+  | .cmp p a rest => liftCmp isVal isField p (a :: rest.map (·.2)) (rest.map (·.1))
   | .member p x m => return .member p (← liftE isVal isField x) m
   | .query p x => return .query p (← liftE isVal isField x)
   | .neg p x => return .neg p (← liftE isVal isField x)
@@ -281,6 +282,37 @@ partial def liftE (isVal : String → Bool) (isField : String → String → Boo
       | _ => []
     return .mapLit p (pairs flat)
   | e => return e
+
+/-- A comparison chain `o₀ op₁ o₁ op₂ …` whose operand `oⱼ` is the first with
+    a choice: `o₀ … oⱼ₋₁` are bound to names, the pairs among them checked
+    (the chain stops at the first that fails, before the choice), then the
+    rest of the chain goes on from `oⱼ₋₁`. Its value is `o₀`. -/
+partial def liftCmp (isVal : String → Bool) (isField : String → String → Bool) (p : Pos)
+    (os : List SExpr) (syms : List String) : LM SExpr := do
+  match (os.zipIdx.find? (hasLiftable ·.1)).map (·.2) with
+  | none =>
+    match os with
+    | o :: more => return .cmp p o (syms.zip more)
+    | [] => return .tuple p []
+  | some 0 =>
+    -- (the choice in the first operand: lifted, then the chain from it)
+    match os with
+    | o :: more => liftCmp isVal isField p ((← liftE isVal isField o) :: more) syms
+    | [] => return .tuple p []
+  | some j =>
+    -- (the operands before it, each bound, then the pairs among them)
+    let mut hs : Array SExpr := #[]
+    for o in os.take j do
+      hs := hs.push (← if stable isVal o then pure o else LM.bind o.pos "t" o)
+    let h0 := hs[0]!
+    if j ≥ 2 then
+      modify fun s => { s with pre := s.pre.push (.cmp p h0 ((syms.take (j - 1)).zip (hs.toList.drop 1))) }
+    let oj ← liftE isVal isField os[j]!
+    let r ← liftCmp isVal isField p (hs.back! :: oj :: os.drop (j + 1)) (syms.drop (j - 1))
+    if j == 1 then return r
+    -- (the rest checked as a clause; the chain's value is its first operand)
+    modify fun s => { s with pre := s.pre.push r }
+    return h0
 
 /-- Operands evaluated left to right: the liftable choices of each are
     lifted, and every operand before the last one with such a choice is
@@ -310,6 +342,11 @@ def liftClause (isVal : String → Bool) (isField : String → String → Bool) 
     st.pre.toList ++ [c']
   match c with
   | .app _ (.ident _ "$choice") _ false => [c]
+  -- (`set L = …` as the last clause of a macro, which names its value)
+  | .decl p x ty v (.set q l op r) =>
+    if isChoice r || !hasLiftable r then [c] else
+      let (h, o?, l') := setPrefix q l op
+      h ++ run do return .decl p x ty v (.set q l' op (withOld q o? (← liftE isVal isField r)))
   | .decl p x ty v rhs =>
     if isChoice rhs || !hasLiftable rhs then [c] else run do
       return .decl p x ty v (← liftE isVal isField rhs)
