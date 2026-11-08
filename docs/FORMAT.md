@@ -57,6 +57,28 @@ evaluates to the literal (the front end emits only canonical bits; a
 hand-written Core literal of other bits, such as -0, would differ), and the
 literal kinds stay as they are.
 
+### An example
+
+The function body `.assign 0 (.prim .add [.local 0, .lit (.int 1)])`, which
+is `set X = X + 1` with `X` in slot 0, is this node table (arrows go from a
+node to its children, always to a smaller index):
+
+```mermaid
+flowchart RL
+    n3["3: ASSIGN slot 0, 2<br/>(root)"] --> n2["2: PRIM add, args 0 1"]
+    n2 --> n0["0: LOCAL slot 0"]
+    n2 --> n1["1: LIT INT 1"]
+```
+
+| node | bytes | meaning |
+|---|---|---|
+| 0 | `01 00000000` | LOCAL, slot 0 |
+| 1 | `00 00 0100000000000000` | LIT, INT 1 |
+| 2 | `04 00 00000000 02000000 00000000 01000000` | PRIM `add` (code 0), k 0, 2 args: nodes 0 and 1 |
+| 3 | `02 00000000 02000000` | ASSIGN slot 0, node 2 |
+
+followed by `root:u32` = 3. These are the bytes `Encode.encFn` writes.
+
 ## Primitive codes
 
 | code | prim | code | prim | code | prim |

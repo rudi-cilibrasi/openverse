@@ -6,12 +6,21 @@ proved about, and run. That definition is the big-step semantics of Verse
 Core in Lean. Everything else, the front end and the C runtime, is checked
 against it. This page records the decisions behind the shape of the code.
 
+**Contents**
+
+- Semantics: [Two languages, one semantics](#two-languages-one-semantics) · [Failure and rollback](#failure-and-rollback) · [Fuel](#fuel)
+- Front end: [Translation validation](#translation-validation-instead-of-a-verified-front-end) · [Modules](#modules-a-renaming-before-elaboration) · [Floats](#floats-canonical-bits) · [Rationals](#rationals-helpers-written-in-verse) · [Generic functions](#generic-functions-polymorphic-verse-core)
+- Classes and the heap: [Classes as references](#classes-as-references) · [Typing the heap](#typing-the-heap) · [Typed defaults](#why-every-slot-starts-with-a-typed-default)
+- C runtime: [The binary format and the loader](#the-binary-format-and-the-loader) · [Two semantics, one seam](#two-semantics-one-seam) · [Objects in the C runtime](#objects-in-the-c-runtime)
+- [Readings of the Book](#readings-of-the-book)
+
 ## Two languages, one semantics
 
 Surface Verse is large and changing (the Book of Verse tracks a development
 branch). Verse Core (`OpenVerse/Core/Syntax.lean`) is small: literals, slot
-reads and writes, sequencing, 29 primitives, calls, `if`, single-generator
-`for`, `loop`, `break`, `return`, `Print`. Every surface construct is a
+reads and writes, sequencing, 59 primitives, calls, `if`, single-generator
+`for`, `loop`, `break`, `return`, `Print`, and five heap operations (`new`,
+field `get` and `set`, `tag`, `isTag`). Every surface construct is a
 *derived form*:
 
 - `not`, `or`, `and`, `option{}` and `logic{}` are built from `if`
@@ -24,7 +33,7 @@ reads and writes, sequencing, 29 primitives, calls, `if`, single-generator
 - a generic function is one Core function with type variables, and a
   hidden argument per type parameter.
 
-Keeping Core small keeps the proofs and the C runtime small. All 29
+Keeping Core small keeps the proofs and the C runtime small. All 59
 primitives are one Lean function (`Prim.apply`) and one C file
 (`runtime/src/prims.c`).
 
@@ -49,6 +58,20 @@ undo journal (`runtime/src/store.c`):
 - writes are logged only inside failure contexts;
 - a mark is a pair of lengths, journal and output;
 - rolling back undoes entries newest first and truncates the output.
+
+```mermaid
+sequenceDiagram
+    participant I as interpreter (interp.c)
+    participant S as store (store.c)
+    I->>S: vx_store_mark: save the journal and output lengths
+    I->>S: vx_store_set: log the slot's old value, then write it
+    I->>S: vx_store_out_append: print
+    alt the context fails
+        I->>S: vx_store_rollback: undo the logged writes, newest first, and cut the output back
+    else it succeeds
+        I->>S: vx_store_commit: keep everything (enclosing contexts keep the log)
+    end
+```
 
 The QuickProof law `store_rollback_model` proves this against a naive
 copy-the-whole-state model, for every sequence of 32 operations on up to 3
@@ -103,11 +126,31 @@ allows 10 million nested evaluations on a 4 GiB stack), so a program that
 recurses deeply enough to reach one of them may get a limit from one
 implementation and an answer from the other.
 
+In short:
+
+```mermaid
+flowchart LR
+    run(["openverse run"]) --> evalB["evalB<br/>eval with a depth budget<br/>(Bounded.lean)"]
+    evalB -- "evalB_sound<br/>evalB_complete" --> eval["eval<br/>the interpreter, with fuel<br/>(Interp.lean)"]
+    eval -- "eval_iff<br/>eval_fuel_irrelevant" --> Eval["Eval<br/>the big-step semantics<br/>(Semantics.lean)"]
+    cverse(["cverse"]) -. "the same fuel count,<br/>differential tests" .-> eval
+```
+
 ## Translation validation instead of a verified front end
 
 The parser and elaborator are ordinary code (`partial def`) and are not
 proved correct. Each program they produce is checked by decidable functions
 that are proved to establish the hypotheses of the core theorems:
+
+```mermaid
+flowchart LR
+    src(["Verse source"]) --> fe["front end<br/>parser and elaborator<br/>(not proved)"]
+    fe --> P["Verse Core program<br/>+ certificate: function<br/>signatures, slot types"]
+    P --> chk{"Prog.check<br/>Prog.checkTypes<br/>Prog.checkControl"}
+    chk -- "all pass" --> acc["Prog.accepted holds:<br/>one outcome, one output;<br/>no slot, call, type or control error;<br/>Main's value has its type;<br/>no failure unless Main is #lt;decides#gt;"]
+    chk -- "one fails" --> ie["rejected:<br/>internal error"]
+```
+
 
 | Check | Proved to give | Used by |
 |---|---|---|
@@ -371,6 +414,21 @@ formulas symbol for symbol and proves in Lean that each one is `Prim.apply`.
 QuickProof proves in Coq that the C functions compute those formulas. The
 remaining trusted step is reading that the two texts are the same formula
 (`docs/SEAMS.md`).
+
+```mermaid
+flowchart LR
+    subgraph lean["Lean: lake build"]
+        apply["Prim.apply<br/>(the semantics)"]
+        lf["Seams.lean<br/>cAddFits, cFloorDiv, …"]
+        apply -- "add_seam … modulo_seam" --- lf
+    end
+    subgraph coq["Coq: QuickProof qp verify"]
+        cf["arith_exact.c<br/>the formulas, in C"]
+        ac["arith.c<br/>vx_add … vx_modulo"]
+        cf -- "arith_exact" --- ac
+    end
+    lf <-. "read by a person:<br/>the same formula" .-> cf
+```
 
 The interpreter itself is not proved. It is a transcription of
 `Interp.lean`, and it is compared with the Lean interpreter on the Verse test

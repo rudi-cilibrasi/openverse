@@ -12,6 +12,13 @@ surface Verse is elaborated (`OpenVerse/Front/Elab.lean`) into Verse Core
 (`OpenVerse/Core/Syntax.lean`), whose semantics is the big-step relation of
 `OpenVerse/Core/Semantics.lean`.
 
+**Contents**
+
+- Overview: [Supported](#supported) · [Source text](#source-text) · [Readings openverse takes](#readings-openverse-takes) · [Not supported in v1](#not-supported-in-v1)
+- Functions: [Parametric functions](#parametric-functions) · [Overloading](#overloading) · [defer](#defer)
+- Types: [Parametric structs](#parametric-structs) · [Classes](#classes) · [any](#any) · [Refinement types](#refinement-types) · [float](#float) · [rational](#rational) · [char32](#char32)
+- Programs: [Modules](#modules) · [Programs of several files](#programs-of-several-files) · [Mutation, macros, tooling](#mutation-macros-tooling)
+
 ## Supported
 
 | Area | Supported | Book |

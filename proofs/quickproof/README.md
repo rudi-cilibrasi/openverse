@@ -12,9 +12,19 @@ that no run of the program has undefined behaviour in CompCert's semantics,
 for any input the law allows. So every assertion holds and every memory
 access is in bounds.
 
-**A person reviews the laws (the first comment of each harness file is the
-claim), the configuration, and `docs/SEAMS.md`. Nobody needs to review the
-Coq proof; `qp verify` checks it.**
+```mermaid
+flowchart LR
+    law["law<br/>a C harness: nondet inputs,<br/>qp_assume, qp_assert"] --> check
+    comp["component<br/>load.c, arith.c or store.c"] --> check
+    check["qp check<br/>native runs under ASan/UBSan,<br/>CompCert's interpreter, mutants"] --> verify["qp verify<br/>Coq checks the VST proof"]
+    verify --> thm["Theorem LAW :<br/>harness_safe whole_prog<br/>no undefined behaviour,<br/>for any input the law allows"]
+    thm --> pin["project.conf pins the commit;<br/>check-quickproof-pins.sh fails<br/>when a pinned file changes"]
+```
+
+> [!IMPORTANT]
+> A person reviews the laws (the first comment of each harness file is the
+> claim), the configuration, and `docs/SEAMS.md`. Nobody needs to review the
+> Coq proof; `qp verify` checks it.
 
 | Project | Law | Claim (summary) | Status |
 |---|---|---|---|

@@ -9,14 +9,21 @@ program loading, and the rollback of variables and output are proved with
 are checked by differential testing and fuzzing.
 
 [![check](https://github.com/rudi-cilibrasi/openverse/actions/workflows/check.yml/badge.svg)](https://github.com/rudi-cilibrasi/openverse/actions/workflows/check.yml)
-**Try it** in the [online playground](https://rudi-cilibrasi.github.io/openverse-docs/demo/)
-(this compiler and runtime as WebAssembly, in your browser), or step inside your
-code in the [3D simulator](https://rudi-cilibrasi.github.io/openverse-docs/sim/)
-([openfort-sim](https://github.com/rudi-cilibrasi/openfort-sim)) · **Learn it** from
-two books, [*Verse Logic*](https://rudi-cilibrasi.github.io/openverse-docs/verse-logic/)
-and [*The Little Verser*](https://rudi-cilibrasi.github.io/openverse-docs/little-verser/),
-whose every program and Lean statement is checked against this repository
-([openverse-docs](https://github.com/rudi-cilibrasi/openverse-docs)).
+
+- **Try it** in the [online playground](https://rudi-cilibrasi.github.io/openverse-docs/demo/):
+  this compiler and runtime as WebAssembly, in your browser.
+- **Step inside your code** in the [3D simulator](https://rudi-cilibrasi.github.io/openverse-docs/sim/)
+  ([openfort-sim](https://github.com/rudi-cilibrasi/openfort-sim)).
+- **Learn it** from two books, [*Verse Logic*](https://rudi-cilibrasi.github.io/openverse-docs/verse-logic/)
+  and [*The Little Verser*](https://rudi-cilibrasi.github.io/openverse-docs/little-verser/),
+  whose every program and Lean statement is checked against this repository
+  ([openverse-docs](https://github.com/rudi-cilibrasi/openverse-docs)).
+
+## How it fits together
+
+Verse source is elaborated into Verse Core, whose big-step semantics is the
+definition of every program's meaning. The C runtime loads the same programs
+in a binary format and runs them.
 
 ```mermaid
 flowchart TD
@@ -111,9 +118,17 @@ Main():void =
     for (I := 1..6, H := Half[I]) { Print("{I} / 2 = {H}") }
 ```
 
-The supported subset, and the reading taken wherever the Book of Verse is
-silent or contradicts itself, are in [`docs/LANGUAGE.md`](docs/LANGUAGE.md).
-The binary format and exit codes are in [`docs/FORMAT.md`](docs/FORMAT.md).
+## Documentation
+
+| Page | What it covers |
+|---|---|
+| [`docs/LANGUAGE.md`](docs/LANGUAGE.md) | the supported Verse subset, and the reading taken wherever the Book of Verse is silent or contradicts itself |
+| [`docs/DESIGN.md`](docs/DESIGN.md) | the decisions behind the code: Verse Core, rollback, fuel, translation validation, classes and the heap, the C runtime |
+| [`docs/CLAIMS.md`](docs/CLAIMS.md) | the statement and axioms of every theorem, as Lean prints them (generated) |
+| [`docs/SEAMS.md`](docs/SEAMS.md) | where the Lean theorems meet the QuickProof laws about the C runtime |
+| [`docs/FORMAT.md`](docs/FORMAT.md) | OVBC, the binary format the runtime loads, and the exit codes |
+| [`proofs/quickproof/README.md`](proofs/quickproof/README.md) | the laws about the C runtime, their status, and how to re-check them |
+| [`docs/research/book-of-verse-digest.md`](docs/research/book-of-verse-digest.md) | the Book of Verse, quoted rule by rule |
 
 ## Trust
 
