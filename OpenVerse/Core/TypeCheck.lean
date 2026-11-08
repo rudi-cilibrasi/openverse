@@ -17,7 +17,7 @@
   Every recursive call is on a strict subterm, so the soundness proof
   `tc_sound` follows the definition case by case.
 -/
-import OpenVerse.Core.TypeSafety
+import OpenVerse.Core.Unify
 
 namespace OpenVerse
 
@@ -262,18 +262,6 @@ theorem fieldTy_sound {S : Sigs} {ts : List Nat} {args : List VTy} {k : Nat} {τ
         exact fun u hu => classField_sound (hc u hu)
       · simp at h
     · simp at h
-
-mutual
-/-- One more than the largest type variable of `t` (none: 0). -/
-def VTy.nvars : VTy → Nat
-  | .var j => j + 1
-  | .arr t | .opt t => VTy.nvars t
-  | .tup ts | .ref _ ts => VTy.nvarsL ts
-  | _ => 0
-def VTy.nvarsL : List VTy → Nat
-  | [] => 0
-  | t :: ts => max (VTy.nvars t) (VTy.nvarsL ts)
-end
 
 /-- The first of two proposals that passes `ok` (else the second). -/
 def firstOk (ok : List VTy → Bool) (a b : List VTy) : List VTy := if ok a then a else b
