@@ -555,6 +555,17 @@ of copies (500) and on the size of the types (2000 parts, which types that
 double at each call reach quickly) turn polymorphic recursion into an
 error.
 
+The other generic suspends functions are copied the same way where they
+are called at small closed types (at most 40 parts, 200 copies), and kept
+for every other call (#225). The copy is not needed for correctness: a
+generic callee's frame has type arguments, so its caller keeps it in an
+option field, unwrapped and resumed in a condition, while a non-generic
+callee's lives in a field of its own class and is resumed after a test of
+it. A resumption writes the heap, and a write in a condition makes the
+reference interpreter keep the heap as it was, for the rollback, and so
+copy it: many tasks awaiting one event, `event(t)`'s generic `Await`,
+took quadratic time in Lean.
+
 ## Classes as references
 
 Verse classes are references (#34). A class or interface `T(args)` is
