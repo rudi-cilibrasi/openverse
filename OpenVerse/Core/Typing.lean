@@ -248,6 +248,50 @@ structure Sigs where
   classes : List (List VTy) := []
   /-- The prototypes: each one's class and (closed) type arguments. -/
   protos : HeapTy := []
+  /-- Each class's pins (#142): for each of its Verse Core type arguments,
+      `some c` when the class fixes it to the closed type `c` (an
+      `int_box := class(box(int))` has `[some int]`), else `none`. -/
+  pins : List (List (Option VTy)) := []
+
+/-- The pins of class `t`. -/
+def Sigs.pinsOf (S : Sigs) (t : Nat) : List (Option VTy) := (S.pins[t]?).getD []
+
+mutual
+/-- Whether type variable `j` occurs in a type. -/
+def VTy.hasVar (j : Nat) : VTy → Bool
+  | .var i => i == j
+  | .arr t | .opt t => VTy.hasVar j t
+  | .tup ts => VTy.hasVarL j ts
+  | .ref _ args => VTy.hasVarL j args
+  | _ => false
+def VTy.hasVarL (j : Nat) : List VTy → Bool
+  | [] => false
+  | t :: ts => VTy.hasVar j t || VTy.hasVarL j ts
+end
+
+/-- The type arguments among `args` that a class's pins `ps` fix (#142),
+    each with the type it is fixed to. -/
+def VTy.pinPairs : List (Option VTy) → List VTy → List (VTy × VTy)
+  | some c :: ps, a :: as => (a, c) :: VTy.pinPairs ps as
+  | none :: ps, _ :: as => VTy.pinPairs ps as
+  | _, _ => []
+
+/-- Type arguments `args` agree with pins `ps`: each pinned argument is the
+    type the class fixes. -/
+def VTy.pinsOK (ps : List (Option VTy)) (args : List VTy) : Bool :=
+  (VTy.pinPairs ps args).all fun p => decide (p.1 = p.2)
+
+/-- The pinned type arguments. -/
+def VTy.pinned (ps : List (Option VTy)) (args : List VTy) : List VTy :=
+  (VTy.pinPairs ps args).map Prod.fst
+
+/-- `μ` refines type arguments `args` by closed pins `ps` (#142): it makes
+    them agree with the pins, and binds only the type variables of the
+    pinned arguments, each to a closed type. -/
+def PinRefines (ps : List (Option VTy)) (args : List VTy) (μ : Nat → VTy) : Prop :=
+  (∀ c, some c ∈ ps → c.closed = true) ∧ VTy.pinsOK ps (args.map (VTy.subst μ)) = true ∧
+  ∀ j, ((VTy.pinned ps args).any (VTy.hasVar j) = true → (μ j).closed = true) ∧
+    ((VTy.pinned ps args).any (VTy.hasVar j) = false → μ j = .var j)
 
 /-- The typing of primitives: `PrimTy op ts τ` when `op` applied to values
     of types `ts` gives a value of type `τ`. -/
@@ -317,8 +361,9 @@ inductive Typed (S : Sigs) (Γ : List VTy) (ρ : VTy) : Expr → VTy → Prop
   | brk {τ} : Typed S Γ ρ .brk τ
   | ret {e τ} : Typed S Γ ρ e ρ → Typed S Γ ρ (.ret e) τ
   | print {e} : Typed S Γ ρ e VTy.str → Typed S Γ ρ (.print e) VTy.void
-  /-- A new object of class `t`, its fields given in order. -/
-  | heap_new {t es fs ts args} : S.classes[t]? = some fs → t ∈ ts →
+  /-- A new object of class `t`, its fields given in order, at type
+      arguments that agree with its class's pins. -/
+  | heap_new {t es fs ts args} : S.classes[t]? = some fs → t ∈ ts → VTy.pinsOK (S.pinsOf t) args = true →
       TypedL S Γ ρ es (fs.map (VTy.inst args)) → Typed S Γ ρ (.heap (.new t) es) (.ref ts args)
   | heap_get {k e ts args τ} : Typed S Γ ρ e (.ref ts args) → FieldTy S ts args k τ →
       Typed S Γ ρ (.heap (.get k) [e]) τ
@@ -328,6 +373,24 @@ inductive Typed (S : Sigs) (Γ : List VTy) (ρ : VTy) : Expr → VTy → Prop
   /-- A cast: it fails unless the object's class is one of `us`. -/
   | heap_isTag {e ts args us} : Typed S Γ ρ e (.ref ts args) →
       Typed S Γ ρ (.heap (.isTag us) [e]) (.ref us args)
+  /-- **Dispatch to classes that fix type arguments** (#142): a call of `f`
+      on the object in slot `y` when its class is one of `us`, else `e`.
+      Every class of `us` pins the same arguments among `y`'s type arguments
+      `a`, and `μ` refines `a` by those pins; the call is typed with `μ`
+      applied to both sides. When the branch runs, the object's arguments
+      agree with its pins and start with `a`, so `μ` is the identity. -/
+  | dispatch {y us f es e ts a ps τ σs τ' P} (θ μ : Nat → VTy) :
+      Γ[y]? = some (.ref ts a) → (∀ t ∈ us, (S.pinsOf t).take a.length = P) → PinRefines P a μ →
+      S.fns[f]? = some (ps, τ) → TypedL S Γ ρ es σs →
+      VTy.subL ((VTy.ref us a :: σs).map (VTy.subst μ)) (ps.map (VTy.subst θ)) = true →
+      (τ.subst θ).sub (τ'.subst μ) = true → Typed S Γ ρ e τ' →
+      Typed S Γ ρ (.ite (.heap (.isTag us) [.local y]) (.call f (.local y :: es)) e) τ'
+  /-- When no substitution makes `a` agree with the pins, the call cannot
+      run: no object of a class of `us` has type arguments starting with `a`. -/
+  | dispatch_none {y us f es e ts a τ' P} :
+      Γ[y]? = some (.ref ts a) → (∀ t ∈ us, (S.pinsOf t).take a.length = P) →
+      (∀ μ, VTy.pinsOK P (a.map (VTy.subst μ)) = false) → Typed S Γ ρ e τ' →
+      Typed S Γ ρ (.ite (.heap (.isTag us) [.local y]) (.call f (.local y :: es)) e) τ'
 inductive TypedL (S : Sigs) (Γ : List VTy) (ρ : VTy) : List Expr → List VTy → Prop
   | nil : TypedL S Γ ρ [] []
   | cons {e es τ ts} : Typed S Γ ρ e τ → TypedL S Γ ρ es ts → TypedL S Γ ρ (e :: es) (τ :: ts)
@@ -354,7 +417,7 @@ inductive DefaultE (S : Sigs) (a : Nat) (Γ : List VTy) : Expr → VTy → Prop
   | lit {v t} : hasTy S.protos v t = true → DefaultE S a Γ (.lit v) t
   | param {i t} : i < a → Γ[i]? = some t → DefaultE S a Γ (.local i) t
   | tup {ds ts} : DefaultEL S a Γ ds ts → DefaultE S a Γ (.prim .mkTup ds) (.tup ts)
-  | new {t ds fs ts args} : S.classes[t]? = some fs → t ∈ ts →
+  | new {t ds fs ts args} : S.classes[t]? = some fs → t ∈ ts → VTy.pinsOK (S.pinsOf t) args = true →
       DefaultEL S a Γ ds (fs.map (VTy.inst args)) → DefaultE S a Γ (.heap (.new t) ds) (.ref ts args)
   /-- A default is also one of every type above its own. -/
   | sub {d t u} : DefaultE S a Γ d t → t.sub u = true → DefaultE S a Γ d u
@@ -376,13 +439,20 @@ structure FnTyped (S : Sigs) (fn : Fn) (ps : List VTy) (ρ : VTy) (Γ : List VTy
     at every instance, `Typed.subst`). -/
 def Sigs.ClosedProtos (S : Sigs) : Prop := ∀ p ∈ S.protos, VTy.closedL p.2 = true
 
+/-- The pins are closed types (#142), so a `new` agrees with them at every
+    instance. -/
+def Sigs.ClosedPins (S : Sigs) : Prop := ∀ ps ∈ S.pins, ∀ c, some c ∈ ps → c.closed = true
+
+/-- What `Typed.subst` needs of the certificate. -/
+def Sigs.Closed (S : Sigs) : Prop := S.ClosedProtos ∧ S.ClosedPins
+
 /-- The heap typing `Ξ` is the heap's: one entry per object, its class and
     type arguments, and every object has its class's field types at them. -/
 def HeapOK (S : Sigs) (Ξ : HeapTy) (h : Array Obj) : Prop :=
   Ξ.length = h.size ∧
   (∀ (a : Nat) (o : Obj), h.toList[a]? = some o →
     ∃ args fs, Ξ[a]? = some (o.tag, args) ∧ S.classes[o.tag]? = some fs ∧
-      allTys Ξ o.fields (fs.map (VTy.inst args)) = true) ∧
+      allTys Ξ o.fields (fs.map (VTy.inst args)) = true ∧ VTy.pinsOK (S.pinsOf o.tag) args = true) ∧
   -- the heap starts with the prototypes (#37)
   S.protos <+: Ξ
 
@@ -407,7 +477,7 @@ def PreludeOK (P : Prog) (S : Sigs) : Prop :=
 
 /-- Every function of `P` is typed with its signature in `S`. -/
 def ProgTyped (P : Prog) (S : Sigs) : Prop :=
-  S.ClosedProtos ∧ P.fns.length = S.fns.length ∧
+  S.Closed ∧ P.fns.length = S.fns.length ∧
   (∀ (f : Nat) (fn : Fn) (ps : List VTy) (τ : VTy), P.fns[f]? = some fn → S.fns[f]? = some (ps, τ) →
     ∃ Γ, FnTyped S fn ps τ Γ) ∧
   -- the heap starts with the prototypes when the program starts (#37)

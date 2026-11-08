@@ -368,6 +368,22 @@ Phase 3 (#20) adds a heap of objects, each with a class tag and fields
   new: a failure context restores the heap it started from, which `Ξ`
   types. `Runs.typed` states the result's type in the final heap, under
   some heap typing of it.
+- **Pins and dispatch** (#142). A class that fixes some of its parent's
+  type arguments to closed types (`int_box := class(box(int))`) records
+  them as its *pins* (`Sigs.pins`), and every object of the class has them
+  (`HeapOK`; `new` checks them). Code generic over `box(t)` cannot call
+  `int_box`'s override with the ordinary call rule, since it needs
+  `t = int`. `Typed.dispatch` types the dispatch the elaborator emits,
+  `if (isTag us Y) then F(Y, …) else E`, by a substitution `μ` that makes
+  `Y`'s type arguments agree with the pins of the classes `us`, applied to
+  both sides of the call: the arguments against the parameters, and the
+  result against the expected type. When the call runs, the object's
+  arguments agree with its pins and start with `Y`'s, so `μ` is the
+  identity and preservation is the call's. The substitution lemma holds
+  because every substitution that makes the arguments agree with the pins
+  factors through `μ`, whose bindings are closed (`PinRefines.factor`);
+  when none does, the call cannot run (`Typed.dispatch_none`). The
+  semantics, the binary format and the C runtime are unchanged.
 - **Defaults.** No literal is a reference, so a slot of class type starts as
   a new object of one of its classes with default fields (`DefaultE.new`),
   or as a parameter of a subtype (`DefaultE.sub`). Placeholders cost an

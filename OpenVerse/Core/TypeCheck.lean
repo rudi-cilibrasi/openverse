@@ -295,6 +295,83 @@ def callInst (acc : List (Nat × VTy)) (t : VTy) (m : Option VTy) : Nat → VTy 
     | none => acc
   fun j => (acc.lookup j).getD (.var j)
 
+/-- The refinement `tc` proposes for type arguments `a` by pins `ps` (#142):
+    each variable of the pinned arguments bound by matching them against the
+    pins (to `void` if that gives no closed type: the check then fails), the
+    others left alone. -/
+def pinRefinement (ps : List (Option VTy)) (a : List VTy) : Nat → VTy :=
+  let acc := (VTy.pinPairs ps a).foldl (fun acc p => VTy.bindVars p.1 p.2 acc) []
+  fun j => if (VTy.pinned ps a).any (VTy.hasVar j) then
+      (match acc.lookup j with
+       | some v => if v.closed then v else VTy.void
+       | none => VTy.void)
+    else .var j
+
+/-- The common pins of classes `us` on type arguments of length `n`. -/
+def commonPins (S : Sigs) (us : List Nat) (n : Nat) : List (Option VTy) :=
+  match us with
+  | [] => []
+  | u :: _ => (S.pinsOf u).take n
+
+theorem pinRefinement_refines {ps : List (Option VTy)} {a : List VTy}
+    (hc : ps.all (fun o => o.all VTy.closed) = true)
+    (hok : VTy.pinsOK ps (a.map (VTy.subst (pinRefinement ps a))) = true) :
+    PinRefines ps a (pinRefinement ps a) := by
+  refine ⟨fun c hcm => ?_, hok, fun j => ⟨fun hj => ?_, fun hj => ?_⟩⟩
+  · have := List.all_eq_true.mp hc _ hcm
+    simpa using this
+  · simp only [pinRefinement, hj, if_true]
+    split
+    · split
+      · assumption
+      · rfl
+    · rfl
+  · unfold pinRefinement
+    simp only [hj, Bool.false_eq_true, ite_false]
+
+/-- The dispatch check of `tc` (#142), given the inferred types of the
+    call's other arguments and whether `e` checks against `τ'`. -/
+def tcDispatch (S : Sigs) (Γ : List VTy) (us : List Nat) (y y' f : Nat) (m : Option VTy)
+    (σs? : Option (List VTy)) (eOK : Bool) : Option VTy :=
+  if y = y' then
+    match m, Γ[y]?, S.fns[f]?, σs? with
+    | some τ', some (.ref ts a), some (ps, τ), some σs =>
+      let P := commonPins S us a.length
+      let μ := pinRefinement P a
+      let θ := callInst (VTy.bindVarsL ps ((VTy.ref us a :: σs).map (VTy.subst μ)) []) τ
+        (some (τ'.subst μ))
+      if us.all (fun u => decide ((S.pinsOf u).take a.length = P)) &&
+          P.all (fun o => o.all VTy.closed) && VTy.pinsOK P (a.map (VTy.subst μ)) &&
+          VTy.subL ((VTy.ref us a :: σs).map (VTy.subst μ)) (ps.map (VTy.subst θ)) &&
+          (τ.subst θ).sub (τ'.subst μ) && eOK then some τ'
+      else none
+    | _, _, _, _ => none
+  else none
+
+theorem tcDispatch_sound {S : Sigs} {Γ : List VTy} {us : List Nat} {y y' f : Nat} {m : Option VTy}
+    {σs? : Option (List VTy)} {eOK : Bool} {τ : VTy} (h : tcDispatch S Γ us y y' f m σs? eOK = some τ) :
+    y = y' ∧ m = some τ ∧ eOK = true ∧ ∃ ts a ps τ0 σs P μ θ, Γ[y]? = some (.ref ts a) ∧
+      S.fns[f]? = some (ps, τ0) ∧ σs? = some σs ∧ (∀ u ∈ us, (S.pinsOf u).take a.length = P) ∧
+      PinRefines P a μ ∧ VTy.subL ((VTy.ref us a :: σs).map (VTy.subst μ)) (ps.map (VTy.subst θ)) = true ∧
+      (τ0.subst θ).sub (τ.subst μ) = true := by
+  simp only [tcDispatch] at h
+  split at h
+  · next hyy =>
+    split at h
+    · next τ' ts a ps τ0 σs hy hf =>
+      split at h
+      · next hc =>
+        simp only [Bool.and_eq_true] at hc
+        obtain ⟨⟨⟨⟨⟨hus, hPc⟩, hok⟩, hsub⟩, hres⟩, heOK⟩ := hc
+        have hus' : ∀ u ∈ us, (S.pinsOf u).take a.length = commonPins S us a.length := by
+          intro u hu; simpa using List.all_eq_true.mp hus u hu
+        simp only [Option.some.injEq] at h; subst h
+        exact ⟨hyy, rfl, heOK, ts, a, ps, τ0, σs, _, _, _, hy, hf, rfl, hus',
+          pinRefinement_refines hPc hok, hsub, hres⟩
+      · simp at h
+    · simp at h
+  · simp at h
+
 section
 variable (S : Sigs) (Γ : List VTy) (ρ : VTy)
 
@@ -321,19 +398,27 @@ def tc : Expr → Option VTy → Option VTy
       if tcL es (ps.map (VTy.subst θ)) then expect m (t.subst θ) else none
     | none => none
   | .ite c t e, m =>
-    if (tc c none).isSome || (tc c (some VTy.void)).isSome then
-      match m with
-      | some τ => if (tc t (some τ)).isSome && (tc e (some τ)).isSome then some τ else none
-      | none => match tc t none with
-        | some τ =>
-          if (tc e (some τ)).isSome then some τ
-          else match tc e none with
-            | some τ' => VTy.join τ τ'
+    match
+      if (tc c none).isSome || (tc c (some VTy.void)).isSome then
+        match m with
+        | some τ => if (tc t (some τ)).isSome && (tc e (some τ)).isSome then some τ else none
+        | none => match tc t none with
+          | some τ =>
+            if (tc e (some τ)).isSome then some τ
+            else match tc e none with
+              | some τ' => VTy.join τ τ'
+              | none => none
+          | none => match tc e none with
+            | some τ => if (tc t (some τ)).isSome then some τ else none
             | none => none
-        | none => match tc e none with
-          | some τ => if (tc t (some τ)).isSome then some τ else none
-          | none => none
-    else none
+      else none with
+    | some τ => some τ
+    | none => match c, t with
+      -- dispatch to classes that fix type arguments (#142), when the plain
+      -- typing fails
+      | .heap (.isTag us) [.local y], .call f (.local y' :: es) =>
+        tcDispatch S Γ us y y' f m (inferL es) (tc e m).isSome
+      | _, _ => none
   | .forE i it filt body, m => match Γ[i]? with
     | some te =>
       if (tc it (some (.arr te))).isSome &&
@@ -361,7 +446,8 @@ def tc : Expr → Option VTy → Option VTy
       -- determine them (`Main`'s prelude allocates the prototypes, #37)
       let args := firstOk (fun a => tcL es (fs.map (VTy.inst a))) (newArgs (fun _ => bindArgs fs es []) fs m)
         (((S.protos.find? (·.1 == t)).map (·.2)).getD [])
-      if tcL es (fs.map (VTy.inst args)) then expect m (.ref [t] args) else none
+      if tcL es (fs.map (VTy.inst args)) && VTy.pinsOK (S.pinsOf t) args then expect m (.ref [t] args)
+      else none
     | none => none
   | .heap (.get k) [e], m => match tc e none with
     | some (.ref ts args) => match fieldTy S ts args k with
@@ -899,7 +985,8 @@ theorem tcHeap_sound_of {op : HeapOp} {es : List Expr} {m τ} (ih : ∀ e ∈ es
     · next fs hc =>
       split at h
       · next hes =>
-        exact expect_typed h (.heap_new hc (List.mem_singleton_self t) (tcL_sound_of ih hes))
+        simp only [Bool.and_eq_true] at hes
+        exact expect_typed h (.heap_new hc (List.mem_singleton_self t) hes.2 (tcL_sound_of ih hes.1))
       · simp at h
     · simp at h
   | get k =>
@@ -1009,43 +1096,75 @@ theorem tc_sound_aux : ∀ (n : Nat) (e : Expr), sizeOf e < n → TcOK S Γ ρ e
       have Ic := IH c (by simp <;> omega)
       have It := IH t (by simp <;> omega)
       have Ie := IH e (by simp <;> omega)
+      -- the arguments of a dispatched call are smaller than the `ite`
+      have Isz : ∀ {f y es}, t = .call f (.local y :: es) → ∀ e' ∈ es, TcOK S Γ ρ e' := by
+        intro f y es ht e' he'
+        subst ht
+        exact IH e' (by
+          have := sizeOf_lt_of_mem_call (f := f) (List.mem_cons_of_mem (Expr.local y) he')
+          simp at this ⊢; omega)
       cases m with
       | some τ' =>
-        simp only [tc] at h; split at h
-        · next hw =>
-          obtain ⟨σ, hσ⟩ := typed_of_wt Ic hw
-          split at h
-          · next hc =>
-            simp only [Bool.and_eq_true] at hc
-            simp only [Option.some.injEq] at h; subst h
-            exact ⟨.ite hσ (typed_of_check It hc.1) (typed_of_check Ie hc.2), by simp⟩
-          · simp at h
-        · simp at h
-      | none =>
-        simp only [tc] at h; split at h
-        · next hw =>
-          obtain ⟨σ, hσ⟩ := typed_of_wt Ic hw
-          split at h
-          · next τ1 ht1 =>
-            split at h
+        unfold tc at h
+        split at h
+        · next τr hreg =>
+          -- the plain typing
+          simp only [Option.some.injEq] at h; subst h
+          simp only at hreg
+          split at hreg
+          · next hw =>
+            obtain ⟨σ, hσ⟩ := typed_of_wt Ic hw
+            split at hreg
             · next hc =>
-              simp only [Option.some.injEq] at h; subst h
-              exact ⟨.ite hσ (It _ _ ht1).1 (typed_of_check Ie hc), by simp⟩
-            · split at h
-              · next τ2 he2 =>
-                -- the branches infer different types: their join
-                obtain ⟨h1, h2⟩ := VTy.join_sub _ _ _ h
-                exact ⟨.ite hσ (.sub (It _ _ ht1).1 h1) (.sub (Ie _ _ he2).1 h2), by simp⟩
-              · simp at h
-          · split at h
-            · next τ1 he1 =>
-              split at h
+              simp only [Bool.and_eq_true] at hc
+              simp only [Option.some.injEq] at hreg; subst hreg
+              exact ⟨.ite hσ (typed_of_check It hc.1) (typed_of_check Ie hc.2), by simp⟩
+            · simp at hreg
+          · simp at hreg
+        · next hreg =>
+          -- dispatch to classes that fix type arguments (#142)
+          split at h
+          · next us y f y' es =>
+            obtain ⟨rfl, hm, heOK, ts, a, ps, τ0, σs, P, μ, θ, hy, hf, hσs, hus, hμ, hsub, hres⟩ :=
+              tcDispatch_sound h
+            simp only [Option.some.injEq] at hm; subst hm
+            have Iargs : TypedL S Γ ρ es σs := inferL_sound_of (Isz rfl) hσs
+            exact ⟨Typed.dispatch θ μ hy hus hμ hf Iargs hsub hres (typed_of_check Ie heOK), by simp⟩
+          · simp at h
+      | none =>
+        unfold tc at h
+        split at h
+        · next τr hreg =>
+          simp only [Option.some.injEq] at h; subst h
+          simp only at hreg
+          split at hreg
+          · next hw =>
+            obtain ⟨σ, hσ⟩ := typed_of_wt Ic hw
+            split at hreg
+            · next τ1 ht1 =>
+              split at hreg
               · next hc =>
-                simp only [Option.some.injEq] at h; subst h
-                exact ⟨.ite hσ (typed_of_check It hc) (Ie _ _ he1).1, by simp⟩
-              · simp at h
-            · simp at h
-        · simp at h
+                simp only [Option.some.injEq] at hreg; subst hreg
+                exact ⟨.ite hσ (It _ _ ht1).1 (typed_of_check Ie hc), by simp⟩
+              · split at hreg
+                · next τ2 he2 =>
+                  -- the branches infer different types: their join
+                  obtain ⟨h1, h2⟩ := VTy.join_sub _ _ _ hreg
+                  exact ⟨.ite hσ (.sub (It _ _ ht1).1 h1) (.sub (Ie _ _ he2).1 h2), by simp⟩
+                · simp at hreg
+            · split at hreg
+              · next τ1 he1 =>
+                split at hreg
+                · next hc =>
+                  simp only [Option.some.injEq] at hreg; subst hreg
+                  exact ⟨.ite hσ (typed_of_check It hc) (Ie _ _ he1).1, by simp⟩
+                · simp at hreg
+              · simp at hreg
+          · simp at hreg
+        · next hreg =>
+          split at h
+          · next us y f y' es => exact absurd (tcDispatch_sound h).2.1 (by simp)
+          · simp at h
     | forE i it filt body =>
       have Iit := IH it (by simp <;> omega)
       have If := IH filt (by simp <;> omega)
@@ -1140,7 +1259,7 @@ def checkDefault (S : Sigs) (a : Nat) (Γ : List VTy) : Expr → VTy → Bool
     | some t' => t'.sub t
     | none => false
   | .prim .mkTup ds, .tup ts => checkDefaultL S a Γ ds ts
-  | .heap (.new c) ds, .ref ts args => ts.contains c && match S.classes[c]? with
+  | .heap (.new c) ds, .ref ts args => ts.contains c && VTy.pinsOK (S.pinsOf c) args && match S.classes[c]? with
     | some fs => checkDefaultL S a Γ ds (fs.map (VTy.inst args))
     | none => false
   | _, _ => false
@@ -1171,9 +1290,9 @@ theorem checkDefault_sound {S : Sigs} {a : Nat} {Γ : List VTy} : ∀ (d : Expr)
     cases t <;> try (simp [checkDefault] at h; done)
     rename_i c ts args
     simp only [checkDefault, Bool.and_eq_true] at h
-    obtain ⟨hc, h⟩ := h
+    obtain ⟨⟨hc, hpin⟩, h⟩ := h
     split at h
-    · next fs hfs => exact .new hfs (by simpa using hc) (checkDefaultL_sound ds _ h)
+    · next fs hfs => exact .new hfs (by simpa using hc) hpin (checkDefaultL_sound ds _ h)
     · simp at h
   | .assign .., _, h | .seq .., _, h | .call .., _, h | .ite .., _, h | .forE .., _, h
   | .loop _, _, h | .brk, _, h | .ret _, _, h | .print _, _, h => by simp [checkDefault] at h
@@ -1295,7 +1414,7 @@ def checkHeapOK (S : Sigs) (Ξ : HeapTy) (h : Array Obj) : Bool :=
   decide (Ξ.length = h.size) &&
   (List.range h.size).all (fun a => match h.toList[a]?, Ξ[a]? with
     | some o, some (t, args) => decide (t = o.tag) && match S.classes[o.tag]? with
-      | some fs => allTys Ξ o.fields (fs.map (VTy.inst args))
+      | some fs => allTys Ξ o.fields (fs.map (VTy.inst args)) && VTy.pinsOK (S.pinsOf o.tag) args
       | none => false
     | _, _ => false) && S.protos.isPrefixOf Ξ
 
@@ -1311,7 +1430,9 @@ theorem checkHeapOK_sound {S : Sigs} {Ξ : HeapTy} {h : Array Obj} (hc : checkHe
   · simp only [ho, hΞ, Bool.and_eq_true, decide_eq_true_eq] at this
     obtain ⟨rfl, this⟩ := this
     split at this
-    · next fs hfs => exact ⟨args, fs, rfl, hfs, this⟩
+    · next fs hfs =>
+      simp only [Bool.and_eq_true] at this
+      exact ⟨args, fs, rfl, hfs, this.1, this.2⟩
     · simp at this
 
 /-- `Main` is a prelude of prototypes (#37), or there are none. -/
@@ -1347,6 +1468,7 @@ theorem checkPrelude_sound {P : Prog} {S : Sigs} (h : checkPrelude P S = true) :
 def Prog.checkTypes (P : Prog) (S : Sigs) (Γs : List (List VTy)) : Bool :=
   checkPrelude P S &&
   S.protos.all (VTy.closedL ·.2) &&
+  S.pins.all (fun ps => ps.all fun o => o.all VTy.closed) &&
   decide (P.fns.length = S.fns.length) &&
   (List.range P.fns.length).all fun f =>
     match P.fns[f]?, S.fns[f]?, Γs[f]? with
@@ -1359,8 +1481,8 @@ theorem Prog.checkTypes_sound {P : Prog} {S : Sigs} {Γs} (h : P.checkTypes S Γ
     ProgTyped P S := by
   unfold Prog.checkTypes at h
   simp only [Bool.and_eq_true, decide_eq_true_eq, List.all_eq_true, List.mem_range] at h
-  obtain ⟨⟨⟨hpre, hcl⟩, hlen⟩, h⟩ := h
-  refine ⟨hcl, hlen,
+  obtain ⟨⟨⟨⟨hpre, hcl⟩, hpins⟩, hlen⟩, h⟩ := h
+  refine ⟨⟨hcl, fun ps hps c hc => by simpa using hpins ps hps _ hc⟩, hlen,
     fun f fn ps τ hf hs => ?_, checkPrelude_sound hpre⟩
   have hlt := lt_of_getElem?_some hf
   have := h f hlt

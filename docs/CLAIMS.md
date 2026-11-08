@@ -189,11 +189,11 @@ out of date. The proofs are in `OpenVerse/Core/`.
 
 ## `Typed.subst`: the substitution lemma: a typing with type variables holds at every instance
 
-`OpenVerse/Core/TypeSafety.lean`; axioms: [propext, Quot.sound]
+`OpenVerse/Core/TypeSafety.lean`; axioms: [propext, Classical.choice, Quot.sound]
 
 ```lean
 @Typed.subst : ∀ {S : Sigs} {Γ : List VTy} {ρ : VTy},
-  S.ClosedProtos →
+  S.Closed →
     ∀ (θ : Nat → VTy) {e : Expr} {τ : VTy},
       Typed S Γ ρ e τ → Typed S (List.map (VTy.subst θ) Γ) (VTy.subst θ ρ) e (VTy.subst θ τ)
 ```
