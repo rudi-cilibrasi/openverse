@@ -516,6 +516,17 @@ position in every class below the one that declares it.
   its declaring class leaves open record pins (`TyEnv.pinned`): every
   object agrees with its class's pins, and a placeholder of another class
   may have any type arguments.
+  When every concrete class below a generic class or interface records
+  pins, a variable of its type at other type arguments (a receiver read
+  from a field or an array, in code generic over the class) would have no
+  initial value. So the front end adds a hidden abstract class below it,
+  `n$placeholder`, with its fields and no pins (#157). Its tag is in every
+  reference type the class is in, a slot starts as one of its objects, and
+  no dispatch test names it. Below a class that records pins it records
+  the same. An interface gets one of its own only when neither it nor the
+  interfaces above it declare fields (its fields would have to sit where
+  every class has them); otherwise a placeholder of a class below it
+  serves, when there is one.
   A class that repeats type arguments cannot override yet (that would
   need unification), nor can one that adds its own, as a `named`'s
   implementation needs an `n` the caller does not have.

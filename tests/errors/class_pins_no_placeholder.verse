@@ -1,11 +1,11 @@
-# expect: every class below cell (intcell) fixes type arguments that cell(t) does not have, so none can be it
-cell(t:type) := class<abstract>:
-    Value:t
-    Get():t = Value
-intcell := class(cell(int)):
-    Get<override>():int = Value + 1
-Get(O:?cell(t), D:t where t:type):t =
-    if (C := O?) then C.Get() else D
-Main():void =
-    O:?cell(int) = option{intcell{Value := 5}}
-    Print("{Get(O, 0)}")
+# expect: (an interface that declares fields, or is below one, gets no placeholder object, #157)
+named(t:type) := interface:
+    Name:string
+    Get():t
+ints := class(named(int)):
+    V:int
+    Get<override>():int = V
+holder(t:type) := class:
+    N:named(t)
+Run(H:holder(t) where t:type):t = H.N.Get()
+Main():void = Print("{Run(holder(int){N := ints{Name := "i", V := 3}})}")
