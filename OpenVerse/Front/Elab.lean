@@ -1905,10 +1905,16 @@ partial def elabSpawn (ctx : Ctx) (p : Pos) (body : SExpr) : EM R := do
   let e := match r.e with
     | .seq (.ite (.prim .fail []) _ (.lit .void)) e => e
     | e => e
-  let .call g es := e
-    | eerr p "spawn{…} takes one call of a <suspends> function, with its arguments (#156)"
+  -- (statements before the call, such as a method call's receiver, run
+  -- now, as the arguments are evaluated)
+  let rec peel : Expr → Option (List Expr × Expr)
+    | .call g es => some ([], .call g es)
+    | .seq a b => (peel b).map fun (ps, c) => (a :: ps, c)
+    | _ => none
+  let some (pre, .call g es) := peel e
+    | eerr p "spawn{…} takes one call of a <suspends> function, with its arguments (a method with several implementations is not supported yet) (#156)"
   if !isS g then eerr p "spawn{…} takes a call of a <suspends> function (#156)"
-  if es.any (Suspend.hasSusp isS) then eerr p "the arguments of a spawned call cannot suspend (#156)"
+  if (pre ++ es).any (Suspend.hasSusp isS) then eerr p "the arguments of a spawned call cannot suspend (#156)"
   if !ctx.dictVars.isEmpty then eerr p "spawn in a generic function is not supported yet (#156)"
   let ty : Ty := .struct "task" [r.ty]
   let tagT := ctx.types.tagOf "task"
@@ -1916,8 +1922,9 @@ partial def elabSpawn (ctx : Ctx) (p : Pos) (body : SExpr) : EM R := do
   -- (its fields: the done flag `false`, the others empty options)
   let fieldVals := (ctx.types.fields "task" [r.ty]).map fun (_, ft, _) =>
     if ft == .logic then Expr.lit (.logic false) else Expr.lit .none
-  return ⟨.seq (.assign t (.heap (.new tagT) fieldVals))
-    (.seq (.call mark.idx [.prim .mkArr [.seq (.call g es) (.lit .void), .seq (.local t) (.lit .void)]]) (.local t)), ty⟩
+  let spawnE : Expr := .seq (.assign t (.heap (.new tagT) fieldVals))
+    (.seq (.call mark.idx [.prim .mkArr [.seq (.call g es) (.lit .void), .seq (.local t) (.lit .void)]]) (.local t))
+  return ⟨pre.foldr Expr.seq spawnE, ty⟩
 
 /-- `branch:` (#156): its body runs as a background task over the enclosing
     function's frame, at once up to its first wait, and is cancelled when
@@ -2728,6 +2735,8 @@ partial def elabAppBase (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (b
                   (some (msRet.subst μF))
                 -- (named arguments go through temporaries: put their values
                 -- in the call, which must have the rule's shape)
+                if ms.suspends then
+                  eerr p s!"a <suspends> method cannot be dispatched to class {e}, which fixes type arguments of {c}, yet (#156)"
                 let some (.call fi (.local s0 :: es)) := Expr.inlineArgTemps rc.e
                   | eerr p s!"cannot dispatch {m} to class {e}, which fixes type arguments of {c}, when a named argument's default is computed (#142)"
                 if s0 != slot then eerr p s!"cannot dispatch {m} to class {e}, which fixes type arguments of {c} (#142)"
@@ -4233,6 +4242,9 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   -- concurrency (#156): the helpers, for a program with a <suspends> function
   let usesConc := allTops0r.any fun
     | .fn _ _ _ _ effs _ _ => effs.contains "suspends"
+    | .classDef _ _ _ _ _ _ _ _ ms => ms.any fun
+      | .fn _ _ _ _ effs _ _ => effs.contains "suspends"
+      | _ => false
     | _ => false
   let helpers := helpers ++ (← if usesConc then concTops else pure [])
   let allTops000 := allTops0r.filter (!isRatMarker ·)
@@ -4875,8 +4887,6 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     if effs.contains "suspends" then
       if effs.contains "decides" then
         throw s!"{p.show}: {n} is both <suspends> and <decides>, which exclude each other"
-      if n.contains '.' then
-        throw s!"{p.show}: a <suspends> method ({n}) is not supported yet (#156)"
       if n.endsWith "$init" then
         throw s!"{p.show}: a <suspends> constructor is not supported (#156)"
     let (tys, _) ← ((ps.mapM fun prm => resolveTy env p prm.ty).run {})
@@ -5106,6 +5116,8 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     match allSigs.find? (·.name == mine), allSigs.find? (·.name == theirs) with
     | some a, some b =>
       if !sameSigIn (clsOf mine) a b then throw s!"{mp.show}: {mine} must have the signature of {theirs}, which it overrides"
+      if a.suspends != b.suspends then
+        throw s!"{mp.show}: {mine} must {if b.suspends then "be" else "not be"} <suspends>, as {theirs}, which it overrides, is{if b.suspends then "" else " not"} (#156)"
       if let some k := fxOver a b then
         throw s!"{mp.show}: {mine} allows the effect <{k}>, which {theirs}, which it overrides, does not"
     | _, _ => pure ()

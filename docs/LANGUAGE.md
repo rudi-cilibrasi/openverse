@@ -759,7 +759,9 @@ Main()<suspends>:void =
   function, `Sleep`, `sync` and `race` can be used only in a suspends
   function, and not in a failure context (an `if` condition, a `for`
   filter, a `case` pattern, a `<decides>` call's arguments) nor in a
-  `defer`. A `<suspends>` method is not supported yet, nor a `<suspends>`
+  `defer`. A method may be `<suspends>` (an override must be too, and
+  only when what it overrides is); dispatching one to a class that fixes
+  type arguments (#142) is not supported yet, nor a `<suspends>`
   constructor. `<suspends>` combines with the heap effects
   (`<computes>`, `<reads>`, …): waiting has none.
 - **Time.** The schedule is deterministic: a virtual clock counts ticks, 30
@@ -813,6 +815,6 @@ arithmetic on rationals (see [rational](#rational)), float functions beyond thos
 the class features listed under [Classes](#classes), struct methods (Verse structs have none; classes do),
 `weak_map`, module paths `using{/Verse.org/…}` (accepted and ignored), overloading beyond [Overloading](#overloading), nested
 functions, concurrency beyond [Concurrency](#concurrency) (`rush`,
-`spawn` outside suspends functions, `event()` without a type argument, cancelling a task, `return` in arms, `<suspends>` methods; #156), and effect checking
+`spawn` outside suspends functions, `event()` without a type argument, cancelling a task, `return` in arms; #156), and effect checking
 other than `<decides>` and the heap effects (`<converges>` is accepted and
 ignored).
