@@ -1,0 +1,7 @@
+echo waits
+helper ticked
+s
+echo waits
+helper ticked
+7
+exit=0

@@ -738,8 +738,10 @@ Main()<suspends>:void =
   `t` is `F`'s result type, and `T.Await()` waits for the task to end and
   gives its result (at once if it has ended). A task is not tied to the
   code that spawned it: it runs until it ends or the program does. `spawn`
-  is allowed in any function that is not generic, immediate ones too, and
-  in a field's default (a task per construction that omits the field);
+  is allowed in any function, immediate ones too, and in a field's default
+  (a task per construction that omits the field); in a generic function,
+  the spawned call's argument and result types must not mention its type
+  parameters (the scheduler's tasks have no type arguments);
   without a suspends `Main`, a task runs only up to its first wait.
   `T.Cancel()` (in a suspends function) cancels a task that has not ended:
   it unwinds at once, running its `defer:` blocks, or, when a task cancels
@@ -835,6 +837,7 @@ arithmetic on rationals (see [rational](#rational)), float functions beyond thos
 the class features listed under [Classes](#classes), struct methods (Verse structs have none; classes do),
 `weak_map`, module paths `using{/Verse.org/…}` (accepted and ignored), overloading beyond [Overloading](#overloading), nested
 functions, concurrency beyond [Concurrency](#concurrency) (`spawn`
+of a call that depends on a generic function's type parameters, `branch` and `rush`
 in generic functions, `subscribable_event`; #156), and effect checking
 other than `<decides>` and the heap effects (`<converges>` is accepted and
 ignored).
