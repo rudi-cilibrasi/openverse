@@ -1,0 +1,9 @@
+normal F end
+normal F defer
+normal B2 defer
+normal B1 defer
+cancelled F defer
+cancelled B2 defer
+cancelled B1 defer
+main end
+exit=0

@@ -329,15 +329,20 @@ ends, the others that are pending are registered as roots (not run again
 at once) instead of cancelled.
 
 An `event(t)` keeps a list of waiter records (each an `$evrec(t)`, also
-below `$taskBase`). `E.Await()` appends one and waits at `$WaitDone`.
-`E.Signal(X)` gives `X` to every record in the list, marks it done, and
-empties the list. A record learns the scheduler on its first poll, so
+below `$taskBase`). `E.Await()` first drops the records at the head that are
+done (woken, or of waits that were cancelled, which mark their record in a
+`defer:`), then appends one and waits at `$WaitDone`. `E.Signal(X)` gives
+`X` to every record in the list, marks it done, and empties the list. A record learns the scheduler on its first poll, so
 `Signal`, which has no scheduler of its own, can make the scheduler pass
 again in the same tick.
 
-Between ticks, the roots that are done are dropped once they are more
-than half, since every spawn copies the array. In C, each task's frame
-and task object stay in memory.
+The roots are a list of cells `[root, next]` (adding one costs a cell; an
+array would be copied at each spawn, and C keeps every copy). A pass follows
+the list, reading each cell's next after its root ran, so a root added
+during the pass runs in it. After a root ended or was stopped, the cells of
+the roots that are done are unlinked between ticks. In C, what a task or a
+branch allocates (its frame, wrapper, cell, task object, waiter record)
+stays in memory, a few hundred bytes each.
 
 **Cancellation.** Every region, a function body or an arm, also gets a
 cancel function. It cancels what the region waits at (a callee's frame,

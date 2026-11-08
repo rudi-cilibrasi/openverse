@@ -675,8 +675,10 @@ partial def region (pcFld : Nat) (done : Option (Expr → Expr)) (body : Expr) :
             (.seq (seqVoid [spillMark, .call can args, reloadMark]) vd) vd)
     .ite (.prim .eq [fget pcFld, int s.id]) (.seq (seqVoid [child, s.defers]) vd) vd
   -- (a function's cancel also stops its branches, before the rest)
-  let cancel := seqVoid ([reloadMark] ++ (if pcFld == pcF then [killMark] else []) ++
-    st.sites.toList.map cancelAt ++ [spillMark])
+  -- (a function's branches are stopped last, after its own defers, as when
+  -- it returns)
+  let cancel := seqVoid ([reloadMark] ++ st.sites.toList.map cancelAt ++
+    (if pcFld == pcF then [killMark] else []) ++ [spillMark])
   modify fun st => { st with regionNext := saved.regionNext, sites := saved.sites, defers := saved.defers }
   return (resume, cancel)
 end
@@ -799,9 +801,10 @@ def lower (S : Sigs) (callee : Nat → Option Callee) (syncMark raceMark rushMar
   -- stopping the branches: each wrapper marked done (through a test of its
   -- class), each arm still pending cancelled and marked dead
   let args : List Expr := [fr, .local schS] ++ (List.range arity).map fun i => .local (i + 2)
-  let kill := seqVoid (st.kills.toList.map fun (wf, wrapTag, stopFn, y, pcA, doneA, can) =>
+  -- (last started first, as a `race`'s losers)
+  let kill := seqVoid (st.kills.toList.reverse.map fun (wf, wrapTag, stopFn, y, pcA, doneA, can) =>
     seqVoid [.assign y (fget wf),
-      .ite (.heap (.isTag [wrapTag]) [.local y]) (.call stopFn [.local y]) vd,
+      .ite (.heap (.isTag [wrapTag]) [.local y]) (.call stopFn [.local y, .local schS]) vd,
       .ite (allOf [.prim .ne [fget pcA, int 0], .prim .eq [fget doneA, int 0]])
         (.seq (seqVoid [.call can args, fset doneA (int 2)]) vd) vd])
   -- the slots kept across suspension points live in the frame: their reads

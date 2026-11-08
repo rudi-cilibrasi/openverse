@@ -729,7 +729,8 @@ Main()<suspends>:void =
   up to its first wait, while the code after it goes on. It shares the
   enclosing function's variables, and it is cancelled (running its active
   `defer:` blocks) when that function exits, by returning, ending or being
-  cancelled. A `branch` cannot be in a `loop` or `for` body (the Book's
+  cancelled: after the function's own `defer:` blocks, the last started
+  branch first. A `branch` cannot be in a `loop` or `for` body (the Book's
   rule), even through an arm, nor in a generic function for now.
 - **`spawn`.** `spawn{F(…)}` starts a task running the call, which must be
   of a suspends function. Its arguments are evaluated at once, and the
@@ -752,9 +753,10 @@ Main()<suspends>:void =
   ```
 - **`event`.** An `event(t){}` has `E.Await()`, which waits for the next
   `E.Signal(X)` and gives `X`, and `E.Signal(X)`, which wakes every task
-  waiting at that moment, in the order they began waiting, each with `X`
-  (the API's reading; the Book's text says both "each awaiter" and
-  "exactly one"). A `Signal` with no one waiting is lost, and `Signal`
+  waiting at that moment, each with `X` (the API's reading; the Book's text
+  says both "each awaiter" and "exactly one"). The woken tasks go on in the
+  scheduler's order (`Main`, then tasks in the order they were started,
+  arms in source order), not in the order they began waiting. A `Signal` with no one waiting is lost, and `Signal`
   itself never waits. `event()` without a type, `sticky_event` and
   `subscribable_event` are not supported.
 - **Arms.** Arms share the enclosing function's variables. An arm is a
