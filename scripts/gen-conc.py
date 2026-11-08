@@ -12,7 +12,8 @@ A program combines
   - generic suspends functions with branch, rush, race, sync, spawn and
     defer (specialised at each type they are used at, #174);
   - spawns of plain calls and of dispatched methods (#173), awaited and
-    cancelled, nested spawns (#180);
+    cancelled, nested spawns (#180), and of methods every class fixes, in
+    generic code (#204);
   - rush losers that outlive the rush, branches nested in branches (#187);
   - a class keeping one type argument and fixing another, overriding with a
     narrower result (#198).
@@ -93,6 +94,19 @@ if R.random() < 0.5:
     emit(2, f"Sleep({dur()})")
     emit(2, 'Print("evalall branch")')
 emit(1, "R")
+# spawning and racing a method that every class fixes, in code generic over
+# the class: compiled at each type (#204)
+emit(0, "SpawnEval(E:expr(t), F:expr(t) where t:type)<suspends>:t =")
+emit(1, "T := spawn{E.Eval()}")
+if R.random() < 0.5:
+    emit(1, "U := spawn{F.Eval()}")
+    emit(1, "U.Cancel()" if R.random() < 0.5 else "UV := U.Await()")
+if R.random() < 0.5:
+    emit(1, "race:")
+    emit(2, "T.Await()")
+    emit(2, "F.Eval()")
+else:
+    emit(1, "T.Await()")
 # an interface with a field at different places (#157 accessors)
 emit(0, "slot(t:type) := interface:")
 emit(1, "var Item:t")
@@ -271,7 +285,14 @@ emit(0, "Main()<suspends>:void =")
 receivers = [("int", "int_box{V := %d}"), ("int", "sub(int){V := %d}"), ("int", "box(int){V := %d}"),
              ("string", 'box(string){V := "s%d"}'), ("string", 'sub(string){V := "t%d"}')]
 for _ in range(R.randint(2, 6)):
-    c = R.randrange(9)
+    c = R.randrange(10)
+    if c == 9:
+        n = R.randint(1, 9)
+        if R.random() < 0.5:
+            emit(1, f'Print("spawneval {{SpawnEval(lit{{N := {n}}}, neg{{E := lit{{N := {n + 1}}}}})}}")')
+        else:
+            emit(1, f'Print("spawneval {{SpawnEval(word{{S := "w{n}"}}, word{{S := "v{n}"}})}}")')
+        continue
     if c == 8:
         n = R.randint(1, 9)
         if R.random() < 0.5:

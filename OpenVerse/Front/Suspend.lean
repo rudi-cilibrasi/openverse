@@ -243,7 +243,9 @@ partial def liftChains (m base : Nat) : Expr → StateM (Array (Expr × List Nat
     match f == m, es with
     | true, [.prim .mkArr [.seq ch v, .seq (.local t) v2]] =>
       match ch with
-      | .ite .. =>
+      -- (also one whose every test a copy at closed types dropped, #186:
+      -- left with its unreachable end, at a type no class implements)
+      | .ite .. | .prim .userErr [] =>
         let ops := (slotsOf ch).eraseDups
         let i := (← get).size
         modify (·.push (ch, ops, t))
