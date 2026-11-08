@@ -316,7 +316,12 @@ The scheduler is its class's prototype, a literal any code can name, so
 an immediate function can spawn too. The spawn site calls
 `$spawnK$start(sched, $spawnK$new(sched, T, args…))`,
 which adds the root's frame to the scheduler's `Roots` and runs it up to
-its first suspension point.
+its first suspension point. A spawned method with several implementations
+is a dispatch on the receiver's class rather than one call (#173): its
+chain of tests becomes a suspends function `$dispatchK` of the slots the
+chain uses (the receiver, the arguments, and the slots each test binds the
+narrowed receiver to, which start as the caller's, so the function needs
+no initial values), and the root calls that.
 
 Each pass resumes `Main`'s frame, then every root whose suspension point
 is not -1 (done). It reaches a root through a test of its class

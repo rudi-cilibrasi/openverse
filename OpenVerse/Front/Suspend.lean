@@ -189,6 +189,75 @@ partial def spawnSites (m : Nat) : Expr → List (Nat × List Expr × Nat)
   | .forE _ it f b => spawnSites m it ++ spawnSites m f ++ spawnSites m b
   | _ => []
 
+/-- The slots `e` uses. -/
+partial def slotsOf : Expr → List Nat
+  | .local j => [j]
+  | .assign j e => j :: slotsOf e
+  | .forE i it f b => i :: slotsOf it ++ slotsOf f ++ slotsOf b
+  | .ret e | .print e | .loop e => slotsOf e
+  | .seq a b => slotsOf a ++ slotsOf b
+  | .prim _ es | .call _ es | .heap _ es => (es.map slotsOf).flatten
+  | .ite c t e => slotsOf c ++ slotsOf t ++ slotsOf e
+  | _ => []
+
+/-- Whether `e` is a method call's dispatch on the class of the receiver in
+    slot `y` (#34, #142): a chain of class tests of it (each binding the
+    narrowed receiver to a slot, or in `Typed.dispatch`'s shape), each
+    running an implementation, ending in `userErr`. -/
+partial def isDispatchChainOn (y : Nat) : Expr → Bool
+  | .ite (.assign sd (.heap (.isTag _) [.local y'])) _ e => y' == y && sd != y && isDispatchChainOn y e
+  | .ite (.heap (.isTag _) [.local y']) _ e => y' == y && isDispatchChainOn y e
+  | .prim .userErr [] => true
+  | _ => false
+
+/-- `isDispatchChainOn` at the receiver its first test reads. -/
+def isDispatchChain : Expr → Bool
+  | e@(.ite (.assign _ (.heap (.isTag _) [.local y])) _ _) => isDispatchChainOn y e
+  | e@(.ite (.heap (.isTag _) [.local y]) _ _) => isDispatchChainOn y e
+  | _ => false
+
+/-- Every call in `e`: its callee and arguments. -/
+partial def callsOf : Expr → List (Nat × List Expr)
+  | .call f es => (f, es) :: (es.map callsOf).flatten
+  | .assign _ e | .ret e | .print e | .loop e => callsOf e
+  | .seq a b => callsOf a ++ callsOf b
+  | .prim _ es | .heap _ es => (es.map callsOf).flatten
+  | .ite c t e => callsOf c ++ callsOf t ++ callsOf e
+  | .forE _ it f b => callsOf it ++ callsOf f ++ callsOf b
+  | _ => []
+
+/-- The code each test of a dispatch chain runs. -/
+partial def chainArms : Expr → List Expr
+  | .ite _ t e => t :: chainArms e
+  | _ => []
+
+/-- The `spawn`s (mark `m`) in `e` of a dispatch chain rather than a call
+    (#173): each chain becomes a function, `base + i` for the `i`-th met
+    (counting from the state's size), of the slots it uses, called in its
+    place. Collects each chain, its slots and its task's slot. -/
+partial def liftChains (m base : Nat) : Expr → StateM (Array (Expr × List Nat × Nat)) Expr
+  | .call f es => do
+    match f == m, es with
+    | true, [.prim .mkArr [.seq ch v, .seq (.local t) v2]] =>
+      match ch with
+      | .ite .. =>
+        let ops := (slotsOf ch).eraseDups
+        let i := (← get).size
+        modify (·.push (ch, ops, t))
+        return .call f [.prim .mkArr [.seq (.call (base + i) (ops.map Expr.local)) v, .seq (.local t) v2]]
+      | _ => return .call f es
+    | _, _ => return .call f (← es.mapM (liftChains m base))
+  | .assign i x => return .assign i (← liftChains m base x)
+  | .ret x => return .ret (← liftChains m base x)
+  | .print x => return .print (← liftChains m base x)
+  | .loop x => return .loop (← liftChains m base x)
+  | .seq a b => return .seq (← liftChains m base a) (← liftChains m base b)
+  | .prim p es => return .prim p (← es.mapM (liftChains m base))
+  | .heap op es => return .heap op (← es.mapM (liftChains m base))
+  | .ite c t x => return .ite (← liftChains m base c) (← liftChains m base t) (← liftChains m base x)
+  | .forE i it f b => return .forE i (← liftChains m base it) (← liftChains m base f) (← liftChains m base b)
+  | x => return x
+
 /-- The number of arms of the `sync`s and `race`s (marks `m`) in `e`. -/
 partial def countArms (m : Nat → Bool) : Expr → Nat
   | .call f es =>
@@ -933,17 +1002,6 @@ partial def toFields (fld : Nat → Option Nat) : Expr → Expr
   | .ret e => .ret (toFields fld e)
   | .print e => .print (toFields fld e)
   | e => e
-
-/-- The slots `e` uses. -/
-partial def slotsOf : Expr → List Nat
-  | .local j => [j]
-  | .assign j e => j :: slotsOf e
-  | .forE i it f b => i :: slotsOf it ++ slotsOf f ++ slotsOf b
-  | .ret e | .print e | .loop e => slotsOf e
-  | .seq a b => slotsOf a ++ slotsOf b
-  | .prim _ es | .call _ es | .heap _ es => (es.map slotsOf).flatten
-  | .ite c t e => slotsOf c ++ slotsOf t ++ slotsOf e
-  | _ => []
 
 /-- `e` with its slots renamed by `ren`. -/
 partial def renumber (ren : Nat → Nat) : Expr → Expr

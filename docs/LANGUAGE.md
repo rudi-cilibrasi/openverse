@@ -737,7 +737,8 @@ Main()<suspends>:void =
   branch first. A `branch` cannot be in a `loop` or `for` body (the Book's
   rule), even through an arm, nor in a generic function for now.
 - **`spawn`.** `spawn{F(…)}` starts a task running the call, which must be
-  of a suspends function. Its arguments are evaluated at once, and the
+  of a suspends function or method (`spawn{Agent.Run()}`, also when
+  subclasses override `Run`). Its arguments are evaluated at once, and the
   task runs at once up to its first wait. The value is a `task(t)`, where
   `t` is `F`'s result type, and `T.Await()` waits for the task to end and
   gives its result (at once if it has ended). A task is not tied to the

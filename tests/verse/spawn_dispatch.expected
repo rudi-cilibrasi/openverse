@@ -1,0 +1,9 @@
+f fast 2
+a ran 1
+s slow 3
+s unwinds
+total 14
+c unwinds
+d unwinds
+end
+exit=0
