@@ -219,6 +219,22 @@ where
   | .forE i it f b => return .forE i (← go it) (← go f) (← go b)
   | x => return x
 
+/-- `e` with each call of `f` replaced by `repl args`. -/
+partial def substCall (f : Nat) (repl : List Expr → Expr) : Expr → Expr
+  | .call g es =>
+    let es := es.map (substCall f repl)
+    if g == f then repl es else .call g es
+  | .assign i x => .assign i (substCall f repl x)
+  | .ret x => .ret (substCall f repl x)
+  | .print x => .print (substCall f repl x)
+  | .loop x => .loop (substCall f repl x)
+  | .seq a b => .seq (substCall f repl a) (substCall f repl b)
+  | .prim p es => .prim p (es.map (substCall f repl))
+  | .heap op es => .heap op (es.map (substCall f repl))
+  | .ite c t x => .ite (substCall f repl c) (substCall f repl t) (substCall f repl x)
+  | .forE i it fl b => .forE i (substCall f repl it) (substCall f repl fl) (substCall f repl b)
+  | x => x
+
 /-- Split `k` slot initialisations off the front of a function body
     (`initPrefixE`). -/
 def stripInits : Nat → Expr → Option (List Expr × Expr)
