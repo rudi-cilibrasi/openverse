@@ -7,6 +7,23 @@ on both sides, so that the theorems meet. Following LeanOS (ADR 0030), every
 seam is a scalar contract with the same formula on both sides. The one step
 that no tool checks is reading that the two formulas below are the same.
 
+```mermaid
+flowchart LR
+    subgraph lean["Lean (OpenVerse/Core)"]
+        L1["Prim.apply on int64,<br/>as formulas (Seams.lean)"]
+        L2["Prog.WellScoped ⟹ Eval.scoped_ok<br/>(Scoping.lean)"]
+        L3["a failed context restarts<br/>from the saved state<br/>(Eval.ite_fail, EvalFor.skip)"]
+    end
+    subgraph c["C, proved with QuickProof"]
+        C1["arith.c<br/>arith_exact"]
+        C2["load.c<br/>loader_wellscoped"]
+        C3["store.c<br/>store_rollback_model"]
+    end
+    L1 <-. "1. the same formulas" .-> C1
+    L2 <-. "2. the same conditions" .-> C2
+    L3 <-. "3. mark and roll back<br/>where Lean saves and restores" .-> C3
+```
+
 ## 1. Integer arithmetic (`runtime/src/arith.c`)
 
 | | C (law `arith_exact`, `proofs/quickproof/arith/project/harness/arith_exact.c`) | Lean (`OpenVerse/Core/Seams.lean`) |
