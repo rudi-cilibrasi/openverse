@@ -4731,6 +4731,14 @@ def specialise (fns0 : Array Fn) (slotTys0 : Array (List VTy)) (S0 : Sigs) (ntpO
           (witTys S0 slotTys[gi]! (resTy S0 gi) g es).any (·.all (·.mentionsVar))) then
         needy := needy.set! gi true
         changed := true
+  -- (#225) the other generic suspends functions are copied too where they
+  -- are called at small closed types, within a budget, and kept for every
+  -- other call: a copy keeps its callers' child frames in fields of its own
+  -- class, resumed outside any condition, not in options unwrapped in a
+  -- condition, where a resumption's writes make the reference interpreter
+  -- copy the heap
+  let mut soft : Array Bool := (List.range nOrig).toArray.map fun gi => ntpOf gi > 0 && isSusp gi && !needy[gi]!
+  let mut softCopies := 0
   let mut specKeys : Array (Nat × List VTy) := #[]
   let mut queue : Array Nat := ((List.range nOrig).filter fun gi => !needy[gi]!).toArray
   let mut qi := 0
@@ -4740,9 +4748,28 @@ def specialise (fns0 : Array Fn) (slotTys0 : Array (List VTy)) (S0 : Sigs) (ntpO
     let S : Sigs := { S0 with fns := S0.fns ++ specSigs.toList }
     let Γ := slotTys[gi]!
     let ρ := resTy S gi
-    let calls := (Suspend.callsOf fns[gi]!.body).filter fun (g, _) => needy[g]?.getD false
+    let calls := (Suspend.callsOf fns[gi]!.body).filter fun (g, _) => needy[g]?.getD false || soft[g]?.getD false
     if calls.isEmpty then continue
     for (g, es) in calls do
+      if !(needy[g]?.getD false) then
+        -- (a soft one: copied only at a small closed type, within the budget)
+        let some θ := (witTys S Γ ρ g es).mapM id | continue
+        if θ.any (·.mentionsVar) || θ.any (·.size > 40) then continue
+        if !specKeys.contains (g, θ) then
+          if softCopies ≥ 200 || specKeys.size ≥ 500 then continue
+          let σ : Nat → VTy := fun i => θ.getD i (.var i)
+          let fn := fns[g]!
+          let Γc := slotTys[g]!.map (VTy.subst σ)
+          fns := fns.push { fn with name := s!"{fn.name}$at{specKeys.size}", body := Suspend.pruneDead S0 Γc fn.body }
+          slotTys := slotTys.push Γc
+          let (ps, τ) := (S0.fns[g]?).getD ([], .void)
+          specSigs := specSigs.push (ps.map (VTy.subst σ), τ.subst σ)
+          needy := needy.push false
+          soft := soft.push false
+          queue := queue.push (nOrig + specKeys.size)
+          specKeys := specKeys.push (g, θ)
+          softCopies := softCopies + 1
+        continue
       let some θ := (witTys S Γ ρ g es).mapM id
         | throw (inFn fns[gi]!.name s!"a type argument of a call of {fns[g]!.name} has no type of its own (#174)")
       -- (types that grow at each copy, doubling for instance: polymorphic
@@ -4761,13 +4788,15 @@ def specialise (fns0 : Array Fn) (slotTys0 : Array (List VTy)) (S0 : Sigs) (ntpO
         let (ps, τ) := (S0.fns[g]?).getD ([], .void)
         specSigs := specSigs.push (ps.map (VTy.subst σ), τ.subst σ)
         needy := needy.push false
+        soft := soft.push false
         queue := queue.push (nOrig + specKeys.size)
         specKeys := specKeys.push (g, θ)
     let keys := specKeys
     let isNeedy := needy
+    let isSoft := soft
     let S : Sigs := { S0 with fns := S0.fns ++ specSigs.toList }
     let body := Suspend.redirectCalls (fun g es =>
-      if isNeedy[g]?.getD false then
+      if isNeedy[g]?.getD false || isSoft[g]?.getD false then
         match (witTys S Γ ρ g es).mapM id with
         | some θ => (keys.idxOf? (g, θ)).map (nOrig + ·)
         | none => none
