@@ -1853,8 +1853,15 @@ partial def elabConc (ctx : Ctx) (p : Pos) (isSync : Bool) (arms : List SExpr) (
     let mut slots : Array Nat := #[]
     let mut tys : Array Ty := #[]
     let mut async := 0
-    for a in arms do
-      let r ← elabE armCtx a none
+    -- (an expected tuple type gives each arm its expected type)
+    let armExp : List (Option Ty) := match exp with
+      | some (.tup ts) => if ts.length == arms.length then ts.map some else arms.map fun _ => none
+      | _ => arms.map fun _ => none
+    for (a, ae) in arms.zip armExp do
+      let r ← elabE armCtx a ae
+      let r ← match ae with
+        | some t => pure ⟨← coerce a.pos r t, t⟩
+        | none => pure r
       if Suspend.hasSusp isS r.e then async := async + 1
       let ty := if r.ty == .never then Ty.void else r.ty
       let t ← fresh ty
@@ -1871,13 +1878,11 @@ partial def elabConc (ctx : Ctx) (p : Pos) (isSync : Bool) (arms : List SExpr) (
     let mut rs : Array (Pos × R) := #[]
     for a in arms do
       rs := rs.push (a.pos, ← elabE armCtx a exp)
-    let mut ty : Ty := match rs.toList with
-      | (_, r0) :: _ => r0.ty
-      | [] => .void
-    for (_, r) in rs.toList.drop 1 do
-      match joinTy ctx.types ty r.ty exp with
-      | some j => ty := j
-      | none => eerr p s!"the arms of race have no common type ({ty.show} and {r.ty.show})"
+    -- (as an `if`'s branches: void when one is, `any` when nothing else is
+    -- common)
+    let mut ty : Ty := .never
+    for (_, r) in rs.toList do
+      ty ← join p ty r.ty exp
     let rty := match exp with
       | some t => t
       | none => ty
@@ -5486,17 +5491,20 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
         branchTys := branchTys.push [wrapTy K]
         branchSigs := branchSigs.push ([wrapTy K], VTy.void)
       let ps := Γ.take a
-      let tempTys := low.slots.drop (2 + fn.nslots)
       let dflt (params : List VTy) (τ : VTy) : Except String Expr :=
         match Suspend.coreDefault Sinf params 0 τ with
         | some d => pure d
-        | none => throw s!"internal error: lowering {gname}: no initial value for a temporary of type {repr τ}"
-      let inits := ds.map (Suspend.shift 2) ++ (← tempTys.mapM (dflt (low.slots.take (a + 2))))
-      let resumeLike (name : String) (body : Expr) : Fn :=
-        { name, arity := a + 2, nslots := low.slots.length, decides := false, writes := true,
-          body := initPrefixE (a + 2) inits body }
-      fns := fns.set! gi (resumeLike gname low.body)
-      slotTys := slotTys.set! gi low.slots
+        | none => throw s!"internal error: lowering {gname}: no initial value for a slot of type {repr τ}"
+      -- the frame's slots after the parameters: the function's own, then the
+      -- pass's temporaries
+      let tempTys := (low.fields.drop (2 + sites + 2 * arms + a + (fn.nslots - a)))
+      -- each function keeps its parameters and the transient slots it uses
+      let resumeLike (name : String) (lf : Suspend.LFn) : Except String Fn := do
+        let inits ← (lf.slots.drop (a + 2)).mapM (dflt (lf.slots.take (a + 2)))
+        return { name, arity := a + 2, nslots := lf.slots.length, decides := false, writes := true,
+                 body := initPrefixE (a + 2) inits lf.body }
+      fns := fns.set! gi (← resumeLike gname low.body)
+      slotTys := slotTys.set! gi low.body.slots
       fsigs := fsigs.set gi (frameTy j :: schedTy :: ps, .int)
       frameClasses := frameClasses.push low.fields
       -- `g$new(sched, params…)`: the frame, with the arguments and initial
@@ -5520,18 +5528,18 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
                               writes := true, body := resetBody }
       newTys := newTys.push (frameTy j :: ps)
       -- `g$cancel(frame, sched, params…)`: unwinds it
-      newFns := newFns.push (resumeLike s!"{gname}$cancel" low.cancel)
-      newTys := newTys.push low.slots
+      newFns := newFns.push (← resumeLike s!"{gname}$cancel" low.cancel)
+      newTys := newTys.push low.cancel.slots
       -- `g$result(frame)`
       newFns := newFns.push { name := s!"{gname}$result", arity := 1, nslots := 1, decides := false,
                               writes := false, body := .heap (.get Suspend.resF) [.local 0] }
       newTys := newTys.push [frameTy j]
       -- the arms of its `sync`s and `race`s
       for ((res, can), i) in low.arms.zipIdx do
-        armFns := armFns.push (resumeLike s!"{gname}$arm{i}" res)
-        armFns := armFns.push (resumeLike s!"{gname}$arm{i}$cancel" can)
-        armTys := armTys.push low.slots
-        armTys := armTys.push low.slots
+        armFns := armFns.push (← resumeLike s!"{gname}$arm{i}" res)
+        armFns := armFns.push (← resumeLike s!"{gname}$arm{i}$cancel" can)
+        armTys := armTys.push res.slots
+        armTys := armTys.push can.slots
         armSigs := armSigs.push (frameTy j :: schedTy :: ps, .int)
         armSigs := armSigs.push (frameTy j :: schedTy :: ps, VTy.void)
     -- each root's trampoline, which resumes it with its parameters from its

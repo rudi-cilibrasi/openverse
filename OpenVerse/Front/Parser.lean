@@ -241,7 +241,9 @@ partial def parseExpr (stop : Nat) : PM SExpr := do
   else if t.identName?.isSome && t1.isSym ":=" then
     bump; bump
     return .decl t.pos t.identName?.get! none false (← parseExpr stop)
-  else if t.identName?.isSome && t1.isSym ":" then
+  else if t.identName?.isSome && t1.isSym ":" && !(← peekT 2).bol then
+    -- (a typed declaration has its type on the line of its `:`; `sync:`
+    -- and the like start an indented block)
     let saved ← get
     let typed ← (do
         bump; bump

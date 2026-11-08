@@ -280,19 +280,27 @@ classic coroutine transformation. A `<suspends>` function `g` becomes:
    `if` picks the branch that holds it instead of testing its condition
    again, and a `loop` stays a loop. A `for` whose body suspends becomes a
    loop over an index.
+4. **Slots in the frame.** The slots whose values must outlive a suspension
+   point live in the frame: their reads and writes become the frame's.
+   These are the function's own and the pass's temporaries. The slots used
+   only within one resumption stay real slots: the seeking flag, a branch
+   choice, a callee's status, a `for`'s element. Each generated function
+   keeps only those, renumbered after its parameters, so there is nothing
+   to store or reload, and code size grows linearly with the function.
 
-At a suspension point, the caller resumes the callee's frame. If the callee
-is pending, the caller stores its slots in its own frame and returns 0;
-resuming reloads them.
+At a suspension point, the caller resumes the callee's frame and returns 0
+if the callee is pending. Failure contexts never contain a suspension, so a
+rollback never spans one, and the frame's fields roll back with the heap
+like any object's. The result is ordinary Verse Core, which
+`Prog.checkTypes` checks, and Lean and C run.
 
 **`sync` and `race`.** In the elaborated Core, a `sync` or `race` is a call
 of the marker `$syncMark` or `$raceMark` on the array of its arms. Each arm
 is a statement that leaves the arm's value in a slot (for `race`, the one
 slot of the arms' common type). The pass makes each arm a function of its
 own over the same frame, with its own suspension point and done flag in
-fields of the frame. The enclosing code resumes the arms in order, storing
-its slots before each and reloading them after, so the arms share
-variables. A `race`'s winner cancels the arms that started and are pending,
+fields of the frame. The enclosing code resumes the arms in order; as the
+variables live in the frame, the arms share them. A `race`'s winner cancels the arms that started and are pending,
 last first.
 
 **Tasks.** A `spawn` gets a root: a suspends function `$spawnK(T, args…)`

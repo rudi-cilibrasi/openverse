@@ -269,6 +269,9 @@ structure Env where
 structure St where
   /-- The functions' slot types (shared by the body and its arms). -/
   Γ : Array VTy
+  /-- Which slots are transient: used only within one resumption (so real
+      slots), not kept in the frame. -/
+  trans : Array Bool := #[]
   /-- Suspension points numbered so far, in order (from 1). -/
   next : Nat := 0
   /-- The region's own suspension points so far. -/
@@ -294,8 +297,13 @@ structure St where
 
 abbrev M := ReaderT Env (StateT St (Except String))
 
+/-- A new slot whose value is kept across suspension points (in the frame). -/
 def fresh (τ : VTy) : M Nat :=
-  modifyGet fun st => (st.Γ.size, { st with Γ := st.Γ.push τ })
+  modifyGet fun st => (st.Γ.size, { st with Γ := st.Γ.push τ, trans := st.trans.push false })
+
+/-- A new slot used only within one resumption. -/
+def freshT (τ : VTy) : M Nat :=
+  modifyGet fun st => (st.Γ.size, { st with Γ := st.Γ.push τ, trans := st.trans.push true })
 
 def infer (e : Expr) : M VTy := do
   let env ← read
@@ -380,7 +388,7 @@ partial def block (e : Expr) (k : Option (Expr → Expr)) : M (List Expr) := do
   | .ite c t e2 =>
     if ← hasS c then throw "internal error: a suspending call in a failure context"
     return [← emit do
-      let b ← fresh .int
+      let b ← freshT .int
       let lo := (← get).next + 1
       let tb ← block t k
       let mid := (← get).next
@@ -442,7 +450,7 @@ partial def block (e : Expr) (k : Option (Expr → Expr)) : M (List Expr) := do
         let pcA := armPcF env.sites a
         let doneA := armDoneF env.sites a
         let (res, can) ← region pcA none arm
-        let y ← fresh wide
+        let y ← freshT wide
         let killInfo := (childF site, wrapTag, stopFn, y, pcA, doneA, env.fnBase + 2 * a + 1)
         modify fun st => { st with arms := st.arms.set! a (res, can) }
         modify fun st => { st with kills := st.kills.push killInfo }
@@ -512,7 +520,7 @@ partial def suspendAt (g : Nat) (c : Callee) (rs : List Expr) : M (Expr × Expr)
     let cf := childF k
     let q : Expr := .prim .query [fget cf]
     let create : Expr := .ite (.call c.initFn (q :: rs)) vd (.seq (fset cf (.prim .mkSome [.call c.newFn (newArgs rs)])) vd)
-    let st ← fresh .int
+    let st ← freshT .int
     let arrive : Expr := .ite (← seeking) vd (.seq create (.seq (fset env.pcFld (int k)) vd))
     let poll : Expr := .ite (.assign st (.call c.resumeFn ([q, .local schS] ++ c.passFields.map fun f => .heap (.get f) [q])))
       vd (.seq (.prim .userErr []) vd)
@@ -535,10 +543,10 @@ partial def suspendAt (g : Nat) (c : Callee) (rs : List Expr) : M (Expr × Expr)
   let ptys := ((env.S.fns[g]?).map (·.1)).getD []
   let argSlots ← ptys.mapM fresh
   let as := argSlots.map Expr.local
-  let y ← fresh wide
+  let y ← freshT wide
   modify fun st => { st with sites := st.sites.push { id := k, waits := .callee k c y argSlots, defers := st.defers } }
   let isC : Expr := .heap (.isTag [c.tag]) [.local y]
-  let st ← fresh .int
+  let st ← freshT .int
   let arrive : Expr := .ite (← seeking) vd (seqVoid (
     (argSlots.zip rs).map (fun (a, r) => .assign a r) ++
     [.assign y (fget cf),
@@ -574,7 +582,7 @@ partial def concAt (isSync : Bool) (arms : List Expr) : M Expr := do
     info := info.push (env.fnBase + 2 * a, env.fnBase + 2 * a + 1, pcA, doneA)
   modify fun st => { st with sites := st.sites.push { id := k, waits := .arms info.toList, defers := defersHere } }
   let args ← armArgs
-  let st ← fresh .int
+  let st ← freshT .int
   let arrive : Expr := .ite (← seeking) vd (seqVoid
     (info.toList.flatMap (fun (_, _, pcA, doneA) => [fset pcA (int 0), fset doneA (int 0)]) ++ [fset env.pcFld (int k)]))
   let found : Expr := .assign env.rS (int 0)
@@ -587,7 +595,7 @@ partial def concAt (isSync : Bool) (arms : List Expr) : M Expr := do
     let wait : Expr := .ite all vd (.seq spillMark (.ret (int 0)))
     return seqVoid ([arrive, found] ++ polls ++ [wait])
   else
-    let w ← fresh .int
+    let w ← freshT .int
     let polls := info.toList.zipIdx.map fun ((res, _, _, doneA), i) =>
       Expr.ite (.prim .eq [.local w, int (-1)])
         (.seq (Expr.ite (.prim .eq [fget doneA, int 0])
@@ -604,7 +612,7 @@ partial def concAt (isSync : Bool) (arms : List Expr) : M Expr := do
     and giving 1) and its cancel body. -/
 partial def region (pcFld : Nat) (done : Option (Expr → Expr)) (body : Expr) : M (Expr × Expr) := do
   let env ← read
-  let rS ← fresh .int
+  let rS ← freshT .int
   let saved ← get
   modify fun st => { st with regionNext := 0, sites := #[], defers := vd }
   let regionTotal := countSusp (fun f => (env.callee f).isSome || isMark env f)
@@ -662,16 +670,74 @@ partial def fill (spill reload : Expr) (kill : Expr := vd) : Expr → Expr
   | .print e => .print (fill spill reload kill e)
   | e => e
 
+/-- The element slots of the `for`s in `e`. -/
+partial def forBinders : Expr → List Nat
+  | .forE i it f b => i :: forBinders it ++ forBinders f ++ forBinders b
+  | .assign _ e | .ret e | .print e | .loop e => forBinders e
+  | .seq a b => forBinders a ++ forBinders b
+  | .prim _ es | .call _ es | .heap _ es => (es.map forBinders).flatten
+  | .ite c t e => forBinders c ++ forBinders t ++ forBinders e
+  | _ => []
+
+/-- `e` with the slots `fld` maps read and written in the frame's fields. -/
+partial def toFields (fld : Nat → Option Nat) : Expr → Expr
+  | .local j => match fld j with
+    | some f => fget f
+    | none => .local j
+  | .assign j e => match fld j with
+    | some f => fset f (toFields fld e)
+    | none => .assign j (toFields fld e)
+  | .forE i it f b => .forE i (toFields fld it) (toFields fld f) (toFields fld b)
+  | .seq a b => .seq (toFields fld a) (toFields fld b)
+  | .prim p es => .prim p (es.map (toFields fld))
+  | .call g es => .call g (es.map (toFields fld))
+  | .heap op es => .heap op (es.map (toFields fld))
+  | .ite c t e => .ite (toFields fld c) (toFields fld t) (toFields fld e)
+  | .loop b => .loop (toFields fld b)
+  | .ret e => .ret (toFields fld e)
+  | .print e => .print (toFields fld e)
+  | e => e
+
+/-- The slots `e` uses. -/
+partial def slotsOf : Expr → List Nat
+  | .local j => [j]
+  | .assign j e => j :: slotsOf e
+  | .forE i it f b => i :: slotsOf it ++ slotsOf f ++ slotsOf b
+  | .ret e | .print e | .loop e => slotsOf e
+  | .seq a b => slotsOf a ++ slotsOf b
+  | .prim _ es | .call _ es | .heap _ es => (es.map slotsOf).flatten
+  | .ite c t e => slotsOf c ++ slotsOf t ++ slotsOf e
+  | _ => []
+
+/-- `e` with its slots renamed by `ren`. -/
+partial def renumber (ren : Nat → Nat) : Expr → Expr
+  | .local j => .local (ren j)
+  | .assign j e => .assign (ren j) (renumber ren e)
+  | .forE i it f b => .forE (ren i) (renumber ren it) (renumber ren f) (renumber ren b)
+  | .seq a b => .seq (renumber ren a) (renumber ren b)
+  | .prim p es => .prim p (es.map (renumber ren))
+  | .call g es => .call g (es.map (renumber ren))
+  | .heap op es => .heap op (es.map (renumber ren))
+  | .ite c t e => .ite (renumber ren c) (renumber ren t) (renumber ren e)
+  | .loop b => .loop (renumber ren b)
+  | .ret e => .ret (renumber ren e)
+  | .print e => .print (renumber ren e)
+  | e => e
+
+/-- A function of a lowered suspends function: its body, without the slots'
+    initialisations, and its slot types (the frame, the scheduler, the
+    parameters, then the transient slots it uses). -/
+structure LFn where
+  body : Expr
+  slots : List VTy
+
 /-- A lowered suspends function. -/
 structure Lowered where
-  /-- `resume`'s and `cancel`'s bodies, without the slots' initialisations. -/
-  body : Expr
-  cancel : Expr
-  /-- Each arm's resume and cancel bodies (functions `fnBase + 2a`, `+ 1`). -/
-  arms : List (Expr × Expr)
-  /-- The functions' slot types (frame, scheduler, the parameters, then the
-      other slots and the temporaries). -/
-  slots : List VTy
+  /-- `resume` and `cancel`. -/
+  body : LFn
+  cancel : LFn
+  /-- Each arm's resume and cancel (functions `fnBase + 2a`, `+ 1`). -/
+  arms : List (LFn × LFn)
   /-- The frame's field types. -/
   fields : List VTy
   /-- Each `branch`'s arm resume function and done field, in order. -/
@@ -691,17 +757,15 @@ def lower (S : Sigs) (callee : Nat → Option Callee) (syncMark raceMark spawnMa
   let armsTotal := countArms (fun f => isM f || f == branchMark) b
   let b := shift 2 b
   let Γ0 := #[frameTy, schedTy] ++ Γ.toArray
+  let trans0 := #[true, true] ++ (List.replicate Γ.length false).toArray
   let env : Env := { S, ρ, callee, syncMark, raceMark, arity, sites, armsTotal, fnBase, schedTag, spawnMark, spawns,
                      branchMark, branches,
                      pcFld := pcF, rS := 0, regionTotal := 0 }
   let done : Expr → Expr := fun v => .seq (fset resF v) (.seq killMark (.ret (int 1)))
-  let ((res, can), st) ← ((region pcF (some done) b).run env).run { Γ := Γ0 }
+  let ((res, can), st) ← ((region pcF (some done) b).run env).run { Γ := Γ0, trans := trans0 }
   if st.next != sites || st.armsNext != armsTotal then
     throw "internal error: lowering a <suspends> function: suspension points miscounted"
-  let n := st.Γ.size
   let base := slotBaseOf sites armsTotal
-  let spill := seqVoid ((List.range (n - 2)).map fun j => fset (base + j) (.local (j + 2)))
-  let reload := seqVoid ((List.range (n - 2)).map fun j => .assign (j + 2) (fget (base + j)))
   -- stopping the branches: each wrapper marked done (through a test of its
   -- class), each arm still pending cancelled and marked dead
   let args : List Expr := [fr, .local schS] ++ (List.range arity).map fun i => .local (i + 2)
@@ -709,11 +773,22 @@ def lower (S : Sigs) (callee : Nat → Option Callee) (syncMark raceMark spawnMa
     seqVoid [.assign y (fget wf),
       .ite (.heap (.isTag [wrapTag]) [.local y]) (.call stopFn [.local y]) vd,
       .ite (allOf [.prim .ne [fget pcA, int 0], .prim .eq [fget doneA, int 0]])
-        (.seq (seqVoid [spillMark, .call can args, reloadMark, fset doneA (int 2)]) vd) vd])
-  let f := fill spill reload kill
-  return { body := f res, cancel := f can, arms := st.arms.toList.map fun (r, c) => (f r, f c),
+        (.seq (seqVoid [.call can args, fset doneA (int 2)]) vd) vd])
+  -- the slots kept across suspension points live in the frame: their reads
+  -- and writes become the frame's (so nothing is stored or reloaded), except
+  -- a `for`'s element slot, bound by the `for` itself; each function then
+  -- keeps only the transient slots it uses, renumbered after its parameters
+  let finish (e : Expr) : LFn :=
+    let e := fill vd vd kill e
+    let binders := forBinders e
+    let resident (j : Nat) : Bool :=
+      j ≥ 2 + arity && !((st.trans[j]?).getD false) && !binders.contains j
+    let e := toFields (fun j => if resident j then some (base + (j - 2)) else none) e
+    let used := ((slotsOf e).filter (· ≥ 2 + arity)).eraseDups.mergeSort
+    let ren (j : Nat) : Nat := if j < 2 + arity then j else 2 + arity + ((used.idxOf? j).getD 0)
+    { body := renumber ren e, slots := st.Γ.toList.take (2 + arity) ++ used.map fun j => (st.Γ[j]?).getD .int }
+  return { body := finish res, cancel := finish can, arms := st.arms.toList.map fun (r, c) => (finish r, finish c),
            branchArms := st.branchArms.toList,
-           slots := st.Γ.toList,
            fields := [.int, ρ] ++ st.children.toList ++ List.replicate (2 * armsTotal) .int ++
              (st.Γ.toList.drop 2) }
 
