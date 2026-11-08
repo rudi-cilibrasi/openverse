@@ -386,6 +386,17 @@ and journals every write made in a condition (for rollback). So:
   recover. It sits in an option field, unwrapped in a condition, so C
   journals what a generic suspends function writes during one resumption,
   until that resumption returns.
+- A method called under a refinement (a class that fixes the receiver's
+  type arguments, see "Pins and dispatch") needs `Typed.dispatch` on the
+  receiver wherever the refinement matters: passing the arguments and
+  taking the result. The callee gets helpers whose first parameter is the
+  receiver, `arrive(self, args…, frame, sched)` (reset the frame or make
+  one) and `take(self, frame)`, called in the rule's shape on a transient
+  copy of the receiver (its own slot is a frame field by then; the copy
+  starts as that slot's initial value). It is resumed and cancelled
+  through `resumeOwn(frame, sched)` and `cancelOwn(frame, sched)`, which
+  read its parameters from its frame, as the caller has no slots of the
+  callee's (refined) parameter types.
 
 Values stored in a frame, such as strings or arrays in slots, are kept
 like any object's fields (see "Objects in the C runtime"). Each pass

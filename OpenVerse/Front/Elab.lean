@@ -2809,8 +2809,10 @@ partial def elabAppBase (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (b
                   (some (msRet.subst μF))
                 -- (named arguments go through temporaries: put their values
                 -- in the call, which must have the rule's shape)
-                if ms.suspends then
-                  eerr p s!"a <suspends> method cannot be dispatched to class {e}, which fixes type arguments of {c}, yet (#156)"
+                -- (a generic implementation below the receiver's class would
+                -- need its frame's type arguments refined too)
+                if ms.suspends && !env.isSub c e && !((ctx.sig? fname).map (·.tparams.isEmpty)).getD true then
+                  eerr p s!"a <suspends> method of a generic class cannot be dispatched to class {e}, which fixes type arguments of {c}, yet (#171)"
                 let some (.call fi (.local s0 :: es)) := Expr.inlineArgTemps rc.e
                   | eerr p s!"cannot dispatch {m} to class {e}, which fixes type arguments of {c}, when a named argument's default is computed (#142)"
                 if s0 != slot then eerr p s!"cannot dispatch {m} to class {e}, which fixes type arguments of {c} (#142)"
@@ -5548,10 +5550,16 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
         Suspend.countArms (fun f => isMark f || f == branchMark) b)
     let frameTy (j : Nat) : VTy :=
       .ref [tagBase + j] ((List.range lows[j]!.2.2).map VTy.var)
+    -- the methods called through `Typed.dispatch` (#142) of classes that fix
+    -- type arguments (non-generic ones: a generic one's call is refused)
+    let targets : List Nat := (lows.foldl (fun acc (gi, _, _) => acc ++
+      Suspend.dispatchTargets (fun f => user.any fun (h, _, ntp) => h == f && ntp == 0) fns[gi]!.body) []).eraseDups
     -- each one's `new`, `reset`, `cancel` and `result` (fixed indices), each
-    -- root's trampoline and `start`, then the arms' functions
+    -- target's receiver-first helpers, each root's trampoline and `start`,
+    -- then the arms' functions
     let L := lows.length
-    let trampOf (k : Nat) : Nat := nFns + 4 * L + 2 * k
+    let selfBase := nFns + 4 * L
+    let trampOf (k : Nat) : Nat := selfBase + 4 * targets.length + 2 * k
     -- the scheduler: its class's prototype
     let some schedLit := Suspend.coreDefault Sorig [] 0 schedTy
       | throw "internal error: no prototype for the scheduler"
@@ -5574,7 +5582,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     let B := branchHome.size
     -- (`$link(sched, root)`, which adds a root to the scheduler's list,
     -- comes before them)
-    let linkIdx := nFns + 4 * L + 2 * roots.size
+    let linkIdx := selfBase + 4 * targets.length + 2 * roots.size
     let wrapFnBase := linkIdx + 1
     let wrapTag (K : Nat) : Nat := tagBase + L + K
     let wrapTy (K : Nat) : VTy := .ref [wrapTag K] []
@@ -5592,7 +5600,9 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
                  cancelFn := some (nFns + 4 * j + 2),
                  passFields := (List.range fns[gi]!.arity).map fun i => Suspend.slotBaseOf sites arms + i,
                  resField := some Suspend.resF, generic := ntp != 0, newSched := true,
-                 resultFn := if ntp == 0 then some (nFns + 4 * j + 3) else none }
+                 resultFn := if ntp == 0 then some (nFns + 4 * j + 3) else none,
+                 selfFns := (targets.idxOf? gi).map fun i =>
+                   (selfBase + 4 * i, selfBase + 4 * i + 1, selfBase + 4 * i + 2, selfBase + 4 * i + 3) }
         | none => none
     for ((gi, _, _), j) in lows.zipIdx do
       let ps := slotTys[gi]!.take fns[gi]!.arity
@@ -5600,6 +5610,38 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       extraSigs := extraSigs.push (frameTy j :: ps, VTy.void)
       extraSigs := extraSigs.push (frameTy j :: schedTy :: ps, VTy.void)
       extraSigs := extraSigs.push ([frameTy j], (fsigs0[gi]!).2)
+    -- each target's helpers (#142), whose first parameter is the receiver:
+    -- `arrive(self, args…, frame, sched)` resets the frame (or makes one)
+    -- and gives it; `take(self, frame)` its result; `resume(frame, sched)`
+    -- and `cancel(frame, sched)` pass the parameters from the frame
+    let mut selfFns : Array Fn := #[]
+    let mut selfTys : Array (List VTy) := #[]
+    let mut selfSigs : Array (List VTy × VTy) := #[]
+    for gi in targets do
+      let some j := lows.findIdx? (·.1 == gi) | throw "internal error: a dispatch target"
+      let (_, gname, _) := lows[j]!
+      let a := fns[gi]!.arity
+      let ps := slotTys[gi]!.take a
+      let ρ := (fsigs0[gi]!).2
+      let (_, _, sites, arms) := parts[j]!
+      let wide : VTy := .ref [tagBase + j, schedTag] []
+      let locals := (List.range a).map Expr.local
+      let isF (i : Nat) : Expr := .heap (.isTag [tagBase + j]) [.local i]
+      let arriveBody : Expr := .seq (.ite (isF a) (.call (nFns + 4 * j + 1) (.local a :: locals))
+        (.seq (.assign a (.call (nFns + 4 * j) (.local (a + 1) :: locals))) Suspend.vd)) (.local a)
+      let pass := (List.range a).map fun i => Expr.heap (.get (Suspend.slotBaseOf sites arms + i)) [.local 0]
+      selfFns := selfFns ++ #[
+        { name := s!"{gname}$arrive", arity := a + 2, nslots := a + 2, decides := false, writes := true,
+          body := arriveBody },
+        { name := s!"{gname}$take", arity := 2, nslots := 2, decides := false, writes := false,
+          body := .ite (isF 1) (.call (nFns + 4 * j + 3) [.local 1]) (.prim .userErr []) },
+        { name := s!"{gname}$resumeOwn", arity := 2, nslots := 2, decides := false, writes := true,
+          body := .call gi (.local 0 :: .local 1 :: pass) },
+        { name := s!"{gname}$cancelOwn", arity := 2, nslots := 2, decides := false, writes := true,
+          body := .call (nFns + 4 * j + 2) (.local 0 :: .local 1 :: pass) }]
+      selfTys := selfTys ++ #[ps ++ [wide, schedTy], [ps.headD .int, wide], [frameTy j, schedTy], [frameTy j, schedTy]]
+      selfSigs := selfSigs ++ #[(ps ++ [wide, schedTy], wide), ([ps.headD .int, wide], ρ),
+        ([frameTy j, schedTy], .int), ([frameTy j, schedTy], VTy.void)]
     let rootJ (k : Nat) : Nat := user.length + k
     let rootTags := (List.range roots.size).map (fun k => tagBase + rootJ k) ++ (List.range B).map wrapTag
     let mainJ := (lows.findIdx? (·.1 == mainSig.idx)).getD 0
@@ -5609,7 +5651,8 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     for k in List.range roots.size do
       rootSigs := rootSigs.push ([frameTy (rootJ k), schedTy], .int)
       rootSigs := rootSigs.push ([schedTy, frameTy (rootJ k)], VTy.void)
-    let Sinf : Sigs := { fns := fsigs0 ++ extraSigs.toList ++ rootSigs.toList, classes := classTable, protos, pins }
+    let Sinf : Sigs := { fns := fsigs0 ++ extraSigs.toList ++ selfSigs.toList ++ rootSigs.toList, classes := classTable,
+                         protos, pins }
     let mut newFns : Array Fn := #[]
     let mut newTys : Array (List VTy) := #[]
     let mut armFns : Array Fn := #[]
@@ -5646,7 +5689,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       let branches : Array (Nat × Nat × Nat) := ((branchOf[j]?).getD []).toArray.map fun K =>
         (wrapFnBase + 3 * K + 1, wrapFnBase + 3 * K + 2, wrapTag K)
       let low ← (Suspend.lower Sinf callee syncMark raceMark rushMark spawnMark spawns branchMark branches a Γ ρ (frameTy j)
-        schedTag fnBase b).mapError fun e => s!"in {gname}: {e}"
+        schedTag fnBase b ds).mapError fun e => s!"in {gname}: {e}"
       -- its branches' wrappers: `tramp(w, sched)` resumes the arm (with the
       -- function's parameters from its frame) unless the function stopped
       -- it; `start(sched, frame)` makes the wrapper, registers it and runs
@@ -5694,7 +5737,9 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       let tempTys := (low.fields.drop (2 + sites + 2 * arms + a + (fn.nslots - a)))
       -- each function keeps its parameters and the transient slots it uses
       let resumeLike (name : String) (lf : Suspend.LFn) : Except String Fn := do
-        let inits ← (lf.slots.drop (a + 2)).mapM (dflt (lf.slots.take (a + 2)))
+        let inits ← (lf.slots.drop (a + 2)).zipIdx.mapM fun (τ, i) => match lf.inits[i]? with
+          | some (some e) => pure e
+          | _ => dflt (lf.slots.take (a + 2)) τ
         return { name, arity := a + 2, nslots := lf.slots.length, decides := false, writes := true,
                  body := initPrefixE (a + 2) inits lf.body }
       fns := fns.set! gi (← resumeLike gname low.body)
@@ -5783,10 +5828,10 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       .heap (.set tailF) [.local 0, .prim .mkSome [.local 2]]]
     let linkFn : Fn := { name := "$link", arity := 2, nslots := 3, decides := false, writes := true,
                          body := initPrefixE 2 [.heap (.new cellTag) [.local 1, .lit .none]] linkBody }
-    fns := fns ++ newFns ++ rootFns ++ [linkFn] ++ branchFns ++ armFns
-    slotTys := slotTys ++ newTys ++ rootTys ++ [[schedTy, rootAny, cellTy]] ++ branchTys ++ armTys
-    fsigs := fsigs ++ extraSigs.toList ++ rootSigs.toList ++ [([schedTy, rootAny], VTy.void)] ++ branchSigs.toList ++
-      armSigs.toList
+    fns := fns ++ newFns ++ selfFns ++ rootFns ++ [linkFn] ++ branchFns ++ armFns
+    slotTys := slotTys ++ newTys ++ selfTys ++ rootTys ++ [[schedTy, rootAny, cellTy]] ++ branchTys ++ armTys
+    fsigs := fsigs ++ extraSigs.toList ++ selfSigs.toList ++ rootSigs.toList ++ [([schedTy, rootAny], VTy.void)] ++
+      branchSigs.toList ++ armSigs.toList
     -- the wrappers' classes, after the frames', then the cells'
     for K in List.range B do
       frameClasses := frameClasses.push [.int, frameTy branchHome[K]!]

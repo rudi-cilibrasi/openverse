@@ -786,9 +786,11 @@ Main()<suspends>:void =
   function, and not in a failure context (an `if` condition, a `for`
   filter, a `case` pattern, a `<decides>` call's arguments) nor in a
   `defer`. A method may be `<suspends>` (an override must be too, and
-  only when what it overrides is); dispatching one to a class that fixes
-  type arguments (#142) is not supported yet, nor a `<suspends>`
-  constructor. `<suspends>` combines with the heap effects
+  only when what it overrides is). Code generic over a class can call one
+  that a subclass fixing its type arguments overrides (`int_box :=
+  class(box(int))`), under the refinement that gives (#142, #171); not
+  yet when the overriding class has type parameters of its own. A
+  `<suspends>` constructor is not supported. `<suspends>` combines with the heap effects
   (`<computes>`, `<reads>`, …): waiting has none.
 - **Time.** The schedule is deterministic: a virtual clock counts ticks, 30
   per second, and ticks in which nothing can run are skipped. In each tick,
