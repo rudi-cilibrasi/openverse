@@ -547,11 +547,18 @@ position in every class below the one that declares it.
   `n$placeholder`, with its fields and no pins (#157). Its tag is in every
   reference type the class is in, a slot starts as one of its objects, and
   no dispatch test names it. Below a class that records pins it records
-  the same. An interface's placeholder is laid out like the interface:
-  each field of the interfaces at or above it sits where every class below
-  that interface has it (a read through the interface goes there), the
-  fields that sit at different places after them (such a read tests the
-  class first), with padding between.
+  the same. A read of an interface's field goes straight to it when every
+  concrete class below the interface has it at one place (which need not
+  be its place in the interface: a class can list another parent first),
+  and tests the class first otherwise. So an interface's placeholder puts
+  each of its fields, inherited ones too, where every concrete class below
+  it has it, when they agree, and the others after those, with padding
+  between. A read through an interface above it goes straight to a field
+  only when all of that interface's classes agree, and those include
+  these, so it finds the field in the placeholder too. A placeholder
+  nests: `slot(slot(u))`'s holds `slot(u)`'s. One that would hold itself
+  (an interface `node(t)` with a field `Next:node(t)`) cannot be built, so
+  a variable of its type is refused there.
   A class that repeats type arguments cannot override yet (that would
   need unification), nor can one that adds its own, as a `named`'s
   implementation needs an `n` the caller does not have.

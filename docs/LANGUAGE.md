@@ -256,7 +256,9 @@ circle := class(shape, labelled):
   - A class may hold itself, through an option or an array
     (`node := class: var Next:?node = false`). A class that *requires* an
     instance of itself can never be constructed, but its variables are
-    fine (they are only reached by code that never runs).
+    fine (they are only reached by code that never runs), except in code
+    generic over it at type arguments that every class below it fixes
+    otherwise (see *Not yet supported* below).
   - Every variable of a class type starts as a *prototype* until it is set,
     which Verse code always does before reading it: one object per class,
     made once before `Main` with default field values (#37), so it costs
@@ -429,11 +431,14 @@ circle := class(shape, labelled):
 - **Not yet supported** (each rejected with a message):
   - overrides in a subclass that repeats or adds type arguments its
     parent (or an interface) leaves open, or fixes them to types that
-    mention type parameters; a class that gives two
-    interfaces different type arguments, an interface that gives a parent
-    interface other than its own type parameters, and a parametric class
-    below a non-parametric interface (or one that adds type parameters
-    below a parametric interface's implementation).
+    mention type parameters; a variable, in generic code, of a class or
+    interface type that requires an instance of itself (`Next:node(t)`)
+    at type arguments that every class below it fixes otherwise: its
+    hidden placeholder object (#157) would have to hold itself; a class
+    that gives two interfaces different type arguments, an interface that
+    gives a parent interface other than its own type parameters, and a
+    parametric class below a non-parametric interface (or one that adds
+    type parameters below a parametric interface's implementation).
 
 ## Mutation, macros, tooling
 
