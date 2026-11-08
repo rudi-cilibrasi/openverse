@@ -647,6 +647,28 @@ Main():void =
   first.) A `break` in the clauses of an `if` or `first{…}` with a choice
   is refused. `first{…}` with a choice can fail, so it must be in a
   failure context.
+- **Functions with several values** (#235). A top-level function whose
+  body has a choice that nothing in it takes has several values, and a call
+  of it is a choice: it goes where a choice can go, and its values come in
+  the callee's spatial order, at the call's place.
+
+  ```verse
+  Digit():int = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9
+  Main():void =
+      for (X := Digit(), Y := Digit(), X + Y = 9, X < Y) { Print("{X}{Y}") }   # 09 18 27 36 45
+  ```
+
+  Such a call is inlined: its arguments are evaluated first, in order, then
+  its body runs in the caller's clauses, so the body's effects are rolled
+  back or kept as the caller's are. The function itself is still checked
+  as any function is (types, effects, `<decides>`), with each choice read
+  as any of its alternatives. Refused for now: one that calls itself,
+  directly or not, a generic or overloaded one, one with named parameters
+  or a `return`, a method, one used as a function value, a call of one in
+  an `if`'s branch, and, since its body is inlined where other names may be
+  in scope, one whose name, or a name its body uses from outside, is also
+  the name of a parameter, local, field or method anywhere in the program.
+  `Main` never has several values.
 - **Precedence.** `|` binds looser than arithmetic and tighter than the
   comparisons: `X = 1 | 2` is `X = (1 | 2)`.
 
@@ -1075,6 +1097,6 @@ Main()<suspends>:void =
 arithmetic on rationals (see [rational](#rational)), float functions beyond those of [float](#float),
 the class features listed under [Classes](#classes), struct methods (Verse structs have none; classes do),
 `weak_map`, module paths `using{/Verse.org/…}` (accepted and ignored), overloading beyond [Overloading](#overloading), nested
-functions and lambdas (not released in Verse), choice beyond [Choice](#choice) (a function with several values; inside a block, a struct construction, a named argument or an alternative), concurrency beyond [Concurrency](#concurrency) (`subscribable_event()` without a value), and effect checking
+functions and lambdas (not released in Verse), choice beyond [Choice](#choice) (recursive or generic functions with several values, methods with several values; a choice inside a block, a struct construction, a named argument or an alternative), concurrency beyond [Concurrency](#concurrency) (`subscribable_event()` without a value), and effect checking
 other than `<decides>` and the heap effects (`<converges>` is accepted and
 ignored).

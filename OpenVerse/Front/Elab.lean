@@ -1978,6 +1978,11 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
   | .app p (.ident _ "$rush") arms false => elabConc ctx p false arms exp true
   | .app p (.ident _ "$spawn") [body] false => elabSpawn ctx p body
   | .app p (.ident _ "$branch") [body] false => elabBranch ctx p body
+  | .app p (.ident _ "$inline") (.ident _ f :: _) false =>
+    if ctx.inTaking then
+      eerr p s!"a call of {f}, which has several values, cannot be lifted from here, for now (#235)"
+    eerr p (s!"{f} has several values, so a call of it must be in a failure context that takes them: " ++
+      "an if condition, a for's clauses, first{…}, option{…}, logic{…}, not, or the left of or (#235)")
   | .app p (.ident _ "$choice") _ false =>
     if ctx.inTaking then
       eerr p ("a choice (a | b) cannot be lifted from here, for now (#208): not from a block, a struct " ++
@@ -1985,9 +1990,11 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
         "nor from the branch of an if without else or one that is more than a choice or a value")
     eerr p ("a choice (a | b) has several values, so it must be in a failure context that takes them: " ++
       "an if condition, a for's clauses, first{…}, option{…}, logic{…}, not, or the left of or (#208)")
-  | .app p (.ident _ "$first") [.block _ items] false =>
-    -- `first{…}` and `first(…){…}` with a choice (#208): the first success
-    -- of the clauses, then the value (or body), which sees their names
+  | .app p (.ident _ "$first") [.block bp items] false =>
+    -- `first{…}` and `first(…){…}`: without a choice, a block
+    if !Choice.hasChoice items.dropLast then return ← elabE ctx (.block bp items) exp
+    -- with one (#208): the first success of the clauses, then the value (or
+    -- body), which sees their names
     if !ctx.canFail then
       eerr p "first{…} with a choice can fail, but it is not in a failure context (#208)"
     let (rc, c1) ← elabOneClauses ctx items.dropLast
@@ -5881,6 +5888,8 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     | some e => [.fn e.pos "$Do" [] [] ["decides"] (.name "void") (.app e.pos (.ident e.pos "$Show") [e] false)]
     | none => []
   let resolved ← resolveModules (allTops000 ++ rawEntry)
+  -- functions with several values (#235): inlined at their calls
+  let resolved ← Choice.inlineMulti resolved
   -- (the helpers after: they name nothing of the program's)
   -- function values (#210): the function types' interfaces, and a class
   -- for each function used as a value
