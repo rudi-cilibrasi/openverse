@@ -66,8 +66,72 @@ example : heapDemo.checkControl = true := by native_decide
 example : heapDemo.checkTypes heapSigs heapSlots = true := by native_decide
 example : outOf heapDemo = some (.ok .void, "10\na point3\n2\n1\n3\n") := by native_decide
 
+/-! ### Dispatch to a class that fixes type arguments (#142)
+
+```verse
+box(t:type) := class:
+    V:t
+    Get():t = V
+int_box := class(box(int)):
+    Get<override>():int = V + 1
+GetAny(B:box(t) where t:type):t = B.Get()
+Main():void =
+    Print("{GetAny(int_box{V := 41})}")
+    Print("{GetAny(box(int){V := 7})}")
+    Print(GetAny(box(string){V := "s"}))
+```
+
+`box` is tag 0, `int_box` tag 1; both have the field `V : var 0`, and
+`int_box` pins its type argument to `int`. In `GetAny`, generic over `t`,
+the call of `int_box`'s `Get` returns an `int` where a `t` is expected:
+`Typed.dispatch` types it under `t := int`. -/
+def pinDemo : Prog where
+  fns := [
+    { name := "box.Get", arity := 1, nslots := 1, decides := false,
+      body := .heap (.get 0) [.local 0] },
+    { name := "int_box.Get", arity := 1, nslots := 1, decides := false,
+      body := p .add [.heap (.get 0) [.local 0], int 1] },
+    { name := "GetAny", arity := 1, nslots := 1, decides := false,
+      body := .ite (.heap (.isTag [1]) [.local 0]) (.call 1 [.local 0])
+        (.ite (.heap (.isTag [0]) [.local 0]) (.call 0 [.local 0]) (p .userErr [])) },
+    { name := "Main", arity := 0, nslots := 0, decides := false,
+      body := .seq (printInt (.call 2 [.heap (.new 1) [int 41]]))
+        (.seq (printInt (.call 2 [.heap (.new 0) [int 7]]))
+          (.print (.call 2 [.heap (.new 0) [str "s"]]))) }]
+  main := 3
+
+def pinSigs : Sigs where
+  fns := [([.ref [0] [.var 0]], .var 0), ([.ref [1] [.int]], .int), ([.ref [0, 1] [.var 0]], .var 0),
+    ([], .void)]
+  classes := [[.var 0], [.var 0]]
+  pins := [[], [some .int]]
+def pinSlots : List (List VTy) := [[.ref [0] [.var 0]], [.ref [1] [.int]], [.ref [0, 1] [.var 0]], []]
+
+example : pinDemo.check = true := by native_decide
+example : pinDemo.checkControl = true := by native_decide
+example : pinDemo.checkTypes pinSigs pinSlots = true := by native_decide
+example : outOf pinDemo = some (.ok .void, "42\n7\ns\n") := by native_decide
+/-- Without the pins, `GetAny` does not type: `int_box`'s `Get` returns an `int`, not a `t`. -/
+example : pinDemo.checkTypes { pinSigs with pins := [] } pinSlots = false := by native_decide
+/-- An `int_box` must have `int` as its type argument. -/
+example : (tc pinSigs [] .void (.heap (.new 1) [str "x"]) none) = none := by native_decide
+example : (tc pinSigs [] .void (.heap (.new 1) [int 1]) none) = some (.ref [1] [.int]) := by native_decide
+
+/-- A chain of `n` dispatch-shaped tests ending in an ill-typed literal. -/
+def pinChain (tag f : Nat) : Nat → Expr
+  | 0 => str "x"
+  | n+1 => .ite (.heap (.isTag [tag]) [.local 0]) (.call f [.local 0]) (pinChain tag f n)
+/-- The checker types each branch of a failing chain once, so a deep one is
+    rejected at once (re-checking the else branch at each test took time
+    exponential in the depth: 15 s at depth 20). -/
+example : (tc pinSigs [.ref [0, 1] [.var 0]] .void (pinChain 0 0 40) none) = none := by native_decide
+example : (tc pinSigs [.ref [0, 1] [.var 0]] .void (pinChain 0 0 40) (some (.var 0))) = none := by
+  native_decide
+example : (tc pinSigs [.ref [0, 1] [.var 0]] .void (pinChain 1 1 40) (some (.var 0))) = none := by
+  native_decide
+
 /-- The heap programs, for `openverse example` (the C runtime runs them, #31). -/
-def all : List (String × Prog) := [("heap", heapDemo)]
+def all : List (String × Prog) := [("heap", heapDemo), ("pins", pinDemo)]
 
 /-- A cast outside a failure context makes `Show` failable: `Prog.check`
     rejects it unless `Show` is `<decides>`. -/

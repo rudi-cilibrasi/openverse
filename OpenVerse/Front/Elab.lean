@@ -897,10 +897,10 @@ partial def witness (env : TyEnv) (dictBase : Nat) (dictVars : List String) : Ty
     | none => .lit .void
 
 /-- Whether a Verse Core type mentions a type variable. -/
-partial def _root_.OpenVerse.VTy.hasVar : VTy → Bool
+partial def _root_.OpenVerse.VTy.mentionsVar : VTy → Bool
   | .var _ => true
-  | .arr t | .opt t => t.hasVar
-  | .tup ts => ts.any VTy.hasVar
+  | .arr t | .opt t => t.mentionsVar
+  | .tup ts => ts.any VTy.mentionsVar
   | _ => false
 
 /-- The value of a prototype's field of type `t`: its type's default, or a
@@ -959,7 +959,7 @@ partial def _root_.OpenVerse.VTy.hasRef : VTy → Bool
 partial def slotDefault (env : TyEnv) (dictBase : Nat) (params : List Ty) (visiting : List String)
     (t : Ty) : Except String Expr := do
   let vt := t.toVTy env
-  if !vt.hasVar && !vt.hasRef then return .lit vt.default
+  if !vt.mentionsVar && !vt.hasRef then return .lit vt.default
   -- a parameter of a subtype: no allocation
   if vt.hasRef then
     if let some i := params.findIdx? (fun pt => (pt.toVTy env).sub vt) then return .local i
