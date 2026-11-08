@@ -675,9 +675,9 @@ the readings are flat:
 
 ## Concurrency
 
-A function marked `<suspends>` can wait (Book of Verse ch. 14, #156). This
-first step supports such functions, `Sleep`, and calls between them; `sync`,
-`race`, `rush`, `branch`, `spawn`, `task` and `event` come next.
+A function marked `<suspends>` can wait (Book of Verse ch. 14, #156).
+openverse supports such functions, `Sleep`, calls between them, `sync` and
+`race`; `rush`, `branch`, `spawn`, `task` and `event` come next.
 
 ```verse
 Countdown(N:int)<suspends>:int =
@@ -694,13 +694,43 @@ Main()<suspends>:void =
     Print("done after {Total} seconds")
 ```
 
+- **`sync`.** Each statement of a `sync:` block is an arm. The arms start in
+  source order, each running until it waits or ends before the next starts,
+  and the `sync` ends when all have, with the tuple of their values. At
+  least two arms must be able to wait.
+- **`race`.** The arms start in source order; the first to end wins, and its
+  value is the `race`'s (of the arms' common type). An arm that ends without
+  waiting wins at once, and the arms after it never start. The losers that
+  started are cancelled at once, last started first: each unwinds from where
+  it waits, running the `defer:` blocks active there, those of the functions
+  it called first.
+
+  ```verse
+  Fetch()<suspends>:string =
+      defer:
+          Print("fetch cancelled or done")
+      Sleep(5.0)
+      "data"
+
+  Main()<suspends>:void =
+      Result := race:
+          Fetch()
+          block:
+              Sleep(1.0)
+              "timeout"
+      Print(Result)    # fetch cancelled or done, then timeout
+  ```
+- **Arms.** Arms share the enclosing function's variables. An arm is a
+  scope of its own: `return` in an arm is not supported yet, and `break`
+  cannot leave it.
 - **Effects.** `<suspends>` and `<decides>` exclude each other. A suspends
-  function, and `Sleep`, can be called only in a suspends function, and not
-  in a failure context (an `if` condition, a `for` filter, a `<decides>`
-  call's arguments) nor in a `defer`. A `<suspends>` method is not
-  supported yet.
+  function, `Sleep`, `sync` and `race` can be used only in a suspends
+  function, and not in a failure context (an `if` condition, a `for`
+  filter, a `<decides>` call's arguments) nor in a `defer`. A `<suspends>`
+  method is not supported yet.
 - **Time.** The schedule is deterministic: a virtual clock counts ticks, 30
-  per second, and ticks in which nothing can run are skipped. `Sleep(S)`
+  per second, and ticks in which nothing can run are skipped. Arms that can
+  go on in the same tick do so in source order. `Sleep(S)`
   resumes after `Round(30·S)` ticks, at least one, so it always yields;
   `Sleep(Inf)` never resumes; a negative or NaN `S` returns at once.
 - **The program.** A suspends `Main` runs under the scheduler. The program
@@ -745,7 +775,7 @@ Main()<suspends>:void =
 arithmetic on rationals (see [rational](#rational)), float functions beyond those of [float](#float),
 the class features listed under [Classes](#classes), struct methods (Verse structs have none; classes do),
 `weak_map`, module paths `using{/Verse.org/…}` (accepted and ignored), overloading beyond [Overloading](#overloading), nested
-functions, concurrency beyond [Concurrency](#concurrency) (`spawn`, `sync`,
-`race`, `rush`, `branch`, `task`, `event`, `<suspends>` methods; #156), and effect checking
+functions, concurrency beyond [Concurrency](#concurrency) (`spawn`, `rush`,
+`branch`, `task`, `event`, `return` in arms, `<suspends>` methods; #156), and effect checking
 other than `<decides>` and the heap effects (`<converges>` is accepted and
 ignored).

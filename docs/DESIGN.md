@@ -283,7 +283,24 @@ classic coroutine transformation. A `<suspends>` function `g` becomes:
 
 At a suspension point, the caller resumes the callee's frame. If the callee
 is pending, the caller stores its slots in its own frame and returns 0;
-resuming reloads them. Failure contexts never contain a suspension, so a
+resuming reloads them.
+
+**`sync` and `race`.** In the elaborated Core, a `sync` or `race` is a call
+of the marker `$syncMark` or `$raceMark` on the array of its arms. Each arm
+is a statement that leaves the arm's value in a slot (for `race`, the one
+slot of the arms' common type). The pass makes each arm a function of its
+own over the same frame, with its own suspension point and done flag in
+fields of the frame. The enclosing code resumes the arms in order, storing
+its slots before each and reloading them after, so the arms share
+variables. A `race`'s winner cancels the arms that started and are pending,
+last first.
+
+**Cancellation.** Every region, a function body or an arm, also gets a
+cancel function. It cancels what the region waits at (a callee's frame,
+through the callee's own cancel function, or a `sync`'s or `race`'s
+pending arms), then runs the `defer:` blocks active there. The elaborator
+records those blocks at each suspension point in a branch that never runs
+(`if (false) defers`), and the pass moves them into the cancel function. Failure contexts never contain a suspension, so a
 rollback never spans one. The result is ordinary Verse Core, which
 `Prog.checkTypes` checks, and Lean and C run.
 

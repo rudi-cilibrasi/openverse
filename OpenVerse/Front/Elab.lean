@@ -726,6 +726,8 @@ structure Ctx where
   inCtor : Bool := false
   /-- In a `<suspends>` function (#156): calls of suspends functions allowed. -/
   suspends : Bool := false
+  /-- In an arm of `sync` or `race` (#156): no `return` yet. -/
+  inArm : Bool := false
 
 structure ESt where
   /-- The program's types, for conversions between class types (`coerce`). -/
@@ -1558,6 +1560,8 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
   -- a constructor's `block:` (#11): it cannot fail, as a class's cannot
   | .app _ (.ident _ "$nofail") [e] false => elabE { ctx with canFail := false, inBlock := true } e exp
   | .app p (.ident _ "$defer") _ _ => eerr p "defer: is a statement: it has no value"
+  | .app p (.ident _ "$sync") arms false => elabConc ctx p true arms exp
+  | .app p (.ident _ "$race") arms false => elabConc ctx p false arms exp
   | .app p f args bracket => elabApp ctx p f args bracket exp
   | .member p (.ident _ n) m =>
     match ctx.lookup n, ctx.types.enums.lookup n with
@@ -1756,6 +1760,7 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
     if ctx.inDefer then eerr p "return is not allowed in a defer: block"
     if ctx.inCtor then eerr p "return is not allowed in a constructor (it would skip the items after it)"
     if ctx.inBlock then eerr p "return is not allowed in a block: clause (it would skip the clauses after it)"
+    if ctx.inArm then eerr p "return in an arm of sync or race is not supported yet (#156)"
     if ctx.retTy != .void then eerr p s!"return needs a value of type {ctx.retTy.show}"
     return ⟨.seq (← elabDefers ctx ctx.defers) (.ret (.lit .void)), .never⟩
   | .ret p (some e) =>
@@ -1763,6 +1768,7 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
     if ctx.inDefer then eerr p "return is not allowed in a defer: block"
     if ctx.inCtor then eerr p "return is not allowed in a constructor (it would skip the items after it)"
     if ctx.inBlock then eerr p "return is not allowed in a block: clause (it would skip the clauses after it)"
+    if ctx.inArm then eerr p "return in an arm of sync or race is not supported yet (#156)"
     let r ← elabE ctx e (some ctx.retTy)
     let v ← coerce p r ctx.retTy
     if ctx.defers.isEmpty then return ⟨.ret v, .never⟩
@@ -1809,6 +1815,71 @@ partial def elabStmt (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM (R × Ctx) 
     or break out of itself, and sees the locals in scope where it is
     registered (Verse has no shadowing, so those at an exit include them). -/
 partial def elabDefers (ctx : Ctx) (ds : List (SExpr × List Local)) : EM Expr := do
+  elabDefersCore ctx ds
+
+/-- A suspension point with the code of the `defer:` blocks active there, in
+    a branch that never runs (`if (false) …`), for the lowering's
+    cancellation (#156): the defers run when a cancelled task unwinds. -/
+partial def withDeferMark (ctx : Ctx) (e : Expr) : EM Expr := do
+  if ctx.defers.isEmpty then return e
+  return .seq (.ite (.prim .fail []) (← elabDefersCore ctx ctx.defers) (.lit .void)) e
+
+/-- `sync:` (`isSync`) or `race:` with arms `arms` (#156): each arm's value
+    goes to a slot (`race`: one slot of the arms' join type, written by the
+    winner), and the arms to the marker `$syncMark(array{…})` (or
+    `$raceMark`), which the lowering (`Suspend.lean`) runs concurrently. -/
+partial def elabConc (ctx : Ctx) (p : Pos) (isSync : Bool) (arms : List SExpr) (exp : Option Ty) : EM R := do
+  let kw := if isSync then "sync" else "race"
+  if !ctx.suspends then eerr p s!"{kw} suspends: it can only be used in a <suspends> function (#156)"
+  if ctx.inDefer then eerr p s!"{kw} suspends, and a defer cannot suspend (#156)"
+  if ctx.canFail then eerr p s!"{kw} suspends, and a failure context (a condition, a filter, or a <decides> call's arguments) cannot (#156)"
+  let some mark := ctx.sig? (if isSync then "$syncMark" else "$raceMark")
+    | eerr p s!"internal error: no {kw} helper"
+  -- (an arm is a scope of its own: its defers are its own, and break and
+  -- return cannot leave it)
+  let armCtx := { ctx with defers := [], loopDefers := 0, inLoop := false, inArm := true }
+  let isS : Nat → Bool := fun f => ctx.sigs.any fun s => s.idx == f && s.suspends
+  if isSync then
+    let mut stmts : Array Expr := #[]
+    let mut slots : Array Nat := #[]
+    let mut tys : Array Ty := #[]
+    let mut async := 0
+    for a in arms do
+      let r ← elabE armCtx a none
+      if Suspend.hasSusp isS r.e then async := async + 1
+      let ty := if r.ty == .never then Ty.void else r.ty
+      let t ← fresh ty
+      stmts := stmts.push (.seq (.assign t r.e) (.lit .void))
+      slots := slots.push t
+      tys := tys.push ty
+    if async < 2 then
+      eerr p "sync needs at least two arms that can suspend (Book of Verse ch. 14): write the others in sequence"
+    let e := Expr.seq (.call mark.idx [.prim .mkArr stmts.toList]) (.prim .mkTup (slots.toList.map Expr.local))
+    return ⟨← withDeferMark ctx e, .tup tys.toList⟩
+  else
+    if arms.length < 2 then eerr p "race needs at least two arms"
+    -- the arms' join, as an `if`'s branches (or the expected type)
+    let mut rs : Array (Pos × R) := #[]
+    for a in arms do
+      rs := rs.push (a.pos, ← elabE armCtx a exp)
+    let mut ty : Ty := match rs.toList with
+      | (_, r0) :: _ => r0.ty
+      | [] => .void
+    for (_, r) in rs.toList.drop 1 do
+      match joinTy ctx.types ty r.ty exp with
+      | some j => ty := j
+      | none => eerr p s!"the arms of race have no common type ({ty.show} and {r.ty.show})"
+    let rty := match exp with
+      | some t => t
+      | none => ty
+    let t ← fresh rty
+    let mut stmts : Array Expr := #[]
+    for (ap, r) in rs do
+      stmts := stmts.push (.seq (.assign t (← coerce ap r rty)) (.lit .void))
+    let e := Expr.seq (.call mark.idx [.prim .mkArr stmts.toList]) (.local t)
+    return ⟨← withDeferMark ctx e, rty⟩
+
+partial def elabDefersCore (ctx : Ctx) (ds : List (SExpr × List Local)) : EM Expr := do
   let mut acc : Expr := .lit .void
   for (d, locs) in ds.reverse do
     -- (with the locals where it was registered: their slots still hold them)
@@ -2259,10 +2330,14 @@ partial def elabAppBase (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (b
             if !ctx.suspends then eerr p s!"{shown} suspends: it can only be called in a <suspends> function (#156)"
             if ctx.inDefer then eerr p s!"{shown} suspends, and a defer cannot suspend (#156)"
             if ctx.canFail then eerr p s!"{shown} suspends, and a failure context (a condition, a filter, or a <decides> call's arguments) cannot (#156)"
-          if !s.tparams.isEmpty then return ← elabGenericCall ctx p s args exp
+          if !s.tparams.isEmpty then
+            let r ← elabGenericCall ctx p s args exp
+            if s.suspends then return ⟨← withDeferMark ctx r.e, r.ty⟩ else return r
           let isNamed : SExpr → Bool
             | .decl _ n _ _ _ => n.startsWith "?"
             | _ => false
+          -- (a suspension point records the defers active there, #156)
+          let mark (e : Expr) : EM Expr := if s.suspends then withDeferMark ctx e else pure e
           if s.named.isEmpty && !args.any isNamed then
             -- a tuple for several parameters is expanded into them (Book of
             -- Verse ch. 3: `Describe(MyTuple)` is `Describe(1, "two")`)
@@ -2274,7 +2349,7 @@ partial def elabAppBase (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (b
                     let tt ← fresh r.ty
                     let parts ← ((s.params.zip ts).zip (List.range ts.length)).mapM fun ((pt, et), i) =>
                       coerce a.pos ⟨.prim (.tupGet i) [.local tt], et⟩ pt
-                    return ⟨.seq (.assign tt r.e) (.call s.idx parts), s.ret⟩
+                    return ⟨← mark (.seq (.assign tt r.e) (.call s.idx parts)), s.ret⟩
                 let (shown, off) := match name.splitOn "." with
                   | [_, m] => if s.pnames.head? == some "Self" then (m, 1) else (name, 0)
                   | _ => (name, 0)
@@ -2284,9 +2359,9 @@ partial def elabAppBase (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (b
             if let [.arr et] := s.params then
               if args.length > 1 then
                 let es ← elabArgs ctx p args (args.map fun _ => et)
-                return ⟨.call s.idx [.prim .mkArr es], s.ret⟩
+                return ⟨← mark (.call s.idx [.prim .mkArr es]), s.ret⟩
             let es ← elabArgs ctx p args s.params
-            return ⟨.call s.idx es, s.ret⟩
+            return ⟨← mark (.call s.idx es), s.ret⟩
           -- named arguments: evaluate positional arguments left to right, then named ones as
           -- written, then the defaults of those omitted (Book of Verse §2.5), into temporaries
           let npos := s.params.length - s.named.length
@@ -2343,7 +2418,8 @@ partial def elabAppBase (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (b
               steps := steps.push (.assign ta rd)
               slots := slots.set! k (some ta)
           let call := Expr.call s.idx (slots.toList.map fun o => Expr.local o.get!)
-          return ⟨steps.toList.foldr Expr.seq call, s.ret⟩
+          let e := steps.toList.foldr Expr.seq call
+          return ⟨← mark e, s.ret⟩
       | none =>
         if (ctx.sig? s!"{name}$init").isSome || (ctx.types.overloads.lookup s!"{name}$init").isSome then
           eerr p s!"{name} constructs an abstract class: it can only be delegated to, as {name}<constructor>(…) in a constructor of a class below it"
@@ -4009,11 +4085,13 @@ sleepResume(F:sleep, C:sched):int =
         set C.Next = F.Wake
     0
 Sleep(S:float)<suspends>:void = {}
+syncMark(A:[]void)<suspends>:void = {}
+raceMark(A:[]void)<suspends>:void = {}
 "
 
 def concTops : Except String (List STop) :=
   parsePrelude concPrelude ["sched", "Now", "Next", "sleep", "Pc", "Secs", "Wake", "sleepNew",
-    "sleepInit", "sleepResume", "Sleep", "S", "F", "C", "N", "R"]
+    "sleepInit", "sleepResume", "Sleep", "syncMark", "raceMark", "S", "F", "C", "N", "R", "A"]
 
 /-- Elaborate a parsed program into a Verse Core program that passes `Prog.check`
     and `Prog.checkTypes`. -/
@@ -5111,73 +5189,101 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     let allS := sigs.toList ++ gsigs.toList
     let idxOf (n : String) : Nat := ((allS.find? (·.name == n)).map (·.idx)).getD 0
     let sleepIdx := idxOf "$Sleep"
-    let conc := (allS.filter fun s => s.suspends && s.name != "$Sleep").toArray
+    let syncMark := idxOf "$syncMark"
+    let raceMark := idxOf "$raceMark"
+    let isMark (f : Nat) : Bool := f == syncMark || f == raceMark
+    let conc := (allS.filter fun s => s.suspends && !["$Sleep", "$syncMark", "$raceMark"].contains s.name).toArray
     let tagBase := env.classes.length
     let nFns := fns.size
-    let isS : Nat → Bool := fun f => f == sleepIdx || conc.any (·.idx == f)
+    let isS : Nat → Bool := fun f => f == sleepIdx || isMark f || conc.any (·.idx == f)
     let schedTy : VTy := .ref [env.tagOf "$sched"] []
-    -- each one's body (initialisations stripped) and number of suspension points
-    let mut parts : Array (List Expr × Expr × Nat) := #[]
+    -- each one's body (initialisations stripped), suspension points and arms
+    let mut parts : Array (List Expr × Expr × Nat × Nat) := #[]
     for g in conc do
       let fn := fns[g.idx]!
       let some (ds, b) := Suspend.stripInits (fn.nslots - fn.arity) fn.body
         | throw s!"internal error: lowering {g.name}: unexpected initialisations"
-      parts := parts.push (ds, b, Suspend.countSusp isS b)
+      parts := parts.push (ds, b, Suspend.countSusp isS isMark false b, Suspend.countArms isMark b)
     let frameTy (j : Nat) : VTy :=
       .ref [tagBase + j] ((List.range conc[j]!.tparams.length).map VTy.var)
+    -- each one's `new`, `reset` and `cancel` (fixed indices), then the arms'
+    -- functions
     let callee : Nat → Option Suspend.Callee := fun f =>
       if f == sleepIdx then
         some { tag := env.tagOf "$sleep", newFn := idxOf "$sleepNew", initFn := idxOf "$sleepInit",
-               resumeFn := idxOf "$sleepResume", passFields := [], resField := none }
+               resumeFn := idxOf "$sleepResume", cancelFn := none, passFields := [], resField := none }
       else match conc.toList.zipIdx.find? (·.1.idx == f) with
         | some (g, j) =>
-          some { tag := tagBase + j, newFn := nFns + 2 * j, initFn := nFns + 2 * j + 1, resumeFn := g.idx,
-                 passFields := (List.range fns[g.idx]!.arity).map fun i => Suspend.slotF parts[j]!.2.2 (i + 2),
+          let (_, _, sites, arms) := parts[j]!
+          some { tag := tagBase + j, newFn := nFns + 3 * j, initFn := nFns + 3 * j + 1, resumeFn := g.idx,
+                 cancelFn := some (nFns + 3 * j + 2),
+                 passFields := (List.range fns[g.idx]!.arity).map fun i => Suspend.slotBaseOf sites arms + i,
                  resField := some Suspend.resF }
         | none => none
-    -- `new` and `reset` of each, for inferring the frames' type arguments
     for (g, j) in conc.toList.zipIdx do
       let ps := slotTys[g.idx]!.take fns[g.idx]!.arity
       extraSigs := extraSigs.push (ps, frameTy j)
       extraSigs := extraSigs.push (frameTy j :: ps, VTy.void)
+      extraSigs := extraSigs.push (frameTy j :: schedTy :: ps, VTy.void)
     let Sinf : Sigs := { fns := fsigs0 ++ extraSigs.toList, classes := classTable, protos, pins }
     let mut newFns : Array Fn := #[]
     let mut newTys : Array (List VTy) := #[]
+    let mut armFns : Array Fn := #[]
+    let mut armTys : Array (List VTy) := #[]
+    let mut armSigs : Array (List VTy × VTy) := #[]
+    let armBase := nFns + 3 * conc.size
     for (g, j) in conc.toList.zipIdx do
       let fn := fns[g.idx]!
       let Γ := slotTys[g.idx]!
       let a := fn.arity
-      let (ds, b, total) := parts[j]!
+      let (ds, b, sites, arms) := parts[j]!
       let ρ := (fsigs0[g.idx]!).2
-      let low ← (Suspend.lower Sinf callee Γ ρ (frameTy j) schedTy b).mapError fun e => s!"in {g.name}: {e}"
+      let fnBase := armBase + armFns.size
+      let low ← (Suspend.lower Sinf callee syncMark raceMark a Γ ρ (frameTy j) schedTy fnBase b).mapError
+        fun e => s!"in {g.name}: {e}"
       let ps := Γ.take a
       let tempTys := low.slots.drop (2 + fn.nslots)
       let dflt (params : List VTy) (τ : VTy) : Except String Expr :=
         match Suspend.coreDefault Sinf params 0 τ with
         | some d => pure d
         | none => throw s!"internal error: lowering {g.name}: no initial value for a temporary of type {repr τ}"
-      let resumeInits := ds.map (Suspend.shift 2) ++ (← tempTys.mapM (dflt (low.slots.take (a + 2))))
-      fns := fns.set! g.idx { name := g.name, arity := a + 2, nslots := low.slots.length, decides := false,
-                              writes := true, body := initPrefixE (a + 2) resumeInits low.body }
+      let inits := ds.map (Suspend.shift 2) ++ (← tempTys.mapM (dflt (low.slots.take (a + 2))))
+      let resumeLike (name : String) (body : Expr) : Fn :=
+        { name, arity := a + 2, nslots := low.slots.length, decides := false, writes := true,
+          body := initPrefixE (a + 2) inits body }
+      fns := fns.set! g.idx (resumeLike g.name low.body)
       slotTys := slotTys.set! g.idx low.slots
       fsigs := fsigs.set g.idx (frameTy j :: schedTy :: ps, .int)
       frameClasses := frameClasses.push low.fields
       -- `g$new(params…)`: the frame, with the arguments and initial values
+      let childTys := low.fields.drop 2 |>.take sites
       let newBody : Expr := .heap (.new (tagBase + j))
-        ([Suspend.int 0, .lit .none] ++ List.replicate total (.lit .none) ++
+        ([Suspend.int 0, .lit .none] ++ childTys.map (fun τ => Expr.lit τ.default) ++
+          List.replicate (2 * arms) (Suspend.int 0) ++
           (List.range a).map Expr.local ++ ds ++ (← tempTys.mapM (dflt ps)))
       newFns := newFns.push { name := s!"{g.name}$new", arity := a, nslots := a, decides := false,
                               writes := true, body := newBody }
       newTys := newTys.push ps
       -- `g$reset(frame, params…)`: the frame, made ready for another call
       let resetBody := Suspend.seqVoid (.heap (.set Suspend.pcF) [.local 0, Suspend.int 0] ::
-        (List.range a).map fun i => .heap (.set (Suspend.slotF total (i + 2))) [.local 0, .local (i + 1)])
+        (List.range a).map fun i => .heap (.set (Suspend.slotBaseOf sites arms + i)) [.local 0, .local (i + 1)])
       newFns := newFns.push { name := s!"{g.name}$reset", arity := a + 1, nslots := a + 1, decides := false,
                               writes := true, body := resetBody }
       newTys := newTys.push (frameTy j :: ps)
-    fns := fns ++ newFns
-    slotTys := slotTys ++ newTys
-    fsigs := fsigs ++ extraSigs.toList
+      -- `g$cancel(frame, sched, params…)`: unwinds it
+      newFns := newFns.push (resumeLike s!"{g.name}$cancel" low.cancel)
+      newTys := newTys.push low.slots
+      -- the arms of its `sync`s and `race`s
+      for ((res, can), i) in low.arms.zipIdx do
+        armFns := armFns.push (resumeLike s!"{g.name}$arm{i}" res)
+        armFns := armFns.push (resumeLike s!"{g.name}$arm{i}$cancel" can)
+        armTys := armTys.push low.slots
+        armTys := armTys.push low.slots
+        armSigs := armSigs.push (frameTy j :: schedTy :: ps, .int)
+        armSigs := armSigs.push (frameTy j :: schedTy :: ps, VTy.void)
+    fns := fns ++ newFns ++ armFns
+    slotTys := slotTys ++ newTys ++ armTys
+    fsigs := fsigs ++ extraSigs.toList ++ armSigs.toList
     -- a suspends `Main` runs under the scheduler: a loop of passes, one per
     -- tick, each resuming `Main`; between passes the clock moves to the
     -- earliest tick a sleeping task waits for (none: no task can go on)
@@ -5198,7 +5304,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       -- (the prelude calls a function without arguments, `checkPrelude`)
       fns := fns.push { name := "$Start", arity := 0, nslots := 0, decides := false, writes := true,
                         body := .call runIdx [.heap (.new (env.tagOf "$sched")) [Suspend.int 0, Suspend.int (-1)],
-                          .call (nFns + 2 * j) []] }
+                          .call (nFns + 3 * j) []] }
       slotTys := slotTys.push []
       fsigs := fsigs ++ [([], VTy.void)]
       mainCall := .call (runIdx + 1) []

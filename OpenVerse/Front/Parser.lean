@@ -795,6 +795,18 @@ partial def parsePrimary (stop : Nat) : PM SExpr := do
   -- `defer:` (Book of Verse ch. 7): runs when its scope exits; `$defer(body)`
   | .ident "defer" => bump; return .app t.pos (.ident t.pos "$defer") [← parseBody stop] false
   | .ident "block" => bump; parseBody stop
+  -- `sync:` and `race:` (#156): each statement of the block is an arm
+  | .ident "sync" | .ident "race" =>
+    let n ← peekT 1
+    if n.isSym ":" || n.isSym "{" then
+      bump
+      let kw := if t.isKw "sync" then "$sync" else "$race"
+      let arms := match ← parseBody stop with
+        | .block _ es => es
+        | e => [e]
+      return .app t.pos (.ident t.pos kw) arms false
+    else
+      bump; return .ident t.pos (if t.isKw "sync" then "sync" else "race")
   | .ident "let" =>
     if (← peekT 1).isSym "(" then
       -- `let(defs){body}`: the definitions are visible in the body only, and
