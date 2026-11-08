@@ -22,7 +22,7 @@ A program combines
   - a stand-alone qualified (i:)M module;
   - a field two parametric interfaces declare, as the type parameter and as
     int, in classes that fix it to int (#205);
-  - function values: functions passed, stored and called (#210);
+  - function values: functions and methods passed, stored and called (#210);
   - a parametric hierarchy pb(t) with renaming, fixing and extending subclasses,
     a parametric interface, generic and fixed constructors, generic methods with
     overrides, generic functions;
@@ -1363,6 +1363,24 @@ class Gen:
         L.append('%s(F:int->int, X:int):int = F(F(X))' % tw)
         pu = self.fresh('Fpure')
         L.append('%s(X:int)<computes>:int = X + %s' % (pu, lit()))
+        # (methods as values: an override through the base class, a generic
+        # class's method, a <decides> method)
+        fb, fs2, fbx, fpk = self.fresh('fbase'), self.fresh('fsub'), self.fresh('fbox'), self.fresh('fpick')
+        L.append('%s := class:' % fb)
+        L.append('    Val():int = %s' % lit())
+        L.append('%s := class(%s):' % (fs2, fb))
+        L.append('    Val<override>():int = %s' % lit(10, 19))
+        L.append('%s(t:type) := class:' % fbx)
+        L.append('    V:t')
+        L.append('    Get():t = V')
+        L.append('%s := class:' % fpk)
+        L.append('    Min:int')
+        L.append('    Keep(X:int)<decides>:int =')
+        L.append('        X >= Min')
+        L.append('        X')
+        fr, fg = self.fresh('FRun0'), self.fresh('FGet')
+        L.append('%s(F:type{_():int}):int = F()' % fr)
+        L.append('%s(F:type{_():t} where t:type):t = F()' % fg)
         hc = self.fresh('fholder')
         L.append('%s := class:' % hc)
         L.append('    var Op:int->int = %s' % R.choice(fs))
@@ -1370,7 +1388,15 @@ class Gen:
         self.out += L
         xs = 'array{%s}' % ', '.join(lit() for _ in range(R.randint(1, 4)))
         for _ in range(R.randint(2, 6)):
-            k = R.randrange(9)
+            k = R.randrange(10)
+            if k == 9:
+                b = tmpname('FB')
+                M.append('%s:%s = %s{}' % (b, fb, R.choice([fb, fs2])))
+                M.append('Print("fov {%s(%s.Val)}")' % (fr, b))
+                M.append('Print("fgb {%s(%s(int){V := %s}.Get)} {%s(%s(string){V := \"g\"}.Get)}")' % (fg, fbx, lit(), fg, fbx))
+                y = tmpname('FY')
+                M.append('for (%s : %s(%s, %s{Min := %s}.Keep)) { Print("fpk {%s}") }' % (y, fl, xs, fpk, lit(0, 6), y))
+                continue
             if k == 6:
                 # (effect subtyping between variables)
                 a, b, c = tmpname('FP'), tmpname('FR'), tmpname('FQ')
@@ -1411,6 +1437,8 @@ class Gen:
                 M.append('%s := %s{}' % (h, hc))
                 M.append('set %s.Op = %s' % (h, R.choice(fs)))
                 M.append('Print("fh {%s.Run(%s)} {%s.Op(%s)}")' % (h, lit(), h, lit()))
+                # (a method as a value, holding its receiver)
+                M.append('Print("fmv {%s(%s.Run, %s)}")' % (tw, h, lit()))
             else:
                 a, y = tmpname('FA'), tmpname('FY')
                 M.append('%s:[](int->int) = array{%s}' % (a, ', '.join(R.sample(fs, min(len(fs), 2)))))

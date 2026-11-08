@@ -292,6 +292,26 @@ flowchart LR
   why the shapes are generic per arity rather than one interface per
   function type: a `type{_(:int):int}` variable is then also a
   `type{_(:t):u}` at `t = u = int`.
+- **A method as a value** is an object of the declaring class's value
+  class `C$M$fn`, which holds the receiver in a field `$self` and whose
+  `$call…` calls `$self.M(…)`, dispatched as any call of `M` is. A
+  generic class's value class has the class's type parameters; it cannot
+  repeat or nest them in its shape's type arguments, so such methods are
+  no values (#171).
+- **`subscribable_event(t)`** is Verse code in a prelude (`subPrelude`):
+  `event(t)` with an array of (subscription, handler) pairs, the handlers
+  of type `type{_(:t):void}`, called under the refinement in `Signal`. A
+  subscription is a non-generic object with a live flag, as a generic
+  class cannot implement the non-generic `cancelable` (#53); `Signal`
+  drops the cancelled ones, so the array holds the live subscriptions and
+  those cancelled since the last `Signal`.
+- **Over-approximation.** The pass makes a method's value class whenever
+  `X.M` is written outside a call for some `X` and a class declares `M`,
+  as it cannot tell a method from a field, or from an array's `Length`.
+  An unused value class changes the bytecode, not the behaviour. The class
+  is made only when the class's type parameters each occur once in the
+  shape's type arguments, as whole types, so that it is always a valid
+  class (#53, #171).
 - **The cost of that choice.** A class implements an interface at one
   instantiation, so parameter and result types are matched exactly and the
   Book's variance applies to effects only. A generic function as a value

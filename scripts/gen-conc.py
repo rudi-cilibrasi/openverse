@@ -14,6 +14,7 @@ A program combines
   - spawns of plain calls and of dispatched methods (#173), awaited and
     cancelled, nested spawns (#180), and of methods every class fixes, in
     generic code (#204);
+  - a subscribable_event with a function and a method subscribed (#210);
   - rush losers that outlive the rush, branches nested in branches (#187);
   - a class keeping one type argument and fixing another, overriding with a
     narrower result (#198).
@@ -281,11 +282,42 @@ emit(1, f"G{R.randrange(NG)}(X, H, N)")
 # a function spawning a dispatched method on a closed receiver
 emit(0, "Kick(B:box(int)):task(int) = spawn{B.Get()}")
 
+# a subscribable_event (#210): a function and a method subscribed,
+# signalled, cancelled, awaited
+emit(0, "evlog := class:")
+emit(1, "var Sum:int = 0")
+emit(1, "On(X:int):void =")
+emit(2, "set Sum += X")
+emit(0, 'EvShow(X:int):void = Print("ev {X}")')
+emit(0, "EvRun(N:int)<suspends>:void =")
+emit(1, "E := subscribable_event(int){}")
+emit(1, "L := evlog{}")
+emit(1, "S1 := E.Subscribe(EvShow)")
+emit(1, "S2 := E.Subscribe(L.On)")
+for _ in range(R.randint(1, 4)):
+    k = R.randrange(4)
+    if k == 0:
+        emit(1, f"E.Signal(N + {R.randint(0, 9)})")
+    elif k == 1:
+        emit(1, R.choice(["S1.Cancel()", "S2.Cancel()"]))
+    elif k == 2:
+        emit(1, "race:")
+        emit(2, 'Print("evaw {E.Await()}")')
+        emit(2, "block:")
+        emit(3, f"Sleep({dur()})")
+        emit(3, f"E.Signal({R.randint(10, 19)})")
+        emit(3, f"Sleep({dur()})")
+    else:
+        emit(1, f"if (S3 := E.Subscribe(EvShow), N > {R.randint(0, 9)}) then E.Signal(N) else E.Signal(-N)")
+emit(1, 'Print("evsum {L.Sum}")')
 emit(0, "Main()<suspends>:void =")
 receivers = [("int", "int_box{V := %d}"), ("int", "sub(int){V := %d}"), ("int", "box(int){V := %d}"),
              ("string", 'box(string){V := "s%d"}'), ("string", 'sub(string){V := "t%d"}')]
 for _ in range(R.randint(2, 6)):
-    c = R.randrange(10)
+    c = R.randrange(11)
+    if c == 10:
+        emit(1, f"EvRun({R.randint(1, 9)})")
+        continue
     if c == 9:
         n = R.randint(1, 9)
         if R.random() < 0.5:

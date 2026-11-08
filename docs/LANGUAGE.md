@@ -42,7 +42,7 @@ surface Verse is elaborated (`OpenVerse/Front/Elab.lean`) into Verse Core
 | Array methods | `A.Slice[i, j]`, `A.Slice[i]`, `A.Find[x]`, `A.RemoveElement[i]`, `A.RemoveFirstElement[x]`, `A.Remove[i, j]` (half-open), `A.ReplaceElement[i, x]`, `A.ReplaceFirstElement[x, y]`, `A.Insert[i, B]`, `A.Last[]`, `A.Last[n]` (the element n before the last) (all failable); `A.RemoveAllElements(x)`, `A.ReplaceAllElements(x, y)`, `A.ReplaceAll(Pattern, Replacement)` (contiguous subarrays, left to right, not overlapping; an empty pattern changes nothing), `Concatenate(A, B, …)` or `Concatenate(Arrays)` (#150) (never failing) | §9.1 |
 | Built-ins | `Print(s)`, `ToString(x)` (int, float, char, string), `Floor[F]`, `Ceil[F]`, `Round[F]`, `Int[F]` (of a float, failable), `Floor(R)`, `Ceil(R)` (of a rational or an int, never failing; `Floor(X / Y)` fails when `Y = 0`, as `X / Y` does), `Quotient[X, Y]`, `Mod[X, Y]` (Euclidean), `Abs`, `Min`, `Max`, `Err()` | API reference |
 | Modules | `name := module:` (nested), `M.F`, `A.B.F`, the types `M.c` and values `M.c{…}`, `(M:)F`, `using{M}` at file or module scope, `<public>` members (`<internal>` is the default); see [Modules](#modules) | ch. 16 |
-| Concurrency | `<suspends>` functions and methods, `Sleep`, `sync`, `race`, `rush`, `branch`, `spawn` with `task(t)` and `Await`, `event(t)` with `Signal` and `Await`, cancellation with `defer:`, under a deterministic scheduler; see [Concurrency](#concurrency) | ch. 14 |
+| Concurrency | `<suspends>` functions and methods, `Sleep`, `sync`, `race`, `rush`, `branch`, `spawn` with `task(t)` and `Await`, `event(t)` with `Signal` and `Await`, `subscribable_event(t)` with `Subscribe` and `Cancel` (see [Function values](#function-values)), cancellation with `defer:`, under a deterministic scheduler; see [Concurrency](#concurrency) | ch. 14 |
 | Program entry | `Main()` — see the exit protocol in [`FORMAT.md`](FORMAT.md) | (not in the book) |
 
 ## Source text
@@ -132,8 +132,8 @@ Combine(A:t1, B:t2 where t1:type, t2:type):tuple(t1, t2) = (A, B)
 A function type is written `type{_(:t₁, :t₂)<effects>:r}` or `t₁->r` (Book
 of Verse ch. 6); `tuple(t₁, t₂)->r` takes two parameters, as a tuple
 flattens into parameters, and `->` binds loosest (`[]int->int` takes an
-array). A top-level function named without a call is a value of its
-function type (#210):
+array). A top-level function, or a method of an object, named without a call is
+a value of its function type (#210):
 
 ```verse
 Twice(F:int->int, X:int):int = F(F(X))
@@ -152,9 +152,14 @@ Main():void =
   does not apply the Book's variance to parameter and result types
   (`F(X:rational)` is no `int->rational`).
 - Function values are not comparable and have no `ToString`.
-- Generic functions, overloaded ones and functions with named parameters
-  cannot be used as values; methods cannot be either, yet. Lambdas and
-  nested functions are not released in Verse, so there are none.
+- A method as a value, `C.Add` (or `Add` in a method of the class), holds
+  its receiver: calling it calls `C.Add`, the receiver's class's
+  implementation, and sees and changes `C`'s fields.
+- Generic functions and methods, overloaded ones and ones with named
+  parameters cannot be used as values, nor can a method whose type repeats
+  or nests its class's type parameters (`box(t)`'s `Same(X:t):t`: that
+  needs #171). Lambdas and nested functions are not released in Verse, so
+  there are none.
 
 ## defer
 
@@ -807,9 +812,13 @@ Main()<suspends>:void =
   itself never waits. `event()` is an event without a value (`event(void)`),
   with `E.Signal()` and `E.Await()`. A `sticky_event(t)` (or
   `sticky_event()`) is an event that keeps its last signal: an `Await`
-  after a `Signal` gives that value at once. `subscribable_event` is not
-  supported yet: its callbacks are methods, which cannot be values yet
-  (#210).
+  after a `Signal` gives that value at once. A `subscribable_event(t)` is an
+  event that also calls the functions subscribed to it:
+  `E.Subscribe(F)` (with `F` a function or method value of type
+  `type{_(:t):void}`) gives a `cancelable`, whose `Cancel()` unsubscribes
+  `F`, and `E.Signal(X)` calls each subscribed function in the order they
+  subscribed, after waking the tasks awaiting `E` (#210). A function
+  subscribed during a `Signal` is first called at the next one.
 - **Arms.** Arms share the enclosing function's variables. An arm is a
   scope of its own, which `break` cannot leave. A `return` in an arm
   returns from the enclosing function: the arm's defers run, then the other
@@ -887,6 +896,6 @@ Main()<suspends>:void =
 arithmetic on rationals (see [rational](#rational)), float functions beyond those of [float](#float),
 the class features listed under [Classes](#classes), struct methods (Verse structs have none; classes do),
 `weak_map`, module paths `using{/Verse.org/…}` (accepted and ignored), overloading beyond [Overloading](#overloading), nested
-functions, concurrency beyond [Concurrency](#concurrency) (`subscribable_event`; #156), and effect checking
+functions and lambdas (not released in Verse), concurrency beyond [Concurrency](#concurrency) (`subscribable_event()` without a value), and effect checking
 other than `<decides>` and the heap effects (`<converges>` is accepted and
 ignored).

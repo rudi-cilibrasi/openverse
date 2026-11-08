@@ -235,6 +235,8 @@ partial def parseTypeAtom : PM STy := do
         -- (`event()`: an event without a value, `event(void)`, #156)
         if (← peekT).isSym ")" && (n == "event" || n == "sticky_event") then
           bump; return .app n [.name "void"]
+        if (← peekT).isSym ")" && n == "subscribable_event" then
+          perr (← peekT) "subscribable_event() without a value is not supported: give it a type, subscribable_event(t)"
         let mut ts := #[← parseType]
         while (← peekT).isSym "," do bump; ts := ts.push (← parseType)
         expectSym ")"
@@ -399,6 +401,8 @@ partial def parsePostfix (stop : Nat) : PM SExpr := do
       -- `pair(int, string){…}`: type arguments then a struct value; otherwise a call
       let cons? ← match e.dottedName? with
         | some n => do
+          if n == "subscribable_event" && (← peekT 1).isSym ")" then
+            perr (← peekT 1) "subscribable_event() without a value is not supported: give it a type, subscribable_event(t)"
           let saved ← get
           let r ← (do
               bump

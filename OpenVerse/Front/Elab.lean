@@ -1657,7 +1657,8 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
           if (ctx.types.fields c).any (·.1 == n) then
             return ← elabE ctx (.member p (.ident p "Self") n) exp
           if ctx.hasMethod c n then
-            eerr p s!"'{n}' is a method: call it with {n}(…)"
+            -- (a method of `Self` as a value, #210)
+            return ← elabE ctx (.member p (.ident p "Self") n) exp
         match ctx.sig? n with
         | some s =>
           if s.isConst then
@@ -2692,7 +2693,8 @@ partial def elabAppBase (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (b
     if m0 == "Await" && args.isEmpty then
       match (← elabE ctx obj none).ty with
       | .struct "task" [_] => return ← elabApp ctx p (.ident mp "$Await") [obj] false exp
-      | .struct "event" [_] => return ← elabApp ctx p (.ident mp "$EvAwait") [obj] false exp
+      | .struct "event" [_] | .struct "subscribable_event" [_] =>
+        return ← elabApp ctx p (.ident mp "$EvAwait") [obj] false exp
       | .struct "sticky_event" [_] => return ← elabApp ctx p (.ident mp "$StickyAwait") [obj] false exp
       | _ => pure ()
     let r0 ← elabE ctx obj none
@@ -3927,7 +3929,33 @@ partial def elabMember (ctx : Ctx) (p : Pos) (r : R) (m : String) : EM R := do
       return ⟨.prim (.tupGet k) [r.e], t⟩
     | none =>
       if ctx.types.classes.contains sn then
-        if ctx.hasMethod sn f then eerr p s!"'{f}' is a method of {sn}: call it with {f}(…)"
+        if f.startsWith "(" then
+          eerr p s!"X.{f}, a qualified method, cannot be used as a value: call it with X.{f}(…) (#210)"
+        if ctx.hasMethod sn f then
+          -- a method as a value (#210): an object of its declaring class's
+          -- value class, holding the receiver, of its own function type
+          let env := ctx.types
+          -- (one implementation per class below, as a call needs, #70)
+          let roots := ctx.rootsOf sn f
+          if let some root := roots.head? then
+            for d in env.concreteBelow sn do
+              for o in roots do
+                if ctx.implFor? d o f != ctx.implFor? d root f then
+                  eerr p s!"{d} implements {f} separately for {root} and {o}, so the value {f} would not say which: call it as X.({root}:){f}(…) or X.({o}:){f}(…)"
+          let some x := (env.supers sn).find? (fun x => env.classes.contains s!"{x}${f}$fn")
+            | eerr p s!"'{f}' is a method of {sn} that cannot be used as a value: call it with {f}(…) (a generic method, one with named parameters, and one whose type does not mention each of its class's type parameters once, as a whole parameter or result type, are no values, #210)"
+          let cls := s!"{x}${f}$fn"
+          let xargs := env.argsAt sn targs x
+          let t ← fresh r.ty
+          let nm := s!"$recv{t}"
+          let ctx' := { ctx with locals := { name := nm, slot := t, ty := r.ty, mutable := false } :: ctx.locals }
+          let rv ← elabConstruct ctx' p cls [] [.decl p "$self" none false (.ident p nm)] (some (.struct cls xargs))
+          let i := (env.info cls).ifaces.headD ""
+          let σ := (((env.sparams.lookup cls).getD []).map (·.1)).zip xargs
+          let own : Ty := .struct i (((env.iargs.lookup (cls, i)).getD []).map (Ty.subst σ))
+          return ⟨.seq (.assign t r.e) (← coerce p rv own), own⟩
+        if ((ctx.types.methodOverloads.lookup f).map (·.any (ctx.hasMethod sn ·))).getD false then
+          eerr p s!"'{f}' is an overloaded method of {sn}: an overloaded method cannot be used as a value (Book of Verse ch. 6)"
         eerr p s!"class {sn} has no field '{f}'"
       eerr p s!"struct {sn} has no field '{f}'"
   | t, m => eerr p s!"{t.show} has no member '{m}'"
@@ -4481,6 +4509,34 @@ def concTops : Except String (List STop) :=
     "Progress", "Roots", "taskBase", "Done", "Result", "waitf", "T", "X", "waitNew", "waitInit", "waitResume",
     "WaitDone", "Await", "spawnMark", "t", "Sch", "Dead", "evrec", "Got", "Next", "Head", "Tail", "Cur", "W", "L", "V",
     "EvAwait", "E", "branchMark", "rushMark", "signalAll", "H", "StickyAwait", "Last", "CancelCur", "Cancelled", "Running", "Root", "cancelMark"]
+
+/-- `subscribable_event(t)` (#210): an event whose `Signal` also calls the
+    functions subscribed to it, each `Subscribe` giving a `cancelable` whose
+    `Cancel` unsubscribes it. Added, with the concurrency prelude it
+    extends, to a program that mentions it. -/
+def subPrelude : String := "
+cancelable := interface:
+    Cancel():void
+subscription := class(cancelable):
+    var Live:logic = true
+    Cancel<override>():void =
+        set Live = false
+subscribable_event(t:type) := class(event(t)):
+    var Handlers:[]tuple(subscription, type{_(:t):void}) = array{}
+    Signal<override>(X:t):void =
+        if (Head?) then signalAll(Self, X)
+        Hs := Handlers
+        set Handlers = for (H : Hs, H(0).Live?) { H }
+        for (H : Hs, H(0).Live?):
+            H(1)(X)
+    Subscribe(F:type{_(:t):void}):cancelable =
+        S := subscription{}
+        set Handlers += array{(S, F)}
+        S
+"
+
+def subTops : Except String (List STop) :=
+  parsePrelude subPrelude ["subscription", "Live", "Handlers", "Hs", "H", "S", "F", "X", "t", "Head", "signalAll"]
 
 /-- The number of constructors in a Verse Core type (to bound the types a
     specialisation is made at, #174). -/
@@ -5256,13 +5312,22 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   let helpers ← if usesRat then ratTops else pure []
   let helpers := helpers ++ (← if usesReplaceAll then replaceAllTops else pure [])
   -- concurrency (#156): the helpers, for a program with a <suspends> function
-  let usesConc := allTops0r.any fun
+  -- (and `subscribable_event`, which extends the concurrency prelude's
+  -- `event`, #210)
+  -- (unless the program defines its own)
+  let defines0 (n : String) : Option Pos := allTops0r.findSome? fun
+    | .classDef p m .. | .fn p m .. | .const p m .. => if m == n then some p else none
+  let usesSub := (defines0 "subscribable_event").isNone && allTops0r.any (·.usesType "subscribable_event")
+  if usesSub then
+    if let some p := defines0 "cancelable" then
+      throw s!"{p.show}: cancelable is the type subscribable_event's Subscribe gives: a program that uses subscribable_event cannot define its own (#210)"
+  let usesConc := usesSub || allTops0r.any fun
     | .fn _ _ _ _ effs _ _ => effs.contains "suspends"
     | .classDef _ _ _ _ _ _ _ _ ms => ms.any fun
       | .fn _ _ _ _ effs _ _ => effs.contains "suspends"
       | _ => false
     | _ => false
-  let helpers := helpers ++ (← if usesConc then concTops else pure [])
+  let helpers := helpers ++ (← if usesConc then concTops else pure []) ++ (← if usesSub then subTops else pure [])
   let allTops000 := allTops0r.filter (!isRatMarker ·)
   -- modules (#112): every reference to a member, qualified (the entry
   -- expression's too)
