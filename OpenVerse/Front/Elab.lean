@@ -5944,9 +5944,15 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
         let fr : Expr := .heap (.get 1) [.local 0]
         let pass := (List.range a).map fun i => Expr.heap (.get (Suspend.slotBaseOf sitesJ armsJ + i)) [fr]
         branchInfo := branchInfo.push (armRes, doneA, pass)
+        -- (a `rush` loser that runs `return` after the `rush` ended has
+        -- unwound itself and ends there: it is marked so, and not stopped
+        -- again when the function exits, #181)
         let tramp : Expr := .seq (.ite (.prim .eq [.heap (.get doneA) [fr], Suspend.int 0])
             (.seq (Suspend.seqVoid [.assign 2 (.call armRes (fr :: .local 1 :: pass)),
-              .ite (.prim .eq [.local 2, Suspend.int 1]) (.seq (.heap (.set doneA) [fr, Suspend.int 1]) Suspend.vd) Suspend.vd])
+              .ite (.prim .eq [.local 2, Suspend.int 1]) (.seq (.heap (.set doneA) [fr, Suspend.int 1]) Suspend.vd) Suspend.vd,
+              .ite (.prim .eq [.local 2, Suspend.int 2])
+                (.seq (Suspend.seqVoid [.heap (.set doneA) [fr, Suspend.int 2], .assign 2 (Suspend.int 1)]) Suspend.vd)
+                Suspend.vd])
               Suspend.vd)
             (.seq (.assign 2 (Suspend.int 1)) Suspend.vd)) (.local 2)
         branchFns := branchFns.push { name := s!"$branch{K}$tramp", arity := 2, nslots := 3, decides := false,
