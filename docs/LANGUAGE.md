@@ -677,7 +677,7 @@ the readings are flat:
 
 A function marked `<suspends>` can wait (Book of Verse ch. 14, #156).
 openverse supports such functions, `Sleep`, calls between them, `sync`,
-`race`, `branch`, `spawn`, `task` and `event`; `rush` comes next.
+`race`, `rush`, `branch`, `spawn`, `task` and `event`.
 
 ```verse
 Countdown(N:int)<suspends>:int =
@@ -720,6 +720,11 @@ Main()<suspends>:void =
               "timeout"
       Print(Result)    # fetch cancelled or done, then timeout
   ```
+- **`rush`.** As `race`, but the arms that started and have not ended when
+  the first ends go on, as tasks of their own, until they end or the
+  function that contains the `rush` exits (which cancels them, running
+  their defers). A `rush` cannot be in a `loop` or `for` body (the Book's
+  rule), nor in a generic function for now.
 - **`branch`.** The body of a `branch:` runs as a task of its own, at once
   up to its first wait, while the code after it goes on. It shares the
   enclosing function's variables, and it is cancelled (running its active
@@ -814,7 +819,7 @@ Main()<suspends>:void =
 arithmetic on rationals (see [rational](#rational)), float functions beyond those of [float](#float),
 the class features listed under [Classes](#classes), struct methods (Verse structs have none; classes do),
 `weak_map`, module paths `using{/Verse.org/…}` (accepted and ignored), overloading beyond [Overloading](#overloading), nested
-functions, concurrency beyond [Concurrency](#concurrency) (`rush`,
-`spawn` outside suspends functions, `event()` without a type argument, cancelling a task, `return` in arms; #156), and effect checking
+functions, concurrency beyond [Concurrency](#concurrency) (`spawn`
+outside suspends functions, `event()` without a type argument, cancelling a task, `return` in arms; #156), and effect checking
 other than `<decides>` and the heap effects (`<converges>` is accepted and
 ignored).

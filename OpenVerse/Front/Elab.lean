@@ -1569,6 +1569,7 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
   | .app p (.ident _ "$defer") _ _ => eerr p "defer: is a statement: it has no value"
   | .app p (.ident _ "$sync") arms false => elabConc ctx p true arms exp
   | .app p (.ident _ "$race") arms false => elabConc ctx p false arms exp
+  | .app p (.ident _ "$rush") arms false => elabConc ctx p false arms exp true
   | .app p (.ident _ "$spawn") [body] false => elabSpawn ctx p body
   | .app p (.ident _ "$branch") [body] false => elabBranch ctx p body
   | .app p f args bracket => elabApp ctx p f args bracket exp
@@ -1837,12 +1838,16 @@ partial def withDeferMark (ctx : Ctx) (e : Expr) : EM Expr := do
     goes to a slot (`race`: one slot of the arms' join type, written by the
     winner), and the arms to the marker `$syncMark(array{…})` (or
     `$raceMark`), which the lowering (`Suspend.lean`) runs concurrently. -/
-partial def elabConc (ctx : Ctx) (p : Pos) (isSync : Bool) (arms : List SExpr) (exp : Option Ty) : EM R := do
-  let kw := if isSync then "sync" else "race"
+partial def elabConc (ctx : Ctx) (p : Pos) (isSync : Bool) (arms : List SExpr) (exp : Option Ty)
+    (isRush : Bool := false) : EM R := do
+  let kw := if isSync then "sync" else if isRush then "rush" else "race"
   if !ctx.suspends then eerr p s!"{kw} suspends: it can only be used in a <suspends> function (#156)"
   if ctx.inDefer then eerr p s!"{kw} suspends, and a defer cannot suspend (#156)"
   if ctx.canFail then eerr p s!"{kw} suspends, and a failure context (a condition, a filter, or a <decides> call's arguments) cannot (#156)"
-  let some mark := ctx.sig? (if isSync then "$syncMark" else "$raceMark")
+  if isRush && ctx.inRepeat then
+    eerr p "rush cannot be in a loop or for body (Book of Verse ch. 14): call a function that rushes"
+  if isRush && !ctx.dictVars.isEmpty then eerr p "rush in a generic function is not supported yet (#156)"
+  let some mark := ctx.sig? (if isSync then "$syncMark" else if isRush then "$rushMark" else "$raceMark")
     | eerr p s!"internal error: no {kw} helper"
   -- (an arm is a scope of its own: its defers are its own, and break and
   -- return cannot leave it)
@@ -1873,7 +1878,7 @@ partial def elabConc (ctx : Ctx) (p : Pos) (isSync : Bool) (arms : List SExpr) (
     let e := Expr.seq (.call mark.idx [.prim .mkArr stmts.toList]) (.prim .mkTup (slots.toList.map Expr.local))
     return ⟨← withDeferMark ctx e, .tup tys.toList⟩
   else
-    if arms.length < 2 then eerr p "race needs at least two arms"
+    if arms.length < 2 then eerr p s!"{kw} needs at least two arms"
     -- the arms' join, as an `if`'s branches (or the expected type)
     let mut rs : Array (Pos × R) := #[]
     for a in arms do
@@ -4218,6 +4223,7 @@ sleepResume(F:sleep, C:sched):int =
 Sleep(S:float)<suspends><computes>:void = {}
 syncMark(A:[]void)<suspends><computes>:void = {}
 raceMark(A:[]void)<suspends><computes>:void = {}
+rushMark(A:[]void)<suspends><computes>:void = {}
 "
 
 def concTops : Except String (List STop) :=
@@ -4225,7 +4231,7 @@ def concTops : Except String (List STop) :=
     "sleepInit", "sleepResume", "Sleep", "syncMark", "raceMark", "S", "F", "C", "N", "R", "A",
     "Progress", "Roots", "taskBase", "Done", "Result", "waitf", "T", "X", "waitNew", "waitInit", "waitResume",
     "WaitDone", "Await", "spawnMark", "t", "Sch", "evrec", "Got", "Next", "Head", "Tail", "Cur", "W", "L", "V",
-    "EvAwait", "E", "branchMark"]
+    "EvAwait", "E", "branchMark", "rushMark"]
 
 /-- Elaborate a parsed program into a Verse Core program that passes `Prog.check`
     and `Prog.checkTypes`. -/
@@ -5331,10 +5337,11 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     let waitIdx := idxOf "$WaitDone"
     let syncMark := idxOf "$syncMark"
     let raceMark := idxOf "$raceMark"
+    let rushMark := idxOf "$rushMark"
     let spawnMark := idxOf "$spawnMark"
     let branchMark := idxOf "$branchMark"
-    let isMark (f : Nat) : Bool := f == syncMark || f == raceMark
-    let leaves := ["$Sleep", "$WaitDone", "$syncMark", "$raceMark", "$spawnMark", "$branchMark"]
+    let isMark (f : Nat) : Bool := f == syncMark || f == raceMark || f == rushMark
+    let leaves := ["$Sleep", "$WaitDone", "$syncMark", "$raceMark", "$rushMark", "$spawnMark", "$branchMark"]
     let user := (allS.filter fun s => s.suspends && !leaves.contains s.name).map fun s =>
       (s.idx, s.name, s.tparams.length)
     let tagBase := env.classes.length
@@ -5381,7 +5388,8 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       let fn := fns[gi]!
       let some (ds, b) := Suspend.stripInits (fn.nslots - fn.arity) fn.body
         | throw s!"internal error: lowering {gname}: unexpected initialisations"
-      parts := parts.push (ds, b, Suspend.countSusp (fun f => isS f || f == branchMark) (fun _ => false) false (· == spawnMark) b,
+      parts := parts.push (ds, b, Suspend.countSusp (fun f => isS f || f == branchMark) (fun _ => false) false (· == spawnMark) b +
+          Suspend.countArms (· == rushMark) b,
         Suspend.countArms (fun f => isMark f || f == branchMark) b)
     let frameTy (j : Nat) : VTy :=
       .ref [tagBase + j] ((List.range lows[j]!.2.2).map VTy.var)
@@ -5394,7 +5402,8 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     let mut branchOf : Array (List Nat) := #[]
     let mut branchHome : Array Nat := #[]
     for (j, part) in (List.range L).zip parts.toList do
-      let n := Suspend.countSusp (· == branchMark) (fun _ => false) false (fun _ => false) part.2.1
+      let n := Suspend.countSusp (· == branchMark) (fun _ => false) false (fun _ => false) part.2.1 +
+        Suspend.countArms (· == rushMark) part.2.1
       branchOf := branchOf.push ((List.range n).map (· + branchHome.size))
       branchHome := branchHome ++ (List.replicate n j).toArray
     let B := branchHome.size
@@ -5455,14 +5464,14 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
         (nFns + 4 * rootJ k, trampOf k + 1)
       let branches : Array (Nat × Nat × Nat) := ((branchOf[j]?).getD []).toArray.map fun K =>
         (wrapFnBase + 3 * K + 1, wrapFnBase + 3 * K + 2, wrapTag K)
-      let low ← (Suspend.lower Sinf callee syncMark raceMark spawnMark spawns branchMark branches a Γ ρ (frameTy j)
+      let low ← (Suspend.lower Sinf callee syncMark raceMark rushMark spawnMark spawns branchMark branches a Γ ρ (frameTy j)
         schedTag fnBase b).mapError fun e => s!"in {gname}: {e}"
       -- its branches' wrappers: `tramp(w, sched)` resumes the arm (with the
       -- function's parameters from its frame) unless the function stopped
       -- it; `start(sched, frame)` makes the wrapper, registers it and runs
       -- it once; `stop(w)` marks it done
       let (_, _, sitesJ, armsJ) := parts[j]!
-      for (K, (armRes, doneA)) in ((branchOf[j]?).getD []).zip low.branchArms do
+      for (K, (armRes, doneA, runNow)) in ((branchOf[j]?).getD []).zip low.branchArms do
         let fr : Expr := .heap (.get 1) [.local 0]
         let pass := (List.range a).map fun i => Expr.heap (.get (Suspend.slotBaseOf sitesJ armsJ + i)) [fr]
         let tramp : Expr := .seq (.ite (.prim .eq [.heap (.get doneA) [fr], Suspend.int 0])
@@ -5474,12 +5483,13 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
                                       writes := true, body := initPrefixE 2 [Suspend.int 0] tramp }
         branchTys := branchTys.push [wrapTy K, schedTy, .int]
         branchSigs := branchSigs.push ([wrapTy K, schedTy], .int)
-        let start : Expr := .seq (Suspend.seqVoid [
-          .heap (.set rootsF) [.local 0, .prim .concat [.heap (.get rootsF) [.local 0], .prim .mkArr [.local 2]]],
+        -- (a `rush` loser's wrapper only registers it: it already started)
+        let register : Expr := .heap (.set rootsF) [.local 0, .prim .concat [.heap (.get rootsF) [.local 0], .prim .mkArr [.local 2]]]
+        let start : Expr := .seq (Suspend.seqVoid (if !runNow then [register] else [register,
           .assign 3 (.call (wrapFnBase + 3 * K) [.local 2, .local 0]),
           .ite (.prim .eq [.local 3, Suspend.int 1])
             (.seq (Suspend.seqVoid [.heap (.set Suspend.pcF) [.local 2, Suspend.int (-1)],
-              .heap (.set progressF) [.local 0, .lit (.logic true)]]) Suspend.vd) Suspend.vd]) (.local 2)
+              .heap (.set progressF) [.local 0, .lit (.logic true)]]) Suspend.vd) Suspend.vd])) (.local 2)
         let startFn : Fn := { name := s!"$branch{K}$start", arity := 2, nslots := 4, decides := false, writes := true,
                               body := initPrefixE 2 [.heap (.new (wrapTag K)) [Suspend.int 0, .local 1], Suspend.int 0] start }
         branchFns := branchFns.push startFn

@@ -323,7 +323,10 @@ wrapper `[pc, frame]`. The wrapper's trampoline resumes the arm unless the
 function stopped it. Every exit of the function, and its cancel function,
 stops its branches: it marks each wrapper done (through a test of its
 class, kept in a frame field) and cancels each arm still pending. A frame
-reused for another call so never shares an arm with an old wrapper.
+reused for another call so never shares an arm with an old wrapper. A
+`rush` is a `race` whose arms each get such a wrapper: when the first arm
+ends, the others that are pending are registered as roots (not run again
+at once) instead of cancelled.
 
 An `event(t)` keeps a list of waiter records (each an `$evrec(t)`, also
 below `$taskBase`). `E.Await()` appends one and waits at `$WaitDone`.

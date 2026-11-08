@@ -815,17 +815,17 @@ partial def parsePrimary (stop : Nat) : PM SExpr := do
       return .app t.pos (.ident t.pos "$spawn") [b] false
     else
       bump; return .ident t.pos "spawn"
-  | .ident "sync" | .ident "race" =>
+  | .ident "sync" | .ident "race" | .ident "rush" =>
     let n ← peekT 1
     if n.isSym ":" || n.isSym "{" then
       bump
-      let kw := if t.isKw "sync" then "$sync" else "$race"
+      let kw := if t.isKw "sync" then "$sync" else if t.isKw "race" then "$race" else "$rush"
       let arms := match ← parseBody stop with
         | .block _ es => es
         | e => [e]
       return .app t.pos (.ident t.pos kw) arms false
     else
-      bump; return .ident t.pos (if t.isKw "sync" then "sync" else "race")
+      bump; return .ident t.pos (t.identName?.getD "sync")
   | .ident "let" =>
     if (← peekT 1).isSym "(" then
       -- `let(defs){body}`: the definitions are visible in the body only, and
