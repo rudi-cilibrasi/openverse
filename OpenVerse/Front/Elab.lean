@@ -1849,6 +1849,10 @@ partial def elabApp (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (brack
     -- (the state is restored between attempts, but not the overload cache)
     let restore : EM Unit := do set { saved with natTys := (← get).natTys }
     tryCatch (elabAppBase ctx p f args bracket exp) fun err => do
+      -- (only a call refused for its arguments' shape is tried again: an
+      -- error from inside the argument is the argument's)
+      let shapeErr := ["argument(s)", "overload", "expected tuple"].any fun k => (err.splitOn k).length > 1
+      if !shapeErr then throw err
       restore
       let c2 := { ctx with retries := ctx.retries + 1 }
       -- a method's receiver is evaluated first, then the tuple
