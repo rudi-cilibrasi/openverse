@@ -1265,6 +1265,20 @@ partial def joinTy (env : TyEnv) (a b : Ty) (exp : Option Ty) (inner : Bool := f
   else if a == b then some a
   else match a, b with
   | .int, .rational | .rational, .int => if inner then none else some .rational
+  -- (refinements join at an expected refinement holding both, or at the
+  -- wider of the two, #143)
+  | .refine n, .refine m =>
+    let within (x y : String) : Bool := match env.refines.lookup x, env.refines.lookup y with
+      | some (bx, cx), some (by_, cy) => bx == by_ && intervalWithin (refineInterval cx) (refineInterval cy)
+      | _, _ => false
+    match exp with
+    | some (.refine e) => if within n e && within m e then some (.refine e)
+      else if within n m then some (.refine m) else if within m n then some (.refine n)
+      else (env.refines.lookup n).map (·.1)
+    | _ => if within n m then some (.refine m) else if within m n then some (.refine n)
+      else match env.refines.lookup n, env.refines.lookup m with
+        | some (bn, _), some (bm, _) => if bn == bm then some bn else none
+        | _, _ => none
   | .refine n, b | b, .refine n =>
     match env.refines.lookup n, b with
     | some (base, _), .refine m => if (env.refines.lookup m).map (·.1) == some base then some base else none
