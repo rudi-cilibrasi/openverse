@@ -1843,8 +1843,11 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
   | .app p (.ident _ "$spawn") [body] false => elabSpawn ctx p body
   | .app p (.ident _ "$branch") [body] false => elabBranch ctx p body
   | .app p (.ident _ "$choice") _ false =>
-    eerr p ("a choice (a | b) can only be the value of a binding (X := a | b), or a clause of its own, " ++
-      "in an if condition, a for or first{…}, for now (#208)")
+    if ctx.canFail then
+      eerr p ("a choice (a | b) cannot be taken from here: not from inside a block, a branch, a struct " ++
+        "construction, a named argument or another choice's alternative, for now (#208)")
+    eerr p ("a choice (a | b) has several values, so it must be in a failure context that takes them: " ++
+      "an if condition, a for's clauses, first{…}, option{…}, logic{…}, not, or the left of or (#208)")
   | .app p (.ident _ "$first") [.block _ items] false =>
     -- `first{…}` and `first(…){…}` with a choice (#208): the first success
     -- of the clauses, then the value (or body), which sees their names
@@ -1891,6 +1894,8 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
     if r.ty != .int then eerr p s!"unary '-' needs an int or a float, found {r.ty.show}"
     return litAt ctx.types exp ⟨.prim .neg [r.e], .int⟩
   | .notE _ e =>
+    -- (with a choice, its first success, #208)
+    let e := (Choice.takeFirst? e).getD e
     let r ← elabE { ctx with canFail := true } e none
     return ⟨Expr.notE r.e, .void⟩
   | .bin p "/" a b =>
@@ -1947,6 +1952,7 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
     let (rb, _) ← elabStmt ctx b exp
     return ⟨Expr.andE ra.e rb.e, rb.ty⟩
   | .orE p a b =>
+    let a := (Choice.takeFirst? a).getD a
     let ra ← elabE { ctx with canFail := true } a exp
     let rb ← match exp with
       | some _ => elabE ctx b exp
@@ -2001,6 +2007,7 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
         let es ← all.mapM fun (e', x) => coerce e'.pos x jt
         return ⟨.prim .mkArr es, .arr jt⟩
   | .optionLit _ e =>
+    let e := (Choice.takeFirst? e).getD e
     let inner : Option Ty := match exp with
       | some (.opt t) => some t
       | _ => none
@@ -2011,6 +2018,7 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
     let t ← fresh r.ty
     return ⟨Expr.optionE t r.e, .opt r.ty⟩
   | .logicLit p e =>
+    let e := (Choice.takeFirst? e).getD e
     let r ← elabE { ctx with canFail := true } e none
     if !(r.e.mayFail ctx.sigProg) then eerr p "logic{…} needs an expression that can fail"
     return ⟨Expr.logicE r.e, .logic⟩
@@ -3913,7 +3921,7 @@ partial def elabSet (ctx : Ctx) (p : Pos) (lhs0 : SExpr) (op : Option String) (r
     leftmost outermost). The clauses are a failure context; the body is not. -/
 partial def elabFor (ctx : Ctx) (p : Pos) (clauses : List SExpr) (body : SExpr) : EM R := do
   -- (a choice is a generator over its alternatives, #208)
-  let clauses := Choice.normClauses clauses
+  let clauses := Choice.prepare clauses
   -- split into groups: [filters before the first generator], then (generator, filters)…
   let isGen : SExpr → Bool
     | .gen .. => true
@@ -4066,7 +4074,7 @@ partial def elabAlts (ctx : Ctx) (p : Pos) (b : Choice.Binding) : EM (Ty × List
     `void`: an `if` and `first{…}` read their clauses' values through names. -/
 partial def elabOneClauses (ctx : Ctx) (cs : List SExpr) : EM (R × Ctx) := do
   -- (a `break` here would leave `firstE`'s loop, not the program's)
-  let (code, ctx') ← elabOneGo { ctx with inLoop := false, inChoice := ctx.inLoop } (Choice.normClauses cs)
+  let (code, ctx') ← elabOneGo { ctx with inLoop := false, inChoice := ctx.inLoop } (Choice.prepare cs)
   return (⟨Expr.firstE code, .void⟩, { ctx' with inLoop := ctx.inLoop, inChoice := ctx.inChoice })
 
 partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)

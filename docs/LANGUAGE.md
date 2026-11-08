@@ -32,7 +32,7 @@ surface Verse is elaborated (`OpenVerse/Front/Elab.lean`) into Verse Core
 | Operators | `* + -`, unary `-`, comparisons `= <> < <= > >=` (failable, return the left operand, chains check every pair), `and`, `or`, `not` (below the comparisons, above `and`: `not X = Y` is `not (X = Y)`), `?`, `.Length`, `A[i]`, `T(k)` | ch. 4 |
 | Failure | failure contexts (`if` conditions, `for` clauses, `option{}`, `logic{}`, `not`, left of `or`, `<decides>` bodies) with rollback of `var` writes **and output** | ch. 8 |
 | Control | `if`/`else if`/`else` (all styles, `if:`…`then:`), `for` with `X : array`, `I -> X : array`, `X := a..b`, filters, bindings, several generators (cartesian product), `loop`/`break`, `return`, `case` with literal patterns and `_` | ch. 7 |
-| Choice | `a \| b \| …` with several values in spatial order, as a binding's value or a clause in an `if` condition (the first success), a `for` (all of them) or `first{…}`; see [Choice](#choice) (#208) | (the Verse Calculus) |
+| Choice | `a \| b \| …` with several values in spatial order, in a clause of an `if` condition, `first{…}`, `option{…}`, `logic{…}`, `not` or `or` (the first success) or of a `for` (all of them), also inside expressions (`(1 \| 2) + (10 \| 20)`, `X = 1 \| 2`); see [Choice](#choice) (#208) | (the Verse Calculus) |
 | Functions | a tuple argument expands into several parameters (`Describe(MyTuple)`), several arguments make a single array parameter (`Sum(1, 2, 3)`) (#134, #140; the array form for a plain call only, and a method's, an overloaded or a generic function's tuple is typed without the parameters' types); recursion, mutual recursion, `<decides>` (called with `F[…]`; other functions with `F(…)`), named parameters `?P:t = default` passed as `?P := e` (positional, then named as written, then defaults; a default may use the parameters before it, and a method's default the method's fields; a default is evaluated at the call, its effects counting as the caller's, and cannot return, break or use itself), the heap effects `<computes>`, `<reads>`, `<writes>`, `<allocates>`, `<transacts>` (checked, see [Classes](#classes)), other effect specifiers accepted and ignored | ch. 6, 13 |
 | Parametric functions | `F(X:t, … where t:type, u:subtype(comparable))`: type parameters in parameter types, the result type and local declarations; type arguments inferred at each call (see [Parametric functions](#parametric-functions)) | Types: where clauses |
 | Structs | `name := struct:` with typed fields and defaults, `name{F := e, …}`, `S.F`, `set S.F = e` / `op=`, structural equality (a struct is the tuple of its fields in Verse Core) | ch. 9 |
@@ -572,13 +572,31 @@ Main():void =
 - **`set L = a | b`** evaluates as `set` does: the indices of `L`'s path
   first, then for `op=` the old value, then the choice, so each alternative
   only runs the assignment.
-- **Where.** For now, a choice is the value of a binding (`X := a | b`,
-  `X:t = a | b`, `set X = a | b`, `var X:t = a | b`) or a clause of its
-  own, in an `if` condition, the clauses of a `for`, `first{…}`, `first(…){…}`,
-  `if{…}`, `for{…}` and `assert{…}`. A choice inside an expression (`(1 | 2) + 1`,
-  `X = 1 | 2`), or anywhere else, is refused, and so is a `break` in the
-  clauses of an `if` or `first{…}` with a choice. `first{…}` with a choice
-  can fail, so it must be in a failure context.
+- **Where.** A choice is taken by an `if` condition, the clauses of a
+  `for`, `first{…}`, `first(…){…}`, `if{…}`, `for{…}`, `assert{…}`,
+  `option{…}`, `logic{…}`, `not`, and the left of `or`. In their clauses, a choice can
+  be a binding's value (`X := a | b`, `X:t = a | b`, `set X = a | b`,
+  `var X:t = a | b`), a clause of its own, or inside an expression. It is
+  then *lifted* out of its clause, as one more clause before it, with the
+  code that runs before it bound to names first, so that it still runs
+  first and once:
+
+  ```verse
+  for (Y := F() + (1 | 2)) { … }       # as: T := F(), C := 1 | 2, Y := T + C
+  if (X = 1 | 2 | 3) then …            # X is 1, 2 or 3
+  if (H := Half[3 | 5 | 8]) then …     # the first argument Half succeeds with
+  ```
+
+  Lifting goes through arithmetic, comparisons, calls (the receiver
+  first), member access, `?`, tuples, arrays, maps and string
+  interpolation. A variable is read where it is written: before the choice
+  if the clause sets it after. A choice inside a block, a branch, a struct
+  construction (whose fields are evaluated in declaration order, not as
+  written), a named argument or another choice's alternative is refused
+  for now, and so is a choice anywhere else (outside these failure
+  contexts). A `break` in the clauses of an `if` or `first{…}` with a
+  choice is refused. `first{…}` with a choice can fail, so it must be in a
+  failure context.
 - **Precedence.** `|` binds looser than arithmetic and tighter than the
   comparisons: `X = 1 | 2` is `X = (1 | 2)`.
 
@@ -599,8 +617,9 @@ conditions:
   (`firstE_of_brk`, `firstE_of_ok`).
 
 Four things are **tested, not proved**:
-- that the elaborator emits these forms as described above (the front end
-  is not verified; see DESIGN.md, "Translation validation");
+- that the elaborator emits these forms as described above, lifting a
+  choice out of an expression included (the front end is not verified;
+  see DESIGN.md, "Translation validation");
 - the reading for `for`;
 - the order of values across several choices;
 - that the code before a choice runs once.
@@ -992,7 +1011,7 @@ Main()<suspends>:void =
 | `=` between different types | not stated | refused when two scalar types (int, float, char, …) meet at the same place, also inside containers (`array{1} = array{1.0}`), as Verse Core holds them differently |
 | Ordering of rationals | not stated (§2 lists `<` … for `int` and `float`) | exact (by continued fractions, so it cannot overflow), and an int compares with a rational |
 | Order of a choice's values | (not in the Book; the Verse Calculus: spatial) | spatial: the leftmost choice varies slowest, as nested generators do (#208) |
-| Code before a choice | (the Verse Calculus is pure) | runs once; each alternative runs the code after the choice, from where the choice was reached; in an `if` or `first{}`, one that leads to no success is rolled back (as backtracking does); in a `for`, the choice is a generator, so only an alternative whose own clauses fail is (#208) |
+| Code before a choice | (the Verse Calculus is pure) | runs once, also within an expression (the operands before the choice are evaluated first, as written); each alternative runs the code after the choice, from where the choice was reached; in an `if` or `first{}`, one that leads to no success is rolled back (as backtracking does); in a `for`, the choice is a generator, so only an alternative whose own clauses fail is (#208) |
 | Precedence of `\|` | (not in the Book) | below `+`, above the comparisons: `X = 1 \| 2` is `X = (1 \| 2)` (#208) |
 | `Sleep(0.0)` | "may resume in the same tick" (ch. 14); the API reference: it always yields | always yields: resumes in the next tick (#156) |
 | `Sleep(S)` rounding | rounded up to whole ticks (ch. 14) | `Round(30·S)` ticks, at least one: rounding to the nearest keeps `Sleep(0.1)` at 3 ticks despite binary floats (#156) |
@@ -1005,6 +1024,6 @@ Main()<suspends>:void =
 arithmetic on rationals (see [rational](#rational)), float functions beyond those of [float](#float),
 the class features listed under [Classes](#classes), struct methods (Verse structs have none; classes do),
 `weak_map`, module paths `using{/Verse.org/…}` (accepted and ignored), overloading beyond [Overloading](#overloading), nested
-functions and lambdas (not released in Verse), choice beyond [Choice](#choice) (inside an expression; a function with several values), concurrency beyond [Concurrency](#concurrency) (`subscribable_event()` without a value), and effect checking
+functions and lambdas (not released in Verse), choice beyond [Choice](#choice) (a function with several values; inside a block, a struct construction, a named argument or an alternative), concurrency beyond [Concurrency](#concurrency) (`subscribable_event()` without a value), and effect checking
 other than `<decides>` and the heap effects (`<converges>` is accepted and
 ignored).

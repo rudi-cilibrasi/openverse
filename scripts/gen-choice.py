@@ -8,7 +8,10 @@ that take a choice's values: an `if` condition and `first{...}` (the first
 success) and a `for` (all of them, by generators). The clauses mix choice
 bindings, whose alternatives are literals, nested choices, or blocks that
 print, change the variable `N` or fail; range generators; filters; and
-clauses that print or change `N`. The expected output comes from the model
+clauses that print or change `N`; and choices inside expressions, as
+`X := (a | b) + (c | d)` and `(Print(...); X) + (a | b) > c`, which the model
+expands into the clauses they are lifted to (the code before a choice
+first, once, then each choice in order). The expected output comes from the model
 below, a backtracking interpreter written from the semantics in
 docs/LANGUAGE.md ("Choice"), not from the compiler:
 
@@ -75,6 +78,9 @@ def alt_eval(a, st):
 # ('range', name, lo, hi)      only in a for
 # ('cmp', lhs, op, c)          lhs: ('var', x) | ('N',) | ('sum', x, y)
 # ('setN', d) | ('print', tag)
+# ('bindsum', x, a, b)         x := a + b of two names (always succeeds)
+# ('sugar', src, expansion)    a clause with choices inside its expressions:
+#                              its source, and the clauses it is lifted to
 
 def flat_alts(groups):
     out = []
@@ -111,6 +117,8 @@ OPS = {'>': lambda a, b: a > b, '<': lambda a, b: a < b, '<>': lambda a, b: a !=
 
 def clause_src(c):
     k = c[0]
+    if k == 'sugar':
+        return c[1]
     if k == 'choice':
         return f'{c[1]} := {choice_src(c[2])}'
     if k == 'range':
@@ -127,6 +135,9 @@ def clause_src(c):
 def apply(c, st):
     """A clause that is no generator: whether it succeeds (mutating st)."""
     k = c[0]
+    if k == 'bindsum':
+        st.env[c[1]] = st.env[c[2]] + st.env[c[3]]
+        return True
     if k == 'cmp':
         return OPS[c[2]](lhs_val(c[1], st), c[3])
     if k == 'setN':
@@ -158,6 +169,14 @@ def one(cls, st):
     if not apply(c, s2):
         return None
     return one(rest, s2)
+
+
+def expand(cls):
+    """The clauses with each sugar clause replaced by those it is lifted to."""
+    out = []
+    for c in cls:
+        out.extend(c[2] if c[0] == 'sugar' else [c])
+    return out
 
 
 def is_gen(c):
@@ -262,6 +281,33 @@ class Gen:
             c = self.rng.randint(0, 6)
         return ('cmp', lhs, op, c)
 
+    def plain_alts(self):
+        return [self.alt() for _ in range(self.rng.randint(2, 3))]
+
+    def sugar(self, name, names):
+        """A clause with choices inside its expressions."""
+        self.tag += 1
+        t = self.tag
+        a, b = f'$a{t}', f'$b{t}'
+        if names and self.rng.random() < 0.5:
+            # a filter: [(Print(u); ] X [)] + (alts) op c
+            x = self.rng.choice(names)
+            alts = self.plain_alts()
+            op = self.rng.choice(list(OPS))
+            c = self.rng.randint(0, 18)
+            pre = []
+            lhs = x
+            if self.rng.random() < 0.5:
+                u = self.fresh_tag('u')
+                lhs = f'(Print("{u}"); {x})'
+                pre = [('print', u)]
+            src = f'{lhs} + ({choice_src(alts)}) {op} {c}'
+            return ('sugar', src, pre + [('choice', a, alts), ('cmp', ('sum', x, a), op, c)]), None
+        # a binding: name := (alts) + (alts)
+        al, ar = self.plain_alts(), self.plain_alts()
+        src = f'{name} := ({choice_src(al)}) + ({choice_src(ar)})'
+        return ('sugar', src, [('choice', a, al), ('choice', b, ar), ('bindsum', name, a, b)]), name
+
     def clauses(self, prefix, in_for):
         """1-5 clauses with at least one choice."""
         cls = []
@@ -273,7 +319,12 @@ class Gen:
             r = self.rng.random()
             if r < 0.45 or (i == n - 1 and not has_choice):
                 cls.append(self.choice(name)); names.append(name); has_choice = True
-            elif in_for and r < 0.55:
+            elif r < 0.6:
+                c, bound = self.sugar(name, names)
+                cls.append(c); has_choice = True
+                if bound:
+                    names.append(bound)
+            elif in_for and r < 0.68:
                 lo = self.rng.randint(0, 2)
                 cls.append(('range', name, lo, lo + self.rng.randint(0, 2))); names.append(name)
             else:
@@ -304,14 +355,14 @@ def program(seed):
             def body(s, names=names, bump=bump, k=k):
                 s.n += bump
                 s.out.append(f'b{k} ' + ' '.join(str(s.env[x]) for x in names) + f' {s.n}')
-            run_for(cls, body, st)
+            run_for(expand(cls), body, st)
             # (the names of the for are not visible after it)
             st.env = {}
         elif form == 'if':
             cls, names = g.clauses(pfx, False)
             lines.append(f'    if ({", ".join(clause_src(c) for c in cls)}) then '
                          f'Print("t{k} {interp(names)} {{N}}") else Print("e{k} {{N}}")')
-            r = one(cls, st)
+            r = one(expand(cls), st)
             if r is None:
                 st.out.append(f'e{k} {st.n}')
             else:
@@ -323,7 +374,7 @@ def program(seed):
             last = names[-1]
             lines.append(f'    if (V{k} := first{{{"; ".join(clause_src(c) for c in cls)}; {last}}}) then '
                          f'Print("f{k} {{V{k}}} {{N}}") else Print("g{k} {{N}}")')
-            r = one(cls, st)
+            r = one(expand(cls), st)
             if r is None:
                 st.out.append(f'g{k} {st.n}')
             else:
