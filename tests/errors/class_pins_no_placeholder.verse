@@ -1,11 +1,11 @@
-# expect: (an interface that declares fields, or is below one, gets no placeholder object, #157)
-named(t:type) := interface:
-    Name:string
-    Get():t
-ints := class(named(int)):
-    V:int
-    Get<override>():int = V
+# expect: no class at or below expr can be constructed without an instance of itself
+expr(t:type) := class<abstract>:
+    Sub:expr(t)
+    Eval():t
+lit := class(expr(int)):
+    N:int
+    Eval<override>():int = N
 holder(t:type) := class:
-    N:named(t)
-Run(H:holder(t) where t:type):t = H.N.Get()
-Main():void = Print("{Run(holder(int){N := ints{Name := "i", V := 3}})}")
+    E:expr(t)
+Run(H:holder(t) where t:type):t = H.E.Eval()
+Main():void = Print("ok")

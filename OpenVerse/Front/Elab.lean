@@ -1071,7 +1071,11 @@ partial def slotDefault (env : TyEnv) (dictBase : Nat) (params : List Ty) (visit
     if env.isRefClass n then
       -- the first class below `n` whose placeholder needs no instance of a
       -- class whose placeholder is being built
-      let mut lastErr := s!"no class at or below {n} can be constructed without an instance of itself, so a variable or temporary of type {n} has no initial value"
+      let selfErr := s!"no class at or below {n} can be constructed without an instance of itself, so a variable or temporary of type {(Ty.struct n ts).show} has no initial value"
+      let mut lastErr := selfErr
+      -- (a failure for want of an instance of itself deeper down is this
+      -- one, at the type the slot has: other failures are passed on)
+      let keep (msg : String) : String := if msg.startsWith "no class at or below " then selfErr else msg
       -- (instantiations that grow without end are cut off)
       let key := (Ty.struct n ts).show
       if visiting.length > 16 || key.length > 400 then throw lastErr
@@ -1090,21 +1094,29 @@ partial def slotDefault (env : TyEnv) (dictBase : Nat) (params : List Ty) (visit
         match (env.fieldsSeen n ts d).mapM fun (_, ft, _) =>
             slotDefault env dictBase params (dkey :: visiting) ft with
         | .ok fs => return .heap (.new (env.tagOf d)) fs
-        | .error msg => lastErr := msg
+        | .error msg => lastErr := keep msg
       if !pinnedOut.isEmpty && pinnedOut.length == (env.concreteBelow n).length then
         -- (its hidden placeholder class, or another's below it, which fix
         -- no more than it does, #157)
         let h0 := s!"{n}$placeholder"
         let hs := (if env.phs.contains h0 then [h0] else []) ++ env.phs.filter fun h => h != h0 && env.isSub h n
         for h in hs do
-          if !visiting.contains h then
-            match (env.fieldsSeen n ts h).mapM fun (_, ft, _) => slotDefault env dictBase params (h :: visiting) ft with
+          -- (again only at a part of each type it is being built at: a
+          -- placeholder at others is another object, `slot(slot(u))`'s
+          -- holds `slot(u)`'s, and the types shrink, so this ends; one at
+          -- types that grow, `n(t)`'s holding `n([]t)`'s, never would)
+          let hpre := s!"{h} as "
+          let hkey := hpre ++ key
+          let shrinks := visiting.all fun v =>
+            !v.startsWith hpre ||
+              (let k0 := String.ofList (v.toList.drop hpre.length)
+               key.length < k0.length && (k0.splitOn key).length > 1)
+          if shrinks then
+            match (env.fieldsSeen n ts h).mapM fun (_, ft, _) => slotDefault env dictBase params (hkey :: visiting) ft with
             | .ok fs => return .heap (.new (env.tagOf h)) fs
-            | .error msg => lastErr := msg
+            | .error msg => lastErr := keep msg
         if !hs.isEmpty then throw lastErr
-        let why := if (env.info n).isIface && (env.supers n).any (fun x => !(env.fields x).isEmpty)
-          then s!" (an interface that declares fields, or is below one, gets no placeholder object, #157)" else " (#142)"
-        throw s!"a variable or temporary of type {key} needs an initial value, and every class below {n} ({", ".intercalate pinnedOut}) fixes type arguments that {key} does not have, so none can be it{why}"
+        throw s!"a variable or temporary of type {key} needs an initial value, and every class below {n} ({", ".intercalate pinnedOut}) fixes type arguments that {key} does not have, so none can be it (#142)"
       throw lastErr
     -- a parametric class starts with no option set, which has every such type
     if env.classes.contains n then return .lit vt.default
@@ -1501,15 +1513,18 @@ def fieldIndex (fs : List (String × Ty × Option SExpr)) (f : String) : Option 
   ((fs.zip (List.range fs.length)).find? (·.1.1 == f)).map fun ((_, t, _), k) => (k, t)
 
 /-- Write `v` to field `f` (of type `t`, at position `k` in `sn`) of the
-    object in slot `obj`, of static type `sn(targs)`: in place at `k` when the
-    field has that position in every class below, otherwise after a test of
+    object in slot `obj`, of static type `sn(targs)`: in place when the field
+    has one position in every class below (`k`, or another for an interface
+    listed after a class or interface with fields), otherwise after a test of
     the object's class, as a read does (an interface's field can sit at
     different positions in the classes implementing it). The value is `v`. -/
 def setFieldAt (env : TyEnv) (p : Pos) (sn : String) (targs : List Ty) (obj : Nat) (f : String) (k : Nat) (t : Ty)
     (v : Expr) : EM Expr := do
   let ds := env.concreteBelow sn
   let pos := ds.map fun d => ((fieldIndex (env.fields d []) f).map (·.1)).getD k
-  if pos.all (· == k) then return .heap (.set k) [.local obj, v]
+  -- (where every class below has it, so does every placeholder below, #157)
+  let p0 := pos.headD k
+  if pos.all (· == p0) then return .heap (.set p0) [.local obj, v]
   if let some d := ds.find? fun d => !env.sameCore d sn && (env.fieldAcc.idxOf? (d, f)).isNone then
     eerr p s!"field '{f}' of {sn} sits at different places in the classes below it, and {d} repeats its type arguments or fixes them to types that mention type parameters: setting it is not supported yet (#53, #157)"
   let tv ← fresh t
@@ -3799,7 +3814,10 @@ partial def elabMember (ctx : Ctx) (p : Pos) (r : R) (m : String) : EM R := do
         let ds := ctx.types.concreteBelow sn
         let pos := ds.map fun d => ((fieldIndex (ctx.types.fields d []) f).map (·.1)).getD k
         if ctx.types.isVarField sn f then noteFx p ["reads"]
-        if pos.all (· == k) then return ⟨.heap (.get k) [r.e], t⟩
+        -- (where every class below has it, so does every placeholder below,
+        -- even when that is not `k`: an interface listed after another, #157)
+        let p0 := pos.headD k
+        if pos.all (· == p0) then return ⟨.heap (.get p0) [r.e], t⟩
         let env := ctx.types
         if let some d := ds.find? fun d => !env.sameCore d sn && (env.fieldAcc.idxOf? (d, f)).isNone then
           eerr p s!"field '{f}' of {sn} sits at different places in the classes below it, and {d} repeats its type arguments or fixes them to types that mention type parameters: reading it is not supported yet (#53, #157)"
@@ -5776,14 +5794,32 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   -- (#157) a hidden class below each generic class or interface whose
   -- concrete classes all fix some of its type arguments: a variable of its
   -- type at other type arguments starts as one. It has the class's fields
-  -- (an interface's: none, so only for interfaces whose own and inherited
-  -- interfaces declare no fields; a class's include its interfaces'), and
-  -- the program never makes one
+  -- (a class's include its interfaces'), and the program never makes one
+  -- (an interface's placeholder is laid out for reads through `n` and the
+  -- interfaces above it: each of `n`'s fields, inherited ones too, where
+  -- every class below `n` has it, when they agree, else after those, as a
+  -- read then tests the class first; padding between. A read through an
+  -- interface `T` above `n` goes straight to the field only when every class
+  -- below `T` has it at one place, and those include `n`'s, so it is the
+  -- place here too. A placeholder needs a concrete class below, and no two
+  -- fields share a place in one)
+  let ifaceLayout (n : String) : List (String × Ty × Option SExpr) := Id.run do
+    let ds := env.concreteBelow n
+    let mut fixed : List (Nat × String × Ty) := []
+    let mut free : List (String × Ty) := []
+    for (f, t, _) in env.fields n do
+      let pos := ds.map fun d => ((fieldIndex (env.fields d) f).map (·.1)).getD 0
+      match pos.head? with
+      | some p0 => if pos.all (· == p0) then fixed := fixed ++ [(p0, f, t)] else free := free ++ [(f, t)]
+      | none => free := free ++ [(f, t)]
+    let size := (fixed.map (·.1 + 1)).foldl max 0
+    let laid := (List.range size).map fun k => match fixed.find? (·.1 == k) with
+      | some (_, f, t) => (f, t, (none : Option SExpr))
+      | none => (s!"$pad{k}", Ty.void, none)
+    return laid ++ free.map fun (f, t) => (f, t, none)
   let needsPh (n : String) : Bool :=
-    let i := env.info n
     (env.sparams.lookup n).isSome && env.isRefClass n &&
-    (env.concreteBelow n).all (fun d => env.pinned.contains d && (env.corePins d).any Option.isSome) &&
-    (!i.isIface || (env.supers n).all fun x => (env.fields x).isEmpty)
+    (env.concreteBelow n).all (fun d => env.pinned.contains d && (env.corePins d).any Option.isSome)
   for n in env.classes.filter needsPh do
     let h := s!"{n}$placeholder"
     let i := env.info n
@@ -5791,7 +5827,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     let own := ps.map fun (v, c) => Ty.param v c
     env := { env with
       classes := env.classes ++ [h],
-      structs := env.structs ++ [(h, if i.isIface then [] else (env.structs.lookup n).getD [])],
+      structs := env.structs ++ [(h, if i.isIface then ifaceLayout n else (env.structs.lookup n).getD [])],
       sparams := env.sparams ++ [(h, ps)],
       cinfo := env.cinfo ++ [(h, { parent := if i.isIface then none else some n,
                                    ifaces := if i.isIface then [n] else [], isAbstract := true })],
