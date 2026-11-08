@@ -1281,9 +1281,14 @@ def textUsesRational (src : String) : Bool :=
   | .ok toks => usesRational toks
   | .error _ => false
 
+/-- A marker that the source may use `ReplaceAll` (#150). -/
+def replaceAllMarker : String := "$uses:replaceAll"
+
 def withRatMarker (toks : Array Token) (tops : List STop) : List STop :=
   let p : Pos := { line := 0, col := 0 }
-  if usesRational toks then tops ++ [.const p ratMarker none (.block p [])] else tops
+  let tops := if usesRational toks then tops ++ [.const p ratMarker none (.block p [])] else tops
+  if toks.any (·.identName? == some "ReplaceAll") then tops ++ [.const p replaceAllMarker none (.block p [])]
+  else tops
 
 /-- Parse a source file: its definitions, and the files it imports. `file`
     names it in error positions (empty for the main file). -/

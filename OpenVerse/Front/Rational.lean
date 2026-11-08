@@ -69,4 +69,30 @@ ratLt(A:tuple(int, int), B:tuple(int, int))<computes><decides>:void =
 /-- The helpers, parsed (their names renamed). -/
 def ratTops : Except String (List STop) := parsePrelude ratPrelude ratNames
 
+/-- `A.ReplaceAll(Pattern, Replacement)` (#150): every non-overlapping
+    occurrence of the pattern, left to right, replaced; an empty pattern
+    changes nothing. -/
+def replaceAllPrelude : String := "
+replaceAll(A:[]t, P:[]t, R:[]t where t:subtype(comparable)):[]t =
+    var Out:[]t = array{}
+    var I:int = 0
+    if (P.Length = 0):
+        set Out = A
+        set I = A.Length
+    loop:
+        if (I >= A.Length) then break
+        if (S := A.Slice[I, I + P.Length], S = P):
+            set Out += R
+            set I += P.Length
+        else if (E := A[I]):
+            set Out += array{E}
+            set I += 1
+        else:
+            break
+    Out
+"
+
+def replaceAllTops : Except String (List STop) :=
+  parsePrelude replaceAllPrelude ["replaceAll", "A", "P", "R", "Out", "I", "S", "E", "t"]
+
 end OpenVerse.Front

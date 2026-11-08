@@ -772,7 +772,7 @@ def builtins : List String :=
     definition, if any, is the one a call means. -/
 def softBuiltins : List String :=
   ["Round", "Int", "Sqrt", "Exp", "Ln", "Log", "Pow", "Sin", "Cos", "Tan", "ArcSin", "ArcCos", "ArcTan",
-   "IsFinite"]
+   "IsFinite", "Concatenate"]
 
 partial def resolveTy (env : TyEnv) (p : Pos) : STy → EM Ty
   | .name "int" => pure .int
@@ -1997,6 +1997,26 @@ partial def elabAppBase (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (b
     -- (a soft built-in the program defines is the program's)
     let builtinName := if (softBuiltins.contains name || name == "any") && (ctx.sig? name).isSome then "$program" else name
     match builtinName with
+    | "Concatenate" =>
+      -- (#150) an array of arrays flattened, or several arrays one after
+      -- the other (as a tuple of them converts to an array of arrays)
+      match args with
+      | [] => match exp with
+        | some (.arr t) => return ⟨.lit (.arr #[]), .arr t⟩
+        | _ => eerr p "Concatenate() needs an expected array type"
+      | [a] =>
+        let r ← elabE ctx a (match exp with | some t => some (.arr t) | none => none)
+        match r.ty with
+        | .arr (.arr t) => return ⟨.prim .flatten [r.e], .arr t⟩
+        | t => eerr p s!"Concatenate takes arrays, or an array of arrays, found {t.show}"
+      | a :: rest =>
+        let r0 ← elabE ctx a exp
+        let .arr t := r0.ty | eerr a.pos s!"Concatenate takes arrays, found {r0.ty.show}"
+        let mut acc := r0.e
+        for b in rest do
+          let rb ← elabE ctx b (some (.arr t))
+          acc := p2 .concat acc (← coerce b.pos rb (.arr t))
+        return ⟨acc, .arr t⟩
     | "any" =>
       -- `any(X)`: X as an `any` (#138), evaluated
       let [a] := args | eerr p "any(…) takes one value"
@@ -2663,7 +2683,10 @@ partial def elabGenericCall (ctx : Ctx) (p : Pos) (s : Sig) (args : List SExpr) 
 partial def elabMethod (ctx : Ctx) (p : Pos) (r : R) (m : String) (args : List SExpr) (bracket : Bool) :
     EM R := do
   let .arr t := r.ty | eerr p s!"{r.ty.show} has no method '{m}'"
-  if !bracket then eerr p s!"{m} can fail: call it with A.{m}[…]"
+  -- (the methods that cannot fail take parentheses, #150)
+  let total := ["RemoveAllElements", "ReplaceAllElements", "ReplaceAll"].contains m
+  if total && bracket then eerr p s!"{m} cannot fail: call it with A.{m}(…)"
+  if !total && !bracket then eerr p s!"{m} can fail: call it with A.{m}[…]"
   let ta ← fresh r.ty
   let len := Expr.prim .len [.local ta]
   let int (i : Int) : Expr := .lit (.int i)
@@ -2720,7 +2743,57 @@ partial def elabMethod (ctx : Ctx) (p : Pos) (r : R) (m : String) (args : List S
     let chk := Expr.seq (p2 .le (int 0) (.local tk)) (p2 .le (.local tk) len)
     return ⟨.seq start (.seq (.assign tk es[0]!) (.seq (.assign tb (← coerce p rb r.ty)) (.seq chk
       (p2 .concat (p2 .concat (← slice (int 0) (.local tk)) (.local tb)) (← slice (.local tk) len))))), r.ty⟩
-  | _, _ => eerr p s!"unknown array method '{m}' with {args.length} argument(s) (openverse supports Slice, Find, RemoveElement, ReplaceElement, Insert)"
+  -- (#150) the first occurrence of `x`, removed or replaced: failing when
+  -- there is none
+  | "RemoveFirstElement", [x] | "ReplaceFirstElement", [x, _] =>
+    if !t.comparable ctx.types then eerr p (notComparable ctx.types t s!"the element type of {m}")
+    let rx ← elabE ctx x (some t)
+    let tx ← fresh t
+    let ti ← fresh .int
+    let found := Expr.forE ti (.prim .range [int 0, p2 .sub len (int 1)])
+      (p2 .eq (p2 .index (.local ta) (.local ti)) (.local tx)) (.local ti)
+    let tk ← fresh .int
+    let first := Expr.seq (.assign tx (← coerce p rx t)) (.assign tk (p2 .index found (int 0)))
+    match m, args with
+    | "ReplaceFirstElement", [_, y] =>
+      let ry ← elabE ctx y (some t)
+      return ⟨.seq start (.seq first (.prim .arrSet [.local ta, .local tk, ← coerce p ry t])), r.ty⟩
+    | _, _ =>
+      return ⟨.seq start (.seq first
+        (p2 .concat (← slice (int 0) (.local tk)) (← slice (p2 .add (.local tk) (int 1)) len))), r.ty⟩
+  -- `A.Remove[i, j]`: without the elements i…j-1 (0 ≤ i ≤ j ≤ the length)
+  | "Remove", [a, b] =>
+    let es ← elabInts ctx p [a, b]
+    let tlo ← fresh .int
+    let thi ← fresh .int
+    let chk := Expr.seq (p2 .le (int 0) (.local tlo)) (.seq (p2 .le (.local tlo) (.local thi))
+      (p2 .le (.local thi) len))
+    return ⟨.seq start (.seq (.assign tlo es[0]!) (.seq (.assign thi es[1]!) (.seq chk
+      (p2 .concat (← slice (int 0) (.local tlo)) (← slice (.local thi) len))))), r.ty⟩
+  -- every occurrence of `x`, removed or replaced: never failing
+  | "RemoveAllElements", [x] | "ReplaceAllElements", [x, _] =>
+    if !t.comparable ctx.types then eerr p (notComparable ctx.types t s!"the element type of {m}")
+    let rx ← elabE ctx x (some t)
+    let tx ← fresh t
+    let te ← fresh t
+    let setX := Expr.assign tx (← coerce p rx t)
+    match m, args with
+    | "ReplaceAllElements", [_, y] =>
+      let ry ← elabE ctx y (some t)
+      let ty ← fresh t
+      return ⟨.seq start (.seq setX (.seq (.assign ty (← coerce p ry t))
+        (.forE te (.local ta) (.lit .void)
+          (.ite (p2 .eq (.local te) (.local tx)) (.local ty) (.local te))))), r.ty⟩
+    | _, _ =>
+      return ⟨.seq start (.seq setX (.forE te (.local ta) (p2 .ne (.local te) (.local tx)) (.local te))), r.ty⟩
+  -- `A.ReplaceAll(Pattern, Replacement)`: a helper written in Verse
+  | "ReplaceAll", [pat, rep] =>
+    if !t.comparable ctx.types then eerr p (notComparable ctx.types t "the element type of ReplaceAll")
+    let nm := s!"$receiver{ta}"
+    let c2 := { ctx with locals := { name := nm, slot := ta, ty := r.ty, mutable := false } :: ctx.locals }
+    let rc ← elabApp c2 p (.ident p "$replaceAll") [.ident p nm, pat, rep] false (some r.ty)
+    return ⟨.seq start rc.e, r.ty⟩
+  | _, _ => eerr p s!"unknown array method '{m}' with {args.length} argument(s) (openverse supports Slice, Find, RemoveFirstElement, RemoveElement, Remove, RemoveAllElements, ReplaceFirstElement, ReplaceElement, ReplaceAllElements, ReplaceAll, Insert, Last)"
 
 /-- `A[i]` on an array (failable) or `T(k)` on a tuple. -/
 partial def elabIndexLike (ctx : Ctx) (p : Pos) (r : R) (args : List SExpr) (bracket : Bool) : EM R := do
@@ -3783,7 +3856,10 @@ def expandCtors (ctors : List (Pos × String × List SParam × List TParam × Li
     and `Prog.checkTypes`. -/
 def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except String Compiled := do
   -- rationals (#116): the helpers, for a program that may use them
-  let isRatMarker : STop → Bool := fun | .const _ n _ _ => n == ratMarker | _ => false
+  let isRatMarker : STop → Bool := fun
+    | .const _ n _ _ => n == ratMarker || n == replaceAllMarker
+    | _ => false
+  let usesReplaceAll := allTops0r.any fun | .const _ n _ _ => n == replaceAllMarker | _ => false
   let usesRat := allTops0r.any isRatMarker || opts.entry.isSome
   -- (a type of the program's own cannot take a built-in type's name)
   for t in allTops0r do
@@ -3792,6 +3868,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       if ("char32" :: typeNames).contains n then throw s!"{p.show}: {n} is a built-in type"
     | _ => pure ()
   let helpers ← if usesRat then ratTops else pure []
+  let helpers := helpers ++ (← if usesReplaceAll then replaceAllTops else pure [])
   let allTops000 := allTops0r.filter (!isRatMarker ·)
   -- modules (#112): every reference to a member, qualified (the entry
   -- expression's too)
