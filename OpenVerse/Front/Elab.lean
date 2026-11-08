@@ -896,6 +896,9 @@ def fnFits (env : TyEnv) (s : Sig) (t : Ty) : Bool :=
         else match s.params, qs0 with
           | [.tup es], _ => if es.length == k then some (es, qs0) else none
           | _, [.tup es] => if es.length == s.params.length then some (s.params, es) else none
+          -- (a single parameter, a type parameter say, at the tuple of the
+          -- type's parameters: matching decides)
+          | [_], _ => if k ≥ 2 then some (s.params, [.tup qs0]) else none
           | _, _ => none
       match reshaped with
       | none => false
@@ -2154,12 +2157,14 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
   | .logicLit p e =>
     let e := (Choice.takeFirst? e).getD e
     let r ← elabE { ctx with canFail := true, inTaking := true } e none
-    if !(r.e.mayFail ctx.sigProg) then eerr p "logic{…} needs an expression that can fail"
+    if !(r.e.mayFail ctx.sigProg) && (← get).fnNeeds.isEmpty then eerr p "logic{…} needs an expression that can fail"
     return ⟨Expr.logicE r.e, .logic⟩
   | .ite p conds thenE elseE =>
     let (rc, ctxT) ← if Choice.hasChoice conds then elabOneClauses { ctx with canFail := true } conds
       else elabSeq { ctx with canFail := true, inTaking := true } conds none
-    if !(rc.e.mayFail ctx.sigProg) then
+    -- (not while a function value is asked for, #214, #231: a call through
+    -- it may fail once its class is made, in the elaboration that follows)
+    if !(rc.e.mayFail ctx.sigProg) && (← get).fnNeeds.isEmpty then
       eerr p "the condition of this if cannot fail (Verse requires a failable condition)"
     let thenCtx := { ctxT with canFail := ctx.canFail, inTaking := ctx.inTaking }
     match elseE with
@@ -4222,7 +4227,7 @@ partial def elabBranchAlts (ctx : Ctx) (p : Pos) (i : SExpr) (sty : Option STy) 
     | some cs =>
       let (rc, cT) ← if Choice.hasChoice cs then elabOneClauses { ctx with canFail := true } cs
         else elabSeq { ctx with canFail := true, inTaking := true } cs none
-      if !(rc.e.mayFail ctx.sigProg) then
+      if !(rc.e.mayFail ctx.sigProg) && (← get).fnNeeds.isEmpty then
         eerr p "the condition of this if cannot fail (Verse requires a failable condition)"
       conds := conds.push (some rc.e)
       ctxs := ctxs.push { cT with canFail := ctx.canFail, inTaking := ctx.inTaking }

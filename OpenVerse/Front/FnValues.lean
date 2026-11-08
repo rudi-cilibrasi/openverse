@@ -265,10 +265,24 @@ partial def plainComparable : STy → Bool
   | .map k v => plainComparable k && plainComparable v
   | _ => false
 
+/-- A type with `string` spelled `[]char` everywhere, so that equal types
+    compare equal (#231). -/
+partial def normS : STy → STy
+  | .name "string" => .arr (.name "char")
+  | .arr t => .arr (normS t)
+  | .opt t => .opt (normS t)
+  | .tup ts => .tup (ts.map normS)
+  | .map a b => .map (normS a) (normS b)
+  | .app n ts => .app n (ts.map normS)
+  | .fn ps es r => .fn (ps.map normS) es (normS r)
+  | t => t
+
 /-- `a` is `b` or a subtype the elaborator converts at a parameter or a
     result (#214): `int` to `rational`, a class to one above it. Nothing
     else, so a value class made for a function type always elaborates. -/
-def subAt (anc : String → List String) (a b : STy) : Bool :=
+def subAt (anc : String → List String) (a0 b0 : STy) : Bool :=
+  let a := normS a0
+  let b := normS b0
   reprStr a == reprStr b || match a, b with
     | .name "int", .name "rational" => true
     | .name x, .name y => (anc x).contains y
@@ -483,14 +497,17 @@ def desugar (tops : List STop) (extra : List STop := []) (requests : List (Strin
         if es.length == ps.length then
           some (ps, es, (List.range ps.length).map fun (i : Nat) => SExpr.app p (.ident p "$X0") [.int p (i : Int)] false)
         else none
+      -- (a single parameter of another type, a type parameter say, at the
+      -- tuple of the type's parameters: matching decides)
+      | [_], _ => if qs.length ≥ 2 then some (ps, [.tup qs], [.tuple p (xs qs.length)]) else none
       | _, _ => none
   for (p, n, ps, effs, r) in values do
     let own := shapeOf ps.length effs
     let mut k := 0
     for (qs, es, u) in requested n do
       let some (ps', qs', args) := reshape p (ps.map (·.ty)) qs | continue
-      let exact := qs.length == ps.length && ((ps.map (·.ty)).zip qs).all (fun (a, b) => reprStr a == reprStr b) &&
-        reprStr r == reprStr u
+      let exact := qs.length == ps.length && ((ps.map (·.ty)).zip qs).all (fun (a, b) => reprStr (normS a) == reprStr (normS b)) &&
+        reprStr (normS r) == reprStr (normS u)
       -- (contravariant parameters, a covariant result)
       if !exact && (qs'.zip ps').all (fun (a, b) => subAt anc a b) && subAt anc r u then
         if let some c := variant p n own k qs es u args then
@@ -530,8 +547,8 @@ def desugar (tops : List STop) (extra : List STop := []) (requests : List (Strin
     if ctps.isEmpty then
       let mut k := 0
       for (qs, es, u) in requested s!".{c}${m}" do
-        let exact := qs.length == ps.length && ((ps.map (·.ty)).zip qs).all (fun (a, b) => reprStr a == reprStr b) &&
-          reprStr r == reprStr u
+        let exact := qs.length == ps.length && ((ps.map (·.ty)).zip qs).all (fun (a, b) => reprStr (normS a) == reprStr (normS b)) &&
+          reprStr (normS r) == reprStr (normS u)
         let s := shapeOf qs.length es
         if !exact && qs.length == ps.length && own.within s &&
             (qs.zip (ps.map (·.ty))).all (fun (a, b) => subAt anc a b) && subAt anc r u then
