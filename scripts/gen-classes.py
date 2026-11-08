@@ -1280,6 +1280,16 @@ class Gen:
         sd = self.fresh('sd')
         L.append('%s := class(%s(int), %s(int)):' % (sd, sb, sx))
         L.append('    %s:int = %s' % (self.fresh('SL'), lit()))
+        # (classes that fix t and take the field from sy alone)
+        sf = sg = None
+        if chance(0.5):
+            sf = self.fresh('sf')
+            L.append('%s := class(%s(int)):' % (sf, sy))
+            L.append('    %s:int = %s' % (self.fresh('SJ'), lit()))
+        if chance(0.5):
+            sg = self.fresh('sg')
+            L.append('%s := class(%s(int)):' % (sg, sb))
+            L.append('    %s:int = %s' % (self.fresh('SM'), lit()))
         gx, gy, gb = self.fresh('SFx'), self.fresh('SFy'), self.fresh('SFb')
         L.append('%s(N:%s(t) where t:type):t = N.%s' % (gx, sx, f))
         L.append('%s(N:%s(t) where t:type):int = N.%s' % (gy, sy, f))
@@ -1292,9 +1302,25 @@ class Gen:
         c, d = tmpname('SC'), tmpname('SD')
         M.append('%s := %s{%s := %s}' % (c, sc, f, lit()))
         M.append('%s := %s{%s := %s}' % (d, sd, f, lit()))
+        ys, bs = [c, d], [d]
+        if sf:
+            v = tmpname('SFv')
+            M.append('%s := %s{%s := %s}' % (v, sf, f, lit()))
+            ys.append(v)
+        if sg:
+            v = tmpname('SG')
+            M.append('%s := %s{%s := %s}' % (v, sg, f, lit()))
+            ys.append(v)
+            bs.append(v)
         for _ in range(R.randint(2, 6)):
-            k = R.randrange(4)
+            k = R.randrange(5)
             o = R.choice([c, d])
+            if k == 4:
+                o = R.choice(ys)
+                b = R.choice(bs)
+                M.append('%s(%s, %s)' % (ty, o, lit(10, 99)))
+                M.append('Print("sy {%s(%s)} {%s(%s)}")' % (gy, o, gb, b))
+                continue
             if k == 0:
                 M.append('Print("sf {%s(%s)} {%s(%s)} {%s.%s}")' % (gx, o, gy, o, o, f))
             elif k == 1:

@@ -5819,8 +5819,11 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       let pos := ds.map fun d => ((fieldIndex (env.fields d) f).map (·.1)).getD 0
       let moved := (env.info i).isIface && !pos.all (· == pos.headD 0)
       let τi := env.coreFieldTy i f
+      -- (a read that tests the class first needs an accessor for each class
+      -- that fixes type arguments, also one that types the field as `i`)
+      let retyped := ds.any fun d => env.coreFieldTy d f != τi
       for d in ds do
-        if (moved || env.coreFieldTy d f != τi) && fixes d i && env.sameCorePinned d i &&
+        if (moved || retyped) && fixes d i && env.sameCorePinned d i &&
             !fieldAcc.contains (d, f) then
           fieldAcc := fieldAcc.push (d, f)
           accFixers := accFixers.push d
