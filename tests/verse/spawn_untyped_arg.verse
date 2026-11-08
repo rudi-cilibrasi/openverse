@@ -1,10 +1,12 @@
-# a spawned call's argument with no type of its own takes the callee's
-# parameter type at its type arguments (#174)
-Count(Xs:[]u where u:type)<suspends>:int =
-    Sleep(1.0)
-    Xs.Length
+# a spawned argument with no type of its own, in a generic function: the callee's parameter type at its type arguments (#174)
+Both(X:?t, Y:t, Z:[]t where t:type)<suspends>:int =
+    Sleep(0.5)
+    Z.Length + (if (X?) then 1 else 0)
+Gen(Y:u where u:type)<suspends>:int =
+    T := spawn{Both(false, Y, array{})}
+    T.Await()
 Main()<suspends>:void =
-    E:[]int = array{}
-    T := spawn{Count(E)}
-    U:task(int) = spawn{Count(array{1, 2, 3})}
-    Print("{T.Await()} {U.Await()}")
+    T := spawn{Both(false, 3, array{})}
+    Print("{T.Await()}")
+    Print("{Gen("s")}")
+    Print("{Gen(array{1})}")

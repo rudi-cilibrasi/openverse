@@ -808,10 +808,13 @@ Main()<suspends>:void =
   Verse Core, the proofs or the C runtime. A call site keeps its callee's
   frame, so a loop of calls allocates once.
 - **Generic functions.** A generic function with a `branch`, a `rush`, or a
-  `spawn` of a call whose types mention its type parameters is compiled
-  once for each type it is used at (#174), as the scheduler's tasks have no
-  type arguments. One that calls itself at ever bigger types (`F(X:t)`
-  calling `F(array{X})`) would need endlessly many copies and is refused.
+  `spawn` whose call's arguments or result have types that mention its
+  type parameters is compiled once for each type it is used at (#174), as
+  the scheduler's tasks have no type arguments; so is a generic function
+  that uses such a function at its own type parameters. Such a function
+  calling itself at ever bigger types (`F(X:t)` calling `F(array{X})`)
+  would need endlessly many copies and is refused, as are programs that
+  would need more than 500 copies.
 
 ## Readings openverse takes
 

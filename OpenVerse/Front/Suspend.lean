@@ -258,15 +258,29 @@ partial def liftChains (m base : Nat) : Expr → StateM (Array (Expr × List Nat
   | .forE i it f b => return .forE i (← liftChains m base it) (← liftChains m base f) (← liftChains m base b)
   | x => return x
 
-/-- Every call in `e`: its callee and arguments. -/
-partial def callsOf : Expr → List (Nat × List Expr)
-  | .call f es => (f, es) :: (es.map callsOf).flatten
-  | .assign _ e | .ret e | .print e | .loop e => callsOf e
-  | .seq a b => callsOf a ++ callsOf b
-  | .prim _ es | .heap _ es => (es.map callsOf).flatten
-  | .ite c t e => callsOf c ++ callsOf t ++ callsOf e
-  | .forE _ it f b => callsOf it ++ callsOf f ++ callsOf b
-  | _ => []
+/-- `e` without the tests in `Typed.dispatch`'s shape that no object can
+    pass at the slot types `Γ`: the receiver's type arguments are closed and
+    disagree with the tested classes' pins (#142). A copy of a generic
+    function at closed types has such tests where the generic one had a
+    refinement (#174), and the checker types a dispatch only when its pins
+    can agree. -/
+partial def pruneDead (S : Sigs) (Γ : List VTy) : Expr → Expr
+  | .ite c@(.heap (.isTag us) [.local y]) t@(.call _ (.local y' :: _)) e =>
+    let dead := y == y' && match Γ[y]?, us.head? with
+      | some (.ref _ a), some u => a.all VTy.closed && !VTy.pinsOK ((S.pinsOf u).take a.length) a
+      | _, _ => false
+    if dead then pruneDead S Γ e else .ite c (pruneDead S Γ t) (pruneDead S Γ e)
+  | .assign i x => .assign i (pruneDead S Γ x)
+  | .ret x => .ret (pruneDead S Γ x)
+  | .print x => .print (pruneDead S Γ x)
+  | .loop x => .loop (pruneDead S Γ x)
+  | .seq a b => .seq (pruneDead S Γ a) (pruneDead S Γ b)
+  | .call f es => .call f (es.map (pruneDead S Γ))
+  | .prim p es => .prim p (es.map (pruneDead S Γ))
+  | .heap op es => .heap op (es.map (pruneDead S Γ))
+  | .ite c t x => .ite (pruneDead S Γ c) (pruneDead S Γ t) (pruneDead S Γ x)
+  | .forE i it f b => .forE i (pruneDead S Γ it) (pruneDead S Γ f) (pruneDead S Γ b)
+  | x => x
 
 /-- `e` with each call `call g es` for which `r g es` gives a function
     redirected to it (#174). -/

@@ -424,17 +424,22 @@ could not be typed; generic frames are always resumed by their callers, who
 know their type arguments.
 
 **Specialising generic functions with roots.** A generic function whose
-roots would depend on its type parameters (a `branch` or `rush`, a
-`spawn` reading values of such types, or a call of such a function at such
-types) is specialised before the lowering (`specialise`, #174). Verse Core
+roots would depend on its type parameters (a `branch` or `rush`; a
+`spawn` whose call's arguments or task have such types, or a spawned
+dispatch reading values of such types; any `spawn` in an immediate one,
+whose roots are made only for non-generic functions; or a call of such a
+function at such types) is specialised before the lowering (`specialise`, #174). Verse Core
 is first-order and a generic call passes one witness argument per type
 argument, built so that the checker infers exactly that type, so each
 call's instantiation is read off its last arguments. A call at closed types
 goes to a copy at those types: the same body, its slot types and signature
 substituted. The copies' own calls are handled the same way, from a
-worklist. The generic originals are then never called, and keep only their
-parameters. A bound on the number of copies turns polymorphic recursion
-into an error.
+worklist. In a copy, a refined dispatch test (#142) whose classes' pins
+its closed types rule out is dropped, as the checker types such a test
+only when the pins can agree. The generic originals are then never called;
+they keep only their parameters and are not lowered. Bounds on the size of
+the types and on the number of copies turn polymorphic recursion into an
+error.
 
 ## Classes as references
 

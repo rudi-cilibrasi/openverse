@@ -4371,32 +4371,48 @@ def concTops : Except String (List STop) :=
     "WaitDone", "Await", "spawnMark", "t", "Sch", "Dead", "evrec", "Got", "Next", "Head", "Tail", "Cur", "W", "L", "V",
     "EvAwait", "E", "branchMark", "rushMark", "signalAll", "H", "StickyAwait", "Last", "CancelCur", "Cancelled", "Running", "Root", "cancelMark"]
 
+/-- The number of constructors in a Verse Core type (to bound the types a
+    specialisation is made at, #174). -/
+partial def _root_.OpenVerse.VTy.size : VTy → Nat
+  | .arr t | .opt t => 1 + t.size
+  | .tup ts | .ref _ ts => 1 + (ts.map VTy.size).sum
+  | _ => 1
+
 /-- (#174) Specialise the generic functions whose tasks' roots would depend
     on their type parameters: those with a `branch` or `rush` (marks
-    `branchMark`, `rushMark`), or a `spawn` (`spawnMark`) reading values of
-    such types, and those calling one at such types. Each call of one at
-    closed type arguments, read off the call's witnesses (its last
-    `ntpOf g` arguments, whose types the checker infers exactly), goes to a
-    copy at those types (appended to `fns`, `slotTys`), whose own calls are
-    handled the same way. The originals are then never called and keep only
-    their parameters. Gives the functions, their slot types, the copies'
-    signatures, and each copy's original and type arguments. -/
+    `branchMark`, `rushMark`), or a `spawn` (`spawnMark`) whose call's
+    arguments or result have such types (or a spawned dispatch reading
+    values of such types), or (immediate ones, `isSusp` false) any `spawn`,
+    and those calling one at such types. Each call of one at closed type
+    arguments, read off the call's witnesses (its last `ntpOf g` arguments,
+    whose types the checker infers exactly), goes to a copy at those types
+    (appended to `fns`, `slotTys`), whose own calls are handled the same
+    way; in a copy, the refined dispatch tests its types rule out are
+    dropped. The originals are then never called and keep only their
+    parameters. Gives the functions, their slot types, the copies'
+    signatures, each copy's original and type arguments, and which
+    functions were replaced. -/
 def specialise (fns0 : Array Fn) (slotTys0 : Array (List VTy)) (S0 : Sigs) (ntpOf : Nat → Nat)
-    (branchMark rushMark spawnMark : Nat) :
-    Except String (Array Fn × Array (List VTy) × Array (List VTy × VTy) × Array (Nat × List VTy)) := do
+    (isSusp : Nat → Bool) (branchMark rushMark spawnMark : Nat) :
+    Except String (Array Fn × Array (List VTy) × Array (List VTy × VTy) × Array (Nat × List VTy) × Array Bool) := do
   let mut fns := fns0
   let mut slotTys := slotTys0
   let nOrig := fns.size
   let mut specSigs : Array (List VTy × VTy) := #[]
   let mut needy : Array Bool := #[]
+  let resTy (S : Sigs) (gi : Nat) : VTy := ((S.fns[gi]?).map (·.2)).getD .void
   for gi in List.range nOrig do
     let Γ := slotTys[gi]!
+    let ρ := resTy S0 gi
+    let openTy (e : Expr) : Bool := (tc S0 Γ ρ e none).all (·.mentionsVar)
     let openSlot (j : Nat) : Bool := ((Γ[j]?).map (·.mentionsVar)).getD false
+    let spawnOpen (es : List Expr) : Bool := match es with
+      | [.prim .mkArr [.seq (.call _ hs) _, .seq (.local t) _]] => openSlot t || hs.any openTy
+      | _ => (Suspend.slotsOf (.prim .mkTup es)).any openSlot
     needy := needy.push (ntpOf gi > 0 && (Suspend.callsOf fns[gi]!.body).any fun (g, es) =>
-      g == branchMark || g == rushMark || (g == spawnMark && (Suspend.slotsOf (.prim .mkTup es)).any openSlot))
+      g == branchMark || g == rushMark || (g == spawnMark && (!isSusp gi || spawnOpen es)))
   let witTys (S : Sigs) (Γ : List VTy) (ρ : VTy) (g : Nat) (es : List Expr) : List (Option VTy) :=
     (es.drop (es.length - ntpOf g)).map fun e => tc S Γ ρ e none
-  let resTy (S : Sigs) (gi : Nat) : VTy := ((S.fns[gi]?).map (·.2)).getD .void
   -- (a call of one at types that mention the caller's type parameters: the
   -- caller needs specialising too)
   let mut changed := true
@@ -4422,14 +4438,18 @@ def specialise (fns0 : Array Fn) (slotTys0 : Array (List VTy)) (S0 : Sigs) (ntpO
     for (g, es) in calls do
       let some θ := (witTys S Γ ρ g es).mapM id
         | throw s!"in {fns[gi]!.name}: a type argument of a call of {fns[g]!.name} has no type of its own (#174)"
+      -- (types that grow at each copy: polymorphic recursion)
+      if θ.any (·.size > 40) then
+        throw s!"{fns[g]!.name} would be compiled at ever bigger types: a generic function with branch, rush or spawn, or one using such a function at its own type parameters, cannot call itself at bigger types (#174)"
       if θ.any (·.mentionsVar) then throw s!"internal error: specialising a call of {fns[g]!.name} in {fns[gi]!.name}"
       if !specKeys.contains (g, θ) then
         if specKeys.size ≥ 500 then
-          throw s!"{fns[g]!.name} is used at too many types: a generic function with branch, rush or spawn cannot call itself at ever bigger types (#174)"
+          throw s!"more than 500 copies of generic functions with branch, rush or spawn, one per type each is used at (last {fns[g]!.name}): a function calling itself at ever bigger types, or many nested generic uses, cannot be compiled (#174)"
         let σ : Nat → VTy := fun i => θ.getD i (.var i)
         let fn := fns[g]!
-        fns := fns.push { fn with name := s!"{fn.name}$at{specKeys.size}" }
-        slotTys := slotTys.push (slotTys[g]!.map (VTy.subst σ))
+        let Γc := slotTys[g]!.map (VTy.subst σ)
+        fns := fns.push { fn with name := s!"{fn.name}$at{specKeys.size}", body := Suspend.pruneDead S0 Γc fn.body }
+        slotTys := slotTys.push Γc
         let (ps, τ) := (S0.fns[g]?).getD ([], .void)
         specSigs := specSigs.push (ps.map (VTy.subst σ), τ.subst σ)
         needy := needy.push false
@@ -4450,7 +4470,7 @@ def specialise (fns0 : Array Fn) (slotTys0 : Array (List VTy)) (S0 : Sigs) (ntpO
       let fn := fns[gi]!
       fns := fns.set! gi { fn with nslots := fn.arity, body := .prim .userErr [] }
       slotTys := slotTys.set! gi (slotTys[gi]!.take fn.arity)
-  return (fns, slotTys, specSigs, specKeys)
+  return (fns, slotTys, specSigs, specKeys, needy.extract 0 nOrig)
 
 /-- Elaborate a parsed program into a Verse Core program that passes `Prog.check`
     and `Prog.checkTypes`. -/
@@ -5601,20 +5621,16 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     -- type parameters, specialised at the types they are called at
     let sigOf (f : Nat) : Option Sig := allS.find? (·.idx == f)
     let nOrig := fns.size
-    let (fns1, slotTys1, specSigs, specKeys) ← specialise fns slotTys
+    let (fns1, slotTys1, specSigs, specKeys, replaced) ← specialise fns slotTys
       { fns := fsigs0, classes := classTable, protos, pins }
-      (fun f => ((sigOf f).map (·.tparams.length)).getD 0) branchMark rushMark spawnMark
+      (fun f => ((sigOf f).map (·.tparams.length)).getD 0) (fun f => ((sigOf f).map (·.suspends)).getD false)
+      branchMark rushMark spawnMark
     fns := fns1
     slotTys := slotTys1
     let fsigs0 := fsigs0 ++ specSigs.toList
     fsigs := fsigs ++ specSigs.toList
     let specUser : List (Nat × String × Nat) := specKeys.toList.zipIdx.filterMap fun ((g, _), k) =>
       if ((sigOf g).map (fun s => s.suspends && !leaves.contains s.name)).getD false then
-        some (nOrig + k, fns[nOrig + k]!.name, 0)
-      else none
-    let specImm : List (Nat × String × Nat) := specKeys.toList.zipIdx.filterMap fun ((g, _), k) =>
-      if ((sigOf g).map (fun s => !s.suspends && !s.isConst)).getD false &&
-          !(Suspend.spawnSites spawnMark fns[nOrig + k]!.body).isEmpty then
         some (nOrig + k, fns[nOrig + k]!.name, 0)
       else none
     -- each `spawn` of a method with several implementations (#173): its
@@ -5650,8 +5666,15 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       disps := disps ++ [(dispBase + k, s!"$dispatch{k}", 0)]
     let fsigs0 := fsigs0 ++ dispSigs.toList
     fsigs := fsigs ++ dispSigs.toList
-    let user := (allS.filter fun s => s.suspends && !leaves.contains s.name).map (fun s =>
-      (s.idx, s.name, s.tparams.length)) ++ specUser ++ disps
+    -- (the specialised originals, never called, are not lowered)
+    let user := (allS.filter fun s => s.suspends && !leaves.contains s.name && !(replaced[s.idx]?.getD false)).map
+      (fun s => (s.idx, s.name, s.tparams.length)) ++ specUser ++ disps
+    -- (copies of immediate functions that spawn, their spawns lifted)
+    let specImm : List (Nat × String × Nat) := specKeys.toList.zipIdx.filterMap fun ((g, _), k) =>
+      if ((sigOf g).map (fun s => !s.suspends && !s.isConst)).getD false &&
+          !(Suspend.spawnSites spawnMark fns[nOrig + k]!.body).isEmpty then
+        some (nOrig + k, fns[nOrig + k]!.name, 0)
+      else none
     let tagBase := env.classes.length
     let schedTag := env.tagOf "$sched"
     let schedTy : VTy := .ref [schedTag] []
