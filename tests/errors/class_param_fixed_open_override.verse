@@ -1,4 +1,4 @@
-# expect: arr_box has type parameters that box does not have, so it cannot override Get
+# expect: type parameter u of arr_box occurs only inside the type arguments arr_box gives its parent
 box(t:type) := class:
     V:t
     Get():t = V

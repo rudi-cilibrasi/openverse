@@ -14,7 +14,7 @@
   lazily: fine for the few short equations of pins, though a long chain
   of eliminations can make the types it gives large.
 -/
-import OpenVerse.Core.TypeSafety
+import OpenVerse.Core.Subst
 
 namespace OpenVerse
 

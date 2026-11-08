@@ -365,9 +365,9 @@ flowchart LR
   `$self.M(…)`, dispatched as any call of `M` is. The value takes the
   class nearest the receiver's static class whose type is the one
   expected, else the nearest (#219). A
-  generic class's value class has the class's type parameters; it cannot
-  repeat or nest them in its shape's type arguments, so such methods are
-  no values (#171).
+  generic class's value class has the class's type parameters; one that
+  repeats or nests them in its shape's type arguments is not built yet,
+  so such methods are no values (#171, #209).
 - **`subscribable_event(t)`** is Verse code in a prelude (`subPrelude`):
   `event(t)` with an array of (subscription, handler) pairs, the handlers
   of type `type{_(:t):void}`, called under the refinement in `Signal`. A
@@ -407,8 +407,9 @@ flowchart LR
   another by variance (that would need a wrapper object made at the
   conversion), and variance applies only where a closed type is written.
   A generic function as a value at open types would need a class that
-  repeats type arguments (`Identity$fn(t)` implementing `$fn1(t, t)`),
-  which needs the unifying refinement of #171.
+  repeats type arguments (`Identity$fn(t)` implementing `$fn1(t, t)`);
+  the refinement that unifies is there now (#209), the value classes are
+  not yet.
 
 ## Concurrency: suspends functions as frames
 
@@ -570,8 +571,8 @@ and journals every write made in a condition (for rollback). So:
   A generic override (`ipair(b) := class(pair(int, b))`, or one with a
   type parameter of its own) keeps its frame in an option field like any
   generic callee's, at the type arguments the dispatch gives: the
-  receiver's, refined by the pins, matched against its parameters as the
-  checker does. It is resumed and cancelled like any generic callee's;
+  receiver's, refined by the pins (`unify`), matched against its
+  parameters as the checker does. It is resumed and cancelled like any generic callee's;
   arriving and taking the result go through `arriveVia`/`takeVia` again;
   its `take(self, frame?)` fails without a frame, so the caller takes the
   result in a condition, into a slot kept in the frame (covariant results
@@ -614,8 +615,8 @@ call's instantiation is read off its last arguments. A call at closed types
 goes to a copy at those types: the same body, its slot types and signature
 substituted. The copies' own calls are handled the same way, from a
 worklist. In a copy, a refined dispatch test (#142) whose classes' pins
-its closed types rule out is dropped, as the checker types such a test
-only when the pins can agree. The generic originals are then never called;
+no instance of its types agrees with (`unify` fails) is dropped, as the
+checker types such a test only when the pins can agree. The generic originals are then never called;
 they keep only their parameters and are not lowered. Bounds on the number
 of copies (500) and on the size of the types (2000 parts, which types that
 double at each call reach quickly) turn polymorphic recursion into an
@@ -734,9 +735,10 @@ position in every class below the one that declares it.
   nests: `slot(slot(u))`'s holds `slot(u)`'s. One that would hold itself
   (an interface `node(t)` with a field `Next:node(t)`) cannot be built, so
   a variable of its type is refused there.
-  A class that repeats type arguments cannot override yet (that would
-  need unification), nor can one that adds its own, as a `named`'s
-  implementation needs an `n` the caller does not have.
+  A class that repeats type arguments or fixes them to types over its
+  others overrides under the refinement that unifies them (#209); one
+  that adds its own cannot, as a `named`'s implementation needs an `n`
+  the caller does not have.
 
 ## Unification
 
@@ -745,7 +747,14 @@ matching: the pinned arguments' variables are bound to parts of the pins.
 A class that repeats its parent's type arguments, `dup(t) :=
 class(pair(t, t))`, needs pins that relate arguments to each other, and
 its refinement is then a most general unifier of the arguments under the
-pins (#171, #209). `Core/Unify.lean` is Robinson's algorithm on equations
+pins (#171, #209). A pin is a type over the class's own type arguments
+(`var j` is the `j`-th): `dup`'s are `[none, some (var 0)]`, and
+`optpair(t) := class(pair(?t, t))`'s `[some (opt (var 1)), none]`.
+Arguments agree with pins when each pinned one is its pin at them
+(`VTy.pinsOK`), and `PinRefines P a μ` says that `μ` makes `a` agree
+with `P` and that every substitution that does factors through `μ`: a
+most general unifier of the pin equations (`VTy.pinEqs`), which
+`unify` finds. `Core/Unify.lean` is Robinson's algorithm on equations
 between Verse Core types, proved sound (`unify_sound`), most general
 (`unify_mgu`: every unifier `R` factors through it, `(σ j).subst R = R j`)
 and complete (`unify_complete`). Being a unifier itself, what it gives
@@ -755,7 +764,33 @@ mention and their size: eliminating a variable for a type without it
 removes the variable, and no step adds one; the steps that eliminate none
 shrink the equations. Completeness is what the substitution lemma needs:
 at every instance of the receiver's type arguments, a refinement exists
-exactly when some substitution satisfies the pins.
+exactly when some substitution satisfies the pins (`PinRefines.exists`).
+
+The front end's pins (`TyEnv.pinsOf`) name the argument positions
+`$pos j`: an argument is unpinned where it is a type parameter met there
+first, and pinned to its type over those first places otherwise. Every
+type parameter of a class is one of its Verse Core type arguments
+(`coreArgs` appends those that are not themselves one of its parent's),
+so arguments that agree with the pins are an instance of the class's:
+they determine its type arguments, and an override needs only as many as
+the declaring class. The elaborator types a refined call under
+`Ty.unifyEqs`, which unifies the same equations as `unify`, in the same
+order, in its own types (it skips equations that already hold, so its
+result can differ by a renaming), comparing a value struct by its
+fields as Verse Core does (`tag(t) := struct: N:int` says nothing of
+`t`); the checker computes the refinement with `unify`. Whether an
+object of the tested classes can be the receiver at all is decided by
+Verse's types, which compare struct type arguments as they are. A dispatch
+rule also asks that the tested classes' pins on the receiver's arguments
+mention only those (`VTy.pinsBelow`): an object's arguments extend the
+receiver's, and the pins on the shared ones must agree on both. The
+front end keeps to that: where a class's pin would mention an argument
+past its parent's (`wrapint(w) := class(pint([]w))`, below
+`pint(u) := class(pair(int, u))`), it takes its parent's pin there; an
+implementation at or above the receiver's class, or one that fixes none
+of its arguments, is called without a refinement; and a dispatch whose
+pins still relate the receiver's arguments to others is refused, until
+a dispatch can open those (#209, step 2).
 
 ## Typing the heap
 
@@ -818,9 +853,10 @@ Phase 3 (#20) adds a heap of objects, each with a class tag and fields
   new: a failure context restores the heap it started from, which `Ξ`
   types. `Runs.typed` states the result's type in the final heap, under
   some heap typing of it.
-- **Pins and dispatch** (#142). A class that fixes some of its parent's
-  type arguments to closed types (`int_box := class(box(int))`) records
-  them as its *pins* (`Sigs.pins`). Every object of the class agrees with
+- **Pins and dispatch** (#142, #209). A class that fixes some of its
+  parent's type arguments (`int_box := class(box(int))`) or relates them
+  (`dup(t) := class(pair(t, t))`) records them as its *pins*
+  (`Sigs.pins`, see Unification). Every object of the class agrees with
   them at the type arguments it has (`HeapOK`; `new` checks them): an object
   with fewer arguments than a pinned position is unconstrained there, which
   is harmless, as subtyping only drops trailing arguments, so no reference
@@ -835,8 +871,9 @@ Phase 3 (#20) adds a heap of objects, each with a class tag and fields
   arguments agree with its pins and start with `Y`'s, so `μ` is the
   identity and preservation is the call's. The substitution lemma holds
   because every substitution that makes the arguments agree with the pins
-  factors through `μ`, whose bindings are closed (`PinRefines.factor`);
-  when none does, the call cannot run (`Typed.dispatch_none`). The checker
+  factors through `μ` (`PinRefines.factor`), and at each instance of the
+  arguments `unify` finds a refinement when one exists; when none does,
+  the call cannot run (`Typed.dispatch_none`). The checker
   (`tcDispatch`) tries the plain `if` typing first, and types a dispatch
   only against an expected type, since `μ` relates the call's result to
   it: a dispatch chain is assigned to a slot of the method's result type.

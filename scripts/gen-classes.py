@@ -24,6 +24,8 @@ A program combines
     int, in classes that fix it to int (#205);
   - function values: functions and methods passed, stored and called (#210);
   - a parametric hierarchy pb(t) with renaming, fixing and extending subclasses,
+    and a two-parameter class with subclasses that repeat or relate its type
+    arguments (#209),
     a parametric interface, generic and fixed constructors, generic methods with
     overrides, generic functions;
   - overloaded top-level functions over disjoint types;
@@ -1619,6 +1621,136 @@ class Gen:
                 M.append('Print("held {%s} {%s.%s()}")' % (ct[0], b, desc))
         self.pmain = M
 
+    # --- classes that repeat or relate type arguments (#209)
+
+    def gen_relational(self):
+        """A two-parameter class q2(t, u) and subclasses whose pins relate its
+        type arguments: qd(t) := class(q2(t, t)) repeats them, qo(t) and qn(t)
+        fix the first to ?t and []t, qi := class(qd(int)) fixes both below
+        qd. Each overrides some of q2's methods; generic functions over
+        q2(t, u) and q2(t, t) call them, so dispatch is typed under the
+        refinement that unifies the receiver's type arguments with the pins."""
+        L, M = [], []
+        q2, qd, qo, qn, qi = (self.fresh(x) for x in ['q2', 'qd', 'qo', 'qn', 'qi'])
+        qp, qs, qw = (self.fresh(x) for x in ['qp', 'qs', 'qw'])
+        C = self.fresh('QC')
+        A, B, N = (self.fresh(x) for x in ['QA', 'QB', 'QN'])
+        g1, g2, tag, mix, pk = (self.fresh(x) for x in ['G1', 'G2', 'QTag', 'Mix', 'Pk'])
+        fs, ss, sw = (self.fresh(x) for x in ['Firsts', 'Sames', 'Swaps'])
+        k = lit(1, 4)
+        L.append('%s(t:type, u:type) := class:' % q2)
+        L.append('    %s:t' % A)
+        L.append('    %s:u' % B)
+        L.append('    var %s:int = %s' % (N, lit(0, 3)))
+        L.append('    %s():t = %s' % (g1, A))
+        L.append('    %s():u = %s' % (g2, B))
+        L.append('    %s():string = "q2"' % tag)
+        L.append('    %s(X:t, Y:u):tuple(t, u) = (X, Y)' % mix)
+        L.append('    %s(X:t):t =' % pk)
+        L.append('        set %s += 1' % N)
+        L.append('        if (%s > %s) then X else %s' % (N, k, A))
+        have_qo, have_qn, have_qi = chance(0.7), chance(0.5), chance(0.6)
+        have_qp, have_qw = chance(0.5), chance(0.5)
+        L.append('%s(t:type) := class(%s(t, t)):' % (qd, q2))
+        if chance(0.7):
+            L.append('    %s<override>():t = %s' % (g1, B))
+        if chance(0.5):
+            L.append('    %s<override>():t = %s' % (g2, A))
+        L.append('    %s<override>():string = "qd"' % tag)
+        if chance(0.6):
+            L.append('    %s<override>(X:t, Y:t):tuple(t, t) = (Y, X)' % mix)
+        if chance(0.5):
+            L.append('    %s<override>(X:t):t = if (%s > 0) then %s else (super:)%s(X)' % (pk, N, B, pk))
+        if have_qi:
+            L.append('%s := class(%s(int)):' % (qi, qd))
+            L.append('    %s<override>():int = %s + %s * %s' % (g1, A, B, lit(2, 5)))
+            L.append('    %s<override>():string = "qi {(super:)%s()}"' % (tag, tag))
+            if chance(0.5):
+                L.append('    %s<override>(X:int):int = X + %s' % (pk, A))
+        if have_qo:
+            L.append('%s(t:type) := class(%s(?t, t)):' % (qo, q2))
+            L.append('    %s<override>():?t = %s' % (
+                g1, R.choice(['option{%s}' % B, 'if (%s > 1) then option{%s} else %s' % (N, B, A)])))
+            L.append('    %s<override>():string = "qo"' % tag)
+            if chance(0.5):
+                L.append('    %s<override>(X:?t, Y:t):tuple(?t, t) = (option{Y}, Y)' % mix)
+        if have_qn:
+            L.append('%s(t:type) := class(%s([]t, t)):' % (qn, q2))
+            L.append('    %s<override>():[]t = array{%s, %s}' % (g1, B, B))
+            L.append('    %s<override>():string = "qn"' % tag)
+        if have_qp:
+            # a class below a closed fixer that wraps its own parameter (it
+            # takes the fixer's pins where its own would point past them)
+            L.append('%s(u:type) := class(%s(int, u)):' % (qp, q2))
+            L.append('    %s<override>():string = "qp {%s}"' % (tag, A))
+            L.append('%s(w:type) := class(%s([]w)):' % (qs, qp))
+            L.append('    %s:w' % C)
+        if have_qw:
+            # a class below a repeating one that wraps its own parameter
+            L.append('%s(u:type) := class(%s(?u)):' % (qw, qd))
+            L.append('    %s:u' % C)
+        L.append('%s(Xs:[]%s(t, u) where t:type, u:type):[]t = for (X : Xs) { X.%s() }' % (fs, q2, g1))
+        L.append('%s(Xs:[]%s(t, t) where t:type):[]t = for (X : Xs) { X.%s() }' % (ss, q2, g2))
+        L.append('%s(Xs:[]%s(t, u), Y:t, Z:u where t:type, u:type):[]tuple(t, u) =' % (sw, q2))
+        L.append('    for (X : Xs) { X.%s(X.%s(Y), Z) }' % (mix, pk))
+        self.out += L
+
+        def ints():
+            out = ['%s(int, int){%s := %s, %s := %s}' % (q2, A, lit(), B, lit()),
+                   '%s(int){%s := %s, %s := %s}' % (qd, A, lit(), B, lit())]
+            if have_qi:
+                out.append('%s{%s := %s, %s := %s}' % (qi, A, lit(), B, lit()))
+            R.shuffle(out)
+            return out[:R.randint(1, len(out))]
+        xs = tmpname('Qs')
+        M.append('%s:[]%s(int, int) = array{%s}' % (xs, q2, ', '.join(ints())))
+        x = tmpname('X')
+        M.append('for (%s : %s) { Print("{%s.%s()} {%s.%s()} {%s.%s()} {%s.%s(%s)}") }' %
+                 (x, xs, x, tag, x, g1, x, g2, x, pk, lit()))
+        x = tmpname('X')
+        M.append('for (%s : %s(%s)) { Print("f {%s}") }' % (x, fs, xs, x))
+        x = tmpname('X')
+        M.append('for (%s : %s(%s)) { Print("s {%s}") }' % (x, ss, xs, x))
+        x = tmpname('X')
+        M.append('for (%s : %s(%s, %s, %s)) { Print("w {%s(0)} {%s(1)}") }' % (x, sw, xs, lit(), lit(), x, x))
+        if chance(0.5):
+            ys = tmpname('Qs')
+            M.append('%s:[]%s(string, string) = array{%s(string){%s := "a", %s := "b"}, %s(string, string){%s := "c", %s := "d"}}' %
+                     (ys, q2, qd, A, B, q2, A, B))
+            x = tmpname('X')
+            M.append('for (%s : %s(%s)) { Print("fs {%s}") }' % (x, fs, ys, x))
+        if have_qo:
+            os_ = tmpname('Qo')
+            M.append('%s:[]%s(?int, int) = array{%s(int){%s := false, %s := %s}, %s(?int, int){%s := option{%s}, %s := %s}}' %
+                     (os_, q2, qo, A, B, lit(), q2, A, lit(), B, lit()))
+            x, v = tmpname('X'), tmpname('V')
+            M.append('for (%s : %s) { Print(if (%s := %s.%s()?) then "o {%s.%s()} {%s}" else "o {%s.%s()} none") }' %
+                     (x, os_, v, x, g1, x, tag, v, x, tag))
+            x, v = tmpname('X'), tmpname('V')
+            M.append('for (%s : %s(%s)) { Print(if (%s := %s?) then "of {%s}" else "of none") }' % (x, fs, os_, v, x, v))
+        if have_qp:
+            ps_ = tmpname('Qp')
+            M.append('%s:[]%s(int, []int) = array{%s(int){%s := %s, %s := array{%s}, %s := %s}, %s([]int){%s := %s, %s := array{}}}' %
+                     (ps_, q2, qs, A, lit(), B, lit(), C, lit(), qp, A, lit(), B))
+            x = tmpname('X')
+            M.append('for (%s : %s) { Print("p {%s.%s()} {%s.%s()} {%s.%s().Length}") }' % (x, ps_, x, tag, x, g1, x, g2))
+            x = tmpname('X')
+            M.append('for (%s : %s(%s)) { Print("pf {%s}") }' % (x, fs, ps_, x))
+        if have_qw:
+            ws = tmpname('Qw')
+            M.append('%s:[]%s(?int, ?int) = array{%s(int){%s := false, %s := option{%s}, %s := %s}, %s(?int){%s := option{%s}, %s := false}}' %
+                     (ws, q2, qw, A, B, lit(), C, lit(), qd, A, lit(), B))
+            x, v = tmpname('X'), tmpname('V')
+            M.append('for (%s : %s) { Print(if (%s := %s.%s()?) then "wq {%s.%s()} {%s}" else "wq {%s.%s()} none") }' %
+                     (x, ws, v, x, g1, x, tag, v, x, tag))
+        if have_qn:
+            ns = tmpname('Qn')
+            M.append('%s:[]%s([]int, int) = array{%s(int){%s := array{}, %s := %s}, %s([]int, int){%s := array{%s}, %s := 0}}' %
+                     (ns, q2, qn, A, B, lit(), q2, A, lit(), B))
+            x = tmpname('X')
+            M.append('for (%s : %s) { Print("n {%s.%s()} {%s.%s().Length}") }' % (x, ns, x, tag, x, g1))
+        self.main += M
+
     # --- overloads
 
     def gen_overloads(self):
@@ -1949,6 +2081,8 @@ class Gen:
             self.gen_overloads()
         self.gen_main_hierarchy()
         self.main += self.pmain + self.omain
+        if chance(0.4):
+            self.gen_relational()
         # types with no concrete class below them (for triage: see drive.sh)
         empty = [t.name for t in self.types()
                  if not any((c is t or c.below(t)) and not c.abstract for c in self.classes)]

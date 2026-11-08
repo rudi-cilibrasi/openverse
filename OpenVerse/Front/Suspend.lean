@@ -267,16 +267,19 @@ partial def liftChains (m base : Nat) : Expr → StateM (Array (Expr × List Nat
   | x => return x
 
 /-- `e` without the tests in `Typed.dispatch`'s shape that no object can
-    pass at the slot types `Γ`: the receiver's type arguments are closed and
-    disagree with every tested class's pins (#142). The checker types a
-    dispatch only when its pins can agree, and such tests arise in a copy
-    of a generic function at closed types, where the generic one had a
+    pass at the slot types `Γ`: no substitution makes the receiver's type
+    arguments agree with any tested class's pins on them (#142, #209), so
+    no instance of them starts an object's. The checker types a dispatch
+    only when its pins can agree, and such tests arise in a copy of a
+    generic function at closed types, where the generic one had a
     refinement (#174), and in #157's field accessors on closed receivers;
     every function is pruned before the lowering (#186). -/
 partial def pruneDead (S : Sigs) (Γ : List VTy) : Expr → Expr
   | .ite c@(.heap (.isTag us) [.local y]) t@(.call _ (.local y' :: _)) e =>
     let dead := y == y' && !us.isEmpty && match Γ[y]? with
-      | some (.ref _ a) => a.all VTy.closed && us.all fun u => !VTy.pinsOK ((S.pinsOf u).take a.length) a
+      | some (.ref _ a) => us.all fun u =>
+        let P := (S.pinsOf u).take a.length
+        VTy.pinsBelow P a.length && (unify (VTy.pinEqs P a)).isNone
       | _ => false
     if dead then pruneDead S Γ e else .ite c (pruneDead S Γ t) (pruneDead S Γ e)
   | .assign i x => .assign i (pruneDead S Γ x)
@@ -945,7 +948,7 @@ partial def suspendSelfGeneric (us : List Nat) (y g : Nat) (c : Callee) (rs : Li
   let σs ← rs.mapM infer
   -- (the callee's type arguments: its parameters matched against the
   -- receiver and arguments as refined by the pins)
-  let μ := pinRefinement (commonPins env.S us a.length) a
+  let μ := (unify (VTy.pinEqs (commonPins env.S us a.length) a)).getD VTy.var
   let acc := VTy.bindVarsL ps ((VTy.ref us a :: σs).map (VTy.subst μ)) []
   let frameTy : VTy := .ref [c.tag] ((List.range c.ntp).map VTy.var)
   if frameTy.unbound acc then
