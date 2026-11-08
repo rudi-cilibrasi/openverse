@@ -5,7 +5,7 @@ programming language of Epic Games (Unreal Editor for Fortnite, Unreal Engine
 6). The semantics is defined and proved in **Lean 4**, and a C runtime is
 checked against it. The handwritten C components for integer arithmetic,
 program loading, and the rollback of variables and output are proved with
-**QuickProof** (VST + CompCert in Coq); the object store and the value heap
+**QuickProof** (VST + CompCert in Rocq); the object store and the value heap
 are checked by differential testing and fuzzing.
 
 [![check](https://github.com/rudi-cilibrasi/openverse/actions/workflows/check.yml/badge.svg)](https://github.com/rudi-cilibrasi/openverse/actions/workflows/check.yml)
@@ -76,7 +76,7 @@ flowchart TD
 | **`Prog.accepted`** | `Core/Guarantees.lean` | **every program the front end accepts** has one outcome and one output; it never raises a slot, call, type or control error, so the only runtime errors left are integer overflow and `Err()`; `Main`'s value has its type; and it never fails unless `Main` is `<decides>` |
 | `add_seam` … `modulo_seam`, `apply_*` | `Core/Seams.lean` | each int operation equals the C99 formula that the QuickProof law `arith_exact` asserts |
 
-**In Coq, with QuickProof** (`proofs/quickproof/`; a separate evidence class,
+**In Rocq, with QuickProof** (`proofs/quickproof/`; a separate evidence class,
 "proved under CompCert's C semantics", not Lean theorems):
 
 | Law | C under test | Status |
@@ -146,7 +146,7 @@ Trusted, besides Lean's kernel:
   `Prog.check` and `Prog.checkTypes`, with a certificate of slot and function
   types. Both checks are proved to establish what the theorems assume, so
   `Prog.accepted` holds of every program the front end emits;
-- for the QuickProof results, QuickProof's own trusted base (Coq, VST,
+- for the QuickProof results, QuickProof's own trusted base (Rocq, VST,
   CompCert's Clight semantics, `clightgen`; see
   `proofs/quickproof/README.md`), and the reading that each C law formula and
   its Lean restatement are the same formula (`docs/SEAMS.md`);

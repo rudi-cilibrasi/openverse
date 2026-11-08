@@ -3,7 +3,7 @@
 The C runtime (`runtime/`) has three handwritten components that the rest
 depends on for memory safety and for Verse's rollback semantics. Each is
 proved with [QuickProof](https://github.com/genproof/quickproof-public)
-v0.1.0 (Coq 8.20.1, VST 2.15, CompCert 3.15 Clight), following the evidence
+v0.1.0 (Rocq 8.20.1, VST 2.15, CompCert 3.15 Clight), following the evidence
 lane of LeanOS ADR 0030. A property is a C program, the *law*: it draws
 arbitrary inputs (`nondet_*`, `pick`), restricts them (`qp_assume`) and
 checks results (`qp_assert`). QuickProof turns it into `Theorem LAW :
@@ -16,7 +16,7 @@ access is in bounds.
 flowchart LR
     law["law<br/>a C harness: nondet inputs,<br/>qp_assume, qp_assert"] --> check
     comp["component<br/>load.c, arith.c or store.c"] --> check
-    check["qp check<br/>native runs under ASan/UBSan,<br/>CompCert's interpreter, mutants"] --> verify["qp verify<br/>Coq checks the VST proof"]
+    check["qp check<br/>native runs under ASan/UBSan,<br/>CompCert's interpreter, mutants"] --> verify["qp verify<br/>Rocq checks the VST proof"]
     verify --> thm["Theorem LAW :<br/>harness_safe whole_prog<br/>read through VST's adequacy:<br/>no undefined behaviour,<br/>for any input the law allows"]
     thm --> pin["project.conf pins the commit;<br/>check-quickproof-pins.sh fails<br/>when a pinned file changes"]
 ```
@@ -24,7 +24,7 @@ flowchart LR
 > [!IMPORTANT]
 > A person reviews the laws (the first comment of each harness file is the
 > claim), the configuration, and `docs/SEAMS.md`. Nobody needs to review the
-> Coq proof; `qp verify` checks it.
+> Rocq proof; `qp verify` checks it.
 
 | Project | Law | Claim (summary) | Status |
 |---|---|---|---|
@@ -49,7 +49,7 @@ commit its theorems are about.
 ## What a QuickProof result relies on
 
 As in QuickProof's own `docs/GUARANTEES.md`:
-- Coq, VST, CompCert's Clight semantics for x86-64, `clightgen`, QuickProof's
+- Rocq, VST, CompCert's Clight semantics for x86-64, `clightgen`, QuickProof's
   translation scripts and `qp verify`;
 - VST's adequacy theorem, not yet instantiated for QuickProof's environment;
   each theorem rests on the axioms its `VERIFY.md` lists: the standard ones plus the declarations of VST's malloc library;
