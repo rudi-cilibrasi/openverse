@@ -1,0 +1,9 @@
+get 1.0 exits
+arm exits
+get 2.0 exits
+G 2.0 exits
+2
+get 3.0 exits
+G 3.0 exits
+cancelled
+exit=0

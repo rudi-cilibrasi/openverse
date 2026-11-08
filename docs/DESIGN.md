@@ -391,12 +391,15 @@ and journals every write made in a condition (for rollback). So:
   receiver wherever the refinement matters: passing the arguments and
   taking the result. The callee gets helpers whose first parameter is the
   receiver, `arrive(self, args…, frame, sched)` (reset the frame or make
-  one) and `take(self, frame)`, called in the rule's shape on a transient
-  copy of the receiver (its own slot is a frame field by then; the copy
-  starts as that slot's initial value). It is resumed and cancelled
-  through `resumeOwn(frame, sched)` and `cancelOwn(frame, sched)`, which
-  read its parameters from its frame, as the caller has no slots of the
-  callee's (refined) parameter types.
+  one) and `take(self, frame)`. The rule's shape needs the receiver in a
+  slot, and the caller's receiver slot is a frame field by then, so each
+  call site gets two small helpers of its own whose first parameter is the
+  receiver, `arriveVia` and `takeVia`, which make the test and the call.
+  (A slot holding a copy would need an initial value at each resumption,
+  which for a class can be a new object: C would allocate one per tick.)
+  The callee is resumed and cancelled through `resumeOwn(frame, sched)`
+  and `cancelOwn(frame, sched)`, which read its parameters from its frame,
+  as the caller has no slots of the callee's (refined) parameter types.
 
 Values stored in a frame, such as strings or arrays in slots, are kept
 like any object's fields (see "Objects in the C runtime"). Each pass

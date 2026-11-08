@@ -2812,8 +2812,13 @@ partial def elabAppBase (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (b
                 -- (a generic implementation below the receiver's class would
                 -- need its frame's type arguments refined too)
                 if ms.suspends && !env.isSub c e && !((ctx.sig? fname).map (·.tparams.isEmpty)).getD true then
-                  eerr p s!"a <suspends> method of a generic class cannot be dispatched to class {e}, which fixes type arguments of {c}, yet (#171)"
-                let some (.call fi (.local s0 :: es)) := Expr.inlineArgTemps rc.e
+                  eerr p s!"a <suspends> method with type parameters (its class's or its own) cannot be dispatched to class {e}, which fixes type arguments of {c}, yet (#171)"
+                -- (a suspends call carries the defers active at it, which
+                -- go around the whole dispatch instead)
+                let rcE : Expr := match rc.e with
+                  | .seq (.ite (.prim .fail []) _ (.lit .void)) b => b
+                  | e => e
+                let some (.call fi (.local s0 :: es)) := Expr.inlineArgTemps rcE
                   | eerr p s!"cannot dispatch {m} to class {e}, which fixes type arguments of {c}, when a named argument's default is computed (#142)"
                 if s0 != slot then eerr p s!"cannot dispatch {m} to class {e}, which fixes type arguments of {c} (#142)"
                 acc := .ite (.heap (.isTag (part.toList.map env.tagOf)) [.local slot]) (.call fi (.local slot :: es)) acc
@@ -2833,7 +2838,8 @@ partial def elabAppBase (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (b
             -- (checked against the method's result type, as the refined
             -- calls need an expected type)
             let y ← fresh msRet
-            return ⟨pre.toList.foldr Expr.seq (.assign y acc), msRet⟩
+            let body ← if ms.suspends then withDeferMark ctx (.assign y acc) else pure (.assign y acc)
+            return ⟨pre.toList.foldr Expr.seq body, msRet⟩
           return ⟨pre.toList.foldr Expr.seq acc, msRet⟩
         for (d, j) in (ds.zip (List.range ds.length)).reverse do
           let some fname := ctx.implFor? d root m | eerr p s!"class {d} does not implement '{m}'"
@@ -5551,7 +5557,8 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     let frameTy (j : Nat) : VTy :=
       .ref [tagBase + j] ((List.range lows[j]!.2.2).map VTy.var)
     -- the methods called through `Typed.dispatch` (#142) of classes that fix
-    -- type arguments (non-generic ones: a generic one's call is refused)
+    -- type arguments (non-generic ones; a generic one is refused below the
+    -- receiver's class, and above it needs no refinement)
     let targets : List Nat := (lows.foldl (fun acc (gi, _, _) => acc ++
       Suspend.dispatchTargets (fun f => user.any fun (h, _, ntp) => h == f && ntp == 0) fns[gi]!.body) []).eraseDups
     -- each one's `new`, `reset`, `cancel` and `result` (fixed indices), each
@@ -5689,7 +5696,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       let branches : Array (Nat × Nat × Nat) := ((branchOf[j]?).getD []).toArray.map fun K =>
         (wrapFnBase + 3 * K + 1, wrapFnBase + 3 * K + 2, wrapTag K)
       let low ← (Suspend.lower Sinf callee syncMark raceMark rushMark spawnMark spawns branchMark branches a Γ ρ (frameTy j)
-        schedTag fnBase b ds).mapError fun e => s!"in {gname}: {e}"
+        schedTag fnBase b).mapError fun e => s!"in {gname}: {e}"
       -- its branches' wrappers: `tramp(w, sched)` resumes the arm (with the
       -- function's parameters from its frame) unless the function stopped
       -- it; `start(sched, frame)` makes the wrapper, registers it and runs
@@ -5737,9 +5744,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       let tempTys := (low.fields.drop (2 + sites + 2 * arms + a + (fn.nslots - a)))
       -- each function keeps its parameters and the transient slots it uses
       let resumeLike (name : String) (lf : Suspend.LFn) : Except String Fn := do
-        let inits ← (lf.slots.drop (a + 2)).zipIdx.mapM fun (τ, i) => match lf.inits[i]? with
-          | some (some e) => pure e
-          | _ => dflt (lf.slots.take (a + 2)) τ
+        let inits ← (lf.slots.drop (a + 2)).mapM (dflt (lf.slots.take (a + 2)))
         return { name, arity := a + 2, nslots := lf.slots.length, decides := false, writes := true,
                  body := initPrefixE (a + 2) inits lf.body }
       fns := fns.set! gi (← resumeLike gname low.body)
@@ -5781,6 +5786,12 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
         armTys := armTys.push can.slots
         armSigs := armSigs.push (frameTy j :: schedTy :: ps, .int)
         armSigs := armSigs.push (frameTy j :: schedTy :: ps, VTy.void)
+      -- its refined calls' helpers (#171), whose slots are their parameters
+      for ((body, vps, vτ), i) in low.vias.zipIdx do
+        armFns := armFns.push { name := s!"{gname}$via{i}", arity := vps.length, nslots := vps.length,
+                                decides := false, writes := true, body }
+        armTys := armTys.push vps
+        armSigs := armSigs.push (vps, vτ)
     -- each root's trampoline, which resumes it with its parameters from its
     -- frame, and `start`, which registers it with the scheduler and runs it
     -- up to its first suspension point (a root that is done has its

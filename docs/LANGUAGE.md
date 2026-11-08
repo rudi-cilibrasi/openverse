@@ -789,7 +789,7 @@ Main()<suspends>:void =
   only when what it overrides is). Code generic over a class can call one
   that a subclass fixing its type arguments overrides (`int_box :=
   class(box(int))`), under the refinement that gives (#142, #171); not
-  yet when the overriding class has type parameters of its own. A
+  yet when the override has type parameters (its class's or its own). A
   `<suspends>` constructor is not supported. `<suspends>` combines with the heap effects
   (`<computes>`, `<reads>`, …): waiting has none.
 - **Time.** The schedule is deterministic: a virtual clock counts ticks, 30

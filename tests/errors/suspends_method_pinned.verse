@@ -1,4 +1,4 @@
-# expect: a <suspends> method of a generic class cannot be dispatched to class ipair, which fixes type arguments of pair, yet
+# expect: a <suspends> method with type parameters (its class's or its own) cannot be dispatched to class ipair, which fixes type arguments of pair, yet
 pair(a:type, b:type) := class:
     A:a
     B:b
