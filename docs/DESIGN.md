@@ -112,10 +112,21 @@ not an `array{a₀, …}`, which would run `aₙ₋₁` before `a₀`'s value wa
 
 Since the result is ordinary Verse Core, every theorem holds of it as it
 stands, and the C runtime runs it unchanged. What is new is proved in
-`Core/Derived.lean`: `altE_sel` (the alternative selected is the one the
-slot names), and `firstE_chooseFirst_ok` / `firstE_chooseFirst_fail` (the
-first alternative that succeeds is taken, in the state it left, with the
-ones before it rolled back; with none, the context fails).
+`Core/Derived.lean`:
+- `altE_sel`: the alternative selected is the one the slot names;
+- `chooseFirst_brk`: a choice breaks at its first alternative that
+  succeeds, in the state it left, with the ones before it rolled back;
+- `chooseFirst_none`: with none, it ends with no value;
+- `firstE_of_brk` and `firstE_of_ok`: what those make of the context.
+
+These compose along the code the elaborator emits, a `seq` of clauses
+with each later choice in an earlier one's `inner`.
+
+The emitted code ends its filters with `fail; void` and its success with
+`break; void`, not a bare `fail` or `break`. Code ending with a bare one
+has no type of its own, so Core's type checker would check it again
+against `void`. That is twice per `loop` and per `for` filter, so 4ⁿ for
+choices nested n deep in conditions.
 `scripts/gen-choice.py` is a backtracking model of the readings, and
 `scripts/fuzz-choice.sh` runs its programs on both implementations.
 

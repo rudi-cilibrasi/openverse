@@ -63,7 +63,7 @@ flowchart TD
 | `evalB_sound`, `evalB_complete`, `Prog.runB_sound` | `Core/Bounded.lean` | `openverse run` runs `evalB`, which is `eval` with a bound on its native recursion depth: whenever it does not stop for depth it computes exactly `eval`, and with a bound at least the fuel it never stops for depth |
 | `ite_rollback` | `Core/Derived.lean` | once an `if` condition fails, the `if` behaves as its `else` branch from the **original** state (rollback) |
 | `notE_ok`, `notE_notE_ok` | `Core/Derived.lean` | `not e` always discards `e`'s effects; `not not e` is a pure test (Book of Verse §5.5) |
-| `firstE_chooseFirst_ok`, `firstE_chooseFirst_fail`, `altE_sel` | `Core/Derived.lean` | a choice `a \| b` (#208) in an `if` condition or `first{}` takes its first alternative that succeeds, in the state it left, with the alternatives before it rolled back; with none, the condition fails |
+| `chooseFirst_brk`, `chooseFirst_none`, `firstE_of_brk`, `firstE_of_ok`, `altE_sel` | `Core/Derived.lean` | a choice `a \| b` (#208) in an `if` condition or `first{}` breaks out at its first alternative that succeeds, in the state it left, with the alternatives before it rolled back, or ends with no value; the condition then succeeds or fails. The lemmas compose along the code the front end emits |
 | `optionE_none`, `optionE_some`, `orE_right`, `logicE_ne_fail` | `Core/Derived.lean` | `option{}`, `or` and `logic{}` behave as the book says, including rollback |
 | `Eval.no_fail`, `call_no_fail`, `Runs.no_fail` | `Core/Effects.lean` | **`<decides>` soundness**: a function without `<decides>` never fails |
 | `Eval.scoped_ok`, `Runs.scoped_ok` | `Core/Scoping.lean` | a program that the C loader accepts never raises a slot or call error, and frames keep their size |

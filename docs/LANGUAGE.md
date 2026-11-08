@@ -552,11 +552,15 @@ Main():void =
   An alternative that fails gives no value, and a condition with no
   success fails.
 - **Effects.** The code before a choice runs once. Each alternative then
-  runs the rest of the clauses, from the state the choice was reached in
-  when the alternatives before it failed: a failed alternative is rolled
-  back, output included, as any failure context is. In a `for`, each
-  success also runs the body, and their effects stay, as with any
-  generator.
+  runs the rest of the clauses.
+  - In an `if` condition or `first{…}`, an alternative that leads to no
+    success is rolled back, output included, as any failure context is,
+    and the next one starts from the state the choice was reached in.
+  - In a `for`, a choice is one more generator. An alternative whose own
+    clauses (up to the next generator) fail is rolled back. One whose
+    clauses succeed keeps their effects, even when the generators after it
+    give no value, and each value runs the body, whose effects stay too.
+    That is how every generator of a `for` behaves.
 
   ```verse
   var N:int = 0
@@ -576,10 +580,18 @@ Main():void =
 
 In Verse Core a choice is iteration over its alternatives' indices
 (`Expr.altE`, `Expr.chooseFirst`, `Expr.firstE` in `Core/Derived.lean`),
-so no proof or part of the C runtime changes. `firstE_chooseFirst_ok` and
-`firstE_chooseFirst_fail` prove the first-success reading with its
-rollback. `scripts/fuzz-choice.sh` checks both implementations against a
-model of these rules.
+so no proof or part of the C runtime changes. For the first success, the
+lemmas there say:
+- a choice breaks out at its first alternative that succeeds, in the state
+  that alternative left, with the ones before it rolled back
+  (`chooseFirst_brk`);
+- with none, it ends with no value (`chooseFirst_none`);
+- `firstE` turns the one into success and the other into failure
+  (`firstE_of_brk`, `firstE_of_ok`).
+
+They compose: clauses before a choice come first in a `seq`, and a later
+choice is in an earlier one's `inner`. `scripts/fuzz-choice.sh` checks both
+implementations against a model of these rules.
 
 ## any
 
@@ -964,7 +976,7 @@ Main()<suspends>:void =
 | `=` between different types | not stated | refused when two scalar types (int, float, char, …) meet at the same place, also inside containers (`array{1} = array{1.0}`), as Verse Core holds them differently |
 | Ordering of rationals | not stated (§2 lists `<` … for `int` and `float`) | exact (by continued fractions, so it cannot overflow), and an int compares with a rational |
 | Order of a choice's values | (not in the Book; the Verse Calculus: spatial) | spatial: the leftmost choice varies slowest, as nested generators do (#208) |
-| Code before a choice | (the Verse Calculus is pure) | runs once; each alternative runs the code after the choice, from where the choice was reached, a failed one rolled back (as backtracking does) (#208) |
+| Code before a choice | (the Verse Calculus is pure) | runs once; each alternative runs the code after the choice, from where the choice was reached; in an `if` or `first{}`, one that leads to no success is rolled back (as backtracking does); in a `for`, the choice is a generator, so only an alternative whose own clauses fail is (#208) |
 | Precedence of `\|` | (not in the Book) | below `+`, above the comparisons: `X = 1 \| 2` is `X = (1 \| 2)` (#208) |
 | `Sleep(0.0)` | "may resume in the same tick" (ch. 14); the API reference: it always yields | always yields: resumes in the next tick (#156) |
 | `Sleep(S)` rounding | rounded up to whole ticks (ch. 14) | `Round(30·S)` ticks, at least one: rounding to the nearest keeps `Sleep(0.1)` at 3 ticks despite binary floats (#156) |

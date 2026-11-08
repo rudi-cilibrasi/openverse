@@ -46,6 +46,10 @@ def normClauses (cs : List SExpr) : List SExpr :=
       if isChoice rhs then [.decl p (nm p) none false rhs, .set p l op (.ident p (nm p))] else [c]
     | .decl p x ty true rhs =>
       if isChoice rhs then [.decl p (nm p) ty false rhs, .decl p x ty true (.ident p (nm p))] else [c]
+    -- (`set L = a | b` as the last clause of a macro, which names its value)
+    | .decl p x ty false (.set q l op rhs) =>
+      if isChoice rhs then [.decl q (nm q) none false rhs, .decl p x ty false (.set q l op (.ident q (nm q)))]
+      else [c]
     | c => [c]
 
 /-- Whether the clauses have a choice for their failure context to take. -/

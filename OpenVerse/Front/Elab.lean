@@ -871,7 +871,8 @@ structure Ctx where
       `branch` there would start again before the last one ended. -/
   inRepeat : Bool := false
   /-- In the clauses of an `if` condition or `first{…}` that bind a choice
-      (#208): a `break` there would leave the loop they are compiled to. -/
+      (#208), inside a `loop`: a `break` there would leave the loop they are
+      compiled to, not that one. -/
   inChoice : Bool := false
 
 structure ESt where
@@ -4039,8 +4040,12 @@ partial def elabAlts (ctx : Ctx) (p : Pos) (sty : Option STy) (alts : List SExpr
   | none =>
     let some a0 := alts.head? | eerr p "internal: a choice without alternatives"
     let r0 ← elabE ctx a0 none
+    -- (at most a few levels of retries, as for `if`'s branches, #32)
     let rs ← alts.tail.mapM fun a =>
-      tryCatch (elabE ctx a (some r0.ty)) fun _ => elabE ctx a none
+      if ctx.retries ≥ 3 then elabE ctx a (some r0.ty)
+      else
+        let c2 := { ctx with retries := ctx.retries + 1 }
+        tryCatch (elabE c2 a (some r0.ty)) fun _ => elabE c2 a none
     let ty ← rs.foldlM (fun acc r => join p acc r.ty none) r0.ty
     if ty == .never then eerr p "cannot infer the type of this choice"
     return (ty, ← ((alts.zip (r0 :: rs)).mapM fun (a, r) => coerce a.pos r ty))
@@ -4052,12 +4057,14 @@ partial def elabAlts (ctx : Ctx) (p : Pos) (sty : Option STy) (alts : List SExpr
     `void`: an `if` and `first{…}` read their clauses' values through names. -/
 partial def elabOneClauses (ctx : Ctx) (cs : List SExpr) : EM (R × Ctx) := do
   -- (a `break` here would leave `firstE`'s loop, not the program's)
-  let (code, ctx') ← elabOneGo { ctx with inLoop := false, inChoice := true } (Choice.normClauses cs)
+  let (code, ctx') ← elabOneGo { ctx with inLoop := false, inChoice := ctx.inLoop } (Choice.normClauses cs)
   return (⟨Expr.firstE code, .void⟩, { ctx' with inLoop := ctx.inLoop, inChoice := ctx.inChoice })
 
 partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
-  | [] => return (.brk, ctx)
+  | [] => return (Expr.brkV, ctx)
   | cl :: rest => do
+    if let .app p (.ident _ "$defer") _ _ := cl then
+      eerr p "defer: cannot be a clause of an if condition or first{…} that has a choice (#208)"
     match Choice.binding? cl with
     | some (p, n, sty, alts) =>
       let (ty, es) ← elabAlts ctx p sty alts

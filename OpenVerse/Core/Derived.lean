@@ -15,9 +15,12 @@
   * A failed `if` condition leaves no trace: the `else` branch behaves
     exactly as if the condition had never run.
   * A choice `a₀ | … | aₙ₋₁` (#208) in a context that takes its first
-    success is its first alternative that succeeds, with the alternatives
-    before it rolled back (`firstE_chooseFirst_ok`), and fails when none
-    does (`firstE_chooseFirst_fail`).
+    success breaks out at its first alternative that succeeds, with the
+    alternatives before it rolled back (`chooseFirst_brk`), and ends with no
+    value when none does (`chooseFirst_none`); `firstE` turns the one into
+    success and the other into failure (`firstE_of_brk`, `firstE_of_ok`).
+    These compose: clauses before a choice come first in a `seq`, and a
+    later choice is in the earlier one's `inner`.
 -/
 import OpenVerse.Core.Adequacy
 
@@ -181,15 +184,25 @@ def Expr.altE (k : Nat) (as : List Expr) : Expr := Expr.altFrom k 0 as
 def choiceIdx (n : Nat) : Array Value :=
   ((List.range n).map fun (j : Nat) => Value.int (j : Int)).toArray
 
+/-- `fail`, then `void`: the same outcome as `fail`, but code ending with it
+    has a type of its own, so the type checker types it at the first try
+    instead of once more against `void` (with choices nested in conditions,
+    that would be twice per level). -/
+def Expr.failV : Expr := .seq (.prim .fail []) (.lit .void)
+
+/-- `break`, then `void`, for the same reason: how the clauses after the
+    last choice signal success. -/
+def Expr.brkV : Expr := .seq .brk (.lit .void)
+
 /-- Try the alternatives `as` in order: bind each to slot `x`, then run
     `inner`, the clauses after the choice, which `break` when they succeed. -/
 def Expr.chooseFirst (k x : Nat) (as : List Expr) (inner : Expr) : Expr :=
   .forE k (.lit (.arr (choiceIdx as.length)))
-    (.seq (.assign x (Expr.altE k as)) (.seq inner (.prim .fail []))) (.lit .void)
+    (.seq (.assign x (Expr.altE k as)) (.seq inner Expr.failV)) (.lit .void)
 
 /-- The first success of `c`, code that `break`s when it succeeds and ends
     normally when it does not. -/
-def Expr.firstE (c : Expr) : Expr := .loop (.seq c (.prim .fail []))
+def Expr.firstE (c : Expr) : Expr := .loop (.seq c Expr.failV)
 
 /-- The state with slot `k` set to `v`. -/
 def St.setSlot (s : St) (k : Nat) (v : Value) : St := ⟨s.fr.set k v, s.g⟩
@@ -323,43 +336,78 @@ theorem evalFor_allFail {P : Prog} {k : Nat} {F B : Expr} {s : St} {n : Nat} (hk
 /-- The filter of `chooseFirst` at alternative `i` is alternative `i`
     itself, bound to `x`, then the rest. -/
 theorem chooseFirst_filt {P : Prog} {s : St} {k x : Nat} {as : List Expr} {inner : Expr} {i : Nat} (hk : k < s.fr.length) (hi : i < as.length) {r s'} :
-    Eval P (s.setSlot k (.int i)) (.seq (.assign x (Expr.altE k as)) (.seq inner (.prim .fail []))) r s' ↔
-      Eval P (s.setSlot k (.int i)) (.seq (.assign x as[i]) (.seq inner (.prim .fail []))) r s' :=
+    Eval P (s.setSlot k (.int i)) (.seq (.assign x (Expr.altE k as)) (.seq inner Expr.failV)) r s' ↔
+      Eval P (s.setSlot k (.int i)) (.seq (.assign x as[i]) (.seq inner Expr.failV)) r s' :=
   Eval.seq_assign_congr (altE_sel hi (by simp [readSlot, St.setSlot, List.getElem?_set_self hk]))
 
-/-- **A choice takes its first success.** If the alternatives before `j`
-    fail (each one, bound to `x`, then the rest of the clauses `inner`,
-    started from `s` with slot `k` set to its index: the effects of the
-    earlier ones are rolled back) and alternative `j` succeeds (`inner`
-    breaks), the context succeeds in the state alternative `j` left. The
+/-- **A choice breaks out at its first success.** If the alternatives
+    before `j` fail (each one, bound to `x`, then the rest of the clauses
+    `inner`, started from `s` with slot `k` set to its index: the effects of
+    the earlier ones are rolled back) and alternative `j` succeeds (`inner`
+    breaks), the choice breaks in the state alternative `j` left. The
     alternatives after `j` never run. -/
-theorem firstE_chooseFirst_ok {P : Prog} {s : St} {k x : Nat} {as : List Expr} {inner : Expr} {j : Nat} {s' : St} (hk : k < s.fr.length) (hj : j < as.length)
+theorem chooseFirst_brk {P : Prog} {s : St} {k x : Nat} {as : List Expr} {inner : Expr} {j : Nat} {s' : St}
+    (hk : k < s.fr.length) (hj : j < as.length)
     (hbefore : ∀ i (hi : i < j), ∃ s₁, Eval P (s.setSlot k (.int i))
-      (.seq (.assign x (as[i]'(Nat.lt_trans hi hj))) (.seq inner (.prim .fail []))) .fail s₁)
-    (hbrk : Eval P (s.setSlot k (.int j)) (.seq (.assign x as[j]) (.seq inner (.prim .fail []))) .brk s') :
-    Eval P s (Expr.firstE (Expr.chooseFirst k x as inner)) (.ok .void) s' := by
-  unfold Expr.firstE Expr.chooseFirst
-  refine .loop_brk (.seq_stop (.for_ok .lit ?_) rfl)
+      (.seq (.assign x (as[i]'(Nat.lt_trans hi hj))) (.seq inner Expr.failV)) .fail s₁)
+    (hbrk : Eval P (s.setSlot k (.int j)) (.seq (.assign x as[j]) (.seq inner Expr.failV)) .brk s') :
+    Eval P s (Expr.chooseFirst k x as inner) .brk s' := by
+  unfold Expr.chooseFirst
+  refine .for_ok .lit ?_
   rw [choiceIdx_toList, List.range_eq_range']
   refine evalFor_firstBrk hk (j := j) (fun i hi => ?_) ((chooseFirst_filt hk hj).mpr hbrk)
     as.length 0 s [] (by omega) (by omega) rfl (fun _ => rfl) rfl
   obtain ⟨s₁, h⟩ := hbefore i hi
   exact ⟨s₁, (chooseFirst_filt hk (Nat.lt_trans hi hj)).mpr h⟩
 
-/-- **A choice with no success fails** (and the enclosing failure context
-    rolls its effects back, `ite_rollback`). -/
-theorem firstE_chooseFirst_fail {P : Prog} {s : St} {k x : Nat} {as : List Expr} {inner : Expr} (hk : k < s.fr.length)
+/-- **A choice with no success ends with no value**, so the code around it
+    goes on: an enclosing choice's filter then fails (the `fail` after its
+    `inner`), and `firstE` fails. -/
+theorem chooseFirst_none {P : Prog} {s : St} {k x : Nat} {as : List Expr} {inner : Expr}
+    (hk : k < s.fr.length)
     (hall : ∀ i (hi : i < as.length), ∃ s₁, Eval P (s.setSlot k (.int i))
-      (.seq (.assign x as[i]) (.seq inner (.prim .fail []))) .fail s₁) :
-    ∃ s', Eval P s (Expr.firstE (Expr.chooseFirst k x as inner)) .fail s' := by
-  unfold Expr.firstE Expr.chooseFirst
+      (.seq (.assign x as[i]) (.seq inner Expr.failV)) .fail s₁) :
+    ∃ s', Eval P s (Expr.chooseFirst k x as inner) (.ok (.arr #[])) s' := by
+  unfold Expr.chooseFirst
   have hf : ∀ i, i < as.length → ∃ s₁, Eval P (s.setSlot k (.int i))
-      (.seq (.assign x (Expr.altE k as)) (.seq inner (.prim .fail []))) .fail s₁ := by
+      (.seq (.assign x (Expr.altE k as)) (.seq inner Expr.failV)) .fail s₁ := by
     intro i hi
     obtain ⟨s₁, h⟩ := hall i hi
     exact ⟨s₁, (chooseFirst_filt hk hi).mpr h⟩
   obtain ⟨t', ht⟩ := evalFor_allFail (B := .lit .void) hk hf as.length 0 s (by omega) rfl (fun _ => rfl) rfl
   rw [← List.range_eq_range', ← choiceIdx_toList] at ht
-  exact ⟨t', .loop_stop (.seq_ok (.for_ok .lit ht) (.prim_ok .nil)) rfl (by simp)⟩
+  exact ⟨t', .for_ok .lit ht⟩
+
+/-- **The first success of the clauses**: code that breaks makes `firstE`
+    succeed, in the state it broke in. -/
+theorem firstE_of_brk {P : Prog} {s s' : St} {c : Expr} (h : Eval P s c .brk s') :
+    Eval P s (Expr.firstE c) (.ok .void) s' :=
+  .loop_brk (.seq_stop h rfl)
+
+/-- Code that ends normally, with no success, makes `firstE` fail (and the
+    enclosing failure context rolls back, `ite_rollback`). -/
+theorem firstE_of_ok {P : Prog} {s s' : St} {c : Expr} {v : Value} (h : Eval P s c (.ok v) s') :
+    Eval P s (Expr.firstE c) .fail s' :=
+  .loop_stop (.seq_ok h (.seq_stop (.prim_ok .nil) rfl)) rfl (by simp)
+
+/-- **A choice takes its first success**, as the clauses of an `if`
+    condition (`chooseFirst_brk` and `firstE_of_brk`; with clauses before
+    the choice, `Eval.seq_ok` first; a choice after it is in `inner`). -/
+theorem firstE_chooseFirst_ok {P : Prog} {s : St} {k x : Nat} {as : List Expr} {inner : Expr} {j : Nat} {s' : St}
+    (hk : k < s.fr.length) (hj : j < as.length)
+    (hbefore : ∀ i (hi : i < j), ∃ s₁, Eval P (s.setSlot k (.int i))
+      (.seq (.assign x (as[i]'(Nat.lt_trans hi hj))) (.seq inner Expr.failV)) .fail s₁)
+    (hbrk : Eval P (s.setSlot k (.int j)) (.seq (.assign x as[j]) (.seq inner Expr.failV)) .brk s') :
+    Eval P s (Expr.firstE (Expr.chooseFirst k x as inner)) (.ok .void) s' :=
+  firstE_of_brk (chooseFirst_brk hk hj hbefore hbrk)
+
+/-- **A choice with no success fails** (`chooseFirst_none` and `firstE_of_ok`). -/
+theorem firstE_chooseFirst_fail {P : Prog} {s : St} {k x : Nat} {as : List Expr} {inner : Expr}
+    (hk : k < s.fr.length)
+    (hall : ∀ i (hi : i < as.length), ∃ s₁, Eval P (s.setSlot k (.int i))
+      (.seq (.assign x as[i]) (.seq inner Expr.failV)) .fail s₁) :
+    ∃ s', Eval P s (Expr.firstE (Expr.chooseFirst k x as inner)) .fail s' := by
+  obtain ⟨s', h⟩ := chooseFirst_none hk hall
+  exact ⟨s', firstE_of_ok h⟩
 
 end OpenVerse
