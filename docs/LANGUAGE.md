@@ -613,8 +613,8 @@ Main():void =
   come first, then the members of the modules it opens with `using{M}`.
   If two modules opened at the same scope give the name, it is ambiguous
   and an error. The first definition or module found is the one meant.
-- `(M:)F` and `(A.B:)F`, of a value or a function, are `M.F` and `A.B.F`
-  (#145); a type or a construction is written `M.c`, `M.c{…}`.
+- `(M:)F` and `(A.B:)F` are `M.F` and `A.B.F` (#145): values, functions,
+  the type `(M:)c` and the construction `(M:)c{…}` (#147).
 - `M.F`, `A.B.F`, the type `M.c`, the value `M.c{…}`, a delegation
   `M.D<constructor>(…)` and a qualifier `X.(M.i:)F()` name a member. `M`
   is looked up like any name; if a value is found instead, `.F` is its

@@ -139,6 +139,17 @@ def expectIdent : PM String := do
 
 partial def parseType : PM STy := do
   let t ← peekT
+  -- `(M:)c`: the type `M.c` (#147)
+  if t.isSym "(" && ((← peekT 1).identName?).isSome then
+    let mut q := ((← peekT 1).identName?).getD ""
+    let mut k := 2
+    while (← peekT k).isSym "." && ((← peekT (k + 1)).identName?).isSome do
+      q := q ++ "." ++ ((← peekT (k + 1)).identName?).getD ""
+      k := k + 2
+    if (← peekT k).isSym ":" && (← peekT (k + 1)).isSym ")" && ((← peekT (k + 2)).identName?).isSome then
+      for _ in [0:k + 2] do bump
+      let c ← expectIdent
+      return .name s!"{q}.{c}"
   if t.isSym "[" then
     bump
     if (← peekT).isSym "]" then bump; return .arr (← parseType)
@@ -750,7 +761,13 @@ partial def parsePrimary (stop : Nat) : PM SExpr := do
     if let some (q, k) ← peekQual then
       -- `(i:)M`: `Self.(i:)M`, a qualified member of the current object (#70)
       for _ in [0:k] do bump
-      return .member t.pos (.ident t.pos "Self") s!"({q}:){← expectIdent}"
+      let m ← expectIdent
+      -- (`(M:)c{…}`: a construction of the module's `c`, #147)
+      let b ← peekT
+      if b.isSym "{" && !b.bol then
+        bump
+        return .construct t.pos s!"{q}.{m}" [] (← parseArgs "}")
+      return .member t.pos (.ident t.pos "Self") s!"({q}:){m}"
     bump
     let (items, commas) ← parseParenItems
     match items with
