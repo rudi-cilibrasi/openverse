@@ -372,13 +372,62 @@ def newSite (fieldTy : VTy) : M Nat := do
 def armArgs : M (List Expr) := do
   return [fr, .local schS] ++ (List.range (← read).arity).map fun i => .local (i + 2)
 
+/-- Whether a type mentions a reference. -/
+partial def refIn : VTy → Bool
+  | .ref _ _ => true
+  | .arr t | .opt t => refIn t
+  | .tup ts => ts.any refIn
+  | _ => false
+
+/-- `e` with each `for` whose element has a reference type turned into a
+    loop over an index: its element slot then lives in the frame, initialised
+    once, rather than being a real slot whose initial value would be a new
+    placeholder object at each resumption. -/
+partial def loopify (e : Expr) (used : Bool := true) : M Expr := do
+  match e with
+  | .forE i it f b =>
+    let ty := ((← get).Γ[i]?).getD .int
+    let τit? := tc (← read).S (← get).Γ.toList (← read).ρ it none
+    let τ? := tc (← read).S (← get).Γ.toList (← read).ρ e none
+    let it' ← loopify it
+    let f' ← loopify f
+    let b' ← loopify b
+    match refIn ty, τit?, τ? with
+    | true, some τit, some τ =>
+      let a ← fresh τit
+      let ix ← fresh .int
+      let next : Expr := .assign ix (.prim .add [.local ix, int 1])
+      let elem : Expr := .seq (.prim .lt [.local ix, .prim .len [.local a]])
+        (.assign i (.prim .index [.local a, .local ix]))
+      if !used then
+        -- (its value is dropped: no array of the body's values)
+        return .seq (.assign a it') (.seq (.assign ix (int 0))
+          (.loop (.ite elem (.seq next (.ite f' (.seq b' vd) vd)) .brk)))
+      let acc ← fresh τ
+      let add : Expr := .assign acc (.prim .concat [.local acc, .prim .mkArr [b']])
+      return .seq (.assign a it') (.seq (.assign ix (int 0)) (.seq (.assign acc (.lit (.arr #[])))
+        (.seq (.loop (.ite elem (.seq next (.ite f' (.seq add vd) vd)) .brk)) (.local acc))))
+    | _, _, _ => return .forE i it' f' b'
+  | .assign j x => return .assign j (← loopify x)
+  | .seq x y => return .seq (← loopify x false) (← loopify y used)
+  | .prim p es => return .prim p (← es.mapM loopify)
+  | .call g es => return .call g (← es.mapM loopify)
+  | .heap op es => return .heap op (← es.mapM loopify)
+  | .ite c t x => return .ite (← loopify c) (← loopify t) (← loopify x)
+  | .loop x => return .loop (← loopify x)
+  | .ret x => return .ret (← loopify x)
+  | .print x => return .print (← loopify x)
+  | e => return e
+
 mutual
 /-- The statements of `e`, each guarded, with the continuation `k` applied
     to its value (none: the value is discarded). -/
 partial def block (e : Expr) (k : Option (Expr → Expr)) : M (List Expr) := do
   -- (`return` becomes "store the result, give 1" only here, as the user's
   -- code is emitted: inference sees the code as written)
-  if !(← hasS e) then return [← emit (pure (app k (retToDone e)))]
+  if !(← hasS e) then
+    let e ← loopify e k.isSome
+    return [← emit (pure (app k (retToDone e)))]
   match e with
   -- the defers active at the suspension points of `b` (`withDeferMark`)
   | .seq (.ite (.prim .fail []) d (.lit .void)) b =>
@@ -410,7 +459,8 @@ partial def block (e : Expr) (k : Option (Expr → Expr)) : M (List Expr) := do
       -- only the array suspends: compute it first
       let a ← fresh (← infer it)
       let pre ← block it (some (.assign a ·))
-      return pre ++ [← emit (pure (app k (.forE i (.local a) (retToDone filt) (retToDone body))))]
+      let fe ← loopify (.forE i (.local a) filt body) k.isSome
+      return pre ++ [← emit (pure (app k (retToDone fe)))]
     -- a loop over an index (and the array of the body's values, when used)
     let a ← fresh (← infer it)
     let ix ← fresh .int
@@ -492,7 +542,9 @@ partial def block (e : Expr) (k : Option (Expr → Expr)) : M (List Expr) := do
     let (pre, rs) ← operands [e1]
     return pre ++ [← emit (pure (app k (.print rs.head!)))]
   | .ret e1 => block e1 (some fun v => .seq (fset resF v) (.seq killMark (.ret (int 1))))
-  | e => return [← emit (pure (app k (retToDone e)))]
+  | e =>
+    let e ← loopify e k.isSome
+    return [← emit (pure (app k (retToDone e)))]
 
 /-- Operands evaluated left to right, some of which suspend: those before
     the last that suspends go to temporaries first. -/
@@ -504,7 +556,7 @@ partial def operands (es : List Expr) : M (List Expr × List Expr) := do
     let mut pre : Array Expr := #[]
     let mut rs : Array Expr := #[]
     for (e, i) in es.zipIdx do
-      if i > j || (i < j && stable e) then rs := rs.push (retToDone e)
+      if i > j || (i < j && stable e) then rs := rs.push (retToDone (← loopify e))
       else
         let t ← fresh (← infer e)
         pre := pre ++ (← block e (some (.assign t ·)))

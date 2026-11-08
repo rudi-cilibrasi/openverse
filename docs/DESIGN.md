@@ -284,7 +284,10 @@ classic coroutine transformation. A `<suspends>` function `g` becomes:
    point live in the frame: their reads and writes become the frame's.
    These are the function's own and the pass's temporaries. The slots used
    only within one resumption stay real slots: the seeking flag, a branch
-   choice, a callee's status, a `for`'s element. Each generated function
+   choice, a callee's status, a `for`'s element. (A `for` whose element is
+   a reference becomes a loop over an index, so that its element lives in
+   the frame too: as a real slot, its initial value would be a new
+   placeholder object at each resumption.) Each generated function
    keeps only those, renumbered after its parameters, so there is nothing
    to store or reload, and code size grows linearly with the function.
 
