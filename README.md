@@ -101,6 +101,7 @@ make -C runtime                             # C runtime: runtime/build/cverse
 .lake/build/bin/openverse run tests/verse/hello.verse
 .lake/build/bin/openverse emit tests/verse/hello.verse -o /tmp/hello.vbc
 runtime/build/cverse /tmp/hello.vbc
+.lake/build/bin/openverse run tests/verse/hello.verse --emit /tmp/hello.vbc   # run and emit, compiled once
 scripts/test-verse.sh --c                   # both implementations on the test suite
 scripts/fuzz-diff.sh 1000                   # differential fuzzing on random programs
 scripts/check.sh                            # all of the above, plus the C unit tests and QuickProof pins

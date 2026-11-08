@@ -17,14 +17,16 @@ for f in "${progs[@]}"; do
   n="$(basename "$f" .verse)"
   # NAME.args: command-line arguments, one per line (Args, `do EXPR`)
   extra=(); [[ -f "$root/tests/verse/$n.args" ]] && mapfile -t extra <"$root/tests/verse/$n.args"
-  { "$ov" run "$f" "${extra[@]}" 2>"$tmp/$n.lean.err"; echo "exit=$?"; } >"$tmp/$n.lean.out"
+  # with --c, the same compilation also writes the bytecode for cverse
+  emit=(); [[ $withc -eq 1 ]] && emit=(--emit "$tmp/$n.vbc")
+  { "$ov" run "$f" "${emit[@]}" "${extra[@]}" 2>"$tmp/$n.lean.err"; echo "exit=$?"; } >"$tmp/$n.lean.out"
   if ! cmp -s "$tmp/$n.lean.out" "$root/tests/verse/$n.expected"; then
     echo "FAIL $n (lean):"; diff "$root/tests/verse/$n.expected" "$tmp/$n.lean.out" | head -20
     cat "$tmp/$n.lean.err" | head -5
     fail=$((fail+1)); continue
   fi
   if [[ $withc -eq 1 ]]; then
-    "$ov" emit "$f" -o "$tmp/$n.vbc" "${extra[@]}" || { echo "FAIL $n (emit)"; fail=$((fail+1)); continue; }
+    [[ -s "$tmp/$n.vbc" ]] || { echo "FAIL $n (no bytecode)"; fail=$((fail+1)); continue; }
     { "$cv" "$tmp/$n.vbc" 2>"$tmp/$n.c.err"; echo "exit=$?"; } >"$tmp/$n.c.out"
     if ! cmp -s "$tmp/$n.lean.out" "$tmp/$n.c.out" || ! cmp -s "$tmp/$n.lean.err" "$tmp/$n.c.err"; then
       echo "FAIL $n (C differs from Lean):"; diff "$tmp/$n.lean.out" "$tmp/$n.c.out" | head -20

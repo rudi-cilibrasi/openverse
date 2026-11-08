@@ -38,9 +38,10 @@ def runProg (P : Prog) (fuel : Nat) : IO UInt32 := do
     | .err k => IO.eprintln s!"error: {errName k}"; return 2
 
 def usage : String :=
-  "usage: openverse run FILE.verse [--fuel N] [ARG…] [do EXPR]\n" ++
+  "usage: openverse run FILE.verse [--fuel N] [--emit FILE.vbc] [ARG…] [do EXPR]\n" ++
   "                                               run Main() (or EXPR) with the reference interpreter;\n" ++
-  "                                               the ARGs are the program's Args:[]string\n" ++
+  "                                               the ARGs are the program's Args:[]string; --emit also\n" ++
+  "                                               writes what emit would, compiling the program once\n" ++
   "       openverse emit FILE.verse -o FILE.vbc [ARG…] [do EXPR]\n" ++
   "                                               compile to OVBC for the C runtime (cverse)\n" ++
   "       openverse check FILE.verse              parse, elaborate and check only\n" ++
@@ -76,6 +77,17 @@ def withProgArgs (file : String) (rest : List String) (k : Prog → IO UInt32) :
 
 def defaultFuel : Nat := 100000000
 
+/-- `openverse run FILE [--fuel N] [--emit FILE.vbc] [ARG…] [do EXPR]`. With
+    `--emit`, the bytecode `emit` would write is written before the program
+    runs, from the same compilation, so the scripts that run a program on both
+    implementations compile it once. -/
+def runCmd (file : String) (fuel : Nat) (emit : Option String) : List String → IO UInt32
+  | "--fuel" :: n :: rest => runCmd file n.toNat! emit rest
+  | "--emit" :: out :: rest => runCmd file fuel (some out) rest
+  | rest => withProgArgs file rest fun P => do
+      if let some out := emit then IO.FS.writeBinFile out P.encode
+      runProg P fuel
+
 /-- The hand-written Core programs (`tests/core` holds their encodings). -/
 def allExamples : List (String × Prog) := Examples.all ++ HeapExamples.all
 
@@ -92,8 +104,7 @@ def main (args : List String) : IO UInt32 := do
     match allExamples.lookup name with
     | some P => IO.FS.writeBinFile file P.encode; return 0
     | none => IO.eprintln s!"no example {name}"; return 4
-  | "run" :: file :: "--fuel" :: n :: rest => withProgArgs file rest (runProg · n.toNat!)
-  | "run" :: file :: rest => withProgArgs file rest (runProg · defaultFuel)
+  | "run" :: file :: rest => runCmd file defaultFuel none rest
   | "emit" :: file :: "-o" :: out :: rest => withProgArgs file rest fun P => do
       IO.FS.writeBinFile out P.encode; return 0
   | ["check", file] => withProg file fun P => do
