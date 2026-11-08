@@ -741,6 +741,11 @@ Main()<suspends>:void =
   is allowed in any function that is not generic, immediate ones too, and
   in a field's default (a task per construction that omits the field);
   without a suspends `Main`, a task runs only up to its first wait.
+  `T.Cancel()` (in a suspends function) cancels a task that has not ended:
+  it unwinds at once, running its `defer:` blocks, or, when a task cancels
+  itself, at its next wait. Awaiting a cancelled task cancels the task that
+  awaits (and a `Main` that awaits one is cancelled, which ends the
+  program); cancelling a task that has ended changes nothing.
 
   ```verse
   Fetch(Name:string, D:float)<suspends>:string =
@@ -830,6 +835,6 @@ arithmetic on rationals (see [rational](#rational)), float functions beyond thos
 the class features listed under [Classes](#classes), struct methods (Verse structs have none; classes do),
 `weak_map`, module paths `using{/Verse.org/…}` (accepted and ignored), overloading beyond [Overloading](#overloading), nested
 functions, concurrency beyond [Concurrency](#concurrency) (`spawn`
-in generic functions, `subscribable_event`, cancelling a task; #156), and effect checking
+in generic functions, `subscribable_event`; #156), and effect checking
 other than `<decides>` and the heap effects (`<converges>` is accepted and
 ignored).

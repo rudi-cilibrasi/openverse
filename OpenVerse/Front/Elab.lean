@@ -2554,6 +2554,17 @@ partial def elabAppBase (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (b
     elabApp ctx p (.ident mp impl) (.ident mp "Self" :: args) bracket exp
   | .member mp obj m0 =>
     -- `T.Await()` of a task (#156): the helper `$Await(T)`
+    -- `T.Cancel()` of a task (#156): the mark `$cancelMark(T)`, which the
+    -- lowering turns into the cancellation of the task's root
+    if m0 == "Cancel" && args.isEmpty then
+      let rt ← elabE ctx obj none
+      if let .struct "task" [_] := rt.ty then
+        if !ctx.suspends then eerr p "Cancel suspends: it can only be called in a <suspends> function (#156)"
+        if ctx.inDefer then eerr p "Cancel suspends, and a defer cannot suspend (#156)"
+        if ctx.canFail then eerr p "Cancel suspends, and a failure context (a condition, a filter, or a <decides> call's arguments) cannot (#156)"
+        let some mark := ctx.sig? "$cancelMark" | eerr p "internal error: no Cancel helper"
+        let t ← fresh rt.ty
+        return ⟨.seq (.assign t rt.e) (.call mark.idx [.local t]), .void⟩
     -- `E.Signal()` of an `event()` (#156): with the value `void`
     if m0 == "Signal" && args.isEmpty then
       match (← elabE ctx obj none).ty with
@@ -4178,9 +4189,13 @@ sched := class:
     var Head:?int = false
     var Tail:?int = false
     var Dead:logic = false
+    var CancelCur:logic = false
 taskBase := class:
     var Done:logic = false
     var Sch:?sched = false
+    var Cancelled:logic = false
+    var Running:logic = false
+    var Root:?int = false
 task(t:type) := class(taskBase):
     var Result:?t = false
 waitf := class:
@@ -4191,6 +4206,9 @@ waitInit(F:waitf, X:taskBase):void =
     set F.Pc = 0
     set F.T = X
 waitResume(F:waitf, C:sched):int =
+    if (F.T.Cancelled?):
+        set C.CancelCur = true
+        return 0
     if (F.T.Done?) then return 1
     if (F.Pc = 0):
         set F.Pc = 1
@@ -4201,6 +4219,7 @@ Await(T:task(t) where t:type)<suspends>:t =
     WaitDone(T)
     if (R := T.Result?) then R else Err()
 spawnMark(A:[]void)<computes>:void = {}
+cancelMark(X:taskBase)<suspends><computes>:void = {}
 branchMark(A:[]void)<computes>:void = {}
 evrec(t:type) := class(taskBase):
     var Got:?t = false
@@ -4281,7 +4300,7 @@ def concTops : Except String (List STop) :=
     "sleepInit", "sleepResume", "Sleep", "syncMark", "raceMark", "S", "F", "C", "N", "R", "A",
     "Progress", "Roots", "taskBase", "Done", "Result", "waitf", "T", "X", "waitNew", "waitInit", "waitResume",
     "WaitDone", "Await", "spawnMark", "t", "Sch", "Dead", "evrec", "Got", "Next", "Head", "Tail", "Cur", "W", "L", "V",
-    "EvAwait", "E", "branchMark", "rushMark", "signalAll", "H", "StickyAwait", "Last"]
+    "EvAwait", "E", "branchMark", "rushMark", "signalAll", "H", "StickyAwait", "Last", "CancelCur", "Cancelled", "Running", "Root", "cancelMark"]
 
 /-- Elaborate a parsed program into a Verse Core program that passes `Prog.check`
     and `Prog.checkTypes`. -/
@@ -5391,7 +5410,8 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     let spawnMark := idxOf "$spawnMark"
     let branchMark := idxOf "$branchMark"
     let isMark (f : Nat) : Bool := f == syncMark || f == raceMark || f == rushMark
-    let leaves := ["$Sleep", "$WaitDone", "$syncMark", "$raceMark", "$rushMark", "$spawnMark", "$branchMark"]
+    let leaves := ["$Sleep", "$WaitDone", "$syncMark", "$raceMark", "$rushMark", "$spawnMark", "$branchMark",
+      "$cancelMark"]
     let user := (allS.filter fun s => s.suspends && !leaves.contains s.name).map fun s =>
       (s.idx, s.name, s.tparams.length)
     let tagBase := env.classes.length
@@ -5525,12 +5545,22 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     let armBase := wrapFnBase + 3 * B
     let mut branchFns : Array Fn := #[]
     let mut branchTys : Array (List VTy) := #[]
+    -- (each branch's arm resume function, done field, and the passing of its
+    -- function's parameters from the frame, for cancelling it)
+    let mut branchInfo : Array (Nat × Nat × List Expr) := #[]
     let mut branchSigs : Array (List VTy × VTy) := #[]
     let progressF := fieldIdx "$sched" "$Progress"
     let headF := fieldIdx "$sched" "$Head"
     let tailF := fieldIdx "$sched" "$Tail"
     -- (set when a root ends or is stopped: the list then has cells to drop)
     let deadF := fieldIdx "$sched" "$Dead"
+    -- (cancellation: the task's flags and root; the scheduler's request to
+    -- cancel the root that just ran)
+    let cancelCurF := fieldIdx "$sched" "$CancelCur"
+    let tDoneF := fieldIdx "task" "$Done"
+    let tCancelledF := fieldIdx "task" "$Cancelled"
+    let runningF := fieldIdx "task" "$Running"
+    let rootF := fieldIdx "task" "$Root"
     for ((gi, gname, _), j) in lows.zipIdx do
       let fn := fns[gi]!
       let Γ := slotTys[gi]!
@@ -5552,6 +5582,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       for (K, (armRes, doneA, runNow)) in ((branchOf[j]?).getD []).zip low.branchArms do
         let fr : Expr := .heap (.get 1) [.local 0]
         let pass := (List.range a).map fun i => Expr.heap (.get (Suspend.slotBaseOf sitesJ armsJ + i)) [fr]
+        branchInfo := branchInfo.push (armRes, doneA, pass)
         let tramp : Expr := .seq (.ite (.prim .eq [.heap (.get doneA) [fr], Suspend.int 0])
             (.seq (Suspend.seqVoid [.assign 2 (.call armRes (fr :: .local 1 :: pass)),
               .ite (.prim .eq [.local 2, Suspend.int 1]) (.seq (.heap (.set doneA) [fr, Suspend.int 1]) Suspend.vd) Suspend.vd])
@@ -5645,11 +5676,20 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       let (_, _, sites, arms) := parts[j]!
       let a := fns[ri]!.arity - 2
       let pass := (List.range a).map fun i => Expr.heap (.get (Suspend.slotBaseOf sites arms + i)) [.local 0]
-      rootFns := rootFns.push { name := s!"$spawn{k}$tramp", arity := 2, nslots := 2, decides := false, writes := true,
-                                body := .call ri (.local 0 :: .local 1 :: pass) }
-      rootTys := rootTys.push [frameTy j, schedTy]
+      -- (the task is the root's first parameter; it is marked running while
+      -- the root runs, so that cancelling it from inside waits until it
+      -- suspends)
+      let task : Expr := .heap (.get (Suspend.slotBaseOf sites arms)) [.local 0]
+      let trampBody : Expr := Suspend.seqVoid [
+        .heap (.set runningF) [task, .lit (.logic true)],
+        .assign 2 (.call ri (.local 0 :: .local 1 :: pass)),
+        .heap (.set runningF) [task, .lit (.logic false)]] |> fun e => Expr.seq e (.local 2)
+      rootFns := rootFns.push { name := s!"$spawn{k}$tramp", arity := 2, nslots := 3, decides := false, writes := true,
+                                body := initPrefixE 2 [Suspend.int 0] trampBody }
+      rootTys := rootTys.push [frameTy j, schedTy, .int]
       let start : Expr := Suspend.seqVoid [
         .call linkIdx [.local 0, .local 1],
+        .heap (.set rootF) [.heap (.get (Suspend.slotBaseOf sites arms)) [.local 1], .prim .mkSome [.local 1]],
         .assign 2 (.call (trampOf k) [.local 1, .local 0]),
         .ite (.prim .eq [.local 2, Suspend.int 1])
           (.seq (Suspend.seqVoid [.heap (.set Suspend.pcF) [.local 1, Suspend.int (-1)],
@@ -5679,6 +5719,71 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       frameClasses := frameClasses.push [.int, frameTy branchHome[K]!]
     frameClasses := frameClasses.push [rootAny, .opt cellTy]
     classTable := classTable.set schedTag (((classTable[schedTag]!).set headF (.opt cellTy)).set tailF (.opt cellTy))
+    -- a task's root: the type of its `Root` field (in every class that has it)
+    for d in env.classes do
+      if let some ri := (env.fields d).findIdx? (·.1 == "$Root") then
+        classTable := classTable.set (env.tagOf d) ((classTable[env.tagOf d]!).set ri (.opt rootAny))
+    -- cancelling (#156): `$cancelRoot(sched, root)` unwinds a root that is
+    -- not done, through its kind's cancel function (a spawned task's root
+    -- also marks its task cancelled), and marks it done
+    let cancelRootIdx := fns.size
+    let cancelTOf (k : Nat) : Nat := cancelRootIdx + 1 + k
+    let cancelWOf (K : Nat) : Nat := cancelRootIdx + 1 + roots.size + K
+    let dispatchCancel : Expr := (List.range roots.size).foldr (fun k acc =>
+        Expr.ite (.heap (.isTag [tagBase + rootJ k]) [.local 1]) (.call (cancelTOf k) [.local 1, .local 0]) acc)
+      ((List.range B).foldr (fun K acc =>
+        Expr.ite (.heap (.isTag [wrapTag K]) [.local 1]) (.call (cancelWOf K) [.local 1, .local 0]) acc) Suspend.vd)
+    let cancelRootBody : Expr := .ite (.prim .ne [.heap (.get Suspend.pcF) [.local 1], Suspend.int (-1)])
+      (.seq (Suspend.seqVoid [dispatchCancel, .heap (.set Suspend.pcF) [.local 1, Suspend.int (-1)],
+        .heap (.set deadF) [.local 0, .lit (.logic true)], .heap (.set progressF) [.local 0, .lit (.logic true)]])
+        Suspend.vd) Suspend.vd
+    let cancelRootFn : Fn := { name := "$cancelRoot", arity := 2, nslots := 2, decides := false, writes := true, body := cancelRootBody }
+    let mut cancelFns : Array Fn := #[cancelRootFn]
+    let mut cancelTys : Array (List VTy) := #[[schedTy, rootAny]]
+    let mut cancelSigs : Array (List VTy × VTy) := #[([schedTy, rootAny], VTy.void)]
+    for k in List.range roots.size do
+      let j := rootJ k
+      let (ri, _, _) := roots[k]!
+      let (_, _, sites, arms) := parts[j]!
+      let a := fns[ri]!.arity - 2
+      let pass := (List.range a).map fun i => Expr.heap (.get (Suspend.slotBaseOf sites arms + i)) [.local 0]
+      let task : Expr := .heap (.get (Suspend.slotBaseOf sites arms)) [.local 0]
+      let cbody : Expr := Suspend.seqVoid [.call (nFns + 4 * j + 2) (.local 0 :: .local 1 :: pass),
+        .heap (.set tCancelledF) [task, .lit (.logic true)], .heap (.set tDoneF) [task, .lit (.logic true)]]
+      let cfn : Fn := { name := s!"$spawn{k}$cancelT", arity := 2, nslots := 2, decides := false, writes := true, body := cbody }
+      cancelFns := cancelFns.push cfn
+      cancelTys := cancelTys.push [frameTy j, schedTy]
+      cancelSigs := cancelSigs.push ([frameTy j, schedTy], VTy.void)
+    for K in List.range B do
+      let (armRes, doneA, pass) := branchInfo[K]!
+      let fr : Expr := .heap (.get 1) [.local 0]
+      let pass := pass.map fun e => match e with
+        | .heap op _ => Expr.heap op [fr]
+        | e => e
+      let wbody : Expr := .ite (.prim .eq [.heap (.get doneA) [fr], Suspend.int 0])
+        (.seq (Suspend.seqVoid [.call (armRes + 1) (fr :: .local 1 :: pass), .heap (.set doneA) [fr, Suspend.int 2]])
+          Suspend.vd) Suspend.vd
+      let wfn : Fn := { name := s!"$branch{K}$cancelT", arity := 2, nslots := 2, decides := false, writes := true, body := wbody }
+      cancelFns := cancelFns.push wfn
+      cancelTys := cancelTys.push [wrapTy K, schedTy]
+      cancelSigs := cancelSigs.push ([wrapTy K, schedTy], VTy.void)
+    fns := fns ++ cancelFns
+    slotTys := slotTys ++ cancelTys
+    fsigs := fsigs ++ cancelSigs.toList
+    -- `T.Cancel()` (the mark `$cancelMark(T)`, in suspends code, whose slot 1
+    -- is the scheduler): a task that is not done is cancelled now, or, when
+    -- it is the one running (it cancels itself), at its next suspension
+    let cancelMark := idxOf "$cancelMark"
+    let cancelAt (t : Expr) : Expr :=
+      .ite (.prim .eq [.heap (.get tDoneF) [t], .lit (.logic false)])
+        (.seq (.ite (.prim .query [.heap (.get runningF) [t]])
+          (.seq (.heap (.set cancelCurF) [.local 1, .lit (.logic true)]) Suspend.vd)
+          (.seq (.ite (.call cancelRootIdx [.local 1, .prim .query [.heap (.get rootF) [t]]]) Suspend.vd Suspend.vd)
+            Suspend.vd)) Suspend.vd) Suspend.vd
+    let replCancel : List Expr → Expr := fun es => match es with
+      | [t] => cancelAt t
+      | _ => .prim .userErr []
+    fns := fns.map fun fn => { fn with body := Suspend.substCall cancelMark replCancel fn.body }
     -- a suspends `Main` runs under the scheduler: a loop of ticks; in each,
     -- passes that resume `Main` and then every root that is not done, again
     -- while a root ends; between ticks the clock moves to the earliest tick
@@ -5712,6 +5817,11 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
           .assign r (rootOf (.local c)),
           .ite (.prim .ne [.heap (.get Suspend.pcF) [.local r], Suspend.int (-1)])
             (.seq (Suspend.seqVoid [.assign st dispatch,
+              -- (a root asked to be cancelled: awaiting a cancelled task, or
+              -- cancelling its own)
+              .ite (.prim .query [.heap (.get cancelCurF) [sch]])
+                (.seq (Suspend.seqVoid [.heap (.set cancelCurF) [sch, .lit (.logic false)],
+                  .call cancelRootIdx [sch, .local r]]) Suspend.vd) Suspend.vd,
               .ite (.prim .eq [.local st, Suspend.int 1])
                 (.seq (Suspend.seqVoid [.heap (.set Suspend.pcF) [.local r, Suspend.int (-1)],
                   .heap (.set progressF) [sch, .lit (.logic true)], .heap (.set deadF) [sch, .lit (.logic true)]]) Suspend.vd)
@@ -5721,7 +5831,11 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
         .heap (.set progressF) [sch, .lit (.logic false)],
         .heap (.set 1) [sch, Suspend.int (-1)],
         .assign st (.call mainSig.idx [.local 1, sch]),
-        .ite (.prim .eq [.local st, Suspend.int 1]) (.seq (.assign mainDone (Suspend.int 1)) .brk) Suspend.vd] ++
+        .ite (.prim .eq [.local st, Suspend.int 1]) (.seq (.assign mainDone (Suspend.int 1)) .brk) Suspend.vd,
+        -- (`Main` awaited a cancelled task: it is cancelled, and so the program ends)
+        .ite (.prim .query [.heap (.get cancelCurF) [sch]])
+          (.seq (Suspend.seqVoid [.heap (.set cancelCurF) [sch, .lit (.logic false)],
+            .call (nFns + 4 * j + 2) [.local 1, sch], .assign mainDone (Suspend.int 1)]) .brk) Suspend.vd] ++
         pollRoots ++
         [.ite (.prim .query [.heap (.get progressF) [sch]]) Suspend.vd .brk]))
       -- (between ticks, after a root ended, the cells of the roots that are

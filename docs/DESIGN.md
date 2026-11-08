@@ -336,6 +336,14 @@ reused for another call so never shares an arm with an old wrapper. A
 ends, the others that are pending are registered as roots (not run again
 at once) instead of cancelled.
 
+`T.Cancel()` reaches the task's root (recorded in the task when it starts)
+through `$cancelRoot`, which calls the root's cancel function. That unwinds
+it as a race's loser is unwound, and marks the task cancelled. A task that
+cancels itself is marked running by its trampoline, so it only asks the
+scheduler, which cancels the root after its resumption returns. The same
+request is how cancellation spreads: the leaf `$WaitDone`, seeing a
+cancelled task, asks the scheduler to cancel the root that awaits it.
+
 An `event(t)` keeps a list of waiter records (each an `$evrec(t)`, also
 below `$taskBase`). `E.Await()` first drops the records at the head that are
 done (woken, or of waits that were cancelled, which mark their record in a
