@@ -37,10 +37,11 @@ for i in range(n):
 PY
 acc=0; rej=0; bad=0
 for f in "$tmp"/m*.verse; do
-  timeout 20 "$ov" emit "$f" -o "$f.vbc" >/dev/null 2>"$f.err"; e=$?
-  if [[ $e -eq 4 ]] && ! grep -q "internal error" "$f.err"; then rej=$((rej+1)); continue; fi
-  if [[ $e -ne 0 ]]; then echo "FRONT END BUG ($e) on $(basename "$f"): $(head -3 "$f.err")"; cp "$f" "$root/build/" 2>/dev/null; bad=$((bad+1)); continue; fi
-  timeout 20 "$ov" run "$f" --fuel 200000 >"$f.l" 2>"$f.le"; le=$?
+  # one compilation: it writes the bytecode (so a mutant without one never got past the front
+  # end), then the Lean interpreter runs it
+  timeout 20 "$ov" run "$f" --emit "$f.vbc" --fuel 200000 >"$f.l" 2>"$f.le"; le=$?
+  if [[ $le -eq 4 ]] && ! grep -q "internal error" "$f.le"; then rej=$((rej+1)); continue; fi
+  if [[ ! -s "$f.vbc" ]]; then echo "FRONT END BUG ($le) on $(basename "$f"): $(head -3 "$f.le")"; cp "$f" "$root/build/" 2>/dev/null; bad=$((bad+1)); continue; fi
   timeout 20 "$cv" "$f.vbc" --fuel 200000 >"$f.c" 2>"$f.ce"; ce=$?
   if [[ $le -ne 3 && $le -ne 124 ]] && { [[ $le -ne $ce ]] || ! cmp -s "$f.l" "$f.c" || ! cmp -s "$f.le" "$f.ce"; }; then
     echo "MISMATCH on $(basename "$f"): lean $le, C $ce"; bad=$((bad+1)); continue
