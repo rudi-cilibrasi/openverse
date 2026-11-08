@@ -176,6 +176,12 @@ structure TyEnv where
       made the class queries quadratic, and their users cubic. -/
   belowMap : Std.HashMap String (List String) := {}
   belowReady : Bool := false
+  /-- `supers` of each class and interface, once the classes are known: each
+      walk up a chain made the queries that walk every ancestor's ancestors
+      grow with the fourth power of a chain's depth (#238). -/
+  supersMap : Std.HashMap String (List String) := {}
+  /-- `pinsOf` of each class, once the type arguments are known (#238). -/
+  pinsMap : Std.HashMap String (List (Option Ty)) := {}
   /-- The abstract methods (class or interface, method): their functions are
       never called. -/
   abstracts : List (String × String) := []
@@ -258,7 +264,7 @@ def TyEnv.info (env : TyEnv) (c : String) : ClassInfo :=
 /-- A class or interface and everything above it: its class chain first,
     nearest first, then the interfaces of the chain, breadth first. This is
     also the order in which a method's implementation is looked up. -/
-def TyEnv.supers (env : TyEnv) (c : String) : List String := Id.run do
+def TyEnv.supersWalk (env : TyEnv) (c : String) : List String := Id.run do
   let mut chain := [c]
   let mut cur := c
   for _ in [0:env.cinfo.length] do
@@ -273,6 +279,12 @@ def TyEnv.supers (env : TyEnv) (c : String) : List String := Id.run do
     out := out ++ new
     frontier := new.flatMap fun k => (env.info k).ifaces
   return out
+
+/-- `supersWalk`, from `supersMap` once it is filled. -/
+def TyEnv.supers (env : TyEnv) (c : String) : List String :=
+  match env.supersMap[c]? with
+  | some s => s
+  | none => env.supersWalk c
 
 /-- `d` is `T` or below it. -/
 def TyEnv.isSub (env : TyEnv) (d T : String) : Bool := (env.supers d).contains T
@@ -645,19 +657,22 @@ def pinArg (j : Nat) : String := s!"$pos{j}"
     parent's pin there instead: a dispatch on a receiver with its
     parent's arguments could not name that one (#209). -/
 partial def TyEnv.pinsOf (env : TyEnv) (d : String) : List (Option Ty) :=
-  let cs := env.coreArgs d (((env.sparams.lookup d).getD []).map fun (v, k) => Ty.param v k)
-  let first (v : String) : Option Nat := cs.findIdx? fun | .param w _ => w == v | _ => false
-  let σ := (cs.flatMap Ty.params).filterMap fun v => (first v).map fun j => (v, Ty.param (pinArg j) false)
-  let own := cs.zipIdx.map fun (t, i) => match t with
-    | .param v _ => if first v == some i then none else some (t.subst σ)
-    | _ => if t.params.all fun v => (first v).isSome then some (t.subst σ) else none
-  match (env.info d).parent with
-  | some q =>
-    let pq := env.pinsOf q
-    let low := lowerPins env own
-    own.zipIdx.map fun (o, i) =>
-      if ((low.getD i none).all (·.varsBelow pq.length)) then o else pq.getD i none
-  | none => own
+  match env.pinsMap[d]? with
+  | some ps => ps
+  | none =>
+      let cs := env.coreArgs d (((env.sparams.lookup d).getD []).map fun (v, k) => Ty.param v k)
+      let first (v : String) : Option Nat := cs.findIdx? fun | .param w _ => w == v | _ => false
+      let σ := (cs.flatMap Ty.params).filterMap fun v => (first v).map fun j => (v, Ty.param (pinArg j) false)
+      let own := cs.zipIdx.map fun (t, i) => match t with
+        | .param v _ => if first v == some i then none else some (t.subst σ)
+        | _ => if t.params.all fun v => (first v).isSome then some (t.subst σ) else none
+      match (env.info d).parent with
+      | some q =>
+        let pq := env.pinsOf q
+        let low := lowerPins env own
+        own.zipIdx.map fun (o, i) =>
+          if ((low.getD i none).all (·.varsBelow pq.length)) then o else pq.getD i none
+      | none => own
 where
   /-- Pins in Verse Core (as `TyEnv.lowerPins`): `pinArg j` is `var j`,
       also past the pins' length (on a prefix of a class's arguments). -/
@@ -5963,6 +5978,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     cinfo := cinfo.push (cd.name, info)
   let henv : TyEnv := { classes := cdefs.map (·.name), cinfo := cinfo.toList,
                         cinfoMap := cinfo.foldl (fun m (n, i) => m.insert n i) {} }
+  let henv : TyEnv := { henv with supersMap := henv.classes.foldl (fun m d => m.insert d (henv.supers d)) {} }
   let directUp (n : String) : List String := (henv.info n).parent.toList ++ (henv.info n).ifaces
   for cd in cdefs do
     let mut seen : List String := []
@@ -6225,6 +6241,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   let mut env : TyEnv := { classes := henv.classes, cinfo := henv.cinfo, cinfoMap := henv.cinfoMap,
                            classIx := henv.classes.zipIdx.foldl (fun m (n, i) => m.insert n i) {},
                            belowReady := true,
+                           supersMap := henv.classes.foldl (fun m d => m.insert d (henv.supers d)) {},
                            belowMap := henv.classes.foldl (fun m d =>
                              let i := henv.info d
                              if i.isIface || i.isAbstract then m else
@@ -6336,6 +6353,12 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   -- the classes whose implementations fix type arguments their declaring
   -- class leaves open, and the classes below them, are dispatched to under
   -- a refinement, so Verse Core records their pins (#142)
+  -- (the pins of the classes in override pairs, once, #238; not of every
+  -- class, as a class whose Verse Core type would contain itself is refused
+  -- only below, and computing its pins would not end)
+  let pinClasses := (overridePairs.toList.flatMap fun (_, dm, qm) =>
+      [(dm.splitOn ".").head!, (qm.splitOn ".").head!]).eraseDups
+  env := { env with pinsMap := pinClasses.foldl (fun m d => m.insert d (env.pinsOf d)) {} }
   let fixes (e q : String) : Bool := ((env.pinsOf q).zip (env.pinsOf e)).any fun (a, b) => a != b
   let headOf (f : String) : String := (f.splitOn ".").head!
   let fixers := (overridePairs.toList.filterMap fun (_, dm, qm) =>
