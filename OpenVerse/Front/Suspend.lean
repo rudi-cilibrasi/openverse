@@ -200,34 +200,35 @@ partial def slotsOf : Expr → List Nat
   | .ite c t e => slotsOf c ++ slotsOf t ++ slotsOf e
   | _ => []
 
-/-- A method call's dispatch on the class of the receiver in slot `y`
-    (#34), as a chain of tests in `Typed.dispatch`'s shape: a test that
-    binds the narrowed receiver to a slot for the call becomes a test of the
-    receiver itself, which the rule narrows. None unless each test calls
-    the implementation directly on it; the chain ends in `userErr`. (Used to
-    recognise a dispatch; the lowering keeps the bindings, as a generic
-    implementation's frame is made by a call typed without narrowing.) -/
-partial def dispatchChainOn (y : Nat) : Expr → Option Expr
-  | .ite (.assign sd (.heap (.isTag us) [.local y'])) (.call f (.local sd' :: es)) e =>
-    if y' == y && sd' == sd && sd != y && !(es.any fun x => (slotsOf x).contains sd) then
-      (dispatchChainOn y e).map (.ite (.heap (.isTag us) [.local y]) (.call f (.local y :: es)))
-    else none
-  | .ite (.heap (.isTag us) [.local y']) (.call f (.local y'' :: es)) e =>
-    if y' == y && y'' == y then
-      (dispatchChainOn y e).map (.ite (.heap (.isTag us) [.local y]) (.call f (.local y :: es)))
-    else none
-  | .prim .userErr [] => some (.prim .userErr [])
-  | _ => none
+/-- Whether `e` is a method call's dispatch on the class of the receiver in
+    slot `y` (#34, #142): a chain of class tests of it (each binding the
+    narrowed receiver to a slot, or in `Typed.dispatch`'s shape), each
+    running an implementation, ending in `userErr`. -/
+partial def isDispatchChainOn (y : Nat) : Expr → Bool
+  | .ite (.assign sd (.heap (.isTag _) [.local y'])) _ e => y' == y && sd != y && isDispatchChainOn y e
+  | .ite (.heap (.isTag _) [.local y']) _ e => y' == y && isDispatchChainOn y e
+  | .prim .userErr [] => true
+  | _ => false
 
-/-- `dispatchChainOn` at the receiver its first test reads. -/
-def dispatchChain : Expr → Option Expr
-  | e@(.ite (.assign _ (.heap (.isTag _) [.local y])) _ _) => dispatchChainOn y e
-  | e@(.ite (.heap (.isTag _) [.local y]) _ _) => dispatchChainOn y e
-  | _ => none
+/-- `isDispatchChainOn` at the receiver its first test reads. -/
+def isDispatchChain : Expr → Bool
+  | e@(.ite (.assign _ (.heap (.isTag _) [.local y])) _ _) => isDispatchChainOn y e
+  | e@(.ite (.heap (.isTag _) [.local y]) _ _) => isDispatchChainOn y e
+  | _ => false
 
-/-- The functions a dispatch chain calls. -/
-partial def chainCallees : Expr → List Nat
-  | .ite _ (.call f _) e => f :: chainCallees e
+/-- Every call in `e`: its callee and arguments. -/
+partial def callsOf : Expr → List (Nat × List Expr)
+  | .call f es => (f, es) :: (es.map callsOf).flatten
+  | .assign _ e | .ret e | .print e | .loop e => callsOf e
+  | .seq a b => callsOf a ++ callsOf b
+  | .prim _ es | .heap _ es => (es.map callsOf).flatten
+  | .ite c t e => callsOf c ++ callsOf t ++ callsOf e
+  | .forE _ it f b => callsOf it ++ callsOf f ++ callsOf b
+  | _ => []
+
+/-- The code each test of a dispatch chain runs. -/
+partial def chainArms : Expr → List Expr
+  | .ite _ t e => t :: chainArms e
   | _ => []
 
 /-- The `spawn`s (mark `m`) in `e` of a dispatch chain rather than a call

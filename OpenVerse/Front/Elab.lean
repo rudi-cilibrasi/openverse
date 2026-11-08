@@ -1967,16 +1967,17 @@ partial def elabSpawn (ctx : Ctx) (p : Pos) (body : SExpr) : EM R := do
   let rec peel : Expr → Option (List Expr × Expr)
     | .call g es => some ([], .call g es)
     | .seq a b => (peel b).map fun (ps, c) => (a :: ps, c)
-    | e@(.ite ..) => (Suspend.dispatchChain e).map fun _ => ([], e)
+    | e@(.ite ..) => if Suspend.isDispatchChain e then some ([], e) else none
     -- (one refined by #142, through a temporary of the result type)
-    | .assign _ e@(.ite ..) => (Suspend.dispatchChain e).map fun _ => ([], e)
+    | .assign _ e@(.ite ..) => if Suspend.isDispatchChain e then some ([], e) else none
     | _ => none
   let some (pre, callE) := peel e
-    | eerr p "spawn{…} takes one call of a <suspends> function, with its arguments (#156)"
-  let (callees, es) := match callE with
-    | .call g es => ([g], es)
-    | ch => (Suspend.chainCallees ch, [])
-  if callees.isEmpty || !callees.all isS then eerr p "spawn{…} takes a call of a <suspends> function (#156)"
+    | eerr p "spawn{…} takes one call of a <suspends> function or method, with its arguments (#156)"
+  let (ok, es) := match callE with
+    | .call g es => (isS g, es)
+    -- (each implementation the dispatch runs, with its own defaults)
+    | ch => ((Suspend.chainArms ch).all fun a => (Suspend.callsOf a).any (isS ·.1), [])
+  if !ok then eerr p "spawn{…} takes a call of a <suspends> function (#156)"
   -- (a spawn among them does not wait)
   if (pre ++ es).any (fun x => Suspend.countSusp isS (fun _ => false) false (· == mark.idx) x > 0) then
     eerr p "the arguments of a spawned call cannot suspend (#156)"

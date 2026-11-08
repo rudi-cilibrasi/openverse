@@ -1,0 +1,9 @@
+make 1
+make 0
+agent a run 1
+make 1
+fast f run 3
+fast f run 7
+fast g run 2
+6 1 14 4
+exit=0
