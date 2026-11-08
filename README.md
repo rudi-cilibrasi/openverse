@@ -105,6 +105,7 @@ scripts/test-verse.sh --c                   # both implementations on the test s
 scripts/fuzz-diff.sh 1000                   # differential fuzzing on random programs
 scripts/check.sh                            # all of the above, plus the C unit tests and QuickProof pins
 scripts/check-quickproof.sh --check         # QuickProof: qp check and qp verify (needs Docker)
+scripts/worktree.sh feat/x                  # a worktree ../openverse-x on branch feat/x, built from this one's .lake
 ```
 
 ```verse
