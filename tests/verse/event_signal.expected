@@ -1,0 +1,11 @@
+signalled 1
+a got 1
+b got 1
+signalled 2 and 3
+a got 2
+main after signal
+waiter woke with go
+waiter said ok go
+timeout
+got 10
+exit=0

@@ -677,7 +677,7 @@ the readings are flat:
 
 A function marked `<suspends>` can wait (Book of Verse ch. 14, #156).
 openverse supports such functions, `Sleep`, calls between them, `sync`,
-`race`, `spawn` and `task`; `rush`, `branch` and `event` come next.
+`race`, `spawn`, `task` and `event`; `rush` and `branch` come next.
 
 ```verse
 Countdown(N:int)<suspends>:int =
@@ -739,6 +739,13 @@ Main()<suspends>:void =
       Print(B.Await())    # after 1 second: b data
       Print(A.Await())    # after 2 seconds: a data
   ```
+- **`event`.** An `event(t){}` has `E.Await()`, which waits for the next
+  `E.Signal(X)` and gives `X`, and `E.Signal(X)`, which wakes every task
+  waiting at that moment, in the order they began waiting, each with `X`
+  (the API's reading; the Book's text says both "each awaiter" and
+  "exactly one"). A `Signal` with no one waiting is lost, and `Signal`
+  itself never waits. `event()` without a type, `sticky_event` and
+  `subscribable_event` are not supported.
 - **Arms.** Arms share the enclosing function's variables. An arm is a
   scope of its own: `return` in an arm is not supported yet, and `break`
   cannot leave it.
@@ -800,6 +807,6 @@ arithmetic on rationals (see [rational](#rational)), float functions beyond thos
 the class features listed under [Classes](#classes), struct methods (Verse structs have none; classes do),
 `weak_map`, module paths `using{/Verse.org/…}` (accepted and ignored), overloading beyond [Overloading](#overloading), nested
 functions, concurrency beyond [Concurrency](#concurrency) (`rush`, `branch`,
-`event`, `spawn` outside suspends functions, cancelling a task, `return` in arms, `<suspends>` methods; #156), and effect checking
+`spawn` outside suspends functions, `event()` without a type argument, cancelling a task, `return` in arms, `<suspends>` methods; #156), and effect checking
 other than `<decides>` and the heap effects (`<converges>` is accepted and
 ignored).

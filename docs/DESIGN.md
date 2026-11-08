@@ -310,6 +310,13 @@ ends makes the scheduler pass again in the same tick. `T.Await()` is a
 helper written in Verse: it waits at the leaf `$WaitDone` (whose frame
 tests the done flag, non-generically), then takes the result.
 
+An `event(t)` keeps a list of waiter records (each an `$evrec(t)`, also
+below `$taskBase`). `E.Await()` appends one and waits at `$WaitDone`.
+`E.Signal(X)` gives `X` to every record in the list, marks it done, and
+empties the list. A record learns the scheduler on its first poll, so
+`Signal`, which has no scheduler of its own, can make the scheduler pass
+again in the same tick.
+
 Between ticks, the roots that are done are dropped once they are more
 than half, since every spawn copies the array. In C, each task's frame
 and task object stay in memory.

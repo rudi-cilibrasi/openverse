@@ -1909,7 +1909,10 @@ partial def elabSpawn (ctx : Ctx) (p : Pos) (body : SExpr) : EM R := do
   let ty : Ty := .struct "task" [r.ty]
   let tagT := ctx.types.tagOf "task"
   let t ← fresh ty
-  return ⟨.seq (.assign t (.heap (.new tagT) [.lit (.logic false), .lit .none]))
+  -- (its fields: the done flag `false`, the others empty options)
+  let fieldVals := (ctx.types.fields "task" [r.ty]).map fun (_, ft, _) =>
+    if ft == .logic then Expr.lit (.logic false) else Expr.lit .none
+  return ⟨.seq (.assign t (.heap (.new tagT) fieldVals))
     (.seq (.call mark.idx [.prim .mkArr [.seq (.call g es) (.lit .void), .seq (.local t) (.lit .void)]]) (.local t)), ty⟩
 
 partial def elabDefersCore (ctx : Ctx) (ds : List (SExpr × List Local)) : EM Expr := do
@@ -2359,7 +2362,8 @@ partial def elabAppBase (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (b
           -- the call syntax marks failure (Book of Verse §8.1)
           if !s.decides && bracket then eerr p s!"{name} cannot fail: call it with {name}(…)"
           if s.suspends then
-            let shown := if name.startsWith "$" then (name.drop 1).toString else name
+            let shown := if name == "$EvAwait" then "Await"
+              else if name.startsWith "$" then (name.drop 1).toString else name
             if !ctx.suspends then eerr p s!"{shown} suspends: it can only be called in a <suspends> function (#156)"
             if ctx.inDefer then eerr p s!"{shown} suspends, and a defer cannot suspend (#156)"
             if ctx.canFail then eerr p s!"{shown} suspends, and a failure context (a condition, a filter, or a <decides> call's arguments) cannot (#156)"
@@ -2491,8 +2495,10 @@ partial def elabAppBase (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (b
   | .member mp obj m0 =>
     -- `T.Await()` of a task (#156): the helper `$Await(T)`
     if m0 == "Await" && args.isEmpty then
-      if let .struct "task" [_] := (← elabE ctx obj none).ty then
-        return ← elabApp ctx p (.ident mp "$Await") [obj] false exp
+      match (← elabE ctx obj none).ty with
+      | .struct "task" [_] => return ← elabApp ctx p (.ident mp "$Await") [obj] false exp
+      | .struct "event" [_] => return ← elabApp ctx p (.ident mp "$EvAwait") [obj] false exp
+      | _ => pure ()
     let r0 ← elabE ctx obj none
     -- `X.(i:)M(…)`: `X` as an `i`, so `i`'s `M` (a qualified call)
     let (r, m) ← match r0.ty, m0.startsWith "(", (m0.drop 1).toString.splitOn ":)" with
@@ -4103,6 +4109,7 @@ sched := class:
     var Roots:[]int = array{}
 taskBase := class:
     var Done:logic = false
+    var Sch:?sched = false
 task(t:type) := class(taskBase):
     var Result:?t = false
 waitf := class:
@@ -4114,13 +4121,39 @@ waitInit(F:waitf, X:taskBase):void =
     set F.T = X
 waitResume(F:waitf, C:sched):int =
     if (F.T.Done?) then return 1
-    set F.Pc = 1
+    if (F.Pc = 0):
+        set F.Pc = 1
+        set F.T.Sch = option{C}
     0
 WaitDone(X:taskBase)<suspends><computes>:void = {}
 Await(T:task(t) where t:type)<suspends>:t =
     WaitDone(T)
     if (R := T.Result?) then R else Err()
 spawnMark(A:[]void)<computes>:void = {}
+evrec(t:type) := class(taskBase):
+    var Got:?t = false
+    var Next:?evrec(t) = false
+event(t:type) := class:
+    var Head:?evrec(t) = false
+    var Tail:?evrec(t) = false
+    Signal(X:t):void =
+        var Cur:?evrec(t) = Head
+        set Head = false
+        set Tail = false
+        loop:
+            if (W := Cur?):
+                set W.Got = option{X}
+                set W.Done = true
+                if (S := W.Sch?) then set S.Progress = true
+                set Cur = W.Next
+            else:
+                break
+EvAwait(E:event(t) where t:type)<suspends>:t =
+    W := evrec(t){}
+    if (L := E.Tail?) then set L.Next = option{W} else set E.Head = option{W}
+    set E.Tail = option{W}
+    WaitDone(W)
+    if (V := W.Got?) then V else Err()
 sleep := class:
     var Pc:int = 0
     var Secs:float = 0.0
@@ -4157,7 +4190,8 @@ def concTops : Except String (List STop) :=
   parsePrelude concPrelude ["sched", "Now", "Next", "sleep", "Pc", "Secs", "Wake", "sleepNew",
     "sleepInit", "sleepResume", "Sleep", "syncMark", "raceMark", "S", "F", "C", "N", "R", "A",
     "Progress", "Roots", "taskBase", "Done", "Result", "waitf", "T", "X", "waitNew", "waitInit", "waitResume",
-    "WaitDone", "Await", "spawnMark", "t"]
+    "WaitDone", "Await", "spawnMark", "t", "Sch", "evrec", "Got", "Next", "Head", "Tail", "Cur", "W", "L", "V",
+    "EvAwait", "E"]
 
 /-- Elaborate a parsed program into a Verse Core program that passes `Prog.check`
     and `Prog.checkTypes`. -/
