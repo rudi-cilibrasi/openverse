@@ -18,23 +18,27 @@ and [*The Little Verser*](https://rudi-cilibrasi.github.io/openverse-docs/little
 whose every program and Lean statement is checked against this repository
 ([openverse-docs](https://github.com/rudi-cilibrasi/openverse-docs)).
 
-```
-             Verse source (.verse)
-                    │  OpenVerse/Front: lexer, offside-rule parser,
-                    ▼  elaborator (types, failure discipline)
-   ┌──────────── Verse Core (OpenVerse/Core/Syntax.lean) ────────────┐
-   │  big-step semantics  Eval  (Semantics.lean)  ◀── the definition │
-   │        ▲ adequacy: eval_iff, Eval.det (Adequacy.lean)           │
-   │  reference interpreter  eval  (Interp.lean)  ── openverse run   │
-   └───────────────────────────────┬─────────────────────────────────┘
-                                   │ Prog.check (Check.lean), then
-                                   │ Prog.encode → OVBC (docs/FORMAT.md)
-                                   ▼
-        C runtime: runtime/  ── cverse FILE.vbc
-          load.c   validating loader   ── QuickProof law (WellScoped)
-          store.c  frame + undo journal ── QuickProof law (rollback)
-          arith.c  int64 operations     ── QuickProof law + Lean seam (Seams.lean)
-          interp.c transcription of Interp.lean ── differential tests and fuzzing
+```mermaid
+flowchart TD
+    src["Verse source (.verse)"]
+    subgraph front["OpenVerse/Front"]
+        direction LR
+        parse["lexer, offside-rule parser"] --> elab["elaborator<br/>(types, failure discipline)"]
+    end
+    subgraph core["Verse Core (OpenVerse/Core/Syntax.lean)"]
+        sem["big-step semantics Eval<br/>(Semantics.lean): the definition"]
+        interp["reference interpreter eval<br/>(Interp.lean): openverse run"]
+        interp -- "adequacy: eval_iff, Eval.det<br/>(Adequacy.lean)" --> sem
+    end
+    subgraph c["C runtime: runtime/ (cverse FILE.vbc)"]
+        load["load.c: validating loader<br/>QuickProof law (WellScoped)"]
+        store["store.c: frame + undo journal<br/>QuickProof law (rollback)"]
+        arith["arith.c: int64 operations<br/>QuickProof law + Lean seam (Seams.lean)"]
+        cint["interp.c: transcription of Interp.lean<br/>differential tests and fuzzing"]
+    end
+    src --> front
+    front --> core
+    core -- "Prog.check (Check.lean), then<br/>Prog.encode → OVBC (docs/FORMAT.md)" --> c
 ```
 
 ## What is proved
