@@ -731,6 +731,10 @@ structure Ctx where
   inArm : Bool := false
   /-- In a `branch` body (#156): no `return` (the Book's rule). -/
   inBranch : Bool := false
+  /-- Checking a field's default once, as a failure context: the default is
+      elaborated again at each construction that omits the field, in that
+      construction's context (#156). -/
+  inDefaultCheck : Bool := false
   /-- In the body of a `loop` or `for`, also through arms (#156): a
       `branch` there would start again before the last one ended. -/
   inRepeat : Bool := false
@@ -1920,14 +1924,15 @@ partial def elabConc (ctx : Ctx) (p : Pos) (isSync : Bool) (arms : List SExpr) (
     `$spawnMark(array{F(…), T})` into a new task root. -/
 partial def elabSpawn (ctx : Ctx) (p : Pos) (body : SExpr) : EM R := do
   if ctx.inDefer then eerr p "spawn in a defer is not supported (#156)"
-  if ctx.canFail then eerr p "spawn cannot be in a failure context (a condition, a filter, or a <decides> call's arguments) (#156)"
+  if ctx.canFail && !ctx.inDefaultCheck then
+    eerr p "spawn cannot be in a failure context (a condition, a filter, or a <decides> call's arguments) (#156)"
   let some mark := ctx.sig? "$spawnMark" | eerr p "internal error: no spawn helper"
   let call := match body with
     | .block _ [e] => e
     | e => e
   -- (the call runs in the new task, which may wait, also when spawned from
   -- an immediate function; its arguments may not)
-  let r ← elabE { ctx with defers := [], suspends := true } call none
+  let r ← elabE { ctx with defers := [], suspends := true, canFail := false } call none
   let isS : Nat → Bool := fun f => ctx.sigs.any fun s => s.idx == f && s.suspends
   let e := match r.e with
     | .seq (.ite (.prim .fail []) _ (.lit .void)) e => e
@@ -2551,12 +2556,15 @@ partial def elabAppBase (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (b
     -- `T.Await()` of a task (#156): the helper `$Await(T)`
     -- `E.Signal()` of an `event()` (#156): with the value `void`
     if m0 == "Signal" && args.isEmpty then
-      if let .struct "event" [.void] := (← elabE ctx obj none).ty then
+      match (← elabE ctx obj none).ty with
+      | .struct "event" [.void] | .struct "sticky_event" [.void] =>
         return ← elabApp ctx p (.member mp obj "Signal") [.tuple p []] bracket exp
+      | _ => pure ()
     if m0 == "Await" && args.isEmpty then
       match (← elabE ctx obj none).ty with
       | .struct "task" [_] => return ← elabApp ctx p (.ident mp "$Await") [obj] false exp
       | .struct "event" [_] => return ← elabApp ctx p (.ident mp "$EvAwait") [obj] false exp
+      | .struct "sticky_event" [_] => return ← elabApp ctx p (.ident mp "$StickyAwait") [obj] false exp
       | _ => pure ()
     let r0 ← elabE ctx obj none
     -- `X.(i:)M(…)`: `X` as an `i`, so `i`'s `M` (a qualified call)
@@ -4228,6 +4236,13 @@ EvAwait(E:event(t) where t:type)<suspends>:t =
         set W.Done = true
     WaitDone(W)
     if (V := W.Got?) then V else Err()
+sticky_event(t:type) := class(event(t)):
+    var Last:?t = false
+    Signal<override>(X:t):void =
+        set Last = option{X}
+        if (Head?) then signalAll(Self, X)
+StickyAwait(E:sticky_event(t) where t:type)<suspends>:t =
+    if (V := E.Last?) then V else EvAwait(E)
 sleep := class:
     var Pc:int = 0
     var Secs:float = 0.0
@@ -4266,7 +4281,7 @@ def concTops : Except String (List STop) :=
     "sleepInit", "sleepResume", "Sleep", "syncMark", "raceMark", "S", "F", "C", "N", "R", "A",
     "Progress", "Roots", "taskBase", "Done", "Result", "waitf", "T", "X", "waitNew", "waitInit", "waitResume",
     "WaitDone", "Await", "spawnMark", "t", "Sch", "Dead", "evrec", "Got", "Next", "Head", "Tail", "Cur", "W", "L", "V",
-    "EvAwait", "E", "branchMark", "rushMark", "signalAll", "H"]
+    "EvAwait", "E", "branchMark", "rushMark", "signalAll", "H", "StickyAwait", "Last"]
 
 /-- Elaborate a parsed program into a Verse Core program that passes `Prog.check`
     and `Prog.checkTypes`. -/
@@ -5219,7 +5234,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     | .const p n none (.structDef _ _ _) =>
       let nps := ((env.sparams.lookup n).getD []).map fun (v, c) => Ty.param v c
       let senv := { env with tvars := (env.sparams.lookup n).getD [] |>.map fun (v, c) => (v, Ty.param v c) }
-      let ctx : Ctx := { sigs := allSigs, sigProg, types := senv, canFail := true }
+      let ctx : Ctx := { sigs := allSigs, sigProg, types := senv, canFail := true, inDefaultCheck := true }
       for (f, ft, d) in (env.structs.lookup n).getD [] do
         if let some d := d then
           -- (an inherited default sees its home class's type parameters, #39)
