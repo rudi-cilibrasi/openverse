@@ -470,6 +470,10 @@ position in every class below the one that declares it.
   with the pins, so that a prototype holding an object of a subclass of
   the fixed class is typed at the fixed type.) A chain with such a test is assigned to a
   slot of the method's result type, as the rule needs an expected type.
+  A field of an interface that sits at different places in its classes is
+  reached the same way in a class that fixes the interface's type
+  arguments: through an accessor pair `get`/`set` generated for the class
+  and the field (`TyEnv.fieldAcc`), called under the refinement (#157).
   Only the classes at or below one whose implementation fixes arguments
   its declaring class leaves open record pins (`TyEnv.pinned`): every
   object agrees with its class's pins, and a placeholder of another class
