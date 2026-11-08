@@ -1195,7 +1195,23 @@ partial def forBinders : Expr → List Nat
   | .ite c t e => forBinders c ++ forBinders t ++ forBinders e
   | _ => []
 
-/-- `e` with the slots `fld` maps read and written in the frame's fields. -/
+/-- The slots `e` assigns. -/
+partial def assignsIn : Expr → List Nat
+  | .assign j e => j :: assignsIn e
+  | .ret e | .print e | .loop e => assignsIn e
+  | .seq a b => assignsIn a ++ assignsIn b
+  | .prim _ es | .call _ es | .heap _ es => (es.map assignsIn).flatten
+  | .ite c t e => assignsIn c ++ assignsIn t ++ assignsIn e
+  | .forE _ it f b => assignsIn it ++ assignsIn f ++ assignsIn b
+  | _ => []
+
+/-- `e` with the slots `fld` maps read and written in the frame's fields.
+    A condition (or a `for`'s filter) that assigns such a slot works on the
+    slot itself, loaded from the field first, and the field is written
+    once the condition holds: a heap write in a condition makes the
+    reference interpreter keep the heap as it was, for the rollback, and so
+    copy it (#225). A condition cannot suspend, so the slot holds the
+    value throughout. -/
 partial def toFields (fld : Nat → Option Nat) : Expr → Expr
   | .local j => match fld j with
     | some f => fget f
@@ -1203,16 +1219,28 @@ partial def toFields (fld : Nat → Option Nat) : Expr → Expr
   | .assign j e => match fld j with
     | some f => fset f (toFields fld e)
     | none => .assign j (toFields fld e)
-  | .forE i it f b => .forE i (toFields fld it) (toFields fld f) (toFields fld b)
+  | .forE i it f b =>
+    let (load, f', store) := inCond fld f
+    .forE i (toFields fld it) (seqWith load f') (seqWith store (toFields fld b))
   | .seq a b => .seq (toFields fld a) (toFields fld b)
   | .prim p es => .prim p (es.map (toFields fld))
   | .call g es => .call g (es.map (toFields fld))
   | .heap op es => .heap op (es.map (toFields fld))
-  | .ite c t e => .ite (toFields fld c) (toFields fld t) (toFields fld e)
+  | .ite c t e =>
+    let (load, c', store) := inCond fld c
+    .ite (seqWith load c') (seqWith store (toFields fld t)) (toFields fld e)
   | .loop b => .loop (toFields fld b)
   | .ret e => .ret (toFields fld e)
   | .print e => .print (toFields fld e)
   | e => e
+where
+  /-- A condition with the frame slots it assigns kept in their slots: the
+      loads before it, it, and the stores after it. -/
+  inCond (fld : Nat → Option Nat) (c : Expr) : List Expr × Expr × List Expr :=
+    let mine := (assignsIn c).eraseDups.filterMap fun j => (fld j).map (j, ·)
+    let fld' : Nat → Option Nat := fun j => if mine.any (·.1 == j) then none else fld j
+    (mine.map (fun (j, f) => .assign j (fget f)), toFields fld' c, mine.map fun (j, f) => fset f (.local j))
+  seqWith (pre : List Expr) (e : Expr) : Expr := pre.foldr (fun a acc => .seq a acc) e
 
 /-- `e` with its slots renamed by `ren`. -/
 partial def renumber (ren : Nat → Nat) : Expr → Expr
