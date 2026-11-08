@@ -2841,10 +2841,6 @@ partial def elabAppBase (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (b
                   (some (msRet.subst μF))
                 -- (named arguments go through temporaries: put their values
                 -- in the call, which must have the rule's shape)
-                -- (a generic implementation below the receiver's class would
-                -- need its frame's type arguments refined too)
-                if ms.suspends && !env.isSub c e && !((ctx.sig? fname).map (·.tparams.isEmpty)).getD true then
-                  eerr p s!"a <suspends> method with type parameters (its class's or its own) cannot be dispatched to class {e}, which fixes type arguments of {c}, yet (#171)"
                 -- (a suspends call carries the defers active at it, which
                 -- go around the whole dispatch instead)
                 let rcE : Expr := match rc.e with
@@ -4671,10 +4667,10 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
   let frameTy (j : Nat) : VTy :=
     .ref [tagBase + j] ((List.range lows[j]!.2.2).map VTy.var)
   -- the methods called through `Typed.dispatch` (#142) of classes that fix
-  -- type arguments (non-generic ones; a generic one is refused below the
-  -- receiver's class, and called without the refinement at or above it)
+  -- type arguments (a generic one at or above the receiver's class is
+  -- called without the refinement, so it is never one)
   let targets : List Nat := (lows.foldl (fun acc (gi, _, _) => acc ++
-    Suspend.dispatchTargets (fun f => user.any fun (h, _, ntp) => h == f && ntp == 0) fns[gi]!.body) []).eraseDups
+    Suspend.dispatchTargets (fun f => user.any fun (h, _, _) => h == f) fns[gi]!.body) []).eraseDups
   -- each one's `new`, `reset`, `cancel` and `result` (fixed indices), each
   -- target's receiver-first helpers, each root's trampoline and `start`,
   -- then the arms' functions
@@ -4721,7 +4717,7 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
                cancelFn := some (nFns + 4 * j + 2),
                passFields := (List.range fns[gi]!.arity).map fun i => Suspend.slotBaseOf sites arms + i,
                resField := some Suspend.resF, generic := ntp != 0, newSched := true,
-               resultFn := if ntp == 0 then some (nFns + 4 * j + 3) else none,
+               resultFn := if ntp == 0 then some (nFns + 4 * j + 3) else none, ntp,
                selfFns := (targets.idxOf? gi).map fun i =>
                  (selfBase + 4 * i, selfBase + 4 * i + 1, selfBase + 4 * i + 2, selfBase + 4 * i + 3) }
       | none => none
@@ -4740,7 +4736,7 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
   let mut selfSigs : Array (List VTy × VTy) := #[]
   for gi in targets do
     let some j := lows.findIdx? (·.1 == gi) | throw "internal error: a dispatch target"
-    let (_, gname, _) := lows[j]!
+    let (_, gname, ntp) := lows[j]!
     let a := fns[gi]!.arity
     let ps := slotTys[gi]!.take a
     let ρ := (fsigs0[gi]!).2
@@ -4748,18 +4744,37 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
     let wide : VTy := .ref [tagBase + j, schedTag] []
     let locals := (List.range a).map Expr.local
     let isF (i : Nat) : Expr := .heap (.isTag [tagBase + j]) [.local i]
+    let pass := (List.range a).map fun i => Expr.heap (.get (Suspend.slotBaseOf sites arms + i)) [.local 0]
+    let resumeOwn : Fn := { name := s!"{gname}$resumeOwn", arity := 2, nslots := 2, decides := false, writes := true,
+                            body := .call gi (.local 0 :: .local 1 :: pass) }
+    let cancelOwn : Fn := { name := s!"{gname}$cancelOwn", arity := 2, nslots := 2, decides := false, writes := true,
+                            body := .call (nFns + 4 * j + 2) (.local 0 :: .local 1 :: pass) }
+    if ntp != 0 then
+      -- (a generic one's frame is kept in an option field, as any generic
+      -- callee's: `arrive(self, args…, frame?, sched)` resets it or makes
+      -- one; `take(self, frame?)` gives its result, failing without a frame,
+      -- so that the caller unwraps it in a condition)
+      let optF : VTy := .opt (frameTy j)
+      let arriveBody : Expr := .seq (.ite (.call (nFns + 4 * j + 1) (.prim .query [.local a] :: locals)) Suspend.vd
+        (.seq (.assign a (.prim .mkSome [.call (nFns + 4 * j) (.local (a + 1) :: locals)])) Suspend.vd)) (.local a)
+      let takeBody : Expr := .heap (.get Suspend.resF) [.prim .query [.local 1]]
+      selfFns := selfFns ++ #[
+        { name := s!"{gname}$arrive", arity := a + 2, nslots := a + 2, decides := false, writes := true,
+          body := arriveBody },
+        { name := s!"{gname}$take", arity := 2, nslots := 2, decides := true, writes := false, body := takeBody },
+        resumeOwn, cancelOwn]
+      selfTys := selfTys ++ #[ps ++ [optF, schedTy], [ps.headD .int, optF], [frameTy j, schedTy], [frameTy j, schedTy]]
+      selfSigs := selfSigs ++ #[(ps ++ [optF, schedTy], optF), ([ps.headD .int, optF], ρ),
+        ([frameTy j, schedTy], .int), ([frameTy j, schedTy], VTy.void)]
+      continue
     let arriveBody : Expr := .seq (.ite (isF a) (.call (nFns + 4 * j + 1) (.local a :: locals))
       (.seq (.assign a (.call (nFns + 4 * j) (.local (a + 1) :: locals))) Suspend.vd)) (.local a)
-    let pass := (List.range a).map fun i => Expr.heap (.get (Suspend.slotBaseOf sites arms + i)) [.local 0]
     selfFns := selfFns ++ #[
       { name := s!"{gname}$arrive", arity := a + 2, nslots := a + 2, decides := false, writes := true,
         body := arriveBody },
       { name := s!"{gname}$take", arity := 2, nslots := 2, decides := false, writes := false,
         body := .ite (isF 1) (.call (nFns + 4 * j + 3) [.local 1]) (.prim .userErr []) },
-      { name := s!"{gname}$resumeOwn", arity := 2, nslots := 2, decides := false, writes := true,
-        body := .call gi (.local 0 :: .local 1 :: pass) },
-      { name := s!"{gname}$cancelOwn", arity := 2, nslots := 2, decides := false, writes := true,
-        body := .call (nFns + 4 * j + 2) (.local 0 :: .local 1 :: pass) }]
+      resumeOwn, cancelOwn]
     selfTys := selfTys ++ #[ps ++ [wide, schedTy], [ps.headD .int, wide], [frameTy j, schedTy], [frameTy j, schedTy]]
     selfSigs := selfSigs ++ #[(ps ++ [wide, schedTy], wide), ([ps.headD .int, wide], ρ),
       ([frameTy j, schedTy], .int), ([frameTy j, schedTy], VTy.void)]
@@ -4909,7 +4924,10 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
     -- its refined calls' helpers (#171), whose slots are their parameters
     -- (one calling a <decides> method can fail too, #179)
     for ((body, vps, vτ), i) in low.vias.zipIdx do
-      let canFail := (Suspend.callsOf body).any fun (g, _) => ((fns[g]?).map (·.decides)).getD false
+      let canFail := (Suspend.callsOf body).any fun (g, _) =>
+        if g < fns.size then ((fns[g]?).map (·.decides)).getD false
+        else if selfBase ≤ g then ((selfFns[g - selfBase]?).map (·.decides)).getD false
+        else false
       armFns := armFns.push { name := s!"{gname}$via{i}", arity := vps.length, nslots := vps.length,
                               decides := canFail, writes := true, body }
       armTys := armTys.push vps

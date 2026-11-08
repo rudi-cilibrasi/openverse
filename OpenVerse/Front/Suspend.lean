@@ -78,6 +78,8 @@ structure Callee where
       `take(self, frame)` (the result), and `resume(frame, sched)` and
       `cancel(frame, sched)` (with the parameters from the frame). -/
   selfFns : Option (Nat × Nat × Nat × Nat) := none
+  /-- The callee's number of type parameters (its frame's type arguments). -/
+  ntp : Nat := 0
   deriving Inhabited
 
 /-- Slots of a resume function: the frame, the scheduler. -/
@@ -369,7 +371,8 @@ def stripInits : Nat → Expr → Option (List Expr × Expr)
     `params` (`DefaultE`): a parameter of a subtype, a default literal, a
     prototype, a new object built from such values, or a tuple of them. -/
 partial def coreDefault (S : Sigs) (params : List VTy) (depth : Nat) (τ : VTy) : Option Expr :=
-  if depth > 12 then none else
+  -- (as deep as the elaborator's `slotDefault` goes)
+  if depth > 16 then none else
   match params.findIdx? (fun p => p.sub τ) with
   | some i => some (.local i)
   | none =>
@@ -627,12 +630,12 @@ partial def loopify (e : Expr) (used : Bool := true) : M Expr := do
 /-- A call through `Typed.dispatch`'s shape, `ite (isTag us [local y])
     (call g (local y :: es)) _`, of a callee with receiver-first helpers
     (#142): the classes, the receiver's slot, the callee, the arguments. -/
-def refined? (c t : Expr) : M (Option (List Nat × Nat × Callee × List Expr)) := do
+def refined? (c t : Expr) : M (Option (List Nat × Nat × Nat × Callee × List Expr)) := do
   match c, t with
   | .heap (.isTag us) [.local y], .call g (.local y' :: es) =>
     if y != y' then return none
     match (← read).callee g with
-    | some cal => return if cal.selfFns.isSome then some (us, y, cal, es) else none
+    | some cal => return if cal.selfFns.isSome then some (us, y, g, cal, es) else none
     | none => return none
   | _, _ => return none
 
@@ -663,7 +666,7 @@ partial def block (e : Expr) (k : Option (Expr → Expr)) : M (List Expr) := do
       let b ← freshT .int
       let lo := (← get).next + 1
       let tb ← match ← refined? c t with
-        | some (us, y, cal, es) => selfCall us y cal es k
+        | some (us, y, g, cal, es) => selfCall us y g cal es k
         | none => block t k
       let mid := (← get).next
       let eb ← block e2 k
@@ -870,10 +873,10 @@ partial def suspendAt (g : Nat) (c : Callee) (rs : List Expr) : M (Expr × Expr)
 
 /-- A call of a method of a class that fixes type arguments, through
     `Typed.dispatch` on the receiver in slot `y` (classes `us`, #142). -/
-partial def selfCall (us : List Nat) (y : Nat) (c : Callee) (es : List Expr) (k : Option (Expr → Expr)) :
+partial def selfCall (us : List Nat) (y g : Nat) (c : Callee) (es : List Expr) (k : Option (Expr → Expr)) :
     M (List Expr) := do
   let (pre, rs) ← operands es
-  let (s, v) ← emitWith (suspendSelf us y c rs k.isSome)
+  let (s, v) ← emitWith (if c.generic then suspendSelfGeneric us y g c rs k.isSome else suspendSelf us y c rs k.isSome)
   match k with
   | none => return pre ++ [s]
   | some k => return pre ++ [s, ← emit (pure (k v))]
@@ -920,6 +923,62 @@ partial def suspendSelf (us : List Nat) (y : Nat) (c : Callee) (rs : List Expr) 
     let takeV ← via (.ite isR (.call takeFn [.local 0, .local 1]) (.prim .userErr [])) [ty, wide] τ
     return (seqVoid [arrive, found, poll, pend], .call takeV [.local y, .local w])
   | _, _ => return (seqVoid [arrive, found, poll, pend], vd)
+
+/-- `suspendSelf` for a generic callee (an override with type parameters of
+    its own or of its class, #171): its frame is kept in an option field, as
+    any generic callee's, at the type arguments the dispatch gives (the
+    receiver's, refined by the tested classes' pins, matched against the
+    callee's parameters as the checker does); it is resumed and cancelled
+    as any generic callee's. Arriving and taking the result go through
+    helpers of this call site, as in `suspendSelf`; the take helper fails
+    without a frame, so the result is taken in a condition. -/
+partial def suspendSelfGeneric (us : List Nat) (y g : Nat) (c : Callee) (rs : List Expr) (valued : Bool) :
+    M (Expr × Expr) := do
+  let env ← read
+  let some (arriveFn, takeFn, _, _) := c.selfFns
+    | throw "internal error: a refined call without helpers"
+  let some ty := (← get).Γ[y]? | throw "internal error: a refined call's receiver"
+  let .ref _ a := ty | throw "internal error: a refined call's receiver type"
+  let some (ps, _) := env.S.fns[g]? | throw "internal error: a refined call's callee"
+  let σs ← rs.mapM infer
+  -- (the callee's type arguments: its parameters matched against the
+  -- receiver and arguments as refined by the pins)
+  let μ := pinRefinement (commonPins env.S us a.length) a
+  let acc := VTy.bindVarsL ps ((VTy.ref us a :: σs).map (VTy.subst μ)) []
+  let frameTy : VTy := .ref [c.tag] ((List.range c.ntp).map VTy.var)
+  if frameTy.unbound acc then
+    throw "a <suspends> method whose type parameters the call does not determine cannot be dispatched to a class that fixes type arguments yet (#171)"
+  let fty := frameTy.subst (callInst acc .void none)
+  let k ← newSite (.opt fty)
+  modify fun st => { st with sites := st.sites.push { id := k, waits := .callee k c 0 [], defers := st.defers } }
+  let cf := childF k
+  let q : Expr := .prim .query [fget cf]
+  let isR : Expr := .heap (.isTag us) [.local 0]
+  let n := rs.length
+  let via (body : Expr) (vps : List VTy) (τ : VTy) : M Nat := do
+    let i := (← get).vias.size
+    modify fun st => { st with vias := st.vias.push (body, vps, τ) }
+    return env.viaBase + i
+  let arriveV ← via (.ite isR (.call arriveFn ((List.range (n + 3)).map Expr.local)) (.prim .userErr []))
+    (ty :: σs ++ [.opt fty, .ref [env.schedTag] []]) (.opt fty)
+  let st ← freshT .int
+  let arrive : Expr := .ite (← seeking) vd (seqVoid [
+    fset cf (.call arriveV (.local y :: rs ++ [fget cf, .local schS])),
+    fset env.pcFld (int k)])
+  let poll : Expr := .ite (.assign st (.call c.resumeFn ([q, .local schS] ++ c.passFields.map fun f => .heap (.get f) [q])))
+    vd (.seq (.prim .userErr []) vd)
+  let pend : Expr := .ite (.prim .eq [.local st, int 0]) (.seq spillMark (.ret (int 0))) vd
+  let found : Expr := .assign env.rS (int 0)
+  match valued with
+  | true =>
+    -- (taken in a condition, as the frame is an option: into a slot kept in
+    -- the frame, whose initial value is made once, with the frame)
+    let some τ := env.expTy | throw "internal error: a refined call's value has no expected type"
+    let takeV ← via (.ite isR (.call takeFn [.local 0, .local 1]) (.prim .userErr [])) [ty, .opt fty] τ
+    let t ← fresh τ
+    let take : Expr := .ite (.assign t (.call takeV [.local y, fget cf])) vd (.seq (.prim .userErr []) vd)
+    return (seqVoid [arrive, found, poll, pend, take], .local t)
+  | false => return (seqVoid [arrive, found, poll, pend], vd)
 
 /-- The statement of a `sync` (`isSync`) or `race` with arms `arms` (each
     a statement that leaves the arm's value in a slot). -/
