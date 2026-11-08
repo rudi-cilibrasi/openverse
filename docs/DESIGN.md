@@ -319,11 +319,22 @@ flowchart LR
   is made only when the class's type parameters each occur once in the
   shape's type arguments, as whole types, so that it is always a valid
   class (#53, #171).
+- **Variance and generic functions, where a closed type is written**
+  (#214). The pass also collects the closed function types the program
+  writes. For a value that fits one by variance (contravariant parameters
+  and a covariant result, through `int` below `rational` and class
+  subtyping only, the conversions the elaborator makes at a call), or a
+  generic function that matches one, it makes a further class `F$fn$k`
+  implementing that type's shape at the type's own arguments, whose
+  `$call…` calls `F`, converting. A function named as a value where such
+  a type is expected is an object of that class.
 - **The cost of that choice.** A class implements an interface at one
-  instantiation, so parameter and result types are matched exactly and the
-  Book's variance applies to effects only. A generic function as a value
-  would need a class that repeats type arguments (`Identity$fn(t)`
-  implementing `$fn1(t, t)`), which needs the unifying refinement of #171.
+  instantiation, so a value of one function type does not convert to
+  another by variance (that would need a wrapper object made at the
+  conversion), and variance applies only where a closed type is written.
+  A generic function as a value at open types would need a class that
+  repeats type arguments (`Identity$fn(t)` implementing `$fn1(t, t)`),
+  which needs the unifying refinement of #171.
 
 ## Concurrency: suspends functions as frames
 

@@ -146,11 +146,15 @@ Main():void =
 
 - A value is called like a function: `F(X)`, or `F[X]` when its type is
   `<decides>`. A `<suspends>` type's values are called in suspends code.
-- A function fits a function type with exactly its parameter and result
-  types and at least its effects: a function without `<decides>` is also a
-  `type{_(:int)<decides>:int}` (fewer effects make a subtype). openverse
-  does not apply the Book's variance to parameter and result types
-  (`F(X:rational)` is no `int->rational`).
+- A function fits a function type with at least its effects: a function
+  without `<decides>` is also a `type{_(:int)<decides>:int}` (fewer
+  effects make a subtype). Its parameter and result types must match,
+  except that a function is also a value of a closed function type written
+  in the program that it fits by variance (#214): its parameters may be
+  above the type's (`Describe(A:animal)` is a `type{_(:dog):string}`) and
+  its result below (`Count():int` is a `type{_():rational}`), with `int`
+  below `rational` and a class below the classes above it. A value of one
+  function type does not convert to another by variance.
 - Function values are not comparable and have no `ToString`.
 - A method as a value, `C.Add` (or `Add` in a method of the class), holds
   its receiver: calling it calls `C.Add`, the receiver's class's
@@ -158,7 +162,11 @@ Main():void =
   method's in `C`'s static class, so an override's narrower result type
   is the value's (#219), or, where a function type is expected, that of
   the class above that declares or overrides it with that type.
-- Generic functions and methods, overloaded ones and ones with named
+- A generic function is a value where a closed function type that is an
+  instance of its type is expected and written in the program (`F:int->int
+  = Identity`, or an `int->int` parameter); not where the type mentions
+  type parameters (`Map(Xs, Identity)` with `Map` over `type{_(:t):u}`).
+- Generic methods, overloaded functions and methods and ones with named
   parameters cannot be used as values, nor can a method whose type repeats
   or nests its class's type parameters (`box(t)`'s `Same(X:t):t`: that
   needs #171). Lambdas and nested functions are not released in Verse, so

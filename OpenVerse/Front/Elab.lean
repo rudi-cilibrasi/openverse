@@ -1669,6 +1669,19 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
           if s.isConst then
             noteFx p s.fx (some s!"uses the constant {n}")
             return ⟨.call s.idx [], s.ret⟩
+          else if let some (cls, ty) := (do
+              -- (#214) a value class made for the function type expected,
+              -- a written closed one the function fits other than at its
+              -- own types (by variance, or a generic one at an instance)
+              let t@(.struct m _) ← exp | none
+              if (FnValues.parseName m).isNone then none
+              let env := ctx.types
+              let c ← env.classes.find? fun c => c.startsWith s!"{n}$fn$" &&
+                let i := (env.info c).ifaces.headD ""
+                Ty.struct i ((env.iargs.lookup (c, i)).getD []) == t
+              some (c, t)) then
+            let r ← elabE ctx (.construct p cls [] []) none
+            return ⟨← coerce p r ty, ty⟩
           else if ctx.types.classes.contains s!"{n}$fn" then
             -- a function as a value (#210): its class's object, of the
             -- function type expected, else of its own
@@ -1686,7 +1699,7 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
             | some e => return ⟨e, ty⟩
             | none => return r
           else if !s.tparams.isEmpty then
-            eerr p s!"'{n}' is generic: a generic function cannot be used as a value yet (#210)"
+            eerr p s!"'{n}' is generic: a generic function is a value only where a closed function type it fits is expected, written in the program (`F:int->int = {n}`), #214"
           else if !s.named.isEmpty then
             eerr p s!"'{n}' has named parameters: such a function cannot be used as a value (a function type has no named parameters)"
           else eerr p s!"'{n}' is a function: call it with {n}(…)"

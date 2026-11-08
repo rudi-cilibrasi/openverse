@@ -244,6 +244,76 @@ partial def _root_.OpenVerse.Front.STop.scan (bound : List String := []) (meths 
     (parents.flatMap STy.fnShapes ++ fields.flatMap (·.2.1.fnShapes) ++ s ++ ms.flatMap (·.1),
       n ++ (ms.flatMap (·.2)).map self)
 
+/-- The function types inside a type: parameters, effects, result. -/
+partial def _root_.OpenVerse.Front.STy.fnTypes : STy → List (List STy × List String × STy)
+  | .name _ => []
+  | .arr t | .opt t => t.fnTypes
+  | .tup ts | .app _ ts => ts.flatMap STy.fnTypes
+  | .map a b => a.fnTypes ++ b.fnTypes
+  | .fn ps es r => (ps, es, r) :: (ps.flatMap STy.fnTypes ++ r.fnTypes)
+
+/-- The types an expression writes. -/
+partial def _root_.OpenVerse.Front.SExpr.tys : SExpr → List STy
+  | .decl _ _ t _ e => t.toList ++ e.tys
+  | .construct _ _ ts args => ts ++ args.flatMap SExpr.tys
+  | .app _ f args _ => f.tys ++ args.flatMap SExpr.tys
+  | .member _ e _ | .query _ e | .neg _ e | .notE _ e | .optionLit _ e | .logicLit _ e | .loop _ e
+  | .gen _ _ _ e => e.tys
+  | .bin _ _ a b | .andE _ a b | .orE _ a b | .range _ a b => a.tys ++ b.tys
+  | .cmp _ a rest => a.tys ++ rest.flatMap (·.2.tys)
+  | .tuple _ es | .block _ es | .arrayLit _ es => es.flatMap SExpr.tys
+  | .ite _ cs t e => cs.flatMap SExpr.tys ++ t.tys ++ (e.map SExpr.tys).getD []
+  | .forE _ cs b => cs.flatMap SExpr.tys ++ b.tys
+  | .ret _ e => (e.map SExpr.tys).getD []
+  | .caseE _ e arms => e.tys ++ arms.flatMap fun (q, v) => (q.map SExpr.tys).getD [] ++ v.tys
+  | .set _ l _ e => l.tys ++ e.tys
+  | .mapLit _ kvs => kvs.flatMap fun (k, v) => k.tys ++ v.tys
+  | .structDef _ _ fs => fs.flatMap fun (_, t, d, _) => t :: (d.map SExpr.tys).getD []
+  | .refineDef _ _ t cs => t :: cs.flatMap SExpr.tys
+  | .str _ parts => parts.flatMap fun | .code e => e.tys | .text _ => []
+  | _ => []
+
+/-- The closed function types a definition writes: those that mention no
+    type parameter in scope (#214). -/
+partial def _root_.OpenVerse.Front.STop.closedFnTypes (scope : List String := []) :
+    STop → List (List STy × List String × STy)
+  | .fn _ _ ps tps _ r body =>
+    let sc := scope ++ tps.map (·.name)
+    ((ps.map (·.ty) ++ [r] ++ body.tys ++ ps.flatMap fun q => (q.default.map SExpr.tys).getD []).flatMap
+      STy.fnTypes).filter fun (qs, _, u) => !(qs ++ [u]).any fun t => sc.any t.hasName
+  | .const _ _ t e =>
+    ((t.toList ++ e.tys).flatMap STy.fnTypes).filter fun (qs, _, u) => !(qs ++ [u]).any fun t => scope.any t.hasName
+  | .classDef _ _ tps _ parents _ fields _ methods =>
+    let sc := scope ++ tps.map (·.name)
+    (((parents ++ fields.flatMap fun (_, t, d, _) => t :: (d.map SExpr.tys).getD []).flatMap STy.fnTypes).filter
+      fun (qs, _, u) => !(qs ++ [u]).any fun t => sc.any t.hasName) ++ methods.flatMap (STop.closedFnTypes sc)
+
+/-- `a` is `b` or a subtype the elaborator converts at a parameter or a
+    result (#214): `int` to `rational`, a class to one above it. Nothing
+    else, so a value class made for a function type always elaborates. -/
+def subAt (anc : String → List String) (a b : STy) : Bool :=
+  reprStr a == reprStr b || match a, b with
+    | .name "int", .name "rational" => true
+    | .name x, .name y => (anc x).contains y
+    | _, _ => false
+
+/-- A match of a generic function's types (its type parameters `tps`)
+    against closed ones: each parameter's type, or none. -/
+partial def matchTy (tps : List String) (θ : List (String × STy)) : STy → STy → Option (List (String × STy))
+  | .name x, t =>
+    if tps.contains x then
+      match θ.lookup x with
+      | some u => if reprStr u == reprStr t then some θ else none
+      | none => some ((x, t) :: θ)
+    else if reprStr (STy.name x) == reprStr t then some θ else none
+  | .arr a, .arr b | .opt a, .opt b => matchTy tps θ a b
+  | .tup as, .tup bs => if as.length != bs.length then none else
+      (as.zip bs).foldlM (fun θ (a, b) => matchTy tps θ a b) θ
+  | .app n as, .app m bs => if n != m || as.length != bs.length then none else
+      (as.zip bs).foldlM (fun θ (a, b) => matchTy tps θ a b) θ
+  | .map a b, .map c d => (matchTy tps θ a c).bind fun θ => matchTy tps θ b d
+  | a, b => if reprStr a == reprStr b then some θ else none
+
 /-- Add the shapes' interfaces and the value classes of the functions used
     as values (#210). A function is used as a value when its name occurs
     other than as the head of a call (an over-approximation: a parameter of
@@ -344,7 +414,25 @@ def desugar (tops : List STop) (extra : List STop := []) : List STop := Id.run d
           else none
         | _ => none
       | _ => []
-  if values.isEmpty && mvalues.isEmpty && (scans.all fun (s, _) => s.isEmpty) then return tops
+  -- (#214) the closed function types written, and the functions used as
+  -- values that fit one other than at their own types: by variance, or a
+  -- generic one at an instance
+  let written := ((tops ++ extra).flatMap (STop.closedFnTypes [])).foldl
+    (fun acc w => if acc.any (reprStr · == reprStr w) then acc else acc ++ [w]) []
+  let gvalues : List (Pos × String × List SParam × List String × List String × STy) := tops.filterMap fun
+    | .fn p n ps tps effs r _ =>
+      if named.contains n && !tps.isEmpty && ps.all (!·.named) && !n.contains '$' &&
+          (fnNames.filter (· == n)).length == 1 then some (p, n, ps, tps.map (·.name), effs, r)
+      else none
+    | _ => none
+  let rec ancOf (fuel : Nat) (c : String) : List String :=
+    match fuel, defs.find? (·.1 == c) with
+    | fuel + 1, some (_, ps, _, _) =>
+      let up := ps.filterMap fun | .name q => some q | _ => none
+      up ++ up.flatMap (ancOf fuel)
+    | _, _ => []
+  let anc := ancOf (defs.length + 1)
+  if values.isEmpty && mvalues.isEmpty && gvalues.isEmpty && (scans.all fun (s, _) => s.isEmpty) then return tops
   -- every shape written, and each value's own (a value's type when nothing
   -- else gives one)
   let mut shapes : List Shape := []
@@ -377,6 +465,42 @@ def desugar (tops : List STop) (extra : List STop := []) : List STop := Id.run d
     -- (its own shape first: the value's type when nothing else gives one)
     let fits := own :: fits.filter (· != own)
     out := out ++ [.classDef p s!"{n}$fn" [] [] (fits.map fun s => STy.app s.name targs) false [] [] methods]
+  -- (#214) a value class per written closed function type that a value
+  -- fits other than at its own types, `F$fn$k`, implementing that type's
+  -- shape (and those with more effects) at the type's own arguments
+  let variant (p : Pos) (n : String) (own : Shape) (k : Nat) (qs : List STy) (es : List String) (u : STy) :
+      Option STop :=
+    let s := shapeOf qs.length es
+    if !own.within s then none else
+    let fits := shapes.filter (s.within ·)
+    let args := (List.range qs.length).map fun i => SExpr.ident p s!"$X{i}"
+    let methods := fits.map fun s' =>
+      STop.fn p s'.call (params qs) [] (s'.effs ++ ["override"]) u (.app p (.ident p n) args own.decides)
+    let fits := s :: fits.filter (· != s)
+    some (.classDef p s!"{n}$fn${k}" [] [] (fits.map fun s' => STy.app s'.name (qs ++ [u])) false [] [] methods)
+  for (p, n, ps, effs, r) in values do
+    let own := shapeOf ps.length effs
+    let mut k := 0
+    for (qs, es, u) in written do
+      let exact := qs.length == ps.length && ((ps.map (·.ty)).zip qs).all (fun (a, b) => reprStr a == reprStr b) &&
+        reprStr r == reprStr u
+      -- (contravariant parameters, a covariant result)
+      if !exact && qs.length == ps.length && (qs.zip (ps.map (·.ty))).all (fun (a, b) => subAt anc a b) &&
+          subAt anc r u then
+        if let some c := variant p n own k qs es u then
+          out := out ++ [c]
+          k := k + 1
+  for (p, n, ps, tps, effs, r) in gvalues do
+    let own := shapeOf ps.length effs
+    let mut k := 0
+    for (qs, es, u) in written do
+      if qs.length != ps.length then continue
+      let θ := ((ps.map (·.ty) ++ [r]).zip (qs ++ [u])).foldlM (fun θ (a, b) => matchTy tps θ a b) []
+      if let some θ := θ then
+        if tps.all fun t => (θ.lookup t).isSome then
+          if let some c := variant p n own k qs es u then
+            out := out ++ [c]
+            k := k + 1
   for (p, c, ctps, m, ps, effs, r) in mvalues do
     let own := shapeOf ps.length effs
     let fits := shapes.filter (own.within ·)

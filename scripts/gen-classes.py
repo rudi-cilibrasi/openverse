@@ -1378,6 +1378,13 @@ class Gen:
         L.append('    Keep(X:int)<decides>:int =')
         L.append('        X >= Min')
         L.append('        X')
+        # (#214: by variance, and a generic function at closed types)
+        fid, fdesc, fon = self.fresh('FId'), self.fresh('FDesc'), self.fresh('FOnSub')
+        L.append('%s(X:t where t:type):t = X' % fid)
+        L.append('%s(B:%s):int = B.Val() + %s' % (fdesc, fb, lit()))
+        L.append('%s(F:type{_(:%s):int}, B:%s):int = F(B)' % (fon, fs2, fs2))
+        fcnt = self.fresh('FCnt')
+        L.append('%s():int = %s' % (fcnt, lit()))
         fr, fg = self.fresh('FRun0'), self.fresh('FGet')
         L.append('%s(F:type{_():int}):int = F()' % fr)
         L.append('%s(F:type{_():t} where t:type):t = F()' % fg)
@@ -1388,7 +1395,13 @@ class Gen:
         self.out += L
         xs = 'array{%s}' % ', '.join(lit() for _ in range(R.randint(1, 4)))
         for _ in range(R.randint(2, 6)):
-            k = R.randrange(10)
+            k = R.randrange(11)
+            if k == 10:
+                M.append('Print("fva {%s(%s, %s{})} {%s(%s, %s)}")' % (fon, fdesc, fs2, tw, fid, lit()))
+                v = tmpname('FW')
+                M.append('%s:type{_():rational} = %s' % (v, fcnt))
+                M.append('Print("fw {Floor(%s())}")' % v)
+                continue
             if k == 9:
                 b = tmpname('FB')
                 M.append('%s:%s = %s{}' % (b, fb, R.choice([fb, fs2])))
