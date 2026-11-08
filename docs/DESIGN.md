@@ -304,7 +304,10 @@ slot of the arms' common type). The pass makes each arm a function of its
 own over the same frame, with its own suspension point and done flag in
 fields of the frame. The enclosing code resumes the arms in order; as the
 variables live in the frame, the arms share them. A `race`'s winner cancels the arms that started and are pending,
-last first.
+last first. A `return` in an arm stores the result and makes the arm give
+2. The code around the arm then cancels the other pending arms, runs the
+defers active there, and returns from the function (or, in an arm, gives
+2 in turn).
 
 **Tasks.** A `spawn` gets a root: a suspends function `$spawnK(T, args…)`
 that the pass makes from the spawned call. It runs the call and fills the

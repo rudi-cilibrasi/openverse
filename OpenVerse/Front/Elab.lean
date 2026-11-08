@@ -726,8 +726,11 @@ structure Ctx where
   inCtor : Bool := false
   /-- In a `<suspends>` function (#156): calls of suspends functions allowed. -/
   suspends : Bool := false
-  /-- In an arm of `sync` or `race` (#156): no `return` yet. -/
+  /-- In an arm of `sync`, `race` or `rush` (#156): a `return` returns from
+      the function, cancelling the other arms. -/
   inArm : Bool := false
+  /-- In a `branch` body (#156): no `return` (the Book's rule). -/
+  inBranch : Bool := false
   /-- In the body of a `loop` or `for`, also through arms (#156): a
       `branch` there would start again before the last one ended. -/
   inRepeat : Bool := false
@@ -1781,7 +1784,7 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
     if ctx.inDefer then eerr p "return is not allowed in a defer: block"
     if ctx.inCtor then eerr p "return is not allowed in a constructor (it would skip the items after it)"
     if ctx.inBlock then eerr p "return is not allowed in a block: clause (it would skip the clauses after it)"
-    if ctx.inArm then eerr p "return in an arm of sync or race is not supported yet (#156)"
+    if ctx.inBranch then eerr p "return is not allowed in a branch (Book of Verse ch. 14)"
     if ctx.retTy != .void then eerr p s!"return needs a value of type {ctx.retTy.show}"
     return ⟨.seq (← elabDefers ctx ctx.defers) (.ret (.lit .void)), .never⟩
   | .ret p (some e) =>
@@ -1789,7 +1792,7 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
     if ctx.inDefer then eerr p "return is not allowed in a defer: block"
     if ctx.inCtor then eerr p "return is not allowed in a constructor (it would skip the items after it)"
     if ctx.inBlock then eerr p "return is not allowed in a block: clause (it would skip the clauses after it)"
-    if ctx.inArm then eerr p "return in an arm of sync or race is not supported yet (#156)"
+    if ctx.inBranch then eerr p "return is not allowed in a branch (Book of Verse ch. 14)"
     let r ← elabE ctx e (some ctx.retTy)
     let v ← coerce p r ctx.retTy
     if ctx.defers.isEmpty then return ⟨.ret v, .never⟩
@@ -1962,7 +1965,7 @@ partial def elabBranch (ctx : Ctx) (p : Pos) (body : SExpr) : EM R := do
   if ctx.inRepeat then eerr p "branch cannot be in a loop or for body (Book of Verse ch. 14): call a function that branches"
   if !ctx.dictVars.isEmpty then eerr p "branch in a generic function is not supported yet (#156)"
   let some mark := ctx.sig? "$branchMark" | eerr p "internal error: no branch helper"
-  let armCtx := { ctx with defers := [], loopDefers := 0, inLoop := false, inArm := true }
+  let armCtx := { ctx with defers := [], loopDefers := 0, inLoop := false, inArm := true, inBranch := true }
   let r ← elabE armCtx body none
   return ⟨.call mark.idx [.prim .mkArr [.seq r.e (.lit .void)]], .void⟩
 
