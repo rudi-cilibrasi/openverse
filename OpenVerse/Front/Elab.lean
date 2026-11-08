@@ -2826,27 +2826,20 @@ partial def elabAppBase (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (b
                   | .seq (.ite (.prim .fail []) _ (.lit .void)) b => b
                   | e => e
                 -- (an omitted named argument's default with no type of its
-                -- own, `false` or `array{}`, goes in as an expression whose
-                -- type the checker infers, `if (fail) then …`, as the rule
+                -- own, `false`, `array{}` or `map{}`, goes in as `if (fail)
+                -- then T else false`, with `T` its temporary, whose type is
+                -- the parameter's, so that the checker infers it, as the rule
                 -- infers the other arguments' types, #175)
                 let rec untyped : Expr → List Nat
                   | .seq (.assign t (.lit .none)) rest => t :: untyped rest
                   | .seq (.assign t (.lit (.arr a))) rest => if a.isEmpty then t :: untyped rest else untyped rest
                   | .seq _ rest => untyped rest
                   | _ => []
-                let mut typed : List (Nat × Expr) := []
-                for t in untyped rcE do
-                  match (← get).slotTys[t]? with
-                  | some (.opt et) =>
-                    typed := (t, .ite (.prim .fail []) (.prim .mkSome [← witness env ctx.dictBase ctx.dictVars et])
-                      (.lit .none)) :: typed
-                  | some (.arr et) =>
-                    typed := (t, .ite (.prim .fail []) (.prim .mkArr [← witness env ctx.dictBase ctx.dictVars et])
-                      (.lit (.arr #[]))) :: typed
-                  | some (.map k v) =>
-                    typed := (t, .ite (.prim .fail []) (.prim .mkArr [.prim .mkTup [← witness env ctx.dictBase ctx.dictVars k,
-                      ← witness env ctx.dictBase ctx.dictVars v]]) (.lit (.arr #[]))) :: typed
-                  | _ => pure ()
+                let rec litOf (t : Nat) : Expr → Expr
+                  | .seq (.assign t' v) rest => if t' == t then v else litOf t rest
+                  | _ => .lit .none
+                let typed : List (Nat × Expr) := (untyped rcE).map fun t =>
+                  (t, .ite (.prim .fail []) (.local t) (litOf t rcE))
                 let some (.call fi (.local s0 :: es)) := Expr.inlineArgTemps rcE typed
                   | eerr p s!"cannot dispatch {m} to class {e}, which fixes type arguments of {c}, when a named argument's default is computed (#142)"
                 if s0 != slot then eerr p s!"cannot dispatch {m} to class {e}, which fixes type arguments of {c} (#142)"
