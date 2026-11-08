@@ -169,10 +169,10 @@ Main():void =
   mentions type parameters (`Map(Xs, Identity)` with `Map` over
   `type{_(:t):u}`).
 - Generic methods, overloaded functions and methods and ones with named
-  parameters cannot be used as values, nor can a method whose type repeats
-  or nests its class's type parameters (`box(t)`'s `Same(X:t):t`: that
-  needs #171). Lambdas and nested functions are not released in Verse, so
-  there are none.
+  parameters cannot be used as values, nor can a method whose type repeats,
+  nests or leaves out one of its class's type parameters (`box(t)`'s
+  `Same(X:t):t` needs #171; its `Size():int` leaves `t` out). Lambdas and
+  nested functions are not released in Verse, so there are none.
 
 ## defer
 
@@ -830,8 +830,17 @@ Main()<suspends>:void =
   `E.Subscribe(F)` (with `F` a function or method value of type
   `type{_(:t):void}`) gives a `cancelable`, whose `Cancel()` unsubscribes
   `F`, and `E.Signal(X)` calls each subscribed function in the order they
-  subscribed, after waking the tasks awaiting `E` (#210). A function
-  subscribed during a `Signal` is first called at the next one.
+  subscribed (see [Readings](#readings-openverse-takes)), after waking the
+  tasks awaiting `E`, which go on once `Signal` has returned (#210). A
+  function subscribed during a `Signal` is first called at the next one; a
+  function cancelled during a `Signal`, by one called before it, is not
+  called by it. As in the Book (ch. 14, "Transactional Behavior"), a
+  `Subscribe` or a `Cancel` in a failure context that fails is undone. A
+  `Signal` may be called in a failure context too, which Verse refuses
+  (the API reference makes its `Signal` `<no_rollback>`): what the
+  functions it calls do is rolled back with the context, as `Print` is.
+  The Book marks subscribable events as not yet released in Verse;
+  openverse follows the Book's description of them.
 - **Arms.** Arms share the enclosing function's variables. An arm is a
   scope of its own, which `break` cannot leave. A `return` in an arm
   returns from the enclosing function: the arm's defers run, then the other
@@ -902,6 +911,7 @@ Main()<suspends>:void =
 | `Sleep(0.0)` | "may resume in the same tick" (ch. 14); the API reference: it always yields | always yields: resumes in the next tick (#156) |
 | `Sleep(S)` rounding | rounded up to whole ticks (ch. 14) | `Round(30·S)` ticks, at least one: rounding to the nearest keeps `Sleep(0.1)` at 3 ticks despite binary floats (#156) |
 | End of a program with tasks | not stated | the program ends when `Main` does; a `Main` that waits with no task able to run is an error (exit 2) (#156) |
+| Order of a `subscribable_event`'s functions | not stated (ch. 14's example lists them in subscription order) | subscription order; the tasks awaiting the event are woken first and go on after `Signal` returns (#210) |
 | Extent of a `<#>` comment | "everything indented by four spaces on subsequent lines" (§1.1) | the rest of the `<#>` line and every following line indented more than that line, whatever the amount (blank lines included); `<#>` may also follow code on a line |
 
 ## Not supported in v1

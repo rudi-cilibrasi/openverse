@@ -308,7 +308,11 @@ flowchart LR
   subscription is a non-generic object with a live flag, as a generic
   class cannot implement the non-generic `cancelable` (#53); `Signal`
   drops the cancelled ones, so the array holds the live subscriptions and
-  those cancelled since the last `Signal`.
+  those cancelled since the last `Signal` (a loop that subscribes and
+  cancels without signalling grows it until the next `Signal`). `Signal`
+  calls a snapshot of the array and checks each flag just before the call,
+  so a function subscribed during a `Signal` waits for the next one and one
+  cancelled before its turn is skipped.
 - **Over-approximation.** The pass makes a method's value class whenever
   `X.M` is written outside a call for some `X` and a class declares `M`,
   as it cannot tell a method from a field, or from an array's `Length`.
