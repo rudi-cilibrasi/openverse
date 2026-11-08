@@ -537,6 +537,18 @@ def stable : Expr → Bool
   | .local i => i == frS || i == schS
   | _ => false
 
+/-- The types a call's arguments are checked against: `g`'s parameter types,
+    at the type arguments its other arguments give (none where one of `g`'s
+    type variables stays unbound, #188). -/
+def callHints (g : Nat) (es : List Expr) : M (List (Option VTy)) := do
+  let env ← read
+  match env.S.fns[g]? with
+  | some (ps, τ) =>
+    let acc := bindArgs env.S (← get).Γ.toList env.ρ ps es []
+    let θ := callInst acc τ none
+    return ps.map fun p => if p.unbound acc then none else some (p.subst θ)
+  | none => return []
+
 /-- A new suspension point of the region. -/
 def newSite (fieldTy : VTy) : M Nat := do
   let k := (← get).next + 1
@@ -676,7 +688,7 @@ partial def block (e : Expr) (k : Option (Expr → Expr)) : M (List Expr) := do
       let [.prim .mkArr [.seq (.call h hs) _, .seq (.local t) _]] := es
         | throw "internal error: a malformed spawn"
       -- (its arguments now, a spawn among them first, #180)
-      let (pre, hs) ← operands hs
+      let (pre, hs) ← operands hs (← callHints h hs)
       let i := (← get).spawnNext
       modify fun st => { st with spawnNext := i + 1 }
       let some (newFn, startFn) := env.spawns[i]? | throw "internal error: spawns miscounted"
@@ -719,7 +731,7 @@ partial def block (e : Expr) (k : Option (Expr → Expr)) : M (List Expr) := do
       match k with
       | none => return [s]
       | some k => return [s, ← emit (pure (k vd))]
-    let (pre, rs) ← operands es
+    let (pre, rs) ← operands es (← callHints g es)
     match env.callee g with
     | some c =>
       let (s, v) ← emitWith (suspendAt g c rs)
@@ -746,7 +758,7 @@ partial def block (e : Expr) (k : Option (Expr → Expr)) : M (List Expr) := do
 
 /-- Operands evaluated left to right, some of which suspend: those before
     the last that suspends go to temporaries first. -/
-partial def operands (es : List Expr) : M (List Expr × List Expr) := do
+partial def operands (es : List Expr) (hints : List (Option VTy) := []) : M (List Expr × List Expr) := do
   let flags ← es.mapM hasS
   match (flags.zipIdx.filter (·.1)).getLast? with
   | none => return ([], es)
@@ -756,7 +768,15 @@ partial def operands (es : List Expr) : M (List Expr × List Expr) := do
     for (e, i) in es.zipIdx do
       if i > j || (i < j && stable e) then rs := rs.push (retToDone (← read).inArmR (← loopify e))
       else
-        let t ← fresh (← infer e)
+        -- (one with no type of its own, `if … then array{} else array{}`:
+        -- the type it is checked against, when known, #188)
+        let env ← read
+        let Γ := (← get).Γ.toList
+        let τ ← match tc env.S Γ env.ρ e none, hints[i]? with
+          | some τ, _ => pure τ
+          | none, some (some h) => if (tc env.S Γ env.ρ e (some h)).isSome then pure h else infer e
+          | none, _ => infer e
+        let t ← fresh τ
         pre := pre ++ (← block e (some (.assign t ·)))
         rs := rs.push (.local t)
     return (pre.toList, rs.toList)
