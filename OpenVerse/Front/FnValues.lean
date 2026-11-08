@@ -281,11 +281,50 @@ def desugar (tops : List STop) (extra : List STop := []) : List STop := Id.run d
   -- methods used as values (`X.M`, or `M` in the class's methods): each
   -- declaring class's method, its receiver a field `$self` (#210)
   let members := named.filterMap fun n => if n.startsWith "." then some (n.drop 1).toString else none
+  -- (a method value's class is valid when the class's type parameters
+  -- occur once each in the shape's type arguments, as whole types)
+  let valid (tps : List TParam) (targs : List STy) : Bool :=
+    let tpn := tps.map (·.name)
+    let bare := targs.filterMap fun | .name x => if tpn.contains x then some x else none | _ => none
+    let whole := targs.all fun t => match t with
+      | .name _ => true
+      | t => !tpn.any t.hasName
+    whole && tpn.all bare.contains && bare.eraseDups.length == bare.length
+  -- (the declaration an override overrides: the nearest class or interface
+  -- above that declares the method)
+  let classOf (c : String) : Option (List TParam × List STy × List STop) := tops.findSome? fun
+    | .classDef _ n tps _ ps _ _ _ ms => if n == c then some (tps, ps, ms) else none
+    | _ => none
+  let rec declOf (fuel : Nat) (c m : String) : Option (List TParam × List STy) :=
+    match fuel, classOf c with
+    | fuel + 1, some (_, ps, _) => (ps.filterMap parentName).findSome? fun q =>
+      match classOf q with
+      | some (qtps, _, qms) =>
+        let own : STop → Option (List STy) := fun
+          | .fn _ m' qps _ qeffs qr _ =>
+            if m' == m && !qeffs.contains "override" then some (qps.map (·.ty) ++ [qr]) else none
+          | _ => none
+        match qms.findSome? own with
+        | some targs => some (qtps, targs)
+        | none => declOf fuel q m
+      | none => none
+    | _, _ => none
   let mvalues : List (Pos × String × List TParam × String × List SParam × List String × STy) :=
     tops.flatMap fun
       | .classDef _ c tps _ _ _ _ _ ms => ms.filterMap fun
         | .fn mp m ps mtps effs r _ =>
           let targs := ps.map (·.ty) ++ [r]
+          -- (an override needs a class of its own only when its type is not
+          -- its declaration's, a narrower result, #219, or the declaration's
+          -- class cannot have one, as a generic interface's method that a
+          -- class implements at closed types: otherwise the declaration's
+          -- value dispatches to it, and one class per override in a long
+          -- chain of them makes code without end)
+          let needed := !effs.contains "override" || match declOf (tops.length + 1) c m with
+            | some (dtps, dtargs) =>
+              !(valid dtps dtargs) || dtargs.length != targs.length ||
+                (dtargs.zip targs).any fun (a, b) => reprStr a != reprStr b
+            | none => true
           let tpn := tps.map (·.name)
           -- (a class's type parameters only as whole, distinct type
           -- arguments of the shape: a class that repeats or nests them
@@ -298,7 +337,7 @@ def desugar (tops : List STop) (extra : List STop := []) : List STop := Id.run d
           -- (and every one of them: the class's type arguments must be
           -- recoverable from the shape's, #53)
           let complete := tpn.all bare.contains
-          if members.contains m && !overloaded && mtps.isEmpty && ps.all (!·.named) && !m.contains '$' &&
+          if members.contains m && needed && !overloaded && mtps.isEmpty && ps.all (!·.named) && !m.contains '$' &&
               !m.startsWith "(" &&
               whole && complete && bare.eraseDups.length == bare.length then
             some (mp, c, tps, m, ps, effs, r)

@@ -156,7 +156,8 @@ Main():void =
   its receiver: calling it calls `C.Add`, the receiver's class's
   implementation, and sees and changes `C`'s fields. Its type is the
   method's in `C`'s static class, so an override's narrower result type
-  is the value's (#219).
+  is the value's (#219), or, where a function type is expected, that of
+  the class above that declares or overrides it with that type.
 - Generic functions and methods, overloaded ones and ones with named
   parameters cannot be used as values, nor can a method whose type repeats
   or nests its class's type parameters (`box(t)`'s `Same(X:t):t`: that
