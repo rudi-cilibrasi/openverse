@@ -728,14 +728,14 @@ Main()<suspends>:void =
   the first ends go on, as tasks of their own, until they end or the
   function that contains the `rush` exits (which cancels them, running
   their defers). A `rush` cannot be in a `loop` or `for` body (the Book's
-  rule), nor in a generic function for now.
+  rule).
 - **`branch`.** The body of a `branch:` runs as a task of its own, at once
   up to its first wait, while the code after it goes on. It shares the
   enclosing function's variables, and it is cancelled (running its active
   `defer:` blocks) when that function exits, by returning, ending or being
   cancelled: after the function's own `defer:` blocks, the last started
   branch first. A `branch` cannot be in a `loop` or `for` body (the Book's
-  rule), even through an arm, nor in a generic function for now.
+  rule), even through an arm.
 - **`spawn`.** `spawn{F(…)}` starts a task running the call, which must be
   of a suspends function or method (`spawn{Agent.Run()}`, also when
   subclasses override `Run`). Its arguments are evaluated at once, and the
@@ -744,9 +744,7 @@ Main()<suspends>:void =
   gives its result (at once if it has ended). A task is not tied to the
   code that spawned it: it runs until it ends or the program does. `spawn`
   is allowed in any function, immediate ones too, and in a field's default
-  (a task per construction that omits the field); in a generic function,
-  the spawned call's argument and result types must not mention its type
-  parameters (the scheduler's tasks have no type arguments);
+  (a task per construction that omits the field);
   without a suspends `Main`, a task runs only up to its first wait.
   `T.Cancel()` (in a suspends function) cancels a task that has not ended:
   it unwinds at once, running its `defer:` blocks, or, when a task cancels
@@ -809,6 +807,15 @@ Main()<suspends>:void =
   one suspension point to the next (see DESIGN.md). Nothing changes in
   Verse Core, the proofs or the C runtime. A call site keeps its callee's
   frame, so a loop of calls allocates once.
+- **Generic functions.** A generic function with a `branch`, a `rush`, or a
+  `spawn` whose call's arguments or result have types that mention its
+  type parameters, and a generic immediate function with any `spawn`, is
+  compiled once for each type it is used at (#174), as the scheduler's
+  tasks have no type arguments; so is a generic function that uses such a
+  function at its own type parameters. Such a function calling itself at
+  ever bigger types (`F(X:t)` calling `F(array{X})`) would need endlessly
+  many copies and is refused: a program may need at most 500 copies, at
+  types of at most 2000 parts.
 
 ## Readings openverse takes
 
@@ -843,8 +850,6 @@ Main()<suspends>:void =
 arithmetic on rationals (see [rational](#rational)), float functions beyond those of [float](#float),
 the class features listed under [Classes](#classes), struct methods (Verse structs have none; classes do),
 `weak_map`, module paths `using{/Verse.org/…}` (accepted and ignored), overloading beyond [Overloading](#overloading), nested
-functions, concurrency beyond [Concurrency](#concurrency) (`spawn`
-of a call that depends on a generic function's type parameters, `branch` and `rush`
-in generic functions, `subscribable_event`; #156), and effect checking
+functions, concurrency beyond [Concurrency](#concurrency) (`subscribable_event`; #156), and effect checking
 other than `<decides>` and the heap effects (`<converges>` is accepted and
 ignored).

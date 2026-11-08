@@ -258,6 +258,47 @@ partial def liftChains (m base : Nat) : Expr → StateM (Array (Expr × List Nat
   | .forE i it f b => return .forE i (← liftChains m base it) (← liftChains m base f) (← liftChains m base b)
   | x => return x
 
+/-- `e` without the tests in `Typed.dispatch`'s shape that no object can
+    pass at the slot types `Γ`: the receiver's type arguments are closed and
+    disagree with the tested classes' pins (#142). A copy of a generic
+    function at closed types has such tests where the generic one had a
+    refinement (#174), and the checker types a dispatch only when its pins
+    can agree. -/
+partial def pruneDead (S : Sigs) (Γ : List VTy) : Expr → Expr
+  | .ite c@(.heap (.isTag us) [.local y]) t@(.call _ (.local y' :: _)) e =>
+    let dead := y == y' && !us.isEmpty && match Γ[y]? with
+      | some (.ref _ a) => a.all VTy.closed && us.all fun u => !VTy.pinsOK ((S.pinsOf u).take a.length) a
+      | _ => false
+    if dead then pruneDead S Γ e else .ite c (pruneDead S Γ t) (pruneDead S Γ e)
+  | .assign i x => .assign i (pruneDead S Γ x)
+  | .ret x => .ret (pruneDead S Γ x)
+  | .print x => .print (pruneDead S Γ x)
+  | .loop x => .loop (pruneDead S Γ x)
+  | .seq a b => .seq (pruneDead S Γ a) (pruneDead S Γ b)
+  | .call f es => .call f (es.map (pruneDead S Γ))
+  | .prim p es => .prim p (es.map (pruneDead S Γ))
+  | .heap op es => .heap op (es.map (pruneDead S Γ))
+  | .ite c t x => .ite (pruneDead S Γ c) (pruneDead S Γ t) (pruneDead S Γ x)
+  | .forE i it f b => .forE i (pruneDead S Γ it) (pruneDead S Γ f) (pruneDead S Γ b)
+  | x => x
+
+/-- `e` with each call `call g es` for which `r g es` gives a function
+    redirected to it (#174). -/
+partial def redirectCalls (r : Nat → List Expr → Option Nat) : Expr → Expr
+  | .call f es =>
+    let es := es.map (redirectCalls r)
+    .call ((r f es).getD f) es
+  | .assign i x => .assign i (redirectCalls r x)
+  | .ret x => .ret (redirectCalls r x)
+  | .print x => .print (redirectCalls r x)
+  | .loop x => .loop (redirectCalls r x)
+  | .seq a b => .seq (redirectCalls r a) (redirectCalls r b)
+  | .prim p es => .prim p (es.map (redirectCalls r))
+  | .heap op es => .heap op (es.map (redirectCalls r))
+  | .ite c t x => .ite (redirectCalls r c) (redirectCalls r t) (redirectCalls r x)
+  | .forE i it f b => .forE i (redirectCalls r it) (redirectCalls r f) (redirectCalls r b)
+  | x => x
+
 /-- The number of arms of the `sync`s and `race`s (marks `m`) in `e`. -/
 partial def countArms (m : Nat → Bool) : Expr → Nat
   | .call f es =>

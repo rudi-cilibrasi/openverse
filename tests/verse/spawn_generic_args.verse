@@ -1,4 +1,4 @@
-# expect: a spawned call whose arguments' types mention the function's type parameters
+# formerly refused; generic functions with task roots are specialised (#174)
 W(X:t where t:type)<suspends>:int = 1
 H(X:t where t:type)<suspends>:void =
     T := spawn{W(X)}
