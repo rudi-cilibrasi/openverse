@@ -102,6 +102,23 @@ partial def Ty.show : Ty → String
 
 def Ty.string : Ty := .arr .char
 
+/-- A closed type as written (#214: a function type asked for, for the
+    value classes made before elaboration). -/
+partial def Ty.toSTy : Ty → STy
+  | .int => .name "int" | .logic => .name "logic" | .char => .name "char" | .char32 => .name "char32"
+  | .rational => .name "rational" | .float => .name "float" | .void => .name "void" | .any => .name "any"
+  | .refine n | .enum n | .param n _ => .name n
+  | .never => .name "false"
+  | .arr .char => .name "string"
+  | .arr t => .arr t.toSTy
+  | .opt t => .opt t.toSTy
+  | .tup ts => .tup (ts.map Ty.toSTy)
+  | .map k v => .map k.toSTy v.toSTy
+  | .struct n [] => .name n
+  | .struct n ts => match FnValues.parseName n with
+    | some (k, effs) => .fn ((ts.take k).map Ty.toSTy) effs ((ts.drop k).headD .void).toSTy
+    | none => .app n (ts.map Ty.toSTy)
+
 /-- Substitute type arguments for type parameters. -/
 partial def Ty.subst (σ : List (String × Ty)) : Ty → Ty
   | .param n c => (σ.lookup n).getD (.param n c)
@@ -187,6 +204,8 @@ structure TyEnv where
       dispatched under the refinement the class's pins give, as a method. -/
   fieldAcc : List (String × String) := []
   fieldAccBase : Nat := 0
+  /-- The functions asked for as values at closed function types (#214). -/
+  fnRequests : List (String × Ty) := []
   /-- The type arguments of each class's parametric superclass (#39), in
       terms of the class's own type parameters: `sub(t) := class(base(t))`
       gives `base ↦ [t]`. -/
@@ -733,6 +752,44 @@ structure Sig where
   suspends : Bool := false
   deriving Inhabited
 
+/-- A type built from the primitive comparable types (#214). -/
+partial def Ty.plainComparable : Ty → Bool
+  | .int | .logic | .char | .char32 | .rational | .float => true
+  | .arr t | .opt t => t.plainComparable
+  | .tup ts => ts.all Ty.plainComparable
+  | .map k v => k.plainComparable && v.plainComparable
+  | _ => false
+
+/-- Whether function `s` fits the closed function type `t` other than at its
+    own types, as the value classes made for a type asked for do (#214, as
+    `FnValues.desugar`): by variance (parameters above the type's and a
+    result below, through `int` below `rational` and class subtyping), or a
+    generic function at an instance, a comparable type parameter at a type
+    built from the primitive comparable types; with at most the type's
+    effects. -/
+def fnFits (env : TyEnv) (s : Sig) (t : Ty) : Bool :=
+  match t with
+  | .struct m ts =>
+    match FnValues.parseName m with
+    | some (k, effs) =>
+      let sh : FnValues.Shape := ⟨s.params.length, s.decides, s.suspends, s.fx⟩
+      let qs := ts.take k
+      let u := (ts.drop k).headD .void
+      let subAt (a b : Ty) : Bool := a == b || (a == .int && b == .rational) || match a, b with
+        | .struct x [], .struct y [] => x != y && env.isSub x y
+        | _, _ => false
+      k == s.params.length && sh.within (FnValues.shapeOf k effs) &&
+        if s.tparams.isEmpty then
+          (qs.zip s.params).all (fun (q, p) => subAt q p) && subAt s.ret u
+        else
+          match ((s.params ++ [s.ret]).zip (qs ++ [u])).foldlM (fun σ (a, b) => a.matchArg env σ b) [] with
+          | some σ => s.tparams.all fun (v, cmp) => match σ.lookup v with
+            | some x => !cmp || x.plainComparable
+            | none => false
+          | none => false
+    | none => false
+  | _ => false
+
 structure Ctx where
   /-- How many retries without an expected type enclose this point: a later
       branch is elaborated against the first's type, else on its own (to
@@ -804,6 +861,9 @@ structure ESt where
       its position and text (#74): computed once, so nested overloaded calls
       take polynomial time (it survives the trials' state being restored). -/
   natTys : Std.HashMap String (Option Ty) := {}
+  /-- Functions wanted as values at closed function types no class of
+      theirs gives (#214). -/
+  fnNeeds : List (String × Ty) := []
   deriving Inhabited
 
 abbrev EM := StateT ESt (Except String)
@@ -1666,9 +1726,34 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
             return ← elabE ctx (.member p (.ident p "Self") n) exp
         match ctx.sig? n with
         | some s =>
+          -- (#214) a function wanted at a closed function type of its arity
+          -- that no class of its gives, not asked for yet: asked for, as a
+          -- placeholder, the program is elaborated again with a class made
+          -- for it (if the function fits the type)
+          let askFor : Option Ty := match exp with
+            | some t@(.struct m ts) =>
+              match FnValues.parseName m with
+              | some (k, _) =>
+                if k == s.params.length && (ts.all fun u => u.params.isEmpty) &&
+                    !ctx.types.fnRequests.contains (n, t) && fnFits ctx.types s t then some t else none
+              | none => none
+            | _ => none
           if s.isConst then
             noteFx p s.fx (some s!"uses the constant {n}")
             return ⟨.call s.idx [], s.ret⟩
+          else if let some (cls, ty) := (do
+              -- (#214) a value class made for the function type expected,
+              -- a written closed one the function fits other than at its
+              -- own types (by variance, or a generic one at an instance)
+              let t@(.struct m _) ← exp | none
+              if (FnValues.parseName m).isNone then none
+              let env := ctx.types
+              let c ← env.classes.find? fun (c : String) => c.startsWith s!"{n}$fn$" &&
+                let i := (env.info c).ifaces.headD ""
+                Ty.struct i ((env.iargs.lookup (c, i)).getD []) == t
+              some (c, t) : Option (String × Ty)) then
+            let r ← elabE ctx (.construct p cls [] []) none
+            return ⟨← coerce p r ty, ty⟩
           else if ctx.types.classes.contains s!"{n}$fn" then
             -- a function as a value (#210): its class's object, of the
             -- function type expected, else of its own
@@ -1684,9 +1769,16 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
             if ty == own then return r
             match ← tryCatch (some <$> coerce p r ty) (fun _ => pure none) with
             | some e => return ⟨e, ty⟩
-            | none => return r
+            | none =>
+              if let some t := askFor then
+                modify fun st => { st with fnNeeds := st.fnNeeds ++ [(n, t)] }
+                return ⟨.prim .userErr [], t⟩
+              return r
+          else if let some t := askFor then
+            modify fun st => { st with fnNeeds := st.fnNeeds ++ [(n, t)] }
+            return ⟨.prim .userErr [], t⟩
           else if !s.tparams.isEmpty then
-            eerr p s!"'{n}' is generic: a generic function cannot be used as a value yet (#210)"
+            eerr p s!"'{n}' is generic: a generic function is a value only where a closed function type that is an instance of its type is expected (X:type\{…} = {n}, or as an argument of such a parameter), not at a type over type parameters, #214"
           else if !s.named.isEmpty then
             eerr p s!"'{n}' has named parameters: such a function cannot be used as a value (a function type has no named parameters)"
           else eerr p s!"'{n}' is a function: call it with {n}(…)"
@@ -4160,6 +4252,9 @@ structure Compiled where
   prog    : Prog
   sigs    : Sigs
   slotTys : List (List VTy)
+  /-- Functions wanted as values at closed function types no class of
+      theirs gives (#214): the program is elaborated again, with them. -/
+  fnNeeds : List (String × Ty) := []
 
 /-- Names a type parameter cannot have. -/
 def typeNames : List String :=
@@ -4187,6 +4282,9 @@ def checkTParams (env : TyEnv) (tps : List TParam) : Except String (List (String
 structure Options where
   args : Option (List String) := none
   entry : Option SExpr := none
+  /-- Functions wanted as values at closed function types no class of
+      theirs gave in an earlier elaboration (#214): a class for each. -/
+  fnRequests : List (String × Ty) := []
 
 /-- A class or interface definition, as parsed. -/
 structure CDef where
@@ -5373,7 +5471,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   -- for each function used as a value
   -- (the entry expression is scanned too)
   let allTops00 := FnValues.desugar (resolved.take (resolved.length - rawEntry.length) ++ helpers)
-    (resolved.drop (resolved.length - rawEntry.length))
+    (resolved.drop (resolved.length - rawEntry.length)) (opts.fnRequests.map fun (n, t) => (n, t.toSTy))
   let entryTop := resolved.drop (resolved.length - rawEntry.length)
   -- the command line: `Args`, and an entry expression
   let defines (n : String) := allTops00.any fun
@@ -5838,7 +5936,8 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   let varFields : List (String × String) := cdefs.flatMap fun cd =>
     (fullOf cd.name).filterMap fun (f, _, _, isVar) => if isVar then some (cd.name, f) else none
   let uniques : List String := (cdefs.filter (·.specs.contains "unique")).map (·.name)
-  let mut env : TyEnv := { classes := henv.classes, cinfo := henv.cinfo, abstracts := abstracts.toList }
+  let mut env : TyEnv := { classes := henv.classes, cinfo := henv.cinfo, abstracts := abstracts.toList,
+                           fnRequests := opts.fnRequests }
   env := { env with varFields := varFields, uniques := uniques }
   -- the class whose code each inherited field default is (#39): the nearest
   -- one, the class's own first, that gives the field a default itself
@@ -6406,7 +6505,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   let elabFn (env : TyEnv) (p : Pos) (name : String) (ps : List SParam) (ptys : List Ty) (ret : Ty)
       (decides : Bool) (allowed : List String) (tps : List (String × Bool)) (body : SExpr)
       (suspends : Bool := false) :
-      Except String (Fn × List VTy) := do
+      Except String (Fn × List VTy × List (String × Ty)) := do
     let locals := (ps.zip (List.range ps.length)).zip ptys |>.map fun ((prm, i), t) =>
       ({ name := prm.name, slot := i, ty := t, mutable := false } : Local)
     for (prm, i) in ps.zip (List.range ps.length) do
@@ -6434,17 +6533,19 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     fxCheck name allowed st
     return ({ name, arity, nslots := st.nslots, decides, writes := allowed.contains "writes",
               body := initPrefixE arity inits e },
-      st.slotTys.toList.map (Ty.toVTy env))
+      st.slotTys.toList.map (Ty.toVTy env), st.fnNeeds)
   -- (the accessors come right after the functions, #157)
   env := { env with fieldAccBase := tops.length + gsigs.size }
   let genvOf (g : Sig) : TyEnv := { env with tvars := g.tparams.map fun (v, c) => (v, Ty.param v c) }
   let mut fns : Array Fn := #[]
   let mut slotTys : Array (List VTy) := #[]
+  let mut fnNeeds : List (String × Ty) := []
   for (top, idx) in tops.zip (List.range tops.length) do
     let sig := sigs[idx]!
     match top with
     | .fn p n ps _ _ _ body =>
-      let (fn, tys) ← elabFn env p n ps sig.params sig.ret sig.decides sig.fx [] body sig.suspends
+      let (fn, tys, needs) ← elabFn env p n ps sig.params sig.ret sig.decides sig.fx [] body sig.suspends
+      fnNeeds := fnNeeds ++ needs
       fns := fns.push fn
       slotTys := slotTys.push tys
     | .const p n _ body =>
@@ -6455,6 +6556,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       let ctx : Ctx := { sigs := allSigs, sigProg, types := env }
       let (r, st) ← (elabStmt ctx body (some sig.ret)).run { env }
       let (e, st) ← (coerce p r.1 sig.ret).run st
+      fnNeeds := fnNeeds ++ st.fnNeeds
       let tys := st.slotTys.toList.map (Ty.toVTy env)
       -- slots start like a function's (a class-typed one as a placeholder)
       let inits ← match st.slotTys.toList.mapM (slotDefault env 0 [] []) with
@@ -6472,10 +6574,16 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   for (top, g) in generics.zip gsigs.toList do
     match top with
     | .fn p n ps _ _ _ body =>
-      let (fn, tys) ← elabFn (genvOf g) p n ps g.params g.ret g.decides g.fx g.tparams body g.suspends
+      let (fn, tys, needs) ← elabFn (genvOf g) p n ps g.params g.ret g.decides g.fx g.tparams body g.suspends
+      fnNeeds := fnNeeds ++ needs
       fns := fns.push fn
       slotTys := slotTys.push tys
     | _ => pure ()
+  -- (#214) functions wanted as values at types no class of theirs gives:
+  -- the program is elaborated again, with classes for them, so this one,
+  -- with placeholders, goes no further
+  if !fnNeeds.isEmpty then
+    return { prog := default, sigs := { fns := [] }, slotTys := [], fnNeeds := fnNeeds.eraseDups }
   let mainSig ← match sigs.toList.find? (·.name == (if opts.entry.isSome then "$Do" else "Main")) with
     | some s =>
       if s.isConst || !s.params.isEmpty then throw "Main must be a function with no parameters"
@@ -6565,7 +6673,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       | some f => s!" (in {((P.fns[f]?).map Fn.name).getD "?"})"
       | none => if !checkPrelude P S then " (the prototypes)" else ""
     throw s!"internal error: the elaborated program does not pass Prog.checkTypes{which}"
-  return { prog := P, sigs := S, slotTys := slotTys.toList }
+  return { prog := P, sigs := S, slotTys := slotTys.toList, fnNeeds := fnNeeds.eraseDups }
 
 /-- `F$ovN` (an overload, #74) shown as `F`: every `$ov` and the digits after it removed. -/
 def stripOv (msg0 : String) : String := Id.run do
@@ -6592,7 +6700,16 @@ def stripOv (msg0 : String) : String := Id.run do
     functions a constructor or an overload becomes shown as written: `K$init`
     is `K<constructor>`, `F$ov1` is `F` (names with `$` are never the user's). -/
 def elabProgram (allTops00 : List STop) (opts : Options := {}) : Except String Compiled :=
-  (elabProgramCore allTops00 opts).mapError fun msg =>
+  -- (#214) again with the functions wanted as values at closed function
+  -- types: each round asks for new ones only, so a few rounds do
+  let rec go (fuel : Nat) (opts : Options) : Except String Compiled := do
+    let c ← elabProgramCore allTops00 opts
+    match fuel, c.fnNeeds.filter (!opts.fnRequests.contains ·) with
+    | fuel + 1, new@(_ :: _) => go fuel { opts with fnRequests := opts.fnRequests ++ new }
+    | _, [] => return c
+    -- (a program with a placeholder left is never given out)
+    | 0, _ :: _ => throw "internal error: functions still wanted as values after several elaborations (#214)"
+  (go 4 opts).mapError fun msg =>
     FnValues.pretty (((stripOv (msg.replace "$init" "<constructor>")).replace "::" ".").replace "$replaceAll" "ReplaceAll")
 
 /-- Parse and elaborate Verse source text. -/

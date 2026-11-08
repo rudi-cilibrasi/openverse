@@ -244,13 +244,69 @@ partial def _root_.OpenVerse.Front.STop.scan (bound : List String := []) (meths 
     (parents.flatMap STy.fnShapes ++ fields.flatMap (·.2.1.fnShapes) ++ s ++ ms.flatMap (·.1),
       n ++ (ms.flatMap (·.2)).map self)
 
+/-- The function types inside a type: parameters, effects, result. -/
+partial def _root_.OpenVerse.Front.STy.fnTypes : STy → List (List STy × List String × STy)
+  | .name _ => []
+  | .arr t | .opt t => t.fnTypes
+  | .tup ts | .app _ ts => ts.flatMap STy.fnTypes
+  | .map a b => a.fnTypes ++ b.fnTypes
+  | .fn ps es r =>
+    -- (a type both <decides> and <suspends> has no shape: refused later)
+    (if es.contains "decides" && es.contains "suspends" then [] else [(ps, es, r)]) ++
+      ps.flatMap STy.fnTypes ++ r.fnTypes
+
+/-- Whether a type is comparable whatever the classes: built from the
+    primitive comparable types (a generic function's `subtype(comparable)`
+    parameter is matched only to such, #214). -/
+partial def plainComparable : STy → Bool
+  | .name n => ["int", "logic", "char", "char32", "string", "rational", "float"].contains n
+  | .arr t | .opt t => plainComparable t
+  | .tup ts => ts.all plainComparable
+  | .map k v => plainComparable k && plainComparable v
+  | _ => false
+
+/-- `a` is `b` or a subtype the elaborator converts at a parameter or a
+    result (#214): `int` to `rational`, a class to one above it. Nothing
+    else, so a value class made for a function type always elaborates. -/
+def subAt (anc : String → List String) (a b : STy) : Bool :=
+  reprStr a == reprStr b || match a, b with
+    | .name "int", .name "rational" => true
+    | .name x, .name y => (anc x).contains y
+    | _, _ => false
+
+/-- A match of a generic function's types (its type parameters `tps`)
+    against closed ones: each parameter's type, or none. -/
+partial def matchTy (tps : List String) (θ : List (String × STy)) (a b : STy) : Option (List (String × STy)) :=
+  -- (`string` is `[]char`)
+  let norm : STy → STy := fun | .name "string" => .arr (.name "char") | t => t
+  matchTy.go tps θ (norm a) (norm b)
+where
+  go (tps : List String) (θ : List (String × STy)) : STy → STy → Option (List (String × STy))
+  | .name x, t =>
+    if tps.contains x then
+      match θ.lookup x with
+      | some u => if reprStr u == reprStr t then some θ else none
+      | none => some ((x, t) :: θ)
+    else if reprStr (STy.name x) == reprStr t then some θ else none
+  | .arr a, .arr b | .opt a, .opt b => matchTy tps θ a b
+  | .tup as, .tup bs => if as.length != bs.length then none else
+      (as.zip bs).foldlM (fun θ (a, b) => matchTy tps θ a b) θ
+  | .app n as, .app m bs => if n != m || as.length != bs.length then none else
+      (as.zip bs).foldlM (fun θ (a, b) => matchTy tps θ a b) θ
+  | .map a b, .map c d => (matchTy tps θ a c).bind fun θ => matchTy tps θ b d
+  | .fn ps es r, .fn qs fs u =>
+    if ps.length != qs.length || shapeOf ps.length es != shapeOf qs.length fs then none else
+      ((ps ++ [r]).zip (qs ++ [u])).foldlM (fun θ (a, b) => matchTy tps θ a b) θ
+  | a, b => if reprStr a == reprStr b then some θ else none
+
 /-- Add the shapes' interfaces and the value classes of the functions used
     as values (#210). A function is used as a value when its name occurs
     other than as the head of a call (an over-approximation: a parameter of
     that name may be meant, and then the class is never used). Generic and
     overloaded functions, functions with named parameters and hidden ones
     get none (the elaborator explains why such a function is no value). -/
-def desugar (tops : List STop) (extra : List STop := []) : List STop := Id.run do
+def desugar (tops : List STop) (extra : List STop := []) (requests : List (String × STy) := []) :
+    List STop := Id.run do
   -- (each class's fields, its own and its parents', in its methods: a
   -- field of that name is meant there)
   let defs : List (String × List STy × List String × List String) := tops.filterMap fun
@@ -344,7 +400,28 @@ def desugar (tops : List STop) (extra : List STop := []) : List STop := Id.run d
           else none
         | _ => none
       | _ => []
-  if values.isEmpty && mvalues.isEmpty && (scans.all fun (s, _) => s.isEmpty) then return tops
+  let gvalues : List (Pos × String × List SParam × List TParam × List String × STy) := tops.filterMap fun
+    | .fn p n ps tps effs r _ =>
+      if named.contains n && !tps.isEmpty && ps.all (!·.named) && !n.contains '$' &&
+          (fnNames.filter (· == n)).length == 1 then some (p, n, ps, tps, effs, r)
+      else none
+    | _ => none
+  -- (#214) the function types each function is asked for at: where the
+  -- elaborator wanted it as a value and no class of its fitted
+  let requested (n : String) : List (List STy × List String × STy) := requests.filterMap fun (f, t) =>
+    if f == n then match t with
+      | .fn qs es u => some (qs, es, u)
+      | _ => none
+    else none
+  let rec ancOf (fuel : Nat) (c : String) : List String :=
+    match fuel, defs.find? (·.1 == c) with
+    | fuel + 1, some (_, ps, _, _) =>
+      -- (through generic parents too: subtyping is by name, #214)
+      let up := ps.filterMap parentName
+      up ++ up.flatMap (ancOf fuel)
+    | _, _ => []
+  let anc := ancOf (defs.length + 1)
+  if values.isEmpty && mvalues.isEmpty && gvalues.isEmpty && (scans.all fun (s, _) => s.isEmpty) then return tops
   -- every shape written, and each value's own (a value's type when nothing
   -- else gives one)
   let mut shapes : List Shape := []
@@ -377,6 +454,47 @@ def desugar (tops : List STop) (extra : List STop := []) : List STop := Id.run d
     -- (its own shape first: the value's type when nothing else gives one)
     let fits := own :: fits.filter (· != own)
     out := out ++ [.classDef p s!"{n}$fn" [] [] (fits.map fun s => STy.app s.name targs) false [] [] methods]
+  -- (#214) a value class per closed function type a value is asked for at
+  -- and fits other than at its own types, `F$fn$k`, implementing that type's
+  -- shape (and those with more effects) at the type's own arguments
+  let variant (p : Pos) (n : String) (own : Shape) (k : Nat) (qs : List STy) (es : List String) (u : STy) :
+      Option STop :=
+    let s := shapeOf qs.length es
+    if !own.within s then none else
+    let fits := shapes.filter (s.within ·)
+    let args := (List.range qs.length).map fun i => SExpr.ident p s!"$X{i}"
+    let methods := fits.map fun s' =>
+      STop.fn p s'.call (params qs) [] (s'.effs ++ ["override"]) u (.app p (.ident p n) args own.decides)
+    let fits := s :: fits.filter (· != s)
+    some (.classDef p s!"{n}$fn${k}" [] [] (fits.map fun s' => STy.app s'.name (qs ++ [u])) false [] [] methods)
+  for (p, n, ps, effs, r) in values do
+    let own := shapeOf ps.length effs
+    let mut k := 0
+    for (qs, es, u) in requested n do
+      let exact := qs.length == ps.length && ((ps.map (·.ty)).zip qs).all (fun (a, b) => reprStr a == reprStr b) &&
+        reprStr r == reprStr u
+      -- (contravariant parameters, a covariant result)
+      if !exact && qs.length == ps.length && (qs.zip (ps.map (·.ty))).all (fun (a, b) => subAt anc a b) &&
+          subAt anc r u then
+        if let some c := variant p n own k qs es u then
+          out := out ++ [c]
+          k := k + 1
+  for (p, n, ps, tps, effs, r) in gvalues do
+    let own := shapeOf ps.length effs
+    let tpn := tps.map (·.name)
+    let mut k := 0
+    for (qs, es, u) in requested n do
+      if qs.length != ps.length then continue
+      let θ := ((ps.map (·.ty) ++ [r]).zip (qs ++ [u])).foldlM (fun θ (a, b) => matchTy tpn θ a b) []
+      if let some θ := θ then
+        -- (every type parameter instantiated, a comparable one to a type
+        -- that is surely comparable)
+        if tps.all fun tp => match θ.lookup tp.name with
+            | some t => tp.constraint != "comparable" || plainComparable t
+            | none => false then
+          if let some c := variant p n own k qs es u then
+            out := out ++ [c]
+            k := k + 1
   for (p, c, ctps, m, ps, effs, r) in mvalues do
     let own := shapeOf ps.length effs
     let fits := shapes.filter (own.within ·)
