@@ -320,7 +320,7 @@ theorem pinRefinement_refines {ps : List (Option VTy)} {a : List VTy}
   refine ⟨fun c hcm => ?_, hok, fun j => ⟨fun hj => ?_, fun hj => ?_⟩⟩
   · have := List.all_eq_true.mp hc _ hcm
     simpa using this
-  · simp only [pinRefinement, hj, if_true]
+  · simp only [pinRefinement, hj, ite_true]
     split
     · split
       · assumption
@@ -335,7 +335,7 @@ def tcDispatch (S : Sigs) (Γ : List VTy) (us : List Nat) (y y' f : Nat) (m : Op
     (σs? : Option (List VTy)) (eOK : Bool) : Option VTy :=
   if y = y' then
     match m, Γ[y]?, S.fns[f]?, σs? with
-    | some τ', some (.ref ts a), some (ps, τ), some σs =>
+    | some τ', some (.ref _ a), some (ps, τ), some σs =>
       let P := commonPins S us a.length
       let μ := pinRefinement P a
       let θ := callInst (VTy.bindVarsL ps ((VTy.ref us a :: σs).map (VTy.subst μ)) []) τ
@@ -413,12 +413,18 @@ def tc : Expr → Option VTy → Option VTy
             | none => none
       else none with
     | some τ => some τ
-    | none => match c, t with
+    | none => match c with
       -- dispatch to classes that fix type arguments (#142), when the plain
-      -- typing fails
-      | .heap (.isTag us) [.local y], .call f (.local y' :: es) =>
-        tcDispatch S Γ us y y' f m (inferL es) (tc e m).isSome
-      | _, _ => none
+      -- typing fails because of the call (so that `e` is checked once): only
+      -- against an expected type, as the refinement relates the call's
+      -- result to it
+      | .heap (.isTag us) [.local y] =>
+        if m.isSome && (tc t m).isNone then
+          match t with
+          | .call f (.local y' :: es) => tcDispatch S Γ us y y' f m (inferL es) (tc e m).isSome
+          | _ => none
+        else none
+      | _ => none
   | .forE i it filt body, m => match Γ[i]? with
     | some te =>
       if (tc it (some (.arr te))).isSome &&
@@ -1124,12 +1130,18 @@ theorem tc_sound_aux : ∀ (n : Nat) (e : Expr), sizeOf e < n → TcOK S Γ ρ e
         · next hreg =>
           -- dispatch to classes that fix type arguments (#142)
           split at h
-          · next us y f y' es =>
-            obtain ⟨rfl, hm, heOK, ts, a, ps, τ0, σs, P, μ, θ, hy, hf, hσs, hus, hμ, hsub, hres⟩ :=
-              tcDispatch_sound h
-            simp only [Option.some.injEq] at hm; subst hm
-            have Iargs : TypedL S Γ ρ es σs := inferL_sound_of (Isz rfl) hσs
-            exact ⟨Typed.dispatch θ μ hy hus hμ hf Iargs hsub hres (typed_of_check Ie heOK), by simp⟩
+          · next us y =>
+            split at h
+            · next hc =>
+              split at h
+              · next f y' es =>
+                obtain ⟨rfl, hm, heOK, ts, a, ps, τ0, σs, P, μ, θ, hy, hf, hσs, hus, hμ, hsub, hres⟩ :=
+                  tcDispatch_sound h
+                simp only [Option.some.injEq] at hm; subst hm
+                have Iargs : TypedL S Γ ρ es σs := inferL_sound_of (Isz rfl) hσs
+                exact ⟨Typed.dispatch θ μ hy hus hμ hf Iargs hsub hres (typed_of_check Ie heOK), by simp⟩
+              · simp at h
+            · simp at h
           · simp at h
       | none =>
         unfold tc at h
@@ -1163,7 +1175,10 @@ theorem tc_sound_aux : ∀ (n : Nat) (e : Expr), sizeOf e < n → TcOK S Γ ρ e
           · simp at hreg
         · next hreg =>
           split at h
-          · next us y f y' es => exact absurd (tcDispatch_sound h).2.1 (by simp)
+          · next us y =>
+            split at h
+            · next hc => simp at hc
+            · simp at h
           · simp at h
     | forE i it filt body =>
       have Iit := IH it (by simp <;> omega)

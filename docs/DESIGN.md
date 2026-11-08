@@ -303,9 +303,10 @@ position in every class below the one that declares it.
   type through every reference of the hierarchy. Dispatch passes the
   receiver as an instance of the implementing class at the arguments it
   has there (`upArgs`, `argsBelow`). A class that fixes or repeats the
-  type arguments cannot override: from code generic over `cell(t)`, an
-  `intcell`'s implementation would need `t = int`, which Verse Core cannot
-  express, and a `named`'s an `n` the caller does not have.
+  type arguments cannot override yet: from code generic over `cell(t)`, an
+  `intcell`'s implementation needs `t = int`, which Verse Core expresses
+  only under a dispatch's refinement (see "Pins and dispatch" below, #142),
+  and a `named`'s an `n` the caller does not have.
 
 ## Typing the heap
 
@@ -370,11 +371,15 @@ Phase 3 (#20) adds a heap of objects, each with a class tag and fields
   some heap typing of it.
 - **Pins and dispatch** (#142). A class that fixes some of its parent's
   type arguments to closed types (`int_box := class(box(int))`) records
-  them as its *pins* (`Sigs.pins`), and every object of the class has them
-  (`HeapOK`; `new` checks them). Code generic over `box(t)` cannot call
+  them as its *pins* (`Sigs.pins`). Every object of the class agrees with
+  them at the type arguments it has (`HeapOK`; `new` checks them): an object
+  with fewer arguments than a pinned position is unconstrained there, which
+  is harmless, as subtyping only drops trailing arguments, so no reference
+  to it has that position. Code generic over `box(t)` cannot call
   `int_box`'s override with the ordinary call rule, since it needs
-  `t = int`. `Typed.dispatch` types the dispatch the elaborator emits,
-  `if (isTag us Y) then F(Y, …) else E`, by a substitution `μ` that makes
+  `t = int`. `Typed.dispatch` types a dispatch
+  `if (isTag us Y) then F(Y, …) else E` (the shape the elaborator is to
+  emit for such overrides, step 2 of #142) by a substitution `μ` that makes
   `Y`'s type arguments agree with the pins of the classes `us`, applied to
   both sides of the call: the arguments against the parameters, and the
   result against the expected type. When the call runs, the object's
@@ -382,8 +387,11 @@ Phase 3 (#20) adds a heap of objects, each with a class tag and fields
   identity and preservation is the call's. The substitution lemma holds
   because every substitution that makes the arguments agree with the pins
   factors through `μ`, whose bindings are closed (`PinRefines.factor`);
-  when none does, the call cannot run (`Typed.dispatch_none`). The
-  semantics, the binary format and the C runtime are unchanged.
+  when none does, the call cannot run (`Typed.dispatch_none`). The checker
+  (`tcDispatch`) tries the plain `if` typing first, and types a dispatch
+  only against an expected type, since `μ` relates the call's result to
+  it: a dispatch chain is assigned to a slot of the method's result type.
+  The semantics, the binary format and the C runtime are unchanged.
 - **Defaults.** No literal is a reference, so a slot of class type starts as
   a new object of one of its classes with default fields (`DefaultE.new`),
   or as a parameter of a subtype (`DefaultE.sub`). Placeholders cost an

@@ -117,6 +117,19 @@ example : pinDemo.checkTypes { pinSigs with pins := [] } pinSlots = false := by 
 example : (tc pinSigs [] .void (.heap (.new 1) [str "x"]) none) = none := by native_decide
 example : (tc pinSigs [] .void (.heap (.new 1) [int 1]) none) = some (.ref [1] [.int]) := by native_decide
 
+/-- A chain of `n` dispatch-shaped tests ending in an ill-typed literal. -/
+def pinChain (tag f : Nat) : Nat → Expr
+  | 0 => str "x"
+  | n+1 => .ite (.heap (.isTag [tag]) [.local 0]) (.call f [.local 0]) (pinChain tag f n)
+/-- The checker types each branch of a failing chain once, so a deep one is
+    rejected at once (re-checking the else branch at each test took time
+    exponential in the depth: 15 s at depth 20). -/
+example : (tc pinSigs [.ref [0, 1] [.var 0]] .void (pinChain 0 0 40) none) = none := by native_decide
+example : (tc pinSigs [.ref [0, 1] [.var 0]] .void (pinChain 0 0 40) (some (.var 0))) = none := by
+  native_decide
+example : (tc pinSigs [.ref [0, 1] [.var 0]] .void (pinChain 1 1 40) (some (.var 0))) = none := by
+  native_decide
+
 /-- The heap programs, for `openverse example` (the C runtime runs them, #31). -/
 def all : List (String × Prog) := [("heap", heapDemo), ("pins", pinDemo)]
 
