@@ -2782,7 +2782,11 @@ partial def elabAppBase (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (b
             let needOf (pins : List (Option Ty)) := (rargs.zip pins).filterMap fun (a, pin) => match pin with
               | some pt => if a == pt then none else some (a, pt)
               | none => none
-            if cls.any fun d => !(needOf (env.corePins d)).isEmpty then
+            -- (a generic <suspends> implementation at or above the receiver's
+            -- class is called at the receiver's own type arguments, without
+            -- the refinement: its frame is made by a call typed without it)
+            let plainSusp := ms.suspends && env.isSub c e && !((ctx.sig? fname).map (·.tparams.isEmpty)).getD true
+            if !plainSusp && cls.any fun d => !(needOf (env.corePins d)).isEmpty then
               -- one test per set of pins among the classes using `e`'s
               -- implementation: `Typed.dispatch` refines by the pins all the
               -- tested classes share, which may fix more than `e`'s (and it
@@ -5558,7 +5562,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       .ref [tagBase + j] ((List.range lows[j]!.2.2).map VTy.var)
     -- the methods called through `Typed.dispatch` (#142) of classes that fix
     -- type arguments (non-generic ones; a generic one is refused below the
-    -- receiver's class, and above it needs no refinement)
+    -- receiver's class, and called without the refinement at or above it)
     let targets : List Nat := (lows.foldl (fun acc (gi, _, _) => acc ++
       Suspend.dispatchTargets (fun f => user.any fun (h, _, ntp) => h == f && ntp == 0) fns[gi]!.body) []).eraseDups
     -- each one's `new`, `reset`, `cancel` and `result` (fixed indices), each
