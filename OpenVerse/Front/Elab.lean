@@ -4399,6 +4399,21 @@ partial def _root_.OpenVerse.VTy.size : VTy → Nat
   | .tup ts | .ref _ ts => 1 + (ts.map VTy.size).sum
   | _ => 1
 
+/-- An error of the lowering in function `name` (#156): with the position of
+    its definition among `tops`, and the name the program gave it (a
+    specialised copy's original's, #174). -/
+def inFnMsg (tops : List STop) (name msg : String) : String :=
+  let base := (name.splitOn "$at").headD name
+  let pos := tops.findSome? fun
+    | .fn q m .. => if m == base then some q else none
+    | .classDef _ c _ _ _ _ _ _ ms => ms.findSome? fun
+      | .fn q m .. => if s!"{c}.{m}" == base then some q else none
+      | _ => none
+    | _ => none
+  match pos with
+  | some q => s!"{q.show}: in {base}: {msg}"
+  | none => s!"in {base}: {msg}"
+
 /-- (#174) Specialise the generic functions whose tasks' roots would depend
     on their type parameters: those with a `branch` or `rush` (marks
     `branchMark`, `rushMark`), or a `spawn` (`spawnMark`) whose call's
@@ -4414,7 +4429,8 @@ partial def _root_.OpenVerse.VTy.size : VTy → Nat
     signatures, each copy's original and type arguments, and which
     functions were replaced. -/
 def specialise (fns0 : Array Fn) (slotTys0 : Array (List VTy)) (S0 : Sigs) (ntpOf : Nat → Nat)
-    (isSusp : Nat → Bool) (branchMark rushMark spawnMark : Nat) :
+    (isSusp : Nat → Bool) (branchMark rushMark spawnMark : Nat)
+    (inFn : String → String → String := fun n m => s!"in {n}: {m}") :
     Except String (Array Fn × Array (List VTy) × Array (List VTy × VTy) × Array (Nat × List VTy) × Array Bool) := do
   let mut fns := fns0
   let mut slotTys := slotTys0
@@ -4458,15 +4474,15 @@ def specialise (fns0 : Array Fn) (slotTys0 : Array (List VTy)) (S0 : Sigs) (ntpO
     if calls.isEmpty then continue
     for (g, es) in calls do
       let some θ := (witTys S Γ ρ g es).mapM id
-        | throw s!"in {fns[gi]!.name}: a type argument of a call of {fns[g]!.name} has no type of its own (#174)"
+        | throw (inFn fns[gi]!.name s!"a type argument of a call of {fns[g]!.name} has no type of its own (#174)")
       -- (types that grow at each copy, doubling for instance: polymorphic
       -- recursion; linear growth meets the bound on copies first)
       if θ.any (·.size > 2000) then
-        throw s!"{fns[g]!.name} would be compiled at a type of more than 2000 parts, as if at ever bigger types: a generic function with branch, rush or spawn, or one using such a function at its own type parameters, cannot call itself at bigger types (#174)"
+        throw (inFn fns[gi]!.name s!"{fns[g]!.name} would be compiled at a type of more than 2000 parts, as if at ever bigger types: a generic function with branch, rush or spawn, or one using such a function at its own type parameters, cannot call itself at bigger types (#174)")
       if θ.any (·.mentionsVar) then throw s!"internal error: specialising a call of {fns[g]!.name} in {fns[gi]!.name}"
       if !specKeys.contains (g, θ) then
         if specKeys.size ≥ 500 then
-          throw s!"more than 500 copies of generic functions with branch, rush or spawn, one per type each is used at (last {fns[g]!.name}): a function calling itself at ever bigger types, or many nested generic uses, cannot be compiled (#174)"
+          throw (inFn fns[gi]!.name s!"more than 500 copies of generic functions with branch, rush or spawn, one per type each is used at (last {fns[g]!.name}): a function calling itself at ever bigger types, or many nested generic uses, cannot be compiled (#174)")
         let σ : Nat → VTy := fun i => θ.getD i (.var i)
         let fn := fns[g]!
         let Γc := slotTys[g]!.map (VTy.subst σ)
@@ -5653,6 +5669,8 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   let mut frameClasses : Array (List VTy) := #[]
   let mut extraSigs : Array (List VTy × VTy) := #[]
   let mut mainCall : Expr := .call mainSig.idx []
+  -- (an error of the lowering names a function: with its position)
+  let inFn := inFnMsg (tops ++ generics)
   -- (a refined test, #142, of classes whose pins the receiver's closed type
   -- arguments rule out can never pass, and the checker types such a test
   -- only when the pins can agree: it goes, #186)
@@ -5680,7 +5698,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     let (fns1, slotTys1, specSigs, specKeys, replaced) ← specialise fns slotTys
       { fns := fsigs0, classes := classTable, protos, pins }
       (fun f => ((sigOf f).map (·.tparams.length)).getD 0) (fun f => ((sigOf f).map (·.suspends)).getD false)
-      branchMark rushMark spawnMark
+      branchMark rushMark spawnMark inFn
     fns := fns1
     slotTys := slotTys1
     let fsigs0 := fsigs0 ++ specSigs.toList
@@ -5711,7 +5729,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       let Γ := slotTys[gi]!
       let tys := ops.map fun o => (Γ[o]?).getD .int
       if tys.any (·.mentionsVar) then
-        throw s!"in {fns[gi]!.name}: a spawned call whose arguments' types mention the function's type parameters is not supported yet (#156)"
+        throw (inFn fns[gi]!.name "a spawned call whose arguments' types mention the function's type parameters is not supported yet (#156)")
       let ρ ← match Γ[t]? with
         | some (.ref _ [ρ]) => pure ρ
         | _ => throw s!"internal error: lowering {fns[gi]!.name}: a spawn's task"
@@ -5763,14 +5781,14 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
           match tc Sorig Γ (fsigs0[gi]!).2 e none with
           | some τ =>
             if τ.mentionsVar then
-              throw s!"in {gname}: a spawned call whose arguments' types mention the function's type parameters is not supported yet (#156)"
+              throw (inFn gname "a spawned call whose arguments' types mention the function's type parameters is not supported yet (#156)")
             atys := atys.push τ
           | none =>
             -- (`array{}` or `false` has no type of its own: the callee's
             -- parameter type at its type arguments, when that is closed)
             let pt := (((fsigs0[h]?).bind (·.1[i]?)).getD (.var 0)).subst θh
             if pt.mentionsVar then
-              throw s!"in {gname}: the arguments of a spawned call of a generic function must have types of their own (#156)"
+              throw (inFn gname "the arguments of a spawned call of a generic function must have types of their own (#156)")
             atys := atys.push pt
         let k := roots.size
         let n := hs.length
@@ -5941,7 +5959,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       let branches : Array (Nat × Nat × Nat) := ((branchOf[j]?).getD []).toArray.map fun K =>
         (wrapFnBase + 3 * K + 1, wrapFnBase + 3 * K + 2, wrapTag K)
       let low ← (Suspend.lower Sinf callee syncMark raceMark rushMark spawnMark spawns branchMark branches a Γ ρ (frameTy j)
-        schedTag fnBase b).mapError fun e => s!"in {gname}: {e}"
+        schedTag fnBase b).mapError fun e => inFn gname e
       -- its branches' wrappers: `tramp(w, sched)` resumes the arm (with the
       -- function's parameters from its frame) unless the function stopped
       -- it; `start(sched, frame)` makes the wrapper, registers it and runs
