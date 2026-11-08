@@ -127,6 +127,15 @@ proved, like the rest of the front end. The same goes for the reading for
 and `scripts/gen-choice.py`, a model of the readings written apart from
 the compiler.
 
+A choice inside an expression is first *lifted* out of its clause by
+`Choice.prepare`, an A-normal form at the surface. The operands evaluated
+before it are bound to fresh names (`$t := …`), then comes the choice
+(`$c := a | b`), then the clause with `$c` in its place. Doing it at the
+surface means the elaborator types the new names like any binding, so no
+type inference over Core is needed. `option{…}`, `logic{…}`, `not` and the
+left of `or` take a choice's first success by becoming `first{…}` of their
+clauses.
+
 The emitted code ends its filters with `fail; void` and its success with
 `break; void`, not a bare `fail` or `break`. Code ending with a bare one
 has no type of its own, so Core's type checker would check it again
