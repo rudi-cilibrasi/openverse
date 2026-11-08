@@ -25,6 +25,7 @@ import OpenVerse.Front.Suspend
 import OpenVerse.Front.Rational
 import OpenVerse.Front.Modules
 import OpenVerse.Front.FnValues
+import OpenVerse.Front.Choice
 import Std.Data.HashMap
 
 namespace OpenVerse.Front
@@ -869,6 +870,10 @@ structure Ctx where
   /-- In the body of a `loop` or `for`, also through arms (#156): a
       `branch` there would start again before the last one ended. -/
   inRepeat : Bool := false
+  /-- In the clauses of an `if` condition or `first{…}` that bind a choice
+      (#208), inside a `loop`: a `break` there would leave the loop they are
+      compiled to, not that one. -/
+  inChoice : Bool := false
 
 structure ESt where
   /-- The program's types, for conversions between class types (`coerce`). -/
@@ -1711,6 +1716,18 @@ def toStringOf (p : Pos) (r0 : R) : EM Expr := do
   | .arr .char => pure r.e
   | t => eerr p s!"no ToString for {t.show} (Verse defines it for int, float, char, char32 and string)"
 
+/-- A local named `n` may be declared here: Verse has no shadowing. -/
+def checkNewLocal (ctx : Ctx) (p : Pos) (n : String) : EM Unit := do
+  if ctx.lookup n |>.isSome then
+    eerr p s!"'{n}' is already defined; Verse does not allow shadowing (use set {n} = … for a var)"
+  -- (nor a soft built-in's: a local cannot hide one, #132)
+  if (ctx.sig? n).isSome || builtins.contains n || softBuiltins.contains n then
+    eerr p s!"'{n}' is already the name of a function or constant"
+  if let some c := ctx.selfClass then
+    if (ctx.types.fields c).any (·.1 == n) || ctx.hasMethod c n ||
+        ((ctx.types.methodOverloads.lookup n).map (·.any (ctx.hasMethod c ·))).getD false then
+      eerr p s!"'{n}' is already a field or method of {c}; Verse does not allow shadowing"
+
 mutual
 partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
   match se with
@@ -1825,6 +1842,17 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
   | .app p (.ident _ "$rush") arms false => elabConc ctx p false arms exp true
   | .app p (.ident _ "$spawn") [body] false => elabSpawn ctx p body
   | .app p (.ident _ "$branch") [body] false => elabBranch ctx p body
+  | .app p (.ident _ "$choice") _ false =>
+    eerr p ("a choice (a | b) can only be the value of a binding (X := a | b), or a clause of its own, " ++
+      "in an if condition, a for or first{…}, for now (#208)")
+  | .app p (.ident _ "$first") [.block _ items] false =>
+    -- `first{…}` and `first(…){…}` with a choice (#208): the first success
+    -- of the clauses, then the value (or body), which sees their names
+    if !ctx.canFail then
+      eerr p "first{…} with a choice can fail, but it is not in a failure context (#208)"
+    let (rc, c1) ← elabOneClauses ctx items.dropLast
+    let rv ← elabE c1 (items.getLastD (.tuple p [])) exp
+    return ⟨.seq rc.e rv.e, rv.ty⟩
   | .app p f args bracket => elabApp ctx p f args bracket exp
   | .member p (.ident _ n) m =>
     if n == "(super:)" then
@@ -1987,7 +2015,8 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
     if !(r.e.mayFail ctx.sigProg) then eerr p "logic{…} needs an expression that can fail"
     return ⟨Expr.logicE r.e, .logic⟩
   | .ite p conds thenE elseE =>
-    let (rc, ctxT) ← elabSeq { ctx with canFail := true } conds none
+    let (rc, ctxT) ← if Choice.hasChoice conds then elabOneClauses { ctx with canFail := true } conds
+      else elabSeq { ctx with canFail := true } conds none
     if !(rc.e.mayFail ctx.sigProg) then
       eerr p "the condition of this if cannot fail (Verse requires a failable condition)"
     let thenCtx := { ctxT with canFail := ctx.canFail }
@@ -2011,9 +2040,12 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
   | .forE p clauses body => elabFor ctx p clauses body
   | .gen p _ _ _ => eerr p "a generator X : source can only appear in a for clause"
   | .loop _ body =>
-    let r ← elabE { ctx with inLoop := true, inRepeat := true, loopDefers := ctx.defers.length } body none
+    let lctx := { ctx with inLoop := true, inRepeat := true, loopDefers := ctx.defers.length, inChoice := false }
+    let r ← elabE lctx body none
     return ⟨.loop r.e, .void⟩
   | .brk p =>
+    if ctx.inChoice then
+      eerr p "break cannot leave an if condition or first{…} that has a choice (#208)"
     if !ctx.inLoop then
       eerr p (if ctx.inDefer then "break is only allowed inside loop (not for), and cannot leave a defer: block"
               else "break is only allowed inside loop (not for)")
@@ -2053,15 +2085,7 @@ partial def elabStmt (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM (R × Ctx) 
   let (r, ctx') ← match se with
     | .decl p n sty isVar rhs => do
       if let .app dp (.ident _ "$defer") _ _ := rhs then eerr dp "defer: is a statement: it has no value"
-      if ctx.lookup n |>.isSome then
-        eerr p s!"'{n}' is already defined; Verse does not allow shadowing (use set {n} = … for a var)"
-      -- (nor a soft built-in's: a local cannot hide one, #132)
-      if (ctx.sig? n).isSome || builtins.contains n || softBuiltins.contains n then
-        eerr p s!"'{n}' is already the name of a function or constant"
-      if let some c := ctx.selfClass then
-        if (ctx.types.fields c).any (·.1 == n) || ctx.hasMethod c n ||
-            ((ctx.types.methodOverloads.lookup n).map (·.any (ctx.hasMethod c ·))).getD false then
-          eerr p s!"'{n}' is already a field or method of {c}; Verse does not allow shadowing"
+      checkNewLocal ctx p n
       let ty? ← sty.mapM (resolveTy ctx.types p)
       let r ← elabE ctx rhs ty?
       let ty := ty?.getD r.ty
@@ -3888,11 +3912,13 @@ partial def elabSet (ctx : Ctx) (p : Pos) (lhs0 : SExpr) (op : Option String) (r
     a nested `forE`, and nested results are flattened (cartesian product,
     leftmost outermost). The clauses are a failure context; the body is not. -/
 partial def elabFor (ctx : Ctx) (p : Pos) (clauses : List SExpr) (body : SExpr) : EM R := do
+  -- (a choice is a generator over its alternatives, #208)
+  let clauses := Choice.normClauses clauses
   -- split into groups: [filters before the first generator], then (generator, filters)…
   let isGen : SExpr → Bool
     | .gen .. => true
     | .decl _ _ none false (.range ..) => true
-    | _ => false
+    | c => (Choice.binding? c).isSome
   let pre := clauses.takeWhile (!isGen ·)
   let rest := clauses.dropWhile (!isGen ·)
   let rec groups : List SExpr → List (SExpr × List SExpr)
@@ -3969,6 +3995,15 @@ partial def elabFor (ctx : Ctx) (p : Pos) (clauses : List SExpr) (body : SExpr) 
               Expr.orE tmp rs.e (.lit (.arr #[])) else rs.e
           let (slot, c1) ← declare c x ty
           pure (slot, src, c1, Expr.lit (.logic true))
+        | .decl gp n _ false _ => do
+          -- `X := a₁ | … | aₙ` (#208): over the alternatives' indices, each
+          -- alternative bound in the filter (so a failing one is skipped)
+          let some b := Choice.binding? g | eerr g.pos "bad for clause"
+          let (ty, es) ← elabAlts { c with canFail := true } gp b
+          checkNewLocal c gp n
+          let k ← fresh .int
+          let (xs, c1) ← declare c n ty
+          pure (k, Expr.lit (.arr (choiceIdx es.length)), c1, Expr.assign xs (Expr.altE k es))
         | _ => eerr g.pos "bad for clause"
       let (filt, c2) ← elabFilters c1 fs
       let filt := if fs.isEmpty then pre else
@@ -3996,6 +4031,64 @@ partial def elabFor (ctx : Ctx) (p : Pos) (clauses : List SExpr) (body : SExpr) 
       match inner.ty with
       | .arr t => return ⟨.prim .flatten [.forE slot (.lit (.arr #[.tup []])) filt inner.e], .arr t⟩
       | _ => eerr p "internal: nested for"
+
+/-- The alternatives of a choice (#208), at its written type or at their
+    join (each one against the first's type, else on its own, as `if`'s
+    branches are), and that type. -/
+partial def elabAlts (ctx : Ctx) (p : Pos) (b : Choice.Binding) : EM (Ty × List Expr) := do
+  let alts := b.alts
+  -- (the written type, or for `set L = a | b` the type of `L`)
+  let t? ← match ← b.ty.mapM (resolveTy ctx.types p) with
+    | some t => pure (some t)
+    | none => match b.place with
+      | some l => tryCatch (do pure (some (← elabE ctx l none).ty)) fun _ => pure none
+      | none => pure none
+  match t? with
+  | some t => return (t, ← alts.mapM fun a => do coerce a.pos (← elabE ctx a (some t)) t)
+  | none =>
+    let some a0 := alts.head? | eerr p "internal: a choice without alternatives"
+    let r0 ← elabE ctx a0 none
+    -- (each later one against the first's type, else on its own, to join;
+    -- a few levels deep, then on its own first, as the join needs, #32)
+    let rs ← alts.tail.mapM fun a =>
+      if ctx.retries ≥ 3 then tryCatch (elabE ctx a none) fun _ => elabE ctx a (some r0.ty)
+      else
+        let c2 := { ctx with retries := ctx.retries + 1 }
+        tryCatch (elabE c2 a (some r0.ty)) fun _ => elabE c2 a none
+    let ty ← rs.foldlM (fun acc r => join p acc r.ty none) r0.ty
+    if ty == .never then eerr p "cannot infer the type of this choice"
+    return (ty, ← ((alts.zip (r0 :: rs)).mapM fun (a, r) => coerce a.pos r ty))
+
+/-- The clauses of a failure context that takes its first success (an `if`
+    condition, `first{…}`), when one of them binds a choice (#208):
+    `Expr.firstE` over the clauses, each choice an `Expr.chooseFirst` around
+    the clauses after it, which `break` when all of them succeed. Its value is
+    `void`: an `if` and `first{…}` read their clauses' values through names. -/
+partial def elabOneClauses (ctx : Ctx) (cs : List SExpr) : EM (R × Ctx) := do
+  -- (a `break` here would leave `firstE`'s loop, not the program's)
+  let (code, ctx') ← elabOneGo { ctx with inLoop := false, inChoice := ctx.inLoop } (Choice.normClauses cs)
+  return (⟨Expr.firstE code, .void⟩, { ctx' with inLoop := ctx.inLoop, inChoice := ctx.inChoice })
+
+partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
+  | [] => return (Expr.brkV, ctx)
+  | cl :: rest => do
+    if let .app p (.ident _ "$defer") _ _ := cl then
+      eerr p "defer: cannot be a clause of an if condition or first{…} that has a choice (#208)"
+    match Choice.binding? cl with
+    | some b =>
+      let p := b.pos
+      let n := b.name
+      let (ty, es) ← elabAlts ctx p b
+      checkNewLocal ctx p n
+      let k ← fresh .int
+      let x ← fresh ty
+      let c1 := { ctx with locals := { name := n, slot := x, ty, mutable := false } :: ctx.locals }
+      let (inner, c2) ← elabOneGo c1 rest
+      return (Expr.chooseFirst k x es inner, c2)
+    | none =>
+      let (r, c1) ← elabStmt ctx cl none
+      let (inner, c2) ← elabOneGo c1 rest
+      return (.seq r.e inner, c2)
 
 /-- `e.m`: `.Length` of an array or string, or a field of a struct. -/
 partial def elabMember (ctx : Ctx) (p : Pos) (r : R) (m : String) (exp : Option Ty := none) : EM R := do

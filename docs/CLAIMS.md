@@ -127,6 +127,58 @@ out of date. The proofs are in `OpenVerse/Core/`.
   Eval P s a Res.fail s₁ → (Eval P s (Expr.orE t a b) r s' ↔ Eval P s b r s')
 ```
 
+## `altE_sel`: a choice's index slot selects its alternative
+
+`OpenVerse/Core/Derived.lean`; axioms: [propext, Classical.choice, Quot.sound]
+
+```lean
+@altE_sel : ∀ {P : Prog} {s : St} {k : Nat} {as : List Expr} {i : Nat} (hi : i < as.length),
+  readSlot s k = Res.ok (Value.int ↑i) → ∀ {r : Res} {s' : St}, Eval P s (Expr.altE k as) r s' ↔ Eval P s as[i] r s'
+```
+
+## `chooseFirst_brk`: a choice breaks out at its first success, the alternatives before it rolled back
+
+`OpenVerse/Core/Derived.lean`; axioms: [propext, Classical.choice, Quot.sound]
+
+```lean
+@chooseFirst_brk : ∀ {P : Prog} {s : St} {k x : Nat} {as : List Expr} {inner : Expr} {j : Nat} {s' : St},
+  k < s.fr.length →
+    ∀ (hj : j < as.length),
+      (∀ (i : Nat) (hi : i < j),
+          ∃ s₁, Eval P (s.setSlot k (Value.int ↑i)) ((Expr.assign x as[i]).seq (inner.seq Expr.failV)) Res.fail s₁) →
+        Eval P (s.setSlot k (Value.int ↑j)) ((Expr.assign x as[j]).seq (inner.seq Expr.failV)) Res.brk s' →
+          Eval P s (Expr.chooseFirst k x as inner) Res.brk s'
+```
+
+## `chooseFirst_none`: a choice with no success ends with no value
+
+`OpenVerse/Core/Derived.lean`; axioms: [propext, Classical.choice, Quot.sound]
+
+```lean
+@chooseFirst_none : ∀ {P : Prog} {s : St} {k x : Nat} {as : List Expr} {inner : Expr},
+  k < s.fr.length →
+    (∀ (i : Nat) (hi : i < as.length),
+        ∃ s₁, Eval P (s.setSlot k (Value.int ↑i)) ((Expr.assign x as[i]).seq (inner.seq Expr.failV)) Res.fail s₁) →
+      ∃ s', Eval P s (Expr.chooseFirst k x as inner) (Res.ok (Value.arr #[])) s'
+```
+
+## `firstE_of_brk`: clauses that break make firstE succeed
+
+`OpenVerse/Core/Derived.lean`; axioms: [propext, Classical.choice, Quot.sound]
+
+```lean
+@firstE_of_brk : ∀ {P : Prog} {s s' : St} {c : Expr}, Eval P s c Res.brk s' → Eval P s c.firstE (Res.ok Value.void) s'
+```
+
+## `firstE_of_ok`: clauses that end normally make firstE fail
+
+`OpenVerse/Core/Derived.lean`; axioms: [propext, Classical.choice, Quot.sound]
+
+```lean
+@firstE_of_ok : ∀ {P : Prog} {s s' : St} {c : Expr} {v : Value},
+  Eval P s c (Res.ok v) s' → Eval P s c.firstE Res.fail s'
+```
+
 ## `Eval.no_fail`: <decides> soundness for expressions
 
 `OpenVerse/Core/Effects.lean`; axioms: [propext, Classical.choice, Quot.sound]
