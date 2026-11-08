@@ -14,7 +14,7 @@ surface Verse is elaborated (`OpenVerse/Front/Elab.lean`) into Verse Core
 
 **Contents**
 
-- The language: [Supported](#supported) · [Source text](#source-text) · [Parametric functions](#parametric-functions) · [Function values](#function-values) · [defer](#defer) · [Overloading](#overloading) · [Parametric structs](#parametric-structs) · [Classes](#classes) · [Mutation, macros, tooling](#mutation-macros-tooling)
+- The language: [Supported](#supported) · [Source text](#source-text) · [Parametric functions](#parametric-functions) · [Function values](#function-values) · [defer](#defer) · [Overloading](#overloading) · [Parametric structs](#parametric-structs) · [Classes](#classes) · [Mutation, macros, tooling](#mutation-macros-tooling) · [Choice](#choice)
 - More types: [any](#any) · [Refinement types](#refinement-types) · [float](#float) · [rational](#rational) · [char32](#char32)
 - Programs: [Modules](#modules) · [Programs of several files](#programs-of-several-files) · [Concurrency](#concurrency)
 - [Readings openverse takes](#readings-openverse-takes) · [Not supported in v1](#not-supported-in-v1)
@@ -32,6 +32,7 @@ surface Verse is elaborated (`OpenVerse/Front/Elab.lean`) into Verse Core
 | Operators | `* + -`, unary `-`, comparisons `= <> < <= > >=` (failable, return the left operand, chains check every pair), `and`, `or`, `not` (below the comparisons, above `and`: `not X = Y` is `not (X = Y)`), `?`, `.Length`, `A[i]`, `T(k)` | ch. 4 |
 | Failure | failure contexts (`if` conditions, `for` clauses, `option{}`, `logic{}`, `not`, left of `or`, `<decides>` bodies) with rollback of `var` writes **and output** | ch. 8 |
 | Control | `if`/`else if`/`else` (all styles, `if:`…`then:`), `for` with `X : array`, `I -> X : array`, `X := a..b`, filters, bindings, several generators (cartesian product), `loop`/`break`, `return`, `case` with literal patterns and `_` | ch. 7 |
+| Choice | `a \| b \| …` with several values in spatial order, as a binding's value or a clause in an `if` condition (the first success), a `for` (all of them) or `first{…}`; see [Choice](#choice) (#208) | (the Verse Calculus) |
 | Functions | a tuple argument expands into several parameters (`Describe(MyTuple)`), several arguments make a single array parameter (`Sum(1, 2, 3)`) (#134, #140; the array form for a plain call only, and a method's, an overloaded or a generic function's tuple is typed without the parameters' types); recursion, mutual recursion, `<decides>` (called with `F[…]`; other functions with `F(…)`), named parameters `?P:t = default` passed as `?P := e` (positional, then named as written, then defaults; a default may use the parameters before it, and a method's default the method's fields; a default is evaluated at the call, its effects counting as the caller's, and cannot return, break or use itself), the heap effects `<computes>`, `<reads>`, `<writes>`, `<allocates>`, `<transacts>` (checked, see [Classes](#classes)), other effect specifiers accepted and ignored | ch. 6, 13 |
 | Parametric functions | `F(X:t, … where t:type, u:subtype(comparable))`: type parameters in parameter types, the result type and local declarations; type arguments inferred at each call (see [Parametric functions](#parametric-functions)) | Types: where clauses |
 | Structs | `name := struct:` with typed fields and defaults, `name{F := e, …}`, `S.F`, `set S.F = e` / `op=`, structural equality (a struct is the tuple of its fields in Verse Core) | ch. 9 |
@@ -511,8 +512,8 @@ circle := class(shape, labelled):
     does. Without a body after it, `first(…)` is a call.
   - `assert{c}` is a runtime error (as `Err()`, with no message) unless
     `c` succeeds.
-  With no generators (`choice` is not supported), `first` is the first and
-  only success, and `first{c}` can only fail when `c` can. These macros
+  Without a [choice](#choice), `first` is the first and only success, and
+  `first{c}` can only fail when `c` can. These macros
   take no body (`for{c} {b}` is refused), and `first` and `assert` before
   `{` are the macros, not a struct of that name. A void branch makes an
   `if` void (void accepts any value), so `if{X := e} else {Print("none")}`
@@ -525,6 +526,60 @@ circle := class(shape, labelled):
     file's definitions, and its value is printed when it is an `int`, `char`
     or `string`. The expression may fail, which gives exit code 1.
   - A `#!` first line is a `#` comment.
+
+## Choice
+
+A choice `a | b | …` has several values: `a`'s, then `b`'s, and so on
+(the [Verse Calculus](https://doi.org/10.1145/3607845)'s choice; #208).
+The failure context it is in takes them:
+
+```verse
+Main():void =
+    for (X := 1 | 2, Y := 10 | 20):    # a for takes all of them
+        Print("{X + Y}")              # 11, 21, 12, 22
+    if (X := 1 | 2 | 3, X > 1):       # an if takes the first success
+        Print("{X}")                  # 2
+    if (F := first{X := 4 | 6 | 9; X > 5; X}) then Print("{F}")   # 6
+```
+
+- **Order.** The values come in *spatial* order, which is fixed by where
+  each choice is written, not by when it runs. The leftmost choice varies
+  slowest, as the generators of a `for` do. A nested choice is spliced in:
+  `(1 | 2) | 3` is `1 | 2 | 3`.
+- **Who takes them.** A `for`, or `for{…}`, takes every value. An `if`
+  condition, `if{…}` and `first{…}` take the first success, and the
+  alternatives after it never run: `if (X := 5 | Err())` is not an error.
+  An alternative that fails gives no value, and a condition with no
+  success fails.
+- **Effects.** The code before a choice runs once. Each alternative then
+  runs the rest of the clauses, from the state the choice was reached in
+  when the alternatives before it failed: a failed alternative is rolled
+  back, output included, as any failure context is. In a `for`, each
+  success also runs the body, and their effects stay, as with any
+  generator.
+
+  ```verse
+  var N:int = 0
+  if (X := (set N = 1; 1) | (set N = 2; 2), X > 1) then Print("{X} {N}")   # 2 2
+  ```
+- **Type.** The written type (`X:int = 1 | 2`), else the join of the
+  alternatives' types, as for `if`'s branches.
+- **Where.** For now, a choice is the value of a binding (`X := a | b`,
+  `X:t = a | b`, `set X = a | b`, `var X:t = a | b`) or a clause of its
+  own, in an `if` condition, the clauses of a `for`, `first{…}`, `first(…){…}`,
+  `if{…}` and `for{…}`. A choice inside an expression (`(1 | 2) + 1`,
+  `X = 1 | 2`), or anywhere else, is refused, and so is a `break` in the
+  clauses of an `if` or `first{…}` with a choice. `first{…}` with a choice
+  can fail, so it must be in a failure context.
+- **Precedence.** `|` binds looser than arithmetic and tighter than the
+  comparisons: `X = 1 | 2` is `X = (1 | 2)`.
+
+In Verse Core a choice is iteration over its alternatives' indices
+(`Expr.altE`, `Expr.chooseFirst`, `Expr.firstE` in `Core/Derived.lean`),
+so no proof or part of the C runtime changes. `firstE_chooseFirst_ok` and
+`firstE_chooseFirst_fail` prove the first-success reading with its
+rollback. `scripts/fuzz-choice.sh` checks both implementations against a
+model of these rules.
 
 ## any
 
@@ -908,6 +963,9 @@ Main()<suspends>:void =
 | `NaN < X` | not stated | fails (IEEE: NaN orders with nothing); `NaN = NaN` succeeds (the Book) |
 | `=` between different types | not stated | refused when two scalar types (int, float, char, …) meet at the same place, also inside containers (`array{1} = array{1.0}`), as Verse Core holds them differently |
 | Ordering of rationals | not stated (§2 lists `<` … for `int` and `float`) | exact (by continued fractions, so it cannot overflow), and an int compares with a rational |
+| Order of a choice's values | (not in the Book; the Verse Calculus: spatial) | spatial: the leftmost choice varies slowest, as nested generators do (#208) |
+| Code before a choice | (the Verse Calculus is pure) | runs once; each alternative runs the code after the choice, from where the choice was reached, a failed one rolled back (as backtracking does) (#208) |
+| Precedence of `\|` | (not in the Book) | below `+`, above the comparisons: `X = 1 \| 2` is `X = (1 \| 2)` (#208) |
 | `Sleep(0.0)` | "may resume in the same tick" (ch. 14); the API reference: it always yields | always yields: resumes in the next tick (#156) |
 | `Sleep(S)` rounding | rounded up to whole ticks (ch. 14) | `Round(30·S)` ticks, at least one: rounding to the nearest keeps `Sleep(0.1)` at 3 ticks despite binary floats (#156) |
 | End of a program with tasks | not stated | the program ends when `Main` does; a `Main` that waits with no task able to run is an error (exit 2) (#156) |
@@ -919,6 +977,6 @@ Main()<suspends>:void =
 arithmetic on rationals (see [rational](#rational)), float functions beyond those of [float](#float),
 the class features listed under [Classes](#classes), struct methods (Verse structs have none; classes do),
 `weak_map`, module paths `using{/Verse.org/…}` (accepted and ignored), overloading beyond [Overloading](#overloading), nested
-functions and lambdas (not released in Verse), concurrency beyond [Concurrency](#concurrency) (`subscribable_event()` without a value), and effect checking
+functions and lambdas (not released in Verse), choice beyond [Choice](#choice) (inside an expression; a function with several values), concurrency beyond [Concurrency](#concurrency) (`subscribable_event()` without a value), and effect checking
 other than `<decides>` and the heap effects (`<converges>` is accepted and
 ignored).

@@ -127,6 +127,46 @@ out of date. The proofs are in `OpenVerse/Core/`.
   Eval P s a Res.fail s₁ → (Eval P s (Expr.orE t a b) r s' ↔ Eval P s b r s')
 ```
 
+## `altE_sel`: a choice's index slot selects its alternative
+
+`OpenVerse/Core/Derived.lean`; axioms: [propext, Classical.choice, Quot.sound]
+
+```lean
+@altE_sel : ∀ {P : Prog} {s : St} {k : Nat} {as : List Expr} {i : Nat} (hi : i < as.length),
+  readSlot s k = Res.ok (Value.int ↑i) → ∀ {r : Res} {s' : St}, Eval P s (Expr.altE k as) r s' ↔ Eval P s as[i] r s'
+```
+
+## `firstE_chooseFirst_ok`: a choice takes its first success, the alternatives before it rolled back
+
+`OpenVerse/Core/Derived.lean`; axioms: [propext, Classical.choice, Quot.sound]
+
+```lean
+@firstE_chooseFirst_ok : ∀ {P : Prog} {s : St} {k x : Nat} {as : List Expr} {inner : Expr} {j : Nat} {s' : St},
+  k < s.fr.length →
+    ∀ (hj : j < as.length),
+      (∀ (i : Nat) (hi : i < j),
+          ∃ s₁,
+            Eval P (s.setSlot k (Value.int ↑i)) ((Expr.assign x as[i]).seq (inner.seq (Expr.prim Prim.fail [])))
+              Res.fail s₁) →
+        Eval P (s.setSlot k (Value.int ↑j)) ((Expr.assign x as[j]).seq (inner.seq (Expr.prim Prim.fail []))) Res.brk
+            s' →
+          Eval P s (Expr.chooseFirst k x as inner).firstE (Res.ok Value.void) s'
+```
+
+## `firstE_chooseFirst_fail`: a choice with no success fails
+
+`OpenVerse/Core/Derived.lean`; axioms: [propext, Classical.choice, Quot.sound]
+
+```lean
+@firstE_chooseFirst_fail : ∀ {P : Prog} {s : St} {k x : Nat} {as : List Expr} {inner : Expr},
+  k < s.fr.length →
+    (∀ (i : Nat) (hi : i < as.length),
+        ∃ s₁,
+          Eval P (s.setSlot k (Value.int ↑i)) ((Expr.assign x as[i]).seq (inner.seq (Expr.prim Prim.fail []))) Res.fail
+            s₁) →
+      ∃ s', Eval P s (Expr.chooseFirst k x as inner).firstE Res.fail s'
+```
+
 ## `Eval.no_fail`: <decides> soundness for expressions
 
 `OpenVerse/Core/Effects.lean`; axioms: [propext, Classical.choice, Quot.sound]

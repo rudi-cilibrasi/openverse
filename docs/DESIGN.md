@@ -8,7 +8,7 @@ against it. This page records the decisions behind the shape of the code.
 
 **Contents**
 
-- Semantics: [Two languages, one semantics](#two-languages-one-semantics) · [Failure and rollback](#failure-and-rollback) · [Fuel](#fuel)
+- Semantics: [Two languages, one semantics](#two-languages-one-semantics) · [Failure and rollback](#failure-and-rollback) · [Choice](#choice-iteration-over-alternatives) · [Fuel](#fuel)
 - Front end: [Translation validation](#translation-validation-instead-of-a-verified-front-end) · [Modules](#modules-a-renaming-before-elaboration) · [Floats](#floats-canonical-bits) · [Rationals](#rationals-helpers-written-in-verse) · [Generic functions](#generic-functions-polymorphic-verse-core) · [Function values](#function-values-hidden-interfaces-and-classes) · [Concurrency](#concurrency-suspends-functions-as-frames)
 - Classes and the heap: [Classes as references](#classes-as-references) · [Typing the heap](#typing-the-heap) · [Typed defaults](#why-every-slot-starts-with-a-typed-default)
 - C runtime: [The binary format and the loader](#the-binary-format-and-the-loader) · [Two semantics, one seam](#two-semantics-one-seam) · [Objects in the C runtime](#objects-in-the-c-runtime)
@@ -27,6 +27,8 @@ field `get` and `set`, `tag`, `isTag`). Every surface construct is a
   (`Core/Derived.lean`), and the rollback laws the Book states are theorems
   about these definitions;
 - multi-generator `for` is nested single-generator `for` plus `flatten`;
+- a choice `a | b` is a `for` over its alternatives' indices (see
+  [Choice](#choice-iteration-over-alternatives));
 - comparison chains use temporaries, so each operand is evaluated once;
 - structs are tuples, enums are ints, and maps are arrays of pairs in
   insertion order;
@@ -77,6 +79,45 @@ The QuickProof law `store_rollback_model` proves this against a naive
 copy-the-whole-state model, for every sequence of 32 operations on up to 3
 nested contexts (the bounds a VST proof needs; the code has no depth limit
 of its own).
+
+## Choice: iteration over alternatives
+
+A choice `a₀ | … | aₙ₋₁` (#208) has several values, which the nearest
+failure context takes: all of them in a `for`, the first success in an
+`if` condition or `first{…}`. Verse Core has one outcome per expression,
+and no choice. But a `for` already backtracks: each element's filter is a
+failure context that is rolled back when it fails (`EvalFor.skip`). So a
+choice is compiled to a `for` over the *indices* of its alternatives, with
+slot `K` holding the index and `Expr.altE` selecting the alternative,
+`if (K = 0) a₀ else if (K = 1) a₁ …`. The alternatives stay lazy: they are
+not an `array{a₀, …}`, which would run `aₙ₋₁` before `a₀`'s value was used.
+
+- **In a `for`**, `X := a₀ | …` is one more generator, over
+  `#[0, …, n-1]`, whose filter binds `X := altE K as` before the clause's
+  filters. The groups and `flatten` of multi-generator `for` are unchanged.
+- **For the first success**, the clauses are compiled to code that `break`s
+  when they succeed, inside `Expr.firstE c = loop{c; fail}`. Each choice is
+  `Expr.chooseFirst`: a `for` whose filter binds the alternative, runs the
+  clauses after it, then fails. So with two choices:
+
+  ```
+  loop{ pre; for K₁ (X := alt K₁; mid; for K₂ (Y := alt K₂; rest; break) void; fail) void; fail }
+  ```
+
+  The inner `for` sits in the outer one's *filter*, not its body: when every
+  inner alternative fails, the `fail` after it rolls the outer alternative
+  back before the next one is tried. A body's effects would stay. The
+  code is linear in the number of choices: nothing is copied per
+  alternative, and `break` already passes `checkControl` inside a `loop`.
+
+Since the result is ordinary Verse Core, every theorem holds of it as it
+stands, and the C runtime runs it unchanged. What is new is proved in
+`Core/Derived.lean`: `altE_sel` (the alternative selected is the one the
+slot names), and `firstE_chooseFirst_ok` / `firstE_chooseFirst_fail` (the
+first alternative that succeeds is taken, in the state it left, with the
+ones before it rolled back; with none, the context fails).
+`scripts/gen-choice.py` is a backtracking model of the readings, and
+`scripts/fuzz-choice.sh` runs its programs on both implementations.
 
 ## Fuel
 
@@ -880,3 +921,5 @@ one reading and records it in `docs/LANGUAGE.md`. The most consequential:
   choice, VerseVM's unbounded integers, would need bignums in the C runtime.
 - comparisons return their left operand;
 - a failing `for` body makes the `for` fail, as in the Verse Calculus.
+- a choice's values come in the Verse Calculus's spatial order, and the code
+  before a choice runs once, as on a backtracking machine (#208).

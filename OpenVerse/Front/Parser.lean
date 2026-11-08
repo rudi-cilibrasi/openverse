@@ -22,6 +22,7 @@
 -/
 import OpenVerse.Front.Lexer
 import OpenVerse.Front.Syntax
+import OpenVerse.Front.Choice
 
 namespace OpenVerse.Front
 
@@ -339,17 +340,33 @@ partial def parseNot (stop : Nat) : PM SExpr := do
   parseCmp stop
 
 partial def parseCmp (stop : Nat) : PM SExpr := do
-  let a ← parseAdd stop
+  let a ← parseChoice stop
   let mut rest := #[]
   repeat
     let t ← peekT
     match t.tok with
     | .sym op =>
       if cmpOps.contains op && !t.offside stop then
-        bump; rest := rest.push (op, ← parseAdd stop)
+        bump; rest := rest.push (op, ← parseChoice stop)
       else break
     | _ => break
   if rest.isEmpty then return a else return .cmp a.pos a rest.toList
+
+/-- A choice `a₁ | a₂ | …` (#208), below the comparisons and above `+`:
+    `X = 1 | 2` is `X = (1 | 2)`. Its position is its first `|`'s. -/
+partial def parseChoice (stop : Nat) : PM SExpr := do
+  let a ← parseAdd stop
+  let mut alts := #[a]
+  let mut pos : Option Pos := none
+  repeat
+    let t ← peekT
+    if t.isSym "|" && !t.offside stop then
+      if pos.isNone then pos := some t.pos
+      bump; alts := alts.push (← parseAdd stop)
+    else break
+  match pos with
+  | none => return a
+  | some p => return Choice.mk p alts.toList
 
 partial def parseAdd (stop : Nat) : PM SExpr := do
   let mut a ← parseMul stop
@@ -902,6 +919,8 @@ partial def parsePrimary (stop : Nat) : PM SExpr := do
       if cs.isEmpty then perr b "'first{}' needs a clause"
       noMacroBody "first" (← peekT) "its value is its last clause's; write 'first(…) {…}' for a body"
       let (cs, v) := clausesValue cs
+      -- (with a choice, the first success of the clauses, #208)
+      if Choice.hasChoice cs then return .app t.pos (.ident t.pos "$first") [.block t.pos (cs ++ [v])] false
       return .block t.pos (cs ++ [v])
     else if (← peekT 1).isSym "(" then
       -- `first(c){b}`: `b`, with `c`'s names, once `c`
@@ -913,7 +932,9 @@ partial def parsePrimary (stop : Nat) : PM SExpr := do
       let n ← peekT
       if let some (cs, _) := cs? then
         if !n.bol && (n.isSym "{" || n.isSym ":") then
-          return .block t.pos (cs ++ [.block t.pos [← parseBody stop]])
+          let b := SExpr.block t.pos (cs ++ [.block t.pos [← parseBody stop]])
+          if Choice.hasChoice cs then return .app t.pos (.ident t.pos "$first") [b] false
+          return b
       set saved
       bump; return .ident t.pos "first"
     else
