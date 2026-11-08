@@ -4510,6 +4510,622 @@ def specialise (fns0 : Array Fn) (slotTys0 : Array (List VTy)) (S0 : Sigs) (ntpO
       slotTys := slotTys.set! gi (slotTys[gi]!.take fn.arity)
   return (fns, slotTys, specSigs, specKeys, needy.extract 0 nOrig)
 
+/-- The concurrency lowering (#156), at the end of `elabProgramCore`: each
+    `<suspends>` function becomes a frame class and its resume, cancel and
+    arm functions (`Suspend.lower`), after the generic functions with task
+    roots are specialised (#174) and spawned dispatches are lifted (#173);
+    then the task roots, branch wrappers, the scheduler's list and, for a
+    suspends `Main`, `$Run` and `$Start`. Gives the functions, their slot
+    types and signatures, the class table, the frame classes and `Main`'s
+    call. (A function of its own, so that `elabProgramCore` stays within
+    Lean's elaboration limits.) -/
+def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsigs0 : List (List VTy × VTy))
+    (protos : HeapTy) (pins : List (List (Option VTy))) (inFn : String → String → String)
+    (fns0 : Array Fn) (slotTys0 : Array (List VTy)) (fsigsIn : List (List VTy × VTy)) (classTable0 : List (List VTy)) :
+    Except String (Array Fn × Array (List VTy) × List (List VTy × VTy) × List (List VTy) × Array (List VTy) × Expr) := do
+  let mut fns := fns0
+  let mut slotTys := slotTys0
+  let mut fsigs := fsigsIn
+  let mut classTable := classTable0
+  let mut frameClasses : Array (List VTy) := #[]
+  let mut extraSigs : Array (List VTy × VTy) := #[]
+  let mut mainCall : Expr := .call mainSig.idx []
+  let allS := sigs.toList ++ gsigs.toList
+  let idxOf (n : String) : Nat := ((allS.find? (·.name == n)).map (·.idx)).getD 0
+  let sleepIdx := idxOf "$Sleep"
+  let waitIdx := idxOf "$WaitDone"
+  let syncMark := idxOf "$syncMark"
+  let raceMark := idxOf "$raceMark"
+  let rushMark := idxOf "$rushMark"
+  let spawnMark := idxOf "$spawnMark"
+  let branchMark := idxOf "$branchMark"
+  let isMark (f : Nat) : Bool := f == syncMark || f == raceMark || f == rushMark
+  let leaves := ["$Sleep", "$WaitDone", "$syncMark", "$raceMark", "$rushMark", "$spawnMark", "$branchMark",
+    "$cancelMark"]
+  -- (#174) the generic functions whose tasks' roots would depend on their
+  -- type parameters, specialised at the types they are called at
+  let sigOf (f : Nat) : Option Sig := allS.find? (·.idx == f)
+  let nOrig := fns.size
+  let (fns1, slotTys1, specSigs, specKeys, replaced) ← specialise fns slotTys
+    { fns := fsigs0, classes := classTable, protos, pins }
+    (fun f => ((sigOf f).map (·.tparams.length)).getD 0) (fun f => ((sigOf f).map (·.suspends)).getD false)
+    branchMark rushMark spawnMark inFn
+  fns := fns1
+  slotTys := slotTys1
+  let fsigs0 := fsigs0 ++ specSigs.toList
+  fsigs := fsigs ++ specSigs.toList
+  let specUser : List (Nat × String × Nat) := specKeys.toList.zipIdx.filterMap fun ((g, _), k) =>
+    if ((sigOf g).map (fun s => s.suspends && !leaves.contains s.name)).getD false then
+      some (nOrig + k, fns[nOrig + k]!.name, 0)
+    else none
+  -- each `spawn` of a method with several implementations (#173): its
+  -- dispatch chain becomes a suspends function `$dispatchK` of the slots
+  -- it uses (the receiver, the arguments, and the slots its tests bind the
+  -- narrowed receiver to, which start as the caller's), which the spawn
+  -- calls
+  let dispBase := fns.size
+  let mut lifted : Array (Expr × List Nat × Nat) := #[]
+  let mut liftedIn : Array Nat := #[]
+  for gi in List.range dispBase do
+    let n0 := lifted.size
+    let (body, acc) := (Suspend.liftChains spawnMark dispBase fns[gi]!.body).run lifted
+    if acc.size > n0 then
+      fns := fns.set! gi { fns[gi]! with body }
+      lifted := acc
+      liftedIn := liftedIn ++ (List.replicate (acc.size - n0) gi).toArray
+  let mut disps : List (Nat × String × Nat) := []
+  let mut dispSigs : Array (List VTy × VTy) := #[]
+  for ((ch, ops, t), k) in lifted.toList.zipIdx do
+    let gi := liftedIn[k]!
+    let Γ := slotTys[gi]!
+    let tys := ops.map fun o => (Γ[o]?).getD .int
+    if tys.any (·.mentionsVar) then
+      throw (inFn fns[gi]!.name "a spawned call whose arguments' types mention the function's type parameters is not supported yet (#156)")
+    let ρ ← match Γ[t]? with
+      | some (.ref _ [ρ]) => pure ρ
+      | _ => throw s!"internal error: lowering {fns[gi]!.name}: a spawn's task"
+    fns := fns.push { name := s!"$dispatch{k}", arity := ops.length, nslots := ops.length, decides := false,
+                      writes := true, body := Suspend.renumber (fun j => (ops.idxOf? j).getD 0) ch }
+    slotTys := slotTys.push tys
+    dispSigs := dispSigs.push (tys, ρ)
+    disps := disps ++ [(dispBase + k, s!"$dispatch{k}", 0)]
+  let fsigs0 := fsigs0 ++ dispSigs.toList
+  fsigs := fsigs ++ dispSigs.toList
+  -- (the specialised originals, never called, are not lowered)
+  let user := (allS.filter fun s => s.suspends && !leaves.contains s.name && !(replaced[s.idx]?.getD false)).map
+    (fun s => (s.idx, s.name, s.tparams.length)) ++ specUser ++ disps
+  -- (copies of immediate functions that spawn, their spawns lifted)
+  let specImm : List (Nat × String × Nat) := specKeys.toList.zipIdx.filterMap fun ((g, _), k) =>
+    if ((sigOf g).map (fun s => !s.suspends && !s.isConst)).getD false &&
+        !(Suspend.spawnSites spawnMark fns[nOrig + k]!.body).isEmpty then
+      some (nOrig + k, fns[nOrig + k]!.name, 0)
+    else none
+  let tagBase := env.classes.length
+  let schedTag := env.tagOf "$sched"
+  let schedTy : VTy := .ref [schedTag] []
+  let fieldIdx (c f : String) : Nat := ((env.fields c).findIdx? (·.1 == f)).getD 0
+  let Sorig : Sigs := { fns := fsigs0, classes := classTable, protos, pins }
+  -- each `spawn` (#156) gets a root: a function `$spawnK(T, args…)` that
+  -- runs the spawned call and fills the task `T`
+  let mut roots : Array (Nat × String × Nat) := #[]
+  let mut spawnOf : Array (List Nat) := #[]   -- each user function's spawns' root numbers
+  let nFns0 := fns.size
+  -- (immediate functions may spawn too: their spawns start the task on
+  -- the scheduler, which is its class's prototype, a literal)
+  let imm := ((sigs.toList.filter fun s => !s.suspends && !s.isConst && s.tparams.isEmpty &&
+    !(Suspend.spawnSites spawnMark fns[s.idx]!.body).isEmpty).map fun s => (s.idx, s.name, 0)) ++ specImm
+  let mut immSpawns : Array (Nat × List Nat) := #[]
+  for (gi, gname, _) in user ++ imm do
+    let fn := fns[gi]!
+    let Γ := slotTys[gi]!
+    let mut mine : List Nat := []
+    for (h, hs, t) in Suspend.spawnSites spawnMark fn.body do
+      let some ttyT := Γ[t]? | throw s!"internal error: lowering {gname}: a spawn's task"
+      let mut atys : Array VTy := #[]
+      -- (the callee's type arguments, from its witnesses)
+      let ntpH := ((sigOf h).map (·.tparams.length)).getD 0
+      let wit := (hs.drop (hs.length - ntpH)).map fun w => tc Sorig Γ (fsigs0[gi]!).2 w none
+      let θh : Nat → VTy := fun i => match wit[i]? with
+        | some (some τ) => τ
+        | _ => .var i
+      for (e, i) in hs.zipIdx do
+        match tc Sorig Γ (fsigs0[gi]!).2 e none with
+        | some τ =>
+          if τ.mentionsVar then
+            throw (inFn gname "a spawned call whose arguments' types mention the function's type parameters is not supported yet (#156)")
+          atys := atys.push τ
+        | none =>
+          -- (`array{}` or `false` has no type of its own: the callee's
+          -- parameter type at its type arguments, when that is closed)
+          let pt := (((fsigs0[h]?).bind (·.1[i]?)).getD (.var 0)).subst θh
+          if pt.mentionsVar then
+            throw (inFn gname "the arguments of a spawned call of a generic function must have types of their own (#156)")
+          atys := atys.push pt
+      let k := roots.size
+      let n := hs.length
+      let body : Expr := .seq
+        (.heap (.set (fieldIdx "task" "$Result")) [.local 0, .prim .mkSome [.call h ((List.range n).map (fun i => Expr.local (i + 1)))]])
+        (.seq (.heap (.set (fieldIdx "task" "$Done")) [.local 0, .lit (.logic true)]) (.lit .void))
+      let Γk := ttyT :: atys.toList
+      fns := fns.push { name := s!"$spawn{k}", arity := n + 1, nslots := n + 1, decides := false,
+                        writes := true, body }
+      slotTys := slotTys.push Γk
+      roots := roots.push (nFns0 + k, s!"$spawn{k}", 0)
+      mine := mine ++ [k]
+    if imm.any (·.1 == gi) then immSpawns := immSpawns.push (gi, mine)
+    else spawnOf := spawnOf.push mine
+  let fsigs0 := fsigs0 ++ roots.toList.map fun (ri, _, _) => (slotTys[ri]!, VTy.void)
+  fsigs := fsigs ++ roots.toList.map fun (ri, _, _) => (slotTys[ri]!, VTy.void)
+  let lows := user ++ roots.toList
+  let nFns := fns.size
+  let isS : Nat → Bool := fun f => f == sleepIdx || f == waitIdx || isMark f || lows.any (·.1 == f)
+  -- each one's body (initialisations stripped), suspension points and arms
+  let mut parts : Array (List Expr × Expr × Nat × Nat) := #[]
+  for (gi, gname, _) in lows do
+    let fn := fns[gi]!
+    let some (ds, b) := Suspend.stripInits (fn.nslots - fn.arity) fn.body
+      | throw s!"internal error: lowering {gname}: unexpected initialisations"
+    parts := parts.push (ds, b, Suspend.countSusp (fun f => isS f || f == branchMark) (fun _ => false) false (· == spawnMark) b +
+        Suspend.countArms (· == rushMark) b,
+      Suspend.countArms (fun f => isMark f || f == branchMark) b)
+  let frameTy (j : Nat) : VTy :=
+    .ref [tagBase + j] ((List.range lows[j]!.2.2).map VTy.var)
+  -- the methods called through `Typed.dispatch` (#142) of classes that fix
+  -- type arguments (non-generic ones; a generic one is refused below the
+  -- receiver's class, and called without the refinement at or above it)
+  let targets : List Nat := (lows.foldl (fun acc (gi, _, _) => acc ++
+    Suspend.dispatchTargets (fun f => user.any fun (h, _, ntp) => h == f && ntp == 0) fns[gi]!.body) []).eraseDups
+  -- each one's `new`, `reset`, `cancel` and `result` (fixed indices), each
+  -- target's receiver-first helpers, each root's trampoline and `start`,
+  -- then the arms' functions
+  let L := lows.length
+  let selfBase := nFns + 4 * L
+  let trampOf (k : Nat) : Nat := selfBase + 4 * targets.length + 2 * k
+  -- the scheduler: its class's prototype
+  let some schedLit := Suspend.coreDefault Sorig [] 0 schedTy
+    | throw "internal error: no prototype for the scheduler"
+  -- an immediate function's spawns: start the task now
+  for (gi, ks) in immSpawns do
+    let fn := fns[gi]!
+    let body := Suspend.substSpawns spawnMark (fun i _ hs t =>
+      let k := (ks[i]?).getD 0
+      .call (trampOf k + 1) [schedLit, .call (nFns + 4 * (user.length + k)) (schedLit :: .local t :: hs)]) fn.body
+    fns := fns.set! gi { fn with writes := true, body }
+  -- each `branch` (numbered across the functions, in order) gets a
+  -- wrapper class `[pc, frame]` and its `tramp`, `start` and `stop`
+  let mut branchOf : Array (List Nat) := #[]
+  let mut branchHome : Array Nat := #[]
+  for (j, part) in (List.range L).zip parts.toList do
+    let n := Suspend.countSusp (· == branchMark) (fun _ => false) false (fun _ => false) part.2.1 +
+      Suspend.countArms (· == rushMark) part.2.1
+    branchOf := branchOf.push ((List.range n).map (· + branchHome.size))
+    branchHome := branchHome ++ (List.replicate n j).toArray
+  let B := branchHome.size
+  -- (`$link(sched, root)`, which adds a root to the scheduler's list,
+  -- comes before them)
+  let linkIdx := selfBase + 4 * targets.length + 2 * roots.size
+  let wrapFnBase := linkIdx + 1
+  let wrapTag (K : Nat) : Nat := tagBase + L + K
+  let wrapTy (K : Nat) : VTy := .ref [wrapTag K] []
+  let callee : Nat → Option Suspend.Callee := fun f =>
+    if f == sleepIdx then
+      some { tag := env.tagOf "$sleep", newFn := idxOf "$sleepNew", initFn := idxOf "$sleepInit",
+             resumeFn := idxOf "$sleepResume", cancelFn := none, passFields := [], resField := none }
+    else if f == waitIdx then
+      some { tag := env.tagOf "$waitf", newFn := idxOf "$waitNew", initFn := idxOf "$waitInit",
+             resumeFn := idxOf "$waitResume", cancelFn := none, passFields := [], resField := none }
+    else match lows.zipIdx.find? (·.1.1 == f) with
+      | some ((gi, _, ntp), j) =>
+        let (_, _, sites, arms) := parts[j]!
+        some { tag := tagBase + j, newFn := nFns + 4 * j, initFn := nFns + 4 * j + 1, resumeFn := gi,
+               cancelFn := some (nFns + 4 * j + 2),
+               passFields := (List.range fns[gi]!.arity).map fun i => Suspend.slotBaseOf sites arms + i,
+               resField := some Suspend.resF, generic := ntp != 0, newSched := true,
+               resultFn := if ntp == 0 then some (nFns + 4 * j + 3) else none,
+               selfFns := (targets.idxOf? gi).map fun i =>
+                 (selfBase + 4 * i, selfBase + 4 * i + 1, selfBase + 4 * i + 2, selfBase + 4 * i + 3) }
+      | none => none
+  for ((gi, _, _), j) in lows.zipIdx do
+    let ps := slotTys[gi]!.take fns[gi]!.arity
+    extraSigs := extraSigs.push (schedTy :: ps, frameTy j)
+    extraSigs := extraSigs.push (frameTy j :: ps, VTy.void)
+    extraSigs := extraSigs.push (frameTy j :: schedTy :: ps, VTy.void)
+    extraSigs := extraSigs.push ([frameTy j], (fsigs0[gi]!).2)
+  -- each target's helpers (#142), whose first parameter is the receiver:
+  -- `arrive(self, args…, frame, sched)` resets the frame (or makes one)
+  -- and gives it; `take(self, frame)` its result; `resume(frame, sched)`
+  -- and `cancel(frame, sched)` pass the parameters from the frame
+  let mut selfFns : Array Fn := #[]
+  let mut selfTys : Array (List VTy) := #[]
+  let mut selfSigs : Array (List VTy × VTy) := #[]
+  for gi in targets do
+    let some j := lows.findIdx? (·.1 == gi) | throw "internal error: a dispatch target"
+    let (_, gname, _) := lows[j]!
+    let a := fns[gi]!.arity
+    let ps := slotTys[gi]!.take a
+    let ρ := (fsigs0[gi]!).2
+    let (_, _, sites, arms) := parts[j]!
+    let wide : VTy := .ref [tagBase + j, schedTag] []
+    let locals := (List.range a).map Expr.local
+    let isF (i : Nat) : Expr := .heap (.isTag [tagBase + j]) [.local i]
+    let arriveBody : Expr := .seq (.ite (isF a) (.call (nFns + 4 * j + 1) (.local a :: locals))
+      (.seq (.assign a (.call (nFns + 4 * j) (.local (a + 1) :: locals))) Suspend.vd)) (.local a)
+    let pass := (List.range a).map fun i => Expr.heap (.get (Suspend.slotBaseOf sites arms + i)) [.local 0]
+    selfFns := selfFns ++ #[
+      { name := s!"{gname}$arrive", arity := a + 2, nslots := a + 2, decides := false, writes := true,
+        body := arriveBody },
+      { name := s!"{gname}$take", arity := 2, nslots := 2, decides := false, writes := false,
+        body := .ite (isF 1) (.call (nFns + 4 * j + 3) [.local 1]) (.prim .userErr []) },
+      { name := s!"{gname}$resumeOwn", arity := 2, nslots := 2, decides := false, writes := true,
+        body := .call gi (.local 0 :: .local 1 :: pass) },
+      { name := s!"{gname}$cancelOwn", arity := 2, nslots := 2, decides := false, writes := true,
+        body := .call (nFns + 4 * j + 2) (.local 0 :: .local 1 :: pass) }]
+    selfTys := selfTys ++ #[ps ++ [wide, schedTy], [ps.headD .int, wide], [frameTy j, schedTy], [frameTy j, schedTy]]
+    selfSigs := selfSigs ++ #[(ps ++ [wide, schedTy], wide), ([ps.headD .int, wide], ρ),
+      ([frameTy j, schedTy], .int), ([frameTy j, schedTy], VTy.void)]
+  let rootJ (k : Nat) : Nat := user.length + k
+  let rootTags := (List.range roots.size).map (fun k => tagBase + rootJ k) ++ (List.range B).map wrapTag
+  let mainJ := (lows.findIdx? (·.1 == mainSig.idx)).getD 0
+  let rootAny : VTy := .ref ((tagBase + mainJ) :: rootTags) []
+  -- each root's trampoline (frame, sched) and `start(sched, frame)`
+  let mut rootSigs : Array (List VTy × VTy) := #[]
+  for k in List.range roots.size do
+    rootSigs := rootSigs.push ([frameTy (rootJ k), schedTy], .int)
+    rootSigs := rootSigs.push ([schedTy, frameTy (rootJ k)], VTy.void)
+  let Sinf : Sigs := { fns := fsigs0 ++ extraSigs.toList ++ selfSigs.toList ++ rootSigs.toList, classes := classTable,
+                       protos, pins }
+  let mut newFns : Array Fn := #[]
+  let mut newTys : Array (List VTy) := #[]
+  let mut armFns : Array Fn := #[]
+  let mut armTys : Array (List VTy) := #[]
+  let mut armSigs : Array (List VTy × VTy) := #[]
+  let armBase := wrapFnBase + 3 * B
+  let mut branchFns : Array Fn := #[]
+  let mut branchTys : Array (List VTy) := #[]
+  -- (each branch's arm resume function, done field, and the passing of its
+  -- function's parameters from the frame, for cancelling it)
+  let mut branchInfo : Array (Nat × Nat × List Expr) := #[]
+  let mut branchSigs : Array (List VTy × VTy) := #[]
+  let progressF := fieldIdx "$sched" "$Progress"
+  let headF := fieldIdx "$sched" "$Head"
+  let tailF := fieldIdx "$sched" "$Tail"
+  -- (set when a root ends or is stopped: the list then has cells to drop)
+  let deadF := fieldIdx "$sched" "$Dead"
+  -- (cancellation: the task's flags and root; the scheduler's request to
+  -- cancel the root that just ran)
+  let cancelCurF := fieldIdx "$sched" "$CancelCur"
+  let tDoneF := fieldIdx "task" "$Done"
+  let tCancelledF := fieldIdx "task" "$Cancelled"
+  let runningF := fieldIdx "task" "$Running"
+  let rootF := fieldIdx "task" "$Root"
+  for ((gi, gname, _), j) in lows.zipIdx do
+    let fn := fns[gi]!
+    let Γ := slotTys[gi]!
+    let a := fn.arity
+    let (ds, b, sites, arms) := parts[j]!
+    let ρ := (fsigs0[gi]!).2
+    let fnBase := armBase + armFns.size
+    let spawns : Array (Nat × Nat) := ((spawnOf[j]?).getD []).toArray.map fun k =>
+      (nFns + 4 * rootJ k, trampOf k + 1)
+    let branches : Array (Nat × Nat × Nat) := ((branchOf[j]?).getD []).toArray.map fun K =>
+      (wrapFnBase + 3 * K + 1, wrapFnBase + 3 * K + 2, wrapTag K)
+    let low ← (Suspend.lower Sinf callee syncMark raceMark rushMark spawnMark spawns branchMark branches a Γ ρ (frameTy j)
+      schedTag fnBase b).mapError fun e => inFn gname e
+    -- its branches' wrappers: `tramp(w, sched)` resumes the arm (with the
+    -- function's parameters from its frame) unless the function stopped
+    -- it; `start(sched, frame)` makes the wrapper, registers it and runs
+    -- it once; `stop(w)` marks it done
+    let (_, _, sitesJ, armsJ) := parts[j]!
+    for (K, (armRes, doneA, runNow)) in ((branchOf[j]?).getD []).zip low.branchArms do
+      let fr : Expr := .heap (.get 1) [.local 0]
+      let pass := (List.range a).map fun i => Expr.heap (.get (Suspend.slotBaseOf sitesJ armsJ + i)) [fr]
+      branchInfo := branchInfo.push (armRes, doneA, pass)
+      -- (a `rush` loser that runs `return` after the `rush` ended has
+      -- unwound itself and ends there: it is marked so, and not stopped
+      -- again when the function exits, #181)
+      let tramp : Expr := .seq (.ite (.prim .eq [.heap (.get doneA) [fr], Suspend.int 0])
+          (.seq (Suspend.seqVoid [.assign 2 (.call armRes (fr :: .local 1 :: pass)),
+            .ite (.prim .eq [.local 2, Suspend.int 1]) (.seq (.heap (.set doneA) [fr, Suspend.int 1]) Suspend.vd) Suspend.vd,
+            .ite (.prim .eq [.local 2, Suspend.int 2])
+              (.seq (Suspend.seqVoid [.heap (.set doneA) [fr, Suspend.int 2], .assign 2 (Suspend.int 1)]) Suspend.vd)
+              Suspend.vd])
+            Suspend.vd)
+          (.seq (.assign 2 (Suspend.int 1)) Suspend.vd)) (.local 2)
+      branchFns := branchFns.push { name := s!"$branch{K}$tramp", arity := 2, nslots := 3, decides := false,
+                                    writes := true, body := initPrefixE 2 [Suspend.int 0] tramp }
+      branchTys := branchTys.push [wrapTy K, schedTy, .int]
+      branchSigs := branchSigs.push ([wrapTy K, schedTy], .int)
+      -- (a `rush` loser's wrapper only registers it: it already started)
+      let register : Expr := .call linkIdx [.local 0, .local 2]
+      let start : Expr := .seq (Suspend.seqVoid (if !runNow then [register] else [register,
+        .assign 3 (.call (wrapFnBase + 3 * K) [.local 2, .local 0]),
+        .ite (.prim .eq [.local 3, Suspend.int 1])
+          (.seq (Suspend.seqVoid [.heap (.set Suspend.pcF) [.local 2, Suspend.int (-1)],
+            .heap (.set progressF) [.local 0, .lit (.logic true)], .heap (.set deadF) [.local 0, .lit (.logic true)]])
+            Suspend.vd) Suspend.vd])) (.local 2)
+      let startFn : Fn := { name := s!"$branch{K}$start", arity := 2, nslots := 4, decides := false, writes := true,
+                            body := initPrefixE 2 [.heap (.new (wrapTag K)) [Suspend.int 0, .local 1], Suspend.int 0] start }
+      branchFns := branchFns.push startFn
+      branchTys := branchTys.push [schedTy, frameTy j, wrapTy K, .int]
+      branchSigs := branchSigs.push ([schedTy, frameTy j], wrapTy K)
+      let stopFn : Fn := { name := s!"$branch{K}$stop", arity := 2, nslots := 2, decides := false, writes := true,
+                           body := Suspend.seqVoid [.heap (.set Suspend.pcF) [.local 0, Suspend.int (-1)],
+                             .heap (.set deadF) [.local 1, .lit (.logic true)]] }
+      branchFns := branchFns.push stopFn
+      branchTys := branchTys.push [wrapTy K, schedTy]
+      branchSigs := branchSigs.push ([wrapTy K, schedTy], VTy.void)
+    let ps := Γ.take a
+    let dflt (params : List VTy) (τ : VTy) : Except String Expr :=
+      match Suspend.coreDefault Sinf params 0 τ with
+      | some d => pure d
+      | none => throw s!"internal error: lowering {gname}: no initial value for a slot of type {repr τ}"
+    -- the frame's slots after the parameters: the function's own, then the
+    -- pass's temporaries
+    let tempTys := (low.fields.drop (2 + sites + 2 * arms + a + (fn.nslots - a)))
+    -- each function keeps its parameters and the transient slots it uses
+    let resumeLike (name : String) (lf : Suspend.LFn) : Except String Fn := do
+      let inits ← (lf.slots.drop (a + 2)).mapM (dflt (lf.slots.take (a + 2)))
+      return { name, arity := a + 2, nslots := lf.slots.length, decides := false, writes := true,
+               body := initPrefixE (a + 2) inits lf.body }
+    fns := fns.set! gi (← resumeLike gname low.body)
+    slotTys := slotTys.set! gi low.body.slots
+    fsigs := fsigs.set gi (frameTy j :: schedTy :: ps, .int)
+    frameClasses := frameClasses.push low.fields
+    -- `g$new(sched, params…)`: the frame, with the arguments and initial
+    -- values (a non-generic callee's frame field starts as the scheduler)
+    let childTys := low.fields.drop 2 |>.take sites
+    let nps := schedTy :: ps
+    let newBody : Expr := .heap (.new (tagBase + j))
+      ([Suspend.int 0, ← dflt nps ρ] ++ childTys.map (fun τ => match τ with
+          | .ref _ _ => Expr.local 0
+          | τ => Expr.lit τ.default) ++
+        List.replicate (2 * arms) (Suspend.int 0) ++
+        (List.range a).map (fun i => Expr.local (i + 1)) ++ ds.map (Suspend.shift 1) ++
+        (← tempTys.mapM (dflt nps)))
+    newFns := newFns.push { name := s!"{gname}$new", arity := a + 1, nslots := a + 1, decides := false,
+                            writes := true, body := newBody }
+    newTys := newTys.push nps
+    -- `g$reset(frame, params…)`: the frame, made ready for another call
+    let resetBody := Suspend.seqVoid (.heap (.set Suspend.pcF) [.local 0, Suspend.int 0] ::
+      (List.range a).map fun i => .heap (.set (Suspend.slotBaseOf sites arms + i)) [.local 0, .local (i + 1)])
+    newFns := newFns.push { name := s!"{gname}$reset", arity := a + 1, nslots := a + 1, decides := false,
+                            writes := true, body := resetBody }
+    newTys := newTys.push (frameTy j :: ps)
+    -- `g$cancel(frame, sched, params…)`: unwinds it
+    newFns := newFns.push (← resumeLike s!"{gname}$cancel" low.cancel)
+    newTys := newTys.push low.cancel.slots
+    -- `g$result(frame)`
+    newFns := newFns.push { name := s!"{gname}$result", arity := 1, nslots := 1, decides := false,
+                            writes := false, body := .heap (.get Suspend.resF) [.local 0] }
+    newTys := newTys.push [frameTy j]
+    -- the arms of its `sync`s and `race`s
+    for ((res, can), i) in low.arms.zipIdx do
+      armFns := armFns.push (← resumeLike s!"{gname}$arm{i}" res)
+      armFns := armFns.push (← resumeLike s!"{gname}$arm{i}$cancel" can)
+      armTys := armTys.push res.slots
+      armTys := armTys.push can.slots
+      armSigs := armSigs.push (frameTy j :: schedTy :: ps, .int)
+      armSigs := armSigs.push (frameTy j :: schedTy :: ps, VTy.void)
+    -- its refined calls' helpers (#171), whose slots are their parameters
+    -- (one calling a <decides> method can fail too, #179)
+    for ((body, vps, vτ), i) in low.vias.zipIdx do
+      let canFail := (Suspend.callsOf body).any fun (g, _) => ((fns[g]?).map (·.decides)).getD false
+      armFns := armFns.push { name := s!"{gname}$via{i}", arity := vps.length, nslots := vps.length,
+                              decides := canFail, writes := true, body }
+      armTys := armTys.push vps
+      armSigs := armSigs.push (vps, vτ)
+  -- each root's trampoline, which resumes it with its parameters from its
+  -- frame, and `start`, which registers it with the scheduler and runs it
+  -- up to its first suspension point (a root that is done has its
+  -- suspension point set to -1, and a done root lets the scheduler make
+  -- another pass in the same tick, for the tasks waiting for it)
+  let mut rootFns : Array Fn := #[]
+  let mut rootTys : Array (List VTy) := #[]
+  for k in List.range roots.size do
+    let j := rootJ k
+    let (ri, _, _) := roots[k]!
+    let (_, _, sites, arms) := parts[j]!
+    let a := fns[ri]!.arity - 2
+    let pass := (List.range a).map fun i => Expr.heap (.get (Suspend.slotBaseOf sites arms + i)) [.local 0]
+    -- (the task is the root's first parameter; it is marked running while
+    -- the root runs, so that cancelling it from inside waits until it
+    -- suspends)
+    let task : Expr := .heap (.get (Suspend.slotBaseOf sites arms)) [.local 0]
+    let trampBody : Expr := Suspend.seqVoid [
+      .heap (.set runningF) [task, .lit (.logic true)],
+      .assign 2 (.call ri (.local 0 :: .local 1 :: pass)),
+      .heap (.set runningF) [task, .lit (.logic false)]] |> fun e => Expr.seq e (.local 2)
+    rootFns := rootFns.push { name := s!"$spawn{k}$tramp", arity := 2, nslots := 3, decides := false, writes := true,
+                              body := initPrefixE 2 [Suspend.int 0] trampBody }
+    rootTys := rootTys.push [frameTy j, schedTy, .int]
+    let start : Expr := Suspend.seqVoid [
+      .call linkIdx [.local 0, .local 1],
+      .heap (.set rootF) [.heap (.get (Suspend.slotBaseOf sites arms)) [.local 1], .prim .mkSome [.local 1]],
+      .assign 2 (.call (trampOf k) [.local 1, .local 0]),
+      .ite (.prim .eq [.local 2, Suspend.int 1])
+        (.seq (Suspend.seqVoid [.heap (.set Suspend.pcF) [.local 1, Suspend.int (-1)],
+          .heap (.set progressF) [.local 0, .lit (.logic true)], .heap (.set deadF) [.local 0, .lit (.logic true)]])
+          Suspend.vd) Suspend.vd]
+    rootFns := rootFns.push { name := s!"$spawn{k}$start", arity := 2, nslots := 3, decides := false, writes := true,
+                              body := initPrefixE 2 [Suspend.int 0] start }
+    rootTys := rootTys.push [schedTy, frameTy j, .int]
+  -- the scheduler's roots are a list of cells `[root, next]`, so that
+  -- adding one costs one cell (an array would be copied, and C keeps every
+  -- copy): `$link(sched, root)` adds one at the end
+  let cellTag := tagBase + L + B
+  let cellTy : VTy := .ref [cellTag] []
+  let nextF := 1
+  let linkBody : Expr := Suspend.seqVoid [
+    .ite (.heap (.set nextF) [.prim .query [.heap (.get tailF) [.local 0]], .prim .mkSome [.local 2]]) Suspend.vd
+      (.seq (.heap (.set headF) [.local 0, .prim .mkSome [.local 2]]) Suspend.vd),
+    .heap (.set tailF) [.local 0, .prim .mkSome [.local 2]]]
+  let linkFn : Fn := { name := "$link", arity := 2, nslots := 3, decides := false, writes := true,
+                       body := initPrefixE 2 [.heap (.new cellTag) [.local 1, .lit .none]] linkBody }
+  fns := fns ++ newFns ++ selfFns ++ rootFns ++ [linkFn] ++ branchFns ++ armFns
+  slotTys := slotTys ++ newTys ++ selfTys ++ rootTys ++ [[schedTy, rootAny, cellTy]] ++ branchTys ++ armTys
+  fsigs := fsigs ++ extraSigs.toList ++ selfSigs.toList ++ rootSigs.toList ++ [([schedTy, rootAny], VTy.void)] ++
+    branchSigs.toList ++ armSigs.toList
+  -- the wrappers' classes, after the frames', then the cells'
+  for K in List.range B do
+    frameClasses := frameClasses.push [.int, frameTy branchHome[K]!]
+  frameClasses := frameClasses.push [rootAny, .opt cellTy]
+  classTable := classTable.set schedTag (((classTable[schedTag]!).set headF (.opt cellTy)).set tailF (.opt cellTy))
+  -- a task's root: the type of its `Root` field (in every class that has it)
+  for d in env.classes do
+    if let some ri := (env.fields d).findIdx? (·.1 == "$Root") then
+      classTable := classTable.set (env.tagOf d) ((classTable[env.tagOf d]!).set ri (.opt rootAny))
+  -- cancelling (#156): `$cancelRoot(sched, root)` unwinds a root that is
+  -- not done, through its kind's cancel function (a spawned task's root
+  -- also marks its task cancelled), and marks it done
+  let cancelRootIdx := fns.size
+  let cancelTOf (k : Nat) : Nat := cancelRootIdx + 1 + k
+  let cancelWOf (K : Nat) : Nat := cancelRootIdx + 1 + roots.size + K
+  let dispatchCancel : Expr := (List.range roots.size).foldr (fun k acc =>
+      Expr.ite (.heap (.isTag [tagBase + rootJ k]) [.local 1]) (.call (cancelTOf k) [.local 1, .local 0]) acc)
+    ((List.range B).foldr (fun K acc =>
+      Expr.ite (.heap (.isTag [wrapTag K]) [.local 1]) (.call (cancelWOf K) [.local 1, .local 0]) acc) Suspend.vd)
+  let cancelRootBody : Expr := .ite (.prim .ne [.heap (.get Suspend.pcF) [.local 1], Suspend.int (-1)])
+    (.seq (Suspend.seqVoid [dispatchCancel, .heap (.set Suspend.pcF) [.local 1, Suspend.int (-1)],
+      .heap (.set deadF) [.local 0, .lit (.logic true)], .heap (.set progressF) [.local 0, .lit (.logic true)]])
+      Suspend.vd) Suspend.vd
+  let cancelRootFn : Fn := { name := "$cancelRoot", arity := 2, nslots := 2, decides := false, writes := true, body := cancelRootBody }
+  let mut cancelFns : Array Fn := #[cancelRootFn]
+  let mut cancelTys : Array (List VTy) := #[[schedTy, rootAny]]
+  let mut cancelSigs : Array (List VTy × VTy) := #[([schedTy, rootAny], VTy.void)]
+  for k in List.range roots.size do
+    let j := rootJ k
+    let (ri, _, _) := roots[k]!
+    let (_, _, sites, arms) := parts[j]!
+    let a := fns[ri]!.arity - 2
+    let pass := (List.range a).map fun i => Expr.heap (.get (Suspend.slotBaseOf sites arms + i)) [.local 0]
+    let task : Expr := .heap (.get (Suspend.slotBaseOf sites arms)) [.local 0]
+    let cbody : Expr := Suspend.seqVoid [.call (nFns + 4 * j + 2) (.local 0 :: .local 1 :: pass),
+      .heap (.set tCancelledF) [task, .lit (.logic true)], .heap (.set tDoneF) [task, .lit (.logic true)]]
+    let cfn : Fn := { name := s!"$spawn{k}$cancelT", arity := 2, nslots := 2, decides := false, writes := true, body := cbody }
+    cancelFns := cancelFns.push cfn
+    cancelTys := cancelTys.push [frameTy j, schedTy]
+    cancelSigs := cancelSigs.push ([frameTy j, schedTy], VTy.void)
+  for K in List.range B do
+    let (armRes, doneA, pass) := branchInfo[K]!
+    let fr : Expr := .heap (.get 1) [.local 0]
+    let pass := pass.map fun e => match e with
+      | .heap op _ => Expr.heap op [fr]
+      | e => e
+    let wbody : Expr := .ite (.prim .eq [.heap (.get doneA) [fr], Suspend.int 0])
+      (.seq (Suspend.seqVoid [.call (armRes + 1) (fr :: .local 1 :: pass), .heap (.set doneA) [fr, Suspend.int 2]])
+        Suspend.vd) Suspend.vd
+    let wfn : Fn := { name := s!"$branch{K}$cancelT", arity := 2, nslots := 2, decides := false, writes := true, body := wbody }
+    cancelFns := cancelFns.push wfn
+    cancelTys := cancelTys.push [wrapTy K, schedTy]
+    cancelSigs := cancelSigs.push ([wrapTy K, schedTy], VTy.void)
+  fns := fns ++ cancelFns
+  slotTys := slotTys ++ cancelTys
+  fsigs := fsigs ++ cancelSigs.toList
+  -- `T.Cancel()` (the mark `$cancelMark(T)`, in suspends code, whose slot 1
+  -- is the scheduler): a task that is not done is cancelled now, or, when
+  -- it is the one running (it cancels itself), at its next suspension
+  let cancelMark := idxOf "$cancelMark"
+  let cancelAt (t : Expr) : Expr :=
+    .ite (.prim .eq [.heap (.get tDoneF) [t], .lit (.logic false)])
+      (.seq (.ite (.prim .query [.heap (.get runningF) [t]])
+        (.seq (.heap (.set cancelCurF) [.local 1, .lit (.logic true)]) Suspend.vd)
+        (.seq (.ite (.call cancelRootIdx [.local 1, .prim .query [.heap (.get rootF) [t]]]) Suspend.vd Suspend.vd)
+          Suspend.vd)) Suspend.vd) Suspend.vd
+  let replCancel : List Expr → Expr := fun es => match es with
+    | [t] => cancelAt t
+    | _ => .prim .userErr []
+  fns := fns.map fun fn => { fn with body := Suspend.substCall cancelMark replCancel fn.body }
+  -- a suspends `Main` runs under the scheduler: a loop of ticks; in each,
+  -- passes that resume `Main` and then every root that is not done, again
+  -- while a root ends; between ticks the clock moves to the earliest tick
+  -- a sleeping task waits for (none: no task can go on)
+  if mainSig.suspends then
+    let j := mainJ
+    let runIdx := fns.size
+    let sch : Expr := .local 0
+    -- slots: sched, Main's frame, a status, Main done, a root ended, a
+    -- root, the next cell, a cell, another cell
+    let st := 2
+    let mainDone := 3
+    let died := 4
+    let r := 5
+    let cur := 6
+    let c := 7
+    let n := 8
+    let dispatch : Expr := ((List.range roots.size).foldr (fun k acc =>
+      Expr.ite (.heap (.isTag [tagBase + rootJ k]) [.local r]) (.call (trampOf k) [.local r, sch]) acc)
+      ((List.range B).foldr (fun K acc =>
+        Expr.ite (.heap (.isTag [wrapTag K]) [.local r]) (.call (wrapFnBase + 3 * K) [.local r, sch]) acc)
+        (.prim .userErr [])))
+    let rootOf (cell : Expr) : Expr := .heap (.get 0) [cell]
+    let dead (cell : Expr) : Expr := .prim .eq [.heap (.get Suspend.pcF) [rootOf cell], Suspend.int (-1)]
+    -- (each cell's next is read after its root ran, so that the roots it
+    -- added run in this pass too)
+    let pollRoots : List Expr := if rootTags.isEmpty then [] else [
+      .assign cur (.heap (.get headF) [sch]),
+      .loop (Suspend.seqVoid [
+        .ite (.assign c (.prim .query [.local cur])) Suspend.vd .brk,
+        .assign r (rootOf (.local c)),
+        .ite (.prim .ne [.heap (.get Suspend.pcF) [.local r], Suspend.int (-1)])
+          (.seq (Suspend.seqVoid [.assign st dispatch,
+            -- (a root asked to be cancelled: awaiting a cancelled task, or
+            -- cancelling its own)
+            .ite (.prim .query [.heap (.get cancelCurF) [sch]])
+              (.seq (Suspend.seqVoid [.heap (.set cancelCurF) [sch, .lit (.logic false)],
+                .call cancelRootIdx [sch, .local r]]) Suspend.vd) Suspend.vd,
+            .ite (.prim .eq [.local st, Suspend.int 1])
+              (.seq (Suspend.seqVoid [.heap (.set Suspend.pcF) [.local r, Suspend.int (-1)],
+                .heap (.set progressF) [sch, .lit (.logic true)], .heap (.set deadF) [sch, .lit (.logic true)]]) Suspend.vd)
+              Suspend.vd]) Suspend.vd) Suspend.vd,
+        .assign cur (.heap (.get nextF) [.local c])])]
+    let pass : Expr := .loop (Suspend.seqVoid ([
+      .heap (.set progressF) [sch, .lit (.logic false)],
+      .heap (.set 1) [sch, Suspend.int (-1)],
+      .assign st (.call mainSig.idx [.local 1, sch]),
+      .ite (.prim .eq [.local st, Suspend.int 1]) (.seq (.assign mainDone (Suspend.int 1)) .brk) Suspend.vd,
+      -- (`Main` awaited a cancelled task: it is cancelled, and so the program ends)
+      .ite (.prim .query [.heap (.get cancelCurF) [sch]])
+        (.seq (Suspend.seqVoid [.heap (.set cancelCurF) [sch, .lit (.logic false)],
+          .call (nFns + 4 * j + 2) [.local 1, sch], .assign mainDone (Suspend.int 1)]) .brk) Suspend.vd] ++
+      pollRoots ++
+      [.ite (.prim .query [.heap (.get progressF) [sch]]) Suspend.vd .brk]))
+    -- (between ticks, after a root ended, the cells of the roots that are
+    -- done are unlinked: no allocation but the new end)
+    let compact : List Expr := if rootTags.isEmpty then [] else [
+      .ite (.prim .query [.heap (.get deadF) [sch]]) (.seq (Suspend.seqVoid [
+        .heap (.set deadF) [sch, .lit (.logic false)],
+        .loop (Suspend.seqVoid [
+          .ite (.assign c (.prim .query [.heap (.get headF) [sch]])) Suspend.vd .brk,
+          .ite (dead (.local c)) (.seq (.heap (.set headF) [sch, .heap (.get nextF) [.local c]]) Suspend.vd) .brk]),
+        .ite (.assign c (.prim .query [.heap (.get headF) [sch]]))
+          (.seq (Suspend.seqVoid [
+            .loop (Suspend.seqVoid [
+              .ite (.assign n (.prim .query [.heap (.get nextF) [.local c]])) Suspend.vd .brk,
+              .ite (dead (.local n))
+                (.seq (.heap (.set nextF) [.local c, .heap (.get nextF) [.local n]]) Suspend.vd)
+                (.seq (.assign c (.local n)) Suspend.vd)]),
+            .heap (.set tailF) [sch, .prim .mkSome [.local c]]]) Suspend.vd)
+          (.seq (.heap (.set tailF) [sch, .lit .none]) Suspend.vd)]) Suspend.vd) Suspend.vd]
+    let run : Expr := Suspend.seqVoid [.loop (Suspend.seqVoid (compact ++ [pass,
+      .ite (.prim .eq [.local mainDone, Suspend.int 1]) .brk Suspend.vd,
+      .ite (.prim .lt [.heap (.get 1) [sch], Suspend.int 0]) (.seq (.prim .userErr []) Suspend.vd) Suspend.vd,
+      .heap (.set 0) [sch, .heap (.get 1) [sch]]]))]
+    let cellInit : Expr := .heap (.new cellTag) [.local 1, .lit .none]
+    fns := fns.push { name := "$Run", arity := 2, nslots := 9, decides := false, writes := true,
+                      body := initPrefixE 2 [Suspend.int 0, Suspend.int 0, Suspend.int 0, .local 1, .lit .none,
+                        cellInit, cellInit] run }
+    slotTys := slotTys.push [schedTy, frameTy j, .int, .int, .int, rootAny, .opt cellTy, cellTy, cellTy]
+    fsigs := fsigs ++ [([schedTy, frameTy j], VTy.void)]
+    -- (the prelude calls a function without arguments, `checkPrelude`)
+    -- (the scheduler is its class's prototype, so that immediate code can
+    -- spawn on it)
+    fns := fns.push { name := "$Start", arity := 0, nslots := 0, decides := false, writes := true,
+                      body := .call runIdx [schedLit, .call (nFns + 4 * j) [schedLit]] }
+    slotTys := slotTys.push []
+    fsigs := fsigs ++ [([], VTy.void)]
+    mainCall := .call (runIdx + 1) []
+  return (fns, slotTys, fsigs, classTable, frameClasses, mainCall)
+
 /-- Elaborate a parsed program into a Verse Core program that passes `Prog.check`
     and `Prog.checkTypes`. -/
 def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except String Compiled := do
@@ -5679,600 +6295,14 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     let fn := fns[gi]!
     fns := fns.set! gi { fn with body := Suspend.pruneDead S00 ((slotTys[gi]?).getD []) fn.body }
   if usesConc then
-    let allS := sigs.toList ++ gsigs.toList
-    let idxOf (n : String) : Nat := ((allS.find? (·.name == n)).map (·.idx)).getD 0
-    let sleepIdx := idxOf "$Sleep"
-    let waitIdx := idxOf "$WaitDone"
-    let syncMark := idxOf "$syncMark"
-    let raceMark := idxOf "$raceMark"
-    let rushMark := idxOf "$rushMark"
-    let spawnMark := idxOf "$spawnMark"
-    let branchMark := idxOf "$branchMark"
-    let isMark (f : Nat) : Bool := f == syncMark || f == raceMark || f == rushMark
-    let leaves := ["$Sleep", "$WaitDone", "$syncMark", "$raceMark", "$rushMark", "$spawnMark", "$branchMark",
-      "$cancelMark"]
-    -- (#174) the generic functions whose tasks' roots would depend on their
-    -- type parameters, specialised at the types they are called at
-    let sigOf (f : Nat) : Option Sig := allS.find? (·.idx == f)
-    let nOrig := fns.size
-    let (fns1, slotTys1, specSigs, specKeys, replaced) ← specialise fns slotTys
-      { fns := fsigs0, classes := classTable, protos, pins }
-      (fun f => ((sigOf f).map (·.tparams.length)).getD 0) (fun f => ((sigOf f).map (·.suspends)).getD false)
-      branchMark rushMark spawnMark inFn
+    let (fns1, slotTys1, fsigs1, classTable1, frameClasses1, mainCall1) ←
+      lowerConcurrency env sigs gsigs mainSig fsigs0 protos pins inFn fns slotTys fsigs classTable
     fns := fns1
     slotTys := slotTys1
-    let fsigs0 := fsigs0 ++ specSigs.toList
-    fsigs := fsigs ++ specSigs.toList
-    let specUser : List (Nat × String × Nat) := specKeys.toList.zipIdx.filterMap fun ((g, _), k) =>
-      if ((sigOf g).map (fun s => s.suspends && !leaves.contains s.name)).getD false then
-        some (nOrig + k, fns[nOrig + k]!.name, 0)
-      else none
-    -- each `spawn` of a method with several implementations (#173): its
-    -- dispatch chain becomes a suspends function `$dispatchK` of the slots
-    -- it uses (the receiver, the arguments, and the slots its tests bind the
-    -- narrowed receiver to, which start as the caller's), which the spawn
-    -- calls
-    let dispBase := fns.size
-    let mut lifted : Array (Expr × List Nat × Nat) := #[]
-    let mut liftedIn : Array Nat := #[]
-    for gi in List.range dispBase do
-      let n0 := lifted.size
-      let (body, acc) := (Suspend.liftChains spawnMark dispBase fns[gi]!.body).run lifted
-      if acc.size > n0 then
-        fns := fns.set! gi { fns[gi]! with body }
-        lifted := acc
-        liftedIn := liftedIn ++ (List.replicate (acc.size - n0) gi).toArray
-    let mut disps : List (Nat × String × Nat) := []
-    let mut dispSigs : Array (List VTy × VTy) := #[]
-    for ((ch, ops, t), k) in lifted.toList.zipIdx do
-      let gi := liftedIn[k]!
-      let Γ := slotTys[gi]!
-      let tys := ops.map fun o => (Γ[o]?).getD .int
-      if tys.any (·.mentionsVar) then
-        throw (inFn fns[gi]!.name "a spawned call whose arguments' types mention the function's type parameters is not supported yet (#156)")
-      let ρ ← match Γ[t]? with
-        | some (.ref _ [ρ]) => pure ρ
-        | _ => throw s!"internal error: lowering {fns[gi]!.name}: a spawn's task"
-      fns := fns.push { name := s!"$dispatch{k}", arity := ops.length, nslots := ops.length, decides := false,
-                        writes := true, body := Suspend.renumber (fun j => (ops.idxOf? j).getD 0) ch }
-      slotTys := slotTys.push tys
-      dispSigs := dispSigs.push (tys, ρ)
-      disps := disps ++ [(dispBase + k, s!"$dispatch{k}", 0)]
-    let fsigs0 := fsigs0 ++ dispSigs.toList
-    fsigs := fsigs ++ dispSigs.toList
-    -- (the specialised originals, never called, are not lowered)
-    let user := (allS.filter fun s => s.suspends && !leaves.contains s.name && !(replaced[s.idx]?.getD false)).map
-      (fun s => (s.idx, s.name, s.tparams.length)) ++ specUser ++ disps
-    -- (copies of immediate functions that spawn, their spawns lifted)
-    let specImm : List (Nat × String × Nat) := specKeys.toList.zipIdx.filterMap fun ((g, _), k) =>
-      if ((sigOf g).map (fun s => !s.suspends && !s.isConst)).getD false &&
-          !(Suspend.spawnSites spawnMark fns[nOrig + k]!.body).isEmpty then
-        some (nOrig + k, fns[nOrig + k]!.name, 0)
-      else none
-    let tagBase := env.classes.length
-    let schedTag := env.tagOf "$sched"
-    let schedTy : VTy := .ref [schedTag] []
-    let fieldIdx (c f : String) : Nat := ((env.fields c).findIdx? (·.1 == f)).getD 0
-    let Sorig : Sigs := { fns := fsigs0, classes := classTable, protos, pins }
-    -- each `spawn` (#156) gets a root: a function `$spawnK(T, args…)` that
-    -- runs the spawned call and fills the task `T`
-    let mut roots : Array (Nat × String × Nat) := #[]
-    let mut spawnOf : Array (List Nat) := #[]   -- each user function's spawns' root numbers
-    let nFns0 := fns.size
-    -- (immediate functions may spawn too: their spawns start the task on
-    -- the scheduler, which is its class's prototype, a literal)
-    let imm := ((sigs.toList.filter fun s => !s.suspends && !s.isConst && s.tparams.isEmpty &&
-      !(Suspend.spawnSites spawnMark fns[s.idx]!.body).isEmpty).map fun s => (s.idx, s.name, 0)) ++ specImm
-    let mut immSpawns : Array (Nat × List Nat) := #[]
-    for (gi, gname, _) in user ++ imm do
-      let fn := fns[gi]!
-      let Γ := slotTys[gi]!
-      let mut mine : List Nat := []
-      for (h, hs, t) in Suspend.spawnSites spawnMark fn.body do
-        let some ttyT := Γ[t]? | throw s!"internal error: lowering {gname}: a spawn's task"
-        let mut atys : Array VTy := #[]
-        -- (the callee's type arguments, from its witnesses)
-        let ntpH := ((sigOf h).map (·.tparams.length)).getD 0
-        let wit := (hs.drop (hs.length - ntpH)).map fun w => tc Sorig Γ (fsigs0[gi]!).2 w none
-        let θh : Nat → VTy := fun i => match wit[i]? with
-          | some (some τ) => τ
-          | _ => .var i
-        for (e, i) in hs.zipIdx do
-          match tc Sorig Γ (fsigs0[gi]!).2 e none with
-          | some τ =>
-            if τ.mentionsVar then
-              throw (inFn gname "a spawned call whose arguments' types mention the function's type parameters is not supported yet (#156)")
-            atys := atys.push τ
-          | none =>
-            -- (`array{}` or `false` has no type of its own: the callee's
-            -- parameter type at its type arguments, when that is closed)
-            let pt := (((fsigs0[h]?).bind (·.1[i]?)).getD (.var 0)).subst θh
-            if pt.mentionsVar then
-              throw (inFn gname "the arguments of a spawned call of a generic function must have types of their own (#156)")
-            atys := atys.push pt
-        let k := roots.size
-        let n := hs.length
-        let body : Expr := .seq
-          (.heap (.set (fieldIdx "task" "$Result")) [.local 0, .prim .mkSome [.call h ((List.range n).map (fun i => Expr.local (i + 1)))]])
-          (.seq (.heap (.set (fieldIdx "task" "$Done")) [.local 0, .lit (.logic true)]) (.lit .void))
-        let Γk := ttyT :: atys.toList
-        fns := fns.push { name := s!"$spawn{k}", arity := n + 1, nslots := n + 1, decides := false,
-                          writes := true, body }
-        slotTys := slotTys.push Γk
-        roots := roots.push (nFns0 + k, s!"$spawn{k}", 0)
-        mine := mine ++ [k]
-      if imm.any (·.1 == gi) then immSpawns := immSpawns.push (gi, mine)
-      else spawnOf := spawnOf.push mine
-    let fsigs0 := fsigs0 ++ roots.toList.map fun (ri, _, _) => (slotTys[ri]!, VTy.void)
-    fsigs := fsigs ++ roots.toList.map fun (ri, _, _) => (slotTys[ri]!, VTy.void)
-    let lows := user ++ roots.toList
-    let nFns := fns.size
-    let isS : Nat → Bool := fun f => f == sleepIdx || f == waitIdx || isMark f || lows.any (·.1 == f)
-    -- each one's body (initialisations stripped), suspension points and arms
-    let mut parts : Array (List Expr × Expr × Nat × Nat) := #[]
-    for (gi, gname, _) in lows do
-      let fn := fns[gi]!
-      let some (ds, b) := Suspend.stripInits (fn.nslots - fn.arity) fn.body
-        | throw s!"internal error: lowering {gname}: unexpected initialisations"
-      parts := parts.push (ds, b, Suspend.countSusp (fun f => isS f || f == branchMark) (fun _ => false) false (· == spawnMark) b +
-          Suspend.countArms (· == rushMark) b,
-        Suspend.countArms (fun f => isMark f || f == branchMark) b)
-    let frameTy (j : Nat) : VTy :=
-      .ref [tagBase + j] ((List.range lows[j]!.2.2).map VTy.var)
-    -- the methods called through `Typed.dispatch` (#142) of classes that fix
-    -- type arguments (non-generic ones; a generic one is refused below the
-    -- receiver's class, and called without the refinement at or above it)
-    let targets : List Nat := (lows.foldl (fun acc (gi, _, _) => acc ++
-      Suspend.dispatchTargets (fun f => user.any fun (h, _, ntp) => h == f && ntp == 0) fns[gi]!.body) []).eraseDups
-    -- each one's `new`, `reset`, `cancel` and `result` (fixed indices), each
-    -- target's receiver-first helpers, each root's trampoline and `start`,
-    -- then the arms' functions
-    let L := lows.length
-    let selfBase := nFns + 4 * L
-    let trampOf (k : Nat) : Nat := selfBase + 4 * targets.length + 2 * k
-    -- the scheduler: its class's prototype
-    let some schedLit := Suspend.coreDefault Sorig [] 0 schedTy
-      | throw "internal error: no prototype for the scheduler"
-    -- an immediate function's spawns: start the task now
-    for (gi, ks) in immSpawns do
-      let fn := fns[gi]!
-      let body := Suspend.substSpawns spawnMark (fun i _ hs t =>
-        let k := (ks[i]?).getD 0
-        .call (trampOf k + 1) [schedLit, .call (nFns + 4 * (user.length + k)) (schedLit :: .local t :: hs)]) fn.body
-      fns := fns.set! gi { fn with writes := true, body }
-    -- each `branch` (numbered across the functions, in order) gets a
-    -- wrapper class `[pc, frame]` and its `tramp`, `start` and `stop`
-    let mut branchOf : Array (List Nat) := #[]
-    let mut branchHome : Array Nat := #[]
-    for (j, part) in (List.range L).zip parts.toList do
-      let n := Suspend.countSusp (· == branchMark) (fun _ => false) false (fun _ => false) part.2.1 +
-        Suspend.countArms (· == rushMark) part.2.1
-      branchOf := branchOf.push ((List.range n).map (· + branchHome.size))
-      branchHome := branchHome ++ (List.replicate n j).toArray
-    let B := branchHome.size
-    -- (`$link(sched, root)`, which adds a root to the scheduler's list,
-    -- comes before them)
-    let linkIdx := selfBase + 4 * targets.length + 2 * roots.size
-    let wrapFnBase := linkIdx + 1
-    let wrapTag (K : Nat) : Nat := tagBase + L + K
-    let wrapTy (K : Nat) : VTy := .ref [wrapTag K] []
-    let callee : Nat → Option Suspend.Callee := fun f =>
-      if f == sleepIdx then
-        some { tag := env.tagOf "$sleep", newFn := idxOf "$sleepNew", initFn := idxOf "$sleepInit",
-               resumeFn := idxOf "$sleepResume", cancelFn := none, passFields := [], resField := none }
-      else if f == waitIdx then
-        some { tag := env.tagOf "$waitf", newFn := idxOf "$waitNew", initFn := idxOf "$waitInit",
-               resumeFn := idxOf "$waitResume", cancelFn := none, passFields := [], resField := none }
-      else match lows.zipIdx.find? (·.1.1 == f) with
-        | some ((gi, _, ntp), j) =>
-          let (_, _, sites, arms) := parts[j]!
-          some { tag := tagBase + j, newFn := nFns + 4 * j, initFn := nFns + 4 * j + 1, resumeFn := gi,
-                 cancelFn := some (nFns + 4 * j + 2),
-                 passFields := (List.range fns[gi]!.arity).map fun i => Suspend.slotBaseOf sites arms + i,
-                 resField := some Suspend.resF, generic := ntp != 0, newSched := true,
-                 resultFn := if ntp == 0 then some (nFns + 4 * j + 3) else none,
-                 selfFns := (targets.idxOf? gi).map fun i =>
-                   (selfBase + 4 * i, selfBase + 4 * i + 1, selfBase + 4 * i + 2, selfBase + 4 * i + 3) }
-        | none => none
-    for ((gi, _, _), j) in lows.zipIdx do
-      let ps := slotTys[gi]!.take fns[gi]!.arity
-      extraSigs := extraSigs.push (schedTy :: ps, frameTy j)
-      extraSigs := extraSigs.push (frameTy j :: ps, VTy.void)
-      extraSigs := extraSigs.push (frameTy j :: schedTy :: ps, VTy.void)
-      extraSigs := extraSigs.push ([frameTy j], (fsigs0[gi]!).2)
-    -- each target's helpers (#142), whose first parameter is the receiver:
-    -- `arrive(self, args…, frame, sched)` resets the frame (or makes one)
-    -- and gives it; `take(self, frame)` its result; `resume(frame, sched)`
-    -- and `cancel(frame, sched)` pass the parameters from the frame
-    let mut selfFns : Array Fn := #[]
-    let mut selfTys : Array (List VTy) := #[]
-    let mut selfSigs : Array (List VTy × VTy) := #[]
-    for gi in targets do
-      let some j := lows.findIdx? (·.1 == gi) | throw "internal error: a dispatch target"
-      let (_, gname, _) := lows[j]!
-      let a := fns[gi]!.arity
-      let ps := slotTys[gi]!.take a
-      let ρ := (fsigs0[gi]!).2
-      let (_, _, sites, arms) := parts[j]!
-      let wide : VTy := .ref [tagBase + j, schedTag] []
-      let locals := (List.range a).map Expr.local
-      let isF (i : Nat) : Expr := .heap (.isTag [tagBase + j]) [.local i]
-      let arriveBody : Expr := .seq (.ite (isF a) (.call (nFns + 4 * j + 1) (.local a :: locals))
-        (.seq (.assign a (.call (nFns + 4 * j) (.local (a + 1) :: locals))) Suspend.vd)) (.local a)
-      let pass := (List.range a).map fun i => Expr.heap (.get (Suspend.slotBaseOf sites arms + i)) [.local 0]
-      selfFns := selfFns ++ #[
-        { name := s!"{gname}$arrive", arity := a + 2, nslots := a + 2, decides := false, writes := true,
-          body := arriveBody },
-        { name := s!"{gname}$take", arity := 2, nslots := 2, decides := false, writes := false,
-          body := .ite (isF 1) (.call (nFns + 4 * j + 3) [.local 1]) (.prim .userErr []) },
-        { name := s!"{gname}$resumeOwn", arity := 2, nslots := 2, decides := false, writes := true,
-          body := .call gi (.local 0 :: .local 1 :: pass) },
-        { name := s!"{gname}$cancelOwn", arity := 2, nslots := 2, decides := false, writes := true,
-          body := .call (nFns + 4 * j + 2) (.local 0 :: .local 1 :: pass) }]
-      selfTys := selfTys ++ #[ps ++ [wide, schedTy], [ps.headD .int, wide], [frameTy j, schedTy], [frameTy j, schedTy]]
-      selfSigs := selfSigs ++ #[(ps ++ [wide, schedTy], wide), ([ps.headD .int, wide], ρ),
-        ([frameTy j, schedTy], .int), ([frameTy j, schedTy], VTy.void)]
-    let rootJ (k : Nat) : Nat := user.length + k
-    let rootTags := (List.range roots.size).map (fun k => tagBase + rootJ k) ++ (List.range B).map wrapTag
-    let mainJ := (lows.findIdx? (·.1 == mainSig.idx)).getD 0
-    let rootAny : VTy := .ref ((tagBase + mainJ) :: rootTags) []
-    -- each root's trampoline (frame, sched) and `start(sched, frame)`
-    let mut rootSigs : Array (List VTy × VTy) := #[]
-    for k in List.range roots.size do
-      rootSigs := rootSigs.push ([frameTy (rootJ k), schedTy], .int)
-      rootSigs := rootSigs.push ([schedTy, frameTy (rootJ k)], VTy.void)
-    let Sinf : Sigs := { fns := fsigs0 ++ extraSigs.toList ++ selfSigs.toList ++ rootSigs.toList, classes := classTable,
-                         protos, pins }
-    let mut newFns : Array Fn := #[]
-    let mut newTys : Array (List VTy) := #[]
-    let mut armFns : Array Fn := #[]
-    let mut armTys : Array (List VTy) := #[]
-    let mut armSigs : Array (List VTy × VTy) := #[]
-    let armBase := wrapFnBase + 3 * B
-    let mut branchFns : Array Fn := #[]
-    let mut branchTys : Array (List VTy) := #[]
-    -- (each branch's arm resume function, done field, and the passing of its
-    -- function's parameters from the frame, for cancelling it)
-    let mut branchInfo : Array (Nat × Nat × List Expr) := #[]
-    let mut branchSigs : Array (List VTy × VTy) := #[]
-    let progressF := fieldIdx "$sched" "$Progress"
-    let headF := fieldIdx "$sched" "$Head"
-    let tailF := fieldIdx "$sched" "$Tail"
-    -- (set when a root ends or is stopped: the list then has cells to drop)
-    let deadF := fieldIdx "$sched" "$Dead"
-    -- (cancellation: the task's flags and root; the scheduler's request to
-    -- cancel the root that just ran)
-    let cancelCurF := fieldIdx "$sched" "$CancelCur"
-    let tDoneF := fieldIdx "task" "$Done"
-    let tCancelledF := fieldIdx "task" "$Cancelled"
-    let runningF := fieldIdx "task" "$Running"
-    let rootF := fieldIdx "task" "$Root"
-    for ((gi, gname, _), j) in lows.zipIdx do
-      let fn := fns[gi]!
-      let Γ := slotTys[gi]!
-      let a := fn.arity
-      let (ds, b, sites, arms) := parts[j]!
-      let ρ := (fsigs0[gi]!).2
-      let fnBase := armBase + armFns.size
-      let spawns : Array (Nat × Nat) := ((spawnOf[j]?).getD []).toArray.map fun k =>
-        (nFns + 4 * rootJ k, trampOf k + 1)
-      let branches : Array (Nat × Nat × Nat) := ((branchOf[j]?).getD []).toArray.map fun K =>
-        (wrapFnBase + 3 * K + 1, wrapFnBase + 3 * K + 2, wrapTag K)
-      let low ← (Suspend.lower Sinf callee syncMark raceMark rushMark spawnMark spawns branchMark branches a Γ ρ (frameTy j)
-        schedTag fnBase b).mapError fun e => inFn gname e
-      -- its branches' wrappers: `tramp(w, sched)` resumes the arm (with the
-      -- function's parameters from its frame) unless the function stopped
-      -- it; `start(sched, frame)` makes the wrapper, registers it and runs
-      -- it once; `stop(w)` marks it done
-      let (_, _, sitesJ, armsJ) := parts[j]!
-      for (K, (armRes, doneA, runNow)) in ((branchOf[j]?).getD []).zip low.branchArms do
-        let fr : Expr := .heap (.get 1) [.local 0]
-        let pass := (List.range a).map fun i => Expr.heap (.get (Suspend.slotBaseOf sitesJ armsJ + i)) [fr]
-        branchInfo := branchInfo.push (armRes, doneA, pass)
-        -- (a `rush` loser that runs `return` after the `rush` ended has
-        -- unwound itself and ends there: it is marked so, and not stopped
-        -- again when the function exits, #181)
-        let tramp : Expr := .seq (.ite (.prim .eq [.heap (.get doneA) [fr], Suspend.int 0])
-            (.seq (Suspend.seqVoid [.assign 2 (.call armRes (fr :: .local 1 :: pass)),
-              .ite (.prim .eq [.local 2, Suspend.int 1]) (.seq (.heap (.set doneA) [fr, Suspend.int 1]) Suspend.vd) Suspend.vd,
-              .ite (.prim .eq [.local 2, Suspend.int 2])
-                (.seq (Suspend.seqVoid [.heap (.set doneA) [fr, Suspend.int 2], .assign 2 (Suspend.int 1)]) Suspend.vd)
-                Suspend.vd])
-              Suspend.vd)
-            (.seq (.assign 2 (Suspend.int 1)) Suspend.vd)) (.local 2)
-        branchFns := branchFns.push { name := s!"$branch{K}$tramp", arity := 2, nslots := 3, decides := false,
-                                      writes := true, body := initPrefixE 2 [Suspend.int 0] tramp }
-        branchTys := branchTys.push [wrapTy K, schedTy, .int]
-        branchSigs := branchSigs.push ([wrapTy K, schedTy], .int)
-        -- (a `rush` loser's wrapper only registers it: it already started)
-        let register : Expr := .call linkIdx [.local 0, .local 2]
-        let start : Expr := .seq (Suspend.seqVoid (if !runNow then [register] else [register,
-          .assign 3 (.call (wrapFnBase + 3 * K) [.local 2, .local 0]),
-          .ite (.prim .eq [.local 3, Suspend.int 1])
-            (.seq (Suspend.seqVoid [.heap (.set Suspend.pcF) [.local 2, Suspend.int (-1)],
-              .heap (.set progressF) [.local 0, .lit (.logic true)], .heap (.set deadF) [.local 0, .lit (.logic true)]])
-              Suspend.vd) Suspend.vd])) (.local 2)
-        let startFn : Fn := { name := s!"$branch{K}$start", arity := 2, nslots := 4, decides := false, writes := true,
-                              body := initPrefixE 2 [.heap (.new (wrapTag K)) [Suspend.int 0, .local 1], Suspend.int 0] start }
-        branchFns := branchFns.push startFn
-        branchTys := branchTys.push [schedTy, frameTy j, wrapTy K, .int]
-        branchSigs := branchSigs.push ([schedTy, frameTy j], wrapTy K)
-        let stopFn : Fn := { name := s!"$branch{K}$stop", arity := 2, nslots := 2, decides := false, writes := true,
-                             body := Suspend.seqVoid [.heap (.set Suspend.pcF) [.local 0, Suspend.int (-1)],
-                               .heap (.set deadF) [.local 1, .lit (.logic true)]] }
-        branchFns := branchFns.push stopFn
-        branchTys := branchTys.push [wrapTy K, schedTy]
-        branchSigs := branchSigs.push ([wrapTy K, schedTy], VTy.void)
-      let ps := Γ.take a
-      let dflt (params : List VTy) (τ : VTy) : Except String Expr :=
-        match Suspend.coreDefault Sinf params 0 τ with
-        | some d => pure d
-        | none => throw s!"internal error: lowering {gname}: no initial value for a slot of type {repr τ}"
-      -- the frame's slots after the parameters: the function's own, then the
-      -- pass's temporaries
-      let tempTys := (low.fields.drop (2 + sites + 2 * arms + a + (fn.nslots - a)))
-      -- each function keeps its parameters and the transient slots it uses
-      let resumeLike (name : String) (lf : Suspend.LFn) : Except String Fn := do
-        let inits ← (lf.slots.drop (a + 2)).mapM (dflt (lf.slots.take (a + 2)))
-        return { name, arity := a + 2, nslots := lf.slots.length, decides := false, writes := true,
-                 body := initPrefixE (a + 2) inits lf.body }
-      fns := fns.set! gi (← resumeLike gname low.body)
-      slotTys := slotTys.set! gi low.body.slots
-      fsigs := fsigs.set gi (frameTy j :: schedTy :: ps, .int)
-      frameClasses := frameClasses.push low.fields
-      -- `g$new(sched, params…)`: the frame, with the arguments and initial
-      -- values (a non-generic callee's frame field starts as the scheduler)
-      let childTys := low.fields.drop 2 |>.take sites
-      let nps := schedTy :: ps
-      let newBody : Expr := .heap (.new (tagBase + j))
-        ([Suspend.int 0, ← dflt nps ρ] ++ childTys.map (fun τ => match τ with
-            | .ref _ _ => Expr.local 0
-            | τ => Expr.lit τ.default) ++
-          List.replicate (2 * arms) (Suspend.int 0) ++
-          (List.range a).map (fun i => Expr.local (i + 1)) ++ ds.map (Suspend.shift 1) ++
-          (← tempTys.mapM (dflt nps)))
-      newFns := newFns.push { name := s!"{gname}$new", arity := a + 1, nslots := a + 1, decides := false,
-                              writes := true, body := newBody }
-      newTys := newTys.push nps
-      -- `g$reset(frame, params…)`: the frame, made ready for another call
-      let resetBody := Suspend.seqVoid (.heap (.set Suspend.pcF) [.local 0, Suspend.int 0] ::
-        (List.range a).map fun i => .heap (.set (Suspend.slotBaseOf sites arms + i)) [.local 0, .local (i + 1)])
-      newFns := newFns.push { name := s!"{gname}$reset", arity := a + 1, nslots := a + 1, decides := false,
-                              writes := true, body := resetBody }
-      newTys := newTys.push (frameTy j :: ps)
-      -- `g$cancel(frame, sched, params…)`: unwinds it
-      newFns := newFns.push (← resumeLike s!"{gname}$cancel" low.cancel)
-      newTys := newTys.push low.cancel.slots
-      -- `g$result(frame)`
-      newFns := newFns.push { name := s!"{gname}$result", arity := 1, nslots := 1, decides := false,
-                              writes := false, body := .heap (.get Suspend.resF) [.local 0] }
-      newTys := newTys.push [frameTy j]
-      -- the arms of its `sync`s and `race`s
-      for ((res, can), i) in low.arms.zipIdx do
-        armFns := armFns.push (← resumeLike s!"{gname}$arm{i}" res)
-        armFns := armFns.push (← resumeLike s!"{gname}$arm{i}$cancel" can)
-        armTys := armTys.push res.slots
-        armTys := armTys.push can.slots
-        armSigs := armSigs.push (frameTy j :: schedTy :: ps, .int)
-        armSigs := armSigs.push (frameTy j :: schedTy :: ps, VTy.void)
-      -- its refined calls' helpers (#171), whose slots are their parameters
-      -- (one calling a <decides> method can fail too, #179)
-      for ((body, vps, vτ), i) in low.vias.zipIdx do
-        let canFail := (Suspend.callsOf body).any fun (g, _) => ((fns[g]?).map (·.decides)).getD false
-        armFns := armFns.push { name := s!"{gname}$via{i}", arity := vps.length, nslots := vps.length,
-                                decides := canFail, writes := true, body }
-        armTys := armTys.push vps
-        armSigs := armSigs.push (vps, vτ)
-    -- each root's trampoline, which resumes it with its parameters from its
-    -- frame, and `start`, which registers it with the scheduler and runs it
-    -- up to its first suspension point (a root that is done has its
-    -- suspension point set to -1, and a done root lets the scheduler make
-    -- another pass in the same tick, for the tasks waiting for it)
-    let mut rootFns : Array Fn := #[]
-    let mut rootTys : Array (List VTy) := #[]
-    for k in List.range roots.size do
-      let j := rootJ k
-      let (ri, _, _) := roots[k]!
-      let (_, _, sites, arms) := parts[j]!
-      let a := fns[ri]!.arity - 2
-      let pass := (List.range a).map fun i => Expr.heap (.get (Suspend.slotBaseOf sites arms + i)) [.local 0]
-      -- (the task is the root's first parameter; it is marked running while
-      -- the root runs, so that cancelling it from inside waits until it
-      -- suspends)
-      let task : Expr := .heap (.get (Suspend.slotBaseOf sites arms)) [.local 0]
-      let trampBody : Expr := Suspend.seqVoid [
-        .heap (.set runningF) [task, .lit (.logic true)],
-        .assign 2 (.call ri (.local 0 :: .local 1 :: pass)),
-        .heap (.set runningF) [task, .lit (.logic false)]] |> fun e => Expr.seq e (.local 2)
-      rootFns := rootFns.push { name := s!"$spawn{k}$tramp", arity := 2, nslots := 3, decides := false, writes := true,
-                                body := initPrefixE 2 [Suspend.int 0] trampBody }
-      rootTys := rootTys.push [frameTy j, schedTy, .int]
-      let start : Expr := Suspend.seqVoid [
-        .call linkIdx [.local 0, .local 1],
-        .heap (.set rootF) [.heap (.get (Suspend.slotBaseOf sites arms)) [.local 1], .prim .mkSome [.local 1]],
-        .assign 2 (.call (trampOf k) [.local 1, .local 0]),
-        .ite (.prim .eq [.local 2, Suspend.int 1])
-          (.seq (Suspend.seqVoid [.heap (.set Suspend.pcF) [.local 1, Suspend.int (-1)],
-            .heap (.set progressF) [.local 0, .lit (.logic true)], .heap (.set deadF) [.local 0, .lit (.logic true)]])
-            Suspend.vd) Suspend.vd]
-      rootFns := rootFns.push { name := s!"$spawn{k}$start", arity := 2, nslots := 3, decides := false, writes := true,
-                                body := initPrefixE 2 [Suspend.int 0] start }
-      rootTys := rootTys.push [schedTy, frameTy j, .int]
-    -- the scheduler's roots are a list of cells `[root, next]`, so that
-    -- adding one costs one cell (an array would be copied, and C keeps every
-    -- copy): `$link(sched, root)` adds one at the end
-    let cellTag := tagBase + L + B
-    let cellTy : VTy := .ref [cellTag] []
-    let nextF := 1
-    let linkBody : Expr := Suspend.seqVoid [
-      .ite (.heap (.set nextF) [.prim .query [.heap (.get tailF) [.local 0]], .prim .mkSome [.local 2]]) Suspend.vd
-        (.seq (.heap (.set headF) [.local 0, .prim .mkSome [.local 2]]) Suspend.vd),
-      .heap (.set tailF) [.local 0, .prim .mkSome [.local 2]]]
-    let linkFn : Fn := { name := "$link", arity := 2, nslots := 3, decides := false, writes := true,
-                         body := initPrefixE 2 [.heap (.new cellTag) [.local 1, .lit .none]] linkBody }
-    fns := fns ++ newFns ++ selfFns ++ rootFns ++ [linkFn] ++ branchFns ++ armFns
-    slotTys := slotTys ++ newTys ++ selfTys ++ rootTys ++ [[schedTy, rootAny, cellTy]] ++ branchTys ++ armTys
-    fsigs := fsigs ++ extraSigs.toList ++ selfSigs.toList ++ rootSigs.toList ++ [([schedTy, rootAny], VTy.void)] ++
-      branchSigs.toList ++ armSigs.toList
-    -- the wrappers' classes, after the frames', then the cells'
-    for K in List.range B do
-      frameClasses := frameClasses.push [.int, frameTy branchHome[K]!]
-    frameClasses := frameClasses.push [rootAny, .opt cellTy]
-    classTable := classTable.set schedTag (((classTable[schedTag]!).set headF (.opt cellTy)).set tailF (.opt cellTy))
-    -- a task's root: the type of its `Root` field (in every class that has it)
-    for d in env.classes do
-      if let some ri := (env.fields d).findIdx? (·.1 == "$Root") then
-        classTable := classTable.set (env.tagOf d) ((classTable[env.tagOf d]!).set ri (.opt rootAny))
-    -- cancelling (#156): `$cancelRoot(sched, root)` unwinds a root that is
-    -- not done, through its kind's cancel function (a spawned task's root
-    -- also marks its task cancelled), and marks it done
-    let cancelRootIdx := fns.size
-    let cancelTOf (k : Nat) : Nat := cancelRootIdx + 1 + k
-    let cancelWOf (K : Nat) : Nat := cancelRootIdx + 1 + roots.size + K
-    let dispatchCancel : Expr := (List.range roots.size).foldr (fun k acc =>
-        Expr.ite (.heap (.isTag [tagBase + rootJ k]) [.local 1]) (.call (cancelTOf k) [.local 1, .local 0]) acc)
-      ((List.range B).foldr (fun K acc =>
-        Expr.ite (.heap (.isTag [wrapTag K]) [.local 1]) (.call (cancelWOf K) [.local 1, .local 0]) acc) Suspend.vd)
-    let cancelRootBody : Expr := .ite (.prim .ne [.heap (.get Suspend.pcF) [.local 1], Suspend.int (-1)])
-      (.seq (Suspend.seqVoid [dispatchCancel, .heap (.set Suspend.pcF) [.local 1, Suspend.int (-1)],
-        .heap (.set deadF) [.local 0, .lit (.logic true)], .heap (.set progressF) [.local 0, .lit (.logic true)]])
-        Suspend.vd) Suspend.vd
-    let cancelRootFn : Fn := { name := "$cancelRoot", arity := 2, nslots := 2, decides := false, writes := true, body := cancelRootBody }
-    let mut cancelFns : Array Fn := #[cancelRootFn]
-    let mut cancelTys : Array (List VTy) := #[[schedTy, rootAny]]
-    let mut cancelSigs : Array (List VTy × VTy) := #[([schedTy, rootAny], VTy.void)]
-    for k in List.range roots.size do
-      let j := rootJ k
-      let (ri, _, _) := roots[k]!
-      let (_, _, sites, arms) := parts[j]!
-      let a := fns[ri]!.arity - 2
-      let pass := (List.range a).map fun i => Expr.heap (.get (Suspend.slotBaseOf sites arms + i)) [.local 0]
-      let task : Expr := .heap (.get (Suspend.slotBaseOf sites arms)) [.local 0]
-      let cbody : Expr := Suspend.seqVoid [.call (nFns + 4 * j + 2) (.local 0 :: .local 1 :: pass),
-        .heap (.set tCancelledF) [task, .lit (.logic true)], .heap (.set tDoneF) [task, .lit (.logic true)]]
-      let cfn : Fn := { name := s!"$spawn{k}$cancelT", arity := 2, nslots := 2, decides := false, writes := true, body := cbody }
-      cancelFns := cancelFns.push cfn
-      cancelTys := cancelTys.push [frameTy j, schedTy]
-      cancelSigs := cancelSigs.push ([frameTy j, schedTy], VTy.void)
-    for K in List.range B do
-      let (armRes, doneA, pass) := branchInfo[K]!
-      let fr : Expr := .heap (.get 1) [.local 0]
-      let pass := pass.map fun e => match e with
-        | .heap op _ => Expr.heap op [fr]
-        | e => e
-      let wbody : Expr := .ite (.prim .eq [.heap (.get doneA) [fr], Suspend.int 0])
-        (.seq (Suspend.seqVoid [.call (armRes + 1) (fr :: .local 1 :: pass), .heap (.set doneA) [fr, Suspend.int 2]])
-          Suspend.vd) Suspend.vd
-      let wfn : Fn := { name := s!"$branch{K}$cancelT", arity := 2, nslots := 2, decides := false, writes := true, body := wbody }
-      cancelFns := cancelFns.push wfn
-      cancelTys := cancelTys.push [wrapTy K, schedTy]
-      cancelSigs := cancelSigs.push ([wrapTy K, schedTy], VTy.void)
-    fns := fns ++ cancelFns
-    slotTys := slotTys ++ cancelTys
-    fsigs := fsigs ++ cancelSigs.toList
-    -- `T.Cancel()` (the mark `$cancelMark(T)`, in suspends code, whose slot 1
-    -- is the scheduler): a task that is not done is cancelled now, or, when
-    -- it is the one running (it cancels itself), at its next suspension
-    let cancelMark := idxOf "$cancelMark"
-    let cancelAt (t : Expr) : Expr :=
-      .ite (.prim .eq [.heap (.get tDoneF) [t], .lit (.logic false)])
-        (.seq (.ite (.prim .query [.heap (.get runningF) [t]])
-          (.seq (.heap (.set cancelCurF) [.local 1, .lit (.logic true)]) Suspend.vd)
-          (.seq (.ite (.call cancelRootIdx [.local 1, .prim .query [.heap (.get rootF) [t]]]) Suspend.vd Suspend.vd)
-            Suspend.vd)) Suspend.vd) Suspend.vd
-    let replCancel : List Expr → Expr := fun es => match es with
-      | [t] => cancelAt t
-      | _ => .prim .userErr []
-    fns := fns.map fun fn => { fn with body := Suspend.substCall cancelMark replCancel fn.body }
-    -- a suspends `Main` runs under the scheduler: a loop of ticks; in each,
-    -- passes that resume `Main` and then every root that is not done, again
-    -- while a root ends; between ticks the clock moves to the earliest tick
-    -- a sleeping task waits for (none: no task can go on)
-    if mainSig.suspends then
-      let j := mainJ
-      let runIdx := fns.size
-      let sch : Expr := .local 0
-      -- slots: sched, Main's frame, a status, Main done, a root ended, a
-      -- root, the next cell, a cell, another cell
-      let st := 2
-      let mainDone := 3
-      let died := 4
-      let r := 5
-      let cur := 6
-      let c := 7
-      let n := 8
-      let dispatch : Expr := ((List.range roots.size).foldr (fun k acc =>
-        Expr.ite (.heap (.isTag [tagBase + rootJ k]) [.local r]) (.call (trampOf k) [.local r, sch]) acc)
-        ((List.range B).foldr (fun K acc =>
-          Expr.ite (.heap (.isTag [wrapTag K]) [.local r]) (.call (wrapFnBase + 3 * K) [.local r, sch]) acc)
-          (.prim .userErr [])))
-      let rootOf (cell : Expr) : Expr := .heap (.get 0) [cell]
-      let dead (cell : Expr) : Expr := .prim .eq [.heap (.get Suspend.pcF) [rootOf cell], Suspend.int (-1)]
-      -- (each cell's next is read after its root ran, so that the roots it
-      -- added run in this pass too)
-      let pollRoots : List Expr := if rootTags.isEmpty then [] else [
-        .assign cur (.heap (.get headF) [sch]),
-        .loop (Suspend.seqVoid [
-          .ite (.assign c (.prim .query [.local cur])) Suspend.vd .brk,
-          .assign r (rootOf (.local c)),
-          .ite (.prim .ne [.heap (.get Suspend.pcF) [.local r], Suspend.int (-1)])
-            (.seq (Suspend.seqVoid [.assign st dispatch,
-              -- (a root asked to be cancelled: awaiting a cancelled task, or
-              -- cancelling its own)
-              .ite (.prim .query [.heap (.get cancelCurF) [sch]])
-                (.seq (Suspend.seqVoid [.heap (.set cancelCurF) [sch, .lit (.logic false)],
-                  .call cancelRootIdx [sch, .local r]]) Suspend.vd) Suspend.vd,
-              .ite (.prim .eq [.local st, Suspend.int 1])
-                (.seq (Suspend.seqVoid [.heap (.set Suspend.pcF) [.local r, Suspend.int (-1)],
-                  .heap (.set progressF) [sch, .lit (.logic true)], .heap (.set deadF) [sch, .lit (.logic true)]]) Suspend.vd)
-                Suspend.vd]) Suspend.vd) Suspend.vd,
-          .assign cur (.heap (.get nextF) [.local c])])]
-      let pass : Expr := .loop (Suspend.seqVoid ([
-        .heap (.set progressF) [sch, .lit (.logic false)],
-        .heap (.set 1) [sch, Suspend.int (-1)],
-        .assign st (.call mainSig.idx [.local 1, sch]),
-        .ite (.prim .eq [.local st, Suspend.int 1]) (.seq (.assign mainDone (Suspend.int 1)) .brk) Suspend.vd,
-        -- (`Main` awaited a cancelled task: it is cancelled, and so the program ends)
-        .ite (.prim .query [.heap (.get cancelCurF) [sch]])
-          (.seq (Suspend.seqVoid [.heap (.set cancelCurF) [sch, .lit (.logic false)],
-            .call (nFns + 4 * j + 2) [.local 1, sch], .assign mainDone (Suspend.int 1)]) .brk) Suspend.vd] ++
-        pollRoots ++
-        [.ite (.prim .query [.heap (.get progressF) [sch]]) Suspend.vd .brk]))
-      -- (between ticks, after a root ended, the cells of the roots that are
-      -- done are unlinked: no allocation but the new end)
-      let compact : List Expr := if rootTags.isEmpty then [] else [
-        .ite (.prim .query [.heap (.get deadF) [sch]]) (.seq (Suspend.seqVoid [
-          .heap (.set deadF) [sch, .lit (.logic false)],
-          .loop (Suspend.seqVoid [
-            .ite (.assign c (.prim .query [.heap (.get headF) [sch]])) Suspend.vd .brk,
-            .ite (dead (.local c)) (.seq (.heap (.set headF) [sch, .heap (.get nextF) [.local c]]) Suspend.vd) .brk]),
-          .ite (.assign c (.prim .query [.heap (.get headF) [sch]]))
-            (.seq (Suspend.seqVoid [
-              .loop (Suspend.seqVoid [
-                .ite (.assign n (.prim .query [.heap (.get nextF) [.local c]])) Suspend.vd .brk,
-                .ite (dead (.local n))
-                  (.seq (.heap (.set nextF) [.local c, .heap (.get nextF) [.local n]]) Suspend.vd)
-                  (.seq (.assign c (.local n)) Suspend.vd)]),
-              .heap (.set tailF) [sch, .prim .mkSome [.local c]]]) Suspend.vd)
-            (.seq (.heap (.set tailF) [sch, .lit .none]) Suspend.vd)]) Suspend.vd) Suspend.vd]
-      let run : Expr := Suspend.seqVoid [.loop (Suspend.seqVoid (compact ++ [pass,
-        .ite (.prim .eq [.local mainDone, Suspend.int 1]) .brk Suspend.vd,
-        .ite (.prim .lt [.heap (.get 1) [sch], Suspend.int 0]) (.seq (.prim .userErr []) Suspend.vd) Suspend.vd,
-        .heap (.set 0) [sch, .heap (.get 1) [sch]]]))]
-      let cellInit : Expr := .heap (.new cellTag) [.local 1, .lit .none]
-      fns := fns.push { name := "$Run", arity := 2, nslots := 9, decides := false, writes := true,
-                        body := initPrefixE 2 [Suspend.int 0, Suspend.int 0, Suspend.int 0, .local 1, .lit .none,
-                          cellInit, cellInit] run }
-      slotTys := slotTys.push [schedTy, frameTy j, .int, .int, .int, rootAny, .opt cellTy, cellTy, cellTy]
-      fsigs := fsigs ++ [([schedTy, frameTy j], VTy.void)]
-      -- (the prelude calls a function without arguments, `checkPrelude`)
-      -- (the scheduler is its class's prototype, so that immediate code can
-      -- spawn on it)
-      fns := fns.push { name := "$Start", arity := 0, nslots := 0, decides := false, writes := true,
-                        body := .call runIdx [schedLit, .call (nFns + 4 * j) [schedLit]] }
-      slotTys := slotTys.push []
-      fsigs := fsigs ++ [([], VTy.void)]
-      mainCall := .call (runIdx + 1) []
+    fsigs := fsigs1
+    classTable := classTable1
+    frameClasses := frameClasses1
+    mainCall := mainCall1
   let mut main := mainSig.idx
   if !protoList.isEmpty || mainSig.suspends then
     main := fns.size
