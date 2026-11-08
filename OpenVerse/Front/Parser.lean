@@ -190,6 +190,9 @@ partial def parseType : PM STy := do
         -- `pair(int, string)`: a parametric struct applied to type arguments
         -- (a `(` starting a line starts the next item, such as `(i:)M`)
         bump
+        -- (`event()`: an event without a value, `event(void)`, #156)
+        if (← peekT).isSym ")" && n == "event" then
+          bump; return .app n [.name "void"]
         let mut ts := #[← parseType]
         while (← peekT).isSym "," do bump; ts := ts.push (← parseType)
         expectSym ")"
@@ -356,8 +359,13 @@ partial def parsePostfix (stop : Nat) : PM SExpr := do
           let saved ← get
           let r ← (do
               bump
-              let mut ts := #[← parseType]
-              while (← peekT).isSym "," do bump; ts := ts.push (← parseType)
+              -- (`event(){}`: an event without a value, `event(void)`, #156)
+              let mut ts : Array STy := #[]
+              if (← peekT).isSym ")" && n == "event" then
+                ts := #[.name "void"]
+              else
+                ts := #[← parseType]
+                while (← peekT).isSym "," do bump; ts := ts.push (← parseType)
               expectSym ")"
               let b ← peekT
               if b.isSym "{" && !b.offside stop && !b.bol then bump; return some (n, ts.toList)
