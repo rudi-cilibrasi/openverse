@@ -122,12 +122,12 @@ theorem ceilDiv_seam (a b : Int) (hb : b ≠ 0) : ceilDivInt a b = cCeilDiv a b 
     by_cases hr : a.tmod b < 0
     · have hr' : ¬ (-a.tmod b < 0) := by omega
       by_cases hb' : b < 0
-      · simp [hz, hr, hr', hb', show a.tmod b ≤ 0 by omega]; omega
-      · simp [hz, hr, hr', hb']; omega
+      · simp [hz, hr, hb', show a.tmod b ≤ 0 by omega]; omega
+      · simp [hz, hr, hb']; omega
     · have hr' : -a.tmod b < 0 := by omega
       by_cases hb' : b < 0
-      · simp [hz, hr, hr', hb']; omega
-      · simp [hz, hr, hr', hb', show 0 < a.tmod b by omega]; omega
+      · simp [hz, hr, hb']; omega
+      · simp [hz, hr, hb', show 0 < a.tmod b by omega]; omega
 
 /-! ### Overflow conditions, as the C law writes them -/
 

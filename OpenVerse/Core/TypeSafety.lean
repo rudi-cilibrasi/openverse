@@ -631,7 +631,7 @@ theorem Typed.subst (hS : S.Closed) (θ : Nat → VTy) : ∀ {e τ}, Typed S Γ 
           have : (VTy.pinned P (a.map (VTy.subst θ))).any (VTy.hasVar j) = true :=
             List.any_eq_true.mpr ⟨p.1, List.mem_map.mpr ⟨p, hp, rfl⟩, hj⟩
           simp [this]
-        · simp only [hj, if_true]
+        · simp only [hj, ite_true]
           obtain ⟨t, ht, htj⟩ := List.any_eq_true.mp hj
           obtain ⟨p, hp, rfl⟩ := List.mem_map.mp ht
           have h1 := VTy.pinsOK_map_iff.mp hρ' p hp
@@ -732,7 +732,7 @@ theorem hasTy_float {v} (h : hasTy Ξ v .float = true) : ∃ b, v = .float b := 
   cases v <;> simp_all [hasTy]
 
 theorem ofString_typed (s : String) : hasTy Ξ (Value.ofString s) VTy.str = true := by
-  simp only [Value.ofString, hasTy, VTy.str, List.toList_toArray]
+  simp only [Value.ofString, hasTy, VTy.str]
   rw [allTy_iff]; intro v hv
   simp only [List.mem_map] at hv
   obtain ⟨b, _, rfl⟩ := hv
@@ -913,10 +913,10 @@ theorem prim_typed {op ts τ ρ} {vs : List Value} (hp : PrimTy op ts τ) (hv : 
     all_goals
       exact toStr_typed .toStrStr hv
   | fail =>
-    rcases vs with _ | ⟨_, _⟩ <;> simp only [allTys, Bool.and_eq_true, Bool.false_eq_true, and_false, and_true] at hv
+    rcases vs with _ | ⟨_, _⟩ <;> simp only [allTys, Bool.false_eq_true] at hv
     all_goals simp [Prim.apply, ResOK]
   | userErr =>
-    rcases vs with _ | ⟨_, _⟩ <;> simp only [allTys, Bool.and_eq_true, Bool.false_eq_true, and_false, and_true] at hv
+    rcases vs with _ | ⟨_, _⟩ <;> simp only [allTys, Bool.false_eq_true] at hv
     all_goals simp [Prim.apply, ResOK]
 
 /-! ### The heap (#29, #39) -/
@@ -1141,7 +1141,7 @@ theorem DefaultE.eval_ok {P : Prog} {S : Sigs} (hS : S.Closed) {a : Nat} {Γ : L
     simp only [eval] at h
     rcases bindL_some h with ⟨vs, s1, hx, hk⟩ | ⟨r1, s1, hx, rfl⟩
     · obtain ⟨vs', s1', Ξ1, hvs, hfr, hH1, hx1, ht⟩ := DefaultEL.eval_ok hS n hds hp hH hx
-      simp only [Option.some.injEq, Prod.mk.injEq, LRes.ok.injEq] at hvs
+      simp only [Prod.mk.injEq, LRes.ok.injEq] at hvs
       obtain ⟨rfl, rfl⟩ := hvs
       split at hk
       · simp at hk
@@ -1153,13 +1153,13 @@ theorem DefaultE.eval_ok {P : Prog} {S : Sigs} (hS : S.Closed) {a : Nat} {Γ : L
     simp only [eval] at h
     rcases bindL_some h with ⟨vs, s1, hx, hk⟩ | ⟨r1, s1, hx, rfl⟩
     · obtain ⟨vs', s1', Ξ1, hvs, hfr, hH1, hx1, hft⟩ := DefaultEL.eval_ok hS n hds hp hH hx
-      simp only [Option.some.injEq, Prod.mk.injEq, LRes.ok.injEq] at hvs
+      simp only [Prod.mk.injEq, LRes.ok.injEq] at hvs
       obtain ⟨rfl, rfl⟩ := hvs
       simp only [Option.some.injEq] at hk
       rw [VTy.map_inst_subst] at hft
       refine ⟨_, _, _, hk.symm, hfr, HeapOK.new hH1 hc hft (VTy.pinsOK_subst (Sigs.pinsOf_closed hS.2 _) θ hpin),
         hx1.trans (List.prefix_append _ _), ?_⟩
-      simp [HeapOp.apply, hasTy, ← hH1.1, ht]
+      simp [hasTy, ← hH1.1, ht]
     · obtain ⟨vs', s1', Ξ1, hvs, -⟩ := DefaultEL.eval_ok hS n hds hp hH hx
       simp at hvs
   | _, _, n, s, _, _, .sub hd hsub, hp, hH, h => by
@@ -1180,7 +1180,7 @@ theorem DefaultEL.eval_ok {P : Prog} {S : Sigs} (hS : S.Closed) {a : Nat} {Γ : 
     · simp at h
     · next v s1 hx =>
       obtain ⟨v', s1', Ξ1, hv, hfr1, hH1, hx1, ht⟩ := DefaultE.eval_ok hS n hd hp hH hx
-      simp only [Option.some.injEq, Prod.mk.injEq, Res.ok.injEq] at hv
+      simp only [Prod.mk.injEq, Res.ok.injEq] at hv
       obtain ⟨rfl, rfl⟩ := hv
       have hp1 : allTys Ξ1 (s1.fr.take a) ((Γ.take a).map (VTy.subst θ)) = true := by
         rw [hfr1]; exact allTys_mono hx1 _ _ hp
@@ -1188,7 +1188,7 @@ theorem DefaultEL.eval_ok {P : Prog} {S : Sigs} (hS : S.Closed) {a : Nat} {Γ : 
       · simp at h
       · next vs s2 hxs =>
         obtain ⟨vs', s2', Ξ2, hvs, hfr2, hH2, hx2, hts⟩ := DefaultEL.eval_ok hS n hds hp1 hH1 hxs
-        simp only [Option.some.injEq, Prod.mk.injEq, LRes.ok.injEq] at hvs
+        simp only [Prod.mk.injEq, LRes.ok.injEq] at hvs
         obtain ⟨rfl, rfl⟩ := hvs
         simp only [Option.some.injEq] at h
         exact ⟨_, s2, Ξ2, h.symm, hfr2.trans hfr1, hH2, hx1.trans hx2,
@@ -1230,7 +1230,7 @@ theorem eval_initPrefixE {P : Prog} {S : Sigs} (hS : S.Closed) {a : Nat} {Γ : L
           rcases bindR_some hx with ⟨w, s2, hw, hw'⟩ | ⟨r2, s2, hw, hr2, hw'⟩
           · obtain ⟨w', s2', Ξ2, hwv, hfr2, hH2, hx2, hwt⟩ :=
               DefaultE.eval_ok (s := ⟨fr, o⟩) hS n' hd hp hH hw
-            simp only [Option.some.injEq, Prod.mk.injEq, Res.ok.injEq] at hwv
+            simp only [Prod.mk.injEq, Res.ok.injEq] at hwv
             obtain ⟨rfl, rfl⟩ := hwv
             obtain ⟨fr2, o2⟩ := s2
             simp only at hfr2; subst fr2
@@ -1246,7 +1246,7 @@ theorem eval_initPrefixE {P : Prog} {S : Sigs} (hS : S.Closed) {a : Nat} {Γ : L
             rw [take_set_succ fr k _ hk] at hm'
             simpa using hm'
           · obtain ⟨w', s2', -, hwv, -⟩ := DefaultE.eval_ok (s := ⟨fr, o⟩) hS n' hd hp hH hw
-            simp only [Option.some.injEq, Prod.mk.injEq] at hwv
+            simp only [Prod.mk.injEq] at hwv
             obtain ⟨rfl, -⟩ := hwv
             simp at hr2
         | 0, hx, _ => simp [eval] at hx
@@ -1255,7 +1255,7 @@ theorem eval_initPrefixE {P : Prog} {S : Sigs} (hS : S.Closed) {a : Nat} {Γ : L
           simp only [eval] at hx
           rcases bindR_some hx with ⟨w, s2, hw, hw'⟩ | ⟨r2, s2, hw, hr2, hw'⟩
           · obtain ⟨w', s2', -, hwv, hfr2, -⟩ := DefaultE.eval_ok (s := ⟨fr, o⟩) hS n' hd hp hH hw
-            simp only [Option.some.injEq, Prod.mk.injEq, Res.ok.injEq] at hwv
+            simp only [Prod.mk.injEq, Res.ok.injEq] at hwv
             obtain ⟨rfl, rfl⟩ := hwv
             obtain ⟨fr2, o2⟩ := s2
             simp only at hfr2; subst fr2
@@ -1263,7 +1263,7 @@ theorem eval_initPrefixE {P : Prog} {S : Sigs} (hS : S.Closed) {a : Nat} {Γ : L
             obtain ⟨rfl, -⟩ := hw'
             simp at hr
           · obtain ⟨w', s2', -, hwv, -⟩ := DefaultE.eval_ok (s := ⟨fr, o⟩) hS n' hd hp hH hw
-            simp only [Option.some.injEq, Prod.mk.injEq] at hwv
+            simp only [Prod.mk.injEq] at hwv
             obtain ⟨rfl, -⟩ := hwv
             simp at hr2
         | 0, hx => simp [eval] at hx
