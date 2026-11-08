@@ -3995,10 +3995,11 @@ partial def elabFor (ctx : Ctx) (p : Pos) (clauses : List SExpr) (body : SExpr) 
               Expr.orE tmp rs.e (.lit (.arr #[])) else rs.e
           let (slot, c1) ← declare c x ty
           pure (slot, src, c1, Expr.lit (.logic true))
-        | .decl gp n sty false (.app _ (.ident _ "$choice") alts false) => do
+        | .decl gp n _ false _ => do
           -- `X := a₁ | … | aₙ` (#208): over the alternatives' indices, each
           -- alternative bound in the filter (so a failing one is skipped)
-          let (ty, es) ← elabAlts { c with canFail := true } gp sty alts
+          let some b := Choice.binding? g | eerr g.pos "bad for clause"
+          let (ty, es) ← elabAlts { c with canFail := true } gp b
           checkNewLocal c gp n
           let k ← fresh .int
           let (xs, c1) ← declare c n ty
@@ -4034,15 +4035,23 @@ partial def elabFor (ctx : Ctx) (p : Pos) (clauses : List SExpr) (body : SExpr) 
 /-- The alternatives of a choice (#208), at its written type or at their
     join (each one against the first's type, else on its own, as `if`'s
     branches are), and that type. -/
-partial def elabAlts (ctx : Ctx) (p : Pos) (sty : Option STy) (alts : List SExpr) : EM (Ty × List Expr) := do
-  match ← sty.mapM (resolveTy ctx.types p) with
+partial def elabAlts (ctx : Ctx) (p : Pos) (b : Choice.Binding) : EM (Ty × List Expr) := do
+  let alts := b.alts
+  -- (the written type, or for `set L = a | b` the type of `L`)
+  let t? ← match ← b.ty.mapM (resolveTy ctx.types p) with
+    | some t => pure (some t)
+    | none => match b.place with
+      | some l => tryCatch (do pure (some (← elabE ctx l none).ty)) fun _ => pure none
+      | none => pure none
+  match t? with
   | some t => return (t, ← alts.mapM fun a => do coerce a.pos (← elabE ctx a (some t)) t)
   | none =>
     let some a0 := alts.head? | eerr p "internal: a choice without alternatives"
     let r0 ← elabE ctx a0 none
-    -- (at most a few levels of retries, as for `if`'s branches, #32)
+    -- (each later one against the first's type, else on its own, to join;
+    -- a few levels deep, then on its own first, as the join needs, #32)
     let rs ← alts.tail.mapM fun a =>
-      if ctx.retries ≥ 3 then elabE ctx a (some r0.ty)
+      if ctx.retries ≥ 3 then tryCatch (elabE ctx a none) fun _ => elabE ctx a (some r0.ty)
       else
         let c2 := { ctx with retries := ctx.retries + 1 }
         tryCatch (elabE c2 a (some r0.ty)) fun _ => elabE c2 a none
@@ -4066,8 +4075,10 @@ partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
     if let .app p (.ident _ "$defer") _ _ := cl then
       eerr p "defer: cannot be a clause of an if condition or first{…} that has a choice (#208)"
     match Choice.binding? cl with
-    | some (p, n, sty, alts) =>
-      let (ty, es) ← elabAlts ctx p sty alts
+    | some b =>
+      let p := b.pos
+      let n := b.name
+      let (ty, es) ← elabAlts ctx p b
       checkNewLocal ctx p n
       let k ← fresh .int
       let x ← fresh ty

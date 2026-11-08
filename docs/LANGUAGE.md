@@ -566,8 +566,12 @@ Main():void =
   var N:int = 0
   if (X := (set N = 1; 1) | (set N = 2; 2), X > 1) then Print("{X} {N}")   # 2 2
   ```
-- **Type.** The written type (`X:int = 1 | 2`), else the join of the
-  alternatives' types, as for `if`'s branches.
+- **Type.** The written type (`X:int = 1 | 2`), or the type of the
+  variable or path that `set` writes, else the join of the alternatives'
+  types, as for `if`'s branches.
+- **`set L = a | b`** evaluates as `set` does: the indices of `L`'s path
+  first, then for `op=` the old value, then the choice, so each alternative
+  only runs the assignment.
 - **Where.** For now, a choice is the value of a binding (`X := a | b`,
   `X:t = a | b`, `set X = a | b`, `var X:t = a | b`) or a clause of its
   own, in an `if` condition, the clauses of a `for`, `first{…}`, `first(…){…}`,
