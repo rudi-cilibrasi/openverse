@@ -80,6 +80,12 @@ partial def SExpr.mapNamesM (r : Resolver) : SExpr → Except String SExpr := fu
     return .ident p (← r.val p n)
   | .app p g args b => return .app p (← go g) (← args.mapM go) b
   | .member p x m => do
+    -- `(M:)F`, parsed as `Self.(M:)F`: when `M` is a module, its member `F`
+    -- (#145), as `M.F`; else a qualified member of `Self`
+    if let .ident _ "Self" := x then
+      if m.startsWith "(" then
+        if let [q, f] := (m.drop 1).toString.splitOn ":)" then
+          if let some qn ← r.qual p (q.splitOn "." ++ [f]) then return .ident p qn
     if let some comps := x.identPath then
       if let some qn ← r.qual p (comps ++ [m]) then return .ident p qn
     return .member p (← go x) (← r.method p m)

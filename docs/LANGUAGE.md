@@ -613,6 +613,7 @@ Main():void =
   come first, then the members of the modules it opens with `using{M}`.
   If two modules opened at the same scope give the name, it is ambiguous
   and an error. The first definition or module found is the one meant.
+- `(M:)F` and `(A.B:)F` are `M.F` and `A.B.F` (#145).
 - `M.F`, `A.B.F`, the type `M.c`, the value `M.c{…}`, a delegation
   `M.D<constructor>(…)` and a qualifier `X.(M.i:)F()` name a member. `M`
   is looked up like any name; if a value is found instead, `.F` is its
@@ -680,7 +681,7 @@ the readings are flat:
 
 arithmetic on rationals (see [rational](#rational)), float functions beyond those of [float](#float),
 the class features listed under [Classes](#classes), struct methods (Verse structs have none; classes do),
-`weak_map`, qualified names `(M:)F` and module paths `using{/Verse.org/…}` (accepted and ignored), overloading beyond [Overloading](#overloading), nested
+`weak_map`, module paths `using{/Verse.org/…}` (accepted and ignored), overloading beyond [Overloading](#overloading), nested
 functions, concurrency (`spawn`, `sync`,
 `race`, `rush`, `branch`, `<suspends>`), and effect checking
 other than `<decides>` and the heap effects (`<converges>` is accepted and
