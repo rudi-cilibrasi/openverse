@@ -276,6 +276,10 @@ partial def liftE (isVal : String → Bool) (isField : String → String → Boo
     -- order, into its (renamed) parameters, then its body's clauses, then
     -- its value's name
     let (pds, body) := (tmpl.take args.length, tmpl.drop args.length)
+    -- (the callee's declared effects, which the caller must allow, as at a
+    -- call: noted by `$fxOf`, since no call is left)
+    if let .app _ _ (fn :: _) _ := e then
+      modify fun s => { s with pre := s.pre.push (.app fn.pos (.ident fn.pos "$fxOf") [fn] false) }
     for (pd, a) in pds.zip args do
       let a' ← liftE isVal isField a
       match pd with
@@ -762,6 +766,8 @@ def inlineMulti (tops : List STop) : Except String (List STop) := do
       throw s!"{f.pos.show}: {n} has several values and named parameters: such functions are not supported yet (#235)"
     if anyE (fun | .ret .. => true | _ => false) f.body then
       throw s!"{f.pos.show}: {n} has several values and a return, which would leave its caller once inlined (#235)"
+    if anyE (fun | .app _ (.ident _ "$defer") _ _ => true | _ => false) f.body then
+      throw s!"{f.pos.show}: {n} has several values and a defer:, which would run in its caller's clauses once inlined: not supported yet (#235)"
     -- (its body is inlined where other names may be in scope: so neither
     -- its name nor a name its body uses from outside may be bound anywhere)
     if binders.contains n then

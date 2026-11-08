@@ -1978,6 +1978,11 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
   | .app p (.ident _ "$rush") arms false => elabConc ctx p false arms exp true
   | .app p (.ident _ "$spawn") [body] false => elabSpawn ctx p body
   | .app p (.ident _ "$branch") [body] false => elabBranch ctx p body
+  | .app p (.ident _ "$fxOf") [.ident _ f] false =>
+    -- (an inlined call of a function with several values: its declared
+    -- effects, as at a call, #235)
+    if let some s := ctx.sig? f then noteFx p s.fx (some s!"calls {f}")
+    return ⟨.lit .void, .void⟩
   | .app p (.ident _ "$inline") (.ident _ f :: _) false =>
     if ctx.inTaking then
       eerr p s!"a call of {f}, which has several values, cannot be lifted from here, for now (#235)"

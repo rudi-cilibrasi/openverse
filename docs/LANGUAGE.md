@@ -660,11 +660,12 @@ Main():void =
 
   Such a call is inlined: its arguments are evaluated first, in order, then
   its body runs in the caller's clauses, so the body's effects are rolled
-  back or kept as the caller's are. The function itself is still checked
+  back or kept as the caller's are; the caller needs the callee's declared
+  effects, as for any call. The function itself is still checked
   as any function is (types, effects, `<decides>`), with each choice read
   as any of its alternatives. Refused for now: one that calls itself,
   directly or not, a generic or overloaded one, one with named parameters
-  or a `return`, a method, one used as a function value, a call of one in
+  or a `return` or `defer:`, a method, one used as a function value, a call of one in
   an `if`'s branch, and, since its body is inlined where other names may be
   in scope, one whose name, or a name its body uses from outside, is also
   the name of a parameter, local, field or method anywhere in the program.
