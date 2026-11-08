@@ -1808,22 +1808,38 @@ partial def elabApp (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (brack
     (exp : Option Ty) : EM R := do
   match args with
   | [a] =>
-    if ctx.retries ≥ 3 then return ← elabAppBase ctx p f args bracket exp
+    -- (nested retries are bounded: each level elaborates its argument again)
+    if ctx.retries ≥ 8 then return ← elabAppBase ctx p f args bracket exp
     let saved ← get
+    -- (the state is restored between attempts, but not the overload cache)
+    let restore : EM Unit := do set { saved with natTys := (← get).natTys }
     tryCatch (elabAppBase ctx p f args bracket exp) fun err => do
-      set saved
+      restore
       let c2 := { ctx with retries := ctx.retries + 1 }
+      -- a method's receiver is evaluated first, then the tuple
+      let (pre, c2, f') ← match f with
+        | .member mp obj m =>
+          if (match obj with | .ident _ "(super:)" => true | _ => false) then pure ([], c2, f) else
+          match ← tryCatch (some <$> elabE c2 obj none) (fun _ => pure none) with
+          | some ro =>
+            let to ← fresh ro.ty
+            let nm := s!"$receiver{to}"
+            pure ([Expr.assign to ro.e],
+              { c2 with locals := { name := nm, slot := to, ty := ro.ty, mutable := false } :: c2.locals },
+              SExpr.member mp (.ident mp nm) m)
+          | none => pure ([], c2, f)
+        | _ => pure ([], c2, f)
       match ← tryCatch (some <$> elabE c2 a none) (fun _ => pure none) with
       | some ⟨e, .tup ts⟩ =>
-        if ts.length < 2 then set saved; throw err
+        if ts.length < 2 then restore; throw err
         let tt ← fresh (.tup ts)
         let nm := s!"$tuple{tt}"
         let c3 := { c2 with locals := { name := nm, slot := tt, ty := .tup ts, mutable := false } :: c2.locals }
         let parts := (List.range ts.length).map fun (i : Nat) => SExpr.app a.pos (.ident a.pos nm) [.int a.pos (i : Int)] false
-        match ← tryCatch (some <$> elabAppBase c3 p f parts bracket exp) (fun _ => pure none) with
-        | some r => return ⟨.seq (.assign tt e) r.e, r.ty⟩
-        | none => set saved; throw err
-      | _ => set saved; throw err
+        match ← tryCatch (some <$> elabAppBase c3 p f' parts bracket exp) (fun _ => pure none) with
+        | some r => return ⟨(pre ++ [Expr.assign tt e]).foldr Expr.seq r.e, r.ty⟩
+        | none => restore; throw err
+      | _ => restore; throw err
   | _ => elabAppBase ctx p f args bracket exp
 
 partial def elabAppBase (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (bracket : Bool)
