@@ -3642,7 +3642,7 @@ partial def elabSet (ctx : Ctx) (p : Pos) (lhs0 : SExpr) (op : Option String) (r
       return ⟨.seq (.assign ti ri.e)
         (.seq (.assign l.slot (.prim .arrSet [.local l.slot, .local ti, .assign tv v])) (.local tv)), t⟩
     | ty => eerr p s!"cannot index a value of type {ty.show}"
-  | .member mp (.ident _ n) f =>
+  | .member _ (.ident _ n) f =>
     -- an object's field: written in place, through any variable (#34)
     if let some l := ctx.lookup n then
       if let .struct sn _ := l.ty then
@@ -4205,7 +4205,6 @@ def expandCtors (ctors : List (Pos × String × List SParam × List TParam × Li
     if onCycle then throw s!"{p.show}: {k} delegates to itself, through {d}"
     if intoCycle then throw s!"{p.show}: {k} delegates to {d}, which delegates in a cycle"
   for (p, k, _, _, _, _, items) in ctors do
-    let fs := (setBy.lookup k).getD []
     let mine := (directOf items).map (·.2) ++ (((delegsOf items).head?.bind fun (_, d) => setBy.lookup d).getD [])
     if let some f := mine.find? fun f => (mine.filter (· == f)).length > 1 then
       throw s!"{p.show}: {k} sets {f} twice: itself, and by delegating"
@@ -5085,15 +5084,15 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
     let j := mainJ
     let runIdx := fns.size
     let sch : Expr := .local 0
-    -- slots: sched, Main's frame, a status, Main done, a root ended, a
-    -- root, the next cell, a cell, another cell
+    -- slots: sched, Main's frame, a status, Main done, a root, the next
+    -- cell, a cell, another cell (a root that ended is recorded in the
+    -- scheduler's `deadF`)
     let st := 2
     let mainDone := 3
-    let died := 4
-    let r := 5
-    let cur := 6
-    let c := 7
-    let n := 8
+    let r := 4
+    let cur := 5
+    let c := 6
+    let n := 7
     let dispatch : Expr := ((List.range roots.size).foldr (fun k acc =>
       Expr.ite (.heap (.isTag [tagBase + rootJ k]) [.local r]) (.call (trampOf k) [.local r, sch]) acc)
       ((List.range B).foldr (fun K acc =>
@@ -5153,10 +5152,10 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
       .ite (.prim .lt [.heap (.get 1) [sch], Suspend.int 0]) (.seq (.prim .userErr []) Suspend.vd) Suspend.vd,
       .heap (.set 0) [sch, .heap (.get 1) [sch]]]))]
     let cellInit : Expr := .heap (.new cellTag) [.local 1, .lit .none]
-    fns := fns.push { name := "$Run", arity := 2, nslots := 9, decides := false, writes := true,
-                      body := initPrefixE 2 [Suspend.int 0, Suspend.int 0, Suspend.int 0, .local 1, .lit .none,
+    fns := fns.push { name := "$Run", arity := 2, nslots := 8, decides := false, writes := true,
+                      body := initPrefixE 2 [Suspend.int 0, Suspend.int 0, .local 1, .lit .none,
                         cellInit, cellInit] run }
-    slotTys := slotTys.push [schedTy, frameTy j, .int, .int, .int, rootAny, .opt cellTy, cellTy, cellTy]
+    slotTys := slotTys.push [schedTy, frameTy j, .int, .int, rootAny, .opt cellTy, cellTy, cellTy]
     fsigs := fsigs ++ [([schedTy, frameTy j], VTy.void)]
     -- (the prelude calls a function without arguments, `checkPrelude`)
     -- (the scheduler is its class's prototype, so that immediate code can
@@ -6176,7 +6175,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   -- that omits the field)
   for t in allTops do
     match t with
-    | .const p n none (.structDef _ _ _) =>
+    | .const _ n none (.structDef _ _ _) =>
       let nps := ((env.sparams.lookup n).getD []).map fun (v, c) => Ty.param v c
       let senv := { env with tvars := (env.sparams.lookup n).getD [] |>.map fun (v, c) => (v, Ty.param v c) }
       let ctx : Ctx := { sigs := allSigs, sigProg, types := senv, canFail := true, inDefaultCheck := true }
@@ -6343,7 +6342,6 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   let fsigs0 := fsigs0 ++ accSigs.toList
   let mut fsigs := fsigs0
   let mut frameClasses : Array (List VTy) := #[]
-  let mut extraSigs : Array (List VTy × VTy) := #[]
   let mut mainCall : Expr := .call mainSig.idx []
   -- (an error of the lowering names a function: with its position)
   let inFn := inFnMsg (tops ++ generics)
