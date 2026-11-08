@@ -1071,7 +1071,11 @@ partial def slotDefault (env : TyEnv) (dictBase : Nat) (params : List Ty) (visit
     if env.isRefClass n then
       -- the first class below `n` whose placeholder needs no instance of a
       -- class whose placeholder is being built
-      let mut lastErr := s!"no class at or below {n} can be constructed without an instance of itself, so a variable or temporary of type {(Ty.struct n ts).show} has no initial value"
+      let selfErr := s!"no class at or below {n} can be constructed without an instance of itself, so a variable or temporary of type {(Ty.struct n ts).show} has no initial value"
+      let mut lastErr := selfErr
+      -- (a failure for want of an instance of itself deeper down is this
+      -- one, at the type the slot has: other failures are passed on)
+      let keep (msg : String) : String := if msg.startsWith "no class at or below " then selfErr else msg
       -- (instantiations that grow without end are cut off)
       let key := (Ty.struct n ts).show
       if visiting.length > 16 || key.length > 400 then throw lastErr
@@ -1090,20 +1094,27 @@ partial def slotDefault (env : TyEnv) (dictBase : Nat) (params : List Ty) (visit
         match (env.fieldsSeen n ts d).mapM fun (_, ft, _) =>
             slotDefault env dictBase params (dkey :: visiting) ft with
         | .ok fs => return .heap (.new (env.tagOf d)) fs
-        | .error msg => lastErr := msg
+        | .error msg => lastErr := keep msg
       if !pinnedOut.isEmpty && pinnedOut.length == (env.concreteBelow n).length then
         -- (its hidden placeholder class, or another's below it, which fix
         -- no more than it does, #157)
         let h0 := s!"{n}$placeholder"
         let hs := (if env.phs.contains h0 then [h0] else []) ++ env.phs.filter fun h => h != h0 && env.isSub h n
         for h in hs do
-          -- (at these type arguments: a placeholder at others is another
-          -- object, `slot(slot(u))`'s holds `slot(u)`'s)
-          let hkey := s!"{h} as {key}"
-          if !visiting.contains hkey then
+          -- (again only at a part of each type it is being built at: a
+          -- placeholder at others is another object, `slot(slot(u))`'s
+          -- holds `slot(u)`'s, and the types shrink, so this ends; one at
+          -- types that grow, `n(t)`'s holding `n([]t)`'s, never would)
+          let hpre := s!"{h} as "
+          let hkey := hpre ++ key
+          let shrinks := visiting.all fun v =>
+            !v.startsWith hpre ||
+              (let k0 := String.ofList (v.toList.drop hpre.length)
+               key.length < k0.length && (k0.splitOn key).length > 1)
+          if shrinks then
             match (env.fieldsSeen n ts h).mapM fun (_, ft, _) => slotDefault env dictBase params (hkey :: visiting) ft with
             | .ok fs => return .heap (.new (env.tagOf h)) fs
-            | .error msg => lastErr := msg
+            | .error msg => lastErr := keep msg
         if !hs.isEmpty then throw lastErr
         throw s!"a variable or temporary of type {key} needs an initial value, and every class below {n} ({", ".intercalate pinnedOut}) fixes type arguments that {key} does not have, so none can be it (#142)"
       throw lastErr
