@@ -606,11 +606,20 @@ Main():void =
   - `set L op= R` evaluates `L`'s indices, then for `op=` its old value, then
     `R`'s lifted code, as `set` does.
 
-  Refused for now: a choice inside a block, a branch, a struct construction
-  (whose fields are evaluated in declaration order, not as written), a
-  named argument, a call where a named argument comes before the choice,
-  another choice's alternative, either side of `and`, the right of `or`, a
-  range, or a `set`'s path (`set A[0 | 1] = …`); and
+  An `if … else if … else …` whose branches are choices or plain values is
+  itself a choice (#235). Its conditions run once and pick a branch, whose
+  alternatives are then its values, seeing the names its conditions bind:
+
+  ```verse
+  for (Z := if (V := M?) then (V | V * 10) else 0) { … }   # V, V * 10; or 0
+  ```
+
+  Refused for now: a choice inside a block, a struct construction (whose
+  fields are evaluated in declaration order, not as written), a named
+  argument, a call where a named argument comes before the choice, another
+  choice's alternative, either side of `and`, the right of `or`, a range, a
+  `set`'s path (`set A[0 | 1] = …`), or the branch of an `if` without
+  `else` or one that is more than a choice or a value; and
   a choice anywhere outside these failure contexts. (A field reached
   through a receiver that is not a variable or `Self`, as `F().Items[…]`,
   is read after the choice, since only the receiver's value is bound

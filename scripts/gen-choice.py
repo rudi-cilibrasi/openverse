@@ -79,6 +79,8 @@ def alt_eval(a, st):
 # ('cmp', lhs, op, c)          lhs: ('var', x) | ('N',) | ('sum', x, y)
 # ('setN', d) | ('print', tag)
 # ('bindsum', x, a, b)         x := a + b of two names (always succeeds)
+# ('bchoice', x, c, alts1, alts2)  x := if (N > c) then (alts1) else (alts2): the
+#                              branch picked once, then its alternatives (#235)
 # ('sugar', src, expansion)    a clause with choices inside its expressions:
 #                              its source, and the clauses it is lifted to
 
@@ -117,6 +119,8 @@ OPS = {'>': lambda a, b: a > b, '<': lambda a, b: a < b, '<>': lambda a, b: a !=
 
 def clause_src(c):
     k = c[0]
+    if k == 'bchoice':
+        return f'{c[1]} := if (N > {c[2]}) then ({choice_src(c[3])}) else ({choice_src(c[4])})'
     if k == 'sugar':
         return c[1]
     if k == 'choice':
@@ -154,8 +158,9 @@ def one(cls, st):
     if not cls:
         return st
     c, rest = cls[0], cls[1:]
-    if c[0] == 'choice':
-        for a in flat_alts(c[2]):
+    if c[0] in ('choice', 'bchoice'):
+        alts = flat_alts(c[2]) if c[0] == 'choice' else flat_alts(c[3] if st.n > c[2] else c[4])
+        for a in alts:
             s2 = st.copy()
             v = alt_eval(a, s2)
             if v is None:
@@ -180,7 +185,7 @@ def expand(cls):
 
 
 def is_gen(c):
-    return c[0] in ('choice', 'range')
+    return c[0] in ('choice', 'range', 'bchoice')
 
 
 def run_for(cls, body, st):
@@ -210,6 +215,8 @@ def run_for(cls, body, st):
         (g, fs), more = gs[0], gs[1:]
         if g[0] == 'choice':
             items = [('alt', a) for a in flat_alts(g[2])]
+        elif g[0] == 'bchoice':
+            items = [('alt', a) for a in flat_alts(g[3] if st.n > g[2] else g[4])]
         else:
             items = [('val', v) for v in range(g[2], g[3] + 1)]
         for kind, x in items:
@@ -319,6 +326,9 @@ class Gen:
             r = self.rng.random()
             if r < 0.45 or (i == n - 1 and not has_choice):
                 cls.append(self.choice(name)); names.append(name); has_choice = True
+            elif r < 0.52:
+                cls.append(('bchoice', name, self.rng.randint(0, 4), self.plain_alts(), self.plain_alts()))
+                names.append(name); has_choice = True
             elif r < 0.6:
                 c, bound = self.sugar(name, names)
                 cls.append(c); has_choice = True

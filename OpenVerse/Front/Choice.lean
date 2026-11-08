@@ -37,11 +37,27 @@ structure Binding where
   alts : List SExpr
   /-- For `set L = a | b`: `L`, at whose type the alternatives are taken. -/
   place : Option SExpr := none
+  /-- For an `if` with choices in its branches (#235): the `if`, whose
+      branches' alternatives the elaborator guards by the branch taken. -/
+  branchy : Option SExpr := none
 
 def binding? : SExpr → Option Binding
-  | .decl p x ty false (.app _ (.ident _ "$choice") as false) => some ⟨p, x, ty, as, none⟩
-  | .decl p x ty false (.app _ (.ident _ "$choiceAt") (l :: as) false) => some ⟨p, x, ty, as, some l⟩
+  | .decl p x ty false (.app _ (.ident _ "$choice") as false) => some ⟨p, x, ty, as, none, none⟩
+  | .decl p x ty false (.app _ (.ident _ "$choiceAt") (l :: as) false) => some ⟨p, x, ty, as, some l, none⟩
+  | .decl p x ty false (.app _ (.ident _ "$branchChoice") [i] false) => some ⟨p, x, ty, [], none, some i⟩
   | _ => none
+
+/-- An `if … else …` with a choice in a branch (the branches of an `else if`
+    chain included): it has the values of the branch its conditions pick. -/
+partial def isBranchy : SExpr → Bool
+  | .ite _ _ t (some e) => isChoice t || isChoice e || isBranchy t || isBranchy e
+  | _ => false
+
+/-- The branches of an `if … else if … else …` chain: each one's conditions
+    (none for the last `else`) and its expression. -/
+partial def arms : SExpr → List (Option (List SExpr) × SExpr)
+  | .ite _ cs t (some e) => (some cs, t) :: arms e
+  | e => [(none, e)]
 
 /-- The indices of a `set` path bound to names, in order (unless literals),
     and the path with those names in their places: `set` evaluates them
@@ -193,6 +209,7 @@ partial def headHas (hasL : SExpr → Bool) : SExpr → Bool
 /-- Whether `e` has a choice that lifting reaches. -/
 partial def hasLiftable : SExpr → Bool
   | .app _ (.ident _ "$choice") _ false => true
+  | e@(.ite ..) => isBranchy e
   | .app _ f args _ => headHas hasLiftable f || args.any fun a =>
       (match a with | .decl _ n _ _ _ => !n.startsWith "?" | _ => true) && hasLiftable a
   | .bin _ _ a b => hasLiftable a || hasLiftable b
@@ -241,6 +258,7 @@ partial def liftE (isVal : String → Bool) (isField : String → String → Boo
   if !hasLiftable e then return e
   match e with
   | .app p (.ident _ "$choice") _ false => LM.bind p "c" e
+  | .ite p .. => LM.bind p "c" (.app p (.ident p "$branchChoice") [e] false)
   | .app p f args br =>
     let (hs, whole) := headOps isVal isField f
     let ops := hs ++ args
