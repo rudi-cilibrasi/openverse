@@ -119,8 +119,13 @@ stands, and the C runtime runs it unchanged. What is new is proved in
 - `chooseFirst_none`: with none, it ends with no value;
 - `firstE_of_brk` and `firstE_of_ok`: what those make of the context.
 
-These compose along the code the elaborator emits, a `seq` of clauses
-with each later choice in an earlier one's `inner`.
+These lemmas are sufficient conditions about the Core forms. The
+elaborator is meant to emit those forms (a `seq` of clauses, each later
+choice in an earlier one's `inner`), but that it does is tested, not
+proved, like the rest of the front end. The same goes for the reading for
+`for` and the order of values across choices. The evidence is the tests
+and `scripts/gen-choice.py`, a model of the readings written apart from
+the compiler.
 
 The emitted code ends its filters with `fail; void` and its success with
 `break; void`, not a bare `fail` or `break`. Code ending with a bare one

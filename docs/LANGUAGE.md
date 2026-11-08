@@ -575,27 +575,39 @@ Main():void =
 - **Where.** For now, a choice is the value of a binding (`X := a | b`,
   `X:t = a | b`, `set X = a | b`, `var X:t = a | b`) or a clause of its
   own, in an `if` condition, the clauses of a `for`, `first{…}`, `first(…){…}`,
-  `if{…}` and `for{…}`. A choice inside an expression (`(1 | 2) + 1`,
+  `if{…}`, `for{…}` and `assert{…}`. A choice inside an expression (`(1 | 2) + 1`,
   `X = 1 | 2`), or anywhere else, is refused, and so is a `break` in the
   clauses of an `if` or `first{…}` with a choice. `first{…}` with a choice
   can fail, so it must be in a failure context.
 - **Precedence.** `|` binds looser than arithmetic and tighter than the
   comparisons: `X = 1 | 2` is `X = (1 | 2)`.
 
-In Verse Core a choice is iteration over its alternatives' indices
-(`Expr.altE`, `Expr.chooseFirst`, `Expr.firstE` in `Core/Derived.lean`),
-so no proof or part of the C runtime changes. For the first success, the
-lemmas there say:
-- a choice breaks out at its first alternative that succeeds, in the state
-  that alternative left, with the ones before it rolled back
-  (`chooseFirst_brk`);
-- with none, it ends with no value (`chooseFirst_none`);
+**What is proved, and what is tested.** In Verse Core a choice is
+iteration over its alternatives' indices (`Expr.altE`, `Expr.chooseFirst`
+and `Expr.firstE` in `Core/Derived.lean`), so no proof or part of the C
+runtime changes. Every guarantee in the README's "What is proved" holds of
+programs with choices as of any other: one outcome, rollback of failure
+contexts, type safety. About choice itself, `Core/Derived.lean` proves
+facts about those Core forms, for the first success, as sufficient
+conditions:
+- If the alternatives before `j` fail, each started from the state at the
+  choice (so rolled back), and alternative `j` breaks, the choice breaks
+  in the state `j` left (`chooseFirst_brk`).
+- If they all fail, it ends with no value (`chooseFirst_none`). The
+  enclosing failure context then rolls back its effects (`ite_rollback`).
 - `firstE` turns the one into success and the other into failure
   (`firstE_of_brk`, `firstE_of_ok`).
 
-They compose: clauses before a choice come first in a `seq`, and a later
-choice is in an earlier one's `inner`. `scripts/fuzz-choice.sh` checks both
-implementations against a model of these rules.
+Four things are **tested, not proved**:
+- that the elaborator emits these forms as described above (the front end
+  is not verified; see DESIGN.md, "Translation validation");
+- the reading for `for`;
+- the order of values across several choices;
+- that the code before a choice runs once.
+
+The tests above check them, and `scripts/fuzz-choice.sh` runs both
+implementations against a model of these rules written apart from the
+compiler.
 
 ## any
 
