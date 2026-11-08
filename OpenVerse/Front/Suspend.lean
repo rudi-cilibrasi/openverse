@@ -740,10 +740,21 @@ partial def block (e : Expr) (k : Option (Expr → Expr)) : M (List Expr) := do
       | some k => return pre ++ [s, ← emit (pure (k v))]
     | none => return pre ++ [← emit (pure (app k (.call g rs)))]
   | .prim p es =>
-    let (pre, rs) ← operands es
+    -- (an array's or tuple's parts are checked against its expected type's)
+    let hints : List (Option VTy) := match p, (← read).expTy with
+      | .mkArr, some (.arr τ) => es.map fun _ => some τ
+      | .mkTup, some (.tup ts) => ts.map some
+      | _, _ => []
+    let (pre, rs) ← operands es hints
     return pre ++ [← emit (pure (app k (.prim p rs)))]
   | .heap op es =>
-    let (pre, rs) ← operands es
+    -- (an object's fields against its class's, at the expected type's
+    -- type arguments)
+    let env ← read
+    let hints : List (Option VTy) := match op, env.expTy with
+      | .new c, some (.ref _ args) => ((env.S.classes[c]?).getD []).map fun f => some (f.inst args)
+      | _, _ => []
+    let (pre, rs) ← operands es hints
     return pre ++ [← emit (pure (app k (.heap op rs)))]
   | .print e1 =>
     let (pre, rs) ← operands [e1]
