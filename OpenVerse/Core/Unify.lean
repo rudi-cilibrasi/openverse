@@ -5,9 +5,14 @@
   (`VTy`, whose variables are `var j`). It is sound (its result makes both
   sides of every equation equal), most general (every unifier factors
   through it: `(σ j).subst R = R j`), and complete (it finds a unifier
-  whenever there is one). A refinement by pins that relate type arguments
-  to each other (a class that repeats its parent's type arguments,
-  `dup(t) := class(pair(t, t))`) is such a most general unifier.
+  whenever there is one). The refinement by pins that relate type
+  arguments to each other (a class that repeats its parent's type
+  arguments, `dup(t) := class(pair(t, t))`) is to be such a most general
+  unifier (#171).
+
+  `unify` composes its result as a chain of substitutions, each applied
+  lazily: fine for the few short equations of pins, though a long chain
+  of eliminations can make the types it gives large.
 -/
 import OpenVerse.Core.TypeSafety
 
@@ -70,7 +75,7 @@ def Eqs.subst (σ : Nat → VTy) (eqs : Eqs) : Eqs := eqs.map fun p => (p.1.subs
 def Eqs.Unifies (σ : Nat → VTy) (eqs : Eqs) : Prop := ∀ p ∈ eqs, p.1.subst σ = p.2.subst σ
 
 /-- `t` for variable `x`, every other variable kept. -/
-def single (x : Nat) (t : VTy) : Nat → VTy := fun j => if j = x then t else .var j
+def Unify.single (x : Nat) (t : VTy) : Nat → VTy := fun j => if j = x then t else .var j
 
 /-! ### Variables and bounds -/
 
@@ -132,7 +137,7 @@ theorem Eqs.nvars_le : ∀ (eqs : Eqs) (n : Nat), (∀ j, eqs.has j = true → j
 /-! ### Counting -/
 
 /-- Counting over a longer range adds nothing a predicate does not hold of. -/
-theorem countP_range_extend (p : Nat → Bool) {m n : Nat} (hmn : m ≤ n) (hp : ∀ j, p j = true → j < m) :
+theorem Unify.countP_range_extend (p : Nat → Bool) {m n : Nat} (hmn : m ≤ n) (hp : ∀ j, p j = true → j < m) :
     (List.range n).countP p = (List.range m).countP p := by
   induction n with
   | zero => simp [Nat.le_zero.mp hmn]
@@ -147,7 +152,7 @@ theorem countP_range_extend (p : Nat → Bool) {m n : Nat} (hmn : m ≤ n) (hp :
     · rw [h]
 
 /-- A predicate that implies another, and fails where the other holds, counts fewer. -/
-theorem countP_lt_of_imp {α} (p q : α → Bool) : ∀ (l : List α), (∀ x ∈ l, p x = true → q x = true) →
+theorem Unify.countP_lt_of_imp {α} (p q : α → Bool) : ∀ (l : List α), (∀ x ∈ l, p x = true → q x = true) →
     ∀ y ∈ l, q y = true → p y = false → l.countP p < l.countP q
   | [], _, y, hy, _, _ => by simp at hy
   | x :: xs, himp, y, hy, hq, hp => by
@@ -155,7 +160,7 @@ theorem countP_lt_of_imp {α} (p q : α → Bool) : ∀ (l : List α), (∀ x �
     have hle : xs.countP p ≤ xs.countP q := List.countP_mono_left hrest
     rcases List.mem_cons.mp hy with rfl | hy'
     · simp [hq, hp]; omega
-    · have ih := countP_lt_of_imp p q xs hrest y hy' hq hp
+    · have ih := Unify.countP_lt_of_imp p q xs hrest y hy' hq hp
       simp only [List.countP_cons]
       have hx : (if p x = true then 1 else 0) ≤ (if q x = true then 1 else 0) := by
         by_cases hpx : p x = true
@@ -209,7 +214,7 @@ theorem Eqs.count_le {new old : Eqs} (h : ∀ j, new.has j = true → old.has j 
     new.count ≤ old.count := by
   unfold Eqs.count
   have hn : new.nvars ≤ old.nvars := Eqs.nvars_le new old.nvars fun j hj => Eqs.lt_nvars old j (h j hj)
-  rw [← countP_range_extend (Eqs.has · new) hn (fun j hj => Eqs.lt_nvars new j hj)]
+  rw [← Unify.countP_range_extend (Eqs.has · new) hn (fun j hj => Eqs.lt_nvars new j hj)]
   exact List.countP_mono_left fun j _ hj => h j hj
 
 /-- ... and fewer when one of the other's is not among them. -/
@@ -217,27 +222,27 @@ theorem Eqs.count_lt {new old : Eqs} (h : ∀ j, new.has j = true → old.has j 
     (hx : old.has x = true) (hnx : new.has x = false) : new.count < old.count := by
   unfold Eqs.count
   have hn : new.nvars ≤ old.nvars := Eqs.nvars_le new old.nvars fun j hj => Eqs.lt_nvars old j (h j hj)
-  rw [← countP_range_extend (Eqs.has · new) hn (fun j hj => Eqs.lt_nvars new j hj)]
-  exact countP_lt_of_imp _ _ _ (fun j _ hj => h j hj) x
+  rw [← Unify.countP_range_extend (Eqs.has · new) hn (fun j hj => Eqs.lt_nvars new j hj)]
+  exact Unify.countP_lt_of_imp _ _ _ (fun j _ hj => h j hj) x
     (List.mem_range.mpr (Eqs.lt_nvars old x hx)) hx hnx
 
 /-- Eliminating a variable `x` for a type `t` without it: the variables of
     the rest, under the substitution, are among the equations', but `x`. -/
 theorem Eqs.count_elim {x : Nat} {t : VTy} {old r : Eqs} (htx : t.hasVar x = false)
     (hx : old.has x = true) (ht : ∀ j, t.hasVar j = true → old.has j = true)
-    (hr : ∀ j, r.has j = true → old.has j = true) : (r.subst (single x t)).count < old.count := by
+    (hr : ∀ j, r.has j = true → old.has j = true) : (r.subst (Unify.single x t)).count < old.count := by
   refine Eqs.count_lt (x := x) ?_ hx ?_
   · intro j hj
     obtain ⟨k, hk, hkj⟩ := Eqs.has_subst r hj
     by_cases hkx : k = x
-    · subst hkx; simp only [single, ite_true] at hkj; exact ht j hkj
-    · simp only [single, hkx, ite_false, VTy.hasVar, beq_iff_eq] at hkj; subst hkj; exact hr k hk
-  · cases h : (r.subst (single x t)).has x
+    · subst hkx; simp only [Unify.single, ite_true] at hkj; exact ht j hkj
+    · simp only [Unify.single, hkx, ite_false, VTy.hasVar, beq_iff_eq] at hkj; subst hkj; exact hr k hk
+  · cases h : (r.subst (Unify.single x t)).has x
     · rfl
     · obtain ⟨k, _, hkx⟩ := Eqs.has_subst r h
       by_cases hk : k = x
-      · subst hk; simp [single, htx] at hkx
-      · simp [single, hk, VTy.hasVar] at hkx
+      · subst hk; simp [Unify.single, htx] at hkx
+      · simp [Unify.single, hk, VTy.hasVar] at hkx
 
 /-! ### Sizes of decompositions -/
 
@@ -271,7 +276,7 @@ theorem Eqs.has_append {j : Nat} : ∀ (a b : Eqs), Eqs.has j (a ++ b) = (a.has 
   | (x, y) :: a, b => by simp [Eqs.has, Eqs.has_append a b, Bool.or_assoc]
 
 /-- A lexicographic decrease of the measure. -/
-theorem lex_lt {a b c d : Nat} (h : a < b ∨ (a ≤ b ∧ c < d)) :
+theorem Unify.lex_lt {a b c d : Nat} (h : a < b ∨ (a ≤ b ∧ c < d)) :
     Prod.Lex (· < ·) (· < ·) (a, c) (b, d) := by
   rcases h with h | ⟨h1, h2⟩
   · exact Prod.Lex.left _ _ h
@@ -283,7 +288,7 @@ theorem lex_lt {a b c d : Nat} (h : a < b ∨ (a ≤ b ∧ c < d)) :
 
 /-- The substitution `σ` after `t` for `x`: `x` to `t` under `σ`, every
     other variable as `σ` gives it. -/
-def thenSubst (x : Nat) (t : VTy) (σ : Nat → VTy) : Nat → VTy := fun j => (single x t j).subst σ
+def Unify.thenSubst (x : Nat) (t : VTy) (σ : Nat → VTy) : Nat → VTy := fun j => (Unify.single x t j).subst σ
 
 /-- Robinson's unification of the equations: a most general unifier, if
     any. -/
@@ -292,10 +297,10 @@ def unify : Eqs → Option (Nat → VTy)
   | (.var x, b) :: r =>
     if b = .var x then unify r
     else if b.hasVar x then none
-    else (unify (Eqs.subst (single x b) r)).map (thenSubst x b)
+    else (unify (Eqs.subst (Unify.single x b) r)).map (Unify.thenSubst x b)
   | (a, .var y) :: r =>
     if a.hasVar y then none
-    else (unify (Eqs.subst (single y a) r)).map (thenSubst y a)
+    else (unify (Eqs.subst (Unify.single y a) r)).map (Unify.thenSubst y a)
   | (.int, .int) :: r | (.logic, .logic) :: r | (.char, .char) :: r | (.float, .float) :: r => unify r
   | (.arr a, .arr b) :: r | (.opt a, .opt b) :: r => unify ((a, b) :: r)
   | (.tup as, .tup bs) :: r =>
@@ -305,7 +310,7 @@ def unify : Eqs → Option (Nat → VTy)
   | _ :: _ => none
 termination_by eqs => (Eqs.count eqs, Eqs.size eqs)
 decreasing_by
-  all_goals apply lex_lt
+  all_goals apply Unify.lex_lt
   · exact Or.inr ⟨Eqs.count_le (fun j hj => by simp [Eqs.has, hj]),
       by have := VTy.usize_pos b; simp [Eqs.size, VTy.usize]; omega⟩
   · rename_i _ h2
@@ -349,22 +354,22 @@ decreasing_by
 
 /-! ### Facts about substitutions -/
 
-theorem VTy.subst_single_of_not {x : Nat} {t u : VTy} (h : u.hasVar x = false) : u.subst (single x t) = u := by
-  calc u.subst (single x t) = u.subst VTy.var := VTy.subst_congr_vars u fun j hj => by
+theorem VTy.subst_single_of_not {x : Nat} {t u : VTy} (h : u.hasVar x = false) : u.subst (Unify.single x t) = u := by
+  calc u.subst (Unify.single x t) = u.subst VTy.var := VTy.subst_congr_vars u fun j hj => by
         have : j ≠ x := fun hjx => by subst hjx; rw [h] at hj; exact absurd hj (by simp)
-        simp [single, this]
+        simp [Unify.single, this]
     _ = u := VTy.subst_id u
 
 theorem VTy.subst_thenSubst (x : Nat) (t : VTy) (σ : Nat → VTy) (u : VTy) :
-    u.subst (thenSubst x t σ) = (u.subst (single x t)).subst σ := (VTy.subst_comp _ _ u).symm
+    u.subst (Unify.thenSubst x t σ) = (u.subst (Unify.single x t)).subst σ := (VTy.subst_comp _ _ u).symm
 
 theorem VTy.subst_single_unifier {R : Nat → VTy} {x : Nat} {t : VTy} (hR : R x = t.subst R) (u : VTy) :
-    (u.subst (single x t)).subst R = u.subst R := by
+    (u.subst (Unify.single x t)).subst R = u.subst R := by
   rw [VTy.subst_comp]
   exact VTy.subst_congr_vars u fun k _ => by
     by_cases hk : k = x
-    · subst hk; simp [single, hR]
-    · simp [single, hk]
+    · subst hk; simp [Unify.single, hR]
+    · simp [Unify.single, hk]
 
 theorem Eqs.unifies_nil (σ : Nat → VTy) : Eqs.Unifies σ [] := by simp [Eqs.Unifies]
 
@@ -474,32 +479,32 @@ theorem UnifySpec.of_none {old : Eqs} (hu : unify old = none) (hno : ∀ R, ¬ E
   rw [hu] at h; exact absurd h (by simp)
 
 theorem UnifySpec.of_elim {x : Nat} {b : VTy} {r old : Eqs} (hbx : b.hasVar x = false)
-    (hu : unify old = (unify (Eqs.subst (single x b) r)).map (thenSubst x b))
+    (hu : unify old = (unify (Eqs.subst (Unify.single x b) r)).map (Unify.thenSubst x b))
     (hiff : ∀ R, Eqs.Unifies R old ↔ R x = b.subst R ∧ Eqs.Unifies R r)
-    (ih : UnifySpec (Eqs.subst (single x b) r)) : UnifySpec old := by
+    (ih : UnifySpec (Eqs.subst (Unify.single x b) r)) : UnifySpec old := by
   -- (a unifier of the equations unifies the rest under the substitution)
-  have hrest : ∀ R, R x = b.subst R → Eqs.Unifies R r → Eqs.Unifies R (Eqs.subst (single x b) r) := by
+  have hrest : ∀ R, R x = b.subst R → Eqs.Unifies R r → Eqs.Unifies R (Eqs.subst (Unify.single x b) r) := by
     intro R hx hr
     rw [Eqs.unifies_subst]
-    have : (fun j => (single x b j).subst R) = R := funext fun j => by
+    have : (fun j => (Unify.single x b j).subst R) = R := funext fun j => by
       by_cases hj : j = x
-      · subst hj; simp [single, hx]
-      · simp [single, hj]
+      · subst hj; simp [Unify.single, hx]
+      · simp [Unify.single, hj]
     rw [this]; exact hr
   refine ⟨fun σ h => ?_, fun R hR => ?_⟩
   · rw [hu] at h
     obtain ⟨σ', h', rfl⟩ := Option.map_eq_some_iff.mp h
     obtain ⟨h1, h2⟩ := ih.1 σ' h'
     refine ⟨(hiff _).mpr ⟨?_, Eqs.unifies_subst.mp h1⟩, fun R hR j => ?_⟩
-    · show (single x b x).subst σ' = b.subst (thenSubst x b σ')
-      rw [VTy.subst_thenSubst, VTy.subst_single_of_not hbx]; simp [single]
+    · show (Unify.single x b x).subst σ' = b.subst (Unify.thenSubst x b σ')
+      rw [VTy.subst_thenSubst, VTy.subst_single_of_not hbx]; simp [Unify.single]
     · obtain ⟨hx, hr⟩ := (hiff R).mp hR
       have hσ' := h2 R (hrest R hx hr)
-      show ((single x b j).subst σ').subst R = R j
+      show ((Unify.single x b j).subst σ').subst R = R j
       rw [VTy.subst_comp, show (fun k => (σ' k).subst R) = R from funext hσ']
       by_cases hj : j = x
-      · subst hj; simp [single, hx]
-      · simp [single, hj]
+      · subst hj; simp [Unify.single, hx]
+      · simp [Unify.single, hj]
   · obtain ⟨hx, hr⟩ := (hiff R).mp hR
     rw [hu]
     simpa using ih.2 R (hrest R hx hr)
@@ -524,7 +529,7 @@ theorem unify_spec (eqs : Eqs) : UnifySpec eqs := by
     exact UnifySpec.of_none hu fun R hR =>
       VTy.occurs_no_unifier hocc (fun h => hnv y h) (by simpa using (Eqs.unifies_cons.mp hR).1.symm)
   | case6 a y r hnv hocc ih =>
-    have hu : unify ((a, VTy.var y) :: r) = (unify (Eqs.subst (single y a) r)).map (thenSubst y a) := by
+    have hu : unify ((a, VTy.var y) :: r) = (unify (Eqs.subst (Unify.single y a) r)).map (Unify.thenSubst y a) := by
       cases a <;> simp_all [unify]
     exact UnifySpec.of_elim (by simpa using hocc) hu
       (fun R => by simp [Eqs.unifies_cons, eq_comm]) ih
@@ -564,7 +569,7 @@ theorem unify_sound {eqs : Eqs} {σ : Nat → VTy} (h : unify eqs = some σ) : E
   ((unify_spec eqs).1 σ h).1
 
 /-- Every unifier factors through what `unify` gives: it is a most general
-    unifier, and idempotent. -/
+    unifier. -/
 theorem unify_mgu {eqs : Eqs} {σ R : Nat → VTy} (h : unify eqs = some σ) (hR : Eqs.Unifies R eqs) (j : Nat) :
     (σ j).subst R = R j :=
   ((unify_spec eqs).1 σ h).2 R hR j
@@ -572,5 +577,39 @@ theorem unify_mgu {eqs : Eqs} {σ R : Nat → VTy} (h : unify eqs = some σ) (hR
 /-- `unify` finds a unifier whenever there is one. -/
 theorem unify_complete {eqs : Eqs} {R : Nat → VTy} (hR : Eqs.Unifies R eqs) : ∃ σ, unify eqs = some σ :=
   Option.isSome_iff_exists.mp ((unify_spec eqs).2 R hR)
+
+/-- What `unify` gives is idempotent: it is a unifier, so it factors through itself. -/
+theorem unify_idem {eqs : Eqs} {σ : Nat → VTy} (h : unify eqs = some σ) (j : Nat) :
+    (σ j).subst σ = σ j :=
+  unify_mgu h (unify_sound h) j
+
+/-- `unify` fails exactly when nothing unifies the equations. -/
+theorem unify_eq_none_iff {eqs : Eqs} : unify eqs = none ↔ ∀ R, ¬ Eqs.Unifies R eqs := by
+  constructor
+  · intro h R hR
+    obtain ⟨σ, hσ⟩ := unify_complete hR
+    rw [h] at hσ; cases hσ
+  · intro h
+    cases hu : unify eqs with
+    | none => rfl
+    | some σ => exact absurd (unify_sound hu) (h σ)
+
+/-! ### Examples -/
+
+/-- The first `n` variables' images under what `unify` gives. -/
+private def unifyAt (n : Nat) (eqs : Eqs) : Option (List VTy) :=
+  (unify eqs).map fun σ => (List.range n).map σ
+
+-- `dup(t) := class(pair(t, t))`: the second argument is the first, twice over
+example : unifyAt 2 [(.var 1, .tup [.var 0, .var 0])] = some [.var 0, .tup [.var 0, .var 0]] := by
+  native_decide
+-- a chain of variables ends at the type it is equal to
+example : unifyAt 3 [(.var 0, .var 1), (.var 1, .var 2), (.var 2, .int)] = some [.int, .int, .int] := by
+  native_decide
+-- the occurs check, either way round
+example : unifyAt 1 [(.var 0, .arr (.var 0))] = none := by native_decide
+example : unifyAt 1 [(.opt (.var 0), .var 0)] = none := by native_decide
+-- tuples of different lengths
+example : unifyAt 1 [(.tup [.var 0], .tup [.int, .int])] = none := by native_decide
 
 end OpenVerse
