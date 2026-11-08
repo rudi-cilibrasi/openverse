@@ -170,6 +170,13 @@ structure TyEnv where
       (#142): those at or below a class whose implementation of a method
       fixes type arguments that the method's declaring class leaves open. -/
   pinned : List String := []
+  /-- The fields read or written through an interface, where they sit at
+      different places in the classes below it, of the classes that fix the
+      interface's type arguments (#157): (class, field), each reached through
+      an accessor pair `get`, `set` at functions `fieldAccBase + 2i`, `+ 1`,
+      dispatched under the refinement the class's pins give, as a method. -/
+  fieldAcc : List (String × String) := []
+  fieldAccBase : Nat := 0
   /-- The type arguments of each class's parametric superclass (#39), in
       terms of the class's own type parameters: `sub(t) := class(base(t))`
       gives `base ↦ [t]`. -/
@@ -1474,13 +1481,25 @@ def setFieldAt (env : TyEnv) (p : Pos) (sn : String) (targs : List Ty) (obj : Na
   let ds := env.concreteBelow sn
   let pos := ds.map fun d => ((fieldIndex (env.fields d []) f).map (·.1)).getD k
   if pos.all (· == k) then return .heap (.set k) [.local obj, v]
-  if let some d := ds.find? (!env.sameCore · sn) then
-    eerr p s!"field '{f}' of {sn} sits at different places in the classes below it, and {d} fixes or repeats its type arguments: setting it is not supported yet (#53)"
+  if let some d := ds.find? fun d => !env.sameCore d sn && (env.fieldAcc.idxOf? (d, f)).isNone then
+    eerr p s!"field '{f}' of {sn} sits at different places in the classes below it, and {d} repeats its type arguments or fixes them to types that mention type parameters: setting it is not supported yet (#53, #157)"
   let tv ← fresh t
   let mut acc : Expr := .prim .userErr []   -- no class: unreachable
+  let mut refined := false
   for (d, kd) in (ds.zip pos).reverse do
-    let yd ← fresh (.struct d (env.argsAt sn targs d))
-    acc := .ite (.assign yd (.heap (.isTag [env.tagOf d]) [.local obj])) (.heap (.set kd) [.local yd, .local tv]) acc
+    match env.fieldAcc.idxOf? (d, f) with
+    | some i =>
+      -- (a class that fixes the type arguments: its setter, under the
+      -- refinement, #157)
+      acc := .ite (.heap (.isTag [env.tagOf d]) [.local obj]) (.call (env.fieldAccBase + 2 * i + 1) [.local obj, .local tv]) acc
+      refined := true
+    | none =>
+      let yd ← fresh (.struct d (env.argsAt sn targs d))
+      acc := .ite (.assign yd (.heap (.isTag [env.tagOf d]) [.local obj])) (.heap (.set kd) [.local yd, .local tv]) acc
+  if refined then
+    -- (checked against the field's type, as the refined calls need one)
+    let y ← fresh t
+    return .seq (.assign tv v) (.assign y acc)
   return .seq (.assign tv v) acc
 
 /-- The UTF-8 encoding of the char32 in slot `tc`, a Unicode scalar value:
@@ -3725,13 +3744,26 @@ partial def elabMember (ctx : Ctx) (p : Pos) (r : R) (m : String) : EM R := do
         let pos := ds.map fun d => ((fieldIndex (ctx.types.fields d []) f).map (·.1)).getD k
         if ctx.types.isVarField sn f then noteFx p ["reads"]
         if pos.all (· == k) then return ⟨.heap (.get k) [r.e], t⟩
-        if let some d := ds.find? (!ctx.types.sameCore · sn) then
-          eerr p s!"field '{f}' of {sn} sits at different places in the classes below it, and {d} fixes or repeats its type arguments: reading it is not supported yet (#53)"
+        let env := ctx.types
+        if let some d := ds.find? fun d => !env.sameCore d sn && (env.fieldAcc.idxOf? (d, f)).isNone then
+          eerr p s!"field '{f}' of {sn} sits at different places in the classes below it, and {d} repeats its type arguments or fixes them to types that mention type parameters: reading it is not supported yet (#53, #157)"
         let x ← fresh r.ty
         let mut acc : Expr := .prim .userErr []   -- no class: unreachable
+        let mut refined := false
         for (d, kd) in (ds.zip pos).reverse do
-          let yd ← fresh (.struct d (ctx.types.argsAt sn targs d))
-          acc := .ite (.assign yd (.heap (.isTag [ctx.types.tagOf d]) [.local x])) (.heap (.get kd) [.local yd]) acc
+          match env.fieldAcc.idxOf? (d, f) with
+          | some i =>
+            -- (a class that fixes the type arguments: its getter, under the
+            -- refinement, #157)
+            acc := .ite (.heap (.isTag [env.tagOf d]) [.local x]) (.call (env.fieldAccBase + 2 * i) [.local x]) acc
+            refined := true
+          | none =>
+            let yd ← fresh (.struct d (env.argsAt sn targs d))
+            acc := .ite (.assign yd (.heap (.isTag [env.tagOf d]) [.local x])) (.heap (.get kd) [.local yd]) acc
+        if refined then
+          -- (checked against the field's type, as the refined calls need one)
+          let y ← fresh t
+          return ⟨.seq (.assign x r.e) (.assign y acc), t⟩
         return ⟨.seq (.assign x r.e) acc, t⟩
       if ctx.types.classes.contains sn then
         -- a class: the field of whichever option is set (inherited fields come
@@ -4913,7 +4945,22 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       if fixes (headOf dm) (headOf qm) then some (headOf dm) else none) ++
     (implChecks.toList.filterMap fun (_, _, impl, decl) =>
       if fixes (headOf impl) (headOf decl) then some (headOf impl) else none)
-  env := { env with pinned := env.classes.filter fun d => fixers.any fun f => d == f || (env.supers d).contains f }
+  -- (and the classes that fix an interface's type arguments, below an
+  -- interface whose fields sit at different places in its classes: its
+  -- fields are reached through accessors, under the refinement, #157)
+  let mut fieldAcc : Array (String × String) := #[]
+  for i in env.classes do
+    if (env.info i).isIface then
+      let ds := env.concreteBelow i
+      for (f, _, _) in env.fields i do
+        let pos := ds.map fun d => ((fieldIndex (env.fields d) f).map (·.1)).getD 0
+        if !pos.all (· == pos.headD 0) then
+          for d in ds do
+            if fixes d i && env.sameCorePinned d i && !fieldAcc.contains (d, f) then
+              fieldAcc := fieldAcc.push (d, f)
+  let fixers := fixers ++ fieldAcc.toList.map (·.1)
+  env := { env with pinned := env.classes.filter fun d => fixers.any fun f => d == f || (env.supers d).contains f,
+                    fieldAcc := fieldAcc.toList }
   env := { env with protos := env.makeProtos }
   if let some n := env.recursiveStruct? then
     if env.classes.contains n then
@@ -5322,6 +5369,8 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     return ({ name, arity, nslots := st.nslots, decides, writes := allowed.contains "writes",
               body := initPrefixE arity inits e },
       st.slotTys.toList.map (Ty.toVTy env))
+  -- (the accessors come right after the functions, #157)
+  env := { env with fieldAccBase := tops.length + gsigs.size }
   let genvOf (g : Sig) : TyEnv := { env with tvars := g.tparams.map fun (v, c) => (v, Ty.param v c) }
   let mut fns : Array Fn := #[]
   let mut slotTys : Array (List VTy) := #[]
@@ -5398,6 +5447,24 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   -- concurrency (#156): each <suspends> function `g` becomes a frame class
   -- and the functions `g$new`, `g$reset` and `g$resume` (`Suspend.lean`);
   -- `g`'s own index is `g$resume`'s, as only suspends code calls it
+  -- the accessors (#157): for each (class, field), `get(Self)` and
+  -- `set(Self, V)`, generic over the class's type argument positions
+  let mut accSigs : Array (List VTy × VTy) := #[]
+  for (d, f) in env.fieldAcc do
+    let tag := env.tagOf d
+    let kd := ((fieldIndex (env.fields d) f).map (·.1)).getD 0
+    let m := (env.coreArgs d (((env.sparams.lookup d).getD []).map fun (v, c) => Ty.param v c)).length
+    let selfTy : VTy := .ref [tag] ((List.range m).map VTy.var)
+    let fTy : VTy := ((classTable[tag]?).bind (·[kd]?)).getD .int
+    fns := fns.push { name := s!"{d}.$get.{f}", arity := 1, nslots := 1, decides := false, writes := false,
+                      body := .heap (.get kd) [.local 0] }
+    slotTys := slotTys.push [selfTy]
+    accSigs := accSigs.push ([selfTy], fTy)
+    fns := fns.push { name := s!"{d}.$set.{f}", arity := 2, nslots := 2, decides := false, writes := true,
+                      body := .heap (.set kd) [.local 0, .local 1] }
+    slotTys := slotTys.push [selfTy, fTy]
+    accSigs := accSigs.push ([selfTy, fTy], fTy)
+  let fsigs0 := fsigs0 ++ accSigs.toList
   let mut fsigs := fsigs0
   let mut frameClasses : Array (List VTy) := #[]
   let mut extraSigs : Array (List VTy × VTy) := #[]

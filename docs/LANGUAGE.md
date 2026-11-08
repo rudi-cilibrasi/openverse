@@ -386,7 +386,11 @@ circle := class(shape, labelled):
   dispatches to `box(t)`'s methods and casts `container(t)` to `box(t)`.
   An interface's fields are typed as it gives them: a class that fixes or
   repeats its type arguments (`intbox := class(holder(int))`) can still
-  implement an interface whose members it does not override. An interface
+  implement an interface whose members it does not override. Code generic
+  over the interface reads and writes a field that sits at different
+  places in its classes also when a class fixes its type arguments (to
+  closed types), under the refinement those give (#157); a class that
+  repeats them makes such a field unreadable there. An interface
   that extends a parametric interface gives it its own type parameters. Inherited field defaults see their
   own class's type parameters. A cast `square[S]` takes its type arguments
   from `S`'s, and is refused when it would need more. A method
