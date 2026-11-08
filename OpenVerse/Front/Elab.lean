@@ -554,6 +554,23 @@ def TyEnv.sameCorePinned (env : TyEnv) (d T : String) : Bool :=
   let open' := (cT.zip cd).filter fun (_, b) => !b.params.isEmpty
   cd.length == cT.length && (open'.foldlM (fun m (a, b) => Ty.alpha m a b) []).isSome
 
+/-- `seq (assign t₁ v₁) (… (call f es))` as the call with each `vᵢ` (a
+    literal or a slot) in place of `tᵢ` in its arguments: a call whose
+    named arguments went through temporaries (#142). -/
+partial def Expr.inlineArgTemps : Expr → Option Expr
+  | .call f es => some (.call f es)
+  | .seq (.assign t v) rest =>
+    let simple := match v with
+      | .lit _ | .local _ => true
+      | _ => false
+    if !simple then none else
+    (Expr.inlineArgTemps rest).map fun
+      | .call f es => .call f (es.map fun a => match a with
+        | .local t' => if t' == t then v else a
+        | _ => a)
+      | other => other
+  | _ => none
+
 /-- Whether `false` (the bottom type) occurs in a type. -/
 partial def Ty.hasNever : Ty → Bool
   | .never => true
@@ -2521,19 +2538,22 @@ partial def elabAppBase (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (b
             | some gi => groups := groups.modify gi fun (e', cls) => (e', cls.push d)
             | none => groups := groups.push (fname, #[d])
           let mut pinned := false
+          let mut emitted := false
           for (fname, cls) in groups.toList.reverse do
             let e := clsOf fname
-            -- (#142) the type arguments `e` fixes that the receiver's may not
-            -- have: matched against the receiver's, they refine the call,
-            -- which `Typed.dispatch` types under that refinement
+            -- (#142) the type arguments the classes fix that the receiver's
+            -- may not have: matched against the receiver's, they refine the
+            -- call, which `Typed.dispatch` types under that refinement
             let rargs := env.coreArgs c targs
             let needOf (pins : List (Option Ty)) := (rargs.zip pins).filterMap fun (a, pin) => match pin with
               | some pt => if a == pt then none else some (a, pt)
               | none => none
-            if !(needOf (env.corePins e)).isEmpty then
+            if cls.any fun d => !(needOf (env.corePins d)).isEmpty then
               -- one test per set of pins among the classes using `e`'s
               -- implementation: `Typed.dispatch` refines by the pins all the
-              -- tested classes share, which may fix more than `e`'s
+              -- tested classes share, which may fix more than `e`'s (and it
+              -- takes the receiver as narrowed by the test, so no temporary
+              -- of `e`'s type, which might have no initial value)
               let mut parts : Array (List (Option Ty) × Array String) := #[]
               for d in cls do
                 let key := (env.corePins d).take rargs.length
@@ -2553,17 +2573,24 @@ partial def elabAppBase (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (b
                 let ctx' := { ctx with locals := selfL :: (locsF ++ ctx.locals) }
                 let rc ← elabApp ctx' p (.ident mp fname) (.ident mp selfName :: argIds.toList) bracket
                   (some (msRet.subst μF))
-                let .call fi (.local s0 :: es) := rc.e
-                  | eerr p s!"cannot dispatch {m} to class {e}, which fixes type arguments of {c} (#142)"
+                -- (named arguments go through temporaries: put their values
+                -- in the call, which must have the rule's shape)
+                let some (.call fi (.local s0 :: es)) := Expr.inlineArgTemps rc.e
+                  | eerr p s!"cannot dispatch {m} to class {e}, which fixes type arguments of {c}, when a named argument's default is computed (#142)"
                 if s0 != slot then eerr p s!"cannot dispatch {m} to class {e}, which fixes type arguments of {c} (#142)"
                 acc := .ite (.heap (.isTag (part.toList.map env.tagOf)) [.local slot]) (.call fi (.local slot :: es)) acc
                 pinned := true
+                emitted := true
               continue
             let sd ← fresh (.struct e (argsAt e))
             let ctx' := { ctx with locals := { name := s!"$self{sd}", slot := sd, ty := .struct e (argsAt e), mutable := false } :: (locs ++ ctx.locals) }
             let rc ← elabApp ctx' p (.ident mp fname) (.ident mp s!"$self{sd}" :: argIds.toList) bracket exp
             acc := .ite (.assign sd (.heap (.isTag (cls.toList.map env.tagOf)) [.local slot]))
               (← coerce p rc msRet) acc
+            emitted := true
+          -- (no class can be the receiver: the call cannot run; a failable
+          -- one still fails, for the failure checks)
+          if !emitted && ms.decides then acc := .prim .fail []
           if pinned then
             -- (checked against the method's result type, as the refined
             -- calls need an expected type)
@@ -4513,6 +4540,8 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     let mn := (dm.splitOn ".").getLast!
     let (cd', cq) := (core d, core q)
     if cd'.length != cq.length then
+      if ((env.sparams.lookup d).getD []).isEmpty then
+        throw s!"{mp.show}: {d} has more Verse Core type arguments than {q} (a class between them has type parameters of its own), so it cannot override {mn} yet: code generic over {q} could not give them (#39)"
       throw s!"{mp.show}: {d} has type parameters that {q} does not have, so it cannot override {mn} yet: code generic over {q} could not give them (#39)"
     -- its Verse Core type arguments are {q}'s, up to renaming, except where
     -- it fixes them to closed types: dispatch is then typed under the

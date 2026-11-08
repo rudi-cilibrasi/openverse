@@ -374,8 +374,9 @@ circle := class(shape, labelled):
   `box` implements) runs it, typed under `t = int`; the dispatch skips
   the classes whose fixed arguments the receiver's type rules out. One
   that repeats type arguments (`dup(t) := class(pair(t, t))`), fixes them
-  to types that mention type parameters, or adds type parameters of its
-  own cannot override yet: code generic over the declaring class could
+  to types that mention type parameters, or has more type arguments than
+  the declaring class (type parameters of its own, or of a class between
+  them) cannot override yet: code generic over the declaring class could
   not call it. An interface can be parametric too (#53):
   `container(t) := interface: Get():t`, with `box(t) := class(container(t))`.
   A class gives the interfaces above it exactly its own Verse Core type

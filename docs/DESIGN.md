@@ -310,7 +310,14 @@ position in every class below the one that declares it.
   and dispatch" below, #142). One test covers the classes that share an
   implementation and fix the same arguments; a class whose fixed
   arguments the receiver's rule out (an `intcell` from code over
-  `cell(string)`) gets none. A chain with such a test is assigned to a
+  `cell(string)`) gets none. Every group of classes sharing an
+  implementation in which one class needs the refinement is dispatched
+  this way, as the rule takes the receiver as narrowed by the test: the
+  ordinary dispatch would need a temporary of the implementing class's
+  type, which has no initial value when every class below it fixes other
+  arguments. (`tc` proposes a `new`'s type arguments so that they agree
+  with the pins, so that a prototype holding an object of a subclass of
+  the fixed class is typed at the fixed type.) A chain with such a test is assigned to a
   slot of the method's result type, as the rule needs an expected type.
   Only the classes at or below one whose implementation fixes arguments
   its declaring class leaves open record pins (`TyEnv.pinned`): every
