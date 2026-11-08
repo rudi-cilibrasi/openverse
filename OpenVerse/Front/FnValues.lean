@@ -87,6 +87,29 @@ def showFn (effs : List String) (ps : List String) (r : String) : String :=
   "type{_(" ++ ", ".intercalate (ps.map (":" ++ ·)) ++ ")" ++ String.join (effs.map fun e => s!"<{e}>") ++
     ":" ++ r ++ "}"
 
+/-- An error message with the hidden names read as Verse: `F$fn.$call…`
+    is `F` called as a value, another `$call…` a function value, a shape's
+    interface a function type. -/
+def pretty (msg : String) : String :=
+  let delim (c : Char) : Bool := c == ' ' || c == ',' || c == ';' || c == '\'' || c == '(' || c == ')' ||
+    c == '\n'
+  let word (w : String) : String :=
+    if !(w.splitOn "$call").tail.isEmpty then
+      match w.splitOn "$fn.$call" with
+      | f :: _ :: _ => s!"{f} (called as a function value)"
+      | _ => "a function value"
+    else if w.startsWith "$fn" then "a function type"
+    else w
+  Id.run do
+    let mut out := ""
+    let mut cur := ""
+    for c in (msg.replace "class $fn" "$fn").toList do
+      if delim c then
+        out := out ++ word cur ++ c.toString
+        cur := ""
+      else cur := cur.push c
+    return out ++ word cur
+
 /-- `s`'s effects are among `t`'s: a function of shape `s` is one of shape
     `t` too. -/
 def Shape.within (s t : Shape) : Bool :=
@@ -97,7 +120,10 @@ partial def _root_.OpenVerse.Front.STy.fnShapes : STy → List Shape
   | .arr t | .opt t => t.fnShapes
   | .tup ts | .app _ ts => ts.flatMap STy.fnShapes
   | .map a b => a.fnShapes ++ b.fnShapes
-  | .fn ps es r => shapeOf ps.length es :: (ps.flatMap STy.fnShapes ++ r.fnShapes)
+  | .fn ps es r =>
+    -- (a type both <decides> and <suspends> has none: `resolveTy` refuses it)
+    let s := shapeOf ps.length es
+    (if s.decides && s.suspends then [] else [s]) ++ ps.flatMap STy.fnShapes ++ r.fnShapes
 
 mutual
 /-- The function types written in an expression, and the names it uses as
@@ -112,7 +138,11 @@ partial def _root_.OpenVerse.Front.SExpr.scan : SExpr → List Shape × List Str
   | .cmp _ a rest => scanL (a :: rest.map (·.2))
   | .tuple _ es | .block _ es | .arrayLit _ es => scanL es
   | .ite _ cs t e => scanL (cs ++ [t] ++ e.toList)
-  | .forE _ cs b => scanL (cs ++ [b])
+  | .forE _ cs b =>
+    -- (a generator's names are bound there: `for (Double : Xs)` means them)
+    let bound := cs.flatMap fun | .gen _ x i _ => x :: i.toList | _ => []
+    let (s, n) := scanL (cs ++ [b])
+    (s, n.filter (!bound.contains ·))
   | .ret _ e => scanL e.toList
   | .caseE _ e arms => scanL (e :: arms.flatMap fun (pat, v) => pat.toList ++ [v])
   | .decl _ _ t _ e =>
@@ -163,10 +193,19 @@ partial def _root_.OpenVerse.Front.STop.scan (bound : List String := []) : STop 
     that name may be meant, and then the class is never used). Generic and
     overloaded functions, functions with named parameters and hidden ones
     get none (the elaborator explains why such a function is no value). -/
-def desugar (tops : List STop) : List STop := Id.run do
-  let fields := tops.flatMap fun | .classDef _ _ _ _ _ _ fs _ _ => fs.map (·.1) | _ => []
-  let scans := tops.map fun t => match t with
-    | .classDef .. => t.scan fields
+def desugar (tops : List STop) (extra : List STop := []) : List STop := Id.run do
+  -- (each class's fields, its own and its parents', in its methods: a
+  -- field of that name is meant there)
+  let defs : List (String × List STy × List String) := tops.filterMap fun
+    | .classDef _ n _ _ ps _ fs _ _ => some (n, ps, fs.map (·.1))
+    | _ => none
+  let parentName : STy → Option String := fun | .name q | .app q _ => some q | _ => none
+  let rec fieldsOf (fuel : Nat) (c : String) : List String :=
+    match fuel, defs.find? (·.1 == c) with
+    | fuel + 1, some (_, ps, fs) => fs ++ (ps.filterMap parentName).flatMap (fieldsOf fuel)
+    | _, _ => []
+  let scans := (tops ++ extra).map fun t => match t with
+    | .classDef _ n .. => t.scan (fieldsOf (defs.length + 1) n)
     | _ => t.scan
   let named := (scans.flatMap (·.2)).eraseDups
   let fnNames := tops.filterMap fun | .fn _ n .. => some n | _ => none

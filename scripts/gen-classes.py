@@ -1361,6 +1361,8 @@ class Gen:
         L.append('%s(Xs:[]t, F:type{_(:t):u} where t:type, u:type):[]u = for (X : Xs) { F(X) }' % mp)
         L.append('%s(Xs:[]int, F:type{_(:int)<decides>:int}):[]int = for (X : Xs, Y := F[X]) { Y }' % fl)
         L.append('%s(F:int->int, X:int):int = F(F(X))' % tw)
+        pu = self.fresh('Fpure')
+        L.append('%s(X:int)<computes>:int = X + %s' % (pu, lit()))
         hc = self.fresh('fholder')
         L.append('%s := class:' % hc)
         L.append('    var Op:int->int = %s' % R.choice(fs))
@@ -1368,7 +1370,31 @@ class Gen:
         self.out += L
         xs = 'array{%s}' % ', '.join(lit() for _ in range(R.randint(1, 4)))
         for _ in range(R.randint(2, 6)):
-            k = R.randrange(6)
+            k = R.randrange(9)
+            if k == 6:
+                # (effect subtyping between variables)
+                a, b, c = tmpname('FP'), tmpname('FR'), tmpname('FQ')
+                M.append('%s:type{_(:int)<computes>:int} = %s' % (a, pu))
+                M.append('%s:type{_(:int)<reads>:int} = %s' % (b, a))
+                M.append('%s:type{_(:int)<decides>:int} = %s' % (c, b))
+                M.append('if (V := %s[%s]) then Print("fe {%s(1)} {V}")' % (c, lit(), a))
+                continue
+            if k == 7:
+                # (a var holding a function, rolled back)
+                v = tmpname('FV')
+                M.append('var %s:int->int = %s' % (v, R.choice(fs)))
+                M.append('if (set %s = %s, %s[%s]) then Print("fs") else Print("fr")' % (v, R.choice(fs + [pu]), d, lit(0, 6)))
+                M.append('Print("fv {%s(%s)}")' % (v, lit()))
+                continue
+            if k == 8:
+                # (options and maps of functions, joined whatever the order)
+                o, m = tmpname('FO'), tmpname('FM')
+                M.append('%s:?(int->int) = option{%s}' % (o, R.choice(fs)))
+                M.append('if (G := %s?) then Print("fo {G(%s)}")' % (o, lit()))
+                ks = R.sample(fs + [pu], 2)
+                M.append('%s := map{1 => %s, 2 => %s}' % (m, ks[0], ks[1]))
+                M.append('if (G := %s[%s]) then Print("fq {G(%s)}")' % (m, R.choice(['1', '2']), lit()))
+                continue
             if k == 0:
                 y = tmpname('FY')
                 M.append('for (%s : %s(%s, %s)) { Print("fm {%s}") }' % (y, mp, xs, R.choice(fs), y))

@@ -898,7 +898,10 @@ partial def resolveTy (env : TyEnv) (p : Pos) : STy → EM Ty
   | .tup [] => pure .void
   | .tup ts => return .tup (← ts.mapM (resolveTy env p))
   -- a function type: its shape's interface (#210)
-  | .fn ps es r => resolveTy env p (.app (FnValues.shapeOf ps.length es).name (ps ++ [r]))
+  | .fn ps es r => do
+    if es.contains "decides" && es.contains "suspends" then
+      eerr p "a function type cannot be both <suspends> and <decides>, which exclude each other"
+    resolveTy env p (.app (FnValues.shapeOf ps.length es).name (ps ++ [r]))
   | .map k v => do
     let kt ← resolveTy env p k
     if !kt.comparable env then eerr p (notComparable env kt "a map key")
@@ -1668,10 +1671,14 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
             let ty := match exp with
               | some t@(.struct m _) => if (FnValues.parseName m).isSome then t else own
               | _ => own
-            -- (through its own type, which a mismatch then names)
+            -- (through its own type; when the expected one does not fit, as
+            -- its own, which the caller then joins or names in a mismatch)
             let r ← elabE ctx (.construct p s!"{n}$fn" [] []) none
             let r : R := ⟨← coerce p r own, own⟩
-            return ⟨← coerce p r ty, ty⟩
+            if ty == own then return r
+            match ← tryCatch (some <$> coerce p r ty) (fun _ => pure none) with
+            | some e => return ⟨e, ty⟩
+            | none => return r
           else if !s.tparams.isEmpty then
             eerr p s!"'{n}' is generic: a generic function cannot be used as a value yet (#210)"
           else if !s.named.isEmpty then
@@ -5266,7 +5273,9 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   -- (the helpers after: they name nothing of the program's)
   -- function values (#210): the function types' interfaces, and a class
   -- for each function used as a value
+  -- (the entry expression is scanned too)
   let allTops00 := FnValues.desugar (resolved.take (resolved.length - rawEntry.length) ++ helpers)
+    (resolved.drop (resolved.length - rawEntry.length))
   let entryTop := resolved.drop (resolved.length - rawEntry.length)
   -- the command line: `Args`, and an entry expression
   let defines (n : String) := allTops00.any fun
@@ -6486,7 +6495,7 @@ def stripOv (msg0 : String) : String := Id.run do
     is `K<constructor>`, `F$ov1` is `F` (names with `$` are never the user's). -/
 def elabProgram (allTops00 : List STop) (opts : Options := {}) : Except String Compiled :=
   (elabProgramCore allTops00 opts).mapError fun msg =>
-    ((stripOv (msg.replace "$init" "<constructor>")).replace "::" ".").replace "$replaceAll" "ReplaceAll"
+    FnValues.pretty (((stripOv (msg.replace "$init" "<constructor>")).replace "::" ".").replace "$replaceAll" "ReplaceAll")
 
 /-- Parse and elaborate Verse source text. -/
 def compileChecked (src : String) (opts : Options := {}) : Except String Compiled := do
