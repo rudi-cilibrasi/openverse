@@ -371,7 +371,8 @@ def stripInits : Nat → Expr → Option (List Expr × Expr)
     `params` (`DefaultE`): a parameter of a subtype, a default literal, a
     prototype, a new object built from such values, or a tuple of them. -/
 partial def coreDefault (S : Sigs) (params : List VTy) (depth : Nat) (τ : VTy) : Option Expr :=
-  if depth > 12 then none else
+  -- (as deep as the elaborator's `slotDefault` goes)
+  if depth > 16 then none else
   match params.findIdx? (fun p => p.sub τ) with
   | some i => some (.local i)
   | none =>
@@ -929,8 +930,8 @@ partial def suspendSelf (us : List Nat) (y : Nat) (c : Callee) (rs : List Expr) 
     receiver's, refined by the tested classes' pins, matched against the
     callee's parameters as the checker does); it is resumed and cancelled
     as any generic callee's. Arriving and taking the result go through
-    helpers of this call site, as in `suspendSelf`; the take helper gets a
-    value of the expected type, given back if the frame were missing. -/
+    helpers of this call site, as in `suspendSelf`; the take helper fails
+    without a frame, so the result is taken in a condition. -/
 partial def suspendSelfGeneric (us : List Nat) (y g : Nat) (c : Callee) (rs : List Expr) (valued : Bool) :
     M (Expr × Expr) := do
   let env ← read
@@ -970,11 +971,13 @@ partial def suspendSelfGeneric (us : List Nat) (y g : Nat) (c : Callee) (rs : Li
   let found : Expr := .assign env.rS (int 0)
   match valued with
   | true =>
+    -- (taken in a condition, as the frame is an option: into a slot kept in
+    -- the frame, whose initial value is made once, with the frame)
     let some τ := env.expTy | throw "internal error: a refined call's value has no expected type"
-    let some d := coreDefault env.S ((← get).Γ.toList.take (2 + env.arity)) 0 τ
-      | throw "a <suspends> method of a generic class dispatched to a class that fixes type arguments, whose result type has no initial value, is not supported yet (#171)"
-    let takeV ← via (.ite isR (.call takeFn [.local 0, .local 1, .local 2]) (.prim .userErr [])) [ty, .opt fty, τ] τ
-    return (seqVoid [arrive, found, poll, pend], .call takeV [.local y, fget cf, d])
+    let takeV ← via (.ite isR (.call takeFn [.local 0, .local 1]) (.prim .userErr [])) [ty, .opt fty] τ
+    let t ← fresh τ
+    let take : Expr := .ite (.assign t (.call takeV [.local y, fget cf])) vd (.seq (.prim .userErr []) vd)
+    return (seqVoid [arrive, found, poll, pend, take], .local t)
   | false => return (seqVoid [arrive, found, poll, pend], vd)
 
 /-- The statement of a `sync` (`isSync`) or `race` with arms `arms` (each

@@ -4752,18 +4752,19 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
     if ntp != 0 then
       -- (a generic one's frame is kept in an option field, as any generic
       -- callee's: `arrive(self, args…, frame?, sched)` resets it or makes
-      -- one; `take(self, frame?, d)` gives its result, else `d`)
+      -- one; `take(self, frame?)` gives its result, failing without a frame,
+      -- so that the caller unwraps it in a condition)
       let optF : VTy := .opt (frameTy j)
       let arriveBody : Expr := .seq (.ite (.call (nFns + 4 * j + 1) (.prim .query [.local a] :: locals)) Suspend.vd
         (.seq (.assign a (.prim .mkSome [.call (nFns + 4 * j) (.local (a + 1) :: locals)])) Suspend.vd)) (.local a)
-      let takeBody : Expr := .ite (.assign 2 (.heap (.get Suspend.resF) [.prim .query [.local 1]])) (.local 2) (.local 2)
+      let takeBody : Expr := .heap (.get Suspend.resF) [.prim .query [.local 1]]
       selfFns := selfFns ++ #[
         { name := s!"{gname}$arrive", arity := a + 2, nslots := a + 2, decides := false, writes := true,
           body := arriveBody },
-        { name := s!"{gname}$take", arity := 3, nslots := 3, decides := false, writes := false, body := takeBody },
+        { name := s!"{gname}$take", arity := 2, nslots := 2, decides := true, writes := false, body := takeBody },
         resumeOwn, cancelOwn]
-      selfTys := selfTys ++ #[ps ++ [optF, schedTy], [ps.headD .int, optF, ρ], [frameTy j, schedTy], [frameTy j, schedTy]]
-      selfSigs := selfSigs ++ #[(ps ++ [optF, schedTy], optF), ([ps.headD .int, optF, ρ], ρ),
+      selfTys := selfTys ++ #[ps ++ [optF, schedTy], [ps.headD .int, optF], [frameTy j, schedTy], [frameTy j, schedTy]]
+      selfSigs := selfSigs ++ #[(ps ++ [optF, schedTy], optF), ([ps.headD .int, optF], ρ),
         ([frameTy j, schedTy], .int), ([frameTy j, schedTy], VTy.void)]
       continue
     let arriveBody : Expr := .seq (.ite (isF a) (.call (nFns + 4 * j + 1) (.local a :: locals))
@@ -4923,7 +4924,10 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
     -- its refined calls' helpers (#171), whose slots are their parameters
     -- (one calling a <decides> method can fail too, #179)
     for ((body, vps, vτ), i) in low.vias.zipIdx do
-      let canFail := (Suspend.callsOf body).any fun (g, _) => ((fns[g]?).map (·.decides)).getD false
+      let canFail := (Suspend.callsOf body).any fun (g, _) =>
+        if g < fns.size then ((fns[g]?).map (·.decides)).getD false
+        else if selfBase ≤ g then ((selfFns[g - selfBase]?).map (·.decides)).getD false
+        else false
       armFns := armFns.push { name := s!"{gname}$via{i}", arity := vps.length, nslots := vps.length,
                               decides := canFail, writes := true, body }
       armTys := armTys.push vps

@@ -419,9 +419,10 @@ and journals every write made in a condition (for rollback). So:
   generic callee's, at the type arguments the dispatch gives: the
   receiver's, refined by the pins, matched against its parameters as the
   checker does. It is resumed and cancelled like any generic callee's;
-  arriving and taking the result go through `arriveVia`/`takeVia` again,
-  the latter passing a value of the expected type that the callee's `take`
-  gives back were the frame missing (it unwraps the frame in a condition).
+  arriving and taking the result go through `arriveVia`/`takeVia` again;
+  its `take(self, frame?)` fails without a frame, so the caller takes the
+  result in a condition, into a slot kept in the frame (covariant results
+  check through the rule's subtyping).
 - A refined call that does not suspend (an immediate method, or a #157
   field accessor) has the same problem once its receiver's slot is a frame
   field. Before the slots become fields, each such test gets a helper of
