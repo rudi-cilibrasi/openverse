@@ -1,0 +1,18 @@
+pause 1 unwound
+pause 2 unwound
+twice 7 7
+pause 11 unwound
+pause 12 unwound
+pause 13 unwound
+loop 6
+slow unwound
+cancelled
+slow unwound
+race 3
+ipair both unwound
+ipair both unwound
+use 40
+ipair both unwound
+ipair both unwound
+use cancelled
+exit=0

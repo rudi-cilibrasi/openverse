@@ -466,8 +466,9 @@ every preservation case, and a C interpreter that recurses on the C stack.
 So the front end lowers concurrency into ordinary Verse Core (#156), the
 classic coroutine transformation. A `<suspends>` function `g` becomes:
 
-- a frame class: the suspension point it is at, its `?result`, one `?frame`
-  per suspension point for the callee's frame, and one field per slot;
+- a frame class: the suspension point it is at, its result, one field per
+  suspension point for the callee's frame (see "Avoiding allocation and
+  journaling"), and one field per slot;
 - `g$new(params…)`, which allocates a frame, `g$reset(frame, params…)`, which
   readies it for another call, and `g$resume(frame, sched, params…)`, which
   runs from the frame's suspension point to the next one (result 0) or the
@@ -611,10 +612,23 @@ and journals every write made in a condition (for rollback). So:
   test of its class (`if (isTag [callee] Y) then resume(Y, …)`), the shape
   `Typed.dispatch` types (#154), so the callee runs outside any condition.
   The call's arguments stay in the caller's slots for each resumption.
-- A generic callee's frame has type arguments that this narrowing cannot
-  recover. It sits in an option field, unwrapped in a condition, so C
-  journals what a generic suspends function writes during one resumption,
-  until that resumption returns.
+- A generic callee's frame has type arguments, which the scheduler's type
+  has none of, so it cannot be the field's first value. The field has type
+  `ref [callee, $nil] args`, at the call's type arguments, where `$nil` is
+  an empty class without type parameters. An object of a class without
+  pins can be made at any type arguments, so the frame's `new` fills the
+  field with one (one allocation per frame, not per call). The call site's
+  slot has the same type, and its initial value is the field itself, read
+  from the frame (`DefaultE.field`). The test of the class narrows it to
+  the callee's frame type at those arguments (`Typed.dispatch` with no
+  opened ones), so a generic callee is resumed outside any condition too.
+  It is resumed and cancelled through `resumeOwn(frame, sched)` and
+  `cancelOwn(frame, sched)`, which read its parameters from its frame, as
+  the caller has no slots of their types, and its result is taken through
+  `result(frame)`. (Until #256 such a frame sat in an option field,
+  unwrapped and resumed in a condition: C journalled what the callee wrote
+  during the resumption, and the reference interpreter copied the heap, see
+  "Specialising generic functions with roots".)
 - A method called under a refinement (a class that fixes the receiver's
   type arguments, see "Pins and dispatch") needs `Typed.dispatch` on the
   receiver wherever the refinement matters: passing the arguments and
@@ -630,14 +644,12 @@ and journals every write made in a condition (for rollback). So:
   and `cancelOwn(frame, sched)`, which read its parameters from its frame,
   as the caller has no slots of the callee's (refined) parameter types.
   A generic override (`ipair(b) := class(pair(int, b))`, or one with a
-  type parameter of its own) keeps its frame in an option field like any
-  generic callee's, at the type arguments the dispatch gives: the
-  receiver's, refined by the pins (`unify`), matched against its
-  parameters as the checker does. It is resumed and cancelled like any generic callee's;
-  arriving and taking the result go through `arriveVia`/`takeVia` again;
-  its `take(self, frame?)` fails without a frame, so the caller takes the
-  result in a condition, into a slot kept in the frame (covariant results
-  check through the rule's subtyping).
+  type parameter of its own) keeps its frame like any generic callee's, in
+  a field of type `ref [callee, $nil] args`, at the type arguments the
+  dispatch gives: the receiver's, refined by the pins (`unify`), matched
+  against its parameters as the checker does. Arriving and taking the
+  result go through `arriveVia`/`takeVia` as for any override (covariant
+  results check through the rule's subtyping).
 - A refined call that does not suspend (an immediate method, or a #157
   field accessor) has the same problem once its receiver's slot is a frame
   field. Before the slots become fields, each such test gets a helper of
@@ -697,14 +709,16 @@ error.
 The other generic suspends functions are copied the same way where they
 are called at small closed types (at most 40 parts, 200 copies, 16 of
 each function, so that one calling itself at ever bigger types does not
-spend the budget, #256), and kept for every other call (#225). The copy is not needed for correctness: a
-generic callee's frame has type arguments, so its caller keeps it in an
-option field, unwrapped and resumed in a condition, while a non-generic
-callee's lives in a field of its own class and is resumed after a test of
-it. A resumption writes the heap, and a write in a condition makes the
-reference interpreter keep the heap as it was, for the rollback, and so
-copy it: many tasks awaiting one event, `event(t)`'s generic `Await`,
-took quadratic time in Lean.
+spend the budget, #256), and kept for every other call (#225). The copy is
+not needed for correctness. It was made for speed: a generic callee's frame
+used to sit in an option field, unwrapped and resumed in a condition, and
+a write in a condition makes the reference interpreter keep the heap as it
+was, for the rollback, and so copy it. Many tasks awaiting one event,
+`event(t)`'s generic `Await`, took quadratic time in Lean. Since #256 a
+generic callee is resumed after a test of its class too (see "Avoiding
+allocation and journaling"), and 4,000 tasks spawned from generic code
+awaiting one event take the same time with the copies as without
+(`tests/bench/generic_waiters.verse`).
 
 ## Classes as references
 

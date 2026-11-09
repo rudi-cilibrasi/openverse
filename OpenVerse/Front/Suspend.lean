@@ -62,14 +62,17 @@ structure Callee where
   passFields : List Nat
   /-- The frame's result field; none when the call's value is `void`. -/
   resField : Option Nat
-  /-- A generic callee's frame has type arguments: it is kept in an option
-      field, unwrapped (and resumed) in a condition. Another's is kept in a
-      field of type `ref [tag, sched] []`, first the scheduler, and resumed
-      by a test of its class (`Typed.dispatch`), outside any condition. -/
+  /-- A callee's frame is kept in a field of type `ref [tag, sched] []`,
+      first the scheduler, and resumed by a test of its class
+      (`Typed.dispatch`), outside any condition. A generic callee's frame
+      has type arguments, which the scheduler's type has none of: its field
+      has type `ref [tag, $nil] args`, first an empty object made at those
+      arguments (#256), and it is resumed and cancelled through helpers
+      that read its parameters from it (`passFields` is empty). -/
   generic : Bool := false
   /-- `new` takes the scheduler first (to fill its frame's child fields). -/
   newSched : Bool := false
-  /-- A non-generic callee's result getter, `g$result(frame)`. -/
+  /-- The callee's result getter, `g$result(frame)`. -/
   resultFn : Option Nat := none
   /-- For a method of a class that fixes type arguments, called through
       `Typed.dispatch` (#142): helpers taking the receiver first, so that
@@ -87,7 +90,7 @@ def frS : Nat := 0
 def schS : Nat := 1
 
 /-- Frame fields: the suspension point the body is at (0: not started), the
-    result, one field per suspension point (a callee's `?frame`), two per arm
+    result, one field per suspension point (a callee's frame), two per arm
     of a `sync` or `race` (its suspension point, whether it is done), then
     the slots. -/
 def pcF : Nat := 0
@@ -432,6 +435,9 @@ structure Env where
   fnBase : Nat
   /-- The scheduler's class. -/
   schedTag : Nat
+  /-- The empty class without type parameters whose objects first fill a
+      generic callee's frame field (#256). -/
+  nilTag : Nat
   /-- The `spawn` mark, and for each `spawn` in the function, in order, its
       root's `new` and `start` functions. -/
   spawnMark : Nat
@@ -841,37 +847,25 @@ partial def operands (es : List Expr) (hints : List (Option VTy) := []) : M (Lis
 partial def suspendAt (g : Nat) (c : Callee) (rs : List Expr) : M (Expr × Expr) := do
   let env ← read
   let newArgs (as : List Expr) : List Expr := if c.newSched then .local schS :: as else as
-  if c.generic then
-    -- an option field, unwrapped in conditions
-    let fty ← infer (.call c.newFn (newArgs rs))
-    let k ← newSite (.opt fty)
-    modify fun st => { st with sites := st.sites.push { id := k, waits := .callee k c 0 [], defers := st.defers } }
-    let cf := childF k
-    let q : Expr := .prim .query [fget cf]
-    let create : Expr := .ite (.call c.initFn (q :: rs)) vd (.seq (fset cf (.prim .mkSome [.call c.newFn (newArgs rs)])) vd)
-    let st ← freshT .int
-    let arrive : Expr := .ite (← seeking) vd (.seq create (.seq (fset env.pcFld (int k)) vd))
-    let poll : Expr := .ite (.assign st (.call c.resumeFn ([q, .local schS] ++ c.passFields.map fun f => .heap (.get f) [q])))
-      vd (.seq (.prim .userErr []) vd)
-    let pend : Expr := .ite (.prim .eq [.local st, int 0]) (.seq spillMark (.ret (int 0))) vd
-    let found : Expr := .assign env.rS (int 0)
-    match c.resField with
-    | some rf =>
-      let t ← fresh (← infer (.call g rs))
-      let take : Expr := .ite (.assign t (.heap (.get rf) [q])) vd (.seq (.prim .userErr []) vd)
-      return (seqVoid [arrive, found, poll, pend, take], .local t)
-    | none => return (seqVoid [arrive, found, poll, pend], vd)
   -- a field of type `ref [tag, sched] []` (first the scheduler), copied to a
   -- slot of that type (whose initial value is the scheduler parameter) and
   -- resumed after a test of its class, so not in a condition: C journals
-  -- the writes made in a condition. The arguments stay in slots, for each
-  -- resumption.
-  let wide : VTy := .ref [c.tag, env.schedTag] []
+  -- the writes made in a condition, and the reference interpreter copies
+  -- the heap at the first one (#256). The arguments stay in slots, for each
+  -- resumption. A generic callee's frame has type arguments: its field and
+  -- slot have type `ref [tag, $nil] args` (the slot's initial value is the
+  -- field, read from the frame), and its resume and cancel functions read
+  -- its parameters from it.
+  let wide : VTy ← if c.generic then do
+      match ← infer (.call c.newFn (newArgs rs)) with
+      | .ref _ args => pure (.ref [c.tag, env.nilTag] args)
+      | _ => throw "internal error: a generic callee's frame type"
+    else pure (.ref [c.tag, env.schedTag] [])
   let k ← newSite wide
   let cf := childF k
-  let ptys := ((env.S.fns[g]?).map (·.1)).getD []
+  let ptys := if c.generic then [] else ((env.S.fns[g]?).map (·.1)).getD []
   let argSlots ← ptys.mapM fresh
-  let as := argSlots.map Expr.local
+  let as := if c.generic then rs else argSlots.map Expr.local
   let y ← freshT wide
   modify fun st => { st with sites := st.sites.push { id := k, waits := .callee k c y argSlots, defers := st.defers } }
   let isC : Expr := .heap (.isTag [c.tag]) [.local y]
@@ -898,7 +892,9 @@ partial def suspendAt (g : Nat) (c : Callee) (rs : List Expr) : M (Expr × Expr)
 partial def selfCall (us : List Nat) (y g : Nat) (c : Callee) (es : List Expr) (k : Option (Expr → Expr)) :
     M (List Expr) := do
   let (pre, rs) ← operands es
-  let (s, v) ← emitWith (if c.generic then suspendSelfGeneric us y g c rs k.isSome else suspendSelf us y c rs k.isSome)
+  let schedTag := (← read).schedTag
+  let (s, v) ← emitWith (if c.generic then suspendSelfGeneric us y g c rs k.isSome
+    else suspendSelf us y c rs k.isSome (.ref [c.tag, schedTag] []))
   match k with
   | none => return pre ++ [s]
   | some k => return pre ++ [s, ← emit (pure (k v))]
@@ -908,16 +904,16 @@ partial def selfCall (us : List Nat) (y g : Nat) (c : Callee) (es : List Expr) (
     receiver-first helpers, each called in the rule's shape by a helper of
     this call site whose first parameter is the receiver (`arriveVia(recv,
     args…, frame, sched)`, `takeVia(recv, frame)`), as the receiver's slot
-    may be a frame field. The frame is kept as a non-generic callee's, and
-    resumed and cancelled with its parameters from itself. Gives the
-    statement and the call's value. -/
-partial def suspendSelf (us : List Nat) (y : Nat) (c : Callee) (rs : List Expr) (valued : Bool) : M (Expr × Expr) := do
+    may be a frame field. The frame is kept as any callee's, in a field of
+    type `wide`, and resumed and cancelled with its parameters from itself.
+    Gives the statement and the call's value. -/
+partial def suspendSelf (us : List Nat) (y : Nat) (c : Callee) (rs : List Expr) (valued : Bool) (wide : VTy) :
+    M (Expr × Expr) := do
   let env ← read
   let some (arriveFn, takeFn, resumeFn, cancelFn) := c.selfFns
     | throw "internal error: a refined call without helpers"
   let some ty := (← get).Γ[y]? | throw "internal error: a refined call's receiver"
   let σs ← rs.mapM infer
-  let wide : VTy := .ref [c.tag, env.schedTag] []
   let k ← newSite wide
   let cf := childF k
   let w ← freshT wide
@@ -947,18 +943,13 @@ partial def suspendSelf (us : List Nat) (y : Nat) (c : Callee) (rs : List Expr) 
   | _, _ => return (seqVoid [arrive, found, poll, pend], vd)
 
 /-- `suspendSelf` for a generic callee (an override with type parameters of
-    its own or of its class, #171): its frame is kept in an option field, as
-    any generic callee's, at the type arguments the dispatch gives (the
-    receiver's, refined by the tested classes' pins, matched against the
-    callee's parameters as the checker does); it is resumed and cancelled
-    as any generic callee's. Arriving and taking the result go through
-    helpers of this call site, as in `suspendSelf`; the take helper fails
-    without a frame, so the result is taken in a condition. -/
+    its own or of its class, #171): its frame is kept as any generic
+    callee's, at the type arguments the dispatch gives (the receiver's,
+    refined by the tested classes' pins, matched against the callee's
+    parameters as the checker does). -/
 partial def suspendSelfGeneric (us : List Nat) (y g : Nat) (c : Callee) (rs : List Expr) (valued : Bool) :
     M (Expr × Expr) := do
   let env ← read
-  let some (arriveFn, takeFn, _, _) := c.selfFns
-    | throw "internal error: a refined call without helpers"
   let some ty := (← get).Γ[y]? | throw "internal error: a refined call's receiver"
   let .ref _ a := ty | throw "internal error: a refined call's receiver type"
   let some (ps, _) := env.S.fns[g]? | throw "internal error: a refined call's callee"
@@ -975,39 +966,11 @@ partial def suspendSelfGeneric (us : List Nat) (y g : Nat) (c : Callee) (rs : Li
   let frameTy : VTy := .ref [c.tag] ((List.range c.ntp).map VTy.var)
   if frameTy.unbound acc then
     throw "a <suspends> method whose type parameters the call does not determine cannot be dispatched to a class that fixes type arguments yet (#171)"
-  let fty := frameTy.subst (callInst acc .void none)
-  if !fty.varsBelow N then
+  let .ref _ fargs := frameTy.subst (callInst acc .void none)
+    | throw "internal error: a refined call's frame type"
+  if !VTy.varsBelowL N fargs then
     throw "a <suspends> method of a class with type parameters that only its parent's type arguments determine cannot be dispatched to yet: its frame would need them (#209)"
-  let k ← newSite (.opt fty)
-  modify fun st => { st with sites := st.sites.push { id := k, waits := .callee k c 0 [], defers := st.defers } }
-  let cf := childF k
-  let q : Expr := .prim .query [fget cf]
-  let isR : Expr := .heap (.isTag us) [.local 0]
-  let n := rs.length
-  let via (body : Expr) (vps : List VTy) (τ : VTy) : M Nat := do
-    let i := (← get).vias.size
-    modify fun st => { st with vias := st.vias.push (body, vps, τ) }
-    return env.viaBase + i
-  let arriveV ← via (.ite isR (.call arriveFn ((List.range (n + 3)).map Expr.local)) (.prim .userErr []))
-    (ty :: σs ++ [.opt fty, .ref [env.schedTag] []]) (.opt fty)
-  let st ← freshT .int
-  let arrive : Expr := .ite (← seeking) vd (seqVoid [
-    fset cf (.call arriveV (.local y :: rs ++ [fget cf, .local schS])),
-    fset env.pcFld (int k)])
-  let poll : Expr := .ite (.assign st (.call c.resumeFn ([q, .local schS] ++ c.passFields.map fun f => .heap (.get f) [q])))
-    vd (.seq (.prim .userErr []) vd)
-  let pend : Expr := .ite (.prim .eq [.local st, int 0]) (.seq spillMark (.ret (int 0))) vd
-  let found : Expr := .assign env.rS (int 0)
-  match valued with
-  | true =>
-    -- (taken in a condition, as the frame is an option: into a slot kept in
-    -- the frame, whose initial value is made once, with the frame)
-    let some τ := env.expTy | throw "internal error: a refined call's value has no expected type"
-    let takeV ← via (.ite isR (.call takeFn [.local 0, .local 1]) (.prim .userErr [])) [ty, .opt fty] τ
-    let t ← fresh τ
-    let take : Expr := .ite (.assign t (.call takeV [.local y, fget cf])) vd (.seq (.prim .userErr []) vd)
-    return (seqVoid [arrive, found, poll, pend, take], .local t)
-  | false => return (seqVoid [arrive, found, poll, pend], vd)
+  suspendSelf us y c rs valued (.ref [c.tag, env.nilTag] fargs)
 
 /-- The statement of a `sync` (`isSync`) or `race` with arms `arms` (each
     a statement that leaves the arm's value in a slot). -/
@@ -1121,15 +1084,12 @@ partial def region (pcFld : Nat) (done : Option (Expr → Expr)) (body : Expr) :
     let child : Expr := match s.waits with
       | .callee k c y as => match c.cancelFn with
         | some cf =>
-          if c.generic then
-            let q : Expr := .prim .query [fget (childF k)]
-            .ite (.call cf ([q, .local schS] ++ c.passFields.map fun f => .heap (.get f) [q])) vd vd
-          else
-            -- (the child's frame, as `suspendAt` reads it: through a slot
-            -- of its field's type, and with its parameters from its frame)
-            let pass := if c.passFields.isEmpty then [] else as.map Expr.local
-            .seq (.assign y (fget (childF k)))
-              (.seq (.ite (.heap (.isTag [c.tag]) [.local y]) (.call cf (.local y :: .local schS :: pass)) vd) vd)
+          -- (the child's frame, as `suspendAt` reads it: through a slot of
+          -- its field's type, and with its parameters from the caller's
+          -- slots or, for a generic one, from its frame)
+          let pass := if c.passFields.isEmpty then [] else as.map Expr.local
+          .seq (.assign y (fget (childF k)))
+            (.seq (.ite (.heap (.isTag [c.tag]) [.local y]) (.call cf (.local y :: .local schS :: pass)) vd) vd)
         | none => vd
       -- (each marked cancelled, 2, so that stopping a `rush`'s arm wrappers
       -- after does not cancel it again, #181)
@@ -1320,7 +1280,7 @@ structure Lowered where
     refined calls' helpers. -/
 def lower (S : Sigs) (callee : Nat → Option Callee) (syncMark raceMark rushMark spawnMark : Nat) (spawns : Array (Nat × Nat))
     (branchMark : Nat) (branches : Array (Nat × Nat × Nat))
-    (arity : Nat) (Γ : List VTy) (ρ : VTy) (frameTy : VTy) (schedTag : Nat) (fnBase : Nat) (b : Expr) :
+    (arity : Nat) (Γ : List VTy) (ρ : VTy) (frameTy : VTy) (schedTag nilTag : Nat) (fnBase : Nat) (b : Expr) :
     Except String Lowered := do
   let schedTy : VTy := .ref [schedTag] []
   let isM := fun f => f == syncMark || f == raceMark || f == rushMark
@@ -1331,7 +1291,7 @@ def lower (S : Sigs) (callee : Nat → Option Callee) (syncMark raceMark rushMar
   let b := shift 2 b
   let Γ0 := #[frameTy, schedTy] ++ Γ.toArray
   let trans0 := #[true, true] ++ (List.replicate Γ.length false).toArray
-  let env : Env := { S, ρ, callee, syncMark, raceMark, rushMark, arity, sites, armsTotal, fnBase, schedTag, spawnMark, spawns,
+  let env : Env := { S, ρ, callee, syncMark, raceMark, rushMark, arity, sites, armsTotal, fnBase, schedTag, nilTag, spawnMark, spawns,
                      branchMark, branches, viaBase := fnBase + 2 * armsTotal, expTy := some ρ,
                      pcFld := pcF, rS := 0, regionTotal := 0 }
   let done : Expr → Expr := fun v => .seq (fset resF v) (.seq killMark (.ret (int 1)))
