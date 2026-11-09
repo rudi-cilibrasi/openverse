@@ -555,10 +555,7 @@ circle := class(shape, labelled):
   - in a class with type parameters that its parent's type arguments
     do not give: a call of a `<suspends>` override with a
     narrower result, in code generic over a class above, from a class that
-    declares the method with yet another result type, and a spawned call of
-    one of its overrides with an argument that has no type of its own (an
-    empty array, `false`) where the parameter's type mentions those type
-    parameters (pass it through a variable of its type) (#209); a class below
+    declares the method with yet another result type (#209); a class below
     an interface that does not give it its first type parameters, in
     order (`both(t, u) := class(container(t), sink(u))`, #276); a dispatch, in code generic over a
     class, to a subclass whose fixed type arguments relate to ones the

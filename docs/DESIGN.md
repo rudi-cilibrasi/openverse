@@ -965,7 +965,10 @@ does. A `$spawnK` reads its callee's type arguments off the call's
 witnesses, its last arguments: one per type parameter but those an
 override reads from its receiver (`Sig.selfTps`, #209), so a spawn may
 call such an override directly (`spawn{P.Run()}` on a `pairJ(int,
-string)` below `job(int)`). A generic root of such a call, in an override
+string)` below `job(int)`); those it reads off the receiver's type,
+matched against its receiver parameter's (`VTy.bindVars`), to type an
+argument with no type of its own (`array{}` for an `arrJ(int)`'s
+`Put(X:[]a)`). A generic root of such a call, in an override
 at its class's own type parameters (`spawn{Run()}` in `pairJ`'s `Go`),
 has no witnesses of them among its arguments: its slots of their types
 start as parts of the receiver's fields, hidden ones included, through
