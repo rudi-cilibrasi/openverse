@@ -724,6 +724,11 @@ Main():void =
       for (X := Digit(), Y := Digit(), X + Y = 9, X < Y) { Print("{X}{Y}") }   # 09 18 27 36 45
   ```
 
+  A choice's alternatives may have several values themselves, calls of
+  such functions or choices inside expressions (`C():int = A() | B()`,
+  `X := Upto[1, 3] | 9`): their values come in order, alternative by
+  alternative (#283).
+
   Such a call is inlined: its arguments are evaluated first, in order, then
   its body runs in the caller's clauses, so the body's effects are rolled
   back or kept as the caller's are; the caller needs the callee's declared
@@ -797,7 +802,7 @@ Main():void =
   overloaded one (a generic one's type arguments are inferred from the
   arguments where it is inlined, as at a call), one with named parameters
   or a `return` or a `defer:` of its own (in its body, not in a block inside it), a method, one used as a function value, a call of a
-  recursive one in an `if`'s branch, a choice's alternative or a `set`'s path, and, since its body is inlined where other names may be
+  recursive one in an `if`'s branch or a `set`'s path, and, since its body is inlined where other names may be
   in scope, one whose name is also the name of a parameter, local, field or
   method anywhere in the program, and a call of one where a name its body
   uses from outside is a parameter, local or member of `Self` in scope.
@@ -1245,6 +1250,6 @@ Main()<suspends>:void =
 arithmetic on rationals (see [rational](#rational)), float functions beyond those of [float](#float),
 the class features listed under [Classes](#classes), struct methods (Verse structs have none; classes do),
 `weak_map`, module paths `using{/Verse.org/…}` (accepted and ignored), overloading beyond [Overloading](#overloading), nested
-functions and lambdas (not released in Verse), choice beyond [Choice](#choice) (recursive functions with several values that have effects, other than generators, methods with several values; a choice inside a block, a struct construction, a named argument or an alternative), concurrency beyond [Concurrency](#concurrency) (`subscribable_event()` without a value), and effect checking
+functions and lambdas (not released in Verse), choice beyond [Choice](#choice) (recursive functions with several values that have effects, other than generators, methods with several values; a choice inside a block, a struct construction or a named argument), concurrency beyond [Concurrency](#concurrency) (`subscribable_event()` without a value), and effect checking
 other than `<decides>` and the heap effects (`<converges>` is accepted and
 ignored).

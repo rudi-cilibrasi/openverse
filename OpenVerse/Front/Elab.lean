@@ -2340,7 +2340,7 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
     let f := if fa.endsWith "$all" then String.ofList (fa.toList.take (fa.length - 4)) else fa
     if ctx.inTaking then
       eerr p (s!"a call of {f}, which has several values, cannot be lifted from here, for now (#235): " ++
-        "not from a block, a struct construction, a named argument, a choice's alternative, the right of " ++
+        "not from a block, a struct construction, a named argument, an alternative of a set's choice, the right of " ++
         "and or or, a range, a set's path, nor from the branch of an if")
     eerr p (s!"{f} has several values, so a call of it must be in a failure context that takes them: " ++
       "an if condition, a for's clauses, first{…}, option{…}, logic{…}, not, or the left of or (#235)")
@@ -2348,14 +2348,14 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
     -- (a call of a recursive function with several values taken lazily, #246)
     if ctx.inTaking then
       eerr p (s!"a call of {f}, which has several values, cannot be lifted from here, for now (#235): " ++
-        "not from a block, a struct construction, a named argument, a choice's alternative, the right of " ++
+        "not from a block, a struct construction, a named argument, an alternative of a set's choice, the right of " ++
         "and or or, a range, a set's path, nor from the branch of an if")
     eerr p (s!"{f} has several values, so a call of it must be in a failure context that takes them: " ++
       "an if condition, a for's clauses, first{…}, option{…}, logic{…}, not, or the left of or (#235)")
   | .app p (.ident _ "$choice") _ false =>
     if ctx.inTaking then
       eerr p ("a choice (a | b) cannot be lifted from here, for now (#208): not from a block, a struct " ++
-        "construction, a named argument, another choice's alternative, the right of and or or, a range, " ++
+        "construction, a named argument, an alternative of a set's choice, the right of and or or, a range, " ++
         "nor from the branch of an if without else or one that is more than a choice or a value")
     eerr p ("a choice (a | b) has several values, so it must be in a failure context that takes them: " ++
       "an if condition, a for's clauses, first{…}, option{…}, logic{…}, not, or the left of or (#208)")
@@ -4853,9 +4853,11 @@ partial def elabSet (ctx : Ctx) (p : Pos) (lhs0 : SExpr) (op : Option String) (r
 /-- `for`: clauses are generators, bindings and filters; each generator opens
     a nested `forE`, and nested results are flattened (cartesian product,
     leftmost outermost). The clauses are a failure context; the body is not. -/
-partial def elabFor (ctx : Ctx) (p : Pos) (clauses : List SExpr) (body : SExpr) : EM R := do
-  -- (a choice is a generator over its alternatives, #208)
-  let clauses := Choice.prepare clauses (choiceValues ctx) (choiceField ctx)
+partial def elabFor (ctx : Ctx) (p : Pos) (clauses : List SExpr) (body : SExpr) (prepared : Bool := false) :
+    EM R := do
+  -- (a choice is a generator over its alternatives, #208; clauses lifted
+  -- already, `prepared`, are not lifted again)
+  let clauses := if prepared then clauses else Choice.prepare clauses (choiceValues ctx) (choiceField ctx)
   -- (a call of a recursive function with several values, #235: a generator
   -- over the array of its values; at a written type, through a binding)
   let clauses := clauses.flatMap fun c => match Choice.binding? c with
@@ -4897,6 +4899,25 @@ partial def elabFor (ctx : Ctx) (p : Pos) (clauses : List SExpr) (body : SExpr) 
         if c.lookup n |>.isSome then eerr g.pos s!"'{n}' is already defined"
         let slot ← fresh ty
         return (slot, { c with locals := { name := n, slot, ty, mutable := false } :: c.locals })
+      -- (a choice whose alternatives have several values themselves, or
+      -- clauses to lift, #283: a for of its own for each alternative, with
+      -- the clauses after it and the body, their values concatenated, so
+      -- that each alternative's values come in order, with the body between)
+      if let some b@{ pos := gp, place := none, branchy := none, each := none, .. } := Choice.binding? g then
+        if b.alts.any Choice.hasLiftable then
+          let site := s!"$cf{gp.line}_{gp.col}"
+          let moreClauses := more.flatMap fun (g', fs') => g' :: fs'
+          let bctx : Ctx := { c with canFail := ctx.canFail, inTaking := ctx.inTaking, inLoop := ctx.inLoop,
+                                     inRepeat := ctx.inRepeat }
+          let mut parts : List R := []
+          for (a, i) in b.alts.zipIdx do
+            let lifted := Choice.prepare [.decl gp b.name b.ty false a] (choiceValues c) (choiceField c)
+              (site := s!"{site}a{i}")
+            parts := parts ++ [← elabFor bctx p (lifted ++ fs ++ moreClauses) body (prepared := true)]
+          let some r0 := parts.head? | eerr gp "internal: a choice without alternatives"
+          if let some r := parts.find? (·.ty != r0.ty) then
+            eerr gp s!"the for's values have the type {r0.ty.show} for one alternative of this choice and {r.ty.show} for another"
+          return ⟨parts.tail.foldl (fun acc r => p2 .concat acc r.e) r0.e, r0.ty⟩
       -- (a call of a recursive function with several values taken lazily,
       -- #246: a loop over its values, each one iteration, over a one-element
       -- array, whose filter binds it and runs the generator's filters, and
@@ -5200,6 +5221,33 @@ partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
       let (inner, c2) ← elabOneGo c1 rest
       let bindX ← coerce p ⟨.local e, ety⟩ ty
       return (.forE e ra.e (.seq (.assign x bindX) (.seq inner Expr.failV)) (.lit .void), c2)
+    | some b@{ place := none, branchy := none, each := none, .. } =>
+      if b.alts.any Choice.hasLiftable then
+        -- (a choice whose alternatives have several values themselves, or
+        -- clauses to lift, #283: each alternative with the clauses after
+        -- it, in a first{…} of its own, so that its values are taken in
+        -- order and the clauses run for each; the first success gives the
+        -- names they bind, in a tuple)
+        let p := b.pos
+        let t := s!"$ct{p.line}_{p.col}"
+        let binds := (b.name :: Choice.boundIn rest).eraseDups
+        let vars := rest.filterMap fun | .decl _ n _ true _ => some n | _ => none
+        let tup : SExpr := .tuple p (binds.map (SExpr.ident p ·) ++ [.ident p "true"])
+        let alt (a : SExpr) (i : Nat) : SExpr :=
+          let lifted := Choice.prepare [.decl p b.name b.ty false a] (choiceValues ctx) (choiceField ctx)
+            (site := s!"{t}a{i}")
+          .app p (.ident p "$firstP") [.block p (lifted ++ rest ++ [tup])] false
+        return ← elabOneGo ctx ([.decl p t none false (Choice.mk p (b.alts.zipIdx.map fun (a, i) => alt a i))] ++
+          binds.zipIdx.map fun (n, i) => .decl p n none (vars.contains n) (.app p (.ident p t) [.int p (i : Int)] false))
+      let p := b.pos
+      let n := b.name
+      let (ty, es) ← elabAlts ctx p b
+      checkNewLocal ctx p n
+      let k ← fresh .int
+      let x ← fresh ty
+      let c1 := { ctx with locals := { name := n, slot := x, ty, mutable := false } :: ctx.locals }
+      let (inner, c2) ← elabOneGo c1 rest
+      return (Expr.chooseFirst k x es inner, c2)
     | some b =>
       let p := b.pos
       let n := b.name
