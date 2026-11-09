@@ -4,7 +4,8 @@
 # scripts/gen-choice.py, gen-conc.py and gen-classes.py and of the front end's code,
 # for the reviews of #234, #239 and #245 (choice and functions with several values, #208, #235),
 # laziness from the review of #267 (generators taken where they are consumed, #246),
-# exact effects where the first success is taken from the review of #275.
+# exact effects where the first success is taken from the review of #275,
+# consumers in methods from the review of #279, a return in a test's clauses from #284 and #287.
 """Random programs with choices INSIDE expressions (PR #234, phase 2), and an
 independent model written from docs/LANGUAGE.md's "Choice" section (not from
 scripts/gen-choice.py, and not from the lifting code).
@@ -43,6 +44,8 @@ flags: heavy     (with bif: more of them, longer chains, longer conditions)
        lazy      (recursive generators taken lazily, #246/#267; on by default
                   with mv, rec and bif; nolazy turns it off)
        noforset  (no op= / indexed set in a for)
+       noret     (no `if (A op B) then return else true` among a test's clauses,
+                  on with lazy otherwise, #284/#287)
 """
 import copy
 import os
@@ -207,6 +210,56 @@ LAZY = 'lazy' in flags or ('nolazy' not in flags and bool({'mv', 'rec', 'bif'} &
 GFUNCS = []
 GFRAME = [0]
 FXFIRST = [0]
+# ---- #279, flag meth (on with lazy; nometh turns it off): some tests run in
+# a method, Run, of a class of their own whose var fields are the test's two
+# variables (one of them <private> at times), read and set bare there, and
+# which inherits a method Nx from tbase (overridden at times) that counts in
+# a var field Cn, called bare. Where the first success is taken, a set of
+# such a field after a generator call keeps only the successful attempt's
+# value, as a local's would: the model treats the fields as the test's vars.
+METH = LAZY and 'nometh' not in flags
+# ---- #284/#287, flag ret (on with lazy; noret turns it off): a test's if or
+# for has a clause `if (A op B) then return else true` (A, B names bound before
+# it, the test's vars, literals). A return inside a failure context leaves the
+# function, and nothing the condition did is rolled back (LANGUAGE.md); the
+# test prints its state in a defer:, so it is still checked. After a call of a
+# generator with effects where the first success is taken (run as a function
+# of its own, #275), such a clause is refused (#287), and so is the program.
+RET = LAZY and 'noret' not in flags
+REFUSED = [False]
+
+
+class Return(Exception):
+    def __init__(self, st):
+        self.st = st
+
+
+# the kinds of node whose insides are failure contexts of their own (or an
+# inlined function's arguments), where a lifted call's clauses are not the test's
+NESTED = ('not', 'logic', 'optor', 'orx', 'ifx', 'bif', 'mcall')
+
+
+def lift_pos(x):
+    """'top' if x has a call of a lifted generator outside NESTED nodes, else
+    'nested' if it has one inside them, else None."""
+    if isinstance(x, tuple) and x and isinstance(x[0], str):
+        if x[0] == 'gcall' and GFUNCS[x[1]]['lifted']:
+            return 'top'
+        if x[0] in NESTED:
+            return 'nested' if has_lifted(x) else None
+    if isinstance(x, (tuple, list)):
+        rs = [lift_pos(y) for y in x]
+        return 'top' if 'top' in rs else ('nested' if 'nested' in rs else None)
+    return None
+
+
+def has_lifted(x):
+    if isinstance(x, tuple) and x and isinstance(x[0], str) and x[0] == 'gcall' and GFUNCS[x[1]]['lifted']:
+        return True
+    if isinstance(x, (tuple, list)):
+        return any(has_lifted(y) for y in x)
+    return False
+SNX = {'inc': 1}
 RFUNCS = []
 RX = {'fi': None}
 FUNCS = []
@@ -291,6 +344,8 @@ def gen_e(scope, vars_, d, ch):
     if k < 0.64:
         if CTX['ctrs'] is not None:
             return ('cnext', R.choice(CTX['ctrs'])) if CTX['ctrs'] else leaf(scope, vars_)
+        if CTX.get('meth') and CTX['fmax'] is None and R.random() < 0.5:
+            return ('snx',)        # (Self's Nx, called bare)
         return ('next',)
     if k < 0.69:
         if CTX['ctrs'] is not None:
@@ -324,7 +379,7 @@ def lift_block():
     function of its own), a later generator without them, an eager call or a
     branchy if is a name clash ('$c… is already defined'), and so is one in
     its arguments; a call with effects in such a call's arguments followed by
-    another is refused with 'internal: name $c…', fixed in #275; flag fxsteer avoids them)"""
+    another is refused with 'internal: name $c…'. Flag fxsteer avoids them (fixed in 9bff543))"""
     return CTX['take'] != 'for' and 'fxsteer' in flags and bool(FXFIRST[0] or CTX.get('liftargs'))
 
 
@@ -354,7 +409,7 @@ def gen_gcall(scope, vars_, d):
              and (GFUNCS[i]['first_ok'] or CTX['take'] == 'for' or 'nofirstfx' not in flags)
              # (known bug in #275: where the first success is taken, a call of a
              # generator without effects after one with effects is a name
-             # clash before #275; flag fxsteer avoids that)
+             # clash; so none after one there, with flag fxsteer)
              and not (not GFUNCS[i]['lifted'] and lift_block())
              and not (GFUNCS[i]['lifted'] and CTX.get('liftargs') and CTX['take'] != 'for' and 'fxsteer' in flags)
              # (nor a second one in a clause after a clause that had one)
@@ -855,6 +910,8 @@ def show(e):
         return f'Pos[{show(e[1])}]'
     if t == 'even':
         return f'Even[{show(e[1])}]'
+    if t == 'snx':
+        return 'Nx()'
     if t == 'next':
         return 'K.Next()'
     if t == 'add':
@@ -979,7 +1036,7 @@ def top_choice_e(e):
     t = e[0]
     if t in ('choice', 'bif', 'mcall', 'rcall', 'gcall'):
         return True
-    if t in ('lit', 'ref', 'next', 'bprint', 'bset', 'optor', 'orx', 'ifx', 'obj', 'cnext', 'big'):
+    if t in ('lit', 'ref', 'next', 'bprint', 'bset', 'optor', 'orx', 'ifx', 'obj', 'cnext', 'big', 'snx'):
         return False
     if t == 'cadd':
         return top_choice_e(e[2])
@@ -1040,6 +1097,8 @@ def show_c(c):
         return f"not ({show_cl(c[1], '; ')})"
     if t == 'logic':
         return f"logic{{{show_cl(c[1], '; ')}}}?"
+    if t == 'ret':
+        return f"if ({show(c[1])[1:-1]}) then return else true"
     raise AssertionError(c)
 
 
@@ -1048,7 +1107,7 @@ def show_cl(cl, sep):
 
 
 # ---------------------------------------------------------------- the model
-STATS = {'cp': 0, 'gfirst': 0, 'gback': 0, 'gfor': 0, 'lfirst': 0, 'lback': 0}
+STATS = {'cp': 0, 'gfirst': 0, 'gback': 0, 'gfor': 0, 'lfirst': 0, 'lback': 0, 'lmeth': 0}
 LASTG = [False]
 
 
@@ -1061,6 +1120,8 @@ def choice_point(thunks, st, k, mode, gen=False):
         STATS['gfirst' if mode == 'first' else 'gfor'] += 1
         if lift and mode == 'first':
             STATS['lfirst'] += 1
+            if CTX.get('meth'):
+                STATS['lmeth'] += 1
     if mode == 'first':
         for th in thunks:
             s1 = st.copy()
@@ -1130,6 +1191,10 @@ def ev(e, st, k, mode):
                 return k(v, s)
             raise Fail()
         return ev(e[1], st, kp, mode)
+    if t == 'snx':
+        v = st.vars['S.Cn']
+        st.vars['S.Cn'] += SNX['inc']
+        return k(v, st)
     if t == 'next':
         v = st.vars['K.C']
         st.vars['K.C'] += 1
@@ -1404,6 +1469,10 @@ def run_clauses(cl, st, k, mode):
         if res is not None:
             raise Fail()
         return nxt(st)
+    if t == 'ret':
+        if first_inner(lambda s, kk: ev(c[1], s, kk, 'first'), st) is not None:
+            raise Return(st)       # (leaves the test with the state as it is)
+        return nxt(st)
     if t == 'logic':
         res = first_inner(lambda s, kk: run_clauses(c[1], s, lambda s2: kk(None, s2), 'first'), st)
         if res is None:
@@ -1509,6 +1578,7 @@ lines = []
 out = []
 tests = []
 OVERFLOW = [False]
+SKIPRET = [False]
 if REC:
     lines += ["CTw(A:int, B:int)<computes>:int = A * 10 + B",
               "CPos(X:int)<computes><decides>:int =", "    X > 0", "    X"]
@@ -1542,6 +1612,12 @@ for ti in range(NT):
     st.vars = {v: 0 for v in vars_}
     st.vars['K.C'] = 0
     st.vars['J.C'] = 0
+    meth = METH and R.random() < 0.4
+    if meth:
+        ovr, priv = R.random() < 0.5, R.random() < 0.5
+        SNX['inc'] = 2 if ovr else 1
+        st.vars['S.Cn'] = 0
+    CTX['meth'] = meth
     L = [f"{name}():void ="]
     for v in vars_:
         L.append(f"    var {v}:int = 0")
@@ -1563,12 +1639,39 @@ for ti in range(NT):
         e = ('bin', '+', ('tell', fresh("t"), leaf([], vars_)), ('choice', [('lit', 1), ('lit', 2)]))
         cl.insert(0, ('bind', x, e))
         scope = [x] + scope
+    has_ret = False
+    if RET and kind in ('if', 'for') and R.random() < 0.35:
+        # where: before the first clause with a lifted call (it runs), or, at
+        # times, after one whose call is at the clause's top (refused, #287)
+        lp = [lift_pos(c) if kind == 'if' else None for c in cl]
+        j = next((i for i, x in enumerate(lp) if x), len(cl))
+        if j < len(cl) and lp[j] == "top" and R.random() < 0.4:
+            pos = R.randint(j + 1, len(cl))
+            REFUSED[0] = True
+        else:
+            pos = R.randint(0, j)
+        sc = [c[1] for c in cl[:pos] if c[0] in ('bind', 'range')]
+        cl.insert(pos, ('ret', ('cmp', leaf(sc, vars_), [(R.choice(OPS), leaf(sc, vars_))])))
+        has_ret = True
     show_state = ('Print("st {' + vars_[0] + '} {' + vars_[1] + '} {K.C} {J.C} '
-                  '{A[0] or 9}{A[1] or 9}{A[2] or 9}{A[3] or 9} {F}")')
+                  '{A[0] or 9}{A[1] or 9}{A[2] or 9}{A[3] or 9} {F}' + (' {Cn}' if meth else '') + '")')
 
     def state_line(s):
         return (f"st {s.vars[vars_[0]]} {s.vars[vars_[1]]} {s.vars['K.C']} {s.vars['J.C']} "
-                + "".join(str(x) for x in s.A) + " " + fmt_float(s.F))
+                + "".join(str(x) for x in s.A) + " " + fmt_float(s.F) + (f" {s.vars['S.Cn']}" if meth else ""))
+
+    def as_method(L):
+        """the test as the method Run of a class of its own, its vars fields."""
+        if not meth:
+            return L
+        M = [f"{name}c := class(tbase):", f"    var {vars_[0]}:int = 0",
+             f"    var {vars_[1]}{'<private>' if priv else ''}:int = 0"]
+        if ovr:
+            M += ["    Nx<override>()<transacts>:int =", "        set Cn += 2", "        Cn - 2"]
+        M.append("    Run():void =")
+        M += ["    " + l for l in L[3:]]
+        M.append(f"{name}():void = {name}c{{}}.Run()")
+        return M
     binds = [c[1] for c in cl if c[0] in ('bind', 'range', 'sbind')]
     vals_str = " ".join("{" + b + "}" for b in binds)
 
@@ -1582,12 +1685,15 @@ for ti in range(NT):
             L.append(f'        Print("then {vals_str}")')
             L.append("    else:")
             L.append('        Print("else")')
-            res = first_inner(lambda s, kk: run_clauses(cl, s, lambda s2: kk(None, s2), 'first'), st)
-            if res is not None:
-                st = res[1]
-                st.out.append(f"then {vals(st)}")
-            else:
-                st.out.append("else")
+            try:
+                res = first_inner(lambda s, kk: run_clauses(cl, s, lambda s2: kk(None, s2), 'first'), st)
+                if res is not None:
+                    st = res[1]
+                    st.out.append(f"then {vals(st)}")
+                else:
+                    st.out.append("else")
+            except Return as r:
+                st = r.st
         elif kind in ('first', 'ifmacro', 'option', 'or'):
             body = show_cl(cl, '; ')
             if kind == 'first':
@@ -1632,6 +1738,8 @@ for ti in range(NT):
                 st = run_clauses(cl, s0, fbody, 'all')
             except Fail:
                 pass
+            except Return as r:
+                st = r.st
         else:  # formacro
             last = cl[-1]
             L.append(f"    Vs := for{{{show_cl(cl, '; ')}}}")
@@ -1649,24 +1757,41 @@ for ti in range(NT):
             st.out += [f"e {v}" for v in vs]
     except StOverflow as ov:
         # (the program stops in this test: the later ones never run)
+        if has_ret:
+            SKIPRET[0] = True    # (whether its defer runs then is not modelled)
         L.append("    " + show_state)
-        lines += L
+        lines += as_method(L)
         tests.append(name)
         out += [f"== {name}"] + ov.st.out
         OVERFLOW[0] = True
         break
-    L.append("    " + show_state)
+    if has_ret:
+        L[7:7] = ["    defer:", "        " + show_state]     # (after F's declaration)
+    else:
+        L.append("    " + show_state)
     tout = st.out + [state_line(st)]
-    lines += L
+    lines += as_method(L)
     tests.append(name)
     out += [f"== {name}"] + tout
 
 src_main = ["Main():void ="] + [f'    Print("== {n}")\n    {n}()' for n in tests]
+if METH:
+    PRE += """tbase := class:
+    var Cn:int = 0
+    Nx()<transacts>:int =
+        set Cn += 1
+        Cn - 1
+"""
 if LAZY:
     PRE = PRE.replace("Pos(X:int)<decides>", "Pos(X:int)<computes><decides>").replace(
         "Even(X:int)<decides>", "Even(X:int)<computes><decides>").replace("Tw(A:int, B:int):int", "Tw(A:int, B:int)<computes>:int")
 open(f"{outdir}/p.verse", "w").write(PRE + "\n".join(lines) + "\n" + "\n".join(src_main) + "\n")
 open(f"{outdir}/p.chain", "w").write("1" if CHAIN[0] else "0")
 if os.environ.get('MVSTATS'):
-    print(f"stats gens={len(GFUNCS)} gfor={STATS['gfor']} gfirst={STATS['gfirst']} gback={STATS['gback']} lfirst={STATS['lfirst']} lback={STATS['lback']}", file=sys.stderr)
-open(f"{outdir}/p.expected", "w").write("".join(l + "\n" for l in out) + ("exit=2\n" if OVERFLOW[0] else "exit=0\n"))
+    print(f"stats gens={len(GFUNCS)} gfor={STATS['gfor']} gfirst={STATS['gfirst']} gback={STATS['gback']} lfirst={STATS['lfirst']} lback={STATS['lback']} lmeth={STATS['lmeth']}", file=sys.stderr)
+if SKIPRET[0]:
+    open(f"{outdir}/p.expected", "w").write("SKIP (a return in a test that overflows)\n")
+elif REFUSED[0]:
+    open(f"{outdir}/p.expected", "w").write("exit=4\n")
+else:
+    open(f"{outdir}/p.expected", "w").write("".join(l + "\n" for l in out) + ("exit=2\n" if OVERFLOW[0] else "exit=0\n"))
