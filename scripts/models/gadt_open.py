@@ -12,8 +12,12 @@ random order with opening casts (pairE[E], fstE[E], dupP[E], tagged[E], ...),
 recurse on the opened parts, pass opened values through generic functions
 (Id, Flip, First, MkCst, which need the opened witnesses), nest a refining
 cast (lit[P.L]) or another opening cast (pairE[P.L]) in a branch, and read a
-var changed before the cast.  The model evaluates each matcher by the first
-rule whose class is at or above the object's class.
+var changed before the cast.  Some casts are followed by more clauses (#277)
+where the else has no other cast (#286): Ds's last rule reads a var, ClosedSum
+binds and compares an opened value, and Sz's fstE rule calls Sz in the
+condition, so the call's failure is the else and its field writes are rolled
+back.  The model evaluates each matcher by the first rule whose class is at or
+above the object's class (and whose clauses hold).
 argv: seed expfile [--cmp]
 """
 import random, sys
@@ -241,11 +245,13 @@ def ev_text():
 
 DS_ORDER = [k for k in ['pairE', 'dupP', 'fstE', 'sndE', 'mkE', 'optE', 'tagged'] if ch(0.75) and k not in KNOWN]
 R.shuffle(DS_ORDER)
+DS_THR = R.randint(0, 7) if DS_ORDER and ch(0.5) else None   # last rule: `, Acc > DS_THR`
 def ds(n, K):
     acc = K + 1
     if n.cls == 'lit': return f"L{n.v}"
     for k in DS_ORDER:
         if below(n.cls, k):
+            if k == DS_ORDER[-1] and DS_THR is not None and not acc > DS_THR: break
             if k in ('pairE', 'dupP', 'tagged'): return f"{k[0]}{acc}({ds(n.L, acc)},{ds(n.R, acc)})"
             if k in ('fstE', 'sndE'): return f"{k[0]}({ds(n.P, acc)})"
             if k == 'mkE': return "M"
@@ -259,20 +265,27 @@ def ds_text():
         elif k in ('fstE', 'sndE'): b = f'"{k[0]}({{Ds(P.P, Acc)}})"'
         elif k == 'mkE': b = '"M"'
         else: b = '"O({Ds(P.E, Acc)})"'
-        L.append(f"    else if (P := {k}[E]) then {b}")
+        cl = f", Acc > {DS_THR}" if k == DS_ORDER[-1] and DS_THR is not None else ""
+        L.append(f"    else if (P := {k}[E]{cl}) then {b}")
     L.append("    else E.Name()")
     return '\n'.join(L)
 
 # Sz: <decides>; fails on a lit 13 reached through the rules; counts pairE hits
 def sz(n, hits):
     if n.cls == 'lit':
-        if n.v == 13: raise ValueError
+        if (n.v >= 12) if SZ_COND else (n.v == 13): raise ValueError
         return 1
     if below(n.cls, 'pairE'):
         hits[id(n)] = hits.get(id(n), 0) + 1
         return sz(n.L, hits) + sz(n.R, hits)
-    if n.cls == 'fstE': return sz(n.P, hits)
+    if n.cls == 'fstE':
+        if not SZ_COND: return sz(n.P, hits)
+        h2 = dict(hits)
+        try: v = sz(n.P, h2)
+        except ValueError: return 1     # the else; the call's writes are rolled back
+        hits.clear(); hits.update(h2); return v
     return 1
+SZ_COND = ch(0.5)
 SZ_TEXT = '''Sz(E:ex(t) where t:type)<decides>:int =
     if (L := lit[E]):
         L.V <> 13
@@ -282,6 +295,8 @@ SZ_TEXT = '''Sz(E:ex(t) where t:type)<decides>:int =
         Sz[P.L] + Sz[P.R]
     else if (F := fstE[E]) then Sz[F.P]
     else 1'''
+if SZ_COND:     # (and failing more often, so that the condition catches it)
+    SZ_TEXT = SZ_TEXT.replace("(F := fstE[E]) then Sz[F.P]", "(F := fstE[E], S := Sz[F.P]) then S").replace("L.V <> 13", "L.V < 12")
 
 # ---------------------------------------------------------------- main
 main, expect = [], []
@@ -316,13 +331,33 @@ for i in range(R.randint(3, 8)):
     if ch(0.3):
         main.append(f'    Print("native {nm}: {{{shname(t)}({nm}.Eval())}}")')
         expect.append(f"native {nm}: {show(native(n), t)}")
+# Sz's fstE rule with its call in the condition: a failed inner call is the
+# else (1), and its write to the inner pair's Hits is rolled back
+if SZ_COND:
+    for i in range(R.randint(1, 2)):
+        v1, v2 = R.randint(6, 16), R.randint(0, 13)
+        l1, l2, l3 = (N('lit', INT, f"lit{{V := {v}}}", v=v) for v in (v1, v2, 3))
+        pin = N('pairE', Tup(INT, INT), f"pairE(int, int){{L := {l1.txt}, R := {l2.txt}}}", L=l1, R=l2)
+        top = N('pairE', Tup(INT, INT), '', L=N('fstE', INT, '', P=pin), R=l3)
+        main.append(f"    Pin{i}:pairE(int, int) = {pin.txt}")
+        main.append(f"    Top{i}:pairE(int, int) = pairE(int, int){{L := fstE(int, int){{P := Pin{i}}}, R := {l3.txt}}}")
+        for _ in range(R.randint(1, 2)):
+            h = {}; v = sz(top, h)          # cannot fail: the failure is caught in fstE's condition
+            for k2, c2 in h.items(): hits_total[k2] = hits_total.get(k2, 0) + c2
+            main.append(f'    if (S := Sz[Top{i}]) then Print("szc: {{S}} {{Top{i}.Hits}} {{Pin{i}.Hits}}") else Print("szc: fail")')
+            expect.append(f"szc: {v} {hits_total.get(id(top), 0)} {hits_total.get(id(pin), 0)}")
 # a closed object type: opening casts that refine to closed types
+CS_THR = R.randint(0, 20) if ch(0.5) else None     # `, X := Ev(P.L), X > CS_THR`
 for nm, n, t in objs:
     if t == Tup(INT, INT):
         main.append(f'    Print("closed {nm}: {{ClosedSum({nm})}}")')
-        expect.append(f"closed {nm}: {ev(n.L) + ev(n.R) if below(n.cls, 'pairE') else -1}")
+        if CS_THR is None: v = ev(n.L) + ev(n.R) if below(n.cls, 'pairE') else -1
+        else: v = ev(n.L) + ev(n.R) if below(n.cls, 'pairE') and ev(n.L) > CS_THR else -1
+        expect.append(f"closed {nm}: {v}")
 CLOSED_TXT = '''ClosedSum(E:ex(tuple(int, int))):int =
     if (P := pairE[E]) then Ev(P.L) + Ev(P.R) else -1'''
+if CS_THR is not None:
+    CLOSED_TXT = CLOSED_TXT.replace("(P := pairE[E]) then Ev(P.L)", f"(P := pairE[E], X := Ev(P.L), X > {CS_THR}) then X")
 
 prog = [f"# genopen seed {seed}", CLASSES, "NewLeafP(L:ex(int), R:ex(string)):leafP = leafP{L := L, R := R}",
         ev_text(), ds_text(), SZ_TEXT, CLOSED_TXT] + list(SHOWN.values()) + ["Main():void ="] + main
