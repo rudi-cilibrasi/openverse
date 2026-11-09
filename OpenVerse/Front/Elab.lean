@@ -1735,10 +1735,25 @@ partial def convert (env : TyEnv) (e : Expr) (a b : Ty) : EM (Option Expr) := do
     return some (.seq (.assign x e) (.prim .mkArr es.toList))
   | _, _ => return none
 
+/-- A tuple literal whose element of type `never` was followed by `void`,
+    for a Verse Core that infers the tuple's type (#285), taken to a type
+    that has another type there: the element as it was, which has every
+    type (nested tuples too). -/
+partial def unwrapNever : Expr → Ty → Ty → Expr
+  | .prim .mkTup es, .tup ts, .tup us =>
+    if es.length == ts.length && ts.length == us.length then
+      .prim .mkTup ((es.zip (ts.zip us)).map fun (e, t, u) => match e, t with
+        | .seq e' (.lit .void), .never => if u == .void then e else e'
+        | e, .tup _ => unwrapNever e t u
+        | e, _ => e)
+    else .prim .mkTup es
+  | e, _, _ => e
+
 /-- Convert `r` to type `target`: equal types, `false` (bottom) to anything,
     anything to `void` (Book of Verse: "void accepts any value"), and a
     class to a class or interface above it (`convert`). -/
 def coerce (p : Pos) (r : R) (target : Ty) : EM Expr := do
+  let r : R := { r with e := unwrapNever r.e r.ty target }
   if r.ty == target || r.ty == .never then return r.e
   if target == .void then return .seq r.e (.lit .void)
   match ← convert (← get).env r.e r.ty target with
