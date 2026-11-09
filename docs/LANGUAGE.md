@@ -553,7 +553,7 @@ circle := class(shape, labelled):
   is a struct or container that holds one.
 - **Not yet supported** (each rejected with a message):
   - in a class with type parameters that its parent's type arguments
-    do not give: a `spawn` in an override, a `<suspends>` override whose
+    do not give: a `spawn` in an immediate override, a `<suspends>` override whose
     result is narrower than the method's it overrides when called through
     code generic over the class above, and,
     in code generic over a class above, a call of one whose omitted

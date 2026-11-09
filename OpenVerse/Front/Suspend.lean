@@ -255,7 +255,7 @@ partial def chainArms : Expr → List Expr
     (#173): each chain becomes a function, `base + i` for the `i`-th met
     (counting from the state's size), of the slots it uses, called in its
     place. Collects each chain, its slots and its task's slot. -/
-partial def liftChains (m base : Nat) : Expr → StateM (Array (Expr × List Nat × Nat)) Expr
+partial def liftChains (m base : Nat) (extra : List Nat := []) : Expr → StateM (Array (Expr × List Nat × Nat)) Expr
   | .call f es => do
     match f == m, es with
     | true, [.prim .mkArr [.seq ch v, .seq (.local t) v2]] =>
@@ -263,24 +263,25 @@ partial def liftChains (m base : Nat) : Expr → StateM (Array (Expr × List Nat
       -- (also one whose every test a copy at closed types dropped, #186:
       -- left with its unreachable end, at a type no class implements)
       | .ite .. | .prim .userErr [] =>
-        let ops := (slotsOf ch).eraseDups
+        -- (and `extra`: the caller's type witnesses, for a generic chain)
+        let ops := ((slotsOf ch) ++ extra).eraseDups
         let i := (← get).size
         modify (·.push (ch, ops, t))
         return .call f [.prim .mkArr [.seq (.call (base + i) (ops.map Expr.local)) v, .seq (.local t) v2]]
       | .call g gs =>
-        let gs ← gs.mapM (liftChains m base)
+        let gs ← gs.mapM (liftChains m base extra)
         return .call f [.prim .mkArr [.seq (.call g gs) v, .seq (.local t) v2]]
       | _ => return .call f es
-    | _, _ => return .call f (← es.mapM (liftChains m base))
-  | .assign i x => return .assign i (← liftChains m base x)
-  | .ret x => return .ret (← liftChains m base x)
-  | .print x => return .print (← liftChains m base x)
-  | .loop x => return .loop (← liftChains m base x)
-  | .seq a b => return .seq (← liftChains m base a) (← liftChains m base b)
-  | .prim p es => return .prim p (← es.mapM (liftChains m base))
-  | .heap op es => return .heap op (← es.mapM (liftChains m base))
-  | .ite c t x => return .ite (← liftChains m base c) (← liftChains m base t) (← liftChains m base x)
-  | .forE i it f b => return .forE i (← liftChains m base it) (← liftChains m base f) (← liftChains m base b)
+    | _, _ => return .call f (← es.mapM (liftChains m base extra))
+  | .assign i x => return .assign i (← liftChains m base extra x)
+  | .ret x => return .ret (← liftChains m base extra x)
+  | .print x => return .print (← liftChains m base extra x)
+  | .loop x => return .loop (← liftChains m base extra x)
+  | .seq a b => return .seq (← liftChains m base extra a) (← liftChains m base extra b)
+  | .prim p es => return .prim p (← es.mapM (liftChains m base extra))
+  | .heap op es => return .heap op (← es.mapM (liftChains m base extra))
+  | .ite c t x => return .ite (← liftChains m base extra c) (← liftChains m base extra t) (← liftChains m base extra x)
+  | .forE i it f b => return .forE i (← liftChains m base extra it) (← liftChains m base extra f) (← liftChains m base extra b)
   | x => return x
 
 /-- `e` without the tests in `Typed.dispatch`'s shape that no object can

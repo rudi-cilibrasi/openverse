@@ -874,12 +874,20 @@ keeps the witnesses its resumption passes on. So such a function is
 compiled once, and calls itself at ever bigger types as any function
 does.
 
-**Specialising generic functions with roots.** A generic function with a
-spawned dispatch whose receiver or arguments have types that mention its
-type parameters (a spawned `E.Eval()` on an `expr(t)`, #204), a generic
-immediate function with a `spawn` (whose roots are made only for
-non-generic functions), or a function calling such a function at such
-types, is specialised before the lowering (`specialise`, #174). Verse Core
+**Specialising generic functions with roots.** A spawned dispatch (a
+spawned `E.Eval()` on an `expr(t)`, #173, #204) is first lifted into a
+suspends function `$dispatchK` of the slots it uses, which the spawn calls.
+That happens before the specialisation, and `$dispatchK` is generic in its
+caller's type parameters when those slots' types mention them: it takes the
+caller's type witnesses too (its hidden parameters, and the slots an
+override fills from its receiver, #209). The spawn is then a spawn of a
+call, a root at the caller's type arguments (#244), so it needs no copy per
+type: a function calling itself at ever bigger types may spawn dispatches,
+and so may an override of a class with type parameters its parent's type
+arguments do not give. A generic immediate function with a `spawn` (whose
+roots are made only for non-generic functions), or a function calling such
+a function at its type parameters, is specialised before the lowering
+(`specialise`, #174). Verse Core
 is first-order and a generic call passes one witness argument per type
 argument, built so that the checker infers exactly that type, so each
 call's instantiation is read off its last arguments. A call at closed types
@@ -1129,10 +1137,12 @@ below `box(t) := class(container(t))`): `box` holds `t` in a hidden field
 too, and its overrides read it from the receiver, as a dispatch from
 `shower` opens it. A `<suspends>`
 override of such a class works (#251, see "Avoiding allocation and
-journaling"). A `spawn` in one, and a call whose omitted named argument's
-default has no type of its own in a dispatch that opens arguments, are
-refused for now: their roots and temporaries would need the opened
-types. A variable of a
+journaling"), and so does a spawn in one, also of a dispatch at its class's
+type parameters (see "Specialising generic functions with roots"). An
+immediate override with a `spawn`, and a call whose omitted named
+argument's default has no type of its own in a dispatch that opens
+arguments, are refused for now: the first would need a copy per type, the
+second a temporary of an opened type. A variable of a
 class type whose classes below need more type arguments than its own
 starts as the class's hidden placeholder (#157), also for a class
 without type parameters.

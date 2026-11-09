@@ -1,4 +1,4 @@
-# expect: needs a copy per type (#174), and its class has type parameters that its parent's type arguments do not give
+# the same, in an override whose only type parameter its receiver holds (#209)
 # (an override whose only type parameter is held by its receiver: idJ(a) := class(job(int)))
 job(t:type) := class<abstract>:
     Run()<suspends>:t
