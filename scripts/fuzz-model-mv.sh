@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Model-based fuzzing of choice and functions with several values (#208,
 # #235): random programs from an independent model (scripts/models/mv.py,
-# from the reviews of #239, #245, #267, #275, #279, #287, #296, #302, #305, #307, #310 and #312), in four modes by seed: plain choices,
+# from the reviews of #239, #245, #267, #275, #279, #287, #296, #302, #305, #307, #310, #312 and #318), in four modes by seed: plain choices,
 # choices in if branches (bif), functions with several values (mv), and
 # recursive ones (rec). Lean must match the model's output and exit, and C
 # must match Lean; no program may hit an internal error. A program that runs
