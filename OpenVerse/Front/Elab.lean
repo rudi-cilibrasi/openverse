@@ -2601,7 +2601,12 @@ partial def elabStmt (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM (R × Ctx) 
       -- checked against its parameter's type once the type parameters it
       -- mentions are bound, else inferring them; `false`, `array{}` and
       -- `map{}` last), then named for the written types after
-      let names := tps.filterMap fun | .ident _ n => some n | _ => none
+      let (fname, names) := match tps.filterMap fun | .ident _ n => some n | _ => none with
+        | f :: ns => (f, ns)
+        | [] => ("", [])
+      -- (as messages show them: the type parameters' own names)
+      let shown (t : Ty) : String :=
+        (t.subst (names.map fun n => (n, Ty.param ((n.dropWhile (· != '_')).drop 1).toString false))).show
       let penv : TyEnv := { ctx.types with tvars := ctx.types.tvars ++ names.map fun n => (n, Ty.param n false) }
       let items ← decls.mapM fun
         | .decl q x (some sty) v a => do pure (q, x, v, a, ← resolveTy penv q sty)
@@ -2617,7 +2622,7 @@ partial def elabStmt (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM (R × Ctx) 
           if (pass == 0) == deferred[i]! then continue
           let t := t0.subst σ
           if t.params.any names.contains then
-            if fromContext a then eerr q "cannot infer the type parameters of this call from its arguments (#235)"
+            if fromContext a then eerr q s!"cannot infer the type parameters of {fname} from the arguments of this call"
             let r ← elabE ctx a none
             match t.matchArg ctx.types σ r.ty with
             | some σ' =>
@@ -2625,15 +2630,15 @@ partial def elabStmt (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM (R × Ctx) 
               let t' := t.subst σ
               if t'.params.any names.contains then
                 if pass == 0 then deferred := deferred.set! i true
-                else eerr q "cannot infer the type parameters of this call from this argument (#235)"
+                else eerr q s!"cannot infer the type parameters of {fname} from this argument"
               else done := done.set! i (some (← coerce q r t', t'))
-            | none => eerr q s!"expected {t.show}, found {r.ty.show}"
+            | none => eerr q s!"expected {shown t}, found {r.ty.show} (in a call of {fname})"
           else
             done := done.set! i (some (← coerce q (← elabE ctx a (some t)) t, t))
       let mut code : Expr := .lit .void
       let mut c := ctx
       for ((q, x, v, _, _), d) in items.zip done.toList do
-        let some (e, t) := d | eerr q "cannot infer the type parameters of this call from its arguments (#235)"
+        let some (e, t) := d | eerr q s!"cannot infer the type parameters of {fname} from the arguments of this call"
         checkNewLocal c q x
         let slot ← fresh t
         code := .seq code (.assign slot e)

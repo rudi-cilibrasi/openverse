@@ -804,7 +804,7 @@ partial def inlineCalls (mv : List (String × MFn)) (e : SExpr) (recs : List Str
       let ρ : List (String × String) := f.tparams.map fun tp => (tp.name, s!"$tp{site}_{tp.name}")
       let tyOf (t : STy) : Option STy := some (styRename ρ t)
       let tmark : List SExpr := if ρ.isEmpty then [] else
-        [.app q (.ident q "$tparams") (ρ.map fun (_, n) => SExpr.ident q n) false]
+        [.app q (.ident q "$tparams") (.ident q g :: ρ.map fun (_, n) => SExpr.ident q n) false]
       let (pds, unpack, as'') : List SExpr × List SExpr × List SExpr :=
         if as.length == f.params.length then
           (f.params.map fun sp => SExpr.decl q (tag sp.name) (tyOf sp.ty) false (.ident q "$arg"), [], as')
