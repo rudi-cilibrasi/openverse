@@ -1,4 +1,7 @@
-# expect: its type arguments there relate to ones that fstE does not have
+# a dispatch from expr(t) to fstT, whose pins relate the receiver's type
+# arguments to ones fstE, whose implementation it uses, does not have (#209):
+# the refinement opens them, and fstE's implementation gets its hidden
+# arguments from the caller's own type parameters (Ctx.unrefine)
 expr(t:type) := class<abstract>:
     Eval():t
     Name():string = "expr"

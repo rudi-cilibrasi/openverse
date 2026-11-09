@@ -4864,16 +4864,19 @@ partial def elabAppBase (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (b
                 -- (pins that relate the receiver's type arguments to ones
                 -- past those of `e`, whose implementation is called: they
                 -- would instantiate `e`'s type parameters with what the
-                -- dispatch opens, which it has no values of; so no
-                -- refinement, and `e`'s implementation must take the
-                -- receiver as it is)
+                -- dispatch opens; so, where `e` takes the receiver's type
+                -- arguments as they are (no pins of its own on them, and no
+                -- more of them), no refinement, and `e`'s implementation
+                -- takes the receiver as it is; elsewhere the refinement
+                -- below, whose hidden arguments for `e`'s implementation are
+                -- built from the caller's own type parameters, which the
+                -- refinement binds to what it opens, `Ctx.unrefine`, #209)
                 -- (unless the implementation takes no values of type arguments,
                 -- reading them from its receiver, `Sig.selfTps`)
                 let calleeDicts := ((ctx.sig? fname).map (·.ndicts)).getD 0
                 if calleeDicts != 0 &&
-                    !VTy.pinsBelow (env.lowerPins (pins.take (max eLen rargs.length))) (max eLen rargs.length) then
-                  if !(needOf (env.corePins e)).isEmpty || eLen > rargs.length then
-                    eerr p s!"cannot dispatch {m} on {withArticle (Ty.struct c targs).show} to class {part[0]!} yet: its type arguments there relate to ones that {e} does not have (#209)"
+                    !VTy.pinsBelow (env.lowerPins (pins.take (max eLen rargs.length))) (max eLen rargs.length) &&
+                    (needOf (env.corePins e)).isEmpty && eLen ≤ rargs.length then
                   let sd ← fresh (.struct e (argsAt e))
                   let ctx' := { ctx with locals := { name := s!"$self{sd}", slot := sd, ty := .struct e (argsAt e), mutable := false } :: (locs ++ ctx.locals) }
                   let rc ← elabApp ctx' p (.ident mp fname) (.ident mp s!"$self{sd}" :: argIds.toList) bracket exp
