@@ -8,7 +8,7 @@
 # consumers in methods from the review of #279, a return in a test's clauses from #284 and #287,
 # alternatives with several values from the review of #296, blocks and constructions from #302,
 # named arguments from #305, functions with several values and named parameters from #307,
-# methods with several values from #310.
+# methods with several values from #310, returns in functions with several values from #312.
 """Random programs with choices INSIDE expressions (PR #234, phase 2), and an
 independent model written from docs/LANGUAGE.md's "Choice" section (not from
 scripts/gen-choice.py, and not from the lifting code).
@@ -49,6 +49,8 @@ flags: heavy     (with bif: more of them, longer chains, longer conditions)
        noforset  (no op= / indexed set in a for)
        noret     (no `if (A op B) then return else true` among a test's clauses,
                   on with lazy otherwise, #284/#287)
+       nort      (no call of RT, a function with several values with an early return
+                  whose value is a choice; on with lazy otherwise, #312)
        nomvm     (no bare call, in a test that runs as a method, of that class's own
                   method with several values; on with meth otherwise, #310)
        nonam     (no call of NAM(NU, ?NV := …), a function with several values and a
@@ -278,6 +280,26 @@ NAM = LAZY and 'nonam' not in flags and 'cf' not in flags
 # argument and the body must both read the field (the silent bug #310's review
 # found).
 MVM = 'nomvm' not in flags
+# ---- #312, flag rt (on with lazy; nort turns it off): a test's expression may call
+#   RT(RTa:int):int =
+#       RTy := RTa | RTa + 1 | RTa + 2
+#       Print("p{RTy}")
+#       if (RTy = RTa + 1):
+#           Print("rt")
+#           return 99
+#       else:
+#           RTd := RTy * 2
+#           Print("e{RTd}")
+#       RTd := RTy * 10
+#       RTd
+# Each alternative prints p{RTy} first, before the if (#312's review: no hidden
+# choice may keep it when a for rejects the value).
+# A return gives the value of the alternative it is reached in: (after e{2 RTa})
+# RTa * 10, then (after rt) 99, then (after e{2 (RTa + 2)}) (RTa + 2) * 10. (#312
+# takes only the exact subset: every choice before the if, none in a return's
+# value or after the if.)
+# The else's RTd is its own; the one after the if is another (#312's review).
+RT = LAZY and 'nort' not in flags and 'cf' not in flags
 REFUSED = [False]
 
 
@@ -288,7 +310,7 @@ class Return(Exception):
 
 # the kinds of node whose insides are failure contexts of their own (or an
 # inlined function's arguments), where a lifted call's clauses are not the test's
-NESTED = ('not', 'logic', 'optor', 'orx', 'ifx', 'bif', 'mcall', 'choice', 'blk', 'cons', 'na', 'nam', 'mvm')
+NESTED = ('not', 'logic', 'optor', 'orx', 'ifx', 'bif', 'mcall', 'choice', 'blk', 'cons', 'na', 'nam', 'mvm', 'rt')
 
 
 def lift_pos(x):
@@ -389,6 +411,13 @@ def gen_e(scope, vars_, d, ch):
         if op == '*' and R.random() < 0.5:
             a, b = b, a
         return ('bin', op, a, b)
+    if (k < 0.48 and RT and ch and NCH[0] < 4 and CTX['fmax'] is None and not CTX['nochoice']
+            and not CTX.get('inset') and not CTX.get('inbif') and R.random() < 0.3
+            and (not MV or PROD[0] * 3 <= CTX['plim'])):
+        NCH[0] += 1
+        if MV:
+            PROD[0] *= 3
+        return ('rt', gen_e(scope, vars_, d + 1, ch))
     if (k < 0.48 and MVM and CTX.get('meth') and METH and ch and NCH[0] < 4 and CTX['fmax'] is None
             and not CTX['nochoice'] and not CTX.get('inset') and not CTX.get('inbif') and R.random() < 0.9
             and (not MV or PROD[0] * 2 <= CTX['plim'])):
@@ -1006,6 +1035,8 @@ def show(e):
         return f'block{{ {e[1]} := {show(e[2])}; {show(e[3])} }}'
     if t == 'mvm':
         return f'Mv{e[2][0]}({show(e[1])})'
+    if t == 'rt':
+        return f'RT({show(e[1])})'
     if t in ('na', 'nam'):
         items = [f'?{n} := {show(x)}' for n, x in e[2]]
         items.insert(e[3], show(e[1]))
@@ -1146,7 +1177,7 @@ def failable(scope, vars_):
 
 def top_choice_e(e):
     t = e[0]
-    if t in ('choice', 'bif', 'mcall', 'rcall', 'gcall', 'nam', 'mvm'):
+    if t in ('choice', 'bif', 'mcall', 'rcall', 'gcall', 'nam', 'mvm', 'rt'):
         return True
     if t in ('lit', 'ref', 'next', 'bprint', 'bset', 'optor', 'orx', 'ifx', 'obj', 'cnext', 'big', 'snx'):
         return False
@@ -1291,6 +1322,23 @@ def ev(e, st, k, mode):
     if t == 'bset':
         st.vars[e[1]] = e[3] if e[2] == '=' else chks(st.vars[e[1]] + e[3], st)
         return ev(e[4], st, k, mode)
+    if t == 'rt':
+        def krt(v, s0):
+            def val(x):
+                return lambda s1, k2: k2(chks(x, s1), s1)
+
+            def alt_ret(s1, k2):
+                s1.out.append(f"p{chks(v + 1, s1)}")
+                s1.out.append('rt')
+                return k2(99, s1)
+            def fall(y):
+                def th(s1, k2):
+                    s1.out.append(f"p{y}")
+                    s1.out.append(f"e{chks(y * 2, s1)}")
+                    return k2(chks(y * 10, s1), s1)
+                return th
+            return choice_point([fall(v), alt_ret, fall(v + 2)], s0, k, mode)
+        return ev(e[1], st, krt, mode)
     if t == 'mvm':
         def kmvm(v, s0):
             def alt1(s1, k2):
@@ -1954,6 +2002,10 @@ if METH:
         set Cn += 1
         Cn - 1
 """
+if RT:
+    PRE += ('RT(RTa:int):int =\n    RTy := RTa | RTa + 1 | RTa + 2\n    Print("p{RTy}")\n    if (RTy = RTa + 1):\n'
+            '        Print("rt")\n        return 99\n    else:\n        RTd := RTy * 2\n'
+            '        Print("e{RTd}")\n    RTd := RTy * 10\n    RTd\n')
 if NAM:
     PRE += 'NAM(NU:int, ?NV:int = Tell("dv", NU)):int = NU + NV | NV * 2\n'
 if NA:
