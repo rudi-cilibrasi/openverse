@@ -617,7 +617,9 @@ and journals every write made in a condition (for rollback). So:
   `ref [callee, $nil] args`, at the call's type arguments, where `$nil` is
   an empty class without type parameters. An object of a class without
   pins can be made at any type arguments, so the frame's `new` fills the
-  field with one (one allocation per frame, not per call). The call site's
+  field with one (and the field of the call site's slot, as every slot has
+  one: two small allocations per call site and frame, none per call or
+  resumption). The call site's
   slot has the same type, and its initial value is the field itself, read
   from the frame (`DefaultE.field`). The test of the class narrows it to
   the callee's frame type at those arguments (`Typed.dispatch` with no
