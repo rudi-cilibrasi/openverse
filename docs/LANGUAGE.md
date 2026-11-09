@@ -1123,9 +1123,9 @@ Main()<suspends>:void =
   `spawn` is compiled once, as any generic function: its tasks are roots
   of the scheduler at its type arguments (#244), and it may call itself at
   ever bigger types (`F(X:t)` calling `F(array{X})`). A spawned dispatch
-  that reads values of its type parameters (`spawn{E.Eval()}` on an
-  `expr(t)` whose classes fix `t`), and a generic immediate function with
-  a `spawn`, are still compiled once for each type they are used at
+  whose receiver or arguments have types that mention its type parameters
+  (`spawn{E.Eval()}` on an `expr(t)`), and a generic immediate function
+  with a `spawn`, are still compiled once for each type they are used at
   (#174), as is a generic function that uses one at its own type
   parameters; such a function calling itself at ever bigger types would
   need endlessly many copies and is refused: a program may need at most

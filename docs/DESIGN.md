@@ -644,10 +644,10 @@ each resuming `Main`'s frame. A sleeping frame reports the tick it waits
 for, and the clock then moves to the earliest of them, so idle ticks cost
 nothing.
 
-The scheduler only ever holds non-generic task roots. Core has no
-existential types, so a queue of frames whose type arguments it has forgotten
-could not be typed; generic frames are always resumed by their callers, who
-know their type arguments.
+The scheduler holds its task roots as references without type
+arguments; a generic frame that is not a root is resumed by its caller,
+who knows its type arguments, and a generic root by a dispatch that opens
+them (below).
 
 **Generic roots (#244).** A `branch`, a `rush`, or a `spawn` of a call,
 in a generic function, is a root of the scheduler at the function's own
@@ -663,8 +663,8 @@ does. `OPENVERSE_GENERIC_ROOTS=1` compiles them with generic roots only,
 without the copies below, which the gate's concurrency fuzzing also does.
 
 **Specialising generic functions with roots.** A generic function with a
-spawned dispatch reading values of its type parameters (a spawned
-`E.Eval()` on an `expr(t)` whose classes all fix `t`, #204), a generic
+spawned dispatch whose receiver or arguments have types that mention its
+type parameters (a spawned `E.Eval()` on an `expr(t)`, #204), a generic
 immediate function with a `spawn` (whose roots are made only for
 non-generic functions), or a function calling such a function at such
 types, is specialised before the lowering (`specialise`, #174). Verse Core

@@ -36,6 +36,8 @@ check "choice fuzzing (${FUZZ_CHOICE:-200} programs, against a backtracking mode
 check "concurrency fuzzing (${FUZZ_CONC:-100} programs)" scripts/fuzz-conc.sh "${FUZZ_CONC:-100}" 1
 check "concurrency fuzzing with generic roots (${FUZZ_CONC_GR:-60} programs, #244)" \
   env OPENVERSE_GENERIC_ROOTS=1 scripts/fuzz-conc.sh "${FUZZ_CONC_GR:-60}" 1001
+check "polymorphic-recursion concurrency fuzzing (${FUZZ_CONC_POLY:-60} programs, both modes, #244)" \
+  scripts/fuzz-conc-poly.sh "${FUZZ_CONC_POLY:-60}" 1
 check "heap-reclamation fuzzing (${FUZZ_FIELDS:-60} programs with array fields)" scripts/fuzz-fields.sh "${FUZZ_FIELDS:-60}" 1
 
 failed=()

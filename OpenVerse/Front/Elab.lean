@@ -5041,9 +5041,9 @@ structure Options where
   /-- Branches of casts that refine type arguments, found in an earlier
       elaboration (#243): a function for each. -/
   castRequests : List Refine.Lift := []
-  /-- Compile every generic function with a `branch`, `rush` or `spawn` at
-      its own type arguments, with generic roots (#244), not also copies at
-      small closed types (#225): for testing those
+  /-- Compile the generic functions with a `branch`, `rush` or `spawn` that
+      need no copies (#174) with generic roots only (#244), not also copies
+      at small closed types (#225): for testing those
       (`OPENVERSE_GENERIC_ROOTS=1`). -/
   genericRoots : Bool := false
 
@@ -5472,7 +5472,6 @@ def specialise (fns0 : Array Fn) (slotTys0 : Array (List VTy)) (S0 : Sigs) (ntpO
   for gi in List.range nOrig do
     let Γ := slotTys[gi]!
     let ρ := resTy S0 gi
-    let openTy (e : Expr) : Bool := (tc S0 Γ ρ e none).all (·.mentionsVar)
     let openSlot (j : Nat) : Bool := ((Γ[j]?).map (·.mentionsVar)).getD false
     -- (#244: a branch, a rush, or a spawn of a call, is a root of the
     -- scheduler at the function's own type arguments, which its dispatch
@@ -5480,7 +5479,6 @@ def specialise (fns0 : Array Fn) (slotTys0 : Array (List VTy)) (S0 : Sigs) (ntpO
     let spawnOpen (es : List Expr) : Bool := match es with
       | [.prim .mkArr [.seq (.call _ _) _, .seq (.local _) _]] => false
       | _ => (Suspend.slotsOf (.prim .mkTup es)).any openSlot
-    let _ := openTy
     needy := needy.push (ntpOf gi > 0 && (Suspend.callsOf fns[gi]!.body).any fun (g, es) =>
       g == spawnMark && (!isSusp gi || spawnOpen es))
   let witTys (S : Sigs) (Γ : List VTy) (ρ : VTy) (g : Nat) (es : List Expr) : List (Option VTy) :=
@@ -5580,12 +5578,13 @@ def specialise (fns0 : Array Fn) (slotTys0 : Array (List VTy)) (S0 : Sigs) (ntpO
 
 /-- The concurrency lowering (#156), at the end of `elabProgramCore`: each
     `<suspends>` function becomes a frame class and its resume, cancel and
-    arm functions (`Suspend.lower`), after the generic functions with task
-    roots are specialised (#174) and spawned dispatches are lifted (#173);
-    then the task roots, branch wrappers, the scheduler's list and, for a
-    suspends `Main`, `$Run` and `$Start`. Gives the functions, their slot
-    types and signatures, the class table, the frame classes and `Main`'s
-    call. (A function of its own, so that `elabProgramCore` stays within
+    arm functions (`Suspend.lower`), after the generic functions whose
+    roots generic roots do not cover are specialised (#174, #244) and
+    spawned dispatches are lifted (#173); then the task roots (generic ones
+    at their function's type arguments), branch wrappers, the scheduler's
+    list and, for a suspends `Main`, `$Run` and `$Start`. Gives the
+    functions, their slot types and signatures, the class table, the frame
+    classes and their pins, and `Main`'s call. (A function of its own, so that `elabProgramCore` stays within
     Lean's elaboration limits.) -/
 def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsigs0 : List (List VTy × VTy))
     (protos : HeapTy) (pins : List (List (Option VTy))) (inFn : String → String → String)
@@ -5617,7 +5616,8 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
   let leaves := ["$Sleep", "$WaitDone", "$syncMark", "$raceMark", "$rushMark", "$spawnMark", "$branchMark",
     "$cancelMark"]
   -- (#174) the generic functions whose tasks' roots would depend on their
-  -- type parameters, specialised at the types they are called at
+  -- type parameters in a way generic roots (#244) do not cover,
+  -- specialised at the types they are called at
   let sigOf (f : Nat) : Option Sig := allS.find? (·.idx == f)
   let nOrig := fns.size
   -- (#209) an override that reads its class's type arguments' values from
@@ -5877,6 +5877,13 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
   for k in List.range roots.size do
     rootSigs := rootSigs.push ([frameTy (rootJ k), schedTy], .int)
     rootSigs := rootSigs.push ([schedTy, frameTy (rootJ k)], VTy.void)
+  -- a task's root: the type of its `Root` field (in every class that has
+  -- it), before the frames' defaults are built from the class table (a
+  -- task temporary's `Root` starts as `false`, not as a `?int` parameter
+  -- the prelude's placeholder type would allow)
+  for d in env.classes do
+    if let some ri := (env.fields d).findIdx? (·.1 == "$Root") then
+      classTable := classTable.set (env.tagOf d) ((classTable[env.tagOf d]!).set ri (.opt rootAny))
   let Sinf : Sigs := { fns := fsigs0 ++ extraSigs.toList ++ selfSigs.toList ++ rootSigs.toList, classes := classTable,
                        protos, pins }
   let mut newFns : Array Fn := #[]
@@ -6088,10 +6095,6 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
   frameClasses := frameClasses.push [rootAny, .opt cellTy]
   framePins := framePins.push []
   classTable := classTable.set schedTag (((classTable[schedTag]!).set headF (.opt cellTy)).set tailF (.opt cellTy))
-  -- a task's root: the type of its `Root` field (in every class that has it)
-  for d in env.classes do
-    if let some ri := (env.fields d).findIdx? (·.1 == "$Root") then
-      classTable := classTable.set (env.tagOf d) ((classTable[env.tagOf d]!).set ri (.opt rootAny))
   -- cancelling (#156): `$cancelRoot(sched, root)` unwinds a root that is
   -- not done, through its kind's cancel function (a spawned task's root
   -- also marks its task cancelled), and marks it done
