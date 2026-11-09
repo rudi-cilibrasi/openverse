@@ -1,0 +1,105 @@
+# Every night, scripts/check.sh with ten times the fuzzers' counts, from a first seed that changes
+# each day: the fixed seeds the check workflow runs on each pull request miss bugs that show up
+# in one program in a hundred or so. A failure opens an issue (or comments on the open one) with
+# the seed, the failing lines and the saved programs as an artifact;
+# `FUZZ_SEED=<seed> scripts/check.sh`, with the same counts, reproduces it.
+name: fuzz-nightly
+
+on:
+  schedule:
+    - cron: "17 4 * * *"
+  workflow_dispatch:
+    inputs:
+      seed:
+        description: "first seed (empty: the day's)"
+        required: false
+      scale:
+        description: "multiple of check.sh's counts"
+        required: false
+        default: "10"
+
+concurrency:
+  group: fuzz-nightly
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Cache elan and the Lean build
+        uses: actions/cache/restore@v6
+        with:
+          path: |
+            ~/.elan
+            .lake
+          key: lean-${{ runner.os }}-${{ hashFiles('lean-toolchain', 'lake-manifest.json') }}-${{ hashFiles('**/*.lean') }}
+          restore-keys: |
+            lean-${{ runner.os }}-${{ hashFiles('lean-toolchain', 'lake-manifest.json') }}-
+
+      - name: Install elan
+        run: |
+          if [ ! -x "$HOME/.elan/bin/elan" ]; then
+            curl -sSfL https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh \
+              | sh -s -- -y --default-toolchain none
+          fi
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+
+      - name: Seed and counts
+        env:
+          SEED_IN: ${{ inputs.seed }}
+          SCALE_IN: ${{ inputs.scale }}
+        run: |
+          # (the day's seed: days since 1970 times 1000, so nights never overlap)
+          seed=${SEED_IN:-$(( $(date -u +%s) / 86400 * 1000 ))}
+          k=${SCALE_IN:-10}
+          {
+            echo "FUZZ_SEED=$seed"
+            echo "FUZZ=$((1000 * k))"; echo "FUZZ_FRONT=$((500 * k))"; echo "FUZZ_CLASSES=$((200 * k))"
+            echo "FUZZ_FLOATS=$((200 * k))"; echo "FUZZ_CHOICE=$((200 * k))"; echo "FUZZ_MODEL_SCHED=$((50 * k))"
+            echo "FUZZ_MODEL_GADT=$((150 * k))"; echo "FUZZ_MODEL_MV=$((140 * k))"; echo "FUZZ_CONC=$((160 * k))"
+            echo "FUZZ_CONC_POLY=$((60 * k))"; echo "FUZZ_FIELDS=$((60 * k))"
+          } >> "$GITHUB_ENV"
+          echo "first seed $seed, counts x$k"
+
+      - name: scripts/check.sh
+        shell: bash
+        run: scripts/check.sh 2>&1 | tee check.log
+
+      - name: Saved programs
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: fuzz-nightly-${{ env.FUZZ_SEED }}
+          path: |
+            fuzz-*.verse
+            fuzz-*.expected
+            check.log
+          if-no-files-found: ignore
+
+      - name: Open or update the issue
+        if: failure() && github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          {
+            echo "The nightly fuzz run from seed **$FUZZ_SEED** (ten times check.sh's counts) failed: $RUN"
+            echo
+            echo '```'
+            grep -E 'FAILED|MISMATCH|bad|EXPECTED|LEAN EXIT|NO BYTECODE|GENERATOR|internal' check.log | grep -v ' 0 bad' | head -40
+            echo '```'
+            echo
+            echo "Reproduce with \`FUZZ_SEED=$FUZZ_SEED\` and the counts in the run's \"Seed and counts\" step, or run the failing fuzzer alone from the seed it names. The saved programs are the run's artifact."
+          } > body.md
+          n=$(gh issue list --state open --search "Nightly fuzz in:title" --json number --jq '.[0].number // empty')
+          if [ -n "$n" ]; then gh issue comment "$n" --body-file body.md
+          else gh issue create --title "Nightly fuzz: failures from seed $FUZZ_SEED" --body-file body.md; fi
