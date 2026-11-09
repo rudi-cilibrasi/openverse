@@ -26,11 +26,23 @@ class Deadlock(Exception):
 class Task:
     def __init__(self):
         self.done = False; self.cancelled = False; self.result = None; self.root = None
+        # (a cancel of it while it runs, taken after that run, #253, #260)
+        self.req = False
+
+
+# (Main's code runs as a dummy task, which nothing can cancel)
+MAIN_TASK = Task()
 
 
 class Root:
-    def __init__(self, kind, gen, task=None):
+    """A root of the scheduler: Main, a spawned task's call, a branch or a
+    rush loser. Its owner is the task whose code it runs: a spawned task's
+    own, or for a branch or loser the task running when it was made (#260).
+    `cancel_req`: the root asked to be cancelled after its run (it awaited a
+    cancelled task)."""
+    def __init__(self, kind, gen, task=None, owner=None):
         self.kind = kind; self.gen = gen; self.task = task
+        self.owner = owner if owner is not None else (task if task is not None else MAIN_TASK)
         self.done = False; self.cancel_req = False
 
 
@@ -55,9 +67,17 @@ class Sched:
     def cur(self):
         return self.running[-1]
 
+    def cur_task(self):
+        return self.running[-1].owner if self.running else MAIN_TASK
+
+    def task_running(self, t):
+        # its root, or one of its branches or rush losers, runs (#260)
+        return any(r.owner is t for r in self.running)
+
     def poll(self, root):
         if root.done:
             return
+        was = self.task_running(root.owner)
         self.running.append(root)
         try:
             next(root.gen)
@@ -67,6 +87,17 @@ class Sched:
                 root.task.done = True; root.task.result = s.value
         finally:
             self.running.pop()
+        # the run that marked its owner running takes a cancel of the owner
+        # asked meanwhile: a task's own run unless it ended in it (#253), a
+        # branch's or loser's run its owner's (#260)
+        t = root.owner
+        if t is not MAIN_TASK and not was and t.req:
+            t.req = False
+            if root.kind == "spawn":
+                if not root.done:
+                    self.cancel_root(root)
+            elif not t.done:
+                self.cancel_root(t.root)
         if root.cancel_req and not root.done:
             root.cancel_req = False
             self.cancel_root(root)
@@ -250,9 +281,35 @@ def m_spawn(gen):
 
 
 def m_cancel(task):
+    # a running task (its code, or a branch's or loser's of it, runs) is
+    # cancelled after that run (#260); a task done, or unwinding (marked
+    # done first, #261), is not changed
     if task.done:
         return
+    if S.task_running(task):
+        task.req = True
+        return
     S.cancel_root(task.root)
+
+
+def killer_gen(t, tag, k, d):
+    try:
+        if d != "-1.0":
+            yield from m_sleep(d)
+        m_cancel(t)
+        S.p(f"{tag} k{k} cancelled")
+        yield from m_sleep(3)
+        S.p(f"{tag} k{k} end")
+    finally:
+        S.p(f"{tag} k{k} defer")
+
+
+def awaiter_gen(t, tag, k):
+    try:
+        yield from m_await_task(t)
+        S.p(f"{tag} a{k} got")
+    finally:
+        S.p(f"{tag} a{k} defer")
 
 
 # ---------------------------------------------------------------- AST
@@ -276,6 +333,10 @@ def exec_block(stmts, fr, owner=None):
                 return v
             finally:
                 S.p(f"{fr.env['Tag']} {s.label} {fr.env['N']}")
+                if getattr(s, "kill", None):
+                    m_spawn(killer_gen(fr.env[s.kill], fr.env["Tag"], s.kk, "-1.0"))
+                if getattr(s, "aw", None):
+                    m_spawn(awaiter_gen(fr.env[s.aw], fr.env["Tag"], s.kk2))
         yield from exec_stmt(s, fr, owner)
     return None
 
@@ -340,7 +401,7 @@ def exec_conc(s, fr, owner=None):
                 item[2].close()
         else:  # rush: losers become roots
             for (i, sn, g) in pend:
-                r = Root("rushloser", g)
+                r = Root("rushloser", g, owner=S.cur_task())
                 if IMPL_ORDER:
                     fr.starts.append((sn, r, owner))
                 else:
@@ -365,7 +426,7 @@ def exec_stmt(s, fr, owner=None):
         yield from m_sleep(s.d)
     elif k == "branch":
         sn = fr.counter; fr.counter += 1
-        r = Root("branch", None)
+        r = Root("branch", None, owner=S.cur_task())
         r.gen = exec_block(s.body, fr, r)
         fr.starts.append((sn, r, owner))
         S.roots.append(r)
@@ -405,6 +466,22 @@ def exec_stmt(s, fr, owner=None):
                     env[s.var] = yield from m_await_task(t)
             else:
                 env[s.var] = yield from m_call(FNS[s.fn], args)
+    elif k == "meawait":   # a task's own handle (#260)
+        env[s.var] = yield from m_await_event(env["Me"])
+    elif k == "hcancel":
+        m_cancel(env[s.var])
+    elif k == "spawnkill":
+        m_spawn(killer_gen(env[s.var], env["Tag"], s.kk, s.d))
+    elif k == "spawnawait":
+        m_spawn(awaiter_gen(env[s.var], env["Tag"], s.kk))
+    elif k == "gcall":
+        env[s.var] = env["X"]
+        if env["N"] > 0:
+            env[s.var] = yield from m_call(GFNS[s.fn], {"X": env["X"], "Tag": env["Tag"] + "g", "N": env["N"] - 1,
+                                                       "Me": env["Me"]})
+    elif k == "fcall":
+        env[s.var] = yield from m_call(FNS[s.fn], {"X": env["X"], "Y": env["X"], "Z": env["X"],
+                                                   "Tag": env["Tag"] + "f", "N": s.n})
     elif k == "hdsleep":  # the helper's own body pieces
         yield from m_sleep(env["D"])
     elif k == "hprint":
@@ -462,6 +539,7 @@ WRAPS = {
 }
 TUPWRAP = True  # tuple wrap handled specially (X,Y)/(Y,X)
 FNS = {}
+GFNS = {}
 
 # instantiations: (type text, mk(k) expr, show(var) interpolation, model show)
 INSTS = {
@@ -598,6 +676,126 @@ class Gen:
         raise ValueError(c)
 
 
+class GGen:
+    """Functions G(X:t, Tag, N, Me:sticky_event(task(t))) (and Gi, the same
+    at int) run as tasks that Main gives their own handle: their code, their
+    branches and rush losers, at several depths, take it (`Me.Await()`) and
+    cancel it, or start tasks that cancel or await it, also from defers
+    (#253, #260, #261)."""
+    def __init__(self, g, ngf, nfns):
+        self.g = g; self.r = g.r; self.ngf = ngf; self.nfns = nfns
+
+    def block(self, scope, depth, length, lead_sleep=False):
+        scope = {k: list(v) for k, v in scope.items()}
+        out = []
+        if lead_sleep:
+            out.append(St("sleep", d=self.g.dur()))
+        for _ in range(length):
+            out.extend(self.stmt(scope, depth))
+        return out, scope
+
+    def stmt(self, scope, depth):
+        r, g = self.r, self.g
+        ch = ["print", "sleep", "sleep", "defer", "callh"]
+        if not scope["handles"]:
+            ch += ["meawait"] * 4
+        else:
+            ch += ["hcancel"] * 2 + ["spawnkill", "spawnkill", "spawnawait", "kdefer", "kdefer", "meawait"]
+        if depth < 2:
+            ch += ["branch"] * 3 + ["rush"] * 2 + ["race", "sync", "spawnh"]
+        if scope["tasks"]:
+            ch += ["await", "cancel"]
+        if depth < 2:
+            ch += ["gcall", "fcall"]
+        c = r.choice(ch)
+        if c == "print":
+            return [St("print", label=g.fresh("p"))]
+        if c == "sleep":
+            return [St("sleep", d=g.dur())]
+        if c == "defer":
+            return [St("defer", label=g.fresh("d"))]
+        if c == "meawait":
+            t = g.fresh("T")
+            scope["handles"].append(t)
+            return [St("meawait", var=t)]
+        if c == "hcancel":
+            return [St("hcancel", var=r.choice(scope["handles"]))]
+        if c == "spawnkill":
+            return [St("spawnkill", var=r.choice(scope["handles"]), kk=int(g.fresh("k")[1:]),
+                       d=r.choice(["-1.0", "-1.0", "0.0", "0.1", "0.2"]))]
+        if c == "spawnawait":
+            return [St("spawnawait", var=r.choice(scope["handles"]), kk=int(g.fresh("k")[1:]))]
+        if c == "kdefer":
+            h = r.choice(scope["handles"])
+            kill = h if r.random() < 0.7 else None
+            aw = h if (kill is None or r.random() < 0.3) else None
+            lab = g.fresh("kd")
+            return [St("defer", label=lab, kill=kill, aw=aw, kk=g.n, kk2=g.n + 1000)]
+        if c == "callh":
+            v = g.fresh("V")
+            scope["vals"].append(v)
+            return [St("callh", var=v, val=r.choice(scope["vals"][:-1]), kk=g.n, d=g.dur())]
+        if c == "spawnh":
+            t = g.fresh("T")
+            scope["tasks"].append(t)
+            return [St("spawnh", tvar=t, val=r.choice(scope["vals"]), kk=g.n, d=g.dur())]
+        if c == "await":
+            t = r.choice(scope["tasks"]); scope["tasks"].remove(t)
+            v = g.fresh("V")
+            scope["vals"].append(v)
+            return [St("await", var=v, tvar=t)]
+        if c == "cancel":
+            t = r.choice(scope["tasks"]); scope["tasks"].remove(t)
+            return [St("cancel", tvar=t)]
+        if c == "branch":
+            body, _ = self.block(scope, depth + 1, r.randint(1, 3), lead_sleep=r.random() < 0.6)
+            body.append(St("print", label=g.fresh("bp")))
+            if r.random() < 0.6:
+                body.insert(0, St("defer", label=g.fresh("bd")))
+            return [St("branch", body=body)]
+        if c in ("rush", "race", "sync"):
+            na = r.choice([2, 2, 3])
+            arms = []
+            for ai in range(na):
+                body, sc = self.block(scope, depth + 1, r.randint(0, 3), lead_sleep=True)
+                if r.random() < 0.5:
+                    body.insert(0, St("defer", label=g.fresh("ad")))
+                body.append(St("print", label=g.fresh("ap")))
+                arms.append((body, r.choice(sc["vals"])))
+            v = g.fresh("V")
+            scope["vals"].append(v)
+            return [St("conc", kind=c, var=v, arms=arms, pick=r.randrange(na))]
+        if c == "gcall":
+            v = g.fresh("V")
+            scope["vals"].append(v)
+            return [St("gcall", var=v, fn=r.randrange(self.ngf), idn=g.n)]
+        if c == "fcall":
+            v = g.fresh("V")
+            scope["vals"].append(v)
+            return [St("fcall", var=v, fn=r.randrange(self.nfns), n=r.randint(0, 1))]
+        raise ValueError(c)
+
+    def function(self, i):
+        r = self.r
+        scope = {"vals": ["X"], "tasks": [], "handles": [], "events": []}
+        body, sc = self.block(scope, 0, r.randint(3, 6))
+        if r.random() < 0.3:
+            t = self.g.fresh("T")
+            body.insert(0, St("meawait", var=t))
+        if r.random() < 0.7:
+            body.append(St("sleep", d=r.choice(["0.5", "1.0"])))
+        return Fn(f"G{i}", body, r.choice(sc["vals"]))
+
+
+def emit_gfn(f, i, generic):
+    ty = "t" if generic else "int"
+    name = f"G{i}" if generic else f"Gi{i}"
+    head = (f"{name}(X:t, Tag:string, N:int, Me:sticky_event(task(t)) where t:type)<suspends>:t ="
+            if generic else f"{name}(X:int, Tag:string, N:int, Me:sticky_event(task(int)))<suspends>:int =")
+    lines = [head] + emit_block(f.body, 4) + [f"    {f.ret}"]
+    return [l.replace("\u00a7TY\u00a7", ty).replace("\u00a7G\u00a7", "G" if generic else "Gi") for l in lines]
+
+
 # ---------------------------------------------------------------- emitter
 def emit_block(stmts, ind):
     out = []
@@ -614,7 +812,12 @@ def emit_stmt(s, ind):
     if k == "sleep":
         return [p + f"Sleep({s.d})"]
     if k == "defer":
-        return [p + "defer:", p + f'    Print("{{Tag}} {s.label} {{N}}")']
+        out = [p + "defer:", p + f'    Print("{{Tag}} {s.label} {{N}}")']
+        if getattr(s, "kill", None):
+            out.append(p + f"    StartKill({s.kill}, Tag, {s.kk})")
+        if getattr(s, "aw", None):
+            out.append(p + f"    StartAwait({s.aw}, Tag, {s.kk2})")
+        return out
     if k == "branch":
         return [p + "branch:"] + emit_block(s.body, ind + 4)
     if k == "conc":
@@ -643,6 +846,19 @@ def emit_stmt(s, ind):
         return [p + f"{s.evar}.Signal({s.val})"]
     if k == "evawait":
         return [p + f"{s.var} := {s.evar}.Await()"]
+    if k == "meawait":
+        return [p + f"{s.var} := Me.Await()"]
+    if k == "hcancel":
+        return [p + f"{s.var}.Cancel()"]
+    if k == "spawnkill":
+        return [p + f"spawn{{Killer({s.var}, Tag, {s.kk}, {s.d})}}"]
+    if k == "spawnawait":
+        return [p + f"spawn{{Awaiter({s.var}, Tag, {s.kk})}}"]
+    if k == "gcall":
+        return [p + f"var {s.var}:\u00a7TY\u00a7 = X", p + "if (N > 0):",
+                p + f'    I{s.idn} := \u00a7G\u00a7{s.fn}(X, "{{Tag}}g", N - 1, Me)', p + f"    set {s.var} = I{s.idn}"]
+    if k == "fcall":
+        return [p + f'{s.var} := F{s.fn}(X, X, "{{Tag}}f", {s.n})']
     if k == "rec":
         i, w, t = f"I{s.idn}", f"W{s.idn}", f"T{s.idn}x"
         if s.wrap == "tup":
@@ -695,6 +911,21 @@ Ws(E:sticky_event(t), Tag:string, K:int where t:type)<suspends>:t =
     V := E.Await()
     Print("{Tag} w{K} woke")
     V
+Killer(T:task(t), Tag:string, K:int, D:float where t:type)<suspends>:void =
+    defer:
+        Print("{Tag} k{K} defer")
+    Sleep(D)
+    T.Cancel()
+    Print("{Tag} k{K} cancelled")
+    Sleep(0.1)
+    Print("{Tag} k{K} end")
+Awaiter(T:task(t), Tag:string, K:int where t:type)<suspends>:void =
+    defer:
+        Print("{Tag} a{K} defer")
+    T.Await()
+    Print("{Tag} a{K} got")
+StartKill(T:task(t), Tag:string, K:int where t:type):void = spawn{Killer(T, Tag, K, -1.0)}
+StartAwait(T:task(t), Tag:string, K:int where t:type):void = spawn{Awaiter(T, Tag, K)}
 '''
 
 
@@ -712,6 +943,11 @@ def generate(seed):
         body, sc = g.block({"vals": ["X", "Y"], "tasks": [], "events": []}, 0, False, rng.randint(2, 6))
         ret = rng.choice(sc["vals"])
         fns.append(Fn(f"F{i}", body, ret))
+    # (functions holding their own task's handle, in about half the programs)
+    gfns = []
+    if rng.random() < 0.55:
+        gg = GGen(g, rng.randint(1, 2), nf)
+        gfns = [gg.function(i) for i in range(gg.ngf)]
     # Main jobs
     jobs = []
     keys = list(INSTS)
@@ -733,11 +969,23 @@ def generate(seed):
             mstmts.append((mode, arms))
         if rng.random() < 0.3:
             mstmts.append(("sleep", rng.choice(DURS)))
-    return fns, mstmts
+        if gfns and (j == 0 or rng.random() < 0.4):
+            generic = rng.random() < 0.6
+            inst = rng.choice(keys) if generic else "int"
+            mstmts.append(("self", (rng.randrange(len(gfns)), generic, inst, vid, f"s{j}", rng.randint(0, 2),
+                                    rng.random() < 0.25)))
+            vid += 2
+    if gfns and rng.random() < 0.5:
+        mstmts.append(("sleep", "1.0"))
+    return (fns, gfns), mstmts
 
 
 def emit_program(fns, mstmts):
+    fns, gfns = fns
     out = [PRELUDE.rstrip("\n")]
+    for i, f in enumerate(gfns):
+        out.extend(emit_gfn(f, i, True))
+        out.extend(emit_gfn(f, i, False))
     for f in fns:
         out.append(f"{f.name}(X:t, Y:t, Tag:string, N:int where t:type)<suspends>:t =")
         out.extend(emit_block(f.body, 4))
@@ -753,6 +1001,14 @@ def emit_program(fns, mstmts):
             fi, inst, a, b, tag, dep = job
             mk = INSTS[inst][1]
             return f'F{fi}({mk(a)}, {mk(b)}, "{tag}", {dep})'
+        if mode == "self":
+            gi, generic, inst, a, tag, dep, aw = arg
+            out.append(f"    ME{idx} := sticky_event(task({INSTS[inst][0]})){{}}")
+            out.append(f'    MT{idx} := spawn{{{"G" if generic else "Gi"}{gi}({INSTS[inst][1](a)}, "{tag}", {dep}, ME{idx})}}')
+            out.append(f"    ME{idx}.Signal(MT{idx})")
+            if aw:
+                pend.append((idx, (gi, inst, a, a, tag, dep)))
+            continue
         if mode == "seq":
             job = arg[0]
             out.append(f"    R{idx} := {call(job)}")
@@ -783,9 +1039,12 @@ def emit_program(fns, mstmts):
 def model_program(fns, mstmts):
     global S
     S = Sched()
-    FNS.clear()
+    fns, gfns = fns
+    FNS.clear(); GFNS.clear()
     for i, f in enumerate(fns):
         FNS[i] = f
+    for i, f in enumerate(gfns):
+        GFNS[i] = f
 
     def main():
         fr = Frame({})
@@ -802,6 +1061,14 @@ def model_program(fns, mstmts):
 
                 def show(job, v):
                     return INSTS[job[1]][3](v)
+                if mode == "self":
+                    gi, generic, inst, a, tag, dep, aw = arg
+                    ev = Event(True)
+                    t = m_spawn(m_call(GFNS[gi], {"X": a, "Tag": tag, "N": dep, "Me": ev}))
+                    m_signal(ev, t)
+                    if aw:
+                        pend.append(((gi, inst, a, a, tag, dep), t))
+                    continue
                 if mode == "seq":
                     v = yield from cgen(arg[0])
                     S.p(f"{arg[0][4]} = {show(arg[0], v)}")
