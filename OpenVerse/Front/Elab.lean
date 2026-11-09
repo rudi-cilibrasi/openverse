@@ -666,6 +666,15 @@ partial def Ty.params : Ty → List String
 /-- The name that stands for the `j`-th Verse Core type argument in a pin (#209). -/
 def pinArg (j : Nat) : String := s!"$pos{j}"
 
+/-- Whether a written type mentions one of the names `vs` (a function type,
+    conservatively, does). -/
+partial def STy.mentionsAny (vs : List String) : STy → Bool
+  | .name n => vs.contains n
+  | .arr t | .opt t => STy.mentionsAny vs t
+  | .tup ts | .app _ ts => ts.any (STy.mentionsAny vs)
+  | .map k v => STy.mentionsAny vs k || STy.mentionsAny vs v
+  | _ => true
+
 /-- How many of class `d`'s Verse Core type arguments its root class
     gives: as many as the interface with the fewest type parameters that is
     at or above it or above a class below it (#53, #276), else all of its
@@ -679,8 +688,14 @@ partial def TyEnv.rootArgCount (env : TyEnv) (d : String) : Nat :=
   | none =>
     let own := (env.coreArgs d (((env.sparams.lookup d).getD []).map fun (v, k) => Ty.param v k)).length
     let subtree := env.classes.filter fun c => env.rootOf c == d
-    let ifs := (subtree.flatMap fun c => (env.supers c).filter (env.info · |>.isIface)).eraseDups
-    ifs.foldl (fun m i => min m ((env.sparams.lookup i).getD []).length) own
+    -- (an interface above a class below the root counts only when one of
+    -- the root's type arguments it does not give is still a type parameter
+    -- there: one the class fixes is given by its pins, #276)
+    subtree.foldl (fun m c =>
+      let ca := env.coreArgs c (((env.sparams.lookup c).getD []).map fun (v, k) => Ty.param v k)
+      ((env.supers c).filter (env.info · |>.isIface)).foldl (fun m i =>
+        let k := ((env.sparams.lookup i).getD []).length
+        if c == d || ((ca.take own).drop k).any (!·.params.isEmpty) then min m k else m) m) own
 
 /-- The type parameters of class `d` that are not among those its root
     class gives (#209): the ones it pins to themselves (`pinsOf`), whose
@@ -7681,10 +7696,11 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       -- whose branch's function reads them from the object, also those an
       -- ancestor of the target adds)
       let methodsBelow := methodsBelow || opts.castRequests.any fun l => !l.opened.isEmpty && henv.isSub l.target cd.name
-      -- (#276: a root class below interfaces counts them as `rootArgCount`
-      -- does: those among the first type arguments it gives the first
-      -- interface that has any, as many as the interface at or above it
-      -- with the fewest type parameters; an interface has no such fields)
+      -- (#276, #209: a root class counts them as `rootArgCount` does: the
+      -- first of its Verse Core type arguments, as many as the interface
+      -- with the fewest type parameters at or above it, or above a class
+      -- below it that leaves one of the others a type parameter; an
+      -- interface has no such fields)
       let qargs? : Option (List STy) := if cd.isIface then none else match (henv.info cd.name).parent with
         | some q => some (((cd.parents.zip cd.parentArgs).lookup q).getD [])
         | none =>
@@ -7692,16 +7708,36 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
           let below := cdefs.filter fun c => !c.isIface && henv.isSub c.name cd.name
           let ifs := cdefs.filter fun i => i.isIface && below.any fun c => henv.isSub c.name i.name
           if ifs.isEmpty then none else
-          -- (the type arguments it gives the interface it lists with the
-          -- most, then its other type parameters, as `coreArgs` has them)
+          -- (its Verse Core type arguments: those it gives the interface it
+          -- lists with the most, then its other type parameters, as
+          -- `coreArgs` has them; all of them when it lists no interface)
           let longest := ((cd.parents.zip cd.parentArgs).filter fun (q, _) => (henv.info q).isIface).foldl
             (fun (b : List STy) (_, qa) => if b.length < qa.length then qa else b) []
           let others := cd.tps.filter fun tp => !longest.any fun | .name v => v == tp.name | _ => false
-          let fewest := ifs.foldl (fun m i => min m i.tps.length) (longest.length + others.length)
-          -- (its Verse Core type arguments' first `fewest`: the interface's,
-          -- then its other type parameters, which are all of them when it
-          -- lists no interface itself)
-          some ((longest ++ others.map fun tp => STy.name tp.name).take fewest)
+          let coreS := longest ++ others.map fun tp => STy.name tp.name
+          -- (as a class below gives them: through its parents' arguments)
+          let rec viewIn (fuel : Nat) (c : CDef) : List STy :=
+            match fuel with
+            | 0 => coreS
+            | f + 1 =>
+              if c.name == cd.name then coreS else
+              match (henv.info c.name).parent with
+              | some q => match cdefs.find? (·.name == q) with
+                | some qd =>
+                  let σ := qd.tps.map (·.name) |>.zip (((c.parents.zip c.parentArgs).lookup q).getD [])
+                  (viewIn f qd).map (·.substNames σ)
+                | none => coreS
+              | none => coreS
+          -- (an interface above a class below it counts only when one of
+          -- its type arguments that interface does not give is still a
+          -- type parameter there, as `rootArgCount` has it, #276)
+          let fewest := below.foldl (fun m c =>
+            let view := viewIn cdefs.length c
+            (ifs.filter fun i => henv.isSub c.name i.name).foldl (fun m i =>
+              let k := i.tps.length
+              if c.name == cd.name || (view.drop k).any (STy.mentionsAny (c.tps.map (·.name))) then min m k else m) m)
+            coreS.length
+          some (coreS.take fewest)
       if let some qargs := qargs? then
         for tp in (if methodsBelow then cd.tps else []) do
           if !qargs.any (fun | .name v => v == tp.name | _ => false) then

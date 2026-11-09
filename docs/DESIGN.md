@@ -1087,8 +1087,10 @@ of a parameter's object). Its other methods are called at known types,
 as before. Only classes with an override at or below them get the
 fields, and only reference classes' overrides read them. A class without
 a parent class counts its type parameters against the interface with the
-fewest that is at or above it or above a class below it (#276, #209), as
-`rootArgCount` does, so every class of the hierarchy agrees: `box(t) :=
+fewest that is at or above it, or above a class below it that leaves one
+of the type arguments that interface does not give a type parameter (one
+it fixes, its pins give), as `rootArgCount` does, so every class of the
+hierarchy agrees (#276, #209): `box(t) :=
 class(shower)` adds `t` to `shower`'s none, `pairbox(t, u) :=
 class(container(t))` adds `u`, and `box(t) := class(container(t),
 shower)` adds `t`, whichever interface comes first. Its Verse Core type
