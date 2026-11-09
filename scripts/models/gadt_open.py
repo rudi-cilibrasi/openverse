@@ -18,11 +18,16 @@ binds and compares an opened value, and Sz's fstE rule calls Sz in the
 condition, so the call's failure is the else and its field writes are rolled
 back.  The model evaluates each matcher by the first rule whose class is at or
 above the object's class (and whose clauses hold).
+Since #317, Pk's named parameters with defaults that have no type of their own (false,
+array{}) are passed through dispatches that open type arguments, from generic code and inside
+overrides at their own opened types; its choices draw from a second generator, so each seed's
+other choices stay as they were.
 argv: seed expfile [--cmp]
 """
 import random, sys
 seed = int(sys.argv[1]); out_exp = sys.argv[2]
 R = random.Random(seed)
+R2 = random.Random(seed * 1000003 + 317)   # (Pk's choices, #317)
 def ch(p): return R.random() < p
 CMP = True   # comparable opened parameters (fixed in #252)
 
@@ -71,6 +76,8 @@ CLASSES = f'''ex(t:type) := class<abstract>:
     Eval():t
     Name():string = "ex"
     var Hits:int = 0
+    Pk(?Alt:?t = false, ?More:[]t = array{{}}, ?N:int = 0):t =
+        if (A := Alt?) then A else if (M := More[N]) then M else Eval()
 lit := class(ex(int)):
     V:int
     Eval<override>():int = V
@@ -86,9 +93,13 @@ pairE(a:type, b:type) := class(ex(tuple(a, b))):
     L:ex(a)
     R:ex(b)
     Eval<override>():tuple(a, b) = (L.Eval(), R.Eval())
+    Pk<override>(?Alt:?tuple(a, b) = false, ?More:[]tuple(a, b) = array{{}}, ?N:int = 0):tuple(a, b) =
+        if (A := Alt?) then A else if (M := More[N]) then M else (L.Pk(), R.Pk())
 fstE(a:type, b:type) := class(ex(a)):
     P:ex(tuple(a, b))
     Eval<override>():a = P.Eval()(0)
+    Pk<override>(?Alt:?a = false, ?More:[]a = array{{}}, ?N:int = 0):a =
+        if (A := Alt?) then A else if (M := More[N]) then M else P.Pk()(0)
 sndE(a:type, b:type) := class(ex(b)):
     P:ex(tuple(a, b))
     Eval<override>():b = P.Eval()(1)
@@ -96,9 +107,13 @@ mkE(a:type, b:type) := class(ex(tuple(a, b))):
     X:a
     Y:b
     Eval<override>():tuple(a, b) = (X, Y)
+    Pk<override>(?Alt:?tuple(a, b) = false, ?More:[]tuple(a, b) = array{{}}, ?N:int = 0):tuple(a, b) =
+        if (A := Alt?) then A else if (M := More[N]) then M else (X, Y)
 optE(a:type) := class(ex(?a)):
     E:ex(a)
     Eval<override>():?a = option{{E.Eval()}}
+    Pk<override>(?Alt:??a = false, ?More:[]?a = array{{}}, ?N:int = 0):?a =
+        if (A := Alt?) then A else if (M := More[N]) then M else option{{E.Pk()}}
 dupP(a:type) := class(pairE(a, a)):''' + ('''
     Eval<override>():tuple(a, a) = (R.Eval(), L.Eval())''' if V['dupP'] == 'swap' else '''
     Z:int = 0''') + '''
@@ -299,6 +314,37 @@ SZ_TEXT = '''Sz(E:ex(t) where t:type)<decides>:int =
 if SZ_COND:     # (and failing more often, so that the condition catches it)
     SZ_TEXT = SZ_TEXT.replace("(F := fstE[E]) then Sz[F.P]", "(F := fstE[E], S := Sz[F.P]) then S").replace("L.V <> 13", "L.V < 12")
 
+# Pk (#317): the value with every default (the overrides fall back to their parts' Pk at
+# their own opened types; dupP, tagged and leafP inherit pairE's, which neither swaps nor
+# adds 100), and its three calls from generic code
+def pk(n):
+    if below(n.cls, 'pairE'): return (pk(n.L), pk(n.R))
+    if n.cls == 'mkE': return (n.x, n.y)
+    if n.cls == 'optE': return ('some', pk(n.E))
+    if n.cls == 'fstE': return pk(n.P)[0]
+    return native(n)
+def lit2(t):
+    if t == INT: n = R2.randint(0, 20); return str(n), n
+    if t == STR: w = R2.choice(['ka', 'lo', 'mi']); return f'"{w}"', w
+    if t == LOG: b = R2.random() < 0.5; return ('true' if b else 'false'), b
+    if t[0] == 'tup':
+        x, v = lit2(t[1]); y, w = lit2(t[2]); return f"({x}, {y})", (v, w)
+    if R2.random() < 0.3: return 'false', None
+    x, v = lit2(t[1]); return f"option{{{x}}}", ('some', v)
+PK_TEXT = """Pk0(E:ex(t) where t:type):t = E.Pk()
+Pk1(E:ex(t), X:t where t:type):t = E.Pk(?Alt := option{X})
+Pk2(E:ex(t), X:t, K:int where t:type):t = E.Pk(?N := K, ?More := array{X, X})
+Pk3(E:ex(t), X:t where t:type):t = E.Pk(?More := array{X}, ?N := 1)"""
+def pk_call(nm, n, t):
+    k = R2.choice(['pk0', 'pk0', 'pk1', 'pk2', 'pk3', 'direct'])
+    if k == 'pk0': return f"Pk0({nm})", pk(n)
+    if k == 'direct': return f"{nm}.Pk()", pk(n)
+    x, v = lit2(t)
+    if k == 'pk1': return f"Pk1({nm}, {x})", v
+    if k == 'pk3': return f"Pk3({nm}, {x})", pk(n)
+    K = R2.randint(0, 2)
+    return f"Pk2({nm}, {x}, {K})", (v if K < 2 else pk(n))
+
 # ---------------------------------------------------------------- main
 main, expect = [], []
 hits_total = {}
@@ -329,6 +375,10 @@ for i in range(R.randint(3, 8)):
                 for k2, c2 in h.items(): hits_total[k2] = hits_total.get(k2, 0) + c2
             main.append(f'    if (S := Sz[{nm}]) then Print("sz {nm}: {{S}} {{{nm}.Hits}}") else Print("sz {nm}: fail {{{nm}.Hits}}")')
             expect.append(f"sz {nm}: {s if ok else 'fail'} {hits_total.get(id(n), 0)}")
+    for _ in range(R2.choice([0, 1, 1, 2])):
+        call, v = pk_call(nm, n, t)
+        main.append(f'    Print("pk {nm}: {{{shname(t)}({call})}}")')
+        expect.append(f"pk {nm}: {show(v, t)}")
     if ch(0.3):
         main.append(f'    Print("native {nm}: {{{shname(t)}({nm}.Eval())}}")')
         expect.append(f"native {nm}: {show(native(n), t)}")
@@ -361,6 +411,6 @@ if CS_THR is not None:
     CLOSED_TXT = CLOSED_TXT.replace("(P := pairE[E]) then Ev(P.L)", f"(P := pairE[E], X := Ev(P.L), X > {CS_THR}) then X")
 
 prog = [f"# genopen seed {seed}", CLASSES, "NewLeafP(L:ex(int), R:ex(string)):leafP = leafP{L := L, R := R}",
-        ev_text(), ds_text(), SZ_TEXT, CLOSED_TXT] + list(SHOWN.values()) + ["Main():void ="] + main
+        ev_text(), ds_text(), SZ_TEXT, CLOSED_TXT, PK_TEXT] + list(SHOWN.values()) + ["Main():void ="] + main
 print('\n'.join(prog))
 open(out_exp, 'w').write("exit=0\n" + ''.join(l + '\n' for l in expect))
