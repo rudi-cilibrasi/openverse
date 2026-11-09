@@ -724,7 +724,9 @@ Main():void =
   the function itself. Its values are taken one at a time, as the place
   that takes them asks for them, in spatial order (depth first), so an
   infinite one works where the first success is taken, and a value never
-  reached is never computed. It may have effects:
+  reached is never computed. A call evaluates its arguments first; when
+  its clauses fail, it has no values, and what its arguments did stays, as
+  for a recursive call computed at the call. It may have effects:
   - in a `for`, its clauses run as its values are taken, between the
     iterations, and stay, as a `for` keeps the effects of clauses before a
     choice; what a value does is undone with its iteration when the
@@ -733,9 +735,9 @@ Main():void =
     `option{…}`, `logic{…}`, `not`, the left of `or`), what a value does is
     undone with it too, but its clauses, the conditions of its last `if`
     and the arguments of its calls of itself may not print or change an
-    object (refused): they run once for all the values they lead to, and
-    the Verse Calculus undoes them with those values when the context
-    rejects all of them.
+    object, nor those arguments `set` a name (refused): they run once for
+    all the values they lead to, and the Verse Calculus undoes them with
+    those values when the context rejects all of them.
 
   ```verse
   Upto(A:int, B:int)<transacts><decides>:int =

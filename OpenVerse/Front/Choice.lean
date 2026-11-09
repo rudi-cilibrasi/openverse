@@ -298,7 +298,9 @@ partial def liftE (isVal : String → Bool) (isField : String → String → Boo
     -- a call of a recursive function with several values taken lazily
     -- (#246): the arguments into its (renamed) parameters, as for
     -- `$inline`, then the call, without them, bound to a name: the
-    -- consumer of that binding takes its values one at a time
+    -- consumer of that binding takes its values one at a time (a call
+    -- whose clauses fail has none, and what its arguments did stays, as
+    -- for one computed at the call)
     modify fun s => { s with pre := s.pre.push (.app fn.pos (.ident fn.pos "$fxOf") [fn] false) }
     let (pds, unpack) := (pre.take args.length, pre.drop args.length)
     for (pd, a) in pds.zip args do
@@ -696,7 +698,9 @@ def loopShape? (g : String) (mv : List String) (body : SExpr) : Option (List SEx
   let tail := match last with
     | .decl _ _ _ false rhs => rhs
     | e => e
-  let plain (e : SExpr) : Bool := !liftsHere (markCalls mv e)
+  -- (no choice, and no call of a function with several values, nor any
+  -- other mention of `g`: a call of it its own `if` or `for` takes, say)
+  let plain (e : SExpr) : Bool := !liftsHere (markCalls mv e) && !(namesUsed e).contains g
   let isRec : SExpr → Bool
     | .app _ (.ident _ h) as _ => h == g && as.all fun a =>
         plain a && (match a with | .decl .. => false | _ => true)
@@ -896,8 +900,10 @@ partial def valueUse? (mv : List String) : SExpr → Option (Pos × String)
     kids.findSome? (valueUse? mv)
 
 /-- The functions of the program that have several values, inlined at their
-    calls (see above); the program unchanged when there are none. -/
-def inlineMulti (tops : List STop) : Except String (List STop) := do
+    calls (see above); the program unchanged when there are none. Also
+    whether some are taken lazily (#246), whose consumers need a class of
+    stack cells. -/
+def inlineMulti (tops : List STop) : Except String (List STop × Bool) := do
   -- (not `Main` or the entry expression, which nothing calls in a failure
   -- context, nor `<suspends>` functions, which cannot run in one)
   let fns : List (String × MFn) := tops.filterMap fun
@@ -914,7 +920,7 @@ def inlineMulti (tops : List STop) : Except String (List STop) := do
       let ss := stmtsOf (markCalls mv f.body)
       if !mv.contains n && (hasChoice ss || ss.any liftsHere) then
         mv := mv ++ [n]; changed := true
-  if mv.isEmpty then return tops
+  if mv.isEmpty then return (tops, false)
   let mfs := fns.filter (mv.contains ·.1)
   -- (every name the program binds: parameters, locals, fields, methods)
   let binders : List String := (tops.flatMap fun
@@ -946,9 +952,14 @@ def inlineMulti (tops : List STop) : Except String (List STop) := do
   -- (#246) the self-recursive ones of the shape of a generator, taken
   -- lazily where they are consumed: computed eagerly, `F$all`, only for the
   -- recursive ones that call them
+  -- (one whose body uses a name bound elsewhere too, which it would mean
+  -- something else once inlined at its consumer, stays eager)
   let loops : List String := recs.filter fun g =>
     match mfs.lookup g with
-    | some f => (callees.lookup g).getD [] == [g] && (loopShape? g mv f.body).isSome
+    | some f =>
+      let own := f.params.map (·.name) ++ localsOf f.body
+      (callees.lookup g).getD [] == [g] && (loopShape? g mv f.body).isSome &&
+        !(namesUsed f.body).any fun u => !own.contains u && binders.contains u
     | none => false
   let mut needAll := recs.filter (!loops.contains ·)
   let mut grew := true
@@ -1018,6 +1029,6 @@ def inlineMulti (tops : List STop) : Except String (List STop) := do
   -- (`F$all` for each that needs one: the array of its values)
   let alls : List STop := needAll.filterMap fun g => (mfs.lookup g).map fun f =>
     .fn f.pos s!"{g}$all" f.params f.tparams (f.fx.filter (· != "decides")) (.arr f.ret) (allBody needAll f.ret f.body)
-  return tops' ++ alls
+  return (tops' ++ alls, !loops.isEmpty)
 
 end OpenVerse.Front.Choice

@@ -1,4 +1,4 @@
-# expect: 13:18: Count has several values, is recursive and may change an object (Bump may) in its clauses
+# expect: 13:18: Count has several values, is recursive and may change an object (Bump does) in its clauses
 # (#246) a clause that calls a function that may change an object
 cell := class:
     var V:int = 0

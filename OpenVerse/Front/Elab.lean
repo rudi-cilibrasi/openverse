@@ -1114,6 +1114,10 @@ structure LoopGen where
   /-- The code that runs once for all the values of an item: its clauses,
       its conditions, the arguments of its calls of the function. -/
   itemCode : Expr
+  /-- Where an argument of a call of the function by itself has a `set`:
+      a context that takes its first success would not undo it with the
+      values of that call it rejects. -/
+  argSet : Option Pos
 
 /-- Run `m`, attributing the heap effects it records first to `p` (a field
     or argument default: the effect is the construction's or the call's). -/
@@ -4854,6 +4858,9 @@ partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
       let p := b.pos
       let g := match lp with | .ident _ g :: _ => g | _ => ""
       let lg ← elabLoopGen ctx p lp
+      if let some q := lg.argSet then
+        eerr q (s!"a set in an argument of {g}'s call of itself: where the first success is taken, it would " ++
+          s!"not be undone with the values of that call that the context rejects; call {g} in a for (#246)")
       modify fun st => { st with loopFirst := st.loopFirst ++ [(g, p, lg.itemCode)] }
       let ty ← match ← b.ty.mapM (resolveTy ctx.types p) with
         | some t => pure t
@@ -4868,7 +4875,7 @@ partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
       let body : Expr := .seq
         (.ite (p2 .eq (.local lg.sp) (.lit (.int 0))) (.seq (.assign done (.lit (.logic true))) Expr.brkV) vd)
         (.seq lg.step (.ite (.prim .query [.local lg.has])
-          (.seq (.ite (.seq (.assign x bindX) inner) vd vd) lg.after) vd))
+          (.seq (.ite (.seq (.assign x bindX) (.seq inner Expr.failV)) vd vd) lg.after) vd))
       return (.seq lg.init (.seq (.assign done (.lit (.logic false))) (.seq (.loop body)
         (.ite (p2 .eq (.local done) (.lit (.logic false))) Expr.brkV vd))), c2)
     | some b@{ each := some arr, .. } =>
@@ -4910,38 +4917,38 @@ partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
 
 /-- A call of a recursive function with several values that its consumer
     takes lazily (#246), `$loop(F, params, clauses, r := tail)`, its
-    parameters bound by the clauses before it. It runs as a loop over a
-    stack of items, each `(k, F's parameters and the names its clauses and
-    conditions bind)`: the alternative to run, or -1 for the clauses first.
-    A step pops one; when it starts, it runs `F`'s clauses (when they fail,
-    there are no values) and picks the branch of its last `if`, then runs
-    one alternative. A value is the step's, for the consumer to compute; a
-    call of `F` evaluates its arguments and pushes the item that starts it.
-    The item that resumes at the next alternative of the choice, if any, is
-    pushed below that one, or once the consumer took or rejected the value,
-    with the names as they then are: so the values come in the Verse
-    Calculus's order, depth first, and an alternative sees the names as the
-    one before it left them (a value's `set` kept with it or undone). -/
+    parameters bound by the consumer's clauses before it, to its
+    arguments. It runs as a loop over a stack of items, each `(k, F's
+    parameters and the names its clauses and conditions bind)`: the
+    alternative to run, or -1 to run the clauses and pick the branch of its
+    last `if` first (when the clauses fail, the call has no values; what its
+    arguments did stays, as for a call computed eagerly). A step pops one
+    and runs one alternative. A value is the step's, for the consumer to
+    compute; a call of `F` evaluates its arguments and pushes the item that
+    starts it. The item that resumes at the next alternative of the choice,
+    if any, is pushed below that one (with the names as the arguments left
+    them), or once the consumer took or rejected the value (as the consumer
+    left them): so the values come in the Verse Calculus's order, depth
+    first. The stack is a list of cells (`$lazycell`), so a step costs the
+    same however deep the stack is. -/
 partial def elabLoopGen (ctx : Ctx) (p : Pos) (lp : List SExpr) : EM LoopGen := do
   let [.ident _ g, .block _ ps, .block _ cls, .decl _ _ (some rsty) _ tail] := lp
     | eerr p "internal: a $loop marker (#246)"
   let rty ← resolveTy ctx.types p rsty
   let vd : Expr := .lit .void
-  -- (the parameters, bound before the call, to the arguments: the items
-  -- have slots of their own for them, so that the call, run again, as in
-  -- a loop of its consumer's, starts from its arguments, not from what the
-  -- last run of it left in them)
+  -- (the parameters, bound by the consumer's clauses: the loop has slots
+  -- of its own for them, so that the call, run again by a loop of its
+  -- consumer's, starts from its arguments, not from what its last run left)
   let args ← ps.mapM fun
     | .ident q n => match ctx.lookup n with
       | some l => pure l
       | none => eerr q s!"internal: parameter {n} of a $loop (#246)"
     | e => eerr e.pos "internal: a $loop parameter (#246)"
   let pls ← args.mapM fun l => do return { l with slot := ← fresh l.ty }
-  let ctx : Ctx := { ctx with locals := pls.reverse ++ ctx.locals }
-  let fctx : Ctx := { ctx with canFail := true, inTaking := true }
-  let newOf (c : Ctx) : List Local := c.locals.take (c.locals.length - ctx.locals.length)
+  let lctx : Ctx := { ctx with locals := pls.reverse ++ ctx.locals }
+  let newOf (c : Ctx) : List Local := c.locals.take (c.locals.length - lctx.locals.length)
   -- (the clauses, then each branch's conditions)
-  let (rc, cc) ← elabSeq fctx cls none
+  let (rc, cc) ← elabSeq { lctx with canFail := true, inTaking := true } cls none
   let arms : List (Option (List SExpr) × SExpr) :=
     if Choice.isBranchy tail then Choice.arms tail else [(none, tail)]
   let mut armCode : Array (Option Expr × Ctx × List SExpr) := #[]
@@ -4957,7 +4964,12 @@ partial def elabLoopGen (ctx : Ctx) (p : Pos) (lp : List SExpr) : EM LoopGen := 
   for l in (newOf cc ++ armCode.toList.flatMap fun (_, ca, _) => newOf ca).reverse do
     if !tls.any (·.slot == l.slot) then tls := tls ++ [l]
   let tupTy : Ty := .tup (.int :: tls.map (·.ty))
-  let w ← fresh (.arr tupTy)
+  let cellTy : Ty := .struct "$lazycell" [tupTy]
+  let cfs := ctx.types.fields "$lazycell" [tupTy]
+  let (some (itemF, _), some (nextF, _)) := (fieldIndex cfs "$LItem", fieldIndex cfs "$LNext")
+    | eerr p "internal: the stack cells of a $loop (#246)"
+  let w ← fresh (.opt cellTy)
+  let cell ← fresh cellTy
   let sp ← fresh .int
   let it ← fresh tupTy
   let k ← fresh .int
@@ -4965,60 +4977,67 @@ partial def elabLoopGen (ctx : Ctx) (p : Pos) (lp : List SExpr) : EM LoopGen := 
   let nx ← fresh .int
   let item (kE : Expr) (vals : List Expr) : Expr := .prim .mkTup (kE :: vals)
   let cur : List Expr := tls.map (Expr.local ·.slot)
-  -- (an item onto the stack: over a popped one, else at its end)
-  let push (e : Expr) : Expr := .seq
-    (.ite (.assign w (.prim .arrSet [.local w, .local sp, e])) vd
-      (.seq (.assign w (p2 .concat (.local w) (.prim .mkArr [e]))) vd))
-    (.seq (.assign sp (p2 .add (.local sp) (.lit (.int 1)))) vd)
-  -- (each alternative's code, numbered across the branches)
+  let push (e : Expr) : Expr :=
+    .seq (.assign cell (.heap (.new (ctx.types.tagOf "$lazycell")) [e, .local w]))
+      (.seq (.assign w (.prim .mkSome [.local cell]))
+        (.seq (.assign sp (p2 .add (.local sp) (.lit (.int 1)))) vd))
+  -- (the branch an item takes: the first alternative of it)
   let total := armCode.foldl (fun n (_, _, as) => n + as.length) 0
+  let starts : List Nat := (armCode.toList.foldl (fun (acc, n) (_, _, as) => (acc ++ [n], n + as.length)) ([], 0)).1
+  let select : Expr := (armCode.toList.zip starts).foldr (fun ((c?, _, _), st) acc =>
+    let set : Expr := .seq (.assign k (.lit (.int (st : Nat)))) vd
+    match c? with
+    | some c => .ite c set acc
+    | none => set) vd
+  -- (each alternative's code, numbered across the branches)
   let mut alts : Array Expr := #[]
   let mut values : Array (Nat × Expr) := #[]
   let mut itemCode : Expr := rc.e
   for (c?, _, _) in armCode do
     if let some c := c? then itemCode := .seq itemCode c
-  let mut starts : Array Nat := #[]
-  for (_, ca, as) in armCode do
-    let start := alts.size
-    starts := starts.push start
+  let mut argSet : Option Pos := none
+  for ((_, ca, as), start) in armCode.toList.zip starts do
     for (a, j) in as.zipIdx do
       let i := start + j
       let actx : Ctx := { ca with canFail := true, inTaking := true }
-      let cont : Expr := if j + 1 < as.length then push (item (.lit (.int (i + 1 : Nat))) cur) else vd
-      let nextK : Int := if j + 1 < as.length then ((i + 1 : Nat) : Int) else -1
+      let next? : Option Nat := if j + 1 < as.length then some (i + 1) else none
+      let cont : Expr := match next? with
+        | some n => push (item (.lit (.int (n : Nat))) cur)
+        | none => vd
       match a with
-      | .app q (.ident _ "$rec") args false =>
-        if args.length != pls.length then
-          eerr q s!"{g} takes {pls.length} argument(s), found {args.length}: a call of it with a tuple, in its own body, is not supported yet (#246)"
+      | .app q (.ident _ "$rec") args' false =>
+        if args'.length != pls.length then
+          eerr q s!"{g} takes {pls.length} argument(s), found {args'.length}: a call of it with a tuple, in its own body, is not supported yet (#246)"
+        if argSet.isNone then
+          argSet := args'.findSome? fun a' =>
+            if Choice.anyE (fun | .set .. => true | _ => false) a' then some a'.pos else none
         let ts ← pls.mapM fun l => fresh l.ty
-        let es ← (args.zip pls).mapM fun (a', l) => do
+        let es ← (args'.zip pls).mapM fun (a', l) => do
           let r ← elabE actx a' (some l.ty)
           coerce a'.pos r l.ty
         let assigns : Expr := (es.zip ts).foldr (fun (e, t) acc => .seq (.assign t e) acc) vd
         itemCode := .seq itemCode assigns
-        let next := item (.lit (.int (-1))) (ts.map Expr.local ++ (cur.drop pls.length))
-        -- (the item that resumes after it, with the names as its arguments
-        -- left them, below the one that starts the call)
-        alts := alts.push (.ite assigns (.seq cont (push next)) cont)
+        -- (the item that resumes after the call, with the names as its
+        -- arguments left them, below the one that starts it; when an
+        -- argument fails, only the first)
+        let start := item (.lit (.int (-1))) (ts.map Expr.local ++ cur.drop pls.length)
+        alts := alts.push (.ite assigns (.seq cont (push start)) cont)
       | _ =>
         let r ← elabE actx a (some rty)
         values := values.push (i, ← coerce a.pos r rty)
+        let nextK : Int := match next? with | some n => (n : Int) | none => -1
         alts := alts.push (.seq (.assign nx (.lit (.int nextK))) (.seq (.assign has (.lit (.logic true))) vd))
-  -- (the branch an item that starts takes: the first alternative of it)
-  let select : Expr := (armCode.toList.zip starts.toList).foldr (fun ((c?, _, _), st) acc =>
-    let set : Expr := .seq (.assign k (.lit (.int (st : Nat)))) vd
-    match c? with
-    | some c => .ite c set acc
-    | none => set) vd
   let dispatch : Expr := (alts.toList.zipIdx).foldr (fun (a, i) acc =>
     .ite (p2 .eq (.local k) (.lit (.int (i : Nat)))) a acc) vd
   let unpack : Expr := (tls.zipIdx).foldr (fun (l, j) acc =>
     .seq (.assign l.slot (.prim (.tupGet (j + 1)) [.local it])) acc) vd
-  let init : Expr := .seq (.assign w (.prim .mkArr [item (.lit (.int (-1)))
-      (args.map (Expr.local ·.slot) ++ cur.drop pls.length)]))
-    (.seq (.assign sp (.lit (.int 1))) vd)
+  -- (the call's item: its parameters from the consumer's slots, its
+  -- other names as they are)
+  let init : Expr := .seq (.assign w (.lit .none)) (.seq (.assign sp (.lit (.int 0)))
+    (push (item (.lit (.int (-1))) (args.map (Expr.local ·.slot) ++ cur.drop pls.length))))
   let step : Expr := Expr.seq (.assign sp (p2 .sub (.local sp) (.lit (.int 1))))
-    (.seq (.ite (.assign it (p2 .index (.local w) (.local sp))) vd vd)
+    (.seq (.ite (.assign cell (.prim .query [.local w]))
+        (.seq (.assign it (.heap (.get itemF) [.local cell])) (.seq (.assign w (.heap (.get nextF) [.local cell])) vd)) vd)
     (.seq (.assign k (.prim (.tupGet 0) [.local it]))
     (.seq unpack
     (.seq (.assign has (.lit (.logic false)))
@@ -5029,7 +5048,7 @@ partial def elabLoopGen (ctx : Ctx) (p : Pos) (lp : List SExpr) : EM LoopGen := 
   let value : Expr := values.toList.foldr (fun (i, e) acc =>
     .ite (p2 .eq (.local k) (.lit (.int (i : Nat)))) e acc) (.prim .fail [])
   let after : Expr := .ite (p2 .ge (.local nx) (.lit (.int 0))) (push (item (.local nx) cur)) vd
-  return { init, step, sp, has, value, after, vty := rty, itemCode }
+  return { init, step, sp, has, value, after, vty := rty, itemCode, argSet }
 
 /-- `e.m`: `.Length` of an array or string, or a field of a struct. -/
 partial def elabMember (ctx : Ctx) (p : Pos) (r : R) (m : String) (exp : Option Ty := none) : EM R := do
@@ -5737,6 +5756,17 @@ def concTops : Except String (List STop) :=
     "Progress", "Roots", "taskBase", "Done", "Result", "waitf", "T", "X", "waitNew", "waitInit", "waitResume",
     "WaitDone", "Await", "spawnMark", "t", "Sch", "Dead", "evrec", "Got", "Next", "Head", "Tail", "Cur", "W", "L", "V",
     "EvAwait", "E", "branchMark", "rushMark", "signalAll", "H", "StickyAwait", "Last", "CancelCur", "Cancelled", "Running", "Root", "CancelReq", "CurTask", "cancelMark"]
+
+/-- The class of the cells of the stack a lazily taken function with
+    several values runs its calls from (#246): an item, and the cells
+    below it. Added to a program that has such a function. -/
+def lazyPrelude : String := "
+lazycell(t:type) := class:
+    LItem:t
+    LNext:?lazycell(t)
+"
+
+def lazyTops : Except String (List STop) := parsePrelude lazyPrelude ["lazycell", "LItem", "LNext"]
 
 /-- `subscribable_event(t)` (#210): an event whose `Signal` also calls the
     functions subscribed to it, each `Subscribe` giving a `cancelable` whose
@@ -6759,7 +6789,7 @@ def checkLoopFirst (fns : Array Fn) (uses : List (String × Pos × Expr)) : Exce
       todo := todo.tail!
       let fj := fns[j]!
       if exprPrints fj.body then throw (why "print" s!" ({shownFn fj.name} does)")
-      if fj.writes then throw (why "change an object" s!" ({shownFn fj.name} may)")
+      if exprWrites fj.body then throw (why "change an object" s!" ({shownFn fj.name} does)")
       for (f, _) in Suspend.callsOf fj.body do
         if f < fns.size && !seen[f]! then
           seen := seen.set! f true
@@ -6807,7 +6837,9 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     | none => []
   let resolved ← resolveModules (allTops000 ++ rawEntry)
   -- functions with several values (#235): inlined at their calls
-  let resolved ← Choice.inlineMulti resolved
+  let (resolved, lazy) ← Choice.inlineMulti resolved
+  -- (#246) the class of the stack cells of lazily taken ones
+  let helpers := helpers ++ (← if lazy then lazyTops else pure [])
   -- the branches of casts that refine type arguments, as functions (#243)
   -- (in front, as the entry expression is the end)
   let resolved := Refine.functions opts.castRequests resolved ++ resolved
