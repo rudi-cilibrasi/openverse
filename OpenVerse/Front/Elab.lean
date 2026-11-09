@@ -6639,7 +6639,9 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
           -- parameter type at its type arguments, which its witnesses give)
           let pt0 := ((fsigs0[h]?).bind (·.1[i]?)).getD (.var 0)
           let pt := pt0.subst θh
-          if pt.mentionsVar && (wit.any (·.isNone) || mentionsSelf pt0) then
+          if pt.mentionsVar && mentionsSelf pt0 then
+            throw (inFn gname s!"an argument of a spawned call of {((sigOf h).map (·.name)).getD "a method"}, a method that reads type arguments from its receiver, must have a type of its own where its parameter's type mentions them (an empty array or `false` has none): pass it through a variable of its type (#209)")
+          if pt.mentionsVar && wit.any (·.isNone) then
             throw (inFn gname "the arguments of a spawned call of a generic function must have types of their own (#156)")
           atys := atys.push pt
       let k := roots.size
