@@ -170,7 +170,7 @@ lifted, and the elaborator refuses it. -/
 /-- The variable a `set` path starts from. -/
 partial def rootName? : SExpr → Option String
   | .ident _ n => some n
-  | .member _ e _ | .app _ e _ true => rootName? e
+  | .member _ e _ | .app _ e _ true | .query _ e => rootName? e
   | _ => none
 
 /-- The names that `set` writes inside `e`. -/
@@ -919,6 +919,8 @@ structure FirstLift where
   binds : List String
   sets : List String
   args : List SExpr
+  /-- The names of `binds` that are `var`s, bound so again. -/
+  varBinds : List String := []
   deriving Inhabited
 
 /-- The body of a `FirstLift` (#246): the function's clauses, then the first
@@ -928,12 +930,19 @@ structure FirstLift where
     captured names after its arguments. The `var`s the clauses set are
     copied first from parameters named `m$in`. -/
 def firstBody (helper : String) (p : Pos) (b : String) (bty : Option STy) (cls : List SExpr) (tail : SExpr)
-    (rest : List SExpr) (binds : List String) (sets : List (String × STy)) (caps : List SExpr) : SExpr :=
+    (rest : List SExpr) (binds : List String) (sets : List (String × STy)) (caps : List SExpr)
+    (ret : Option STy := none) : SExpr :=
   let tup : SExpr := .tuple p (binds.map (SExpr.ident p ·) ++ sets.map (fun (m, _) => SExpr.ident p m) ++
     [.ident p "true"])
   let alt (a : SExpr) : SExpr := match a with
     | .app q (.ident _ "$rec") as false => .app q (.ident q helper) (as ++ caps) true
-    | a => .app a.pos (.ident a.pos "$first") [.block a.pos ([.decl a.pos b bty false a] ++ rest ++ [tup])] false
+    | a =>
+      -- (the value at the function's result type, then at the binding's)
+      let v := match ret with
+        | some t => SExpr.app a.pos (.ident a.pos "$first") [.block a.pos [.decl a.pos s!"{b}$v" (some t) false a,
+            .ident a.pos s!"{b}$v"]] false
+        | none => a
+      .app a.pos (.ident a.pos "$first") [.block a.pos ([.decl a.pos b bty false v] ++ rest ++ [tup])] false
   let group (v : SExpr) : SExpr := match alts? v with
     | some as => mk v.pos (as.map alt)
     | none => alt v

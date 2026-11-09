@@ -220,6 +220,10 @@ the consumer's names those clauses use (the `var`s they set copied in,
 and given back in the tuple); the consumer calls it and binds the names
 from the tuple. It is not yet done in a method (whose clauses may use
 `Self`'s members), a constructor, a default, or a generic function's types.
+It is keyed by the call's place, its binding and the names it passes, as a
+call in a function inlined at several sites is at one place. Being
+recursive, it reaches the recursion limit in a deep search: about 400,000
+levels in Lean, a few million in C.
 The other consumers keep the loop, which needs no recursion. In a `for`,
 nothing is to be undone: a `for` keeps the effects of the clauses before a choice whose
 values its filter all rejects. The C runtime journals the writes made

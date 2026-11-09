@@ -1993,6 +1993,18 @@ partial def Ty.paramsC : Ty → List (String × Bool)
   | .map k v => k.paramsC ++ v.paramsC
   | _ => []
 
+/-- The key of a `Choice.FirstLift`: where the call is, its binding and
+    the consumer's names it passes (its parameters, renamed for each site of
+    an inlined body it is in, and the names the clauses after it use), as
+    a call in a function's body inlined at several sites is at one place. -/
+def firstKey (ctx : Ctx) (p : Pos) (lp : List SExpr) (b : String) (rest : List SExpr) : String :=
+  let pnames := match lp with
+    | [_, .block _ ps, _, _] => ps.filterMap fun | .ident _ n => some n | _ => none
+    | _ => []
+  let caps := (Choice.namesUsed (.block p rest)).eraseDups.filter fun n =>
+    !pnames.contains n && (ctx.lookup n).isSome
+  s!"{p.line}_{p.col}_{p.file}_{b}_{String.intercalate "," (pnames ++ caps)}"
+
 /-- (#246) The function of its own a lazily taken call where the first
     success is taken is compiled as, when what it runs once for all the
     values of an item has effects (`Choice.FirstLift`): from the call
@@ -2002,7 +2014,7 @@ partial def Ty.paramsC : Ty → List (String × Bool)
 def firstLiftOf (ctx c2 : Ctx) (p : Pos) (g : String) (lp : List SExpr) (b : String) (bty : Option STy)
     (rest : List SExpr) (fxB : List (String × Pos × Option String)) (suspends : Bool) :
     Except String Choice.FirstLift := do
-  let [_, .block _ ps, .block _ cls, .decl _ _ _ _ tail] := lp | throw "internal: a $loop marker"
+  let [_, .block _ ps, .block _ cls, .decl _ _ rsty _ tail] := lp | throw "internal: a $loop marker"
   if ctx.selfClass.isSome then throw "in a method"
   if ctx.inCtor || ctx.inParamDefault || ctx.inBlock || ctx.inDefer || !ctx.defaults.isEmpty then
     throw "in a constructor, a default or a defer"
@@ -2023,17 +2035,19 @@ def firstLiftOf (ctx c2 : Ctx) (p : Pos) (g : String) (lp : List SExpr) (b : Str
     | some l => pure l
     | none => throw s!"internal: name {n}"
   if (pls ++ caps ++ bls).any (fun l => !(Ty.paramsC l.ty).isEmpty) then throw "in a generic function"
-  let name := s!"$first{p.line}_{p.col}" ++ (if p.file.isEmpty then "" else s!"_{p.file}")
+  let key := firstKey ctx p lp b rest
+  let name := s!"$first{p.line}_{p.col}_{key.hash}" ++ (if p.file.isEmpty then "" else s!"_{p.file}")
   let capArgs := caps.map fun l => SExpr.ident p l.name
   let heap := ["reads", "writes", "allocates"].filter fun k =>
     fxB.any (·.1 == k) || ((ctx.sig? g).map (·.fx.contains k)).getD false
   let params : List SParam := pls.map (fun l => { name := l.name, ty := l.ty.toSTy }) ++
     caps.map fun l => { name := if sets.any (·.name == l.name) then s!"{l.name}$in" else l.name, ty := l.ty.toSTy }
-  return { key := s!"{p.line}_{p.col}_{p.file}", pos := p, name, params,
+  return { key, pos := p, name, params,
            specs := (if heap.isEmpty then ["computes"] else heap) ++ ["decides"],
            ret := .tup (bls.map (·.ty.toSTy) ++ sets.map (·.ty.toSTy) ++ [.name "logic"]),
-           body := Choice.firstBody name p b bty cls tail rest binds (sets.map fun l => (l.name, l.ty.toSTy)) capArgs,
-           binds, sets := sets.map (·.name), args := pnames.map (SExpr.ident p ·) ++ capArgs }
+           body := Choice.firstBody name p b bty cls tail rest binds (sets.map fun l => (l.name, l.ty.toSTy)) capArgs rsty,
+           binds, sets := sets.map (·.name), args := pnames.map (SExpr.ident p ·) ++ capArgs,
+           varBinds := (bls.filter (·.mutable)).map (·.name) }
 
 /-- A cast `T[X]`, `X` of type `xty`, that holds only under a refinement of
     the code's type parameters (#243): `T` fixes or repeats type arguments
@@ -4922,11 +4936,11 @@ partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
       -- (when what it runs once for all the values of an item has effects,
       -- asked for by an earlier elaboration: a call of a function of its
       -- own that runs the clauses after it too, then the names they bind)
-      if let some l := ctx.types.loopRequests.find? (·.key == s!"{p.line}_{p.col}_{p.file}") then
+      if let some l := ctx.types.loopRequests.find? (·.key == firstKey ctx p lp b.name rest) then
         let t := s!"$ft{p.line}_{p.col}"
         let get (i : Nat) : SExpr := .app p (.ident p t) [.int p (i : Int)] false
         return ← elabOneGo ctx ([.decl p t none false (.app p (.ident p l.name) l.args true)] ++
-          l.binds.zipIdx.map (fun (n, i) => .decl p n none false (get i)) ++
+          l.binds.zipIdx.map (fun (n, i) => .decl p n none (l.varBinds.contains n) (get i)) ++
           l.sets.zipIdx.map (fun (m, j) => .set p (.ident p m) none (get (l.binds.length + j))))
       let fx0 := (← get).fx
       modify fun st => { st with fx := [] }
