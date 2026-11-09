@@ -488,8 +488,10 @@ circle := class(shape, labelled):
   branch means the same there, it cannot have a `return`, a `break` that
   leaves it, or a `set` of a `var` from outside it (it reads one's value
   when the cast runs), and, in a `<suspends>` function, neither it nor the
-  `else` can suspend, for now. Nor can such a cast be in a method, a
-  `defer:`, a constructor's items, a class's `block:` clause, a field's or
+  `else` can suspend, for now. In a method, the branch names `Self`'s
+  fields and methods as anywhere in the method (its function takes `Self`
+  too), but cannot call `(super:)`. Nor can such a cast be in a `defer:`,
+  a constructor's items, a class's `block:` clause, a field's or
   parameter's default, or an arm of `sync`, `race`, `rush` or `branch`.
   An interface can be parametric too (#53):
   `container(t) := interface: Get():t`, with `box(t) := class(container(t))`.
@@ -551,8 +553,8 @@ circle := class(shape, labelled):
     arguments agree with `X`'s only under a refinement (`dup[P]` for
     `P:pair(a, b)`) other than as the whole condition of an `if`, whose
     branch has a `return`, a `break` that leaves it or a `set` of a `var`
-    from outside it, whose branch or `else` suspends, or in a method, a
-    `defer:`, a constructor's items, a class's `block:` clause, a default
+    from outside it, whose branch or `else` suspends, whose branch calls
+    `(super:)`, or in a `defer:`, a constructor's items, a class's `block:` clause, a default
     or a concurrent arm (#243); a variable, in generic code, of a class or
     interface type that requires an instance of itself (`Next:node(t)`)
     at type arguments that every class below it fixes otherwise: its
