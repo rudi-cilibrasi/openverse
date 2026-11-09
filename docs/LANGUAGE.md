@@ -798,8 +798,9 @@ Main():void =
   arguments where it is inlined, as at a call), one with named parameters
   or a `return` or a `defer:` of its own (in its body, not in a block inside it), a method, one used as a function value, a call of a
   recursive one in an `if`'s branch, a choice's alternative or a `set`'s path, and, since its body is inlined where other names may be
-  in scope, one whose name, or a name its body uses from outside, is also
-  the name of a parameter, local, field or method anywhere in the program.
+  in scope, one whose name is also the name of a parameter, local, field or
+  method anywhere in the program, and a call of one where a name its body
+  uses from outside is a parameter, local or member of `Self` in scope.
   `Main` never has several values.
 - **Precedence.** `|` binds looser than arithmetic and tighter than the
   comparisons: `X = 1 | 2` is `X = (1 | 2)`.

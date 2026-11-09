@@ -287,6 +287,9 @@ mutual
     arguments as at a call and names them for the written types after. -/
 partial def bindParams (isVal : String → Bool) (isField : String → String → Bool) (p : Pos) (pre : List SExpr)
     (args : List SExpr) (unpacks : Bool := true) : LM Unit := do
+  let (frees, pre) := pre.partition fun | .app _ (.ident _ "$freeNames") _ false => true | _ => false
+  for fr in frees do
+    modify fun s => { s with pre := s.pre.push fr }
   let (marks, pre) := pre.partition fun | .app _ (.ident _ "$tparams") _ false => true | _ => false
   let (pds, unpack) := (pre.take args.length, pre.drop args.length)
   match marks with
@@ -346,7 +349,9 @@ partial def liftE (isVal : String → Bool) (isField : String → String → Boo
     -- a call of a function with several values (#235): the arguments, in
     -- order, into its (renamed) parameters, then its body's clauses, then
     -- its value's name
-    let (marks, tmpl) := tmpl.partition fun | .app _ (.ident _ "$tparams") _ false => true | _ => false
+    let (marks, tmpl) := tmpl.partition fun
+      | .app _ (.ident _ "$tparams") _ false | .app _ (.ident _ "$freeNames") _ false => true
+      | _ => false
     let body := tmpl.drop args.length
     -- (the callee's declared effects, which the caller must allow, as at a
     -- call: noted by `$fxOf`, since no call is left)
@@ -784,8 +789,8 @@ def markRec (g : String) : SExpr → SExpr :=
     each with its own call site (`n`, the sites so far); a call of one of
     `loops` by `$loop(F, …)` (#246). -/
 partial def inlineCalls (mv : List (String × MFn)) (e : SExpr) (recs : List String := [])
-    (loops : List String := []) : StateT Nat (Except String) SExpr := do
-  let go := fun x => inlineCalls mv x recs loops
+    (loops : List String := []) (clash : List (String × List String) := []) : StateT Nat (Except String) SExpr := do
+  let go := fun x => inlineCalls mv x recs loops clash
   match e with
   | .app p (.ident q g) as br =>
     match mv.lookup g with
@@ -816,9 +821,13 @@ partial def inlineCalls (mv : List (String × MFn)) (e : SExpr) (recs : List Str
       -- the written types after)
       let ρ : List (String × String) := f.tparams.map fun tp => (tp.name, s!"$tp{site}_{tp.name}")
       let tyOf (t : STy) : Option STy := some (styRename ρ t)
-      let tmark : List SExpr := if ρ.isEmpty then [] else
+      let tmark : List SExpr := (if ρ.isEmpty then [] else
         [.app q (.ident q "$tparams") (.ident q g :: (ρ.zip f.tparams).map fun ((_, n), tp) =>
-          SExpr.tuple q [.ident q n, .ident q tp.constraint]) false]
+          SExpr.tuple q [.ident q n, .ident q tp.constraint]) false]) ++
+        -- (the names its body uses from outside, checked not in scope here)
+        (match clash.lookup g with
+         | some us => [.app q (.ident q "$freeNames") (.ident q g :: us.map (SExpr.ident q ·)) false]
+         | none => [])
       let (pds, unpack, as'') : List SExpr × List SExpr × List SExpr :=
         if as.length == f.params.length then
           (f.params.map fun sp => SExpr.decl q (tag sp.name) (tyOf sp.ty) false (.ident q "$arg"), [], as')
@@ -1083,14 +1092,9 @@ def inlineMulti (tops : List STop) : Except String (List STop × Bool) := do
   -- (#246) the self-recursive ones of the shape of a generator, taken
   -- lazily where they are consumed: computed eagerly, `F$all`, only for the
   -- recursive ones that call them
-  -- (one whose body uses a name bound elsewhere too, which it would mean
-  -- something else once inlined at its consumer, stays eager)
   let loops : List String := recs.filter fun g =>
     match mfs.lookup g with
-    | some f =>
-      let own := f.params.map (·.name) ++ localsOf f.body
-      (callees.lookup g).getD [] == [g] && (loopShape? g mv f.body).isSome &&
-        !(namesUsed f.body).any fun u => !own.contains u && binders.contains u
+    | some f => (callees.lookup g).getD [] == [g] && (loopShape? g mv f.body).isSome
     | none => false
   let mut needAll := recs.filter (!loops.contains ·)
   let mut grew := true
@@ -1122,10 +1126,8 @@ def inlineMulti (tops : List STop) : Except String (List STop × Bool) := do
     -- its name nor a name its body uses from outside may be bound anywhere)
     if binders.contains n then
       throw s!"{f.pos.show}: {n} has several values, and {n} is also the name of a parameter, local, field or method: rename one, as calls of {n} are inlined (#235)"
-    let own := f.params.map (·.name) ++ localsOf f.body
-    for u in namesUsed f.body do
-      if (!recs.contains n || loops.contains n) && !own.contains u && binders.contains u then
-        throw s!"{f.pos.show}: {n} has several values and uses {u}, which is also the name of a parameter, local, field or method: rename one, as {n}'s body is inlined where that name may mean something else (#235)"
+    -- (a name its body uses from outside that is bound somewhere too is
+    -- checked where the body is inlined, `$freeNames`, #283)
   -- (no use as a value)
   let defaults (ps : List SParam) : List SExpr := ps.filterMap (·.default)
   let bodies : List SExpr := tops.flatMap fun
@@ -1138,7 +1140,13 @@ def inlineMulti (tops : List STop) : Except String (List STop × Bool) := do
     if let some (p, n) := valueUse? mv b then
       throw s!"{p.show}: {n} has several values, so it cannot be used as a function value (#235)"
   -- (each call inlined; each function kept for checking only)
-  let go (e : SExpr) : StateT Nat (Except String) SExpr := inlineCalls mfs e recs loops
+  -- (for each, the names its body uses from outside that are bound
+  -- somewhere too: where it is inlined, they must not be in scope)
+  let clash : List (String × List String) := mfs.filterMap fun (n, f) =>
+    let own := f.params.map (·.name) ++ localsOf f.body
+    let us := (namesUsed f.body).eraseDups.filter fun u => u != n && !own.contains u && binders.contains u
+    if us.isEmpty || (recs.contains n && !loops.contains n) then none else some (n, us)
+  let go (e : SExpr) : StateT Nat (Except String) SExpr := inlineCalls mfs e recs loops clash
   let goPs (ps : List SParam) : StateT Nat (Except String) (List SParam) :=
     ps.mapM fun sp => do return { sp with default := ← sp.default.mapM go }
   let (tops', _) ← (tops.filterMapM (m := StateT Nat (Except String)) fun t => do

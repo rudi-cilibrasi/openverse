@@ -141,7 +141,12 @@ A function with several values (#235) is inlined before elaboration, by
 the top-level functions whose body has a choice that nothing in it takes,
 iterating to a fixpoint, since calling one where the call is not taken
 makes the caller one too. It refuses the cases it cannot inline:
-recursion, named parameters, `return`, and use as a value. (A generic
+recursion, named parameters, `return`, and use as a value. The names its
+body uses from outside that are bound somewhere too are checked where it is
+inlined, by a `$freeNames` clause the template starts with: not a
+parameter, local or member of `Self` in scope there, where they would mean
+that (#283; only its own name must be free everywhere, as its calls are
+recognized by it). (A generic
 one's template has its type parameters renamed for the site, `$tp…`, in
 every type it writes; its parameters are bound together by a `$params`
 clause, which infers the type arguments from the arguments as a generic
