@@ -453,10 +453,10 @@ circle := class(shape, labelled):
   dispatch opens `a` and `b` as types it has no names for, refines `t` to
   `tuple(a, b)` for a `pairE`, and runs `pairE`'s `Eval` at them. Such
   an object carries a value of each of those types, hidden, which its
-  methods start their variables of those types with. A class whose type
-  arguments beyond the declaring class's are fixed to closed types (a
-  class between them has type parameters of its own, which it fixes)
-  cannot override yet. An interface can be parametric too (#53):
+  overrides start their variables of those types with. A class below
+  such a class can fix or repeat those type arguments (`leaf :=
+  class(mid(int, string))` below `mid(a, b) := class(expr(tuple(a, b)))`)
+  and override too. An interface can be parametric too (#53):
   `container(t) := interface: Get():t`, with `box(t) := class(container(t))`.
   A class gives the interfaces above it exactly its own Verse Core type
   arguments (`box(t)` gives `container` `t`; a class implementing
@@ -506,12 +506,12 @@ circle := class(shape, labelled):
 - **Comparability.** Other classes and interfaces are not comparable (Book §4.9), nor
   is a struct or container that holds one.
 - **Not yet supported** (each rejected with a message):
-  - overrides in a class whose type arguments beyond those of the
-    class that declares the method are fixed to closed types (`leaf :=
-    class(mid(int, string))` below `mid(a, b) := class(expr(tuple(a,
-    b)))`, #209); a `<suspends>` method, and a `spawn` of a method, of a
-    class with type parameters that its parent's type arguments do not
-    give (#209); a dispatch, in code generic over a
+  - in a class with type parameters that its parent's type arguments
+    do not give: a `<suspends>` override, a `spawn` in an override, a
+    spawn of a call of one, and, in code generic over a class above, a
+    call of one whose omitted named argument's default has no type of
+    its own (#209); such a class below a parametric interface (#53,
+    #209); a dispatch, in code generic over a
     class, to a subclass whose fixed type arguments relate to ones the
     receiver's type does not have (#209); a cast `T[X]` whose type
     arguments agree with `X`'s only under a refinement (`dup[P]` for

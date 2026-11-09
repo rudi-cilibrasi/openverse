@@ -183,10 +183,10 @@ Main():void = Print("{Run(pk(int, string){X := 7})}")
 
 `expr` is tag 0, `pk` tag 1, with the fields `X : var 0` and the hidden
 `$w.pk.b : var 1` (a value of `b`). `pk`'s `b` is no type argument of
-`expr`'s: `pk` pins it to itself, `[none, some (var 1)]`, so that an
-object has it. In `Run`, generic over `t`, the receiver has one type
-argument; the dispatch opens a second as a fresh variable, and calls
-`pk`'s `Get` at both. -/
+`expr`'s; `pk` records pins on both of its type arguments, `[none,
+none]`, so that an object has both. In `Run`, generic over `t`, the
+receiver has one type argument; the dispatch opens a second as a fresh
+variable, and calls `pk`'s `Get` at both. -/
 def openDemo : Prog where
   fns := [
     { name := "pk.Get", arity := 1, nslots := 1, decides := false,
@@ -200,15 +200,15 @@ def openDemo : Prog where
 def openSigs : Sigs where
   fns := [([.ref [1] [.var 0, .var 1]], .var 0), ([.ref [0, 1] [.var 0]], .var 0), ([], .void)]
   classes := [[], [.var 0, .var 1]]
-  pins := [[], [none, some (.var 1)]]
+  pins := [[], [none, none]]
 def openSlots : List (List VTy) := [[.ref [1] [.var 0, .var 1]], [.ref [0, 1] [.var 0]], []]
 
 example : openDemo.check = true := by native_decide
 example : openDemo.checkTypes openSigs openSlots = true := by native_decide
 example : outOf openDemo = some (.ok .void, "7\n") := by native_decide
-/-- Without the pin, nothing says that a `pk` has a second type argument,
+/-- Without the pins, nothing says that a `pk` has a second type argument,
     so the dispatch cannot open it, and `Run` does not type. -/
-example : openDemo.checkTypes { openSigs with pins := [[], [none, none]] } openSlots = false := by
+example : openDemo.checkTypes { openSigs with pins := [] } openSlots = false := by
   native_decide
 
 /-- A chain of `n` dispatch-shaped tests ending in an ill-typed literal. -/

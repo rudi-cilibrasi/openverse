@@ -285,21 +285,21 @@ def VTy.pinPairs : List (Option VTy) → List VTy → List (VTy × VTy)
 def VTy.pinsBelow (ps : List (Option VTy)) (n : Nat) : Bool :=
   ps.all fun o => o.all (VTy.varsBelow n)
 
-/-- Type arguments `args` agree with pins `ps` (#142, #209): there are as
-    many as the pins mention, and each pinned argument is its pin at
-    `args`. (So an object has every type argument its class's pins
-    mention: those a dispatch opens, `Typed.dispatch`.) -/
+/-- Type arguments `args` agree with pins `ps` (#142, #209): there are at
+    least as many as pins, and each pinned argument is its pin at `args`.
+    (So an object of a class with pins has all of its type arguments:
+    those a dispatch opens, `Typed.dispatch`.) -/
 def VTy.pinsOK (ps : List (Option VTy)) (args : List VTy) : Bool :=
-  VTy.pinsBelow ps args.length && (VTy.pinPairs ps args).all fun p => decide (p.1 = p.2.inst args)
+  decide (ps.length ≤ args.length) && (VTy.pinPairs ps args).all fun p => decide (p.1 = p.2.inst args)
 
 /-- `k` fresh type variables, from `N` on: the type arguments a dispatch
     opens beyond the receiver's (#209). -/
 def VTy.ext (N k : Nat) : List VTy := (List.range k).map fun i => .var (N + i)
 
-/-- The pins `P` on `n + k` type arguments mention the last one, when
-    `k > 0`: an object that agrees with them has at least `n + k`. -/
+/-- When `k > 0`, the pins `P` on `n + k` type arguments are pins on all of
+    them: an object that agrees with them has at least `n + k`. -/
 def VTy.extOK (P : List (Option VTy)) (n k : Nat) : Bool :=
-  k == 0 || P.any fun o => o.any (VTy.hasVar (n + k - 1))
+  k == 0 || P.length == n + k
 
 /-- `μ` refines type arguments `args` by pins `ps` (#142, #209): it is a most
     general substitution that makes them agree with the pins. Every other
@@ -393,10 +393,11 @@ inductive Typed (S : Sigs) (Γ : List VTy) (ρ : VTy) : Expr → VTy → Prop
       `e`. `y`'s type arguments `a` are extended by `k` fresh type
       variables `ext` (from `N` on, above every variable of `a`, of the
       other arguments' types `σs` and of `τ'`): the arguments an object of
-      `us` has beyond `a`, which the code has no names for (existentials).
-      Every class of `us` pins the same arguments among those, in terms of
-      them alone, and `μ` refines `a ++ ext` by the pins; the call is typed
-      with `μ` applied to both sides. When the branch runs, the object's
+      `us` has beyond `a`, which the code has no names for (existentials;
+      the classes have pins on all of them, so an object has them). Every
+      class of `us` pins the same arguments among those, in terms of them
+      alone, and `μ` refines `a ++ ext` by the pins; the call is typed with
+      `μ` applied to both sides. When the branch runs, the object's
       arguments agree with its pins and are `a ++ rest`: the substitution
       of `rest` for `ext` makes them agree, so it factors through `μ`, and
       the call is typed at it. -/

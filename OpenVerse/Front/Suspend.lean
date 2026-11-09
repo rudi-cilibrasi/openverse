@@ -277,9 +277,13 @@ partial def liftChains (m base : Nat) : Expr → StateM (Array (Expr × List Nat
 partial def pruneDead (S : Sigs) (Γ : List VTy) : Expr → Expr
   | .ite c@(.heap (.isTag us) [.local y]) t@(.call _ (.local y' :: _)) e =>
     let dead := y == y' && !us.isEmpty && match Γ[y]? with
-      | some (.ref _ a) => us.all fun u =>
-        let P := (S.pinsOf u).take a.length
-        VTy.pinsBelow P a.length && (unify (VTy.pinEqs P a)).isNone
+      | some (.ref _ a) =>
+        -- (as the checker opens the arguments beyond `a`, #209)
+        let k := openCount S us a.length
+        let N := VTy.nvarsL a
+        us.all fun u =>
+          let P := (S.pinsOf u).take (a.length + k)
+          VTy.pinsBelow P (a.length + k) && (unify (VTy.pinEqs P (a ++ VTy.ext N k))).isNone
       | _ => false
     if dead then pruneDead S Γ e else .ite c (pruneDead S Γ t) (pruneDead S Γ e)
   | .assign i x => .assign i (pruneDead S Γ x)

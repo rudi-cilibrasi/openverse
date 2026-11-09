@@ -167,18 +167,18 @@ theorem VTy.pinPairs_map (f : VTy → VTy) : ∀ (ps : List (Option VTy)) (args 
 
 theorem VTy.pinsOK_iff {ps : List (Option VTy)} {args : List VTy} :
     VTy.pinsOK ps args = true ↔
-      VTy.pinsBelow ps args.length = true ∧ ∀ p ∈ VTy.pinPairs ps args, p.1 = p.2.inst args := by
+      ps.length ≤ args.length ∧ ∀ p ∈ VTy.pinPairs ps args, p.1 = p.2.inst args := by
   simp [VTy.pinsOK]
 
-/-- Type arguments that agree with pins are as many as the pins mention. -/
-theorem VTy.pinsOK.below {ps : List (Option VTy)} {args : List VTy} (h : VTy.pinsOK ps args = true) :
-    VTy.pinsBelow ps args.length = true :=
+/-- Type arguments that agree with pins are at least as many. -/
+theorem VTy.pinsOK.length_le {ps : List (Option VTy)} {args : List VTy} (h : VTy.pinsOK ps args = true) :
+    ps.length ≤ args.length :=
   (VTy.pinsOK_iff.mp h).1
 
 /-- Instantiated type arguments agree with pins when the substitution
     unifies each pinned argument with its pin. -/
 theorem VTy.pinsOK_subst_iff {θ : Nat → VTy} {ps : List (Option VTy)} {args : List VTy} :
-    VTy.pinsOK ps (args.map (VTy.subst θ)) = true ↔ VTy.pinsBelow ps args.length = true ∧
+    VTy.pinsOK ps (args.map (VTy.subst θ)) = true ↔ ps.length ≤ args.length ∧
       ∀ p ∈ VTy.pinPairs ps args, p.1.subst θ = (p.2.inst args).subst θ := by
   simp [VTy.pinsOK, VTy.pinPairs_map, VTy.inst_subst]
 
@@ -227,7 +227,7 @@ theorem VTy.pinPairs_take : ∀ (ps : List (Option VTy)) (a rest : List VTy),
 theorem VTy.pinsOK_subst {ps : List (Option VTy)} {args : List VTy}
     (θ : Nat → VTy) (h : VTy.pinsOK ps args = true) : VTy.pinsOK ps (args.map (VTy.subst θ)) = true := by
   rw [VTy.pinsOK_subst_iff]; rw [VTy.pinsOK_iff] at h
-  refine ⟨h.1, fun p hp => ?_⟩
+  refine ⟨by simpa using h.1, fun p hp => ?_⟩
   rw [h.2 p hp]
 
 /-- When the type arguments already agree with the pins, a refinement is the identity. -/
@@ -249,17 +249,17 @@ def VTy.pinEqs (ps : List (Option VTy)) (args : List VTy) : Eqs :=
 
 theorem VTy.pinsOK_iff_unifies {θ : Nat → VTy} {ps : List (Option VTy)} {args : List VTy} :
     VTy.pinsOK ps (args.map (VTy.subst θ)) = true ↔
-      VTy.pinsBelow ps args.length = true ∧ Eqs.Unifies θ (VTy.pinEqs ps args) := by
+      ps.length ≤ args.length ∧ Eqs.Unifies θ (VTy.pinEqs ps args) := by
   rw [VTy.pinsOK_subst_iff]
   simp only [Eqs.Unifies, VTy.pinEqs, List.mem_map]
   constructor
   · rintro ⟨hb, h⟩; exact ⟨hb, by rintro _ ⟨p, hp, rfl⟩; exact h p hp⟩
   · rintro ⟨hb, h⟩; exact ⟨hb, fun p hp => h _ ⟨p, hp, rfl⟩⟩
 
-/-- A most general unifier of the pin equations is a refinement, when the
-    pins mention only the type arguments. -/
+/-- A most general unifier of the pin equations is a refinement, when there
+    are as many type arguments as pins. -/
 theorem PinRefines.of_unify {ps : List (Option VTy)} {args : List VTy} {μ : Nat → VTy}
-    (hb : VTy.pinsBelow ps args.length = true) (h : unify (VTy.pinEqs ps args) = some μ) :
+    (hb : ps.length ≤ args.length) (h : unify (VTy.pinEqs ps args) = some μ) :
     PinRefines ps args μ :=
   ⟨VTy.pinsOK_iff_unifies.mpr ⟨hb, unify_sound h⟩,
     fun _ hR j => unify_mgu h (VTy.pinsOK_iff_unifies.mp hR).2 j⟩
@@ -314,25 +314,22 @@ theorem VTy.range_getD_eq_take {l : List VTy} {k : Nat} (hk : k ≤ l.length) :
     simp only [List.length_map, List.length_range] at h1
     simp [List.getD_eq_getElem?_getD, List.getElem?_eq_getElem (show i < l.length by omega)]
 
-/-- An object of a class whose pins on `a.length + k` type arguments
-    mention the last one, and whose arguments `a ++ rest` agree with them,
-    has at least `k` beyond `a`. -/
-theorem VTy.extOK_rest {P ps : List (Option VTy)} {a rest : List VTy} {k : Nat}
+/-- An object of a class whose pins on `a.length + k` type arguments are
+    pins on all of them (`k > 0`), and whose arguments `a ++ rest` agree
+    with them, has at least `k` beyond `a`. -/
+theorem VTy.len_rest {P ps : List (Option VTy)} {a rest : List VTy} {k : Nat}
     (hext : VTy.extOK P a.length k = true) (hP : ps.take (a.length + k) = P)
     (h : VTy.pinsOK ps (a ++ rest) = true) : k ≤ rest.length := by
   rcases Nat.eq_zero_or_pos k with rfl | hk
   · exact Nat.zero_le _
-  · simp only [VTy.extOK, Bool.or_eq_true, beq_iff_eq, Nat.pos_iff_ne_zero.mp hk, false_or,
-      List.any_eq_true] at hext
-    obtain ⟨o, ho, hc⟩ := hext
-    cases o with
-    | none => simp at hc
-    | some c =>
-      simp only [Option.any_some] at hc
-      have hb := VTy.pinsBelow_iff.mp (VTy.pinsOK.below h) c (List.mem_of_mem_take (hP ▸ ho))
-      have := ((VTy.varsBelow_iff c _).mp hb) _ hc
-      simp only [List.length_append] at this
-      omega
+  have hlen : P.length = a.length + k := by
+    simp only [VTy.extOK, Bool.or_eq_true, beq_iff_eq, Nat.pos_iff_ne_zero.mp hk, false_or] at hext
+    exact hext
+  have h1 := VTy.pinsOK.length_le h
+  have h2 : (ps.take (a.length + k)).length = a.length + k := by rw [hP, hlen]
+  rw [List.length_take] at h2
+  simp only [List.length_append] at h1
+  omega
 
 /-- A field type mentioning only the first `args.length` type parameters
     has the same instance at every extension of `args` (#39). -/
@@ -350,7 +347,7 @@ theorem VTy.pinsOK_take {ps : List (Option VTy)} {a rest : List VTy}
     (hb : VTy.pinsBelow (ps.take a.length) a.length = true) (h : VTy.pinsOK ps (a ++ rest) = true) :
     VTy.pinsOK (ps.take a.length) a = true := by
   rw [VTy.pinsOK_iff] at h ⊢
-  refine ⟨hb, fun p hp => ?_⟩
+  refine ⟨List.length_take_le _ _, fun p hp => ?_⟩
   rw [h.2 p (VTy.pinPairs_take _ _ _ p hp)]
   have hc : p.2.varsBelow a.length = true := by
     simp only [VTy.pinsBelow, List.all_eq_true] at hb
@@ -1013,7 +1010,7 @@ theorem ref_open {S : Sigs} {h : Array Obj} (hH : HeapOK S Ξ h) {a0 : Nat} {o :
   obtain ⟨a1, o1, rest, hv1, ho1, -, hΞ1, hpin⟩ := ref_pins hH hwt
   simp only [Value.ref.injEq] at hv1; subst hv1
   rw [ho] at ho1; simp only [Option.some.injEq] at ho1; subst ho1
-  have hk : k ≤ rest.length := VTy.extOK_rest hext hP hpin
+  have hk : k ≤ rest.length := VTy.len_rest hext hP hpin
   have he : (a ++ VTy.ext N k).map (VTy.subst (VTy.openAt VTy.var N fun i => rest.getD i .void)) =
       a ++ rest.take k := by
     rw [List.map_append, VTy.openAt_belowL hNa, VTy.substL_id, VTy.openAt_ext, VTy.range_getD_eq_take hk]

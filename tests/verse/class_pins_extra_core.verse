@@ -1,4 +1,5 @@
-# expect: ia has more Verse Core type arguments than box (a class between them has type parameters of its own), so it cannot override Name
+# a class below one with a type parameter of its own fixes it and overrides:
+# a dispatch on box opens it (#209)
 box(t:type) := class:
     V:t
     Name():string = "box"
@@ -9,3 +10,5 @@ ia := class(arrbox(int)):
 N(B:box(t) where t:type):string = B.Name()
 Main():void =
     Print(N(ia{V := array{1}}))
+    Print(N(box(int){V := 2}))
+    Print(N(arrbox(string){V := array{}}))

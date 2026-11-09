@@ -282,7 +282,7 @@ def newArgs (acc : Unit → List (Nat × VTy)) (fs : List VTy) : Option VTy → 
 def newProposal (ps : List (Option VTy)) (acc : Unit → List (Nat × VTy)) (fs : List VTy) (m : Option VTy) :
     List VTy :=
   let a := newArgs acc fs m
-  if VTy.pinsBelow ps a.length then a else newArgs acc fs none
+  if ps.length ≤ a.length then a else newArgs acc fs none
 
 /-- The instantiation `tc` proposes for a call with result type `t`: the
     bindings `acc` from the arguments, completed from the expected type. -/
@@ -299,9 +299,9 @@ def commonPins (S : Sigs) (us : List Nat) (n : Nat) : List (Option VTy) :=
   | u :: _ => (S.pinsOf u).take n
 
 /-- How many type arguments beyond `n` a dispatch to classes `us` opens
-    (#209): the fewest that the pins of one of them mention. -/
+    (#209): the fewest that one of them has pins on. -/
 def openCount (S : Sigs) (us : List Nat) (n : Nat) : Nat :=
-  match us.map fun u => VTy.nvarsL ((S.pinsOf u).filterMap id) - n with
+  match us.map fun u => (S.pinsOf u).length - n with
   | [] => 0
   | k :: ks => ks.foldl min k
 
@@ -355,10 +355,12 @@ theorem tcDispatch_sound {S : Sigs} {Γ : List VTy} {us : List Nat} {y y' f : Na
               commonPins S us (a.length + openCount S us a.length) := by
             intro u hu; simpa using List.all_eq_true.mp hus u hu
           simp only [Option.some.injEq] at h; subst h
-          have hb' : VTy.pinsBelow (commonPins S us (a.length + openCount S us a.length))
-              (a ++ VTy.ext (max (VTy.nvarsL a) (max (VTy.nvarsL σs) τ'.nvars)) (openCount S us a.length)).length
-              = true := by
-            rwa [List.length_append, VTy.ext_length]
+          have hb' : (commonPins S us (a.length + openCount S us a.length)).length ≤
+              (a ++ VTy.ext (max (VTy.nvarsL a) (max (VTy.nvarsL σs) τ'.nvars)) (openCount S us a.length)).length := by
+            rw [List.length_append, VTy.ext_length]
+            unfold commonPins; split
+            · simp
+            · exact List.length_take_le _ _
           exact ⟨hyy, rfl, heOK, ts, a, ps, τ0, σs, _, _, _, _, _, hy, hf, rfl, hus', hb, hext,
             VTy.varsBelowL_mono (Nat.le_max_left _ _) (VTy.varsBelowL_nvarsL _),
             VTy.varsBelowL_mono (Nat.le_trans (Nat.le_max_left _ _) (Nat.le_max_right _ _))
