@@ -260,8 +260,9 @@ partial def liftChains (m base : Nat) (extra : List Nat := []) : Expr → StateM
     match f == m, es with
     | true, [.prim .mkArr [.seq ch v, .seq (.local t) v2]] =>
       match ch with
-      -- (also one whose every test a copy at closed types dropped, #186:
-      -- left with its unreachable end, at a type no class implements)
+      -- (also one whose every test was dropped at closed types, by the
+      -- elaborator or `pruneDead`, #186: left with its unreachable end, at
+      -- a type no class implements)
       | .ite .. | .prim .userErr [] =>
         -- (and `extra`: the caller's type witnesses, for a generic chain,
         -- last and in order, where a generic call's witnesses are)
@@ -289,10 +290,11 @@ partial def liftChains (m base : Nat) (extra : List Nat := []) : Expr → StateM
     pass at the slot types `Γ`: no substitution makes the receiver's type
     arguments agree with any tested class's pins on them (#142, #209), so
     no instance of them starts an object's. The checker types a dispatch
-    only when its pins can agree, and such tests arise in a copy of a
-    generic function at closed types, where the generic one had a
-    refinement (#174), and in #157's field accessors on closed receivers;
-    every function is pruned before the lowering (#186). -/
+    only when its pins can agree, and such tests arise in #157's field
+    accessors on closed receivers (a dispatch the elaborator builds skips
+    them itself). Every function is pruned before the lowering (#186);
+    copies of generic functions at closed types, the other source once
+    (#174), are gone. -/
 partial def pruneDead (S : Sigs) (Γ : List VTy) : Expr → Expr
   | .ite c@(.heap (.isTag us) [.local y]) t@(.call _ (.local y' :: _)) e =>
     let dead := y == y' && !us.isEmpty && match Γ[y]? with
@@ -315,23 +317,6 @@ partial def pruneDead (S : Sigs) (Γ : List VTy) : Expr → Expr
   | .heap op es => .heap op (es.map (pruneDead S Γ))
   | .ite c t x => .ite (pruneDead S Γ c) (pruneDead S Γ t) (pruneDead S Γ x)
   | .forE i it f b => .forE i (pruneDead S Γ it) (pruneDead S Γ f) (pruneDead S Γ b)
-  | x => x
-
-/-- `e` with each call `call g es` for which `r g es` gives a function
-    redirected to it (#174). -/
-partial def redirectCalls (r : Nat → List Expr → Option Nat) : Expr → Expr
-  | .call f es =>
-    let es := es.map (redirectCalls r)
-    .call ((r f es).getD f) es
-  | .assign i x => .assign i (redirectCalls r x)
-  | .ret x => .ret (redirectCalls r x)
-  | .print x => .print (redirectCalls r x)
-  | .loop x => .loop (redirectCalls r x)
-  | .seq a b => .seq (redirectCalls r a) (redirectCalls r b)
-  | .prim p es => .prim p (es.map (redirectCalls r))
-  | .heap op es => .heap op (es.map (redirectCalls r))
-  | .ite c t x => .ite (redirectCalls r c) (redirectCalls r t) (redirectCalls r x)
-  | .forE i it f b => .forE i (redirectCalls r it) (redirectCalls r f) (redirectCalls r b)
   | x => x
 
 /-- The number of arms of the `sync`s and `race`s (marks `m`) in `e`. -/

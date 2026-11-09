@@ -6264,141 +6264,24 @@ subscribable_event(t:type) := class(event(t)):
 def subTops : Except String (List STop) :=
   parsePrelude subPrelude ["subscription", "Live", "Handlers", "Hs", "H", "S", "F", "X", "t", "Head", "signalAll"]
 
-/-- The number of constructors in a Verse Core type (to bound the types a
-    specialisation is made at, #174). -/
-partial def _root_.OpenVerse.VTy.size : VTy → Nat
-  | .arr t | .opt t => 1 + t.size
-  | .tup ts | .ref _ ts => 1 + (ts.map VTy.size).sum
-  | _ => 1
-
 /-- An error of the lowering in function `name` (#156): with the position of
-    its definition among `tops`, and the name the program gave it (a
-    specialised copy's original's, #174). -/
+    its definition among `tops`. -/
 def inFnMsg (tops : List STop) (name msg : String) : String :=
-  let base := (name.splitOn "$at").headD name
   let pos := tops.findSome? fun
-    | .fn q m .. => if m == base then some q else none
+    | .fn q m .. => if m == name then some q else none
     | .classDef _ c _ _ _ _ _ _ ms => ms.findSome? fun
-      | .fn q m .. => if s!"{c}.{m}" == base then some q else none
+      | .fn q m .. => if s!"{c}.{m}" == name then some q else none
       | _ => none
     | _ => none
   match pos with
-  | some q => s!"{q.show}: in {base}: {msg}"
-  | none => s!"in {base}: {msg}"
-
-/-- (#174) Specialise the generic functions whose tasks' roots would depend
-    on their type parameters in a way generic roots (#244) do not cover:
-    those with a spawned dispatch reading values of such types (`spawnMark`),
-    or (immediate ones, `isSusp` false) any `spawn`, and those calling one
-    at such types. (A `branch`, a `rush`, or a spawn of a call, is a root at
-    the function's own type arguments.) Each call of one at closed type
-    arguments, read off the call's witnesses (its last `ntpOf g` arguments,
-    whose types the checker infers exactly), goes to a copy at those types
-    (appended to `fns`, `slotTys`), whose own calls are handled the same
-    way; in a copy, the refined dispatch tests its types rule out are
-    dropped. The originals are then never called and keep only their
-    parameters. Gives the functions, their slot types, the copies'
-    signatures, each copy's original and type arguments, and which
-    functions were replaced. -/
-def specialise (fns0 : Array Fn) (slotTys0 : Array (List VTy)) (S0 : Sigs) (ntpOf : Nat → Nat)
-    (isSusp : Nat → Bool) (spawnMark : Nat)
-    (inFn : String → String → String := fun n m => s!"in {n}: {m}") (hasSelfTps : Nat → Bool := fun _ => false) :
-    Except String (Array Fn × Array (List VTy) × Array (List VTy × VTy) × Array (Nat × List VTy) × Array Bool) := do
-  let mut fns := fns0
-  let mut slotTys := slotTys0
-  let nOrig := fns.size
-  let mut specSigs : Array (List VTy × VTy) := #[]
-  let mut needy : Array Bool := #[]
-  let resTy (S : Sigs) (gi : Nat) : VTy := ((S.fns[gi]?).map (·.2)).getD .void
-  for gi in List.range nOrig do
-    let Γ := slotTys[gi]!
-    let openSlot (j : Nat) : Bool := ((Γ[j]?).map (·.mentionsVar)).getD false
-    -- (#244: a branch, a rush, or a spawn of a call, is a root of the
-    -- scheduler at the function's own type arguments, which its dispatch
-    -- opens; a spawned dispatch chain at open types still needs copies)
-    let spawnOpen (es : List Expr) : Bool := match es with
-      | [.prim .mkArr [.seq (.call _ _) _, .seq (.local _) _]] => false
-      | _ => (Suspend.slotsOf (.prim .mkTup es)).any openSlot
-    -- (an override whose class's type parameters its receiver holds, #209,
-    -- is generic in them too, even without type parameters of its own)
-    needy := needy.push ((ntpOf gi > 0 || hasSelfTps gi) && (Suspend.callsOf fns[gi]!.body).any fun (g, es) =>
-      g == spawnMark && (!isSusp gi || spawnOpen es))
-  let witTys (S : Sigs) (Γ : List VTy) (ρ : VTy) (g : Nat) (es : List Expr) : List (Option VTy) :=
-    (es.drop (es.length - ntpOf g)).map fun e => tc S Γ ρ e none
-  -- (a call of one at types that mention the caller's type parameters: the
-  -- caller needs specialising too)
-  let mut changed := true
-  while changed do
-    changed := false
-    for gi in List.range nOrig do
-      if needy[gi]! || (ntpOf gi == 0 && !hasSelfTps gi) then continue
-      if (Suspend.callsOf fns[gi]!.body).any (fun (g, es) => (needy[g]?.getD false) &&
-          (witTys S0 slotTys[gi]! (resTy S0 gi) g es).any (·.all (·.mentionsVar))) then
-        needy := needy.set! gi true
-        changed := true
-  -- (an override that reads its class's type parameters from its receiver,
-  -- #209, cannot be copied per type: its copy would not know them)
-  for gi in List.range nOrig do
-    if needy[gi]! && hasSelfTps gi then
-      throw (inFn fns[gi]!.name "it needs a copy per type (#174: an immediate function with a spawn, or one calling such a function at its type parameters), and its class has type parameters that its parent's type arguments do not give: not supported yet (#209)")
-  -- (the other generic functions are not copied: a generic callee's frame
-  -- is resumed outside any condition as a non-generic one's is, #256, so
-  -- copies at closed types, #225, gained nothing, #269)
-  let mut specKeys : Array (Nat × List VTy) := #[]
-  let mut queue : Array Nat := ((List.range nOrig).filter fun gi => !needy[gi]!).toArray
-  let mut qi := 0
-  while qi < queue.size do
-    let gi := queue[qi]!
-    qi := qi + 1
-    let S : Sigs := { S0 with fns := S0.fns ++ specSigs.toList }
-    let Γ := slotTys[gi]!
-    let ρ := resTy S gi
-    let calls := (Suspend.callsOf fns[gi]!.body).filter fun (g, _) => needy[g]?.getD false
-    if calls.isEmpty then continue
-    for (g, es) in calls do
-      let some θ := (witTys S Γ ρ g es).mapM id
-        | throw (inFn fns[gi]!.name s!"a type argument of a call of {fns[g]!.name} has no type of its own (#174)")
-      -- (types that grow at each copy, doubling for instance: polymorphic
-      -- recursion; linear growth meets the bound on copies first)
-      if θ.any (·.size > 2000) then
-        throw (inFn fns[gi]!.name s!"{fns[g]!.name} would be compiled at a type of more than 2000 parts, as if at ever bigger types: a generic function with a spawned dispatch at its type parameters, or a generic immediate function with a spawn, or one using such a function at its own type parameters, cannot call itself at bigger types (#174)")
-      if θ.any (·.mentionsVar) then throw s!"internal error: specialising a call of {fns[g]!.name} in {fns[gi]!.name}"
-      if !specKeys.contains (g, θ) then
-        if specKeys.size ≥ 500 then
-          throw (inFn fns[gi]!.name s!"more than 500 copies of generic functions with a spawned dispatch or an immediate spawn, one per type each is used at (last {fns[g]!.name}): a function calling itself at ever bigger types, or many nested generic uses, cannot be compiled (#174)")
-        let σ : Nat → VTy := fun i => θ.getD i (.var i)
-        let fn := fns[g]!
-        let Γc := slotTys[g]!.map (VTy.subst σ)
-        fns := fns.push { fn with name := s!"{fn.name}$at{specKeys.size}", body := Suspend.pruneDead S0 Γc fn.body }
-        slotTys := slotTys.push Γc
-        let (ps, τ) := (S0.fns[g]?).getD ([], .void)
-        specSigs := specSigs.push (ps.map (VTy.subst σ), τ.subst σ)
-        needy := needy.push false
-        queue := queue.push (nOrig + specKeys.size)
-        specKeys := specKeys.push (g, θ)
-    let keys := specKeys
-    let isNeedy := needy
-    let S : Sigs := { S0 with fns := S0.fns ++ specSigs.toList }
-    let body := Suspend.redirectCalls (fun g es =>
-      if isNeedy[g]?.getD false then
-        match (witTys S Γ ρ g es).mapM id with
-        | some θ => (keys.idxOf? (g, θ)).map (nOrig + ·)
-        | none => none
-      else none) fns[gi]!.body
-    fns := fns.set! gi { fns[gi]! with body }
-  for gi in List.range nOrig do
-    if needy[gi]! then
-      let fn := fns[gi]!
-      fns := fns.set! gi { fn with nslots := fn.arity, body := .prim .userErr [] }
-      slotTys := slotTys.set! gi (slotTys[gi]!.take fn.arity)
-  return (fns, slotTys, specSigs, specKeys, needy.extract 0 nOrig)
+  | some q => s!"{q.show}: in {name}: {msg}"
+  | none => s!"in {name}: {msg}"
 
 /-- The concurrency lowering (#156), at the end of `elabProgramCore`: each
     `<suspends>` function becomes a frame class and its resume, cancel and
-    arm functions (`Suspend.lower`), after the generic functions whose
-    roots generic roots do not cover are specialised (#174, #244) and
-    spawned dispatches are lifted (#173); then the task roots (generic ones
-    at their function's type arguments), branch wrappers, the scheduler's
+    arm functions (`Suspend.lower`), after spawned dispatches are lifted
+    (#173); then the task roots (generic ones at their function's type
+    arguments, #244), branch wrappers, the scheduler's
     list and, for a suspends `Main`, `$Run` and `$Start`. Gives the
     functions, their slot types and signatures, the class table, the frame
     classes and their pins, and `Main`'s call. (A function of its own, so that `elabProgramCore` stays within
@@ -6431,17 +6314,14 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
   let isMark (f : Nat) : Bool := f == syncMark || f == raceMark || f == rushMark
   let leaves := ["$Sleep", "$WaitDone", "$syncMark", "$raceMark", "$rushMark", "$spawnMark", "$branchMark",
     "$cancelMark"]
-  -- (#174) the generic functions whose tasks' roots would depend on their
-  -- type parameters in a way generic roots (#244) do not cover,
-  -- specialised at the types they are called at
   let sigOf (f : Nat) : Option Sig := allS.find? (·.idx == f)
   -- each `spawn` of a method with several implementations (#173): its
   -- dispatch chain becomes a suspends function `$dispatchK` of the slots
   -- it uses (the receiver, the arguments, and the slots its tests bind the
   -- narrowed receiver to, which start as the caller's), which the spawn
-  -- calls; before the specialisation, so that a spawned dispatch at the
-  -- caller's type parameters is a spawn of a call, a root at them (#244),
-  -- not a reason to copy the caller per type (#209)
+  -- calls, so that a spawned dispatch at the caller's type parameters is
+  -- a spawn of a call, a root at them (#244), not a reason to copy the
+  -- caller per type (#174, #209)
   let dispBase := fns.size
   let mut lifted : Array (Expr × List Nat × Nat) := #[]
   let mut liftedIn : Array Nat := #[]
@@ -6456,14 +6336,17 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
         sg.tparams.filterMap fun (v, _) => (dictTps.findIdx? (·.1 == v)).map (fns[gi]!.arity - sg.ndicts + ·)
       | none => []
     let (body, acc) := (Suspend.liftChains spawnMark dispBase witnesses fns[gi]!.body).run lifted
+    -- (every spawn is now of a call, which `spawnSites` finds: its task's
+    -- root, generic or not, needs no copy of the function per type, #209;
+    -- `elabSpawn` makes only calls and dispatch chains)
+    if ((Suspend.callsOf body).filter (·.1 == spawnMark)).length != (Suspend.spawnSites spawnMark body).length then
+      throw (inFn fns[gi]!.name "internal error: a spawn of neither a call nor a dispatch chain")
     if acc.size > n0 then
       fns := fns.set! gi { fns[gi]! with body }
       lifted := acc
       liftedIn := liftedIn ++ (List.replicate (acc.size - n0) gi).toArray
   let mut disps : List (Nat × String × Nat) := []
   let mut dispSigs : Array (List VTy × VTy) := #[]
-  -- (each `$dispatchK`'s number of type parameters, its witnesses' count)
-  let mut dispNtp : Std.HashMap Nat Nat := {}
   for ((ch, ops, t), k) in lifted.toList.zipIdx do
     let gi := liftedIn[k]!
     let Γ := slotTys[gi]!
@@ -6480,37 +6363,10 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
     -- caller's type arguments, #244, #209)
     let ntpK := ((sigOf gi).map (·.tparams.length)).getD 0
     disps := disps ++ [(dispBase + k, s!"$dispatch{k}", ntpK)]
-    dispNtp := dispNtp.insert (dispBase + k) ntpK
   let fsigs0 := fsigs0 ++ dispSigs.toList
   fsigs := fsigs ++ dispSigs.toList
-  let nOrig := fns.size
-  -- (a `$dispatchK` takes its caller's witnesses last, and suspends: it may
-  -- need copies too, when one of its implementations does)
-  let dispNtpOf := dispNtp
-  let (fns1, slotTys1, specSigs, specKeys, replaced) ← specialise fns slotTys
-    { fns := fsigs0, classes := classTable, protos, pins }
-    (fun f => match dispNtpOf[f]? with
-      | some n => n
-      | none => ((sigOf f).map (·.ndicts)).getD 0)
-    (fun f => dispNtpOf.contains f || ((sigOf f).map (·.suspends)).getD false)
-    spawnMark inFn (fun f => ((sigOf f).map (!·.selfTps.isEmpty)).getD false)
-  fns := fns1
-  slotTys := slotTys1
-  let fsigs0 := fsigs0 ++ specSigs.toList
-  fsigs := fsigs ++ specSigs.toList
-  let specUser : List (Nat × String × Nat) := specKeys.toList.zipIdx.filterMap fun ((g, _), k) =>
-    if dispNtpOf.contains g || ((sigOf g).map (fun s => s.suspends && !leaves.contains s.name)).getD false then
-      some (nOrig + k, fns[nOrig + k]!.name, 0)
-    else none
-  -- (the specialised originals, never called, are not lowered)
-  let user := (allS.filter fun s => s.suspends && !leaves.contains s.name && !(replaced[s.idx]?.getD false)).map
-    (fun s => (s.idx, s.name, s.tparams.length)) ++ specUser ++ disps.filter fun (f, _, _) => !(replaced[f]?.getD false)
-  -- (copies of immediate functions that spawn, their spawns lifted)
-  let specImm : List (Nat × String × Nat) := specKeys.toList.zipIdx.filterMap fun ((g, _), k) =>
-    if ((sigOf g).map (fun s => !s.suspends && !s.isConst)).getD false &&
-        !(Suspend.spawnSites spawnMark fns[nOrig + k]!.body).isEmpty then
-      some (nOrig + k, fns[nOrig + k]!.name, 0)
-    else none
+  let user := (allS.filter fun s => s.suspends && !leaves.contains s.name).map
+    (fun s => (s.idx, s.name, s.tparams.length)) ++ disps
   let tagBase := env.classes.length
   let schedTag := env.tagOf "$sched"
   let schedTy : VTy := .ref [schedTag] []
@@ -6523,8 +6379,10 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
   let nFns0 := fns.size
   -- (immediate functions may spawn too: their spawns start the task on
   -- the scheduler, which is its class's prototype, a literal)
-  let imm := ((sigs.toList.filter fun s => !s.suspends && !s.isConst && s.tparams.isEmpty &&
-    !(Suspend.spawnSites spawnMark fns[s.idx]!.body).isEmpty).map fun s => (s.idx, s.name, 0)) ++ specImm
+  -- (a generic one's spawns are roots at its type arguments, as a generic
+  -- suspends function's are, #244: so no function is copied per type, #174)
+  let imm := (allS.filter fun s => !s.suspends && !s.isConst &&
+    !(Suspend.spawnSites spawnMark fns[s.idx]!.body).isEmpty).map fun s => (s.idx, s.name, s.tparams.length)
   let mut immSpawns : Array (Nat × List Nat) := #[]
   for (gi, gname, ntpC) in user ++ imm do
     let fn := fns[gi]!

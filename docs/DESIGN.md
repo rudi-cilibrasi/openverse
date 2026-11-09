@@ -816,7 +816,7 @@ and journals every write made in a condition (for rollback). So:
   `result(frame)`. (Until #256 such a frame sat in an option field,
   unwrapped and resumed in a condition: C journalled what the callee wrote
   during the resumption, and the reference interpreter copied the heap, see
-  "Specialising generic functions with roots".)
+  "No copies per type".)
 - A method called under a refinement (a class that fixes the receiver's
   type arguments, see "Pins and dispatch") needs `Typed.dispatch` on the
   receiver wherever the refinement matters: passing the arguments and
@@ -858,10 +858,7 @@ and journals every write made in a condition (for rollback). So:
   its own cell, at its own type, with no dispatch. A cell's type argument is
   invariant, so an override whose result is narrower than the method's it
   overrides (covariant) is refused on this path: the caller's type, refined
-  by the dispatch, must be the override's result there. An override that
-  would need a copy per type (#174: a spawned dispatch at its type
-  parameters, in it or in a function it calls at them) is refused too: a
-  copy would not know the type parameters its receiver holds. Slots of the override's
+  by the dispatch, must be the override's result there. Slots of the override's
   frame whose types mention its class's added type parameters start as
   the receiver's hidden fields (`$w`), as in its body.
 - A refined call that does not suspend (an immediate method, or a #157
@@ -900,35 +897,40 @@ keeps the witnesses its resumption passes on. So such a function is
 compiled once, and calls itself at ever bigger types as any function
 does.
 
-**Specialising generic functions with roots.** A spawned dispatch (a
-spawned `E.Eval()` on an `expr(t)`, #173, #204) is first lifted into a
-suspends function `$dispatchK` of the slots it uses, which the spawn calls.
-That happens before the specialisation, and `$dispatchK` is generic in its
-caller's type parameters: it takes the caller's type witnesses too, last,
-in order (its hidden parameters, and the slots an override fills from its
-receiver, #209), so the specialisation copies it per type where one of its
-implementations needs that, as any generic function. The spawn is then a spawn of a
-call, a root at the caller's type arguments (#244), so it needs no copy per
-type: a function calling itself at ever bigger types may spawn dispatches,
-and so may an override of a class with type parameters its parent's type
-arguments do not give. A generic immediate function with a `spawn` (whose
-roots are made only for non-generic functions), or a function calling such
-a function at its type parameters, is specialised before the lowering
-(`specialise`, #174). Verse Core
-is first-order and a generic call passes one witness argument per type
-argument, built so that the checker infers exactly that type, so each
-call's instantiation is read off its last arguments. A call at closed types
-goes to a copy at those types: the same body, its slot types and signature
-substituted. The copies' own calls are handled the same way, from a
-worklist. In a copy, a refined dispatch test (#142) whose classes' pins
-no instance of its types agrees with (`unify` fails) is dropped, as the
-checker types such a test only when the pins can agree. The generic originals are then never called;
-they keep only their parameters and are not lowered. Bounds on the number
-of copies (500) and on the size of the types (2000 parts, which types that
-double at each call reach quickly) turn polymorphic recursion into an
-error.
+**No copies per type.** A spawned dispatch (a spawned `E.Eval()` on an
+`expr(t)`, #173, #204) is first lifted into a suspends function
+`$dispatchK` of the slots it uses, which the spawn calls. `$dispatchK` is
+generic in its caller's type parameters: it takes the caller's type
+witnesses too, last, in order (its hidden parameters, and the slots an
+override fills from its receiver, #209). The spawn is then a spawn of a
+call, a root at the caller's type arguments (#244). A generic immediate
+function's spawns (`Kick(X:t):task(t) = spawn{Echo(X)}`) are roots at its
+type arguments in the same way. So every `spawn` is of a call (the lowering
+checks it), its root is generic at its function's type arguments where its
+slots' types mention them (and plain where they are closed), and every
+function is compiled once: a function calling itself at ever bigger types
+may spawn dispatches, and so may an override of a class with type
+parameters its parent's type arguments do not give, an immediate one
+included.
 
-No other generic function is copied. Until #269 the other generic suspends
+Before the lowering, every function drops the tests in `Typed.dispatch`'s
+shape that no object can pass at its slots' types (`pruneDead`, #186): no
+substitution makes the receiver's type arguments agree with the tested
+classes' pins. The checker types a dispatch only when they can agree, and
+such tests arise in #157's field accessors on receivers of closed types.
+
+Earlier (#174), a generic function with a spawned dispatch at its type
+parameters, or a generic immediate function with a `spawn`, and each
+function calling one at its own type parameters, was copied before the
+lowering for each closed type it was called at, read off the call's
+witness arguments, and its calls were redirected to the copies. Bounds on
+the number of copies (500) and on the size of the types (2000 parts)
+turned polymorphic recursion into an error, and such an override was
+refused, as a copy would not know the type parameters its receiver holds.
+The lift of spawned dispatches and the generic roots of immediate
+functions left nothing to copy (#209).
+
+Until #269 the other generic suspends
 functions were also copied where they were called at small closed types
 (#225), for speed: a generic callee's frame sat in an option field,
 unwrapped and resumed in a condition, and a write in a condition makes the
@@ -1165,11 +1167,10 @@ too, and its overrides read it from the receiver, as a dispatch from
 `shower` opens it. A `<suspends>`
 override of such a class works (#251, see "Avoiding allocation and
 journaling"), and so does a spawn in one, also of a dispatch at its class's
-type parameters (see "Specialising generic functions with roots"). An
-immediate override with a `spawn`, and a call whose omitted named
-argument's default has no type of its own in a dispatch that opens
-arguments, are refused for now: the first would need a copy per type, the
-second a temporary of an opened type. A variable of a
+type parameters, and in an immediate one (see "No copies per type"). A
+call whose omitted named argument's default has no type of its own, in a
+dispatch that opens arguments, is refused for now: it would need a
+temporary of an opened type. A variable of a
 class type whose classes below need more type arguments than its own
 starts as the class's hidden placeholder (#157), also for a class
 without type parameters.

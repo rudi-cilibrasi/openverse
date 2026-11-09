@@ -1,4 +1,5 @@
-# a copy of a generic immediate method whose spawn is a dispatch (#174)
+# a generic immediate method whose spawn is a dispatch: its task is a root at
+# its type arguments (until #209, a copy per type, #174)
 box(t:type) := class:
     V:t
     Get()<suspends>:t =

@@ -1,4 +1,4 @@
-# formerly refused; generic functions with task roots are specialised (#174)
+# formerly refused; generic functions with task roots, compiled once (#174, #244)
 G(X:t where t:type)<suspends>:t =
     branch:
         Sleep(1.0)

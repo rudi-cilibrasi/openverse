@@ -1,4 +1,4 @@
-# formerly refused; generic functions with task roots are specialised (#174)
+# formerly refused; generic functions with task roots, compiled once (#174, #244)
 W(X:t where t:type)<suspends>:t =
     rush:
         block:
