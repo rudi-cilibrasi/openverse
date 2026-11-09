@@ -2122,12 +2122,19 @@ partial def selfQualify (ctx : Ctx) (c : String) (e : SExpr) : SExpr :=
     after the clauses that follow it (`c2`, those clauses `rest`), and the
     effects all that has (`fxB`); or why it cannot be yet. -/
 def firstLiftOf (ctx c2 : Ctx) (p : Pos) (g : String) (lp : List SExpr) (b : String) (bty : Option STy)
-    (rest : List SExpr) (fxB : List (String × Pos × Option String)) (suspends : Bool) :
+    (rest : List SExpr) (fxB : List (String × Pos × Option String)) (suspends : Bool) (vty : Ty) :
     Except String Choice.FirstLift := do
-  let [_, .block _ ps, .block _ cls, .decl _ _ rsty _ tail] := lp | throw "internal: a $loop marker"
+  let [_, .block _ ps, .block _ cls, .decl _ _ _ _ tail] := lp | throw "internal: a $loop marker"
   if ctx.inCtor || ctx.inParamDefault || ctx.inBlock || ctx.inDefer || !ctx.defaults.isEmpty then
     throw "in a constructor, a default or a defer"
   let key := firstKey ctx p lp b rest
+  -- (an inlined generic one's type parameters, #235: at the types the
+  -- call's `$params` gave, as the function of its own has no names for them)
+  let σt : List (String × STy) := ctx.types.tvars.filterMap fun (n, t) =>
+    if n.startsWith "$tp" then some (n, t.toSTy) else none
+  let cls := cls.map (Refine.substTypes σt)
+  let tail := Refine.substTypes σt tail
+  let rest := rest.map (Refine.substTypes σt)
   -- (in a method: the members of `Self` the clauses name bare, as members
   -- of `Self`, which the function takes as a parameter, as #243's do)
   let rest ← match ctx.selfClass with
@@ -2168,7 +2175,7 @@ def firstLiftOf (ctx c2 : Ctx) (p : Pos) (g : String) (lp : List SExpr) (b : Str
   return { key, pos := p, name, params,
            specs := (if heap.isEmpty then ["computes"] else heap) ++ ["decides"],
            ret := .tup (bls.map (·.ty.toSTy) ++ sets.map (·.ty.toSTy) ++ [.name "logic"]),
-           body := Choice.firstBody name p b bty cls tail rest binds (sets.map fun l => (l.name, l.ty.toSTy)) capArgs rsty,
+           body := Choice.firstBody name p b bty cls tail rest binds (sets.map fun l => (l.name, l.ty.toSTy)) capArgs (some vty.toSTy),
            binds, sets := sets.map (·.name), args := pnames.map (SExpr.ident p ·) ++ capArgs,
            varBinds := (bls.filter (·.mutable)).map (·.name) }
 
@@ -2664,6 +2671,64 @@ partial def elabStmt (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM (R × Ctx) 
       let slot ← fresh ty
       pure (⟨.assign slot e, ty⟩,
         { ctx with locals := { name := n, slot, ty, mutable := isVar } :: ctx.locals })
+    | .app p (.ident _ "$params") (.block _ decls :: tps) false => do
+      -- (#235) an inlined generic call's parameters, bound together: its
+      -- type arguments inferred from the arguments as at a call (each
+      -- checked against its parameter's type once the type parameters it
+      -- mentions are bound, else inferring them; `false`, `array{}` and
+      -- `map{}` last), then named for the written types after
+      let fname := match tps with | .ident _ f :: _ => f | _ => ""
+      let cons : List (String × String) := tps.drop 1 |>.filterMap fun
+        | .tuple _ [.ident _ n, .ident _ c] => some (n, c)
+        | _ => none
+      let names := cons.map (·.1)
+      -- (as messages show them: the type parameters' own names)
+      let shown (t : Ty) : String :=
+        (t.subst (names.map fun n => (n, Ty.param ((n.dropWhile (· != '_')).drop 1).toString false))).show
+      let penv : TyEnv := { ctx.types with tvars := ctx.types.tvars ++ cons.map fun (n, c) => (n, Ty.param n (c == "comparable")) }
+      let items ← decls.mapM fun
+        | .decl q x (some sty) v a => do pure (q, x, v, a, ← resolveTy penv q sty)
+        | d => eerr d.pos "internal: a $params clause (#235)"
+      let fromContext : SExpr → Bool
+        | .ident _ "false" | .arrayLit _ [] | .mapLit _ [] => true
+        | _ => false
+      let mut σ : List (String × Ty) := []
+      let mut done : Array (Option (Expr × Ty)) := Array.replicate items.length none
+      let mut deferred : Array Bool := (items.map fun (_, _, _, a, _) => fromContext a).toArray
+      for pass in [0, 1] do
+        for ((q, _, _, a, t0), i) in items.zipIdx do
+          if (pass == 0) == deferred[i]! then continue
+          let t := t0.subst σ
+          if t.params.any names.contains then
+            if fromContext a then eerr q s!"cannot infer the type parameters of {fname} from the arguments of this call"
+            let r ← elabE ctx a none
+            match t.matchArg ctx.types σ r.ty with
+            | some σ' =>
+              σ := σ'.filter fun (v, _) => names.contains v
+              let t' := t.subst σ
+              if t'.params.any names.contains then
+                if pass == 0 then deferred := deferred.set! i true
+                else eerr q s!"cannot infer the type parameters of {fname} from this argument"
+              else done := done.set! i (some (← coerce q r t', t'))
+            | none => eerr q s!"expected {shown t}, found {r.ty.show} (in a call of {fname})"
+          else
+            done := done.set! i (some (← coerce q (← elabE ctx a (some t)) t, t))
+      -- (a comparable type parameter's type argument must be comparable,
+      -- as at a call)
+      for (n, c) in cons do
+        if c == "comparable" then
+          if let some t := σ.lookup n then
+            if !(isComparable ctx.types t) then
+              eerr p (notComparable ctx.types t s!"{fname}'s type argument for {((n.dropWhile (· != '_')).drop 1).toString}")
+      let mut code : Expr := .lit .void
+      let mut c := ctx
+      for ((q, x, v, _, _), d) in items.zip done.toList do
+        let some (e, t) := d | eerr q s!"cannot infer the type parameters of {fname} from the arguments of this call"
+        checkNewLocal c q x
+        let slot ← fresh t
+        code := .seq code (.assign slot e)
+        c := { c with locals := { name := x, slot, ty := t, mutable := v } :: c.locals }
+      pure (⟨.seq code (.lit .void), .void⟩, { c with types := { c.types with tvars := c.types.tvars ++ σ } })
     | _ => do pure (← elabE ctx se exp, ctx)
   if !ctx.canFail && (r.e.mayFail ctx.sigProg) then
     eerr se.pos ("this expression can fail, but it is not in a failure context (an if " ++
@@ -5057,7 +5122,9 @@ partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
       modify fun st => { st with fx := fx0 }
       for (k, q, via) in fxB do noteFx q [k] via
       let isS (f : Nat) : Bool := ctx.sigs.any fun s => s.idx == f && s.suspends
-      let lift := firstLiftOf ctx c2 p g lp b.name b.ty rest fxB (ctx.suspends && Suspend.hasSusp isS inner)
+      -- (the values at the function's result type, at the type arguments
+      -- this call gives, for a generic one)
+      let lift := firstLiftOf ctx c2 p g lp b.name b.ty rest fxB (ctx.suspends && Suspend.hasSusp isS inner) lg.vty
       modify fun st => { st with loopFirst := st.loopFirst ++
         [{ g, pos := p, itemCode := lg.itemCode, argSet := lg.argSet, lift }] }
       let bindX ← coerce p ⟨lg.value, lg.vty⟩ ty
@@ -5125,7 +5192,6 @@ partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
 partial def elabLoopGen (ctx : Ctx) (p : Pos) (lp : List SExpr) : EM LoopGen := do
   let [.ident _ g, .block _ ps, .block _ cls, .decl _ _ (some rsty) _ tail] := lp
     | eerr p "internal: a $loop marker (#246)"
-  let rty ← resolveTy ctx.types p rsty
   let vd : Expr := .lit .void
   -- (the parameters, bound by the consumer's clauses: the loop has slots
   -- of its own for them, so that the call, run again by a loop of its
@@ -5136,6 +5202,18 @@ partial def elabLoopGen (ctx : Ctx) (p : Pos) (lp : List SExpr) : EM LoopGen := 
       | none => eerr q s!"internal: parameter {n} of a $loop (#246)"
     | e => eerr e.pos "internal: a $loop parameter (#246)"
   let pls ← args.mapM fun l => do return { l with slot := ← fresh l.ty }
+  -- (the result type: the signature's, at the type arguments the
+  -- arguments give, for a generic one, #235)
+  let rty ← match ctx.sig? g with
+    | some sig =>
+      if sig.tparams.isEmpty then resolveTy ctx.types p rsty else
+      match (sig.params.zip args).foldlM (fun σ (pt, l) => Ty.matchArg ctx.types σ pt l.ty) [] with
+      | some σ =>
+        if let some (v, _) := sig.tparams.find? fun (v, _) => (σ.lookup v).isNone then
+          eerr p s!"{g}'s type parameter {v} is not determined by its arguments' types here (#235)"
+        pure (sig.ret.subst σ)
+      | none => eerr p s!"internal: the arguments of {g} (#235)"
+    | none => resolveTy ctx.types p rsty
   let lctx : Ctx := { ctx with locals := pls.reverse ++ ctx.locals }
   let newOf (c : Ctx) : List Local := c.locals.take (c.locals.length - lctx.locals.length)
   -- (the clauses, then each branch's conditions)

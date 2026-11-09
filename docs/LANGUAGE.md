@@ -793,8 +793,9 @@ Main():void =
   and the clauses after it call `(super:)` or have a `return` or a `break`
   that leaves them (which would leave the function they run in), in a constructor, a parameter's
   or field's default or a `defer:`, or where the names the clauses after it
-  use have type parameters (`Self` of a generic class among them), a
-  generic or overloaded one, one with named parameters
+  use have type parameters (`Self` of a generic class among them), an
+  overloaded one (a generic one's type arguments are inferred from the
+  arguments where it is inlined, as at a call), one with named parameters
   or a `return` or a `defer:` of its own (in its body, not in a block inside it), a method, one used as a function value, a call of a
   recursive one in an `if`'s branch, a choice's alternative or a `set`'s path, and, since its body is inlined where other names may be
   in scope, one whose name, or a name its body uses from outside, is also
@@ -1243,6 +1244,6 @@ Main()<suspends>:void =
 arithmetic on rationals (see [rational](#rational)), float functions beyond those of [float](#float),
 the class features listed under [Classes](#classes), struct methods (Verse structs have none; classes do),
 `weak_map`, module paths `using{/Verse.org/…}` (accepted and ignored), overloading beyond [Overloading](#overloading), nested
-functions and lambdas (not released in Verse), choice beyond [Choice](#choice) (recursive functions with several values that have effects, other than generators, generic ones, methods with several values; a choice inside a block, a struct construction, a named argument or an alternative), concurrency beyond [Concurrency](#concurrency) (`subscribable_event()` without a value), and effect checking
+functions and lambdas (not released in Verse), choice beyond [Choice](#choice) (recursive functions with several values that have effects, other than generators, methods with several values; a choice inside a block, a struct construction, a named argument or an alternative), concurrency beyond [Concurrency](#concurrency) (`subscribable_event()` without a value), and effect checking
 other than `<decides>` and the heap effects (`<converges>` is accepted and
 ignored).
