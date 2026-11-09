@@ -2107,9 +2107,9 @@ partial def selfQualify (ctx : Ctx) (c : String) (e : SExpr) : SExpr :=
     after the clauses that follow it (`c2`, those clauses `rest`), and the
     effects all that has (`fxB`); or why it cannot be yet. -/
 def firstLiftOf (ctx c2 : Ctx) (p : Pos) (g : String) (lp : List SExpr) (b : String) (bty : Option STy)
-    (rest : List SExpr) (fxB : List (String × Pos × Option String)) (suspends : Bool) :
+    (rest : List SExpr) (fxB : List (String × Pos × Option String)) (suspends : Bool) (vty : Ty) :
     Except String Choice.FirstLift := do
-  let [_, .block _ ps, .block _ cls, .decl _ _ rsty _ tail] := lp | throw "internal: a $loop marker"
+  let [_, .block _ ps, .block _ cls, .decl _ _ _ _ tail] := lp | throw "internal: a $loop marker"
   if ctx.inCtor || ctx.inParamDefault || ctx.inBlock || ctx.inDefer || !ctx.defaults.isEmpty then
     throw "in a constructor, a default or a defer"
   let key := firstKey ctx p lp b rest
@@ -2147,7 +2147,7 @@ def firstLiftOf (ctx c2 : Ctx) (p : Pos) (g : String) (lp : List SExpr) (b : Str
   return { key, pos := p, name, params,
            specs := (if heap.isEmpty then ["computes"] else heap) ++ ["decides"],
            ret := .tup (bls.map (·.ty.toSTy) ++ sets.map (·.ty.toSTy) ++ [.name "logic"]),
-           body := Choice.firstBody name p b bty cls tail rest binds (sets.map fun l => (l.name, l.ty.toSTy)) capArgs rsty,
+           body := Choice.firstBody name p b bty cls tail rest binds (sets.map fun l => (l.name, l.ty.toSTy)) capArgs (some vty.toSTy),
            binds, sets := sets.map (·.name), args := pnames.map (SExpr.ident p ·) ++ capArgs,
            varBinds := (bls.filter (·.mutable)).map (·.name) }
 
@@ -4979,7 +4979,9 @@ partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
       modify fun st => { st with fx := fx0 }
       for (k, q, via) in fxB do noteFx q [k] via
       let isS (f : Nat) : Bool := ctx.sigs.any fun s => s.idx == f && s.suspends
-      let lift := firstLiftOf ctx c2 p g lp b.name b.ty rest fxB (ctx.suspends && Suspend.hasSusp isS inner)
+      -- (the values at the function's result type, at the type arguments
+      -- this call gives, for a generic one)
+      let lift := firstLiftOf ctx c2 p g lp b.name b.ty rest fxB (ctx.suspends && Suspend.hasSusp isS inner) lg.vty
       modify fun st => { st with loopFirst := st.loopFirst ++
         [{ g, pos := p, itemCode := lg.itemCode, argSet := lg.argSet, lift }] }
       let bindX ← coerce p ⟨lg.value, lg.vty⟩ ty
@@ -5047,7 +5049,6 @@ partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
 partial def elabLoopGen (ctx : Ctx) (p : Pos) (lp : List SExpr) : EM LoopGen := do
   let [.ident _ g, .block _ ps, .block _ cls, .decl _ _ (some rsty) _ tail] := lp
     | eerr p "internal: a $loop marker (#246)"
-  let rty ← resolveTy ctx.types p rsty
   let vd : Expr := .lit .void
   -- (the parameters, bound by the consumer's clauses: the loop has slots
   -- of its own for them, so that the call, run again by a loop of its
@@ -5058,6 +5059,18 @@ partial def elabLoopGen (ctx : Ctx) (p : Pos) (lp : List SExpr) : EM LoopGen := 
       | none => eerr q s!"internal: parameter {n} of a $loop (#246)"
     | e => eerr e.pos "internal: a $loop parameter (#246)"
   let pls ← args.mapM fun l => do return { l with slot := ← fresh l.ty }
+  -- (the result type: the signature's, at the type arguments the
+  -- arguments give, for a generic one, #235)
+  let rty ← match ctx.sig? g with
+    | some sig =>
+      if sig.tparams.isEmpty then resolveTy ctx.types p rsty else
+      match (sig.params.zip args).foldlM (fun σ (pt, l) => Ty.matchArg ctx.types σ pt l.ty) [] with
+      | some σ =>
+        if let some (v, _) := sig.tparams.find? fun (v, _) => (σ.lookup v).isNone then
+          eerr p s!"{g}'s type parameter {v} is not determined by its arguments' types here (#235)"
+        pure (sig.ret.subst σ)
+      | none => eerr p s!"internal: the arguments of {g} (#235)"
+    | none => resolveTy ctx.types p rsty
   let lctx : Ctx := { ctx with locals := pls.reverse ++ ctx.locals }
   let newOf (c : Ctx) : List Local := c.locals.take (c.locals.length - lctx.locals.length)
   -- (the clauses, then each branch's conditions)

@@ -684,6 +684,23 @@ def liftsHere (c : SExpr) : Bool :=
   | .gen _ _ _ src => hasLiftable src
   | e => hasLiftable e
 
+/-- Whether a written type mentions one of the names `tps`. -/
+partial def styMentions (tps : List String) : STy → Bool
+  | .name n => tps.contains n
+  | .arr t | .opt t => styMentions tps t
+  | .tup ts => ts.any (styMentions tps)
+  | .map k v => styMentions tps k || styMentions tps v
+  | .app n ts => tps.contains n || ts.any (styMentions tps)
+  | .fn ps _ r => ps.any (styMentions tps) || styMentions tps r
+
+/-- Whether the body writes a type that mentions one of `tps`: in a
+    binding's type or a construction's type arguments. -/
+partial def writesTypes (tps : List String) (e : SExpr) : Bool :=
+  anyE (fun
+    | .decl _ _ (some t) _ _ => styMentions tps t
+    | .construct _ n ts _ => tps.contains n || ts.any (styMentions tps)
+    | _ => false) e
+
 /-- The shape of a recursive function with several values that its
     consumers take lazily (#246), from its body: its clauses, which have no
     choice and call no function with several values, then its last
@@ -747,18 +764,22 @@ partial def inlineCalls (mv : List (String × MFn)) (e : SExpr) (recs : List Str
         throw s!"{p.show}: more than 2000 calls of functions with several values to inline: nested calls multiply them (#235)"
       let tag (n : String) : String := s!"${g.replace "::" "_"}_{n}_{site}"
       let ren := (f.params.map (·.name) ++ localsOf f.body).eraseDups.map fun n => (n, tag n)
+      -- (a generic one's types that mention its type parameters are left
+      -- out: the arguments and values have their own, #235)
+      let tps := f.tparams.map (·.name)
+      let tyOf (t : STy) : Option STy := if styMentions tps t then none else some t
       let (pds, unpack, as'') : List SExpr × List SExpr × List SExpr :=
         if as.length == f.params.length then
-          (f.params.map fun sp => SExpr.decl q (tag sp.name) (some sp.ty) false (.ident q "$arg"), [], as')
+          (f.params.map fun sp => SExpr.decl q (tag sp.name) (tyOf sp.ty) false (.ident q "$arg"), [], as')
         else if arrayParam then
-          (f.params.map fun sp => SExpr.decl q (tag sp.name) (some sp.ty) false (.ident q "$arg"), [],
+          (f.params.map fun sp => SExpr.decl q (tag sp.name) (tyOf sp.ty) false (.ident q "$arg"), [],
             [.arrayLit p as'])
         else
           -- (the tuple bound once, its elements into the parameters)
           let t := tag "$tuple"
-          ([.decl q t (some (.tup (f.params.map (·.ty)))) false (.ident q "$arg")],
+          ([.decl q t (tyOf (.tup (f.params.map (·.ty)))) false (.ident q "$arg")],
             (f.params.zipIdx.map fun (sp, i) =>
-              SExpr.decl q (tag sp.name) (some sp.ty) false (.app q (.ident q t) [.int q (i : Int)] false)), as')
+              SExpr.decl q (tag sp.name) (tyOf sp.ty) false (.app q (.ident q t) [.int q (i : Int)] false)), as')
       -- (one taken lazily, #246: its parameters, its clauses and its last
       -- expression, its own calls marked, for its consumer to run)
       if loops.contains g then
@@ -775,7 +796,7 @@ partial def inlineCalls (mv : List (String × MFn)) (e : SExpr) (recs : List Str
         | some (.decl q2 x t v rhs) => (init ++ [.decl q2 x t v rhs], .ident q2 x)
         | some l => (init, l)
         | none => (init, .tuple q [])
-      let tmpl := SExpr.block q (pds ++ unpack ++ init ++ [.decl q r (some f.ret) false res])
+      let tmpl := SExpr.block q (pds ++ unpack ++ init ++ [.decl q r (tyOf f.ret) false res])
       return .app p (.ident p "$inline") (.ident q g :: tmpl :: as'') false
     | none => return .app p (← go (.ident q g)) (← as.mapM go) br
   | .str p ps => return .str p (← ps.mapM fun | .code c => do return .code (← go c) | t => pure t)
@@ -1040,8 +1061,11 @@ def inlineMulti (tops : List STop) : Except String (List STop × Bool) := do
   for (n, f) in mfs do
     if (fns.filter (·.1 == n)).length > 1 then
       throw s!"{f.pos.show}: {n} has several values and is overloaded: such functions are not supported yet (#235)"
-    if !f.tparams.isEmpty then
-      throw s!"{f.pos.show}: {n} has several values and is generic: such functions are not supported yet (#235)"
+    -- (a generic one, #235: inlined, its parameters and value at the
+    -- arguments' and values' own types; a type it writes in its body
+    -- would name its type parameters where they mean nothing)
+    if !f.tparams.isEmpty && writesTypes (f.tparams.map (·.name)) f.body then
+      throw s!"{f.pos.show}: {n} has several values, is generic and writes a type that mentions its type parameters in its body: such functions are not supported yet (#235)"
     if f.params.any (·.named) then
       throw s!"{f.pos.show}: {n} has several values and named parameters: such functions are not supported yet (#235)"
     if anyE (fun | .ret .. => true | _ => false) f.body then

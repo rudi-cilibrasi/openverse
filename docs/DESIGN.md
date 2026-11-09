@@ -141,8 +141,12 @@ A function with several values (#235) is inlined before elaboration, by
 the top-level functions whose body has a choice that nothing in it takes,
 iterating to a fixpoint, since calling one where the call is not taken
 makes the caller one too. It refuses the cases it cannot inline:
-recursion, type parameters, named parameters, `return`, and use as a
-value. Then it drops those functions and turns each call into an
+recursion, named parameters, `return`, use as a value, and a generic
+one whose body writes a type that mentions its type parameters. (A generic
+one's template leaves out the types that mention them, on its parameters
+and value, which then have the arguments' and values' own types; a lazily
+taken one's result type is the signature's at the type arguments that
+matching its parameters' types against the arguments' gives, #235.) Then it drops those functions and turns each call into an
 `$inline(F, template, args…)` marker, whose template is the body with its
 parameters and locals renamed for that call site. Lifting expands the
 marker in the caller's clauses: the arguments go into the parameters, in
