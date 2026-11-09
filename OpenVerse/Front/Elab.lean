@@ -5117,7 +5117,9 @@ partial def elabFor (ctx : Ctx) (p : Pos) (clauses : List SExpr) (body : SExpr) 
         let some t := ety | eerr gp "internal: an exclusive choice without alternatives"
         let pick (es : Array Expr) (last : Expr) : Expr :=
           (es.toList.zipIdx.foldr (fun (e, i) acc => .ite (p2 .eq (.local sel) (.lit (.int (i : Int)))) e acc) last)
-        let filt := Expr.seq codeA (.seq (.assign sel rsel.e) (pick filts Expr.failV))
+        -- (each path's filter as `void`, as `failV` is, for the if-chain)
+        let filt := Expr.seq codeA (.seq (.assign sel rsel.e)
+          (pick (filts.map fun f => Expr.seq f (.lit .void)) Expr.failV))
         return (filt, pick arrs (.lit (.arr #[])), t)
     match gs with
     | [] =>

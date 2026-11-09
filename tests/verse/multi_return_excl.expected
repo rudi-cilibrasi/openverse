@@ -1,0 +1,29 @@
+z 6
+pre1
+e1
+rt 100
+pre2
+rt 99
+pre3
+e3
+rt 300
+pre3
+e3
+if 300
+done
+d 6
+f 4
+f 8
+t 2
+a 100
+a 101
+b 18
+c 100
+c 101
+small 3
+a 7
+a 8
+b 30
+c 7
+c 8
+exit=0
