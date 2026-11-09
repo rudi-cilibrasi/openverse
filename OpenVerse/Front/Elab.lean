@@ -1077,9 +1077,47 @@ structure ESt where
   /-- Branches of casts that refine type arguments, to lift into functions
       (#243): the program is elaborated again, with them. -/
   castNeeds : List Refine.Lift := []
+  /-- The recursive functions with several values that a context taking
+      its first success consumes lazily (#246), with where, and the code
+      each runs once for all the values of an item (`LoopGen.itemCode`):
+      it may reach no `Print` and change no object, checked on Verse Core
+      code once every function is. -/
+  loopFirst : List (String × Pos × Expr) := []
   deriving Inhabited
 
 abbrev EM := StateT ESt (Except String)
+
+/-- A call of a recursive function with several values that its consumer
+    takes lazily (#246), as code for the consumer to put in its loop: the
+    stack of items to run, a step that runs one of them, the slot that says
+    whether that came to a value, and the value, which the consumer
+    computes in its own failure context, so that what it does is undone
+    with it, as for a choice's alternative. -/
+structure LoopGen where
+  /-- The stack with the call's item (its parameters are bound before). -/
+  init : Expr
+  /-- Pops an item and runs one alternative of it (its clauses first when
+      it starts): a call of the function pushes an item, a value sets `has`. -/
+  step : Expr
+  /-- The slot of the stack's size: no items, no values left. -/
+  sp : Nat
+  has : Nat
+  /-- The value the step came to, at `vty`, the function's result type:
+      it may fail. -/
+  value : Expr
+  /-- What runs once the consumer took that value or rejected it: the item
+      that resumes at the next alternative, if any, pushed with the names
+      as the consumer left them (as a value's `set` of one is kept with it,
+      or undone). -/
+  after : Expr
+  vty : Ty
+  /-- The code that runs once for all the values of an item: its clauses,
+      its conditions, the arguments of its calls of the function. -/
+  itemCode : Expr
+  /-- Where an argument of a call of the function by itself has a `set`:
+      a context that takes its first success would not undo it with the
+      values of that call it rejects. -/
+  argSet : Option Pos
 
 /-- Run `m`, attributing the heap effects it records first to `p` (a field
     or argument default: the effect is the construction's or the call's). -/
@@ -2166,6 +2204,14 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
   | .app p (.ident _ "$each") (.app _ (.ident _ fa) _ _ :: _) false =>
     -- (a call of a recursive function with several values, #235)
     let f := if fa.endsWith "$all" then String.ofList (fa.toList.take (fa.length - 4)) else fa
+    if ctx.inTaking then
+      eerr p (s!"a call of {f}, which has several values, cannot be lifted from here, for now (#235): " ++
+        "not from a block, a struct construction, a named argument, a choice's alternative, the right of " ++
+        "and or or, a range, a set's path, nor from the branch of an if")
+    eerr p (s!"{f} has several values, so a call of it must be in a failure context that takes them: " ++
+      "an if condition, a for's clauses, first{…}, option{…}, logic{…}, not, or the left of or (#235)")
+  | .app p (.ident _ "$loop") (.ident _ f :: _) false =>
+    -- (a call of a recursive function with several values taken lazily, #246)
     if ctx.inTaking then
       eerr p (s!"a call of {f}, which has several values, cannot be lifted from here, for now (#235): " ++
         "not from a block, a struct construction, a named argument, a choice's alternative, the right of " ++
@@ -4526,6 +4572,8 @@ partial def elabFor (ctx : Ctx) (p : Pos) (clauses : List SExpr) (body : SExpr) 
   -- (a call of a recursive function with several values, #235: a generator
   -- over the array of its values; at a written type, through a binding)
   let clauses := clauses.flatMap fun c => match Choice.binding? c with
+    -- (one taken lazily, #246: the binding stays, a generator of its own)
+    | some { each := some (.app _ (.ident _ "$loop") _ false), .. } => [c]
     | some { pos := q, name := n, ty := none, each := some arr, .. } => [.gen q n none arr]
     | some { pos := q, name := n, ty := some t, each := some arr, .. } =>
       let tmp := s!"$e{q.line}_{q.col}"
@@ -4562,6 +4610,51 @@ partial def elabFor (ctx : Ctx) (p : Pos) (clauses : List SExpr) (body : SExpr) 
         if c.lookup n |>.isSome then eerr g.pos s!"'{n}' is already defined"
         let slot ← fresh ty
         return (slot, { c with locals := { name := n, slot, ty, mutable := false } :: c.locals })
+      -- (a call of a recursive function with several values taken lazily,
+      -- #246: a loop over its values, each one iteration, over a one-element
+      -- array, whose filter binds it and runs the generator's filters, and
+      -- whose values are collected)
+      if let some { pos := gp, name := n, ty := sty, each := some (.app _ (.ident _ "$loop") lp false), .. } :=
+          Choice.binding? g then
+        let lg ← elabLoopGen { c with canFail := true, inTaking := true } gp lp
+        let ty ← match ← sty.mapM (resolveTy c.types gp) with
+          | some t => pure t
+          | none => pure lg.vty
+        let (xs, c1) ← declare c n ty
+        let (filt, c2) ← elabFilters c1 fs
+        let bindX ← coerce gp ⟨lg.value, lg.vty⟩ ty
+        let inner ← build c2 more
+        let one ← fresh .void
+        let iter : Expr := .forE one (.lit (.arr #[.tup []])) (.seq (.assign xs bindX) filt) inner.e
+        -- (the steps in rounds, each a `forE` over a range twice as long as
+        -- the last one's, whose body runs a step and gives the values of
+        -- its iteration, if it came to a value: so the values are collected
+        -- in linear time and space, where adding each to an array would copy
+        -- it each time)
+        let acc ← fresh (.arr inner.ty)
+        let size ← fresh .int
+        let done ← fresh .logic
+        let d ← fresh .int
+        let vd : Expr := .lit .void
+        let none : Expr := .lit (.arr #[])
+        let r ← fresh (.arr inner.ty)
+        let stepBody : Expr := .ite (p2 .eq (.local lg.sp) (.lit (.int 0)))
+          (.seq (.assign done (.lit (.logic true))) none)
+          (.seq lg.step (.ite (.prim .query [.local lg.has])
+            (.seq (.assign r iter) (.seq lg.after (.local r))) none))
+        let round : Expr := .forE d (p2 .range (.lit (.int 1)) (.local size))
+          (p2 .eq (.local done) (.lit (.logic false))) stepBody
+        let body : Expr := .seq (.assign acc (p2 .concat (.local acc) (.prim .flatten [round])))
+          (.ite (p2 .eq (.local done) (.lit (.logic true))) Expr.brkV
+            (.seq (.assign size (p2 .mul (.local size) (.lit (.int 2)))) vd))
+        let code : Expr := .seq lg.init (.seq (.assign acc none) (.seq (.assign size (.lit (.int 16)))
+          (.seq (.assign done (.lit (.logic false))) (.seq (.loop body) (.local acc)))))
+        match more with
+        | [] => return ⟨code, .arr inner.ty⟩
+        | _ =>
+          match inner.ty with
+          | .arr t => return ⟨.prim .flatten [code], .arr t⟩
+          | _ => eerr gp "internal: nested for"
       -- the source: evaluated before the iterations; a failing source gives no iterations
       let (slot, src, c1, pre) ← match g with
         | .decl gp n none false (.range _ lo hi) => do
@@ -4758,6 +4851,33 @@ partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
     if let .app p (.ident _ "$defer") _ _ := cl then
       eerr p "defer: cannot be a clause of an if condition or first{…} that has a choice (#208)"
     match Choice.binding? cl with
+    | some b@{ each := some (.app _ (.ident _ "$loop") lp false), .. } =>
+      -- (one taken lazily, #246: a loop over its values, each followed by
+      -- the clauses after it, which leave the loop when they succeed; the
+      -- code after the loop says whether one did)
+      let p := b.pos
+      let g := match lp with | .ident _ g :: _ => g | _ => ""
+      let lg ← elabLoopGen ctx p lp
+      if let some q := lg.argSet then
+        eerr q (s!"a set in an argument of {g}'s call of itself: where the first success is taken, it would " ++
+          s!"not be undone with the values of that call that the context rejects; call {g} in a for (#246)")
+      modify fun st => { st with loopFirst := st.loopFirst ++ [(g, p, lg.itemCode)] }
+      let ty ← match ← b.ty.mapM (resolveTy ctx.types p) with
+        | some t => pure t
+        | none => pure lg.vty
+      checkNewLocal ctx p b.name
+      let x ← fresh ty
+      let c1 := { ctx with locals := { name := b.name, slot := x, ty, mutable := false } :: ctx.locals }
+      let (inner, c2) ← elabOneGo c1 rest
+      let bindX ← coerce p ⟨lg.value, lg.vty⟩ ty
+      let done ← fresh .logic
+      let vd : Expr := .lit .void
+      let body : Expr := .seq
+        (.ite (p2 .eq (.local lg.sp) (.lit (.int 0))) (.seq (.assign done (.lit (.logic true))) Expr.brkV) vd)
+        (.seq lg.step (.ite (.prim .query [.local lg.has])
+          (.seq (.ite (.seq (.assign x bindX) (.seq inner Expr.failV)) vd vd) lg.after) vd))
+      return (.seq lg.init (.seq (.assign done (.lit (.logic false))) (.seq (.loop body)
+        (.ite (p2 .eq (.local done) (.lit (.logic false))) Expr.brkV vd))), c2)
     | some b@{ each := some arr, .. } =>
       -- (a call of a recursive function with several values, #235: each
       -- element of the array of its values in turn, the clauses after it
@@ -4794,6 +4914,141 @@ partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
       let (r, c1) ← elabStmt ctx cl none
       let (inner, c2) ← elabOneGo c1 rest
       return (.seq r.e inner, c2)
+
+/-- A call of a recursive function with several values that its consumer
+    takes lazily (#246), `$loop(F, params, clauses, r := tail)`, its
+    parameters bound by the consumer's clauses before it, to its
+    arguments. It runs as a loop over a stack of items, each `(k, F's
+    parameters and the names its clauses and conditions bind)`: the
+    alternative to run, or -1 to run the clauses and pick the branch of its
+    last `if` first (when the clauses fail, the call has no values; what its
+    arguments did stays, as for a call computed eagerly). A step pops one
+    and runs one alternative. A value is the step's, for the consumer to
+    compute; a call of `F` evaluates its arguments and pushes the item that
+    starts it. The item that resumes at the next alternative of the choice,
+    if any, is pushed below that one (with the names as the arguments left
+    them), or once the consumer took or rejected the value (as the consumer
+    left them): so the values come in the Verse Calculus's order, depth
+    first. The stack is a list of cells (`$lazycell`), so a step costs the
+    same however deep the stack is. -/
+partial def elabLoopGen (ctx : Ctx) (p : Pos) (lp : List SExpr) : EM LoopGen := do
+  let [.ident _ g, .block _ ps, .block _ cls, .decl _ _ (some rsty) _ tail] := lp
+    | eerr p "internal: a $loop marker (#246)"
+  let rty ← resolveTy ctx.types p rsty
+  let vd : Expr := .lit .void
+  -- (the parameters, bound by the consumer's clauses: the loop has slots
+  -- of its own for them, so that the call, run again by a loop of its
+  -- consumer's, starts from its arguments, not from what its last run left)
+  let args ← ps.mapM fun
+    | .ident q n => match ctx.lookup n with
+      | some l => pure l
+      | none => eerr q s!"internal: parameter {n} of a $loop (#246)"
+    | e => eerr e.pos "internal: a $loop parameter (#246)"
+  let pls ← args.mapM fun l => do return { l with slot := ← fresh l.ty }
+  let lctx : Ctx := { ctx with locals := pls.reverse ++ ctx.locals }
+  let newOf (c : Ctx) : List Local := c.locals.take (c.locals.length - lctx.locals.length)
+  -- (the clauses, then each branch's conditions)
+  let (rc, cc) ← elabSeq { lctx with canFail := true, inTaking := true } cls none
+  let arms : List (Option (List SExpr) × SExpr) :=
+    if Choice.isBranchy tail then Choice.arms tail else [(none, tail)]
+  let mut armCode : Array (Option Expr × Ctx × List SExpr) := #[]
+  for (cs?, v) in arms do
+    let alts := (Choice.alts? v).getD [v]
+    match cs? with
+    | some cs =>
+      let (rcond, ca) ← elabSeq { cc with canFail := true, inTaking := true } cs none
+      armCode := armCode.push (some rcond.e, ca, alts)
+    | none => armCode := armCode.push (none, cc, alts)
+  -- (every name to save in an item: the parameters, then the others)
+  let mut tls : List Local := pls
+  for l in (newOf cc ++ armCode.toList.flatMap fun (_, ca, _) => newOf ca).reverse do
+    if !tls.any (·.slot == l.slot) then tls := tls ++ [l]
+  let tupTy : Ty := .tup (.int :: tls.map (·.ty))
+  let cellTy : Ty := .struct "$lazycell" [tupTy]
+  let cfs := ctx.types.fields "$lazycell" [tupTy]
+  let (some (itemF, _), some (nextF, _)) := (fieldIndex cfs "$LItem", fieldIndex cfs "$LNext")
+    | eerr p "internal: the stack cells of a $loop (#246)"
+  let w ← fresh (.opt cellTy)
+  let cell ← fresh cellTy
+  let sp ← fresh .int
+  let it ← fresh tupTy
+  let k ← fresh .int
+  let has ← fresh .logic
+  let nx ← fresh .int
+  let item (kE : Expr) (vals : List Expr) : Expr := .prim .mkTup (kE :: vals)
+  let cur : List Expr := tls.map (Expr.local ·.slot)
+  let push (e : Expr) : Expr :=
+    .seq (.assign cell (.heap (.new (ctx.types.tagOf "$lazycell")) [e, .local w]))
+      (.seq (.assign w (.prim .mkSome [.local cell]))
+        (.seq (.assign sp (p2 .add (.local sp) (.lit (.int 1)))) vd))
+  -- (the branch an item takes: the first alternative of it)
+  let total := armCode.foldl (fun n (_, _, as) => n + as.length) 0
+  let starts : List Nat := (armCode.toList.foldl (fun (acc, n) (_, _, as) => (acc ++ [n], n + as.length)) ([], 0)).1
+  let select : Expr := (armCode.toList.zip starts).foldr (fun ((c?, _, _), st) acc =>
+    let set : Expr := .seq (.assign k (.lit (.int (st : Nat)))) vd
+    match c? with
+    | some c => .ite c set acc
+    | none => set) vd
+  -- (each alternative's code, numbered across the branches)
+  let mut alts : Array Expr := #[]
+  let mut values : Array (Nat × Expr) := #[]
+  let mut itemCode : Expr := rc.e
+  for (c?, _, _) in armCode do
+    if let some c := c? then itemCode := .seq itemCode c
+  let mut argSet : Option Pos := none
+  for ((_, ca, as), start) in armCode.toList.zip starts do
+    for (a, j) in as.zipIdx do
+      let i := start + j
+      let actx : Ctx := { ca with canFail := true, inTaking := true }
+      let next? : Option Nat := if j + 1 < as.length then some (i + 1) else none
+      let cont : Expr := match next? with
+        | some n => push (item (.lit (.int (n : Nat))) cur)
+        | none => vd
+      match a with
+      | .app q (.ident _ "$rec") args' false =>
+        if args'.length != pls.length then
+          eerr q s!"{g} takes {pls.length} argument(s), found {args'.length}: a call of it with a tuple, in its own body, is not supported yet (#246)"
+        if argSet.isNone then
+          argSet := args'.findSome? fun a' =>
+            if Choice.anyE (fun | .set .. => true | _ => false) a' then some a'.pos else none
+        let ts ← pls.mapM fun l => fresh l.ty
+        let es ← (args'.zip pls).mapM fun (a', l) => do
+          let r ← elabE actx a' (some l.ty)
+          coerce a'.pos r l.ty
+        let assigns : Expr := (es.zip ts).foldr (fun (e, t) acc => .seq (.assign t e) acc) vd
+        itemCode := .seq itemCode assigns
+        -- (the item that resumes after the call, with the names as its
+        -- arguments left them, below the one that starts it; when an
+        -- argument fails, only the first)
+        let start := item (.lit (.int (-1))) (ts.map Expr.local ++ cur.drop pls.length)
+        alts := alts.push (.ite assigns (.seq cont (push start)) cont)
+      | _ =>
+        let r ← elabE actx a (some rty)
+        values := values.push (i, ← coerce a.pos r rty)
+        let nextK : Int := match next? with | some n => (n : Int) | none => -1
+        alts := alts.push (.seq (.assign nx (.lit (.int nextK))) (.seq (.assign has (.lit (.logic true))) vd))
+  let dispatch : Expr := (alts.toList.zipIdx).foldr (fun (a, i) acc =>
+    .ite (p2 .eq (.local k) (.lit (.int (i : Nat)))) a acc) vd
+  let unpack : Expr := (tls.zipIdx).foldr (fun (l, j) acc =>
+    .seq (.assign l.slot (.prim (.tupGet (j + 1)) [.local it])) acc) vd
+  -- (the call's item: its parameters from the consumer's slots, its
+  -- other names as they are)
+  let init : Expr := .seq (.assign w (.lit .none)) (.seq (.assign sp (.lit (.int 0)))
+    (push (item (.lit (.int (-1))) (args.map (Expr.local ·.slot) ++ cur.drop pls.length))))
+  let step : Expr := Expr.seq (.assign sp (p2 .sub (.local sp) (.lit (.int 1))))
+    (.seq (.ite (.assign cell (.prim .query [.local w]))
+        (.seq (.assign it (.heap (.get itemF) [.local cell])) (.seq (.assign w (.heap (.get nextF) [.local cell])) vd)) vd)
+    (.seq (.assign k (.prim (.tupGet 0) [.local it]))
+    (.seq unpack
+    (.seq (.assign has (.lit (.logic false)))
+    (.seq (.ite (p2 .eq (.local k) (.lit (.int (-1))))
+        (.ite (.seq rc.e select) vd (.seq (.assign k (.lit (.int (total : Nat)))) vd)) vd)
+      dispatch)))))
+  -- (the value of the alternative the step came to, which it left in `k`)
+  let value : Expr := values.toList.foldr (fun (i, e) acc =>
+    .ite (p2 .eq (.local k) (.lit (.int (i : Nat)))) e acc) (.prim .fail [])
+  let after : Expr := .ite (p2 .ge (.local nx) (.lit (.int 0))) (push (item (.local nx) cur)) vd
+  return { init, step, sp, has, value, after, vty := rty, itemCode, argSet }
 
 /-- `e.m`: `.Length` of an array or string, or a field of a struct. -/
 partial def elabMember (ctx : Ctx) (p : Pos) (r : R) (m : String) (exp : Option Ty := none) : EM R := do
@@ -5501,6 +5756,17 @@ def concTops : Except String (List STop) :=
     "Progress", "Roots", "taskBase", "Done", "Result", "waitf", "T", "X", "waitNew", "waitInit", "waitResume",
     "WaitDone", "Await", "spawnMark", "t", "Sch", "Dead", "evrec", "Got", "Next", "Head", "Tail", "Cur", "W", "L", "V",
     "EvAwait", "E", "branchMark", "rushMark", "signalAll", "H", "StickyAwait", "Last", "CancelCur", "Cancelled", "Running", "Root", "CancelReq", "CurTask", "cancelMark"]
+
+/-- The class of the cells of the stack a lazily taken function with
+    several values runs its calls from (#246): an item, and the cells
+    below it. Added to a program that has such a function. -/
+def lazyPrelude : String := "
+lazycell(t:type) := class:
+    LItem:t
+    LNext:?lazycell(t)
+"
+
+def lazyTops : Except String (List STop) := parsePrelude lazyPrelude ["lazycell", "LItem", "LNext"]
 
 /-- `subscribable_event(t)` (#210): an event whose `Signal` also calls the
     functions subscribed to it, each `Subscribe` giving a `cancelable` whose
@@ -6452,6 +6718,10 @@ partial def exprPrints : Expr → Bool
   | .forE _ it f b => exprPrints it || exprPrints f || exprPrints b
   | _ => false
 
+/-- A function's name as messages show it: a `block:`'s by its class. -/
+def shownFn (n : String) : String :=
+  if n.endsWith ".$block" then s!"the block: of {String.ofList (n.toList.take (n.length - 7))}" else n
+
 /-- (#235) A recursive function with several values is computed at its
     call as `F$all`, all its values at once, so nothing it may run may print
     or call `Err()`. Followed through its Verse Core code, so through every
@@ -6474,14 +6744,52 @@ def checkEager (fns : Array Fn) (errs : Array (Option Pos)) (posOf : String → 
       let j := todo.head!
       todo := todo.tail!
       let fj := fns[j]!
-      let shown := if fj.name.endsWith ".$block" then
-          s!"the block: of {String.ofList (fj.name.toList.take (fj.name.length - 7))}" else fj.name
-      let via := if fj.name == fn.name then "" else s!" ({shown} does)"
+      let via := if fj.name == fn.name then "" else s!" ({shownFn fj.name} does)"
       let what? : Option String :=
         if exprPrints fj.body then some "print"
         else if let some (some _) := errs[j]? then some "call Err()" else none
       if let some what := what? then
         throw s!"{loc}{g} has several values and is recursive, or called by a recursive one, and it may {what}{via}: such a function must be <computes>, keep no local state, and reach nothing that prints or calls Err(), as all its values are computed at a call (#235)"
+      for (f, _) in Suspend.callsOf fj.body do
+        if f < fns.size && !seen[f]! then
+          seen := seen.set! f true
+          todo := todo ++ [f]
+
+/-- Whether `e` itself changes an object (a field's `set`). -/
+partial def exprWrites : Expr → Bool
+  | .heap (.set _) _ => true
+  | .assign _ e | .ret e | .loop e | .print e => exprWrites e
+  | .seq a b => exprWrites a || exprWrites b
+  | .prim _ es | .heap _ es | .call _ es => es.any exprWrites
+  | .ite c t e => exprWrites c || exprWrites t || exprWrites e
+  | .forE _ it f b => exprWrites it || exprWrites f || exprWrites b
+  | _ => false
+
+/-- (#246) A recursive function with several values that a context taking
+    its first success consumes lazily runs the code of an item (its
+    clauses, conditions and the arguments of its calls of itself) once for
+    all the values the item gives: so that code may not print or change an
+    object, whose effects for values the context then rejects would stay,
+    where the Verse Calculus undoes them with those values. (Its values are
+    computed in the context's own failure context: undone with it.) -/
+def checkLoopFirst (fns : Array Fn) (uses : List (String × Pos × Expr)) : Except String Unit := do
+  for (g, p, e) in uses do
+    let why (what via : String) : String :=
+      s!"{p.show}: {g} has several values, is recursive and may {what}{via} in its clauses, its conditions or the arguments of its calls of itself: in a context that takes its first success, that code runs once for all the values it leads to, and what it does for values the context then rejects would stay; call {g} in a for, or move that into its values (#246)"
+    if exprPrints e then throw (why "print" "")
+    if exprWrites e then throw (why "change an object" "")
+    let mut seen : Array Bool := Array.replicate fns.size false
+    let mut todo : List Nat := []
+    for (f, _) in Suspend.callsOf e do
+      if f < fns.size && !seen[f]! then
+        seen := seen.set! f true
+        todo := todo ++ [f]
+    while !todo.isEmpty do
+      let j := todo.head!
+      todo := todo.tail!
+      let fj := fns[j]!
+      if exprPrints fj.body then throw (why "print" s!" ({shownFn fj.name} does)")
+      if exprWrites fj.body then throw (why "change an object" s!" ({shownFn fj.name} does)")
       for (f, _) in Suspend.callsOf fj.body do
         if f < fns.size && !seen[f]! then
           seen := seen.set! f true
@@ -6529,7 +6837,9 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     | none => []
   let resolved ← resolveModules (allTops000 ++ rawEntry)
   -- functions with several values (#235): inlined at their calls
-  let resolved ← Choice.inlineMulti resolved
+  let (resolved, lazy) ← Choice.inlineMulti resolved
+  -- (#246) the class of the stack cells of lazily taken ones
+  let helpers := helpers ++ (← if lazy then lazyTops else pure [])
   -- the branches of casts that refine type arguments, as functions (#243)
   -- (in front, as the entry expression is the end)
   let resolved := Refine.functions opts.castRequests resolved ++ resolved
@@ -7652,7 +7962,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       (decides : Bool) (allowed : List String) (tps : List (String × Bool)) (body : SExpr)
       (suspends : Bool := false) (selfTps : List String := [])
       (selfFieldOf : Option (String → Option Nat) := none) :
-      Except String (Fn × List VTy × List (String × Ty) × Option Pos × List Refine.Lift) := do
+      Except String (Fn × List VTy × List (String × Ty) × Option Pos × List Refine.Lift × List (String × Pos × Expr)) := do
     -- (#209) the values of `selfTps` come from the receiver's hidden
     -- fields, in slots after the hidden parameters: a method's own class's
     -- (`C.M`), or as `selfFieldOf` says (a cast's branch, #250, the cast
@@ -7699,7 +8009,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     fxCheck name allowed st
     return ({ name, arity, nslots := st.nslots, decides, writes := allowed.contains "writes",
               body := initPrefixE arity inits e },
-      st.slotTys.toList.map (Ty.toVTy env), st.fnNeeds, st.errAt, st.castNeeds)
+      st.slotTys.toList.map (Ty.toVTy env), st.fnNeeds, st.errAt, st.castNeeds, st.loopFirst)
   -- (the accessors come right after the functions, #157)
   env := { env with fieldAccBase := tops.length + gsigs.size }
   let genvOf (g : Sig) : TyEnv := { env with tvars := g.tparams.map fun (v, c) => (v, Ty.param v c) }
@@ -7709,13 +8019,17 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   -- (where each function calls `Err()`, by its index, #235)
   let mut errs : Array (Option Pos) := #[]
   let mut castNeeds : List Refine.Lift := []
+  -- (the lazily taken functions with several values that contexts taking
+  -- their first success consume, #246)
+  let mut loopFirst : List (String × Pos × Expr) := []
   for (top, idx) in tops.zip (List.range tops.length) do
     let sig := sigs[idx]!
     match top with
     | .fn p n ps _ _ _ body =>
-      let (fn, tys, needs, err, casts) ← elabFn env p n ps sig.params sig.ret sig.decides sig.fx [] body sig.suspends
+      let (fn, tys, needs, err, casts, lf) ← elabFn env p n ps sig.params sig.ret sig.decides sig.fx [] body sig.suspends
       fnNeeds := fnNeeds ++ needs
       castNeeds := castNeeds ++ casts
+      loopFirst := loopFirst ++ lf
       fns := fns.push fn
       errs := errs.push err
       slotTys := slotTys.push tys
@@ -7729,6 +8043,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       let (e, st) ← (coerce p r.1 sig.ret).run st
       fnNeeds := fnNeeds ++ st.fnNeeds
       castNeeds := castNeeds ++ st.castNeeds
+      loopFirst := loopFirst ++ st.loopFirst
       let tys := st.slotTys.toList.map (Ty.toVTy env)
       -- slots start like a function's (a class-typed one as a placeholder)
       let inits ← match st.slotTys.toList.mapM (slotDefault env 0 [] []) with
@@ -7747,11 +8062,12 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   for (top, g) in generics.zip gsigs.toList do
     match top with
     | .fn p n ps _ _ _ body =>
-      let (fn, tys, needs, err, casts) ← elabFn (genvOf g) p n ps g.params g.ret g.decides g.fx g.tparams body g.suspends
+      let (fn, tys, needs, err, casts, lf) ← elabFn (genvOf g) p n ps g.params g.ret g.decides g.fx g.tparams body g.suspends
         g.selfTps ((opts.castRequests.find? (·.name == n)).map fun l => fun v =>
           (l.opened.lookup v).bind (env.witnessField? l.target ·))
       fnNeeds := fnNeeds ++ needs
       castNeeds := castNeeds ++ casts
+      loopFirst := loopFirst ++ lf
       fns := fns.push fn
       errs := errs.push err
       slotTys := slotTys.push tys
@@ -7829,6 +8145,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   checkEager fns errs fun g => ((tops ++ generics).findSome? fun
     | .fn p n .. => if n == g then some p else none
     | _ => none)
+  checkLoopFirst fns loopFirst
   if usesConc then
     let (fns1, slotTys1, fsigs1, classTable1, frameClasses1, mainCall1, framePins1) ←
       lowerConcurrency env sigs gsigs mainSig fsigs0 protos pins inFn fns slotTys fsigs classTable opts.genericRoots

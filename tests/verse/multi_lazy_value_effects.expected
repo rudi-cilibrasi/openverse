@@ -1,0 +1,7 @@
+show 3
+for 3
+show 2
+for 2
+show 2
+if 2
+exit=0

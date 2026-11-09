@@ -169,6 +169,54 @@ The cost: all values are computed even where one is taken, so an
 infinite generator never stops, and an error (an overflow) in a value a
 first success would not have reached stops the program.
 
+A self-recursive one shaped as a generator (#246; `Choice.loopShape?`:
+clauses without choices, then a choice, or an `if … else …` of choices and
+values, whose alternatives are values or whole calls of itself) is instead
+taken lazily, where it is consumed. Its calls become `$loop(F, …)`
+markers, carrying its renamed parameters, clauses and last expression,
+whose own calls are marked `$rec`. Lifting binds the arguments to the
+parameters as for `$inline`, and the call's binding is compiled by its
+consumer, `elabFor`'s or `elabOneGo`'s, through `elabLoopGen`: a loop over a
+stack of items, each a tuple of the alternative to run (or -1: the clauses
+first) and the values of the parameters and of the names the clauses and
+conditions bind. A step pops an item, runs the clauses when it starts
+(when they fail, no values; what the arguments did stays, as for a call
+computed eagerly, whose arguments are clauses before its generator) and
+picks the branch, then runs one alternative: a value leaves its number for
+the consumer, which computes it in its own failure context (so what it
+does is undone with it, as for a choice's alternative); a call of `F`
+evaluates its arguments and pushes the item that starts it. The item that
+resumes at the next alternative is pushed below that one, with the names
+as the arguments left them, or after the consumer took or rejected the
+value, with the names as it left them: so the values come depth first, in
+spatial order, and an alternative sees the names as the one before it left
+them (a value's `set` of one kept with it, or undone). The loop has slots
+of its own for the parameters, so a call run again by a loop of its
+consumer's starts from its arguments. The
+stack is a list of `$lazycell` objects (a prelude class added when there
+are lazy calls), not an array, which the C runtime would copy at each
+push. In a `for`, the steps run in rounds, each a `forE` over a range
+twice as long as the last one's whose body runs a step and gives that
+iteration's values: adding each value to an array would copy it each time,
+and the C runtime frees a call's cells only when it returns.
+
+Where the first success is taken, this is exact only if what the clauses,
+conditions and arguments do is never to be undone: the Verse Calculus nests
+a failure context per call, so a subtree whose values the context all
+rejects is undone with them (`if (A := 1 | 2, Print(…), B := …, B > 30)`
+prints only for the `A` that succeeds), and a loop cannot undo it. So the
+elaborator records that code for each such consumer (`ESt.loopFirst`), and
+`checkLoopFirst` refuses it when it, or a function it may call, prints or
+changes an object; and a `set` in such an argument (of one of the
+function's own names, which the next alternative would see) is refused
+as the code is elaborated. In a `for`, nothing is to be
+undone: a `for` keeps the effects of the clauses before a choice whose
+values its filter all rejects. The C runtime journals the writes made
+inside a failure context until it ends (a call's are dropped when it
+returns), so a first-success search, a loop inside one, costs about 1 KB
+per value tried: 100,000 take 0.3 s and 144 MB, where `F$all` did not
+finish in minutes.
+
 Effect-freedom is checked on Verse Core, after elaboration (`checkEager`),
 not on the source: every call `F$all` may make is there, including the
 dispatch of a method call to each implementation below the receiver's
