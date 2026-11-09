@@ -92,6 +92,7 @@ partial def Ty.show : Ty → String
   | .arr t => "[]" ++ t.show
   | .opt t => "?" ++ t.show
   | .tup ts => "tuple(" ++ ", ".intercalate (ts.map Ty.show) ++ ")"
+  | .struct "$subev0" [] => "subscribable_event()"
   | .struct n [] => n
   | .struct n ts =>
     -- (a function type, #210)
@@ -1289,7 +1290,7 @@ partial def resolveTy (env : TyEnv) (p : Pos) : STy → EM Ty
     let ts ← args.mapM (resolveTy env p)
     -- (#220: its handlers take the value, so an event without one has none)
     if n == "subscribable_event" && ts == [.void] && env.classes.contains "$subscription" then
-      eerr p "subscribable_event(void), an event without a value, is not supported: give it a type, subscribable_event(t)"
+      eerr p "subscribable_event(void) is not supported: an event without a value is subscribable_event(), whose functions take none (#220)"
     match env.sparams.lookup n with
     | some ps =>
       if ps.length != ts.length then eerr p s!"{n} takes {ps.length} type argument(s), found {ts.length}"
@@ -4725,13 +4726,13 @@ partial def elabAppBase (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (b
     -- `E.Signal()` of an `event()` (#156): with the value `void`
     if m0 == "Signal" && args.isEmpty then
       match (← elabE ctx obj none).ty with
-      | .struct "event" [.void] | .struct "sticky_event" [.void] =>
+      | .struct "event" [.void] | .struct "sticky_event" [.void] | .struct "$subev0" [] =>
         return ← elabApp ctx p (.member mp obj "Signal") [.tuple p []] bracket exp
       | _ => pure ()
     if m0 == "Await" && args.isEmpty then
       match (← elabE ctx obj none).ty with
       | .struct "task" [_] => return ← elabApp ctx p (.ident mp "$Await") [obj] false exp
-      | .struct "event" [_] | .struct "subscribable_event" [_] =>
+      | .struct "event" [_] | .struct "subscribable_event" [_] | .struct "$subev0" [] =>
         return ← elabApp ctx p (.ident mp "$EvAwait") [obj] false exp
       | .struct "sticky_event" [_] => return ← elabApp ctx p (.ident mp "$StickyAwait") [obj] false exp
       | _ => pure ()
@@ -6618,8 +6619,28 @@ subscribable_event(t:type) := class(event(t)):
         S
 "
 
+/-- `subscribable_event()` (#220): one without a value, whose functions take
+    none. Added after `subPrelude` to a program that mentions it. -/
+def subVoidPrelude : String := "
+subev0 := class(event(void)):
+    var Handlers:[]tuple(subscription, type{_():void}) = array{}
+    Signal<override>(X:void):void =
+        if (Head?) then signalAll(Self, X)
+        Hs := Handlers
+        set Handlers = for (H : Hs, H(0).Live?) { H }
+        for (H : Hs, H(0).Live?):
+            H(1)()
+    Subscribe(F:type{_():void}):cancelable =
+        S := subscription{}
+        set Handlers += array{(S, F)}
+        S
+"
+
 def subTops : Except String (List STop) :=
   parsePrelude subPrelude ["subscription", "Live", "Handlers", "Hs", "H", "S", "F", "X", "t", "Head", "signalAll"]
+
+def subVoidTops : Except String (List STop) :=
+  parsePrelude subVoidPrelude ["subscription", "Live", "Handlers", "Hs", "H", "S", "F", "X", "Head", "signalAll", "subev0"]
 
 /-- An error of the lowering in function `name` (#156): with the position of
     its definition among `tops`. -/
@@ -7692,7 +7713,8 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   -- (unless the program defines its own)
   let defines0 (n : String) : Option Pos := allTops0r.findSome? fun
     | .classDef p m .. | .fn p m .. | .const p m .. => if m == n then some p else none
-  let usesSub := (defines0 "subscribable_event").isNone && allTops0r.any (·.usesType "subscribable_event")
+  let usesSubVoid := (defines0 "subscribable_event").isNone && allTops0r.any (·.usesType "$subev0")
+  let usesSub := usesSubVoid || (defines0 "subscribable_event").isNone && allTops0r.any (·.usesType "subscribable_event")
   if usesSub then
     if let some p := defines0 "cancelable" then
       throw s!"{p.show}: cancelable is the type subscribable_event's Subscribe gives: a program that uses subscribable_event cannot define its own (#210)"
@@ -7702,7 +7724,8 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       | .fn _ _ _ _ effs _ _ => effs.contains "suspends"
       | _ => false
     | _ => false
-  let helpers := helpers ++ (← if usesConc then concTops else pure []) ++ (← if usesSub then subTops else pure [])
+  let helpers := helpers ++ (← if usesConc then concTops else pure []) ++ (← if usesSub then subTops else pure []) ++
+    (← if usesSubVoid then subVoidTops else pure [])
   let allTops000 := allTops0r.filter (!isRatMarker ·)
   -- modules (#112): every reference to a member, qualified (the entry
   -- expression's too)
