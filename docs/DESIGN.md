@@ -165,6 +165,13 @@ elaborator passes the order in (`choiceOrder`, through `prepare`,
 Where the order is not known (an eager `F$all` template), a field is given
 twice, or such a default comes before the last choice (it would run after
 it), the construction is not lifted and the choice is refused there.
+A block or construction kept with a choice inside becomes
+`$noLift(why, e)`. `hasLiftable` treats it as false, so callers that lift
+until nothing is left (`liftCmp`, `liftOps`) do not try it again and
+again. The elaborator elaborates `e` with `liftWhy` set, and the choice's
+refusal says why: the block's `defer:`, a range it binds (which only a `for`
+clause can), or the default that would run after the choice. A block's
+renamed locals are `$b…'N`, and messages show `N` (`shownName`).
 `hasLiftable` does not look inside a `.block` that is an argument of a `$…`
 marker. That block is the body of `first{…}`, `spawn`, `branch`, `sync`,
 `race`, `rush` or `defer:`, which take their choices themselves or run

@@ -1,4 +1,4 @@
-# expect: 7:24: a choice (a | b) cannot be lifted from here
+# expect: 7:24: a choice (a | b) cannot be lifted from a construction of pt that does not give field 'Y'
 G()<transacts>:int =
     Print("g")
     7

@@ -226,8 +226,21 @@ partial def headHas (hasL : SExpr → Bool) : SExpr → Bool
   | .member _ obj _ => hasL obj
   | f => hasL f
 
+
+/-- `e` kept where it is, with a choice inside that is not lifted, and why,
+    for the elaborator's message (#283). -/
+def noLift (p : Pos) (why : String) (e : SExpr) : SExpr :=
+  .app p (.ident p "$noLift") [.str p [.text why], e] false
+
+/-- A name as written: one renamed for a place (a block's local, #283) is
+    `$…'N`. -/
+def shownName (n : String) : String :=
+  if n.startsWith "$" && n.contains '\'' then ((n.splitOn "'").getLast?.getD n) else n
+
 /-- Whether `e` has a choice that lifting reaches. -/
 partial def hasLiftable : SExpr → Bool
+  -- (a block or construction kept, with why, `$noLift`, #283)
+  | .app _ (.ident _ "$noLift") _ false => false
   | .app _ (.ident _ "$choice") _ false => true
   | .app _ (.ident _ "$inline") _ false => true
   | .app _ (.ident _ "$each") _ false => true
@@ -541,13 +554,17 @@ partial def liftE (isVal : String → Bool) (isField : String → String → Boo
     -- run after it)
     let ord := (← get).fieldOrder n
     let names := fs.filterMap fun | .decl _ f none false _ => some f | _ => none
-    if ord.isEmpty || names.length != fs.length || names.eraseDups.length != names.length then return e
+    if ord.isEmpty || names.length != fs.length then
+      return noLift p "a construction here, whose fields' order is not known (in a recursive function computed eagerly)" e
+    if let some f := names.find? (fun f => (names.filter (· == f)).length > 1) then
+      return noLift p s!"a construction that gives field '{f}' twice" e
     let idx := fun (f : String) => (ord.map (·.1)).idxOf f
     let fs := fs.mergeSort fun a b => match a, b with
       | .decl _ f _ _ _, .decl _ g _ _ _ => idx f ≤ idx g
       | _, _ => true
     let lastAt := (fs.filterMap fun | .decl _ f _ _ x => if hasLiftable x then some (idx f) else none | _ => none).foldl max 0
-    if (ord.take lastAt).any (fun (f, d) => d && !names.contains f) then return e
+    if let some (f, _) := (ord.take lastAt).find? (fun (f, d) => d && !names.contains f) then
+      return noLift p s!"a construction of {n} that does not give field '{f}': its default comes before the choice, and would run after it" e
     let vals ← liftOps isVal isField (fs.map fun | .decl _ _ _ _ x => x | x => x)
     return .construct p n ts ((fs.zip vals).map fun
       | (.decl q f t v _, x) => .decl q f t v x
@@ -557,14 +574,20 @@ partial def liftE (isVal : String → Bool) (isField : String → String → Boo
     -- inlined body's, its names renamed for this place (so they stay its
     -- own), its last expression the value; not with a defer:, whose scope
     -- would change
-    if ss.any (fun | .app _ (.ident _ "$defer") _ _ => true | _ => false) then return e
+    if ss.any (fun | .app _ (.ident _ "$defer") _ _ => true | _ => false) then
+      return noLift p "a block with a defer: of its own, whose scope would change" e
+    -- (a range bound with no type is a for's generator: in a block it is an
+    -- error, which it must stay)
+    if ss.any (fun | .decl _ _ none false (.range ..) | .gen .. => true | _ => false) then
+      return noLift p "a block that binds a range (a..b), which only a for clause can" e
     let tag ← LM.fresh p "b"
     -- (its names are not in scope where it is, as for a block's own,
     -- `$declNames`: Verse has no shadowing)
     let decls := localDecls e
     if !decls.isEmpty then
       modify fun s => { s with pre := s.pre.push (.app p (.ident p "$declNames") (decls.map fun (n, q) => .ident q n) false) }
-    let ren := (localsOf e).map fun n => (n, s!"{tag}_{n}")
+    -- (`'` sets the name written apart, `shownName`)
+    let ren := (localsOf e).map fun n => (n, s!"{tag}'{n}")
     let ss := stmtsOf (renameE ren e)
     let bound := boundIn ss
     let isVal' := fun n => isVal n || bound.contains n
@@ -596,7 +619,12 @@ partial def liftCmp (isVal : String → Bool) (isField : String → String → B
   | some 0 =>
     -- (the choice in the first operand: lifted, then the chain from it)
     match os with
-    | o :: more => liftCmp isVal isField p ((← liftE isVal isField o) :: more) syms
+    | o :: more =>
+      let o' ← liftE isVal isField o
+      -- (one kept after all, with a choice still in it: the chain stays as
+      -- it is, for the elaborator to refuse)
+      if hasLiftable o' then return .cmp p o' (syms.zip more)
+      liftCmp isVal isField p (o' :: more) syms
     | [] => return .tuple p []
   | some j =>
     -- (the operands before it, each bound, then the pairs among them)
@@ -607,7 +635,9 @@ partial def liftCmp (isVal : String → Bool) (isField : String → String → B
     if j ≥ 2 then
       modify fun s => { s with pre := s.pre.push (.cmp p h0 ((syms.take (j - 1)).zip (hs.toList.drop 1))) }
     let oj ← liftE isVal isField os[j]!
-    let r ← liftCmp isVal isField p (hs.back! :: oj :: os.drop (j + 1)) (syms.drop (j - 1))
+    let rest := oj :: os.drop (j + 1)
+    let r ← if hasLiftable oj then pure (.cmp p hs.back! ((syms.drop (j - 1)).zip rest))
+      else liftCmp isVal isField p (hs.back! :: rest) (syms.drop (j - 1))
     if j == 1 then return r
     -- (the rest checked as a clause; the chain's value is its first operand)
     modify fun s => { s with pre := s.pre.push r }

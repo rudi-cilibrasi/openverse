@@ -1064,6 +1064,9 @@ structure Ctx where
       (#208): a choice that reaches the elaborator here is in a place it
       cannot be lifted from. -/
   inTaking : Bool := false
+  /-- Inside a block or construction kept with a choice in it (`$noLift`,
+      #283): what it is, for the message. -/
+  liftWhy : String := ""
 
 /-- A lazily taken call where the first success is taken (#246): its
     function, where, the code it runs once for all the values of an item,
@@ -2027,6 +2030,7 @@ def choiceOrder (ctx : Ctx) (n : String) : List (String × Bool) :=
 /-- A local named `n` may be declared here: Verse has no shadowing. -/
 def checkNewLocal (ctx : Ctx) (p : Pos) (n : String) : EM Unit := do
   if ctx.lookup n |>.isSome then
+    let n := Choice.shownName n
     eerr p s!"'{n}' is already defined; Verse does not allow shadowing (use set {n} = … for a var)"
   -- (nor a soft built-in's: a local cannot hide one, #132)
   if (ctx.sig? n).isSome || builtins.contains n || softBuiltins.contains n then
@@ -2348,6 +2352,8 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
     -- (a call of a recursive function with several values, #235)
     let f := if fa.endsWith "$all" then String.ofList (fa.toList.take (fa.length - 4)) else fa
     if ctx.inTaking then
+      if ctx.liftWhy != "" then
+        eerr p s!"a call of {f}, which has several values, cannot be lifted from {ctx.liftWhy}, for now (#283)"
       eerr p (s!"a call of {f}, which has several values, cannot be lifted from here, for now (#235): " ++
         "not from a block with a defer:, a construction where a field's default runs before it, a named argument, " ++
         "an alternative of a set's choice, the right of " ++
@@ -2357,6 +2363,8 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
   | .app p (.ident _ "$loop") (.ident _ f :: _) false =>
     -- (a call of a recursive function with several values taken lazily, #246)
     if ctx.inTaking then
+      if ctx.liftWhy != "" then
+        eerr p s!"a call of {f}, which has several values, cannot be lifted from {ctx.liftWhy}, for now (#283)"
       eerr p (s!"a call of {f}, which has several values, cannot be lifted from here, for now (#235): " ++
         "not from a block with a defer:, a construction where a field's default runs before it, a named argument, " ++
         "an alternative of a set's choice, the right of " ++
@@ -2364,6 +2372,8 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
     eerr p (s!"{f} has several values, so a call of it must be in a failure context that takes them: " ++
       "an if condition, a for's clauses, first{…}, option{…}, logic{…}, not, or the left of or (#235)")
   | .app p (.ident _ "$choice") _ false =>
+    if ctx.inTaking && ctx.liftWhy != "" then
+      eerr p s!"a choice (a | b) cannot be lifted from {ctx.liftWhy}, for now (#283)"
     if ctx.inTaking then
       eerr p ("a choice (a | b) cannot be lifted from here, for now (#208): not from a block with a defer:, " ++
         "a construction where a field's default runs before it, a named argument, an alternative of a set's " ++
@@ -2371,6 +2381,10 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
         "nor from the branch of an if without else or one that is more than a choice or a value")
     eerr p ("a choice (a | b) has several values, so it must be in a failure context that takes them: " ++
       "an if condition, a for's clauses, first{…}, option{…}, logic{…}, not, or the left of or (#208)")
+  | .app _ (.ident _ "$noLift") [.str _ [.text why], e] false =>
+    -- (#283) a block or construction kept: elaborated as it is, its choice
+    -- refused with why
+    elabE { ctx with liftWhy := why } e exp
   | .app p (.ident _ "$firstP") [.block _ items] false =>
     -- (#246) `first{…}` of clauses that are lifted already (a consumer's,
     -- taken into a lazily taken call's function of its own): not again,
@@ -4873,6 +4887,7 @@ partial def elabSet (ctx : Ctx) (p : Pos) (lhs0 : SExpr) (op : Option String) (r
     leftmost outermost). The clauses are a failure context; the body is not. -/
 partial def elabFor (ctx : Ctx) (p : Pos) (clauses : List SExpr) (body : SExpr) (prepared : Bool := false) :
     EM R := do
+  let ctx := { ctx with liftWhy := "" }
   -- (a choice is a generator over its alternatives, #208; clauses lifted
   -- already, `prepared`, are not lifted again)
   let clauses := if prepared then clauses else
@@ -5168,6 +5183,7 @@ partial def elabAlts (ctx : Ctx) (p : Pos) (b : Choice.Binding) : EM (Ty × List
     the clauses after it, which `break` when all of them succeed. Its value is
     `void`: an `if` and `first{…}` read their clauses' values through names. -/
 partial def elabOneClauses (ctx : Ctx) (cs : List SExpr) : EM (R × Ctx) := do
+  let ctx := { ctx with liftWhy := "" }
   -- (a `break` here would leave `firstE`'s loop, not the program's)
   let (code, ctx') ← elabOneGo { ctx with inLoop := false, inChoice := ctx.inLoop, inTaking := true }
     (Choice.prepare cs (choiceValues ctx) (choiceField ctx) (fieldOrder := choiceOrder ctx))
