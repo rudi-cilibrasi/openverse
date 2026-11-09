@@ -491,9 +491,16 @@ CS_THR = R.randint(0, 20) if ch(0.5) else None     # `, X := Ev(P.L), X > CS_THR
 for nm, n, t in objs:
     if t == Tup(INT, INT):
         main.append(f'    Print("closed {nm}: {{ClosedSum({nm})}}")')
-        if CS_THR is None: v = ev(n.L) + ev(n.R) if below(n.cls, 'pairE') else -1
-        else: v = ev(n.L) + ev(n.R) if below(n.cls, 'pairE') and ev(n.L) > CS_THR else -1
-        expect.append(f"closed {nm}: {v}")
+        # (Ev prints its "nested" lines before the closed line; those of the condition's Ev(P.L)
+        # are rolled back with it when it fails)
+        LOG_.clear()
+        if not below(n.cls, 'pairE'): v = -1
+        elif CS_THR is None: v = ev(n.L) + ev(n.R)
+        else:
+            mark = len(LOG_); x = ev(n.L)
+            if x > CS_THR: v = x + ev(n.R)
+            else: del LOG_[mark:]; v = -1
+        expect.extend(LOG_); expect.append(f"closed {nm}: {v}")
 CLOSED_TXT = '''ClosedSum(E:ex(tuple(int, int))):int =
     if (P := pairE[E]) then Ev(P.L) + Ev(P.R) else -1'''
 if CS_THR is not None:
