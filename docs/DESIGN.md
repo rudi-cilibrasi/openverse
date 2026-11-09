@@ -184,15 +184,24 @@ marker. That block is the body of `first{…}`, `spawn`, `branch`, `sync`,
 apart.
 
 A `return` in such a function's body (#283) is taken out where the body
-is inlined (`Choice.elimReturns`). An `if` with a `return` in a branch
-becomes guarded alternatives, each branch followed by the rest of the
-body: `S; if (C) { A; return E }; R` becomes `S; $k := if (C) then 0 else 1;
-block{ $k = 0; A; E } | block{ $k = 1; R }`. The alternatives are compiled
-as #296 composes choices, and their blocks are lifted as in #302. The
-condition runs once. The other alternative's guard fails before any of its
-clauses, so it has no effects and no values. A condition that binds names
-goes through an option instead: `$k := option{C; (names)}`, then the
-names from `$k?` in the first alternative and `not $k?` in the second. A
+is inlined (`Choice.elimReturns`). An `if` with a `return` in a branch,
+`S; if (C) { T } else { U }; R`, becomes
+`S; $k := if (C) then 0 else 1; $kr : ?t := block{ $k = 0; T° } | block{ $k = 1; U° }`,
+then `block{ $kx := $kr?; $kx } | block{ not $kr?; R }`. A branch `T°` gives
+`option{v}` where a `return v` is reached, and `false` where it falls
+through, so the rest `R` comes once, after it. Each branch is a block of
+its own, so its names stay its own. (Copying the rest into each branch
+would double the code with each `if`, and widen the branches' scopes.)
+The alternatives are compiled as #296 composes choices, and their blocks
+are lifted as in #302. The condition runs once. The other alternative's
+guard fails before any of its clauses, so it has no effects and no values.
+A condition that binds names goes through an option instead:
+`$k := option{C; (names)}`, then the names from `$k?` in the first
+alternative and `not $k?` in the second. The last statement's branches
+return their values (`tailReturns`), and a `return` without a value gives
+`()`. #296 copies the clauses after a composed choice into each
+alternative, so a function with more than 16 such `if`s is refused for
+now, since the code would double with each. A
 `return` elsewhere (in a loop, a condition, an expression), or in a
 recursive one, is refused. The transformation always makes a choice, so
 it only applies to functions that have several values on their own (a

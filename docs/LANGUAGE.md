@@ -770,7 +770,8 @@ Main():void =
   A `return` in the branches of an `if` in such a function's body gives the
   value of the alternative it is reached in, and the rest of the body is
   skipped for it (#283). The condition runs once, and the names it binds
-  reach the branch:
+  reach the branch (up to 16 such `if`s in a function, as the code of an
+  inlined call doubles with each for now):
 
   ```verse
   F(X:?int):int =
