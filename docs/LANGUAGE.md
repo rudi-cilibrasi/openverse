@@ -476,9 +476,9 @@ circle := class(shape, labelled):
   values, which the branch's own generic calls at them need, come from the
   object, which holds them in hidden fields as #209's existential classes'
   objects do. An opened parameter is as comparable as the one it stands
-  for; one that only a comparable type parameter's refinement constrains
-  (`t:subtype(comparable)` refined to `tuple(a', b')`) is not known to be
-  comparable, for now.
+  for, and also when a comparable type parameter's refinement mentions it
+  (`t:subtype(comparable)` refined to `tuple(a', b')`), as the object's type
+  argument for `t` is then comparable.
 
   The branch is compiled as a function of its own, generic over the
   enclosing function's type parameters, that takes the object (as `D`) and

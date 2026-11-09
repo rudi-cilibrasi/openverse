@@ -3587,6 +3587,18 @@ partial def elabRefinedIf (ctx : Ctx) (p _dp : Pos) (D T : String) (x : SExpr) (
   let coreFields (n : String) (ts : List Ty) : Option (List Ty) :=
     if env.classes.contains n then none else some ((env.fields n ts).map (·.2.1))
   let some μT := Ty.unifyEqs coreFields [] eqs | do set st0; return none
+  -- (#250: an opened parameter that a comparable type parameter's
+  -- refinement mentions, `t:subtype(comparable)` refined to `tuple(a', b')`,
+  -- is comparable too, as the object's type argument for `t` is)
+  let cmpVars : List String := env.tvars.filterMap fun (n, t) => match t with
+    | .param _ true => some n
+    | _ => none
+  let cmpOpen : List String := (opened.filter fun (n, _, c) => !c && cmpVars.any fun v =>
+    ((Ty.param v true).subst μT).params.contains n).map (·.1)
+  let mkC (t : Ty) : Ty := t.subst (cmpOpen.map fun n => (n, Ty.param n true))
+  let targs := targs.map mkC
+  let μT := μT.map fun (v, t) => (v, mkC t)
+  let opened := opened.map fun (n, v, c) => (n, v, c || cmpOpen.contains n)
   let shown := (Ty.struct T targs).show
   -- (the locals the branch uses, in order of first use)
   let caps : List Local := (Choice.namesUsed body).filterMap fun n =>
@@ -3721,9 +3733,16 @@ partial def elabRefinedIf (ctx : Ctx) (p _dp : Pos) (D T : String) (x : SExpr) (
       let some μF := Ty.unifyEqs coreFields [] (if wide then needX else needOf pins) | continue
       -- (the object as a `T`: its type parameters from the test's type
       -- arguments, refined)
+      -- (the opened arguments a comparable type parameter's refinement
+      -- mentions are comparable, as in the first elaboration)
+      let cmpExt : List String := (extOf.filterMap fun
+        | .param n _ => if cmpVars.any (fun v => ((Ty.param v true).subst μF).params.contains n) then some n else none
+        | _ => none)
+      let mkX (t : Ty) : Ty := t.subst (cmpExt.map fun n => (n, Ty.param n true))
+      let μF := μF.map fun (v, t) => (v, mkX t)
       let dTyX ← if !wide then pure ((Ty.struct T targs).subst μF) else
-        match Ty.unifyEqs coreFields [] ((env.coreArgs T targs).zip (rxs.map (·.subst μF))) with
-        | some θD => pure ((Ty.struct T targs).subst θD)
+        match Ty.unifyEqs coreFields [] ((env.coreArgs T targs).zip (rxs.map (fun t => mkX (t.subst μF)))) with
+        | some θD => pure (mkX ((Ty.struct T targs).subst θD))
         | none => eerr p s!"cannot cast {withArticle rx.ty.show} to {shown} yet: the object's type arguments as {withArticle part[0]!} do not determine {T}'s (#250)"
       let dL : Local := { name := D, slot := y, ty := dTyX, mutable := false }
       let ctx' := { ctx with
