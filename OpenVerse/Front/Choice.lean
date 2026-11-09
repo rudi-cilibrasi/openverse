@@ -359,9 +359,11 @@ partial def mapE (f : SExpr → Option SExpr) (e : SExpr) : SExpr :=
 def mkExcl (p : Pos) (alts : List (List SExpr × SExpr)) : SExpr :=
   .app p (.ident p "$excl") (alts.map fun (gs, r) => .app p (.ident p "$alt") [.block p gs, r] false) false
 
-/-- `e` with its exclusive choices as choices (#314). -/
+/-- `e` with its exclusive choices as choices (#314). Not inside a nested
+    `for`: its own clauses keep theirs, for it to compile as `if`s. -/
 partial def exclToChoice (e : SExpr) : SExpr :=
   mapE (fun
+    | f@(.forE ..) => some f
     | .app p (.ident q "$excl") alts false =>
       some (.app p (.ident q "$choice") (alts.map fun
         | .app _ (.ident _ "$alt") [.block bp gs, .block _ rs] false => .block bp ((gs ++ rs).map exclToChoice)

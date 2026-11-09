@@ -197,7 +197,9 @@ with a choice (guarded alternatives, an option per branch then a choice
 of "returned or not") makes the `if` such a boundary, where the program
 had none. tim-e1's model found it twice in #312's review: prints in the
 branch, then before the `if`, survived a rejected value. Even the
-caller's earlier clauses would show it. When a branch, or the rest copied into it, has a choice of its own, the
+caller's earlier clauses would show it.
+
+When a branch, or the rest copied into it, has a choice of its own, the
 `if` becomes an *exclusive choice* instead (#314):
 `$excl(($k = 0) ⇒ block{T; R}, ($k = 1) ⇒ block{U; R})`, where at most one
 alternative's guards can hold (`Choice.mkExcl`). Where the first success is
@@ -211,6 +213,11 @@ clauses after it) go into that same filter under `if ($sel = i)`, so a
 failure there rolls back to the iteration's generator. Each path's
 generators go into the iteration's body under the selector, as arrays,
 which are flattened. Top-level filters go through a one-element generator.
+A `for` compiles it this way wherever its clauses go:
+- in an alternative with several values of its own, which is a `for` of its own (#283), `keepExcl` is passed again;
+- after a generator taken lazily (#246), the paths go into the filter of the one-element iteration that binds each value.
+
+`exclToChoice` stops at a nested `for`. Otherwise an `if` condition with a choice of its own would turn that `for`'s exclusive choices into generators before the `for` sees them. The eager route (`F$all`, #235) refuses a function with a `return`, as before.
 `checkBody` reads an exclusive choice as an if-chain on its guards.
 Programs without one compile byte for byte as before. The last statement's branches return
 their values (`tailReturns`), and a `return` without a value gives `()`.

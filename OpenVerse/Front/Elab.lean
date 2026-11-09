@@ -5142,9 +5142,10 @@ partial def elabFor (ctx : Ctx) (p : Pos) (clauses : List SExpr) (body : SExpr) 
                                      inRepeat := ctx.inRepeat }
           let mut parts : List R := []
           for (a, i) in b.alts.zipIdx do
+            -- (its exclusive choices kept: this for compiles them, #314)
             let lifted := Choice.prepare [.decl gp b.name b.ty false a] (choiceValues c) (choiceField c)
               (fieldOrder := choiceOrder c)
-              (site := s!"{site}a{i}")
+              (site := s!"{site}a{i}") (keepExcl := true)
             parts := parts ++ [← elabFor bctx p (lifted ++ fs ++ moreClauses) body (prepared := true)]
           let some r0 := parts.head? | eerr gp "internal: a choice without alternatives"
           if let some r := parts.find? (·.ty != r0.ty) then
@@ -5161,23 +5162,34 @@ partial def elabFor (ctx : Ctx) (p : Pos) (clauses : List SExpr) (body : SExpr) 
           | some t => pure t
           | none => pure lg.vty
         let (xs, c1) ← declare c n ty
-        let (filt, c2) ← elabFilters c1 fs
-        let bindX ← coerce gp ⟨lg.value, lg.vty⟩ ty
-        let inner ← build c2 more
-        let one ← fresh .void
-        let iter : Expr := .forE one (.lit (.arr #[.tup []])) (.seq (.assign xs bindX) filt) inner.e
+        -- (the iteration's values, their type, and whether they are flat
+        -- already: with an exclusive choice among the filters, #314, its
+        -- paths in this filter and their values, flattened)
+        let (iter, ity, flat) ← if fs.any isExcl then do
+            let (filtE, arr, ety) ← exclIter c1 fs more
+            let bindX ← coerce gp ⟨lg.value, lg.vty⟩ ty
+            let one ← fresh .void
+            pure (Expr.prim .flatten [.forE one (.lit (.arr #[.tup []])) (.seq (.assign xs bindX) filtE) arr],
+              ety, true)
+          else do
+            let (filt, c2) ← elabFilters c1 fs
+            let bindX ← coerce gp ⟨lg.value, lg.vty⟩ ty
+            let inner ← build c2 more
+            let one ← fresh .void
+            pure (Expr.forE one (.lit (.arr #[.tup []])) (.seq (.assign xs bindX) filt) inner.e,
+              inner.ty, more.isEmpty)
         -- (the steps in rounds, each a `forE` over a range twice as long as
         -- the last one's, whose body runs a step and gives the values of
         -- its iteration, if it came to a value: so the values are collected
         -- in linear time and space, where adding each to an array would copy
         -- it each time)
-        let acc ← fresh (.arr inner.ty)
+        let acc ← fresh (.arr ity)
         let size ← fresh .int
         let done ← fresh .logic
         let d ← fresh .int
         let vd : Expr := .lit .void
         let none : Expr := .lit (.arr #[])
-        let r ← fresh (.arr inner.ty)
+        let r ← fresh (.arr ity)
         let stepBody : Expr := .ite (p2 .eq (.local lg.sp) (.lit (.int 0)))
           (.seq (.assign done (.lit (.logic true))) none)
           (.seq lg.step (.ite (.prim .query [.local lg.has])
@@ -5189,12 +5201,10 @@ partial def elabFor (ctx : Ctx) (p : Pos) (clauses : List SExpr) (body : SExpr) 
             (.seq (.assign size (p2 .mul (.local size) (.lit (.int 2)))) vd))
         let code : Expr := .seq lg.init (.seq (.assign acc none) (.seq (.assign size (.lit (.int 16)))
           (.seq (.assign done (.lit (.logic false))) (.seq (.loop body) (.local acc)))))
-        match more with
-        | [] => return ⟨code, .arr inner.ty⟩
-        | _ =>
-          match inner.ty with
-          | .arr t => return ⟨.prim .flatten [code], .arr t⟩
-          | _ => eerr gp "internal: nested for"
+        if flat then return ⟨code, .arr ity⟩
+        match ity with
+        | .arr t => return ⟨.prim .flatten [code], .arr t⟩
+        | _ => eerr gp "internal: nested for"
       -- the source: evaluated before the iterations; a failing source gives no iterations
       let (slot, src, c1, pre) ← match g with
         | .decl gp n none false (.range _ lo hi) => do
