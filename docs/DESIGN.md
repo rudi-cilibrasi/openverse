@@ -200,17 +200,32 @@ twice as long as the last one's whose body runs a step and gives that
 iteration's values: adding each value to an array would copy it each time,
 and the C runtime frees a call's cells only when it returns.
 
-Where the first success is taken, this is exact only if what the clauses,
-conditions and arguments do is never to be undone: the Verse Calculus nests
-a failure context per call, so a subtree whose values the context all
-rejects is undone with them (`if (A := 1 | 2, Print(…), B := …, B > 30)`
-prints only for the `A` that succeeds), and a loop cannot undo it. So the
-elaborator records that code for each such consumer (`ESt.loopFirst`), and
-`checkLoopFirst` refuses it when it, or a function it may call, prints or
-changes an object; and a `set` in such an argument (of one of the
-function's own names, which the next alternative would see) is refused
-as the code is elaborated. In a `for`, nothing is to be
-undone: a `for` keeps the effects of the clauses before a choice whose
+Where the first success is taken, the loop is exact only if what the
+clauses, conditions and arguments do is never to be undone: the Verse
+Calculus nests a failure context per call, so a subtree whose values the
+context all rejects is undone with them (`if (A := 1 | 2, Print(…), B := …,
+B > 30)` prints only for the `A` that succeeds), and a loop cannot undo it.
+So the elaborator records that code for each such consumer (`LoopUse`, in
+`ESt.loopFirst`), and `checkLoopFirst` finds the ones where it, or a
+function it may call, prints or changes an object, or where an argument
+`set`s one of the function's names (which the next alternative would see).
+Those are compiled, as #243's cast branches are, in a second elaboration,
+as functions of their own (`Choice.FirstLift`, `$first…`): the function's
+clauses, then the first success of its last expression, each value
+followed by the consumer's clauses after the call (with the value bound
+first) and the tuple of the names they bind, each call of itself a call of
+the function. So each alternative and each call is a failure context of
+its own, as in the Verse Calculus. The function takes the parameters and
+the consumer's names those clauses use (the `var`s they set copied in,
+and given back in the tuple); the consumer calls it and binds the names
+from the tuple. It is not yet done in a method (whose clauses may use
+`Self`'s members), a constructor, a default, or a generic function's types.
+It is keyed by the call's place, its binding and the names it passes, as a
+call in a function inlined at several sites is at one place. Being
+recursive, it reaches the recursion limit in a deep search: about 400,000
+levels in Lean, a few million in C.
+The other consumers keep the loop, which needs no recursion. In a `for`,
+nothing is to be undone: a `for` keeps the effects of the clauses before a choice whose
 values its filter all rejects. The C runtime journals the writes made
 inside a failure context until it ends (a call's are dropped when it
 returns), so a first-success search, a loop inside one, costs about 1 KB

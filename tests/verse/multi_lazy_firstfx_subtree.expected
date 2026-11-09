@@ -1,0 +1,14 @@
+visit 1
+visit 3
+visit 6
+found 6
+--
+visit 1
+visit 2
+visit 4
+visit 5
+visit 3
+visit 6
+for 6
+visit 7
+exit=0

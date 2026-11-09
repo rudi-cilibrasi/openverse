@@ -1,5 +1,4 @@
-# expect: 13:18: Count has several values, is recursive and may change an object (Bump does) in its clauses
-# (#246) a clause that calls a function that may change an object
+# a clause calling a function that changes an object, where the first success is taken (#246 step 2)
 cell := class:
     var V:int = 0
 Bump(C:cell)<transacts>:void =

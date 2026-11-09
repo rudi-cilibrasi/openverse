@@ -255,6 +255,10 @@ structure TyEnv where
   /-- The branches of casts that refine type arguments asked for in an
       earlier elaboration (#243), each lifted into a function. -/
   castRequests : List Refine.Lift := []
+  /-- Lazily taken calls where the first success is taken whose effects
+      need functions of their own, asked for in an earlier elaboration
+      (#246). -/
+  loopRequests : List Choice.FirstLift := []
   deriving Inhabited
 
 /-- The fields of struct `n` applied to the type arguments `args`. -/
@@ -1054,6 +1058,18 @@ structure Ctx where
       cannot be lifted from. -/
   inTaking : Bool := false
 
+/-- A lazily taken call where the first success is taken (#246): its
+    function, where, the code it runs once for all the values of an item,
+    where an argument of a call of itself sets a name, and the function of
+    its own it is compiled as when that code has effects, or why it cannot
+    be. -/
+structure LoopUse where
+  g : String
+  pos : Pos
+  itemCode : Expr
+  argSet : Option Pos
+  lift : Except String Choice.FirstLift
+
 structure ESt where
   /-- The program's types, for conversions between class types (`coerce`). -/
   env : TyEnv := {}
@@ -1082,7 +1098,7 @@ structure ESt where
       each runs once for all the values of an item (`LoopGen.itemCode`):
       it may reach no `Print` and change no object, checked on Verse Core
       code once every function is. -/
-  loopFirst : List (String × Pos × Expr) := []
+  loopFirst : List LoopUse := []
   deriving Inhabited
 
 abbrev EM := StateT ESt (Except String)
@@ -1977,6 +1993,62 @@ partial def Ty.paramsC : Ty → List (String × Bool)
   | .map k v => k.paramsC ++ v.paramsC
   | _ => []
 
+/-- The key of a `Choice.FirstLift`: where the call is, its binding and
+    the consumer's names it passes (its parameters, renamed for each site of
+    an inlined body it is in, and the names the clauses after it use), as
+    a call in a function's body inlined at several sites is at one place. -/
+def firstKey (ctx : Ctx) (p : Pos) (lp : List SExpr) (b : String) (rest : List SExpr) : String :=
+  let pnames := match lp with
+    | [_, .block _ ps, _, _] => ps.filterMap fun | .ident _ n => some n | _ => none
+    | _ => []
+  let caps := (Choice.namesUsed (.block p rest)).eraseDups.filter fun n =>
+    !pnames.contains n && (ctx.lookup n).isSome
+  s!"{p.line}_{p.col}_{p.file}_{b}_{String.intercalate "," (pnames ++ caps)}"
+
+/-- (#246) The function of its own a lazily taken call where the first
+    success is taken is compiled as, when what it runs once for all the
+    values of an item has effects (`Choice.FirstLift`): from the call
+    (`lp`, its binding `b`), the consumer's names before it (`ctx`) and
+    after the clauses that follow it (`c2`, those clauses `rest`), and the
+    effects all that has (`fxB`); or why it cannot be yet. -/
+def firstLiftOf (ctx c2 : Ctx) (p : Pos) (g : String) (lp : List SExpr) (b : String) (bty : Option STy)
+    (rest : List SExpr) (fxB : List (String × Pos × Option String)) (suspends : Bool) :
+    Except String Choice.FirstLift := do
+  let [_, .block _ ps, .block _ cls, .decl _ _ rsty _ tail] := lp | throw "internal: a $loop marker"
+  if ctx.selfClass.isSome then throw "in a method"
+  if ctx.inCtor || ctx.inParamDefault || ctx.inBlock || ctx.inDefer || !ctx.defaults.isEmpty then
+    throw "in a constructor, a default or a defer"
+  if suspends then throw "as the clauses after it suspend"
+  let pnames := ps.filterMap fun | .ident _ n => some n | _ => none
+  let pls ← pnames.mapM fun n => match ctx.lookup n with
+    | some l => pure l
+    | none => throw s!"internal: parameter {n}"
+  -- (the consumer's names the clauses after it use, in order of first use)
+  let caps : List Local := (Choice.namesUsed (.block p rest)).eraseDups.filterMap fun n =>
+    if pnames.contains n then none else ctx.lookup n
+  let setNames := Choice.setsIn (.block p rest)
+  let sets := caps.filter fun l => l.mutable && setNames.contains l.name
+  -- (its own binding too: a call in the clauses of another such call's
+  -- function, compiled as one too, binds only what that one gives)
+  let binds := (b :: Choice.boundIn rest).eraseDups
+  let bls ← binds.mapM fun n => match c2.lookup n with
+    | some l => pure l
+    | none => throw s!"internal: name {n}"
+  if (pls ++ caps ++ bls).any (fun l => !(Ty.paramsC l.ty).isEmpty) then throw "in a generic function"
+  let key := firstKey ctx p lp b rest
+  let name := s!"$first{p.line}_{p.col}_{key.hash}" ++ (if p.file.isEmpty then "" else s!"_{p.file}")
+  let capArgs := caps.map fun l => SExpr.ident p l.name
+  let heap := ["reads", "writes", "allocates"].filter fun k =>
+    fxB.any (·.1 == k) || ((ctx.sig? g).map (·.fx.contains k)).getD false
+  let params : List SParam := pls.map (fun l => { name := l.name, ty := l.ty.toSTy }) ++
+    caps.map fun l => { name := if sets.any (·.name == l.name) then s!"{l.name}$in" else l.name, ty := l.ty.toSTy }
+  return { key, pos := p, name, params,
+           specs := (if heap.isEmpty then ["computes"] else heap) ++ ["decides"],
+           ret := .tup (bls.map (·.ty.toSTy) ++ sets.map (·.ty.toSTy) ++ [.name "logic"]),
+           body := Choice.firstBody name p b bty cls tail rest binds (sets.map fun l => (l.name, l.ty.toSTy)) capArgs rsty,
+           binds, sets := sets.map (·.name), args := pnames.map (SExpr.ident p ·) ++ capArgs,
+           varBinds := (bls.filter (·.mutable)).map (·.name) }
+
 /-- A cast `T[X]`, `X` of type `xty`, that holds only under a refinement of
     the code's type parameters (#243): `T` fixes or repeats type arguments
     of `X`'s class, which agree with `X`'s only when they are unified (as
@@ -2225,6 +2297,15 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
         "nor from the branch of an if without else or one that is more than a choice or a value")
     eerr p ("a choice (a | b) has several values, so it must be in a failure context that takes them: " ++
       "an if condition, a for's clauses, first{…}, option{…}, logic{…}, not, or the left of or (#208)")
+  | .app p (.ident _ "$firstP") [.block _ items] false =>
+    -- (#246) `first{…}` of clauses that are lifted already (a consumer's,
+    -- taken into a lazily taken call's function of its own): not again,
+    -- which would bind their lifted names a second time
+    let (code, c1) ← elabOneGo { ctx with inLoop := false, inChoice := ctx.inLoop, inTaking := true, canFail := true }
+      items.dropLast
+    let c1 := { c1 with inLoop := ctx.inLoop, inChoice := ctx.inChoice, inTaking := ctx.inTaking, canFail := ctx.canFail }
+    let rv ← elabE c1 (items.getLastD (.tuple p [])) exp
+    return ⟨.seq (Expr.firstE code) rv.e, rv.ty⟩
   | .app p (.ident _ "$first") [.block bp items] false =>
     -- `first{…}` and `first(…){…}`: without a choice, a block
     if !Choice.hasChoice items.dropLast then return ← elabE ctx (.block bp items) exp
@@ -4861,11 +4942,18 @@ partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
       -- code after the loop says whether one did)
       let p := b.pos
       let g := match lp with | .ident _ g :: _ => g | _ => ""
+      -- (when what it runs once for all the values of an item has effects,
+      -- asked for by an earlier elaboration: a call of a function of its
+      -- own that runs the clauses after it too, then the names they bind)
+      if let some l := ctx.types.loopRequests.find? (·.key == firstKey ctx p lp b.name rest) then
+        let t := s!"$ft{p.line}_{p.col}"
+        let get (i : Nat) : SExpr := .app p (.ident p t) [.int p (i : Int)] false
+        return ← elabOneGo ctx ([.decl p t none false (.app p (.ident p l.name) l.args true)] ++
+          l.binds.zipIdx.map (fun (n, i) => .decl p n none (l.varBinds.contains n) (get i)) ++
+          l.sets.zipIdx.map (fun (m, j) => .set p (.ident p m) none (get (l.binds.length + j))))
+      let fx0 := (← get).fx
+      modify fun st => { st with fx := [] }
       let lg ← elabLoopGen ctx p lp
-      if let some q := lg.argSet then
-        eerr q (s!"a set in an argument of {g}'s call of itself: where the first success is taken, it would " ++
-          s!"not be undone with the values of that call that the context rejects; call {g} in a for (#246)")
-      modify fun st => { st with loopFirst := st.loopFirst ++ [(g, p, lg.itemCode)] }
       let ty ← match ← b.ty.mapM (resolveTy ctx.types p) with
         | some t => pure t
         | none => pure lg.vty
@@ -4873,6 +4961,13 @@ partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
       let x ← fresh ty
       let c1 := { ctx with locals := { name := b.name, slot := x, ty, mutable := false } :: ctx.locals }
       let (inner, c2) ← elabOneGo c1 rest
+      let fxB := (← get).fx
+      modify fun st => { st with fx := fx0 }
+      for (k, q, via) in fxB do noteFx q [k] via
+      let isS (f : Nat) : Bool := ctx.sigs.any fun s => s.idx == f && s.suspends
+      let lift := firstLiftOf ctx c2 p g lp b.name b.ty rest fxB (ctx.suspends && Suspend.hasSusp isS inner)
+      modify fun st => { st with loopFirst := st.loopFirst ++
+        [{ g, pos := p, itemCode := lg.itemCode, argSet := lg.argSet, lift }] }
       let bindX ← coerce p ⟨lg.value, lg.vty⟩ ty
       let done ← fresh .logic
       let vd : Expr := .lit .void
@@ -5368,6 +5463,9 @@ structure Compiled where
   /-- Branches of casts that refine type arguments, to lift (#243): the
       program is elaborated again, with them. -/
   castNeeds : List Refine.Lift := []
+  /-- Lazily taken calls whose effects need functions of their own (#246):
+      the program is elaborated again, with them. -/
+  loopNeeds : List Choice.FirstLift := []
 
 /-- Names a type parameter cannot have. -/
 def typeNames : List String :=
@@ -5405,6 +5503,9 @@ structure Options where
   /-- Branches of casts that refine type arguments, found in an earlier
       elaboration (#243): a function for each. -/
   castRequests : List Refine.Lift := []
+  /-- Lazily taken calls whose effects need functions of their own, found
+      in an earlier elaboration (#246). -/
+  loopRequests : List Choice.FirstLift := []
 
 /-- A class or interface definition, as parsed. -/
 structure CDef where
@@ -6827,28 +6928,43 @@ partial def exprWrites : Expr → Bool
     object, whose effects for values the context then rejects would stay,
     where the Verse Calculus undoes them with those values. (Its values are
     computed in the context's own failure context: undone with it.) -/
-def checkLoopFirst (fns : Array Fn) (uses : List (String × Pos × Expr)) : Except String Unit := do
-  for (g, p, e) in uses do
+def checkLoopFirst (fns : Array Fn) (uses : List LoopUse) : Except String (List Choice.FirstLift) := do
+  let mut needs : List Choice.FirstLift := []
+  for u in uses do
+    let g := u.g
+    let e := u.itemCode
     let why (what via : String) : String :=
-      s!"{p.show}: {g} has several values, is recursive and may {what}{via} in its clauses, its conditions or the arguments of its calls of itself: in a context that takes its first success, that code runs once for all the values it leads to, and what it does for values the context then rejects would stay; call {g} in a for, or move that into its values (#246)"
-    if exprPrints e then throw (why "print" "")
-    if exprWrites e then throw (why "change an object" "")
-    let mut seen : Array Bool := Array.replicate fns.size false
-    let mut todo : List Nat := []
-    for (f, _) in Suspend.callsOf e do
-      if f < fns.size && !seen[f]! then
-        seen := seen.set! f true
-        todo := todo ++ [f]
-    while !todo.isEmpty do
-      let j := todo.head!
-      todo := todo.tail!
-      let fj := fns[j]!
-      if exprPrints fj.body then throw (why "print" s!" ({shownFn fj.name} does)")
-      if exprWrites fj.body then throw (why "change an object" s!" ({shownFn fj.name} does)")
-      for (f, _) in Suspend.callsOf fj.body do
+      s!"{u.pos.show}: {g} has several values, is recursive and may {what}{via} in its clauses, its conditions or the arguments of its calls of itself: in a context that takes its first success, that code runs once for all the values it leads to, and what it does for values the context then rejects would stay"
+    let mut msg? : Option String := none
+    if let some q := u.argSet then
+      msg? := some s!"{q.show}: a set in an argument of {g}'s call of itself: where the first success is taken, it would not be undone with the values of that call that the context rejects"
+    else if exprPrints e then msg? := some (why "print" "")
+    else if exprWrites e then msg? := some (why "change an object" "")
+    else
+      let mut seen : Array Bool := Array.replicate fns.size false
+      let mut todo : List Nat := []
+      for (f, _) in Suspend.callsOf e do
         if f < fns.size && !seen[f]! then
           seen := seen.set! f true
           todo := todo ++ [f]
+      while !todo.isEmpty && msg?.isNone do
+        let j := todo.head!
+        todo := todo.tail!
+        let fj := fns[j]!
+        if exprPrints fj.body then msg? := some (why "print" s!" ({shownFn fj.name} does)")
+        else if exprWrites fj.body then msg? := some (why "change an object" s!" ({shownFn fj.name} does)")
+        for (f, _) in Suspend.callsOf fj.body do
+          if f < fns.size && !seen[f]! then
+            seen := seen.set! f true
+            todo := todo ++ [f]
+    -- (such a call is compiled as a function of its own, recursive, which
+    -- undoes it as the Verse Calculus does, where it can be)
+    if let some msg := msg? then
+      match u.lift with
+      | .ok l => if !needs.any (·.key == l.key) then needs := needs ++ [l]
+      | .error reason =>
+        throw s!"{msg}; it would be compiled as a function of its own, which is not supported {reason} yet: call {g} in a for, or move that into its values (#246)"
+  return needs
 
 /-- Elaborate a parsed program into a Verse Core program that passes `Prog.check`
     and `Prog.checkTypes`. -/
@@ -6898,6 +7014,8 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   -- the branches of casts that refine type arguments, as functions (#243)
   -- (in front, as the entry expression is the end)
   let resolved := Refine.functions opts.castRequests resolved ++ resolved
+  -- (#246) the functions of their own of lazily taken calls
+  let resolved := opts.loopRequests.map (fun l => STop.fn l.pos l.name l.params [] l.specs l.ret l.body) ++ resolved
   -- (the helpers after: they name nothing of the program's)
   -- function values (#210): the function types' interfaces, and a class
   -- for each function used as a value
@@ -7406,7 +7524,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
                              if i.isIface || i.isAbstract then m else
                              (henv.supers d).foldl (fun m T => m.insert T ((m[T]?.getD []) ++ [d])) m) {},
                            abstracts := abstracts.toList, fnRequests := opts.fnRequests,
-                           castRequests := opts.castRequests }
+                           castRequests := opts.castRequests, loopRequests := opts.loopRequests }
   env := { env with varFields := varFields, uniques := uniques,
                     overriders := (overridePairs.toList.map fun (_, dm, _) => (dm.splitOn ".").headD "") ++
                       (implChecks.toList.map fun (_, _, impl, _) => (impl.splitOn ".").headD "") ++
@@ -8015,7 +8133,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       (decides : Bool) (allowed : List String) (tps : List (String × Bool)) (body : SExpr)
       (suspends : Bool := false) (selfTps : List String := [])
       (selfFieldOf : Option (String → Option Nat) := none) :
-      Except String (Fn × List VTy × List (String × Ty) × Option Pos × List Refine.Lift × List (String × Pos × Expr)) := do
+      Except String (Fn × List VTy × List (String × Ty) × Option Pos × List Refine.Lift × List LoopUse) := do
     -- (#209) the values of `selfTps` come from the receiver's hidden
     -- fields, in slots after the hidden parameters: a method's own class's
     -- (`C.M`), or as `selfFieldOf` says (a cast's branch, #250, the cast
@@ -8074,7 +8192,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   let mut castNeeds : List Refine.Lift := []
   -- (the lazily taken functions with several values that contexts taking
   -- their first success consume, #246)
-  let mut loopFirst : List (String × Pos × Expr) := []
+  let mut loopFirst : List LoopUse := []
   for (top, idx) in tops.zip (List.range tops.length) do
     let sig := sigs[idx]!
     match top with
@@ -8198,7 +8316,11 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   checkEager fns errs fun g => ((tops ++ generics).findSome? fun
     | .fn p n .. => if n == g then some p else none
     | _ => none)
-  checkLoopFirst fns loopFirst
+  -- (#246) and functions of their own for the lazily taken calls whose
+  -- effects need them: the program is elaborated again, with them
+  let loopNeeds ← checkLoopFirst fns loopFirst
+  if !loopNeeds.isEmpty then
+    return { prog := default, sigs := { fns := [] }, slotTys := [], loopNeeds }
   if usesConc then
     let (fns1, slotTys1, fsigs1, classTable1, frameClasses1, mainCall1, framePins1) ←
       lowerConcurrency env sigs gsigs mainSig fsigs0 protos pins inFn fns slotTys fsigs classTable
@@ -8270,17 +8392,20 @@ def elabProgram (allTops00 : List STop) (opts : Options := {}) : Except String C
     let c ← elabProgramCore allTops00 opts
     -- (#243) and with the branches of casts that refine type arguments
     let casts := c.castNeeds.filter fun l => !opts.castRequests.any (·.key == l.key)
+    -- (#246) and with functions of their own for lazily taken calls
+    let loops := c.loopNeeds.filter fun l => !opts.loopRequests.any (·.key == l.key)
     match fuel, c.fnNeeds.filter (!opts.fnRequests.contains ·) with
     | fuel + 1, new@(_ :: _) =>
-      go fuel { opts with fnRequests := opts.fnRequests ++ new, castRequests := opts.castRequests ++ casts }
+      go fuel { opts with fnRequests := opts.fnRequests ++ new, castRequests := opts.castRequests ++ casts,
+                          loopRequests := opts.loopRequests ++ loops }
     | fuel + 1, [] =>
-      if casts.isEmpty then
-        if c.castNeeds.isEmpty then return c
-        throw "internal error: a cast that refines type arguments was asked for again (#243)"
-      go fuel { opts with castRequests := opts.castRequests ++ casts }
+      if casts.isEmpty && loops.isEmpty then
+        if c.castNeeds.isEmpty && c.loopNeeds.isEmpty then return c
+        throw "internal error: a cast that refines type arguments, or a lazily taken call's function, was asked for again (#243, #246)"
+      go fuel { opts with castRequests := opts.castRequests ++ casts, loopRequests := opts.loopRequests ++ loops }
     | 0, [] =>
-      if c.castNeeds.isEmpty then return c
-      throw "internal error: casts that refine type arguments still to lift after several elaborations (#243)"
+      if c.castNeeds.isEmpty && c.loopNeeds.isEmpty then return c
+      throw "internal error: casts that refine type arguments, or lazily taken calls, still to lift after several elaborations (#243, #246)"
     -- (a program with a placeholder left is never given out)
     | 0, _ :: _ => throw "internal error: functions still wanted as values after several elaborations (#214)"
   (go 4 opts).mapError fun msg =>
