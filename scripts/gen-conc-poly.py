@@ -5,8 +5,8 @@ spawn, Await, Cancel and defer at those types: generic task roots (#244).
 
 usage: gen-conc-poly.py SEED   (deterministic per seed; prints one program)
 
-Written for the review of #249. scripts/fuzz-conc-poly.sh runs each program
-with and without OPENVERSE_GENERIC_ROOTS=1, Lean against C.
+Written for the review of #249. scripts/fuzz-conc-poly.sh runs each program,
+Lean against C.
 """
 import random
 import sys

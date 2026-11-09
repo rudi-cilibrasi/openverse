@@ -10,6 +10,6 @@ Programs too slow for the default test suite. Run one on both implementations:
 | Program | Result | Lean reference interpreter | C runtime |
 |---|---|---|---|
 | `tictactoe.verse`: full minimax over tic-tac-toe (549,946 positions) | draw, as a Python model of the same search agrees | 45 s | 7 s |
-| `generic_waiters.verse`: 4,000 tasks spawned from generic code awaiting one event (#256) | `done` | 0.6 s (4.1 s before #256 with `OPENVERSE_GENERIC_ROOTS=1`) | 0.1 s |
+| `generic_waiters.verse`: 4,000 tasks spawned from generic code awaiting one event (#256) | `done` | 0.6 s (4.1 s before #256, when compiled without copies at closed types) | 0.1 s |
 
 (2026-11-03 and 2026-11-08, 12-core x86-64; both outputs are identical byte for byte.)
