@@ -6340,7 +6340,7 @@ def specialise (fns0 : Array Fn) (slotTys0 : Array (List VTy)) (S0 : Sigs) (ntpO
   -- #209, cannot be copied per type: its copy would not know them)
   for gi in List.range nOrig do
     if needy[gi]! && hasSelfTps gi then
-      throw (inFn fns[gi]!.name "a spawn of a dispatch at its type parameters (in it, or in a function it calls at them) needs a copy per type (#174), and its class has type parameters that its parent's type arguments do not give: not supported yet (#209)")
+      throw (inFn fns[gi]!.name "it needs a copy per type (#174: an immediate function with a spawn, or one calling such a function at its type parameters), and its class has type parameters that its parent's type arguments do not give: not supported yet (#209)")
   -- (the other generic functions are not copied: a generic callee's frame
   -- is resumed outside any condition as a non-generic one's is, #256, so
   -- copies at closed types, #225, gained nothing, #269)
@@ -6435,47 +6435,39 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
   -- type parameters in a way generic roots (#244) do not cover,
   -- specialised at the types they are called at
   let sigOf (f : Nat) : Option Sig := allS.find? (·.idx == f)
-  let nOrig := fns.size
-  -- (#209) an override that reads its class's type arguments' values from
-  -- its receiver is not copied per type, so its spawns would not be lowered
-  for g in gsigs do
-    if !g.selfTps.isEmpty && !(Suspend.spawnSites spawnMark fns[g.idx]!.body).isEmpty then
-      throw (inFn g.name "a spawn in an override of a class with type parameters that its parent's type arguments do not give is not supported yet (#209)")
-  let (fns1, slotTys1, specSigs, specKeys, replaced) ← specialise fns slotTys
-    { fns := fsigs0, classes := classTable, protos, pins }
-    (fun f => ((sigOf f).map (·.ndicts)).getD 0) (fun f => ((sigOf f).map (·.suspends)).getD false)
-    spawnMark inFn (fun f => ((sigOf f).map (!·.selfTps.isEmpty)).getD false)
-  fns := fns1
-  slotTys := slotTys1
-  let fsigs0 := fsigs0 ++ specSigs.toList
-  fsigs := fsigs ++ specSigs.toList
-  let specUser : List (Nat × String × Nat) := specKeys.toList.zipIdx.filterMap fun ((g, _), k) =>
-    if ((sigOf g).map (fun s => s.suspends && !leaves.contains s.name)).getD false then
-      some (nOrig + k, fns[nOrig + k]!.name, 0)
-    else none
   -- each `spawn` of a method with several implementations (#173): its
   -- dispatch chain becomes a suspends function `$dispatchK` of the slots
   -- it uses (the receiver, the arguments, and the slots its tests bind the
   -- narrowed receiver to, which start as the caller's), which the spawn
-  -- calls
+  -- calls; before the specialisation, so that a spawned dispatch at the
+  -- caller's type parameters is a spawn of a call, a root at them (#244),
+  -- not a reason to copy the caller per type (#209)
   let dispBase := fns.size
   let mut lifted : Array (Expr × List Nat × Nat) := #[]
   let mut liftedIn : Array Nat := #[]
   for gi in List.range dispBase do
     let n0 := lifted.size
-    let (body, acc) := (Suspend.liftChains spawnMark dispBase fns[gi]!.body).run lifted
+    -- (the slot holding each of its type parameters' values, in their
+    -- order: its hidden parameters, then the slots its receiver's fill)
+    let witnesses : List Nat := match sigOf gi with
+      | some sg =>
+        let dictTps := sg.tparams.filter (fun (v, _) => !sg.selfTps.contains v) ++
+          sg.tparams.filter (fun (v, _) => sg.selfTps.contains v)
+        sg.tparams.filterMap fun (v, _) => (dictTps.findIdx? (·.1 == v)).map (fns[gi]!.arity - sg.ndicts + ·)
+      | none => []
+    let (body, acc) := (Suspend.liftChains spawnMark dispBase witnesses fns[gi]!.body).run lifted
     if acc.size > n0 then
       fns := fns.set! gi { fns[gi]! with body }
       lifted := acc
       liftedIn := liftedIn ++ (List.replicate (acc.size - n0) gi).toArray
   let mut disps : List (Nat × String × Nat) := []
   let mut dispSigs : Array (List VTy × VTy) := #[]
+  -- (each `$dispatchK`'s number of type parameters, its witnesses' count)
+  let mut dispNtp : Std.HashMap Nat Nat := {}
   for ((ch, ops, t), k) in lifted.toList.zipIdx do
     let gi := liftedIn[k]!
     let Γ := slotTys[gi]!
     let tys := ops.map fun o => (Γ[o]?).getD .int
-    if tys.any (·.mentionsVar) then
-      throw (inFn fns[gi]!.name "a spawned call whose arguments' types mention the function's type parameters is not supported yet (#156)")
     let ρ ← match Γ[t]? with
       | some (.ref _ [ρ]) => pure ρ
       | _ => throw s!"internal error: lowering {fns[gi]!.name}: a spawn's task"
@@ -6483,12 +6475,36 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
                       writes := true, body := Suspend.renumber (fun j => (ops.idxOf? j).getD 0) ch }
     slotTys := slotTys.push tys
     dispSigs := dispSigs.push (tys, ρ)
-    disps := disps ++ [(dispBase + k, s!"$dispatch{k}", 0)]
+    -- (generic in the caller's type parameters, whose witnesses it takes
+    -- last: its frame then has them, and the spawn is a root at the
+    -- caller's type arguments, #244, #209)
+    let ntpK := ((sigOf gi).map (·.tparams.length)).getD 0
+    disps := disps ++ [(dispBase + k, s!"$dispatch{k}", ntpK)]
+    dispNtp := dispNtp.insert (dispBase + k) ntpK
   let fsigs0 := fsigs0 ++ dispSigs.toList
   fsigs := fsigs ++ dispSigs.toList
+  let nOrig := fns.size
+  -- (a `$dispatchK` takes its caller's witnesses last, and suspends: it may
+  -- need copies too, when one of its implementations does)
+  let dispNtpOf := dispNtp
+  let (fns1, slotTys1, specSigs, specKeys, replaced) ← specialise fns slotTys
+    { fns := fsigs0, classes := classTable, protos, pins }
+    (fun f => match dispNtpOf[f]? with
+      | some n => n
+      | none => ((sigOf f).map (·.ndicts)).getD 0)
+    (fun f => dispNtpOf.contains f || ((sigOf f).map (·.suspends)).getD false)
+    spawnMark inFn (fun f => ((sigOf f).map (!·.selfTps.isEmpty)).getD false)
+  fns := fns1
+  slotTys := slotTys1
+  let fsigs0 := fsigs0 ++ specSigs.toList
+  fsigs := fsigs ++ specSigs.toList
+  let specUser : List (Nat × String × Nat) := specKeys.toList.zipIdx.filterMap fun ((g, _), k) =>
+    if dispNtpOf.contains g || ((sigOf g).map (fun s => s.suspends && !leaves.contains s.name)).getD false then
+      some (nOrig + k, fns[nOrig + k]!.name, 0)
+    else none
   -- (the specialised originals, never called, are not lowered)
   let user := (allS.filter fun s => s.suspends && !leaves.contains s.name && !(replaced[s.idx]?.getD false)).map
-    (fun s => (s.idx, s.name, s.tparams.length)) ++ specUser ++ disps
+    (fun s => (s.idx, s.name, s.tparams.length)) ++ specUser ++ disps.filter fun (f, _, _) => !(replaced[f]?.getD false)
   -- (copies of immediate functions that spawn, their spawns lifted)
   let specImm : List (Nat × String × Nat) := specKeys.toList.zipIdx.filterMap fun ((g, _), k) =>
     if ((sigOf g).map (fun s => !s.suspends && !s.isConst)).getD false &&
@@ -6511,8 +6527,6 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
     !(Suspend.spawnSites spawnMark fns[s.idx]!.body).isEmpty).map fun s => (s.idx, s.name, 0)) ++ specImm
   let mut immSpawns : Array (Nat × List Nat) := #[]
   for (gi, gname, ntpC) in user ++ imm do
-    if ((sigOf gi).map (!·.selfTps.isEmpty)).getD false && !(Suspend.spawnSites spawnMark fns[gi]!.body).isEmpty then
-      throw (inFn gname "a spawn in an override of a class with type parameters that its parent's type arguments do not give is not supported yet (#209)")
     let fn := fns[gi]!
     let Γ := slotTys[gi]!
     let mut mine : List Nat := []

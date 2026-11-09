@@ -1,4 +1,5 @@
-# expect: more than 500 copies of generic functions with a spawned dispatch or an immediate spawn
+# a spawned dispatch in a function that calls itself at ever bigger types: the
+# dispatch is a generic `$dispatchK`, so no copy per type is needed (#209)
 cell(t:type) := class<abstract>:
     Get()<suspends>:t
 icell := class(cell(int)):

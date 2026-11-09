@@ -1,4 +1,4 @@
-# expect: a spawn in an override of a class with type parameters that its parent's type arguments do not give
+# expect: needs a copy per type (#174: an immediate function with a spawn
 Worker()<suspends>:int =
     Sleep(1.0)
     7
