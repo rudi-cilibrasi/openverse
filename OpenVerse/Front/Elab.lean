@@ -3595,8 +3595,10 @@ partial def elabRefinedIf (ctx : Ctx) (p _dp : Pos) (D T : String) (x : SExpr) (
     let extra := written.foldl (fun acc (n, c) =>
       if tps.any (·.1 == n) || acc.any (·.1 == n) then acc else acc ++ [(n, c)]) []
     let tps := tps ++ extra
-    -- (the opened ones' values come from the object's hidden fields)
-    if let some (n, _) := tps.find? fun (n, _) => !ctx.dictVars.contains n && !opened.any (·.1 == n) then
+    -- (the opened ones' values come from the object's hidden fields; those
+    -- of a cast this one is in, from its function's, #250)
+    if let some (n, _) := tps.find? fun (n, _) =>
+        !ctx.dictVars.contains n && !opened.any (·.1 == n) && !ctx.types.tvars.any (·.1 == n) then
       eerr p s!"cannot lift the branch of the cast to {shown} yet: its types mention {n}, which this function has no value of (#243)"
     -- (from the enclosing function's own names, also through the
     -- refinements of the casts this one is in, as the branch is taken from
