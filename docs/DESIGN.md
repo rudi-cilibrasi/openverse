@@ -138,7 +138,11 @@ not an `array{a₀, …}`, which would run `aₙ₋₁` before `a₀`'s value wa
   - The first elaboration elaborates every other alternative alone, without the clauses after it, for its type and for the continuations inside it, so nesting through inlined functions takes no more elaborations.
   - Code and compile time are now linear in the number of such choices in one condition: ten calls of a function with a `return` and a choice after it take 44 KB and 0.04 s, where copying took 2.3 MB and 16 s.
   - Each call is a non-tail call in a filter, so n of them nest n deep in the evaluator's depth budget.
-  In a `for`, the clauses are still copied: there the function would hold the `for`'s body too, which may not run in a failure context (#335).
+  In a `for` (phase 2), such a choice's alternatives are each a `for` of their own. When the clauses after it have another such choice, or an exclusive one, the continuation `$contf…` holds those clauses and the body, and gives the values (and the final values of the `var`s they set).
+  - It runs `$forFirst`: `elabFor`'s filter of the first group, then its values. So it fails exactly where the copied form's failure would undo the alternative's own last clauses, since those and the first segment after them were one filter. A later generator that gives nothing does not make it fail, as in the copied form.
+  - Each alternative's `for` binds its value, calls it as a clause, and its values are flattened.
+  - It is used only where the body may run in a failure context (`forBodySafe`: no `return`, `break`, suspension, `Signal`, or other marker), otherwise copied (tim-6e's review of #335).
+  - An exclusive choice's own paths (#314, `exclIter`) still copy the clauses after them.
 
 Since the result is ordinary Verse Core, every theorem holds of it as it
 stands, and the C runtime runs it unchanged. What is new is proved in
