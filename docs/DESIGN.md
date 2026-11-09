@@ -109,6 +109,19 @@ not an `array{a₀, …}`, which would run `aₙ₋₁` before `a₀`'s value wa
   back before the next one is tried. A body's effects would stay. The
   code is linear in the number of choices: nothing is copied per
   alternative, and `break` already passes `checkControl` inside a `loop`.
+- **An alternative with values or clauses of its own** (#283), a call of a
+  function with several values or a choice inside an expression
+  (`A() | B()`, `Upto[1, 3] | 9`), cannot be selected by `altE`: its values
+  come from its own lifted clauses. Such a choice is compiled alternative by
+  alternative, the clauses after it copied into each. In a `for`, each
+  alternative is a `for` of its own over its binding (lifted with a site of
+  its own, so that the names made differ), the clauses after it and the
+  body, and their values are concatenated (`elabFor` with `prepared`, so
+  the clauses already lifted are not lifted again). For the first success,
+  each is a `first{…}` of its binding, the clauses after it and the tuple of
+  the names they bind (`$firstP`, as for #246's functions of their own),
+  the alternatives a plain choice, and the names bound from the tuple of
+  the one that succeeds. Only such choices are copied, once per alternative.
 
 Since the result is ordinary Verse Core, every theorem holds of it as it
 stands, and the C runtime runs it unchanged. What is new is proved in

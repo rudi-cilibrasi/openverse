@@ -1,4 +1,4 @@
-# expect: 6:22: a call of Down, which has several values, cannot be lifted from here, for now (#235)
+# a call of a recursive function with several values as a choice's alternative, in a for (#283)
 Down(N:int)<computes><decides>:int =
     N >= 0
     N | Down[N - 1]
