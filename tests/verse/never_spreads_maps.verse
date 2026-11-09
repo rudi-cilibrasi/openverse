@@ -26,6 +26,16 @@ Maps(K:int):int =
     M.Length + N.Length
 Mix(K:int):int =
     if (not (K = 2, array{return 1, 5})) then 7 else 8
+# (review) such values read from a tuple, taken to `any` where the type is
+# inferred; a mixed array literal with a string
+ToAny(K:int):int =
+    A := for (I := 0..3, I > K) { return I }
+    var N:int = 0
+    for (Y : A) { set N += array{any(Y), any(2)}.Length }
+    N
+MixStr(K:int):int =
+    if (not (K = 2, array{return 1, "a"})) then 7 else 8
 Main():void =
     Print("{Meth(2)} {Meth(3)} {Gen(2)} {Gen(3)} {Val(2)} {Val(3)}")
     Print("{Maps(2)} {Maps(3)} {Mix(2)} {Mix(3)}")
+    Print("{ToAny(5)} {ToAny(1)} {MixStr(2)} {MixStr(3)}")
