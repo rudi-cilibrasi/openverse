@@ -1119,15 +1119,17 @@ Main()<suspends>:void =
   one suspension point to the next (see DESIGN.md). Nothing changes in
   Verse Core, the proofs or the C runtime. A call site keeps its callee's
   frame, so a loop of calls allocates once.
-- **Generic functions.** A generic function with a `branch`, a `rush`, or a
-  `spawn` whose call's arguments or result have types that mention its
-  type parameters, and a generic immediate function with any `spawn`, is
-  compiled once for each type it is used at (#174), as the scheduler's
-  tasks have no type arguments; so is a generic function that uses such a
-  function at its own type parameters. Such a function calling itself at
-  ever bigger types (`F(X:t)` calling `F(array{X})`) would need endlessly
-  many copies and is refused: a program may need at most 500 copies, at
-  types of at most 2000 parts.
+- **Generic functions.** A generic function with a `branch`, a `rush` or a
+  `spawn` is compiled once, as any generic function: its tasks are roots
+  of the scheduler at its type arguments (#244), and it may call itself at
+  ever bigger types (`F(X:t)` calling `F(array{X})`). A spawned dispatch
+  that reads values of its type parameters (`spawn{E.Eval()}` on an
+  `expr(t)` whose classes fix `t`), and a generic immediate function with
+  a `spawn`, are still compiled once for each type they are used at
+  (#174), as is a generic function that uses one at its own type
+  parameters; such a function calling itself at ever bigger types would
+  need endlessly many copies and is refused: a program may need at most
+  500 copies, at types of at most 2000 parts.
 
 ## Readings openverse takes
 

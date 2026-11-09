@@ -5041,6 +5041,11 @@ structure Options where
   /-- Branches of casts that refine type arguments, found in an earlier
       elaboration (#243): a function for each. -/
   castRequests : List Refine.Lift := []
+  /-- Compile every generic function with a `branch`, `rush` or `spawn` at
+      its own type arguments, with generic roots (#244), not also copies at
+      small closed types (#225): for testing those
+      (`OPENVERSE_GENERIC_ROOTS=1`). -/
+  genericRoots : Bool := false
 
 /-- A class or interface definition, as parsed. -/
 structure CDef where
@@ -5441,11 +5446,11 @@ def inFnMsg (tops : List STop) (name msg : String) : String :=
   | none => s!"in {base}: {msg}"
 
 /-- (#174) Specialise the generic functions whose tasks' roots would depend
-    on their type parameters: those with a `branch` or `rush` (marks
-    `branchMark`, `rushMark`), or a `spawn` (`spawnMark`) whose call's
-    arguments or result have such types (or a spawned dispatch reading
-    values of such types), or (immediate ones, `isSusp` false) any `spawn`,
-    and those calling one at such types. Each call of one at closed type
+    on their type parameters in a way generic roots (#244) do not cover:
+    those with a spawned dispatch reading values of such types (`spawnMark`),
+    or (immediate ones, `isSusp` false) any `spawn`, and those calling one
+    at such types. (A `branch`, a `rush`, or a spawn of a call, is a root at
+    the function's own type arguments.) Each call of one at closed type
     arguments, read off the call's witnesses (its last `ntpOf g` arguments,
     whose types the checker infers exactly), goes to a copy at those types
     (appended to `fns`, `slotTys`), whose own calls are handled the same
@@ -5456,7 +5461,7 @@ def inFnMsg (tops : List STop) (name msg : String) : String :=
     functions were replaced. -/
 def specialise (fns0 : Array Fn) (slotTys0 : Array (List VTy)) (S0 : Sigs) (ntpOf : Nat → Nat)
     (isSusp : Nat → Bool) (branchMark rushMark spawnMark : Nat)
-    (inFn : String → String → String := fun n m => s!"in {n}: {m}") :
+    (inFn : String → String → String := fun n m => s!"in {n}: {m}") (genericRoots : Bool := false) :
     Except String (Array Fn × Array (List VTy) × Array (List VTy × VTy) × Array (Nat × List VTy) × Array Bool) := do
   let mut fns := fns0
   let mut slotTys := slotTys0
@@ -5469,11 +5474,15 @@ def specialise (fns0 : Array Fn) (slotTys0 : Array (List VTy)) (S0 : Sigs) (ntpO
     let ρ := resTy S0 gi
     let openTy (e : Expr) : Bool := (tc S0 Γ ρ e none).all (·.mentionsVar)
     let openSlot (j : Nat) : Bool := ((Γ[j]?).map (·.mentionsVar)).getD false
+    -- (#244: a branch, a rush, or a spawn of a call, is a root of the
+    -- scheduler at the function's own type arguments, which its dispatch
+    -- opens; a spawned dispatch chain at open types still needs copies)
     let spawnOpen (es : List Expr) : Bool := match es with
-      | [.prim .mkArr [.seq (.call _ hs) _, .seq (.local t) _]] => openSlot t || hs.any openTy
+      | [.prim .mkArr [.seq (.call _ _) _, .seq (.local _) _]] => false
       | _ => (Suspend.slotsOf (.prim .mkTup es)).any openSlot
+    let _ := openTy
     needy := needy.push (ntpOf gi > 0 && (Suspend.callsOf fns[gi]!.body).any fun (g, es) =>
-      g == branchMark || g == rushMark || (g == spawnMark && (!isSusp gi || spawnOpen es)))
+      g == spawnMark && (!isSusp gi || spawnOpen es))
   let witTys (S : Sigs) (Γ : List VTy) (ρ : VTy) (g : Nat) (es : List Expr) : List (Option VTy) :=
     (es.drop (es.length - ntpOf g)).map fun e => tc S Γ ρ e none
   -- (a call of one at types that mention the caller's type parameters: the
@@ -5493,7 +5502,10 @@ def specialise (fns0 : Array Fn) (slotTys0 : Array (List VTy)) (S0 : Sigs) (ntpO
   -- class, resumed outside any condition, not in options unwrapped in a
   -- condition, where a resumption's writes make the reference interpreter
   -- copy the heap
-  let mut soft : Array Bool := (List.range nOrig).toArray.map fun gi => ntpOf gi > 0 && isSusp gi && !needy[gi]!
+  let holdsRoots (gi : Nat) : Bool := (Suspend.callsOf fns[gi]!.body).any fun (g, _) =>
+    g == branchMark || g == rushMark || g == spawnMark
+  let mut soft : Array Bool := (List.range nOrig).toArray.map fun gi =>
+    ntpOf gi > 0 && isSusp gi && !needy[gi]! && !(genericRoots && holdsRoots gi)
   let mut softCopies := 0
   let mut specKeys : Array (Nat × List VTy) := #[]
   let mut queue : Array Nat := ((List.range nOrig).filter fun gi => !needy[gi]!).toArray
@@ -5531,12 +5543,12 @@ def specialise (fns0 : Array Fn) (slotTys0 : Array (List VTy)) (S0 : Sigs) (ntpO
       -- (types that grow at each copy, doubling for instance: polymorphic
       -- recursion; linear growth meets the bound on copies first)
       if θ.any (·.size > 2000) then
-        throw (inFn fns[gi]!.name s!"{fns[g]!.name} would be compiled at a type of more than 2000 parts, as if at ever bigger types: a generic function with branch, rush or spawn, or one using such a function at its own type parameters, cannot call itself at bigger types (#174)")
+        throw (inFn fns[gi]!.name s!"{fns[g]!.name} would be compiled at a type of more than 2000 parts, as if at ever bigger types: a generic function with a spawned dispatch at its type parameters, or a generic immediate function with a spawn, or one using such a function at its own type parameters, cannot call itself at bigger types (#174)")
       if θ.any (·.mentionsVar) then throw s!"internal error: specialising a call of {fns[g]!.name} in {fns[gi]!.name}"
       if !specKeys.contains (g, θ) then
         -- (the soft copies, #225, have their own budget)
         if specKeys.size - softCopies ≥ 500 then
-          throw (inFn fns[gi]!.name s!"more than 500 copies of generic functions with branch, rush or spawn, one per type each is used at (last {fns[g]!.name}): a function calling itself at ever bigger types, or many nested generic uses, cannot be compiled (#174)")
+          throw (inFn fns[gi]!.name s!"more than 500 copies of generic functions with a spawned dispatch or an immediate spawn, one per type each is used at (last {fns[g]!.name}): a function calling itself at ever bigger types, or many nested generic uses, cannot be compiled (#174)")
         let σ : Nat → VTy := fun i => θ.getD i (.var i)
         let fn := fns[g]!
         let Γc := slotTys[g]!.map (VTy.subst σ)
@@ -5577,13 +5589,19 @@ def specialise (fns0 : Array Fn) (slotTys0 : Array (List VTy)) (S0 : Sigs) (ntpO
     Lean's elaboration limits.) -/
 def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsigs0 : List (List VTy × VTy))
     (protos : HeapTy) (pins : List (List (Option VTy))) (inFn : String → String → String)
-    (fns0 : Array Fn) (slotTys0 : Array (List VTy)) (fsigsIn : List (List VTy × VTy)) (classTable0 : List (List VTy)) :
-    Except String (Array Fn × Array (List VTy) × List (List VTy × VTy) × List (List VTy) × Array (List VTy) × Expr) := do
+    (fns0 : Array Fn) (slotTys0 : Array (List VTy)) (fsigsIn : List (List VTy × VTy)) (classTable0 : List (List VTy))
+    (genericRoots : Bool := false) :
+    Except String (Array Fn × Array (List VTy) × List (List VTy × VTy) × List (List VTy) × Array (List VTy) × Expr ×
+      List (List (Option VTy))) := do
   let mut fns := fns0
   let mut slotTys := slotTys0
   let mut fsigs := fsigsIn
   let mut classTable := classTable0
   let mut frameClasses : Array (List VTy) := #[]
+  -- (#244: the pins of the frame classes, in their order: a generic root's
+  -- and a branch wrapper's are on all of their type arguments, so that the
+  -- scheduler's dispatch opens them)
+  let mut framePins : Array (List (Option VTy)) := #[]
   let mut extraSigs : Array (List VTy × VTy) := #[]
   let mut mainCall : Expr := .call mainSig.idx []
   let allS := sigs.toList ++ gsigs.toList
@@ -5610,7 +5628,7 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
   let (fns1, slotTys1, specSigs, specKeys, replaced) ← specialise fns slotTys
     { fns := fsigs0, classes := classTable, protos, pins }
     (fun f => ((sigOf f).map (·.ndicts)).getD 0) (fun f => ((sigOf f).map (·.suspends)).getD false)
-    branchMark rushMark spawnMark inFn
+    branchMark rushMark spawnMark inFn genericRoots
   fns := fns1
   slotTys := slotTys1
   let fsigs0 := fsigs0 ++ specSigs.toList
@@ -5676,7 +5694,7 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
   let imm := ((sigs.toList.filter fun s => !s.suspends && !s.isConst && s.tparams.isEmpty &&
     !(Suspend.spawnSites spawnMark fns[s.idx]!.body).isEmpty).map fun s => (s.idx, s.name, 0)) ++ specImm
   let mut immSpawns : Array (Nat × List Nat) := #[]
-  for (gi, gname, _) in user ++ imm do
+  for (gi, gname, ntpC) in user ++ imm do
     if ((sigOf gi).map (!·.selfTps.isEmpty)).getD false then
       throw (inFn gname "a spawn in an override of a class with type parameters that its parent's type arguments do not give is not supported yet (#209)")
     let fn := fns[gi]!
@@ -5695,15 +5713,15 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
         | _ => .var i
       for (e, i) in hs.zipIdx do
         match tc Sorig Γ (fsigs0[gi]!).2 e none with
-        | some τ =>
-          if τ.mentionsVar then
-            throw (inFn gname "a spawned call whose arguments' types mention the function's type parameters is not supported yet (#156)")
-          atys := atys.push τ
+        -- (types that mention the function's type parameters make the root
+        -- generic, at the function's type arguments, which the scheduler's
+        -- dispatch opens, #244)
+        | some τ => atys := atys.push τ
         | none =>
           -- (`array{}` or `false` has no type of its own: the callee's
-          -- parameter type at its type arguments, when that is closed)
+          -- parameter type at its type arguments, which its witnesses give)
           let pt := (((fsigs0[h]?).bind (·.1[i]?)).getD (.var 0)).subst θh
-          if pt.mentionsVar then
+          if pt.mentionsVar && wit.any (·.isNone) then
             throw (inFn gname "the arguments of a spawned call of a generic function must have types of their own (#156)")
           atys := atys.push pt
       let k := roots.size
@@ -5715,7 +5733,7 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
       fns := fns.push { name := s!"$spawn{k}", arity := n + 1, nslots := n + 1, decides := false,
                         writes := true, body }
       slotTys := slotTys.push Γk
-      roots := roots.push (nFns0 + k, s!"$spawn{k}", 0)
+      roots := roots.push (nFns0 + k, s!"$spawn{k}", if Γk.any (·.mentionsVar) then ntpC else 0)
       mine := mine ++ [k]
     if imm.any (·.1 == gi) then immSpawns := immSpawns.push (gi, mine)
     else spawnOf := spawnOf.push mine
@@ -5771,7 +5789,10 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
   let linkIdx := selfBase + 4 * targets.length + 2 * roots.size
   let wrapFnBase := linkIdx + 1
   let wrapTag (K : Nat) : Nat := tagBase + L + K
-  let wrapTy (K : Nat) : VTy := .ref [wrapTag K] []
+  -- (a branch's wrapper holds its home's frame, at its type arguments,
+  -- which the scheduler's dispatch opens, #244)
+  let ntpOfLow (j : Nat) : Nat := ((lows[j]?).map (·.2.2)).getD 0
+  let wrapTy (K : Nat) : VTy := .ref [wrapTag K] ((List.range (ntpOfLow (branchHome[K]?.getD 0))).map VTy.var)
   let callee : Nat → Option Suspend.Callee := fun f =>
     if f == sleepIdx then
       some { tag := env.tagOf "$sleep", newFn := idxOf "$sleepNew", initFn := idxOf "$sleepInit",
@@ -5955,6 +5976,7 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
     slotTys := slotTys.set! gi low.body.slots
     fsigs := fsigs.set gi (frameTy j :: schedTy :: ps, .int)
     frameClasses := frameClasses.push low.fields
+    framePins := framePins.push (if j ≥ user.length then List.replicate (ntpOfLow j) none else [])
     -- `g$new(sched, params…)`: the frame, with the arguments and initial
     -- values (a non-generic callee's frame field starts as the scheduler)
     let childTys := low.fields.drop 2 |>.take sites
@@ -6062,7 +6084,9 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
   -- the wrappers' classes, after the frames', then the cells'
   for K in List.range B do
     frameClasses := frameClasses.push [.int, frameTy branchHome[K]!]
+    framePins := framePins.push (List.replicate (ntpOfLow branchHome[K]!) none)
   frameClasses := frameClasses.push [rootAny, .opt cellTy]
+  framePins := framePins.push []
   classTable := classTable.set schedTag (((classTable[schedTag]!).set headF (.opt cellTy)).set tailF (.opt cellTy))
   -- a task's root: the type of its `Root` field (in every class that has it)
   for d in env.classes do
@@ -6218,7 +6242,7 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
     slotTys := slotTys.push []
     fsigs := fsigs ++ [([], VTy.void)]
     mainCall := .call (runIdx + 1) []
-  return (fns, slotTys, fsigs, classTable, frameClasses, mainCall)
+  return (fns, slotTys, fsigs, classTable, frameClasses, mainCall, framePins.toList)
 
 /-- Whether `e` itself prints (`Print`), for `checkEager`. -/
 partial def exprPrints : Expr → Bool
@@ -7568,6 +7592,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   let fsigs0 := fsigs0 ++ accSigs.toList
   let mut fsigs := fsigs0
   let mut frameClasses : Array (List VTy) := #[]
+  let mut framePins : List (List (Option VTy)) := []
   let mut mainCall : Expr := .call mainSig.idx []
   -- (an error of the lowering names a function: with its position)
   let inFn := inFnMsg (tops ++ generics)
@@ -7583,14 +7608,15 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     | .fn p n .. => if n == g then some p else none
     | _ => none)
   if usesConc then
-    let (fns1, slotTys1, fsigs1, classTable1, frameClasses1, mainCall1) ←
-      lowerConcurrency env sigs gsigs mainSig fsigs0 protos pins inFn fns slotTys fsigs classTable
+    let (fns1, slotTys1, fsigs1, classTable1, frameClasses1, mainCall1, framePins1) ←
+      lowerConcurrency env sigs gsigs mainSig fsigs0 protos pins inFn fns slotTys fsigs classTable opts.genericRoots
     fns := fns1
     slotTys := slotTys1
     fsigs := fsigs1
     classTable := classTable1
     frameClasses := frameClasses1
     mainCall := mainCall1
+    framePins := framePins1
   let mut main := mainSig.idx
   if !protoList.isEmpty || mainSig.suspends then
     main := fns.size
@@ -7602,6 +7628,8 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   let P : Prog := { fns := fns.toList, main }
   if !P.check then throw "internal error: the elaborated program does not pass Prog.check"
   if !P.checkControl then throw "internal error: the elaborated program does not pass Prog.checkControl"
+  -- (the frame classes' pins after the classes', #244)
+  let pins := (List.range classTable.length).map (fun t => (pins[t]?).getD []) ++ framePins
   let S : Sigs := { fns := fsigs, classes := classTable ++ frameClasses.toList, protos, pins }
   if !P.checkTypes S slotTys.toList then
     -- name what fails, for a bug report
@@ -7677,12 +7705,12 @@ def compile (src : String) (opts : Options := {}) : Except String Prog := do
 /-- Compile loaded definitions (`Front.loadProgram`) with shell arguments,
     bound to `Args` when given or mentioned, and an optional `do` expression. -/
 def compileTops (tops : List STop) (args : List String) (mentionsArgs : Bool) (doExpr : Option String)
-    (debug : Bool := false) : Except String Prog := do
+    (debug : Bool := false) (genericRoots : Bool := false) : Except String Prog := do
   let entry ← match doExpr with
     | some t => some <$> parseExprText t
     | none => pure none
   let useArgs := !args.isEmpty || mentionsArgs
-  return (← elabProgram tops { args := if useArgs then some args else none, entry, debug }).prog
+  return (← elabProgram tops { args := if useArgs then some args else none, entry, debug, genericRoots }).prog
 
 /-- Compile with shell arguments (bound to `Args` when given or used) and an
     optional `do` expression, as `openverse run FILE ARG… do EXPR` does. -/

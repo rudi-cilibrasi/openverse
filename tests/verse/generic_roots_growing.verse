@@ -1,4 +1,4 @@
-# expect: more than 500 copies of generic functions with branch, rush or spawn
+# polymorphic recursion at ever bigger types, with a branch: a generic root (#244)
 Grow(X:t, N:int where t:type)<suspends>:int =
     branch:
         Sleep(1.0)

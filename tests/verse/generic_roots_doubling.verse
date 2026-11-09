@@ -1,5 +1,5 @@
-# expect: would be compiled at a type of more than 2000 parts
-# polymorphic recursion, doubling
+# polymorphic recursion, doubling, with a branch: the branch is a root of the
+# scheduler at the function's type arguments, which its dispatch opens (#244)
 Grow(X:t, N:int where t:type)<suspends>:int =
     branch:
         Sleep(1.0)
