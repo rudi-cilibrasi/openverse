@@ -1033,7 +1033,9 @@ Main()<suspends>:void =
   cancelled: after the function's own `defer:` blocks, the last started
   branch (or `rush` arm going on) first, each unwinding whole: what its own
   code started (a `rush` it waits in, the branches it started) is stopped
-  first, the same way, then its own `defer:` blocks run (#254). A `branch` cannot be in a `loop` or `for` body (the Book's
+  first, the same way, then its own `defer:` blocks run (#254). A branch or
+  `rush` arm that has ended still owns what it started: those are stopped
+  in its place in that order, not by their own start among the function's. A `branch` cannot be in a `loop` or `for` body (the Book's
   rule), even through an arm.
 - **`spawn`.** `spawn{F(…)}` starts a task running the call, which must be
   of a suspends function or method (`spawn{Agent.Run()}`, also when
