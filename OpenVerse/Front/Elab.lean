@@ -5846,7 +5846,9 @@ def specialise (fns0 : Array Fn) (slotTys0 : Array (List VTy)) (S0 : Sigs) (ntpO
     let spawnOpen (es : List Expr) : Bool := match es with
       | [.prim .mkArr [.seq (.call _ _) _, .seq (.local _) _]] => false
       | _ => (Suspend.slotsOf (.prim .mkTup es)).any openSlot
-    needy := needy.push (ntpOf gi > 0 && (Suspend.callsOf fns[gi]!.body).any fun (g, es) =>
+    -- (an override whose class's type parameters its receiver holds, #209,
+    -- is generic in them too, even without type parameters of its own)
+    needy := needy.push ((ntpOf gi > 0 || hasSelfTps gi) && (Suspend.callsOf fns[gi]!.body).any fun (g, es) =>
       g == spawnMark && (!isSusp gi || spawnOpen es))
   let witTys (S : Sigs) (Γ : List VTy) (ρ : VTy) (g : Nat) (es : List Expr) : List (Option VTy) :=
     (es.drop (es.length - ntpOf g)).map fun e => tc S Γ ρ e none
@@ -5856,7 +5858,7 @@ def specialise (fns0 : Array Fn) (slotTys0 : Array (List VTy)) (S0 : Sigs) (ntpO
   while changed do
     changed := false
     for gi in List.range nOrig do
-      if needy[gi]! || ntpOf gi == 0 then continue
+      if needy[gi]! || (ntpOf gi == 0 && !hasSelfTps gi) then continue
       if (Suspend.callsOf fns[gi]!.body).any (fun (g, es) => (needy[g]?.getD false) &&
           (witTys S0 slotTys[gi]! (resTy S0 gi) g es).any (·.all (·.mentionsVar))) then
         needy := needy.set! gi true
