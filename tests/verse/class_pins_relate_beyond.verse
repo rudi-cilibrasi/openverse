@@ -1,4 +1,5 @@
-# expect: cannot dispatch Get on a pair(t, u) to class d yet
+# a dispatch from pair(t, u) to d, whose pins relate the receiver's type
+# arguments to ones dup does not have (#209): refined, as class_exist_relate_beyond
 pair(t:type, u:type) := class:
     A:t
     B:u

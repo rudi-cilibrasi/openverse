@@ -388,7 +388,10 @@ def ndicts_of(e):
 
 def dispatch_refused(rc, rargs, m):
     """documented refusal: pins relating the receiver's args to ones it lacks,
-    with an implementation that fixes something."""
+    with an implementation that fixes something.  Lifted: such a dispatch is
+    refined, and the implementation's hidden arguments come from the caller's
+    own type parameters (#209, Ctx.unrefine), so nothing is refused."""
+    return None
     groups = {}
     for d in concrete_below(rc):
         e = impl_of(d, m); groups.setdefault(e.name, []).append(d)

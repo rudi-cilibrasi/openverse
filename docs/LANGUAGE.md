@@ -559,9 +559,7 @@ circle := class(shape, labelled):
     parameters that the class declaring it first does not, or when two
     first declarations of the method give different results (#209); a class below
     an interface that does not give it its first type parameters, in
-    order (`both(t, u) := class(container(t), sink(u))`, #276); a dispatch, in code generic over a
-    class, to a subclass whose fixed type arguments relate to ones the
-    receiver's type does not have (#209); a cast `T[X]` whose type
+    order (`both(t, u) := class(container(t), sink(u))`, #276); a cast `T[X]` whose type
     arguments agree with `X`'s only under a refinement (`dup[P]` for
     `P:pair(a, b)`) other than as the first clause of an `if`'s condition, whose
     branch has a `return`, a `break` that leaves it or a `set` of a `var`

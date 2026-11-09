@@ -1426,6 +1426,13 @@ Phase 3 (#20) adds a heap of objects, each with a class tag and fields
   (`t`'s value), not the opened ones its values are typed with in the
   branch (`tuple(a, b)`, which has no value to pass): `Ctx.unrefine` maps
   each type the refinement binds a caller's parameter to back to it.
+  The same holds for an inherited implementation whose class's type
+  arguments the tested class's pins relate to ones it opens
+  (`fstT(a, b, c) := class(fstE(a, tuple(b, c)))`, using `fstE`'s `Eval`
+  from `expr(t)`): its hidden arguments come from the caller's own type
+  parameters, so such a dispatch is refined like any other. (Where the
+  implementing class takes the receiver's type arguments as they are, the
+  call instead takes the receiver unrefined, as before.)
   The semantics, the binary format and the C runtime are unchanged.
 - **Defaults.** No literal is a reference, so a slot of class type starts as
   a new object of one of its classes with default fields (`DefaultE.new`),
