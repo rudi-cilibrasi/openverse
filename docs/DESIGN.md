@@ -929,7 +929,10 @@ does. A `$spawnK` reads its callee's type arguments off the call's
 witnesses, its last arguments: one per type parameter but those an
 override reads from its receiver (`Sig.selfTps`, #209), so a spawn may
 call such an override directly (`spawn{P.Run()}` on a `pairJ(int,
-string)` below `job(int)`).
+string)` below `job(int)`). A generic root of such a call, in an override
+at its class's own type parameters (`spawn{Run()}` in `pairJ`'s `Go`),
+has no witnesses of them among its arguments: its slots of their types
+start as the receiver's hidden fields, as the override's do.
 
 **No copies per type.** A spawned dispatch (a spawned `E.Eval()` on an
 `expr(t)`, #173, #204) is first lifted into a suspends function

@@ -6591,6 +6591,9 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
   -- each `spawn` (#156) gets a root: a function `$spawnK(T, args…)` that
   -- runs the spawned call and fills the task `T`
   let mut roots : Array (Nat × String × Nat) := #[]
+  -- (each spawn's root's callee's class, when the callee reads type
+  -- arguments from its receiver, #209)
+  let mut rootSelf : Array (Option String) := #[]
   let mut spawnOf : Array (List Nat) := #[]   -- each user function's spawns' root numbers
   let nFns0 := fns.size
   -- (immediate functions may spawn too: their spawns start the task on
@@ -6621,6 +6624,10 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
       -- receiver, which no witness gives)
       let mentionsSelf (τ : VTy) : Bool :=
         (τ.subst fun i => if witIdx.contains i then VTy.void else .var 0).mentionsVar
+      -- (and then its class, whose hidden fields its root's slots of those
+      -- types start as)
+      rootSelf := rootSelf.push (if selfH.isEmpty then none
+        else some (((((sigOf h).map (·.name)).getD "").splitOn ".").headD ""))
       for (e, i) in hs.zipIdx do
         match tc Sorig Γ (fsigs0[gi]!).2 e none with
         -- (types that mention the function's type parameters make the root
@@ -6966,12 +6973,25 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
     -- #209, #251; the receiver is the first of the function's parameters,
     -- which come last)
     let selfCls := (gname.splitOn ".").headD ""
-    let varD (params : List VTy) (i : Nat) : Option Expr := do
+    -- (a spawn's root whose callee reads type arguments from its receiver,
+    -- its second parameter, after the task, likewise: the receiver's hidden
+    -- field whose type at the receiver's type arguments is the variable;
+    -- a generic root's other variables have witnesses among its arguments)
+    let rootVarD (params : List VTy) (i : Nat) : Option Expr := do
+      if gi < nFns0 then none
+      let cls ← (rootSelf[gi - nFns0]?).join
+      let .ref (t :: _) args ← params[params.length - a + 1]? | none
+      let fs ← classTable[t]?
+      ((env.sparams.lookup cls).getD []).findSome? fun (v, _) => do
+        let k ← env.witnessField? cls v
+        let f ← fs[k]?
+        if f.inst args == .var i then some (.heap (.get k) [.local (params.length - a + 1)]) else none
+    let varD (params : List VTy) (i : Nat) : Option Expr := (do
       let s ← sigOf gi
       let (v, _) ← s.tparams[i]?
       if !s.selfTps.contains v then none
       let k ← env.witnessField? selfCls v
-      some (.heap (.get k) [.local (params.length - a)])
+      some (.heap (.get k) [.local (params.length - a)])) <|> rootVarD params i
     let coreDflt (params : List VTy) (τ : VTy) : Except String Expr :=
       match Suspend.coreDefault Sinf params 0 τ (varD params) with
       | some d => pure d
