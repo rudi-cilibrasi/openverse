@@ -878,13 +878,17 @@ and journals every write made in a condition (for rollback). So:
   its `resumeOwn` writes the result there when it is done. The caller reads
   its own cell, at its own type, with no dispatch. A cell's type argument is
   invariant: the caller's type, refined by the dispatch, must be the type
-  the frame's cell holds. So that is the method's first declared result at
-  the override's class's type arguments (`declaredRes`, as the override
-  check relates the two), not the override's own, and an override with a
-  narrower result (covariant: `pairE(a, b)`'s `Copy():pairE(a, b)` for
-  `expr(t)`'s `Copy():expr(t)`) writes its result there by subsumption
-  (#209). A call from a class that itself overrides the method with a
-  narrower result than that declaration's is refused. Slots of the override's
+  the frame's cell holds, and a caller expects the method's result as its
+  receiver's class declares it. So the cell holds the override's own
+  result when a class above it that a dispatch opens from (one with fewer
+  Verse Core type arguments) declares the method with it, and otherwise
+  the method's first declared result at the override's class's type
+  arguments (`declaredRes`, as the override check relates the two): an
+  override with a narrower result (covariant: `pairE(a, b)`'s
+  `Copy():pairE(a, b)` for `expr(t)`'s `Copy():expr(t)`) writes its result
+  there by subsumption (#209). A call that expects yet another result (from
+  a class between them that declares the method with a third one) is
+  refused. Slots of the override's
   frame whose types mention its class's added type parameters start as
   the receiver's hidden fields (`$w`), as in its body.
 - A refined call that does not suspend (an immediate method, or a #157

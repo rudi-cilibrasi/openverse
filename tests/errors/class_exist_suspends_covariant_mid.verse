@@ -1,4 +1,4 @@
-# expect: a <suspends> override cannot be called yet through a dispatch that opens its class's type parameters from a class that overrides its method with a narrower result than the method's first declaration's (#209)
+# expect: a <suspends> override cannot be called yet through a dispatch that opens its class's type parameters when the call expects the method's result as a class above it declares it and the override's frame keeps its result at another type: its own, or the method's first declaration's (#209)
 # (the frame's result cell holds Copy's first declared result, expr(t), at
 # pairM's type arguments; a call from mid expects mid(t), and the cell's type
 # is invariant. The same call from expr(t) runs: class_exist_suspends_covariant)

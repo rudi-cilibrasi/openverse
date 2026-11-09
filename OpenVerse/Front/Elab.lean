@@ -6442,19 +6442,27 @@ def inFnMsg (tops : List STop) (name msg : String) : String :=
   | none => s!"in {name}: {msg}"
 
 /-- The type an opened override's result cell holds (#251, #209), in the
-    override's own type variables: the result its method's first
+    override's own type variables. A caller dispatching from a class above
+    it with fewer Verse Core type arguments (a dispatch that opens them)
+    passes a cell of the method's result as that class declares it, at the
+    dispatch's refinement, and a cell's type is invariant. So: the
+    override's own result when such a declaration gives it (the calls that
+    worked before go on working); else the result the method's first
     declaration gives at the override's class's type arguments, as
-    `sameSigIn` relates the two. A caller dispatching from the declaration
-    passes a cell of that type, refined by the dispatch, and the frame
-    writes its result there by subsumption, also when the override's
-    result is narrower (covariant). Its own result when the declarations
-    it overrides first (one per root, #70) give different types, or when
-    its own is not below theirs in Verse Core. -/
+    `sameSigIn` relates the two, which the frame writes its narrower
+    (covariant) result to by subsumption; else (the first declarations, one
+    per root, #70, disagree, or its own is not below theirs in Verse Core)
+    its own. A qualified implementation `(q:)M` has the roots above `q`. -/
 def declaredRes (env : TyEnv) (allS : List Sig) (s : Sig) : VTy :=
   let genv : TyEnv := { env with tvars := s.tparams.map fun (v, k) => (v, Ty.param v k) }
   let own := s.ret.toVTy genv
   let c := (s.name.splitOn ".").headD ""
-  let m := s.name.drop (c.length + 1)
+  let m0 := (s.name.drop (c.length + 1)).toString
+  let (m, qual) : String × Option String :=
+    if m0.startsWith "(" then match (m0.drop 1).toString.splitOn ":)" with
+      | [q, m'] => (m', some q)
+      | _ => (m0, none)
+    else (m0, none)
   let sigAt (r : String) : Option Sig := allS.find? (·.name == s!"{r}.{m}")
   let nps (r : String) : Nat := ((env.sparams.lookup r).getD []).length
   let cps := ((env.sparams.lookup c).getD []).map fun (v, k) => Ty.param v k
@@ -6470,7 +6478,17 @@ def declaredRes (env : TyEnv) (allS : List Sig) (s : Sig) : VTy :=
       let back := sOwn.zipIdx.map fun ((x, k), i) => (s!"$o{i}", Ty.param x k)
       let cls := (((env.sparams.lookup r).getD []).map (·.1)).zip (env.upArgs c cps r)
       some (((rs.ret.subst apart).subst cls).subst back |>.toVTy genv)
-  let decls := (env.rootsOf (fun r => (sigAt r).isSome) c).map fun r => (sigAt r).bind (atC r)
+  -- (the classes above `c` on its slot of the method: for a qualified
+  -- implementation, those at or above `q`, or between it and `c`)
+  let onSlot (r : String) : Bool := match qual with
+    | some q => (env.supers q).contains r || env.isSub r q
+    | none => true
+  let declares (r : String) : Bool := (sigAt r).isSome && onSlot r
+  let core (d : String) : Nat :=
+    (env.coreArgs d (((env.sparams.lookup d).getD []).map fun (v, k) => Ty.param v k)).length
+  let opening := ((env.supers c).drop 1).filter fun r => declares r && core r < core c
+  if opening.any fun r => (sigAt r).bind (atC r) == some own then own else
+  let decls := (env.rootsOf declares (qual.getD c)).map fun r => (sigAt r).bind (atC r)
   match decls with
   | some d :: rest => if rest.all (· == some d) && own.sub d then d else own
   | _ => own

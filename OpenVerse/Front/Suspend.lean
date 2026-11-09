@@ -1001,11 +1001,10 @@ partial def suspendSelfGeneric (us : List Nat) (y g : Nat) (c : Callee) (rs : Li
     which writes its result there when done (`g$resumeOwn`). The cell's
     type is invariant, so `ρθ`, the type the frame's cell holds at the
     dispatch's instance, must be the caller's type refined by `μ`. The
-    frame's cell holds its method's declared result (`Callee.cellRes`), so
-    an override with a narrower (covariant) result is called as any other
-    (#209); a call that sees the method with a result narrower than its
-    first declaration's (a class between them overriding it covariantly)
-    is refused. -/
+    frame's cell holds its method's declared result (`Callee.cellRes`,
+    `declaredRes`), so an override with a narrower (covariant) result is
+    called as any other (#209); a call that expects yet another result (a
+    class between them declaring the method with a third one) is refused. -/
 partial def suspendSelfOpen (us : List Nat) (y : Nat) (c : Callee) (rs : List Expr) (valued : Bool)
     (ρθ : VTy) (μ : Nat → VTy) : M (Expr × Expr) := do
   let env ← read
@@ -1020,7 +1019,7 @@ partial def suspendSelfOpen (us : List Nat) (y : Nat) (c : Callee) (rs : List Ex
   -- (the cell's type is invariant: the type the frame's cell holds, at the
   -- dispatch's instance, must be the caller's refined one)
   if ρθ != τ.subst μ then
-    throw "a <suspends> override cannot be called yet through a dispatch that opens its class's type parameters from a class that overrides its method with a narrower result than the method's first declaration's (#209)"
+    throw "a <suspends> override cannot be called yet through a dispatch that opens its class's type parameters when the call expects the method's result as a class above it declares it and the override's frame keeps its result at another type: its own, or the method's first declaration's (#209)"
   let σs ← rs.mapM infer
   let wide : VTy := .ref [c.tag, env.schedTag] []
   let schedTy : VTy := .ref [env.schedTag] []
