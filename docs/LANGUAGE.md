@@ -776,7 +776,9 @@ Main():void =
   (`<final>`, its signature and effects against the one it overrides, an
   abstract one implemented), but an override with several values must
   return the same type as the method it overrides, not a narrower one, for
-  now. A parameter or local of the method named like a member is refused,
+  now. Since the dispatch is made before types, a call has the effects of
+  the method as the class that declares it declares them, whatever the
+  receiver's type (an override may declare fewer). A parameter or local of the method named like a member is refused,
   as anywhere in a class.
 
   A `return` in the branches of an `if` in such a function's body, after

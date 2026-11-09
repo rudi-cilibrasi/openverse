@@ -1,4 +1,4 @@
-# expect: 10:4: kennel.Get has several values and returns dog, where shelter.Get returns animal: an override with several values must return the same type, for now (#283)
+# expect: 10:4: kennel.Get returns dog, where shelter.Get, which it overrides and which has several values, returns animal: an override in a family of methods with several values must return the same type (a narrower one is not supported yet, #283)
 # (a narrower return type: a dispatch, made before types, has the declaring class's)
 animal := class:
     N : int = 1

@@ -1433,7 +1433,8 @@ partial def styEq : STy → STy → Bool
   | .map a b, .map c d => styEq a c && styEq b d
   | .app f as, .app g bs => f == g && as.length == bs.length && (as.zip bs).all fun (x, y) => styEq x y
   | .fn as e r, .fn bs e' r' =>
-    as.length == bs.length && (as.zip bs).all (fun (x, y) => styEq x y) && e == e' && styEq r r'
+    as.length == bs.length && (as.zip bs).all (fun (x, y) => styEq x y) &&
+      e.all e'.contains && e'.all e.contains && styEq r r'
   | _, _ => false
 
 /-- A written type with `string` spelled `[]char`, which it is. -/
@@ -1455,7 +1456,8 @@ partial def styShow : STy → String
   | .tup ts => "tuple(" ++ ", ".intercalate (ts.map styShow) ++ ")"
   | .map k v => "[" ++ styShow k ++ "]" ++ styShow v
   | .app f ts => f.replace "::" "." ++ "(" ++ ", ".intercalate (ts.map styShow) ++ ")"
-  | .fn ps _ r => "type{_(" ++ ", ".intercalate (ps.map styShow) ++ "):" ++ styShow r ++ "}"
+  | .fn ps e r => "type{_(" ++ ", ".intercalate (ps.map (":" ++ styShow ·)) ++ ")" ++
+      String.join (e.map (s!"<{·}>")) ++ ":" ++ styShow r ++ "}"
 
 /-- A method with several values and its overrides (#283): the class that
     declares it, and the classes with an implementation (the declaring one
@@ -1493,9 +1495,27 @@ partial def rwFamCalls (anc : String → List String) (fams : List (String × MF
     (inC : Option String) (e : SExpr) : SExpr :=
   let rw := rwFamCalls anc fams trial inC
   let below (f : MFam) (d : String) : List String := f.impls.filter fun x => x != d && (anc x).contains d
+  -- (a call of one implementation's function in a family with overrides,
+  -- the receiver first: one tuple argument to several positional
+  -- parameters, and no named one, taken apart after the receiver, as at a
+  -- call, #140, also where the function is not inlined, a kept body)
+  let plain (p q : Pos) (fn : String) (f : MFam) (recv : SExpr) (args : List SExpr) (br : Bool) : SExpr :=
+    let named := fun | SExpr.decl _ n _ _ _ => n.startsWith "?" | _ => false
+    let posPs := f.params.filter (!·.named)
+    match args with
+    | [a] =>
+      if named a || posPs.length < 2 then .app p (.ident q fn) (recv :: args) br else
+      let site := s!"{p.line}_{p.col}"
+      let (r, t) := (s!"$r{site}", s!"$t{site}")
+      .block p [.decl p r none false recv, .decl p t (some (.tup (posPs.map (·.ty)))) false a,
+        .app p (.ident q fn) (.ident p r :: posPs.zipIdx.map fun (_, i) => .app p (.ident p t) [.int p (i : Int)] false) br]
+    | _ => .app p (.ident q fn) (recv :: args) br
   let call (p q : Pos) (m : String) (f : MFam) (recv : SExpr) (args : List SExpr) (br : Bool) : SExpr :=
     if f.direct then .app p (.ident q (methodFnName f.root m)) (recv :: args) br
     else if trial then .app p (.ident q (methodFnName f.root m ++ "$fam")) (recv :: args) br
+    -- (its declaring class's the only implementation, an abstract override
+    -- below it: that one, which dispatch always picks)
+    else if f.impls == [f.root] then plain p q (methodFnName f.root m) f recv args br
     else
       -- (names of this call's own, `inlineCalls` tags them for each site)
       let site := s!"{p.line}_{p.col}"
@@ -1541,7 +1561,7 @@ partial def rwFamCalls (anc : String → List String) (fams : List (String × MF
         match recv, inC with
         | .ident _ "(super:)", some d =>
           match ((anc d).drop 1).find? f.impls.contains with
-          | some a => some (.app p (.ident q (methodFnName a m)) (.ident q "Self" :: args.map rw) br)
+          | some a => some (plain p q (methodFnName a m) f (.ident q "Self") (args.map rw) br)
           | none => none
         | _, _ => some (call p q m f (rw recv) (args.map rw) br)
       | none => none
@@ -1664,12 +1684,15 @@ def methodFns (tops : List STop) (reserved : List String := []) : Except String 
       some (.fn p (methodFnName f.root n ++ "$fam") ({ name := "$Self", ty := .name f.root } :: ps) [] fx r
         (.tuple p (f.impls.map fun c => .app p (.ident p (methodFnName c n)) (.ident p "$Self" :: args) false)))
     | _ => none
+  -- (parameters' defaults too, which a call evaluates)
+  let rwPs (fs : List (String × MFam)) (trial : Bool) (inC : Option String) (ps : List SParam) : List SParam :=
+    ps.map fun sp => { sp with default := sp.default.map (rw fs trial inC) }
   let rwTops (fs : List (String × MFam)) (trial : Bool) : List STop := tops.map fun
-    | .fn p n ps tps fx r b => .fn p n ps tps fx r (rw fs trial none b)
+    | .fn p n ps tps fx r b => .fn p n (rwPs fs trial none ps) tps fx r (rw fs trial none b)
     | .const p n ty e => .const p n ty (rw fs trial none e)
     | .classDef p n tps sp pa ii fs' ov ms =>
       .classDef p n tps sp pa ii (fs'.map fun (f, t, d, v) => (f, t, d.map (rw fs trial (some n)), v)) ov (ms.map fun
-        | .fn p2 m ps fx2 x r b => .fn p2 m ps fx2 x r (rw fs trial (some n) b)
+        | .fn p2 m ps fx2 x r b => .fn p2 m (rwPs fs trial (some n) ps) fx2 x r (rw fs trial (some n) b)
         | s => s)
   -- (in the trial, calls of the families go through `$fam`)
   let trialFns := fams.flatMap fun (n, f) =>
@@ -1697,7 +1720,7 @@ def methodFns (tops : List STop) (reserved : List String := []) : Except String 
       for (c, m) in declsOf n do
         if let .fn q _ _ _ _ r _ := m then
           if c != f.root && !styEq (styNorm r) (styNorm r0) then
-            throw s!"{q.show}: {c.replace "::" "."}.{n} has several values and returns {styShow r}, where {f.root.replace "::" "."}.{n} returns {styShow r0}: an override with several values must return the same type, for now (#283)"
+            throw s!"{q.show}: {c.replace "::" "."}.{n} returns {styShow r}, where {f.root.replace "::" "."}.{n}, which it overrides and which has several values, returns {styShow r0}: an override in a family of methods with several values must return the same type (a narrower one is not supported yet, #283)"
   if sel.isEmpty then return tops
   -- (a parameter or local named like a member: refused, as in the class,
   -- since the body leaves it)
