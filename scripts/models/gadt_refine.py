@@ -11,8 +11,12 @@ dup (b = a), dupi (a = b = int), opp (a = ?b), ipp (a = int), dupx (b = a, adds
 a parameter), dmid (b = a, below a pin-free class).  Branches print, write a
 var field, fail (in <decides> functions), read captured params and a var
 changed before the cast, use written types under the refinement, and nest a
-second refining cast.  The model: the cast succeeds iff the object's class is
-at or below T; Print is transactional (rolled back with a failed condition).
+second refining cast.  The cast is often followed by more clauses (#277):
+comparisons, a choice, a Print and a set of the object's field, so that
+`if (D := T[P], rest) then B else E` is `if (D := T[P]) then (if (rest) then B
+else E) else E`.  The model: the cast succeeds iff the object's class is at or
+below T; Print is transactional (rolled back with a failed condition), and so is
+the field set.
 argv: seed expfile
 """
 import random, sys
@@ -127,6 +131,49 @@ MENU = {
 MENU['opp'][2] = ('a', 'WT:?b = X', lambda o, e: e['X'], 'P.A', vA)
 
 funcs = []    # dicts
+# clauses after the cast (#277): ('cmpC', n) D.C > n; ('cmpK', n) K > n;
+# ('choice', i, n) Yi := (1 | 2), Yi > n; ('print', i or None) Print("c F" or "c F {Yi}");
+# ('bump', n) set D.N += n
+def mk_rest(name):
+    rest = []; ys = []
+    for _ in range(R.randint(1, 3)):
+        k = R.choice(['cmpC', 'cmpK', 'choice', 'print', 'print', 'bump'])
+        if k == 'cmpC': rest.append(('cmpC', R.randint(0, 5)))
+        elif k == 'cmpK': rest.append(('cmpK', R.randint(0, 8)))
+        elif k == 'choice':
+            i = len(ys); ys.append(i); rest.append(('choice', i, R.randint(0, 2)))
+        elif k == 'print': rest.append(('print', ys[-1] if ys and ch(0.6) else None))
+        else: rest.append(('bump', R.randint(1, 5)))
+    return rest
+def rest_text(f):
+    out = []
+    for c in f['rest']:
+        if c[0] == 'cmpC': out.append(f"D.C > {c[1]}")
+        elif c[0] == 'cmpK': out.append(f"K > {c[1]}")
+        elif c[0] == 'choice': out.append(f"Y{c[1]} := (1 | 2), Y{c[1]} > {c[2]}")
+        elif c[0] == 'print':
+            out.append(f'Print("c {f["name"]}")' if c[1] is None else f'Print("c {f["name"]} {{Y{c[1]}}}")')
+        else: out.append(f"set D.N += {c[1]}")
+    return ''.join(', ' + x for x in out)
+# the clauses after the cast, for an object below T: (ok, printed lines, N delta).
+# Each choice keeps the first alternative its comparison accepts (no clause after it
+# depends on its value other than a Print), so the condition succeeds iff every
+# comparison can, and then its effects are the clauses' own, in order.
+def run_rest(f, o, K):
+    out = []; dN = 0; ys = {}
+    for c in f['rest']:
+        if c[0] == 'cmpC':
+            if not o['C'] > c[1]: return False, [], 0
+        elif c[0] == 'cmpK':
+            if not K > c[1]: return False, [], 0
+        elif c[0] == 'choice':
+            ok = [y for y in (1, 2) if y > c[2]]
+            if not ok: return False, [], 0
+            ys[c[1]] = ok[0]
+        elif c[0] == 'print':
+            out.append(f"c {f['name']}" if c[1] is None else f"c {f['name']} {ys[c[1]]}")
+        else: dN += c[1]
+    return True, out, dN
 def mk_func(k):
     T = R.choice(list(MENU))
     ret, btxt, bfn, etxt, efn = R.choice(MENU[T])
@@ -141,8 +188,10 @@ def mk_func(k):
     f['nest'] = T == 'dup' and ret == 'a' and ch(0.35)
     f['iface'] = IFACE and ch(0.5)
     alts = [(t2, e) for t2 in MENU if t2 != T for e in MENU[t2] if e[0] == ret]
+    f['rest'] = mk_rest(f['name']) if ch(0.5) else []
     f['second'] = None
-    if alts and ch(0.4):
+    # (no refining cast in the else after clauses, until #286: the else's copy is checked under the refinement)
+    if alts and ch(0.4) and not f['rest']:
         t2, (r2, b2, bf2, _, _) = R.choice(alts)
         f['second'] = (t2, b2, bf2, ch(0.5))
     return f
@@ -156,7 +205,7 @@ def ftext(f):
     L.append(f"    var Acc:int = K")
     if f['acc'] is not None: L.append(f"    set Acc += {f['acc']}")
     if f['pre']: L.append(f'    Print("pre {f["name"]} {{Acc}}")')
-    L.append(f"    R := if (D := {f['T']}[P]):")
+    L.append(f"    R := if (D := {f['T']}[P]{rest_text(f)}):")
     if f['inp']: L.append(f'        Print("in {f["name"]} {{Acc}} {{K}}")')
     if f['bump']: L.append("        set D.N += 1")
     if f['fail']: L.append(f"        D.C > {f['thr']}")
@@ -214,7 +263,11 @@ def run_call(f, o, K, Xv):
     acc = K + (f['acc'] or 0); env['Acc'] = acc
     N0 = o['N']
     if f['pre']: out.append(f"pre {f['name']} {acc}")
+    rok = False
     if below(o['cls'], f['T']):
+        rok, rout, rdN = run_rest(f, o, K)
+    if rok:
+        out.extend(rout); o['N'] += rdN
         if f['inp']: out.append(f"in {f['name']} {acc} {K}")
         if f['bump']: o['N'] += 1
         if f['fail'] and not (o['C'] > f['thr']):

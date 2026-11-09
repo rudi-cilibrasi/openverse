@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Model-based fuzzing of classes that fix, repeat, relate or hide type
 # arguments (GADTs, #209): random programs from five independent models
-# (scripts/models/gadt_*.py, from the reviews of #236, #242, #243 and #250),
+# (scripts/models/gadt_*.py, from the reviews of #236, #242, #243 and #250,
+# with the clauses after a cast from #277),
 # each predicting the program's output, or the message of the refusal it
 # expects. Each seed uses one model in turn. Lean must match the model, and C
 # must match Lean; no program may hit an internal error.
