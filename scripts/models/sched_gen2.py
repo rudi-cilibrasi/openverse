@@ -2,7 +2,9 @@
 # A model-based generator for openverse's gate (scripts/fuzz-model-*.sh).
 # Its model is written from docs/LANGUAGE.md by the upkeep session, independently of
 # scripts/gen-choice.py, gen-conc.py and gen-classes.py and of the front end's code,
-# for the review of #249 (generic task roots, #244).
+# for the review of #249 (generic task roots, #244). Since #316, every other spawn of Hd goes
+# through SpH, a generic immediate function that spawns it, so its roots are at its caller's
+# type arguments too (the statement's number picks the form, so seeds keep their programs).
 """Generator + reference model for concurrency in generic functions (PR #249).
 
 usage: gen.py SEED OUTDIR   -> writes OUTDIR/gSEED.verse and OUTDIR/gSEED.expected
@@ -833,6 +835,8 @@ def emit_stmt(s, ind):
             out.append(p + f"{s.var} := {tv}({s.pick})")
         return out
     if k == "spawnh":
+        if s.kk % 2:
+            return [p + f'{s.tvar} := SpH({s.val}, Tag, {s.kk}, {s.d})']
         return [p + f'{s.tvar} := spawn{{Hd({s.val}, Tag, {s.kk}, {s.d})}}']
     if k == "callh":
         return [p + f'{s.var} := Hd({s.val}, Tag, {s.kk}, {s.d})']
@@ -902,6 +906,7 @@ Hd(X:t, Tag:string, K:int, D:float where t:type)<suspends>:t =
     Sleep(D)
     Print("{Tag} h{K} done")
     X
+SpH(X:t, Tag:string, K:int, D:float where t:type):task(t) = spawn{Hd(X, Tag, K, D)}
 Wt(E:event(t), Tag:string, K:int where t:type)<suspends>:t =
     defer:
         Print("{Tag} w{K} defer")
