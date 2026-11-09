@@ -5388,6 +5388,7 @@ sched := class:
     var Tail:?int = false
     var Dead:logic = false
     var CancelCur:logic = false
+    var CurTask:taskBase = taskBase{}
 taskBase := class:
     var Done:logic = false
     var Sch:?sched = false
