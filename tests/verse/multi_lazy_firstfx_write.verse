@@ -1,5 +1,4 @@
-# expect: 11:18: Count has several values, is recursive and may change an object in its clauses
-# (#246) a clause that changes an object: in an if, kept for the values the if rejects
+# a clause changing an object, where the first success is taken: kept for the calls on the way to the value taken (#246 step 2)
 cell := class:
     var V:int = 0
 Count(C:cell, N:int)<transacts><decides>:int =

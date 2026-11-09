@@ -736,12 +736,13 @@ Main():void =
     choice; what a value does is undone with its iteration when the
     filter rejects it;
   - where the first success is taken (an `if` condition, `first{…}`,
-    `option{…}`, `logic{…}`, `not`, the left of `or`), what a value does is
-    undone with it too, but its clauses, the conditions of its last `if`
-    and the arguments of its calls of itself may not print or change an
-    object, nor those arguments `set` a name (refused): they run once for
-    all the values they lead to, and the Verse Calculus undoes them with
-    those values when the context rejects all of them.
+    `option{…}`, `logic{…}`, `not`, the left of `or`), effects are undone as
+    the Verse Calculus undoes them: what a value does with that value, and
+    what a call's clauses, the conditions of its last `if` and its
+    arguments do with all the values that call leads to, when the context
+    rejects them all (a tree walk that prints keeps only the path to the
+    value taken). When those have effects, the call and the clauses after
+    it run as a function of their own, recursive (not yet in a method).
 
   ```verse
   Upto(A:int, B:int)<transacts><decides>:int =
@@ -774,8 +775,9 @@ Main():void =
   error would have been it.
 
   Refused for now: a recursive one that is not a generator and is not
-  `<computes>`, or may print or call `Err()`, a generator that may print or
-  change an object in its clauses where the first success is taken, a
+  `<computes>`, or may print or call `Err()`, a generator whose clauses,
+  conditions or arguments have effects where the first success is taken in
+  a method, a
   generic or overloaded one, one with named parameters
   or a `return` or a `defer:` of its own (in its body, not in a block inside it), a method, one used as a function value, a call of a
   recursive one in an `if`'s branch, a choice's alternative or a `set`'s path, and, since its body is inlined where other names may be

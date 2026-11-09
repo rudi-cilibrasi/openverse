@@ -1,5 +1,4 @@
-# expect: 12:18: Count has several values, is recursive and may print (printer.Show does) in its clauses
-# (#246) a clause that prints through a method
+# a clause printing through a method, where the first success is taken (#246 step 2)
 printer := class:
     Show(N:int)<computes>:int =
         Print("show {N}")

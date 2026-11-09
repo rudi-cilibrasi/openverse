@@ -899,6 +899,54 @@ partial def valueUse? (mv : List String) : SExpr → Option (Pos × String)
       | _ => []
     kids.findSome? (valueUse? mv)
 
+/-- (#246) A lazily taken call, where the first success is taken, whose
+    clauses, conditions or calls of itself have effects: compiled as a
+    function of its own, recursive, so that each alternative and each call
+    of itself is a failure context of its own, undone with its values as
+    the Verse Calculus does. It takes the function's parameters and the
+    consumer's names that the clauses after the call use (`args`, at the
+    consumer), and gives, at the first success of those clauses, the names
+    they bind and the final values of the `var`s they set (`binds`, then
+    `sets`, then `true`). -/
+structure FirstLift where
+  key : String
+  pos : Pos
+  name : String
+  params : List SParam
+  specs : List String
+  ret : STy
+  body : SExpr
+  binds : List String
+  sets : List String
+  args : List SExpr
+  deriving Inhabited
+
+/-- The body of a `FirstLift` (#246): the function's clauses, then the first
+    success of its last expression, each value followed by the consumer's
+    clauses after the call (`rest`, the value bound to `b` first) and the
+    tuple of what they bind, each call of itself a call of `helper` with the
+    captured names after its arguments. The `var`s the clauses set are
+    copied first from parameters named `m$in`. -/
+def firstBody (helper : String) (p : Pos) (b : String) (bty : Option STy) (cls : List SExpr) (tail : SExpr)
+    (rest : List SExpr) (binds : List String) (sets : List (String × STy)) (caps : List SExpr) : SExpr :=
+  let tup : SExpr := .tuple p (binds.map (SExpr.ident p ·) ++ sets.map (fun (m, _) => SExpr.ident p m) ++
+    [.ident p "true"])
+  let alt (a : SExpr) : SExpr := match a with
+    | .app q (.ident _ "$rec") as false => .app q (.ident q helper) (as ++ caps) true
+    | a => .app a.pos (.ident a.pos "$first") [.block a.pos ([.decl a.pos b bty false a] ++ rest ++ [tup])] false
+  let group (v : SExpr) : SExpr := match alts? v with
+    | some as => mk v.pos (as.map alt)
+    | none => alt v
+  let rec chain : List (Option (List SExpr) × SExpr) → SExpr
+    | [] => .tuple p []
+    | [(_, v)] => group v
+    | (some cs, v) :: more => .ite p cs (group v) (some (chain more))
+    | (none, v) :: _ => group v
+  let tail' := if isBranchy tail then chain (arms tail) else group tail
+  let copies := sets.map fun (m, t) => SExpr.decl p m (some t) true (.ident p s!"{m}$in")
+  .block p (copies ++ cls ++
+    [.app p (.ident p "$first") [.block p [.decl p "$R" none false tail', .ident p "$R"]] false])
+
 /-- The functions of the program that have several values, inlined at their
     calls (see above); the program unchanged when there are none. Also
     whether some are taken lazily (#246), whose consumers need a class of
