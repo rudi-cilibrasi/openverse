@@ -6,7 +6,8 @@
 # laziness from the review of #267 (generators taken where they are consumed, #246),
 # exact effects where the first success is taken from the review of #275,
 # consumers in methods from the review of #279, a return in a test's clauses from #284 and #287,
-# alternatives with several values from the review of #296, blocks and constructions from #302.
+# alternatives with several values from the review of #296, blocks and constructions from #302,
+# named arguments from #305.
 """Random programs with choices INSIDE expressions (PR #234, phase 2), and an
 independent model written from docs/LANGUAGE.md's "Choice" section (not from
 scripts/gen-choice.py, and not from the lifting code).
@@ -47,6 +48,8 @@ flags: heavy     (with bif: more of them, longer chains, longer conditions)
        noforset  (no op= / indexed set in a for)
        noret     (no `if (A op B) then return else true` among a test's clauses,
                   on with lazy otherwise, #284/#287)
+       nona      (no call of NA(A, ?P := …, ?Q := …) with named arguments in a test's
+                  expressions, #305; on with lazy otherwise)
        nocb      (no block{B := e1; e2} or construction pt{Y := e2, X := e1} in a
                   test's expressions, #302; on with lazy otherwise)
        noaltch   (no alternative of a choice with several values of its own: a
@@ -247,6 +250,13 @@ ALTCH = LAZY and 'noaltch' not in flags and 'cf' not in flags
 # then e2, as Tw(e1, e2); a block's clauses are the context's own. Choices may be
 # inside both. Not in a set's value, a branchy if, nor the generated functions.
 CB = LAZY and 'nocb' not in flags and 'cf' not in flags
+# ---- #305, flag na (on with lazy; nona turns it off): a test's expression may call
+# NA(A:int, ?P:int = Tell("dp", A), ?Q:int = P + 1):int = A * 100 + P * 10 + Q
+# with some of its named arguments, in either order, the positional one written
+# before or after them. A call evaluates its positional arguments, then its named
+# ones as written, then the defaults of those omitted, in order (LANGUAGE.md); a
+# default may use the parameters before it, and its effects are the caller's.
+NA = LAZY and 'nona' not in flags and 'cf' not in flags
 REFUSED = [False]
 
 
@@ -257,7 +267,7 @@ class Return(Exception):
 
 # the kinds of node whose insides are failure contexts of their own (or an
 # inlined function's arguments), where a lifted call's clauses are not the test's
-NESTED = ('not', 'logic', 'optor', 'orx', 'ifx', 'bif', 'mcall', 'choice', 'blk', 'cons')
+NESTED = ('not', 'logic', 'optor', 'orx', 'ifx', 'bif', 'mcall', 'choice', 'blk', 'cons', 'na')
 
 
 def lift_pos(x):
@@ -358,6 +368,11 @@ def gen_e(scope, vars_, d, ch):
         if op == '*' and R.random() < 0.5:
             a, b = b, a
         return ('bin', op, a, b)
+    if (k < 0.48 and NA and CTX['fmax'] is None and not CTX['nochoice'] and not CTX.get('inset')
+            and not CTX.get("inbif") and R.random() < 0.4):
+        named = [(n, gen_e(scope, vars_, d + 1, ch)) for n in ('P', 'Q') if R.random() < 0.6]
+        R.shuffle(named)
+        return ('na', gen_e(scope, vars_, d + 1, ch), named, R.randint(0, len(named)))
     if (k < 0.48 and CB and CTX['fmax'] is None and not CTX['nochoice'] and not CTX.get('inset')
             and not CTX.get('inbif') and R.random() < 0.4):
         if R.random() < 0.5:
@@ -951,6 +966,10 @@ def show(e):
         return f'PS(pt{{X := {show(e[1])}, Y := {show(e[2])}}})'
     if t == 'blk':
         return f'block{{ {e[1]} := {show(e[2])}; {show(e[3])} }}'
+    if t == 'na':
+        items = [f'?{n} := {show(x)}' for n, x in e[2]]
+        items.insert(e[3], show(e[1]))
+        return f'NA({", ".join(items)})'
     if t == 'twt':
         return f'Tw(({show(e[1])}, {show(e[2])}))'
     if t == 'pos':
@@ -1101,6 +1120,8 @@ def top_choice_e(e):
         return top_choice_e(e[1]) or top_choice_e(e[2])
     if t == 'blk':
         return top_choice_e(e[2]) or top_choice_e(e[3])
+    if t == 'na':
+        return top_choice_e(e[1]) or any(top_choice_e(x) for _, x in e[2])
     if t == 'idx':
         return any(top_choice_e(x) for x in e[1]) or top_choice_e(e[2])
     if t == 'cmp':
@@ -1230,6 +1251,27 @@ def ev(e, st, k, mode):
     if t == 'bset':
         st.vars[e[1]] = e[3] if e[2] == '=' else chks(st.vars[e[1]] + e[3], st)
         return ev(e[4], st, k, mode)
+    if t == 'na':
+        # positional, then the named ones as written, then the omitted defaults
+        def kna(va, s0):
+            vals = {}
+
+            def step(i, s):
+                if i < len(e[2]):
+                    n, x = e[2][i]
+
+                    def kn(v, s2):
+                        vals[n] = v
+                        return step(i + 1, s2)
+                    return ev(x, s, kn, mode)
+                p = vals['P'] if 'P' in vals else None
+                if p is None:
+                    s.out.append('dp')
+                    p = va
+                q = vals['Q'] if 'Q' in vals else p + 1
+                return k(chks(chks(chks(va * 100, s) + chks(p * 10, s), s) + q, s), s)
+            return step(0, s0)
+        return ev(e[1], st, kna, mode)
     if t == 'blk':
         def kblk(v, s):
             s.binds[e[1]] = v
@@ -1843,6 +1885,8 @@ if METH:
         set Cn += 1
         Cn - 1
 """
+if NA:
+    PRE += 'NA(A:int, ?P:int = Tell("dp", A), ?Q:int = P + 1):int = A * 100 + P * 10 + Q\n'
 if CB:
     PRE += "pt := struct:\n    X:int = 0\n    Y:int = 0\nPS(P:pt)<computes>:int = P.X * 10 + P.Y\n"
 if LAZY:
