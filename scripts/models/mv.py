@@ -3,7 +3,8 @@
 # Its model is written from docs/LANGUAGE.md by the upkeep session, independently of
 # scripts/gen-choice.py, gen-conc.py and gen-classes.py and of the front end's code,
 # for the reviews of #234, #239 and #245 (choice and functions with several values, #208, #235),
-# laziness from the review of #267 (generators taken where they are consumed, #246).
+# laziness from the review of #267 (generators taken where they are consumed, #246),
+# exact effects where the first success is taken from the review of #275.
 """Random programs with choices INSIDE expressions (PR #234, phase 2), and an
 independent model written from docs/LANGUAGE.md's "Choice" section (not from
 scripts/gen-choice.py, and not from the lifting code).
@@ -189,11 +190,14 @@ REC = 'rec' in flags
 # the generator's clauses run between iterations and stay, a value's effects
 # go with a rejected iteration, and a call whose clauses fail gives no values
 # but keeps what its arguments did (as an eager one, #245); where the first
-# success is taken, a value's effects go with it, also when a later choice is
-# exhausted and the context comes back for the next value, and its clauses,
-# last if's conditions and the arguments of its calls of itself may not print
-# or change an object, nor those arguments set a local (refused; the
-# generated programs take such a generator in a for only). The model inlines
+# success is taken, effects are undone as the Verse Calculus undoes them
+# (#275): a value's with that value, also when a later choice is exhausted
+# and the context comes back for the next value, and what a call's clauses,
+# last if's conditions and arguments do (print, change an object, set a
+# name) with all the values that call leads to, when the context rejects
+# them all; the path to the value taken keeps its effects, in order (not yet
+# in a method, where it is refused: the generated consumers are top-level
+# functions; flag nofirstfx takes such a generator in a for only). The model inlines
 # each call, recursively and lazily (CPS): a call evaluates its arguments,
 # then its clauses as the caller's code, then its last choice as a choice
 # point whose alternatives are values or calls of itself. A value never taken
@@ -202,6 +206,7 @@ REC = 'rec' in flags
 LAZY = 'lazy' in flags or ('nolazy' not in flags and bool({'mv', 'rec', 'bif'} & flags))
 GFUNCS = []
 GFRAME = [0]
+FXFIRST = [0]
 RFUNCS = []
 RX = {'fi': None}
 FUNCS = []
@@ -228,12 +233,12 @@ def gen_e(scope, vars_, d, ch):
         if m is not None:
             return m
     if 'bif' in flags and ch and NCH[0] < 4 and d < 3 and R.random() < (0.4 if 'heavy' in flags else 0.14) \
-            and (not MV or PROD[0] * 3 <= CTX['plim']):
+            and (not MV or PROD[0] * 3 <= CTX['plim']) and not lift_block():
         NCH[0] += 1
         if MV:
             PROD[0] *= 3
         return gen_bif(scope, vars_, d)
-    if REC and ch and NCH[0] < 4 and RFUNCS and R.random() < 0.2:
+    if REC and ch and NCH[0] < 4 and RFUNCS and R.random() < 0.2 and not lift_block():
         m = gen_rcall(scope, vars_, d)
         if m is not None:
             return m
@@ -313,6 +318,16 @@ def gen_e(scope, vars_, d, ch):
         CTX['take'] = savedt
 
 
+def lift_block():
+    """(known bugs in #275: where the first success is taken, after a call of
+    a generator whose clauses, conditions or arguments have effects (run as a
+    function of its own), a later generator without them, an eager call or a
+    branchy if is a name clash ('$c… is already defined'), and so is one in
+    its arguments; a call with effects in such a call's arguments followed by
+    another is refused with 'internal: name $c…', fixed in #275; flag fxsteer avoids them)"""
+    return CTX['take'] != 'for' and 'fxsteer' in flags and bool(FXFIRST[0] or CTX.get('liftargs'))
+
+
 def gub(fi, n):
     """an upper bound of the number of values of Gz_fi with N = n."""
     f = GFUNCS[fi]
@@ -334,15 +349,37 @@ def gen_gcall(scope, vars_, d):
              if 1 <= gub(i, n) and gub(i, n) * PROD[0] <= CTX['plim']
              and not (CTX['nofail'] and GFUNCS[i]['decides'])
              # (one whose clauses, conditions or arguments of its calls of itself
-             # print, change an object or set a local is taken in a for only)
-             and (GFUNCS[i]['first_ok'] or CTX['take'] == 'for')]
+             # print, change an object or set a local: anywhere since #275;
+             # flag nofirstfx, the rule of #267, takes it in a for only)
+             and (GFUNCS[i]['first_ok'] or CTX['take'] == 'for' or 'nofirstfx' not in flags)
+             # (known bug in #275: where the first success is taken, a call of a
+             # generator without effects after one with effects is a name
+             # clash before #275; flag fxsteer avoids that)
+             and not (not GFUNCS[i]['lifted'] and lift_block())
+             and not (GFUNCS[i]['lifted'] and CTX.get('liftargs') and CTX['take'] != 'for' and 'fxsteer' in flags)
+             # (nor a second one in a clause after a clause that had one)
+             and not (GFUNCS[i]['lifted'] and CTX['take'] != 'for' and 'fxsteer' in flags
+                      and CTX.get('fx_before', 0) > 0 and CTX.get('clause_lifts', 0) >= 1)
+             # (nor one with effects in the arguments of one without, which run first)
+             and not (GFUNCS[i]['lifted'] and CTX['take'] != 'for' and CTX.get('loopargs') and 'fxsteer' in flags)]
     if not cands:
         return None
     i, n = R.choice(cands)
     f = GFUNCS[i]
+    if f['lifted'] and CTX['take'] != 'for':
+        FXFIRST[0] += 1
+        CTX['clause_lifts'] = CTX.get('clause_lifts', 0) + 1
     NCH[0] += 1
     PROD[0] *= gub(i, n)
-    args = [('lit', n), gen_e(scope, vars_, d + 1, True)]
+    saved = (CTX.get('loopargs'), CTX.get('liftargs'))
+    if not f['lifted'] and CTX['take'] != 'for':
+        CTX['loopargs'] = True
+    if f['lifted'] and CTX['take'] != 'for':
+        CTX['liftargs'] = True
+    try:
+        args = [('lit', n), gen_e(scope, vars_, d + 1, True)]
+    finally:
+        CTX['loopargs'], CTX['liftargs'] = saved
     if f['ctr']:
         args.append(('obj', R.choice(['K', 'J'])) if CTX['ctrs'] is None else ('ref', R.choice(CTX['ctrs'])))
     return ('gcall', i, args)
@@ -391,9 +428,8 @@ def gen_gfunc(i):
             CTX['big'] = False
 
     def selfcall():
-        # (where the first success is taken, the arguments of a call of itself
-        # may not print, change an object or set a local: refused, LANGUAGE.md;
-        # in a for they may)
+        # (the arguments of a call of itself print, change an object or set a
+        # local in a generator with effects, fx; in the others they are pure)
         CTX['nobset'] = not fx
         a = gen_e(sc, vs, 1, False)
         CTX['nobset'] = False
@@ -419,8 +455,34 @@ def gen_gfunc(i):
             conds = c2 + conds if R.random() < 0.5 else conds + c2
         f['val'] = ('gbif', conds, alts(False), alts(True))
     f['stmts'] = stmts
+    f['lifted'] = lifted(f)
     CTX.update(ctrs=None, nofail=False, nochoice=False, noprint=False, fmax=None, take=None)
     return f
+
+
+FX_NODES = ('sprint', 'snext', 'tell', 'bprint', 'cnext', 'cadd', 'print', 'next', 'add', 'seti', 'setf')
+
+
+def has_node(x, kinds):
+    if isinstance(x, tuple):
+        if x and isinstance(x[0], str) and x[0] in kinds:
+            return True
+        return any(has_node(y, kinds) for y in x)
+    if isinstance(x, list):
+        return any(has_node(y, kinds) for y in x)
+    return False
+
+
+def lifted(f):
+    """whether a call of f where the first success is taken runs as a function
+    of its own (#275): its clauses, last if's conditions or self-call
+    arguments print or change an object, or those arguments set a name."""
+    v = f['val']
+    alts = v[1] if v[0] == 'gchoice' else v[2] + v[3]
+    args = [a[2] for a in alts if a[0] == 'gself']
+    conds = v[1] if v[0] == 'gbif' else []
+    return (has_node(f['stmts'], FX_NODES) or has_node(conds, FX_NODES) or has_node(args, FX_NODES)
+            or has_node(args, ('bset', 'setv')))
 
 
 def show_galts(alts):
@@ -450,6 +512,7 @@ def gen_call(fi, vals, st, k, mode):
     val = rename(f['val'], own, fr)
     for (p, _), v in zip(f['params'], vals):
         st.binds[f"{fr}.{p}"] = v
+    LASTG[0] = f.get('lifted', False)
     if mode == 'all':
         # (in a for, a call whose clauses fail gives no values: what its
         # arguments and the clauses before it did stays, and its clauses' own
@@ -474,7 +537,15 @@ def gen_rcall(scope, vars_, d):
     # (known bug: a choice or a call with several values in the argument of a
     # recursive one is refused or miscompiled; flag argbug keeps them)
     if True:
-        return ('rcall', i, n, gen_e(scope, vars_, d + 1, True))
+        # (a call with effects where the first success is taken cannot be in
+        # the arguments of an eager call: see lift_block)
+        saved = CTX.get('loopargs')
+        if CTX['take'] != 'for':
+            CTX['loopargs'] = True
+        try:
+            return ('rcall', i, n, gen_e(scope, vars_, d + 1, True))
+        finally:
+            CTX['loopargs'] = saved
     # (known bugs: a failing argument of a recursive call loses the other
     # alternatives in a body, and keeps the effects before it in a for)
     saved = CTX['nofail']
@@ -851,6 +922,7 @@ def alts_of(e):
 def gen_clauses(scope, vars_, d, n, allow_gen, inner=False, lastval=False, isfor=False):
     cl = []
     for i in range(n):
+        CTX['fx_before'], CTX['clause_lifts'] = FXFIRST[0], 0
         k = R.random()
         last = lastval and i == n - 1
         if k < 0.33 or last:
@@ -976,15 +1048,19 @@ def show_cl(cl, sep):
 
 
 # ---------------------------------------------------------------- the model
-STATS = {'cp': 0, 'gfirst': 0, 'gback': 0, 'gfor': 0}
+STATS = {'cp': 0, 'gfirst': 0, 'gback': 0, 'gfor': 0, 'lfirst': 0, 'lback': 0}
+LASTG = [False]
 
 
 def choice_point(thunks, st, k, mode, gen=False):
     """thunks: f(s, k) for each alternative, in spatial order. (gen: a
     generator's; counted for the statistics MVSTATS asks for)"""
     STATS['cp'] += 1
+    lift = gen and LASTG[0]
     if gen:
         STATS['gfirst' if mode == 'first' else 'gfor'] += 1
+        if lift and mode == 'first':
+            STATS['lfirst'] += 1
     if mode == 'first':
         for th in thunks:
             s1 = st.copy()
@@ -994,6 +1070,8 @@ def choice_point(thunks, st, k, mode, gen=False):
             except Fail:
                 if gen and STATS['cp'] > before:
                     STATS['gback'] += 1    # (a later choice exhausted, back into the generator)
+                    if lift:
+                        STATS['lback'] += 1
                 continue
         raise Fail()
     cur = st
@@ -1458,6 +1536,7 @@ for ti in range(NT):
     name = f"T{ti}"
     NCH[0] = 0
     PROD[0] = 1
+    FXFIRST[0] = 0
     vars_ = [f"N{ti}a", f"N{ti}b"]
     st = St()
     st.vars = {v: 0 for v in vars_}
@@ -1589,5 +1668,5 @@ if LAZY:
 open(f"{outdir}/p.verse", "w").write(PRE + "\n".join(lines) + "\n" + "\n".join(src_main) + "\n")
 open(f"{outdir}/p.chain", "w").write("1" if CHAIN[0] else "0")
 if os.environ.get('MVSTATS'):
-    print(f"stats gens={len(GFUNCS)} gfor={STATS['gfor']} gfirst={STATS['gfirst']} gback={STATS['gback']}", file=sys.stderr)
+    print(f"stats gens={len(GFUNCS)} gfor={STATS['gfor']} gfirst={STATS['gfirst']} gback={STATS['gback']} lfirst={STATS['lfirst']} lback={STATS['lback']}", file=sys.stderr)
 open(f"{outdir}/p.expected", "w").write("".join(l + "\n" for l in out) + ("exit=2\n" if OVERFLOW[0] else "exit=0\n"))
