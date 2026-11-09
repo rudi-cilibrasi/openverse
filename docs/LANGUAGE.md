@@ -154,14 +154,19 @@ Main():void =
   is a value of it if it fits it by variance (#214): its parameters may be
   above the type's (`Describe(A:animal)` is a `type{_(:dog):string}`) and
   its result below (`Count():int` is a `type{_():rational}`), with `int`
-  below `rational` and a class below the classes above it. A method of an
-  object of a class without type parameters does too (#231):
+  below `rational` and a class below the classes above it. A method does
+  too (#231) when the class that gives the receiver's value of it (the
+  nearest that declares or overrides it) has no type parameters:
   `Obj.Describe` is a `type{_(:dog):string}`, holding `Obj`, evaluated when
-  the value is made. And a tuple flattens and unflattens between
-  parameters there (#231): a function with one `tuple(int, string)`
-  parameter is a `type{_(:int, :string):int}` (the call makes the tuple),
-  and a function of two parameters is a `type{_(:tuple(int, int)):int}`
-  (the call takes it apart), also for generic functions at an instance. A
+  the value is made. (A subclass `gsub(t) := class(base)` may have them;
+  `abox := class(box(animal))` using `box(t)`'s method may not.) And a
+  tuple flattens and unflattens between parameters there (#231):
+  - a function with one `tuple(int, string)` parameter is a
+    `type{_(:int, :string):int}` (the call makes the tuple);
+  - a function of two parameters is a `type{_(:tuple(int, int)):int}`
+    (the call takes it apart);
+  - a generic one at an instance, its single parameter standing for the
+    whole tuple: `Id(X:t):t` is a `type{_(:int, :string):tuple(int, string)}`. A
   value of one function type does not convert to another by variance.
 - Function values are not comparable and have no `ToString`.
 - A method as a value, `C.Add` (or `Add` in a method of the class), holds
