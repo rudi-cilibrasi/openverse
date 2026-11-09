@@ -877,9 +877,14 @@ and journals every write made in a condition (for rollback). So:
   callee's result type; the callee's frame keeps it in a last field, and
   its `resumeOwn` writes the result there when it is done. The caller reads
   its own cell, at its own type, with no dispatch. A cell's type argument is
-  invariant, so an override whose result is narrower than the method's it
-  overrides (covariant) is refused on this path: the caller's type, refined
-  by the dispatch, must be the override's result there. Slots of the override's
+  invariant: the caller's type, refined by the dispatch, must be the type
+  the frame's cell holds. So that is the method's first declared result at
+  the override's class's type arguments (`declaredRes`, as the override
+  check relates the two), not the override's own, and an override with a
+  narrower result (covariant: `pairE(a, b)`'s `Copy():pairE(a, b)` for
+  `expr(t)`'s `Copy():expr(t)`) writes its result there by subsumption
+  (#209). A call from a class that itself overrides the method with a
+  narrower result than that declaration's is refused. Slots of the override's
   frame whose types mention its class's added type parameters start as
   the receiver's hidden fields (`$w`), as in its body.
 - A refined call that does not suspend (an immediate method, or a #157
@@ -1186,11 +1191,11 @@ type arguments than its parent's (`sbox(t) := class(box(t), shower)`
 below `box(t) := class(container(t))`): `box` holds `t` in a hidden field
 too, and its overrides read it from the receiver, as a dispatch from
 `shower` opens it. A `<suspends>`
-override of such a class works (#251, see "Avoiding allocation and
-journaling"), and so does a spawn in one, also of a dispatch at its class's
-type parameters, and in an immediate one (see "No copies per type"), and
-so does a call whose omitted named argument's default has no type of its
-own (see "Pins and dispatch"). A variable of a
+override of such a class works (#251, also one with a narrower result,
+see "Avoiding allocation and journaling"), and so does a spawn in one, also
+of a dispatch at its class's type parameters, and in an immediate one (see
+"No copies per type"), and so does a call whose omitted named argument's
+default has no type of its own (see "Pins and dispatch"). A variable of a
 class type whose classes below need more type arguments than its own
 starts as the class's hidden placeholder (#157), also for a class
 without type parameters.
