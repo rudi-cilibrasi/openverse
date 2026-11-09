@@ -1,0 +1,8 @@
+A defer
+B end x
+B defer x
+B end y
+B defer y
+G end
+main end
+exit=0
