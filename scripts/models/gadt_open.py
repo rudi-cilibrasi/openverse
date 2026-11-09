@@ -22,12 +22,16 @@ Since #317, Pk's named parameters with defaults that have no type of their own (
 array{}) are passed through dispatches that open type arguments, from generic code and inside
 overrides at their own opened types; its choices draw from a second generator, so each seed's
 other choices stay as they were.
+Since #324, every class overrides Cp()<suspends> with its own, narrower result (pairE's
+from its parts' Cp, at its opened types), called from generic code through dispatches that open
+type arguments; its choices draw from a third generator.
 argv: seed expfile [--cmp]
 """
 import random, sys
 seed = int(sys.argv[1]); out_exp = sys.argv[2]
 R = random.Random(seed)
 R2 = random.Random(seed * 1000003 + 317)   # (Pk's choices, #317)
+R3 = random.Random(seed * 1000003 + 324)   # (Cp's choices, #324)
 def ch(p): return R.random() < p
 CMP = True   # comparable opened parameters (fixed in #252)
 
@@ -76,42 +80,55 @@ CLASSES = f'''ex(t:type) := class<abstract>:
     Eval():t
     Name():string = "ex"
     var Hits:int = 0
+    Cp()<suspends>:ex(t)
     Pk(?Alt:?t = false, ?More:[]t = array{{}}, ?N:int = 0):t =
         if (A := Alt?) then A else if (M := More[N]) then M else Eval()
 lit := class(ex(int)):
     V:int
     Eval<override>():int = V
     Name<override>():string = "lit"
+    Cp<override>()<suspends>:lit = lit{{V := V + 1}}
 slit := class(ex(string)):
     V:string
     Eval<override>():string = V
+    Cp<override>()<suspends>:slit =
+        Sleep(0.0)
+        slit{{V := V}}
 cst(t:type) := class(ex(t)):
     V:t
     Eval<override>():t = V
     Name<override>():string = "cst"
+    Cp<override>()<suspends>:cst(t) = cst(t){{V := V}}
 pairE(a:type, b:type) := class(ex(tuple(a, b))):
     L:ex(a)
     R:ex(b)
     Eval<override>():tuple(a, b) = (L.Eval(), R.Eval())
+    Cp<override>()<suspends>:pairE(a, b) =
+        Sleep(0.0)
+        pairE(a, b){{L := L.Cp(), R := R.Cp()}}
     Pk<override>(?Alt:?tuple(a, b) = false, ?More:[]tuple(a, b) = array{{}}, ?N:int = 0):tuple(a, b) =
         if (A := Alt?) then A else if (M := More[N]) then M else (L.Pk(), R.Pk())
 fstE(a:type, b:type) := class(ex(a)):
     P:ex(tuple(a, b))
     Eval<override>():a = P.Eval()(0)
+    Cp<override>()<suspends>:fstE(a, b) = fstE(a, b){{P := P.Cp()}}
     Pk<override>(?Alt:?a = false, ?More:[]a = array{{}}, ?N:int = 0):a =
         if (A := Alt?) then A else if (M := More[N]) then M else P.Pk()(0)
 sndE(a:type, b:type) := class(ex(b)):
     P:ex(tuple(a, b))
     Eval<override>():b = P.Eval()(1)
+    Cp<override>()<suspends>:sndE(a, b) = sndE(a, b){{P := P.Cp()}}
 mkE(a:type, b:type) := class(ex(tuple(a, b))):
     X:a
     Y:b
     Eval<override>():tuple(a, b) = (X, Y)
+    Cp<override>()<suspends>:mkE(a, b) = mkE(a, b){{X := X, Y := Y}}
     Pk<override>(?Alt:?tuple(a, b) = false, ?More:[]tuple(a, b) = array{{}}, ?N:int = 0):tuple(a, b) =
         if (A := Alt?) then A else if (M := More[N]) then M else (X, Y)
 optE(a:type) := class(ex(?a)):
     E:ex(a)
     Eval<override>():?a = option{{E.Eval()}}
+    Cp<override>()<suspends>:optE(a) = optE(a){{E := E.Cp()}}
     Pk<override>(?Alt:??a = false, ?More:[]?a = array{{}}, ?N:int = 0):?a =
         if (A := Alt?) then A else if (M := More[N]) then M else option{{E.Pk()}}
 dupP(a:type) := class(pairE(a, a)):''' + ('''
@@ -124,7 +141,8 @@ leafP := class(pairE(int, string)):
 eqE(a:subtype(comparable)) := class(ex(logic)):
     L:ex(a)
     R:ex(a)
-    Eval<override>():logic = logic{L.Eval() = R.Eval()}''' if V['cmp'] else '') + '''
+    Eval<override>():logic = logic{L.Eval() = R.Eval()}
+    Cp<override>()<suspends>:eqE(a) = eqE(a){L := L.Cp(), R := R.Cp()}''' if V['cmp'] else '') + '''
 Id(X:x where x:type):x = X
 Flip(T:tuple(x, y) where x:type, y:type):tuple(y, x) = (T(1), T(0))
 First(T:tuple(x, y) where x:type, y:type):x = T(0)
@@ -345,6 +363,30 @@ def pk_call(nm, n, t):
     K = R2.randint(0, 2)
     return f"Pk2({nm}, {x}, {K})", (v if K < 2 else pk(n))
 
+# Cp (#324): the copy each class's override builds (lit adds 1 to V; dupP, tagged and leafP
+# inherit pairE's, so their copy is a plain pairE), and its calls from generic code
+def cp(n):
+    c = n.cls
+    if c == 'lit': return N('lit', n.ty, '', v=n.v + 1)
+    if below(c, 'pairE'): return N('pairE', n.ty, '', L=cp(n.L), R=cp(n.R))
+    if c in ('fstE', 'sndE'): return N(c, n.ty, '', P=cp(n.P))
+    if c == 'optE': return N('optE', n.ty, '', E=cp(n.E))
+    if c == 'eqE': return N('eqE', n.ty, '', L=cp(n.L), R=cp(n.R))
+    return n     # slit, cst, mkE: a new object with the same values
+CP_TEXT = """CpE(E:ex(t) where t:type)<suspends>:t = E.Cp().Eval()
+CpV(E:ex(t) where t:type)<suspends>:t = Ev(E.Cp())
+CpS(E:ex(t) where t:type)<suspends>:t =
+    T := spawn{E.Cp()}
+    T.Await().Eval()
+CpC(E:ex(t) where t:type)<suspends>:t = E.Cp().Cp().Eval()"""
+def cp_call(nm, n, t):
+    k = R3.choice(['e', 'e', 'v', 's', 'c', 'direct'])
+    if k == 'v':
+        LOG_.clear(); v = ev(cp(n)); return f"CpV({nm})", v, list(LOG_)
+    if k == 'c': return f"CpC({nm})", native(cp(cp(n))), []
+    if k == 'direct': return f"{nm}.Cp().Eval()", native(cp(n)), []
+    return f"Cp{k.upper()}({nm})", native(cp(n)), []
+
 # ---------------------------------------------------------------- main
 main, expect = [], []
 hits_total = {}
@@ -375,6 +417,10 @@ for i in range(R.randint(3, 8)):
                 for k2, c2 in h.items(): hits_total[k2] = hits_total.get(k2, 0) + c2
             main.append(f'    if (S := Sz[{nm}]) then Print("sz {nm}: {{S}} {{{nm}.Hits}}") else Print("sz {nm}: fail {{{nm}.Hits}}")')
             expect.append(f"sz {nm}: {s if ok else 'fail'} {hits_total.get(id(n), 0)}")
+    for _ in range(R3.choice([0, 1, 1])):
+        call, v, logs = cp_call(nm, n, t)
+        main.append(f'    Print("cp {nm}: {{{shname(t)}({call})}}")')
+        expect.extend(logs); expect.append(f"cp {nm}: {show(v, t)}")
     for _ in range(R2.choice([0, 1, 1, 2])):
         call, v = pk_call(nm, n, t)
         main.append(f'    Print("pk {nm}: {{{shname(t)}({call})}}")')
@@ -411,6 +457,6 @@ if CS_THR is not None:
     CLOSED_TXT = CLOSED_TXT.replace("(P := pairE[E]) then Ev(P.L)", f"(P := pairE[E], X := Ev(P.L), X > {CS_THR}) then X")
 
 prog = [f"# genopen seed {seed}", CLASSES, "NewLeafP(L:ex(int), R:ex(string)):leafP = leafP{L := L, R := R}",
-        ev_text(), ds_text(), SZ_TEXT, CLOSED_TXT, PK_TEXT] + list(SHOWN.values()) + ["Main():void ="] + main
+        ev_text(), ds_text(), SZ_TEXT, CLOSED_TXT, PK_TEXT, CP_TEXT] + list(SHOWN.values()) + ["Main()<suspends>:void ="] + main
 print('\n'.join(prog))
 open(out_exp, 'w').write("exit=0\n" + ''.join(l + '\n' for l in expect))

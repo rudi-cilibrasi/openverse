@@ -3,7 +3,8 @@
 # arguments (GADTs, #209): random programs from five independent models
 # (scripts/models/gadt_*.py, from the reviews of #236, #242, #243 and #250,
 # with the clauses after a cast from #277 and named arguments with defaults of no
-# type of their own through opening dispatches from #317),
+# type of their own through opening dispatches from #317, and covariant <suspends>
+# overrides through them from #324),
 # each predicting the program's output, or the message of the refusal it
 # expects. Each seed uses one model in turn. Lean must match the model, and C
 # must match Lean; no program may hit an internal error.
