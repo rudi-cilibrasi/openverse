@@ -6591,6 +6591,9 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
   -- each `spawn` (#156) gets a root: a function `$spawnK(T, args…)` that
   -- runs the spawned call and fills the task `T`
   let mut roots : Array (Nat × String × Nat) := #[]
+  -- (each spawn's root's callee's class, when the callee reads type
+  -- arguments from its receiver, #209)
+  let mut rootSelf : Array (Option String) := #[]
   let mut spawnOf : Array (List Nat) := #[]   -- each user function's spawns' root numbers
   let nFns0 := fns.size
   -- (immediate functions may spawn too: their spawns start the task on
@@ -6607,14 +6610,24 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
     for (h, hs, t) in Suspend.spawnSites spawnMark fn.body do
       let some ttyT := Γ[t]? | throw s!"internal error: lowering {gname}: a spawn's task"
       let mut atys : Array VTy := #[]
-      -- (the callee's type arguments, from its witnesses)
-      if ((sigOf h).map (!·.selfTps.isEmpty)).getD false then
-        throw (inFn gname s!"a spawn of {((sigOf h).map (·.name)).getD "a method"}, a method of a class with type parameters that its parent's type arguments do not give, is not supported yet (#209)")
-      let ntpH := ((sigOf h).map (·.tparams.length)).getD 0
-      let wit := (hs.drop (hs.length - ntpH)).map fun w => tc Sorig Γ (fsigs0[gi]!).2 w none
-      let θh : Nat → VTy := fun i => match wit[i]? with
+      -- (the callee's type arguments, from its witnesses: the last
+      -- arguments, one per type parameter but those a method reads from its
+      -- receiver, #209)
+      let tpsH := ((sigOf h).map (·.tparams)).getD []
+      let selfH := ((sigOf h).map (·.selfTps)).getD []
+      let witIdx := (List.range tpsH.length).filter fun i => !selfH.contains ((tpsH[i]?.map (·.1)).getD "")
+      let wit := (hs.drop (hs.length - witIdx.length)).map fun w => tc Sorig Γ (fsigs0[gi]!).2 w none
+      let θh : Nat → VTy := fun i => match (witIdx.idxOf? i).bind (wit[·]?) with
         | some (some τ) => τ
         | _ => .var i
+      -- (whether a type mentions a type parameter the callee reads from its
+      -- receiver, which no witness gives)
+      let mentionsSelf (τ : VTy) : Bool :=
+        (τ.subst fun i => if witIdx.contains i then VTy.void else .var 0).mentionsVar
+      -- (and then its class, whose hidden fields its root's slots of those
+      -- types start as)
+      rootSelf := rootSelf.push (if selfH.isEmpty then none
+        else some (((((sigOf h).map (·.name)).getD "").splitOn ".").headD ""))
       for (e, i) in hs.zipIdx do
         match tc Sorig Γ (fsigs0[gi]!).2 e none with
         -- (types that mention the function's type parameters make the root
@@ -6624,7 +6637,10 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
         | none =>
           -- (`array{}` or `false` has no type of its own: the callee's
           -- parameter type at its type arguments, which its witnesses give)
-          let pt := (((fsigs0[h]?).bind (·.1[i]?)).getD (.var 0)).subst θh
+          let pt0 := ((fsigs0[h]?).bind (·.1[i]?)).getD (.var 0)
+          let pt := pt0.subst θh
+          if !selfH.isEmpty && pt.mentionsVar && mentionsSelf pt0 then
+            throw (inFn gname s!"an argument of a spawned call of {((sigOf h).map (·.name)).getD "a method"}, a method that reads type arguments from its receiver, must have a type of its own where its parameter's type mentions them (an empty array or `false` has none): pass it through a variable of its type (#209)")
           if pt.mentionsVar && wit.any (·.isNone) then
             throw (inFn gname "the arguments of a spawned call of a generic function must have types of their own (#156)")
           atys := atys.push pt
@@ -6959,12 +6975,25 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
     -- #209, #251; the receiver is the first of the function's parameters,
     -- which come last)
     let selfCls := (gname.splitOn ".").headD ""
-    let varD (params : List VTy) (i : Nat) : Option Expr := do
+    -- (a spawn's root whose callee reads type arguments from its receiver,
+    -- its second parameter, after the task, likewise: a field of the
+    -- receiver's class, hidden or not, or a part of one through tuples,
+    -- whose type at the receiver's type arguments is the variable (the
+    -- callee's class may hold only a composite of it, `mid(tuple(u, v),
+    -- int)`'s `a`); a generic root's other variables have witnesses among
+    -- its arguments)
+    let rootVarD (params : List VTy) (i : Nat) : Option Expr := do
+      if gi < nFns0 then none
+      let _ ← (rootSelf[gi - nFns0]?).join
+      let ri := params.length - a + 1
+      let recv@(.ref _ _) ← params[ri]? | none
+      Suspend.partOfType classTable (.var i) (.local ri) recv 16
+    let varD (params : List VTy) (i : Nat) : Option Expr := (do
       let s ← sigOf gi
       let (v, _) ← s.tparams[i]?
       if !s.selfTps.contains v then none
       let k ← env.witnessField? selfCls v
-      some (.heap (.get k) [.local (params.length - a)])
+      some (.heap (.get k) [.local (params.length - a)])) <|> rootVarD params i
     let coreDflt (params : List VTy) (τ : VTy) : Except String Expr :=
       match Suspend.coreDefault Sinf params 0 τ (varD params) with
       | some d => pure d

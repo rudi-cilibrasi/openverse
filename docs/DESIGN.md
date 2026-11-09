@@ -925,7 +925,17 @@ have pins on all of their type arguments, so that its dispatch to their
 resumption opens them (`Typed.dispatch`, #209), and a generic frame
 keeps the witnesses its resumption passes on. So such a function is
 compiled once, and calls itself at ever bigger types as any function
-does.
+does. A `$spawnK` reads its callee's type arguments off the call's
+witnesses, its last arguments: one per type parameter but those an
+override reads from its receiver (`Sig.selfTps`, #209), so a spawn may
+call such an override directly (`spawn{P.Run()}` on a `pairJ(int,
+string)` below `job(int)`). A generic root of such a call, in an override
+at its class's own type parameters (`spawn{Run()}` in `pairJ`'s `Go`),
+has no witnesses of them among its arguments: its slots of their types
+start as parts of the receiver's fields, hidden ones included, through
+tuples and objects (`Suspend.partOfType`: `mid(tuple(u, v), int)`'s
+hidden `a` holds a `tuple(u, v)`), as the override's own start as its
+hidden fields.
 
 **No copies per type.** A spawned dispatch (a spawned `E.Eval()` on an
 `expr(t)`, #173, #204) is first lifted into a suspends function

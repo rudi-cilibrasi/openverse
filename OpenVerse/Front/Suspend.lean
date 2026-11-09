@@ -412,6 +412,25 @@ partial def coreDefault (S : Sigs) (params : List VTy) (depth : Nat) (τ : VTy)
           let ds ← (fs.map (VTy.inst args)).mapM (coreDefault S params (depth + 1) (varD := varD))
           some (.heap (.new t) ds)
 
+/-- `e`, of type `τ`, or a part of it through tuples (`tupGet`) and object
+    fields (`classes`, a field with that type in every class of the
+    reference, as `FieldTy` asks), whose type is `want`: a value of that type
+    for an initial value (#209). Options and arrays may hold none, so they
+    are not searched; the depth bounds recursive classes (as deep as
+    `coreDefault` goes, 16). -/
+partial def partOfType (classes : List (List VTy)) (want : VTy) (e : Expr) (τ : VTy) (depth : Nat := 16) :
+    Option Expr :=
+  if τ == want then some e
+  else match τ, depth with
+    | .tup ts, d + 1 => ts.zipIdx.findSome? fun (u, k) => partOfType classes want (.prim (.tupGet k) [e]) u d
+    | .ref ts@(t :: _) args, d + 1 => do
+      let fs ← classes[t]?
+      fs.zipIdx.findSome? fun (f, k) =>
+        if ts.all (fun t' => ((classes[t']?).bind (·[k]?)) == some f) && f.varsBelow args.length then
+          partOfType classes want (.heap (.get k) [e]) (f.inst args) d
+        else none
+    | _, _ => none
+
 /-- What a suspension point waits for, for cancelling it. -/
 inductive Waits where
   /-- A callee's frame (for a non-generic callee: the slot its frame is read
