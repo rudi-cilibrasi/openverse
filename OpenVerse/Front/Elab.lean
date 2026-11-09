@@ -2448,7 +2448,15 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
       | some (.arr t) => es.map fun _ => some t
       | _ => es.map fun _ => none
     let rs ← (es.zip exps).mapM fun (e, t) => elabE ctx e t
-    return ⟨.prim .mkTup (rs.map (·.e)), .tup (rs.map (·.ty))⟩
+    -- (an element that never gives a value, `return e`, `break`, `Err()`,
+    -- has no type of its own in Verse Core, where a tuple whose type is
+    -- inferred, as `not`'s operand is, needs one: without an expected type,
+    -- it is followed by `void`, the type `never` stands for there, #285;
+    -- with one, it is checked against it, as it has every type)
+    let elems := (rs.zip exps).map fun (r, t) => match r.ty, t with
+      | .never, none => Expr.seq r.e (.lit .void)
+      | _, _ => r.e
+    return ⟨.prim .mkTup elems, .tup (rs.map (·.ty))⟩
   | .block _ ss =>
     let (r, _) ← elabSeq ctx ss exp
     return r
