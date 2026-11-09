@@ -1332,7 +1332,12 @@ Phase 3 (#20) adds a heap of objects, each with a class tag and fields
   opens type arguments, the parameter's type in the override mentions them
   and the caller has no names for them, so `T` has the method's declared
   type at the receiver's type arguments instead (`?t` for the override's
-  `?tuple(a, b)`), which `μ` makes the override's (#209).
+  `?tuple(a, b)`), which `μ` makes the override's (#209). Likewise, the
+  hidden arguments of a generic implementation (`W(X:u)` called as
+  `E.W(X)` with `X:t`) are built in terms of the caller's type parameters
+  (`t`'s value), not the opened ones its values are typed with in the
+  branch (`tuple(a, b)`, which has no value to pass): `Ctx.unrefine` maps
+  each type the refinement binds a caller's parameter to back to it.
   The semantics, the binary format and the C runtime are unchanged.
 - **Defaults.** No literal is a reference, so a slot of class type starts as
   a new object of one of its classes with default fields (`DefaultE.new`),
