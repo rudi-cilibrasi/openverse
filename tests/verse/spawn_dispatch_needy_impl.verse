@@ -1,6 +1,6 @@
 # a spawned dispatch whose implementation calls a generic immediate function
 # that spawns, at its type parameters: `$dispatchK` takes the caller's witnesses
-# last, so it is copied per type like any such function (#209 review)
+# last, and each is compiled once, their spawns roots at their type arguments (#209)
 cell(t:type) := class<abstract>:
     Get()<suspends>:t
 Echo(X:t where t:type)<suspends>:t = X

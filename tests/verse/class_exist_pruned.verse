@@ -1,7 +1,6 @@
 # a generic <suspends> function dispatching on expr(t), called at closed
 # types: generic, its dispatch opens the type arguments of the classes
-# tested (#209); copies at closed types drop the tests no object can pass
-# (generic_roots_pruned.verse)
+# tested (#209); compiled once, also where no object can pass a test
 expr(t:type) := class<abstract>:
     Eval():t
 lit := class(expr(int)):

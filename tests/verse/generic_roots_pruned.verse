@@ -1,4 +1,6 @@
-# a copy at a type that rules out a class fixing type arguments drops that class's refined test (#174)
+# a spawned dispatch in a generic function, called at a type that rules out a
+# class fixing type arguments: compiled once, its refined test kept and never
+# passed (until #209, a copy per type dropped it, #174)
 # spawn of dispatch in generic function, called at int (refined) and string
 box(t:type) := class:
     V:t

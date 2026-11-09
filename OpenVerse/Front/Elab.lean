@@ -6336,6 +6336,11 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
         sg.tparams.filterMap fun (v, _) => (dictTps.findIdx? (·.1 == v)).map (fns[gi]!.arity - sg.ndicts + ·)
       | none => []
     let (body, acc) := (Suspend.liftChains spawnMark dispBase witnesses fns[gi]!.body).run lifted
+    -- (every spawn is now of a call, which `spawnSites` finds: its task's
+    -- root, generic or not, needs no copy of the function per type, #209;
+    -- `elabSpawn` makes only calls and dispatch chains)
+    if ((Suspend.callsOf body).filter (·.1 == spawnMark)).length != (Suspend.spawnSites spawnMark body).length then
+      throw (inFn fns[gi]!.name "internal error: a spawn of neither a call nor a dispatch chain")
     if acc.size > n0 then
       fns := fns.set! gi { fns[gi]! with body }
       lifted := acc

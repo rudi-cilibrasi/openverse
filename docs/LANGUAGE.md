@@ -553,7 +553,10 @@ circle := class(shape, labelled):
   is a struct or container that holds one.
 - **Not yet supported** (each rejected with a message):
   - in a class with type parameters that its parent's type arguments
-    do not give: a `<suspends>` override whose
+    do not give: a `spawn` of a call of one of its methods on a value of
+    its type (`spawn{P.Run()}` with `P` a `pairJ(int, string)` below
+    `job(int)`: spawn it through the class above instead, `J:job(int) = P`
+    then `spawn{J.Run()}`), a `<suspends>` override whose
     result is narrower than the method's it overrides when called through
     code generic over the class above, and,
     in code generic over a class above, a call of one whose omitted

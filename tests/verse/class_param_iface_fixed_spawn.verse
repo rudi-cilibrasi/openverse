@@ -1,6 +1,6 @@
 # a subclass that implements a plain interface while fixing the type parameter
 # that interface does not give: the root does not count it, its pins give the
-# argument, so the root keeps it as given (spawns and copies stay allowed, #276)
+# argument, so the root keeps it as given (spawns stay allowed, #276)
 Worker()<suspends>:int =
     Sleep(0.1)
     7

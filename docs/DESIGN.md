@@ -879,11 +879,19 @@ witnesses too, last, in order (its hidden parameters, and the slots an
 override fills from its receiver, #209). The spawn is then a spawn of a
 call, a root at the caller's type arguments (#244). A generic immediate
 function's spawns (`Kick(X:t):task(t) = spawn{Echo(X)}`) are roots at its
-type arguments in the same way, so every `spawn` is a root at its
-function's type arguments and every function is compiled once: a function
-calling itself at ever bigger types may spawn dispatches, and so may an
-override of a class with type parameters its parent's type arguments do
-not give, an immediate one included.
+type arguments in the same way. So every `spawn` is of a call (the lowering
+checks it), its root is generic at its function's type arguments where its
+slots' types mention them (and plain where they are closed), and every
+function is compiled once: a function calling itself at ever bigger types
+may spawn dispatches, and so may an override of a class with type
+parameters its parent's type arguments do not give, an immediate one
+included.
+
+Before the lowering, every function drops the tests in `Typed.dispatch`'s
+shape that no object can pass at its slots' types (`pruneDead`, #186): no
+substitution makes the receiver's type arguments agree with the tested
+classes' pins. The checker types a dispatch only when they can agree, and
+such tests arise in #157's field accessors on receivers of closed types.
 
 Earlier (#174), a generic function with a spawned dispatch at its type
 parameters, or a generic immediate function with a `spawn`, and each
@@ -893,7 +901,8 @@ witness arguments, and its calls were redirected to the copies. Bounds on
 the number of copies (500) and on the size of the types (2000 parts)
 turned polymorphic recursion into an error, and such an override was
 refused, as a copy would not know the type parameters its receiver holds.
-The lifts above left nothing to copy (#209).
+The lift of spawned dispatches and the generic roots of immediate
+functions left nothing to copy (#209).
 
 Until #269 the other generic suspends
 functions were also copied where they were called at small closed types

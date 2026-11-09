@@ -1,5 +1,5 @@
 # spawning and racing an interface method that classes fix, in code generic
-# over the interface: the generic function is compiled at each type (#204)
+# over the interface: the generic function is compiled once (#204, #209)
 src(t:type) := interface:
     Next()<suspends>:t
 ints := class(src(int)):
@@ -23,7 +23,7 @@ First(A:src(t), B:src(t) where t:type)<suspends>:t =
 Sp(S:src(t) where t:type)<suspends>:t =
     T := spawn{S.Next()}
     T.Await()
-# (at a type no class implements, the copy's spawn has no test left)
+# (at a type no class implements: no test passes)
 Count(Ss:[]src(t) where t:type)<suspends>:int =
     for (S : Ss):
         T := spawn{S.Next()}
