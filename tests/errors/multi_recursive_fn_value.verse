@@ -1,4 +1,4 @@
-# expect: 2:0: Count has several values and is recursive, or called by a recursive one, and it calls the function value Op
+# expect: 2:0: Count has several values and is recursive, or called by a recursive one, and it may print (Loud does)
 Count(Op:type{_(:int)<computes>:int}, N:int)<computes><decides>:int =
     N > 0
     Op(N) | Count[Op, N - 1]

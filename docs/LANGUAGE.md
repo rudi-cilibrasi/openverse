@@ -667,14 +667,22 @@ Main():void =
 
   A recursive one (that calls itself, directly or not) is not inlined: if
   it is `<computes>`, keeps no local state (no `var`, no `set`), and nothing
-  it reaches prints or stops (the functions and methods it calls, the
-  constants it uses, the field defaults of the classes it constructs; a
-  call through a function value cannot be followed, so it is refused), its values are
-  computed at the call, all of them, in order, as an array the call then
-  takes them from (#235). For a recursive function whose values are
-  finite this is the same as taking them one by one, since it has no
-  effects; one with infinitely many values does not stop, even where only
-  the first success is taken.
+  it may run prints or calls `Err()`, its values are computed at the call,
+  all of them, in order, as an array the call then takes them from (#235).
+  What it may run is followed through its Verse Core code, so through every
+  call: the functions it calls, each implementation a method call may
+  dispatch to, each function of a function value's type that the program
+  uses as a value, the field defaults and `block:` clauses of the classes and
+  structs it constructs, the constants it uses, and the defaults of the
+  parameters its calls omit. An argument of such a call that fails gives no
+  values for that call alone, as a failing clause does.
+
+  Computing all the values first is the same as taking them one by one,
+  since nothing it runs has an effect, as long as computing them all stops
+  without an error. If it does not stop (infinitely many values), or stops
+  the program with an error (an overflow, the recursion limit), so does the
+  call, even where only the first success is taken and a value before the
+  error would have been it.
 
   ```verse
   Upto(A:int, B:int)<computes><decides>:int =
@@ -684,10 +692,10 @@ Main():void =
       if (X := Upto[1, 10], X * X > 50) then Print("{X}")   # 8
   ```
 
-  Refused for now: a recursive one that is not `<computes>` or may print or
-  stop, a generic or overloaded one, one with named parameters
-  or a `return` or a `defer:` of its own (in its body, not in a block inside it), a method, one used as a function value, a call of one in
-  an `if`'s branch, and, since its body is inlined where other names may be
+  Refused for now: a recursive one that is not `<computes>`, or may print or
+  call `Err()`, a generic or overloaded one, one with named parameters
+  or a `return` or a `defer:` of its own (in its body, not in a block inside it), a method, one used as a function value, a call of a
+  recursive one in an `if`'s branch, a choice's alternative or a `set`'s path, and, since its body is inlined where other names may be
   in scope, one whose name, or a name its body uses from outside, is also
   the name of a parameter, local, field or method anywhere in the program.
   `Main` never has several values.

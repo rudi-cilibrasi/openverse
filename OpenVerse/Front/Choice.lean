@@ -281,6 +281,14 @@ partial def liftE (isVal : String → Bool) (isField : String → String → Boo
   match e with
   | .app p (.ident _ "$choice") _ false => LM.bind p "c" e
   | .ite p .. => LM.bind p "c" (.app p (.ident p "$branchChoice") [e] false)
+  | .app p (.ident q "$each") [.app p2 g args br] false =>
+    -- (a call of a recursive function with several values, #235: the
+    -- choices in its arguments lifted, then each argument bound, so that
+    -- one that fails is a clause that fails where it is, before the array
+    -- of the function's values is computed)
+    let args' ← liftOps isVal isField args
+    let args'' ← args'.mapM fun a => if stable isVal a then pure a else LM.bind a.pos "t" a
+    LM.bind p "c" (.app p (.ident q "$each") [.app p2 g args'' br] false)
   | .app p (.ident _ "$each") _ false => LM.bind p "c" e
   | .app _ (.ident _ "$inline") (_ :: .block _ tmpl :: args) false =>
     -- a call of a function with several values (#235): the arguments, in
@@ -454,16 +462,17 @@ end
 /-- A clause with the liftable choices inside it lifted: the clauses before
     it, then it. A binding or `set` whose value is a choice, or a clause that
     is one, stays as it is (`normClauses` makes it a binding). -/
-def liftClause (isVal : String → Bool) (isField : String → String → Bool) (c : SExpr) : List SExpr :=
-  (liftClauseM isVal isField c).run' {}
+def liftClause (isVal : String → Bool) (isField : String → String → Bool) (c : SExpr)
+    (site : String := "") : List SExpr :=
+  (liftClauseM isVal isField c).run' { site }
 
 /-- The clauses ready for compiling: choices inside expressions lifted, and
     each choice the value of a binding. `isVal` says which names are values
     (variables and fields in scope); the clauses' own bindings are too. -/
 def prepare (cs : List SExpr) (isVal : String → Bool := fun _ => false)
-    (isField : String → String → Bool := fun _ _ => false) : List SExpr :=
+    (isField : String → String → Bool := fun _ _ => false) (site : String := "") : List SExpr :=
   let bound := boundIn cs
-  normClauses (cs.flatMap (liftClause (fun n => isVal n || bound.contains n) isField))
+  normClauses (cs.flatMap (liftClause (fun n => isVal n || bound.contains n) isField · site)) site
 
 /-- Whether the clauses have a choice for their failure context to take. -/
 def hasChoice (cs : List SExpr) : Bool := (prepare cs).any fun c => (binding? c).isSome
@@ -728,62 +737,72 @@ partial def inlineCalls (mv : List (String × MFn)) (e : SExpr) (recs : List Str
   | .structDef p tps fs => return .structDef p tps (← fs.mapM fun (n, t, d, v) => do return (n, t, ← d.mapM go, v))
   | e => return e
 
+mutual
 /-- The array of an expression's values, for a `$all` body (#235): a choice
     concatenates its alternatives' arrays, an `if` with choices in its
-    branches picks a branch's, a call of a function with several values
-    (marked `$each`) is its array, and any other expression is the array of
-    its value, empty when it fails. -/
+    branches picks a branch's, and any other expression is the array of the
+    values of its own clauses (`gensOf`): of its value, empty when it fails,
+    and through the choices and calls of functions with several values
+    (marked `$each`) inside it. So an alternative that fails, or whose
+    argument does, gives no values, and the others still do. At the written
+    type `ty`, when there is one. -/
 partial def arrOfE (ty : Option STy := none) : SExpr → SExpr
   | .app p (.ident _ "$choice") as false =>
     match as with
     | [a] => arrOfE ty a
     | _ => .app p (.ident p "Concatenate") (as.map (arrOfE ty)) false
-  | .app p (.ident _ "$each") [a] false =>
-    -- (at the written type: each value converted)
-    match ty with
-    | none => a
-    | some t =>
-      let w := s!"$w{p.line}_{p.col}"
-      let v := s!"$a{p.line}_{p.col}"
-      .forE p [.gen p w none a, .decl p v (some t) false (.ident p w)] (.ident p v)
   | .ite p cs t (some e) => .ite p cs (arrOfE ty t) (some (arrOfE ty e))
   | a =>
     let p := a.pos
+    let site := s!"a{p.line}_{p.col}"
     let v := s!"$a{p.line}_{p.col}"
-    .forE p [.decl p v ty false a] (.ident p v)
+    .forE p (gensOf site [.decl p v ty false a]) (.ident p v)
 
-/-- The body of `F$all`, the array of `F`'s values in order (#235): one
-    `for` over its clauses, where each choice is a generator over the array
-    of its alternatives' values, and whose value is `F`'s. (`F` is
-    effect-free, so evaluating the clauses in this order changes nothing.) -/
-def allBody (mvs : List String) (b : SExpr) : SExpr :=
-  let marked := mapE (fun
-    | .app p (.ident q g) as _ =>
-      if mvs.contains g then some (.app p (.ident p "$each") [.app p (.ident q s!"{g}$all") as false] false)
-      else none
-    | _ => none) b
-  let ss := stmtsOf marked
-  let p := b.pos
-  let (cs, v) : List SExpr × SExpr := match ss.getLast? with
-    | some (.decl q x _ _ _) => (ss, .ident q x)
-    | some l => (ss.dropLast ++ [.decl l.pos "$val" none false l], .ident l.pos "$val")
-    | none => ([], .tuple p [])
-  let gens := (prepare cs).flatMap fun c => match binding? c with
+/-- Clauses for a `for` that goes through all their values (#235): each
+    choice a generator over the array of its alternatives' values, each
+    call of a recursive function with several values one over its array.
+    Names made include `site`, so that nested ones differ. -/
+partial def gensOf (site : String) (cs : List SExpr) : List SExpr :=
+  let nm (q : Pos) : String := s!"$e{sitePart site}{q.line}_{q.col}"
+  (prepare cs (site := site)).flatMap fun c => match binding? c with
     | some { pos := q, name := x, ty := ty, alts := as, branchy := none, each := none, .. } =>
       let src := arrOfE ty (.app q (.ident q "$choice") as false)
       match ty with
       | none => [.gen q x none src]
-      | some t => [.gen q s!"$e{q.line}_{q.col}" none src, .decl q x (some t) false (.ident q s!"$e{q.line}_{q.col}")]
+      | some t => [.gen q (nm q) none src, .decl q x (some t) false (.ident q (nm q))]
     | some { pos := q, name := x, ty := ty, branchy := some i, .. } =>
       match ty with
       | none => [.gen q x none (arrOfE none i)]
-      | some t => [.gen q s!"$e{q.line}_{q.col}" none (arrOfE (some t) i), .decl q x (some t) false (.ident q s!"$e{q.line}_{q.col}")]
+      | some t => [.gen q (nm q) none (arrOfE (some t) i), .decl q x (some t) false (.ident q (nm q))]
     | some { pos := q, name := x, ty := ty, each := some a, .. } =>
       match ty with
       | none => [.gen q x none a]
-      | some t => [.gen q s!"$e{q.line}_{q.col}" none a, .decl q x (some t) false (.ident q s!"$e{q.line}_{q.col}")]
+      | some t => [.gen q (nm q) none a, .decl q x (some t) false (.ident q (nm q))]
     | _ => [c]
-  .forE p gens v
+end
+
+/-- Each call of a function of `mvs` marked as the array of its values,
+    `$each(F$all(args))`, also in the arguments of others. -/
+partial def markAll (mvs : List String) : SExpr → SExpr :=
+  mapE fun
+    | .app p (.ident q g) as _ =>
+      if mvs.contains g then
+        some (.app p (.ident p "$each") [.app p (.ident q s!"{g}$all") (as.map (markAll mvs)) false] false)
+      else none
+    | _ => none
+
+/-- The body of `F$all`, the array of `F`'s values in order (#235): one
+    `for` over its clauses (`gensOf`), whose value is `F`'s, at its result
+    type `ret`. (`F` is effect-free, so evaluating the clauses in this order
+    changes nothing.) -/
+def allBody (mvs : List String) (ret : STy) (b : SExpr) : SExpr :=
+  let ss := stmtsOf (markAll mvs b)
+  let p := b.pos
+  let (cs, v) : List SExpr × SExpr := match ss.getLast? with
+    | some (.decl q x _ _ _) => (ss, .ident q x)
+    | some l => (ss.dropLast ++ [.decl l.pos "$val" (some ret) false l], .ident l.pos "$val")
+    | none => ([], .tuple p [])
+  .forE p (gensOf "" cs) v
 
 /-- A name of `mv` used other than as a call's head: as a function value. -/
 partial def valueUse? (mv : List String) : SExpr → Option (Pos × String)
@@ -815,27 +834,6 @@ def liftsHere (c : SExpr) : Bool :=
   | .set _ _ _ rhs => hasLiftable rhs
   | .gen _ _ _ src => hasLiftable src
   | e => hasLiftable e
-
-/-- What a body does that the effect check of `inlineMulti` follows (#235):
-  calls, method calls, uses of names, constructions. -/
-partial def effEvents : SExpr → List (String × String)
-  | .app _ (.ident _ n) as _ => ("call", n) :: as.flatMap effEvents
-  | .app _ (.member _ x m) as _ => ("method", m) :: effEvents x ++ as.flatMap effEvents
-  | .ident _ n => [("use", n)]
-  | .construct _ n _ fs => ("new", n) :: fs.flatMap fun | .decl _ _ _ _ x => effEvents x | a => effEvents a
-  | .str _ ps => ps.flatMap fun | .code c => effEvents c | _ => []
-  | .app _ g as _ => effEvents g ++ as.flatMap effEvents
-  | .member _ x _ | .query _ x | .neg _ x | .notE _ x | .optionLit _ x | .logicLit _ x | .loop _ x
-  | .gen _ _ _ x | .decl _ _ _ _ x => effEvents x
-  | .bin _ _ a b | .andE _ a b | .orE _ a b | .range _ a b | .set _ a _ b => effEvents a ++ effEvents b
-  | .cmp _ a r => effEvents a ++ r.flatMap (effEvents ·.2)
-  | .tuple _ es | .block _ es | .arrayLit _ es => es.flatMap effEvents
-  | .ite _ cs t e' => cs.flatMap effEvents ++ effEvents t ++ ((e'.map effEvents).getD [])
-  | .forE _ cs b => cs.flatMap effEvents ++ effEvents b
-  | .ret _ x => (x.map effEvents).getD []
-  | .caseE _ sc arms => effEvents sc ++ arms.flatMap fun (pt, v) => ((pt.map effEvents).getD []) ++ effEvents v
-  | .mapLit _ kvs => kvs.flatMap fun (k, v) => effEvents k ++ effEvents v
-  | _ => []
 
 /-- The functions of the program that have several values, inlined at their
     calls (see above); the program unchanged when there are none. -/
@@ -892,66 +890,16 @@ def inlineMulti (tops : List STop) : Except String (List STop) := do
     for g in needAll do
       for h in (callees.lookup g).getD [] do
         if !needAll.contains h then needAll := needAll ++ [h]; grew := true
-  -- (effect-free: <computes>, no local state, and nothing reachable from
-  -- them prints or stops, as their values are all computed at the call:
-  -- functions and methods called (all methods of the name), constants
-  -- used, the field defaults of classes constructed; a call through a
-  -- function value, which cannot be followed, is refused)
-  let fnDefs : List (String × List SParam × SExpr) := tops.flatMap fun
-    | .fn _ m ps _ _ _ b => [(m, ps, b)]
-    | _ => []
-  let methodDefs : List (String × List SParam × SExpr) := tops.flatMap fun
-    | .classDef _ _ _ _ _ _ _ _ ms => ms.filterMap fun
-        | .fn _ m ps _ _ _ b => some (m, ps, b)
-        | _ => none
-    | _ => []
-  let constDefs : List (String × SExpr) := tops.filterMap fun
-    | .const _ n _ e => some (n, e)
-    | _ => none
-  let classDefs : List (String × List String × List SExpr) := tops.filterMap fun
-    | .classDef _ n _ _ ps _ fs _ _ => some (n, ps.filterMap (fun | .name q | .app q _ => some q | _ => none),
-        fs.filterMap (·.2.2.1))
-    | _ => none
+  -- (effect-free: <computes> and no local state; that nothing they may
+  -- run prints or calls `Err()` is checked on their Verse Core code, which
+  -- shows every call, `checkEager`)
   for g in needAll do
     let some f := mfs.lookup g | continue
     let why (w : String) : String :=
-      s!"{f.pos.show}: {g} has several values and is recursive, or called by a recursive one, {w}: such a function must be <computes>, keep no local state, and reach nothing that prints or stops, as all its values are computed at a call (#235)"
+      s!"{f.pos.show}: {g} has several values and is recursive, or called by a recursive one, {w}: such a function must be <computes>, keep no local state, and reach nothing that prints or calls Err(), as all its values are computed at a call (#235)"
     if !f.fx.contains "computes" then throw (why "and it is not <computes>")
     if anyE (fun | .set .. | .decl _ _ _ true _ => true | _ => false) f.body then
       throw (why "and it has a var or a set")
-    -- (each body to follow with its own parameters and locals)
-    let mut seen : List (String × String) := []
-    let mut todo : List (List String × SExpr) := [(f.params.map (·.name) ++ localsOf f.body, f.body)]
-    while !todo.isEmpty do
-      let (locals, b) := todo.head!
-      todo := todo.tail!
-      for ev in effEvents b do
-        if seen.contains ev then continue
-        seen := seen ++ [ev]
-        match ev with
-        | ("call", n) =>
-          if n == "Print" || n == "Err" then throw (why s!"and it may call {n}")
-          if locals.contains n then throw (why s!"and it calls the function value {n}")
-          for (_, ps, fb) in fnDefs.filter (·.1 == n) do
-            todo := todo ++ [(ps.map (·.name) ++ localsOf fb, fb)]
-          for (_, ce) in constDefs.filter (·.1 == n) do todo := todo ++ [([], ce)]
-        | ("method", m) =>
-          let ms := methodDefs.filter (·.1 == m)
-          if ms.isEmpty then throw (why s!"and it calls {m}, which is no method: a function value")
-          for (_, ps, mb) in ms do todo := todo ++ [(ps.map (·.name) ++ localsOf mb, mb)]
-        | ("use", n) =>
-          for (_, ce) in constDefs.filter (·.1 == n) do todo := todo ++ [([], ce)]
-        | ("new", c) =>
-          -- (the class's and its parents' field defaults)
-          let mut cs := [c]
-          let mut i := 0
-          while i < cs.length do
-            let cn := cs[i]!
-            i := i + 1
-            for (_, parents, ds) in classDefs.filter (·.1 == cn) do
-              for d in ds do todo := todo ++ [([], d)]
-              for q in parents do if !cs.contains q then cs := cs ++ [q]
-        | _ => pure ()
   for (n, f) in mfs do
     if (fns.filter (·.1 == n)).length > 1 then
       throw s!"{f.pos.show}: {n} has several values and is overloaded: such functions are not supported yet (#235)"
@@ -1002,7 +950,7 @@ def inlineMulti (tops : List STop) : Except String (List STop) := do
       return some (.classDef p n tps sp pa ii fs' ov ms')).run 0
   -- (`F$all` for each that needs one: the array of its values)
   let alls : List STop := needAll.filterMap fun g => (mfs.lookup g).map fun f =>
-    .fn f.pos s!"{g}$all" f.params f.tparams (f.fx.filter (· != "decides")) (.arr f.ret) (allBody needAll f.body)
+    .fn f.pos s!"{g}$all" f.params f.tparams (f.fx.filter (· != "decides")) (.arr f.ret) (allBody needAll f.ret f.body)
   return tops' ++ alls
 
 end OpenVerse.Front.Choice

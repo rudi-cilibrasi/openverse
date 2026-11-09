@@ -1,0 +1,31 @@
+down 1
+chain 1
+chain 0
+choice arg 1
+choice arg 0
+choice arg 2
+choice arg 1
+choice arg 0
+nested 1
+nested 0
+nested 0
+opt -1
+opt 1
+opt -1
+opt 0
+empty 0
+empty 0
+dog
+cat
+dog
+cat
+first 9
+first 9
+second 4
+second 4
+apply 6
+apply 4
+apply 2
+n 0
+n 0
+exit=0

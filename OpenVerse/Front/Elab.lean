@@ -1014,6 +1014,9 @@ structure ESt where
   /-- Functions wanted as values at closed function types no class of
       theirs gives (#214). -/
   fnNeeds : List (String × Ty) := []
+  /-- Where the function calls `Err()` first, if it does: a function whose
+      values are all computed at a call (#235) may reach none. -/
+  errAt : Option Pos := none
   deriving Inhabited
 
 abbrev EM := StateT ESt (Except String)
@@ -1988,6 +1991,15 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
       eerr p s!"a call of {f}, which has several values, cannot be lifted from here, for now (#235)"
     eerr p (s!"{f} has several values, so a call of it must be in a failure context that takes them: " ++
       "an if condition, a for's clauses, first{…}, option{…}, logic{…}, not, or the left of or (#235)")
+  | .app p (.ident _ "$each") (.app _ (.ident _ fa) _ _ :: _) false =>
+    -- (a call of a recursive function with several values, #235)
+    let f := if fa.endsWith "$all" then String.ofList (fa.toList.take (fa.length - 4)) else fa
+    if ctx.inTaking then
+      eerr p (s!"a call of {f}, which has several values, cannot be lifted from here, for now (#235): " ++
+        "not from a block, a struct construction, a named argument, a choice's alternative, the right of " ++
+        "and or or, a range, a set's path, nor from the branch of an if")
+    eerr p (s!"{f} has several values, so a call of it must be in a failure context that takes them: " ++
+      "an if condition, a for's clauses, first{…}, option{…}, logic{…}, not, or the left of or (#235)")
   | .app p (.ident _ "$choice") _ false =>
     if ctx.inTaking then
       eerr p ("a choice (a | b) cannot be lifted from here, for now (#208): not from a block, a struct " ++
@@ -2823,7 +2835,9 @@ partial def elabAppBase (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (b
       let op := if name == "Min" then Prim.le else Prim.ge
       return ⟨.seq (.assign ta es[0]!) (.seq (.assign tb es[1]!)
         (.ite (p2 op (.local ta) (.local tb)) (.local ta) (.local tb))), .int⟩
-    | "Err" => return ⟨.prim .userErr [], .never⟩
+    | "Err" =>
+      modify fun st => if st.errAt.isNone then { st with errAt := some p } else st
+      return ⟨.prim .userErr [], .never⟩
     | "$Show" =>
       -- the entry of `openverse run FILE do EXPR`: print the value when it
       -- has a ToString, else just evaluate it
@@ -4293,6 +4307,9 @@ partial def elabBranchAlts (ctx : Ctx) (p : Pos) (i : SExpr) (sty : Option STy) 
     join (each one against the first's type, else on its own, as `if`'s
     branches are), and that type. -/
 partial def elabAlts (ctx : Ctx) (p : Pos) (b : Choice.Binding) : EM (Ty × List Expr) := do
+  -- (a choice or a call with several values left in an alternative is in a
+  -- failure context that takes values, where it cannot be lifted from)
+  let ctx := { ctx with inTaking := true }
   let alts := b.alts
   -- (the written type, or for `set L = a | b` the type of `L`)
   let t? ← match ← b.ty.mapM (resolveTy ctx.types p) with
@@ -5879,6 +5896,51 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
     mainCall := .call (runIdx + 1) []
   return (fns, slotTys, fsigs, classTable, frameClasses, mainCall)
 
+/-- Whether `e` itself prints (`Print`), for `checkEager`. -/
+partial def exprPrints : Expr → Bool
+  | .print _ => true
+  | .assign _ e | .ret e | .loop e => exprPrints e
+  | .seq a b => exprPrints a || exprPrints b
+  | .prim _ es | .heap _ es | .call _ es => es.any exprPrints
+  | .ite c t e => exprPrints c || exprPrints t || exprPrints e
+  | .forE _ it f b => exprPrints it || exprPrints f || exprPrints b
+  | _ => false
+
+/-- (#235) A recursive function with several values is computed at its
+    call as `F$all`, all its values at once, so nothing it may run may print
+    or call `Err()`. Followed through its Verse Core code, so through every
+    call it may make: functions, methods (each implementation a dispatch
+    may pick), function values (each function of that type used as a
+    value), constructors (field defaults, `block:` clauses), constants, and
+    parameter defaults (elaborated at the call). `errs` says where each
+    function elaborated from the program calls `Err()`. -/
+def checkEager (fns : Array Fn) (errs : Array (Option Pos)) (posOf : String → Option Pos) :
+    Except String Unit := do
+  for i in List.range fns.size do
+    let fn := fns[i]!
+    if !fn.name.endsWith "$all" then continue
+    let g := String.ofList (fn.name.toList.take (fn.name.length - 4))
+    let loc := ((posOf g).map (·.show ++ ": ")).getD ""
+    let mut seen : Array Bool := Array.replicate fns.size false
+    let mut todo : List Nat := [i]
+    seen := seen.set! i true
+    while !todo.isEmpty do
+      let j := todo.head!
+      todo := todo.tail!
+      let fj := fns[j]!
+      let shown := if fj.name.endsWith ".$block" then
+          s!"the block: of {String.ofList (fj.name.toList.take (fj.name.length - 7))}" else fj.name
+      let via := if fj.name == fn.name then "" else s!" ({shown} does)"
+      let what? : Option String :=
+        if exprPrints fj.body then some "print"
+        else if let some (some _) := errs[j]? then some "call Err()" else none
+      if let some what := what? then
+        throw s!"{loc}{g} has several values and is recursive, or called by a recursive one, and it may {what}{via}: such a function must be <computes>, keep no local state, and reach nothing that prints or calls Err(), as all its values are computed at a call (#235)"
+      for (f, _) in Suspend.callsOf fj.body do
+        if f < fns.size && !seen[f]! then
+          seen := seen.set! f true
+          todo := todo ++ [f]
+
 /-- Elaborate a parsed program into a Verse Core program that passes `Prog.check`
     and `Prog.checkTypes`. -/
 def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except String Compiled := do
@@ -6990,7 +7052,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   let elabFn (env : TyEnv) (p : Pos) (name : String) (ps : List SParam) (ptys : List Ty) (ret : Ty)
       (decides : Bool) (allowed : List String) (tps : List (String × Bool)) (body : SExpr)
       (suspends : Bool := false) :
-      Except String (Fn × List VTy × List (String × Ty)) := do
+      Except String (Fn × List VTy × List (String × Ty) × Option Pos) := do
     let locals := (ps.zip (List.range ps.length)).zip ptys |>.map fun ((prm, i), t) =>
       ({ name := prm.name, slot := i, ty := t, mutable := false } : Local)
     for (prm, i) in ps.zip (List.range ps.length) do
@@ -7018,20 +7080,23 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     fxCheck name allowed st
     return ({ name, arity, nslots := st.nslots, decides, writes := allowed.contains "writes",
               body := initPrefixE arity inits e },
-      st.slotTys.toList.map (Ty.toVTy env), st.fnNeeds)
+      st.slotTys.toList.map (Ty.toVTy env), st.fnNeeds, st.errAt)
   -- (the accessors come right after the functions, #157)
   env := { env with fieldAccBase := tops.length + gsigs.size }
   let genvOf (g : Sig) : TyEnv := { env with tvars := g.tparams.map fun (v, c) => (v, Ty.param v c) }
   let mut fns : Array Fn := #[]
   let mut slotTys : Array (List VTy) := #[]
   let mut fnNeeds : List (String × Ty) := []
+  -- (where each function calls `Err()`, by its index, #235)
+  let mut errs : Array (Option Pos) := #[]
   for (top, idx) in tops.zip (List.range tops.length) do
     let sig := sigs[idx]!
     match top with
     | .fn p n ps _ _ _ body =>
-      let (fn, tys, needs) ← elabFn env p n ps sig.params sig.ret sig.decides sig.fx [] body sig.suspends
+      let (fn, tys, needs, err) ← elabFn env p n ps sig.params sig.ret sig.decides sig.fx [] body sig.suspends
       fnNeeds := fnNeeds ++ needs
       fns := fns.push fn
+      errs := errs.push err
       slotTys := slotTys.push tys
     | .const p n _ body =>
       -- a constant is computed at each use, so it would be a new object each
@@ -7050,6 +7115,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       fxCheck n sig.fx st
       fns := fns.push { name := n, arity := 0, nslots := st.nslots, decides := false,
                         writes := sig.fx.contains "writes", body := initPrefixE 0 inits e }
+      errs := errs.push st.errAt
       slotTys := slotTys.push tys
     | .classDef .. => pure ()   -- expanded above
   -- each generic function is elaborated once, with its type parameters
@@ -7059,9 +7125,10 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   for (top, g) in generics.zip gsigs.toList do
     match top with
     | .fn p n ps _ _ _ body =>
-      let (fn, tys, needs) ← elabFn (genvOf g) p n ps g.params g.ret g.decides g.fx g.tparams body g.suspends
+      let (fn, tys, needs, err) ← elabFn (genvOf g) p n ps g.params g.ret g.decides g.fx g.tparams body g.suspends
       fnNeeds := fnNeeds ++ needs
       fns := fns.push fn
+      errs := errs.push err
       slotTys := slotTys.push tys
     | _ => pure ()
   -- (#214) functions wanted as values at types no class of theirs gives:
@@ -7127,6 +7194,10 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   for gi in List.range fns.size do
     let fn := fns[gi]!
     fns := fns.set! gi { fn with body := Suspend.pruneDead S00 ((slotTys[gi]?).getD []) fn.body }
+  -- (#235) the functions with several values computed at their calls
+  checkEager fns errs fun g => ((tops ++ generics).findSome? fun
+    | .fn p n .. => if n == g then some p else none
+    | _ => none)
   if usesConc then
     let (fns1, slotTys1, fsigs1, classTable1, frameClasses1, mainCall1) ←
       lowerConcurrency env sigs gsigs mainSig fsigs0 protos pins inFn fns slotTys fsigs classTable

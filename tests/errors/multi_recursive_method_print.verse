@@ -1,4 +1,4 @@
-# expect: 6:0: Count has several values and is recursive, or called by a recursive one, and it may call Print
+# expect: 6:0: Count has several values and is recursive, or called by a recursive one, and it may print (printer.Show does)
 printer := class:
     Show(N:int)<computes>:int =
         Print("show {N}")
