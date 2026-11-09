@@ -6607,14 +6607,20 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
     for (h, hs, t) in Suspend.spawnSites spawnMark fn.body do
       let some ttyT := Γ[t]? | throw s!"internal error: lowering {gname}: a spawn's task"
       let mut atys : Array VTy := #[]
-      -- (the callee's type arguments, from its witnesses)
-      if ((sigOf h).map (!·.selfTps.isEmpty)).getD false then
-        throw (inFn gname s!"a spawn of {((sigOf h).map (·.name)).getD "a method"}, a method of a class with type parameters that its parent's type arguments do not give, is not supported yet (#209)")
-      let ntpH := ((sigOf h).map (·.tparams.length)).getD 0
-      let wit := (hs.drop (hs.length - ntpH)).map fun w => tc Sorig Γ (fsigs0[gi]!).2 w none
-      let θh : Nat → VTy := fun i => match wit[i]? with
+      -- (the callee's type arguments, from its witnesses: the last
+      -- arguments, one per type parameter but those a method reads from its
+      -- receiver, #209)
+      let tpsH := ((sigOf h).map (·.tparams)).getD []
+      let selfH := ((sigOf h).map (·.selfTps)).getD []
+      let witIdx := (List.range tpsH.length).filter fun i => !selfH.contains ((tpsH[i]?.map (·.1)).getD "")
+      let wit := (hs.drop (hs.length - witIdx.length)).map fun w => tc Sorig Γ (fsigs0[gi]!).2 w none
+      let θh : Nat → VTy := fun i => match (witIdx.idxOf? i).bind (wit[·]?) with
         | some (some τ) => τ
         | _ => .var i
+      -- (whether a type mentions a type parameter the callee reads from its
+      -- receiver, which no witness gives)
+      let mentionsSelf (τ : VTy) : Bool :=
+        (τ.subst fun i => if witIdx.contains i then VTy.void else .var 0).mentionsVar
       for (e, i) in hs.zipIdx do
         match tc Sorig Γ (fsigs0[gi]!).2 e none with
         -- (types that mention the function's type parameters make the root
@@ -6624,8 +6630,9 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
         | none =>
           -- (`array{}` or `false` has no type of its own: the callee's
           -- parameter type at its type arguments, which its witnesses give)
-          let pt := (((fsigs0[h]?).bind (·.1[i]?)).getD (.var 0)).subst θh
-          if pt.mentionsVar && wit.any (·.isNone) then
+          let pt0 := ((fsigs0[h]?).bind (·.1[i]?)).getD (.var 0)
+          let pt := pt0.subst θh
+          if pt.mentionsVar && (wit.any (·.isNone) || mentionsSelf pt0) then
             throw (inFn gname "the arguments of a spawned call of a generic function must have types of their own (#156)")
           atys := atys.push pt
       let k := roots.size
