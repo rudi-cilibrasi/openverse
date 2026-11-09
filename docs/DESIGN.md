@@ -122,6 +122,23 @@ not an `array{a₀, …}`, which would run `aₙ₋₁` before `a₀`'s value wa
   the names they bind (`$firstP`, as for #246's functions of their own),
   the alternatives a plain choice, and the names bound from the tuple of
   the one that succeeds. Only such choices are copied, once per alternative.
+  When the clauses after such a choice have another one, so that the copies
+  would double with each (#335), they become a function of their own,
+  `$cont…`, which each alternative calls. It is `<decides>`, with the
+  function's own effects. It takes the alternative's value and the names
+  the clauses use (`Self` in a method; a `var` they set, copied in and
+  out), and gives the tuple of the names they bind at their first success.
+  The call is a clause of the alternative's `first{…}`, so that its
+  failure goes back into the alternative's own values first, and the
+  tuple is that `first{…}`'s value.
+  - As #246's functions of their own, it is asked for by the first elaboration and made for the next. The first elaboration takes one alternative, for the names' types, and its code is not kept.
+  - The clauses are still copied, as before, in a constructor, a default, a `defer:`, a generic function, after a `return` or a `break` that leaves them, with a `var` binding, with `(super:)`, or where a call taken lazily is involved, since that call's function of its own takes the clauses after it.
+  - They are also copied where the alternatives' values have different types (subclasses), since the function takes one type, and inside a function of its own of a call taken lazily that allows fewer effects than the function the continuation was asked for in.
+  - The key has the captured names' types: a `for`'s body copied once per alternative has one place but names of other types.
+  - The first elaboration elaborates every other alternative alone, without the clauses after it, for its type and for the continuations inside it, so nesting through inlined functions takes no more elaborations.
+  - Code and compile time are now linear in the number of such choices in one condition: ten calls of a function with a `return` and a choice after it take 44 KB and 0.04 s, where copying took 2.3 MB and 16 s.
+  - Each call is a non-tail call in a filter, so n of them nest n deep in the evaluator's depth budget.
+  In a `for`, the clauses are still copied: there the function would hold the `for`'s body too, which may not run in a failure context (#335).
 
 Since the result is ordinary Verse Core, every theorem holds of it as it
 stands, and the C runtime runs it unchanged. What is new is proved in
@@ -221,7 +238,7 @@ A `for` compiles it this way wherever its clauses go:
 
 The names made for a path, and for a composed choice in a first-success context or a `for` (`$x…`, `$ct…`, `$cf…`), contain the binding's name. That name is tagged for the inlined call's site, while a position inside an inlined body is shared by every call of it. So two calls of the same function in one context don't clash. The one-element generator is named for the depth of its scope, since a `for` of an alternative's own has the same position.
 
-Each path copies the clauses after the choice and the body, so the code doubles with each such call in one `for`, as with #296's composed choices. The route around both is the same: continuation functions.
+Each path copies the clauses after the choice and the body, so the code doubles with each such call in one `for`, as with #296's composed choices there. Where the first success is taken, those clauses are a function of their own since #335. A `for`'s still holds its body, which may `return`, suspend or signal, none of which a function in a failure context may do.
 `checkBody` reads an exclusive choice as an if-chain on its guards.
 Programs without one compile byte for byte as before. The last statement's branches return
 their values (`tailReturns`), and a `return` without a value gives `()`.
