@@ -6244,7 +6244,8 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
   let rootJ (k : Nat) : Nat := user.length + k
   let rootTags := (List.range roots.size).map (fun k => tagBase + rootJ k) ++ (List.range B).map wrapTag
   let mainJ := (lows.findIdx? (·.1 == mainSig.idx)).getD 0
-  let rootAny : VTy := .ref ((tagBase + mainJ) :: rootTags) []
+  let rootAnyTags : List Nat := (tagBase + mainJ) :: rootTags
+  let rootAny : VTy := .ref rootAnyTags []
   -- each root's trampoline (frame, sched) and `start(sched, frame)`
   let mut rootSigs : Array (List VTy × VTy) := #[]
   for k in List.range roots.size do
@@ -6635,7 +6636,6 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
   -- roots' type widened by `$nil`, so that its initial value is an empty
   -- object, and the unwinding goes through a test of the roots' classes, to
   -- `$cancelRootSelf(root, sched)`, `$cancelRoot` with its root first.
-  let rootAnyTags : List Nat := (tagBase + mainJ) :: rootTags
   let rootW : VTy := .ref (rootAnyTags ++ [nilTag]) []
   let cancelSelfIdx := cancelRootIdx + cancelFns.size
   let cancelTaskRootIdx := cancelSelfIdx + 1
