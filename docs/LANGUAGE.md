@@ -742,7 +742,9 @@ Main():void =
     arguments do with all the values that call leads to, when the context
     rejects them all (a tree walk that prints keeps only the path to the
     value taken). When those have effects, the call and the clauses after
-    it run as a function of their own, recursive (not yet in a method).
+    it run as a function of their own, recursive (also in a method, taking
+    `Self`; not yet where those clauses call `(super:)` or use `Self` of a
+    generic class).
 
   ```verse
   Upto(A:int, B:int)<transacts><decides>:int =
@@ -776,9 +778,10 @@ Main():void =
 
   Refused for now: a recursive one that is not a generator and is not
   `<computes>`, or may print or call `Err()`, a generator whose clauses,
-  conditions or arguments have effects where the first success is taken in
-  a method, a constructor, a parameter's or field's default or a `defer:`,
-  or where the names the clauses after it use have type parameters, a
+  conditions or arguments have effects where the first success is taken
+  and the clauses after it call `(super:)`, in a constructor, a parameter's
+  or field's default or a `defer:`, or where the names the clauses after it
+  use have type parameters (`Self` of a generic class among them), a
   generic or overloaded one, one with named parameters
   or a `return` or a `defer:` of its own (in its body, not in a block inside it), a method, one used as a function value, a call of a
   recursive one in an `if`'s branch, a choice's alternative or a `set`'s path, and, since its body is inlined where other names may be
