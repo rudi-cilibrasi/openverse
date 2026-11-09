@@ -32,7 +32,17 @@ holder(t:type) := class:
         if (D := dup[P]) then X else P.B
     Get(P:pair(a, b), Y:a where a:type, b:type):b =
         if (D := dup[P]) then Y else P.B
+# (a field named like a built-in is the built-in when called, in the branch
+# as outside it)
+Two(X:int, Y:int):int = X * 10 + Y
+host := class:
+    Max:type{_(:int, :int):int} = Two
+    F(P:pair(a, b) where a:type, b:type):string =
+        Out := Max(7, 3)
+        In := if (D := dup[P]) then Max(7, 3) else 0
+        "{Out} {In}"
 Main():void =
+    Print(host{}.F(dup(int){A := 1, B := 2}))
     V := evaluator{}
     R := V.Ev(pairE(int, int){L := lit{V := 1}, R := lit{V := 2}})
     Print("{R(0)} {R(1)} calls {V.Calls}")

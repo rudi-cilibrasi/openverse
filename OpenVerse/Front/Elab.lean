@@ -2021,7 +2021,9 @@ partial def selfQualify (ctx : Ctx) (c : String) (e : SExpr) : SExpr :=
     | .app p (.ident q n) args br =>
       if free n && (isMethod n || (isField n && !builtins.contains n && !softBuiltins.contains n)) then
         some (.app p (.member q (.ident q "Self") n) (args.map (selfQualify ctx c)) br)
-      else none
+      -- (a call of anything else keeps its head as written: a field named
+      -- like a built-in, `Max(7, 3)`, is the built-in there, as elsewhere)
+      else some (.app p (.ident q n) (args.map (selfQualify ctx c)) br)
     | .ident p n => if free n && (isField n || isMethod n) then some (.member p (.ident p "Self") n) else none
     | _ => none) e
 
