@@ -30,6 +30,10 @@ do not give: spawn{Zc.Cp()} with Zc a pairE(int, string)). Since #337, a class b
 redeclares Cp narrower (mx(t)), and pairX below it is copied through code generic over mx(t).
 At times pairE's Cp returns tagged(a, b, int) and pairX's laterX(a, b, int): result classes with
 a type parameter more than the method's cell (#337's review).
+Since #344, an interface family where ci(t) gives its parent cont([]t): a class ibx(t) below
+ci(t) and a direct implementer of cont([]int), read through code generic over cont(u) and ci(t);
+a two-parameter pin kvI(k, v) over cont(tuple(k, v)), a three-level chain c3(c) over ci(?c), a
+parametric class below intI, an interface without parameters over cont(int), and refining casts.
 argv: seed expfile [--cmp]
 """
 import random, sys
@@ -37,6 +41,7 @@ seed = int(sys.argv[1]); out_exp = sys.argv[2]
 R = random.Random(seed)
 R2 = random.Random(seed * 1000003 + 317)   # (Pk's choices, #317)
 R3 = random.Random(seed * 1000003 + 324)   # (Cp's choices, #324)
+R7 = random.Random(seed * 1000003 + 344)   # (the interface pins' choices, #344)
 def ch(p): return R.random() < p
 CMP = True   # comparable opened parameters (fixed in #252)
 
@@ -167,6 +172,38 @@ eqE(a:subtype(comparable)) := class(ex(logic)):
     R:ex(a)
     Eval<override>():logic = logic{L.Eval() = R.Eval()}
     Cp<override>()<suspends>:eqE(a) = eqE(a){L := L.Cp(), R := R.Cp()}''' if V['cmp'] else '') + '''
+cont(c:type) := interface:
+    Gt():c
+ci(c:type) := interface(cont([]c)):
+    Sz():int
+ibx(c:type) := class(ci(c)):
+    V:c
+    Gt<override>():[]c = array{V, V}
+    Sz<override>():int = 2
+iarr := class(cont([]int)):
+    Xs:[]int
+    Gt<override>():[]int = Xs
+kvI(k:type, v:type) := interface(cont(tuple(k, v))):
+    Ky():k
+kvp(k:type, v:type) := class(kvI(k, v)):
+    K:k
+    W:v
+    Gt<override>():tuple(k, v) = (K, W)
+    Ky<override>():k = K
+c3(c:type) := interface(ci(?c)):
+    Hs():logic
+obx(c:type) := class(c3(c)):
+    O:?c
+    Gt<override>():[]?c = array{O, O, O}
+    Sz<override>():int = 1
+    Hs<override>():logic = if (O?) then true else false
+intI := interface(cont(int)):
+    Tg():int
+ipar(w:type) := class(intI):
+    Wv:w
+    N:int
+    Gt<override>():int = N
+    Tg<override>():int = N + 1
 Id(X:x where x:type):x = X
 Flip(T:tuple(x, y) where x:type, y:type):tuple(y, x) = (T(1), T(0))
 First(T:tuple(x, y) where x:type, y:type):x = T(0)
@@ -410,6 +447,9 @@ CpS(E:ex(t) where t:type)<suspends>:t =
     T := spawn{E.Cp()}
     T.Await().Eval()
 CpC(E:ex(t) where t:type)<suspends>:t = E.Cp().Cp().Eval()
+GtC(C:cont(u) where u:type):u = C.Gt()
+SzI(C:ci(c) where c:type):int = GtC(C).Length + C.Sz()
+KyC(C:kvI(k, v) where k:type, v:type):tuple(k, v) = (C.Ky(), GtC(C)(1))
 CpM(E:mx(t) where t:type)<suspends>:t = E.Cp().Eval()
 CpMM(E:mx(t) where t:type)<suspends>:t = E.Cp().Cp().Eval()"""
 def cp_call(nm, n, t):
@@ -471,6 +511,41 @@ for i in range(R.randint(3, 8)):
     if ch(0.3):
         main.append(f'    Print("native {nm}: {{{shname(t)}({nm}.Eval())}}")')
         expect.append(f"native {nm}: {show(native(n), t)}")
+# the interface pins (#344): ibx(T) through cont(u) (u is []T) and ci(c); and a []cont([]int)
+# holding an ibx(int) and an iarr
+for i in range(R7.choice([0, 1, 2])):
+    t = rtype(); x, v = lit2(t)
+    main.append(f"    Ib{i} := ibx({tyt(t)}){{V := {x}}}")
+    main.append(f'    Print("ib{i}: {{SzI(Ib{i})}} {{if (E := GtC(Ib{i})[1]) then {shname(t)}(E) else "none"}}")')
+    expect.append(f"ib{i}: 4 {show(v, t)}")
+for i in range(R7.choice([0, 1, 1, 2])):
+    k = R7.choice(['kv', 'ob', 'ip', 'cast'])
+    if k == 'kv':
+        tk, tv = rtype(2), rtype(2); (x, xv), (y, yv) = lit2(tk), lit2(tv)
+        main.append(f"    Kv{i} := kvp({tyt(tk)}, {tyt(tv)}){{K := {x}, W := {y}}}")
+        main.append(f'    Print("kv{i}: {{{shname(Tup(tk, tv))}(KyC(Kv{i}))}}")')
+        expect.append(f"kv{i}: {show((xv, yv), Tup(tk, tv))}")
+    elif k == 'ob':
+        t = rtype(2); o, ov = lit2(Opt(t))
+        main.append(f"    Ob{i} := obx({tyt(t)}){{O := {o}}}")
+        main.append(f'    Print("ob{i}: {{SzI(Ob{i})}} {{if (Ob{i}.Hs()?) then "T" else "F"}}")')
+        expect.append(f"ob{i}: 4 {'F' if ov is None else 'T'}")
+    elif k == 'ip':
+        t = rtype(2); x, _ = lit2(t); nv = R7.randint(0, 20)
+        main.append(f"    Ip{i} := ipar({tyt(t)}){{Wv := {x}, N := {nv}}}")
+        main.append(f'    Print("ip{i}: {{GtC(Ip{i})}} {{Ip{i}.Tg()}}")')
+        expect.append(f"ip{i}: {nv} {nv + 1}")
+    else:
+        nv = R7.randint(0, 20); isbox = R7.random() < 0.6
+        rhs = f"ibx(int){{V := {nv}}}" if isbox else "iarr{Xs := array{1}}"
+        main.append(f"    Cc{i}:cont([]int) = {rhs}")
+        main.append(f'    Print("cc{i}: {{if (B := ibx[Cc{i}]) then "{{B.V}}" else "none"}}")')
+        expect.append(f"cc{i}: {nv if isbox else 'none'}")
+if R7.random() < 0.5:
+    n = R7.randint(0, 3); xs = [R7.randint(0, 9) for _ in range(n)]
+    main.append(f"    Cs:[]cont([]int) = array{{ibx(int){{V := 3}}, iarr{{Xs := array{{{', '.join(map(str, xs))}}}}}}}")
+    main.append('    for (C : Cs) { Print("cs {GtC(C).Length}") }')
+    expect.extend(["cs 2", f"cs {n}"])
 # Sz's fstE rule with its call in the condition: a failed inner call is the
 # else (1), and its write to the inner pair's Hits is rolled back
 if SZ_COND:

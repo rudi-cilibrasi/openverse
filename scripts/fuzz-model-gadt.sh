@@ -5,7 +5,8 @@
 # with the clauses after a cast from #277 and named arguments with defaults of no
 # type of their own through opening dispatches from #317, and covariant <suspends>
 # overrides through them from #324, also spawned on a value of the class itself from
-# #321, and through a class between that redeclares it narrower from #337),
+# #321, and through a class between that redeclares it narrower from #337; interfaces that
+# give a parent interface other type arguments from #344),
 # each predicting the program's output, or the message of the refusal it
 # expects. Each seed uses one model in turn. Lean must match the model, and C
 # must match Lean; no program may hit an internal error.
