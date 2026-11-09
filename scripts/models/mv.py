@@ -281,6 +281,11 @@ NAM = LAZY and 'nonam' not in flags and 'cf' not in flags
 # argument and the body must both read the field (the silent bug #310's review
 # found).
 MVM = 'nomvm' not in flags
+# ---- #338 (with altch): at times a test that takes the first success starts with two composed
+# choices, X := T | (C + L) with a choice C inside an alternative, the second in the rest of
+# the first, so the front end compiles that rest once as a continuation ($cont, #335). A
+# separate generator decides, so seeds keep their other choices.
+R5 = random.Random(seed * 1000003 + 338)
 # ---- #328 (with mvm): at times the test's class overrides Mv with several values of its own,
 #   MvT<override>(MpT:int):int = MpT * 3 | (super:)MvT(MpT) | MpT - 1
 # Run, the fields and the base MvT are then in a parent class, so the bare MvT(..) in Run
@@ -1910,6 +1915,13 @@ for ti in range(NT):
     n = R.randint(1, 4)
     lastval = kind in ('first', 'formacro', 'ifmacro', 'option', 'or')
     cl, scope = gen_clauses([], vars_, 0, n, allow_gen=isfor, lastval=lastval, isfor=isfor)
+    if not isfor and ALTCH and R5.random() < 0.35:
+        two = []
+        for _ in range(2):
+            alt1 = ('tell', fresh("t"), leaf([], vars_))
+            alt2 = ('bin', '+', ('choice', [leaf([], vars_), leaf([], vars_)]), leaf([], vars_))
+            two.append(('bind', fresh("X"), ('choice', [alt1, alt2])))
+        cl = two + cl
     if kind not in ('for', 'formacro', 'option'):
         cl.append(('filter', ('cmp', leaf(scope, vars_), [(R.choice(OPS), leaf(scope, vars_))])))
     if not any(top_choice_c(c) for c in cl):
