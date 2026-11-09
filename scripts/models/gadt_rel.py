@@ -93,9 +93,9 @@ def unify(eqs):
     while work:
         a, b = work.pop()
         a, b = walk(a), walk(b)
-        # (a string is an array of char32 in Verse: []x unifies with it, at x = char32)
-        if a == STR: a = Arr(('char32',))
-        if b == STR: b = Arr(('char32',))
+        # (a string is an array of char in Verse, string = []char: []x unifies with it, at x = char)
+        if a == STR: a = Arr(('char',))
+        if b == STR: b = Arr(('char',))
         if a == b: continue
         if a[0] in ('var', 'pos') or b[0] in ('var', 'pos'):
             if a[0] not in ('var', 'pos'): a, b = b, a
