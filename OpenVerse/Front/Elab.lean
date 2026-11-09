@@ -2504,14 +2504,61 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
     return ⟨Expr.logicE r.e, .logic⟩
   | .ite p conds thenE elseE =>
     -- (a cast that refines type arguments, as the whole condition, #243,
-    -- or as its first clause: `if (D := T[X], rest) then B else E` is
-    -- `if (D := T[X]) then (if (rest) then B else E) else E`, the cast
-    -- having no effects to undo when `rest` fails)
+    -- or as its first clause, the cast having no effects to undo when the
+    -- rest fails: `if (D := T[X], rest) then B` is `if (D := T[X]) then (if
+    -- (rest) then B)`, and with an `else E`, the branch's function gives
+    -- `option{B}`, or `false` when the rest fails, and `E` runs once, in the
+    -- caller, not under the refinement, #286)
     if let .decl dp d none false (.app _ (.ident _ T) [x] true) :: more := conds then
-      let thenE' := Refine.castRest p more thenE elseE
-      match ← elabRefinedIf ctx p dp d T x thenE' elseE exp with
-      | some r => return r
-      | none => pure ()
+      match more, elseE with
+      | [], _ =>
+        match ← elabRefinedIf ctx p dp d T x thenE elseE exp with
+        | some r => return r
+        | none => pure ()
+      | _, none =>
+        match ← elabRefinedIf ctx p dp d T x (Refine.castRest p more thenE none) none exp (made := true) with
+        | some r => return r
+        | none => pure ()
+      | _, some ee =>
+        -- (at the if's type `τ`: void, the branch's function says whether
+        -- the rest succeeded)
+        -- (the branch runs outside any failure context, in the branch's
+        -- function and in the caller, which keeps its result first: when
+        -- it fails, the if fails, as a branch does; only `false`, the rest
+        -- having failed, runs `E`)
+        let attempt (τ : Ty) : EM (Option R) := do
+          let isVoid := τ == .void
+          let v := s!"$cv{p.line}_{p.col}"
+          let thenV : SExpr := if isVoid then .block p [thenE, .ident p "true"]
+            else .block p [.decl p v none false thenE, .optionLit p (.ident p v)]
+          let inner := Refine.castRest p more thenV (some (.ident p "false"))
+          let rty : Ty := if isVoid then .logic else .opt τ
+          match ← elabRefinedIf ctx p dp d T x inner (some (.ident p "false")) (some rty) (made := true) with
+          | some r =>
+            let t ← fresh rty
+            if isVoid then
+              let eE ← elabE ctx ee none
+              return some ⟨.seq (.assign t r.e) (.ite (.prim .query [.local t]) (.lit .void) (.seq eE.e (.lit .void))), .void⟩
+            let eE ← coerce p (← elabE ctx ee (some τ)) τ
+            let xv ← fresh τ
+            return some ⟨.seq (.assign t r.e) (.ite (.assign xv (.prim .query [.local t])) (.local xv) eE), τ⟩
+          | none => return none
+        -- (without an expected type: the else's, else void, as a statement
+        -- whose branches' types differ)
+        -- (a later elaboration decides as the first did: by the result
+        -- type of the function it asked for, `logic` for void)
+        let r? ← match exp with
+          | some t => attempt t
+          | none => do
+            let st0 ← get
+            let re ← elabE ctx ee none
+            set st0
+            match ctx.types.castRequests.find? (·.key == Refine.keyOf p d) with
+            | some l => attempt (match l.ret with | .name "logic" => .void | _ => re.ty)
+            | none =>
+              if re.ty == .void then attempt .void
+              else tryCatch (attempt re.ty) fun _ => attempt .void
+        if let some r := r? then return r
     let (rc, ctxT) ← if Choice.hasChoice conds then elabOneClauses { ctx with canFail := true } conds
       else elabSeq { ctx with canFail := true, inTaking := true } conds none
     -- (not while a function value is asked for, #214, #231: a call through
@@ -3718,7 +3765,7 @@ partial def elabCast (ctx : Ctx) (p : Pos) (T : String) (args : List SExpr) (bra
     with the object (as `D`) and those locals passed at their refined
     types. `none` when the cast does not refine: the plain path. -/
 partial def elabRefinedIf (ctx : Ctx) (p _dp : Pos) (D T : String) (x : SExpr) (body0 : SExpr)
-    (elseE : Option SExpr) (exp : Option Ty) : EM (Option R) := do
+    (elseE : Option SExpr) (exp : Option Ty) (made : Bool := false) : EM (Option R) := do
   let env := ctx.types
   if !env.classes.contains T then return none
   -- (in a method: the members of `Self` the branch names bare, as members
@@ -3826,7 +3873,9 @@ partial def elabRefinedIf (ctx : Ctx) (p _dp : Pos) (D T : String) (x : SExpr) (
         extra.map fun (n, _) => { name := s!"$type{n}", ty := .name n },
       tparams := tps.map fun (n, c) => { pos := p, name := n, constraint := if c then "comparable" else "type" },
       specs, ret := ret.toSTy, subst := σ, opened := opened.map fun (n, v, _) => (n, v),
-      body := if ctx.selfClass.isSome then some body else none }
+      -- (made: a branch the elaborator made, for a cast with clauses
+      -- after it, #286, which the source does not have as such)
+      body := if ctx.selfClass.isSome || made then some body else none }
     modify fun st => if st.castNeeds.any (·.key == key) then st else { st with castNeeds := st.castNeeds ++ [lift] }
     -- (a placeholder: this elaboration goes no further)
     return some ⟨if decides then .prim .fail [] else .prim .userErr [], τ'⟩

@@ -126,6 +126,11 @@ def functions (lifts : List Lift) (tops : List STop) : List STop := Id.run do
   if lifts.isEmpty then return []
   let mut out : Array STop := #[]
   let mut done : List String := []
+  -- (a branch the lift has, a method's or one the elaborator made, as it is)
+  for l in lifts do
+    if let some b := l.body then
+      done := l.key :: done
+      out := out.push (.fn l.pos l.name l.params l.tparams l.specs l.ret (substTypes l.subst b))
   let mut todo : List SExpr := tops.flatMap fun
     | .fn _ _ ps _ _ _ b => b :: ps.filterMap (·.default)
     | .classDef _ _ _ _ _ _ _ _ ms => ms.flatMap fun
@@ -135,17 +140,11 @@ def functions (lifts : List Lift) (tops : List STop) : List STop := Id.run do
   while !todo.isEmpty do
     let e := todo.head!
     todo := todo.tail!
-    -- (the cast as the condition's first clause: the branch is the `if`
-    -- of the rest, as the elaborator reads it)
-    if let .ite p (.decl _ d none false _ :: more) body0 els := e then
+    if let .ite p [.decl _ d none false _] body _ := e then
       if let some l := lifts.find? (·.key == keyOf p d) then
         if !done.contains l.key then
           done := l.key :: done
-          let body := castRest p more body0 els
-          out := out.push (.fn p l.name l.params l.tparams l.specs l.ret (substTypes l.subst (l.body.getD body)))
-      -- (the `if` of the rest, as the elaborator reads it: a cast that is
-      -- its first clause, the second of the condition, is lifted too)
-      if !more.isEmpty then todo := castRest p more body0 els :: todo
+          out := out.push (.fn p l.name l.params l.tparams l.specs l.ret (substTypes l.subst body))
     todo := kids e ++ todo
   return out.toList
 
