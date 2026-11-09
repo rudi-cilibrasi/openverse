@@ -1,4 +1,4 @@
-# expect: both gives container the type arguments t, but its own are t, u
+# expect: both gives sink the type arguments u, but its own are t, u: a class below an interface that does not give it its first type parameters, in order, is not supported yet (#276)
 container(t:type) := interface:
     Size():int
 sink(t:type) := interface:

@@ -462,8 +462,9 @@ flowchart LR
 - **`subscribable_event(t)`** is Verse code in a prelude (`subPrelude`):
   `event(t)` with an array of (subscription, handler) pairs, the handlers
   of type `type{_(:t):void}`, called under the refinement in `Signal`. A
-  subscription is a non-generic object with a live flag, as a generic
-  class cannot implement the non-generic `cancelable` (#53); `Signal`
+  subscription is a non-generic object with a live flag (written when a
+  generic class could not implement the non-generic `cancelable`, #53,
+  which #276 now allows); `Signal`
   drops the cancelled ones, so the array holds the live subscriptions and
   those cancelled since the last `Signal` (a loop that subscribes and
   cancels without signalling grows it until the next `Signal`). `Signal`
@@ -1007,7 +1008,14 @@ dispatch reaches, read those from their receiver instead of taking them
 (`Sig.selfTps`): a slot starts as the field (`DefaultE.field`, a field
 of a parameter's object). Its other methods are called at known types,
 as before. Only classes with an override at or below them get the
-fields, and only reference classes' overrides read them. A `<suspends>`
+fields, and only reference classes' overrides read them. A class without
+a parent class counts its type parameters against the first interface it
+lists (#276), as `rootArgCount` does: `box(t) := class(shower)` adds `t`
+to `shower`'s none, `pairbox(t, u) := class(container(t))` adds `u`. The
+interface's type arguments must be the class's first ones, in order, so
+that a reference to the interface has a prefix of the class's and a
+dispatch from it opens the rest; `iargs` records an empty list for an
+interface without type parameters, so that its classes' roots give none. A `<suspends>`
 override of such a class works (#251, see "Avoiding allocation and
 journaling"). A `spawn` in one, and a call whose omitted named argument's
 default has no type of its own in a dispatch that opens arguments, are

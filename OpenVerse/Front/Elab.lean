@@ -7225,8 +7225,12 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       -- whose branch's function reads them from the object, also those an
       -- ancestor of the target adds)
       let methodsBelow := methodsBelow || opts.castRequests.any fun l => !l.opened.isEmpty && henv.isSub l.target cd.name
-      if let some q := (henv.info cd.name).parent then
-        let qargs := ((cd.parents.zip cd.parentArgs).lookup q).getD []
+      -- (#276: a root class counts them against the first interface it
+      -- lists, as `rootArgCount` does)
+      let qargs? : Option (List STy) := match (henv.info cd.name).parent with
+        | some q => some (((cd.parents.zip cd.parentArgs).lookup q).getD [])
+        | none => ((cd.parents.zip cd.parentArgs).find? fun (q, _) => (henv.info q).isIface).map (·.2)
+      if let some qargs := qargs? then
         for tp in (if methodsBelow then cd.tps else []) do
           if !qargs.any (fun | .name v => v == tp.name | _ => false) then
             fs := fs ++ [(s!"$w.{cd.name}.{tp.name}", .name tp.name, some (.ident cd.pos "$witness"), false)]
@@ -7463,10 +7467,13 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
         pargs := pargs.push (cd.name, tys)
   env := { env with pargs := pargs.toList }
   -- the type arguments of each parametric interface a class or interface
-  -- lists as a parent (#53)
+  -- lists as a parent (#53), and none for an interface a class with type
+  -- parameters lists without them (#276): the class's root then gives none
   let mut iargs : Array ((String × String) × List Ty) := #[]
   for cd in cdefs do
     for (q, qargs) in cd.parents.zip cd.parentArgs do
+      if (henv.info q).isIface && qargs.isEmpty && !((env.sparams.lookup cd.name).getD []).isEmpty then
+        iargs := iargs.push ((cd.name, q), [])
       if (henv.info q).isIface && !qargs.isEmpty then
         let cenv := { env with tvars := ((env.sparams.lookup cd.name).getD []).map fun (v, c) => (v, Ty.param v c) }
         let tys ← qargs.mapM fun sty => do
@@ -7483,18 +7490,21 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   -- give it a type argument it fixes, nor one it adds)
   let core (c : String) : List Ty :=
     env.coreArgs c (((env.sparams.lookup c).getD []).map fun (v, k) => Ty.param v k)
-  -- a class below an interface has as its Verse Core type arguments exactly
+  -- a class below an interface has as its Verse Core type arguments first
   -- those it gives the interface: references to the interface have those,
-  -- and dispatch and field reads through them recover the class's (#53)
+  -- and dispatch and field reads through them recover the class's (#53);
+  -- its other type parameters come after, held by its objects in hidden
+  -- fields, and a dispatch from the interface opens them, as for a class
+  -- whose parent's type arguments do not give them (#209, #276)
   for cd in cdefs do
     if !cd.isIface then
       let ps := ((env.sparams.lookup cd.name).getD []).map fun (v, k) => Ty.param v k
       for i in (env.supers cd.name).filter (env.info · |>.isIface) do
         let ia := env.upArgs cd.name ps i
-        if !(ia == core cd.name) then
+        if !(ia.isPrefixOf (core cd.name)) then
           let showArgs (ts : List Ty) : String := if ts.isEmpty then "none" else ", ".intercalate (ts.map Ty.show)
           if ia.length < (core cd.name).length then
-            throw s!"{cd.pos.show}: {cd.name} gives {i} the type arguments {showArgs ia}, but its own are {showArgs (core cd.name)}: a class below an interface with type parameters of its own is not supported yet (#53, #209)"
+            throw s!"{cd.pos.show}: {cd.name} gives {i} the type arguments {showArgs ia}, but its own are {showArgs (core cd.name)}: a class below an interface that does not give it its first type parameters, in order, is not supported yet (#276)"
           throw s!"{cd.pos.show}: {cd.name} gives {i} the type arguments {showArgs ia}, but its own are {showArgs (core cd.name)}: references to {i} could not recover them (#53)"
   for (mp, dm, qm) in overridePairs do
     let d := (dm.splitOn ".").head!
