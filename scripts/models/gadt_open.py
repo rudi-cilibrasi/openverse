@@ -26,7 +26,10 @@ Since #324, every class overrides Cp()<suspends> with its own, narrower result (
 from its parts' Cp, at its opened types), called from generic code through dispatches that open
 type arguments; its choices draw from a third generator. Since #321, Cp is also spawned on a
 value whose type is the class itself (a class with type parameters its parent's type arguments
-do not give: spawn{Zc.Cp()} with Zc a pairE(int, string)).
+do not give: spawn{Zc.Cp()} with Zc a pairE(int, string)). Since #337, a class between, mx(t),
+redeclares Cp narrower (mx(t)), and pairX below it is copied through code generic over mx(t).
+At times pairE's Cp returns tagged(a, b, int) and pairX's laterX(a, b, int): result classes with
+a type parameter more than the method's cell (#337's review).
 argv: seed expfile [--cmp]
 """
 import random, sys
@@ -78,6 +81,8 @@ def lit(t):
         x, v = lit(t[1]); return f"option{{{x}}}", ('some', v)
 
 V = {'dupP': R.choice(['swap', 'none']), 'cmp': CMP and ch(0.7)}
+V['cpT'] = R3.random() < 0.5     # (pairE's Cp gives a tagged(a, b, int))
+V['cpX'] = R3.random() < 0.5     # (pairX's Cp gives a laterX(a, b, int))
 CLASSES = f'''ex(t:type) := class<abstract>:
     Eval():t
     Name():string = "ex"
@@ -105,10 +110,13 @@ pairE(a:type, b:type) := class(ex(tuple(a, b))):
     L:ex(a)
     R:ex(b)
     Eval<override>():tuple(a, b) = (L.Eval(), R.Eval())
-    Cp<override>()<suspends>:pairE(a, b) =
+''' + ('''    Cp<override>()<suspends>:tagged(a, b, int) =
         Sleep(0.0)
-        pairE(a, b){{L := L.Cp(), R := R.Cp()}}
-    Pk<override>(?Alt:?tuple(a, b) = false, ?More:[]tuple(a, b) = array{{}}, ?N:int = 0):tuple(a, b) =
+        tagged(a, b, int){L := L.Cp(), R := R.Cp(), Tag := 0}
+''' if V['cpT'] else '''    Cp<override>()<suspends>:pairE(a, b) =
+        Sleep(0.0)
+        pairE(a, b){L := L.Cp(), R := R.Cp()}
+''') + f'''    Pk<override>(?Alt:?tuple(a, b) = false, ?More:[]tuple(a, b) = array{{}}, ?N:int = 0):tuple(a, b) =
         if (A := Alt?) then A else if (M := More[N]) then M else (L.Pk(), R.Pk())
 fstE(a:type, b:type) := class(ex(a)):
     P:ex(tuple(a, b))
@@ -127,7 +135,21 @@ mkE(a:type, b:type) := class(ex(tuple(a, b))):
     Cp<override>()<suspends>:mkE(a, b) = mkE(a, b){{X := X, Y := Y}}
     Pk<override>(?Alt:?tuple(a, b) = false, ?More:[]tuple(a, b) = array{{}}, ?N:int = 0):tuple(a, b) =
         if (A := Alt?) then A else if (M := More[N]) then M else (X, Y)
-optE(a:type) := class(ex(?a)):
+mx(t:type) := class<abstract>(ex(t)):
+    Cp<override>()<suspends>:mx(t)
+pairX(a:type, b:type) := class(mx(tuple(a, b))):
+    L:ex(a)
+    R:ex(b)
+    Eval<override>():tuple(a, b) = (L.Eval(), R.Eval())
+''' + ('''    Cp<override>()<suspends>:laterX(a, b, int) =
+        Sleep(0.0)
+        laterX(a, b, int){L := L.Cp(), R := R.Cp()}
+laterX(a:type, b:type, s:type) := class(pairX(a, b)):
+    K:int = 0
+''' if V['cpX'] else '''    Cp<override>()<suspends>:pairX(a, b) =
+        Sleep(0.0)
+        pairX(a, b){L := L.Cp(), R := R.Cp()}
+''') + f'''optE(a:type) := class(ex(?a)):
     E:ex(a)
     Eval<override>():?a = option{{E.Eval()}}
     Cp<override>()<suspends>:optE(a) = optE(a){{E := E.Cp()}}
@@ -151,7 +173,7 @@ First(T:tuple(x, y) where x:type, y:type):x = T(0)
 MkCst(X:x where x:type):ex(x) = cst(x){V := X}'''
 
 PARENT = {'lit': None, 'slit': None, 'cst': None, 'pairE': None, 'fstE': None, 'sndE': None, 'mkE': None,
-          'optE': None, 'dupP': 'pairE', 'tagged': 'pairE', 'leafP': 'pairE', 'eqE': None}
+          'optE': None, 'mx': None, 'pairX': 'mx', 'laterX': 'pairX', 'dupP': 'pairE', 'tagged': 'pairE', 'leafP': 'pairE', 'eqE': None}
 def below(c, t):
     while c is not None:
         if c == t: return True
@@ -172,6 +194,7 @@ def native(n):
     if c == 'fstE': return native(n.P)[0]
     if c == 'sndE': return native(n.P)[1]
     if c == 'mkE': return (n.x, n.y)
+    if c in ('pairX', 'laterX'): return (native(n.L), native(n.R))
     if c == 'optE': return ('some', native(n.E))
     if c == 'eqE': return native(n.L) == native(n.R)
 
@@ -195,6 +218,11 @@ def gen(t, d=0):
         cands += ['tagged']
     if t[0] == 'opt': cands += ['optE'] * 2
     c = R.choice(cands)
+    if t[0] == 'tup' and c not in ('lit', 'slit', 'cst') and R3.random() < 0.15:
+        c = 'pairX'
+    if c == 'pairX':
+        l, r = gen(t[1], d + 1), gen(t[2], d + 1)
+        return N(c, t, f"pairX({tyt(t[1])}, {tyt(t[2])}){{L := {l.txt}, R := {r.txt}}}", L=l, R=r)
     if c in ('lit', 'slit', 'cst'):
         x, v = lit(t)
         txt = {'lit': f"lit{{V := {x}}}", 'slit': f"slit{{V := {x}}}", 'cst': f"cst({tyt(t)}){{V := {x}}}"}[c]
@@ -370,9 +398,10 @@ def pk_call(nm, n, t):
 def cp(n):
     c = n.cls
     if c == 'lit': return N('lit', n.ty, '', v=n.v + 1)
-    if below(c, 'pairE'): return N('pairE', n.ty, '', L=cp(n.L), R=cp(n.R))
+    if below(c, 'pairE'): return N('tagged' if V['cpT'] else 'pairE', n.ty, '', L=cp(n.L), R=cp(n.R))
     if c in ('fstE', 'sndE'): return N(c, n.ty, '', P=cp(n.P))
     if c == 'optE': return N('optE', n.ty, '', E=cp(n.E))
+    if c in ('pairX', 'laterX'): return N('laterX' if V['cpX'] else 'pairX', n.ty, '', L=cp(n.L), R=cp(n.R))
     if c == 'eqE': return N('eqE', n.ty, '', L=cp(n.L), R=cp(n.R))
     return n     # slit, cst, mkE: a new object with the same values
 CP_TEXT = """CpE(E:ex(t) where t:type)<suspends>:t = E.Cp().Eval()
@@ -380,7 +409,9 @@ CpV(E:ex(t) where t:type)<suspends>:t = Ev(E.Cp())
 CpS(E:ex(t) where t:type)<suspends>:t =
     T := spawn{E.Cp()}
     T.Await().Eval()
-CpC(E:ex(t) where t:type)<suspends>:t = E.Cp().Cp().Eval()"""
+CpC(E:ex(t) where t:type)<suspends>:t = E.Cp().Cp().Eval()
+CpM(E:mx(t) where t:type)<suspends>:t = E.Cp().Eval()
+CpMM(E:mx(t) where t:type)<suspends>:t = E.Cp().Cp().Eval()"""
 def cp_call(nm, n, t):
     k = R3.choice(['e', 'e', 'v', 's', 'c', 'direct'])
     if k == 'v':
@@ -423,6 +454,11 @@ for i in range(R.randint(3, 8)):
         call, v, logs = cp_call(nm, n, t)
         main.append(f'    Print("cp {nm}: {{{shname(t)}({call})}}")')
         expect.extend(logs); expect.append(f"cp {nm}: {show(v, t)}")
+    if n.cls == 'pairX':
+        f = R3.choice(['CpM', 'CpMM'])
+        main.append(f"    Mx{i} := {n.txt}")
+        main.append(f'    Print("cm {nm}: {{{shname(t)}({f}(Mx{i}))}}")')
+        expect.append(f"cm {nm}: {show(native(cp(cp(n)) if f == 'CpMM' else cp(n)), t)}")
     if n.cls in ('pairE', 'mkE', 'optE', 'fstE', 'sndE', 'tagged') and R3.random() < 0.35:
         main.append(f"    Zc{i} := {n.txt}")
         main.append(f"    Zt{i} := spawn{{Zc{i}.Cp()}}")
