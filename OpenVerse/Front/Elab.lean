@@ -2609,7 +2609,7 @@ partial def elabStmt (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM (R × Ctx) 
       -- (as messages show them: the type parameters' own names)
       let shown (t : Ty) : String :=
         (t.subst (names.map fun n => (n, Ty.param ((n.dropWhile (· != '_')).drop 1).toString false))).show
-      let penv : TyEnv := { ctx.types with tvars := ctx.types.tvars ++ names.map fun n => (n, Ty.param n false) }
+      let penv : TyEnv := { ctx.types with tvars := ctx.types.tvars ++ cons.map fun (n, c) => (n, Ty.param n (c == "comparable")) }
       let items ← decls.mapM fun
         | .decl q x (some sty) v a => do pure (q, x, v, a, ← resolveTy penv q sty)
         | d => eerr d.pos "internal: a $params clause (#235)"
