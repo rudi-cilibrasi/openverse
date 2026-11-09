@@ -1,0 +1,4 @@
+arm b defer
+F defer
+main goes on
+exit=0

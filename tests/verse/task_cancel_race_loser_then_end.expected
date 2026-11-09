@@ -1,0 +1,6 @@
+F got 5
+F defer
+main awaits
+main got 5
+main end
+exit=0

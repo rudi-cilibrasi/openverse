@@ -1,0 +1,8 @@
+still running s
+S defer s
+P after spawn i
+P defer i
+C end s
+Kid end i
+end
+exit=0

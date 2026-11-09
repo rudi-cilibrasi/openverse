@@ -1,0 +1,6 @@
+still running until it waits
+selfstop defer
+C end
+C defer
+end
+exit=0
