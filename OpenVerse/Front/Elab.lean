@@ -6642,13 +6642,22 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
       let selfH := ((sigOf h).map (·.selfTps)).getD []
       let witIdx := (List.range tpsH.length).filter fun i => !selfH.contains ((tpsH[i]?.map (·.1)).getD "")
       let wit := (hs.drop (hs.length - witIdx.length)).map fun w => tc Sorig Γ (fsigs0[gi]!).2 w none
+      -- (and those it reads from its receiver, which no witness gives: the
+      -- receiver's type matched against its receiver parameter's)
+      let selfIdx := (List.range tpsH.length).filter (!witIdx.contains ·)
+      let recvB : List (Nat × VTy) := if selfIdx.isEmpty then [] else
+        match ((fsigs0[h]?).bind (·.1.head?)), (hs.head?.bind fun r => tc Sorig Γ (fsigs0[gi]!).2 r none) with
+        | some p0, some τr => VTy.bindVars p0 τr []
+        | _, _ => []
       let θh : Nat → VTy := fun i => match (witIdx.idxOf? i).bind (wit[·]?) with
         | some (some τ) => τ
-        | _ => .var i
+        | _ => (recvB.lookup i).getD (.var i)
       -- (whether a type mentions a type parameter the callee reads from its
-      -- receiver, which no witness gives)
+      -- receiver that the receiver's type does not give: not expected, as
+      -- those are among its class's type arguments, which a receiver of a
+      -- reference type repeats; the refusal below stays as a message)
       let mentionsSelf (τ : VTy) : Bool :=
-        (τ.subst fun i => if witIdx.contains i then VTy.void else .var 0).mentionsVar
+        (τ.subst fun i => if selfIdx.contains i && (recvB.lookup i).isNone then .var 0 else VTy.void).mentionsVar
       -- (and then its class, whose hidden fields its root's slots of those
       -- types start as)
       rootSelf := rootSelf.push (if selfH.isEmpty then none
