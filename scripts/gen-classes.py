@@ -1802,7 +1802,14 @@ class Gen:
             L.append('        set X = %s.%s()' % (L1, ev))
             L.append('        (X, Y)')
         else:
-            L.append('    %s<override>()%s:tuple(a, b) = (%s.%s(), %s.%s())' % (ev, sx, L1, ev, R1, ev))
+            if su and chance(0.5):
+                # (a spawned dispatch at the opened type parameters, #209)
+                L.append('    %s<override>()%s:tuple(a, b) =' % (ev, sx))
+                L.append('        TL := spawn{%s.%s()}' % (L1, ev))
+                L.append('        Y:b = %s.%s()' % (R1, ev))
+                L.append('        (TL.Await(), Y)')
+            else:
+                L.append('    %s<override>()%s:tuple(a, b) = (%s.%s(), %s.%s())' % (ev, sx, L1, ev, R1, ev))
         if chance(0.6):
             L.append('    %s<override>():string = "xp({%s.%s()}, {%s.%s()})"' % (nm, L1, nm, R1, nm))
         L.append('%s(a:type, b:type) := class(%s(a)):' % (xf, xe))
