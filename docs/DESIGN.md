@@ -737,8 +737,7 @@ have pins on all of their type arguments, so that its dispatch to their
 resumption opens them (`Typed.dispatch`, #209), and a generic frame
 keeps the witnesses its resumption passes on. So such a function is
 compiled once, and calls itself at ever bigger types as any function
-does. `OPENVERSE_GENERIC_ROOTS=1` compiles them with generic roots only,
-without the copies below, which the gate's concurrency fuzzing also does.
+does.
 
 **Specialising generic functions with roots.** A generic function with a
 spawned dispatch whose receiver or arguments have types that mention its
@@ -759,19 +758,19 @@ of copies (500) and on the size of the types (2000 parts, which types that
 double at each call reach quickly) turn polymorphic recursion into an
 error.
 
-The other generic suspends functions are copied the same way where they
-are called at small closed types (at most 40 parts, 200 copies, 16 of
-each function, so that one calling itself at ever bigger types does not
-spend the budget, #256), and kept for every other call (#225). The copy is
-not needed for correctness. It was made for speed: a generic callee's frame
-used to sit in an option field, unwrapped and resumed in a condition, and
-a write in a condition makes the reference interpreter keep the heap as it
-was, for the rollback, and so copy it. Many tasks awaiting one event,
-`event(t)`'s generic `Await`, took quadratic time in Lean. Since #256 a
-generic callee is resumed after a test of its class too (see "Avoiding
-allocation and journaling"), and 4,000 tasks spawned from generic code
-awaiting one event take the same time with the copies as without
-(`tests/bench/generic_waiters.verse`).
+No other generic function is copied. Until #269 the other generic suspends
+functions were also copied where they were called at small closed types
+(#225), for speed: a generic callee's frame sat in an option field,
+unwrapped and resumed in a condition, and a write in a condition makes the
+reference interpreter keep the heap as it was, for the rollback, and so
+copy it. Many tasks awaiting one event, `event(t)`'s generic `Await`, took
+quadratic time in Lean. Since #256 a generic callee is resumed after a test
+of its class (see "Avoiding allocation and journaling"). Without the copies
+(2026-11-09, 12-core x86-64), the suite's concurrent programs compile in
+3.4 s instead of 4.2 s and run in
+9.4 s instead of 9.9 s in Lean, with the same output, and 40 programs of
+polymorphic recursion (`scripts/gen-conc-poly.py`, seeds 1 to 40) compile
+in 0.8 s instead of 5.2 s.
 
 ## Classes as references
 

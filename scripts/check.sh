@@ -33,16 +33,14 @@ check "front-end mutation fuzzing (${FUZZ_FRONT:-500} mutants)" scripts/fuzz-fro
 check "QuickProof pins" scripts/check-quickproof-pins.sh
 check "float fuzzing (${FUZZ_FLOATS:-200} programs, against Python's doubles)" scripts/fuzz-floats.sh "${FUZZ_FLOATS:-200}" 1
 check "choice fuzzing (${FUZZ_CHOICE:-200} programs, against a backtracking model)" scripts/fuzz-choice.sh "${FUZZ_CHOICE:-200}" 1
-check "scheduler model fuzzing (${FUZZ_MODEL_SCHED:-50} programs, both modes, against a model of the docs)" \
+check "scheduler model fuzzing (${FUZZ_MODEL_SCHED:-50} programs, against a model of the docs)" \
   scripts/fuzz-model-sched.sh "${FUZZ_MODEL_SCHED:-50}" 1
 check "GADT model fuzzing (${FUZZ_MODEL_GADT:-150} programs, against five models of the docs)" \
   scripts/fuzz-model-gadt.sh "${FUZZ_MODEL_GADT:-150}" 1
 check "choice model fuzzing (${FUZZ_MODEL_MV:-140} programs, functions with several values too)" \
   scripts/fuzz-model-mv.sh "${FUZZ_MODEL_MV:-140}" 1
-check "concurrency fuzzing (${FUZZ_CONC:-100} programs)" scripts/fuzz-conc.sh "${FUZZ_CONC:-100}" 1
-check "concurrency fuzzing with generic roots (${FUZZ_CONC_GR:-60} programs, #244)" \
-  env OPENVERSE_GENERIC_ROOTS=1 scripts/fuzz-conc.sh "${FUZZ_CONC_GR:-60}" 1001
-check "polymorphic-recursion concurrency fuzzing (${FUZZ_CONC_POLY:-60} programs, both modes, #244)" \
+check "concurrency fuzzing (${FUZZ_CONC:-160} programs)" scripts/fuzz-conc.sh "${FUZZ_CONC:-160}" 1
+check "polymorphic-recursion concurrency fuzzing (${FUZZ_CONC_POLY:-60} programs, #244)" \
   scripts/fuzz-conc-poly.sh "${FUZZ_CONC_POLY:-60}" 1
 check "heap-reclamation fuzzing (${FUZZ_FIELDS:-60} programs with array fields)" scripts/fuzz-fields.sh "${FUZZ_FIELDS:-60}" 1
 

@@ -5401,11 +5401,6 @@ structure Options where
   /-- Branches of casts that refine type arguments, found in an earlier
       elaboration (#243): a function for each. -/
   castRequests : List Refine.Lift := []
-  /-- Compile the generic functions with a `branch`, `rush` or `spawn` that
-      need no copies (#174) with generic roots only (#244), not also copies
-      at small closed types (#225): for testing those
-      (`OPENVERSE_GENERIC_ROOTS=1`). -/
-  genericRoots : Bool := false
 
 /-- A class or interface definition, as parsed. -/
 structure CDef where
@@ -5833,8 +5828,8 @@ def inFnMsg (tops : List STop) (name msg : String) : String :=
     signatures, each copy's original and type arguments, and which
     functions were replaced. -/
 def specialise (fns0 : Array Fn) (slotTys0 : Array (List VTy)) (S0 : Sigs) (ntpOf : Nat → Nat)
-    (isSusp : Nat → Bool) (branchMark rushMark spawnMark : Nat)
-    (inFn : String → String → String := fun n m => s!"in {n}: {m}") (genericRoots : Bool := false) :
+    (isSusp : Nat → Bool) (spawnMark : Nat)
+    (inFn : String → String → String := fun n m => s!"in {n}: {m}") :
     Except String (Array Fn × Array (List VTy) × Array (List VTy × VTy) × Array (Nat × List VTy) × Array Bool) := do
   let mut fns := fns0
   let mut slotTys := slotTys0
@@ -5844,7 +5839,6 @@ def specialise (fns0 : Array Fn) (slotTys0 : Array (List VTy)) (S0 : Sigs) (ntpO
   let resTy (S : Sigs) (gi : Nat) : VTy := ((S.fns[gi]?).map (·.2)).getD .void
   for gi in List.range nOrig do
     let Γ := slotTys[gi]!
-    let ρ := resTy S0 gi
     let openSlot (j : Nat) : Bool := ((Γ[j]?).map (·.mentionsVar)).getD false
     -- (#244: a branch, a rush, or a spawn of a call, is a root of the
     -- scheduler at the function's own type arguments, which its dispatch
@@ -5867,21 +5861,9 @@ def specialise (fns0 : Array Fn) (slotTys0 : Array (List VTy)) (S0 : Sigs) (ntpO
           (witTys S0 slotTys[gi]! (resTy S0 gi) g es).any (·.all (·.mentionsVar))) then
         needy := needy.set! gi true
         changed := true
-  -- (#225) the other generic suspends functions are copied too where they
-  -- are called at small closed types, within a budget, and kept for every
-  -- other call (made for speed when a generic callee's frame was resumed in
-  -- a condition, where its writes made the reference interpreter copy the
-  -- heap; since #256 it is resumed outside any condition too)
-  let holdsRoots (gi : Nat) : Bool := (Suspend.callsOf fns[gi]!.body).any fun (g, _) =>
-    g == branchMark || g == rushMark || g == spawnMark
-  let mut soft : Array Bool := (List.range nOrig).toArray.map fun gi =>
-    ntpOf gi > 0 && isSusp gi && !needy[gi]! && !(genericRoots && holdsRoots gi)
-  let mut softCopies := 0
-  -- (and at most 16 of each function: one calling itself at ever bigger
-  -- types, polymorphic recursion, would otherwise spend the whole budget,
-  -- each copy lowered on its own; its generic original serves the rest,
-  -- #256)
-  let mut softOf : Std.HashMap Nat Nat := {}
+  -- (the other generic functions are not copied: a generic callee's frame
+  -- is resumed outside any condition as a non-generic one's is, #256, so
+  -- copies at closed types, #225, gained nothing, #269)
   let mut specKeys : Array (Nat × List VTy) := #[]
   let mut queue : Array Nat := ((List.range nOrig).filter fun gi => !needy[gi]!).toArray
   let mut qi := 0
@@ -5891,29 +5873,9 @@ def specialise (fns0 : Array Fn) (slotTys0 : Array (List VTy)) (S0 : Sigs) (ntpO
     let S : Sigs := { S0 with fns := S0.fns ++ specSigs.toList }
     let Γ := slotTys[gi]!
     let ρ := resTy S gi
-    let calls := (Suspend.callsOf fns[gi]!.body).filter fun (g, _) => needy[g]?.getD false || soft[g]?.getD false
+    let calls := (Suspend.callsOf fns[gi]!.body).filter fun (g, _) => needy[g]?.getD false
     if calls.isEmpty then continue
     for (g, es) in calls do
-      if !(needy[g]?.getD false) then
-        -- (a soft one: copied only at a small closed type, within the budget)
-        let some θ := (witTys S Γ ρ g es).mapM id | continue
-        if θ.any (·.mentionsVar) || θ.any (·.size > 40) then continue
-        if !specKeys.contains (g, θ) then
-          if softCopies ≥ 200 || softOf.getD g 0 ≥ 16 then continue
-          let σ : Nat → VTy := fun i => θ.getD i (.var i)
-          let fn := fns[g]!
-          let Γc := slotTys[g]!.map (VTy.subst σ)
-          fns := fns.push { fn with name := s!"{fn.name}$at{specKeys.size}", body := Suspend.pruneDead S0 Γc fn.body }
-          slotTys := slotTys.push Γc
-          let (ps, τ) := (S0.fns[g]?).getD ([], .void)
-          specSigs := specSigs.push (ps.map (VTy.subst σ), τ.subst σ)
-          needy := needy.push false
-          soft := soft.push false
-          queue := queue.push (nOrig + specKeys.size)
-          specKeys := specKeys.push (g, θ)
-          softCopies := softCopies + 1
-          softOf := softOf.insert g (softOf.getD g 0 + 1)
-        continue
       let some θ := (witTys S Γ ρ g es).mapM id
         | throw (inFn fns[gi]!.name s!"a type argument of a call of {fns[g]!.name} has no type of its own (#174)")
       -- (types that grow at each copy, doubling for instance: polymorphic
@@ -5922,8 +5884,7 @@ def specialise (fns0 : Array Fn) (slotTys0 : Array (List VTy)) (S0 : Sigs) (ntpO
         throw (inFn fns[gi]!.name s!"{fns[g]!.name} would be compiled at a type of more than 2000 parts, as if at ever bigger types: a generic function with a spawned dispatch at its type parameters, or a generic immediate function with a spawn, or one using such a function at its own type parameters, cannot call itself at bigger types (#174)")
       if θ.any (·.mentionsVar) then throw s!"internal error: specialising a call of {fns[g]!.name} in {fns[gi]!.name}"
       if !specKeys.contains (g, θ) then
-        -- (the soft copies, #225, have their own budget)
-        if specKeys.size - softCopies ≥ 500 then
+        if specKeys.size ≥ 500 then
           throw (inFn fns[gi]!.name s!"more than 500 copies of generic functions with a spawned dispatch or an immediate spawn, one per type each is used at (last {fns[g]!.name}): a function calling itself at ever bigger types, or many nested generic uses, cannot be compiled (#174)")
         let σ : Nat → VTy := fun i => θ.getD i (.var i)
         let fn := fns[g]!
@@ -5933,15 +5894,13 @@ def specialise (fns0 : Array Fn) (slotTys0 : Array (List VTy)) (S0 : Sigs) (ntpO
         let (ps, τ) := (S0.fns[g]?).getD ([], .void)
         specSigs := specSigs.push (ps.map (VTy.subst σ), τ.subst σ)
         needy := needy.push false
-        soft := soft.push false
         queue := queue.push (nOrig + specKeys.size)
         specKeys := specKeys.push (g, θ)
     let keys := specKeys
     let isNeedy := needy
-    let isSoft := soft
     let S : Sigs := { S0 with fns := S0.fns ++ specSigs.toList }
     let body := Suspend.redirectCalls (fun g es =>
-      if isNeedy[g]?.getD false || isSoft[g]?.getD false then
+      if isNeedy[g]?.getD false then
         match (witTys S Γ ρ g es).mapM id with
         | some θ => (keys.idxOf? (g, θ)).map (nOrig + ·)
         | none => none
@@ -5966,8 +5925,7 @@ def specialise (fns0 : Array Fn) (slotTys0 : Array (List VTy)) (S0 : Sigs) (ntpO
     Lean's elaboration limits.) -/
 def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsigs0 : List (List VTy × VTy))
     (protos : HeapTy) (pins : List (List (Option VTy))) (inFn : String → String → String)
-    (fns0 : Array Fn) (slotTys0 : Array (List VTy)) (fsigsIn : List (List VTy × VTy)) (classTable0 : List (List VTy))
-    (genericRoots : Bool := false) :
+    (fns0 : Array Fn) (slotTys0 : Array (List VTy)) (fsigsIn : List (List VTy × VTy)) (classTable0 : List (List VTy)) :
     Except String (Array Fn × Array (List VTy) × List (List VTy × VTy) × List (List VTy) × Array (List VTy) × Expr ×
       List (List (Option VTy))) := do
   let mut fns := fns0
@@ -6006,7 +5964,7 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
   let (fns1, slotTys1, specSigs, specKeys, replaced) ← specialise fns slotTys
     { fns := fsigs0, classes := classTable, protos, pins }
     (fun f => ((sigOf f).map (·.ndicts)).getD 0) (fun f => ((sigOf f).map (·.suspends)).getD false)
-    branchMark rushMark spawnMark inFn genericRoots
+    spawnMark inFn
   fns := fns1
   slotTys := slotTys1
   let fsigs0 := fsigs0 ++ specSigs.toList
@@ -8148,7 +8106,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   checkLoopFirst fns loopFirst
   if usesConc then
     let (fns1, slotTys1, fsigs1, classTable1, frameClasses1, mainCall1, framePins1) ←
-      lowerConcurrency env sigs gsigs mainSig fsigs0 protos pins inFn fns slotTys fsigs classTable opts.genericRoots
+      lowerConcurrency env sigs gsigs mainSig fsigs0 protos pins inFn fns slotTys fsigs classTable
     fns := fns1
     slotTys := slotTys1
     fsigs := fsigs1
@@ -8244,12 +8202,12 @@ def compile (src : String) (opts : Options := {}) : Except String Prog := do
 /-- Compile loaded definitions (`Front.loadProgram`) with shell arguments,
     bound to `Args` when given or mentioned, and an optional `do` expression. -/
 def compileTops (tops : List STop) (args : List String) (mentionsArgs : Bool) (doExpr : Option String)
-    (debug : Bool := false) (genericRoots : Bool := false) : Except String Prog := do
+    (debug : Bool := false) : Except String Prog := do
   let entry ← match doExpr with
     | some t => some <$> parseExprText t
     | none => pure none
   let useArgs := !args.isEmpty || mentionsArgs
-  return (← elabProgram tops { args := if useArgs then some args else none, entry, debug, genericRoots }).prog
+  return (← elabProgram tops { args := if useArgs then some args else none, entry, debug }).prog
 
 /-- Compile with shell arguments (bound to `Args` when given or used) and an
     optional `do` expression, as `openverse run FILE ARG… do EXPR` does. -/
