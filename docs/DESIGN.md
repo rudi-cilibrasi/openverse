@@ -622,7 +622,10 @@ and journals every write made in a condition (for rollback). So:
   from the frame (`DefaultE.field`). The test of the class narrows it to
   the callee's frame type at those arguments (`Typed.dispatch` with no
   opened ones), so a generic callee is resumed outside any condition too.
-  It is resumed and cancelled through `resumeOwn(frame, sched)` and
+  It is made or reset by `arrive(params…, frame, sched)`, a plain call, so
+  that each argument is checked against its parameter's type: a dispatch's
+  arguments need types of their own, which a literal `array{}` has not. It
+  is resumed and cancelled through `resumeOwn(frame, sched)` and
   `cancelOwn(frame, sched)`, which read its parameters from its frame, as
   the caller has no slots of their types, and its result is taken through
   `result(frame)`. (Until #256 such a frame sat in an option field,

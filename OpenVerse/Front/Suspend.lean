@@ -74,6 +74,12 @@ structure Callee where
   newSched : Bool := false
   /-- The callee's result getter, `g$result(frame)`. -/
   resultFn : Option Nat := none
+  /-- `g$arrive(params…, frame, sched)`: resets the frame or makes one, and
+      gives it. A generic callee is arrived at through it, by a plain call,
+      so that its arguments are checked against its parameters' types (an
+      argument of a dispatch's call must have a type of its own, which a
+      literal `array{}` has not, #256). -/
+  arriveFn : Option Nat := none
   /-- For a method of a class that fixes type arguments, called through
       `Typed.dispatch` (#142): helpers taking the receiver first, so that
       the code depending on the refinement keeps the rule's shape —
@@ -854,8 +860,8 @@ partial def suspendAt (g : Nat) (c : Callee) (rs : List Expr) : M (Expr × Expr)
   -- the heap at the first one (#256). The arguments stay in slots, for each
   -- resumption. A generic callee's frame has type arguments: its field and
   -- slot have type `ref [tag, $nil] args` (the slot's initial value is the
-  -- field, read from the frame), and its resume and cancel functions read
-  -- its parameters from it.
+  -- field, read from the frame); it is made or reset by `arrive`, and its
+  -- resume and cancel functions read its parameters from it.
   let wide : VTy ← if c.generic then do
       match ← infer (.call c.newFn (newArgs rs)) with
       | .ref _ args => pure (.ref [c.tag, env.nilTag] args)
@@ -865,16 +871,18 @@ partial def suspendAt (g : Nat) (c : Callee) (rs : List Expr) : M (Expr × Expr)
   let cf := childF k
   let ptys := if c.generic then [] else ((env.S.fns[g]?).map (·.1)).getD []
   let argSlots ← ptys.mapM fresh
-  let as := if c.generic then rs else argSlots.map Expr.local
+  let as := argSlots.map Expr.local
   let y ← freshT wide
   modify fun st => { st with sites := st.sites.push { id := k, waits := .callee k c y argSlots, defers := st.defers } }
   let isC : Expr := .heap (.isTag [c.tag]) [.local y]
   let st ← freshT .int
-  let arrive : Expr := .ite (← seeking) vd (seqVoid (
-    (argSlots.zip rs).map (fun (a, r) => .assign a r) ++
-    [.assign y (fget cf),
-     .ite isC (.call c.initFn (.local y :: as)) (.seq (fset cf (.call c.newFn (newArgs as))) vd),
-     fset env.pcFld (int k)]))
+  let make : List Expr ← if c.generic then do
+      let some af := c.arriveFn | throw "internal error: a generic callee without `arrive`"
+      pure [fset cf (.call af (rs ++ [fget cf, .local schS]))]
+    else pure ((argSlots.zip rs).map (fun (a, r) => .assign a r) ++
+      [.assign y (fget cf),
+       .ite isC (.call c.initFn (.local y :: as)) (.seq (fset cf (.call c.newFn (newArgs as))) vd)])
+  let arrive : Expr := .ite (← seeking) vd (seqVoid (make ++ [fset env.pcFld (int k)]))
   let pass := if c.passFields.isEmpty then [] else as
   let poll : Expr := seqVoid [.assign y (fget cf),
     .assign st (.ite isC (.call c.resumeFn (.local y :: .local schS :: pass)) (.prim .userErr []))]
