@@ -546,8 +546,12 @@ reused for another call so never shares an arm with an old wrapper. They
 are stopped last started first: each branch and `rush` arm records a
 start number (a counter in the frame) when it starts, and the stop is a
 loop that picks the highest recorded number, stops that one and clears
-it (#187), as a nested branch starts only when its parent's code reaches
-it. A
+it (#187). Each unwinds whole (#254): the branches and `rush` arms whose
+start is in a branch's or a `rush` arm's own code are owned by it
+(`St.killOwner`, from the entries of `kills` its region's lowering adds),
+and stopping it first stops those, by the same loop over its own, then
+itself; the function's loop picks among the unowned. A function with no
+such nesting keeps the flat loop, so its code is as before. A
 `rush` is a `race` whose arms each get such a wrapper: when the first arm
 ends, the others that are pending are registered as roots (not run again
 at once) instead of cancelled.

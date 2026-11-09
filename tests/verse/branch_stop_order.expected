@@ -1,6 +1,6 @@
 F defer
-inner branch defer
 second branch defer
+inner branch defer
 outer branch defer
 0
 late branch 0 defer
