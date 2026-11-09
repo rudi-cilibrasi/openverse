@@ -218,8 +218,12 @@ the function. So each alternative and each call is a failure context of
 its own, as in the Verse Calculus. The function takes the parameters and
 the consumer's names those clauses use (the `var`s they set copied in,
 and given back in the tuple); the consumer calls it and binds the names
-from the tuple. It is not yet done in a method (whose clauses may use
-`Self`'s members), a constructor, a default, or a generic function's types.
+from the tuple. In a method, the members of `Self` that those clauses
+name bare are made `Self.member` (`selfQualify`, as for #243's branches),
+and `Self`, a parameter of the method, is passed as any name. It is not yet
+done where they call `(super:)`, in a constructor or a default, or where
+the names passed have type parameters (`Self` of a generic class, a generic
+function's types).
 It is keyed by the call's place, its binding and the names it passes, as a
 call in a function inlined at several sites is at one place. Being
 recursive, it reaches the recursion limit in a deep search: about 400,000

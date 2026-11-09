@@ -2012,50 +2012,6 @@ def firstKey (ctx : Ctx) (p : Pos) (lp : List SExpr) (b : String) (rest : List S
     !pnames.contains n && (ctx.lookup n).isSome
   s!"{p.line}_{p.col}_{p.file}_{b}_{String.intercalate "," (pnames ++ caps)}"
 
-/-- (#246) The function of its own a lazily taken call where the first
-    success is taken is compiled as, when what it runs once for all the
-    values of an item has effects (`Choice.FirstLift`): from the call
-    (`lp`, its binding `b`), the consumer's names before it (`ctx`) and
-    after the clauses that follow it (`c2`, those clauses `rest`), and the
-    effects all that has (`fxB`); or why it cannot be yet. -/
-def firstLiftOf (ctx c2 : Ctx) (p : Pos) (g : String) (lp : List SExpr) (b : String) (bty : Option STy)
-    (rest : List SExpr) (fxB : List (String × Pos × Option String)) (suspends : Bool) :
-    Except String Choice.FirstLift := do
-  let [_, .block _ ps, .block _ cls, .decl _ _ rsty _ tail] := lp | throw "internal: a $loop marker"
-  if ctx.selfClass.isSome then throw "in a method"
-  if ctx.inCtor || ctx.inParamDefault || ctx.inBlock || ctx.inDefer || !ctx.defaults.isEmpty then
-    throw "in a constructor, a default or a defer"
-  if suspends then throw "as the clauses after it suspend"
-  let pnames := ps.filterMap fun | .ident _ n => some n | _ => none
-  let pls ← pnames.mapM fun n => match ctx.lookup n with
-    | some l => pure l
-    | none => throw s!"internal: parameter {n}"
-  -- (the consumer's names the clauses after it use, in order of first use)
-  let caps : List Local := (Choice.namesUsed (.block p rest)).eraseDups.filterMap fun n =>
-    if pnames.contains n then none else ctx.lookup n
-  let setNames := Choice.setsIn (.block p rest)
-  let sets := caps.filter fun l => l.mutable && setNames.contains l.name
-  -- (its own binding too: a call in the clauses of another such call's
-  -- function, compiled as one too, binds only what that one gives)
-  let binds := (b :: Choice.boundIn rest).eraseDups
-  let bls ← binds.mapM fun n => match c2.lookup n with
-    | some l => pure l
-    | none => throw s!"internal: name {n}"
-  if (pls ++ caps ++ bls).any (fun l => !(Ty.paramsC l.ty).isEmpty) then throw "in a generic function"
-  let key := firstKey ctx p lp b rest
-  let name := s!"$first{p.line}_{p.col}_{key.hash}" ++ (if p.file.isEmpty then "" else s!"_{p.file}")
-  let capArgs := caps.map fun l => SExpr.ident p l.name
-  let heap := ["reads", "writes", "allocates"].filter fun k =>
-    fxB.any (·.1 == k) || ((ctx.sig? g).map (·.fx.contains k)).getD false
-  let params : List SParam := pls.map (fun l => { name := l.name, ty := l.ty.toSTy }) ++
-    caps.map fun l => { name := if sets.any (·.name == l.name) then s!"{l.name}$in" else l.name, ty := l.ty.toSTy }
-  return { key, pos := p, name, params,
-           specs := (if heap.isEmpty then ["computes"] else heap) ++ ["decides"],
-           ret := .tup (bls.map (·.ty.toSTy) ++ sets.map (·.ty.toSTy) ++ [.name "logic"]),
-           body := Choice.firstBody name p b bty cls tail rest binds (sets.map fun l => (l.name, l.ty.toSTy)) capArgs rsty,
-           binds, sets := sets.map (·.name), args := pnames.map (SExpr.ident p ·) ++ capArgs,
-           varBinds := (bls.filter (·.mutable)).map (·.name) }
-
 /-- A cast `T[X]`, `X` of type `xty`, that holds only under a refinement of
     the code's type parameters (#243): `T` fixes or repeats type arguments
     of `X`'s class, which agree with `X`'s only when they are unified (as
@@ -2143,6 +2099,57 @@ partial def selfQualify (ctx : Ctx) (c : String) (e : SExpr) : SExpr :=
       else some (.app p (.ident q n) (args.map (selfQualify ctx c)) br)
     | .ident p n => if free n && (isField n || isMethod n) then some (.member p (.ident p "Self") n) else none
     | _ => none) e
+
+/-- (#246) The function of its own a lazily taken call where the first
+    success is taken is compiled as, when what it runs once for all the
+    values of an item has effects (`Choice.FirstLift`): from the call
+    (`lp`, its binding `b`), the consumer's names before it (`ctx`) and
+    after the clauses that follow it (`c2`, those clauses `rest`), and the
+    effects all that has (`fxB`); or why it cannot be yet. -/
+def firstLiftOf (ctx c2 : Ctx) (p : Pos) (g : String) (lp : List SExpr) (b : String) (bty : Option STy)
+    (rest : List SExpr) (fxB : List (String × Pos × Option String)) (suspends : Bool) :
+    Except String Choice.FirstLift := do
+  let [_, .block _ ps, .block _ cls, .decl _ _ rsty _ tail] := lp | throw "internal: a $loop marker"
+  if ctx.inCtor || ctx.inParamDefault || ctx.inBlock || ctx.inDefer || !ctx.defaults.isEmpty then
+    throw "in a constructor, a default or a defer"
+  let key := firstKey ctx p lp b rest
+  -- (in a method: the members of `Self` the clauses name bare, as members
+  -- of `Self`, which the function takes as a parameter, as #243's do)
+  let rest ← match ctx.selfClass with
+    | some c =>
+      if rest.any (Choice.anyE fun | .ident _ "(super:)" | .member _ (.ident _ "(super:)") _ => true | _ => false) then
+        throw "where the clauses after it call (super:)"
+      pure (rest.map (selfQualify ctx c))
+    | none => pure rest
+  if suspends then throw "as the clauses after it suspend"
+  let pnames := ps.filterMap fun | .ident _ n => some n | _ => none
+  let pls ← pnames.mapM fun n => match ctx.lookup n with
+    | some l => pure l
+    | none => throw s!"internal: parameter {n}"
+  -- (the consumer's names the clauses after it use, in order of first use)
+  let caps : List Local := (Choice.namesUsed (.block p rest)).eraseDups.filterMap fun n =>
+    if pnames.contains n then none else ctx.lookup n
+  let setNames := Choice.setsIn (.block p rest)
+  let sets := caps.filter fun l => l.mutable && setNames.contains l.name
+  -- (its own binding too: a call in the clauses of another such call's
+  -- function, compiled as one too, binds only what that one gives)
+  let binds := (b :: Choice.boundIn rest).eraseDups
+  let bls ← binds.mapM fun n => match c2.lookup n with
+    | some l => pure l
+    | none => throw s!"internal: name {n}"
+  if (pls ++ caps ++ bls).any (fun l => !(Ty.paramsC l.ty).isEmpty) then throw "in a generic function"
+  let name := s!"$first{p.line}_{p.col}_{key.hash}" ++ (if p.file.isEmpty then "" else s!"_{p.file}")
+  let capArgs := caps.map fun l => SExpr.ident p l.name
+  let heap := ["reads", "writes", "allocates"].filter fun k =>
+    fxB.any (·.1 == k) || ((ctx.sig? g).map (·.fx.contains k)).getD false
+  let params : List SParam := pls.map (fun l => { name := l.name, ty := l.ty.toSTy }) ++
+    caps.map fun l => { name := if sets.any (·.name == l.name) then s!"{l.name}$in" else l.name, ty := l.ty.toSTy }
+  return { key, pos := p, name, params,
+           specs := (if heap.isEmpty then ["computes"] else heap) ++ ["decides"],
+           ret := .tup (bls.map (·.ty.toSTy) ++ sets.map (·.ty.toSTy) ++ [.name "logic"]),
+           body := Choice.firstBody name p b bty cls tail rest binds (sets.map fun l => (l.name, l.ty.toSTy)) capArgs rsty,
+           binds, sets := sets.map (·.name), args := pnames.map (SExpr.ident p ·) ++ capArgs,
+           varBinds := (bls.filter (·.mutable)).map (·.name) }
 
 mutual
 partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
