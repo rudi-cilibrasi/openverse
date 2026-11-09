@@ -2601,9 +2601,11 @@ partial def elabStmt (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM (R × Ctx) 
       -- checked against its parameter's type once the type parameters it
       -- mentions are bound, else inferring them; `false`, `array{}` and
       -- `map{}` last), then named for the written types after
-      let (fname, names) := match tps.filterMap fun | .ident _ n => some n | _ => none with
-        | f :: ns => (f, ns)
-        | [] => ("", [])
+      let fname := match tps with | .ident _ f :: _ => f | _ => ""
+      let cons : List (String × String) := tps.drop 1 |>.filterMap fun
+        | .tuple _ [.ident _ n, .ident _ c] => some (n, c)
+        | _ => none
+      let names := cons.map (·.1)
       -- (as messages show them: the type parameters' own names)
       let shown (t : Ty) : String :=
         (t.subst (names.map fun n => (n, Ty.param ((n.dropWhile (· != '_')).drop 1).toString false))).show
@@ -2635,6 +2637,13 @@ partial def elabStmt (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM (R × Ctx) 
             | none => eerr q s!"expected {shown t}, found {r.ty.show} (in a call of {fname})"
           else
             done := done.set! i (some (← coerce q (← elabE ctx a (some t)) t, t))
+      -- (a comparable type parameter's type argument must be comparable,
+      -- as at a call)
+      for (n, c) in cons do
+        if c == "comparable" then
+          if let some t := σ.lookup n then
+            if !(isComparable ctx.types t) then
+              eerr p (notComparable ctx.types t s!"{fname}'s type argument for {((n.dropWhile (· != '_')).drop 1).toString}")
       let mut code : Expr := .lit .void
       let mut c := ctx
       for ((q, x, v, _, _), d) in items.zip done.toList do

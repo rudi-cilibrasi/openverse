@@ -289,16 +289,29 @@ partial def bindParams (isVal : String → Bool) (isField : String → String �
     (args : List SExpr) (unpacks : Bool := true) : LM Unit := do
   let (marks, pre) := pre.partition fun | .app _ (.ident _ "$tparams") _ false => true | _ => false
   let (pds, unpack) := (pre.take args.length, pre.drop args.length)
-  let mut binds : Array SExpr := #[]
-  for (pd, a) in pds.zip args do
-    let a' ← liftE isVal isField a
-    match pd with
-    | .decl q x ty v _ => binds := binds.push (.decl q x ty v a')
-    | _ => pure ()
   match marks with
   | .app _ _ tps _ :: _ =>
+    -- (each argument evaluated where it is, in order: one that a later
+    -- argument's lifted choice would otherwise follow is bound first, to
+    -- a name of its own, unless it takes its type from its parameter)
+    let fromContext : SExpr → Bool
+      | .ident _ "false" | .arrayLit _ [] | .mapLit _ [] => true
+      | _ => false
+    let mut binds : Array SExpr := #[]
+    for ((pd, a), i) in (pds.zip args).zipIdx do
+      let a' ← liftE isVal isField a
+      let later := (args.drop (i + 1)).any hasLiftable
+      let a'' ← if later && !fromContext a' && !stable isVal a' then LM.bind a.pos "t" a' else pure a'
+      match pd with
+      | .decl q x ty v _ => binds := binds.push (.decl q x ty v a'')
+      | _ => pure ()
     modify fun s => { s with pre := s.pre.push (.app p (.ident p "$params") (.block p binds.toList :: tps) false) }
-  | _ => for b in binds do modify fun s => { s with pre := s.pre.push b }
+  | _ =>
+    for (pd, a) in pds.zip args do
+      let a' ← liftE isVal isField a
+      match pd with
+      | .decl q x ty v _ => modify fun s => { s with pre := s.pre.push (.decl q x ty v a') }
+      | _ => pure ()
   if unpacks then
     for u in unpack do
       modify fun s => { s with pre := s.pre.push u }
@@ -804,7 +817,8 @@ partial def inlineCalls (mv : List (String × MFn)) (e : SExpr) (recs : List Str
       let ρ : List (String × String) := f.tparams.map fun tp => (tp.name, s!"$tp{site}_{tp.name}")
       let tyOf (t : STy) : Option STy := some (styRename ρ t)
       let tmark : List SExpr := if ρ.isEmpty then [] else
-        [.app q (.ident q "$tparams") (.ident q g :: ρ.map fun (_, n) => SExpr.ident q n) false]
+        [.app q (.ident q "$tparams") (.ident q g :: (ρ.zip f.tparams).map fun ((_, n), tp) =>
+          SExpr.tuple q [.ident q n, .ident q tp.constraint]) false]
       let (pds, unpack, as'') : List SExpr × List SExpr × List SExpr :=
         if as.length == f.params.length then
           (f.params.map fun sp => SExpr.decl q (tag sp.name) (tyOf sp.ty) false (.ident q "$arg"), [], as')
