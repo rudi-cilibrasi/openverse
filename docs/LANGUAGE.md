@@ -571,7 +571,8 @@ circle := class(shape, labelled):
     hidden placeholder object (#157) would have to hold itself; a class
     that gives two interfaces different type arguments (`c := class(i1(int),
     i2(string))`), and an interface that gives a parent interface other than
-    its own type parameters (`c2(t) := interface(container([]t))`, #53).
+    its own type parameters (`c2(t) := interface(container([]t))`) (both
+    #53).
 
 ## Mutation, macros, tooling
 
