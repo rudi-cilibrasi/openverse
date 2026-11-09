@@ -5963,6 +5963,16 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
   -- (cancellation: the task's flags and root; the scheduler's request to
   -- cancel the root that just ran)
   let cancelCurF := fieldIdx "$sched" "$CancelCur"
+  -- (#253) a root's first run happens inline, in its parent's resumption:
+  -- a request to cancel the root that ran (awaiting a cancelled task,
+  -- cancelling its own) is then for it, not for the root the scheduler is
+  -- resuming; its start function takes it (`$cancelRoot`, whose index is
+  -- known only later: a mark, substituted then)
+  let cancelRootMark : Nat := 0xFFFFFF
+  let takeCancel (root : Expr) : Expr :=
+    .ite (.prim .query [.heap (.get cancelCurF) [.local 0]])
+      (.seq (Suspend.seqVoid [.heap (.set cancelCurF) [.local 0, .lit (.logic false)],
+        .call cancelRootMark [.local 0, root]]) Suspend.vd) Suspend.vd
   let tDoneF := fieldIdx "task" "$Done"
   let tCancelledF := fieldIdx "task" "$Cancelled"
   let runningF := fieldIdx "task" "$Running"
@@ -6008,6 +6018,7 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
       let register : Expr := .call linkIdx [.local 0, .local 2]
       let start : Expr := .seq (Suspend.seqVoid (if !runNow then [register] else [register,
         .assign 3 (.call (wrapFnBase + 3 * K) [.local 2, .local 0]),
+        takeCancel (.local 2),
         .ite (.prim .eq [.local 3, Suspend.int 1])
           (.seq (Suspend.seqVoid [.heap (.set Suspend.pcF) [.local 2, Suspend.int (-1)],
             .heap (.set progressF) [.local 0, .lit (.logic true)], .heap (.set deadF) [.local 0, .lit (.logic true)]])
@@ -6115,6 +6126,7 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
       .call linkIdx [.local 0, .local 1],
       .heap (.set rootF) [.heap (.get (Suspend.slotBaseOf sites arms)) [.local 1], .prim .mkSome [.local 1]],
       .assign 2 (.call (trampOf k) [.local 1, .local 0]),
+      takeCancel (.local 1),
       .ite (.prim .eq [.local 2, Suspend.int 1])
         (.seq (Suspend.seqVoid [.heap (.set Suspend.pcF) [.local 1, Suspend.int (-1)],
           .heap (.set progressF) [.local 0, .lit (.logic true)], .heap (.set deadF) [.local 0, .lit (.logic true)]])
@@ -6167,6 +6179,7 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
       .heap (.set deadF) [.local 0, .lit (.logic true)], .heap (.set progressF) [.local 0, .lit (.logic true)]])
       Suspend.vd) Suspend.vd
   let cancelRootFn : Fn := { name := "$cancelRoot", arity := 2, nslots := 2, decides := false, writes := true, body := cancelRootBody }
+  fns := fns.map fun fn => { fn with body := Suspend.substCall cancelRootMark (fun es => .call cancelRootIdx es) fn.body }
   let mut cancelFns : Array Fn := #[cancelRootFn]
   let mut cancelTys : Array (List VTy) := #[[schedTy, rootAny]]
   let mut cancelSigs : Array (List VTy × VTy) := #[([schedTy, rootAny], VTy.void)]
