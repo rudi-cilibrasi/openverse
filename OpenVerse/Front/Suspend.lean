@@ -1036,8 +1036,19 @@ partial def suspendSelfOpen (us : List Nat) (y : Nat) (c : Callee) (rs : List Ex
   let some τ := env.expTy | throw "internal error: a refined call's value has no expected type"
   if !valued || c.resField.isNone then throw "internal error: an opened override's value is not taken"
   -- (the cell's type is invariant: the type the frame's cell holds, at the
-  -- dispatch's instance, must be the caller's refined one)
-  if ρθ != τ.subst μ then
+  -- dispatch's instance, must be the caller's refined one; or, for a caller
+  -- whose class declares the method with a narrower result at the same type
+  -- arguments, `mid(t)`'s `Copy():mid(t)` for a cell of `expr(t)`'s
+  -- `Copy():expr(t)`, its cell is of the wider classes at its own type
+  -- arguments, and it narrows the value with a cast, which the override's
+  -- result, below the caller's class's, always passes, #209)
+  let narrow : Option (VTy × List Nat) :=
+    if ρθ == τ.subst μ then none
+    else match τ, ρθ with
+      | .ref usτ aτ, .ref usρ aρ =>
+        if aτ.map (·.subst μ) == aρ && usτ.all usρ.contains then some (.ref usρ aτ, usτ) else none
+      | _, _ => none
+  if ρθ != τ.subst μ && narrow.isNone then
     throw "a <suspends> override cannot be called yet through a dispatch that opens its class's type parameters when the call expects the method's result as a class above it declares it and the override's frame keeps its result at another type: its own, or the method's first declaration's (#209)"
   let σs ← rs.mapM infer
   let wide : VTy := .ref [c.tag, env.schedTag] []
@@ -1054,7 +1065,7 @@ partial def suspendSelfOpen (us : List Nat) (y : Nat) (c : Callee) (rs : List Ex
     modify fun st => { st with vias := st.vias.push (body, ps, τ) }
     return env.viaBase + i
   -- (the cell: a slot kept in the frame, made with it)
-  let cellTy : VTy := .ref [env.resCellTag] [τ]
+  let cellTy : VTy := .ref [env.resCellTag] [(narrow.map (·.1)).getD τ]
   let cs ← fresh cellTy
   let arriveV ← via (.ite isR (.call newCellFn ((List.range (n + 3)).map Expr.local)) (.prim .userErr []))
     (ty :: σs ++ [cellTy, schedTy]) wide
@@ -1066,7 +1077,12 @@ partial def suspendSelfOpen (us : List Nat) (y : Nat) (c : Callee) (rs : List Ex
     .assign st (.ite (.heap (.isTag [c.tag]) [.local w]) (.call resumeFn [.local w, .local schS]) (.prim .userErr []))]
   let pend : Expr := .ite (.prim .eq [.local st, int 0]) (.seq spillMark (.ret (int 0))) vd
   let found : Expr := .assign env.rS (int 0)
-  return (seqVoid [arrive, found, poll, pend], .heap (.get 0) [.local cs])
+  let value : Expr ← match narrow with
+    | some (_, usτ) => do
+      let t ← freshT τ
+      pure (.ite (.assign t (.heap (.isTag usτ) [.heap (.get 0) [.local cs]])) (.local t) (.prim .userErr []))
+    | none => pure (.heap (.get 0) [.local cs])
+  return (seqVoid [arrive, found, poll, pend], value)
 
 /-- The statement of a `sync` (`isSync`) or `race` with arms `arms` (each
     a statement that leaves the arm's value in a slot). -/
