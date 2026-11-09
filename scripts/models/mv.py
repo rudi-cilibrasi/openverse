@@ -2,7 +2,8 @@
 # A model-based generator for openverse's gate (scripts/fuzz-model-*.sh).
 # Its model is written from docs/LANGUAGE.md by the upkeep session, independently of
 # scripts/gen-choice.py, gen-conc.py and gen-classes.py and of the front end's code,
-# for the reviews of #234, #239 and #245 (choice and functions with several values, #208, #235).
+# for the reviews of #234, #239 and #245 (choice and functions with several values, #208, #235),
+# laziness from the review of #267 (generators taken where they are consumed, #246).
 """Random programs with choices INSIDE expressions (PR #234, phase 2), and an
 independent model written from docs/LANGUAGE.md's "Choice" section (not from
 scripts/gen-choice.py, and not from the lifting code).
@@ -38,9 +39,12 @@ flags: heavy     (with bif: more of them, longer chains, longer conditions)
        bif       (branchy ifs; without it the programs are #234's, seed for seed)
        cf        (the choice-free twin: each choice is its first alternative)
        nochain   (no choice in operand >= 2 of a comparison chain: known bug)
+       lazy      (recursive generators taken lazily, #246/#267; on by default
+                  with mv, rec and bif; nolazy turns it off)
        noforset  (no op= / indexed set in a for)
 """
 import copy
+import os
 import random
 import sys
 
@@ -60,6 +64,10 @@ def _skip_eager_overflow(exc_type, exc, tb):
 
 
 sys.excepthook = _skip_eager_overflow
+
+# (the CPS model recurses deeply: Python 3.11's calls of Python functions do
+# not use the C stack, so a high limit is enough)
+sys.setrecursionlimit(1000000)
 R = random.Random(seed)
 
 PRE = '''Pos(X:int)<decides>:int =
@@ -90,6 +98,22 @@ class EagerOverflow(Exception):
     this also covers one in a value a first success would not reach (#246)."""
 
 
+class StOverflow(Exception):
+    """An int leaves 64-bit range where the program computes it (not an
+    eager F$all value): the program stops there with an overflow (exit 2),
+    having printed what the path it is on printed, those of failure contexts
+    still open included."""
+
+    def __init__(self, st):
+        self.st = st
+
+
+def chks(v, st):
+    if not (-(1 << 63) <= v < (1 << 63)):
+        raise StOverflow(st)
+    return v
+
+
 def chk(v):
     if not (-(1 << 63) <= v < (1 << 63)):
         raise EagerOverflow()
@@ -109,7 +133,14 @@ class St:
         self.out = []
 
     def copy(self):
-        return copy.deepcopy(self)
+        # (vars and binds hold ints and strings only: shallow copies suffice)
+        n = St.__new__(St)
+        n.vars = dict(self.vars)
+        n.binds = dict(self.binds)
+        n.A = list(self.A)
+        n.F = self.F
+        n.out = list(self.out)
+        return n
 
 
 uid = [0]
@@ -152,10 +183,29 @@ MV = 'mv' in flags
 # leftmost varying slowest, failure gives none), written from that text; a
 # call is then a choice point over the list, in the caller's context.
 REC = 'rec' in flags
+# ---- PR #267 (#246 step 1), flag `lazy` (on with mv, rec and bif): recursive
+# functions shaped as generators, taken lazily. From LANGUAGE.md: values one
+# at a time as the consumer asks, in spatial order (depth first); in a for,
+# the generator's clauses run between iterations and stay, a value's effects
+# go with a rejected iteration, and a call whose clauses fail gives no values
+# but keeps what its arguments did (as an eager one, #245); where the first
+# success is taken, a value's effects go with it, also when a later choice is
+# exhausted and the context comes back for the next value, and its clauses,
+# last if's conditions and the arguments of its calls of itself may not print
+# or change an object, nor those arguments set a local (refused; the
+# generated programs take such a generator in a for only). The model inlines
+# each call, recursively and lazily (CPS): a call evaluates its arguments,
+# then its clauses as the caller's code, then its last choice as a choice
+# point whose alternatives are values or calls of itself. A value never taken
+# is never computed, so an overflow in one does not happen; one taken stops
+# the program there (exit 2), and only eager F$all values are SKIPped.
+LAZY = 'lazy' in flags or ('nolazy' not in flags and bool({'mv', 'rec', 'bif'} & flags))
+GFUNCS = []
+GFRAME = [0]
 RFUNCS = []
 RX = {'fi': None}
 FUNCS = []
-CTX = {'ctrs': None, 'nofail': False, 'fmax': None, 'plim': 64}
+CTX = {'ctrs': None, 'nofail': False, 'fmax': None, 'plim': 64, 'take': None, 'noprint': False, 'nochoice': False}
 PROD = [1]          # upper bound of the number of values (bounded)
 SITE = [0]
 
@@ -171,6 +221,12 @@ def leaf(scope, vars_):
 
 def gen_e(scope, vars_, d, ch):
     """an int expression; ch: whether a choice may be inside (liftably)."""
+    if CTX['nochoice']:
+        ch = False
+    if LAZY and ch and NCH[0] < 4 and GFUNCS and CTX['fmax'] is None and R.random() < 0.25:
+        m = gen_gcall(scope, vars_, d)
+        if m is not None:
+            return m
     if 'bif' in flags and ch and NCH[0] < 4 and d < 3 and R.random() < (0.4 if 'heavy' in flags else 0.14) \
             and (not MV or PROD[0] * 3 <= CTX['plim']):
         NCH[0] += 1
@@ -202,11 +258,15 @@ def gen_e(scope, vars_, d, ch):
     if d >= 3 or k < 0.32:
         return leaf(scope, vars_)
     k = R.random()
+    if CTX['noprint'] and (k < 0.16 or 0.59 <= k < 0.69):
+        return leaf(scope, vars_)     # (no print, no object change)
+    if CTX.get('big') and k < 0.03:
+        return ('big', leaf(scope, vars_))
     if k < 0.10:
         return ('tell', fresh("t"), gen_e(scope, vars_, d + 1, ch))
     if k < 0.16:
         return ('bprint', fresh("p"), gen_e(scope, vars_, d + 1, False))
-    if k < 0.22 and vars_:
+    if k < 0.22 and vars_ and not CTX.get('nobset'):
         return ('bset', R.choice(vars_), R.choice(['=', '+=']), R.randint(-1, 7), gen_e(scope, vars_, d + 1, False))
     if k < 0.40:
         op = R.choice(['+', '-', '+', '*'])
@@ -237,6 +297,8 @@ def gen_e(scope, vars_, d, ch):
         return gen_cmp(scope, vars_, d + 1, ch)
     saved = CTX['nofail']
     CTX['nofail'] = False      # (a nested failure context may fail inside)
+    savedt = CTX['take']
+    CTX['take'] = 'first'      # (and takes the first success)
     try:
         if k < 0.89:
             cl, _ = gen_clauses(list(scope), vars_, d + 1, R.randint(1, 2), allow_gen=False, inner=True, lastval=True)
@@ -248,6 +310,156 @@ def gen_e(scope, vars_, d, ch):
         return ('ifx', cl, leaf(sc2, vars_), leaf(scope, vars_))
     finally:
         CTX['nofail'] = saved
+        CTX['take'] = savedt
+
+
+def gub(fi, n):
+    """an upper bound of the number of values of Gz_fi with N = n."""
+    f = GFUNCS[fi]
+    if f['decides'] and n < f['lo']:
+        return 0
+    if n < -1:
+        return 0
+    if f['decides']:
+        alts = f['val'][1]
+    else:
+        alts = f['val'][2] if n <= f['lo'] else f['val'][3]
+    if 'cf' in flags:
+        alts = alts[:1]
+    return sum(gub(fi, n - 1) if a[0] == 'gself' else 1 for a in alts)
+
+
+def gen_gcall(scope, vars_, d):
+    cands = [(i, n) for i in range(len(GFUNCS)) for n in range(0, 4)
+             if 1 <= gub(i, n) and gub(i, n) * PROD[0] <= CTX['plim']
+             and not (CTX['nofail'] and GFUNCS[i]['decides'])
+             # (one whose clauses, conditions or arguments of its calls of itself
+             # print, change an object or set a local is taken in a for only)
+             and (GFUNCS[i]['first_ok'] or CTX['take'] == 'for')]
+    if not cands:
+        return None
+    i, n = R.choice(cands)
+    f = GFUNCS[i]
+    NCH[0] += 1
+    PROD[0] *= gub(i, n)
+    args = [('lit', n), gen_e(scope, vars_, d + 1, True)]
+    if f['ctr']:
+        args.append(('obj', R.choice(['K', 'J'])) if CTX['ctrs'] is None else ('ref', R.choice(CTX['ctrs'])))
+    return ('gcall', i, args)
+
+
+def gen_gfunc(i):
+    fx = R.random() < 0.5          # may print or change an object in clauses, conditions, arguments
+    dec = R.random() < 0.7
+    ctr = R.random() < 0.4
+    f = {'name': f"Gz{i}", 'decides': dec, 'ctr': ctr, 'first_ok': not fx, 'lo': R.choice([0, 1]),
+         'params': [('N', 'int'), ('A', 'int')] + ([('C', 'ctr')] if ctr else [])}
+    CTX.update(ctrs=['C'] if ctr else [], nofail=not dec, nochoice=True, noprint=not fx, fmax=-1, take=None)
+    sc, vs = ['N', 'A'], []
+    stmts = []
+    if dec:
+        stmts.append(('sfilt', ('cmp', ('ref', 'N'), [('>=', ('lit', f['lo']))])))
+    names = R.sample(['Y', 'Q', 'V', 'W', 'Z', 'B'], 6)
+    for _ in range(R.randint(0, 3)):
+        k = R.random()
+        if k < 0.25 and fx:
+            stmts.append(('sprint', fresh("g")))
+        elif k < 0.5:
+            x = names.pop()
+            stmts.append(('slet', x, gen_e(sc, vs, 1, False)))
+            sc = sc + [x]
+        elif k < 0.7:
+            v = names.pop()
+            stmts.append(('svar', v, gen_e(sc, vs, 1, False)))
+            vs = vs + [v]
+        elif k < 0.85 and vs:
+            stmts.append(('sset', R.choice(vs), R.choice(['=', '+=']), gen_e(sc, vs, 1, False)))
+        elif ctr and fx:
+            stmts.append(('snext', 'C'))
+    allsc = sc + vs
+
+    def value():
+        # (a value may print, change an object and set a local anywhere:
+        # undone with it where it is rejected; one that overflows only does
+        # where it is taken)
+        CTX['noprint'] = False
+        CTX['big'] = True
+        try:
+            return gen_e(sc, vs, 1, False)
+        finally:
+            CTX['noprint'] = not fx
+            CTX['big'] = False
+
+    def selfcall():
+        # (where the first success is taken, the arguments of a call of itself
+        # may not print, change an object or set a local: refused, LANGUAGE.md;
+        # in a for they may)
+        CTX['nobset'] = not fx
+        a = gen_e(sc, vs, 1, False)
+        CTX['nobset'] = False
+        args = [('bin', '-', ('ref', 'N'), ('lit', 1)), a] + ([('ref', 'C')] if ctr else [])
+        return ('gself', i, args)
+
+    def alts(withself):
+        out = [value() for _ in range(R.randint(1, 2))]
+        if withself:
+            for _ in range(R.choice([1, 1, 2])):
+                out.insert(R.randint(0, len(out)), selfcall())
+        if len(out) == 1 and not withself and R.random() < 0.5:
+            out.append(value())
+        return out
+    if dec:
+        f['val'] = ('gchoice', alts(True))
+    else:
+        conds = [('filter', ('cmp', ('ref', 'N'), [('<=', ('lit', f['lo']))]))]
+        # (a condition that always succeeds, so that N <= lo picks the base:
+        # a print where the generator may print there)
+        if fx and R.random() < 0.5:
+            c2 = [('print', fresh("c"))]
+            conds = c2 + conds if R.random() < 0.5 else conds + c2
+        f['val'] = ('gbif', conds, alts(False), alts(True))
+    f['stmts'] = stmts
+    CTX.update(ctrs=None, nofail=False, nochoice=False, noprint=False, fmax=None, take=None)
+    return f
+
+
+def show_galts(alts):
+    if 'cf' in flags:
+        return "(" + show(alts[0]) + ")"
+    return "(" + " | ".join(show(a) for a in alts) + ")"
+
+
+def show_gfunc(f):
+    ps = ", ".join(f"{p}:{t}" for p, t in f['params'])
+    L = [f"{f['name']}({ps}){'<decides>' if f['decides'] else ''}:int ="]
+    L += ["    " + show_s(c) for c in f['stmts']]
+    v = f['val']
+    if v[0] == 'gchoice':
+        L.append("    " + show_galts(v[1]))
+    else:
+        L.append(f"    if ({show_cl(v[1], ', ')}) then {show_galts(v[2])} else {show_galts(v[3])}")
+    return L
+
+
+def gen_call(fi, vals, st, k, mode):
+    GFRAME[0] += 1
+    fr = f"g{GFRAME[0]}"
+    f = GFUNCS[fi]
+    own = set(p for p, _ in f['params']) | binders_of(f['stmts'], set()) | binders_of(f['val'], set())
+    stmts = rename(f['stmts'], own, fr)
+    val = rename(f['val'], own, fr)
+    for (p, _), v in zip(f['params'], vals):
+        st.binds[f"{fr}.{p}"] = v
+    if mode == 'all':
+        # (in a for, a call whose clauses fail gives no values: what its
+        # arguments and the clauses before it did stays, and its clauses' own
+        # effects go, LANGUAGE.md, as for an eager one)
+        s0 = st.copy()
+        try:
+            return run_body(stmts, val, st, k, mode)
+        except Fail:
+            return s0
+    return run_body(stmts, val, st, k, mode)
 
 
 def gen_rcall(scope, vars_, d):
@@ -509,9 +721,12 @@ def gen_bif(scope, vars_, d):
     arms = []
     for _ in range(R.choice([1, 1, 2, 3, 4] if 'heavy' in flags else [1, 1, 2, 3])):
         saved = CTX['nofail']
+        savedt = CTX['take']
         CTX['nofail'] = False
+        CTX['take'] = 'first'
         cl, sc2 = gen_clauses(list(scope), vars_, d + 1, R.randint(0, 3 if 'heavy' in flags else 2), allow_gen=False, inner=True)
         CTX['nofail'] = saved
+        CTX['take'] = savedt
         cl.append(failable(sc2, vars_))
         arms.append((cl, gen_alts(sc2, vars_, d)))
     els = gen_alts(scope, vars_, d)
@@ -521,9 +736,10 @@ def gen_bif(scope, vars_, d):
 
 
 def gen_cmp(scope, vars_, d, ch):
-    if CTX['fmax'] is not None and 'cmpbug' not in flags:
-        # (known bug: a call of a function with several values in a comparison
-        # in a function's statement hangs the compiler; flag cmpbug keeps it)
+    if CTX['fmax'] is not None and 'nocmpcall' in flags:
+        # (a call of a function with several values in a comparison in a
+        # function's statement hung the compiler, #239, fixed since: flag
+        # nocmpcall leaves it out)
         saved = CTX.get('nomcall', False)
         CTX['nomcall'] = True
         try:
@@ -586,6 +802,12 @@ def show(e):
         return f'({show(e[1])} or {show(e[2])})'
     if t == 'ifx':
         return f'(if ({show_cl(e[1], ", ")}) then {show(e[2])} else {show(e[3])})'
+    if t in ('gcall', 'gself'):
+        f = GFUNCS[e[1]]
+        a = ", ".join(show(x) for x in e[2])
+        return f"{f['name']}[{a}]" if f['decides'] else f"{f['name']}({a})"
+    if t == 'big':
+        return f"(9223372036854775807 + {show(e[1])} * 0 + 1)"
     if t == 'rcall':
         f = RFUNCS[e[1]]
         return f"{f['name']}[{e[2]}, {show(e[3])}]" if f['decides'] else f"{f['name']}({e[2]}, {show(e[3])})"
@@ -643,7 +865,7 @@ def gen_clauses(scope, vars_, d, n, allow_gen, inner=False, lastval=False, isfor
             cl.append(('sbind', x, [gen_e(scope, vars_, d + 1, True) for _ in range(2)]))
         elif k < 0.55:
             cl.append(('filter', gen_cmp(scope, vars_, d, True)))
-        elif k < 0.64 and vars_:
+        elif k < 0.64 and vars_ and not CTX.get('nobset'):
             op = '=' if (isfor and 'noforset' in flags) else R.choice(['=', '+=', '*='])
             cl.append(('setv', R.choice(vars_), op, gen_e(scope, vars_, d, True)))
         elif k < 0.69 and not inner:
@@ -653,19 +875,26 @@ def gen_clauses(scope, vars_, d, n, allow_gen, inner=False, lastval=False, isfor
         elif k < 0.73 and not inner and not (isfor and 'noforset' in flags):
             cl.append(('setf', gen_e(scope, vars_, d + 1, True)))
         elif k < 0.79:
-            cl.append(('print', fresh("c")))
+            if not CTX['noprint']:
+                cl.append(('print', fresh("c")))
         elif k < 0.85 and not inner:
+            savedt = CTX['take']
+            CTX['take'] = 'first'
             c2, s2 = gen_clauses(list(scope), vars_, d + 1, R.randint(1, 2), allow_gen=False, inner=True)
+            CTX['take'] = savedt
             cl.append(('not', c2 + [failable(s2, vars_)]))
         elif k < 0.90 and not inner:
+            savedt = CTX['take']
+            CTX['take'] = 'first'
             c2, s2 = gen_clauses(list(scope), vars_, d + 1, R.randint(1, 2), allow_gen=False, inner=True)
+            CTX['take'] = savedt
             cl.append(('logic', c2 + [failable(s2, vars_)]))
         elif allow_gen:
             x = fresh("R")
             lo = R.randint(0, 2)
             cl.append(('range', x, lo, lo + R.randint(0, 2)))
             scope = scope + [x]
-        else:
+        elif not CTX['noprint']:
             cl.append(('print', fresh("c")))
     return cl, scope
 
@@ -676,9 +905,9 @@ def failable(scope, vars_):
 
 def top_choice_e(e):
     t = e[0]
-    if t in ('choice', 'bif', 'mcall', 'rcall'):
+    if t in ('choice', 'bif', 'mcall', 'rcall', 'gcall'):
         return True
-    if t in ('lit', 'ref', 'next', 'bprint', 'bset', 'optor', 'orx', 'ifx', 'obj', 'cnext'):
+    if t in ('lit', 'ref', 'next', 'bprint', 'bset', 'optor', 'orx', 'ifx', 'obj', 'cnext', 'big'):
         return False
     if t == 'cadd':
         return top_choice_e(e[2])
@@ -747,14 +976,24 @@ def show_cl(cl, sep):
 
 
 # ---------------------------------------------------------------- the model
-def choice_point(thunks, st, k, mode):
-    """thunks: f(s, k) for each alternative, in spatial order."""
+STATS = {'cp': 0, 'gfirst': 0, 'gback': 0, 'gfor': 0}
+
+
+def choice_point(thunks, st, k, mode, gen=False):
+    """thunks: f(s, k) for each alternative, in spatial order. (gen: a
+    generator's; counted for the statistics MVSTATS asks for)"""
+    STATS['cp'] += 1
+    if gen:
+        STATS['gfirst' if mode == 'first' else 'gfor'] += 1
     if mode == 'first':
         for th in thunks:
             s1 = st.copy()
+            before = STATS['cp']
             try:
                 return th(s1, k)
             except Fail:
+                if gen and STATS['cp'] > before:
+                    STATS['gback'] += 1    # (a later choice exhausted, back into the generator)
                 continue
         raise Fail()
     cur = st
@@ -795,7 +1034,7 @@ def ev(e, st, k, mode):
         st.out.append(e[1])
         return ev(e[2], st, k, mode)
     if t == 'bset':
-        st.vars[e[1]] = e[3] if e[2] == '=' else chk(st.vars[e[1]] + e[3])
+        st.vars[e[1]] = e[3] if e[2] == '=' else chks(st.vars[e[1]] + e[3], st)
         return ev(e[4], st, k, mode)
     if t in ('bin', 'tw', 'twt'):
         a, b = (e[2], e[3]) if t == 'bin' else (e[1], e[2])
@@ -803,8 +1042,8 @@ def ev(e, st, k, mode):
         def ka(va, s1):
             def kb(vb, s2):
                 if t != 'bin':
-                    return k(chk(va * 10 + vb), s2)
-                return k(chk({'+': va + vb, '-': va - vb, '*': va * vb}[e[1]]), s2)
+                    return k(chks(chks(va * 10, s2) + vb, s2), s2)
+                return k(chks({'+': va + vb, '-': va - vb, '*': va * vb}[e[1]], s2), s2)
             return ev(b, s1, kb, mode)
         return ev(a, st, ka, mode)
     if t in ('pos', 'even'):
@@ -819,7 +1058,7 @@ def ev(e, st, k, mode):
         return k(v, st)
     if t == 'add':
         def kadd(v, s):
-            s.vars['K.C'] = chk(s.vars['K.C'] + v)
+            s.vars['K.C'] = chks(s.vars['K.C'] + v, s)
             return k(s.vars['K.C'], s)
         return ev(e[1], st, kadd, mode)
     if t == 'idx':
@@ -856,9 +1095,29 @@ def ev(e, st, k, mode):
         o = lookup(st, e[1]) + '.C'
 
         def kca(v, s):
-            s.vars[o] = chk(s.vars[o] + v)
+            s.vars[o] = chks(s.vars[o] + v, s)
             return k(s.vars[o], s)
         return ev(e[2], st, kca, mode)
+    if t in ('gcall', 'gself'):
+        args = e[2]
+
+        def gog(i, vals, s):
+            if i == len(args):
+                return gen_call(e[1], vals, s, k, mode)
+            return ev(args[i], s, lambda v, s2: gog(i + 1, vals + [v], s2), mode)
+        return gog(0, [], st)
+    if t == 'gchoice':
+        if 'cf' in flags:
+            return ev(e[1][0], st, k, mode)
+        return choice_point([(lambda s, k2, a=a: ev(a, s, k2, mode)) for a in e[1]], st, k, mode, True)
+    if t == 'gbif':
+        res = first_inner(lambda s, kk: run_clauses(e[1], s, lambda s2: kk(None, s2), 'first'), st)
+        alts, s0 = (e[2], res[1]) if res is not None else (e[3], st)
+        if 'cf' in flags:
+            return ev(alts[0], s0, k, mode)
+        return choice_point([(lambda s, k2, a=a: ev(a, s, k2, mode)) for a in alts], s0, k, mode, True)
+    if t == 'big':
+        return ev(e[1], st, lambda v, s: k(chks(9223372036854775807 + v * 0 + 1, s), s), mode)
     if t == 'rcall':
         def krc(av, s):
             vs = rcall_vals(e[1], e[2], av)
@@ -974,7 +1233,7 @@ def run_body(stmts, val, st, k, mode):
         old = st.vars[c[1]]
 
         def kss(x, s):
-            s.vars[c[1]] = x if c[2] == '=' else chk(old + x)
+            s.vars[c[1]] = x if c[2] == '=' else chks(old + x, s)
             return nxt(s)
         return ev(c[3], st, kss, mode)
     if t == 'sfilt':
@@ -1032,7 +1291,7 @@ def run_clauses(cl, st, k, mode):
         old = st.vars[v]
 
         def ks(x, s):
-            s.vars[v] = x if op == '=' else chk(old + x if op == '+=' else old * x)
+            s.vars[v] = x if op == '=' else chks(old + x if op == '+=' else old * x, s)
             return nxt(s)
         return ev(c[3], st, ks, mode)
     if t == 'seti':
@@ -1042,7 +1301,7 @@ def run_clauses(cl, st, k, mode):
         old = st.A[i]
 
         def ksi(x, s):
-            s.A[i] = x if op == '=' else chk(old + x)
+            s.A[i] = x if op == '=' else chks(old + x, s)
             return nxt(s)
         return ev(c[2], st, ksi, mode)
     if t == 'setf':
@@ -1077,8 +1336,12 @@ def run_clauses(cl, st, k, mode):
 
 def fmt_float(f):
     # (openverse floats have no negative zero: LANGUAGE.md, float)
-    r = repr(float(f) + 0.0)
-    return r
+    f = float(f) + 0.0
+    if f != f:
+        return "NaN"
+    if f in (float('inf'), float('-inf')):
+        return "Inf" if f > 0 else "-Inf"
+    return repr(f)
 
 
 # ---------------------------------------------------------------- programs
@@ -1167,6 +1430,7 @@ def show_func(f):
 lines = []
 out = []
 tests = []
+OVERFLOW = [False]
 if REC:
     lines += ["CTw(A:int, B:int)<computes>:int = A * 10 + B",
               "CPos(X:int)<computes><decides>:int =", "    X > 0", "    X"]
@@ -1179,6 +1443,11 @@ if REC:
             pass
     for f in RFUNCS:
         lines += show_rfunc(f)
+if LAZY:
+    for i in range(R.randint(1, 3)):
+        GFUNCS.append(gen_gfunc(i))
+    for f in GFUNCS:
+        lines += show_gfunc(f)
 if MV:
     for i in range(R.randint(1, 4)):
         FUNCS.append(gen_func(i))
@@ -1203,6 +1472,7 @@ for ti in range(NT):
     L.append("    var F:float = 1.0")
     kind = R.choice(['if', 'if', 'for', 'for', 'first', 'formacro', 'ifmacro', 'option', 'logic', 'not', 'or'])
     isfor = kind in ('for', 'formacro')
+    CTX['take'] = 'for' if isfor else 'first'
     n = R.randint(1, 4)
     lastval = kind in ('first', 'formacro', 'ifmacro', 'option', 'or')
     cl, scope = gen_clauses([], vars_, 0, n, allow_gen=isfor, lastval=lastval, isfor=isfor)
@@ -1227,76 +1497,85 @@ for ti in range(NT):
         return " ".join(str(s.binds[b]) for b in binds)
     tout = []
     body_first = lambda s2: s2
-    if kind == 'if':
-        L.append(f"    if ({show_cl(cl, ', ')}):")
-        L.append(f'        Print("then {vals_str}")')
-        L.append("    else:")
-        L.append('        Print("else")')
-        res = first_inner(lambda s, kk: run_clauses(cl, s, lambda s2: kk(None, s2), 'first'), st)
-        if res is not None:
-            st = res[1]
-            st.out.append(f"then {vals(st)}")
-        else:
-            st.out.append("else")
-    elif kind in ('first', 'ifmacro', 'option', 'or'):
-        body = show_cl(cl, '; ')
-        if kind == 'first':
-            L.append(f'    if (V := first{{{body}}}) then Print("first {{V}}") else Print("none")')
-        elif kind == 'ifmacro':
-            L.append(f'    V := if{{{body}}} else -7')
-            L.append('    Print("v {V}")')
-        elif kind == 'option':
-            L.append(f'    O := option{{{body}}}')
-            L.append('    if (V := O?) then Print("o {V}") else Print("o none")')
-        else:
-            L.append(f'    W := ({body}) or -7')
-            L.append('    Print("w {W}")')
-        res = first_inner(lambda s, kk: run_clauses(cl, s, lambda s2: kk(clause_value(cl, s2), s2), 'first'), st)
-        if res is not None:
-            v, st = res
-            st.out.append({'first': f"first {v}", 'ifmacro': f"v {v}", 'option': f"o {v}", 'or': f"w {v}"}[kind])
-        else:
-            st.out.append({'first': "none", 'ifmacro': "v -7", 'option': "o none", 'or': "w -7"}[kind])
-    elif kind == 'logic':
-        L.append(f"    Lg := logic{{{show_cl(cl, '; ')}}}")
-        L.append('    if (Lg?) then Print("l true") else Print("l false")')
-        res = first_inner(lambda s, kk: run_clauses(cl, s, lambda s2: kk(None, s2), 'first'), st)
-        if res is not None:
-            st = res[1]
-            st.out.append("l true")
-        else:
-            st.out.append("l false")
-    elif kind == 'not':
-        L.append(f"    if (not ({show_cl(cl, '; ')})) then Print(\"not ok\") else Print(\"not fail\")")
-        res = first_inner(lambda s, kk: run_clauses(cl, s, lambda s2: kk(None, s2), 'first'), st)
-        st.out.append("not fail" if res is not None else "not ok")
-    elif kind == 'for':
-        L.append(f"    for ({show_cl(cl, ', ')}):")
-        L.append(f'        Print("body {vals_str}")')
+    try:
+        if kind == 'if':
+            L.append(f"    if ({show_cl(cl, ', ')}):")
+            L.append(f'        Print("then {vals_str}")')
+            L.append("    else:")
+            L.append('        Print("else")')
+            res = first_inner(lambda s, kk: run_clauses(cl, s, lambda s2: kk(None, s2), 'first'), st)
+            if res is not None:
+                st = res[1]
+                st.out.append(f"then {vals(st)}")
+            else:
+                st.out.append("else")
+        elif kind in ('first', 'ifmacro', 'option', 'or'):
+            body = show_cl(cl, '; ')
+            if kind == 'first':
+                L.append(f'    if (V := first{{{body}}}) then Print("first {{V}}") else Print("none")')
+            elif kind == 'ifmacro':
+                L.append(f'    V := if{{{body}}} else -7')
+                L.append('    Print("v {V}")')
+            elif kind == 'option':
+                L.append(f'    O := option{{{body}}}')
+                L.append('    if (V := O?) then Print("o {V}") else Print("o none")')
+            else:
+                L.append(f'    W := ({body}) or -7')
+                L.append('    Print("w {W}")')
+            res = first_inner(lambda s, kk: run_clauses(cl, s, lambda s2: kk(clause_value(cl, s2), s2), 'first'), st)
+            if res is not None:
+                v, st = res
+                st.out.append({'first': f"first {v}", 'ifmacro': f"v {v}", 'option': f"o {v}", 'or': f"w {v}"}[kind])
+            else:
+                st.out.append({'first': "none", 'ifmacro': "v -7", 'option': "o none", 'or': "w -7"}[kind])
+        elif kind == 'logic':
+            L.append(f"    Lg := logic{{{show_cl(cl, '; ')}}}")
+            L.append('    if (Lg?) then Print("l true") else Print("l false")')
+            res = first_inner(lambda s, kk: run_clauses(cl, s, lambda s2: kk(None, s2), 'first'), st)
+            if res is not None:
+                st = res[1]
+                st.out.append("l true")
+            else:
+                st.out.append("l false")
+        elif kind == 'not':
+            L.append(f"    if (not ({show_cl(cl, '; ')})) then Print(\"not ok\") else Print(\"not fail\")")
+            res = first_inner(lambda s, kk: run_clauses(cl, s, lambda s2: kk(None, s2), 'first'), st)
+            st.out.append("not fail" if res is not None else "not ok")
+        elif kind == 'for':
+            L.append(f"    for ({show_cl(cl, ', ')}):")
+            L.append(f'        Print("body {vals_str}")')
 
-        def fbody(s):
-            s.out.append(f"body {vals(s)}")
-            return s
-        s0 = st.copy()
-        try:
-            st = run_clauses(cl, s0, fbody, 'all')
-        except Fail:
-            pass
-    else:  # formacro
-        last = cl[-1]
-        L.append(f"    Vs := for{{{show_cl(cl, '; ')}}}")
-        L.append('    for (V : Vs) { Print("e {V}") }')
-        vs = []
+            def fbody(s):
+                s.out.append(f"body {vals(s)}")
+                return s
+            s0 = st.copy()
+            try:
+                st = run_clauses(cl, s0, fbody, 'all')
+            except Fail:
+                pass
+        else:  # formacro
+            last = cl[-1]
+            L.append(f"    Vs := for{{{show_cl(cl, '; ')}}}")
+            L.append('    for (V : Vs) { Print("e {V}") }')
+            vs = []
 
-        def fbody2(s):
-            vs.append(clause_value(cl, s))
-            return s
-        s0 = st.copy()
-        try:
-            st = run_clauses(cl, s0, fbody2, 'all')
-        except Fail:
-            pass
-        st.out += [f"e {v}" for v in vs]
+            def fbody2(s):
+                vs.append(clause_value(cl, s))
+                return s
+            s0 = st.copy()
+            try:
+                st = run_clauses(cl, s0, fbody2, 'all')
+            except Fail:
+                pass
+            st.out += [f"e {v}" for v in vs]
+    except StOverflow as ov:
+        # (the program stops in this test: the later ones never run)
+        L.append("    " + show_state)
+        lines += L
+        tests.append(name)
+        out += [f"== {name}"] + ov.st.out
+        OVERFLOW[0] = True
+        break
     L.append("    " + show_state)
     tout = st.out + [state_line(st)]
     lines += L
@@ -1304,6 +1583,11 @@ for ti in range(NT):
     out += [f"== {name}"] + tout
 
 src_main = ["Main():void ="] + [f'    Print("== {n}")\n    {n}()' for n in tests]
+if LAZY:
+    PRE = PRE.replace("Pos(X:int)<decides>", "Pos(X:int)<computes><decides>").replace(
+        "Even(X:int)<decides>", "Even(X:int)<computes><decides>").replace("Tw(A:int, B:int):int", "Tw(A:int, B:int)<computes>:int")
 open(f"{outdir}/p.verse", "w").write(PRE + "\n".join(lines) + "\n" + "\n".join(src_main) + "\n")
 open(f"{outdir}/p.chain", "w").write("1" if CHAIN[0] else "0")
-open(f"{outdir}/p.expected", "w").write("".join(l + "\n" for l in out) + "exit=0\n")
+if os.environ.get('MVSTATS'):
+    print(f"stats gens={len(GFUNCS)} gfor={STATS['gfor']} gfirst={STATS['gfirst']} gback={STATS['gback']}", file=sys.stderr)
+open(f"{outdir}/p.expected", "w").write("".join(l + "\n" for l in out) + ("exit=2\n" if OVERFLOW[0] else "exit=0\n"))
