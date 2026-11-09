@@ -1946,7 +1946,7 @@ partial def Ty.paramsC : Ty → List (String × Bool)
     arguments, the classes the cast tests for, and the equations of the
     refinement; `none` for any other cast. -/
 def refiningCast? (env : TyEnv) (T : String) (xty : Ty) (avoid : List String := []) :
-    Option (String × List Ty × List Ty × List String × List (Ty × Ty) × List (String × String)) := do
+    Option (String × List Ty × List Ty × List String × List (Ty × Ty) × List (String × String × Bool)) := do
   let .struct S sargs := xty | none
   if !env.classes.contains S || !env.classes.contains T then none
   if (env.sparams.lookup T).isNone && (env.coreArgs T []).isEmpty then none
@@ -1961,8 +1961,9 @@ def refiningCast? (env : TyEnv) (T : String) (xty : Ty) (avoid : List String := 
     let mut n := v ++ "'"
     while avoid.contains n || tcore.any (·.1 == n) do n := n ++ "'"
     return n
-  let opened := tcore.map fun (v, _) => (fresh v, v)
-  let ext := opened.map fun (n, _) => Ty.param n false
+  -- (each as comparable as the parameter it stands for)
+  let opened := tcore.map fun (v, t) => (fresh v, v, match t with | .param _ c => c | _ => false)
+  let ext := opened.map fun (n, _, c) => Ty.param n c
   let targs := if env.isSub S T then env.upArgs S sargs T else env.argsBelow S sargs T ext
   let cargs := env.coreArgs T targs
   if cargs.length != rargs.length + ext.length || (cargs == rargs && ext.isEmpty) then none
@@ -3537,7 +3538,7 @@ partial def elabRefinedIf (ctx : Ctx) (p _dp : Pos) (D T : String) (x : SExpr) (
   let rx ← elabE { ctx with canFail := true, inTaking := true } x none
   let some (S, sargs, targs, common, eqs, opened) := refiningCast? env T rx.ty (env.tvars.map (·.1))
     | do set st0; return none
-  if !env.isRefClass S then set st0; return none
+  if !env.isRefClass S || (!opened.isEmpty && !env.isRefClass T) then set st0; return none
   let coreFields (n : String) (ts : List Ty) : Option (List Ty) :=
     if env.classes.contains n then none else some ((env.fields n ts).map (·.2.1))
   let some μT := Ty.unifyEqs coreFields [] eqs | do set st0; return none
@@ -3569,7 +3570,7 @@ partial def elabRefinedIf (ctx : Ctx) (p _dp : Pos) (D T : String) (x : SExpr) (
         ctx.locals.map fun l => { l with ty := refine l.ty },
       -- (and the type arguments the cast opens, #250)
       types := { env with tvars := (env.tvars.map (fun (n, t) => (n, refine t)) ++
-        opened.map (fun (n, _) => (n, Ty.param n false))) } }
+        opened.map (fun (n, _, c) => (n, Ty.param n c))) } }
     -- (its own effects, which its function declares; the enclosing one's too)
     let fx0 := (← get).fx
     modify fun st => { st with fx := [] }
@@ -3616,7 +3617,7 @@ partial def elabRefinedIf (ctx : Ctx) (p _dp : Pos) (D T : String) (x : SExpr) (
       params := ((D, dTy) :: sig).map (fun (n, t) => { name := n, ty := t.toSTy }) ++
         extra.map fun (n, _) => { name := s!"$type{n}", ty := .name n },
       tparams := tps.map fun (n, c) => { pos := p, name := n, constraint := if c then "comparable" else "type" },
-      specs, ret := ret.toSTy, subst := σ, opened }
+      specs, ret := ret.toSTy, subst := σ, opened := opened.map fun (n, v, _) => (n, v) }
     modify fun st => if st.castNeeds.any (·.key == key) then st else { st with castNeeds := st.castNeeds ++ [lift] }
     -- (a placeholder: this elaboration goes no further)
     return some ⟨if decides then .prim .fail [] else .prim .userErr [], τ'⟩
@@ -3657,8 +3658,16 @@ partial def elabRefinedIf (ctx : Ctx) (p _dp : Pos) (D T : String) (x : SExpr) (
       -- (#250: the type arguments the test opens, as fresh parameters
       -- `$ext i`, which the refinement binds; the object is a `T` at the
       -- first of them)
+      -- (each as comparable as the parameter it stands for: the target's,
+      -- or past those, the tested class's own)
+      let ownC := ((env.coreVars (part[0]!)).drop rargs.length).map fun (_, t) =>
+        match t with | .param _ c => c | _ => false
       let extOf : List Ty := if opened.isEmpty then [] else
-        (List.range (pins.length - rargs.length)).map fun i => Ty.param s!"$ext{i}" false
+        (List.range (pins.length - rargs.length)).map fun i =>
+          let c := match opened[i]? with
+            | some (_, _, c) => c
+            | none => ownC.getD i false
+          Ty.param s!"$ext{i}" c
       let rxs := rargs ++ extOf
       let atX := rxs.zipIdx.map fun (r, j) => (pinArg j, r)
       let needX : List (Ty × Ty) := (rxs.zip pins).filterMap fun (a, pin) => match pin with
@@ -6695,9 +6704,10 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       -- (only where an override, at or below, may need it)
       let methodsBelow := cdefs.any fun cd' => henv.isSub cd'.name cd.name &&
         cd'.methods.any fun | .fn _ _ _ _ effs .. => effs.contains "override" | _ => false
-      -- (#250: or the class is the target of a cast that opens them, whose
-      -- branch's function reads them from the object)
-      let methodsBelow := methodsBelow || opts.castRequests.any fun l => !l.opened.isEmpty && l.target == cd.name
+      -- (#250: or a cast that opens them targets the class or one below it,
+      -- whose branch's function reads them from the object, also those an
+      -- ancestor of the target adds)
+      let methodsBelow := methodsBelow || opts.castRequests.any fun l => !l.opened.isEmpty && henv.isSub l.target cd.name
       if let some q := (henv.info cd.name).parent then
         let qargs := ((cd.parents.zip cd.parentArgs).lookup q).getD []
         for tp in (if methodsBelow then cd.tps else []) do
