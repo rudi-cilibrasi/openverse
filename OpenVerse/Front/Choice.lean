@@ -1625,23 +1625,24 @@ def methodFns (tops : List STop) (reserved : List String := []) : Except String 
     anyE (fun | .member _ (.ident _ "(super:)") x => x != n | _ => false) (eraseCallHeads [n] b)
   -- (why a method name's declarations cannot become functions, if they
   -- cannot: one class declares it, the others below it override it)
-  let whyNot (n : String) : Option String := Id.run do
+  -- (and, for a reason of one declaration's own, its class)
+  let whyNot (n : String) : Option (String × Option String) := Id.run do
     let ds := declsOf n
     let roots := ds.filter fun (_, m) => !isOverride m
-    let some (r, _) := roots.head? | return some s!"no class declares {n} without <override>"
+    let some (r, _) := roots.head? | return some (s!"no class declares {n} without <override>", none)
     if roots.length > 1 then
-      return some s!"another class or interface has a method {n} too, not one it overrides, so a call R.{n}(…) cannot be known to be this one where it is inlined, before types are checked"
+      return some (s!"another class or interface has a method {n} too, not one it overrides, so a call R.{n}(…) cannot be known to be this one where it is inlined, before types are checked", none)
     for (c, m) in ds do
-      let some (_, ii, _, _, tps) := classes.lookup c | return some ""
-      if ii then return some s!"an interface ({c.replace "::" "."}) has it"
-      if !tps.isEmpty then return some s!"a class that has it is generic ({c.replace "::" "."})"
-      if !(anc c).contains r then return some s!"{c.replace "::" "."} overrides it without being below {r.replace "::" "."}"
+      let some (_, ii, _, _, tps) := classes.lookup c | return some ("", none)
+      if ii then return some (s!"an interface ({c.replace "::" "."}) has it", none)
+      if !tps.isEmpty then return some (s!"a class that has it is generic ({c.replace "::" "."})", none)
+      if !(anc c).contains r then return some (s!"{c.replace "::" "."} overrides it without being below {r.replace "::" "."}", none)
       if let .fn _ _ _ mtps fx _ b := m then
-        if !mtps.isEmpty then return some "it is generic"
-        if fx.contains "suspends" then return some "it is <suspends>"
-        if otherSuper n b then return some "it uses (super:) of another method"
+        if !mtps.isEmpty then return some ("is generic", some c)
+        if fx.contains "suspends" then return some ("is <suspends>", some c)
+        if otherSuper n b then return some ("uses (super:) of another method", some c)
     if allFields.contains n || topNames.contains n || localBinders.contains n then
-      return some s!"{n} is also the name of a field, an enumerator, a member of a built-in type, a top-level name, a parameter or a local"
+      return some (s!"{n} is also the name of a field, an enumerator, a member of a built-in type, a top-level name, a parameter or a local", none)
     return none
   -- (the families that may become functions)
   let fams : List (String × MFam) := names.filterMap fun n =>
@@ -1703,15 +1704,33 @@ def methodFns (tops : List STop) (reserved : List String := []) : Except String 
   -- (a method with several values whose name cannot become functions:
   -- refused, saying why)
   for n in names do
-    if let some why := whyNot n then
+    if let some (why, atC) := whyNot n then
       if why != "" then
-        for (c, m) in declsOf n do
-          if let .fn p _ _ _ _ _ b := m then
+        let multi := (declsOf n).find? fun (c, m) => match m with
+          | .fn _ _ _ _ _ _ b =>
             let b' := markCalls mv (rw fams true (some c) b)
             let ss := stmtsOf b'
-            if hasChoice ss || ss.any liftsHere || anyE (fun | .ret _ (some e) => hasLiftable e | _ => false) b' then
-              throw s!"{p.show}: {c.replace "::" "."}.{n} has several values, but {why}: such methods are not supported yet (#283)"
+            hasChoice ss || ss.any liftsHere || anyE (fun | .ret _ (some e) => hasLiftable e | _ => false) b'
+          | _ => false
+        if let some (c1, .fn p1 ..) := multi then
+          let shown (c : String) : String := c.replace "::" "."
+          match atC with
+          | none => throw s!"{p1.show}: {shown c1}.{n} has several values, but {why}: such methods are not supported yet (#283)"
+          | some c0 =>
+            -- (said of the declaration it is about, #328's review)
+            let p0 := (((declsOf n).find? (·.1 == c0)).bind fun | (_, .fn q ..) => some q | _ => none).getD p1
+            if c0 == c1 then
+              throw s!"{p0.show}: {shown c0}.{n} has several values, but it {why}: such methods are not supported yet (#283)"
+            throw s!"{p0.show}: {shown c0}.{n} {why}, and {shown c1}.{n} has several values: such methods are not supported yet (#283)"
   let sel := fams.filter fun (n, f) => famHas n f
+  -- (`(super:)M(…)` with nothing above implementing M: as the elaborator
+  -- says, before the body leaves its class, #328's review)
+  for (n, f) in sel do
+    for (c, m) in declsOf n do
+      if let .fn q _ _ _ _ _ b := m then
+        if anyE (fun | .member _ (.ident _ "(super:)") x => x == n | _ => false) b &&
+            (((anc c).drop 1).find? f.impls.contains).isNone then
+          throw s!"{q.show}: nothing above {c.replace "::" "."} implements '{n}'"
   -- (an override with several values that returns a narrower type than the
   -- method it overrides: refused, since a dispatch, made before types, has
   -- the declaring class's return type)
