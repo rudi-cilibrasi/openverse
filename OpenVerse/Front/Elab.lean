@@ -4420,7 +4420,11 @@ partial def elabSet (ctx : Ctx) (p : Pos) (lhs0 : SExpr) (op : Option String) (r
     | "*", .int, .int => pure (p2 .mul old new.e)
     | "+", .arr t, .arr u => do
         if t == u then pure (p2 .concat old new.e)
-        else if refUp (← get).env (.arr u) (.arr t) || u.hasNever then pure (p2 .concat old (← coerce p new (.arr t)))
+        else if refUp (← get).env (.arr u) (.arr t) then pure (p2 .concat old (← coerce p new (.arr t)))
+        else if u.hasNever then
+          match ← tryCatch (some <$> coerce p new (.arr t)) (fun _ => pure none) with
+          | some e => pure (p2 .concat old e)
+          | none => eerr p s!"cannot concatenate {ty.show} and {new.ty.show}"
         else eerr p s!"cannot concatenate {ty.show} and {new.ty.show}"
     -- floats (#127)
     | "+", .float, .float => pure (p2 .fadd old new.e)
