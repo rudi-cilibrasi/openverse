@@ -2281,7 +2281,10 @@ def contKey (ctx : Ctx) (p : Pos) (b : String) (rest : List SExpr) : String :=
   let rest := match ctx.selfClass with
     | some c => rest.map (selfQualify ctx c)
     | none => rest
-  let caps := (Choice.namesUsed (.block p rest)).eraseDups.filter fun n => (ctx.lookup n).isSome
+  -- (with their types: a `for`'s body copied once per alternative of a
+  -- choice has the same place, with names of other types)
+  let caps := (Choice.namesUsed (.block p rest)).eraseDups.filterMap fun n =>
+    (ctx.lookup n).map fun l => s!"{n}:{l.ty.show}"
   s!"k{p.line}_{p.col}_{p.file}_{b}_{String.intercalate "," caps}"
 
 /-- (#335) The function of its own that the clauses after a composed choice
@@ -5613,7 +5616,13 @@ partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
         -- this changes between elaborations)
         let hasLoop := (b.alts ++ rest).any (Choice.anyE fun | .app _ (.ident _ "$loop") _ _ => true | _ => false)
         if rest.any isComposed && !hasLoop then
-          if let some l := ctx.types.loopRequests.find? (·.key == contKey ctx p b.name rest) then
+          let req := ctx.types.loopRequests.find? (·.key == contKey ctx p b.name rest)
+          -- (asked for where more effects are allowed than here, as in a
+          -- function of its own of a call taken lazily, #246: copied)
+          let fits (l : Choice.FirstLift) : Bool :=
+            (l.specs.filter (["reads", "writes", "allocates"].contains ·)).all ctx.fnFx.contains
+          if let some l := req then
+            if !fits l then return ← elabOneGo ctx copied
             let get (i : Nat) : SExpr := .app p (.ident p t) [.int p (i : Int)] false
             -- (the call a clause, whose failure goes back into the
             -- alternative's own choices, then its tuple the value)
@@ -5631,10 +5640,22 @@ partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
             let st0 ← get
             let fx0 := st0.fx
             modify fun st => { st with fx := [] }
+            -- (each other alternative alone, without the clauses after it: its
+            -- value's type, which must be the first's, as the function takes
+            -- one; and the continuations in it, asked for in this elaboration
+            -- too, so that nesting takes no more elaborations)
+            let mut tys : List Ty := []
+            for (a, i) in b.alts.zipIdx.drop 1 do
+              let r ← elabE { ctx with canFail := true, inTaking := true }
+                (.app p (.ident p "$firstP") [.block p (liftAlt a i ++ [.ident p b.name])] false) none
+              tys := tys ++ [r.ty]
             let (code1, c1) ← elabOneGo ctx ([.decl p t none false (alt a0 0)] ++
               binds.zipIdx.map fun (n, i) => .decl p n none (vars.contains n) (.app p (.ident p t) [.int p (i : Int)] false))
             let fxB := (← get).fx
-            match contLiftOf ctx c1 p b.name rest fxB with
+            let same := match c1.lookup b.name with
+              | some l => tys.all (· == l.ty)
+              | none => false
+            match (if same then contLiftOf ctx c1 p b.name rest fxB else .error "alternatives of different types") with
             | .ok lift =>
               let use : LoopUse := { g := "", pos := p, itemCode := .lit .void, argSet := none, lift := .ok lift }
               modify fun st => { st with fx := fx0 }

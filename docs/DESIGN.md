@@ -133,6 +133,9 @@ not an `array{a₀, …}`, which would run `aₙ₋₁` before `a₀`'s value wa
   tuple is that `first{…}`'s value.
   - As #246's functions of their own, it is asked for by the first elaboration and made for the next. The first elaboration takes one alternative, for the names' types, and its code is not kept.
   - The clauses are still copied, as before, in a constructor, a default, a `defer:`, a generic function, after a `return` or a `break` that leaves them, with a `var` binding, with `(super:)`, or where a call taken lazily is involved, since that call's function of its own takes the clauses after it.
+  - They are also copied where the alternatives' values have different types (subclasses), since the function takes one type, and inside a function of its own of a call taken lazily that allows fewer effects than the function the continuation was asked for in.
+  - The key has the captured names' types: a `for`'s body copied once per alternative has one place but names of other types.
+  - The first elaboration elaborates every other alternative alone, without the clauses after it, for its type and for the continuations inside it, so nesting through inlined functions takes no more elaborations.
   - Code and compile time are now linear in the number of such choices in one condition: ten calls of a function with a `return` and a choice after it take 44 KB and 0.04 s, where copying took 2.3 MB and 16 s.
   - Each call is a non-tail call in a filter, so n of them nest n deep in the evaluator's depth budget.
   In a `for`, the clauses are still copied: there the function would hold the `for`'s body too, which may not run in a failure context (#335).
