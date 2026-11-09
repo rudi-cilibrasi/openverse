@@ -12,8 +12,8 @@ random order with opening casts (pairE[E], fstE[E], dupP[E], tagged[E], ...),
 recurse on the opened parts, pass opened values through generic functions
 (Id, Flip, First, MkCst, which need the opened witnesses), nest a refining
 cast (lit[P.L]) or another opening cast (pairE[P.L]) in a branch, and read a
-var changed before the cast.  Some casts are followed by more clauses (#277)
-where the else has no other cast (#286): Ds's last rule reads a var, ClosedSum
+var changed before the cast.  Some casts are followed by more clauses (#277,
+#286): one of Ds's rules reads a var (when it fails, the rules after it run), ClosedSum
 binds and compares an opened value, and Sz's fstE rule calls Sz in the
 condition, so the call's failure is the else and its field writes are rolled
 back.  The model evaluates each matcher by the first rule whose class is at or
@@ -245,13 +245,14 @@ def ev_text():
 
 DS_ORDER = [k for k in ['pairE', 'dupP', 'fstE', 'sndE', 'mkE', 'optE', 'tagged'] if ch(0.75) and k not in KNOWN]
 R.shuffle(DS_ORDER)
-DS_THR = R.randint(0, 7) if DS_ORDER and ch(0.5) else None   # last rule: `, Acc > DS_THR`
+DS_THR = R.randint(0, 7) if DS_ORDER and ch(0.5) else None   # one rule: `, Acc > DS_THR`
+DS_AT = R.randrange(len(DS_ORDER)) if DS_ORDER else None     # (which one: its else is the rules after it)
 def ds(n, K):
     acc = K + 1
     if n.cls == 'lit': return f"L{n.v}"
     for k in DS_ORDER:
         if below(n.cls, k):
-            if k == DS_ORDER[-1] and DS_THR is not None and not acc > DS_THR: break
+            if k == DS_ORDER[DS_AT] and DS_THR is not None and not acc > DS_THR: continue
             if k in ('pairE', 'dupP', 'tagged'): return f"{k[0]}{acc}({ds(n.L, acc)},{ds(n.R, acc)})"
             if k in ('fstE', 'sndE'): return f"{k[0]}({ds(n.P, acc)})"
             if k == 'mkE': return "M"
@@ -265,7 +266,7 @@ def ds_text():
         elif k in ('fstE', 'sndE'): b = f'"{k[0]}({{Ds(P.P, Acc)}})"'
         elif k == 'mkE': b = '"M"'
         else: b = '"O({Ds(P.E, Acc)})"'
-        cl = f", Acc > {DS_THR}" if k == DS_ORDER[-1] and DS_THR is not None else ""
+        cl = f", Acc > {DS_THR}" if k == DS_ORDER[DS_AT] and DS_THR is not None else ""
         L.append(f"    else if (P := {k}[E]{cl}) then {b}")
     L.append("    else E.Name()")
     return '\n'.join(L)

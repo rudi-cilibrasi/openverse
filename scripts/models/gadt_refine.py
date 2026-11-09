@@ -190,8 +190,7 @@ def mk_func(k):
     alts = [(t2, e) for t2 in MENU if t2 != T for e in MENU[t2] if e[0] == ret]
     f['rest'] = mk_rest(f['name']) if ch(0.5) else []
     f['second'] = None
-    # (no refining cast in the else after clauses, until #286: the else's copy is checked under the refinement)
-    if alts and ch(0.4) and not f['rest']:
+    if alts and ch(0.4):
         t2, (r2, b2, bf2, _, _) = R.choice(alts)
         f['second'] = (t2, b2, bf2, ch(0.5))
     return f
