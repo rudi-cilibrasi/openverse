@@ -1502,15 +1502,18 @@ def classRepTy (env : TyEnv) (d : String) (args : List Ty := []) : Ty :=
 
 /-- `a` is a reference class below the class or interface `b`, or an array
     or option of such. -/
-partial def refUp (env : TyEnv) : Ty → Ty → Bool
-  -- `false` (no value) is below every type, also inside a container
-  | .never, _ => true
+partial def refUp (env : TyEnv) (a b : Ty) (nested : Bool := false) : Bool :=
+  match a, b with
+  -- `false` (no value) is below every type; inside a container, where
+  -- Verse Core has `void` for it, only below `void` and `any`, which it
+  -- has as `void` too (#290)
+  | .never, b => !nested || b == .void || b == .any
   | .struct S as, .struct T bs =>
     env.isRefClass S && env.isRefClass T && env.isSub S T && env.upArgs S as T == bs
-  | .arr a, .arr b | .opt a, .opt b => refUp env a b
+  | .arr a, .arr b | .opt a, .opt b => refUp env a b true
   -- tuples pointwise, maps in their values (Core subtyping is covariant there)
-  | .tup as, .tup bs => as.length == bs.length && (as.zip bs).all fun (a, b) => a == b || refUp env a b
-  | .map k a, .map k' b => k == k' && (a == b || refUp env a b)
+  | .tup as, .tup bs => as.length == bs.length && (as.zip bs).all fun (a, b) => a == b || refUp env a b true
+  | .map k a, .map k' b => k == k' && (a == b || refUp env a b true)
   | _, _ => false
 
 /-- The value of a literal expression: a number, or a negated one. -/
@@ -1656,6 +1659,13 @@ def refineConds (p : Pos) (v : String) (base : Ty) (conds : List SExpr) :
     and options are covariant): the options of the classes below `a` move to
     their places among those below `b`. -/
 partial def convert (env : TyEnv) (e : Expr) (a b : Ty) : EM (Option Expr) := do
+  -- (a conversion's temporary or its element of type `false` holds no value:
+  -- the code that made it left before, so `Err()` stands for it, of every
+  -- type, not the `void` Verse Core has for its slot, #290)
+  if a == .never && b != .never && b != .void then
+    match e with
+    | .local _ | .prim (.tupGet _) _ => return some (.prim .userErr [])
+    | _ => pure ()
   -- references: the same value has both types (Verse Core subtyping, #32)
   if refUp env a b then return some e
   -- no value has a class type with no concrete class below it (an interface
@@ -1716,7 +1726,11 @@ partial def convert (env : TyEnv) (e : Expr) (a b : Ty) : EM (Option Expr) := do
     let mut es : Array Expr := #[]
     for ((ti, ui), i) in (ts.zip us).zip (List.range ts.length) do
       let ei := Expr.prim (.tupGet i) [.local x]
-      if ti == ui || ti == .never then es := es.push ei
+      -- (an element that never gives a value left the tuple before this
+      -- runs: its place holds `Err()`, of every type, not the `void` its
+      -- slot has, #290)
+      if ti == .never && ui != .never then es := es.push (.prim .userErr [])
+      else if ti == ui || ti == .never then es := es.push ei
       else match ← convert env ei ti ui with
         | some c => es := es.push c
         | none => return none
@@ -1728,7 +1742,8 @@ partial def convert (env : TyEnv) (e : Expr) (a b : Ty) : EM (Option Expr) := do
     let mut es : Array Expr := #[]
     for (ti, i) in ts.zip (List.range ts.length) do
       let ei := Expr.prim (.tupGet i) [.local x]
-      if ti == t || ti == .never then es := es.push ei
+      if ti == .never && t != .never then es := es.push (.prim .userErr [])
+      else if ti == t || ti == .never then es := es.push ei
       else match ← convert env ei ti t with
         | some c => es := es.push c
         | none => return none
@@ -1743,10 +1758,15 @@ partial def unwrapNever : Expr → Ty → Ty → Expr
   | .prim .mkTup es, .tup ts, .tup us =>
     if es.length == ts.length && ts.length == us.length then
       .prim .mkTup ((es.zip (ts.zip us)).map fun (e, t, u) => match e, t with
-        | .seq e' (.lit .void), .never => if u == .void then e else e'
+        | .seq e' (.lit .void), .never => if u == .void || u == .never then e else e'
         | e, .tup _ => unwrapNever e t u
         | e, _ => e)
     else .prim .mkTup es
+  | .prim .mkArr es, .arr .never, .arr u =>
+    if u == .void || u == .never then .prim .mkArr es
+    else .prim .mkArr (es.map fun e => match e with
+      | .seq e' (.lit .void) => e'
+      | e => e)
   | e, _, _ => e
 
 /-- Convert `r` to type `target`: equal types, `false` (bottom) to anything,
@@ -2505,7 +2525,9 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
       -- converts to it; else the join of their types (classes at a common
       -- supertype, #67), with no element elaborated again
       match ← tryCatch (some <$> all.mapM fun (e', x) => coerce e'.pos x t) (fun _ => pure none) with
-      | some es => return ⟨.prim .mkArr es, .arr t⟩
+      -- (elements that never give a value, without an expected type: each
+      -- followed by `void`, the type `never` stands for, as a tuple's, #285)
+      | some es => return ⟨.prim .mkArr (if t == .never && elemExp.isNone then es.map (.seq · (.lit .void)) else es), .arr t⟩
       | none =>
         let jt ← (rest.zip rs).foldlM (fun acc ((e', x) : SExpr × R) => do
             match joinTy (← get).env acc x.ty elemExp with
@@ -2524,7 +2546,11 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
     let r ← elabE { ctx with canFail := true, inTaking := true } e inner
     -- an expression that cannot fail needs no failure context (and no
     -- saved state to roll back to: the interpreter's heap is not copied)
-    if !(r.e.mayFail ctx.sigProg) then return ⟨.prim .mkSome [r.e], .opt r.ty⟩
+    -- (one that never gives a value, without an expected type: followed by
+    -- `void`, the type `never` stands for in Verse Core, as in a tuple, #290)
+    if !(r.e.mayFail ctx.sigProg) then
+      let e := if r.ty == .never && inner.isNone then Expr.seq r.e (.lit .void) else r.e
+      return ⟨.prim .mkSome [e], .opt r.ty⟩
     let t ← fresh r.ty
     return ⟨Expr.optionE t r.e, .opt r.ty⟩
   | .logicLit p e =>
@@ -3349,8 +3375,11 @@ partial def elabAppBase (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (b
                 if let .tup ts := r.ty then
                   if ts.length == s.params.length then
                     let tt ← fresh r.ty
+                    -- (an element that never gives a value left before the
+                    -- call: `Err()` in its place, of every type, #290)
                     let parts ← ((s.params.zip ts).zip (List.range ts.length)).mapM fun ((pt, et), i) =>
-                      coerce a.pos ⟨.prim (.tupGet i) [.local tt], et⟩ pt
+                      if et == .never then pure (.prim .userErr [])
+                      else coerce a.pos ⟨.prim (.tupGet i) [.local tt], et⟩ pt
                     return ⟨← mark (.seq (.assign tt r.e) (.call s.idx parts)), s.ret⟩
                 let (shown, off) := match name.splitOn "." with
                   | [_, m] => if s.pnames.head? == some "Self" then (m, 1) else (name, 0)
@@ -4506,6 +4535,10 @@ partial def elabSet (ctx : Ctx) (p : Pos) (lhs0 : SExpr) (op : Option String) (r
     | "+", .arr t, .arr u => do
         if t == u then pure (p2 .concat old new.e)
         else if refUp (← get).env (.arr u) (.arr t) then pure (p2 .concat old (← coerce p new (.arr t)))
+        else if u.hasNever then
+          match ← tryCatch (some <$> coerce p new (.arr t)) (fun _ => pure none) with
+          | some e => pure (p2 .concat old e)
+          | none => eerr p s!"cannot concatenate {ty.show} and {new.ty.show}"
         else eerr p s!"cannot concatenate {ty.show} and {new.ty.show}"
     -- floats (#127)
     | "+", .float, .float => pure (p2 .fadd old new.e)
