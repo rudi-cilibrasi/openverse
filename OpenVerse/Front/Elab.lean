@@ -3592,16 +3592,18 @@ partial def elabRefinedIf (ctx : Ctx) (p _dp : Pos) (D T : String) (x : SExpr) (
       | some pt => let pt := pt.subst atR; if a == pt then none else some (a, pt)
       | none => none
     let mut parts : Array (List (Option Ty) × Array String) := #[]
-    -- (keyed by all of each class's pins, so that the classes of a test
-    -- share them, as the checker's `openCount` needs)
+    -- (keyed by each class's pins on the object's type arguments: the
+    -- branch needs none of those a class below adds, so a test of classes
+    -- that share those pins opens what the fewest of them add, as the
+    -- checker's `openCount` does: none when one of them adds none)
     for d in common do
-      let k := env.corePins d
+      let k := (env.corePins d).take rargs.length
       match parts.findIdx? (·.1 == k) with
       | some pi => parts := parts.modify pi fun (k', ds) => (k', ds.push d)
       | none => parts := parts.push (k, #[d])
     let mut acc := eE
     for (pins, part) in parts.toList.reverse do
-      if !VTy.pinsBelow (env.lowerPins (pins.take rargs.length)) rargs.length || pins.length > rargs.length then
+      if !VTy.pinsBelow (env.lowerPins pins) rargs.length then
         eerr p s!"cannot cast {withArticle rx.ty.show} to {shown} yet: class {part[0]!} relates its type arguments to ones that {S} does not have (#209, #243)"
       -- (no object of `part` can be this one: no test)
       let some μF := Ty.unifyEqs coreFields [] (needOf pins) | continue

@@ -904,13 +904,16 @@ them every proof by cases on a derivation. `Typed.dispatch` already
 types a call under the refinement, so the branch is made a function:
 `if (D := T[X]) then Body else Else` becomes a dispatch to
 `$refine…(D, Y₁, …)`, one test per set of pins among the classes the
-cast tests for (keyed by all of each class's pins, as a method's
-dispatch is), with `D` the tested object (the dispatch's receiver) and
+cast tests for, with `D` the tested object (the dispatch's receiver) and
 `Yᵢ` the locals `Body` uses. The function is generic over the
 enclosing function's type parameters that remain under the refinement
 `μ` (the front end's, from the cast's type arguments), takes `D` and the
 `Yᵢ` at their types under `μ`, and returns the `if`'s type under `μ`;
-the types written in `Body` have `μ` applied (`Refine.substTypes`).
+the types written in `Body` have `μ` applied (`Refine.substTypes`). The tests are keyed by each class's pins on the object's
+type arguments only: the branch needs none of the arguments a class
+below adds (`dupX(t, u) := class(dup(t))`), so a test of `dup` and
+`dupX` opens nothing, and one of `dupX` alone opens its `u`, which the
+call does not mention.
 
 It takes two elaborations, as function values at closed types do
 (#214): the first finds the cast (`elabRefinedIf`), elaborates `Body`
