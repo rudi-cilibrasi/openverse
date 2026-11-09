@@ -2300,6 +2300,10 @@ def contLiftOf (ctx c2 : Ctx) (p : Pos) (b : String) (rest : List SExpr)
     (fxB : List (String × Pos × Option String)) : Except String Choice.FirstLift := do
   if ctx.inCtor || ctx.inParamDefault || ctx.inBlock || ctx.inDefer || !ctx.defaults.isEmpty then
     throw "in a constructor, a default or a defer"
+  -- (in a generic function or class: the clauses may write its type
+  -- parameters, `E:[]t = array{}`, which the function would not have;
+  -- an inlined generic one's are substituted, below)
+  if ctx.types.tvars.any (fun (n, _) => !n.startsWith "$tp") then throw "in a generic function"
   let key := contKey ctx p b rest
   let σt : List (String × STy) := ctx.types.tvars.filterMap fun (n, t) =>
     if n.startsWith "$tp" then some (n, t.toSTy) else none
@@ -2369,6 +2373,10 @@ def contForLiftOf (ctx : Ctx) (p : Pos) (b : String) (bty vty : Ty) (rest : List
     Except String Choice.FirstLift := do
   if ctx.inCtor || ctx.inParamDefault || ctx.inBlock || ctx.inDefer || !ctx.defaults.isEmpty then
     throw "in a constructor, a default or a defer"
+  -- (in a generic function or class: the clauses may write its type
+  -- parameters, `E:[]t = array{}`, which the function would not have;
+  -- an inlined generic one's are substituted, below)
+  if ctx.types.tvars.any (fun (n, _) => !n.startsWith "$tp") then throw "in a generic function"
   let key := "f" ++ contKey ctx p b (rest ++ [body])
   let σt : List (String × STy) := ctx.types.tvars.filterMap fun (n, t) =>
     if n.startsWith "$tp" then some (n, t.toSTy) else none
