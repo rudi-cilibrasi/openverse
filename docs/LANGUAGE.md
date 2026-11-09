@@ -516,7 +516,12 @@ circle := class(shape, labelled):
   in a class that fixes `t` to `int`: it is read and set through either
   interface, and through a class below `y` whose subclass also
   implements `x` (#205). An interface that extends a parametric interface
-  gives it its own type parameters. Inherited field defaults see their
+  may give it any type arguments, as a class may its parent: a class below
+  `c2(t) := interface(container([]t))` is a `container([]t)`, and code
+  generic over `container(u)` reaches it with `u` as `[]t` (#53); so may
+  one without type parameters (`intI := interface(container(int))`). The
+  interfaces a class lists may not reach one interface at two instances
+  (`class(pi(int), pi(string))`). Inherited field defaults see their
   own class's type parameters. A cast `square[S]` takes its type arguments
   from `S`'s, and is refused when it would need more. A method
   of a parametric class is generic over the class's type parameters, then
@@ -570,9 +575,11 @@ circle := class(shape, labelled):
     at type arguments that every class below it fixes otherwise: its
     hidden placeholder object (#157) would have to hold itself; a class
     that gives two interfaces different type arguments (`c := class(i1(int),
-    i2(string))`), and an interface that gives a parent interface other than
-    its own type parameters (`c2(t) := interface(container([]t))`) (both
-    #53).
+    i2(string))`, #53); in code generic over an interface's parent, a call
+    of a default implementation the interface gives a method of its parent
+    at type arguments the interface fixes otherwise (`c2(t)`'s
+    `Get<override>():[]t` reached from `container(u)`), and a cast to such
+    an interface whose type parameters would be unknown (#53).
 
 ## Mutation, macros, tooling
 
