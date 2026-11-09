@@ -238,9 +238,26 @@ supers' member names qualified by `Self` (the syntactic counterpart of
 Elab's `selfQualify`, which needs only the class definitions), then `Self`
 renamed. `R.M(args)` becomes `C$M(R, args)`, and in the bodies of `C` and
 the classes below it, `M(args)` becomes `C$M(Self, args)`. Without types, `R.M`
-must name that method whatever `R` is, so only a method whose name no
-other class or interface has as a member qualifies (no override, not
-overridden). Its name must also be no struct field or enumerator, and no
+must name that method whatever `R` is: the name must be declared by one
+class and overridden only below it (a family, `MFam`), and by no
+interface. Each implementation becomes its own function `D$M`. A call
+`R.M(args)` of an overridden one dispatches through guarded alternatives,
+one per implementation `D`:
+`block{ $r : root := R; $a… := args; $d := D[$r]; not E[$r] …; D$M($d, $a…) }`,
+with `E` each class below `D` that implements it again. The receiver is
+bound at the declaring class's type, so every cast is a downcast, which
+the elaborator allows. Exactly one guard holds, the one dynamic dispatch
+would pick. The choice comes before the receiver's and the arguments'
+effects: each alternative evaluates them, and one whose guard fails undoes
+them. In a `for`, a choice after them would be a generator boundary that
+keeps them when a later filter fails, where a call has none (#312's
+lesson). The kept bodies (`checkBody`) read such a choice as an
+if-chain on the guards, ending in `Err()`, which a call never reaches.
+`(super:)M(…)` calls the nearest implementation above directly. For the
+fixpoint, a family's calls go through `root$M$fam`, whose body calls
+every implementation, since the dispatch has a choice in it whatever the
+implementations are, and would make every caller one with several values. Its
+name must also be no struct field or enumerator, and no
 member of a built-in type or of the prelude (`reserved`, which Elab
 passes in), no top-level name, no parameter and no local. Its class must
 not be generic. Which candidates have several

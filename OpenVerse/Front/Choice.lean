@@ -836,7 +836,19 @@ partial def checkBody : SExpr → SExpr :=
       some (alts.foldr (fun a acc => match a with
         | .app _ (.ident _ "$alt") [.block bp gs, rest] false => .ite bp (gs.map checkBody) (checkBody rest) (some acc)
         | _ => acc) (.app p (.ident p "Err") [] false))
+    -- (a method's dispatch on the receiver's class, #283: its alternatives'
+    -- guards as the conditions of an if-chain, which a call never reaches
+    -- the end of)
     | .app p (.ident _ "$choice") as false =>
+      let isGuarded : SExpr → Bool := fun
+        | .block _ ss => ss.any (fun | .decl _ "$d" _ _ _ => true | _ => false) &&
+            (match ss.head? with | some (.decl _ "$r" _ _ _) => true | _ => false)
+        | _ => false
+      if !as.isEmpty && as.all isGuarded then
+        some (as.foldr (fun a acc => match a with
+          | .block bp ss => .ite bp (ss.dropLast.map checkBody) (checkBody (ss.getLastD (.tuple bp []))) (some acc)
+          | _ => acc) (.app p (.ident p "Err") [] false))
+      else
       let rec chain : List SExpr → SExpr
         | [] => .tuple p []
         | [a] => checkBody a
@@ -1385,25 +1397,66 @@ partial def eraseCallHeads (names : List String) (e : SExpr) : SExpr :=
       if names.contains x then some (.app p (.ident q "$h") ((r :: args).map go) br) else none
     | _ => none) e
 
-/-- The calls of the methods `sel` (name, class) in `e` as calls of their
-    functions (#283): `R.M(args)` as `C$M(R, args)`, and in the body of a
-    class `inC` below `C` (`anc` gives a class's ancestors), `M(args)` as
-    `C$M(Self, args)`. -/
-partial def rwMethodCalls (anc : String → List String) (sel : List (String × String)) (inC : Option String)
-    (e : SExpr) : SExpr :=
-  let rw := rwMethodCalls anc sel inC
+/-- A method with several values and its overrides (#283): the class that
+    declares it, and the classes with an implementation (the declaring one
+    first, unless abstract). `direct`: one implementation, the declaring
+    class's, overridden nowhere: a plain call of its function. -/
+structure MFam where
+  root : String
+  impls : List String
+  direct : Bool
+  deriving Inhabited
+
+/-- The calls of the methods of `fams` in `e` (#283), `inC` the class whose
+    body this is (`anc` gives a class's ancestors, nearest first):
+    - `R.M(args)` is a call of `M`'s function with `R` first. With
+      overrides, it dispatches on the receiver's class: one alternative per
+      implementation `D`, `block{ $r : root := R; args into temporaries;
+      $d := D[$r]; not E[$r] …; D$M($d, …) }`, which goes on when `$r` is a `D`
+      and no class `E` below `D` that implements `M` (the casts are from the
+      root, so always possible). The choice comes first, before the
+      receiver's and the arguments' effects (each alternative evaluates them,
+      and the ones whose guard fails undo them): in a `for` a choice after
+      them would be a generator boundary that keeps them when a later
+      filter fails, where a call has none.
+      With `trial`, it is a call of `root$M$fam` instead, for the fixpoint.
+    - `M(args)` in the body of a class below the root is `Self.M(args)`.
+    - `(super:)M(args)` is a call of the nearest implementation above. -/
+partial def rwFamCalls (anc : String → List String) (fams : List (String × MFam)) (trial : Bool)
+    (inC : Option String) (e : SExpr) : SExpr :=
+  let rw := rwFamCalls anc fams trial inC
+  let below (f : MFam) (d : String) : List String := f.impls.filter fun x => x != d && (anc x).contains d
+  let call (p q : Pos) (m : String) (f : MFam) (recv : SExpr) (args : List SExpr) (br : Bool) : SExpr :=
+    if f.direct then .app p (.ident q (methodFnName f.root m)) (recv :: args) br
+    else if trial then .app p (.ident q (methodFnName f.root m ++ "$fam")) (recv :: args) br
+    else
+      let binds := args.zipIdx.map fun (a, i) => match a with
+        | .decl _ n _ _ x => if n.startsWith "?" then SExpr.decl p s!"$a{i}" none false x else .decl p s!"$a{i}" none false a
+        | a => .decl p s!"$a{i}" none false a
+      let passed := args.zipIdx.map fun (a, i) => match a with
+        | .decl ap n t v _ => if n.startsWith "?" then SExpr.decl ap n t v (.ident p s!"$a{i}") else .ident p s!"$a{i}"
+        | _ => .ident p s!"$a{i}"
+      let alt (d : String) : SExpr :=
+        let guard := if d == f.root then SExpr.decl p "$d" none false (.ident p "$r")
+          else .decl p "$d" none false (.app p (.ident p d) [.ident p "$r"] true)
+        let nots := (below f d).map fun x => SExpr.notE p (.app p (.ident p x) [.ident p "$r"] true)
+        .block p ([.decl p "$r" (some (.name f.root)) false recv] ++ binds ++ [guard] ++ nots ++
+          [.app p (.ident q (methodFnName d m)) (.ident p "$d" :: passed) br])
+      mk p (f.impls.map alt)
   mapE (fun
     | .app p (.member q recv m) args br =>
-      match sel.lookup m with
-      -- (`(super:)M(…)` too: `M` is overridden nowhere, so it is `C`'s)
-      | some c =>
-        let recv := match recv with | .ident r "(super:)" => .ident r "Self" | r => rw r
-        some (.app p (.ident q (methodFnName c m)) (recv :: args.map rw) br)
+      match fams.lookup m with
+      | some f =>
+        match recv, inC with
+        | .ident _ "(super:)", some d =>
+          match ((anc d).drop 1).find? f.impls.contains with
+          | some a => some (.app p (.ident q (methodFnName a m)) (.ident q "Self" :: args.map rw) br)
+          | none => none
+        | _, _ => some (call p q m f (rw recv) (args.map rw) br)
       | none => none
     | .app p (.ident q m) args br =>
-      match sel.lookup m, inC with
-      | some c, some d => if (anc d).contains c then
-          some (.app p (.ident q (methodFnName c m)) (.ident q "Self" :: args.map rw) br) else none
+      match fams.lookup m, inC with
+      | some f, some d => if (anc d).contains f.root then some (call p q m f (.ident q "Self") (args.map rw) br) else none
       | _, _ => none
     | _ => none) e
 
@@ -1434,7 +1487,6 @@ def methodFns (tops : List STop) (reserved : List String := []) : Except String 
     match classes.lookup d with
     | some (_, _, fs, ms, _) => fs.map (·.1) ++ ms.filterMap fun | .fn _ m .. => some m | _ => none
     | none => []
-  let allMethods : List String := classes.flatMap fun (_, (_, _, _, ms, _)) => ms.filterMap fun | .fn _ m .. => some m | _ => none
   -- (struct fields and enumerators too, and the members of built-in types
   -- and of the prelude, `reserved`: `R.M` may be any of them)
   let allFields : List String := classes.flatMap (fun (_, (_, _, fs, _, _)) => fs.map (·.1)) ++
@@ -1447,30 +1499,51 @@ def methodFns (tops : List STop) (reserved : List String := []) : Except String 
     | .fn _ _ ps _ _ _ b => ps.map (·.name) ++ localsOf b
     | .classDef _ _ _ _ _ _ _ _ ms => ms.flatMap fun | .fn _ _ ps _ _ _ b => ps.map (·.name) ++ localsOf b | _ => []
     | _ => []
-  let superCall (b : SExpr) : Bool := anyE (fun | .member _ (.ident _ "(super:)") _ => true | _ => false) b
-  -- (why a method cannot become a function, if it cannot)
-  let whyNot (ii : Bool) (tps : List TParam) : STop → Option String
-    | .fn _ n _ mtps fx _ b =>
-      if n.startsWith "$" || n.startsWith "(" || fx.contains "$abstract" then some ""
-      else if ii then some "it is an interface's"
-      else if !tps.isEmpty then some "its class is generic"
-      else if !mtps.isEmpty then some "it is generic"
-      else if fx.contains "suspends" then some "it is <suspends>"
-      else if fx.contains "override" || (allMethods.filter (· == n)).length != 1 then
-        some s!"another class or interface has a method {n} too (an override, an overridden one, or another), so a call R.{n}(…) cannot be known to be this one where it is inlined, before types are checked"
-      else if allFields.contains n || topNames.contains n || localBinders.contains n then
-        some s!"{n} is also the name of a field, an enumerator, a member of a built-in type, a top-level name, a parameter or a local"
-      else if superCall b then some "it uses (super:)"
-      else none
-    | _ => some ""
-  -- (the candidates: class, method)
-  let cands : List (String × STop) := classes.flatMap fun (c, (_, ii, _, ms, tps)) =>
-    ms.filterMap fun m => if (whyNot ii tps m).isNone then some (c, m) else none
-  let owner : List (String × String) := cands.filterMap fun | (c, .fn _ n ..) => some (n, c) | _ => none
-  let rw := rwMethodCalls anc
+  -- (every declaration of each method name: class, method)
+  let decls : List (String × STop) := classes.flatMap fun (c, (_, _, _, ms, _)) => ms.filterMap fun
+    | m@(.fn _ n ..) => if n.startsWith "$" || n.startsWith "(" then none else some (c, m)
+    | _ => none
+  let names : List String := (decls.filterMap fun | (_, .fn _ n ..) => some n | _ => none).eraseDups
+  let declsOf (n : String) : List (String × STop) := decls.filter fun | (_, .fn _ x ..) => x == n | _ => false
+  let isOverride : STop → Bool := fun | .fn _ _ _ _ fx _ _ => fx.contains "override" | _ => false
+  let isAbstract : STop → Bool := fun | .fn _ _ _ _ fx _ _ => fx.contains "$abstract" | _ => false
+  -- (`(super:)` of another method than the one itself: its body leaves
+  -- the class, where that means nothing)
+  let otherSuper (n : String) (b : SExpr) : Bool :=
+    anyE (fun | .app _ (.member _ (.ident _ "(super:)") x) _ _ => x != n | .member _ (.ident _ "(super:)") _ => false | _ => false) b ||
+    anyE (fun | .member _ (.ident _ "(super:)") x => x != n | _ => false) (eraseCallHeads [n] b)
+  -- (why a method name's declarations cannot become functions, if they
+  -- cannot: one class declares it, the others below it override it)
+  let whyNot (n : String) : Option String := Id.run do
+    let ds := declsOf n
+    let roots := ds.filter fun (_, m) => !isOverride m
+    let some (r, _) := roots.head? | return some s!"no class declares {n} without <override>"
+    if roots.length > 1 then
+      return some s!"another class or interface has a method {n} too, not one it overrides, so a call R.{n}(…) cannot be known to be this one where it is inlined, before types are checked"
+    for (c, m) in ds do
+      let some (_, ii, _, _, tps) := classes.lookup c | return some ""
+      if ii then return some s!"an interface ({c.replace "::" "."}) has it"
+      if !tps.isEmpty then return some s!"a class that has it is generic ({c.replace "::" "."})"
+      if !(anc c).contains r then return some s!"{c.replace "::" "."} overrides it without being below {r.replace "::" "."}"
+      if let .fn _ _ _ mtps fx _ b := m then
+        if !mtps.isEmpty then return some "it is generic"
+        if fx.contains "suspends" then return some "it is <suspends>"
+        if otherSuper n b then return some "it uses (super:) of another method"
+    if allFields.contains n || topNames.contains n || localBinders.contains n then
+      return some s!"{n} is also the name of a field, an enumerator, a member of a built-in type, a top-level name, a parameter or a local"
+    return none
+  -- (the families that may become functions)
+  let fams : List (String × MFam) := names.filterMap fun n =>
+    if (whyNot n).isSome then none else
+    let ds := declsOf n
+    let root := ((ds.find? fun (_, m) => !isOverride m).map (·.1)).getD ""
+    let impls := (ds.filter fun (_, m) => !isAbstract m).map (·.1)
+    let impls := (impls.filter (· == root)) ++ impls.filter (· != root)
+    some (n, { root, impls, direct := impls == [root] && ds.length == 1 })
+  let rw := rwFamCalls anc
   -- (a method's body as the function's: its members qualified by `Self`,
   -- then `Self` the parameter `$Self`)
-  let fnOf (sel : List (String × String)) (c : String) : STop → Option STop
+  let fnOf (fs : List (String × MFam)) (trial : Bool) (c : String) : STop → Option STop
     | .fn p m ps _ fx r b =>
       let mem := members c
       let isMethodName := fun n => (anc c).any fun d => match classes.lookup d with
@@ -1481,37 +1554,54 @@ def methodFns (tops : List STop) (reserved : List String := []) : Except String 
       let qual := qualMembers isMethodName mem.contains free
       -- (now `M(…)` is `Self.M(…)`; then the calls of the selected ones;
       -- a parameter's default too, which sees the method's fields)
-      let fix := fun e => renameE [("Self", "$Self")] (rw sel (some c) (qual e))
+      let fix := fun e => renameE [("Self", "$Self")] (rw fs trial (some c) (qual e))
       let ps' := ps.map fun sp => { sp with default := sp.default.map fix }
       some (.fn p (methodFnName c m) ({ name := "$Self", ty := .name c } :: ps') [] fx r (fix b))
     | _ => none
-  -- (which of them have several values: with every candidate's calls
-  -- rewritten, the functions' fixpoint)
-  let all := cands.map fun (c, m) => (c, m)
-  let trial : List STop := tops.map (fun
-      | .fn p n ps tps fx r b => .fn p n ps tps fx r (rw owner none b)
-      | .classDef p n tps sp pa ii fs ov ms => .classDef p n tps sp pa ii fs ov (ms.map fun
-          | .fn p2 m ps fx2 x r b => .fn p2 m ps fx2 x r (rw owner (some n) b)
-          | s => s)
-      | t => t) ++ all.filterMap fun (c, m) => fnOf owner c m
-  let mv := multiValued (multiCandidates trial)
-  -- (one that has several values but cannot become a function: refused,
-  -- saying why)
-  for (c, (_, ii, _, ms, tps)) in classes do
-    for m in ms do
-      if let (some why, .fn p n _ _ _ _ b) := (whyNot ii tps m, m) then
-        if why != "" then
-          let b' := markCalls mv (rw owner (some c) b)
-          let ss := stmtsOf b'
-          if hasChoice ss || ss.any liftsHere || anyE (fun | .ret _ (some e) => hasLiftable e | _ => false) b' then
-            throw s!"{p.show}: {c.replace "::" "."}.{n} has several values, but {why}: such methods are not supported yet (#283)"
-  let sel := owner.filter fun (m, c) => mv.contains (methodFnName c m)
+  let implFns (fs : List (String × MFam)) : List STop := fs.flatMap fun (n, f) =>
+    f.impls.filterMap fun c => ((declsOf n).find? (·.1 == c)).bind fun (_, m) => fnOf fs false c m
+  -- (which have several values: with every family's calls rewritten, the
+  -- functions' fixpoint; a family with overrides through `root$M$fam`,
+  -- whose body calls each implementation)
+  let famFns : List STop := fams.filterMap fun (n, f) =>
+    if f.direct then none else
+    match (declsOf n).find? (·.1 == f.root) with
+    | some (_, .fn p _ ps _ fx r _) =>
+      let args := ps.map fun sp => SExpr.ident p sp.name
+      some (.fn p (methodFnName f.root n ++ "$fam") ({ name := "$Self", ty := .name f.root } :: ps) [] fx r
+        (.tuple p (f.impls.map fun c => .app p (.ident p (methodFnName c n)) (.ident p "$Self" :: args) false)))
+    | _ => none
+  let rwTops (fs : List (String × MFam)) (trial : Bool) : List STop := tops.map fun
+    | .fn p n ps tps fx r b => .fn p n ps tps fx r (rw fs trial none b)
+    | .const p n ty e => .const p n ty (rw fs trial none e)
+    | .classDef p n tps sp pa ii fs' ov ms =>
+      .classDef p n tps sp pa ii (fs'.map fun (f, t, d, v) => (f, t, d.map (rw fs trial (some n)), v)) ov (ms.map fun
+        | .fn p2 m ps fx2 x r b => .fn p2 m ps fx2 x r (rw fs trial (some n) b)
+        | s => s)
+  -- (in the trial, calls of the families go through `$fam`)
+  let trialFns := fams.flatMap fun (n, f) =>
+    f.impls.filterMap fun c => ((declsOf n).find? (·.1 == c)).bind fun (_, m) => fnOf fams true c m
+  let mv := multiValued (multiCandidates (rwTops fams true ++ trialFns ++ famFns))
+  let famHas (n : String) (f : MFam) : Bool :=
+    mv.contains (if f.direct then methodFnName f.root n else methodFnName f.root n ++ "$fam")
+  -- (a method with several values whose name cannot become functions:
+  -- refused, saying why)
+  for n in names do
+    if let some why := whyNot n then
+      if why != "" then
+        for (c, m) in declsOf n do
+          if let .fn p _ _ _ _ _ b := m then
+            let b' := markCalls mv (rw fams true (some c) b)
+            let ss := stmtsOf b'
+            if hasChoice ss || ss.any liftsHere || anyE (fun | .ret _ (some e) => hasLiftable e | _ => false) b' then
+              throw s!"{p.show}: {c.replace "::" "."}.{n} has several values, but {why}: such methods are not supported yet (#283)"
+  let sel := fams.filter fun (n, f) => famHas n f
   if sel.isEmpty then return tops
   -- (a parameter or local named like a member: refused, as in the class,
   -- since the body leaves it)
-  for (c, m) in cands do
-    if let .fn p n ps _ _ _ b := m then
-      if sel.any (fun (m', c') => m' == n && c' == c) then
+  for (n, f) in sel do
+    for c in f.impls do
+      if let some (_, .fn p _ ps _ _ _ b) := (declsOf n).find? (·.1 == c) then
         let mem := members c
         if let some sp := ps.find? (mem.contains ·.name) then
           throw s!"{p.show}: parameter '{sp.name}' of {n} is already a field or method of {c.replace "::" "."}; Verse does not allow shadowing"
@@ -1519,23 +1609,13 @@ def methodFns (tops : List STop) (reserved : List String := []) : Except String 
           throw s!"{q.show}: '{x}' is already a field or method of {c.replace "::" "."}; Verse does not allow shadowing"
   -- (the program with those methods out of their classes and their calls
   -- rewritten, and their functions)
-  let out := tops.map fun
-    | .fn p n ps tps fx r b => .fn p n ps tps fx r (rw sel none b)
-    | .const p n ty e => .const p n ty (rw sel none e)
+  let selNames := sel.map (·.1)
+  let out := (rwTops sel false).map fun
     | .classDef p n tps sp pa ii fs ov ms =>
-      .classDef p n tps sp pa ii (fs.map fun (f, t, d, v) => (f, t, d.map (rw sel (some n)), v)) ov (ms.filterMap fun
-        | .fn p2 m ps fx2 x r b => if sel.any (fun (m', c) => m' == m && c == n) then none
-            else some (.fn p2 m ps fx2 x r (rw sel (some n) b))
-        | s => some s)
+      .classDef p n tps sp pa ii fs ov (ms.filter fun | .fn _ m .. => !selNames.contains m | _ => true)
+    | t => t
   -- (what is left of their names is a use as a value: refused, as for a
   -- function's; a name of theirs is nothing else's)
-  let valueUse (e : SExpr) : Option (Pos × String) := Id.run do
-    let mut r := none
-    let e := eraseCallHeads (sel.map (·.1)) e
-    for m in sel.map (·.1) do
-      if r.isNone && anyE (fun | .member _ _ x | .ident _ x => x == m | _ => false) e then
-        r := some (e.pos, m)
-    return r
   for t in out do
     let bodies : List SExpr := match t with
       | .fn _ _ ps _ _ _ b => b :: ps.filterMap (·.default)
@@ -1544,14 +1624,13 @@ def methodFns (tops : List STop) (reserved : List String := []) : Except String 
           | .fn _ _ ps _ _ _ b => b :: ps.filterMap (·.default)
           | _ => []
     for b in bodies do
-      if let some (_, m) := valueUse b then
-        let c := (sel.lookup m).getD ""
-        let b := eraseCallHeads (sel.map (·.1)) b
-        let p := ((stmtsOf b).find? (anyE fun | .member _ _ x | .ident _ x => x == m | _ => false)).map (·.pos) |>.getD b.pos
-        throw s!"{p.show}: {c.replace "::" "."}.{m} has several values, so it cannot be used as a function value (#235, #283)"
-  return out ++ all.filterMap fun (c, m) => match m with
-    | .fn _ n .. => if sel.any (fun (m', c') => m' == n && c' == c) then fnOf sel c m else none
-    | _ => none
+      let b := eraseCallHeads selNames b
+      for m in selNames do
+        if anyE (fun | .member _ _ x | .ident _ x => x == m | _ => false) b then
+          let c := ((sel.lookup m).map (·.root)).getD ""
+          let p := ((stmtsOf b).find? (anyE fun | .member _ _ x | .ident _ x => x == m | _ => false)).map (·.pos) |>.getD b.pos
+          throw s!"{p.show}: {c.replace "::" "."}.{m} has several values, so it cannot be used as a function value (#235, #283)"
+  return out ++ implFns sel
 
 /-- The functions of the program that have several values, inlined at their
     calls (see above); the program unchanged when there are none. Also
