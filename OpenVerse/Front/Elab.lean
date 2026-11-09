@@ -1785,12 +1785,14 @@ def coerce (p : Pos) (r : R) (target : Ty) : EM Expr := do
   -- option or a field has `void` in Verse Core: it is evaluated, which may
   -- fail, and `Err()` follows, never reached, into a temporary of the target
   -- type, so that its type can be inferred anywhere, #297)
-  if r.ty == .never && target != .never && target != .void then
-    match r.e with
-    | .local _ | .prim (.tupGet _) _ | .prim .index _ | .prim .query _ | .heap (.get _) _ =>
-      let x ← modifyGet fun s => (s.nslots, { s with nslots := s.nslots + 1, slotTys := s.slotTys.push target })
-      return .assign x (.seq r.e (.prim .userErr []))
-    | _ => pure ()
+  -- (also after statements that compute its operands: a map's lookup)
+  let rec projection : Expr → Bool
+    | .local _ | .prim (.tupGet _) _ | .prim .index _ | .prim .query _ | .heap (.get _) _ => true
+    | .seq _ b => projection b
+    | _ => false
+  if r.ty == .never && target != .never && target != .void && projection r.e then
+    let x ← modifyGet fun s => (s.nslots, { s with nslots := s.nslots + 1, slotTys := s.slotTys.push target })
+    return .assign x (.seq r.e (.prim .userErr []))
   if r.ty == target || r.ty == .never then return r.e
   if target == .void then return .seq r.e (.lit .void)
   match ← convert (← get).env r.e r.ty target with
