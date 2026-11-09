@@ -911,74 +911,66 @@ partial def tailReturns (ss : List SExpr) : List SExpr :=
     | e => init ++ [.ret e.pos (some e)]
 
 /-- A body's statements with its `return`s, in `if`s, taken out (#283).
-    An `if` with a `return` in a branch, `S; if (C) { T }; R`, becomes
+    An `if` with a `return` in a branch, `S; if (C) { T } else { U }; R`,
+    becomes guarded alternatives, each branch followed by the rest:
 
         S; $k := if (C) then 0 else 1
-        $kr := block{ $k = 0; T° } | block{ $k = 1; U° }
-        block{ $kx := $kr?; $kx } | block{ not $kr?; R }
+        block{ $k = 0; T; R } | block{ $k = 1; U; R }
 
-    where `T°` gives `option{v}` where a `return v` is reached and `false`
-    where it falls through to the end (so the rest `R` runs once, after
-    it). The condition runs once, and a guard that fails stops an
-    alternative before any of its clauses. A condition that binds names
-    gives them to its branch through an option: `$k := option{C; (names)}`,
-    the names from `$k?` there and `not $k?` in the other. Each branch is a
-    block of its own, so its names are its own. `opt`: these statements are
-    a branch's (so give an option). `none` when a `return` is elsewhere (in a
-    loop, a condition, an expression). `fresh i` names the `$k`s; `ret` is
-    the function's result type (the options are at `?ret`, so `false` is
-    one). -/
-partial def elimReturns (fresh : Nat → String) (n : Nat) (opt : Bool) (p0 : Pos) (ret : STy) :
-    List SExpr → Option (List SExpr × Nat)
-  | [] => some ((if opt then [.ident p0 "false"] else []), n)
-  | .ret p e? :: _ =>
-    let e := e?.getD (.tuple p [])
-    if opt then
-      let y := fresh n ++ "y"
-      some ([.decl p y none false e, .optionLit p (.block p [.ident p y])], n + 1)
-    else some ([e], n)
+    where a `return v` ends its alternative with the value `v` (so the rest
+    is left out after a branch that always returns). The guard comes first:
+    the other alternative stops before any of its clauses, and in a `for`
+    the choice is a generator before the branch's effects, as the `if` was
+    none (a choice after them would keep them when a later filter fails).
+    The condition runs once. A condition that binds names gives them to its
+    branch through an option: `$k := option{C; (names)}`, the names from
+    `$k?` there and `not $k?` in the other. A branch's own names (and its
+    condition's) are renamed for it, so the rest's may be the same. `none`
+    when a `return` is elsewhere (in a loop, a condition, an expression).
+    `fresh i` names the `$k`s. -/
+partial def elimReturns (fresh : Nat → String) (n : Nat) (p0 : Pos) : List SExpr → Option (List SExpr × Nat)
+  | [] => some ([], n)
+  | .ret p e? :: _ => some ([e?.getD (.tuple p [])], n)
   | s@(.ite p cs t u?) :: rest =>
     let hasRet := anyE fun | .ret .. => true | _ => false
-    if !hasRet s then (elimReturns fresh n opt p0 ret rest).map fun (r, n') => (s :: r, n')
+    if !hasRet s then (elimReturns fresh n p0 rest).map fun (r, n') => (s :: r, n')
     else if cs.any hasRet then none
     else do
+      let k := fresh n
       -- (the last statement of a body: its branches' values are returned)
-      let (ts, us) := if !opt && rest.isEmpty then
+      let (ts, us) := if rest.isEmpty then
           (tailReturns (stmtsOf t), tailReturns ((u?.map stmtsOf).getD []))
         else (stmtsOf t, (u?.map stmtsOf).getD [])
-      let k := fresh n
-      let (tb, n1) ← elimReturns fresh (n + 1) true p ret ts
-      let (ub, n2) ← elimReturns fresh n1 true p ret us
-      let (rb, n3) ← elimReturns fresh n2 opt p ret rest
-      let res := k ++ "r"
-      let x := k ++ "x"
-      let (cond, pre0, pre1) : SExpr × List SExpr × List SExpr := match boundIn cs with
-        | [] =>
-          (.decl p k none false (.ite p cs (.int p 0) (some (.int p 1))),
-            [.cmp p (.ident p k) [("=", .int p 0)]], [.cmp p (.ident p k) [("=", .int p 1)]])
-        | names =>
-          -- (the names the condition binds, for its branch: through an option)
-          let (val, binds) : SExpr × List SExpr := match names with
-            | [y] => (.ident p y, [.decl p y none false (.query p (.ident p k))])
-            | ys =>
-              let tt := k ++ "t"
-              (.tuple p (ys.map (SExpr.ident p ·)),
-                .decl p tt none false (.query p (.ident p k)) ::
-                  ys.zipIdx.map fun (y, i) => SExpr.decl p y none false (.app p (.ident p tt) [.int p (i : Int)] false))
-          (.decl p k none false (.optionLit p (.block p (cs ++ [val]))), binds, [.notE p (.query p (.ident p k))])
-      let resDecl := SExpr.decl p res (some (.opt ret)) false (mk p [.block p (pre0 ++ tb), .block p (pre1 ++ ub)])
-      let take : SExpr := if opt then .optionLit p (.block p [.ident p x]) else .ident p x
-      let after : SExpr :=
-        if rb.isEmpty then .query p (.ident p res)
-        else mk p [.block p [.decl p x none false (.query p (.ident p res)), take],
-                   .block p (.notE p (.query p (.ident p res)) :: rb)]
-      -- (in a branch, its value an option too, at `?ret`)
-      let last : List SExpr := if opt then
-          [.decl p (k ++ "v") (some (.opt ret)) false after, .ident p (k ++ "v")] else [after]
-      some ([cond, resDecl] ++ last, n3)
+      -- (a branch's names, and its condition's, are its own)
+      let names := boundIn cs
+      let own (ss : List SExpr) (extra : List String) : List (String × String) :=
+        ((ss.flatMap localsOf) ++ extra).eraseDups.map fun x => (x, s!"{k}'{x}")
+      let ρt := own ts names
+      let ρu := own us []
+      let ts := ts.map (renameE ρt)
+      let us := us.map (renameE ρu)
+      let (tb, n1) ← elimReturns fresh (n + 1) p (ts ++ rest)
+      let (ub, n2) ← elimReturns fresh n1 p (us ++ rest)
+      match names with
+      | [] =>
+        let guard (i : Int) (b : List SExpr) : SExpr := .block p (.cmp p (.ident p k) [("=", .int p i)] :: b)
+        some ([.decl p k none false (.ite p cs (.int p 0) (some (.int p 1))), mk p [guard 0 tb, guard 1 ub]], n2)
+      | _ =>
+        -- (the names the condition binds, for its branch: through an option,
+        -- under the branch's names for them)
+        let rn := fun x => (ρt.lookup x).getD x
+        let (val, binds) : SExpr × List SExpr := match names with
+          | [y] => (.ident p y, [.decl p (rn y) none false (.query p (.ident p k))])
+          | ys =>
+            let tt := k ++ "t"
+            (.tuple p (ys.map (SExpr.ident p ·)),
+              .decl p tt none false (.query p (.ident p k)) ::
+                ys.zipIdx.map fun (y, i) => SExpr.decl p (rn y) none false (.app p (.ident p tt) [.int p (i : Int)] false))
+        some ([.decl p k none false (.optionLit p (.block p (cs ++ [val]))),
+          mk p [.block p (binds ++ tb), .block p (.notE p (.query p (.ident p k)) :: ub)]], n2)
   | s :: rest =>
     if anyE (fun | .ret .. => true | _ => false) s then none
-    else (elimReturns fresh n opt p0 ret rest).map fun (r, n') => (s :: r, n')
+    else (elimReturns fresh n p0 rest).map fun (r, n') => (s :: r, n')
 
 /-- A function's name as written: a method's function `C$M` as `C.M`, and
     `F$all` as `F` (#283). -/
@@ -1118,7 +1110,7 @@ partial def inlineCalls (mv : List (String × MFn)) (e : SExpr) (recs : List Str
       -- (its `return`s as guarded alternatives, #283)
       let ss := stmtsOf body
       let ss := if anyE (fun | .ret .. => true | _ => false) body then
-          ((elimReturns (fun i => tag s!"$k{i}") 0 false q ((tyOf f.ret).getD f.ret) ss).map (·.1)).getD ss else ss
+          ((elimReturns (fun i => tag s!"$k{i}") 0 q ss).map (·.1)).getD ss else ss
       let r := tag "$r"
       let (init, last) := (ss.dropLast, ss.getLast?)
       let (init, res) : List SExpr × SExpr := match last with
@@ -1605,7 +1597,7 @@ def inlineMulti (tops : List STop) (reserved : List String := []) : Except Strin
       let retIfs := (stmtsOf f.body).foldl (init := 0) fun acc s => acc + countRetIfs s
       if retIfs > 16 then
         throw s!"{f.pos.show}: {shownFnName n} has several values and {retIfs} ifs with a return: more than 16, and the code of an inlined call doubles with each, until choices compose without copying the clauses after them (#283)"
-      if (elimReturns (fun _ => "") 0 false f.pos f.ret (stmtsOf f.body)).isNone then
+      if (elimReturns (fun _ => "") 0 f.pos (stmtsOf f.body)).isNone then
         throw s!"{f.pos.show}: {shownFnName n} has several values and a return other than in the branches of an if, which would leave its caller once inlined (#235, #283)"
     if (stmtsOf f.body).any (fun | .app _ (.ident _ "$defer") _ _ => true | _ => false) then
       throw s!"{f.pos.show}: {shownFnName n} has several values and a defer:, which would run in its caller's clauses once inlined: not supported yet (#235)"
