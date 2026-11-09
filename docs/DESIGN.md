@@ -149,6 +149,27 @@ type inference over Core is needed. `option{…}`, `logic{…}`, `not` and the
 left of `or` take a choice's first success by becoming `first{…}` of their
 clauses.
 
+Lifting goes into blocks and constructions too (#283). A block's clauses
+become the clauses of the failure context it is in. Its locals are renamed
+for the place (`$b…_Y`), so two blocks in one clause list stay apart. A
+`$declNames` clause in front checks the original names with
+`checkNewLocal` where the block was: the renaming must not get around the
+no-shadowing rule. The block's last expression is the value. A block with
+a `defer:` of its own is not lifted, since its scope would change.
+
+A construction evaluates its fields in its type's declaration order, so its
+fields are first put in that order, which by itself changes nothing. Then
+they are lifted as a call's arguments. `Choice` works on syntax, so the
+elaborator passes the order in (`choiceOrder`, through `prepare`,
+`hasChoice` and `takeFirst?`). Each field's entry also says whether its default is more than a literal.
+Where the order is not known (an eager `F$all` template), a field is given
+twice, or such a default comes before the last choice (it would run after
+it), the construction is not lifted and the choice is refused there.
+`hasLiftable` does not look inside a `.block` that is an argument of a `$…`
+marker. That block is the body of `first{…}`, `spawn`, `branch`, `sync`,
+`race`, `rush` or `defer:`, which take their choices themselves or run
+apart.
+
 A function with several values (#235) is inlined before elaboration, by
 `Choice.inlineMulti`, which runs right after module resolution. It finds
 the top-level functions whose body has a choice that nothing in it takes,

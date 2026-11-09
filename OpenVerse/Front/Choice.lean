@@ -234,13 +234,23 @@ partial def hasLiftable : SExpr → Bool
   | .app _ (.ident _ "$loop") _ false => true
   | e@(.ite ..) => isBranchy e
   | .app _ f args _ => headHas hasLiftable f || args.any fun a =>
-      (match a with | .decl _ n _ _ _ => !n.startsWith "?" | _ => true) && hasLiftable a
+      (match a with
+       | .decl _ n _ _ _ => !n.startsWith "?"
+       -- (the body of `first{…}`, `spawn`, `branch`, `defer`, `sync`, … is
+       -- no value to lift from: its choices are its own)
+       | .block .. => !(match f with | .ident _ n => n.startsWith "$" | _ => false)
+       | _ => true) && hasLiftable a
   | .bin _ _ a b => hasLiftable a || hasLiftable b
   | .cmp _ a rest => hasLiftable a || rest.any (hasLiftable ·.2)
   | .member _ e _ | .query _ e | .neg _ e => hasLiftable e
   | .tuple _ es | .arrayLit _ es => es.any hasLiftable
   | .str _ ps => ps.any fun | .code c => hasLiftable c | .text _ => false
   | .mapLit _ kvs => kvs.any fun (k, v) => hasLiftable k || hasLiftable v
+  -- (a construction's field values and a block's clauses, #283)
+  | .construct _ _ _ fs => fs.any fun | .decl _ _ _ _ x => hasLiftable x | x => hasLiftable x
+  | .block _ ss => ss.any fun
+      | .decl _ _ _ _ x | .set _ _ _ x | .gen _ _ _ x => hasLiftable x
+      | x => hasLiftable x
   | _ => false
 
 /-- The same whenever evaluated, and typed by where they are (so they keep
@@ -267,6 +277,11 @@ structure LiftSt where
   /-- Part of every name made: the call site of the function being inlined
       (#235), so two calls of one function do not make the same names. -/
   site : String := ""
+  /-- A struct's or class's fields in declaration order, the order its
+      constructions evaluate them in, each with whether it has a default
+      that is more than a literal (so runs where it is, #283); `[]` when not
+      known here. -/
+  fieldOrder : String → List (String × Bool) := fun _ => []
 
 abbrev LM := StateM LiftSt
 
@@ -277,6 +292,110 @@ def LM.bind (p : Pos) (k : String) (e : SExpr) : LM SExpr := do
   let x ← LM.fresh p k
   modify fun s => { s with pre := s.pre.push (.decl p x none false e) }
   return .ident p x
+
+/-- `e` with `f` applied top-down: where `f` gives a replacement, it is used
+    (and not descended into). Struct constructions' field names are kept. -/
+partial def mapE (f : SExpr → Option SExpr) (e : SExpr) : SExpr :=
+  match f e with
+  | some e' => e'
+  | none =>
+    let go := mapE f
+    match e with
+    | .str p ps => .str p (ps.map fun | .code c => .code (go c) | t => t)
+    | .app p g as b => .app p (go g) (as.map go) b
+    | .member p x m => .member p (go x) m
+    | .query p x => .query p (go x)
+    | .neg p x => .neg p (go x)
+    | .notE p x => .notE p (go x)
+    | .bin p o a b => .bin p o (go a) (go b)
+    | .cmp p a r => .cmp p (go a) (r.map fun (o, b) => (o, go b))
+    | .andE p a b => .andE p (go a) (go b)
+    | .orE p a b => .orE p (go a) (go b)
+    | .range p a b => .range p (go a) (go b)
+    | .tuple p es => .tuple p (es.map go)
+    | .block p es => .block p (es.map go)
+    | .arrayLit p es => .arrayLit p (es.map go)
+    | .optionLit p x => .optionLit p (go x)
+    | .logicLit p x => .logicLit p (go x)
+    | .ite p cs t e' => .ite p (cs.map go) (go t) (e'.map go)
+    | .forE p cs b => .forE p (cs.map go) (go b)
+    | .gen p x i src => .gen p x i (go src)
+    | .loop p b => .loop p (go b)
+    | .ret p x => .ret p (x.map go)
+    | .caseE p sc arms => .caseE p (go sc) (arms.map fun (pt, v) => (pt.map go, go v))
+    | .decl p n t v x => .decl p n t v (go x)
+    | .set p l o r => .set p (go l) o (go r)
+    | .construct p n ts fs => .construct p n ts (fs.map fun
+        | .decl q fn t v x => .decl q fn t v (go x)
+        | a => go a)
+    | .mapLit p kvs => .mapLit p (kvs.map fun (k, v) => (go k, go v))
+    | .structDef p tps fs => .structDef p tps (fs.map fun (n, t, d, v) => (n, t, d.map go, v))
+    | e => e
+
+/-- Whether some subexpression satisfies `pr` (through `mapE`). -/
+partial def anyE (pr : SExpr → Bool) (e : SExpr) : Bool :=
+  pr e || match e with
+    | .str _ ps => ps.any fun | .code c => anyE pr c | _ => false
+    | .app _ g as _ => anyE pr g || as.any (anyE pr)
+    | .member _ x _ | .query _ x | .neg _ x | .notE _ x | .optionLit _ x | .logicLit _ x | .loop _ x
+    | .gen _ _ _ x | .decl _ _ _ _ x => anyE pr x
+    | .bin _ _ a b | .andE _ a b | .orE _ a b | .range _ a b | .set _ a _ b => anyE pr a || anyE pr b
+    | .cmp _ a r => anyE pr a || r.any (anyE pr ·.2)
+    | .tuple _ es | .block _ es | .arrayLit _ es | .construct _ _ _ es => es.any (anyE pr)
+    | .ite _ cs t e' => cs.any (anyE pr) || anyE pr t || (e'.map (anyE pr)).getD false
+    | .forE _ cs b => cs.any (anyE pr) || anyE pr b
+    | .ret _ x => (x.map (anyE pr)).getD false
+    | .caseE _ sc arms => anyE pr sc || arms.any fun (pt, v) => ((pt.map (anyE pr)).getD false) || anyE pr v
+    | .mapLit _ kvs => kvs.any fun (k, v) => anyE pr k || anyE pr v
+    | _ => false
+
+/-- The statements of a body. -/
+def stmtsOf : SExpr → List SExpr
+  | .block _ ss => ss
+  | e => [e]
+
+/-- Calls of the functions `mv` as `$inline` markers with an empty template:
+    enough to see whether a body has several values. -/
+def markCalls (mv : List String) : SExpr → SExpr :=
+  mapE fun
+    | .app p (.ident q g) as _ =>
+      if mv.contains g then some (.app p (.ident p "$inline") (.ident q g :: .block p [] :: as) false)
+      else none
+    | _ => none
+
+/-- The names a body binds (its locals), each where it is bound, struct
+    fields and named arguments aside. -/
+partial def localDecls (e : SExpr) : List (String × Pos) :=
+  let rec go : SExpr → List (String × Pos)
+    | .decl p n _ _ x => (if n.startsWith "?" then [] else [(n, p)]) ++ go x
+    | .gen p x i src => (x :: i.toList).map (·, p) ++ go src
+    | .construct _ _ _ fs => fs.flatMap fun | .decl _ _ _ _ x => go x | a => go a
+    | .str _ ps => ps.flatMap fun | .code c => go c | _ => []
+    | .app _ g as _ => go g ++ as.flatMap go
+    | .member _ x _ | .query _ x | .neg _ x | .notE _ x | .optionLit _ x | .logicLit _ x | .loop _ x => go x
+    | .bin _ _ a b | .andE _ a b | .orE _ a b | .range _ a b | .set _ a _ b => go a ++ go b
+    | .cmp _ a r => go a ++ r.flatMap (go ·.2)
+    | .tuple _ es | .block _ es | .arrayLit _ es => es.flatMap go
+    | .ite _ cs t e' => cs.flatMap go ++ go t ++ ((e'.map go).getD [])
+    | .forE _ cs b => cs.flatMap go ++ go b
+    | .ret _ x => (x.map go).getD []
+    | .caseE _ sc arms => go sc ++ arms.flatMap fun (pt, v) => ((pt.map go).getD []) ++ go v
+    | .mapLit _ kvs => kvs.flatMap fun (k, v) => go k ++ go v
+    | _ => []
+  go e
+
+/-- The names `e` binds, at any depth. -/
+partial def localsOf (e : SExpr) : List String :=
+  ((localDecls e).map (·.1)).eraseDups
+
+/-- `e` with the names in `ren` renamed, binders and uses. -/
+partial def renameE (ren : List (String × String)) : SExpr → SExpr :=
+  mapE fun
+    | .ident p n => (ren.lookup n).map (.ident p ·)
+    | .decl p n t v x => (ren.lookup n).map fun n' => .decl p n' t v (renameE ren x)
+    | .gen p x i src => if (ren.lookup x).isSome || (i.bind fun j => ren.lookup j).isSome then
+        some (.gen p ((ren.lookup x).getD x) (i.map fun j => (ren.lookup j).getD j) (renameE ren src)) else none
+    | _ => none
 
 mutual
 /-- An inlined call's parameters bound to its arguments, lifted, in order
@@ -412,6 +531,55 @@ partial def liftE (isVal : String → Bool) (isField : String → String → Boo
       | k :: v :: r => (k, v) :: pairs r
       | _ => []
     return .mapLit p (pairs flat)
+  | .construct p n ts fs =>
+    -- (#283) a construction's field values, as a call's arguments, in the
+    -- order it evaluates them: its type's declaration order, not as written
+    -- (so they are put in that order first, which changes nothing else).
+    -- Kept (so refused) when that order is unknown here, a field is given
+    -- twice (only the first is evaluated), or a field not given whose
+    -- default is more than a literal comes before the last choice (it would
+    -- run after it)
+    let ord := (← get).fieldOrder n
+    let names := fs.filterMap fun | .decl _ f none false _ => some f | _ => none
+    if ord.isEmpty || names.length != fs.length || names.eraseDups.length != names.length then return e
+    let idx := fun (f : String) => (ord.map (·.1)).idxOf f
+    let fs := fs.mergeSort fun a b => match a, b with
+      | .decl _ f _ _ _, .decl _ g _ _ _ => idx f ≤ idx g
+      | _, _ => true
+    let lastAt := (fs.filterMap fun | .decl _ f _ _ x => if hasLiftable x then some (idx f) else none | _ => none).foldl max 0
+    if (ord.take lastAt).any (fun (f, d) => d && !names.contains f) then return e
+    let vals ← liftOps isVal isField (fs.map fun | .decl _ _ _ _ x => x | x => x)
+    return .construct p n ts ((fs.zip vals).map fun
+      | (.decl q f t v _, x) => .decl q f t v x
+      | (_, x) => x)
+  | .block p ss =>
+    -- (#283) a block with a choice: its clauses into the caller's, as an
+    -- inlined body's, its names renamed for this place (so they stay its
+    -- own), its last expression the value; not with a defer:, whose scope
+    -- would change
+    if ss.any (fun | .app _ (.ident _ "$defer") _ _ => true | _ => false) then return e
+    let tag ← LM.fresh p "b"
+    -- (its names are not in scope where it is, as for a block's own,
+    -- `$declNames`: Verse has no shadowing)
+    let decls := localDecls e
+    if !decls.isEmpty then
+      modify fun s => { s with pre := s.pre.push (.app p (.ident p "$declNames") (decls.map fun (n, q) => .ident q n) false) }
+    let ren := (localsOf e).map fun n => (n, s!"{tag}_{n}")
+    let ss := stmtsOf (renameE ren e)
+    let bound := boundIn ss
+    let isVal' := fun n => isVal n || bound.contains n
+    let site := (← get).site
+    let (init, last) := (ss.dropLast, ss.getLast?)
+    for c in init do
+      for c' in normClauses (← liftClauseM isVal' isField c) site do
+        modify fun s => { s with pre := s.pre.push c' }
+    match last with
+    | some c@(.decl q x _ _ _) =>
+      for c' in normClauses (← liftClauseM isVal' isField c) site do
+        modify fun s => { s with pre := s.pre.push c' }
+      return .ident q x
+    | some l => liftE isVal' isField l
+    | none => return .tuple p []
   | e => return e
 
 /-- A comparison chain `o₀ op₁ o₁ op₂ …` whose operand `oⱼ` is the first with
@@ -517,19 +685,21 @@ end
     it, then it. A binding or `set` whose value is a choice, or a clause that
     is one, stays as it is (`normClauses` makes it a binding). -/
 def liftClause (isVal : String → Bool) (isField : String → String → Bool) (c : SExpr)
-    (site : String := "") : List SExpr :=
-  (liftClauseM isVal isField c).run' { site }
+    (site : String := "") (fieldOrder : String → List (String × Bool) := fun _ => []) : List SExpr :=
+  (liftClauseM isVal isField c).run' { site, fieldOrder }
 
 /-- The clauses ready for compiling: choices inside expressions lifted, and
     each choice the value of a binding. `isVal` says which names are values
     (variables and fields in scope); the clauses' own bindings are too. -/
 def prepare (cs : List SExpr) (isVal : String → Bool := fun _ => false)
-    (isField : String → String → Bool := fun _ _ => false) (site : String := "") : List SExpr :=
+    (isField : String → String → Bool := fun _ _ => false) (site : String := "")
+    (fieldOrder : String → List (String × Bool) := fun _ => []) : List SExpr :=
   let bound := boundIn cs
-  normClauses (cs.flatMap (liftClause (fun n => isVal n || bound.contains n) isField · site)) site
+  normClauses (cs.flatMap (liftClause (fun n => isVal n || bound.contains n) isField · site fieldOrder)) site
 
 /-- Whether the clauses have a choice for their failure context to take. -/
-def hasChoice (cs : List SExpr) : Bool := (prepare cs).any fun c => (binding? c).isSome
+def hasChoice (cs : List SExpr) (fieldOrder : String → List (String × Bool) := fun _ => []) : Bool :=
+  (prepare cs (fieldOrder := fieldOrder)).any fun c => (binding? c).isSome
 
 /-- `first{cs}`, the last clause naming its value. -/
 def firstOfClauses (p : Pos) (cs : List SExpr) : SExpr :=
@@ -545,8 +715,9 @@ def firstOfClauses (p : Pos) (cs : List SExpr) : SExpr :=
 /-- With a choice to take, `e` as the first success of it (#208): how
     `option{…}` and `logic{…}` (whose braces hold clauses), `not` and the left
     of `or` take a choice's values. -/
-def takeFirst? : SExpr → Option SExpr
-  | .block p cs => if hasChoice cs then some (firstOfClauses p cs) else none
+def takeFirst? (e : SExpr) (fieldOrder : String → List (String × Bool) := fun _ => []) : Option SExpr :=
+  match e with
+  | .block p cs => if hasChoice cs fieldOrder then some (firstOfClauses p cs) else none
   | e => if hasLiftable e then some (firstOfClauses e.pos [e]) else none
 
 /-! ### Functions with several values (#235)
@@ -560,106 +731,6 @@ arguments into the parameters, then the body's clauses, into the caller's
 clauses, so the body's choices become the caller's. Recursive and generic
 ones, ones with named parameters or `return`, and their use as values are
 refused for now. -/
-
-/-- `e` with `f` applied top-down: where `f` gives a replacement, it is used
-    (and not descended into). Struct constructions' field names are kept. -/
-partial def mapE (f : SExpr → Option SExpr) (e : SExpr) : SExpr :=
-  match f e with
-  | some e' => e'
-  | none =>
-    let go := mapE f
-    match e with
-    | .str p ps => .str p (ps.map fun | .code c => .code (go c) | t => t)
-    | .app p g as b => .app p (go g) (as.map go) b
-    | .member p x m => .member p (go x) m
-    | .query p x => .query p (go x)
-    | .neg p x => .neg p (go x)
-    | .notE p x => .notE p (go x)
-    | .bin p o a b => .bin p o (go a) (go b)
-    | .cmp p a r => .cmp p (go a) (r.map fun (o, b) => (o, go b))
-    | .andE p a b => .andE p (go a) (go b)
-    | .orE p a b => .orE p (go a) (go b)
-    | .range p a b => .range p (go a) (go b)
-    | .tuple p es => .tuple p (es.map go)
-    | .block p es => .block p (es.map go)
-    | .arrayLit p es => .arrayLit p (es.map go)
-    | .optionLit p x => .optionLit p (go x)
-    | .logicLit p x => .logicLit p (go x)
-    | .ite p cs t e' => .ite p (cs.map go) (go t) (e'.map go)
-    | .forE p cs b => .forE p (cs.map go) (go b)
-    | .gen p x i src => .gen p x i (go src)
-    | .loop p b => .loop p (go b)
-    | .ret p x => .ret p (x.map go)
-    | .caseE p sc arms => .caseE p (go sc) (arms.map fun (pt, v) => (pt.map go, go v))
-    | .decl p n t v x => .decl p n t v (go x)
-    | .set p l o r => .set p (go l) o (go r)
-    | .construct p n ts fs => .construct p n ts (fs.map fun
-        | .decl q fn t v x => .decl q fn t v (go x)
-        | a => go a)
-    | .mapLit p kvs => .mapLit p (kvs.map fun (k, v) => (go k, go v))
-    | .structDef p tps fs => .structDef p tps (fs.map fun (n, t, d, v) => (n, t, d.map go, v))
-    | e => e
-
-/-- Whether some subexpression satisfies `pr` (through `mapE`). -/
-partial def anyE (pr : SExpr → Bool) (e : SExpr) : Bool :=
-  pr e || match e with
-    | .str _ ps => ps.any fun | .code c => anyE pr c | _ => false
-    | .app _ g as _ => anyE pr g || as.any (anyE pr)
-    | .member _ x _ | .query _ x | .neg _ x | .notE _ x | .optionLit _ x | .logicLit _ x | .loop _ x
-    | .gen _ _ _ x | .decl _ _ _ _ x => anyE pr x
-    | .bin _ _ a b | .andE _ a b | .orE _ a b | .range _ a b | .set _ a _ b => anyE pr a || anyE pr b
-    | .cmp _ a r => anyE pr a || r.any (anyE pr ·.2)
-    | .tuple _ es | .block _ es | .arrayLit _ es | .construct _ _ _ es => es.any (anyE pr)
-    | .ite _ cs t e' => cs.any (anyE pr) || anyE pr t || (e'.map (anyE pr)).getD false
-    | .forE _ cs b => cs.any (anyE pr) || anyE pr b
-    | .ret _ x => (x.map (anyE pr)).getD false
-    | .caseE _ sc arms => anyE pr sc || arms.any fun (pt, v) => ((pt.map (anyE pr)).getD false) || anyE pr v
-    | .mapLit _ kvs => kvs.any fun (k, v) => anyE pr k || anyE pr v
-    | _ => false
-
-/-- The statements of a body. -/
-def stmtsOf : SExpr → List SExpr
-  | .block _ ss => ss
-  | e => [e]
-
-/-- Calls of the functions `mv` as `$inline` markers with an empty template:
-    enough to see whether a body has several values. -/
-def markCalls (mv : List String) : SExpr → SExpr :=
-  mapE fun
-    | .app p (.ident q g) as _ =>
-      if mv.contains g then some (.app p (.ident p "$inline") (.ident q g :: .block p [] :: as) false)
-      else none
-    | _ => none
-
-/-- The names a body binds (its locals), struct fields and named arguments
-    aside. -/
-partial def localsOf (e : SExpr) : List String :=
-  let rec go : SExpr → List String
-    | .decl _ n _ _ x => (if n.startsWith "?" then [] else [n]) ++ go x
-    | .gen _ x i src => x :: i.toList ++ go src
-    | .construct _ _ _ fs => fs.flatMap fun | .decl _ _ _ _ x => go x | a => go a
-    | .str _ ps => ps.flatMap fun | .code c => go c | _ => []
-    | .app _ g as _ => go g ++ as.flatMap go
-    | .member _ x _ | .query _ x | .neg _ x | .notE _ x | .optionLit _ x | .logicLit _ x | .loop _ x => go x
-    | .bin _ _ a b | .andE _ a b | .orE _ a b | .range _ a b | .set _ a _ b => go a ++ go b
-    | .cmp _ a r => go a ++ r.flatMap (go ·.2)
-    | .tuple _ es | .block _ es | .arrayLit _ es => es.flatMap go
-    | .ite _ cs t e' => cs.flatMap go ++ go t ++ ((e'.map go).getD [])
-    | .forE _ cs b => cs.flatMap go ++ go b
-    | .ret _ x => (x.map go).getD []
-    | .caseE _ sc arms => go sc ++ arms.flatMap fun (pt, v) => ((pt.map go).getD []) ++ go v
-    | .mapLit _ kvs => kvs.flatMap fun (k, v) => go k ++ go v
-    | _ => []
-  (go e).eraseDups
-
-/-- `e` with the names in `ren` renamed, binders and uses. -/
-partial def renameE (ren : List (String × String)) : SExpr → SExpr :=
-  mapE fun
-    | .ident p n => (ren.lookup n).map (.ident p ·)
-    | .decl p n t v x => (ren.lookup n).map fun n' => .decl p n' t v (renameE ren x)
-    | .gen p x i src => if (ren.lookup x).isSome || (i.bind fun j => ren.lookup j).isSome then
-        some (.gen p ((ren.lookup x).getD x) (i.map fun j => (ren.lookup j).getD j) (renameE ren src)) else none
-    | _ => none
 
 /-- A function of the program, by name: its parameters, type parameters,
     effects, result type and body. -/
