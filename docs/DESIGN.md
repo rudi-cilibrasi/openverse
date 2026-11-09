@@ -924,9 +924,13 @@ heap effects (the function declares exactly those, plus `<decides>` if
 elaboration, which compiles the `if` as the dispatch. The cast's target
 class then counts as one that fixes type arguments, so it and the
 classes below it get pins in Verse Core. A `return`, a `break` leaving
-the branch, a `set` of an outside `var`, a cast in a method (whose
-branch would lose `Self`) and one that opens type arguments (no
-witnesses to pass) are refused for now.
+the branch, a `set` of an outside `var`, a suspension in the branch or
+the `else` (the dispatch would have to carry it through the lowering of
+`<suspends>` code), a cast in a method (whose branch would lose `Self`)
+and one that opens type arguments (no witnesses to pass) are refused for
+now. The placeholder classes that pinning the targets may add (#157) get
+their superclasses in `supersMap` like every class, as `refTags` asks
+whether each is below a class at every conversion of a class type.
 
 ## Typing the heap
 

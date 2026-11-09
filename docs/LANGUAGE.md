@@ -476,7 +476,10 @@ circle := class(shape, labelled):
   (`Typed.dispatch`), so nothing is assumed in Verse Core. So that the
   branch means the same there, it cannot have a `return`, a `break` that
   leaves it, or a `set` of a `var` from outside it (it reads one's value
-  when the cast runs), and it cannot be in a method, for now.
+  when the cast runs), and, in a `<suspends>` function, neither it nor the
+  `else` can suspend, for now. Nor can such a cast be in a method, a
+  `defer:`, a constructor's items, a class's `block:` clause, a field's or
+  parameter's default, or an arm of `sync`, `race`, `rush` or `branch`.
   An interface can be parametric too (#53):
   `container(t) := interface: Get():t`, with `box(t) := class(container(t))`.
   A class gives the interfaces above it exactly its own Verse Core type
@@ -537,8 +540,10 @@ circle := class(shape, labelled):
     arguments agree with `X`'s only under a refinement (`dup[P]` for
     `P:pair(a, b)`) other than as the whole condition of an `if`, whose
     branch has a `return`, a `break` that leaves it or a `set` of a `var`
-    from outside it, or in a method, and one that would open type
-    arguments (`pairE[E]` for `E:expr(t)`) (#243); a variable, in generic code, of a class or
+    from outside it, whose branch or `else` suspends, or in a method, a
+    `defer:`, a constructor's items, a class's `block:` clause, a default
+    or a concurrent arm, and one that would open type arguments
+    (`pairE[E]` for `E:expr(t)`) (#243); a variable, in generic code, of a class or
     interface type that requires an instance of itself (`Next:node(t)`)
     at type arguments that every class below it fixes otherwise: its
     hidden placeholder object (#157) would have to hold itself; a class

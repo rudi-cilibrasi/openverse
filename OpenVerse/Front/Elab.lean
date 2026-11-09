@@ -1968,7 +1968,7 @@ def refineBranchWhy? (ctx : Ctx) (p : Pos) (body : SExpr) (muts : List String) :
   if ctx.selfClass.isSome then some (p, "it cannot be in a method yet, where it would lose Self")
   else if ctx.inDefer || ctx.inCtor || ctx.inBlock || ctx.inParamDefault || ctx.inArm || ctx.inBranch ||
       !ctx.defaults.isEmpty || ctx.inDefaultCheck then
-    some (p, "it cannot be here yet (in a defer:, a constructor, a block:, a default, or an arm of a concurrent expression)")
+    some (p, "it cannot be here yet: in a defer:, a constructor's items, a class's block: clause, a field's or parameter's default, or an arm of sync, race, rush or branch")
   else if let some e := Refine.findPart (fun | .ret .. => true | _ => false) false body then
     some (e.pos, "it cannot have a return yet")
   else if let some e := Refine.findPart (fun | .brk _ => true | _ => false) true body then
@@ -3475,10 +3475,10 @@ partial def elabCast (ctx : Ctx) (p : Pos) (T : String) (args : List SExpr) (bra
   if (env.concreteBelow S).all (fun d => !env.isSub d T) then
     eerr p s!"no class is below both {r.ty.show} and {T}, so {T}[…] would always fail"
   if parametric && !(env.isSub S T || env.isSub T S) then
-    eerr p s!"cannot cast a {S} to {T}: {T}'s type arguments would be unknown (they are not {S}'s)"
+    eerr p s!"cannot cast {withArticle S} to {T}: {T}'s type arguments would be unknown (they are not {S}'s)"
   let targs := if env.isSub S T then env.upArgs S sargs T else env.argsBelow S sargs T
   if parametric && (env.coreArgs T targs).length > (env.coreArgs S sargs).length then
-    eerr p s!"cannot cast a {r.ty.show} to {T}: {T} has type parameters that {S} does not have, which would be unknown"
+    eerr p s!"cannot cast {withArticle r.ty.show} to {T}: {T} has type parameters that {S} does not have, which would be unknown"
   let tty : Ty := .struct T targs
   if !bracket then
     if !env.isSub S T then
@@ -3491,7 +3491,7 @@ partial def elabCast (ctx : Ctx) (p : Pos) (T : String) (args : List SExpr) (bra
   if parametric && env.coreArgs T targs != env.coreArgs S sargs then
     if (Ty.unifyEqs (fun _ _ => none) [] ((env.coreArgs S sargs).zip (env.coreArgs T targs))).isSome then
       eerr p s!"cannot cast {withArticle r.ty.show} to {(Ty.struct T targs).show} here: their type arguments agree only under a refinement, which a cast gives only as the whole condition of an if, D := {T}[X], whose branch is then typed under it (#209, #243)"
-    eerr p s!"a {r.ty.show} is never a {T}: their type arguments differ, so {T}[…] would always fail"
+    eerr p s!"{withArticle r.ty.show} is never {withArticle T}: their type arguments differ, so {T}[…] would always fail"
   -- a reference: a test of its object's class (#34)
   if env.isRefClass S then return ⟨.heap (.isTag (common.map env.tagOf)) [r.e], tty⟩
   let x ← fresh r.ty
@@ -3529,6 +3529,16 @@ partial def elabRefinedIf (ctx : Ctx) (p _dp : Pos) (D T : String) (x : SExpr) (
     if n == D then none else ctx.locals.find? (·.name == n)
   if let some (q, what) := refineBranchWhy? ctx p body ((caps.filter (·.mutable)).map (·.name)) then
     eerr q s!"the branch of the cast to {shown}, which holds only under a refinement of the type arguments, is compiled as a function of its own, so {what} (#243)"
+  -- (a suspension in the branch or in the `else`, which the dispatch to the
+  -- branch's function would have to carry, is refused for now)
+  let isS (f : Nat) : Bool := ctx.sigs.any fun s => s.idx == f && s.suspends
+  let elseOf : EM R := match elseE with
+    | none => pure ⟨.lit .void, .void⟩
+    | some ee => do
+      let re ← elabE ctx ee exp
+      if ctx.suspends && Suspend.hasSusp isS re.e then
+        eerr ee.pos s!"the else of the cast to {shown}, which holds only under a refinement of the type arguments, cannot suspend yet: the if is a dispatch to its branch's function (#243)"
+      pure re
   let key := Refine.keyOf p D
   match env.castRequests.find? (·.key == key) with
   | none =>
@@ -3539,18 +3549,17 @@ partial def elabRefinedIf (ctx : Ctx) (p _dp : Pos) (D T : String) (x : SExpr) (
     let ctxB : Ctx := { ctx with
       locals := { name := D, slot := dslot, ty := dTy, mutable := false } ::
         ctx.locals.map fun l => { l with ty := refine l.ty },
-      types := { env with tvars := env.tvars.map fun (n, t) => (n, refine t) },
-      suspends := false }
+      types := { env with tvars := env.tvars.map fun (n, t) => (n, refine t) } }
     -- (its own effects, which its function declares; the enclosing one's too)
     let fx0 := (← get).fx
     modify fun st => { st with fx := [] }
     let rb ← elabE ctxB body (if elseE.isNone then some .void else exp.map refine)
+    if ctx.suspends && Suspend.hasSusp isS rb.e then
+      eerr body.pos s!"the branch of the cast to {shown}, which holds only under a refinement of the type arguments, is compiled as a function of its own, so it cannot suspend yet (#243)"
     let fxB := (← get).fx
     modify fun st => { st with fx := fx0 }
     for (k, q, via) in fxB do noteFx q [k] via
-    let re ← match elseE with
-      | none => pure (⟨.lit .void, .void⟩ : R)
-      | some ee => elabE ctx ee exp
+    let re ← elseOf
     let τ' : Ty := if elseE.isNone then .void else exp.getD re.ty
     let ret := refine τ'
     discard <| coerce p rb ret
@@ -3581,9 +3590,7 @@ partial def elabRefinedIf (ctx : Ctx) (p _dp : Pos) (D T : String) (x : SExpr) (
       | e => do
         let y ← fresh rx.ty
         pure ([Expr.assign y e], y)
-    let re ← match elseE with
-      | none => pure (⟨.lit .void, .void⟩ : R)
-      | some ee => elabE ctx ee exp
+    let re ← elseOf
     let τ' : Ty := if elseE.isNone then .void else exp.getD re.ty
     let eE ← coerce p re τ'
     let rargs := env.coreArgs S sargs
@@ -6980,6 +6987,10 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       phs := env.phs ++ [h],
       -- (below a class that records pins, it records the same)
       pinned := if env.pinned.contains n then env.pinned ++ [h] else env.pinned }
+  -- (their superclasses too, as every class's, so that a test of whether
+  -- a placeholder is below a class does not walk the chain each time:
+  -- `refTags` asks that of each at each conversion of a class type)
+  env := { env with supersMap := env.phs.foldl (fun m h => m.insert h (env.supersWalk h)) env.supersMap }
   env := { env with protos := env.makeProtos }
   if let some n := env.recursiveStruct? then
     if env.classes.contains n then
