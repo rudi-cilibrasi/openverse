@@ -362,14 +362,16 @@ def mkExcl (p : Pos) (alts : List (List SExpr × SExpr)) : SExpr :=
   .app p (.ident p "$excl") (alts.map fun (gs, r) => .app p (.ident p "$alt") [.block p gs, r] false) false
 
 /-- `e` with its exclusive choices as choices (#314). Not inside a nested
-    `for`: its own clauses keep theirs, for it to compile as `if`s. -/
-partial def exclToChoice (e : SExpr) : SExpr :=
+    `for`, unless `deep`: its own clauses keep theirs, for it to compile as
+    `if`s (`deep`, for an effect-free body, where a choice is as exact). -/
+partial def exclToChoice (e : SExpr) (deep : Bool := false) : SExpr :=
+  let go := fun x => exclToChoice x deep
   mapE (fun
-    | f@(.forE ..) => some f
+    | f@(.forE ..) => if deep then none else some f
     | .app p (.ident q "$excl") alts false =>
       some (.app p (.ident q "$choice") (alts.map fun
-        | .app _ (.ident _ "$alt") [.block bp gs, .block _ rs] false => .block bp ((gs ++ rs).map exclToChoice)
-        | .app _ (.ident _ "$alt") [.block bp gs, r] false => .block bp (gs.map exclToChoice ++ [exclToChoice r])
+        | .app _ (.ident _ "$alt") [.block bp gs, .block _ rs] false => .block bp ((gs ++ rs).map go)
+        | .app _ (.ident _ "$alt") [.block bp gs, r] false => .block bp (gs.map go ++ [go r])
         | a => a) false)
     | _ => none) e
 
@@ -1283,7 +1285,7 @@ partial def markAll (mvs : List String) : SExpr → SExpr :=
 def allBody (mvs : List String) (ret : STy) (b : SExpr) : SExpr :=
   -- (an overridden method's dispatch, #283: a choice of its alternatives,
   -- the receiver and the arguments bound before; exact, as effect-free)
-  let ss := stmtsOf (markAll mvs (exclToChoice (dispatchBlocks b)))
+  let ss := stmtsOf (markAll mvs (exclToChoice (dispatchBlocks b) (deep := true)))
   let p := b.pos
   let (cs, v) : List SExpr × SExpr := match ss.getLast? with
     | some (.decl q x _ _ _) => (ss, .ident q x)
@@ -1423,6 +1425,27 @@ partial def eraseCallHeads (names : List String) (e : SExpr) : SExpr :=
       if names.contains x then some (.app p (.ident q "$h") ((r :: args).map go) br) else none
     | _ => none) e
 
+/-- Whether two written types are the same as written. -/
+partial def styEq : STy → STy → Bool
+  | .name a, .name b => a == b
+  | .arr a, .arr b | .opt a, .opt b => styEq a b
+  | .tup as, .tup bs => as.length == bs.length && (as.zip bs).all fun (x, y) => styEq x y
+  | .map a b, .map c d => styEq a c && styEq b d
+  | .app f as, .app g bs => f == g && as.length == bs.length && (as.zip bs).all fun (x, y) => styEq x y
+  | .fn as e r, .fn bs e' r' =>
+    as.length == bs.length && (as.zip bs).all (fun (x, y) => styEq x y) && e == e' && styEq r r'
+  | _, _ => false
+
+/-- A written type, for messages. -/
+partial def styShow : STy → String
+  | .name a => a.replace "::" "."
+  | .arr a => "[]" ++ styShow a
+  | .opt a => "?" ++ styShow a
+  | .tup ts => "tuple(" ++ ", ".intercalate (ts.map styShow) ++ ")"
+  | .map k v => "[" ++ styShow k ++ "]" ++ styShow v
+  | .app f ts => f.replace "::" "." ++ "(" ++ ", ".intercalate (ts.map styShow) ++ ")"
+  | .fn ps _ r => "type{_(" ++ ", ".intercalate (ps.map styShow) ++ "):" ++ styShow r ++ "}"
+
 /-- A method with several values and its overrides (#283): the class that
     declares it, and the classes with an implementation (the declaring one
     first, unless abstract). `direct`: one implementation, the declaring
@@ -1433,6 +1456,9 @@ structure MFam where
   direct : Bool
   /-- The declaring class's return type, which a dispatch's value has. -/
   ret : Option STy := none
+  /-- The declaring class's parameters, whose types a dispatch's arguments
+      are bound at. -/
+  params : List SParam := []
   deriving Inhabited
 
 /-- The calls of the methods of `fams` in `e` (#283), `inC` the class whose
@@ -1469,16 +1495,32 @@ partial def rwFamCalls (anc : String → List String) (fams : List (String × MF
       let named := fun | SExpr.decl _ n _ _ _ => n.startsWith "?" | _ => false
       let args := args.filter (!named ·) ++ args.filter named
       let vals := args.map fun | a@(.decl _ n _ _ x) => if n.startsWith "?" then x else a | a => a
-      let passed := args.zipIdx.map fun (a, i) => match a with
+      let posPs := f.params.filter (!·.named)
+      -- (one tuple argument to several positional parameters, and no named
+      -- one: taken apart, as at a call, #140)
+      let tupled := vals.length == 1 && !(args.any named) && posPs.length ≥ 2
+      let passed := if tupled then posPs.zipIdx.map fun (_, i) => SExpr.ident p (aN i) else
+        args.zipIdx.map fun (a, i) => match a with
         | .decl ap n t v _ => if n.startsWith "?" then SExpr.decl ap n t v (.ident p (aN i)) else .ident p (aN i)
         | _ => .ident p (aN i)
+      -- (each argument at its parameter's written type, as at a call: so
+      -- `array{}` or `false` has the type it needs)
+      let tyAt (a : SExpr) (i : Nat) : Option STy := match a with
+        | .decl _ n _ _ _ =>
+          if n.startsWith "?" then (f.params.find? (·.name == (n.drop 1).toString)).map (·.ty)
+          else (posPs[i]?).map (·.ty)
+        | _ => (posPs[i]?).map (·.ty)
+      let binds : List SExpr := if tupled then
+          let t := s!"$t{site}"
+          SExpr.decl p t (some (.tup (posPs.map (·.ty)))) false (.ident p "$arg") ::
+            posPs.zipIdx.map fun (sp, i) => SExpr.decl p (aN i) (some sp.ty) false (.app p (.ident p t) [.int p (i : Int)] false)
+        else args.zipIdx.map fun (a, i) => SExpr.decl p (aN i) (tyAt a i) false (.ident p "$arg")
       let alt (d : String) : List SExpr × SExpr :=
         let guard := if d == f.root then SExpr.decl p dn none false (.ident p r)
           else .decl p dn none false (.app p (.ident p d) [.ident p r] true)
         let nots := (below f d).map fun x => SExpr.notE p (.app p (.ident p x) [.ident p r] true)
         (guard :: nots, .app p (.ident q (methodFnName d m)) (.ident p dn :: passed) br)
-      let tmpl := [SExpr.decl p r (some (.name f.root)) false (.ident p "$arg")] ++
-        args.zipIdx.map (fun (_, i) => SExpr.decl p (aN i) none false (.ident p "$arg")) ++
+      let tmpl := [SExpr.decl p r (some (.name f.root)) false (.ident p "$arg")] ++ binds ++
         [.decl p kv f.ret false (mkExcl p (f.impls.map alt))]
       .app p (.ident p "$dispatch") (.ident q (methodFnName f.root m) :: .block p tmpl :: recv :: vals) false
   mapE (fun
@@ -1578,7 +1620,8 @@ def methodFns (tops : List STop) (reserved : List String := []) : Except String 
     let impls := (ds.filter fun (_, m) => !isAbstract m).map (·.1)
     let impls := (impls.filter (· == root)) ++ impls.filter (· != root)
     let ret := (ds.find? (·.1 == root)).bind fun | (_, .fn _ _ _ _ _ r _) => some r | _ => none
-    some (n, { root, impls, direct := impls == [root] && ds.length == 1, ret })
+    let params := ((ds.find? (·.1 == root)).bind fun | (_, .fn _ _ ps _ _ _ _) => some ps | _ => none).getD []
+    some (n, { root, impls, direct := impls == [root] && ds.length == 1, ret, params })
   let rw := rwFamCalls anc
   -- (a method's body as the function's: its members qualified by `Self`,
   -- then `Self` the parameter `$Self`)
@@ -1635,6 +1678,15 @@ def methodFns (tops : List STop) (reserved : List String := []) : Except String 
             if hasChoice ss || ss.any liftsHere || anyE (fun | .ret _ (some e) => hasLiftable e | _ => false) b' then
               throw s!"{p.show}: {c.replace "::" "."}.{n} has several values, but {why}: such methods are not supported yet (#283)"
   let sel := fams.filter fun (n, f) => famHas n f
+  -- (an override with several values that returns a narrower type than the
+  -- method it overrides: refused, since a dispatch, made before types, has
+  -- the declaring class's return type)
+  for (n, f) in sel do
+    if let some r0 := f.ret then
+      for (c, m) in declsOf n do
+        if let .fn q _ _ _ _ r _ := m then
+          if c != f.root && !styEq r r0 then
+            throw s!"{q.show}: {c.replace "::" "."}.{n} has several values and returns {styShow r}, where {f.root.replace "::" "."}.{n} returns {styShow r0}: an override with several values must return the same type, for now (#283)"
   if sel.isEmpty then return tops
   -- (a parameter or local named like a member: refused, as in the class,
   -- since the body leaves it)
@@ -1649,9 +1701,22 @@ def methodFns (tops : List STop) (reserved : List String := []) : Except String 
   -- (the program with those methods out of their classes and their calls
   -- rewritten, and their functions)
   let selNames := sel.map (·.1)
+  -- (each of a family with overrides stays in its class as a stub, `Err()`,
+  -- which no call reaches: so the elaborator still checks it as a member,
+  -- <final>, its signature and effects against the one it overrides, an
+  -- abstract one implemented)
+  let stub (q : Pos) : SExpr := .app q (.ident q "Err") [] false
+  -- (one overridden nowhere, `direct`, is taken out, as there is nothing
+  -- to check it against)
+  let directNames := (sel.filter (·.2.direct)).map (·.1)
   let out := (rwTops sel false).map fun
     | .classDef p n tps sp pa ii fs ov ms =>
-      .classDef p n tps sp pa ii fs ov (ms.filter fun | .fn _ m .. => !selNames.contains m | _ => true)
+      .classDef p n tps sp pa ii fs ov ((ms.filter fun | .fn _ m .. => !directNames.contains m | _ => true).map fun
+        | d@(.fn p2 m ps tps2 fx r _) =>
+          -- (an abstract one, or one with no body, as written)
+          if !selNames.contains m || fx.contains "$abstract" then d
+          else .fn p2 m (ps.map fun sp => { sp with default := sp.default.map fun d => stub d.pos }) tps2 fx r (stub p2)
+        | s => s)
     | t => t
   -- (what is left of their names is a use as a value: refused, as for a
   -- function's; a name of theirs is nothing else's)

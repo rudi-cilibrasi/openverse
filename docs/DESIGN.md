@@ -258,6 +258,7 @@ been a generator there, where a call has none (#312's lesson). The kept
 bodies (`checkBody`), and an `F$all`'s, which is effect-free, see a block
 that binds the receiver and the arguments, then the if-chain on the guards
 (ending in `Err()`, which a call never reaches) or the choice.
+Each method of a family stays in its class as a stub, `Err()`, which no call reaches, so that the elaborator still checks it as a member: `<final>`, its signature and effects against the one it overrides, and an abstract one implemented. The dispatch's arguments are bound at the declaring class's parameter types, so `array{}` or `false` gets the type it needs, and one tuple argument to several parameters is taken apart, as at a call. An override that returns a narrower type is refused, since the dispatch is made before types and has the declaring class's return type. An `F$all` body turns every exclusive choice into a choice, nested `for`s included, which is exact as it is effect-free.
 `(super:)M(…)` calls the nearest implementation above directly. For the
 fixpoint, a family's calls go through `root$M$fam`, whose body calls
 every implementation, since the dispatch has a choice in it whatever the

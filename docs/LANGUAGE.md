@@ -772,8 +772,12 @@ Main():void =
   clauses, unless the implementation reaches a choice of its own. `(super:)M(…)` calls the
   implementation above; a recursive overridden one is computed at the
   call (its implementations call each other through the dispatch), so
-  it must be `<computes>`. A parameter or local of the method named like a
-  member is refused, as anywhere in a class.
+  it must be `<computes>`. Such a method is still checked as a member
+  (`<final>`, its signature and effects against the one it overrides, an
+  abstract one implemented), but an override with several values must
+  return the same type as the method it overrides, not a narrower one, for
+  now. A parameter or local of the method named like a member is refused,
+  as anywhere in a class.
 
   A `return` in the branches of an `if` in such a function's body, after
   its choices, gives the value of the alternative it is reached in, and the
