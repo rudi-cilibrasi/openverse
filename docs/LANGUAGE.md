@@ -761,12 +761,25 @@ Main():void =
   those of the classes below it. A recursive one is taken lazily, and a
   named parameter's default sees the fields. Inlining happens before
   types are checked, so `R.M` has to name that method whatever `R` is:
-  such a method's name must be no other class's or interface's member
-  (so it is no override and is not overridden), no struct field,
-  enumerator or member of a built-in type (`Length`, `Find`, `Signal`, …),
-  no top-level name and no parameter or local, and its class not generic.
-  A parameter or local of the method named like a member is refused, as
-  anywhere in a class.
+  such a method's name must be no other member than it and its overrides
+  (in classes below the one that declares it), no interface's, struct
+  field, enumerator or member of a built-in type (`Length`, `Find`,
+  `Signal`, …), no top-level name and no parameter or local, and its
+  classes not generic. A call of an overridden one dispatches on the
+  receiver's class as any method call does, adding no choice of its own
+  (#314): in a `for`, a value the filters after it reject undoes what came
+  before it, the receiver's and the arguments' effects and the earlier
+  clauses, unless the implementation reaches a choice of its own. `(super:)M(…)` calls the
+  implementation above; a recursive overridden one is computed at the
+  call (its implementations call each other through the dispatch), so
+  it must be `<computes>`. Such a method is still checked as a member
+  (`<final>`, its signature and effects against the one it overrides, an
+  abstract one implemented), but an override with several values must
+  return the same type as the method it overrides, not a narrower one, for
+  now. Since the dispatch is made before types, a call has the effects of
+  the method as the class that declares it declares them, whatever the
+  receiver's type (an override may declare fewer). A parameter or local of the method named like a member is refused,
+  as anywhere in a class.
 
   A `return` in the branches of an `if` in such a function's body, after
   its choices, gives the value of the alternative it is reached in, and the

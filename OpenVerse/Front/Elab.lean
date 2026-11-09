@@ -2403,7 +2403,7 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
   | .app p (.ident _ "$fxOf") [.ident _ f] false =>
     -- (an inlined call of a function with several values: its declared
     -- effects, as at a call, #235)
-    if let some s := ctx.sig? f then noteFx p s.fx (some s!"calls {f}")
+    if let some s := ctx.sig? f then noteFx p s.fx (some s!"calls {Choice.shownFnName f}")
     return ⟨.lit .void, .void⟩
   | .app p (.ident _ "$inline") (.ident _ f :: _) false =>
     if ctx.inTaking then

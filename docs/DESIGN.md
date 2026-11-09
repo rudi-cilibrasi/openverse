@@ -238,9 +238,33 @@ supers' member names qualified by `Self` (the syntactic counterpart of
 Elab's `selfQualify`, which needs only the class definitions), then `Self`
 renamed. `R.M(args)` becomes `C$M(R, args)`, and in the bodies of `C` and
 the classes below it, `M(args)` becomes `C$M(Self, args)`. Without types, `R.M`
-must name that method whatever `R` is, so only a method whose name no
-other class or interface has as a member qualifies (no override, not
-overridden). Its name must also be no struct field or enumerator, and no
+must name that method whatever `R` is: the name must be declared by one
+class and overridden only below it (a family, `MFam`), and by no
+interface. Each implementation becomes its own function `D$M`. A call
+`R.M(args)` of an overridden one is a dispatch,
+`$dispatch(root$M, block{ $r : root := $arg; $a… := $arg; $kv := $excl(…) }, R, args…)`.
+`inlineCalls` makes it an inlined call, its names tagged for the site, so
+the receiver and the arguments are bound once, as at a call. Then comes an
+exclusive choice (#314) with one alternative per implementation `D`,
+guarded by `$d := D[$r]; not E[$r] …`, where `E` is each class below `D`
+that implements it again, with the value `D$M($d, $a…)`. The receiver is bound
+at the declaring class's type, so every cast is a downcast, which the
+elaborator allows. Exactly one guard holds, the one dynamic dispatch would
+pick. Since the choice is exclusive, a `for` compiles it as an if-chain,
+with no generator: what came before the call, the caller's earlier clauses
+included, rolls back with a rejected value unless the implementation
+reaches a choice of its own. A guarded choice of alternatives would have
+been a generator there, where a call has none (#312's lesson). The kept
+bodies (`checkBody`), and an `F$all`'s, which is effect-free, see a block
+that binds the receiver and the arguments, then the if-chain on the guards
+(ending in `Err()`, which a call never reaches) or the choice.
+Each method of a family stays in its class as a stub, `Err()`, which no call reaches, so that the elaborator still checks it as a member: `<final>`, its signature and effects against the one it overrides, and an abstract one implemented. The dispatch's arguments are bound at the declaring class's parameter types, so `array{}` or `false` gets the type it needs, and one tuple argument to several parameters is taken apart, as at a call. An override that returns a narrower type is refused, since the dispatch is made before types and has the declaring class's return type. An `F$all` body turns every exclusive choice into a choice, nested `for`s included, which is exact as it is effect-free.
+A call has the declaring class's effects, which bound every implementation's. Parameters' defaults are rewritten too, so a call in a default is refused as any call with several values is outside a failure context, instead of reaching a stub. When the declaring class's implementation is the only one (an abstract override below it), the call is of that function, with no dispatch. A call of one implementation's function in a family with overrides (that one, or `(super:)`) takes one tuple argument apart after the receiver, also where it is not inlined.
+`(super:)M(…)` calls the nearest implementation above directly. For the
+fixpoint, a family's calls go through `root$M$fam`, whose body calls
+every implementation, since the dispatch has a choice in it whatever the
+implementations are, and would make every caller one with several values. Its
+name must also be no struct field or enumerator, and no
 member of a built-in type or of the prelude (`reserved`, which Elab
 passes in), no top-level name, no parameter and no local. Its class must
 not be generic. Which candidates have several

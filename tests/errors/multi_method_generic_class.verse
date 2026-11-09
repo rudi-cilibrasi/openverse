@@ -1,4 +1,4 @@
-# expect: 4:4: box.Vals has several values, but its class is generic: such 
+# expect: 4:4: box.Vals has several values, but a class that has it is generic
 box(t : type) := class:
     V : t
     Vals()<transacts>:t = V | V
