@@ -1,0 +1,23 @@
+after 2
+if 2
+--
+f 1
+body 1
+u
+f 7
+body 7
+--
+at 0
+at 1
+at 2
+at 3
+at 4
+at 5
+at 6
+at 7
+at 8
+at 9
+at 10
+at 11
+nat 1 11
+exit=0
