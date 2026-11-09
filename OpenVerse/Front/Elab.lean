@@ -430,8 +430,9 @@ partial def TyEnv.coreArgs (env : TyEnv) (d : String) (args : List Ty) : List Ty
   | some q => env.coreArgs q (((env.pargs.lookup d).getD []).map (·.subst σ)) ++ extras
   | none =>
     -- a root: the type arguments it gives the parametric interfaces above it
-    -- (#53), then its other type parameters
-    match (env.info d).ifaces.findSome? fun i => env.iargs.lookup (d, i) with
+    -- (#53), then its other type parameters (an interface it lists without
+    -- type arguments gives none, #276)
+    match (env.info d).ifaces.findSome? fun i => (env.iargs.lookup (d, i)).filter (!·.isEmpty) with
     | some ia =>
       let others := ps.filter fun p => !ia.any fun | .param v _ => v == p | _ => false
       ia.map (·.subst σ) ++ others.map fun p => (σ.lookup p).getD Ty.void
@@ -658,15 +659,17 @@ partial def Ty.params : Ty → List String
 def pinArg (j : Nat) : String := s!"$pos{j}"
 
 /-- How many of class `d`'s Verse Core type arguments its root class
-    gives: those it gives a parametric interface above it (#53), else all
-    of its own. The others are type parameters added below the root. -/
+    gives: as many as the interface at or above it that has the fewest type
+    parameters (#53, #276), else all of its own. The others are type
+    parameters added below the root, or not given by some interface, which
+    a dispatch from it opens. -/
 partial def TyEnv.rootArgCount (env : TyEnv) (d : String) : Nat :=
   match (env.info d).parent with
   | some q => env.rootArgCount q
   | none =>
-    match (env.info d).ifaces.findSome? fun i => env.iargs.lookup (d, i) with
-    | some ia => ia.length
-    | none => (env.coreArgs d (((env.sparams.lookup d).getD []).map fun (v, k) => Ty.param v k)).length
+    let own := (env.coreArgs d (((env.sparams.lookup d).getD []).map fun (v, k) => Ty.param v k)).length
+    ((env.supers d).filter (env.info · |>.isIface)).foldl
+      (fun m i => min m ((env.sparams.lookup i).getD []).length) own
 
 /-- The type parameters of class `d` that are not among those its root
     class gives (#209): the ones it pins to themselves (`pinsOf`), whose
@@ -7225,11 +7228,18 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       -- whose branch's function reads them from the object, also those an
       -- ancestor of the target adds)
       let methodsBelow := methodsBelow || opts.castRequests.any fun l => !l.opened.isEmpty && henv.isSub l.target cd.name
-      -- (#276: a root class counts them against the first interface it
-      -- lists, as `rootArgCount` does)
-      let qargs? : Option (List STy) := match (henv.info cd.name).parent with
+      -- (#276: a root class below interfaces counts them as `rootArgCount`
+      -- does: those among the first type arguments it gives the first
+      -- interface that has any, as many as the interface at or above it
+      -- with the fewest type parameters; an interface has no such fields)
+      let qargs? : Option (List STy) := if cd.isIface then none else match (henv.info cd.name).parent with
         | some q => some (((cd.parents.zip cd.parentArgs).lookup q).getD [])
-        | none => ((cd.parents.zip cd.parentArgs).find? fun (q, _) => (henv.info q).isIface).map (·.2)
+        | none =>
+          let ifs := cdefs.filter fun i => i.isIface && henv.isSub cd.name i.name
+          if ifs.isEmpty then none else
+          let fewest := ifs.foldl (fun m i => min m i.tps.length) cd.tps.length
+          let first := ((cd.parents.zip cd.parentArgs).find? fun (q, qa) => (henv.info q).isIface && !qa.isEmpty).map (·.2)
+          some ((first.getD []).take fewest)
       if let some qargs := qargs? then
         for tp in (if methodsBelow then cd.tps else []) do
           if !qargs.any (fun | .name v => v == tp.name | _ => false) then
@@ -7501,6 +7511,13 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       let ps := ((env.sparams.lookup cd.name).getD []).map fun (v, k) => Ty.param v k
       for i in (env.supers cd.name).filter (env.info · |>.isIface) do
         let ia := env.upArgs cd.name ps i
+        -- (#276: the interface with the fewest is counted at the root; one
+        -- below a parent class that gives fewer than its root's count would
+        -- open type arguments that the classes above it read as given, unless
+        -- those are fixed types, which the pins give)
+        if (env.info cd.name).parent.isSome && ia.length < env.rootArgCount cd.name &&
+            ((core cd.name).drop ia.length).any (!·.params.isEmpty) then
+          throw s!"{cd.pos.show}: {cd.name} has a parent class and lists {i}, which gives it fewer type arguments than its root class's interfaces: not supported yet (#276)"
         if !(ia.isPrefixOf (core cd.name)) then
           let showArgs (ts : List Ty) : String := if ts.isEmpty then "none" else ", ".intercalate (ts.map Ty.show)
           if ia.length < (core cd.name).length then

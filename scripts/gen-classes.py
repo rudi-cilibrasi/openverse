@@ -1837,8 +1837,10 @@ class Gen:
 
     def gen_param_iface(self):
         """Parametric classes below a plain interface (#276): pi(t) with a
-        field of type t below ni, maybe a subclass fixing t and one keeping
-        it; code over ni dispatches to their overrides, opening t."""
+        field of type t below ni, maybe also below a parametric interface
+        ci(t) listed before or after ni, or below ci(t) extending ni; maybe a
+        subclass fixing t and one keeping it; code over ni (and ci) dispatches
+        to their overrides, opening t."""
         L, M = [], []
         ni, pc, ipc, kpc = (self.fresh(x) for x in ['ni', 'pc', 'ipc', 'kpc'])
         nm, sz, lb = (self.fresh(x) for x in ['INm', 'ISz', 'ILb'])
@@ -1847,11 +1849,20 @@ class Gen:
         L.append('    %s:string = "%s"' % (lb, lb.lower()))
         L.append('    %s():string' % nm)
         L.append('    %s():int' % sz)
-        L.append('%s(t:type) := class(%s):' % (pc, ni))
+        ci, cg = self.fresh('ci'), self.fresh('ICg')
+        mode = R.choice(['plain', 'plain', 'before', 'after', 'extends'])
+        if mode != 'plain':
+            L.append('%s(t:type) := interface%s:' % (ci, '(%s)' % ni if mode == 'extends' else ''))
+            L.append('    %s():int' % cg)
+        parents = {'plain': ni, 'before': '%s(t), %s' % (ci, ni), 'after': '%s, %s(t)' % (ni, ci),
+                   'extends': '%s(t)' % ci}[mode]
+        L.append('%s(t:type) := class(%s):' % (pc, parents))
         L.append('    %s:[]t' % V)
         L.append('    %s:int' % N)
         L.append('    %s<override>():string = "%s {%s} {%s.Length}"' % (nm, pc, N, V))
         L.append('    %s<override>():int = %s.Length + %s' % (sz, V, N))
+        if mode != 'plain':
+            L.append('    %s<override>():int = %s * 10' % (cg, N))
         have_i, have_k = chance(0.6), chance(0.5)
         if have_i:
             L.append('%s := class(%s(int)):' % (ipc, pc))
@@ -1871,6 +1882,11 @@ class Gen:
         M.append('%s:[]%s = array{%s}' % (xs, ni, ', '.join(obj() for _ in range(R.randint(1, 4)))))
         x = tmpname('X')
         M.append('for (%s : %s) { Print("ni {%s.%s} {%s.%s()} {%s.%s()}") }' % (x, xs, x, lb, x, nm, x, sz))
+        if mode != 'plain':
+            cs = tmpname('Ci')
+            M.append('%s:[]%s(logic) = array{%s(logic){%s := array{false}, %s := %s}}' % (cs, ci, pc, V, N, lit()))
+            y = tmpname('Y')
+            M.append('for (%s : %s) { Print("ci {%s.%s()}") }' % (y, cs, y, cg))
         self.main += M
 
     # --- overloads
