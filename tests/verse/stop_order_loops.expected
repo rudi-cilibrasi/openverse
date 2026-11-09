@@ -1,0 +1,44 @@
+F0 defer
+F0 B defer
+F0 A.1 defer
+F0 A.r1.b defer
+F0 A.r1 defer
+F0 A defer
+0
+F1 defer
+F1 B defer
+F1 A.1 defer
+F1 A.r1.b defer
+F1 A.r1 defer
+F1 A defer
+1
+F2 defer
+F2 B defer
+F2 A.1 defer
+F2 A.r1.b defer
+F2 A.r1 defer
+F2 A defer
+2
+F10 defer
+F10 B defer
+F10 A.1 defer
+F10 A.r1.b defer
+F10 A.r1 defer
+F10 A defer
+cancelled
+F11 defer
+F11 B defer
+F11 A.1 defer
+F11 A.r1.b defer
+F11 A.r1 defer
+F11 A defer
+cancelled
+F12 defer
+F12 B defer
+F12 A.1 defer
+F12 A.r1.b defer
+F12 A.r1 defer
+F12 A defer
+cancelled
+end
+exit=0

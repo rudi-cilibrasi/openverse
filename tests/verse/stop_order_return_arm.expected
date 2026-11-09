@@ -1,0 +1,17 @@
+arm1 defer
+arm2 defer
+F defer
+B defer
+A.1 defer
+A defer
+7
+s2 defer
+s1 defer
+G defer
+s1.b defer
+B defer
+A.r2 defer
+A.r1 defer
+A defer
+8
+exit=0

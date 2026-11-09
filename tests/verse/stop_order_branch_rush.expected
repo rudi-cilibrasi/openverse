@@ -1,0 +1,13 @@
+B got 3
+C defer
+R2 defer
+R1 defer
+B defer
+0
+B got 3
+B ended
+C defer
+R2 defer
+R1 defer
+0
+exit=0

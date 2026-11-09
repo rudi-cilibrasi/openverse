@@ -1,0 +1,20 @@
+C defer
+outer loser defer
+inner loser defer
+2
+G defer
+G.B defer
+G.A.1 defer
+G.A defer
+2
+K.A race loser defer
+K.A won 2
+K.B defer
+K.A.loser.b defer
+K.A defer
+0
+Main defer
+Main.B defer
+Main.A.1 defer
+Main.A defer
+exit=0
