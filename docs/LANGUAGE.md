@@ -469,6 +469,14 @@ circle := class(shape, labelled):
       else Err()
   ```
 
+  A cast can also open type arguments the object's type has no names for
+  (#250): `if (P := pairE[E]) then (Eval(P.L), Eval(P.R))`, for
+  `E:expr(t)`, types the branch with `t = tuple(a', b')`, where `a'` and
+  `b'` are `pairE`'s `a` and `b`, unknown but fixed for the branch; their
+  values, which the branch's own generic calls at them need, come from the
+  object, which holds them in hidden fields as #209's existential classes'
+  objects do.
+
   The branch is compiled as a function of its own, generic over the
   enclosing function's type parameters, that takes the object (as `D`) and
   the locals the branch uses, at their refined types; the `if` becomes a
@@ -542,8 +550,7 @@ circle := class(shape, labelled):
     branch has a `return`, a `break` that leaves it or a `set` of a `var`
     from outside it, whose branch or `else` suspends, or in a method, a
     `defer:`, a constructor's items, a class's `block:` clause, a default
-    or a concurrent arm, and one that would open type arguments
-    (`pairE[E]` for `E:expr(t)`) (#243); a variable, in generic code, of a class or
+    or a concurrent arm (#243); a variable, in generic code, of a class or
     interface type that requires an instance of itself (`Next:node(t)`)
     at type arguments that every class below it fixes otherwise: its
     hidden placeholder object (#157) would have to hold itself; a class

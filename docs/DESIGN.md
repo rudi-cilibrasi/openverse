@@ -937,11 +937,23 @@ class then counts as one that fixes type arguments, so it and the
 classes below it get pins in Verse Core. A `return`, a `break` leaving
 the branch, a `set` of an outside `var`, a suspension in the branch or
 the `else` (the dispatch would have to carry it through the lowering of
-`<suspends>` code), a cast in a method (whose branch would lose `Self`)
-and one that opens type arguments (no witnesses to pass) are refused for
-now. The placeholder classes that pinning the targets may add (#157) get
-their superclasses in `supersMap` like every class, as `refTags` asks
-whether each is below a class at every conversion of a class type.
+`<suspends>` code) and a cast in a method (whose branch would lose
+`Self`) are refused for now. The placeholder classes that pinning the
+targets may add (#157) get their superclasses in `supersMap` like every
+class, as `refTags` asks whether each is below a class at every
+conversion of a class type.
+
+A cast that opens type arguments (#250, `pairE[E]` for `E:expr(t)`)
+gives the target's type parameters past the object's arguments fresh
+names (`a'`, `b'`, avoiding the enclosing function's), and the refinement
+binds `t` to `tuple(a', b')`. The branch's function is generic over them
+too, but no caller has values of them: as #209's overrides do, it reads
+them from the object's hidden fields (`Sig.selfTps`, with the field
+class given by the lift rather than by a `C.M` name; the object is its
+first parameter, so `.heap (.get k) [.local 0]` as for a method), and
+its callers pass none. The target gets those hidden fields as a class
+with an override below does. Its tests are keyed by all of each class's
+pins and open their arguments as `$ext i`, as a method's dispatch does.
 
 ## Typing the heap
 
