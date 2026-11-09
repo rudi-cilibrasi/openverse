@@ -1040,7 +1040,8 @@ else Else` as the branch (`Refine.castRest`, which both the elaborator and
 would have to undo, so `Else` runs from the same state either way, and
 `true?` keeps `rest` a condition when it cannot fail itself, as the whole
 condition could. `Else` is written twice, once inside the function, but
-runs once. A cast after another clause stays refused: that clause's effects
+runs once. Leading casts chain: the second is the first clause of the
+`if` of the rest, lifted in turn (`Refine.functions` walks that `if` too). A cast after another clause stays refused: that clause's effects
 would have to be undone before `Else`.
 
 It takes two elaborations, as function values at closed types do

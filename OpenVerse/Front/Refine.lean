@@ -143,6 +143,9 @@ def functions (lifts : List Lift) (tops : List STop) : List STop := Id.run do
           done := l.key :: done
           let body := castRest p more body0 els
           out := out.push (.fn p l.name l.params l.tparams l.specs l.ret (substTypes l.subst (l.body.getD body)))
+      -- (the `if` of the rest, as the elaborator reads it: a cast that is
+      -- its first clause, the second of the condition, is lifted too)
+      if !more.isEmpty then todo := castRest p more body0 els :: todo
     todo := kids e ++ todo
   return out.toList
 
