@@ -1,4 +1,6 @@
-# expect: a class below an interface with type parameters of its own is not supported yet
+# a GADT through an interface (#276): expr(t) is an interface, and pairE's
+# a and b, which only occur inside the type argument it gives expr, are
+# opened by a dispatch from expr(t)
 expr(t:type) := interface:
     Eval():t
 lit := class(expr(int)):

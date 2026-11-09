@@ -1,4 +1,5 @@
-# expect: intcell gives titled the type arguments none, but its own are int
+# a class without type parameters whose Verse Core type arguments it gives
+# its parent class (cell(int)), below an interface that takes none (#276)
 titled := interface:
     Title:string = "t"
 cell(t:type) := class:

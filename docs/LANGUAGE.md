@@ -497,10 +497,17 @@ circle := class(shape, labelled):
   parameter's default, or an arm of `sync`, `race`, `rush` or `branch`.
   An interface can be parametric too (#53):
   `container(t) := interface: Get():t`, with `box(t) := class(container(t))`.
-  A class gives the interfaces above it exactly its own Verse Core type
+  A class gives the interfaces above it its first Verse Core type
   arguments (`box(t)` gives `container` `t`; a class implementing
   `container(t)` and `sink(u)` cannot), so code generic over `container(t)`
   dispatches to `box(t)`'s methods and casts `container(t)` to `box(t)`.
+  Its other type parameters are like those a class adds to its parent's
+  (#209): `pairbox(t, u) := class(container(t))`, or `box(t) :=
+  class(shower)` below an interface without type parameters, holds a
+  value of each, hidden, and code generic over the interface dispatches to
+  its overrides by opening them (#276). An interface can so be a GADT's
+  root: `expr(t) := interface: Eval():t` with `pairE(a, b) :=
+  class(expr(tuple(a, b)))`.
   An interface's fields are typed as it gives them. Code generic over the
   interface reads and writes a field that sits at different places in its
   classes also when a class fixes or repeats its type arguments, under
@@ -550,8 +557,12 @@ circle := class(shape, labelled):
     result is narrower than the method's it overrides when called through
     code generic over the class above, and,
     in code generic over a class above, a call of one whose omitted
-    named argument's default has no type of its own (#209); such a class
-    below an interface (#53, #209); a dispatch, in code generic over a
+    named argument's default has no type of its own (#209); a class below
+    an interface that does not give it its first type parameters, in
+    order (`both(t, u) := class(container(t), sink(u))`, #276), or one
+    with a parent class below an interface that gives it fewer type
+    arguments than its root class does (`sbox(t) := class(box(t),
+    shower)` below `box(t) := class(container(t))`, #276); a dispatch, in code generic over a
     class, to a subclass whose fixed type arguments relate to ones the
     receiver's type does not have (#209); a cast `T[X]` whose type
     arguments agree with `X`'s only under a refinement (`dup[P]` for

@@ -434,8 +434,13 @@ partial def TyEnv.coreArgs (env : TyEnv) (d : String) (args : List Ty) : List Ty
   | some q => env.coreArgs q (((env.pargs.lookup d).getD []).map (·.subst σ)) ++ extras
   | none =>
     -- a root: the type arguments it gives the parametric interfaces above it
-    -- (#53), then its other type parameters
-    match (env.info d).ifaces.findSome? fun i => env.iargs.lookup (d, i) with
+    -- (#53), then its other type parameters: those it gives the interface
+    -- it lists with the most, of which every other one's are a prefix (an
+    -- interface it lists without type arguments gives none, #276)
+    let ias := (env.info d).ifaces.filterMap fun i => (env.iargs.lookup (d, i)).filter (!·.isEmpty)
+    match ias.foldl (fun (b : Option (List Ty)) ia => match b with
+        | some b => if b.length < ia.length then some ia else some b
+        | none => some ia) none with
     | some ia =>
       let others := ps.filter fun p => !ia.any fun | .param v _ => v == p | _ => false
       ia.map (·.subst σ) ++ others.map fun p => (σ.lookup p).getD Ty.void
@@ -662,15 +667,17 @@ partial def Ty.params : Ty → List String
 def pinArg (j : Nat) : String := s!"$pos{j}"
 
 /-- How many of class `d`'s Verse Core type arguments its root class
-    gives: those it gives a parametric interface above it (#53), else all
-    of its own. The others are type parameters added below the root. -/
+    gives: as many as the interface at or above it that has the fewest type
+    parameters (#53, #276), else all of its own. The others are type
+    parameters added below the root, or not given by some interface, which
+    a dispatch from it opens. -/
 partial def TyEnv.rootArgCount (env : TyEnv) (d : String) : Nat :=
   match (env.info d).parent with
   | some q => env.rootArgCount q
   | none =>
-    match (env.info d).ifaces.findSome? fun i => env.iargs.lookup (d, i) with
-    | some ia => ia.length
-    | none => (env.coreArgs d (((env.sparams.lookup d).getD []).map fun (v, k) => Ty.param v k)).length
+    let own := (env.coreArgs d (((env.sparams.lookup d).getD []).map fun (v, k) => Ty.param v k)).length
+    ((env.supers d).filter (env.info · |>.isIface)).foldl
+      (fun m i => min m ((env.sparams.lookup i).getD []).length) own
 
 /-- The type parameters of class `d` that are not among those its root
     class gives (#209): the ones it pins to themselves (`pinsOf`), whose
@@ -7347,8 +7354,23 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       -- whose branch's function reads them from the object, also those an
       -- ancestor of the target adds)
       let methodsBelow := methodsBelow || opts.castRequests.any fun l => !l.opened.isEmpty && henv.isSub l.target cd.name
-      if let some q := (henv.info cd.name).parent then
-        let qargs := ((cd.parents.zip cd.parentArgs).lookup q).getD []
+      -- (#276: a root class below interfaces counts them as `rootArgCount`
+      -- does: those among the first type arguments it gives the first
+      -- interface that has any, as many as the interface at or above it
+      -- with the fewest type parameters; an interface has no such fields)
+      let qargs? : Option (List STy) := if cd.isIface then none else match (henv.info cd.name).parent with
+        | some q => some (((cd.parents.zip cd.parentArgs).lookup q).getD [])
+        | none =>
+          let ifs := cdefs.filter fun i => i.isIface && henv.isSub cd.name i.name
+          if ifs.isEmpty then none else
+          -- (the type arguments it gives the interface it lists with the
+          -- most, then its other type parameters, as `coreArgs` has them)
+          let longest := ((cd.parents.zip cd.parentArgs).filter fun (q, _) => (henv.info q).isIface).foldl
+            (fun (b : List STy) (_, qa) => if b.length < qa.length then qa else b) []
+          let others := cd.tps.filter fun tp => !longest.any fun | .name v => v == tp.name | _ => false
+          let fewest := ifs.foldl (fun m i => min m i.tps.length) (longest.length + others.length)
+          some (longest.take fewest)
+      if let some qargs := qargs? then
         for tp in (if methodsBelow then cd.tps else []) do
           if !qargs.any (fun | .name v => v == tp.name | _ => false) then
             fs := fs ++ [(s!"$w.{cd.name}.{tp.name}", .name tp.name, some (.ident cd.pos "$witness"), false)]
@@ -7585,10 +7607,13 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
         pargs := pargs.push (cd.name, tys)
   env := { env with pargs := pargs.toList }
   -- the type arguments of each parametric interface a class or interface
-  -- lists as a parent (#53)
+  -- lists as a parent (#53), and none for an interface a class with type
+  -- parameters lists without them (#276): the class's root then gives none
   let mut iargs : Array ((String × String) × List Ty) := #[]
   for cd in cdefs do
     for (q, qargs) in cd.parents.zip cd.parentArgs do
+      if (henv.info q).isIface && qargs.isEmpty && !((env.sparams.lookup cd.name).getD []).isEmpty then
+        iargs := iargs.push ((cd.name, q), [])
       if (henv.info q).isIface && !qargs.isEmpty then
         let cenv := { env with tvars := ((env.sparams.lookup cd.name).getD []).map fun (v, c) => (v, Ty.param v c) }
         let tys ← qargs.mapM fun sty => do
@@ -7605,18 +7630,28 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   -- give it a type argument it fixes, nor one it adds)
   let core (c : String) : List Ty :=
     env.coreArgs c (((env.sparams.lookup c).getD []).map fun (v, k) => Ty.param v k)
-  -- a class below an interface has as its Verse Core type arguments exactly
+  -- a class below an interface has as its Verse Core type arguments first
   -- those it gives the interface: references to the interface have those,
-  -- and dispatch and field reads through them recover the class's (#53)
+  -- and dispatch and field reads through them recover the class's (#53);
+  -- its other type parameters come after, held by its objects in hidden
+  -- fields, and a dispatch from the interface opens them, as for a class
+  -- whose parent's type arguments do not give them (#209, #276)
   for cd in cdefs do
     if !cd.isIface then
       let ps := ((env.sparams.lookup cd.name).getD []).map fun (v, k) => Ty.param v k
       for i in (env.supers cd.name).filter (env.info · |>.isIface) do
         let ia := env.upArgs cd.name ps i
-        if !(ia == core cd.name) then
+        -- (#276: the interface with the fewest is counted at the root; one
+        -- below a parent class that gives fewer than its root's count would
+        -- open type arguments that the classes above it read as given, unless
+        -- those are fixed types, which the pins give)
+        if (env.info cd.name).parent.isSome && ia.length < env.rootArgCount cd.name &&
+            ((core cd.name).drop ia.length).any (!·.params.isEmpty) then
+          throw s!"{cd.pos.show}: {cd.name} has a parent class and is below {i}, which gives it fewer type arguments than its root class does: not supported yet (#276)"
+        if !(ia.isPrefixOf (core cd.name)) then
           let showArgs (ts : List Ty) : String := if ts.isEmpty then "none" else ", ".intercalate (ts.map Ty.show)
           if ia.length < (core cd.name).length then
-            throw s!"{cd.pos.show}: {cd.name} gives {i} the type arguments {showArgs ia}, but its own are {showArgs (core cd.name)}: a class below an interface with type parameters of its own is not supported yet (#53, #209)"
+            throw s!"{cd.pos.show}: {cd.name} gives {i} the type arguments {showArgs ia}, but its own are {showArgs (core cd.name)}: a class below an interface that does not give it its first type parameters, in order, is not supported yet (#276)"
           throw s!"{cd.pos.show}: {cd.name} gives {i} the type arguments {showArgs ia}, but its own are {showArgs (core cd.name)}: references to {i} could not recover them (#53)"
   for (mp, dm, qm) in overridePairs do
     let d := (dm.splitOn ".").head!
