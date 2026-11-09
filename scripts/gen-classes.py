@@ -1685,6 +1685,9 @@ class Gen:
             L.append('    %s<override>():string = "qp {%s}"' % (tag, A))
             L.append('%s(w:type) := class(%s([]w)):' % (qs, qp))
             L.append('    %s:w' % C)
+            if chance(0.5):
+                # (it overrides too: a dispatch on q2 opens w, #209 step 2)
+                L.append('    %s<override>():string = "qs {%s}"' % (tag, A))
         if have_qw:
             # a class below a repeating one that wraps its own parameter
             L.append('%s(u:type) := class(%s(?u)):' % (qw, qd))
@@ -1749,6 +1752,76 @@ class Gen:
                      (ns, q2, qn, A, B, lit(), q2, A, lit(), B))
             x = tmpname('X')
             M.append('for (%s : %s) { Print("n {%s.%s()} {%s.%s().Length}") }' % (x, ns, x, tag, x, g1))
+        self.main += M
+
+    # --- classes with type parameters a dispatch opens (#209 step 2)
+
+    def gen_existential(self):
+        """A GADT-style hierarchy: xe(t) with Ev():t; xl := class(xe(int));
+        xp(a, b) := class(xe(tuple(a, b))), whose a and b only occur inside
+        the type argument it gives xe; xf(a, b) := class(xe(a)), whose b
+        does not occur at all; maybe xt(a, b, n) below xp, with a type
+        parameter of its own. Code generic over xe(t) dispatches to them,
+        opening their type parameters; their methods use locals of those
+        types, whose initial values come from the object."""
+        L, M = [], []
+        xe, xl, xa, xp, xf, xt = (self.fresh(x) for x in ['xe', 'xl', 'xa', 'xp', 'xf', 'xt'])
+        ev, nm, run = (self.fresh(x) for x in ['Ev', 'Nm', 'XRun'])
+        V, L1, R1, P1, T1 = (self.fresh(x) for x in ['XV', 'XL', 'XR', 'XP', 'XT'])
+        have_xt = chance(0.5)
+        L.append('%s(t:type) := class<abstract>:' % xe)
+        L.append('    %s():t' % ev)
+        L.append('    %s():string = "xe"' % nm)
+        L.append('%s := class(%s(int)):' % (xl, xe))
+        L.append('    %s:int' % V)
+        L.append('    %s<override>():int = %s' % (ev, V))
+        if chance(0.6):
+            L.append('    %s<override>():string = "xl {%s}"' % (nm, V))
+        L.append('%s := class(%s(int)):' % (xa, xe))
+        L.append('    %s:%s(int)' % (L1, xe))
+        L.append('    %s:%s(int)' % (R1, xe))
+        L.append('    %s<override>():int = %s.%s() + %s.%s()' % (ev, L1, ev, R1, ev))
+        L.append('%s(a:type, b:type) := class(%s(tuple(a, b))):' % (xp, xe))
+        L.append('    %s:%s(a)' % (L1, xe))
+        L.append('    %s:%s(b)' % (R1, xe))
+        if chance(0.5):
+            L.append('    %s<override>():tuple(a, b) =' % ev)
+            L.append('        var X:a = %s.%s()' % (L1, ev))
+            L.append('        Y:b = %s.%s()' % (R1, ev))
+            L.append('        set X = %s.%s()' % (L1, ev))
+            L.append('        (X, Y)')
+        else:
+            L.append('    %s<override>():tuple(a, b) = (%s.%s(), %s.%s())' % (ev, L1, ev, R1, ev))
+        if chance(0.6):
+            L.append('    %s<override>():string = "xp({%s.%s()}, {%s.%s()})"' % (nm, L1, nm, R1, nm))
+        L.append('%s(a:type, b:type) := class(%s(a)):' % (xf, xe))
+        L.append('    %s:%s(tuple(a, b))' % (P1, xe))
+        L.append('    %s<override>():a = %s.%s()(0)' % (ev, P1, ev))
+        if have_xt:
+            L.append('%s(a:type, b:type, n:type) := class(%s(a, b)):' % (xt, xp))
+            L.append('    %s:n' % T1)
+            L.append('    %s<override>():string = "xt {(super:)%s()}"' % (nm, nm))
+        L.append('%s(E:%s(t) where t:type):t = E.%s()' % (run, xe, ev))
+        self.out += L
+
+        def iexp(d):
+            r = R.random()
+            if d <= 0 or r < 0.35:
+                return '%s{%s := %s}' % (xl, V, lit())
+            if r < 0.6:
+                return '%s{%s := %s, %s := %s}' % (xa, L1, iexp(d - 1), R1, iexp(d - 1))
+            return '%s(int, int){%s := %s}' % (xf, P1, pexp(d - 1))
+
+        def pexp(d):
+            if have_xt and chance(0.3):
+                return '%s(int, int, string){%s := %s, %s := %s, %s := "t"}' % (xt, L1, iexp(d - 1), R1, iexp(d - 1), T1)
+            return '%s(int, int){%s := %s, %s := %s}' % (xp, L1, iexp(d - 1), R1, iexp(d - 1))
+        for _ in range(R.randint(1, 3)):
+            M.append('Print("x {%s(%s)}")' % (run, iexp(3)))
+        ps = tmpname('Xp')
+        M.append('%s:[]%s(tuple(int, int)) = array{%s, %s}' % (ps, xe, pexp(2), pexp(2)))
+        x = tmpname('X')
+        M.append('for (%s : %s) { Print("xp {%s.%s()} {%s(%s)(0)} {%s(%s)(1)}") }' % (x, ps, x, nm, run, x, run, x))
         self.main += M
 
     # --- overloads
@@ -2083,6 +2156,8 @@ class Gen:
         self.main += self.pmain + self.omain
         if chance(0.4):
             self.gen_relational()
+        if chance(0.4):
+            self.gen_existential()
         # types with no concrete class below them (for triage: see drive.sh)
         empty = [t.name for t in self.types()
                  if not any((c is t or c.below(t)) and not c.abstract for c in self.classes)]

@@ -275,6 +275,15 @@ def newArgs (acc : Unit → List (Nat × VTy)) (fs : List VTy) : Option VTy → 
   | some (.ref _ args) => args
   | _ => (List.range (VTy.nvarsL fs)).map fun j => ((acc ()).lookup j).getD VTy.void
 
+/-- The type arguments `tc` proposes for a `new` with pins `ps` (#209): the
+    expected type's, unless they are too few for the pins (an object of a
+    class whose type parameters a dispatch opens has every argument its
+    pins mention), then the fields'. -/
+def newProposal (ps : List (Option VTy)) (acc : Unit → List (Nat × VTy)) (fs : List VTy) (m : Option VTy) :
+    List VTy :=
+  let a := newArgs acc fs m
+  if VTy.pinsBelow ps a.length then a else newArgs acc fs none
+
 /-- The instantiation `tc` proposes for a call with result type `t`: the
     bindings `acc` from the arguments, completed from the expected type. -/
 def callInst (acc : List (Nat × VTy)) (t : VTy) (m : Option VTy) : Nat → VTy :=
@@ -289,23 +298,33 @@ def commonPins (S : Sigs) (us : List Nat) (n : Nat) : List (Option VTy) :=
   | [] => []
   | u :: _ => (S.pinsOf u).take n
 
+/-- How many type arguments beyond `n` a dispatch to classes `us` opens
+    (#209): the fewest that the pins of one of them mention. -/
+def openCount (S : Sigs) (us : List Nat) (n : Nat) : Nat :=
+  match us.map fun u => VTy.nvarsL ((S.pinsOf u).filterMap id) - n with
+  | [] => 0
+  | k :: ks => ks.foldl min k
+
 /-- The dispatch check of `tc` (#142, #209), given the inferred types of the
     call's other arguments and whether `e` checks against `τ'`: the
-    receiver's type arguments refined by a most general unifier of the
-    tested classes' pins. -/
+    receiver's type arguments, extended by fresh variables for those the
+    tested classes' pins mention beyond them, refined by a most general
+    unifier of the pins. -/
 def tcDispatch (S : Sigs) (Γ : List VTy) (us : List Nat) (y y' f : Nat) (m : Option VTy)
     (σs? : Option (List VTy)) (eOK : Bool) : Option VTy :=
   if y = y' then
     match m, Γ[y]?, S.fns[f]?, σs? with
     | some τ', some (.ref _ a), some (ps, τ), some σs =>
-      let P := commonPins S us a.length
-      match unify (VTy.pinEqs P a) with
+      let k := openCount S us a.length
+      let N := max (VTy.nvarsL a) (max (VTy.nvarsL σs) τ'.nvars)
+      let P := commonPins S us (a.length + k)
+      match unify (VTy.pinEqs P (a ++ VTy.ext N k)) with
       | some μ =>
-        let θ := callInst (VTy.bindVarsL ps ((VTy.ref us a :: σs).map (VTy.subst μ)) []) τ
+        let θ := callInst (VTy.bindVarsL ps ((VTy.ref us (a ++ VTy.ext N k) :: σs).map (VTy.subst μ)) []) τ
           (some (τ'.subst μ))
-        if us.all (fun u => decide ((S.pinsOf u).take a.length = P)) &&
-            VTy.pinsBelow P a.length &&
-            VTy.subL ((VTy.ref us a :: σs).map (VTy.subst μ)) (ps.map (VTy.subst θ)) &&
+        if us.all (fun u => decide ((S.pinsOf u).take (a.length + k) = P)) &&
+            VTy.pinsBelow P (a.length + k) && VTy.extOK P a.length k &&
+            VTy.subL ((VTy.ref us (a ++ VTy.ext N k) :: σs).map (VTy.subst μ)) (ps.map (VTy.subst θ)) &&
             (τ.subst θ).sub (τ'.subst μ) && eOK then some τ'
         else none
       | none => none
@@ -314,10 +333,12 @@ def tcDispatch (S : Sigs) (Γ : List VTy) (us : List Nat) (y y' f : Nat) (m : Op
 
 theorem tcDispatch_sound {S : Sigs} {Γ : List VTy} {us : List Nat} {y y' f : Nat} {m : Option VTy}
     {σs? : Option (List VTy)} {eOK : Bool} {τ : VTy} (h : tcDispatch S Γ us y y' f m σs? eOK = some τ) :
-    y = y' ∧ m = some τ ∧ eOK = true ∧ ∃ ts a ps τ0 σs P μ θ, Γ[y]? = some (.ref ts a) ∧
-      S.fns[f]? = some (ps, τ0) ∧ σs? = some σs ∧ (∀ u ∈ us, (S.pinsOf u).take a.length = P) ∧
-      VTy.pinsBelow P a.length = true ∧
-      PinRefines P a μ ∧ VTy.subL ((VTy.ref us a :: σs).map (VTy.subst μ)) (ps.map (VTy.subst θ)) = true ∧
+    y = y' ∧ m = some τ ∧ eOK = true ∧ ∃ ts a ps τ0 σs P k N μ θ, Γ[y]? = some (.ref ts a) ∧
+      S.fns[f]? = some (ps, τ0) ∧ σs? = some σs ∧ (∀ u ∈ us, (S.pinsOf u).take (a.length + k) = P) ∧
+      VTy.pinsBelow P (a.length + k) = true ∧ VTy.extOK P a.length k = true ∧
+      VTy.varsBelowL N a = true ∧ VTy.varsBelowL N σs = true ∧ τ.varsBelow N = true ∧
+      PinRefines P (a ++ VTy.ext N k) μ ∧
+      VTy.subL ((VTy.ref us (a ++ VTy.ext N k) :: σs).map (VTy.subst μ)) (ps.map (VTy.subst θ)) = true ∧
       (τ0.subst θ).sub (τ.subst μ) = true := by
   simp only [tcDispatch] at h
   split at h
@@ -329,12 +350,22 @@ theorem tcDispatch_sound {S : Sigs} {Γ : List VTy} {us : List Nat} {y y' f : Na
         split at h
         · next hc =>
           simp only [Bool.and_eq_true] at hc
-          obtain ⟨⟨⟨⟨hus, hb⟩, hsub⟩, hres⟩, heOK⟩ := hc
-          have hus' : ∀ u ∈ us, (S.pinsOf u).take a.length = commonPins S us a.length := by
+          obtain ⟨⟨⟨⟨⟨hus, hb⟩, hext⟩, hsub⟩, hres⟩, heOK⟩ := hc
+          have hus' : ∀ u ∈ us, (S.pinsOf u).take (a.length + openCount S us a.length) =
+              commonPins S us (a.length + openCount S us a.length) := by
             intro u hu; simpa using List.all_eq_true.mp hus u hu
           simp only [Option.some.injEq] at h; subst h
-          exact ⟨hyy, rfl, heOK, ts, a, ps, τ0, σs, _, _, _, hy, hf, rfl, hus', hb,
-            PinRefines.of_unify hu, hsub, hres⟩
+          have hb' : VTy.pinsBelow (commonPins S us (a.length + openCount S us a.length))
+              (a ++ VTy.ext (max (VTy.nvarsL a) (max (VTy.nvarsL σs) τ'.nvars)) (openCount S us a.length)).length
+              = true := by
+            rwa [List.length_append, VTy.ext_length]
+          exact ⟨hyy, rfl, heOK, ts, a, ps, τ0, σs, _, _, _, _, _, hy, hf, rfl, hus', hb, hext,
+            VTy.varsBelowL_mono (Nat.le_max_left _ _) (VTy.varsBelowL_nvarsL _),
+            VTy.varsBelowL_mono (Nat.le_trans (Nat.le_max_left _ _) (Nat.le_max_right _ _))
+              (VTy.varsBelowL_nvarsL _),
+            VTy.varsBelow_mono (Nat.le_trans (Nat.le_max_right _ _) (Nat.le_max_right _ _))
+              (VTy.varsBelow_nvars _),
+            PinRefines.of_unify hb' hu, hsub, hres⟩
         · simp at h
       · simp at h
     · simp at h
@@ -421,8 +452,13 @@ def tc : Expr → Option VTy → Option VTy
       -- (the proposal must also agree with the class's pins, #142: an
       -- `an_box := class(box(animal))`'s prototype holds an `animal`, whose
       -- fields propose `ref [animal] []`, not the pinned `ref [animal, dog] []`)
+      -- (and those of the fields when the expected type's are too few for
+      -- the pins: an object of a class whose type parameters a dispatch
+      -- opens has them all, #209)
+      -- (one proposal and a fallback, so that nested `new`s check in
+      -- linear time)
       let args := firstOk (fun a => tcL es (fs.map (VTy.inst a)) && VTy.pinsOK (S.pinsOf t) a)
-        (newArgs (fun _ => bindArgs fs es []) fs m)
+        (newProposal (S.pinsOf t) (fun _ => bindArgs fs es []) fs m)
         (((S.protos.find? (·.1 == t)).map (·.2)).getD [])
       if tcL es (fs.map (VTy.inst args)) && VTy.pinsOK (S.pinsOf t) args then expect m (.ref [t] args)
       else none
@@ -1107,11 +1143,12 @@ theorem tc_sound_aux : ∀ (n : Nat) (e : Expr), sizeOf e < n → TcOK S Γ ρ e
             · next hc =>
               split at h
               · next f y' es =>
-                obtain ⟨rfl, hm, heOK, ts, a, ps, τ0, σs, P, μ, θ, hy, hf, hσs, hus, hb, hμ, hsub, hres⟩ :=
-                  tcDispatch_sound h
+                obtain ⟨rfl, hm, heOK, ts, a, ps, τ0, σs, P, k, N, μ, θ, hy, hf, hσs, hus, hb, hext, hNa, hNσ,
+                  hNτ, hμ, hsub, hres⟩ := tcDispatch_sound h
                 simp only [Option.some.injEq] at hm; subst hm
                 have Iargs : TypedL S Γ ρ es σs := inferL_sound_of (Isz rfl) hσs
-                exact ⟨Typed.dispatch θ μ hy hus hb hμ hf Iargs hsub hres (typed_of_check Ie heOK), by simp⟩
+                exact ⟨Typed.dispatch k N θ μ hy hus hb hext hNa hNσ hNτ hμ hf Iargs hsub hres (typed_of_check Ie heOK),
+                  by simp⟩
               · simp at h
             · simp at h
           · simp at h
@@ -1249,6 +1286,11 @@ def checkDefault (S : Sigs) (a : Nat) (Γ : List VTy) : Expr → VTy → Bool
   | .heap (.new c) ds, .ref ts args => ts.contains c && VTy.pinsOK (S.pinsOf c) args && match S.classes[c]? with
     | some fs => checkDefaultL S a Γ ds (fs.map (VTy.inst args))
     | none => false
+  | .heap (.get k) [.local i], t => decide (i < a) && match Γ[i]? with
+    | some (.ref ts args) => match fieldTy S ts args k with
+      | some τ => τ.sub t
+      | none => false
+    | _ => false
   | _, _ => false
 def checkDefaultL (S : Sigs) (a : Nat) (Γ : List VTy) : List Expr → List VTy → Bool
   | [], [] => true
@@ -1273,7 +1315,22 @@ theorem checkDefault_sound {S : Sigs} {a : Nat} {Γ : List VTy} : ∀ (d : Expr)
     simp only [checkDefault] at h
     exact .tup (checkDefaultL_sound ds ts h)
   | .heap op ds, t, h => by
-    cases op <;> try (simp [checkDefault] at h; done)
+    cases op
+    case get k =>
+      rcases ds with _ | ⟨d, _ | ⟨_, _⟩⟩
+      · simp [checkDefault] at h
+      · cases d <;> try (simp [checkDefault] at h; done)
+        rename_i i
+        simp only [checkDefault, Bool.and_eq_true, decide_eq_true_eq] at h
+        obtain ⟨hi, h⟩ := h
+        split at h
+        · next ts args hΓ =>
+          split at h
+          · next τ hf => exact .sub (.field hi hΓ (fieldTy_sound hf)) h
+          · simp at h
+        · simp at h
+      · cases d <;> (rename_i d2 _; cases d2) <;> simp [checkDefault] at h
+    all_goals try (simp [checkDefault] at h; done)
     cases t <;> try (simp [checkDefault] at h; done)
     rename_i c ts args
     simp only [checkDefault, Bool.and_eq_true] at h

@@ -226,6 +226,16 @@ structure TyEnv where
   fieldAccBase : Nat := 0
   /-- The functions asked for as values at closed function types (#214). -/
   fnRequests : List (String × Ty) := []
+  /-- The order of the slots holding values of the type parameters, when it
+      is not that of `tvars` (a method that reads some from its receiver,
+      #209, has those after the others). -/
+  dictOrder : List String := []
+  /-- In a method that reads some type parameters' values from its receiver
+      (#209): each one's hidden field, which a slot of its type starts as. -/
+  selfWitness : List (String × Nat) := []
+  /-- The classes that hold an implementation overriding one above them
+      (#209): they keep every pin of theirs (`pinsOf`). -/
+  overriders : List String := []
   /-- The type arguments of each class's parametric superclass (#39), in
       terms of the class's own type parameters: `sub(t) := class(base(t))`
       gives `base ↦ [t]`. -/
@@ -433,9 +443,10 @@ def TyEnv.coreVars (env : TyEnv) (d : String) : List (String × Ty) :=
 
 /-- The type arguments of `d` below `T`, for an instance of `T(targs)`: its
     type parameters at their places among the Verse Core type arguments. -/
-def TyEnv.argsBelow (env : TyEnv) (T : String) (targs : List Ty) (d : String) : List Ty :=
+def TyEnv.argsBelow (env : TyEnv) (T : String) (targs : List Ty) (d : String) (ext : List Ty := []) :
+    List Ty :=
   if d == T then targs else
-  let cs := env.coreArgs T targs
+  let cs := env.coreArgs T targs ++ ext
   let vars := env.coreVars d
   ((env.sparams.lookup d).getD []).map fun (v, _) =>
     match vars.findIdx? (·.1 == v) with
@@ -642,20 +653,50 @@ partial def Ty.params : Ty → List String
 /-- The name that stands for the `j`-th Verse Core type argument in a pin (#209). -/
 def pinArg (j : Nat) : String := s!"$pos{j}"
 
+/-- How many of class `d`'s Verse Core type arguments its root class
+    gives: those it gives a parametric interface above it (#53), else all
+    of its own. The others are type parameters added below the root. -/
+partial def TyEnv.rootArgCount (env : TyEnv) (d : String) : Nat :=
+  match (env.info d).parent with
+  | some q => env.rootArgCount q
+  | none =>
+    match (env.info d).ifaces.findSome? fun i => env.iargs.lookup (d, i) with
+    | some ia => ia.length
+    | none => (env.coreArgs d (((env.sparams.lookup d).getD []).map fun (v, k) => Ty.param v k)).length
+
+/-- The type parameters of class `d` that are not among those its root
+    class gives (#209): the ones it pins to themselves (`pinsOf`), whose
+    values its objects hold in hidden fields (`$w.…`). -/
+def TyEnv.addedParams (env : TyEnv) (d : String) : List String :=
+  let ps := ((env.sparams.lookup d).getD []).map (·.1)
+  let cs := env.coreArgs d (ps.map fun v => Ty.param v false)
+  let nr := env.rootArgCount d
+  ps.filter fun v => match cs.findIdx? (fun | .param w _ => w == v | _ => false) with
+    | some j => nr ≤ j
+    | none => false
+
+/-- The index of the hidden field of class `d` that holds a value of its
+    type parameter `v` (#209). -/
+def TyEnv.witnessField? (env : TyEnv) (d v : String) : Option Nat :=
+  (env.fields d).findIdx? fun (f, t, _) => f.startsWith "$w." && match t with
+    | .param w _ => w == v
+    | _ => false
+
 /-- The pins of class `d` (#142, #209), by position among its Verse Core
-    type arguments (`coreArgs`): `none` where the argument is a type
-    parameter of `d` met there first, else `some` the type the class fixes
-    it to, over those first places (`pinArg j` for the `j`-th argument).
-    A pin is closed (`intbox := class(box(int))` gives `[some int]`) or
-    relates the argument to others (`dup(t) := class(pair(t, t))` gives
-    `[none, some $pos0]`). Every type parameter of `d` is one of its Verse
-    Core type arguments (`coreArgs` adds those that are not themselves one
-    of its parent's), so arguments that agree with the pins are an
-    instance of `d`'s: they determine `d`'s type arguments. Where a pin
-    would mention an argument past its parent's (`sub(w) :=
-    class(pint([]w))` relates its second to its third), `d` takes its
-    parent's pin there instead: a dispatch on a receiver with its
-    parent's arguments could not name that one (#209). -/
+    type arguments (`coreArgs`): `some` the type the class fixes the
+    argument to, over the places where its type parameters first occur
+    (`pinArg j` for the `j`-th argument), or `none`. A pin is closed
+    (`intbox := class(box(int))` gives `[some int]`) or relates the
+    argument to others (`dup(t) := class(pair(t, t))` gives `[none, some
+    $pos0]`). Every type parameter of `d` is one of its Verse Core type
+    arguments (`coreArgs` appends those that are not themselves one of
+    its parent's), so arguments that agree with the pins are an instance
+    of `d`'s: they determine its type arguments. A type parameter added
+    below the root class, where it first occurs, is pinned to itself
+    (`pairE(a, b) := class(expr(tuple(a, b)))` gives `[some (tuple($pos1,
+    $pos2)), some $pos1, some $pos2]`): that says nothing of its value,
+    but an object then has that argument, which a dispatch on a receiver
+    without it opens (`Typed.dispatch`). -/
 partial def TyEnv.pinsOf (env : TyEnv) (d : String) : List (Option Ty) :=
   match env.pinsMap[d]? with
   | some ps => ps
@@ -663,11 +704,17 @@ partial def TyEnv.pinsOf (env : TyEnv) (d : String) : List (Option Ty) :=
       let cs := env.coreArgs d (((env.sparams.lookup d).getD []).map fun (v, k) => Ty.param v k)
       let first (v : String) : Option Nat := cs.findIdx? fun | .param w _ => w == v | _ => false
       let σ := (cs.flatMap Ty.params).filterMap fun v => (first v).map fun j => (v, Ty.param (pinArg j) false)
+      let nr := env.rootArgCount d
       let own := cs.zipIdx.map fun (t, i) => match t with
-        | .param v _ => if first v == some i then none else some (t.subst σ)
+        | .param v _ => if first v == some i && i < nr then none else some (t.subst σ)
         | _ => if t.params.all fun v => (first v).isSome then some (t.subst σ) else none
+      -- (a class that only inherits implementations takes its parent's pin
+      -- where its own would mention a type argument past its parent's: the
+      -- implementations it uses are typed at its parent's, which they cannot
+      -- relate to it, and a dispatch to them need not open it)
       match (env.info d).parent with
       | some q =>
+        if env.overriders.contains d then own else
         let pq := env.pinsOf q
         let low := lowerPins env own
         own.zipIdx.map fun (o, i) =>
@@ -692,12 +739,24 @@ def TyEnv.lowerPins (env : TyEnv) (ps : List (Option Ty)) : List (Option VTy) :=
 def TyEnv.corePins (env : TyEnv) (d : String) : List (Option Ty) :=
   if env.pinned.contains d then env.pinsOf d else []
 
-/-- `d`, below `T`, has as many Verse Core type arguments as `T`: code
-    generic over `T` can treat a `d` under the refinement its pins give
-    (#142, #209), as they determine `d`'s type arguments (`pinsOf`). -/
+/-- Code generic over `T` can treat a `d` below it under the refinement
+    its pins give (#142, #209): `d`'s pins determine its Verse Core type
+    arguments (`pinsOf`), and when it has more than `T`, its pins mention
+    the last (a type parameter added below the root is pinned to itself),
+    so that an object has them all and a dispatch on a `T` opens them
+    (`Typed.dispatch`). One that fixes the extra ones to closed types
+    (`leaf := class(mid(int, string))` below `mid(a, b) :=
+    class(expr(tuple(a, b)))`) does not say that an object has them. -/
 def TyEnv.sameCorePinned (env : TyEnv) (d T : String) : Bool :=
   let core (c : String) := env.coreArgs c (((env.sparams.lookup c).getD []).map fun (v, k) => Ty.param v k)
-  (core d).length == (core T).length
+  let (n, m) := ((core T).length, (core d).length)
+  n ≤ m && (m == n || (env.lowerPins (env.pinsOf d)).any fun o => o.any (VTy.hasVar (m - 1)))
+
+/-- How many Verse Core type arguments beyond the first `n` pins `ps`
+    mention: those a dispatch on a receiver with `n` opens (#209), as the
+    checker counts them (`openCount`). -/
+def TyEnv.openOf (env : TyEnv) (ps : List (Option Ty)) (n : Nat) : Nat :=
+  VTy.nvarsL ((env.lowerPins ps).filterMap id) - n
 
 /-- `seq (assign t₁ v₁) (… (call f es))` as the call with each `vᵢ` (a
     literal or a slot) in place of `tᵢ` in its arguments: a call whose
@@ -859,7 +918,15 @@ structure Sig where
   fx : List String := heapFx
   /-- `<suspends>` (#156): lowered to a frame and a resume function. -/
   suspends : Bool := false
+  /-- Of a method of a class with type parameters that its parent's type
+      arguments do not give (#209): those type parameters, whose values it
+      reads from its receiver's hidden fields (`$w.…`), not from hidden
+      parameters, as a dispatch that opens them has none to pass. -/
+  selfTps : List String := []
   deriving Inhabited
+
+/-- How many hidden parameters (values of type arguments) a function takes. -/
+def Sig.ndicts (s : Sig) : Nat := s.tparams.length - s.selfTps.length
 
 /-- A type built from the primitive comparable types (#214). -/
 partial def Ty.plainComparable : Ty → Bool
@@ -1179,7 +1246,8 @@ def p2 (op : Prim) (a b : Expr) : Expr := .prim op [a, b]
 
 /-- The slot of the hidden parameter for type parameter `n`. -/
 def TyEnv.dictSlot? (env : TyEnv) (dictBase : Nat) (n : String) : Option Nat :=
-  (env.tvars.findIdx? (·.1 == n)).map (dictBase + ·)
+  if env.dictOrder.isEmpty then (env.tvars.findIdx? (·.1 == n)).map (dictBase + ·)
+  else (env.dictOrder.idxOf? n).map (dictBase + ·)
 
 /-- A value of type `t`, built by an expression whose Verse Core type the
     checker infers exactly (`tc e none`): the hidden argument a call of a
@@ -1297,7 +1365,9 @@ partial def slotDefault (env : TyEnv) (dictBase : Nat) (params : List Ty) (visit
   if vt.hasRef then
     if let some i := params.findIdx? (fun pt => (pt.toVTy env).sub vt) then return .local i
   match t with
-  | .param n _ => match env.dictSlot? dictBase n with
+  | .param n _ =>
+    if let some k := env.selfWitness.lookup n then return .heap (.get k) [.local 0]
+    match env.dictSlot? dictBase n with
     | some d => return .local d
     | none => return .lit vt.default
   | .tup ts => return .prim .mkTup (← ts.mapM (slotDefault env dictBase params visiting))
@@ -1336,7 +1406,9 @@ partial def slotDefault (env : TyEnv) (dictBase : Nat) (params : List Ty) (visit
             slotDefault env dictBase params (dkey :: visiting) ft with
         | .ok fs => return .heap (.new (env.tagOf d)) fs
         | .error msg => lastErr := keep msg
-      if !pinnedOut.isEmpty && pinnedOut.length == (env.concreteBelow n).length then
+      -- (no class can be built: one that some pins ruled out, or that
+      -- needs more type arguments than the slot's, #209)
+      if !pinnedOut.isEmpty then
         -- (its hidden placeholder class, or another's below it, which fix
         -- no more than it does, #157)
         let h0 := s!"{n}$placeholder"
@@ -1883,6 +1955,11 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
     match pieces with
     | [] => return ⟨.lit (Value.ofString ""), Ty.string⟩
     | e :: es => return ⟨es.foldl (fun a b => p2 .concat a b) e, Ty.string⟩
+  -- (#209) a hidden field's default: a value of its type
+  | .ident p "$witness" =>
+    match exp with
+    | some t => return ⟨← witness ctx.types ctx.dictBase ctx.dictVars t, t⟩
+    | none => eerr p "internal error: a witness without a type"
   | .ident p n =>
     match n with
     | "true" => return ⟨.lit (.logic true), .logic⟩
@@ -3200,17 +3277,25 @@ partial def elabAppBase (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (b
             -- may not have: matched against the receiver's, they refine the
             -- call, which `Typed.dispatch` types under that refinement
             let rargs := env.coreArgs c targs
-            let atR := rargs.zipIdx.map fun (r, j) => (pinArg j, r)
-            let needOf (pins : List (Option Ty)) := (rargs.zip pins).filterMap fun (a, pin) => match pin with
-              | some pt => let pt := pt.subst atR; if a == pt then none else some (a, pt)
-              | none => none
+            -- (#209) the type arguments of `e` beyond the receiver's are
+            -- opened as fresh parameters, which the refinement binds
+            let eLen := (env.pinsOf e).length
+            let extOf (_ : List (Option Ty)) : List Ty :=
+              (List.range (eLen - rargs.length)).map fun i => Ty.param s!"$ext{i}" false
+            let needOf (pins : List (Option Ty)) :=
+              let rx := rargs ++ extOf pins
+              let atR := rx.zipIdx.map fun (r, j) => (pinArg j, r)
+              (rx.zip pins).filterMap fun (a, pin) => match pin with
+                | some pt => let pt := pt.subst atR; if a == pt then none else some (a, pt)
+                | none => none
             -- (a generic <suspends> implementation at or above the receiver's
             -- class is called at the receiver's own type arguments, without
             -- the refinement: its frame is made by a call typed without it)
             let plainSusp := ms.suspends && env.isSub c e && !((ctx.sig? fname).map (·.tparams.isEmpty)).getD true
             -- (an implementation at or above the receiver's class is called
             -- at the receiver's type arguments, which it takes as they are)
-            if !plainSusp && !env.isSub c e && cls.any fun d => !(needOf (env.corePins d)).isEmpty then
+            if !plainSusp && !env.isSub c e && cls.any fun d =>
+                !(needOf (env.corePins d)).isEmpty || eLen > rargs.length then
               -- one test per set of pins among the classes using `e`'s
               -- implementation: `Typed.dispatch` refines by the pins all the
               -- tested classes share, which may fix more than `e`'s (and it
@@ -3218,17 +3303,20 @@ partial def elabAppBase (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (b
               -- of `e`'s type, which might have no initial value)
               let mut parts : Array (List (Option Ty) × Array String) := #[]
               for d in cls do
-                let key := (env.corePins d).take rargs.length
+                let key := (env.corePins d).take (max eLen rargs.length)
                 match parts.findIdx? (·.1 == key) with
                 | some pi => parts := parts.modify pi fun (k, ds') => (k, ds'.push d)
                 | none => parts := parts.push (key, #[d])
               for (pins, part) in parts.toList.reverse do
-                if !VTy.pinsBelow (env.lowerPins pins) rargs.length then
-                  -- (pins that relate the receiver's type arguments to ones
-                  -- it does not have: no refinement, so `e`'s implementation
-                  -- must take the receiver as it is)
+                -- (pins that relate the receiver's type arguments to ones
+                -- past those of `e`, whose implementation is called: they
+                -- would instantiate `e`'s type parameters with what the
+                -- dispatch opens, which it has no values of; so no
+                -- refinement, and `e`'s implementation must take the
+                -- receiver as it is)
+                if !VTy.pinsBelow (env.lowerPins pins) (max eLen rargs.length) then
                   if !(needOf (env.corePins e)).isEmpty then
-                    eerr p s!"cannot dispatch {m} on {withArticle (Ty.struct c targs).show} to class {part[0]!} yet: its type arguments there relate to ones that {c} does not have (#209)"
+                    eerr p s!"cannot dispatch {m} on {withArticle (Ty.struct c targs).show} to class {part[0]!} yet: its type arguments there relate to ones that {e} does not have (#209)"
                   let sd ← fresh (.struct e (argsAt e))
                   let ctx' := { ctx with locals := { name := s!"$self{sd}", slot := sd, ty := .struct e (argsAt e), mutable := false } :: (locs ++ ctx.locals) }
                   let rc ← elabApp ctx' p (.ident mp fname) (.ident mp s!"$self{sd}" :: argIds.toList) bracket exp
@@ -3236,6 +3324,11 @@ partial def elabAppBase (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (b
                     (← coerce p rc msRet) acc
                   emitted := true
                   continue
+                -- (pins that fix the last of `e`'s type arguments past the
+                -- receiver's to a closed type say nothing of whether an
+                -- object has it: it cannot be opened)
+                if eLen > rargs.length && !(env.lowerPins pins).any (fun o => o.any (VTy.hasVar (eLen - 1))) then
+                  eerr p s!"cannot dispatch {m} on {withArticle (Ty.struct c targs).show} to class {part[0]!} yet: it fixes type arguments that {e} has beyond {c}'s (#209)"
                 -- (no instance of the receiver's type arguments agrees with
                 -- the pins: no object of `part` is the receiver)
                 -- (whether an object of `part` can be the receiver, by
@@ -3247,7 +3340,8 @@ partial def elabAppBase (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (b
                 let some μF := Ty.unifyEqs coreFields [] (needOf pins) | continue
                 let selfName := s!"$self{slot}"
                 let locsF := locs.map fun l => { l with ty := l.ty.subst μF }
-                let selfL : Local := { name := selfName, slot, ty := .struct e ((argsAt e).map (·.subst μF)), mutable := false }
+                let argsE := if env.isSub c e then argsAt e else env.argsBelow c targs e (extOf pins)
+                let selfL : Local := { name := selfName, slot, ty := .struct e (argsE.map (·.subst μF)), mutable := false }
                 let ctx' := { ctx with locals := selfL :: (locsF ++ ctx.locals) }
                 let rc ← elabApp ctx' p (.ident mp fname) (.ident mp selfName :: argIds.toList) bracket
                   (some (msRet.subst μF))
@@ -3483,8 +3577,10 @@ partial def elabGenericCall (ctx : Ctx) (p : Pos) (s : Sig) (args : List SExpr) 
     if cmp && !valueCall && !t.comparable ctx.types then
       eerr p (notComparable ctx.types t s!"type parameter {v} of {s.name}")
     targs := targs.push t
-  -- the hidden arguments: a value of each type argument
-  let dicts ← targs.toList.mapM (witness ctx.types ctx.dictBase ctx.dictVars)
+  -- the hidden arguments: a value of each type argument (but those a
+  -- method reads from its receiver, #209)
+  let dicts ← ((targs.toList.zip s.tparams).filter fun (_, (v, _)) => !s.selfTps.contains v).mapM
+    fun (t, _) => witness ctx.types ctx.dictBase ctx.dictVars t
   if plain then return ⟨.call s.idx (es.toList ++ dicts), s.ret.subst σ⟩
   let call := Expr.call s.idx (slots.toList.map (fun o => Expr.local o.get!) ++ dicts)
   return ⟨steps.toList.foldr Expr.seq call, s.ret.subst σ⟩
@@ -5289,7 +5385,7 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
   let nOrig := fns.size
   let (fns1, slotTys1, specSigs, specKeys, replaced) ← specialise fns slotTys
     { fns := fsigs0, classes := classTable, protos, pins }
-    (fun f => ((sigOf f).map (·.tparams.length)).getD 0) (fun f => ((sigOf f).map (·.suspends)).getD false)
+    (fun f => ((sigOf f).map (·.ndicts)).getD 0) (fun f => ((sigOf f).map (·.suspends)).getD false)
     branchMark rushMark spawnMark inFn
   fns := fns1
   slotTys := slotTys1
@@ -5364,6 +5460,8 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
       let some ttyT := Γ[t]? | throw s!"internal error: lowering {gname}: a spawn's task"
       let mut atys : Array VTy := #[]
       -- (the callee's type arguments, from its witnesses)
+      if ((sigOf h).map (!·.selfTps.isEmpty)).getD false then
+        throw (inFn gname s!"a spawn of {((sigOf h).map (·.name)).getD "a method"}, a method of a class with type parameters that its parent's type arguments do not give, is not supported yet (#209)")
       let ntpH := ((sigOf h).map (·.tparams.length)).getD 0
       let wit := (hs.drop (hs.length - ntpH)).map fun w => tc Sorig Γ (fsigs0[gi]!).2 w none
       let θh : Nat → VTy := fun i => match wit[i]? with
@@ -6304,6 +6402,17 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
           if cd.overrides.contains f then
             throw s!"{cd.pos.show}: {f}<override> in {cd.name} does not override an inherited field"
           fs := fs ++ [(f, sty, d, isVar)]
+      -- (#209) each type parameter that is not one of its parent's type
+      -- arguments as a whole: a hidden field holds a value of it, from
+      -- which a method of the class, run by a dispatch that opens it, gets
+      -- its slots of that type (`Sig.selfTps`)
+      -- (only where a method can need it: a class with methods at or below)
+      let methodsBelow := cdefs.any fun cd' => !cd'.methods.isEmpty && henv.isSub cd'.name cd.name
+      if let some q := (henv.info cd.name).parent then
+        let qargs := ((cd.parents.zip cd.parentArgs).lookup q).getD []
+        for tp in (if methodsBelow then cd.tps else []) do
+          if !qargs.any (fun | .name v => v == tp.name | _ => false) then
+            fs := fs ++ [(s!"$w.{cd.name}.{tp.name}", .name tp.name, some (.ident cd.pos "$witness"), false)]
       full := full.push (cd.name, fs)
       fullMap := fullMap.insert cd.name fs
     if full.size == before then break
@@ -6476,7 +6585,9 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
                              if i.isIface || i.isAbstract then m else
                              (henv.supers d).foldl (fun m T => m.insert T ((m[T]?.getD []) ++ [d])) m) {},
                            abstracts := abstracts.toList, fnRequests := opts.fnRequests }
-  env := { env with varFields := varFields, uniques := uniques }
+  env := { env with varFields := varFields, uniques := uniques,
+                    overriders := (overridePairs.toList.map fun (_, dm, _) => (dm.splitOn ".").headD "") ++
+                      (implChecks.toList.map fun (_, _, impl, _) => (impl.splitOn ".").headD "") }
   -- the class whose code each inherited field default is (#39): the nearest
   -- one, the class's own first, that gives the field a default itself
   let homeOf (c f : String) : String :=
@@ -6566,16 +6677,10 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     let q := (qm.splitOn ".").head!
     let mn := (dm.splitOn ".").getLast!
     let (cd', cq) := (core d, core q)
-    if cd'.length != cq.length then
+    if !env.sameCorePinned d q then
       if ((env.sparams.lookup d).getD []).isEmpty then
         throw s!"{mp.show}: {d} has more Verse Core type arguments than {q} (a class between them has type parameters of its own), so it cannot override {mn} yet: code generic over {q} could not give them (#39)"
-      -- (one that occurs inside the type arguments it gives its parent, but
-      -- is not one of them, `nest(t) := class(pair(?t, ?t))`)
-      let inside := (env.extraParams d).filter fun v =>
-        ((env.pargs.lookup d).getD []).any fun a => a.params.contains v
-      if let some v := inside.head? then
-        throw s!"{mp.show}: type parameter {v} of {d} occurs only inside the type arguments {d} gives its parent, not as one of them, so {d} cannot override {mn} yet: code generic over {q} could not give it (#39, #209)"
-      throw s!"{mp.show}: {d} has type parameters that {q} does not have, so it cannot override {mn} yet: code generic over {q} could not give them (#39)"
+      throw s!"{mp.show}: {d} has type parameters that {q} does not have and that the type arguments it gives {q} do not determine, so it cannot override {mn}: code generic over {q} could not give them (#39, #209)"
     -- (its Verse Core type arguments are {q}'s, except where it fixes them
     -- or relates them to each other: dispatch is then typed under the
     -- refinement its pins give, #142, #209)
@@ -6588,7 +6693,8 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   let pinClasses := (overridePairs.toList.flatMap fun (_, dm, qm) =>
       [(dm.splitOn ".").head!, (qm.splitOn ".").head!]).eraseDups
   env := { env with pinsMap := pinClasses.foldl (fun m d => m.insert d (env.pinsOf d)) {} }
-  let fixes (e q : String) : Bool := ((env.pinsOf q).zip (env.pinsOf e)).any fun (a, b) => a != b
+  let fixes (e q : String) : Bool :=
+    ((env.pinsOf q).zip (env.pinsOf e)).any (fun (a, b) => a != b) || (env.pinsOf e).length > (env.pinsOf q).length
   let headOf (f : String) : String := (f.splitOn ".").head!
   let fixers := (overridePairs.toList.filterMap fun (_, dm, qm) =>
       if fixes (headOf dm) (headOf qm) then some (headOf dm) else none) ++
@@ -6654,9 +6760,14 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       | some (_, f, t) => (f, t, (none : Option SExpr))
       | none => (s!"$pad{k}", Ty.void, none)
     return laid ++ free.map fun (f, t) => (f, t, none)
+  let coreLen (c : String) : Nat :=
+    (env.coreArgs c (((env.sparams.lookup c).getD []).map fun (v, k) => Ty.param v k)).length
   let needsPh (n : String) : Bool :=
     (env.sparams.lookup n).isSome && env.isRefClass n &&
-    (env.concreteBelow n).all (fun d => env.pinned.contains d && (env.corePins d).any Option.isSome)
+    ((env.concreteBelow n).all (fun d => env.pinned.contains d && (env.corePins d).any Option.isSome) ||
+      -- (or a class below with type parameters a dispatch on `n` opens,
+      -- #209: an object of it needs more type arguments than `n`'s)
+      (env.concreteBelow n).any fun d => env.pinned.contains d && coreLen d > coreLen n)
   for n in env.classes.filter needsPh do
     let h := s!"{n}$placeholder"
     let i := env.info n
@@ -6777,8 +6888,19 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
         throw s!"{p.show}: {n} has more than one of <converges>, <computes> and <transacts> (they exclude each other)"
       if effs.contains "computes" && ("transacts" :: heapFx).any effs.contains then
         throw s!"{p.show}: <computes> excludes the heap effects (<reads>, <writes>, <allocates>, <transacts>) that {n} also has"
+      -- (#209) a method of a class with type parameters that its parent's
+      -- type arguments do not give reads their values from its receiver
+      let selfTps : List String := match n.splitOn "." with
+        | [c, m] =>
+          if env.classes.contains c && env.isRefClass c && !m.startsWith "$" &&
+              (match tys.head? with | some (.struct c' _) => c' == c | _ => false) then
+            (env.addedParams c).filter fun v => tparams.any (·.1 == v) && (env.witnessField? c v).isSome
+          else []
+        | _ => []
+      if !selfTps.isEmpty && effs.contains "suspends" then
+        throw s!"{p.show}: {n} is <suspends>, and its class has type parameters that its parent's type arguments do not give: not supported yet (#209)"
       -- generic functions come after the others
-      gsigs := gsigs.push { idx := tops.length + gidx, name := n, params := tys, ret := rt,
+      gsigs := gsigs.push { idx := tops.length + gidx, name := n, params := tys, ret := rt, selfTps,
                             decides := effs.contains "decides", isConst := false,
                             suspends := effs.contains "suspends",
                             -- (a parametric class's `block:`: inferred from none, #41)
@@ -6789,7 +6911,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     | _ => pure ()
   let mkSigProg (sigs : Array Sig) : Prog :=
     { fns := (sigs ++ gsigs).toList.map fun s =>
-        { name := s.name, arity := s.params.length + s.tparams.length, nslots := 0,
+        { name := s.name, arity := s.params.length + s.ndicts, nslots := 0,
           decides := s.decides, writes := s.fx.contains "writes", body := .lit .void },
       main := 0 }
   -- infer the types of unannotated constants: in order, in rounds, so that a
@@ -7051,15 +7173,22 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
           throw s!"{kp.show}: {name} {what}, which its effects ({spec}) do not allow: {fix}"
   let elabFn (env : TyEnv) (p : Pos) (name : String) (ps : List SParam) (ptys : List Ty) (ret : Ty)
       (decides : Bool) (allowed : List String) (tps : List (String × Bool)) (body : SExpr)
-      (suspends : Bool := false) :
+      (suspends : Bool := false) (selfTps : List String := []) :
       Except String (Fn × List VTy × List (String × Ty) × Option Pos) := do
+    -- (#209) the values of `selfTps` come from the receiver's hidden
+    -- fields, in slots after the hidden parameters
+    let dictTps := tps.filter (fun (v, _) => !selfTps.contains v) ++ tps.filter (fun (v, _) => selfTps.contains v)
+    let selfCls := (name.splitOn ".").headD ""
+    let env := if selfTps.isEmpty then env else
+      { env with dictOrder := dictTps.map (·.1),
+                 selfWitness := selfTps.map fun v => (v, (env.witnessField? selfCls v).getD 0) }
     let locals := (ps.zip (List.range ps.length)).zip ptys |>.map fun ((prm, i), t) =>
       ({ name := prm.name, slot := i, ty := t, mutable := false } : Local)
     for (prm, i) in ps.zip (List.range ps.length) do
       if ps.take i |>.any (·.name == prm.name) then throw s!"{p.show}: duplicate parameter '{prm.name}'"
     let ctx : Ctx := { sigs := allSigs, sigProg, locals := locals.reverse, types := env,
                        canFail := decides, retTy := ret, dictBase := ps.length, suspends,
-                       dictVars := tps.map (·.1),
+                       dictVars := dictTps.map (·.1),
                        inBlock := name.endsWith ".$block",
                        inCtor := name.endsWith "$init",
                        selfClass := match name.splitOn "." with
@@ -7068,14 +7197,17 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
                        selfMethod := match name.splitOn "." with
                          | [_, m] => some m
                          | _ => none }
-    let hidden := tps.map fun (v, c) => Ty.param v c
-    let arity := ps.length + hidden.length
+    let hidden := dictTps.map fun (v, c) => Ty.param v c
+    let arity := ps.length + hidden.length - selfTps.length
     let ((r, _), st) ← (elabStmt ctx body (some ret)).run
-      { env, nslots := arity, slotTys := (ptys ++ hidden).toArray }
+      { env, nslots := ps.length + hidden.length, slotTys := (ptys ++ hidden).toArray }
     let (e, st) ← (coerce p r ret).run st
     let e := if ret == .void then Expr.seq e (.lit .void) else e
-    let inits ← match (st.slotTys.toList.drop arity).mapM (slotDefault env ps.length (ptys ++ hidden) []) with
-      | .ok ds => pure ds
+    let selfInits : List Expr := (dictTps.drop (hidden.length - selfTps.length)).map fun (v, _) =>
+      .heap (.get ((env.witnessField? selfCls v).getD 0)) [.local 0]
+    let inits ← match (st.slotTys.toList.drop (ps.length + hidden.length)).mapM
+        (slotDefault env ps.length (ptys ++ hidden.take (hidden.length - selfTps.length)) []) with
+      | .ok ds => pure (selfInits ++ ds)
       | .error msg => throw s!"{p.show}: in {name}: {msg}"
     fxCheck name allowed st
     return ({ name, arity, nslots := st.nslots, decides, writes := allowed.contains "writes",
@@ -7126,6 +7258,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     match top with
     | .fn p n ps _ _ _ body =>
       let (fn, tys, needs, err) ← elabFn (genvOf g) p n ps g.params g.ret g.decides g.fx g.tparams body g.suspends
+        g.selfTps
       fnNeeds := fnNeeds ++ needs
       fns := fns.push fn
       errs := errs.push err
@@ -7147,7 +7280,9 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   let fsigs0 := sigs.toList.map (fun s => (s.params.map (Ty.toVTy env), s.ret.toVTy env)) ++
     gsigs.toList.map fun g =>
       let genv := genvOf g
-      ((g.params ++ g.tparams.map fun (v, c) => Ty.param v c).map (Ty.toVTy genv), g.ret.toVTy genv)
+      let dictTys : List Ty := (g.tparams.filter fun (vc : String × Bool) => !g.selfTps.contains vc.1).map
+        fun (vc : String × Bool) => Ty.param vc.1 vc.2
+      ((g.params ++ dictTys).map (Ty.toVTy genv), g.ret.toVTy genv)
   -- the class table: the fields of each class, by tag (#34); the prototypes (#37)
   -- (a parametric class's field types mention its type parameters, #39)
   -- each field as `TyEnv.fieldSrc` gives it (the topmost interface that

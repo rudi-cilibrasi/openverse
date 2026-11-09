@@ -113,6 +113,40 @@ theorem VTy.nvarsL_le : ∀ (ts : List VTy) (n : Nat), (∀ j, VTy.hasVarL j ts 
       VTy.nvarsL_le ts n (fun j hj => h j (by simp [VTy.hasVarL, hj]))⟩
 end
 
+mutual
+/-- A type's variables are below `n` exactly when each one it mentions is. -/
+theorem VTy.varsBelow_iff : ∀ (t : VTy) (n : Nat), t.varsBelow n = true ↔ ∀ j, t.hasVar j = true → j < n
+  | .int, _ | .logic, _ | .char, _ | .float, _ => by simp [VTy.varsBelow, VTy.hasVar]
+  | .var i, n => by simp [VTy.varsBelow, VTy.hasVar]
+  | .arr t, n | .opt t, n => by simpa [VTy.varsBelow, VTy.hasVar] using VTy.varsBelow_iff t n
+  | .tup ts, n | .ref _ ts, n => by simpa [VTy.varsBelow, VTy.hasVar] using VTy.varsBelowL_iff ts n
+theorem VTy.varsBelowL_iff : ∀ (ts : List VTy) (n : Nat),
+    VTy.varsBelowL n ts = true ↔ ∀ j, VTy.hasVarL j ts = true → j < n
+  | [], _ => by simp [VTy.varsBelowL, VTy.hasVarL]
+  | t :: ts, n => by
+    simp only [VTy.varsBelowL, VTy.hasVarL, Bool.and_eq_true, Bool.or_eq_true, VTy.varsBelow_iff t n,
+      VTy.varsBelowL_iff ts n]
+    constructor
+    · rintro ⟨h1, h2⟩ j (hj | hj)
+      · exact h1 j hj
+      · exact h2 j hj
+    · intro h; exact ⟨fun j hj => h j (.inl hj), fun j hj => h j (.inr hj)⟩
+end
+
+theorem VTy.varsBelow_mono {t : VTy} {n m : Nat} (hnm : n ≤ m) (h : t.varsBelow n = true) :
+    t.varsBelow m = true :=
+  (VTy.varsBelow_iff t m).mpr fun j hj => Nat.lt_of_lt_of_le (((VTy.varsBelow_iff t n).mp h) j hj) hnm
+
+theorem VTy.varsBelowL_mono {ts : List VTy} {n m : Nat} (hnm : n ≤ m) (h : VTy.varsBelowL n ts = true) :
+    VTy.varsBelowL m ts = true :=
+  (VTy.varsBelowL_iff ts m).mpr fun j hj => Nat.lt_of_lt_of_le (((VTy.varsBelowL_iff ts n).mp h) j hj) hnm
+
+theorem VTy.varsBelow_nvars (t : VTy) : t.varsBelow t.nvars = true :=
+  (VTy.varsBelow_iff t _).mpr fun j hj => VTy.lt_nvars t j hj
+
+theorem VTy.varsBelowL_nvarsL (ts : List VTy) : VTy.varsBelowL (VTy.nvarsL ts) ts = true :=
+  (VTy.varsBelowL_iff ts _).mpr fun j hj => VTy.lt_nvarsL ts j hj
+
 theorem Eqs.lt_nvars : ∀ (eqs : Eqs) (j : Nat), eqs.has j = true → j < eqs.nvars
   | [], _, h => by simp [Eqs.has] at h
   | (a, b) :: r, j, h => by

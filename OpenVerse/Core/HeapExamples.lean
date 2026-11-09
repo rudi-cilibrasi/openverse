@@ -169,6 +169,48 @@ example : (tc relSigs [] .void (.heap (.new 1) [int 1, str "x"]) none) = none :=
 example : (tc relSigs [] .void (.heap (.new 1) [int 1, int 2]) none) = some (.ref [1] [.int, .int]) := by
   native_decide
 
+/-! ### A dispatch that opens a type argument (#209)
+
+```verse
+expr(t:type) := class<abstract>:
+    Get():t
+pk(a:type, b:type) := class(expr(a)):
+    X:a
+    Get<override>():a = X
+Run(E:expr(t) where t:type):t = E.Get()
+Main():void = Print("{Run(pk(int, string){X := 7})}")
+```
+
+`expr` is tag 0, `pk` tag 1, with the fields `X : var 0` and the hidden
+`$w.pk.b : var 1` (a value of `b`). `pk`'s `b` is no type argument of
+`expr`'s: `pk` pins it to itself, `[none, some (var 1)]`, so that an
+object has it. In `Run`, generic over `t`, the receiver has one type
+argument; the dispatch opens a second as a fresh variable, and calls
+`pk`'s `Get` at both. -/
+def openDemo : Prog where
+  fns := [
+    { name := "pk.Get", arity := 1, nslots := 1, decides := false,
+      body := .heap (.get 0) [.local 0] },
+    { name := "Run", arity := 1, nslots := 1, decides := false,
+      body := .ite (.heap (.isTag [1]) [.local 0]) (.call 0 [.local 0]) (p .userErr []) },
+    { name := "Main", arity := 0, nslots := 0, decides := false,
+      body := printInt (.call 1 [.heap (.new 1) [int 7, str "w"]]) }]
+  main := 2
+
+def openSigs : Sigs where
+  fns := [([.ref [1] [.var 0, .var 1]], .var 0), ([.ref [0, 1] [.var 0]], .var 0), ([], .void)]
+  classes := [[], [.var 0, .var 1]]
+  pins := [[], [none, some (.var 1)]]
+def openSlots : List (List VTy) := [[.ref [1] [.var 0, .var 1]], [.ref [0, 1] [.var 0]], []]
+
+example : openDemo.check = true := by native_decide
+example : openDemo.checkTypes openSigs openSlots = true := by native_decide
+example : outOf openDemo = some (.ok .void, "7\n") := by native_decide
+/-- Without the pin, nothing says that a `pk` has a second type argument,
+    so the dispatch cannot open it, and `Run` does not type. -/
+example : openDemo.checkTypes { openSigs with pins := [[], [none, none]] } openSlots = false := by
+  native_decide
+
 /-- A chain of `n` dispatch-shaped tests ending in an ill-typed literal. -/
 def pinChain (tag f : Nat) : Nat → Expr
   | 0 => str "x"
