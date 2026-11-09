@@ -26,6 +26,7 @@ import OpenVerse.Front.Rational
 import OpenVerse.Front.Modules
 import OpenVerse.Front.FnValues
 import OpenVerse.Front.Choice
+import OpenVerse.Front.Refine
 import Std.Data.HashMap
 
 namespace OpenVerse.Front
@@ -251,6 +252,9 @@ structure TyEnv where
       generic function or struct definition, the type arguments of a struct
       construction when its field defaults are elaborated. -/
   tvars : List (String × Ty) := []
+  /-- The branches of casts that refine type arguments asked for in an
+      earlier elaboration (#243), each lifted into a function. -/
+  castRequests : List Refine.Lift := []
   deriving Inhabited
 
 /-- The fields of struct `n` applied to the type arguments `args`. -/
@@ -1070,6 +1074,9 @@ structure ESt where
   /-- Where the function calls `Err()` first, if it does: a function whose
       values are all computed at a call (#235) may reach none. -/
   errAt : Option Pos := none
+  /-- Branches of casts that refine type arguments, to lift into functions
+      (#243): the program is elaborated again, with them. -/
+  castNeeds : List Refine.Lift := []
   deriving Inhabited
 
 abbrev EM := StateT ESt (Except String)
@@ -1924,6 +1931,54 @@ def checkNewLocal (ctx : Ctx) (p : Pos) (n : String) : EM Unit := do
         ((ctx.types.methodOverloads.lookup n).map (·.any (ctx.hasMethod c ·))).getD false then
       eerr p s!"'{n}' is already a field or method of {c}; Verse does not allow shadowing"
 
+/-- The type parameters a type mentions, with whether each is comparable. -/
+partial def Ty.paramsC : Ty → List (String × Bool)
+  | .param n c => [(n, c)]
+  | .arr t | .opt t => t.paramsC
+  | .tup ts | .struct _ ts => ts.flatMap Ty.paramsC
+  | .map k v => k.paramsC ++ v.paramsC
+  | _ => []
+
+/-- A cast `T[X]`, `X` of type `xty`, that holds only under a refinement of
+    the code's type parameters (#243): `T` fixes or repeats type arguments
+    of `X`'s class, which agree with `X`'s only when they are unified (as
+    `elabCast` refuses). `X`'s class and type arguments, `T`'s type
+    arguments, the classes the cast tests for, and the equations of the
+    refinement; `none` for any other cast. -/
+def refiningCast? (env : TyEnv) (T : String) (xty : Ty) :
+    Option (String × List Ty × List Ty × List String × List (Ty × Ty)) := do
+  let .struct S sargs := xty | none
+  if !env.classes.contains S || !env.classes.contains T then none
+  if (env.sparams.lookup T).isNone && (env.coreArgs T []).isEmpty then none
+  if !(env.isSub S T || env.isSub T S) then none
+  let targs := if env.isSub S T then env.upArgs S sargs T else env.argsBelow S sargs T
+  let rargs := env.coreArgs S sargs
+  let cargs := env.coreArgs T targs
+  if cargs.length > rargs.length || cargs == rargs then none
+  let common := (env.concreteBelow S).filter (env.isSub · T)
+  if common.isEmpty then none
+  let eqs := rargs.zip cargs
+  if (Ty.unifyEqs (fun _ _ => none) [] eqs).isNone then none
+  some (S, sargs, targs, common, eqs)
+
+/-- What, in the branch of a cast that refines type arguments, would not
+    mean the same once the branch is a function of its own (#243): its
+    position and what it is. `muts` are the `var`s it uses from outside. -/
+def refineBranchWhy? (ctx : Ctx) (p : Pos) (body : SExpr) (muts : List String) : Option (Pos × String) :=
+  if ctx.selfClass.isSome then some (p, "it cannot be in a method yet, where it would lose Self")
+  else if ctx.inDefer || ctx.inCtor || ctx.inBlock || ctx.inParamDefault || ctx.inArm || ctx.inBranch ||
+      !ctx.defaults.isEmpty || ctx.inDefaultCheck then
+    some (p, "it cannot be here yet (in a defer:, a constructor, a block:, a default, or an arm of a concurrent expression)")
+  else if let some e := Refine.findPart (fun | .ret .. => true | _ => false) false body then
+    some (e.pos, "it cannot have a return yet")
+  else if let some e := Refine.findPart (fun | .brk _ => true | _ => false) true body then
+    some (e.pos, "it cannot have a break that leaves it yet")
+  else if let some e := Refine.findPart (fun
+      | .set _ l _ _ => (Choice.rootName? l).any muts.contains
+      | _ => false) false body then
+    some (e.pos, "it cannot set a var from outside it yet")
+  else none
+
 mutual
 partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
   match se with
@@ -2247,6 +2302,11 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
     if !(r.e.mayFail ctx.sigProg) && (← get).fnNeeds.isEmpty then eerr p "logic{…} needs an expression that can fail"
     return ⟨Expr.logicE r.e, .logic⟩
   | .ite p conds thenE elseE =>
+    -- (a cast that refines type arguments, as the whole condition, #243)
+    if let [.decl dp d none false (.app _ (.ident _ T) [x] true)] := conds then
+      match ← elabRefinedIf ctx p dp d T x thenE elseE exp with
+      | some r => return r
+      | none => pure ()
     let (rc, ctxT) ← if Choice.hasChoice conds then elabOneClauses { ctx with canFail := true } conds
       else elabSeq { ctx with canFail := true, inTaking := true } conds none
     -- (not while a function value is asked for, #214, #231: a call through
@@ -3430,7 +3490,7 @@ partial def elabCast (ctx : Ctx) (p : Pos) (T : String) (args : List SExpr) (bra
     eerr p s!"no class is below both {r.ty.show} and {T}, so {T}[…] would always fail"
   if parametric && env.coreArgs T targs != env.coreArgs S sargs then
     if (Ty.unifyEqs (fun _ _ => none) [] ((env.coreArgs S sargs).zip (env.coreArgs T targs))).isSome then
-      eerr p s!"cannot cast {withArticle r.ty.show} to {(Ty.struct T targs).show} yet: their type arguments agree only under a refinement, which a cast does not give (#209)"
+      eerr p s!"cannot cast {withArticle r.ty.show} to {(Ty.struct T targs).show} here: their type arguments agree only under a refinement, which a cast gives only as the whole condition of an if, D := {T}[X], whose branch is then typed under it (#209, #243)"
     eerr p s!"a {r.ty.show} is never a {T}: their type arguments differ, so {T}[…] would always fail"
   -- a reference: a test of its object's class (#34)
   if env.isRefClass S then return ⟨.heap (.isTag (common.map env.tagOf)) [r.e], tty⟩
@@ -3442,6 +3502,119 @@ partial def elabCast (ctx : Ctx) (p : Pos) (T : String) (args : List SExpr) (bra
     acc := .ite (.assign td (.prim .query [.prim (.tupGet j) [.local x]])) (classWrap env T d (.local td)) acc
   let y ← fresh (.struct T [])
   return ⟨.seq (.assign x r.e) (.assign y acc), .struct T []⟩
+
+/-- `if (D := T[X]) then Body else Else`, where the cast holds only under a
+    refinement of the code's type parameters (#243). `Body` is lifted into
+    a generic function (`Refine.functions`), asked for in a first
+    elaboration, which elaborates `Body` in the refined world to find its
+    type, effects and the locals it uses. Then the `if` is a dispatch to
+    it, one test per set of pins among the classes tested, as a refined
+    method call is: `Typed.dispatch` types the call under the refinement,
+    with the object (as `D`) and those locals passed at their refined
+    types. `none` when the cast does not refine: the plain path. -/
+partial def elabRefinedIf (ctx : Ctx) (p _dp : Pos) (D T : String) (x : SExpr) (body : SExpr)
+    (elseE : Option SExpr) (exp : Option Ty) : EM (Option R) := do
+  let env := ctx.types
+  if !env.classes.contains T then return none
+  let st0 ← get
+  let rx ← elabE { ctx with canFail := true, inTaking := true } x none
+  let some (S, sargs, targs, common, eqs) := refiningCast? env T rx.ty | do set st0; return none
+  if !env.isRefClass S then set st0; return none
+  let coreFields (n : String) (ts : List Ty) : Option (List Ty) :=
+    if env.classes.contains n then none else some ((env.fields n ts).map (·.2.1))
+  let some μT := Ty.unifyEqs coreFields [] eqs | do set st0; return none
+  let shown := (Ty.struct T targs).show
+  -- (the locals the branch uses, in order of first use)
+  let caps : List Local := (Choice.namesUsed body).filterMap fun n =>
+    if n == D then none else ctx.locals.find? (·.name == n)
+  if let some (q, what) := refineBranchWhy? ctx p body ((caps.filter (·.mutable)).map (·.name)) then
+    eerr q s!"the branch of the cast to {shown}, which holds only under a refinement of the type arguments, is compiled as a function of its own, so {what} (#243)"
+  let key := Refine.keyOf p D
+  match env.castRequests.find? (·.key == key) with
+  | none =>
+    -- (first: the branch in the refined world)
+    let refine (t : Ty) : Ty := t.subst μT
+    let dTy := refine (.struct T targs)
+    let dslot ← fresh dTy
+    let ctxB : Ctx := { ctx with
+      locals := { name := D, slot := dslot, ty := dTy, mutable := false } ::
+        ctx.locals.map fun l => { l with ty := refine l.ty },
+      types := { env with tvars := env.tvars.map fun (n, t) => (n, refine t) },
+      suspends := false }
+    -- (its own effects, which its function declares; the enclosing one's too)
+    let fx0 := (← get).fx
+    modify fun st => { st with fx := [] }
+    let rb ← elabE ctxB body (if elseE.isNone then some .void else exp.map refine)
+    let fxB := (← get).fx
+    modify fun st => { st with fx := fx0 }
+    for (k, q, via) in fxB do noteFx q [k] via
+    let re ← match elseE with
+      | none => pure (⟨.lit .void, .void⟩ : R)
+      | some ee => elabE ctx ee exp
+    let τ' : Ty := if elseE.isNone then .void else exp.getD re.ty
+    let ret := refine τ'
+    discard <| coerce p rb ret
+    let decides := rb.e.mayFail ctx.sigProg
+    let sig := caps.map fun l => (l.name, refine l.ty)
+    let tps := ((dTy :: ret :: sig.map (·.2)).flatMap Ty.paramsC).foldl
+      (fun acc (n, c) => if acc.any (·.1 == n) then acc else acc ++ [(n, c)]) []
+    if let some (n, _) := tps.find? fun (n, _) => !ctx.dictVars.contains n then
+      eerr p s!"cannot lift the branch of the cast to {shown} yet: its types mention {n}, which this function has no value of (#243)"
+    let σ := env.tvars.filterMap fun (n, t) =>
+      let t' := refine t
+      if t' == t then none else some (n, t'.toSTy)
+    let heap := ["reads", "writes", "allocates"].filter fun k => fxB.any (·.1 == k)
+    let specs := (if heap.isEmpty then ["computes"] else heap) ++ (if decides then ["decides"] else [])
+    let lift : Refine.Lift := {
+      pos := p, bound := D, target := T,
+      name := s!"$refine{p.line}_{p.col}_{D}" ++ (if p.file.isEmpty then "" else s!"_{p.file}"),
+      params := ((D, dTy) :: sig).map fun (n, t) => { name := n, ty := t.toSTy },
+      tparams := tps.map fun (n, c) => { pos := p, name := n, constraint := if c then "comparable" else "type" },
+      specs, ret := ret.toSTy, subst := σ }
+    modify fun st => if st.castNeeds.any (·.key == key) then st else { st with castNeeds := st.castNeeds ++ [lift] }
+    -- (a placeholder: this elaboration goes no further)
+    return some ⟨if decides then .prim .fail [] else .prim .userErr [], τ'⟩
+  | some l =>
+    -- (then: the object in a slot, and one dispatch per set of pins)
+    let (pre, y) ← match rx.e with
+      | .local y => pure ([], y)
+      | e => do
+        let y ← fresh rx.ty
+        pure ([Expr.assign y e], y)
+    let re ← match elseE with
+      | none => pure (⟨.lit .void, .void⟩ : R)
+      | some ee => elabE ctx ee exp
+    let τ' : Ty := if elseE.isNone then .void else exp.getD re.ty
+    let eE ← coerce p re τ'
+    let rargs := env.coreArgs S sargs
+    let atR := rargs.zipIdx.map fun (r, j) => (pinArg j, r)
+    let needOf (pins : List (Option Ty)) := (rargs.zip pins).filterMap fun (a, pin) => match pin with
+      | some pt => let pt := pt.subst atR; if a == pt then none else some (a, pt)
+      | none => none
+    let mut parts : Array (List (Option Ty) × Array String) := #[]
+    -- (keyed by all of each class's pins, so that the classes of a test
+    -- share them, as the checker's `openCount` needs)
+    for d in common do
+      let k := env.corePins d
+      match parts.findIdx? (·.1 == k) with
+      | some pi => parts := parts.modify pi fun (k', ds) => (k', ds.push d)
+      | none => parts := parts.push (k, #[d])
+    let mut acc := eE
+    for (pins, part) in parts.toList.reverse do
+      if !VTy.pinsBelow (env.lowerPins (pins.take rargs.length)) rargs.length || pins.length > rargs.length then
+        eerr p s!"cannot cast {withArticle rx.ty.show} to {shown} yet: class {part[0]!} relates its type arguments to ones that {S} does not have (#209, #243)"
+      -- (no object of `part` can be this one: no test)
+      let some μF := Ty.unifyEqs coreFields [] (needOf pins) | continue
+      let dL : Local := { name := D, slot := y, ty := (Ty.struct T targs).subst μF, mutable := false }
+      let ctx' := { ctx with locals := dL :: ctx.locals.map fun loc => { loc with ty := loc.ty.subst μF } }
+      let rc ← elabApp ctx' p (.ident p l.name) (l.params.map fun sp => .ident p sp.name)
+        (l.specs.contains "decides") (some (τ'.subst μF))
+      let .call fi (.local s0 :: es) := rc.e
+        | eerr p s!"cannot lift the branch of the cast to {shown} yet: its call is not a plain one (#243)"
+      if s0 != y then eerr p s!"cannot lift the branch of the cast to {shown} yet (#243)"
+      acc := .ite (.heap (.isTag (part.toList.map env.tagOf)) [.local y]) (.call fi (.local y :: es)) acc
+    let t ← fresh τ'
+    return some ⟨pre.foldr Expr.seq (.assign t acc), τ'⟩
 
 /-- A call of a generic function. Its type arguments are inferred by matching
     its signature: the result type against the expected type (unless that is
@@ -4786,6 +4959,9 @@ structure Compiled where
   /-- Functions wanted as values at closed function types no class of
       theirs gives (#214): the program is elaborated again, with them. -/
   fnNeeds : List (String × Ty) := []
+  /-- Branches of casts that refine type arguments, to lift (#243): the
+      program is elaborated again, with them. -/
+  castNeeds : List Refine.Lift := []
 
 /-- Names a type parameter cannot have. -/
 def typeNames : List String :=
@@ -4820,6 +4996,9 @@ structure Options where
       also print that function's Verse Core, its slot types and signature,
       for a bug report (`OPENVERSE_DEBUG=1`). -/
   debug : Bool := false
+  /-- Branches of casts that refine type arguments, found in an earlier
+      elaboration (#243): a function for each. -/
+  castRequests : List Refine.Lift := []
 
 /-- A class or interface definition, as parsed. -/
 structure CDef where
@@ -6087,6 +6266,9 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   let resolved ← resolveModules (allTops000 ++ rawEntry)
   -- functions with several values (#235): inlined at their calls
   let resolved ← Choice.inlineMulti resolved
+  -- the branches of casts that refine type arguments, as functions (#243)
+  -- (in front, as the entry expression is the end)
+  let resolved := Refine.functions opts.castRequests resolved ++ resolved
   -- (the helpers after: they name nothing of the program's)
   -- function values (#210): the function types' interfaces, and a class
   -- for each function used as a value
@@ -6590,7 +6772,8 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
                              let i := henv.info d
                              if i.isIface || i.isAbstract then m else
                              (henv.supers d).foldl (fun m T => m.insert T ((m[T]?.getD []) ++ [d])) m) {},
-                           abstracts := abstracts.toList, fnRequests := opts.fnRequests }
+                           abstracts := abstracts.toList, fnRequests := opts.fnRequests,
+                           castRequests := opts.castRequests }
   env := { env with varFields := varFields, uniques := uniques,
                     overriders := (overridePairs.toList.map fun (_, dm, _) => (dm.splitOn ".").headD "") ++
                       (implChecks.toList.map fun (_, _, impl, _) => (impl.splitOn ".").headD "") }
@@ -6739,7 +6922,9 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       if (env.concreteBelow d).any (fun d' => d' != d && env.coreFieldTy d' f != τ) &&
           !fieldAcc.contains (d, f) then
         fieldAcc := fieldAcc.push (d, f)
-  let fixers := fixers ++ accFixers.toList
+  -- (#243) and the classes refining casts test for, by their target
+  -- (whose pins the dispatch to the cast's branch refines by)
+  let fixers := fixers ++ accFixers.toList ++ env.castRequests.map (·.target)
   env := { env with pinned := env.classes.filter fun d => fixers.any fun f => d == f || (env.supers d).contains f,
                     fieldAcc := fieldAcc.toList }
   -- (#157) a hidden class below each generic class or interface whose
@@ -7185,7 +7370,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   let elabFn (env : TyEnv) (p : Pos) (name : String) (ps : List SParam) (ptys : List Ty) (ret : Ty)
       (decides : Bool) (allowed : List String) (tps : List (String × Bool)) (body : SExpr)
       (suspends : Bool := false) (selfTps : List String := []) :
-      Except String (Fn × List VTy × List (String × Ty) × Option Pos) := do
+      Except String (Fn × List VTy × List (String × Ty) × Option Pos × List Refine.Lift) := do
     -- (#209) the values of `selfTps` come from the receiver's hidden
     -- fields, in slots after the hidden parameters
     let dictTps := tps.filter (fun (v, _) => !selfTps.contains v) ++ tps.filter (fun (v, _) => selfTps.contains v)
@@ -7223,7 +7408,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     fxCheck name allowed st
     return ({ name, arity, nslots := st.nslots, decides, writes := allowed.contains "writes",
               body := initPrefixE arity inits e },
-      st.slotTys.toList.map (Ty.toVTy env), st.fnNeeds, st.errAt)
+      st.slotTys.toList.map (Ty.toVTy env), st.fnNeeds, st.errAt, st.castNeeds)
   -- (the accessors come right after the functions, #157)
   env := { env with fieldAccBase := tops.length + gsigs.size }
   let genvOf (g : Sig) : TyEnv := { env with tvars := g.tparams.map fun (v, c) => (v, Ty.param v c) }
@@ -7232,12 +7417,14 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   let mut fnNeeds : List (String × Ty) := []
   -- (where each function calls `Err()`, by its index, #235)
   let mut errs : Array (Option Pos) := #[]
+  let mut castNeeds : List Refine.Lift := []
   for (top, idx) in tops.zip (List.range tops.length) do
     let sig := sigs[idx]!
     match top with
     | .fn p n ps _ _ _ body =>
-      let (fn, tys, needs, err) ← elabFn env p n ps sig.params sig.ret sig.decides sig.fx [] body sig.suspends
+      let (fn, tys, needs, err, casts) ← elabFn env p n ps sig.params sig.ret sig.decides sig.fx [] body sig.suspends
       fnNeeds := fnNeeds ++ needs
+      castNeeds := castNeeds ++ casts
       fns := fns.push fn
       errs := errs.push err
       slotTys := slotTys.push tys
@@ -7250,6 +7437,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       let (r, st) ← (elabStmt ctx body (some sig.ret)).run { env }
       let (e, st) ← (coerce p r.1 sig.ret).run st
       fnNeeds := fnNeeds ++ st.fnNeeds
+      castNeeds := castNeeds ++ st.castNeeds
       let tys := st.slotTys.toList.map (Ty.toVTy env)
       -- slots start like a function's (a class-typed one as a placeholder)
       let inits ← match st.slotTys.toList.mapM (slotDefault env 0 [] []) with
@@ -7268,9 +7456,10 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   for (top, g) in generics.zip gsigs.toList do
     match top with
     | .fn p n ps _ _ _ body =>
-      let (fn, tys, needs, err) ← elabFn (genvOf g) p n ps g.params g.ret g.decides g.fx g.tparams body g.suspends
+      let (fn, tys, needs, err, casts) ← elabFn (genvOf g) p n ps g.params g.ret g.decides g.fx g.tparams body g.suspends
         g.selfTps
       fnNeeds := fnNeeds ++ needs
+      castNeeds := castNeeds ++ casts
       fns := fns.push fn
       errs := errs.push err
       slotTys := slotTys.push tys
@@ -7278,8 +7467,11 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   -- (#214) functions wanted as values at types no class of theirs gives:
   -- the program is elaborated again, with classes for them, so this one,
   -- with placeholders, goes no further
-  if !fnNeeds.isEmpty then
-    return { prog := default, sigs := { fns := [] }, slotTys := [], fnNeeds := fnNeeds.eraseDups }
+  -- (#243) and branches of casts that refine type arguments, lifted into
+  -- functions
+  if !fnNeeds.isEmpty || !castNeeds.isEmpty then
+    let casts := castNeeds.foldl (fun acc l => if acc.any (·.key == l.key) then acc else acc ++ [l]) []
+    return { prog := default, sigs := { fns := [] }, slotTys := [], fnNeeds := fnNeeds.eraseDups, castNeeds := casts }
   let mainSig ← match sigs.toList.find? (·.name == (if opts.entry.isSome then "$Do" else "Main")) with
     | some s =>
       if s.isConst || !s.params.isEmpty then throw "Main must be a function with no parameters"
@@ -7410,9 +7602,19 @@ def elabProgram (allTops00 : List STop) (opts : Options := {}) : Except String C
   -- types: each round asks for new ones only, so a few rounds do
   let rec go (fuel : Nat) (opts : Options) : Except String Compiled := do
     let c ← elabProgramCore allTops00 opts
+    -- (#243) and with the branches of casts that refine type arguments
+    let casts := c.castNeeds.filter fun l => !opts.castRequests.any (·.key == l.key)
     match fuel, c.fnNeeds.filter (!opts.fnRequests.contains ·) with
-    | fuel + 1, new@(_ :: _) => go fuel { opts with fnRequests := opts.fnRequests ++ new }
-    | _, [] => return c
+    | fuel + 1, new@(_ :: _) =>
+      go fuel { opts with fnRequests := opts.fnRequests ++ new, castRequests := opts.castRequests ++ casts }
+    | fuel + 1, [] =>
+      if casts.isEmpty then
+        if c.castNeeds.isEmpty then return c
+        throw "internal error: a cast that refines type arguments was asked for again (#243)"
+      go fuel { opts with castRequests := opts.castRequests ++ casts }
+    | 0, [] =>
+      if c.castNeeds.isEmpty then return c
+      throw "internal error: casts that refine type arguments still to lift after several elaborations (#243)"
     -- (a program with a placeholder left is never given out)
     | 0, _ :: _ => throw "internal error: functions still wanted as values after several elaborations (#214)"
   (go 4 opts).mapError fun msg =>

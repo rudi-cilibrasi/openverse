@@ -456,7 +456,28 @@ circle := class(shape, labelled):
   overrides start their variables of those types with. A class below
   such a class can fix or repeat those type arguments (`leaf :=
   class(mid(int, string))` below `mid(a, b) := class(expr(tuple(a, b)))`)
-  and override too. An interface can be parametric too (#53):
+  and override too. A cast in generic code that holds only under such a
+  refinement is pattern matching on the class, as in a GADT (#243): as the
+  whole condition of an `if`, `D := T[X]` types the branch it guards under
+  the refinement, where the code's type parameters are unified as `T`'s
+  type arguments say (written types in the branch included):
+
+  ```verse
+  Eval(E:expr(t) where t:type):t =
+      if (L := lit[E]) then L.V                         # t = int here
+      else if (A := add[E]) then Eval(A.L) + Eval(A.R)  # t = int here
+      else Err()
+  ```
+
+  The branch is compiled as a function of its own, generic over the
+  enclosing function's type parameters, that takes the object (as `D`) and
+  the locals the branch uses, at their refined types; the `if` becomes a
+  dispatch to it, which Verse Core types as it types a refined method call
+  (`Typed.dispatch`), so nothing is assumed in Verse Core. So that the
+  branch means the same there, it cannot have a `return`, a `break` that
+  leaves it, or a `set` of a `var` from outside it (it reads one's value
+  when the cast runs), and it cannot be in a method, for now.
+  An interface can be parametric too (#53):
   `container(t) := interface: Get():t`, with `box(t) := class(container(t))`.
   A class gives the interfaces above it exactly its own Verse Core type
   arguments (`box(t)` gives `container` `t`; a class implementing
@@ -514,7 +535,10 @@ circle := class(shape, labelled):
     class, to a subclass whose fixed type arguments relate to ones the
     receiver's type does not have (#209); a cast `T[X]` whose type
     arguments agree with `X`'s only under a refinement (`dup[P]` for
-    `P:pair(a, b)`, #209); a variable, in generic code, of a class or
+    `P:pair(a, b)`) other than as the whole condition of an `if`, whose
+    branch has a `return`, a `break` that leaves it or a `set` of a `var`
+    from outside it, or in a method, and one that would open type
+    arguments (`pairE[E]` for `E:expr(t)`) (#243); a variable, in generic code, of a class or
     interface type that requires an instance of itself (`Next:node(t)`)
     at type arguments that every class below it fixes otherwise: its
     hidden placeholder object (#157) would have to hold itself; a class
