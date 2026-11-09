@@ -663,10 +663,39 @@ Main():void =
   back or kept as the caller's are; the caller needs the callee's declared
   effects, as for any call. The function itself is still checked
   as any function is (types, effects, `<decides>`), with each choice read
-  as any of its alternatives. Refused for now: one that calls itself,
-  directly or not, a generic or overloaded one, one with named parameters
-  or a `return` or a `defer:` of its own (in its body, not in a block inside it), a method, one used as a function value, a call of one in
-  an `if`'s branch, and, since its body is inlined where other names may be
+  as any of its alternatives.
+
+  A recursive one (that calls itself, directly or not) is not inlined: if
+  it is `<computes>`, keeps no local state (no `var`, no `set`), and nothing
+  it may run prints or calls `Err()`, its values are computed at the call,
+  all of them, in order, as an array the call then takes them from (#235).
+  What it may run is followed through its Verse Core code, so through every
+  call: the functions it calls, each implementation a method call may
+  dispatch to, each function of a function value's type that the program
+  uses as a value, the field defaults and `block:` clauses of the classes and
+  structs it constructs, the constants it uses, and the defaults of the
+  parameters its calls omit. An argument of such a call that fails gives no
+  values for that call alone, as a failing clause does.
+
+  Computing all the values first is the same as taking them one by one,
+  since nothing it runs has an effect, as long as computing them all stops
+  without an error. If it does not stop (infinitely many values), or stops
+  the program with an error (an overflow, the recursion limit), so does the
+  call, even where only the first success is taken and a value before the
+  error would have been it.
+
+  ```verse
+  Upto(A:int, B:int)<computes><decides>:int =
+      A <= B
+      A | Upto[A + 1, B]
+  Main():void =
+      if (X := Upto[1, 10], X * X > 50) then Print("{X}")   # 8
+  ```
+
+  Refused for now: a recursive one that is not `<computes>`, or may print or
+  call `Err()`, a generic or overloaded one, one with named parameters
+  or a `return` or a `defer:` of its own (in its body, not in a block inside it), a method, one used as a function value, a call of a
+  recursive one in an `if`'s branch, a choice's alternative or a `set`'s path, and, since its body is inlined where other names may be
   in scope, one whose name, or a name its body uses from outside, is also
   the name of a parameter, local, field or method anywhere in the program.
   `Main` never has several values.
@@ -1098,6 +1127,6 @@ Main()<suspends>:void =
 arithmetic on rationals (see [rational](#rational)), float functions beyond those of [float](#float),
 the class features listed under [Classes](#classes), struct methods (Verse structs have none; classes do),
 `weak_map`, module paths `using{/Verse.org/…}` (accepted and ignored), overloading beyond [Overloading](#overloading), nested
-functions and lambdas (not released in Verse), choice beyond [Choice](#choice) (recursive or generic functions with several values, methods with several values; a choice inside a block, a struct construction, a named argument or an alternative), concurrency beyond [Concurrency](#concurrency) (`subscribable_event()` without a value), and effect checking
+functions and lambdas (not released in Verse), choice beyond [Choice](#choice) (recursive functions with several values that have effects, generic ones, methods with several values; a choice inside a block, a struct construction, a named argument or an alternative), concurrency beyond [Concurrency](#concurrency) (`subscribable_event()` without a value), and effect checking
 other than `<decides>` and the heap effects (`<converges>` is accepted and
 ignored).

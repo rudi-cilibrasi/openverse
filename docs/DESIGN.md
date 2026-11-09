@@ -150,7 +150,34 @@ order, then the body's clauses follow, then its value's name. Names made
 while lifting an inlined body carry the call site, so two calls of one
 function in a clause list cannot clash. Recursive functions with several
 values would need resumable generators, with effects kept out of the
-rollback (see #235). Effect-free ones are the planned next step.
+rollback (see #235). For the effect-free ones there is a simpler way,
+which is what is done: since evaluation order then changes nothing, their
+values can be computed at the call, eagerly. Each recursive one, and each
+one with several values it calls, gets `F$all(params) : []t`, whose body is
+one `for` over `F`'s clauses (lifted as everywhere), each choice there a
+generator over the array of its alternatives' values (`Concatenate` of
+them), each call of such a function a generator over its `$all` array,
+and whose value is `F`'s. A call of `F` elsewhere is a choice over the
+elements of `F$all(args)` (`$each`): a generator in a `for`, and a `for`
+over them in the filter of the first success. This is the list monad,
+with Verse's own `for` as its bind, so the values come in spatial order.
+An alternative is the array of its own clauses' values, so a failing one,
+or one whose argument fails, adds nothing and the others still count; a
+call's arguments are bound as clauses before its array is computed, so in
+a `for` their failure rolls back the clauses before them, as anywhere.
+The cost: all values are computed even where one is taken, so an
+infinite generator never stops, and an error (an overflow) in a value a
+first success would not have reached stops the program.
+
+Effect-freedom is checked on Verse Core, after elaboration (`checkEager`),
+not on the source: every call `F$all` may make is there, including the
+dispatch of a method call to each implementation below the receiver's
+class, a call through a function value to each value class of its type,
+constructors, constants and parameter defaults (elaborated at the call).
+Reaching `Print` or `Err()` is refused (`Err()` by where each function's
+elaboration met it, since the elaborator also uses `userErr` for code that
+cannot run). The checks on `F`'s own body, `<computes>` and no `var` or
+`set`, stay on the source.
 
 The emitted code ends its filters with `fail; void` and its success with
 `break; void`, not a bare `fail` or `break`. Code ending with a bare one
