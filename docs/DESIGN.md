@@ -185,31 +185,29 @@ apart.
 
 A `return` in such a function's body (#283) is taken out where the body
 is inlined (`Choice.elimReturns`). An `if` with a `return` in a branch,
-`S; if (C) { T } else { U }; R`, becomes guarded alternatives, each branch
-followed by the rest: `S; $k := if (C) then 0 else 1;
-block{ $k = 0; T; R } | block{ $k = 1; U; R }`. A `return v` ends its
-alternative with the value `v`, so the rest is left out after a branch that
-always returns, and the common guard `if (C) { return v }` copies nothing.
-The guard comes first in each alternative. The other alternative stops
-before any of its clauses, and in a `for` the choice is a generator
-*before* the branch's effects, where the `if` was none. A choice after them
-(an option per branch, then a choice between "returned" and the rest) is a
-generator boundary after the effects, which would keep them when a later
-filter fails: tim-e1's model found that in #312's review. A branch's own
-names, and its condition's, are renamed for it (`$k…'N`), so the rest may
-declare the same ones. The alternatives are compiled as #296 composes
-choices, and their blocks are lifted as in #302. The condition runs once.
-A condition that binds names goes through an option instead:
-`$k := option{C; (names)}`, then the names from `$k?` in the first
-alternative and `not $k?` in the second. The last statement's branches
-return their values (`tailReturns`), and a `return` without a value gives
-`()`. Rest copied into branches that both fall through, and #296's copying
-of the clauses after a composed choice, double the code with each such
-`if`, so a function with more than 16 of them is refused for now. A
-`return` elsewhere (in a loop, a condition, an expression), or in a
-recursive one, is refused. The transformation always makes a choice, so
-it only applies to functions that have several values on their own (a
-choice in a `return`'s value counts).
+`S; if (C) { T } else { U }; R`, becomes the value
+`S; if (C) then block{ T; R } else block{ U; R }`, a `return v` ending its
+block with the value `v`. The rest is left out after a branch that always
+returns, and the condition binds its names for its branch natively. A
+branch's own names, and its condition's, are renamed for it (`$k…'N`), so
+the rest copied into it may declare the same ones. No choice is added,
+and that is the point. In a `for`, every choice is a generator, and what
+came before a generator is kept when a later filter fails. Any encoding
+with a choice (guarded alternatives, an option per branch then a choice
+of "returned or not") makes the `if` such a boundary, where the program
+had none. tim-e1's model found it twice in #312's review: prints in the
+branch, then before the `if`, survived a rejected value. Even the
+caller's earlier clauses would show it. So it applies only when the
+branches and the rest have no choice of their own (`plainReturns`); a
+choice after the `if`, or in a `return`'s value, is refused for now. That
+needs an exclusive choice compiled in a `for` without a generator
+boundary: each path's clauses up to its first generator in the enclosing
+iteration's filter, under a selector. The last statement's branches return
+their values (`tailReturns`), and a `return` without a value gives `()`.
+The rest copied into branches that fall through doubles the code with
+each such `if`, so a function with more than 16 is refused. A `return`
+elsewhere (in a loop, a condition, an expression), or in a recursive one,
+is refused.
 
 A function with several values (#235) is inlined before elaboration, by
 `Choice.inlineMulti`, which runs right after module resolution. A method
