@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# Model-based fuzzing of generic functions with several values (#235, #282): random
+# programs from an independent model (scripts/models/generic_mv.py, from the review of
+# #282) that call such functions on all three paths (inlined, taken lazily, computed at
+# the call), at several types, from for, first-success and <decides> consumers, generic
+# ones too, with arguments that print or choose. The model predicts each program's output,
+# or that it is refused. Lean must match the model, and C must match Lean; no program may
+# hit an internal error. A program that runs out of fuel (exit 3) is skipped.
+#   usage: scripts/fuzz-model-generic.sh [COUNT [FIRST_SEED]]
+set -uo pipefail
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+n="${1:-60}"; first="${2:-1}"
+ov="$root/.lake/build/bin/openverse"; cv="$root/runtime/build/cverse"
+tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
+ran=0; ref=0; fuel=0; bad=0
+declare -A paths
+for ((s=first; s<first+n; s++)); do
+  save() { cp "$tmp/p.verse" "$root/fuzz-model-generic-$s.verse"; cp "$tmp/p.expected" "$root/fuzz-model-generic-$s.expected"; }
+  python3 -I "$root/scripts/models/generic_mv.py" "$s" "$tmp" 2> "$tmp/gen.err" ||
+    { bad=$((bad+1)); echo "GENERATOR FAILED seed $s: $(tail -1 "$tmp/gen.err")"; continue; }
+  for p in $(sed -n 's/^paths=\([^ ]*\).*/\1/p' "$tmp/p.meta" | tr , ' '); do paths[$p]=$(( ${paths[$p]:-0} + 1 )); done
+  rm -f "$tmp/p.vbc"
+  timeout 60 "$ov" run "$tmp/p.verse" --emit "$tmp/p.vbc" > "$tmp/l.out" 2> "$tmp/l.err"; le=$?
+  if [[ $le -eq 3 ]]; then fuel=$((fuel+1)); continue; fi
+  { cat "$tmp/l.out"; echo "exit=$le"; } > "$tmp/l.full"
+  if grep -qi "internal" "$tmp/l.err" || ! cmp -s "$tmp/l.full" "$tmp/p.expected"; then
+    bad=$((bad+1)); save
+    echo "MODEL MISMATCH seed $s (Lean exit $le, saved fuzz-model-generic-$s.verse): $(head -c 200 "$tmp/l.err") [$(cat "$tmp/p.meta")]"
+    continue
+  fi
+  [[ $le -eq 4 ]] && { ref=$((ref+1)); continue; }
+  [[ -s "$tmp/p.vbc" ]] || { bad=$((bad+1)); save; echo "NO BYTECODE seed $s"; continue; }
+  (ulimit -v 4000000; timeout 60 "$cv" "$tmp/p.vbc") > "$tmp/c.out" 2> /dev/null; ce=$?
+  ran=$((ran+1))
+  if [[ $ce -ne $le ]] || ! cmp -s "$tmp/l.out" "$tmp/c.out"; then
+    bad=$((bad+1)); save; echo "C MISMATCH seed $s (C exit $ce, saved fuzz-model-generic-$s.verse)"
+  fi
+done
+echo "fuzz-model-generic: $n programs from seed $first, $ran ran in both, $ref refused as the model says, $fuel out of fuel, $bad bad (paths: inlined ${paths[inlined]:-0}, lazy ${paths[lazy]:-0}, eager ${paths[eager]:-0})"
+[[ $bad -eq 0 ]]
