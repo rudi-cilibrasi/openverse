@@ -1850,29 +1850,44 @@ class Gen:
         L.append('    %s():string' % nm)
         L.append('    %s():int' % sz)
         ci, cg = self.fresh('ci'), self.fresh('ICg')
-        mode = R.choice(['plain', 'plain', 'before', 'after', 'extends'])
+        # ('sub': pc implements ci(t) only, and its subclasses add ni, #209)
+        mode = R.choice(['plain', 'plain', 'before', 'after', 'extends', 'sub'])
         if mode != 'plain':
             L.append('%s(t:type) := interface%s:' % (ci, '(%s)' % ni if mode == 'extends' else ''))
             L.append('    %s():int' % cg)
         parents = {'plain': ni, 'before': '%s(t), %s' % (ci, ni), 'after': '%s, %s(t)' % (ni, ci),
-                   'extends': '%s(t)' % ci}[mode]
+                   'extends': '%s(t)' % ci, 'sub': '%s(t)' % ci}[mode]
         L.append('%s(t:type) := class(%s):' % (pc, parents))
         L.append('    %s:[]t' % V)
         L.append('    %s:int' % N)
-        L.append('    %s<override>():string = "%s {%s} {%s.Length}"' % (nm, pc, N, V))
-        L.append('    %s<override>():int = %s.Length + %s' % (sz, V, N))
+        if mode != 'sub':
+            L.append('    %s<override>():string = "%s {%s} {%s.Length}"' % (nm, pc, N, V))
+            L.append('    %s<override>():int = %s.Length + %s' % (sz, V, N))
         if mode != 'plain':
             L.append('    %s<override>():int = %s * 10' % (cg, N))
         have_i, have_k = chance(0.6), chance(0.5)
-        if have_i:
-            L.append('%s := class(%s(int)):' % (ipc, pc))
-            L.append('    %s<override>():string = "%s {%s}"' % (nm, ipc, N))
-        if have_k:
-            L.append('%s(t:type) := class(%s(t)):' % (kpc, pc))
+        if mode == 'sub':
+            have_i, have_k = True, True
+            L.append('%s := class(%s(int), %s):' % (ipc, pc, ni))
+            L.append('    %s<override>():string = "%s {%s} {%s.Length}"' % (nm, ipc, N, V))
+            L.append('    %s<override>():int = %s.Length + %s' % (sz, V, N))
+            L.append('%s(t:type) := class(%s(t), %s):' % (kpc, pc, ni))
+            L.append('    %s<override>():string = "%s {%s.Length}"' % (nm, kpc, V))
             L.append('    %s<override>():int = %s.Length * 2' % (sz, V))
+        else:
+            if have_i:
+                L.append('%s := class(%s(int)):' % (ipc, pc))
+                L.append('    %s<override>():string = "%s {%s}"' % (nm, ipc, N))
+            if have_k:
+                L.append('%s(t:type) := class(%s(t)):' % (kpc, pc))
+                L.append('    %s<override>():int = %s.Length * 2' % (sz, V))
         self.out += L
         def obj():
             r = R.random()
+            if mode == 'sub':
+                if r < 0.5:
+                    return '%s{%s := array{%s}, %s := %s}' % (ipc, V, lit(), N, lit())
+                return '%s(string){%s := array{"a", "b"}, %s := %s}' % (kpc, V, N, lit())
             if have_i and r < 0.3:
                 return '%s{%s := array{%s}, %s := %s}' % (ipc, V, lit(), N, lit())
             if have_k and r < 0.55:

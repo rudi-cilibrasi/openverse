@@ -1,0 +1,7 @@
+? sbox 2 2
+? ibox 7
+? child 2
+3
+1
+101
+exit=0

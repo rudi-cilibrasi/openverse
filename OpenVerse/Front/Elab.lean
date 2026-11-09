@@ -667,17 +667,20 @@ partial def Ty.params : Ty → List String
 def pinArg (j : Nat) : String := s!"$pos{j}"
 
 /-- How many of class `d`'s Verse Core type arguments its root class
-    gives: as many as the interface at or above it that has the fewest type
-    parameters (#53, #276), else all of its own. The others are type
-    parameters added below the root, or not given by some interface, which
-    a dispatch from it opens. -/
+    gives: as many as the interface with the fewest type parameters that is
+    at or above it or above a class below it (#53, #276), else all of its
+    own. The others are type parameters added below the root, or not given
+    by some interface, which a dispatch from it opens; every class of the
+    hierarchy agrees on them, so a subclass may implement an interface
+    that gives fewer than its parent's (#209). -/
 partial def TyEnv.rootArgCount (env : TyEnv) (d : String) : Nat :=
   match (env.info d).parent with
   | some q => env.rootArgCount q
   | none =>
     let own := (env.coreArgs d (((env.sparams.lookup d).getD []).map fun (v, k) => Ty.param v k)).length
-    ((env.supers d).filter (env.info · |>.isIface)).foldl
-      (fun m i => min m ((env.sparams.lookup i).getD []).length) own
+    let subtree := env.classes.filter fun c => env.rootOf c == d
+    let ifs := (subtree.flatMap fun c => (env.supers c).filter (env.info · |>.isIface)).eraseDups
+    ifs.foldl (fun m i => min m ((env.sparams.lookup i).getD []).length) own
 
 /-- The type parameters of class `d` that are not among those its root
     class gives (#209): the ones it pins to themselves (`pinsOf`), whose
@@ -7685,7 +7688,9 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       let qargs? : Option (List STy) := if cd.isIface then none else match (henv.info cd.name).parent with
         | some q => some (((cd.parents.zip cd.parentArgs).lookup q).getD [])
         | none =>
-          let ifs := cdefs.filter fun i => i.isIface && henv.isSub cd.name i.name
+          -- (the interfaces above it or above a class below it, #209)
+          let below := cdefs.filter fun c => !c.isIface && henv.isSub c.name cd.name
+          let ifs := cdefs.filter fun i => i.isIface && below.any fun c => henv.isSub c.name i.name
           if ifs.isEmpty then none else
           -- (the type arguments it gives the interface it lists with the
           -- most, then its other type parameters, as `coreArgs` has them)
@@ -7693,7 +7698,10 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
             (fun (b : List STy) (_, qa) => if b.length < qa.length then qa else b) []
           let others := cd.tps.filter fun tp => !longest.any fun | .name v => v == tp.name | _ => false
           let fewest := ifs.foldl (fun m i => min m i.tps.length) (longest.length + others.length)
-          some (longest.take fewest)
+          -- (its Verse Core type arguments' first `fewest`: the interface's,
+          -- then its other type parameters, which are all of them when it
+          -- lists no interface itself)
+          some ((longest ++ others.map fun tp => STy.name tp.name).take fewest)
       if let some qargs := qargs? then
         for tp in (if methodsBelow then cd.tps else []) do
           if !qargs.any (fun | .name v => v == tp.name | _ => false) then
@@ -7965,13 +7973,6 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       let ps := ((env.sparams.lookup cd.name).getD []).map fun (v, k) => Ty.param v k
       for i in (env.supers cd.name).filter (env.info · |>.isIface) do
         let ia := env.upArgs cd.name ps i
-        -- (#276: the interface with the fewest is counted at the root; one
-        -- below a parent class that gives fewer than its root's count would
-        -- open type arguments that the classes above it read as given, unless
-        -- those are fixed types, which the pins give)
-        if (env.info cd.name).parent.isSome && ia.length < env.rootArgCount cd.name &&
-            ((core cd.name).drop ia.length).any (!·.params.isEmpty) then
-          throw s!"{cd.pos.show}: {cd.name} has a parent class and is below {i}, which gives it fewer type arguments than its root class does: not supported yet (#276)"
         if !(ia.isPrefixOf (core cd.name)) then
           let showArgs (ts : List Ty) : String := if ts.isEmpty then "none" else ", ".intercalate (ts.map Ty.show)
           if ia.length < (core cd.name).length then
