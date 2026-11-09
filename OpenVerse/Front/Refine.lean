@@ -77,6 +77,23 @@ partial def findPart (pr : SExpr → Bool) (outside : Bool) (e : SExpr) : Option
     | .loop .. => if outside then none else (kids e).findSome? (findPart pr outside)
     | e => (kids e).findSome? (findPart pr outside)
 
+/-- The names in a written type. -/
+partial def styNames : STy → List String
+  | .name n => [n]
+  | .arr t | .opt t => styNames t
+  | .tup ts => ts.flatMap styNames
+  | .map k v => styNames k ++ styNames v
+  | .app n ts => n :: ts.flatMap styNames
+  | .fn ps _ r => ps.flatMap styNames ++ styNames r
+
+/-- The type names written in `e` (in declarations and constructions). -/
+partial def typeNames (e : SExpr) : List String :=
+  let own : List String := match e with
+    | .decl _ _ (some t) _ _ => styNames t
+    | .construct _ _ ts _ => ts.flatMap styNames
+    | _ => []
+  own ++ (kids e).flatMap typeNames
+
 /-- `e` with the type names in `σ` substituted in the types written in it
     (declarations, constructions). -/
 partial def substTypes (σ : List (String × STy)) : SExpr → SExpr :=

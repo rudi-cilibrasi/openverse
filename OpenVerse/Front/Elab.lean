@@ -2099,6 +2099,12 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
   | .app p (.ident _ "$rush") arms false => elabConc ctx p false arms exp true
   | .app p (.ident _ "$spawn") [body] false => elabSpawn ctx p body
   | .app p (.ident _ "$branch") [body] false => elabBranch ctx p body
+  | .app _ (.ident _ "$witness") [.ident _ n] false =>
+    -- (a value of type parameter `n`, as the hidden argument of a generic
+    -- call for it: the type argument of a lifted branch (#243) that only its
+    -- written types mention)
+    let t := (ctx.types.tvars.lookup n).getD (.param n false)
+    return ⟨← witness ctx.types ctx.dictBase ctx.dictVars t, t⟩
   | .app p (.ident _ "$fxOf") [.ident _ f] false =>
     -- (an inlined call of a function with several values: its declared
     -- effects, as at a call, #235)
@@ -3567,17 +3573,31 @@ partial def elabRefinedIf (ctx : Ctx) (p _dp : Pos) (D T : String) (x : SExpr) (
     let sig := caps.map fun l => (l.name, refine l.ty)
     let tps := ((dTy :: ret :: sig.map (·.2)).flatMap Ty.paramsC).foldl
       (fun acc (n, c) => if acc.any (·.1 == n) then acc else acc ++ [(n, c)]) []
+    -- (the type parameters only the types written in the branch mention:
+    -- each through a parameter of its own, passed a value of it, so that
+    -- the call determines it)
+    let written := ((Refine.typeNames body).filterMap fun w =>
+      (env.tvars.lookup w).map refine).flatMap Ty.paramsC
+    let extra := written.foldl (fun acc (n, c) =>
+      if tps.any (·.1 == n) || acc.any (·.1 == n) then acc else acc ++ [(n, c)]) []
+    let tps := tps ++ extra
     if let some (n, _) := tps.find? fun (n, _) => !ctx.dictVars.contains n then
       eerr p s!"cannot lift the branch of the cast to {shown} yet: its types mention {n}, which this function has no value of (#243)"
+    -- (from the enclosing function's own names, also through the
+    -- refinements of the casts this one is in, as the branch is taken from
+    -- the source)
     let σ := env.tvars.filterMap fun (n, t) =>
       let t' := refine t
-      if t' == t then none else some (n, t'.toSTy)
+      match t' with
+      | .param m _ => if m == n then none else some (n, t'.toSTy)
+      | _ => some (n, t'.toSTy)
     let heap := ["reads", "writes", "allocates"].filter fun k => fxB.any (·.1 == k)
     let specs := (if heap.isEmpty then ["computes"] else heap) ++ (if decides then ["decides"] else [])
     let lift : Refine.Lift := {
       pos := p, bound := D, target := T,
       name := s!"$refine{p.line}_{p.col}_{D}" ++ (if p.file.isEmpty then "" else s!"_{p.file}"),
-      params := ((D, dTy) :: sig).map fun (n, t) => { name := n, ty := t.toSTy },
+      params := ((D, dTy) :: sig).map (fun (n, t) => { name := n, ty := t.toSTy }) ++
+        extra.map fun (n, _) => { name := s!"$type{n}", ty := .name n },
       tparams := tps.map fun (n, c) => { pos := p, name := n, constraint := if c then "comparable" else "type" },
       specs, ret := ret.toSTy, subst := σ }
     modify fun st => if st.castNeeds.any (·.key == key) then st else { st with castNeeds := st.castNeeds ++ [lift] }
@@ -3608,22 +3628,35 @@ partial def elabRefinedIf (ctx : Ctx) (p _dp : Pos) (D T : String) (x : SExpr) (
       match parts.findIdx? (·.1 == k) with
       | some pi => parts := parts.modify pi fun (k', ds) => (k', ds.push d)
       | none => parts := parts.push (k, #[d])
-    let mut acc := eE
+    -- (an object that is no local: evaluated with a test of all the
+    -- classes tested, in one condition, so that its effects roll back and
+    -- its failure takes the else when the cast fails; the dispatch then
+    -- tests each part, its end unreachable)
+    let mut acc := if pre.isEmpty then eE else .prim .userErr []
+    let mut tested : Array String := #[]
     for (pins, part) in parts.toList.reverse do
       if !VTy.pinsBelow (env.lowerPins pins) rargs.length then
         eerr p s!"cannot cast {withArticle rx.ty.show} to {shown} yet: class {part[0]!} relates its type arguments to ones that {S} does not have (#209, #243)"
       -- (no object of `part` can be this one: no test)
       let some μF := Ty.unifyEqs coreFields [] (needOf pins) | continue
       let dL : Local := { name := D, slot := y, ty := (Ty.struct T targs).subst μF, mutable := false }
-      let ctx' := { ctx with locals := dL :: ctx.locals.map fun loc => { loc with ty := loc.ty.subst μF } }
-      let rc ← elabApp ctx' p (.ident p l.name) (l.params.map fun sp => .ident p sp.name)
+      let ctx' := { ctx with
+        locals := dL :: ctx.locals.map fun loc => { loc with ty := loc.ty.subst μF },
+        types := { env with tvars := env.tvars.map fun (m, t) => (m, t.subst μF) } }
+      let argOf (sp : SParam) : SExpr :=
+        if sp.name.startsWith "$type" then .app p (.ident p "$witness") [.ident p (sp.name.drop 5).toString] false
+        else .ident p sp.name
+      let rc ← elabApp ctx' p (.ident p l.name) (l.params.map argOf)
         (l.specs.contains "decides") (some (τ'.subst μF))
       let .call fi (.local s0 :: es) := rc.e
         | eerr p s!"cannot lift the branch of the cast to {shown} yet: its call is not a plain one (#243)"
       if s0 != y then eerr p s!"cannot lift the branch of the cast to {shown} yet (#243)"
       acc := .ite (.heap (.isTag (part.toList.map env.tagOf)) [.local y]) (.call fi (.local y :: es)) acc
+      tested := part ++ tested
     let t ← fresh τ'
-    return some ⟨pre.foldr Expr.seq (.assign t acc), τ'⟩
+    if pre.isEmpty then return some ⟨.assign t acc, τ'⟩
+    let cond := pre.foldr Expr.seq (.heap (.isTag (tested.toList.map env.tagOf)) [.local y])
+    return some ⟨.assign t (.ite cond acc eE), τ'⟩
 
 /-- A call of a generic function. Its type arguments are inferred by matching
     its signature: the result type against the expected type (unless that is
