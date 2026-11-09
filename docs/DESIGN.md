@@ -893,6 +893,45 @@ class type whose classes below need more type arguments than its own
 starts as the class's hidden placeholder (#157), also for a class
 without type parameters.
 
+### Casts that refine (#243)
+
+A cast `T[X]` in generic code that holds only under a refinement of the
+code's type parameters (`dup[P]` for `P:pair(a, b)`, `lit[E]` for
+`E:expr(t)`) gives no refinement as a cast: `Typed`'s environment `Γ`
+and result type `ρ` are parameters of the inductive, so a rule typing a
+branch under `Γ.map (subst μ)` would need them made indices, and with
+them every proof by cases on a derivation. `Typed.dispatch` already
+types a call under the refinement, so the branch is made a function:
+`if (D := T[X]) then Body else Else` becomes a dispatch to
+`$refine…(D, Y₁, …)`, one test per set of pins among the classes the
+cast tests for, with `D` the tested object (the dispatch's receiver) and
+`Yᵢ` the locals `Body` uses. The function is generic over the
+enclosing function's type parameters that remain under the refinement
+`μ` (the front end's, from the cast's type arguments), takes `D` and the
+`Yᵢ` at their types under `μ`, and returns the `if`'s type under `μ`;
+the types written in `Body` have `μ` applied (`Refine.substTypes`). The tests are keyed by each class's pins on the object's
+type arguments only: the branch needs none of the arguments a class
+below adds (`dupX(t, u) := class(dup(t))`), so a test of `dup` and
+`dupX` opens nothing, and one of `dupX` alone opens its `u`, which the
+call does not mention.
+
+It takes two elaborations, as function values at closed types do
+(#214): the first finds the cast (`elabRefinedIf`), elaborates `Body`
+in the refined world (locals and `tvars` under `μ`) for its type, its
+heap effects (the function declares exactly those, plus `<decides>` if
+`Body` can fail), and the locals it uses, and records a `Refine.Lift`;
+`Refine.functions` makes the function from the branch for the next
+elaboration, which compiles the `if` as the dispatch. The cast's target
+class then counts as one that fixes type arguments, so it and the
+classes below it get pins in Verse Core. A `return`, a `break` leaving
+the branch, a `set` of an outside `var`, a suspension in the branch or
+the `else` (the dispatch would have to carry it through the lowering of
+`<suspends>` code), a cast in a method (whose branch would lose `Self`)
+and one that opens type arguments (no witnesses to pass) are refused for
+now. The placeholder classes that pinning the targets may add (#157) get
+their superclasses in `supersMap` like every class, as `refTags` asks
+whether each is below a class at every conversion of a class type.
+
 ## Typing the heap
 
 Phase 3 (#20) adds a heap of objects, each with a class tag and fields
