@@ -3269,7 +3269,7 @@ partial def elabAppBase (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (b
             -- a test is of classes with the same pins)
             let eLen := (env.pinsOf e).length
             let extOf (pins : List (Option Ty)) : List Ty :=
-              (List.range (pins.length - rargs.length)).map fun i => Ty.param s!"$ext{i}" false
+              (List.range (pins.length - rargs.length)).map fun i => Ty.param s!"$ext{i}" true
             let needOf (pins : List (Option Ty)) :=
               let rx := rargs ++ extOf pins
               let atR := rx.zipIdx.map fun (r, j) => (pinArg j, r)
@@ -3296,13 +3296,20 @@ partial def elabAppBase (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (b
                 | some pi => parts := parts.modify pi fun (k, ds') => (k, ds'.push d)
                 | none => parts := parts.push (key, #[d])
               for (pins, part) in parts.toList.reverse do
+                -- (whether an object of `part` can be the receiver, by
+                -- Verse's types)
+                if (Ty.unifyEqs (fun _ _ => none) [] (needOf pins)).isNone then continue
                 -- (pins that relate the receiver's type arguments to ones
                 -- past those of `e`, whose implementation is called: they
                 -- would instantiate `e`'s type parameters with what the
                 -- dispatch opens, which it has no values of; so no
                 -- refinement, and `e`'s implementation must take the
                 -- receiver as it is)
-                if !VTy.pinsBelow (env.lowerPins (pins.take (max eLen rargs.length))) (max eLen rargs.length) then
+                -- (unless the implementation takes no values of type arguments,
+                -- reading them from its receiver, `Sig.selfTps`)
+                let calleeDicts := ((ctx.sig? fname).map (·.ndicts)).getD 0
+                if calleeDicts != 0 &&
+                    !VTy.pinsBelow (env.lowerPins (pins.take (max eLen rargs.length))) (max eLen rargs.length) then
                   if !(needOf (env.corePins e)).isEmpty || eLen > rargs.length then
                     eerr p s!"cannot dispatch {m} on {withArticle (Ty.struct c targs).show} to class {part[0]!} yet: its type arguments there relate to ones that {e} does not have (#209)"
                   let sd ← fresh (.struct e (argsAt e))
@@ -4647,7 +4654,9 @@ partial def elabConstruct (ctx : Ctx) (p : Pos) (name : String) (targs : List ST
       if blocks.isEmpty then
         -- a parametric class's object goes through a temporary of its type,
         -- which gives the checker its type arguments (#39)
-        if tas.isEmpty then return ⟨.heap (.new (ctx.types.tagOf name)) es, ty⟩
+        -- (and so does a pinned class's, whose pins may be on more type
+        -- arguments than the type it is used at, #209)
+        if tas.isEmpty && (ctx.types.corePins name).isEmpty then return ⟨.heap (.new (ctx.types.tagOf name)) es, ty⟩
         let x ← fresh ty
         return ⟨.assign x (.heap (.new (ctx.types.tagOf name)) es), ty⟩
       let x ← fresh ty
