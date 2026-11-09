@@ -1,0 +1,5 @@
+ends without waiting
+selfend defer
+got 7
+Main defer
+exit=0

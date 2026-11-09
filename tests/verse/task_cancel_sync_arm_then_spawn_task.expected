@@ -1,0 +1,5 @@
+F defer
+C end
+C defer
+main end
+exit=0
