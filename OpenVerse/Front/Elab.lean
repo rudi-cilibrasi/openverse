@@ -1952,26 +1952,39 @@ def refiningCast? (env : TyEnv) (T : String) (xty : Ty) (avoid : List String := 
   if (env.sparams.lookup T).isNone && (env.coreArgs T []).isEmpty then none
   if !(env.isSub S T || env.isSub T S) then none
   let rargs := env.coreArgs S sargs
-  -- (#250) the type arguments `T` has past the object's: its own type
-  -- parameters there, each opened as a fresh one (not a name of `avoid`)
-  let tcore := (env.coreVars T).drop rargs.length
-  if env.isSub S T && !tcore.isEmpty then none
-  if tcore.any (·.1.startsWith "$arg") then none
-  let fresh (v : String) : String := Id.run do
-    let mut n := v ++ "'"
-    while avoid.contains n || tcore.any (·.1 == n) do n := n ++ "'"
-    return n
-  -- (each as comparable as the parameter it stands for)
-  let opened := tcore.map fun (v, t) => (fresh v, v, match t with | .param _ c => c | _ => false)
-  let ext := opened.map fun (n, _, c) => Ty.param n c
-  let targs := if env.isSub S T then env.upArgs S sargs T else env.argsBelow S sargs T ext
-  let cargs := env.coreArgs T targs
-  if cargs.length != rargs.length + ext.length || (cargs == rargs && ext.isEmpty) then none
   let common := (env.concreteBelow S).filter (env.isSub · T)
   if common.isEmpty then none
-  let eqs := (rargs ++ ext).zip cargs
-  if (Ty.unifyEqs (fun _ _ => none) [] eqs).isNone then none
-  some (S, sargs, targs, common, eqs, opened)
+  let tv := env.coreVars T
+  if tv.length == rargs.length && tv.all (fun (v, _) => !v.startsWith "$arg") then
+    -- (#243: `T`'s Verse Core type arguments are its own type parameters,
+    -- as many as the object's: those, as the object's type gives them)
+    let targs := if env.isSub S T then env.upArgs S sargs T else env.argsBelow S sargs T
+    let cargs := env.coreArgs T targs
+    if cargs == rargs then none
+    let eqs := rargs.zip cargs
+    if (Ty.unifyEqs (fun _ _ => none) [] eqs).isNone then none
+    some (S, sargs, targs, common, eqs, [])
+  else
+    -- (#250: more, or not its type parameters as a whole: each of `T`'s
+    -- type parameters fresh (not a name of `avoid`), unified with the
+    -- object's type arguments, the fresh ones bound first; those left
+    -- unbound are opened, as comparable as the parameters they stand for)
+    if env.isSub S T then none
+    let ps := (env.sparams.lookup T).getD []
+    let names : List String := ps.foldl (fun acc (v, _) => Id.run do
+      let mut n := v ++ "'"
+      while avoid.contains n || acc.contains n do n := n ++ "'"
+      return acc ++ [n]) []
+    let targs := (ps.zip names).map fun ((_, c), n) => Ty.param n c
+    let cargs := env.coreArgs T targs
+    if cargs.length < rargs.length then none
+    let eqs := (cargs.take rargs.length).zip rargs
+    let some μ := Ty.unifyEqs (fun _ _ => none) [] eqs | none
+    let opened := (ps.zip names).filterMap fun ((v, c), n) =>
+      if (μ.lookup n).isSome then none else some (n, v, c)
+    -- (nothing to refine, to open, nor past the object's: a plain cast)
+    if cargs.length == rargs.length && opened.isEmpty && μ.all (names.contains ·.1) then none
+    some (S, sargs, targs, common, eqs, opened)
 
 /-- What, in the branch of a cast that refines type arguments, would not
     mean the same once the branch is a function of its own (#243): its
@@ -3539,6 +3552,10 @@ partial def elabRefinedIf (ctx : Ctx) (p _dp : Pos) (D T : String) (x : SExpr) (
   let some (S, sargs, targs, common, eqs, opened) := refiningCast? env T rx.ty (env.tvars.map (·.1))
     | do set st0; return none
   if !env.isRefClass S || (!opened.isEmpty && !env.isRefClass T) then set st0; return none
+  -- (#250: `T` has Verse Core type arguments past the object's, or not as
+  -- its own type parameters: its tests open them, as a method's dispatch does)
+  let wide := !((env.coreVars T).length == (env.coreArgs S sargs).length &&
+    (env.coreVars T).all fun (v, _) => !v.startsWith "$arg")
   let coreFields (n : String) (ts : List Ty) : Option (List Ty) :=
     if env.classes.contains n then none else some ((env.fields n ts).map (·.2.1))
   let some μT := Ty.unifyEqs coreFields [] eqs | do set st0; return none
@@ -3644,7 +3661,7 @@ partial def elabRefinedIf (ctx : Ctx) (p _dp : Pos) (D T : String) (x : SExpr) (
     -- that opens type arguments, #250, by all of each class's pins, as a
     -- method's dispatch is, since its tests open them)
     for d in common do
-      let k := if opened.isEmpty then (env.corePins d).take rargs.length else env.corePins d
+      let k := if wide then env.corePins d else (env.corePins d).take rargs.length
       match parts.findIdx? (·.1 == k) with
       | some pi => parts := parts.modify pi fun (k', ds) => (k', ds.push d)
       | none => parts := parts.push (k, #[d])
@@ -3662,12 +3679,8 @@ partial def elabRefinedIf (ctx : Ctx) (p _dp : Pos) (D T : String) (x : SExpr) (
       -- or past those, the tested class's own)
       let ownC := ((env.coreVars (part[0]!)).drop rargs.length).map fun (_, t) =>
         match t with | .param _ c => c | _ => false
-      let extOf : List Ty := if opened.isEmpty then [] else
-        (List.range (pins.length - rargs.length)).map fun i =>
-          let c := match opened[i]? with
-            | some (_, _, c) => c
-            | none => ownC.getD i false
-          Ty.param s!"$ext{i}" c
+      let extOf : List Ty := if !wide then [] else
+        (List.range (pins.length - rargs.length)).map fun i => Ty.param s!"$ext{i}" (ownC.getD i false)
       let rxs := rargs ++ extOf
       let atX := rxs.zipIdx.map fun (r, j) => (pinArg j, r)
       let needX : List (Ty × Ty) := (rxs.zip pins).filterMap fun (a, pin) => match pin with
@@ -3676,9 +3689,14 @@ partial def elabRefinedIf (ctx : Ctx) (p _dp : Pos) (D T : String) (x : SExpr) (
       if !VTy.pinsBelow (env.lowerPins pins) rxs.length then
         eerr p s!"cannot cast {withArticle rx.ty.show} to {shown} yet: class {part[0]!} relates its type arguments to ones that {S} does not have (#209, #243)"
       -- (no object of `part` can be this one: no test)
-      let some μF := Ty.unifyEqs coreFields [] (if opened.isEmpty then needOf pins else needX) | continue
-      let targsX := if opened.isEmpty then targs else env.argsBelow S sargs T (extOf.take opened.length)
-      let dL : Local := { name := D, slot := y, ty := (Ty.struct T targsX).subst μF, mutable := false }
+      let some μF := Ty.unifyEqs coreFields [] (if wide then needX else needOf pins) | continue
+      -- (the object as a `T`: its type parameters from the test's type
+      -- arguments, refined)
+      let dTyX ← if !wide then pure ((Ty.struct T targs).subst μF) else
+        match Ty.unifyEqs coreFields [] ((env.coreArgs T targs).zip (rxs.map (·.subst μF))) with
+        | some θD => pure ((Ty.struct T targs).subst θD)
+        | none => eerr p s!"cannot cast {withArticle rx.ty.show} to {shown} yet: the object's type arguments as {withArticle part[0]!} do not determine {T}'s (#250)"
+      let dL : Local := { name := D, slot := y, ty := dTyX, mutable := false }
       let ctx' := { ctx with
         locals := dL :: ctx.locals.map fun loc => { loc with ty := loc.ty.subst μF },
         types := { env with tvars := env.tvars.map fun (m, t) => (m, t.subst μF) } }
@@ -6888,7 +6906,11 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
                            castRequests := opts.castRequests }
   env := { env with varFields := varFields, uniques := uniques,
                     overriders := (overridePairs.toList.map fun (_, dm, _) => (dm.splitOn ".").headD "") ++
-                      (implChecks.toList.map fun (_, _, impl, _) => (impl.splitOn ".").headD "") }
+                      (implChecks.toList.map fun (_, _, impl, _) => (impl.splitOn ".").headD "") ++
+                      -- (#250: and the targets of casts that open type
+                      -- arguments, whose own pins relate them to the
+                      -- object's, as the dispatch to the branch refines by)
+                      ((opts.castRequests.filter (!·.opened.isEmpty)).map (·.target)) }
   -- the class whose code each inherited field default is (#39): the nearest
   -- one, the class's own first, that gives the field a default itself
   let homeOf (c f : String) : String :=
@@ -7501,6 +7523,11 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     let selfCls := (name.splitOn ".").headD ""
     let selfField (v : String) : Nat :=
       ((selfFieldOf.getD fun v => env.witnessField? selfCls v) v).getD 0
+    -- (a cast's branch, #250: each opened type parameter's value must have
+    -- a hidden field to come from, never another field)
+    if let some sf := selfFieldOf then
+      if let some v := selfTps.find? fun v => (sf v).isNone then
+        throw s!"{p.show}: internal error: no hidden field holds a value of the type parameter {v} the cast opens (#250)"
     let env := if selfTps.isEmpty then env else
       { env with dictOrder := dictTps.map (·.1),
                  selfWitness := selfTps.map fun v => (v, selfField v) }
