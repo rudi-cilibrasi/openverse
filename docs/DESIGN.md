@@ -859,7 +859,9 @@ The front end's pins are on all of a class's Verse Core type arguments
 (`pairE`: `[tuple($1, $2), none, none]`), so an object has every one.
 A dispatch opens the type arguments of the class whose implementation it
 calls beyond the receiver's (`$ext i` in the front end), and keys its
-tests by the tested classes' pins on those: `dupP(a) :=
+tests by the tested classes' pins (a test is of classes with the same
+pins, so it opens what they all have pins on, as the checker does):
+`dupP(a) :=
 class(pairE(a, a))` and `leaf := class(mid(int, string))` (below
 `mid(a, b) := class(expr(tuple(a, b)))`) refine them further. A class
 that holds no overriding implementation takes its parent's pin where its
@@ -883,10 +885,10 @@ dispatch reaches, read those from their receiver instead of taking them
 of a parameter's object). Its other methods are called at known types,
 as before. Only classes with an override at or below them get the
 fields, and only reference classes' overrides read them. A `<suspends>`
-override of such a class, a `spawn` in one, a spawn of a call of one,
-and a call whose omitted named argument's default has no type of its own
-in a dispatch that opens arguments, are refused for now: their frames,
-roots and temporaries would need the opened types. A variable of a
+override of such a class, a `spawn` in one, and a call whose omitted
+named argument's default has no type of its own in a dispatch that opens
+arguments, are refused for now: their frames, roots and temporaries
+would need the opened types. A variable of a
 class type whose classes below need more type arguments than its own
 starts as the class's hidden placeholder (#157), also for a class
 without type parameters.

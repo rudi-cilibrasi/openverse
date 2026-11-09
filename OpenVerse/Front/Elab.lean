@@ -3263,13 +3263,15 @@ partial def elabAppBase (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (b
             -- may not have: matched against the receiver's, they refine the
             -- call, which `Typed.dispatch` types under that refinement
             let rargs := env.coreArgs c targs
-            -- (#209) the type arguments of `e` beyond the receiver's are
-            -- opened as fresh parameters, which the refinement binds
+            -- (#209) the type arguments that the tested classes have pins
+            -- on beyond the receiver's are opened as fresh parameters, which
+            -- the refinement binds (as the checker opens them, `openCount`:
+            -- a test is of classes with the same pins)
             let eLen := (env.pinsOf e).length
-            let extOf : List Ty :=
-              (List.range (eLen - rargs.length)).map fun i => Ty.param s!"$ext{i}" false
+            let extOf (pins : List (Option Ty)) : List Ty :=
+              (List.range (pins.length - rargs.length)).map fun i => Ty.param s!"$ext{i}" false
             let needOf (pins : List (Option Ty)) :=
-              let rx := rargs ++ extOf
+              let rx := rargs ++ extOf pins
               let atR := rx.zipIdx.map fun (r, j) => (pinArg j, r)
               (rx.zip pins).filterMap fun (a, pin) => match pin with
                 | some pt => let pt := pt.subst atR; if a == pt then none else some (a, pt)
@@ -3289,7 +3291,7 @@ partial def elabAppBase (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (b
               -- of `e`'s type, which might have no initial value)
               let mut parts : Array (List (Option Ty) × Array String) := #[]
               for d in cls do
-                let key := (env.corePins d).take (max eLen rargs.length)
+                let key := env.corePins d
                 match parts.findIdx? (·.1 == key) with
                 | some pi => parts := parts.modify pi fun (k, ds') => (k, ds'.push d)
                 | none => parts := parts.push (key, #[d])
@@ -3300,7 +3302,7 @@ partial def elabAppBase (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (b
                 -- dispatch opens, which it has no values of; so no
                 -- refinement, and `e`'s implementation must take the
                 -- receiver as it is)
-                if !VTy.pinsBelow (env.lowerPins pins) (max eLen rargs.length) then
+                if !VTy.pinsBelow (env.lowerPins (pins.take (max eLen rargs.length))) (max eLen rargs.length) then
                   if !(needOf (env.corePins e)).isEmpty || eLen > rargs.length then
                     eerr p s!"cannot dispatch {m} on {withArticle (Ty.struct c targs).show} to class {part[0]!} yet: its type arguments there relate to ones that {e} does not have (#209)"
                   let sd ← fresh (.struct e (argsAt e))
@@ -3321,7 +3323,7 @@ partial def elabAppBase (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (b
                 let some μF := Ty.unifyEqs coreFields [] (needOf pins) | continue
                 let selfName := s!"$self{slot}"
                 let locsF := locs.map fun l => { l with ty := l.ty.subst μF }
-                let argsE := if env.isSub c e then argsAt e else env.argsBelow c targs e extOf
+                let argsE := if env.isSub c e then argsAt e else env.argsBelow c targs e (extOf pins)
                 let selfL : Local := { name := selfName, slot, ty := .struct e (argsE.map (·.subst μF)), mutable := false }
                 let ctx' := { ctx with locals := selfL :: (locsF ++ ctx.locals) }
                 let rc ← elabApp ctx' p (.ident mp fname) (.ident mp selfName :: argIds.toList) bracket
@@ -3348,7 +3350,7 @@ partial def elabAppBase (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (b
                   | _ => .lit .none
                 let typed : List (Nat × Expr) := (untyped rcE).map fun t =>
                   (t, .ite (.prim .fail []) (.local t) (litOf t rcE))
-                if eLen > rargs.length && !typed.isEmpty then
+                if pins.length > rargs.length && !typed.isEmpty then
                   eerr p s!"cannot dispatch {m} to class {e} yet when a named argument's default has no type of its own: its temporary would need the type arguments the dispatch opens (#209)"
                 let some (.call fi (.local s0 :: es)) := Expr.inlineArgTemps rcE typed
                   | eerr p s!"cannot dispatch {m} to class {e}, which fixes type arguments of {c}, when a named argument's default is computed (#142)"
@@ -5366,6 +5368,11 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
   -- type parameters, specialised at the types they are called at
   let sigOf (f : Nat) : Option Sig := allS.find? (·.idx == f)
   let nOrig := fns.size
+  -- (#209) an override that reads its class's type arguments' values from
+  -- its receiver is not copied per type, so its spawns would not be lowered
+  for g in gsigs do
+    if !g.selfTps.isEmpty && !(Suspend.spawnSites spawnMark fns[g.idx]!.body).isEmpty then
+      throw (inFn g.name "a spawn in an override of a class with type parameters that its parent's type arguments do not give is not supported yet (#209)")
   let (fns1, slotTys1, specSigs, specKeys, replaced) ← specialise fns slotTys
     { fns := fsigs0, classes := classTable, protos, pins }
     (fun f => ((sigOf f).map (·.ndicts)).getD 0) (fun f => ((sigOf f).map (·.suspends)).getD false)

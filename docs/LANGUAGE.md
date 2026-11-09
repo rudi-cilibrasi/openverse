@@ -507,11 +507,10 @@ circle := class(shape, labelled):
   is a struct or container that holds one.
 - **Not yet supported** (each rejected with a message):
   - in a class with type parameters that its parent's type arguments
-    do not give: a `<suspends>` override, a `spawn` in an override, a
-    spawn of a call of one, and, in code generic over a class above, a
-    call of one whose omitted named argument's default has no type of
-    its own (#209); such a class below a parametric interface (#53,
-    #209); a dispatch, in code generic over a
+    do not give: a `<suspends>` override, a `spawn` in an override, and,
+    in code generic over a class above, a call of one whose omitted
+    named argument's default has no type of its own (#209); such a class
+    below an interface (#53, #209); a dispatch, in code generic over a
     class, to a subclass whose fixed type arguments relate to ones the
     receiver's type does not have (#209); a cast `T[X]` whose type
     arguments agree with `X`'s only under a refinement (`dup[P]` for
