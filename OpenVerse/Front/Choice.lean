@@ -245,6 +245,8 @@ partial def hasLiftable : SExpr → Bool
   | .app _ (.ident _ "$noLift") _ false => false
   -- (an inlined function's parameter default, in its own context, #283)
   | .app _ (.ident _ "$paramDefault") _ false => false
+  -- (an exclusive choice, which a `for` compiles itself, #314)
+  | .app _ (.ident _ "$excl") _ false => false
   | .app _ (.ident _ "$choice") _ false => true
   | .app _ (.ident _ "$inline") _ false => true
   | .app _ (.ident _ "$each") _ false => true
@@ -348,6 +350,24 @@ partial def mapE (f : SExpr → Option SExpr) (e : SExpr) : SExpr :=
     | .mapLit p kvs => .mapLit p (kvs.map fun (k, v) => (go k, go v))
     | .structDef p tps fs => .structDef p tps (fs.map fun (n, t, d, v) => (n, t, d.map go, v))
     | e => e
+
+/-- An exclusive choice (#314): at most one alternative's `guards` hold,
+    and that alternative's value is its `rest`'s (a block). A `for`
+    compiles it as the `if` it stands for, with no generator, so that what
+    came before it rolls back as it would without it. Elsewhere it is the
+    choice of `block{guards; rest}`. -/
+def mkExcl (p : Pos) (alts : List (List SExpr × SExpr)) : SExpr :=
+  .app p (.ident p "$excl") (alts.map fun (gs, r) => .app p (.ident p "$alt") [.block p gs, r] false) false
+
+/-- `e` with its exclusive choices as choices (#314). -/
+partial def exclToChoice (e : SExpr) : SExpr :=
+  mapE (fun
+    | .app p (.ident q "$excl") alts false =>
+      some (.app p (.ident q "$choice") (alts.map fun
+        | .app _ (.ident _ "$alt") [.block bp gs, .block _ rs] false => .block bp ((gs ++ rs).map exclToChoice)
+        | .app _ (.ident _ "$alt") [.block bp gs, r] false => .block bp (gs.map exclToChoice ++ [exclToChoice r])
+        | a => a) false)
+    | _ => none) e
 
 /-- Whether some subexpression satisfies `pr` (through `mapE`). -/
 partial def anyE (pr : SExpr → Bool) (e : SExpr) : Bool :=
@@ -729,7 +749,10 @@ def liftClause (isVal : String → Bool) (isField : String → String → Bool) 
     (variables and fields in scope); the clauses' own bindings are too. -/
 def prepare (cs : List SExpr) (isVal : String → Bool := fun _ => false)
     (isField : String → String → Bool := fun _ _ => false) (site : String := "")
-    (fieldOrder : String → List (String × Bool) := fun _ => []) : List SExpr :=
+    (fieldOrder : String → List (String × Bool) := fun _ => []) (keepExcl : Bool := false) : List SExpr :=
+  -- (an exclusive choice is a `for`'s to compile, #314; elsewhere, where
+  -- the first success is taken, the choice of its alternatives)
+  let cs := if keepExcl then cs else cs.map exclToChoice
   let bound := boundIn cs
   normClauses (cs.flatMap (liftClause (fun n => isVal n || bound.contains n) isField · site fieldOrder)) site
 
@@ -806,6 +829,11 @@ partial def namesUsed (e : SExpr) : List String :=
     calls are inlined. -/
 partial def checkBody : SExpr → SExpr :=
   mapE fun
+    -- (an exclusive choice, #314: an if-chain on its guards)
+    | .app p (.ident _ "$excl") alts false =>
+      some (alts.foldr (fun a acc => match a with
+        | .app _ (.ident _ "$alt") [.block bp gs, rest] false => .ite bp (gs.map checkBody) (checkBody rest) (some acc)
+        | _ => acc) (.app p (.ident p "Err") [] false))
     | .app p (.ident _ "$choice") as false =>
       let rec chain : List SExpr → SExpr
         | [] => .tuple p []
