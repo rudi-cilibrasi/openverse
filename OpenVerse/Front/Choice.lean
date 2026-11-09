@@ -886,6 +886,45 @@ def loopShape? (g : String) (mv : List String) (body : SExpr) : Option (List SEx
     else isChoice tail && groupOK tail
   if cls.all plain && tailOK then some (cls, tail) else none
 
+/-- A body's statements with its `return`s, in `if`s, as guarded
+    alternatives (#283): `S; if (C) { A; return E }; R` becomes
+    `S; $k := if (C) then 0 else 1; block{ $k = 0; A; E } | block{ $k = 1; R }`.
+    The condition runs once, and the other alternative's guard fails before
+    any of its clauses. A condition that binds names gives them to its
+    branch through an option: `$k := option{C; (names)}`, then
+    `block{ names from $k?; A; E } | block{ not $k?; R }`. `none` when a
+    `return` is elsewhere (in a loop, a condition, an expression). The last
+    statement of each alternative is its value; `fresh i` names the `$k`s. -/
+partial def elimReturns (fresh : Nat → String) (n : Nat) : List SExpr → Option (List SExpr × Nat)
+  | [] => some ([], n)
+  | .ret _ (some e) :: _ => some ([e], n)
+  | s@(.ite p cs t u?) :: rest =>
+    let hasRet := anyE fun | .ret .. => true | _ => false
+    if !hasRet s then (elimReturns fresh n rest).map fun (r, n') => (s :: r, n')
+    else if cs.any hasRet then none
+    else do
+      let (tb, n1) ← elimReturns fresh (n + 1) (stmtsOf t ++ rest)
+      let (ub, n2) ← elimReturns fresh n1 ((u?.map stmtsOf).getD [] ++ rest)
+      let k := fresh n
+      match boundIn cs with
+      | [] =>
+        let guard (i : Int) (b : List SExpr) : SExpr := .block p (.cmp p (.ident p k) [("=", .int p i)] :: b)
+        some ([.decl p k none false (.ite p cs (.int p 0) (some (.int p 1))), mk p [guard 0 tb, guard 1 ub]], n2)
+      | names =>
+        -- (the names the condition binds, for its branch: through an option)
+        let (val, binds) : SExpr × List SExpr := match names with
+          | [x] => (.ident p x, [.decl p x none false (.query p (.ident p k))])
+          | xs =>
+            let t := k ++ "t"
+            (.tuple p (xs.map (SExpr.ident p ·)),
+              .decl p t none false (.query p (.ident p k)) ::
+                xs.zipIdx.map fun (x, i) => SExpr.decl p x none false (.app p (.ident p t) [.int p (i : Int)] false))
+        some ([.decl p k none false (.optionLit p (.block p (cs ++ [val]))),
+          mk p [.block p (binds ++ tb), .block p (.notE p (.query p (.ident p k)) :: ub)]], n2)
+  | s :: rest =>
+    if anyE (fun | .ret .. => true | _ => false) s then none
+    else (elimReturns fresh n rest).map fun (r, n') => (s :: r, n')
+
 /-- A function's name as written: a method's function `C$M` as `C.M`, and
     `F$all` as `F` (#283). -/
 def shownFnName (n : String) : String :=
@@ -1021,7 +1060,10 @@ partial def inlineCalls (mv : List (String × MFn)) (e : SExpr) (recs : List Str
         return .app p (.ident p "$loop") (.ident q g :: .block q (tmark ++ pds ++ unpack) :: .block q ps :: .block q cls ::
           .decl q (tag "$r") (tyOf f.ret) false (markRec g tail) :: as'') false
       let body ← go (renameTypes ρ (renameE ren f.body))
+      -- (its `return`s as guarded alternatives, #283)
       let ss := stmtsOf body
+      let ss := if anyE (fun | .ret .. => true | _ => false) body then
+          ((elimReturns (fun i => tag s!"$k{i}") 0 ss).map (·.1)).getD ss else ss
       let r := tag "$r"
       let (init, last) := (ss.dropLast, ss.getLast?)
       let (init, res) : List SExpr × SExpr := match last with
@@ -1228,8 +1270,11 @@ def multiValued (fns : List (String × MFn)) : List String := Id.run do
   while changed do
     changed := false
     for (n, f) in fns do
-      let ss := stmtsOf (markCalls mv f.body)
-      if !mv.contains n && (hasChoice ss || ss.any liftsHere) then
+      let b := markCalls mv f.body
+      let ss := stmtsOf b
+      -- (a choice in a `return`'s value too, #283)
+      if !mv.contains n && (hasChoice ss || ss.any liftsHere ||
+          anyE (fun | .ret _ (some e) => hasLiftable e | _ => false) b) then
         mv := mv ++ [n]; changed := true
   return mv
 
@@ -1494,8 +1539,13 @@ def inlineMulti (tops : List STop) (reserved : List String := []) : Except Strin
       let what := if recs.contains n then "recursive" else if needAll.contains n then
         "called by a recursive one (so its values are computed at the call, F$all)" else "generic"
       throw s!"{f.pos.show}: {shownFnName n} has several values and named parameters, and is {what}: such functions are not supported yet (#235, #283)"
+    -- (a `return` in an `if`'s branches becomes guarded alternatives, #283;
+    -- not in a recursive one, computed or taken lazily from its body)
     if anyE (fun | .ret .. => true | _ => false) f.body then
-      throw s!"{f.pos.show}: {shownFnName n} has several values and a return, which would leave its caller once inlined (#235)"
+      if recs.contains n || needAll.contains n then
+        throw s!"{f.pos.show}: {shownFnName n} has several values, a return, and is recursive or called by a recursive one: not supported yet (#235, #283)"
+      if (elimReturns (fun _ => "") 0 (stmtsOf f.body)).isNone then
+        throw s!"{f.pos.show}: {shownFnName n} has several values and a return other than in the branches of an if, which would leave its caller once inlined (#235, #283)"
     if (stmtsOf f.body).any (fun | .app _ (.ident _ "$defer") _ _ => true | _ => false) then
       throw s!"{f.pos.show}: {shownFnName n} has several values and a defer:, which would run in its caller's clauses once inlined: not supported yet (#235)"
     -- (its body is inlined where other names may be in scope: so neither

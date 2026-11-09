@@ -767,6 +767,19 @@ Main():void =
   A parameter or local of the method named like a member is refused, as
   anywhere in a class.
 
+  A `return` in the branches of an `if` in such a function's body gives the
+  value of the alternative it is reached in, and the rest of the body is
+  skipped for it (#283). The condition runs once, and the names it binds
+  reach the branch:
+
+  ```verse
+  F(X:?int):int =
+      if (V := X?):
+          return V | V * 10
+      1 | 2
+  # F(option{4}): 4, 40; F(false): 1, 2
+  ```
+
   ```verse
   dice := class:
       Sides : int
@@ -843,7 +856,8 @@ Main():void =
   use have type parameters (`Self` of a generic class among them), an
   overloaded one (a generic one's type arguments are inferred from the
   arguments where it is inlined, as at a call), a recursive or generic one
-  with named parameters, one with a `return` or a `defer:` of its own (in its body, not in a block inside it), a method whose name another class or interface
+  with named parameters, one with a `defer:` of its own (in its body, not in a block inside it), one with a `return`
+  other than in an `if`'s branches, or recursive with a `return`, a method whose name another class or interface
   also has, of a generic class, generic, `<suspends>` or using `(super:)`, one used as a function value, a call of a
   recursive one in an `if`'s branch or a `set`'s path, and, since its body is inlined where other names may be
   in scope, one whose name is also the name of a parameter, local, field or

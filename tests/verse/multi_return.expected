@@ -1,0 +1,34 @@
+f- 0
+f 5
+f 6
+h 10
+h 99
+h 30
+b 3
+b 6
+neg
+bn 7
+if 99
+p 1 2
+-3: -1
+0: 0
+0: 100
+5: 5
+small
+5: 50
+15: 2
+25: 3
+pos2
+r 2
+m0 7
+m 4
+m 5
+some 4
+some 40
+none 1
+none 2
+p 30
+miss
+q 0
+q -1
+exit=0
