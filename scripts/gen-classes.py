@@ -568,6 +568,7 @@ class Gen:
         self.main = []
         self.pmain = []
         self.omain = []
+        self.susp_main = False  # Main suspends (gen_existential's <suspends> Ev, #251)
         self.shared = set()     # method names with several roots
         self.fovered = set()    # fields an interface gives a new default
         self.phase = 'decl'     # 'decl' while generating bodies, 'main' after
@@ -1763,45 +1764,55 @@ class Gen:
         does not occur at all; maybe xt(a, b, n) below xp, with a type
         parameter of its own. Code generic over xe(t) dispatches to them,
         opening their type parameters; their methods use locals of those
-        types, whose initial values come from the object."""
+        types, whose initial values come from the object. Sometimes Ev is
+        <suspends> throughout (#251), and Main then suspends too."""
         L, M = [], []
+        su = chance(0.4)
+        if su:
+            self.susp_main = True
+        sx = '<suspends>' if su else ''
+        def pause():
+            return ['        Sleep(0.0)'] if su and chance(0.5) else []
         xe, xl, xa, xp, xf, xt = (self.fresh(x) for x in ['xe', 'xl', 'xa', 'xp', 'xf', 'xt'])
         ev, nm, run = (self.fresh(x) for x in ['Ev', 'Nm', 'XRun'])
         V, L1, R1, P1, T1 = (self.fresh(x) for x in ['XV', 'XL', 'XR', 'XP', 'XT'])
         have_xt = chance(0.5)
         L.append('%s(t:type) := class<abstract>:' % xe)
-        L.append('    %s():t' % ev)
+        L.append('    %s()%s:t' % (ev, sx))
         L.append('    %s():string = "xe"' % nm)
         L.append('%s := class(%s(int)):' % (xl, xe))
         L.append('    %s:int' % V)
-        L.append('    %s<override>():int = %s' % (ev, V))
+        L.append('    %s<override>()%s:int =' % (ev, sx))
+        L += pause()
+        L.append('        %s' % V)
         if chance(0.6):
             L.append('    %s<override>():string = "xl {%s}"' % (nm, V))
         L.append('%s := class(%s(int)):' % (xa, xe))
         L.append('    %s:%s(int)' % (L1, xe))
         L.append('    %s:%s(int)' % (R1, xe))
-        L.append('    %s<override>():int = %s.%s() + %s.%s()' % (ev, L1, ev, R1, ev))
+        L.append('    %s<override>()%s:int = %s.%s() + %s.%s()' % (ev, sx, L1, ev, R1, ev))
         L.append('%s(a:type, b:type) := class(%s(tuple(a, b))):' % (xp, xe))
         L.append('    %s:%s(a)' % (L1, xe))
         L.append('    %s:%s(b)' % (R1, xe))
         if chance(0.5):
-            L.append('    %s<override>():tuple(a, b) =' % ev)
+            L.append('    %s<override>()%s:tuple(a, b) =' % (ev, sx))
+            L += pause()
             L.append('        var X:a = %s.%s()' % (L1, ev))
             L.append('        Y:b = %s.%s()' % (R1, ev))
             L.append('        set X = %s.%s()' % (L1, ev))
             L.append('        (X, Y)')
         else:
-            L.append('    %s<override>():tuple(a, b) = (%s.%s(), %s.%s())' % (ev, L1, ev, R1, ev))
+            L.append('    %s<override>()%s:tuple(a, b) = (%s.%s(), %s.%s())' % (ev, sx, L1, ev, R1, ev))
         if chance(0.6):
             L.append('    %s<override>():string = "xp({%s.%s()}, {%s.%s()})"' % (nm, L1, nm, R1, nm))
         L.append('%s(a:type, b:type) := class(%s(a)):' % (xf, xe))
         L.append('    %s:%s(tuple(a, b))' % (P1, xe))
-        L.append('    %s<override>():a = %s.%s()(0)' % (ev, P1, ev))
+        L.append('    %s<override>()%s:a = %s.%s()(0)' % (ev, sx, P1, ev))
         if have_xt:
             L.append('%s(a:type, b:type, n:type) := class(%s(a, b)):' % (xt, xp))
             L.append('    %s:n' % T1)
             L.append('    %s<override>():string = "xt {(super:)%s()}"' % (nm, nm))
-        L.append('%s(E:%s(t) where t:type):t = E.%s()' % (run, xe, ev))
+        L.append('%s(E:%s(t) where t:type)%s:t = E.%s()' % (run, xe, sx, ev))
         self.out += L
 
         def iexp(d):
@@ -2162,7 +2173,7 @@ class Gen:
         empty = [t.name for t in self.types()
                  if not any((c is t or c.below(t)) and not c.abstract for c in self.classes)]
         lines = ['# uninhabited: %s' % ' '.join(empty)] + list(self.out)
-        lines.append('Main():void =')
+        lines.append('Main()<suspends>:void =' if self.susp_main else 'Main():void =')
         if chance(0.25):
             lines += ['    defer:', '        Print("main done")']
         for m in self.main:
