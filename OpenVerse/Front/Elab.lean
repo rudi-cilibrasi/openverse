@@ -4101,6 +4101,14 @@ partial def elabSet (ctx : Ctx) (p : Pos) (lhs0 : SExpr) (op : Option String) (r
 partial def elabFor (ctx : Ctx) (p : Pos) (clauses : List SExpr) (body : SExpr) : EM R := do
   -- (a choice is a generator over its alternatives, #208)
   let clauses := Choice.prepare clauses (choiceValues ctx) (choiceField ctx)
+  -- (a call of a recursive function with several values, #235: a generator
+  -- over the array of its values; at a written type, through a binding)
+  let clauses := clauses.flatMap fun c => match Choice.binding? c with
+    | some { pos := q, name := n, ty := none, each := some arr, .. } => [.gen q n none arr]
+    | some { pos := q, name := n, ty := some t, each := some arr, .. } =>
+      let tmp := s!"$e{q.line}_{q.col}"
+      [.gen q tmp none arr, .decl q n (some t) false (.ident q tmp)]
+    | _ => [c]
   -- split into groups: [filters before the first generator], then (generator, filters)…
   let isGen : SExpr → Bool
     | .gen .. => true
@@ -4325,6 +4333,25 @@ partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
     if let .app p (.ident _ "$defer") _ _ := cl then
       eerr p "defer: cannot be a clause of an if condition or first{…} that has a choice (#208)"
     match Choice.binding? cl with
+    | some b@{ each := some arr, .. } =>
+      -- (a call of a recursive function with several values, #235: each
+      -- element of the array of its values in turn, the clauses after it
+      -- in the filter, as `chooseFirst` does with alternatives)
+      let p := b.pos
+      let ra ← elabE ctx arr none
+      let ety ← match ra.ty with
+        | .arr t => pure t
+        | t => eerr p s!"internal: the values of a call are {t.show}"
+      let ty ← match ← b.ty.mapM (resolveTy ctx.types p) with
+        | some t => pure t
+        | none => pure ety
+      checkNewLocal ctx p b.name
+      let e ← fresh ety
+      let x ← fresh ty
+      let c1 := { ctx with locals := { name := b.name, slot := x, ty, mutable := false } :: ctx.locals }
+      let (inner, c2) ← elabOneGo c1 rest
+      let bindX ← coerce p ⟨.local e, ety⟩ ty
+      return (.forE e ra.e (.seq (.assign x bindX) (.seq inner Expr.failV)) (.lit .void), c2)
     | some b =>
       let p := b.pos
       let n := b.name

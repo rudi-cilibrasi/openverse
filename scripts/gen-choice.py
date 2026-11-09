@@ -87,6 +87,8 @@ def alt_eval(a, st):
 # ('cmp', lhs, op, c)          lhs: ('var', x) | ('N',) | ('sum', x, y)
 # ('setN', d) | ('print', tag)
 # ('bindsum', x, a, b)         x := a + b of two names (always succeeds)
+# ('rcall', x, f, ref, hi)     x := Rg_i[ref, hi]: a recursive function with
+#                              several values (#235), the values ref..hi
 # ('bchoice', x, c, alts1, alts2)  x := if (N > c) then (alts1) else (alts2): the
 #                              branch picked once, then its alternatives (#235)
 # ('sugar', src, expansion)    a clause with choices inside its expressions:
@@ -127,6 +129,9 @@ OPS = {'>': lambda a, b: a > b, '<': lambda a, b: a < b, '<>': lambda a, b: a !=
 
 def clause_src(c):
     k = c[0]
+    if k == 'rcall':
+        ref = c[3]
+        return f'{c[1]} := {c[2]}[{ref[1]}, {c[4]}]'
     if k == 'mcall':
         ref = c[3]
         return f'{c[1]} := {c[2]}({ref[1] if ref[0] == "name" else ref[1]})'
@@ -169,8 +174,14 @@ def one(cls, st):
     if not cls:
         return st
     c, rest = cls[0], cls[1:]
-    if c[0] in ('choice', 'bchoice'):
-        alts = flat_alts(c[2]) if c[0] == 'choice' else flat_alts(c[3] if st.n > c[2] else c[4])
+    if c[0] in ('choice', 'bchoice', 'rcall'):
+        if c[0] == 'choice':
+            alts = flat_alts(c[2])
+        elif c[0] == 'bchoice':
+            alts = flat_alts(c[3] if st.n > c[2] else c[4])
+        else:
+            lo = st.env[c[3][1]] if c[3][0] == 'name' else c[3][1]
+            alts = [('lit', v) for v in range(lo, c[4] + 1)]
         for a in alts:
             s2 = st.copy()
             v = alt_eval(a, s2)
@@ -203,7 +214,7 @@ def expand(cls):
 
 
 def is_gen(c):
-    return c[0] in ('choice', 'range', 'bchoice')
+    return c[0] in ('choice', 'range', 'bchoice', 'rcall')
 
 
 def run_for(cls, body, st):
@@ -235,6 +246,9 @@ def run_for(cls, body, st):
             items = [('alt', a) for a in flat_alts(g[2])]
         elif g[0] == 'bchoice':
             items = [('alt', a) for a in flat_alts(g[3] if st.n > g[2] else g[4])]
+        elif g[0] == 'rcall':
+            lo = st.env[g[3][1]] if g[3][0] == 'name' else g[3][1]
+            items = [('alt', ('lit', v)) for v in range(lo, g[4] + 1)]
         else:
             items = [('val', v) for v in range(g[2], g[3] + 1)]
         for kind, x in items:
@@ -264,6 +278,8 @@ class Gen:
         self.tag = 0
         # functions with several values (#235): name, offset, printing tag
         self.fns = []
+        # recursive ones (#235), effect-free: names
+        self.rfns = []
 
     def fresh_tag(self, pfx):
         self.tag += 1
@@ -349,6 +365,11 @@ class Gen:
             elif r < 0.52:
                 cls.append(('bchoice', name, self.rng.randint(0, 4), self.plain_alts(), self.plain_alts()))
                 names.append(name); has_choice = True
+            elif self.rfns and r < 0.54:
+                f = self.rng.choice(self.rfns)
+                ref = ('name', self.rng.choice(names)) if names and self.rng.random() < 0.5 else ('lit', self.rng.randint(0, 6))
+                cls.append(('rcall', name, f, ref, self.rng.randint(0, 9)))
+                names.append(name); has_choice = True
             elif self.fns and r < 0.56:
                 f, off, tag = self.rng.choice(self.fns)
                 ref = ('name', self.rng.choice(names)) if names and self.rng.random() < 0.6 else ('lit', self.rng.randint(0, 9))
@@ -381,6 +402,9 @@ def program(seed):
         g.fns.append((f'Mv{i}', off, tag))
         first = f'(Print("{tag}"); X)' if tag else 'X'
         lines.append(f'Mv{i}(X:int):int = {first} | X + {off}')
+    for i in range(rng.randint(0, 2)):
+        g.rfns.append(f'Rg{i}')
+        lines += [f'Rg{i}(A:int, B:int)<computes><decides>:int =', '    A <= B', f'    A | Rg{i}[A + 1, B]']
     lines += ['Main():void =', '    var N:int = 0']
     st = St()
     for k in range(rng.randint(3, 7)):
