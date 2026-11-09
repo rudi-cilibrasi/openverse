@@ -2271,6 +2271,9 @@ def firstLiftOf (ctx c2 : Ctx) (p : Pos) (g : String) (lp : List SExpr) (b : Str
            binds, sets := sets.map (·.name), args := pnames.map (SExpr.ident p ·) ++ capArgs,
            varBinds := (bls.filter (·.mutable)).map (·.name) }
 
+-- (the block below is one command, so the compiler's heartbeats for all of
+-- it count against one limit; it outgrew the default, 200000: #318, #325)
+set_option maxHeartbeats 400000 in
 mutual
 partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
   match se with
