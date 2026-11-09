@@ -6,3 +6,5 @@
 fuzz-classes-*.verse
 fuzz-fields-*.verse
 fuzz-floats-*.verse
+fuzz-model-*.verse
+fuzz-model-*.expected
