@@ -1053,6 +1053,14 @@ structure Ctx where
       still come from the enclosing function's. -/
   dictBase : Nat := 0
   dictVars : List String := []
+  /-- In the call of a dispatch's branch that opens type arguments (#209):
+      each type parameter of the enclosing function that the refinement
+      binds, as the type it binds it to and itself. The locals are typed
+      under the refinement there, so a generic call infers its type
+      arguments in terms of the opened ones, which have no values; its
+      hidden arguments are built in terms of the function's own instead,
+      whose values `Typed.dispatch` types under the refinement too. -/
+  unrefine : List (Ty × Ty) := []
   /-- In a method of class `c` (the function `c.M`): `c`. A bare name that is
       not a local is then looked up among the fields and methods of `Self`. -/
   selfClass : Option String := none
@@ -1324,6 +1332,19 @@ def TyEnv.dictSlot? (env : TyEnv) (dictBase : Nat) (n : String) : Option Nat :=
   if env.dictOrder.isEmpty then (env.tvars.findIdx? (·.1 == n)).map (dictBase + ·)
   else (env.dictOrder.idxOf? n).map (dictBase + ·)
 
+/-- `t` with each part that is one of `ps`'s first types replaced by its
+    second, outermost first (`Ctx.unrefine`, #209). -/
+partial def Ty.unrefine (ps : List (Ty × Ty)) (t : Ty) : Ty :=
+  match ps.find? (·.1 == t) with
+  | some (_, r) => r
+  | none => match t with
+    | .arr u => .arr (u.unrefine ps)
+    | .opt u => .opt (u.unrefine ps)
+    | .tup ts => .tup (ts.map (Ty.unrefine ps))
+    | .struct n ts => .struct n (ts.map (Ty.unrefine ps))
+    | .map k v => .map (k.unrefine ps) (v.unrefine ps)
+    | u => u
+
 /-- A value of type `t`, built by an expression whose Verse Core type the
     checker infers exactly (`tc e none`): the hidden argument a call of a
     generic function passes for a type argument `t`. It is only ever used to
@@ -1355,7 +1376,8 @@ partial def witness (env : TyEnv) (dictBase : Nat) (dictVars : List String) : Ty
           witness env dictBase dictVars t)])
     return .prim .mkTup (← (env.fields n ts).mapM fun (_, t, _) => witness env dictBase dictVars t)
   -- a type parameter of the enclosing function: its hidden parameter (an
-  -- unknown one cannot occur; the checker would reject the program)
+  -- unknown one cannot occur; the checker would reject the program; a
+  -- generic call at a type a dispatch opens is refused before, #209)
   | .param n _ => pure <| match dictVars.idxOf? n with
     | some j => .local (dictBase + j)
     | none => .lit .void
@@ -3870,7 +3892,14 @@ partial def elabAppBase (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (b
                 let locsF := locs.map fun l => { l with ty := l.ty.subst μF }
                 let argsE := if env.isSub c e then argsAt e else env.argsBelow c targs e (extOf pins)
                 let selfL : Local := { name := selfName, slot, ty := .struct e (argsE.map (·.subst μF)), mutable := false }
-                let ctx' := { ctx with locals := selfL :: (locsF ++ ctx.locals) }
+                -- (the caller's type parameters the refinement binds to
+                -- types that mention opened ones, for the hidden arguments
+                -- of a generic implementation, #209)
+                let unrefine := μF.filterMap fun (x, t) =>
+                  if ctx.dictVars.contains x && t.params.any (·.startsWith "$ext") then
+                    (ctx.types.tvars.lookup x).map (t, ·)
+                  else none
+                let ctx' := { ctx with locals := selfL :: (locsF ++ ctx.locals), unrefine }
                 let rc ← elabApp ctx' p (.ident mp fname) (.ident mp selfName :: argIds.toList) bracket
                   (some (msRet.subst μF))
                 -- (named arguments go through temporaries: put their values
@@ -3893,10 +3922,36 @@ partial def elabAppBase (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (b
                 let rec litOf (t : Nat) : Expr → Expr
                   | .seq (.assign t' v) rest => if t' == t then v else litOf t rest
                   | _ => .lit .none
-                let typed : List (Nat × Expr) := (untyped rcE).map fun t =>
-                  (t, .ite (.prim .fail []) (.local t) (litOf t rcE))
-                if pins.length > rargs.length && !typed.isEmpty then
+                -- (when the dispatch opens type arguments, #209, the
+                -- parameter's type in the implementation mentions them, and
+                -- the caller has no names for them: the temporary has the
+                -- declaration's type at the receiver's type arguments, which
+                -- the dispatch's refinement makes the implementation's)
+                -- (the refusals below are not expected: the temporary is
+                -- an argument of the call, which is in the implementation's
+                -- parameter order, and an override has its method's named
+                -- parameters, in order, `sameSigIn`; kept, as the old one,
+                -- should those change)
+                let refuseOpen : EM Unit :=
                   eerr p s!"cannot dispatch {m} to class {e} yet when a named argument's default has no type of its own: its temporary would need the type arguments the dispatch opens (#209)"
+                let rec callArgs : Expr → List Expr
+                  | .call _ (_ :: es) => es
+                  | .seq _ rest => callArgs rest
+                  | _ => []
+                let fs := (ctx.sig? fname).get!
+                let nposF := fs.params.length - fs.named.length
+                let mut typed : List (Nat × Expr) := []
+                for t in untyped rcE do
+                  let mut tv := t
+                  if pins.length > rargs.length then
+                    let some i := (callArgs rcE).findIdx? (fun a => match a with | .local t' => t' == t | _ => false)
+                      | refuseOpen
+                    let some (n, _) := (if i + 1 < nposF then none else fs.named[i + 1 - nposF]?) | refuseOpen
+                    let some j := ms.named.findIdx? (·.1 == n) | refuseOpen
+                    let τ := (declTy ms.params[npos + j]!).subst σu
+                    if τ.params.any ownNames.contains then refuseOpen
+                    tv ← fresh τ
+                  typed := typed ++ [(t, .ite (.prim .fail []) (.local tv) (litOf t rcE))]
                 let some (.call fi (.local s0 :: es)) := Expr.inlineArgTemps rcE typed
                   | eerr p s!"cannot dispatch {m} to class {e}, which fixes type arguments of {c}, when a named argument's default is computed (#142)"
                 if s0 != slot then eerr p s!"cannot dispatch {m} to class {e}, which fixes type arguments of {c} (#142)"
@@ -4317,8 +4372,16 @@ partial def elabGenericCall (ctx : Ctx) (p : Pos) (s : Sig) (args : List SExpr) 
     targs := targs.push t
   -- the hidden arguments: a value of each type argument (but those a
   -- method reads from its receiver, #209)
+  -- (in a dispatch's branch that opens type arguments, #209, a type
+  -- argument in terms of the caller's own type parameters, whose values the
+  -- dispatch types under its refinement; one that still mentions the opened
+  -- ones has no value to pass)
   let dicts ← ((targs.toList.zip s.tparams).filter fun (_, (v, _)) => !s.selfTps.contains v).mapM
-    fun (t, _) => witness ctx.types ctx.dictBase ctx.dictVars t
+    fun (t, (v, _)) => do
+      let t := t.unrefine ctx.unrefine
+      if t.params.any (·.startsWith "$ext") then
+        eerr p s!"cannot call {s.name} here yet: its type parameter {v} would mention type arguments that the dispatch opens, apart from the caller's, and no value of those can be passed (#209)"
+      witness ctx.types ctx.dictBase ctx.dictVars t
   if plain then return ⟨.call s.idx (es.toList ++ dicts), s.ret.subst σ⟩
   let call := Expr.call s.idx (slots.toList.map (fun o => Expr.local o.get!) ++ dicts)
   return ⟨steps.toList.foldr Expr.seq call, s.ret.subst σ⟩

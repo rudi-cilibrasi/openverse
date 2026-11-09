@@ -558,9 +558,7 @@ circle := class(shape, labelled):
     `job(int)`: spawn it through the class above instead, `J:job(int) = P`
     then `spawn{J.Run()}`), a `<suspends>` override whose
     result is narrower than the method's it overrides when called through
-    code generic over the class above, and,
-    in code generic over a class above, a call of one whose omitted
-    named argument's default has no type of its own (#209); a class below
+    code generic over the class above (#209); a class below
     an interface that does not give it its first type parameters, in
     order (`both(t, u) := class(container(t), sink(u))`, #276); a dispatch, in code generic over a
     class, to a subclass whose fixed type arguments relate to ones the
