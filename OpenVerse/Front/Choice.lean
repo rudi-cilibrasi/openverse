@@ -279,6 +279,30 @@ def LM.bind (p : Pos) (k : String) (e : SExpr) : LM SExpr := do
   return .ident p x
 
 mutual
+/-- An inlined call's parameters bound to its arguments, lifted, in order
+    (#235): `pre` is the template's parameter bindings (with `$arg` where
+    the argument goes), then (`unpacks`) the bindings that take a tuple
+    argument apart. A generic callee's (its template led by `$tparams`) are
+    bound together, `$params`, which infers its type arguments from the
+    arguments as at a call and names them for the written types after. -/
+partial def bindParams (isVal : String → Bool) (isField : String → String → Bool) (p : Pos) (pre : List SExpr)
+    (args : List SExpr) (unpacks : Bool := true) : LM Unit := do
+  let (marks, pre) := pre.partition fun | .app _ (.ident _ "$tparams") _ false => true | _ => false
+  let (pds, unpack) := (pre.take args.length, pre.drop args.length)
+  let mut binds : Array SExpr := #[]
+  for (pd, a) in pds.zip args do
+    let a' ← liftE isVal isField a
+    match pd with
+    | .decl q x ty v _ => binds := binds.push (.decl q x ty v a')
+    | _ => pure ()
+  match marks with
+  | .app _ _ tps _ :: _ =>
+    modify fun s => { s with pre := s.pre.push (.app p (.ident p "$params") (.block p binds.toList :: tps) false) }
+  | _ => for b in binds do modify fun s => { s with pre := s.pre.push b }
+  if unpacks then
+    for u in unpack do
+      modify fun s => { s with pre := s.pre.push u }
+
 /-- `e` with its liftable choices lifted (into the state's clauses). -/
 partial def liftE (isVal : String → Bool) (isField : String → String → Bool) (e : SExpr) : LM SExpr := do
   if !hasLiftable e then return e
@@ -302,30 +326,20 @@ partial def liftE (isVal : String → Bool) (isField : String → String → Boo
     -- whose clauses fail has none, and what its arguments did stays, as
     -- for one computed at the call)
     modify fun s => { s with pre := s.pre.push (.app fn.pos (.ident fn.pos "$fxOf") [fn] false) }
-    let (pds, unpack) := (pre.take args.length, pre.drop args.length)
-    for (pd, a) in pds.zip args do
-      let a' ← liftE isVal isField a
-      match pd with
-      | .decl q2 x ty v _ => modify fun s => { s with pre := s.pre.push (.decl q2 x ty v a') }
-      | _ => pure ()
-    for u in unpack do
-      modify fun s => { s with pre := s.pre.push u }
+    bindParams isVal isField p pre args
     LM.bind p "c" (.app p (.ident q "$loop") [fn, ps, cls, tl] false)
   | .app p (.ident _ "$loop") _ false => LM.bind p "c" e
   | .app _ (.ident _ "$inline") (_ :: .block _ tmpl :: args) false =>
     -- a call of a function with several values (#235): the arguments, in
     -- order, into its (renamed) parameters, then its body's clauses, then
     -- its value's name
-    let (pds, body) := (tmpl.take args.length, tmpl.drop args.length)
+    let (marks, tmpl) := tmpl.partition fun | .app _ (.ident _ "$tparams") _ false => true | _ => false
+    let body := tmpl.drop args.length
     -- (the callee's declared effects, which the caller must allow, as at a
     -- call: noted by `$fxOf`, since no call is left)
     if let .app _ _ (fn :: _) _ := e then
       modify fun s => { s with pre := s.pre.push (.app fn.pos (.ident fn.pos "$fxOf") [fn] false) }
-    for (pd, a) in pds.zip args do
-      let a' ← liftE isVal isField a
-      match pd with
-      | .decl q x ty v _ => modify fun s => { s with pre := s.pre.push (.decl q x ty v a') }
-      | _ => pure ()
+    bindParams isVal isField e.pos (marks ++ tmpl.take args.length) args (unpacks := false)
     match body.getLast? with
     | some (.decl q r _ _ _) =>
       let saved := (← get).site
@@ -701,6 +715,25 @@ partial def writesTypes (tps : List String) (e : SExpr) : Bool :=
     | .construct _ n ts _ => tps.contains n || ts.any (styMentions tps)
     | _ => false) e
 
+/-- A written type with the names of `ρ` renamed. -/
+partial def styRename (ρ : List (String × String)) : STy → STy
+  | .name n => .name ((ρ.lookup n).getD n)
+  | .arr t => .arr (styRename ρ t)
+  | .opt t => .opt (styRename ρ t)
+  | .tup ts => .tup (ts.map (styRename ρ))
+  | .map k v => .map (styRename ρ k) (styRename ρ v)
+  | .app n ts => .app ((ρ.lookup n).getD n) (ts.map (styRename ρ))
+  | .fn ps es r => .fn (ps.map (styRename ρ)) es (styRename ρ r)
+
+/-- The types a body writes (bindings', constructions' type arguments) with
+    the names of `ρ` renamed: a generic function's type parameters, renamed
+    for the site its body is inlined at (#235). -/
+partial def renameTypes (ρ : List (String × String)) : SExpr → SExpr :=
+  mapE fun
+    | .decl p n (some t) v x => some (.decl p n (some (styRename ρ t)) v (renameTypes ρ x))
+    | .construct p n ts fs => some (.construct p ((ρ.lookup n).getD n) (ts.map (styRename ρ)) (fs.map (renameTypes ρ)))
+    | _ => none
+
 /-- The shape of a recursive function with several values that its
     consumers take lazily (#246), from its body: its clauses, which have no
     choice and call no function with several values, then its last
@@ -764,10 +797,14 @@ partial def inlineCalls (mv : List (String × MFn)) (e : SExpr) (recs : List Str
         throw s!"{p.show}: more than 2000 calls of functions with several values to inline: nested calls multiply them (#235)"
       let tag (n : String) : String := s!"${g.replace "::" "_"}_{n}_{site}"
       let ren := (f.params.map (·.name) ++ localsOf f.body).eraseDups.map fun n => (n, tag n)
-      -- (a generic one's types that mention its type parameters are left
-      -- out: the arguments and values have their own, #235)
-      let tps := f.tparams.map (·.name)
-      let tyOf (t : STy) : Option STy := if styMentions tps t then none else some t
+      -- (a generic one's type parameters renamed for this site, #235: its
+      -- parameters are bound together, the type arguments inferred from
+      -- the arguments as at a call, `$params`, which then names them for
+      -- the written types after)
+      let ρ : List (String × String) := f.tparams.map fun tp => (tp.name, s!"$tp{site}_{tp.name}")
+      let tyOf (t : STy) : Option STy := some (styRename ρ t)
+      let tmark : List SExpr := if ρ.isEmpty then [] else
+        [.app q (.ident q "$tparams") (ρ.map fun (_, n) => SExpr.ident q n) false]
       let (pds, unpack, as'') : List SExpr × List SExpr × List SExpr :=
         if as.length == f.params.length then
           (f.params.map fun sp => SExpr.decl q (tag sp.name) (tyOf sp.ty) false (.ident q "$arg"), [], as')
@@ -783,12 +820,12 @@ partial def inlineCalls (mv : List (String × MFn)) (e : SExpr) (recs : List Str
       -- (one taken lazily, #246: its parameters, its clauses and its last
       -- expression, its own calls marked, for its consumer to run)
       if loops.contains g then
-        let some (cls, tail) := loopShape? g (mv.map (·.1)) (renameE ren f.body)
+        let some (cls, tail) := loopShape? g (mv.map (·.1)) (renameTypes ρ (renameE ren f.body))
           | throw s!"{p.show}: internal: the shape of {g} (#246)"
         let ps := f.params.map fun sp => SExpr.ident q (tag sp.name)
-        return .app p (.ident p "$loop") (.ident q g :: .block q (pds ++ unpack) :: .block q ps :: .block q cls ::
-          .decl q (tag "$r") (some f.ret) false (markRec g tail) :: as'') false
-      let body ← go (renameE ren f.body)
+        return .app p (.ident p "$loop") (.ident q g :: .block q (tmark ++ pds ++ unpack) :: .block q ps :: .block q cls ::
+          .decl q (tag "$r") (tyOf f.ret) false (markRec g tail) :: as'') false
+      let body ← go (renameTypes ρ (renameE ren f.body))
       let ss := stmtsOf body
       let r := tag "$r"
       let (init, last) := (ss.dropLast, ss.getLast?)
@@ -796,7 +833,7 @@ partial def inlineCalls (mv : List (String × MFn)) (e : SExpr) (recs : List Str
         | some (.decl q2 x t v rhs) => (init ++ [.decl q2 x t v rhs], .ident q2 x)
         | some l => (init, l)
         | none => (init, .tuple q [])
-      let tmpl := SExpr.block q (pds ++ unpack ++ init ++ [.decl q r (tyOf f.ret) false res])
+      let tmpl := SExpr.block q (tmark ++ pds ++ unpack ++ init ++ [.decl q r (tyOf f.ret) false res])
       return .app p (.ident p "$inline") (.ident q g :: tmpl :: as'') false
     | none => return .app p (← go (.ident q g)) (← as.mapM go) br
   | .str p ps => return .str p (← ps.mapM fun | .code c => do return .code (← go c) | t => pure t)
@@ -1061,11 +1098,6 @@ def inlineMulti (tops : List STop) : Except String (List STop × Bool) := do
   for (n, f) in mfs do
     if (fns.filter (·.1 == n)).length > 1 then
       throw s!"{f.pos.show}: {n} has several values and is overloaded: such functions are not supported yet (#235)"
-    -- (a generic one, #235: inlined, its parameters and value at the
-    -- arguments' and values' own types; a type it writes in its body
-    -- would name its type parameters where they mean nothing)
-    if !f.tparams.isEmpty && writesTypes (f.tparams.map (·.name)) f.body then
-      throw s!"{f.pos.show}: {n} has several values, is generic and writes a type that mentions its type parameters in its body: such functions are not supported yet (#235)"
     if f.params.any (·.named) then
       throw s!"{f.pos.show}: {n} has several values and named parameters: such functions are not supported yet (#235)"
     if anyE (fun | .ret .. => true | _ => false) f.body then
