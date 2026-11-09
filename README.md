@@ -93,7 +93,12 @@ and what a QuickProof result relies on.
 **By testing**: the C interpreter is a transcription of `Interp.lean` and is
 not proved. It is compared with the Lean interpreter on the Verse test suite
 (`scripts/test-verse.sh --c`) and on random programs (`scripts/fuzz-diff.sh`),
-and it runs under ASan/UBSan.
+and it runs under ASan/UBSan. Some fuzzers also check both against a model of
+the documented semantics, written apart from the code it checks:
+`scripts/fuzz-model-gadt.sh` (classes that fix, repeat or hide type arguments,
+and casts on them), `scripts/fuzz-model-mv.sh` (choice and functions with
+several values) and `scripts/fuzz-model-sched.sh` (the scheduler), with the
+models in `scripts/models/`.
 
 ## Using it
 
