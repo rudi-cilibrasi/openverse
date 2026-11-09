@@ -777,7 +777,8 @@ Main():void =
   Refused for now: a recursive one that is not a generator and is not
   `<computes>`, or may print or call `Err()`, a generator whose clauses,
   conditions or arguments have effects where the first success is taken in
-  a method, a
+  a method, a constructor, a parameter's or field's default or a `defer:`,
+  or where the names the clauses after it use have type parameters, a
   generic or overloaded one, one with named parameters
   or a `return` or a `defer:` of its own (in its body, not in a block inside it), a method, one used as a function value, a call of a
   recursive one in an `if`'s branch, a choice's alternative or a `set`'s path, and, since its body is inlined where other names may be

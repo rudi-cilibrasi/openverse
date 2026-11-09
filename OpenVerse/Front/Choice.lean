@@ -942,7 +942,9 @@ def firstBody (helper : String) (p : Pos) (b : String) (bty : Option STy) (cls :
         | some t => SExpr.app a.pos (.ident a.pos "$first") [.block a.pos [.decl a.pos s!"{b}$v" (some t) false a,
             .ident a.pos s!"{b}$v"]] false
         | none => a
-      .app a.pos (.ident a.pos "$first") [.block a.pos ([.decl a.pos b bty false v] ++ rest ++ [tup])] false
+      -- (`$firstP`: `first{…}` of clauses that are lifted already, the
+      -- consumer's, which lifting again would bind twice)
+      .app a.pos (.ident a.pos "$firstP") [.block a.pos ([.decl a.pos b bty false v] ++ rest ++ [tup])] false
   let group (v : SExpr) : SExpr := match alts? v with
     | some as => mk v.pos (as.map alt)
     | none => alt v

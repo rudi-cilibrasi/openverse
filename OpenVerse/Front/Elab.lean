@@ -2297,6 +2297,15 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
         "nor from the branch of an if without else or one that is more than a choice or a value")
     eerr p ("a choice (a | b) has several values, so it must be in a failure context that takes them: " ++
       "an if condition, a for's clauses, first{…}, option{…}, logic{…}, not, or the left of or (#208)")
+  | .app p (.ident _ "$firstP") [.block _ items] false =>
+    -- (#246) `first{…}` of clauses that are lifted already (a consumer's,
+    -- taken into a lazily taken call's function of its own): not again,
+    -- which would bind their lifted names a second time
+    let (code, c1) ← elabOneGo { ctx with inLoop := false, inChoice := ctx.inLoop, inTaking := true, canFail := true }
+      items.dropLast
+    let c1 := { c1 with inLoop := ctx.inLoop, inChoice := ctx.inChoice, inTaking := ctx.inTaking, canFail := ctx.canFail }
+    let rv ← elabE c1 (items.getLastD (.tuple p [])) exp
+    return ⟨.seq (Expr.firstE code) rv.e, rv.ty⟩
   | .app p (.ident _ "$first") [.block bp items] false =>
     -- `first{…}` and `first(…){…}`: without a choice, a block
     if !Choice.hasChoice items.dropLast then return ← elabE ctx (.block bp items) exp
