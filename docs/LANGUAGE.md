@@ -764,8 +764,11 @@ Main():void =
   named parameter's default sees the fields. Inlining happens before
   types are checked, so `R.M` has to name that method whatever `R` is:
   such a method's name must be no other class's or interface's member
-  (so it is no override and is not overridden), no top-level name and no
-  parameter or local, and its class not generic.
+  (so it is no override and is not overridden), no struct field,
+  enumerator or member of a built-in type (`Length`, `Find`, `Signal`, …),
+  no top-level name and no parameter or local, and its class not generic.
+  A parameter or local of the method named like a member is refused, as
+  anywhere in a class.
 
   ```verse
   dice := class:

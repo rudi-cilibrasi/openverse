@@ -886,6 +886,12 @@ def loopShape? (g : String) (mv : List String) (body : SExpr) : Option (List SEx
     else isChoice tail && groupOK tail
   if cls.all plain && tailOK then some (cls, tail) else none
 
+/-- A function's name as written: a method's function `C$M` as `C.M`, and
+    `F$all` as `F` (#283). -/
+def shownFnName (n : String) : String :=
+  let n := if n.endsWith "$all" then String.ofList (n.toList.take (n.length - 4)) else n
+  if n.startsWith "$" then n else (n.replace "::" ".").replace "$" "."
+
 /-- The calls of `g` in `e` (its consumer's code, #246) as `$rec(args)`. -/
 def markRec (g : String) : SExpr → SExpr :=
   mapE fun
@@ -913,28 +919,32 @@ partial def inlineCalls (mv : List (String × MFn)) (e : SExpr) (recs : List Str
       let namedAs : List (Pos × String × SExpr) := as.filterMap fun
         | .decl ap n _ _ x => if n.startsWith "?" then some (ap, (n.drop 1).toString, x) else none
         | _ => none
-      let arrayParam := !hasNamed && match f.params with | [sp] => (match sp.ty with | .arr _ => true | _ => false) | _ => false
-      let tupleArg := !hasNamed && as.length == 1 && f.params.length ≥ 2
+      -- (a method's function, #283: its receiver first, then the arguments
+      -- as a method's; no array form for a method, as at its call)
+      let selfP := match f.params with | sp :: _ => sp.name == "$Self" | _ => false
+      let off := if selfP then 1 else 0
+      let arrayParam := !hasNamed && !selfP && match f.params with | [sp] => (match sp.ty with | .arr _ => true | _ => false) | _ => false
+      let tupleArg := !hasNamed && as.length == 1 + off && f.params.length ≥ 2 + off
       -- (one tuple argument, no named one, to several positional parameters:
       -- expanded, as at a call)
-      let tupleNamed := hasNamed && namedAs.isEmpty && as.length == 1 && posPs.length ≥ 2
+      let tupleNamed := hasNamed && namedAs.isEmpty && as.length == 1 + off && posPs.length ≥ 2 + off
       if hasNamed then
         if posAs.length != posPs.length && !tupleNamed then
-          throw s!"{p.show}: {g} takes {posPs.length} positional argument(s), found {posAs.length}"
+          throw s!"{p.show}: {shownFnName g} takes {posPs.length - off} positional argument(s), found {posAs.length - off}"
         for ((ap, n, _), i) in namedAs.zipIdx do
-          if !(f.params.any fun sp => sp.named && sp.name == n) then throw s!"{ap.show}: {g} has no parameter ?{n}"
+          if !(f.params.any fun sp => sp.named && sp.name == n) then throw s!"{ap.show}: {shownFnName g} has no parameter ?{n}"
           if (namedAs.take i).any (·.2.1 == n) then throw s!"{ap.show}: ?{n} is given twice"
         for sp in f.params do
           if sp.named && sp.default.isNone && !namedAs.any (·.2.1 == sp.name) then
-            throw s!"{p.show}: {g} needs the argument ?{sp.name}, which has no default"
+            throw s!"{p.show}: {shownFnName g} needs the argument ?{sp.name}, which has no default"
       else
         if as.length != f.params.length && !arrayParam && !tupleArg then
-          throw s!"{p.show}: {g} takes {f.params.length} argument(s), found {as.length}"
+          throw s!"{p.show}: {shownFnName g} takes {f.params.length - off} argument(s), found {as.length - off}"
         if !namedAs.isEmpty then
-          throw s!"{p.show}: {g} has no named parameters"
+          throw s!"{p.show}: {shownFnName g} has no named parameters"
       if br != f.fx.contains "decides" then
-        throw (if br then s!"{p.show}: {g} is not <decides>: call it with {g}(…)"
-          else s!"{p.show}: {g} is <decides>: call it with {g}[…]")
+        throw (if br then s!"{p.show}: {shownFnName g} is not <decides>: call it with {shownFnName g}(…)"
+          else s!"{p.show}: {shownFnName g} is <decides>: call it with {shownFnName g}[…]")
       -- (with named parameters, the positional arguments' then the named
       -- ones' values, as evaluated)
       let as' ← if hasNamed then pure [] else as.mapM go
@@ -972,7 +982,7 @@ partial def inlineCalls (mv : List (String × MFn)) (e : SExpr) (recs : List Str
             if !sp.named || namedAs.any (·.2.1 == sp.name) then return none
             -- (one that calls `g` again omitting it: as at a call)
             if inDflt.contains (g, sp.name) then
-              throw s!"{p.show}: the default of ?{sp.name} of {g} uses itself (a call of {g} that omits ?{sp.name})"
+              throw s!"{p.show}: the default of ?{sp.name} of {shownFnName g} uses itself (a call of {shownFnName g} that omits ?{sp.name})"
             let d' ← inlineCalls mv (renameTypes ρ d) recs loops clash ((g, sp.name) :: inDflt)
             let earlier := (f.params.take k).map fun e => SExpr.tuple q [.ident q e.name, .ident q (tag e.name)]
             return some (.decl q (tag sp.name) (tyOf sp.ty) false
@@ -981,8 +991,9 @@ partial def inlineCalls (mv : List (String × MFn)) (e : SExpr) (recs : List Str
       let (pds, unpack, as'') : List SExpr × List SExpr × List SExpr :=
         if tupleNamed then
           let t := tag "$tuple"
-          ([.decl q t (tyOf (.tup (posPs.map (·.ty)))) false (.ident q "$arg")],
-            (posPs.zipIdx.map fun (sp, i) =>
+          let tps := posPs.drop off
+          ((posPs.take off).map pdOf ++ [.decl q t (tyOf (.tup (tps.map (·.ty)))) false (.ident q "$arg")],
+            (tps.zipIdx.map fun (sp, i) =>
               SExpr.decl q (tag sp.name) (tyOf sp.ty) false (.app q (.ident q t) [.int q (i : Int)] false)) ++ dflts,
             posVals)
         else if hasNamed then
@@ -994,10 +1005,12 @@ partial def inlineCalls (mv : List (String × MFn)) (e : SExpr) (recs : List Str
           (f.params.map fun sp => SExpr.decl q (tag sp.name) (tyOf sp.ty) false (.ident q "$arg"), [],
             [.arrayLit p as'])
         else
-          -- (the tuple bound once, its elements into the parameters)
+          -- (the tuple bound once, its elements into the parameters; a
+          -- method's receiver first)
           let t := tag "$tuple"
-          ([.decl q t (tyOf (.tup (f.params.map (·.ty)))) false (.ident q "$arg")],
-            (f.params.zipIdx.map fun (sp, i) =>
+          let tps := f.params.drop off
+          ((f.params.take off).map pdOf ++ [.decl q t (tyOf (.tup (tps.map (·.ty)))) false (.ident q "$arg")],
+            (tps.zipIdx.map fun (sp, i) =>
               SExpr.decl q (tag sp.name) (tyOf sp.ty) false (.app q (.ident q t) [.int q (i : Int)] false)), as')
       -- (one taken lazily, #246: its parameters, its clauses and its last
       -- expression, its own calls marked, for its consumer to run)
@@ -1224,6 +1237,26 @@ def multiValued (fns : List (String × MFn)) : List String := Id.run do
     becomes (#283). -/
 def methodFnName (c m : String) : String := s!"{c}${m}"
 
+/-- A method's body with the names of its class's members qualified by
+    `Self` (#283): `isMethod`, `isMember` and `free` say which names. -/
+partial def qualMembers (isMethod isMember free : String → Bool) (e : SExpr) : SExpr :=
+  let go := qualMembers isMethod isMember free
+  mapE (fun
+    | .app p (.ident q n) args br =>
+      if free n && isMethod n then some (.app p (.member q (.ident q "Self") n) (args.map go) br) else none
+    | .ident p n => if free n && isMember n then some (.member p (.ident p "Self") n) else none
+    | _ => none) e
+
+/-- `e` with the calls of `names`, by name or as a member, as calls of
+    `$h`: what is left of the names is then a use as a value (#283). -/
+partial def eraseCallHeads (names : List String) (e : SExpr) : SExpr :=
+  let go := eraseCallHeads names
+  mapE (fun
+    | .app p (.ident q x) args br => if names.contains x then some (.app p (.ident q "$h") (args.map go) br) else none
+    | .app p (.member q r x) args br =>
+      if names.contains x then some (.app p (.ident q "$h") ((r :: args).map go) br) else none
+    | _ => none) e
+
 /-- The calls of the methods `sel` (name, class) in `e` as calls of their
     functions (#283): `R.M(args)` as `C$M(R, args)`, and in the body of a
     class `inC` below `C` (`anc` gives a class's ancestors), `M(args)` as
@@ -1234,8 +1267,10 @@ partial def rwMethodCalls (anc : String → List String) (sel : List (String × 
   mapE (fun
     | .app p (.member q recv m) args br =>
       match sel.lookup m with
-      | some c => if (match recv with | .ident _ "(super:)" => true | _ => false) then none
-        else some (.app p (.ident q (methodFnName c m)) (rw recv :: args.map rw) br)
+      -- (`(super:)M(…)` too: `M` is overridden nowhere, so it is `C`'s)
+      | some c =>
+        let recv := match recv with | .ident r "(super:)" => .ident r "Self" | r => rw r
+        some (.app p (.ident q (methodFnName c m)) (recv :: args.map rw) br)
       | none => none
     | .app p (.ident q m) args br =>
       match sel.lookup m, inC with
@@ -1256,7 +1291,7 @@ partial def rwMethodCalls (anc : String → List String) (sel : List (String × 
     class is not generic, and it is not abstract, an override, generic,
     `<suspends>`, or a user of `(super:)`. Those methods that turn out to
     have several values are taken out of their class. -/
-def methodFns (tops : List STop) : Except String (List STop) := do
+def methodFns (tops : List STop) (reserved : List String := []) : Except String (List STop) := do
   let classes := tops.filterMap fun
     | .classDef _ n tps _ pa ii fs _ ms => some (n, (pa, ii, fs, ms, tps))
     | _ => none
@@ -1272,7 +1307,13 @@ def methodFns (tops : List STop) : Except String (List STop) := do
     | some (_, _, fs, ms, _) => fs.map (·.1) ++ ms.filterMap fun | .fn _ m .. => some m | _ => none
     | none => []
   let allMethods : List String := classes.flatMap fun (_, (_, _, _, ms, _)) => ms.filterMap fun | .fn _ m .. => some m | _ => none
-  let allFields : List String := classes.flatMap fun (_, (_, _, fs, _, _)) => fs.map (·.1)
+  -- (struct fields and enumerators too, and the members of built-in types
+  -- and of the prelude, `reserved`: `R.M` may be any of them)
+  let allFields : List String := classes.flatMap (fun (_, (_, _, fs, _, _)) => fs.map (·.1)) ++
+    tops.flatMap (fun
+      | .const _ _ _ (.structDef _ _ fs) => fs.map (·.1)
+      | .const _ _ _ (.enumDef _ vs _) => vs
+      | _ => []) ++ reserved
   let topNames : List String := tops.filterMap fun | .fn _ n .. | .const _ n .. | .classDef _ n .. => some n
   let localBinders : List String := tops.flatMap fun
     | .fn _ _ ps _ _ _ b => ps.map (·.name) ++ localsOf b
@@ -1290,7 +1331,7 @@ def methodFns (tops : List STop) : Except String (List STop) := do
       else if fx.contains "override" || (allMethods.filter (· == n)).length != 1 then
         some s!"another class or interface has a method {n} too (an override, an overridden one, or another), so a call R.{n}(…) cannot be known to be this one where it is inlined, before types are checked"
       else if allFields.contains n || topNames.contains n || localBinders.contains n then
-        some s!"{n} is also the name of a field, a top-level name, a parameter or a local"
+        some s!"{n} is also the name of a field, an enumerator, a member of a built-in type, a top-level name, a parameter or a local"
       else if superCall b then some "it uses (super:)"
       else none
     | _ => some ""
@@ -1309,11 +1350,7 @@ def methodFns (tops : List STop) : Except String (List STop) := do
         | none => false
       let bound := ps.map (·.name) ++ localsOf b
       let free := fun n => !bound.contains n && n != "Self"
-      let qual := mapE (fun
-        | .app p2 (.ident q2 n) args br =>
-          if free n && isMethodName n then some (.app p2 (.member q2 (.ident q2 "Self") n) args br) else none
-        | .ident p2 n => if free n && mem.contains n then some (.member p2 (.ident p2 "Self") n) else none
-        | _ => none)
+      let qual := qualMembers isMethodName mem.contains free
       -- (now `M(…)` is `Self.M(…)`; then the calls of the selected ones;
       -- a parameter's default too, which sees the method's fields)
       let fix := fun e => renameE [("Self", "$Self")] (rw sel (some c) (qual e))
@@ -1341,6 +1378,16 @@ def methodFns (tops : List STop) : Except String (List STop) := do
             throw s!"{p.show}: {c.replace "::" "."}.{n} has several values, but {why}: such methods are not supported yet (#283)"
   let sel := owner.filter fun (m, c) => mv.contains (methodFnName c m)
   if sel.isEmpty then return tops
+  -- (a parameter or local named like a member: refused, as in the class,
+  -- since the body leaves it)
+  for (c, m) in cands do
+    if let .fn p n ps _ _ _ b := m then
+      if sel.any (fun (m', c') => m' == n && c' == c) then
+        let mem := members c
+        if let some sp := ps.find? (mem.contains ·.name) then
+          throw s!"{p.show}: parameter '{sp.name}' of {n} is already a field or method of {c.replace "::" "."}; Verse does not allow shadowing"
+        if let some (x, q) := (localDecls b).find? (mem.contains ·.1) then
+          throw s!"{q.show}: '{x}' is already a field or method of {c.replace "::" "."}; Verse does not allow shadowing"
   -- (the program with those methods out of their classes and their calls
   -- rewritten, and their functions)
   let out := tops.map fun
@@ -1355,6 +1402,7 @@ def methodFns (tops : List STop) : Except String (List STop) := do
   -- function's; a name of theirs is nothing else's)
   let valueUse (e : SExpr) : Option (Pos × String) := Id.run do
     let mut r := none
+    let e := eraseCallHeads (sel.map (·.1)) e
     for m in sel.map (·.1) do
       if r.isNone && anyE (fun | .member _ _ x | .ident _ x => x == m | _ => false) e then
         r := some (e.pos, m)
@@ -1369,6 +1417,7 @@ def methodFns (tops : List STop) : Except String (List STop) := do
     for b in bodies do
       if let some (_, m) := valueUse b then
         let c := (sel.lookup m).getD ""
+        let b := eraseCallHeads (sel.map (·.1)) b
         let p := ((stmtsOf b).find? (anyE fun | .member _ _ x | .ident _ x => x == m | _ => false)).map (·.pos) |>.getD b.pos
         throw s!"{p.show}: {c.replace "::" "."}.{m} has several values, so it cannot be used as a function value (#235, #283)"
   return out ++ all.filterMap fun (c, m) => match m with
@@ -1379,9 +1428,10 @@ def methodFns (tops : List STop) : Except String (List STop) := do
     calls (see above); the program unchanged when there are none. Also
     whether some are taken lazily (#246), whose consumers need a class of
     stack cells. -/
-def inlineMulti (tops : List STop) : Except String (List STop × Bool) := do
-  -- (methods with several values as functions first, #283)
-  let tops ← methodFns tops
+def inlineMulti (tops : List STop) (reserved : List String := []) : Except String (List STop × Bool) := do
+  -- (methods with several values as functions first, #283; `reserved`:
+  -- the members of built-in types and of the prelude)
+  let tops ← methodFns tops reserved
   let fns := multiCandidates tops
   let mv := multiValued fns
   if mv.isEmpty then return (tops, false)
@@ -1433,21 +1483,21 @@ def inlineMulti (tops : List STop) : Except String (List STop × Bool) := do
   for g in needAll do
     let some f := mfs.lookup g | continue
     let why (w : String) : String :=
-      s!"{f.pos.show}: {g} has several values and is recursive, or called by a recursive one, {w}: such a function must be <computes>, keep no local state, and reach nothing that prints or calls Err(), as all its values are computed at a call (#235)"
+      s!"{f.pos.show}: {shownFnName g} has several values and is recursive, or called by a recursive one, {w}: such a function must be <computes>, keep no local state, and reach nothing that prints or calls Err(), as all its values are computed at a call (#235)"
     if !f.fx.contains "computes" then throw (why "and it is not <computes>")
     if anyE (fun | .set .. | .decl _ _ _ true _ => true | _ => false) f.body then
       throw (why "and it has a var or a set")
   for (n, f) in mfs do
     if (fns.filter (·.1 == n)).length > 1 then
-      throw s!"{f.pos.show}: {n} has several values and is overloaded: such functions are not supported yet (#235)"
+      throw s!"{f.pos.show}: {shownFnName n} has several values and is overloaded: such functions are not supported yet (#235)"
     if f.params.any (·.named) && (recs.contains n || needAll.contains n || !f.tparams.isEmpty) then
       let what := if recs.contains n then "recursive" else if needAll.contains n then
         "called by a recursive one (so its values are computed at the call, F$all)" else "generic"
-      throw s!"{f.pos.show}: {n} has several values and named parameters, and is {what}: such functions are not supported yet (#235, #283)"
+      throw s!"{f.pos.show}: {shownFnName n} has several values and named parameters, and is {what}: such functions are not supported yet (#235, #283)"
     if anyE (fun | .ret .. => true | _ => false) f.body then
-      throw s!"{f.pos.show}: {n} has several values and a return, which would leave its caller once inlined (#235)"
+      throw s!"{f.pos.show}: {shownFnName n} has several values and a return, which would leave its caller once inlined (#235)"
     if (stmtsOf f.body).any (fun | .app _ (.ident _ "$defer") _ _ => true | _ => false) then
-      throw s!"{f.pos.show}: {n} has several values and a defer:, which would run in its caller's clauses once inlined: not supported yet (#235)"
+      throw s!"{f.pos.show}: {shownFnName n} has several values and a defer:, which would run in its caller's clauses once inlined: not supported yet (#235)"
     -- (its body is inlined where other names may be in scope: so neither
     -- its name nor a name its body uses from outside may be bound anywhere)
     if binders.contains n then

@@ -193,8 +193,10 @@ renamed. `R.M(args)` becomes `C$M(R, args)`, and in the bodies of `C` and
 the classes below it, `M(args)` becomes `C$M(Self, args)`. Without types, `R.M`
 must name that method whatever `R` is, so only a method whose name no
 other class or interface has as a member qualifies (no override, not
-overridden), and only one that is not a top-level name, a parameter or a
-local, of a class that is not generic. Which candidates have several
+overridden). Its name must also be no struct field or enumerator, and no
+member of a built-in type or of the prelude (`reserved`, which Elab
+passes in), no top-level name, no parameter and no local. Its class must
+not be generic. Which candidates have several
 values is the functions' fixpoint (`multiValued`), run with every
 candidate's calls rewritten. Those that do leave their class. One that
 has several values but does not qualify is refused, saying why, and what
