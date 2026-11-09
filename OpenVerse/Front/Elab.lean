@@ -6244,7 +6244,8 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
   let rootJ (k : Nat) : Nat := user.length + k
   let rootTags := (List.range roots.size).map (fun k => tagBase + rootJ k) ++ (List.range B).map wrapTag
   let mainJ := (lows.findIdx? (·.1 == mainSig.idx)).getD 0
-  let rootAny : VTy := .ref ((tagBase + mainJ) :: rootTags) []
+  let rootAnyTags : List Nat := (tagBase + mainJ) :: rootTags
+  let rootAny : VTy := .ref rootAnyTags []
   -- each root's trampoline (frame, sched) and `start(sched, frame)`
   let mut rootSigs : Array (List VTy × VTy) := #[]
   for k in List.range roots.size do
@@ -6285,6 +6286,8 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
   -- resuming; its start function takes it (`$cancelRoot`, whose index is
   -- known only later: a mark, substituted then)
   let cancelRootMark : Nat := 0xFFFFFF
+  -- (and `$cancelTaskRoot(sched, task)`, which unwinds a task's root, #270)
+  let cancelTaskRootMark : Nat := 0xFFFFFE
   -- (one that ended in that run, `st` 1, is not cancelled after it)
   let takeCancel (root st : Expr) : Expr :=
     .ite (.prim .query [.heap (.get cancelCurF) [.local 0]])
@@ -6348,7 +6351,7 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
         .ite (.prim .eq [.local 4, .lit (.logic false)])
           (.seq (.ite (.prim .query [.heap (.get cancelReqF) [.local 3]])
             (.seq (Suspend.seqVoid [.heap (.set cancelReqF) [.local 3, .lit (.logic false)],
-              .ite (.call cancelRootMark [.local 1, .prim .query [.heap (.get rootF) [.local 3]]]) Suspend.vd Suspend.vd])
+              .call cancelTaskRootMark [.local 1, .local 3]])
               Suspend.vd) Suspend.vd) Suspend.vd) Suspend.vd] |> fun e => Expr.seq e (.local 2)
       branchFns := branchFns.push { name := s!"$branch{K}$tramp", arity := 2, nslots := 6, decides := false,
                                     writes := true, body := initPrefixE 2 [Suspend.int 0,
@@ -6626,6 +6629,28 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
     cancelFns := cancelFns.push wfn
     cancelTys := cancelTys.push [wrapTy K, schedTy]
     cancelSigs := cancelSigs.push ([wrapTy K, schedTy], VTy.void)
+  -- `$cancelTaskRoot(sched, task)`: unwinds the task's root, if it has one.
+  -- The root is read into a slot in the condition and unwound after it: a
+  -- heap write in a condition makes the reference interpreter keep the heap
+  -- as it was, for the rollback, and so copy it (#270). The slot has the
+  -- roots' type widened by `$nil`, so that its initial value is an empty
+  -- object, and the unwinding goes through a test of the roots' classes, to
+  -- `$cancelRootSelf(root, sched)`, `$cancelRoot` with its root first.
+  let rootW : VTy := .ref (rootAnyTags ++ [nilTag]) []
+  let cancelSelfIdx := cancelRootIdx + cancelFns.size
+  let cancelTaskRootIdx := cancelSelfIdx + 1
+  cancelFns := cancelFns.push { name := "$cancelRootSelf", arity := 2, nslots := 2, decides := false, writes := true,
+                                body := .call cancelRootIdx [.local 1, .local 0] }
+  cancelTys := cancelTys.push [rootAny, schedTy]
+  cancelSigs := cancelSigs.push ([rootAny, schedTy], VTy.void)
+  let taskRootBody : Expr := .ite (.assign 2 (.prim .query [.heap (.get rootF) [.local 1]]))
+    (.seq (.ite (.heap (.isTag rootAnyTags) [.local 2]) (.call cancelSelfIdx [.local 2, .local 0]) Suspend.vd) Suspend.vd)
+    Suspend.vd
+  cancelFns := cancelFns.push { name := "$cancelTaskRoot", arity := 2, nslots := 3, decides := false, writes := true,
+                                body := initPrefixE 2 [.heap (.new nilTag) []] taskRootBody }
+  cancelTys := cancelTys.push [schedTy, taskBaseTy, rootW]
+  cancelSigs := cancelSigs.push ([schedTy, taskBaseTy], VTy.void)
+  fns := fns.map fun fn => { fn with body := Suspend.substCall cancelTaskRootMark (fun es => .call cancelTaskRootIdx es) fn.body }
   fns := fns ++ cancelFns
   slotTys := slotTys ++ cancelTys
   fsigs := fsigs ++ cancelSigs.toList
@@ -6637,8 +6662,7 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
     .ite (.prim .eq [.heap (.get tDoneF) [t], .lit (.logic false)])
       (.seq (.ite (.prim .query [.heap (.get runningF) [t]])
         (.seq (.heap (.set cancelReqF) [t, .lit (.logic true)]) Suspend.vd)
-        (.seq (.ite (.call cancelRootIdx [.local 1, .prim .query [.heap (.get rootF) [t]]]) Suspend.vd Suspend.vd)
-          Suspend.vd)) Suspend.vd) Suspend.vd
+        (.seq (.call cancelTaskRootIdx [.local 1, t]) Suspend.vd)) Suspend.vd) Suspend.vd
   let replCancel : List Expr → Expr := fun es => match es with
     | [t] => cancelAt t
     | _ => .prim .userErr []

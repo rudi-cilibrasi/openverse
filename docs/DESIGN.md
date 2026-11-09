@@ -609,7 +609,13 @@ at once) instead of cancelled.
 `T.Cancel()` reaches the task's root (recorded in the task when it starts)
 through `$cancelRoot`, which calls the root's cancel function. That marks
 the task cancelled and done first, so that a cancel of it while it unwinds
-changes nothing (#261), and unwinds it as a race's loser is unwound. A
+changes nothing (#261), and unwinds it as a race's loser is unwound. (The
+root is unwrapped from the task's option field into a slot in a condition
+and unwound after it, in `$cancelTaskRoot`, which a branch's trampoline
+taking its owner's request uses too: unwinding in the condition made the
+reference interpreter copy the heap at each cancel, #270. The slot's type
+is the roots' widened by `$nil`, whose empty object is its initial value,
+and a test of the roots' classes narrows it.) A
 task whose code is running is marked running: by its trampoline while its
 root runs, and by a branch's trampoline, for the branch's owner, while the
 branch runs (#260); cancelling a running task only records a request in
