@@ -162,10 +162,12 @@ the choice's name in its place:
 
 Lifting goes through the operands that are evaluated left to right, once
 each: those of arithmetic, comparisons, calls (the receiver first), member
-access, `?`, tuples, arrays, maps and string interpolation. A choice
-elsewhere (in a block, a branch, a struct construction, whose fields are
-evaluated in declaration order, a named argument, or an alternative) is not
-lifted, and the elaborator refuses it. -/
+access, `?`, tuples, arrays, maps and string interpolation; a call's
+named arguments after its positional ones, as they are evaluated; a
+block's clauses; a construction's fields, in its type's declaration order,
+as they are evaluated (#283). A choice elsewhere (a branch that is more
+than a value, an alternative, which the elaborator takes apart) is not
+lifted here. -/
 
 /-- The variable a `set` path starts from. -/
 partial def rootName? : SExpr → Option String
@@ -246,13 +248,13 @@ partial def hasLiftable : SExpr → Bool
   | .app _ (.ident _ "$each") _ false => true
   | .app _ (.ident _ "$loop") _ false => true
   | e@(.ite ..) => isBranchy e
-  | .app _ f args _ => headHas hasLiftable f || args.any fun a =>
-      (match a with
-       | .decl _ n _ _ _ => !n.startsWith "?"
-       -- (the body of `first{…}`, `spawn`, `branch`, `defer`, `sync`, … is
-       -- no value to lift from: its choices are its own)
-       | .block .. => !(match f with | .ident _ n => n.startsWith "$" | _ => false)
-       | _ => true) && hasLiftable a
+  | .app _ f args _ => headHas hasLiftable f || args.any fun
+      -- (a named argument's value, #283)
+      | .decl _ n _ _ x => n.startsWith "?" && hasLiftable x
+      -- (the body of `first{…}`, `spawn`, `branch`, `defer`, `sync`, … is
+      -- no value to lift from: its choices are its own)
+      | a@(.block ..) => !(match f with | .ident _ n => n.startsWith "$" | _ => false) && hasLiftable a
+      | a => hasLiftable a
   | .bin _ _ a b => hasLiftable a || hasLiftable b
   | .cmp _ a rest => hasLiftable a || rest.any (hasLiftable ·.2)
   | .member _ e _ | .query _ e | .neg _ e => hasLiftable e
@@ -506,16 +508,18 @@ partial def liftE (isVal : String → Bool) (isField : String → String → Boo
     | _ => LM.bind e.pos "c" e
   | .app p f args br =>
     let (hs, whole) := headOps isVal isField f
-    let ops := hs ++ args
-    -- (named arguments are evaluated after the positional ones: one before
-    -- the last choice would change places, so then no lifting)
-    let last := (ops.zipIdx.filter (hasLiftable ·.1)).getLast?.map (·.2)
-    let named := ops.zipIdx.any fun (a, i) => (match a with
-      | .decl _ n _ _ _ => n.startsWith "?" | _ => false) && last.any (i < ·)
-    if named then return e
-    let ops' ← liftOps isVal isField ops
+    -- (a call evaluates its positional arguments, then its named ones as
+    -- written, then the defaults of those omitted, #283: the arguments are
+    -- put in that order, which changes nothing else, and a named one's
+    -- value is lifted as an argument is)
+    let named := fun | SExpr.decl _ n _ _ _ => n.startsWith "?" | _ => false
+    let args := args.filter (!named ·) ++ args.filter named
+    let val := fun | a@(SExpr.decl _ n _ _ x) => if n.startsWith "?" then x else a | a => a
+    let ops' ← liftOps isVal isField (hs ++ args.map val)
     let hs' := ops'.take hs.length
-    let args' := ops'.drop hs.length
+    let args' := (args.zip (ops'.drop hs.length)).map fun
+      | (.decl q n t v _, x) => if n.startsWith "?" then .decl q n t v x else x
+      | (_, x) => x
     let f' := match f, hs' with
       | .member q _ m, [o] => if whole then o else .member q o m
       | _, [h] => h

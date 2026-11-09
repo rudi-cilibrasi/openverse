@@ -714,15 +714,17 @@ Main():void =
   A choice inside a struct or class construction is lifted as one in a
   call's arguments, in the order the construction evaluates its fields: its
   type's declaration order, not as written (`pt{Y := F(), X := 1 | 2}`
-  takes X's value first, then calls `F`). Nothing is lifted from the body
+  takes X's value first, then calls `F`). A call's named arguments are
+  lifted after its positional ones, in the order written, as a call
+  evaluates them (the defaults of those omitted come after):
+  `F(?C := G(), 1 | 2)` takes the choice, then calls `G`. Nothing is lifted from the body
   of `first{…}`, `spawn`, `branch`, `sync`, `race`, `rush` or `defer:`:
   such a body takes its own choices or runs apart.
 
   Refused for now: a choice inside a block with a `defer:` of its own
   (whose scope would change), or inside a construction where a field it
   does not give, with a default that is more than a literal, comes before
-  the choice (the default runs in its place); a named
-  argument, a call where a named argument comes before the choice, an
+  the choice (the default runs in its place); an
   alternative of a `set`'s choice, either side of `and`, the right of `or`, a range, a
   `set`'s path (`set A[0 | 1] = …`), or the branch of an `if` without
   `else` or one that is more than a choice or a value; and
@@ -1269,6 +1271,6 @@ Main()<suspends>:void =
 arithmetic on rationals (see [rational](#rational)), float functions beyond those of [float](#float),
 the class features listed under [Classes](#classes), struct methods (Verse structs have none; classes do),
 `weak_map`, module paths `using{/Verse.org/…}` (accepted and ignored), overloading beyond [Overloading](#overloading), nested
-functions and lambdas (not released in Verse), choice beyond [Choice](#choice) (recursive functions with several values that have effects, other than generators, methods with several values; a choice inside a named argument, a block with a `defer:` or a construction whose default runs before it), concurrency beyond [Concurrency](#concurrency) (`subscribable_event()` without a value), and effect checking
+functions and lambdas (not released in Verse), choice beyond [Choice](#choice) (recursive functions with several values that have effects, other than generators, methods with several values; a choice inside a block with a `defer:` or a construction whose default runs before it), concurrency beyond [Concurrency](#concurrency) (`subscribable_event()` without a value), and effect checking
 other than `<decides>` and the heap effects (`<converges>` is accepted and
 ignored).

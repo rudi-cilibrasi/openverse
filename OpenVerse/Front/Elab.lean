@@ -2374,7 +2374,7 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
       if ctx.liftWhy != "" then
         eerr p s!"a call of {f}, which has several values, cannot be lifted from {ctx.liftWhy}, for now (#283)"
       eerr p (s!"a call of {f}, which has several values, cannot be lifted from here, for now (#235): " ++
-        "not from a block with a defer:, a construction where a field's default runs before it, a named argument, " ++
+        "not from a block with a defer:, a construction where a field's default runs before it, " ++
         "an alternative of a set's choice, the right of " ++
         "and or or, a range, a set's path, nor from the branch of an if")
     eerr p (s!"{f} has several values, so a call of it must be in a failure context that takes them: " ++
@@ -2385,7 +2385,7 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
       if ctx.liftWhy != "" then
         eerr p s!"a call of {f}, which has several values, cannot be lifted from {ctx.liftWhy}, for now (#283)"
       eerr p (s!"a call of {f}, which has several values, cannot be lifted from here, for now (#235): " ++
-        "not from a block with a defer:, a construction where a field's default runs before it, a named argument, " ++
+        "not from a block with a defer:, a construction where a field's default runs before it, " ++
         "an alternative of a set's choice, the right of " ++
         "and or or, a range, a set's path, nor from the branch of an if")
     eerr p (s!"{f} has several values, so a call of it must be in a failure context that takes them: " ++
@@ -2395,7 +2395,7 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
       eerr p s!"a choice (a | b) cannot be lifted from {ctx.liftWhy}, for now (#283)"
     if ctx.inTaking then
       eerr p ("a choice (a | b) cannot be lifted from here, for now (#208): not from a block with a defer:, " ++
-        "a construction where a field's default runs before it, a named argument, an alternative of a set's " ++
+        "a construction where a field's default runs before it, an alternative of a set's " ++
         "choice, the right of and or or, a range, " ++
         "nor from the branch of an if without else or one that is more than a choice or a value")
     eerr p ("a choice (a | b) has several values, so it must be in a failure context that takes them: " ++
