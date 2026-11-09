@@ -218,6 +218,10 @@ A `for` compiles it this way wherever its clauses go:
 - after a generator taken lazily (#246), the paths go into the filter of the one-element iteration that binds each value.
 
 `exclToChoice` stops at a nested `for`. Otherwise an `if` condition with a choice of its own would turn that `for`'s exclusive choices into generators before the `for` sees them. The eager route (`F$all`, #235) refuses a function with a `return`, as before.
+
+The names made for a path, and for a composed choice in a first-success context or a `for` (`$x…`, `$ct…`, `$cf…`), contain the binding's name. That name is tagged for the inlined call's site, while a position inside an inlined body is shared by every call of it. So two calls of the same function in one context don't clash. The one-element generator is named for the depth of its scope, since a `for` of an alternative's own has the same position.
+
+Each path copies the clauses after the choice and the body, so the code doubles with each such call in one `for`, as with #296's composed choices. The route around both is the same: continuation functions.
 `checkBody` reads an exclusive choice as an if-chain on its guards.
 Programs without one compile byte for byte as before. The last statement's branches return
 their values (`tailReturns`), and a `return` without a value gives `()`.

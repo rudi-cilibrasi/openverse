@@ -5106,7 +5106,7 @@ partial def elabFor (ctx : Ctx) (p : Pos) (clauses : List SExpr) (body : SExpr) 
               | none => [.decl rp x xty false (.tuple rp [])]
             | e => [.decl e.pos x xty false e]
           let lifted := normGens (Choice.prepare (gs ++ rcl) (choiceValues cA) (choiceField cA)
-            (site := s!"$x{gp.line}_{gp.col}a{i}") (fieldOrder := choiceOrder cA) (keepExcl := true))
+            (site := s!"$x{x}a{i}") (fieldOrder := choiceOrder cA) (keepExcl := true))
           let path := lifted ++ after ++ moreCl
           let (f, a, t) ← exclIter cA (path.takeWhile (!isGen ·)) (groups (path.dropWhile (!isGen ·)))
           if let some t0 := ety then
@@ -5136,7 +5136,9 @@ partial def elabFor (ctx : Ctx) (p : Pos) (clauses : List SExpr) (body : SExpr) 
       -- that each alternative's values come in order, with the body between)
       if let some b@{ pos := gp, place := none, branchy := none, each := none, .. } := Choice.binding? g then
         if b.alts.any Choice.hasLiftable then
-          let site := s!"$cf{gp.line}_{gp.col}"
+          -- (with the binding's name: an inlined body's position is every
+          -- site's, #314)
+          let site := s!"$cf{gp.line}_{gp.col}{b.name}"
           let moreClauses := more.flatMap fun (g', fs') => g' :: fs'
           let bctx : Ctx := { c with canFail := ctx.canFail, inTaking := ctx.inTaking, inLoop := ctx.inLoop,
                                      inRepeat := ctx.inRepeat }
@@ -5297,7 +5299,9 @@ partial def elabFor (ctx : Ctx) (p : Pos) (clauses : List SExpr) (body : SExpr) 
     -- (an exclusive choice among them, #314: its paths in this filter)
     -- (through a generator over one element, whose filters they are)
     if pre.any isExcl then
-      return ← build ctx ((.gen p s!"$u{p.line}_{p.col}" none (.arrayLit p [.tuple p []]), pre) :: gs)
+      -- (named for the depth too: a for of an alternative's, inside this
+      -- one's clauses, has the same position)
+      return ← build ctx ((.gen p s!"$u{p.line}_{p.col}_{ctx.locals.length}" none (.arrayLit p [.tuple p []]), pre) :: gs)
     -- filters before any generator: iterate once over a one-element array
     let (filt, c1) ← elabFilters ctx pre
     let slot ← fresh .void
@@ -5485,7 +5489,9 @@ partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
         -- order and the clauses run for each; the first success gives the
         -- names they bind, in a tuple)
         let p := b.pos
-        let t := s!"$ct{p.line}_{p.col}"
+        -- (with the binding's name: an inlined body's position is every
+        -- site's, #314)
+        let t := s!"$ct{p.line}_{p.col}{b.name}"
         let binds := (b.name :: Choice.boundIn rest).eraseDups
         let vars := rest.filterMap fun | .decl _ n _ true _ => some n | _ => none
         let tup : SExpr := .tuple p (binds.map (SExpr.ident p ·) ++ [.ident p "true"])
