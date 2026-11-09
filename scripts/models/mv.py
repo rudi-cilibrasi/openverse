@@ -6,7 +6,7 @@
 # laziness from the review of #267 (generators taken where they are consumed, #246),
 # exact effects where the first success is taken from the review of #275,
 # consumers in methods from the review of #279, a return in a test's clauses from #284 and #287,
-# alternatives with several values from the review of #296.
+# alternatives with several values from the review of #296, blocks and constructions from #302.
 """Random programs with choices INSIDE expressions (PR #234, phase 2), and an
 independent model written from docs/LANGUAGE.md's "Choice" section (not from
 scripts/gen-choice.py, and not from the lifting code).
@@ -47,6 +47,8 @@ flags: heavy     (with bif: more of them, longer chains, longer conditions)
        noforset  (no op= / indexed set in a for)
        noret     (no `if (A op B) then return else true` among a test's clauses,
                   on with lazy otherwise, #284/#287)
+       nocb      (no block{B := e1; e2} or construction pt{Y := e2, X := e1} in a
+                  test's expressions, #302; on with lazy otherwise)
        noaltch   (no alternative of a choice with several values of its own: a
                   choice, a call of a function with several values or of a
                   generator, #296; on with lazy otherwise)
@@ -237,6 +239,14 @@ RET = LAZY and 'noret' not in flags
 # usual undo rules: the CPS model needs nothing new. Not in a set's value nor
 # in a branchy if, where it is still refused, nor in the generated functions.
 ALTCH = LAZY and 'noaltch' not in flags and 'cf' not in flags
+# ---- #302, flag cb (on with lazy; nocb turns it off): a test's expression may be
+# block{B := e1; e2} (B is the block's own name, e2 may use it) or
+# PS(pt{Y := e2, X := e1}), a construction of pt := struct{X, Y} written against
+# its declaration order at times. A construction evaluates its fields in
+# declaration order, not as written (LANGUAGE.md), so the model evaluates e1,
+# then e2, as Tw(e1, e2); a block's clauses are the context's own. Choices may be
+# inside both. Not in a set's value, a branchy if, nor the generated functions.
+CB = LAZY and 'nocb' not in flags and 'cf' not in flags
 REFUSED = [False]
 
 
@@ -247,7 +257,7 @@ class Return(Exception):
 
 # the kinds of node whose insides are failure contexts of their own (or an
 # inlined function's arguments), where a lifted call's clauses are not the test's
-NESTED = ('not', 'logic', 'optor', 'orx', 'ifx', 'bif', 'mcall', 'choice')
+NESTED = ('not', 'logic', 'optor', 'orx', 'ifx', 'bif', 'mcall', 'choice', 'blk', 'cons')
 
 
 def lift_pos(x):
@@ -348,6 +358,13 @@ def gen_e(scope, vars_, d, ch):
         if op == '*' and R.random() < 0.5:
             a, b = b, a
         return ('bin', op, a, b)
+    if (k < 0.48 and CB and CTX['fmax'] is None and not CTX['nochoice'] and not CTX.get('inset')
+            and not CTX.get('inbif') and R.random() < 0.4):
+        if R.random() < 0.5:
+            return ('cons', gen_e(scope, vars_, d + 1, ch), gen_e(scope, vars_, d + 1, ch), R.random() < 0.6)
+        x = fresh("B")
+        e1 = gen_e(scope, vars_, d + 1, ch)
+        return ('blk', x, e1, gen_e(scope + [x], vars_, d + 1, ch))
     if k < 0.48:
         return ('tw', gen_e(scope, vars_, d + 1, ch), gen_e(scope, vars_, d + 1, ch))
     if k < 0.51:
@@ -928,6 +945,12 @@ def show(e):
         return f'({show(e[2])} {e[1]} {show(e[3])})'
     if t == 'tw':
         return f'Tw({show(e[1])}, {show(e[2])})'
+    if t == 'cons':
+        if e[3]:
+            return f'PS(pt{{Y := {show(e[2])}, X := {show(e[1])}}})'
+        return f'PS(pt{{X := {show(e[1])}, Y := {show(e[2])}}})'
+    if t == 'blk':
+        return f'block{{ {e[1]} := {show(e[2])}; {show(e[3])} }}'
     if t == 'twt':
         return f'Tw(({show(e[1])}, {show(e[2])}))'
     if t == 'pos':
@@ -1074,8 +1097,10 @@ def top_choice_e(e):
         return top_choice_e(e[-1])
     if t == 'bin':
         return top_choice_e(e[2]) or top_choice_e(e[3])
-    if t in ('tw', 'twt'):
+    if t in ('tw', 'twt', 'cons'):
         return top_choice_e(e[1]) or top_choice_e(e[2])
+    if t == 'blk':
+        return top_choice_e(e[2]) or top_choice_e(e[3])
     if t == 'idx':
         return any(top_choice_e(x) for x in e[1]) or top_choice_e(e[2])
     if t == 'cmp':
@@ -1205,7 +1230,13 @@ def ev(e, st, k, mode):
     if t == 'bset':
         st.vars[e[1]] = e[3] if e[2] == '=' else chks(st.vars[e[1]] + e[3], st)
         return ev(e[4], st, k, mode)
-    if t in ('bin', 'tw', 'twt'):
+    if t == 'blk':
+        def kblk(v, s):
+            s.binds[e[1]] = v
+            return ev(e[3], s, k, mode)
+        return ev(e[2], st, kblk, mode)
+    if t in ('bin', 'tw', 'twt', 'cons'):
+        # (a construction: its fields in declaration order, X then Y, as written or not)
         a, b = (e[2], e[3]) if t == 'bin' else (e[1], e[2])
 
         def ka(va, s1):
@@ -1812,6 +1843,8 @@ if METH:
         set Cn += 1
         Cn - 1
 """
+if CB:
+    PRE += "pt := struct:\n    X:int = 0\n    Y:int = 0\nPS(P:pt)<computes>:int = P.X * 10 + P.Y\n"
 if LAZY:
     PRE = PRE.replace("Pos(X:int)<decides>", "Pos(X:int)<computes><decides>").replace(
         "Even(X:int)<decides>", "Even(X:int)<computes><decides>").replace("Tw(A:int, B:int):int", "Tw(A:int, B:int)<computes>:int")
