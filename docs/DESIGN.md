@@ -703,6 +703,27 @@ and journals every write made in a condition (for rollback). So:
   against its parameters as the checker does. Arriving and taking the
   result go through `arriveVia`/`takeVia` as for any override (covariant
   results check through the rule's subtyping).
+- An override of a class with type parameters that its parent's type
+  arguments do not give (#209), called through a dispatch that opens them
+  (#251): the caller has no names for its frame's type arguments, so it
+  cannot keep the frame at them. It holds the frame as a non-generic
+  callee's, in a field of type `ref [callee, sched] []` (no type arguments,
+  a subtype of every instance), and resumes and cancels it through
+  dispatches that open them, as the scheduler's roots are (#244): such a
+  frame's class has pins on all of its type arguments. Resetting a frame
+  would relate its type arguments to the new receiver's, so each call
+  makes a new one, through `newCell(params…, cell, sched)` (or `new0` when
+  the value is unused) called by an `arriveVia` helper of the call site
+  in the rule's shape. That is the one place a suspending call allocates
+  per call: in C, which frees nothing, a loop of 100,000 such calls holds
+  about 45 MB (2026-11-09). The result goes through a cell: the caller keeps a
+  `$cell(t)` of its own expected type in its frame, made with it, and
+  passes it at the arrive, where the dispatch's refinement types it at the
+  callee's result type; the callee's frame keeps it in a last field, and
+  its `resumeOwn` writes the result there when it is done. The caller reads
+  its own cell, at its own type, with no dispatch. Slots of the override's
+  frame whose types mention its class's added type parameters start as
+  the receiver's hidden fields (`$w`), as in its body.
 - A refined call that does not suspend (an immediate method, or a #157
   field accessor) has the same problem once its receiver's slot is a frame
   field. Before the slots become fields, each such test gets a helper of
@@ -976,10 +997,11 @@ dispatch reaches, read those from their receiver instead of taking them
 of a parameter's object). Its other methods are called at known types,
 as before. Only classes with an override at or below them get the
 fields, and only reference classes' overrides read them. A `<suspends>`
-override of such a class, a `spawn` in one, and a call whose omitted
-named argument's default has no type of its own in a dispatch that opens
-arguments, are refused for now: their frames, roots and temporaries
-would need the opened types. A variable of a
+override of such a class works (#251, see "Avoiding allocation and
+journaling"). A `spawn` in one, and a call whose omitted named argument's
+default has no type of its own in a dispatch that opens arguments, are
+refused for now: their roots and temporaries would need the opened
+types. A variable of a
 class type whose classes below need more type arguments than its own
 starts as the class's hidden placeholder (#157), also for a class
 without type parameters.

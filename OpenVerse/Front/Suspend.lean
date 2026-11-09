@@ -80,6 +80,14 @@ structure Callee where
       argument of a dispatch's call must have a type of its own, which a
       literal `array{}` has not, #256). -/
   arriveFn : Option Nat := none
+  /-- For an override whose class has type parameters its parent's type
+      arguments do not give (#251): `g$newCell(params…, cell, sched)` and
+      `g$new0(params…, sched)`, which make a frame, the first with the
+      caller's result cell. A caller under a dispatch that opens those
+      parameters cannot name the frame's type arguments, so it holds the
+      frame without them, makes a new one for each call, and reads the
+      result from a cell of its own type that the frame writes when done. -/
+  openNewFns : Option (Nat × Nat) := none
   /-- For a method of a class that fixes type arguments, called through
       `Typed.dispatch` (#142): helpers taking the receiver first, so that
       the code depending on the refinement keeps the rule's shape —
@@ -387,8 +395,10 @@ def stripInits : Nat → Expr → Option (List Expr × Expr)
 
 /-- An initial value of type `τ` in a function whose parameters have types
     `params` (`DefaultE`): a parameter of a subtype, a default literal, a
-    prototype, a new object built from such values, or a tuple of them. -/
-partial def coreDefault (S : Sigs) (params : List VTy) (depth : Nat) (τ : VTy) : Option Expr :=
+    prototype, a new object built from such values, or a tuple of them; a
+    type variable's, as `varD` gives it. -/
+partial def coreDefault (S : Sigs) (params : List VTy) (depth : Nat) (τ : VTy)
+    (varD : Nat → Option Expr := fun _ => none) : Option Expr :=
   -- (as deep as the elaborator's `slotDefault` goes)
   if depth > 16 then none else
   match params.findIdx? (fun p => p.sub τ) with
@@ -396,15 +406,16 @@ partial def coreDefault (S : Sigs) (params : List VTy) (depth : Nat) (τ : VTy) 
   | none =>
     match τ with
     | .int | .logic | .char | .float | .arr _ | .opt _ => some (.lit τ.default)
-    | .tup ts => (ts.mapM (coreDefault S params (depth + 1))).map (.prim .mkTup ·)
-    | .var _ => none
+    | .tup ts => (ts.mapM (coreDefault S params (depth + 1) (varD := varD))).map (.prim .mkTup ·)
+    -- (a type variable: as the caller says, e.g. a receiver's hidden field, #251)
+    | .var i => varD i
     | .ref ts args =>
       match (S.protos.zipIdx.find? fun ((t, a), _) => ts.contains t && decide (a = args)) with
       | some (_, addr) => some (.lit (.ref addr))
       | none => ts.findSome? fun t => do
           let fs ← S.classes[t]?
           if !VTy.pinsOK (S.pinsOf t) args then none
-          let ds ← (fs.map (VTy.inst args)).mapM (coreDefault S params (depth + 1))
+          let ds ← (fs.map (VTy.inst args)).mapM (coreDefault S params (depth + 1) (varD := varD))
           some (.heap (.new t) ds)
 
 /-- What a suspension point waits for, for cancelling it. -/
@@ -444,6 +455,8 @@ structure Env where
   /-- The empty class without type parameters whose objects first fill a
       generic callee's frame field (#256). -/
   nilTag : Nat
+  /-- The class `$cell(t)`, one field `t`: a caller's result cell (#251). -/
+  cellTag : Nat
   /-- The `spawn` mark, and for each `spawn` in the function, in order, its
       root's `new` and `start` functions. -/
   spawnMark : Nat
@@ -976,9 +989,68 @@ partial def suspendSelfGeneric (us : List Nat) (y g : Nat) (c : Callee) (rs : Li
     throw "a <suspends> method whose type parameters the call does not determine cannot be dispatched to a class that fixes type arguments yet (#171)"
   let .ref _ fargs := frameTy.subst (callInst acc .void none)
     | throw "internal error: a refined call's frame type"
-  if !VTy.varsBelowL N fargs then
-    throw "a <suspends> method of a class with type parameters that only its parent's type arguments determine cannot be dispatched to yet: its frame would need them (#209)"
+  if !VTy.varsBelowL N fargs then return ← suspendSelfOpen us y c rs valued
   suspendSelf us y c rs valued (.ref [c.tag, env.nilTag] fargs)
+
+/-- `suspendSelf` for an override whose frame's type arguments the dispatch
+    opens (#251): ones the caller has no names for. The frame is held
+    without type arguments, in a field of type `ref [frame, sched] []`, and
+    resumed and cancelled through dispatches that open them (as the
+    scheduler's roots are, #244). Each call makes a new frame
+    (`g$newCell`, through an arrive helper of this call site, in the rule's
+    shape), since resetting one would relate its type arguments to the new
+    receiver's. Its result goes through a cell of the caller's own type,
+    kept in the caller's frame: the refined arrive passes it to the frame,
+    which writes its result there when done (`g$resumeOwn`). -/
+partial def suspendSelfOpen (us : List Nat) (y : Nat) (c : Callee) (rs : List Expr) (valued : Bool) :
+    M (Expr × Expr) := do
+  let env ← read
+  let some (_, _, resumeFn, cancelFn) := c.selfFns
+    | throw "internal error: a refined call without helpers"
+  let some (newCellFn, new0Fn) := c.openNewFns
+    | throw "internal error: an opened override without frame makers"
+  let some ty := (← get).Γ[y]? | throw "internal error: a refined call's receiver"
+  let σs ← rs.mapM infer
+  let wide : VTy := .ref [c.tag, env.schedTag] []
+  let schedTy : VTy := .ref [env.schedTag] []
+  let k ← newSite wide
+  let cf := childF k
+  let w ← freshT wide
+  let own : Callee := { c with resumeFn, cancelFn := some cancelFn, passFields := [] }
+  modify fun st => { st with sites := st.sites.push { id := k, waits := .callee k own w [], defers := st.defers } }
+  let isR : Expr := .heap (.isTag us) [.local 0]
+  let n := rs.length
+  let via (body : Expr) (ps : List VTy) (τ : VTy) : M Nat := do
+    let i := (← get).vias.size
+    modify fun st => { st with vias := st.vias.push (body, ps, τ) }
+    return env.viaBase + i
+  -- (the cell, a slot kept in the frame, made with it, of the type the
+  -- call's value is checked against)
+  let mut cell : Option (Nat × VTy) := none
+  if valued && c.resField.isSome then
+    let some τ := env.expTy | throw "internal error: a refined call's value has no expected type"
+    cell := some ((← fresh (.ref [env.cellTag] [τ])), τ)
+  let mut arriveV := 0
+  let mut cellArg : List Expr := []
+  match cell with
+  | some (cs, τ) =>
+    arriveV ← via (.ite isR (.call newCellFn ((List.range (n + 3)).map Expr.local)) (.prim .userErr []))
+      (ty :: σs ++ [.ref [env.cellTag] [τ], schedTy]) wide
+    cellArg := [.local cs]
+  | none =>
+    arriveV ← via (.ite isR (.call new0Fn ((List.range (n + 2)).map Expr.local)) (.prim .userErr []))
+      (ty :: σs ++ [schedTy]) wide
+  let st ← freshT .int
+  let arrive : Expr := .ite (← seeking) vd (seqVoid [
+    fset cf (.call arriveV (.local y :: rs ++ cellArg ++ [.local schS])),
+    fset env.pcFld (int k)])
+  let poll : Expr := seqVoid [.assign w (fget cf),
+    .assign st (.ite (.heap (.isTag [c.tag]) [.local w]) (.call resumeFn [.local w, .local schS]) (.prim .userErr []))]
+  let pend : Expr := .ite (.prim .eq [.local st, int 0]) (.seq spillMark (.ret (int 0))) vd
+  let found : Expr := .assign env.rS (int 0)
+  match cell with
+  | some (cs, _) => return (seqVoid [arrive, found, poll, pend], .heap (.get 0) [.local cs])
+  | none => return (seqVoid [arrive, found, poll, pend], vd)
 
 /-- The statement of a `sync` (`isSync`) or `race` with arms `arms` (each
     a statement that leaves the arm's value in a slot). -/
@@ -1288,7 +1360,7 @@ structure Lowered where
     refined calls' helpers. -/
 def lower (S : Sigs) (callee : Nat → Option Callee) (syncMark raceMark rushMark spawnMark : Nat) (spawns : Array (Nat × Nat))
     (branchMark : Nat) (branches : Array (Nat × Nat × Nat))
-    (arity : Nat) (Γ : List VTy) (ρ : VTy) (frameTy : VTy) (schedTag nilTag : Nat) (fnBase : Nat) (b : Expr) :
+    (arity : Nat) (Γ : List VTy) (ρ : VTy) (frameTy : VTy) (schedTag nilTag cellTag : Nat) (fnBase : Nat) (b : Expr) :
     Except String Lowered := do
   let schedTy : VTy := .ref [schedTag] []
   let isM := fun f => f == syncMark || f == raceMark || f == rushMark
@@ -1299,7 +1371,7 @@ def lower (S : Sigs) (callee : Nat → Option Callee) (syncMark raceMark rushMar
   let b := shift 2 b
   let Γ0 := #[frameTy, schedTy] ++ Γ.toArray
   let trans0 := #[true, true] ++ (List.replicate Γ.length false).toArray
-  let env : Env := { S, ρ, callee, syncMark, raceMark, rushMark, arity, sites, armsTotal, fnBase, schedTag, nilTag, spawnMark, spawns,
+  let env : Env := { S, ρ, callee, syncMark, raceMark, rushMark, arity, sites, armsTotal, fnBase, schedTag, nilTag, cellTag, spawnMark, spawns,
                      branchMark, branches, viaBase := fnBase + 2 * armsTotal, expTy := some ρ,
                      pcFld := pcF, rS := 0, regionTotal := 0 }
   let done : Expr → Expr := fun v => .seq (fset resF v) (.seq killMark (.ret (int 1)))

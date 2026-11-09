@@ -6031,7 +6031,7 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
     !(Suspend.spawnSites spawnMark fns[s.idx]!.body).isEmpty).map fun s => (s.idx, s.name, 0)) ++ specImm
   let mut immSpawns : Array (Nat × List Nat) := #[]
   for (gi, gname, ntpC) in user ++ imm do
-    if ((sigOf gi).map (!·.selfTps.isEmpty)).getD false then
+    if ((sigOf gi).map (!·.selfTps.isEmpty)).getD false && !(Suspend.spawnSites spawnMark fns[gi]!.body).isEmpty then
       throw (inFn gname "a spawn in an override of a class with type parameters that its parent's type arguments do not give is not supported yet (#209)")
     let fn := fns[gi]!
     let Γ := slotTys[gi]!
@@ -6095,12 +6095,12 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
   let targets : List Nat := (lows.foldl (fun acc (gi, _, _) => acc ++
     Suspend.dispatchTargets (fun f => user.any fun (h, _, _) => h == f) fns[gi]!.body) []).eraseDups
   -- each one's `new`, `reset`, `cancel` and `result` (fixed indices), then
-  -- each one's `arrive`, `resumeOwn` and `cancelOwn`, each target's
-  -- receiver-first `take`, each root's trampoline and `start`, then the
-  -- arms' functions
+  -- each one's `arrive`, `resumeOwn`, `cancelOwn`, `newCell` and `new0`,
+  -- each target's receiver-first `take`, each root's trampoline and
+  -- `start`, then the arms' functions
   let L := lows.length
   let ownBase := nFns + 4 * L
-  let selfBase := ownBase + 3 * L
+  let selfBase := ownBase + 5 * L
   let trampOf (k : Nat) : Nat := selfBase + targets.length + 2 * k
   -- the scheduler: its class's prototype
   let some schedLit := Suspend.coreDefault Sorig [] 0 schedTy
@@ -6131,6 +6131,14 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
   -- class without type parameters: its objects, made at any type arguments,
   -- first fill a generic callee's frame field, #256)
   let nilTag := tagBase + L + B + 1
+  -- (then `$cell(t)`, a caller's result cell for an opened override, #251)
+  let cellTag := tagBase + L + B + 2
+  -- (the overrides whose class has type parameters its parent's type
+  -- arguments do not give: a dispatch may open their frames' type
+  -- arguments, #251)
+  let opened (j : Nat) : Bool := match lows[j]? with
+    | some (gi, _, _) => ((sigOf gi).map (!·.selfTps.isEmpty)).getD false
+    | none => false
   -- (a branch's wrapper holds its home's frame, at its type arguments,
   -- which the scheduler's dispatch opens, #244)
   let ntpOfLow (j : Nat) : Nat := ((lows[j]?).map (·.2.2)).getD 0
@@ -6149,15 +6157,16 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
         -- cancelled with its parameters from its frame, as its caller has no
         -- slots of their types, #256)
         some { tag := tagBase + j, newFn := nFns + 4 * j, initFn := nFns + 4 * j + 1,
-               arriveFn := some (ownBase + 3 * j),
-               resumeFn := if ntp == 0 then gi else ownBase + 3 * j + 1,
-               cancelFn := some (if ntp == 0 then nFns + 4 * j + 2 else ownBase + 3 * j + 2),
+               arriveFn := some (ownBase + 5 * j),
+               resumeFn := if ntp == 0 then gi else ownBase + 5 * j + 1,
+               cancelFn := some (if ntp == 0 then nFns + 4 * j + 2 else ownBase + 5 * j + 2),
+               openNewFns := if opened j then some (ownBase + 5 * j + 3, ownBase + 5 * j + 4) else none,
                passFields := if ntp == 0 then (List.range fns[gi]!.arity).map fun i => Suspend.slotBaseOf sites arms + i
                  else [],
                resField := some Suspend.resF, generic := ntp != 0, newSched := true,
                resultFn := some (nFns + 4 * j + 3), ntp,
                selfFns := (targets.idxOf? gi).map fun i =>
-                 (ownBase + 3 * j, selfBase + i, ownBase + 3 * j + 1, ownBase + 3 * j + 2) }
+                 (ownBase + 5 * j, selfBase + i, ownBase + 5 * j + 1, ownBase + 5 * j + 2) }
       | none => none
   for ((gi, _, _), j) in lows.zipIdx do
     let ps := slotTys[gi]!.take fns[gi]!.arity
@@ -6170,7 +6179,16 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
   -- against its parameters' types), and `resumeOwn(frame, sched)` and
   -- `cancelOwn(frame, sched)`, which pass its parameters from its frame; a
   -- frame field has type `ref [frame, sched] []`, or for a generic one
-  -- `ref [frame, $nil] args` (#256)
+  -- `ref [frame, $nil] args` (#256); an opened override's `newCell(params…,
+  -- cell, sched)` and `new0(params…, sched)` make a frame, whose bodies are
+  -- built with its `new`'s, after the lowering (another's are stubs, never
+  -- called), and its `resumeOwn` also writes its result to its cell when it
+  -- is done (#251)
+  let cellTyOf (j : Nat) : VTy := match lows[j]? with
+    | some (gi, _, _) => .ref [cellTag] [(fsigs0[gi]!).2]
+    | none => .void
+  let stub : Fn := { name := "$unused", arity := 0, nslots := 0, decides := false, writes := false,
+                     body := .prim .userErr [] }
   let wideOf (j : Nat) : VTy :=
     if ntpOfLow j == 0 then .ref [tagBase + j, schedTag] []
     else .ref [tagBase + j, nilTag] ((List.range (ntpOfLow j)).map VTy.var)
@@ -6190,10 +6208,16 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
       { name := s!"{gname}$resumeOwn", arity := 2, nslots := 2, decides := false, writes := true,
         body := .call gi (.local 0 :: .local 1 :: pass) },
       { name := s!"{gname}$cancelOwn", arity := 2, nslots := 2, decides := false, writes := true,
-        body := .call (nFns + 4 * j + 2) (.local 0 :: .local 1 :: pass) }]
+        body := .call (nFns + 4 * j + 2) (.local 0 :: .local 1 :: pass) }, stub, stub]
     ownTys := ownTys ++ #[ps ++ [wideOf j, schedTy], [frameTy j, schedTy], [frameTy j, schedTy]]
     extraSigs := extraSigs ++ #[(ps ++ [wideOf j, schedTy], wideOf j), ([frameTy j, schedTy], .int),
       ([frameTy j, schedTy], VTy.void)]
+    if opened j then
+      ownTys := ownTys ++ #[ps ++ [cellTyOf j, schedTy], ps ++ [schedTy]]
+      extraSigs := extraSigs ++ #[(ps ++ [cellTyOf j, schedTy], frameTy j), (ps ++ [schedTy], frameTy j)]
+    else
+      ownTys := ownTys ++ #[[], []]
+      extraSigs := extraSigs ++ #[([], VTy.void), ([], VTy.void)]
   -- each target's `take(self, frame)` (#142), whose first parameter is the
   -- receiver: the frame's result (its frame is made, resumed and cancelled
   -- through its `arrive`, `resumeOwn` and `cancelOwn`)
@@ -6284,7 +6308,7 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
     let branches : Array (Nat × Nat × Nat) := ((branchOf[j]?).getD []).toArray.map fun K =>
       (wrapFnBase + 3 * K + 1, wrapFnBase + 3 * K + 2, wrapTag K)
     let low ← (Suspend.lower Sinf callee syncMark raceMark rushMark spawnMark spawns branchMark branches a Γ ρ (frameTy j)
-      schedTag nilTag fnBase b).mapError fun e => inFn gname e
+      schedTag nilTag cellTag fnBase b).mapError fun e => inFn gname e
     -- its branches' wrappers: `tramp(w, sched)` resumes the arm (with the
     -- function's parameters from its frame) unless the function stopped
     -- it; `start(sched, frame)` makes the wrapper, registers it and runs
@@ -6352,8 +6376,19 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
       branchTys := branchTys.push [wrapTy K, schedTy]
       branchSigs := branchSigs.push ([wrapTy K, schedTy], VTy.void)
     let ps := Γ.take a
+    -- (an opened override's own type parameters have no parameters of their
+    -- own: their values are the receiver's hidden fields, as in its body,
+    -- #209, #251; the receiver is the first of the function's parameters,
+    -- which come last)
+    let selfCls := (gname.splitOn ".").headD ""
+    let varD (params : List VTy) (i : Nat) : Option Expr := do
+      let s ← sigOf gi
+      let (v, _) ← s.tparams[i]?
+      if !s.selfTps.contains v then none
+      let k ← env.witnessField? selfCls v
+      some (.heap (.get k) [.local (params.length - a)])
     let coreDflt (params : List VTy) (τ : VTy) : Except String Expr :=
-      match Suspend.coreDefault Sinf params 0 τ with
+      match Suspend.coreDefault Sinf params 0 τ (varD params) with
       | some d => pure d
       | none => throw s!"internal error: lowering {gname}: no initial value for a slot of type {repr τ}"
     -- (a slot holding a generic callee's frame, of type `ref [frame, $nil]
@@ -6364,6 +6399,9 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
     -- type does, even when it is another call site's)
     let dflt (params : List VTy) (τ : VTy) (ownFrame : Bool := false) : Except String Expr :=
       match τ with
+      -- (a result cell, #251: made with a value of its type)
+      | .ref [t] [x] =>
+        if t == cellTag then do pure (.heap (.new cellTag) [← coreDflt params x]) else coreDflt params τ
       | .ref ts _ =>
         if !ts.contains nilTag then coreDflt params τ
         else match (if ownFrame then low.fields.idxOf? τ else none) with
@@ -6381,20 +6419,46 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
     fns := fns.set! gi (← resumeLike gname low.body)
     slotTys := slotTys.set! gi low.body.slots
     fsigs := fsigs.set gi (frameTy j :: schedTy :: ps, .int)
-    frameClasses := frameClasses.push low.fields
-    framePins := framePins.push (if j ≥ user.length then List.replicate (ntpOfLow j) none else [])
+    -- (an opened override's frame has its result cell last, and pins on all
+    -- of its type arguments, so that a dispatch opens them, #251)
+    let cellF := low.fields.length
+    frameClasses := frameClasses.push (low.fields ++ (if opened j then [cellTyOf j] else []))
+    framePins := framePins.push (if j ≥ user.length || opened j then List.replicate (ntpOfLow j) none else [])
     -- `g$new(sched, params…)`: the frame, with the arguments and initial
     -- values (a non-generic callee's frame field starts as the scheduler, a
     -- generic one's as an empty object)
     let childTys := low.fields.drop 2 |>.take sites
     let nps := schedTy :: ps
-    let newBody : Expr := .heap (.new (tagBase + j))
-      ([Suspend.int 0, ← dflt nps ρ] ++ childTys.map (fun τ => match τ with
+    let newFields : List Expr := [Suspend.int 0, ← dflt nps ρ] ++ childTys.map (fun τ => match τ with
           | .ref ts _ => if ts.contains nilTag then .heap (.new nilTag) [] else Expr.local 0
           | τ => Expr.lit τ.default) ++
         List.replicate (2 * arms) (Suspend.int 0) ++
         (List.range a).map (fun i => Expr.local (i + 1)) ++ ds.map (Suspend.shift 1) ++
-        (← tempTys.mapM (dflt nps)))
+        (← tempTys.mapM (dflt nps))
+    let cellDflt : List Expr ← if opened j then do pure [.heap (.new cellTag) [← dflt nps ρ]] else pure []
+    let newBody : Expr := .heap (.new (tagBase + j)) (newFields ++ cellDflt)
+    if opened j then
+      -- `newCell(params…, cell, sched)` and `new0(params…, sched)`: `new`'s
+      -- frame, with the parameters renumbered (and the given cell); and its
+      -- `resumeOwn`, which writes the result to the cell when it is done
+      let renCell (i : Nat) : Nat := if i == 0 then a + 1 else i - 1
+      let ren0 (i : Nat) : Nat := if i == 0 then a else i - 1
+      let newCellFn : Fn := { name := s!"{gname}$newCell", arity := a + 2, nslots := a + 2, decides := false,
+                              writes := true,
+                              body := .heap (.new (tagBase + j)) (newFields.map (Suspend.renumber renCell) ++ [.local a]) }
+      let new0Fn : Fn := { name := s!"{gname}$new0", arity := a + 1, nslots := a + 1, decides := false,
+                           writes := true, body := Suspend.renumber ren0 newBody }
+      ownFns := (ownFns.set! (5 * j + 3) newCellFn).set! (5 * j + 4) new0Fn
+      let pass := (List.range a).map fun i => Expr.heap (.get (Suspend.slotBaseOf sites arms + i)) [.local 0]
+      let resumeBody : Expr := .seq (Suspend.seqVoid [
+        .assign 2 (.call gi (.local 0 :: .local 1 :: pass)),
+        .ite (.prim .eq [.local 2, Suspend.int 1])
+          (.seq (.heap (.set 0) [.heap (.get cellF) [.local 0], .heap (.get Suspend.resF) [.local 0]]) Suspend.vd)
+          Suspend.vd]) (.local 2)
+      let resumeOwnFn : Fn := { name := s!"{gname}$resumeOwn", arity := 2, nslots := 3, decides := false,
+                                writes := true, body := initPrefixE 2 [Suspend.int 0] resumeBody }
+      ownFns := ownFns.set! (5 * j + 1) resumeOwnFn
+      ownTys := ownTys.set! (5 * j + 1) [frameTy j, schedTy, .int]
     newFns := newFns.push { name := s!"{gname}$new", arity := a + 1, nslots := a + 1, decides := false,
                             writes := true, body := newBody }
     newTys := newTys.push nps
@@ -6508,6 +6572,8 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
   frameClasses := frameClasses.push [rootAny, .opt cellTy]
   framePins := framePins.push []
   frameClasses := frameClasses.push []
+  framePins := framePins.push []
+  frameClasses := frameClasses.push [.var 0]
   framePins := framePins.push []
   classTable := classTable.set schedTag (((classTable[schedTag]!).set headF (.opt cellTy)).set tailF (.opt cellTy))
   -- cancelling (#156): `$cancelRoot(sched, root)` unwinds a root that is
@@ -7642,8 +7708,6 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
             (env.addedParams c).filter fun v => tparams.any (·.1 == v) && (env.witnessField? c v).isSome
           else []
         | _ => []
-      if !selfTps.isEmpty && effs.contains "suspends" then
-        throw s!"{p.show}: {n} is a <suspends> override, and its class has type parameters that its parent's type arguments do not give: not supported yet (#209)"
       -- generic functions come after the others
       gsigs := gsigs.push { idx := tops.length + gidx, name := n, params := tys, ret := rt, selfTps,
                             decides := effs.contains "decides", isConst := false,
