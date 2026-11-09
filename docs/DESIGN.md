@@ -165,6 +165,12 @@ elaborator passes the order in (`choiceOrder`, through `prepare`,
 Where the order is not known (an eager `F$all` template), a field is given
 twice, or such a default comes before the last choice (it would run after
 it), the construction is not lifted and the choice is refused there.
+A call's arguments are put in the order the call evaluates them,
+positional ones then named ones as written, and a named one's value is
+lifted like an argument. Every call path (direct, generic, a method's
+dispatch to its overrides) evaluates in that order, and the defaults of
+omitted named arguments come after them all, so none can run before a
+lifted choice.
 A block or construction kept with a choice inside becomes
 `$noLift(why, e)`. `hasLiftable` treats it as false, so callers that lift
 until nothing is left (`liftCmp`, `liftOps`) do not try it again and
