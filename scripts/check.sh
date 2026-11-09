@@ -6,6 +6,10 @@
 # concurrently, at most CHECK_JOBS at a time (default: the number of CPUs), longest first so they
 # pack well, and each one's output is printed, in this order, once it has finished. CHECK_JOBS=1
 # runs them one after another.
+#
+# Every fuzzer starts at seed FUZZ_SEED (default 1), and its count comes from its own variable
+# (FUZZ_MODEL_MV=1400, …): the nightly workflow (.github/workflows/fuzz-nightly.yml) runs ten times
+# the counts from a seed that changes each day, and `FUZZ_SEED=N scripts/check.sh` reproduces it.
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root"
@@ -16,6 +20,7 @@ scripts/gen-claims.sh --check
 echo "== C runtime"
 make -s -C runtime test
 
+seed="${FUZZ_SEED:-1}"
 logs="$(mktemp -d)"; trap 'rm -rf "$logs"' EXIT
 max="${CHECK_JOBS:-$(nproc 2>/dev/null || echo 4)}"
 titles=(); pids=()
@@ -26,23 +31,23 @@ check() {
   ( set +e; s=$SECONDS; "$@" >"$logs/$i" 2>&1; echo "$? $((SECONDS - s))" >"$logs/$i.rc" ) &
   pids+=($!)
 }
-check "class-feature fuzzing (${FUZZ_CLASSES:-200} programs)" scripts/fuzz-classes.sh "${FUZZ_CLASSES:-200}" 1
-check "differential fuzzing (${FUZZ:-1000} random programs)" scripts/fuzz-diff.sh "${FUZZ:-1000}" 1
+check "class-feature fuzzing (${FUZZ_CLASSES:-200} programs)" scripts/fuzz-classes.sh "${FUZZ_CLASSES:-200}" "$seed"
+check "differential fuzzing (${FUZZ:-1000} random programs)" scripts/fuzz-diff.sh "${FUZZ:-1000}" "$seed"
 check "Verse test suite, Lean and C" scripts/test-verse.sh --c
-check "front-end mutation fuzzing (${FUZZ_FRONT:-500} mutants)" scripts/fuzz-front.sh "${FUZZ_FRONT:-500}" 1
+check "front-end mutation fuzzing (${FUZZ_FRONT:-500} mutants)" scripts/fuzz-front.sh "${FUZZ_FRONT:-500}" "$seed"
 check "QuickProof pins" scripts/check-quickproof-pins.sh
-check "float fuzzing (${FUZZ_FLOATS:-200} programs, against Python's doubles)" scripts/fuzz-floats.sh "${FUZZ_FLOATS:-200}" 1
-check "choice fuzzing (${FUZZ_CHOICE:-200} programs, against a backtracking model)" scripts/fuzz-choice.sh "${FUZZ_CHOICE:-200}" 1
+check "float fuzzing (${FUZZ_FLOATS:-200} programs, against Python's doubles)" scripts/fuzz-floats.sh "${FUZZ_FLOATS:-200}" "$seed"
+check "choice fuzzing (${FUZZ_CHOICE:-200} programs, against a backtracking model)" scripts/fuzz-choice.sh "${FUZZ_CHOICE:-200}" "$seed"
 check "scheduler model fuzzing (${FUZZ_MODEL_SCHED:-50} programs, against a model of the docs)" \
-  scripts/fuzz-model-sched.sh "${FUZZ_MODEL_SCHED:-50}" 1
+  scripts/fuzz-model-sched.sh "${FUZZ_MODEL_SCHED:-50}" "$seed"
 check "GADT model fuzzing (${FUZZ_MODEL_GADT:-150} programs, against five models of the docs)" \
-  scripts/fuzz-model-gadt.sh "${FUZZ_MODEL_GADT:-150}" 1
+  scripts/fuzz-model-gadt.sh "${FUZZ_MODEL_GADT:-150}" "$seed"
 check "choice model fuzzing (${FUZZ_MODEL_MV:-140} programs, functions with several values too)" \
-  scripts/fuzz-model-mv.sh "${FUZZ_MODEL_MV:-140}" 1
-check "concurrency fuzzing (${FUZZ_CONC:-160} programs)" scripts/fuzz-conc.sh "${FUZZ_CONC:-160}" 1
+  scripts/fuzz-model-mv.sh "${FUZZ_MODEL_MV:-140}" "$seed"
+check "concurrency fuzzing (${FUZZ_CONC:-160} programs)" scripts/fuzz-conc.sh "${FUZZ_CONC:-160}" "$seed"
 check "polymorphic-recursion concurrency fuzzing (${FUZZ_CONC_POLY:-60} programs, #244)" \
-  scripts/fuzz-conc-poly.sh "${FUZZ_CONC_POLY:-60}" 1
-check "heap-reclamation fuzzing (${FUZZ_FIELDS:-60} programs with array fields)" scripts/fuzz-fields.sh "${FUZZ_FIELDS:-60}" 1
+  scripts/fuzz-conc-poly.sh "${FUZZ_CONC_POLY:-60}" "$seed"
+check "heap-reclamation fuzzing (${FUZZ_FIELDS:-60} programs with array fields)" scripts/fuzz-fields.sh "${FUZZ_FIELDS:-60}" "$seed"
 
 failed=()
 for i in "${!titles[@]}"; do
