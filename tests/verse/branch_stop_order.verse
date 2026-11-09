@@ -1,5 +1,6 @@
-# a function's branches and rush losers are stopped last started first, by
-# when they started, also when one starts inside another (#187)
+# a function's branches and rush losers are stopped last started first
+# (#187), each unwinding whole: one started inside another branch is stopped
+# with it, before it, not by its own start among the function's (#254)
 F()<suspends>:int =
     defer:
         Print("F defer")

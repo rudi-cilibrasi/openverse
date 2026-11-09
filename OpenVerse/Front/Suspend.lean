@@ -491,6 +491,15 @@ structure St where
       one's arm resume function, done field, and whether its wrapper runs
       it at once (a `branch`) or only registers it (a `rush` loser). -/
   branchArms : Array (Nat × Nat × Bool) := #[]
+  /-- The entries of `kills` that a `branch`'s or `rush` arm's own code
+      started (child, owner), so that each is stopped with its owner, before
+      it, and not among the function's own (#254). -/
+  killOwner : Array (Nat × Nat) := #[]
+
+/-- The entries `kills[from, to)` not already owned, owned by `owner` (#254). -/
+def ownKills (st : St) (lo hi owner : Nat) : St :=
+  { st with killOwner := st.killOwner ++ ((List.range (hi - lo)).map (lo + ·) |>.filter
+      (fun i => !st.killOwner.any (·.1 == i))).toArray.map (·, owner) }
 
 abbrev M := ReaderT Env (StateT St (Except String))
 
@@ -740,12 +749,16 @@ partial def block (e : Expr) (k : Option (Expr → Expr)) : M (List Expr) := do
         modify fun st => { st with armsNext := a + 1, arms := st.arms.push (vd, vd) }
         let pcA := armPcF env.sites a
         let doneA := armDoneF env.sites a
+        let k0 := (← get).kills.size
         let (res, can) ← region pcA none arm
+        let k1 := (← get).kills.size
         let y ← freshT wide
         let (sk, number) ← startNumber
         let killInfo := (childF site, wrapTag, stopFn, y, pcA, doneA, env.fnBase + 2 * a + 1, sk)
         modify fun st => { st with arms := st.arms.set! a (res, can) }
         modify fun st => { st with kills := st.kills.push killInfo }
+        -- (the branches and `rush` arms its arm starts are stopped with it)
+        modify fun st => ownKills st k0 k1 k1
         modify fun st => { st with branchArms := st.branchArms.set! i (env.fnBase + 2 * a, doneA, true) }
         -- (`start(sched, frame)` makes the wrapper, registers it, runs the
         -- arm once and gives the wrapper, kept in the frame for `stop`)
@@ -1019,12 +1032,16 @@ partial def concAt (isSync : Bool) (arms : List Expr) (isRush : Bool := false) :
       rushW := rushW.push (i, startFn, stopFn, wrapTag, site, sk)
   -- each arm, a region of its own
   let mut info : Array (Nat × Nat × Nat × Nat) := #[]
+  -- (the entries of `kills` each arm's own code adds, #254)
+  let mut ranges : Array (Nat × Nat) := #[]
   for arm in arms do
     let a := (← get).armsNext
     modify fun st => { st with armsNext := a + 1, arms := st.arms.push (vd, vd) }
     let pcA := armPcF env.sites a
     let doneA := armDoneF env.sites a
+    let k0 := (← get).kills.size
     let (res, can) ← region pcA (none) arm
+    ranges := ranges.push (k0, (← get).kills.size)
     modify fun st => { st with arms := st.arms.set! a (res, can) }
     info := info.push (env.fnBase + 2 * a, env.fnBase + 2 * a + 1, pcA, doneA)
   modify fun st => { st with sites := st.sites.push { id := k, waits := .arms info.toList, defers := defersHere } }
@@ -1066,6 +1083,9 @@ partial def concAt (isSync : Bool) (arms : List Expr) (isRush : Bool := false) :
       for (((res, can, pcA, doneA), (i, startFn, stopFn, wrapTag, site, sk)), j) in (info.toList.zip rushW.toList).zipIdx do
         let y ← freshT (.ref [wrapTag, env.schedTag] [])
         modify fun st => { st with kills := st.kills.push (childF site, wrapTag, stopFn, y, pcA, doneA, can, sk) }
+        -- (the branches and `rush` arms this arm starts are stopped with it)
+        let (lo, hi) := ranges.getD j (0, 0)
+        modify fun st => ownKills st lo hi (st.kills.size - 1)
         modify fun st => { st with branchArms := st.branchArms.set! i (res, doneA, false) }
         goOn := goOn.push (Expr.ite (allOf [.prim .ne [.local w, int j], .prim .ne [fget pcA, int 0], .prim .eq [fget doneA, int 0]])
           (.seq (fset (childF site) (.call startFn [.local schS, fr])) vd) vd)
@@ -1339,7 +1359,36 @@ def lower (S : Sigs) (callee : Nat → Option Callee) (syncMark raceMark rushMar
       .ite (allOf [.prim .ne [fget pcA, int 0], .prim .eq [fget doneA, int 0]])
         (.seq (seqVoid [.call can args, fset doneA (int 2)]) vd) vd,
       .assign sk (int 0)]) vd) vd
-  let kill : Expr := if entries.isEmpty then vd else
+  -- (#254: each stopped with what its own code started, which goes first,
+  -- also last started first, so that each unwinds whole; the function's
+  -- own last started first among them. Only where some are nested, so that
+  -- the other functions' code stays as it was)
+  let ownerOf (i : Nat) : Option Nat := (st.killOwner.find? (·.1 == i)).map (·.2)
+  let stopBody (j : Nat) : Expr :=
+    let (wf, wrapTag, stopFn, y, pcA, doneA, can, sk) := st.kills[j]!
+    seqVoid [.assign y (fget wf),
+      .ite (.heap (.isTag [wrapTag]) [.local y]) (.call stopFn [.local y, .local schS]) vd,
+      .ite (allOf [.prim .ne [fget pcA, int 0], .prim .eq [fget doneA, int 0]])
+        (.seq (seqVoid [.call can args, fset doneA (int 2)]) vd) vd,
+      .assign sk (int 0)]
+  -- (a loop that picks the last started among `ids`, stops it and what it
+  -- started, until none is left; one `else` chain, as the slots are shared)
+  let rec loopOver (fuel : Nat) (ids : List Nat) : Expr :=
+    match fuel with
+    | 0 => vd
+    | fuel + 1 =>
+      let pickAmong : List Expr := [.assign bestS (int 0), .assign whichS (int (-1))] ++ ids.map fun j =>
+        let sk := (st.kills[j]!).2.2.2.2.2.2.2
+        .ite (.prim .lt [.local bestS, .local sk]) (.seq (seqVoid [.assign bestS (.local sk), .assign whichS (int j)]) vd) vd
+      let dispatch : Expr := ids.foldr (fun j acc =>
+        let kids := (List.range st.kills.size).filter (ownerOf · == some j)
+        let stopTree := if kids.isEmpty then stopBody j else .seq (loopOver fuel kids) (stopBody j)
+        .ite (.prim .eq [.local whichS, int j]) (.seq stopTree vd) acc) vd
+      .seq (.loop (seqVoid (pickAmong ++ [.ite (.prim .eq [.local whichS, int (-1)]) .brk vd, dispatch]))) vd
+  let kill : Expr := if entries.isEmpty then vd
+    else if !st.killOwner.isEmpty then
+      loopOver (st.kills.size + 1) ((List.range st.kills.size).filter (ownerOf · == none))
+    else
     .seq (.loop (seqVoid (pick ++ [.ite (.prim .eq [.local whichS, int (-1)]) .brk vd] ++ stopOne))) vd
   -- the slots kept across suspension points live in the frame: their reads
   -- and writes become the frame's (so nothing is stored or reloaded), except

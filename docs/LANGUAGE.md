@@ -1032,7 +1032,8 @@ Main()<suspends>:void =
 - **`rush`.** As `race`, but the arms that started and have not ended when
   the first ends go on, as tasks of their own, until they end or the
   function that contains the `rush` exits (which cancels them, running
-  their defers). A `return` in such an arm, once the `rush` has ended,
+  their defers, as it does its branches). They take their places in the
+  scheduler's order when the `rush` ends, after the tasks already there. A `return` in such an arm, once the `rush` has ended,
   ends that arm only: the function has gone on, and the value is dropped.
   A `rush` cannot be in a `loop` or `for` body (the Book's rule).
 - **`branch`.** The body of a `branch:` runs as a task of its own, at once
@@ -1040,7 +1041,11 @@ Main()<suspends>:void =
   enclosing function's variables, and it is cancelled (running its active
   `defer:` blocks) when that function exits, by returning, ending or being
   cancelled: after the function's own `defer:` blocks, the last started
-  branch first. A `branch` cannot be in a `loop` or `for` body (the Book's
+  branch (or `rush` arm going on) first, each unwinding whole: what its own
+  code started (a `rush` it waits in, the branches it started) is stopped
+  first, the same way, then its own `defer:` blocks run (#254). A branch or
+  `rush` arm that has ended still owns what it started: those are stopped
+  in its place in that order, not by their own start among the function's. A `branch` cannot be in a `loop` or `for` body (the Book's
   rule), even through an arm.
 - **`spawn`.** `spawn{F(…)}` starts a task running the call, which must be
   of a suspends function or method (`spawn{Agent.Run()}`, also when
@@ -1098,7 +1103,9 @@ Main()<suspends>:void =
   scope of its own, which `break` cannot leave. A `return` in an arm
   returns from the enclosing function: the arm's defers run, then the other
   arms that started are cancelled (last started first), then the defers of
-  the scopes around the `sync`, `race` or `rush`. A `return` in a `branch`
+  the scopes around the `sync`, `race` or `rush`. A `sync` or `race` that is
+  cancelled from outside (its task cancelled, its function's branch
+  stopped) cancels its arms the same way, last started first. A `return` in a `branch`
   is an error, as in a `defer`.
 - **Effects.** `<suspends>` and `<decides>` exclude each other. A suspends
   function, `Sleep`, `sync` and `race` can be used only in a suspends
@@ -1116,8 +1123,8 @@ Main()<suspends>:void =
 - **Time.** The schedule is deterministic: a virtual clock counts ticks, 30
   per second, and ticks in which nothing can run are skipped. In each tick,
   `Main` goes on first, then each task in the order they were spawned, then
-  again while a task ended (so that those waiting for it go on in the same
-  tick). Arms that can go on in the same tick do so in source order. `Sleep(S)`
+  again while a task ended, a `Signal` woke a task, or a task was cancelled
+  (so that those waiting go on in the same tick). Arms that can go on in the same tick do so in source order. `Sleep(S)`
   resumes after `Round(30·S)` ticks, at least one, so it always yields;
   `Sleep(Inf)` never resumes; a negative or NaN `S` returns at once.
 - **The program.** A suspends `Main` runs under the scheduler. The program

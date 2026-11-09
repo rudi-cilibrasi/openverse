@@ -1,0 +1,10 @@
+B2 defer
+B1 arm 2
+B1 arm 1
+B1 defer
+0
+B defer
+A inner 1
+A defer
+3
+exit=0
