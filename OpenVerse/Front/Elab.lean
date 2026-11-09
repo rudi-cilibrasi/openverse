@@ -6976,18 +6976,18 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
     -- which come last)
     let selfCls := (gname.splitOn ".").headD ""
     -- (a spawn's root whose callee reads type arguments from its receiver,
-    -- its second parameter, after the task, likewise: the receiver's hidden
-    -- field whose type at the receiver's type arguments is the variable;
-    -- a generic root's other variables have witnesses among its arguments)
+    -- its second parameter, after the task, likewise: a field of the
+    -- receiver's class, hidden or not, or a part of one through tuples,
+    -- whose type at the receiver's type arguments is the variable (the
+    -- callee's class may hold only a composite of it, `mid(tuple(u, v),
+    -- int)`'s `a`); a generic root's other variables have witnesses among
+    -- its arguments)
     let rootVarD (params : List VTy) (i : Nat) : Option Expr := do
       if gi < nFns0 then none
-      let cls ← (rootSelf[gi - nFns0]?).join
-      let .ref (t :: _) args ← params[params.length - a + 1]? | none
-      let fs ← classTable[t]?
-      ((env.sparams.lookup cls).getD []).findSome? fun (v, _) => do
-        let k ← env.witnessField? cls v
-        let f ← fs[k]?
-        if f.inst args == .var i then some (.heap (.get k) [.local (params.length - a + 1)]) else none
+      let _ ← (rootSelf[gi - nFns0]?).join
+      let ri := params.length - a + 1
+      let recv@(.ref _ _) ← params[ri]? | none
+      Suspend.partOfType classTable (.var i) (.local ri) recv 5
     let varD (params : List VTy) (i : Nat) : Option Expr := (do
       let s ← sigOf gi
       let (v, _) ← s.tparams[i]?

@@ -932,7 +932,10 @@ call such an override directly (`spawn{P.Run()}` on a `pairJ(int,
 string)` below `job(int)`). A generic root of such a call, in an override
 at its class's own type parameters (`spawn{Run()}` in `pairJ`'s `Go`),
 has no witnesses of them among its arguments: its slots of their types
-start as the receiver's hidden fields, as the override's do.
+start as parts of the receiver's fields, hidden ones included, through
+tuples and objects (`Suspend.partOfType`: `mid(tuple(u, v), int)`'s
+hidden `a` holds a `tuple(u, v)`), as the override's own start as its
+hidden fields.
 
 **No copies per type.** A spawned dispatch (a spawned `E.Eval()` on an
 `expr(t)`, #173, #204) is first lifted into a suspends function
