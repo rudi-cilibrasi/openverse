@@ -1,4 +1,4 @@
-# expect: 3:0: F has several values and uses K, which is also the name of a parameter, local, field or method
+# expect: 4:24: F has several values and uses K, which is also the name of a local here
 K:int = 5
 F():int = K | K + 1
 H(K:int):int = if (V := F()) then V else 0

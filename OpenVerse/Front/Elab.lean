@@ -2697,6 +2697,18 @@ partial def elabStmt (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM (R × Ctx) 
       let slot ← fresh ty
       pure (⟨.assign slot e, ty⟩,
         { ctx with locals := { name := n, slot, ty, mutable := isVar } :: ctx.locals })
+    | .app p (.ident _ "$freeNames") (.ident _ f :: ns) false => do
+      -- (#283) the names an inlined body uses from outside: not bound
+      -- here, where they would mean something else
+      for n in ns.filterMap (fun | .ident _ n => some n | _ => none) do
+        let member := match ctx.selfClass with
+          | some c => ctx.hasMethod c n || (ctx.types.fields c).any (·.1 == n)
+          | none => false
+        if (ctx.lookup n).isSome || member then
+          eerr p (s!"{f} has several values and uses {n}, which is also the name of a " ++
+            s!"{if member then "member of Self" else "local"} here: rename one, as {f}'s body is inlined here, " ++
+            s!"where {n} would mean that (#235, #283)")
+      pure (⟨.lit .void, .void⟩, ctx)
     | .app p (.ident _ "$params") (.block _ decls :: tps) false => do
       -- (#235) an inlined generic call's parameters, bound together: its
       -- type arguments inferred from the arguments as at a call (each
