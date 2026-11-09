@@ -136,6 +136,22 @@ type inference over Core is needed. `option{…}`, `logic{…}`, `not` and the
 left of `or` take a choice's first success by becoming `first{…}` of their
 clauses.
 
+A function with several values (#235) is inlined before elaboration, by
+`Choice.inlineMulti`, which runs right after module resolution. It finds
+the top-level functions whose body has a choice that nothing in it takes,
+iterating to a fixpoint, since calling one where the call is not taken
+makes the caller one too. It refuses the cases it cannot inline:
+recursion, type parameters, named parameters, `return`, and use as a
+value. Then it drops those functions and turns each call into an
+`$inline(F, template, args…)` marker, whose template is the body with its
+parameters and locals renamed for that call site. Lifting expands the
+marker in the caller's clauses: the arguments go into the parameters, in
+order, then the body's clauses follow, then its value's name. Names made
+while lifting an inlined body carry the call site, so two calls of one
+function in a clause list cannot clash. Recursive functions with several
+values would need resumable generators, with effects kept out of the
+rollback (see #235). Effect-free ones are the planned next step.
+
 The emitted code ends its filters with `fail; void` and its success with
 `break; void`, not a bare `fail` or `break`. Code ending with a bare one
 has no type of its own, so Core's type checker would check it again

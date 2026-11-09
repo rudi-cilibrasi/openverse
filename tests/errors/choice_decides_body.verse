@@ -1,3 +1,4 @@
-# expect: 2:30: a choice (a | b) has several values, so it must be in a failure context that takes them
-F(X:int)<decides>:int = X = 1 | 2
+# expect: 3:25: a choice (a | b) has several values, so it must be in a failure context that takes them
+c := class:
+    M()<decides>:int = 1 | 2
 Main():void = Print("x")

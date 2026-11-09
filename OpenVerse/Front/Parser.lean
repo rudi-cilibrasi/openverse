@@ -919,9 +919,10 @@ partial def parsePrimary (stop : Nat) : PM SExpr := do
       if cs.isEmpty then perr b "'first{}' needs a clause"
       noMacroBody "first" (← peekT) "its value is its last clause's; write 'first(…) {…}' for a body"
       let (cs, v) := clausesValue cs
-      -- (with a choice, the first success of the clauses, #208)
-      if Choice.hasChoice cs then return .app t.pos (.ident t.pos "$first") [.block t.pos (cs ++ [v])] false
-      return .block t.pos (cs ++ [v])
+      -- (the first success of the clauses when they have a choice, which
+      -- the elaborator sees once calls of functions with several values are
+      -- inlined, #208, #235; else a block)
+      return .app t.pos (.ident t.pos "$first") [.block t.pos (cs ++ [v])] false
     else if (← peekT 1).isSym "(" then
       -- `first(c){b}`: `b`, with `c`'s names, once `c`
       -- succeeds; fails if `c` does. Otherwise (no body on the same line, or
@@ -933,8 +934,7 @@ partial def parsePrimary (stop : Nat) : PM SExpr := do
       if let some (cs, _) := cs? then
         if !n.bol && (n.isSym "{" || n.isSym ":") then
           let b := SExpr.block t.pos (cs ++ [.block t.pos [← parseBody stop]])
-          if Choice.hasChoice cs then return .app t.pos (.ident t.pos "$first") [b] false
-          return b
+          return .app t.pos (.ident t.pos "$first") [b] false
       set saved
       bump; return .ident t.pos "first"
     else
