@@ -24,7 +24,9 @@ overrides at their own opened types; its choices draw from a second generator, s
 other choices stay as they were.
 Since #324, every class overrides Cp()<suspends> with its own, narrower result (pairE's
 from its parts' Cp, at its opened types), called from generic code through dispatches that open
-type arguments; its choices draw from a third generator.
+type arguments; its choices draw from a third generator. Since #321, Cp is also spawned on a
+value whose type is the class itself (a class with type parameters its parent's type arguments
+do not give: spawn{Zc.Cp()} with Zc a pairE(int, string)).
 argv: seed expfile [--cmp]
 """
 import random, sys
@@ -421,6 +423,11 @@ for i in range(R.randint(3, 8)):
         call, v, logs = cp_call(nm, n, t)
         main.append(f'    Print("cp {nm}: {{{shname(t)}({call})}}")')
         expect.extend(logs); expect.append(f"cp {nm}: {show(v, t)}")
+    if n.cls in ('pairE', 'mkE', 'optE', 'fstE', 'sndE', 'tagged') and R3.random() < 0.35:
+        main.append(f"    Zc{i} := {n.txt}")
+        main.append(f"    Zt{i} := spawn{{Zc{i}.Cp()}}")
+        main.append(f'    Print("cz {nm}: {{{shname(t)}(Zt{i}.Await().Eval())}}")')
+        expect.append(f"cz {nm}: {show(native(cp(n)), t)}")
     for _ in range(R2.choice([0, 1, 1, 2])):
         call, v = pk_call(nm, n, t)
         main.append(f'    Print("pk {nm}: {{{shname(t)}({call})}}")')
