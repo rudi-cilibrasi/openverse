@@ -44,6 +44,8 @@ check "GADT model fuzzing (${FUZZ_MODEL_GADT:-150} programs, against five models
   scripts/fuzz-model-gadt.sh "${FUZZ_MODEL_GADT:-150}" "$seed"
 check "choice model fuzzing (${FUZZ_MODEL_MV:-140} programs, functions with several values too)" \
   scripts/fuzz-model-mv.sh "${FUZZ_MODEL_MV:-140}" "$seed"
+check "generic functions with several values (${FUZZ_MODEL_GENERIC:-150} programs, against a model of the docs)" \
+  scripts/fuzz-model-generic.sh "${FUZZ_MODEL_GENERIC:-150}" "$seed"
 check "concurrency fuzzing (${FUZZ_CONC:-160} programs)" scripts/fuzz-conc.sh "${FUZZ_CONC:-160}" "$seed"
 check "polymorphic-recursion concurrency fuzzing (${FUZZ_CONC_POLY:-60} programs, #244)" \
   scripts/fuzz-conc-poly.sh "${FUZZ_CONC_POLY:-60}" "$seed"
