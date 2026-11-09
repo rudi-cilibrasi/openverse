@@ -1505,8 +1505,9 @@ def classRepTy (env : TyEnv) (d : String) (args : List Ty := []) : Ty :=
 partial def refUp (env : TyEnv) (a b : Ty) (nested : Bool := false) : Bool :=
   match a, b with
   -- `false` (no value) is below every type; inside a container, where
-  -- Verse Core has `void` for it, only below `void` (#290)
-  | .never, b => !nested || b == .void
+  -- Verse Core has `void` for it, only below `void` and `any`, which it
+  -- has as `void` too (#290)
+  | .never, b => !nested || b == .void || b == .any
   | .struct S as, .struct T bs =>
     env.isRefClass S && env.isRefClass T && env.isSub S T && env.upArgs S as T == bs
   | .arr a, .arr b | .opt a, .opt b => refUp env a b true
@@ -1757,7 +1758,7 @@ partial def unwrapNever : Expr → Ty → Ty → Expr
   | .prim .mkTup es, .tup ts, .tup us =>
     if es.length == ts.length && ts.length == us.length then
       .prim .mkTup ((es.zip (ts.zip us)).map fun (e, t, u) => match e, t with
-        | .seq e' (.lit .void), .never => if u == .void then e else e'
+        | .seq e' (.lit .void), .never => if u == .void || u == .never then e else e'
         | e, .tup _ => unwrapNever e t u
         | e, _ => e)
     else .prim .mkTup es
@@ -2538,7 +2539,11 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
     let r ← elabE { ctx with canFail := true, inTaking := true } e inner
     -- an expression that cannot fail needs no failure context (and no
     -- saved state to roll back to: the interpreter's heap is not copied)
-    if !(r.e.mayFail ctx.sigProg) then return ⟨.prim .mkSome [r.e], .opt r.ty⟩
+    -- (one that never gives a value, without an expected type: followed by
+    -- `void`, the type `never` stands for in Verse Core, as in a tuple, #290)
+    if !(r.e.mayFail ctx.sigProg) then
+      let e := if r.ty == .never && inner.isNone then Expr.seq r.e (.lit .void) else r.e
+      return ⟨.prim .mkSome [e], .opt r.ty⟩
     let t ← fresh r.ty
     return ⟨Expr.optionE t r.e, .opt r.ty⟩
   | .logicLit p e =>
@@ -4415,7 +4420,7 @@ partial def elabSet (ctx : Ctx) (p : Pos) (lhs0 : SExpr) (op : Option String) (r
     | "*", .int, .int => pure (p2 .mul old new.e)
     | "+", .arr t, .arr u => do
         if t == u then pure (p2 .concat old new.e)
-        else if refUp (← get).env (.arr u) (.arr t) then pure (p2 .concat old (← coerce p new (.arr t)))
+        else if refUp (← get).env (.arr u) (.arr t) || u.hasNever then pure (p2 .concat old (← coerce p new (.arr t)))
         else eerr p s!"cannot concatenate {ty.show} and {new.ty.show}"
     -- floats (#127)
     | "+", .float, .float => pure (p2 .fadd old new.e)
