@@ -66,11 +66,16 @@ partial def arms : SExpr → List (Option (List SExpr) × SExpr)
   | .ite _ cs t (some e) => (some cs, t) :: arms e
   | e => [(none, e)]
 
+/-- The part of a made name that names an inlined call's site (#235), set
+    apart from the position after it (site 1 at line 12 is not site 11 at
+    line 2); nothing outside one. -/
+def sitePart (site : String) : String := if site.isEmpty then "" else site ++ "@"
+
 /-- The indices of a `set` path bound to names, in order (unless literals),
     and the path with those names in their places: `set` evaluates them
     before the new value. -/
 partial def hoistPath (q : Pos) (l : SExpr) (site : String := "") : List SExpr × SExpr :=
-  let nm (n : Nat) : String := s!"$i{site}{q.line}_{q.col}_{n}"
+  let nm (n : Nat) : String := s!"$i{sitePart site}{q.line}_{q.col}_{n}"
   let rec go (n : Nat) : SExpr → List SExpr × SExpr × Nat
     | .app r base args true =>
       let (h, base', n) := go n base
@@ -99,7 +104,7 @@ def setPrefix (q : Pos) (l : SExpr) (op : Option String) (site : String := "") :
   match op with
   | none => (h, none, l')
   | some _ =>
-    let o := s!"$o{site}{q.line}_{q.col}"
+    let o := s!"$o{sitePart site}{q.line}_{q.col}"
     (h ++ [.decl q o none false l'], some o, l')
 
 /-- The new value of a `set` whose old one is in `o?`. -/
@@ -114,7 +119,7 @@ def withOld (q : Pos) (o? : Option String) (r : SExpr) : SExpr :=
 def setClauses (p : Pos) (l : SExpr) (op : Option String) (as : List SExpr) (q : Pos) (site : String := "") :
     List SExpr × SExpr :=
   let (h, o?, l') := setPrefix q l op site
-  let c := s!"$c{site}{q.line}_{q.col}"
+  let c := s!"$c{sitePart site}{q.line}_{q.col}"
   let choice : SExpr := match op with
     | none => .app q (.ident q "$choiceAt") (l' :: as) false
     | some _ => .app q (.ident q "$choice") as false
@@ -125,7 +130,7 @@ def setClauses (p : Pos) (l : SExpr) (op : Option String) (as : List SExpr) (q :
     bind the choice first. -/
 def normClauses (cs : List SExpr) (site : String := "") : List SExpr :=
   cs.flatMap fun c =>
-    let nm (p : Pos) : String := s!"$c{site}{p.line}_{p.col}"
+    let nm (p : Pos) : String := s!"$c{sitePart site}{p.line}_{p.col}"
     match c with
     | .app p (.ident _ "$choice") _ false => [.decl p (nm p) none false c]
     | .set p l op rhs => match alts? rhs with
@@ -257,7 +262,7 @@ structure LiftSt where
 abbrev LM := StateM LiftSt
 
 def LM.fresh (p : Pos) (k : String) : LM String :=
-  modifyGet fun s => (s!"${k}{s.site}{p.line}_{p.col}_{s.next}", { s with next := s.next + 1 })
+  modifyGet fun s => (s!"${k}{sitePart s.site}{p.line}_{p.col}_{s.next}", { s with next := s.next + 1 })
 
 def LM.bind (p : Pos) (k : String) (e : SExpr) : LM SExpr := do
   let x ← LM.fresh p k
@@ -297,7 +302,8 @@ partial def liftE (isVal : String → Bool) (isField : String → String → Boo
           modify fun s => { s with pre := s.pre.push c' }
       modify fun s => { s with site := saved }
       return .ident q r
-    | _ => return e
+    -- (no template: only seeing whether a body has several values)
+    | _ => LM.bind e.pos "c" e
   | .app p f args br =>
     let (hs, whole) := headOps isVal isField f
     let ops := hs ++ args
@@ -409,13 +415,13 @@ partial def liftClauseM (isVal : String → Bool) (isField : String → String �
       if !hasLiftable rhs then return [c] else run do return .decl p x ty false (← liftE isVal isField rhs)
   | .decl p x ty true rhs@(.ite ..) =>
     if isBranchy rhs then
-      let n := s!"$c{site}{p.line}_{p.col}"
+      let n := s!"$c{sitePart site}{p.line}_{p.col}"
       return [.decl p n ty false (.app p (.ident p "$branchChoice") [rhs] false), .decl p x ty true (.ident p n)]
     else if !hasLiftable rhs then return [c] else run do return .decl p x ty true (← liftE isVal isField rhs)
   | .set p l none rhs@(.ite ..) =>
     if isBranchy rhs then
       let (h, _, l') := setPrefix p l none site
-      let n := s!"$c{site}{p.line}_{p.col}"
+      let n := s!"$c{sitePart site}{p.line}_{p.col}"
       return h ++ [.decl p n none false (.app p (.ident p "$branchChoiceAt") [l', rhs] false), .set p l' none (.ident p n)]
     else if !hasLiftable rhs then return [c] else
       let (h, o?, l') := setPrefix p l none site
@@ -640,7 +646,11 @@ partial def inlineCalls (mv : List (String × MFn)) (e : SExpr) : StateT Nat (Ex
   | .app p (.ident q g) as br =>
     match mv.lookup g with
     | some f =>
-      if as.length != f.params.length then
+      -- (as at a call: several arguments to a single array parameter, and
+      -- one tuple argument to several parameters, #134, #140)
+      let arrayParam := match f.params with | [sp] => (match sp.ty with | .arr _ => true | _ => false) | _ => false
+      let tupleArg := as.length == 1 && f.params.length ≥ 2
+      if as.length != f.params.length && !arrayParam && !tupleArg then
         throw s!"{p.show}: {g} takes {f.params.length} argument(s), found {as.length}"
       if as.any (fun | .decl _ n _ _ _ => n.startsWith "?" | _ => false) then
         throw s!"{p.show}: {g} has no named parameters"
@@ -661,9 +671,20 @@ partial def inlineCalls (mv : List (String × MFn)) (e : SExpr) : StateT Nat (Ex
         | some (.decl q2 x t v rhs) => (init ++ [.decl q2 x t v rhs], .ident q2 x)
         | some l => (init, l)
         | none => (init, .tuple q [])
-      let pds := f.params.map fun sp => SExpr.decl q (tag sp.name) (some sp.ty) false (.ident q "$arg")
-      let tmpl := SExpr.block q (pds ++ init ++ [.decl q r (some f.ret) false res])
-      return .app p (.ident p "$inline") (.ident q g :: tmpl :: as') false
+      let (pds, unpack, as'') : List SExpr × List SExpr × List SExpr :=
+        if as.length == f.params.length then
+          (f.params.map fun sp => SExpr.decl q (tag sp.name) (some sp.ty) false (.ident q "$arg"), [], as')
+        else if arrayParam then
+          (f.params.map fun sp => SExpr.decl q (tag sp.name) (some sp.ty) false (.ident q "$arg"), [],
+            [.arrayLit p as'])
+        else
+          -- (the tuple bound once, its elements into the parameters)
+          let t := tag "$tuple"
+          ([.decl q t (some (.tup (f.params.map (·.ty)))) false (.ident q "$arg")],
+            (f.params.zipIdx.map fun (sp, i) =>
+              SExpr.decl q (tag sp.name) (some sp.ty) false (.app q (.ident q t) [.int q (i : Int)] false)), as')
+      let tmpl := SExpr.block q (pds ++ unpack ++ init ++ [.decl q r (some f.ret) false res])
+      return .app p (.ident p "$inline") (.ident q g :: tmpl :: as'') false
     | none => return .app p (← go (.ident q g)) (← as.mapM go) br
   | .str p ps => return .str p (← ps.mapM fun | .code c => do return .code (← go c) | t => pure t)
   | .app p g as b => return .app p (← go g) (← as.mapM go) b
@@ -766,7 +787,7 @@ def inlineMulti (tops : List STop) : Except String (List STop) := do
       throw s!"{f.pos.show}: {n} has several values and named parameters: such functions are not supported yet (#235)"
     if anyE (fun | .ret .. => true | _ => false) f.body then
       throw s!"{f.pos.show}: {n} has several values and a return, which would leave its caller once inlined (#235)"
-    if anyE (fun | .app _ (.ident _ "$defer") _ _ => true | _ => false) f.body then
+    if (stmtsOf f.body).any (fun | .app _ (.ident _ "$defer") _ _ => true | _ => false) then
       throw s!"{f.pos.show}: {n} has several values and a defer:, which would run in its caller's clauses once inlined: not supported yet (#235)"
     -- (its body is inlined where other names may be in scope: so neither
     -- its name nor a name its body uses from outside may be bound anywhere)
@@ -778,15 +799,24 @@ def inlineMulti (tops : List STop) : Except String (List STop) := do
         throw s!"{f.pos.show}: {n} has several values and uses {u}, which is also the name of a parameter, local, field or method: rename one, as {n}'s body is inlined where that name may mean something else (#235)"
   -- (no cycle among them: each is inlined, so none may reach itself)
   let callsIn (b : SExpr) : List String :=
-    mv.filter fun g => anyE (fun | .app _ (.ident _ h) _ _ => h == g | _ => false) b
-  let rec reaches (fuel : Nat) (seen : List String) (g : String) : Option String :=
-    match fuel with
-    | 0 => none
-    | fuel + 1 =>
-      let next := ((mfs.lookup g).map (callsIn ·.body)).getD []
-      next.findSome? fun h => if seen.contains h then some h else reaches fuel (h :: seen) h
+    let used := namesUsed b
+    mv.filter used.contains
+  let callees : List (String × List String) := mfs.map fun (n, f) => (n, callsIn f.body)
+  -- (whether `g` reaches itself: each function visited once)
+  let reaches (g : String) : Bool := Id.run do
+    let mut seen : List String := []
+    let mut todo := (callees.lookup g).getD []
+    let mut found := false
+    while !todo.isEmpty && !found do
+      let h := todo.head!
+      todo := todo.tail!
+      if h == g then found := true
+      else if !seen.contains h then
+        seen := h :: seen
+        todo := ((callees.lookup h).getD []) ++ todo
+    return found
   for (n, f) in mfs do
-    if (reaches (mv.length + 1) [n] n).isSome then
+    if reaches n then
       throw s!"{f.pos.show}: {n} has several values and calls itself, directly or not: recursive functions with several values are not supported yet (#235)"
   -- (no use as a value)
   let defaults (ps : List SParam) : List SExpr := ps.filterMap (·.default)

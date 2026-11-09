@@ -665,7 +665,7 @@ Main():void =
   as any function is (types, effects, `<decides>`), with each choice read
   as any of its alternatives. Refused for now: one that calls itself,
   directly or not, a generic or overloaded one, one with named parameters
-  or a `return` or `defer:`, a method, one used as a function value, a call of one in
+  or a `return` or a `defer:` of its own (in its body, not in a block inside it), a method, one used as a function value, a call of one in
   an `if`'s branch, and, since its body is inlined where other names may be
   in scope, one whose name, or a name its body uses from outside, is also
   the name of a parameter, local, field or method anywhere in the program.
