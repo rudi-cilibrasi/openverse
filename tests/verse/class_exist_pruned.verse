@@ -1,6 +1,7 @@
-# a generic <suspends> function dispatching on expr(t), copied at closed
-# types (#225): the tests no object can pass are dropped, as the checker
-# opens the type arguments of the classes tested (#209)
+# a generic <suspends> function dispatching on expr(t), called at closed
+# types: generic, its dispatch opens the type arguments of the classes
+# tested (#209); copies at closed types drop the tests no object can pass
+# (generic_roots_pruned.verse)
 expr(t:type) := class<abstract>:
     Eval():t
 lit := class(expr(int)):

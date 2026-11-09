@@ -717,8 +717,9 @@ unwrapped and resumed in a condition, and a write in a condition makes the
 reference interpreter keep the heap as it was, for the rollback, and so
 copy it. Many tasks awaiting one event, `event(t)`'s generic `Await`, took
 quadratic time in Lean. Since #256 a generic callee is resumed after a test
-of its class (see "Avoiding allocation and journaling"). Without the copies,
-the suite's concurrent programs compile in 3.4 s instead of 4.2 s and run in
+of its class (see "Avoiding allocation and journaling"). Without the copies
+(2026-11-09, 12-core x86-64), the suite's concurrent programs compile in
+3.4 s instead of 4.2 s and run in
 9.4 s instead of 9.9 s in Lean, with the same output, and 40 programs of
 polymorphic recursion (`scripts/gen-conc-poly.py`, seeds 1 to 40) compile
 in 0.8 s instead of 5.2 s.

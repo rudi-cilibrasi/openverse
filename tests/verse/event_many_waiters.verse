@@ -1,8 +1,8 @@
-# many tasks awaiting one event, a generic suspends function (#225): its
-# copy at the event's type keeps each waiter's child frame in a field of
-# its own class, resumed outside any condition, so a resumption does not
-# make the reference interpreter copy the heap; a generic suspends function
-# that calls itself at bigger types still runs, generic
+# many tasks awaiting one event, a generic suspends function: each waiter's
+# child frame is resumed after a test of its class, outside any condition,
+# so a resumption does not make the reference interpreter copy the heap
+# (#256); a generic suspends function that calls itself at bigger types
+# runs the same way
 Waiter(E:event(int), N:int)<suspends>:int =
     V := E.Await()
     V + N

@@ -39,7 +39,7 @@ check "GADT model fuzzing (${FUZZ_MODEL_GADT:-150} programs, against five models
   scripts/fuzz-model-gadt.sh "${FUZZ_MODEL_GADT:-150}" 1
 check "choice model fuzzing (${FUZZ_MODEL_MV:-140} programs, functions with several values too)" \
   scripts/fuzz-model-mv.sh "${FUZZ_MODEL_MV:-140}" 1
-check "concurrency fuzzing (${FUZZ_CONC:-100} programs)" scripts/fuzz-conc.sh "${FUZZ_CONC:-100}" 1
+check "concurrency fuzzing (${FUZZ_CONC:-160} programs)" scripts/fuzz-conc.sh "${FUZZ_CONC:-160}" 1
 check "polymorphic-recursion concurrency fuzzing (${FUZZ_CONC_POLY:-60} programs, #244)" \
   scripts/fuzz-conc-poly.sh "${FUZZ_CONC_POLY:-60}" 1
 check "heap-reclamation fuzzing (${FUZZ_FIELDS:-60} programs with array fields)" scripts/fuzz-fields.sh "${FUZZ_FIELDS:-60}" 1
