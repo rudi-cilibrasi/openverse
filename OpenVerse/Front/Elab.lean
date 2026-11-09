@@ -2355,7 +2355,8 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
     (elabBranchAlts : Ctx → Pos → SExpr → Option STy → Option SExpr → EM (Option Expr × Ty × List Expr))
     (elabE : Ctx → SExpr → Option Ty → EM R) (elabInts : Ctx → Pos → List SExpr → EM (List Expr))
     (elabLoopGen : Ctx → Pos → List SExpr → EM LoopGen) (elabSeq : Ctx → List SExpr → Option Ty → EM (R × Ctx))
-    (ctx : Ctx) (p : Pos) (clauses : List SExpr) (body : SExpr) (prepared : Bool := false) : EM R := do
+    (ctx : Ctx) (p : Pos) (clauses : List SExpr) (body : SExpr) (prepared : Bool := false)
+    (firstDecides : Bool := false) : EM R := do
   let ctx := { ctx with liftWhy := "" }
   -- (a choice is a generator over its alternatives, #208; clauses lifted
   -- already, `prepared`, are not lifted again)
@@ -2643,16 +2644,27 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
     if pre.any isExcl then
       -- (named for the depth too: a for of an alternative's, inside this
       -- one's clauses, has the same position)
-      return ← build ctx ((.gen p s!"$u{p.line}_{p.col}_{ctx.locals.length}" none (.arrayLit p [.tuple p []]), pre) :: gs)
+      let r ← build ctx ((.gen p s!"$u{p.line}_{p.col}_{ctx.locals.length}" none (.arrayLit p [.tuple p []]), pre) :: gs)
+      -- (a continuation's, #335: its filter, then its values, failing where
+      -- the filter fails, as the caller's filter would with it copied in)
+      if firstDecides then
+        match r.e with
+        | .prim .flatten [.forE _ _ filt arr] => return ⟨.seq filt arr, r.ty⟩
+        | _ => eerr p "internal: a continuation's clauses"
+      return r
     -- filters before any generator: iterate once over a one-element array
     let (filt, c1) ← elabFilters ctx pre
     let slot ← fresh .void
     let inner ← build c1 gs
     match gs with
-    | [] => return ⟨.forE slot (.lit (.arr #[.tup []])) filt inner.e, .arr inner.ty⟩
+    | [] =>
+      if firstDecides then return ⟨.seq filt (.prim .mkArr [inner.e]), .arr inner.ty⟩
+      return ⟨.forE slot (.lit (.arr #[.tup []])) filt inner.e, .arr inner.ty⟩
     | _ =>
       match inner.ty with
-      | .arr t => return ⟨.prim .flatten [.forE slot (.lit (.arr #[.tup []])) filt inner.e], .arr t⟩
+      | .arr t =>
+        if firstDecides then return ⟨.seq filt inner.e, .arr t⟩
+        return ⟨.prim .flatten [.forE slot (.lit (.arr #[.tup []])) filt inner.e], .arr t⟩
       | _ => eerr p "internal: nested for"
 
 /-- A call of a generic function. Its type arguments are inferred by matching
@@ -3478,6 +3490,9 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
     -- effects, as at a call, #235)
     if let some s := ctx.sig? f then noteFx p s.fx (some s!"calls {Choice.shownFnName f}")
     return ⟨.lit .void, .void⟩
+  -- (a continuation's body, #335: clauses lifted already, failing where their
+  -- first filter does, then the values)
+  | .app p (.ident _ "$forFirst") [.block _ clauses, body] false => elabFor ctx p clauses body (prepared := true) (firstDecides := true)
   | .app p (.ident _ "$inline") (.ident _ f :: _) false =>
     if ctx.inTaking then
       if ctx.liftWhy != "" then
@@ -5414,9 +5429,10 @@ partial def elabSet (ctx : Ctx) (p : Pos) (lhs0 : SExpr) (op : Option String) (r
   elabSetWith elabE (fun c q r m => elabMember c q r m) ctx p lhs0 op rhs0
 
 /-- `for` (#208, #314): `elabForWith`, given this block's functions (#325). -/
-partial def elabFor (ctx : Ctx) (p : Pos) (clauses : List SExpr) (body : SExpr) (prepared : Bool := false) :
-    EM R :=
-  elabForWith elabAlts (fun c q i t pl => elabBranchAlts c q i t pl) elabE elabInts elabLoopGen elabSeq ctx p clauses body prepared
+partial def elabFor (ctx : Ctx) (p : Pos) (clauses : List SExpr) (body : SExpr) (prepared : Bool := false)
+    (firstDecides : Bool := false) : EM R :=
+  elabForWith elabAlts (fun c q i t pl => elabBranchAlts c q i t pl) elabE elabInts elabLoopGen elabSeq ctx p clauses body
+    prepared firstDecides
 
 /-- An `if … else if … else …` with choices in its branches (#235): code that
     picks the branch, once, into a fresh slot (each condition a failure
