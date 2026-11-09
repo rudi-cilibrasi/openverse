@@ -27,4 +27,7 @@ dc
 dc
 10 9
 10 10
+tup 1
+tup 2
+tup 0
 exit=0

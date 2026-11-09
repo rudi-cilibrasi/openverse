@@ -896,8 +896,10 @@ def markRec (g : String) : SExpr → SExpr :=
     each with its own call site (`n`, the sites so far); a call of one of
     `loops` by `$loop(F, …)` (#246). -/
 partial def inlineCalls (mv : List (String × MFn)) (e : SExpr) (recs : List String := [])
-    (loops : List String := []) (clash : List (String × List String) := []) : StateT Nat (Except String) SExpr := do
-  let go := fun x => inlineCalls mv x recs loops clash
+    (loops : List String := []) (clash : List (String × List String) := [])
+    (inDflt : List (String × String) := []) : StateT Nat (Except String) SExpr := do
+  -- (`inDflt`: the defaults being inlined, function and parameter, #283)
+  let go := fun x => inlineCalls mv x recs loops clash inDflt
   match e with
   | .app p (.ident q g) as br =>
     match mv.lookup g with
@@ -913,8 +915,11 @@ partial def inlineCalls (mv : List (String × MFn)) (e : SExpr) (recs : List Str
         | _ => none
       let arrayParam := !hasNamed && match f.params with | [sp] => (match sp.ty with | .arr _ => true | _ => false) | _ => false
       let tupleArg := !hasNamed && as.length == 1 && f.params.length ≥ 2
+      -- (one tuple argument, no named one, to several positional parameters:
+      -- expanded, as at a call)
+      let tupleNamed := hasNamed && namedAs.isEmpty && as.length == 1 && posPs.length ≥ 2
       if hasNamed then
-        if posAs.length != posPs.length then
+        if posAs.length != posPs.length && !tupleNamed then
           throw s!"{p.show}: {g} takes {posPs.length} positional argument(s), found {posAs.length}"
         for ((ap, n, _), i) in namedAs.zipIdx do
           if !(f.params.any fun sp => sp.named && sp.name == n) then throw s!"{ap.show}: {g} has no parameter ?{n}"
@@ -965,13 +970,22 @@ partial def inlineCalls (mv : List (String × MFn)) (e : SExpr) (recs : List Str
           match sp.default with
           | some d =>
             if !sp.named || namedAs.any (·.2.1 == sp.name) then return none
-            let d' ← go (renameTypes ρ d)
+            -- (one that calls `g` again omitting it: as at a call)
+            if inDflt.contains (g, sp.name) then
+              throw s!"{p.show}: the default of ?{sp.name} of {g} uses itself (a call of {g} that omits ?{sp.name})"
+            let d' ← inlineCalls mv (renameTypes ρ d) recs loops clash ((g, sp.name) :: inDflt)
             let earlier := (f.params.take k).map fun e => SExpr.tuple q [.ident q e.name, .ident q (tag e.name)]
             return some (.decl q (tag sp.name) (tyOf sp.ty) false
               (.app q (.ident q "$paramDefault") [.ident q g, .ident q sp.name, .block q earlier, d'] false))
           | none => return none
       let (pds, unpack, as'') : List SExpr × List SExpr × List SExpr :=
-        if hasNamed then
+        if tupleNamed then
+          let t := tag "$tuple"
+          ([.decl q t (tyOf (.tup (posPs.map (·.ty)))) false (.ident q "$arg")],
+            (posPs.zipIdx.map fun (sp, i) =>
+              SExpr.decl q (tag sp.name) (tyOf sp.ty) false (.app q (.ident q t) [.int q (i : Int)] false)) ++ dflts,
+            posVals)
+        else if hasNamed then
           (posPs.map pdOf ++ namedAs.filterMap (fun (_, n, _) => (f.params.find? (·.name == n)).map pdOf), dflts,
             posVals ++ namedVals)
         else if as.length == f.params.length then
@@ -1261,8 +1275,10 @@ def inlineMulti (tops : List STop) : Except String (List STop × Bool) := do
   for (n, f) in mfs do
     if (fns.filter (·.1 == n)).length > 1 then
       throw s!"{f.pos.show}: {n} has several values and is overloaded: such functions are not supported yet (#235)"
-    if f.params.any (·.named) && (recs.contains n || !f.tparams.isEmpty) then
-      throw s!"{f.pos.show}: {n} has several values and named parameters, and is {if recs.contains n then "recursive" else "generic"}: such functions are not supported yet (#235, #283)"
+    if f.params.any (·.named) && (recs.contains n || needAll.contains n || !f.tparams.isEmpty) then
+      let what := if recs.contains n then "recursive" else if needAll.contains n then
+        "called by a recursive one (so its values are computed at the call, F$all)" else "generic"
+      throw s!"{f.pos.show}: {n} has several values and named parameters, and is {what}: such functions are not supported yet (#235, #283)"
     if anyE (fun | .ret .. => true | _ => false) f.body then
       throw s!"{f.pos.show}: {n} has several values and a return, which would leave its caller once inlined (#235)"
     if (stmtsOf f.body).any (fun | .app _ (.ident _ "$defer") _ _ => true | _ => false) then

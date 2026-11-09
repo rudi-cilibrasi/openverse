@@ -8,6 +8,7 @@ F(A : int, ?B : int = A * 10, ?C : int = G("dc", 7))<transacts>:int = (A | B) + 
 Chain(A : int, ?B : int = A + 1, ?C : int = B * 2)<transacts>:int = A | B | C
 Arr : []int = array{1, 2}
 Dec(A : int, ?B : int = Arr[A])<decides><transacts>:int = A | B
+Tup(A : int, B : int, ?C : int = 0)<transacts>:int = A | B | C
 Main()<transacts>:void =
     for (X := F(1)):
         Print("{X}")
@@ -30,3 +31,6 @@ Main()<transacts>:void =
     # two sites: each its own default
     for (X := F(1, ?C := 0), Y := F(2, ?B := 3)):
         Print("{X} {Y}")
+    # one tuple argument to the positional parameters, as at a call
+    for (X := Tup((1, 2))):
+        Print("tup {X}")
