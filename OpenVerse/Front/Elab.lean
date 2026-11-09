@@ -2271,9 +2271,1008 @@ def firstLiftOf (ctx c2 : Ctx) (p : Pos) (g : String) (lp : List SExpr) (b : Str
            binds, sets := sets.map (·.name), args := pnames.map (SExpr.ident p ·) ++ capArgs,
            varBinds := (bls.filter (·.mutable)).map (·.name) }
 
--- (the block below is one command, so the compiler's heartbeats for all of
--- it count against one limit; it outgrew the default, 200000: #318, #325)
-set_option maxHeartbeats 400000 in
+/-- `for`: clauses are generators, bindings and filters; each generator opens
+    a nested `forE`, and nested results are flattened (cartesian product,
+    leftmost outermost). The clauses are a failure context; the body is not.
+    Defined before the mutual block, with the functions of the block it
+    calls as arguments (named as they are), so that it is a command of its
+    own, with its own heartbeats (#325); `elabFor` in the block passes them. -/
+partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty × List Expr))
+    (elabBranchAlts : Ctx → Pos → SExpr → Option STy → Option SExpr → EM (Option Expr × Ty × List Expr))
+    (elabE : Ctx → SExpr → Option Ty → EM R) (elabInts : Ctx → Pos → List SExpr → EM (List Expr))
+    (elabLoopGen : Ctx → Pos → List SExpr → EM LoopGen) (elabSeq : Ctx → List SExpr → Option Ty → EM (R × Ctx))
+    (ctx : Ctx) (p : Pos) (clauses : List SExpr) (body : SExpr) (prepared : Bool := false) : EM R := do
+  let ctx := { ctx with liftWhy := "" }
+  -- (a choice is a generator over its alternatives, #208; clauses lifted
+  -- already, `prepared`, are not lifted again)
+  let clauses := if prepared then clauses else
+    Choice.prepare clauses (choiceValues ctx) (choiceField ctx) (fieldOrder := choiceOrder ctx) (keepExcl := true)
+  -- (a call of a recursive function with several values, #235: a generator
+  -- over the array of its values; at a written type, through a binding)
+  let normGens (cs : List SExpr) : List SExpr := cs.flatMap fun c => match Choice.binding? c with
+    | some { each := some (.app _ (.ident _ "$loop") _ false), .. } => [c]
+    | some { pos := q, name := n, ty := none, each := some arr, .. } => [.gen q n none arr]
+    | some { pos := q, name := n, ty := some t, each := some arr, .. } =>
+      let tmp := s!"$e{q.line}_{q.col}"
+      [.gen q tmp none arr, .decl q n (some t) false (.ident q tmp)]
+    | _ => [c]
+  let clauses := clauses.flatMap fun c => match Choice.binding? c with
+    -- (one taken lazily, #246: the binding stays, a generator of its own)
+    | some { each := some (.app _ (.ident _ "$loop") _ false), .. } => [c]
+    | some { pos := q, name := n, ty := none, each := some arr, .. } => [.gen q n none arr]
+    | some { pos := q, name := n, ty := some t, each := some arr, .. } =>
+      let tmp := s!"$e{q.line}_{q.col}"
+      [.gen q tmp none arr, .decl q n (some t) false (.ident q tmp)]
+    | _ => [c]
+  -- split into groups: [filters before the first generator], then (generator, filters)…
+  let isGen : SExpr → Bool
+    | .gen .. => true
+    | .decl _ _ none false (.range ..) => true
+    | c => (Choice.binding? c).isSome
+  -- (an exclusive choice's binding, #314: no generator, but paths)
+  let isExcl : SExpr → Bool
+    | .decl _ _ _ false (.app _ (.ident _ "$excl") _ false) => true
+    | _ => false
+  let pre := clauses.takeWhile (!isGen ·)
+  let rest := clauses.dropWhile (!isGen ·)
+  let rec groups : List SExpr → List (SExpr × List SExpr)
+    | [] => []
+    | g :: cs =>
+      let fs := cs.takeWhile (!isGen ·)
+      (g, fs) :: groups (cs.dropWhile (!isGen ·))
+  let gs := groups rest
+  let bodyCtx (c : Ctx) : Ctx := { c with canFail := ctx.canFail, inLoop := false, inRepeat := true }
+  -- elaborate the filters of one generator (in a failure context)
+  let elabFilters (c : Ctx) (fs : List SExpr) : EM (Expr × Ctx) := do
+    match fs with
+    | [] => return (.lit (.logic true), c)
+    | _ =>
+      let (r, c') ← elabSeq { c with canFail := true, inTaking := true } fs none
+      return (r.e, c')
+  let rec build (c : Ctx) (gs : List (SExpr × List SExpr)) : EM R := do
+    -- (#314) filters `fs` with an exclusive choice among them, then the
+    -- groups `more`: its guards pick a path into a selector; each path's
+    -- clauses up to its first generator (its guards again, which bind its
+    -- names, its clauses, then the filters after the choice) go into this
+    -- filter under the selector, so a failure there rolls back to this
+    -- iteration's generator; each path's generators into the iteration's
+    -- body, under it. The filter's code, the body's (an array of the
+    -- values), and their type.
+    let rec exclIter (c : Ctx) (fs : List SExpr) (more : List (SExpr × List SExpr)) : EM (Expr × Expr × Ty) := do
+      match fs.findIdx? isExcl with
+      | none =>
+        let (filt, c') ← elabFilters c fs
+        let inner ← build c' more
+        match more with
+        | [] => return (filt, .prim .mkArr [inner.e], inner.ty)
+        | _ => match inner.ty with
+          | .arr t => return (filt, inner.e, t)
+          | _ => eerr p "internal: nested for"
+      | some j =>
+        let (codeA, cA) ← elabFilters c (fs.take j)
+        let after := fs.drop (j + 1)
+        let moreCl := more.flatMap fun (g', fs') => g' :: fs'
+        let some (.decl gp x xty _ (.app _ _ alts _)) := fs[j]? | eerr p "internal: an exclusive choice"
+        let alts : List (List SExpr × SExpr) := alts.filterMap fun
+          | .app _ (.ident _ "$alt") [.block _ gs, r] false => some (gs, r)
+          | _ => none
+        -- (the selector: the first alternative whose guards hold)
+        let selS : SExpr := alts.zipIdx.foldr (fun ((gs, _), i) acc =>
+          .ite gp gs (.int gp (i : Int)) (some acc)) (.int gp (-1))
+        let rsel ← elabE { cA with canFail := true, inTaking := true } selS (some .int)
+        let sel ← fresh .int
+        let mut filts : Array Expr := #[]
+        let mut arrs : Array Expr := #[]
+        let mut ety : Option Ty := none
+        for ((gs, r), i) in alts.zipIdx do
+          -- (its value bound to the choice's name)
+          let rcl : List SExpr := match r with
+            | .block rp ss => match ss.getLast? with
+              | some (.decl q y t v e) => ss.dropLast ++ [.decl q y t v e, .decl rp x xty false (.ident rp y)]
+              | some l => ss.dropLast ++ [.decl rp x xty false l]
+              | none => [.decl rp x xty false (.tuple rp [])]
+            | e => [.decl e.pos x xty false e]
+          let lifted := normGens (Choice.prepare (gs ++ rcl) (choiceValues cA) (choiceField cA)
+            (site := s!"$x{x}a{i}") (fieldOrder := choiceOrder cA) (keepExcl := true))
+          let path := lifted ++ after ++ moreCl
+          let (f, a, t) ← exclIter cA (path.takeWhile (!isGen ·)) (groups (path.dropWhile (!isGen ·)))
+          if let some t0 := ety then
+            if t0 != t then eerr gp s!"the for's values have the type {t0.show} on one path of this if and {t.show} on another"
+          ety := some t
+          filts := filts.push f
+          arrs := arrs.push a
+        let some t := ety | eerr gp "internal: an exclusive choice without alternatives"
+        let pick (es : Array Expr) (last : Expr) : Expr :=
+          (es.toList.zipIdx.foldr (fun (e, i) acc => .ite (p2 .eq (.local sel) (.lit (.int (i : Int)))) e acc) last)
+        -- (each path's filter as `void`, as `failV` is, for the if-chain)
+        let filt := Expr.seq codeA (.seq (.assign sel rsel.e)
+          (pick (filts.map fun f => Expr.seq f (.lit .void)) Expr.failV))
+        return (filt, pick arrs (.lit (.arr #[])), t)
+    match gs with
+    | [] =>
+      let r ← elabE (bodyCtx c) body none
+      return r
+    | (g, fs) :: more =>
+      let declare (c : Ctx) (n : String) (ty : Ty) : EM (Nat × Ctx) := do
+        if c.lookup n |>.isSome then eerr g.pos s!"'{n}' is already defined"
+        let slot ← fresh ty
+        return (slot, { c with locals := { name := n, slot, ty, mutable := false } :: c.locals })
+      -- (a choice whose alternatives have several values themselves, or
+      -- clauses to lift, #283: a for of its own for each alternative, with
+      -- the clauses after it and the body, their values concatenated, so
+      -- that each alternative's values come in order, with the body between)
+      if let some b@{ pos := gp, place := none, branchy := none, each := none, .. } := Choice.binding? g then
+        if b.alts.any Choice.hasLiftable then
+          -- (with the binding's name: an inlined body's position is every
+          -- site's, #314)
+          let site := s!"$cf{gp.line}_{gp.col}{b.name}"
+          let moreClauses := more.flatMap fun (g', fs') => g' :: fs'
+          let bctx : Ctx := { c with canFail := ctx.canFail, inTaking := ctx.inTaking, inLoop := ctx.inLoop,
+                                     inRepeat := ctx.inRepeat }
+          let mut parts : List R := []
+          for (a, i) in b.alts.zipIdx do
+            -- (its exclusive choices kept: this for compiles them, #314)
+            let lifted := Choice.prepare [.decl gp b.name b.ty false a] (choiceValues c) (choiceField c)
+              (fieldOrder := choiceOrder c)
+              (site := s!"{site}a{i}") (keepExcl := true)
+            parts := parts ++ [← elabForWith elabAlts elabBranchAlts elabE elabInts elabLoopGen elabSeq bctx p
+              (lifted ++ fs ++ moreClauses) body (prepared := true)]
+          let some r0 := parts.head? | eerr gp "internal: a choice without alternatives"
+          if let some r := parts.find? (·.ty != r0.ty) then
+            eerr gp s!"the for's values have the type {r0.ty.show} for one alternative of this choice and {r.ty.show} for another"
+          return ⟨parts.tail.foldl (fun acc r => p2 .concat acc r.e) r0.e, r0.ty⟩
+      -- (a call of a recursive function with several values taken lazily,
+      -- #246: a loop over its values, each one iteration, over a one-element
+      -- array, whose filter binds it and runs the generator's filters, and
+      -- whose values are collected)
+      if let some { pos := gp, name := n, ty := sty, each := some (.app _ (.ident _ "$loop") lp false), .. } :=
+          Choice.binding? g then
+        let lg ← elabLoopGen { c with canFail := true, inTaking := true } gp lp
+        let ty ← match ← sty.mapM (resolveTy c.types gp) with
+          | some t => pure t
+          | none => pure lg.vty
+        let (xs, c1) ← declare c n ty
+        -- (the iteration's values, their type, and whether they are flat
+        -- already: with an exclusive choice among the filters, #314, its
+        -- paths in this filter and their values, flattened)
+        let (iter, ity, flat) ← if fs.any isExcl then do
+            let (filtE, arr, ety) ← exclIter c1 fs more
+            let bindX ← coerce gp ⟨lg.value, lg.vty⟩ ty
+            let one ← fresh .void
+            pure (Expr.prim .flatten [.forE one (.lit (.arr #[.tup []])) (.seq (.assign xs bindX) filtE) arr],
+              ety, true)
+          else do
+            let (filt, c2) ← elabFilters c1 fs
+            let bindX ← coerce gp ⟨lg.value, lg.vty⟩ ty
+            let inner ← build c2 more
+            let one ← fresh .void
+            pure (Expr.forE one (.lit (.arr #[.tup []])) (.seq (.assign xs bindX) filt) inner.e,
+              inner.ty, more.isEmpty)
+        -- (the steps in rounds, each a `forE` over a range twice as long as
+        -- the last one's, whose body runs a step and gives the values of
+        -- its iteration, if it came to a value: so the values are collected
+        -- in linear time and space, where adding each to an array would copy
+        -- it each time)
+        let acc ← fresh (.arr ity)
+        let size ← fresh .int
+        let done ← fresh .logic
+        let d ← fresh .int
+        let vd : Expr := .lit .void
+        let none : Expr := .lit (.arr #[])
+        let r ← fresh (.arr ity)
+        let stepBody : Expr := .ite (p2 .eq (.local lg.sp) (.lit (.int 0)))
+          (.seq (.assign done (.lit (.logic true))) none)
+          (.seq lg.step (.ite (.prim .query [.local lg.has])
+            (.seq (.assign r iter) (.seq lg.after (.local r))) none))
+        let round : Expr := .forE d (p2 .range (.lit (.int 1)) (.local size))
+          (p2 .eq (.local done) (.lit (.logic false))) stepBody
+        let body : Expr := .seq (.assign acc (p2 .concat (.local acc) (.prim .flatten [round])))
+          (.ite (p2 .eq (.local done) (.lit (.logic true))) Expr.brkV
+            (.seq (.assign size (p2 .mul (.local size) (.lit (.int 2)))) vd))
+        let code : Expr := .seq lg.init (.seq (.assign acc none) (.seq (.assign size (.lit (.int 16)))
+          (.seq (.assign done (.lit (.logic false))) (.seq (.loop body) (.local acc)))))
+        if flat then return ⟨code, .arr ity⟩
+        match ity with
+        | .arr t => return ⟨.prim .flatten [code], .arr t⟩
+        | _ => eerr gp "internal: nested for"
+      -- the source: evaluated before the iterations; a failing source gives no iterations
+      let (slot, src, c1, pre) ← match g with
+        | .decl gp n none false (.range _ lo hi) => do
+          let es ← elabInts { c with canFail := true, inTaking := true } gp [lo, hi]
+          let (slot, c1) ← declare c n .int
+          pure (slot, Expr.prim .range es, c1, Expr.lit (.logic true))
+        | .gen gp x idx srcE => do
+          let rs ← elabE { c with canFail := true, inTaking := true } srcE none
+          match rs.ty with
+          | .map kt vt =>
+            -- `for (V : M)` and `for (K -> V : M)`: over the (key, value) pairs
+            let tmp ← fresh rs.ty
+            let src := if (rs.e.mayFail ctx.sigProg) then
+                Expr.orE tmp rs.e (.lit (.arr #[])) else rs.e
+            let tp ← fresh (.tup [kt, vt])
+            let (pre, c1) ← match idx with
+              | none => do
+                let (xs, c1) ← declare c x vt
+                pure (Expr.assign xs (.prim (.tupGet 1) [.local tp]), c1)
+              | some i => do
+                let (is, c1) ← declare c i kt
+                let (xs, c2) ← declare c1 x vt
+                pure (Expr.seq (.assign is (.prim (.tupGet 0) [.local tp]))
+                  (.assign xs (.prim (.tupGet 1) [.local tp])), c2)
+            pure (tp, src, c1, pre)
+          | _ =>
+          match idx with
+          | some i => do
+            -- `I -> X : A`: iterate over the indices of A
+            let ty ← match rs.ty with
+              | .arr t => pure t
+              | t => eerr gp s!"a for generator needs an array, string or map, found {t.show}"
+            let tmp ← fresh rs.ty
+            let src0 := if (rs.e.mayFail ctx.sigProg) then
+                Expr.orE tmp rs.e (.lit (.arr #[])) else rs.e
+            let ta ← fresh rs.ty
+            let (islot, c1) ← declare c i .int
+            let (xslot, c2) ← declare c1 x ty
+            let src := Expr.seq (.assign ta src0)
+              (.prim .range [.lit (.int 0), p2 .sub (.prim .len [.local ta]) (.lit (.int 1))])
+            pure (islot, src, c2, Expr.assign xslot (p2 .index (.local ta) (.local islot)))
+          | none => do
+          let ty ← match rs.ty with
+            | .arr t => pure t
+            | t => eerr gp s!"a for generator needs an array, string or map, found {t.show}"
+          let tmp ← fresh rs.ty
+          let src := if (rs.e.mayFail ctx.sigProg) then
+              Expr.orE tmp rs.e (.lit (.arr #[])) else rs.e
+          let (slot, c1) ← declare c x ty
+          pure (slot, src, c1, Expr.lit (.logic true))
+        | .decl gp n _ false _ => do
+          -- `X := a₁ | … | aₙ` (#208): over the alternatives' indices, each
+          -- alternative bound in the filter (so a failing one is skipped)
+          let some b := Choice.binding? g | eerr g.pos "bad for clause"
+          -- (an `if` with choices in its branches picks its branch first, once, #235)
+          let (pre, ty, es) ← match b.branchy with
+            | some i => elabBranchAlts { c with canFail := true, inTaking := true } gp i b.ty b.place
+            | none => do let (ty, es) ← elabAlts { c with canFail := true } gp b; pure (none, ty, es)
+          checkNewLocal c gp n
+          let k ← fresh .int
+          let (xs, c1) ← declare c n ty
+          let idx := Expr.lit (.arr (choiceIdx es.length))
+          pure (k, (pre.map (Expr.seq · idx)).getD idx, c1, Expr.assign xs (Expr.altE k es))
+        | _ => eerr g.pos "bad for clause"
+      -- (an exclusive choice among the filters, #314: its paths in this
+      -- iteration's filter, so that a failure in one rolls back to this
+      -- generator, as the `if` it stands for would)
+      if fs.any isExcl then
+        let (filtE, arr, ety) ← exclIter c1 fs more
+        let filt := match pre with
+          | .lit _ => filtE
+          | e => .seq e filtE
+        return ⟨.prim .flatten [Expr.forE slot src filt arr], .arr ety⟩
+      let (filt, c2) ← elabFilters c1 fs
+      let filt := if fs.isEmpty then pre else
+        match pre with
+        | .lit _ => filt
+        | e => .seq e filt
+      let inner ← build c2 more
+      let loopE := Expr.forE slot src filt inner.e
+      match more with
+      | [] => return ⟨loopE, .arr inner.ty⟩
+      | _ =>
+        match inner.ty with
+        | .arr t => return ⟨.prim .flatten [loopE], .arr t⟩
+        | _ => eerr p "internal: nested for"
+  match pre with
+  | [] => build ctx gs
+  | _ =>
+    -- (an exclusive choice among them, #314: its paths in this filter)
+    -- (through a generator over one element, whose filters they are)
+    if pre.any isExcl then
+      -- (named for the depth too: a for of an alternative's, inside this
+      -- one's clauses, has the same position)
+      return ← build ctx ((.gen p s!"$u{p.line}_{p.col}_{ctx.locals.length}" none (.arrayLit p [.tuple p []]), pre) :: gs)
+    -- filters before any generator: iterate once over a one-element array
+    let (filt, c1) ← elabFilters ctx pre
+    let slot ← fresh .void
+    let inner ← build c1 gs
+    match gs with
+    | [] => return ⟨.forE slot (.lit (.arr #[.tup []])) filt inner.e, .arr inner.ty⟩
+    | _ =>
+      match inner.ty with
+      | .arr t => return ⟨.prim .flatten [.forE slot (.lit (.arr #[.tup []])) filt inner.e], .arr t⟩
+      | _ => eerr p "internal: nested for"
+
+/-- A call of a generic function. Its type arguments are inferred by matching
+    its signature: the result type against the expected type (unless that is
+    `void`, which accepts anything), then each parameter type against its
+    argument's, left to right. An argument whose parameter type is already
+    determined is elaborated against it, so `array{}` and `false` work. -/
+partial def elabGenericCallWith (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx) (p : Pos) (s : Sig) (args : List SExpr) (exp : Option Ty) :
+    EM R := do
+  -- named arguments (#119): positional ones, then named ones as written,
+  -- then the defaults of those omitted, as for other functions
+  let isNamed : SExpr → Bool := fun | .decl _ n _ _ _ => n.startsWith "?" | _ => false
+  let npos := s.params.length - s.named.length
+  let pos := args.filter (!isNamed ·)
+  let named : List (Pos × String × SExpr) := args.filterMap fun
+    | .decl ap n _ _ rhs => if n.startsWith "?" then some (ap, (n.drop 1).toString, rhs) else none
+    | _ => none
+  let plain := s.named.isEmpty && named.isEmpty
+  if plain then
+    if args.length != s.params.length then
+      eerr p s!"{s.name} takes {s.params.length} argument(s), found {args.length}"
+  else
+    if pos.length != npos then
+      -- (a method's receiver is its first positional argument)
+      let (shown, off) := match s.name.splitOn "." with
+        | [_, m] => if s.pnames.head? == some "Self" then (m, 1) else (s.name, 0)
+        | _ => (s.name, 0)
+      eerr p s!"{shown} takes {npos - off} positional argument(s), found {pos.length - off}"
+    for ((ap, n, _), i) in named.zip (List.range named.length) do
+      if (s.named.find? (·.1 == n)).isNone then eerr ap s!"{s.name} has no parameter ?{n}"
+      if (named.take i).any (·.2.1 == n) then eerr ap s!"?{n} is given twice"
+  -- the arguments given, in the order they are evaluated, each with the
+  -- index of its parameter
+  let given : List (SExpr × Nat) := (pos.zip (List.range npos)) ++ named.map fun (_, n, rhs) =>
+    (rhs, npos + (s.named.findIdx? (·.1 == n)).getD 0)
+  let ptys := s.params.toArray
+  let mut σ : List (String × Ty) := []
+  if let some et := exp then
+    if !(et == .void) then
+      if let some σ' := s.ret.matchArg ctx.types σ et then σ := σ'
+  let bound (σ : List (String × Ty)) (t : Ty) := t.params.all fun v => (σ.lookup v).isSome
+  -- `false`, `array{}` and `map{}` take their type from context, so they are
+  -- elaborated after the other arguments (they are still evaluated in order)
+  let fromContext : SExpr → Bool
+    | .ident _ "false" | .arrayLit _ [] | .mapLit _ [] => true
+    | _ => false
+  let mut es : Array Expr := Array.replicate given.length (.lit .void)
+  -- arguments left for the second pass; an argument whose type contains
+  -- `false` (like `array{Err()}`) binds nothing, so it joins them
+  let mut deferred : Array Bool := (given.map (fromContext ·.1)).toArray
+  for pass in [0, 1] do
+    for ((a, k), i) in given.zip (List.range given.length) do
+      let pt := ptys[k]!
+      if (pass == 0) == deferred[i]! then continue
+      if bound σ pt then
+        let t := pt.subst σ
+        let r ← elabE ctx a (some t)
+        let e ← tryCatch (coerce a.pos r t) fun msg => throw s!"{msg} (in a call of {s.name})"
+        es := es.set! i e
+      else
+        if fromContext a then
+          let v := (pt.params.filter fun v => (σ.lookup v).isNone).headD "t"
+          eerr a.pos s!"cannot infer type parameter {v} of {s.name} from the arguments of this call"
+        let r ← elabE ctx a none
+        match pt.matchArg ctx.types σ r.ty with
+        | some σ' =>
+          σ := σ'
+          if pass == 0 && !bound σ pt then
+            deferred := deferred.set! i true
+          else
+            es := es.set! i (← coerce a.pos r (pt.subst σ))
+        | none => eerr a.pos s!"expected {(pt.subst σ).show}, found {r.ty.show} (in a call of {s.name})"
+  -- the arguments, in their temporaries, then the defaults
+  let mut steps : Array Expr := #[]
+  let mut slots : Array (Option Nat) := Array.replicate s.params.length none
+  if !plain then
+    for ((_, k), i) in given.zip (List.range given.length) do
+      let ta ← fresh (ptys[k]!.subst σ)
+      steps := steps.push (.assign ta es[i]!)
+      slots := slots.set! k (some ta)
+    for ((n, dflt), j) in s.named.zip (List.range s.named.length) do
+      let k := npos + j
+      if slots[k]!.isNone then
+        let some d := dflt | eerr p s!"{s.name} needs the argument ?{n}, which has no default"
+        let pt := ptys[k]!
+        -- (the default sees the parameters before it, in their temporaries)
+        let earlier : List Local := ((s.pnames.zip (List.range k)).filterMap fun (pn, j) =>
+          (slots[j]!).map fun sl => ({ name := pn, slot := sl, ty := ptys[j]!.subst σ, mutable := false } : Local)).reverse
+        let key := (s.name, s!"?{n}")
+        if ctx.defaults.contains key then
+          eerr p s!"the default of ?{n} of {s.name} uses itself (a call of {s.name} that omits ?{n})"
+        -- (a method's: its receiver's fields too, through `Self`)
+        let selfC : Option String :=
+          if s.pnames.head? == some "Self" then (s.name.splitOn ".").head? else none
+        let dctx := { ctx with locals := earlier, selfClass := selfC, inParamDefault := true,
+                               inLoop := false, canFail := ctx.canFail && s.decides,
+                               suspends := ctx.suspends && s.suspends,
+                               defaults := key :: ctx.defaults }
+        -- (its type: the parameter's, or what the default gives a type
+        -- parameter nothing else determined)
+        let σ0 := σ
+        if !bound σ0 pt && fromContext d then
+          let v := (pt.params.filter fun v => (σ0.lookup v).isNone).headD "t"
+          eerr p s!"cannot infer type parameter {v} of {s.name} from the arguments of this call"
+        let (rd, σ1) ← fxAt p (do
+          let r ← elabE dctx d (if bound σ0 pt then some (pt.subst σ0) else none)
+          let σ1 ← if bound σ0 pt then pure σ0 else
+            match pt.matchArg ctx.types σ0 r.ty with
+            | some σ' => pure σ'
+            | none => eerr p s!"the default of ?{n} of {s.name} is a {r.ty.show}, not a {(pt.subst σ0).show}"
+          return (← coerce p r (pt.subst σ1), σ1))
+        σ := σ1
+        if !s.decides && rd.mayFail ctx.sigProg then
+          eerr p s!"the default of ?{n} of {s.name} can fail, but {s.name} is not <decides>"
+        let ta ← fresh (pt.subst σ)
+        steps := steps.push (.assign ta rd)
+        slots := slots.set! k (some ta)
+  let mut targs : Array Ty := #[]
+  for (v, cmp) in s.tparams do
+    let some t := σ.lookup v
+      | eerr p s!"cannot infer type parameter {v} of {s.name} from the arguments of this call"
+    -- (not of a value class's `$call…`, #218: the class's type arguments
+    -- are its receiver's, fixed, and checked, when the value was made; a
+    -- call through a function type only dispatches to it)
+    let valueCall := !(s.name.splitOn ".$call").tail.isEmpty
+    if cmp && !valueCall && !t.comparable ctx.types then
+      eerr p (notComparable ctx.types t s!"type parameter {v} of {s.name}")
+    targs := targs.push t
+  -- the hidden arguments: a value of each type argument (but those a
+  -- method reads from its receiver, #209)
+  -- (in a dispatch's branch that opens type arguments, #209, a type
+  -- argument in terms of the caller's own type parameters, whose values the
+  -- dispatch types under its refinement; one that still mentions the opened
+  -- ones has no value to pass)
+  let dicts ← ((targs.toList.zip s.tparams).filter fun (_, (v, _)) => !s.selfTps.contains v).mapM
+    fun (t, (v, _)) => do
+      let t := t.unrefine ctx.unrefine
+      if t.params.any (·.startsWith "$ext") then
+        eerr p s!"cannot call {s.name} here yet: its type parameter {v} would mention type arguments that the dispatch opens, apart from the caller's, and no value of those can be passed (#209)"
+      witness ctx.types ctx.dictBase ctx.dictVars t
+  if plain then return ⟨.call s.idx (es.toList ++ dicts), s.ret.subst σ⟩
+  let call := Expr.call s.idx (slots.toList.map (fun o => Expr.local o.get!) ++ dicts)
+  return ⟨steps.toList.foldr Expr.seq call, s.ret.subst σ⟩
+
+partial def elabSetWith (elabE : Ctx → SExpr → Option Ty → EM R) (elabMember : Ctx → Pos → R → String → EM R)
+    (ctx : Ctx) (p : Pos) (lhs0 : SExpr) (op : Option String) (rhs0 : SExpr) : EM R := do
+  -- (`$withOld(O, R)`: for `op=`, the old value was read into `O` before
+  -- the code that computes `R`, as `set` evaluates, #208)
+  let (rhs, oldIn) : SExpr × Option Expr := match rhs0 with
+    | .app _ (.ident _ "$withOld") [.ident _ o, r] false => (r, (ctx.lookup o).map (fun l => Expr.local l.slot))
+    | r => (r, none)
+  -- the right side at the target's type; for `set F *= N` of a float, an
+  -- int too (#127), so without it when that fails
+  let rhsAt (t : Ty) : EM R :=
+    if op == some "*" && t == .float then
+      tryCatch (elabE ctx rhs (some t)) fun _ => elabE ctx rhs none
+    else elabE ctx rhs (some t)
+  -- in a method, a path from a field of `Self` (as when one is read)
+  let rec selfRoot : SExpr → SExpr
+    | .ident ip n =>
+      match ctx.lookup n, ctx.selfClass with
+      | none, some c => if (ctx.types.fields c).any (·.1 == n) then .member ip (.ident ip "Self") n else .ident ip n
+      | _, _ => .ident ip n
+    | .member sp e f => .member sp (selfRoot e) f
+    | .app sp e [k] true => .app sp (selfRoot e) [k] true
+    | .query sp e => .query sp (selfRoot e)
+    | e => e
+  let lhs := selfRoot lhs0
+  let combine (old0 : Expr) (ty : Ty) (o : String) (new0 : R) : EM Expr := do
+    let old := oldIn.getD old0
+    -- (a refinement's value is its base; a refined variable is set only
+    -- through a cast, #136)
+    let new := widenR (← get).env new0
+    if let .refine n := ty then
+      eerr p s!"set {o}= on {withArticle n} needs a cast: write set X = {n}[X {o} …], which fails when the result is not one"
+    match o, ty, new.ty with
+    | "+", .int, .int => pure (p2 .add old new.e)
+    | "-", .int, .int => pure (p2 .sub old new.e)
+    | "*", .int, .int => pure (p2 .mul old new.e)
+    | "+", .arr t, .arr u => do
+        if t == u then pure (p2 .concat old new.e)
+        else if refUp (← get).env (.arr u) (.arr t) then pure (p2 .concat old (← coerce p new (.arr t)))
+        else if u.hasNever then
+          match ← tryCatch (some <$> coerce p new (.arr t)) (fun _ => pure none) with
+          | some e => pure (p2 .concat old e)
+          | none => eerr p s!"cannot concatenate {ty.show} and {new.ty.show}"
+        else eerr p s!"cannot concatenate {ty.show} and {new.ty.show}"
+    -- floats (#127)
+    | "+", .float, .float => pure (p2 .fadd old new.e)
+    | "-", .float, .float => pure (p2 .fsub old new.e)
+    | "*", .float, .float => pure (p2 .fmul old new.e)
+    | "*", .float, .int => pure (p2 .fmul old (.prim .fofInt [new.e]))
+    | "/", .float, .float => pure (p2 .fdiv old new.e)
+    | "/", .int, _ => eerr p "set /= is not defined on int (integer division can fail)"
+    | _, _, _ => eerr p s!"no operator '{o}=' for {ty.show} and {new.ty.show}"
+  let mutableLocal (n : String) : EM Local := do
+    match ctx.lookup n with
+    | some l => if l.mutable then pure l else eerr p s!"'{n}' is not a var; declare it with var {n}:t = …"
+    | none => eerr p s!"unknown variable '{n}'"
+  -- a path `X.F[i]…`: the root variable and its steps (`some f` a field,
+  -- `none` with an expression an index or key)
+  let rec path : SExpr → Option (String × List (Pos × Option String × Option SExpr))
+    | .ident _ n => some (n, [])
+    | .member sp e f => (path e).map fun (n, ss) => (n, ss ++ [(sp, some f, none)])
+    | .app sp e [k] true => (path e).map fun (n, ss) => (n, ss ++ [(sp, none, some k)])
+    -- `X?`: the value inside an option; fails when empty
+    | .query sp e => (path e).map fun (n, ss) => (n, ss ++ [(sp, some "?", none)])
+    | _ => none
+  let general : List (Pos × Option String × Option SExpr) → Bool
+    | steps@(_ :: _ :: _) => !steps.isEmpty
+    | steps => steps.any (·.2.1 == some "?")
+  if let some (root, steps) := path lhs then if general steps then
+    -- `set X.p = e` with a path of two or more steps (Book of Verse §3.5, §9.3):
+    -- the indices and keys are evaluated once, left to right; then each
+    -- intermediate container is read (an index or an intermediate key that
+    -- is missing makes the set fail); then the new leaf; then the
+    -- containers are rebuilt from the leaf up, ending with the variable
+    -- the variable must be a var unless the path writes an object (below)
+    let l ← match ctx.lookup root with
+      | some l => pure l
+      | none => eerr p s!"unknown variable '{root}'"
+    let mut pre : Array Expr := #[]
+    -- per step: the container's slot and type, and the step
+    let mut levels : Array (Nat × Ty × Pos × Option String × Option (Nat × Ty)) := #[]
+    let mut cur := l.slot
+    let mut ty := l.ty
+    -- first the indices and keys
+    let mut keys : Array (Option (Nat × Ty)) := #[]
+    let mut tys : Array Ty := #[]
+    for (sp, f?, k?) in steps do
+      tys := tys.push ty
+      match f?, k?, ty with
+      | some "?", _, .opt t => keys := keys.push none; ty := t
+      | some "?", _, t => eerr sp s!"'?' in a set needs an option, found {t.show}"
+      | some f, _, .struct sn targs =>
+        match fieldIndex (ctx.types.fields sn targs) f with
+        | some (_, ft) => keys := keys.push none; ty := ft
+        | none => eerr sp s!"{ty.show} has no field '{f}'"
+      | some f, _, t => eerr sp s!"{t.show} has no field '{f}'"
+      | none, some k, .arr t =>
+        let ri ← elabE ctx k (some .int)
+        if ri.ty != .int then eerr sp "an array index must be an int"
+        let ti ← fresh .int
+        pre := pre.push (.assign ti ri.e)
+        keys := keys.push (some (ti, .int)); ty := t
+      | none, some k, .map kt vt =>
+        let rk ← elabE ctx k (some kt)
+        let tk ← fresh kt
+        pre := pre.push (.assign tk (← coerce sp rk kt))
+        keys := keys.push (some (tk, kt)); ty := vt
+      | _, _, t => eerr sp s!"cannot index a value of type {t.show}"
+    let leafTy := ty
+    -- the last step from an object (#34): it writes the object in place, so
+    -- the path above it is only read, and its field must be a var
+    let tysA := tys
+    let refLevel? : Option Nat := (List.range steps.length).reverse.find? fun k =>
+      match tysA[k]! with
+      | .struct sn _ => ctx.types.isRefClass sn
+      | _ => false
+    if let some kr := refLevel? then
+      let (sp, f?, _) := steps.toArray[kr]!
+      match tysA[kr]!, f? with
+      | .struct sn _, some f =>
+        if !ctx.types.isVarField sn f then eerr sp (classSetMsg sn f)
+      | _, _ => eerr p "internal: set path"
+    if refLevel?.isNone && !l.mutable then
+      eerr p s!"'{root}' is not a var; declare it with var {root}:t = …"
+    -- read one step of the container in slot `c` of type `cty`
+    let readStep (c : Nat) (cty : Ty) (step : Option String) (key : Option (Nat × Ty)) : EM Expr := do
+      match step, key, cty with
+      | some "?", _, .opt _ => pure (.prim .query [.local c])
+      | some f, _, .struct sn targs =>
+        -- a class's field as when it is read (an interface field may sit at
+        -- different places in different classes)
+        if ctx.types.classes.contains sn then return (← elabMember ctx p ⟨.local c, cty⟩ f).e
+        let (j, _) := (fieldIndex (ctx.types.fields sn targs) f).get!
+        pure (.prim (.tupGet j) [.local c])
+      | none, some (ti, _), .arr _ => pure (p2 .index (.local c) (.local ti))
+      | none, some (tk, kt), .map _ vt =>
+        let tp ← fresh (.tup [kt, vt])
+        pure (mapLookup c tk tp)
+      | _, _, _ => eerr p "internal: set path"
+    -- a value of a class with no instance cannot exist, so the set is
+    -- unreachable once the path reaches one; but the steps before it (the
+    -- indices and keys, then the containers read) may fail first (#104)
+    if let some ke := (List.range steps.length).find? fun k =>
+        match tysA[k]! with | .struct sn _ => ctx.types.isEmptyClass sn | _ => false then
+      let stepsA := steps.toArray
+      let mut c := l.slot
+      for k in [0:ke] do
+        let (_, f?, _) := stepsA[k]!
+        let c' ← fresh tysA[k + 1]!
+        pre := pre.push (.assign c' (← readStep c tysA[k]! f? keys[k]!))
+        c := c'
+      -- (the right-hand side never runs, but is checked, and the field set
+      -- at the empty class must be a var, as on any path)
+      let lastCls := (List.range steps.length).reverse.find? fun k =>
+        match tysA[k]!, stepsA[k]! with
+        | .struct sn _, (_, some f, _) => f != "?" && ctx.types.classes.contains sn
+        | _, _ => false
+      if let some kc := lastCls then
+        if let (.struct sn _, (sp, some f, _)) := (tysA[kc]!, stepsA[kc]!) then
+          if !ctx.types.isVarField sn f then eerr sp (classSetMsg sn f)
+      let r ← rhsAt leafTy
+      match op with
+      | none => discard <| coerce p r leafTy
+      | some o => discard <| combine (.prim .userErr []) leafTy o r
+      let tu ← fresh leafTy
+      return ⟨pre.toList.foldr Expr.seq (.assign tu (.prim .userErr [])), leafTy⟩
+    -- the intermediate containers: level 0 is a copy of the variable, taken
+    -- after the indices, so that the right-hand side cannot change what is
+    -- rebuilt (as for `set A[i] = e`); the variable is written once, last
+    let c0 ← fresh l.ty
+    pre := pre.push (.assign c0 (.local l.slot))
+    cur := c0
+    let stepsA := steps.toArray
+    -- with an object on the path, the right-hand side runs once the path has
+    -- reached it, before the values in the object are read (#34): a write it
+    -- makes through the object is not lost. Without, it runs after every
+    -- container is read, as for `set A[i] = e`.
+    let rhsAfter : Nat := match refLevel? with
+      | some kr => kr
+      | none => stepsA.size
+    let mut rhsVal : Option R := none
+    let mut oldLeaf : Option Nat := none
+    for k in [0:stepsA.size] do
+      let (sp, f?, _) := stepsA[k]!
+      levels := levels.push (cur, tys[k]!, sp, f?, keys[k]!)
+      if k == rhsAfter then
+        -- `set P op= e` reads P before e, as the direct form does (Book of
+        -- Verse: `set X += e` is `set X = X + e`; #58): the rest of the path,
+        -- read now, gives the old leaf (it fails as `P` would, and is read
+        -- again for the rebuild below)
+        if op.isSome then
+          let mut c2 := cur
+          for k2 in [k:stepsA.size] do
+            let (_, f2, _) := stepsA[k2]!
+            let t2 := if k2 + 1 < stepsA.size then tys[k2 + 1]! else leafTy
+            let c3 ← fresh t2
+            pre := pre.push (.assign c3 (← readStep c2 tys[k2]! f2 keys[k2]!))
+            c2 := c3
+          oldLeaf := some c2
+        let r ← rhsAt leafTy
+        let tr ← fresh r.ty
+        pre := pre.push (.assign tr r.e)
+        rhsVal := some ⟨.local tr, r.ty⟩
+      if k + 1 < stepsA.size then
+        let c ← fresh tys[k + 1]!
+        pre := pre.push (.assign c (← readStep cur tys[k]! f? keys[k]!))
+        cur := c
+    let (lc, lty, _, lf, lkey) := levels[levels.size - 1]!
+    -- a last `?` step also needs the option to be set
+    if lf == some "?" then pre := pre.push (.seq (.prim .query [.local lc]) (.lit .void))
+    -- the new leaf value
+    let r ← match rhsVal with
+      | some r => pure r
+      | none => rhsAt leafTy
+    let leaf ← match op with
+      | none => coerce p r leafTy
+      | some o =>
+        -- (only an `op=` reads the old value: a read can have an effect)
+        let old ← match oldLeaf with
+          | some t => pure (Expr.local t)
+          | none => readStep lc lty lf lkey
+        combine old leafTy o r
+    let tv ← fresh leafTy
+    pre := pre.push (.assign tv leaf)
+    -- rebuild, from the leaf up, as far as the object written in place
+    let mut newVal : Expr := .local tv
+    let mut wroteObject := false
+    for k' in [0:levels.size] do
+      let k := levels.size - 1 - k'
+      if wroteObject then break
+      let (c, cty, _, f?, key) := levels[k]!
+      match f?, key, cty with
+      | some "?", _, .opt _ => pre := pre.push (.assign c (.prim .mkSome [newVal]))
+      | some f, _, .struct sn targs =>
+        if ctx.types.isRefClass sn then
+          let (j, ft) := (fieldIndex (ctx.types.fields sn targs) f).get!
+          pre := pre.push (← setFieldAt ctx.types p sn targs c f j ft newVal)
+          noteFx p ["writes"]
+          wroteObject := true
+        else
+          let fs := ctx.types.fields sn targs
+          let (j, _) := (fieldIndex fs f).get!
+          let parts := (List.range fs.length).map fun i =>
+            if i == j then newVal else Expr.prim (.tupGet i) [.local c]
+          pre := pre.push (.assign c (.prim .mkTup parts))
+      | none, some (ti, _), .arr _ =>
+        pre := pre.push (.assign c (.prim .arrSet [.local c, .local ti, newVal]))
+      | none, some (tk, _), .map _ vt =>
+        -- the last key inserts or updates; an intermediate one was read above, so it exists
+        let tvk ← fresh vt
+        let ti ← fresh .int
+        let tidx ← fresh .int
+        pre := pre.push (.assign tvk newVal)
+        pre := pre.push (mapPut c tk tvk ti tidx)
+      | _, _, _ => eerr p "internal: set path"
+      newVal := .local c
+    if !wroteObject then pre := pre.push (.assign l.slot (.local c0))
+    return ⟨pre.toList.foldr Expr.seq (.local tv), leafTy⟩
+  match lhs with
+  | .ident _ n =>
+    let l ← mutableLocal n
+    let r ← rhsAt l.ty
+    let v ← match op with
+      | none => coerce p r l.ty
+      | some o => combine (.local l.slot) l.ty o r
+    return ⟨.assign l.slot v, l.ty⟩
+  | .app _ (.ident _ n) [k] true =>
+    let l ← mutableLocal n
+    match l.ty with
+    | .map kt vt =>
+      let rk ← elabE ctx k (some kt)
+      let tk ← fresh kt
+      let tp ← fresh (.tup [kt, vt])
+      let r ← rhsAt vt
+      let v ← match op with
+        | none => coerce p r vt
+        -- `set M[k] op= v` fails when k is not a key (Book of Verse §9.3)
+        | some o => combine (mapLookup l.slot tk tp) vt o r
+      let tv ← fresh vt
+      let ti ← fresh .int
+      let tidx ← fresh .int
+      return ⟨.seq (.assign tk (← coerce p rk kt)) (.seq (.assign tv v)
+        (.seq (mapPut l.slot tk tv ti tidx) (.local tv))), vt⟩
+    | .arr t =>
+      let i := k
+      let ri := widenR ctx.types (← elabE ctx i (some .int))
+      if ri.ty != .int then eerr p "an array index must be an int"
+      let ti ← fresh .int
+      let tv ← fresh t
+      let r ← rhsAt t
+      let v ← match op with
+        | none => coerce p r t
+        | some o => combine (p2 .index (.local l.slot) (.local ti)) t o r
+      -- `set A[i] = v` fails out of range and returns `v` (Book of Verse §3.3)
+      return ⟨.seq (.assign ti ri.e)
+        (.seq (.assign l.slot (.prim .arrSet [.local l.slot, .local ti, .assign tv v])) (.local tv)), t⟩
+    | ty => eerr p s!"cannot index a value of type {ty.show}"
+  | .member _ (.ident _ n) f =>
+    -- an object's field: written in place, through any variable (#34)
+    if let some l := ctx.lookup n then
+      if let .struct sn _ := l.ty then
+        if ctx.types.isRefClass sn then
+          let targs := match l.ty with | .struct _ ts => ts | _ => []
+          let some (k, t) := fieldIndex (ctx.types.fields sn targs) f
+            | eerr p s!"class {sn} has no field '{f}'"
+          if !ctx.types.isVarField sn f then eerr p (classSetMsg sn f)
+          let r ← rhsAt t
+          noteFx p (if op.isSome then ["reads", "writes"] else ["writes"])
+          let v ← match op with
+            | none => coerce p r t
+            -- (the current value, read as a read does)
+            | some o => combine (← elabMember ctx p ⟨.local l.slot, l.ty⟩ f).e t o r
+          return ⟨← setFieldAt ctx.types p sn targs l.slot f k t v, t⟩
+    if let some l := ctx.lookup n then
+      if let .struct sn targs := l.ty then
+        if ctx.types.isEmptyClass sn then
+          -- no instance can exist: unreachable
+          let some (_, t) := fieldIndex (ctx.types.fields sn targs) f | eerr p s!"class {sn} has no field '{f}'"
+          let tu ← fresh t
+          return ⟨.assign tu (.prim .userErr []), t⟩
+        if ctx.types.classes.contains sn && !ctx.types.isRefClass sn then
+          eerr p s!"field '{f}' of the parametric class {sn} cannot be set: a parametric class is a value (#34)"
+    let l ← mutableLocal n
+    match l.ty with
+    | .struct sn targs =>
+      if ctx.types.classes.contains sn then eerr p (classSetMsg sn f)
+      let fs := ctx.types.fields sn targs
+      match fieldIndex fs f with
+      | some (k, t) =>
+        let r ← rhsAt t
+        let v ← match op with
+          | none => coerce p r t
+          | some o => combine (.prim (.tupGet k) [.local l.slot]) t o r
+        let tv ← fresh t
+        -- the struct is rebuilt with field k replaced; `set` returns the new field value
+        let parts := (List.range fs.length).map fun i =>
+          if i == k then Expr.assign tv v else Expr.prim (.tupGet i) [.local l.slot]
+        return ⟨.seq (.assign l.slot (.prim .mkTup parts)) (.local tv), t⟩
+      | none => eerr p s!"struct {sn} has no field '{f}'"
+    | ty => eerr p s!"{ty.show} has no field '{f}'"
+  | _ => eerr p "openverse supports set X = …, and set on a path of fields, indices and keys from a variable (set S.F[i].G = …); not through a tuple element or a call result"
+
+/-- `if (D := T[X]) then Body else Else`, where the cast holds only under a
+    refinement of the code's type parameters (#243). `Body` is lifted into
+    a generic function (`Refine.functions`), asked for in a first
+    elaboration, which elaborates `Body` in the refined world to find its
+    type, effects and the locals it uses. Then the `if` is a dispatch to
+    it, one test per set of pins among the classes tested, as a refined
+    method call is: `Typed.dispatch` types the call under the refinement,
+    with the object (as `D`) and those locals passed at their refined
+    types. `none` when the cast does not refine: the plain path. -/
+partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr → Bool → Option Ty → EM R)
+    (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx) (p _dp : Pos) (D T : String) (x : SExpr) (body0 : SExpr)
+    (elseE : Option SExpr) (exp : Option Ty) (made : Bool := false) : EM (Option R) := do
+  let env := ctx.types
+  if !env.classes.contains T then return none
+  -- (in a method: the members of `Self` the branch names bare, as members
+  -- of `Self`, which its function takes as a parameter)
+  let body := match ctx.selfClass with
+    | some c => selfQualify ctx c body0
+    | none => body0
+  let st0 ← get
+  let rx ← elabE { ctx with canFail := true, inTaking := true } x none
+  let some (S, sargs, targs, common, eqs, opened) := refiningCast? env T rx.ty (env.tvars.map (·.1))
+    | do set st0; return none
+  if !env.isRefClass S || (!opened.isEmpty && !env.isRefClass T) then set st0; return none
+  -- (#250: `T` has Verse Core type arguments past the object's, or not as
+  -- its own type parameters: its tests open them, as a method's dispatch does)
+  let wide := !((env.coreVars T).length == (env.coreArgs S sargs).length &&
+    (env.coreVars T).all fun (v, _) => !v.startsWith "$arg")
+  let coreFields (n : String) (ts : List Ty) : Option (List Ty) :=
+    if env.classes.contains n then none else some ((env.fields n ts).map (·.2.1))
+  let some μT := Ty.unifyEqs coreFields [] eqs | do set st0; return none
+  -- (#250: an opened parameter that a comparable type parameter's
+  -- refinement mentions, `t:subtype(comparable)` refined to `tuple(a', b')`,
+  -- is comparable too, as the object's type argument for `t` is)
+  let cmpVars : List String := env.tvars.filterMap fun (n, t) => match t with
+    | .param _ true => some n
+    | _ => none
+  let cmpOpen : List String := (opened.filter fun (n, _, c) => !c && cmpVars.any fun v =>
+    ((Ty.param v true).subst μT).params.contains n).map (·.1)
+  let mkC (t : Ty) : Ty := t.subst (cmpOpen.map fun n => (n, Ty.param n true))
+  let targs := targs.map mkC
+  let μT := μT.map fun (v, t) => (v, mkC t)
+  let opened := opened.map fun (n, v, c) => (n, v, c || cmpOpen.contains n)
+  let shown := (Ty.struct T targs).show
+  -- (the locals the branch uses, in order of first use)
+  let caps : List Local := (Choice.namesUsed body).filterMap fun n =>
+    if n == D then none else ctx.locals.find? (·.name == n)
+  if let some (q, what) := refineBranchWhy? ctx p body ((caps.filter (·.mutable)).map (·.name)) then
+    eerr q s!"the branch of the cast to {shown}, which holds only under a refinement of the type arguments, is compiled as a function of its own, so {what} (#243)"
+  -- (a suspension in the branch or in the `else`, which the dispatch to the
+  -- branch's function would have to carry, is refused for now)
+  let isS (f : Nat) : Bool := ctx.sigs.any fun s => s.idx == f && s.suspends
+  let elseOf : EM R := match elseE with
+    | none => pure ⟨.lit .void, .void⟩
+    | some ee => do
+      let re ← elabE ctx ee exp
+      if ctx.suspends && Suspend.hasSusp isS re.e then
+        eerr ee.pos s!"the else of the cast to {shown}, which holds only under a refinement of the type arguments, cannot suspend yet: the if is a dispatch to its branch's function (#243)"
+      pure re
+  let key := Refine.keyOf p D
+  match env.castRequests.find? (·.key == key) with
+  | none =>
+    -- (first: the branch in the refined world)
+    let refine (t : Ty) : Ty := t.subst μT
+    let dTy := refine (.struct T targs)
+    let dslot ← fresh dTy
+    let ctxB : Ctx := { ctx with
+      locals := { name := D, slot := dslot, ty := dTy, mutable := false } ::
+        ctx.locals.map fun l => { l with ty := refine l.ty },
+      -- (and the type arguments the cast opens, #250)
+      types := { env with tvars := (env.tvars.map (fun (n, t) => (n, refine t)) ++
+        opened.map (fun (n, _, c) => (n, Ty.param n c))) } }
+    -- (its own effects, which its function declares; the enclosing one's too)
+    let fx0 := (← get).fx
+    modify fun st => { st with fx := [] }
+    let rb ← elabE ctxB body (if elseE.isNone then some .void else exp.map refine)
+    if ctx.suspends && Suspend.hasSusp isS rb.e then
+      eerr body.pos s!"the branch of the cast to {shown}, which holds only under a refinement of the type arguments, is compiled as a function of its own, so it cannot suspend yet (#243)"
+    let fxB := (← get).fx
+    modify fun st => { st with fx := fx0 }
+    for (k, q, via) in fxB do noteFx q [k] via
+    let re ← elseOf
+    let τ' : Ty := if elseE.isNone then .void else exp.getD re.ty
+    let ret := refine τ'
+    discard <| coerce p rb ret
+    let decides := rb.e.mayFail ctx.sigProg
+    let sig := caps.map fun l => (l.name, refine l.ty)
+    let tps := ((dTy :: ret :: sig.map (·.2)).flatMap Ty.paramsC).foldl
+      (fun acc (n, c) => if acc.any (·.1 == n) then acc else acc ++ [(n, c)]) []
+    -- (the type parameters only the types written in the branch mention:
+    -- each through a parameter of its own, passed a value of it, so that
+    -- the call determines it)
+    let written := ((Refine.typeNames body).filterMap fun w =>
+      (env.tvars.lookup w).map refine).flatMap Ty.paramsC
+    let extra := written.foldl (fun acc (n, c) =>
+      if tps.any (·.1 == n) || acc.any (·.1 == n) then acc else acc ++ [(n, c)]) []
+    let tps := tps ++ extra
+    -- (the opened ones' values come from the object's hidden fields; those
+    -- of a cast this one is in, from its function's, #250)
+    if let some (n, _) := tps.find? fun (n, _) =>
+        !ctx.dictVars.contains n && !opened.any (·.1 == n) && !ctx.types.tvars.any (·.1 == n) then
+      eerr p s!"cannot lift the branch of the cast to {shown} yet: its types mention {n}, which this function has no value of (#243)"
+    -- (from the enclosing function's own names, also through the
+    -- refinements of the casts this one is in, as the branch is taken from
+    -- the source)
+    let σ := env.tvars.filterMap fun (n, t) =>
+      let t' := refine t
+      match t' with
+      | .param m _ => if m == n then none else some (n, t'.toSTy)
+      | _ => some (n, t'.toSTy)
+    let heap := ["reads", "writes", "allocates"].filter fun k => fxB.any (·.1 == k)
+    let specs := (if heap.isEmpty then ["computes"] else heap) ++ (if decides then ["decides"] else [])
+    let lift : Refine.Lift := {
+      pos := p, bound := D, target := T,
+      name := s!"$refine{p.line}_{p.col}_{D}" ++ (if p.file.isEmpty then "" else s!"_{p.file}"),
+      params := ((D, dTy) :: sig).map (fun (n, t) => { name := n, ty := t.toSTy }) ++
+        extra.map fun (n, _) => { name := s!"$type{n}", ty := .name n },
+      tparams := tps.map fun (n, c) => { pos := p, name := n, constraint := if c then "comparable" else "type" },
+      specs, ret := ret.toSTy, subst := σ, opened := opened.map fun (n, v, _) => (n, v),
+      -- (made: a branch the elaborator made, for a cast with clauses
+      -- after it, #286, which the source does not have as such)
+      body := if ctx.selfClass.isSome || made then some body else none }
+    modify fun st => if st.castNeeds.any (·.key == key) then st else { st with castNeeds := st.castNeeds ++ [lift] }
+    -- (a placeholder: this elaboration goes no further)
+    return some ⟨if decides then .prim .fail [] else .prim .userErr [], τ'⟩
+  | some l =>
+    -- (then: the object in a slot, and one dispatch per set of pins)
+    let (pre, y) ← match rx.e with
+      | .local y => pure ([], y)
+      | e => do
+        let y ← fresh rx.ty
+        pure ([Expr.assign y e], y)
+    let re ← elseOf
+    let τ' : Ty := if elseE.isNone then .void else exp.getD re.ty
+    let eE ← coerce p re τ'
+    let rargs := env.coreArgs S sargs
+    let atR := rargs.zipIdx.map fun (r, j) => (pinArg j, r)
+    let needOf (pins : List (Option Ty)) := (rargs.zip pins).filterMap fun (a, pin) => match pin with
+      | some pt => let pt := pt.subst atR; if a == pt then none else some (a, pt)
+      | none => none
+    let mut parts : Array (List (Option Ty) × Array String) := #[]
+    -- (keyed by each class's pins on the object's type arguments: the
+    -- branch needs none of those a class below adds, so a test of classes
+    -- that share those pins opens what the fewest of them add, as the
+    -- checker's `openCount` does: none when one of them adds none; a cast
+    -- that opens type arguments, #250, by all of each class's pins, as a
+    -- method's dispatch is, since its tests open them)
+    for d in common do
+      let k := if wide then env.corePins d else (env.corePins d).take rargs.length
+      match parts.findIdx? (·.1 == k) with
+      | some pi => parts := parts.modify pi fun (k', ds) => (k', ds.push d)
+      | none => parts := parts.push (k, #[d])
+    -- (an object that is no local: evaluated with a test of all the
+    -- classes tested, in one condition, so that its effects roll back and
+    -- its failure takes the else when the cast fails; the dispatch then
+    -- tests each part, its end unreachable)
+    let mut acc := if pre.isEmpty then eE else .prim .userErr []
+    let mut tested : Array String := #[]
+    for (pins, part) in parts.toList.reverse do
+      -- (#250: the type arguments the test opens, as fresh parameters
+      -- `$ext i`, which the refinement binds; the object is a `T` at the
+      -- first of them)
+      -- (each as comparable as the parameter it stands for: the target's,
+      -- or past those, the tested class's own)
+      let ownC := ((env.coreVars (part[0]!)).drop rargs.length).map fun (_, t) =>
+        match t with | .param _ c => c | _ => false
+      let extOf : List Ty := if !wide then [] else
+        (List.range (pins.length - rargs.length)).map fun i => Ty.param s!"$ext{i}" (ownC.getD i false)
+      let rxs := rargs ++ extOf
+      let atX := rxs.zipIdx.map fun (r, j) => (pinArg j, r)
+      let needX : List (Ty × Ty) := (rxs.zip pins).filterMap fun (a, pin) => match pin with
+        | some pt => let pt := pt.subst atX; if a == pt then none else some (a, pt)
+        | none => none
+      if !VTy.pinsBelow (env.lowerPins pins) rxs.length then
+        eerr p s!"cannot cast {withArticle rx.ty.show} to {shown} yet: class {part[0]!} relates its type arguments to ones that {S} does not have (#209, #243)"
+      -- (no object of `part` can be this one: no test)
+      let some μF := Ty.unifyEqs coreFields [] (if wide then needX else needOf pins) | continue
+      -- (the object as a `T`: its type parameters from the test's type
+      -- arguments, refined)
+      -- (the opened arguments a comparable type parameter's refinement
+      -- mentions are comparable, as in the first elaboration)
+      let cmpExt : List String := (extOf.filterMap fun
+        | .param n _ => if cmpVars.any (fun v => ((Ty.param v true).subst μF).params.contains n) then some n else none
+        | _ => none)
+      let mkX (t : Ty) : Ty := t.subst (cmpExt.map fun n => (n, Ty.param n true))
+      let μF := μF.map fun (v, t) => (v, mkX t)
+      let dTyX ← if !wide then pure ((Ty.struct T targs).subst μF) else
+        match Ty.unifyEqs coreFields [] ((env.coreArgs T targs).zip (rxs.map (fun t => mkX (t.subst μF)))) with
+        | some θD => pure (mkX ((Ty.struct T targs).subst θD))
+        | none => eerr p s!"cannot cast {withArticle rx.ty.show} to {shown} yet: the object's type arguments as {withArticle part[0]!} do not determine {T}'s (#250)"
+      let dL : Local := { name := D, slot := y, ty := dTyX, mutable := false }
+      let ctx' := { ctx with
+        locals := dL :: ctx.locals.map fun loc => { loc with ty := loc.ty.subst μF },
+        types := { env with tvars := env.tvars.map fun (m, t) => (m, t.subst μF) } }
+      let argOf (sp : SParam) : SExpr :=
+        if sp.name.startsWith "$type" then .app p (.ident p "$witness") [.ident p (sp.name.drop 5).toString] false
+        else .ident p sp.name
+      let rc ← elabApp ctx' p (.ident p l.name) (l.params.map argOf)
+        (l.specs.contains "decides") (some (τ'.subst μF))
+      let .call fi (.local s0 :: es) := rc.e
+        | eerr p s!"cannot lift the branch of the cast to {shown} yet: its call is not a plain one (#243)"
+      if s0 != y then eerr p s!"cannot lift the branch of the cast to {shown} yet (#243)"
+      acc := .ite (.heap (.isTag (part.toList.map env.tagOf)) [.local y]) (.call fi (.local y :: es)) acc
+      tested := part ++ tested
+    let t ← fresh τ'
+    if pre.isEmpty then return some ⟨.assign t acc, τ'⟩
+    let cond := pre.foldr Expr.seq (.heap (.isTag (tested.toList.map env.tagOf)) [.local y])
+    return some ⟨.assign t (.ite cond acc eE), τ'⟩
+
 mutual
 partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
   match se with
@@ -4039,355 +5038,15 @@ partial def elabCast (ctx : Ctx) (p : Pos) (T : String) (args : List SExpr) (bra
   let y ← fresh (.struct T [])
   return ⟨.seq (.assign x r.e) (.assign y acc), .struct T []⟩
 
-/-- `if (D := T[X]) then Body else Else`, where the cast holds only under a
-    refinement of the code's type parameters (#243). `Body` is lifted into
-    a generic function (`Refine.functions`), asked for in a first
-    elaboration, which elaborates `Body` in the refined world to find its
-    type, effects and the locals it uses. Then the `if` is a dispatch to
-    it, one test per set of pins among the classes tested, as a refined
-    method call is: `Typed.dispatch` types the call under the refinement,
-    with the object (as `D`) and those locals passed at their refined
-    types. `none` when the cast does not refine: the plain path. -/
+/-- `elabRefinedIfWith`, given this block's functions (#325). -/
 partial def elabRefinedIf (ctx : Ctx) (p _dp : Pos) (D T : String) (x : SExpr) (body0 : SExpr)
-    (elseE : Option SExpr) (exp : Option Ty) (made : Bool := false) : EM (Option R) := do
-  let env := ctx.types
-  if !env.classes.contains T then return none
-  -- (in a method: the members of `Self` the branch names bare, as members
-  -- of `Self`, which its function takes as a parameter)
-  let body := match ctx.selfClass with
-    | some c => selfQualify ctx c body0
-    | none => body0
-  let st0 ← get
-  let rx ← elabE { ctx with canFail := true, inTaking := true } x none
-  let some (S, sargs, targs, common, eqs, opened) := refiningCast? env T rx.ty (env.tvars.map (·.1))
-    | do set st0; return none
-  if !env.isRefClass S || (!opened.isEmpty && !env.isRefClass T) then set st0; return none
-  -- (#250: `T` has Verse Core type arguments past the object's, or not as
-  -- its own type parameters: its tests open them, as a method's dispatch does)
-  let wide := !((env.coreVars T).length == (env.coreArgs S sargs).length &&
-    (env.coreVars T).all fun (v, _) => !v.startsWith "$arg")
-  let coreFields (n : String) (ts : List Ty) : Option (List Ty) :=
-    if env.classes.contains n then none else some ((env.fields n ts).map (·.2.1))
-  let some μT := Ty.unifyEqs coreFields [] eqs | do set st0; return none
-  -- (#250: an opened parameter that a comparable type parameter's
-  -- refinement mentions, `t:subtype(comparable)` refined to `tuple(a', b')`,
-  -- is comparable too, as the object's type argument for `t` is)
-  let cmpVars : List String := env.tvars.filterMap fun (n, t) => match t with
-    | .param _ true => some n
-    | _ => none
-  let cmpOpen : List String := (opened.filter fun (n, _, c) => !c && cmpVars.any fun v =>
-    ((Ty.param v true).subst μT).params.contains n).map (·.1)
-  let mkC (t : Ty) : Ty := t.subst (cmpOpen.map fun n => (n, Ty.param n true))
-  let targs := targs.map mkC
-  let μT := μT.map fun (v, t) => (v, mkC t)
-  let opened := opened.map fun (n, v, c) => (n, v, c || cmpOpen.contains n)
-  let shown := (Ty.struct T targs).show
-  -- (the locals the branch uses, in order of first use)
-  let caps : List Local := (Choice.namesUsed body).filterMap fun n =>
-    if n == D then none else ctx.locals.find? (·.name == n)
-  if let some (q, what) := refineBranchWhy? ctx p body ((caps.filter (·.mutable)).map (·.name)) then
-    eerr q s!"the branch of the cast to {shown}, which holds only under a refinement of the type arguments, is compiled as a function of its own, so {what} (#243)"
-  -- (a suspension in the branch or in the `else`, which the dispatch to the
-  -- branch's function would have to carry, is refused for now)
-  let isS (f : Nat) : Bool := ctx.sigs.any fun s => s.idx == f && s.suspends
-  let elseOf : EM R := match elseE with
-    | none => pure ⟨.lit .void, .void⟩
-    | some ee => do
-      let re ← elabE ctx ee exp
-      if ctx.suspends && Suspend.hasSusp isS re.e then
-        eerr ee.pos s!"the else of the cast to {shown}, which holds only under a refinement of the type arguments, cannot suspend yet: the if is a dispatch to its branch's function (#243)"
-      pure re
-  let key := Refine.keyOf p D
-  match env.castRequests.find? (·.key == key) with
-  | none =>
-    -- (first: the branch in the refined world)
-    let refine (t : Ty) : Ty := t.subst μT
-    let dTy := refine (.struct T targs)
-    let dslot ← fresh dTy
-    let ctxB : Ctx := { ctx with
-      locals := { name := D, slot := dslot, ty := dTy, mutable := false } ::
-        ctx.locals.map fun l => { l with ty := refine l.ty },
-      -- (and the type arguments the cast opens, #250)
-      types := { env with tvars := (env.tvars.map (fun (n, t) => (n, refine t)) ++
-        opened.map (fun (n, _, c) => (n, Ty.param n c))) } }
-    -- (its own effects, which its function declares; the enclosing one's too)
-    let fx0 := (← get).fx
-    modify fun st => { st with fx := [] }
-    let rb ← elabE ctxB body (if elseE.isNone then some .void else exp.map refine)
-    if ctx.suspends && Suspend.hasSusp isS rb.e then
-      eerr body.pos s!"the branch of the cast to {shown}, which holds only under a refinement of the type arguments, is compiled as a function of its own, so it cannot suspend yet (#243)"
-    let fxB := (← get).fx
-    modify fun st => { st with fx := fx0 }
-    for (k, q, via) in fxB do noteFx q [k] via
-    let re ← elseOf
-    let τ' : Ty := if elseE.isNone then .void else exp.getD re.ty
-    let ret := refine τ'
-    discard <| coerce p rb ret
-    let decides := rb.e.mayFail ctx.sigProg
-    let sig := caps.map fun l => (l.name, refine l.ty)
-    let tps := ((dTy :: ret :: sig.map (·.2)).flatMap Ty.paramsC).foldl
-      (fun acc (n, c) => if acc.any (·.1 == n) then acc else acc ++ [(n, c)]) []
-    -- (the type parameters only the types written in the branch mention:
-    -- each through a parameter of its own, passed a value of it, so that
-    -- the call determines it)
-    let written := ((Refine.typeNames body).filterMap fun w =>
-      (env.tvars.lookup w).map refine).flatMap Ty.paramsC
-    let extra := written.foldl (fun acc (n, c) =>
-      if tps.any (·.1 == n) || acc.any (·.1 == n) then acc else acc ++ [(n, c)]) []
-    let tps := tps ++ extra
-    -- (the opened ones' values come from the object's hidden fields; those
-    -- of a cast this one is in, from its function's, #250)
-    if let some (n, _) := tps.find? fun (n, _) =>
-        !ctx.dictVars.contains n && !opened.any (·.1 == n) && !ctx.types.tvars.any (·.1 == n) then
-      eerr p s!"cannot lift the branch of the cast to {shown} yet: its types mention {n}, which this function has no value of (#243)"
-    -- (from the enclosing function's own names, also through the
-    -- refinements of the casts this one is in, as the branch is taken from
-    -- the source)
-    let σ := env.tvars.filterMap fun (n, t) =>
-      let t' := refine t
-      match t' with
-      | .param m _ => if m == n then none else some (n, t'.toSTy)
-      | _ => some (n, t'.toSTy)
-    let heap := ["reads", "writes", "allocates"].filter fun k => fxB.any (·.1 == k)
-    let specs := (if heap.isEmpty then ["computes"] else heap) ++ (if decides then ["decides"] else [])
-    let lift : Refine.Lift := {
-      pos := p, bound := D, target := T,
-      name := s!"$refine{p.line}_{p.col}_{D}" ++ (if p.file.isEmpty then "" else s!"_{p.file}"),
-      params := ((D, dTy) :: sig).map (fun (n, t) => { name := n, ty := t.toSTy }) ++
-        extra.map fun (n, _) => { name := s!"$type{n}", ty := .name n },
-      tparams := tps.map fun (n, c) => { pos := p, name := n, constraint := if c then "comparable" else "type" },
-      specs, ret := ret.toSTy, subst := σ, opened := opened.map fun (n, v, _) => (n, v),
-      -- (made: a branch the elaborator made, for a cast with clauses
-      -- after it, #286, which the source does not have as such)
-      body := if ctx.selfClass.isSome || made then some body else none }
-    modify fun st => if st.castNeeds.any (·.key == key) then st else { st with castNeeds := st.castNeeds ++ [lift] }
-    -- (a placeholder: this elaboration goes no further)
-    return some ⟨if decides then .prim .fail [] else .prim .userErr [], τ'⟩
-  | some l =>
-    -- (then: the object in a slot, and one dispatch per set of pins)
-    let (pre, y) ← match rx.e with
-      | .local y => pure ([], y)
-      | e => do
-        let y ← fresh rx.ty
-        pure ([Expr.assign y e], y)
-    let re ← elseOf
-    let τ' : Ty := if elseE.isNone then .void else exp.getD re.ty
-    let eE ← coerce p re τ'
-    let rargs := env.coreArgs S sargs
-    let atR := rargs.zipIdx.map fun (r, j) => (pinArg j, r)
-    let needOf (pins : List (Option Ty)) := (rargs.zip pins).filterMap fun (a, pin) => match pin with
-      | some pt => let pt := pt.subst atR; if a == pt then none else some (a, pt)
-      | none => none
-    let mut parts : Array (List (Option Ty) × Array String) := #[]
-    -- (keyed by each class's pins on the object's type arguments: the
-    -- branch needs none of those a class below adds, so a test of classes
-    -- that share those pins opens what the fewest of them add, as the
-    -- checker's `openCount` does: none when one of them adds none; a cast
-    -- that opens type arguments, #250, by all of each class's pins, as a
-    -- method's dispatch is, since its tests open them)
-    for d in common do
-      let k := if wide then env.corePins d else (env.corePins d).take rargs.length
-      match parts.findIdx? (·.1 == k) with
-      | some pi => parts := parts.modify pi fun (k', ds) => (k', ds.push d)
-      | none => parts := parts.push (k, #[d])
-    -- (an object that is no local: evaluated with a test of all the
-    -- classes tested, in one condition, so that its effects roll back and
-    -- its failure takes the else when the cast fails; the dispatch then
-    -- tests each part, its end unreachable)
-    let mut acc := if pre.isEmpty then eE else .prim .userErr []
-    let mut tested : Array String := #[]
-    for (pins, part) in parts.toList.reverse do
-      -- (#250: the type arguments the test opens, as fresh parameters
-      -- `$ext i`, which the refinement binds; the object is a `T` at the
-      -- first of them)
-      -- (each as comparable as the parameter it stands for: the target's,
-      -- or past those, the tested class's own)
-      let ownC := ((env.coreVars (part[0]!)).drop rargs.length).map fun (_, t) =>
-        match t with | .param _ c => c | _ => false
-      let extOf : List Ty := if !wide then [] else
-        (List.range (pins.length - rargs.length)).map fun i => Ty.param s!"$ext{i}" (ownC.getD i false)
-      let rxs := rargs ++ extOf
-      let atX := rxs.zipIdx.map fun (r, j) => (pinArg j, r)
-      let needX : List (Ty × Ty) := (rxs.zip pins).filterMap fun (a, pin) => match pin with
-        | some pt => let pt := pt.subst atX; if a == pt then none else some (a, pt)
-        | none => none
-      if !VTy.pinsBelow (env.lowerPins pins) rxs.length then
-        eerr p s!"cannot cast {withArticle rx.ty.show} to {shown} yet: class {part[0]!} relates its type arguments to ones that {S} does not have (#209, #243)"
-      -- (no object of `part` can be this one: no test)
-      let some μF := Ty.unifyEqs coreFields [] (if wide then needX else needOf pins) | continue
-      -- (the object as a `T`: its type parameters from the test's type
-      -- arguments, refined)
-      -- (the opened arguments a comparable type parameter's refinement
-      -- mentions are comparable, as in the first elaboration)
-      let cmpExt : List String := (extOf.filterMap fun
-        | .param n _ => if cmpVars.any (fun v => ((Ty.param v true).subst μF).params.contains n) then some n else none
-        | _ => none)
-      let mkX (t : Ty) : Ty := t.subst (cmpExt.map fun n => (n, Ty.param n true))
-      let μF := μF.map fun (v, t) => (v, mkX t)
-      let dTyX ← if !wide then pure ((Ty.struct T targs).subst μF) else
-        match Ty.unifyEqs coreFields [] ((env.coreArgs T targs).zip (rxs.map (fun t => mkX (t.subst μF)))) with
-        | some θD => pure (mkX ((Ty.struct T targs).subst θD))
-        | none => eerr p s!"cannot cast {withArticle rx.ty.show} to {shown} yet: the object's type arguments as {withArticle part[0]!} do not determine {T}'s (#250)"
-      let dL : Local := { name := D, slot := y, ty := dTyX, mutable := false }
-      let ctx' := { ctx with
-        locals := dL :: ctx.locals.map fun loc => { loc with ty := loc.ty.subst μF },
-        types := { env with tvars := env.tvars.map fun (m, t) => (m, t.subst μF) } }
-      let argOf (sp : SParam) : SExpr :=
-        if sp.name.startsWith "$type" then .app p (.ident p "$witness") [.ident p (sp.name.drop 5).toString] false
-        else .ident p sp.name
-      let rc ← elabApp ctx' p (.ident p l.name) (l.params.map argOf)
-        (l.specs.contains "decides") (some (τ'.subst μF))
-      let .call fi (.local s0 :: es) := rc.e
-        | eerr p s!"cannot lift the branch of the cast to {shown} yet: its call is not a plain one (#243)"
-      if s0 != y then eerr p s!"cannot lift the branch of the cast to {shown} yet (#243)"
-      acc := .ite (.heap (.isTag (part.toList.map env.tagOf)) [.local y]) (.call fi (.local y :: es)) acc
-      tested := part ++ tested
-    let t ← fresh τ'
-    if pre.isEmpty then return some ⟨.assign t acc, τ'⟩
-    let cond := pre.foldr Expr.seq (.heap (.isTag (tested.toList.map env.tagOf)) [.local y])
-    return some ⟨.assign t (.ite cond acc eE), τ'⟩
+    (elseE : Option SExpr) (exp : Option Ty) (made : Bool := false) : EM (Option R) :=
+  elabRefinedIfWith elabApp elabE ctx p _dp D T x body0 elseE exp made
 
-/-- A call of a generic function. Its type arguments are inferred by matching
-    its signature: the result type against the expected type (unless that is
-    `void`, which accepts anything), then each parameter type against its
-    argument's, left to right. An argument whose parameter type is already
-    determined is elaborated against it, so `array{}` and `false` work. -/
+/-- `elabGenericCallWith`, given this block's functions (#325). -/
 partial def elabGenericCall (ctx : Ctx) (p : Pos) (s : Sig) (args : List SExpr) (exp : Option Ty) :
-    EM R := do
-  -- named arguments (#119): positional ones, then named ones as written,
-  -- then the defaults of those omitted, as for other functions
-  let isNamed : SExpr → Bool := fun | .decl _ n _ _ _ => n.startsWith "?" | _ => false
-  let npos := s.params.length - s.named.length
-  let pos := args.filter (!isNamed ·)
-  let named : List (Pos × String × SExpr) := args.filterMap fun
-    | .decl ap n _ _ rhs => if n.startsWith "?" then some (ap, (n.drop 1).toString, rhs) else none
-    | _ => none
-  let plain := s.named.isEmpty && named.isEmpty
-  if plain then
-    if args.length != s.params.length then
-      eerr p s!"{s.name} takes {s.params.length} argument(s), found {args.length}"
-  else
-    if pos.length != npos then
-      -- (a method's receiver is its first positional argument)
-      let (shown, off) := match s.name.splitOn "." with
-        | [_, m] => if s.pnames.head? == some "Self" then (m, 1) else (s.name, 0)
-        | _ => (s.name, 0)
-      eerr p s!"{shown} takes {npos - off} positional argument(s), found {pos.length - off}"
-    for ((ap, n, _), i) in named.zip (List.range named.length) do
-      if (s.named.find? (·.1 == n)).isNone then eerr ap s!"{s.name} has no parameter ?{n}"
-      if (named.take i).any (·.2.1 == n) then eerr ap s!"?{n} is given twice"
-  -- the arguments given, in the order they are evaluated, each with the
-  -- index of its parameter
-  let given : List (SExpr × Nat) := (pos.zip (List.range npos)) ++ named.map fun (_, n, rhs) =>
-    (rhs, npos + (s.named.findIdx? (·.1 == n)).getD 0)
-  let ptys := s.params.toArray
-  let mut σ : List (String × Ty) := []
-  if let some et := exp then
-    if !(et == .void) then
-      if let some σ' := s.ret.matchArg ctx.types σ et then σ := σ'
-  let bound (σ : List (String × Ty)) (t : Ty) := t.params.all fun v => (σ.lookup v).isSome
-  -- `false`, `array{}` and `map{}` take their type from context, so they are
-  -- elaborated after the other arguments (they are still evaluated in order)
-  let fromContext : SExpr → Bool
-    | .ident _ "false" | .arrayLit _ [] | .mapLit _ [] => true
-    | _ => false
-  let mut es : Array Expr := Array.replicate given.length (.lit .void)
-  -- arguments left for the second pass; an argument whose type contains
-  -- `false` (like `array{Err()}`) binds nothing, so it joins them
-  let mut deferred : Array Bool := (given.map (fromContext ·.1)).toArray
-  for pass in [0, 1] do
-    for ((a, k), i) in given.zip (List.range given.length) do
-      let pt := ptys[k]!
-      if (pass == 0) == deferred[i]! then continue
-      if bound σ pt then
-        let t := pt.subst σ
-        let r ← elabE ctx a (some t)
-        let e ← tryCatch (coerce a.pos r t) fun msg => throw s!"{msg} (in a call of {s.name})"
-        es := es.set! i e
-      else
-        if fromContext a then
-          let v := (pt.params.filter fun v => (σ.lookup v).isNone).headD "t"
-          eerr a.pos s!"cannot infer type parameter {v} of {s.name} from the arguments of this call"
-        let r ← elabE ctx a none
-        match pt.matchArg ctx.types σ r.ty with
-        | some σ' =>
-          σ := σ'
-          if pass == 0 && !bound σ pt then
-            deferred := deferred.set! i true
-          else
-            es := es.set! i (← coerce a.pos r (pt.subst σ))
-        | none => eerr a.pos s!"expected {(pt.subst σ).show}, found {r.ty.show} (in a call of {s.name})"
-  -- the arguments, in their temporaries, then the defaults
-  let mut steps : Array Expr := #[]
-  let mut slots : Array (Option Nat) := Array.replicate s.params.length none
-  if !plain then
-    for ((_, k), i) in given.zip (List.range given.length) do
-      let ta ← fresh (ptys[k]!.subst σ)
-      steps := steps.push (.assign ta es[i]!)
-      slots := slots.set! k (some ta)
-    for ((n, dflt), j) in s.named.zip (List.range s.named.length) do
-      let k := npos + j
-      if slots[k]!.isNone then
-        let some d := dflt | eerr p s!"{s.name} needs the argument ?{n}, which has no default"
-        let pt := ptys[k]!
-        -- (the default sees the parameters before it, in their temporaries)
-        let earlier : List Local := ((s.pnames.zip (List.range k)).filterMap fun (pn, j) =>
-          (slots[j]!).map fun sl => ({ name := pn, slot := sl, ty := ptys[j]!.subst σ, mutable := false } : Local)).reverse
-        let key := (s.name, s!"?{n}")
-        if ctx.defaults.contains key then
-          eerr p s!"the default of ?{n} of {s.name} uses itself (a call of {s.name} that omits ?{n})"
-        -- (a method's: its receiver's fields too, through `Self`)
-        let selfC : Option String :=
-          if s.pnames.head? == some "Self" then (s.name.splitOn ".").head? else none
-        let dctx := { ctx with locals := earlier, selfClass := selfC, inParamDefault := true,
-                               inLoop := false, canFail := ctx.canFail && s.decides,
-                               suspends := ctx.suspends && s.suspends,
-                               defaults := key :: ctx.defaults }
-        -- (its type: the parameter's, or what the default gives a type
-        -- parameter nothing else determined)
-        let σ0 := σ
-        if !bound σ0 pt && fromContext d then
-          let v := (pt.params.filter fun v => (σ0.lookup v).isNone).headD "t"
-          eerr p s!"cannot infer type parameter {v} of {s.name} from the arguments of this call"
-        let (rd, σ1) ← fxAt p (do
-          let r ← elabE dctx d (if bound σ0 pt then some (pt.subst σ0) else none)
-          let σ1 ← if bound σ0 pt then pure σ0 else
-            match pt.matchArg ctx.types σ0 r.ty with
-            | some σ' => pure σ'
-            | none => eerr p s!"the default of ?{n} of {s.name} is a {r.ty.show}, not a {(pt.subst σ0).show}"
-          return (← coerce p r (pt.subst σ1), σ1))
-        σ := σ1
-        if !s.decides && rd.mayFail ctx.sigProg then
-          eerr p s!"the default of ?{n} of {s.name} can fail, but {s.name} is not <decides>"
-        let ta ← fresh (pt.subst σ)
-        steps := steps.push (.assign ta rd)
-        slots := slots.set! k (some ta)
-  let mut targs : Array Ty := #[]
-  for (v, cmp) in s.tparams do
-    let some t := σ.lookup v
-      | eerr p s!"cannot infer type parameter {v} of {s.name} from the arguments of this call"
-    -- (not of a value class's `$call…`, #218: the class's type arguments
-    -- are its receiver's, fixed, and checked, when the value was made; a
-    -- call through a function type only dispatches to it)
-    let valueCall := !(s.name.splitOn ".$call").tail.isEmpty
-    if cmp && !valueCall && !t.comparable ctx.types then
-      eerr p (notComparable ctx.types t s!"type parameter {v} of {s.name}")
-    targs := targs.push t
-  -- the hidden arguments: a value of each type argument (but those a
-  -- method reads from its receiver, #209)
-  -- (in a dispatch's branch that opens type arguments, #209, a type
-  -- argument in terms of the caller's own type parameters, whose values the
-  -- dispatch types under its refinement; one that still mentions the opened
-  -- ones has no value to pass)
-  let dicts ← ((targs.toList.zip s.tparams).filter fun (_, (v, _)) => !s.selfTps.contains v).mapM
-    fun (t, (v, _)) => do
-      let t := t.unrefine ctx.unrefine
-      if t.params.any (·.startsWith "$ext") then
-        eerr p s!"cannot call {s.name} here yet: its type parameter {v} would mention type arguments that the dispatch opens, apart from the caller's, and no value of those can be passed (#209)"
-      witness ctx.types ctx.dictBase ctx.dictVars t
-  if plain then return ⟨.call s.idx (es.toList ++ dicts), s.ret.subst σ⟩
-  let call := Expr.call s.idx (slots.toList.map (fun o => Expr.local o.get!) ++ dicts)
-  return ⟨steps.toList.foldr Expr.seq call, s.ret.subst σ⟩
+    EM R :=
+  elabGenericCallWith elabE ctx p s args exp
 
 /-- The failable array methods of the Book of Verse (§9.1):
     `A.Slice[i, j]`, `A.Slice[i]`, `A.Find[x]`, `A.RemoveElement[i]`,
@@ -4673,648 +5332,14 @@ partial def elabCmp (ctx : Ctx) (p : Pos) (a : SExpr) (rest : List (String × SE
       prevTy := rb.ty
     return ⟨steps.foldr Expr.seq (.local t0), ra.ty⟩
 
-partial def elabSet (ctx : Ctx) (p : Pos) (lhs0 : SExpr) (op : Option String) (rhs0 : SExpr) : EM R := do
-  -- (`$withOld(O, R)`: for `op=`, the old value was read into `O` before
-  -- the code that computes `R`, as `set` evaluates, #208)
-  let (rhs, oldIn) : SExpr × Option Expr := match rhs0 with
-    | .app _ (.ident _ "$withOld") [.ident _ o, r] false => (r, (ctx.lookup o).map (fun l => Expr.local l.slot))
-    | r => (r, none)
-  -- the right side at the target's type; for `set F *= N` of a float, an
-  -- int too (#127), so without it when that fails
-  let rhsAt (t : Ty) : EM R :=
-    if op == some "*" && t == .float then
-      tryCatch (elabE ctx rhs (some t)) fun _ => elabE ctx rhs none
-    else elabE ctx rhs (some t)
-  -- in a method, a path from a field of `Self` (as when one is read)
-  let rec selfRoot : SExpr → SExpr
-    | .ident ip n =>
-      match ctx.lookup n, ctx.selfClass with
-      | none, some c => if (ctx.types.fields c).any (·.1 == n) then .member ip (.ident ip "Self") n else .ident ip n
-      | _, _ => .ident ip n
-    | .member sp e f => .member sp (selfRoot e) f
-    | .app sp e [k] true => .app sp (selfRoot e) [k] true
-    | .query sp e => .query sp (selfRoot e)
-    | e => e
-  let lhs := selfRoot lhs0
-  let combine (old0 : Expr) (ty : Ty) (o : String) (new0 : R) : EM Expr := do
-    let old := oldIn.getD old0
-    -- (a refinement's value is its base; a refined variable is set only
-    -- through a cast, #136)
-    let new := widenR (← get).env new0
-    if let .refine n := ty then
-      eerr p s!"set {o}= on {withArticle n} needs a cast: write set X = {n}[X {o} …], which fails when the result is not one"
-    match o, ty, new.ty with
-    | "+", .int, .int => pure (p2 .add old new.e)
-    | "-", .int, .int => pure (p2 .sub old new.e)
-    | "*", .int, .int => pure (p2 .mul old new.e)
-    | "+", .arr t, .arr u => do
-        if t == u then pure (p2 .concat old new.e)
-        else if refUp (← get).env (.arr u) (.arr t) then pure (p2 .concat old (← coerce p new (.arr t)))
-        else if u.hasNever then
-          match ← tryCatch (some <$> coerce p new (.arr t)) (fun _ => pure none) with
-          | some e => pure (p2 .concat old e)
-          | none => eerr p s!"cannot concatenate {ty.show} and {new.ty.show}"
-        else eerr p s!"cannot concatenate {ty.show} and {new.ty.show}"
-    -- floats (#127)
-    | "+", .float, .float => pure (p2 .fadd old new.e)
-    | "-", .float, .float => pure (p2 .fsub old new.e)
-    | "*", .float, .float => pure (p2 .fmul old new.e)
-    | "*", .float, .int => pure (p2 .fmul old (.prim .fofInt [new.e]))
-    | "/", .float, .float => pure (p2 .fdiv old new.e)
-    | "/", .int, _ => eerr p "set /= is not defined on int (integer division can fail)"
-    | _, _, _ => eerr p s!"no operator '{o}=' for {ty.show} and {new.ty.show}"
-  let mutableLocal (n : String) : EM Local := do
-    match ctx.lookup n with
-    | some l => if l.mutable then pure l else eerr p s!"'{n}' is not a var; declare it with var {n}:t = …"
-    | none => eerr p s!"unknown variable '{n}'"
-  -- a path `X.F[i]…`: the root variable and its steps (`some f` a field,
-  -- `none` with an expression an index or key)
-  let rec path : SExpr → Option (String × List (Pos × Option String × Option SExpr))
-    | .ident _ n => some (n, [])
-    | .member sp e f => (path e).map fun (n, ss) => (n, ss ++ [(sp, some f, none)])
-    | .app sp e [k] true => (path e).map fun (n, ss) => (n, ss ++ [(sp, none, some k)])
-    -- `X?`: the value inside an option; fails when empty
-    | .query sp e => (path e).map fun (n, ss) => (n, ss ++ [(sp, some "?", none)])
-    | _ => none
-  let general : List (Pos × Option String × Option SExpr) → Bool
-    | steps@(_ :: _ :: _) => !steps.isEmpty
-    | steps => steps.any (·.2.1 == some "?")
-  if let some (root, steps) := path lhs then if general steps then
-    -- `set X.p = e` with a path of two or more steps (Book of Verse §3.5, §9.3):
-    -- the indices and keys are evaluated once, left to right; then each
-    -- intermediate container is read (an index or an intermediate key that
-    -- is missing makes the set fail); then the new leaf; then the
-    -- containers are rebuilt from the leaf up, ending with the variable
-    -- the variable must be a var unless the path writes an object (below)
-    let l ← match ctx.lookup root with
-      | some l => pure l
-      | none => eerr p s!"unknown variable '{root}'"
-    let mut pre : Array Expr := #[]
-    -- per step: the container's slot and type, and the step
-    let mut levels : Array (Nat × Ty × Pos × Option String × Option (Nat × Ty)) := #[]
-    let mut cur := l.slot
-    let mut ty := l.ty
-    -- first the indices and keys
-    let mut keys : Array (Option (Nat × Ty)) := #[]
-    let mut tys : Array Ty := #[]
-    for (sp, f?, k?) in steps do
-      tys := tys.push ty
-      match f?, k?, ty with
-      | some "?", _, .opt t => keys := keys.push none; ty := t
-      | some "?", _, t => eerr sp s!"'?' in a set needs an option, found {t.show}"
-      | some f, _, .struct sn targs =>
-        match fieldIndex (ctx.types.fields sn targs) f with
-        | some (_, ft) => keys := keys.push none; ty := ft
-        | none => eerr sp s!"{ty.show} has no field '{f}'"
-      | some f, _, t => eerr sp s!"{t.show} has no field '{f}'"
-      | none, some k, .arr t =>
-        let ri ← elabE ctx k (some .int)
-        if ri.ty != .int then eerr sp "an array index must be an int"
-        let ti ← fresh .int
-        pre := pre.push (.assign ti ri.e)
-        keys := keys.push (some (ti, .int)); ty := t
-      | none, some k, .map kt vt =>
-        let rk ← elabE ctx k (some kt)
-        let tk ← fresh kt
-        pre := pre.push (.assign tk (← coerce sp rk kt))
-        keys := keys.push (some (tk, kt)); ty := vt
-      | _, _, t => eerr sp s!"cannot index a value of type {t.show}"
-    let leafTy := ty
-    -- the last step from an object (#34): it writes the object in place, so
-    -- the path above it is only read, and its field must be a var
-    let tysA := tys
-    let refLevel? : Option Nat := (List.range steps.length).reverse.find? fun k =>
-      match tysA[k]! with
-      | .struct sn _ => ctx.types.isRefClass sn
-      | _ => false
-    if let some kr := refLevel? then
-      let (sp, f?, _) := steps.toArray[kr]!
-      match tysA[kr]!, f? with
-      | .struct sn _, some f =>
-        if !ctx.types.isVarField sn f then eerr sp (classSetMsg sn f)
-      | _, _ => eerr p "internal: set path"
-    if refLevel?.isNone && !l.mutable then
-      eerr p s!"'{root}' is not a var; declare it with var {root}:t = …"
-    -- read one step of the container in slot `c` of type `cty`
-    let readStep (c : Nat) (cty : Ty) (step : Option String) (key : Option (Nat × Ty)) : EM Expr := do
-      match step, key, cty with
-      | some "?", _, .opt _ => pure (.prim .query [.local c])
-      | some f, _, .struct sn targs =>
-        -- a class's field as when it is read (an interface field may sit at
-        -- different places in different classes)
-        if ctx.types.classes.contains sn then return (← elabMember ctx p ⟨.local c, cty⟩ f).e
-        let (j, _) := (fieldIndex (ctx.types.fields sn targs) f).get!
-        pure (.prim (.tupGet j) [.local c])
-      | none, some (ti, _), .arr _ => pure (p2 .index (.local c) (.local ti))
-      | none, some (tk, kt), .map _ vt =>
-        let tp ← fresh (.tup [kt, vt])
-        pure (mapLookup c tk tp)
-      | _, _, _ => eerr p "internal: set path"
-    -- a value of a class with no instance cannot exist, so the set is
-    -- unreachable once the path reaches one; but the steps before it (the
-    -- indices and keys, then the containers read) may fail first (#104)
-    if let some ke := (List.range steps.length).find? fun k =>
-        match tysA[k]! with | .struct sn _ => ctx.types.isEmptyClass sn | _ => false then
-      let stepsA := steps.toArray
-      let mut c := l.slot
-      for k in [0:ke] do
-        let (_, f?, _) := stepsA[k]!
-        let c' ← fresh tysA[k + 1]!
-        pre := pre.push (.assign c' (← readStep c tysA[k]! f? keys[k]!))
-        c := c'
-      -- (the right-hand side never runs, but is checked, and the field set
-      -- at the empty class must be a var, as on any path)
-      let lastCls := (List.range steps.length).reverse.find? fun k =>
-        match tysA[k]!, stepsA[k]! with
-        | .struct sn _, (_, some f, _) => f != "?" && ctx.types.classes.contains sn
-        | _, _ => false
-      if let some kc := lastCls then
-        if let (.struct sn _, (sp, some f, _)) := (tysA[kc]!, stepsA[kc]!) then
-          if !ctx.types.isVarField sn f then eerr sp (classSetMsg sn f)
-      let r ← rhsAt leafTy
-      match op with
-      | none => discard <| coerce p r leafTy
-      | some o => discard <| combine (.prim .userErr []) leafTy o r
-      let tu ← fresh leafTy
-      return ⟨pre.toList.foldr Expr.seq (.assign tu (.prim .userErr [])), leafTy⟩
-    -- the intermediate containers: level 0 is a copy of the variable, taken
-    -- after the indices, so that the right-hand side cannot change what is
-    -- rebuilt (as for `set A[i] = e`); the variable is written once, last
-    let c0 ← fresh l.ty
-    pre := pre.push (.assign c0 (.local l.slot))
-    cur := c0
-    let stepsA := steps.toArray
-    -- with an object on the path, the right-hand side runs once the path has
-    -- reached it, before the values in the object are read (#34): a write it
-    -- makes through the object is not lost. Without, it runs after every
-    -- container is read, as for `set A[i] = e`.
-    let rhsAfter : Nat := match refLevel? with
-      | some kr => kr
-      | none => stepsA.size
-    let mut rhsVal : Option R := none
-    let mut oldLeaf : Option Nat := none
-    for k in [0:stepsA.size] do
-      let (sp, f?, _) := stepsA[k]!
-      levels := levels.push (cur, tys[k]!, sp, f?, keys[k]!)
-      if k == rhsAfter then
-        -- `set P op= e` reads P before e, as the direct form does (Book of
-        -- Verse: `set X += e` is `set X = X + e`; #58): the rest of the path,
-        -- read now, gives the old leaf (it fails as `P` would, and is read
-        -- again for the rebuild below)
-        if op.isSome then
-          let mut c2 := cur
-          for k2 in [k:stepsA.size] do
-            let (_, f2, _) := stepsA[k2]!
-            let t2 := if k2 + 1 < stepsA.size then tys[k2 + 1]! else leafTy
-            let c3 ← fresh t2
-            pre := pre.push (.assign c3 (← readStep c2 tys[k2]! f2 keys[k2]!))
-            c2 := c3
-          oldLeaf := some c2
-        let r ← rhsAt leafTy
-        let tr ← fresh r.ty
-        pre := pre.push (.assign tr r.e)
-        rhsVal := some ⟨.local tr, r.ty⟩
-      if k + 1 < stepsA.size then
-        let c ← fresh tys[k + 1]!
-        pre := pre.push (.assign c (← readStep cur tys[k]! f? keys[k]!))
-        cur := c
-    let (lc, lty, _, lf, lkey) := levels[levels.size - 1]!
-    -- a last `?` step also needs the option to be set
-    if lf == some "?" then pre := pre.push (.seq (.prim .query [.local lc]) (.lit .void))
-    -- the new leaf value
-    let r ← match rhsVal with
-      | some r => pure r
-      | none => rhsAt leafTy
-    let leaf ← match op with
-      | none => coerce p r leafTy
-      | some o =>
-        -- (only an `op=` reads the old value: a read can have an effect)
-        let old ← match oldLeaf with
-          | some t => pure (Expr.local t)
-          | none => readStep lc lty lf lkey
-        combine old leafTy o r
-    let tv ← fresh leafTy
-    pre := pre.push (.assign tv leaf)
-    -- rebuild, from the leaf up, as far as the object written in place
-    let mut newVal : Expr := .local tv
-    let mut wroteObject := false
-    for k' in [0:levels.size] do
-      let k := levels.size - 1 - k'
-      if wroteObject then break
-      let (c, cty, _, f?, key) := levels[k]!
-      match f?, key, cty with
-      | some "?", _, .opt _ => pre := pre.push (.assign c (.prim .mkSome [newVal]))
-      | some f, _, .struct sn targs =>
-        if ctx.types.isRefClass sn then
-          let (j, ft) := (fieldIndex (ctx.types.fields sn targs) f).get!
-          pre := pre.push (← setFieldAt ctx.types p sn targs c f j ft newVal)
-          noteFx p ["writes"]
-          wroteObject := true
-        else
-          let fs := ctx.types.fields sn targs
-          let (j, _) := (fieldIndex fs f).get!
-          let parts := (List.range fs.length).map fun i =>
-            if i == j then newVal else Expr.prim (.tupGet i) [.local c]
-          pre := pre.push (.assign c (.prim .mkTup parts))
-      | none, some (ti, _), .arr _ =>
-        pre := pre.push (.assign c (.prim .arrSet [.local c, .local ti, newVal]))
-      | none, some (tk, _), .map _ vt =>
-        -- the last key inserts or updates; an intermediate one was read above, so it exists
-        let tvk ← fresh vt
-        let ti ← fresh .int
-        let tidx ← fresh .int
-        pre := pre.push (.assign tvk newVal)
-        pre := pre.push (mapPut c tk tvk ti tidx)
-      | _, _, _ => eerr p "internal: set path"
-      newVal := .local c
-    if !wroteObject then pre := pre.push (.assign l.slot (.local c0))
-    return ⟨pre.toList.foldr Expr.seq (.local tv), leafTy⟩
-  match lhs with
-  | .ident _ n =>
-    let l ← mutableLocal n
-    let r ← rhsAt l.ty
-    let v ← match op with
-      | none => coerce p r l.ty
-      | some o => combine (.local l.slot) l.ty o r
-    return ⟨.assign l.slot v, l.ty⟩
-  | .app _ (.ident _ n) [k] true =>
-    let l ← mutableLocal n
-    match l.ty with
-    | .map kt vt =>
-      let rk ← elabE ctx k (some kt)
-      let tk ← fresh kt
-      let tp ← fresh (.tup [kt, vt])
-      let r ← rhsAt vt
-      let v ← match op with
-        | none => coerce p r vt
-        -- `set M[k] op= v` fails when k is not a key (Book of Verse §9.3)
-        | some o => combine (mapLookup l.slot tk tp) vt o r
-      let tv ← fresh vt
-      let ti ← fresh .int
-      let tidx ← fresh .int
-      return ⟨.seq (.assign tk (← coerce p rk kt)) (.seq (.assign tv v)
-        (.seq (mapPut l.slot tk tv ti tidx) (.local tv))), vt⟩
-    | .arr t =>
-      let i := k
-      let ri := widenR ctx.types (← elabE ctx i (some .int))
-      if ri.ty != .int then eerr p "an array index must be an int"
-      let ti ← fresh .int
-      let tv ← fresh t
-      let r ← rhsAt t
-      let v ← match op with
-        | none => coerce p r t
-        | some o => combine (p2 .index (.local l.slot) (.local ti)) t o r
-      -- `set A[i] = v` fails out of range and returns `v` (Book of Verse §3.3)
-      return ⟨.seq (.assign ti ri.e)
-        (.seq (.assign l.slot (.prim .arrSet [.local l.slot, .local ti, .assign tv v])) (.local tv)), t⟩
-    | ty => eerr p s!"cannot index a value of type {ty.show}"
-  | .member _ (.ident _ n) f =>
-    -- an object's field: written in place, through any variable (#34)
-    if let some l := ctx.lookup n then
-      if let .struct sn _ := l.ty then
-        if ctx.types.isRefClass sn then
-          let targs := match l.ty with | .struct _ ts => ts | _ => []
-          let some (k, t) := fieldIndex (ctx.types.fields sn targs) f
-            | eerr p s!"class {sn} has no field '{f}'"
-          if !ctx.types.isVarField sn f then eerr p (classSetMsg sn f)
-          let r ← rhsAt t
-          noteFx p (if op.isSome then ["reads", "writes"] else ["writes"])
-          let v ← match op with
-            | none => coerce p r t
-            -- (the current value, read as a read does)
-            | some o => combine (← elabMember ctx p ⟨.local l.slot, l.ty⟩ f).e t o r
-          return ⟨← setFieldAt ctx.types p sn targs l.slot f k t v, t⟩
-    if let some l := ctx.lookup n then
-      if let .struct sn targs := l.ty then
-        if ctx.types.isEmptyClass sn then
-          -- no instance can exist: unreachable
-          let some (_, t) := fieldIndex (ctx.types.fields sn targs) f | eerr p s!"class {sn} has no field '{f}'"
-          let tu ← fresh t
-          return ⟨.assign tu (.prim .userErr []), t⟩
-        if ctx.types.classes.contains sn && !ctx.types.isRefClass sn then
-          eerr p s!"field '{f}' of the parametric class {sn} cannot be set: a parametric class is a value (#34)"
-    let l ← mutableLocal n
-    match l.ty with
-    | .struct sn targs =>
-      if ctx.types.classes.contains sn then eerr p (classSetMsg sn f)
-      let fs := ctx.types.fields sn targs
-      match fieldIndex fs f with
-      | some (k, t) =>
-        let r ← rhsAt t
-        let v ← match op with
-          | none => coerce p r t
-          | some o => combine (.prim (.tupGet k) [.local l.slot]) t o r
-        let tv ← fresh t
-        -- the struct is rebuilt with field k replaced; `set` returns the new field value
-        let parts := (List.range fs.length).map fun i =>
-          if i == k then Expr.assign tv v else Expr.prim (.tupGet i) [.local l.slot]
-        return ⟨.seq (.assign l.slot (.prim .mkTup parts)) (.local tv), t⟩
-      | none => eerr p s!"struct {sn} has no field '{f}'"
-    | ty => eerr p s!"{ty.show} has no field '{f}'"
-  | _ => eerr p "openverse supports set X = …, and set on a path of fields, indices and keys from a variable (set S.F[i].G = …); not through a tuple element or a call result"
+/-- `elabSetWith`, given this block's functions (#325). -/
+partial def elabSet (ctx : Ctx) (p : Pos) (lhs0 : SExpr) (op : Option String) (rhs0 : SExpr) : EM R :=
+  elabSetWith elabE (fun c q r m => elabMember c q r m) ctx p lhs0 op rhs0
 
-/-- `for`: clauses are generators, bindings and filters; each generator opens
-    a nested `forE`, and nested results are flattened (cartesian product,
-    leftmost outermost). The clauses are a failure context; the body is not. -/
+/-- `for` (#208, #314): `elabForWith`, given this block's functions (#325). -/
 partial def elabFor (ctx : Ctx) (p : Pos) (clauses : List SExpr) (body : SExpr) (prepared : Bool := false) :
-    EM R := do
-  let ctx := { ctx with liftWhy := "" }
-  -- (a choice is a generator over its alternatives, #208; clauses lifted
-  -- already, `prepared`, are not lifted again)
-  let clauses := if prepared then clauses else
-    Choice.prepare clauses (choiceValues ctx) (choiceField ctx) (fieldOrder := choiceOrder ctx) (keepExcl := true)
-  -- (a call of a recursive function with several values, #235: a generator
-  -- over the array of its values; at a written type, through a binding)
-  let normGens (cs : List SExpr) : List SExpr := cs.flatMap fun c => match Choice.binding? c with
-    | some { each := some (.app _ (.ident _ "$loop") _ false), .. } => [c]
-    | some { pos := q, name := n, ty := none, each := some arr, .. } => [.gen q n none arr]
-    | some { pos := q, name := n, ty := some t, each := some arr, .. } =>
-      let tmp := s!"$e{q.line}_{q.col}"
-      [.gen q tmp none arr, .decl q n (some t) false (.ident q tmp)]
-    | _ => [c]
-  let clauses := clauses.flatMap fun c => match Choice.binding? c with
-    -- (one taken lazily, #246: the binding stays, a generator of its own)
-    | some { each := some (.app _ (.ident _ "$loop") _ false), .. } => [c]
-    | some { pos := q, name := n, ty := none, each := some arr, .. } => [.gen q n none arr]
-    | some { pos := q, name := n, ty := some t, each := some arr, .. } =>
-      let tmp := s!"$e{q.line}_{q.col}"
-      [.gen q tmp none arr, .decl q n (some t) false (.ident q tmp)]
-    | _ => [c]
-  -- split into groups: [filters before the first generator], then (generator, filters)…
-  let isGen : SExpr → Bool
-    | .gen .. => true
-    | .decl _ _ none false (.range ..) => true
-    | c => (Choice.binding? c).isSome
-  -- (an exclusive choice's binding, #314: no generator, but paths)
-  let isExcl : SExpr → Bool
-    | .decl _ _ _ false (.app _ (.ident _ "$excl") _ false) => true
-    | _ => false
-  let pre := clauses.takeWhile (!isGen ·)
-  let rest := clauses.dropWhile (!isGen ·)
-  let rec groups : List SExpr → List (SExpr × List SExpr)
-    | [] => []
-    | g :: cs =>
-      let fs := cs.takeWhile (!isGen ·)
-      (g, fs) :: groups (cs.dropWhile (!isGen ·))
-  let gs := groups rest
-  let bodyCtx (c : Ctx) : Ctx := { c with canFail := ctx.canFail, inLoop := false, inRepeat := true }
-  -- elaborate the filters of one generator (in a failure context)
-  let elabFilters (c : Ctx) (fs : List SExpr) : EM (Expr × Ctx) := do
-    match fs with
-    | [] => return (.lit (.logic true), c)
-    | _ =>
-      let (r, c') ← elabSeq { c with canFail := true, inTaking := true } fs none
-      return (r.e, c')
-  let rec build (c : Ctx) (gs : List (SExpr × List SExpr)) : EM R := do
-    -- (#314) filters `fs` with an exclusive choice among them, then the
-    -- groups `more`: its guards pick a path into a selector; each path's
-    -- clauses up to its first generator (its guards again, which bind its
-    -- names, its clauses, then the filters after the choice) go into this
-    -- filter under the selector, so a failure there rolls back to this
-    -- iteration's generator; each path's generators into the iteration's
-    -- body, under it. The filter's code, the body's (an array of the
-    -- values), and their type.
-    let rec exclIter (c : Ctx) (fs : List SExpr) (more : List (SExpr × List SExpr)) : EM (Expr × Expr × Ty) := do
-      match fs.findIdx? isExcl with
-      | none =>
-        let (filt, c') ← elabFilters c fs
-        let inner ← build c' more
-        match more with
-        | [] => return (filt, .prim .mkArr [inner.e], inner.ty)
-        | _ => match inner.ty with
-          | .arr t => return (filt, inner.e, t)
-          | _ => eerr p "internal: nested for"
-      | some j =>
-        let (codeA, cA) ← elabFilters c (fs.take j)
-        let after := fs.drop (j + 1)
-        let moreCl := more.flatMap fun (g', fs') => g' :: fs'
-        let some (.decl gp x xty _ (.app _ _ alts _)) := fs[j]? | eerr p "internal: an exclusive choice"
-        let alts : List (List SExpr × SExpr) := alts.filterMap fun
-          | .app _ (.ident _ "$alt") [.block _ gs, r] false => some (gs, r)
-          | _ => none
-        -- (the selector: the first alternative whose guards hold)
-        let selS : SExpr := alts.zipIdx.foldr (fun ((gs, _), i) acc =>
-          .ite gp gs (.int gp (i : Int)) (some acc)) (.int gp (-1))
-        let rsel ← elabE { cA with canFail := true, inTaking := true } selS (some .int)
-        let sel ← fresh .int
-        let mut filts : Array Expr := #[]
-        let mut arrs : Array Expr := #[]
-        let mut ety : Option Ty := none
-        for ((gs, r), i) in alts.zipIdx do
-          -- (its value bound to the choice's name)
-          let rcl : List SExpr := match r with
-            | .block rp ss => match ss.getLast? with
-              | some (.decl q y t v e) => ss.dropLast ++ [.decl q y t v e, .decl rp x xty false (.ident rp y)]
-              | some l => ss.dropLast ++ [.decl rp x xty false l]
-              | none => [.decl rp x xty false (.tuple rp [])]
-            | e => [.decl e.pos x xty false e]
-          let lifted := normGens (Choice.prepare (gs ++ rcl) (choiceValues cA) (choiceField cA)
-            (site := s!"$x{x}a{i}") (fieldOrder := choiceOrder cA) (keepExcl := true))
-          let path := lifted ++ after ++ moreCl
-          let (f, a, t) ← exclIter cA (path.takeWhile (!isGen ·)) (groups (path.dropWhile (!isGen ·)))
-          if let some t0 := ety then
-            if t0 != t then eerr gp s!"the for's values have the type {t0.show} on one path of this if and {t.show} on another"
-          ety := some t
-          filts := filts.push f
-          arrs := arrs.push a
-        let some t := ety | eerr gp "internal: an exclusive choice without alternatives"
-        let pick (es : Array Expr) (last : Expr) : Expr :=
-          (es.toList.zipIdx.foldr (fun (e, i) acc => .ite (p2 .eq (.local sel) (.lit (.int (i : Int)))) e acc) last)
-        -- (each path's filter as `void`, as `failV` is, for the if-chain)
-        let filt := Expr.seq codeA (.seq (.assign sel rsel.e)
-          (pick (filts.map fun f => Expr.seq f (.lit .void)) Expr.failV))
-        return (filt, pick arrs (.lit (.arr #[])), t)
-    match gs with
-    | [] =>
-      let r ← elabE (bodyCtx c) body none
-      return r
-    | (g, fs) :: more =>
-      let declare (c : Ctx) (n : String) (ty : Ty) : EM (Nat × Ctx) := do
-        if c.lookup n |>.isSome then eerr g.pos s!"'{n}' is already defined"
-        let slot ← fresh ty
-        return (slot, { c with locals := { name := n, slot, ty, mutable := false } :: c.locals })
-      -- (a choice whose alternatives have several values themselves, or
-      -- clauses to lift, #283: a for of its own for each alternative, with
-      -- the clauses after it and the body, their values concatenated, so
-      -- that each alternative's values come in order, with the body between)
-      if let some b@{ pos := gp, place := none, branchy := none, each := none, .. } := Choice.binding? g then
-        if b.alts.any Choice.hasLiftable then
-          -- (with the binding's name: an inlined body's position is every
-          -- site's, #314)
-          let site := s!"$cf{gp.line}_{gp.col}{b.name}"
-          let moreClauses := more.flatMap fun (g', fs') => g' :: fs'
-          let bctx : Ctx := { c with canFail := ctx.canFail, inTaking := ctx.inTaking, inLoop := ctx.inLoop,
-                                     inRepeat := ctx.inRepeat }
-          let mut parts : List R := []
-          for (a, i) in b.alts.zipIdx do
-            -- (its exclusive choices kept: this for compiles them, #314)
-            let lifted := Choice.prepare [.decl gp b.name b.ty false a] (choiceValues c) (choiceField c)
-              (fieldOrder := choiceOrder c)
-              (site := s!"{site}a{i}") (keepExcl := true)
-            parts := parts ++ [← elabFor bctx p (lifted ++ fs ++ moreClauses) body (prepared := true)]
-          let some r0 := parts.head? | eerr gp "internal: a choice without alternatives"
-          if let some r := parts.find? (·.ty != r0.ty) then
-            eerr gp s!"the for's values have the type {r0.ty.show} for one alternative of this choice and {r.ty.show} for another"
-          return ⟨parts.tail.foldl (fun acc r => p2 .concat acc r.e) r0.e, r0.ty⟩
-      -- (a call of a recursive function with several values taken lazily,
-      -- #246: a loop over its values, each one iteration, over a one-element
-      -- array, whose filter binds it and runs the generator's filters, and
-      -- whose values are collected)
-      if let some { pos := gp, name := n, ty := sty, each := some (.app _ (.ident _ "$loop") lp false), .. } :=
-          Choice.binding? g then
-        let lg ← elabLoopGen { c with canFail := true, inTaking := true } gp lp
-        let ty ← match ← sty.mapM (resolveTy c.types gp) with
-          | some t => pure t
-          | none => pure lg.vty
-        let (xs, c1) ← declare c n ty
-        -- (the iteration's values, their type, and whether they are flat
-        -- already: with an exclusive choice among the filters, #314, its
-        -- paths in this filter and their values, flattened)
-        let (iter, ity, flat) ← if fs.any isExcl then do
-            let (filtE, arr, ety) ← exclIter c1 fs more
-            let bindX ← coerce gp ⟨lg.value, lg.vty⟩ ty
-            let one ← fresh .void
-            pure (Expr.prim .flatten [.forE one (.lit (.arr #[.tup []])) (.seq (.assign xs bindX) filtE) arr],
-              ety, true)
-          else do
-            let (filt, c2) ← elabFilters c1 fs
-            let bindX ← coerce gp ⟨lg.value, lg.vty⟩ ty
-            let inner ← build c2 more
-            let one ← fresh .void
-            pure (Expr.forE one (.lit (.arr #[.tup []])) (.seq (.assign xs bindX) filt) inner.e,
-              inner.ty, more.isEmpty)
-        -- (the steps in rounds, each a `forE` over a range twice as long as
-        -- the last one's, whose body runs a step and gives the values of
-        -- its iteration, if it came to a value: so the values are collected
-        -- in linear time and space, where adding each to an array would copy
-        -- it each time)
-        let acc ← fresh (.arr ity)
-        let size ← fresh .int
-        let done ← fresh .logic
-        let d ← fresh .int
-        let vd : Expr := .lit .void
-        let none : Expr := .lit (.arr #[])
-        let r ← fresh (.arr ity)
-        let stepBody : Expr := .ite (p2 .eq (.local lg.sp) (.lit (.int 0)))
-          (.seq (.assign done (.lit (.logic true))) none)
-          (.seq lg.step (.ite (.prim .query [.local lg.has])
-            (.seq (.assign r iter) (.seq lg.after (.local r))) none))
-        let round : Expr := .forE d (p2 .range (.lit (.int 1)) (.local size))
-          (p2 .eq (.local done) (.lit (.logic false))) stepBody
-        let body : Expr := .seq (.assign acc (p2 .concat (.local acc) (.prim .flatten [round])))
-          (.ite (p2 .eq (.local done) (.lit (.logic true))) Expr.brkV
-            (.seq (.assign size (p2 .mul (.local size) (.lit (.int 2)))) vd))
-        let code : Expr := .seq lg.init (.seq (.assign acc none) (.seq (.assign size (.lit (.int 16)))
-          (.seq (.assign done (.lit (.logic false))) (.seq (.loop body) (.local acc)))))
-        if flat then return ⟨code, .arr ity⟩
-        match ity with
-        | .arr t => return ⟨.prim .flatten [code], .arr t⟩
-        | _ => eerr gp "internal: nested for"
-      -- the source: evaluated before the iterations; a failing source gives no iterations
-      let (slot, src, c1, pre) ← match g with
-        | .decl gp n none false (.range _ lo hi) => do
-          let es ← elabInts { c with canFail := true, inTaking := true } gp [lo, hi]
-          let (slot, c1) ← declare c n .int
-          pure (slot, Expr.prim .range es, c1, Expr.lit (.logic true))
-        | .gen gp x idx srcE => do
-          let rs ← elabE { c with canFail := true, inTaking := true } srcE none
-          match rs.ty with
-          | .map kt vt =>
-            -- `for (V : M)` and `for (K -> V : M)`: over the (key, value) pairs
-            let tmp ← fresh rs.ty
-            let src := if (rs.e.mayFail ctx.sigProg) then
-                Expr.orE tmp rs.e (.lit (.arr #[])) else rs.e
-            let tp ← fresh (.tup [kt, vt])
-            let (pre, c1) ← match idx with
-              | none => do
-                let (xs, c1) ← declare c x vt
-                pure (Expr.assign xs (.prim (.tupGet 1) [.local tp]), c1)
-              | some i => do
-                let (is, c1) ← declare c i kt
-                let (xs, c2) ← declare c1 x vt
-                pure (Expr.seq (.assign is (.prim (.tupGet 0) [.local tp]))
-                  (.assign xs (.prim (.tupGet 1) [.local tp])), c2)
-            pure (tp, src, c1, pre)
-          | _ =>
-          match idx with
-          | some i => do
-            -- `I -> X : A`: iterate over the indices of A
-            let ty ← match rs.ty with
-              | .arr t => pure t
-              | t => eerr gp s!"a for generator needs an array, string or map, found {t.show}"
-            let tmp ← fresh rs.ty
-            let src0 := if (rs.e.mayFail ctx.sigProg) then
-                Expr.orE tmp rs.e (.lit (.arr #[])) else rs.e
-            let ta ← fresh rs.ty
-            let (islot, c1) ← declare c i .int
-            let (xslot, c2) ← declare c1 x ty
-            let src := Expr.seq (.assign ta src0)
-              (.prim .range [.lit (.int 0), p2 .sub (.prim .len [.local ta]) (.lit (.int 1))])
-            pure (islot, src, c2, Expr.assign xslot (p2 .index (.local ta) (.local islot)))
-          | none => do
-          let ty ← match rs.ty with
-            | .arr t => pure t
-            | t => eerr gp s!"a for generator needs an array, string or map, found {t.show}"
-          let tmp ← fresh rs.ty
-          let src := if (rs.e.mayFail ctx.sigProg) then
-              Expr.orE tmp rs.e (.lit (.arr #[])) else rs.e
-          let (slot, c1) ← declare c x ty
-          pure (slot, src, c1, Expr.lit (.logic true))
-        | .decl gp n _ false _ => do
-          -- `X := a₁ | … | aₙ` (#208): over the alternatives' indices, each
-          -- alternative bound in the filter (so a failing one is skipped)
-          let some b := Choice.binding? g | eerr g.pos "bad for clause"
-          -- (an `if` with choices in its branches picks its branch first, once, #235)
-          let (pre, ty, es) ← match b.branchy with
-            | some i => elabBranchAlts { c with canFail := true, inTaking := true } gp i b.ty b.place
-            | none => do let (ty, es) ← elabAlts { c with canFail := true } gp b; pure (none, ty, es)
-          checkNewLocal c gp n
-          let k ← fresh .int
-          let (xs, c1) ← declare c n ty
-          let idx := Expr.lit (.arr (choiceIdx es.length))
-          pure (k, (pre.map (Expr.seq · idx)).getD idx, c1, Expr.assign xs (Expr.altE k es))
-        | _ => eerr g.pos "bad for clause"
-      -- (an exclusive choice among the filters, #314: its paths in this
-      -- iteration's filter, so that a failure in one rolls back to this
-      -- generator, as the `if` it stands for would)
-      if fs.any isExcl then
-        let (filtE, arr, ety) ← exclIter c1 fs more
-        let filt := match pre with
-          | .lit _ => filtE
-          | e => .seq e filtE
-        return ⟨.prim .flatten [Expr.forE slot src filt arr], .arr ety⟩
-      let (filt, c2) ← elabFilters c1 fs
-      let filt := if fs.isEmpty then pre else
-        match pre with
-        | .lit _ => filt
-        | e => .seq e filt
-      let inner ← build c2 more
-      let loopE := Expr.forE slot src filt inner.e
-      match more with
-      | [] => return ⟨loopE, .arr inner.ty⟩
-      | _ =>
-        match inner.ty with
-        | .arr t => return ⟨.prim .flatten [loopE], .arr t⟩
-        | _ => eerr p "internal: nested for"
-  match pre with
-  | [] => build ctx gs
-  | _ =>
-    -- (an exclusive choice among them, #314: its paths in this filter)
-    -- (through a generator over one element, whose filters they are)
-    if pre.any isExcl then
-      -- (named for the depth too: a for of an alternative's, inside this
-      -- one's clauses, has the same position)
-      return ← build ctx ((.gen p s!"$u{p.line}_{p.col}_{ctx.locals.length}" none (.arrayLit p [.tuple p []]), pre) :: gs)
-    -- filters before any generator: iterate once over a one-element array
-    let (filt, c1) ← elabFilters ctx pre
-    let slot ← fresh .void
-    let inner ← build c1 gs
-    match gs with
-    | [] => return ⟨.forE slot (.lit (.arr #[.tup []])) filt inner.e, .arr inner.ty⟩
-    | _ =>
-      match inner.ty with
-      | .arr t => return ⟨.prim .flatten [.forE slot (.lit (.arr #[.tup []])) filt inner.e], .arr t⟩
-      | _ => eerr p "internal: nested for"
+    EM R :=
+  elabForWith elabAlts (fun c q i t pl => elabBranchAlts c q i t pl) elabE elabInts elabLoopGen elabSeq ctx p clauses body prepared
 
 /-- An `if … else if … else …` with choices in its branches (#235): code that
     picks the branch, once, into a fresh slot (each condition a failure

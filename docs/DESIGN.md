@@ -468,6 +468,18 @@ flowchart LR
     cverse(["cverse"]) -. "the same fuel count,<br/>differential tests" .-> eval
 ```
 
+## The elaborator's mutual block (#325)
+
+Most of `Elab.lean`'s elaborator is one `mutual` block, from `elabE` to its `end`. Of its definitions, 31 form one cycle with `elabE`. Lean compiles the block as one command, so the heartbeats for all of it count against one limit (`maxHeartbeats`, 200000 by default). The block reached that limit in #318. Moving code into new functions *inside* the block does not help.
+
+So a large definition that calls few functions of the block is defined before it instead. It takes those functions as arguments, named as they are so that its body reads the same, and the block keeps a one-line wrapper with the original signature, defaults included:
+- `elabForWith`
+- `elabGenericCallWith`
+- `elabSetWith`
+- `elabRefinedIfWith`
+
+The block then needs between 120000 and 160000 heartbeats. A function with a default argument is passed as an explicit lambda (`fun c q i t pl => elabBranchAlts c q i t pl`), or as the shorter form a body uses (`elabMember`'s four arguments). New elaborator logic can follow the same pattern.
+
 ## Translation validation instead of a verified front end
 
 The parser and elaborator are ordinary code (`partial def`) and are not
