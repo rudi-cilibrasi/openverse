@@ -184,7 +184,23 @@ marker. That block is the body of `first{…}`, `spawn`, `branch`, `sync`,
 apart.
 
 A function with several values (#235) is inlined before elaboration, by
-`Choice.inlineMulti`, which runs right after module resolution. It finds
+`Choice.inlineMulti`, which runs right after module resolution. A method
+with several values first becomes one (#283, `Choice.methodFns`): a
+top-level `C$M($Self:C, params…)`, its body and defaults with `C`'s and its
+supers' member names qualified by `Self` (the syntactic counterpart of
+Elab's `selfQualify`, which needs only the class definitions), then `Self`
+renamed. `R.M(args)` becomes `C$M(R, args)`, and in the bodies of `C` and
+the classes below it, `M(args)` becomes `C$M(Self, args)`. Without types, `R.M`
+must name that method whatever `R` is, so only a method whose name no
+other class or interface has as a member qualifies (no override, not
+overridden). Its name must also be no struct field or enumerator, and no
+member of a built-in type or of the prelude (`reserved`, which Elab
+passes in), no top-level name, no parameter and no local. Its class must
+not be generic. Which candidates have several
+values is the functions' fixpoint (`multiValued`), run with every
+candidate's calls rewritten. Those that do leave their class. One that
+has several values but does not qualify is refused, saying why, and what
+is left of their names after the rewriting is a use as a value. It finds
 the top-level functions whose body has a choice that nothing in it takes,
 iterating to a fixpoint, since calling one where the call is not taken
 makes the caller one too. It refuses the cases it cannot inline:

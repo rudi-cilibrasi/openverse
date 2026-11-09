@@ -2383,32 +2383,32 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
   | .app p (.ident _ "$inline") (.ident _ f :: _) false =>
     if ctx.inTaking then
       if ctx.liftWhy != "" then
-        eerr p s!"a call of {f}, which has several values, cannot be lifted from {ctx.liftWhy}, for now (#283)"
-      eerr p s!"a call of {f}, which has several values, cannot be lifted from here, for now (#235)"
-    eerr p (s!"{f} has several values, so a call of it must be in a failure context that takes them: " ++
+        eerr p s!"a call of {Choice.shownFnName f}, which has several values, cannot be lifted from {ctx.liftWhy}, for now (#283)"
+      eerr p s!"a call of {Choice.shownFnName f}, which has several values, cannot be lifted from here, for now (#235)"
+    eerr p (s!"{Choice.shownFnName f} has several values, so a call of it must be in a failure context that takes them: " ++
       "an if condition, a for's clauses, first{…}, option{…}, logic{…}, not, or the left of or (#235)")
   | .app p (.ident _ "$each") (.app _ (.ident _ fa) _ _ :: _) false =>
     -- (a call of a recursive function with several values, #235)
     let f := if fa.endsWith "$all" then String.ofList (fa.toList.take (fa.length - 4)) else fa
     if ctx.inTaking then
       if ctx.liftWhy != "" then
-        eerr p s!"a call of {f}, which has several values, cannot be lifted from {ctx.liftWhy}, for now (#283)"
-      eerr p (s!"a call of {f}, which has several values, cannot be lifted from here, for now (#235): " ++
+        eerr p s!"a call of {Choice.shownFnName f}, which has several values, cannot be lifted from {ctx.liftWhy}, for now (#283)"
+      eerr p (s!"a call of {Choice.shownFnName f}, which has several values, cannot be lifted from here, for now (#235): " ++
         "not from a block with a defer:, a construction where a field's default runs before it, " ++
         "an alternative of a set's choice, the right of " ++
         "and or or, a range, a set's path, nor from the branch of an if")
-    eerr p (s!"{f} has several values, so a call of it must be in a failure context that takes them: " ++
+    eerr p (s!"{Choice.shownFnName f} has several values, so a call of it must be in a failure context that takes them: " ++
       "an if condition, a for's clauses, first{…}, option{…}, logic{…}, not, or the left of or (#235)")
   | .app p (.ident _ "$loop") (.ident _ f :: _) false =>
     -- (a call of a recursive function with several values taken lazily, #246)
     if ctx.inTaking then
       if ctx.liftWhy != "" then
-        eerr p s!"a call of {f}, which has several values, cannot be lifted from {ctx.liftWhy}, for now (#283)"
-      eerr p (s!"a call of {f}, which has several values, cannot be lifted from here, for now (#235): " ++
+        eerr p s!"a call of {Choice.shownFnName f}, which has several values, cannot be lifted from {ctx.liftWhy}, for now (#283)"
+      eerr p (s!"a call of {Choice.shownFnName f}, which has several values, cannot be lifted from here, for now (#235): " ++
         "not from a block with a defer:, a construction where a field's default runs before it, " ++
         "an alternative of a set's choice, the right of " ++
         "and or or, a range, a set's path, nor from the branch of an if")
-    eerr p (s!"{f} has several values, so a call of it must be in a failure context that takes them: " ++
+    eerr p (s!"{Choice.shownFnName f} has several values, so a call of it must be in a failure context that takes them: " ++
       "an if condition, a for's clauses, first{…}, option{…}, logic{…}, not, or the left of or (#235)")
   | .app p (.ident _ "$choice") _ false =>
     if ctx.inTaking && ctx.liftWhy != "" then
@@ -7376,7 +7376,14 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     | none => []
   let resolved ← resolveModules (allTops000 ++ rawEntry)
   -- functions with several values (#235): inlined at their calls
-  let (resolved, lazy) ← Choice.inlineMulti resolved
+  -- (#283) the members of built-in types and of the prelude: a method with
+  -- several values may not be named like one, as `R.M` could be it
+  let reserved : List String := ["Length", "Slice", "Find", "Insert", "Remove", "RemoveElement",
+    "RemoveFirstElement", "RemoveAllElements", "ReplaceElement", "ReplaceAllElements", "ReplaceAll", "Last",
+    "Signal", "Await", "Cancel"] ++ helpers.flatMap fun
+      | .classDef _ _ _ _ _ _ fs _ ms => fs.map (·.1) ++ ms.filterMap fun | .fn _ m .. => some m | _ => none
+      | _ => []
+  let (resolved, lazy) ← Choice.inlineMulti resolved reserved
   -- (#246) the class of the stack cells of lazily taken ones
   let helpers := helpers ++ (← if lazy then lazyTops else pure [])
   -- the branches of casts that refine type arguments, as functions (#243)

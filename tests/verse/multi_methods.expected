@@ -1,0 +1,31 @@
+3
+4
+twice 6
+twice 8
+if 4
+step 1 1
+step 10 1
+n 1
+recv
+r 2
+r 3
+upto 1
+upto 2
+upto 3
+off 3
+off 6
+off d 3
+off d 103
+pick 9
+pick 3
+sub 7
+sub 8
+extra 1007
+extra 1008
+two 11
+two 61
+two 16
+two 66
+me 6
+me 600
+exit=0
