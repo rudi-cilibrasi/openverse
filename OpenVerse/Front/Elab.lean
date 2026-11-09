@@ -6462,6 +6462,8 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
       liftedIn := liftedIn ++ (List.replicate (acc.size - n0) gi).toArray
   let mut disps : List (Nat × String × Nat) := []
   let mut dispSigs : Array (List VTy × VTy) := #[]
+  -- (each `$dispatchK`'s number of type parameters, its witnesses' count)
+  let mut dispNtp : Std.HashMap Nat Nat := {}
   for ((ch, ops, t), k) in lifted.toList.zipIdx do
     let gi := liftedIn[k]!
     let Γ := slotTys[gi]!
@@ -6473,28 +6475,36 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
                       writes := true, body := Suspend.renumber (fun j => (ops.idxOf? j).getD 0) ch }
     slotTys := slotTys.push tys
     dispSigs := dispSigs.push (tys, ρ)
-    -- (generic in the caller's type parameters when the slots' types
-    -- mention them: its frame then has them, and the spawn is a root at
-    -- the caller's type arguments, #244, #209)
-    disps := disps ++ [(dispBase + k, s!"$dispatch{k}", ((sigOf gi).map (·.tparams.length)).getD 0)]
+    -- (generic in the caller's type parameters, whose witnesses it takes
+    -- last: its frame then has them, and the spawn is a root at the
+    -- caller's type arguments, #244, #209)
+    let ntpK := ((sigOf gi).map (·.tparams.length)).getD 0
+    disps := disps ++ [(dispBase + k, s!"$dispatch{k}", ntpK)]
+    dispNtp := dispNtp.insert (dispBase + k) ntpK
   let fsigs0 := fsigs0 ++ dispSigs.toList
   fsigs := fsigs ++ dispSigs.toList
   let nOrig := fns.size
+  -- (a `$dispatchK` takes its caller's witnesses last, and suspends: it may
+  -- need copies too, when one of its implementations does)
+  let dispNtpOf := dispNtp
   let (fns1, slotTys1, specSigs, specKeys, replaced) ← specialise fns slotTys
     { fns := fsigs0, classes := classTable, protos, pins }
-    (fun f => ((sigOf f).map (·.ndicts)).getD 0) (fun f => ((sigOf f).map (·.suspends)).getD false)
+    (fun f => match dispNtpOf[f]? with
+      | some n => n
+      | none => ((sigOf f).map (·.ndicts)).getD 0)
+    (fun f => dispNtpOf.contains f || ((sigOf f).map (·.suspends)).getD false)
     spawnMark inFn (fun f => ((sigOf f).map (!·.selfTps.isEmpty)).getD false)
   fns := fns1
   slotTys := slotTys1
   let fsigs0 := fsigs0 ++ specSigs.toList
   fsigs := fsigs ++ specSigs.toList
   let specUser : List (Nat × String × Nat) := specKeys.toList.zipIdx.filterMap fun ((g, _), k) =>
-    if ((sigOf g).map (fun s => s.suspends && !leaves.contains s.name)).getD false then
+    if dispNtpOf.contains g || ((sigOf g).map (fun s => s.suspends && !leaves.contains s.name)).getD false then
       some (nOrig + k, fns[nOrig + k]!.name, 0)
     else none
   -- (the specialised originals, never called, are not lowered)
   let user := (allS.filter fun s => s.suspends && !leaves.contains s.name && !(replaced[s.idx]?.getD false)).map
-    (fun s => (s.idx, s.name, s.tparams.length)) ++ specUser ++ disps
+    (fun s => (s.idx, s.name, s.tparams.length)) ++ specUser ++ disps.filter fun (f, _, _) => !(replaced[f]?.getD false)
   -- (copies of immediate functions that spawn, their spawns lifted)
   let specImm : List (Nat × String × Nat) := specKeys.toList.zipIdx.filterMap fun ((g, _), k) =>
     if ((sigOf g).map (fun s => !s.suspends && !s.isConst)).getD false &&

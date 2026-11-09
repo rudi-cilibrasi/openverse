@@ -878,9 +878,10 @@ does.
 spawned `E.Eval()` on an `expr(t)`, #173, #204) is first lifted into a
 suspends function `$dispatchK` of the slots it uses, which the spawn calls.
 That happens before the specialisation, and `$dispatchK` is generic in its
-caller's type parameters when those slots' types mention them: it takes the
-caller's type witnesses too (its hidden parameters, and the slots an
-override fills from its receiver, #209). The spawn is then a spawn of a
+caller's type parameters: it takes the caller's type witnesses too, last,
+in order (its hidden parameters, and the slots an override fills from its
+receiver, #209), so the specialisation copies it per type where one of its
+implementations needs that, as any generic function. The spawn is then a spawn of a
 call, a root at the caller's type arguments (#244), so it needs no copy per
 type: a function calling itself at ever bigger types may spawn dispatches,
 and so may an override of a class with type parameters its parent's type

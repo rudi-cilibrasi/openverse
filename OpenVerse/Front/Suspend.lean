@@ -263,8 +263,9 @@ partial def liftChains (m base : Nat) (extra : List Nat := []) : Expr → StateM
       -- (also one whose every test a copy at closed types dropped, #186:
       -- left with its unreachable end, at a type no class implements)
       | .ite .. | .prim .userErr [] =>
-        -- (and `extra`: the caller's type witnesses, for a generic chain)
-        let ops := ((slotsOf ch) ++ extra).eraseDups
+        -- (and `extra`: the caller's type witnesses, for a generic chain,
+        -- last and in order, where a generic call's witnesses are)
+        let ops := ((slotsOf ch).eraseDups.filter (!extra.contains ·)) ++ extra
         let i := (← get).size
         modify (·.push (ch, ops, t))
         return .call f [.prim .mkArr [.seq (.call (base + i) (ops.map Expr.local)) v, .seq (.local t) v2]]
