@@ -768,6 +768,26 @@ Main():void =
   A parameter or local of the method named like a member is refused, as
   anywhere in a class.
 
+  A `return` in the branches of an `if` in such a function's body, after
+  its choices, gives the value of the alternative it is reached in, and the
+  rest of the body is skipped for it (#283). The `if` stays an `if`, with
+  no choice added, so what came before it rolls back as without the
+  return:
+
+  ```verse
+  H():int =
+      Y := 1 | 2 | 3
+      if (Y = 2):
+          return 99
+      Y * 10
+  # 10, 99, 30
+  ```
+
+  Not yet: a choice after such an `if`, or in a `return`'s value
+  (`if (X < 0) { return 0 }; X | X + 1`). That `if` would have to become a
+  choice, which a `for` treats as a generator: what came before it would
+  then be kept when a later filter fails.
+
   ```verse
   dice := class:
       Sides : int
@@ -844,7 +864,8 @@ Main():void =
   use have type parameters (`Self` of a generic class among them), an
   overloaded one (a generic one's type arguments are inferred from the
   arguments where it is inlined, as at a call), a recursive or generic one
-  with named parameters, one with a `return` or a `defer:` of its own (in its body, not in a block inside it), a method whose name another class or interface
+  with named parameters, one with a `defer:` of its own (in its body, not in a block inside it), one with a `return`
+  other than in an `if`'s branches, after which or in whose value there is a choice, or recursive with a `return`, a method whose name another class or interface
   also has, of a generic class, generic, `<suspends>` or using `(super:)`, one used as a function value, a call of a
   recursive one in an `if`'s branch or a `set`'s path, and, since its body is inlined where other names may be
   in scope, one whose name is also the name of a parameter, local, field or

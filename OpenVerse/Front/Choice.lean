@@ -886,6 +886,77 @@ def loopShape? (g : String) (mv : List String) (body : SExpr) : Option (List SEx
     else isChoice tail && groupOK tail
   if cls.all plain && tailOK then some (cls, tail) else none
 
+/-- How many `if`s with a `return` in them `e` has (#283). -/
+partial def countRetIfs (e : SExpr) : Nat :=
+  match e with
+  | .ite _ cs t u? =>
+    let hasRet := anyE (fun | .ret .. => true | _ => false)
+    (if hasRet t || u?.any hasRet then 1 else 0) + (cs.map countRetIfs).foldl (· + ·) 0 +
+      ((stmtsOf t).map countRetIfs).foldl (· + ·) 0 + ((u?.map fun u => ((stmtsOf u).map countRetIfs).foldl (· + ·) 0).getD 0)
+  | .block _ ss => (ss.map countRetIfs).foldl (· + ·) 0
+  | _ => 0
+
+/-- The statements `ss` with their last value returned (#283): the value of
+    a body that ends in an `if` with a `return` in it is its branches'. -/
+partial def tailReturns (ss : List SExpr) : List SExpr :=
+  match ss.getLast? with
+  | none => ss
+  | some last =>
+    let init := ss.dropLast
+    match last with
+    | .ret .. => ss
+    | .decl q x _ _ _ => ss ++ [.ret q (some (.ident q x))]
+    | .ite q cs t u? =>
+      init ++ [.ite q cs (.block q (tailReturns (stmtsOf t))) (u?.map fun u => .block q (tailReturns (stmtsOf u)))]
+    | e => init ++ [.ret e.pos (some e)]
+
+/-- A body's statements with its `return`s, in `if`s, taken out (#283):
+    an `if` with a `return` in a branch, `S; if (C) { T } else { U }; R`,
+    becomes the value `S; if (C) then block{ T; R } else block{ U; R }`, a
+    `return v` ending its block with the value `v` (so the rest is left out
+    after a branch that always returns). No choice is added: in a `for`,
+    a choice is a generator, which keeps what came before it when a later
+    filter fails, where the `if` had none. So it is exact only when the
+    branches and the rest have no choice of their own (`plainReturns`
+    says so). A branch's own names, and its condition's, are renamed for it
+    (`fresh i ++ "'" ++ N`), so the rest copied into it may declare the same
+    ones. `none` when a `return` is elsewhere (in a loop, a condition, an
+    expression). -/
+partial def elimReturns (fresh : Nat → String) (n : Nat) : List SExpr → Option (List SExpr × Nat)
+  | [] => some ([], n)
+  | .ret p e? :: _ => some ([e?.getD (.tuple p [])], n)
+  | s@(.ite p cs t u?) :: rest =>
+    let hasRet := anyE fun | .ret .. => true | _ => false
+    if !hasRet s then (elimReturns fresh n rest).map fun (r, n') => (s :: r, n')
+    else if cs.any hasRet then none
+    else do
+      let k := fresh n
+      -- (the last statement of a body: its branches' values are returned)
+      let (ts, us) := if rest.isEmpty then
+          (tailReturns (stmtsOf t), tailReturns ((u?.map stmtsOf).getD []))
+        else (stmtsOf t, (u?.map stmtsOf).getD [])
+      -- (a branch's names, and its condition's, are its own)
+      let own (ss : List SExpr) (extra : List String) (tg : String) : List (String × String) :=
+        ((ss.flatMap localsOf) ++ extra).eraseDups.map fun x => (x, s!"{k}{tg}'{x}")
+      let ρt := own ts (boundIn cs) "t"
+      let ρu := own us [] "u"
+      let (tb, n1) ← elimReturns fresh (n + 1) (ts.map (renameE ρt) ++ rest)
+      let (ub, n2) ← elimReturns fresh n1 (us.map (renameE ρu) ++ rest)
+      some ([.ite p (cs.map (renameE ρt)) (.block p tb) (some (.block p ub))], n2)
+  | s :: rest =>
+    if anyE (fun | .ret .. => true | _ => false) s then none
+    else (elimReturns fresh n rest).map fun (r, n') => (s :: r, n')
+
+/-- Whether `elimReturns` gave `if`s whose branches (with the rest copied
+    in) have no choice, nor a call that has several values (`mv`), of their
+    own: then it added no choice, and is exact (#283). -/
+partial def plainReturns (mv : List String) (ss : List SExpr) : Bool :=
+  ss.all fun
+    | .ite _ _ t (some u) =>
+      let br (b : SExpr) := !(stmtsOf (markCalls mv b)).any liftsHere && !hasChoice (stmtsOf (markCalls mv b))
+      (br t && plainReturns mv (stmtsOf t)) && (br u && plainReturns mv (stmtsOf u))
+    | _ => true
+
 /-- A function's name as written: a method's function `C$M` as `C.M`, and
     `F$all` as `F` (#283). -/
 def shownFnName (n : String) : String :=
@@ -1021,7 +1092,10 @@ partial def inlineCalls (mv : List (String × MFn)) (e : SExpr) (recs : List Str
         return .app p (.ident p "$loop") (.ident q g :: .block q (tmark ++ pds ++ unpack) :: .block q ps :: .block q cls ::
           .decl q (tag "$r") (tyOf f.ret) false (markRec g tail) :: as'') false
       let body ← go (renameTypes ρ (renameE ren f.body))
+      -- (its `return`s as guarded alternatives, #283)
       let ss := stmtsOf body
+      let ss := if anyE (fun | .ret .. => true | _ => false) body then
+          ((elimReturns (fun i => tag s!"$k{i}") 0 ss).map (·.1)).getD ss else ss
       let r := tag "$r"
       let (init, last) := (ss.dropLast, ss.getLast?)
       let (init, res) : List SExpr × SExpr := match last with
@@ -1228,8 +1302,11 @@ def multiValued (fns : List (String × MFn)) : List String := Id.run do
   while changed do
     changed := false
     for (n, f) in fns do
-      let ss := stmtsOf (markCalls mv f.body)
-      if !mv.contains n && (hasChoice ss || ss.any liftsHere) then
+      let b := markCalls mv f.body
+      let ss := stmtsOf b
+      -- (a choice in a `return`'s value too, #283)
+      if !mv.contains n && (hasChoice ss || ss.any liftsHere ||
+          anyE (fun | .ret _ (some e) => hasLiftable e | _ => false) b) then
         mv := mv ++ [n]; changed := true
   return mv
 
@@ -1373,8 +1450,9 @@ def methodFns (tops : List STop) (reserved : List String := []) : Except String 
     for m in ms do
       if let (some why, .fn p n _ _ _ _ b) := (whyNot ii tps m, m) then
         if why != "" then
-          let ss := stmtsOf (markCalls mv (rw owner (some c) b))
-          if hasChoice ss || ss.any liftsHere then
+          let b' := markCalls mv (rw owner (some c) b)
+          let ss := stmtsOf b'
+          if hasChoice ss || ss.any liftsHere || anyE (fun | .ret _ (some e) => hasLiftable e | _ => false) b' then
             throw s!"{p.show}: {c.replace "::" "."}.{n} has several values, but {why}: such methods are not supported yet (#283)"
   let sel := owner.filter fun (m, c) => mv.contains (methodFnName c m)
   if sel.isEmpty then return tops
@@ -1494,8 +1572,22 @@ def inlineMulti (tops : List STop) (reserved : List String := []) : Except Strin
       let what := if recs.contains n then "recursive" else if needAll.contains n then
         "called by a recursive one (so its values are computed at the call, F$all)" else "generic"
       throw s!"{f.pos.show}: {shownFnName n} has several values and named parameters, and is {what}: such functions are not supported yet (#235, #283)"
+    -- (a `return` in an `if`'s branches becomes guarded alternatives, #283;
+    -- not in a recursive one, computed or taken lazily from its body)
     if anyE (fun | .ret .. => true | _ => false) f.body then
-      throw s!"{f.pos.show}: {shownFnName n} has several values and a return, which would leave its caller once inlined (#235)"
+      if recs.contains n || needAll.contains n then
+        throw s!"{f.pos.show}: {shownFnName n} has several values, a return, and is recursive or called by a recursive one: not supported yet (#235, #283)"
+      -- (each `if` with a `return` composes choices, whose clauses after them
+      -- are copied for each alternative, #296: the code doubles with each)
+      let retIfs := (stmtsOf f.body).foldl (init := 0) fun acc s => acc + countRetIfs s
+      if retIfs > 16 then
+        throw s!"{f.pos.show}: {shownFnName n} has several values and {retIfs} ifs with a return: more than 16, and the code of an inlined call doubles with each, until choices compose without copying the clauses after them (#283)"
+      match elimReturns (fun i => s!"$k{i}") 0 (stmtsOf f.body) with
+      | none =>
+        throw s!"{f.pos.show}: {shownFnName n} has several values and a return other than in the branches of an if, which would leave its caller once inlined (#235, #283)"
+      | some (ss, _) =>
+        if !plainReturns mv ss then
+          throw s!"{f.pos.show}: {shownFnName n} has several values and a return in an if after which, or in whose return, there is a choice: not supported yet, as that if would become a choice, which a for treats as a generator (#283)"
     if (stmtsOf f.body).any (fun | .app _ (.ident _ "$defer") _ _ => true | _ => false) then
       throw s!"{f.pos.show}: {shownFnName n} has several values and a defer:, which would run in its caller's clauses once inlined: not supported yet (#235)"
     -- (its body is inlined where other names may be in scope: so neither

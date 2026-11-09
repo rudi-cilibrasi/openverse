@@ -183,6 +183,32 @@ marker. That block is the body of `first{…}`, `spawn`, `branch`, `sync`,
 `race`, `rush` or `defer:`, which take their choices themselves or run
 apart.
 
+A `return` in such a function's body (#283) is taken out where the body
+is inlined (`Choice.elimReturns`). An `if` with a `return` in a branch,
+`S; if (C) { T } else { U }; R`, becomes the value
+`S; if (C) then block{ T; R } else block{ U; R }`, a `return v` ending its
+block with the value `v`. The rest is left out after a branch that always
+returns, and the condition binds its names for its branch natively. A
+branch's own names, and its condition's, are renamed for it (`$k…'N`), so
+the rest copied into it may declare the same ones. No choice is added,
+and that is the point. In a `for`, every choice is a generator, and what
+came before a generator is kept when a later filter fails. Any encoding
+with a choice (guarded alternatives, an option per branch then a choice
+of "returned or not") makes the `if` such a boundary, where the program
+had none. tim-e1's model found it twice in #312's review: prints in the
+branch, then before the `if`, survived a rejected value. Even the
+caller's earlier clauses would show it. So it applies only when the
+branches and the rest have no choice of their own (`plainReturns`); a
+choice after the `if`, or in a `return`'s value, is refused for now. That
+needs an exclusive choice compiled in a `for` without a generator
+boundary: each path's clauses up to its first generator in the enclosing
+iteration's filter, under a selector. The last statement's branches return
+their values (`tailReturns`), and a `return` without a value gives `()`.
+The rest copied into branches that fall through doubles the code with
+each such `if`, so a function with more than 16 is refused. A `return`
+elsewhere (in a loop, a condition, an expression), or in a recursive one,
+is refused.
+
 A function with several values (#235) is inlined before elaboration, by
 `Choice.inlineMulti`, which runs right after module resolution. A method
 with several values first becomes one (#283, `Choice.methodFns`): a
