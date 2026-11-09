@@ -1061,8 +1061,10 @@ Main()<suspends>:void =
   without a suspends `Main`, a task runs only up to its first wait.
   `T.Cancel()` (in a suspends function) cancels a task that has not ended:
   it unwinds at once, running its `defer:` blocks, or, when the task is
-  running (it cancels itself, or a task or branch started while it runs,
-  at any depth, cancels it in its first run), at its next wait. Awaiting
+  running (its own code or one of its branches or `rush` losers runs:
+  it cancels itself, or a task or branch started while it runs, at any
+  depth, cancels it in its first run), at its next wait; cancelling a
+  task while it unwinds changes nothing. Awaiting
   a cancelled task cancels the task that awaits, also in a task's or a
   branch's first run (and a `Main` that awaits one is cancelled, which
   ends the program). A task asked to be cancelled at its next wait that
