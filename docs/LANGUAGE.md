@@ -783,10 +783,11 @@ Main():void =
   # 10, 99, 30
   ```
 
-  Not yet: a choice after such an `if`, or in a `return`'s value
-  (`if (X < 0) { return 0 }; X | X + 1`). That `if` would have to become a
-  choice, which a `for` treats as a generator: what came before it would
-  then be kept when a later filter fails.
+  A choice may also come after such an `if`, or be in a `return`'s value
+  (`if (X < 0) { return 0 }; X | X + 1`, `return 99 | 98`). The `if` still
+  picks one branch, with no choice of its own (#314): in a `for`, a value
+  the filters after it reject undoes what came before it, the caller's
+  clauses too, unless a choice of the program's own came in between.
 
   ```verse
   dice := class:
@@ -865,7 +866,7 @@ Main():void =
   overloaded one (a generic one's type arguments are inferred from the
   arguments where it is inlined, as at a call), a recursive or generic one
   with named parameters, one with a `defer:` of its own (in its body, not in a block inside it), one with a `return`
-  other than in an `if`'s branches, after which or in whose value there is a choice, or recursive with a `return`, a method whose name another class or interface
+  other than in an `if`'s branches, or recursive with a `return`, a method whose name another class or interface
   also has, of a generic class, generic, `<suspends>` or using `(super:)`, one used as a function value, a call of a
   recursive one in an `if`'s branch or a `set`'s path, and, since its body is inlined where other names may be
   in scope, one whose name is also the name of a parameter, local, field or

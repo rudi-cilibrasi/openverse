@@ -197,12 +197,33 @@ with a choice (guarded alternatives, an option per branch then a choice
 of "returned or not") makes the `if` such a boundary, where the program
 had none. tim-e1's model found it twice in #312's review: prints in the
 branch, then before the `if`, survived a rejected value. Even the
-caller's earlier clauses would show it. So it applies only when the
-branches and the rest have no choice of their own (`plainReturns`); a
-choice after the `if`, or in a `return`'s value, is refused for now. That
-needs an exclusive choice compiled in a `for` without a generator
-boundary: each path's clauses up to its first generator in the enclosing
-iteration's filter, under a selector. The last statement's branches return
+caller's earlier clauses would show it.
+
+When a branch, or the rest copied into it, has a choice of its own, the
+`if` becomes an *exclusive choice* instead (#314):
+`$excl(($k = 0) ⇒ block{T; R}, ($k = 1) ⇒ block{U; R})`, where at most one
+alternative's guards can hold (`Choice.mkExcl`). Where the first success is
+taken, it is the plain composed choice of `block{guards; rest}` (`prepare`
+converts it, `exclToChoice`), since rollback there is right. A `for`
+compiles it as the `if` it stands for (`elabFor`'s `exclIter`). The guards
+become a selector in the iteration's filter. Each path's clauses up to its
+first generator (the guards again, which bind the path's names, its
+clauses with its value bound to the choice's name, then the `for`'s
+clauses after it) go into that same filter under `if ($sel = i)`, so a
+failure there rolls back to the iteration's generator. Each path's
+generators go into the iteration's body under the selector, as arrays,
+which are flattened. Top-level filters go through a one-element generator.
+A `for` compiles it this way wherever its clauses go:
+- in an alternative with several values of its own, which is a `for` of its own (#283), `keepExcl` is passed again;
+- after a generator taken lazily (#246), the paths go into the filter of the one-element iteration that binds each value.
+
+`exclToChoice` stops at a nested `for`. Otherwise an `if` condition with a choice of its own would turn that `for`'s exclusive choices into generators before the `for` sees them. The eager route (`F$all`, #235) refuses a function with a `return`, as before.
+
+The names made for a path, and for a composed choice in a first-success context or a `for` (`$x…`, `$ct…`, `$cf…`), contain the binding's name. That name is tagged for the inlined call's site, while a position inside an inlined body is shared by every call of it. So two calls of the same function in one context don't clash. The one-element generator is named for the depth of its scope, since a `for` of an alternative's own has the same position.
+
+Each path copies the clauses after the choice and the body, so the code doubles with each such call in one `for`, as with #296's composed choices. The route around both is the same: continuation functions.
+`checkBody` reads an exclusive choice as an if-chain on its guards.
+Programs without one compile byte for byte as before. The last statement's branches return
 their values (`tailReturns`), and a `return` without a value gives `()`.
 The rest copied into branches that fall through doubles the code with
 each such `if`, so a function with more than 16 is refused. A `return`

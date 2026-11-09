@@ -245,6 +245,8 @@ partial def hasLiftable : SExpr → Bool
   | .app _ (.ident _ "$noLift") _ false => false
   -- (an inlined function's parameter default, in its own context, #283)
   | .app _ (.ident _ "$paramDefault") _ false => false
+  -- (an exclusive choice, which a `for` compiles itself, #314)
+  | .app _ (.ident _ "$excl") _ false => false
   | .app _ (.ident _ "$choice") _ false => true
   | .app _ (.ident _ "$inline") _ false => true
   | .app _ (.ident _ "$each") _ false => true
@@ -348,6 +350,26 @@ partial def mapE (f : SExpr → Option SExpr) (e : SExpr) : SExpr :=
     | .mapLit p kvs => .mapLit p (kvs.map fun (k, v) => (go k, go v))
     | .structDef p tps fs => .structDef p tps (fs.map fun (n, t, d, v) => (n, t, d.map go, v))
     | e => e
+
+/-- An exclusive choice (#314): at most one alternative's `guards` hold,
+    and that alternative's value is its `rest`'s (a block). A `for`
+    compiles it as the `if` it stands for, with no generator, so that what
+    came before it rolls back as it would without it. Elsewhere it is the
+    choice of `block{guards; rest}`. -/
+def mkExcl (p : Pos) (alts : List (List SExpr × SExpr)) : SExpr :=
+  .app p (.ident p "$excl") (alts.map fun (gs, r) => .app p (.ident p "$alt") [.block p gs, r] false) false
+
+/-- `e` with its exclusive choices as choices (#314). Not inside a nested
+    `for`: its own clauses keep theirs, for it to compile as `if`s. -/
+partial def exclToChoice (e : SExpr) : SExpr :=
+  mapE (fun
+    | f@(.forE ..) => some f
+    | .app p (.ident q "$excl") alts false =>
+      some (.app p (.ident q "$choice") (alts.map fun
+        | .app _ (.ident _ "$alt") [.block bp gs, .block _ rs] false => .block bp ((gs ++ rs).map exclToChoice)
+        | .app _ (.ident _ "$alt") [.block bp gs, r] false => .block bp (gs.map exclToChoice ++ [exclToChoice r])
+        | a => a) false)
+    | _ => none) e
 
 /-- Whether some subexpression satisfies `pr` (through `mapE`). -/
 partial def anyE (pr : SExpr → Bool) (e : SExpr) : Bool :=
@@ -729,7 +751,10 @@ def liftClause (isVal : String → Bool) (isField : String → String → Bool) 
     (variables and fields in scope); the clauses' own bindings are too. -/
 def prepare (cs : List SExpr) (isVal : String → Bool := fun _ => false)
     (isField : String → String → Bool := fun _ _ => false) (site : String := "")
-    (fieldOrder : String → List (String × Bool) := fun _ => []) : List SExpr :=
+    (fieldOrder : String → List (String × Bool) := fun _ => []) (keepExcl : Bool := false) : List SExpr :=
+  -- (an exclusive choice is a `for`'s to compile, #314; elsewhere, where
+  -- the first success is taken, the choice of its alternatives)
+  let cs := if keepExcl then cs else cs.map exclToChoice
   let bound := boundIn cs
   normClauses (cs.flatMap (liftClause (fun n => isVal n || bound.contains n) isField · site fieldOrder)) site
 
@@ -806,6 +831,11 @@ partial def namesUsed (e : SExpr) : List String :=
     calls are inlined. -/
 partial def checkBody : SExpr → SExpr :=
   mapE fun
+    -- (an exclusive choice, #314: an if-chain on its guards)
+    | .app p (.ident _ "$excl") alts false =>
+      some (alts.foldr (fun a acc => match a with
+        | .app _ (.ident _ "$alt") [.block bp gs, rest] false => .ite bp (gs.map checkBody) (checkBody rest) (some acc)
+        | _ => acc) (.app p (.ident p "Err") [] false))
     | .app p (.ident _ "$choice") as false =>
       let rec chain : List SExpr → SExpr
         | [] => .tuple p []
@@ -914,20 +944,22 @@ partial def tailReturns (ss : List SExpr) : List SExpr :=
     an `if` with a `return` in a branch, `S; if (C) { T } else { U }; R`,
     becomes the value `S; if (C) then block{ T; R } else block{ U; R }`, a
     `return v` ending its block with the value `v` (so the rest is left out
-    after a branch that always returns). No choice is added: in a `for`,
-    a choice is a generator, which keeps what came before it when a later
-    filter fails, where the `if` had none. So it is exact only when the
-    branches and the rest have no choice of their own (`plainReturns`
-    says so). A branch's own names, and its condition's, are renamed for it
-    (`fresh i ++ "'" ++ N`), so the rest copied into it may declare the same
-    ones. `none` when a `return` is elsewhere (in a loop, a condition, an
-    expression). -/
-partial def elimReturns (fresh : Nat → String) (n : Nat) : List SExpr → Option (List SExpr × Nat)
+    after a branch that always returns). When a branch has a choice of its
+    own (`multi`), it is an exclusive choice of the two instead (#314),
+    `$k := if (C) then 0 else 1; $kv := $excl(($k = 0) ⇒ T; R, ($k = 1) ⇒ U; R)`
+    (a condition that binds names through an option), which a `for`
+    compiles as the `if` it stands for: no generator, so what came before
+    it rolls back as without the return. A branch's own names, and its
+    condition's, are renamed for it (`fresh i ++ "'" ++ N`), so the rest
+    copied into it may declare the same ones. `none` when a `return` is
+    elsewhere (in a loop, a condition, an expression). -/
+partial def elimReturns (fresh : Nat → String) (n : Nat) (multi : SExpr → Bool := fun _ => false)
+    (ret : Option STy := none) : List SExpr → Option (List SExpr × Nat)
   | [] => some ([], n)
   | .ret p e? :: _ => some ([e?.getD (.tuple p [])], n)
   | s@(.ite p cs t u?) :: rest =>
     let hasRet := anyE fun | .ret .. => true | _ => false
-    if !hasRet s then (elimReturns fresh n rest).map fun (r, n') => (s :: r, n')
+    if !hasRet s then (elimReturns fresh n multi ret rest).map fun (r, n') => (s :: r, n')
     else if cs.any hasRet then none
     else do
       let k := fresh n
@@ -940,22 +972,40 @@ partial def elimReturns (fresh : Nat → String) (n : Nat) : List SExpr → Opti
         ((ss.flatMap localsOf) ++ extra).eraseDups.map fun x => (x, s!"{k}{tg}'{x}")
       let ρt := own ts (boundIn cs) "t"
       let ρu := own us [] "u"
-      let (tb, n1) ← elimReturns fresh (n + 1) (ts.map (renameE ρt) ++ rest)
-      let (ub, n2) ← elimReturns fresh n1 (us.map (renameE ρu) ++ rest)
-      some ([.ite p (cs.map (renameE ρt)) (.block p tb) (some (.block p ub))], n2)
+      let (tb, n1) ← elimReturns fresh (n + 1) multi ret (ts.map (renameE ρt) ++ rest)
+      let (ub, n2) ← elimReturns fresh n1 multi ret (us.map (renameE ρu) ++ rest)
+      let cs := cs.map (renameE ρt)
+      if !multi (.block p tb) && !multi (.block p ub) then
+        some ([.ite p cs (.block p tb) (some (.block p ub))], n2)
+      else
+      -- (a branch with a choice of its own: an exclusive choice of the two,
+      -- which a `for` compiles as this `if`, #314; the condition once)
+      let v := k ++ "v"
+      match boundIn cs with
+      | [] =>
+        let g (i : Int) : List SExpr := [.cmp p (.ident p k) [("=", .int p i)]]
+        some ([.decl p k none false (.ite p cs (.int p 0) (some (.int p 1))),
+          .decl p v ret false (mkExcl p [(g 0, .block p tb), (g 1, .block p ub)]), .ident p v], n2)
+      | names =>
+        -- (the names the condition binds, for its branch: through an option,
+        -- each with its written type, a `var` still one)
+        let declOf (y : String) : Option STy × Bool :=
+          (cs.findSome? fun | .decl _ x t m _ => if x == y then some (t, m) else none | _ => none).getD (none, false)
+        let (val, binds) : SExpr × List SExpr := match names with
+          | [y] => let (t, m) := declOf y; (.ident p y, [.decl p y t m (.query p (.ident p k))])
+          | ys =>
+            let tt := k ++ "t"
+            (.tuple p (ys.map (SExpr.ident p ·)),
+              .decl p tt none false (.query p (.ident p k)) ::
+                ys.zipIdx.map fun (y, i) =>
+                  let (t, m) := declOf y
+                  SExpr.decl p y t m (.app p (.ident p tt) [.int p (i : Int)] false))
+        some ([.decl p k none false (.optionLit p (.block p (cs ++ [val]))),
+          .decl p v ret false (mkExcl p [(binds, .block p tb), ([.notE p (.query p (.ident p k))], .block p ub)]),
+          .ident p v], n2)
   | s :: rest =>
     if anyE (fun | .ret .. => true | _ => false) s then none
-    else (elimReturns fresh n rest).map fun (r, n') => (s :: r, n')
-
-/-- Whether `elimReturns` gave `if`s whose branches (with the rest copied
-    in) have no choice, nor a call that has several values (`mv`), of their
-    own: then it added no choice, and is exact (#283). -/
-partial def plainReturns (mv : List String) (ss : List SExpr) : Bool :=
-  ss.all fun
-    | .ite _ _ t (some u) =>
-      let br (b : SExpr) := !(stmtsOf (markCalls mv b)).any liftsHere && !hasChoice (stmtsOf (markCalls mv b))
-      (br t && plainReturns mv (stmtsOf t)) && (br u && plainReturns mv (stmtsOf u))
-    | _ => true
+    else (elimReturns fresh n multi ret rest).map fun (r, n') => (s :: r, n')
 
 /-- A function's name as written: a method's function `C$M` as `C.M`, and
     `F$all` as `F` (#283). -/
@@ -1095,7 +1145,8 @@ partial def inlineCalls (mv : List (String × MFn)) (e : SExpr) (recs : List Str
       -- (its `return`s as guarded alternatives, #283)
       let ss := stmtsOf body
       let ss := if anyE (fun | .ret .. => true | _ => false) body then
-          ((elimReturns (fun i => tag s!"$k{i}") 0 ss).map (·.1)).getD ss else ss
+          ((elimReturns (fun i => tag s!"$k{i}") 0
+            (fun b => (stmtsOf b).any liftsHere || hasChoice (stmtsOf b)) (tyOf f.ret) ss).map (·.1)).getD ss else ss
       let r := tag "$r"
       let (init, last) := (ss.dropLast, ss.getLast?)
       let (init, res) : List SExpr × SExpr := match last with
@@ -1582,12 +1633,10 @@ def inlineMulti (tops : List STop) (reserved : List String := []) : Except Strin
       let retIfs := (stmtsOf f.body).foldl (init := 0) fun acc s => acc + countRetIfs s
       if retIfs > 16 then
         throw s!"{f.pos.show}: {shownFnName n} has several values and {retIfs} ifs with a return: more than 16, and the code of an inlined call doubles with each, until choices compose without copying the clauses after them (#283)"
-      match elimReturns (fun i => s!"$k{i}") 0 (stmtsOf f.body) with
+      match elimReturns (fun i => s!"$k{i}") 0 (fun _ => false) none (stmtsOf f.body) with
       | none =>
         throw s!"{f.pos.show}: {shownFnName n} has several values and a return other than in the branches of an if, which would leave its caller once inlined (#235, #283)"
-      | some (ss, _) =>
-        if !plainReturns mv ss then
-          throw s!"{f.pos.show}: {shownFnName n} has several values and a return in an if after which, or in whose return, there is a choice: not supported yet, as that if would become a choice, which a for treats as a generator (#283)"
+      | some _ => pure ()
     if (stmtsOf f.body).any (fun | .app _ (.ident _ "$defer") _ _ => true | _ => false) then
       throw s!"{f.pos.show}: {shownFnName n} has several values and a defer:, which would run in its caller's clauses once inlined: not supported yet (#235)"
     -- (its body is inlined where other names may be in scope: so neither

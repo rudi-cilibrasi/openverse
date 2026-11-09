@@ -2271,6 +2271,9 @@ def firstLiftOf (ctx c2 : Ctx) (p : Pos) (g : String) (lp : List SExpr) (b : Str
            binds, sets := sets.map (·.name), args := pnames.map (SExpr.ident p ·) ++ capArgs,
            varBinds := (bls.filter (·.mutable)).map (·.name) }
 
+-- (the block below is one command, so the compiler's heartbeats for all of
+-- it count against one limit; it outgrew the default, 200000: #318, #325)
+set_option maxHeartbeats 400000 in
 mutual
 partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
   match se with
@@ -5019,9 +5022,16 @@ partial def elabFor (ctx : Ctx) (p : Pos) (clauses : List SExpr) (body : SExpr) 
   -- (a choice is a generator over its alternatives, #208; clauses lifted
   -- already, `prepared`, are not lifted again)
   let clauses := if prepared then clauses else
-    Choice.prepare clauses (choiceValues ctx) (choiceField ctx) (fieldOrder := choiceOrder ctx)
+    Choice.prepare clauses (choiceValues ctx) (choiceField ctx) (fieldOrder := choiceOrder ctx) (keepExcl := true)
   -- (a call of a recursive function with several values, #235: a generator
   -- over the array of its values; at a written type, through a binding)
+  let normGens (cs : List SExpr) : List SExpr := cs.flatMap fun c => match Choice.binding? c with
+    | some { each := some (.app _ (.ident _ "$loop") _ false), .. } => [c]
+    | some { pos := q, name := n, ty := none, each := some arr, .. } => [.gen q n none arr]
+    | some { pos := q, name := n, ty := some t, each := some arr, .. } =>
+      let tmp := s!"$e{q.line}_{q.col}"
+      [.gen q tmp none arr, .decl q n (some t) false (.ident q tmp)]
+    | _ => [c]
   let clauses := clauses.flatMap fun c => match Choice.binding? c with
     -- (one taken lazily, #246: the binding stays, a generator of its own)
     | some { each := some (.app _ (.ident _ "$loop") _ false), .. } => [c]
@@ -5035,6 +5045,10 @@ partial def elabFor (ctx : Ctx) (p : Pos) (clauses : List SExpr) (body : SExpr) 
     | .gen .. => true
     | .decl _ _ none false (.range ..) => true
     | c => (Choice.binding? c).isSome
+  -- (an exclusive choice's binding, #314: no generator, but paths)
+  let isExcl : SExpr → Bool
+    | .decl _ _ _ false (.app _ (.ident _ "$excl") _ false) => true
+    | _ => false
   let pre := clauses.takeWhile (!isGen ·)
   let rest := clauses.dropWhile (!isGen ·)
   let rec groups : List SExpr → List (SExpr × List SExpr)
@@ -5052,6 +5066,64 @@ partial def elabFor (ctx : Ctx) (p : Pos) (clauses : List SExpr) (body : SExpr) 
       let (r, c') ← elabSeq { c with canFail := true, inTaking := true } fs none
       return (r.e, c')
   let rec build (c : Ctx) (gs : List (SExpr × List SExpr)) : EM R := do
+    -- (#314) filters `fs` with an exclusive choice among them, then the
+    -- groups `more`: its guards pick a path into a selector; each path's
+    -- clauses up to its first generator (its guards again, which bind its
+    -- names, its clauses, then the filters after the choice) go into this
+    -- filter under the selector, so a failure there rolls back to this
+    -- iteration's generator; each path's generators into the iteration's
+    -- body, under it. The filter's code, the body's (an array of the
+    -- values), and their type.
+    let rec exclIter (c : Ctx) (fs : List SExpr) (more : List (SExpr × List SExpr)) : EM (Expr × Expr × Ty) := do
+      match fs.findIdx? isExcl with
+      | none =>
+        let (filt, c') ← elabFilters c fs
+        let inner ← build c' more
+        match more with
+        | [] => return (filt, .prim .mkArr [inner.e], inner.ty)
+        | _ => match inner.ty with
+          | .arr t => return (filt, inner.e, t)
+          | _ => eerr p "internal: nested for"
+      | some j =>
+        let (codeA, cA) ← elabFilters c (fs.take j)
+        let after := fs.drop (j + 1)
+        let moreCl := more.flatMap fun (g', fs') => g' :: fs'
+        let some (.decl gp x xty _ (.app _ _ alts _)) := fs[j]? | eerr p "internal: an exclusive choice"
+        let alts : List (List SExpr × SExpr) := alts.filterMap fun
+          | .app _ (.ident _ "$alt") [.block _ gs, r] false => some (gs, r)
+          | _ => none
+        -- (the selector: the first alternative whose guards hold)
+        let selS : SExpr := alts.zipIdx.foldr (fun ((gs, _), i) acc =>
+          .ite gp gs (.int gp (i : Int)) (some acc)) (.int gp (-1))
+        let rsel ← elabE { cA with canFail := true, inTaking := true } selS (some .int)
+        let sel ← fresh .int
+        let mut filts : Array Expr := #[]
+        let mut arrs : Array Expr := #[]
+        let mut ety : Option Ty := none
+        for ((gs, r), i) in alts.zipIdx do
+          -- (its value bound to the choice's name)
+          let rcl : List SExpr := match r with
+            | .block rp ss => match ss.getLast? with
+              | some (.decl q y t v e) => ss.dropLast ++ [.decl q y t v e, .decl rp x xty false (.ident rp y)]
+              | some l => ss.dropLast ++ [.decl rp x xty false l]
+              | none => [.decl rp x xty false (.tuple rp [])]
+            | e => [.decl e.pos x xty false e]
+          let lifted := normGens (Choice.prepare (gs ++ rcl) (choiceValues cA) (choiceField cA)
+            (site := s!"$x{x}a{i}") (fieldOrder := choiceOrder cA) (keepExcl := true))
+          let path := lifted ++ after ++ moreCl
+          let (f, a, t) ← exclIter cA (path.takeWhile (!isGen ·)) (groups (path.dropWhile (!isGen ·)))
+          if let some t0 := ety then
+            if t0 != t then eerr gp s!"the for's values have the type {t0.show} on one path of this if and {t.show} on another"
+          ety := some t
+          filts := filts.push f
+          arrs := arrs.push a
+        let some t := ety | eerr gp "internal: an exclusive choice without alternatives"
+        let pick (es : Array Expr) (last : Expr) : Expr :=
+          (es.toList.zipIdx.foldr (fun (e, i) acc => .ite (p2 .eq (.local sel) (.lit (.int (i : Int)))) e acc) last)
+        -- (each path's filter as `void`, as `failV` is, for the if-chain)
+        let filt := Expr.seq codeA (.seq (.assign sel rsel.e)
+          (pick (filts.map fun f => Expr.seq f (.lit .void)) Expr.failV))
+        return (filt, pick arrs (.lit (.arr #[])), t)
     match gs with
     | [] =>
       let r ← elabE (bodyCtx c) body none
@@ -5067,15 +5139,18 @@ partial def elabFor (ctx : Ctx) (p : Pos) (clauses : List SExpr) (body : SExpr) 
       -- that each alternative's values come in order, with the body between)
       if let some b@{ pos := gp, place := none, branchy := none, each := none, .. } := Choice.binding? g then
         if b.alts.any Choice.hasLiftable then
-          let site := s!"$cf{gp.line}_{gp.col}"
+          -- (with the binding's name: an inlined body's position is every
+          -- site's, #314)
+          let site := s!"$cf{gp.line}_{gp.col}{b.name}"
           let moreClauses := more.flatMap fun (g', fs') => g' :: fs'
           let bctx : Ctx := { c with canFail := ctx.canFail, inTaking := ctx.inTaking, inLoop := ctx.inLoop,
                                      inRepeat := ctx.inRepeat }
           let mut parts : List R := []
           for (a, i) in b.alts.zipIdx do
+            -- (its exclusive choices kept: this for compiles them, #314)
             let lifted := Choice.prepare [.decl gp b.name b.ty false a] (choiceValues c) (choiceField c)
               (fieldOrder := choiceOrder c)
-              (site := s!"{site}a{i}")
+              (site := s!"{site}a{i}") (keepExcl := true)
             parts := parts ++ [← elabFor bctx p (lifted ++ fs ++ moreClauses) body (prepared := true)]
           let some r0 := parts.head? | eerr gp "internal: a choice without alternatives"
           if let some r := parts.find? (·.ty != r0.ty) then
@@ -5092,23 +5167,34 @@ partial def elabFor (ctx : Ctx) (p : Pos) (clauses : List SExpr) (body : SExpr) 
           | some t => pure t
           | none => pure lg.vty
         let (xs, c1) ← declare c n ty
-        let (filt, c2) ← elabFilters c1 fs
-        let bindX ← coerce gp ⟨lg.value, lg.vty⟩ ty
-        let inner ← build c2 more
-        let one ← fresh .void
-        let iter : Expr := .forE one (.lit (.arr #[.tup []])) (.seq (.assign xs bindX) filt) inner.e
+        -- (the iteration's values, their type, and whether they are flat
+        -- already: with an exclusive choice among the filters, #314, its
+        -- paths in this filter and their values, flattened)
+        let (iter, ity, flat) ← if fs.any isExcl then do
+            let (filtE, arr, ety) ← exclIter c1 fs more
+            let bindX ← coerce gp ⟨lg.value, lg.vty⟩ ty
+            let one ← fresh .void
+            pure (Expr.prim .flatten [.forE one (.lit (.arr #[.tup []])) (.seq (.assign xs bindX) filtE) arr],
+              ety, true)
+          else do
+            let (filt, c2) ← elabFilters c1 fs
+            let bindX ← coerce gp ⟨lg.value, lg.vty⟩ ty
+            let inner ← build c2 more
+            let one ← fresh .void
+            pure (Expr.forE one (.lit (.arr #[.tup []])) (.seq (.assign xs bindX) filt) inner.e,
+              inner.ty, more.isEmpty)
         -- (the steps in rounds, each a `forE` over a range twice as long as
         -- the last one's, whose body runs a step and gives the values of
         -- its iteration, if it came to a value: so the values are collected
         -- in linear time and space, where adding each to an array would copy
         -- it each time)
-        let acc ← fresh (.arr inner.ty)
+        let acc ← fresh (.arr ity)
         let size ← fresh .int
         let done ← fresh .logic
         let d ← fresh .int
         let vd : Expr := .lit .void
         let none : Expr := .lit (.arr #[])
-        let r ← fresh (.arr inner.ty)
+        let r ← fresh (.arr ity)
         let stepBody : Expr := .ite (p2 .eq (.local lg.sp) (.lit (.int 0)))
           (.seq (.assign done (.lit (.logic true))) none)
           (.seq lg.step (.ite (.prim .query [.local lg.has])
@@ -5120,12 +5206,10 @@ partial def elabFor (ctx : Ctx) (p : Pos) (clauses : List SExpr) (body : SExpr) 
             (.seq (.assign size (p2 .mul (.local size) (.lit (.int 2)))) vd))
         let code : Expr := .seq lg.init (.seq (.assign acc none) (.seq (.assign size (.lit (.int 16)))
           (.seq (.assign done (.lit (.logic false))) (.seq (.loop body) (.local acc)))))
-        match more with
-        | [] => return ⟨code, .arr inner.ty⟩
-        | _ =>
-          match inner.ty with
-          | .arr t => return ⟨.prim .flatten [code], .arr t⟩
-          | _ => eerr gp "internal: nested for"
+        if flat then return ⟨code, .arr ity⟩
+        match ity with
+        | .arr t => return ⟨.prim .flatten [code], .arr t⟩
+        | _ => eerr gp "internal: nested for"
       -- the source: evaluated before the iterations; a failing source gives no iterations
       let (slot, src, c1, pre) ← match g with
         | .decl gp n none false (.range _ lo hi) => do
@@ -5190,6 +5274,15 @@ partial def elabFor (ctx : Ctx) (p : Pos) (clauses : List SExpr) (body : SExpr) 
           let idx := Expr.lit (.arr (choiceIdx es.length))
           pure (k, (pre.map (Expr.seq · idx)).getD idx, c1, Expr.assign xs (Expr.altE k es))
         | _ => eerr g.pos "bad for clause"
+      -- (an exclusive choice among the filters, #314: its paths in this
+      -- iteration's filter, so that a failure in one rolls back to this
+      -- generator, as the `if` it stands for would)
+      if fs.any isExcl then
+        let (filtE, arr, ety) ← exclIter c1 fs more
+        let filt := match pre with
+          | .lit _ => filtE
+          | e => .seq e filtE
+        return ⟨.prim .flatten [Expr.forE slot src filt arr], .arr ety⟩
       let (filt, c2) ← elabFilters c1 fs
       let filt := if fs.isEmpty then pre else
         match pre with
@@ -5206,6 +5299,12 @@ partial def elabFor (ctx : Ctx) (p : Pos) (clauses : List SExpr) (body : SExpr) 
   match pre with
   | [] => build ctx gs
   | _ =>
+    -- (an exclusive choice among them, #314: its paths in this filter)
+    -- (through a generator over one element, whose filters they are)
+    if pre.any isExcl then
+      -- (named for the depth too: a for of an alternative's, inside this
+      -- one's clauses, has the same position)
+      return ← build ctx ((.gen p s!"$u{p.line}_{p.col}_{ctx.locals.length}" none (.arrayLit p [.tuple p []]), pre) :: gs)
     -- filters before any generator: iterate once over a one-element array
     let (filt, c1) ← elabFilters ctx pre
     let slot ← fresh .void
@@ -5393,7 +5492,9 @@ partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
         -- order and the clauses run for each; the first success gives the
         -- names they bind, in a tuple)
         let p := b.pos
-        let t := s!"$ct{p.line}_{p.col}"
+        -- (with the binding's name: an inlined body's position is every
+        -- site's, #314)
+        let t := s!"$ct{p.line}_{p.col}{b.name}"
         let binds := (b.name :: Choice.boundIn rest).eraseDups
         let vars := rest.filterMap fun | .decl _ n _ true _ => some n | _ => none
         let tup : SExpr := .tuple p (binds.map (SExpr.ident p ·) ++ [.ident p "true"])

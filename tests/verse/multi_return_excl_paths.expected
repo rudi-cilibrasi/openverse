@@ -1,0 +1,20 @@
+z 7
+g0
+g1
+z 2
+zy 6 2
+b2
+g-2
+g0
+zw 0 1
+g-1
+zw 2 0
+g-1
+zw 3 0
+empty 1
+g0
+a2 1
+v 0
+z 2
+p0
+exit=0
