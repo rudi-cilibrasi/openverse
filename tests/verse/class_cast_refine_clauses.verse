@@ -1,4 +1,4 @@
-# expect: 8:16: cannot cast a pair(a, b) to dup(a) here: their type arguments agree only under a refinement, which a cast gives only as the whole condition of an if, D := dup[X], whose branch is then typed under it (#209, #243)
+# a refining cast as the first clause of an if's condition, a clause after it using it (#243 follow-up)
 pair(t:type, u:type) := class:
     A:t
     B:u

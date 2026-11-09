@@ -460,8 +460,8 @@ circle := class(shape, labelled):
   class(mid(int, string))` below `mid(a, b) := class(expr(tuple(a, b)))`)
   and override too. A cast in generic code that holds only under such a
   refinement is pattern matching on the class, as in a GADT (#243): as the
-  whole condition of an `if`, `D := T[X]` types the branch it guards under
-  the refinement, where the code's type parameters are unified as `T`'s
+  first clause of an `if`'s condition, `D := T[X]` types the branch it
+  guards, and the clauses after it, under the refinement, where the code's type parameters are unified as `T`'s
   type arguments say (written types in the branch included):
 
   ```verse
@@ -555,7 +555,7 @@ circle := class(shape, labelled):
     class, to a subclass whose fixed type arguments relate to ones the
     receiver's type does not have (#209); a cast `T[X]` whose type
     arguments agree with `X`'s only under a refinement (`dup[P]` for
-    `P:pair(a, b)`) other than as the whole condition of an `if`, whose
+    `P:pair(a, b)`) other than as the first clause of an `if`'s condition, whose
     branch has a `return`, a `break` that leaves it or a `set` of a `var`
     from outside it, whose branch or `else` suspends, whose branch calls
     `(super:)`, or in a `defer:`, a constructor's items, a class's `block:` clause, a default

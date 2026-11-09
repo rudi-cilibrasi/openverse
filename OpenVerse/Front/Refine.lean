@@ -110,6 +110,14 @@ partial def substTypes (σ : List (String × STy)) : SExpr → SExpr :=
     | .construct p n ts fs => some (.construct p n (ts.map (·.substNames σ)) (fs.map (substTypes σ)))
     | _ => none
 
+/-- The branch of a refining cast that is the first clause of an `if`'s
+    condition, `if (D := T[X], rest) then B else E`: the `if` of the rest,
+    `if (rest, true?) then B else E` (the cast has no effects to undo when
+    the rest fails; `true?`, which may fail, keeps the rest a condition
+    when it cannot fail itself, as the whole condition could). -/
+def castRest (p : Pos) (more : List SExpr) (body : SExpr) (els : Option SExpr) : SExpr :=
+  if more.isEmpty then body else .ite p (more ++ [.query p (.ident p "true")]) body els
+
 /-- The branches the lifts ask for, as functions: each `if (D := …) then
     Body …` whose position and bound name are a lift's key gives `Body`,
     with the refinement applied to its written types. Found anywhere in the
@@ -127,10 +135,13 @@ def functions (lifts : List Lift) (tops : List STop) : List STop := Id.run do
   while !todo.isEmpty do
     let e := todo.head!
     todo := todo.tail!
-    if let .ite p [.decl _ d none false _] body _ := e then
+    -- (the cast as the condition's first clause: the branch is the `if`
+    -- of the rest, as the elaborator reads it)
+    if let .ite p (.decl _ d none false _ :: more) body0 els := e then
       if let some l := lifts.find? (·.key == keyOf p d) then
         if !done.contains l.key then
           done := l.key :: done
+          let body := castRest p more body0 els
           out := out.push (.fn p l.name l.params l.tparams l.specs l.ret (substTypes l.subst (l.body.getD body)))
     todo := kids e ++ todo
   return out.toList
