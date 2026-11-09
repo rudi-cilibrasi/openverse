@@ -1436,6 +1436,17 @@ partial def styEq : STy → STy → Bool
     as.length == bs.length && (as.zip bs).all (fun (x, y) => styEq x y) && e == e' && styEq r r'
   | _, _ => false
 
+/-- A written type with `string` spelled `[]char`, which it is. -/
+partial def styNorm : STy → STy
+  | .name "string" => .arr (.name "char")
+  | .arr a => .arr (styNorm a)
+  | .opt a => .opt (styNorm a)
+  | .tup ts => .tup (ts.map styNorm)
+  | .map k v => .map (styNorm k) (styNorm v)
+  | .app f ts => .app f (ts.map styNorm)
+  | .fn ps e r => .fn (ps.map styNorm) e (styNorm r)
+  | t => t
+
 /-- A written type, for messages. -/
 partial def styShow : STy → String
   | .name a => a.replace "::" "."
@@ -1685,7 +1696,7 @@ def methodFns (tops : List STop) (reserved : List String := []) : Except String 
     if let some r0 := f.ret then
       for (c, m) in declsOf n do
         if let .fn q _ _ _ _ r _ := m then
-          if c != f.root && !styEq r r0 then
+          if c != f.root && !styEq (styNorm r) (styNorm r0) then
             throw s!"{q.show}: {c.replace "::" "."}.{n} has several values and returns {styShow r}, where {f.root.replace "::" "."}.{n} returns {styShow r0}: an override with several values must return the same type, for now (#283)"
   if sel.isEmpty then return tops
   -- (a parameter or local named like a member: refused, as in the class,
