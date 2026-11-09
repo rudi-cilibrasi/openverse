@@ -1990,7 +1990,10 @@ def refiningCast? (env : TyEnv) (T : String) (xty : Ty) (avoid : List String := 
     mean the same once the branch is a function of its own (#243): its
     position and what it is. `muts` are the `var`s it uses from outside. -/
 def refineBranchWhy? (ctx : Ctx) (p : Pos) (body : SExpr) (muts : List String) : Option (Pos × String) :=
-  if ctx.selfClass.isSome then some (p, "it cannot be in a method yet, where it would lose Self")
+  if ctx.selfClass.isSome && Choice.anyE (fun
+      | .ident _ n | .member _ _ n => (n.splitOn "(super:)").length > 1
+      | _ => false) body then
+    some (p, "in a method, it cannot call (super:) yet")
   else if ctx.inDefer || ctx.inCtor || ctx.inBlock || ctx.inParamDefault || ctx.inArm || ctx.inBranch ||
       !ctx.defaults.isEmpty || ctx.inDefaultCheck then
     some (p, "it cannot be here yet: in a defer:, a constructor's items, a class's block: clause, a field's or parameter's default, or an arm of sync, race, rush or branch")
@@ -2003,6 +2006,24 @@ def refineBranchWhy? (ctx : Ctx) (p : Pos) (body : SExpr) (muts : List String) :
       | _ => false) false body then
     some (e.pos, "it cannot set a var from outside it yet")
   else none
+
+/-- In a method of class `c`, the branch of a cast that refines (#243), with
+    the members of `Self` it names bare (its fields and methods, not shadowed
+    by a local) made `Self.member`, as the elaborator reads them: its
+    function, of its own, takes `Self` as a parameter. -/
+partial def selfQualify (ctx : Ctx) (c : String) (e : SExpr) : SExpr :=
+  let isMethod (n : String) : Bool := ctx.hasMethod c n ||
+    ((ctx.types.methodOverloads.lookup n).map (·.any (ctx.hasMethod c ·))).getD false
+  let isField (n : String) : Bool := (ctx.types.fields c).any (·.1 == n)
+  let bound := Choice.localsOf e
+  let free (n : String) : Bool := (ctx.lookup n).isNone && !bound.contains n && n != "Self"
+  Choice.mapE (fun
+    | .app p (.ident q n) args br =>
+      if free n && (isMethod n || (isField n && !builtins.contains n && !softBuiltins.contains n)) then
+        some (.app p (.member q (.ident q "Self") n) (args.map (selfQualify ctx c)) br)
+      else none
+    | .ident p n => if free n && (isField n || isMethod n) then some (.member p (.ident p "Self") n) else none
+    | _ => none) e
 
 mutual
 partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
@@ -3543,10 +3564,15 @@ partial def elabCast (ctx : Ctx) (p : Pos) (T : String) (args : List SExpr) (bra
     method call is: `Typed.dispatch` types the call under the refinement,
     with the object (as `D`) and those locals passed at their refined
     types. `none` when the cast does not refine: the plain path. -/
-partial def elabRefinedIf (ctx : Ctx) (p _dp : Pos) (D T : String) (x : SExpr) (body : SExpr)
+partial def elabRefinedIf (ctx : Ctx) (p _dp : Pos) (D T : String) (x : SExpr) (body0 : SExpr)
     (elseE : Option SExpr) (exp : Option Ty) : EM (Option R) := do
   let env := ctx.types
   if !env.classes.contains T then return none
+  -- (in a method: the members of `Self` the branch names bare, as members
+  -- of `Self`, which its function takes as a parameter)
+  let body := match ctx.selfClass with
+    | some c => selfQualify ctx c body0
+    | none => body0
   let st0 ← get
   let rx ← elabE { ctx with canFail := true, inTaking := true } x none
   let some (S, sargs, targs, common, eqs, opened) := refiningCast? env T rx.ty (env.tvars.map (·.1))
@@ -3634,7 +3660,8 @@ partial def elabRefinedIf (ctx : Ctx) (p _dp : Pos) (D T : String) (x : SExpr) (
       params := ((D, dTy) :: sig).map (fun (n, t) => { name := n, ty := t.toSTy }) ++
         extra.map fun (n, _) => { name := s!"$type{n}", ty := .name n },
       tparams := tps.map fun (n, c) => { pos := p, name := n, constraint := if c then "comparable" else "type" },
-      specs, ret := ret.toSTy, subst := σ, opened := opened.map fun (n, v, _) => (n, v) }
+      specs, ret := ret.toSTy, subst := σ, opened := opened.map fun (n, v, _) => (n, v),
+      body := if ctx.selfClass.isSome then some body else none }
     modify fun st => if st.castNeeds.any (·.key == key) then st else { st with castNeeds := st.castNeeds ++ [lift] }
     -- (a placeholder: this elaboration goes no further)
     return some ⟨if decides then .prim .fail [] else .prim .userErr [], τ'⟩

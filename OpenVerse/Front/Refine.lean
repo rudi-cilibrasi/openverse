@@ -46,6 +46,9 @@ structure Lift where
       for them, with the name of `target`'s type parameter it stands for,
       whose value it reads from the object's hidden field. -/
   opened : List (String × String) := []
+  /-- The branch, when it is not taken from the source as written: in a
+      method, with the members of `Self` it names bare made `Self.member`. -/
+  body : Option SExpr := none
   deriving Inhabited
 
 def keyOf (p : Pos) (bound : String) : String := s!"{p.file}:{p.line}:{p.col}:{bound}"
@@ -128,7 +131,7 @@ def functions (lifts : List Lift) (tops : List STop) : List STop := Id.run do
       if let some l := lifts.find? (·.key == keyOf p d) then
         if !done.contains l.key then
           done := l.key :: done
-          out := out.push (.fn p l.name l.params l.tparams l.specs l.ret (substTypes l.subst body))
+          out := out.push (.fn p l.name l.params l.tparams l.specs l.ret (substTypes l.subst (l.body.getD body)))
     todo := kids e ++ todo
   return out.toList
 
