@@ -1,4 +1,6 @@
-# expect: child has a parent class and is below shower, which gives it fewer type arguments than its root class does: not supported yet (#276)
+# a class with a parent class below an interface that gives it fewer type
+# arguments than its parent's: the root counts against the interface with the
+# fewest anywhere below it (#209)
 shower := interface:
     Show():string
 base(t:type) := class:

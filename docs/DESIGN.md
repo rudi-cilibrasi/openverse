@@ -1095,8 +1095,11 @@ dispatch reaches, read those from their receiver instead of taking them
 of a parameter's object). Its other methods are called at known types,
 as before. Only classes with an override at or below them get the
 fields, and only reference classes' overrides read them. A class without
-a parent class counts its type parameters against the interface at or
-above it with the fewest (#276), as `rootArgCount` does: `box(t) :=
+a parent class counts its type parameters against the interface with the
+fewest that is at or above it, or above a class below it that leaves one
+of the type arguments that interface does not give a type parameter (one
+it fixes, its pins give), as `rootArgCount` does, so every class of the
+hierarchy agrees (#276, #209): `box(t) :=
 class(shower)` adds `t` to `shower`'s none, `pairbox(t, u) :=
 class(container(t))` adds `u`, and `box(t) := class(container(t),
 shower)` adds `t`, whichever interface comes first. Its Verse Core type
@@ -1104,10 +1107,11 @@ arguments start with those it gives the interface it lists with the most,
 and every interface's must be a prefix of them, so that a reference to an
 interface has a prefix of the class's and a dispatch from it opens the
 rest; `iargs` records an empty list for an interface without type
-parameters. A class with a parent class that lists an interface giving it
-fewer type arguments than its root's count, other than fixed ones, is
-refused: the classes above it would read as given what a dispatch from
-that interface opens. A `<suspends>`
+parameters. A subclass may so implement an interface that gives it fewer
+type arguments than its parent's (`sbox(t) := class(box(t), shower)`
+below `box(t) := class(container(t))`): `box` holds `t` in a hidden field
+too, and its overrides read it from the receiver, as a dispatch from
+`shower` opens it. A `<suspends>`
 override of such a class works (#251, see "Avoiding allocation and
 journaling"). A `spawn` in one, and a call whose omitted named argument's
 default has no type of its own in a dispatch that opens arguments, are
