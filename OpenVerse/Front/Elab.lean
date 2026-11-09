@@ -2402,9 +2402,13 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
     if !(r.e.mayFail ctx.sigProg) && (← get).fnNeeds.isEmpty then eerr p "logic{…} needs an expression that can fail"
     return ⟨Expr.logicE r.e, .logic⟩
   | .ite p conds thenE elseE =>
-    -- (a cast that refines type arguments, as the whole condition, #243)
-    if let [.decl dp d none false (.app _ (.ident _ T) [x] true)] := conds then
-      match ← elabRefinedIf ctx p dp d T x thenE elseE exp with
+    -- (a cast that refines type arguments, as the whole condition, #243,
+    -- or as its first clause: `if (D := T[X], rest) then B else E` is
+    -- `if (D := T[X]) then (if (rest) then B else E) else E`, the cast
+    -- having no effects to undo when `rest` fails)
+    if let .decl dp d none false (.app _ (.ident _ T) [x] true) :: more := conds then
+      let thenE' := Refine.castRest p more thenE elseE
+      match ← elabRefinedIf ctx p dp d T x thenE' elseE exp with
       | some r => return r
       | none => pure ()
     let (rc, ctxT) ← if Choice.hasChoice conds then elabOneClauses { ctx with canFail := true } conds
@@ -3578,7 +3582,7 @@ partial def elabCast (ctx : Ctx) (p : Pos) (T : String) (args : List SExpr) (bra
     eerr p s!"cannot cast {withArticle S} to {T}: {T}'s type arguments would be unknown (they are not {S}'s)"
   let targs := if env.isSub S T then env.upArgs S sargs T else env.argsBelow S sargs T
   if parametric && (env.coreArgs T targs).length > (env.coreArgs S sargs).length then
-    eerr p s!"cannot cast {withArticle r.ty.show} to {T}: {T} has type parameters that {S} does not have, which would be unknown here: a cast opens them only as the whole condition of an if, D := {T}[X], whose branch then has them (#250)"
+    eerr p s!"cannot cast {withArticle r.ty.show} to {T}: {T} has type parameters that {S} does not have, which would be unknown here: a cast opens them only as the first clause of an if's condition, D := {T}[X], whose branch then has them (#250)"
   let tty : Ty := .struct T targs
   if !bracket then
     if !env.isSub S T then
@@ -3590,7 +3594,7 @@ partial def elabCast (ctx : Ctx) (p : Pos) (T : String) (args : List SExpr) (bra
     eerr p s!"no class is below both {r.ty.show} and {T}, so {T}[…] would always fail"
   if parametric && env.coreArgs T targs != env.coreArgs S sargs then
     if (Ty.unifyEqs (fun _ _ => none) [] ((env.coreArgs S sargs).zip (env.coreArgs T targs))).isSome then
-      eerr p s!"cannot cast {withArticle r.ty.show} to {(Ty.struct T targs).show} here: their type arguments agree only under a refinement, which a cast gives only as the whole condition of an if, D := {T}[X], whose branch is then typed under it (#209, #243)"
+      eerr p s!"cannot cast {withArticle r.ty.show} to {(Ty.struct T targs).show} here: their type arguments agree only under a refinement, which a cast gives only as the first clause of an if's condition, D := {T}[X], whose branch is then typed under it (#209, #243)"
     eerr p s!"{withArticle r.ty.show} is never {withArticle T}: their type arguments differ, so {T}[…] would always fail"
   -- a reference: a test of its object's class (#34)
   if env.isRefClass S then return ⟨.heap (.isTag (common.map env.tagOf)) [r.e], tty⟩

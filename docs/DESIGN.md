@@ -1039,6 +1039,17 @@ below adds (`dupX(t, u) := class(dup(t))`), so a test of `dup` and
 `dupX` opens nothing, and one of `dupX` alone opens its `u`, which the
 call does not mention.
 
+A cast that is the first clause of a longer condition, `if (D := T[X],
+rest) then Body else Else`, is the same with `if (rest, true?) then Body
+else Else` as the branch (`Refine.castRest`, which both the elaborator and
+`Refine.functions` build): the cast has no effects that a failing `rest`
+would have to undo, so `Else` runs from the same state either way, and
+`true?` keeps `rest` a condition when it cannot fail itself, as the whole
+condition could. `Else` is written twice, once inside the function, but
+runs once. Leading casts chain: the second is the first clause of the
+`if` of the rest, lifted in turn (`Refine.functions` walks that `if` too). A cast after another clause stays refused: that clause's effects
+would have to be undone before `Else`.
+
 It takes two elaborations, as function values at closed types do
 (#214): the first finds the cast (`elabRefinedIf`), elaborates `Body`
 in the refined world (locals and `tvars` under `μ`) for its type, its
