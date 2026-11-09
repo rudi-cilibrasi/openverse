@@ -88,6 +88,13 @@ structure Callee where
       each call, and reads the result from a cell of its own type that the
       frame writes when done. -/
   newCellFn : Option Nat := none
+  /-- With `newCellFn`: the type its result cell holds, in the callee's type
+      variables. Its method's declared result at its class's type
+      arguments (#209), so that a caller dispatching from the declaration
+      passes a cell of its own type also when the override's result is
+      narrower (covariant): the frame writes its result to the cell by
+      subsumption. -/
+  cellRes : Option VTy := none
   /-- For a method of a class that fixes type arguments, called through
       `Typed.dispatch` (#142): helpers taking the receiver first, so that
       the code depending on the refinement keeps the rule's shape —
@@ -977,7 +984,8 @@ partial def suspendSelfGeneric (us : List Nat) (y g : Nat) (c : Callee) (rs : Li
   let .ref _ fargs := frameTy.subst (callInst acc .void none)
     | throw "internal error: a refined call's frame type"
   if !VTy.varsBelowL N fargs then
-    let ρθ := ((((env.S.fns[g]?).map (·.2)).getD VTy.void)).subst (callInst acc .void none)
+    -- (the type its result cell holds, at the dispatch's instance)
+    let ρθ := ((c.cellRes.orElse fun _ => (env.S.fns[g]?).map (·.2)).getD VTy.void).subst (callInst acc .void none)
     return ← suspendSelfOpen us y c rs valued ρθ μ
   suspendSelf us y c rs valued (.ref [c.tag, env.nilTag] fargs)
 
@@ -988,11 +996,15 @@ partial def suspendSelfGeneric (us : List Nat) (y g : Nat) (c : Callee) (rs : Li
     scheduler's roots are, #244). Each call makes a new frame
     (`g$newCell`, through an arrive helper of this call site, in the rule's
     shape), since resetting one would relate its type arguments to the new
-    receiver's. The cell's type is invariant, so an override with a narrower
-    (covariant) result is refused: `ρθ`, its result at the dispatch's
-    instance, must be the caller's type refined by `μ`. Its result goes through a cell of the caller's own type,
+    receiver's. Its result goes through a cell of the caller's own type,
     kept in the caller's frame: the refined arrive passes it to the frame,
-    which writes its result there when done (`g$resumeOwn`). -/
+    which writes its result there when done (`g$resumeOwn`). The cell's
+    type is invariant, so `ρθ`, the type the frame's cell holds at the
+    dispatch's instance, must be the caller's type refined by `μ`. The
+    frame's cell holds its method's declared result (`Callee.cellRes`,
+    `declaredRes`), so an override with a narrower (covariant) result is
+    called as any other (#209); a call that expects yet another result (a
+    class between them declaring the method with a third one) is refused. -/
 partial def suspendSelfOpen (us : List Nat) (y : Nat) (c : Callee) (rs : List Expr) (valued : Bool)
     (ρθ : VTy) (μ : Nat → VTy) : M (Expr × Expr) := do
   let env ← read
@@ -1004,10 +1016,10 @@ partial def suspendSelfOpen (us : List Nat) (y : Nat) (c : Callee) (rs : List Ex
   -- (the value of a refined call is always bound, so it has a type)
   let some τ := env.expTy | throw "internal error: a refined call's value has no expected type"
   if !valued || c.resField.isNone then throw "internal error: an opened override's value is not taken"
-  -- (the cell's type is invariant: the override's result, at the
+  -- (the cell's type is invariant: the type the frame's cell holds, at the
   -- dispatch's instance, must be the caller's refined one)
   if ρθ != τ.subst μ then
-    throw "a <suspends> override whose result type is narrower than the method's it overrides cannot be called yet through a dispatch that opens its class's type parameters (#251)"
+    throw "a <suspends> override cannot be called yet through a dispatch that opens its class's type parameters when the call expects the method's result as a class above it declares it and the override's frame keeps its result at another type: its own, or the method's first declaration's (#209)"
   let σs ← rs.mapM infer
   let wide : VTy := .ref [c.tag, env.schedTag] []
   let schedTy : VTy := .ref [env.schedTag] []

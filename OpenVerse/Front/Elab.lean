@@ -6441,6 +6441,58 @@ def inFnMsg (tops : List STop) (name msg : String) : String :=
   | some q => s!"{q.show}: in {name}: {msg}"
   | none => s!"in {name}: {msg}"
 
+/-- The type an opened override's result cell holds (#251, #209), in the
+    override's own type variables. A caller dispatching from a class above
+    it with fewer Verse Core type arguments (a dispatch that opens them)
+    passes a cell of the method's result as that class declares it, at the
+    dispatch's refinement, and a cell's type is invariant. So: the
+    override's own result when such a declaration gives it (the calls that
+    worked before go on working); else the result the method's first
+    declaration gives at the override's class's type arguments, as
+    `sameSigIn` relates the two, which the frame writes its narrower
+    (covariant) result to by subsumption; else (the first declarations, one
+    per root, #70, disagree, or its own is not below theirs in Verse Core)
+    its own. A qualified implementation `(q:)M` has the roots above `q`. -/
+def declaredRes (env : TyEnv) (allS : List Sig) (s : Sig) : VTy :=
+  let genv : TyEnv := { env with tvars := s.tparams.map fun (v, k) => (v, Ty.param v k) }
+  let own := s.ret.toVTy genv
+  let c := (s.name.splitOn ".").headD ""
+  let m0 := (s.name.drop (c.length + 1)).toString
+  let (m, qual) : String × Option String :=
+    if m0.startsWith "(" then match (m0.drop 1).toString.splitOn ":)" with
+      | [q, m'] => (m', some q)
+      | _ => (m0, none)
+    else (m0, none)
+  let sigAt (r : String) : Option Sig := allS.find? (·.name == s!"{r}.{m}")
+  let nps (r : String) : Nat := ((env.sparams.lookup r).getD []).length
+  let cps := ((env.sparams.lookup c).getD []).map fun (v, k) => Ty.param v k
+  let sOwn := s.tparams.drop (nps c)
+  -- (the declaration's result as an instance of `c` sees it: its own type
+  -- parameters renamed apart, then its class's at their arguments in `c`,
+  -- then its own as the override's, by position)
+  let atC (r : String) (rs : Sig) : Option VTy :=
+    let rOwn := rs.tparams.drop (nps r)
+    if rOwn.length != sOwn.length then none
+    else
+      let apart := rOwn.zipIdx.map fun ((x, k), i) => (x, Ty.param s!"$o{i}" k)
+      let back := sOwn.zipIdx.map fun ((x, k), i) => (s!"$o{i}", Ty.param x k)
+      let cls := (((env.sparams.lookup r).getD []).map (·.1)).zip (env.upArgs c cps r)
+      some (((rs.ret.subst apart).subst cls).subst back |>.toVTy genv)
+  -- (the classes above `c` on its slot of the method: for a qualified
+  -- implementation, those at or above `q`, or between it and `c`)
+  let onSlot (r : String) : Bool := match qual with
+    | some q => (env.supers q).contains r || env.isSub r q
+    | none => true
+  let declares (r : String) : Bool := (sigAt r).isSome && onSlot r
+  let core (d : String) : Nat :=
+    (env.coreArgs d (((env.sparams.lookup d).getD []).map fun (v, k) => Ty.param v k)).length
+  let opening := ((env.supers c).drop 1).filter fun r => declares r && core r < core c
+  if opening.any fun r => (sigAt r).bind (atC r) == some own then own else
+  let decls := (env.rootsOf declares (qual.getD c)).map fun r => (sigAt r).bind (atC r)
+  match decls with
+  | some d :: rest => if rest.all (· == some d) && own.sub d then d else own
+  | _ => own
+
 /-- The concurrency lowering (#156), at the end of `elabProgramCore`: each
     `<suspends>` function becomes a frame class and its resume, cancel and
     arm functions (`Suspend.lower`), after spawned dispatches are lifted
@@ -6655,6 +6707,13 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
   let opened (j : Nat) : Bool := match lows[j]? with
     | some (gi, _, _) => ((sigOf gi).map (!·.selfTps.isEmpty)).getD false
     | none => false
+  -- (the type such an override's result cell holds: its method's declared
+  -- result, so that a narrower, covariant, one is called as any other, #209)
+  let cellResOf (j : Nat) : VTy := match lows[j]? with
+    | some (gi, _, _) => match sigOf gi with
+      | some s => if opened j then declaredRes env allS s else (fsigs0[gi]!).2
+      | none => (fsigs0[gi]!).2
+    | none => .void
   -- (a branch's wrapper holds its home's frame, at its type arguments,
   -- which the scheduler's dispatch opens, #244)
   let ntpOfLow (j : Nat) : Nat := ((lows[j]?).map (·.2.2)).getD 0
@@ -6677,6 +6736,7 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
                resumeFn := if ntp == 0 then gi else ownBase + 4 * j + 1,
                cancelFn := some (if ntp == 0 then nFns + 4 * j + 2 else ownBase + 4 * j + 2),
                newCellFn := if opened j then some (ownBase + 4 * j + 3) else none,
+               cellRes := if opened j then some (cellResOf j) else none,
                passFields := if ntp == 0 then (List.range fns[gi]!.arity).map fun i => Suspend.slotBaseOf sites arms + i
                  else [],
                resField := some Suspend.resF, generic := ntp != 0, newSched := true,
@@ -6700,7 +6760,7 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
   -- lowering (another's is a stub, never called), and its `resumeOwn` also
   -- writes its result to its cell when it is done (#251)
   let cellTyOf (j : Nat) : VTy := match lows[j]? with
-    | some (gi, _, _) => .ref [resCellTag] [(fsigs0[gi]!).2]
+    | some _ => .ref [resCellTag] [cellResOf j]
     | none => .void
   let stub : Fn := { name := "$unused", arity := 0, nslots := 0, decides := false, writes := false,
                      body := .prim .userErr [] }

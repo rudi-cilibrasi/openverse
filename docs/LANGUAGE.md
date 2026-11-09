@@ -556,9 +556,9 @@ circle := class(shape, labelled):
     do not give: a `spawn` of a call of one of its methods on a value of
     its type (`spawn{P.Run()}` with `P` a `pairJ(int, string)` below
     `job(int)`: spawn it through the class above instead, `J:job(int) = P`
-    then `spawn{J.Run()}`), a `<suspends>` override whose
-    result is narrower than the method's it overrides when called through
-    code generic over the class above (#209); a class below
+    then `spawn{J.Run()}`), a call of a `<suspends>` override with a
+    narrower result, in code generic over a class above, from a class that
+    declares the method with yet another result type (#209); a class below
     an interface that does not give it its first type parameters, in
     order (`both(t, u) := class(container(t), sink(u))`, #276); a dispatch, in code generic over a
     class, to a subclass whose fixed type arguments relate to ones the
