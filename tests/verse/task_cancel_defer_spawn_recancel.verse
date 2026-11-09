@@ -1,6 +1,6 @@
 # a defer calls an immediate function that spawns a task whose first run
-# cancels the task being unwound (not running, not yet done). Expected:
-# V defer once, killer done, end.
+# cancels the task being unwound: that changes nothing, as the task is
+# marked cancelled before it unwinds (#261)
 Killer(T:task(int))<suspends>:void =
     T.Cancel()
     Print("killer done")

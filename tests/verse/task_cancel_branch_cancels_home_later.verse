@@ -1,10 +1,6 @@
-# (#260, #261) A starts a branch that, resumed later by the
-# scheduler (A is waiting, so not "running"), cancels A. A unwinds at once,
-# and its exit cancels its branches, among them the branch that is running
-# Cancel(): its defer runs, and then it goes on running ("after cancel")
-# until its next wait. Expected: no code of the branch runs after its defer,
-# e.g. A defer / after cancel / branch defer / end (a running branch
-# cancelled at its next wait, as a running task is)
+# a branch, resumed by the scheduler, cancels the task whose function started
+# it: the task is running while the branch runs, so it is cancelled when the
+# branch waits next, and the branch goes on until then (#260)
 A(Me:event(task(int)))<suspends>:int =
     defer:
         Print("A defer")

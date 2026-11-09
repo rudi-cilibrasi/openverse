@@ -1,7 +1,5 @@
-# A rush loser (its own task after the rush) cancels the task whose function
-# contains the rush; A is suspended, so it unwinds at once, and its exit
-# cancels the loser that is running Cancel(). Expected as
-# branch_cancels_home_later: A defer / loser defer / end
+# a rush loser cancels the task whose function holds the rush: as a branch
+# does, it goes on until it waits next, and the task is cancelled then (#260)
 A(Me:event(task(int)))<suspends>:int =
     defer:
         Print("A defer")

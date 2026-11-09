@@ -1,0 +1,6 @@
+V inner defer
+waiter defer
+V outer defer
+main cancelled V
+end
+exit=0

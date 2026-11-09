@@ -538,8 +538,9 @@ helper written in Verse: it waits at the leaf `$WaitDone` (whose frame
 tests the done flag, non-generically), then takes the result.
 
 A `branch` is an arm over the enclosing frame, run as a root through a
-wrapper `[pc, frame]`. The wrapper's trampoline resumes the arm unless the
-function stopped it. Every exit of the function, and its cancel function,
+wrapper `[pc, frame, owner]`, its owner the task whose code started it
+(the scheduler's `$CurTask`, a dummy task for `Main`'s code). The
+wrapper's trampoline resumes the arm unless the function stopped it. Every exit of the function, and its cancel function,
 stops its branches: it marks each wrapper done (through a test of its
 class, kept in a frame field) and cancels each arm still pending. A frame
 reused for another call so never shares an arm with an old wrapper. They
@@ -557,12 +558,20 @@ ends, the others that are pending are registered as roots (not run again
 at once) instead of cancelled.
 
 `T.Cancel()` reaches the task's root (recorded in the task when it starts)
-through `$cancelRoot`, which calls the root's cancel function. That unwinds
-it as a race's loser is unwound, and marks the task cancelled. A task that
-cancels itself is marked running by its trampoline, so it only asks the
-scheduler, which cancels the root after its resumption returns. The same
-request is how cancellation spreads: the leaf `$WaitDone`, seeing a
-cancelled task, asks the scheduler to cancel the root that awaits it.
+through `$cancelRoot`, which calls the root's cancel function. That marks
+the task cancelled and done first, so that a cancel of it while it unwinds
+changes nothing (#261), and unwinds it as a race's loser is unwound. A
+task whose code is running is marked running: by its trampoline while its
+root runs, and by a branch's trampoline, for the branch's owner, while the
+branch runs (#260); cancelling a running task only records a request in
+it (`$CancelReq`), which the trampoline that marked it running takes
+after the run returns, unless the task ended in that run (#253). The
+scheduler's request is how cancellation spreads: the leaf `$WaitDone`,
+seeing a cancelled task, asks the scheduler to cancel the root that awaits
+it; a root's first run, inline in its parent's, takes the request for its
+own root, around which its start function saves and clears the parent's.
+A task's trampoline sets `$CurTask` while its root runs, so that a branch
+started there records the task as its owner.
 
 An `event(t)` keeps a list of waiter records (each an `$evrec(t)`, also
 below `$taskBase`). `E.Await()` first drops the records at the head that are

@@ -1,7 +1,5 @@
-# (#260, #261) as branch_cancels_home_later, and after Cancel()
-# the branch calls H, which has a defer and waits. The branch was already
-# unwound (its defer ran) and is stopped at H's wait: H's defer never runs.
-# Expected: every defer that was entered runs once (H defer included).
+# as task_cancel_branch_cancels_home_later, and the branch then calls H,
+# which has a defer and waits: every defer entered runs once (#260)
 H()<suspends>:void =
     defer:
         Print("H defer")

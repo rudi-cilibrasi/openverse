@@ -1,8 +1,5 @@
-# (#260) a branch
-# that cancels the task running its own function is stopped while it runs.
-# Its defer runs at once, in the middle of its code, and its code then goes
-# on ("B goes on" after "B defer"). Expected, as for a task that cancels
-# itself: B unwinds at its next wait, so "B goes on" then "B defer".
+# a branch that cancels the task running its own function goes on until it
+# waits next; the task is cancelled then, its branch stopped with it (#260)
 F(Me:event(task(int)))<suspends>:int =
     defer:
         Print("F defer")

@@ -5888,7 +5888,7 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
       .call (trampOf k + 1) [schedLit, .call (nFns + 4 * (user.length + k)) (schedLit :: .local t :: hs)]) fn.body
     fns := fns.set! gi { fn with writes := true, body }
   -- each `branch` (numbered across the functions, in order) gets a
-  -- wrapper class `[pc, frame]` and its `tramp`, `start` and `stop`
+  -- wrapper class `[pc, frame, owner]` and its `tramp`, `start` and `stop`
   let mut branchOf : Array (List Nat) := #[]
   let mut branchHome : Array Nat := #[]
   for (j, part) in (List.range L).zip parts.toList do
@@ -6304,7 +6304,7 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
       | .heap op _ => Expr.heap op [fr]
       | e => e
     let wbody : Expr := .ite (.prim .eq [.heap (.get doneA) [fr], Suspend.int 0])
-      (.seq (Suspend.seqVoid [.call (armRes + 1) (fr :: .local 1 :: pass), .heap (.set doneA) [fr, Suspend.int 2]])
+      (.seq (Suspend.seqVoid [.heap (.set doneA) [fr, Suspend.int 2], .call (armRes + 1) (fr :: .local 1 :: pass)])
         Suspend.vd) Suspend.vd
     let wfn : Fn := { name := s!"$branch{K}$cancelT", arity := 2, nslots := 2, decides := false, writes := true, body := wbody }
     cancelFns := cancelFns.push wfn
