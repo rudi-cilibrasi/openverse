@@ -2364,6 +2364,8 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
     return ⟨.lit .void, .void⟩
   | .app p (.ident _ "$inline") (.ident _ f :: _) false =>
     if ctx.inTaking then
+      if ctx.liftWhy != "" then
+        eerr p s!"a call of {f}, which has several values, cannot be lifted from {ctx.liftWhy}, for now (#283)"
       eerr p s!"a call of {f}, which has several values, cannot be lifted from here, for now (#235)"
     eerr p (s!"{f} has several values, so a call of it must be in a failure context that takes them: " ++
       "an if condition, a for's clauses, first{…}, option{…}, logic{…}, not, or the left of or (#235)")
