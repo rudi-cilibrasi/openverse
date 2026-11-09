@@ -1265,7 +1265,17 @@ arguments start with those it gives the interface it lists with the most,
 and every interface's must be a prefix of them, so that a reference to an
 interface has a prefix of the class's and a dispatch from it opens the
 rest; `iargs` records an empty list for an interface without type
-parameters. A subclass may so implement an interface that gives it fewer
+parameters. An interface may give a parent interface other than its own
+type parameters (`c2(t) := interface(container([]t))`, #53): its Verse
+Core type arguments are then that interface's at the ones it gives, then
+its other type parameters (`[]t, t`), as a class's start with its
+parent's, and a class below it has those first (`CDef.ifaceCoreS` in
+source types, `TyEnv.coreArgs` in Verse Core). So a `box(t) :=
+class(c2(t))` is a `container([]t)` by Core's prefix subtyping, has a pin
+`[]$1` on `container`'s argument and holds `t` in a hidden field, and a
+dispatch from `container(u)` refines `u` to `[]t`. A class that reaches
+one interface at two instances through the interfaces it lists (also
+`class(pi(int), pi(string))`) is refused. A subclass may so implement an interface that gives it fewer
 type arguments than its parent's (`sbox(t) := class(box(t), shower)`
 below `box(t) := class(container(t))`): `box` holds `t` in a hidden field
 too, and its overrides read it from the receiver, as a dispatch from

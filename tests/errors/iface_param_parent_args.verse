@@ -1,4 +1,4 @@
-# expect: must give container its own type parameters
+# expect: box implements container at two instances, container(t) and container([]t), through the interfaces it lists
 container(t:type) := interface:
     Get():t
 c2(t:type) := interface(container([]t)):

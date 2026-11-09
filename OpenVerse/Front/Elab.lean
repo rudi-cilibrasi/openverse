@@ -437,7 +437,10 @@ partial def TyEnv.coreArgs (env : TyEnv) (d : String) (args : List Ty) : List Ty
     -- (#53), then its other type parameters: those it gives the interface
     -- it lists with the most, of which every other one's are a prefix (an
     -- interface it lists without type arguments gives none, #276)
-    let ias := (env.info d).ifaces.filterMap fun i => (env.iargs.lookup (d, i)).filter (!·.isEmpty)
+    -- (each at the Verse Core type arguments the interface gives its own
+    -- parents in turn: `c2(t) := interface(container([]t))`'s are `[]t, t`)
+    let ias := (env.info d).ifaces.filterMap fun i =>
+      ((env.iargs.lookup (d, i)).filter (!·.isEmpty)).map (env.coreArgs i ·)
     match ias.foldl (fun (b : Option (List Ty)) ia => match b with
         | some b => if b.length < ia.length then some ia else some b
         | none => some ia) none with
@@ -6215,6 +6218,28 @@ structure CDef where
   overrides : List String
   methods : List STop
 
+/-- An interface's Verse Core type arguments at `args`, in source types (as
+    `TyEnv.coreArgs` has them, #53): those it gives the parent interface it
+    lists with the most, in turn, then its other type parameters
+    (`c2(t) := interface(container([]t))` at `int` gives `[]int, int`). -/
+partial def CDef.ifaceCoreS (cdefs : List CDef) (i : CDef) (args : List STy) : List STy :=
+  let σ := i.tps.map (·.name) |>.zip args
+  let pas := (i.parents.zip i.parentArgs).filterMap fun (q, qa) =>
+    if qa.isEmpty then none else (cdefs.find? (·.name == q)).map fun qd => CDef.ifaceCoreS cdefs qd qa
+  let longest := pas.foldl (fun b a => if b.length < a.length then a else b) []
+  if longest.isEmpty then args else
+  let others := i.tps.filter fun tp => !longest.any fun | .name v => v == tp.name | _ => false
+  (longest ++ others.map fun tp => STy.name tp.name).map (·.substNames σ)
+
+/-- The interfaces `i(args)` reaches through the parent interfaces it lists,
+    with their type arguments (#53): itself first. -/
+partial def CDef.ifaceInstancesS (cdefs : List CDef) (i : CDef) (args : List STy) : List (String × List STy) :=
+  let σ := i.tps.map (·.name) |>.zip args
+  (i.name, args) :: (i.parents.zip i.parentArgs).flatMap fun (q, qa) =>
+    match cdefs.find? (·.name == q) with
+    | some qd => if qd.isIface then CDef.ifaceInstancesS cdefs qd (qa.map (·.substNames σ)) else []
+    | none => []
+
 /-- The names a type mentions, in order of first occurrence. -/
 partial def STy.names : STy → List String
   | .name m => [m]
@@ -7899,13 +7924,9 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
           else throw s!"{p.show}: unknown class or interface '{q}'"
       if qargs.length != qd.tps.length then
         throw s!"{p.show}: {q} takes {qd.tps.length} type argument(s), found {qargs.length}"
-      -- (an interface's type arguments are its references'; one that extends
-      -- a parametric interface gives it its own, unchanged, #53)
-      if cd.isIface && qd.isIface && !qargs.isEmpty then
-        let own := cd.tps.map (·.name)
-        let given := qargs.map fun | .name x => x | _ => "?"
-        if given != own then
-          throw s!"{p.show}: interface {cd.name} must give {q} its own type parameters, in order, as in interface({q}({", ".intercalate own})) (#53)"
+      -- (an interface that extends a parametric interface may give it any
+      -- type arguments: its Verse Core type arguments start with that
+      -- interface's at them, as a class's start with its parent's, #53)
 
       if qd.isIface then ifaces := ifaces.push q
       else
@@ -8041,8 +8062,14 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
           -- (its Verse Core type arguments: those it gives the interface it
           -- lists with the most, then its other type parameters, as
           -- `coreArgs` has them; all of them when it lists no interface)
+          -- (each at that interface's Verse Core type arguments, also those
+          -- it gives its own parents, #53)
           let longest := ((cd.parents.zip cd.parentArgs).filter fun (q, _) => (henv.info q).isIface).foldl
-            (fun (b : List STy) (_, qa) => if b.length < qa.length then qa else b) []
+            (fun (b : List STy) (q, qa) =>
+              let qa := match cdefs.find? (·.name == q) with
+                | some qd => if qa.isEmpty then qa else qd.ifaceCoreS cdefs qa
+                | none => qa
+              if b.length < qa.length then qa else b) []
           let others := cd.tps.filter fun tp => !longest.any fun | .name v => v == tp.name | _ => false
           let coreS := longest ++ others.map fun tp => STy.name tp.name
           -- (as a class below gives them: through its parents' arguments)
@@ -8336,10 +8363,22 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   -- whose parent's type arguments do not give them (#209, #276)
   for cd in cdefs do
     if !cd.isIface then
+      -- (an interface reached through two parents at different type
+      -- arguments: the class would implement two instances of it, #53)
+      let insts := (cd.parents.zip cd.parentArgs).flatMap fun (q, qa) =>
+        match cdefs.find? (·.name == q) with
+        | some qd => if qd.isIface then qd.ifaceInstancesS cdefs qa else []
+        | none => []
+      let sh (ts : List STy) : String := ", ".intercalate (ts.map Choice.styShow)
+      for (i, ia) in insts do
+        if let some (_, ib) := insts.find? fun (j, jb) => j == i && sh jb != sh ia then
+          throw s!"{cd.pos.show}: {cd.name} implements {i} at two instances, {i}({sh ia}) and {i}({sh ib}), through the interfaces it lists: a class implements one instance of an interface (#53)"
       let ps := ((env.sparams.lookup cd.name).getD []).map fun (v, k) => Ty.param v k
       for i in (env.supers cd.name).filter (env.info · |>.isIface) do
         let ia := env.upArgs cd.name ps i
-        if !(ia.isPrefixOf (core cd.name)) then
+        -- (at the interface's Verse Core type arguments, which also hold
+        -- those it gives its own parents, `c2(t)`'s `[]t, t`)
+        if !((env.coreArgs i ia).isPrefixOf (core cd.name)) then
           let showArgs (ts : List Ty) : String := if ts.isEmpty then "none" else ", ".intercalate (ts.map Ty.show)
           if ia.length < (core cd.name).length then
             throw s!"{cd.pos.show}: {cd.name} gives {i} the type arguments {showArgs ia}, but its own are {showArgs (core cd.name)}: a class below an interface that does not give it its first type parameters, in order, is not supported yet (#276)"
