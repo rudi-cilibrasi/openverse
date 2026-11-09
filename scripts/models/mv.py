@@ -5,7 +5,8 @@
 # for the reviews of #234, #239 and #245 (choice and functions with several values, #208, #235),
 # laziness from the review of #267 (generators taken where they are consumed, #246),
 # exact effects where the first success is taken from the review of #275,
-# consumers in methods from the review of #279, a return in a test's clauses from #284 and #287.
+# consumers in methods from the review of #279, a return in a test's clauses from #284 and #287,
+# alternatives with several values from the review of #296.
 """Random programs with choices INSIDE expressions (PR #234, phase 2), and an
 independent model written from docs/LANGUAGE.md's "Choice" section (not from
 scripts/gen-choice.py, and not from the lifting code).
@@ -46,6 +47,9 @@ flags: heavy     (with bif: more of them, longer chains, longer conditions)
        noforset  (no op= / indexed set in a for)
        noret     (no `if (A op B) then return else true` among a test's clauses,
                   on with lazy otherwise, #284/#287)
+       noaltch   (no alternative of a choice with several values of its own: a
+                  choice, a call of a function with several values or of a
+                  generator, #296; on with lazy otherwise)
 """
 import copy
 import os
@@ -226,6 +230,13 @@ METH = LAZY and 'nometh' not in flags
 # generator with effects where the first success is taken (run as a function
 # of its own, #275), such a clause is refused (#287), and so is the program.
 RET = LAZY and 'noret' not in flags
+# ---- #296, flag altch (on with lazy; noaltch turns it off): an alternative
+# of a choice in a test's code may have several values of its own (a choice
+# inside an expression, a call of a function with several values or of a
+# generator). Its values come in order, alternative by alternative, with the
+# usual undo rules: the CPS model needs nothing new. Not in a set's value nor
+# in a branchy if, where it is still refused, nor in the generated functions.
+ALTCH = LAZY and 'noaltch' not in flags and 'cf' not in flags
 REFUSED = [False]
 
 
@@ -236,7 +247,7 @@ class Return(Exception):
 
 # the kinds of node whose insides are failure contexts of their own (or an
 # inlined function's arguments), where a lifted call's clauses are not the test's
-NESTED = ('not', 'logic', 'optor', 'orx', 'ifx', 'bif', 'mcall')
+NESTED = ('not', 'logic', 'optor', 'orx', 'ifx', 'bif', 'mcall', 'choice')
 
 
 def lift_pos(x):
@@ -306,10 +317,14 @@ def gen_e(scope, vars_, d, ch):
         if MV:
             PROD[0] *= n
         alts = []
+        altch = (ALTCH and CTX['fmax'] is None and not CTX['nochoice'] and not CTX.get('inset')
+                 and not CTX.get('inbif'))
         for _ in range(n):
             if R.random() < 0.08 and d < 3:
                 # a directly nested choice is spliced
                 alts.append(('choice', [gen_e(scope, vars_, d + 2, False) for _ in range(2)]))
+            elif altch and d < 3 and R.random() < 0.3:
+                alts.append(gen_e(scope, vars_, d + 1, True))     # (with several values of its own, #296)
             else:
                 alts.append(gen_e(scope, vars_, d + 1, False))
         return ('choice', alts)
@@ -844,6 +859,15 @@ def gen_alts(scope, vars_, d):
 
 
 def gen_bif(scope, vars_, d):
+    saved_inbif = CTX.get('inbif')
+    CTX['inbif'] = True       # (no alternative with values of its own in a branchy if, #296)
+    try:
+        return gen_bif0(scope, vars_, d)
+    finally:
+        CTX['inbif'] = saved_inbif
+
+
+def gen_bif0(scope, vars_, d):
     arms = []
     for _ in range(R.choice([1, 1, 2, 3, 4] if 'heavy' in flags else [1, 1, 2, 3])):
         saved = CTX['nofail']
@@ -996,13 +1020,19 @@ def gen_clauses(scope, vars_, d, n, allow_gen, inner=False, lastval=False, isfor
             cl.append(('filter', gen_cmp(scope, vars_, d, True)))
         elif k < 0.64 and vars_ and not CTX.get('nobset'):
             op = '=' if (isfor and 'noforset' in flags) else R.choice(['=', '+=', '*='])
+            CTX['inset'] = True
             cl.append(('setv', R.choice(vars_), op, gen_e(scope, vars_, d, True)))
+            CTX['inset'] = False
         elif k < 0.69 and not inner:
             op = '=' if (isfor and 'noforset' in flags) else R.choice(['=', '+='])
             if not (isfor and 'noforset' in flags):
+                CTX['inset'] = True
                 cl.append(('seti', op, gen_e(scope, vars_, d, True)))
+                CTX['inset'] = False
         elif k < 0.73 and not inner and not (isfor and 'noforset' in flags):
+            CTX['inset'] = True
             cl.append(('setf', gen_e(scope, vars_, d + 1, True)))
+            CTX['inset'] = False
         elif k < 0.79:
             if not CTX['noprint']:
                 cl.append(('print', fresh("c")))
