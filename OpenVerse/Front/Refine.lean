@@ -41,6 +41,11 @@ structure Lift where
   /-- The refinement, on the enclosing function's type parameters, for the
       types written in the branch. -/
   subst : List (String × STy)
+  /-- The type arguments the cast opens (#250), which `target` has and the
+      object's type does not name: each type parameter of the function made
+      for them, with the name of `target`'s type parameter it stands for,
+      whose value it reads from the object's hidden field. -/
+  opened : List (String × String) := []
   deriving Inhabited
 
 def keyOf (p : Pos) (bound : String) : String := s!"{p.file}:{p.line}:{p.col}:{bound}"
