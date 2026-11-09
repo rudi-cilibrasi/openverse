@@ -2345,6 +2345,62 @@ def contLiftOf (ctx c2 : Ctx) (p : Pos) (b : String) (rest : List SExpr)
            binds, sets := sets.map (·.name), args := SExpr.ident p b :: caps.map (fun l => SExpr.ident p l.name),
            varBinds := (bls.filter (·.mutable)).map (·.name) }
 
+/-- (#335, phase 2) Whether a `for`'s body may run in a failure context, as
+    in a continuation: no `return`, no `break`, no suspension (none in a
+    function that cannot suspend), no `Signal`, no other marker than those
+    of choices and calls with several values. Conservative. -/
+def forBodySafe (ctx : Ctx) (body : SExpr) : Bool :=
+  let safeMarkers := ["$inline", "$choice", "$excl", "$alt", "$firstP", "$first", "$each", "$noLift", "$fxOf"]
+  !ctx.suspends && !(Choice.anyE (fun
+    | .ret .. | .brk _ => true
+    | .app _ (.ident _ f) _ _ =>
+      (f.startsWith "$" && !safeMarkers.contains f) || f == "Sleep" ||
+        ((ctx.sig? f).map fun s => s.suspends || s.fx.contains "no_rollback").getD false
+    | .app _ (.member _ _ m) _ _ => ["Signal", "Await", "Cancel", "Subscribe"].contains m
+    | _ => false) body)
+
+/-- (#335, phase 2) The continuation of a composed choice in a `for`: a
+    function that runs the clauses after it (`rest`) and the body, failing
+    where their first filter fails (`$forFirst`), and gives the values (and
+    the final values of the `var`s they set), called from each alternative's
+    own `for`. Its binding's type `bty`, the values' type `vty`. Or why not,
+    and the clauses are copied, as before. -/
+def contForLiftOf (ctx : Ctx) (p : Pos) (b : String) (bty vty : Ty) (rest : List SExpr) (body : SExpr) :
+    Except String Choice.FirstLift := do
+  if ctx.inCtor || ctx.inParamDefault || ctx.inBlock || ctx.inDefer || !ctx.defaults.isEmpty then
+    throw "in a constructor, a default or a defer"
+  let key := "f" ++ contKey ctx p b (rest ++ [body])
+  let σt : List (String × STy) := ctx.types.tvars.filterMap fun (n, t) =>
+    if n.startsWith "$tp" then some (n, t.toSTy) else none
+  let rest := rest.map (Refine.substTypes σt)
+  let body := Refine.substTypes σt body
+  let (rest, body) ← match ctx.selfClass with
+    | some c =>
+      if (body :: rest).any (Choice.anyE fun | .ident _ "(super:)" | .member _ (.ident _ "(super:)") _ => true | _ => false) then
+        throw "(super:)"
+      pure (rest.map (selfQualify ctx c), selfQualify ctx c body)
+    | none => pure (rest, body)
+  if (Refine.findPart (fun | .ret .. => true | _ => false) false (.block p (rest ++ [body]))).isSome then throw "a return"
+  if (Refine.findPart (fun | .brk _ => true | _ => false) true (.block p rest)).isSome then throw "a break"
+  let caps : List Local := (Choice.namesUsed (.block p (rest ++ [body]))).eraseDups.filterMap ctx.lookup
+  let setNames := Choice.setsIn (.block p (rest ++ [body]))
+  let sets := caps.filter fun l => l.mutable && setNames.contains l.name
+  if (caps.map (·.ty) ++ [bty, vty]).any (fun t => !(Ty.paramsC t).isEmpty) then throw "in a generic function"
+  let name := s!"$contf{p.line}_{p.col}_{key.hash}" ++ (if p.file.isEmpty then "" else s!"_{p.file}")
+  let heap := ["reads", "writes", "allocates"].filter fun k => ctx.fnFx.contains k
+  let copies := sets.map fun l => SExpr.decl p l.name (some l.ty.toSTy) true (.ident p s!"{l.name}$in")
+  let params : List SParam := { name := b, ty := bty.toSTy } ::
+    caps.map fun l => { name := if sets.any (·.name == l.name) then s!"{l.name}$in" else l.name, ty := l.ty.toSTy }
+  let vals := s!"{b}$vals"
+  let ffirst : SExpr := .app p (.ident p "$forFirst") [.block p rest, body] false
+  let ret : STy := if sets.isEmpty then .arr vty.toSTy else .tup (.arr vty.toSTy :: sets.map (·.ty.toSTy))
+  let bodyE : SExpr := if sets.isEmpty then .block p (copies ++ [ffirst]) else
+    .block p (copies ++ [.decl p vals none false ffirst, .tuple p (.ident p vals :: sets.map fun l => SExpr.ident p l.name)])
+  return { key, pos := p, name, params,
+           specs := (if heap.isEmpty then ["computes"] else heap) ++ ["decides"],
+           ret, body := bodyE, binds := [], sets := sets.map (·.name),
+           args := SExpr.ident p b :: caps.map (fun l => SExpr.ident p l.name) }
+
 /-- `for`: clauses are generators, bindings and filters; each generator opens
     a nested `forE`, and nested results are flattened (cartesian product,
     leftmost outermost). The clauses are a failure context; the body is not.
@@ -2484,14 +2540,68 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
           let moreClauses := more.flatMap fun (g', fs') => g' :: fs'
           let bctx : Ctx := { c with canFail := ctx.canFail, inTaking := ctx.inTaking, inLoop := ctx.inLoop,
                                      inRepeat := ctx.inRepeat }
-          let mut parts : List R := []
-          for (a, i) in b.alts.zipIdx do
+          let liftA (a : SExpr) (i : Nat) : List SExpr :=
             -- (its exclusive choices kept: this for compiles them, #314)
-            let lifted := Choice.prepare [.decl gp b.name b.ty false a] (choiceValues c) (choiceField c)
+            Choice.prepare [.decl gp b.name b.ty false a] (choiceValues c) (choiceField c)
               (fieldOrder := choiceOrder c)
               (site := s!"{site}a{i}") (keepExcl := true)
-            parts := parts ++ [← elabForWith elabAlts elabBranchAlts elabE elabInts elabLoopGen elabSeq bctx p
-              (lifted ++ fs ++ moreClauses) body (prepared := true)]
+          let forW (cl : List SExpr) (bd : SExpr) : EM R :=
+            elabForWith elabAlts elabBranchAlts elabE elabInts elabLoopGen elabSeq bctx p cl bd (prepared := true)
+          -- (#335, phase 2: another such choice, or an exclusive one, in the
+          -- clauses after it, and a body that may run in a failure context:
+          -- those clauses and the body a function of their own, which each
+          -- alternative's for calls, instead of a copy in each)
+          let restCl := fs ++ moreClauses
+          let isCF (x : SExpr) : Bool := isExcl x || (match Choice.binding? x with
+            | some { place := none, branchy := none, each := none, alts := xs, .. } => xs.any Choice.hasLiftable
+            | _ => false)
+          let hasLoop := (b.alts ++ restCl ++ [body]).any
+            (Choice.anyE fun | .app _ (.ident _ "$loop") _ _ => true | _ => false)
+          if restCl.any isCF && !hasLoop && forBodySafe c body then
+            let req := c.types.loopRequests.find? (·.key == "f" ++ contKey c gp b.name (restCl ++ [body]))
+            let fits (l : Choice.FirstLift) : Bool :=
+              (l.specs.filter (["reads", "writes", "allocates"].contains ·)).all c.fnFx.contains
+            if let some l := req then
+              if fits l then
+                let kv := s!"{site}v"
+                let mut parts : List R := []
+                for (a, i) in b.alts.zipIdx do
+                  let call : SExpr := .app gp (.ident gp l.name) l.args true
+                  let callCl : List SExpr := if l.sets.isEmpty then [.decl gp kv none false call] else
+                    let kt := s!"{site}t"
+                    [.decl gp kt none false call] ++
+                      l.sets.zipIdx.map (fun (m, j) => SExpr.set gp (.ident gp m) none (.app gp (.ident gp kt) [.int gp ((j + 1 : Nat) : Int)] false)) ++
+                      [.decl gp kv none false (.app gp (.ident gp kt) [.int gp 0] false)]
+                  let r ← forW (liftA a i ++ callCl) (.ident gp kv)
+                  match r.ty with
+                  | .arr (.arr t) => parts := parts ++ [⟨.prim .flatten [r.e], .arr t⟩]
+                  | _ => eerr gp "internal: a continuation's values"
+                let some r0 := parts.head? | eerr gp "internal: a choice without alternatives"
+                return ⟨parts.tail.foldl (fun acc r => p2 .concat acc r.e) r0.e, r0.ty⟩
+            else if let some a0 := b.alts.head? then
+              -- (the first elaboration: each alternative alone, for its
+              -- binding's type, and the first with the clauses after it and
+              -- the body, for the values' type; its code is not kept)
+              let st0 ← get
+              let mut tys : List Ty := []
+              for (a, i) in b.alts.zipIdx do
+                let r ← forW (liftA a i) (.ident gp b.name)
+                if let .arr t := r.ty then tys := tys ++ [t]
+              let r0 ← forW (liftA a0 0 ++ restCl) body
+              let same := tys.length == b.alts.length && tys.all (some · == tys.head?)
+              match (do
+                  let some bty := tys.head? | throw "no type"
+                  let .arr vty := r0.ty | throw "no values"
+                  if !same then throw "alternatives of different types"
+                  contForLiftOf c gp b.name bty vty restCl body) with
+              | .ok lift =>
+                let use : LoopUse := { g := "", pos := gp, itemCode := .lit .void, argSet := none, lift := .ok lift }
+                modify fun st => { st with loopFirst := st.loopFirst ++ [use] }
+                return r0
+              | .error _ => set st0
+          let mut parts : List R := []
+          for (a, i) in b.alts.zipIdx do
+            parts := parts ++ [← forW (liftA a i ++ fs ++ moreClauses) body]
           let some r0 := parts.head? | eerr gp "internal: a choice without alternatives"
           if let some r := parts.find? (·.ty != r0.ty) then
             eerr gp s!"the for's values have the type {r0.ty.show} for one alternative of this choice and {r.ty.show} for another"
