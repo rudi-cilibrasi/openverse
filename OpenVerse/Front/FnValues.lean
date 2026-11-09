@@ -265,10 +265,24 @@ partial def plainComparable : STy → Bool
   | .map k v => plainComparable k && plainComparable v
   | _ => false
 
+/-- A type with `string` spelled `[]char` everywhere, so that equal types
+    compare equal (#231). -/
+partial def normS : STy → STy
+  | .name "string" => .arr (.name "char")
+  | .arr t => .arr (normS t)
+  | .opt t => .opt (normS t)
+  | .tup ts => .tup (ts.map normS)
+  | .map a b => .map (normS a) (normS b)
+  | .app n ts => .app n (ts.map normS)
+  | .fn ps es r => .fn (ps.map normS) es (normS r)
+  | t => t
+
 /-- `a` is `b` or a subtype the elaborator converts at a parameter or a
     result (#214): `int` to `rational`, a class to one above it. Nothing
     else, so a value class made for a function type always elaborates. -/
-def subAt (anc : String → List String) (a b : STy) : Bool :=
+def subAt (anc : String → List String) (a0 b0 : STy) : Bool :=
+  let a := normS a0
+  let b := normS b0
   reprStr a == reprStr b || match a, b with
     | .name "int", .name "rational" => true
     | .name x, .name y => (anc x).contains y
@@ -457,26 +471,46 @@ def desugar (tops : List STop) (extra : List STop := []) (requests : List (Strin
   -- (#214) a value class per closed function type a value is asked for at
   -- and fits other than at its own types, `F$fn$k`, implementing that type's
   -- shape (and those with more effects) at the type's own arguments
-  let variant (p : Pos) (n : String) (own : Shape) (k : Nat) (qs : List STy) (es : List String) (u : STy) :
-      Option STop :=
+  let variant (p : Pos) (n : String) (own : Shape) (k : Nat) (qs : List STy) (es : List String) (u : STy)
+      (args : List SExpr) : Option STop :=
     let s := shapeOf qs.length es
-    if !own.within s then none else
+    -- (the effects only: a tuple parameter may be flattened, #231)
+    if !(shapeOf qs.length own.effs).within s then none else
     let fits := shapes.filter (s.within ·)
-    let args := (List.range qs.length).map fun i => SExpr.ident p s!"$X{i}"
     let methods := fits.map fun s' =>
       STop.fn p s'.call (params qs) [] (s'.effs ++ ["override"]) u (.app p (.ident p n) args own.decides)
     let fits := s :: fits.filter (· != s)
     some (.classDef p s!"{n}$fn${k}" [] [] (fits.map fun s' => STy.app s'.name (qs ++ [u])) false [] [] methods)
+  -- (#231) the parameters a function takes as a function type wants them:
+  -- as they are, its single tuple parameter unflattened into the type's
+  -- parameters (the call makes the tuple), or its parameters flattened into
+  -- the type's single tuple parameter (the call takes the tuple apart);
+  -- the function's parameter types to compare with, and the call's
+  -- arguments
+  let reshape (p : Pos) (ps : List STy) (qs : List STy) : Option (List STy × List STy × List SExpr) :=
+    let xs (k : Nat) : List SExpr := (List.range k).map fun i => SExpr.ident p s!"$X{i}"
+    if qs.length == ps.length then some (ps, qs, xs qs.length)
+    else match ps, qs with
+      | [.tup es], _ =>
+        if es.length == qs.length then some (es, qs, [.tuple p (xs qs.length)]) else none
+      | _, [.tup es] =>
+        if es.length == ps.length then
+          some (ps, es, (List.range ps.length).map fun (i : Nat) => SExpr.app p (.ident p "$X0") [.int p (i : Int)] false)
+        else none
+      -- (a single parameter of another type, a type parameter say, at the
+      -- tuple of the type's parameters: matching decides)
+      | [_], _ => if qs.length ≥ 2 then some (ps, [.tup qs], [.tuple p (xs qs.length)]) else none
+      | _, _ => none
   for (p, n, ps, effs, r) in values do
     let own := shapeOf ps.length effs
     let mut k := 0
     for (qs, es, u) in requested n do
-      let exact := qs.length == ps.length && ((ps.map (·.ty)).zip qs).all (fun (a, b) => reprStr a == reprStr b) &&
-        reprStr r == reprStr u
+      let some (ps', qs', args) := reshape p (ps.map (·.ty)) qs | continue
+      let exact := qs.length == ps.length && ((ps.map (·.ty)).zip qs).all (fun (a, b) => reprStr (normS a) == reprStr (normS b)) &&
+        reprStr (normS r) == reprStr (normS u)
       -- (contravariant parameters, a covariant result)
-      if !exact && qs.length == ps.length && (qs.zip (ps.map (·.ty))).all (fun (a, b) => subAt anc a b) &&
-          subAt anc r u then
-        if let some c := variant p n own k qs es u then
+      if !exact && (qs'.zip ps').all (fun (a, b) => subAt anc a b) && subAt anc r u then
+        if let some c := variant p n own k qs es u args then
           out := out ++ [c]
           k := k + 1
   for (p, n, ps, tps, effs, r) in gvalues do
@@ -484,15 +518,15 @@ def desugar (tops : List STop) (extra : List STop := []) (requests : List (Strin
     let tpn := tps.map (·.name)
     let mut k := 0
     for (qs, es, u) in requested n do
-      if qs.length != ps.length then continue
-      let θ := ((ps.map (·.ty) ++ [r]).zip (qs ++ [u])).foldlM (fun θ (a, b) => matchTy tpn θ a b) []
+      let some (ps', qs', args) := reshape p (ps.map (·.ty)) qs | continue
+      let θ := ((ps' ++ [r]).zip (qs' ++ [u])).foldlM (fun θ (a, b) => matchTy tpn θ a b) []
       if let some θ := θ then
         -- (every type parameter instantiated, a comparable one to a type
         -- that is surely comparable)
         if tps.all fun tp => match θ.lookup tp.name with
             | some t => tp.constraint != "comparable" || plainComparable t
             | none => false then
-          if let some c := variant p n own k qs es u then
+          if let some c := variant p n own k qs es u args then
             out := out ++ [c]
             k := k + 1
   for (p, c, ctps, m, ps, effs, r) in mvalues do
@@ -507,6 +541,25 @@ def desugar (tops : List STop) (extra : List STop := []) (requests : List (Strin
     let fits := own :: fits.filter (· != own)
     out := out ++ [.classDef p s!"{c}${m}$fn" ctps [] (fits.map fun s => STy.app s.name targs) false
       [("$self", selfTy, none, false)] [] methods]
+    -- (#231) a method of a class without type parameters as a value at a
+    -- closed function type it fits by variance, asked for as `.{c}${m}`:
+    -- `{c}${m}$fn${k}`, holding the receiver
+    if ctps.isEmpty then
+      let mut k := 0
+      for (qs, es, u) in requested s!".{c}${m}" do
+        let exact := qs.length == ps.length && ((ps.map (·.ty)).zip qs).all (fun (a, b) => reprStr (normS a) == reprStr (normS b)) &&
+          reprStr (normS r) == reprStr (normS u)
+        let s := shapeOf qs.length es
+        if !exact && qs.length == ps.length && own.within s &&
+            (qs.zip (ps.map (·.ty))).all (fun (a, b) => subAt anc a b) && subAt anc r u then
+          let vfits := shapes.filter (s.within ·)
+          let vmethods := vfits.map fun s' =>
+            STop.fn p s'.call (params qs) [] (s'.effs ++ ["override"]) u
+              (.app p (.member p (.ident p "$self") m) args own.decides)
+          let vfits := s :: vfits.filter (· != s)
+          out := out ++ [.classDef p s!"{c}${m}$fn${k}" [] [] (vfits.map fun s' => STy.app s'.name (qs ++ [u])) false
+            [("$self", .name c, none, false)] [] vmethods]
+          k := k + 1
   return tops ++ out
 
 end FnValues

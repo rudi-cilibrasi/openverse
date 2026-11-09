@@ -401,7 +401,12 @@ flowchart LR
   implements that type's shape at the type's own arguments and whose
   `$call…` calls `F`, converting. A program with a placeholder left is
   never given out. Only programs that need such a class are elaborated
-  twice.
+  twice. A method of a class without type parameters is asked for the same
+  way, as `.{C}${M}` (#231): its class `{C}${M}$fn${k}` holds the receiver
+  in `$self`, like `{C}${M}$fn`. And a function fits a type whose
+  parameters flatten or unflatten its own (#231): with one tuple parameter
+  at the tuple's element types, `$call(X0, X1)` calls `F((X0, X1))`; with
+  several at one tuple of them, `$call(X0)` calls `F(X0(0), X0(1))`.
 - **The cost of that choice.** A class implements an interface at one
   instantiation, so a value of one function type does not convert to
   another by variance (that would need a wrapper object made at the
