@@ -712,16 +712,21 @@ and journals every write made in a condition (for rollback). So:
   dispatches that open them, as the scheduler's roots are (#244): such a
   frame's class has pins on all of its type arguments. Resetting a frame
   would relate its type arguments to the new receiver's, so each call
-  makes a new one, through `newCell(params…, cell, sched)` (or `new0` when
-  the value is unused) called by an `arriveVia` helper of the call site
-  in the rule's shape. That is the one place a suspending call allocates
+  makes a new one, through `newCell(params…, cell, sched)` called by an
+  `arriveVia` helper of the call site in the rule's shape. That is the one place a suspending call allocates
   per call: in C, which frees nothing, a loop of 100,000 such calls holds
   about 45 MB (2026-11-09). The result goes through a cell: the caller keeps a
   `$cell(t)` of its own expected type in its frame, made with it, and
   passes it at the arrive, where the dispatch's refinement types it at the
   callee's result type; the callee's frame keeps it in a last field, and
   its `resumeOwn` writes the result there when it is done. The caller reads
-  its own cell, at its own type, with no dispatch. Slots of the override's
+  its own cell, at its own type, with no dispatch. A cell's type argument is
+  invariant, so an override whose result is narrower than the method's it
+  overrides (covariant) is refused on this path: the caller's type, refined
+  by the dispatch, must be the override's result there. An override that
+  would need a copy per type (#174: a spawned dispatch at its type
+  parameters, in it or in a function it calls at them) is refused too: a
+  copy would not know the type parameters its receiver holds. Slots of the override's
   frame whose types mention its class's added type parameters start as
   the receiver's hidden fields (`$w`), as in its body.
 - A refined call that does not suspend (an immediate method, or a #157
