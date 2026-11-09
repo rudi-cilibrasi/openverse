@@ -1,5 +1,6 @@
-# recursive functions with several values (#235): effect-free ones are
-# computed at the call as the array of their values, in spatial order
+# recursive functions with several values: generators (Upto) taken lazily
+# where they are consumed (#246), the others (Path) computed at the call as
+# the array of their values (#235), both in spatial order
 Upto(A:int, B:int)<computes><decides>:int =
     A <= B
     A | Upto[A + 1, B]

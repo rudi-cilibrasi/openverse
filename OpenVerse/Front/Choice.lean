@@ -41,7 +41,9 @@ structure Binding where
       branches' alternatives the elaborator guards by the branch taken. -/
   branchy : Option SExpr := none
   /-- For a call of a recursive function with several values (#235): the
-      array of its values, `F$all(args)`; the binding takes each in turn. -/
+      array of its values, `F$all(args)`; the binding takes each in turn.
+      Or, for one taken lazily (#246), the call `$loop(F, …)`, whose
+      consumer takes its values one at a time. -/
   each : Option SExpr := none
 
 def binding? : SExpr → Option Binding
@@ -50,6 +52,7 @@ def binding? : SExpr → Option Binding
   | .decl p x ty false (.app _ (.ident _ "$branchChoice") [i] false) => some ⟨p, x, ty, [], none, some i, none⟩
   | .decl p x ty false (.app _ (.ident _ "$branchChoiceAt") [l, i] false) => some ⟨p, x, ty, [], some l, some i, none⟩
   | .decl p x ty false (.app _ (.ident _ "$each") [a] false) => some ⟨p, x, ty, [], none, none, some a⟩
+  | .decl p x ty false e@(.app _ (.ident _ "$loop") _ false) => some ⟨p, x, ty, [], none, none, some e⟩
   | _ => none
 
 /-- An `if … else …` with a choice in a branch (the branches of an `else if`
@@ -228,6 +231,7 @@ partial def hasLiftable : SExpr → Bool
   | .app _ (.ident _ "$choice") _ false => true
   | .app _ (.ident _ "$inline") _ false => true
   | .app _ (.ident _ "$each") _ false => true
+  | .app _ (.ident _ "$loop") _ false => true
   | e@(.ite ..) => isBranchy e
   | .app _ f args _ => headHas hasLiftable f || args.any fun a =>
       (match a with | .decl _ n _ _ _ => !n.startsWith "?" | _ => true) && hasLiftable a
@@ -290,6 +294,22 @@ partial def liftE (isVal : String → Bool) (isField : String → String → Boo
     let args'' ← args'.mapM fun a => if stable isVal a then pure a else LM.bind a.pos "t" a
     LM.bind p "c" (.app p (.ident q "$each") [.app p2 g args'' br] false)
   | .app p (.ident _ "$each") _ false => LM.bind p "c" e
+  | .app p (.ident q "$loop") (fn :: .block _ pre :: ps :: cls :: tl :: args) false =>
+    -- a call of a recursive function with several values taken lazily
+    -- (#246): the arguments into its (renamed) parameters, as for
+    -- `$inline`, then the call, without them, bound to a name: the
+    -- consumer of that binding takes its values one at a time
+    modify fun s => { s with pre := s.pre.push (.app fn.pos (.ident fn.pos "$fxOf") [fn] false) }
+    let (pds, unpack) := (pre.take args.length, pre.drop args.length)
+    for (pd, a) in pds.zip args do
+      let a' ← liftE isVal isField a
+      match pd with
+      | .decl q2 x ty v _ => modify fun s => { s with pre := s.pre.push (.decl q2 x ty v a') }
+      | _ => pure ()
+    for u in unpack do
+      modify fun s => { s with pre := s.pre.push u }
+    LM.bind p "c" (.app p (.ident q "$loop") [fn, ps, cls, tl] false)
+  | .app p (.ident _ "$loop") _ false => LM.bind p "c" e
   | .app _ (.ident _ "$inline") (_ :: .block _ tmpl :: args) false =>
     -- a call of a function with several values (#235): the arguments, in
     -- order, into its (renamed) parameters, then its body's clauses, then
@@ -653,11 +673,52 @@ partial def checkBody : SExpr → SExpr :=
       some (chain as)
     | _ => none
 
+/-- A statement where a choice or a call of a function of `mv` (marked) is
+    lifted into the body's own clauses: the body then has several values. -/
+def liftsHere (c : SExpr) : Bool :=
+  match c with
+  | .decl _ _ _ _ rhs => hasLiftable rhs
+  | .set _ _ _ rhs => hasLiftable rhs
+  | .gen _ _ _ src => hasLiftable src
+  | e => hasLiftable e
+
+/-- The shape of a recursive function with several values that its
+    consumers take lazily (#246), from its body: its clauses, which have no
+    choice and call no function with several values, then its last
+    expression (or the value of its last binding), a choice or an
+    `if … else …` whose branches are choices or values, each alternative a
+    whole call of the function itself (`g`) or a value with no choice in
+    it. -/
+def loopShape? (g : String) (mv : List String) (body : SExpr) : Option (List SExpr × SExpr) := do
+  let ss := stmtsOf body
+  let last ← ss.getLast?
+  let cls := ss.dropLast
+  let tail := match last with
+    | .decl _ _ _ false rhs => rhs
+    | e => e
+  let plain (e : SExpr) : Bool := !liftsHere (markCalls mv e)
+  let isRec : SExpr → Bool
+    | .app _ (.ident _ h) as _ => h == g && as.all fun a =>
+        plain a && (match a with | .decl .. => false | _ => true)
+    | _ => false
+  let groupOK (e : SExpr) : Bool := ((alts? e).getD [e]).all fun a => isRec a || plain a
+  let tailOK :=
+    if isBranchy tail then (arms tail).all fun (cs?, v) => (cs?.getD []).all plain && groupOK v
+    else isChoice tail && groupOK tail
+  if cls.all plain && tailOK then some (cls, tail) else none
+
+/-- The calls of `g` in `e` (its consumer's code, #246) as `$rec(args)`. -/
+def markRec (g : String) : SExpr → SExpr :=
+  mapE fun
+    | .app p (.ident _ h) as _ => if h == g then some (.app p (.ident p "$rec") as false) else none
+    | _ => none
+
 /-- Replace each call of a function of `mv` by `$inline(F, template, args…)`,
-    each with its own call site (`n`, the sites so far). -/
-partial def inlineCalls (mv : List (String × MFn)) (e : SExpr) (recs : List String := []) :
-    StateT Nat (Except String) SExpr := do
-  let go := fun x => inlineCalls mv x recs
+    each with its own call site (`n`, the sites so far); a call of one of
+    `loops` by `$loop(F, …)` (#246). -/
+partial def inlineCalls (mv : List (String × MFn)) (e : SExpr) (recs : List String := [])
+    (loops : List String := []) : StateT Nat (Except String) SExpr := do
+  let go := fun x => inlineCalls mv x recs loops
   match e with
   | .app p (.ident q g) as br =>
     match mv.lookup g with
@@ -675,21 +736,13 @@ partial def inlineCalls (mv : List (String × MFn)) (e : SExpr) (recs : List Str
           else s!"{p.show}: {g} is <decides>: call it with {g}[…]")
       let as' ← as.mapM go
       -- (a recursive one: the array of its values, computed at the call)
-      if recs.contains g then
+      if recs.contains g && !loops.contains g then
         return .app p (.ident p "$each") [.app p (.ident q s!"{g}$all") as' false] false
       let site ← modifyGet fun n => (n, n + 1)
       if site ≥ 2000 then
         throw s!"{p.show}: more than 2000 calls of functions with several values to inline: nested calls multiply them (#235)"
       let tag (n : String) : String := s!"${g.replace "::" "_"}_{n}_{site}"
       let ren := (f.params.map (·.name) ++ localsOf f.body).eraseDups.map fun n => (n, tag n)
-      let body ← go (renameE ren f.body)
-      let ss := stmtsOf body
-      let r := tag "$r"
-      let (init, last) := (ss.dropLast, ss.getLast?)
-      let (init, res) : List SExpr × SExpr := match last with
-        | some (.decl q2 x t v rhs) => (init ++ [.decl q2 x t v rhs], .ident q2 x)
-        | some l => (init, l)
-        | none => (init, .tuple q [])
       let (pds, unpack, as'') : List SExpr × List SExpr × List SExpr :=
         if as.length == f.params.length then
           (f.params.map fun sp => SExpr.decl q (tag sp.name) (some sp.ty) false (.ident q "$arg"), [], as')
@@ -702,6 +755,22 @@ partial def inlineCalls (mv : List (String × MFn)) (e : SExpr) (recs : List Str
           ([.decl q t (some (.tup (f.params.map (·.ty)))) false (.ident q "$arg")],
             (f.params.zipIdx.map fun (sp, i) =>
               SExpr.decl q (tag sp.name) (some sp.ty) false (.app q (.ident q t) [.int q (i : Int)] false)), as')
+      -- (one taken lazily, #246: its parameters, its clauses and its last
+      -- expression, its own calls marked, for its consumer to run)
+      if loops.contains g then
+        let some (cls, tail) := loopShape? g (mv.map (·.1)) (renameE ren f.body)
+          | throw s!"{p.show}: internal: the shape of {g} (#246)"
+        let ps := f.params.map fun sp => SExpr.ident q (tag sp.name)
+        return .app p (.ident p "$loop") (.ident q g :: .block q (pds ++ unpack) :: .block q ps :: .block q cls ::
+          .decl q (tag "$r") (some f.ret) false (markRec g tail) :: as'') false
+      let body ← go (renameE ren f.body)
+      let ss := stmtsOf body
+      let r := tag "$r"
+      let (init, last) := (ss.dropLast, ss.getLast?)
+      let (init, res) : List SExpr × SExpr := match last with
+        | some (.decl q2 x t v rhs) => (init ++ [.decl q2 x t v rhs], .ident q2 x)
+        | some l => (init, l)
+        | none => (init, .tuple q [])
       let tmpl := SExpr.block q (pds ++ unpack ++ init ++ [.decl q r (some f.ret) false res])
       return .app p (.ident p "$inline") (.ident q g :: tmpl :: as'') false
     | none => return .app p (← go (.ident q g)) (← as.mapM go) br
@@ -826,15 +895,6 @@ partial def valueUse? (mv : List String) : SExpr → Option (Pos × String)
       | _ => []
     kids.findSome? (valueUse? mv)
 
-/-- A statement where a choice or a call of a function of `mv` (marked) is
-    lifted into the body's own clauses: the body then has several values. -/
-def liftsHere (c : SExpr) : Bool :=
-  match c with
-  | .decl _ _ _ _ rhs => hasLiftable rhs
-  | .set _ _ _ rhs => hasLiftable rhs
-  | .gen _ _ _ src => hasLiftable src
-  | e => hasLiftable e
-
 /-- The functions of the program that have several values, inlined at their
     calls (see above); the program unchanged when there are none. -/
 def inlineMulti (tops : List STop) : Except String (List STop) := do
@@ -883,7 +943,14 @@ def inlineMulti (tops : List STop) : Except String (List STop) := do
         todo := ((callees.lookup h).getD []) ++ todo
     return found
   let recs := (mfs.filter fun (n, _) => reaches n).map (·.1)
-  let mut needAll := recs
+  -- (#246) the self-recursive ones of the shape of a generator, taken
+  -- lazily where they are consumed: computed eagerly, `F$all`, only for the
+  -- recursive ones that call them
+  let loops : List String := recs.filter fun g =>
+    match mfs.lookup g with
+    | some f => (callees.lookup g).getD [] == [g] && (loopShape? g mv f.body).isSome
+    | none => false
+  let mut needAll := recs.filter (!loops.contains ·)
   let mut grew := true
   while grew do
     grew := false
@@ -917,7 +984,7 @@ def inlineMulti (tops : List STop) : Except String (List STop) := do
       throw s!"{f.pos.show}: {n} has several values, and {n} is also the name of a parameter, local, field or method: rename one, as calls of {n} are inlined (#235)"
     let own := f.params.map (·.name) ++ localsOf f.body
     for u in namesUsed f.body do
-      if !recs.contains n && !own.contains u && binders.contains u then
+      if (!recs.contains n || loops.contains n) && !own.contains u && binders.contains u then
         throw s!"{f.pos.show}: {n} has several values and uses {u}, which is also the name of a parameter, local, field or method: rename one, as {n}'s body is inlined where that name may mean something else (#235)"
   -- (no use as a value)
   let defaults (ps : List SParam) : List SExpr := ps.filterMap (·.default)
@@ -931,7 +998,7 @@ def inlineMulti (tops : List STop) : Except String (List STop) := do
     if let some (p, n) := valueUse? mv b then
       throw s!"{p.show}: {n} has several values, so it cannot be used as a function value (#235)"
   -- (each call inlined; each function kept for checking only)
-  let go (e : SExpr) : StateT Nat (Except String) SExpr := inlineCalls mfs e recs
+  let go (e : SExpr) : StateT Nat (Except String) SExpr := inlineCalls mfs e recs loops
   let goPs (ps : List SParam) : StateT Nat (Except String) (List SParam) :=
     ps.mapM fun sp => do return { sp with default := ← sp.default.mapM go }
   let (tops', _) ← (tops.filterMapM (m := StateT Nat (Except String)) fun t => do

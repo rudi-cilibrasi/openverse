@@ -716,10 +716,42 @@ Main():void =
   as any function is (types, effects, `<decides>`), with each choice read
   as any of its alternatives.
 
-  A recursive one (that calls itself, directly or not) is not inlined: if
-  it is `<computes>`, keeps no local state (no `var`, no `set`), and nothing
-  it may run prints or calls `Err()`, its values are computed at the call,
-  all of them, in order, as an array the call then takes them from (#235).
+  A recursive one (that calls itself, directly or not) is not inlined.
+  One shaped as a generator is taken lazily (#246): it calls no other
+  function with several values, its clauses have no choice, and its last
+  expression is a choice, or an `if … else …` whose branches are choices or
+  values, each alternative a value with no choice in it or a whole call of
+  the function itself. Its values are taken one at a time, as the place
+  that takes them asks for them, in spatial order (depth first), so an
+  infinite one works where the first success is taken, and a value never
+  reached is never computed. It may have effects:
+  - in a `for`, its clauses run as its values are taken, between the
+    iterations, and stay, as a `for` keeps the effects of clauses before a
+    choice; what a value does is undone with its iteration when the
+    filter rejects it;
+  - where the first success is taken (an `if` condition, `first{…}`,
+    `option{…}`, `logic{…}`, `not`, the left of `or`), what a value does is
+    undone with it too, but its clauses, the conditions of its last `if`
+    and the arguments of its calls of itself may not print or change an
+    object (refused): they run once for all the values they lead to, and
+    the Verse Calculus undoes them with those values when the context
+    rejects all of them.
+
+  ```verse
+  Upto(A:int, B:int)<transacts><decides>:int =
+      A <= B
+      Print("visit {A}")
+      A | Upto[A + 1, B]
+  Nat(N:int)<computes><decides>:int = N | Nat[N + 1]
+  Main():void =
+      for (X := Upto[1, 2]) { Print("got {X}") }   # visit 1, got 1, visit 2, got 2
+      if (X := Nat[0], X * X > 50) then Print("{X}")   # 8
+  ```
+
+  The others, if they are `<computes>`, keep no local state (no `var`, no
+  `set`), and nothing they may run prints or calls `Err()`, have their
+  values computed at the call, all of them, in order, as an array the call
+  then takes them from (#235).
   What it may run is followed through its Verse Core code, so through every
   call: the functions it calls, each implementation a method call may
   dispatch to, each function of a function value's type that the program
@@ -735,16 +767,10 @@ Main():void =
   call, even where only the first success is taken and a value before the
   error would have been it.
 
-  ```verse
-  Upto(A:int, B:int)<computes><decides>:int =
-      A <= B
-      A | Upto[A + 1, B]
-  Main():void =
-      if (X := Upto[1, 10], X * X > 50) then Print("{X}")   # 8
-  ```
-
-  Refused for now: a recursive one that is not `<computes>`, or may print or
-  call `Err()`, a generic or overloaded one, one with named parameters
+  Refused for now: a recursive one that is not a generator and is not
+  `<computes>`, or may print or call `Err()`, a generator that may print or
+  change an object in its clauses where the first success is taken, a
+  generic or overloaded one, one with named parameters
   or a `return` or a `defer:` of its own (in its body, not in a block inside it), a method, one used as a function value, a call of a
   recursive one in an `if`'s branch, a choice's alternative or a `set`'s path, and, since its body is inlined where other names may be
   in scope, one whose name, or a name its body uses from outside, is also
@@ -1193,6 +1219,6 @@ Main()<suspends>:void =
 arithmetic on rationals (see [rational](#rational)), float functions beyond those of [float](#float),
 the class features listed under [Classes](#classes), struct methods (Verse structs have none; classes do),
 `weak_map`, module paths `using{/Verse.org/…}` (accepted and ignored), overloading beyond [Overloading](#overloading), nested
-functions and lambdas (not released in Verse), choice beyond [Choice](#choice) (recursive functions with several values that have effects, generic ones, methods with several values; a choice inside a block, a struct construction, a named argument or an alternative), concurrency beyond [Concurrency](#concurrency) (`subscribable_event()` without a value), and effect checking
+functions and lambdas (not released in Verse), choice beyond [Choice](#choice) (recursive functions with several values that have effects, other than generators, generic ones, methods with several values; a choice inside a block, a struct construction, a named argument or an alternative), concurrency beyond [Concurrency](#concurrency) (`subscribable_event()` without a value), and effect checking
 other than `<decides>` and the heap effects (`<converges>` is accepted and
 ignored).
