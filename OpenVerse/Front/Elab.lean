@@ -2121,6 +2121,12 @@ def firstLiftOf (ctx c2 : Ctx) (p : Pos) (g : String) (lp : List SExpr) (b : Str
         throw "where the clauses after it call (super:)"
       pure (rest.map (selfQualify ctx c))
     | none => pure rest
+  -- (a `return`, or a `break` that leaves them, would leave the function
+  -- of its own, not the consumer's)
+  if (Refine.findPart (fun | .ret .. => true | _ => false) false (.block p rest)).isSome then
+    throw "where the clauses after it have a return"
+  if (Refine.findPart (fun | .brk _ => true | _ => false) true (.block p rest)).isSome then
+    throw "where the clauses after it have a break that leaves them"
   if suspends then throw "as the clauses after it suspend"
   let pnames := ps.filterMap fun | .ident _ n => some n | _ => none
   let pls ← pnames.mapM fun n => match ctx.lookup n with
