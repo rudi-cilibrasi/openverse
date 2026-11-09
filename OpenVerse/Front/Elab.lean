@@ -1719,6 +1719,13 @@ partial def convert (env : TyEnv) (e : Expr) (a b : Ty) : EM (Option Expr) := do
       let x ← modifyGet fun s => (s.nslots, { s with nslots := s.nslots + 1, slotTys := s.slotTys.push a })
       return some (.seq (.assign x e) (.ite (.assign i (.prim .query [.local x])) (.prim .mkSome [c]) (.lit .none)))
     | none => return none
+  -- a map of convertible values is a map of the converted ones (#297)
+  | .map k a', .map k' b' =>
+    if k != k' then return none
+    let i ← modifyGet fun s => (s.nslots, { s with nslots := s.nslots + 1, slotTys := s.slotTys.push (.tup [k, a']) })
+    match ← convert env (.prim (.tupGet 1) [.local i]) a' b' with
+    | some c => return some (.forE i e (.lit (.logic true)) (.prim .mkTup [.prim (.tupGet 0) [.local i], c]))
+    | none => return none
   -- a tuple of convertible elements is a tuple of the converted ones
   | .tup ts, .tup us =>
     if ts.length != us.length then return none
@@ -1774,6 +1781,16 @@ partial def unwrapNever : Expr → Ty → Ty → Expr
     class to a class or interface above it (`convert`). -/
 def coerce (p : Pos) (r : R) (target : Ty) : EM Expr := do
   let r : R := { r with e := unwrapNever r.e r.ty target }
+  -- (a value of type `false` read out of a temporary, a tuple, an array, an
+  -- option or a field has `void` in Verse Core: it is evaluated, which may
+  -- fail, and `Err()` follows, never reached, into a temporary of the target
+  -- type, so that its type can be inferred anywhere, #297)
+  if r.ty == .never && target != .never && target != .void then
+    match r.e with
+    | .local _ | .prim (.tupGet _) _ | .prim .index _ | .prim .query _ | .heap (.get _) _ =>
+      let x ← modifyGet fun s => (s.nslots, { s with nslots := s.nslots + 1, slotTys := s.slotTys.push target })
+      return .assign x (.seq r.e (.prim .userErr []))
+    | _ => pure ()
   if r.ty == target || r.ty == .never then return r.e
   if target == .void then return .seq r.e (.lit .void)
   match ← convert (← get).env r.e r.ty target with
@@ -2537,6 +2554,13 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
                 pure .any
               else eerr e'.pos s!"the elements of this array have different types: {acc.show} and {x.ty.show}") r.ty
         let es ← all.mapM fun (e', x) => coerce e'.pos x jt
+        -- (an element that never gives a value, joined with others, without
+        -- an expected type: into a temporary of the joined type, so that the
+        -- array's type can be inferred, #297)
+        let es ← if elemExp.isSome then pure es else (es.zip all).mapM fun (e, (_, x)) => do
+          if x.ty != .never then return e
+          let t ← modifyGet fun s => (s.nslots, { s with nslots := s.nslots + 1, slotTys := s.slotTys.push jt })
+          return Expr.assign t e
         return ⟨.prim .mkArr es, .arr jt⟩
   | .optionLit _ e =>
     let e := (Choice.takeFirst? e).getD e
