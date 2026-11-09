@@ -277,9 +277,13 @@ partial def liftChains (m base : Nat) : Expr → StateM (Array (Expr × List Nat
 partial def pruneDead (S : Sigs) (Γ : List VTy) : Expr → Expr
   | .ite c@(.heap (.isTag us) [.local y]) t@(.call _ (.local y' :: _)) e =>
     let dead := y == y' && !us.isEmpty && match Γ[y]? with
-      | some (.ref _ a) => us.all fun u =>
-        let P := (S.pinsOf u).take a.length
-        VTy.pinsBelow P a.length && (unify (VTy.pinEqs P a)).isNone
+      | some (.ref _ a) =>
+        -- (as the checker opens the arguments beyond `a`, #209)
+        let k := openCount S us a.length
+        let N := VTy.nvarsL a
+        us.all fun u =>
+          let P := (S.pinsOf u).take (a.length + k)
+          VTy.pinsBelow P (a.length + k) && (unify (VTy.pinEqs P (a ++ VTy.ext N k))).isNone
       | _ => false
     if dead then pruneDead S Γ e else .ite c (pruneDead S Γ t) (pruneDead S Γ e)
   | .assign i x => .assign i (pruneDead S Γ x)
@@ -948,12 +952,19 @@ partial def suspendSelfGeneric (us : List Nat) (y g : Nat) (c : Callee) (rs : Li
   let σs ← rs.mapM infer
   -- (the callee's type arguments: its parameters matched against the
   -- receiver and arguments as refined by the pins)
-  let μ := (unify (VTy.pinEqs (commonPins env.S us a.length) a)).getD VTy.var
-  let acc := VTy.bindVarsL ps ((VTy.ref us a :: σs).map (VTy.subst μ)) []
+  -- (as the checker opens them, #209: the arguments the pins mention
+  -- beyond the receiver's, as fresh variables)
+  let k := openCount env.S us a.length
+  let N := max (VTy.nvarsL a) (VTy.nvarsL σs)
+  let a' := a ++ VTy.ext N k
+  let μ := (unify (VTy.pinEqs (commonPins env.S us (a.length + k)) a')).getD VTy.var
+  let acc := VTy.bindVarsL ps ((VTy.ref us a' :: σs).map (VTy.subst μ)) []
   let frameTy : VTy := .ref [c.tag] ((List.range c.ntp).map VTy.var)
   if frameTy.unbound acc then
     throw "a <suspends> method whose type parameters the call does not determine cannot be dispatched to a class that fixes type arguments yet (#171)"
   let fty := frameTy.subst (callInst acc .void none)
+  if !fty.varsBelow N then
+    throw "a <suspends> method of a class with type parameters that only its parent's type arguments determine cannot be dispatched to yet: its frame would need them (#209)"
   let k ← newSite (.opt fty)
   modify fun st => { st with sites := st.sites.push { id := k, waits := .callee k c 0 [], defers := st.defers } }
   let cf := childF k

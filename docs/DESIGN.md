@@ -831,14 +831,67 @@ object of the tested classes can be the receiver at all is decided by
 Verse's types, which compare struct type arguments as they are. A dispatch
 rule also asks that the tested classes' pins on the receiver's arguments
 mention only those (`VTy.pinsBelow`): an object's arguments extend the
-receiver's, and the pins on the shared ones must agree on both. The
-front end keeps to that: where a class's pin would mention an argument
-past its parent's (`wrapint(w) := class(pint([]w))`, below
-`pint(u) := class(pair(int, u))`), it takes its parent's pin there; an
-implementation at or above the receiver's class, or one that fixes none
-of its arguments, is called without a refinement; and a dispatch whose
-pins still relate the receiver's arguments to others is refused, until
-a dispatch can open those (#209, step 2).
+receiver's, and the pins on the shared ones must agree on both, unless
+the dispatch opens the others (below).
+
+### Existentials (#209)
+
+`pairE(a, b) := class(expr(tuple(a, b)))` has three Verse Core type
+arguments, `[tuple(a, b), a, b]`, to `expr`'s one, and `fstE(a, b) :=
+class(expr(a))` two, `[a, b]`: code generic over `expr(t)` has no names
+for their `a` and `b`. `Typed.dispatch` opens them: it extends the
+receiver's type arguments `a` by `k` fresh type variables `VTy.ext N k`,
+from a bound `N` above every variable of `a`, of the other arguments'
+types and of the expected type, and refines `a ++ ext` by the pins. When
+the call runs, the object's arguments are `a ++ rest`; the substitution
+that keeps the variables below `N` and gives `ext` the first `k` of
+`rest` makes `a ++ ext` agree with the pins, so it factors through the
+refinement, and applied to the rule's premises it types the call at the
+object (`ref_open`). For that the object must have those `k` arguments:
+`VTy.pinsOK` asks for at least as many type arguments as pins, and the
+rule that the tested pins be pins on all `a.length + k` (`VTy.extOK`).
+The substitution lemma chooses a new bound at each instance (`VTy.openAt`
+renames the old fresh variables to new ones); `dispatch_none` opens the
+same way. The checker opens the fewest arguments one of the tested
+classes has pins on (`openCount`).
+
+The front end's pins are on all of a class's Verse Core type arguments
+(`pairE`: `[tuple($1, $2), none, none]`), so an object has every one.
+A dispatch opens the type arguments of the class whose implementation it
+calls beyond the receiver's (`$ext i` in the front end), and keys its
+tests by the tested classes' pins (a test is of classes with the same
+pins, so it opens what they all have pins on, as the checker does):
+`dupP(a) :=
+class(pairE(a, a))` and `leaf := class(mid(int, string))` (below
+`mid(a, b) := class(expr(tuple(a, b)))`) refine them further. A class
+that holds no overriding implementation takes its parent's pin where its
+own would mention an argument past its parent's (`wrapint(w) :=
+class(pint([]w))`, below `pint(u) := class(pair(int, u))`): the
+implementations it uses are typed at its parent's arguments, which they
+cannot relate to its own. An implementation at or above the receiver's
+class is called without a refinement, and so is one that opens nothing
+and fixes none of its arguments when the tested pins relate the
+receiver's arguments to ones past its own; a dispatch that would need
+those is refused.
+
+A generic function takes a value of each type parameter, from which its
+slots of that type start (`witness`, `slotDefault`); a dispatch that
+opens `a` has none to pass. So an object of a class with type
+parameters that its parent's type arguments do not give holds a value
+of each in a hidden field (`$w.pairE.a`), filled when it is made, where
+the type is known; the class's overriding implementations, which such a
+dispatch reaches, read those from their receiver instead of taking them
+(`Sig.selfTps`): a slot starts as the field (`DefaultE.field`, a field
+of a parameter's object). Its other methods are called at known types,
+as before. Only classes with an override at or below them get the
+fields, and only reference classes' overrides read them. A `<suspends>`
+override of such a class, a `spawn` in one, and a call whose omitted
+named argument's default has no type of its own in a dispatch that opens
+arguments, are refused for now: their frames, roots and temporaries
+would need the opened types. A variable of a
+class type whose classes below need more type arguments than its own
+starts as the class's hidden placeholder (#157), also for a class
+without type parameters.
 
 ## Typing the heap
 

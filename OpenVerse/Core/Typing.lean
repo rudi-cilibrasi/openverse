@@ -279,16 +279,27 @@ def VTy.pinPairs : List (Option VTy) → List VTy → List (VTy × VTy)
   | none :: ps, _ :: as => VTy.pinPairs ps as
   | _, _ => []
 
-/-- Type arguments `args` agree with pins `ps`: each pinned argument is its
-    pin at `args` (#142, #209). -/
-def VTy.pinsOK (ps : List (Option VTy)) (args : List VTy) : Bool :=
-  (VTy.pinPairs ps args).all fun p => decide (p.1 = p.2.inst args)
-
 /-- Pins `ps` mention only the first `n` type arguments, so type arguments
     `a` of length `n` agree with them whenever an extension of `a` agrees
     with pins that start with `ps`. -/
 def VTy.pinsBelow (ps : List (Option VTy)) (n : Nat) : Bool :=
   ps.all fun o => o.all (VTy.varsBelow n)
+
+/-- Type arguments `args` agree with pins `ps` (#142, #209): there are at
+    least as many as pins, and each pinned argument is its pin at `args`.
+    (So an object of a class with pins has all of its type arguments:
+    those a dispatch opens, `Typed.dispatch`.) -/
+def VTy.pinsOK (ps : List (Option VTy)) (args : List VTy) : Bool :=
+  decide (ps.length ≤ args.length) && (VTy.pinPairs ps args).all fun p => decide (p.1 = p.2.inst args)
+
+/-- `k` fresh type variables, from `N` on: the type arguments a dispatch
+    opens beyond the receiver's (#209). -/
+def VTy.ext (N k : Nat) : List VTy := (List.range k).map fun i => .var (N + i)
+
+/-- When `k > 0`, the pins `P` on `n + k` type arguments are pins on all of
+    them: an object that agrees with them has at least `n + k`. -/
+def VTy.extOK (P : List (Option VTy)) (n k : Nat) : Bool :=
+  k == 0 || P.length == n + k
 
 /-- `μ` refines type arguments `args` by pins `ps` (#142, #209): it is a most
     general substitution that makes them agree with the pins. Every other
@@ -377,26 +388,36 @@ inductive Typed (S : Sigs) (Γ : List VTy) (ρ : VTy) : Expr → VTy → Prop
   /-- A cast: it fails unless the object's class is one of `us`. -/
   | heap_isTag {e ts args us} : Typed S Γ ρ e (.ref ts args) →
       Typed S Γ ρ (.heap (.isTag us) [e]) (.ref us args)
-  /-- **Dispatch to classes that fix type arguments** (#142): a call of `f`
-      on the object in slot `y` when its class is one of `us`, else `e`.
-      Every class of `us` pins the same arguments among `y`'s type arguments
-      `a`, in terms of `a` alone, and `μ` refines `a` by those pins; the call
-      is typed with `μ` applied to both sides. When the branch runs, the
-      object's arguments agree with its pins and start with `a`, so `μ` is
-      the identity. -/
-  | dispatch {y us f es e ts a ps τ σs τ' P} (θ μ : Nat → VTy) :
-      Γ[y]? = some (.ref ts a) → (∀ t ∈ us, (S.pinsOf t).take a.length = P) →
-      VTy.pinsBelow P a.length = true → PinRefines P a μ →
+  /-- **Dispatch to classes that fix type arguments** (#142, #209): a call
+      of `f` on the object in slot `y` when its class is one of `us`, else
+      `e`. `y`'s type arguments `a` are extended by `k` fresh type
+      variables `ext` (from `N` on, above every variable of `a`, of the
+      other arguments' types `σs` and of `τ'`): the arguments an object of
+      `us` has beyond `a`, which the code has no names for (existentials;
+      the classes have pins on all of them, so an object has them). Every
+      class of `us` pins the same arguments among those, in terms of them
+      alone, and `μ` refines `a ++ ext` by the pins; the call is typed with
+      `μ` applied to both sides. When the branch runs, the object's
+      arguments agree with its pins and are `a ++ rest`: the substitution
+      of `rest` for `ext` makes them agree, so it factors through `μ`, and
+      the call is typed at it. -/
+  | dispatch {y us f es e ts a ps τ σs τ' P} (k N : Nat) (θ μ : Nat → VTy) :
+      Γ[y]? = some (.ref ts a) → (∀ t ∈ us, (S.pinsOf t).take (a.length + k) = P) →
+      VTy.pinsBelow P (a.length + k) = true → VTy.extOK P a.length k = true →
+      VTy.varsBelowL N a = true → VTy.varsBelowL N σs = true → τ'.varsBelow N = true →
+      PinRefines P (a ++ VTy.ext N k) μ →
       S.fns[f]? = some (ps, τ) → TypedL S Γ ρ es σs →
-      VTy.subL ((VTy.ref us a :: σs).map (VTy.subst μ)) (ps.map (VTy.subst θ)) = true →
+      VTy.subL ((VTy.ref us (a ++ VTy.ext N k) :: σs).map (VTy.subst μ)) (ps.map (VTy.subst θ)) = true →
       (τ.subst θ).sub (τ'.subst μ) = true → Typed S Γ ρ e τ' →
       Typed S Γ ρ (.ite (.heap (.isTag us) [.local y]) (.call f (.local y :: es)) e) τ'
-  /-- When no substitution makes `a` agree with the pins, the call cannot
-      run: no object of a class of `us` has type arguments starting with `a`. -/
-  | dispatch_none {y us f es e ts a τ' P} :
-      Γ[y]? = some (.ref ts a) → (∀ t ∈ us, (S.pinsOf t).take a.length = P) →
-      VTy.pinsBelow P a.length = true →
-      (∀ μ, VTy.pinsOK P (a.map (VTy.subst μ)) = false) → Typed S Γ ρ e τ' →
+  /-- When no substitution makes `a ++ ext` agree with the pins, the call
+      cannot run: no object of a class of `us` has type arguments starting
+      with `a`. -/
+  | dispatch_none {y us f es e ts a τ' P} (k N : Nat) :
+      Γ[y]? = some (.ref ts a) → (∀ t ∈ us, (S.pinsOf t).take (a.length + k) = P) →
+      VTy.pinsBelow P (a.length + k) = true → VTy.extOK P a.length k = true →
+      VTy.varsBelowL N a = true →
+      (∀ μ, VTy.pinsOK P ((a ++ VTy.ext N k).map (VTy.subst μ)) = false) → Typed S Γ ρ e τ' →
       Typed S Γ ρ (.ite (.heap (.isTag us) [.local y]) (.call f (.local y :: es)) e) τ'
 inductive TypedL (S : Sigs) (Γ : List VTy) (ρ : VTy) : List Expr → List VTy → Prop
   | nil : TypedL S Γ ρ [] []
@@ -426,6 +447,11 @@ inductive DefaultE (S : Sigs) (a : Nat) (Γ : List VTy) : Expr → VTy → Prop
   | tup {ds ts} : DefaultEL S a Γ ds ts → DefaultE S a Γ (.prim .mkTup ds) (.tup ts)
   | new {t ds fs ts args} : S.classes[t]? = some fs → t ∈ ts → VTy.pinsOK (S.pinsOf t) args = true →
       DefaultEL S a Γ ds (fs.map (VTy.inst args)) → DefaultE S a Γ (.heap (.new t) ds) (.ref ts args)
+  /-- A field of a parameter's object (#209): the value of a type argument
+      that an object of a class with type parameters of its own holds, as
+      code that opens them has none of its own. -/
+  | field {i k ts args τ} : i < a → Γ[i]? = some (.ref ts args) → FieldTy S ts args k τ →
+      DefaultE S a Γ (.heap (.get k) [.local i]) τ
   /-- A default is also one of every type above its own. -/
   | sub {d t u} : DefaultE S a Γ d t → t.sub u = true → DefaultE S a Γ d u
 inductive DefaultEL (S : Sigs) (a : Nat) (Γ : List VTy) : List Expr → List VTy → Prop

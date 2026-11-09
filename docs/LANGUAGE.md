@@ -444,10 +444,19 @@ circle := class(shape, labelled):
   arguments fit the class (so a type-equality witness `refl(t) :=
   class(eqw(t, t))` casts an `a` to a `b` through any `eqw(a, b)`), and
   the dispatch skips the classes that no instance of the receiver's type
-  fits. One that has more type arguments than the declaring class (type
-  parameters of its own, or of a class between them) cannot override
-  yet: code generic over the declaring class could not give them. An
-  interface can be parametric too (#53):
+  fits. A class can also have type parameters of its own that the type
+  arguments it gives its parent do not give as a whole, existentially
+  quantified as in a GADT (#209): `pairE(a, b) := class(expr(tuple(a,
+  b)))`, whose `a` and `b` occur only inside `expr`'s argument, and
+  `fstE(a, b) := class(expr(a))`, whose `b` does not occur at all. Code
+  generic over `expr(t)` dispatches to their overrides of `Eval():t`: the
+  dispatch opens `a` and `b` as types it has no names for, refines `t` to
+  `tuple(a, b)` for a `pairE`, and runs `pairE`'s `Eval` at them. Such
+  an object carries a value of each of those types, hidden, which its
+  overrides start their variables of those types with. A class below
+  such a class can fix or repeat those type arguments (`leaf :=
+  class(mid(int, string))` below `mid(a, b) := class(expr(tuple(a, b)))`)
+  and override too. An interface can be parametric too (#53):
   `container(t) := interface: Get():t`, with `box(t) := class(container(t))`.
   A class gives the interfaces above it exactly its own Verse Core type
   arguments (`box(t)` gives `container` `t`; a class implementing
@@ -497,10 +506,11 @@ circle := class(shape, labelled):
 - **Comparability.** Other classes and interfaces are not comparable (Book §4.9), nor
   is a struct or container that holds one.
 - **Not yet supported** (each rejected with a message):
-  - overrides in a subclass that adds type arguments its parent (or an
-    interface) leaves open, such as a type parameter that only occurs
-    inside a type it gives the parent (`pairE(a, b) :=
-    class(expr(tuple(a, b)))`, #209); a dispatch, in code generic over a
+  - in a class with type parameters that its parent's type arguments
+    do not give: a `<suspends>` override, a `spawn` in an override, and,
+    in code generic over a class above, a call of one whose omitted
+    named argument's default has no type of its own (#209); such a class
+    below an interface (#53, #209); a dispatch, in code generic over a
     class, to a subclass whose fixed type arguments relate to ones the
     receiver's type does not have (#209); a cast `T[X]` whose type
     arguments agree with `X`'s only under a refinement (`dup[P]` for
