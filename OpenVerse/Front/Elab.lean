@@ -3893,10 +3893,31 @@ partial def elabAppBase (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (b
                 let rec litOf (t : Nat) : Expr → Expr
                   | .seq (.assign t' v) rest => if t' == t then v else litOf t rest
                   | _ => .lit .none
-                let typed : List (Nat × Expr) := (untyped rcE).map fun t =>
-                  (t, .ite (.prim .fail []) (.local t) (litOf t rcE))
-                if pins.length > rargs.length && !typed.isEmpty then
+                -- (when the dispatch opens type arguments, #209, the
+                -- parameter's type in the implementation mentions them, and
+                -- the caller has no names for them: the temporary has the
+                -- declaration's type at the receiver's type arguments, which
+                -- the dispatch's refinement makes the implementation's)
+                let refuseOpen : EM Unit :=
                   eerr p s!"cannot dispatch {m} to class {e} yet when a named argument's default has no type of its own: its temporary would need the type arguments the dispatch opens (#209)"
+                let rec callArgs : Expr → List Expr
+                  | .call _ (_ :: es) => es
+                  | .seq _ rest => callArgs rest
+                  | _ => []
+                let fs := (ctx.sig? fname).get!
+                let nposF := fs.params.length - fs.named.length
+                let mut typed : List (Nat × Expr) := []
+                for t in untyped rcE do
+                  let mut tv := t
+                  if pins.length > rargs.length then
+                    let some i := (callArgs rcE).findIdx? (fun a => match a with | .local t' => t' == t | _ => false)
+                      | refuseOpen
+                    let some (n, _) := (if i + 1 < nposF then none else fs.named[i + 1 - nposF]?) | refuseOpen
+                    let some j := ms.named.findIdx? (·.1 == n) | refuseOpen
+                    let τ := (declTy ms.params[npos + j]!).subst σu
+                    if τ.params.any ownNames.contains then refuseOpen
+                    tv ← fresh τ
+                  typed := typed ++ [(t, .ite (.prim .fail []) (.local tv) (litOf t rcE))]
                 let some (.call fi (.local s0 :: es)) := Expr.inlineArgTemps rcE typed
                   | eerr p s!"cannot dispatch {m} to class {e}, which fixes type arguments of {c}, when a named argument's default is computed (#142)"
                 if s0 != slot then eerr p s!"cannot dispatch {m} to class {e}, which fixes type arguments of {c} (#142)"

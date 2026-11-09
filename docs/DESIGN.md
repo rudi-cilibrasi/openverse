@@ -1167,10 +1167,9 @@ too, and its overrides read it from the receiver, as a dispatch from
 `shower` opens it. A `<suspends>`
 override of such a class works (#251, see "Avoiding allocation and
 journaling"), and so does a spawn in one, also of a dispatch at its class's
-type parameters, and in an immediate one (see "No copies per type"). A
-call whose omitted named argument's default has no type of its own, in a
-dispatch that opens arguments, is refused for now: it would need a
-temporary of an opened type. A variable of a
+type parameters, and in an immediate one (see "No copies per type"), and
+so does a call whose omitted named argument's default has no type of its
+own (see "Pins and dispatch"). A variable of a
 class type whose classes below need more type arguments than its own
 starts as the class's hidden placeholder (#157), also for a class
 without type parameters.
@@ -1326,6 +1325,14 @@ Phase 3 (#20) adds a heap of objects, each with a class tag and fields
   (`tcDispatch`) tries the plain `if` typing first, and types a dispatch
   only against an expected type, since `μ` relates the call's result to
   it: a dispatch chain is assigned to a slot of the method's result type.
+  An omitted named argument whose default has no type of its own
+  (`false`, `array{}`, `map{}`) is passed as `if (fail) then T else false`,
+  with `T` a temporary of the parameter's type, so that the checker infers
+  the argument's type as it does the others' (#175). When the dispatch
+  opens type arguments, the parameter's type in the override mentions them
+  and the caller has no names for them, so `T` has the method's declared
+  type at the receiver's type arguments instead (`?t` for the override's
+  `?tuple(a, b)`), which `μ` makes the override's (#209).
   The semantics, the binary format and the C runtime are unchanged.
 - **Defaults.** No literal is a reference, so a slot of class type starts as
   a new object of one of its classes with default fields (`DefaultE.new`),
