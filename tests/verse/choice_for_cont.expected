@@ -1,0 +1,17 @@
+a 1 3 4
+a 2 2 4
+a 2 3 3
+a 2 3 4
+b 10 201
+b 11 200
+b 11 201
+p
+q
+r
+then 1
+then 2
+s
+then 2
+then 3
+end
+exit=0
