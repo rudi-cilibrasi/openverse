@@ -1093,6 +1093,9 @@ structure Ctx where
   /-- Inside a block or construction kept with a choice in it (`$noLift`,
       #283): what it is, for the message. -/
   liftWhy : String := ""
+  /-- The effects the function being elaborated allows (#335): a
+      continuation's, which runs only where that code would. -/
+  fnFx : List String := []
 
 /-- A lazily taken call where the first success is taken (#246): its
     function, where, the code it runs once for all the values of an item,
@@ -2269,6 +2272,74 @@ def firstLiftOf (ctx c2 : Ctx) (p : Pos) (g : String) (lp : List SExpr) (b : Str
            ret := .tup (bls.map (·.ty.toSTy) ++ sets.map (·.ty.toSTy) ++ [.name "logic"]),
            body := Choice.firstBody name p b bty cls tail rest binds (sets.map fun l => (l.name, l.ty.toSTy)) capArgs (some vty.toSTy),
            binds, sets := sets.map (·.name), args := pnames.map (SExpr.ident p ·) ++ capArgs,
+           varBinds := (bls.filter (·.mutable)).map (·.name) }
+
+/-- (#335) The key of a continuation: where the composed choice is, its
+    binding, and the consumer's names the clauses after it use (in a method,
+    once its members are `Self`'s, as in the function), as `firstKey`. -/
+def contKey (ctx : Ctx) (p : Pos) (b : String) (rest : List SExpr) : String :=
+  let rest := match ctx.selfClass with
+    | some c => rest.map (selfQualify ctx c)
+    | none => rest
+  let caps := (Choice.namesUsed (.block p rest)).eraseDups.filter fun n => (ctx.lookup n).isSome
+  s!"k{p.line}_{p.col}_{p.file}_{b}_{String.intercalate "," caps}"
+
+/-- (#335) The function of its own that the clauses after a composed choice
+    (#296) are compiled as, where the first success is taken and those
+    clauses (`rest`) have another such choice: called from each alternative
+    with its value (`b`) and the consumer's names `rest` uses (from `ctx`,
+    before the choice), it gives at the first success of `rest` the names
+    they bind and the final values of the `var`s they set (their types from
+    `c2`, after `rest`; `fxB`, the effects). So `rest` is compiled once, not
+    once per alternative, which doubled the code with each such choice. Or
+    why not, and the clauses are copied, as before. -/
+def contLiftOf (ctx c2 : Ctx) (p : Pos) (b : String) (rest : List SExpr)
+    (fxB : List (String × Pos × Option String)) : Except String Choice.FirstLift := do
+  if ctx.inCtor || ctx.inParamDefault || ctx.inBlock || ctx.inDefer || !ctx.defaults.isEmpty then
+    throw "in a constructor, a default or a defer"
+  let key := contKey ctx p b rest
+  let σt : List (String × STy) := ctx.types.tvars.filterMap fun (n, t) =>
+    if n.startsWith "$tp" then some (n, t.toSTy) else none
+  let rest := rest.map (Refine.substTypes σt)
+  -- (in a method: the members of `Self` the clauses name bare, as members
+  -- of `Self`, which the function takes as a parameter, as #279's do)
+  let rest ← match ctx.selfClass with
+    | some c =>
+      if rest.any (Choice.anyE fun | .ident _ "(super:)" | .member _ (.ident _ "(super:)") _ => true | _ => false) then
+        throw "(super:)"
+      pure (rest.map (selfQualify ctx c))
+    | none => pure rest
+  -- (a `return`, or a `break` that leaves them, would leave the function)
+  if (Refine.findPart (fun | .ret .. => true | _ => false) false (.block p rest)).isSome then throw "a return"
+  if (Refine.findPart (fun | .brk _ => true | _ => false) true (.block p rest)).isSome then throw "a break"
+  let caps : List Local := (Choice.namesUsed (.block p rest)).eraseDups.filterMap ctx.lookup
+  let setNames := Choice.setsIn (.block p rest)
+  let sets := caps.filter fun l => l.mutable && setNames.contains l.name
+  let binds := (b :: Choice.boundIn rest).eraseDups
+  let bls ← binds.mapM fun n => match c2.lookup n with
+    | some l => pure l
+    | none => throw s!"internal: name {n}"
+  let some bl := bls.head? | throw "internal: no binding"
+  if bl.mutable then throw "a var binding"
+  if (caps ++ bls).any (fun l => !(Ty.paramsC l.ty).isEmpty) then throw "in a generic function"
+  let name := s!"$cont{p.line}_{p.col}_{key.hash}" ++ (if p.file.isEmpty then "" else s!"_{p.file}")
+  -- (its effects the function's own: its body is that function's code,
+  -- and it may call what is asked for only in the next elaboration, a
+  -- `$first…` or `$refine…`, whose effects this one cannot see)
+  let heap := ["reads", "writes", "allocates"].filter fun k => ctx.fnFx.contains k || fxB.any (·.1 == k)
+  let tup : SExpr := .tuple p (binds.map (SExpr.ident p ·) ++ sets.map (fun l => SExpr.ident p l.name) ++
+    [.ident p "true"])
+  -- (the `var`s it sets, copied from parameters named `m$in`, and given back)
+  let copies := sets.map fun l => SExpr.decl p l.name (some l.ty.toSTy) true (.ident p s!"{l.name}$in")
+  let params : List SParam := { name := b, ty := bl.ty.toSTy } ::
+    caps.map fun l => { name := if sets.any (·.name == l.name) then s!"{l.name}$in" else l.name, ty := l.ty.toSTy }
+  -- (`$firstP`: the clauses are lifted already, the consumer's, which lifting
+  -- again would bind twice, as for #275's functions)
+  return { key, pos := p, name, params,
+           specs := (if heap.isEmpty then ["computes"] else heap) ++ ["decides"],
+           ret := .tup (bls.map (·.ty.toSTy) ++ sets.map (·.ty.toSTy) ++ [.name "logic"]),
+           body := .block p (copies ++ [.app p (.ident p "$firstP") [.block p (rest ++ [tup])] false]),
+           binds, sets := sets.map (·.name), args := SExpr.ident p b :: caps.map (fun l => SExpr.ident p l.name),
            varBinds := (bls.filter (·.mutable)).map (·.name) }
 
 /-- `for`: clauses are generators, bindings and filters; each generator opens
@@ -5523,13 +5594,55 @@ partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
         let binds := (b.name :: Choice.boundIn rest).eraseDups
         let vars := rest.filterMap fun | .decl _ n _ true _ => some n | _ => none
         let tup : SExpr := .tuple p (binds.map (SExpr.ident p ·) ++ [.ident p "true"])
-        let alt (a : SExpr) (i : Nat) : SExpr :=
-          let lifted := Choice.prepare [.decl p b.name b.ty false a] (choiceValues ctx) (choiceField ctx)
+        let liftAlt (a : SExpr) (i : Nat) : List SExpr :=
+          Choice.prepare [.decl p b.name b.ty false a] (choiceValues ctx) (choiceField ctx)
             (fieldOrder := choiceOrder ctx)
             (site := s!"{t}a{i}")
-          .app p (.ident p "$firstP") [.block p (lifted ++ rest ++ [tup])] false
-        return ← elabOneGo ctx ([.decl p t none false (Choice.mk p (b.alts.zipIdx.map fun (a, i) => alt a i))] ++
-          binds.zipIdx.map fun (n, i) => .decl p n none (vars.contains n) (.app p (.ident p t) [.int p (i : Int)] false))
+        let alt (a : SExpr) (i : Nat) : SExpr :=
+          .app p (.ident p "$firstP") [.block p (liftAlt a i ++ rest ++ [tup])] false
+        let copied : List SExpr := [.decl p t none false (Choice.mk p (b.alts.zipIdx.map fun (a, i) => alt a i))] ++
+          binds.zipIdx.map fun (n, i) => .decl p n none (vars.contains n) (.app p (.ident p t) [.int p (i : Int)] false)
+        -- (#335: another such choice in the clauses after it: those clauses a
+        -- function of their own, which each alternative calls, instead of a
+        -- copy in each, which doubled the code with each such choice)
+        let isComposed (c : SExpr) : Bool := match Choice.binding? c with
+          | some { place := none, branchy := none, each := none, alts := as, .. } => as.any Choice.hasLiftable
+          | _ => false
+        -- (not where a call taken lazily is in it, #246: the function of its
+        -- own such a call may be compiled as takes the clauses after it, which
+        -- this changes between elaborations)
+        let hasLoop := (b.alts ++ rest).any (Choice.anyE fun | .app _ (.ident _ "$loop") _ _ => true | _ => false)
+        if rest.any isComposed && !hasLoop then
+          if let some l := ctx.types.loopRequests.find? (·.key == contKey ctx p b.name rest) then
+            let get (i : Nat) : SExpr := .app p (.ident p t) [.int p (i : Int)] false
+            -- (the call a clause, whose failure goes back into the
+            -- alternative's own choices, then its tuple the value)
+            let kt := s!"{t}k"
+            let altK (a : SExpr) (i : Nat) : SExpr :=
+              .app p (.ident p "$firstP") [.block p (liftAlt a i ++
+                [.decl p kt none false (.app p (.ident p l.name) l.args true), .ident p kt])] false
+            return ← elabOneGo ctx ([.decl p t none false (Choice.mk p (b.alts.zipIdx.map fun (a, i) => altK a i))] ++
+              l.binds.zipIdx.map (fun (n, i) => .decl p n none (l.varBinds.contains n) (get i)) ++
+              l.sets.zipIdx.map (fun (m, j) => .set p (.ident p m) none (get (l.binds.length + j))))
+          -- (the first elaboration: one alternative with the clauses after it,
+          -- for their names' types and effects, and the function asked for;
+          -- its code is not kept, as the next elaboration has the function)
+          if let some a0 := b.alts.head? then
+            let st0 ← get
+            let fx0 := st0.fx
+            modify fun st => { st with fx := [] }
+            let (code1, c1) ← elabOneGo ctx ([.decl p t none false (alt a0 0)] ++
+              binds.zipIdx.map fun (n, i) => .decl p n none (vars.contains n) (.app p (.ident p t) [.int p (i : Int)] false))
+            let fxB := (← get).fx
+            match contLiftOf ctx c1 p b.name rest fxB with
+            | .ok lift =>
+              let use : LoopUse := { g := "", pos := p, itemCode := .lit .void, argSet := none, lift := .ok lift }
+              modify fun st => { st with fx := fx0 }
+              modify fun st => { st with loopFirst := st.loopFirst ++ [use] }
+              for (k, q, via) in fxB do noteFx q [k] via
+              return (code1, c1)
+            | .error _ => set st0
+        return ← elabOneGo ctx copied
       let p := b.pos
       let n := b.name
       let (ty, es) ← elabAlts ctx p b
@@ -7449,6 +7562,12 @@ partial def exprWrites : Expr → Bool
 def checkLoopFirst (fns : Array Fn) (uses : List LoopUse) : Except String (List Choice.FirstLift) := do
   let mut needs : List Choice.FirstLift := []
   for u in uses do
+    -- (a continuation, #335: asked for whenever it could be made; when not,
+    -- the clauses were copied)
+    if u.g == "" then
+      if let .ok l := u.lift then
+        if !needs.any (·.key == l.key) then needs := needs ++ [l]
+      continue
     let g := u.g
     let e := u.itemCode
     let why (what via : String) : String :=
@@ -8726,7 +8845,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       ({ name := prm.name, slot := i, ty := t, mutable := false } : Local)
     for (prm, i) in ps.zip (List.range ps.length) do
       if ps.take i |>.any (·.name == prm.name) then throw s!"{p.show}: duplicate parameter '{prm.name}'"
-    let ctx : Ctx := { sigs := allSigs, sigProg, locals := locals.reverse, types := env,
+    let ctx : Ctx := { sigs := allSigs, sigProg, locals := locals.reverse, types := env, fnFx := allowed,
                        canFail := decides, retTy := ret, dictBase := ps.length, suspends,
                        dictVars := dictTps.map (·.1),
                        inBlock := name.endsWith ".$block",
