@@ -430,9 +430,13 @@ partial def TyEnv.coreArgs (env : TyEnv) (d : String) (args : List Ty) : List Ty
   | some q => env.coreArgs q (((env.pargs.lookup d).getD []).map (·.subst σ)) ++ extras
   | none =>
     -- a root: the type arguments it gives the parametric interfaces above it
-    -- (#53), then its other type parameters (an interface it lists without
-    -- type arguments gives none, #276)
-    match (env.info d).ifaces.findSome? fun i => (env.iargs.lookup (d, i)).filter (!·.isEmpty) with
+    -- (#53), then its other type parameters: those it gives the interface
+    -- it lists with the most, of which every other one's are a prefix (an
+    -- interface it lists without type arguments gives none, #276)
+    let ias := (env.info d).ifaces.filterMap fun i => (env.iargs.lookup (d, i)).filter (!·.isEmpty)
+    match ias.foldl (fun (b : Option (List Ty)) ia => match b with
+        | some b => if b.length < ia.length then some ia else some b
+        | none => some ia) none with
     | some ia =>
       let others := ps.filter fun p => !ia.any fun | .param v _ => v == p | _ => false
       ia.map (·.subst σ) ++ others.map fun p => (σ.lookup p).getD Ty.void
@@ -7237,9 +7241,13 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
         | none =>
           let ifs := cdefs.filter fun i => i.isIface && henv.isSub cd.name i.name
           if ifs.isEmpty then none else
-          let fewest := ifs.foldl (fun m i => min m i.tps.length) cd.tps.length
-          let first := ((cd.parents.zip cd.parentArgs).find? fun (q, qa) => (henv.info q).isIface && !qa.isEmpty).map (·.2)
-          some ((first.getD []).take fewest)
+          -- (the type arguments it gives the interface it lists with the
+          -- most, then its other type parameters, as `coreArgs` has them)
+          let longest := ((cd.parents.zip cd.parentArgs).filter fun (q, _) => (henv.info q).isIface).foldl
+            (fun (b : List STy) (_, qa) => if b.length < qa.length then qa else b) []
+          let others := cd.tps.filter fun tp => !longest.any fun | .name v => v == tp.name | _ => false
+          let fewest := ifs.foldl (fun m i => min m i.tps.length) (longest.length + others.length)
+          some (longest.take fewest)
       if let some qargs := qargs? then
         for tp in (if methodsBelow then cd.tps else []) do
           if !qargs.any (fun | .name v => v == tp.name | _ => false) then
@@ -7517,7 +7525,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
         -- those are fixed types, which the pins give)
         if (env.info cd.name).parent.isSome && ia.length < env.rootArgCount cd.name &&
             ((core cd.name).drop ia.length).any (!·.params.isEmpty) then
-          throw s!"{cd.pos.show}: {cd.name} has a parent class and lists {i}, which gives it fewer type arguments than its root class's interfaces: not supported yet (#276)"
+          throw s!"{cd.pos.show}: {cd.name} has a parent class and is below {i}, which gives it fewer type arguments than its root class does: not supported yet (#276)"
         if !(ia.isPrefixOf (core cd.name)) then
           let showArgs (ts : List Ty) : String := if ts.isEmpty then "none" else ", ".intercalate (ts.map Ty.show)
           if ia.length < (core cd.name).length then

@@ -560,9 +560,9 @@ circle := class(shape, labelled):
     named argument's default has no type of its own (#209); a class below
     an interface that does not give it its first type parameters, in
     order (`both(t, u) := class(container(t), sink(u))`, #276), or one
-    with a parent class that lists an interface giving it fewer type
-    parameters than its root class's interfaces do (`sbox(t) :=
-    class(box(t), shower)` below `box(t) := class(container(t))`, #276); a dispatch, in code generic over a
+    with a parent class below an interface that gives it fewer type
+    arguments than its root class does (`sbox(t) := class(box(t),
+    shower)` below `box(t) := class(container(t))`, #276); a dispatch, in code generic over a
     class, to a subclass whose fixed type arguments relate to ones the
     receiver's type does not have (#209); a cast `T[X]` whose type
     arguments agree with `X`'s only under a refinement (`dup[P]` for

@@ -1012,8 +1012,8 @@ above it with the fewest (#276), as `rootArgCount` does: `box(t) :=
 class(shower)` adds `t` to `shower`'s none, `pairbox(t, u) :=
 class(container(t))` adds `u`, and `box(t) := class(container(t),
 shower)` adds `t`, whichever interface comes first. Its Verse Core type
-arguments start with those it gives the first interface that has any, and
-every interface's must be a prefix of them, so that a reference to an
+arguments start with those it gives the interface it lists with the most,
+and every interface's must be a prefix of them, so that a reference to an
 interface has a prefix of the class's and a dispatch from it opens the
 rest; `iargs` records an empty list for an interface without type
 parameters. A class with a parent class that lists an interface giving it
