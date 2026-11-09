@@ -7076,7 +7076,9 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
         List.replicate (2 * arms) (Suspend.int 0) ++
         (List.range a).map (fun i => Expr.local (i + 1)) ++ ds.map (Suspend.shift 1) ++
         (← tempTys.mapM (dflt nps))
-    let cellDflt : List Expr ← if opened j then do pure [.heap (.new resCellTag) [← dflt nps ρ]] else pure []
+    -- (the cell starts holding a default of its own type, which may have
+    -- fewer type arguments than the override's result, #209)
+    let cellDflt : List Expr ← if opened j then do pure [.heap (.new resCellTag) [← dflt nps (cellResOf j)]] else pure []
     let newBody : Expr := .heap (.new (tagBase + j)) (newFields ++ cellDflt)
     if opened j then
       -- `newCell(params…, cell, sched)`: `new`'s frame, with the parameters

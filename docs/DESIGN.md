@@ -922,9 +922,18 @@ and journals every write made in a condition (for rollback). So:
   arguments (`declaredRes`, as the override check relates the two): an
   override with a narrower result (covariant: `pairE(a, b)`'s
   `Copy():pairE(a, b)` for `expr(t)`'s `Copy():expr(t)`) writes its result
-  there by subsumption (#209). A call that expects yet another result (from
-  a class between them that declares the method with a third one) is
-  refused. Slots of the override's
+  there by subsumption (#209). A call from a class between them that
+  declares the method with a third, narrower, result at the same type
+  arguments (`mid(t)`'s `Copy():mid(t)`) makes its cell of the wider
+  classes at its own type arguments, which the refinement makes the
+  frame's, and narrows the value with a cast (`isTag`) that the override's
+  result, below its class's declaration, always passes; a call from above
+  a cell of narrower classes (from `expr(t)`, the cell holding `mid(t)`'s
+  result because the override returns that) does the same with no cast.
+  The cell starts holding a default of its own type. Other calls that
+  expect yet another result are refused: from a class with type
+  parameters the first declaration's class does not have, or when two
+  first declarations disagree. Slots of the override's
   frame whose types mention its class's added type parameters start as
   the receiver's hidden fields (`$w`), as in its body.
 - A refined call that does not suspend (an immediate method, or a #157
