@@ -1,4 +1,4 @@
-# a refined call on a receiver read from a field, in a specialised generic suspends function, with placeholders (#179, #174, #157)
+# a refined call on a receiver read from a field, in a generic suspends function, with placeholders (#179, #174, #157)
 expr(t:type) := class<abstract>:
     Eval():t
 int_lit := class(expr(int)):

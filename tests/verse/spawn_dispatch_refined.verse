@@ -1,4 +1,4 @@
-# formerly refused: a spawned dispatch refined by #142 in a generic function, now specialised (#174)
+# formerly refused: a spawned dispatch refined by #142 in a generic function, a root at its type arguments (#174, #209)
 box(t:type) := class:
     V:t
     Size()<suspends>:int = 0

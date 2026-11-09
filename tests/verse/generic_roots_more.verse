@@ -1,4 +1,4 @@
-# specialising: through generic callers, recursion at the same type, a
+# generic roots: through generic callers, recursion at the same type, a
 # generic method with a branch, spawning a dispatch in generic code, and a
 # generic function never called (#174)
 box(t:type) := class:

@@ -1,5 +1,5 @@
 # a spawned dispatch at the type parameters of a function an opened override
-# calls: lifted into a generic `$dispatchK` before the specialisation, a root at
+# calls: lifted into a generic `$dispatchK`, a root at
 # the caller's type arguments (#244), not a copy per type (#209)
 job(t:type) := class<abstract>:
     Run()<suspends>:t

@@ -10,7 +10,7 @@ A program combines
     immediate method overridden the same way, reached through a holder's
     field (frame-resident receivers, #179) and from generic code;
   - generic suspends functions with branch, rush, race, sync, spawn and
-    defer (specialised at each type they are used at, #174);
+    defer (roots at their type arguments, #244);
   - spawns of plain calls and of dispatched methods (#173), awaited and
     cancelled, nested spawns (#180), and of methods every class fixes, in
     generic code (#204);
@@ -275,7 +275,7 @@ for j in range(NG):
     else:
         emit(1, "H.B.Peek()")
 
-# a generic function calling another at its own type (specialised in turn)
+# a generic function calling another at its own type
 emit(0, "Chain(X:t, H:holder(t), N:int where t:type)<suspends>:t =")
 emit(1, f"G{R.randrange(NG)}(X, H, N)")
 

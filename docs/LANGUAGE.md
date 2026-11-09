@@ -553,8 +553,7 @@ circle := class(shape, labelled):
   is a struct or container that holds one.
 - **Not yet supported** (each rejected with a message):
   - in a class with type parameters that its parent's type arguments
-    do not give: a `spawn` in an immediate override, or in a generic
-    immediate function an override calls at those type parameters, a `<suspends>` override whose
+    do not give: a `<suspends>` override whose
     result is narrower than the method's it overrides when called through
     code generic over the class above, and,
     in code generic over a class above, a call of one whose omitted
@@ -1248,14 +1247,10 @@ Main()<suspends>:void =
 - **Generic functions.** A generic function with a `branch`, a `rush` or a
   `spawn` is compiled once, as any generic function: its tasks are roots
   of the scheduler at its type arguments (#244), and it may call itself at
-  ever bigger types (`F(X:t)` calling `F(array{X})`). A spawned dispatch
-  whose receiver or arguments have types that mention its type parameters
-  (`spawn{E.Eval()}` on an `expr(t)`), and a generic immediate function
-  with a `spawn`, are still compiled once for each type they are used at
-  (#174), as is a generic function that uses one at its own type
-  parameters; such a function calling itself at ever bigger types would
-  need endlessly many copies and is refused: a program may need at most
-  500 copies, at types of at most 2000 parts.
+  ever bigger types (`F(X:t)` calling `F(array{X})`). So is one with a
+  spawned dispatch whose receiver or arguments have types that mention its
+  type parameters (`spawn{E.Eval()}` on an `expr(t)`), and a generic
+  immediate function with a `spawn` (#174, #209).
 
 ## Readings openverse takes
 

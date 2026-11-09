@@ -1,5 +1,5 @@
-# branch, rush and spawn in generic functions, which are specialised at the
-# types they are used at (#174)
+# branch, rush and spawn in generic functions, roots at their type
+# arguments (#174, #244)
 Tick(Name:string, X:t where t:type)<suspends>:t =
     Sleep(1.0)
     Print("tick {Name}")

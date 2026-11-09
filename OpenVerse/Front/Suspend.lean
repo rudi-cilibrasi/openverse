@@ -317,23 +317,6 @@ partial def pruneDead (S : Sigs) (Γ : List VTy) : Expr → Expr
   | .forE i it f b => .forE i (pruneDead S Γ it) (pruneDead S Γ f) (pruneDead S Γ b)
   | x => x
 
-/-- `e` with each call `call g es` for which `r g es` gives a function
-    redirected to it (#174). -/
-partial def redirectCalls (r : Nat → List Expr → Option Nat) : Expr → Expr
-  | .call f es =>
-    let es := es.map (redirectCalls r)
-    .call ((r f es).getD f) es
-  | .assign i x => .assign i (redirectCalls r x)
-  | .ret x => .ret (redirectCalls r x)
-  | .print x => .print (redirectCalls r x)
-  | .loop x => .loop (redirectCalls r x)
-  | .seq a b => .seq (redirectCalls r a) (redirectCalls r b)
-  | .prim p es => .prim p (es.map (redirectCalls r))
-  | .heap op es => .heap op (es.map (redirectCalls r))
-  | .ite c t x => .ite (redirectCalls r c) (redirectCalls r t) (redirectCalls r x)
-  | .forE i it f b => .forE i (redirectCalls r it) (redirectCalls r f) (redirectCalls r b)
-  | x => x
-
 /-- The number of arms of the `sync`s and `race`s (marks `m`) in `e`. -/
 partial def countArms (m : Nat → Bool) : Expr → Nat
   | .call f es =>
