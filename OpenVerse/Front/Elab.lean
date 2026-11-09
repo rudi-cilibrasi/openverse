@@ -4816,6 +4816,10 @@ structure Options where
   /-- Functions wanted as values at closed function types no class of
       theirs gave in an earlier elaboration (#214): a class for each. -/
   fnRequests : List (String × Ty) := []
+  /-- On an internal error (an elaborated function the checker rejects),
+      also print that function's Verse Core, its slot types and signature,
+      for a bug report (`OPENVERSE_DEBUG=1`). -/
+  debug : Bool := false
 
 /-- A class or interface definition, as parsed. -/
 structure CDef where
@@ -7368,7 +7372,11 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       | some fn, some (ps, τ), some Γ => !checkFn S fn ps τ Γ
       | _, _, _ => true
     let which := match bad with
-      | some f => s!" (in {((P.fns[f]?).map Fn.name).getD "?"})"
+      | some f =>
+        let dump := if !opts.debug then "" else
+          s!"\n-- body: {repr ((P.fns[f]?).map Fn.body)}\n-- arity: {(P.fns[f]?).map Fn.arity}" ++
+          s!"\n-- slot types: {repr (slotTys[f]?)}\n-- signature: {repr (S.fns[f]?)}"
+        s!" (in {((P.fns[f]?).map Fn.name).getD "?"}){dump}"
       | none => if !checkPrelude P S then " (the prototypes)" else ""
     throw s!"internal error: the elaborated program does not pass Prog.checkTypes{which}"
   return { prog := P, sigs := S, slotTys := slotTys.toList, fnNeeds := fnNeeds.eraseDups }
@@ -7420,13 +7428,13 @@ def compile (src : String) (opts : Options := {}) : Except String Prog := do
 
 /-- Compile loaded definitions (`Front.loadProgram`) with shell arguments,
     bound to `Args` when given or mentioned, and an optional `do` expression. -/
-def compileTops (tops : List STop) (args : List String) (mentionsArgs : Bool) (doExpr : Option String) :
-    Except String Prog := do
+def compileTops (tops : List STop) (args : List String) (mentionsArgs : Bool) (doExpr : Option String)
+    (debug : Bool := false) : Except String Prog := do
   let entry ← match doExpr with
     | some t => some <$> parseExprText t
     | none => pure none
   let useArgs := !args.isEmpty || mentionsArgs
-  return (← elabProgram tops { args := if useArgs then some args else none, entry }).prog
+  return (← elabProgram tops { args := if useArgs then some args else none, entry, debug }).prog
 
 /-- Compile with shell arguments (bound to `Args` when given or used) and an
     optional `do` expression, as `openverse run FILE ARG… do EXPR` does. -/

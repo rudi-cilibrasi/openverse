@@ -55,7 +55,10 @@ def loadAndCompile (file : String) (args : List String) (doExpr : Option String)
     IO (Except String Prog) := do
   match ← Front.loadProgram file with
   | .error e => return .error e
-  | .ok (tops, mentionsArgs) => return Front.compileTops tops args mentionsArgs doExpr
+  | .ok (tops, mentionsArgs) =>
+    -- (OPENVERSE_DEBUG=1: an internal error also prints the rejected Verse Core)
+    let debug := (← IO.getEnv "OPENVERSE_DEBUG").any fun v => v != "" && v != "0"
+    return Front.compileTops tops args mentionsArgs doExpr debug
 
 def withProg (file : String) (k : Prog → IO UInt32) : IO UInt32 := do
   match ← loadAndCompile file [] none with

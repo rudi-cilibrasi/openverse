@@ -109,6 +109,7 @@ scripts/fuzz-diff.sh 1000                   # differential fuzzing on random pro
 scripts/check.sh                            # all of the above, plus the C unit tests and QuickProof pins
 scripts/check-quickproof.sh --check         # QuickProof: qp check and qp verify (needs Docker)
 scripts/worktree.sh feat/x                  # a worktree ../openverse-x on branch feat/x, built from this one's .lake
+OPENVERSE_DEBUG=1 .lake/build/bin/openverse check F.verse   # an internal error also prints the rejected Verse Core
 ```
 
 ```verse
