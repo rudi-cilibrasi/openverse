@@ -666,14 +666,14 @@ partial def Ty.params : Ty → List String
 /-- The name that stands for the `j`-th Verse Core type argument in a pin (#209). -/
 def pinArg (j : Nat) : String := s!"$pos{j}"
 
-/-- Whether a written type mentions one of the names `vs` (a function type,
-    conservatively, does). -/
+/-- Whether a written type mentions one of the names `vs` (as `Ty.params`
+    has it, function types' parameters and result included). -/
 partial def STy.mentionsAny (vs : List String) : STy → Bool
   | .name n => vs.contains n
   | .arr t | .opt t => STy.mentionsAny vs t
   | .tup ts | .app _ ts => ts.any (STy.mentionsAny vs)
   | .map k v => STy.mentionsAny vs k || STy.mentionsAny vs v
-  | _ => true
+  | .fn ps _ r => ps.any (STy.mentionsAny vs) || STy.mentionsAny vs r
 
 /-- How many of class `d`'s Verse Core type arguments its root class
     gives: as many as the interface with the fewest type parameters that is
