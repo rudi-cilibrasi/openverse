@@ -5562,6 +5562,11 @@ def specialise (fns0 : Array Fn) (slotTys0 : Array (List VTy)) (S0 : Sigs) (ntpO
   let mut soft : Array Bool := (List.range nOrig).toArray.map fun gi =>
     ntpOf gi > 0 && isSusp gi && !needy[gi]! && !(genericRoots && holdsRoots gi)
   let mut softCopies := 0
+  -- (and at most 16 of each function: one calling itself at ever bigger
+  -- types, polymorphic recursion, would otherwise spend the whole budget,
+  -- each copy lowered on its own; its generic original serves the rest,
+  -- #256)
+  let mut softOf : Std.HashMap Nat Nat := {}
   let mut specKeys : Array (Nat × List VTy) := #[]
   let mut queue : Array Nat := ((List.range nOrig).filter fun gi => !needy[gi]!).toArray
   let mut qi := 0
@@ -5579,7 +5584,7 @@ def specialise (fns0 : Array Fn) (slotTys0 : Array (List VTy)) (S0 : Sigs) (ntpO
         let some θ := (witTys S Γ ρ g es).mapM id | continue
         if θ.any (·.mentionsVar) || θ.any (·.size > 40) then continue
         if !specKeys.contains (g, θ) then
-          if softCopies ≥ 200 then continue
+          if softCopies ≥ 200 || softOf.getD g 0 ≥ 16 then continue
           let σ : Nat → VTy := fun i => θ.getD i (.var i)
           let fn := fns[g]!
           let Γc := slotTys[g]!.map (VTy.subst σ)
@@ -5592,6 +5597,7 @@ def specialise (fns0 : Array Fn) (slotTys0 : Array (List VTy)) (S0 : Sigs) (ntpO
           queue := queue.push (nOrig + specKeys.size)
           specKeys := specKeys.push (g, θ)
           softCopies := softCopies + 1
+          softOf := softOf.insert g (softOf.getD g 0 + 1)
         continue
       let some θ := (witTys S Γ ρ g es).mapM id
         | throw (inFn fns[gi]!.name s!"a type argument of a call of {fns[g]!.name} has no type of its own (#174)")

@@ -682,8 +682,9 @@ double at each call reach quickly) turn polymorphic recursion into an
 error.
 
 The other generic suspends functions are copied the same way where they
-are called at small closed types (at most 40 parts, 200 copies), and kept
-for every other call (#225). The copy is not needed for correctness: a
+are called at small closed types (at most 40 parts, 200 copies, 16 of
+each function, so that one calling itself at ever bigger types does not
+spend the budget, #256), and kept for every other call (#225). The copy is not needed for correctness: a
 generic callee's frame has type arguments, so its caller keeps it in an
 option field, unwrapped and resumed in a condition, while a non-generic
 callee's lives in a field of its own class and is resumed after a test of
