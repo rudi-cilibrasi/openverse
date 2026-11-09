@@ -1198,19 +1198,18 @@ def firstBody (helper : String) (p : Pos) (b : String) (bty : Option STy) (cls :
   .block p (copies ++ cls ++
     [.app p (.ident p "$first") [.block p [.decl p "$R" none false tail', .ident p "$R"]] false])
 
-/-- The functions of the program that have several values, inlined at their
-    calls (see above); the program unchanged when there are none. Also
-    whether some are taken lazily (#246), whose consumers need a class of
-    stack cells. -/
-def inlineMulti (tops : List STop) : Except String (List STop × Bool) := do
-  -- (not `Main` or the entry expression, which nothing calls in a failure
-  -- context, nor `<suspends>` functions, which cannot run in one)
-  let fns : List (String × MFn) := tops.filterMap fun
+/-- The functions a call of which may have several values: (not `Main` or
+    the entry expression, which nothing calls in a failure context, nor
+    `<suspends>` functions, which cannot run in one). -/
+def multiCandidates (tops : List STop) : List (String × MFn) :=
+  tops.filterMap fun
     | .fn p n ps tps fx r b =>
       if n == "Main" || n == "$Do" || fx.contains "suspends" then none else some (n, ⟨p, ps, tps, fx, r, b⟩)
     | _ => none
-  -- (several values, also through the calls of ones that have them, where
-  -- the body itself does not take their values)
+
+/-- Which of `fns` have several values, also through the calls of ones that
+    have them, where the body itself does not take their values. -/
+def multiValued (fns : List (String × MFn)) : List String := Id.run do
   let mut mv : List String := []
   let mut changed := true
   while changed do
@@ -1219,6 +1218,172 @@ def inlineMulti (tops : List STop) : Except String (List STop × Bool) := do
       let ss := stmtsOf (markCalls mv f.body)
       if !mv.contains n && (hasChoice ss || ss.any liftsHere) then
         mv := mv ++ [n]; changed := true
+  return mv
+
+/-- The name of the function a method `m` of class `c` with several values
+    becomes (#283). -/
+def methodFnName (c m : String) : String := s!"{c}${m}"
+
+/-- The calls of the methods `sel` (name, class) in `e` as calls of their
+    functions (#283): `R.M(args)` as `C$M(R, args)`, and in the body of a
+    class `inC` below `C` (`anc` gives a class's ancestors), `M(args)` as
+    `C$M(Self, args)`. -/
+partial def rwMethodCalls (anc : String → List String) (sel : List (String × String)) (inC : Option String)
+    (e : SExpr) : SExpr :=
+  let rw := rwMethodCalls anc sel inC
+  mapE (fun
+    | .app p (.member q recv m) args br =>
+      match sel.lookup m with
+      | some c => if (match recv with | .ident _ "(super:)" => true | _ => false) then none
+        else some (.app p (.ident q (methodFnName c m)) (rw recv :: args.map rw) br)
+      | none => none
+    | .app p (.ident q m) args br =>
+      match sel.lookup m, inC with
+      | some c, some d => if (anc d).contains c then
+          some (.app p (.ident q (methodFnName c m)) (.ident q "Self" :: args.map rw) br) else none
+      | _, _ => none
+    | _ => none) e
+
+/-- Methods with several values (#283), as top-level functions that take
+    `Self` explicitly, so that everything functions with several values
+    have applies: `C$M($Self:C, params…)`, its body with the names of `C`'s
+    members (and its supers') qualified by `Self`, then `Self` renamed;
+    `R.M(args)` becomes `C$M(R, args)` (the receiver first, once), and in
+    `C`'s bodies and its subclasses' `M(args)` and `Self.M(args)` become
+    `C$M(Self, args)`. Inlining has no types, so `R.M` must name that
+    method whatever `R` is: such a method's name is no other class's or
+    interface's member, no top-level name and no parameter or local, its
+    class is not generic, and it is not abstract, an override, generic,
+    `<suspends>`, or a user of `(super:)`. Those methods that turn out to
+    have several values are taken out of their class. -/
+def methodFns (tops : List STop) : Except String (List STop) := do
+  let classes := tops.filterMap fun
+    | .classDef _ n tps _ pa ii fs _ ms => some (n, (pa, ii, fs, ms, tps))
+    | _ => none
+  if classes.isEmpty then return tops
+  let parentNames (pa : List STy) : List String := pa.filterMap fun | .name n => some n | .app n _ => some n | _ => none
+  let rec ancestors (fuel : Nat) (c : String) : List String := match fuel with
+    | 0 => [c]
+    | f + 1 => c :: (((classes.lookup c).map fun (pa, _) => (parentNames pa).flatMap (ancestors f)).getD [])
+  let anc (c : String) : List String := (ancestors (classes.length + 1) c).eraseDups
+  -- (every member name of `c`, inherited ones too)
+  let members (c : String) : List String := (anc c).flatMap fun d =>
+    match classes.lookup d with
+    | some (_, _, fs, ms, _) => fs.map (·.1) ++ ms.filterMap fun | .fn _ m .. => some m | _ => none
+    | none => []
+  let allMethods : List String := classes.flatMap fun (_, (_, _, _, ms, _)) => ms.filterMap fun | .fn _ m .. => some m | _ => none
+  let allFields : List String := classes.flatMap fun (_, (_, _, fs, _, _)) => fs.map (·.1)
+  let topNames : List String := tops.filterMap fun | .fn _ n .. | .const _ n .. | .classDef _ n .. => some n
+  let localBinders : List String := tops.flatMap fun
+    | .fn _ _ ps _ _ _ b => ps.map (·.name) ++ localsOf b
+    | .classDef _ _ _ _ _ _ _ _ ms => ms.flatMap fun | .fn _ _ ps _ _ _ b => ps.map (·.name) ++ localsOf b | _ => []
+    | _ => []
+  let superCall (b : SExpr) : Bool := anyE (fun | .member _ (.ident _ "(super:)") _ => true | _ => false) b
+  -- (why a method cannot become a function, if it cannot)
+  let whyNot (ii : Bool) (tps : List TParam) : STop → Option String
+    | .fn _ n _ mtps fx _ b =>
+      if n.startsWith "$" || n.startsWith "(" || fx.contains "$abstract" then some ""
+      else if ii then some "it is an interface's"
+      else if !tps.isEmpty then some "its class is generic"
+      else if !mtps.isEmpty then some "it is generic"
+      else if fx.contains "suspends" then some "it is <suspends>"
+      else if fx.contains "override" || (allMethods.filter (· == n)).length != 1 then
+        some s!"another class or interface has a method {n} too (an override, an overridden one, or another), so a call R.{n}(…) cannot be known to be this one where it is inlined, before types are checked"
+      else if allFields.contains n || topNames.contains n || localBinders.contains n then
+        some s!"{n} is also the name of a field, a top-level name, a parameter or a local"
+      else if superCall b then some "it uses (super:)"
+      else none
+    | _ => some ""
+  -- (the candidates: class, method)
+  let cands : List (String × STop) := classes.flatMap fun (c, (_, ii, _, ms, tps)) =>
+    ms.filterMap fun m => if (whyNot ii tps m).isNone then some (c, m) else none
+  let owner : List (String × String) := cands.filterMap fun | (c, .fn _ n ..) => some (n, c) | _ => none
+  let rw := rwMethodCalls anc
+  -- (a method's body as the function's: its members qualified by `Self`,
+  -- then `Self` the parameter `$Self`)
+  let fnOf (sel : List (String × String)) (c : String) : STop → Option STop
+    | .fn p m ps _ fx r b =>
+      let mem := members c
+      let isMethodName := fun n => (anc c).any fun d => match classes.lookup d with
+        | some (_, _, _, ms, _) => ms.any fun | .fn _ x .. => x == n | _ => false
+        | none => false
+      let bound := ps.map (·.name) ++ localsOf b
+      let free := fun n => !bound.contains n && n != "Self"
+      let qual := mapE (fun
+        | .app p2 (.ident q2 n) args br =>
+          if free n && isMethodName n then some (.app p2 (.member q2 (.ident q2 "Self") n) args br) else none
+        | .ident p2 n => if free n && mem.contains n then some (.member p2 (.ident p2 "Self") n) else none
+        | _ => none)
+      -- (now `M(…)` is `Self.M(…)`; then the calls of the selected ones;
+      -- a parameter's default too, which sees the method's fields)
+      let fix := fun e => renameE [("Self", "$Self")] (rw sel (some c) (qual e))
+      let ps' := ps.map fun sp => { sp with default := sp.default.map fix }
+      some (.fn p (methodFnName c m) ({ name := "$Self", ty := .name c } :: ps') [] fx r (fix b))
+    | _ => none
+  -- (which of them have several values: with every candidate's calls
+  -- rewritten, the functions' fixpoint)
+  let all := cands.map fun (c, m) => (c, m)
+  let trial : List STop := tops.map (fun
+      | .fn p n ps tps fx r b => .fn p n ps tps fx r (rw owner none b)
+      | .classDef p n tps sp pa ii fs ov ms => .classDef p n tps sp pa ii fs ov (ms.map fun
+          | .fn p2 m ps fx2 x r b => .fn p2 m ps fx2 x r (rw owner (some n) b)
+          | s => s)
+      | t => t) ++ all.filterMap fun (c, m) => fnOf owner c m
+  let mv := multiValued (multiCandidates trial)
+  -- (one that has several values but cannot become a function: refused,
+  -- saying why)
+  for (c, (_, ii, _, ms, tps)) in classes do
+    for m in ms do
+      if let (some why, .fn p n _ _ _ _ b) := (whyNot ii tps m, m) then
+        if why != "" then
+          let ss := stmtsOf (markCalls mv (rw owner (some c) b))
+          if hasChoice ss || ss.any liftsHere then
+            throw s!"{p.show}: {c.replace "::" "."}.{n} has several values, but {why}: such methods are not supported yet (#283)"
+  let sel := owner.filter fun (m, c) => mv.contains (methodFnName c m)
+  if sel.isEmpty then return tops
+  -- (the program with those methods out of their classes and their calls
+  -- rewritten, and their functions)
+  let out := tops.map fun
+    | .fn p n ps tps fx r b => .fn p n ps tps fx r (rw sel none b)
+    | .const p n ty e => .const p n ty (rw sel none e)
+    | .classDef p n tps sp pa ii fs ov ms =>
+      .classDef p n tps sp pa ii (fs.map fun (f, t, d, v) => (f, t, d.map (rw sel (some n)), v)) ov (ms.filterMap fun
+        | .fn p2 m ps fx2 x r b => if sel.any (fun (m', c) => m' == m && c == n) then none
+            else some (.fn p2 m ps fx2 x r (rw sel (some n) b))
+        | s => some s)
+  -- (what is left of their names is a use as a value: refused, as for a
+  -- function's; a name of theirs is nothing else's)
+  let valueUse (e : SExpr) : Option (Pos × String) := Id.run do
+    let mut r := none
+    for m in sel.map (·.1) do
+      if r.isNone && anyE (fun | .member _ _ x | .ident _ x => x == m | _ => false) e then
+        r := some (e.pos, m)
+    return r
+  for t in out do
+    let bodies : List SExpr := match t with
+      | .fn _ _ ps _ _ _ b => b :: ps.filterMap (·.default)
+      | .const _ _ _ e => [e]
+      | .classDef _ _ _ _ _ _ fs _ ms => fs.filterMap (·.2.2.1) ++ ms.flatMap fun
+          | .fn _ _ ps _ _ _ b => b :: ps.filterMap (·.default)
+          | _ => []
+    for b in bodies do
+      if let some (_, m) := valueUse b then
+        let c := (sel.lookup m).getD ""
+        let p := ((stmtsOf b).find? (anyE fun | .member _ _ x | .ident _ x => x == m | _ => false)).map (·.pos) |>.getD b.pos
+        throw s!"{p.show}: {c.replace "::" "."}.{m} has several values, so it cannot be used as a function value (#235, #283)"
+  return out ++ all.filterMap fun (c, m) => match m with
+    | .fn _ n .. => if sel.any (fun (m', c') => m' == n && c' == c) then fnOf sel c m else none
+    | _ => none
+
+/-- The functions of the program that have several values, inlined at their
+    calls (see above); the program unchanged when there are none. Also
+    whether some are taken lazily (#246), whose consumers need a class of
+    stack cells. -/
+def inlineMulti (tops : List STop) : Except String (List STop × Bool) := do
+  -- (methods with several values as functions first, #283)
+  let tops ← methodFns tops
+  let fns := multiCandidates tops
+  let mv := multiValued fns
   if mv.isEmpty then return (tops, false)
   let mfs := fns.filter (mv.contains ·.1)
   -- (every name the program binds: parameters, locals, fields, methods)

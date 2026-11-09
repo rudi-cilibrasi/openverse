@@ -755,7 +755,26 @@ Main():void =
   back or kept as the caller's are; the caller needs the callee's declared
   effects, as for any call. With named parameters, as at any call: the
   positional arguments, then the named ones as written, then the defaults
-  of those omitted, each seeing only the parameters before it (#283). The function itself is still checked
+  of those omitted, each seeing only the parameters before it (#283).
+
+  A method with several values works the same way (#283): a call
+  `R.M(args)` evaluates `R` first, once, then is inlined like a function's,
+  with `Self` the receiver, and so is `M(args)` in its class's methods and
+  those of the classes below it. A recursive one is taken lazily, and a
+  named parameter's default sees the fields. Inlining happens before
+  types are checked, so `R.M` has to name that method whatever `R` is:
+  such a method's name must be no other class's or interface's member
+  (so it is no override and is not overridden), no top-level name and no
+  parameter or local, and its class not generic.
+
+  ```verse
+  dice := class:
+      Sides : int
+      Roll()<transacts>:int = 1 | Sides
+  Main()<transacts>:void =
+      D := dice{Sides := 6}
+      for (X := D.Roll(), Y := D.Roll()) { Print("{X}{Y}") }   # 11 16 61 66
+  ``` The function itself is still checked
   as any function is (types, effects, `<decides>`), with each choice read
   as any of its alternatives.
 
@@ -824,7 +843,8 @@ Main():void =
   use have type parameters (`Self` of a generic class among them), an
   overloaded one (a generic one's type arguments are inferred from the
   arguments where it is inlined, as at a call), a recursive or generic one
-  with named parameters, one with a `return` or a `defer:` of its own (in its body, not in a block inside it), a method, one used as a function value, a call of a
+  with named parameters, one with a `return` or a `defer:` of its own (in its body, not in a block inside it), a method whose name another class or interface
+  also has, of a generic class, generic, `<suspends>` or using `(super:)`, one used as a function value, a call of a
   recursive one in an `if`'s branch or a `set`'s path, and, since its body is inlined where other names may be
   in scope, one whose name is also the name of a parameter, local, field or
   method anywhere in the program, and a call of one where a name its body
@@ -1273,6 +1293,6 @@ Main()<suspends>:void =
 arithmetic on rationals (see [rational](#rational)), float functions beyond those of [float](#float),
 the class features listed under [Classes](#classes), struct methods (Verse structs have none; classes do),
 `weak_map`, module paths `using{/Verse.org/…}` (accepted and ignored), overloading beyond [Overloading](#overloading), nested
-functions and lambdas (not released in Verse), choice beyond [Choice](#choice) (recursive functions with several values that have effects, other than generators, methods with several values; a choice inside a block with a `defer:` or a construction whose default runs before it), concurrency beyond [Concurrency](#concurrency) (`subscribable_event()` without a value), and effect checking
+functions and lambdas (not released in Verse), choice beyond [Choice](#choice) (recursive functions with several values that have effects, other than generators, methods with several values whose name another class shares or whose class is generic; a choice inside a block with a `defer:` or a construction whose default runs before it), concurrency beyond [Concurrency](#concurrency) (`subscribable_event()` without a value), and effect checking
 other than `<decides>` and the heap effects (`<converges>` is accepted and
 ignored).
