@@ -7,7 +7,8 @@
 # exact effects where the first success is taken from the review of #275,
 # consumers in methods from the review of #279, a return in a test's clauses from #284 and #287,
 # alternatives with several values from the review of #296, blocks and constructions from #302,
-# named arguments from #305, functions with several values and named parameters from #307.
+# named arguments from #305, functions with several values and named parameters from #307,
+# methods with several values from #310.
 """Random programs with choices INSIDE expressions (PR #234, phase 2), and an
 independent model written from docs/LANGUAGE.md's "Choice" section (not from
 scripts/gen-choice.py, and not from the lifting code).
@@ -48,6 +49,8 @@ flags: heavy     (with bif: more of them, longer chains, longer conditions)
        noforset  (no op= / indexed set in a for)
        noret     (no `if (A op B) then return else true` among a test's clauses,
                   on with lazy otherwise, #284/#287)
+       nomvm     (no bare call, in a test that runs as a method, of that class's own
+                  method with several values; on with meth otherwise, #310)
        nonam     (no call of NAM(NU, ?NV := …), a function with several values and a
                   named parameter whose default prints; on with lazy otherwise)
        nona      (no call of NA(A, ?P := …, ?Q := …) with named arguments in a test's
@@ -264,6 +267,17 @@ NA = LAZY and 'nona' not in flags and 'cf' not in flags
 # several values and a named parameter (inlined): its argument, then ?NV's if given,
 # else the default (printing dv), then a choice of its two values.
 NAM = LAZY and 'nonam' not in flags and 'cf' not in flags
+# ---- #310, flag mvm (on with meth; nomvm turns it off): a test that runs as a
+# method may call, bare, its class's own method with several values,
+#   MvT(MpT:int):int = MpT + Nx() | MpT + HpT(NTa),  HpT(HqT:int):int = HqT * 2
+# (unique names, as #310 requires): the first alternative calls Self's Nx,
+# overridden at times, so it counts in Cn only when that alternative runs; the
+# second reads the var field NTa where it is evaluated, as a bare call's
+# argument in the body. At times a top-level constant has the field's name
+# (NTa:int = 100 + T), and the call's argument is the field itself: the
+# argument and the body must both read the field (the silent bug #310's review
+# found).
+MVM = 'nomvm' not in flags
 REFUSED = [False]
 
 
@@ -274,7 +288,7 @@ class Return(Exception):
 
 # the kinds of node whose insides are failure contexts of their own (or an
 # inlined function's arguments), where a lifted call's clauses are not the test's
-NESTED = ('not', 'logic', 'optor', 'orx', 'ifx', 'bif', 'mcall', 'choice', 'blk', 'cons', 'na', 'nam')
+NESTED = ('not', 'logic', 'optor', 'orx', 'ifx', 'bif', 'mcall', 'choice', 'blk', 'cons', 'na', 'nam', 'mvm')
 
 
 def lift_pos(x):
@@ -375,6 +389,15 @@ def gen_e(scope, vars_, d, ch):
         if op == '*' and R.random() < 0.5:
             a, b = b, a
         return ('bin', op, a, b)
+    if (k < 0.48 and MVM and CTX.get('meth') and METH and ch and NCH[0] < 4 and CTX['fmax'] is None
+            and not CTX['nochoice'] and not CTX.get('inset') and not CTX.get('inbif') and R.random() < 0.9
+            and (not MV or PROD[0] * 2 <= CTX['plim'])):
+        NCH[0] += 1
+        if MV:
+            PROD[0] *= 2
+        CTX['mvm_used'] = True
+        arg = ('ref', CTX['mvm'][1]) if R.random() < 0.4 else gen_e(scope, vars_, d + 1, ch)
+        return ('mvm', arg, CTX['mvm'])
     if (k < 0.48 and NAM and ch and NCH[0] < 4 and CTX['fmax'] is None and not CTX['nochoice']
             and not CTX.get('inset') and not CTX.get('inbif') and R.random() < 0.5
             and (not MV or PROD[0] * 2 <= CTX['plim'])):
@@ -981,6 +1004,8 @@ def show(e):
         return f'PS(pt{{X := {show(e[1])}, Y := {show(e[2])}}})'
     if t == 'blk':
         return f'block{{ {e[1]} := {show(e[2])}; {show(e[3])} }}'
+    if t == 'mvm':
+        return f'Mv{e[2][0]}({show(e[1])})'
     if t in ('na', 'nam'):
         items = [f'?{n} := {show(x)}' for n, x in e[2]]
         items.insert(e[3], show(e[1]))
@@ -1121,7 +1146,7 @@ def failable(scope, vars_):
 
 def top_choice_e(e):
     t = e[0]
-    if t in ('choice', 'bif', 'mcall', 'rcall', 'gcall', 'nam'):
+    if t in ('choice', 'bif', 'mcall', 'rcall', 'gcall', 'nam', 'mvm'):
         return True
     if t in ('lit', 'ref', 'next', 'bprint', 'bset', 'optor', 'orx', 'ifx', 'obj', 'cnext', 'big', 'snx'):
         return False
@@ -1266,6 +1291,17 @@ def ev(e, st, k, mode):
     if t == 'bset':
         st.vars[e[1]] = e[3] if e[2] == '=' else chks(st.vars[e[1]] + e[3], st)
         return ev(e[4], st, k, mode)
+    if t == 'mvm':
+        def kmvm(v, s0):
+            def alt1(s1, k2):
+                c = s1.vars['S.Cn']
+                s1.vars['S.Cn'] = c + SNX['inc']
+                return k2(chks(v + c, s1), s1)
+
+            def alt2(s1, k2):
+                return k2(chks(v + 2 * s1.vars[e[2][1]], s1), s1)
+            return choice_point([alt1, alt2], s0, k, mode)
+        return ev(e[1], st, kmvm, mode)
     if t == 'nam':
         def knam(vu, s0):
             def finish(nv, s):
@@ -1746,6 +1782,9 @@ for ti in range(NT):
         SNX['inc'] = 2 if ovr else 1
         st.vars['S.Cn'] = 0
     CTX['meth'] = meth
+    CTX['mvm'] = (ti, f"N{ti}a")
+    CTX['mvm_used'] = False
+    CTX['mvm_const'] = R.random() < 0.5
     L = [f"{name}():void ="]
     for v in vars_:
         L.append(f"    var {v}:int = 0")
@@ -1796,9 +1835,14 @@ for ti in range(NT):
              f"    var {vars_[1]}{'<private>' if priv else ''}:int = 0"]
         if ovr:
             M += ["    Nx<override>()<transacts>:int =", "        set Cn += 2", "        Cn - 2"]
+        if CTX.get('mvm_used'):
+            M.append(f"    Hp{ti}(Hq{ti}:int):int = Hq{ti} * 2")
+            M.append(f"    Mv{ti}(Mp{ti}:int):int = Mp{ti} + Nx() | Mp{ti} + Hp{ti}(N{ti}a)")
         M.append("    Run():void =")
         M += ["    " + l for l in L[3:]]
         M.append(f"{name}():void = {name}c{{}}.Run()")
+        if CTX.get('mvm_used') and CTX.get('mvm_const'):
+            M.insert(0, f"N{ti}a:int = {100 + ti}")    # (a constant named like the field)
         return M
     binds = [c[1] for c in cl if c[0] in ('bind', 'range', 'sbind')]
     vals_str = " ".join("{" + b + "}" for b in binds)
