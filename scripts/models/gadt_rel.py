@@ -56,8 +56,6 @@ def poss(t):
     if k in ('opt', 'arr'): return poss(t[1])
     return []
 
-def closed(t): return not tvars(t) and not poss(t)
-
 def match(p, a, s):
     """first-order matching of pattern p (vars) against closed a."""
     if s is None: return None
@@ -71,41 +69,6 @@ def match(p, a, s):
         for x, y in zip(p[2], a[2]): s = match(x, y, s)
         return s
     return s
-
-def unify(eqs):
-    """Robinson unification over our type terms ('var' and 'pos' are variables)."""
-    s = {}
-    def key(t): return t if t[0] == 'pos' else t
-    def walk(t):
-        while t[0] in ('var', 'pos') and (t[1] if t[0] == 'var' else t) in s:
-            t = s[t[1] if t[0] == 'var' else t]
-        return t
-    def full(t):
-        t = walk(t)
-        if t[0] in ('opt', 'arr'): return (t[0], full(t[1]))
-        return t
-    def occurs(vk, t):
-        t = walk(t)
-        if t[0] in ('var', 'pos'): return (t[1] if t[0] == 'var' else t) == vk
-        if t[0] in ('opt', 'arr'): return occurs(vk, t[1])
-        return False
-    work = list(eqs)
-    while work:
-        a, b = work.pop()
-        a, b = walk(a), walk(b)
-        # (a string is an array of char in Verse, string = []char: []x unifies with it, at x = char)
-        if a == STR: a = Arr(('char',))
-        if b == STR: b = Arr(('char',))
-        if a == b: continue
-        if a[0] in ('var', 'pos') or b[0] in ('var', 'pos'):
-            if a[0] not in ('var', 'pos'): a, b = b, a
-            vk = a[1] if a[0] == 'var' else a
-            if occurs(vk, b): return None
-            s[vk] = b; continue
-        if a[0] != b[0]: return None
-        if a[0] in ('opt', 'arr'): work.append((a[1], b[1])); continue
-        return None
-    return {k: full(v) for k, v in s.items()}
 
 # ---------------------------------------------------------------- values
 def show(v, t):
@@ -202,10 +165,6 @@ def pins_of(c):
     pq = pins_of(classes[c.parent])
     return [o if o is None or all(j < len(pq) for j in poss(o)) else (pq[i] if i < len(pq) else None)
             for i, o in enumerate(own)]
-
-def core_args_at(c, args):
-    s = dict(zip(c.params, args))
-    return [subst(a, s) for a in core_args(c)]
 
 def is_sub(c, e):
     return any(x.name == e.name for x in chain(c))
@@ -359,57 +318,6 @@ for c in order[1:]:
 root.meths['Put'] = ('set A = X', ('set', 'A', 0))
 
 # ---------------------------------------------------------------- pins / dispatch prediction
-def pinned_names():
-    fixers = set()
-    for c in order[1:]:
-        if c.meths and any(p is not None for p in pins_of(c)):
-            fixers.add(c.name)
-    return {c.name for c in order if any(x.name in fixers for x in chain(c))}
-
-PINNED = pinned_names()
-def core_pins(c): return pins_of(c) if c.name in PINNED else []
-
-def need_of(pins, rargs):
-    s = {('pos', j): a for j, a in enumerate(rargs)}
-    out = []
-    for a, p in zip(rargs, pins):
-        if p is None: continue
-        pt = subst(p, s)
-        if a != pt: out.append((a, pt))
-    return out
-
-def ndicts_of(e):
-    """The type arguments an implementation in class `e` takes as values:
-    all of a root's (its methods are declared there), or those an override
-    gets from its parent as a whole (it reads the added ones from the
-    receiver's hidden fields, Sig.selfTps)."""
-    if e.parent is None: return len(e.params)
-    return len([p for p in e.params if any(a == V(p) for a in e.pargs)])
-
-def dispatch_refused(rc, rargs, m):
-    """documented refusal: pins relating the receiver's args to ones it lacks,
-    with an implementation that fixes something.  Lifted: such a dispatch is
-    refined, and the implementation's hidden arguments come from the caller's
-    own type parameters (#209, Ctx.unrefine), so nothing is refused."""
-    return None
-    groups = {}
-    for d in concrete_below(rc):
-        e = impl_of(d, m); groups.setdefault(e.name, []).append(d)
-    for en, cls in groups.items():
-        e = classes[en]
-        if is_sub(rc, e): continue
-        # (only an implementation that takes values of type arguments: an
-        # override reads its class's added ones from the receiver, #242)
-        if ndicts_of(e) == 0: continue
-        if not any(need_of(core_pins(d), rargs) for d in cls): continue
-        for d in cls:
-            # (no object of `d` can be the receiver at this type: no test)
-            if unify(need_of(core_pins(d), rargs)) is None: continue
-            key = core_pins(d)[:len(rargs)]
-            if not all(p is None or all(j < len(rargs) for j in poss(p)) for p in key):
-                if need_of(core_pins(e), rargs): return d.name
-    return None
-
 # ---------------------------------------------------------------- callers
 var_pool = ['a', 'b']
 def rand_pattern():
@@ -480,10 +388,8 @@ CLOSED = [INT, STR, Opt(INT), Arr(INT), Arr(STR)]
 objs = []   # (name, class, args, fields dict, static type args at class)
 main = []
 expect = []
-refusal = None
 
 def make_obj(c):
-    global refusal
     args = [R.choice(CLOSED) for _ in c.params]
     ft = field_tys(c)
     s = dict(zip(c.params, args))
@@ -532,19 +438,12 @@ def static_up(o, rc):
 
 used_callers = set()
 def do_call(o, cl):
-    global refusal
     nm, rc, pat, m, txt, via = cl
     up = static_up(o, rc)
     if up is None: return False
     s = {}
     for p, a in zip(pat, up): s = match(p, a, s)
     if s is None: return False
-    # predicted refusal at this caller (generic) or its inner
-    rs = [(c2[0], r) for c2 in ([cl] + ([via] if via else []))
-          for r in [dispatch_refused(c2[1], core_args_at(c2[1], list(c2[2])), c2[3])] if r]
-    if rs:
-        if ch(0.85): return False
-        refusal = refusal or rs[0]
     used_callers.add(nm)
     if via: used_callers.add(via[0])
     pa = pair_args(rc, [subst(t, s) for t in pat])
@@ -576,7 +475,6 @@ for _ in range(nobj):
     if ch(0.5):
         m = R.choice(['Get', 'Snd', 'Name'])
         sc, sargs = o['static']
-        if dispatch_refused(sc, core_args_at(sc, list(sargs)), m): continue
         spa = pair_args(sc, list(sargs))
         rt = spa[0] if m == 'Get' else spa[1] if m == 'Snd' else STR
         v = run_method(o, m)
@@ -597,8 +495,6 @@ for k, os_ in groups.items():
         s = {}
         for p, a in zip(cl[2], k): s = match(p, a, s)
         if s is None: continue
-        bad = any(dispatch_refused(c2[1], core_args_at(c2[1], list(c2[2])), c2[3]) for c2 in ([cl] + ([cl[5]] if cl[5] else [])))
-        if bad: continue
         cands.append((cl, s))
     if not cands: continue
     cl, s = R.choice(cands)
@@ -643,7 +539,4 @@ prog.append("Main():void =")
 prog += main if main else ["    Print(\"none\")"]
 print('\n'.join(prog))
 with open(out_exp, 'w') as fh:
-    if refusal:
-        fh.write("exit=4\ncannot dispatch\n")
-    else:
-        fh.write("exit=0\n" + ''.join(l + '\n' for l in expect))
+    fh.write("exit=0\n" + ''.join(l + '\n' for l in expect))
