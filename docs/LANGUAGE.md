@@ -766,7 +766,10 @@ Main():void =
   field, enumerator or member of a built-in type (`Length`, `Find`,
   `Signal`, …), no top-level name and no parameter or local, and its
   classes not generic. A call of an overridden one dispatches on the
-  receiver's class as any method call does, and `(super:)M(…)` calls the
+  receiver's class as any method call does, adding no choice of its own
+  (#314): in a `for`, a value the filters after it reject undoes what came
+  before it, the receiver's and the arguments' effects and the earlier
+  clauses, unless the implementation reaches a choice of its own. `(super:)M(…)` calls the
   implementation above; a recursive overridden one is computed at the
   call (its implementations call each other through the dispatch), so
   it must be `<computes>`. A parameter or local of the method named like a

@@ -249,6 +249,8 @@ partial def hasLiftable : SExpr → Bool
   | .app _ (.ident _ "$excl") _ false => false
   | .app _ (.ident _ "$choice") _ false => true
   | .app _ (.ident _ "$inline") _ false => true
+  -- (an overridden method's dispatch, which becomes an inlined call, #283)
+  | .app _ (.ident _ "$dispatch") _ false => true
   | .app _ (.ident _ "$each") _ false => true
   | .app _ (.ident _ "$loop") _ false => true
   | e@(.ite ..) => isBranchy e
@@ -825,6 +827,21 @@ partial def namesUsed (e : SExpr) : List String :=
     | _ => []
   (go e).eraseDups
 
+/-- `e` with each overridden method's dispatch (#283) a block: the receiver
+    and the arguments into the template's names, then its exclusive choice,
+    then its value. For a body not inlined (an `F$all`'s, effect-free). -/
+partial def dispatchBlocks (e : SExpr) : SExpr :=
+  mapE (fun
+    | .app _ (.ident _ "$dispatch") (_ :: .block bp tmpl :: as) false =>
+      let binds := (tmpl.zip as).map fun
+        | (.decl q x t v _, a) => SExpr.decl q x t v (dispatchBlocks a)
+        | (d, _) => d
+      let val : List SExpr := match tmpl.getLast? with
+        | some (.decl q x _ _ _) => [.ident q x]
+        | _ => []
+      some (.block bp (binds ++ (tmpl.drop as.length).map dispatchBlocks ++ val))
+    | _ => none) e
+
 /-- `e` with every choice `a₁ | … | aₙ` made `if (false?) then a₁ else …
     aₙ`: the body a function with several values keeps, elaborated (so
     type- and effect-checked like any function's) but never called, as its
@@ -836,19 +853,14 @@ partial def checkBody : SExpr → SExpr :=
       some (alts.foldr (fun a acc => match a with
         | .app _ (.ident _ "$alt") [.block bp gs, rest] false => .ite bp (gs.map checkBody) (checkBody rest) (some acc)
         | _ => acc) (.app p (.ident p "Err") [] false))
-    -- (a method's dispatch on the receiver's class, #283: its alternatives'
-    -- guards as the conditions of an if-chain, which a call never reaches
-    -- the end of)
+    -- (a method's dispatch on the receiver's class, #283: the receiver and
+    -- the arguments into the template's names, then its exclusive choice,
+    -- an if-chain whose end a call never reaches, then its value)
+    | d@(.app _ (.ident _ "$dispatch") _ false) =>
+      match dispatchBlocks d with
+      | .block bp ss => some (.block bp (ss.map checkBody))
+      | _ => none
     | .app p (.ident _ "$choice") as false =>
-      let isGuarded : SExpr → Bool := fun
-        | .block _ ss => ss.any (fun | .decl _ "$d" _ _ _ => true | _ => false) &&
-            (match ss.head? with | some (.decl _ "$r" _ _ _) => true | _ => false)
-        | _ => false
-      if !as.isEmpty && as.all isGuarded then
-        some (as.foldr (fun a acc => match a with
-          | .block bp ss => .ite bp (ss.dropLast.map checkBody) (checkBody (ss.getLastD (.tuple bp []))) (some acc)
-          | _ => acc) (.app p (.ident p "Err") [] false))
-      else
       let rec chain : List SExpr → SExpr
         | [] => .tuple p []
         | [a] => checkBody a
@@ -1040,6 +1052,16 @@ partial def inlineCalls (mv : List (String × MFn)) (e : SExpr) (recs : List Str
   -- (`inDflt`: the defaults being inlined, function and parameter, #283)
   let go := fun x => inlineCalls mv x recs loops clash inDflt
   match e with
+  | .app p (.ident _ "$dispatch") (.ident q g :: .block tp tmpl :: as) false =>
+    -- (an overridden method's dispatch, #283: an inlined call whose
+    -- template binds the receiver and the arguments, then picks the
+    -- implementation, its names tagged for this site)
+    let site ← modifyGet fun n => (n, n + 1)
+    if site ≥ 2000 then
+      throw s!"{p.show}: more than 2000 calls of functions with several values to inline: nested calls multiply them (#235)"
+    let ren := (localsOf (.block tp tmpl)).map fun n => (n, s!"${g.replace "::" "_"}_{n}_{site}")
+    let tmpl' ← (tmpl.map (renameE ren)).mapM go
+    return .app p (.ident p "$inline") (.ident q g :: .block tp tmpl' :: (← as.mapM go)) false
   | .app p (.ident q g) as br =>
     match mv.lookup g with
     | some f =>
@@ -1259,7 +1281,9 @@ partial def markAll (mvs : List String) : SExpr → SExpr :=
     type `ret`. (`F` is effect-free, so evaluating the clauses in this order
     changes nothing.) -/
 def allBody (mvs : List String) (ret : STy) (b : SExpr) : SExpr :=
-  let ss := stmtsOf (markAll mvs b)
+  -- (an overridden method's dispatch, #283: a choice of its alternatives,
+  -- the receiver and the arguments bound before; exact, as effect-free)
+  let ss := stmtsOf (markAll mvs (exclToChoice (dispatchBlocks b)))
   let p := b.pos
   let (cs, v) : List SExpr × SExpr := match ss.getLast? with
     | some (.decl q x _ _ _) => (ss, .ident q x)
@@ -1269,6 +1293,8 @@ def allBody (mvs : List String) (ret : STy) (b : SExpr) : SExpr :=
 
 /-- A name of `mv` used other than as a call's head: as a function value. -/
 partial def valueUse? (mv : List String) : SExpr → Option (Pos × String)
+  -- (a dispatch names the family's function for its messages, #283)
+  | .app _ (.ident _ "$dispatch") (_ :: as) _ => as.findSome? (valueUse? mv)
   | .app _ (.ident _ _) as _ => as.findSome? (valueUse? mv)
   | .ident p n => if mv.contains n then some (p, n) else none
   | e =>
@@ -1405,20 +1431,24 @@ structure MFam where
   root : String
   impls : List String
   direct : Bool
+  /-- The declaring class's return type, which a dispatch's value has. -/
+  ret : Option STy := none
   deriving Inhabited
 
 /-- The calls of the methods of `fams` in `e` (#283), `inC` the class whose
     body this is (`anc` gives a class's ancestors, nearest first):
     - `R.M(args)` is a call of `M`'s function with `R` first. With
-      overrides, it dispatches on the receiver's class: one alternative per
-      implementation `D`, `block{ $r : root := R; args into temporaries;
-      $d := D[$r]; not E[$r] …; D$M($d, …) }`, which goes on when `$r` is a `D`
-      and no class `E` below `D` that implements `M` (the casts are from the
-      root, so always possible). The choice comes first, before the
-      receiver's and the arguments' effects (each alternative evaluates them,
-      and the ones whose guard fails undo them): in a `for` a choice after
-      them would be a generator boundary that keeps them when a later
-      filter fails, where a call has none.
+      overrides, it dispatches on the receiver's class: `$dispatch(root$M,
+      block{ $r : root := $arg; $a… := $arg; $kv := $excl(…) }, R, args…)`,
+      which `inlineCalls` makes an inlined call (its names tagged for the
+      site): the receiver and the arguments bound once, as at a call, then
+      an exclusive choice (#314) with an alternative per implementation `D`,
+      guarded by `$d := D[$r]; not E[$r] …`, of value `D$M($d, …)`. It holds
+      when `$r` is a `D` and no class `E` below `D` implements `M` (the casts
+      are from the root, so always possible): exactly one holds, the one
+      dynamic dispatch picks. Being exclusive, it is no generator in a
+      `for`: what came before the call rolls back as at a call, unless the
+      implementation reaches a choice of its own.
       With `trial`, it is a call of `root$M$fam` instead, for the fixpoint.
     - `M(args)` in the body of a class below the root is `Self.M(args)`.
     - `(super:)M(args)` is a call of the nearest implementation above. -/
@@ -1430,19 +1460,27 @@ partial def rwFamCalls (anc : String → List String) (fams : List (String × MF
     if f.direct then .app p (.ident q (methodFnName f.root m)) (recv :: args) br
     else if trial then .app p (.ident q (methodFnName f.root m ++ "$fam")) (recv :: args) br
     else
-      let binds := args.zipIdx.map fun (a, i) => match a with
-        | .decl _ n _ _ x => if n.startsWith "?" then SExpr.decl p s!"$a{i}" none false x else .decl p s!"$a{i}" none false a
-        | a => .decl p s!"$a{i}" none false a
+      -- (names of this call's own, `inlineCalls` tags them for each site)
+      let site := s!"{p.line}_{p.col}"
+      let (r, dn, kv) := (s!"$r{site}", s!"$d{site}", s!"$kv{site}")
+      let aN (i : Nat) : String := s!"$a{i}_{site}"
+      -- (the arguments as a call evaluates them: positional, then named as
+      -- written, #283)
+      let named := fun | SExpr.decl _ n _ _ _ => n.startsWith "?" | _ => false
+      let args := args.filter (!named ·) ++ args.filter named
+      let vals := args.map fun | a@(.decl _ n _ _ x) => if n.startsWith "?" then x else a | a => a
       let passed := args.zipIdx.map fun (a, i) => match a with
-        | .decl ap n t v _ => if n.startsWith "?" then SExpr.decl ap n t v (.ident p s!"$a{i}") else .ident p s!"$a{i}"
-        | _ => .ident p s!"$a{i}"
-      let alt (d : String) : SExpr :=
-        let guard := if d == f.root then SExpr.decl p "$d" none false (.ident p "$r")
-          else .decl p "$d" none false (.app p (.ident p d) [.ident p "$r"] true)
-        let nots := (below f d).map fun x => SExpr.notE p (.app p (.ident p x) [.ident p "$r"] true)
-        .block p ([.decl p "$r" (some (.name f.root)) false recv] ++ binds ++ [guard] ++ nots ++
-          [.app p (.ident q (methodFnName d m)) (.ident p "$d" :: passed) br])
-      mk p (f.impls.map alt)
+        | .decl ap n t v _ => if n.startsWith "?" then SExpr.decl ap n t v (.ident p (aN i)) else .ident p (aN i)
+        | _ => .ident p (aN i)
+      let alt (d : String) : List SExpr × SExpr :=
+        let guard := if d == f.root then SExpr.decl p dn none false (.ident p r)
+          else .decl p dn none false (.app p (.ident p d) [.ident p r] true)
+        let nots := (below f d).map fun x => SExpr.notE p (.app p (.ident p x) [.ident p r] true)
+        (guard :: nots, .app p (.ident q (methodFnName d m)) (.ident p dn :: passed) br)
+      let tmpl := [SExpr.decl p r (some (.name f.root)) false (.ident p "$arg")] ++
+        args.zipIdx.map (fun (_, i) => SExpr.decl p (aN i) none false (.ident p "$arg")) ++
+        [.decl p kv f.ret false (mkExcl p (f.impls.map alt))]
+      .app p (.ident p "$dispatch") (.ident q (methodFnName f.root m) :: .block p tmpl :: recv :: vals) false
   mapE (fun
     | .app p (.member q recv m) args br =>
       match fams.lookup m with
@@ -1539,7 +1577,8 @@ def methodFns (tops : List STop) (reserved : List String := []) : Except String 
     let root := ((ds.find? fun (_, m) => !isOverride m).map (·.1)).getD ""
     let impls := (ds.filter fun (_, m) => !isAbstract m).map (·.1)
     let impls := (impls.filter (· == root)) ++ impls.filter (· != root)
-    some (n, { root, impls, direct := impls == [root] && ds.length == 1 })
+    let ret := (ds.find? (·.1 == root)).bind fun | (_, .fn _ _ _ _ _ r _) => some r | _ => none
+    some (n, { root, impls, direct := impls == [root] && ds.length == 1, ret })
   let rw := rwFamCalls anc
   -- (a method's body as the function's: its members qualified by `Self`,
   -- then `Self` the parameter `$Self`)
