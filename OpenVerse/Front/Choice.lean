@@ -243,6 +243,8 @@ def shownName (n : String) : String :=
 partial def hasLiftable : SExpr → Bool
   -- (a block or construction kept, with why, `$noLift`, #283)
   | .app _ (.ident _ "$noLift") _ false => false
+  -- (an inlined function's parameter default, in its own context, #283)
+  | .app _ (.ident _ "$paramDefault") _ false => false
   | .app _ (.ident _ "$choice") _ false => true
   | .app _ (.ident _ "$inline") _ false => true
   | .app _ (.ident _ "$each") _ false => true
@@ -902,16 +904,37 @@ partial def inlineCalls (mv : List (String × MFn)) (e : SExpr) (recs : List Str
     | some f =>
       -- (as at a call: several arguments to a single array parameter, and
       -- one tuple argument to several parameters, #134, #140)
-      let arrayParam := match f.params with | [sp] => (match sp.ty with | .arr _ => true | _ => false) | _ => false
-      let tupleArg := as.length == 1 && f.params.length ≥ 2
-      if as.length != f.params.length && !arrayParam && !tupleArg then
-        throw s!"{p.show}: {g} takes {f.params.length} argument(s), found {as.length}"
-      if as.any (fun | .decl _ n _ _ _ => n.startsWith "?" | _ => false) then
-        throw s!"{p.show}: {g} has no named parameters"
+      -- (named parameters, #283: none of that, as at such a call)
+      let hasNamed := f.params.any (·.named)
+      let posPs := f.params.filter (!·.named)
+      let posAs := as.filter fun | .decl _ n _ _ _ => !n.startsWith "?" | _ => true
+      let namedAs : List (Pos × String × SExpr) := as.filterMap fun
+        | .decl ap n _ _ x => if n.startsWith "?" then some (ap, (n.drop 1).toString, x) else none
+        | _ => none
+      let arrayParam := !hasNamed && match f.params with | [sp] => (match sp.ty with | .arr _ => true | _ => false) | _ => false
+      let tupleArg := !hasNamed && as.length == 1 && f.params.length ≥ 2
+      if hasNamed then
+        if posAs.length != posPs.length then
+          throw s!"{p.show}: {g} takes {posPs.length} positional argument(s), found {posAs.length}"
+        for ((ap, n, _), i) in namedAs.zipIdx do
+          if !(f.params.any fun sp => sp.named && sp.name == n) then throw s!"{ap.show}: {g} has no parameter ?{n}"
+          if (namedAs.take i).any (·.2.1 == n) then throw s!"{ap.show}: ?{n} is given twice"
+        for sp in f.params do
+          if sp.named && sp.default.isNone && !namedAs.any (·.2.1 == sp.name) then
+            throw s!"{p.show}: {g} needs the argument ?{sp.name}, which has no default"
+      else
+        if as.length != f.params.length && !arrayParam && !tupleArg then
+          throw s!"{p.show}: {g} takes {f.params.length} argument(s), found {as.length}"
+        if !namedAs.isEmpty then
+          throw s!"{p.show}: {g} has no named parameters"
       if br != f.fx.contains "decides" then
         throw (if br then s!"{p.show}: {g} is not <decides>: call it with {g}(…)"
           else s!"{p.show}: {g} is <decides>: call it with {g}[…]")
-      let as' ← as.mapM go
+      -- (with named parameters, the positional arguments' then the named
+      -- ones' values, as evaluated)
+      let as' ← if hasNamed then pure [] else as.mapM go
+      let posVals ← if hasNamed then posAs.mapM go else pure []
+      let namedVals ← if hasNamed then namedAs.mapM (fun (_, _, x) => go x) else pure []
       -- (a recursive one: the array of its values, computed at the call)
       if recs.contains g && !loops.contains g then
         return .app p (.ident p "$each") [.app p (.ident q s!"{g}$all") as' false] false
@@ -933,8 +956,25 @@ partial def inlineCalls (mv : List (String × MFn)) (e : SExpr) (recs : List Str
         (match clash.lookup g with
          | some us => [.app q (.ident q "$freeNames") (.ident q g :: us.map (SExpr.ident q ·)) false]
          | none => [])
+      -- (with named parameters: the positional ones, then the named ones
+      -- given, as written, then the defaults of those omitted, in order,
+      -- each in its own context, `$paramDefault`, as at a call)
+      let pdOf (sp : SParam) : SExpr := .decl q (tag sp.name) (tyOf sp.ty) false (.ident q "$arg")
+      let dflts ← if !hasNamed then pure [] else
+        f.params.zipIdx.filterMapM fun (sp, k) => do
+          match sp.default with
+          | some d =>
+            if !sp.named || namedAs.any (·.2.1 == sp.name) then return none
+            let d' ← go (renameTypes ρ d)
+            let earlier := (f.params.take k).map fun e => SExpr.tuple q [.ident q e.name, .ident q (tag e.name)]
+            return some (.decl q (tag sp.name) (tyOf sp.ty) false
+              (.app q (.ident q "$paramDefault") [.ident q g, .ident q sp.name, .block q earlier, d'] false))
+          | none => return none
       let (pds, unpack, as'') : List SExpr × List SExpr × List SExpr :=
-        if as.length == f.params.length then
+        if hasNamed then
+          (posPs.map pdOf ++ namedAs.filterMap (fun (_, n, _) => (f.params.find? (·.name == n)).map pdOf), dflts,
+            posVals ++ namedVals)
+        else if as.length == f.params.length then
           (f.params.map fun sp => SExpr.decl q (tag sp.name) (tyOf sp.ty) false (.ident q "$arg"), [], as')
         else if arrayParam then
           (f.params.map fun sp => SExpr.decl q (tag sp.name) (tyOf sp.ty) false (.ident q "$arg"), [],
@@ -1221,8 +1261,8 @@ def inlineMulti (tops : List STop) : Except String (List STop × Bool) := do
   for (n, f) in mfs do
     if (fns.filter (·.1 == n)).length > 1 then
       throw s!"{f.pos.show}: {n} has several values and is overloaded: such functions are not supported yet (#235)"
-    if f.params.any (·.named) then
-      throw s!"{f.pos.show}: {n} has several values and named parameters: such functions are not supported yet (#235)"
+    if f.params.any (·.named) && (recs.contains n || !f.tparams.isEmpty) then
+      throw s!"{f.pos.show}: {n} has several values and named parameters, and is {if recs.contains n then "recursive" else "generic"}: such functions are not supported yet (#235, #283)"
     if anyE (fun | .ret .. => true | _ => false) f.body then
       throw s!"{f.pos.show}: {n} has several values and a return, which would leave its caller once inlined (#235)"
     if (stmtsOf f.body).any (fun | .app _ (.ident _ "$defer") _ _ => true | _ => false) then

@@ -188,7 +188,16 @@ A function with several values (#235) is inlined before elaboration, by
 the top-level functions whose body has a choice that nothing in it takes,
 iterating to a fixpoint, since calling one where the call is not taken
 makes the caller one too. It refuses the cases it cannot inline:
-recursion, named parameters, `return`, and use as a value. The names its
+recursion (some recursive ones are computed instead, below), `return`,
+and use as a value. Named parameters are bound as a call binds them
+(#283): the positional arguments, then the named ones as written, then a
+`$paramDefault(F, N, earlier, d)` clause for each one omitted. The
+elaborator elaborates that clause as `elabApp` elaborates a default: only
+the parameters before it in scope (their renamed slots under their own
+names), no `return`, failing only for a `<decides>` `F`, and not its own
+default again. The caller's locals are out of its scope, so a default
+needs no `$freeNames` check. The default is never lifted
+(`hasLiftable` is false on the clause). The names its
 body uses from outside that are bound somewhere too are checked where it is
 inlined, by a `$freeNames` clause the template starts with: not a
 parameter, local or member of `Self` in scope there, where they would mean
