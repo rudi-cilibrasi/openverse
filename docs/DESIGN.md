@@ -644,19 +644,30 @@ each resuming `Main`'s frame. A sleeping frame reports the tick it waits
 for, and the clock then moves to the earliest of them, so idle ticks cost
 nothing.
 
-The scheduler only ever holds non-generic task roots. Core has no
-existential types, so a queue of frames whose type arguments it has forgotten
-could not be typed; generic frames are always resumed by their callers, who
-know their type arguments.
+The scheduler holds its task roots as references without type
+arguments; a generic frame that is not a root is resumed by its caller,
+who knows its type arguments, and a generic root by a dispatch that opens
+them (below).
 
-**Specialising generic functions with roots.** A generic function whose
-roots would depend on its type parameters (a `branch` or `rush`; a
-`spawn` whose call's arguments or task have such types, also as the type
-arguments of a class or of the task itself (a spawned `E.Eval()` on an
-`expr(t)` whose classes all fix `t`, #204), or a spawned dispatch reading
-values of such types; any `spawn` in an immediate one,
-whose roots are made only for non-generic functions; or a call of such a
-function at such types) is specialised before the lowering (`specialise`, #174). Verse Core
+**Generic roots (#244).** A `branch`, a `rush`, or a `spawn` of a call,
+in a generic function, is a root of the scheduler at the function's own
+type arguments: the branch's wrapper class holds the function's frame at
+them, and a spawn's `$spawnK` function, whose frame is the root, takes
+them when its arguments' types mention them. The scheduler holds every
+root as a reference with no type arguments; the classes of these roots
+have pins on all of their type arguments, so that its dispatch to their
+resumption opens them (`Typed.dispatch`, #209), and a generic frame
+keeps the witnesses its resumption passes on. So such a function is
+compiled once, and calls itself at ever bigger types as any function
+does. `OPENVERSE_GENERIC_ROOTS=1` compiles them with generic roots only,
+without the copies below, which the gate's concurrency fuzzing also does.
+
+**Specialising generic functions with roots.** A generic function with a
+spawned dispatch whose receiver or arguments have types that mention its
+type parameters (a spawned `E.Eval()` on an `expr(t)`, #204), a generic
+immediate function with a `spawn` (whose roots are made only for
+non-generic functions), or a function calling such a function at such
+types, is specialised before the lowering (`specialise`, #174). Verse Core
 is first-order and a generic call passes one witness argument per type
 argument, built so that the checker infers exactly that type, so each
 call's instantiation is read off its last arguments. A call at closed types
