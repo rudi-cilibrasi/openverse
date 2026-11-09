@@ -2402,6 +2402,25 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
         "nor from the branch of an if without else or one that is more than a choice or a value")
     eerr p ("a choice (a | b) has several values, so it must be in a failure context that takes them: " ++
       "an if condition, a for's clauses, first{…}, option{…}, logic{…}, not, or the left of or (#208)")
+  | .app p (.ident _ "$paramDefault") [.ident _ f, .ident _ n, .block _ earlier, d] false =>
+    -- (#283) the default of a named parameter an inlined call of a function
+    -- with several values omits: in the context a call gives it (the
+    -- parameters before it, under their own names; no return; failing only
+    -- for a <decides> function)
+    let some s := ctx.sig? f | eerr p s!"internal: no signature for {f} (#283)"
+    let locals : List Local := earlier.filterMap fun
+      | .tuple _ [.ident _ orig, .ident _ t] => (ctx.lookup t).map fun l => { l with name := orig }
+      | _ => none
+    let key := (s.name, s!"?{n}")
+    if ctx.defaults.contains key then
+      eerr p s!"the default of ?{n} of {f} uses itself (a call of {f} that omits ?{n})"
+    let dctx := { ctx with locals := locals.reverse, selfClass := none, inParamDefault := true,
+                           inLoop := false, canFail := ctx.canFail && s.decides,
+                           suspends := ctx.suspends && s.suspends, defaults := key :: ctx.defaults }
+    let rd ← fxAt p (elabE dctx d exp)
+    if !s.decides && rd.e.mayFail ctx.sigProg then
+      eerr p s!"the default of ?{n} of {f} can fail, but {f} is not <decides>"
+    return rd
   | .app _ (.ident _ "$noLift") [.str _ [.text why], e] false =>
     -- (#283) a block or construction kept: elaborated as it is, its choice
     -- refused with why

@@ -1,0 +1,33 @@
+dc
+8
+17
+a
+c
+b
+2
+5
+dc
+8
+10
+dc
+9
+10
+if 10
+chain 1
+chain 2
+chain 4
+chain b 1
+chain b 5
+chain b 10
+dec 1
+dec 2
+dc
+1 9
+1 10
+dc
+10 9
+10 10
+tup 1
+tup 2
+tup 0
+exit=0

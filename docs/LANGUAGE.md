@@ -753,7 +753,9 @@ Main():void =
   Such a call is inlined: its arguments are evaluated first, in order, then
   its body runs in the caller's clauses, so the body's effects are rolled
   back or kept as the caller's are; the caller needs the callee's declared
-  effects, as for any call. The function itself is still checked
+  effects, as for any call. With named parameters, as at any call: the
+  positional arguments, then the named ones as written, then the defaults
+  of those omitted, each seeing only the parameters before it (#283). The function itself is still checked
   as any function is (types, effects, `<decides>`), with each choice read
   as any of its alternatives.
 
@@ -821,8 +823,8 @@ Main():void =
   or field's default or a `defer:`, or where the names the clauses after it
   use have type parameters (`Self` of a generic class among them), an
   overloaded one (a generic one's type arguments are inferred from the
-  arguments where it is inlined, as at a call), one with named parameters
-  or a `return` or a `defer:` of its own (in its body, not in a block inside it), a method, one used as a function value, a call of a
+  arguments where it is inlined, as at a call), a recursive or generic one
+  with named parameters, one with a `return` or a `defer:` of its own (in its body, not in a block inside it), a method, one used as a function value, a call of a
   recursive one in an `if`'s branch or a `set`'s path, and, since its body is inlined where other names may be
   in scope, one whose name is also the name of a parameter, local, field or
   method anywhere in the program, and a call of one where a name its body
