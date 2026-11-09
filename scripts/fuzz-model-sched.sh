@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Model-based fuzzing of the scheduler (#156, #244): random concurrent
 # programs from an independent scheduler model (scripts/models/sched_gen*.py,
-# from the review of #249), each predicting the output and exit. Lean must
-# match the model and C must match Lean; no program may hit an internal
-# error.
+# from the review of #249; immediate generic spawners since #316), each
+# predicting the output and exit. Lean must match the model and C must match
+# Lean; no program may hit an internal error.
 #   usage: scripts/fuzz-model-sched.sh [COUNT [FIRST_SEED]]
 set -uo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
