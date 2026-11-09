@@ -8,7 +8,7 @@
 # consumers in methods from the review of #279, a return in a test's clauses from #284 and #287,
 # alternatives with several values from the review of #296, blocks and constructions from #302,
 # named arguments from #305, functions with several values and named parameters from #307,
-# methods with several values from #310, returns in functions with several values from #312,
+# methods with several values from #310 (overridden from #328), returns in functions with several values from #312,
 # and a choice after such a return's if, or in its value, from #318.
 """Random programs with choices INSIDE expressions (PR #234, phase 2), and an
 independent model written from docs/LANGUAGE.md's "Choice" section (not from
@@ -281,6 +281,12 @@ NAM = LAZY and 'nonam' not in flags and 'cf' not in flags
 # argument and the body must both read the field (the silent bug #310's review
 # found).
 MVM = 'nomvm' not in flags
+# ---- #328 (with mvm): at times the test's class overrides Mv with several values of its own,
+#   MvT<override>(MpT:int):int = MpT * 3 | (super:)MvT(MpT) | MpT - 1
+# Run, the fields and the base MvT are then in a parent class, so the bare MvT(..) in Run
+# dispatches on Self, the test's class: the override's alternatives, the middle one the base's
+# two. A second generator decides, so seeds keep their other choices.
+R4 = random.Random(seed * 1000003 + 328)
 # ---- #312, flag rt (on with lazy; nort turns it off): a test's expression may call
 #   RT(RTa:int):int =
 #       RTy := RTa | RTa + 1 | RTa + 2
@@ -351,7 +357,7 @@ def has_lifted(x):
     if isinstance(x, (tuple, list)):
         return any(has_lifted(y) for y in x)
     return False
-SNX = {'inc': 1}
+SNX = {'inc': 1, 'ovm': False}
 RFUNCS = []
 RX = {'fi': None}
 FUNCS = []
@@ -1401,6 +1407,10 @@ def ev(e, st, k, mode):
 
             def alt2(s1, k2):
                 return k2(chks(v + 2 * s1.vars[e[2][1]], s1), s1)
+            if SNX['ovm']:
+                return choice_point([lambda s1, k2: k2(chks(v * 3, s1), s1),
+                                     lambda s1, k2: choice_point([alt1, alt2], s1, k2, mode),
+                                     lambda s1, k2: k2(chks(v - 1, s1), s1)], s0, k, mode)
             return choice_point([alt1, alt2], s0, k, mode)
         return ev(e[1], st, kmvm, mode)
     if t == 'nam':
@@ -1881,6 +1891,7 @@ for ti in range(NT):
     if meth:
         ovr, priv = R.random() < 0.5, R.random() < 0.5
         SNX['inc'] = 2 if ovr else 1
+        SNX['ovm'] = MVM and R4.random() < 0.5
         st.vars['S.Cn'] = 0
     CTX['meth'] = meth
     CTX['mvm'] = (ti, f"N{ti}a")
@@ -1932,15 +1943,22 @@ for ti in range(NT):
         """the test as the method Run of a class of its own, its vars fields."""
         if not meth:
             return L
-        M = [f"{name}c := class(tbase):", f"    var {vars_[0]}:int = 0",
+        split = CTX.get('mvm_used') and SNX['ovm']     # (#328: Run in a parent class)
+        top = f"{name}b" if split else f"{name}c"
+        M = [f"{top} := class(tbase):", f"    var {vars_[0]}:int = 0",
              f"    var {vars_[1]}{'<private>' if priv else ''}:int = 0"]
-        if ovr:
+        if ovr and not split:
             M += ["    Nx<override>()<transacts>:int =", "        set Cn += 2", "        Cn - 2"]
         if CTX.get('mvm_used'):
             M.append(f"    Hp{ti}(Hq{ti}:int):int = Hq{ti} * 2")
             M.append(f"    Mv{ti}(Mp{ti}:int):int = Mp{ti} + Nx() | Mp{ti} + Hp{ti}(N{ti}a)")
         M.append("    Run():void =")
         M += ["    " + l for l in L[3:]]
+        if split:
+            M.append(f"{name}c := class({name}b):")
+            if ovr:
+                M += ["    Nx<override>()<transacts>:int =", "        set Cn += 2", "        Cn - 2"]
+            M.append(f"    Mv{ti}<override>(Mp{ti}:int):int = Mp{ti} * 3 | (super:)Mv{ti}(Mp{ti}) | Mp{ti} - 1")
         M.append(f"{name}():void = {name}c{{}}.Run()")
         if CTX.get('mvm_used') and CTX.get('mvm_const'):
             M.insert(0, f"N{ti}a:int = {100 + ti}")    # (a constant named like the field)
