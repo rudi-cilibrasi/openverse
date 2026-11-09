@@ -6653,7 +6653,9 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
         | some (some τ) => τ
         | _ => (recvB.lookup i).getD (.var i)
       -- (whether a type mentions a type parameter the callee reads from its
-      -- receiver that the receiver's type does not give)
+      -- receiver that the receiver's type does not give: not expected, as
+      -- those are among its class's type arguments, which a receiver of a
+      -- reference type repeats; the refusal below stays as a message)
       let mentionsSelf (τ : VTy) : Bool :=
         (τ.subst fun i => if selfIdx.contains i && (recvB.lookup i).isNone then .var 0 else VTy.void).mentionsVar
       -- (and then its class, whose hidden fields its root's slots of those
