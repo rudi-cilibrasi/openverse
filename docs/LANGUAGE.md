@@ -666,7 +666,10 @@ Main():void =
   as any of its alternatives.
 
   A recursive one (that calls itself, directly or not) is not inlined: if
-  it is `<computes>` and nothing it calls prints or stops, its values are
+  it is `<computes>`, keeps no local state (no `var`, no `set`), and nothing
+  it reaches prints or stops (the functions and methods it calls, the
+  constants it uses, the field defaults of the classes it constructs; a
+  call through a function value cannot be followed, so it is refused), its values are
   computed at the call, all of them, in order, as an array the call then
   takes them from (#235). For a recursive function whose values are
   finite this is the same as taking them one by one, since it has no

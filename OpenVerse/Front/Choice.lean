@@ -733,17 +733,24 @@ partial def inlineCalls (mv : List (String × MFn)) (e : SExpr) (recs : List Str
     branches picks a branch's, a call of a function with several values
     (marked `$each`) is its array, and any other expression is the array of
     its value, empty when it fails. -/
-partial def arrOfE : SExpr → SExpr
+partial def arrOfE (ty : Option STy := none) : SExpr → SExpr
   | .app p (.ident _ "$choice") as false =>
     match as with
-    | [a] => arrOfE a
-    | _ => .app p (.ident p "Concatenate") (as.map arrOfE) false
-  | .app _ (.ident _ "$each") [a] false => a
-  | .ite p cs t (some e) => .ite p cs (arrOfE t) (some (arrOfE e))
+    | [a] => arrOfE ty a
+    | _ => .app p (.ident p "Concatenate") (as.map (arrOfE ty)) false
+  | .app p (.ident _ "$each") [a] false =>
+    -- (at the written type: each value converted)
+    match ty with
+    | none => a
+    | some t =>
+      let w := s!"$w{p.line}_{p.col}"
+      let v := s!"$a{p.line}_{p.col}"
+      .forE p [.gen p w none a, .decl p v (some t) false (.ident p w)] (.ident p v)
+  | .ite p cs t (some e) => .ite p cs (arrOfE ty t) (some (arrOfE ty e))
   | a =>
     let p := a.pos
     let v := s!"$a{p.line}_{p.col}"
-    .forE p [.decl p v none false a] (.ident p v)
+    .forE p [.decl p v ty false a] (.ident p v)
 
 /-- The body of `F$all`, the array of `F`'s values in order (#235): one
     `for` over its clauses, where each choice is a generator over the array
@@ -763,14 +770,14 @@ def allBody (mvs : List String) (b : SExpr) : SExpr :=
     | none => ([], .tuple p [])
   let gens := (prepare cs).flatMap fun c => match binding? c with
     | some { pos := q, name := x, ty := ty, alts := as, branchy := none, each := none, .. } =>
-      let src := arrOfE (.app q (.ident q "$choice") as false)
+      let src := arrOfE ty (.app q (.ident q "$choice") as false)
       match ty with
       | none => [.gen q x none src]
       | some t => [.gen q s!"$e{q.line}_{q.col}" none src, .decl q x (some t) false (.ident q s!"$e{q.line}_{q.col}")]
     | some { pos := q, name := x, ty := ty, branchy := some i, .. } =>
       match ty with
-      | none => [.gen q x none (arrOfE i)]
-      | some t => [.gen q s!"$e{q.line}_{q.col}" none (arrOfE i), .decl q x (some t) false (.ident q s!"$e{q.line}_{q.col}")]
+      | none => [.gen q x none (arrOfE none i)]
+      | some t => [.gen q s!"$e{q.line}_{q.col}" none (arrOfE (some t) i), .decl q x (some t) false (.ident q s!"$e{q.line}_{q.col}")]
     | some { pos := q, name := x, ty := ty, each := some a, .. } =>
       match ty with
       | none => [.gen q x none a]
@@ -808,6 +815,27 @@ def liftsHere (c : SExpr) : Bool :=
   | .set _ _ _ rhs => hasLiftable rhs
   | .gen _ _ _ src => hasLiftable src
   | e => hasLiftable e
+
+/-- What a body does that the effect check of `inlineMulti` follows (#235):
+  calls, method calls, uses of names, constructions. -/
+partial def effEvents : SExpr → List (String × String)
+  | .app _ (.ident _ n) as _ => ("call", n) :: as.flatMap effEvents
+  | .app _ (.member _ x m) as _ => ("method", m) :: effEvents x ++ as.flatMap effEvents
+  | .ident _ n => [("use", n)]
+  | .construct _ n _ fs => ("new", n) :: fs.flatMap fun | .decl _ _ _ _ x => effEvents x | a => effEvents a
+  | .str _ ps => ps.flatMap fun | .code c => effEvents c | _ => []
+  | .app _ g as _ => effEvents g ++ as.flatMap effEvents
+  | .member _ x _ | .query _ x | .neg _ x | .notE _ x | .optionLit _ x | .logicLit _ x | .loop _ x
+  | .gen _ _ _ x | .decl _ _ _ _ x => effEvents x
+  | .bin _ _ a b | .andE _ a b | .orE _ a b | .range _ a b | .set _ a _ b => effEvents a ++ effEvents b
+  | .cmp _ a r => effEvents a ++ r.flatMap (effEvents ·.2)
+  | .tuple _ es | .block _ es | .arrayLit _ es => es.flatMap effEvents
+  | .ite _ cs t e' => cs.flatMap effEvents ++ effEvents t ++ ((e'.map effEvents).getD [])
+  | .forE _ cs b => cs.flatMap effEvents ++ effEvents b
+  | .ret _ x => (x.map effEvents).getD []
+  | .caseE _ sc arms => effEvents sc ++ arms.flatMap fun (pt, v) => ((pt.map effEvents).getD []) ++ effEvents v
+  | .mapLit _ kvs => kvs.flatMap fun (k, v) => effEvents k ++ effEvents v
+  | _ => []
 
 /-- The functions of the program that have several values, inlined at their
     calls (see above); the program unchanged when there are none. -/
@@ -864,30 +892,66 @@ def inlineMulti (tops : List STop) : Except String (List STop) := do
     for g in needAll do
       for h in (callees.lookup g).getD [] do
         if !needAll.contains h then needAll := needAll ++ [h]; grew := true
-  -- (effect-free: <computes>, and nothing they call, by name, prints or
-  -- stops: their values are all computed at the call)
-  let bodyOf (n : String) : List SExpr :=
-    (tops.filterMap fun | .fn _ m _ _ _ _ b => if m == n then some b else none | _ => none) ++
-    tops.flatMap fun
-      | .classDef _ _ _ _ _ _ _ _ ms => ms.filterMap fun
-          | .fn _ m _ _ _ _ b => if m == n then some b else none
-          | _ => none
-      | _ => []
+  -- (effect-free: <computes>, no local state, and nothing reachable from
+  -- them prints or stops, as their values are all computed at the call:
+  -- functions and methods called (all methods of the name), constants
+  -- used, the field defaults of classes constructed; a call through a
+  -- function value, which cannot be followed, is refused)
+  let fnDefs : List (String × List SParam × SExpr) := tops.flatMap fun
+    | .fn _ m ps _ _ _ b => [(m, ps, b)]
+    | _ => []
+  let methodDefs : List (String × List SParam × SExpr) := tops.flatMap fun
+    | .classDef _ _ _ _ _ _ _ _ ms => ms.filterMap fun
+        | .fn _ m ps _ _ _ b => some (m, ps, b)
+        | _ => none
+    | _ => []
+  let constDefs : List (String × SExpr) := tops.filterMap fun
+    | .const _ n _ e => some (n, e)
+    | _ => none
+  let classDefs : List (String × List String × List SExpr) := tops.filterMap fun
+    | .classDef _ n _ _ ps _ fs _ _ => some (n, ps.filterMap (fun | .name q | .app q _ => some q | _ => none),
+        fs.filterMap (·.2.2.1))
+    | _ => none
   for g in needAll do
     let some f := mfs.lookup g | continue
-    if !f.fx.contains "computes" then
-      throw s!"{f.pos.show}: {g} has several values and is recursive, or called by a recursive one: such a function must be <computes>, as all its values are computed at a call (#235)"
-    let mut seen : List String := []
-    let mut todo : List String := namesUsed f.body
+    let why (w : String) : String :=
+      s!"{f.pos.show}: {g} has several values and is recursive, or called by a recursive one, {w}: such a function must be <computes>, keep no local state, and reach nothing that prints or stops, as all its values are computed at a call (#235)"
+    if !f.fx.contains "computes" then throw (why "and it is not <computes>")
+    if anyE (fun | .set .. | .decl _ _ _ true _ => true | _ => false) f.body then
+      throw (why "and it has a var or a set")
+    -- (each body to follow with its own parameters and locals)
+    let mut seen : List (String × String) := []
+    let mut todo : List (List String × SExpr) := [(f.params.map (·.name) ++ localsOf f.body, f.body)]
     while !todo.isEmpty do
-      let u := todo.head!
+      let (locals, b) := todo.head!
       todo := todo.tail!
-      if seen.contains u then continue
-      seen := seen ++ [u]
-      if u == "Print" || u == "Err" then
-        throw s!"{f.pos.show}: {g} has several values and is recursive, or called by a recursive one, and it may call {u}: such a function must not print or stop, as all its values are computed at a call (#235)"
-      for b in bodyOf u do
-        todo := todo ++ namesUsed b
+      for ev in effEvents b do
+        if seen.contains ev then continue
+        seen := seen ++ [ev]
+        match ev with
+        | ("call", n) =>
+          if n == "Print" || n == "Err" then throw (why s!"and it may call {n}")
+          if locals.contains n then throw (why s!"and it calls the function value {n}")
+          for (_, ps, fb) in fnDefs.filter (·.1 == n) do
+            todo := todo ++ [(ps.map (·.name) ++ localsOf fb, fb)]
+          for (_, ce) in constDefs.filter (·.1 == n) do todo := todo ++ [([], ce)]
+        | ("method", m) =>
+          let ms := methodDefs.filter (·.1 == m)
+          if ms.isEmpty then throw (why s!"and it calls {m}, which is no method: a function value")
+          for (_, ps, mb) in ms do todo := todo ++ [(ps.map (·.name) ++ localsOf mb, mb)]
+        | ("use", n) =>
+          for (_, ce) in constDefs.filter (·.1 == n) do todo := todo ++ [([], ce)]
+        | ("new", c) =>
+          -- (the class's and its parents' field defaults)
+          let mut cs := [c]
+          let mut i := 0
+          while i < cs.length do
+            let cn := cs[i]!
+            i := i + 1
+            for (_, parents, ds) in classDefs.filter (·.1 == cn) do
+              for d in ds do todo := todo ++ [([], d)]
+              for q in parents do if !cs.contains q then cs := cs ++ [q]
+        | _ => pure ()
   for (n, f) in mfs do
     if (fns.filter (·.1 == n)).length > 1 then
       throw s!"{f.pos.show}: {n} has several values and is overloaded: such functions are not supported yet (#235)"
