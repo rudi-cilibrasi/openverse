@@ -279,14 +279,64 @@ def newArgs (acc : Unit → List (Nat × VTy)) (fs : List VTy) : Option VTy → 
   | some (.ref _ args) => args
   | _ => (List.range (VTy.nvarsL fs)).map fun j => ((acc ()).lookup j).getD VTy.void
 
+/-- (#351) Type arguments from bindings `bound`, and those the pins of bound
+    ones bind, at least `n` and as many as pins `ps`: an unbound one its pin
+    (at the others), else any type, `void`. (A class below an interface referred to through views has pins
+    on every type argument, which neither its fields nor the view need
+    determine.) -/
+def VTy.fillArgs (ps : List (Option VTy)) (n : Nat) (bound : Nat → Option VTy) : List VTy :=
+  let m := max n ps.length
+  let acc0 : List (Nat × VTy) := (List.range m).filterMap fun j => (bound j).map (j, ·)
+  -- (a bound one's pin binds those it mentions: `dup(t) := class(both(t,
+  -- t))` at a view that binds its second binds its first; as many rounds
+  -- as arguments, for pins that refer along a chain)
+  let round (acc : List (Nat × VTy)) : List (Nat × VTy) := (List.range m).foldl (fun acc j =>
+    match acc.lookup j, ps[j]? with
+    | some t, some (some p) => p.bindVars t acc
+    | _, _ => acc) acc
+  let acc := (List.range m).foldl (fun acc _ => round acc) acc0
+  let base := (List.range m).map fun j => (acc.lookup j).getD VTy.void
+  (List.range m).map fun j => match acc.lookup j, ps[j]? with
+    | some t, _ => t
+    | none, some (some p) => p.inst base
+    | none, _ => VTy.void
+
+/-- (#351) The type arguments of an object of a class with fields `fs` and
+    pins `ps`, for a slot through views whose entry for the class has view
+    `φ` and whose type arguments are `bs`: those the view relates to the
+    slot's, the others as `VTy.fillArgs` has them. -/
+def VTy.viewSlotArgs (ps : List (Option VTy)) (fs φ bs : List VTy) : List VTy :=
+  let vb := VTy.bindVarsL φ bs []
+  VTy.fillArgs ps (max (VTy.nvarsL fs) (VTy.nvarsL φ)) fun j => vb.lookup j
+
 /-- The type arguments `tc` proposes for a `new` with pins `ps` (#209): the
     expected type's, unless they are too few for the pins (an object of a
     class whose type parameters a dispatch opens has every argument its
-    pins mention), then the fields'. -/
-def newProposal (ps : List (Option VTy)) (acc : Unit → List (Nat × VTy)) (fs : List VTy) (m : Option VTy) :
-    List VTy :=
-  let a := newArgs acc fs m
-  if ps.length ≤ a.length then a else newArgs acc fs none
+    pins mention), then the fields', as many as the pins. For an expected
+    reference through views (#351), the class's view matched against its
+    type arguments, the others as the fields bind them. -/
+def newProposal (t : Nat) (ps : List (Option VTy)) (acc : Unit → List (Nat × VTy)) (fs : List VTy)
+    (m : Option VTy) : List VTy :=
+  -- (the fields' bindings computed once, and only when needed)
+  let fromFields (_ : Unit) : List VTy :=
+    let ac := acc ()
+    VTy.fillArgs ps (VTy.nvarsL fs) fun j => ac.lookup j
+  match m with
+  | some (.vref es bs) => match es.find? (·.1 == t) with
+    | some (_, φ) =>
+      let vb := VTy.bindVarsL φ bs []
+      let n := max (VTy.nvarsL fs) (VTy.nvarsL φ)
+      let ac := if (List.range n).all (fun j => (vb.lookup j).isSome) then [] else acc ()
+      VTy.fillArgs ps n fun j => (vb.lookup j).orElse fun _ => ac.lookup j
+    | none => fromFields ()
+  | _ =>
+    let a := newArgs acc fs m
+    if ps.length ≤ a.length then a else
+    -- (the expected type's first, #351: a class below an interface
+    -- referred to through views has pins on all of its, more than a
+    -- prefix reference gives)
+    let ac := acc ()
+    VTy.fillArgs ps (max a.length (VTy.nvarsL fs)) fun j => a[j]?.orElse fun _ => ac.lookup j
 
 /-- The instantiation `tc` proposes for a call with result type `t`: the
     bindings `acc` from the arguments, completed from the expected type. -/
@@ -558,7 +608,7 @@ def tc : Expr → Option VTy → Option VTy
       -- (one proposal and a fallback, so that nested `new`s check in
       -- linear time)
       let args := firstOk (fun a => tcL es (fs.map (VTy.inst a)) && VTy.pinsOK (S.pinsOf t) a)
-        (newProposal (S.pinsOf t) (fun _ => bindArgs fs es []) fs m)
+        (newProposal t (S.pinsOf t) (fun _ => bindArgs fs es []) fs m)
         (((S.protos.find? (·.1 == t)).map (·.2)).getD [])
       if tcL es (fs.map (VTy.inst args)) && VTy.pinsOK (S.pinsOf t) args then expect m (.ref [t] args)
       else none
@@ -1396,9 +1446,23 @@ def checkDefault (S : Sigs) (a : Nat) (Γ : List VTy) : Expr → VTy → Bool
     | some t' => t'.sub t
     | none => false
   | .prim .mkTup ds, .tup ts => checkDefaultL S a Γ ds ts
-  | .heap (.new c) ds, .ref ts args => ts.contains c && VTy.pinsOK (S.pinsOf c) args && match S.classes[c]? with
-    | some fs => checkDefaultL S a Γ ds (fs.map (VTy.inst args))
+  -- (an object of the class at the slot's type arguments, or, with more
+  -- pins than those, #351, at them and those the pins give, a reference
+  -- to it then fitting the slot's by prefix)
+  | .heap (.new c) ds, .ref ts args => match S.classes[c]? with
+    | some fs =>
+      let args' := VTy.fillArgs (S.pinsOf c) args.length fun j => args[j]?
+      VTy.pinsOK (S.pinsOf c) args' && checkDefaultL S a Γ ds (fs.map (VTy.inst args')) &&
+        (VTy.ref [c] args').sub (.ref ts args)
     | none => false
+  -- (#351) a slot of a reference type through views: an object of a class
+  -- of an entry, at type arguments its view relates to the slot's
+  | .heap (.new c) ds, .vref es bs => match es.find? (·.1 == c), S.classes[c]? with
+    | some (_, φ), some fs =>
+      let args := VTy.viewSlotArgs (S.pinsOf c) fs φ bs
+      VTy.pinsOK (S.pinsOf c) args && checkDefaultL S a Γ ds (fs.map (VTy.inst args)) &&
+        (VTy.ref [c] args).sub (.vref es bs)
+    | _, _ => false
   | .heap (.get k) [.local i], t => decide (i < a) && match Γ[i]? with
     | some (.ref ts args) => match fieldTy S ts args k with
       | some τ => τ.sub t
@@ -1444,13 +1508,25 @@ theorem checkDefault_sound {S : Sigs} {a : Nat} {Γ : List VTy} : ∀ (d : Expr)
         · simp at h
       · cases d <;> (rename_i d2 _; cases d2) <;> simp [checkDefault] at h
     all_goals try (simp [checkDefault] at h; done)
-    cases t <;> try (simp [checkDefault] at h; done)
-    rename_i c ts args
-    simp only [checkDefault, Bool.and_eq_true] at h
-    obtain ⟨⟨hc, hpin⟩, h⟩ := h
-    split at h
-    · next fs hfs => exact .new hfs (by simpa using hc) hpin (checkDefaultL_sound ds _ h)
-    · simp at h
+    rename_i c
+    cases t with
+    | ref ts args =>
+      simp only [checkDefault] at h
+      split at h
+      · next fs hfs =>
+        simp only [Bool.and_eq_true] at h
+        obtain ⟨⟨hpin, hds⟩, hsub⟩ := h
+        exact .sub (.new hfs (List.mem_singleton_self c) hpin (checkDefaultL_sound ds _ hds)) hsub
+      · simp at h
+    | vref es bs =>
+      simp only [checkDefault] at h
+      split at h
+      · next φ fs _ hfs =>
+        simp only [Bool.and_eq_true] at h
+        obtain ⟨⟨hpin, hds⟩, hsub⟩ := h
+        exact .sub (.new hfs (List.mem_singleton_self c) hpin (checkDefaultL_sound ds _ hds)) hsub
+      · simp at h
+    | _ => simp [checkDefault] at h
   | .assign .., _, h | .seq .., _, h | .call .., _, h | .ite .., _, h | .forE .., _, h
   | .loop _, _, h | .brk, _, h | .ret _, _, h | .print _, _, h => by simp [checkDefault] at h
 theorem checkDefaultL_sound {S : Sigs} {a : Nat} {Γ : List VTy} : ∀ (ds : List Expr) (ts : List VTy),

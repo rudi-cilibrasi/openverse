@@ -1,0 +1,13 @@
+1 2 2
+put 3 both
+put 100 one
+put 1000 both
+both 3
+not both
+both 0
+get 3
+get 4
+named both
+named one
+seven 7
+exit=0

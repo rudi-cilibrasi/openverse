@@ -524,8 +524,18 @@ circle := class(shape, labelled):
   their defaults, and `(super:)` resolve as in `c2`, whatever members the
   class adds (only a method of `c2` used as a value, `H := F`, is refused
   where the class overloads it); so may
-  one without type parameters (`intI := interface(container(int))`). The
-  interfaces a class lists may not reach one interface at two instances
+  one without type parameters (`intI := interface(container(int))`). A
+  class may give the interfaces it lists any type arguments
+  (`both(t, u) := class(container(t), sink(u))`, `c := class(i1(int),
+  i2(string))`): a reference to an interface that a class gives type
+  arguments other than its own first ones, in order, relates them to each
+  class's through the class's view of it (#351), so calls through it
+  (`<suspends>` ones and named arguments' defaults too), generic code over
+  it, upcasts to the interfaces above it and casts back work as for any
+  interface, also for classes below that fix some of those type arguments
+  (`ib := class(both(int, string))`) or add their own; such an interface
+  cannot declare fields yet.
+  The interfaces a class lists may not reach one interface at two instances
   (`class(pi(int), pi(string))`). Inherited field defaults see their
   own class's type parameters. A cast `square[S]` takes its type arguments
   from `S`'s, and is refused when it would need more. A method
@@ -562,9 +572,16 @@ circle := class(shape, labelled):
 - **Comparability.** Other classes and interfaces are not comparable (Book §4.9), nor
   is a struct or container that holds one.
 - **Not yet supported** (each rejected with a message):
-  - a class below
-    an interface that does not give it its first type parameters, in
-    order (`both(t, u) := class(container(t), sink(u))`, #276); a cast `T[X]` whose type
+  - a field of an interface that a class gives type arguments that are not
+    a prefix of its own (see below, #351), and such an interface listed by
+    a class that has a class parent which does not reach it; a cast from
+    a reference to such an interface (or one above it) to a class or
+    interface with type arguments, its own or ones it fixes (`c :=
+    class(i1(int), i2(string))`), other than as the first clause of an
+    `if`'s condition, whose branch is then a function of its own as below
+    (#243: it cannot suspend, `return`, and so on), or to one neither above
+    nor below it, and a named argument's default computed by code (not a
+    literal) in a call through one; a cast `T[X]` whose type
     arguments agree with `X`'s only under a refinement (`dup[P]` for
     `P:pair(a, b)`) other than as the first clause of an `if`'s condition, whose
     branch has a `return`, a `break` that leaves it or a `set` of a `var`
@@ -575,9 +592,7 @@ circle := class(shape, labelled):
     at type arguments that every class below it fixes otherwise: its
     hidden placeholder object (#157) would have to hold itself (no program
     can build an object of such a type: each would need another first,
-    so use `?node(t)` for a link that may be absent); a class
-    that gives two interfaces different type arguments (`c := class(i1(int),
-    i2(string))`, #53); and, in code generic over an interface's parent, a
+    so use `?node(t)` for a link that may be absent); and, in code generic over an interface's parent, a
     cast to an interface that gives that parent type arguments of its own
     (`c2(t) := interface(container([]t))`) whose type parameters would be
     unknown (#53).

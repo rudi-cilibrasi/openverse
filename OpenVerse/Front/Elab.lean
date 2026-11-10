@@ -214,6 +214,11 @@ structure TyEnv where
       (#142): those at or below a class whose implementation of a method
       fixes type arguments that the method's declaring class leaves open. -/
   pinned : List String := []
+  /-- The interfaces referred to through views (#351): some class below
+      gives one of them type arguments that are not a prefix of its own (or
+      of an interface below them that does), so a reference to it relates
+      its type arguments to each class's through the class's view. -/
+  viewed : List String := []
   /-- The hidden placeholder classes (#157): one below each generic class or
       interface whose concrete classes all fix its type arguments, so that a
       variable of its type at other type arguments has an initial value. The
@@ -461,6 +466,26 @@ def TyEnv.coreVars (env : TyEnv) (d : String) : List (String × Ty) :=
     | (.param v c, _) => (v, Ty.param v c)
     | (_, j) => (s!"$arg{j}", Ty.void)
 
+/-- The name that stands for the `j`-th Verse Core type argument in a pin (#209). -/
+def pinArg (j : Nat) : String := s!"$pos{j}"
+
+/-- (#351) The Verse Core type arguments that an object of class `d` gives
+    interface `n`, over its own Verse Core type arguments `X`: through the
+    topmost class of `d`'s chain below `n` (which reaches it), whose places
+    `d`'s share, so a class that fixes one of them (`ib := class(both(int,
+    string))`) still has the view at its place. -/
+partial def TyEnv.viewOf (env : TyEnv) (n d : String) (X : List Ty) : List Ty :=
+  let rec top (fuel : Nat) (c : String) : String :=
+    match fuel, (env.info c).parent with
+    | f + 1, some q => if env.isSub q n then top f q else c
+    | _, _ => c
+  let r := top (env.classes.length + 1) d
+  let vars := env.coreVars r
+  let rargs := ((env.sparams.lookup r).getD []).map fun (v, _) => match vars.findIdx? (·.1 == v) with
+    | some j => X.getD j Ty.void
+    | none => Ty.void
+  env.coreArgs n (env.upArgs r rargs n)
+
 /-- The type arguments of `d` below `T`, for an instance of `T(targs)`: its
     type parameters at their places among the Verse Core type arguments. -/
 def TyEnv.argsBelow (env : TyEnv) (T : String) (targs : List Ty) (d : String) (ext : List Ty := []) :
@@ -630,7 +655,14 @@ partial def Ty.toVTy (env : TyEnv) : Ty → VTy
   | .opt t => .opt (t.toVTy env)
   | .tup ts => .tup (ts.map (Ty.toVTy env))
   | .struct n ts =>
-    if env.isRefClass n then .ref (env.refTags n) ((env.coreArgs n ts).map (Ty.toVTy env))
+    -- (an interface referred to through views, #351: each class below, with
+    -- the interface's Verse Core type arguments over its own)
+    if env.viewed.contains n then
+      let ents := (env.concreteBelow n ++ env.phs.filter (env.isSub · n)).map fun d =>
+        let X := (List.range (env.coreVars d).length).map fun j => Ty.param (pinArg j) false
+        (env.tagOf d, (env.viewOf n d X).map (Ty.toVTy { env with tvars := X.zipIdx.map fun (x, j) => (pinArg j, x) }))
+      .vref ents ((env.coreArgs n ts).map (Ty.toVTy env))
+    else if env.isRefClass n then .ref (env.refTags n) ((env.coreArgs n ts).map (Ty.toVTy env))
     else if env.classes.contains n then
       -- one option per concrete class at or below `n`
       .tup ((env.concreteBelow n).map fun d =>
@@ -669,9 +701,6 @@ partial def Ty.params : Ty → List String
   | .tup ts | .struct _ ts => ts.flatMap Ty.params
   | .map k v => k.params ++ v.params
   | _ => []
-
-/-- The name that stands for the `j`-th Verse Core type argument in a pin (#209). -/
-def pinArg (j : Nat) : String := s!"$pos{j}"
 
 /-- Whether a written type mentions one of the names `vs` (as `Ty.params`
     has it, function types' parameters and result included). -/
@@ -791,6 +820,14 @@ def TyEnv.sameCorePinned (env : TyEnv) (d T : String) : Bool :=
   let core (c : String) := env.coreArgs c (((env.sparams.lookup c).getD []).map fun (v, k) => Ty.param v k)
   (core T).length ≤ (core d).length
 
+/-- A value that may go in a call's arguments in place of its temporary: a
+    literal, a slot, or a tuple of those (`(1, 2)`, a default), which has no
+    effect nor failure to keep in order. -/
+partial def _root_.OpenVerse.Expr.pureArg : Expr → Bool
+  | .lit _ | .local _ => true
+  | .prim .mkTup es => es.all Expr.pureArg
+  | _ => false
+
 /-- `seq (assign t₁ v₁) (… (call f es))` as the call with each `vᵢ` (a
     literal or a slot) in place of `tᵢ` in its arguments: a call whose
     named arguments went through temporaries (#142). `typed` gives, for
@@ -799,10 +836,7 @@ partial def Expr.inlineArgTemps (e : Expr) (typed : List (Nat × Expr) := []) : 
   match e with
   | .call f es => some (.call f es)
   | .seq (.assign t v0) rest =>
-    let simple := match v0 with
-      | .lit _ | .local _ => true
-      | _ => false
-    if !simple then none else
+    if !v0.pureArg then none else
     let v := (typed.lookup t).getD v0
     (Expr.inlineArgTemps rest typed).map fun
       | .call f es => .call f (es.map fun a => match a with
@@ -810,6 +844,40 @@ partial def Expr.inlineArgTemps (e : Expr) (typed : List (Nat × Expr) := []) : 
         | _ => a)
       | other => other
   | _ => none
+
+/-- A literal with no type of its own: `false`, an empty `array{}`, `map{}`
+    or `""`, or a tuple holding one. -/
+partial def _root_.OpenVerse.Value.untyped : Value → Bool
+  | .none => true
+  | .arr a => a.isEmpty
+  | .tup vs => vs.any Value.untyped
+  | _ => false
+
+/-- A default with no type of its own: such a literal, or a tuple of
+    values holding one (`(false, 1)`). -/
+partial def _root_.OpenVerse.Expr.untypedDefault : Expr → Bool
+  | .lit v => v.untyped
+  | .prim .mkTup es => es.any Expr.untypedDefault
+  | _ => false
+
+/-- The temporaries of such a call (`seq (assign t v) (… call)`) whose
+    value is an omitted named argument's default with no type of its own
+    (`Expr.untypedDefault`, #175). -/
+def _root_.OpenVerse.Expr.untypedArgTemps : Expr → List Nat
+  | .seq (.assign t v) rest => if v.untypedDefault then t :: Expr.untypedArgTemps rest else Expr.untypedArgTemps rest
+  | .seq _ rest => Expr.untypedArgTemps rest
+  | _ => []
+
+/-- The value temporary `t` of such a call is assigned. -/
+def _root_.OpenVerse.Expr.argTempValue (t : Nat) : Expr → Expr
+  | .seq (.assign t' v) rest => if t' == t then v else Expr.argTempValue t rest
+  | _ => .lit .none
+
+/-- The arguments of such a call after its receiver. -/
+def _root_.OpenVerse.Expr.argsAfterRecv : Expr → List Expr
+  | .call _ (_ :: es) => es
+  | .seq _ rest => Expr.argsAfterRecv rest
+  | _ => []
 
 /-- Whether `false` (the bottom type) occurs in a type. -/
 partial def Ty.hasNever : Ty → Bool
@@ -1429,8 +1497,30 @@ partial def witness (env : TyEnv) (dictBase : Nat) (dictVars : List String) : Ty
 partial def _root_.OpenVerse.VTy.mentionsVar : VTy → Bool
   | .var _ => true
   | .arr t | .opt t => t.mentionsVar
-  | .tup ts | .ref _ ts => ts.any VTy.mentionsVar
+  | .tup ts | .ref _ ts | .vref _ ts => ts.any VTy.mentionsVar
   | _ => false
+
+/-- (#351) The type arguments of class `d` (as its type parameters) for one
+    of its objects that is an `n(args)` for interface `n`, referred to
+    through views: those that make `d`'s view of `n` `args`, at `d`'s pins;
+    any others `void`. None when no object of `d` is one (its pins fix one
+    that differs, or, `rigid`, one of `args` is a type parameter of the code
+    there, which no fixed one equals). -/
+def TyEnv.viewArgs? (env : TyEnv) (n d : String) (args : List Ty) (rigid : Bool := true) : Option (List Ty) :=
+  let vars := env.coreVars d
+  let X := (List.range vars.length).map fun j => Ty.param s!"$vw{j}" false
+  let atX := X.zipIdx.map fun (x, j) => (pinArg j, x)
+  let pinEqs := (X.zip (env.corePins d)).filterMap fun (x, pin) => pin.map fun pt => (x, pt.subst atX)
+  let coreFields (m : String) (ts : List Ty) : Option (List Ty) :=
+    if env.classes.contains m then none else some ((env.fields m ts).map (·.2.1))
+  match Ty.unifyEqs coreFields [] ((env.viewOf n d X).zip args ++ pinEqs) with
+  | some μ =>
+    if rigid && !μ.all (·.1.startsWith "$vw") then none else
+    let rest := X.filterMap fun | .param x _ => some (x, Ty.void) | _ => none
+    some (((env.sparams.lookup d).getD []).map fun (v, _) => match vars.findIdx? (·.1 == v) with
+      | some j => ((X.getD j Ty.void).subst μ).subst rest
+      | none => Ty.void)
+  | none => none
 
 /-- The value of a prototype's field of type `t`: its type's default, or a
     reference to a prototype already allocated (`done`: class, address). -/
@@ -1451,7 +1541,9 @@ partial def protoValue (env : TyEnv) (done : List (String × Nat)) : Ty → Opti
   | t@(.struct n ts) =>
     if env.isRefClass n then
       ((env.concreteBelow n).findSome? fun d =>
-        if env.coreArgs d [] == env.coreArgs n ts then (done.lookup d).map Value.ref else none)
+        -- (through a view, its arguments as the class gives them, #351)
+        if (if env.viewed.contains n then env.viewOf n d (env.coreArgs d []) else env.coreArgs d []) ==
+            env.coreArgs n ts then (done.lookup d).map Value.ref else none)
     else if env.classes.contains n then some (t.toVTy env).default
     else ((env.fields n ts).mapM fun (f : String × Ty × Option SExpr) => protoValue env done f.2.1).map .tup
   | .param .. => none
@@ -1483,7 +1575,7 @@ def TyEnv.makeProtos (env : TyEnv) : List (String × Nat × List Value) :=
 
 /-- Whether a Verse Core type mentions a reference. -/
 partial def _root_.OpenVerse.VTy.hasRef : VTy → Bool
-  | .ref _ _ => true
+  | .ref _ _ | .vref _ _ => true
   | .arr t | .opt t => t.hasRef
   | .tup ts => ts.any VTy.hasRef
   | _ => false
@@ -1518,7 +1610,8 @@ partial def slotDefault (env : TyEnv) (dictBase : Nat) (params : List Ty) (visit
       let below := env.concreteBelow n
       let args := env.coreArgs n ts
       if let some (_, a) := env.protos.zipIdx.find? fun (x : (String × Nat × List Value) × Nat) =>
-          below.contains x.1.1 && env.coreArgs x.1.1 [] == args then
+          below.contains x.1.1 && (if env.viewed.contains n then env.viewOf n x.1.1 (env.coreArgs x.1.1 [])
+            else env.coreArgs x.1.1 []) == args then
         return .lit (.ref a)
     if env.isRefClass n then
       -- the first class below `n` whose placeholder needs no instance of a
@@ -1536,12 +1629,21 @@ partial def slotDefault (env : TyEnv) (dictBase : Nat) (params : List Ty) (visit
       for d in env.concreteBelow n do
         let dkey := s!"{d} as {key}"
         if visiting.contains dkey then continue
-        -- (an object agrees with its class's pins, #142)
-        if !VTy.pinsOK (env.lowerPins (env.corePins d)) args then
+        -- (an object agrees with its class's pins, #142; through a view,
+        -- at the type arguments that give the slot's, #351)
+        let viewArgs := if env.viewed.contains n then env.viewArgs? n d (env.coreArgs n ts) else none
+        if env.viewed.contains n then
+          if viewArgs.isNone then
+            pinnedOut := pinnedOut ++ [d]
+            continue
+        else if !VTy.pinsOK (env.lowerPins (env.corePins d)) args then
           pinnedOut := pinnedOut ++ [d]
           continue
         -- (its fields at the slot's type arguments, #39)
-        match (env.fieldsSeen n ts d).mapM fun (_, ft, _) =>
+        let seen := match viewArgs with
+          | some dargs => env.fieldsSeen d dargs d
+          | none => env.fieldsSeen n ts d
+        match seen.mapM fun (_, ft, _) =>
             slotDefault env dictBase params (dkey :: visiting) ft with
         | .ok fs => return .heap (.new (env.tagOf d)) fs
         | .error msg => lastErr := keep msg
@@ -2177,7 +2279,10 @@ def refiningCast? (env : TyEnv) (T : String) (xty : Ty) (avoid : List String := 
   let common := (env.concreteBelow S).filter (env.isSub · T)
   if common.isEmpty then none
   let tv := env.coreVars T
-  if tv.length == rargs.length && tv.all (fun (v, _) => !v.startsWith "$arg") then
+  -- (#351: an object referred to through views relates its type arguments
+  -- to `T`'s through `S`'s view of `T`, never by position)
+  let viewedS := env.viewed.contains S
+  if !viewedS && tv.length == rargs.length && tv.all (fun (v, _) => !v.startsWith "$arg") then
     -- (#243: `T`'s Verse Core type arguments are its own type parameters,
     -- as many as the object's: those, as the object's type gives them)
     let targs := if env.isSub S T then env.upArgs S sargs T else env.argsBelow S sargs T
@@ -2199,16 +2304,19 @@ def refiningCast? (env : TyEnv) (T : String) (xty : Ty) (avoid : List String := 
       return acc ++ [n]) []
     let targs := (ps.zip names).map fun ((_, c), n) => Ty.param n c
     let cargs := env.coreArgs T targs
-    if cargs.length < rargs.length then none
-    let eqs := (cargs.take rargs.length).zip rargs
+    if !viewedS && cargs.length < rargs.length then none
+    let eqs := if viewedS then (env.viewOf S T cargs).zip rargs
+      else (cargs.take rargs.length).zip rargs
     let some μ := Ty.unifyEqs (fun _ _ => none) [] eqs | none
     let opened := (ps.zip names).filterMap fun ((v, c), n) =>
       if (μ.lookup n).isSome then none else some (n, v, c)
     -- (an interface has no hidden fields to read opened ones from, #53:
     -- such a cast is a plain one, which refuses unknown type arguments)
     if (env.info T).isIface && !opened.isEmpty then none
-    -- (nothing to refine, to open, nor past the object's: a plain cast)
-    if cargs.length == rargs.length && opened.isEmpty && μ.all (names.contains ·.1) then none
+    -- (nothing to refine, to open, nor past the object's: a plain cast;
+    -- through a view, the object's type arguments come from the dispatch,
+    -- as a plain cast does not give them, #351)
+    if !viewedS && cargs.length == rargs.length && opened.isEmpty && μ.all (names.contains ·.1) then none
     some (S, sargs, targs, common, eqs, opened)
 
 /-- What, in the branch of a cast that refines type arguments, would not
@@ -3577,6 +3685,9 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
     -- that opens type arguments, #250, by all of each class's pins, as a
     -- method's dispatch is, since its tests open them)
     for d in common do
+      -- (#351: through views, one test per class, each with its view and
+      -- all of its pins, which the view relates to the object's)
+      if env.viewed.contains S then parts := parts.push (env.corePins d, #[d]) else
       let k := if wide then env.corePins d else (env.corePins d).take rargs.length
       match parts.findIdx? (·.1 == k) with
       | some pi => parts := parts.modify pi fun (k', ds) => (k', ds.push d)
@@ -3593,19 +3704,26 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
       -- first of them)
       -- (each as comparable as the parameter it stands for: the target's,
       -- or past those, the tested class's own)
-      let ownC := ((env.coreVars (part[0]!)).drop rargs.length).map fun (_, t) =>
+      -- (#351: through views, the object's are all fresh, as many as the
+      -- class has, related to `X`'s by its view)
+      let viewedS := env.viewed.contains S
+      let dV := part[0]!
+      let ownC := ((env.coreVars dV).drop (if viewedS then 0 else rargs.length)).map fun (_, t) =>
         match t with | .param _ c => c | _ => false
-      let extOf : List Ty := if !wide then [] else
+      let nV := (env.coreVars dV).length
+      let extOf : List Ty := if viewedS then (List.range nV).map fun i => Ty.param s!"$ext{i}" (ownC.getD i false)
+        else if !wide then [] else
         (List.range (pins.length - rargs.length)).map fun i => Ty.param s!"$ext{i}" (ownC.getD i false)
-      let rxs := rargs ++ extOf
+      let rxs := if viewedS then extOf else rargs ++ extOf
       let atX := rxs.zipIdx.map fun (r, j) => (pinArg j, r)
-      let needX : List (Ty × Ty) := (rxs.zip pins).filterMap fun (a, pin) => match pin with
+      let viewEqs : List (Ty × Ty) := if !viewedS then [] else rargs.zip (env.viewOf S dV extOf)
+      let needX : List (Ty × Ty) := viewEqs ++ (rxs.zip pins).filterMap fun (a, pin) => match pin with
         | some pt => let pt := pt.subst atX; if a == pt then none else some (a, pt)
         | none => none
       if !VTy.pinsBelow (env.lowerPins pins) rxs.length then
         eerr p s!"cannot cast {withArticle rx.ty.show} to {shown} yet: class {part[0]!} relates its type arguments to ones that {S} does not have (#209, #243)"
       -- (no object of `part` can be this one: no test)
-      let some μF := Ty.unifyEqs coreFields [] (if wide then needX else needOf pins) | continue
+      let some μF := Ty.unifyEqs coreFields [] (if wide || viewedS then needX else needOf pins) | continue
       -- (the object as a `T`: its type parameters from the test's type
       -- arguments, refined)
       -- (the opened arguments a comparable type parameter's refinement
@@ -3615,8 +3733,11 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
         | _ => none)
       let mkX (t : Ty) : Ty := t.subst (cmpExt.map fun n => (n, Ty.param n true))
       let μF := μF.map fun (v, t) => (v, mkX t)
-      let dTyX ← if !wide then pure ((Ty.struct T targs).subst μF) else
-        match Ty.unifyEqs coreFields [] ((env.coreArgs T targs).zip (rxs.map (fun t => mkX (t.subst μF)))) with
+      let dTyX ← if !wide && !viewedS then pure ((Ty.struct T targs).subst μF) else
+        -- (a target seen through views has the tested class's view of it, #351)
+        let rxsF := rxs.map fun t => mkX (t.subst μF)
+        match Ty.unifyEqs coreFields [] ((env.coreArgs T targs).zip
+            (if env.viewed.contains T then env.viewOf T dV rxsF else rxsF)) with
         | some θD => pure (mkX ((Ty.struct T targs).subst θD))
         | none => eerr p s!"cannot cast {withArticle rx.ty.show} to {shown} yet: the object's type arguments as {withArticle part[0]!} do not determine {T}'s (#250)"
       let dL : Local := { name := D, slot := y, ty := dTyX, mutable := false }
@@ -5466,6 +5587,120 @@ partial def elabAppBase (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (b
         if msRet.params.any ownNames.contains then
           eerr p s!"cannot infer the type parameters of {m} from the arguments of this call"
         let mut acc : Expr := .prim .userErr []   -- no option set: unreachable
+        -- (an omitted named argument's default with no type of its own,
+        -- `false`, `array{}` or `map{}`, goes in a refined call `rcE` of
+        -- implementation `fname` of class `e` as `if (fail) then T else
+        -- false`, with `T` its temporary, whose type is the parameter's, so
+        -- that the checker infers it, as the rule infers the other
+        -- arguments' types, #175)
+        -- (when the dispatch opens type arguments (`opens`), #209, the
+        -- parameter's type in the implementation mentions them, and the
+        -- caller has no names for them: the temporary has the declaration's
+        -- type at the receiver's type arguments, which the dispatch's
+        -- refinement makes the implementation's)
+        -- (the refusals below are not expected: the temporary is an
+        -- argument of the call, which is in the implementation's parameter
+        -- order, and an override has its method's named parameters, in
+        -- order, `sameSigIn`; kept, as the old one, should those change)
+        let typedDefaults (fname e : String) (rcE : Expr) (opens : Bool) : EM (List (Nat × Expr)) := do
+          let refuseOpen : EM Unit :=
+            eerr p s!"cannot dispatch {m} to class {e} yet when a named argument's default has no type of its own: its temporary would need the type arguments the dispatch opens (#209)"
+          let fs := (ctx.sig? fname).get!
+          let nposF := fs.params.length - fs.named.length
+          let mut typed : List (Nat × Expr) := []
+          for t in rcE.untypedArgTemps do
+            let mut tv := t
+            if opens then
+              let some i := rcE.argsAfterRecv.findIdx? (fun a => match a with | .local t' => t' == t | _ => false)
+                | refuseOpen
+              let some (n, _) := (if i + 1 < nposF then none else fs.named[i + 1 - nposF]?) | refuseOpen
+              let some j := ms.named.findIdx? (·.1 == n) | refuseOpen
+              let τ := (declTy ms.params[npos + j]!).subst σu
+              if τ.params.any ownNames.contains then refuseOpen
+              -- (the declaration's type must hold the default: an option
+              -- for `false`, an array or a map for `array{}`, `map{}` or
+              -- `""`; one at a bare type parameter, `?Extra:t`, cannot,
+              -- whatever the implementation's)
+              -- (a tuple's parts each, those with no type of their own)
+              let rec holdsV : Value → Ty → Bool
+                | .none, .opt _ => true
+                | .arr _, .arr _ | .arr _, .map _ _ => true
+                | .tup vs, .tup ts => vs.length == ts.length && (vs.zip ts).all fun (v, u) => !v.untyped || holdsV v u
+                | _, _ => false
+              let rec holds : Expr → Ty → Bool
+                | .lit v, u => holdsV v u
+                | .prim .mkTup es, .tup ts => es.length == ts.length && (es.zip ts).all fun (e, u) => !e.untypedDefault || holds e u
+                | _, _ => false
+              let holds := holds (rcE.argTempValue t) τ
+              if !holds then
+                eerr p s!"cannot dispatch {m} to class {e} yet when its default for ?{n} has no type of its own: {m} declares ?{n} as {τ.show} there, which the dispatch would have to open to hold the default; give ?{n} at the call (#209)"
+              tv ← fresh τ
+            typed := typed ++ [(t, .ite (.prim .fail []) (.local tv) (rcE.argTempValue t))]
+          return typed
+        if env.viewed.contains c then
+          -- (#351) a receiver through views: one test per class below, a
+          -- dispatch that opens the class's Verse Core type arguments,
+          -- refined by its view (the receiver's are the interface's at the
+          -- class's) and its pins (`Typed.dispatch_view`)
+          let rargs := env.coreArgs c targs
+          let mut emitted := false
+          for d in ds.reverse do
+            let some fname := ctx.implFor? d root m | eerr p s!"class {d} does not implement '{m}'"
+            let e := clsOf fname
+            let vars := env.coreVars d
+            -- (each as comparable as the type parameter at its place)
+            let X := vars.zipIdx.map fun ((_, t), i) =>
+              Ty.param s!"$ext{i}" (match t with | .param _ k => k | _ => false)
+            let view := env.viewOf c d X
+            let atX := X.zipIdx.map fun (x, j) => (pinArg j, x)
+            let pinEqs := (X.zip (env.corePins d)).filterMap fun (x, pin) => match pin with
+              | some pt => some (x, pt.subst atX)
+              | none => none
+            let coreFields (n : String) (ts : List Ty) : Option (List Ty) :=
+              if env.classes.contains n then none else some ((env.fields n ts).map (·.2.1))
+            -- (no substitution relates them: no object of `d` is the receiver)
+            -- (the opened ones bound to the reference's, not those to them:
+            -- the code's own type parameters keep their names, as in a
+            -- dispatch with no view, and errors name them)
+            let some μF := Ty.unifyEqs coreFields [] (view.zip rargs ++ pinEqs) | continue
+            let selfName := s!"$self{slot}"
+            let locsF := locs.map fun l => { l with ty := l.ty.subst μF }
+            -- (the implementation's class or interface `e`, above `d`, at
+            -- its places among the opened ones: a class's are a prefix of
+            -- `d`'s, an interface's those its view gives; not through `d`'s
+            -- own parameters, which a class that only inherits has no pins
+            -- relating to them, `low(t, u) := class(both(t, []u))`)
+            let eCore : List Ty := if env.viewed.contains e then env.viewOf e d X else X
+            let eVars := env.coreVars e
+            let eArgs := ((env.sparams.lookup e).getD []).map fun (v, _) =>
+              match eVars.findIdx? (fun (x : String × Ty) => x.1 == v) with
+              | some j => eCore.getD j Ty.void
+              | none => Ty.void
+            let selfL : Local := { name := selfName, slot,
+                                   ty := .struct e (eArgs.map (·.subst μF)), mutable := false }
+            let unrefine := μF.filterMap fun (x, t) =>
+              if ctx.dictVars.contains x && t.params.any (·.startsWith "$ext") then
+                (ctx.types.tvars.lookup x).map (t, ·)
+              else none
+            let ctx' := { ctx with locals := selfL :: (locsF ++ ctx.locals), unrefine }
+            let rc ← elabApp ctx' p (.ident mp fname) (.ident mp selfName :: argIds.toList) bracket
+              (some (msRet.subst μF))
+            let rcE : Expr := match rc.e with
+              | .seq (.ite (.prim .fail []) _ (.lit .void)) b => b
+              | e => e
+            -- (a dispatch through a view opens all of the class's type
+            -- arguments: defaults with no type of their own at the
+            -- declaration's, #209)
+            let typed ← typedDefaults fname e rcE true
+            let some (.call fi (.local s0 :: es)) := Expr.inlineArgTemps rcE typed
+              | eerr p s!"cannot dispatch {m} through a view to class {d} yet when a named argument's default is computed (#351)"
+            if s0 != slot then eerr p s!"internal error: a dispatch through a view to class {d} (#351)"
+            acc := .ite (.heap (.isTag [env.tagOf d]) [.local slot]) (.call fi (.local slot :: es)) acc
+            emitted := true
+          if !emitted && ms.decides then acc := .prim .fail []
+          let y ← fresh msRet
+          let body ← if ms.suspends then withDeferMark ctx (.assign y acc) else pure (.assign y acc)
+          return ⟨pre.toList.foldr Expr.seq body, msRet⟩
         if env.isRefClass c then
           -- a reference: one test of the object's class per implementation (#34)
           let mut groups : Array (String × Array String) := #[]
@@ -5571,59 +5806,7 @@ partial def elabAppBase (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (b
                 let rcE : Expr := match rc.e with
                   | .seq (.ite (.prim .fail []) _ (.lit .void)) b => b
                   | e => e
-                -- (an omitted named argument's default with no type of its
-                -- own, `false`, `array{}` or `map{}`, goes in as `if (fail)
-                -- then T else false`, with `T` its temporary, whose type is
-                -- the parameter's, so that the checker infers it, as the rule
-                -- infers the other arguments' types, #175)
-                let rec untyped : Expr → List Nat
-                  | .seq (.assign t (.lit .none)) rest => t :: untyped rest
-                  | .seq (.assign t (.lit (.arr a))) rest => if a.isEmpty then t :: untyped rest else untyped rest
-                  | .seq _ rest => untyped rest
-                  | _ => []
-                let rec litOf (t : Nat) : Expr → Expr
-                  | .seq (.assign t' v) rest => if t' == t then v else litOf t rest
-                  | _ => .lit .none
-                -- (when the dispatch opens type arguments, #209, the
-                -- parameter's type in the implementation mentions them, and
-                -- the caller has no names for them: the temporary has the
-                -- declaration's type at the receiver's type arguments, which
-                -- the dispatch's refinement makes the implementation's)
-                -- (the refusals below are not expected: the temporary is
-                -- an argument of the call, which is in the implementation's
-                -- parameter order, and an override has its method's named
-                -- parameters, in order, `sameSigIn`; kept, as the old one,
-                -- should those change)
-                let refuseOpen : EM Unit :=
-                  eerr p s!"cannot dispatch {m} to class {e} yet when a named argument's default has no type of its own: its temporary would need the type arguments the dispatch opens (#209)"
-                let rec callArgs : Expr → List Expr
-                  | .call _ (_ :: es) => es
-                  | .seq _ rest => callArgs rest
-                  | _ => []
-                let fs := (ctx.sig? fname).get!
-                let nposF := fs.params.length - fs.named.length
-                let mut typed : List (Nat × Expr) := []
-                for t in untyped rcE do
-                  let mut tv := t
-                  if pins.length > rargs.length then
-                    let some i := (callArgs rcE).findIdx? (fun a => match a with | .local t' => t' == t | _ => false)
-                      | refuseOpen
-                    let some (n, _) := (if i + 1 < nposF then none else fs.named[i + 1 - nposF]?) | refuseOpen
-                    let some j := ms.named.findIdx? (·.1 == n) | refuseOpen
-                    let τ := (declTy ms.params[npos + j]!).subst σu
-                    if τ.params.any ownNames.contains then refuseOpen
-                    -- (the declaration's type must hold the default: an
-                    -- option for `false`, an array or a map for `array{}`,
-                    -- `map{}` or `""`; one at a bare type parameter,
-                    -- `?Extra:t`, cannot, whatever the implementation's)
-                    let holds := match litOf t rcE, τ with
-                      | .lit .none, .opt _ => true
-                      | .lit (.arr _), .arr _ | .lit (.arr _), .map _ _ => true
-                      | _, _ => false
-                    if !holds then
-                      eerr p s!"cannot dispatch {m} to class {e} yet when its default for ?{n} has no type of its own: {m} declares ?{n} as {τ.show} there, which the dispatch would have to open to hold the default; give ?{n} at the call (#209)"
-                    tv ← fresh τ
-                  typed := typed ++ [(t, .ite (.prim .fail []) (.local tv) (litOf t rcE))]
+                let typed ← typedDefaults fname e rcE (pins.length > rargs.length)
                 let some (.call fi (.local s0 :: es)) := Expr.inlineArgTemps rcE typed
                   | eerr p s!"cannot dispatch {m} to class {e}, which fixes type arguments of {c}, when a named argument's default is computed (#142)"
                 if s0 != slot then eerr p s!"cannot dispatch {m} to class {e}, which fixes type arguments of {c} (#142)"
@@ -5674,6 +5857,26 @@ partial def elabCast (ctx : Ctx) (p : Pos) (T : String) (args : List SExpr) (bra
   let (S, sargs) ← match r.ty with
     | .struct S sargs => if env.classes.contains S then pure (S, sargs) else eerr p s!"cannot cast {withArticle S} to {T}"
     | t => eerr p s!"cannot cast {withArticle t.show} to {T}"
+  -- (#351) from a reference through views, a cast to a class or interface
+  -- with Verse Core type arguments takes them from a dispatch: as the first
+  -- clause of an if's condition, whose branch is a function of its own
+  if bracket && env.viewed.contains S && !(env.coreArgs T (((env.sparams.lookup T).getD []).map fun (v, k) => Ty.param v k)).isEmpty then
+    let what := s!"a cast of {withArticle r.ty.show}, an interface referred to through views, to {T}"
+    if !(env.isSub S T || env.isSub T S) then
+      eerr p s!"{what}, which is neither above nor below {S}, is not supported yet (#351)"
+    if env.isSub S T then
+      eerr p s!"{what}, which is above {S}, cannot fail: use {T}(…), an upcast (#351)"
+    -- (no class below both whose view and pins can give the object's type
+    -- arguments: it would always fail, as main says of a positional one)
+    if ((env.concreteBelow S).filter (env.isSub · T)).all fun d =>
+        (env.viewArgs? S d (env.coreArgs S sargs) (rigid := false)).isNone then
+      eerr p s!"{withArticle r.ty.show} is never {withArticle T}: no class below both gives {S} those type arguments, so {T}[…] would always fail"
+    -- (one the first clause of an if's condition does not take either: an
+    -- interface whose type arguments the cast would open, #53)
+    if (refiningCast? env T r.ty).isNone then
+      eerr p s!"{what} would leave {T}'s type arguments unknown: they are not {S}'s, and an interface has no hidden fields to read them from (#351, #53)"
+    let theirs := if (env.sparams.lookup T).isNone then s!"the type arguments {T} fixes" else s!"{T}'s type arguments"
+    eerr p s!"{what} works only as the first clause of an if's condition, D := {T}[X], whose branch then has {theirs} (#351)"
   -- a parametric class's type arguments are those of the value (#39), in the
   -- same hierarchy
   let parametric := (env.sparams.lookup T).isSome || !(env.coreArgs T []).isEmpty
@@ -9087,6 +9290,16 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
               if b.length < qa.length then qa else b) []
           let others := cd.tps.filter fun tp => !longest.any fun | .name v => v == tp.name | _ => false
           let coreS := longest ++ others.map fun tp => STy.name tp.name
+          -- (#351: an interface it lists at type arguments that are not a
+          -- prefix of its own is referred to through views, a dispatch
+          -- through which may open any of them: all have hidden fields)
+          let nonPrefix := (cd.parents.zip cd.parentArgs).any fun (q, qa) =>
+            (henv.info q).isIface &&
+              let ca := match cdefs.find? (·.name == q) with
+                | some qd => qd.ifaceCoreS cdefs qa
+                | none => qa
+              !(ca.length ≤ coreS.length && (ca.zip coreS).all fun (a, b) => Choice.styEq a b)
+          if nonPrefix then some [] else
           -- (as a class below gives them: through its parents' arguments)
           let rec viewIn (fuel : Nat) (c : CDef) : List STy :=
             match fuel with
@@ -9295,10 +9508,12 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   env := { env with varFields := varFields, uniques := uniques,
                     overriders := (overridePairs.toList.map fun (_, dm, _) => (dm.splitOn ".").headD "") ++
                       (implChecks.toList.map fun (_, _, impl, _) => (impl.splitOn ".").headD "") ++
-                      -- (#250: and the targets of casts that open type
-                      -- arguments, whose own pins relate them to the
-                      -- object's, as the dispatch to the branch refines by)
-                      ((opts.castRequests.filter (!·.opened.isEmpty)).map (·.target)) }
+                      -- (#250: and the targets of refining casts, whose own
+                      -- pins relate their type arguments to the object's, as
+                      -- the dispatch to the branch refines by: also one that
+                      -- only inherits and gives its parent a compound of its
+                      -- own, `c1(t) := class(c0([]t))`, #243, #351)
+                      (opts.castRequests.map (·.target)) }
   -- the class whose code each inherited field default is (#39): the nearest
   -- one, the class's own first, that gives the field a default itself
   let homeOf (c f : String) : String :=
@@ -9381,6 +9596,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   -- its other type parameters come after, held by its objects in hidden
   -- fields, and a dispatch from the interface opens them, as for a class
   -- whose parent's type arguments do not give them (#209, #276)
+  let mut viewed : List String := []
   for cd in cdefs do
     if !cd.isIface then
       -- (an interface reached through two parents at different type
@@ -9404,9 +9620,21 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
           -- (and, where they differ, as the interface holds them, #53)
           let ica := env.coreArgs i ia
           let gives := if ica == ia then showArgs ia else s!"{showArgs ia} (which {i} holds as {showArgs ica})"
-          if ia.length < (core cd.name).length then
-            throw s!"{cd.pos.show}: {cd.name} gives {i} the type arguments {gives}, but its own are {showArgs (core cd.name)}: a class below an interface that does not give it its first type parameters, in order, is not supported yet (#276)"
-          throw s!"{cd.pos.show}: {cd.name} gives {i} the type arguments {gives}, but its own are {showArgs (core cd.name)}: references to {i} could not recover them (#53)"
+          -- (#351) references to the interface go through views, each class
+          -- below with its own; its fields would be at other places in its
+          -- classes, which no view gives
+          if !(env.fields i).isEmpty then
+            throw s!"{cd.pos.show}: {cd.name} gives {i} the type arguments {gives}, but its own are {showArgs (core cd.name)}, and {i} has fields: references to it through views cannot read them yet (#351)"
+          -- (its hidden fields, which a dispatch through a view reads, are
+          -- for a class without a class parent: one with one, which adds
+          -- the interface, is not supported yet)
+          if let some q := (env.info cd.name).parent then
+            if !env.isSub q i then
+              throw s!"{cd.pos.show}: {cd.name} gives {i} the type arguments {gives}, but its own are {showArgs (core cd.name)}, and {cd.name} has a parent class, {q}, which does not reach {i}: a class with a parent class that adds such an interface is not supported yet (#351)"
+          viewed := viewed ++ [i]
+  -- (and the interfaces above them, which see their classes through a
+  -- prefix of what they do)
+  env := { env with viewed := (viewed ++ viewed.flatMap fun i => (env.supers i).filter (env.info · |>.isIface)).eraseDups }
   for (mp, dm, qm) in overridePairs do
     let d := (dm.splitOn ".").head!
     let q := (qm.splitOn ".").head!
@@ -9643,7 +9871,10 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
         | [c, m] =>
           if effs.contains "override" && env.classes.contains c && env.isRefClass c && !m.startsWith "$" &&
               (match tys.head? with | some (.struct c' _) => c' == c | _ => false) then
-            (env.addedParams c).filter fun v => tparams.any (·.1 == v) && (env.witnessField? c v).isSome
+            -- (#351: below an interface referred to through views, every
+            -- type parameter, which a dispatch through a view may open)
+            (if env.viewed.any (env.isSub c ·) then ((env.sparams.lookup c).getD []).map (·.1)
+             else env.addedParams c).filter fun v => tparams.any (·.1 == v) && (env.witnessField? c v).isSome
           else []
         | _ => []
       -- generic functions come after the others
@@ -9850,11 +10081,18 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     let pinσ : Nat → VTy := fun j => match (env.lowerPins (env.pinsOf e))[j]? with
       | some (some t) => t
       | _ => .var j
+    -- (#351) at a class an interface sees through a view, the declaration's
+    -- types are taken at the view: its type arguments over the class's
+    let viewσ : Nat → VTy := if !env.viewed.contains q then pinσ else
+      let X := (List.range (env.coreVars e).length).map fun j => Ty.param (pinArg j) false
+      let vw := (env.viewOf q e X).map (Ty.toVTy { env with tvars := X.zipIdx.map fun (x, j) => (pinArg j, x) })
+      -- (and at the type arguments `e` fixes, as `pinσ`)
+      fun j => (vw.getD j (.var j)).subst pinσ
     let sigOk : Bool := match allSigs.find? (·.name == impl), allSigs.find? (·.name == decl) with
       | some a, some b =>
         let ca := atCore e a
         let cb := atCore q b
-        ca.1 == cb.1.map (VTy.subst pinσ) && VTy.sub ca.2 (cb.2.subst pinσ)
+        ca.1 == cb.1.map (VTy.subst viewσ) && VTy.sub ca.2 (cb.2.subst viewσ)
       | _, _ => true
     match allSigs.find? (·.name == impl), allSigs.find? (·.name == decl) with
     | some a, some b =>
@@ -10072,8 +10310,19 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       (env.coreFieldTy d f).getD (t.toVTy { env with tvars := env.coreVars d })
     else []
   let protos := env.protos.map fun (d, t, _) => (t, (env.coreArgs d []).map (Ty.toVTy env))
+  -- (a class below an interface referred to through views has pins on all of
+  -- its Verse Core type arguments, so that a dispatch through a view opens
+  -- them, `Typed.dispatch_view`, #351)
+  let viewedBelow : List String := env.classes.filter fun d =>
+    !(env.info d).isIface && !env.phs.contains d && env.viewed.any fun i => env.isSub d i
   let pins := env.classes.map fun d =>
-    if env.isRefClass d then env.lowerPins (env.corePins d) else []
+    if env.isRefClass d then
+      let ps := env.lowerPins (env.corePins d)
+      if viewedBelow.contains d then
+        let n := (env.coreArgs d (((env.sparams.lookup d).getD []).map fun (v, c) => Ty.param v c)).length
+        ps ++ List.replicate (n - ps.length) none
+      else ps
+    else []
   -- concurrency (#156): each <suspends> function `g` becomes a frame class
   -- and the functions `g$new`, `g$reset` and `g$resume` (`Suspend.lean`);
   -- `g`'s own index is `g$resume`'s, as only suspends code calls it
@@ -10152,8 +10401,29 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       | _, _, _ => true
     let which := match bad with
       | some f =>
+        -- (the innermost statement of its body the checker rejects, in sequence)
+        let rec firstBad (fuel : Nat) (Γ : List VTy) (ρ : VTy) (e : Expr) : Expr :=
+          match fuel, e with
+          | f + 1, .seq a b =>
+            if (tc S Γ ρ a none).isNone && (tc S Γ ρ a (some VTy.void)).isNone then firstBad f Γ ρ a
+            else firstBad f Γ ρ b
+          | _, e => e
+        -- (first the slots' initial values, which `checkDefault` checks
+        -- apart from the statements, then the body after them)
+        let rec badInit (a k : Nat) (Γ : List VTy) : List VTy → Expr → Sum String Expr
+          | [], e => .inr e
+          | t :: ts, e => match e with
+            | .seq (.assign i d) rest =>
+              if i == k && checkDefault S a Γ d t then badInit a (k + 1) Γ ts rest
+              else .inl s!"\n-- initial value of slot {k} rejected (type {repr t}): {repr d}"
+            | _ => .inl s!"\n-- no initial value for slot {k}"
+        let badStmt : String := match P.fns[f]?, S.fns[f]?, slotTys[f]? with
+          | some fn, some (_, τ), some Γ => match badInit fn.arity fn.arity Γ (Γ.drop fn.arity) fn.body with
+            | .inl msg => msg
+            | .inr b => s!"\n-- first rejected: {repr (firstBad 10000 Γ τ b)}"
+          | _, _, _ => ""
         let dump := if !opts.debug then "" else
-          s!"\n-- body: {repr ((P.fns[f]?).map Fn.body)}\n-- arity: {(P.fns[f]?).map Fn.arity}" ++
+          badStmt ++ s!"\n-- body: {repr ((P.fns[f]?).map Fn.body)}\n-- arity: {(P.fns[f]?).map Fn.arity}" ++
           s!"\n-- slot types: {repr (slotTys[f]?)}\n-- signature: {repr (S.fns[f]?)}"
         s!" (in {((P.fns[f]?).map Fn.name).getD "?"}){dump}"
       | none => if !checkPrelude P S then " (the prototypes)" else ""

@@ -437,8 +437,18 @@ partial def coreDefault (S : Sigs) (params : List VTy) (depth : Nat) (τ : VTy)
           if !VTy.pinsOK (S.pinsOf t) args then none
           let ds ← (fs.map (VTy.inst args)).mapM (coreDefault S params (depth + 1) (varD := varD))
           some (.heap (.new t) ds)
-    -- (a reference through views, #351: a parameter of a subtype only)
-    | .vref _ _ => none
+    -- (a reference through views, #351: an object of a class of an entry,
+    -- at the type arguments its view relates to the reference's, as
+    -- `checkDefault` takes them; its prototype if it has one at them)
+    | .vref es bs => es.findSome? fun (t, φ) => do
+        let fs ← S.classes[t]?
+        let args := VTy.viewSlotArgs (S.pinsOf t) fs φ bs
+        if !VTy.pinsOK (S.pinsOf t) args || !(VTy.ref [t] args).sub (.vref es bs) then none
+        match S.protos.zipIdx.find? fun ((t', a), _) => t' == t && decide (a = args) with
+        | some (_, addr) => some (.lit (.ref addr))
+        | none =>
+          let ds ← (fs.map (VTy.inst args)).mapM (coreDefault S params (depth + 1) (varD := varD))
+          some (.heap (.new t) ds)
 
 /-- `e`, of type `τ`, or a part of it through tuples (`tupGet`) and object
     fields (`classes`, a field with that type in every class of the
@@ -724,7 +734,7 @@ def armArgs : M (List Expr) := do
 
 /-- Whether a type mentions a reference. -/
 partial def refIn : VTy → Bool
-  | .ref _ _ => true
+  | .ref _ _ | .vref _ _ => true
   | .arr t | .opt t => refIn t
   | .tup ts => ts.any refIn
   | _ => false
@@ -1065,6 +1075,19 @@ partial def suspendSelf (us : List Nat) (y : Nat) (c : Callee) (rs : List Expr) 
     return (seqVoid [arrive, found, poll, pend], .call takeV [.local y, .local w])
   | _, _ => return (seqVoid [arrive, found, poll, pend], vd)
 
+/-- `t` with each part that is a term of `back` replaced by its stand-in
+    (#351: a caller's type variable for the type the dispatch binds it to). -/
+partial def replaceTerms (back : List (VTy × VTy)) (t : VTy) : VTy :=
+  match back.find? fun (a, _) => decide (a = t) with
+  | some (_, b) => b
+  | none => match t with
+    | .arr u => .arr (replaceTerms back u)
+    | .opt u => .opt (replaceTerms back u)
+    | .tup us => .tup (us.map (replaceTerms back))
+    | .ref ts us => .ref ts (us.map (replaceTerms back))
+    | .vref es us => .vref es (us.map (replaceTerms back))
+    | u => u
+
 /-- `suspendSelf` for a generic callee (an override with type parameters of
     its own or of its class, #171): its frame is kept as any generic
     callee's, at the type arguments the dispatch gives (the receiver's,
@@ -1074,23 +1097,50 @@ partial def suspendSelfGeneric (us : List Nat) (y g : Nat) (c : Callee) (rs : Li
     M (Expr × Expr) := do
   let env ← read
   let some ty := (← get).Γ[y]? | throw "internal error: a refined call's receiver"
-  let .ref _ a := ty | throw "internal error: a refined call's receiver type"
   let some (ps, _) := env.S.fns[g]? | throw "internal error: a refined call's callee"
   let σs ← rs.mapM infer
   -- (the callee's type arguments: its parameters matched against the
   -- receiver and arguments as refined by the pins)
   -- (as the checker opens them, #209: the arguments the pins mention
   -- beyond the receiver's, as fresh variables)
-  let k := openCount env.S us a.length
-  let N := max (VTy.nvarsL a) (VTy.nvarsL σs)
-  let a' := a ++ VTy.ext N k
-  let μ := (unify (VTy.pinEqs (commonPins env.S us (a.length + k)) a')).getD VTy.var
-  let acc := VTy.bindVarsL ps ((VTy.ref us a' :: σs).map (VTy.subst μ)) []
+  -- (through a view, #351, as `tcDispatchView` does: all of the tested
+  -- classes' type arguments the pins mention, fresh, related to the
+  -- receiver's by the view)
+  let (N, μ, recv, back) ← match ty with
+    | .ref _ a =>
+      let k := openCount env.S us a.length
+      let N := max (VTy.nvarsL a) (VTy.nvarsL σs)
+      let a' := a ++ VTy.ext N k
+      pure (N, (unify (VTy.pinEqs (commonPins env.S us (a.length + k)) a')).getD VTy.var, VTy.ref us a', [])
+    | .vref ents a =>
+      let some φ := viewOf ents us | throw "internal error: a refined call's view"
+      let k := openCount env.S us 0
+      let N := max (VTy.nvarsL a) (VTy.nvarsL σs)
+      let X := VTy.ext N k
+      let some μ := unify (VTy.viewEqs (commonPins env.S us k) φ a X)
+        | throw "internal error: a refined call's view equations"
+      -- (a fresh one that a variable of the caller's is bound to stands
+      -- for it: the frame's type arguments then mention the caller's own,
+      -- not opened ones, where the view gives them)
+      let ρ : Nat → VTy := fun i =>
+        if i < N then .var i else
+        match (List.range N).find? fun v => decide (μ v = .var i) with
+        | some v => .var v
+        | none => .var i
+      let μ' := fun i => (μ i).subst ρ
+      -- (and a type with fresh ones that one of the caller's is bound to,
+      -- `[]$ext1` for `x` through a view `sink([]u)`, is that one in the
+      -- frame's type arguments)
+      let back := (List.range N).filterMap fun v => let t := μ' v; if t.varsBelow N then none else some (t, VTy.var v)
+      pure (N, μ', VTy.ref us X, back)
+    | _ => throw "internal error: a refined call's receiver type"
+  let acc := VTy.bindVarsL ps ((recv :: σs).map (VTy.subst μ)) []
   let frameTy : VTy := .ref [c.tag] ((List.range c.ntp).map VTy.var)
   if frameTy.unbound acc then
     throw "a <suspends> method whose type parameters the call does not determine cannot be dispatched to a class that fixes type arguments yet (#171)"
   let .ref _ fargs := frameTy.subst (callInst acc .void none)
     | throw "internal error: a refined call's frame type"
+  let fargs := fargs.map (replaceTerms back)
   if !VTy.varsBelowL N fargs then
     -- (the types its result cells hold, at the dispatch's instance, each
     -- with its `newCell`)
