@@ -31,6 +31,9 @@ The model:
 import random, sys, os
 
 R = None
+# (#387: an overridden method of a generic class; a generator of its own decides, so seeds keep
+# their other programs)
+R387 = None
 
 # ---------------------------------------------------------------- types
 CLASSES = ["cat", "dog", "animal"]
@@ -160,8 +163,17 @@ class Producer:
             # (#365: a generic class's method with several values, reached through a wrapper
             # that builds the receiver at its own type parameter)
             self.path = "inlined"; self.params = [("X", "t"), ("Y", "t")]; self.fx = True
-            self.src = ("c%s(t:type) := class:\n    X:t\n    Y:t\n    M%s()<transacts>:t = X | Y\n"
-                        "%s(X:t, Y:t where t:type)<transacts>:t = c%s(t){X := X, Y := Y}.M%s()") % (n, n, n, n, n)
+            self.ovr = R387.random() < 0.5
+            if self.ovr:
+                # (#387: overridden in a generic subclass, which reaches it with (super:); the
+                # receiver is typed at the base class, so the call dispatches: Y, then X | Y)
+                self.src = ("c%s(t:type) := class:\n    X:t\n    Y:t\n    M%s()<transacts>:t = X | Y\n"
+                            "d%s(t:type) := class(c%s(t)):\n    M%s<override>()<transacts>:t = Y | (super:)M%s()\n"
+                            "%s(X:t, Y:t where t:type)<transacts>:t =\n    R:c%s(t) = d%s(t){X := X, Y := Y}\n    R.M%s()"
+                            ) % (n, n, n, n, n, n, n, n, n, n)
+            else:
+                self.src = ("c%s(t:type) := class:\n    X:t\n    Y:t\n    M%s()<transacts>:t = X | Y\n"
+                            "%s(X:t, Y:t where t:type)<transacts>:t = c%s(t){X := X, Y := Y}.M%s()") % (n, n, n, n, n)
         elif k == "IFx2":
             self.path = "inlined"; self.params = [("X", "t"), ("Y", "t")]; self.fx = True
             self.src = ("%s(X:t, Y:t where t:type)<transacts>:t =\n"
@@ -312,7 +324,9 @@ class Producer:
             if a["N"] <= 0: return [("cond", False)]
             return [("choice", [V(a["X"]), self.expand({"X": a["Y"], "Y": a["X"], "N": a["N"] - 1}, var)])]
         if k == "I3": return [("choice", [V(a["X"]), V(a["Y"]), V(a["Z"])])]
-        if k == "IMeth": return [("choice", [V(a["X"]), V(a["Y"])])]
+        if k == "IMeth":
+            if self.ovr: return [("choice", [V(a["Y"]), V(a["X"]), V(a["Y"])])]
+            return [("choice", [V(a["X"]), V(a["Y"])])]
         if k == "IIf":
             # (#331: an if adds no choice of its own; a branch without one is
             # its value, no generator, as an if with a return is not, #314)
@@ -440,8 +454,9 @@ class Machine:
 # ---------------------------------------------------------------- the program
 class Gen:
     def __init__(self, seed):
-        global R
+        global R, R387
         R = random.Random(seed)
+        R387 = random.Random(seed * 1000003 + 387)
         self.seed = seed
         self.prods = []
         self.consumers = []    # source of generic consumers

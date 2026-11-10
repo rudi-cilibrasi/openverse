@@ -1022,12 +1022,31 @@ partial def namesUsed (e : SExpr) : List String :=
     | _ => []
   (go e).eraseDups
 
+/-- Whether a written type mentions one of the names `tps`. -/
+partial def styMentions (tps : List String) : STy → Bool
+  | .name n => tps.contains n
+  | .arr t | .opt t => styMentions tps t
+  | .tup ts => ts.any (styMentions tps)
+  | .map k v => styMentions tps k || styMentions tps v
+  | .app n ts => tps.contains n || ts.any (styMentions tps)
+  | .fn ps _ r => ps.any (styMentions tps) || styMentions tps r
+
 /-- `e` with each overridden method's dispatch (#283) a block: the receiver
     and the arguments into the template's names, then its exclusive choice,
     then its value. For a body not inlined (an `F$all`'s, effect-free). -/
 partial def dispatchBlocks (e : SExpr) : SExpr :=
   mapE (fun
     | .app _ (.ident _ "$dispatch") (_ :: .block bp tmpl :: as) false =>
+      -- (a generic family's, #283: no `$tparams` grouping here, so its
+      -- type parameters' names are left out of the written types)
+      let tps : List String := match tmpl.head? with
+        | some (.app _ (.ident _ "$tparams") (_ :: ts) false) => ts.filterMap fun
+            | .tuple _ [.ident _ n, _] => some n
+            | _ => none
+        | _ => []
+      let tmpl := if tps.isEmpty then tmpl else (tmpl.drop 1).map (mapE fun
+        | .decl q x (some t) v rhs => if styMentions tps t then some (.decl q x none v rhs) else none
+        | _ => none)
       let binds := (tmpl.zip as).map fun
         | (.decl q x t v _, a) => SExpr.decl q x t v (dispatchBlocks a)
         | (d, _) => d
@@ -1071,15 +1090,6 @@ def liftsHere (c : SExpr) : Bool :=
   | .set _ l _ rhs => hasLiftable rhs || pathHas hasLiftable l
   | .gen _ _ _ src => hasLiftable src
   | e => hasLiftable e
-
-/-- Whether a written type mentions one of the names `tps`. -/
-partial def styMentions (tps : List String) : STy → Bool
-  | .name n => tps.contains n
-  | .arr t | .opt t => styMentions tps t
-  | .tup ts => ts.any (styMentions tps)
-  | .map k v => styMentions tps k || styMentions tps v
-  | .app n ts => tps.contains n || ts.any (styMentions tps)
-  | .fn ps _ r => ps.any (styMentions tps) || styMentions tps r
 
 /-- Whether the body writes a type that mentions one of `tps`: in a
     binding's type or a construction's type arguments. -/
@@ -1276,6 +1286,21 @@ partial def inlineCalls (mv : List (String × MFn)) (e : SExpr) (recs : List Str
     if site ≥ 2000 then
       throw s!"{p.show}: more than 2000 calls of functions with several values to inline: nested calls multiply them (#235)"
     let ren := (localsOf (.block tp tmpl)).map fun n => (n, s!"${g.replace "::" "_"}_{n}_{site}")
+    -- (a generic family's type parameters, named for the call, for this
+    -- site too, #283: a body inlined twice has its dispatch twice)
+    let tpNames : List String := tmpl.flatMap fun
+      | .app _ (.ident _ "$tparams") (_ :: tps) false => tps.filterMap fun
+          | .tuple _ [.ident _ n, _] => some n
+          | _ => none
+      | _ => []
+    let ρt := tpNames.map fun n => (n, s!"{n}s{site}")
+    let renTps : SExpr → SExpr
+      | .app q (.ident q2 "$tparams") (fnm :: tps) false =>
+        .app q (.ident q2 "$tparams") (fnm :: tps.map fun
+          | .tuple q3 [.ident q4 n, c] => .tuple q3 [.ident q4 ((ρt.lookup n).getD n), c]
+          | t => t) false
+      | x => renameTypes ρt x
+    let tmpl := if ρt.isEmpty then tmpl else tmpl.map renTps
     let tmpl' ← (tmpl.map (renameE ren)).mapM go
     return .app p (.ident p "$inline") (.ident q g :: .block tp tmpl' :: (← as.mapM go)) false
   -- (#283) a call of an overloaded function with several values: the
@@ -1810,18 +1835,22 @@ partial def rwFamCalls (anc : String → List String) (fams : List (String × MF
         | _ => .ident p (aN i)
       -- (each argument at its parameter's written type, as at a call: so
       -- `array{}` or `false` has the type it needs)
-      -- (none for a generic family, #283, whose written types name the
-      -- declaring class's type parameters, unknown where it is called)
-      let tyAt (a : SExpr) (i : Nat) : Option STy := if !f.rootTps.isEmpty then none else match a with
+      -- (a generic family's, #283: the declaring class's type parameters
+      -- named for this call, `$params` below inferring them from the
+      -- receiver and the arguments, as at a call of a generic function)
+      let tpN (n : String) : String := s!"$tp{p.line}x{p.col}_{n}"
+      let σn : List (String × String) := f.rootTps.map fun tp => (tp.name, tpN tp.name)
+      let tyR (t : STy) : STy := styRename σn t
+      let tyAt0 (a : SExpr) (i : Nat) : Option STy := match a with
         | .decl _ n _ _ _ =>
-          if n.startsWith "?" then (f.params.find? (·.name == (n.drop 1).toString)).map (·.ty)
-          else (posPs[i]?).map (·.ty)
-        | _ => (posPs[i]?).map (·.ty)
+          if n.startsWith "?" then (f.params.find? fun (sp : SParam) => sp.name == (n.drop 1).toString).map fun (sp : SParam) => sp.ty
+          else (posPs[i]?).map fun (sp : SParam) => sp.ty
+        | _ => (posPs[i]?).map fun (sp : SParam) => sp.ty
+      let tyAt (a : SExpr) (i : Nat) : Option STy := (tyAt0 a i).map tyR
       let binds : List SExpr := if tupled then
           let t := s!"$t{site}"
-          let gen := !f.rootTps.isEmpty
-          SExpr.decl p t (if gen then none else some (.tup (posPs.map (·.ty)))) false (.ident p "$arg") ::
-            posPs.zipIdx.map fun (sp, i) => SExpr.decl p (aN i) (if gen then none else some sp.ty) false (.app p (.ident p t) [.int p (i : Int)] false)
+          SExpr.decl p t (some (tyR (.tup (posPs.map (·.ty))))) false (.ident p "$arg") ::
+            posPs.zipIdx.map fun (sp, i) => SExpr.decl p (aN i) (some (tyR sp.ty)) false (.app p (.ident p t) [.int p (i : Int)] false)
         else args.zipIdx.map fun (a, i) => SExpr.decl p (aN i) (tyAt a i) false (.ident p "$arg")
       let castTo (d : String) : SExpr := .app p (.ident p d) [.ident p r] true
       let alt (d : String) : List SExpr × SExpr :=
@@ -1829,8 +1858,20 @@ partial def rwFamCalls (anc : String → List String) (fams : List (String × MF
           else .decl p dn none false (castTo d)
         let nots := (yieldsTo f d).map fun x => SExpr.notE p (castTo x)
         (guard :: nots, .app p (.ident q (methodFnName d m)) (.ident p dn :: passed) br)
-      let tmpl := [SExpr.decl p r (if f.rootTps.isEmpty then some (.name f.root) else none) false (.ident p "$arg")] ++ binds ++
-        [.decl p kv (if f.rootTps.isEmpty then f.ret else none) false (mkExcl p (f.impls.map alt))]
+      let recvB : SExpr := .decl p r (some (if f.rootTps.isEmpty then .name f.root
+        else .app f.root (f.rootTps.map fun tp => .name (tpN tp.name)))) false (.ident p "$arg")
+      -- (a generic family's receiver and arguments bound together, their
+      -- type arguments inferred as at a call, `$params`, #283: so the
+      -- receiver is at the declaring class, and `false` or `array{}` at
+      -- its parameter's type; a tuple argument's parts after)
+      -- (the binding of the arguments, `bindParams`, groups them so when
+      -- the template is led by `$tparams`, as an inlined generic call's;
+      -- its name for messages only, as shown: no function's, which a use
+      -- as a value would be taken for)
+      let head : List SExpr := if f.rootTps.isEmpty then recvB :: binds else
+        .app p (.ident p "$tparams") (.ident p (shownFnName (methodFnName f.root m)) ::
+          f.rootTps.map fun tp => .tuple p [.ident p (tpN tp.name), .ident p tp.constraint]) false :: recvB :: binds
+      let tmpl := head ++ [.decl p kv (f.ret.map tyR) false (mkExcl p (f.impls.map alt))]
       .app p (.ident p "$dispatch") (.ident q (methodFnName f.root m) :: .block p tmpl :: recv :: vals) false
   mapE (fun
     | .app p (.member q recv m) args br =>
