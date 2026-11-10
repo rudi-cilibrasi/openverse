@@ -1020,10 +1020,14 @@ instead:
   suspension points and poll their callees: a frame that is done gives 1
   at once (`pcF` -1, set when it ends).
 - Recording a frame above the one that waits is always sound (resuming it
-  resumes what it waits for), and none means the whole chain. What a
-  root's first run, inline in another's resumption, records is forgotten
-  after it (`$spawnK$start`, `$branchK$start`), and so is what the arms of
-  a `sync`, `race` or `rush` recorded once it ends.
+  resumes what it waits for), and none means the whole chain; forgetting
+  is always sound. What a root's first run, inline in another's
+  resumption, records is forgotten after it (`$spawnK$start`,
+  `$branchK$start`), so is what the arms of a `sync`, `race` or `rush`
+  recorded once it ends, and what frames below a frame recorded when it
+  ends (`doneRet`: its callees are done or were cancelled, as by a
+  `return` from an arm). A cancelled frame is marked done too, so a record
+  of it that stayed would only resume the chain from the root.
 - Cancelling is unchanged: it unwinds from the root through each frame's
   current callee.
 
