@@ -306,6 +306,9 @@ R10 = random.Random(seed * 1000003 + 361)
 # RT3(..) (a return with a choice after it), and then a composed choice, so the front end calls
 # one continuation from each path instead of copying the rest. A generator of its own decides.
 R11 = random.Random(seed * 1000003 + 364)
+# ---- #371 (#283): at times two of the lazily taken generators (Gz) call each other instead of
+# themselves: a mutually recursive group, taken lazily as one. A generator of its own decides.
+R12 = random.Random(seed * 1000003 + 371)
 # ---- #328 (with mvm): at times the test's class overrides Mv with several values of its own,
 #   MvT<override>(MpT:int):int = MpT * 3 | (super:)MvT(MpT) | MpT - 1
 # Run, the fields and the base MvT are then in a parent class, so the bare MvT(..) in Run
@@ -571,7 +574,7 @@ def gub(fi, n):
         alts = f['val'][2] if n <= f['lo'] else f['val'][3]
     if 'cf' in flags:
         alts = alts[:1]
-    return sum(gub(fi, n - 1) if a[0] == 'gself' else 1 for a in alts)
+    return sum(gub(a[1], n - 1) if a[0] == 'gself' else 1 for a in alts)     # (the callee's, #371)
 
 
 def gen_gcall(scope, vars_, d):
@@ -1945,6 +1948,18 @@ if REC:
 if LAZY:
     for i in range(R.randint(1, 3)):
         GFUNCS.append(gen_gfunc(i))
+    # (#371: a pair of compatible generators call each other: the same parameters, failing or
+    # not, with or without effects, run apart or not where the first success is taken)
+    def retarget(f, j):
+        v = f['val']
+        fix = lambda alts: [('gself', j, a[2]) if a[0] == 'gself' else a for a in alts]
+        f['val'] = ('gchoice', fix(v[1])) if v[0] == 'gchoice' else ('gbif', v[1], fix(v[2]), fix(v[3]))
+    pairs = [(a, b) for a in range(len(GFUNCS)) for b in range(a + 1, len(GFUNCS))
+             if all(GFUNCS[a][x] == GFUNCS[b][x] for x in ('decides', 'ctr', 'first_ok', 'lifted'))]
+    if pairs and R12.random() < 0.8:
+        a, b = R12.choice(pairs)
+        retarget(GFUNCS[a], b)
+        retarget(GFUNCS[b], a)
     for f in GFUNCS:
         lines += show_gfunc(f)
 if MV:
