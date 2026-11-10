@@ -148,7 +148,7 @@ not an `array{a₀, …}`, which would run `aₙ₋₁` before `a₀`'s value wa
   - It runs `$forFirst`: `elabFor`'s filter of the first group, then its values. So it fails exactly where the copied form's failure would undo the alternative's own last clauses, since those and the first segment after them were one filter. A later generator that gives nothing does not make it fail, as in the copied form.
   - Each alternative's `for` binds its value, calls it as a clause, and its values are flattened.
   - It is used only where the body may run in a failure context (`forBodySafe`: no `return`, `break`, suspension, `Signal`, or other marker), otherwise copied (tim-6e's review of #335).
-  - An exclusive choice's own paths (#314, `exclIter`) still copy the clauses after them.
+  - An exclusive choice's own paths (#314's returns, #331's `if`s, `exclIter`) do the same (phase 2b): when the clauses after it have another such choice, every path ends with a call of the continuation, in the path's part of the iteration's filter, so a failure of its first filter undoes the path as the copy's would, and the path's generators take the continuation's values as their body (`build` takes the body as an argument for this). The first elaboration compiles the first path with the clauses after it, for the values' type, and asks for the continuation; the next compiles every path with the call. Ten calls of a function with a `return` and a choice after it in one `for` take 13 KB and 0.01 s to compile, where copying took 1.2 MB and 0.4 s. As in phase 2a, a `<suspends>` function, whose effects are not a continuation's, keeps the copies.
 
 Since the result is ordinary Verse Core, every theorem holds of it as it
 stands, and the C runtime runs it unchanged. What is new is proved in
@@ -267,7 +267,10 @@ with several values first becomes one (#283, `Choice.methodFns`): a
 top-level `C$M($Self:C, params…)`, its body and defaults with `C`'s and its
 supers' member names qualified by `Self` (the syntactic counterpart of
 Elab's `selfQualify`, which needs only the class definitions), then `Self`
-renamed. `R.M(args)` becomes `C$M(R, args)`, and in the bodies of `C` and
+renamed. A generic class's is generic over the class's type parameters,
+`C$M($Self:C(t…), params…)`, and its type arguments are inferred from the
+receiver where it is inlined, as for any generic function with several
+values (#282); not yet when a class overrides it. `R.M(args)` becomes `C$M(R, args)`, and in the bodies of `C` and
 the classes below it, `M(args)` becomes `C$M(Self, args)`. Without types, `R.M`
 must name that method whatever `R` is: the name must be declared by one
 class and overridden only below it (a family, `MFam`), and by no
@@ -1344,15 +1347,22 @@ the body's typed locals, `Refine.substTypes`): such a
 dispatch opens `t`, which the class's copy reads from its hidden field,
 where `c2`'s own, shared by its classes, would need it as a hidden
 argument that `Typed.dispatch` cannot pass (its other arguments are typed
-without the refinement). The copy is made only where it means what the
-default does: no class of the chain declares the method (the chain wins
-over defaults), no other interface above the class gives it a body (one
-that overrides `c2`'s is copied instead), it has no `(super:)`, and no
-name it uses free, nor a named parameter, is a member the class's scope
-has beyond `c2`'s (which would resolve differently there); its locals and
-positional parameters named like such a member are renamed (Verse
-refuses shadowing, so they are never also free), and a `<final>` default
-stays final, its copy exempt from overriding it (`$copy`). A class that reaches
+without the refinement). The copy is elaborated in `c2`'s scope (its effect
+`$copyOf:c2`, `copyScope?`, sets `Ctx.selfClass` to `c2` and the
+parameter check's members to `c2`'s, and `Sig.scope` the scope its named
+parameters' defaults are evaluated in at a call): a name it uses free is
+the global `c2`'s own body sees, not a member the class adds, its
+parameters and locals shadow none of the class's members, and
+`(super:)` is what is above `c2`; only the receiver, its hidden fields and
+the dispatch of its members are the class's (a member of `c2` is reached
+as `Self`'s, so one the class overloads cannot be taken as a value). A
+refining cast in it lifts its branch per copy (#243): the copies and
+`c2`'s own default share the source's places, so the lift's key and
+function carry `Ctx.liftTag`, `$in` and the class. It is made only where it means what the default
+does: no class of the chain declares the method (the chain wins over
+defaults), and no other interface above the class gives it a body (one
+that overrides `c2`'s is copied instead); a `<final>` default stays
+final, its copy exempt from overriding it (`$copy`). A class that reaches
 one interface at two instances through the interfaces it lists (also
 `class(pi(int), pi(string))`) is refused. A subclass may so implement an interface that gives it fewer
 type arguments than its parent's (`sbox(t) := class(box(t), shower)`

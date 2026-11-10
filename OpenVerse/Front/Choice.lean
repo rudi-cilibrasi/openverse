@@ -1791,7 +1791,12 @@ def methodFns (tops : List STop) (reserved : List String := []) : Except String 
     for (c, m) in ds do
       let some (_, ii, _, _, tps) := classes.lookup c | return some ("", none)
       if ii then return some (s!"an interface ({c.replace "::" "."}) has it", none)
-      if !tps.isEmpty then return some (s!"a class that has it is generic ({c.replace "::" "."})", none)
+      -- (a generic class's: a function generic over its type parameters,
+      -- #283, inferred from the receiver where it is inlined, as at a call
+      -- of a generic one; not yet with overrides, whose dispatch tests
+      -- classes, not their type arguments)
+      if !tps.isEmpty && ds.length > 1 then
+        return some (s!"a class that has it is generic ({c.replace "::" "."}) and it is overridden", none)
       if !(anc c).contains r then return some (s!"{c.replace "::" "."} overrides it without being below {r.replace "::" "."}", none)
       if let .fn _ _ _ mtps fx _ b := m then
         if !mtps.isEmpty then return some ("is generic", some c)
@@ -1826,7 +1831,11 @@ def methodFns (tops : List STop) (reserved : List String := []) : Except String 
       -- a parameter's default too, which sees the method's fields)
       let fix := fun e => renameE [("Self", "$Self")] (rw fs trial (some c) (qual e))
       let ps' := ps.map fun sp => { sp with default := sp.default.map fix }
-      some (.fn p (methodFnName c m) ({ name := "$Self", ty := .name c } :: ps') [] fx r (fix b))
+      -- (a generic class's type parameters the function's, `$Self` the
+      -- class at them)
+      let tps : List TParam := ((classes.lookup c).map fun (_, _, _, _, tps) => tps).getD []
+      let selfTy : STy := if tps.isEmpty then .name c else .app c (tps.map fun tp => .name tp.name)
+      some (.fn p (methodFnName c m) ({ name := "$Self", ty := selfTy } :: ps') tps fx r (fix b))
     | _ => none
   let implFns (fs : List (String × MFam)) : List STop := fs.flatMap fun (n, f) =>
     f.impls.filterMap fun c => ((declsOf n).find? (·.1 == c)).bind fun (_, m) => fnOf fs false c m
@@ -2013,7 +2022,9 @@ def inlineMulti (tops : List STop) (reserved : List String := []) : Except Strin
       throw s!"{f.pos.show}: {shownFnName n} has several values and is overloaded: such functions are not supported yet (#235)"
     if f.params.any (·.named) && (recs.contains n || needAll.contains n || !f.tparams.isEmpty) then
       let what := if recs.contains n then "recursive" else if needAll.contains n then
-        "called by a recursive one (so its values are computed at the call, F$all)" else "generic"
+        "called by a recursive one (so its values are computed at the call, F$all)"
+        -- (a generic class's method, whose own type parameters are its class's)
+        else if f.params.head?.any (·.name == "$Self") then "a method of a generic class" else "generic"
       throw s!"{f.pos.show}: {shownFnName n} has several values and named parameters, and is {what}: such functions are not supported yet (#235, #283)"
     -- (a `return` in an `if`'s branches becomes guarded alternatives, #283;
     -- not in a recursive one, computed or taken lazily from its body)

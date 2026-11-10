@@ -518,7 +518,12 @@ circle := class(shape, labelled):
   implements `x` (#205). An interface that extends a parametric interface
   may give it any type arguments, as a class may its parent: a class below
   `c2(t) := interface(container([]t))` is a `container([]t)`, and code
-  generic over `container(u)` reaches it with `u` as `[]t` (#53); so may
+  generic over `container(u)` reaches it with `u` as `[]t` (#53), also
+  through a default `c2` gives one of `container`'s methods, which means
+  in every class what it means in `c2`: its names, its parameters and
+  their defaults, and `(super:)` resolve as in `c2`, whatever members the
+  class adds (only a method of `c2` used as a value, `H := F`, is refused
+  where the class overloads it); so may
   one without type parameters (`intI := interface(container(int))`). The
   interfaces a class lists may not reach one interface at two instances
   (`class(pi(int), pi(string))`). Inherited field defaults see their
@@ -570,14 +575,10 @@ circle := class(shape, labelled):
     at type arguments that every class below it fixes otherwise: its
     hidden placeholder object (#157) would have to hold itself; a class
     that gives two interfaces different type arguments (`c := class(i1(int),
-    i2(string))`, #53); in code generic over an interface's parent, a call
-    of a default implementation the interface gives a method of its parent
-    at type arguments the interface fixes otherwise (`c2(t)`'s
-    `Get<override>():[]t` reached from `container(u)`) in a class whose
-    members give a name the default uses free (a global) another meaning,
-    or that has a member named like one of its named parameters, or for a
-    default with `(super:)`; and a cast to such an interface whose type
-    parameters would be unknown (#53).
+    i2(string))`, #53); and, in code generic over an interface's parent, a
+    cast to an interface that gives that parent type arguments of its own
+    (`c2(t) := interface(container([]t))`) whose type parameters would be
+    unknown (#53).
 
 ## Mutation, macros, tooling
 
@@ -777,8 +778,10 @@ Main():void =
   such a method's name must be no other member than it and its overrides
   (in classes below the one that declares it), no interface's, struct
   field, enumerator or member of a built-in type (`Length`, `Find`,
-  `Signal`, …), no top-level name and no parameter or local, and its
-  classes not generic. A call of an overridden one dispatches on the
+  `Signal`, …), no top-level name and no parameter or local. A generic
+  class's method is a function generic over the class's type parameters,
+  their arguments inferred from the receiver where it is inlined, as at a
+  call of a generic function (#283), when no class overrides it. A call of an overridden one dispatches on the
   receiver's class as any method call does, adding no choice of its own
   (#314): in a `for`, a value the filters after it reject undoes what came
   before it, the receiver's and the arguments' effects and the earlier
@@ -893,7 +896,7 @@ Main():void =
   arguments where it is inlined, as at a call), a recursive or generic one
   with named parameters, one with a `defer:` of its own (in its body, not in a block inside it), one with a `return`
   other than in an `if`'s branches, or recursive with a `return`, a method whose name another class or interface
-  also has, of a generic class, generic, `<suspends>` or using `(super:)`, one used as a function value, and, since its body is inlined where other names may be
+  also has, overridden in a generic class, generic, `<suspends>` or using `(super:)`, one used as a function value, and, since its body is inlined where other names may be
   in scope, one whose name is also the name of a parameter, local, field or
   method anywhere in the program, and a call of one where a name its body
   uses from outside is a parameter, local or member of `Self` in scope.
@@ -1341,6 +1344,6 @@ Main()<suspends>:void =
 arithmetic on rationals (see [rational](#rational)), float functions beyond those of [float](#float),
 the class features listed under [Classes](#classes), struct methods (Verse structs have none; classes do),
 `weak_map`, module paths `using{/Verse.org/…}` (accepted and ignored), overloading beyond [Overloading](#overloading), nested
-functions and lambdas (not released in Verse), choice beyond [Choice](#choice) (recursive functions with several values that have effects, other than generators, methods with several values whose name another class shares or whose class is generic; a choice inside a block with a `defer:` or a construction whose default runs before it), concurrency beyond [Concurrency](#concurrency), and effect checking
+functions and lambdas (not released in Verse), choice beyond [Choice](#choice) (recursive functions with several values that have effects, other than generators, methods with several values whose name another class shares or that a generic class overrides; a choice inside a block with a `defer:` or a construction whose default runs before it), concurrency beyond [Concurrency](#concurrency), and effect checking
 other than `<decides>` and the heap effects (`<converges>` is accepted and
 ignored).

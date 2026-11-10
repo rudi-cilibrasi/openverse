@@ -1,5 +1,6 @@
-# no copy where the default's body uses a name the class's scope has beyond the
-# interface's: Help and Limit stay the global ones, as without copies (#53)
+# a default whose body uses names the class's scope has beyond the interface's
+# (#53): its copy, elaborated in c2's scope, uses the global Help and Limit, as
+# the interface's own does; a dispatch from container(u) reaches the copies
 Help():int = 1
 Limit:int = 1
 container(t:type) := interface:
@@ -15,7 +16,8 @@ bl(a:type) := class(c2(a)):
     X:a
     Limit:int = 7
     V<override>():a = X
+G(C:container(u) where u:type):u = C.Get()
 Main():void =
     B := box(int){X := 1}
     L := bl(int){X := 1}
-    Print("{B.Get().Length} {L.Get().Length}")
+    Print("{B.Get().Length} {L.Get().Length} {G(B).Length} {G(L).Length}")
