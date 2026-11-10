@@ -1003,10 +1003,12 @@ instead:
 - A frame that waits records itself in the scheduler (`$Leaf`, after the
   scheduler's own fields), unless a frame it called did; each frame above
   counts itself (`$LeafDepth`; -1: none recorded). A root records none,
-  meaning itself. A frame whose wait goes through something resumed only
-  by it (the arms of a `sync`, `race` or `rush`, or a frame called through
-  `Typed.dispatch`, whose frame has no type arguments the scheduler could
-  name) records itself even then (`Suspend.waitsHere`).
+  meaning itself. A frame whose wait goes through the arms of a `sync`,
+  `race` or `rush`, which only it resumes, records itself even then
+  (`Suspend.waitsHere`). A frame called through `Typed.dispatch` (#142,
+  #209, #251) is recorded as any other: `$resumeAny` opens its type
+  arguments, and an opened override's `resumeOwn` writes its result cells
+  when it ends (again, harmlessly, when its caller polls it after).
 - After the root's resumption, the root keeps the recorded frame in its
   last field when the frame was found from it at least `leafDepthMin`
   levels down (nearer, a pass from the root costs no more than the

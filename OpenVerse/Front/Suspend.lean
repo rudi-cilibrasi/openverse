@@ -598,8 +598,10 @@ def seeking : M Expr := do return .prim .eq [.local (← read).rS, int 1]
     scheduler as the frame to resume first (none for a root: the root
     itself), unless a frame it called did, which it waits for (it then
     counts itself above that one); `force`: also then, as what it waits for
-    is resumed only through it (the arms of a `sync`, `race` or `rush`, or a
-    frame called through `Typed.dispatch`). Recording a frame above the one
+    is resumed only through it (the arms of a `sync`, `race` or `rush`). A
+    frame called through `Typed.dispatch` records itself as any other: the
+    scheduler resumes it through `$resumeAny`, which opens its type
+    arguments, and an opened one's `resumeOwn` writes its result cells. Recording a frame above the one
     that waits is always sound: resuming it resumes what it waits for, as
     each pass did before (#362). -/
 def waitsHere (force : Bool) : M Expr := do
@@ -1025,7 +1027,7 @@ partial def suspendSelf (us : List Nat) (y : Nat) (c : Callee) (rs : List Expr) 
     fset env.pcFld (int k)])
   let poll : Expr := seqVoid [.assign w (fget cf),
     .assign st (.ite (.heap (.isTag [c.tag]) [.local w]) (.call resumeFn [.local w, .local schS]) (.prim .userErr []))]
-  let pend : Expr := .ite (.prim .eq [.local st, int 0]) (← waitThen true (.seq spillMark (.ret (int 0)))) vd
+  let pend : Expr := .ite (.prim .eq [.local st, int 0]) (← waitThen false (.seq spillMark (.ret (int 0)))) vd
   let found : Expr := .assign env.rS (int 0)
   match c.resField, valued with
   | some _, true =>
@@ -1148,7 +1150,7 @@ partial def suspendSelfOpen (us : List Nat) (y : Nat) (c : Callee) (rs : List Ex
     fset env.pcFld (int k)])
   let poll : Expr := seqVoid [.assign w (fget cf),
     .assign st (.ite (.heap (.isTag [c.tag]) [.local w]) (.call resumeFn [.local w, .local schS]) (.prim .userErr []))]
-  let pend : Expr := .ite (.prim .eq [.local st, int 0]) (← waitThen true (.seq spillMark (.ret (int 0)))) vd
+  let pend : Expr := .ite (.prim .eq [.local st, int 0]) (← waitThen false (.seq spillMark (.ret (int 0)))) vd
   let found : Expr := .assign env.rS (int 0)
   let value : Expr ← match narrow with
     | some (_, some usτ) => do
