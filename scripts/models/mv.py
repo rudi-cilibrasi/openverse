@@ -298,6 +298,10 @@ R6 = random.Random(seed * 1000003 + 342)
 R9 = random.Random(seed * 1000003 + 360)
 # (branchy ifs in mv and rec modes too, half the programs, so their branches can call them)
 BIF = 'bif' in flags or ((MV or REC) and R9.random() < 0.5)
+# ---- #361 (#283): a choice in a set's path, set A[Mod[J.Next() + (0 | 2), 4]] op= e: the index's
+# J.Next() runs once, before the choice; each index value is an alternative, reading its old value
+# and then running e (its effects once per index value). A generator of its own decides.
+R10 = random.Random(seed * 1000003 + 361)
 # ---- #328 (with mvm): at times the test's class overrides Mv with several values of its own,
 #   MvT<override>(MpT:int):int = MpT * 3 | (super:)MvT(MpT) | MpT - 1
 # Run, the fields and the base MvT are then in a parent class, so the bare MvT(..) in Run
@@ -1224,7 +1228,7 @@ def gen_clauses(scope, vars_, d, n, allow_gen, inner=False, lastval=False, isfor
             op = '=' if (isfor and 'noforset' in flags) else R.choice(['=', '+='])
             if not (isfor and 'noforset' in flags):
                 CTX['inset'] = True
-                cl.append(('seti', op, gen_e(scope, vars_, d, True)))
+                cl.append(('setc' if R10.random() < 0.4 else 'seti', op, gen_e(scope, vars_, d, True)))
                 CTX['inset'] = False
         elif k < 0.73 and not inner and not (isfor and 'noforset' in flags):
             CTX['inset'] = True
@@ -1294,6 +1298,8 @@ def top_choice_c(c):
         return top_choice_e(c[1])
     if t == 'setv':
         return top_choice_e(c[3])
+    if t == 'setc':
+        return True          # (the index's choice is at the top)
     if t in ('seti', 'setf'):
         return top_choice_e(c[-1])
     return False
@@ -1317,6 +1323,8 @@ def show_c(c):
     if t == 'seti':
         e = c[2]
         return f"set A[Mod[J.Next(), 4]] {c[1]} " + (show(e) if e[0] == 'choice' else show(e))
+    if t == 'setc':
+        return f"set A[Mod[J.Next() + (0 | 2), 4]] {c[1]} " + show(c[2])
     if t == 'setf':
         e = c[1]
         return "set F *= " + (show(e) if e[0] == 'choice' else show(e))
@@ -1760,6 +1768,22 @@ def run_clauses(cl, st, k, mode):
             s.vars[v] = x if op == '=' else chks(old + x if op == '+=' else old * x, s)
             return nxt(s)
         return ev(c[3], st, ks, mode)
+    if t == 'setc':
+        op = c[1]
+        base = st.vars['J.C']
+        st.vars['J.C'] += 1
+
+        def idx(k):
+            def th(s1, k2):
+                i = (base + k) % 4
+                old = s1.A[i]
+
+                def ksc(x, s):
+                    s.A[i] = x if op == '=' else chks(old + x, s)
+                    return k2(None, s)
+                return ev(c[2], s1, ksc, mode)
+            return th
+        return choice_point([idx(0), idx(2)], st, lambda _v, s: nxt(s), mode)
     if t == 'seti':
         op = c[1]
         i = st.vars['J.C'] % 4

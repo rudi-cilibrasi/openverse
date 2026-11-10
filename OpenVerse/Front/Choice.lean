@@ -762,8 +762,8 @@ partial def liftClauseM (isVal : String → Bool) (isField : String → String �
         let (h, s) := setClauses p l op as p site
         return (← liftAll h) ++ [s]
       | none, none =>
-        if isBranchy rhs then
-          -- (an `if` with choices in its branches: at `L`'s type, as below)
+        if liftsAsIf rhs then
+          -- (an `if` lifted whole, #235, #283: at `L`'s type, as below)
           let (h, _, l') := setPrefix p l none site
           let n := s!"$c{sitePart site}{p.line}_{p.col}"
           return (← liftAll h) ++ [.decl p n none false (.app p (.ident p "$branchChoiceAt") [l', rhs] false),
