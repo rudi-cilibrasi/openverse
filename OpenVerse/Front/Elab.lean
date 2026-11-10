@@ -6814,21 +6814,13 @@ def subTops : Except String (List STop) :=
 def subVoidTops : Except String (List STop) :=
   parsePrelude subVoidPrelude ["subscription", "Live", "Handlers", "Hs", "H", "S", "F", "X", "Head", "signalAll", "subev0"]
 
-/-- The types a body writes (bindings', constructions' type arguments) with
-    the names of `σ` substituted (#53): as `Choice.renameTypes`, but by types,
-    an interface's type parameters at the arguments a class gives it. -/
-partial def substTypesE (σ : List (String × STy)) : SExpr → SExpr :=
-  Choice.mapE fun
-    | .decl p n (some t) v x => some (.decl p n (some (t.substNames σ)) v (substTypesE σ x))
-    | .construct p n ts fs => some (.construct p n (ts.map (·.substNames σ)) (fs.map (substTypesE σ)))
-    | _ => none
-
 /-- (#53) An interface that gives a parent interface other type arguments
     than its own type parameters (`c2(t) := interface(container([]t))`) and
     a default body for one of that parent's methods (`Get<override>():[]t`):
-    a class that reaches it through interfaces each given the class's own
-    type parameters by name gets that body as an override of its own, with
-    the interface's type parameters renamed to the class's. A dispatch from
+    a class that reaches it with type arguments that mention its own type
+    parameters gets that body as an override of its own, with the
+    interface's type parameters substituted by those type arguments
+    (`Refine.substTypes`). A dispatch from
     the parent that opens the class's type parameters reaches the class's
     copy, which reads them from its receiver's hidden fields as any override
     does; the interface's own, shared by all its classes, would need them as
@@ -6881,8 +6873,8 @@ def copyIfaceDefaults (tops : List STop) : List STop :=
     | .classDef cp n tps specs parents false fields ovs ms =>
       let chain := (supersOf n).filter fun c => ((defOf c).map (!·.2.1)).getD false
       let chainDeclares (m : String) : Bool := chain.any fun c => (membersOf c).contains m
-      -- (the pinned interfaces reached through interfaces given the class's
-      -- own type parameters by name, each with the renaming to the class's)
+      -- (the pinned interfaces reached, each with its type parameters as the
+      -- class gives them, through the interfaces between)
       let rec reach (fuel : Nat) (q : String) (qa : List STy) (σ : List (String × STy)) :
           List (String × List (String × STy)) :=
         match fuel, defOf q with
@@ -6923,14 +6915,14 @@ def copyIfaceDefaults (tops : List STop) : List STop :=
             if effs.contains "override" && !effs.contains "$abstract" && !effs.contains "final" &&
                 !m.startsWith "(" && !chainDeclares (baseName m) && others.isEmpty && !usesSuper body &&
                 !mtps.any (fun tp => tps.any (·.name == tp.name)) &&
-                -- (nor a type parameter the renaming changes as a name in an
-                -- expression, which `renameTypes` leaves: a cast's `c2(t)`)
+                -- (nor a type parameter the substitution changes as a name in
+                -- an expression, which `Refine.substTypes` leaves: a cast's `c2(t)`)
                 !mentions ((σ.filter fun (x, y) => match y with | .name y' => x != y' | _ => true).map (·.1)) body &&
                 !mentions risky body && !ps.any (fun sp => risky.contains sp.name ||
                   (sp.default.map (mentions risky)).getD false) then
               let ps' : List SParam := ps.map fun sp =>
-                ({ sp with ty := sp.ty.substNames σ, «default» := sp.default.map (substTypesE σ) } : SParam)
-              some (.fn mp m ps' mtps effs (ret.substNames σ) (substTypesE σ body))
+                ({ sp with ty := sp.ty.substNames σ, «default» := sp.default.map (Refine.substTypes σ) } : SParam)
+              some (.fn mp m ps' mtps effs (ret.substNames σ) (Refine.substTypes σ body))
             else none
           | _ => none
       .classDef cp n tps specs parents false fields ovs (ms ++ extra)
