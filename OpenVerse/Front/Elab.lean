@@ -704,15 +704,6 @@ partial def Ty.params : Ty → List String
   | .map k v => k.params ++ v.params
   | _ => []
 
-/-- Whether a written type mentions one of the names `vs` (as `Ty.params`
-    has it, function types' parameters and result included). -/
-partial def STy.mentionsAny (vs : List String) : STy → Bool
-  | .name n => vs.contains n
-  | .arr t | .opt t => STy.mentionsAny vs t
-  | .tup ts | .app _ ts => ts.any (STy.mentionsAny vs)
-  | .map k v => STy.mentionsAny vs k || STy.mentionsAny vs v
-  | .fn ps _ r => ps.any (STy.mentionsAny vs) || STy.mentionsAny vs r
-
 /-- The interfaces `i(args)` reaches through the parent interfaces it lists,
     with their resolved type arguments (#53): itself first. -/
 partial def TyEnv.ifaceInstances (env : TyEnv) (i : String) (args : List Ty) : List (String × List Ty) :=
@@ -7556,23 +7547,6 @@ partial def CDef.ifaceCoreS (cdefs : List CDef) (i : CDef) (args : List STy) : L
   if longest.isEmpty then args else
   let others := i.tps.filter fun tp => !longest.any fun | .name v => v == tp.name | _ => false
   (longest ++ others.map fun tp => STy.name tp.name).map (·.substNames σ)
-
-/-- The names a type mentions, in order of first occurrence. -/
-partial def STy.names : STy → List String
-  | .name m => [m]
-  | .arr u | .opt u => u.names
-  | .tup ts => (ts.flatMap STy.names).eraseDups
-  | .app n ts => (n :: ts.flatMap STy.names).eraseDups
-  | .map a b => (a.names ++ b.names).eraseDups
-  | .fn ps _ r => ((ps ++ [r]).flatMap STy.names).eraseDups
-
-/-- The type names `n` (a type parameter, say) somewhere. -/
-partial def STy.mentions (t : STy) (n : String) : Bool := match t with
-  | .name m => m == n
-  | .arr u | .opt u => u.mentions n
-  | .tup ts | .app _ ts => ts.any (·.mentions n)
-  | .map a b => a.mentions n || b.mentions n
-  | .fn ps _ r => ps.any (·.mentions n) || r.mentions n
 
 /-- Constructor functions (#11, Book of Verse ch. 10). `K<constructor>(ps) :=
     c:` with items becomes two functions with K's parameters and effects:
