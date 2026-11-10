@@ -119,14 +119,21 @@ def schS : Nat := 1
     done, in a program whose scheduler resumes waiting frames directly,
     #362), the result, one field per suspension point (a callee's frame),
     two per arm of a `sync` or `race` (its suspension point, whether it is
-    done), then the slots (and a root's waiting frame to resume first, #362,
-    which `lowerConcurrency` adds). -/
+    done), then the slots; where frames are resumed directly (#362), each
+    arm's record of the waiting frame to resume first (`armTopMark`), and,
+    after an opened override's result cells, a root's (which
+    `lowerConcurrency` adds). -/
 def pcF : Nat := 0
 def resF : Nat := 1
 def childF (k : Nat) : Nat := 2 + (k - 1)
 def armPcF (sites a : Nat) : Nat := 2 + sites + 2 * a
 def armDoneF (sites a : Nat) : Nat := 2 + sites + 2 * a + 1
 def slotBaseOf (sites arms : Nat) : Nat := 2 + sites + 2 * arms
+
+/-- An arm's field recording the waiting frame to resume first (#362), as a
+    placeholder index, filled in once the number of slots is known: the
+    arms' fields come after the slots. -/
+def armTopMark (a : Nat) : Nat := 1100000000 + a
 
 /-- Placeholders for "store every slot in the frame" and "reload every slot
     from it", filled in once the number of slots is known. -/
@@ -521,6 +528,12 @@ structure Env where
       their waiting frames directly (#362): else nothing is recorded, and
       frames are not marked done. -/
   leafy : Bool := false
+  /-- With `leafy`: `$resumeAny` (a mark, its index known later), the least
+      depth at which a waiting frame found from an arm is kept, and the type
+      of an arm's field recording it (#362). -/
+  resumeAnyFn : Nat := 0
+  leafMin : Nat := 0
+  armTopTy : VTy := .opt .void
 
 structure St where
   /-- The functions' slot types (shared by the body and its arms). -/
@@ -615,7 +628,10 @@ def seeking : M Expr := do return .prim .eq [.local (← read).rS, int 1]
     each pass did before (#362). -/
 def waitsHere (force : Bool) : M Expr := do
   let env ← read
-  let v : Expr := if env.isRoot then .lit .none else .prim .mkSome [fr]
+  -- (none is the scheduler, as a callee's frame field starts, so that
+  -- recording allocates nothing; code of an arm records none too, meaning
+  -- the arm itself: its frame is the one that has the arms, #362)
+  let v : Expr := if env.isRoot || env.inArmR then .local schS else fr
   let sch : Expr := .local schS
   let depth : Expr := .heap (.get env.leafDepthF) [sch]
   let setIt := seqVoid [.heap (.set env.leafF) [sch, v], .heap (.set env.leafDepthF) [sch, int 0]]
@@ -868,8 +884,10 @@ partial def block (e : Expr) (k : Option (Expr → Expr)) : M (List Expr) := do
         modify fun st => { st with branchArms := st.branchArms.set! i (env.fnBase + 2 * a, doneA, true) }
         -- (`start(sched, frame)` makes the wrapper, registers it, runs the
         -- arm once and gives the wrapper, kept in the frame for `stop`)
-        pure (seqVoid [fset pcA (int 0), fset doneA (int 0), number, spillMark,
-          fset (childF site) (.call startFn [.local schS, fr]), reloadMark])
+        -- (its arm's record, #362, which its wrapper reads, starts as none)
+        pure (seqVoid ([fset pcA (int 0), fset doneA (int 0)] ++
+          (if env.leafy then [fset (armTopMark a) (.local schS)] else []) ++ [number, spillMark,
+          fset (childF site) (.call startFn [.local schS, fr]), reloadMark]))
       match k with
       | some k => return [s, ← emit (pure (k vd))]
       | none => return [s]
@@ -1206,8 +1224,12 @@ partial def concAt (isSync : Bool) (arms : List Expr) (isRush : Bool := false) :
   modify fun st => { st with sites := st.sites.push { id := k, waits := .arms info.toList, defers := defersHere } }
   let args ← armArgs
   let st ← freshT .int
+  -- (where frames are resumed directly, #362, each arm records the waiting
+  -- frame its chain found, from which it is resumed while it waits)
+  let armTop (res : Nat) : Nat := armTopMark ((res - env.fnBase) / 2)
   let arrive : Expr := .ite (← seeking) vd (seqVoid
-    (info.toList.flatMap (fun (_, _, pcA, doneA) => [fset pcA (int 0), fset doneA (int 0)]) ++ numbers.toList ++
+    (info.toList.flatMap (fun (res, _, pcA, doneA) => [fset pcA (int 0), fset doneA (int 0)] ++
+        (if env.leafy then [fset (armTop res) (.local schS)] else [])) ++ numbers.toList ++
       [fset env.pcFld (int k)]))
   let found : Expr := .assign env.rS (int 0)
   -- an arm that gives 2 makes the function return: the other arms that
@@ -1219,9 +1241,27 @@ partial def concAt (isSync : Bool) (arms : List Expr) (isRush : Bool := false) :
       Expr.ite (allOf [.prim .ne [fget pcA, int 0], .prim .eq [fget doneA, int 0]])
         (.seq (seqVoid [.call can args, fset doneA (int 2)]) vd) vd) ++
     [defersHere, if env.pcFld == pcF then doneRet env.leafOpt else .ret (int 2)])
-  let run (res doneA : Nat) : Expr := seqVoid [spillMark, .assign st (.call res args),
+  -- (an arm is resumed from the frame it recorded, else, or once that one
+  -- is done, from the arm, as a root is, #362)
+  -- (`$resumeAny(recorded, sched)` gives -1 when none is recorded)
+  let (sS, fS) ← if env.leafy then do pure (← freshT .int, ← freshT .int) else pure (0, 0)
+  let resumeArm (res : Nat) : List Expr :=
+    if !env.leafy then [.assign st (.call res args)] else
+    let sch : Expr := .local schS
+    let forget : Expr := .heap (.set env.leafDepthF) [sch, int (-1)]
+    let depth : Expr := .heap (.get env.leafDepthF) [sch]
+    [.assign fS (int 0),
+     .assign st (.seq forget (.seq (.assign sS (.call env.resumeAnyFn [fget (armTop res), sch]))
+       (.ite (.prim .eq [.local sS, int 0]) (.seq (.assign fS (int 1)) (.local sS))
+         (.seq forget (.call res args))))),
+     fset (armTop res) (.ite (.prim .eq [.local st, int 0])
+       (.ite (.prim .lt [depth, int 0]) sch
+         (.ite (.prim .eq [.local fS, int 1]) (.heap (.get env.leafF) [sch])
+           (.ite (.prim .le [int env.leafMin, depth]) (.heap (.get env.leafF) [sch]) sch)))
+       sch)]
+  let run (res doneA : Nat) : Expr := seqVoid ([spillMark] ++ resumeArm res ++ [
     .ite (.prim .eq [.local st, int 1]) (.seq (fset doneA (int 1)) vd) vd,
-    .ite (.prim .eq [.local st, int 2]) (.seq (seqVoid [fset doneA (int 1), returning]) vd) vd, reloadMark]
+    .ite (.prim .eq [.local st, int 2]) (.seq (seqVoid [fset doneA (int 1), returning]) vd) vd, reloadMark])
   if isSync then
     let polls := info.toList.map fun (res, _, _, doneA) =>
       Expr.ite (.prim .eq [fget doneA, int 0]) (.seq (run res doneA) vd) vd
@@ -1455,6 +1495,26 @@ partial def renumber (ren : Nat → Nat) : Expr → Expr
   | .print e => .print (renumber ren e)
   | e => e
 
+/-- `e` with the arms' fields' placeholders (`armTopMark`) at their indices
+    from `base` (#362). -/
+partial def fillArmTops (base : Nat) : Expr → Expr
+  | .heap op es =>
+    let op := match op with
+      | .get k => if armTopMark 0 ≤ k then HeapOp.get (base + (k - armTopMark 0)) else op
+      | .set k => if armTopMark 0 ≤ k then HeapOp.set (base + (k - armTopMark 0)) else op
+      | op => op
+    .heap op (es.map (fillArmTops base))
+  | .assign j e => .assign j (fillArmTops base e)
+  | .forE i it f b => .forE i (fillArmTops base it) (fillArmTops base f) (fillArmTops base b)
+  | .seq a b => .seq (fillArmTops base a) (fillArmTops base b)
+  | .prim p es => .prim p (es.map (fillArmTops base))
+  | .call g es => .call g (es.map (fillArmTops base))
+  | .ite c t e => .ite (fillArmTops base c) (fillArmTops base t) (fillArmTops base e)
+  | .loop b => .loop (fillArmTops base b)
+  | .ret e => .ret (fillArmTops base e)
+  | .print e => .print (fillArmTops base e)
+  | e => e
+
 /-- A function of a lowered suspends function: its body, without the slots'
     initialisations, and its slot types (the frame, the scheduler, the
     parameters, then the transient slots it uses). -/
@@ -1485,7 +1545,8 @@ structure Lowered where
 def lower (S : Sigs) (callee : Nat → Option Callee) (syncMark raceMark rushMark spawnMark : Nat) (spawns : Array (Nat × Nat))
     (branchMark : Nat) (branches : Array (Nat × Nat × Nat))
     (arity : Nat) (Γ : List VTy) (ρ : VTy) (frameTy : VTy) (schedTag nilTag resCellTag : Nat) (fnBase : Nat) (b : Expr)
-    (leafF leafDepthF : Nat := 0) (isRoot : Bool := false) (leafy : Bool := false) :
+    (leafF leafDepthF : Nat := 0) (isRoot : Bool := false) (leafy : Bool := false)
+    (resumeAnyFn leafMin : Nat := 0) (armTopTy : VTy := .opt .void) :
     Except String Lowered := do
   let schedTy : VTy := .ref [schedTag] []
   let isM := fun f => f == syncMark || f == raceMark || f == rushMark
@@ -1498,7 +1559,7 @@ def lower (S : Sigs) (callee : Nat → Option Callee) (syncMark raceMark rushMar
   let trans0 := #[true, true] ++ (List.replicate Γ.length false).toArray
   let env : Env := { S, ρ, callee, syncMark, raceMark, rushMark, arity, sites, armsTotal, fnBase, schedTag, nilTag, resCellTag, spawnMark, spawns,
                      branchMark, branches, viaBase := fnBase + 2 * armsTotal, expTy := some ρ,
-                     pcFld := pcF, rS := 0, regionTotal := 0, leafF, leafDepthF, isRoot, leafy }
+                     pcFld := pcF, rS := 0, regionTotal := 0, leafF, leafDepthF, isRoot, leafy, resumeAnyFn, leafMin, armTopTy }
   let done : Expr → Expr := fun v => .seq (fset resF v) (doneRet (if leafy then some leafDepthF else none))
   let ((res, can), st) ← ((region pcF (some done) b).run env).run { Γ := Γ0, trans := trans0 }
   if st.next != sites || st.armsNext != armsTotal then
@@ -1566,6 +1627,11 @@ def lower (S : Sigs) (callee : Nat → Option Callee) (syncMark raceMark rushMar
   let prep (e : Expr) : StateM (Array (Expr × List VTy × VTy)) Expr :=
     let e := fill vd vd kill e
     fixRefined S st.Γ ρ (residentIn e) (env.viaBase + st.vias.size) none e
+  -- (the arms' fields come after the slots, #362)
+  let armBase := slotBaseOf sites armsTotal + (st.Γ.size - 2)
+  let res := if leafy then fillArmTops armBase res else res
+  let can := if leafy then fillArmTops armBase can else can
+  let st := if leafy then { st with arms := st.arms.map fun (r, c) => (fillArmTops armBase r, fillArmTops armBase c) } else st
   let ((res, can, arms), more) := (do
       let r ← prep res
       let c ← prep can
@@ -1580,6 +1646,6 @@ def lower (S : Sigs) (callee : Nat → Option Callee) (syncMark raceMark rushMar
   return { body := finish res, cancel := finish can, arms := arms.map fun (r, c) => (finish r, finish c),
            branchArms := st.branchArms.toList, vias := st.vias.toList ++ more.toList,
            fields := [.int, ρ] ++ st.children.toList ++ List.replicate (2 * armsTotal) .int ++
-             (st.Γ.toList.drop 2) }
+             (st.Γ.toList.drop 2) ++ (if leafy then List.replicate armsTotal armTopTy else []) }
 
 end OpenVerse.Front.Suspend
