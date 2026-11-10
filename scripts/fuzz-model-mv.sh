@@ -20,6 +20,8 @@ for ((s=first; s<first+n; s++)); do
   # (the mode is a flag of its own, or none)
   python3 -I "$root/scripts/models/mv.py" "$s" "$tmp" $m 2> "$tmp/gen.err" ||
     { bad=$((bad+1)); echo "GENERATOR FAILED ${m:-plain} seed $s: $(tail -1 "$tmp/gen.err")"; continue; }
+  # (SKIP long: the model gave up on a program that prints more than 12000 lines)
+  if grep -q '^SKIP long' "$tmp/p.expected"; then long=$((long+1)); continue; fi
   # (a program whose ints overflow, which the model does not follow: skipped)
   if grep -q '^SKIP' "$tmp/p.expected"; then skip=$((skip+1)); continue; fi
   # (a program the model predicts to print more than 12000 lines may not finish within the

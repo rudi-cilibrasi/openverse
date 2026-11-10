@@ -83,6 +83,10 @@ def _skip_eager_overflow(exc_type, exc, tb):
         open(f"{outdir}/p.verse", "w").write("Main():void = {}\n")
         open(f"{outdir}/p.expected", "w").write("SKIP overflow (not modelled; #246 for one in a value never taken)\n")
         sys.exit(0)
+    if exc_type.__name__ == 'ModelBudget':
+        open(f"{outdir}/p.verse", "w").write("Main():void = {}\n")
+        open(f"{outdir}/p.expected", "w").write(f"SKIP long ({exc})\n")
+        sys.exit(0)
     sys.__excepthook__(exc_type, exc, tb)
 
 
@@ -147,6 +151,22 @@ class Fail(Exception):
     pass
 
 
+# (a path that prints over OUT_MAX lines, a model that takes over EV_MAX steps, or one that
+# copies over WORK_MAX entries with its states (each choice point copies the path's output):
+# the program would print more than the driver's 12000 lines, or the model would run for
+# minutes. Without a bound it copied an ever longer output at each choice point, for hours
+# at seed 770157 in bif mode. Marked SKIP long, which the driver skips as over 12000 lines.)
+OUT_MAX = 12000
+EV_MAX = 10_000_000
+EV_STEPS = [0]
+WORK_MAX = 5_000_000_000
+WORK = [0]
+
+
+class ModelBudget(Exception):
+    pass
+
+
 class St:
     def __init__(self):
         self.vars = {}
@@ -162,6 +182,11 @@ class St:
         n.binds = dict(self.binds)
         n.A = list(self.A)
         n.F = self.F
+        if len(self.out) > OUT_MAX:
+            raise ModelBudget(f"a path prints over {OUT_MAX} lines")
+        WORK[0] += len(self.out) + len(self.vars) + len(self.binds)
+        if WORK[0] > WORK_MAX:
+            raise ModelBudget(f"over {WORK_MAX} entries copied with states")
         n.out = list(self.out)
         return n
 
@@ -1409,6 +1434,9 @@ def cmpf(a, op, b):
 
 
 def ev(e, st, k, mode):
+    EV_STEPS[0] += 1
+    if EV_STEPS[0] > EV_MAX:
+        raise ModelBudget(f"over {EV_MAX} steps of the model")
     t = e[0]
     if t == 'lit':
         return k(e[1], st)
