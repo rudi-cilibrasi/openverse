@@ -6829,6 +6829,14 @@ def subTops : Except String (List STop) :=
 def subVoidTops : Except String (List STop) :=
   parsePrelude subVoidPrelude ["subscription", "Live", "Handlers", "Hs", "H", "S", "F", "X", "Head", "signalAll", "subev0"]
 
+/-- The names a body binds: its locals and its generators' (#53). -/
+partial def boundNamesE (e : SExpr) : List String :=
+  let own := match e with
+    | .decl _ n _ _ _ => [n]
+    | .gen _ x i _ => x :: i.toList
+    | _ => []
+  own ++ (Refine.kids e).flatMap boundNamesE
+
 /-- (#53) An interface that gives a parent interface other type arguments
     than its own type parameters (`c2(t) := interface(container([]t))`) and
     a default body for one of that parent's methods (`Get<override>():[]t`):
@@ -6918,7 +6926,18 @@ def copyIfaceDefaults (tops : List STop) : List STop :=
         let jScope := (supersOf j).flatMap membersOf
         let risky := ((supersOf n).flatMap membersOf).filter (!jScope.contains ·)
         (((defOf j).map (·.2.2.2.2.2)).getD []).filterMap fun
-          | .fn mp m ps mtps effs ret body =>
+          | .fn mp m ps0 mtps effs ret body0 =>
+            -- (the body's locals and positional parameters named like a
+            -- member the class's scope adds are renamed, which a shadowing
+            -- would refuse there: Verse refuses shadowing a global or a
+            -- member, so such a name is never also free in the body; a named
+            -- parameter keeps its name, which calls use)
+            let boundRisky := ((boundNamesE body0 ++ (ps0.filter (!·.named)).map (·.name) ++
+                ps0.flatMap fun sp => (sp.default.map boundNamesE).getD []).filter risky.contains).eraseDups
+            let ren := boundRisky.map fun x => (x, x ++ "$copy")
+            let body := Choice.renameE ren body0
+            let ps : List SParam := ps0.map fun sp =>
+              ({ sp with name := (ren.lookup sp.name).getD sp.name, «default» := sp.default.map (Choice.renameE ren) } : SParam)
             -- (every interface that declares the method, above the class or
             -- above any class below it, is `j` or above it: the copy, a
             -- method of the class chain, takes no other interface's slot or
@@ -6927,7 +6946,7 @@ def copyIfaceDefaults (tops : List STop) : List STop :=
             let jUp := supersOf j
             let others := (below.flatMap supersOf).eraseDups.filter fun i =>
               ((defOf i).map (·.2.1)).getD false && !jUp.contains i && (membersOf i).contains (baseName m)
-            if effs.contains "override" && !effs.contains "$abstract" && !effs.contains "final" &&
+            if effs.contains "override" && !effs.contains "$abstract" &&
                 !m.startsWith "(" && !chainDeclares (baseName m) && others.isEmpty && !usesSuper body &&
                 !mtps.any (fun tp => tps.any (·.name == tp.name)) &&
                 -- (nor a type parameter the substitution changes as a name in
@@ -6937,7 +6956,9 @@ def copyIfaceDefaults (tops : List STop) : List STop :=
                   (sp.default.map (mentions risky)).getD false) then
               let ps' : List SParam := ps.map fun sp =>
                 ({ sp with ty := sp.ty.substNames σ, «default» := sp.default.map (Refine.substTypes σ) } : SParam)
-              some (.fn mp m ps' mtps effs (ret.substNames σ) (Refine.substTypes σ body))
+              -- (`$copy`: its `<final>`, if any, is the interface's, which it
+              -- is, not overrides)
+              some (.fn mp m ps' mtps (effs ++ ["$copy"]) (ret.substNames σ) (Refine.substTypes σ body))
             else none
           | _ => none
       .classDef cp n tps specs parents false fields ovs (ms ++ extra)
@@ -8580,7 +8601,8 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
           for (q, x) in qs do
             match (cdef? q).bind (methodNamed · x) with
             | some (.fn _ _ _ qtps qeffs _ _) =>
-              if qeffs.contains "final" then throw s!"{mp.show}: {q}.{x} is <final>: it cannot be overridden"
+              if qeffs.contains "final" && !effs.contains "$copy" then
+                throw s!"{mp.show}: {q}.{x} is <final>: it cannot be overridden"
               -- (a method with its own type parameters overrides one with as
               -- many, compared up to their names below)
               if qtps.length != mtps.length then

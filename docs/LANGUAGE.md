@@ -574,9 +574,10 @@ circle := class(shape, labelled):
     of a default implementation the interface gives a method of its parent
     at type arguments the interface fixes otherwise (`c2(t)`'s
     `Get<override>():[]t` reached from `container(u)`) in a class whose
-    members give a name the default uses another meaning, or for a
-    `<final>` default or one with `(super:)`; and a cast to such an
-    interface whose type parameters would be unknown (#53).
+    members give a name the default uses free (a global) another meaning,
+    or that has a member named like one of its named parameters, or for a
+    default with `(super:)`; and a cast to such an interface whose type
+    parameters would be unknown (#53).
 
 ## Mutation, macros, tooling
 
