@@ -6850,10 +6850,13 @@ partial def boundNamesE (e : SExpr) : List String :=
     hidden arguments, which such a dispatch cannot pass. Only where the copy
     means what the default does: no class of the chain declares the method
     (the class chain wins over interface defaults), no other interface above
-    the class gives it a body, it is not `<final>`, the body has no
-    `(super:)`, and no name in it or its parameters is a member the class's
-    scope has beyond the interface's (it would resolve, or be refused as a
-    shadowing, differently there). -/
+    the class gives it a body, the body has no `(super:)`, and no name it
+    uses free, nor a named parameter, is a member the class's scope has
+    beyond the interface's (it would resolve differently there). Its locals
+    and positional parameters named like such a member are renamed (Verse
+    refuses shadowing, but a `for` binder may shadow a global or a built-in:
+    a name that is also one keeps the copy from being made), and a
+    `<final>` default stays final, its copy exempt (`$copy`). -/
 def copyIfaceDefaults (tops : List STop) : List STop :=
   let defs : List (String × Bool × List TParam × List STy × List String × List STop) := tops.filterMap fun
     | .classDef _ n tps _ parents isI fields _ ms => some (n, isI, tps, parents, fields.map (·.1), ms)
@@ -6934,6 +6937,12 @@ def copyIfaceDefaults (tops : List STop) : List STop :=
             -- parameter keeps its name, which calls use)
             let boundRisky := ((boundNamesE body0 ++ (ps0.filter (!·.named)).map (·.name) ++
                 ps0.flatMap fun sp => (sp.default.map boundNamesE).getD []).filter risky.contains).eraseDups
+            -- (a `for` binder may shadow a global or a built-in, so it is
+            -- renamed only where no such name is one: else no copy, as now)
+            let topNames : List String := tops.map fun
+              | .fn _ x .. | .const _ x .. | .classDef _ x .. => x
+            let shadowsGlobal := boundRisky.any fun x =>
+              topNames.contains x || builtins.contains x || softBuiltins.contains x
             let ren := boundRisky.map fun x => (x, x ++ "$copy")
             let body := Choice.renameE ren body0
             let ps : List SParam := ps0.map fun sp =>
@@ -6946,7 +6955,7 @@ def copyIfaceDefaults (tops : List STop) : List STop :=
             let jUp := supersOf j
             let others := (below.flatMap supersOf).eraseDups.filter fun i =>
               ((defOf i).map (·.2.1)).getD false && !jUp.contains i && (membersOf i).contains (baseName m)
-            if effs.contains "override" && !effs.contains "$abstract" &&
+            if effs.contains "override" && !effs.contains "$abstract" && !shadowsGlobal &&
                 !m.startsWith "(" && !chainDeclares (baseName m) && others.isEmpty && !usesSuper body &&
                 !mtps.any (fun tp => tps.any (·.name == tp.name)) &&
                 -- (nor a type parameter the substitution changes as a name in
@@ -8601,7 +8610,9 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
           for (q, x) in qs do
             match (cdef? q).bind (methodNamed · x) with
             | some (.fn _ _ _ qtps qeffs _ _) =>
-              if qeffs.contains "final" && !effs.contains "$copy" then
+              -- (a copy is exempt, and a copy's `<final>` is its interface's,
+              -- which the message names)
+              if qeffs.contains "final" && !qeffs.contains "$copy" && !effs.contains "$copy" then
                 throw s!"{mp.show}: {q}.{x} is <final>: it cannot be overridden"
               -- (a method with its own type parameters overrides one with as
               -- many, compared up to their names below)

@@ -1,4 +1,4 @@
-# expect: box.Get is <final>: it cannot be overridden
+# expect: c2.Get is <final>: it cannot be overridden
 # (the copy of c2's <final> Get in box keeps it final for classes below, #53)
 container(t:type) := interface:
     Get():t
