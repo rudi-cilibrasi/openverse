@@ -275,18 +275,26 @@ def firstOk (ok : List VTy → Bool) (a b : List VTy) : List VTy := if ok a then
     the fields, `void` where none (it then checks the fields against them).
     `acc` is only computed when needed, so that checking nested `new`s
     against their types takes linear time. -/
-def newArgs (acc : Unit → List (Nat × VTy)) (fs : List VTy) : Option VTy → List VTy
+def newArgs (t : Nat) (acc : Unit → List (Nat × VTy)) (fs : List VTy) : Option VTy → List VTy
   | some (.ref _ args) => args
+  -- (#351) an expected reference through views: the class's view matched
+  -- against its arguments, the other variables as the fields bind them
+  | some (.vref es bs) => match es.find? (·.1 == t) with
+    | some (_, φ) =>
+      let vb := VTy.bindVarsL φ bs []
+      (List.range (max (VTy.nvarsL fs) (VTy.nvarsL φ))).map fun j =>
+        ((vb.lookup j).orElse fun _ => (acc ()).lookup j).getD VTy.void
+    | none => (List.range (VTy.nvarsL fs)).map fun j => ((acc ()).lookup j).getD VTy.void
   | _ => (List.range (VTy.nvarsL fs)).map fun j => ((acc ()).lookup j).getD VTy.void
 
 /-- The type arguments `tc` proposes for a `new` with pins `ps` (#209): the
     expected type's, unless they are too few for the pins (an object of a
     class whose type parameters a dispatch opens has every argument its
     pins mention), then the fields'. -/
-def newProposal (ps : List (Option VTy)) (acc : Unit → List (Nat × VTy)) (fs : List VTy) (m : Option VTy) :
-    List VTy :=
-  let a := newArgs acc fs m
-  if ps.length ≤ a.length then a else newArgs acc fs none
+def newProposal (t : Nat) (ps : List (Option VTy)) (acc : Unit → List (Nat × VTy)) (fs : List VTy)
+    (m : Option VTy) : List VTy :=
+  let a := newArgs t acc fs m
+  if ps.length ≤ a.length then a else newArgs t acc fs none
 
 /-- The instantiation `tc` proposes for a call with result type `t`: the
     bindings `acc` from the arguments, completed from the expected type. -/
@@ -558,7 +566,7 @@ def tc : Expr → Option VTy → Option VTy
       -- (one proposal and a fallback, so that nested `new`s check in
       -- linear time)
       let args := firstOk (fun a => tcL es (fs.map (VTy.inst a)) && VTy.pinsOK (S.pinsOf t) a)
-        (newProposal (S.pinsOf t) (fun _ => bindArgs fs es []) fs m)
+        (newProposal t (S.pinsOf t) (fun _ => bindArgs fs es []) fs m)
         (((S.protos.find? (·.1 == t)).map (·.2)).getD [])
       if tcL es (fs.map (VTy.inst args)) && VTy.pinsOK (S.pinsOf t) args then expect m (.ref [t] args)
       else none
@@ -1399,6 +1407,15 @@ def checkDefault (S : Sigs) (a : Nat) (Γ : List VTy) : Expr → VTy → Bool
   | .heap (.new c) ds, .ref ts args => ts.contains c && VTy.pinsOK (S.pinsOf c) args && match S.classes[c]? with
     | some fs => checkDefaultL S a Γ ds (fs.map (VTy.inst args))
     | none => false
+  -- (#351) a slot of a reference type through views: an object of a class
+  -- of an entry, at type arguments its view relates to the slot's
+  | .heap (.new c) ds, .vref es bs => match es.find? (·.1 == c), S.classes[c]? with
+    | some (_, φ), some fs =>
+      let vb := VTy.bindVarsL φ bs []
+      let args := (List.range (max (VTy.nvarsL fs) (VTy.nvarsL φ))).map fun j => (vb.lookup j).getD VTy.void
+      VTy.pinsOK (S.pinsOf c) args && checkDefaultL S a Γ ds (fs.map (VTy.inst args)) &&
+        (VTy.ref [c] args).sub (.vref es bs)
+    | _, _ => false
   | .heap (.get k) [.local i], t => decide (i < a) && match Γ[i]? with
     | some (.ref ts args) => match fieldTy S ts args k with
       | some τ => τ.sub t
@@ -1444,13 +1461,23 @@ theorem checkDefault_sound {S : Sigs} {a : Nat} {Γ : List VTy} : ∀ (d : Expr)
         · simp at h
       · cases d <;> (rename_i d2 _; cases d2) <;> simp [checkDefault] at h
     all_goals try (simp [checkDefault] at h; done)
-    cases t <;> try (simp [checkDefault] at h; done)
-    rename_i c ts args
-    simp only [checkDefault, Bool.and_eq_true] at h
-    obtain ⟨⟨hc, hpin⟩, h⟩ := h
-    split at h
-    · next fs hfs => exact .new hfs (by simpa using hc) hpin (checkDefaultL_sound ds _ h)
-    · simp at h
+    rename_i c
+    cases t with
+    | ref ts args =>
+      simp only [checkDefault, Bool.and_eq_true] at h
+      obtain ⟨⟨hc, hpin⟩, h⟩ := h
+      split at h
+      · next fs hfs => exact .new hfs (by simpa using hc) hpin (checkDefaultL_sound ds _ h)
+      · simp at h
+    | vref es bs =>
+      simp only [checkDefault] at h
+      split at h
+      · next φ fs _ hfs =>
+        simp only [Bool.and_eq_true] at h
+        obtain ⟨⟨hpin, hds⟩, hsub⟩ := h
+        exact .sub (.new hfs (List.mem_singleton_self c) hpin (checkDefaultL_sound ds _ hds)) hsub
+      · simp at h
+    | _ => simp [checkDefault] at h
   | .assign .., _, h | .seq .., _, h | .call .., _, h | .ite .., _, h | .forE .., _, h
   | .loop _, _, h | .brk, _, h | .ret _, _, h | .print _, _, h => by simp [checkDefault] at h
 theorem checkDefaultL_sound {S : Sigs} {a : Nat} {Γ : List VTy} : ∀ (ds : List Expr) (ts : List VTy),

@@ -437,8 +437,19 @@ partial def coreDefault (S : Sigs) (params : List VTy) (depth : Nat) (τ : VTy)
           if !VTy.pinsOK (S.pinsOf t) args then none
           let ds ← (fs.map (VTy.inst args)).mapM (coreDefault S params (depth + 1) (varD := varD))
           some (.heap (.new t) ds)
-    -- (a reference through views, #351: a parameter of a subtype only)
-    | .vref _ _ => none
+    -- (a reference through views, #351: an object of a class of an entry,
+    -- at the type arguments its view relates to the reference's, as
+    -- `checkDefault` takes them; its prototype if it has one at them)
+    | .vref es bs => es.findSome? fun (t, φ) => do
+        let fs ← S.classes[t]?
+        let vb := VTy.bindVarsL φ bs []
+        let args := (List.range (max (VTy.nvarsL fs) (VTy.nvarsL φ))).map fun j => (vb.lookup j).getD VTy.void
+        if !VTy.pinsOK (S.pinsOf t) args || !(VTy.ref [t] args).sub (.vref es bs) then none
+        match S.protos.zipIdx.find? fun ((t', a), _) => t' == t && decide (a = args) with
+        | some (_, addr) => some (.lit (.ref addr))
+        | none =>
+          let ds ← (fs.map (VTy.inst args)).mapM (coreDefault S params (depth + 1) (varD := varD))
+          some (.heap (.new t) ds)
 
 /-- `e`, of type `τ`, or a part of it through tuples (`tupGet`) and object
     fields (`classes`, a field with that type in every class of the
@@ -724,7 +735,7 @@ def armArgs : M (List Expr) := do
 
 /-- Whether a type mentions a reference. -/
 partial def refIn : VTy → Bool
-  | .ref _ _ => true
+  | .ref _ _ | .vref _ _ => true
   | .arr t | .opt t => refIn t
   | .tup ts => ts.any refIn
   | _ => false

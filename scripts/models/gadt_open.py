@@ -48,6 +48,7 @@ R2 = random.Random(seed * 1000003 + 317)   # (Pk's choices, #317)
 R3 = random.Random(seed * 1000003 + 324)   # (Cp's choices, #324)
 R7 = random.Random(seed * 1000003 + 344)   # (the interface pins' choices, #344)
 R8 = random.Random(seed * 1000003 + 347)   # (the pinned interfaces' defaults, #347)
+R9 = random.Random(seed * 1000003 + 351)   # (two interfaces at different type arguments, #351)
 def ch(p): return R.random() < p
 CMP = True   # comparable opened parameters (fixed in #252)
 
@@ -616,6 +617,40 @@ if R7.random() < 0.5:
     main.append(f"    Cs:[]cont([]int) = array{{ibx(int){{V := 3}}, iarr{{Xs := array{{{', '.join(map(str, xs))}}}}}}}")
     main.append('    for (C : Cs) { Print("cs {GtC(C).Length}") }')
     expect.extend(["cs 2", f"cs {n}"])
+# two interfaces at different type arguments (#351, views): wboth(t, u) gives wget its first
+# parameter and wput its second, so code generic over wput(u) dispatches through a view; Wp counts
+# its calls on the object in a var field, wone answers 100, and casts from wput go back to wboth
+W_TEXT = ''
+if R9.random() < 0.5:
+    W_TEXT = '''wget(t:type) := interface:
+    Wg()<transacts>:t
+wput(u:type) := interface:
+    Wp(X:u)<transacts>:int
+wboth(t:type, u:type) := class(wget(t), wput(u)):
+    V:t
+    var N:int = 0
+    Wg<override>()<transacts>:t = V
+    Wp<override>(X:u)<transacts>:int =
+        set N += 1
+        N
+wone(u:type) := class(wput(u)):
+    Wp<override>(X:u)<transacts>:int = 100
+WCount(P:wput(u), X:u where u:type)<transacts>:int = P.Wp(X)
+WGet(G:wget(t) where t:type)<transacts>:t = G.Wg()'''
+    for i in range(R9.choice([1, 1, 2])):
+        t, u = rtype(2), rtype(2); (x, xv), (y, _) = lit2(t), lit2(u)
+        main.append(f"    Wb{i} := wboth({tyt(t)}, {tyt(u)}){{V := {x}}}")
+        k = R9.randint(1, 3)
+        calls = " ".join(f"{{WCount(Wb{i}, {y})}}" for _ in range(k))
+        main.append(f'    Print("wb{i}: {calls} {{{shname(t)}(WGet(Wb{i}))}}")')
+        expect.append(f"wb{i}: {' '.join(str(j + 1) for j in range(k))} {show(xv, t)}")
+    if R9.random() < 0.6:
+        t, u = rtype(2), rtype(2); (x, _), (y, _) = lit2(t), lit2(u)
+        kinds = [R9.random() < 0.5 for _ in range(R9.randint(1, 3))]
+        elems = [f"wboth({tyt(t)}, {tyt(u)}){{V := {x}}}" if b else f"wone({tyt(u)}){{}}" for b in kinds]
+        main.append(f"    Wps:[]wput({tyt(u)}) = array{{{', '.join(elems)}}}")
+        main.append(f'    for (P : Wps) {{ Print("wp {{P.Wp({y})}} {{if (B := wboth[P]) then "c" else "n"}}") }}')
+        expect.extend(f"wp {1 if b else 100} {'c' if b else 'n'}" for b in kinds)
 # Sz's fstE rule with its call in the condition: a failed inner call is the
 # else (1), and its write to the inner pair's Hits is rolled back
 if SZ_COND:
@@ -652,6 +687,6 @@ if CS_THR is not None:
     CLOSED_TXT = CLOSED_TXT.replace("(P := pairE[E]) then Ev(P.L)", f"(P := pairE[E], X := Ev(P.L), X > {CS_THR}) then X")
 
 prog = [f"# genopen seed {seed}", CLASSES, "NewLeafP(L:ex(int), R:ex(string)):leafP = leafP{L := L, R := R}",
-        ev_text(), ds_text(), SZ_TEXT, CLOSED_TXT, PK_TEXT, CP_TEXT] + list(SHOWN.values()) + ["Main()<suspends>:void ="] + main
+        ev_text(), ds_text(), SZ_TEXT, CLOSED_TXT, PK_TEXT, CP_TEXT] + ([W_TEXT] if W_TEXT else []) + list(SHOWN.values()) + ["Main()<suspends>:void ="] + main
 print('\n'.join(prog))
 open(out_exp, 'w').write("exit=0\n" + ''.join(l + '\n' for l in expect))

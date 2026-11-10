@@ -1234,8 +1234,23 @@ position in every class below the one that declares it.
   makes them agree with the pins and the reference's arguments a prefix of
   `φ` at them (`ViewRefines`, from `unify`; none: `dispatch_view_none`, the
   branch cannot run); `vref_open` is its preservation step. No fields are
-  read through a view. Nothing makes them yet: the checker and the front
-  end come next.) A class's table entry
+  read through a view. The front end refers to an interface through views
+  (`TyEnv.viewed`) when a class gives it type arguments that are not a
+  prefix of its own, and to the interfaces above it too: `Ty.toVTy` gives
+  each class below its view, the interface's Verse Core type arguments
+  over the class's (`[var 1]` for `both` at `sink`; a prefix class's are
+  its first ones); a class below has pins (`none`) on all of its type
+  arguments, so that a dispatch through a view opens them, and hidden
+  fields for all of its type parameters, which its overrides read
+  (`Sig.selfTps`); a method's dispatch tests each class, its arguments
+  opened (`$ext`) and refined by its view and pins, as #209's refined
+  calls are; a refining cast (#243, #250) relates the object's type
+  arguments to the target's through the view too; and an implementation's
+  signature is checked against the declaration's at the view. A slot of
+  such a type starts as an object of a class of an entry, at type
+  arguments its view relates to the slot's (`checkDefault`); a `new`
+  expected at such a type takes its arguments from the view
+  (`newArgs`).) A class's table entry
   gives each field the type the topmost class that has it gives it, at
   that class's variable positions (`TyEnv.coreVars`), so a field has one
   type through every reference of the hierarchy. Dispatch passes the
