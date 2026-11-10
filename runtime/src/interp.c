@@ -52,29 +52,9 @@
 
 /* -------------------------------------------------------------- results */
 
-static void set_ok(vx_res *r, uint64_t tag, uint64_t bits)
-{
-    r->kind = VX_R_OK;
-    r->code = 0;
-    r->v.tag = tag;
-    r->v.bits = bits;
-}
-
 static void set_void(vx_res *r)
 {
-    set_ok(r, VX_T_TUP, 0);   /* Value.void = .tup [] */
-}
-
-static void set_err(vx_res *r, int code)
-{
-    r->kind = VX_R_ERR;
-    r->code = code;
-}
-
-static void set_limit(vx_res *r, int code)
-{
-    r->kind = VX_R_LIMIT;
-    r->code = code;
+    vx_res_ok(r, VX_T_TUP, 0);   /* Value.void = .tup [] */
 }
 
 /* ------------------------------------------------- growable resources */
@@ -205,14 +185,14 @@ static void print_value(vx_ctx *c, const vx_val *v, vx_res *r)
     size_t n, k;
     const vx_val *e;
     if (v->tag != VX_T_ARR) {
-        set_err(r, VX_E_TYPE);
+        vx_res_error(r, VX_E_TYPE);
         return;
     }
     n = vx_obj_len(&c->heap, v->bits);
     e = vx_obj_elems(&c->heap, v->bits);
     for (k = 0; k < n; k++) {
         if (e[k].tag != VX_T_CHAR) {
-            set_err(r, VX_E_TYPE);
+            vx_res_error(r, VX_E_TYPE);
             return;
         }
     }
@@ -220,7 +200,7 @@ static void print_value(vx_ctx *c, const vx_val *v, vx_res *r)
         size_t cap = n + 1 > 2 * c->scap ? n + 1 : 2 * c->scap;
         uint8_t *s = realloc(c->scratch, cap);
         if (s == NULL) {
-            set_limit(r, VX_L_MEMORY);
+            vx_res_limit(r, VX_L_MEMORY);
             return;
         }
         c->scratch = s;
@@ -231,7 +211,7 @@ static void print_value(vx_ctx *c, const vx_val *v, vx_res *r)
     c->scratch[n] = 10;
     if (vx_store_out_append(&c->st, c->scratch, n + 1) != VX_OK) {
         if (!grow_out(c, n + 1) || vx_store_out_append(&c->st, c->scratch, n + 1) != VX_OK) {
-            set_limit(r, VX_L_MEMORY);
+            vx_res_limit(r, VX_L_MEMORY);
             return;
         }
     }
@@ -261,7 +241,7 @@ static void eval_list(vx_ctx *c, const vx_fn *fn, size_t base, uint32_t off, uin
     for (k = 0;; k++) {
         if (fuel == 0) {                            /* | 0, _, _ => none */
             c->vsp = sp0;
-            set_limit(r, VX_L_FUEL);
+            vx_res_limit(r, VX_L_FUEL);
             return;
         }
         if (k == n) {                               /* | _+1, s, [] => some (.ok [], s) */
@@ -275,7 +255,7 @@ static void eval_list(vx_ctx *c, const vx_fn *fn, size_t base, uint32_t off, uin
         }
         if (!vpush(c, &r->v)) {
             c->vsp = sp0;
-            set_limit(r, VX_L_MEMORY);
+            vx_res_limit(r, VX_L_MEMORY);
             return;
         }
         fuel = fuel - 1;                            /* evalList P n s₁ es */
@@ -325,7 +305,7 @@ static void call_fn(vx_ctx *c, uint32_t f, size_t sp0, size_t nargs, uint64_t n,
     /* Prog.callable P f n: the function exists and its arity is n */
     if (f >= c->p->nfns || c->p->fns[f].arity != nargs) {
         c->vsp = sp0;
-        set_err(r, VX_E_CALL);
+        vx_res_error(r, VX_E_CALL);
         return;
     }
     g = &c->p->fns[f];
@@ -334,7 +314,7 @@ static void call_fn(vx_ctx *c, uint32_t f, size_t sp0, size_t nargs, uint64_t n,
     nb = c->top;
     if (!grow_slots(c, nb + g->nslots)) {
         c->vsp = sp0;
-        set_limit(r, VX_L_MEMORY);
+        vx_res_limit(r, VX_L_MEMORY);
         return;
     }
     for (j = 0; j < nargs; j++)
@@ -358,7 +338,7 @@ static void call_fn(vx_ctx *c, uint32_t f, size_t sp0, size_t nargs, uint64_t n,
         if (dl != NULL) c->dlo = dl;
         if (dh == NULL) {
             c->top = top0;
-            set_limit(r, VX_L_MEMORY);
+            vx_res_limit(r, VX_L_MEMORY);
             return;
         }
         c->dhi = dh;
@@ -366,7 +346,7 @@ static void call_fn(vx_ctx *c, uint32_t f, size_t sp0, size_t nargs, uint64_t n,
     }
     if (vx_objs_call_fast(&c->objs) != VX_OK) {
         c->top = top0;
-        set_limit(r, VX_L_MEMORY);
+        vx_res_limit(r, VX_L_MEMORY);
         return;
     }
     c->hmarks[c->nframes] = hmark;
@@ -387,7 +367,7 @@ static void call_fn(vx_ctx *c, uint32_t f, size_t sp0, size_t nargs, uint64_t n,
     if (r->kind == VX_R_RET)
         r->kind = VX_R_OK;
     else if (r->kind == VX_R_BRK)
-        set_err(r, VX_E_CONTROL);
+        vx_res_error(r, VX_E_CONTROL);
     /* reclaim the callee's heap cells, except what the result, the fields
        written during the call and the field log made during it reach */
     if (r->kind == VX_R_OK) {
@@ -405,12 +385,12 @@ static void call_fn(vx_ctx *c, uint32_t f, size_t sp0, size_t nargs, uint64_t n,
         if (c->dmax[k] == 0 && vx_objs_top_empty(&c->objs)) {
             /* no field roots and no block: the result only */
             if (vx_heap_keep(&c->heap, hmark, &r->v) != VX_OK)
-                set_limit(r, VX_L_MEMORY);
+                vx_res_limit(r, VX_L_MEMORY);
         } else if (region >= 2 * c->dmax[k]) {
             if (c->st.depth == 0)
                 vx_objs_drop_stale(&c->objs);
             if (reclaim(c, hmark, &r->v, &fk) != VX_OK)
-                set_limit(r, VX_L_MEMORY);
+                vx_res_limit(r, VX_L_MEMORY);
             else if (k > 0 && fk > c->dmax[k - 1]) {
                 /* the survivors lie in [hmark, len): a field change there may
                    kill the block */
@@ -432,7 +412,7 @@ static void call_fn(vx_ctx *c, uint32_t f, size_t sp0, size_t nargs, uint64_t n,
     /* the list goes to the caller */
     c->nframes--;
     if (vx_objs_return_fast(&c->objs) != VX_OK)
-        set_limit(r, VX_L_MEMORY);
+        vx_res_limit(r, VX_L_MEMORY);
 }
 
 /* The elements still to visit in evalFor: an array object, or (for a
@@ -489,36 +469,36 @@ static void eval_for_iter(vx_ctx *c, const vx_fn *fn, size_t base, const vx_node
     for (k = 0;; k++) {
         if (fuel == 0) {                            /* | 0, ... => none */
             c->vsp = sp0;
-            set_limit(r, VX_L_FUEL);
+            vx_res_limit(r, VX_L_FUEL);
             return;
         }
         if (c->o->max_steps && ++c->steps > c->o->max_steps) {
             c->vsp = sp0;
-            set_limit(r, VX_L_FUEL);
+            vx_res_limit(r, VX_L_FUEL);
             return;
         }
         if (!src_get(c, src, k, &v)) {              /* | _+1, ..., s, [], acc */
             cnt = c->vsp - sp0;
             if (vx_heap_alloc(&c->heap, cnt, &o) != VX_OK) {
                 c->vsp = sp0;
-                set_limit(r, VX_L_MEMORY);
+                vx_res_limit(r, VX_L_MEMORY);
                 return;
             }
             if (cnt > 0)
                 memcpy(vx_obj_elems(&c->heap, o), &c->vs[sp0], cnt * sizeof(vx_val));
             c->vsp = sp0;
-            set_ok(r, VX_T_ARR, o);                 /* .ok (.arr acc.reverse) */
+            vx_res_ok(r, VX_T_ARR, o);                 /* .ok (.arr acc.reverse) */
             return;
         }
         /* match writeSlot s i v with | none => some (.err .slot, s) | some s₀ => */
         if (nd->a >= fn->nslots) {
             c->vsp = sp0;
-            set_err(r, VX_E_SLOT);
+            vx_res_error(r, VX_E_SLOT);
             return;
         }
         if (!slot_write(c, base + nd->a, &v)) {
             c->vsp = sp0;
-            set_limit(r, VX_L_MEMORY);
+            vx_res_limit(r, VX_L_MEMORY);
             return;
         }
         /* match eval P n s₀ filt with -- the filter is a failure context */
@@ -548,7 +528,7 @@ static void eval_for_iter(vx_ctx *c, const vx_fn *fn, size_t base, const vx_node
         /* | some (.ok w, s₂) => evalFor P n i filt body s₂ vs (w :: acc) */
         if (!vpush(c, &r->v)) {
             c->vsp = sp0;
-            set_limit(r, VX_L_MEMORY);
+            vx_res_limit(r, VX_L_MEMORY);
             return;
         }
         fuel = fuel - 1;
@@ -574,7 +554,7 @@ static void eval_for(vx_ctx *c, const vx_fn *fn, size_t base, const vx_node *nd,
     if (it->tag == VX_N_PRIM && it->op == VX_P_RANGE && !c->o->eager_range) {
         size_t sp0 = c->vsp;
         if (n == 0) {                               /* eval P 0 s it = none */
-            set_limit(r, VX_L_FUEL);
+            vx_res_limit(r, VX_L_FUEL);
             return;
         }
         eval_list(c, fn, base, it->c, it->b, n - 1, r);   /* bindL (evalList P (n-1) s es) */
@@ -600,7 +580,7 @@ static void eval_for(vx_ctx *c, const vx_fn *fn, size_t base, const vx_node *nd,
             return;
     }
     if (r->v.tag != VX_T_ARR) {
-        set_err(r, VX_E_TYPE);
+        vx_res_error(r, VX_E_TYPE);
         return;
     }
     src.arr = (size_t)r->v.bits;
@@ -612,17 +592,17 @@ static void eval_for(vx_ctx *c, const vx_fn *fn, size_t base, const vx_node *nd,
 static void lit_value(const vx_ctx *c, const vx_fn *fn, uint32_t e, const vx_node *nd, vx_res *r)
 {
     if (nd->op == VX_LIT_INT)
-        set_ok(r, VX_T_INT, vx_bits_of(nd->lit));
+        vx_res_ok(r, VX_T_INT, vx_bits_of(nd->lit));
     else if (nd->op == VX_LIT_LOGIC)
-        set_ok(r, VX_T_LOGIC, (uint64_t)nd->lit);
+        vx_res_ok(r, VX_T_LOGIC, (uint64_t)nd->lit);
     else if (nd->op == VX_LIT_CHAR)
-        set_ok(r, VX_T_CHAR, (uint64_t)nd->lit);
+        vx_res_ok(r, VX_T_CHAR, (uint64_t)nd->lit);
     else if (nd->op == VX_LIT_STR)
-        set_ok(r, VX_T_ARR, c->strlit[fn - c->p->fns][e]);
+        vx_res_ok(r, VX_T_ARR, c->strlit[fn - c->p->fns][e]);
     else if (nd->op == VX_LIT_NONE)
-        set_ok(r, VX_T_NONE, 0);
+        vx_res_ok(r, VX_T_NONE, 0);
     else if (nd->op == VX_LIT_REF)
-        set_ok(r, VX_T_REF, (uint64_t)nd->lit);
+        vx_res_ok(r, VX_T_REF, (uint64_t)nd->lit);
 
     else
         set_void(r);
@@ -715,51 +695,50 @@ static void heap_apply(vx_ctx *c, const vx_node *nd, const vx_val *a, size_t n, 
     size_t k, idx;
     if (nd->op == VX_H_NEW) {
         if (vx_objs_new(&c->objs, nd->a, a, n, &idx) != VX_OK) {
-            set_limit(r, VX_L_MEMORY);
+            vx_res_limit(r, VX_L_MEMORY);
             return;
         }
         for (k = 0; k < n; k++)
             if (remember(c, c->objs.objs[idx].off + k, &a[k]) != VX_OK) {
-                set_limit(r, VX_L_MEMORY);
+                vx_res_limit(r, VX_L_MEMORY);
                 return;
             }
-        set_ok(r, VX_T_REF, idx);
+        vx_res_ok(r, VX_T_REF, idx);
         return;
     }
     if (n != (nd->op == VX_H_SET ? 2u : 1u) || (o = obj_of(c, &a[0])) == NULL) {
-        set_err(r, VX_E_TYPE);
+        vx_res_error(r, VX_E_TYPE);
         return;
     }
     switch (nd->op) {
     case VX_H_GET:
         if ((size_t)nd->a >= o->n) {
-            set_err(r, VX_E_TYPE);
+            vx_res_error(r, VX_E_TYPE);
             return;
         }
-        set_ok(r, c->objs.cells[o->off + nd->a].tag, c->objs.cells[o->off + nd->a].bits);
+        vx_res_ok(r, c->objs.cells[o->off + nd->a].tag, c->objs.cells[o->off + nd->a].bits);
         return;
     case VX_H_SET:
         if ((size_t)nd->a >= o->n) {
-            set_err(r, VX_E_TYPE);
+            vx_res_error(r, VX_E_TYPE);
             return;
         }
         field_changes(c, o->off + nd->a);
         if (vx_objs_set(&c->objs, a[0].bits, nd->a, &a[1], c->st.depth > 0) != VX_OK ||
             remember(c, o->off + nd->a, &a[1]) != VX_OK) {
-            set_limit(r, VX_L_MEMORY);
+            vx_res_limit(r, VX_L_MEMORY);
             return;
         }
-        set_ok(r, a[1].tag, a[1].bits);
+        vx_res_ok(r, a[1].tag, a[1].bits);
         return;
     case VX_H_TAG:
-        set_ok(r, VX_T_INT, vx_bits_of((int64_t)o->tag));
+        vx_res_ok(r, VX_T_INT, vx_bits_of((int64_t)o->tag));
         return;
     default: /* VX_H_ISTAG */
         if (tag_in(c, nd, o->tag)) {
-            set_ok(r, VX_T_REF, a[0].bits);
+            vx_res_ok(r, VX_T_REF, a[0].bits);
         } else {
-            r->kind = VX_R_FAIL;
-            r->code = 0;
+            vx_res_fail(r);
         }
         return;
     }
@@ -774,11 +753,11 @@ static void eval_node(vx_ctx *c, const vx_fn *fn, size_t base, uint32_t e, uint6
         fc_mark m;
 
         if (fuel == 0) {                            /* | 0, _, _ => none */
-            set_limit(r, VX_L_FUEL);
+            vx_res_limit(r, VX_L_FUEL);
             return;
         }
         if (c->o->max_steps && ++c->steps > c->o->max_steps) {
-            set_limit(r, VX_L_FUEL);
+            vx_res_limit(r, VX_L_FUEL);
             return;
         }
         n = fuel - 1;
@@ -793,9 +772,9 @@ static void eval_node(vx_ctx *c, const vx_fn *fn, size_t base, uint32_t e, uint6
             /* | _+1, s, .local i => some (readSlot s i, s)
                readSlot s i = match s.fr[i]? with | some v => .ok v | none => .err .slot */
             if (nd->a < fn->nslots)
-                set_ok(r, c->st.slots[base + nd->a].tag, c->st.slots[base + nd->a].bits);
+                vx_res_ok(r, c->st.slots[base + nd->a].tag, c->st.slots[base + nd->a].bits);
             else
-                set_err(r, VX_E_SLOT);
+                vx_res_error(r, VX_E_SLOT);
             return;
 
         case VX_N_ASSIGN:
@@ -807,11 +786,11 @@ static void eval_node(vx_ctx *c, const vx_fn *fn, size_t base, uint32_t e, uint6
             if (r->kind != VX_R_OK)
                 return;
             if (nd->a >= fn->nslots) {
-                set_err(r, VX_E_SLOT);
+                vx_res_error(r, VX_E_SLOT);
                 return;
             }
             if (!slot_write(c, base + nd->a, &r->v))
-                set_limit(r, VX_L_MEMORY);
+                vx_res_limit(r, VX_L_MEMORY);
             return;
 
         case VX_N_SEQ:
@@ -885,11 +864,11 @@ static void eval_node(vx_ctx *c, const vx_fn *fn, size_t base, uint32_t e, uint6
                 eval(c, fn, base, nd->a, n, r);
                 if (r->kind == VX_R_OK) {
                     if (n == 0) {
-                        set_limit(r, VX_L_FUEL);
+                        vx_res_limit(r, VX_L_FUEL);
                         return;
                     }
                     if (c->o->max_steps && ++c->steps > c->o->max_steps) {
-                        set_limit(r, VX_L_FUEL);
+                        vx_res_limit(r, VX_L_FUEL);
                         return;
                     }
                     n = n - 1;
@@ -941,7 +920,7 @@ static void eval_node(vx_ctx *c, const vx_fn *fn, size_t base, uint32_t e, uint6
 
         default:
             /* not reachable: the loader accepts tags 0..12 only */
-            set_err(r, VX_E_TYPE);
+            vx_res_error(r, VX_E_TYPE);
             return;
         }
     }
@@ -960,7 +939,7 @@ static void eval(vx_ctx *c, const vx_fn *fn, size_t base, uint32_t e, uint64_t f
 {
     if (c->depth >= c->o->max_depth ||
         (c->o->stack_budget != 0 && stack_used(c) > c->o->stack_budget)) {
-        set_limit(r, VX_L_DEPTH);
+        vx_res_limit(r, VX_L_DEPTH);
         return;
     }
     c->depth++;
@@ -1043,12 +1022,11 @@ void vx_run(const vx_program *p, const vx_opts *o, vx_outcome *res)
     vx_objs_init(&c.objs, o->max_heap, o->max_journal);
     c.vs = malloc(INIT_VSTACK * sizeof(vx_val));
     c.vcap = INIT_VSTACK;
-    r.kind = VX_R_LIMIT;
-    r.code = VX_L_MEMORY;
+    vx_res_limit(&r, VX_L_MEMORY);
     if (slots != NULL && jour != NULL && out != NULL && c.vs != NULL &&
         vx_heap_init(&c.heap, o->max_heap) == VX_OK && make_literals(&c)) {
         if (o->fuel == 0) {
-            set_limit(&r, VX_L_FUEL);               /* eval P 0 _ _ = none */
+            vx_res_limit(&r, VX_L_FUEL);               /* eval P 0 _ _ = none */
         } else {
             eval_list(&c, NULL, 0, 0, 0, o->fuel - 1, &r);   /* evalList P (n-1) s [] */
             if (r.kind == VX_R_OK)
