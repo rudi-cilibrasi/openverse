@@ -24,7 +24,7 @@ mutual
 /-- The number of constructors in a type. -/
 def VTy.usize : VTy → Nat
   | .arr t | .opt t => VTy.usize t + 1
-  | .tup ts | .ref _ ts => VTy.usizeL ts + 1
+  | .tup ts | .ref _ ts | .vref _ ts => VTy.usizeL ts + 1
   | _ => 1
 def VTy.usizeL : List VTy → Nat
   | [] => 0
@@ -33,14 +33,14 @@ end
 
 theorem VTy.usize_pos : ∀ t : VTy, 0 < t.usize
   | .int | .logic | .char | .float | .var _ => by simp [VTy.usize]
-  | .arr _ | .opt _ | .tup _ | .ref _ _ => by simp [VTy.usize]
+  | .arr _ | .opt _ | .tup _ | .ref _ _ | .vref _ _ => by simp [VTy.usize]
 
 mutual
 /-- One more than the largest type variable of `t` (none: 0). -/
 def VTy.nvars : VTy → Nat
   | .var j => j + 1
   | .arr t | .opt t => VTy.nvars t
-  | .tup ts | .ref _ ts => VTy.nvarsL ts
+  | .tup ts | .ref _ ts | .vref _ ts => VTy.nvarsL ts
   | _ => 0
 def VTy.nvarsL : List VTy → Nat
   | [] => 0
@@ -85,7 +85,7 @@ theorem VTy.lt_nvars : ∀ (t : VTy) (j : Nat), t.hasVar j = true → j < t.nvar
   | .var i, j, h => by simp [VTy.hasVar] at h; subst h; simp [VTy.nvars]
   | .arr t, j, h | .opt t, j, h => by
     simp only [VTy.hasVar] at h; simpa [VTy.nvars] using VTy.lt_nvars t j h
-  | .tup ts, j, h | .ref _ ts, j, h => by
+  | .tup ts, j, h | .ref _ ts, j, h | .vref _ ts, j, h => by
     simp only [VTy.hasVar] at h; simpa [VTy.nvars] using VTy.lt_nvarsL ts j h
 theorem VTy.lt_nvarsL : ∀ (ts : List VTy) (j : Nat), VTy.hasVarL j ts = true → j < VTy.nvarsL ts
   | [], _, h => by simp [VTy.hasVarL] at h
@@ -103,7 +103,7 @@ theorem VTy.nvars_le : ∀ (t : VTy) (n : Nat), (∀ j, t.hasVar j = true → j 
   | .var i, n, h => by simp only [VTy.nvars]; exact h i (by simp [VTy.hasVar])
   | .arr t, n, h | .opt t, n, h => by
     simpa [VTy.nvars] using VTy.nvars_le t n (fun j hj => h j (by simpa [VTy.hasVar] using hj))
-  | .tup ts, n, h | .ref _ ts, n, h => by
+  | .tup ts, n, h | .ref _ ts, n, h | .vref _ ts, n, h => by
     simpa [VTy.nvars] using VTy.nvarsL_le ts n (fun j hj => h j (by simpa [VTy.hasVar] using hj))
 theorem VTy.nvarsL_le : ∀ (ts : List VTy) (n : Nat), (∀ j, VTy.hasVarL j ts = true → j < n) → VTy.nvarsL ts ≤ n
   | [], _, _ => by simp [VTy.nvarsL]
@@ -119,7 +119,7 @@ theorem VTy.varsBelow_iff : ∀ (t : VTy) (n : Nat), t.varsBelow n = true ↔ �
   | .int, _ | .logic, _ | .char, _ | .float, _ => by simp [VTy.varsBelow, VTy.hasVar]
   | .var i, n => by simp [VTy.varsBelow, VTy.hasVar]
   | .arr t, n | .opt t, n => by simpa [VTy.varsBelow, VTy.hasVar] using VTy.varsBelow_iff t n
-  | .tup ts, n | .ref _ ts, n => by simpa [VTy.varsBelow, VTy.hasVar] using VTy.varsBelowL_iff ts n
+  | .tup ts, n | .ref _ ts, n | .vref _ ts, n => by simpa [VTy.varsBelow, VTy.hasVar] using VTy.varsBelowL_iff ts n
 theorem VTy.varsBelowL_iff : ∀ (ts : List VTy) (n : Nat),
     VTy.varsBelowL n ts = true ↔ ∀ j, VTy.hasVarL j ts = true → j < n
   | [], _ => by simp [VTy.varsBelowL, VTy.hasVarL]
@@ -215,7 +215,7 @@ theorem VTy.hasVar_subst {σ : Nat → VTy} {j : Nat} :
   | .tup us, h => by
     obtain ⟨k, hk, hj⟩ := VTy.hasVarL_subst us (by simpa [VTy.hasVar] using h)
     exact ⟨k, by simpa [VTy.hasVar] using hk, hj⟩
-  | .ref _ us, h => by
+  | .ref _ us, h | .vref _ us, h => by
     obtain ⟨k, hk, hj⟩ := VTy.hasVarL_subst us (by simpa [VTy.hasVar, VTy.subst, VTy.substL_eq_map] using h)
     exact ⟨k, by simpa [VTy.hasVar] using hk, hj⟩
 theorem VTy.hasVarL_subst {σ : Nat → VTy} {j : Nat} :
@@ -341,6 +341,8 @@ def unify : Eqs → Option (Nat → VTy)
     if as.length = bs.length then unify (as.zip bs ++ r) else none
   | (.ref ts as, .ref us bs) :: r =>
     if ts = us ∧ as.length = bs.length then unify (as.zip bs ++ r) else none
+  | (.vref es as, .vref fs bs) :: r =>
+    if es = fs ∧ as.length = bs.length then unify (as.zip bs ++ r) else none
   | _ :: _ => none
 termination_by eqs => (Eqs.count eqs, Eqs.size eqs)
 decreasing_by
@@ -457,7 +459,7 @@ theorem VTy.usize_le_subst {R : Nat → VTy} {x : Nat} :
   | .tup us, h => by
     have := VTy.usize_le_substL (R := R) us (by simpa [VTy.hasVar] using h)
     simp [VTy.usize]; omega
-  | .ref _ us, h => by
+  | .ref _ us, h | .vref _ us, h => by
     have := VTy.usize_le_substL (R := R) us (by simpa [VTy.hasVar] using h)
     simp [VTy.subst, VTy.substL_eq_map, VTy.usize]; omega
 theorem VTy.usize_le_substL {R : Nat → VTy} {x : Nat} :
@@ -486,7 +488,7 @@ theorem VTy.occurs_no_unifier {R : Nat → VTy} {x : Nat} {t : VTy} (hx : t.hasV
     | tup us =>
       have := VTy.usize_le_substL us (R := R) (by simpa [VTy.hasVar] using hx)
       simp [VTy.usize]; omega
-    | ref _ us =>
+    | ref _ us | vref _ us =>
       have := VTy.usize_le_substL us (R := R) (by simpa [VTy.hasVar] using hx)
       simp [VTy.subst, VTy.substL_eq_map, VTy.usize]; omega
   rw [he] at hlt; exact Nat.lt_irrefl _ hlt
@@ -589,13 +591,23 @@ theorem unify_spec (eqs : Eqs) : UnifySpec eqs := by
       have he := (Eqs.unifies_cons.mp hR).1
       simp [VTy.subst, VTy.substL_eq_map] at he
       exact h ⟨he.1, by simpa using congrArg List.length he.2⟩
-  | case17 head tail h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 =>
-    refine UnifySpec.of_none (by rw [unify.eq_12 head tail h1 h2 h3 h4 h5 h6 h7 h8 h9 h10]) fun R hR => ?_
+  | case17 es as fs bs r h ih =>
+    obtain ⟨rfl, hlen⟩ := h
+    exact UnifySpec.of_equiv (by simp [unify, hlen])
+      (fun R => by simp [Eqs.unifies_cons, Eqs.unifies_append, Eqs.unifies_zip hlen, VTy.subst,
+        VTy.substL_eq_map]) ih
+  | case18 es as fs bs r h =>
+    exact UnifySpec.of_none (by simp [unify, h]) fun R hR => by
+      have he := (Eqs.unifies_cons.mp hR).1
+      simp [VTy.subst, VTy.substL_eq_map] at he
+      exact h ⟨he.1, by simpa using congrArg List.length he.2⟩
+  | case19 head tail h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 =>
+    refine UnifySpec.of_none (by rw [unify.eq_13 head tail h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11]) fun R hR => ?_
     rcases head with ⟨a, b⟩
     have he := (Eqs.unifies_cons.mp hR).1
     cases a <;> cases b <;> first
       | exact h1 _ _ rfl | exact h2 _ _ rfl | exact h3 rfl | exact h4 rfl | exact h5 rfl | exact h6 rfl
-      | exact h7 _ _ rfl | exact h8 _ _ rfl | exact h9 _ _ rfl | exact h10 _ _ _ _ rfl
+      | exact h7 _ _ rfl | exact h8 _ _ rfl | exact h9 _ _ rfl | exact h10 _ _ _ _ rfl | exact h11 _ _ _ _ rfl
       | (simp only [VTy.subst] at he; cases he)
 
 /-- `unify` gives a unifier. -/

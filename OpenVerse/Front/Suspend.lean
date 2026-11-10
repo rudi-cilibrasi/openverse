@@ -437,6 +437,8 @@ partial def coreDefault (S : Sigs) (params : List VTy) (depth : Nat) (τ : VTy)
           if !VTy.pinsOK (S.pinsOf t) args then none
           let ds ← (fs.map (VTy.inst args)).mapM (coreDefault S params (depth + 1) (varD := varD))
           some (.heap (.new t) ds)
+    -- (a reference through views, #351: a parameter of a subtype only)
+    | .vref _ _ => none
 
 /-- `e`, of type `τ`, or a part of it through tuples (`tupGet`) and object
     fields (`classes`, a field with that type in every class of the

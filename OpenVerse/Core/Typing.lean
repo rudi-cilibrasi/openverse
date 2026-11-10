@@ -38,6 +38,14 @@ inductive VTy where
       type arguments start with `args` (#39): a subclass may have more
       parameters than its parent, after the parent's. -/
   | ref : List Nat → List VTy → VTy
+  /-- A reference through *views* (#351): to an object whose class tag is
+      one of the entries' `t`, whose entry `(t, φ)` gives the view's type
+      arguments as types over the object's (`var j` is its argument `j`),
+      of which `args` is a prefix. An interface a class gives arguments that
+      are not a prefix of its own (`both(t, u) := class(container(t),
+      sink(u))` at `sink`: `φ = [var 1]`) is referred to so. The views are
+      the classes' own: substitution leaves them. -/
+  | vref : List (Nat × List VTy) → List VTy → VTy
   deriving Repr, Inhabited
 
 namespace VTy
@@ -68,6 +76,16 @@ def decEq : (a b : VTy) → Decidable (a = b)
       | isTrue h2 => isTrue (by subst h; subst h2; rfl)
       | isFalse h2 => isFalse (by intro h'; cases h'; exact h2 rfl)
     else isFalse (by intro h'; cases h'; exact h rfl)
+  | .vref a as, .vref b bs => match decEqEnts a b with
+    | isTrue h => match decEqList as bs with
+      | isTrue h2 => isTrue (by subst h; subst h2; rfl)
+      | isFalse h2 => isFalse (by intro h'; cases h'; exact h2 rfl)
+    | isFalse h => isFalse (by intro h'; cases h'; exact h rfl)
+  | .vref _ _, .int | .vref _ _, .logic | .vref _ _, .char | .vref _ _, .float | .vref _ _, .arr _
+  | .vref _ _, .tup _ | .vref _ _, .opt _ | .vref _ _, .var _ | .vref _ _, .ref _ _
+  | .int, .vref _ _ | .logic, .vref _ _ | .char, .vref _ _ | .float, .vref _ _ | .arr _, .vref _ _
+  | .tup _, .vref _ _ | .opt _, .vref _ _ | .var _, .vref _ _ | .ref _ _, .vref _ _ =>
+    isFalse (by intro h; cases h)
   | .int, .ref _ _ | .logic, .ref _ _ | .char, .ref _ _ | .arr _, .ref _ _ | .tup _, .ref _ _
   | .opt _, .ref _ _ | .var _, .ref _ _
   | .ref _ _, .int | .ref _ _, .logic | .ref _ _, .char | .ref _ _, .arr _ | .ref _ _, .tup _
@@ -93,6 +111,17 @@ def decEqList : (as bs : List VTy) → Decidable (as = bs)
     | isTrue h1, isTrue h2 => isTrue (by subst h1; subst h2; rfl)
     | isFalse h1, _ => isFalse (by intro h; cases h; exact h1 rfl)
     | _, isFalse h2 => isFalse (by intro h; cases h; exact h2 rfl)
+def decEqEnts : (as bs : List (Nat × List VTy)) → Decidable (as = bs)
+  | [], [] => isTrue rfl
+  | [], _ :: _ => isFalse (by intro h; cases h)
+  | _ :: _, [] => isFalse (by intro h; cases h)
+  | (t, φ) :: as, (u, ψ) :: bs =>
+    if h0 : t = u then
+      match decEqList φ ψ, decEqEnts as bs with
+      | isTrue h1, isTrue h2 => isTrue (by subst h0; subst h1; subst h2; rfl)
+      | isFalse h1, _ => isFalse (by intro h; cases h; exact h1 rfl)
+      | _, isFalse h2 => isFalse (by intro h; cases h; exact h2 rfl)
+    else isFalse (by intro h; cases h; exact h0 rfl)
 end
 
 instance : DecidableEq VTy := decEq
@@ -113,6 +142,7 @@ def default : VTy → Value
   -- a reference has no default of its own: slots of such types start as a
   -- prototype, a new object or a parameter instead (`DefaultE`, #37)
   | .ref _ _ => .void
+  | .vref _ _ => .void
 def defaults : List VTy → List Value
   | [] => []
   | t :: ts => default t :: defaults ts
@@ -130,6 +160,7 @@ def subst (θ : Nat → VTy) : VTy → VTy
   | .tup ts => .tup (substL θ ts)
   | .var j => θ j
   | .ref ts args => .ref ts (substL θ args)
+  | .vref es args => .vref es (substL θ args)
 def substL (θ : Nat → VTy) : List VTy → List VTy
   | [] => []
   | t :: ts => subst θ t :: substL θ ts
@@ -150,6 +181,8 @@ theorem substL_eq_map (θ : Nat → VTy) : ∀ ts : List VTy, substL θ ts = ts.
 @[simp] theorem subst_var (θ : Nat → VTy) (j : Nat) : subst θ (.var j) = θ j := by simp [subst]
 @[simp] theorem subst_ref (θ : Nat → VTy) (ts : List Nat) (args : List VTy) :
     subst θ (.ref ts args) = .ref ts (args.map (subst θ)) := by simp [subst, substL_eq_map]
+@[simp] theorem subst_vref (θ : Nat → VTy) (es : List (Nat × List VTy)) (args : List VTy) :
+    subst θ (.vref es args) = .vref es (args.map (subst θ)) := by simp [subst, substL_eq_map]
 @[simp] theorem subst_void (θ : Nat → VTy) : subst θ void = void := by simp [void]
 @[simp] theorem subst_str (θ : Nat → VTy) : subst θ str = str := by simp [str]
 
@@ -159,7 +192,7 @@ def closed : VTy → Bool
   | .var _ => false
   | .arr t | .opt t => closed t
   | .tup ts => closedL ts
-  | .ref _ args => closedL args
+  | .ref _ args | .vref _ args => closedL args
   | _ => true
 def closedL : List VTy → Bool
   | [] => true
@@ -178,7 +211,7 @@ def varsBelow (n : Nat) : VTy → Bool
   | .var j => decide (j < n)
   | .arr t | .opt t => varsBelow n t
   | .tup ts => varsBelowL n ts
-  | .ref _ args => varsBelowL n args
+  | .ref _ args | .vref _ args => varsBelowL n args
   | _ => true
 def varsBelowL (n : Nat) : List VTy → Bool
   | [] => true
@@ -193,6 +226,11 @@ mutual
     values); otherwise the types are equal. -/
 def sub : VTy → VTy → Bool
   | .ref ts as, .ref us bs => ts.all us.contains && bs.isPrefixOf as
+  -- (#351) a class's reference fits a view of it whose arguments are among
+  -- the reference's, and a reference through views one through more
+  | .ref ts as, .vref es bs => ts.all fun t => es.any fun e =>
+      e.1 == t && e.2.all (fun v => varsBelow as.length v) && bs.isPrefixOf (e.2.map (inst as))
+  | .vref es as, .vref fs bs => es.all fs.contains && bs.isPrefixOf as
   | .arr t, .arr u => sub t u
   | .opt t, .opt u => sub t u
   | .tup ts, .tup us => subL ts us
@@ -223,6 +261,9 @@ def hasTy (Ξ : HeapTy) : Value → VTy → Bool
   | .some v, .opt t => hasTy Ξ v t
   | .ref a, .ref ts args => match Ξ[a]? with
     | some (t, args') => ts.contains t && args.isPrefixOf args'
+    | none => false
+  | .ref a, .vref es args => match Ξ[a]? with
+    | some (t, args') => es.any fun e => e.1 == t && args.isPrefixOf (e.2.map (VTy.inst args'))
     | none => false
   | _, _ => false
 /-- Every element of `vs` has type `t`. -/
@@ -265,7 +306,7 @@ def VTy.hasVar (j : Nat) : VTy → Bool
   | .var i => i == j
   | .arr t | .opt t => VTy.hasVar j t
   | .tup ts => VTy.hasVarL j ts
-  | .ref _ args => VTy.hasVarL j args
+  | .ref _ args | .vref _ args => VTy.hasVarL j args
   | _ => false
 def VTy.hasVarL (j : Nat) : List VTy → Bool
   | [] => false

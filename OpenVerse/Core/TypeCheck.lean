@@ -167,6 +167,10 @@ theorem VTy.join_sub : ∀ (t u j : VTy), VTy.join t u = some j → t.sub j = tr
   | .int, u, j, h | .logic, u, j, h | .char, u, j, h | .float, u, j, h | .var _, u, j, h => by
     cases u <;> simp [VTy.join] at h <;> (try obtain ⟨rfl, rfl⟩ := h) <;> (try subst h) <;>
       exact ⟨VTy.sub_refl _, VTy.sub_refl _⟩
+  | .vref es as, u, j, h => by
+    cases u <;> simp [VTy.join] at h
+    obtain ⟨⟨rfl, rfl⟩, rfl⟩ := h
+    exact ⟨VTy.sub_refl _, VTy.sub_refl _⟩
 theorem VTy.joinL_sub : ∀ (ts us js : List VTy), VTy.joinL ts us = some js →
     VTy.subL ts js = true ∧ VTy.subL us js = true
   | [], [], js, h => by simp [VTy.joinL] at h; subst h; exact ⟨rfl, rfl⟩
