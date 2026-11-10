@@ -16,6 +16,7 @@
   * The result is checked with `Prog.check` (proved to imply the hypotheses of
     the core theorems) before anyone runs it.
 -/
+import OpenVerse.Core.Show
 import OpenVerse.Core.Check
 import OpenVerse.Core.Derived
 import OpenVerse.Core.TypeCheck
@@ -10735,15 +10736,15 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
           | t :: ts, e => match e with
             | .seq (.assign i d) rest =>
               if i == k && checkDefault S a Γ d t then badInit a (k + 1) Γ ts rest
-              else .inl s!"\n-- initial value of slot {k} rejected (type {repr t}): {repr d}"
+              else .inl s!"\n-- initial value of slot {k} rejected (type {repr t}): {d.compact}"
             | _ => .inl s!"\n-- no initial value for slot {k}"
         let badStmt : String := match P.fns[f]?, S.fns[f]?, slotTys[f]? with
           | some fn, some (_, τ), some Γ => match badInit fn.arity fn.arity Γ (Γ.drop fn.arity) fn.body with
             | .inl msg => msg
-            | .inr b => s!"\n-- first rejected: {repr (firstBad 10000 Γ τ b)}"
+            | .inr b => s!"\n-- first rejected:\n{(firstBad 10000 Γ τ b).compact "   "}"
           | _, _, _ => ""
         let dump := if !opts.debug then "" else
-          badStmt ++ s!"\n-- body: {repr ((P.fns[f]?).map Fn.body)}\n-- arity: {(P.fns[f]?).map Fn.arity}" ++
+          badStmt ++ s!"\n-- body:\n{((P.fns[f]?).map (fun (fn : Fn) => fn.body.compact "   ")).getD "?"}\n-- arity: {(P.fns[f]?).map Fn.arity}" ++
           s!"\n-- slot types: {repr (slotTys[f]?)}\n-- signature: {repr (S.fns[f]?)}"
         s!" (in {((P.fns[f]?).map Fn.name).getD "?"}){dump}"
       | none => if !checkPrelude P S then " (the prototypes)" else ""
@@ -10759,17 +10760,19 @@ def stripOv (msg0 : String) : String := Id.run do
       let dropName (x : String) : String :=
         String.ofList (x.toList.reverse.dropWhile (fun (c : Char) => c.isAlphanum || c == '_')).reverse
       rest.foldl (fun acc part => dropName acc ++ "the default of " ++ part) first
-  let cs := msg.toList
-  let mut out : List Char := []
+  -- (an array: a list's indexing and length are linear, which made this
+  -- quadratic in the message, minutes for `OPENVERSE_DEBUG`'s dump)
+  let cs := msg.toList.toArray
+  let mut out : String := ""
   let mut i := 0
-  while i < cs.length do
-    if cs[i]! == '$' && i + 2 < cs.length && cs[i+1]! == 'o' && cs[i+2]! == 'v' then
+  while i < cs.size do
+    if cs[i]! == '$' && i + 2 < cs.size && cs[i+1]! == 'o' && cs[i+2]! == 'v' then
       i := i + 3
-      while i < cs.length && cs[i]!.isDigit do i := i + 1
+      while i < cs.size && cs[i]!.isDigit do i := i + 1
     else
-      out := cs[i]! :: out
+      out := out.push cs[i]!
       i := i + 1
-  return String.ofList out.reverse
+  return out
 
 /-- Elaborate a parsed program (`elabProgramCore`), with the names of the
     functions a constructor or an overload becomes shown as written: `K$init`
