@@ -1835,10 +1835,9 @@ def methodFns (tops : List STop) (reserved : List String := []) : Except String 
       return some (s!"another class or interface has a method {n} too, not one it overrides, so a call R.{n}(…) cannot be known to be this one where it is inlined, before types are checked", none)
     for (c, m) in ds do
       let some (_, ii, _, _, tps) := classes.lookup c | return some ("", none)
-      -- (an interface's, #283: the dispatch's root, as a class's, when it
-      -- gives no default implementation, which #53 copies into classes)
-      if ii && !isAbstract m then
-        return some (s!"an interface ({c.replace "::" "."}) gives it a default implementation", none)
+      -- (an interface's, #283: the dispatch's root, as a class's; its
+      -- default implementation, if it gives one, the alternative for the
+      -- classes that have none of their own, as a class's own is)
       -- (a generic class's: a function generic over its type parameters,
       -- #283, inferred from the receiver where it is inlined, as at a call
       -- of a generic one; not yet with overrides, whose dispatch tests

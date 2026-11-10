@@ -273,10 +273,13 @@ receiver where it is inlined, as for any generic function with several
 values (#282); not yet when a class overrides it. `R.M(args)` becomes `C$M(R, args)`, and in the bodies of `C` and
 the classes below it, `M(args)` becomes `C$M(Self, args)`. Without types, `R.M`
 must name that method whatever `R` is: the name must be declared by one
-class or interface and overridden only below it (a family, `MFam`); an
-interface's declaration must be abstract (#283: a default, which #53
-copies into classes, is refused), and the dispatch's root is then the
-interface, its receiver typed at it and cast to each implementing class.
+class or interface and overridden only below it (a family, `MFam`); for
+an interface (#283) the dispatch's root is the interface, its receiver
+typed at it and cast to each implementing class, and its default
+implementation, if any, is one more implementation, `I$M`, whose guard
+(`I[$r]`, which always holds) comes after those of the classes below it
+that have their own. `inlineMulti` runs before #53's `copyIfaceDefaults`,
+so it sees the interface's default as written.
 Each implementation becomes its own function `D$M`. A call
 `R.M(args)` of an overridden one is a dispatch,
 `$dispatch(root$M, block{ $r : root := $arg; $a… := $arg; $kv := $excl(…) }, R, args…)`.
