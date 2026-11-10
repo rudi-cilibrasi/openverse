@@ -121,6 +121,28 @@ theorem hasTy_subst (hΞ : ∀ p ∈ Ξ, VTy.closedL p.2 = true) (θ : Nat → V
         rw [VTy.closedL_subst θ args hc]
         exact ⟨h1, hp⟩
     all_goals simp [hasTy] at h
+  | .vref es args, v, h => by
+    cases v
+    case ref a =>
+      simp only [hasTy, VTy.subst_vref] at h ⊢
+      rcases ha : Ξ[a]? with _ | ⟨t, args'⟩
+      · simp [ha] at h
+      · simp only [ha, List.any_eq_true, Bool.and_eq_true, List.isPrefixOf_iff_prefix] at h ⊢
+        obtain ⟨e, he, h1, hp⟩ := h
+        -- (the view at closed arguments is closed, and so is a prefix of it)
+        have hargs : VTy.closedL args' = true := hΞ _ (List.mem_of_getElem? ha)
+        have hcl : VTy.closedL (e.2.map (VTy.inst args')) = true := by
+          unfold VTy.inst
+          exact VTy.substL_closed (fun j => by
+            rcases hj : args'[j]? with _ | x
+            · simp [List.getD_eq_getElem?_getD, hj, VTy.void, VTy.closed, VTy.closedL]
+            · simpa [List.getD_eq_getElem?_getD, hj] using
+                VTy.closedL_iff.mp hargs x (List.mem_of_getElem? hj)) e.2
+        have hc : VTy.closedL args = true := VTy.closedL_iff.mpr fun x hx =>
+          VTy.closedL_iff.mp hcl x (hp.subset hx)
+        rw [VTy.closedL_subst θ args hc]
+        exact ⟨e, he, h1, hp⟩
+    all_goals simp [hasTy] at h
   | .var _, v, h => by cases v <;> simp [hasTy] at h
   | .arr t, v, h => by
     cases v
@@ -397,9 +419,34 @@ theorem getElem?_map_some {α β} {l : List α} {i : Nat} {a : α} (f : α → �
 
 /-! ### Subtyping (#32) -/
 
+/-! (#351) References through views: subtyping and typing, unfolded. -/
+
+theorem VTy.sub_vref_iff {es as fs bs : _} :
+    (VTy.vref es as).sub (.vref fs bs) = true ↔ (∀ e ∈ es, e ∈ fs) ∧ bs <+: as := by
+  simp only [VTy.sub, Bool.and_eq_true, List.all_eq_true, List.isPrefixOf_iff_prefix, List.contains_iff_mem]
+
+theorem VTy.sub_ref_vref_iff {ts : List Nat} {as : List VTy} {es : List (Nat × List VTy)} {bs : List VTy} :
+    (VTy.ref ts as).sub (.vref es bs) = true ↔ ∀ t ∈ ts, ∃ e ∈ es,
+      (e.1 = t ∧ ∀ f ∈ e.2, f.varsBelow as.length = true) ∧ bs <+: e.2.map (VTy.inst as) := by
+  simp only [VTy.sub, List.all_eq_true, List.any_eq_true, Bool.and_eq_true, beq_iff_eq, List.isPrefixOf_iff_prefix]
+
+theorem hasTy_vref_iff {Ξ : HeapTy} {a : Nat} {es : List (Nat × List VTy)} {args : List VTy} :
+    hasTy Ξ (.ref a) (.vref es args) = true ↔
+      ∃ t args', Ξ[a]? = some (t, args') ∧ ∃ e ∈ es, e.1 = t ∧ args <+: e.2.map (VTy.inst args') := by
+  simp only [hasTy]
+  rcases ha : Ξ[a]? with _ | ⟨t, args'⟩
+  · simp
+  · simp only [List.any_eq_true, Bool.and_eq_true, beq_iff_eq, List.isPrefixOf_iff_prefix, Option.some.injEq,
+      Prod.mk.injEq]
+    constructor
+    · rintro ⟨e, he, h1, h2⟩; exact ⟨t, args', ⟨rfl, rfl⟩, e, he, h1, h2⟩
+    · rintro ⟨t', a', ⟨rfl, rfl⟩, e, he, h1, h2⟩; exact ⟨e, he, h1, h2⟩
+
+
 mutual
 theorem VTy.sub_refl : ∀ t : VTy, t.sub t = true
   | .ref ts args => by simp [VTy.sub]
+  | .vref es args => by simp [VTy.sub]
   | .arr t => by simp only [VTy.sub]; exact VTy.sub_refl t
   | .opt t => by simp only [VTy.sub]; exact VTy.sub_refl t
   | .tup ts => by simp only [VTy.sub]; exact VTy.subL_refl ts
@@ -412,9 +459,44 @@ end
 mutual
 theorem VTy.sub_trans : ∀ (t u w : VTy), t.sub u = true → u.sub w = true → t.sub w = true
   | .ref ts as, u, w, h1, h2 => by
-    cases u <;> simp [VTy.sub] at h1
-    cases w <;> simp [VTy.sub] at h2 ⊢
-    exact ⟨fun x hx => h2.1 x (h1.1 x hx), h2.2.trans h1.2⟩
+    cases u with
+    | ref us bs =>
+      cases w with
+      | ref ws cs =>
+        simp [VTy.sub] at h1 h2 ⊢
+        exact ⟨fun x hx => h2.1 x (h1.1 x hx), h2.2.trans h1.2⟩
+      | vref fs cs =>
+        -- (a view of the middle's arguments, a prefix of the first's, is one
+        -- of the first's, the same at them)
+        simp only [VTy.sub, Bool.and_eq_true, List.all_eq_true, List.contains_iff_mem,
+          List.isPrefixOf_iff_prefix] at h1
+        rw [VTy.sub_ref_vref_iff] at h2 ⊢
+        intro t ht
+        obtain ⟨e, he, ⟨het, hv⟩, hp⟩ := h2 t (h1.1 t ht)
+        have hle : bs.length ≤ as.length := h1.2.length_le
+        refine ⟨e, he, ⟨het, fun f hf => VTy.varsBelow_mono hle (hv f hf)⟩, ?_⟩
+        rw [List.map_congr_left (fun f hf => VTy.inst_prefix h1.2 (hv f hf))]
+        exact hp
+      | _ => simp [VTy.sub] at h2
+    | vref es bs =>
+      cases w with
+      | vref fs cs =>
+        rw [VTy.sub_ref_vref_iff] at h1 ⊢
+        rw [VTy.sub_vref_iff] at h2
+        intro t ht
+        obtain ⟨e, he, ⟨het, hv⟩, hp⟩ := h1 t ht
+        exact ⟨e, h2.1 e he, ⟨het, hv⟩, h2.2.trans hp⟩
+      | _ => simp [VTy.sub] at h2
+    | _ => simp [VTy.sub] at h1
+  | .vref es as, u, w, h1, h2 => by
+    cases u with
+    | vref fs bs =>
+      cases w with
+      | vref gs cs =>
+        rw [VTy.sub_vref_iff] at h1 h2 ⊢
+        exact ⟨fun x hx => h2.1 x (h1.1 x hx), h2.2.trans h1.2⟩
+      | _ => simp [VTy.sub] at h2
+    | _ => simp [VTy.sub] at h1
   | .arr t, u, w, h1, h2 => by
     cases u <;> simp [VTy.sub] at h1
     cases w <;> simp [VTy.sub] at h2 ⊢
@@ -443,8 +525,26 @@ mutual
 /-- Subtyping is stable under substitution. -/
 theorem VTy.sub_subst (θ : Nat → VTy) : ∀ (t u : VTy), t.sub u = true → (t.subst θ).sub (u.subst θ) = true
   | .ref ts as, u, h => by
-    cases u <;> simp [VTy.sub] at h ⊢
-    exact ⟨h.1, h.2.map _⟩
+    cases u with
+    | ref us bs =>
+      simp [VTy.sub] at h ⊢
+      exact ⟨h.1, h.2.map _⟩
+    | vref es bs =>
+      rw [VTy.subst_ref, VTy.subst_vref, VTy.sub_ref_vref_iff]
+      rw [VTy.sub_ref_vref_iff] at h
+      intro t ht
+      obtain ⟨e, he, ⟨het, hv⟩, hp⟩ := h t ht
+      refine ⟨e, he, ⟨het, by simpa using hv⟩, ?_⟩
+      rw [← VTy.map_inst_subst]
+      exact hp.map _
+    | _ => simp [VTy.sub] at h
+  | .vref es as, u, h => by
+    cases u with
+    | vref fs bs =>
+      rw [VTy.subst_vref, VTy.subst_vref, VTy.sub_vref_iff]
+      rw [VTy.sub_vref_iff] at h
+      exact ⟨h.1, h.2.map _⟩
+    | _ => simp [VTy.sub] at h
   | .arr t, u, h => by
     cases u <;> simp [VTy.sub] at h
     simpa [VTy.sub] using VTy.sub_subst θ _ _ h
@@ -469,15 +569,44 @@ mutual
 /-- **Subsumption is sound**: a value of a type is a value of every type above it. -/
 theorem hasTy_sub : ∀ (t u : VTy) (v : Value), t.sub u = true → hasTy Ξ v t = true → hasTy Ξ v u = true
   | .ref ts as, u, v, hs, hv => by
-    cases u <;> simp [VTy.sub] at hs
-    cases v with
-    | ref a =>
-      simp only [hasTy] at hv ⊢
-      rcases ha : Ξ[a]? with _ | ⟨t, args'⟩
-      · simp [ha] at hv
-      · simp only [ha, Bool.and_eq_true, List.isPrefixOf_iff_prefix] at hv ⊢
-        exact ⟨by simpa using hs.1 t (by simpa using hv.1), hs.2.trans hv.2⟩
-    | _ => simp [hasTy] at hv
+    cases u with
+    | ref us bs =>
+      simp [VTy.sub] at hs
+      cases v with
+      | ref a =>
+        simp only [hasTy] at hv ⊢
+        rcases ha : Ξ[a]? with _ | ⟨t, args'⟩
+        · simp [ha] at hv
+        · simp only [ha, Bool.and_eq_true, List.isPrefixOf_iff_prefix] at hv ⊢
+          exact ⟨by simpa using hs.1 t (by simpa using hv.1), hs.2.trans hv.2⟩
+      | _ => simp [hasTy] at hv
+    | vref es bs =>
+      -- (the view at the reference's arguments is the view at the object's)
+      rw [VTy.sub_ref_vref_iff] at hs
+      cases v with
+      | ref a =>
+        rw [hasTy_vref_iff]
+        simp only [hasTy] at hv
+        rcases ha : Ξ[a]? with _ | ⟨t, args'⟩
+        · simp [ha] at hv
+        · simp only [ha, Bool.and_eq_true, List.isPrefixOf_iff_prefix, List.contains_iff_mem] at hv
+          obtain ⟨e, he, ⟨het, hvb⟩, hp⟩ := hs t hv.1
+          refine ⟨t, args', rfl, e, he, het, ?_⟩
+          rw [List.map_congr_left (fun f hf => VTy.inst_prefix hv.2 (hvb f hf))]
+          exact hp
+      | _ => simp [hasTy] at hv
+    | _ => simp [VTy.sub] at hs
+  | .vref es as, u, v, hs, hv => by
+    cases u with
+    | vref fs bs =>
+      rw [VTy.sub_vref_iff] at hs
+      cases v with
+      | ref a =>
+        rw [hasTy_vref_iff] at hv ⊢
+        obtain ⟨t, args', ha, e, he, het, hp⟩ := hv
+        exact ⟨t, args', ha, e, hs.1 e he, het, hs.2.trans hp⟩
+      | _ => simp [hasTy] at hv
+    | _ => simp [VTy.sub] at hs
   | .arr t, u, v, hs, hv => by
     cases u <;> simp [VTy.sub] at hs
     cases v with
@@ -921,6 +1050,13 @@ theorem hasTy_mono {Ξ₁ Ξ₂ : HeapTy} (hx : Ξ₁ <+: Ξ₂) : ∀ (t : VTy)
       rcases ha : Ξ₁[a]? with _ | ⟨t, args'⟩
       · simp [ha] at hv
       · simp only [ha] at hv; simp only [prefix_getElem? hx ha]; exact hv
+    all_goals simp [hasTy] at hv
+  | .vref es args, v, hv => by
+    cases v
+    case ref a =>
+      rw [hasTy_vref_iff] at hv ⊢
+      obtain ⟨t, args', ha, rest⟩ := hv
+      exact ⟨t, args', prefix_getElem? hx ha, rest⟩
     all_goals simp [hasTy] at hv
 theorem allTys_mono {Ξ₁ Ξ₂ : HeapTy} (hx : Ξ₁ <+: Ξ₂) : ∀ (ts : List VTy) (vs : List Value),
     allTys Ξ₁ vs ts = true → allTys Ξ₂ vs ts = true

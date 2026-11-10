@@ -1192,7 +1192,14 @@ position in every class below the one that declares it.
   are not among them: a `swap(a, b) := class(pair(b, a))` is `ref … [b, a]`,
   an `intcell := class(cell(int))` is `ref … [int]`, and a
   `named(t, n) := class(cell(t))` is `ref … [t, n]`, a `cell(t)` by Core's
-  prefix subtyping. A class's table entry
+  prefix subtyping. (Core also has references through *views*, #351:
+  `vref es args`, each entry `(t, φ)` a class and the view's type arguments
+  as types over the class's, of which `args` is a prefix; a class's
+  reference is below a view of it whose arguments are among the
+  reference's, `hasTy_sub` proves it sound, and substitution leaves the
+  views. They are for interfaces whose arguments are not a prefix of a
+  class's, `both(t, u) := class(container(t), sink(u))` at `sink`; nothing
+  makes them yet.) A class's table entry
   gives each field the type the topmost class that has it gives it, at
   that class's variable positions (`TyEnv.coreVars`), so a field has one
   type through every reference of the hierarchy. Dispatch passes the

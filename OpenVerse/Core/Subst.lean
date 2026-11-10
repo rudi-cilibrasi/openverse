@@ -13,6 +13,7 @@ mutual
 theorem VTy.closed_subst (θ : Nat → VTy) : ∀ t : VTy, t.closed = true → t.subst θ = t
   | .int, _ | .logic, _ | .char, _ | .float, _ => by simp
   | .ref _ args, h => by simp only [VTy.closed] at h; simpa using VTy.closedL_subst θ args h
+  | .vref _ args, h => by simp only [VTy.closed] at h; simpa using VTy.closedL_subst θ args h
   | .var _, h => by simp [VTy.closed] at h
   | .arr t, h => by simp only [VTy.closed] at h; simp [VTy.closed_subst θ t h]
   | .opt t, h => by simp only [VTy.closed] at h; simp [VTy.closed_subst θ t h]
@@ -24,6 +25,20 @@ theorem VTy.closedL_subst (θ : Nat → VTy) : ∀ ts : List VTy, VTy.closedL ts
     simp [VTy.closed_subst θ t h.1, VTy.closedL_subst θ ts h.2]
 end
 
+mutual
+/-- A type is closed once closed types are substituted for its variables. -/
+theorem VTy.subst_closed {σ : Nat → VTy} (hσ : ∀ j, (σ j).closed = true) :
+    ∀ t : VTy, (t.subst σ).closed = true
+  | .int | .logic | .char | .float => by simp [VTy.closed]
+  | .var j => by simpa using hσ j
+  | .arr t | .opt t => by simpa [VTy.closed] using VTy.subst_closed hσ t
+  | .tup ts | .ref _ ts | .vref _ ts => by simpa [VTy.closed] using VTy.substL_closed hσ ts
+theorem VTy.substL_closed {σ : Nat → VTy} (hσ : ∀ j, (σ j).closed = true) :
+    ∀ ts : List VTy, VTy.closedL (ts.map (VTy.subst σ)) = true
+  | [] => rfl
+  | t :: ts => by simp [VTy.closedL, VTy.subst_closed hσ t, VTy.substL_closed hσ ts]
+end
+
 theorem VTy.closedL_iff : ∀ {ts : List VTy}, VTy.closedL ts = true ↔ ∀ t ∈ ts, t.closed = true
   | [] => by simp [VTy.closedL]
   | t :: ts => by rw [VTy.closedL, Bool.and_eq_true, VTy.closedL_iff]; simp
@@ -33,6 +48,7 @@ theorem VTy.subst_comp (θ₁ θ₂ : Nat → VTy) : ∀ t : VTy,
     (t.subst θ₁).subst θ₂ = t.subst (fun j => (θ₁ j).subst θ₂)
   | .int | .logic | .char | .float | .var _ => by simp
   | .ref _ args => by simpa using VTy.substL_comp θ₁ θ₂ args
+  | .vref _ args => by simpa using VTy.substL_comp θ₁ θ₂ args
   | .arr t => by simp [VTy.subst_comp θ₁ θ₂ t]
   | .opt t => by simp [VTy.subst_comp θ₁ θ₂ t]
   | .tup ts => by simpa using VTy.substL_comp θ₁ θ₂ ts
@@ -46,6 +62,7 @@ mutual
 theorem VTy.subst_id : ∀ t : VTy, t.subst VTy.var = t
   | .int | .logic | .char | .float | .var _ => by simp
   | .ref _ args => by simpa using VTy.substL_id args
+  | .vref _ args => by simpa using VTy.substL_id args
   | .arr t => by simp [VTy.subst_id t]
   | .opt t => by simp [VTy.subst_id t]
   | .tup ts => by simpa using VTy.substL_id ts
@@ -77,6 +94,7 @@ theorem VTy.subst_congr {σ σ' : Nat → VTy} {n : Nat} (hσ : ∀ j < n, σ j 
   | .opt t, h => by simp only [VTy.varsBelow] at h; simp [VTy.subst_congr hσ t h]
   | .tup ts, h => by simp only [VTy.varsBelow] at h; simp [VTy.substL_congr hσ ts h]
   | .ref _ ts, h => by simp only [VTy.varsBelow] at h; simp [VTy.substL_congr hσ ts h]
+  | .vref _ ts, h => by simp only [VTy.varsBelow] at h; simp [VTy.substL_congr hσ ts h]
 theorem VTy.substL_congr {σ σ' : Nat → VTy} {n : Nat} (hσ : ∀ j < n, σ j = σ' j) :
     ∀ ts : List VTy, VTy.varsBelowL n ts = true → ts.map (VTy.subst σ) = ts.map (VTy.subst σ')
   | [], _ => rfl
@@ -96,6 +114,7 @@ theorem VTy.subst_congr_vars {σ σ' : Nat → VTy} :
   | .opt t, h => by simp [VTy.subst_congr_vars t (fun j hj => h j (by simpa [VTy.hasVar] using hj))]
   | .tup ts, h => by simp [VTy.substL_congr_vars ts (fun j hj => h j (by simpa [VTy.hasVar] using hj))]
   | .ref _ ts, h => by simp [VTy.substL_congr_vars ts (fun j hj => h j (by simpa [VTy.hasVar] using hj))]
+  | .vref _ ts, h => by simp [VTy.substL_congr_vars ts (fun j hj => h j (by simpa [VTy.hasVar] using hj))]
 theorem VTy.substL_congr_vars {σ σ' : Nat → VTy} :
     ∀ ts : List VTy, (∀ j, VTy.hasVarL j ts = true → σ j = σ' j) → ts.map (VTy.subst σ) = ts.map (VTy.subst σ')
   | [], _ => rfl
@@ -114,6 +133,7 @@ theorem VTy.vars_of_subst_eq {σ σ' : Nat → VTy} :
   | .opt t, he, j, h => VTy.vars_of_subst_eq t (by simpa using he) j (by simpa [VTy.hasVar] using h)
   | .tup ts, he, j, h => VTy.varsL_of_subst_eq ts (by simpa using he) j (by simpa [VTy.hasVar] using h)
   | .ref _ ts, he, j, h => VTy.varsL_of_subst_eq ts (by simpa using he) j (by simpa [VTy.hasVar] using h)
+  | .vref _ ts, he, j, h => VTy.varsL_of_subst_eq ts (by simpa using he) j (by simpa [VTy.hasVar] using h)
 theorem VTy.varsL_of_subst_eq {σ σ' : Nat → VTy} :
     ∀ ts : List VTy, ts.map (VTy.subst σ) = ts.map (VTy.subst σ') → ∀ j, VTy.hasVarL j ts = true → σ j = σ' j
   | [], _, _, h => by simp [VTy.hasVarL] at h
@@ -135,6 +155,7 @@ theorem VTy.closed_of_subst {σ : Nat → VTy} :
   | .opt t, hc, j, h => VTy.closed_of_subst t (by simpa [VTy.closed] using hc) j (by simpa [VTy.hasVar] using h)
   | .tup ts, hc, j, h => VTy.closedL_of_subst ts (by simpa [VTy.closed] using hc) j (by simpa [VTy.hasVar] using h)
   | .ref _ ts, hc, j, h => VTy.closedL_of_subst ts (by simpa [VTy.closed] using hc) j (by simpa [VTy.hasVar] using h)
+  | .vref _ ts, hc, j, h => VTy.closedL_of_subst ts (by simpa [VTy.closed] using hc) j (by simpa [VTy.hasVar] using h)
 theorem VTy.closedL_of_subst {σ : Nat → VTy} :
     ∀ ts : List VTy, VTy.closedL (ts.map (VTy.subst σ)) = true → ∀ j, VTy.hasVarL j ts = true → (σ j).closed = true
   | [], _, _, h => by simp [VTy.hasVarL] at h
@@ -155,6 +176,7 @@ theorem VTy.hasVar_closed : ∀ t : VTy, t.closed = true → ∀ j, t.hasVar j =
   | .opt t, h, j => by simp only [VTy.closed] at h; simpa [VTy.hasVar] using VTy.hasVar_closed t h j
   | .tup ts, h, j => by simp only [VTy.closed] at h; simpa [VTy.hasVar] using VTy.hasVarL_closed ts h j
   | .ref _ ts, h, j => by simp only [VTy.closed] at h; simpa [VTy.hasVar] using VTy.hasVarL_closed ts h j
+  | .vref _ ts, h, j => by simp only [VTy.closed] at h; simpa [VTy.hasVar] using VTy.hasVarL_closed ts h j
 theorem VTy.hasVarL_closed : ∀ ts : List VTy, VTy.closedL ts = true → ∀ j, VTy.hasVarL j ts = false
   | [], _, _ => rfl
   | t :: ts, h, j => by
