@@ -15,6 +15,7 @@ import OpenVerse.Core.Check
 import OpenVerse.Front.Lexer
 import OpenVerse.Front.Syntax
 import OpenVerse.Front.Parser
+import OpenVerse.Front.Types
 import OpenVerse.Front.Elab
 import OpenVerse.Front.Load
 import OpenVerse.Core.Gen

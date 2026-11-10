@@ -552,6 +552,12 @@ flowchart LR
 
 ## The elaborator's mutual block (#325)
 
+The resolved types (`Ty`), the type and class environment (`TyEnv`), and
+their layout, matching, unification and comparability operations live in
+`Front/Types.lean`. It also builds the prototype values from the type
+environment. `Front/Elab.lean` imports this module and owns expression
+elaboration, slot allocation and effect tracking.
+
 Most of `Elab.lean`'s elaborator is one `mutual` block, from `elabE` to its `end`. Of its definitions, 31 form one cycle with `elabE`. Lean compiles the block as one command, so the heartbeats for all of it count against one limit (`maxHeartbeats`, 200000 by default). The block reached that limit in #318. Moving code into new functions *inside* the block does not help.
 
 So a large definition that calls few functions of the block is defined before it instead. It takes those functions as arguments, named as they are so that its body reads the same, and the block keeps a one-line wrapper with the original signature, defaults included:
