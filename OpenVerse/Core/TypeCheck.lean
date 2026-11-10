@@ -377,6 +377,100 @@ theorem tcDispatch_sound {S : Sigs} {Γ : List VTy} {us : List Nat} {y y' f : Na
     · simp at h
   · simp at h
 
+/-- The view the entries for classes `us` have (#351): the first one's;
+    `tcDispatchView` checks that they all agree. -/
+def viewOf (ents : List (Nat × List VTy)) (us : List Nat) : Option (List VTy) :=
+  (ents.find? fun e => us.contains e.1).map (·.2)
+
+/-- The dispatch check of `tc` through a view (#351): the tested classes'
+    first type arguments, as many as all of them have pins on, as fresh
+    variables, refined by a most general unifier of the view equations. -/
+def tcDispatchView (S : Sigs) (Γ : List VTy) (us : List Nat) (y y' f : Nat) (m : Option VTy)
+    (σs? : Option (List VTy)) (eOK : Bool) : Option VTy :=
+  if y = y' then
+    match m, Γ[y]?, S.fns[f]?, σs? with
+    | some τ', some (.vref ents a), some (ps, τ), some σs =>
+      match viewOf ents us with
+      | some φ =>
+        let k := openCount S us 0
+        let N := max (VTy.nvarsL a) (max (VTy.nvarsL σs) τ'.nvars)
+        let P := commonPins S us k
+        match unify (VTy.viewEqs P φ a (VTy.ext N k)) with
+        | some μ =>
+          let θ := callInst (VTy.bindVarsL ps ((VTy.ref us (VTy.ext N k) :: σs).map (VTy.subst μ)) []) τ
+            (some (τ'.subst μ))
+          if ents.all (fun e => !us.contains e.1 || decide (e.2 = φ)) && φ.all (fun v => v.varsBelow k) &&
+              us.all (fun u => decide ((S.pinsOf u).take k = P)) &&
+              VTy.pinsBelow P k && VTy.extOK P 0 k && decide (a.length ≤ φ.length) &&
+              VTy.subL ((VTy.ref us (VTy.ext N k) :: σs).map (VTy.subst μ)) (ps.map (VTy.subst θ)) &&
+              (τ.subst θ).sub (τ'.subst μ) && eOK then some τ'
+          else none
+        | none => none
+      | none => none
+    | _, _, _, _ => none
+  else none
+
+theorem tcDispatchView_sound {S : Sigs} {Γ : List VTy} {us : List Nat} {y y' f : Nat} {m : Option VTy}
+    {σs? : Option (List VTy)} {eOK : Bool} {τ : VTy} (h : tcDispatchView S Γ us y y' f m σs? eOK = some τ) :
+    y = y' ∧ m = some τ ∧ eOK = true ∧ ∃ ents a ps τ0 σs P φ k N μ θ, Γ[y]? = some (.vref ents a) ∧
+      S.fns[f]? = some (ps, τ0) ∧ σs? = some σs ∧ (∀ e ∈ ents, e.1 ∈ us → e.2 = φ) ∧
+      (∀ v ∈ φ, v.varsBelow k = true) ∧ (∀ u ∈ us, (S.pinsOf u).take k = P) ∧
+      VTy.pinsBelow P k = true ∧ VTy.extOK P 0 k = true ∧
+      VTy.varsBelowL N a = true ∧ VTy.varsBelowL N σs = true ∧ τ.varsBelow N = true ∧
+      ViewRefines P φ a (VTy.ext N k) μ ∧
+      VTy.subL ((VTy.ref us (VTy.ext N k) :: σs).map (VTy.subst μ)) (ps.map (VTy.subst θ)) = true ∧
+      (τ0.subst θ).sub (τ.subst μ) = true := by
+  simp only [tcDispatchView] at h
+  split at h
+  · next hyy =>
+    split at h
+    · next τ' ents a ps τ0 σs hy hf =>
+      split at h
+      · next φ hφv =>
+        split at h
+        · next μ hu =>
+          split at h
+          · next hc =>
+            simp only [Bool.and_eq_true] at hc
+            obtain ⟨⟨⟨⟨⟨⟨⟨⟨hents, hφk⟩, hus⟩, hb⟩, hext⟩, hl⟩, hsub⟩, hres⟩, heOK⟩ := hc
+            simp only [Option.some.injEq] at h; subst h
+            have hview : ∀ e ∈ ents, e.1 ∈ us → e.2 = φ := by
+              intro e he hu'
+              have := List.all_eq_true.mp hents e he
+              simp only [Bool.or_eq_true, Bool.not_eq_eq_eq_not, Bool.not_true, decide_eq_true_eq] at this
+              rcases this with h1 | h1
+              · simp [List.contains_iff_mem, hu'] at h1
+              · exact h1
+            have hus' : ∀ u ∈ us, (S.pinsOf u).take (openCount S us 0) = commonPins S us (openCount S us 0) := by
+              intro u hu; simpa using List.all_eq_true.mp hus u hu
+            have hb' : (commonPins S us (openCount S us 0)).length ≤
+                (VTy.ext (max (VTy.nvarsL a) (max (VTy.nvarsL σs) τ'.nvars)) (openCount S us 0)).length := by
+              rw [VTy.ext_length]
+              unfold commonPins; split
+              · simp
+              · exact List.length_take_le _ _
+            exact ⟨hyy, rfl, heOK, ents, a, ps, τ0, σs, _, φ, _, _, _, _, hy, hf, rfl, hview,
+              fun v hv => List.all_eq_true.mp hφk v hv, hus', hb, hext,
+              VTy.varsBelowL_mono (Nat.le_max_left _ _) (VTy.varsBelowL_nvarsL _),
+              VTy.varsBelowL_mono (Nat.le_trans (Nat.le_max_left _ _) (Nat.le_max_right _ _))
+                (VTy.varsBelowL_nvarsL _),
+              VTy.varsBelow_mono (Nat.le_trans (Nat.le_max_right _ _) (Nat.le_max_right _ _))
+                (VTy.varsBelow_nvars _),
+              ViewRefines.of_unify hb' (by simpa using hl) hu, hsub, hres⟩
+          · simp at h
+        · simp at h
+      · simp at h
+    · simp at h
+  · simp at h
+
+/-- The dispatch check of `tc`: through a view for a receiver of a
+    reference type through views (#351), else by pins (#142, #209). -/
+def tcDispatchAny (S : Sigs) (Γ : List VTy) (us : List Nat) (y y' f : Nat) (m : Option VTy)
+    (σs? : Option (List VTy)) (eOK : Bool) : Option VTy :=
+  match Γ[y]? with
+  | some (.vref _ _) => tcDispatchView S Γ us y y' f m σs? eOK
+  | _ => tcDispatch S Γ us y y' f m σs? eOK
+
 section
 variable (S : Sigs) (Γ : List VTy) (ρ : VTy)
 
@@ -426,7 +520,7 @@ def tc : Expr → Option VTy → Option VTy
       | .heap (.isTag us) [.local y] =>
         if m.isSome && (tc t m).isNone then
           match t with
-          | .call f (.local y' :: es) => tcDispatch S Γ us y y' f m (inferL es) (tc e m).isSome
+          | .call f (.local y' :: es) => tcDispatchAny S Γ us y y' f m (inferL es) (tc e m).isSome
           | _ => none
         else none
       | _ => none
@@ -484,6 +578,8 @@ def tc : Expr → Option VTy → Option VTy
     | _ => none
   | .heap (.isTag us) [e], m => match tc e none with
     | some (.ref _ args) => expect m (.ref us args)
+    -- (a cast of a reference through views, #351)
+    | some (.vref _ _) => expect m (.ref us [])
     | _ => none
   | .heap _ _, _ => none
   | .prim op es, m => tcPrim op es m
@@ -1042,6 +1138,8 @@ theorem tcHeap_sound_of {op : HeapOp} {es : List Expr} {m τ} (ih : ∀ e ∈ es
     split at h
     · next ts args he =>
       exact expect_typed h (.heap_isTag (inf (by simp) he))
+    · next es args he =>
+      exact expect_typed h (.heap_isTag_v (inf (by simp) he))
     · simp at h
 
 end
@@ -1149,12 +1247,21 @@ theorem tc_sound_aux : ∀ (n : Nat) (e : Expr), sizeOf e < n → TcOK S Γ ρ e
             · next hc =>
               split at h
               · next f y' es =>
-                obtain ⟨rfl, hm, heOK, ts, a, ps, τ0, σs, P, k, N, μ, θ, hy, hf, hσs, hus, hb, hext, hNa, hNσ,
-                  hNτ, hμ, hsub, hres⟩ := tcDispatch_sound h
-                simp only [Option.some.injEq] at hm; subst hm
-                have Iargs : TypedL S Γ ρ es σs := inferL_sound_of (Isz rfl) hσs
-                exact ⟨Typed.dispatch k N θ μ hy hus hb hext hNa hNσ hNτ hμ hf Iargs hsub hres (typed_of_check Ie heOK),
-                  by simp⟩
+                unfold tcDispatchAny at h
+                split at h
+                · -- through a view (#351)
+                  obtain ⟨rfl, hm, heOK, ents, a, ps, τ0, σs, P, φ, k, N, μ, θ, hy, hf, hσs, hview, hφk, hus, hb,
+                    hext, hNa, hNσ, hNτ, hμ, hsub, hres⟩ := tcDispatchView_sound h
+                  simp only [Option.some.injEq] at hm; subst hm
+                  have Iargs : TypedL S Γ ρ es σs := inferL_sound_of (Isz rfl) hσs
+                  exact ⟨Typed.dispatch_view k N θ μ hy hview hφk hus hb hext hNa hNσ hNτ hμ hf Iargs hsub hres
+                    (typed_of_check Ie heOK), by simp⟩
+                · obtain ⟨rfl, hm, heOK, ts, a, ps, τ0, σs, P, k, N, μ, θ, hy, hf, hσs, hus, hb, hext, hNa, hNσ,
+                    hNτ, hμ, hsub, hres⟩ := tcDispatch_sound h
+                  simp only [Option.some.injEq] at hm; subst hm
+                  have Iargs : TypedL S Γ ρ es σs := inferL_sound_of (Isz rfl) hσs
+                  exact ⟨Typed.dispatch k N θ μ hy hus hb hext hNa hNσ hNτ hμ hf Iargs hsub hres
+                    (typed_of_check Ie heOK), by simp⟩
               · simp at h
             · simp at h
           · simp at h
