@@ -344,6 +344,12 @@ R4 = random.Random(seed * 1000003 + 328)
 # and the class that gives it Run implements it, so the bare MvT(..) dispatches from the interface,
 # the family's root. The output is the same. A generator of its own decides, so seeds keep the rest.
 R13 = random.Random(seed * 1000003 + 372)
+# ---- #375 (#283): at times (with mvm) the interface gives Mv a default with several values,
+#   i<T> := interface: MvT(MpT:int):int = MpT * 5 | MpT + 7
+# and the class that gives Run has no MvT of its own: a bare MvT(..) gets the default, and an
+# override in a subclass (#328) reaches it with (super:). Its own generator decides, before the
+# test runs (it changes the values); the interface form is then taken whatever R13 draws.
+R14 = random.Random(seed * 1000003 + 375)
 # ---- #312, flag rt (on with lazy; nort turns it off): a test's expression may call
 #   RT(RTa:int):int =
 #       RTy := RTa | RTa + 1 | RTa + 2
@@ -414,7 +420,7 @@ def has_lifted(x):
     if isinstance(x, (tuple, list)):
         return any(has_lifted(y) for y in x)
     return False
-SNX = {'inc': 1, 'ovm': False}
+SNX = {'inc': 1, 'ovm': False, 'dflt': False}
 RFUNCS = []
 RX = {'fi': None}
 FUNCS = []
@@ -1500,11 +1506,15 @@ def ev(e, st, k, mode):
 
             def alt2(s1, k2):
                 return k2(chks(v + 2 * s1.vars[e[2][1]], s1), s1)
+            base = [alt1, alt2]
+            if SNX['dflt']:
+                # (#375: the interface's default, MpT * 5 | MpT + 7)
+                base = [lambda s1, k2: k2(chks(v * 5, s1), s1), lambda s1, k2: k2(chks(v + 7, s1), s1)]
             if SNX['ovm']:
                 return choice_point([lambda s1, k2: k2(chks(v * 3, s1), s1),
-                                     lambda s1, k2: choice_point([alt1, alt2], s1, k2, mode),
+                                     lambda s1, k2: choice_point(base, s1, k2, mode),
                                      lambda s1, k2: k2(chks(v - 1, s1), s1)], s0, k, mode)
-            return choice_point([alt1, alt2], s0, k, mode)
+            return choice_point(base, s0, k, mode)
         return ev(e[1], st, kmvm, mode)
     if t == 'nam':
         def knam(vu, s0):
@@ -2015,6 +2025,7 @@ for ti in range(NT):
         ovr, priv = R.random() < 0.5, R.random() < 0.5
         SNX['inc'] = 2 if ovr else 1
         SNX['ovm'] = MVM and R4.random() < 0.5
+        SNX['dflt'] = MVM and R14.random() < 0.4
         st.vars['S.Cn'] = 0
     CTX['meth'] = meth
     CTX['mvm'] = (ti, f"N{ti}a")
@@ -2081,14 +2092,18 @@ for ti in range(NT):
         split = CTX.get('mvm_used') and SNX['ovm']     # (#328: Run in a parent class)
         top = f"{name}b" if split else f"{name}c"
         ifc = CTX.get('mvm_used') and R13.random() < 0.5
-        M = ([f"i{ti} := interface:", f"    Mv{ti}(Mp{ti}:int):int"] if ifc else []) + [
+        dflt = CTX.get('mvm_used') and SNX['dflt']     # (#375: the interface's default)
+        ifc = ifc or dflt
+        M = ([f"i{ti} := interface:", f"    Mv{ti}(Mp{ti}:int):int" + (f" = Mp{ti} * 5 | Mp{ti} + 7" if dflt else "")]
+             if ifc else []) + [
              f"{top} := class(tbase{f', i{ti}' if ifc else ''}):", f"    var {vars_[0]}:int = 0",
              f"    var {vars_[1]}{'<private>' if priv else ''}:int = 0"]
         if ovr and not split:
             M += ["    Nx<override>()<transacts>:int =", "        set Cn += 2", "        Cn - 2"]
         if CTX.get('mvm_used'):
             M.append(f"    Hp{ti}(Hq{ti}:int):int = Hq{ti} * 2")
-            M.append(f"    Mv{ti}{'<override>' if ifc else ''}(Mp{ti}:int):int = Mp{ti} + Nx() | Mp{ti} + Hp{ti}(N{ti}a)")
+            if not dflt:
+                M.append(f"    Mv{ti}{'<override>' if ifc else ''}(Mp{ti}:int):int = Mp{ti} + Nx() | Mp{ti} + Hp{ti}(N{ti}a)")
         M.append("    Run():void =")
         M += ["    " + l for l in L[3:]]
         if split:
