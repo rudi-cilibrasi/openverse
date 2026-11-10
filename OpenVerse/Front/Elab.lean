@@ -7363,6 +7363,10 @@ structure Compiled where
   /-- Lazily taken calls whose effects need functions of their own (#246):
       the program is elaborated again, with them. -/
   loopNeeds : List Choice.FirstLift := []
+  /-- Classes with a class parent that list an interface at type arguments
+      that are not a prefix of their own (#351): the program is elaborated
+      again, with hidden fields for all of their type parameters. -/
+  witnessNeeds : List String := []
 
 /-- Names a type parameter cannot have. -/
 def typeNames : List String :=
@@ -7403,6 +7407,9 @@ structure Options where
   /-- Lazily taken calls whose effects need functions of their own, found
       in an earlier elaboration (#246). -/
   loopRequests : List Choice.FirstLift := []
+  /-- Classes whose type parameters all get hidden fields, found in an
+      earlier elaboration (#351, `Compiled.witnessNeeds`). -/
+  witnessAll : List String := []
 
 /-- A class or interface definition, as parsed. -/
 structure CDef where
@@ -9621,7 +9628,10 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
           some (coreS.take fewest)
       if let some qargs := qargs? then
         for tp in (if methodsBelow then cd.tps else []) do
-          if !qargs.any (fun | .name v => v == tp.name | _ => false) then
+          -- (all of them for a class with a class parent that lists an
+          -- interface at type arguments that are not a prefix of its own,
+          -- which a dispatch through a view opens, #351)
+          if opts.witnessAll.contains cd.name || !qargs.any (fun | .name v => v == tp.name | _ => false) then
             fs := fs ++ [(s!"$w.{cd.name}.{tp.name}", .name tp.name, some (.ident cd.pos "$witness"), false)]
       full := full.push (cd.name, fs)
       fullMap := fullMap.insert cd.name fs
@@ -9893,6 +9903,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   -- fields, and a dispatch from the interface opens them, as for a class
   -- whose parent's type arguments do not give them (#209, #276)
   let mut viewed : List String := []
+  let mut witnessNeeds : List String := []
   for cd in cdefs do
     if !cd.isIface then
       -- (an interface reached through two parents at different type
@@ -9921,13 +9932,17 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
           -- classes, which no view gives
           if !(env.fields i).isEmpty then
             throw s!"{cd.pos.show}: {cd.name} gives {i} the type arguments {gives}, but its own are {showArgs (core cd.name)}, and {i} has fields: references to it through views cannot read them yet (#351)"
-          -- (its hidden fields, which a dispatch through a view reads, are
-          -- for a class without a class parent: one with one, which adds
-          -- the interface, is not supported yet)
+          -- (a dispatch through a view reads all of the class's type
+          -- arguments from its hidden fields, which a class without a class
+          -- parent has for all of them; one with one, which adds the
+          -- interface, has them for all only when asked, and the program is
+          -- elaborated again, `Options.witnessAll`)
           if let some q := (env.info cd.name).parent then
-            if !env.isSub q i then
-              throw s!"{cd.pos.show}: {cd.name} gives {i} the type arguments {gives}, but its own are {showArgs (core cd.name)}, and {cd.name} has a parent class, {q}, which does not reach {i}: a class with a parent class that adds such an interface is not supported yet (#351)"
+            if !env.isSub q i && !opts.witnessAll.contains cd.name && !witnessNeeds.contains cd.name then
+              witnessNeeds := witnessNeeds ++ [cd.name]
           viewed := viewed ++ [i]
+  if !witnessNeeds.isEmpty then
+    return { prog := default, sigs := { fns := [] }, slotTys := [], witnessNeeds }
   -- (and the interfaces above them, which see their classes through a
   -- prefix of what they do)
   env := { env with viewed := (viewed ++ viewed.flatMap fun i => (env.supers i).filter (env.info · |>.isIface)).eraseDups }
@@ -10774,7 +10789,15 @@ def elabProgram (allTops00 : List STop) (opts : Options := {}) : Except String C
       throw "internal error: casts that refine type arguments, or lazily taken calls, still to lift after several elaborations (#243, #246)"
     -- (a program with a placeholder left is never given out)
     | 0, _ :: _ => throw "internal error: functions still wanted as values after several elaborations (#214)"
-  (go 4 opts).mapError fun msg =>
+  -- (#351) and with hidden fields for all of the type parameters of the
+  -- classes that ask for them, each round more
+  let rec withWitness (fuel : Nat) (opts : Options) : Except String Compiled := do
+    let c ← go 4 opts
+    if c.witnessNeeds.isEmpty then return c
+    match fuel with
+    | fuel + 1 => withWitness fuel { opts with witnessAll := opts.witnessAll ++ c.witnessNeeds }
+    | 0 => throw "internal error: classes still asking for hidden fields after several elaborations (#351)"
+  (withWitness 8 opts).mapError fun msg =>
     FnValues.pretty (((stripOv (msg.replace "$init" "<constructor>")).replace "::" ".").replace "$replaceAll" "ReplaceAll")
 
 /-- Parse and elaborate Verse source text. -/
