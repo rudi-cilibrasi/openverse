@@ -229,6 +229,10 @@ def boundIn (cs : List SExpr) : List String :=
   cs.flatMap fun
     | .decl _ x _ _ _ => [x]
     | .gen _ x i _ => x :: i.toList
+    -- (an inlined generic call's omitted defaults, bound together, #283)
+    | .app _ (.ident _ "$defaults") (.block _ ds :: _) false => ds.filterMap fun
+        | .decl _ x _ _ _ => some x
+        | _ => none
     | _ => []
 
 /-- The receiver of a method or field. -/
@@ -1406,6 +1410,12 @@ partial def inlineCalls (mv : List (String × MFn)) (e : SExpr) (recs : List Str
             return some (.decl q (tag sp.name) (tyOf sp.ty) false
               (.app q (.ident q "$paramDefault") [.ident q g, .ident q sp.name, .block q earlier, d'] false))
           | none => return none
+      -- (a generic one's: together, after its `$params`, `$defaults`, so a
+      -- default can give a type parameter nothing else determined its type
+      -- argument, as at a call, #392's review)
+      let dflts : List SExpr := if ρ.isEmpty || !hasNamed then dflts else
+        [.app q (.ident q "$defaults") (.block q dflts :: .ident q g :: (ρ.zip f.tparams).map fun ((_, n), tp) =>
+          SExpr.tuple q [.ident q n, .ident q tp.constraint]) false]
       let (pds, unpack, as'') : List SExpr × List SExpr × List SExpr :=
         if tupleNamed then
           let t := tag "$tuple"

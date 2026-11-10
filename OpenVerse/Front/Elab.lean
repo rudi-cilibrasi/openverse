@@ -1293,6 +1293,10 @@ partial def resolveTy (env : TyEnv) (p : Pos) : STy → EM Ty
       | none => pure (.struct n [])
     else if (env.enums.lookup n).isSome then pure (.enum n)
     else if (env.refines.lookup n).isSome then pure (.refine n)
+    -- (an inlined generic call's type parameter, `$tp…_t`, that no
+    -- argument determined, #283: said with its own name)
+    else if n.startsWith "$tp" then
+      eerr p s!"cannot infer type parameter {((n.dropWhile (· != '_')).drop 1).toString} of this call of a function with several values from its arguments"
     else eerr p s!"unknown type '{n}' (supported: int, logic, char, string, void, []t, ?t, tuple(…), and structs and enums)"
   | .arr t => return .arr (← resolveTy env p t)
   | .opt t => return .opt (← resolveTy env p t)
@@ -4483,6 +4487,57 @@ partial def elabStmt (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM (R × Ctx) 
         let slot ← fresh t
         code := .seq code (.assign slot e)
         c := { c with locals := { name := x, slot, ty := t, mutable := v } :: c.locals }
+      pure (⟨.seq code (.lit .void), .void⟩, { c with types := { c.types with tvars := c.types.tvars ++ σ } })
+    | .app p (.ident _ "$defaults") (.block _ decls :: tps) false => do
+      -- (#283) the defaults an inlined generic call omits, after its
+      -- `$params`, as at a call: in order, each seeing the parameters
+      -- before it, at its parameter's type, or, when that mentions a type
+      -- parameter nothing else determined, giving it its type argument;
+      -- then every type parameter must have one
+      let fname := Choice.shownFnName (match tps with | .ident _ f :: _ => f | _ => "")
+      let cons : List (String × String) := tps.drop 1 |>.filterMap fun
+        | .tuple _ [.ident _ n, .ident _ c] => some (n, c)
+        | _ => none
+      let shownTp (n : String) : String := ((n.dropWhile (· != '_')).drop 1).toString
+      let open_ := cons.filter fun (n, _) => (ctx.types.tvars.lookup n).isNone
+      let names := open_.map (·.1)
+      let penv : TyEnv := { ctx.types with tvars := ctx.types.tvars ++ open_.map fun (n, c) => (n, Ty.param n (c == "comparable")) }
+      let shown (t : Ty) : String := (t.subst (names.map fun n => (n, Ty.param (shownTp n) false))).show
+      let fromContext : SExpr → Bool
+        | .app _ (.ident _ "$paramDefault") [_, _, _, .ident _ "false"] false
+        | .app _ (.ident _ "$paramDefault") [_, _, _, .arrayLit _ []] false
+        | .app _ (.ident _ "$paramDefault") [_, _, _, .mapLit _ []] false => true
+        | _ => false
+      let mut σ : List (String × Ty) := []
+      let mut code : Expr := .lit .void
+      let mut c := ctx
+      for d in decls do
+        let .decl q x (some sty) v a := d | eerr d.pos "internal: a $defaults clause (#283)"
+        let t := (← resolveTy penv q sty).subst σ
+        let mut e : Expr := .lit .void
+        let mut t' := t
+        if t.params.any names.contains then
+          if fromContext a then
+            eerr p s!"cannot infer type parameter {shownTp ((t.params.filter names.contains).headD "t")} of {fname} from the arguments of this call"
+          let r ← elabE c a none
+          match t.matchArg ctx.types σ r.ty with
+          | some σ' =>
+            σ := σ'.filter fun (n, _) => names.contains n
+            t' := t.subst σ
+            e ← coerce q r t'
+          | none => eerr q s!"expected {shown t}, found {r.ty.show} (the default of a parameter of {fname})"
+        else
+          e ← coerce q (← elabE c a (some t)) t
+        checkNewLocal c q x
+        let slot ← fresh t'
+        code := .seq code (.assign slot e)
+        c := { c with locals := { name := x, slot, ty := t', mutable := v } :: c.locals }
+      for (n, k) in open_ do
+        match σ.lookup n with
+        | none => eerr p s!"cannot infer type parameter {shownTp n} of {fname} from the arguments of this call"
+        | some t =>
+          if k == "comparable" && !(isComparable ctx.types t) then
+            eerr p (notComparable ctx.types t s!"{fname}'s type argument for {shownTp n}")
       pure (⟨.seq code (.lit .void), .void⟩, { c with types := { c.types with tvars := c.types.tvars ++ σ } })
     | _ => do pure (← elabE ctx se exp, ctx)
   if !ctx.canFail && (r.e.mayFail ctx.sigProg) then

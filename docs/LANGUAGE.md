@@ -774,7 +774,9 @@ Main():void =
   positional arguments, then the named ones as written, then the defaults
   of those omitted, each seeing only the parameters before it (#283); a
   generic one's (or a generic class's method's) type arguments are inferred
-  from the arguments given, named ones too, as at a call (#283).
+  as at a call: from the arguments given, named ones too, then from the
+  defaults of those omitted for a type parameter nothing else determines
+  (#283).
 
   An overloaded function may have several values too (#283): a call takes
   the overload its arguments fit, as any call does, and has that

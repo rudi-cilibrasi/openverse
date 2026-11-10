@@ -336,7 +336,11 @@ clause, which infers the type arguments from the arguments as a generic
 call does (each argument checked against its parameter's type once the
 type parameters it mentions are bound, else inferring them; `false`,
 `array{}` and `map{}` last) and names them for the types after, the
-value's and the body's. A lazily taken one's result type is the
+value's and the body's. With named parameters, the defaults of those
+omitted follow in a `$defaults` clause (#283): in order, each seeing the
+parameters before it, at its parameter's type, or, when that mentions a
+type parameter nothing else determined, giving it its type argument, as a
+call does; then every type parameter must have one. A lazily taken one's result type is the
 signature's at those type arguments, and #246's function of its own has
 them substituted in, #235.) Then it drops those functions and turns each call into an
 `$inline(F, template, args…)` marker, whose template is the body with its
