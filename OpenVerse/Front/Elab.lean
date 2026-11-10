@@ -2724,7 +2724,7 @@ partial def elabSetWith (elabE : Ctx → SExpr → Option Ty → EM R) (elabMemb
     with the object (as `D`) and those locals passed at their refined
     types. `none` when the cast does not refine: the plain path. -/
 partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr → Bool → Option Ty → EM R)
-    (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx) (p _dp : Pos) (D T : String) (x : SExpr) (body0 : SExpr)
+    (elabE : Ctx → SExpr → Option Ty → EM R) (withMark : Ctx → Expr → EM Expr) (ctx : Ctx) (p _dp : Pos) (D T : String) (x : SExpr) (body0 : SExpr)
     (elseE : Option SExpr) (exp : Option Ty) (made : Bool := false) (escRet : Option Ty := none) :
     EM (Option R) := do
   let env := ctx.types
@@ -2818,23 +2818,20 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
     let tupTy ← tupS.mapM (resolveTy env p ·)
     -- (the new branch is the elaborator's, so its function is made from it,
     -- `made`, not from the source)
-    let some rIf ← elabRefinedIfWith elabApp elabE ctx p _dp D T x thenB (some elseB) tupTy (made := true)
+    let some rIf ← elabRefinedIfWith elabApp elabE withMark ctx p _dp D T x thenB (some elseB) tupTy (made := true)
         (escRet := if escapes then tupTy else none)
       | eerr p s!"internal: the cast to {shown} with sets, returns or breaks in its branch (#243)"
     let slot ← fresh rIf.ty
     let c := { ctx with locals := { name := t, slot, ty := rIf.ty, mutable := false } :: ctx.locals }
     let rest ← elabE c (.block p after) exp
     return some ⟨.seq (.assign slot rIf.e) rest.e, rest.ty⟩
-  -- (a suspension in the branch or in the `else`, which the dispatch to the
-  -- branch's function would have to carry, is refused for now)
+  -- (a suspension in the branch makes its function `<suspends>`, whose
+  -- dispatch the lowering takes as a suspends method's call, #243; the
+  -- `else` is the caller's code, which may suspend as any)
   let isS (f : Nat) : Bool := ctx.sigs.any fun s => s.idx == f && s.suspends
   let elseOf : EM R := match elseE with
     | none => pure ⟨.lit .void, .void⟩
-    | some ee => do
-      let re ← elabE ctx ee exp
-      if ctx.suspends && Suspend.hasSusp isS re.e then
-        eerr ee.pos s!"the else of the cast to {shown}, which holds only under a refinement of the type arguments, cannot suspend yet: the if is a dispatch to its branch's function (#243)"
-      pure re
+    | some ee => elabE ctx ee exp
   let key := Refine.keyOf p D ctx.liftTag
   match env.castRequests.find? (·.key == key) with
   | none =>
@@ -2855,12 +2852,14 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
     let fx0 := (← get).fx
     modify fun st => { st with fx := [] }
     let rb ← elabE ctxB body (if elseE.isNone then some .void else exp.map refine)
-    if ctx.suspends && Suspend.hasSusp isS rb.e then
-      eerr body.pos s!"the branch of the cast to {shown}, which holds only under a refinement of the type arguments, is compiled as a function of its own, so it cannot suspend yet (#243)"
+    let suspendsB := ctx.suspends && Suspend.hasSusp isS rb.e
     let fxB := (← get).fx
     modify fun st => { st with fx := fx0 }
     for (k, q, via) in fxB do noteFx q [k] via
     let re ← elseOf
+    -- (the dispatch is a suspends call when either side suspends: the
+    -- lowering keeps its shape so, as a suspends method's, #243)
+    let suspendsB := suspendsB || (ctx.suspends && Suspend.hasSusp isS re.e)
     let τ' : Ty := if elseE.isNone then .void else exp.getD re.ty
     let ret := refine τ'
     discard <| coerce p rb ret
@@ -2890,7 +2889,8 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
       | .param m _ => if m == n then none else some (n, t'.toSTy)
       | _ => some (n, t'.toSTy)
     let heap := ["reads", "writes", "allocates"].filter fun k => fxB.any (·.1 == k)
-    let specs := (if heap.isEmpty then ["computes"] else heap) ++ (if decides then ["decides"] else [])
+    let specs := (if heap.isEmpty then ["computes"] else heap) ++ (if decides then ["decides"] else []) ++
+      (if suspendsB then ["suspends"] else [])
     let lift : Refine.Lift := {
       pos := p, bound := D, target := T, tag := ctx.liftTag,
       name := s!"$refine{p.line}_{p.col}_{D}" ++ (if p.file.isEmpty then "" else s!"_{p.file}") ++ ctx.liftTag,
@@ -2992,15 +2992,23 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
         else .ident p sp.name
       let rc ← elabApp ctx' p (.ident p l.name) (l.params.map argOf)
         (l.specs.contains "decides") (some (τ'.subst μF))
-      let .call fi (.local s0 :: es) := rc.e
+      -- (a suspends call carries the defers active at it, which go around
+      -- the whole dispatch instead, as a method's, #243)
+      let rcE : Expr := match rc.e with
+        | .seq (.ite (.prim .fail []) _ (.lit .void)) b => b
+        | e => e
+      let .call fi (.local s0 :: es) := rcE
         | eerr p s!"cannot lift the branch of the cast to {shown} yet: its call is not a plain one (#243)"
       if s0 != y then eerr p s!"cannot lift the branch of the cast to {shown} yet (#243)"
       acc := .ite (.heap (.isTag (part.toList.map env.tagOf)) [.local y]) (.call fi (.local y :: es)) acc
       tested := part ++ tested
     let t ← fresh τ'
-    if pre.isEmpty then return some ⟨.assign t acc, τ'⟩
+    -- (its value in a temporary at its type, as a suspends call's takes,
+    -- and the defers active here around it when its function suspends)
+    let mark (e : Expr) : EM Expr := if l.specs.contains "suspends" then withMark ctx e else pure e
+    if pre.isEmpty then return some ⟨← mark (.assign t acc), τ'⟩
     let cond := pre.foldr Expr.seq (.heap (.isTag (tested.toList.map env.tagOf)) [.local y])
-    return some ⟨.assign t (.ite cond acc eE), τ'⟩
+    return some ⟨← mark (.assign t (.ite cond acc eE)), τ'⟩
 
 /-- (#283) `elabLoopGen` for a strongly connected group of functions with
     several values, taken lazily (`$group(tail, $member(H, params, clauses,
@@ -5279,7 +5287,7 @@ partial def elabCast (ctx : Ctx) (p : Pos) (T : String) (args : List SExpr) (bra
 /-- `elabRefinedIfWith`, given this block's functions (#325). -/
 partial def elabRefinedIf (ctx : Ctx) (p _dp : Pos) (D T : String) (x : SExpr) (body0 : SExpr)
     (elseE : Option SExpr) (exp : Option Ty) (made : Bool := false) : EM (Option R) :=
-  elabRefinedIfWith elabApp elabE ctx p _dp D T x body0 elseE exp made
+  elabRefinedIfWith elabApp elabE withDeferMark ctx p _dp D T x body0 elseE exp made
 
 /-- `elabGenericCallWith`, given this block's functions (#325). -/
 partial def elabGenericCall (ctx : Ctx) (p : Pos) (s : Sig) (args : List SExpr) (exp : Option Ty) :

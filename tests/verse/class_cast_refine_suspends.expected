@@ -1,2 +1,13 @@
-7 2
+woke 5
+v 7
+else woke
+w x
+g before
+g after 3
+g defer
+g before
+g after 4
+g defer
+woke 9
+t1 70
 exit=0

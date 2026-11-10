@@ -1,4 +1,4 @@
-# expect: 10:8: the else of the cast to dup(a), which holds only under a refinement of the type arguments, cannot suspend yet
+# A refining cast whose else suspends (#243): the dispatch a suspends call, as when the branch does
 pair(t:type, u:type) := class:
     A:t
     B:u
