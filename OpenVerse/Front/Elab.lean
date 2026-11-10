@@ -1125,6 +1125,9 @@ structure Ctx where
       of its own an earlier elaboration asked for (#275, #335), which is
       keyed by place and may take clauses that bind other names. -/
   typeOnly : Bool := false
+  /-- (#283) Elaborating the call as written of an `$inlineOv(F, id, …)`,
+      for types: the overload of `F` it takes is noted under `id`. -/
+  ovPick : Option (Nat × String) := none
 
 /-- A lazily taken call where the first success is taken (#246): its
     function, where, the code it runs once for all the values of an item,
@@ -1167,6 +1170,9 @@ structure ESt where
       it may reach no `Print` and change no object, checked on Verse Core
       code once every function is. -/
   loopFirst : List LoopUse := []
+  /-- (#283) For a call of an overloaded function with several values: the
+      overload the elaboration for types chose, by the call's `$inlineOv` id. -/
+  ovPicks : List (Nat × String) := []
   deriving Inhabited
 
 abbrev EM := StateT ESt (Except String)
@@ -3786,6 +3792,25 @@ partial def elabLoopGenGroupWith (elabE : Ctx → SExpr → Option Ty → EM R)
   let after : Expr := .ite (p2 .ge (.local nx) (.lit (.int 0))) (push (item (.local nx) cur)) vd
   return { init, step, sp, has, value, after, vty := rty, itemCode, argSet }
 
+/-- (#283) A body for the elaboration that chooses overloads: each
+    `$inlineOv(F, id, call, …)` its call as written, `$ovPick(id, F, call)`. -/
+partial def ovForTypes : SExpr → SExpr :=
+  Choice.mapE fun
+    | .app p (.ident _ "$inlineOv") (.ident q f :: .int _ id :: call :: _) false =>
+      some (.app p (.ident p "$ovPick") [.int p id, .ident q f, ovForTypes call] false)
+    | _ => none
+
+/-- (#283) The body with each `$inlineOv` its chosen overload's inlined
+    call, `picks` the overload (`F$ovK`) each id's call took. -/
+partial def ovChosen (picks : List (Nat × String)) : SExpr → SExpr :=
+  Choice.mapE fun
+    | .app p (.ident _ "$inlineOv") (.ident q f :: .int _ id :: _ :: cands) false =>
+      let k? : Option Nat := (picks.lookup id.toNat).bind fun o => ((o.splitOn "$ov").getLast?).bind (·.toNat?)
+      match k?.bind (cands[·]?) with
+      | some c => some (ovChosen picks c)
+      | none => some (.app p (.ident p "$ovUnresolved") [.ident q f] false)
+    | _ => none
+
 mutual
 partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
   match se with
@@ -3920,6 +3945,14 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
   -- (a continuation's body, #335: clauses lifted already, failing where their
   -- first filter does, then the values)
   | .app p (.ident _ "$forFirst") [.block _ clauses, body] false => elabFor ctx p clauses body (prepared := true) (firstDecides := true)
+  -- (#283) a call of an overloaded function with several values, as
+  -- written, in the elaboration for types: the overload it takes noted
+  | .app _ (.ident _ "$ovPick") [.int _ id, .ident _ f, call] false =>
+    elabE { ctx with ovPick := some (id.toNat, f) } call exp
+  | .app p (.ident _ "$inlineOv") (.ident _ f :: _) false =>
+    eerr p s!"a call of {Choice.shownFnName f}, which is overloaded and has several values, is supported in the body of a function or method only, for now (#283)"
+  | .app p (.ident _ "$ovUnresolved") [.ident _ f] false =>
+    eerr p s!"internal: which overload of {Choice.shownFnName f} this call takes (#283)"
   | .app p (.ident _ "$inline") (.ident _ f :: _) false =>
     if ctx.inTaking then
       if ctx.liftWhy != "" then
@@ -4190,7 +4223,7 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
   | .logicLit p e =>
     let e := (Choice.takeFirst? e (choiceOrder ctx)).getD e
     let r ← elabE { ctx with canFail := true, inTaking := true } e none
-    if !(r.e.mayFail ctx.sigProg) && (← get).fnNeeds.isEmpty then eerr p "logic{…} needs an expression that can fail"
+    if !(r.e.mayFail ctx.sigProg) && (← get).fnNeeds.isEmpty && !ctx.typeOnly then eerr p "logic{…} needs an expression that can fail"
     return ⟨Expr.logicE r.e, .logic⟩
   | .ite p conds thenE elseE =>
     -- (a cast that refines type arguments, as the whole condition, #243,
@@ -4253,7 +4286,7 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
       else elabSeq { ctx with canFail := true, inTaking := true } conds none
     -- (not while a function value is asked for, #214, #231: a call through
     -- it may fail once its class is made, in the elaboration that follows)
-    if !(rc.e.mayFail ctx.sigProg) && (← get).fnNeeds.isEmpty then
+    if !(rc.e.mayFail ctx.sigProg) && (← get).fnNeeds.isEmpty && !ctx.typeOnly then
       eerr p "the condition of this if cannot fail (Verse requires a failable condition)"
     let thenCtx := { ctxT with canFail := ctx.canFail, inTaking := ctx.inTaking }
     match elseE with
@@ -4836,7 +4869,11 @@ partial def elabAppBase (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (b
       return ⟨.seq (.assign tv r.e) checks, .refine name⟩
     else
     if let some ovs := ctx.types.overloads.lookup name then
-      resolveOverload ctx p name ovs ctx.sig? (fun o => elabApp ctx p (.ident p o) args bracket exp) args
+      resolveOverload ctx p name ovs ctx.sig? (fun o => do
+        -- (#283) the overload an `$inlineOv`'s call as written takes
+        if let some (id, f) := ctx.ovPick then
+          if f == name then modify fun st => { st with ovPicks := (id, o) :: st.ovPicks }
+        elabApp { ctx with ovPick := none } p (.ident p o) args bracket exp) args
     else
     -- (a soft built-in the program defines is the program's)
     let builtinName := if (softBuiltins.contains name || name == "any") && (ctx.sig? name).isSome then "$program" else name
@@ -5934,7 +5971,7 @@ partial def elabBranchAlts (ctx : Ctx) (p : Pos) (i : SExpr) (sty : Option STy) 
     | some cs =>
       let (rc, cT) ← if Choice.hasChoice cs (choiceOrder ctx) then elabOneClauses { ctx with canFail := true } cs
         else elabSeq { ctx with canFail := true, inTaking := true } cs none
-      if !(rc.e.mayFail ctx.sigProg) && (← get).fnNeeds.isEmpty then
+      if !(rc.e.mayFail ctx.sigProg) && (← get).fnNeeds.isEmpty && !ctx.typeOnly then
         eerr p "the condition of this if cannot fail (Verse requires a failable condition)"
       conds := conds.push (some rc.e)
       ctxs := ctxs.push { cT with canFail := ctx.canFail, inTaking := ctx.inTaking }
@@ -6753,6 +6790,16 @@ partial def elabCase (ctx : Ctx) (p : Pos) (scrut : SExpr) (arms : List (Option 
   let (body, ty) ← elabArms arms
   return ⟨.seq (.assign t rs.e) body, ty⟩
 end
+
+/-- (#283) `elabStmt` of a body whose calls of overloaded functions with
+    several values are resolved first: an elaboration for types, each call
+    as written (`ovForTypes`), noting the overload each takes; then each
+    call its chosen overload's inlined call (`ovChosen`). -/
+def elabBodyOv (ctx : Ctx) (body : SExpr) (ret : Option Ty) (st0 : ESt) : Except String ((R × Ctx) × ESt) := do
+  if !Choice.anyE (fun | .app _ (.ident _ "$inlineOv") _ false => true | _ => false) body then
+    return ← (elabStmt ctx body ret).run st0
+  let ((_, _), stT) ← (elabStmt { ctx with typeOnly := true } (ovForTypes body) ret).run st0
+  (elabStmt ctx (ovChosen stT.ovPicks body) ret).run st0
 
 /-- An elaborated program and the certificate under which it type-checks:
     `prog.check`, `prog.checkTypes sigs slotTys` and `prog.checkControl` hold,
@@ -9579,7 +9626,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       match top with
       | .const _ _ _ body =>
         let ctx : Ctx := { sigs := sigs.toList ++ gsigs.toList, sigProg := mkSigProg sigs, types := env }
-        match (elabStmt ctx body (some sigs[idx]!.ret)).run { env } with
+        match elabBodyOv ctx body (some sigs[idx]!.ret) { env } with
         | .ok (_, st) =>
           let fx := heapFx.filter fun k => st.fx.any (·.1 == k)
           if fx != sigs[idx]!.fx then
@@ -9591,7 +9638,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       | .fn _ n ps _ _ _ body =>
         if (n.splitOn "$default$").length > 1 then
           let ctx : Ctx := { sigs := sigs.toList ++ gsigs.toList, sigProg := mkSigProg sigs, types := env }
-          match (elabStmt ctx body (some sigs[idx]!.ret)).run { env } with
+          match elabBodyOv ctx body (some sigs[idx]!.ret) { env } with
           | .ok (_, st) =>
             let fx := heapFx.filter fun k => st.fx.any (·.1 == k)
             if fx != sigs[idx]!.fx then
@@ -9605,7 +9652,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
           let ctx : Ctx := { sigs := sigs.toList ++ gsigs.toList, sigProg := mkSigProg sigs, types := env,
                              locals := locals.reverse, retTy := .void,
                              inBlock := true, selfClass := some ((n.dropEnd ".$block".length).toString) }
-          match (elabStmt ctx body (some .void)).run { env, nslots := ps.length, slotTys := s.params.toArray } with
+          match elabBodyOv ctx body (some .void) { env, nslots := ps.length, slotTys := s.params.toArray } with
           | .ok (_, st) =>
             let fx := heapFx.filter fun k => st.fx.any (·.1 == k)
             if fx != s.fx then
@@ -9627,7 +9674,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
                              locals := locals.reverse, retTy := .void, dictBase := ps.length,
                              dictVars := g.tparams.map (·.1),
                              selfClass := some ((n.dropEnd ".$block".length).toString) }
-          match (elabStmt ctx body (some .void)).run
+          match elabBodyOv ctx body (some .void)
               { env, nslots := ps.length + hidden.length, slotTys := (g.params ++ hidden).toArray } with
           | .ok (_, st) =>
             let fx := heapFx.filter fun k => st.fx.any (·.1 == k)
@@ -9841,8 +9888,9 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
                          | _ => none }
     let hidden := dictTps.map fun (v, c) => Ty.param v c
     let arity := ps.length + hidden.length - selfTps.length
-    let ((r, _), st) ← (elabStmt ctx body (some ret)).run
-      { env, nslots := ps.length + hidden.length, slotTys := (ptys ++ hidden).toArray }
+    let st0 : ESt := { env, nslots := ps.length + hidden.length, slotTys := (ptys ++ hidden).toArray }
+    -- (#283) its calls of overloaded functions with several values chosen
+    let ((r, _), st) ← elabBodyOv ctx body (some ret) st0
     let (e, st) ← (coerce p r ret).run st
     let e := if ret == .void then Expr.seq e (.lit .void) else e
     let selfInits : List Expr := (dictTps.drop (hidden.length - selfTps.length)).map fun (v, _) =>
@@ -9884,7 +9932,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       if sig.ret.holdsMutable env then
         throw s!"{p.show}: the constant {n} would hold an object with var fields or of a <unique> class, which would be a new one at each use: make it a function"
       let ctx : Ctx := { sigs := allSigs, sigProg, types := env }
-      let (r, st) ← (elabStmt ctx body (some sig.ret)).run { env }
+      let (r, st) ← elabBodyOv ctx body (some sig.ret) { env }
       let (e, st) ← (coerce p r.1 sig.ret).run st
       fnNeeds := fnNeeds ++ st.fnNeeds
       castNeeds := castNeeds ++ st.castNeeds
