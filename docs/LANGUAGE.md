@@ -772,7 +772,11 @@ Main():void =
   back or kept as the caller's are; the caller needs the callee's declared
   effects, as for any call. With named parameters, as at any call: the
   positional arguments, then the named ones as written, then the defaults
-  of those omitted, each seeing only the parameters before it (#283).
+  of those omitted, each seeing only the parameters before it (#283); a
+  generic one's (or a generic class's method's) type arguments are inferred
+  as at a call: from the arguments given, named ones too, then from the
+  defaults of those omitted for a type parameter nothing else determines
+  (#283).
 
   An overloaded function may have several values too (#283): a call takes
   the overload its arguments fit, as any call does, and has that
@@ -920,8 +924,8 @@ Main():void =
   use have type parameters (`Self` of a generic class among them), an
   overloaded one with an overload that calls the function's own name
   (a generic one's type arguments are inferred from the
-  arguments where it is inlined, as at a call), a recursive or generic one
-  with named parameters, one with a `defer:` of its own (in its body, not in a block inside it), one with a `return`
+  arguments where it is inlined, as at a call, named ones too), a recursive
+  one with named parameters, one with a `defer:` of its own (in its body, not in a block inside it), one with a `return`
   other than in an `if`'s branches, or recursive with a `return`, a method whose name another class or interface
   also has, overridden in a class that fixes or adds a generic class's type arguments, generic, `<suspends>` or using `(super:)`, one used as a function value, and, since its body is inlined where other names may be
   in scope, one whose name is also the name of a parameter, local, field or
