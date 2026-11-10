@@ -286,6 +286,9 @@ MVM = 'nomvm' not in flags
 # the first, so the front end compiles that rest once as a continuation ($cont, #335). A
 # separate generator decides, so seeds keep their other choices.
 R5 = random.Random(seed * 1000003 + 338)
+# ---- #342: the same in a for (two composed choices first, so the clauses after the first and
+# the body become one continuation, $contf); a generator of its own keeps the rest as they were.
+R6 = random.Random(seed * 1000003 + 342)
 # ---- #328 (with mvm): at times the test's class overrides Mv with several values of its own,
 #   MvT<override>(MpT:int):int = MpT * 3 | (super:)MvT(MpT) | MpT - 1
 # Run, the fields and the base MvT are then in a parent class, so the bare MvT(..) in Run
@@ -1915,7 +1918,7 @@ for ti in range(NT):
     n = R.randint(1, 4)
     lastval = kind in ('first', 'formacro', 'ifmacro', 'option', 'or')
     cl, scope = gen_clauses([], vars_, 0, n, allow_gen=isfor, lastval=lastval, isfor=isfor)
-    if not isfor and ALTCH and R5.random() < 0.35:
+    if ALTCH and ((not isfor and R5.random() < 0.35) or (isfor and R6.random() < 0.35)):
         two = []
         for _ in range(2):
             alt1 = ('tell', fresh("t"), leaf([], vars_))
