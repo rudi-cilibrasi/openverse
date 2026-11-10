@@ -1110,6 +1110,10 @@ structure Ctx where
   /-- The effects the function being elaborated allows (#335): a
       continuation's, which runs only where that code would. -/
   fnFx : List String := []
+  /-- Elaborating only for a type, apart (an `if`'s join, #331): no function
+      of its own an earlier elaboration asked for (#275, #335), which is
+      keyed by place and may take clauses that bind other names. -/
+  typeOnly : Bool := false
 
 /-- A lazily taken call where the first success is taken (#246): its
     function, where, the code it runs once for all the values of an item,
@@ -2532,6 +2536,16 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
         let after := fs.drop (j + 1)
         let moreCl := more.flatMap fun (g', fs') => g' :: fs'
         let some (.decl gp x xty _ (.app _ _ alts _)) := fs[j]? | eerr p "internal: an exclusive choice"
+        -- (an `if`'s, #331, with no type written: its branches' join, as the
+        -- `if`'s value has, found by elaborating it apart; that code is not kept)
+        let xty ← match xty, alts.findSome? (fun | .app _ (.ident _ "$joinOf") (i :: l) false => some (i, l.head?) | _ => none) with
+          | none, some (i, place) => do
+            let st ← get
+            -- (for `set L = if …`, at `L`'s type)
+            let (_, ty, _) ← elabBranchAlts { cA with canFail := true, inTaking := true, typeOnly := true } gp i none place
+            set st
+            pure (some ty.toSTy)
+          | t, _ => pure t
         let alts : List (List SExpr × SExpr) := alts.filterMap fun
           | .app _ (.ident _ "$alt") [.block _ gs, r] false => some (gs, r)
           | _ => none
@@ -2608,7 +2622,8 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
           -- (not where the body may fail: a failure would fail one call, not
           -- the for, #342's review)
           if restCl.any isCF && !hasLoop && !bodyFail && forBodySafe c body then
-            let req := c.types.loopRequests.find? (·.key == "f" ++ contKey c gp b.name (b.alts ++ restCl ++ [body]))
+            let req := if c.typeOnly then none else
+              c.types.loopRequests.find? (·.key == "f" ++ contKey c gp b.name (b.alts ++ restCl ++ [body]))
             let fits (l : Choice.FirstLift) : Bool :=
               (l.specs.filter (["reads", "writes", "allocates"].contains ·)).all c.fnFx.contains
             if let some l := req then
@@ -5721,7 +5736,7 @@ partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
       -- (when what it runs once for all the values of an item has effects,
       -- asked for by an earlier elaboration: a call of a function of its
       -- own that runs the clauses after it too, then the names they bind)
-      if let some l := ctx.types.loopRequests.find? (·.key == firstKey ctx p lp b.name rest) then
+      if let some l := (if ctx.typeOnly then none else ctx.types.loopRequests.find? (·.key == firstKey ctx p lp b.name rest)) then
         let t := s!"$ft{p.line}_{p.col}"
         let get (i : Nat) : SExpr := .app p (.ident p t) [.int p (i : Int)] false
         return ← elabOneGo ctx ([.decl p t none false (.app p (.ident p l.name) l.args true)] ++
@@ -5807,7 +5822,7 @@ partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
         -- this changes between elaborations)
         let hasLoop := (b.alts ++ rest).any (Choice.anyE fun | .app _ (.ident _ "$loop") _ _ => true | _ => false)
         if rest.any isComposed && !hasLoop then
-          let req := ctx.types.loopRequests.find? (·.key == contKey ctx p b.name (b.alts ++ rest))
+          let req := if ctx.typeOnly then none else ctx.types.loopRequests.find? (·.key == contKey ctx p b.name (b.alts ++ rest))
           -- (asked for where more effects are allowed than here, as in a
           -- function of its own of a call taken lazily, #246: copied)
           let fits (l : Choice.FirstLift) : Bool :=

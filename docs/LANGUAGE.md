@@ -693,12 +693,18 @@ Main():void =
     `R`'s lifted code, as `set` does.
 
   An `if … else if … else …` whose branches are choices or plain values
-  (not blocks) is itself a choice (#235). Its conditions run once and pick a branch, whose
+  (not blocks) may stand where a choice may (#235). Its conditions run once and pick a branch, whose
   alternatives are then its values, seeing the names its conditions bind:
 
   ```verse
   for (Z := if (V := M?) then (V | V * 10) else 0) { … }   # V, V * 10; or 0
   ```
+
+  The `if` itself adds no choice (#331): only the choices the program
+  reaches are generators. In a `for`, when the branch it picks is a plain
+  value, a value the filters after it reject undoes what came before it,
+  as the same function written with a `return` does (#314). When that
+  branch is a choice, the choice is a generator, which keeps it.
 
   A choice inside a block is lifted with the block's clauses (#283): they
   become the failure context's, in order, so what they do is undone or kept

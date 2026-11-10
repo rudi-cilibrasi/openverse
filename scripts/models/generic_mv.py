@@ -307,7 +307,9 @@ class Producer:
             return [("choice", [V(a["X"]), self.expand({"X": a["Y"], "Y": a["X"], "N": a["N"] - 1}, var)])]
         if k == "I3": return [("choice", [V(a["X"]), V(a["Y"]), V(a["Z"])])]
         if k == "IIf":
-            return [("choice", [V(a["X"]), V(a["Y"])])] if a["C"] > 0 else [("choice", [V(a["Y"])])]
+            # (#331: an if adds no choice of its own; a branch without one is
+            # its value, no generator, as an if with a return is not, #314)
+            return [("choice", [V(a["X"]), V(a["Y"])])] if a["C"] > 0 else V(a["Y"])
         if k == "IArr":
             xs = a["A"][1]
             alts = [(V(xs[i]) if 0 <= i < len(xs) else [("cond", False)]) for i in (0, 2, 1)]
@@ -326,7 +328,8 @@ class Producer:
             return inner + [("cond", a["K"] > 0)]
         if k == "ICmp":
             if not meq(a["X"], a["Y"]): return [("choice", [V(a["X"]), V(a["Y"])])]
-            return [("choice", [V(a["X"])])]
+            # (#331: the else branch, without a choice of its own, is its value)
+            return V(a["X"])
         if k in ("LElems", "LFx", "LFx2"):
             xs, i = a["A"][1], a["I"]
             out = []

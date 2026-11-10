@@ -36,9 +36,11 @@ whose branches are choices or plain values, anywhere a choice may be. The
 model, from LANGUAGE.md and the PR text only: its conditions run where the if
 is written, once, each a first-success context of its own (kept if it
 succeeds, rolled back if it fails), in order; the first that succeeds picks
-its branch (else the last); the if is then a choice over the picked branch's
-alternatives (a choice point even when it has one, as "is itself a choice"
-says), each evaluated in the state the condition left, seeing its names.
+its branch (else the last); the if then gives the picked branch's
+alternatives, each evaluated in the state the condition left, seeing its
+names. Since #331 the if adds no choice of its own: a branch with one
+alternative is no generator, as an if with a return is not (#314); only
+the choices the program reaches count.
 
 usage: gen-ex.py SEED OUTDIR [flags...]   -> OUTDIR/p.verse, OUTDIR/p.expected
 flags: heavy     (with bif: more of them, longer chains, longer conditions)
@@ -1673,6 +1675,8 @@ def run_body(stmts, val, st, k, mode):
 
 def bif_alts(alts, st, k, mode):
     if 'cf' in flags:
+        return ev(alts[0], st, k, mode)
+    if len(alts) == 1:     # (#331: a branch without a choice of its own is no generator)
         return ev(alts[0], st, k, mode)
     return choice_point([(lambda s, k2, a=a: ev(a, s, k2, mode)) for a in alts], st, k, mode)
 
