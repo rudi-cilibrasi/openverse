@@ -48,6 +48,20 @@ import OpenVerse.Core.TypeCheck
 namespace OpenVerse.Front.Suspend
 open OpenVerse
 
+/-- The error of a call that opens the frame of callee class `tag`, which was
+    not made as an opened override's (#394): `lowerConcurrency` lowers again
+    with it opened (`openedTag?`). -/
+def openedMissing (tag : Nat) : String :=
+  s!"internal error: an opened override without `newCell` [frame class {tag}]"
+
+/-- The frame class of an `openedMissing` error, which the lowering may
+    have prefixed (`in f: …`). -/
+def openedTag? (msg : String) : Option Nat :=
+  match msg.splitOn "without `newCell` [frame class " with
+  | [_, rest] => (rest.takeWhile Char.isDigit).toNat?
+  | _ => none
+
+
 /-- What a call of a suspends function needs of it: its frame class and
     functions. -/
 structure Callee where
@@ -1175,7 +1189,7 @@ partial def suspendSelfOpen (us : List Nat) (y : Nat) (c : Callee) (rs : List Ex
   let env ← read
   let some (_, _, resumeFn, cancelFn) := c.selfFns
     | throw "internal error: a refined call without helpers"
-  if cells.isEmpty then throw "internal error: an opened override without `newCell`"
+  if cells.isEmpty then throw (openedMissing c.tag)
   let some ty := (← get).Γ[y]? | throw "internal error: a refined call's receiver"
   -- (the value of a refined call is always bound, so it has a type)
   let some τ := env.expTy | throw "internal error: a refined call's value has no expected type"
