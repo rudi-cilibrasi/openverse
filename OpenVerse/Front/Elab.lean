@@ -6800,6 +6800,60 @@ def subTops : Except String (List STop) :=
 def subVoidTops : Except String (List STop) :=
   parsePrelude subVoidPrelude ["subscription", "Live", "Handlers", "Hs", "H", "S", "F", "X", "Head", "signalAll", "subev0"]
 
+/-- (#53) An interface that gives a parent interface other type arguments
+    than its own type parameters (`c2(t) := interface(container([]t))`) and
+    a default body for one of that parent's methods (`Get<override>():[]t`):
+    each class that lists it, giving it its own type parameters by name, and
+    does not override the method itself, gets that body as an override of
+    its own, with the interface's type parameters renamed to the class's.
+    A dispatch from the parent that opens the class's type parameters
+    reaches the class's copy, which reads them from its receiver's hidden
+    fields as any override does; the interface's own, shared by all its
+    classes, would need them as hidden arguments, which such a dispatch
+    cannot pass. (Not for a body with `(super:)`, whose meaning would move.) -/
+def copyIfaceDefaults (tops : List STop) : List STop :=
+  let ifaces : List (String × List TParam × List STy × List STop) := tops.filterMap fun
+    | .classDef _ n tps _ parents true _ _ ms => some (n, tps, parents, ms)
+    | _ => none
+  let pinned (tps : List TParam) (parents : List STy) : Bool := parents.any fun
+    | .app _ as => as.length != tps.length || (as.zip tps).any fun (a, tp) => match a with
+      | .name x => x != tp.name
+      | _ => true
+    | _ => false
+  let usesSuper (b : SExpr) : Bool := Choice.anyE (fun
+    | .ident _ n | .member _ _ n => (n.splitOn "(super:)").length > 1
+    | _ => false) b
+  tops.map fun
+    | .classDef cp n tps specs parents false fields ovs ms =>
+      let own := ms.filterMap fun | .fn _ m .. => some m | _ => none
+      let extra : List STop := parents.flatMap fun p =>
+        let (q, qa) : String × List STy := match p with
+          | .app q as => (q, as)
+          | .name q => (q, [])
+          | _ => ("", [])
+        match ifaces.find? (·.1 == q) with
+        | some (_, itps, iparents, ims) =>
+          if !pinned itps iparents then [] else
+          let names := qa.filterMap fun | .name x => some x | _ => none
+          if names.length != itps.length || !names.all (fun x => tps.any (·.name == x)) then [] else
+          let ρ := (itps.map (·.name)).zip names
+          ims.filterMap fun
+            | .fn mp m ps mtps effs ret body =>
+              if effs.contains "override" && !effs.contains "$abstract" && !own.contains m && !usesSuper body &&
+                  !mtps.any (fun tp => names.contains tp.name) then
+                let ps' : List SParam := ps.map fun sp =>
+                  ({ sp with ty := Choice.styRename ρ sp.ty, «default» := sp.default.map (Choice.renameTypes ρ) } : SParam)
+                some (.fn mp m ps' mtps effs (Choice.styRename ρ ret) (Choice.renameTypes ρ body))
+              else none
+            | _ => none
+        | none => []
+      -- (one copy per method, from the first interface listed that gives it)
+      let extra := extra.foldl (fun acc t => match t with
+        | .fn _ m .. => if acc.any (fun | .fn _ m' .. => m' == m | _ => false) then acc else acc ++ [t]
+        | _ => acc) []
+      .classDef cp n tps specs parents false fields ovs (ms ++ extra)
+    | t => t
+
 /-- An error of the lowering in function `name` (#156): with the position of
     its definition among `tops`. -/
 def inFnMsg (tops : List STop) (name msg : String) : String :=
@@ -7911,8 +7965,8 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   -- function values (#210): the function types' interfaces, and a class
   -- for each function used as a value
   -- (the entry expression is scanned too)
-  let allTops00 := FnValues.desugar (resolved.take (resolved.length - rawEntry.length) ++ helpers)
-    (resolved.drop (resolved.length - rawEntry.length)) (opts.fnRequests.map fun (n, t) => (n, t.toSTy))
+  let allTops00 := copyIfaceDefaults (FnValues.desugar (resolved.take (resolved.length - rawEntry.length) ++ helpers)
+    (resolved.drop (resolved.length - rawEntry.length)) (opts.fnRequests.map fun (n, t) => (n, t.toSTy)))
   let entryTop := resolved.drop (resolved.length - rawEntry.length)
   -- the command line: `Args`, and an entry expression
   let defines (n : String) := allTops00.any fun
