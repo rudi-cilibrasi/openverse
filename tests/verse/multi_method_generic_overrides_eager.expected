@@ -1,0 +1,11 @@
+w 1
+w 2
+w 4
+w 3
+v 1
+v 2
+v 4
+v 3
+s b
+s a
+exit=0

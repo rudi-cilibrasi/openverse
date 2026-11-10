@@ -1037,19 +1037,19 @@ partial def styMentions (tps : List String) : STy → Bool
 partial def dispatchBlocks (e : SExpr) : SExpr :=
   mapE (fun
     | .app _ (.ident _ "$dispatch") (_ :: .block bp tmpl :: as) false =>
-      -- (a generic family's, #283: no `$tparams` grouping here, so its
-      -- type parameters' names are left out of the written types)
-      let tps : List String := match tmpl.head? with
-        | some (.app _ (.ident _ "$tparams") (_ :: ts) false) => ts.filterMap fun
-            | .tuple _ [.ident _ n, _] => some n
-            | _ => none
-        | _ => []
-      let tmpl := if tps.isEmpty then tmpl else (tmpl.drop 1).map (mapE fun
-        | .decl q x (some t) v rhs => if styMentions tps t then some (.decl q x none v rhs) else none
-        | _ => none)
+      -- (a generic family's, #283: its receiver and arguments bound
+      -- together, `$params`, as `bindParams` binds them where the call is
+      -- inlined, so the receiver is at the declaring class here too, and
+      -- the type parameters are named for the written types after)
+      let (marks, tmpl) := match tmpl with
+        | m@(.app _ (.ident _ "$tparams") _ false) :: rest => ([m], rest)
+        | _ => ([], tmpl)
       let binds := (tmpl.zip as).map fun
         | (.decl q x t v _, a) => SExpr.decl q x t v (dispatchBlocks a)
         | (d, _) => d
+      let binds := match marks with
+        | [.app _ _ tps _] => [.app bp (.ident bp "$params") (.block bp binds :: tps) false]
+        | _ => binds
       let val : List SExpr := match tmpl.getLast? with
         | some (.decl q x _ _ _) => [.ident q x]
         | _ => []
