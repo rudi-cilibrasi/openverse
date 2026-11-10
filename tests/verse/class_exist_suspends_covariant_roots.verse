@@ -1,7 +1,6 @@
 # two first declarations with different results (a class's and an interface's),
 # one override implementing both, called through a dispatch that opens its
 # class's type parameters (#209): a cell per declaration
-# two roots (class and interface), plain override and qualified ones
 expr(t:type) := class<abstract>:
     Copy()<suspends>:expr(t)
     Eval()<suspends>:t

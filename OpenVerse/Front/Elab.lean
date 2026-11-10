@@ -7208,10 +7208,13 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
   -- (and the other result cells such a frame keeps, for callers that
   -- expect another declared result no cast serves, #209: each with its
   -- `newCell`, in a block after the `own` functions)
-  let moreOf (j : Nat) : List VTy := match lows[j]? with
+  -- (computed once: each lookup and each offset reads the arrays)
+  let moreArr : Array (List VTy) := (List.range lows.length).toArray.map fun j => match lows[j]? with
     | some (gi, _, _) => if opened j then ((sigOf gi).map fun s => (declaredLevels env allS s).2).getD [] else []
     | none => []
-  let moreOff (j : Nat) : Nat := ((List.range j).map fun i => (moreOf i).length).sum
+  let offArr : Array Nat := moreArr.foldl (fun acc m => acc.push (acc.back?.getD 0 + m.length)) #[0]
+  let moreOf (j : Nat) : List VTy := moreArr[j]?.getD []
+  let moreOff (j : Nat) : Nat := offArr[j]?.getD 0
   let L := lows.length
   let ownBase := nFns + 4 * L
   let moreBase := ownBase + 4 * L

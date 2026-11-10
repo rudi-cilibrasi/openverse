@@ -963,6 +963,8 @@ and journals every write made in a condition (for rollback). So:
   own (in a block after the `own` functions, `declaredLevels`); its
   `resumeOwn` writes the result to every cell, each above its own type,
   and a caller passes the cell whose type is its refined one (#209).
+  Every frame of such an override makes all its cells, also where its
+  callers use only one (a cost of a cell's allocation and default).
   Slots of the override's
   frame whose types mention its class's added type parameters start as
   the receiver's hidden fields (`$w`), as in its body.
