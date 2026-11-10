@@ -1,8 +1,8 @@
 # a recursion of depth 400 whose every level waits on its child, which sleeps
-# 400 ticks: each pass of the scheduler resumes the whole chain from its root,
-# so the program makes about 400 × 400 resumptions (DESIGN.md, "Each pass
-# resumes a whole chain"); a baseline for a scheduler that resumes the waiting
-# leaf directly
+# 400 ticks: the scheduler resumes the waiting leaf directly (#362; DESIGN.md,
+# "Resuming the waiting frame directly"), so the cost is linear in the depth
+# (before, each pass resumed the whole chain from its root: about 400 × 400
+# resumptions)
 Deep(N:int)<suspends>:int =
     if (N = 0):
         for (I := 1..400):

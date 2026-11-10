@@ -986,13 +986,46 @@ and journals every write made in a condition (for rollback). So:
   (#179).
 
 Values stored in a frame, such as strings or arrays in slots, are kept
-like any object's fields (see "Objects in the C runtime"). Each pass
-resumes a whole chain of suspended calls from its root, so a recursion of
-depth N that waits at every level costs O(N²) calls per tick. (Each pass
-costs O(N): `tests/bench/deep_chain.verse`, whose leaf at depth 400 sleeps
-400 ticks, one pass each, makes about 160,000 resumptions, 1.5 s in the
-reference interpreter and 0.2 s in C; resuming the waiting leaf directly
-would need another resumption design.)
+like any object's fields (see "Objects in the C runtime").
+
+**Resuming the waiting frame directly (#362).** A pass that resumes a
+chain of suspended calls from its root goes through every frame down to
+the one that waits, so a recursion of depth N that waits at every level
+would cost O(N) per pass and O(N²) per tick. In a program where chains can
+get deep (a suspends function calls itself, directly or through others, or
+a chain of calls has more than `leafDepthMin` = 4 of them; `leafy` in
+`lowerConcurrency`), the scheduler resumes a root's waiting frame directly
+instead:
+
+- A frame that waits records itself in the scheduler (`$Leaf`, after the
+  scheduler's own fields), unless a frame it called did; each frame above
+  counts itself (`$LeafDepth`; -1: none recorded). A root records none,
+  meaning itself. A frame whose wait goes through something resumed only
+  by it (the arms of a `sync`, `race` or `rush`, or a frame called through
+  `Typed.dispatch`, whose frame has no type arguments the scheduler could
+  name) records itself even then (`Suspend.waitsHere`).
+- After the root's resumption, the root keeps the recorded frame in its
+  last field when the frame was found from it at least `leafDepthMin`
+  levels down (nearer, a pass from the root costs no more than the
+  dispatch), and none otherwise. The next pass resumes that frame through
+  `$resumeAny`, a dispatch over the frame classes to each one's
+  `resumeOwn` (generic frames have pins on all their type arguments, so
+  that it opens them). When the frame waits again, it is kept; when it
+  ends, the pass resumes the chain from the root, whose frames seek their
+  suspension points and poll their callees: a frame that is done gives 1
+  at once (`pcF` -1, set when it ends).
+- Recording a frame above the one that waits is always sound (resuming it
+  resumes what it waits for), and none means the whole chain. What a
+  root's first run, inline in another's resumption, records is forgotten
+  after it (`$spawnK$start`, `$branchK$start`), and so is what the arms of
+  a `sync`, `race` or `rush` recorded once it ends.
+- Cancelling is unchanged: it unwinds from the root through each frame's
+  current callee.
+
+`tests/bench/deep_chain.verse` (depth 400, its leaf sleeping 400 ticks) went
+from 1.5 s in the reference interpreter and 0.2 s in C to 0.04 s and under
+0.01 s, linear in the depth. Other programs compile as before, byte for
+byte.
 
 **The scheduler.** The scheduler and `Sleep` are helpers written in Verse
 (`concPrelude`, added to a program with a suspends function, as the
