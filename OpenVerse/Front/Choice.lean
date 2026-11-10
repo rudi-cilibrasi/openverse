@@ -1844,6 +1844,11 @@ def methodFns (tops : List STop) (reserved : List String := []) : Except String 
         return some (s!"a class that has it is generic ({c.replace "::" "."}) and it is overridden", none)
       if !(anc c).contains r then return some (s!"{c.replace "::" "."} overrides it without being below {r.replace "::" "."}", none)
       if let .fn _ _ _ mtps fx _ b := m then
+        -- (an override that is `<decides>` where the declaration is not, or
+        -- the other way round: no family, for the elaborator's check of the
+        -- override's signature to say so, not a call's brackets)
+        let rootDecides := (ds.find? (·.1 == r)).any fun | (_, .fn _ _ _ _ rfx _ _) => rfx.contains "decides" | _ => false
+        if fx.contains "decides" != rootDecides then return some ("", none)
         if !mtps.isEmpty then return some ("is generic", some c)
         if fx.contains "suspends" then return some ("is <suspends>", some c)
         if otherSuper n b then return some ("uses (super:) of another method", some c)
