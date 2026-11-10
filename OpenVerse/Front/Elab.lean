@@ -2318,7 +2318,11 @@ def contKey (ctx : Ctx) (p : Pos) (b : String) (rest : List SExpr) : String :=
   -- choice has the same place, with names of other types)
   let caps := (Choice.namesUsed (.block p rest)).eraseDups.filterMap fun n =>
     (ctx.lookup n).map fun l => s!"{n}:{l.ty.show}"
-  s!"k{p.line}_{p.col}_{p.file}_{b}_{String.intercalate "," caps}"
+  -- (and the places of the clauses after it: the same choice, inside an
+  -- alternative of another one with a continuation, has the call of that
+  -- one after it in the next elaboration, which may use the same names)
+  let places := rest.map fun c => s!"{c.pos.line}.{c.pos.col}"
+  s!"k{p.line}_{p.col}_{p.file}_{b}_{String.intercalate "," caps}_{String.intercalate "," places}"
 
 /-- (#335) The function of its own that the clauses after a composed choice
     (#296) are compiled as, where the first success is taken and those
