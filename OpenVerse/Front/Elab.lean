@@ -845,12 +845,26 @@ partial def Expr.inlineArgTemps (e : Expr) (typed : List (Nat × Expr) := []) : 
       | other => other
   | _ => none
 
+/-- A literal with no type of its own: `false`, an empty `array{}`, `map{}`
+    or `""`, or a tuple holding one. -/
+partial def _root_.OpenVerse.Value.untyped : Value → Bool
+  | .none => true
+  | .arr a => a.isEmpty
+  | .tup vs => vs.any Value.untyped
+  | _ => false
+
+/-- A default with no type of its own: such a literal, or a tuple of
+    values holding one (`(false, 1)`). -/
+partial def _root_.OpenVerse.Expr.untypedDefault : Expr → Bool
+  | .lit v => v.untyped
+  | .prim .mkTup es => es.any Expr.untypedDefault
+  | _ => false
+
 /-- The temporaries of such a call (`seq (assign t v) (… call)`) whose
-    value is an omitted named argument's default with no type of its own:
-    `false`, or an empty `array{}`, `map{}` or `""` (#175). -/
+    value is an omitted named argument's default with no type of its own
+    (`Expr.untypedDefault`, #175). -/
 def _root_.OpenVerse.Expr.untypedArgTemps : Expr → List Nat
-  | .seq (.assign t (.lit .none)) rest => t :: Expr.untypedArgTemps rest
-  | .seq (.assign t (.lit (.arr a))) rest => if a.isEmpty then t :: Expr.untypedArgTemps rest else Expr.untypedArgTemps rest
+  | .seq (.assign t v) rest => if v.untypedDefault then t :: Expr.untypedArgTemps rest else Expr.untypedArgTemps rest
   | .seq _ rest => Expr.untypedArgTemps rest
   | _ => []
 
@@ -5607,10 +5621,17 @@ partial def elabAppBase (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (b
               -- for `false`, an array or a map for `array{}`, `map{}` or
               -- `""`; one at a bare type parameter, `?Extra:t`, cannot,
               -- whatever the implementation's)
-              let holds := match rcE.argTempValue t, τ with
-                | .lit .none, .opt _ => true
-                | .lit (.arr _), .arr _ | .lit (.arr _), .map _ _ => true
+              -- (a tuple's parts each, those with no type of their own)
+              let rec holdsV : Value → Ty → Bool
+                | .none, .opt _ => true
+                | .arr _, .arr _ | .arr _, .map _ _ => true
+                | .tup vs, .tup ts => vs.length == ts.length && (vs.zip ts).all fun (v, u) => !v.untyped || holdsV v u
                 | _, _ => false
+              let rec holds : Expr → Ty → Bool
+                | .lit v, u => holdsV v u
+                | .prim .mkTup es, .tup ts => es.length == ts.length && (es.zip ts).all fun (e, u) => !e.untypedDefault || holds e u
+                | _, _ => false
+              let holds := holds (rcE.argTempValue t) τ
               if !holds then
                 eerr p s!"cannot dispatch {m} to class {e} yet when its default for ?{n} has no type of its own: {m} declares ?{n} as {τ.show} there, which the dispatch would have to open to hold the default; give ?{n} at the call (#209)"
               tv ← fresh τ
