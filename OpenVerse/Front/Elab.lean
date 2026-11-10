@@ -5323,6 +5323,9 @@ partial def elabCast (ctx : Ctx) (p : Pos) (T : String) (args : List SExpr) (bra
   if parametric && env.coreArgs T targs != env.coreArgs S sargs then
     if (Ty.unifyEqs (fun _ _ => none) [] ((env.coreArgs S sargs).zip (env.coreArgs T targs))).isSome then
       eerr p s!"cannot cast {withArticle r.ty.show} to {(Ty.struct T targs).show} here: their type arguments agree only under a refinement, which a cast gives only as the first clause of an if's condition, D := {T}[X], whose branch is then typed under it (#209, #243)"
+    -- (in a class's copy of an interface's default, at type arguments the
+    -- class fixes, it fails, as the interface's own default's would, #53)
+    if !ctx.liftTag.isEmpty then return ⟨.prim .fail [], tty⟩
     eerr p s!"{withArticle r.ty.show} is never {withArticle T}: their type arguments differ, so {T}[…] would always fail"
   -- a reference: a test of its object's class (#34)
   if env.isRefClass S then return ⟨.heap (.isTag (common.map env.tagOf)) [r.e], tty⟩
