@@ -836,7 +836,12 @@ Main():void =
   function with several values, its clauses have no choice, and its last
   expression is a choice, or an `if … else …` whose branches are choices or
   values, each alternative a value with no choice in it or a whole call of
-  the function itself. Its values are taken one at a time, as the place
+  the function itself. So is a strongly connected group of such functions
+  (#283), mutually recursive, each of that shape with its alternatives
+  calls of the group's functions (or, as the last expression or a branch,
+  one such call), all of one result type, none generic, none with named
+  parameters: `Evens(N:int):int = N | Odds(N + 1)` with
+  `Odds(N:int):int = Evens(N + 1)`. Its values are taken one at a time, as the place
   that takes them asks for them, in spatial order (depth first), so an
   infinite one works where the first success is taken, and a value never
   reached is never computed. A call evaluates its arguments first; when

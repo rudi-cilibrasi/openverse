@@ -390,6 +390,13 @@ twice as long as the last one's whose body runs a step and gives that
 iteration's values: adding each value to an array would copy it each time,
 and the C runtime frees a call's cells only when it returns.
 
+A strongly connected group of such functions (#283: each one's alternatives calls of the group's functions; one result type, none generic, no named parameters) is taken lazily too, as one.
+- Its calls' marker is the called one's, with the others in its last expression: `$group(tail, $member(H, params, clauses, r := tail)…)`, each member's names tagged for the site. A call of the function itself is `$rec`, of another member `$recTo(H, …)` (`Choice.markRecG`).
+- In a group, a branch or the last expression may be a single call of another member with no choice of its own (`else Evens(N + 1)`), which a function alone could not be.
+- `elabLoopGenGroupWith` (before the mutual block, #325) builds one stack: an item holds every member's parameters and names, in one tuple, `k` the alternative, numbered across the members, or `-1 - i` to start member `i`. A call pushes the item that starts its callee, with that member's parameters from its arguments.
+- Where the first success is taken with effects, `firstLiftOf` makes one function of its own per member (`FirstLift.extraFns`), which call one another (`firstBody`'s `helperOf`).
+- A function alone keeps `elabLoopGen` and its code byte for byte.
+
 Where the first success is taken, the loop is exact only if what the
 clauses, conditions and arguments do is never to be undone: the Verse
 Calculus nests a failure context per call, so a subtree whose values the
