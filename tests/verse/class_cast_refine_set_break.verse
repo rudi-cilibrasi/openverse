@@ -1,4 +1,4 @@
-# expect: 13:12: the branch of the cast to dup(a), which holds only under a refinement of the type arguments, is compiled as a function of its own, so it cannot both set a var from outside it and have a break that leaves it yet (#243)
+# A refining cast's branch that sets a var from outside it and breaks out (#243): the var is set before the loop is left
 pair(t:type, u:type) := class:
     A:t
     B:u
@@ -9,7 +9,6 @@ F(P:pair(a, b) where a:type, b:type):int =
     loop:
         if (D := dup[P]):
             set N = D.C
-            # (the break would skip setting N after the if)
             break
         else:
             break

@@ -1528,26 +1528,25 @@ elaboration, which compiles the `if` as the dispatch. The cast's target
 class then counts as one that fixes type arguments, so it and the
 classes below it get pins in Verse Core. A suspension in the branch or
 the `else` (the dispatch would have to carry it through the lowering of
-`<suspends>` code) is refused for now. A `return` in the branch, or a
-`break` that leaves it, is rewritten first (`refineEscapes`): each becomes
-a `return` from the branch's function of a tuple that says what to do (an
-option of the enclosing function's result, or a `logic` for a `void`
-one; a `logic` for a `break`), with an option of the branch's value at
-its end, when the `if`'s value is carried (its type known); after the
-`if`, the caller returns or breaks as it says, else takes the value. When
-the value is not carried, the `if` is `void`, or the branch always leaves
-and the `else`'s value is taken after the checks. The branch made so is
-elaborated with that tuple as its `return`s' type (`escRet`), and its
-round-1 type check has no `defer:` of the enclosing function. A `set` of an outside `var` is rewritten first
-(`refineSetsOut`): the branch declares a copy of each such `var`
-(`$set…'N`), uses it in its place, and gives the copies' values with its
-own as a tuple; the `else` gives the `var`s' (with its value, when it has
-one); after the `if`, each `var` is set from the tuple, whose first part
-is the `if`'s value. The new branch is the elaborator's (`made`), so the
-lift carries it (`Lift.body`), and its function sets only its own `var`s.
-A branch that also returns keeps its `return`s, which `refineEscapes` then
-rewrites (the copies are lost on that path, as the function leaves); one
-that also breaks out is refused, as the `var`s would not be set. In a method, the branch's bare
+`<suspends>` code) is refused for now. A `set` of an outside `var`, a `return` in the branch, and a `break` that
+leaves it are rewritten first (`refineExits`): the branch declares a copy
+of each such `var` (`$exit…'N`) and uses it in its place, and every way it
+leaves becomes a value of one tuple: what it says (an option of the
+enclosing function's result, or a `logic` for a `void` one; a `logic` for
+a `break`), its value (as it is when it always ends, as an option when it
+may also leave, or not when the `if` is `void` or the branch always
+leaves, the `else`'s value then taken after), and the copies. A `return`
+or `break` becomes a `return` of that tuple from the branch's function;
+the `else` gives the `var`s' own values. After the `if`, the caller sets
+the `var`s from the tuple first, then returns or breaks as it says, else
+takes the value, so the enclosing function's `defer:`s see what the branch
+set. Each value is bound at its type before it goes in an option, so that
+its failure is the branch's (`option{…}` would take it). The new branch is
+the elaborator's (`made`), so the lift carries it (`Lift.body`); it is
+elaborated with the tuple as its `return`s' type (`escRet`), and its
+round-1 type check has no `defer:` of the enclosing function. With no type
+for the `if`'s value where it is, the `else`'s, found apart
+(`Ctx.typeOnly`), is used, `void` carrying nothing. In a method, the branch's bare
 names of `Self`'s fields and methods are made `Self.member` first
 (`selfQualify`, by the elaborator's own rule for bare names), so its
 function takes `Self` as one of the locals it uses; the lift then carries
