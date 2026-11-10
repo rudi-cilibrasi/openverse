@@ -315,6 +315,10 @@ R12 = random.Random(seed * 1000003 + 371)
 # dispatches on Self, the test's class: the override's alternatives, the middle one the base's
 # two. A second generator decides, so seeds keep their other choices.
 R4 = random.Random(seed * 1000003 + 328)
+# ---- #372 (#283): at times (with mvm) an interface declares Mv, i<T> := interface: MvT(MpT:int):int,
+# and the class that gives it Run implements it, so the bare MvT(..) dispatches from the interface,
+# the family's root. The output is the same. A generator of its own decides, so seeds keep the rest.
+R13 = random.Random(seed * 1000003 + 372)
 # ---- #312, flag rt (on with lazy; nort turns it off): a test's expression may call
 #   RT(RTa:int):int =
 #       RTy := RTa | RTa + 1 | RTa + 2
@@ -2048,13 +2052,15 @@ for ti in range(NT):
             return L
         split = CTX.get('mvm_used') and SNX['ovm']     # (#328: Run in a parent class)
         top = f"{name}b" if split else f"{name}c"
-        M = [f"{top} := class(tbase):", f"    var {vars_[0]}:int = 0",
+        ifc = CTX.get('mvm_used') and R13.random() < 0.5
+        M = ([f"i{ti} := interface:", f"    Mv{ti}(Mp{ti}:int):int"] if ifc else []) + [
+             f"{top} := class(tbase{f', i{ti}' if ifc else ''}):", f"    var {vars_[0]}:int = 0",
              f"    var {vars_[1]}{'<private>' if priv else ''}:int = 0"]
         if ovr and not split:
             M += ["    Nx<override>()<transacts>:int =", "        set Cn += 2", "        Cn - 2"]
         if CTX.get('mvm_used'):
             M.append(f"    Hp{ti}(Hq{ti}:int):int = Hq{ti} * 2")
-            M.append(f"    Mv{ti}(Mp{ti}:int):int = Mp{ti} + Nx() | Mp{ti} + Hp{ti}(N{ti}a)")
+            M.append(f"    Mv{ti}{'<override>' if ifc else ''}(Mp{ti}:int):int = Mp{ti} + Nx() | Mp{ti} + Hp{ti}(N{ti}a)")
         M.append("    Run():void =")
         M += ["    " + l for l in L[3:]]
         if split:

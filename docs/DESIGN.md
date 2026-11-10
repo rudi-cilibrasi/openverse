@@ -273,8 +273,11 @@ receiver where it is inlined, as for any generic function with several
 values (#282); not yet when a class overrides it. `R.M(args)` becomes `C$M(R, args)`, and in the bodies of `C` and
 the classes below it, `M(args)` becomes `C$M(Self, args)`. Without types, `R.M`
 must name that method whatever `R` is: the name must be declared by one
-class and overridden only below it (a family, `MFam`), and by no
-interface. Each implementation becomes its own function `D$M`. A call
+class or interface and overridden only below it (a family, `MFam`); an
+interface's declaration must be abstract (#283: a default, which #53
+copies into classes, is refused), and the dispatch's root is then the
+interface, its receiver typed at it and cast to each implementing class.
+Each implementation becomes its own function `D$M`. A call
 `R.M(args)` of an overridden one is a dispatch,
 `$dispatch(root$M, block{ $r : root := $arg; $a… := $arg; $kv := $excl(…) }, R, args…)`.
 `inlineCalls` makes it an inlined call, its names tagged for the site, so
