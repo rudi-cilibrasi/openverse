@@ -27,3 +27,8 @@ Main()<transacts>:void =
         Print("z {Z}")
     for (Z := if (V := M?, V > 5) then (V | V * 10) else (7 | 8)):
         Print("w {Z}")
+    # (an if as a set's value, #331: the same)
+    var N : int = 0
+    for (A := P("k"), set N = (if (Print("c"), A > 5) then (1 | 2) else 3), N > 5):
+        Print("never")
+    Print("n {N}")

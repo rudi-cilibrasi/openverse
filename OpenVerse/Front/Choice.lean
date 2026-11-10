@@ -758,6 +758,11 @@ def liftClause (isVal : String → Bool) (isField : String → String → Bool) 
     picks one branch, once; only the choices the program reaches generate.
     An `else if` is the else branch's own `if`, made one of these in turn. -/
 def bifToExcl (c : SExpr) : List SExpr :=
+  -- (`set L = if …`'s too, #331: its value bound first, then set, as before)
+  let c := match c with
+    | .decl p x ty false (.app q (.ident q2 "$branchChoiceAt") [_, i] false) =>
+      SExpr.decl p x ty false (.app q (.ident q2 "$branchChoice") [i] false)
+    | c => c
   match c with
   | .decl p x ty false (.app _ (.ident _ "$branchChoice") [i@(.ite ip cs t (some u))] false) =>
     -- (with no type written, its branches' values are at their join, as an
