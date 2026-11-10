@@ -1693,9 +1693,19 @@ structure MFam where
     - `M(args)` in the body of a class below the root is `Self.M(args)`.
     - `(super:)M(args)` is a call of the nearest implementation above. -/
 partial def rwFamCalls (anc : String → List String) (fams : List (String × MFam)) (trial : Bool)
-    (inC : Option String) (e : SExpr) : SExpr :=
-  let rw := rwFamCalls anc fams trial inC
+    (inC : Option String) (e : SExpr) (isIface : String → Bool := fun _ => false) : SExpr :=
+  let rw := fun x => rwFamCalls anc fams trial inC x isIface
   let below (f : MFam) (d : String) : List String := f.impls.filter fun x => x != d && (anc x).contains d
+  -- (#375's review) an interface's default yields to every class's own
+  -- implementation, as dispatch gives: a class's chain wins over the
+  -- defaults of the interfaces it lists
+  let yieldsTo (f : MFam) (d : String) : List String :=
+    if isIface d then (below f d ++ f.impls.filter fun x => x != d && !isIface x).eraseDups else below f d
+  -- (the implementations `(super:)` reaches, nearest first: the class's
+  -- chain, then its interfaces, a derived one before those above it)
+  let superOrder (d : String) : List String :=
+    let ancs := (anc d).drop 1
+    ancs.filter (!isIface ·) ++ (ancs.filter isIface).mergeSort fun a b => (anc a).length ≥ (anc b).length
   -- (a call of one implementation's function in a family with overrides,
   -- the receiver first: one tuple argument to several positional
   -- parameters, and no named one, taken apart after the receiver, as at a
@@ -1750,7 +1760,7 @@ partial def rwFamCalls (anc : String → List String) (fams : List (String × MF
       let alt (d : String) : List SExpr × SExpr :=
         let guard := if d == f.root then SExpr.decl p dn none false (.ident p r)
           else .decl p dn none false (.app p (.ident p d) [.ident p r] true)
-        let nots := (below f d).map fun x => SExpr.notE p (.app p (.ident p x) [.ident p r] true)
+        let nots := (yieldsTo f d).map fun x => SExpr.notE p (.app p (.ident p x) [.ident p r] true)
         (guard :: nots, .app p (.ident q (methodFnName d m)) (.ident p dn :: passed) br)
       let tmpl := [SExpr.decl p r (some (.name f.root)) false (.ident p "$arg")] ++ binds ++
         [.decl p kv f.ret false (mkExcl p (f.impls.map alt))]
@@ -1761,7 +1771,7 @@ partial def rwFamCalls (anc : String → List String) (fams : List (String × MF
       | some f =>
         match recv, inC with
         | .ident _ "(super:)", some d =>
-          match ((anc d).drop 1).find? f.impls.contains with
+          match (superOrder d).find? f.impls.contains with
           | some a => some (plain p q (methodFnName a m) f (.ident q "Self") (args.map rw) br)
           | none => none
         | _, _ => some (call p q m f (rw recv) (args.map rw) br)
@@ -1835,10 +1845,9 @@ def methodFns (tops : List STop) (reserved : List String := []) : Except String 
       return some (s!"another class or interface has a method {n} too, not one it overrides, so a call R.{n}(…) cannot be known to be this one where it is inlined, before types are checked", none)
     for (c, m) in ds do
       let some (_, ii, _, _, tps) := classes.lookup c | return some ("", none)
-      -- (an interface's, #283: the dispatch's root, as a class's, when it
-      -- gives no default implementation, which #53 copies into classes)
-      if ii && !isAbstract m then
-        return some (s!"an interface ({c.replace "::" "."}) gives it a default implementation", none)
+      -- (an interface's, #283: the dispatch's root, as a class's; its
+      -- default implementation, if it gives one, the alternative for the
+      -- classes that have none of their own, as a class's own is)
       -- (a generic class's: a function generic over its type parameters,
       -- #283, inferred from the receiver where it is inlined, as at a call
       -- of a generic one; not yet with overrides, whose dispatch tests
@@ -1868,7 +1877,11 @@ def methodFns (tops : List STop) (reserved : List String := []) : Except String 
     let ret := (ds.find? (·.1 == root)).bind fun | (_, .fn _ _ _ _ _ r _) => some r | _ => none
     let params := ((ds.find? (·.1 == root)).bind fun | (_, .fn _ _ ps _ _ _ _) => some ps | _ => none).getD []
     some (n, { root, impls, direct := impls == [root] && ds.length == 1, ret, params })
-  let rw := rwFamCalls anc
+  -- (which of them are interfaces: their defaults yield to classes', #375)
+  let isIfaceC (c : String) : Bool := match classes.lookup c with
+    | some (_, ii, _, _, _) => ii
+    | none => false
+  let rw := fun fs trial inC e => rwFamCalls anc fs trial inC e isIfaceC
   -- (a method's body as the function's: its members qualified by `Self`,
   -- then `Self` the parameter `$Self`)
   let fnOf (fs : List (String × MFam)) (trial : Bool) (c : String) : STop → Option STop
