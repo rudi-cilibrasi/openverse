@@ -156,6 +156,12 @@ class Producer:
             self.decides = True; self.fx = True
             self.src = ("%s(X:t, Y:t, C:int where t:type)<transacts><decides>:t =\n"
                         "    Print(\"%s {C}\")\n    C > 0\n    X | Y") % (n, n)
+        elif k == "IMeth":
+            # (#365: a generic class's method with several values, reached through a wrapper
+            # that builds the receiver at its own type parameter)
+            self.path = "inlined"; self.params = [("X", "t"), ("Y", "t")]; self.fx = True
+            self.src = ("c%s(t:type) := class:\n    X:t\n    Y:t\n    M%s()<transacts>:t = X | Y\n"
+                        "%s(X:t, Y:t where t:type)<transacts>:t = c%s(t){X := X, Y := Y}.M%s()") % (n, n, n, n, n)
         elif k == "IFx2":
             self.path = "inlined"; self.params = [("X", "t"), ("Y", "t")]; self.fx = True
             self.src = ("%s(X:t, Y:t where t:type)<transacts>:t =\n"
@@ -306,6 +312,7 @@ class Producer:
             if a["N"] <= 0: return [("cond", False)]
             return [("choice", [V(a["X"]), self.expand({"X": a["Y"], "Y": a["X"], "N": a["N"] - 1}, var)])]
         if k == "I3": return [("choice", [V(a["X"]), V(a["Y"]), V(a["Z"])])]
+        if k == "IMeth": return [("choice", [V(a["X"]), V(a["Y"])])]
         if k == "IIf":
             # (#331: an if adds no choice of its own; a branch without one is
             # its value, no generator, as an if with a return is not, #314)
@@ -703,7 +710,7 @@ class Gen:
         self.main.extend(lines)
 
     def program(self):
-        kinds_i = ["I2", "I3", "IIf", "IArr", "IFx", "IFx2", "INest", "ILz", "ICmp", "IW", "IWArr", "IWOpt", "IWPair", "I2i", "I2i"]
+        kinds_i = ["I2", "I3", "IMeth", "IIf", "IArr", "IFx", "IFx2", "INest", "ILz", "ICmp", "IW", "IWArr", "IWOpt", "IWPair", "I2i", "I2i"]
         kinds_l = ["LElems", "LRep", "LTree", "LIf", "LFx", "LFx2", "LFxTree", "LCmp", "LW"]
         kinds_e = ["ERep", "ERev", "ETree", "EW"]
         # one of each path at least, then a few more
