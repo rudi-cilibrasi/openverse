@@ -26,6 +26,9 @@ def ch(p): return R.random() < p
 # (#395: at times the refined branch sets Acc, a var from outside it, read after the if; a
 # generator of its own decides, so seeds keep their other programs)
 R395 = random.Random(seed * 1000003 + 395)
+# (#400: at times a comparison of K comes before the cast, which is then a later clause; a
+# generator of its own decides)
+R400 = random.Random(seed * 1000003 + 400)
 
 INT, STR = ('int',), ('string',)
 def Opt(t): return ('opt', t)
@@ -186,6 +189,7 @@ def mk_func(k):
     f['pre'] = ch(0.4); f['inp'] = ch(0.5); f['outp'] = ch(0.4); f['post'] = ch(0.3)
     f['bump'] = ch(0.4)                       # set D.N += 1 in the branch
     f['aset'] = R395.random() < 0.4           # set Acc += 7 in the branch, Acc printed after (#395)
+    f['precl'] = R400.randint(0, 6) if R400.random() < 0.3 else None   # K > c before the cast (#400)
     f['ebump'] = ch(0.2)                      # set P.N += 10 in the else
     f['fail'] = f['decides'] and ch(0.8) and T != 'mid'
     f['thr'] = R.randint(0, 5)
@@ -208,7 +212,8 @@ def ftext(f):
     L.append(f"    var Acc:int = K")
     if f['acc'] is not None: L.append(f"    set Acc += {f['acc']}")
     if f['pre']: L.append(f'    Print("pre {f["name"]} {{Acc}}")')
-    L.append(f"    R := if (D := {f['T']}[P]{rest_text(f)}):")
+    pre = f"K > {f['precl']}, " if f['precl'] is not None else ""
+    L.append(f"    R := if ({pre}D := {f['T']}[P]{rest_text(f)}):")
     if f['inp']: L.append(f'        Print("in {f["name"]} {{Acc}} {{K}}")')
     if f['bump']: L.append("        set D.N += 1")
     if f['aset']: L.append("        set Acc += 7")
@@ -269,7 +274,7 @@ def run_call(f, o, K, Xv):
     N0 = o['N']
     if f['pre']: out.append(f"pre {f['name']} {acc}")
     rok = False
-    if below(o['cls'], f['T']):
+    if below(o['cls'], f['T']) and (f['precl'] is None or K > f['precl']):
         rok, rout, rdN = run_rest(f, o, K)
     if rok:
         out.extend(rout); o['N'] += rdN
