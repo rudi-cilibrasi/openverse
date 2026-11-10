@@ -1,7 +1,8 @@
 # expect: no class at or below n can be constructed without an instance of itself, so a variable or temporary of type n(t) has no initial value
 # a placeholder that would hold one at a bigger type, through two
 # hierarchies below the interface: refused at once, not after trying every
-# placeholder at every size (#157)
+# placeholder at every size (#157); an n(t) would need an n([]t) first, so no
+# program can build one either
 n(t:type) := interface:
     Next:n([]t)
     Get():t
