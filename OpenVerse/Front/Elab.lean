@@ -2438,7 +2438,7 @@ partial def superNames (e : SExpr) : List (String × Pos × Bool) :=
   match e with
   | .app _ (.member mp (.ident _ "(super:)") m) args _ => (m, mp, true) :: args.flatMap superNames
   | .member mp (.ident _ "(super:)") m => [(m, mp, false)]
-  | _ => (Refine.kids e).flatMap superNames
+  | _ => e.children.flatMap superNames
 
 /-- `e` with its `(super:)M(…)` calls, for the methods `ren` resolves, direct
     calls of the implementations they reach, `Self` first (#243). -/
