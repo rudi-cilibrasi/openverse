@@ -575,10 +575,13 @@ circle := class(shape, labelled):
   - a field of an interface that a class gives type arguments that are not
     a prefix of its own (see below, #351), and such an interface listed by
     a class that has a class parent which does not reach it; a cast from
-    a reference to such an interface to a class or interface with type
-    arguments other than as the first clause of an `if`'s condition, or to
-    one neither above nor below it, and a named argument's default
-    computed by code (not a literal) in a call through one; a cast `T[X]` whose type
+    a reference to such an interface (or one above it) to a class or
+    interface with type arguments, its own or ones it fixes (`c :=
+    class(i1(int), i2(string))`), other than as the first clause of an
+    `if`'s condition, whose branch is then a function of its own as below
+    (#243: it cannot suspend, `return`, and so on), or to one neither above
+    nor below it, and a named argument's default computed by code (not a
+    literal) in a call through one; a cast `T[X]` whose type
     arguments agree with `X`'s only under a refinement (`dup[P]` for
     `P:pair(a, b)`) other than as the first clause of an `if`'s condition, whose
     branch has a `return`, a `break` that leaves it or a `set` of a `var`

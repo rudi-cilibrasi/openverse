@@ -279,15 +279,24 @@ def newArgs (acc : Unit → List (Nat × VTy)) (fs : List VTy) : Option VTy → 
   | some (.ref _ args) => args
   | _ => (List.range (VTy.nvarsL fs)).map fun j => ((acc ()).lookup j).getD VTy.void
 
-/-- (#351) Type arguments from bindings `bound`, at least `n` and as many as
-    pins `ps`: an unbound one its pin (at the others), else any type,
-    `void`. (A class below an interface referred to through views has pins
+/-- (#351) Type arguments from bindings `bound`, and those the pins of bound
+    ones bind, at least `n` and as many as pins `ps`: an unbound one its pin
+    (at the others), else any type, `void`. (A class below an interface referred to through views has pins
     on every type argument, which neither its fields nor the view need
     determine.) -/
 def VTy.fillArgs (ps : List (Option VTy)) (n : Nat) (bound : Nat → Option VTy) : List VTy :=
-  let bs := (List.range (max n ps.length)).map bound
-  let base := bs.map (·.getD VTy.void)
-  bs.zipIdx.map fun (b, j) => match b, ps[j]? with
+  let m := max n ps.length
+  let acc0 : List (Nat × VTy) := (List.range m).filterMap fun j => (bound j).map (j, ·)
+  -- (a bound one's pin binds those it mentions: `dup(t) := class(both(t,
+  -- t))` at a view that binds its second binds its first; as many rounds
+  -- as arguments, for pins that refer along a chain)
+  let round (acc : List (Nat × VTy)) : List (Nat × VTy) := (List.range m).foldl (fun acc j =>
+    match acc.lookup j, ps[j]? with
+    | some t, some (some p) => p.bindVars t acc
+    | _, _ => acc) acc
+  let acc := (List.range m).foldl (fun acc _ => round acc) acc0
+  let base := (List.range m).map fun j => (acc.lookup j).getD VTy.void
+  (List.range m).map fun j => match acc.lookup j, ps[j]? with
     | some t, _ => t
     | none, some (some p) => p.inst base
     | none, _ => VTy.void
@@ -322,7 +331,12 @@ def newProposal (t : Nat) (ps : List (Option VTy)) (acc : Unit → List (Nat × 
     | none => fromFields ()
   | _ =>
     let a := newArgs acc fs m
-    if ps.length ≤ a.length then a else fromFields ()
+    if ps.length ≤ a.length then a else
+    -- (the expected type's first, #351: a class below an interface
+    -- referred to through views has pins on all of its, more than a
+    -- prefix reference gives)
+    let ac := acc ()
+    VTy.fillArgs ps (max a.length (VTy.nvarsL fs)) fun j => a[j]?.orElse fun _ => ac.lookup j
 
 /-- The instantiation `tc` proposes for a call with result type `t`: the
     bindings `acc` from the arguments, completed from the expected type. -/
@@ -1432,8 +1446,14 @@ def checkDefault (S : Sigs) (a : Nat) (Γ : List VTy) : Expr → VTy → Bool
     | some t' => t'.sub t
     | none => false
   | .prim .mkTup ds, .tup ts => checkDefaultL S a Γ ds ts
-  | .heap (.new c) ds, .ref ts args => ts.contains c && VTy.pinsOK (S.pinsOf c) args && match S.classes[c]? with
-    | some fs => checkDefaultL S a Γ ds (fs.map (VTy.inst args))
+  -- (an object of the class at the slot's type arguments, or, with more
+  -- pins than those, #351, at them and those the pins give, a reference
+  -- to it then fitting the slot's by prefix)
+  | .heap (.new c) ds, .ref ts args => match S.classes[c]? with
+    | some fs =>
+      let args' := VTy.fillArgs (S.pinsOf c) args.length fun j => args[j]?
+      VTy.pinsOK (S.pinsOf c) args' && checkDefaultL S a Γ ds (fs.map (VTy.inst args')) &&
+        (VTy.ref [c] args').sub (.ref ts args)
     | none => false
   -- (#351) a slot of a reference type through views: an object of a class
   -- of an entry, at type arguments its view relates to the slot's
@@ -1491,10 +1511,12 @@ theorem checkDefault_sound {S : Sigs} {a : Nat} {Γ : List VTy} : ∀ (d : Expr)
     rename_i c
     cases t with
     | ref ts args =>
-      simp only [checkDefault, Bool.and_eq_true] at h
-      obtain ⟨⟨hc, hpin⟩, h⟩ := h
+      simp only [checkDefault] at h
       split at h
-      · next fs hfs => exact .new hfs (by simpa using hc) hpin (checkDefaultL_sound ds _ h)
+      · next fs hfs =>
+        simp only [Bool.and_eq_true] at h
+        obtain ⟨⟨hpin, hds⟩, hsub⟩ := h
+        exact .sub (.new hfs (List.mem_singleton_self c) hpin (checkDefaultL_sound ds _ hds)) hsub
       · simp at h
     | vref es bs =>
       simp only [checkDefault] at h

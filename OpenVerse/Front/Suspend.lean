@@ -1075,6 +1075,19 @@ partial def suspendSelf (us : List Nat) (y : Nat) (c : Callee) (rs : List Expr) 
     return (seqVoid [arrive, found, poll, pend], .call takeV [.local y, .local w])
   | _, _ => return (seqVoid [arrive, found, poll, pend], vd)
 
+/-- `t` with each part that is a term of `back` replaced by its stand-in
+    (#351: a caller's type variable for the type the dispatch binds it to). -/
+partial def replaceTerms (back : List (VTy × VTy)) (t : VTy) : VTy :=
+  match back.find? fun (a, _) => decide (a = t) with
+  | some (_, b) => b
+  | none => match t with
+    | .arr u => .arr (replaceTerms back u)
+    | .opt u => .opt (replaceTerms back u)
+    | .tup us => .tup (us.map (replaceTerms back))
+    | .ref ts us => .ref ts (us.map (replaceTerms back))
+    | .vref es us => .vref es (us.map (replaceTerms back))
+    | u => u
+
 /-- `suspendSelf` for a generic callee (an override with type parameters of
     its own or of its class, #171): its frame is kept as any generic
     callee's, at the type arguments the dispatch gives (the receiver's,
@@ -1093,12 +1106,12 @@ partial def suspendSelfGeneric (us : List Nat) (y g : Nat) (c : Callee) (rs : Li
   -- (through a view, #351, as `tcDispatchView` does: all of the tested
   -- classes' type arguments the pins mention, fresh, related to the
   -- receiver's by the view)
-  let (N, μ, recv) ← match ty with
+  let (N, μ, recv, back) ← match ty with
     | .ref _ a =>
       let k := openCount env.S us a.length
       let N := max (VTy.nvarsL a) (VTy.nvarsL σs)
       let a' := a ++ VTy.ext N k
-      pure (N, (unify (VTy.pinEqs (commonPins env.S us (a.length + k)) a')).getD VTy.var, VTy.ref us a')
+      pure (N, (unify (VTy.pinEqs (commonPins env.S us (a.length + k)) a')).getD VTy.var, VTy.ref us a', [])
     | .vref ents a =>
       let some φ := viewOf ents us | throw "internal error: a refined call's view"
       let k := openCount env.S us 0
@@ -1114,7 +1127,12 @@ partial def suspendSelfGeneric (us : List Nat) (y g : Nat) (c : Callee) (rs : Li
         match (List.range N).find? fun v => decide (μ v = .var i) with
         | some v => .var v
         | none => .var i
-      pure (N, (fun i => (μ i).subst ρ), VTy.ref us X)
+      let μ' := fun i => (μ i).subst ρ
+      -- (and a type with fresh ones that one of the caller's is bound to,
+      -- `[]$ext1` for `x` through a view `sink([]u)`, is that one in the
+      -- frame's type arguments)
+      let back := (List.range N).filterMap fun v => let t := μ' v; if t.varsBelow N then none else some (t, VTy.var v)
+      pure (N, μ', VTy.ref us X, back)
     | _ => throw "internal error: a refined call's receiver type"
   let acc := VTy.bindVarsL ps ((recv :: σs).map (VTy.subst μ)) []
   let frameTy : VTy := .ref [c.tag] ((List.range c.ntp).map VTy.var)
@@ -1122,6 +1140,7 @@ partial def suspendSelfGeneric (us : List Nat) (y g : Nat) (c : Callee) (rs : Li
     throw "a <suspends> method whose type parameters the call does not determine cannot be dispatched to a class that fixes type arguments yet (#171)"
   let .ref _ fargs := frameTy.subst (callInst acc .void none)
     | throw "internal error: a refined call's frame type"
+  let fargs := fargs.map (replaceTerms back)
   if !VTy.varsBelowL N fargs then
     -- (the types its result cells hold, at the dispatch's instance, each
     -- with its `newCell`)

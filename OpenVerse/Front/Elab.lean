@@ -1504,9 +1504,9 @@ partial def _root_.OpenVerse.VTy.mentionsVar : VTy → Bool
     of its objects that is an `n(args)` for interface `n`, referred to
     through views: those that make `d`'s view of `n` `args`, at `d`'s pins;
     any others `void`. None when no object of `d` is one (its pins fix one
-    that differs, or one of `args` is a type parameter of the code there,
-    which no fixed one equals). -/
-def TyEnv.viewArgs? (env : TyEnv) (n d : String) (args : List Ty) : Option (List Ty) :=
+    that differs, or, `rigid`, one of `args` is a type parameter of the code
+    there, which no fixed one equals). -/
+def TyEnv.viewArgs? (env : TyEnv) (n d : String) (args : List Ty) (rigid : Bool := true) : Option (List Ty) :=
   let vars := env.coreVars d
   let X := (List.range vars.length).map fun j => Ty.param s!"$vw{j}" false
   let atX := X.zipIdx.map fun (x, j) => (pinArg j, x)
@@ -1515,7 +1515,7 @@ def TyEnv.viewArgs? (env : TyEnv) (n d : String) (args : List Ty) : Option (List
     if env.classes.contains m then none else some ((env.fields m ts).map (·.2.1))
   match Ty.unifyEqs coreFields [] ((env.viewOf n d X).zip args ++ pinEqs) with
   | some μ =>
-    if !μ.all (·.1.startsWith "$vw") then none else
+    if rigid && !μ.all (·.1.startsWith "$vw") then none else
     let rest := X.filterMap fun | .param x _ => some (x, Ty.void) | _ => none
     some (((env.sparams.lookup d).getD []).map fun (v, _) => match vars.findIdx? (·.1 == v) with
       | some j => ((X.getD j Ty.void).subst μ).subst rest
@@ -5647,14 +5647,10 @@ partial def elabAppBase (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (b
           for d in ds.reverse do
             let some fname := ctx.implFor? d root m | eerr p s!"class {d} does not implement '{m}'"
             let e := clsOf fname
-            let dsp := (env.sparams.lookup d).getD []
             let vars := env.coreVars d
             -- (each as comparable as the type parameter at its place)
             let X := vars.zipIdx.map fun ((_, t), i) =>
               Ty.param s!"$ext{i}" (match t with | .param _ k => k | _ => false)
-            let dargs := dsp.map fun (v, _) => match vars.findIdx? (·.1 == v) with
-              | some j => X.getD j Ty.void
-              | none => Ty.void
             let view := env.viewOf c d X
             let atX := X.zipIdx.map fun (x, j) => (pinArg j, x)
             let pinEqs := (X.zip (env.corePins d)).filterMap fun (x, pin) => match pin with
@@ -5669,8 +5665,19 @@ partial def elabAppBase (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (b
             let some μF := Ty.unifyEqs coreFields [] (view.zip rargs ++ pinEqs) | continue
             let selfName := s!"$self{slot}"
             let locsF := locs.map fun l => { l with ty := l.ty.subst μF }
+            -- (the implementation's class or interface `e`, above `d`, at
+            -- its places among the opened ones: a class's are a prefix of
+            -- `d`'s, an interface's those its view gives; not through `d`'s
+            -- own parameters, which a class that only inherits has no pins
+            -- relating to them, `low(t, u) := class(both(t, []u))`)
+            let eCore : List Ty := if env.viewed.contains e then env.viewOf e d X else X
+            let eVars := env.coreVars e
+            let eArgs := ((env.sparams.lookup e).getD []).map fun (v, _) =>
+              match eVars.findIdx? (fun (x : String × Ty) => x.1 == v) with
+              | some j => eCore.getD j Ty.void
+              | none => Ty.void
             let selfL : Local := { name := selfName, slot,
-                                   ty := .struct e ((env.upArgs d dargs e).map (·.subst μF)), mutable := false }
+                                   ty := .struct e (eArgs.map (·.subst μF)), mutable := false }
             let unrefine := μF.filterMap fun (x, t) =>
               if ctx.dictVars.contains x && t.params.any (·.startsWith "$ext") then
                 (ctx.types.tvars.lookup x).map (t, ·)
@@ -5854,9 +5861,22 @@ partial def elabCast (ctx : Ctx) (p : Pos) (T : String) (args : List SExpr) (bra
   -- with Verse Core type arguments takes them from a dispatch: as the first
   -- clause of an if's condition, whose branch is a function of its own
   if bracket && env.viewed.contains S && !(env.coreArgs T (((env.sparams.lookup T).getD []).map fun (v, k) => Ty.param v k)).isEmpty then
+    let what := s!"a cast of {withArticle r.ty.show}, an interface referred to through views, to {T}"
     if !(env.isSub S T || env.isSub T S) then
-      eerr p s!"a cast of {withArticle r.ty.show}, an interface referred to through views, to {T}, which is neither above nor below {S}, is not supported yet (#351)"
-    eerr p s!"a cast of {withArticle r.ty.show}, an interface referred to through views, to {T} works only as the first clause of an if's condition, D := {T}[X], whose branch then has {T}'s type arguments (#351)"
+      eerr p s!"{what}, which is neither above nor below {S}, is not supported yet (#351)"
+    if env.isSub S T then
+      eerr p s!"{what}, which is above {S}, cannot fail: use {T}(…), an upcast (#351)"
+    -- (no class below both whose view and pins can give the object's type
+    -- arguments: it would always fail, as main says of a positional one)
+    if ((env.concreteBelow S).filter (env.isSub · T)).all fun d =>
+        (env.viewArgs? S d (env.coreArgs S sargs) (rigid := false)).isNone then
+      eerr p s!"{withArticle r.ty.show} is never {withArticle T}: no class below both gives {S} those type arguments, so {T}[…] would always fail"
+    -- (one the first clause of an if's condition does not take either: an
+    -- interface whose type arguments the cast would open, #53)
+    if (refiningCast? env T r.ty).isNone then
+      eerr p s!"{what} would leave {T}'s type arguments unknown: they are not {S}'s, and an interface has no hidden fields to read them from (#351, #53)"
+    let theirs := if (env.sparams.lookup T).isNone then s!"the type arguments {T} fixes" else s!"{T}'s type arguments"
+    eerr p s!"{what} works only as the first clause of an if's condition, D := {T}[X], whose branch then has {theirs} (#351)"
   -- a parametric class's type arguments are those of the value (#39), in the
   -- same hierarchy
   let parametric := (env.sparams.lookup T).isSome || !(env.coreArgs T []).isEmpty
