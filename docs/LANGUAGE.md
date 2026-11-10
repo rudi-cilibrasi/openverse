@@ -545,8 +545,8 @@ circle := class(shape, labelled):
   (`<suspends>` ones and named arguments' defaults too), generic code over
   it, upcasts to the interfaces above it and casts back work as for any
   interface, also for classes below that fix some of those type arguments
-  (`ib := class(both(int, string))`) or add their own; such an interface
-  cannot declare fields yet.
+  (`ib := class(both(int, string))`) or add their own, and its fields are
+  read and set through it too (each class's, at its own place).
   The interfaces a class lists may not reach one interface at two instances
   (`class(pi(int), pi(string))`). Inherited field defaults see their
   own class's type parameters. A cast `square[S]` takes its type arguments
@@ -584,9 +584,9 @@ circle := class(shape, labelled):
 - **Comparability.** Other classes and interfaces are not comparable (Book §4.9), nor
   is a struct or container that holds one.
 - **Not yet supported** (each rejected with a message):
-  - a field of an interface that a class gives type arguments that are not
-    a prefix of its own (see below, #351); a cast from
-    a reference to such an interface (or one above it) to a class or
+  - a cast from a reference to an interface that a class gives type
+    arguments that are not a prefix of its own, or to one above it (see
+    above, #351), to a class or
     interface with type arguments, its own or ones it fixes (`c :=
     class(i1(int), i2(string))`), other than as a clause of an `if`'s
     condition (the first, or one after clauses that print, change an

@@ -1238,8 +1238,10 @@ position in every class below the one that declares it.
   variables, and types the call at the most general substitution that
   makes them agree with the pins and the reference's arguments a prefix of
   `φ` at them (`ViewRefines`, from `unify`; none: `dispatch_view_none`, the
-  branch cannot run); `vref_open` is its preservation step. No fields are
-  read through a view. The front end refers to an interface through views
+  branch cannot run); `vref_open` is its preservation step. Core reads no
+  field through a view: the front end reads and sets one through each
+  class's accessors (#157), dispatched as a method is, the field typed in
+  each class's table at its view (`coreFieldTy`). The front end refers to an interface through views
   (`TyEnv.viewed`) when a class gives it type arguments that are not a
   prefix of its own, and to the interfaces above it too: `Ty.toVTy` gives
   each class below its view, the interface's Verse Core type arguments
