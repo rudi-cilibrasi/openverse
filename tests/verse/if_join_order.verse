@@ -19,6 +19,9 @@ Main()<transacts>:void =
     if (X := (if (C = 1) then false else Opt(9)), V := X?):
         Print("g {V}")
     W := if (C = 0) then 1 else 2.5
+    S := if (C = 0) then 1 else "s"
+    for (T := (1 | "t")):
+        Print("t")
     Print("h")
     A := if (C = 1) then array{} else array{4, 5}
     Print("i {A.Length}")

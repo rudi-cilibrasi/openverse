@@ -4115,7 +4115,11 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
       -- branch's type instead: `if (C) then false else option{4}` is a
       -- `?int`, as the other order is; else `any`, as before
       -- (from the state before the branches, the else on its own first:
-      -- the first try's code and slots are not kept)
+      -- the first try's code and slots are not kept. Each retry raises
+      -- `retries`, so an `if` nested n deep without a type is elaborated at
+      -- most a constant number of times per level for the first three
+      -- levels and once below: bounded, though multiplicative, tim-cc's
+      -- review of #368)
       if ty == .any && exp.isNone && rt.ty != .any && re.ty != .any && ctx.retries < 3 then
         let stAfter ← get
         set st0
