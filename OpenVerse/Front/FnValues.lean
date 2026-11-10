@@ -187,21 +187,14 @@ partial def _root_.OpenVerse.Front.SExpr.scan : SExpr → List Shape × List Str
     (s, n ++ ["." ++ m])
   | .query _ e | .neg _ e | .notE _ e | .optionLit _ e | .logicLit _ e | .loop _ e
   | .gen _ _ _ e => e.scan
-  | .bin _ _ a b | .andE _ a b | .orE _ a b | .range _ a b => scanL [a, b]
-  | .cmp _ a rest => scanL (a :: rest.map (·.2))
-  | .tuple _ es | .block _ es | .arrayLit _ es => scanL es
-  | .ite _ cs t e => scanL (cs ++ [t] ++ e.toList)
   | .forE _ cs b =>
     -- (a generator's names are bound there: `for (Double : Xs)` means them)
     let bound := cs.flatMap fun | .gen _ x i _ => x :: i.toList | _ => []
     let (s, n) := scanL (cs ++ [b])
     (s, n.filter (!bound.contains ·))
-  | .ret _ e => scanL e.toList
-  | .caseE _ e arms => scanL (e :: arms.flatMap fun (pat, v) => pat.toList ++ [v])
   | .decl _ _ t _ e =>
     let (s, n) := e.scan
     ((t.map STy.fnShapes).getD [] ++ s, n)
-  | .set _ l _ e => scanL [l, e]
   | .structDef _ _ fs =>
     let (s, n) := scanL (fs.filterMap (·.2.2.1))
     (fs.flatMap (·.2.1.fnShapes) ++ s, n)
@@ -211,9 +204,7 @@ partial def _root_.OpenVerse.Front.SExpr.scan : SExpr → List Shape × List Str
   | .construct _ _ ts args =>
     let (s, n) := scanL args
     (ts.flatMap STy.fnShapes ++ s, n)
-  | .mapLit _ kvs => scanL (kvs.flatMap fun (k, v) => [k, v])
-  | .str _ parts => scanL (parts.filterMap fun | .code e => some e | .text _ => none)
-  | _ => ([], [])
+  | e => scanL e.children
 partial def scanL (es : List SExpr) : List Shape × List String :=
   es.foldl (fun (s, n) e => let (s', n') := e.scan; (s ++ s', n ++ n')) ([], [])
 end

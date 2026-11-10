@@ -1702,23 +1702,8 @@ partial def valueUse? (mv : List String) : SExpr → Option (Pos × String)
   | .app _ (.ident _ "$dispatch") (_ :: as) _ => as.findSome? (valueUse? mv)
   | .app _ (.ident _ _) as _ => as.findSome? (valueUse? mv)
   | .ident p n => if mv.contains n then some (p, n) else none
-  | e =>
-    let kids : List SExpr := match e with
-      | .str _ ps => ps.filterMap fun | .code c => some c | _ => none
-      | .app _ g as _ => g :: as
-      | .member _ x _ | .query _ x | .neg _ x | .notE _ x | .optionLit _ x | .logicLit _ x | .loop _ x
-      | .gen _ _ _ x | .decl _ _ _ _ x => [x]
-      | .bin _ _ a b | .andE _ a b | .orE _ a b | .range _ a b | .set _ a _ b => [a, b]
-      | .cmp _ a r => a :: r.map (·.2)
-      | .tuple _ es | .block _ es | .arrayLit _ es | .construct _ _ _ es => es
-      | .ite _ cs t e' => cs ++ [t] ++ e'.toList
-      | .forE _ cs b => cs ++ [b]
-      | .ret _ x => x.toList
-      | .caseE _ sc arms => sc :: arms.flatMap fun (pt, v) => pt.toList ++ [v]
-      | .mapLit _ kvs => kvs.flatMap fun (k, v) => [k, v]
-      | .structDef _ _ fs => fs.filterMap (·.2.2.1)
-      | _ => []
-    kids.findSome? (valueUse? mv)
+  | .structDef _ _ fs => (fs.filterMap (·.2.2.1)).findSome? (valueUse? mv)
+  | e => e.children.findSome? (valueUse? mv)
 
 /-- (#246) A lazily taken call, where the first success is taken, whose
     clauses, conditions or calls of itself have effects: compiled as a
