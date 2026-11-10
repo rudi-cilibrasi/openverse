@@ -682,6 +682,14 @@ partial def Ty.toVTy (env : TyEnv) : Ty → VTy
 def TyEnv.coreFieldTy (env : TyEnv) (d f : String) : Option VTy := do
   let D ← env.fieldSrc d f
   let (_, t, _) ← (env.fields D).find? (·.1 == f)
+  -- (#351) an interface referred to through views is not at a prefix of the
+  -- class's type arguments: its type parameters are the class's view of it
+  if env.viewed.contains D && d != D && !(env.info d).isIface then
+    let X := (List.range (env.coreVars d).length).map fun j => Ty.param (pinArg j) false
+    let view := env.viewOf D d X
+    let σ := (env.coreVars D).zipIdx.filterMap fun ((v, _), j) =>
+      if v.startsWith "$arg" then none else some (v, view.getD j Ty.void)
+    return (t.subst σ).toVTy { env with tvars := X.zipIdx.map fun (x, j) => (pinArg j, x) }
   return t.toVTy { env with tvars := env.coreVars D }
 
 /-- Whether field `f` has one Verse Core type in every class below `sn`,
@@ -2226,7 +2234,8 @@ def setFieldAt (env : TyEnv) (p : Pos) (sn : String) (targs : List Ty) (obj : Na
   -- and with one type in all of them, #205)
   let p0 := pos.headD k
   let tyOK := env.fieldTyAgrees sn targs f
-  if tyOK && pos.all (· == p0) then return .heap (.set p0) [.local obj, v]
+  -- (not through views: each class's setter, #351)
+  if tyOK && pos.all (· == p0) && !env.viewed.contains sn then return .heap (.set p0) [.local obj, v]
   if let some d := ds.find? fun d => !env.sameCore d sn && (env.fieldAcc.idxOf? (d, f)).isNone then
     if !tyOK then
       eerr p s!"field '{f}' of {sn} has another type in {d}, which takes it from another interface, and {d} has type parameters that {sn} does not have: setting it through {sn} is not supported yet (#205)"
@@ -7162,7 +7171,9 @@ partial def elabMember (ctx : Ctx) (p : Pos) (r : R) (m : String) (exp : Option 
         let env := ctx.types
         let p0 := pos.headD k
         let tyOK := env.fieldTyAgrees sn targs f
-        if tyOK && pos.all (· == p0) then return ⟨.heap (.get p0) [r.e], t⟩
+        -- (not through views, whose reference has no type arguments of the
+        -- object's to read the field at: each class's getter, #351)
+        if tyOK && pos.all (· == p0) && !env.viewed.contains sn then return ⟨.heap (.get p0) [r.e], t⟩
         if let some d := ds.find? fun d => !env.sameCore d sn && (env.fieldAcc.idxOf? (d, f)).isNone then
           if !tyOK then
             eerr p s!"field '{f}' of {sn} has another type in {d}, which takes it from another interface, and {d} has type parameters that {sn} does not have: reading it through {sn} is not supported yet (#205)"
@@ -10021,8 +10032,6 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
           -- (#351) references to the interface go through views, each class
           -- below with its own; its fields would be at other places in its
           -- classes, which no view gives
-          if !(env.fields i).isEmpty then
-            throw s!"{cd.pos.show}: {cd.name} gives {i} the type arguments {gives}, but its own are {showArgs (core cd.name)}, and {i} has fields: references to it through views cannot read them yet (#351)"
           -- (a dispatch through a view reads all of the class's type
           -- arguments from its hidden fields, which a class without a class
           -- parent has for all of them; one with one, which adds the
@@ -10089,6 +10098,10 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
             !fieldAcc.contains (d, f) then
           fieldAcc := fieldAcc.push (d, f)
           accFixers := accFixers.push d
+        -- (#351: through views, every class's, a read of a dispatch through
+        -- one, `Typed.dispatch_view`, as a method's call is)
+        else if env.viewed.contains i && !fieldAcc.contains (d, f) then
+          fieldAcc := fieldAcc.push (d, f)
   -- (and a concrete class with a class below it that types one of its
   -- fields otherwise: a read that tests for it reaches the field through
   -- its accessor, whose receiver is of exactly its class, as a temporary
