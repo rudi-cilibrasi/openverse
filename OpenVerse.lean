@@ -1,5 +1,6 @@
 import OpenVerse.Core.Value
 import OpenVerse.Core.Syntax
+import OpenVerse.Core.Show
 import OpenVerse.Core.Prims
 import OpenVerse.Core.Semantics
 import OpenVerse.Core.Interp

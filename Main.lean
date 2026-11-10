@@ -115,7 +115,7 @@ def main (args : List String) : IO UInt32 := do
   | ["core", file] => withProg file fun P => do
       for (fn, i) in P.fns.zip (List.range P.fns.length) do
         IO.println s!"fn {i} {fn.name} arity={fn.arity} slots={fn.nslots} decides={fn.decides}"
-        IO.println s!"  {repr fn.body}"
+        IO.println (fn.body.compact "  " (cap := 1000000))
       return 0
   | ["gen", seed] => runProg (Gen.program seed.toNat!) defaultFuel
   | ["gen", seed, "--emit", file] => do
