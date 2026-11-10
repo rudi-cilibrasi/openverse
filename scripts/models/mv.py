@@ -291,6 +291,13 @@ R5 = random.Random(seed * 1000003 + 338)
 # ---- #342: the same in a for (two composed choices first, so the clauses after the first and
 # the body become one continuation, $contf); a generator of its own keeps the rest as they were.
 R6 = random.Random(seed * 1000003 + 342)
+# ---- #360 (#283): a branch of a branchy if may be a call with several values, recursive (taken
+# lazily, one generator at the call) or not (inlined: its clauses plain, its choices generators);
+# the if adds no choice of its own (#331), so a branch with one alternative is evaluated as it is.
+# A generator of its own decides, so seeds keep their other choices.
+R9 = random.Random(seed * 1000003 + 360)
+# (branchy ifs in mv and rec modes too, half the programs, so their branches can call them)
+BIF = 'bif' in flags or ((MV or REC) and R9.random() < 0.5)
 # ---- #328 (with mvm): at times the test's class overrides Mv with several values of its own,
 #   MvT<override>(MpT:int):int = MpT * 3 | (super:)MvT(MpT) | MpT - 1
 # Run, the fields and the base MvT are then in a parent class, so the bare MvT(..) in Run
@@ -401,7 +408,7 @@ def gen_e(scope, vars_, d, ch):
         m = gen_gcall(scope, vars_, d)
         if m is not None:
             return m
-    if 'bif' in flags and ch and NCH[0] < 4 and d < 3 and R.random() < (0.4 if 'heavy' in flags else 0.14) \
+    if BIF and ch and NCH[0] < 4 and d < 3 and R.random() < (0.4 if 'heavy' in flags else 0.14) \
             and (not MV or PROD[0] * 3 <= CTX['plim']) and not lift_block():
         NCH[0] += 1
         if MV:
@@ -1003,6 +1010,30 @@ def gen_alts(scope, vars_, d):
     return [gen_e(scope, vars_, d + 1, False) for _ in range(R.choice([1, 2, 2, 3]))]
 
 
+def is_call(e):
+    return isinstance(e, tuple) and e and e[0] in ('mcall', 'rcall')
+
+
+def unblock(e):
+    while isinstance(e, tuple) and e and e[0] in ('bset', 'bprint', 'blk'):
+        e = e[2] if e[0] == 'blk' else e[-1]      # (blk: its bound value, which needs no name)
+    return e
+
+
+def branch_alts(scope, vars_, d):
+    """a branch's alternatives: at times one call with several values (#360)."""
+    # (where a lifted choice may go: not in a block with a defer: of its own, lift_block)
+    if R9.random() < 0.3 and NCH[0] < 4 and not lift_block():
+        m = None
+        if MV and FUNCS and not CTX.get('nomcall'):
+            m = gen_mcall(scope, vars_, d)
+        elif REC and RFUNCS:
+            m = gen_rcall(scope, vars_, d)
+        if m is not None:
+            return [m]
+    return gen_alts(scope, vars_, d)
+
+
 def gen_bif(scope, vars_, d):
     saved_inbif = CTX.get('inbif')
     CTX['inbif'] = True       # (no alternative with values of its own in a branchy if, #296)
@@ -1023,10 +1054,15 @@ def gen_bif0(scope, vars_, d):
         CTX['nofail'] = saved
         CTX['take'] = savedt
         cl.append(failable(sc2, vars_))
-        arms.append((cl, gen_alts(sc2, vars_, d)))
-    els = gen_alts(scope, vars_, d)
-    if all(len(a) == 1 for _, a in arms) and len(els) == 1:
+        arms.append((cl, branch_alts(sc2, vars_, d)))
+    els = branch_alts(scope, vars_, d)
+    if all(len(a) == 1 and not is_call(a[0]) for _, a in arms) and len(els) == 1 and not is_call(els[0]):
         els.append(gen_e(scope, vars_, d + 1, False))
+    if any(is_call(x) for _, a in arms for x in a) or any(is_call(x) for x in els):
+        # (an if with a call in a branch converts as a whole, and no branch may then be a block,
+        # as LANGUAGE.md says: a set's, a Print's or a block's value is taken instead)
+        arms = [(cl, [unblock(x) for x in a]) for cl, a in arms]
+        els = [unblock(x) for x in els]
     return ('bif', arms, els, R.random() < 0.5)
 
 
