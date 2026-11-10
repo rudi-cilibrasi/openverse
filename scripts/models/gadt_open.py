@@ -36,7 +36,9 @@ a two-parameter pin kvI(k, v) over cont(tuple(k, v)), a three-level chain c3(c) 
 parametric class below intI, an interface without parameters over cont(int), and refining casts.
 Since #347, a pinned interface cd(c) over cont([]c) with a default Gt using its own On(), reached
 from code generic over cont(u): in a class, a subclass, one with its own override, a chain
-cd3(c) over cd(?c) with its own default (which wins), and through cd4(c) over cd(c).
+cd3(c) over cd(?c) with its own default (which wins), and through cd4(c) over cd(c). Since #355,
+classes giving cd composite type arguments (dtb(a, b) over cd(tuple(a, b)), dar(a) over cd([]a)),
+the default's body with a typed local (Y:c).
 argv: seed expfile [--cmp]
 """
 import random, sys
@@ -203,7 +205,9 @@ obx(c:type) := class(c3(c)):
     Hs<override>():logic = if (O?) then true else false
 cd(c:type) := interface(cont([]c)):
     On():c
-    Gt<override>():[]c = array{On(), On(), On()}
+    Gt<override>():[]c =
+        Y:c = On()
+        array{Y, Y, Y}
 dbx(c:type) := class(cd(c)):
     V:c
     On<override>():c = V
@@ -213,6 +217,13 @@ dov(c:type) := class(cd(c)):
     V:c
     On<override>():c = V
     Gt<override>():[]c = array{V}
+dtb(a:type, b:type) := class(cd(tuple(a, b))):
+    P:a
+    Q:b
+    On<override>():tuple(a, b) = (P, Q)
+dar(a:type) := class(cd([]a)):
+    Xs:[]a
+    On<override>():[]a = Xs
 cd3(c:type) := interface(cd(?c)):
     Gt<override>():[]?c = array{On()}
 d3x(c:type) := class(cd3(c)):
@@ -571,8 +582,21 @@ for i in range(R7.choice([0, 1, 1, 2])):
 # the pinned interfaces' defaults (#347): GtC dispatches from cont(u) to cd's default (or cd3's,
 # or dov's own override); the length, then the first element at its type
 for i in range(R8.choice([0, 1, 1, 2])):
-    k = R8.choice(['dbx', 'dbx2', 'dov', 'd3x', 'd4x'])
+    k = R8.choice(['dbx', 'dbx2', 'dov', 'd3x', 'd4x', 'dtb', 'dar'])
     t = rtype(2)
+    if k == 'dtb':
+        u = rtype(2); (x, xv), (y, yv) = lit2(t), lit2(u)
+        main.append(f"    Dd{i} := dtb({tyt(t)}, {tyt(u)}){{P := {x}, Q := {y}}}")
+        et = Tup(t, u)
+        main.append(f'    Print("dd{i}: {{GtC(Dd{i}).Length}} {{if (E := GtC(Dd{i})[0]) then {shname(et)}(E) else "none"}}")')
+        expect.append(f"dd{i}: 3 {show((xv, yv), et)}")
+        continue
+    if k == 'dar':
+        n = R8.randint(0, 3); xs = [lit2(t)[0] for _ in range(n)]
+        main.append(f"    Dd{i} := dar({tyt(t)}){{Xs := array{{{', '.join(xs)}}}}}" if n else f"    Dd{i}:dar({tyt(t)}) = dar({tyt(t)}){{Xs := array{{}}}}")
+        main.append(f'    Print("dd{i}: {{GtC(Dd{i}).Length}} {{if (E := GtC(Dd{i})[0]) then "{{E.Length}}" else "none"}}")')
+        expect.append(f"dd{i}: 3 {n}")
+        continue
     if k == 'd3x':
         o, ov = lit2(Opt(t))
         main.append(f"    Dd{i} := d3x({tyt(t)}){{O := {o}}}")
