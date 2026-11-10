@@ -1239,18 +1239,24 @@ position in every class below the one that declares it.
   prefix of its own, and to the interfaces above it too: `Ty.toVTy` gives
   each class below its view, the interface's Verse Core type arguments
   over the class's (`[var 1]` for `both` at `sink`; a prefix class's are
-  its first ones); a class below has pins (`none`) on all of its type
+  its first ones), through the topmost class of its chain below the
+  interface (`TyEnv.viewOf`: `ib := class(both(int, string))` has
+  `both`'s, `[var 1]`, which its pins fix to `string`); a class below has pins (`none`) on all of its type
   arguments, so that a dispatch through a view opens them, and hidden
   fields for all of its type parameters, which its overrides read
   (`Sig.selfTps`); a method's dispatch tests each class, its arguments
   opened (`$ext`) and refined by its view and pins, as #209's refined
   calls are; a refining cast (#243, #250) relates the object's type
   arguments to the target's through the view too; and an implementation's
-  signature is checked against the declaration's at the view. A slot of
-  such a type starts as an object of a class of an entry, at type
-  arguments its view relates to the slot's (`checkDefault`); a `new`
-  expected at such a type takes its arguments from the view
-  (`newArgs`).) A class's table entry
+  signature is checked against the declaration's at the view (and the
+  class's pins). A `<suspends>` method's refined call opens them as
+  `tcDispatchView` does (`suspendSelfGeneric`). A slot of
+  such a type starts as an object of a class of an entry (a prototype or
+  placeholder whose view gives the slot's arguments, `TyEnv.viewArgs?`),
+  at type arguments its view relates to the slot's (`checkDefault`,
+  `VTy.viewSlotArgs`); a `new` expected at such a type takes its arguments
+  from the view (`newProposal`), each as many as the class's pins, an
+  unbound one its pin or `void` (`VTy.fillArgs`).) A class's table entry
   gives each field the type the topmost class that has it gives it, at
   that class's variable positions (`TyEnv.coreVars`), so a field has one
   type through every reference of the hierarchy. Dispatch passes the

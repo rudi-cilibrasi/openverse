@@ -529,9 +529,12 @@ circle := class(shape, labelled):
   (`both(t, u) := class(container(t), sink(u))`, `c := class(i1(int),
   i2(string))`): a reference to an interface that a class gives type
   arguments other than its own first ones, in order, relates them to each
-  class's through the class's view of it (#351), so calls through it,
-  generic code over it, upcasts to the interfaces above it and casts back
-  work as for any interface; such an interface cannot declare fields yet.
+  class's through the class's view of it (#351), so calls through it
+  (`<suspends>` ones and named arguments' defaults too), generic code over
+  it, upcasts to the interfaces above it and casts back work as for any
+  interface, also for classes below that fix some of those type arguments
+  (`ib := class(both(int, string))`) or add their own; such an interface
+  cannot declare fields yet.
   The interfaces a class lists may not reach one interface at two instances
   (`class(pi(int), pi(string))`). Inherited field defaults see their
   own class's type parameters. A cast `square[S]` takes its type arguments
@@ -570,7 +573,12 @@ circle := class(shape, labelled):
   is a struct or container that holds one.
 - **Not yet supported** (each rejected with a message):
   - a field of an interface that a class gives type arguments that are not
-    a prefix of its own (see below, #351); a cast `T[X]` whose type
+    a prefix of its own (see below, #351), and such an interface listed by
+    a class that has a class parent which does not reach it; a cast from
+    a reference to such an interface to a class or interface with type
+    arguments other than as the first clause of an `if`'s condition, or to
+    one neither above nor below it, and a named argument's default
+    computed by code (not a literal) in a call through one; a cast `T[X]` whose type
     arguments agree with `X`'s only under a refinement (`dup[P]` for
     `P:pair(a, b)`) other than as the first clause of an `if`'s condition, whose
     branch has a `return`, a `break` that leaves it or a `set` of a `var`
