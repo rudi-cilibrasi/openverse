@@ -88,8 +88,15 @@ def branchesLift (has : SExpr → Bool) (e : SExpr) : Bool :=
   match e with
   | .ite .. =>
     let as := arms e
-    isBranchy.complete e && as.all (fun | (_, .block ..) => false | _ => true) &&
-      as.any fun (_, v) => has v
+    -- (a block as a branch, #283: its names renamed for it where it is
+    -- lifted, `bifToExcl`; not one with a `defer:` or a range of its own,
+    -- as #302 refuses for any block)
+    let blockOK : SExpr → Bool
+      | .block _ ss => !ss.any fun
+          | .app _ (.ident _ "$defer") _ _ | .decl _ _ none false (.range ..) | .gen .. => true
+          | _ => false
+      | _ => true
+    isBranchy.complete e && as.all (fun (_, v) => blockOK v) && as.any fun (_, v) => has v
   | _ => false
 
 /-- (#283) Whether the elaborator takes this `if` with choices in its
@@ -853,10 +860,25 @@ def bifToExcl (c : SExpr) : List SExpr :=
     -- (with the `if`'s place: an `else if`'s binds the same name, in the
     -- path of the one around it)
     let k := s!"{x}$k{ip.line}_{ip.col}"
+    -- (#283) a block as a branch: its names renamed for it, `$…'N`, as the
+    -- clauses after the `if` follow it in its path; as written, not in
+    -- scope where the `if` is (`$declNames`), as for any block
+    let blockNames (b : SExpr) : List SExpr := match b with
+      | .block .. => match localDecls b with
+        | [] => []
+        | ds => [.app ip (.ident ip "$declNames") (ds.map fun (n, q) => .ident q n) false]
+      | _ => []
+    let renameBlock (side : String) (b : SExpr) : SExpr := match b with
+      | .block .. => renameE ((localsOf b).map fun n => (n, s!"${k}{side}'{n}")) b
+      | b => b
+    let checks := blockNames t ++ blockNames u
+    let t0 := t
+    let t := renameBlock "t" t
+    let u := renameBlock "u" u
     match boundIn cs with
     | [] =>
       let g (i : Int) : List SExpr := [.cmp ip (.ident ip k) [("=", .int ip i)]]
-      [.decl ip k none false (.ite ip cs (.int ip 0) (some (.int ip 1))),
+      checks ++ [.decl ip k none false (.ite ip cs (.int ip 0) (some (.int ip 1))),
        .decl p x ty false (withJoin (mkExcl ip [(g 0, t), (g 1, u)]))]
     | names =>
       -- (the names the condition binds, for its branch: through an option,
@@ -881,7 +903,14 @@ def bifToExcl (c : SExpr) : List SExpr :=
               ys.zipIdx.map fun (y, i) =>
                 let (t, m) := declOf y
                 SExpr.decl ip y t m (.app ip (.ident ip tt) [.int ip (i : Int)] false))
-      [written, .decl ip k none false (.optionLit ip (.block ip (cs ++ [val]))),
+      -- (a then-block that binds a name its condition binds: shadowing,
+      -- said where the block binds it, #383's review)
+      let shadows : List SExpr := match (match t0 with
+          | .block .. => (localDecls t0).find? fun (n, _) => (ρ.lookup n).isSome
+          | _ => none) with
+        | some (n, q) => [.app ip (.ident ip "$shadows") [.ident q n] false]
+        | none => []
+      shadows ++ checks ++ [written, .decl ip k none false (.optionLit ip (.block ip (cs ++ [val]))),
        .decl p x ty false (withJoin (mkExcl ip [(binds, t), ([.notE ip (.query ip (.ident ip k))], u)]))]
   | c => [c]
 

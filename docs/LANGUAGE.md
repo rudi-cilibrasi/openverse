@@ -698,9 +698,10 @@ Main():void =
     in `L`'s indices is lifted there, first (#283): `for (set A[0 | 1] = 5)`
     sets `A[0]`, then `A[1]`, each index a generator.
 
-  An `if … else if … else …` whose branches are choices, plain values, or
+  An `if … else if … else …` whose branches are choices, plain values,
   expressions with choices or calls of functions with several values in
-  them (not blocks) may stand where a choice may (#235, #283). Its
+  them, or blocks with them (whose names are the branch's own, as any
+  block's) may stand where a choice may (#235, #283). Its
   conditions run once and pick a branch, whose values are then the
   `if`'s, seeing the names its conditions bind:
 
@@ -741,7 +742,7 @@ Main():void =
   the choice (the default runs in its place); an
   alternative of a `set`'s choice, either side of `and`, the right of `or`, a range,
   or the branch of an `if` without
-  `else`, or one that is a block; and
+  `else`, or a block with a `defer:` or a range of its own as a branch; and
   a choice anywhere outside these failure contexts. (A field reached
   through a receiver that is not a variable or `Self`, as `F().Items[…]`,
   is read after the choice, since only the receiver's value is bound

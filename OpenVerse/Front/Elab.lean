@@ -3953,6 +3953,10 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
     eerr p s!"a call of {Choice.shownFnName f}, which is overloaded and has several values, is supported in the body of a function or method only, for now (#283)"
   | .app p (.ident _ "$ovUnresolved") [.ident _ f] false =>
     eerr p s!"internal: which overload of {Choice.shownFnName f} this call takes (#283)"
+  -- (#283, `Choice.bifToExcl`) a block as an `if`'s branch binding a name
+  -- its condition binds
+  | .app _ (.ident _ "$shadows") [.ident q n] false =>
+    eerr q s!"'{n}' is already defined; Verse does not allow shadowing (use set {n} = … for a var)"
   | .app p (.ident _ "$inline") (.ident _ f :: _) false =>
     if ctx.inTaking then
       if ctx.liftWhy != "" then
@@ -3960,7 +3964,7 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
       eerr p (s!"a call of {Choice.shownFnName f}, which has several values, cannot be lifted from here, for now (#235): " ++
         "not from a block with a defer:, a construction where a field's default runs before it, " ++
         "an alternative of a set's choice, the right of " ++
-        "and or or, a range, nor from the branch of an if without else, or one that is a block")
+        "and or or, a range, nor from the branch of an if without else, or a block with a defer: or a range of its own as a branch")
     eerr p (s!"{Choice.shownFnName f} has several values, so a call of it must be in a failure context that takes them: " ++
       "an if condition, a for's clauses, first{…}, option{…}, logic{…}, not, or the left of or (#235)")
   | .app p (.ident _ "$each") (.app _ (.ident _ fa) _ _ :: _) false =>
@@ -3972,7 +3976,7 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
       eerr p (s!"a call of {Choice.shownFnName f}, which has several values, cannot be lifted from here, for now (#235): " ++
         "not from a block with a defer:, a construction where a field's default runs before it, " ++
         "an alternative of a set's choice, the right of " ++
-        "and or or, a range, nor from the branch of an if without else, or one that is a block")
+        "and or or, a range, nor from the branch of an if without else, or a block with a defer: or a range of its own as a branch")
     eerr p (s!"{Choice.shownFnName f} has several values, so a call of it must be in a failure context that takes them: " ++
       "an if condition, a for's clauses, first{…}, option{…}, logic{…}, not, or the left of or (#235)")
   | .app p (.ident _ "$loop") (.ident _ f :: _) false =>
@@ -3983,7 +3987,7 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
       eerr p (s!"a call of {Choice.shownFnName f}, which has several values, cannot be lifted from here, for now (#235): " ++
         "not from a block with a defer:, a construction where a field's default runs before it, " ++
         "an alternative of a set's choice, the right of " ++
-        "and or or, a range, nor from the branch of an if without else, or one that is a block")
+        "and or or, a range, nor from the branch of an if without else, or a block with a defer: or a range of its own as a branch")
     eerr p (s!"{Choice.shownFnName f} has several values, so a call of it must be in a failure context that takes them: " ++
       "an if condition, a for's clauses, first{…}, option{…}, logic{…}, not, or the left of or (#235)")
   | .app p (.ident _ "$choice") _ false =>
@@ -3993,7 +3997,7 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
       eerr p ("a choice (a | b) cannot be lifted from here, for now (#208): not from a block with a defer:, " ++
         "a construction where a field's default runs before it, an alternative of a set's " ++
         "choice, the right of and or or, a range, " ++
-        "nor from the branch of an if without else, or one that is a block")
+        "nor from the branch of an if without else, or a block with a defer: or a range of its own as a branch")
     eerr p ("a choice (a | b) has several values, so it must be in a failure context that takes them: " ++
       "an if condition, a for's clauses, first{…}, option{…}, logic{…}, not, or the left of or (#208)")
   | .app p (.ident _ "$paramDefault") [.ident _ f, .ident _ n, .block _ earlier, d] false =>
@@ -5994,6 +5998,12 @@ partial def elabBranchAlts (ctx : Ctx) (p : Pos) (i : SExpr) (sty : Option STy) 
   -- compiles, at the type of those values, as `option{…}` takes them)
   let elabA (c : Ctx) (a : SExpr) (t? : Option Ty) : EM R := do
     if ctx.typeOnly && Choice.hasLiftable a then
+      -- (a block's last value at the expected type, which `option{…}`
+      -- does not pass into it, #383's review: `{ …; false }` against ?int)
+      let a := match a, t? with
+        | .block bp ss@(_ :: _), some t =>
+          SExpr.block bp (ss.dropLast ++ [.decl bp "$jv" (some t.toSTy) false (ss.getLast?.getD (.tuple bp [])), .ident bp "$jv"])
+        | a, _ => a
       let r ← elabE c (.optionLit a.pos a) (t?.map .opt)
       match r.ty with
       | .opt t => return ⟨r.e, t⟩
