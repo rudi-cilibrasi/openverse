@@ -667,6 +667,14 @@ partial def liftE (isVal : String → Bool) (isField : String → String → Boo
       for c' in normClauses (← liftClauseM isVal' isField c) site do
         modify fun s => { s with pre := s.pre.push c' }
       return .ident q x
+    -- (#283) a `set` with something to lift, as the value: bound to a name
+    -- of its own, as `X := (set …)` is
+    | some l@(.set q sl _ r) =>
+      if !(pathHas hasLiftable sl || hasLiftable r) then liftE isVal' isField l else
+      let x ← LM.fresh q "s"
+      for c' in normClauses (← liftClauseM isVal' isField (.decl q x none false l)) site do
+        modify fun s => { s with pre := s.pre.push c' }
+      return .ident q x
     | some l => liftE isVal' isField l
     | none => return .tuple p []
   | e => return e
@@ -743,6 +751,28 @@ partial def liftClauseM (isVal : String → Bool) (isField : String → String �
     for c in h do out := out ++ (← liftClauseM isVal isField c)
     return out
   let site := (← get).site
+  -- (#283) a `set` with a choice or a call with several values in its
+  -- path's indices: each index bound, lifted, in order, then for `op=` the
+  -- old value, then the new one's code, as `set` evaluates (before the
+  -- cases below, which take the path as it is)
+  if let .set p l op rhs := c then
+    if pathHas hasLiftable l then
+      match alts? rhs, op with
+      | some as, _ =>
+        let (h, s) := setClauses p l op as p site
+        return (← liftAll h) ++ [s]
+      | none, none =>
+        if isBranchy rhs then
+          -- (an `if` with choices in its branches: at `L`'s type, as below)
+          let (h, _, l') := setPrefix p l none site
+          let n := s!"$c{sitePart site}{p.line}_{p.col}"
+          return (← liftAll h) ++ [.decl p n none false (.app p (.ident p "$branchChoiceAt") [l', rhs] false),
+            .set p l' none (.ident p n)]
+        let (h, _, l') := setPrefix p l none site
+        return (← liftAll h) ++ (← run do return .set p l' none (← liftE isVal isField rhs))
+      | none, some _ =>
+        let (h, o?, l') := setPrefix p l op site
+        return (← liftAll h) ++ (← run do return .set p l' op (withOld p o? (← liftE isVal isField rhs)))
   match c with
   | .app _ (.ident _ "$choice") _ false => return [c]
   -- (an `if` with choices in its branches as a binding's value: at its
@@ -783,18 +813,6 @@ partial def liftClauseM (isVal : String → Bool) (isField : String → String �
     if isChoice rhs || !hasLiftable rhs then return [c] else run do
       return .decl p x ty v (← liftE isVal isField rhs)
   | .set p l op rhs =>
-    if pathHas hasLiftable l then
-      -- (#283) a choice or a call with several values in the path's
-      -- indices: each index bound, lifted, in order, then for `op=` the old
-      -- value, then the new one's code, as `set` evaluates
-      match alts? rhs with
-      | some as =>
-        let (h, s) := setClauses p l op as p site
-        return (← liftAll h) ++ [s]
-      | none =>
-        let (h, o?, l') := setPrefix p l op site
-        return (← liftAll h) ++ (← run do return .set p l' op (withOld p o? (← liftE isVal isField rhs)))
-    else
     if isChoice rhs || !hasLiftable rhs then return [c] else
       -- (the path's indices, then for `op=` the old value, then the
       -- lifted code, as `set` evaluates)
