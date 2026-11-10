@@ -34,6 +34,9 @@ Since #344, an interface family where ci(t) gives its parent cont([]t): a class 
 ci(t) and a direct implementer of cont([]int), read through code generic over cont(u) and ci(t);
 a two-parameter pin kvI(k, v) over cont(tuple(k, v)), a three-level chain c3(c) over ci(?c), a
 parametric class below intI, an interface without parameters over cont(int), and refining casts.
+Since #347, a pinned interface cd(c) over cont([]c) with a default Gt using its own On(), reached
+from code generic over cont(u): in a class, a subclass, one with its own override, a chain
+cd3(c) over cd(?c) with its own default (which wins), and through cd4(c) over cd(c).
 argv: seed expfile [--cmp]
 """
 import random, sys
@@ -42,6 +45,7 @@ R = random.Random(seed)
 R2 = random.Random(seed * 1000003 + 317)   # (Pk's choices, #317)
 R3 = random.Random(seed * 1000003 + 324)   # (Cp's choices, #324)
 R7 = random.Random(seed * 1000003 + 344)   # (the interface pins' choices, #344)
+R8 = random.Random(seed * 1000003 + 347)   # (the pinned interfaces' defaults, #347)
 def ch(p): return R.random() < p
 CMP = True   # comparable opened parameters (fixed in #252)
 
@@ -197,6 +201,29 @@ obx(c:type) := class(c3(c)):
     Gt<override>():[]?c = array{O, O, O}
     Sz<override>():int = 1
     Hs<override>():logic = if (O?) then true else false
+cd(c:type) := interface(cont([]c)):
+    On():c
+    Gt<override>():[]c = array{On(), On(), On()}
+dbx(c:type) := class(cd(c)):
+    V:c
+    On<override>():c = V
+dbx2(c:type, w:type) := class(dbx(c)):
+    W:w
+dov(c:type) := class(cd(c)):
+    V:c
+    On<override>():c = V
+    Gt<override>():[]c = array{V}
+cd3(c:type) := interface(cd(?c)):
+    Gt<override>():[]?c = array{On()}
+d3x(c:type) := class(cd3(c)):
+    O:?c
+    On<override>():?c = O
+cd4(c:type) := interface(cd(c)):
+    Nm():string
+d4x(c:type) := class(cd4(c)):
+    V:c
+    On<override>():c = V
+    Nm<override>():string = "d4"
 intI := interface(cont(int)):
     Tg():int
 ipar(w:type) := class(intI):
@@ -541,6 +568,25 @@ for i in range(R7.choice([0, 1, 1, 2])):
         main.append(f"    Cc{i}:cont([]int) = {rhs}")
         main.append(f'    Print("cc{i}: {{if (B := ibx[Cc{i}]) then "{{B.V}}" else "none"}}")')
         expect.append(f"cc{i}: {nv if isbox else 'none'}")
+# the pinned interfaces' defaults (#347): GtC dispatches from cont(u) to cd's default (or cd3's,
+# or dov's own override); the length, then the first element at its type
+for i in range(R8.choice([0, 1, 1, 2])):
+    k = R8.choice(['dbx', 'dbx2', 'dov', 'd3x', 'd4x'])
+    t = rtype(2)
+    if k == 'd3x':
+        o, ov = lit2(Opt(t))
+        main.append(f"    Dd{i} := d3x({tyt(t)}){{O := {o}}}")
+        et, n, ev0 = Opt(t), 1, ov
+    else:
+        x, xv = lit2(t)
+        if k == 'dbx2':
+            w = rtype(2); wx, _ = lit2(w)
+            main.append(f"    Dd{i} := dbx2({tyt(t)}, {tyt(w)}){{V := {x}, W := {wx}}}")
+        else:
+            main.append(f"    Dd{i} := {k}({tyt(t)}){{V := {x}}}")
+        et, n, ev0 = t, (1 if k == 'dov' else 3), xv
+    main.append(f'    Print("dd{i}: {{GtC(Dd{i}).Length}} {{if (E := GtC(Dd{i})[0]) then {shname(et)}(E) else "none"}}")')
+    expect.append(f"dd{i}: {n} {show(ev0, et)}")
 if R7.random() < 0.5:
     n = R7.randint(0, 3); xs = [R7.randint(0, 9) for _ in range(n)]
     main.append(f"    Cs:[]cont([]int) = array{{ibx(int){{V := 3}}, iarr{{Xs := array{{{', '.join(map(str, xs))}}}}}}}")
