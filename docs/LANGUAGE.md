@@ -778,9 +778,12 @@ Main():void =
   named parameter's default sees the fields. Inlining happens before
   types are checked, so `R.M` has to name that method whatever `R` is:
   such a method's name must be no other member than it and its overrides
-  (in classes below the one that declares it), no interface's, struct
+  (in classes below the class or interface that declares it), no struct
   field, enumerator or member of a built-in type (`Length`, `Find`,
-  `Signal`, …), no top-level name and no parameter or local. A generic
+  `Signal`, …), no top-level name and no parameter or local. An
+  interface's method is such a family's root too (#283): a call through
+  the interface dispatches on the receiver's class, as for an overridden
+  method, when the interface gives it no default implementation. A generic
   class's method is a function generic over the class's type parameters,
   their arguments inferred from the receiver where it is inlined, as at a
   call of a generic function (#283), when no class overrides it. A call of an overridden one dispatches on the
