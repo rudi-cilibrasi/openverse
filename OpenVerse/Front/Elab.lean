@@ -2534,10 +2534,11 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
         let some (.decl gp x xty _ (.app _ _ alts _)) := fs[j]? | eerr p "internal: an exclusive choice"
         -- (an `if`'s, #331, with no type written: its branches' join, as the
         -- `if`'s value has, found by elaborating it apart; that code is not kept)
-        let xty ← match xty, alts.findSome? (fun | .app _ (.ident _ "$joinOf") [i] false => some i | _ => none) with
-          | none, some i => do
+        let xty ← match xty, alts.findSome? (fun | .app _ (.ident _ "$joinOf") (i :: l) false => some (i, l.head?) | _ => none) with
+          | none, some (i, place) => do
             let st ← get
-            let (_, ty, _) ← elabBranchAlts { cA with canFail := true, inTaking := true } gp i none none
+            -- (for `set L = if …`, at `L`'s type)
+            let (_, ty, _) ← elabBranchAlts { cA with canFail := true, inTaking := true } gp i none place
             set st
             pure (some ty.toSTy)
           | t, _ => pure t

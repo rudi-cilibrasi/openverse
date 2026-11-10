@@ -758,17 +758,18 @@ def liftClause (isVal : String → Bool) (isField : String → String → Bool) 
     picks one branch, once; only the choices the program reaches generate.
     An `else if` is the else branch's own `if`, made one of these in turn. -/
 def bifToExcl (c : SExpr) : List SExpr :=
-  -- (`set L = if …`'s too, #331: its value bound first, then set, as before)
-  let c := match c with
-    | .decl p x ty false (.app q (.ident q2 "$branchChoiceAt") [_, i] false) =>
-      SExpr.decl p x ty false (.app q (.ident q2 "$branchChoice") [i] false)
-    | c => c
+  -- (`set L = if …`'s too, #331: its value bound first, then set, as before,
+  -- the branches at `L`'s type when no type is written)
+  let (c, place) : SExpr × List SExpr := match c with
+    | .decl p x ty false (.app q (.ident q2 "$branchChoiceAt") [l, i] false) =>
+      (SExpr.decl p x ty false (.app q (.ident q2 "$branchChoice") [i] false), [l])
+    | c => (c, [])
   match c with
   | .decl p x ty false (.app _ (.ident _ "$branchChoice") [i@(.ite ip cs t (some u))] false) =>
     -- (with no type written, its branches' values are at their join, as an
     -- `if`'s: the `if` goes with it, `$joinOf`, for the elaborator to join)
     let withJoin (e : SExpr) : SExpr := match ty, e with
-      | none, .app q f as b => .app q f (as ++ [.app ip (.ident ip "$joinOf") [i] false]) b
+      | none, .app q f as b => .app q f (as ++ [.app ip (.ident ip "$joinOf") (i :: place) false]) b
       | _, e => e
     -- (with the `if`'s place: an `else if`'s binds the same name, in the
     -- path of the one around it)
@@ -779,15 +780,29 @@ def bifToExcl (c : SExpr) : List SExpr :=
       [.decl ip k none false (.ite ip cs (.int ip 0) (some (.int ip 1))),
        .decl p x ty false (withJoin (mkExcl ip [(g 0, t), (g 1, u)]))]
     | names =>
-      -- (the names the condition binds, for its branch: through an option)
+      -- (the names the condition binds, for its branch: through an option,
+      -- each with its written type, a `var` still one; renamed for the
+      -- branch, `$…'N`, since the clauses after the `if` follow it in its
+      -- path, where they are not in scope)
+      let ρ := names.map fun y => (y, s!"${k}'{y}")
+      -- (as written, they are not in scope where the `if` is: no shadowing)
+      let written : SExpr := .app ip (.ident ip "$declNames") (names.map fun y =>
+        .ident ((cs.findSome? fun | .decl q x _ _ _ => if x == y then some q else none | _ => none).getD ip) y) false
+      let cs := cs.map (renameE ρ)
+      let t := renameE ρ t
+      let names := names.map fun y => (ρ.lookup y).getD y
+      let declOf (y : String) : Option STy × Bool :=
+        (cs.findSome? fun | .decl _ x t m _ => if x == y then some (t, m) else none | _ => none).getD (none, false)
       let (val, binds) : SExpr × List SExpr := match names with
-        | [y] => (.ident ip y, [.decl ip y none false (.query ip (.ident ip k))])
+        | [y] => let (t, m) := declOf y; (.ident ip y, [.decl ip y t m (.query ip (.ident ip k))])
         | ys =>
           let tt := k ++ "t"
           (.tuple ip (ys.map (SExpr.ident ip ·)),
             .decl ip tt none false (.query ip (.ident ip k)) ::
-              ys.zipIdx.map fun (y, i) => SExpr.decl ip y none false (.app ip (.ident ip tt) [.int ip (i : Int)] false))
-      [.decl ip k none false (.optionLit ip (.block ip (cs ++ [val]))),
+              ys.zipIdx.map fun (y, i) =>
+                let (t, m) := declOf y
+                SExpr.decl ip y t m (.app ip (.ident ip tt) [.int ip (i : Int)] false))
+      [written, .decl ip k none false (.optionLit ip (.block ip (cs ++ [val]))),
        .decl p x ty false (withJoin (mkExcl ip [(binds, t), ([.notE ip (.query ip (.ident ip k))], u)]))]
   | c => [c]
 
