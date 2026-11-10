@@ -122,6 +122,12 @@ not an `array{a₀, …}`, which would run `aₙ₋₁` before `a₀`'s value wa
   the names they bind (`$firstP`, as for #246's functions of their own),
   the alternatives a plain choice, and the names bound from the tuple of
   the one that succeeds. Only such choices are copied, once per alternative.
+- **A choice or a call with several values in a `set`'s path** (#283), as
+  `set A[0 | 1] = X`: `liftClauseM` binds the path's indices to names
+  (`setPrefix`, as for a new value that needs code before it), lifts those
+  bindings in order (`Choice.pathHas` says when), then for `op=` reads the
+  old value, then lifts the new value: the order `set` evaluates them in.
+  An index's choice is then an ordinary binding, a generator in a `for`.
   When the clauses after such a choice have another one, so that the copies
   would double with each (#335), they become a function of their own,
   `$cont…`, which each alternative calls. It is `<decides>`, with the
