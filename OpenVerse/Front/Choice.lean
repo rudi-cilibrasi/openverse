@@ -852,7 +852,15 @@ def prepare (cs : List SExpr) (isVal : String → Bool := fun _ => false)
     | .decl _ _ _ false (.app _ (.ident _ b) is false) =>
       if (b == "$branchChoice" || b == "$branchChoiceAt") &&
           is.getLast?.any (fun i => liftsAsIf i && !plainBranches hasLiftable i) then
-        (bifToExcl c).map exclToChoice
+        -- (with no type written, the `if` still with it, `$joinOf`, for the
+        -- elaborator to type the choice at the branches' join, `elabOneGo`)
+        (bifToExcl c).map fun
+          | .decl p x ty v e@(.app _ (.ident _ "$excl") as false) =>
+            let joins := as.filter fun | .app _ (.ident _ "$joinOf") _ _ => true | _ => false
+            match exclToChoice e with
+            | .app q f cs b => .decl p x ty v (.app q f (cs ++ joins) b)
+            | e' => .decl p x ty v e'
+          | c => exclToChoice c
       else [c]
     | c => [c]
 

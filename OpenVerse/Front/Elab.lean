@@ -5740,6 +5740,21 @@ partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
   | cl :: rest => do
     if let .app p (.ident _ "$defer") _ _ := cl then
       eerr p "defer: cannot be a clause of an if condition or first{…} that has a choice (#208)"
+    -- (#283) the choice of an `if`'s branches, each guarded by its branch
+    -- (`Choice.prepare`), with no type written: at the branches' join, as
+    -- the `if`'s value has, found by elaborating the `if` apart for the type
+    -- only, `$joinOf` (for `set L = if …`, at `L`'s type)
+    let cl ← match cl with
+      | .decl p x none false (.app q f@(.ident _ "$choice") as false) =>
+        match as.findSome? (fun | .app _ (.ident _ "$joinOf") (i :: l) false => some (i, l.head?) | _ => none) with
+        | some (i, place) =>
+          let st ← get
+          let (_, ty, _) ← elabBranchAlts { ctx with canFail := true, inTaking := true, typeOnly := true } p i none place
+          set st
+          pure (.decl p x (some ty.toSTy) false
+            (.app q f (as.filter fun | .app _ (.ident _ "$joinOf") _ _ => false | _ => true) false))
+        | none => pure cl
+      | cl => pure cl
     match Choice.binding? cl with
     | some b@{ each := some (.app _ (.ident _ "$loop") lp false), .. } =>
       -- (one taken lazily, #246: a loop over its values, each followed by
