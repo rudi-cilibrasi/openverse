@@ -1526,16 +1526,28 @@ heap effects (the function declares exactly those, plus `<decides>` if
 `Refine.functions` makes the function from the branch for the next
 elaboration, which compiles the `if` as the dispatch. The cast's target
 class then counts as one that fixes type arguments, so it and the
-classes below it get pins in Verse Core. A `return`, a `break` leaving
-the branch, a suspension in the branch or the `else` (the dispatch would
-have to carry it through the lowering of `<suspends>` code) are refused
-for now. A `set` of an outside `var` is rewritten first
+classes below it get pins in Verse Core. A suspension in the branch or
+the `else` (the dispatch would have to carry it through the lowering of
+`<suspends>` code) is refused for now. A `return` in the branch, or a
+`break` that leaves it, is rewritten first (`refineEscapes`): each becomes
+a `return` from the branch's function of a tuple that says what to do (an
+option of the enclosing function's result, or a `logic` for a `void`
+one; a `logic` for a `break`), with an option of the branch's value at
+its end, when the `if`'s value is carried (its type known); after the
+`if`, the caller returns or breaks as it says, else takes the value. When
+the value is not carried, the `if` is `void`, or the branch always leaves
+and the `else`'s value is taken after the checks. The branch made so is
+elaborated with that tuple as its `return`s' type (`escRet`), and its
+round-1 type check has no `defer:` of the enclosing function. A `set` of an outside `var` is rewritten first
 (`refineSetsOut`): the branch declares a copy of each such `var`
 (`$set…'N`), uses it in its place, and gives the copies' values with its
 own as a tuple; the `else` gives the `var`s' (with its value, when it has
 one); after the `if`, each `var` is set from the tuple, whose first part
 is the `if`'s value. The new branch is the elaborator's (`made`), so the
-lift carries it (`Lift.body`), and its function sets only its own `var`s. In a method, the branch's bare
+lift carries it (`Lift.body`), and its function sets only its own `var`s.
+A branch that also returns keeps its `return`s, which `refineEscapes` then
+rewrites (the copies are lost on that path, as the function leaves); one
+that also breaks out is refused, as the `var`s would not be set. In a method, the branch's bare
 names of `Self`'s fields and methods are made `Self.member` first
 (`selfQualify`, by the elaborator's own rule for bare names), so its
 function takes `Self` as one of the locals it uses; the lift then carries

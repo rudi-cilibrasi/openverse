@@ -487,11 +487,16 @@ circle := class(shape, labelled):
   the locals the branch uses, at their refined types; the `if` becomes a
   dispatch to it, which Verse Core types as it types a refined method call
   (`Typed.dispatch`), so nothing is assumed in Verse Core. So that the
-  branch means the same there, it cannot have a `return` or a `break` that
-  leaves it, and, in a `<suspends>` function, neither it nor the `else` can
-  suspend, for now. A `var` from outside it that the branch sets is copied
-  into the branch, which sets the copy, and is set from the copy after the
-  `if` (#243), so it has the value the branch left it. In a method, the branch names `Self`'s
+  branch means the same there, in a `<suspends>` function neither it nor
+  the `else` can suspend, for now. A `var` from outside it that the branch
+  sets is copied into the branch, which sets the copy, and is set from the
+  copy after the `if` (#243), so it has the value the branch left it. A
+  `return` in the branch, or a `break` that leaves it, makes its function
+  return what to do, which the caller then does after the `if` (#243): the
+  enclosing function returns, or the loop is left. Where the `if`'s value
+  is used, its type must be known for that (written, or given by where it
+  is) unless the branch always returns or breaks; and a branch that sets a
+  `var` from outside it cannot also `break` out of it, for now. In a method, the branch names `Self`'s
   fields and methods as anywhere in the method (its function takes `Self`
   too), but cannot call `(super:)`. Nor can such a cast be in a `defer:`,
   a constructor's items, a class's `block:` clause, a field's or
@@ -585,7 +590,9 @@ circle := class(shape, labelled):
     literal) in a call through one; a cast `T[X]` whose type
     arguments agree with `X`'s only under a refinement (`dup[P]` for
     `P:pair(a, b)`) other than as the first clause of an `if`'s condition, whose
-    branch has a `return` or a `break` that leaves it, whose branch or `else` suspends, whose branch calls
+    branch sets a `var` from outside it and has a `break` that leaves it, or
+    has a `return` or such a `break` where the `if`'s value is used at a
+    type not known there, whose branch or `else` suspends, whose branch calls
     `(super:)`, or in a `defer:`, a constructor's items, a class's `block:` clause, a default
     or a concurrent arm (#243); a variable, in generic code, of a class or
     interface type that requires an instance of itself (`Next:node(t)`)

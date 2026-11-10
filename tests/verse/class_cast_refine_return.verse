@@ -1,4 +1,4 @@
-# expect: 9:8: the branch of the cast to dup(a), which holds only under a refinement of the type arguments, is compiled as a function of its own, so it cannot have a return yet (#243)
+# A refining cast's branch with a return (#243): its function returns what to return, and the caller returns it
 pair(t:type, u:type) := class:
     A:t
     B:u

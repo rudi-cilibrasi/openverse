@@ -1,0 +1,20 @@
+5 x
+100
+small
+after
+1
+after
+1
+1
+dup 3
+not dup
+7 11 4
+11 1500 10
+3000 -1
+fdefer
+4
+fdefer
+0
+5 0
+1 0
+exit=0
