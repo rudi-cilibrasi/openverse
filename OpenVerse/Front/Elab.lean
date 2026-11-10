@@ -10365,8 +10365,19 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
             if (tc S Γ ρ a none).isNone && (tc S Γ ρ a (some VTy.void)).isNone then firstBad f Γ ρ a
             else firstBad f Γ ρ b
           | _, e => e
+        -- (first the slots' initial values, which `checkDefault` checks
+        -- apart from the statements, then the body after them)
+        let rec badInit (a k : Nat) (Γ : List VTy) : List VTy → Expr → Sum String Expr
+          | [], e => .inr e
+          | t :: ts, e => match e with
+            | .seq (.assign i d) rest =>
+              if i == k && checkDefault S a Γ d t then badInit a (k + 1) Γ ts rest
+              else .inl s!"\n-- initial value of slot {k} rejected (type {repr t}): {repr d}"
+            | _ => .inl s!"\n-- no initial value for slot {k}"
         let badStmt : String := match P.fns[f]?, S.fns[f]?, slotTys[f]? with
-          | some fn, some (_, τ), some Γ => s!"\n-- first rejected: {repr (firstBad 10000 Γ τ fn.body)}"
+          | some fn, some (_, τ), some Γ => match badInit fn.arity fn.arity Γ (Γ.drop fn.arity) fn.body with
+            | .inl msg => msg
+            | .inr b => s!"\n-- first rejected: {repr (firstBad 10000 Γ τ b)}"
           | _, _, _ => ""
         let dump := if !opts.debug then "" else
           badStmt ++ s!"\n-- body: {repr ((P.fns[f]?).map Fn.body)}\n-- arity: {(P.fns[f]?).map Fn.arity}" ++
