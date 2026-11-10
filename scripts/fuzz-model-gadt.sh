@@ -6,7 +6,8 @@
 # type of their own through opening dispatches from #317, and covariant <suspends>
 # overrides through them from #324, also spawned on a value of the class itself from
 # #321, and through a class between that redeclares it narrower from #337; interfaces that
-# give a parent interface other type arguments from #344, their defaults from #347),
+# give a parent interface other type arguments from #344, their defaults from #347, also in
+# classes giving composite arguments from #355),
 # each predicting the program's output, or the message of the refusal it
 # expects. Each seed uses one model in turn. Lean must match the model, and C
 # must match Lean; no program may hit an internal error.
