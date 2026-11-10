@@ -6804,6 +6804,115 @@ def subTops : Except String (List STop) :=
 def subVoidTops : Except String (List STop) :=
   parsePrelude subVoidPrelude ["subscription", "Live", "Handlers", "Hs", "H", "S", "F", "X", "Head", "signalAll", "subev0"]
 
+/-- (#53) An interface that gives a parent interface other type arguments
+    than its own type parameters (`c2(t) := interface(container([]t))`) and
+    a default body for one of that parent's methods (`Get<override>():[]t`):
+    a class that reaches it through interfaces each given the class's own
+    type parameters by name gets that body as an override of its own, with
+    the interface's type parameters renamed to the class's. A dispatch from
+    the parent that opens the class's type parameters reaches the class's
+    copy, which reads them from its receiver's hidden fields as any override
+    does; the interface's own, shared by all its classes, would need them as
+    hidden arguments, which such a dispatch cannot pass. Only where the copy
+    means what the default does: no class of the chain declares the method
+    (the class chain wins over interface defaults), no other interface above
+    the class gives it a body, it is not `<final>`, the body has no
+    `(super:)`, and no name in it or its parameters is a member the class's
+    scope has beyond the interface's (it would resolve, or be refused as a
+    shadowing, differently there). -/
+def copyIfaceDefaults (tops : List STop) : List STop :=
+  let defs : List (String × Bool × List TParam × List STy × List String × List STop) := tops.filterMap fun
+    | .classDef _ n tps _ parents isI fields _ ms => some (n, isI, tps, parents, fields.map (·.1), ms)
+    | _ => none
+  let defOf (n : String) := defs.find? (·.1 == n)
+  let parentName : STy → String := fun | .app q _ => q | .name q => q | _ => ""
+  let baseName (m : String) : String :=
+    if m.startsWith "(" then ((m.splitOn ":)").getD 1 m) else m
+  -- (everything above `n`, by name, with `n`)
+  let supersOf (n : String) : List String := Id.run do
+    let mut out := [n]
+    let mut frontier := [n]
+    for _ in [0:defs.length + 1] do
+      let next := (frontier.flatMap fun c => ((defOf c).map fun d => d.2.2.2.1.map parentName).getD []).filter
+        (!out.contains ·)
+      if next.isEmpty then break
+      out := out ++ next.eraseDups
+      frontier := next.eraseDups
+    return out
+  let membersOf (n : String) : List String := match defOf n with
+    | some (_, _, _, _, fs, ms) => fs ++ ms.filterMap fun | .fn _ m .. => some (baseName m) | _ => none
+    | none => []
+  -- (an interface's body for `m`, not abstract)
+  let bodyOf (n m : String) : Option STop := (defOf n).bind fun d => d.2.2.2.2.2.find? fun
+    | .fn _ x _ _ effs _ _ => baseName x == m && !effs.contains "$abstract"
+    | _ => false
+  let pinned (tps : List TParam) (parents : List STy) : Bool := parents.any fun
+    | .app _ as => as.length != tps.length || (as.zip tps).any fun (a, tp) => match a with
+      | .name x => x != tp.name
+      | _ => true
+    | _ => false
+  let usesSuper (b : SExpr) : Bool := Choice.anyE (fun
+    | .ident _ n | .member _ _ n => (n.splitOn "(super:)").length > 1
+    | _ => false) b
+  let mentions (names : List String) (b : SExpr) : Bool := Choice.anyE (fun
+    | .ident _ n | .decl _ n .. => names.contains n
+    | .gen _ n n2 _ => names.contains n || (n2.map names.contains).getD false
+    | _ => false) b
+  tops.map fun
+    | .classDef cp n tps specs parents false fields ovs ms =>
+      let chain := (supersOf n).filter fun c => ((defOf c).map (!·.2.1)).getD false
+      let chainDeclares (m : String) : Bool := chain.any fun c => (membersOf c).contains m
+      -- (the pinned interfaces reached through interfaces given the class's
+      -- own type parameters by name, each with the renaming to the class's)
+      let rec reach (fuel : Nat) (q : String) (qa : List STy) (ρ : List (String × String)) :
+          List (String × List (String × String)) :=
+        match fuel, defOf q with
+        | f + 1, some (_, true, itps, iparents, _, _) =>
+          let names := qa.filterMap fun | .name x => (ρ.lookup x).orElse fun _ => none | _ => none
+          if names.length != itps.length || qa.length != itps.length then [] else
+          let ρ' := (itps.map (·.name)).zip names
+          (if !itps.isEmpty && pinned itps iparents then [(q, ρ')] else []) ++
+            iparents.flatMap fun ip => match ip with
+              | .app pq pa => reach f pq pa ρ'
+              | .name pq => reach f pq [] ρ'
+              | _ => []
+        | _, _ => []
+      let selfρ := tps.map fun tp => (tp.name, tp.name)
+      let targets := parents.flatMap fun p => match p with
+        | .app q qa => reach (defs.length + 1) q qa selfρ
+        | .name q => reach (defs.length + 1) q [] selfρ
+        | _ => []
+      -- (one copy per interface, also one reached along two paths)
+      let targets := targets.foldl (fun acc t => if acc.any (·.1 == t.1) then acc else acc ++ [t]) []
+      let extra : List STop := targets.flatMap fun (j, ρ) =>
+        let jScope := (supersOf j).flatMap membersOf
+        let risky := ((supersOf n).flatMap membersOf).filter (!jScope.contains ·)
+        (((defOf j).map (·.2.2.2.2.2)).getD []).filterMap fun
+          | .fn mp m ps mtps effs ret body =>
+            -- (every interface that declares the method, above the class or
+            -- above any class below it, is `j` or above it: the copy, a
+            -- method of the class chain, takes no other interface's slot or
+            -- default, which the chain would otherwise win over)
+            let below := defs.filterMap fun d => if !d.2.1 && (supersOf d.1).contains n then some d.1 else none
+            let jUp := supersOf j
+            let others := (below.flatMap supersOf).eraseDups.filter fun i =>
+              ((defOf i).map (·.2.1)).getD false && !jUp.contains i && (membersOf i).contains (baseName m)
+            if effs.contains "override" && !effs.contains "$abstract" && !effs.contains "final" &&
+                !m.startsWith "(" && !chainDeclares (baseName m) && others.isEmpty && !usesSuper body &&
+                !mtps.any (fun tp => tps.any (·.name == tp.name)) &&
+                -- (nor a type parameter the renaming changes as a name in an
+                -- expression, which `renameTypes` leaves: a cast's `c2(t)`)
+                !mentions ((ρ.filter fun (x, y) => x != y).map (·.1)) body &&
+                !mentions risky body && !ps.any (fun sp => risky.contains sp.name ||
+                  (sp.default.map (mentions risky)).getD false) then
+              let ps' : List SParam := ps.map fun sp =>
+                ({ sp with ty := Choice.styRename ρ sp.ty, «default» := sp.default.map (Choice.renameTypes ρ) } : SParam)
+              some (.fn mp m ps' mtps effs (Choice.styRename ρ ret) (Choice.renameTypes ρ body))
+            else none
+          | _ => none
+      .classDef cp n tps specs parents false fields ovs (ms ++ extra)
+    | t => t
+
 /-- An error of the lowering in function `name` (#156): with the position of
     its definition among `tops`. -/
 def inFnMsg (tops : List STop) (name msg : String) : String :=
@@ -7915,8 +8024,8 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   -- function values (#210): the function types' interfaces, and a class
   -- for each function used as a value
   -- (the entry expression is scanned too)
-  let allTops00 := FnValues.desugar (resolved.take (resolved.length - rawEntry.length) ++ helpers)
-    (resolved.drop (resolved.length - rawEntry.length)) (opts.fnRequests.map fun (n, t) => (n, t.toSTy))
+  let allTops00 := copyIfaceDefaults (FnValues.desugar (resolved.take (resolved.length - rawEntry.length) ++ helpers)
+    (resolved.drop (resolved.length - rawEntry.length)) (opts.fnRequests.map fun (n, t) => (n, t.toSTy)))
   let entryTop := resolved.drop (resolved.length - rawEntry.length)
   -- the command line: `Args`, and an entry expression
   let defines (n : String) := allTops00.any fun

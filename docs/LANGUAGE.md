@@ -578,8 +578,12 @@ circle := class(shape, labelled):
     i2(string))`, #53); in code generic over an interface's parent, a call
     of a default implementation the interface gives a method of its parent
     at type arguments the interface fixes otherwise (`c2(t)`'s
-    `Get<override>():[]t` reached from `container(u)`), and a cast to such
-    an interface whose type parameters would be unknown (#53).
+    `Get<override>():[]t` reached from `container(u)`) in a class that gives
+    the interface other than its own type parameters
+    (`tb(a, b) := class(c2(tuple(a, b)))`), or whose members give a name
+    the default uses another meaning, or for a `<final>` default or one
+    with `(super:)`; and a cast to such an interface whose type parameters
+    would be unknown (#53).
 
 ## Mutation, macros, tooling
 
