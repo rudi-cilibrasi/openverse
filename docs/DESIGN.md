@@ -1314,15 +1314,22 @@ the body's typed locals, `Refine.substTypes`): such a
 dispatch opens `t`, which the class's copy reads from its hidden field,
 where `c2`'s own, shared by its classes, would need it as a hidden
 argument that `Typed.dispatch` cannot pass (its other arguments are typed
-without the refinement). The copy is made only where it means what the
-default does: no class of the chain declares the method (the chain wins
-over defaults), no other interface above the class gives it a body (one
-that overrides `c2`'s is copied instead), it has no `(super:)`, and no
-name it uses free, nor a named parameter, is a member the class's scope
-has beyond `c2`'s (which would resolve differently there); its locals and
-positional parameters named like such a member are renamed (Verse
-refuses shadowing, so they are never also free), and a `<final>` default
-stays final, its copy exempt from overriding it (`$copy`). A class that reaches
+without the refinement). The copy is elaborated in `c2`'s scope (its effect
+`$copyOf:c2`, `copyScope?`, sets `Ctx.selfClass` to `c2` and the
+parameter check's members to `c2`'s, and `Sig.scope` the scope its named
+parameters' defaults are evaluated in at a call): a name it uses free is
+the global `c2`'s own body sees, not a member the class adds, its
+parameters and locals shadow none of the class's members, and
+`(super:)` is what is above `c2`; only the receiver, its hidden fields and
+the dispatch of its members are the class's (a member of `c2` is reached
+as `Self`'s, so one the class overloads cannot be taken as a value). A
+refining cast in it lifts its branch per copy (#243): the copies and
+`c2`'s own default share the source's places, so the lift's key and
+function carry `Ctx.liftTag`, `$in` and the class. It is made only where it means what the default
+does: no class of the chain declares the method (the chain wins over
+defaults), and no other interface above the class gives it a body (one
+that overrides `c2`'s is copied instead); a `<final>` default stays
+final, its copy exempt from overriding it (`$copy`). A class that reaches
 one interface at two instances through the interfaces it lists (also
 `class(pi(int), pi(string))`) is refused. A subclass may so implement an interface that gives it fewer
 type arguments than its parent's (`sbox(t) := class(box(t), shower)`

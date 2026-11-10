@@ -956,6 +956,10 @@ structure Sig where
       reads from its receiver's hidden fields (`$w.…`), not from hidden
       parameters, as a dispatch that opens them has none to pass. -/
   selfTps : List String := []
+  /-- The class or interface whose scope its body and its named parameters'
+      defaults resolve in, when not the one its name says: a class's copy of
+      an interface's default, the interface (#53, `copyScope?`). -/
+  scope : Option String := none
   deriving Inhabited
 
 /-- How many hidden parameters (values of type arguments) a function takes. -/
@@ -1076,8 +1080,15 @@ structure Ctx where
       whose values `Typed.dispatch` types under the refinement too. -/
   unrefine : List (Ty × Ty) := []
   /-- In a method of class `c` (the function `c.M`): `c`. A bare name that is
-      not a local is then looked up among the fields and methods of `Self`. -/
+      not a local is then looked up among the fields and methods of `Self`.
+      In a class's copy of an interface's default, the interface (#53). -/
   selfClass : Option String := none
+  /-- In a class's copy of an interface's default (#53), and in the branches
+      lifted from it: `$in` and the class, which tells its refining casts'
+      lifts (#243) from those of the interface's own default and of the
+      other classes' copies, at the same place in the source but at other
+      types. -/
+  liftTag : String := ""
   /-- In a method `c.M` (or `c.(r:)M`): `M` (or `(r:)M`), for `(super:)`. -/
   selfMethod : Option String := none
   /-- In a constructor's items (the function `K$init`, #72): no `return`. -/
@@ -2934,9 +2945,10 @@ partial def elabGenericCallWith (elabE : Ctx → SExpr → Option Ty → EM R) (
         let key := (s.name, s!"?{n}")
         if ctx.defaults.contains key then
           eerr p s!"the default of ?{n} of {s.name} uses itself (a call of {s.name} that omits ?{n})"
-        -- (a method's: its receiver's fields too, through `Self`)
+        -- (a method's: its receiver's fields too, through `Self`; a copy's
+        -- in its interface's scope, as its body, #53)
         let selfC : Option String :=
-          if s.pnames.head? == some "Self" then (s.name.splitOn ".").head? else none
+          if s.pnames.head? == some "Self" then s.scope.orElse fun _ => (s.name.splitOn ".").head? else none
         let dctx := { ctx with locals := earlier, selfClass := selfC, inParamDefault := true,
                                inLoop := false, canFail := ctx.canFail && s.decides,
                                suspends := ctx.suspends && s.suspends,
@@ -3387,7 +3399,7 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
       if ctx.suspends && Suspend.hasSusp isS re.e then
         eerr ee.pos s!"the else of the cast to {shown}, which holds only under a refinement of the type arguments, cannot suspend yet: the if is a dispatch to its branch's function (#243)"
       pure re
-  let key := Refine.keyOf p D
+  let key := Refine.keyOf p D ctx.liftTag
   match env.castRequests.find? (·.key == key) with
   | none =>
     -- (first: the branch in the refined world)
@@ -3441,15 +3453,16 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
     let heap := ["reads", "writes", "allocates"].filter fun k => fxB.any (·.1 == k)
     let specs := (if heap.isEmpty then ["computes"] else heap) ++ (if decides then ["decides"] else [])
     let lift : Refine.Lift := {
-      pos := p, bound := D, target := T,
-      name := s!"$refine{p.line}_{p.col}_{D}" ++ (if p.file.isEmpty then "" else s!"_{p.file}"),
+      pos := p, bound := D, target := T, tag := ctx.liftTag,
+      name := s!"$refine{p.line}_{p.col}_{D}" ++ (if p.file.isEmpty then "" else s!"_{p.file}") ++ ctx.liftTag,
       params := ((D, dTy) :: sig).map (fun (n, t) => { name := n, ty := t.toSTy }) ++
         extra.map fun (n, _) => { name := s!"$type{n}", ty := .name n },
       tparams := tps.map fun (n, c) => { pos := p, name := n, constraint := if c then "comparable" else "type" },
       specs, ret := ret.toSTy, subst := σ, opened := opened.map fun (n, v, _) => (n, v),
       -- (made: a branch the elaborator made, for a cast with clauses
       -- after it, #286, which the source does not have as such)
-      body := if ctx.selfClass.isSome || made then some body else none }
+      -- (and a tagged one, which the source's places do not find, #53)
+      body := if ctx.selfClass.isSome || made || !ctx.liftTag.isEmpty then some body else none }
     modify fun st => if st.castNeeds.any (·.key == key) then st else { st with castNeeds := st.castNeeds ++ [lift] }
     -- (a placeholder: this elaboration goes no further)
     return some ⟨if decides then .prim .fail [] else .prim .userErr [], τ'⟩
@@ -3994,7 +4007,7 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
             let st0 ← get
             let re ← elabE ctx ee none
             set st0
-            match ctx.types.castRequests.find? (·.key == Refine.keyOf p d) with
+            match ctx.types.castRequests.find? (·.key == Refine.keyOf p d ctx.liftTag) with
             | some l => attempt (match l.ret with | .name "logic" => .void | _ => re.ty)
             | none =>
               if re.ty == .void then attempt .void
@@ -4835,9 +4848,10 @@ partial def elabAppBase (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (b
               -- (the default sees the parameters before it, in their temporaries)
               let earlier : List Local := ((s.pnames.zip (List.range k)).filterMap fun (pn, j) =>
                 (slots[j]!).map fun sl => ({ name := pn, slot := sl, ty := ptys[j]!, mutable := false } : Local)).reverse
-              -- (a method's: its receiver's fields too, through `Self`)
+              -- (a method's: its receiver's fields too, through `Self`; a
+              -- copy's in its interface's scope, as its body, #53)
               let selfC : Option String :=
-                if s.pnames.head? == some "Self" then (s.name.splitOn ".").head? else none
+                if s.pnames.head? == some "Self" then s.scope.orElse fun _ => (s.name.splitOn ".").head? else none
               -- (its own context: no return or break into the caller, failure
               -- only for a <decides> callee, and not its own default again)
               let key := (s.name, s!"?{n}")
@@ -5309,6 +5323,9 @@ partial def elabCast (ctx : Ctx) (p : Pos) (T : String) (args : List SExpr) (bra
   if parametric && env.coreArgs T targs != env.coreArgs S sargs then
     if (Ty.unifyEqs (fun _ _ => none) [] ((env.coreArgs S sargs).zip (env.coreArgs T targs))).isSome then
       eerr p s!"cannot cast {withArticle r.ty.show} to {(Ty.struct T targs).show} here: their type arguments agree only under a refinement, which a cast gives only as the first clause of an if's condition, D := {T}[X], whose branch is then typed under it (#209, #243)"
+    -- (in a class's copy of an interface's default, at type arguments the
+    -- class fixes, it fails, as the interface's own default's would, #53)
+    if !ctx.liftTag.isEmpty then return ⟨.prim .fail [], tty⟩
     eerr p s!"{withArticle r.ty.show} is never {withArticle T}: their type arguments differ, so {T}[…] would always fail"
   -- a reference: a test of its object's class (#34)
   if env.isRefClass S then return ⟨.heap (.isTag (common.map env.tagOf)) [r.e], tty⟩
@@ -6858,13 +6875,21 @@ def subTops : Except String (List STop) :=
 def subVoidTops : Except String (List STop) :=
   parsePrelude subVoidPrelude ["subscription", "Live", "Handlers", "Hs", "H", "S", "F", "X", "Head", "signalAll", "subev0"]
 
-/-- The names a body binds: its locals and its generators' (#53). -/
-partial def boundNamesE (e : SExpr) : List String :=
-  let own := match e with
-    | .decl _ n _ _ _ => [n]
-    | .gen _ x i _ => x :: i.toList
-    | _ => []
-  own ++ (Refine.kids e).flatMap boundNamesE
+/-- The tag of the lifts of the refining casts in a function (#53, #243):
+    a branch lifted from a class's copy of an interface's default, whose
+    name ends with the copy's tag (`$in` and the class), has the copy's, so
+    that its own casts' lifts are told apart too. -/
+def liftTagOf (name : String) : String :=
+  if name.startsWith "$refine" then
+    match (name.splitOn "$in").getLast? with
+    | some c => if (name.splitOn "$in").length > 1 then s!"$in{c}" else ""
+    | none => ""
+  else ""
+
+/-- The interface whose scope a class's copy of its default is elaborated
+    in (#53): its `$copyOf:J` effect, which `copyIfaceDefaults` gives it. -/
+def copyScope? (effs : List String) : Option String :=
+  effs.findSome? fun e => if e.startsWith "$copyOf:" then some (e.drop 8).toString else none
 
 /-- (#53) An interface that gives a parent interface other type arguments
     than its own type parameters (`c2(t) := interface(container([]t))`) and
@@ -6876,16 +6901,14 @@ partial def boundNamesE (e : SExpr) : List String :=
     the parent that opens the class's type parameters reaches the class's
     copy, which reads them from its receiver's hidden fields as any override
     does; the interface's own, shared by all its classes, would need them as
-    hidden arguments, which such a dispatch cannot pass. Only where the copy
-    means what the default does: no class of the chain declares the method
-    (the class chain wins over interface defaults), no other interface above
-    the class gives it a body, the body has no `(super:)`, and no name it
-    uses free, nor a named parameter, is a member the class's scope has
-    beyond the interface's (it would resolve differently there). Its locals
-    and positional parameters named like such a member are renamed (Verse
-    refuses shadowing, but a `for` binder may shadow a global or a built-in:
-    a name that is also one keeps the copy from being made), and a
-    `<final>` default stays final, its copy exempt (`$copy`). -/
+    hidden arguments, which such a dispatch cannot pass. The copy is
+    elaborated in the interface's scope (`$copyOf:J`, `copyScope?`): the
+    names it uses, its parameters and locals, and `(super:)`, mean what they
+    do in the interface's own body, whatever members the class adds. Only
+    where the copy means what the default does: no class of the chain
+    declares the method (the class chain wins over interface defaults) and
+    no other interface above the class gives it a body; a `<final>` default
+    stays final, its copy exempt (`$copy`). -/
 def copyIfaceDefaults (tops : List STop) : List STop :=
   let defs : List (String × Bool × List TParam × List STy × List String × List STop) := tops.filterMap fun
     | .classDef _ n tps _ parents isI fields _ ms => some (n, isI, tps, parents, fields.map (·.1), ms)
@@ -6908,18 +6931,11 @@ def copyIfaceDefaults (tops : List STop) : List STop :=
   let membersOf (n : String) : List String := match defOf n with
     | some (_, _, _, _, fs, ms) => fs ++ ms.filterMap fun | .fn _ m .. => some (baseName m) | _ => none
     | none => []
-  -- (an interface's body for `m`, not abstract)
-  let bodyOf (n m : String) : Option STop := (defOf n).bind fun d => d.2.2.2.2.2.find? fun
-    | .fn _ x _ _ effs _ _ => baseName x == m && !effs.contains "$abstract"
-    | _ => false
   let pinned (tps : List TParam) (parents : List STy) : Bool := parents.any fun
     | .app _ as => as.length != tps.length || (as.zip tps).any fun (a, tp) => match a with
       | .name x => x != tp.name
       | _ => true
     | _ => false
-  let usesSuper (b : SExpr) : Bool := Choice.anyE (fun
-    | .ident _ n | .member _ _ n => (n.splitOn "(super:)").length > 1
-    | _ => false) b
   let mentions (names : List String) (b : SExpr) : Bool := Choice.anyE (fun
     | .ident _ n | .decl _ n .. => names.contains n
     | .gen _ n n2 _ => names.contains n || (n2.map names.contains).getD false
@@ -6955,27 +6971,8 @@ def copyIfaceDefaults (tops : List STop) : List STop :=
       let targets := targets.filter fun (_, σ) =>
         σ.any fun (_, ty) => STy.mentionsAny (tps.map (·.name)) ty
       let extra : List STop := targets.flatMap fun (j, σ) =>
-        let jScope := (supersOf j).flatMap membersOf
-        let risky := ((supersOf n).flatMap membersOf).filter (!jScope.contains ·)
         (((defOf j).map (·.2.2.2.2.2)).getD []).filterMap fun
-          | .fn mp m ps0 mtps effs ret body0 =>
-            -- (the body's locals and positional parameters named like a
-            -- member the class's scope adds are renamed, which a shadowing
-            -- would refuse there: Verse refuses shadowing a global or a
-            -- member, so such a name is never also free in the body; a named
-            -- parameter keeps its name, which calls use)
-            let boundRisky := ((boundNamesE body0 ++ (ps0.filter (!·.named)).map (·.name) ++
-                ps0.flatMap fun sp => (sp.default.map boundNamesE).getD []).filter risky.contains).eraseDups
-            -- (a `for` binder may shadow a global or a built-in, so it is
-            -- renamed only where no such name is one: else no copy, as now)
-            let topNames : List String := tops.map fun
-              | .fn _ x .. | .const _ x .. | .classDef _ x .. => x
-            let shadowsGlobal := boundRisky.any fun x =>
-              topNames.contains x || builtins.contains x || softBuiltins.contains x
-            let ren := boundRisky.map fun x => (x, x ++ "$copy")
-            let body := Choice.renameE ren body0
-            let ps : List SParam := ps0.map fun sp =>
-              ({ sp with name := (ren.lookup sp.name).getD sp.name, «default» := sp.default.map (Choice.renameE ren) } : SParam)
+          | .fn mp m ps mtps effs ret body =>
             -- (every interface that declares the method, above the class or
             -- above any class below it, is `j` or above it: the copy, a
             -- method of the class chain, takes no other interface's slot or
@@ -6984,19 +6981,18 @@ def copyIfaceDefaults (tops : List STop) : List STop :=
             let jUp := supersOf j
             let others := (below.flatMap supersOf).eraseDups.filter fun i =>
               ((defOf i).map (·.2.1)).getD false && !jUp.contains i && (membersOf i).contains (baseName m)
-            if effs.contains "override" && !effs.contains "$abstract" && !shadowsGlobal &&
-                !m.startsWith "(" && !chainDeclares (baseName m) && others.isEmpty && !usesSuper body &&
+            if effs.contains "override" && !effs.contains "$abstract" &&
+                !m.startsWith "(" && !chainDeclares (baseName m) && others.isEmpty &&
                 !mtps.any (fun tp => tps.any (·.name == tp.name)) &&
                 -- (nor a type parameter the substitution changes as a name in
                 -- an expression, which `Refine.substTypes` leaves: a cast's `c2(t)`)
-                !mentions ((σ.filter fun (x, y) => match y with | .name y' => x != y' | _ => true).map (·.1)) body &&
-                !mentions risky body && !ps.any (fun sp => risky.contains sp.name ||
-                  (sp.default.map (mentions risky)).getD false) then
+                !mentions ((σ.filter fun (x, y) => match y with | .name y' => x != y' | _ => true).map (·.1)) body then
               let ps' : List SParam := ps.map fun sp =>
                 ({ sp with ty := sp.ty.substNames σ, «default» := sp.default.map (Refine.substTypes σ) } : SParam)
               -- (`$copy`: its `<final>`, if any, is the interface's, which it
-              -- is, not overrides)
-              some (.fn mp m ps' mtps (effs ++ ["$copy"]) (ret.substNames σ) (Refine.substTypes σ body))
+              -- is, not overrides; `$copyOf`: elaborated in `j`'s scope, so its
+              -- names, `(super:)` included, resolve as in the interface's own)
+              some (.fn mp m ps' mtps (effs ++ ["$copy", s!"$copyOf:{j}"]) (ret.substNames σ) (Refine.substTypes σ body))
             else none
           | _ => none
       .classDef cp n tps specs parents false fields ovs (ms ++ extra)
@@ -8586,9 +8582,11 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
           throw s!"{mp.show}: {n} defines {mn} twice with the same parameters"
         if ps.any (·.name == "Self") then throw s!"{mp.show}: a method parameter cannot be called Self"
         if builtins.contains (methodBase mn) || softBuiltins.contains (methodBase mn) then throw s!"{mp.show}: a method cannot be called {methodBase mn}, the name of a built-in function"
+        -- (a copy of an interface's default: as in the interface, #53)
+        let scope := (copyScope? effs).getD n
         for prm in ps do
-          if fs.any (·.1 == prm.name) || (henv.supers n).any (declaresBase · prm.name) then
-            throw s!"{mp.show}: parameter '{prm.name}' of {mn} is already a field or method of {n}; Verse does not allow shadowing"
+          if (fullOf scope).any (·.1 == prm.name) || (henv.supers scope).any (declaresBase · prm.name) then
+            throw s!"{mp.show}: parameter '{prm.name}' of {mn} is already a field or method of {scope}; Verse does not allow shadowing"
         -- a class's `block:` clauses: run at construction, after those of the
         -- classes above it, so never overridden
         -- overriding (Book of Verse ch. 10: `M<override>`, the same signature)
@@ -9030,7 +9028,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
                           fx := if n.endsWith ".$block" || (n.splitOn "$default$").length > 1 then [] else allowedFx effs,
                           isConst := false,
                           named := (ps.filter (·.named)).map fun q => (q.name, q.default),
-                          pnames := ps.map (·.name) }
+                          pnames := ps.map (·.name), scope := copyScope? effs }
     | .const p n sty _ =>
       let rt ← match sty with
         | some t => do let (rt, _) ← (resolveTy env p t).run {}; pure rt
@@ -9075,7 +9073,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
                             fx := if n.endsWith ".$block" then [] else allowedFx effs,
                             tparams,
                             named := (ps.filter (·.named)).map fun q => (q.name, q.default),
-                            pnames := ps.map (·.name) }
+                            pnames := ps.map (·.name), scope := copyScope? effs }
     | _ => pure ()
   let mkSigProg (sigs : Array Sig) : Prog :=
     { fns := (sigs ++ gsigs).toList.map fun s =>
@@ -9342,7 +9340,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   let elabFn (env : TyEnv) (p : Pos) (name : String) (ps : List SParam) (ptys : List Ty) (ret : Ty)
       (decides : Bool) (allowed : List String) (tps : List (String × Bool)) (body : SExpr)
       (suspends : Bool := false) (selfTps : List String := [])
-      (selfFieldOf : Option (String → Option Nat) := none) :
+      (selfFieldOf : Option (String → Option Nat) := none) (scopeClass : Option String := none) :
       Except String (Fn × List VTy × List (String × Ty) × Option Pos × List Refine.Lift × List LoopUse) := do
     -- (#209) the values of `selfTps` come from the receiver's hidden
     -- fields, in slots after the hidden parameters: a method's own class's
@@ -9369,9 +9367,12 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
                        dictVars := dictTps.map (·.1),
                        inBlock := name.endsWith ".$block",
                        inCtor := name.endsWith "$init",
-                       selfClass := match name.splitOn "." with
+                       -- (an interface's default elaborated for a class, #53:
+                       -- its names resolve in the interface, `scopeClass`)
+                       selfClass := scopeClass.orElse fun _ => match name.splitOn "." with
                          | [c, _] => some c
                          | _ => none
+                       liftTag := if scopeClass.isSome then s!"$in{selfCls}" else liftTagOf name
                        selfMethod := match name.splitOn "." with
                          | [_, m] => some m
                          | _ => none }
@@ -9442,10 +9443,13 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   -- instantiation (`Typed.subst`)
   for (top, g) in generics.zip gsigs.toList do
     match top with
-    | .fn p n ps _ _ _ body =>
+    | .fn p n ps _ effs _ body =>
+      -- (a class's copy of an interface's default, #53, elaborated in the
+      -- interface's scope)
+      let scope := copyScope? effs
       let (fn, tys, needs, err, casts, lf) ← elabFn (genvOf g) p n ps g.params g.ret g.decides g.fx g.tparams body g.suspends
         g.selfTps ((opts.castRequests.find? (·.name == n)).map fun l => fun v =>
-          (l.opened.lookup v).bind (env.witnessField? l.target ·))
+          (l.opened.lookup v).bind (env.witnessField? l.target ·)) scope
       fnNeeds := fnNeeds ++ needs
       castNeeds := castNeeds ++ casts
       loopFirst := loopFirst ++ lf
