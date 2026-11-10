@@ -119,8 +119,10 @@ def schS : Nat := 1
     done, in a program whose scheduler resumes waiting frames directly,
     #362), the result, one field per suspension point (a callee's frame),
     two per arm of a `sync` or `race` (its suspension point, whether it is
-    done), then the slots (and a root's waiting frame to resume first, #362,
-    which `lowerConcurrency` adds). -/
+    done), then the slots; where frames are resumed directly (#362), each
+    arm's record of the waiting frame to resume first (`armTopMark`), and,
+    after an opened override's result cells, a root's (which
+    `lowerConcurrency` adds). -/
 def pcF : Nat := 0
 def resF : Nat := 1
 def childF (k : Nat) : Nat := 2 + (k - 1)
@@ -626,9 +628,10 @@ def seeking : M Expr := do return .prim .eq [.local (← read).rS, int 1]
     each pass did before (#362). -/
 def waitsHere (force : Bool) : M Expr := do
   let env ← read
-  -- (code of an arm records none too, meaning the arm itself: its frame is
-  -- the one that has the arms, which resumes them, #362)
-  let v : Expr := if env.isRoot || env.inArmR then .lit .none else .prim .mkSome [fr]
+  -- (none is the scheduler, as a callee's frame field starts, so that
+  -- recording allocates nothing; code of an arm records none too, meaning
+  -- the arm itself: its frame is the one that has the arms, #362)
+  let v : Expr := if env.isRoot || env.inArmR then .local schS else fr
   let sch : Expr := .local schS
   let depth : Expr := .heap (.get env.leafDepthF) [sch]
   let setIt := seqVoid [.heap (.set env.leafF) [sch, v], .heap (.set env.leafDepthF) [sch, int 0]]
@@ -881,8 +884,10 @@ partial def block (e : Expr) (k : Option (Expr → Expr)) : M (List Expr) := do
         modify fun st => { st with branchArms := st.branchArms.set! i (env.fnBase + 2 * a, doneA, true) }
         -- (`start(sched, frame)` makes the wrapper, registers it, runs the
         -- arm once and gives the wrapper, kept in the frame for `stop`)
-        pure (seqVoid [fset pcA (int 0), fset doneA (int 0), number, spillMark,
-          fset (childF site) (.call startFn [.local schS, fr]), reloadMark])
+        -- (its arm's record, #362, which its wrapper reads, starts as none)
+        pure (seqVoid ([fset pcA (int 0), fset doneA (int 0)] ++
+          (if env.leafy then [fset (armTopMark a) (.local schS)] else []) ++ [number, spillMark,
+          fset (childF site) (.call startFn [.local schS, fr]), reloadMark]))
       match k with
       | some k => return [s, ← emit (pure (k vd))]
       | none => return [s]
@@ -1224,7 +1229,7 @@ partial def concAt (isSync : Bool) (arms : List Expr) (isRush : Bool := false) :
   let armTop (res : Nat) : Nat := armTopMark ((res - env.fnBase) / 2)
   let arrive : Expr := .ite (← seeking) vd (seqVoid
     (info.toList.flatMap (fun (res, _, pcA, doneA) => [fset pcA (int 0), fset doneA (int 0)] ++
-        (if env.leafy then [fset (armTop res) (.lit .none)] else [])) ++ numbers.toList ++
+        (if env.leafy then [fset (armTop res) (.local schS)] else [])) ++ numbers.toList ++
       [fset env.pcFld (int k)]))
   let found : Expr := .assign env.rS (int 0)
   -- an arm that gives 2 makes the function return: the other arms that
@@ -1238,7 +1243,7 @@ partial def concAt (isSync : Bool) (arms : List Expr) (isRush : Bool := false) :
     [defersHere, if env.pcFld == pcF then doneRet env.leafOpt else .ret (int 2)])
   -- (an arm is resumed from the frame it recorded, else, or once that one
   -- is done, from the arm, as a root is, #362)
-  -- (`$resumeAny(recorded, sched, frame)` gives -1 when none is recorded)
+  -- (`$resumeAny(recorded, sched)` gives -1 when none is recorded)
   let (sS, fS) ← if env.leafy then do pure (← freshT .int, ← freshT .int) else pure (0, 0)
   let resumeArm (res : Nat) : List Expr :=
     if !env.leafy then [.assign st (.call res args)] else
@@ -1246,14 +1251,14 @@ partial def concAt (isSync : Bool) (arms : List Expr) (isRush : Bool := false) :
     let forget : Expr := .heap (.set env.leafDepthF) [sch, int (-1)]
     let depth : Expr := .heap (.get env.leafDepthF) [sch]
     [.assign fS (int 0),
-     .assign st (.seq forget (.seq (.assign sS (.call env.resumeAnyFn [fget (armTop res), sch, fr]))
+     .assign st (.seq forget (.seq (.assign sS (.call env.resumeAnyFn [fget (armTop res), sch]))
        (.ite (.prim .eq [.local sS, int 0]) (.seq (.assign fS (int 1)) (.local sS))
          (.seq forget (.call res args))))),
      fset (armTop res) (.ite (.prim .eq [.local st, int 0])
-       (.ite (.prim .lt [depth, int 0]) (.lit .none)
+       (.ite (.prim .lt [depth, int 0]) sch
          (.ite (.prim .eq [.local fS, int 1]) (.heap (.get env.leafF) [sch])
-           (.ite (.prim .le [int env.leafMin, depth]) (.heap (.get env.leafF) [sch]) (.lit .none))))
-       (.lit .none))]
+           (.ite (.prim .le [int env.leafMin, depth]) (.heap (.get env.leafF) [sch]) sch)))
+       sch)]
   let run (res doneA : Nat) : Expr := seqVoid ([spillMark] ++ resumeArm res ++ [
     .ite (.prim .eq [.local st, int 1]) (.seq (fset doneA (int 1)) vd) vd,
     .ite (.prim .eq [.local st, int 2]) (.seq (seqVoid [fset doneA (int 1), returning]) vd) vd, reloadMark])
