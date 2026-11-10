@@ -1799,7 +1799,7 @@ def methodFns (tops : List STop) (reserved : List String := []) : Except String 
       -- of a generic one; not yet with overrides, whose dispatch tests
       -- classes, not their type arguments)
       if !tps.isEmpty && ds.length > 1 then
-        return some (s!"a class that has it is generic ({c.replace "::" "."}) and it is overridden", none)
+        return some (s!"{if ii then "an interface" else "a class"} that has it is generic ({c.replace "::" "."}) and it is overridden", none)
       if !(anc c).contains r then return some (s!"{c.replace "::" "."} overrides it without being below {r.replace "::" "."}", none)
       if let .fn _ _ _ mtps fx _ b := m then
         if !mtps.isEmpty then return some ("is generic", some c)

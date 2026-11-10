@@ -783,7 +783,9 @@ Main():void =
   `Signal`, …), no top-level name and no parameter or local. An
   interface's method is such a family's root too (#283): a call through
   the interface dispatches on the receiver's class, as for an overridden
-  method, when the interface gives it no default implementation. A generic
+  method, when the interface gives it no default implementation and is
+  not generic (a generic class's or interface's method that another class
+  overrides is refused). A generic
   class's method is a function generic over the class's type parameters,
   their arguments inferred from the receiver where it is inlined, as at a
   call of a generic function (#283), when no class overrides it. A call of an overridden one dispatches on the
