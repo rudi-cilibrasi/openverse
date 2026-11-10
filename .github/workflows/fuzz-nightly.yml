@@ -71,11 +71,25 @@ jobs:
           echo "first seed $seed, counts x$k"
 
       - name: scripts/check.sh
+        id: check
         shell: bash
-        run: scripts/check.sh 2>&1 | tee check.log
+        run: |
+          # (memory every 30 s, for a run that is killed: the 2026-11-10 one got SIGTERM after
+          # 11 minutes, with no message, and the steps below were skipped)
+          ( while sleep 30; do
+              { date -u +%T; free -m | sed -n 2p; ps -eo rss,etime,args --sort=-rss | head -4 | cut -c1-160; } >> mem.log
+            done ) > /dev/null 2>&1 &
+          mon=$!; trap 'kill "$mon" 2>/dev/null || true' EXIT
+          scripts/check.sh 2>&1 | tee check.log
+
+      # (these run whenever the check didn't succeed, a killed or cancelled one included,
+      # which failure() alone skips)
+      - name: Kernel log
+        if: always() && steps.check.outcome != 'success'
+        run: sudo dmesg -T 2>/dev/null | tail -100 > dmesg.log || true
 
       - name: Saved programs
-        if: failure()
+        if: always() && steps.check.outcome != 'success'
         uses: actions/upload-artifact@v7
         with:
           name: fuzz-nightly-${{ env.FUZZ_SEED }}
@@ -83,10 +97,12 @@ jobs:
             fuzz-*.verse
             fuzz-*.expected
             check.log
+            mem.log
+            dmesg.log
           if-no-files-found: ignore
 
       - name: Open or update the issue
-        if: failure() && github.event_name == 'schedule'
+        if: always() && steps.check.outcome != 'success' && github.event_name == 'schedule'
         env:
           GH_TOKEN: ${{ github.token }}
           RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
