@@ -302,6 +302,10 @@ BIF = 'bif' in flags or ((MV or REC) and R9.random() < 0.5)
 # J.Next() runs once, before the choice; each index value is an alternative, reading its old value
 # and then running e (its effects once per index value). A generator of its own decides.
 R10 = random.Random(seed * 1000003 + 361)
+# ---- #364 (#335 phase 2b): at times a for test starts with an exclusive choice, X := RT2(..) or
+# RT3(..) (a return with a choice after it), and then a composed choice, so the front end calls
+# one continuation from each path instead of copying the rest. A generator of its own decides.
+R11 = random.Random(seed * 1000003 + 364)
 # ---- #328 (with mvm): at times the test's class overrides Mv with several values of its own,
 #   MvT<override>(MpT:int):int = MpT * 3 | (super:)MvT(MpT) | MpT - 1
 # Run, the fields and the base MvT are then in a parent class, so the bare MvT(..) in Run
@@ -1982,6 +1986,11 @@ for ti in range(NT):
     n = R.randint(1, 4)
     lastval = kind in ('first', 'formacro', 'ifmacro', 'option', 'or')
     cl, scope = gen_clauses([], vars_, 0, n, allow_gen=isfor, lastval=lastval, isfor=isfor)
+    if isfor and RT2 and R11.random() < 0.2:
+        # (one exclusive choice, then a composed one: two constructs, as small as can be)
+        comp = ('choice', [('tell', fresh("t"), leaf([], vars_)),
+                           ('bin', '+', ('choice', [leaf([], vars_), leaf([], vars_)]), leaf([], vars_))])
+        cl = [('bind', fresh("X"), (R11.choice(['rt2', 'rt3']), leaf([], vars_))), ('bind', fresh("X"), comp)] + cl
     if ALTCH and ((not isfor and R5.random() < 0.35) or (isfor and R6.random() < 0.35)):
         two = []
         for _ in range(2):
