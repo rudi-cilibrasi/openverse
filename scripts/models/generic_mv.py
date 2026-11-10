@@ -328,7 +328,8 @@ class Producer:
             return inner + [("cond", a["K"] > 0)]
         if k == "ICmp":
             if not meq(a["X"], a["Y"]): return [("choice", [V(a["X"]), V(a["Y"])])]
-            return [("choice", [V(a["X"])])]
+            # (#331: the else branch, without a choice of its own, is its value)
+            return V(a["X"])
         if k in ("LElems", "LFx", "LFx2"):
             xs, i = a["A"][1], a["I"]
             out = []
