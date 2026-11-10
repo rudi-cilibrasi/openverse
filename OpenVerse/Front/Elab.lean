@@ -2432,9 +2432,13 @@ def superImpl (ctx : Ctx) (p : Pos) (c m : String) : EM String := do
   | f :: g :: _, _ =>
     eerr p s!"(super:){m} is ambiguous here: {f} and {g} implement it for different interfaces above {c}; call it from a qualified (i:){m}"
 
-/-- The methods `e` calls with `(super:)` (#243). -/
-partial def superNames (e : SExpr) : List String :=
-  (match e with | .member _ (.ident _ "(super:)") m => [m] | _ => []) ++ (Refine.kids e).flatMap superNames
+/-- The methods `e` names with `(super:)` (#243), each with where, and
+    whether it is called there (`(super:)M(…)`) rather than a value. -/
+partial def superNames (e : SExpr) : List (String × Pos × Bool) :=
+  match e with
+  | .app _ (.member mp (.ident _ "(super:)") m) args _ => (m, mp, true) :: args.flatMap superNames
+  | .member mp (.ident _ "(super:)") m => [(m, mp, false)]
+  | _ => (Refine.kids e).flatMap superNames
 
 /-- `e` with its `(super:)M(…)` calls, for the methods `ren` resolves, direct
     calls of the implementations they reach, `Self` first (#243). -/
@@ -3788,22 +3792,29 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
   let body := match ctx.selfClass with
     | some c => selfQualify ctx c body0
     | none => body0
-  -- (and its `(super:)M(…)` calls, as the method's class has them, direct
-  -- calls of the implementations they reach, `Self` first, as its function
-  -- has no class; not an overloaded method's, for now)
-  let body ← match ctx.selfClass with
-    | some c => do
-      let mut ren : List (String × String) := []
-      for m in (superNames body).eraseDups do
-        if (ctx.methodDecl? c m).isNone && (ctx.types.methodOverloads.lookup m).isSome then continue
-        ren := ren ++ [(m, ← superImpl ctx p c m)]
-      pure (if ren.isEmpty then body else superCalls ren body)
-    | none => pure body
   let st0 ← get
   let rx ← elabE { ctx with canFail := true, inTaking := true } x none
   let some (S, sargs, targs, common, eqs, opened) := refiningCast? env T rx.ty (env.tvars.map (·.1))
     | do set st0; return none
   if !env.isRefClass S || (!opened.isEmpty && !env.isRefClass T) then set st0; return none
+  -- (in a method, its `(super:)M(…)` calls, as the method's class has them:
+  -- direct calls of the implementations they reach, `Self` first, as its
+  -- function has no class, each resolved where it is; not an overloaded
+  -- method's, whose arguments resolve it, as the elaborator's own (super:)
+  -- takes one an overload above the class declares)
+  let body ← match ctx.selfClass with
+    | some c => do
+      let above := (env.supers c).drop 1
+      let overloaded (m : String) : Bool := (ctx.methodDecl? c m).isNone &&
+        ((env.methodOverloads.lookup m).getD []).any fun o => above.any fun e => (ctx.sig? s!"{e}.{o}").isSome
+      let mut ren : List (String × String) := []
+      for (m, mp, called) in superNames body do
+        if !called then
+          eerr mp s!"(super:){m} cannot be used as a value: call it with (super:){m}(…), or name a method that calls it"
+        if overloaded m || ren.any (·.1 == m) then continue
+        ren := ren ++ [(m, ← superImpl ctx mp c m)]
+      pure (if ren.isEmpty then body else superCalls ren body)
+    | none => pure body
   -- (#250: `T` has Verse Core type arguments past the object's, or not as
   -- its own type parameters: its tests open them, as a method's dispatch does)
   let wide := !((env.coreVars T).length == (env.coreArgs S sargs).length &&
