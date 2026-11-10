@@ -194,14 +194,23 @@ static void flatten(vx_ctx *c, const vx_val *x, vx_res *r)
     size_t n = vx_obj_len(&c->heap, x->bits), k, total = 0, o, at = 0;
     const vx_val *xs = vx_obj_elems(&c->heap, x->bits);
     vx_val *e;
+    int too_big = 0;
     for (k = 0; k < n; k++) {
         if (xs[k].tag != VX_T_ARR) {
             err(r, VX_E_TYPE);
             return;
         }
-        total += vx_obj_len(&c->heap, xs[k].bits);   /* < heap size: no overflow */
+        /* Repeated references can expand beyond the heap limit. Keep
+           checking the remaining types before reporting a memory limit. */
+        if (!too_big) {
+            size_t m = vx_obj_len(&c->heap, xs[k].bits);
+            if (m > c->heap.max - total)
+                too_big = 1;
+            else
+                total += m;
+        }
     }
-    if (vx_heap_alloc(&c->heap, total, &o) != VX_OK) {
+    if (too_big || vx_heap_alloc(&c->heap, total, &o) != VX_OK) {
         nomem(r);
         return;
     }
