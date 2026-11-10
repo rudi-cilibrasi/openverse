@@ -504,7 +504,9 @@ circle := class(shape, labelled):
   for that (written, given by where it is, or the `else`'s) unless the
   branch always returns or breaks. In a method, the branch names `Self`'s
   fields and methods as anywhere in the method (its function takes `Self`
-  too), but cannot call `(super:)`. Nor can such a cast be in a `defer:`,
+  too), and its `(super:)M(…)` calls the implementation the method's class
+  inherits, as anywhere in the method (#243; not an overloaded method's,
+  for now). Nor can such a cast be in a `defer:`,
   a constructor's items, a class's `block:` clause, a field's or
   parameter's default, or an arm of `sync`, `race`, `rush` or `branch`.
   An interface can be parametric too (#53):
@@ -604,7 +606,7 @@ circle := class(shape, labelled):
     call nothing, #243), whose
     branch has a `return` or a `break` that leaves it where the `if`'s value
     is used at a type not known there, whose branch or `else` suspends, whose branch calls
-    `(super:)`, or in a `defer:`, a constructor's items, a class's `block:` clause, a default
+    `(super:)` of an overloaded method, or in a `defer:`, a constructor's items, a class's `block:` clause, a default
     or a concurrent arm (#243); a variable, in generic code, of a class or
     interface type that requires an instance of itself (`Next:node(t)`)
     at type arguments that every class below it fixes otherwise: its
