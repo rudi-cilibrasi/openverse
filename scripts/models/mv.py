@@ -359,6 +359,13 @@ R14 = random.Random(seed * 1000003 + 375)
 # alternative is a value. A generator of its own decides, so seeds keep their other programs.
 R15 = random.Random(seed * 1000003 + 380)
 OVL = 'noovl' not in flags and R15.random() < 0.5
+# ---- #383 (#283): at times a branch of a branchy if is a block whose bound value has several
+# values, a choice or a call with several values, and whose value uses the bound name:
+#   if (…) then block{ BT := (a | b); BT + e } else …
+# The block's name is its own (fresh, so it shadows nothing and is not seen after the if). Its
+# choice is a generator as a branch's is (#360); the if adds none (#331). A generator of its own
+# decides, so seeds keep their other programs.
+R16 = random.Random(seed * 1000003 + 383)
 # ---- #312, flag rt (on with lazy; nort turns it off): a test's expression may call
 #   RT(RTa:int):int =
 #       RTy := RTa | RTa + 1 | RTa + 2
@@ -1080,14 +1087,26 @@ def is_call(e):
 
 
 def unblock(e):
-    while isinstance(e, tuple) and e and e[0] in ('bset', 'bprint', 'blk'):
-        e = e[2] if e[0] == 'blk' else e[-1]      # (blk: its bound value, which needs no name)
+    while isinstance(e, tuple) and e and e[0] in ('bset', 'bprint'):
+        e = e[-1]
     return e
 
 
 def branch_alts(scope, vars_, d):
-    """a branch's alternatives: at times one call with several values (#360)."""
+    """a branch's alternatives: at times one call with several values (#360), or a block
+    whose bound value has several values (#383)."""
     # (where a lifted choice may go: not in a block with a defer: of its own, lift_block)
+    if R16.random() < 0.35 and NCH[0] < 4 and not lift_block() and (not MV or PROD[0] * 2 <= CTX['plim']):
+        x = fresh("BT")
+        e1 = None
+        if MV and FUNCS and not CTX.get('nomcall') and R16.random() < 0.5:
+            e1 = gen_mcall(scope, vars_, d)
+        if e1 is None:
+            NCH[0] += 1
+            if MV:
+                PROD[0] *= 2
+            e1 = ('choice', [gen_e(scope, vars_, d + 1, False) for _ in range(2)])
+        return [('blk', x, e1, ('bin', '+', ('ref', x), gen_e(scope + [x], vars_, d + 1, False)))]
     if R9.random() < 0.3 and NCH[0] < 4 and not lift_block():
         m = None
         if MV and FUNCS and not CTX.get('nomcall'):
@@ -1124,8 +1143,8 @@ def gen_bif0(scope, vars_, d):
     if all(len(a) == 1 and not is_call(a[0]) for _, a in arms) and len(els) == 1 and not is_call(els[0]):
         els.append(gen_e(scope, vars_, d + 1, False))
     if any(is_call(x) for _, a in arms for x in a) or any(is_call(x) for x in els):
-        # (an if with a call in a branch converts as a whole, and no branch may then be a block,
-        # as LANGUAGE.md says: a set's, a Print's or a block's value is taken instead)
+        # (an if with a call in a branch converts as a whole, and no branch may then be a set or
+        # a Print, as LANGUAGE.md says: its value is taken instead; a block may be one, #383)
         arms = [(cl, [unblock(x) for x in a]) for cl, a in arms]
         els = [unblock(x) for x in els]
     return ('bif', arms, els, R.random() < 0.5)
