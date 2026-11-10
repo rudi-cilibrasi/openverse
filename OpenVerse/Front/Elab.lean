@@ -834,6 +834,27 @@ def TyEnv.sameCorePinned (env : TyEnv) (d T : String) : Bool :=
   let core (c : String) := env.coreArgs c (((env.sparams.lookup c).getD []).map fun (v, k) => Ty.param v k)
   (core T).length ≤ (core d).length
 
+/-- Whether `e` assigns a slot below `n` (#400): one it did not make. -/
+partial def _root_.OpenVerse.Expr.assignsBelow (n : Nat) : Expr → Bool
+  | .assign j e => j < n || e.assignsBelow n
+  | .ret e | .loop e | .print e => e.assignsBelow n
+  | .seq a b => a.assignsBelow n || b.assignsBelow n
+  | .prim _ es | .heap _ es | .call _ es => es.any (·.assignsBelow n)
+  | .ite c t e => c.assignsBelow n || t.assignsBelow n || e.assignsBelow n
+  | .forE j it f b => j < n || it.assignsBelow n || f.assignsBelow n || b.assignsBelow n
+  | _ => false
+
+/-- Whether `e` prints or calls a function (which might), #243, #351: code
+    whose effects a failure after it would have to undo. -/
+partial def _root_.OpenVerse.Expr.printsOrCalls : Expr → Bool
+  | .print _ | .call .. => true
+  | .assign _ e | .ret e | .loop e => e.printsOrCalls
+  | .seq a b => a.printsOrCalls || b.printsOrCalls
+  | .prim _ es | .heap _ es => es.any (·.printsOrCalls)
+  | .ite c t e => c.printsOrCalls || t.printsOrCalls || e.printsOrCalls
+  | .forE _ it f b => it.printsOrCalls || f.printsOrCalls || b.printsOrCalls
+  | _ => false
+
 /-- A value that may go in a call's arguments in place of its temporary: a
     literal, a slot, or a tuple of those (`(1, 2)`, a default), which has no
     effect nor failure to keep in order. -/
@@ -1271,6 +1292,9 @@ structure Ctx where
   /-- (#283) Elaborating the call as written of an `$inlineOv(F, id, …)`,
       for types: the overload of `F` it takes is noted under `id`. -/
   ovPick : Option (Nat × String) := none
+  /-- (#243, #351) Elaborating an `if` as written, whose condition has a
+      cast as a later clause: not rewritten, `elabE`'s `.ite`. -/
+  asWritten : Bool := false
 
 /-- A lazily taken call where the first success is taken (#246): its
     function, where, the code it runs once for all the values of an item,
@@ -4586,6 +4610,85 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
     if !(r.e.mayFail ctx.sigProg) && (← get).fnNeeds.isEmpty && !ctx.typeOnly then eerr p "logic{…} needs an expression that can fail"
     return ⟨Expr.logicE r.e, .logic⟩
   | .ite p conds thenE elseE =>
+    -- (#243, #351) a cast as a later clause of the condition, `if (c₁, …,
+    -- D := T[X], rest) then B else E`, that only the first clause may be
+    -- (one that refines type arguments, opens them, or goes through a
+    -- view): as written first, and when that is refused for it, as `if (c₁,
+    -- …) then (if (D := T[X], rest) then B else E) else E`, when the clauses
+    -- before it have nothing its failure would undo (they print nothing,
+    -- change no object, and call nothing, which might)
+    -- (a clause `D := T[X]` past the first, which may be an index, `A[i]`,
+    -- as written: the one the refusal is at)
+    let castAt : List (Nat × Pos) := conds.zipIdx.filterMap fun
+      | (.decl _ _ none false (.app q (.ident _ _) [_] true), i) => if i > 0 then some (i, q) else none
+      | _ => none
+    -- (as written for this `if` only: not the `if`s in it, nor those the
+    -- cast's own path makes, #400's review)
+    let asWritten := ctx.asWritten
+    let ctx := { ctx with asWritten := false }
+    if !asWritten && !castAt.isEmpty then
+          let st0 ← get
+          let tried ← tryCatch (do pure (Except.ok (← elabE { ctx with asWritten := true } (.ite p conds thenE elseE) exp)))
+            fun err => pure (Except.error err)
+          match tried with
+          | .ok r => return r
+          | .error err =>
+            let some (k, _) := castAt.find? (fun (_, q) => err.startsWith s!"{q.show}:") | throw err
+            if (err.splitOn "only as the first clause of an if's condition").length < 2 then throw err
+            let castC := conds[k]!
+            set st0
+            -- (the clauses before it, apart: what they would leave behind)
+            let pre := conds.take k
+            let fx0 := (← get).fx
+            let n0 := (← get).nslots
+            modify fun s => { s with fx := [] }
+            let (rp, _) ← tryCatch (elabSeq { ctx with canFail := true, inTaking := true, asWritten := true } pre none)
+              fun _ => do set st0; throw err
+            let fxP := (← get).fx
+            set st0
+            modify fun s => { s with fx := fx0 }
+            -- (and a `var` set there, a slot they do not bind, which the
+            -- failure would restore, #400's review)
+            if rp.e.printsOrCalls || fxP.any (·.1 == "writes") || rp.e.assignsBelow n0 then
+              throw s!"{err} (and the clauses before it print, change an object or a var, or call a function, which its failure would have to undo: put it first)"
+            -- (the cast's branch is the elaborator's, not the source's: so a
+            -- clause after it, always, `true?`, which the lift then carries,
+            -- `made`)
+            -- (`true?`, which may fail, keeps them a condition when they
+            -- cannot fail themselves, as the whole condition could, as
+            -- `Refine.castRest` does)
+            let tq := SExpr.query p (.ident p "true")
+            let innerC := castC :: conds.drop (k + 1) ++ [tq]
+            match elseE with
+            | none => return ← elabE ctx (.ite p (pre ++ [tq]) (.ite p innerC thenE none) none) exp
+            | some ee =>
+              -- (the `else` once, outside the clauses' names, #400's review:
+              -- the branch gives an option of its value, or `true` for a
+              -- `void` `if`, `false` when a clause fails, as #286's)
+              let attempt (τ : Ty) : EM R := do
+                let isVoid := τ == .void
+                let v := s!"$lc{p.line}_{p.col}"
+                let thenV : SExpr := if isVoid then .block p [thenE, .ident p "true"]
+                  else .block p [.decl p v none false thenE, .optionLit p (.ident p v)]
+                let outer := SExpr.ite p (pre ++ [tq]) (.ite p innerC thenV (some (.ident p "false")))
+                  (some (.ident p "false"))
+                let rty : Ty := if isVoid then .logic else .opt τ
+                let r ← elabE ctx outer (some rty)
+                let t ← fresh rty
+                if isVoid then
+                  let eE ← elabE ctx ee none
+                  return ⟨.seq (.assign t r.e) (.ite (.prim .query [.local t]) (.lit .void) (.seq eE.e (.lit .void))), .void⟩
+                let eE ← coerce p (← elabE ctx ee (some τ)) τ
+                let xv ← fresh τ
+                return ⟨.seq (.assign t r.e) (.ite (.assign xv (.prim .query [.local t])) (.local xv) eE), τ⟩
+              match exp with
+              | some τ => return ← attempt τ
+              | none =>
+                let st1 ← get
+                let re ← elabE ctx ee none
+                set st1
+                if re.ty == .void then return ← attempt .void
+                return ← tryCatch (attempt re.ty) fun _ => do set st1; attempt .void
     -- (a cast that refines type arguments, as the whole condition, #243,
     -- or as its first clause, the cast having no effects to undo when the
     -- rest fails: `if (D := T[X], rest) then B` is `if (D := T[X]) then (if

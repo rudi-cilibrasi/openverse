@@ -1537,8 +1537,16 @@ would have to undo, so `Else` runs from the same state either way, and
 `true?` keeps `rest` a condition when it cannot fail itself, as the whole
 condition could. `Else` is written twice, once inside the function, but
 runs once. Leading casts chain: the second is the first clause of the
-`if` of the rest, lifted in turn (`Refine.functions` walks that `if` too). A cast after another clause stays refused: that clause's effects
-would have to be undone before `Else`.
+`if` of the rest, lifted in turn (`Refine.functions` walks that `if` too). A cast after other clauses that only a first clause may be (one
+that refines, opens type arguments, or goes through a view) is first
+elaborated as written (`Ctx.asWritten`), so nothing that compiles changes;
+when that is refused at it, the `if` becomes `if (before, true?) then (if
+(D := T[X], rest, true?) then Body else Else) else Else`, when the clauses
+before it print nothing, change no object (no `writes`) and call no
+function (`Expr.printsOrCalls`, on their code elaborated apart), so that
+the cast's failure has nothing of theirs to undo. The inner `if` always
+has a clause after the cast, so its branch is the lift's (`made`), not the
+source's. `Else` is written twice, and runs once.
 
 It takes two elaborations, as function values at closed types do
 (#214): the first finds the cast (`elabRefinedIf`), elaborates `Body`
