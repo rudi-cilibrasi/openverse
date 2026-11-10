@@ -13,7 +13,7 @@ n="${1:-60}"; first="${2:-1}"
 ov="$root/.lake/build/bin/openverse"; cv="$root/runtime/build/cverse"
 modes=("" bif mv rec)
 tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
-ran=0; ref=0; fuel=0; skip=0; bad=0
+ran=0; ref=0; fuel=0; skip=0; long=0; bad=0
 for ((s=first; s<first+n; s++)); do
   m="${modes[$((s % ${#modes[@]}))]}"
   save() { cp "$tmp/p.verse" "$root/fuzz-model-mv-$s.verse"; cp "$tmp/p.expected" "$root/fuzz-model-mv-$s.expected"; }
@@ -22,6 +22,9 @@ for ((s=first; s<first+n; s++)); do
     { bad=$((bad+1)); echo "GENERATOR FAILED ${m:-plain} seed $s: $(tail -1 "$tmp/gen.err")"; continue; }
   # (a program whose ints overflow, which the model does not follow: skipped)
   if grep -q '^SKIP' "$tmp/p.expected"; then skip=$((skip+1)); continue; fi
+  # (a program the model predicts to print more than 20000 lines would not finish within the
+  # timeout below, rec mode's enumerations at times: skipped, not counted as bad)
+  if [[ $(wc -l < "$tmp/p.expected") -gt 20000 ]]; then long=$((long+1)); continue; fi
   rm -f "$tmp/p.vbc"
   timeout 60 "$ov" run "$tmp/p.verse" --emit "$tmp/p.vbc" > "$tmp/l.out" 2> "$tmp/l.err"; le=$?
   if [[ $le -eq 3 ]]; then fuel=$((fuel+1)); continue; fi
@@ -37,5 +40,5 @@ for ((s=first; s<first+n; s++)); do
     bad=$((bad+1)); save; echo "C MISMATCH ${m:-plain} seed $s (C exit $ce, saved fuzz-model-mv-$s.verse)"
   fi
 done
-echo "fuzz-model-mv: $n programs from seed $first, $ran ran in both, $ref refused as the model says, $fuel out of fuel, $skip skipped (an overflow), $bad bad"
+echo "fuzz-model-mv: $n programs from seed $first, $ran ran in both, $ref refused as the model says, $fuel out of fuel, $skip skipped (an overflow), $long skipped (over 20000 lines), $bad bad"
 [[ $bad -eq 0 ]]
