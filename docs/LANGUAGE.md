@@ -941,7 +941,9 @@ types with nothing in common join at `any`: `if (C?) then 42 else "text"`,
 supertypes are still an ambiguity, and an expected type still decides
 (`X:int = if (C?) then 1 else "a"` is refused).
 
-The order of the branches doesn't matter (#366): a later branch is
+The order of the branches doesn't matter (#366), up to three levels of
+such `if`s nested without an expected type (the depth to which a branch is
+elaborated against another's, so nesting stays linear): a later branch is
 elaborated against the first's type, and when that gives `any`, or the
 first has no type on its own, every branch is tried against a later one's
 type. So `if (C?) then false else option{4}` is a `?int`, as
