@@ -1580,8 +1580,12 @@ for the `if`'s value where it is, the `else`'s, found apart
 names of `Self`'s fields and methods are made `Self.member` first
 (`selfQualify`, by the elaborator's own rule for bare names), so its
 function takes `Self` as one of the locals it uses; the lift then carries
-that branch (`Lift.body`) rather than the source's. A `(super:)` call in
-it is refused. The placeholder classes that pinning the
+that branch (`Lift.body`) rather than the source's. Its `(super:)M(…)`
+calls are resolved there too, as the method's class has them
+(`superImpl`, which the elaborator's own `(super:)` uses), into direct
+calls of the implementations they reach with `Self` first
+(`superCalls`), since the function has no class; an overloaded method's,
+which its arguments resolve, stays refused. The placeholder classes that pinning the
 targets may add (#157) get their superclasses in `supersMap` like every
 class, as `refTags` asks whether each is below a class at every
 conversion of a class type.

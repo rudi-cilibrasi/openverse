@@ -1,4 +1,4 @@
-# expect: in a method, it cannot call (super:) yet
+# A refining cast's branch in a method that calls (super:) (#243): the implementation the method's class inherits, called directly with Self
 pair(t:type, u:type) := class:
     A:t
     B:u

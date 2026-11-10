@@ -2411,6 +2411,39 @@ def refiningCast? (env : TyEnv) (T : String) (xty : Ty) (avoid : List String := 
     if !viewedS && cargs.length == rargs.length && opened.isEmpty && μ.all (names.contains ·.1) then none
     some (S, sargs, targs, common, eqs, opened)
 
+/-- The implementation `(super:)M` reaches in a method of class `c`: what
+    the class inherits for the method's slot (`(r:)M`'s, or every slot of
+    `M`, implemented alike above it, or the class chain's). -/
+def superImpl (ctx : Ctx) (p : Pos) (c m : String) : EM String := do
+  -- in `(r:)m`, slot r; otherwise every slot of `m` (#70): what is above `c`
+  -- implements them alike, or the class chain's implementation is the one
+  let slots := match ctx.selfMethod with
+    | some cur => match (cur.drop 1).toString.splitOn ":)" with
+      | [r, m'] => if cur.startsWith "(" && m' == m then [r] else ctx.rootsOf c m
+      | _ => ctx.rootsOf c m
+    | none => ctx.rootsOf c m
+  let ups := (ctx.types.supers c).drop 1
+  let found := (slots.filterMap fun r => (ctx.types.slotImpls (ctx.implAt r m) ups r).head?).eraseDups
+  let inClass := found.filter fun f => !(ctx.types.info ((f.splitOn ".").head!)).isIface
+  match found, inClass with
+  | [f], _ => pure f
+  | [], _ => eerr p s!"nothing above {c} implements '{m}'"
+  | _, [f] => pure f
+  | f :: g :: _, _ =>
+    eerr p s!"(super:){m} is ambiguous here: {f} and {g} implement it for different interfaces above {c}; call it from a qualified (i:){m}"
+
+/-- The methods `e` calls with `(super:)` (#243). -/
+partial def superNames (e : SExpr) : List String :=
+  (match e with | .member _ (.ident _ "(super:)") m => [m] | _ => []) ++ (Refine.kids e).flatMap superNames
+
+/-- `e` with its `(super:)M(…)` calls, for the methods `ren` resolves, direct
+    calls of the implementations they reach, `Self` first (#243). -/
+partial def superCalls (ren : List (String × String)) : SExpr → SExpr :=
+  Choice.mapE fun
+    | .app q (.member mp (.ident _ "(super:)") m) args br =>
+      (ren.lookup m).map fun impl => .app q (.ident mp impl) (.ident mp "Self" :: args.map (superCalls ren)) br
+    | _ => none
+
 /-- What, in the branch of a cast that refines type arguments, would not
     mean the same once the branch is a function of its own (#243): its
     position and what it is. `muts` are the `var`s it uses from outside. -/
@@ -2419,7 +2452,7 @@ def refineBranchWhy? (ctx : Ctx) (p : Pos) (body : SExpr) (muts : List String) (
   if ctx.selfClass.isSome && Choice.anyE (fun
       | .ident _ n | .member _ _ n => (n.splitOn "(super:)").length > 1
       | _ => false) body then
-    some (p, "in a method, it cannot call (super:) yet")
+    some (p, "in a method, it cannot call (super:) of an overloaded method yet")
   else if ctx.inDefer || ctx.inCtor || ctx.inBlock || ctx.inParamDefault || ctx.inArm || ctx.inBranch ||
       !ctx.defaults.isEmpty || ctx.inDefaultCheck then
     some (p, "it cannot be here yet: in a defer:, a constructor's items, a class's block: clause, a field's or parameter's default, or an arm of sync, race, rush or branch")
@@ -3755,6 +3788,17 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
   let body := match ctx.selfClass with
     | some c => selfQualify ctx c body0
     | none => body0
+  -- (and its `(super:)M(…)` calls, as the method's class has them, direct
+  -- calls of the implementations they reach, `Self` first, as its function
+  -- has no class; not an overloaded method's, for now)
+  let body ← match ctx.selfClass with
+    | some c => do
+      let mut ren : List (String × String) := []
+      for m in (superNames body).eraseDups do
+        if (ctx.methodDecl? c m).isNone && (ctx.types.methodOverloads.lookup m).isSome then continue
+        ren := ren ++ [(m, ← superImpl ctx p c m)]
+      pure (if ren.isEmpty then body else superCalls ren body)
+    | none => pure body
   let st0 ← get
   let rx ← elabE { ctx with canFail := true, inTaking := true } x none
   let some (S, sargs, targs, common, eqs, opened) := refiningCast? env T rx.ty (env.tvars.map (·.1))
@@ -5705,22 +5749,7 @@ partial def elabAppBase (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (b
       if !vis.isEmpty then
         return ← resolveOverload ctx p m vis sigOf
           (fun o => elabApp ctx p (.member mp (.ident mp "(super:)") o) args bracket exp) args
-    -- in `(r:)m`, slot r; otherwise every slot of `m` (#70): what is above `c`
-    -- implements them alike, or the class chain's implementation is the one
-    let slots := match ctx.selfMethod with
-      | some cur => match (cur.drop 1).toString.splitOn ":)" with
-        | [r, m'] => if cur.startsWith "(" && m' == m then [r] else ctx.rootsOf c m
-        | _ => ctx.rootsOf c m
-      | none => ctx.rootsOf c m
-    let ups := (ctx.types.supers c).drop 1
-    let found := (slots.filterMap fun r => (ctx.types.slotImpls (ctx.implAt r m) ups r).head?).eraseDups
-    let inClass := found.filter fun f => !(ctx.types.info ((f.splitOn ".").head!)).isIface
-    let impl ← match found, inClass with
-      | [f], _ => pure f
-      | [], _ => eerr p s!"nothing above {c} implements '{m}'"
-      | _, [f] => pure f
-      | f :: g :: _, _ =>
-        eerr p s!"(super:){m} is ambiguous here: {f} and {g} implement it for different interfaces above {c}; call it from a qualified (i:){m}"
+    let impl ← superImpl ctx p c m
     elabApp ctx p (.ident mp impl) (.ident mp "Self" :: args) bracket exp
   | .member mp obj m0 =>
     -- `T.Await()` of a task (#156): the helper `$Await(T)`
