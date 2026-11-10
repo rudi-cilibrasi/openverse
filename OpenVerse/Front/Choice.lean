@@ -2022,7 +2022,9 @@ def inlineMulti (tops : List STop) (reserved : List String := []) : Except Strin
       throw s!"{f.pos.show}: {shownFnName n} has several values and is overloaded: such functions are not supported yet (#235)"
     if f.params.any (·.named) && (recs.contains n || needAll.contains n || !f.tparams.isEmpty) then
       let what := if recs.contains n then "recursive" else if needAll.contains n then
-        "called by a recursive one (so its values are computed at the call, F$all)" else "generic"
+        "called by a recursive one (so its values are computed at the call, F$all)"
+        -- (a generic class's method, whose own type parameters are its class's)
+        else if f.params.head?.any (·.name == "$Self") then "a method of a generic class" else "generic"
       throw s!"{f.pos.show}: {shownFnName n} has several values and named parameters, and is {what}: such functions are not supported yet (#235, #283)"
     -- (a `return` in an `if`'s branches becomes guarded alternatives, #283;
     -- not in a recursive one, computed or taken lazily from its body)
