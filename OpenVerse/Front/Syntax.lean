@@ -112,6 +112,27 @@ def SExpr.pos : SExpr → Pos
   | .loop p _ | .brk p | .ret p _ | .caseE p _ _ | .decl p _ _ _ _ | .set p _ _ _
   | .structDef p _ _ | .enumDef p _ _ | .refineDef p _ _ _ | .construct p _ _ _ | .mapLit p _ => p
 
+/-- Immediate expression children, in source order, including call heads,
+    construction field bindings and case patterns. Type definitions are
+    leaves: analyses of their field defaults or refinement conditions must
+    handle those explicitly. Constructions may evaluate their fields in a
+    different order. -/
+def SExpr.children : SExpr → List SExpr
+  | .str _ ps => ps.filterMap fun | .code c => some c | _ => none
+  | .app _ g as _ => g :: as
+  | .member _ x _ | .query _ x | .neg _ x | .notE _ x | .optionLit _ x | .logicLit _ x | .loop _ x
+  | .gen _ _ _ x | .decl _ _ _ _ x => [x]
+  | .bin _ _ a b | .andE _ a b | .orE _ a b | .range _ a b | .set _ a _ b => [a, b]
+  | .cmp _ a r => a :: r.map (·.2)
+  | .tuple _ es | .block _ es | .arrayLit _ es | .construct _ _ _ es => es
+  | .ite _ cs t e => cs ++ [t] ++ e.toList
+  | .forE _ cs b => cs ++ [b]
+  | .ret _ x => x.toList
+  | .caseE _ sc arms => sc :: arms.flatMap fun (pt, v) => pt.toList ++ [v]
+  | .mapLit _ kvs => kvs.flatMap fun (k, v) => [k, v]
+  | .int .. | .char .. | .char32 .. | .float .. | .ident .. | .brk ..
+  | .structDef .. | .enumDef .. | .refineDef .. => []
+
 structure SParam where
   name : String
   ty   : STy

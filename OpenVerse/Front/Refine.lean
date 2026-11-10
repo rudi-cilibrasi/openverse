@@ -59,35 +59,19 @@ def keyOf (p : Pos) (bound : String) (tag : String := "") : String := s!"{p.file
 
 def Lift.key (l : Lift) : String := keyOf l.pos l.bound l.tag
 
-/-- The sub-expressions of `e`, one level down. -/
-def kids : SExpr → List SExpr
-  | .str _ ps => ps.filterMap fun | .code c => some c | _ => none
-  | .app _ g as _ => g :: as
-  | .member _ x _ | .query _ x | .neg _ x | .notE _ x | .optionLit _ x | .logicLit _ x | .loop _ x
-  | .gen _ _ _ x | .decl _ _ _ _ x => [x]
-  | .bin _ _ a b | .andE _ a b | .orE _ a b | .range _ a b | .set _ a _ b => [a, b]
-  | .cmp _ a r => a :: r.map (·.2)
-  | .tuple _ es | .block _ es | .arrayLit _ es | .construct _ _ _ es => es
-  | .ite _ cs t e' => cs ++ [t] ++ e'.toList
-  | .forE _ cs b => cs ++ [b]
-  | .ret _ x => x.toList
-  | .caseE _ sc arms => sc :: arms.flatMap fun (pt, v) => pt.toList ++ [v]
-  | .mapLit _ kvs => kvs.flatMap fun (k, v) => [k, v]
-  | _ => []
-
 /-- Whether `pr` holds of `e` or a part of it outside the `loop`s in it. -/
 partial def anyOutsideLoops (pr : SExpr → Bool) (e : SExpr) : Bool :=
   pr e || match e with
     | .loop .. => false
-    | e => (kids e).any (anyOutsideLoops pr)
+    | e => e.children.any (anyOutsideLoops pr)
 
 /-- The first part of `e` (outside its `loop`s, if `outside`) for which
     `pr` holds. -/
 partial def findPart (pr : SExpr → Bool) (outside : Bool) (e : SExpr) : Option SExpr :=
   if pr e then some e
   else match e with
-    | .loop .. => if outside then none else (kids e).findSome? (findPart pr outside)
-    | e => (kids e).findSome? (findPart pr outside)
+    | .loop .. => if outside then none else e.children.findSome? (findPart pr outside)
+    | e => e.children.findSome? (findPart pr outside)
 
 /-- The names in a written type. -/
 partial def styNames : STy → List String
@@ -104,7 +88,7 @@ partial def typeNames (e : SExpr) : List String :=
     | .decl _ _ (some t) _ _ => styNames t
     | .construct _ _ ts _ => ts.flatMap styNames
     | _ => []
-  own ++ (kids e).flatMap typeNames
+  own ++ e.children.flatMap typeNames
 
 /-- `e` with the type names in `σ` substituted in the types written in it
     (declarations, constructions). -/
@@ -149,7 +133,7 @@ def functions (lifts : List Lift) (tops : List STop) : List STop := Id.run do
         if !done.contains l.key then
           done := l.key :: done
           out := out.push (.fn p l.name l.params l.tparams l.specs l.ret (substTypes l.subst body))
-    todo := kids e ++ todo
+    todo := e.children ++ todo
   return out.toList
 
 end OpenVerse.Front.Refine
