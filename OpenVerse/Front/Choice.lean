@@ -2288,11 +2288,11 @@ def inlineMulti (tops : List STop) (reserved : List String := []) : Except Strin
   for (n, f) in mfs do
     if (fns.filter (·.1 == n)).length > 1 then
       throw s!"{f.pos.show}: {shownFnName n} has several values and is overloaded: such functions are not supported yet (#235)"
-    if f.params.any (·.named) && (recs.contains n || needAll.contains n || !f.tparams.isEmpty) then
-      let what := if recs.contains n then "recursive" else if needAll.contains n then
+    -- (a generic one's, and a generic class's method's, bound with its
+    -- type parameters, `$params`, as at a call, #283)
+    if f.params.any (·.named) && (recs.contains n || needAll.contains n) then
+      let what := if recs.contains n then "recursive" else
         "called by a recursive one (so its values are computed at the call, F$all)"
-        -- (a generic class's method, whose own type parameters are its class's)
-        else if f.params.head?.any (·.name == "$Self") then "a method of a generic class" else "generic"
       throw s!"{f.pos.show}: {shownFnName n} has several values and named parameters, and is {what}: such functions are not supported yet (#235, #283)"
     -- (a `return` in an `if`'s branches becomes guarded alternatives, #283;
     -- not in a recursive one, computed or taken lazily from its body)

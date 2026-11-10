@@ -1,4 +1,4 @@
-# expect: 5:4: box.Pick has several values and named parameters, and is a method of a generic class
+# A generic class's method with several values and named parameters (#283): its type arguments inferred from the receiver, a default reading a field
 box(t : type) := class:
     A : t
     B : t
