@@ -6858,7 +6858,6 @@ def copyIfaceDefaults (tops : List STop) : List STop :=
     | .classDef cp n tps specs parents false fields ovs ms =>
       let chain := (supersOf n).filter fun c => ((defOf c).map (!·.2.1)).getD false
       let chainDeclares (m : String) : Bool := chain.any fun c => (membersOf c).contains m
-      let allIfaces := (supersOf n).filter fun c => ((defOf c).map (·.2.1)).getD false
       -- (the pinned interfaces reached through interfaces given the class's
       -- own type parameters by name, each with the renaming to the class's)
       let rec reach (fuel : Nat) (q : String) (qa : List STy) (ρ : List (String × String)) :
@@ -6868,7 +6867,7 @@ def copyIfaceDefaults (tops : List STop) : List STop :=
           let names := qa.filterMap fun | .name x => (ρ.lookup x).orElse fun _ => none | _ => none
           if names.length != itps.length || qa.length != itps.length then [] else
           let ρ' := (itps.map (·.name)).zip names
-          (if pinned itps iparents then [(q, ρ')] else []) ++
+          (if !itps.isEmpty && pinned itps iparents then [(q, ρ')] else []) ++
             iparents.flatMap fun ip => match ip with
               | .app pq pa => reach f pq pa ρ'
               | .name pq => reach f pq [] ρ'
@@ -6886,10 +6885,17 @@ def copyIfaceDefaults (tops : List STop) : List STop :=
         let risky := ((supersOf n).flatMap membersOf).filter (!jScope.contains ·)
         (((defOf j).map (·.2.2.2.2.2)).getD []).filterMap fun
           | .fn mp m ps mtps effs ret body =>
-            let others := allIfaces.filter fun i => i != j && !(supersOf j).contains i && (bodyOf i (baseName m)).isSome
+            -- (every interface that declares the method, above the class or
+            -- above any class below it, is `j` or above it: the copy, a
+            -- method of the class chain, takes no other interface's slot or
+            -- default, which the chain would otherwise win over)
+            let below := defs.filterMap fun d => if !d.2.1 && (supersOf d.1).contains n then some d.1 else none
+            let jUp := supersOf j
+            let others := (below.flatMap supersOf).eraseDups.filter fun i =>
+              ((defOf i).map (·.2.1)).getD false && !jUp.contains i && (membersOf i).contains (baseName m)
             if effs.contains "override" && !effs.contains "$abstract" && !effs.contains "final" &&
                 !m.startsWith "(" && !chainDeclares (baseName m) && others.isEmpty && !usesSuper body &&
-                !mtps.any (fun tp => (ρ.map (·.2)).contains tp.name) &&
+                !mtps.any (fun tp => tps.any (·.name == tp.name)) &&
                 -- (nor a type parameter the renaming changes as a name in an
                 -- expression, which `renameTypes` leaves: a cast's `c2(t)`)
                 !mentions ((ρ.filter fun (x, y) => x != y).map (·.1)) body &&
