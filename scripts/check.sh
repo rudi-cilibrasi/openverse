@@ -5,7 +5,7 @@
 # After the build and the C runtime, the remaining checks are independent of each other: they run
 # concurrently, at most CHECK_JOBS at a time (default: the number of CPUs), longest first so they
 # pack well, and each one's output is printed, in this order, once it has finished. CHECK_JOBS=1
-# runs them one after another.
+# runs them one after another. CHECK_JOBS must be a positive integer.
 #
 # Every fuzzer starts at seed FUZZ_SEED (default 1), and its count comes from its own variable
 # (FUZZ_MODEL_MV=1400, …): the nightly workflow (.github/workflows/fuzz-nightly.yml) runs ten times
@@ -13,8 +13,21 @@
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root"
+max="${CHECK_JOBS:-$(nproc 2>/dev/null || echo 4)}"
+# Reject counts that Bash arithmetic cannot represent exactly.
+if [[ $max =~ ^0*([1-9][0-9]*)$ ]] &&
+    [[ $(( BASH_REMATCH[1] )) == "${BASH_REMATCH[1]}" ]]; then
+  max="${BASH_REMATCH[1]}"
+else
+  echo "check.sh: CHECK_JOBS must be a positive integer" >&2; exit 1
+fi
+logs="$(mktemp -d)"; trap 'rm -rf "$logs"' EXIT
 echo "== lake build (Lean proofs, front end, reference interpreter)"
-lake build 2>&1 | tail -1
+if lake build >"$logs/build" 2>&1; then
+  tail -1 "$logs/build"
+else
+  rc=$?; cat "$logs/build"; exit "$rc"
+fi
 if grep -rnE '\bsorry\b|\badmit\b' OpenVerse/ Main.lean; then echo "error: sorry/admit in Lean sources" >&2; exit 1; fi
 scripts/gen-claims.sh --check
 echo "== C runtime"
@@ -26,8 +39,6 @@ make -s -C runtime test
 # 2026-11-10 were. With the cap the program fails alone, and its fuzzer saves and reports it.)
 ulimit -v $(( ${CHECK_MEM_GB:-4} * 1024 * 1024 ))
 seed="${FUZZ_SEED:-1}"
-logs="$(mktemp -d)"; trap 'rm -rf "$logs"' EXIT
-max="${CHECK_JOBS:-$(nproc 2>/dev/null || echo 4)}"
 titles=(); pids=()
 # check TITLE CMD...: run CMD in the background once fewer than $max checks are running
 check() {
@@ -42,6 +53,7 @@ check "Verse test suite, Lean and C" scripts/test-verse.sh --c
 check "front-end mutation fuzzing (${FUZZ_FRONT:-500} mutants)" scripts/fuzz-front.sh "${FUZZ_FRONT:-500}" "$seed"
 check "QuickProof pins" scripts/check-quickproof-pins.sh
 check "fuzz runner checks" bash tests/scripts/test-fuzz-runners.sh
+check "check runner checks" bash tests/scripts/test-check.sh
 check "float fuzzing (${FUZZ_FLOATS:-200} programs, against Python's doubles)" scripts/fuzz-floats.sh "${FUZZ_FLOATS:-200}" "$seed"
 check "choice fuzzing (${FUZZ_CHOICE:-200} programs, against a backtracking model)" scripts/fuzz-choice.sh "${FUZZ_CHOICE:-200}" "$seed"
 check "scheduler model fuzzing (${FUZZ_MODEL_SCHED:-50} programs, against a model of the docs)" \
