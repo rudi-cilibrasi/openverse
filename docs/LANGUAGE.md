@@ -573,7 +573,9 @@ circle := class(shape, labelled):
     or a concurrent arm (#243); a variable, in generic code, of a class or
     interface type that requires an instance of itself (`Next:node(t)`)
     at type arguments that every class below it fixes otherwise: its
-    hidden placeholder object (#157) would have to hold itself; a class
+    hidden placeholder object (#157) would have to hold itself (no program
+    can build an object of such a type: each would need another first,
+    so use `?node(t)` for a link that may be absent); a class
     that gives two interfaces different type arguments (`c := class(i1(int),
     i2(string))`, #53); and, in code generic over an interface's parent, a
     cast to an interface that gives that parent type arguments of its own

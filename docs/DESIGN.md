@@ -1181,8 +1181,17 @@ position in every class below the one that declares it.
   only when all of that interface's classes agree, and those include
   these, so it finds the field in the placeholder too. A placeholder
   nests: `slot(slot(u))`'s holds `slot(u)`'s. One that would hold itself
-  (an interface `node(t)` with a field `Next:node(t)`) cannot be built, so
-  a variable of its type is refused there.
+  (an interface `node(t)` with a field `Next:node(t)`, or one at growing
+  types, `Next:n([]t)`) cannot be built, so a variable of its type is
+  refused there. No program can build an object of such a type either:
+  every class below it has the field, so each object would need another
+  one first, as Verse has no null and a construction evaluates its fields
+  before it makes the object. A placeholder would need the same (Verse
+  Core initialises every slot at a function's entry, and its `new` takes
+  the fields' values), or a value from a caller, which has none to pass
+  either; only the prototypes of classes at closed types, made by the
+  program's prelude, may refer to each other. So the refusal costs only
+  code that could never run with a value of that type (#157).
   A class that repeats type arguments or fixes them to types over its
   others overrides under the refinement that unifies them (#209); one
   that adds its own cannot, as a `named`'s implementation needs an `n`
