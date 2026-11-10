@@ -1198,8 +1198,16 @@ position in every class below the one that declares it.
   reference is below a view of it whose arguments are among the
   reference's, `hasTy_sub` proves it sound, and substitution leaves the
   views. They are for interfaces whose arguments are not a prefix of a
-  class's, `both(t, u) := class(container(t), sink(u))` at `sink`; nothing
-  makes them yet.) A class's table entry
+  class's, `both(t, u) := class(container(t), sink(u))` at `sink`. A cast
+  of one, `isTag us`, gives `ref us []` (`Typed.heap_isTag_v`); a
+  dispatch from one, `Typed.dispatch_view`, tests classes whose entries all
+  have one view `φ`, opens their first `k` type arguments as fresh
+  variables, and types the call at the most general substitution that
+  makes them agree with the pins and the reference's arguments a prefix of
+  `φ` at them (`ViewRefines`, from `unify`; none: `dispatch_view_none`, the
+  branch cannot run); `vref_open` is its preservation step. No fields are
+  read through a view. Nothing makes them yet: the checker and the front
+  end come next.) A class's table entry
   gives each field the type the topmost class that has it gives it, at
   that class's variable positions (`TyEnv.coreVars`), so a field has one
   type through every reference of the hierarchy. Dispatch passes the

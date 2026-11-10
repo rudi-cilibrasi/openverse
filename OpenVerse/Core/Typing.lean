@@ -349,6 +349,16 @@ def PinRefines (ps : List (Option VTy)) (args : List VTy) (μ : Nat → VTy) : P
   VTy.pinsOK ps (args.map (VTy.subst μ)) = true ∧
   ∀ R, VTy.pinsOK ps (args.map (VTy.subst R)) = true → ∀ j, (μ j).subst R = R j
 
+/-- `μ` refines the type arguments `X` that an object behind a reference
+    through a view `φ` has (#351): a most general substitution that makes
+    them agree with the pins `ps` and the reference's arguments `a` a prefix
+    of the view at them. Every other one factors through it. -/
+def ViewRefines (ps : List (Option VTy)) (φ a X : List VTy) (μ : Nat → VTy) : Prop :=
+  (VTy.pinsOK ps (X.map (VTy.subst μ)) = true ∧
+    a.map (VTy.subst μ) <+: (φ.map (VTy.inst X)).map (VTy.subst μ)) ∧
+  ∀ R, VTy.pinsOK ps (X.map (VTy.subst R)) = true →
+    a.map (VTy.subst R) <+: (φ.map (VTy.inst X)).map (VTy.subst R) → ∀ j, (μ j).subst R = R j
+
 /-- The typing of primitives: `PrimTy op ts τ` when `op` applied to values
     of types `ts` gives a value of type `τ`. -/
 inductive PrimTy : Prim → List VTy → VTy → Prop
@@ -429,6 +439,38 @@ inductive Typed (S : Sigs) (Γ : List VTy) (ρ : VTy) : Expr → VTy → Prop
   /-- A cast: it fails unless the object's class is one of `us`. -/
   | heap_isTag {e ts args us} : Typed S Γ ρ e (.ref ts args) →
       Typed S Γ ρ (.heap (.isTag us) [e]) (.ref us args)
+  /-- A cast of a reference through views (#351): an object of a class of
+      `us`, at type arguments that the view does not tell. -/
+  | heap_isTag_v {e es args us} : Typed S Γ ρ e (.vref es args) →
+      Typed S Γ ρ (.heap (.isTag us) [e]) (.ref us [])
+  /-- **Dispatch through a view** (#351): a call of `f` on the object in
+      slot `y`, of type `vref ents a`, when its class is one of `us`, else
+      `e`. Every entry for a class of `us` has the same view `φ`, which
+      mentions only its first `k` type arguments, on all of which its pins
+      are `P`. The call is typed with the receiver at `k` fresh type
+      variables `ext` (from `N` on), refined by `μ`, which makes them agree
+      with the pins and `a` a prefix of `φ` at them. When the branch runs,
+      the object's first `k` arguments for `ext` do so, so that substitution
+      factors through `μ`. -/
+  | dispatch_view {y us f es e ents a ps τ σs τ' P φ} (k N : Nat) (θ μ : Nat → VTy) :
+      Γ[y]? = some (.vref ents a) → (∀ e ∈ ents, e.1 ∈ us → e.2 = φ) → (∀ v ∈ φ, v.varsBelow k = true) →
+      (∀ t ∈ us, (S.pinsOf t).take k = P) → VTy.pinsBelow P k = true → VTy.extOK P 0 k = true →
+      VTy.varsBelowL N a = true → VTy.varsBelowL N σs = true → τ'.varsBelow N = true →
+      ViewRefines P φ a (VTy.ext N k) μ →
+      S.fns[f]? = some (ps, τ) → TypedL S Γ ρ es σs →
+      VTy.subL ((VTy.ref us (VTy.ext N k) :: σs).map (VTy.subst μ)) (ps.map (VTy.subst θ)) = true →
+      (τ.subst θ).sub (τ'.subst μ) = true → Typed S Γ ρ e τ' →
+      Typed S Γ ρ (.ite (.heap (.isTag us) [.local y]) (.call f (.local y :: es)) e) τ'
+  /-- When no substitution makes the `k` fresh arguments agree with the
+      pins and `a` a prefix of the view at them, the call through the view
+      cannot run (#351). -/
+  | dispatch_view_none {y us f es e ents a τ' P φ} (k N : Nat) :
+      Γ[y]? = some (.vref ents a) → (∀ e ∈ ents, e.1 ∈ us → e.2 = φ) → (∀ v ∈ φ, v.varsBelow k = true) →
+      (∀ t ∈ us, (S.pinsOf t).take k = P) → VTy.pinsBelow P k = true → VTy.extOK P 0 k = true →
+      VTy.varsBelowL N a = true →
+      (∀ μ, VTy.pinsOK P ((VTy.ext N k).map (VTy.subst μ)) = true →
+        ¬ a.map (VTy.subst μ) <+: (φ.map (VTy.inst (VTy.ext N k))).map (VTy.subst μ)) → Typed S Γ ρ e τ' →
+      Typed S Γ ρ (.ite (.heap (.isTag us) [.local y]) (.call f (.local y :: es)) e) τ'
   /-- **Dispatch to classes that fix type arguments** (#142, #209): a call
       of `f` on the object in slot `y` when its class is one of `us`, else
       `e`. `y`'s type arguments `a` are extended by `k` fresh type
