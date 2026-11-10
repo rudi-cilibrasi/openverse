@@ -836,13 +836,16 @@ partial def Expr.inlineArgTemps (e : Expr) (typed : List (Nat × Expr) := []) : 
   match e with
   | .call f es => some (.call f es)
   | .seq (.assign t v0) rest =>
-    if !v0.pureArg then none else
-    let v := (typed.lookup t).getD v0
-    (Expr.inlineArgTemps rest typed).map fun
-      | .call f es => .call f (es.map fun a => match a with
-        | .local t' => if t' == t then v else a
-        | _ => a)
-      | other => other
+    -- (one with no effect, or one `typed` gives: a default computed by
+    -- code, evaluated in the call, #351)
+    match (typed.lookup t).orElse (fun _ => if v0.pureArg then some v0 else none) with
+    | none => none
+    | some v =>
+      (Expr.inlineArgTemps rest typed).map fun
+        | .call f es => .call f (es.map fun a => match a with
+          | .local t' => if t' == t then v else a
+          | _ => a)
+        | other => other
   | _ => none
 
 /-- A literal with no type of its own: `false`, an empty `array{}`, `map{}`
@@ -878,6 +881,40 @@ def _root_.OpenVerse.Expr.argsAfterRecv : Expr → List Expr
   | .call _ (_ :: es) => es
   | .seq _ rest => Expr.argsAfterRecv rest
   | _ => []
+
+/-- The temporaries of such a call and their values, in order (#351). -/
+def _root_.OpenVerse.Expr.argTemps : Expr → List (Nat × Expr)
+  | .seq (.assign t v) rest => (t, v) :: Expr.argTemps rest
+  | .seq _ rest => Expr.argTemps rest
+  | _ => []
+
+/-- Whether `e` reads or writes slot `i` (#351). -/
+partial def _root_.OpenVerse.Expr.usesSlot (i : Nat) : Expr → Bool
+  | .local j => j == i
+  | .assign j e => j == i || e.usesSlot i
+  | .seq a b => a.usesSlot i || b.usesSlot i
+  | .prim _ es | .call _ es | .heap _ es => es.any (·.usesSlot i)
+  | .ite c t e => c.usesSlot i || t.usesSlot i || e.usesSlot i
+  | .forE j it f b => j == i || it.usesSlot i || f.usesSlot i || b.usesSlot i
+  | .loop b | .ret b | .print b => b.usesSlot i
+  | .lit _ | .brk => false
+
+/-- `e` with its reads of slot `i` made `v` (#351). -/
+partial def _root_.OpenVerse.Expr.substSlot (e : Expr) (i : Nat) (v : Expr) : Expr :=
+  let go := fun (x : Expr) => x.substSlot i v
+  match e with
+  | .local j => if j == i then v else .local j
+  | .assign j x => .assign j (go x)
+  | .seq a b => .seq (go a) (go b)
+  | .prim q es => .prim q (es.map go)
+  | .call f es => .call f (es.map go)
+  | .heap h es => .heap h (es.map go)
+  | .ite c t x => .ite (go c) (go t) (go x)
+  | .forE j it f b => .forE j (go it) (go f) (go b)
+  | .loop b => .loop (go b)
+  | .ret b => .ret (go b)
+  | .print b => .print (go b)
+  | x => x
 
 /-- Whether `false` (the bottom type) occurs in a type. -/
 partial def Ty.hasNever : Ty → Bool
@@ -5602,7 +5639,7 @@ partial def elabAppBase (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (b
         -- argument of the call, which is in the implementation's parameter
         -- order, and an override has its method's named parameters, in
         -- order, `sameSigIn`; kept, as the old one, should those change)
-        let typedDefaults (fname e : String) (rcE : Expr) (opens : Bool) : EM (List (Nat × Expr)) := do
+        let typedDefaults (fname e : String) (rcE : Expr) (opens : Bool) (rslot : Nat) : EM (List (Nat × Expr)) := do
           let refuseOpen : EM Unit :=
             eerr p s!"cannot dispatch {m} to class {e} yet when a named argument's default has no type of its own: its temporary would need the type arguments the dispatch opens (#209)"
           let fs := (ctx.sig? fname).get!
@@ -5636,6 +5673,35 @@ partial def elabAppBase (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (b
                 eerr p s!"cannot dispatch {m} to class {e} yet when its default for ?{n} has no type of its own: {m} declares ?{n} as {τ.show} there, which the dispatch would have to open to hold the default; give ?{n} at the call (#209)"
               tv ← fresh τ
             typed := typed ++ [(t, .ite (.prim .fail []) (.local tv) (rcE.argTempValue t))]
+          -- (#351) a default computed by code: in the call, which the
+          -- dispatch's branch evaluates after the arguments before it, as
+          -- the temporaries did, typed where the dispatch is (its rule types
+          -- the call's arguments there): so one that reads the receiver, or
+          -- whose parameter's type mentions the type arguments the dispatch
+          -- opens, cannot; the earlier arguments' temporaries in it by
+          -- their values, which have no effect (one computed itself would
+          -- run twice)
+          let temps := rcE.argTemps
+          for ((t, v), k) in temps.zipIdx do
+            if v.pureArg || typed.any (·.1 == t) then continue
+            let what := s!"cannot dispatch {m} to class {e} yet when a named argument's default computed by code"
+            if opens then
+              let some i := rcE.argsAfterRecv.findIdx? (fun a => match a with | .local t' => t' == t | _ => false)
+                | eerr p s!"{what} is not in the call (#351)"
+              if let some (n, _) := (if i + 1 < nposF then none else fs.named[i + 1 - nposF]?) then
+                if let some j := ms.named.findIdx? (·.1 == n) then
+                  let τ := (declTy ms.params[npos + j]!).subst σu
+                  if τ.params.any ownNames.contains then
+                    eerr p s!"{what} has a type, {τ.show}, that mentions the type arguments the dispatch opens (#351)"
+            let mut v' := v
+            for (t', v0) in temps.take k do
+              if v'.usesSlot t' then
+                let some r := (typed.lookup t').orElse (fun _ => if v0.pureArg then some v0 else none)
+                  | eerr p s!"{what} uses another computed by code (#351)"
+                v' := v'.substSlot t' r
+            -- (the receiver, also through its parameter's temporary)
+            if v'.usesSlot rslot then eerr p s!"{what} reads the receiver, as its field (#351)"
+            typed := typed ++ [(t, v')]
           return typed
         if env.viewed.contains c then
           -- (#351) a receiver through views: one test per class below, a
@@ -5691,7 +5757,7 @@ partial def elabAppBase (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (b
             -- (a dispatch through a view opens all of the class's type
             -- arguments: defaults with no type of their own at the
             -- declaration's, #209)
-            let typed ← typedDefaults fname e rcE true
+            let typed ← typedDefaults fname e rcE true slot
             let some (.call fi (.local s0 :: es)) := Expr.inlineArgTemps rcE typed
               | eerr p s!"cannot dispatch {m} through a view to class {d} yet when a named argument's default is computed (#351)"
             if s0 != slot then eerr p s!"internal error: a dispatch through a view to class {d} (#351)"
@@ -5806,7 +5872,7 @@ partial def elabAppBase (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (b
                 let rcE : Expr := match rc.e with
                   | .seq (.ite (.prim .fail []) _ (.lit .void)) b => b
                   | e => e
-                let typed ← typedDefaults fname e rcE (pins.length > rargs.length)
+                let typed ← typedDefaults fname e rcE (pins.length > rargs.length) slot
                 let some (.call fi (.local s0 :: es)) := Expr.inlineArgTemps rcE typed
                   | eerr p s!"cannot dispatch {m} to class {e}, which fixes type arguments of {c}, when a named argument's default is computed (#142)"
                 if s0 != slot then eerr p s!"cannot dispatch {m} to class {e}, which fixes type arguments of {c} (#142)"
