@@ -976,6 +976,10 @@ def firstOfClauses (p : Pos) (cs : List SExpr) : SExpr :=
 def takeFirst? (e : SExpr) (fieldOrder : String → List (String × Bool) := fun _ => []) : Option SExpr :=
   match e with
   | .block p cs => if hasChoice cs fieldOrder then some (firstOfClauses p cs) else none
+  -- (#283) a `set` with a choice or a call with several values in its path
+  -- or value, as `not (set A[1 | 2] = 5)`: its value bound to a name, as a
+  -- block's last `set` is (`hasLiftable` sees a `set` only as a clause)
+  | e@(.set _ l _ r) => if hasLiftable r || pathHas hasLiftable l then some (firstOfClauses e.pos [e]) else none
   | e => if hasLiftable e then some (firstOfClauses e.pos [e]) else none
 
 /-! ### Functions with several values (#235)

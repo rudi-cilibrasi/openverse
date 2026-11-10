@@ -696,7 +696,9 @@ Main():void =
   - `set L op= R` evaluates `L`'s indices, then for `op=` its old value, then
     `R`'s lifted code, as `set` does. A choice or a call with several values
     in `L`'s indices is lifted there, first (#283): `for (set A[0 | 1] = 5)`
-    sets `A[0]`, then `A[1]`, each index a generator.
+    sets `A[0]`, then `A[1]`, each index a generator. So does such a `set`
+    inside `not (…)` or on the left of `or`, which take its first success
+    (#283): `(set A[5 | 1] = 8) or …` sets `A[1]`.
 
   An `if … else if … else …` whose branches are choices, plain values,
   expressions with choices or calls of functions with several values in
