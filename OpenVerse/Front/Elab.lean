@@ -7995,8 +7995,22 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
   -- (the overrides whose class has type parameters its parent's type
   -- arguments do not give: a dispatch may open their frames' type
   -- arguments, #251)
+  -- (#394: and an implementation that refined dispatches reach, of a
+  -- class with one below that fixes one of its type arguments to a type
+  -- that mentions one of its own, `c3(t) := class(c1(tuple(char, t)))`:
+  -- a dispatch to that one opens it, and the implementation's frame is at
+  -- a type the caller has no name for)
+  let fixesCompound (e : String) : Bool :=
+    let n := (env.coreVars e).length
+    (env.concreteBelow e).any fun d => d != e &&
+      let own := ((List.range ((env.coreVars d).length - n)).map fun i => pinArg (n + i))
+      ((env.corePins d).take n).any fun | some pt => pt.params.any own.contains | none => false
   let opened (j : Nat) : Bool := match lows[j]? with
-    | some (gi, _, _) => ((sigOf gi).map (!·.selfTps.isEmpty)).getD false
+    | some (gi, gname, _) =>
+      ((sigOf gi).map (!·.selfTps.isEmpty)).getD false ||
+        (targets.contains gi && match gname.splitOn "." with
+          | [e, _] => env.classes.contains e && !(env.info e).isIface && fixesCompound e
+          | _ => false)
     | none => false
   -- (the type such an override's result cell holds: its method's declared
   -- result, so that a narrower, covariant, one is called as any other, #209)

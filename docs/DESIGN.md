@@ -983,7 +983,10 @@ and journals every write made in a condition (for rollback). So:
   results check through the rule's subtyping).
 - An override of a class with type parameters that its parent's type
   arguments do not give (#209), called through a dispatch that opens them
-  (#251): the caller has no names for its frame's type arguments, so it
+  (#251), or an implementation such a dispatch reaches that a class below
+  inherits while fixing one of its class's type arguments to a type that
+  mentions its own (`c3(t) := class(c1(tuple(char, t)))`, #394): the
+  caller has no names for its frame's type arguments, so it
   cannot keep the frame at them. It holds the frame as a non-generic
   callee's, in a field of type `ref [callee, sched] []` (no type arguments,
   a subtype of every instance), and resumes and cancels it through
