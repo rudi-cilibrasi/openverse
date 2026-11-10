@@ -1247,6 +1247,8 @@ Main()<suspends>:void =
   functions it calls do is rolled back with the context, as `Print` is.
   A `subscribable_event()` is one without a value: `E.Signal()`,
   `E.Await()`, and functions of type `type{_():void}` to subscribe (#220).
+  It is an `event(void)`, but not a `subscribable_event(t)`, whose
+  functions take a value.
   The Book marks subscribable events as not yet released in Verse;
   openverse follows the Book's description of them.
 - **Arms.** Arms share the enclosing function's variables. An arm is a
