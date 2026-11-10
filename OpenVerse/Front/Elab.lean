@@ -588,9 +588,10 @@ partial def Ty.holdsMutable (env : TyEnv) (t : Ty) (seen : List String := []) : 
   | .struct n ts =>
     if env.classes.contains n then
       -- an object below `n`, or one its fields reach (by instantiation, #39;
-      -- one that grows without end is taken to)
+      -- one that grows without end is taken to: a large one inside a
+      -- smaller one, not a large one by itself)
       let key := (Ty.struct n ts).show
-      if seen.length > 16 || key.length > 400 then true
+      if seen.length > 16 || (key.length > 400 && seen.any (·.length < key.length)) then true
       else (env.concreteBelow n).any fun d =>
         (env.supers d).any env.uniques.contains ||
         (env.fieldsSeen n ts d).any fun (f, ft, _) =>
@@ -1621,9 +1622,11 @@ partial def slotDefault (env : TyEnv) (dictBase : Nat) (params : List Ty) (visit
       -- (a failure for want of an instance of itself deeper down is this
       -- one, at the type the slot has: other failures are passed on)
       let keep (msg : String) : String := if msg.startsWith "no class at or below " then selfErr else msg
-      -- (instantiations that grow without end are cut off)
+      -- (instantiations that grow without end are cut off: a large one
+      -- inside a smaller one, not a large one by itself, which a class
+      -- below at deeply nested type arguments is)
       let key := (Ty.struct n ts).show
-      if visiting.length > 16 || key.length > 400 then throw lastErr
+      if visiting.length > 16 || (key.length > 400 && visiting.any (·.length < key.length)) then throw lastErr
       let args := (env.coreArgs n ts).map (Ty.toVTy env)
       let mut pinnedOut : List String := []
       for d in env.concreteBelow n do
