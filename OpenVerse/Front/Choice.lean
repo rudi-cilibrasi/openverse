@@ -442,33 +442,6 @@ def stmtsOf : SExpr → List SExpr
   | .block _ ss => ss
   | e => [e]
 
-def isDefer : SExpr → Bool
-  | .app _ (.ident _ "$defer") _ _ => true
-  | _ => false
-
-/-- A scope's own `defer:` blocks after its value, as LANGUAGE.md lowers them
-    (#283): its other statements, its value bound to `dv`, a block of the
-    `defer:`s in order (which runs them where it ends, last registered
-    first, as the elaborator checks a `defer:`), then `dv`. Once the scope's
-    clauses are the caller's, the block runs for each of its values, when
-    the value leaves the scope, and not for a value whose clauses fail. -/
-def deferLast (p : Pos) (dv : String) (ss : List SExpr) : List SExpr :=
-  match ss.getLast? with
-  | some l =>
-    let ds := ss.dropLast.filter isDefer
-    if ds.isEmpty then ss else
-    let rest := ss.dropLast.filter (!isDefer ·)
-    let run := SExpr.block p (ds ++ [.int p 0])
-    match l with
-    -- (a value typed by where it is, which evaluates nothing: after them,
-    -- so it keeps its expected type)
-    | .ident _ "false" | .arrayLit _ [] | .mapLit _ [] => rest ++ [run, l]
-    -- (a binding as the value stays one, its name then in scope too; a
-    -- `defer:` as the value is an error, said where it is bound)
-    | .decl q x _ _ _ => rest ++ [l, .decl p dv none false (.ident q x), run, .ident p dv]
-    | _ => rest ++ [.decl p dv none false l, run, .ident p dv]
-  | none => ss
-
 /-- Calls of the functions `mv` as `$inline` markers with an empty template:
     enough to see whether a body has several values. -/
 def markCalls (mv : List String) : SExpr → SExpr :=
@@ -511,6 +484,76 @@ partial def renameE (ren : List (String × String)) : SExpr → SExpr :=
     | .gen p x i src => if (ren.lookup x).isSome || (i.bind fun j => ren.lookup j).isSome then
         some (.gen p ((ren.lookup x).getD x) (i.map fun j => (ren.lookup j).getD j) (renameE ren src)) else none
     | _ => none
+
+def isDefer : SExpr → Bool
+  | .app _ (.ident _ "$defer") _ _ => true
+  | _ => false
+
+/-- Whether evaluating `e` has no effect and reads nothing a `defer:` could
+    change (#283): literals, the scope's own constants `vals`, and tuples,
+    arrays, maps and options of those. -/
+partial def pureVal (vals : List String) : SExpr → Bool
+  | .int .. | .float .. | .char .. | .char32 .. => true
+  | .str _ ps => ps.all fun | .text _ => true | .code _ => false
+  | .ident _ n => vals.contains n || n == "false" || n == "true"
+  | .neg _ e => pureVal vals e
+  | .tuple _ es | .arrayLit _ es => es.all (pureVal vals)
+  | .mapLit _ kvs => kvs.all fun (k, v) => pureVal vals k && pureVal vals v
+  | .optionLit _ (.block _ [e]) => pureVal vals e
+  | _ => false
+
+/-- Statements every path of which ends in a `return` (#283). -/
+partial def alwaysRets (ss : List SExpr) : Bool :=
+  match ss.getLast? with
+  | some (.ret ..) => true
+  | some (.ite _ _ t (some u)) => alwaysRets (stmtsOf t) && alwaysRets (stmtsOf u)
+  | _ => false
+
+/-- An `if`'s branch with a `defer:` of its own and a `return` before its
+    end, with a path that does not return (#283): the rest of the function
+    would follow the branch's statements, and its `defer:` with them. -/
+def branchDeferBad : SExpr → Bool
+  | .ite _ _ t u? => (t :: u?.toList).any fun b =>
+      let ss := stmtsOf b
+      ss.any isDefer && ss.dropLast.any (anyE fun | .ret .. => true | _ => false) && !alwaysRets ss
+  | _ => false
+
+/-- A scope's `defer:`s, in order, each with the names its scope declares
+    after it renamed (`$later'N`, shown as written): moved after the
+    scope's value, they still cannot use those, as where they were (#283,
+    #391's review). -/
+def deferBodies (ss : List SExpr) : List SExpr :=
+  ss.zipIdx.filterMap fun (s, i) =>
+    if !isDefer s then none else
+    let later := boundIn (ss.drop (i + 1))
+    some (if later.isEmpty then s else renameE (later.map fun n => (n, s!"$later'{n}")) s)
+
+/-- A scope's own `defer:` blocks after its value, as LANGUAGE.md lowers them
+    (#283): its other statements, its value, a block of the `defer:`s in
+    order (which runs them where it ends, last registered first, as the
+    elaborator checks a `defer:`), then the value again. Once the scope's
+    clauses are the caller's, the block runs for each of its values, when
+    the value leaves the scope, and not for a value whose clauses fail. The
+    value is bound to `dv` first, unless it reads nothing the block could
+    change (`pureVal`), so it keeps the type its place gives it (`false`,
+    `(Y, array{})`); a scope ending in a `defer:` has the block itself as
+    its value, as a block ending in one does. -/
+def deferLast (p : Pos) (dv : String) (ss : List SExpr) : List SExpr :=
+  match ss.getLast? with
+  | some l =>
+    if !ss.any isDefer then ss else
+    let ds := deferBodies ss
+    let rest := ss.dropLast.filter (!isDefer ·)
+    if isDefer l then rest ++ [.block p ds] else
+    let run := SExpr.block p (ds ++ [.int p 0])
+    let vals := ss.filterMap fun | .decl _ x _ false _ => some x | _ => none
+    if pureVal vals l then rest ++ [run, l] else
+    match l with
+    -- (a binding as the value stays one, its name then in scope too)
+    | .decl q x _ false _ => rest ++ [l, run, .ident q x]
+    | .decl q x _ true _ => rest ++ [l, .decl p dv none false (.ident q x), run, .ident p dv]
+    | _ => rest ++ [.decl p dv none false l, run, .ident p dv]
+  | none => ss
 
 mutual
 /-- An inlined call's parameters bound to its arguments, lifted, in order
@@ -682,7 +725,7 @@ partial def liftE (isVal : String → Bool) (isField : String → String → Boo
     -- error, which it must stay)
     if ss.any (fun | .decl _ _ none false (.range ..) | .gen .. => true | _ => false) then
       return noLift p "a block that binds a range (a..b), which only a for clause can" e
-    let ssD ← if ss.dropLast.any isDefer then do pure (deferLast p (← LM.fresh p "dv") ss) else pure ss
+    let ssD ← if ss.any isDefer then do pure (deferLast p (← LM.fresh p "dv") ss) else pure ss
     let tag ← LM.fresh p "b"
     -- (its names are not in scope where it is, as for a block's own,
     -- `$declNames`: Verse has no shadowing)
@@ -1245,8 +1288,33 @@ partial def elimReturns (fresh : Nat → String) (n : Nat) (multi : SExpr → Bo
         ((ss.flatMap localsOf) ++ extra).eraseDups.map fun x => (x, s!"{k}{tg}'{x}")
       let ρt := own ts (boundIn cs) "t"
       let ρu := own us [] "u"
-      let (tb, n1) ← elimReturns fresh (n + 1) multi ret (ts.map (renameE ρt) ++ rest)
-      let (ub, n2) ← elimReturns fresh n1 multi ret (us.map (renameE ρu) ++ rest)
+      -- (a branch's own `defer:`s, #283: at its `return`, after the value,
+      -- or at its end, before the rest, as `deferLast` puts a block's)
+      let deferBranch (tg : String) (ss : List SExpr) : List SExpr :=
+        if !ss.any isDefer then ss else
+        let ds := deferBodies ss
+        let other := ss.filter (!isDefer ·)
+        match other.getLast? with
+        | some (.ret q e?) =>
+          let dv := s!"{k}{tg}$dv"
+          other.dropLast ++ [.decl q dv ret false (e?.getD (.tuple q [])), .block q (ds ++ [.int q 0]),
+            .ret q (some (.ident q dv))]
+        | _ => other ++ [.block p (ds ++ [.int p 0])]
+      -- (one with a `return` before its end always returns, `branchDeferBad`,
+      -- so the rest never follows it: its `defer:`s stay where they are,
+      -- in the blocks its own `if`s make, `deferLast` below)
+      let isRet := anyE fun | .ret .. => true | _ => false
+      let ts := ts.map (renameE ρt)
+      let us := us.map (renameE ρu)
+      let ts := if ts.dropLast.any isRet then ts else deferBranch "t" ts
+      let us := if us.dropLast.any isRet then us else deferBranch "u" us
+      let (tb, n1) ← elimReturns fresh (n + 1) multi ret (ts ++ rest)
+      let (ub, n2) ← elimReturns fresh n1 multi ret (us ++ rest)
+      -- (the blocks made, as any block's: their `defer:`s after their value,
+      -- so they run as each value leaves where they are spliced into a
+      -- path or a choice's alternative, #283)
+      let tb := deferLast p s!"{k}t$dvb" tb
+      let ub := deferLast p s!"{k}u$dvb" ub
       let cs := cs.map (renameE ρt)
       if !multi (.block p tb) && !multi (.block p ub) then
         some ([.ite p cs (.block p tb) (some (.block p ub))], n2)
@@ -1503,8 +1571,13 @@ partial def inlineCalls (mv : List (String × MFn)) (e : SExpr) (recs : List Str
       -- (its own `defer:`s after its value, as `deferLast` puts a block's,
       -- #283: the analysis has checked that none comes after a `return`)
       let ss := stmtsOf body
-      let ds := ss.dropLast.filter isDefer
-      let body := if ds.isEmpty then body else .block q (ss.dropLast.filter (!isDefer ·) ++ ss.getLast?.toList)
+      let ds := deferBodies ss
+      -- (one ending in a `defer:`, a `void` one: they are its value, a block
+      -- of them, as a block ending in one has)
+      let lastD := ss.getLast?.any isDefer
+      let body := if ds.isEmpty then body else
+        .block q (ss.filter (!isDefer ·) ++ (if lastD then [.block q ds] else []))
+      let ds := if lastD then [] else ds
       -- (its `return`s as guarded alternatives, #283)
       let ss := stmtsOf body
       let ss := if anyE (fun | .ret .. => true | _ => false) body then
@@ -2360,7 +2433,9 @@ def inlineMulti (tops : List STop) (reserved : List String := []) : Except Strin
     -- value, #283; computed at the call or taken lazily, its body is a
     -- function's, where they would run once, or never)
     let ss := stmtsOf f.body
-    if ss.dropLast.any isDefer then
+    if anyE branchDeferBad f.body then
+      throw s!"{f.pos.show}: {shownFnName n} has several values and a branch of an if with a defer: of its own, a return before its end and a path that does not return, which the rest of the function would follow before the defer: runs: not supported yet (#283)"
+    if ss.any isDefer then
       if recs.contains n || needAll.contains n then
         throw s!"{f.pos.show}: {shownFnName n} has several values and a defer:, and is recursive or called by a recursive one (so its values are computed at the call, or taken lazily): not supported yet (#235, #283)"
       -- (one after a `return`, which may leave before it is reached)

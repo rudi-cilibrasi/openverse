@@ -3926,7 +3926,7 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
           | "PiFloat" => return ⟨.lit (.float (VFloat.canon 3.141592653589793)), .float⟩
           | "Inf" => return ⟨.lit (.float 0x7FF0000000000000), .float⟩
           | "NaN" => return ⟨.lit (.float VFloat.nanBits), .float⟩
-          | _ => eerr p s!"unknown identifier '{n}'"
+          | _ => eerr p s!"unknown identifier '{Choice.shownName n}'"
   -- a constructor's `block:` (#11): it cannot fail, as a class's cannot
   | .app _ (.ident _ "$nofail") [e] false => elabE { ctx with canFail := false, inBlock := true } e exp
   | .app p (.ident _ "$defer") _ _ => eerr p "defer: is a statement: it has no value"
@@ -4692,8 +4692,9 @@ partial def elabDefersCore (ctx : Ctx) (ds : List (SExpr × List Local)) : EM Ex
   let mut acc : Expr := .lit .void
   for (d, locs) in ds.reverse do
     -- (with the locals where it was registered: their slots still hold them)
+    -- (no failure context that takes a choice's values, #283)
     let dctx := { ctx with canFail := false, inDefer := true, inLoop := false, defers := [], loopDefers := 0,
-                           locals := locs }
+                           locals := locs, inTaking := false, liftWhy := "" }
     let r ← elabE dctx d none
     acc := .seq r.e acc
   return acc

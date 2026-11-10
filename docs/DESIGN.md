@@ -183,17 +183,30 @@ for the place (`$b…_Y`), so two blocks in one clause list stay apart. A
 `checkNewLocal` where the block was: the renaming must not get around the
 no-shadowing rule. The block's last expression is the value. A block's
 own `defer:`s go after its value (`Choice.deferLast`, #283): its other
-statements, the value bound to a name of its own (a value typed by where
-it is, `false`, `array{}`, `map{}`, stays last), a block of the `defer:`s in
-order, which runs them where it ends, last registered first, with the
-elaborator's checks of a `defer:`, then the name. As LANGUAGE.md lowers a
-`defer:` after the rest of its scope, so they run as each value leaves the
-block, and not for a value whose clauses fail. The same goes for a
-function's own `defer:`s, after `$r0` in its `$inline` template (not
+statements, the value, a block of the `defer:`s in order, which runs them
+where it ends, last registered first, with the elaborator's checks of a
+`defer:`, then the value again. The value is bound to a name of its own
+first, unless it reads nothing the block could change (`pureVal`:
+literals, the block's constants, and tuples, arrays, maps and options of
+those), so `(Y, false)` keeps the type its place gives it. A block ending
+in a `defer:` has the block of them as its value, as it would have the
+`defer:` (`void`, or the elaborator's "no value"). Each moved `defer:` has
+the names its scope declares after it renamed (`$later'N`, shown as `N`,
+`deferBodies`), so it cannot use them, as where it was. As LANGUAGE.md
+lowers a `defer:` after the rest of its scope, they run as each value
+leaves the block, and not for a value whose clauses fail. The same goes
+for a function's own `defer:`s, after `$r0` in its `$inline` template (not
 after a `return`, which may leave first, and not in a recursive one or one
-reached from it, whose body is a function's), a block as a branch
-(`bifToExcl`), and a branch typed apart as `option{…}` (`elabBranchAlts`),
-whose braces hold clauses.
+reached from it, whose body is a function's); a branch's own, in
+`elimReturns`, at its `return` after the value or at its end before the
+rest of the function; one with a `return` before its end must always
+return (`branchDeferBad`), so the rest never follows it, and its
+`defer:`s stay in the blocks its own `if`s make. Every block
+`elimReturns` makes has its `defer:`s after its value too, as it may be
+spliced into a path or a choice's alternative; a block as a branch (`bifToExcl`); and a branch typed
+apart as `option{…}` (`elabBranchAlts`), whose braces hold clauses. A
+`defer:`'s body is no failure context that takes a choice
+(`elabDefersCore` clears `inTaking`).
 
 A construction evaluates its fields in its type's declaration order, so its
 fields are first put in that order, which by itself changes nothing. Then
