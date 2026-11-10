@@ -1732,6 +1732,10 @@ structure MFam where
   /-- The declaring class's parameters, whose types a dispatch's arguments
       are bound at. -/
   params : List SParam := []
+  /-- (#283) The declaring class's type parameters, when it is generic: the
+      dispatch's receiver then takes its type from the call, and the casts
+      to each implementing class infer theirs from it. -/
+  rootTps : List TParam := []
   deriving Inhabited
 
 /-- The calls of the methods of `fams` in `e` (#283), `inC` the class whose
@@ -1806,23 +1810,27 @@ partial def rwFamCalls (anc : String → List String) (fams : List (String × MF
         | _ => .ident p (aN i)
       -- (each argument at its parameter's written type, as at a call: so
       -- `array{}` or `false` has the type it needs)
-      let tyAt (a : SExpr) (i : Nat) : Option STy := match a with
+      -- (none for a generic family, #283, whose written types name the
+      -- declaring class's type parameters, unknown where it is called)
+      let tyAt (a : SExpr) (i : Nat) : Option STy := if !f.rootTps.isEmpty then none else match a with
         | .decl _ n _ _ _ =>
           if n.startsWith "?" then (f.params.find? (·.name == (n.drop 1).toString)).map (·.ty)
           else (posPs[i]?).map (·.ty)
         | _ => (posPs[i]?).map (·.ty)
       let binds : List SExpr := if tupled then
           let t := s!"$t{site}"
-          SExpr.decl p t (some (.tup (posPs.map (·.ty)))) false (.ident p "$arg") ::
-            posPs.zipIdx.map fun (sp, i) => SExpr.decl p (aN i) (some sp.ty) false (.app p (.ident p t) [.int p (i : Int)] false)
+          let gen := !f.rootTps.isEmpty
+          SExpr.decl p t (if gen then none else some (.tup (posPs.map (·.ty)))) false (.ident p "$arg") ::
+            posPs.zipIdx.map fun (sp, i) => SExpr.decl p (aN i) (if gen then none else some sp.ty) false (.app p (.ident p t) [.int p (i : Int)] false)
         else args.zipIdx.map fun (a, i) => SExpr.decl p (aN i) (tyAt a i) false (.ident p "$arg")
+      let castTo (d : String) : SExpr := .app p (.ident p d) [.ident p r] true
       let alt (d : String) : List SExpr × SExpr :=
         let guard := if d == f.root then SExpr.decl p dn none false (.ident p r)
-          else .decl p dn none false (.app p (.ident p d) [.ident p r] true)
-        let nots := (yieldsTo f d).map fun x => SExpr.notE p (.app p (.ident p x) [.ident p r] true)
+          else .decl p dn none false (castTo d)
+        let nots := (yieldsTo f d).map fun x => SExpr.notE p (castTo x)
         (guard :: nots, .app p (.ident q (methodFnName d m)) (.ident p dn :: passed) br)
-      let tmpl := [SExpr.decl p r (some (.name f.root)) false (.ident p "$arg")] ++ binds ++
-        [.decl p kv f.ret false (mkExcl p (f.impls.map alt))]
+      let tmpl := [SExpr.decl p r (if f.rootTps.isEmpty then some (.name f.root) else none) false (.ident p "$arg")] ++ binds ++
+        [.decl p kv (if f.rootTps.isEmpty then f.ret else none) false (mkExcl p (f.impls.map alt))]
       .app p (.ident p "$dispatch") (.ident q (methodFnName f.root m) :: .block p tmpl :: recv :: vals) false
   mapE (fun
     | .app p (.member q recv m) args br =>
@@ -1893,6 +1901,21 @@ def methodFns (tops : List STop) (reserved : List String := []) : Except String 
   let otherSuper (n : String) (b : SExpr) : Bool :=
     anyE (fun | .app _ (.member _ (.ident _ "(super:)") x) _ _ => x != n | .member _ (.ident _ "(super:)") _ => false | _ => false) b ||
     anyE (fun | .member _ (.ident _ "(super:)") x => x != n | _ => false) (eraseCallHeads [n] b)
+  -- (#283) the root's type parameters as class `c` sees them, through
+  -- each parent's type arguments: `ibox := class(box(int))` sees `t` as
+  -- `int`, so its override may write `int` where the root writes `t`
+  let rec rootView (fuel : Nat) (c root : String) : Option (List (String × STy)) :=
+    if c == root then some (((classes.lookup root).map fun (_, _, _, _, tps) => tps.map fun tp => (tp.name, STy.name tp.name)).getD [])
+    else match fuel with
+      | 0 => none
+      | k + 1 => ((classes.lookup c).map (·.1)).getD [] |>.findSome? fun pe =>
+          let (pn, args) : String × List STy := match pe with
+            | .app pn args => (pn, args)
+            | .name pn => (pn, [])
+            | _ => ("", [])
+          (rootView k pn root).map fun σp =>
+            let ptps := ((classes.lookup pn).map fun (_, _, _, _, tps) => tps.map (·.name)).getD []
+            σp.map fun (r, t) => (r, t.substNames (ptps.zip args))
   -- (why a method name's declarations cannot become functions, if they
   -- cannot: one class declares it, the others below it override it)
   -- (and, for a reason of one declaration's own, its class)
@@ -1911,8 +1934,23 @@ def methodFns (tops : List STop) (reserved : List String := []) : Except String 
       -- #283, inferred from the receiver where it is inlined, as at a call
       -- of a generic one; not yet with overrides, whose dispatch tests
       -- classes, not their type arguments)
-      if !tps.isEmpty && ds.length > 1 then
-        return some (s!"{if ii then "an interface" else "a class"} that has it is generic ({c.replace "::" "."}) and it is overridden", none)
+      -- (a generic one's overrides too, #283: the dispatch's casts infer
+      -- each class's type arguments from the receiver's; so each class
+      -- that has it must give the root's type parameters its own, all of
+      -- them, none fixed, as `sbox(t) := class(box(t))`, a cast to which
+      -- never fails for its type arguments)
+      if ds.length > 1 && c != r then
+        let ctps := tps.map (·.name)
+        let ok := match rootView (classes.length + 1) c r with
+          | some σ =>
+            let args := σ.map (·.2)
+            args.all (fun | .name x => ctps.contains x | _ => false) &&
+              ctps.all (fun x => args.any fun | .name y => y == x | _ => false) &&
+              (args.filterMap fun | .name y => some y | _ => none).eraseDups.length == args.length
+          | none => true
+        let rootGeneric := ((classes.lookup r).map fun (_, _, _, _, rtps) => !rtps.isEmpty).getD false
+        if rootGeneric && !ok then
+          return some (s!"{c.replace "::" "."} overrides it and gives {r.replace "::" "."}, which is generic, type arguments other than its own type parameters", none)
       if !(anc c).contains r then return some (s!"{c.replace "::" "."} overrides it without being below {r.replace "::" "."}", none)
       if let .fn _ _ _ mtps fx _ b := m then
         -- (an override that is `<decides>` where the declaration is not, or
@@ -1935,7 +1973,8 @@ def methodFns (tops : List STop) (reserved : List String := []) : Except String 
     let impls := (impls.filter (· == root)) ++ impls.filter (· != root)
     let ret := (ds.find? (·.1 == root)).bind fun | (_, .fn _ _ _ _ _ r _) => some r | _ => none
     let params := ((ds.find? (·.1 == root)).bind fun | (_, .fn _ _ ps _ _ _ _) => some ps | _ => none).getD []
-    some (n, { root, impls, direct := impls == [root] && ds.length == 1, ret, params })
+    let rootTps := ((classes.lookup root).map fun (_, _, _, _, tps) => tps).getD []
+    some (n, { root, impls, direct := impls == [root] && ds.length == 1, ret, params, rootTps })
   -- (which of them are interfaces: their defaults yield to classes', #375)
   let isIfaceC (c : String) : Bool := match classes.lookup c with
     | some (_, ii, _, _, _) => ii
@@ -1972,7 +2011,8 @@ def methodFns (tops : List STop) (reserved : List String := []) : Except String 
     match (declsOf n).find? (·.1 == f.root) with
     | some (_, .fn p _ ps _ fx r _) =>
       let args := ps.map fun sp => SExpr.ident p sp.name
-      some (.fn p (methodFnName f.root n ++ "$fam") ({ name := "$Self", ty := .name f.root } :: ps) [] fx r
+      let selfTy : STy := if f.rootTps.isEmpty then .name f.root else .app f.root (f.rootTps.map fun tp => .name tp.name)
+      some (.fn p (methodFnName f.root n ++ "$fam") ({ name := "$Self", ty := selfTy } :: ps) f.rootTps fx r
         (.tuple p (f.impls.map fun c => .app p (.ident p (methodFnName c n)) (.ident p "$Self" :: args) false)))
     | _ => none
   -- (parameters' defaults too, which a call evaluates)
@@ -2028,7 +2068,8 @@ def methodFns (tops : List STop) (reserved : List String := []) : Except String 
     if let some r0 := f.ret then
       for (c, m) in declsOf n do
         if let .fn q _ _ _ _ r _ := m then
-          if c != f.root && !styEq (styNorm r) (styNorm r0) then
+          let r0c := ((rootView (classes.length + 1) c f.root).map fun σ => r0.substNames σ).getD r0
+          if c != f.root && !styEq (styNorm r) (styNorm r0c) then
             throw s!"{q.show}: {c.replace "::" "."}.{n} returns {styShow r}, where {f.root.replace "::" "."}.{n}, which it overrides and which has several values, returns {styShow r0}: an override in a family of methods with several values must return the same type (a narrower one is not supported yet, #283)"
   if sel.isEmpty then return tops
   -- (a parameter or local named like a member: refused, as in the class,
