@@ -366,6 +366,11 @@ OVL = 'noovl' not in flags and R15.random() < 0.5
 # choice is a generator as a branch's is (#360); the if adds none (#331). A generator of its own
 # decides, so seeds keep their other programs.
 R16 = random.Random(seed * 1000003 + 383)
+# ---- #391 (#283): at times a function with several values (mv mode) has a defer: of its own
+# that prints, just before its value: it runs as each value leaves the function, after the value is
+# computed and before the caller's clauses after it; a value whose clauses fail rolls it back with
+# the rest of its effects. A generator of its own decides, so seeds keep their other programs.
+R17 = random.Random(seed * 1000003 + 391)
 # ---- #312, flag rt (on with lazy; nort turns it off): a test's expression may call
 #   RT(RTa:int):int =
 #       RTy := RTa | RTa + 1 | RTa + 2
@@ -1705,11 +1710,18 @@ def ev(e, st, k, mode):
         body = inst(e[1], e[3])
         args = e[2]
 
+        dfr = FUNCS[e[1]].get('defer')
+
+        def kd(v, s):
+            # (#391: the function's own defer: runs as this value leaves it)
+            s.out.append(dfr)
+            return k(v, s)
+
         def go(i, vals, s):
             if i == len(args):
                 for p, v in zip(body['params'], vals):
                     s.binds[p] = v
-                return run_body(body['stmts'], body['val'], s, k, mode)
+                return run_body(body['stmts'], body['val'], s, kd if dfr else k, mode)
             return ev(args[i], s, lambda v, s2: go(i + 1, vals + [v], s2), mode)
         return go(0, [], st)
     if t == 'choice' and 'cf' in flags:
@@ -2010,7 +2022,7 @@ def gen_func(i):
         val = ('bin', '+', val, ('choice', [('lit', R.randint(0, 3)), leaf(scope, vars_)]))
         PROD[0] *= 2
     f = {'name': f"M{i}", 'params': params, 'decides': decides, 'stmts': stmts, 'val': val,
-         'count': PROD[0], 'nctr': len(ctrs)}
+         'count': PROD[0], 'nctr': len(ctrs), 'defer': f"df{i}" if R17.random() < 0.35 else None}
     CTX.update(ctrs=None, nofail=False, fmax=None, plim=64)
     return f
 
@@ -2019,6 +2031,8 @@ def show_func(f):
     ps = ", ".join(f"{p}:{t}" for p, t in f['params'])
     L = [f"{f['name']}({ps}){'<decides>' if f['decides'] else ''}:int ="]
     L += ["    " + show_s(c) for c in f['stmts']]
+    if f.get('defer'):
+        L += ["    defer:", f'        Print("{f["defer"]}")']
     L.append("    " + show(f['val']))
     return L
 
