@@ -813,6 +813,18 @@ def TyEnv.lowerPins (env : TyEnv) (ps : List (Option Ty)) : List (Option VTy) :=
 def TyEnv.corePins (env : TyEnv) (d : String) : List (Option Ty) :=
   if env.pinned.contains d then env.pinsOf d else []
 
+/-- The pins of class `d` as Verse Core has them: `corePins`, and for a
+    class below an interface referred to through views, `none` on the rest
+    of its Verse Core type arguments, so that a dispatch through a view
+    opens them (`Typed.dispatch_view`, #351). A dispatch tests classes
+    whose Verse Core pins agree, so it groups them by these. -/
+def TyEnv.dispatchPins (env : TyEnv) (d : String) : List (Option Ty) :=
+  let ps := env.corePins d
+  if !(env.info d).isIface && !env.phs.contains d && env.viewed.any (env.isSub d ·) then
+    let n := (env.coreArgs d (((env.sparams.lookup d).getD []).map fun (v, c) => Ty.param v c)).length
+    ps ++ List.replicate (n - ps.length) none
+  else ps
+
 /-- Code generic over `T` can treat a `d` below it under the refinement
     its pins give (#142, #209): `d`'s pins determine its Verse Core type
     arguments (`pinsOf`), and are on all of them, so an object has those
@@ -3906,7 +3918,7 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
       -- (#351: through views, one test per class, each with its view and
       -- all of its pins, which the view relates to the object's)
       if env.viewed.contains S then parts := parts.push (env.corePins d, #[d]) else
-      let k := if wide then env.corePins d else (env.corePins d).take rargs.length
+      let k := if wide then env.dispatchPins d else (env.dispatchPins d).take rargs.length
       match parts.findIdx? (·.1 == k) with
       | some pi => parts := parts.modify pi fun (k', ds) => (k', ds.push d)
       | none => parts := parts.push (k, #[d])
@@ -6017,7 +6029,8 @@ partial def elabAppBase (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (b
               -- of `e`'s type, which might have no initial value)
               let mut parts : Array (List (Option Ty) × Array String) := #[]
               for d in cls do
-                let key := env.corePins d
+                -- (by their Verse Core pins, which the rule compares, #351)
+                let key := env.dispatchPins d
                 match parts.findIdx? (·.1 == key) with
                 | some pi => parts := parts.modify pi fun (k, ds') => (k, ds'.push d)
                 | none => parts := parts.push (key, #[d])
@@ -9951,7 +9964,10 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     let q := (qm.splitOn ".").head!
     let mn := (dm.splitOn ".").getLast!
     let (cd', cq) := (core d, core q)
-    if !env.sameCorePinned d q then
+    -- (not through views, #351: a dispatch through one opens the class's
+    -- type arguments, related to the interface's by its view, which may
+    -- have more, `q(t) := class(p(t), keyed(string, t))`)
+    if !env.viewed.contains q && !env.sameCorePinned d q then
       if ((env.sparams.lookup d).getD []).isEmpty then
         throw s!"{mp.show}: {d} has more Verse Core type arguments than {q} (a class between them has type parameters of its own), so it cannot override {mn} yet: code generic over {q} could not give them (#39)"
       throw s!"{mp.show}: {d} has type parameters that {q} does not have and that the type arguments it gives {q} do not determine, so it cannot override {mn}: code generic over {q} could not give them (#39, #209)"
@@ -10412,7 +10428,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       if let some k := fxOver a b then
         throw s!"{cp.show}: in {c}, {impl} allows the effect <{k}>, which {decl} does not"
     | _, _ => pure ()
-    if !env.sameCorePinned e q then
+    if !env.viewed.contains q && !env.sameCorePinned e q then
       throw s!"{cp.show}: {c} uses {impl} for {decl}, but {e} has type parameters that {q} does not have, so code generic over {q} could not give them (#39)"
     if !sigOk then
       throw s!"{cp.show}: {c} uses {impl} for {decl}, but their types differ at {q}'s type arguments (as code generic over {q} sees them), so it could not call it (#53)"
@@ -10624,16 +10640,8 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   -- (a class below an interface referred to through views has pins on all of
   -- its Verse Core type arguments, so that a dispatch through a view opens
   -- them, `Typed.dispatch_view`, #351)
-  let viewedBelow : List String := env.classes.filter fun d =>
-    !(env.info d).isIface && !env.phs.contains d && env.viewed.any fun i => env.isSub d i
   let pins := env.classes.map fun d =>
-    if env.isRefClass d then
-      let ps := env.lowerPins (env.corePins d)
-      if viewedBelow.contains d then
-        let n := (env.coreArgs d (((env.sparams.lookup d).getD []).map fun (v, c) => Ty.param v c)).length
-        ps ++ List.replicate (n - ps.length) none
-      else ps
-    else []
+    if env.isRefClass d then env.lowerPins (env.dispatchPins d) else []
   -- concurrency (#156): each <suspends> function `g` becomes a frame class
   -- and the functions `g$new`, `g$reset` and `g$resume` (`Suspend.lean`);
   -- `g`'s own index is `g$resume`'s, as only suspends code calls it
