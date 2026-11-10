@@ -1,0 +1,33 @@
+t1
+v 10
+t1
+v 11
+e2
+v 40
+e2
+v 42
+t1
+w 1
+t1
+w 2
+e2
+w 3
+f
+first 6
+d
+q
+d
+q
+t
+o 1
+t
+o 2
+e
+none
+r 2
+r 100
+gen 1
+gen 10
+gen 2
+gen 20
+exit=0

@@ -3926,7 +3926,7 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
           | "PiFloat" => return ⟨.lit (.float (VFloat.canon 3.141592653589793)), .float⟩
           | "Inf" => return ⟨.lit (.float 0x7FF0000000000000), .float⟩
           | "NaN" => return ⟨.lit (.float VFloat.nanBits), .float⟩
-          | _ => eerr p s!"unknown identifier '{n}'"
+          | _ => eerr p s!"unknown identifier '{Choice.shownName n}'"
   -- a constructor's `block:` (#11): it cannot fail, as a class's cannot
   | .app _ (.ident _ "$nofail") [e] false => elabE { ctx with canFail := false, inBlock := true } e exp
   | .app p (.ident _ "$defer") _ _ => eerr p "defer: is a statement: it has no value"
@@ -3966,9 +3966,9 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
       if ctx.liftWhy != "" then
         eerr p s!"a call of {Choice.shownFnName f}, which has several values, cannot be lifted from {ctx.liftWhy}, for now (#283)"
       eerr p (s!"a call of {Choice.shownFnName f}, which has several values, cannot be lifted from here, for now (#235): " ++
-        "not from a block with a defer:, a construction where a field's default runs before it, " ++
+        "not from a defer:'s body, a construction where a field's default runs before it, " ++
         "an alternative of a set's choice, the right of " ++
-        "and or or, a range, nor from the branch of an if without else, or a block with a defer: or a range of its own as a branch")
+        "and or or, a range, nor from the branch of an if without else, or a block with a range of its own as a branch")
     eerr p (s!"{Choice.shownFnName f} has several values, so a call of it must be in a failure context that takes them: " ++
       "an if condition, a for's clauses, first{…}, option{…}, logic{…}, not, or the left of or (#235)")
   | .app p (.ident _ "$each") (.app _ (.ident _ fa) _ _ :: _) false =>
@@ -3978,9 +3978,9 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
       if ctx.liftWhy != "" then
         eerr p s!"a call of {Choice.shownFnName f}, which has several values, cannot be lifted from {ctx.liftWhy}, for now (#283)"
       eerr p (s!"a call of {Choice.shownFnName f}, which has several values, cannot be lifted from here, for now (#235): " ++
-        "not from a block with a defer:, a construction where a field's default runs before it, " ++
+        "not from a defer:'s body, a construction where a field's default runs before it, " ++
         "an alternative of a set's choice, the right of " ++
-        "and or or, a range, nor from the branch of an if without else, or a block with a defer: or a range of its own as a branch")
+        "and or or, a range, nor from the branch of an if without else, or a block with a range of its own as a branch")
     eerr p (s!"{Choice.shownFnName f} has several values, so a call of it must be in a failure context that takes them: " ++
       "an if condition, a for's clauses, first{…}, option{…}, logic{…}, not, or the left of or (#235)")
   | .app p (.ident _ "$loop") (.ident _ f :: _) false =>
@@ -3989,19 +3989,19 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
       if ctx.liftWhy != "" then
         eerr p s!"a call of {Choice.shownFnName f}, which has several values, cannot be lifted from {ctx.liftWhy}, for now (#283)"
       eerr p (s!"a call of {Choice.shownFnName f}, which has several values, cannot be lifted from here, for now (#235): " ++
-        "not from a block with a defer:, a construction where a field's default runs before it, " ++
+        "not from a defer:'s body, a construction where a field's default runs before it, " ++
         "an alternative of a set's choice, the right of " ++
-        "and or or, a range, nor from the branch of an if without else, or a block with a defer: or a range of its own as a branch")
+        "and or or, a range, nor from the branch of an if without else, or a block with a range of its own as a branch")
     eerr p (s!"{Choice.shownFnName f} has several values, so a call of it must be in a failure context that takes them: " ++
       "an if condition, a for's clauses, first{…}, option{…}, logic{…}, not, or the left of or (#235)")
   | .app p (.ident _ "$choice") _ false =>
     if ctx.inTaking && ctx.liftWhy != "" then
       eerr p s!"a choice (a | b) cannot be lifted from {ctx.liftWhy}, for now (#283)"
     if ctx.inTaking then
-      eerr p ("a choice (a | b) cannot be lifted from here, for now (#208): not from a block with a defer:, " ++
+      eerr p ("a choice (a | b) cannot be lifted from here, for now (#208): not from a defer:'s body, " ++
         "a construction where a field's default runs before it, an alternative of a set's " ++
         "choice, the right of and or or, a range, " ++
-        "nor from the branch of an if without else, or a block with a defer: or a range of its own as a branch")
+        "nor from the branch of an if without else, or a block with a range of its own as a branch")
     eerr p ("a choice (a | b) has several values, so it must be in a failure context that takes them: " ++
       "an if condition, a for's clauses, first{…}, option{…}, logic{…}, not, or the left of or (#208)")
   | .app p (.ident _ "$paramDefault") [.ident _ f, .ident _ n, .block _ earlier, d] false =>
@@ -4692,8 +4692,9 @@ partial def elabDefersCore (ctx : Ctx) (ds : List (SExpr × List Local)) : EM Ex
   let mut acc : Expr := .lit .void
   for (d, locs) in ds.reverse do
     -- (with the locals where it was registered: their slots still hold them)
+    -- (no failure context that takes a choice's values, #283)
     let dctx := { ctx with canFail := false, inDefer := true, inLoop := false, defers := [], loopDefers := 0,
-                           locals := locs }
+                           locals := locs, inTaking := false, liftWhy := "" }
     let r ← elabE dctx d none
     acc := .seq r.e acc
   return acc
@@ -6054,7 +6055,12 @@ partial def elabBranchAlts (ctx : Ctx) (p : Pos) (i : SExpr) (sty : Option STy) 
   let elabA (c : Ctx) (a : SExpr) (t? : Option Ty) : EM R := do
     if ctx.typeOnly && Choice.hasLiftable a then
       -- (a block's last value at the expected type, which `option{…}`
-      -- does not pass into it, #383's review: `{ …; false }` against ?int)
+      -- does not pass into it, #383's review: `{ …; false }` against ?int;
+      -- its `defer:`s after the value, as where it is lifted, #283, since
+      -- the braces of `option{…}` hold clauses)
+      let a := match a with
+        | .block bp ss => SExpr.block bp (Choice.deferLast bp "$jdv" ss)
+        | a => a
       let a := match a, t? with
         | .block bp ss@(_ :: _), some t =>
           SExpr.block bp (ss.dropLast ++ [.decl bp "$jv" (some t.toSTy) false (ss.getLast?.getD (.tuple bp [])), .ident bp "$jv"])

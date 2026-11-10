@@ -181,8 +181,32 @@ become the clauses of the failure context it is in. Its locals are renamed
 for the place (`$b…_Y`), so two blocks in one clause list stay apart. A
 `$declNames` clause in front checks the original names with
 `checkNewLocal` where the block was: the renaming must not get around the
-no-shadowing rule. The block's last expression is the value. A block with
-a `defer:` of its own is not lifted, since its scope would change.
+no-shadowing rule. The block's last expression is the value. A block's
+own `defer:`s go after its value (`Choice.deferLast`, #283): its other
+statements, the value, a block of the `defer:`s in order, which runs them
+where it ends, last registered first, with the elaborator's checks of a
+`defer:`, then the value again. The value is bound to a name of its own
+first, unless it reads nothing the block could change (`pureVal`:
+literals, the block's constants, and tuples, arrays, maps and options of
+those), so `(Y, false)` keeps the type its place gives it. A block ending
+in a `defer:` has the block of them as its value, as it would have the
+`defer:` (`void`, or the elaborator's "no value"). Each moved `defer:` has
+the names its scope declares after it renamed (`$later'N`, shown as `N`,
+`deferBodies`), so it cannot use them, as where it was. As LANGUAGE.md
+lowers a `defer:` after the rest of its scope, they run as each value
+leaves the block, and not for a value whose clauses fail. The same goes
+for a function's own `defer:`s, after `$r0` in its `$inline` template (not
+after a `return`, which may leave first, and not in a recursive one or one
+reached from it, whose body is a function's); a branch's own, in
+`elimReturns`, at its `return` after the value or at its end before the
+rest of the function; one with a `return` before its end must always
+return (`branchDeferBad`), so the rest never follows it, and its
+`defer:`s stay in the blocks its own `if`s make. Every block
+`elimReturns` makes has its `defer:`s after its value too, as it may be
+spliced into a path or a choice's alternative; a block as a branch (`bifToExcl`); and a branch typed
+apart as `option{…}` (`elabBranchAlts`), whose braces hold clauses. A
+`defer:`'s body is no failure context that takes a choice
+(`elabDefersCore` clears `inTaking`).
 
 A construction evaluates its fields in its type's declaration order, so its
 fields are first put in that order, which by itself changes nothing. Then
@@ -202,7 +226,7 @@ A block or construction kept with a choice inside becomes
 `$noLift(why, e)`. `hasLiftable` treats it as false, so callers that lift
 until nothing is left (`liftCmp`, `liftOps`) do not try it again and
 again. The elaborator elaborates `e` with `liftWhy` set, and the choice's
-refusal says why: the block's `defer:`, a range it binds (which only a `for`
+refusal says why: a range it binds (which only a `for`
 clause can), or the default that would run after the choice. A block's
 renamed locals are `$b…'N`, and messages show `N` (`shownName`).
 `hasLiftable` does not look inside a `.block` that is an argument of a `$…`
@@ -246,7 +270,7 @@ A `for` compiles it this way wherever its clauses go:
 
 In a `for`, an `if` with choices in its branches (#235's `$branchChoice`) is such an exclusive choice too (#331, `Choice.bifToExcl` in `prepare` with `keepExcl`). Its condition becomes a selector, or an option of the names it binds, and its branches become the alternatives, so only the picked branch's own choice generates, as the owner decided on #331. With no type written, the `if` goes along as `$joinOf`, and `exclIter` binds the choice's name at the branches' join, which `elabBranchAlts` computes apart (that code is not kept), as the `if`'s value had it. An `else if` is the else branch's own `if`, converted in turn when its path is prepared. Its selector is named for its place, since it binds the same name. Where the first success is taken nothing changes: the composed choice is the same there. The names a condition binds are renamed for its branch (`$…'N`, shown as `N`), since the clauses after the `if` follow it in its path, where they are not in scope; `$declNames` keeps the no-shadowing check where the `if` is. For `set L = if …`, `$joinOf` carries `L`, at whose type the branches are taken, as `elabBranchAlts` takes them. The join is elaborated with `Ctx.typeOnly`, which uses no function of its own that an earlier round asked for (#275's `$first…`, #335's continuations): those are keyed by place, and there the path's clauses bind the renamed names.
 
-An `if` whose branches have more to lift than a choice of values (#283: a call of a function with several values, recursive or not, or a choice inside a branch's expression) is lifted whole too (`Choice.branchesLift`, which `hasLiftable` and `liftsAsIf` use). A block as a branch has its names renamed for its side (`$…'N`, `bifToExcl`), since the clauses after the `if` follow it in its path, with `$declNames` keeping the no-shadowing check; not one with a `defer:` or a range of its own, as for any block (#302). In a `for`, `bifToExcl` makes it the same exclusive choice, and `exclIter` lifts each branch's call or choice in its path, so the picked branch's own generators are the only ones (#331). Where the first success is taken, `prepare` makes it the choice of its branches, each guarded by the selector (`bifToExcl`, then `exclToChoice`), whose alternatives are lifted as any composed choice's (#296, #338). An `if` whose branches the elaborator takes as they are (`plainBranches`) keeps `elabBranchAlts`, so that code does not change, and so does an `F$all`'s body (`gensOf`, `guardBranches := false`), whose `arrOfE` gives the picked branch's array, whatever is in it. With no type written, the join is found by `elabBranchAlts` with `Ctx.typeOnly` set, which types a branch with something to lift as `option{…}` takes it: at its values' type. In a `for`, `exclIter` does so for `$joinOf`. Where the first success is taken, the guarded choice keeps `$joinOf` as its last argument, and `elabOneGo` types the binding at the join (for `set L = if …`, at `L`'s type) and drops it.
+An `if` whose branches have more to lift than a choice of values (#283: a call of a function with several values, recursive or not, or a choice inside a branch's expression) is lifted whole too (`Choice.branchesLift`, which `hasLiftable` and `liftsAsIf` use). A block as a branch has its names renamed for its side (`$…'N`, `bifToExcl`), since the clauses after the `if` follow it in its path, with `$declNames` keeping the no-shadowing check, and its `defer:`s after its value (`deferLast`); not one with a range of its own, as for any block (#302). In a `for`, `bifToExcl` makes it the same exclusive choice, and `exclIter` lifts each branch's call or choice in its path, so the picked branch's own generators are the only ones (#331). Where the first success is taken, `prepare` makes it the choice of its branches, each guarded by the selector (`bifToExcl`, then `exclToChoice`), whose alternatives are lifted as any composed choice's (#296, #338). An `if` whose branches the elaborator takes as they are (`plainBranches`) keeps `elabBranchAlts`, so that code does not change, and so does an `F$all`'s body (`gensOf`, `guardBranches := false`), whose `arrOfE` gives the picked branch's array, whatever is in it. With no type written, the join is found by `elabBranchAlts` with `Ctx.typeOnly` set, which types a branch with something to lift as `option{…}` takes it: at its values' type. In a `for`, `exclIter` does so for `$joinOf`. Where the first success is taken, the guarded choice keeps `$joinOf` as its last argument, and `elabOneGo` types the binding at the join (for `set L = if …`, at `L`'s type) and drops it.
 
 `exclToChoice` stops at a nested `for`. Otherwise an `if` condition with a choice of its own would turn that `for`'s exclusive choices into generators before the `for` sees them. The eager route (`F$all`, #235) refuses a function with a `return`, as before.
 
