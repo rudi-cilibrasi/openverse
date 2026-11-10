@@ -99,15 +99,23 @@ def c_sqrt(x):
     return math.nan if (math.isnan(x) or x < 0) else math.sqrt(x)
 
 
+def odd_int(y):
+    # (every double of magnitude 2^53 or more is an even integer)
+    return math.isfinite(y) and y == math.floor(y) and math.fmod(y, 2.0) != 0.0
+
+
 def c_pow(x, y):
     try:
         return math.pow(x, y)
     except OverflowError:
-        return math.inf
+        # (C: the result keeps the base's sign when the power is an odd integer,
+        # so a negative base overflows to -Inf, not Inf)
+        return -math.inf if x < 0 and odd_int(y) else math.inf
     except (ValueError, ZeroDivisionError):
-        # (C: pow(±0, y<0) = ±Inf; a negative base to a non-integer power is NaN)
+        # (C: pow(±0, y<0) = ±Inf, -Inf only for -0 and an odd integer y; a negative
+        # base to a non-integer power is NaN)
         if x == 0.0 and y < 0:
-            return math.inf
+            return -math.inf if math.copysign(1.0, x) < 0 and odd_int(y) else math.inf
         return math.nan
 
 
