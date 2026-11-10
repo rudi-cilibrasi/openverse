@@ -978,7 +978,11 @@ and journals every write made in a condition (for rollback). So:
 Values stored in a frame, such as strings or arrays in slots, are kept
 like any object's fields (see "Objects in the C runtime"). Each pass
 resumes a whole chain of suspended calls from its root, so a recursion of
-depth N that waits at every level costs O(N²) calls per tick.
+depth N that waits at every level costs O(N²) calls per tick. (Each pass
+costs O(N): `tests/bench/deep_chain.verse`, whose leaf at depth 400 sleeps
+400 ticks, one pass each, makes about 160,000 resumptions, 1.5 s in the
+reference interpreter and 0.2 s in C; resuming the waiting leaf directly
+would need another resumption design.)
 
 **The scheduler.** The scheduler and `Sleep` are helpers written in Verse
 (`concPrelude`, added to a program with a suspends function, as the
