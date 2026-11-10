@@ -1,0 +1,69 @@
+d
+1
+d
+2
+d
+if 2
+g1
+g-b11
+g-a1
+y 22
+bd
+b 10
+bd
+b 20
+g0
+g-b10
+g-a0
+o 20
+an1
+v 1
+an1
+v 2
+bn2
+v 20
+bn2
+v 200
+pair
+s x
+pair
+s y
+in
+out
+o 101
+in
+out
+o 102
+in
+in
+xy 1 2
+in
+c=5
+k 5
+c=6
+k 6
+h1
+hb2
+h2
+xy 10 2
+hb2
+h2
+xy 10 3
+hb2
+h2
+hb3
+h3
+if 3 4
+both
+g p
+both
+g q
+two-int
+i 1
+two-int
+i 2
+two-str
+s s
+two-str
+s s!
+exit=0

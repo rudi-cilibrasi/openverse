@@ -728,6 +728,16 @@ Main():void =
   for (X := block{ Y := 1 | 2; Y * 10 }) { … }   # 10, 20
   ```
 
+  A block's own `defer:` (or a function's, below) runs as each value
+  leaves it (#283), as its lowering places it, after the rest of its scope:
+  once the value is computed, before the clauses after it, last registered
+  first. A value whose clauses fail runs none, since what they did is
+  rolled back with them:
+
+  ```verse
+  for (X := block{ defer: Print("d"); Y := 1 | 2; Y * 10 }) { Print(X) }   # d 10 d 20
+  ```
+
   A choice inside a struct or class construction is lifted as one in a
   call's arguments, in the order the construction evaluates its fields: its
   type's declaration order, not as written (`pt{Y := F(), X := 1 | 2}`
@@ -738,13 +748,12 @@ Main():void =
   of `first{…}`, `spawn`, `branch`, `sync`, `race`, `rush` or `defer:`:
   such a body takes its own choices or runs apart.
 
-  Refused for now: a choice inside a block with a `defer:` of its own
-  (whose scope would change), or inside a construction where a field it
+  Refused for now: a choice inside a construction where a field it
   does not give, with a default that is more than a literal, comes before
   the choice (the default runs in its place); an
   alternative of a `set`'s choice, either side of `and`, the right of `or`, a range,
   or the branch of an `if` without
-  `else`, or a block with a `defer:` or a range of its own as a branch; and
+  `else`, or a block with a range of its own as a branch; and
   a choice anywhere outside these failure contexts. (A field reached
   through a receiver that is not a variable or `Self`, as `F().Items[…]`,
   is read after the choice, since only the receiver's value is bound
@@ -770,7 +779,8 @@ Main():void =
   Such a call is inlined: its arguments are evaluated first, in order, then
   its body runs in the caller's clauses, so the body's effects are rolled
   back or kept as the caller's are; the caller needs the callee's declared
-  effects, as for any call. With named parameters, as at any call: the
+  effects, as for any call. Its own `defer:` runs as each value leaves it,
+  as a block's does (#283). With named parameters, as at any call: the
   positional arguments, then the named ones as written, then the defaults
   of those omitted, each seeing only the parameters before it (#283); a
   generic one's (or a generic class's method's) type arguments are inferred
@@ -925,7 +935,7 @@ Main():void =
   overloaded one with an overload that calls the function's own name
   (a generic one's type arguments are inferred from the
   arguments where it is inlined, as at a call, named ones too), a recursive
-  one with named parameters, one with a `defer:` of its own (in its body, not in a block inside it), one with a `return`
+  one with named parameters, a recursive one with a `defer:` of its own, or called by a recursive one (its body a function's, where it would run once), one with a `defer:` after a `return` (which may leave before it is reached), one with a `return`
   other than in an `if`'s branches, or recursive with a `return`, a method whose name another class or interface
   also has, overridden in a class that fixes or adds a generic class's type arguments, generic, `<suspends>` or using `(super:)`, one used as a function value, and, since its body is inlined where other names may be
   in scope, one whose name is also the name of a parameter, local, field or
@@ -1384,6 +1394,6 @@ Main()<suspends>:void =
 arithmetic on rationals (see [rational](#rational)), float functions beyond those of [float](#float),
 the class features listed under [Classes](#classes), struct methods (Verse structs have none; classes do),
 `weak_map`, module paths `using{/Verse.org/…}` (accepted and ignored), overloading beyond [Overloading](#overloading), nested
-functions and lambdas (not released in Verse), choice beyond [Choice](#choice) (recursive functions with several values that have effects, other than generators, methods with several values whose name another class shares or that a class fixing a generic class's type arguments overrides; a choice inside a block with a `defer:` or a construction whose default runs before it), concurrency beyond [Concurrency](#concurrency), and effect checking
+functions and lambdas (not released in Verse), choice beyond [Choice](#choice) (recursive functions with several values that have effects, other than generators, methods with several values whose name another class shares or that a class fixing a generic class's type arguments overrides; a choice inside a construction whose default runs before it), concurrency beyond [Concurrency](#concurrency), and effect checking
 other than `<decides>` and the heap effects (`<converges>` is accepted and
 ignored).
