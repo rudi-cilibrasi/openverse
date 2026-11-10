@@ -442,8 +442,7 @@ partial def coreDefault (S : Sigs) (params : List VTy) (depth : Nat) (τ : VTy)
     -- `checkDefault` takes them; its prototype if it has one at them)
     | .vref es bs => es.findSome? fun (t, φ) => do
         let fs ← S.classes[t]?
-        let vb := VTy.bindVarsL φ bs []
-        let args := (List.range (max (VTy.nvarsL fs) (VTy.nvarsL φ))).map fun j => (vb.lookup j).getD VTy.void
+        let args := VTy.viewSlotArgs (S.pinsOf t) fs φ bs
         if !VTy.pinsOK (S.pinsOf t) args || !(VTy.ref [t] args).sub (.vref es bs) then none
         match S.protos.zipIdx.find? fun ((t', a), _) => t' == t && decide (a = args) with
         | some (_, addr) => some (.lit (.ref addr))
@@ -1085,18 +1084,39 @@ partial def suspendSelfGeneric (us : List Nat) (y g : Nat) (c : Callee) (rs : Li
     M (Expr × Expr) := do
   let env ← read
   let some ty := (← get).Γ[y]? | throw "internal error: a refined call's receiver"
-  let .ref _ a := ty | throw "internal error: a refined call's receiver type"
   let some (ps, _) := env.S.fns[g]? | throw "internal error: a refined call's callee"
   let σs ← rs.mapM infer
   -- (the callee's type arguments: its parameters matched against the
   -- receiver and arguments as refined by the pins)
   -- (as the checker opens them, #209: the arguments the pins mention
   -- beyond the receiver's, as fresh variables)
-  let k := openCount env.S us a.length
-  let N := max (VTy.nvarsL a) (VTy.nvarsL σs)
-  let a' := a ++ VTy.ext N k
-  let μ := (unify (VTy.pinEqs (commonPins env.S us (a.length + k)) a')).getD VTy.var
-  let acc := VTy.bindVarsL ps ((VTy.ref us a' :: σs).map (VTy.subst μ)) []
+  -- (through a view, #351, as `tcDispatchView` does: all of the tested
+  -- classes' type arguments the pins mention, fresh, related to the
+  -- receiver's by the view)
+  let (N, μ, recv) ← match ty with
+    | .ref _ a =>
+      let k := openCount env.S us a.length
+      let N := max (VTy.nvarsL a) (VTy.nvarsL σs)
+      let a' := a ++ VTy.ext N k
+      pure (N, (unify (VTy.pinEqs (commonPins env.S us (a.length + k)) a')).getD VTy.var, VTy.ref us a')
+    | .vref ents a =>
+      let some φ := viewOf ents us | throw "internal error: a refined call's view"
+      let k := openCount env.S us 0
+      let N := max (VTy.nvarsL a) (VTy.nvarsL σs)
+      let X := VTy.ext N k
+      let some μ := unify (VTy.viewEqs (commonPins env.S us k) φ a X)
+        | throw "internal error: a refined call's view equations"
+      -- (a fresh one that a variable of the caller's is bound to stands
+      -- for it: the frame's type arguments then mention the caller's own,
+      -- not opened ones, where the view gives them)
+      let ρ : Nat → VTy := fun i =>
+        if i < N then .var i else
+        match (List.range N).find? fun v => decide (μ v = .var i) with
+        | some v => .var v
+        | none => .var i
+      pure (N, (fun i => (μ i).subst ρ), VTy.ref us X)
+    | _ => throw "internal error: a refined call's receiver type"
+  let acc := VTy.bindVarsL ps ((recv :: σs).map (VTy.subst μ)) []
   let frameTy : VTy := .ref [c.tag] ((List.range c.ntp).map VTy.var)
   if frameTy.unbound acc then
     throw "a <suspends> method whose type parameters the call does not determine cannot be dispatched to a class that fixes type arguments yet (#171)"

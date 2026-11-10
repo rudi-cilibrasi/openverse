@@ -275,26 +275,54 @@ def firstOk (ok : List VTy → Bool) (a b : List VTy) : List VTy := if ok a then
     the fields, `void` where none (it then checks the fields against them).
     `acc` is only computed when needed, so that checking nested `new`s
     against their types takes linear time. -/
-def newArgs (t : Nat) (acc : Unit → List (Nat × VTy)) (fs : List VTy) : Option VTy → List VTy
+def newArgs (acc : Unit → List (Nat × VTy)) (fs : List VTy) : Option VTy → List VTy
   | some (.ref _ args) => args
-  -- (#351) an expected reference through views: the class's view matched
-  -- against its arguments, the other variables as the fields bind them
-  | some (.vref es bs) => match es.find? (·.1 == t) with
-    | some (_, φ) =>
-      let vb := VTy.bindVarsL φ bs []
-      (List.range (max (VTy.nvarsL fs) (VTy.nvarsL φ))).map fun j =>
-        ((vb.lookup j).orElse fun _ => (acc ()).lookup j).getD VTy.void
-    | none => (List.range (VTy.nvarsL fs)).map fun j => ((acc ()).lookup j).getD VTy.void
   | _ => (List.range (VTy.nvarsL fs)).map fun j => ((acc ()).lookup j).getD VTy.void
+
+/-- (#351) Type arguments from bindings `bound`, at least `n` and as many as
+    pins `ps`: an unbound one its pin (at the others), else any type,
+    `void`. (A class below an interface referred to through views has pins
+    on every type argument, which neither its fields nor the view need
+    determine.) -/
+def VTy.fillArgs (ps : List (Option VTy)) (n : Nat) (bound : Nat → Option VTy) : List VTy :=
+  let bs := (List.range (max n ps.length)).map bound
+  let base := bs.map (·.getD VTy.void)
+  bs.zipIdx.map fun (b, j) => match b, ps[j]? with
+    | some t, _ => t
+    | none, some (some p) => p.inst base
+    | none, _ => VTy.void
+
+/-- (#351) The type arguments of an object of a class with fields `fs` and
+    pins `ps`, for a slot through views whose entry for the class has view
+    `φ` and whose type arguments are `bs`: those the view relates to the
+    slot's, the others as `VTy.fillArgs` has them. -/
+def VTy.viewSlotArgs (ps : List (Option VTy)) (fs φ bs : List VTy) : List VTy :=
+  let vb := VTy.bindVarsL φ bs []
+  VTy.fillArgs ps (max (VTy.nvarsL fs) (VTy.nvarsL φ)) fun j => vb.lookup j
 
 /-- The type arguments `tc` proposes for a `new` with pins `ps` (#209): the
     expected type's, unless they are too few for the pins (an object of a
     class whose type parameters a dispatch opens has every argument its
-    pins mention), then the fields'. -/
+    pins mention), then the fields', as many as the pins. For an expected
+    reference through views (#351), the class's view matched against its
+    type arguments, the others as the fields bind them. -/
 def newProposal (t : Nat) (ps : List (Option VTy)) (acc : Unit → List (Nat × VTy)) (fs : List VTy)
     (m : Option VTy) : List VTy :=
-  let a := newArgs t acc fs m
-  if ps.length ≤ a.length then a else newArgs t acc fs none
+  -- (the fields' bindings computed once, and only when needed)
+  let fromFields (_ : Unit) : List VTy :=
+    let ac := acc ()
+    VTy.fillArgs ps (VTy.nvarsL fs) fun j => ac.lookup j
+  match m with
+  | some (.vref es bs) => match es.find? (·.1 == t) with
+    | some (_, φ) =>
+      let vb := VTy.bindVarsL φ bs []
+      let n := max (VTy.nvarsL fs) (VTy.nvarsL φ)
+      let ac := if (List.range n).all (fun j => (vb.lookup j).isSome) then [] else acc ()
+      VTy.fillArgs ps n fun j => (vb.lookup j).orElse fun _ => ac.lookup j
+    | none => fromFields ()
+  | _ =>
+    let a := newArgs acc fs m
+    if ps.length ≤ a.length then a else fromFields ()
 
 /-- The instantiation `tc` proposes for a call with result type `t`: the
     bindings `acc` from the arguments, completed from the expected type. -/
@@ -1411,8 +1439,7 @@ def checkDefault (S : Sigs) (a : Nat) (Γ : List VTy) : Expr → VTy → Bool
   -- of an entry, at type arguments its view relates to the slot's
   | .heap (.new c) ds, .vref es bs => match es.find? (·.1 == c), S.classes[c]? with
     | some (_, φ), some fs =>
-      let vb := VTy.bindVarsL φ bs []
-      let args := (List.range (max (VTy.nvarsL fs) (VTy.nvarsL φ))).map fun j => (vb.lookup j).getD VTy.void
+      let args := VTy.viewSlotArgs (S.pinsOf c) fs φ bs
       VTy.pinsOK (S.pinsOf c) args && checkDefaultL S a Γ ds (fs.map (VTy.inst args)) &&
         (VTy.ref [c] args).sub (.vref es bs)
     | _, _ => false
