@@ -6858,13 +6858,10 @@ def subTops : Except String (List STop) :=
 def subVoidTops : Except String (List STop) :=
   parsePrelude subVoidPrelude ["subscription", "Live", "Handlers", "Hs", "H", "S", "F", "X", "Head", "signalAll", "subev0"]
 
-/-- The names a body binds: its locals and its generators' (#53). -/
-partial def boundNamesE (e : SExpr) : List String :=
-  let own := match e with
-    | .decl _ n _ _ _ => [n]
-    | .gen _ x i _ => x :: i.toList
-    | _ => []
-  own ++ (Refine.kids e).flatMap boundNamesE
+/-- The interface whose scope a class's copy of its default is elaborated
+    in (#53): its `$copyOf:J` effect, which `copyIfaceDefaults` gives it. -/
+def copyScope? (effs : List String) : Option String :=
+  effs.findSome? fun e => if e.startsWith "$copyOf:" then some (e.drop 8).toString else none
 
 /-- (#53) An interface that gives a parent interface other type arguments
     than its own type parameters (`c2(t) := interface(container([]t))`) and
@@ -6876,16 +6873,14 @@ partial def boundNamesE (e : SExpr) : List String :=
     the parent that opens the class's type parameters reaches the class's
     copy, which reads them from its receiver's hidden fields as any override
     does; the interface's own, shared by all its classes, would need them as
-    hidden arguments, which such a dispatch cannot pass. Only where the copy
-    means what the default does: no class of the chain declares the method
-    (the class chain wins over interface defaults), no other interface above
-    the class gives it a body, the body has no `(super:)`, and no name it
-    uses free, nor a named parameter, is a member the class's scope has
-    beyond the interface's (it would resolve differently there). Its locals
-    and positional parameters named like such a member are renamed (Verse
-    refuses shadowing, but a `for` binder may shadow a global or a built-in:
-    a name that is also one keeps the copy from being made), and a
-    `<final>` default stays final, its copy exempt (`$copy`). -/
+    hidden arguments, which such a dispatch cannot pass. The copy is
+    elaborated in the interface's scope (`$copyOf:J`, `copyScope?`): the
+    names it uses, its parameters and locals, and `(super:)`, mean what they
+    do in the interface's own body, whatever members the class adds. Only
+    where the copy means what the default does: no class of the chain
+    declares the method (the class chain wins over interface defaults) and
+    no other interface above the class gives it a body; a `<final>` default
+    stays final, its copy exempt (`$copy`). -/
 def copyIfaceDefaults (tops : List STop) : List STop :=
   let defs : List (String × Bool × List TParam × List STy × List String × List STop) := tops.filterMap fun
     | .classDef _ n tps _ parents isI fields _ ms => some (n, isI, tps, parents, fields.map (·.1), ms)
@@ -6908,18 +6903,11 @@ def copyIfaceDefaults (tops : List STop) : List STop :=
   let membersOf (n : String) : List String := match defOf n with
     | some (_, _, _, _, fs, ms) => fs ++ ms.filterMap fun | .fn _ m .. => some (baseName m) | _ => none
     | none => []
-  -- (an interface's body for `m`, not abstract)
-  let bodyOf (n m : String) : Option STop := (defOf n).bind fun d => d.2.2.2.2.2.find? fun
-    | .fn _ x _ _ effs _ _ => baseName x == m && !effs.contains "$abstract"
-    | _ => false
   let pinned (tps : List TParam) (parents : List STy) : Bool := parents.any fun
     | .app _ as => as.length != tps.length || (as.zip tps).any fun (a, tp) => match a with
       | .name x => x != tp.name
       | _ => true
     | _ => false
-  let usesSuper (b : SExpr) : Bool := Choice.anyE (fun
-    | .ident _ n | .member _ _ n => (n.splitOn "(super:)").length > 1
-    | _ => false) b
   let mentions (names : List String) (b : SExpr) : Bool := Choice.anyE (fun
     | .ident _ n | .decl _ n .. => names.contains n
     | .gen _ n n2 _ => names.contains n || (n2.map names.contains).getD false
@@ -6955,27 +6943,8 @@ def copyIfaceDefaults (tops : List STop) : List STop :=
       let targets := targets.filter fun (_, σ) =>
         σ.any fun (_, ty) => STy.mentionsAny (tps.map (·.name)) ty
       let extra : List STop := targets.flatMap fun (j, σ) =>
-        let jScope := (supersOf j).flatMap membersOf
-        let risky := ((supersOf n).flatMap membersOf).filter (!jScope.contains ·)
         (((defOf j).map (·.2.2.2.2.2)).getD []).filterMap fun
-          | .fn mp m ps0 mtps effs ret body0 =>
-            -- (the body's locals and positional parameters named like a
-            -- member the class's scope adds are renamed, which a shadowing
-            -- would refuse there: Verse refuses shadowing a global or a
-            -- member, so such a name is never also free in the body; a named
-            -- parameter keeps its name, which calls use)
-            let boundRisky := ((boundNamesE body0 ++ (ps0.filter (!·.named)).map (·.name) ++
-                ps0.flatMap fun sp => (sp.default.map boundNamesE).getD []).filter risky.contains).eraseDups
-            -- (a `for` binder may shadow a global or a built-in, so it is
-            -- renamed only where no such name is one: else no copy, as now)
-            let topNames : List String := tops.map fun
-              | .fn _ x .. | .const _ x .. | .classDef _ x .. => x
-            let shadowsGlobal := boundRisky.any fun x =>
-              topNames.contains x || builtins.contains x || softBuiltins.contains x
-            let ren := boundRisky.map fun x => (x, x ++ "$copy")
-            let body := Choice.renameE ren body0
-            let ps : List SParam := ps0.map fun sp =>
-              ({ sp with name := (ren.lookup sp.name).getD sp.name, «default» := sp.default.map (Choice.renameE ren) } : SParam)
+          | .fn mp m ps mtps effs ret body =>
             -- (every interface that declares the method, above the class or
             -- above any class below it, is `j` or above it: the copy, a
             -- method of the class chain, takes no other interface's slot or
@@ -6984,19 +6953,18 @@ def copyIfaceDefaults (tops : List STop) : List STop :=
             let jUp := supersOf j
             let others := (below.flatMap supersOf).eraseDups.filter fun i =>
               ((defOf i).map (·.2.1)).getD false && !jUp.contains i && (membersOf i).contains (baseName m)
-            if effs.contains "override" && !effs.contains "$abstract" && !shadowsGlobal &&
-                !m.startsWith "(" && !chainDeclares (baseName m) && others.isEmpty && !usesSuper body &&
+            if effs.contains "override" && !effs.contains "$abstract" &&
+                !m.startsWith "(" && !chainDeclares (baseName m) && others.isEmpty &&
                 !mtps.any (fun tp => tps.any (·.name == tp.name)) &&
                 -- (nor a type parameter the substitution changes as a name in
                 -- an expression, which `Refine.substTypes` leaves: a cast's `c2(t)`)
-                !mentions ((σ.filter fun (x, y) => match y with | .name y' => x != y' | _ => true).map (·.1)) body &&
-                !mentions risky body && !ps.any (fun sp => risky.contains sp.name ||
-                  (sp.default.map (mentions risky)).getD false) then
+                !mentions ((σ.filter fun (x, y) => match y with | .name y' => x != y' | _ => true).map (·.1)) body then
               let ps' : List SParam := ps.map fun sp =>
                 ({ sp with ty := sp.ty.substNames σ, «default» := sp.default.map (Refine.substTypes σ) } : SParam)
               -- (`$copy`: its `<final>`, if any, is the interface's, which it
-              -- is, not overrides)
-              some (.fn mp m ps' mtps (effs ++ ["$copy"]) (ret.substNames σ) (Refine.substTypes σ body))
+              -- is, not overrides; `$copyOf`: elaborated in `j`'s scope, so its
+              -- names, `(super:)` included, resolve as in the interface's own)
+              some (.fn mp m ps' mtps (effs ++ ["$copy", s!"$copyOf:{j}"]) (ret.substNames σ) (Refine.substTypes σ body))
             else none
           | _ => none
       .classDef cp n tps specs parents false fields ovs (ms ++ extra)
@@ -8586,9 +8554,11 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
           throw s!"{mp.show}: {n} defines {mn} twice with the same parameters"
         if ps.any (·.name == "Self") then throw s!"{mp.show}: a method parameter cannot be called Self"
         if builtins.contains (methodBase mn) || softBuiltins.contains (methodBase mn) then throw s!"{mp.show}: a method cannot be called {methodBase mn}, the name of a built-in function"
+        -- (a copy of an interface's default: as in the interface, #53)
+        let scope := (copyScope? effs).getD n
         for prm in ps do
-          if fs.any (·.1 == prm.name) || (henv.supers n).any (declaresBase · prm.name) then
-            throw s!"{mp.show}: parameter '{prm.name}' of {mn} is already a field or method of {n}; Verse does not allow shadowing"
+          if (fullOf scope).any (·.1 == prm.name) || (henv.supers scope).any (declaresBase · prm.name) then
+            throw s!"{mp.show}: parameter '{prm.name}' of {mn} is already a field or method of {scope}; Verse does not allow shadowing"
         -- a class's `block:` clauses: run at construction, after those of the
         -- classes above it, so never overridden
         -- overriding (Book of Verse ch. 10: `M<override>`, the same signature)
@@ -9342,7 +9312,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   let elabFn (env : TyEnv) (p : Pos) (name : String) (ps : List SParam) (ptys : List Ty) (ret : Ty)
       (decides : Bool) (allowed : List String) (tps : List (String × Bool)) (body : SExpr)
       (suspends : Bool := false) (selfTps : List String := [])
-      (selfFieldOf : Option (String → Option Nat) := none) :
+      (selfFieldOf : Option (String → Option Nat) := none) (scopeClass : Option String := none) :
       Except String (Fn × List VTy × List (String × Ty) × Option Pos × List Refine.Lift × List LoopUse) := do
     -- (#209) the values of `selfTps` come from the receiver's hidden
     -- fields, in slots after the hidden parameters: a method's own class's
@@ -9369,7 +9339,9 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
                        dictVars := dictTps.map (·.1),
                        inBlock := name.endsWith ".$block",
                        inCtor := name.endsWith "$init",
-                       selfClass := match name.splitOn "." with
+                       -- (an interface's default elaborated for a class, #53:
+                       -- its names resolve in the interface, `scopeClass`)
+                       selfClass := scopeClass.orElse fun _ => match name.splitOn "." with
                          | [c, _] => some c
                          | _ => none
                        selfMethod := match name.splitOn "." with
@@ -9442,10 +9414,13 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   -- instantiation (`Typed.subst`)
   for (top, g) in generics.zip gsigs.toList do
     match top with
-    | .fn p n ps _ _ _ body =>
+    | .fn p n ps _ effs _ body =>
+      -- (a class's copy of an interface's default, #53, elaborated in the
+      -- interface's scope)
+      let scope := copyScope? effs
       let (fn, tys, needs, err, casts, lf) ← elabFn (genvOf g) p n ps g.params g.ret g.decides g.fx g.tparams body g.suspends
         g.selfTps ((opts.castRequests.find? (·.name == n)).map fun l => fun v =>
-          (l.opened.lookup v).bind (env.witnessField? l.target ·))
+          (l.opened.lookup v).bind (env.witnessField? l.target ·)) scope
       fnNeeds := fnNeeds ++ needs
       castNeeds := castNeeds ++ casts
       loopFirst := loopFirst ++ lf

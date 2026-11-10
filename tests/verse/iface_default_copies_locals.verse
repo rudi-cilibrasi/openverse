@@ -1,6 +1,6 @@
 # a pinned interface's default whose local (Y) and parameter (X) are named like
-# members of the class (box's fields X and Y) (#53): renamed in the copy, which
-# a shadowing would refuse there; a dispatch from container(u) reaches it
+# members of the class (box's fields X and Y) (#53): its copy is elaborated in
+# c2's scope, where they shadow nothing; a dispatch from container(u) reaches it
 container(t:type) := interface:
     Get(N:int):t
 c2(t:type) := interface(container([]t)):
