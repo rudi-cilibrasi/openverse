@@ -148,7 +148,7 @@ not an `array{a₀, …}`, which would run `aₙ₋₁` before `a₀`'s value wa
   - It runs `$forFirst`: `elabFor`'s filter of the first group, then its values. So it fails exactly where the copied form's failure would undo the alternative's own last clauses, since those and the first segment after them were one filter. A later generator that gives nothing does not make it fail, as in the copied form.
   - Each alternative's `for` binds its value, calls it as a clause, and its values are flattened.
   - It is used only where the body may run in a failure context (`forBodySafe`: no `return`, `break`, suspension, `Signal`, or other marker), otherwise copied (tim-6e's review of #335).
-  - An exclusive choice's own paths (#314, `exclIter`) still copy the clauses after them.
+  - An exclusive choice's own paths (#314's returns, #331's `if`s, `exclIter`) do the same (phase 2b): when the clauses after it have another such choice, every path ends with a call of the continuation, in the path's part of the iteration's filter, so a failure of its first filter undoes the path as the copy's would, and the path's generators take the continuation's values as their body (`build` takes the body as an argument for this). The first elaboration compiles the first path with the clauses after it, for the values' type, and asks for the continuation; the next compiles every path with the call. Ten calls of a function with a `return` and a choice after it in one `for` take 13 KB and 0.01 s to compile, where copying took 1.2 MB and 0.4 s. As in phase 2a, a `<suspends>` function, whose effects are not a continuation's, keeps the copies.
 
 Since the result is ordinary Verse Core, every theorem holds of it as it
 stands, and the C runtime runs it unchanged. What is new is proved in
