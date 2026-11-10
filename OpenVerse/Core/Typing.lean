@@ -227,10 +227,14 @@ mutual
 def sub : VTy → VTy → Bool
   | .ref ts as, .ref us bs => ts.all us.contains && bs.isPrefixOf as
   -- (#351) a class's reference fits a view of it whose arguments are among
-  -- the reference's, and a reference through views one through more
+  -- the reference's; a reference through views fits one with, for each
+  -- entry, the same one or one with a prefix of its view that the target's
+  -- arguments fit in (an interface's parent sees the classes through a
+  -- prefix of what it does)
   | .ref ts as, .vref es bs => ts.all fun t => es.any fun e =>
       e.1 == t && e.2.all (fun v => varsBelow as.length v) && bs.isPrefixOf (e.2.map (inst as))
-  | .vref es as, .vref fs bs => es.all fs.contains && bs.isPrefixOf as
+  | .vref es as, .vref fs bs => es.all (fun e => fs.any fun e' =>
+      e'.1 == e.1 && e'.2.isPrefixOf e.2 && (e' == e || decide (bs.length ≤ e'.2.length))) && bs.isPrefixOf as
   | .arr t, .arr u => sub t u
   | .opt t, .opt u => sub t u
   | .tup ts, .tup us => subL ts us

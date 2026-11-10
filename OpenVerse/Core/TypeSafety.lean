@@ -460,8 +460,23 @@ theorem getElem?_map_some {α β} {l : List α} {i : Nat} {a : α} (f : α → �
 /-! (#351) References through views: subtyping and typing, unfolded. -/
 
 theorem VTy.sub_vref_iff {es as fs bs : _} :
-    (VTy.vref es as).sub (.vref fs bs) = true ↔ (∀ e ∈ es, e ∈ fs) ∧ bs <+: as := by
-  simp only [VTy.sub, Bool.and_eq_true, List.all_eq_true, List.isPrefixOf_iff_prefix, List.contains_iff_mem]
+    (VTy.vref es as).sub (.vref fs bs) = true ↔
+      (∀ e ∈ es, ∃ e' ∈ fs, (e'.1 = e.1 ∧ e'.2 <+: e.2) ∧ (e' = e ∨ bs.length ≤ e'.2.length)) ∧ bs <+: as := by
+  simp only [VTy.sub, Bool.and_eq_true, List.all_eq_true, List.any_eq_true, beq_iff_eq, List.isPrefixOf_iff_prefix,
+    Bool.or_eq_true, decide_eq_true_eq]
+
+/-- A prefix of a view at some arguments is the view's prefix at them. -/
+theorem VTy.prefix_map_inst {φ φ' : List VTy} (h : φ' <+: φ) (X : List VTy) :
+    φ'.map (VTy.inst X) <+: φ.map (VTy.inst X) := h.map _
+
+/-- What a reference through views fits, at an object's arguments: the
+    target's arguments are a prefix of the target entry's view (#351). -/
+theorem VTy.vref_entry_prefix {e e' : Nat × List VTy} {as bs X : List VTy} (hp : e'.2 <+: e.2)
+    (hor : e' = e ∨ bs.length ≤ e'.2.length) (hb : bs <+: as) (ha : as <+: e.2.map (VTy.inst X)) :
+    bs <+: e'.2.map (VTy.inst X) := by
+  rcases hor with rfl | hl
+  · exact hb.trans ha
+  · exact List.prefix_of_prefix_length_le (hb.trans ha) (VTy.prefix_map_inst hp X) (by simpa using hl)
 
 theorem VTy.sub_ref_vref_iff {ts : List Nat} {as : List VTy} {es : List (Nat × List VTy)} {bs : List VTy} :
     (VTy.ref ts as).sub (.vref es bs) = true ↔ ∀ t ∈ ts, ∃ e ∈ es,
@@ -484,7 +499,9 @@ theorem hasTy_vref_iff {Ξ : HeapTy} {a : Nat} {es : List (Nat × List VTy)} {ar
 mutual
 theorem VTy.sub_refl : ∀ t : VTy, t.sub t = true
   | .ref ts args => by simp [VTy.sub]
-  | .vref es args => by simp [VTy.sub]
+  | .vref es args => by
+    rw [VTy.sub_vref_iff]
+    exact ⟨fun e he => ⟨e, he, ⟨rfl, List.prefix_refl _⟩, .inl rfl⟩, List.prefix_refl _⟩
   | .arr t => by simp only [VTy.sub]; exact VTy.sub_refl t
   | .opt t => by simp only [VTy.sub]; exact VTy.sub_refl t
   | .tup ts => by simp only [VTy.sub]; exact VTy.subL_refl ts
@@ -523,7 +540,9 @@ theorem VTy.sub_trans : ∀ (t u w : VTy), t.sub u = true → u.sub w = true →
         rw [VTy.sub_vref_iff] at h2
         intro t ht
         obtain ⟨e, he, ⟨het, hv⟩, hp⟩ := h1 t ht
-        exact ⟨e, h2.1 e he, ⟨het, hv⟩, h2.2.trans hp⟩
+        obtain ⟨e', he', ⟨he1, hpre⟩, hor⟩ := h2.1 e he
+        exact ⟨e', he', ⟨he1.trans het, fun f hf => hv f (hpre.subset hf)⟩,
+          VTy.vref_entry_prefix hpre hor h2.2 hp⟩
       | _ => simp [VTy.sub] at h2
     | _ => simp [VTy.sub] at h1
   | .vref es as, u, w, h1, h2 => by
@@ -532,7 +551,15 @@ theorem VTy.sub_trans : ∀ (t u w : VTy), t.sub u = true → u.sub w = true →
       cases w with
       | vref gs cs =>
         rw [VTy.sub_vref_iff] at h1 h2 ⊢
-        exact ⟨fun x hx => h2.1 x (h1.1 x hx), h2.2.trans h1.2⟩
+        refine ⟨fun e he => ?_, h2.2.trans h1.2⟩
+        obtain ⟨e1, he1, ⟨h11, h12⟩, hor1⟩ := h1.1 e he
+        obtain ⟨e2, he2, ⟨h21, h22⟩, hor2⟩ := h2.1 e1 he1
+        refine ⟨e2, he2, ⟨h21.trans h11, h22.trans h12⟩, ?_⟩
+        rcases hor2 with rfl | hl2
+        · rcases hor1 with rfl | hl1
+          · exact .inl rfl
+          · exact .inr (Nat.le_trans h2.2.length_le hl1)
+        · exact .inr hl2
       | _ => simp [VTy.sub] at h2
     | _ => simp [VTy.sub] at h1
   | .arr t, u, w, h1, h2 => by
@@ -581,7 +608,7 @@ theorem VTy.sub_subst (θ : Nat → VTy) : ∀ (t u : VTy), t.sub u = true → (
     | vref fs bs =>
       rw [VTy.subst_vref, VTy.subst_vref, VTy.sub_vref_iff]
       rw [VTy.sub_vref_iff] at h
-      exact ⟨h.1, h.2.map _⟩
+      exact ⟨fun e he => by simpa using h.1 e he, h.2.map _⟩
     | _ => simp [VTy.sub] at h
   | .arr t, u, h => by
     cases u <;> simp [VTy.sub] at h
@@ -642,7 +669,8 @@ theorem hasTy_sub : ∀ (t u : VTy) (v : Value), t.sub u = true → hasTy Ξ v t
       | ref a =>
         rw [hasTy_vref_iff] at hv ⊢
         obtain ⟨t, args', ha, e, he, het, hp⟩ := hv
-        exact ⟨t, args', ha, e, hs.1 e he, het, hs.2.trans hp⟩
+        obtain ⟨e', he', ⟨he1, hpre⟩, hor⟩ := hs.1 e he
+        exact ⟨t, args', ha, e', he', he1.trans het, VTy.vref_entry_prefix hpre hor hs.2 hp⟩
       | _ => simp [hasTy] at hv
     | _ => simp [VTy.sub] at hs
   | .arr t, u, v, hs, hv => by
