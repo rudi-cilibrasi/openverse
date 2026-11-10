@@ -4083,7 +4083,24 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
       let rt ← elabE thenCtx thenE (some .void)
       return ⟨.ite rc.e (← coerce p rt .void) (.lit .void), .void⟩
     | some ee =>
-      let rt ← elabE thenCtx thenE exp
+      -- (#366) a then branch that needs the else branch's type (`array{}`
+      -- first): the else on its own first, then the then against it; when
+      -- that fails too, the then branch's own error, as before
+      let st0 ← get
+      let rt? ← tryCatch (do pure (Except.ok (← elabE thenCtx thenE exp))) fun e => pure (Except.error e)
+      let rt ← match rt? with
+        | .ok rt => pure rt
+        | .error err =>
+          if exp.isSome || ctx.retries ≥ 3 then throw err
+          let c2 := { ctx with retries := ctx.retries + 1 }
+          let alt? ← tryCatch (do
+              let re ← elabE c2 ee none
+              let rt ← elabE { thenCtx with retries := ctx.retries + 1 } thenE (some re.ty)
+              let ty ← join p rt.ty re.ty none
+              pure (some ⟨Expr.ite rc.e (← coerce p rt ty) (← coerce p re ty), ty⟩)) fun _ => pure none
+          match alt? with
+          | some r => return r
+          | none => throw err
       -- the else branch against the then branch's type (for `array{}`,
       -- `false`), else on its own, to join with it (#32)
       let re ← match exp with
@@ -4094,6 +4111,29 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
             let c2 := { ctx with retries := ctx.retries + 1 }
             tryCatch (elabE c2 ee (some rt.ty)) fun _ => elabE c2 ee none
       let ty ← join p rt.ty re.ty exp
+      -- (#366) with nothing in common, the then branch against the else
+      -- branch's type instead: `if (C) then false else option{4}` is a
+      -- `?int`, as the other order is; else `any`, as before
+      -- (from the state before the branches, the else on its own first:
+      -- the first try's code and slots are not kept. Each retry raises
+      -- `retries`, so an `if` nested n deep without a type is elaborated at
+      -- most a constant number of times per level for the first three
+      -- levels and once below: bounded, though multiplicative, tim-cc's
+      -- review of #368)
+      if ty == .any && exp.isNone && rt.ty != .any && re.ty != .any && ctx.retries < 3 then
+        let stAfter ← get
+        set st0
+        let c2 := { ctx with retries := ctx.retries + 1 }
+        match ← tryCatch (do
+            let re' ← elabE c2 ee none
+            let rt' ← elabE { thenCtx with retries := ctx.retries + 1 } thenE (some re'.ty)
+            pure (some (rt', re'))) (fun _ => pure none) with
+        | some (rt', re') =>
+          if let some ty' := joinTy (← get).env rt'.ty re'.ty none then
+            if ty' != .any then
+              return ⟨.ite rc.e (← coerce p rt' ty') (← coerce p re' ty'), ty'⟩
+          set stAfter
+        | none => set stAfter
       return ⟨.ite rc.e (← coerce p rt ty) (← coerce p re ty), ty⟩
   | .forE p clauses body => elabFor ctx p clauses body
   | .gen p _ _ _ => eerr p "a generator X : source can only appear in a for clause"
@@ -5744,6 +5784,9 @@ partial def elabBranchAlts (ctx : Ctx) (p : Pos) (i : SExpr) (sty : Option STy) 
       | .opt t => return ⟨r.e, t⟩
       | _ => return r
     else elabE c a t?
+  let all : List (Nat × SExpr) := arms.zipIdx.flatMap fun ((_, arm), j) => ((Choice.alts? arm).getD [arm]).map (j, ·)
+  -- (#366, the state before the alternatives, for the retries below)
+  let st0 ← get
   let mut rs : Array (Nat × SExpr × R) := #[]
   for ((_, arm), j) in arms.zipIdx do
     let c := ctxs.getD j ctx
@@ -5752,7 +5795,24 @@ partial def elabBranchAlts (ctx : Ctx) (p : Pos) (i : SExpr) (sty : Option STy) 
       -- own, as `elabAlts` does, #32)
       let r ← match t?, rs[0]? with
         | some t, _ => elabA c a (some t)
-        | none, none => elabA c a none
+        | none, none => do
+          -- (#366) when the first needs another's type (`array{}` first):
+          -- the first later one with a type on its own gives it; else the
+          -- first one's own error, as before
+          match ← tryCatch (do pure (Except.ok (← elabA c a none))) (fun e => pure (Except.error e)) with
+          | .ok r => pure r
+          | .error err =>
+            if ctx.retries ≥ 3 then throw err
+            let st ← get
+            let mut ref? : Option Ty := none
+            for (j', a') in all.drop 1 do
+              if ref?.isSome then continue
+              if let some r' ← tryCatch (do pure (some (← elabA { (ctxs.getD j' ctx) with retries := ctx.retries + 1 } a' none))) (fun _ => pure none) then
+                ref? := some r'.ty
+            set st
+            match ref? with
+            | some rt => elabA { c with retries := ctx.retries + 1 } a (some rt)
+            | none => throw err
         | none, some (_, _, r0) =>
           if c.retries ≥ 3 then tryCatch (elabA c a none) fun _ => elabA c a (some r0.ty)
           else
@@ -5760,10 +5820,33 @@ partial def elabBranchAlts (ctx : Ctx) (p : Pos) (i : SExpr) (sty : Option STy) 
             tryCatch (elabA c2 a (some r0.ty)) fun _ => elabA c2 a none
       rs := rs.push (j, a, r)
   let some (_, _, r0) := rs[0]? | eerr p "internal: an if without branches"
-  let ty ← match t? with
+  let mut ty ← match t? with
     | some t => pure t
     | none => rs.toList.foldlM (fun acc (_, _, r) => join p acc r.ty none) r0.ty
   if ty == .never then eerr p "cannot infer the type of this if's choices"
+  -- (#366) with nothing in common, every alternative against a later
+  -- one's type instead, the first that fits them all, as `elabAlts` does
+  if t?.isNone && ty == .any && ctx.retries < 3 then
+    let env := (← get).env
+    let mut found := false
+    let stAfter ← get
+    for (_, _, r) in rs.toList.drop 1 do
+      if found || r.ty == .any || r.ty == .never then continue
+      -- (from the state before the alternatives: the first try's code and
+      -- slots are not kept)
+      set st0
+      let attempt : EM (Array (Nat × SExpr × R)) := rs.mapM fun (j, a, _) => do
+        let c := ctxs.getD j ctx
+        return (j, a, ← elabA { c with retries := ctx.retries + 1 } a (some r.ty))
+      match ← tryCatch (do pure (some (← attempt))) (fun _ => pure none) with
+      | some rs' =>
+        match rs'.toList.foldl (fun acc (_, _, r') => acc.bind fun t => joinTy env t r'.ty none) (some r.ty) with
+        | some ty' =>
+          if ty' != .any then
+            ty := ty'; rs := rs'; found := true
+          else set stAfter
+        | none => set stAfter
+      | none => set stAfter
   let es ← rs.toList.mapM fun (j, a, r) => do
     return Expr.seq (.prim .eq [.local bi, .lit (.int j)]) (← coerce a.pos r ty)
   return (some pick, ty, es)
@@ -5786,7 +5869,24 @@ partial def elabAlts (ctx : Ctx) (p : Pos) (b : Choice.Binding) : EM (Ty × List
   | some t => return (t, ← alts.mapM fun a => do coerce a.pos (← elabE ctx a (some t)) t)
   | none =>
     let some a0 := alts.head? | eerr p "internal: a choice without alternatives"
-    let r0 ← elabE ctx a0 none
+    -- (#366) a first alternative that needs another's type (`array{} | …`):
+    -- a later one on its own, then all against its type; when none fits,
+    -- the first one's own error, as before
+    let st0 ← get
+    let r0? ← tryCatch (do pure (Except.ok (← elabE ctx a0 none))) fun e => pure (Except.error e)
+    let r0 ← match r0? with
+      | .ok r => pure r
+      | .error err =>
+        if ctx.retries ≥ 3 then throw err
+        let c2 := { ctx with retries := ctx.retries + 1 }
+        for a in alts.tail do
+          let res ← tryCatch (do
+              let ra ← elabE c2 a none
+              let rs' ← alts.mapM fun a' => elabE c2 a' (some ra.ty)
+              let ty ← rs'.foldlM (fun acc r => join p acc r.ty none) ra.ty
+              pure (some (ty, ← ((alts.zip rs').mapM fun (a', r) => coerce a'.pos r ty)))) fun _ => pure none
+          if let some out := res then return out
+        throw err
     -- (each later one against the first's type, else on its own, to join;
     -- a few levels deep, then on its own first, as the join needs, #32)
     let rs ← alts.tail.mapM fun a =>
@@ -5796,6 +5896,27 @@ partial def elabAlts (ctx : Ctx) (p : Pos) (b : Choice.Binding) : EM (Ty × List
         tryCatch (elabE c2 a (some r0.ty)) fun _ => elabE c2 a none
     let ty ← rs.foldlM (fun acc r => join p acc r.ty none) r0.ty
     if ty == .never then eerr p "cannot infer the type of this choice"
+    -- (#366) with nothing in common, every alternative against a later
+    -- one's type instead, the first that fits them all: `false | option{4}`
+    -- is a `?int`, as `option{4} | false` is; else `any`, as before
+    if ty == .any && ctx.retries < 3 then
+      let env := (← get).env
+      let stAfter ← get
+      for r in rs do
+        if r.ty == .any || r.ty == .never then continue
+        -- (from the state before the alternatives: the first try's code and
+        -- slots are not kept)
+        set st0
+        let c2 := { ctx with retries := ctx.retries + 1 }
+        match ← tryCatch (do pure (some (← alts.mapM fun a => elabE c2 a (some r.ty)))) (fun _ => pure none) with
+        | some rs' =>
+          match rs'.foldl (fun acc r' => acc.bind fun t => joinTy env t r'.ty none) (some r.ty) with
+          | some ty' =>
+            if ty' != .any then
+              return (ty', ← ((alts.zip rs').mapM fun (a, r') => coerce a.pos r' ty'))
+            set stAfter
+          | none => set stAfter
+        | none => set stAfter
     return (ty, ← ((alts.zip (r0 :: rs)).mapM fun (a, r) => coerce a.pos r ty))
 
 /-- The clauses of a failure context that takes its first success (an `if`
