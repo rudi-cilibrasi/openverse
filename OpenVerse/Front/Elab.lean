@@ -2295,16 +2295,36 @@ def firstLiftOf (ctx c2 : Ctx) (p : Pos) (g : String) (lp : List SExpr) (b : Str
   if (pls ++ caps ++ bls).any (fun l => !(Ty.paramsC l.ty).isEmpty) then throw "in a generic function"
   let name := s!"$first{p.line}_{p.col}_{key.hash}" ++ (if p.file.isEmpty then "" else s!"_{p.file}")
   let capArgs := caps.map fun l => SExpr.ident p l.name
+  -- (#283) a function of a strongly connected group: the others' too, one
+  -- function each, named after this one's
+  let (tail, members) : SExpr × List SExpr := match tail with
+    | .app _ (.ident _ "$group") (t0 :: ms) false => (t0, ms)
+    | t => (t, [])
+  let mnames : List String := members.filterMap fun
+    | .app _ (.ident _ "$member") (.ident _ h :: _) false => some h
+    | _ => none
+  let nameOf (h : String) : String := if h == g then name else s!"{name}_{h.replace "::" "_"}"
   let heap := ["reads", "writes", "allocates"].filter fun k =>
-    fxB.any (·.1 == k) || ((ctx.sig? g).map (·.fx.contains k)).getD false
-  let params : List SParam := pls.map (fun l => { name := l.name, ty := l.ty.toSTy }) ++
+    fxB.any (·.1 == k) || ((g :: mnames).any fun h => ((ctx.sig? h).map (·.fx.contains k)).getD false)
+  let capPs : List SParam :=
     caps.map fun l => { name := if sets.any (·.name == l.name) then s!"{l.name}$in" else l.name, ty := l.ty.toSTy }
-  return { key, pos := p, name, params,
-           specs := (if heap.isEmpty then ["computes"] else heap) ++ ["decides"],
-           ret := .tup (bls.map (·.ty.toSTy) ++ sets.map (·.ty.toSTy) ++ [.name "logic"]),
-           body := Choice.firstBody name p b bty cls tail rest binds (sets.map fun l => (l.name, l.ty.toSTy)) capArgs (some vty.toSTy),
+  let params : List SParam := pls.map (fun l => { name := l.name, ty := l.ty.toSTy }) ++ capPs
+  let specs := (if heap.isEmpty then ["computes"] else heap) ++ ["decides"]
+  let ret : STy := .tup (bls.map (·.ty.toSTy) ++ sets.map (·.ty.toSTy) ++ [.name "logic"])
+  let setsT := sets.map fun l => (l.name, l.ty.toSTy)
+  let extraFns ← members.mapM fun
+    | .app _ (.ident _ "$member") [.ident _ h, .block _ hps, .block _ hcls, .decl _ _ _ _ htail] false => do
+      let some sig := ctx.sig? h | throw s!"internal: no signature for {h} (#283)"
+      let hparams : List SParam ← (hps.zip sig.params).mapM fun
+        | (.ident _ n, t) => pure { name := n, ty := t.toSTy }
+        | _ => throw "internal: a $member parameter (#283)"
+      pure (STop.fn p (nameOf h) (hparams ++ capPs) [] specs ret
+        (Choice.firstBody (nameOf h) p b bty hcls htail rest binds setsT capArgs (some vty.toSTy) nameOf))
+    | _ => throw "internal: a $member (#283)"
+  return { key, pos := p, name, params, specs, ret,
+           body := Choice.firstBody name p b bty cls tail rest binds setsT capArgs (some vty.toSTy) nameOf,
            binds, sets := sets.map (·.name), args := pnames.map (SExpr.ident p ·) ++ capArgs,
-           varBinds := (bls.filter (·.mutable)).map (·.name) }
+           varBinds := (bls.filter (·.mutable)).map (·.name), extraFns }
 
 /-- (#335) Whether `e` writes one of the type parameters `tps`: in a written
     type, a construction's, or as a name. Conservative. -/
@@ -3607,6 +3627,164 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
     if pre.isEmpty then return some ⟨.assign t acc, τ'⟩
     let cond := pre.foldr Expr.seq (.heap (.isTag (tested.toList.map env.tagOf)) [.local y])
     return some ⟨.assign t (.ite cond acc eE), τ'⟩
+
+/-- (#283) `elabLoopGen` for a strongly connected group of functions with
+    several values, taken lazily (`$group(tail, $member(H, params, clauses,
+    r := tail)…)` in the marker): one stack of items `(k, every member's
+    parameters and names…)`, `k` the alternative to run, numbered across
+    the members, or `-1 - i` to start member `i` (its clauses, then its
+    branch). A call of a member, `$rec` (its own) or `$recTo(H, …)`, pushes
+    the item that starts that member, its parameters from the arguments.
+    Otherwise as `elabLoopGen`. Defined before the mutual block, with the
+    block's functions it calls as arguments (#325). -/
+partial def elabLoopGenGroupWith (elabE : Ctx → SExpr → Option Ty → EM R)
+    (elabSeq : Ctx → List SExpr → Option Ty → EM (R × Ctx))
+    (ctx : Ctx) (p : Pos) (g : String) (ps cls : List SExpr) (rsty : STy) (tail0 : SExpr)
+    (members : List SExpr) : EM LoopGen := do
+  let vd : Expr := .lit .void
+  let args ← ps.mapM fun
+    | .ident q n => match ctx.lookup n with
+      | some l => pure l
+      | none => eerr q s!"internal: parameter {n} of a $loop (#246)"
+    | e => eerr e.pos "internal: a $loop parameter (#246)"
+  let rty ← resolveTy ctx.types p rsty
+  -- (the members: the called one first, its parameters' slots its own)
+  let mut ms : Array (String × List Local × List SExpr × SExpr) := #[]
+  let pls0 ← args.mapM fun l => do return { l with slot := ← fresh l.ty }
+  ms := ms.push (g, pls0, cls, tail0)
+  for m in members do
+    let .app _ (.ident _ "$member") [.ident _ h, .block _ hps, .block _ hcls, .decl _ _ _ _ htail] false := m
+      | eerr p "internal: a $member (#283)"
+    let some sig := ctx.sig? h | eerr p s!"internal: no signature for {h} (#283)"
+    if hps.length != sig.params.length then eerr p s!"internal: the parameters of {h} (#283)"
+    let hpls ← (hps.zip sig.params).mapM fun (e, t) => match e with
+      | .ident _ n => do return ({ name := n, slot := ← fresh t, ty := t, mutable := false } : Local)
+      | _ => eerr p "internal: a $member parameter (#283)"
+    ms := ms.push (h, hpls, hcls, htail)
+  let names := ms.toList.map (·.1)
+  -- (each member's clauses, then its branches' conditions, in its own
+  -- context; the names each saves in an item: its parameters, then the others)
+  let mut infos : Array (R × Array (Option Expr × Ctx × List SExpr) × List Local) := #[]
+  for (_, pls, mcls, mtail) in ms do
+    let lctx : Ctx := { ctx with locals := pls.reverse ++ ctx.locals }
+    let newOf (c : Ctx) : List Local := c.locals.take (c.locals.length - lctx.locals.length)
+    let (rc, cc) ← elabSeq { lctx with canFail := true, inTaking := true } mcls none
+    -- (an `if` chain's branches even with no choice in them: a branch may
+    -- be a call of another member, `Choice.loopShape?`)
+    let arms : List (Option (List SExpr) × SExpr) :=
+      if Choice.isBranchy mtail || Choice.isBranchy.complete mtail then Choice.arms mtail else [(none, mtail)]
+    let mut armCode : Array (Option Expr × Ctx × List SExpr) := #[]
+    for (cs?, v) in arms do
+      let alts := (Choice.alts? v).getD [v]
+      match cs? with
+      | some cs =>
+        let (rcond, ca) ← elabSeq { cc with canFail := true, inTaking := true } cs none
+        armCode := armCode.push (some rcond.e, ca, alts)
+      | none => armCode := armCode.push (none, cc, alts)
+    let mut tls : List Local := pls
+    for l in (newOf cc ++ armCode.toList.flatMap fun (_, ca, _) => newOf ca).reverse do
+      if !tls.any (·.slot == l.slot) then tls := tls ++ [l]
+    infos := infos.push (rc, armCode, tls)
+  -- (one item for all: every member's names, the members in order)
+  let all : List Local := infos.toList.flatMap (·.2.2)
+  let bases : List Nat := (infos.toList.foldl (fun (acc, n) (_, _, tls) => (acc ++ [n], n + tls.length)) ([], 0)).1
+  let tupTy : Ty := .tup (.int :: all.map (·.ty))
+  let cellTy : Ty := .struct "$lazycell" [tupTy]
+  let cfs := ctx.types.fields "$lazycell" [tupTy]
+  let (some (itemF, _), some (nextF, _)) := (fieldIndex cfs "$LItem", fieldIndex cfs "$LNext")
+    | eerr p "internal: the stack cells of a $loop (#246)"
+  let w ← fresh (.opt cellTy)
+  let cell ← fresh cellTy
+  let sp ← fresh .int
+  let it ← fresh tupTy
+  let k ← fresh .int
+  let has ← fresh .logic
+  let nx ← fresh .int
+  let item (kE : Expr) (vals : List Expr) : Expr := .prim .mkTup (kE :: vals)
+  let cur : List Expr := all.map (Expr.local ·.slot)
+  let push (e : Expr) : Expr :=
+    .seq (.assign cell (.heap (.new (ctx.types.tagOf "$lazycell")) [e, .local w]))
+      (.seq (.assign w (.prim .mkSome [.local cell]))
+        (.seq (.assign sp (p2 .add (.local sp) (.lit (.int 1)))) vd))
+  -- (the item that starts member `j`, its parameters from `ts`)
+  let startOf (j : Nat) (ts : List Nat) : Expr :=
+    let b := bases.getD j 0
+    item (.lit (.int (-1 - (j : Int)))) (cur.take b ++ ts.map Expr.local ++ cur.drop (b + ts.length))
+  -- (the alternatives, numbered across the members' branches)
+  let mut offs : Array Nat := #[]
+  let mut total : Nat := 0
+  for (_, armCode, _) in infos do
+    offs := offs.push total
+    total := total + armCode.foldl (fun n (_, _, as) => n + as.length) 0
+  let mut alts : Array Expr := #[]
+  let mut values : Array (Nat × Expr) := #[]
+  let mut itemCode : Expr := vd
+  let mut argSet : Option Pos := none
+  let mut starts : Array Expr := #[]
+  for ((rc, armCode, _), i) in infos.toList.zipIdx do
+    let off := offs.getD i 0
+    itemCode := .seq itemCode rc.e
+    for (c?, _, _) in armCode do
+      if let some c := c? then itemCode := .seq itemCode c
+    let firsts : List Nat := (armCode.toList.foldl (fun (acc, n) (_, _, as) => (acc ++ [n], n + as.length)) ([], off)).1
+    let select : Expr := (armCode.toList.zip firsts).foldr (fun ((c?, _, _), st) acc =>
+      let set : Expr := .seq (.assign k (.lit (.int (st : Nat)))) vd
+      match c? with
+      | some c => .ite c set acc
+      | none => set) vd
+    starts := starts.push (.ite (.seq rc.e select) vd (.seq (.assign k (.lit (.int (total : Nat)))) vd))
+    for ((_, ca, as), first) in armCode.toList.zip firsts do
+      for (a, j) in as.zipIdx do
+        let gi := first + j
+        let actx : Ctx := { ca with canFail := true, inTaking := true }
+        let next? : Option Nat := if j + 1 < as.length then some (gi + 1) else none
+        let cont : Expr := match next? with
+          | some n => push (item (.lit (.int (n : Nat))) cur)
+          | none => vd
+        let call? : Option (Nat × List SExpr × Pos) := match a with
+          | .app q (.ident _ "$rec") args' false => some (i, args', q)
+          | .app q (.ident _ "$recTo") (.ident _ h :: args') false => (names.idxOf? h).map (·, args', q)
+          | _ => none
+        match call? with
+        | some (jm, args', q) =>
+          let some (h, hpls, _, _) := ms[jm]? | eerr q "internal: a call in a group (#283)"
+          if args'.length != hpls.length then
+            eerr q s!"{h} takes {hpls.length} argument(s), found {args'.length}: a call of it with a tuple, in the body of a function of its group, is not supported yet (#246, #283)"
+          if argSet.isNone then
+            argSet := args'.findSome? fun a' =>
+              if Choice.anyE (fun | .set .. => true | _ => false) a' then some a'.pos else none
+          let ts ← hpls.mapM fun l => fresh l.ty
+          let es ← (args'.zip hpls).mapM fun (a', l) => do
+            let r ← elabE actx a' (some l.ty)
+            coerce a'.pos r l.ty
+          let assigns : Expr := (es.zip ts).foldr (fun (e, t) acc => .seq (.assign t e) acc) vd
+          itemCode := .seq itemCode assigns
+          alts := alts.push (.ite assigns (.seq cont (push (startOf jm ts))) cont)
+        | none =>
+          let r ← elabE actx a (some rty)
+          values := values.push (gi, ← coerce a.pos r rty)
+          let nextK : Int := match next? with | some n => (n : Int) | none => -1
+          alts := alts.push (.seq (.assign nx (.lit (.int nextK))) (.seq (.assign has (.lit (.logic true))) vd))
+  let dispatch : Expr := (alts.toList.zipIdx).foldr (fun (a, i) acc =>
+    .ite (p2 .eq (.local k) (.lit (.int (i : Nat)))) a acc) vd
+  let unpack : Expr := (all.zipIdx).foldr (fun (l, j) acc =>
+    .seq (.assign l.slot (.prim (.tupGet (j + 1)) [.local it])) acc) vd
+  let init : Expr := .seq (.assign w (.lit .none)) (.seq (.assign sp (.lit (.int 0)))
+    (push (item (.lit (.int (-1))) (args.map (Expr.local ·.slot) ++ cur.drop pls0.length))))
+  let start : Expr := (starts.toList.zipIdx).foldr (fun (st, i) acc =>
+    .ite (p2 .eq (.local k) (.lit (.int (-1 - (i : Int))))) st acc) vd
+  let step : Expr := Expr.seq (.assign sp (p2 .sub (.local sp) (.lit (.int 1))))
+    (.seq (.ite (.assign cell (.prim .query [.local w]))
+        (.seq (.assign it (.heap (.get itemF) [.local cell])) (.seq (.assign w (.heap (.get nextF) [.local cell])) vd)) vd)
+    (.seq (.assign k (.prim (.tupGet 0) [.local it]))
+    (.seq unpack
+    (.seq (.assign has (.lit (.logic false)))
+    (.seq (.ite (p2 .lt (.local k) (.lit (.int 0))) start vd)
+      dispatch)))))
+  let value : Expr := values.toList.foldr (fun (i, e) acc =>
+    .ite (p2 .eq (.local k) (.lit (.int (i : Nat)))) e acc) (.prim .fail [])
+  let after : Expr := .ite (p2 .ge (.local nx) (.lit (.int 0))) (push (item (.local nx) cur)) vd
+  return { init, step, sp, has, value, after, vty := rty, itemCode, argSet }
 
 mutual
 partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
@@ -6142,6 +6320,9 @@ partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
 partial def elabLoopGen (ctx : Ctx) (p : Pos) (lp : List SExpr) : EM LoopGen := do
   let [.ident _ g, .block _ ps, .block _ cls, .decl _ _ (some rsty) _ tail] := lp
     | eerr p "internal: a $loop marker (#246)"
+  -- (a strongly connected group's, #283)
+  if let .app _ (.ident _ "$group") (tail0 :: members) false := tail then
+    return ← elabLoopGenGroupWith elabE elabSeq ctx p g ps cls rsty tail0 members
   let vd : Expr := .lit .void
   -- (the parameters, bound by the consumer's clauses: the loop has slots
   -- of its own for them, so that the call, run again by a loop of its
@@ -8435,7 +8616,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   -- (in front, as the entry expression is the end)
   let resolved := Refine.functions opts.castRequests resolved ++ resolved
   -- (#246) the functions of their own of lazily taken calls
-  let resolved := opts.loopRequests.map (fun l => STop.fn l.pos l.name l.params [] l.specs l.ret l.body) ++ resolved
+  let resolved := opts.loopRequests.flatMap (fun l => STop.fn l.pos l.name l.params [] l.specs l.ret l.body :: l.extraFns) ++ resolved
   -- (the helpers after: they name nothing of the program's)
   -- function values (#210): the function types' interfaces, and a class
   -- for each function used as a value

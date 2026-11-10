@@ -13,13 +13,15 @@ n="${1:-60}"; first="${2:-1}"
 ov="$root/.lake/build/bin/openverse"; cv="$root/runtime/build/cverse"
 modes=("" bif mv rec)
 tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
-ran=0; ref=0; fuel=0; skip=0; long=0; bad=0
+ran=0; ref=0; fuel=0; skip=0; long=0; slow=0; bad=0
 for ((s=first; s<first+n; s++)); do
   m="${modes[$((s % ${#modes[@]}))]}"
   save() { cp "$tmp/p.verse" "$root/fuzz-model-mv-$s.verse"; cp "$tmp/p.expected" "$root/fuzz-model-mv-$s.expected"; }
   # (the mode is a flag of its own, or none)
   python3 -I "$root/scripts/models/mv.py" "$s" "$tmp" $m 2> "$tmp/gen.err" ||
     { bad=$((bad+1)); echo "GENERATOR FAILED ${m:-plain} seed $s: $(tail -1 "$tmp/gen.err")"; continue; }
+  # (SKIP long: the model gave up on a program that prints more than 12000 lines)
+  if grep -q '^SKIP long' "$tmp/p.expected"; then long=$((long+1)); continue; fi
   # (a program whose ints overflow, which the model does not follow: skipped)
   if grep -q '^SKIP' "$tmp/p.expected"; then skip=$((skip+1)); continue; fi
   # (a program the model predicts to print more than 12000 lines may not finish within the
@@ -28,6 +30,17 @@ for ((s=first; s<first+n; s++)); do
   rm -f "$tmp/p.vbc"
   timeout 60 "$ov" run "$tmp/p.verse" --emit "$tmp/p.vbc" > "$tmp/l.out" 2> "$tmp/l.err"; le=$?
   if [[ $le -eq 3 ]]; then fuel=$((fuel+1)); continue; fi
+  # (Lean timed out: the reference interpreter is far slower than C on some long backtracking
+  # programs, 78 s against 0.1 s at mv seed 20767547; run --emit wrote the bytecode before
+  # interpreting, so C is checked against the model alone)
+  if [[ $le -eq 124 && -s "$tmp/p.vbc" ]]; then
+    (ulimit -v 4000000; timeout 60 "$cv" "$tmp/p.vbc") > "$tmp/c.out" 2> /dev/null; ce=$?
+    { cat "$tmp/c.out"; echo "exit=$ce"; } > "$tmp/c.full"
+    if cmp -s "$tmp/c.full" "$tmp/p.expected"; then
+      slow=$((slow+1)); echo "slow in Lean: seed $s (C matches the model)"; continue
+    fi
+    bad=$((bad+1)); save; echo "LEAN TIMEOUT ${m:-plain} seed $s, and C (exit $ce) differs from the model (saved fuzz-model-mv-$s.verse)"; continue
+  fi
   { cat "$tmp/l.out"; echo "exit=$le"; } > "$tmp/l.full"
   if grep -qi "internal" "$tmp/l.err" || ! cmp -s "$tmp/l.full" "$tmp/p.expected"; then
     bad=$((bad+1)); save; echo "MODEL MISMATCH ${m:-plain} seed $s (Lean exit $le, saved fuzz-model-mv-$s.verse): $(head -c 200 "$tmp/l.err")"; continue
@@ -40,5 +53,5 @@ for ((s=first; s<first+n; s++)); do
     bad=$((bad+1)); save; echo "C MISMATCH ${m:-plain} seed $s (C exit $ce, saved fuzz-model-mv-$s.verse)"
   fi
 done
-echo "fuzz-model-mv: $n programs from seed $first, $ran ran in both, $ref refused as the model says, $fuel out of fuel, $skip skipped (an overflow), $long skipped (over 12000 lines), $bad bad"
+echo "fuzz-model-mv: $n programs from seed $first, $ran ran in both, $ref refused as the model says, $fuel out of fuel, $skip skipped (an overflow), $long skipped (over 12000 lines), $slow slow in Lean (C matches the model), $bad bad"
 [[ $bad -eq 0 ]]

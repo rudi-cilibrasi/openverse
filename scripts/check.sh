@@ -20,6 +20,11 @@ scripts/gen-claims.sh --check
 echo "== C runtime"
 make -s -C runtime test
 
+# (from here on, each process may use at most CHECK_MEM_GB of virtual memory, 4 by default: on
+# 2026-11-09 a Lean run of a generated program reached 60 GB on a dev machine, and on a 16 GB CI
+# runner one such run takes the whole job down with no message, as the nightly runs of
+# 2026-11-10 were. With the cap the program fails alone, and its fuzzer saves and reports it.)
+ulimit -v $(( ${CHECK_MEM_GB:-4} * 1024 * 1024 ))
 seed="${FUZZ_SEED:-1}"
 logs="$(mktemp -d)"; trap 'rm -rf "$logs"' EXIT
 max="${CHECK_JOBS:-$(nproc 2>/dev/null || echo 4)}"

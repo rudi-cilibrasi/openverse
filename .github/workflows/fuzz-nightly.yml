@@ -71,11 +71,32 @@ jobs:
           echo "first seed $seed, counts x$k"
 
       - name: scripts/check.sh
+        id: check
         shell: bash
-        run: scripts/check.sh 2>&1 | tee check.log
+        run: |
+          # (memory every 60 s, into this step's log, which is kept when the job is cut short: the
+          # 2026-11-10 runs got SIGTERM after 11 minutes, with no message, and even the always()
+          # steps below were skipped, as when the runner itself is shut down)
+          # (set +e: the step runs with -e -o pipefail, and a grep that finds no OOM line would
+          # otherwise end the loop after its first sample, as on 2026-11-10)
+          ( set +e +o pipefail
+            while sleep 60; do
+              { echo "mem $(date -u +%T): $(free -m | awk 'NR==2{print "used " $3 " MB, available " $7 " MB"}')"
+                ps -eo rss,args --sort=-rss | sed -n '2,4p' | awk '{printf "mem   %d MB %s %s %s\n", $1/1024, $2, $3, $4}'
+                sudo dmesg 2>/dev/null | grep -i -E 'out of memory|oom-kill|killed process' | tail -2 | sed 's/^/mem   /'
+              } | tee -a mem.log
+            done ) &
+          mon=$!; trap 'kill "$mon" 2>/dev/null || true' EXIT
+          scripts/check.sh 2>&1 | tee check.log
+
+      # (these run whenever the check didn't succeed, a killed or cancelled one included,
+      # which failure() alone skips)
+      - name: Kernel log
+        if: always() && steps.check.outcome != 'success'
+        run: sudo dmesg -T 2>/dev/null | tail -100 > dmesg.log || true
 
       - name: Saved programs
-        if: failure()
+        if: always() && steps.check.outcome != 'success'
         uses: actions/upload-artifact@v7
         with:
           name: fuzz-nightly-${{ env.FUZZ_SEED }}
@@ -83,10 +104,12 @@ jobs:
             fuzz-*.verse
             fuzz-*.expected
             check.log
+            mem.log
+            dmesg.log
           if-no-files-found: ignore
 
       - name: Open or update the issue
-        if: failure() && github.event_name == 'schedule'
+        if: always() && steps.check.outcome != 'success' && github.event_name == 'schedule'
         env:
           GH_TOKEN: ${{ github.token }}
           RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}

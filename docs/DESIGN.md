@@ -273,8 +273,14 @@ receiver where it is inlined, as for any generic function with several
 values (#282); not yet when a class overrides it. `R.M(args)` becomes `C$M(R, args)`, and in the bodies of `C` and
 the classes below it, `M(args)` becomes `C$M(Self, args)`. Without types, `R.M`
 must name that method whatever `R` is: the name must be declared by one
-class and overridden only below it (a family, `MFam`), and by no
-interface. Each implementation becomes its own function `D$M`. A call
+class or interface and overridden only below it (a family, `MFam`); for
+an interface (#283) the dispatch's root is the interface, its receiver
+typed at it and cast to each implementing class, and its default
+implementation, if any, is one more implementation, `I$M`, whose guard
+(`I[$r]`, which always holds) comes after those of the classes below it
+that have their own. `inlineMulti` runs before #53's `copyIfaceDefaults`,
+so it sees the interface's default as written.
+Each implementation becomes its own function `D$M`. A call
 `R.M(args)` of an overridden one is a dispatch,
 `$dispatch(root$M, block{ $r : root := $arg; $a… := $arg; $kv := $excl(…) }, R, args…)`.
 `inlineCalls` makes it an inlined call, its names tagged for the site, so
@@ -389,6 +395,13 @@ push. In a `for`, the steps run in rounds, each a `forE` over a range
 twice as long as the last one's whose body runs a step and gives that
 iteration's values: adding each value to an array would copy it each time,
 and the C runtime frees a call's cells only when it returns.
+
+A strongly connected group of such functions (#283: each one's alternatives calls of the group's functions; one result type, none generic, no named parameters) is taken lazily too, as one.
+- Its calls' marker is the called one's, with the others in its last expression: `$group(tail, $member(H, params, clauses, r := tail)…)`, each member's names tagged for the site. A call of the function itself is `$rec`, of another member `$recTo(H, …)` (`Choice.markRecG`).
+- In a group, a branch or the last expression may be a single call of another member with no choice of its own (`else Evens(N + 1)`), which a function alone could not be.
+- `elabLoopGenGroupWith` (before the mutual block, #325) builds one stack: an item holds every member's parameters and names, in one tuple, `k` the alternative, numbered across the members, or `-1 - i` to start member `i`. A call pushes the item that starts its callee, with that member's parameters from its arguments.
+- Where the first success is taken with effects, `firstLiftOf` makes one function of its own per member (`FirstLift.extraFns`), which call one another (`firstBody`'s `helperOf`).
+- A function alone keeps `elabLoopGen` and its code byte for byte.
 
 Where the first success is taken, the loop is exact only if what the
 clauses, conditions and arguments do is never to be undone: the Verse

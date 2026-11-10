@@ -778,9 +778,14 @@ Main():void =
   named parameter's default sees the fields. Inlining happens before
   types are checked, so `R.M` has to name that method whatever `R` is:
   such a method's name must be no other member than it and its overrides
-  (in classes below the one that declares it), no interface's, struct
+  (in classes below the class or interface that declares it), no struct
   field, enumerator or member of a built-in type (`Length`, `Find`,
-  `Signal`, …), no top-level name and no parameter or local. A generic
+  `Signal`, …), no top-level name and no parameter or local. An
+  interface's method is such a family's root too (#283): a call through
+  the interface dispatches on the receiver's class, as for an overridden
+  method; an interface's default implementation is the alternative for
+  the classes that have none of their own. A generic class's or
+  interface's method that another class overrides is refused. A generic
   class's method is a function generic over the class's type parameters,
   their arguments inferred from the receiver where it is inlined, as at a
   call of a generic function (#283), when no class overrides it. A call of an overridden one dispatches on the
@@ -836,7 +841,12 @@ Main():void =
   function with several values, its clauses have no choice, and its last
   expression is a choice, or an `if … else …` whose branches are choices or
   values, each alternative a value with no choice in it or a whole call of
-  the function itself. Its values are taken one at a time, as the place
+  the function itself. So is a strongly connected group of such functions
+  (#283), mutually recursive, each of that shape with its alternatives
+  calls of the group's functions (or, as the last expression or a branch,
+  one such call), all of one result type, none generic, none with named
+  parameters: `Evens(N:int):int = N | Odds(N + 1)` with
+  `Odds(N:int):int = Evens(N + 1)`. Its values are taken one at a time, as the place
   that takes them asks for them, in spatial order (depth first), so an
   infinite one works where the first success is taken, and a value never
   reached is never computed. A call evaluates its arguments first; when

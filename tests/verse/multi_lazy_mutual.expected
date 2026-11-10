@@ -1,0 +1,28 @@
+a 8
+b 
+b ab
+b aba!
+b a
+c ab
+u0
+d 0
+d1
+u2
+d 2
+d3
+u4
+d 4
+u0
+d1
+u2
+e 2
+u2
+f 0 2
+d3
+u4
+f 0 4
+u3
+f 1 3
+d4
+f 1 -4
+exit=0
