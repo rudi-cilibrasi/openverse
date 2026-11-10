@@ -2532,6 +2532,15 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
         let after := fs.drop (j + 1)
         let moreCl := more.flatMap fun (g', fs') => g' :: fs'
         let some (.decl gp x xty _ (.app _ _ alts _)) := fs[j]? | eerr p "internal: an exclusive choice"
+        -- (an `if`'s, #331, with no type written: its branches' join, as the
+        -- `if`'s value has, found by elaborating it apart; that code is not kept)
+        let xty ← match xty, alts.findSome? (fun | .app _ (.ident _ "$joinOf") [i] false => some i | _ => none) with
+          | none, some i => do
+            let st ← get
+            let (_, ty, _) ← elabBranchAlts { cA with canFail := true, inTaking := true } gp i none none
+            set st
+            pure (some ty.toSTy)
+          | t, _ => pure t
         let alts : List (List SExpr × SExpr) := alts.filterMap fun
           | .app _ (.ident _ "$alt") [.block _ gs, r] false => some (gs, r)
           | _ => none

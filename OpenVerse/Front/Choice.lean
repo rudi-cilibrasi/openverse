@@ -369,6 +369,7 @@ partial def exclToChoice (e : SExpr) (deep : Bool := false) : SExpr :=
   mapE (fun
     | f@(.forE ..) => if deep then none else some f
     | .app p (.ident q "$excl") alts false =>
+      let alts := alts.filter fun | .app _ (.ident _ "$joinOf") _ _ => false | _ => true
       some (.app p (.ident q "$choice") (alts.map fun
         | .app _ (.ident _ "$alt") [.block bp gs, .block _ rs] false => .block bp ((gs ++ rs).map go)
         | .app _ (.ident _ "$alt") [.block bp gs, r] false => .block bp (gs.map go ++ [go r])
@@ -750,6 +751,41 @@ def liftClause (isVal : String → Bool) (isField : String → String → Bool) 
     (site : String := "") (fieldOrder : String → List (String × Bool) := fun _ => []) : List SExpr :=
   (liftClauseM isVal isField c).run' { site, fieldOrder }
 
+/-- (#331) In a `for`, an `if` with choices in its branches as an exclusive
+    choice of them (#314): its condition once (a selector, or an option of
+    the names it binds for its branch), then the branch it picks, whose own
+    choice, if it has one, is the only generator, as for any `if`. An `if`
+    picks one branch, once; only the choices the program reaches generate.
+    An `else if` is the else branch's own `if`, made one of these in turn. -/
+def bifToExcl (c : SExpr) : List SExpr :=
+  match c with
+  | .decl p x ty false (.app _ (.ident _ "$branchChoice") [i@(.ite ip cs t (some u))] false) =>
+    -- (with no type written, its branches' values are at their join, as an
+    -- `if`'s: the `if` goes with it, `$joinOf`, for the elaborator to join)
+    let withJoin (e : SExpr) : SExpr := match ty, e with
+      | none, .app q f as b => .app q f (as ++ [.app ip (.ident ip "$joinOf") [i] false]) b
+      | _, e => e
+    -- (with the `if`'s place: an `else if`'s binds the same name, in the
+    -- path of the one around it)
+    let k := s!"{x}$k{ip.line}_{ip.col}"
+    match boundIn cs with
+    | [] =>
+      let g (i : Int) : List SExpr := [.cmp ip (.ident ip k) [("=", .int ip i)]]
+      [.decl ip k none false (.ite ip cs (.int ip 0) (some (.int ip 1))),
+       .decl p x ty false (withJoin (mkExcl ip [(g 0, t), (g 1, u)]))]
+    | names =>
+      -- (the names the condition binds, for its branch: through an option)
+      let (val, binds) : SExpr × List SExpr := match names with
+        | [y] => (.ident ip y, [.decl ip y none false (.query ip (.ident ip k))])
+        | ys =>
+          let tt := k ++ "t"
+          (.tuple ip (ys.map (SExpr.ident ip ·)),
+            .decl ip tt none false (.query ip (.ident ip k)) ::
+              ys.zipIdx.map fun (y, i) => SExpr.decl ip y none false (.app ip (.ident ip tt) [.int ip (i : Int)] false))
+      [.decl ip k none false (.optionLit ip (.block ip (cs ++ [val]))),
+       .decl p x ty false (withJoin (mkExcl ip [(binds, t), ([.notE ip (.query ip (.ident ip k))], u)]))]
+  | c => [c]
+
 /-- The clauses ready for compiling: choices inside expressions lifted, and
     each choice the value of a binding. `isVal` says which names are values
     (variables and fields in scope); the clauses' own bindings are too. -/
@@ -760,7 +796,10 @@ def prepare (cs : List SExpr) (isVal : String → Bool := fun _ => false)
   -- the first success is taken, the choice of its alternatives)
   let cs := if keepExcl then cs else cs.map exclToChoice
   let bound := boundIn cs
-  normClauses (cs.flatMap (liftClause (fun n => isVal n || bound.contains n) isField · site fieldOrder)) site
+  let ps := normClauses (cs.flatMap (liftClause (fun n => isVal n || bound.contains n) isField · site fieldOrder)) site
+  -- (in a `for`, an `if` with choices in its branches an exclusive choice of
+  -- them, #331)
+  if keepExcl then ps.flatMap bifToExcl else ps
 
 /-- Whether the clauses have a choice for their failure context to take. -/
 def hasChoice (cs : List SExpr) (fieldOrder : String → List (String × Bool) := fun _ => []) : Bool :=
