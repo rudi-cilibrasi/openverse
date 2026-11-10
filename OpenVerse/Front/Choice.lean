@@ -1078,7 +1078,8 @@ partial def renameTypes (ρ : List (String × String)) : SExpr → SExpr :=
     `if … else …` whose branches are choices or values, each alternative a
     whole call of the function itself (`g`) or a value with no choice in
     it. -/
-def loopShape? (g : String) (mv : List String) (body : SExpr) : Option (List SExpr × SExpr) := do
+def loopShape? (g : String) (mv : List String) (body : SExpr) (grp : List String := [g]) :
+    Option (List SExpr × SExpr) := do
   let ss := stmtsOf body
   let last ← ss.getLast?
   let cls := ss.dropLast
@@ -1087,15 +1088,20 @@ def loopShape? (g : String) (mv : List String) (body : SExpr) : Option (List SEx
     | e => e
   -- (no choice, and no call of a function with several values, nor any
   -- other mention of `g`: a call of it its own `if` or `for` takes, say)
-  let plain (e : SExpr) : Bool := !liftsHere (markCalls mv e) && !(namesUsed e).contains g
+  -- (#283: or of a function of its strongly connected group, `grp`)
+  let plain (e : SExpr) : Bool := !liftsHere (markCalls mv e) && !(namesUsed e).any grp.contains
   let isRec : SExpr → Bool
-    | .app _ (.ident _ h) as _ => h == g && as.all fun a =>
+    | .app _ (.ident _ h) as _ => grp.contains h && as.all fun a =>
         plain a && (match a with | .decl .. => false | _ => true)
     | _ => false
   let groupOK (e : SExpr) : Bool := ((alts? e).getD [e]).all fun a => isRec a || plain a
+  -- (in a group, #283, a branch, or the last expression, may be a call of
+  -- another function of it with no choice of its own: `else Evens(N + 1)`)
+  let inGroup := grp.length > 1
   let tailOK :=
-    if isBranchy tail then (arms tail).all fun (cs?, v) => (cs?.getD []).all plain && groupOK v
-    else isChoice tail && groupOK tail
+    if isBranchy tail || (inGroup && isBranchy.complete tail) then
+      (arms tail).all fun (cs?, v) => (cs?.getD []).all plain && groupOK v
+    else (isChoice tail || (inGroup && isRec tail)) && groupOK tail
   if cls.all plain && tailOK then some (cls, tail) else none
 
 /-- How many `if`s with a `return` in them `e` has (#283). -/
@@ -1201,14 +1207,25 @@ def markRec (g : String) : SExpr → SExpr :=
     | .app p (.ident _ h) as _ => if h == g then some (.app p (.ident p "$rec") as false) else none
     | _ => none
 
+/-- (#283) A call of another function of `g`'s group, `grp`, marked
+    `$recTo(H, args)`; one of `g` itself `$rec(args)`. -/
+def markRecG (g : String) (grp : List String) : SExpr → SExpr :=
+  mapE fun
+    | .app p (.ident q h) as _ =>
+      if h == g then some (.app p (.ident p "$rec") as false)
+      else if grp.contains h then some (.app p (.ident p "$recTo") (.ident q h :: as) false)
+      else none
+    | _ => none
+
 /-- Replace each call of a function of `mv` by `$inline(F, template, args…)`,
     each with its own call site (`n`, the sites so far); a call of one of
     `loops` by `$loop(F, …)` (#246). -/
 partial def inlineCalls (mv : List (String × MFn)) (e : SExpr) (recs : List String := [])
     (loops : List String := []) (clash : List (String × List String) := [])
-    (inDflt : List (String × String) := []) : StateT Nat (Except String) SExpr := do
+    (inDflt : List (String × String) := []) (groups : List (String × List String) := []) :
+    StateT Nat (Except String) SExpr := do
   -- (`inDflt`: the defaults being inlined, function and parameter, #283)
-  let go := fun x => inlineCalls mv x recs loops clash inDflt
+  let go := fun x => inlineCalls mv x recs loops clash inDflt groups
   match e with
   | .app p (.ident _ "$dispatch") (.ident q g :: .block tp tmpl :: as) false =>
     -- (an overridden method's dispatch, #283: an inlined call whose
@@ -1296,7 +1313,7 @@ partial def inlineCalls (mv : List (String × MFn)) (e : SExpr) (recs : List Str
             -- (one that calls `g` again omitting it: as at a call)
             if inDflt.contains (g, sp.name) then
               throw s!"{p.show}: the default of ?{sp.name} of {shownFnName g} uses itself (a call of {shownFnName g} that omits ?{sp.name})"
-            let d' ← inlineCalls mv (renameTypes ρ d) recs loops clash ((g, sp.name) :: inDflt)
+            let d' ← inlineCalls mv (renameTypes ρ d) recs loops clash ((g, sp.name) :: inDflt) groups
             let earlier := (f.params.take k).map fun e => SExpr.tuple q [.ident q e.name, .ident q (tag e.name)]
             return some (.decl q (tag sp.name) (tyOf sp.ty) false
               (.app q (.ident q "$paramDefault") [.ident q g, .ident q sp.name, .block q earlier, d'] false))
@@ -1328,11 +1345,28 @@ partial def inlineCalls (mv : List (String × MFn)) (e : SExpr) (recs : List Str
       -- (one taken lazily, #246: its parameters, its clauses and its last
       -- expression, its own calls marked, for its consumer to run)
       if loops.contains g then
-        let some (cls, tail) := loopShape? g (mv.map (·.1)) (renameTypes ρ (renameE ren f.body))
+        let grp := (groups.lookup g).getD [g]
+        let some (cls, tail) := loopShape? g (mv.map (·.1)) (renameTypes ρ (renameE ren f.body)) grp
           | throw s!"{p.show}: internal: the shape of {g} (#246)"
         let ps := f.params.map fun sp => SExpr.ident q (tag sp.name)
+        -- (#283) a function of a strongly connected group: the others'
+        -- parameters, clauses and last expressions too, each's names
+        -- tagged for this site, in `$group(tail, $member(H, params,
+        -- clauses, r := tail)…)`
+        let tail' ← if grp.length ≤ 1 then pure (markRec g tail) else do
+          let mut members : List SExpr := []
+          for h in grp.filter (· != g) do
+            let some fh := mv.lookup h | throw s!"{p.show}: internal: the group of {g} (#283)"
+            let tagH (n : String) : String := s!"${h.replace "::" "_"}_{n}_{site}"
+            let renH := (fh.params.map (·.name) ++ localsOf fh.body).eraseDups.map fun n => (n, tagH n)
+            let some (clsH, tailH) := loopShape? h (mv.map (·.1)) (renameE renH fh.body) grp
+              | throw s!"{p.show}: internal: the shape of {h} (#283)"
+            members := members ++ [.app q (.ident q "$member") [.ident q h,
+              .block q (fh.params.map fun sp => SExpr.ident q (tagH sp.name)), .block q clsH,
+              .decl q (tagH "$r") (some fh.ret) false (markRecG h grp tailH)] false]
+          pure (.app q (.ident q "$group") (markRecG g grp tail :: members) false)
         return .app p (.ident p "$loop") (.ident q g :: .block q (tmark ++ pds ++ unpack) :: .block q ps :: .block q cls ::
-          .decl q (tag "$r") (tyOf f.ret) false (markRec g tail) :: as'') false
+          .decl q (tag "$r") (tyOf f.ret) false tail' :: as'') false
       let body ← go (renameTypes ρ (renameE ren f.body))
       -- (its `return`s as guarded alternatives, #283)
       let ss := stmtsOf body
@@ -1495,6 +1529,10 @@ structure FirstLift where
   args : List SExpr
   /-- The names of `binds` that are `var`s, bound so again. -/
   varBinds : List String := []
+  /-- (#283) For a call of a function of a strongly connected group: the
+      other functions of the group, one function of its own each, which the
+      function and they call for one another. -/
+  extraFns : List STop := []
   deriving Inhabited
 
 /-- The body of a `FirstLift` (#246): the function's clauses, then the first
@@ -1505,11 +1543,13 @@ structure FirstLift where
     copied first from parameters named `m$in`. -/
 def firstBody (helper : String) (p : Pos) (b : String) (bty : Option STy) (cls : List SExpr) (tail : SExpr)
     (rest : List SExpr) (binds : List String) (sets : List (String × STy)) (caps : List SExpr)
-    (ret : Option STy := none) : SExpr :=
+    (ret : Option STy := none) (helperOf : String → String := fun _ => helper) : SExpr :=
   let tup : SExpr := .tuple p (binds.map (SExpr.ident p ·) ++ sets.map (fun (m, _) => SExpr.ident p m) ++
     [.ident p "true"])
   let alt (a : SExpr) : SExpr := match a with
     | .app q (.ident _ "$rec") as false => .app q (.ident q helper) (as ++ caps) true
+    -- (a call of another function of the group, #283: its own function)
+    | .app q (.ident _ "$recTo") (.ident _ h :: as) false => .app q (.ident q (helperOf h)) (as ++ caps) true
     | a =>
       -- (the value at the function's result type, then at the binding's)
       let v := match ret with
@@ -1527,7 +1567,8 @@ def firstBody (helper : String) (p : Pos) (b : String) (bty : Option STy) (cls :
     | [(_, v)] => group v
     | (some cs, v) :: more => .ite p cs (group v) (some (chain more))
     | (none, v) :: _ => group v
-  let tail' := if isBranchy tail then chain (arms tail) else group tail
+  -- (an `if` chain with no choice, in a group, #283, too)
+  let tail' := if isBranchy tail || isBranchy.complete tail then chain (arms tail) else group tail
   let copies := sets.map fun (m, t) => SExpr.decl p m (some t) true (.ident p s!"{m}$in")
   .block p (copies ++ cls ++
     [.app p (.ident p "$first") [.block p [.decl p "$R" none false tail', .ident p "$R"]] false])
@@ -1996,10 +2037,36 @@ def inlineMulti (tops : List STop) (reserved : List String := []) : Except Strin
   -- (#246) the self-recursive ones of the shape of a generator, taken
   -- lazily where they are consumed: computed eagerly, `F$all`, only for the
   -- recursive ones that call them
+  -- (#283) or of a strongly connected group of such functions, each's
+  -- alternatives calls of the group's, all of one result type and none
+  -- generic: one stack of items for the group, tagged by function
+  let reachSet (g : String) : List String := Id.run do
+    let mut seen : List String := []
+    let mut todo := (callees.lookup g).getD []
+    while !todo.isEmpty do
+      let h := todo.head!
+      todo := todo.tail!
+      if !seen.contains h then
+        seen := seen ++ [h]
+        todo := ((callees.lookup h).getD []) ++ todo
+    return seen
+  let groupOf (g : String) : List String :=
+    g :: (mfs.map (·.1)).filter fun h => h != g && (reachSet g).contains h && (reachSet h).contains g
+  let groupOK (g : String) : Bool :=
+    let grp := groupOf g
+    -- (`STy` has no equality: the written result types compared as shown)
+    let ret := (mfs.lookup g).map fun f => reprStr f.ret
+    grp.all fun h => match mfs.lookup h with
+      | some f => ((callees.lookup h).getD []).all grp.contains && (loopShape? h mv f.body grp).isSome &&
+          (grp.length == 1 || (f.tparams.isEmpty && some (reprStr f.ret) == ret && !f.params.any (·.named)))
+      | none => false
   let loops : List String := recs.filter fun g =>
     match mfs.lookup g with
-    | some f => (callees.lookup g).getD [] == [g] && (loopShape? g mv f.body).isSome
+    | some f => if (groupOf g).length == 1 then (callees.lookup g).getD [] == [g] && (loopShape? g mv f.body).isSome
+      else groupOK g
     | none => false
+  let loopGroups : List (String × List String) :=
+    loops.filterMap fun g => let grp := groupOf g; if grp.length > 1 then some (g, grp) else none
   let mut needAll := recs.filter (!loops.contains ·)
   let mut grew := true
   while grew do
@@ -2066,7 +2133,7 @@ def inlineMulti (tops : List STop) (reserved : List String := []) : Except Strin
     let own := f.params.map (·.name) ++ localsOf f.body
     let us := (namesUsed f.body).eraseDups.filter fun u => u != n && !own.contains u && binders.contains u
     if us.isEmpty || (recs.contains n && !loops.contains n) then none else some (n, us)
-  let go (e : SExpr) : StateT Nat (Except String) SExpr := inlineCalls mfs e recs loops clash
+  let go (e : SExpr) : StateT Nat (Except String) SExpr := inlineCalls mfs e recs loops clash (groups := loopGroups)
   let goPs (ps : List SParam) : StateT Nat (Except String) (List SParam) :=
     ps.mapM fun sp => do return { sp with default := ← sp.default.mapM go }
   let (tops', _) ← (tops.filterMapM (m := StateT Nat (Except String)) fun t => do
