@@ -2709,7 +2709,11 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
                 if let .arr t := r.ty then tys := tys ++ [t]
               let same := tys.length == b.alts.length && tys.all (some · == tys.head?)
               -- (what refuses it known before the trial, which then costs nothing)
-              if same && !writesTps (ownTps c) (.block gp (restCl ++ [bd])) then
+              -- (all its refusals but the values' type, #364's review)
+              let known : Bool := match tys.head? with
+                | some bty => (contForLiftOf c gp b.name bty .void b.alts restCl bd).toOption.isSome
+                | none => false
+              if same && known then
                 let r0 ← forW (liftA a0 0 ++ restCl) bd
                 match (do
                     let some bty := tys.head? | throw "no type"
