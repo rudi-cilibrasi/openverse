@@ -267,7 +267,10 @@ with several values first becomes one (#283, `Choice.methodFns`): a
 top-level `C$M($Self:C, params…)`, its body and defaults with `C`'s and its
 supers' member names qualified by `Self` (the syntactic counterpart of
 Elab's `selfQualify`, which needs only the class definitions), then `Self`
-renamed. `R.M(args)` becomes `C$M(R, args)`, and in the bodies of `C` and
+renamed. A generic class's is generic over the class's type parameters,
+`C$M($Self:C(t…), params…)`, and its type arguments are inferred from the
+receiver where it is inlined, as for any generic function with several
+values (#282); not yet when a class overrides it. `R.M(args)` becomes `C$M(R, args)`, and in the bodies of `C` and
 the classes below it, `M(args)` becomes `C$M(Self, args)`. Without types, `R.M`
 must name that method whatever `R` is: the name must be declared by one
 class and overridden only below it (a family, `MFam`), and by no
