@@ -23,6 +23,9 @@ import random, sys
 seed = int(sys.argv[1]); out_exp = sys.argv[2]
 R = random.Random(seed)
 def ch(p): return R.random() < p
+# (#395: at times the refined branch sets Acc, a var from outside it, read after the if; a
+# generator of its own decides, so seeds keep their other programs)
+R395 = random.Random(seed * 1000003 + 395)
 
 INT, STR = ('int',), ('string',)
 def Opt(t): return ('opt', t)
@@ -182,6 +185,7 @@ def mk_func(k):
     f['acc'] = R.randint(0, 9) if ch(0.6) else None
     f['pre'] = ch(0.4); f['inp'] = ch(0.5); f['outp'] = ch(0.4); f['post'] = ch(0.3)
     f['bump'] = ch(0.4)                       # set D.N += 1 in the branch
+    f['aset'] = R395.random() < 0.4           # set Acc += 7 in the branch, Acc printed after (#395)
     f['ebump'] = ch(0.2)                      # set P.N += 10 in the else
     f['fail'] = f['decides'] and ch(0.8) and T != 'mid'
     f['thr'] = R.randint(0, 5)
@@ -207,6 +211,7 @@ def ftext(f):
     L.append(f"    R := if (D := {f['T']}[P]{rest_text(f)}):")
     if f['inp']: L.append(f'        Print("in {f["name"]} {{Acc}} {{K}}")')
     if f['bump']: L.append("        set D.N += 1")
+    if f['aset']: L.append("        set Acc += 7")
     if f['fail']: L.append(f"        D.C > {f['thr']}")
     if f['nest']:
         L.append("        if (E := dupi[D]) then E.A + E.B + K else D.B")
@@ -233,6 +238,7 @@ def ftext(f):
     if f['outp']: L.append(f'{ind}Print("out {f["name"]}")')
     if f['ebump']: L.append(f"{ind}set P.N += 10" if not f['iface'] else f"{ind}Print(\"e\")")
     L.append(f"{ind}{f['etxt'] if not f['iface'] else f['etxt'].replace('P.', 'PP.')}")
+    if f['aset']: L.append(f'    Print("acc {f["name"]} {{Acc}}")')
     if f['post']: L.append(f'    Print("post {f["name"]}")')
     L.append("    R")
     txt = '\n'.join(L)
@@ -269,6 +275,8 @@ def run_call(f, o, K, Xv):
         out.extend(rout); o['N'] += rdN
         if f['inp']: out.append(f"in {f['name']} {acc} {K}")
         if f['bump']: o['N'] += 1
+        if f['aset']:                         # (#395: the refined branch's set of Acc, which
+            acc += 7; env['Acc'] = acc        # the branch's value reads after it)
         if f['fail'] and not (o['C'] > f['thr']):
             o['N'] = N0
             return False, None, [], 0
@@ -285,6 +293,7 @@ def run_call(f, o, K, Xv):
             if f['iface']: out.append("e")
             else: o['N'] += 10
         v = f['efn'](o, env)
+    if f['aset']: out.append(f"acc {f['name']} {acc}")
     if f['post']: out.append(f"post {f['name']}")
     return True, v, out, o['N'] - N0
 

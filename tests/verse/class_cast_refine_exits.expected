@@ -1,0 +1,21 @@
+defer N=7
+70
+defer N=1
+1
+43 1013 1003 0
+M=4
+1
+M=99
+0
+ok 20
+fail
+fail
+ok 20
+plain fail
+ok 20
+noesc fail
+fail
+70
+not dup
+1
+exit=0

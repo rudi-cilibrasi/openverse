@@ -2325,7 +2325,8 @@ def refiningCast? (env : TyEnv) (T : String) (xty : Ty) (avoid : List String := 
 /-- What, in the branch of a cast that refines type arguments, would not
     mean the same once the branch is a function of its own (#243): its
     position and what it is. `muts` are the `var`s it uses from outside. -/
-def refineBranchWhy? (ctx : Ctx) (p : Pos) (body : SExpr) (muts : List String) : Option (Pos × String) :=
+def refineBranchWhy? (ctx : Ctx) (p : Pos) (body : SExpr) (muts : List String) (allowEsc : Bool := false) :
+    Option (Pos × String) :=
   if ctx.selfClass.isSome && Choice.anyE (fun
       | .ident _ n | .member _ _ n => (n.splitOn "(super:)").length > 1
       | _ => false) body then
@@ -2333,15 +2334,121 @@ def refineBranchWhy? (ctx : Ctx) (p : Pos) (body : SExpr) (muts : List String) :
   else if ctx.inDefer || ctx.inCtor || ctx.inBlock || ctx.inParamDefault || ctx.inArm || ctx.inBranch ||
       !ctx.defaults.isEmpty || ctx.inDefaultCheck then
     some (p, "it cannot be here yet: in a defer:, a constructor's items, a class's block: clause, a field's or parameter's default, or an arm of sync, race, rush or branch")
-  else if let some e := Refine.findPart (fun | .ret .. => true | _ => false) false body then
+  else if let some e := (if allowEsc then none else Refine.findPart (fun | .ret .. => true | _ => false) false body) then
     some (e.pos, "it cannot have a return yet")
-  else if let some e := Refine.findPart (fun | .brk _ => true | _ => false) true body then
+  else if let some e := (if allowEsc then none else Refine.findPart (fun | .brk _ => true | _ => false) true body) then
     some (e.pos, "it cannot have a break that leaves it yet")
   else if let some e := Refine.findPart (fun
       | .set _ l _ _ => (Choice.rootName? l).any muts.contains
       | _ => false) false body then
     some (e.pos, "it cannot set a var from outside it yet")
   else none
+
+/-- Statements every path of which ends in a `return` or a `break` (#243). -/
+partial def escapesAlways (ss : List SExpr) : Bool :=
+  match ss.getLast? with
+  | some (.ret ..) | some (.brk _) => true
+  | some (.ite _ _ t (some u)) => escapesAlways (Choice.stmtsOf t) && escapesAlways (Choice.stmtsOf u)
+  | _ => false
+
+/-- How a refined branch's value leaves its function (#243): not at all
+    (the `if` is `void`), as it is (at its type when known: the branch
+    always ends), as an option (it may also leave by a `return` or
+    `break`), or not, the branch always leaving, so the `else`'s value is
+    taken after the `if`. -/
+inductive ExitVal where
+  | none
+  | raw (t : Option STy)
+  | opt (t : STy)
+  | elseAfter
+
+/-- (#243) `if (D := T[x]) then B else E` whose branch `B`, compiled as a
+    function of its own, sets `var`s from outside it (`vars`), has a
+    `return`, or a `break` that leaves it: every way it leaves becomes a
+    value of a tuple of what it says (an option of the enclosing
+    function's result, `retS`, or a `logic` for a `void` one; a `logic`
+    for a `break`; its value, as `vm` has it) and the values of copies of
+    those `var`s (`$exit…'N`, shown as written), which it uses in their
+    place; the `else` gives the `var`s' own. After the `if`, the caller
+    sets the `var`s from the tuple, then returns or breaks as it says, else
+    takes the value. Each value is bound, at its type, before it goes in an
+    option, so that its failure is the branch's. Gives the new branch and
+    else, the tuple's type when known, the name the `if`'s value is bound
+    to, and what follows it. -/
+def refineExits (p : Pos) (body : SExpr) (elseE : Option SExpr) (vars : List (String × STy))
+    (hasRet hasBrk : Bool) (retS : Option STy) (vm : ExitVal) :
+    SExpr × SExpr × Option STy × String × List SExpr :=
+  let tag := s!"$exit{p.line}_{p.col}"
+  let cp (n : String) : String := s!"{tag}'{n}"
+  let ren := vars.map fun (n, _) => (n, cp n)
+  let retC : List STy := if hasRet then [retS.map STy.opt |>.getD (.name "logic")] else []
+  let brkC : List STy := if hasBrk then [.name "logic"] else []
+  let valC : List (Option STy) := match vm with
+    | .raw t => [t]
+    | .opt t => [some (.opt t)]
+    | _ => []
+  let comps : List (Option STy) := (retC ++ brkC).map some ++ valC ++ vars.map (some ·.2)
+  let tupS : Option STy := if comps.all (·.isSome) then
+      some (match comps.filterMap id with | [c] => c | cs => .tup cs) else none
+  let n := comps.length
+  let rr := s!"{tag}'r"
+  let rx := s!"{tag}'rx"
+  let vx := s!"{tag}'vx"
+  let mk (q : Pos) (ret? : Option (Option SExpr)) (brk : Bool) (val? : Option SExpr) (varsV : List SExpr) : SExpr :=
+    let (pre1, retV) : List SExpr × List SExpr := if !hasRet then ([], []) else match ret?, retS with
+      | some (some v), some r => ([.decl q rx (some r) false v], [.optionLit q (.block q [.ident q rx])])
+      | some (some v), none => ([v], [.ident q "true"])
+      | some none, _ => ([], [.ident q "true"])
+      | none, _ => ([], [.ident q "false"])
+    let brkV : List SExpr := if hasBrk then [.ident q (if brk then "true" else "false")] else []
+    let (pre2, valV) : List SExpr × List SExpr := match vm, val? with
+      | .raw t, some v => ([.decl q vx t false v], [.ident q vx])
+      | .opt t, some v => ([.decl q vx (some t) false v], [.optionLit q (.block q [.ident q vx])])
+      | .opt _, none => ([], [.ident q "false"])
+      | .raw _, none => ([], [.tuple q []])
+      | _, _ => ([], [])
+    let val := match retV ++ brkV ++ valV ++ varsV with | [v] => v | vs => .tuple q vs
+    .block q (pre1 ++ pre2 ++ [.decl q rr tupS false val, .ident q rr])
+  let copiesV := vars.map fun (n, _) => SExpr.ident p (cp n)
+  let outsV := vars.map fun (n, _) => SExpr.ident p n
+  let copies := vars.map fun (n, t) => SExpr.decl p (cp n) (some t) true (.ident p n)
+  let always := escapesAlways (Choice.stmtsOf body)
+  -- (its `return`s anywhere, then its `break`s outside its loops)
+  let body := Choice.renameE ren body
+  let body := Choice.mapE (fun
+    | .ret q e? => some (.ret q (some (mk q (some e?) false none (vars.map fun (n, _) => SExpr.ident q (cp n)))))
+    | _ => none) body
+  let body := Choice.mapE (fun
+    | .brk q => some (.ret q (some (mk q none true none (vars.map fun (n, _) => SExpr.ident q (cp n)))))
+    | l@(.loop ..) => some l
+    | _ => none) body
+  let ss := Choice.stmtsOf body
+  let endV : List SExpr := if always then ss else match vm, ss.getLast? with
+    | .raw _, some (.decl q y _ _ _) | .opt _, some (.decl q y _ _ _) => ss ++ [mk p none false (some (.ident q y)) copiesV]
+    | .raw _, some l | .opt _, some l => ss.dropLast ++ [mk p none false (some l) copiesV]
+    | _, _ => ss ++ [mk p none false none copiesV]
+  let thenB := SExpr.block p (copies ++ endV)
+  let elseB : SExpr := match vm, elseE with
+    | .raw _, some e | .opt _, some e => mk p none false (some e) outsV
+    | .none, some e => .block p [e, mk p none false none outsV]
+    | _, _ => mk p none false none outsV
+  let t := s!"{tag}'t"
+  let get (i : Nat) : SExpr := if n == 1 then .ident p t else .app p (.ident p t) [.int p (i : Int)] false
+  let nRB := retC.length + brkC.length
+  let ci := nRB + valC.length
+  let rv := s!"{tag}'rv"
+  let vv := s!"{tag}'vv"
+  let writes := vars.zipIdx.map fun ((nm, _), k) => SExpr.set p (.ident p nm) none (get (ci + k))
+  let after : List SExpr := writes ++
+    (if hasRet then [if retS.isSome then .ite p [.decl p rv none false (.query p (get 0))] (.ret p (some (.ident p rv))) none
+      else .ite p [.query p (get 0)] (.ret p none) none] else []) ++
+    (if hasBrk then [.ite p [.query p (get retC.length)] (.brk p) none] else []) ++
+    [match vm, elseE with
+      | .raw _, _ => get nRB
+      | .opt _, _ => .ite p [.decl p vv none false (.query p (get nRB))] (.ident p vv) (some (.app p (.ident p "Err") [] false))
+      | .elseAfter, some e => e
+      | _, _ => .tuple p []]
+  (thenB, elseB, tupS, t, after)
 
 /-- In a method of class `c`, the branch of a cast that refines (#243), with
     the members of `Self` it names bare (its fields and methods, not shadowed
@@ -3550,7 +3657,8 @@ partial def elabSetWith (elabE : Ctx → SExpr → Option Ty → EM R) (elabMemb
     types. `none` when the cast does not refine: the plain path. -/
 partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr → Bool → Option Ty → EM R)
     (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx) (p _dp : Pos) (D T : String) (x : SExpr) (body0 : SExpr)
-    (elseE : Option SExpr) (exp : Option Ty) (made : Bool := false) : EM (Option R) := do
+    (elseE : Option SExpr) (exp : Option Ty) (made : Bool := false) (escRet : Option Ty := none) :
+    EM (Option R) := do
   let env := ctx.types
   if !env.classes.contains T then return none
   -- (in a method: the members of `Self` the branch names bare, as members
@@ -3586,8 +3694,51 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
   -- (the locals the branch uses, in order of first use)
   let caps : List Local := (Choice.namesUsed body).filterMap fun n =>
     if n == D then none else ctx.locals.find? (·.name == n)
-  if let some (q, what) := refineBranchWhy? ctx p body ((caps.filter (·.mutable)).map (·.name)) then
+  -- (the `var`s from outside it that the branch sets, its `return`s and its
+  -- `break`s that leave it, `refineExits`: copies in the branch, and its
+  -- function returns what they say, which the caller does after the `if`;
+  -- not again for the branch made so, whose `return`s are its function's,
+  -- `escRet`)
+  let setOut := caps.filter fun l => l.mutable && (Refine.findPart (fun
+      | .set _ lhs _ _ => Choice.rootName? lhs == some l.name
+      | _ => false) false body).isSome
+  if let some (q, what) := refineBranchWhy? ctx p body ((caps.filter (·.mutable)).map (·.name) |>.filter fun n => !setOut.any (·.name == n))
+      (allowEsc := true) then
     eerr q s!"the branch of the cast to {shown}, which holds only under a refinement of the type arguments, is compiled as a function of its own, so {what} (#243)"
+  let retPart := Refine.findPart (fun | .ret .. => true | _ => false) false body
+  let brkPart := Refine.findPart (fun | .brk _ => true | _ => false) true body
+  let escapes := retPart.isSome || brkPart.isSome
+  if escRet.isNone && (!setOut.isEmpty || escapes) then
+    -- (the `if`'s value: by its type where it is; with none there, the
+    -- `else`'s, found apart, `void` carrying nothing)
+    let vm? : Option ExitVal ← match elseE, exp with
+      | none, _ => pure (some .none)
+      | some _, some .void => pure (some .none)
+      | some _, some t => pure (some (if escapes then .opt t.toSTy else .raw (some t.toSTy)))
+      | some ee, none =>
+        if !escapes then pure (some (.raw none))
+        else if escapesAlways (Choice.stmtsOf body) then pure (some .elseAfter)
+        else do
+          let st ← get
+          let τ? ← tryCatch (do pure (some (← elabE { ctx with typeOnly := true } ee none).ty)) fun _ => pure none
+          set st
+          pure (τ?.map fun τ => if τ == .void then ExitVal.none else .opt τ.toSTy)
+    let some vm := vm?
+      | eerr ((retPart.orElse fun _ => brkPart).map (·.pos) |>.getD p) s!"the branch of the cast to {shown}, which holds only under a refinement of the type arguments, is compiled as a function of its own, so it cannot return or break out of it yet where the if's value is used at a type not known there (write it) (#243)"
+    let retS := if ctx.retTy == .void then none else some ctx.retTy.toSTy
+    let (thenB, elseB, tupS, t, after) := refineExits p body0 elseE (setOut.map fun l => (l.name, l.ty.toSTy))
+      retPart.isSome brkPart.isSome retS vm
+    set st0
+    let tupTy ← tupS.mapM (resolveTy env p ·)
+    -- (the new branch is the elaborator's, so its function is made from it,
+    -- `made`, not from the source)
+    let some rIf ← elabRefinedIfWith elabApp elabE ctx p _dp D T x thenB (some elseB) tupTy (made := true)
+        (escRet := if escapes then tupTy else none)
+      | eerr p s!"internal: the cast to {shown} with sets, returns or breaks in its branch (#243)"
+    let slot ← fresh rIf.ty
+    let c := { ctx with locals := { name := t, slot, ty := rIf.ty, mutable := false } :: ctx.locals }
+    let rest ← elabE c (.block p after) exp
+    return some ⟨.seq (.assign slot rIf.e) rest.e, rest.ty⟩
   -- (a suspension in the branch or in the `else`, which the dispatch to the
   -- branch's function would have to carry, is refused for now)
   let isS (f : Nat) : Bool := ctx.sigs.any fun s => s.idx == f && s.suspends
@@ -3608,6 +3759,9 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
     let ctxB : Ctx := { ctx with
       locals := { name := D, slot := dslot, ty := dTy, mutable := false } ::
         ctx.locals.map fun l => { l with ty := refine l.ty },
+      -- (its `return`s its function's, `refineExits`)
+      retTy := (escRet.map refine).getD ctx.retTy,
+      defers := if escRet.isSome then [] else ctx.defers,
       -- (and the type arguments the cast opens, #250)
       types := { env with tvars := (env.tvars.map (fun (n, t) => (n, refine t)) ++
         opened.map (fun (n, _, c) => (n, Ty.param n c))) } }

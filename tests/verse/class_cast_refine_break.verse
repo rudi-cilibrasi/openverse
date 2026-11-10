@@ -1,4 +1,4 @@
-# expect: 10:12: the branch of the cast to dup(a), which holds only under a refinement of the type arguments, is compiled as a function of its own, so it cannot have a break that leaves it yet (#243)
+# A refining cast's branch with a break that leaves it (#243): its function returns that it broke, and the caller breaks
 pair(t:type, u:type) := class:
     A:t
     B:u

@@ -1,4 +1,4 @@
-# expect: 10:8: the branch of the cast to dup(a), which holds only under a refinement of the type arguments, is compiled as a function of its own, so it cannot set a var from outside it yet (#243)
+# A refining cast's branch that sets a var from outside it (#243): a copy in the branch, set after the if
 pair(t:type, u:type) := class:
     A:t
     B:u

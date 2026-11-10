@@ -1531,10 +1531,27 @@ heap effects (the function declares exactly those, plus `<decides>` if
 `Refine.functions` makes the function from the branch for the next
 elaboration, which compiles the `if` as the dispatch. The cast's target
 class then counts as one that fixes type arguments, so it and the
-classes below it get pins in Verse Core. A `return`, a `break` leaving
-the branch, a `set` of an outside `var`, a suspension in the branch or
+classes below it get pins in Verse Core. A suspension in the branch or
 the `else` (the dispatch would have to carry it through the lowering of
-`<suspends>` code) are refused for now. In a method, the branch's bare
+`<suspends>` code) is refused for now. A `set` of an outside `var`, a `return` in the branch, and a `break` that
+leaves it are rewritten first (`refineExits`): the branch declares a copy
+of each such `var` (`$exit…'N`) and uses it in its place, and every way it
+leaves becomes a value of one tuple: what it says (an option of the
+enclosing function's result, or a `logic` for a `void` one; a `logic` for
+a `break`), its value (as it is when it always ends, as an option when it
+may also leave, or not when the `if` is `void` or the branch always
+leaves, the `else`'s value then taken after), and the copies. A `return`
+or `break` becomes a `return` of that tuple from the branch's function;
+the `else` gives the `var`s' own values. After the `if`, the caller sets
+the `var`s from the tuple first, then returns or breaks as it says, else
+takes the value, so the enclosing function's `defer:`s see what the branch
+set. Each value is bound at its type before it goes in an option, so that
+its failure is the branch's (`option{…}` would take it). The new branch is
+the elaborator's (`made`), so the lift carries it (`Lift.body`); it is
+elaborated with the tuple as its `return`s' type (`escRet`), and its
+round-1 type check has no `defer:` of the enclosing function. With no type
+for the `if`'s value where it is, the `else`'s, found apart
+(`Ctx.typeOnly`), is used, `void` carrying nothing. In a method, the branch's bare
 names of `Self`'s fields and methods are made `Self.member` first
 (`selfQualify`, by the elaborator's own rule for bare names), so its
 function takes `Self` as one of the locals it uses; the lift then carries
