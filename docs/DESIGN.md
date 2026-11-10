@@ -1247,9 +1247,13 @@ position in every class below the one that declares it.
   its first ones), through the topmost class of its chain below the
   interface (`TyEnv.viewOf`: `ib := class(both(int, string))` has
   `both`'s, `[var 1]`, which its pins fix to `string`); a class below has pins (`none`) on all of its type
-  arguments, so that a dispatch through a view opens them, and hidden
+  arguments, so that a dispatch through a view opens them (a dispatch
+  groups the classes it tests by these, `TyEnv.dispatchPins`, as the rule
+  compares them), and hidden
   fields for all of its type parameters, which its overrides read
-  (`Sig.selfTps`); a method's dispatch tests each class, its arguments
+  (`Sig.selfTps`; a class with a class parent that adds such an interface
+  has them for all only when asked, after the first elaboration finds it:
+  the program is elaborated again, `Options.witnessAll`); a method's dispatch tests each class, its arguments
   opened (`$ext`) and refined by its view and pins, as #209's refined
   calls are; a refining cast (#243, #250) relates the object's type
   arguments to the target's through the view too; and an implementation's

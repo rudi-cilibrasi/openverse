@@ -813,6 +813,18 @@ def TyEnv.lowerPins (env : TyEnv) (ps : List (Option Ty)) : List (Option VTy) :=
 def TyEnv.corePins (env : TyEnv) (d : String) : List (Option Ty) :=
   if env.pinned.contains d then env.pinsOf d else []
 
+/-- The pins of class `d` as Verse Core has them: `corePins`, and for a
+    class below an interface referred to through views, `none` on the rest
+    of its Verse Core type arguments, so that a dispatch through a view
+    opens them (`Typed.dispatch_view`, #351). A dispatch tests classes
+    whose Verse Core pins agree, so it groups them by these. -/
+def TyEnv.dispatchPins (env : TyEnv) (d : String) : List (Option Ty) :=
+  let ps := env.corePins d
+  if !(env.info d).isIface && !env.phs.contains d && env.viewed.any (env.isSub d ·) then
+    let n := (env.coreArgs d (((env.sparams.lookup d).getD []).map fun (v, c) => Ty.param v c)).length
+    ps ++ List.replicate (n - ps.length) none
+  else ps
+
 /-- Code generic over `T` can treat a `d` below it under the refinement
     its pins give (#142, #209): `d`'s pins determine its Verse Core type
     arguments (`pinsOf`), and are on all of them, so an object has those
@@ -3906,7 +3918,7 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
       -- (#351: through views, one test per class, each with its view and
       -- all of its pins, which the view relates to the object's)
       if env.viewed.contains S then parts := parts.push (env.corePins d, #[d]) else
-      let k := if wide then env.corePins d else (env.corePins d).take rargs.length
+      let k := if wide then env.dispatchPins d else (env.dispatchPins d).take rargs.length
       match parts.findIdx? (·.1 == k) with
       | some pi => parts := parts.modify pi fun (k', ds) => (k', ds.push d)
       | none => parts := parts.push (k, #[d])
@@ -6017,7 +6029,8 @@ partial def elabAppBase (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (b
               -- of `e`'s type, which might have no initial value)
               let mut parts : Array (List (Option Ty) × Array String) := #[]
               for d in cls do
-                let key := env.corePins d
+                -- (by their Verse Core pins, which the rule compares, #351)
+                let key := env.dispatchPins d
                 match parts.findIdx? (·.1 == key) with
                 | some pi => parts := parts.modify pi fun (k, ds') => (k, ds'.push d)
                 | none => parts := parts.push (key, #[d])
@@ -7363,6 +7376,10 @@ structure Compiled where
   /-- Lazily taken calls whose effects need functions of their own (#246):
       the program is elaborated again, with them. -/
   loopNeeds : List Choice.FirstLift := []
+  /-- Classes with a class parent that list an interface at type arguments
+      that are not a prefix of their own (#351): the program is elaborated
+      again, with hidden fields for all of their type parameters. -/
+  witnessNeeds : List String := []
 
 /-- Names a type parameter cannot have. -/
 def typeNames : List String :=
@@ -7403,6 +7420,9 @@ structure Options where
   /-- Lazily taken calls whose effects need functions of their own, found
       in an earlier elaboration (#246). -/
   loopRequests : List Choice.FirstLift := []
+  /-- Classes whose type parameters all get hidden fields, found in an
+      earlier elaboration (#351, `Compiled.witnessNeeds`). -/
+  witnessAll : List String := []
 
 /-- A class or interface definition, as parsed. -/
 structure CDef where
@@ -9621,7 +9641,10 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
           some (coreS.take fewest)
       if let some qargs := qargs? then
         for tp in (if methodsBelow then cd.tps else []) do
-          if !qargs.any (fun | .name v => v == tp.name | _ => false) then
+          -- (all of them for a class with a class parent that lists an
+          -- interface at type arguments that are not a prefix of its own,
+          -- which a dispatch through a view opens, #351)
+          if opts.witnessAll.contains cd.name || !qargs.any (fun | .name v => v == tp.name | _ => false) then
             fs := fs ++ [(s!"$w.{cd.name}.{tp.name}", .name tp.name, some (.ident cd.pos "$witness"), false)]
       full := full.push (cd.name, fs)
       fullMap := fullMap.insert cd.name fs
@@ -9893,6 +9916,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   -- fields, and a dispatch from the interface opens them, as for a class
   -- whose parent's type arguments do not give them (#209, #276)
   let mut viewed : List String := []
+  let mut witnessNeeds : List String := []
   for cd in cdefs do
     if !cd.isIface then
       -- (an interface reached through two parents at different type
@@ -9921,13 +9945,17 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
           -- classes, which no view gives
           if !(env.fields i).isEmpty then
             throw s!"{cd.pos.show}: {cd.name} gives {i} the type arguments {gives}, but its own are {showArgs (core cd.name)}, and {i} has fields: references to it through views cannot read them yet (#351)"
-          -- (its hidden fields, which a dispatch through a view reads, are
-          -- for a class without a class parent: one with one, which adds
-          -- the interface, is not supported yet)
+          -- (a dispatch through a view reads all of the class's type
+          -- arguments from its hidden fields, which a class without a class
+          -- parent has for all of them; one with one, which adds the
+          -- interface, has them for all only when asked, and the program is
+          -- elaborated again, `Options.witnessAll`)
           if let some q := (env.info cd.name).parent then
-            if !env.isSub q i then
-              throw s!"{cd.pos.show}: {cd.name} gives {i} the type arguments {gives}, but its own are {showArgs (core cd.name)}, and {cd.name} has a parent class, {q}, which does not reach {i}: a class with a parent class that adds such an interface is not supported yet (#351)"
+            if !env.isSub q i && !opts.witnessAll.contains cd.name && !witnessNeeds.contains cd.name then
+              witnessNeeds := witnessNeeds ++ [cd.name]
           viewed := viewed ++ [i]
+  if !witnessNeeds.isEmpty then
+    return { prog := default, sigs := { fns := [] }, slotTys := [], witnessNeeds }
   -- (and the interfaces above them, which see their classes through a
   -- prefix of what they do)
   env := { env with viewed := (viewed ++ viewed.flatMap fun i => (env.supers i).filter (env.info · |>.isIface)).eraseDups }
@@ -9936,7 +9964,10 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     let q := (qm.splitOn ".").head!
     let mn := (dm.splitOn ".").getLast!
     let (cd', cq) := (core d, core q)
-    if !env.sameCorePinned d q then
+    -- (not through views, #351: a dispatch through one opens the class's
+    -- type arguments, related to the interface's by its view, which may
+    -- have more, `q(t) := class(p(t), keyed(string, t))`)
+    if !env.viewed.contains q && !env.sameCorePinned d q then
       if ((env.sparams.lookup d).getD []).isEmpty then
         throw s!"{mp.show}: {d} has more Verse Core type arguments than {q} (a class between them has type parameters of its own), so it cannot override {mn} yet: code generic over {q} could not give them (#39)"
       throw s!"{mp.show}: {d} has type parameters that {q} does not have and that the type arguments it gives {q} do not determine, so it cannot override {mn}: code generic over {q} could not give them (#39, #209)"
@@ -10397,7 +10428,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       if let some k := fxOver a b then
         throw s!"{cp.show}: in {c}, {impl} allows the effect <{k}>, which {decl} does not"
     | _, _ => pure ()
-    if !env.sameCorePinned e q then
+    if !env.viewed.contains q && !env.sameCorePinned e q then
       throw s!"{cp.show}: {c} uses {impl} for {decl}, but {e} has type parameters that {q} does not have, so code generic over {q} could not give them (#39)"
     if !sigOk then
       throw s!"{cp.show}: {c} uses {impl} for {decl}, but their types differ at {q}'s type arguments (as code generic over {q} sees them), so it could not call it (#53)"
@@ -10609,16 +10640,8 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   -- (a class below an interface referred to through views has pins on all of
   -- its Verse Core type arguments, so that a dispatch through a view opens
   -- them, `Typed.dispatch_view`, #351)
-  let viewedBelow : List String := env.classes.filter fun d =>
-    !(env.info d).isIface && !env.phs.contains d && env.viewed.any fun i => env.isSub d i
   let pins := env.classes.map fun d =>
-    if env.isRefClass d then
-      let ps := env.lowerPins (env.corePins d)
-      if viewedBelow.contains d then
-        let n := (env.coreArgs d (((env.sparams.lookup d).getD []).map fun (v, c) => Ty.param v c)).length
-        ps ++ List.replicate (n - ps.length) none
-      else ps
-    else []
+    if env.isRefClass d then env.lowerPins (env.dispatchPins d) else []
   -- concurrency (#156): each <suspends> function `g` becomes a frame class
   -- and the functions `g$new`, `g$reset` and `g$resume` (`Suspend.lean`);
   -- `g`'s own index is `g$resume`'s, as only suspends code calls it
@@ -10774,7 +10797,15 @@ def elabProgram (allTops00 : List STop) (opts : Options := {}) : Except String C
       throw "internal error: casts that refine type arguments, or lazily taken calls, still to lift after several elaborations (#243, #246)"
     -- (a program with a placeholder left is never given out)
     | 0, _ :: _ => throw "internal error: functions still wanted as values after several elaborations (#214)"
-  (go 4 opts).mapError fun msg =>
+  -- (#351) and with hidden fields for all of the type parameters of the
+  -- classes that ask for them, each round more
+  let rec withWitness (fuel : Nat) (opts : Options) : Except String Compiled := do
+    let c ← go 4 opts
+    if c.witnessNeeds.isEmpty then return c
+    match fuel with
+    | fuel + 1 => withWitness fuel { opts with witnessAll := opts.witnessAll ++ c.witnessNeeds }
+    | 0 => throw "internal error: classes still asking for hidden fields after several elaborations (#351)"
+  (withWitness 8 opts).mapError fun msg =>
     FnValues.pretty (((stripOv (msg.replace "$init" "<constructor>")).replace "::" ".").replace "$replaceAll" "ReplaceAll")
 
 /-- Parse and elaborate Verse source text. -/

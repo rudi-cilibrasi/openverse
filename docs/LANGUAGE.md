@@ -579,8 +579,7 @@ circle := class(shape, labelled):
   is a struct or container that holds one.
 - **Not yet supported** (each rejected with a message):
   - a field of an interface that a class gives type arguments that are not
-    a prefix of its own (see below, #351), and such an interface listed by
-    a class that has a class parent which does not reach it; a cast from
+    a prefix of its own (see below, #351); a cast from
     a reference to such an interface (or one above it) to a class or
     interface with type arguments, its own or ones it fixes (`c :=
     class(i1(int), i2(string))`), other than as the first clause of an
