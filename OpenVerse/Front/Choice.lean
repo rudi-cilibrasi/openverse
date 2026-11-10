@@ -872,6 +872,7 @@ def bifToExcl (c : SExpr) : List SExpr :=
       | .block .. => renameE ((localsOf b).map fun n => (n, s!"${k}{side}'{n}")) b
       | b => b
     let checks := blockNames t ++ blockNames u
+    let t0 := t
     let t := renameBlock "t" t
     let u := renameBlock "u" u
     match boundIn cs with
@@ -902,7 +903,14 @@ def bifToExcl (c : SExpr) : List SExpr :=
               ys.zipIdx.map fun (y, i) =>
                 let (t, m) := declOf y
                 SExpr.decl ip y t m (.app ip (.ident ip tt) [.int ip (i : Int)] false))
-      checks ++ [written, .decl ip k none false (.optionLit ip (.block ip (cs ++ [val]))),
+      -- (a then-block that binds a name its condition binds: shadowing,
+      -- said where the block binds it, #383's review)
+      let shadows : List SExpr := match (match t0 with
+          | .block .. => (localDecls t0).find? fun (n, _) => (ρ.lookup n).isSome
+          | _ => none) with
+        | some (n, q) => [.app ip (.ident ip "$shadows") [.ident q n] false]
+        | none => []
+      shadows ++ checks ++ [written, .decl ip k none false (.optionLit ip (.block ip (cs ++ [val]))),
        .decl p x ty false (withJoin (mkExcl ip [(binds, t), ([.notE ip (.query ip (.ident ip k))], u)]))]
   | c => [c]
 

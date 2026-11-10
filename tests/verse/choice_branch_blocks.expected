@@ -12,4 +12,10 @@ f 0 0
 f 1 1
 f 1 11
 f 2 9
+g none
+g none
+g some 1
+h 0
+h 0
+h 1
 exit=0

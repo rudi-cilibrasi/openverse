@@ -18,3 +18,8 @@ Main()<transacts>:void =
         Print("e {X}")
     for (C := 0..2, X := if (C = 0) then 0 else if (C = 1) then { V := Two(C); V } else 9):
         Print("f {C} {X}")
+    # (no type written: a block ending in false joins an option, #383's review)
+    for (C := 0..1, X := if (C = 0) then { Y := Two(1); false } else option{C}):
+        if (V := X?) then Print("g some {V}") else Print("g none")
+    for (C := 0..1, A := if (C = 0) then { Y := Two(1); array{} } else array{C}):
+        Print("h {A.Length}")
