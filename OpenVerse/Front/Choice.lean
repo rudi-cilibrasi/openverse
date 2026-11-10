@@ -1365,8 +1365,12 @@ partial def inlineCalls (mv : List (String × MFn)) (e : SExpr) (recs : List Str
               .block q (fh.params.map fun sp => SExpr.ident q (tagH sp.name)), .block q clsH,
               .decl q (tagH "$r") (some fh.ret) false (markRecG h grp tailH)] false]
           pure (.app q (.ident q "$group") (markRecG g grp tail :: members) false)
-        return .app p (.ident p "$loop") (.ident q g :: .block q (tmark ++ pds ++ unpack) :: .block q ps :: .block q cls ::
-          .decl q (tag "$r") (tyOf f.ret) false tail' :: as'') false
+        -- (the names the others' bodies use from outside too, checked not
+        -- in scope here, as for its own, #371's review)
+        let memberFrees : List SExpr := (grp.filter (· != g)).filterMap fun h =>
+          (clash.lookup h).map fun us => .app q (.ident q "$freeNames") (.ident q h :: us.map (SExpr.ident q ·)) false
+        return .app p (.ident p "$loop") (.ident q g :: .block q (tmark ++ memberFrees ++ pds ++ unpack) :: .block q ps ::
+          .block q cls :: .decl q (tag "$r") (tyOf f.ret) false tail' :: as'') false
       let body ← go (renameTypes ρ (renameE ren f.body))
       -- (its `return`s as guarded alternatives, #283)
       let ss := stmtsOf body
