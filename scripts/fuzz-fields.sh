@@ -16,7 +16,9 @@ for ((s=first; s<first+n; s++)); do
   python3 -I "$gen" "$s" > "$tmp/p.verse"
   rm -f "$tmp/p.vbc"
   timeout 60 "$ov" run "$tmp/p.verse" --emit "$tmp/p.vbc" > "$tmp/l.out" 2>/dev/null; le=$?
-  if [[ $le -ne 0 || ! -s "$tmp/p.vbc" ]]; then bad=$((bad+1)); continue; fi
+  # (not runnable: counted, not a failure, but named, so a program that exhausts memory in Lean,
+  # as seed 20767206 does, can be found)
+  if [[ $le -ne 0 || ! -s "$tmp/p.vbc" ]]; then bad=$((bad+1)); echo "not runnable: seed $s (Lean exit $le)"; continue; fi
   ran=$((ran+1))
   timeout 60 "$cv" "$tmp/p.vbc" > "$tmp/c.out" 2>/dev/null; ce=$?
   if [[ $ce -ne $le ]] || ! cmp -s "$tmp/l.out" "$tmp/c.out"; then
