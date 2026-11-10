@@ -95,6 +95,11 @@ structure Callee where
       narrower (covariant): the frame writes its result to the cell by
       subsumption. -/
   cellRes : Option VTy := none
+  /-- With `newCellFn`: the other cells its frame keeps, each with its
+      `newCell` and the type it holds, for callers that expect another of
+      the method's declared results (#209): the frame writes its result to
+      every cell, each above its own type. -/
+  moreCells : List (Nat × VTy) := []
   /-- For a method of a class that fixes type arguments, called through
       `Typed.dispatch` (#142): helpers taking the receiver first, so that
       the code depending on the refinement keeps the rule's shape —
@@ -1003,9 +1008,12 @@ partial def suspendSelfGeneric (us : List Nat) (y g : Nat) (c : Callee) (rs : Li
   let .ref _ fargs := frameTy.subst (callInst acc .void none)
     | throw "internal error: a refined call's frame type"
   if !VTy.varsBelowL N fargs then
-    -- (the type its result cell holds, at the dispatch's instance)
-    let ρθ := ((c.cellRes.orElse fun _ => (env.S.fns[g]?).map (·.2)).getD VTy.void).subst (callInst acc .void none)
-    return ← suspendSelfOpen us y c rs valued ρθ μ
+    -- (the types its result cells hold, at the dispatch's instance, each
+    -- with its `newCell`)
+    let inst := callInst acc .void none
+    let ρθ := ((c.cellRes.orElse fun _ => (env.S.fns[g]?).map (·.2)).getD VTy.void).subst inst
+    let cells := (c.newCellFn.map fun f => [(f, ρθ)]).getD [] ++ c.moreCells.map fun (f, d) => (f, d.subst inst)
+    return ← suspendSelfOpen us y c rs valued cells μ
   suspendSelf us y c rs valued (.ref [c.tag, env.nilTag] fargs)
 
 /-- `suspendSelf` for an override whose frame's type arguments the dispatch
@@ -1029,12 +1037,11 @@ partial def suspendSelfGeneric (us : List Nat) (y g : Nat) (c : Callee) (rs : Li
     arguments, narrowing the value with a cast where they are wider; other
     such calls are refused. -/
 partial def suspendSelfOpen (us : List Nat) (y : Nat) (c : Callee) (rs : List Expr) (valued : Bool)
-    (ρθ : VTy) (μ : Nat → VTy) : M (Expr × Expr) := do
+    (cells : List (Nat × VTy)) (μ : Nat → VTy) : M (Expr × Expr) := do
   let env ← read
   let some (_, _, resumeFn, cancelFn) := c.selfFns
     | throw "internal error: a refined call without helpers"
-  let some newCellFn := c.newCellFn
-    | throw "internal error: an opened override without `newCell`"
+  if cells.isEmpty then throw "internal error: an opened override without `newCell`"
   let some ty := (← get).Γ[y]? | throw "internal error: a refined call's receiver"
   -- (the value of a refined call is always bound, so it has a type)
   let some τ := env.expTy | throw "internal error: a refined call's value has no expected type"
@@ -1048,17 +1055,21 @@ partial def suspendSelfOpen (us : List Nat) (y : Nat) (c : Callee) (rs : List Ex
   -- result, below the caller's class's, always passes, #209)
   -- (and the other way: a cell of narrower classes, `mid(t)`'s, for a
   -- caller from `expr(t)`, needs no cast: its value is one of the wider)
-  let narrow : Option (VTy × Option (List Nat)) :=
-    if ρθ == τ.subst μ then none
-    else match τ, ρθ with
+  let narrowFor (ρθ : VTy) : Option (VTy × Option (List Nat)) :=
+    match τ, ρθ with
       | .ref usτ aτ, .ref usρ aρ =>
         if aτ.map (·.subst μ) != aρ then none
         else if usτ.all usρ.contains then some (.ref usρ aτ, some usτ)
         else if usρ.all usτ.contains then some (.ref usρ aτ, none)
         else none
       | _, _ => none
-  if ρθ != τ.subst μ && narrow.isNone then
-    throw "a <suspends> override cannot be called yet through a dispatch that opens its class's type parameters when the call expects the method's result as a class above it declares it and the override's frame keeps its result at another type: its own, or the method's first declaration's (#209)"
+  -- (the cell whose type is the caller's refined one, else one a cast
+  -- serves; a frame keeps one per result its callers may expect, #209)
+  let pick : Option (Nat × Option (VTy × Option (List Nat))) :=
+    ((cells.find? (·.2 == τ.subst μ)).map fun (f, _) => (f, none)) <|>
+      cells.findSome? fun (f, r) => (narrowFor r).map fun nw => (f, some nw)
+  let some (newCellFn, narrow) := pick
+    | throw "a <suspends> override cannot be called yet through a dispatch that opens its class's type parameters when the call expects the method's result as a class above it declares it and the override's frame keeps its result at another type: its own, or the method's first declaration's (#209)"
   let σs ← rs.mapM infer
   let wide : VTy := .ref [c.tag, env.schedTag] []
   let schedTy : VTy := .ref [env.schedTag] []

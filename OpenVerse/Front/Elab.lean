@@ -6938,7 +6938,7 @@ def inFnMsg (tops : List STop) (name msg : String) : String :=
     (covariant) result to by subsumption; else (the first declarations, one
     per root, #70, disagree, or its own is not below theirs in Verse Core)
     its own. A qualified implementation `(q:)M` has the roots above `q`. -/
-def declaredRes (env : TyEnv) (allS : List Sig) (s : Sig) : VTy :=
+def declaredLevels (env : TyEnv) (allS : List Sig) (s : Sig) : VTy × List VTy :=
   let genv : TyEnv := { env with tvars := s.tparams.map fun (v, k) => (v, Ty.param v k) }
   let own := s.ret.toVTy genv
   let c := (s.name.splitOn ".").headD ""
@@ -6972,11 +6972,27 @@ def declaredRes (env : TyEnv) (allS : List Sig) (s : Sig) : VTy :=
   let core (d : String) : Nat :=
     (env.coreArgs d (((env.sparams.lookup d).getD []).map fun (v, k) => Ty.param v k)).length
   let opening := ((env.supers c).drop 1).filter fun r => declares r && core r < core c
-  if opening.any fun r => (sigAt r).bind (atC r) == some own then own else
   let decls := (env.rootsOf declares (qual.getD c)).map fun r => (sigAt r).bind (atC r)
-  match decls with
-  | some d :: rest => if rest.all (· == some d) && own.sub d then d else own
-  | _ => own
+  let primary : VTy :=
+    if opening.any fun r => (sigAt r).bind (atC r) == some own then own else
+    match decls with
+    | some d :: rest => if rest.all (· == some d) && own.sub d then d else own
+    | _ => own
+  -- (the other results a caller may expect, from a class it dispatches
+  -- from or a first declaration, that a cell of the primary type cannot
+  -- serve through a cast, #337: other type arguments, or classes neither
+  -- above nor below; each gets a cell of its own, #209)
+  let narrowable (d p : VTy) : Bool := match d, p with
+    | .ref ud ad, .ref up ap => ad == ap && (ud.all up.contains || up.all ud.contains)
+    | _, _ => d == p
+  let cands := (opening.filterMap fun r => (sigAt r).bind (atC r)) ++ decls.filterMap id
+  let extras := cands.foldl (fun acc d =>
+    if d != primary && own.sub d && !narrowable d primary && !acc.contains d then acc ++ [d] else acc) []
+  (primary, extras)
+
+/-- The type an opened override's (primary) result cell holds: `declaredLevels`'
+    first. -/
+def declaredRes (env : TyEnv) (allS : List Sig) (s : Sig) : VTy := (declaredLevels env allS s).1
 
 /-- The concurrency lowering (#156), at the end of `elabProgramCore`: each
     `<suspends>` function becomes a frame class and its resume, cancel and
@@ -7176,9 +7192,33 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
   -- each one's `arrive`, `resumeOwn`, `cancelOwn` and `newCell`,
   -- each target's receiver-first `take`, each root's trampoline and
   -- `start`, then the arms' functions
+  -- (the overrides whose class has type parameters its parent's type
+  -- arguments do not give: a dispatch may open their frames' type
+  -- arguments, #251)
+  let opened (j : Nat) : Bool := match lows[j]? with
+    | some (gi, _, _) => ((sigOf gi).map (!·.selfTps.isEmpty)).getD false
+    | none => false
+  -- (the type such an override's result cell holds: its method's declared
+  -- result, so that a narrower, covariant, one is called as any other, #209)
+  let cellResOf (j : Nat) : VTy := match lows[j]? with
+    | some (gi, _, _) => match sigOf gi with
+      | some s => if opened j then declaredRes env allS s else (fsigs0[gi]!).2
+      | none => (fsigs0[gi]!).2
+    | none => .void
+  -- (and the other result cells such a frame keeps, for callers that
+  -- expect another declared result no cast serves, #209: each with its
+  -- `newCell`, in a block after the `own` functions)
+  -- (computed once: each lookup and each offset reads the arrays)
+  let moreArr : Array (List VTy) := (List.range lows.length).toArray.map fun j => match lows[j]? with
+    | some (gi, _, _) => if opened j then ((sigOf gi).map fun s => (declaredLevels env allS s).2).getD [] else []
+    | none => []
+  let offArr : Array Nat := moreArr.foldl (fun acc m => acc.push (acc.back?.getD 0 + m.length)) #[0]
+  let moreOf (j : Nat) : List VTy := moreArr[j]?.getD []
+  let moreOff (j : Nat) : Nat := offArr[j]?.getD 0
   let L := lows.length
   let ownBase := nFns + 4 * L
-  let selfBase := ownBase + 4 * L
+  let moreBase := ownBase + 4 * L
+  let selfBase := moreBase + moreOff L
   let trampOf (k : Nat) : Nat := selfBase + targets.length + 2 * k
   -- the scheduler: its class's prototype
   let some schedLit := Suspend.coreDefault Sorig [] 0 schedTy
@@ -7211,19 +7251,6 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
   let nilTag := tagBase + L + B + 1
   -- (then `$cell(t)`, a caller's result cell for an opened override, #251)
   let resCellTag := tagBase + L + B + 2
-  -- (the overrides whose class has type parameters its parent's type
-  -- arguments do not give: a dispatch may open their frames' type
-  -- arguments, #251)
-  let opened (j : Nat) : Bool := match lows[j]? with
-    | some (gi, _, _) => ((sigOf gi).map (!·.selfTps.isEmpty)).getD false
-    | none => false
-  -- (the type such an override's result cell holds: its method's declared
-  -- result, so that a narrower, covariant, one is called as any other, #209)
-  let cellResOf (j : Nat) : VTy := match lows[j]? with
-    | some (gi, _, _) => match sigOf gi with
-      | some s => if opened j then declaredRes env allS s else (fsigs0[gi]!).2
-      | none => (fsigs0[gi]!).2
-    | none => .void
   -- (a branch's wrapper holds its home's frame, at its type arguments,
   -- which the scheduler's dispatch opens, #244)
   let ntpOfLow (j : Nat) : Nat := ((lows[j]?).map (·.2.2)).getD 0
@@ -7247,6 +7274,7 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
                cancelFn := some (if ntp == 0 then nFns + 4 * j + 2 else ownBase + 4 * j + 2),
                newCellFn := if opened j then some (ownBase + 4 * j + 3) else none,
                cellRes := if opened j then some (cellResOf j) else none,
+               moreCells := (moreOf j).zipIdx.map fun (d, i) => (moreBase + moreOff j + i, d),
                passFields := if ntp == 0 then (List.range fns[gi]!.arity).map fun i => Suspend.slotBaseOf sites arms + i
                  else [],
                resField := some Suspend.resF, generic := ntp != 0, newSched := true,
@@ -7303,6 +7331,14 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
     else
       ownTys := ownTys.push []
       extraSigs := extraSigs.push ([], VTy.void)
+  -- each opened override's other cells' `newCell(params…, cell, sched)`
+  -- (#209), built after the lowering as its first's
+  for ((gi, _, _), j) in lows.zipIdx do
+    let ps := slotTys[gi]!.take fns[gi]!.arity
+    for d in moreOf j do
+      ownFns := ownFns.push stub
+      ownTys := ownTys.push (ps ++ [.ref [resCellTag] [d], schedTy])
+      extraSigs := extraSigs.push (ps ++ [.ref [resCellTag] [d], schedTy], frameTy j)
   -- each target's `take(self, frame)` (#142), whose first parameter is the
   -- receiver: the frame's result (its frame is made, resumed and cancelled
   -- through its `arrive`, `resumeOwn` and `cancelOwn`)
@@ -7523,7 +7559,9 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
     -- (an opened override's frame has its result cell last, and pins on all
     -- of its type arguments, so that a dispatch opens them, #251)
     let cellF := low.fields.length
-    frameClasses := frameClasses.push (low.fields ++ (if opened j then [cellTyOf j] else []))
+    let more := moreOf j
+    frameClasses := frameClasses.push (low.fields ++
+      (if opened j then cellTyOf j :: more.map fun d => .ref [resCellTag] [d] else []))
     framePins := framePins.push (if j ≥ user.length || opened j then List.replicate (ntpOfLow j) none else [])
     -- `g$new(sched, params…)`: the frame, with the arguments and initial
     -- values (a non-generic callee's frame field starts as the scheduler, a
@@ -7538,23 +7576,34 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
         (← tempTys.mapM (dflt nps))
     -- (the cell starts holding a default of its own type, which may have
     -- fewer type arguments than the override's result, #209)
-    let cellDflt : List Expr ← if opened j then do pure [.heap (.new resCellTag) [← dflt nps (cellResOf j)]] else pure []
-    let newBody : Expr := .heap (.new (tagBase + j)) (newFields ++ cellDflt)
+    let cellDflts : List Expr ← if opened j then (cellResOf j :: more).mapM fun d => do
+        pure (.heap (.new resCellTag) [← dflt nps d])
+      else pure []
+    let newBody : Expr := .heap (.new (tagBase + j)) (newFields ++ cellDflts)
     if opened j then
       -- `newCell(params…, cell, sched)`: `new`'s frame, with the parameters
-      -- renumbered and the given cell; and its `resumeOwn`, which writes the
-      -- result to the cell when it is done
+      -- renumbered and the given cell (one per cell the frame keeps, the
+      -- others starting as defaults, #209); and its `resumeOwn`, which
+      -- writes the result to every cell when it is done
       let renCell (i : Nat) : Nat := if i == 0 then a + 1 else i - 1
+      let withCell (l : Nat) : List Expr :=
+        newFields.map (Suspend.renumber renCell) ++
+          cellDflts.zipIdx.map fun (e, l') => if l' == l then .local a else Suspend.renumber renCell e
       let newCellFn : Fn := { name := s!"{gname}$newCell", arity := a + 2, nslots := a + 2, decides := false,
-                              writes := true,
-                              body := .heap (.new (tagBase + j)) (newFields.map (Suspend.renumber renCell) ++ [.local a]) }
+                              writes := true, body := .heap (.new (tagBase + j)) (withCell 0) }
       ownFns := ownFns.set! (4 * j + 3) newCellFn
+      for (_, i) in more.zipIdx do
+        ownFns := ownFns.set! (4 * L + moreOff j + i)
+          { newCellFn with name := s!"{gname}$newCell{i + 1}", body := .heap (.new (tagBase + j)) (withCell (i + 1)) }
       let pass := (List.range a).map fun i => Expr.heap (.get (Suspend.slotBaseOf sites arms + i)) [.local 0]
+      let cellWrites : List Expr := (List.range (1 + more.length)).map fun l =>
+        Expr.heap (.set 0) [.heap (.get (cellF + l)) [.local 0], .heap (.get Suspend.resF) [.local 0]]
+      let writeAll : Expr := match cellWrites with
+        | [w] => w
+        | ws => Suspend.seqVoid ws
       let resumeBody : Expr := .seq (Suspend.seqVoid [
         .assign 2 (.call gi (.local 0 :: .local 1 :: pass)),
-        .ite (.prim .eq [.local 2, Suspend.int 1])
-          (.seq (.heap (.set 0) [.heap (.get cellF) [.local 0], .heap (.get Suspend.resF) [.local 0]]) Suspend.vd)
-          Suspend.vd]) (.local 2)
+        .ite (.prim .eq [.local 2, Suspend.int 1]) (.seq writeAll Suspend.vd) Suspend.vd]) (.local 2)
       let resumeOwnFn : Fn := { name := s!"{gname}$resumeOwn", arity := 2, nslots := 3, decides := false,
                                 writes := true, body := initPrefixE 2 [Suspend.int 0] resumeBody }
       ownFns := ownFns.set! (4 * j + 1) resumeOwnFn

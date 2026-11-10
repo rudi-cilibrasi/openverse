@@ -955,10 +955,17 @@ and journals every write made in a condition (for rollback). So:
   result, below its class's declaration, always passes; a call from above
   a cell of narrower classes (from `expr(t)`, the cell holding `mid(t)`'s
   result because the override returns that) does the same with no cast.
-  The cell starts holding a default of its own type. Other calls that
-  expect yet another result are refused: from a class with type
-  parameters the first declaration's class does not have, or when two
-  first declarations disagree. Slots of the override's
+  The cell starts holding a default of its own type. For each other
+  result a caller may expect that no cast serves (from a class with type
+  parameters the first declaration's class does not have, `midX(t, s)`'s
+  `Copy():midX(t, s)`, or from another first declaration whose result
+  disagrees), the frame keeps a cell of its own, with a `newCell` of its
+  own (in a block after the `own` functions, `declaredLevels`); its
+  `resumeOwn` writes the result to every cell, each above its own type,
+  and a caller passes the cell whose type is its refined one (#209).
+  Every frame of such an override makes all its cells, also where its
+  callers use only one (a cost of a cell's allocation and default).
+  Slots of the override's
   frame whose types mention its class's added type parameters start as
   the receiver's hidden fields (`$w`), as in its body.
 - A refined call that does not suspend (an immediate method, or a #157

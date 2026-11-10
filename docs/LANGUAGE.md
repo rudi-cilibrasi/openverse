@@ -557,12 +557,7 @@ circle := class(shape, labelled):
 - **Comparability.** Other classes and interfaces are not comparable (Book §4.9), nor
   is a struct or container that holds one.
 - **Not yet supported** (each rejected with a message):
-  - in a class with type parameters that its parent's type arguments
-    do not give: a call of a `<suspends>` override with a
-    narrower result, in code generic over a class above, from a class that
-    declares the method with yet another result type and has type
-    parameters that the class declaring it first does not, or when two
-    first declarations of the method give different results (#209); a class below
+  - a class below
     an interface that does not give it its first type parameters, in
     order (`both(t, u) := class(container(t), sink(u))`, #276); a cast `T[X]` whose type
     arguments agree with `X`'s only under a refinement (`dup[P]` for
