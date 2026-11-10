@@ -459,9 +459,9 @@ circle := class(shape, labelled):
   such a class can fix or repeat those type arguments (`leaf :=
   class(mid(int, string))` below `mid(a, b) := class(expr(tuple(a, b)))`)
   and override too. A cast in generic code that holds only under such a
-  refinement is pattern matching on the class, as in a GADT (#243): as the
-  first clause of an `if`'s condition, `D := T[X]` types the branch it
-  guards, and the clauses after it, under the refinement, where the code's type parameters are unified as `T`'s
+  refinement is pattern matching on the class, as in a GADT (#243): as a
+  clause of an `if`'s condition, `D := T[X]` types the branch it guards,
+  and the clauses after it, under the refinement, where the code's type parameters are unified as `T`'s
   type arguments say (written types in the branch included):
 
   ```verse
@@ -470,6 +470,12 @@ circle := class(shape, labelled):
       else if (A := add[E]) then Eval(A.L) + Eval(A.R)  # t = int here
       else Err()
   ```
+
+  A later clause may be such a cast too (#243), when the clauses before it
+  print nothing, change no object and call nothing, so that its failure
+  has nothing of theirs to undo: `if (N := Ns[0], N > 0, D := dup[P])` is
+  `if (N := Ns[0], N > 0) then (if (D := dup[P]) …)`, the `else` the same
+  in both.
 
   A cast can also open type arguments the object's type has no names for
   (#250): `if (P := pairE[E]) then (Eval(P.L), Eval(P.R))`, for
@@ -582,9 +588,10 @@ circle := class(shape, labelled):
     a prefix of its own (see below, #351); a cast from
     a reference to such an interface (or one above it) to a class or
     interface with type arguments, its own or ones it fixes (`c :=
-    class(i1(int), i2(string))`), other than as the first clause of an
-    `if`'s condition, whose branch is then a function of its own as below
-    (#243: it cannot suspend, `return`, and so on), or to one neither above
+    class(i1(int), i2(string))`), other than as a clause of an `if`'s
+    condition (the first, or one after clauses that print, change an
+    object and call nothing), whose branch is then a function of its own
+    as below (#243: it cannot suspend, and so on), or to one neither above
     nor below it, and a named argument's default computed by code (not a
     literal) in a call through one, or to a class that fixes type
     arguments from generic code, when it reads the receiver (its field),
@@ -592,7 +599,9 @@ circle := class(shape, labelled):
     a type the dispatch refines (#351: others are evaluated in the call, as
     that class's, once); a cast `T[X]` whose type
     arguments agree with `X`'s only under a refinement (`dup[P]` for
-    `P:pair(a, b)`) other than as the first clause of an `if`'s condition, whose
+    `P:pair(a, b)`) other than as a clause of an `if`'s condition (the
+    first, or one after clauses that print nothing, change no object and
+    call nothing, #243), whose
     branch has a `return` or a `break` that leaves it where the `if`'s value
     is used at a type not known there, whose branch or `else` suspends, whose branch calls
     `(super:)`, or in a `defer:`, a constructor's items, a class's `block:` clause, a default
