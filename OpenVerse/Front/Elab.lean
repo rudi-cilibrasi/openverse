@@ -5206,6 +5206,16 @@ partial def elabAppBase (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (b
                     let some j := ms.named.findIdx? (·.1 == n) | refuseOpen
                     let τ := (declTy ms.params[npos + j]!).subst σu
                     if τ.params.any ownNames.contains then refuseOpen
+                    -- (the declaration's type must hold the default: an
+                    -- option for `false`, an array or a map for `array{}`,
+                    -- `map{}` or `""`; one at a bare type parameter,
+                    -- `?Extra:t`, cannot, whatever the implementation's)
+                    let holds := match litOf t rcE, τ with
+                      | .lit .none, .opt _ => true
+                      | .lit (.arr _), .arr _ | .lit (.arr _), .map _ _ => true
+                      | _, _ => false
+                    if !holds then
+                      eerr p s!"cannot dispatch {m} to class {e} yet when its default for ?{n} has no type of its own: {m} declares ?{n} as {τ.show} there, which the dispatch would have to open to hold the default; give ?{n} at the call (#209)"
                     tv ← fresh τ
                   typed := typed ++ [(t, .ite (.prim .fail []) (.local tv) (litOf t rcE))]
                 let some (.call fi (.local s0 :: es)) := Expr.inlineArgTemps rcE typed
