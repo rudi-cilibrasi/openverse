@@ -941,6 +941,13 @@ types with nothing in common join at `any`: `if (C?) then 42 else "text"`,
 supertypes are still an ambiguity, and an expected type still decides
 (`X:int = if (C?) then 1 else "a"` is refused).
 
+The order of the branches doesn't matter (#366): a later branch is
+elaborated against the first's type, and when that gives `any`, or the
+first has no type on its own, every branch is tried against a later one's
+type. So `if (C?) then false else option{4}` is a `?int`, as
+`if (C?) then option{4} else false` is, and so is the choice
+`false | option{4}`; `if (C?) then array{} else array{4}` is a `[]int`.
+
 Nothing can be done with an `any`: it has no equality (so it is no map
 key), no `ToString`, and no cast back. So in Verse Core it is `void`: a
 value becomes an `any` by being evaluated.
