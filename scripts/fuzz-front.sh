@@ -10,7 +10,7 @@ root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 n="${1:-300}"; seed="${2:-1}"
 ov="$root/.lake/build/bin/openverse"; cv="$root/runtime/build/cverse"
 tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
-python3 -I - "$root/tests/verse" "$tmp" "$n" "$seed" <<'PY'
+python3 -I - "$root/tests/verse" "$tmp" "$n" "$seed" <<'PY' || { echo "GENERATOR FAILED seed $seed"; exit 1; }
 import os, random, re, sys
 src, out, n, seed = sys.argv[1], sys.argv[2], int(sys.argv[3]), int(sys.argv[4])
 rnd = random.Random(seed)

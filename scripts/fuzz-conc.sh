@@ -14,7 +14,9 @@ ov="$root/.lake/build/bin/openverse"; cv="$root/runtime/build/cverse"
 tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
 ran=0; bad=0
 for ((s=first; s<first+n; s++)); do
-  python3 -I "$root/scripts/gen-conc.py" "$s" > "$tmp/p.verse"
+  if ! python3 -I "$root/scripts/gen-conc.py" "$s" > "$tmp/p.verse"; then
+    bad=$((bad+1)); echo "GENERATOR FAILED seed $s"; continue
+  fi
   rm -f "$tmp/p.vbc"
   timeout 60 "$ov" run "$tmp/p.verse" --emit "$tmp/p.vbc" > "$tmp/l.out" 2> "$tmp/l.err"; le=$?
   if [[ $le -ne 0 ]]; then
