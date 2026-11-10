@@ -34,6 +34,9 @@ R = None
 # (#387: an overridden method of a generic class; a generator of its own decides, so seeds keep
 # their other programs)
 R387 = None
+# (#392: a named parameter with a default; a generator of its own decides, so seeds keep their
+# other programs)
+R392 = None
 
 # ---------------------------------------------------------------- types
 CLASSES = ["cat", "dog", "animal"]
@@ -145,6 +148,10 @@ class Producer:
         if k == "I2":
             self.path = "inlined"; self.params = [("X", "t"), ("Y", "t")]
             self.src = "%s(X:t, Y:t where t:type):t = X | Y" % n
+            # (#392: at times Y is a named parameter whose default is X: given as ?Y := y, or omitted)
+            self.named = R392.random() < 0.3
+            if self.named:
+                self.src = "%s(X:t, ?Y:t = X where t:type):t = X | Y" % n
         elif k == "I3":
             self.path = "inlined"; self.params = [("X", "t"), ("Y", "t"), ("Z", "t")]
             self.src = "%s(X:t, Y:t, Z:t where t:type):t = X | Y | Z" % n
@@ -264,7 +271,7 @@ class Producer:
         n = self.name
         if self.kind == "INest":
             self.src = ("%s(X:t, Y:t, Z:t where t:type):t =\n"
-                        "    W := %s(X, Y)\n    W | Z") % (n, h.name)
+                        "    W := %s\n    W | Z") % (n, h.call(["X", "Y"]))
         elif self.kind == "ILz":
             self.fx = h.fx
             self.src = ("%s(A:[]t, K:int where t:type)%s<decides>:t =\n"
@@ -301,6 +308,8 @@ class Producer:
         return pre + [("dyn", rest)]
 
     def call(self, args):
+        if getattr(self, "named", False):
+            args = [args[0]] + ([] if args[1] is None else ["?Y := " + args[1]])
         if self.decides: return "%s[%s]" % (self.name, ", ".join(args))
         return "%s(%s)" % (self.name, ", ".join(args))
 
@@ -454,9 +463,10 @@ class Machine:
 # ---------------------------------------------------------------- the program
 class Gen:
     def __init__(self, seed):
-        global R, R387
+        global R, R387, R392
         R = random.Random(seed)
         R387 = random.Random(seed * 1000003 + 387)
+        R392 = random.Random(seed * 1000003 + 392)
         self.seed = seed
         self.prods = []
         self.consumers = []    # source of generic consumers
@@ -480,7 +490,7 @@ class Gen:
 
     # arguments at type ty: (verse strings, model dict). mixed: the classes
     # of a t may differ (sibling classes)
-    def args(self, p, ty, mode, choices=True):
+    def args(self, p, ty, mode, choices=True, omit_ok=False):
         """mode (for classes): same (one class), mixed (any classes), parent
         (the first argument that gives t through a variable of the parent's
         type). Returns the arguments, their values, the lines declaring such
@@ -533,6 +543,10 @@ class Gen:
                 first = False
                 out.append(lit)
                 vals[nm] = ("arr", tuple(v for _, v in xs))
+        if getattr(p, "named", False) and omit_ok and R392.random() < 0.5:
+            # (#392: Y omitted for its default X, its value drawn anyway; Producer.call names it)
+            out[1] = None; vals["Y"] = vals["X"]
+            if len(st) > 1: st.pop(1)
         bad = bool(st) and any(c != st[0] and st[0] != "animal" for c in st[1:])
         self.lastst = st[0] if st else None
         return out, vals, pre, bad
@@ -558,7 +572,8 @@ class Gen:
         mode = R.choices(["same", "parent", "mixed"], [0.55, 0.35, 0.10])[0]
         form = R.choice(["for", "for", "forf", "for2", "if", "if", "ifp", "first", "option",
                          "logic", "not", "forexp", "gfor", "gif", "gopt", "gmv", "decides"])
-        args, vals, pre, mixed = self.args(p, ty, mode, choices=form not in ("gfor", "gif", "gopt", "decides"))
+        args, vals, pre, mixed = self.args(p, ty, mode, choices=form not in ("gfor", "gif", "gopt", "decides"),
+                                           omit_ok=form not in ("gfor", "gif", "gopt", "gmv"))
         st = self.lastst
         self.main.extend(pre)
         call = p.call(args)
@@ -586,7 +601,7 @@ class Gen:
             q = R.choice(self.prods)
             ty2 = self.pick_ty(q)
             self.paths.add(q.path)
-            args2, vals2, pre2, _ = self.args(q, ty2, "same")
+            args2, vals2, pre2, _ = self.args(q, ty2, "same", omit_ok=True)
             self.main.extend(pre2)
             W = self.fresh("W")
             mid = R.random() < 0.5
