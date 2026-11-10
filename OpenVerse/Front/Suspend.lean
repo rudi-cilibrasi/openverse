@@ -115,10 +115,12 @@ structure Callee where
 def frS : Nat := 0
 def schS : Nat := 1
 
-/-- Frame fields: the suspension point the body is at (0: not started), the
-    result, one field per suspension point (a callee's frame), two per arm
-    of a `sync` or `race` (its suspension point, whether it is done), then
-    the slots. -/
+/-- Frame fields: the suspension point the body is at (0: not started; -1:
+    done, in a program whose scheduler resumes waiting frames directly,
+    #362), the result, one field per suspension point (a callee's frame),
+    two per arm of a `sync` or `race` (its suspension point, whether it is
+    done), then the slots (and a root's waiting frame to resume first, #362,
+    which `lowerConcurrency` adds). -/
 def pcF : Nat := 0
 def resF : Nat := 1
 def childF (k : Nat) : Nat := 2 + (k - 1)
@@ -138,6 +140,18 @@ def vd : Expr := .lit .void
 def fr : Expr := .local frS
 def fget (f : Nat) : Expr := .heap (.get f) [fr]
 def fset (f : Nat) (v : Expr) : Expr := .heap (.set f) [fr, v]
+
+/-- The end of a function's body: stop its branches, mark the frame done
+    (so that resuming it again gives 1 at once: once the scheduler resumed
+    it alone and it ended, its caller, resumed from the root, polls it
+    again, #362) and give 1. -/
+def doneRet (leaf : Option Nat) : Expr :=
+  match leaf with
+  -- (and what frames below recorded is forgotten: each is done or was
+  -- cancelled, as by a `return` from an arm, #362)
+  | some leafDepthF => .seq killMark (.seq (fset pcF (int (-1)))
+      (.seq (.heap (.set leafDepthF) [.local 1, int (-1)]) (.ret (int 1))))
+  | none => .seq killMark (.ret (int 1))
 
 /-- Statements in sequence, of type `void`. -/
 def seqVoid (ss : List Expr) : Expr := ss.foldr .seq vd
@@ -167,18 +181,18 @@ partial def shift (d : Nat) : Expr → Expr
     stop its branches and give 1 (done), or (in an arm of a `sync`, `race`
     or `rush`) give 2: the function returns, which the code around the arm
     carries out. -/
-partial def retToDone (arm : Bool := false) : Expr → Expr
-  | .ret e => .seq (fset resF (retToDone arm e))
-      (if arm then .ret (int 2) else .seq killMark (.ret (int 1)))
-  | .assign i e => .assign i (retToDone arm e)
-  | .forE i it f b => .forE i (retToDone arm it) (retToDone arm f) (retToDone arm b)
-  | .seq a b => .seq (retToDone arm a) (retToDone arm b)
-  | .prim p es => .prim p (es.map (retToDone arm))
-  | .call f es => .call f (es.map (retToDone arm))
-  | .heap op es => .heap op (es.map (retToDone arm))
-  | .ite c t e => .ite (retToDone arm c) (retToDone arm t) (retToDone arm e)
-  | .loop b => .loop (retToDone arm b)
-  | .print e => .print (retToDone arm e)
+partial def retToDone (arm : Bool := false) (leaf : Option Nat := none) : Expr → Expr
+  | .ret e => .seq (fset resF (retToDone arm leaf e))
+      (if arm then .ret (int 2) else doneRet leaf)
+  | .assign i e => .assign i (retToDone arm leaf e)
+  | .forE i it f b => .forE i (retToDone arm leaf it) (retToDone arm leaf f) (retToDone arm leaf b)
+  | .seq a b => .seq (retToDone arm leaf a) (retToDone arm leaf b)
+  | .prim p es => .prim p (es.map (retToDone arm leaf))
+  | .call f es => .call f (es.map (retToDone arm leaf))
+  | .heap op es => .heap op (es.map (retToDone arm leaf))
+  | .ite c t e => .ite (retToDone arm leaf c) (retToDone arm leaf t) (retToDone arm leaf e)
+  | .loop b => .loop (retToDone arm leaf b)
+  | .print e => .print (retToDone arm leaf e)
   | e => e
 
 /-- Whether `e` contains a suspension point (a call of a function that
@@ -495,6 +509,18 @@ structure Env where
   expTy : Option VTy := none
   rS : Nat
   regionTotal : Nat
+  /-- The scheduler's fields recording the frame to resume first (#362):
+      `$Leaf` (none: the root), and `$LeafDepth`, the number of waiting
+      frames above it that the resumption went through (-1: none recorded). -/
+  leafF : Nat := 0
+  leafDepthF : Nat := 0
+  /-- The function is a root (a spawn's or `Main`): its frame waiting
+      records none, the root itself. -/
+  isRoot : Bool := false
+  /-- The program may make chains deep enough for the scheduler to resume
+      their waiting frames directly (#362): else nothing is recorded, and
+      frames are not marked done. -/
+  leafy : Bool := false
 
 structure St where
   /-- The functions' slot types (shared by the body and its arms). -/
@@ -546,6 +572,10 @@ def ownKills (st : St) (lo hi owner : Nat) : St :=
 
 abbrev M := ReaderT Env (StateT St (Except String))
 
+/-- The scheduler's `$LeafDepth` field where the program records waiting
+    frames (#362). -/
+def Env.leafOpt (env : Env) : Option Nat := if env.leafy then some env.leafDepthF else none
+
 /-- A new slot whose value is kept across suspension points (in the frame). -/
 def fresh (τ : VTy) : M Nat :=
   modifyGet fun st => (st.Γ.size, { st with Γ := st.Γ.push τ, trans := st.trans.push false })
@@ -572,6 +602,39 @@ def inRange (lo hi : Nat) : M Expr := do
   return .seq (.prim .le [int lo, pc]) (.prim .le [pc, int hi])
 
 def seeking : M Expr := do return .prim .eq [.local (← read).rS, int 1]
+
+/-- The statement of a frame that waits (#362): it records itself in the
+    scheduler as the frame to resume first (none for a root: the root
+    itself), unless a frame it called did, which it waits for (it then
+    counts itself above that one); `force`: also then, as what it waits for
+    is resumed only through it (the arms of a `sync`, `race` or `rush`). A
+    frame called through `Typed.dispatch` records itself as any other: the
+    scheduler resumes it through `$resumeAny`, which opens its type
+    arguments, and an opened one's `resumeOwn` writes its result cells. Recording a frame above the one
+    that waits is always sound: resuming it resumes what it waits for, as
+    each pass did before (#362). -/
+def waitsHere (force : Bool) : M Expr := do
+  let env ← read
+  let v : Expr := if env.isRoot then .lit .none else .prim .mkSome [fr]
+  let sch : Expr := .local schS
+  let depth : Expr := .heap (.get env.leafDepthF) [sch]
+  let setIt := seqVoid [.heap (.set env.leafF) [sch, v], .heap (.set env.leafDepthF) [sch, int 0]]
+  if force then return setIt
+  return .ite (.prim .lt [depth, int 0]) (.seq setIt vd)
+    (.seq (.heap (.set env.leafDepthF) [sch, .prim .add [depth, int 1]]) vd)
+
+/-- What frames below recorded is forgotten (#362): after a `sync`,
+    `race` or `rush` whose arms waited ends, the frame goes on, and a frame
+    that waits after records itself afresh. -/
+def forgetWaits : M (List Expr) := do
+  if !(← read).leafy then return []
+  return [.heap (.set (← read).leafDepthF) [.local schS, int (-1)]]
+
+/-- `rest` (storing the slots and giving 0), after `waitsHere force` in a
+    program whose scheduler resumes waiting frames directly (#362). -/
+def waitThen (force : Bool) (rest : Expr) : M Expr := do
+  if !(← read).leafy then return rest
+  return .seq (← waitsHere force) rest
 
 /-- Run `prod`, a statement, and guard it so that it is skipped while
     seeking a suspension point outside it. No guard is needed when none of
@@ -708,7 +771,7 @@ partial def block (e : Expr) (k : Option (Expr → Expr)) : M (List Expr) := do
   -- code is emitted: inference sees the code as written)
   if !(← hasS e) then
     let e ← loopify e k.isSome
-    return [← emit (pure (app k (retToDone (← read).inArmR e)))]
+    return [← emit (pure (app k (retToDone (← read).inArmR (← read).leafOpt e)))]
   match e with
   -- the defers active at the suspension points of `b` (`withDeferMark`)
   | .seq (.ite (.prim .fail []) d (.lit .void)) b =>
@@ -731,7 +794,7 @@ partial def block (e : Expr) (k : Option (Expr → Expr)) : M (List Expr) := do
         | none => block t k
       let mid := (← get).next
       let eb ← block e2 k
-      let sel : Expr := .ite (← seeking) (.ite (← inRange lo mid) (int 1) (int 0)) (.ite (retToDone (← read).inArmR c) (int 1) (int 0))
+      let sel : Expr := .ite (← seeking) (.ite (← inRange lo mid) (int 1) (int 0)) (.ite (retToDone (← read).inArmR (← read).leafOpt c) (int 1) (int 0))
       pure (.seq (.assign b sel) (.ite (.prim .eq [.local b, int 1]) (seqVoid tb) (seqVoid eb)))]
   | .loop body =>
     let l ← emit do pure (.loop (seqVoid (← block body none)))
@@ -745,7 +808,7 @@ partial def block (e : Expr) (k : Option (Expr → Expr)) : M (List Expr) := do
       let a ← fresh (← infer it)
       let pre ← block it (some (.assign a ·))
       let fe ← loopify (.forE i (.local a) filt body) k.isSome
-      return pre ++ [← emit (pure (app k (retToDone (← read).inArmR fe)))]
+      return pre ++ [← emit (pure (app k (retToDone (← read).inArmR (← read).leafOpt fe)))]
     -- a loop over an index (and the array of the body's values, when used)
     let a ← fresh (← infer it)
     let ix ← fresh .int
@@ -846,11 +909,12 @@ partial def block (e : Expr) (k : Option (Expr → Expr)) : M (List Expr) := do
     return pre ++ [← emit (pure (app k (.print rs.head!)))]
   | .ret e1 =>
     let arm := (← read).inArmR
+    let leaf := (← read).leafOpt
     withReader (fun env => { env with expTy := some env.ρ })
-      (block e1 (some fun v => .seq (fset resF v) (if arm then .ret (int 2) else .seq killMark (.ret (int 1)))))
+      (block e1 (some fun v => .seq (fset resF v) (if arm then .ret (int 2) else doneRet leaf)))
   | e =>
     let e ← loopify e k.isSome
-    return [← emit (pure (app k (retToDone (← read).inArmR e)))]
+    return [← emit (pure (app k (retToDone (← read).inArmR (← read).leafOpt e)))]
 
 /-- Operands evaluated left to right, some of which suspend: those before
     the last that suspends go to temporaries first. -/
@@ -862,7 +926,7 @@ partial def operands (es : List Expr) (hints : List (Option VTy) := []) : M (Lis
     let mut pre : Array Expr := #[]
     let mut rs : Array Expr := #[]
     for (e, i) in es.zipIdx do
-      if i > j || (i < j && stable e) then rs := rs.push (retToDone (← read).inArmR (← loopify e))
+      if i > j || (i < j && stable e) then rs := rs.push (retToDone (← read).inArmR (← read).leafOpt (← loopify e))
       else
         -- (one with no type of its own, `if … then array{} else array{}`:
         -- the type it is checked against, when known, #188)
@@ -917,7 +981,7 @@ partial def suspendAt (g : Nat) (c : Callee) (rs : List Expr) : M (Expr × Expr)
   let pass := if c.passFields.isEmpty then [] else as
   let poll : Expr := seqVoid [.assign y (fget cf),
     .assign st (.ite isC (.call c.resumeFn (.local y :: .local schS :: pass)) (.prim .userErr []))]
-  let pend : Expr := .ite (.prim .eq [.local st, int 0]) (.seq spillMark (.ret (int 0))) vd
+  let pend : Expr := .ite (.prim .eq [.local st, int 0]) (← waitThen false (.seq spillMark (.ret (int 0)))) vd
   let found : Expr := .assign env.rS (int 0)
   match c.resField, c.resultFn with
   | some _, some rfn =>
@@ -972,7 +1036,7 @@ partial def suspendSelf (us : List Nat) (y : Nat) (c : Callee) (rs : List Expr) 
     fset env.pcFld (int k)])
   let poll : Expr := seqVoid [.assign w (fget cf),
     .assign st (.ite (.heap (.isTag [c.tag]) [.local w]) (.call resumeFn [.local w, .local schS]) (.prim .userErr []))]
-  let pend : Expr := .ite (.prim .eq [.local st, int 0]) (.seq spillMark (.ret (int 0))) vd
+  let pend : Expr := .ite (.prim .eq [.local st, int 0]) (← waitThen false (.seq spillMark (.ret (int 0)))) vd
   let found : Expr := .assign env.rS (int 0)
   match c.resField, valued with
   | some _, true =>
@@ -1095,7 +1159,7 @@ partial def suspendSelfOpen (us : List Nat) (y : Nat) (c : Callee) (rs : List Ex
     fset env.pcFld (int k)])
   let poll : Expr := seqVoid [.assign w (fget cf),
     .assign st (.ite (.heap (.isTag [c.tag]) [.local w]) (.call resumeFn [.local w, .local schS]) (.prim .userErr []))]
-  let pend : Expr := .ite (.prim .eq [.local st, int 0]) (.seq spillMark (.ret (int 0))) vd
+  let pend : Expr := .ite (.prim .eq [.local st, int 0]) (← waitThen false (.seq spillMark (.ret (int 0)))) vd
   let found : Expr := .assign env.rS (int 0)
   let value : Expr ← match narrow with
     | some (_, some usτ) => do
@@ -1154,7 +1218,7 @@ partial def concAt (isSync : Bool) (arms : List Expr) (isRush : Bool := false) :
     info.toList.reverse.map (fun (_, can, pcA, doneA) =>
       Expr.ite (allOf [.prim .ne [fget pcA, int 0], .prim .eq [fget doneA, int 0]])
         (.seq (seqVoid [.call can args, fset doneA (int 2)]) vd) vd) ++
-    [defersHere, if env.pcFld == pcF then .seq killMark (.ret (int 1)) else .ret (int 2)])
+    [defersHere, if env.pcFld == pcF then doneRet env.leafOpt else .ret (int 2)])
   let run (res doneA : Nat) : Expr := seqVoid [spillMark, .assign st (.call res args),
     .ite (.prim .eq [.local st, int 1]) (.seq (fset doneA (int 1)) vd) vd,
     .ite (.prim .eq [.local st, int 2]) (.seq (seqVoid [fset doneA (int 1), returning]) vd) vd, reloadMark]
@@ -1162,15 +1226,16 @@ partial def concAt (isSync : Bool) (arms : List Expr) (isRush : Bool := false) :
     let polls := info.toList.map fun (res, _, _, doneA) =>
       Expr.ite (.prim .eq [fget doneA, int 0]) (.seq (run res doneA) vd) vd
     let all := allOf (info.toList.map fun (_, _, _, doneA) => .prim .eq [fget doneA, int 1])
-    let wait : Expr := .ite all vd (.seq spillMark (.ret (int 0)))
-    return seqVoid ([arrive, found] ++ polls ++ [wait])
+    let wait : Expr := .ite all vd (← waitThen true (.seq spillMark (.ret (int 0))))
+    return seqVoid ([arrive, found] ++ polls ++ [wait] ++ (← forgetWaits))
   else
     let w ← freshT .int
     let polls := info.toList.zipIdx.map fun ((res, _, _, doneA), i) =>
       Expr.ite (.prim .eq [.local w, int (-1)])
         (.seq (Expr.ite (.prim .eq [fget doneA, int 0])
           (.seq (seqVoid [run res doneA, .ite (.prim .eq [fget doneA, int 1]) (.seq (.assign w (int i)) vd) vd]) vd) vd) vd) vd
-    let wait : Expr := .ite (.prim .eq [.local w, int (-1)]) (.seq spillMark (.ret (int 0))) vd
+    let wait : Expr := .ite (.prim .eq [.local w, int (-1)])
+      (← waitThen true (.seq spillMark (.ret (int 0)))) vd
     if isRush then
       -- the arms that started and are pending go on as tasks, through
       -- their wrappers (registered, not run), stopped when the function exits
@@ -1184,12 +1249,12 @@ partial def concAt (isSync : Bool) (arms : List Expr) (isRush : Bool := false) :
         modify fun st => { st with branchArms := st.branchArms.set! i (res, doneA, false) }
         goOn := goOn.push (Expr.ite (allOf [.prim .ne [.local w, int j], .prim .ne [fget pcA, int 0], .prim .eq [fget doneA, int 0]])
           (.seq (fset (childF site) (.call startFn [.local schS, fr])) vd) vd)
-      return seqVoid ([arrive, found, .assign w (int (-1))] ++ polls ++ [wait] ++ goOn.toList)
+      return seqVoid ([arrive, found, .assign w (int (-1))] ++ polls ++ [wait] ++ (← forgetWaits) ++ goOn.toList)
     -- the winner cancels the arms that started and are pending, last first
     let cancels := info.toList.zipIdx.reverse.map fun ((_, can, pcA, doneA), i) =>
       Expr.ite (allOf [.prim .ne [.local w, int i], .prim .ne [fget pcA, int 0], .prim .eq [fget doneA, int 0]])
         (.seq (seqVoid [spillMark, .call can args, reloadMark, fset doneA (int 2)]) vd) vd
-    return seqVoid ([arrive, found, .assign w (int (-1))] ++ polls ++ [wait] ++ cancels)
+    return seqVoid ([arrive, found, .assign w (int (-1))] ++ polls ++ [wait] ++ (← forgetWaits) ++ cancels)
 
 /-- Lower `body` as a region whose suspension point is in field `pcFld`:
     its resume body (ending with `done`, or, for an arm, storing the slots
@@ -1209,7 +1274,11 @@ partial def region (pcFld : Nat) (done : Option (Expr → Expr)) (body : Expr) :
   let finish : List Expr := match done with
     | some _ => []
     | none => [spillMark]
-  let resume := Expr.seq (seqVoid ([reloadMark, seek] ++ stmts ++ finish)) (int 1)
+  -- (a frame that is done gives 1 again, #362)
+  let doneAgain : List Expr := if pcFld == pcF && env.leafy then
+      [.ite (.prim .eq [fget pcF, int (-1)]) (.seq (.ret (int 1)) vd) vd]
+    else []
+  let resume := Expr.seq (seqVoid (doneAgain ++ [reloadMark, seek] ++ stmts ++ finish)) (int 1)
   -- cancel: what the current suspension point waits for, then its defers
   let args ← armArgs
   let cancelAt (s : Site) : Expr :=
@@ -1232,8 +1301,11 @@ partial def region (pcFld : Nat) (done : Option (Expr → Expr)) (body : Expr) :
   -- (a function's cancel also stops its branches, before the rest)
   -- (a function's branches are stopped last, after its own defers, as when
   -- it returns)
+  -- (where frames are resumed directly, #362, the cancelled frame is marked
+  -- done, so a record of it that stayed would resume it from the root)
   let cancel := seqVoid ([reloadMark] ++ st.sites.toList.map cancelAt ++
-    (if pcFld == pcF then [killMark] else []) ++ [spillMark])
+    (if pcFld == pcF then [killMark] else []) ++
+    (if pcFld == pcF && env.leafy then [fset pcF (int (-1))] else []) ++ [spillMark])
   modify fun st => { st with regionNext := saved.regionNext, sites := saved.sites, defers := saved.defers }
   return (resume, cancel)
 end
@@ -1412,7 +1484,8 @@ structure Lowered where
     refined calls' helpers. -/
 def lower (S : Sigs) (callee : Nat → Option Callee) (syncMark raceMark rushMark spawnMark : Nat) (spawns : Array (Nat × Nat))
     (branchMark : Nat) (branches : Array (Nat × Nat × Nat))
-    (arity : Nat) (Γ : List VTy) (ρ : VTy) (frameTy : VTy) (schedTag nilTag resCellTag : Nat) (fnBase : Nat) (b : Expr) :
+    (arity : Nat) (Γ : List VTy) (ρ : VTy) (frameTy : VTy) (schedTag nilTag resCellTag : Nat) (fnBase : Nat) (b : Expr)
+    (leafF leafDepthF : Nat := 0) (isRoot : Bool := false) (leafy : Bool := false) :
     Except String Lowered := do
   let schedTy : VTy := .ref [schedTag] []
   let isM := fun f => f == syncMark || f == raceMark || f == rushMark
@@ -1425,8 +1498,8 @@ def lower (S : Sigs) (callee : Nat → Option Callee) (syncMark raceMark rushMar
   let trans0 := #[true, true] ++ (List.replicate Γ.length false).toArray
   let env : Env := { S, ρ, callee, syncMark, raceMark, rushMark, arity, sites, armsTotal, fnBase, schedTag, nilTag, resCellTag, spawnMark, spawns,
                      branchMark, branches, viaBase := fnBase + 2 * armsTotal, expTy := some ρ,
-                     pcFld := pcF, rS := 0, regionTotal := 0 }
-  let done : Expr → Expr := fun v => .seq (fset resF v) (.seq killMark (.ret (int 1)))
+                     pcFld := pcF, rS := 0, regionTotal := 0, leafF, leafDepthF, isRoot, leafy }
+  let done : Expr → Expr := fun v => .seq (fset resF v) (doneRet (if leafy then some leafDepthF else none))
   let ((res, can), st) ← ((region pcF (some done) b).run env).run { Γ := Γ0, trans := trans0 }
   if st.next != sites || st.armsNext != armsTotal then
     throw "internal error: lowering a <suspends> function: suspension points miscounted"

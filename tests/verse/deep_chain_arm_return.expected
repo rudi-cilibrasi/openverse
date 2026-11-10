@@ -1,0 +1,29 @@
+race 0 unwinds
+race 1 unwinds
+race 2 unwinds
+race 3 unwinds
+race 4 unwinds
+race 5 unwinds
+F gave 7
+P after sleep 1
+P done
+rush 0 unwinds
+rush 1 unwinds
+rush 2 unwinds
+rush 3 unwinds
+rush 4 unwinds
+rush 5 unwinds
+F gave 8
+P after sleep 1
+P done
+sync0 0 unwinds
+sync0 1 unwinds
+sync0 2 unwinds
+sync0 3 unwinds
+sync0 4 unwinds
+sync0 5 unwinds
+F gave 9
+P after sleep 1
+P done
+main done
+exit=0

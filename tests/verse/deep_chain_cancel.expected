@@ -1,0 +1,23 @@
+a unwinds 0
+a unwinds 1
+a unwinds 2
+a unwinds 3
+a unwinds 4
+a unwinds 5
+a unwinds 6
+a unwinds 7
+a unwinds 8
+cancelled
+loser unwinds 0
+loser unwinds 1
+loser unwinds 2
+loser unwinds 3
+loser unwinds 4
+loser unwinds 5
+loser unwinds 6
+race 8
+sync 9 9
+branch ran
+spawner 46
+gen x 3
+exit=0

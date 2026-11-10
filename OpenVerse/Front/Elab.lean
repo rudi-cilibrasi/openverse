@@ -7271,7 +7271,7 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
     (protos : HeapTy) (pins : List (List (Option VTy))) (inFn : String → String → String)
     (fns0 : Array Fn) (slotTys0 : Array (List VTy)) (fsigsIn : List (List VTy × VTy)) (classTable0 : List (List VTy)) :
     Except String (Array Fn × Array (List VTy) × List (List VTy × VTy) × List (List VTy) × Array (List VTy) × Expr ×
-      List (List (Option VTy))) := do
+      List (List (Option VTy)) × List Value) := do
   let mut fns := fns0
   let mut slotTys := slotTys0
   let mut fsigs := fsigsIn
@@ -7281,6 +7281,8 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
   -- and a branch wrapper's are on all of their type arguments, so that the
   -- scheduler's dispatch opens them)
   let mut framePins : Array (List (Option VTy)) := #[]
+  -- (#362: each frame's index of its root's waiting frame, a root's only)
+  let mut topIdx : Array Nat := #[]
   let mut extraSigs : Array (List VTy × VTy) := #[]
   let mut mainCall : Expr := .call mainSig.idx []
   let allS := sigs.toList ++ gsigs.toList
@@ -7435,6 +7437,36 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
   fsigs := fsigs ++ roots.toList.map fun (ri, _, _) => (slotTys[ri]!, VTy.void)
   let lows := user ++ roots.toList
   let nFns := fns.size
+  -- (#362: a root records the waiting frame to resume first, and the
+  -- scheduler the one a resumption found, in fields of this type, after
+  -- the scheduler's own)
+  let frameAny : VTy := .ref ((List.range lows.length).map (tagBase + ·)) []
+  let parTy : VTy := .opt frameAny
+  let leafF := (classTable[schedTag]?.map (·.length)).getD 0
+  let leafDepthF := leafF + 1
+  -- (#362) whether chains of waiting frames can get deep: a suspends
+  -- function calls itself, directly or through others, or a chain of calls
+  -- has more than `leafDepthMin` of them. Only then does the scheduler
+  -- resume a root's waiting frame directly, through a dispatch; resuming
+  -- a short chain from its root costs no more, and the program is then
+  -- compiled as before (its frames not marked done, nothing recorded)
+  let leafDepthMin : Nat := 4
+  let callsIn : Array (List Nat) := lows.toArray.map fun (gi, _, _) =>
+    ((Suspend.callsOf fns[gi]!.body).filterMap fun (f, _) => lows.findIdx? (·.1 == f)).eraseDups
+  let leafy : Bool := Id.run do
+    -- (the most functions a chain from each has, until nothing grows: still
+    -- growing after as many rounds as functions, a cycle)
+    let mut d : Array Nat := Array.replicate lows.length 1
+    let mut grew := false
+    for _ in [0:lows.length + 1] do
+      grew := false
+      for j in [0:lows.length] do
+        let m := ((callsIn[j]?.getD []).map fun i => d[i]?.getD 0).foldl max 0
+        if m + 1 > d[j]! then
+          d := d.set! j (m + 1)
+          grew := true
+      if !grew then break
+    return grew || d.any (· > leafDepthMin)
   let isS : Nat → Bool := fun f => f == sleepIdx || f == waitIdx || isMark f || lows.any (·.1 == f)
   -- each one's body (initialisations stripped), suspension points and arms
   let mut parts : Array (List Expr × Expr × Nat × Nat) := #[]
@@ -7637,6 +7669,7 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
   for d in env.classes do
     if let some ri := (env.fields d).findIdx? (·.1 == "$Root") then
       classTable := classTable.set (env.tagOf d) ((classTable[env.tagOf d]!).set ri (.opt rootAny))
+  if leafy then classTable := classTable.set schedTag (classTable[schedTag]! ++ [parTy, .int])
   let Sinf : Sigs := { fns := fsigs0 ++ extraSigs.toList ++ selfSigs.toList ++ rootSigs.toList, classes := classTable,
                        protos, pins }
   let mut newFns : Array Fn := #[]
@@ -7673,6 +7706,39 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
       (.seq (Suspend.seqVoid [.heap (.set cancelCurF) [.local 0, .lit (.logic false)],
         .ite (.prim .eq [st, Suspend.int 1]) Suspend.vd (.seq (.call cancelRootMark [.local 0, root]) Suspend.vd)])
         Suspend.vd) Suspend.vd
+  -- (#362) a root's chain resumed from the waiting frame it recorded,
+  -- through `$resumeAny` (a mark: its index is known only later), else, or
+  -- once that frame is done, from the root itself (`direct`), in slot `st`
+  -- (slot `t` holding the frame, `s` its result, `f` whether it waits). The
+  -- root then records the frame its resumption found waiting: from the
+  -- recorded frame, the one found; from the root, the one found only when
+  -- at least `leafDepthMin` waiting frames are above it (nearer, resuming
+  -- from the root costs no more than the dispatch to it); else none, which
+  -- resumes the whole chain, as each pass did before
+  let resumeAnyMark : Nat := 0xFFFFFD
+  let forget (sch : Expr) : List Expr := if leafy then [.heap (.set leafDepthF) [sch, Suspend.int (-1)]] else []
+  let depth (sch : Expr) : Expr := .heap (.get leafDepthF) [sch]
+  let resumeChain (root sch direct : Expr) (topF t st s f : Nat) : List Expr :=
+    if !leafy then [.assign st direct] else
+    let forget (sch : Expr) : Expr := .heap (.set leafDepthF) [sch, Suspend.int (-1)]
+    [
+    .assign f (Suspend.int 0),
+    .assign st (.ite (.assign t (.prim .query [.heap (.get topF) [root]]))
+      (.seq (forget sch)
+        (.seq (.assign s (.call resumeAnyMark [.local t, sch]))
+          (.ite (.prim .eq [.local s, Suspend.int 1])
+            (.seq (forget sch) direct)
+            (.seq (.assign f (Suspend.int 1)) (.local s)))))
+      (.seq (forget sch) direct)),
+    .ite (.prim .eq [.local st, Suspend.int 0])
+      (.seq (.heap (.set topF) [root, .ite (.prim .lt [depth sch, Suspend.int 0]) (.lit .none)
+          (.ite (.prim .eq [.local f, Suspend.int 1]) (.heap (.get leafF) [sch])
+            (.ite (.prim .le [Suspend.int leafDepthMin, depth sch]) (.heap (.get leafF) [sch]) (.lit .none)))])
+        Suspend.vd) Suspend.vd]
+  -- (and after a root's first run, inline in another's resumption, what it
+  -- recorded is forgotten: the other's frames record afresh when they wait,
+  -- as one that recorded before in this resumption is in an arm of a
+  -- `sync`, `race` or `rush`, which records itself or forgets, #362)
   let tDoneF := fieldIdx "task" "$Done"
   let tCancelledF := fieldIdx "task" "$Cancelled"
   let runningF := fieldIdx "task" "$Running"
@@ -7695,8 +7761,9 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
       (nFns + 4 * rootJ k, trampOf k + 1)
     let branches : Array (Nat × Nat × Nat) := ((branchOf[j]?).getD []).toArray.map fun K =>
       (wrapFnBase + 3 * K + 1, wrapFnBase + 3 * K + 2, wrapTag K)
+    let isRoot := j ≥ user.length || (mainSig.suspends && gi == mainSig.idx)
     let low ← (Suspend.lower Sinf callee syncMark raceMark rushMark spawnMark spawns branchMark branches a Γ ρ (frameTy j)
-      schedTag nilTag resCellTag fnBase b).mapError fun e => inFn gname e
+      schedTag nilTag resCellTag fnBase b leafF leafDepthF isRoot leafy).mapError fun e => inFn gname e
     -- its branches' wrappers: `tramp(w, sched)` resumes the arm (with the
     -- function's parameters from its frame) unless the function stopped
     -- it; `start(sched, frame)` makes the wrapper, registers it and runs
@@ -7742,8 +7809,9 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
       let register : Expr := .call linkIdx [.local 0, .local 2]
       let start : Expr := .seq (Suspend.seqVoid (if !runNow then [register] else [register,
         .assign 4 (.heap (.get cancelCurF) [.local 0]),
-        .heap (.set cancelCurF) [.local 0, .lit (.logic false)],
-        .assign 3 (.call (wrapFnBase + 3 * K) [.local 2, .local 0]),
+        .heap (.set cancelCurF) [.local 0, .lit (.logic false)]] ++
+        -- (what its run recorded is forgotten, as after a root's, #362)
+        [.assign 3 (.call (wrapFnBase + 3 * K) [.local 2, .local 0])] ++ forget (.local 0) ++ [
         takeCancel (.local 2) (.local 3),
         .heap (.set cancelCurF) [.local 0, .local 4],
         .ite (.prim .eq [.local 3, Suspend.int 1])
@@ -7824,9 +7892,14 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
     -- of its type arguments, so that a dispatch opens them, #251)
     let cellF := low.fields.length
     let more := moreOf j
+    -- (a root's last field, #362: its waiting frame to resume first)
     frameClasses := frameClasses.push (low.fields ++
-      (if opened j then cellTyOf j :: more.map fun d => .ref [resCellTag] [d] else []))
-    framePins := framePins.push (if j ≥ user.length || opened j then List.replicate (ntpOfLow j) none else [])
+      (if opened j then cellTyOf j :: more.map fun d => .ref [resCellTag] [d] else []) ++
+      (if leafy && isRoot then [parTy] else []))
+    topIdx := topIdx.push (low.fields.length + (if opened j then 1 + more.length else 0))
+    -- (#362: every generic frame's where the scheduler resumes any waiting
+    -- frame, through a dispatch that opens its type arguments, `$resumeAny`)
+    framePins := framePins.push (if leafy || j ≥ user.length || opened j then List.replicate (ntpOfLow j) none else [])
     -- `g$new(sched, params…)`: the frame, with the arguments and initial
     -- values (a non-generic callee's frame field starts as the scheduler, a
     -- generic one's as an empty object)
@@ -7843,7 +7916,8 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
     let cellDflts : List Expr ← if opened j then (cellResOf j :: more).mapM fun d => do
         pure (.heap (.new resCellTag) [← dflt nps d])
       else pure []
-    let newBody : Expr := .heap (.new (tagBase + j)) (newFields ++ cellDflts)
+    let newBody : Expr := .heap (.new (tagBase + j)) (newFields ++ cellDflts ++
+      (if leafy && isRoot then [.lit .none] else []))
     if opened j then
       -- `newCell(params…, cell, sched)`: `new`'s frame, with the parameters
       -- renumbered and the given cell (one per cell the frame keeps, the
@@ -7924,10 +7998,10 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
     -- the root runs, so that cancelling it from inside waits until it
     -- suspends)
     let task : Expr := .heap (.get (Suspend.slotBaseOf sites arms)) [.local 0]
-    let trampBody : Expr := Suspend.seqVoid [
+    let trampBody : Expr := Suspend.seqVoid ([
       .heap (.set runningF) [task, .lit (.logic true)],
-      .heap (.set curTaskF) [.local 1, task],
-      .assign 2 (.call ri (.local 0 :: .local 1 :: pass)),
+      .heap (.set curTaskF) [.local 1, task]] ++
+      resumeChain (.local 0) (.local 1) (.call ri (.local 0 :: .local 1 :: pass)) topIdx[j]! 4 2 5 6 ++ [
       .heap (.set curTaskF) [.local 1, .local 3],
       .heap (.set runningF) [task, .lit (.logic false)],
       -- (cancelled while it ran, by itself or by a task it started, #253:
@@ -7935,23 +8009,24 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
       .ite (.prim .query [.heap (.get cancelReqF) [task]])
         (.seq (Suspend.seqVoid [.heap (.set cancelReqF) [task, .lit (.logic false)],
           .ite (.prim .eq [.local 2, Suspend.int 1]) Suspend.vd
-            (.seq (.call cancelRootMark [.local 1, .local 0]) Suspend.vd)]) Suspend.vd) Suspend.vd] |>
+            (.seq (.call cancelRootMark [.local 1, .local 0]) Suspend.vd)]) Suspend.vd) Suspend.vd]) |>
         fun e => Expr.seq e (.local 2)
-    rootFns := rootFns.push { name := s!"$spawn{k}$tramp", arity := 2, nslots := 4, decides := false, writes := true,
-                              body := initPrefixE 2 [Suspend.int 0, .heap (.get curTaskF) [.local 1]] trampBody }
-    rootTys := rootTys.push [frameTy j, schedTy, .int, taskBaseTy]
-    let start : Expr := Suspend.seqVoid [
+    rootFns := rootFns.push { name := s!"$spawn{k}$tramp", arity := 2, nslots := if leafy then 7 else 4, decides := false,
+                              writes := true, body := initPrefixE 2 ([Suspend.int 0, .heap (.get curTaskF) [.local 1]] ++
+                                (if leafy then [.local 0, Suspend.int 0, Suspend.int 0] else [])) trampBody }
+    rootTys := rootTys.push ([frameTy j, schedTy, .int, taskBaseTy] ++ (if leafy then [frameAny, .int, .int] else []))
+    let start : Expr := Suspend.seqVoid ([
       .call linkIdx [.local 0, .local 1],
       .heap (.set rootF) [.heap (.get (Suspend.slotBaseOf sites arms)) [.local 1], .prim .mkSome [.local 1]],
       .assign 3 (.heap (.get cancelCurF) [.local 0]),
-      .heap (.set cancelCurF) [.local 0, .lit (.logic false)],
-      .assign 2 (.call (trampOf k) [.local 1, .local 0]),
+      .heap (.set cancelCurF) [.local 0, .lit (.logic false)]] ++
+      [.assign 2 (.call (trampOf k) [.local 1, .local 0])] ++ forget (.local 0) ++ [
       takeCancel (.local 1) (.local 2),
       .heap (.set cancelCurF) [.local 0, .local 3],
       .ite (.prim .eq [.local 2, Suspend.int 1])
         (.seq (Suspend.seqVoid [.heap (.set Suspend.pcF) [.local 1, Suspend.int (-1)],
           .heap (.set progressF) [.local 0, .lit (.logic true)], .heap (.set deadF) [.local 0, .lit (.logic true)]])
-          Suspend.vd) Suspend.vd]
+          Suspend.vd) Suspend.vd])
     rootFns := rootFns.push { name := s!"$spawn{k}$start", arity := 2, nslots := 4, decides := false, writes := true,
                               body := initPrefixE 2 [Suspend.int 0, .lit (.logic false)] start }
     rootTys := rootTys.push [schedTy, frameTy j, .int, .logic]
@@ -8061,6 +8136,17 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
   fns := fns ++ cancelFns
   slotTys := slotTys ++ cancelTys
   fsigs := fsigs ++ cancelSigs.toList
+  -- (#362) `$resumeAny(frame, sched)` resumes any frame, with its parameters
+  -- from itself (its `resumeOwn`, through a dispatch that opens its type
+  -- arguments): a root's recorded waiting frame
+  let resumeAnyIdx := fns.size
+  let resumeAnyBody : Expr := (List.range L).foldr (fun j acc =>
+    Expr.ite (.heap (.isTag [tagBase + j]) [.local 0]) (.call (ownBase + 4 * j + 1) [.local 0, .local 1]) acc)
+    (.prim .userErr [])
+  if leafy then
+    fns := fns.push { name := "$resumeAny", arity := 2, nslots := 2, decides := false, writes := true, body := resumeAnyBody }
+    slotTys := slotTys.push [frameAny, schedTy]
+    fsigs := fsigs ++ [([frameAny, schedTy], .int)]
   -- `T.Cancel()` (the mark `$cancelMark(T)`, in suspends code, whose slot 1
   -- is the scheduler): a task that is not done is cancelled now, or, when
   -- it is the one running (it cancels itself), at its next suspension
@@ -8121,7 +8207,7 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
     let pass : Expr := .loop (Suspend.seqVoid ([
       .heap (.set progressF) [sch, .lit (.logic false)],
       .heap (.set 1) [sch, Suspend.int (-1)],
-      .assign st (.call mainSig.idx [.local 1, sch]),
+      ] ++ resumeChain (.local 1) sch (.call mainSig.idx [.local 1, sch]) topIdx[j]! 8 st 9 10 ++ [
       .ite (.prim .eq [.local st, Suspend.int 1]) (.seq (.assign mainDone (Suspend.int 1)) .brk) Suspend.vd,
       -- (`Main` awaited a cancelled task: it is cancelled, and so the program ends)
       .ite (.prim .query [.heap (.get cancelCurF) [sch]])
@@ -8151,10 +8237,11 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
       .ite (.prim .lt [.heap (.get 1) [sch], Suspend.int 0]) (.seq (.prim .userErr []) Suspend.vd) Suspend.vd,
       .heap (.set 0) [sch, .heap (.get 1) [sch]]]))]
     let cellInit : Expr := .heap (.new cellTag) [.local 1, .lit .none]
-    fns := fns.push { name := "$Run", arity := 2, nslots := 8, decides := false, writes := true,
-                      body := initPrefixE 2 [Suspend.int 0, Suspend.int 0, .local 1, .lit .none,
-                        cellInit, cellInit] run }
-    slotTys := slotTys.push [schedTy, frameTy j, .int, .int, rootAny, .opt cellTy, cellTy, cellTy]
+    fns := fns.push { name := "$Run", arity := 2, nslots := if leafy then 11 else 8, decides := false, writes := true,
+                      body := initPrefixE 2 ([Suspend.int 0, Suspend.int 0, .local 1, .lit .none,
+                        cellInit, cellInit] ++ (if leafy then [.local 1, Suspend.int 0, Suspend.int 0] else [])) run }
+    slotTys := slotTys.push ([schedTy, frameTy j, .int, .int, rootAny, .opt cellTy, cellTy, cellTy] ++
+      (if leafy then [frameAny, .int, .int] else []))
     fsigs := fsigs ++ [([schedTy, frameTy j], VTy.void)]
     -- (the prelude calls a function without arguments, `checkPrelude`)
     -- (the scheduler is its class's prototype, so that immediate code can
@@ -8164,7 +8251,10 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
     slotTys := slotTys.push []
     fsigs := fsigs ++ [([], VTy.void)]
     mainCall := .call (runIdx + 1) []
-  return (fns, slotTys, fsigs, classTable, frameClasses, mainCall, framePins.toList)
+  fns := fns.map fun fn => { fn with body := Suspend.substCall resumeAnyMark (fun es => .call resumeAnyIdx es) fn.body }
+  -- (and the values of the scheduler's fields it adds, #362, for its prototype)
+  return (fns, slotTys, fsigs, classTable, frameClasses, mainCall, framePins.toList,
+    if leafy then [.none, .int (-1)] else [])
 
 /-- Whether `e` itself prints (`Print`), for `checkEager`. -/
 partial def exprPrints : Expr → Bool
@@ -9651,7 +9741,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     | none => throw "the program has no Main() function"
   -- with prototypes, the program starts with a prelude that allocates them
   -- and then calls `Main` (#37)
-  let protoList := env.protos.map fun (_, t, vs) => (t, vs)
+  let mut protoList := env.protos.map fun (_, t, vs) => (t, vs)
   let fsigs0 := sigs.toList.map (fun s => (s.params.map (Ty.toVTy env), s.ret.toVTy env)) ++
     gsigs.toList.map fun g =>
       let genv := genvOf g
@@ -9715,8 +9805,11 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   if !loopNeeds.isEmpty then
     return { prog := default, sigs := { fns := [] }, slotTys := [], loopNeeds }
   if usesConc then
-    let (fns1, slotTys1, fsigs1, classTable1, frameClasses1, mainCall1, framePins1) ←
+    let (fns1, slotTys1, fsigs1, classTable1, frameClasses1, mainCall1, framePins1, schedMore) ←
       lowerConcurrency env sigs gsigs mainSig fsigs0 protos pins inFn fns slotTys fsigs classTable
+    if !schedMore.isEmpty then
+      let schedTag := env.tagOf "$sched"
+      protoList := protoList.map fun (t, vs) => if t == schedTag then (t, vs ++ schedMore) else (t, vs)
     fns := fns1
     slotTys := slotTys1
     fsigs := fsigs1
