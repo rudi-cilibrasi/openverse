@@ -1,6 +1,8 @@
 /-
   OpenVerse front end — the surface syntax tree of the supported Verse subset.
 -/
+import Std.Data.HashSet
+
 namespace OpenVerse.Front
 
 structure Pos where
@@ -31,6 +33,46 @@ inductive STy where
       parameter types, effect specifiers and result type. -/
   | fn   : List STy → List String → STy → STy
   deriving Repr, Inhabited
+
+/-- Fold over written type names in source order, including application
+    heads (`box` in `box(t)`) and function parameter and result types. -/
+partial def STy.foldNames (f : α → String → α) (init : α) : STy → α
+  | .name n => f init n
+  | .arr t | .opt t => t.foldNames f init
+  | .tup ts => ts.foldl (STy.foldNames f) init
+  | .app n ts => ts.foldl (STy.foldNames f) (f init n)
+  | .map k v => v.foldNames f (k.foldNames f init)
+  | .fn ps _ r => r.foldNames f (ps.foldl (STy.foldNames f) init)
+
+/-- All written type names, in source order, retaining repetitions. -/
+def STy.allNames (t : STy) : List String :=
+  (t.foldNames (fun names n => n :: names) []).reverse
+
+/-- Written type names in order of first occurrence. Each name is visited
+    once; the set tracks duplicates without depending on its iteration order. -/
+def STy.names (t : STy) : List String :=
+  let (_, names) := t.foldNames (fun (seen, names) n =>
+    if seen.contains n then (seen, names) else (seen.insert n, n :: names))
+    (({} : Std.HashSet String), ([] : List String))
+  names.reverse
+
+/-- Whether a type mentions `n` as a plain type name, including inside
+    function types. Application heads are excluded: `box(t)` mentions `t`. -/
+partial def STy.mentions (t : STy) (n : String) : Bool := match t with
+  | .name m => m == n
+  | .arr u | .opt u => u.mentions n
+  | .tup ts | .app _ ts => ts.any (·.mentions n)
+  | .map a b => a.mentions n || b.mentions n
+  | .fn ps _ r => ps.any (·.mentions n) || r.mentions n
+
+/-- Whether a type mentions any of `vs` as plain type names, with the same
+    treatment of application heads as `mentions`. -/
+partial def STy.mentionsAny (vs : List String) : STy → Bool
+  | .name n => vs.contains n
+  | .arr t | .opt t => STy.mentionsAny vs t
+  | .tup ts | .app _ ts => ts.any (STy.mentionsAny vs)
+  | .map k v => STy.mentionsAny vs k || STy.mentionsAny vs v
+  | .fn ps _ r => ps.any (STy.mentionsAny vs) || STy.mentionsAny vs r
 
 /-- A type parameter from a `where` clause (`t:type` or
     `t:subtype(comparable)`), or of a parametric struct `name(t:type) := struct`. -/

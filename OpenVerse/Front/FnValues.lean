@@ -127,23 +127,6 @@ partial def _root_.OpenVerse.Front.STy.fnShapes : STy → List Shape
     let s := shapeOf ps.length es
     (if s.decides && s.suspends then [] else [s]) ++ ps.flatMap STy.fnShapes ++ r.fnShapes
 
-/-- Whether a type mentions the type name `x`. -/
-partial def _root_.OpenVerse.Front.STy.hasName (x : String) : STy → Bool
-  | .name n => n == x
-  | .arr t | .opt t => t.hasName x
-  | .tup ts | .app _ ts => ts.any (·.hasName x)
-  | .map a b => a.hasName x || b.hasName x
-  | .fn ps _ r => ps.any (·.hasName x) || r.hasName x
-
-/-- The type names a type mentions. -/
-partial def _root_.OpenVerse.Front.STy.allNames : STy → List String
-  | .name n => [n]
-  | .arr t | .opt t => t.allNames
-  | .tup ts => ts.flatMap STy.allNames
-  | .app n ts => n :: ts.flatMap STy.allNames
-  | .map a b => a.allNames ++ b.allNames
-  | .fn ps _ r => ps.flatMap STy.allNames ++ r.allNames
-
 /-- The type names an expression mentions: in its types and constructions. -/
 partial def _root_.OpenVerse.Front.SExpr.tyNames : SExpr → List String
   | .decl _ _ t _ e => (t.map STy.allNames).getD [] ++ e.tyNames
@@ -351,7 +334,7 @@ def desugar (tops : List STop) (extra : List STop := []) (requests : List (Strin
     let bare := targs.filterMap fun | .name x => if tpn.contains x then some x else none | _ => none
     let whole := targs.all fun t => match t with
       | .name _ => true
-      | t => !tpn.any t.hasName
+      | t => !tpn.any t.mentions
     whole && tpn.all bare.contains && bare.eraseDups.length == bare.length
   -- (the declaration an override overrides: the nearest class or interface
   -- above that declares the method)
@@ -395,7 +378,7 @@ def desugar (tops : List STop) (extra : List STop := []) (requests : List (Strin
           let bare := targs.filterMap fun | .name x => if tpn.contains x then some x else none | _ => none
           let whole := targs.all fun t => match t with
             | .name _ => true
-            | t => !tpn.any t.hasName
+            | t => !tpn.any t.mentions
           let overloaded := (ms.filter fun | .fn _ m' .. => m' == m | _ => false).length > 1
           -- (and every one of them: the class's type arguments must be
           -- recoverable from the shape's, #53)
