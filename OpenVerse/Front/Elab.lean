@@ -7760,6 +7760,24 @@ def declaredLevels (env : TyEnv) (allS : List Sig) (s : Sig) : VTy × List VTy :
     first. -/
 def declaredRes (env : TyEnv) (allS : List Sig) (s : Sig) : VTy := (declaredLevels env allS s).1
 
+/-- (#394) `low` with no frames forced open, else again with each frame
+    class a call opened (`Suspend.openedTag?`), until none is missing: an
+    implementation's frame is made as an opened override's only when a call
+    needs it, so programs that do not are lowered as before. -/
+def lowerOpening {α : Type} (low : List Nat → Except String α) : Except String α := Id.run do
+  let mut forced : List Nat := []
+  let mut res := low forced
+  for _ in [0:256] do
+    match res with
+    | .error msg => match Suspend.openedTag? msg with
+      | some t =>
+        if forced.contains t then return res
+        forced := t :: forced
+        res := low forced
+      | none => return res
+    | .ok _ => return res
+  return res
+
 /-- The concurrency lowering (#156), at the end of `elabProgramCore`: each
     `<suspends>` function becomes a frame class and its resume, cancel and
     arm functions (`Suspend.lower`), after spawned dispatches are lifted
@@ -7771,7 +7789,8 @@ def declaredRes (env : TyEnv) (allS : List Sig) (s : Sig) : VTy := (declaredLeve
     Lean's elaboration limits.) -/
 def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsigs0 : List (List VTy × VTy))
     (protos : HeapTy) (pins : List (List (Option VTy))) (inFn : String → String → String)
-    (fns0 : Array Fn) (slotTys0 : Array (List VTy)) (fsigsIn : List (List VTy × VTy)) (classTable0 : List (List VTy)) :
+    (fns0 : Array Fn) (slotTys0 : Array (List VTy)) (fsigsIn : List (List VTy × VTy)) (classTable0 : List (List VTy))
+    (forced : List Nat := []) :
     Except String (Array Fn × Array (List VTy) × List (List VTy × VTy) × List (List VTy) × Array (List VTy) × Expr ×
       List (List (Option VTy)) × List Value) := do
   let mut fns := fns0
@@ -7995,22 +8014,13 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
   -- (the overrides whose class has type parameters its parent's type
   -- arguments do not give: a dispatch may open their frames' type
   -- arguments, #251)
-  -- (#394: and an implementation that refined dispatches reach, of a
-  -- class with one below that fixes one of its type arguments to a type
-  -- that mentions one of its own, `c3(t) := class(c1(tuple(char, t)))`:
-  -- a dispatch to that one opens it, and the implementation's frame is at
-  -- a type the caller has no name for)
-  let fixesCompound (e : String) : Bool :=
-    let n := (env.coreVars e).length
-    (env.concreteBelow e).any fun d => d != e &&
-      let own := ((List.range ((env.coreVars d).length - n)).map fun i => pinArg (n + i))
-      ((env.corePins d).take n).any fun | some pt => pt.params.any own.contains | none => false
+  -- (#394: and the implementations whose frames a call opens although they
+  -- have none of those, `forced`: one that a class below inherits while
+  -- fixing one of its class's type arguments to a type that mentions its
+  -- own, `c3(t) := class(c1(tuple(char, t)))`, which a dispatch to it opens;
+  -- the lowering finds them, and is run again with them, `lowerOpening`)
   let opened (j : Nat) : Bool := match lows[j]? with
-    | some (gi, gname, _) =>
-      ((sigOf gi).map (!·.selfTps.isEmpty)).getD false ||
-        (targets.contains gi && match gname.splitOn "." with
-          | [e, _] => env.classes.contains e && !(env.info e).isIface && fixesCompound e
-          | _ => false)
+    | some (gi, _, _) => ((sigOf gi).map (!·.selfTps.isEmpty)).getD false || forced.contains (tagBase + j)
     | none => false
   -- (the type such an override's result cell holds: its method's declared
   -- result, so that a narrower, covariant, one is called as any other, #209)
@@ -10382,7 +10392,8 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     return { prog := default, sigs := { fns := [] }, slotTys := [], loopNeeds }
   if usesConc then
     let (fns1, slotTys1, fsigs1, classTable1, frameClasses1, mainCall1, framePins1, schedMore) ←
-      lowerConcurrency env sigs gsigs mainSig fsigs0 protos pins inFn fns slotTys fsigs classTable
+      lowerOpening fun forced =>
+        lowerConcurrency env sigs gsigs mainSig fsigs0 protos pins inFn fns slotTys fsigs classTable forced
     if !schedMore.isEmpty then
       let schedTag := env.tagOf "$sched"
       protoList := protoList.map fun (t, vs) => if t == schedTag then (t, vs ++ schedMore) else (t, vs)
