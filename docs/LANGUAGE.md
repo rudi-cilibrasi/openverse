@@ -771,6 +771,13 @@ Main():void =
   positional arguments, then the named ones as written, then the defaults
   of those omitted, each seeing only the parameters before it (#283).
 
+  An overloaded function may have several values too (#283): a call takes
+  the overload its arguments fit, as any call does, and has that
+  overload's values, inlined as it would be alone; an overload with one
+  value is an ordinary call. Without types where it is inlined, a function
+  that calls such an overloaded one is taken to have several values
+  whichever overload it reaches, for now.
+
   A method with several values works the same way (#283): a call
   `R.M(args)` evaluates `R` first, once, then is inlined like a function's,
   with `Self` the receiver, and so is `M(args)` in its class's methods and
@@ -904,7 +911,8 @@ Main():void =
   that leaves them (which would leave the function they run in), in a constructor, a parameter's
   or field's default or a `defer:`, or where the names the clauses after it
   use have type parameters (`Self` of a generic class among them), an
-  overloaded one (a generic one's type arguments are inferred from the
+  overloaded one with an overload that calls the function's own name
+  (a generic one's type arguments are inferred from the
   arguments where it is inlined, as at a call), a recursive or generic one
   with named parameters, one with a `defer:` of its own (in its body, not in a block inside it), one with a `return`
   other than in an `if`'s branches, or recursive with a `return`, a method whose name another class or interface

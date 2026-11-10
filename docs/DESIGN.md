@@ -365,6 +365,13 @@ The cost: all values are computed even where one is taken, so an
 infinite generator never stops, and an error (an overflow) in a value a
 first success would not have reached stops the program.
 
+Overloaded functions with several values (#283) need the overload a call takes, which only types decide.
+- `inlineMulti` gives each overload a function of its own for the analysis, `F$mvK` (K its place, as the elaborator numbers `F$ovK`). `F` itself becomes a stand-in that calls them all, so a function that calls `F` has several values when an overload does.
+- A call becomes `$inlineOv(F, id, F(args), candidates…)`: each overload's own inlined call (the call as written for one with one value, a placeholder for one whose shape the call does not fit).
+- `elabFn` elaborates a body with markers twice. First for types (`Ctx.typeOnly`), each marker its call as written (`$ovPick`), the kept overloads typing it as any call. `resolveOverload`'s call notes the overload taken under the marker's id (`ESt.ovPicks`). Then for real, each marker its chosen candidate (`ovChosen`).
+- The arguments are made once for the call and its candidates, so a nested call keeps one id.
+- The overloads with several values are also kept as `F$mvK`, for their signatures where they are inlined.
+
 A self-recursive one shaped as a generator (#246; `Choice.loopShape?`:
 clauses without choices, then a choice, or an `if … else …` of choices and
 values, whose alternatives are values or whole calls of itself) is instead

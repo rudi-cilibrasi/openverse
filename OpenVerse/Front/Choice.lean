@@ -1222,10 +1222,10 @@ def markRecG (g : String) (grp : List String) : SExpr → SExpr :=
     `loops` by `$loop(F, …)` (#246). -/
 partial def inlineCalls (mv : List (String × MFn)) (e : SExpr) (recs : List String := [])
     (loops : List String := []) (clash : List (String × List String) := [])
-    (inDflt : List (String × String) := []) (groups : List (String × List String) := []) :
-    StateT Nat (Except String) SExpr := do
+    (inDflt : List (String × String) := []) (groups : List (String × List String) := [])
+    (ovs : List (String × List String) := []) : StateT Nat (Except String) SExpr := do
   -- (`inDflt`: the defaults being inlined, function and parameter, #283)
-  let go := fun x => inlineCalls mv x recs loops clash inDflt groups
+  let go := fun x => inlineCalls mv x recs loops clash inDflt groups ovs
   match e with
   | .app p (.ident _ "$dispatch") (.ident q g :: .block tp tmpl :: as) false =>
     -- (an overridden method's dispatch, #283: an inlined call whose
@@ -1237,7 +1237,25 @@ partial def inlineCalls (mv : List (String × MFn)) (e : SExpr) (recs : List Str
     let ren := (localsOf (.block tp tmpl)).map fun n => (n, s!"${g.replace "::" "_"}_{n}_{site}")
     let tmpl' ← (tmpl.map (renameE ren)).mapM go
     return .app p (.ident p "$inline") (.ident q g :: .block tp tmpl' :: (← as.mapM go)) false
+  -- (#283) a call of an overloaded function with several values: the
+  -- call as written, for the elaborator to choose the overload as at any
+  -- call, then each overload's own inlined call, `$inlineOv(F, id, call,
+  -- candidates…)`, `id` its own
+  -- (one made already, in arguments made once for the call as written and
+  -- its candidates: kept, with its id)
+  | e@(.app _ (.ident _ "$inlineOv") _ false) => return e
   | .app p (.ident q g) as br =>
+    if let some ks := ovs.lookup g then do
+      let id ← modifyGet fun n => (n, n + 1)
+      -- (the arguments made once, so a call of such a function in them has
+      -- one id in the call as written and in every candidate)
+      let as' ← as.mapM go
+      let call : SExpr := .app p (.ident q g) as' br
+      -- (an overload the call's shape does not fit, which no resolution
+      -- takes: a placeholder)
+      let cands ← ks.mapM fun k => if k == g then pure call else
+        tryCatch (go (.app p (.ident q k) as' br)) fun _ => pure (.app p (.ident p "$ovUnresolved") [.ident q g] false)
+      return .app p (.ident p "$inlineOv") (.ident q g :: .int p (id : Int) :: call :: cands) false
     match mv.lookup g with
     | some f =>
       -- (as at a call: several arguments to a single array parameter, and
@@ -1313,7 +1331,7 @@ partial def inlineCalls (mv : List (String × MFn)) (e : SExpr) (recs : List Str
             -- (one that calls `g` again omitting it: as at a call)
             if inDflt.contains (g, sp.name) then
               throw s!"{p.show}: the default of ?{sp.name} of {shownFnName g} uses itself (a call of {shownFnName g} that omits ?{sp.name})"
-            let d' ← inlineCalls mv (renameTypes ρ d) recs loops clash ((g, sp.name) :: inDflt) groups
+            let d' ← inlineCalls mv (renameTypes ρ d) recs loops clash ((g, sp.name) :: inDflt) groups ovs
             let earlier := (f.params.take k).map fun e => SExpr.tuple q [.ident q e.name, .ident q (tag e.name)]
             return some (.decl q (tag sp.name) (tyOf sp.ty) false
               (.app q (.ident q "$paramDefault") [.ident q g, .ident q sp.name, .block q earlier, d'] false))
@@ -2028,10 +2046,34 @@ def inlineMulti (tops : List STop) (reserved : List String := []) : Except Strin
   -- (methods with several values as functions first, #283; `reserved`:
   -- the members of built-in types and of the prelude)
   let tops ← methodFns tops reserved
-  let fns := multiCandidates tops
+  -- (#283) overloaded functions: each overload a function of its own for
+  -- the analysis, `F$mvK` (K its place among them, as the elaborator
+  -- numbers them, `F$ovK`), and `F` one that calls them all, so a function
+  -- calling `F` has several values when they do
+  let fnNamesAll := tops.filterMap fun | .fn _ n .. => some n | _ => none
+  let ovNamesAll := (fnNamesAll.filter fun n =>
+    (fnNamesAll.filter (· == n)).length > 1 && !n.contains '.' && n != "Main").eraseDups
+  let ovOf (f : String) : List (String × Pos × MFn) := (tops.filterMap fun
+    | .fn p n ps tps fx r b => if n == f then some (p, (⟨p, ps, tps, fx, r, b⟩ : MFn)) else none
+    | _ => none).zipIdx.map fun ((p, m), k) => (s!"{f}$mv{k}", p, m)
+  let cands0 := multiCandidates tops
+  let fns : List (String × MFn) := cands0.filter (!ovNamesAll.contains ·.1) ++
+    ovNamesAll.flatMap (fun f => (ovOf f).filterMap fun (k, _, m) =>
+      if m.fx.contains "suspends" then none else some (k, m)) ++
+    ovNamesAll.filterMap fun f => (ovOf f).head?.map fun (_, p, _) =>
+      (f, (⟨p, [], [], [], .name "void", .tuple p ((ovOf f).map fun (k, _, _) => .app p (.ident p k) [] false)⟩ : MFn))
   let mv := multiValued fns
   if mv.isEmpty then return (tops, false)
-  let mfs := fns.filter (mv.contains ·.1)
+  -- (none calling one of them, for now; an overload with one value is
+  -- called as written, `F` itself in `ovs`)
+  let ovMv := ovNamesAll.filter mv.contains
+  for f in ovMv do
+    for (_, p, m) in ovOf f do
+      if (namesUsed m.body).contains f then
+        throw s!"{p.show}: {shownFnName f} is overloaded with several values, and this overload calls {shownFnName f}: not supported yet (#283)"
+  let ovs : List (String × List String) := ovMv.map fun f =>
+    (f, (ovOf f).map fun (k, _, _) => if mv.contains k then k else f)
+  let mfs := fns.filter fun (n, _) => mv.contains n && !ovMv.contains n
   -- (every name the program binds: parameters, locals, fields, methods)
   let binders : List String := (tops.flatMap fun
     | .fn _ _ ps _ _ _ b => ps.map (·.name) ++ localsOf b
@@ -2158,7 +2200,7 @@ def inlineMulti (tops : List STop) (reserved : List String := []) : Except Strin
     let own := f.params.map (·.name) ++ localsOf f.body
     let us := (namesUsed f.body).eraseDups.filter fun u => u != n && !own.contains u && binders.contains u
     if us.isEmpty || (recs.contains n && !loops.contains n) then none else some (n, us)
-  let go (e : SExpr) : StateT Nat (Except String) SExpr := inlineCalls mfs e recs loops clash (groups := loopGroups)
+  let go (e : SExpr) : StateT Nat (Except String) SExpr := inlineCalls mfs e recs loops clash (groups := loopGroups) (ovs := ovs)
   let goPs (ps : List SParam) : StateT Nat (Except String) (List SParam) :=
     ps.mapM fun sp => do return { sp with default := ← sp.default.mapM go }
   let (tops', _) ← (tops.filterMapM (m := StateT Nat (Except String)) fun t => do
@@ -2178,6 +2220,10 @@ def inlineMulti (tops : List STop) (reserved : List String := []) : Except Strin
   -- (`F$all` for each that needs one: the array of its values)
   let alls : List STop := needAll.filterMap fun g => (mfs.lookup g).map fun f =>
     .fn f.pos s!"{g}$all" f.params f.tparams (f.fx.filter (· != "decides")) (.arr f.ret) (allBody needAll f.ret f.body)
-  return (tops' ++ alls, !loops.isEmpty)
+  -- (#283) each overload of an overloaded one kept as `F$mvK` too, for
+  -- its signature where its calls are inlined (effects, defaults)
+  let ovKept : List STop := ovMv.flatMap fun f => (ovOf f).filterMap fun (k, p, m) =>
+    if mv.contains k then some (.fn p k m.params m.tparams m.fx m.ret (checkBody m.body)) else none
+  return (tops' ++ ovKept ++ alls, !loops.isEmpty)
 
 end OpenVerse.Front.Choice
