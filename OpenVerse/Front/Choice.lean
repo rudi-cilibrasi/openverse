@@ -78,6 +78,28 @@ partial def arms : SExpr → List (Option (List SExpr) × SExpr)
     line 2); nothing outside one. -/
 def sitePart (site : String) : String := if site.isEmpty then "" else site ++ "@"
 
+/-- (#283) An `if … else …` (each `else if` with an `else`) with something
+    to lift in a branch that `isBranchy` leaves there: a call with several
+    values, or a choice inside a branch's expression (`has`, `hasLiftable`,
+    says which). No branch is a block, whose names would outlive it. It is
+    lifted as an exclusive choice of its branches (#314, #331), each
+    branch's own lifted in its path. -/
+def branchesLift (has : SExpr → Bool) (e : SExpr) : Bool :=
+  match e with
+  | .ite .. =>
+    let as := arms e
+    isBranchy.complete e && as.all (fun | (_, .block ..) => false | _ => true) &&
+      as.any fun (_, v) => has v
+  | _ => false
+
+/-- (#283) Whether the elaborator takes this `if` with choices in its
+    branches as it is (`elabBranchAlts`): each branch a value or a choice
+    of values with nothing to lift. -/
+def plainBranches (has : SExpr → Bool) (e : SExpr) : Bool :=
+  isBranchy e && (arms e).all fun (_, v) => match alts? v with
+    | some xs => !xs.any has
+    | none => !has v
+
 /-- The indices of a `set` path bound to names, in order (unless literals),
     and the path with those names in their places: `set` evaluates them
     before the new value. -/
@@ -253,7 +275,7 @@ partial def hasLiftable : SExpr → Bool
   | .app _ (.ident _ "$dispatch") _ false => true
   | .app _ (.ident _ "$each") _ false => true
   | .app _ (.ident _ "$loop") _ false => true
-  | e@(.ite ..) => isBranchy e
+  | e@(.ite ..) => isBranchy e || branchesLift hasLiftable e
   | .app _ f args _ => headHas hasLiftable f || args.any fun
       -- (a named argument's value, #283)
       | .decl _ n _ _ x => n.startsWith "?" && hasLiftable x
@@ -273,6 +295,9 @@ partial def hasLiftable : SExpr → Bool
       | .decl _ _ _ _ x | .set _ _ _ x | .gen _ _ _ x => hasLiftable x
       | x => hasLiftable x
   | _ => false
+
+/-- An `if` lifted whole, as a binding of `$branchChoice` (#235, #283). -/
+def liftsAsIf (e : SExpr) : Bool := isBranchy e || branchesLift hasLiftable e
 
 /-- The same whenever evaluated, and typed by where they are (so they keep
     their expected type in place), so not bound to a name of their own:
@@ -710,15 +735,15 @@ partial def liftClauseM (isVal : String → Bool) (isField : String → String �
   -- (an `if` with choices in its branches as a binding's value: at its
   -- written type, #235)
   | .decl p x ty false rhs@(.ite ..) =>
-    if isBranchy rhs then return [.decl p x ty false (.app p (.ident p "$branchChoice") [rhs] false)] else
+    if liftsAsIf rhs then return [.decl p x ty false (.app p (.ident p "$branchChoice") [rhs] false)] else
       if !hasLiftable rhs then return [c] else run do return .decl p x ty false (← liftE isVal isField rhs)
   | .decl p x ty true rhs@(.ite ..) =>
-    if isBranchy rhs then
+    if liftsAsIf rhs then
       let n := s!"$c{sitePart site}{p.line}_{p.col}"
       return [.decl p n ty false (.app p (.ident p "$branchChoice") [rhs] false), .decl p x ty true (.ident p n)]
     else if !hasLiftable rhs then return [c] else run do return .decl p x ty true (← liftE isVal isField rhs)
   | .set p l none rhs@(.ite ..) =>
-    if isBranchy rhs then
+    if liftsAsIf rhs then
       let (h, _, l') := setPrefix p l none site
       let n := s!"$c{sitePart site}{p.line}_{p.col}"
       return h ++ [.decl p n none false (.app p (.ident p "$branchChoiceAt") [l', rhs] false), .set p l' none (.ident p n)]
@@ -811,15 +836,25 @@ def bifToExcl (c : SExpr) : List SExpr :=
     (variables and fields in scope); the clauses' own bindings are too. -/
 def prepare (cs : List SExpr) (isVal : String → Bool := fun _ => false)
     (isField : String → String → Bool := fun _ _ => false) (site : String := "")
-    (fieldOrder : String → List (String × Bool) := fun _ => []) (keepExcl : Bool := false) : List SExpr :=
+    (fieldOrder : String → List (String × Bool) := fun _ => []) (keepExcl : Bool := false)
+    (guardBranches : Bool := true) : List SExpr :=
   -- (an exclusive choice is a `for`'s to compile, #314; elsewhere, where
   -- the first success is taken, the choice of its alternatives)
   let cs := if keepExcl then cs else cs.map exclToChoice
   let bound := boundIn cs
   let ps := normClauses (cs.flatMap (liftClause (fun n => isVal n || bound.contains n) isField · site fieldOrder)) site
   -- (in a `for`, an `if` with choices in its branches an exclusive choice of
-  -- them, #331)
-  if keepExcl then ps.flatMap bifToExcl else ps
+  -- them, #331; where the first success is taken, one with more in its
+  -- branches to lift than the elaborator takes, #283, the choice of those,
+  -- each guarded by its branch; not for an `F$all`'s, `gensOf`, whose `if`
+  -- gives its branch's array, `arrOfE`)
+  if keepExcl then ps.flatMap bifToExcl else if !guardBranches then ps else ps.flatMap fun c => match c with
+    | .decl _ _ _ false (.app _ (.ident _ b) is false) =>
+      if (b == "$branchChoice" || b == "$branchChoiceAt") &&
+          is.getLast?.any (fun i => liftsAsIf i && !plainBranches hasLiftable i) then
+        (bifToExcl c).map exclToChoice
+      else [c]
+    | c => [c]
 
 /-- Whether the clauses have a choice for their failure context to take. -/
 def hasChoice (cs : List SExpr) (fieldOrder : String → List (String × Bool) := fun _ => []) : Bool :=
@@ -1310,7 +1345,7 @@ partial def arrOfE (ty : Option STy := none) : SExpr → SExpr
     Names made include `site`, so that nested ones differ. -/
 partial def gensOf (site : String) (cs : List SExpr) : List SExpr :=
   let nm (q : Pos) : String := s!"$e{sitePart site}{q.line}_{q.col}"
-  (prepare cs (site := site)).flatMap fun c => match binding? c with
+  (prepare cs (site := site) (guardBranches := false)).flatMap fun c => match binding? c with
     | some { pos := q, name := x, ty := ty, alts := as, branchy := none, each := none, .. } =>
       let src := arrOfE ty (.app q (.ident q "$choice") as false)
       match ty with

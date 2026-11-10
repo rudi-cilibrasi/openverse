@@ -692,12 +692,15 @@ Main():void =
   - `set L op= R` evaluates `L`'s indices, then for `op=` its old value, then
     `R`'s lifted code, as `set` does.
 
-  An `if … else if … else …` whose branches are choices or plain values
-  (not blocks) may stand where a choice may (#235). Its conditions run once and pick a branch, whose
-  alternatives are then its values, seeing the names its conditions bind:
+  An `if … else if … else …` whose branches are choices, plain values, or
+  expressions with choices or calls of functions with several values in
+  them (not blocks) may stand where a choice may (#235, #283). Its
+  conditions run once and pick a branch, whose values are then the
+  `if`'s, seeing the names its conditions bind:
 
   ```verse
   for (Z := if (V := M?) then (V | V * 10) else 0) { … }   # V, V * 10; or 0
+  for (Z := if (V := M?) then Two(V) else Down(2)) { … }   # Two's values; or Down's
   ```
 
   The `if` itself adds no choice (#331): only the choices the program
@@ -732,7 +735,7 @@ Main():void =
   the choice (the default runs in its place); an
   alternative of a `set`'s choice, either side of `and`, the right of `or`, a range, a
   `set`'s path (`set A[0 | 1] = …`), or the branch of an `if` without
-  `else` or one that is more than a choice or a value; and
+  `else`, or one that is a block; and
   a choice anywhere outside these failure contexts. (A field reached
   through a receiver that is not a variable or `Self`, as `F().Items[…]`,
   is read after the choice, since only the receiver's value is bound
@@ -888,7 +891,7 @@ Main():void =
   with named parameters, one with a `defer:` of its own (in its body, not in a block inside it), one with a `return`
   other than in an `if`'s branches, or recursive with a `return`, a method whose name another class or interface
   also has, of a generic class, generic, `<suspends>` or using `(super:)`, one used as a function value, a call of a
-  recursive one in an `if`'s branch or a `set`'s path, and, since its body is inlined where other names may be
+  recursive one in a `set`'s path, and, since its body is inlined where other names may be
   in scope, one whose name is also the name of a parameter, local, field or
   method anywhere in the program, and a call of one where a name its body
   uses from outside is a parameter, local or member of `Self` in scope.

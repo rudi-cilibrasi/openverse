@@ -2541,7 +2541,8 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
         let xty ← match xty, alts.findSome? (fun | .app _ (.ident _ "$joinOf") (i :: l) false => some (i, l.head?) | _ => none) with
           | none, some (i, place) => do
             let st ← get
-            -- (for `set L = if …`, at `L`'s type)
+            -- (for `set L = if …`, at `L`'s type; a branch with a call to
+            -- lift typed as `option{…}` takes it, #283)
             let (_, ty, _) ← elabBranchAlts { cA with canFail := true, inTaking := true, typeOnly := true } gp i none place
             set st
             pure (some ty.toSTy)
@@ -3674,7 +3675,10 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
     if ctx.inTaking then
       if ctx.liftWhy != "" then
         eerr p s!"a call of {Choice.shownFnName f}, which has several values, cannot be lifted from {ctx.liftWhy}, for now (#283)"
-      eerr p s!"a call of {Choice.shownFnName f}, which has several values, cannot be lifted from here, for now (#235)"
+      eerr p (s!"a call of {Choice.shownFnName f}, which has several values, cannot be lifted from here, for now (#235): " ++
+        "not from a block with a defer:, a construction where a field's default runs before it, " ++
+        "an alternative of a set's choice, the right of " ++
+        "and or or, a range, a set's path, nor from the branch of an if without else, or one that is a block")
     eerr p (s!"{Choice.shownFnName f} has several values, so a call of it must be in a failure context that takes them: " ++
       "an if condition, a for's clauses, first{…}, option{…}, logic{…}, not, or the left of or (#235)")
   | .app p (.ident _ "$each") (.app _ (.ident _ fa) _ _ :: _) false =>
@@ -3686,7 +3690,7 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
       eerr p (s!"a call of {Choice.shownFnName f}, which has several values, cannot be lifted from here, for now (#235): " ++
         "not from a block with a defer:, a construction where a field's default runs before it, " ++
         "an alternative of a set's choice, the right of " ++
-        "and or or, a range, a set's path, nor from the branch of an if")
+        "and or or, a range, a set's path, nor from the branch of an if without else, or one that is a block")
     eerr p (s!"{Choice.shownFnName f} has several values, so a call of it must be in a failure context that takes them: " ++
       "an if condition, a for's clauses, first{…}, option{…}, logic{…}, not, or the left of or (#235)")
   | .app p (.ident _ "$loop") (.ident _ f :: _) false =>
@@ -3697,7 +3701,7 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
       eerr p (s!"a call of {Choice.shownFnName f}, which has several values, cannot be lifted from here, for now (#235): " ++
         "not from a block with a defer:, a construction where a field's default runs before it, " ++
         "an alternative of a set's choice, the right of " ++
-        "and or or, a range, a set's path, nor from the branch of an if")
+        "and or or, a range, a set's path, nor from the branch of an if without else, or one that is a block")
     eerr p (s!"{Choice.shownFnName f} has several values, so a call of it must be in a failure context that takes them: " ++
       "an if condition, a for's clauses, first{…}, option{…}, logic{…}, not, or the left of or (#235)")
   | .app p (.ident _ "$choice") _ false =>
@@ -3707,7 +3711,7 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
       eerr p ("a choice (a | b) cannot be lifted from here, for now (#208): not from a block with a defer:, " ++
         "a construction where a field's default runs before it, an alternative of a set's " ++
         "choice, the right of and or or, a range, " ++
-        "nor from the branch of an if without else or one that is more than a choice or a value")
+        "nor from the branch of an if without else, or one that is a block")
     eerr p ("a choice (a | b) has several values, so it must be in a failure context that takes them: " ++
       "an if condition, a for's clauses, first{…}, option{…}, logic{…}, not, or the left of or (#208)")
   | .app p (.ident _ "$paramDefault") [.ident _ f, .ident _ n, .block _ earlier, d] false =>
@@ -5655,6 +5659,16 @@ partial def elabBranchAlts (ctx : Ctx) (p : Pos) (i : SExpr) (sty : Option STy) 
     | none => match place with
       | some l => tryCatch (do pure (some (← elabE ctx l none).ty)) fun _ => pure none
       | none => pure none
+  -- (for the type only, #283: a value with a call with several values or a
+  -- choice in it, which only a failure context that takes its values
+  -- compiles, at the type of those values, as `option{…}` takes them)
+  let elabA (c : Ctx) (a : SExpr) (t? : Option Ty) : EM R := do
+    if ctx.typeOnly && Choice.hasLiftable a then
+      let r ← elabE c (.optionLit a.pos a) (t?.map .opt)
+      match r.ty with
+      | .opt t => return ⟨r.e, t⟩
+      | _ => return r
+    else elabE c a t?
   let mut rs : Array (Nat × SExpr × R) := #[]
   for ((_, arm), j) in arms.zipIdx do
     let c := ctxs.getD j ctx
@@ -5662,13 +5676,13 @@ partial def elabBranchAlts (ctx : Ctx) (p : Pos) (i : SExpr) (sty : Option STy) 
       -- (without a type, each later one against the first's, else on its
       -- own, as `elabAlts` does, #32)
       let r ← match t?, rs[0]? with
-        | some t, _ => elabE c a (some t)
-        | none, none => elabE c a none
+        | some t, _ => elabA c a (some t)
+        | none, none => elabA c a none
         | none, some (_, _, r0) =>
-          if c.retries ≥ 3 then tryCatch (elabE c a none) fun _ => elabE c a (some r0.ty)
+          if c.retries ≥ 3 then tryCatch (elabA c a none) fun _ => elabA c a (some r0.ty)
           else
             let c2 := { c with retries := c.retries + 1 }
-            tryCatch (elabE c2 a (some r0.ty)) fun _ => elabE c2 a none
+            tryCatch (elabA c2 a (some r0.ty)) fun _ => elabA c2 a none
       rs := rs.push (j, a, r)
   let some (_, _, r0) := rs[0]? | eerr p "internal: an if without branches"
   let ty ← match t? with
