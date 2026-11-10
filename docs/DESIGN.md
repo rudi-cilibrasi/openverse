@@ -1527,9 +1527,15 @@ heap effects (the function declares exactly those, plus `<decides>` if
 elaboration, which compiles the `if` as the dispatch. The cast's target
 class then counts as one that fixes type arguments, so it and the
 classes below it get pins in Verse Core. A `return`, a `break` leaving
-the branch, a `set` of an outside `var`, a suspension in the branch or
-the `else` (the dispatch would have to carry it through the lowering of
-`<suspends>` code) are refused for now. In a method, the branch's bare
+the branch, a suspension in the branch or the `else` (the dispatch would
+have to carry it through the lowering of `<suspends>` code) are refused
+for now. A `set` of an outside `var` is rewritten first
+(`refineSetsOut`): the branch declares a copy of each such `var`
+(`$set…'N`), uses it in its place, and gives the copies' values with its
+own as a tuple; the `else` gives the `var`s' (with its value, when it has
+one); after the `if`, each `var` is set from the tuple, whose first part
+is the `if`'s value. The new branch is the elaborator's (`made`), so the
+lift carries it (`Lift.body`), and its function sets only its own `var`s. In a method, the branch's bare
 names of `Self`'s fields and methods are made `Self.member` first
 (`selfQualify`, by the elaborator's own rule for bare names), so its
 function takes `Self` as one of the locals it uses; the lift then carries

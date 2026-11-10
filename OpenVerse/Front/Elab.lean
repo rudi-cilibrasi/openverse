@@ -2340,6 +2340,44 @@ def refineBranchWhy? (ctx : Ctx) (p : Pos) (body : SExpr) (muts : List String) :
     some (e.pos, "it cannot set a var from outside it yet")
   else none
 
+/-- (#243) `if (D := T[x]) then B else E` whose branch `B` sets `var`s from
+    outside it, `vars` (name, written type), as the branch's function cannot:
+    each a copy in the branch (`$set…'N`, shown as written), used in its
+    place there, its value then the copies' with the branch's (at the `if`'s
+    type, `vty`), set after the `if`; without an `else`, only the copies'
+    values, the `if`'s `void`. The branch then sets only its own `var`s.
+    Gives the new branch and else, the name the `if`'s value is bound to,
+    and what follows it. -/
+def refineSetsOut (p : Pos) (body : SExpr) (elseE : Option SExpr)
+    (vars : List (String × STy)) (vty : Option STy) : SExpr × SExpr × String × List SExpr :=
+  let tag := s!"$set{p.line}_{p.col}"
+  let cp (n : String) : String := s!"{tag}'{n}"
+  let ren := vars.map fun (n, _) => (n, cp n)
+  let copies := vars.map fun (n, t) => SExpr.decl p (cp n) (some t) true (.ident p n)
+  let ss := (Choice.stmtsOf body).map (Choice.renameE ren)
+  let copiesV := vars.map fun (n, _) => SExpr.ident p (cp n)
+  let outsV := vars.map fun (n, _) => SExpr.ident p n
+  let t := s!"{tag}'t"
+  match elseE with
+  | none =>
+    let one (vs : List SExpr) : SExpr := match vs with | [v] => v | vs => .tuple p vs
+    let sets := vars.zipIdx.map fun ((n, _), i) =>
+      SExpr.set p (.ident p n) none (if vars.length == 1 then .ident p t else .app p (.ident p t) [.int p (i : Int)] false)
+    (.block p (copies ++ ss ++ [one copiesV]), one outsV, t, sets ++ [.tuple p []])
+  | some e =>
+    let bv := s!"{tag}'v"
+    let ev := s!"{tag}'e"
+    -- (a binding as the branch's value stays one)
+    let (init, valB) : List SExpr × List SExpr := match ss.getLast? with
+      | some l@(.decl q y _ _ _) => (ss.dropLast, [l, .decl p bv vty false (.ident q y)])
+      | some l => (ss.dropLast, [.decl p bv vty false l])
+      | none => ([], [.decl p bv vty false (.tuple p [])])
+    let sets := vars.zipIdx.map fun ((n, _), i) =>
+      SExpr.set p (.ident p n) none (.app p (.ident p t) [.int p ((i + 1 : Nat) : Int)] false)
+    (.block p (copies ++ init ++ valB ++ [.tuple p (.ident p bv :: copiesV)]),
+      .block p [.decl p ev vty false e, .tuple p (.ident p ev :: outsV)],
+      t, sets ++ [.app p (.ident p t) [.int p 0] false])
+
 /-- In a method of class `c`, the branch of a cast that refines (#243), with
     the members of `Self` it names bare (its fields and methods, not shadowed
     by a local) made `Self.member`, as the elaborator reads them: its
@@ -3583,8 +3621,25 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
   -- (the locals the branch uses, in order of first use)
   let caps : List Local := (Choice.namesUsed body).filterMap fun n =>
     if n == D then none else ctx.locals.find? (·.name == n)
-  if let some (q, what) := refineBranchWhy? ctx p body ((caps.filter (·.mutable)).map (·.name)) then
+  -- (the `var`s from outside it that the branch sets: copies in the branch,
+  -- set after the `if`, `refineSetsOut`, so its function sets only its own)
+  let setOut := caps.filter fun l => l.mutable && (Refine.findPart (fun
+      | .set _ lhs _ _ => Choice.rootName? lhs == some l.name
+      | _ => false) false body).isSome
+  if let some (q, what) := refineBranchWhy? ctx p body ((caps.filter (·.mutable)).map (·.name) |>.filter fun n => !setOut.any (·.name == n)) then
     eerr q s!"the branch of the cast to {shown}, which holds only under a refinement of the type arguments, is compiled as a function of its own, so {what} (#243)"
+  if !setOut.isEmpty then
+    set st0
+    let (thenB, elseB, t, after) := refineSetsOut p body0 elseE (setOut.map fun l => (l.name, l.ty.toSTy))
+      (exp.map (·.toSTy))
+    -- (the new branch is the elaborator's, so its function is made from it,
+    -- `made`, not from the source)
+    let some rIf ← elabRefinedIfWith elabApp elabE ctx p _dp D T x thenB (some elseB) none (made := true)
+      | eerr p s!"internal: the cast to {shown} with sets of vars from outside its branch (#243)"
+    let slot ← fresh rIf.ty
+    let c := { ctx with locals := { name := t, slot, ty := rIf.ty, mutable := false } :: ctx.locals }
+    let rest ← elabE c (.block p after) exp
+    return some ⟨.seq (.assign slot rIf.e) rest.e, rest.ty⟩
   -- (a suspension in the branch or in the `else`, which the dispatch to the
   -- branch's function would have to carry, is refused for now)
   let isS (f : Nat) : Bool := ctx.sigs.any fun s => s.idx == f && s.suspends
