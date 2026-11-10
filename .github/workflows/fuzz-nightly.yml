@@ -74,11 +74,15 @@ jobs:
         id: check
         shell: bash
         run: |
-          # (memory every 30 s, for a run that is killed: the 2026-11-10 one got SIGTERM after
-          # 11 minutes, with no message, and the steps below were skipped)
-          ( while sleep 30; do
-              { date -u +%T; free -m | sed -n 2p; ps -eo rss,etime,args --sort=-rss | head -4 | cut -c1-160; } >> mem.log
-            done ) > /dev/null 2>&1 &
+          # (memory every 60 s, into this step's log, which is kept when the job is cut short: the
+          # 2026-11-10 runs got SIGTERM after 11 minutes, with no message, and even the always()
+          # steps below were skipped, as when the runner itself is shut down)
+          ( while sleep 60; do
+              { echo "mem $(date -u +%T): $(free -m | awk 'NR==2{print "used " $3 " MB, available " $7 " MB"}')"
+                ps -eo rss,args --sort=-rss | sed -n '2,4p' | awk '{printf "mem   %d MB %s %s %s\n", $1/1024, $2, $3, $4}'
+                sudo dmesg 2>/dev/null | grep -i -E 'out of memory|oom-kill|killed process' | tail -2 | sed 's/^/mem   /'
+              } | tee -a mem.log
+            done ) &
           mon=$!; trap 'kill "$mon" 2>/dev/null || true' EXIT
           scripts/check.sh 2>&1 | tee check.log
 
