@@ -920,7 +920,15 @@ def prepare (cs : List SExpr) (isVal : String → Bool := fun _ => false)
 
 /-- Whether the clauses have a choice for their failure context to take. -/
 def hasChoice (cs : List SExpr) (fieldOrder : String → List (String × Bool) := fun _ => []) : Bool :=
-  (prepare cs (fieldOrder := fieldOrder)).any fun c => (binding? c).isSome
+  (prepare cs (fieldOrder := fieldOrder)).any (fun c => (binding? c).isSome) ||
+    -- (#283) or something to lift where a clause takes it (`liftsHere`): an
+    -- inlined call with no choice in it, where an overloaded one's
+    -- overload has one value, still has its clauses to lift
+    cs.any fun
+      | .decl _ _ _ _ rhs => hasLiftable rhs
+      | .set _ l _ rhs => hasLiftable rhs || pathHas hasLiftable l
+      | .gen _ _ _ src => hasLiftable src
+      | e => hasLiftable e
 
 /-- `first{cs}`, the last clause naming its value. -/
 def firstOfClauses (p : Pos) (cs : List SExpr) : SExpr :=
@@ -1199,6 +1207,10 @@ partial def elimReturns (fresh : Nat → String) (n : Nat) (multi : SExpr → Bo
     `F$all` as `F` (#283). -/
 def shownFnName (n : String) : String :=
   let n := if n.endsWith "$all" then String.ofList (n.toList.take (n.length - 4)) else n
+  -- (an overload's own name, #283, `F$mvK`: its function's)
+  let n := match n.splitOn "$mv" with
+    | [f, k] => if !f.isEmpty && k.all Char.isDigit && !k.isEmpty then f else n
+    | _ => n
   if n.startsWith "$" then n else (n.replace "::" ".").replace "$" "."
 
 /-- The calls of `g` in `e` (its consumer's code, #246) as `$rec(args)`. -/
@@ -2141,6 +2153,13 @@ def inlineMulti (tops : List STop) (reserved : List String := []) : Except Strin
     for g in needAll do
       for h in (callees.lookup g).getD [] do
         if !needAll.contains h then needAll := needAll ++ [h]; grew := true
+  -- (#283) one computed eagerly cannot reach an overloaded one, whose
+  -- overload only types choose: refused, for now
+  for g in needAll do
+    if ovMv.contains g then
+      let caller := (needAll.find? fun h => ((callees.lookup h).getD []).contains g).getD g
+      let pos := ((mfs.lookup caller).map (·.pos)).getD (((ovOf g).head?.map (·.2.1)).getD default)
+      throw s!"{pos.show}: {shownFnName caller} has several values and is recursive, or called by a recursive one (so its values are computed at the call, F$all), and it calls {shownFnName g}, which is overloaded with several values: not supported yet (#283)"
   -- (effect-free: <computes> and no local state; that nothing they may
   -- run prints or calls `Err()` is checked on their Verse Core code, which
   -- shows every call, `checkEager`)
@@ -2206,6 +2225,13 @@ def inlineMulti (tops : List STop) (reserved : List String := []) : Except Strin
   let (tops', _) ← (tops.filterMapM (m := StateT Nat (Except String)) fun t => do
     match t with
     | .fn p n ps tps fx r b =>
+      -- (an overload of an overloaded one, #283: as its own analysis says,
+      -- by its place: one with several values kept for checking, one
+      -- with one value compiled, as it is called as written)
+      if ovMv.contains n then
+        let own := ((ovOf n).find? fun (_, q, _) => q.line == p.line && q.col == p.col && q.file == p.file).map (·.1)
+        if own.any mv.contains then return some (.fn p n ps tps fx r (checkBody b))
+        return some (.fn p n (← goPs ps) tps fx r (← go b))
       -- (its own name kept, so that messages name it: nothing calls it)
       if mv.contains n then
         return some (.fn p n ps tps fx r (checkBody b))

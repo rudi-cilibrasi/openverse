@@ -350,6 +350,15 @@ R13 = random.Random(seed * 1000003 + 372)
 # override in a subclass (#328) reaches it with (super:). Its own generator decides, before the
 # test runs (it changes the values); the interface form is then taken whatever R13 draws.
 R14 = random.Random(seed * 1000003 + 375)
+# ---- #380 (#283): at times a test's expression calls Ov, overloaded by arity and by type, each
+# overload with several values:
+#   Ov(OA:int):int = OA + 1 | OA * 2
+#   Ov(OA:int, OB:int):int = OA - OB | OB * 3
+#   Ov(OS:string):int = OS.Length | 0          (called with a string literal)
+# The arguments pick the overload; they run once, left to right, before its choice, and each
+# alternative is a value. A generator of its own decides, so seeds keep their other programs.
+R15 = random.Random(seed * 1000003 + 380)
+OVL = 'noovl' not in flags and R15.random() < 0.5
 # ---- #312, flag rt (on with lazy; nort turns it off): a test's expression may call
 #   RT(RTa:int):int =
 #       RTy := RTa | RTa + 1 | RTa + 2
@@ -397,7 +406,7 @@ class Return(Exception):
 
 # the kinds of node whose insides are failure contexts of their own (or an
 # inlined function's arguments), where a lifted call's clauses are not the test's
-NESTED = ('not', 'logic', 'optor', 'orx', 'ifx', 'bif', 'mcall', 'choice', 'blk', 'cons', 'na', 'nam', 'mvm', 'rt', 'rt2', 'rt3')
+NESTED = ('not', 'logic', 'optor', 'orx', 'ifx', 'bif', 'mcall', 'choice', 'blk', 'cons', 'na', 'nam', 'mvm', 'rt', 'rt2', 'rt3', 'ovl')
 
 
 def lift_pos(x):
@@ -468,6 +477,16 @@ def gen_e(scope, vars_, d, ch):
         m = gen_mcall(scope, vars_, d)
         if m is not None:
             return m
+    if (OVL and ch and NCH[0] < 4 and CTX['fmax'] is None and not CTX['nochoice']
+            and not CTX.get('inset') and not CTX.get('inbif') and R15.random() < 0.1
+            and (not MV or PROD[0] * 2 <= CTX['plim'])):
+        NCH[0] += 1
+        if MV:
+            PROD[0] *= 2
+        kind = R15.choice([1, 2, 's'])
+        if kind == 's':
+            return ('ovl', 's', [], R15.choice(['', 'a', 'xyz', 'hello']))
+        return ('ovl', kind, [gen_e(scope, vars_, d + 1, ch) for _ in range(kind)], None)
     k = R.random()
     if ch and NCH[0] < 4 and k < 0.22 and (not MV or PROD[0] * 3 <= CTX['plim']):
         NCH[0] += 1
@@ -1167,6 +1186,8 @@ def show(e):
         return f'RT({show(e[1])})'
     if t in ('rt2', 'rt3'):
         return f'{t.upper()}({show(e[1])})'
+    if t == 'ovl':
+        return f'Ov("{e[3]}")' if e[1] == 's' else f'Ov({", ".join(show(x) for x in e[2])})'
     if t in ('na', 'nam'):
         items = [f'?{n} := {show(x)}' for n, x in e[2]]
         items.insert(e[3], show(e[1]))
@@ -1307,7 +1328,7 @@ def failable(scope, vars_):
 
 def top_choice_e(e):
     t = e[0]
-    if t in ('choice', 'bif', 'mcall', 'rcall', 'gcall', 'nam', 'mvm', 'rt', 'rt2', 'rt3'):
+    if t in ('choice', 'bif', 'mcall', 'rcall', 'gcall', 'nam', 'mvm', 'rt', 'rt2', 'rt3', 'ovl'):
         return True
     if t in ('lit', 'ref', 'next', 'bprint', 'bset', 'optor', 'orx', 'ifx', 'obj', 'cnext', 'big', 'snx'):
         return False
@@ -1516,6 +1537,19 @@ def ev(e, st, k, mode):
                                      lambda s1, k2: k2(chks(v - 1, s1), s1)], s0, k, mode)
             return choice_point(base, s0, k, mode)
         return ev(e[1], st, kmvm, mode)
+    if t == 'ovl':
+        # (#380: the overload its arguments pick; they run first, then its two alternatives)
+        def kargs(i, got, s0):
+            if i < len(e[2]):
+                return ev(e[2][i], s0, lambda v, s: kargs(i + 1, got + [v], s), mode)
+            if e[1] == 's':
+                alts = [lambda s1, k2: k2(len(e[3]), s1), lambda s1, k2: k2(0, s1)]
+            elif e[1] == 1:
+                alts = [lambda s1, k2: k2(chks(got[0] + 1, s1), s1), lambda s1, k2: k2(chks(got[0] * 2, s1), s1)]
+            else:
+                alts = [lambda s1, k2: k2(chks(got[0] - got[1], s1), s1), lambda s1, k2: k2(chks(got[1] * 3, s1), s1)]
+            return choice_point(alts, s0, k, mode)
+        return kargs(0, [], st)
     if t == 'nam':
         def knam(vu, s0):
             def finish(nv, s):
@@ -2236,6 +2270,9 @@ if RT2:
                 f'        Print("e{{RTy}}")\n    Print("q{{RTy}}")\n    RTy * 10 | RTy * 10 + 1\n')
 if NAM:
     PRE += 'NAM(NU:int, ?NV:int = Tell("dv", NU)):int = NU + NV | NV * 2\n'
+if OVL:
+    PRE += ('Ov(OA:int):int = OA + 1 | OA * 2\nOv(OA:int, OB:int):int = OA - OB | OB * 3\n'
+            'Ov(OS:string):int = OS.Length | 0\n')
 if NA:
     PRE += 'NA(A:int, ?P:int = Tell("dp", A), ?Q:int = P + 1):int = A * 100 + P * 10 + Q\n'
 if CB:
