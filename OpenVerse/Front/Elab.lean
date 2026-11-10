@@ -9508,10 +9508,12 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   env := { env with varFields := varFields, uniques := uniques,
                     overriders := (overridePairs.toList.map fun (_, dm, _) => (dm.splitOn ".").headD "") ++
                       (implChecks.toList.map fun (_, _, impl, _) => (impl.splitOn ".").headD "") ++
-                      -- (#250: and the targets of casts that open type
-                      -- arguments, whose own pins relate them to the
-                      -- object's, as the dispatch to the branch refines by)
-                      ((opts.castRequests.filter (!·.opened.isEmpty)).map (·.target)) }
+                      -- (#250: and the targets of refining casts, whose own
+                      -- pins relate their type arguments to the object's, as
+                      -- the dispatch to the branch refines by: also one that
+                      -- only inherits and gives its parent a compound of its
+                      -- own, `c1(t) := class(c0([]t))`, #243, #351)
+                      (opts.castRequests.map (·.target)) }
   -- the class whose code each inherited field default is (#39): the nearest
   -- one, the class's own first, that gives the field a default itself
   let homeOf (c f : String) : String :=
