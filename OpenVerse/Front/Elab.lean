@@ -2274,6 +2274,22 @@ def firstLiftOf (ctx c2 : Ctx) (p : Pos) (g : String) (lp : List SExpr) (b : Str
            binds, sets := sets.map (·.name), args := pnames.map (SExpr.ident p ·) ++ capArgs,
            varBinds := (bls.filter (·.mutable)).map (·.name) }
 
+/-- (#335) Whether `e` writes one of the type parameters `tps`: in a written
+    type, a construction's, or as a name. Conservative. -/
+def writesTps (tps : List String) (e : SExpr) : Bool :=
+  !tps.isEmpty && Choice.anyE (fun
+    | .decl _ _ (some t) _ _ => Choice.styMentions tps t
+    | .construct _ n ts _ => tps.contains n || ts.any (Choice.styMentions tps)
+    | .structDef _ _ fs => fs.any fun (_, t, _, _) => Choice.styMentions tps t
+    | .refineDef _ _ t _ => Choice.styMentions tps t
+    | .ident _ n => tps.contains n
+    | _ => false) e
+
+/-- (#335) The type parameters of the function being elaborated, its own
+    (an inlined generic one's, `$tp…`, are substituted where it is). -/
+def ownTps (ctx : Ctx) : List String :=
+  ctx.types.tvars.filterMap fun (n, _) => if n.startsWith "$tp" then none else some n
+
 /-- (#335) The key of a continuation: where the composed choice is, its
     binding, and the consumer's names the clauses after it use (in a method,
     once its members are `Self`'s, as in the function), as `firstKey`. -/
@@ -2296,15 +2312,16 @@ def contKey (ctx : Ctx) (p : Pos) (b : String) (rest : List SExpr) : String :=
     `c2`, after `rest`; `fxB`, the effects). So `rest` is compiled once, not
     once per alternative, which doubled the code with each such choice. Or
     why not, and the clauses are copied, as before. -/
-def contLiftOf (ctx c2 : Ctx) (p : Pos) (b : String) (rest : List SExpr)
+def contLiftOf (ctx c2 : Ctx) (p : Pos) (b : String) (alts rest : List SExpr)
     (fxB : List (String × Pos × Option String)) : Except String Choice.FirstLift := do
   if ctx.inCtor || ctx.inParamDefault || ctx.inBlock || ctx.inDefer || !ctx.defaults.isEmpty then
     throw "in a constructor, a default or a defer"
-  -- (in a generic function or class: the clauses may write its type
-  -- parameters, `E:[]t = array{}`, which the function would not have;
-  -- an inlined generic one's are substituted, below)
-  if ctx.types.tvars.any (fun (n, _) => !n.startsWith "$tp") then throw "in a generic function"
-  let key := contKey ctx p b rest
+  -- (in a generic function or class, where the clauses write its type
+  -- parameters, `E:[]t = array{}`, which the function would not have; an
+  -- inlined generic one's are substituted, below)
+  if writesTps (ownTps ctx) (.block p rest) then throw "where the clauses write a type parameter"
+  -- (the alternatives' names too: their types fix the binding's)
+  let key := contKey ctx p b (alts ++ rest)
   let σt : List (String × STy) := ctx.types.tvars.filterMap fun (n, t) =>
     if n.startsWith "$tp" then some (n, t.toSTy) else none
   let rest := rest.map (Refine.substTypes σt)
@@ -2369,15 +2386,14 @@ def forBodySafe (ctx : Ctx) (body : SExpr) : Bool :=
     the final values of the `var`s they set), called from each alternative's
     own `for`. Its binding's type `bty`, the values' type `vty`. Or why not,
     and the clauses are copied, as before. -/
-def contForLiftOf (ctx : Ctx) (p : Pos) (b : String) (bty vty : Ty) (rest : List SExpr) (body : SExpr) :
+def contForLiftOf (ctx : Ctx) (p : Pos) (b : String) (bty vty : Ty) (alts rest : List SExpr) (body : SExpr) :
     Except String Choice.FirstLift := do
   if ctx.inCtor || ctx.inParamDefault || ctx.inBlock || ctx.inDefer || !ctx.defaults.isEmpty then
     throw "in a constructor, a default or a defer"
-  -- (in a generic function or class: the clauses may write its type
-  -- parameters, `E:[]t = array{}`, which the function would not have;
-  -- an inlined generic one's are substituted, below)
-  if ctx.types.tvars.any (fun (n, _) => !n.startsWith "$tp") then throw "in a generic function"
-  let key := "f" ++ contKey ctx p b (rest ++ [body])
+  -- (in a generic function or class, where the clauses or the body write
+  -- its type parameters, which the function would not have)
+  if writesTps (ownTps ctx) (.block p (rest ++ [body])) then throw "where the clauses write a type parameter"
+  let key := "f" ++ contKey ctx p b (alts ++ rest ++ [body])
   let σt : List (String × STy) := ctx.types.tvars.filterMap fun (n, t) =>
     if n.startsWith "$tp" then some (n, t.toSTy) else none
   let rest := rest.map (Refine.substTypes σt)
@@ -2460,7 +2476,10 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
       let fs := cs.takeWhile (!isGen ·)
       (g, fs) :: groups (cs.dropWhile (!isGen ·))
   let gs := groups rest
-  let bodyCtx (c : Ctx) : Ctx := { c with canFail := ctx.canFail, inLoop := false, inRepeat := true }
+  -- (where the body may fail: not in a continuation's own clauses, made
+  -- only where it may not, #335)
+  let bodyFail := ctx.canFail && !firstDecides
+  let bodyCtx (c : Ctx) : Ctx := { c with canFail := bodyFail, inLoop := false, inRepeat := true }
   -- elaborate the filters of one generator (in a failure context)
   let elabFilters (c : Ctx) (fs : List SExpr) : EM (Expr × Ctx) := do
     match fs with
@@ -2565,8 +2584,10 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
             | _ => false)
           let hasLoop := (b.alts ++ restCl ++ [body]).any
             (Choice.anyE fun | .app _ (.ident _ "$loop") _ _ => true | _ => false)
-          if restCl.any isCF && !hasLoop && forBodySafe c body then
-            let req := c.types.loopRequests.find? (·.key == "f" ++ contKey c gp b.name (restCl ++ [body]))
+          -- (not where the body may fail: a failure would fail one call, not
+          -- the for, #342's review)
+          if restCl.any isCF && !hasLoop && !bodyFail && forBodySafe c body then
+            let req := c.types.loopRequests.find? (·.key == "f" ++ contKey c gp b.name (b.alts ++ restCl ++ [body]))
             let fits (l : Choice.FirstLift) : Bool :=
               (l.specs.filter (["reads", "writes", "allocates"].contains ·)).all c.fnFx.contains
             if let some l := req then
@@ -2595,18 +2616,20 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
               for (a, i) in b.alts.zipIdx do
                 let r ← forW (liftA a i) (.ident gp b.name)
                 if let .arr t := r.ty then tys := tys ++ [t]
-              let r0 ← forW (liftA a0 0 ++ restCl) body
               let same := tys.length == b.alts.length && tys.all (some · == tys.head?)
-              match (do
-                  let some bty := tys.head? | throw "no type"
-                  let .arr vty := r0.ty | throw "no values"
-                  if !same then throw "alternatives of different types"
-                  contForLiftOf c gp b.name bty vty restCl body) with
-              | .ok lift =>
-                let use : LoopUse := { g := "", pos := gp, itemCode := .lit .void, argSet := none, lift := .ok lift }
-                modify fun st => { st with loopFirst := st.loopFirst ++ [use] }
-                return r0
-              | .error _ => set st0
+              -- (what refuses it known before the trial, which then costs nothing)
+              if same && !writesTps (ownTps c) (.block gp (restCl ++ [body])) then
+                let r0 ← forW (liftA a0 0 ++ restCl) body
+                match (do
+                    let some bty := tys.head? | throw "no type"
+                    let .arr vty := r0.ty | throw "no values"
+                    contForLiftOf c gp b.name bty vty b.alts restCl body) with
+                | .ok lift =>
+                  let use : LoopUse := { g := "", pos := gp, itemCode := .lit .void, argSet := none, lift := .ok lift }
+                  modify fun st => { st with loopFirst := st.loopFirst ++ [use] }
+                  return r0
+                | .error _ => set st0
+              else set st0
           let mut parts : List R := []
           for (a, i) in b.alts.zipIdx do
             parts := parts ++ [← forW (liftA a i ++ fs ++ moreClauses) body]
@@ -5753,7 +5776,7 @@ partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
         -- this changes between elaborations)
         let hasLoop := (b.alts ++ rest).any (Choice.anyE fun | .app _ (.ident _ "$loop") _ _ => true | _ => false)
         if rest.any isComposed && !hasLoop then
-          let req := ctx.types.loopRequests.find? (·.key == contKey ctx p b.name rest)
+          let req := ctx.types.loopRequests.find? (·.key == contKey ctx p b.name (b.alts ++ rest))
           -- (asked for where more effects are allowed than here, as in a
           -- function of its own of a call taken lazily, #246: copied)
           let fits (l : Choice.FirstLift) : Bool :=
@@ -5782,17 +5805,18 @@ partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
             -- one; and the continuations in it, asked for in this elaboration
             -- too, so that nesting takes no more elaborations)
             let mut tys : List Ty := []
-            for (a, i) in b.alts.zipIdx.drop 1 do
+            for (a, i) in b.alts.zipIdx do
               let r ← elabE { ctx with canFail := true, inTaking := true }
                 (.app p (.ident p "$firstP") [.block p (liftAlt a i ++ [.ident p b.name])] false) none
               tys := tys ++ [r.ty]
-            let (code1, c1) ← elabOneGo ctx ([.decl p t none false (alt a0 0)] ++
-              binds.zipIdx.map fun (n, i) => .decl p n none (vars.contains n) (.app p (.ident p t) [.int p (i : Int)] false))
+            let same := tys.all (some · == tys.head?)
+            -- (what refuses it known before the trial, which then costs nothing)
+            let ok := same && !writesTps (ownTps ctx) (.block p rest)
+            let (code1, c1) ← if ok then elabOneGo ctx ([.decl p t none false (alt a0 0)] ++
+                binds.zipIdx.map fun (n, i) => .decl p n none (vars.contains n) (.app p (.ident p t) [.int p (i : Int)] false))
+              else pure (Expr.lit .void, ctx)
             let fxB := (← get).fx
-            let same := match c1.lookup b.name with
-              | some l => tys.all (· == l.ty)
-              | none => false
-            match (if same then contLiftOf ctx c1 p b.name rest fxB else .error "alternatives of different types") with
+            match (if ok then contLiftOf ctx c1 p b.name b.alts rest fxB else .error "alternatives of different types") with
             | .ok lift =>
               let use : LoopUse := { g := "", pos := p, itemCode := .lit .void, argSet := none, lift := .ok lift }
               modify fun st => { st with fx := fx0 }
