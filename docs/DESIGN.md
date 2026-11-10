@@ -673,6 +673,10 @@ flowchart LR
   calls a snapshot of the array and checks each flag just before the call,
   so a function subscribed during a `Signal` waits for the next one and one
   cancelled before its turn is skipped.
+  `subscribable_event()` (#220) is a second prelude class, `subVoidPrelude`'s
+  `$subev0 := class(event(void))`, whose handlers take no value
+  (`type{_():void}`); the parser maps the type and its constructor to it,
+  and it is added only to a program that mentions it.
 - **Over-approximation.** The pass makes a method's value class whenever
   `X.M` is written outside a call for some `X` and a class declares `M`,
   as it cannot tell a method from a field, or from an array's `Length`.

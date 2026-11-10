@@ -99,6 +99,8 @@ def pretty (msg : String) : String :=
       | f :: _ :: _ => s!"{f.replace "$" "."} (called as a function value)"
       | _ => "a function value"
     else if w.startsWith "$fn" then "a function type"
+    -- (the prelude's `subscribable_event()`, #220)
+    else if w == "$subev0" then "subscribable_event()"
     else w
   Id.run do
     let mut out := ""
