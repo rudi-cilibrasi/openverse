@@ -1,0 +1,24 @@
+fast 0 unwinds
+fast 7 unwinds
+race 50
+a 0 unwinds
+a 7 unwinds
+b 0 unwinds
+b 7 unwinds
+sync 35 50
+quick 0 unwinds
+quick 7 unwinds
+slow 0 unwinds
+slow 7 unwinds
+side 0 unwinds
+nested 21 31
+winner 0 unwinds
+rush 10
+w2 0 unwinds
+w2 7 unwinds
+w1 0 unwinds
+w1 7 unwinds
+done
+loser 0 unwinds
+loser 7 unwinds
+exit=0

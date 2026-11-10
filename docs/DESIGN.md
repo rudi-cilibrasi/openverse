@@ -1003,9 +1003,12 @@ instead:
 - A frame that waits records itself in the scheduler (`$Leaf`, after the
   scheduler's own fields), unless a frame it called did; each frame above
   counts itself (`$LeafDepth`; -1: none recorded). A root records none,
-  meaning itself. A frame whose wait goes through the arms of a `sync`,
-  `race` or `rush`, which only it resumes, records itself even then
-  (`Suspend.waitsHere`). A frame called through `Typed.dispatch` (#142,
+  meaning itself, and so does the code of an arm. A frame whose wait goes
+  through the arms of a `sync`, `race` or `rush` records itself even then
+  (`Suspend.waitsHere`); each arm keeps what its chain recorded in a field
+  of its own (after the frame's slots), as a root does, so a pass resumes
+  a waiting arm from that frame and a deep chain in an arm costs no more
+  than one outside (`tests/bench/deep_race.verse`: 1.8 s → 0.1 s). A frame called through `Typed.dispatch` (#142,
   #209, #251) is recorded as any other: `$resumeAny` opens its type
   arguments, and an opened override's `resumeOwn` writes its result cells
   when it ends (again, harmlessly, when its caller polls it after).
@@ -1013,7 +1016,8 @@ instead:
   last field when the frame was found from it at least `leafDepthMin`
   levels down (nearer, a pass from the root costs no more than the
   dispatch), and none otherwise. The next pass resumes that frame through
-  `$resumeAny`, a dispatch over the frame classes to each one's
+  `$resumeAny(recorded, sched, frame)` (-1 when none is recorded; the
+  frame only gives a slot its initial value), a dispatch over the frame classes to each one's
   `resumeOwn` (generic frames have pins on all their type arguments, so
   that it opens them). When the frame waits again, it is kept; when it
   ends, the pass resumes the chain from the root, whose frames seek their
