@@ -692,7 +692,9 @@ Main():void =
     read where it is written, even if an alternative changes it (a `set`,
     or a method changing a field);
   - `set L op= R` evaluates `L`'s indices, then for `op=` its old value, then
-    `R`'s lifted code, as `set` does.
+    `R`'s lifted code, as `set` does. A choice or a call with several values
+    in `L`'s indices is lifted there, first (#283): `for (set A[0 | 1] = 5)`
+    sets `A[0]`, then `A[1]`, each index a generator.
 
   An `if … else if … else …` whose branches are choices, plain values, or
   expressions with choices or calls of functions with several values in
@@ -735,8 +737,8 @@ Main():void =
   (whose scope would change), or inside a construction where a field it
   does not give, with a default that is more than a literal, comes before
   the choice (the default runs in its place); an
-  alternative of a `set`'s choice, either side of `and`, the right of `or`, a range, a
-  `set`'s path (`set A[0 | 1] = …`), or the branch of an `if` without
+  alternative of a `set`'s choice, either side of `and`, the right of `or`, a range,
+  or the branch of an `if` without
   `else`, or one that is a block; and
   a choice anywhere outside these failure contexts. (A field reached
   through a receiver that is not a variable or `Self`, as `F().Items[…]`,
@@ -892,8 +894,7 @@ Main():void =
   arguments where it is inlined, as at a call), a recursive or generic one
   with named parameters, one with a `defer:` of its own (in its body, not in a block inside it), one with a `return`
   other than in an `if`'s branches, or recursive with a `return`, a method whose name another class or interface
-  also has, of a generic class, generic, `<suspends>` or using `(super:)`, one used as a function value, a call of a
-  recursive one in a `set`'s path, and, since its body is inlined where other names may be
+  also has, of a generic class, generic, `<suspends>` or using `(super:)`, one used as a function value, and, since its body is inlined where other names may be
   in scope, one whose name is also the name of a parameter, local, field or
   method anywhere in the program, and a call of one where a name its body
   uses from outside is a parameter, local or member of `Self` in scope.
