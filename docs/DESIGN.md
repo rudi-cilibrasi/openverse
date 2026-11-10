@@ -280,7 +280,7 @@ implementation, if any, is one more implementation, `I$M`, whose guard
 (`I[$r]`, which always holds) comes after those of the classes below it
 that have their own. `inlineMulti` runs before #53's `copyIfaceDefaults`,
 so it sees the interface's default as written.
-Each implementation becomes its own function `D$M`. A call
+Each implementation becomes its own function `D$M`. A generic family (#283, `MFam.rootTps`): the dispatch's receiver takes its type from the call, the template's written types are left out (they name the root's type parameters), each cast `D[$r]` infers `D`'s type arguments from the receiver's, as a cast to a generic class does, and `root$M$fam` is generic too; so every implementing class must give the root its own type parameters, all of them (`rootView`), or the family is refused, since a cast to a class that fixes them may be impossible for the receiver's type, which no dispatch, made before types, can know. Return types are compared through each class's view of the root's type parameters. A call
 `R.M(args)` of an overridden one is a dispatch,
 `$dispatch(root$M, block{ $r : root := $arg; $a… := $arg; $kv := $excl(…) }, R, args…)`.
 `inlineCalls` makes it an inlined call, its names tagged for the site, so
