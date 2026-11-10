@@ -6814,6 +6814,15 @@ def subTops : Except String (List STop) :=
 def subVoidTops : Except String (List STop) :=
   parsePrelude subVoidPrelude ["subscription", "Live", "Handlers", "Hs", "H", "S", "F", "X", "Head", "signalAll", "subev0"]
 
+/-- The types a body writes (bindings', constructions' type arguments) with
+    the names of `σ` substituted (#53): as `Choice.renameTypes`, but by types,
+    an interface's type parameters at the arguments a class gives it. -/
+partial def substTypesE (σ : List (String × STy)) : SExpr → SExpr :=
+  Choice.mapE fun
+    | .decl p n (some t) v x => some (.decl p n (some (t.substNames σ)) v (substTypesE σ x))
+    | .construct p n ts fs => some (.construct p n (ts.map (·.substNames σ)) (fs.map (substTypesE σ)))
+    | _ => none
+
 /-- (#53) An interface that gives a parent interface other type arguments
     than its own type parameters (`c2(t) := interface(container([]t))`) and
     a default body for one of that parent's methods (`Get<override>():[]t`):
@@ -6874,27 +6883,31 @@ def copyIfaceDefaults (tops : List STop) : List STop :=
       let chainDeclares (m : String) : Bool := chain.any fun c => (membersOf c).contains m
       -- (the pinned interfaces reached through interfaces given the class's
       -- own type parameters by name, each with the renaming to the class's)
-      let rec reach (fuel : Nat) (q : String) (qa : List STy) (ρ : List (String × String)) :
-          List (String × List (String × String)) :=
+      let rec reach (fuel : Nat) (q : String) (qa : List STy) (σ : List (String × STy)) :
+          List (String × List (String × STy)) :=
         match fuel, defOf q with
         | f + 1, some (_, true, itps, iparents, _, _) =>
-          let names := qa.filterMap fun | .name x => (ρ.lookup x).orElse fun _ => none | _ => none
-          if names.length != itps.length || qa.length != itps.length then [] else
-          let ρ' := (itps.map (·.name)).zip names
-          (if !itps.isEmpty && pinned itps iparents then [(q, ρ')] else []) ++
+          if qa.length != itps.length then [] else
+          let σ' := (itps.map (·.name)).zip (qa.map (·.substNames σ))
+          (if !itps.isEmpty && pinned itps iparents then [(q, σ')] else []) ++
             iparents.flatMap fun ip => match ip with
-              | .app pq pa => reach f pq pa ρ'
-              | .name pq => reach f pq [] ρ'
+              | .app pq pa => reach f pq pa σ'
+              | .name pq => reach f pq [] σ'
               | _ => []
         | _, _ => []
-      let selfρ := tps.map fun tp => (tp.name, tp.name)
+      let selfσ := tps.map fun tp => (tp.name, STy.name tp.name)
       let targets := parents.flatMap fun p => match p with
-        | .app q qa => reach (defs.length + 1) q qa selfρ
-        | .name q => reach (defs.length + 1) q [] selfρ
+        | .app q qa => reach (defs.length + 1) q qa selfσ
+        | .name q => reach (defs.length + 1) q [] selfσ
         | _ => []
       -- (one copy per interface, also one reached along two paths)
       let targets := targets.foldl (fun acc t => if acc.any (·.1 == t.1) then acc else acc ++ [t]) []
-      let extra : List STop := targets.flatMap fun (j, ρ) =>
+      -- (only where the interface's type arguments mention the class's
+      -- type parameters, which a dispatch may open: at closed ones, the
+      -- interface's own default takes them as hidden arguments, as now)
+      let targets := targets.filter fun (_, σ) =>
+        σ.any fun (_, ty) => STy.mentionsAny (tps.map (·.name)) ty
+      let extra : List STop := targets.flatMap fun (j, σ) =>
         let jScope := (supersOf j).flatMap membersOf
         let risky := ((supersOf n).flatMap membersOf).filter (!jScope.contains ·)
         (((defOf j).map (·.2.2.2.2.2)).getD []).filterMap fun
@@ -6912,12 +6925,12 @@ def copyIfaceDefaults (tops : List STop) : List STop :=
                 !mtps.any (fun tp => tps.any (·.name == tp.name)) &&
                 -- (nor a type parameter the renaming changes as a name in an
                 -- expression, which `renameTypes` leaves: a cast's `c2(t)`)
-                !mentions ((ρ.filter fun (x, y) => x != y).map (·.1)) body &&
+                !mentions ((σ.filter fun (x, y) => match y with | .name y' => x != y' | _ => true).map (·.1)) body &&
                 !mentions risky body && !ps.any (fun sp => risky.contains sp.name ||
                   (sp.default.map (mentions risky)).getD false) then
               let ps' : List SParam := ps.map fun sp =>
-                ({ sp with ty := Choice.styRename ρ sp.ty, «default» := sp.default.map (Choice.renameTypes ρ) } : SParam)
-              some (.fn mp m ps' mtps effs (Choice.styRename ρ ret) (Choice.renameTypes ρ body))
+                ({ sp with ty := sp.ty.substNames σ, «default» := sp.default.map (substTypesE σ) } : SParam)
+              some (.fn mp m ps' mtps effs (ret.substNames σ) (substTypesE σ body))
             else none
           | _ => none
       .classDef cp n tps specs parents false fields ovs (ms ++ extra)

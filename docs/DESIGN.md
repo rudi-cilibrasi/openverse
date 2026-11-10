@@ -1290,8 +1290,10 @@ class(c2(t))` is a `container([]t)` by Core's prefix subtyping, has a pin
 `[]$1` on `container`'s argument and holds `t` in a hidden field, and a
 dispatch from `container(u)` refines `u` to `[]t`. A default body `c2`
 gives one of `container`'s methods (`Get<override>():[]t`) is copied into
-a class that reaches `c2` through interfaces given its own type parameters
-by name (`copyIfaceDefaults`, before elaboration, renaming them): such a
+a class that reaches `c2` with type arguments that mention its own type
+parameters (`copyIfaceDefaults`, before elaboration, substituting them:
+`tb(a, b) := class(c2(tuple(a, b)))`'s copy has `t` as `tuple(a, b)`, also in
+the body's typed locals, `substTypesE`): such a
 dispatch opens `t`, which the class's copy reads from its hidden field,
 where `c2`'s own, shared by its classes, would need it as a hidden
 argument that `Typed.dispatch` cannot pass (its other arguments are typed
