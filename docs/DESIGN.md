@@ -1254,7 +1254,20 @@ position in every class below the one that declares it.
   calls are; a refining cast (#243, #250) relates the object's type
   arguments to the target's through the view too; and an implementation's
   signature is checked against the declaration's at the view (and the
-  class's pins). A `<suspends>` method's refined call opens them as
+  class's pins). The named arguments' temporaries go into the dispatched
+  call (`inlineArgTemps`): literals and slots as they are, a default with
+  no type of its own at its declaration's (`typedDefaults`), and a default
+  computed by code as its code, since the rule types the call's arguments
+  where the dispatch is and the branch evaluates them only when it runs,
+  in order (`typedDefaults` gives every temporary's value, the earlier
+  ones' in it: one with no effect by its value, one computed by code by a
+  read of its slot, which it then stores where it is in the call,
+  `assign`, as the call evaluates its arguments in order, so it runs once;
+  `inlineArgTemps` puts them in the arguments in one pass. Refused when it
+  reads the receiver, also through its parameter's temporary, mentions the
+  opened type arguments, or uses an argument at a type with a type
+  parameter the dispatch's refinement binds; #351, and so for #142's ref
+  branch). A `<suspends>` method's refined call opens them as
   `tcDispatchView` does (`suspendSelfGeneric`). A slot of
   such a type starts as an object of a class of an entry (a prototype or
   placeholder whose view gives the slot's arguments, `TyEnv.viewArgs?`),

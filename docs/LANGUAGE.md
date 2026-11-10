@@ -587,7 +587,11 @@ circle := class(shape, labelled):
     `if`'s condition, whose branch is then a function of its own as below
     (#243: it cannot suspend, `return`, and so on), or to one neither above
     nor below it, and a named argument's default computed by code (not a
-    literal) in a call through one; a cast `T[X]` whose type
+    literal) in a call through one, or to a class that fixes type
+    arguments from generic code, when it reads the receiver (its field),
+    mentions the type arguments the dispatch opens, or uses an argument at
+    a type the dispatch refines (#351: others are evaluated in the call, as
+    that class's, once); a cast `T[X]` whose type
     arguments agree with `X`'s only under a refinement (`dup[P]` for
     `P:pair(a, b)`) other than as the first clause of an `if`'s condition, whose
     branch has a `return` or a `break` that leaves it where the `if`'s value

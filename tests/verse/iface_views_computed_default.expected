@@ -1,0 +1,14 @@
+tick both
+put 7
+put2 3
+use 15 3
+tick a
+tick b
+two 77
+tick one
+put 8
+put2 3
+use 24 4
+tick b1
+two 8
+exit=0
