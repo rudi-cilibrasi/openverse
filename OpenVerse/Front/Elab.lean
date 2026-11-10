@@ -2609,15 +2609,18 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
             -- it and the body, for the values' type, which asks for the
             -- function; its code is not kept, as the next round compiles all)
             if let (true, some ((gs0, r0), some sty)) := (contOK && !cA.typeOnly, alts.head?.map (·, xty)) then
-              let st0 ← get
-              let (f0, a0, t0) ← runPath (liftP gs0 r0 0 ++ restCl) bd false
               let bty ← resolveTy cA.types gp sty
-              match contForLiftOf cA gp x bty t0 altsS restCl bd with
-              | .ok lift =>
-                let use : LoopUse := { g := "", pos := gp, itemCode := .lit .void, argSet := none, lift := .ok lift }
-                modify fun st => { st with loopFirst := st.loopFirst ++ [use] }
-                return (Expr.seq codeA f0, a0, t0)
-              | .error _ => set st0
+              -- (what refuses it known before the trial, which then costs
+              -- nothing: all but the values' type, #364's review)
+              if (contForLiftOf cA gp x bty .void altsS restCl bd).toOption.isSome then
+                let st0 ← get
+                let (f0, a0, t0) ← runPath (liftP gs0 r0 0 ++ restCl) bd false
+                match contForLiftOf cA gp x bty t0 altsS restCl bd with
+                | .ok lift =>
+                  let use : LoopUse := { g := "", pos := gp, itemCode := .lit .void, argSet := none, lift := .ok lift }
+                  modify fun st => { st with loopFirst := st.loopFirst ++ [use] }
+                  return (Expr.seq codeA f0, a0, t0)
+                | .error _ => set st0
             pure (alts.zipIdx.map fun ((gs, r), i) => (liftP gs r i ++ restCl, bd, false))
         let mut filts : Array Expr := #[]
         let mut arrs : Array Expr := #[]
