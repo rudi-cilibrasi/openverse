@@ -956,6 +956,10 @@ structure Sig where
       reads from its receiver's hidden fields (`$w.…`), not from hidden
       parameters, as a dispatch that opens them has none to pass. -/
   selfTps : List String := []
+  /-- The class or interface whose scope its body and its named parameters'
+      defaults resolve in, when not the one its name says: a class's copy of
+      an interface's default, the interface (#53, `copyScope?`). -/
+  scope : Option String := none
   deriving Inhabited
 
 /-- How many hidden parameters (values of type arguments) a function takes. -/
@@ -1076,8 +1080,15 @@ structure Ctx where
       whose values `Typed.dispatch` types under the refinement too. -/
   unrefine : List (Ty × Ty) := []
   /-- In a method of class `c` (the function `c.M`): `c`. A bare name that is
-      not a local is then looked up among the fields and methods of `Self`. -/
+      not a local is then looked up among the fields and methods of `Self`.
+      In a class's copy of an interface's default, the interface (#53). -/
   selfClass : Option String := none
+  /-- In a class's copy of an interface's default (#53), and in the branches
+      lifted from it: `$in` and the class, which tells its refining casts'
+      lifts (#243) from those of the interface's own default and of the
+      other classes' copies, at the same place in the source but at other
+      types. -/
+  liftTag : String := ""
   /-- In a method `c.M` (or `c.(r:)M`): `M` (or `(r:)M`), for `(super:)`. -/
   selfMethod : Option String := none
   /-- In a constructor's items (the function `K$init`, #72): no `return`. -/
@@ -2934,9 +2945,10 @@ partial def elabGenericCallWith (elabE : Ctx → SExpr → Option Ty → EM R) (
         let key := (s.name, s!"?{n}")
         if ctx.defaults.contains key then
           eerr p s!"the default of ?{n} of {s.name} uses itself (a call of {s.name} that omits ?{n})"
-        -- (a method's: its receiver's fields too, through `Self`)
+        -- (a method's: its receiver's fields too, through `Self`; a copy's
+        -- in its interface's scope, as its body, #53)
         let selfC : Option String :=
-          if s.pnames.head? == some "Self" then (s.name.splitOn ".").head? else none
+          if s.pnames.head? == some "Self" then s.scope.orElse fun _ => (s.name.splitOn ".").head? else none
         let dctx := { ctx with locals := earlier, selfClass := selfC, inParamDefault := true,
                                inLoop := false, canFail := ctx.canFail && s.decides,
                                suspends := ctx.suspends && s.suspends,
@@ -3387,7 +3399,7 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
       if ctx.suspends && Suspend.hasSusp isS re.e then
         eerr ee.pos s!"the else of the cast to {shown}, which holds only under a refinement of the type arguments, cannot suspend yet: the if is a dispatch to its branch's function (#243)"
       pure re
-  let key := Refine.keyOf p D
+  let key := Refine.keyOf p D ctx.liftTag
   match env.castRequests.find? (·.key == key) with
   | none =>
     -- (first: the branch in the refined world)
@@ -3441,15 +3453,16 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
     let heap := ["reads", "writes", "allocates"].filter fun k => fxB.any (·.1 == k)
     let specs := (if heap.isEmpty then ["computes"] else heap) ++ (if decides then ["decides"] else [])
     let lift : Refine.Lift := {
-      pos := p, bound := D, target := T,
-      name := s!"$refine{p.line}_{p.col}_{D}" ++ (if p.file.isEmpty then "" else s!"_{p.file}"),
+      pos := p, bound := D, target := T, tag := ctx.liftTag,
+      name := s!"$refine{p.line}_{p.col}_{D}" ++ (if p.file.isEmpty then "" else s!"_{p.file}") ++ ctx.liftTag,
       params := ((D, dTy) :: sig).map (fun (n, t) => { name := n, ty := t.toSTy }) ++
         extra.map fun (n, _) => { name := s!"$type{n}", ty := .name n },
       tparams := tps.map fun (n, c) => { pos := p, name := n, constraint := if c then "comparable" else "type" },
       specs, ret := ret.toSTy, subst := σ, opened := opened.map fun (n, v, _) => (n, v),
       -- (made: a branch the elaborator made, for a cast with clauses
       -- after it, #286, which the source does not have as such)
-      body := if ctx.selfClass.isSome || made then some body else none }
+      -- (and a tagged one, which the source's places do not find, #53)
+      body := if ctx.selfClass.isSome || made || !ctx.liftTag.isEmpty then some body else none }
     modify fun st => if st.castNeeds.any (·.key == key) then st else { st with castNeeds := st.castNeeds ++ [lift] }
     -- (a placeholder: this elaboration goes no further)
     return some ⟨if decides then .prim .fail [] else .prim .userErr [], τ'⟩
@@ -3994,7 +4007,7 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
             let st0 ← get
             let re ← elabE ctx ee none
             set st0
-            match ctx.types.castRequests.find? (·.key == Refine.keyOf p d) with
+            match ctx.types.castRequests.find? (·.key == Refine.keyOf p d ctx.liftTag) with
             | some l => attempt (match l.ret with | .name "logic" => .void | _ => re.ty)
             | none =>
               if re.ty == .void then attempt .void
@@ -4835,9 +4848,10 @@ partial def elabAppBase (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (b
               -- (the default sees the parameters before it, in their temporaries)
               let earlier : List Local := ((s.pnames.zip (List.range k)).filterMap fun (pn, j) =>
                 (slots[j]!).map fun sl => ({ name := pn, slot := sl, ty := ptys[j]!, mutable := false } : Local)).reverse
-              -- (a method's: its receiver's fields too, through `Self`)
+              -- (a method's: its receiver's fields too, through `Self`; a
+              -- copy's in its interface's scope, as its body, #53)
               let selfC : Option String :=
-                if s.pnames.head? == some "Self" then (s.name.splitOn ".").head? else none
+                if s.pnames.head? == some "Self" then s.scope.orElse fun _ => (s.name.splitOn ".").head? else none
               -- (its own context: no return or break into the caller, failure
               -- only for a <decides> callee, and not its own default again)
               let key := (s.name, s!"?{n}")
@@ -6857,6 +6871,17 @@ def subTops : Except String (List STop) :=
 
 def subVoidTops : Except String (List STop) :=
   parsePrelude subVoidPrelude ["subscription", "Live", "Handlers", "Hs", "H", "S", "F", "X", "Head", "signalAll", "subev0"]
+
+/-- The tag of the lifts of the refining casts in a function (#53, #243):
+    a branch lifted from a class's copy of an interface's default, whose
+    name ends with the copy's tag (`$in` and the class), has the copy's, so
+    that its own casts' lifts are told apart too. -/
+def liftTagOf (name : String) : String :=
+  if name.startsWith "$refine" then
+    match (name.splitOn "$in").getLast? with
+    | some c => if (name.splitOn "$in").length > 1 then s!"$in{c}" else ""
+    | none => ""
+  else ""
 
 /-- The interface whose scope a class's copy of its default is elaborated
     in (#53): its `$copyOf:J` effect, which `copyIfaceDefaults` gives it. -/
@@ -9000,7 +9025,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
                           fx := if n.endsWith ".$block" || (n.splitOn "$default$").length > 1 then [] else allowedFx effs,
                           isConst := false,
                           named := (ps.filter (·.named)).map fun q => (q.name, q.default),
-                          pnames := ps.map (·.name) }
+                          pnames := ps.map (·.name), scope := copyScope? effs }
     | .const p n sty _ =>
       let rt ← match sty with
         | some t => do let (rt, _) ← (resolveTy env p t).run {}; pure rt
@@ -9045,7 +9070,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
                             fx := if n.endsWith ".$block" then [] else allowedFx effs,
                             tparams,
                             named := (ps.filter (·.named)).map fun q => (q.name, q.default),
-                            pnames := ps.map (·.name) }
+                            pnames := ps.map (·.name), scope := copyScope? effs }
     | _ => pure ()
   let mkSigProg (sigs : Array Sig) : Prog :=
     { fns := (sigs ++ gsigs).toList.map fun s =>
@@ -9344,6 +9369,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
                        selfClass := scopeClass.orElse fun _ => match name.splitOn "." with
                          | [c, _] => some c
                          | _ => none
+                       liftTag := if scopeClass.isSome then s!"$in{selfCls}" else liftTagOf name
                        selfMethod := match name.splitOn "." with
                          | [_, m] => some m
                          | _ => none }

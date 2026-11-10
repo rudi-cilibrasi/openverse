@@ -49,11 +49,15 @@ structure Lift where
   /-- The branch, when it is not taken from the source as written: in a
       method, with the members of `Self` it names bare made `Self.member`. -/
   body : Option SExpr := none
+  /-- In a class's copy of an interface's default (#53): `$in` and the
+      class, as the copies and the interface's own default share the
+      source's places (`Ctx.liftTag`); such a lift always has its `body`. -/
+  tag : String := ""
   deriving Inhabited
 
-def keyOf (p : Pos) (bound : String) : String := s!"{p.file}:{p.line}:{p.col}:{bound}"
+def keyOf (p : Pos) (bound : String) (tag : String := "") : String := s!"{p.file}:{p.line}:{p.col}:{bound}{tag}"
 
-def Lift.key (l : Lift) : String := keyOf l.pos l.bound
+def Lift.key (l : Lift) : String := keyOf l.pos l.bound l.tag
 
 /-- The sub-expressions of `e`, one level down. -/
 def kids : SExpr → List SExpr

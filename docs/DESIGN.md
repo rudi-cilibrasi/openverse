@@ -1307,11 +1307,16 @@ where `c2`'s own, shared by its classes, would need it as a hidden
 argument that `Typed.dispatch` cannot pass (its other arguments are typed
 without the refinement). The copy is elaborated in `c2`'s scope (its effect
 `$copyOf:c2`, `copyScope?`, sets `Ctx.selfClass` to `c2` and the
-parameter check's members to `c2`'s): a name it uses free is the global
-`c2`'s own body sees, not a member the class adds, its parameters and
-locals shadow none of the class's members, and `(super:)` is what is
-above `c2`; only the receiver, its hidden fields and the dispatch of its
-members are the class's. It is made only where it means what the default
+parameter check's members to `c2`'s, and `Sig.scope` the scope its named
+parameters' defaults are evaluated in at a call): a name it uses free is
+the global `c2`'s own body sees, not a member the class adds, its
+parameters and locals shadow none of the class's members, and
+`(super:)` is what is above `c2`; only the receiver, its hidden fields and
+the dispatch of its members are the class's (a member of `c2` is reached
+as `Self`'s, so one the class overloads cannot be taken as a value). A
+refining cast in it lifts its branch per copy (#243): the copies and
+`c2`'s own default share the source's places, so the lift's key and
+function carry `Ctx.liftTag`, `$in` and the class. It is made only where it means what the default
 does: no class of the chain declares the method (the chain wins over
 defaults), and no other interface above the class gives it a body (one
 that overrides `c2`'s is copied instead); a `<final>` default stays

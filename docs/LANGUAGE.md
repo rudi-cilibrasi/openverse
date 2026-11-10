@@ -520,8 +520,10 @@ circle := class(shape, labelled):
   `c2(t) := interface(container([]t))` is a `container([]t)`, and code
   generic over `container(u)` reaches it with `u` as `[]t` (#53), also
   through a default `c2` gives one of `container`'s methods, which means
-  in every class what it means in `c2` (its names, its parameters and
-  `(super:)`, whatever members the class adds); so may
+  in every class what it means in `c2`: its names, its parameters and
+  their defaults, and `(super:)` resolve as in `c2`, whatever members the
+  class adds (only a method of `c2` used as a value, `H := F`, is refused
+  where the class overloads it); so may
   one without type parameters (`intI := interface(container(int))`). The
   interfaces a class lists may not reach one interface at two instances
   (`class(pi(int), pi(string))`). Inherited field defaults see their
