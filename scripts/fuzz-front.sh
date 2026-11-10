@@ -40,6 +40,10 @@ for f in "$tmp"/m*.verse; do
   # one compilation: it writes the bytecode (so a mutant without one never got past the front
   # end), then the Lean interpreter runs it
   timeout 20 "$ov" run "$f" --emit "$f.vbc" --fuel 200000 >"$f.l" 2>"$f.le"; le=$?
+  # (Lean out of memory under check.sh's cap, CHECK_MEM_GB: a resource limit, as exit 3 is. An
+  # endless search Lean runs with far more memory per unit of fuel than C does: in the nightly
+  # of 2026-11-10, mutants that C stopped at its fuel limit with 30 MB took Lean 9 GB to get there)
+  if [[ $le -eq 1 ]] && grep -q "INTERNAL PANIC: out of memory" "$f.le"; then le=3; fi
   if [[ $le -eq 4 ]] && ! grep -q "internal error" "$f.le"; then rej=$((rej+1)); continue; fi
   if [[ ! -s "$f.vbc" ]]; then echo "FRONT END BUG ($le) on $(basename "$f"): $(head -3 "$f.le")"; cp "$f" "$root/build/" 2>/dev/null; bad=$((bad+1)); continue; fi
   timeout 20 "$cv" "$f.vbc" --fuel 200000 >"$f.c" 2>"$f.ce"; ce=$?
