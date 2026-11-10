@@ -583,9 +583,9 @@ circle := class(shape, labelled):
     nor below it, and a named argument's default computed by code (not a
     literal) in a call through one, or to a class that fixes type
     arguments from generic code, when it reads the receiver (its field),
-    mentions the type arguments the dispatch opens, or uses another
-    default computed by code (#351: others are evaluated in the call, as
-    that class's); a cast `T[X]` whose type
+    mentions the type arguments the dispatch opens, or uses an argument at
+    a type the dispatch refines (#351: others are evaluated in the call, as
+    that class's, once); a cast `T[X]` whose type
     arguments agree with `X`'s only under a refinement (`dup[P]` for
     `P:pair(a, b)`) other than as the first clause of an `if`'s condition, whose
     branch has a `return`, a `break` that leaves it or a `set` of a `var`
