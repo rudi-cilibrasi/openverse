@@ -3332,7 +3332,7 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
       eerr p (s!"a call of {Choice.shownFnName f}, which has several values, cannot be lifted from here, for now (#235): " ++
         "not from a defer:'s body, a construction where a field's default runs before it, " ++
         "an alternative of a set's choice, the right of " ++
-        "and or or, a range, nor from the branch of an if without else, or a block with a range of its own as a branch")
+        "and or or, a range, or a block with a range of its own as a branch")
     eerr p (s!"{Choice.shownFnName f} has several values, so a call of it must be in a failure context that takes them: " ++
       "an if condition, a for's clauses, first{…}, option{…}, logic{…}, not, or the left of or (#235)")
   | .app p (.ident _ "$each") (.app _ (.ident _ fa) _ _ :: _) false =>
@@ -3344,7 +3344,7 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
       eerr p (s!"a call of {Choice.shownFnName f}, which has several values, cannot be lifted from here, for now (#235): " ++
         "not from a defer:'s body, a construction where a field's default runs before it, " ++
         "an alternative of a set's choice, the right of " ++
-        "and or or, a range, nor from the branch of an if without else, or a block with a range of its own as a branch")
+        "and or or, a range, or a block with a range of its own as a branch")
     eerr p (s!"{Choice.shownFnName f} has several values, so a call of it must be in a failure context that takes them: " ++
       "an if condition, a for's clauses, first{…}, option{…}, logic{…}, not, or the left of or (#235)")
   | .app p (.ident _ "$loop") (.ident _ f :: _) false =>
@@ -3355,7 +3355,7 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
       eerr p (s!"a call of {Choice.shownFnName f}, which has several values, cannot be lifted from here, for now (#235): " ++
         "not from a defer:'s body, a construction where a field's default runs before it, " ++
         "an alternative of a set's choice, the right of " ++
-        "and or or, a range, nor from the branch of an if without else, or a block with a range of its own as a branch")
+        "and or or, a range, or a block with a range of its own as a branch")
     eerr p (s!"{Choice.shownFnName f} has several values, so a call of it must be in a failure context that takes them: " ++
       "an if condition, a for's clauses, first{…}, option{…}, logic{…}, not, or the left of or (#235)")
   | .app p (.ident _ "$choice") _ false =>
@@ -3364,8 +3364,7 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
     if ctx.inTaking then
       eerr p ("a choice (a | b) cannot be lifted from here, for now (#208): not from a defer:'s body, " ++
         "a construction where a field's default runs before it, an alternative of a set's " ++
-        "choice, the right of and or or, a range, " ++
-        "nor from the branch of an if without else, or a block with a range of its own as a branch")
+        "choice, the right of and or or, a range, or a block with a range of its own as a branch")
     eerr p ("a choice (a | b) has several values, so it must be in a failure context that takes them: " ++
       "an if condition, a for's clauses, first{…}, option{…}, logic{…}, not, or the left of or (#208)")
   | .app p (.ident _ "$paramDefault") [.ident _ f, .ident _ n, .block _ earlier, d] false =>

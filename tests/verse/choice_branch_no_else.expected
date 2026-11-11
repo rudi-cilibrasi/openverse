@@ -1,0 +1,44 @@
+item 0
+cond 1
+a 1
+item 1
+b 1
+item 1
+lazy 0
+lazy 0
+lazy 0
+lazy 1
+c
+chain 0
+d
+chain 0
+block 3
+chain 1
+block 4
+chain 1
+chain 2
+plain branch
+cond 2
+keep
+first 3
+no values
+implicit value
+option first
+some void
+first lazy
+inline a
+inline tail
+inline value
+inline b
+inline tail
+inline value
+repeat 2
+repeat value
+repeat 1
+repeat value
+repeat value
+rollback
+ping 2
+group value
+group value
+exit=0
