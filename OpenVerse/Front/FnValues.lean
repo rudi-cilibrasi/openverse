@@ -405,7 +405,11 @@ def desugar (tops : List STop) (extra : List STop := []) (requests : List (Strin
           -- Repeated, compound and hidden receiver arguments use ordinary
           -- GADT dispatch. The captured receiver retains their witnesses.
           let overloaded := (ms.filter fun | .fn _ m' .. => m' == m | _ => false).length > 1
-          if members.contains m && needed && !overloaded && ps.all (!·.named) && !m.contains '$' &&
+          -- Member scanning also sees unrelated fields. A parameter absent
+          -- from the signature can never be inferred at value creation, and
+          -- an unused adapter would itself contain an uninferrable call.
+          let inferable := mtps.all fun tp => targs.any (·.mentions tp.name)
+          if members.contains m && needed && !overloaded && inferable && ps.all (!·.named) && !m.contains '$' &&
               !m.startsWith "(" then
             -- Keep method parameters apart from the receiver arguments a
             -- caller substitutes: its `u` may be a different method's `u`.

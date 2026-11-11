@@ -7952,7 +7952,12 @@ partial def elabMember (ctx : Ctx) (p : Pos) (r : R) (m : String) (exp : Option 
         if visibleOv.length > 1 then
           eerr p s!"'{f}' is an overloaded method of {sn}: an overloaded method cannot be used as a value (Book of Verse ch. 6)"
         let hasValue := (ctx.types.supers sn).any fun x => ctx.types.classes.contains s!"{x}${f}$fn"
-        if ctx.hasMethod sn f || (visibleOv.length == 1 && hasValue) then
+        let genericMethod (m : String) : Bool :=
+          match ctx.methodDecl? sn m with
+          | some owner => (ctx.sig? s!"{owner}.{m}").any fun sg => sg.named.isEmpty &&
+              sg.tparams.length > ((ctx.types.sparams.lookup owner).getD []).length
+          | none => false
+        if ctx.hasMethod sn f || (visibleOv.length == 1 && (hasValue || genericMethod visibleOv.head!)) then
           -- a method as a value (#210): an object of the value class of the
           -- nearest class that declares or overrides it (#219: an override
           -- may narrow the result), holding the receiver, of its type, or
@@ -7978,7 +7983,7 @@ partial def elabMember (ctx : Ctx) (p : Pos) (r : R) (m : String) (exp : Option 
           -- its hidden fields retain those witnesses alongside `$self`.
           let methodTps (x : String) := ((env.sparams.lookup s!"{x}${f}$fn").getD []).drop
             ((env.sparams.lookup x).getD []).length
-          if candidates.any (fun x => !(methodTps x).isEmpty) then
+          if genericMethod fv || candidates.any (fun x => !(methodTps x).isEmpty) then
             if let some target := exp then
               for x in candidates do
                 let .struct shape ts := typeOf x | continue
