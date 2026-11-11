@@ -2037,6 +2037,46 @@ def show_func(f):
     return L
 
 
+def gen_incomplete_if(rng):
+    """A conditional chooses a branch once and discards each yielded value."""
+    arms = [rng.sample(range(1, 9), rng.randint(2, 4)) for _ in range(rng.randint(1, 2))]
+    cond = " else ".join(
+        f'if (Tell("guard {i}", K) = {i}) then (' +
+        " | ".join(f"(set Score = {v}; {v})" for v in values) + ")"
+        for i, values in enumerate(arms))
+    cutoff = rng.randrange(10)
+    selector = rng.randrange(len(arms) + 1)
+    source = [
+        "IncompleteIf():void =",
+        "    var Score:int = 0",
+        f"    for (K := 0..{len(arms)}, {cond}, Score >= {cutoff}):",
+        '        Print("void body {K} {Score}")',
+        "    set Score = 0",
+        f"    if (K := {selector}, {cond}, Score >= {cutoff}):",
+        '        Print("void first {Score}")',
+        '    else: Print("void none")',
+    ]
+    output = []
+    score = 0
+    for i, values in enumerate(arms):
+        output.append(f"guard {i}")
+        for v in values:
+            if v >= cutoff:
+                score = v
+                output.append(f"void body {i} {score}")
+    if score >= cutoff:
+        output.append(f"void body {len(arms)} {score}")
+    candidates = arms[selector] if selector < len(arms) else [0]
+    first = next((v for v in candidates if v >= cutoff), None)
+    if first is None:
+        output.append("void none")
+    else:
+        if selector < len(arms):
+            output.append(f"guard {selector}")
+        output.append(f"void first {first}")
+    return source, output
+
+
 lines = []
 out = []
 tests = []
@@ -2283,6 +2323,12 @@ for ti in range(NT):
     lines += as_method(L)
     tests.append(name)
     out += [f"== {name}"] + tout
+
+if BIF and not OVERFLOW[0] and not REFUSED[0]:
+    incomplete_src, incomplete_out = gen_incomplete_if(random.Random(seed * 1000003 + 283))
+    lines += incomplete_src
+    tests.append("IncompleteIf")
+    out += ["== IncompleteIf"] + incomplete_out
 
 src_main = ["Main():void ="] + [f'    Print("== {n}")\n    {n}()' for n in tests]
 if METH:

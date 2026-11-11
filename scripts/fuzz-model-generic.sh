@@ -4,8 +4,9 @@
 # #282) that call such functions on all three paths (inlined, taken lazily, computed at
 # the call), at several types, from for, first-success and <decides> consumers, generic
 # ones too, with arguments that print or choose. The model predicts each program's output,
-# or that it is refused. Lean must match the model, and C must match Lean; no program may
-# hit an internal error. A program that runs out of fuel (exit 3) is skipped.
+# or the diagnostics it may be refused with. Lean must match the model, and C must match
+# Lean. No program may hit an internal error. Programs expected to run are skipped if
+# they run out of fuel (exit 3).
 #   usage: scripts/fuzz-model-generic.sh [COUNT [FIRST_SEED]]
 set -uo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -21,6 +22,16 @@ for ((s=first; s<first+n; s++)); do
   for p in $(sed -n 's/^paths=\([^ ]*\).*/\1/p' "$tmp/p.meta" | tr , ' '); do paths[$p]=$(( ${paths[$p]:-0} + 1 )); done
   rm -f "$tmp/p.vbc"
   timeout 60 "$ov" run "$tmp/p.verse" --emit "$tmp/p.vbc" > "$tmp/l.out" 2> "$tmp/l.err"; le=$?
+  if [[ $(tail -n 1 "$tmp/p.expected") == exit=4 ]]; then
+    if [[ $le -eq 4 && ! -s "$tmp/l.out" ]] &&
+        ! grep -qi internal "$tmp/l.err" &&
+        grep -qF -f <(sed '$d' "$tmp/p.expected") "$tmp/l.err"; then
+      ref=$((ref+1)); continue
+    fi
+    bad=$((bad+1)); save
+    echo "EXPECTED REFUSAL seed $s (Lean exit $le, saved fuzz-model-generic-$s.verse and .expected): $(head -c 200 "$tmp/l.err")"
+    continue
+  fi
   if [[ $le -eq 3 ]]; then fuel=$((fuel+1)); continue; fi
   # (Lean timed out: the reference interpreter is far slower than C on some long backtracking
   # programs, 78 s against 0.1 s at mv seed 20767547; run --emit wrote the bytecode before
@@ -39,7 +50,6 @@ for ((s=first; s<first+n; s++)); do
     echo "MODEL MISMATCH seed $s (Lean exit $le, saved fuzz-model-generic-$s.verse): $(head -c 200 "$tmp/l.err") [$(cat "$tmp/p.meta")]"
     continue
   fi
-  [[ $le -eq 4 ]] && { ref=$((ref+1)); continue; }
   [[ -s "$tmp/p.vbc" ]] || { bad=$((bad+1)); save; echo "NO BYTECODE seed $s"; continue; }
   (ulimit -v 4000000; timeout 60 "$cv" "$tmp/p.vbc") > "$tmp/c.out" 2> /dev/null; ce=$?
   ran=$((ran+1))

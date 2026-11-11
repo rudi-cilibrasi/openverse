@@ -68,22 +68,30 @@ where
     | _ => false
 
 /-- The branches of an `if … else if … else …` chain: each one's conditions
-    (none for the last `else`) and its expression. -/
+    (none for the last `else`) and its expression. A missing `else` gives
+    one void value. -/
 partial def arms : SExpr → List (Option (List SExpr) × SExpr)
   | .ite _ cs t (some e) => (some cs, t) :: arms e
+  | .ite p cs t none => [(some cs, t), (none, .tuple p [])]
   | e => [(none, e)]
+
+/-- Supply the implicit void arm of an incomplete `if` chain, applying
+    `arm` to the written branches. -/
+partial def fillElse (e : SExpr) (arm : SExpr → SExpr := id) : SExpr :=
+  match e with
+  | .ite p cs t u => .ite p cs (arm t) (some ((u.map (fillElse · arm)).getD (.tuple p [])))
+  | _ => arm e
 
 /-- The part of a made name that names an inlined call's site (#235), set
     apart from the position after it (site 1 at line 12 is not site 11 at
     line 2); nothing outside one. -/
 def sitePart (site : String) : String := if site.isEmpty then "" else site ++ "@"
 
-/-- (#283) An `if … else …` (each `else if` with an `else`) with something
+/-- (#283) An `if` with something
     to lift in a branch that `isBranchy` leaves there: a call with several
     values, or a choice inside a branch's expression (`has`, `hasLiftable`,
-    says which). No branch is a block, whose names would outlive it. It is
-    lifted as an exclusive choice of its branches (#314, #331), each
-    branch's own lifted in its path. -/
+    says which). Each branch is lifted in its own path of an exclusive
+    choice (#314, #331). -/
 def branchesLift (has : SExpr → Bool) (e : SExpr) : Bool :=
   match e with
   | .ite .. =>
@@ -96,7 +104,7 @@ def branchesLift (has : SExpr → Bool) (e : SExpr) : Bool :=
           | .decl _ _ none false (.range ..) | .gen .. => true
           | _ => false
       | _ => true
-    isBranchy.complete e && as.all (fun (_, v) => blockOK v) && as.any fun (_, v) => has v
+    as.all (fun (_, v) => blockOK v) && as.any fun (_, v) => has v
   | _ => false
 
 /-- (#283) Whether the elaborator takes this `if` with choices in its
@@ -315,8 +323,10 @@ partial def hasLiftable : SExpr → Bool
       | x => hasLiftable x
   | _ => false
 
-/-- An `if` lifted whole, as a binding of `$branchChoice` (#235, #283). -/
-def liftsAsIf (e : SExpr) : Bool := isBranchy e || branchesLift hasLiftable e
+/-- An `if` that can lift directly at the binding's expected type.
+    An incomplete chain first needs a binding of its own at void. -/
+def liftsAsIf (e : SExpr) : Bool :=
+  isBranchy.complete e && (isBranchy e || branchesLift hasLiftable e)
 
 /-- The same whenever evaluated, and typed by where they are (so they keep
     their expected type in place), so not bound to a name of their own:
@@ -353,9 +363,9 @@ abbrev LM := StateM LiftSt
 def LM.fresh (p : Pos) (k : String) : LM String :=
   modifyGet fun s => (s!"${k}{sitePart s.site}{p.line}_{p.col}_{s.next}", { s with next := s.next + 1 })
 
-def LM.bind (p : Pos) (k : String) (e : SExpr) : LM SExpr := do
+def LM.bind (p : Pos) (k : String) (e : SExpr) (ty : Option STy := none) : LM SExpr := do
   let x ← LM.fresh p k
-  modify fun s => { s with pre := s.pre.push (.decl p x none false e) }
+  modify fun s => { s with pre := s.pre.push (.decl p x ty false e) }
   return .ident p x
 
 /-- `e` with `f` applied top-down: where `f` gives a replacement, it is used
@@ -601,7 +611,11 @@ partial def liftE (isVal : String → Bool) (isField : String → String → Boo
   if !hasLiftable e then return e
   match e with
   | .app p (.ident _ "$choice") _ false => LM.bind p "c" e
-  | .ite p .. => LM.bind p "c" (.app p (.ident p "$branchChoice") [e] false)
+  | .ite p .. =>
+    if isBranchy.complete e then
+      LM.bind p "c" (.app p (.ident p "$branchChoice") [e] false)
+    else
+      LM.bind p "c" (.app p (.ident p "$branchChoice") [fillElse e] false) (some (.name "void"))
   | .app p (.ident q "$each") [.app p2 g args br] false =>
     -- (a call of a recursive function with several values, #235: the
     -- choices in its arguments lifted, then each argument bound, so that
@@ -1239,10 +1253,23 @@ def loopShape? (g : String) (mv : List String) (body : SExpr) (grp : List String
     | .app _ (.ident _ h) as _ => grp.contains h && as.all fun a =>
         plain a && (match a with | .decl .. => false | _ => true)
     | _ => false
+  let inGroup := grp.length > 1
+  let tail := match tail with
+    | .ite .. =>
+      if isBranchy.complete tail then tail else
+        -- An incomplete if discards its branch's values. The function
+        -- and its recursive group can only yield erased values (void
+        -- or any), so their calls stay whole alternatives.
+        let discard (a : SExpr) : SExpr :=
+          if isRec a then a else
+            .block a.pos [.decl a.pos "$discard" (some (.name "void")) false a]
+        fillElse tail fun arm => match alts? arm with
+          | some as => mk arm.pos (as.map discard)
+          | none => discard arm
+    | _ => tail
   let groupOK (e : SExpr) : Bool := ((alts? e).getD [e]).all fun a => isRec a || plain a
   -- (in a group, #283, a branch, or the last expression, may be a call of
   -- another function of it with no choice of its own: `else Evens(N + 1)`)
-  let inGroup := grp.length > 1
   let tailOK :=
     if isBranchy tail || (inGroup && isBranchy.complete tail) then
       (arms tail).all fun (cs?, v) => (cs?.getD []).all plain && groupOK v
