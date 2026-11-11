@@ -1,0 +1,11 @@
+body -1 -2 -3 -6
+end -6
+rows 1
+rank 3 -3
+body -1 -2 3 0
+body -1 -2 4 4
+end 4
+rows 2
+rank 3 3
+rank 3 4
+exit=0

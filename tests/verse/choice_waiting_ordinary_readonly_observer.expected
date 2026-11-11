@@ -1,0 +1,18 @@
+readonly 1 10 30 99
+readonly 1 10 31 99
+readonly 1 11 30 99
+readonly 1 11 31 99
+readonly 1 20 30 99
+readonly 1 20 31 99
+readonly 1 21 30 99
+readonly 1 21 31 99
+readonly 2 10 30 99
+readonly 2 10 31 99
+readonly 2 11 30 99
+readonly 2 11 31 99
+readonly 2 20 30 99
+readonly 2 20 31 99
+readonly 2 21 30 99
+readonly 2 21 31 99
+end 99
+exit=0

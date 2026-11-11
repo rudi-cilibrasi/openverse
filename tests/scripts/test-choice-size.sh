@@ -102,6 +102,13 @@ kinds=(
   typed-exclusive
   typed-first
   typed-for
+  waiting-composed
+  waiting-composed-lazy
+  waiting-exclusive
+  waiting-exclusive-prefix
+  waiting-generic-state
+  waiting-mixed-arrays
+  waiting-nested-value
   waiting-refined
   waiting-refined-lazy
   waiting-refined-opened
@@ -129,6 +136,43 @@ if kind.startswith('open-function-'):
     args = ','.join('7' if i%2==0 else '"s"' for i in range(count))
     print(f'Main():void=Print("{{Run({args})}}")')
     sys.exit(0)
+if kind.startswith('waiting-') and not kind.startswith('waiting-refined'):
+    print('''Early(N:int)<computes>:int =
+    if(N<0):return N
+    if(N=0):return 0
+    N|N+1
+Lazy(N:int)<computes><decides>:int =
+    N>=0
+    N|Lazy[N-1]
+Wait(N:int)<suspends>:int =
+    Sleep(0.0)
+    N''')
+    values = ['(Two(0)|Two(2))'] * count
+    if kind == 'waiting-composed-lazy': values = ['(Lazy[1]|Lazy[-1])'] * count
+    if kind == 'waiting-exclusive': values = ['Early(1)'] * count
+    if kind == 'waiting-exclusive-prefix': values = ['Early(-1)'] * count
+    if kind in ('waiting-mixed-arrays', 'waiting-nested-value'):
+        values = ['Early(1)' if i%2 else '(Two(0)|Two(2))' for i in range(count)]
+    generic = kind == 'waiting-generic-state'
+    clauses = []
+    for i, value in enumerate(values):
+        clauses.append(f'A{i}:={value}')
+        if generic: clauses.append(f'set Total+=A{i}')
+    print(f'Run({"Value:t where t:type" if generic else ""})<suspends>:void =')
+    if generic: print('    var Total:int=0')
+    if kind == 'waiting-nested-value': print('    F:type{_(:int)<suspends>:int}=Wait')
+    print(f'    R:=for({",".join(clauses)}):')
+    if kind == 'waiting-nested-value':
+        print('        for(X:=(Two(0)|Two(2)),Y:=Early(1)):F(A0+X+Y)')
+    else:
+        print('        Sleep(0.0)')
+        if generic: print('        set Total+=1')
+        if kind == 'waiting-mixed-arrays':
+            print('        Empty:[]int=array{}\n        Empty')
+        else: print('        ' + ('Value' if generic else '+'.join(f'A{i}' for i in range(count))))
+    print('    Print("rows {R.Length}' + (' {Total}' if generic else '') + '")')
+    print('Main()<suspends>:void=Run(' + ('"x"' if generic else '') + ')')
+    raise SystemExit
 if kind.startswith('bound-method-'):
     print('''cell:=class{var N:int=0}
 box(t:type,u:type):=class:
