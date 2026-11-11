@@ -2250,7 +2250,10 @@ def methodFns (tops : List STop) (reserved : List String := []) : Except String 
         let args := σ.map (·.2)
         !(args.all (fun | .name x => ctps.contains x | _ => false) &&
           ctps.all (fun x => args.any fun | .name y => y == x | _ => false) &&
-          (args.filterMap fun | .name y => some y | _ => none).eraseDups.length == args.length)
+          (args.filterMap fun | .name y => some y | _ => none).eraseDups.length == args.length &&
+          (((classes.lookup c).map fun (_, _, _, _, tps) => tps).getD []).all fun tp =>
+            tp.constraint != "comparable" || (rootTps.zip args).any fun (rp, arg) =>
+              rp.constraint == "comparable" && (match arg with | .name x => x == tp.name | _ => false))
       | none => false
     let isIface (c : String) := ((classes.lookup c).map fun (_, ii, _) => ii).getD false
     let ordered := impls.mergeSort fun a b =>

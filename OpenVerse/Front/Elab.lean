@@ -1118,7 +1118,7 @@ def coerce (p : Pos) (r : R) (target : Ty) : EM Expr := do
 partial def joinTy (env : TyEnv) (a b : Ty) (exp : Option Ty) (inner : Bool := false) : Option Ty :=
   if a == .never then some b
   else if b == .never then some a
-  else if a == b then some a
+  else if a == b then some (a.commonBounds b)
   else match a, b with
   | .int, .rational | .rational, .int => if inner then none else some .rational
   -- (refinements join at an expected refinement holding both, or at the
@@ -1149,7 +1149,8 @@ partial def joinTy (env : TyEnv) (a b : Ty) (exp : Option Ty) (inner : Bool := f
       -- common one is below (at the same type arguments, #39)
       let up (U : String) (us : List Ty) : Bool :=
         env.isSub S U && env.isSub T U && env.upArgs S as U == us && env.upArgs T bs U == us
-      let atU (U : String) : Ty := .struct U (env.upArgs S as U)
+      let atU (U : String) : Ty :=
+        (Ty.struct U (env.upArgs S as U)).commonBounds (.struct U (env.upArgs T bs U))
       let cands := (env.supers S).filter fun U => up U (env.upArgs S as U)
       let common : Option Ty :=
         match cands.find? fun U => !(env.info U).isIface with
@@ -1159,7 +1160,7 @@ partial def joinTy (env : TyEnv) (a b : Ty) (exp : Option Ty) (inner : Bool := f
           | [U] => some (atU U)
           | _ => none
       match exp with
-      | some (.struct U us) => if env.classes.contains U && up U us then some (.struct U us) else common
+      | some (.struct U us) => if env.classes.contains U && up U us then some (atU U) else common
       | _ => common
     else none
   | .arr x, .arr y => (joinTy env x y (match exp with | some (.arr e) => some e | _ => none) true).map .arr
@@ -1464,7 +1465,8 @@ partial def pruneMethodCases (ctx : Ctx) : SExpr → SExpr
     let possible := match ctx.lookup x with
       | some l => match l.ty.subst ctx.types.tvars with
         | .struct source args => ((ctx.types.concreteBelow source).filter (ctx.types.isSub · target)).any fun c =>
-          (ctx.types.viewArgs? source c (ctx.types.coreArgs source args) (rigid := false)).isSome
+          ((ctx.types.viewArgs? source c (ctx.types.coreArgs source args) (rigid := false)).bind fun as =>
+            ctx.types.refineComparable? [] (ctx.types.comparableArgs c as)).isSome
         | _ => true
       | none => true
     if possible then .ite p [.decl dp d none false cast] body (some next)
@@ -1545,7 +1547,9 @@ def refiningCast? (env : TyEnv) (T : String) (xty : Ty) (avoid : List String := 
     -- as many as the object's: those, as the object's type gives them)
     let targs := if env.isSub S T then env.upArgs S sargs T else env.argsBelow S sargs T
     let cargs := env.coreArgs T targs
-    if cargs == rargs then none
+    let bounds := env.refineComparable? [] (env.comparableArgs T targs)
+    if bounds.isNone then none else
+    if cargs == rargs && bounds.any List.isEmpty then none
     let eqs := rargs.zip cargs
     if (Ty.unifyEqs (fun _ _ => none) [] eqs).isNone then none
     some (S, sargs, targs, common, eqs, [])
@@ -1574,22 +1578,24 @@ def refiningCast? (env : TyEnv) (T : String) (xty : Ty) (avoid : List String := 
     -- (nothing to refine, to open, nor past the object's: a plain cast;
     -- through a view, the object's type arguments come from the dispatch,
     -- as a plain cast does not give them, #351)
-    if !viewedS && cargs.length == rargs.length && opened.isEmpty && μ.all (names.contains ·.1) then none
+    let bounds := env.refineComparable? μ (env.comparableArgs T targs)
+    if bounds.isNone then none else
+    if !viewedS && cargs.length == rargs.length && opened.isEmpty && μ.all (names.contains ·.1) &&
+        (bounds.getD []).all (names.contains ·.1) then none
     some (S, sargs, targs, common, eqs, opened)
 
 /-- Unify a refining cast's equations, preserving comparable opened types. -/
-def castRefinement? (env : TyEnv) (eqs : List (Ty × Ty)) (opened : List (String × String × Bool)) :
+def castRefinement? (env : TyEnv) (eqs : List (Ty × Ty)) (opened : List (String × String × Bool))
+    (required : List Ty := []) :
     Option (List (String × Ty) × List (String × String × Bool)) := do
   let coreFields (n : String) (ts : List Ty) : Option (List Ty) :=
     if env.classes.contains n then none else some ((env.fields n ts).map (·.2.1))
-  let some μ := Ty.unifyEqs coreFields [] eqs | none
-  let cmpVars := env.tvars.filterMap fun (n, t) => match t with
-    | .param _ true => some n
-    | _ => none
-  let cmpOpen := (opened.filter fun (n, _, c) => !c && cmpVars.any fun v =>
-    ((Ty.param v true).subst μ).params.contains n).map (·.1)
-  let mkC (t : Ty) := t.subst (cmpOpen.map fun n => (n, Ty.param n true))
-  some (μ.map fun (v, t) => (v, mkC t), opened.map fun (n, v, c) => (n, v, c || cmpOpen.contains n))
+  let μ ← Ty.unifyEqs coreFields [] eqs
+  let μ ← env.refineComparable? μ required
+  let opened := opened.map fun (n, v, cmp) =>
+    let refined := (Ty.param n cmp).subst μ
+    (n, v, cmp || refined.comparable env)
+  some (μ, opened)
 
 /-- The implementation `(super:)M` reaches in a method of class `c`: what
     the class inherits for the method's slot (`(r:)M`'s, or every slot of
@@ -1801,8 +1807,7 @@ def contTypes (ctx : Ctx) (p : Pos) (inputs outputs : List Ty) (written : SExpr)
   let inputTps := inputs.flatMap Ty.paramsC
   let writtenTys := ctx.types.tvars.filterMap fun (n, t) =>
     if writesTps [n] written then some t else none
-  let tps := (inputTps ++ (outputs ++ writtenTys).flatMap Ty.paramsC).foldl
-    (fun acc (n, cmp) => if acc.any (·.1 == n) then acc else acc ++ [(n, cmp)]) []
+  let tps := Ty.mergeParamBounds (inputTps ++ (outputs ++ writtenTys).flatMap Ty.paramsC)
   let extra := tps.filter fun (n, _) => !inputTps.any (·.1 == n)
   let available := (ctx.types.tvars.map (·.2)).flatMap Ty.paramsC
   if extra.any (fun (n, _) => !available.any (·.1 == n)) then
@@ -1924,7 +1929,7 @@ def contKey (ctx : Ctx) (p : Pos) (b : String) (rest : List SExpr) : String :=
   -- (with their types: a `for`'s body copied once per alternative of a
   -- choice has the same place, with names of other types)
   let caps := (Choice.namesUsed (.block p rest)).eraseDups.filterMap fun n =>
-    (ctx.lookup n).map fun l => s!"{n}:{l.ty.show}"
+    (ctx.lookup n).map fun l => s!"{n}:{reprStr l.ty}"
   -- A type used only by a written annotation has no captured value. Its
   -- instance still distinguishes helpers made at a shared source position.
   let written := ctx.types.tvars.filterMap fun (n, t) =>
@@ -2693,8 +2698,7 @@ partial def substDefaultTypes (σ : List (String × STy)) (e : SExpr) : SExpr :=
     instantiations. Generated annotations keep the actual Core names, even
     when the caller and callee use the same names in a different order. -/
 def defaultTypes (ctx : Ctx) (p : Pos) (s : Sig) (σ : List (String × Ty)) (d : SExpr) : EM (TyEnv × SExpr) := do
-  let core := (σ.flatMap fun (_, t) => t.paramsC).foldl
-    (fun acc (n, cmp) => if acc.any (·.1 == n) then acc else acc ++ [(n, cmp)]) []
+  let core := Ty.mergeParamBounds (σ.flatMap fun (_, t) => t.paramsC)
   let foreign := core.filter fun (n, _) => !s.tparams.any (·.1 == n)
   let names := defaultTypeNames [] d
   let home := { ctx.types with tvars := σ }
@@ -3281,10 +3285,7 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
     (env.coreVars T).all fun (v, _) => !v.startsWith "$arg")
   let coreFields (n : String) (ts : List Ty) : Option (List Ty) :=
     if env.classes.contains n then none else some ((env.fields n ts).map (·.2.1))
-  let some (μT, opened) := castRefinement? env eqs opened | do set st0; return none
-  let cmpVars := env.tvars.filterMap fun (n, t) => match t with
-    | .param _ true => some n
-    | _ => none
+  let some (μT, opened) := castRefinement? env eqs opened (env.comparableArgs T targs) | do set st0; return none
   let targs := targs.map fun t => t.subst (opened.filterMap fun (n, _, c) => if c then some (n, Ty.param n true) else none)
   let shown := (Ty.struct T targs).show
   -- (the locals the branch uses, in order of first use)
@@ -3365,8 +3366,7 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
   -- nested lift, whose frame reference needs exactly this argument order.
   let availableTypes : List Ty := env.tvars.map (fun binding => Ty.subst μT binding.2) ++
     opened.map (fun binding => Ty.param binding.1 binding.2.2)
-  let available := availableTypes.flatMap Ty.paramsC |>.foldl
-      (fun (acc : List (String × Bool)) (n, c) => if acc.any (·.1 == n) then acc else acc ++ [(n, c)]) []
+  let available := Ty.mergeParamBounds (availableTypes.flatMap Ty.paramsC)
   match env.castRequests.find? (·.key == key) with
   | none =>
     -- (first: the branch in the refined world)
@@ -3417,8 +3417,7 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
     discard <| coerce p rb ret
     let decides := rb.e.mayFail ctx.sigProg
     let sig := caps.map fun l => (l.name, refine l.ty)
-    let tps := ((dTy :: ret :: sig.map (·.2)).flatMap Ty.paramsC).foldl
-      (fun acc (n, c) => if acc.any (·.1 == n) then acc else acc ++ [(n, c)]) []
+    let tps := Ty.mergeParamBounds ((dTy :: ret :: sig.map (·.2)).flatMap Ty.paramsC)
     -- (the type parameters only the types written in the branch mention:
     -- each through a parameter of its own, passed a value of it, so that
     -- the call determines it)
@@ -3428,10 +3427,9 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
       (l.name, s.subst μT)
     let storageTypes := (storage.flatMap (fun (_, s) => s.args)).flatMap Ty.paramsC
     let wanted := (if ctx.suspends then available else []) ++ storageTypes ++ written
-    let extra := wanted.foldl (fun acc (n, c) =>
-      if tps.any (·.1 == n) || acc.any (·.1 == n) then acc else acc ++ [(n, c)]) []
-    let tps := if ctx.suspends then available ++ ((tps ++ extra).filter fun (n, _) => !available.any (·.1 == n))
-      else tps ++ extra
+    let allTps := Ty.mergeParamBounds (tps ++ wanted)
+    let extra := allTps.filter fun (n, _) => !tps.any (·.1 == n)
+    let tps := Ty.mergeParamBounds (if ctx.suspends then available ++ allTps else allTps)
     -- (the opened ones' values come from the object's hidden fields; those
     -- of a cast this one is in, from its function's, #250)
     if let some (n, _) := tps.find? fun (n, _) =>
@@ -3516,12 +3514,10 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
       -- class has, related to `X`'s by its view)
       let viewedS := env.viewed.contains S
       let dV := part[0]!
-      let ownC := ((env.coreVars dV).drop (if viewedS then 0 else rargs.length)).map fun (_, t) =>
-        match t with | .param _ c => c | _ => false
       let nV := (env.coreVars dV).length
-      let extOf : List Ty := if viewedS then (List.range nV).map fun i => Ty.param s!"$ext{i}" (ownC.getD i false)
+      let extOf : List Ty := if viewedS then (List.range nV).map fun i => Ty.param s!"$ext{i}" false
         else if !wide then [] else
-        (List.range (pins.length - rargs.length)).map fun i => Ty.param s!"$ext{i}" (ownC.getD i false)
+        (List.range (pins.length - rargs.length)).map fun i => Ty.param s!"$ext{i}" false
       let rxs := if viewedS then extOf else rargs ++ extOf
       let atX := rxs.zipIdx.map fun (r, j) => (pinArg j, r)
       let viewEqs : List (Ty × Ty) := if !viewedS then [] else rargs.zip (env.viewOf S dV extOf)
@@ -3534,20 +3530,16 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
       let some μF := Ty.unifyEqs coreFields [] (if wide || viewedS then needX else needOf pins) | continue
       -- (the object as a `T`: its type parameters from the test's type
       -- arguments, refined)
-      -- (the opened arguments a comparable type parameter's refinement
-      -- mentions are comparable, as in the first elaboration)
-      let cmpExt : List String := (extOf.filterMap fun
-        | .param n _ => if cmpVars.any (fun v => ((Ty.param v true).subst μF).params.contains n) then some n else none
-        | _ => none)
-      let mkX (t : Ty) : Ty := t.subst (cmpExt.map fun n => (n, Ty.param n true))
-      let μF := μF.map fun (v, t) => (v, mkX t)
       let dTyX ← if !wide && !viewedS then pure ((Ty.struct T targs).subst μF) else
         -- (a target seen through views has the tested class's view of it, #351)
-        let rxsF := rxs.map fun t => mkX (t.subst μF)
+        let rxsF := rxs.map (·.subst μF)
         match Ty.unifyEqs coreFields [] ((env.coreArgs T targs).zip
             (if env.viewed.contains T then env.viewOf T dV rxsF else rxsF)) with
-        | some θD => pure (mkX ((Ty.struct T targs).subst θD))
+        | some θD => pure ((Ty.struct T targs).subst θD)
         | none => eerr p s!"cannot cast {withArticle rx.ty.show} to {shown} yet: the object's type arguments as {withArticle part[0]!} do not determine {T}'s (#250)"
+      let targetArgs := match dTyX with | .struct _ args => args | _ => []
+      let some μF := env.refineComparable? μF (env.comparableArgs T targetArgs) | continue
+      let dTyX := dTyX.subst μF
       let dL : Local := { name := D, slot := y, ty := dTyX, mutable := false }
       -- As for method dispatch, pass witnesses at the caller's own types.
       -- Pins may equate one to a newly opened component of a compound type.
@@ -5767,7 +5759,6 @@ partial def elabAppBase (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (b
             -- dispatch with no view, and errors name them)
             let some μF := Ty.unifyEqs coreFields [] (view.zip rargs ++ pinEqs) | continue
             let selfName := s!"$self{slot}"
-            let locsF := locs.map fun l => { l with ty := l.ty.subst μF }
             -- (the implementation's class or interface `e`, above `d`, at
             -- its places among the opened ones: a class's are a prefix of
             -- `d`'s, an interface's those its view gives; not through `d`'s
@@ -5779,13 +5770,17 @@ partial def elabAppBase (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (b
               match eVars.findIdx? (fun (x : String × Ty) => x.1 == v) with
               | some j => eCore.getD j Ty.void
               | none => Ty.void
+            let some μF := env.refineComparable? μF (env.comparableArgs e eArgs) | continue
+            let locsF := locs.map fun l => { l with ty := l.ty.subst μF }
             let selfL : Local := { name := selfName, slot,
                                    ty := .struct e (eArgs.map (·.subst μF)), mutable := false }
             let unrefine := μF.filterMap fun (x, t) =>
               if ctx.dictVars.contains x && t.params.any (·.startsWith "$ext") then
                 (ctx.types.tvars.lookup x).map (t, ·)
               else none
-            let ctx' := { ctx with locals := selfL :: (locsF ++ ctx.locals), unrefine }
+            let ctx' := { ctx with
+              locals := selfL :: (locsF ++ ctx.locals.map fun l => { l with ty := l.ty.subst μF }),
+              types := { env with tvars := env.tvars.map fun (n, t) => (n, t.subst μF) }, unrefine }
             let rc ← elabApp ctx' p (.ident mp fname) (.ident mp selfName :: argIds.toList) bracket
               (some (msRet.subst μF))
             let rcE : Expr := match rc.e with
@@ -5826,7 +5821,7 @@ partial def elabAppBase (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (b
             -- a test is of classes with the same pins)
             let eLen := (env.pinsOf e).length
             let extOf (pins : List (Option Ty)) : List Ty :=
-              (List.range (pins.length - rargs.length)).map fun i => Ty.param s!"$ext{i}" true
+              (List.range (pins.length - rargs.length)).map fun i => Ty.param s!"$ext{i}" false
             let needOf (pins : List (Option Ty)) :=
               let rx := rargs ++ extOf pins
               let atR := rx.zipIdx.map fun (r, j) => (pinArg j, r)
@@ -5873,8 +5868,14 @@ partial def elabAppBase (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (b
                 if calleeDicts != 0 &&
                     !VTy.pinsBelow (env.lowerPins (pins.take (max eLen rargs.length))) (max eLen rargs.length) &&
                     (needOf (env.corePins e)).isEmpty && eLen ≤ rargs.length then
-                  let sd ← fresh (.struct e (argsAt e))
-                  let ctx' := { ctx with locals := { name := s!"$self{sd}", slot := sd, ty := .struct e (argsAt e), mutable := false } :: (locs ++ ctx.locals) }
+                  let argsE := argsAt e
+                  let some μ := env.refineComparable? [] (env.comparableArgs e argsE) | continue
+                  let ty := Ty.struct e (argsE.map (·.subst μ))
+                  let sd ← fresh ty
+                  let ctx' := { ctx with
+                    locals := { name := s!"$self{sd}", slot := sd, ty, mutable := false } ::
+                      ((locs ++ ctx.locals).map fun l => { l with ty := l.ty.subst μ }),
+                    types := { env with tvars := env.tvars.map fun (n, t) => (n, t.subst μ) } }
                   let rc ← elabApp ctx' p (.ident mp fname) (.ident mp s!"$self{sd}" :: argIds.toList) bracket exp
                   acc := .ite (.assign sd (.heap (.isTag (part.toList.map env.tagOf)) [.local slot]))
                     (← coerce p rc msRet) acc
@@ -5890,8 +5891,9 @@ partial def elabAppBase (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (b
                   if env.classes.contains n then none else some ((env.fields n ts).map (·.2.1))
                 let some μF := Ty.unifyEqs coreFields [] (needOf pins) | continue
                 let selfName := s!"$self{slot}"
-                let locsF := locs.map fun l => { l with ty := l.ty.subst μF }
                 let argsE := if env.isSub c e then argsAt e else env.argsBelow c targs e (extOf pins)
+                let some μF := env.refineComparable? μF (env.comparableArgs e argsE) | continue
+                let locsF := locs.map fun l => { l with ty := l.ty.subst μF }
                 let selfL : Local := { name := selfName, slot, ty := .struct e (argsE.map (·.subst μF)), mutable := false }
                 -- (the caller's type parameters the refinement binds to
                 -- types that mention opened ones, for the hidden arguments
@@ -5900,7 +5902,9 @@ partial def elabAppBase (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (b
                   if ctx.dictVars.contains x && t.params.any (·.startsWith "$ext") then
                     (ctx.types.tvars.lookup x).map (t, ·)
                   else none
-                let ctx' := { ctx with locals := selfL :: (locsF ++ ctx.locals), unrefine }
+                let ctx' := { ctx with
+                  locals := selfL :: (locsF ++ ctx.locals.map fun l => { l with ty := l.ty.subst μF }),
+                  types := { env with tvars := env.tvars.map fun (n, t) => (n, t.subst μF) }, unrefine }
                 let rc ← elabApp ctx' p (.ident mp fname) (.ident mp selfName :: argIds.toList) bracket
                   (some (msRet.subst μF))
                 -- (named arguments go through temporaries: put their values
@@ -5918,8 +5922,14 @@ partial def elabAppBase (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (b
                 pinned := true
                 emitted := true
               continue
-            let sd ← fresh (.struct e (argsAt e))
-            let ctx' := { ctx with locals := { name := s!"$self{sd}", slot := sd, ty := .struct e (argsAt e), mutable := false } :: (locs ++ ctx.locals) }
+            let argsE := argsAt e
+            let some μ := env.refineComparable? [] (env.comparableArgs e argsE) | continue
+            let ty := Ty.struct e (argsE.map (·.subst μ))
+            let sd ← fresh ty
+            let ctx' := { ctx with
+              locals := { name := s!"$self{sd}", slot := sd, ty, mutable := false } ::
+                ((locs ++ ctx.locals).map fun l => { l with ty := l.ty.subst μ }),
+              types := { env with tvars := env.tvars.map fun (n, t) => (n, t.subst μ) } }
             let rc ← elabApp ctx' p (.ident mp fname) (.ident mp s!"$self{sd}" :: argIds.toList) bracket exp
             acc := .ite (.assign sd (.heap (.isTag (cls.toList.map env.tagOf)) [.local slot]))
               (← coerce p rc msRet) acc
@@ -5991,6 +6001,12 @@ partial def elabCast (ctx : Ctx) (p : Pos) (T : String) (args : List SExpr) (bra
   let targs := if env.isSub S T then env.upArgs S sargs T else env.argsBelow S sargs T
   if parametric && (env.coreArgs T targs).length > (env.coreArgs S sargs).length then
     eerr p s!"cannot cast {withArticle r.ty.show} to {T}: {T} has type parameters that {S} does not have, which would be unknown here: a cast opens them only as the first clause of an if's condition, D := {T}[X], whose branch then has them (#250)"
+  if bracket then
+    match env.refineComparable? [] (env.comparableArgs T targs) with
+    | none => eerr p s!"{withArticle r.ty.show} is never {withArticle T}: its type arguments do not satisfy {T}'s comparable bounds"
+    | some μ =>
+      if !μ.isEmpty then
+        eerr p s!"a cast to {T} strengthens comparable bounds, which works only as the first clause of an if's condition, D := {T}[X] (#209)"
   let tty : Ty := .struct T targs
   if !bracket then
     if !env.isSub S T then
@@ -6333,7 +6349,7 @@ partial def elabChoiceTypeCondition (ctx : Ctx) : List SExpr → EM (R × Ctx ×
       let env := ctx.types
       if let some (source, _, targs, _, eqs, opened) := refiningCast? env target rx.ty (env.tvars.map (·.1)) then
         if env.isRefClass source && (opened.isEmpty || env.isRefClass target) then
-          if let some (μ, opened) := castRefinement? env eqs opened then
+          if let some (μ, opened) := castRefinement? env eqs opened (env.comparableArgs target targs) then
             let targs := targs.map fun t => t.subst (opened.filterMap fun (n, _, c) => if c then some (n, Ty.param n true) else none)
             let refine (t : Ty) := t.subst μ
             let ty := refine (.struct target targs)
@@ -6416,7 +6432,10 @@ partial def elabBranchAlts (ctx : Ctx) (p : Pos) (i : SExpr) (sty : Option STy) 
     else elabE c a t?
     if ctx.typeOnly then
       if let some t := t? then discard <| coerce a.pos r t
-    return { r with ty := if ctx.typeOnly then wanted.getD r.ty else r.ty }
+    -- Report the original scope's bounds to the outer consumer. The arm's
+    -- local comparable evidence must not constrain an unrefined else path.
+    let bounds := Ty.mergeParamBounds ((ctx.types.tvars.map (·.2) ++ ctx.locals.map (·.ty)).flatMap Ty.paramsC)
+    return { r with ty := if ctx.typeOnly then (wanted.getD r.ty).withParamBounds bounds else r.ty }
   let all : List (Nat × SExpr) := arms.zipIdx.flatMap fun ((_, arm), j) => ((Choice.alts? arm).getD [arm]).map (j, ·)
   -- (#366, the state before the alternatives, for the retries below)
   let st0 ← get
