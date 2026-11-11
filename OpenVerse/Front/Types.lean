@@ -1034,6 +1034,58 @@ partial def Ty.paramsC : Ty → List (String × Bool)
   | .map k v => k.paramsC ++ v.paramsC
   | _ => []
 
+/-- The unknown parameter bounds needed to make this type comparable.
+    Unique references need no bound on their arguments; value structs follow
+    the same argument/field rule as `Ty.comparable`. -/
+partial def Ty.comparableNeeds? (env : TyEnv) : Ty → Option (List String)
+  | .param n false => some [n]
+  | .param _ true => some []
+  | .arr t | .opt t => t.comparableNeeds? env
+  | .tup ts => ts.foldlM (fun ns t => do return (ns ++ (← t.comparableNeeds? env)).eraseDups) []
+  | .map k v => do return ((← k.comparableNeeds? env) ++ (← v.comparableNeeds? env)).eraseDups
+  | .struct n ts =>
+    if env.isRefClass n then if env.isUnique n then some [] else none
+    else if env.classes.contains n then none else
+      (ts ++ (env.fields n ts).map (·.2.1)).foldlM
+        (fun ns t => do return (ns ++ (← t.comparableNeeds? env)).eraseDups) []
+  | .any | .never => none
+  | _ => some []
+
+/-- Comparable bounds declared by a class/interface, at these arguments. -/
+def TyEnv.comparableArgs (env : TyEnv) (n : String) (args : List Ty) : List Ty :=
+  (((env.sparams.lookup n).getD []).zip args).filterMap fun ((_, cmp), t) => if cmp then some t else none
+
+/-- Preserve known comparable facts through type equations, then add only
+    the bounds implied by the selected target's constrained arguments.
+    Boolean evidence changes no type identity or Verse Core representation. -/
+def TyEnv.refineComparable? (env : TyEnv) (μ : List (String × Ty)) (required : List Ty) :
+    Option (List (String × Ty)) := do
+  let known := env.tvars.flatMap fun (_, t) => t.paramsC.filterMap fun (n, cmp) =>
+    if cmp then some (Ty.param n true) else none
+  let names ← (known ++ required).foldlM (fun ns t => do
+    let needs ← ((t.subst μ).subst env.tvars).comparableNeeds? env
+    return (ns ++ needs).eraseDups) []
+  let bounds := names.map fun n => (n, Ty.param n true)
+  let μ := μ.map fun (n, t) => (n, t.subst bounds)
+  return μ ++ bounds.filter fun (n, _) => !μ.any (·.1 == n)
+
+/-- Bounds guaranteed by both values of the same type identity. A branch
+    join cannot provide a stronger bound merely because its first arm does. -/
+partial def Ty.commonBounds : Ty → Ty → Ty
+  | .param n a, .param _ b => .param n (a && b)
+  | .arr a, .arr b => .arr (a.commonBounds b)
+  | .opt a, .opt b => .opt (a.commonBounds b)
+  | .tup as, .tup bs => .tup ((as.zip bs).map fun (a, b) => a.commonBounds b)
+  | .map a b, .map c d => .map (a.commonBounds c) (b.commonBounds d)
+  | .struct n as, .struct _ bs => .struct n ((as.zip bs).map fun (a, b) => a.commonBounds b)
+  | a, _ => a
+
+/-- Merge repeated parameter requirements, retaining the strongest bound
+    without changing the parameter order. -/
+def Ty.mergeParamBounds (xs : List (String × Bool)) : List (String × Bool) :=
+  xs.foldl (fun acc (n, cmp) => if acc.any (·.1 == n) then
+    acc.map fun (m, old) => (m, old || (m == n && cmp)) else acc ++ [(n, cmp)]) []
+
 /-- A value of function type `own` (a shape's interface at its arguments)
     fits function type `t` by variance (#231): the same arity, effects among
     `t`'s, contravariant parameters and a covariant result. -/
