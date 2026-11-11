@@ -116,7 +116,15 @@ scripts/check-quickproof.sh --check         # QuickProof: qp check and qp verify
 scripts/worktree.sh feat/x                  # a worktree ../openverse-x on branch feat/x, built from this one's .lake
 OPENVERSE_DEBUG=1 .lake/build/bin/openverse check F.verse   # an internal error also prints the rejected Verse Core
 .lake/build/bin/openverse core F.verse                      # each function's Verse Core, one statement per line
+.lake/build/bin/openverse check F.verse --no-choice         # enforce the choice-free source profile
 ```
+
+`--no-choice` is an opt-in source profile for `check`, `core`, `emit`, and
+`run`. It excludes `|`, `first`, `for`/generators and ranges, including in
+imports and defaults. Ordinary failure, mutation, output and virtual-clock
+concurrency remain available. See [source profiles](docs/LANGUAGE.md#source-profiles).
+Normal compilation retains ordered choices and generators; their alternatives
+run at runtime. Both modes use the same deterministic Core semantics.
 
 ```verse
 Half(N:int)<decides>:int =

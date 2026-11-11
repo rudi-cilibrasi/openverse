@@ -260,6 +260,15 @@ marker. That block is the body of `first{…}`, `spawn`, `branch`, `sync`,
 `race`, `rush` or `defer:`, which take their choices themselves or run
 apart.
 
+A source profile is checked before any of these transformations
+(`Front.SourceProfile.check`, at `elabProgram`'s public boundary). The
+choice-free profile examines every loaded definition, nested default and
+refinement condition, plus the optional entry expression. It rejects
+source choice/generator constructs before helper generation, so ordinary
+dispatch, function-value, refinement and scheduler helpers can retain their
+internal loops and first-success forms. The profile is an admission rule;
+it does not change the compiled code of an admitted program.
+
 A `return` in such a function's body (#283) is taken out where the body
 is inlined (`Choice.elimReturns`). An `if` with a `return` in a branch,
 `S; if (C) { T } else { U }; R`, becomes the value

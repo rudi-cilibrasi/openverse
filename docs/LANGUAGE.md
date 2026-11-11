@@ -14,7 +14,7 @@ surface Verse is elaborated (`OpenVerse/Front/Elab.lean`) into Verse Core
 
 **Contents**
 
-- The language: [Supported](#supported) · [Source text](#source-text) · [Parametric functions](#parametric-functions) · [Function values](#function-values) · [defer](#defer) · [Overloading](#overloading) · [Parametric structs](#parametric-structs) · [Classes](#classes) · [Mutation, macros, tooling](#mutation-macros-tooling) · [Choice](#choice)
+- The language: [Supported](#supported) · [Source profiles](#source-profiles) · [Source text](#source-text) · [Parametric functions](#parametric-functions) · [Function values](#function-values) · [defer](#defer) · [Overloading](#overloading) · [Parametric structs](#parametric-structs) · [Classes](#classes) · [Mutation, macros, tooling](#mutation-macros-tooling) · [Choice](#choice)
 - More types: [any](#any) · [Refinement types](#refinement-types) · [float](#float) · [rational](#rational) · [char32](#char32)
 - Programs: [Modules](#modules) · [Programs of several files](#programs-of-several-files) · [Concurrency](#concurrency)
 - [Readings openverse takes](#readings-openverse-takes) · [Not supported in v1](#not-supported-in-v1)
@@ -685,6 +685,58 @@ circle := class(shape, labelled):
     file's definitions, and its value is printed when it is an `int`, `char`
     or `string`. The expression may fail, which gives exit code 1.
   - A `#!` first line is a `#` comment.
+
+## Source profiles
+
+Normal compilation supports the ordered multi-value constructs described
+below. `--no-choice` selects an optional **choice-free source profile**:
+
+```sh
+openverse check Program.verse --no-choice
+openverse core Program.verse --no-choice
+openverse emit Program.verse --no-choice -o Program.vbc
+openverse run Program.verse --no-choice --emit Program.vbc
+openverse --no-choice run Program.verse hello do 'Run(Args)'
+```
+
+The profile rejects explicit `|` choices, both forms of `first` macro,
+both forms of `for`, generator clauses, and ranges. This includes ordinary
+array/map/string iteration through `for`, and a trivial `first{3}` or
+single-element `for`. Array/map literals, indexing, ordinary `if`/`if{…}`,
+`option{…}`, `logic{…}`, `not`, `and` and `or` remain available, with their
+usual failure, binding and rollback behavior. A user-defined function named
+`first` is an ordinary function when called without a macro body.
+
+All loaded source is checked, including unused imported definitions,
+file-backed `.value` expressions, methods, constructors, field and parameter
+defaults, refinement conditions, and an optional command-line `do` expression.
+A call or function value cannot hide an excluded construct in another
+loaded definition. Rejection is a front-end error (exit 4) with its source
+position, before execution or writing bytecode.
+
+The profile leaves mutation, heap effects, output, explicit `loop`, recursion
+and virtual-clock concurrency available under their ordinary checks. It is
+a restriction on source choice/generator constructs. Compiler-generated
+loops and internal first-success/dispatch helpers still implement admitted
+source normally. Accepted source emits identical OVBC with and without the
+profile; normal mode retains its existing choice behavior.
+
+`--no-choice` can appear before the command, before its file, or among the
+compiler options after the file. For `emit`, it can also follow `-o FILE`.
+For `run`/`emit`, put compiler options before program arguments or `do EXPR`;
+after the first program argument, subsequent tokens are arguments as before.
+`--` ends option and `do` processing, passing everything after it literally
+as `Args`. For example, `openverse run Program.verse --no-choice -- --no-choice`
+passes the string `--no-choice` as one argument while enforcing the profile.
+
+The compiler API uses `Front.Options.profile := .choiceFree` with `compile`,
+`compileChecked` or `elabProgram`; `compileTops` and `compileWith` also accept
+an optional profile. The default is `.full`.
+
+Both profiles have deterministic execution: `Eval.det` / `Runs.det` establish
+a unique Core outcome and output. Ordered source choices can yield several
+values within that execution. Supporting choice in the compiler means it
+can compile those constructs; the alternatives are evaluated at runtime.
 
 ## Choice
 

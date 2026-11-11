@@ -38,30 +38,33 @@ def runProg (P : Prog) (fuel : Nat) : IO UInt32 := do
     | .err k => IO.eprintln s!"error: {errName k}"; return 2
 
 def usage : String :=
-  "usage: openverse run FILE.verse [--fuel N] [--emit FILE.vbc] [ARG…] [do EXPR]\n" ++
+  "usage: openverse run FILE.verse [--no-choice] [--fuel N] [--emit FILE.vbc] [ARG…] [do EXPR]\n" ++
   "                                               run Main() (or EXPR) with the reference interpreter;\n" ++
   "                                               the ARGs are the program's Args:[]string; --emit also\n" ++
   "                                               writes what emit would, compiling the program once\n" ++
-  "       openverse emit FILE.verse -o FILE.vbc [ARG…] [do EXPR]\n" ++
+  "       openverse emit FILE.verse [--no-choice] -o FILE.vbc [ARG…] [do EXPR]\n" ++
   "                                               compile to OVBC for the C runtime (cverse)\n" ++
-  "       openverse check FILE.verse              parse, elaborate and check only\n" ++
-  "       openverse core FILE.verse               print the elaborated Verse Core\n" ++
+  "       openverse check FILE.verse [--no-choice] parse, elaborate and check only\n" ++
+  "       openverse core FILE.verse [--no-choice]  print the elaborated Verse Core\n" ++
+  "       --no-choice excludes |, first, for/generators and ranges from all loaded source;\n" ++
+  "       it may also precede the command or file. In run/emit, -- passes literal Args.\n" ++
   "       openverse example NAME [--emit FILE.vbc] | openverse examples"
 
 /-- Load a program, a file or a directory with everything it imports, and
     compile it: malformed UTF-8 is a front-end error (exit 4), as is any
     other front-end error. -/
-def loadAndCompile (file : String) (args : List String) (doExpr : Option String) :
+def loadAndCompile (file : String) (args : List String) (doExpr : Option String)
+    (profile : Front.SourceProfile := .full) :
     IO (Except String Prog) := do
   match ← Front.loadProgram file with
   | .error e => return .error e
   | .ok (tops, mentionsArgs) =>
     -- (OPENVERSE_DEBUG=1: an internal error also prints the rejected Verse Core)
     let debug := (← IO.getEnv "OPENVERSE_DEBUG").any fun v => v != "" && v != "0"
-    return Front.compileTops tops args mentionsArgs doExpr debug
+    return Front.compileTops tops args mentionsArgs doExpr debug profile
 
-def withProg (file : String) (k : Prog → IO UInt32) : IO UInt32 := do
-  match ← loadAndCompile file [] none with
+def withProg (file : String) (profile : Front.SourceProfile) (k : Prog → IO UInt32) : IO UInt32 := do
+  match ← loadAndCompile file [] none profile with
   | .error e => IO.eprintln s!"{file}:{e}"; return 4
   | .ok P => k P
 
@@ -72,9 +75,10 @@ def splitDo (rest : List String) : List String × Option String :=
   | (as, "do" :: e) => (as, some (" ".intercalate e))
   | (as, _) => (as, none)
 
-def withProgArgs (file : String) (rest : List String) (k : Prog → IO UInt32) : IO UInt32 := do
-  let (as, e) := splitDo rest
-  match ← loadAndCompile file as e with
+def withProgArgs (file : String) (rest : List String) (profile : Front.SourceProfile)
+    (k : Prog → IO UInt32) (literal : Bool := false) : IO UInt32 := do
+  let (as, e) := if literal then (rest, none) else splitDo rest
+  match ← loadAndCompile file as e profile with
   | .error err => IO.eprintln s!"{file}:{err}"; return 4
   | .ok P => k P
 
@@ -84,17 +88,45 @@ def defaultFuel : Nat := 100000000
     `--emit`, the bytecode `emit` would write is written before the program
     runs, from the same compilation, so the scripts that run a program on both
     implementations compile it once. -/
-def runCmd (file : String) (fuel : Nat) (emit : Option String) : List String → IO UInt32
-  | "--fuel" :: n :: rest => runCmd file n.toNat! emit rest
-  | "--emit" :: out :: rest => runCmd file fuel (some out) rest
-  | rest => withProgArgs file rest fun P => do
+def runCmd (file : String) (fuel : Nat) (emit : Option String)
+    (profile : Front.SourceProfile) : List String → IO UInt32
+  | "--no-choice" :: rest => runCmd file fuel emit .choiceFree rest
+  | "--fuel" :: n :: rest => runCmd file n.toNat! emit profile rest
+  | "--emit" :: out :: rest => runCmd file fuel (some out) profile rest
+  | rest =>
+    let (literal, rest) := match rest with | "--" :: rest => (true, rest) | _ => (false, rest)
+    withProgArgs file rest profile (fun P => do
       if let some out := emit then IO.FS.writeBinFile out P.encode
-      runProg P fuel
+      runProg P fuel) literal
+
+/-- Source-profile options before the command, file or compiler options. -/
+def profilePrefix (profile : Front.SourceProfile) : List String → Front.SourceProfile × List String
+  | "--no-choice" :: rest => profilePrefix .choiceFree rest
+  | rest => (profile, rest)
+
+def emitCmd (file : String) (profile : Front.SourceProfile) : List String → IO UInt32
+  | "--no-choice" :: rest => emitCmd file .choiceFree rest
+  | "-o" :: out :: rest =>
+    let (profile, rest) := profilePrefix profile rest
+    let (literal, rest) := match rest with | "--" :: rest => (true, rest) | _ => (false, rest)
+    withProgArgs file rest profile (fun P => do
+      IO.FS.writeBinFile out P.encode
+      return 0) literal
+  | _ => do IO.eprintln usage; return 4
 
 /-- The hand-written Core programs (`tests/core` holds their encodings). -/
 def allExamples : List (String × Prog) := Examples.all ++ HeapExamples.all
 
 def main (args : List String) : IO UInt32 := do
+  let (profile, args) := profilePrefix .full args
+  let (profile, args) := match args with
+    | command :: rest =>
+      let (profile, rest) := profilePrefix profile rest
+      (profile, command :: rest)
+    | [] => (profile, [])
+  if profile != .full && !(args.head?.any (["run", "emit", "check", "core"].contains ·)) then
+    IO.eprintln "--no-choice selects a Verse source profile for run, emit, check or core"
+    return 4
   match args with
   | ["examples"] =>
     for (n, _) in allExamples do IO.println n
@@ -107,16 +139,8 @@ def main (args : List String) : IO UInt32 := do
     match allExamples.lookup name with
     | some P => IO.FS.writeBinFile file P.encode; return 0
     | none => IO.eprintln s!"no example {name}"; return 4
-  | "run" :: file :: rest => runCmd file defaultFuel none rest
-  | "emit" :: file :: "-o" :: out :: rest => withProgArgs file rest fun P => do
-      IO.FS.writeBinFile out P.encode; return 0
-  | ["check", file] => withProg file fun P => do
-      IO.println s!"ok: {P.fns.length} functions, Main = {P.main}"; return 0
-  | ["core", file] => withProg file fun P => do
-      for (fn, i) in P.fns.zip (List.range P.fns.length) do
-        IO.println s!"fn {i} {fn.name} arity={fn.arity} slots={fn.nslots} decides={fn.decides}"
-        IO.println (fn.body.compact "  " (cap := 1000000))
-      return 0
+  | "run" :: file :: rest => runCmd file defaultFuel none profile rest
+  | "emit" :: file :: rest => emitCmd file profile rest
   | ["gen", seed] => runProg (Gen.program seed.toNat!) defaultFuel
   | ["gen", seed, "--emit", file] => do
       IO.FS.writeBinFile file (Gen.program seed.toNat!).encode; return 0
@@ -124,4 +148,17 @@ def main (args : List String) : IO UInt32 := do
       let P := Gen.program seed.toNat!
       for fn in P.fns do IO.println s!"{fn.name} arity={fn.arity} slots={fn.nslots} decides={fn.decides}\n  {repr fn.body}"
       return 0
+  | command :: file :: rest =>
+    if command == "check" || command == "core" then
+      let (profile, rest) := profilePrefix profile rest
+      if !rest.isEmpty then IO.eprintln usage; return 4
+      withProg file profile fun P => do
+        if command == "check" then
+          IO.println s!"ok: {P.fns.length} functions, Main = {P.main}"
+        else
+          for (fn, i) in P.fns.zip (List.range P.fns.length) do
+            IO.println s!"fn {i} {fn.name} arity={fn.arity} slots={fn.nslots} decides={fn.decides}"
+            IO.println (fn.body.compact "  " (cap := 1000000))
+        return 0
+    else IO.eprintln usage; return 4
   | _ => IO.eprintln usage; return 4

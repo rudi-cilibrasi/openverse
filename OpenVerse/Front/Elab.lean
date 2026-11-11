@@ -22,6 +22,7 @@ import OpenVerse.Core.Derived
 import OpenVerse.Core.TypeCheck
 import OpenVerse.Core.Control
 import OpenVerse.Front.Parser
+import OpenVerse.Front.Profile
 import OpenVerse.Front.Suspend
 import OpenVerse.Front.Rational
 import OpenVerse.Front.Modules
@@ -7777,6 +7778,7 @@ def checkTParams (env : TyEnv) (tps : List TParam) : Except String (List (String
     bound to `Args : []string` (unless the program defines `Args`), and an
     expression to run instead of `Main`. -/
 structure Options where
+  profile : SourceProfile := .full
   eagerRequests : List String := []
   args : Option (List String) := none
   entry : Option SExpr := none
@@ -11314,6 +11316,7 @@ partial def topDefaultCount : STop → Nat
     functions a constructor or an overload becomes shown as written: `K$init`
     is `K<constructor>`, `F$ov1` is `F` (names with `$` are never the user's). -/
 def elabProgram (allTops00 : List STop) (opts : Options := {}) : Except String Compiled :=
+  (SourceProfile.check opts.profile allTops00 opts.entry).bind fun _ =>
   let defaults := allTops00.foldl (fun n t => n + topDefaultCount t) 0
   let classes := allTops00.filter (fun | .classDef .. => true | _ => false) |>.length
   let rounds := max 4 (4 * (allTops00.foldl (fun n t => max n (topLiftDepth t)) 0 + defaults * (classes + 1)))
@@ -11377,20 +11380,21 @@ def compile (src : String) (opts : Options := {}) : Except String Prog := do
 /-- Compile loaded definitions (`Front.loadProgram`) with shell arguments,
     bound to `Args` when given or mentioned, and an optional `do` expression. -/
 def compileTops (tops : List STop) (args : List String) (mentionsArgs : Bool) (doExpr : Option String)
-    (debug : Bool := false) : Except String Prog := do
+    (debug : Bool := false) (profile : SourceProfile := .full) : Except String Prog := do
   let entry ← match doExpr with
     | some t => some <$> parseExprText t
     | none => pure none
   let useArgs := !args.isEmpty || mentionsArgs
-  return (← elabProgram tops { args := if useArgs then some args else none, entry, debug }).prog
+  return (← elabProgram tops { args := if useArgs then some args else none, entry, debug, profile }).prog
 
 /-- Compile with shell arguments (bound to `Args` when given or used) and an
     optional `do` expression, as `openverse run FILE ARG… do EXPR` does. -/
-def compileWith (src : String) (args : List String) (doExpr : Option String) : Except String Prog := do
+def compileWith (src : String) (args : List String) (doExpr : Option String)
+    (profile : SourceProfile := .full) : Except String Prog := do
   let entry ← match doExpr with
     | some t => some <$> parseExprText t
     | none => pure none
   let useArgs := !args.isEmpty || (src.splitOn "Args").length > 1
-  compile src { args := if useArgs then some args else none, entry }
+  compile src { args := if useArgs then some args else none, entry, profile }
 
 end OpenVerse.Front
