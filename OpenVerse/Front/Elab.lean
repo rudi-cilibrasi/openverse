@@ -3106,13 +3106,13 @@ partial def elabGenericCallWith (elabE : Ctx → SExpr → Option Ty → EM R) (
       if let some σ' := s.ret.matchArg ctx.types σ et then σ := σ'
   let bound (σ : List (String × Ty)) (t : Ty) := t.params.all fun v => (σ.lookup v).isSome
   -- Empty values and generic function identifiers need an expected type,
-  -- so they are
-  -- elaborated after the other arguments (they are still evaluated in order)
+  -- so elaborate them after other arguments, while still evaluating in order.
   let fromContext : SExpr → Bool
     | .ident _ "false" | .arrayLit _ [] | .mapLit _ [] => true
     | .ident _ n =>
       (ctx.lookup n).isNone &&
-        !(ctx.selfClass.any fun c => (ctx.types.fields c).any (·.1 == n) || ctx.hasMethod c n) &&
+        !(ctx.selfClass.any fun c => (ctx.types.fields c).any (·.1 == n) || ctx.hasMethod c n ||
+          ((ctx.types.methodOverloads.lookup n).map (·.any (ctx.hasMethod c ·))).getD false) &&
         (ctx.sig? n).any (fun f => !f.isConst && !f.tparams.isEmpty) &&
         ctx.types.classes.contains s!"{n}$fn"
     | _ => false
