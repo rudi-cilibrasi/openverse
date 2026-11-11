@@ -910,7 +910,14 @@ Main():void =
   including for an inherited interface default. The declaring class's
   parameter and result types still describe the call. A generic class's
   method is a function generic over its class's type parameters, inferred
-  from the receiver as at a generic call. A call dispatches on the
+  from the receiver as at a generic call. Methods may also declare type
+  parameters of their own, inferred from the supplied arguments, or from
+  omitted defaults when the static receiver selects one implementation. Overrides
+  may rename these parameters; their signatures and bounds are still checked.
+  Defaults retain the implementation's type scope. Tuple-form super calls
+  infer the ancestor's method parameters at that call, and covariant result
+  selection substitutes both the receiver's and the method's arguments.
+  A call dispatches on the
   receiver's class as any method call does, adding no choice of its own
   (#314): in a `for`, a value the filters after it reject undoes what came
   before it, the receiver's and the arguments' effects and the earlier
@@ -1050,7 +1057,7 @@ Main():void =
   (a generic one's type arguments are inferred from the
   arguments where it is inlined, as at a call, named ones too), a recursive one with a `defer:` of its own, or called by a recursive one (its body a function's, where it would run once), one with a `defer:` after a `return` (which may leave before it is reached), or with an `if`'s branch that has a `defer:` of its own, a `return` before its end and a path that does not return, one with a `return`
   other than in an `if`'s branches, or recursive with a `return`, a method whose name another class or interface
-  also has, with its own method type parameters, `<suspends>` or using `(super:)` of another method, one used as a function value, and, since its body is inlined where other names may be
+  also has, `<suspends>` or using `(super:)` of another method, one used as a function value, and, since its body is inlined where other names may be
   in scope, one whose name is also the name of a parameter, local, field or
   method anywhere in the program, and a call of one where a name its body
   uses from outside is a parameter, local or member of `Self` in scope.

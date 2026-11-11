@@ -2067,7 +2067,7 @@ def forBodySafe (ctx : Ctx) (body : SExpr) : Bool :=
   -- Prepared consumers keep lazy producer templates (including groups and
   -- generic/default argument bindings) inside the body. Their ownership is
   -- checked when that consumer elaborates; they do not escape the helper.
-  let safeMarkers := ["$sourceSuper", "$methodMiss", "$methodCast", "$methodCase", "$methodType", "$inlineScope", "$inlineScopeEnd", "$inline", "$choice", "$excl", "$alt", "$firstP", "$first", "$each", "$noLift", "$fxOf",
+  let safeMarkers := ["$sourceSuper", "$methodMiss", "$methodCast", "$methodCase", "$methodType", "$methodParams", "$inlineScope", "$inlineScopeEnd", "$inline", "$choice", "$excl", "$alt", "$firstP", "$first", "$each", "$noLift", "$fxOf",
     "$forReturns", "$forReturnBody", "$defer", "$loop", "$rec", "$recTo", "$group", "$member",
     "$tparams", "$params", "$defaults", "$paramDefault", "$freeNames", "$declNames", "$callArgs"]
   !(Refine.findPart (fun | .brk _ => true | _ => false) true body).isSome &&
@@ -4772,13 +4772,49 @@ partial def elabStmt (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM (R × Ctx) 
       pure (⟨.lit .void, .void⟩, { ctx with inlineScopes := name :: ctx.inlineScopes })
     | .app _ (.ident _ "$inlineScopeEnd") [] false =>
       pure (⟨.lit .void, .void⟩, { ctx with inlineScopes := ctx.inlineScopes.drop 1 })
-    | .app p (.ident _ "$methodType") [.ident _ receiver, .str _ [.text method]] false => do
+    | .app p (.ident _ "$methodParams") [.ident _ receiver, .str _ [.text method], .block _ ownTypes, .block _ args] _ => do
+      let aliases ← ownTypes.mapM fun
+        | .decl _ _ (some (.name n)) _ _ => pure n
+        | _ => eerr p "internal: a method's type parameter"
+      if aliases.all fun n => (ctx.types.tvars.lookup n).isSome then
+        pure (⟨.lit .void, .void⟩, ctx)
+      else
+        let some receiverLocal := ctx.lookup receiver | eerr p "internal: missing method receiver"
+        let .struct c _ := receiverLocal.ty | eerr p "method receiver is not a class or interface"
+        let some owner := ctx.methodDecl? c method | eerr p s!"{c} has no method {method}"
+        let root := (ctx.rootsOf c method).headD owner
+        let implementations := ((ctx.types.concreteBelow c).map (ctx.implFor? · root method)).eraseDups
+        let [some fname] := implementations
+          | eerr p s!"cannot infer the type parameters of {method} from the arguments of this call"
+        let some member := ctx.sig? fname | eerr p "internal: missing method declaration"
+        -- Interface defaults may have been copied onto a concrete class
+        -- after method extraction. Their generated function belongs to the
+        -- original interface, whose parameters its receiver still supplies.
+        let cls := member.scope.getD (fname.splitOn ".").head!
+        if !ctx.types.isSub c cls then
+          eerr p s!"cannot infer the type parameters of {method} from the arguments of this call"
+        -- The member's checking stub has erased defaults. The generated
+        -- implementation function retains their bodies and lexical scope.
+        let implementation := Choice.methodFnName cls method
+        let some sig := ctx.sig? implementation | eerr p "internal: missing method implementation"
+        let saved ← get
+        let packet ← elabGenericCallWith elabE { ctx with typeOnly := true, callInstanceProbe := some implementation }
+          p sig (.ident p receiver :: args) none
+        restoreConstructProbe ctx saved
+        let .tup types := packet.ty | eerr p "internal: a method argument type packet"
+        let own := types.drop ((ctx.types.sparams.lookup cls).getD []).length
+        pure (⟨.lit .void, .void⟩, { ctx with types := { ctx.types with tvars := ctx.types.tvars ++ aliases.zip own } })
+    | .app p (.ident _ "$methodType") [.ident _ receiver, .str _ [.text method], .block _ ownTypes] false => do
       let some receiverLocal := ctx.lookup receiver | eerr p "internal: missing method receiver"
       let .struct c args := receiverLocal.ty | eerr p "method receiver is not a class or interface"
       let some owner := ctx.methodDecl? c method | eerr p s!"{c} has no method {method}"
       let some sg := ctx.sig? s!"{owner}.{method}" | eerr p "internal: missing method declaration"
       let names := ((ctx.types.sparams.lookup owner).getD []).map (·.1)
-      let result := sg.ret.subst (names.zip (ctx.types.upArgs c args owner))
+      let types ← ownTypes.mapM fun
+        | .decl q _ (some t) _ _ => resolveTy ctx.types q t
+        | _ => eerr p "internal: a method's type argument"
+      let own := (sg.tparams.drop names.length).map (·.1)
+      let result := sg.ret.subst (names.zip (ctx.types.upArgs c args owner) ++ own.zip types)
       pure (⟨.lit .void, .void⟩, { ctx with types := { ctx.types with tvars := (receiver, result) :: ctx.types.tvars } })
     | .app _ (.ident _ "$declNames") ns false => do
       -- (#283) the names a block whose choice is lifted binds (renamed for
@@ -5250,15 +5286,30 @@ partial def elabApp (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (brack
         let r ← elabE ctx receiver none
         let some σ := s.params[0]!.matchArg ctx.types [] r.ty
           | eerr receiver.pos s!"expected {s.params[0]!.show}, found {r.ty.show} (the receiver of {Choice.shownFnName g})"
-        let ty := Ty.tup ((s.params.drop 1 |>.take (npos - 1)).map (·.subst σ))
+        let pattern := Ty.tup (s.params.drop 1 |>.take (npos - 1))
+        let known := pattern.params.all fun n => (σ.lookup n).isSome
         let rv ← fresh r.ty
         let rn := s!"$methodReceiver{rv}"
+        let c := { ctx with locals := { name := rn, slot := rv, ty := r.ty, mutable := false } :: ctx.locals }
+        if !known then
+          if let .tuple _ fields := tupleArg then
+            let out ← elabAppBase c p f (.ident p rn :: fields ++ namedArgs) bracket exp
+            return ⟨.seq (.assign rv r.e) out.e, out.ty⟩
+          let tuple ← elabE ctx tupleArg none
+          let .tup ts := tuple.ty
+            | eerr tupleArg.pos s!"expected tuple argument of {Choice.shownFnName g}, found {tuple.ty.show}"
+          let tv ← fresh tuple.ty
+          let tn := s!"$methodTuple{tv}"
+          let c := { c with locals := { name := tn, slot := tv, ty := tuple.ty, mutable := false } :: c.locals }
+          let parts := ts.zipIdx.map fun (_, i) =>
+            SExpr.app tupleArg.pos (.ident tupleArg.pos tn) [.int tupleArg.pos (i : Int)] false
+          let out ← elabAppBase c p f (.ident p rn :: parts ++ namedArgs) bracket exp
+          return ⟨.seq (.assign rv r.e) (.seq (.assign tv tuple.e) out.e), out.ty⟩
+        let ty := pattern.subst σ
         let tuple ← coerce tupleArg.pos (← elabE ctx tupleArg (some ty)) ty
         let tv ← fresh ty
         let tn := s!"$methodTuple{tv}"
-        let c := { ctx with locals :=
-          { name := tn, slot := tv, ty, mutable := false } ::
-          { name := rn, slot := rv, ty := r.ty, mutable := false } :: ctx.locals }
+        let c := { c with locals := { name := tn, slot := tv, ty, mutable := false } :: c.locals }
         let parts := (List.range (npos - 1)).map fun (i : Nat) =>
           SExpr.app tupleArg.pos (.ident tupleArg.pos tn) [.int tupleArg.pos (i : Int)] false
         let out ← elabAppBase c p f (.ident p rn :: parts ++ namedArgs) bracket exp

@@ -1,0 +1,13 @@
+receiver
+tuple
+child
+all s
+tuple
+base 0
+all s
+receiver
+tuple
+child
+first p
+none
+exit=0

@@ -1,0 +1,10 @@
+literal 2 2 z
+literal 0 0 s
+literal 1 1 z
+args
+computed 2 2 q
+computed 0 0 p
+computed 1 1 q
+direct 0 0 7
+direct 1 1 7
+exit=0

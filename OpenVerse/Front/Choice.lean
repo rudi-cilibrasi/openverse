@@ -1548,13 +1548,25 @@ partial def inlineCalls (mv : List (String × MFn)) (e : SExpr) (recs : List Str
       -- (named parameters, #283: none of that, as at such a call)
       let hasNamed := f.params.any (·.named)
       let posPs := f.params.filter (!·.named)
+      -- Literal tuple fields participate in generic method inference one
+      -- at a time, so an earlier value can type a later empty container.
+      let namedArg := fun | SExpr.decl _ n _ _ _ => n.startsWith "?" | _ => false
+      let selfP := f.params.head?.any (·.name == "$Self")
+      let classTps := match f.params.head?.map (·.ty) with
+        | some (.app _ ts) => ts.length
+        | _ => 0
+      let as := if selfP && f.tparams.length > classTps && posPs.length >= 3 then
+          match as.filter (!namedArg ·) with
+          | [receiver, .tuple _ fields] =>
+            if fields.length == posPs.length - 1 then receiver :: fields ++ as.filter namedArg else as
+          | _ => as
+        else as
       let posAs := as.filter fun | .decl _ n _ _ _ => !n.startsWith "?" | _ => true
       let namedAs : List (Pos × String × SExpr) := as.filterMap fun
         | .decl ap n _ _ x => if n.startsWith "?" then some (ap, (n.drop 1).toString, x) else none
         | _ => none
       -- (a method's function, #283: its receiver first, then the arguments
       -- as a method's; no array form for a method, as at its call)
-      let selfP := match f.params with | sp :: _ => sp.name == "$Self" | _ => false
       let off := if selfP then 1 else 0
       let arrayParam := !hasNamed && !selfP && match f.params with | [sp] => (match sp.ty with | .arr _ => true | _ => false) | _ => false
       let tupleArg := !hasNamed && as.length == 1 + off && f.params.length ≥ 2 + off
@@ -2011,6 +2023,8 @@ structure MFam where
       dispatch's receiver then takes its type from the call, and the casts
       to each implementing class infer theirs from it. -/
   rootTps : List TParam := []
+  /-- The method's own type parameters, inferred from its call arguments. -/
+  methodTps : List TParam := []
   /-- Dispatch casts may refine or open the receiver's type arguments. -/
   refining : Bool := false
   /-- The static receiver's declaration determines a possibly narrower result. -/
@@ -2065,6 +2079,10 @@ partial def rwFamCalls (anc : String → List String) (fams : List (String × MF
   -- call, #140, also where the function is not inlined, a kept body)
   let superCall (p q : Pos) (fn : String) (f : MFam) (recv : SExpr) (args : List SExpr) (br : Bool)
       (view : List (String × STy)) : SExpr :=
+    -- A method's own parameters are inferred at this call. The ancestor's
+    -- names are outside the override's scope; generic inlining (and lazy
+    -- recursive binding) expands its tuple at the inferred instance.
+    if !f.methodTps.isEmpty then .app p (.ident q fn) (recv :: args) br else
     let named := fun | SExpr.decl _ n _ _ _ => n.startsWith "?" | _ => false
     -- A super call is written in the caller class's type scope. Its
     -- invariant parameter types are the root signature viewed there,
@@ -2079,6 +2097,13 @@ partial def rwFamCalls (anc : String → List String) (fams : List (String × MF
         .app p (.ident q fn) (.ident p r :: posPs.zipIdx.map fun (_, i) => .app p (.ident p t) [.int p (i : Int)] false) br]
     | _ => .app p (.ident q fn) (recv :: args) br
   let call (p q : Pos) (m : String) (f : MFam) (recv : SExpr) (args : List SExpr) (br : Bool) : SExpr :=
+    let named := fun | SExpr.decl _ n _ _ _ => n.startsWith "?" | _ => false
+    let args := if !f.methodTps.isEmpty && (f.params.filter (!·.named)).length >= 2 then
+        match args.filter (!named ·) with
+        | [.tuple _ fields] =>
+          if fields.length == (f.params.filter (!·.named)).length then fields ++ args.filter named else args
+        | _ => args
+      else args
     if f.direct then .app p (.ident q (methodFnName f.root m)) (recv :: args) br
     else if trial then .app p (.ident q (methodFnName f.root m ++ "$fam")) (recv :: args) br
     -- (its declaring class's the only implementation, an abstract override
@@ -2089,7 +2114,8 @@ partial def rwFamCalls (anc : String → List String) (fams : List (String × MF
       let site := s!"{p.line}_{p.col}"
       let (r, dn, kv) := (s!"$r{site}", s!"$d{site}", s!"$kv{site}")
       let raw := s!"$receiver{site}"
-      let actual := if f.covariant then SExpr.ident p raw else recv
+      let keepStatic := f.covariant || !f.methodTps.isEmpty
+      let actual := if keepStatic then SExpr.ident p raw else recv
       let aN (i : Nat) : String := s!"$a{i}_{site}"
       -- (the arguments as a call evaluates them: positional, then named as
       -- written, #283)
@@ -2099,8 +2125,13 @@ partial def rwFamCalls (anc : String → List String) (fams : List (String × MF
       let posPs := f.params.filter (!·.named)
       -- (one tuple argument to several positional parameters, and no named
       -- one: taken apart, as at a call, #140)
-      let tupled := vals.length == 1 && !(args.any named) && posPs.length ≥ 2
-      let passed := if tupled then posPs.zipIdx.map fun (_, i) => SExpr.ident p (aN i) else
+      let namedArgs := args.filter named
+      let tupled := (args.filter (!named ·)).length == 1 && posPs.length ≥ 2
+      let passed := if tupled then
+        posPs.zipIdx.map (fun (_, i) => SExpr.ident p (aN i)) ++ namedArgs.zipIdx.map (fun (a, i) => match a with
+          | .decl ap n t v _ => SExpr.decl ap n t v (.ident p (aN (posPs.length + i)))
+          | _ => a)
+        else
         args.zipIdx.map fun (a, i) => match a with
         | .decl ap n t v _ => if n.startsWith "?" then SExpr.decl ap n t v (.ident p (aN i)) else .ident p (aN i)
         | _ => .ident p (aN i)
@@ -2110,7 +2141,8 @@ partial def rwFamCalls (anc : String → List String) (fams : List (String × MF
       -- named for this call, `$params` below inferring them from the
       -- receiver and the arguments, as at a call of a generic function)
       let tpN (n : String) : String := s!"$tp{p.line}x{p.col}_{n}"
-      let σn : List (String × String) := f.rootTps.map fun tp => (tp.name, tpN tp.name)
+      let tps := f.rootTps ++ f.methodTps
+      let σn : List (String × String) := tps.map fun tp => (tp.name, tpN tp.name)
       let tyR (t : STy) : STy := styRename σn t
       let tyAt0 (a : SExpr) (i : Nat) : Option STy := match a with
         | .decl _ n _ _ _ =>
@@ -2121,9 +2153,10 @@ partial def rwFamCalls (anc : String → List String) (fams : List (String × MF
       let binds : List SExpr := if tupled then
           let t := s!"$t{site}"
           SExpr.decl p t (some (tyR (.tup (posPs.map (·.ty))))) false (.ident p "$arg") ::
+            (namedArgs.zipIdx.map (fun (a, i) => SExpr.decl p (aN (posPs.length + i)) (tyAt a (posPs.length + i)) false (.ident p "$arg"))) ++
             posPs.zipIdx.map fun (sp, i) => SExpr.decl p (aN i) (some (tyR sp.ty)) false (.app p (.ident p t) [.int p (i : Int)] false)
         else args.zipIdx.map fun (a, i) => SExpr.decl p (aN i) (tyAt a i) false (.ident p "$arg")
-      let castTo (d : String) : SExpr := .app p (.ident p d) [if f.covariant then .ident p raw else .ident p r] true
+      let castTo (d : String) : SExpr := .app p (.ident p d) [if keepStatic then .ident p raw else .ident p r] true
       let alt (d : String) : List SExpr × SExpr :=
         let guard := if d == f.root then SExpr.decl p dn none false (.ident p r)
           else .decl p dn none false (castTo d)
@@ -2139,28 +2172,36 @@ partial def rwFamCalls (anc : String → List String) (fams : List (String × MF
       -- the template is led by `$tparams`, as an inlined generic call's;
       -- its name for messages only, as shown: no function's, which a use
       -- as a value would be taken for)
-      let head : List SExpr := if f.rootTps.isEmpty then recvB :: binds else
+      let head : List SExpr := if tps.isEmpty then recvB :: binds else
         .app p (.ident p "$tparams") (.ident p (shownFnName (methodFnName f.root m)) ::
-          f.rootTps.map fun tp => .tuple p [.ident p (tpN tp.name), .ident p tp.constraint]) false :: recvB :: binds
+          tps.map fun tp => .tuple p [.ident p (tpN tp.name), .ident p tp.constraint]) false :: recvB :: binds
       -- A refining implementation must keep its cast with its body. Most
       -- specific classes win before interface defaults, as ordinary dispatch
       -- does. A marked cast lets typing discard statically impossible cases.
-      let cases := if !f.refining && !f.covariant then mkExcl p (f.impls.map alt) else
-        let fallback := if f.impls.contains f.root && !f.covariant then
+      let cases := if !f.refining && !keepStatic then mkExcl p (f.impls.map alt) else
+        let fallback := if f.impls.contains f.root && !keepStatic then
           SExpr.app p (.ident q (methodFnName f.root m)) (.ident p r :: passed) br
           else .app p (.ident p "$methodMiss") [] false
         f.cases.foldr (fun (d, impl) rest =>
           let dn := dn ++ "$" ++ d
           let body := SExpr.app p (.ident q (methodFnName impl m)) (.ident p dn :: passed) br
-          if d == f.root && !f.covariant then
+          if d == f.root && !keepStatic then
             SExpr.block p [.decl p dn none false (.ident p r), body]
-          else SExpr.ite p [.decl p dn none false (.app p (.ident p (if f.covariant then "$methodCase" else "$methodCast")) [castTo d] false)] body (some rest)) fallback
+          else SExpr.ite p [.decl p dn none false (.app p (.ident p (if keepStatic then "$methodCase" else "$methodCast")) [castTo d] false)] body (some rest)) fallback
       let ret := if f.covariant then some (STy.app "$methodResult" [.name raw]) else f.ret.map tyR
-      let tmpl := head ++ [.decl p kv ret false cases]
+      let ownTypes := f.methodTps.zipIdx.map fun (tp, i) =>
+        SExpr.decl p s!"$methodTypeArg{i}" (some (.name (tpN tp.name))) false (.tuple p [])
+      -- A statically selected implementation's omitted defaults may infer
+      -- method parameters. Probe ordinary binding after supplied arguments
+      -- are saved; its defaults still run only in the selected body.
+      let inferTypes := if f.methodTps.isEmpty then [] else
+        [SExpr.app p (.ident p "$methodParams") [.ident p raw, .str p [.text m], .block p ownTypes, .block p passed] br]
+      let resultType := if !f.covariant then [] else
+        [SExpr.app p (.ident p "$methodType") [.ident p raw, .str p [.text m], .block p ownTypes] false]
+      let tmpl := head ++ inferTypes ++ resultType ++ [.decl p kv ret false cases]
       let dispatch := SExpr.app p (.ident p "$dispatch") (.ident q (methodFnName f.root m) :: .block p tmpl :: actual :: vals) false
-      if !f.covariant then dispatch else
-        .block p [.decl p raw none false recv,
-          .app p (.ident p "$methodType") [.ident p raw, .str p [.text m]] false, dispatch]
+      if !keepStatic then dispatch else
+        .block p [.decl p raw none false recv, dispatch]
   mapE (fun
     | .app p (.member q recv m) args br =>
       match fams.lookup m with
@@ -2188,8 +2229,8 @@ partial def rwFamCalls (anc : String → List String) (fams : List (String × MF
     method whatever `R` is: such a method's name is no other class's or
     interface's member apart from its own override family, no top-level
     name and no parameter or local. Class parameters become function
-    parameters; method type parameters, suspension and `(super:)` of
-    another method remain unsupported. Selected families keep stubs in
+    parameters, followed by the method's own type parameters. Suspension
+    and `(super:)` of another method remain unsupported. Selected families keep stubs in
     their classes for ordinary signature/override validation. -/
 def methodFns (tops : List STop) (reserved : List String := []) : Except String (List STop) := do
   let classes := tops.filterMap fun
@@ -2261,13 +2302,12 @@ def methodFns (tops : List STop) (reserved : List String := []) : Except String 
       -- default implementation, if it gives one, the alternative for the
       -- classes that have none of their own, as a class's own is)
       if !(anc c).contains r then return some (s!"{c.replace "::" "."} overrides it without being below {r.replace "::" "."}", none)
-      if let .fn _ _ _ mtps fx _ b := m then
+      if let .fn _ _ _ _ fx _ b := m then
         -- (an override that is `<decides>` where the declaration is not, or
         -- the other way round: no family, for the elaborator's check of the
         -- override's signature to say so, not a call's brackets)
         let rootDecides := (ds.find? (·.1 == r)).any fun | (_, .fn _ _ _ _ rfx _ _) => rfx.contains "decides" | _ => false
         if fx.contains "decides" != rootDecides then return some ("", none)
-        if !mtps.isEmpty then return some ("is generic", some c)
         if fx.contains "suspends" then return some ("is <suspends>", some c)
         if otherSuper n b then return some ("uses (super:) of another method", some c)
     if allFields.contains n || topNames.contains n || localBinders.contains n then
@@ -2281,9 +2321,12 @@ def methodFns (tops : List STop) (reserved : List String := []) : Except String 
     let impls := (ds.filter fun (_, m) => !isAbstract m).map (·.1)
     let impls := (impls.filter (· == root)) ++ impls.filter (· != root)
     let ret := (ds.find? (·.1 == root)).bind fun | (_, .fn _ _ _ _ _ r _) => some r | _ => none
+    let methodTps := ((ds.find? (·.1 == root)).bind fun | (_, .fn _ _ _ tps _ _ _) => some tps | _ => none).getD []
     let covariant := ds.any fun (c, m) => match ret, m with
-      | some r0, .fn _ _ _ _ _ r _ =>
-        let r0c := ((rootView (classes.length + 1) c root).map fun σ => r0.substNames σ).getD r0
+      | some r0, .fn _ _ _ mtps _ r _ =>
+        let σ := ((rootView (classes.length + 1) c root).getD []) ++
+          (methodTps.zip mtps).map (fun (a, b) => (a.name, STy.name b.name))
+        let r0c := r0.substNames σ
         c != root && !styEq (styNorm r) (styNorm r0c)
       | _, _ => false
     let params := ((ds.find? (·.1 == root)).bind fun | (_, .fn _ _ ps _ _ _ _) => some ps | _ => none).getD []
@@ -2308,7 +2351,7 @@ def methodFns (tops : List STop) (reserved : List String := []) : Except String 
       if ii || !(anc c).contains root then none else
       (ordered.find? (anc c).contains).map fun impl => (c, impl)
     let cases := cases.mergeSort fun a b => (anc a.1).length ≥ (anc b.1).length
-    some (n, { root, impls, direct := impls == [root] && ds.length == 1, ret, params, rootTps, refining, covariant, cases })
+    some (n, { root, impls, direct := impls == [root] && ds.length == 1, ret, params, rootTps, methodTps, refining, covariant, cases })
   -- (which of them are interfaces: their defaults yield to classes', #375)
   let isIfaceC (c : String) : Bool := match classes.lookup c with
     | some (_, ii, _, _, _) => ii
@@ -2318,7 +2361,7 @@ def methodFns (tops : List STop) (reserved : List String := []) : Except String 
   -- (a method's body as the function's: its members qualified by `Self`,
   -- then `Self` the parameter `$Self`)
   let fnOf (fs : List (String × MFam)) (trial : Bool) (c : String) : STop → Option STop
-    | .fn p m ps _ fx r b =>
+    | .fn p m ps mtps fx r b =>
       let mem := members c
       let isMethodName := fun n => (anc c).any fun d => match classes.lookup d with
         | some (_, _, _, ms, _) => ms.any fun | .fn _ x .. => x == n | _ => false
@@ -2334,7 +2377,7 @@ def methodFns (tops : List STop) (reserved : List String := []) : Except String 
       -- class at them)
       let tps : List TParam := ((classes.lookup c).map fun (_, _, _, _, tps) => tps).getD []
       let selfTy : STy := if tps.isEmpty then .name c else .app c (tps.map fun tp => .name tp.name)
-      some (.fn p (methodFnName c m) ({ name := "$Self", ty := selfTy } :: ps') tps fx r (fix b))
+      some (.fn p (methodFnName c m) ({ name := "$Self", ty := selfTy } :: ps') (tps ++ mtps) fx r (fix b))
     | _ => none
   let implFns (fs : List (String × MFam)) : List STop := fs.flatMap fun (n, f) =>
     f.impls.filterMap fun c => ((declsOf n).find? (·.1 == c)).bind fun (_, m) => fnOf fs false c m
@@ -2344,10 +2387,10 @@ def methodFns (tops : List STop) (reserved : List String := []) : Except String 
   let famFns : List STop := fams.filterMap fun (n, f) =>
     if f.direct then none else
     match (declsOf n).find? (·.1 == f.root) with
-    | some (_, .fn p _ ps _ fx r _) =>
+    | some (_, .fn p _ ps mtps fx r _) =>
       let args := ps.map fun sp => SExpr.ident p sp.name
       let selfTy : STy := if f.rootTps.isEmpty then .name f.root else .app f.root (f.rootTps.map fun tp => .name tp.name)
-      some (.fn p (methodFnName f.root n ++ "$fam") ({ name := "$Self", ty := selfTy } :: ps) f.rootTps fx r
+      some (.fn p (methodFnName f.root n ++ "$fam") ({ name := "$Self", ty := selfTy } :: ps) (f.rootTps ++ mtps) fx r
         (.tuple p (f.impls.map fun c => .app p (.ident p (methodFnName c n)) (.ident p "$Self" :: args) false)))
     | _ => none
   -- (parameters' defaults too, which a call evaluates)

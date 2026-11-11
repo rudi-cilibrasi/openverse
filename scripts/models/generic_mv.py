@@ -33,9 +33,11 @@ The model:
   * effectful first-success helpers retain generic values and captures, with
     explicit witnesses for types used only by the suffix's written types;
   * generic mutual trees retain each member's type instance, item effects,
-    value rollback, mutable captures and written-only witnesses.
+    value rollback, mutable captures and written-only witnesses;
+  * methods may infer their own type parameters independently of receiver
+    arguments, including through overrides, super tuples and interface defaults.
 """
-import random, sys, os
+import random, sys, os, re
 
 R = None
 # (#387: an overridden method of a generic class; a generator of its own decides, so seeds keep
@@ -186,6 +188,9 @@ class Producer:
                 # parameters, a compound root argument, and interface defaults.
                 shape = method_shape or RMethod.choice(['plain', 'added', 'fixed', 'repeat', 'reorder', 'wrapped', 'interface'])
                 self.method_shape = shape
+                own = shape.startswith('own-')
+                if own:
+                    shape = shape.removeprefix('own-')
                 root_tps, child_tps, parent, receiver, ctor = {
                     'plain': ('t:type', 't:type', f'c{n}(t)', f'c{n}(t)', f'd{n}(t)'),
                     'added': ('t:type', 't:type,u:type', f'c{n}(t)', f'c{n}(t)', f'd{n}(t,int)'),
@@ -200,7 +205,33 @@ class Producer:
                 x, y = ("('x',X)", "('y',Y)") if shape == 'wrapped' else ('X', 'Y')
                 values = f'{ctor}{{X := {x}, Y := {y}{extra_value}}}'
                 result = f'(R.M{n}())(1)' if shape == 'wrapped' else f'R.M{n}()'
-                if shape == 'interface':
+                if own:
+                    # The receiver's type is independent of the values' type.
+                    # The ordered-value oracle remains Y, X, Y, including super.
+                    receiver = re.sub(r'\bt\b', 'int', receiver)
+                    ctor = re.sub(r'\bt\b', 'int', ctor)
+                    anchor = "('a',0)" if shape == 'wrapped' else '0'
+                    if shape == 'interface':
+                        declarations = f'''c{n}(t:type) := interface:
+    M{n}(V:r,W:r,?E:[]r=Concatenate() where r:type)<transacts>:r = V|W
+d{n}(t:type,u:type) := interface(c{n}(t)):
+    M{n}<override>(V:v,W:v,?E:[]v=Concatenate() where v:type)<transacts>:v = W|(super:)M{n}((V,W))
+e{n}(t:type,u:type) := class(d{n}(t,u)):
+    Anchor:t
+    Extra:u'''
+                        values = f'e{n}(int,int){{Anchor:=0,Extra:=0}}'
+                    else:
+                        declarations = f'''c{n}({root_tps}) := class:
+    Anchor:t
+    M{n}(V:r,W:r,?E:[]r=Concatenate() where r:type)<transacts>:r = V|W
+d{n}({child_tps}) := class({parent}):{extra_field}
+    M{n}<override>(V:v,W:v,?E:[]v=Concatenate() where v:type)<transacts>:v = W|(super:)M{n}((V,W))'''
+                        values = f'{ctor}{{Anchor:={anchor}{extra_value}}}'
+                    self.src = declarations + f'''
+{n}(X:t,Y:t where t:type)<transacts>:t =
+    R:{receiver}={values}
+    R.M{n}((X,Y))'''
+                elif shape == 'interface':
                     self.src = f'''c{n}(t:type) := interface:
     HX{n}()<transacts>:t
     HY{n}()<transacts>:t
@@ -804,7 +835,8 @@ class Gen:
         # Every gate range covers each hierarchy, with the same independent
         # ordered-value oracle. Argument effects and rejected first searches
         # distinguish dispatch selection from an extra generator boundary.
-        shapes = ['plain', 'added', 'fixed', 'repeat', 'reorder', 'wrapped', 'interface']
+        base_shapes = ['plain', 'added', 'fixed', 'repeat', 'reorder', 'wrapped', 'interface']
+        shapes = base_shapes + ['own-' + s for s in base_shapes]
         rng = random.Random(self.seed * 1000003 + 28304102)
         p = Producer('IMeth', self.fresh('Dispatch'), shapes[self.seed % len(shapes)])
         self.prods.append(p)
