@@ -73,9 +73,9 @@ for jobs in 1 2 08; do
   [[ -f "$CHECK_TEST_EVENTS/fuzz-fields.sh" ]] || die 'last check did not run'
   [[ -f "$CHECK_TEST_EVENTS/source-frame-contracts" ]] || die 'source-frame contracts did not run'
 done
-run_check 2 success 1 source-frame-contracts
+run_check 2 success 3 source-frame-contracts
 grep -q 'fixture source-frame failure detail' "$tmp/log" || die 'source-frame diagnostic was hidden'
-grep -qF 'check.sh: FAILED: source-frame rewrite contracts' "$tmp/log" || die 'source-frame failure was not reported'
+[[ ! -f "$CHECK_TEST_EVENTS/make" ]] || die 'continued after failed source-frame contracts'
 run_check 2 success 1 fuzz-classes.sh
 grep -q 'fixture check failure detail' "$tmp/log" || die 'check diagnostic was hidden'
 grep -qF 'check.sh: FAILED: class-feature fuzzing' "$tmp/log" || die 'failed check was not reported'
