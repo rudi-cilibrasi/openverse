@@ -6,6 +6,8 @@ static declaration selects the promised result type. A real choice introduces
 a generator boundary; a scalar override does not. Rejected first-success
 searches roll back all their effects. Predict object identity/order, field
 values, call evaluation order and filter rollback without compiler helpers.
+An inherited class renames its type parameter and echoes a tuple through its
+selected ancestor, checking actual int/string payloads in argument order.
 """
 import random
 import sys
@@ -57,6 +59,7 @@ if iface:
 source += f'''factory(t:type) := class{'(maker(t))' if iface else ''}:
     A:dog(t)
     B:pup(t)
+    EchoPair(X:t,Y:t)<transacts>:t = X | Y
     Get{'<override>' if iface else ''}(C:counter,X:int,?Q:int=Mark(C,"dfactory"))<transacts>:item(t) =
         Mark(C,"pfactory")
         A | B
@@ -81,7 +84,8 @@ ints := class(kennel(int)):
     Get<override>(C:counter,X:int,?Q:int=Mark(C,"dints"))<transacts>:dog(int) =
         Mark(C,"pints")
         A | B
-inherited(t:type) := class(kennel(t)) {{}}
+inherited(u:type) := class(kennel(u)):
+    EchoPair<override>(X:u,Y:u)<transacts>:u = (super:)EchoPair((X,Y))
 Receive(P:{root}(t),C:counter where t:type)<transacts>:{root}(t) =
     Mark(C,"r")
     P
@@ -139,6 +143,9 @@ else:
     for(D:=P.Get(C,0)){{Print("direct {{D.Code}}")}}
 '''
         lines += [f"direct {objects[x]['code']}" for x in results]
+    if kind == 'inherited':
+        source += '    for(V:=P.EchoPair(P.A.V,P.B.V)){Print("echo {V}")}\n'
+        lines += ['echo ' + objects[x]['value'] for x in ['a', 'b']]
     expected = 'exit=0\n' + '\n'.join(lines) + '\n'
 
 print(source, end='')

@@ -3,13 +3,30 @@
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
-for kind in composed exclusive binding typed-first typed-for typed-exclusive refined-for refined-state refined-failure lazy-first lazy-for lazy-effect-first lazy-effect-for lazy-alt-first lazy-alt-for lazy-failure-for lazy-alt-failure-for lazy-exclusive-failure-for refined-lazy-failure refined-return refined-lazy-return refined-nested-body refined-nested-failure lazy-generic-first construct-first construct-for construct-failure method-first method-for method-failure lazy-named-first lazy-named-for lazy-named-generic-first bound-first bound-for bound-failure covariant-first covariant-for covariant-failure; do
+for kind in composed exclusive binding typed-first typed-for typed-exclusive refined-for refined-state refined-failure lazy-first lazy-for lazy-effect-first lazy-effect-for lazy-alt-first lazy-alt-for lazy-failure-for lazy-alt-failure-for lazy-exclusive-failure-for refined-lazy-failure refined-return refined-lazy-return refined-nested-body refined-nested-failure lazy-generic-first construct-first construct-for construct-failure method-first method-for method-failure lazy-named-first lazy-named-for lazy-named-generic-first bound-first bound-for bound-failure covariant-first covariant-for covariant-failure tuple-super-first tuple-super-for tuple-super-failure; do
   sizes=()
   for count in 4 8; do
     python3 - "$kind" "$count" >"$tmp/p.verse" <<'PY'
 import sys
 kind, count = sys.argv[1], int(sys.argv[2])
 print('Two(N:int):int = N | N + 1')
+if kind.startswith('tuple-super-'):
+    print('box(t:type) := class:\n    Both(X:t,Y:[]t)<transacts>:t = if(Y.Length=0) then (X|X) else X')
+    print('child(u:type) := class(box(u)):\n    Both<override>(X:u,Y:[]u)<transacts>:u = (super:)Both((X,Y))')
+    params = ', '.join(f'P{i}:child(t{i}),I{i}:t{i}' for i in range(count))
+    tparams = ', '.join(f't{i}:type' for i in range(count))
+    clauses = ', '.join(f'A{i}:=P{i}.Both((I{i},array{{}}))' for i in range(count))
+    if kind == 'tuple-super-first':
+        print(f'Run({params} where {tparams})<transacts>:int = if({clauses}, E:[]t0=array{{A0}}) then E.Length else -1')
+    else:
+        specs = '<decides>' if kind == 'tuple-super-failure' else ''
+        test = '\n        1=1' if specs else ''
+        print(f'Run({params} where {tparams})<transacts>{specs}:int =\n    R:=for({clauses}):{test}\n        A0\n    R.Length')
+    args = ', '.join('child(int){},1' if i%2==0 else 'child(string){},"s"' for i in range(count))
+    specs = '<decides>' if kind == 'tuple-super-failure' else ''
+    call = f'Run[{args}]' if specs else f'Run({args})'
+    print(f'Main()<transacts>{specs}:void = Print("{{{call}}}")')
+    sys.exit(0)
 if kind.startswith('covariant-'):
     print('value(t:type) := class { V:t }')
     print('narrow(t:type) := class(value(t)) { Code:int=1 }')

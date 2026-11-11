@@ -5053,6 +5053,31 @@ partial def elabInts (ctx : Ctx) (p : Pos) (args : List SExpr) : EM (List Expr) 
     generic function as of any other (`elabAppBase` does plain calls). -/
 partial def elabApp (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (bracket : Bool)
     (exp : Option Ty) : EM R := do
+  -- A generated method function keeps its receiver as the first argument.
+  -- Inlining already spreads a following tuple, but kept/scalar/array calls
+  -- reach this boundary directly. Instantiate from the actual receiver;
+  -- callee type names have no meaning in the caller's lexical type scope.
+  if let (.ident _ g, [receiver, tupleArg]) := (f, args) then
+    if let some s := ctx.sig? g then
+      let npos := s.params.length - s.named.length
+      let named := match tupleArg with | .decl _ n _ _ _ => n.startsWith "?" | _ => false
+      if s.pnames.head? == some "$Self" && npos ≥ 3 && !named then
+        let r ← elabE ctx receiver none
+        let some σ := s.params[0]!.matchArg ctx.types [] r.ty
+          | eerr receiver.pos s!"expected {s.params[0]!.show}, found {r.ty.show} (the receiver of {Choice.shownFnName g})"
+        let ty := Ty.tup ((s.params.drop 1 |>.take (npos - 1)).map (·.subst σ))
+        let rv ← fresh r.ty
+        let rn := s!"$methodReceiver{rv}"
+        let tuple ← coerce tupleArg.pos (← elabE ctx tupleArg (some ty)) ty
+        let tv ← fresh ty
+        let tn := s!"$methodTuple{tv}"
+        let c := { ctx with locals :=
+          { name := tn, slot := tv, ty, mutable := false } ::
+          { name := rn, slot := rv, ty := r.ty, mutable := false } :: ctx.locals }
+        let parts := (List.range (npos - 1)).map fun (i : Nat) =>
+          SExpr.app tupleArg.pos (.ident tupleArg.pos tn) [.int tupleArg.pos (i : Int)] false
+        let out ← elabAppBase c p f (.ident p rn :: parts) bracket exp
+        return ⟨.seq (.assign rv r.e) (.seq (.assign tv tuple) out.e), out.ty⟩
   match args with
   | [a] =>
     -- (nested retries are bounded: each level elaborates its argument again)

@@ -1,0 +1,7 @@
+recv 1
+arg 2
+arg 3
+body 3
+win 2 3
+none 3
+exit=0

@@ -909,7 +909,10 @@ Main():void =
   (#314): in a `for`, a value the filters after it reject undoes what came
   before it, the receiver's and the arguments' effects and the earlier
   clauses, unless the implementation reaches a choice of its own. `(super:)M(…)` calls the
-  implementation above; a recursive overridden one is computed at the
+  implementation above. Its tuple form `(super:)M((A, B))` uses the inherited
+  parameter types as the current class sees them, including renamed or
+  compound type arguments. The receiver and tuple are each evaluated once,
+  in that order. A recursive overridden one is computed at the
   call (its implementations call each other through the dispatch), so
   it must be `<computes>`. Such a method is still checked as a member
   (`<final>`, its signature and effects against the one it overrides, an
