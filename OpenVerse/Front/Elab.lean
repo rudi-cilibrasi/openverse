@@ -1845,8 +1845,12 @@ partial def forwardForBreaks (abort escaped : Nat) : Expr → Expr
     Suspension and non-rollback operations remain excluded. -/
 def forBodySafe (ctx : Ctx) (body : SExpr) : Bool :=
   let returns := forReturnBody? body
+  -- Prepared consumers keep lazy producer templates (including groups and
+  -- generic/default argument bindings) inside the body. Their ownership is
+  -- checked when that consumer elaborates; they do not escape the helper.
   let safeMarkers := ["$inline", "$choice", "$excl", "$alt", "$firstP", "$first", "$each", "$noLift", "$fxOf",
-    "$forReturns", "$forReturnBody"] ++ (if returns then ["$defer"] else [])
+    "$forReturns", "$forReturnBody", "$defer", "$loop", "$rec", "$recTo", "$group", "$member",
+    "$tparams", "$params", "$defaults", "$paramDefault", "$freeNames", "$declNames"]
   !ctx.suspends && !(Refine.findPart (fun | .brk _ => true | _ => false) true body).isSome &&
     !(Choice.anyE (fun
     | .ret .. => !returns

@@ -1,0 +1,59 @@
+produce 1 1
+all 4 4 1 9
+produce 0 2
+all 4 4 0 17
+even 2 3
+odd 1 4
+even 0 5
+try 0
+first 0 17
+rejected 17 5
+body cleanup 117
+produce 1 6
+all 4 5 1 127
+produce 0 7
+all 4 5 0 136
+even 2 8
+odd 1 9
+even 0 10
+try 0
+first 0 136
+rejected 136 10
+body cleanup 236
+produce 1 11
+all 5 4 1 246
+produce 0 12
+all 5 4 0 255
+even 2 13
+odd 1 14
+even 0 15
+try 0
+first 0 255
+rejected 255 15
+body cleanup 355
+produce 1 16
+all 5 5 1 366
+produce 0 17
+all 5 5 0 376
+even 2 18
+odd 1 19
+even 0 20
+try 0
+first 0 376
+rejected 376 20
+body cleanup 476
+state 476 20 4
+result 476
+caught 4 4 20
+caught 5 9 20
+handled 9
+caught 0 0 20
+miss 0
+produce 1 21
+return body 4 1 5
+produce 0 22
+return body 4 0 9
+return cleanup 109
+return source 109 22
+returned 9
+exit=0

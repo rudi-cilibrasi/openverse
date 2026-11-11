@@ -3,7 +3,7 @@
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
-for kind in composed exclusive binding typed-first typed-for typed-exclusive refined-for refined-state refined-failure lazy-first lazy-for lazy-effect-first lazy-effect-for lazy-alt-first lazy-alt-for lazy-failure-for lazy-alt-failure-for lazy-exclusive-failure-for refined-lazy-failure refined-return refined-lazy-return; do
+for kind in composed exclusive binding typed-first typed-for typed-exclusive refined-for refined-state refined-failure lazy-first lazy-for lazy-effect-first lazy-effect-for lazy-alt-first lazy-alt-for lazy-failure-for lazy-alt-failure-for lazy-exclusive-failure-for refined-lazy-failure refined-return refined-lazy-return refined-nested-body refined-nested-failure; do
   sizes=()
   for count in 4 8; do
     python3 - "$kind" "$count" >"$tmp/p.verse" <<'PY'
@@ -40,7 +40,7 @@ if kind.startswith('lazy-'):
     sys.exit(0)
 print('Pick(X:t where t:type):t = X | X')
 print('Early(N:int):int =\n    if (N < 0):\n        return 0\n    N | N + 1')
-if kind in ('refined-lazy-failure', 'refined-lazy-return'):
+if kind in ('refined-lazy-failure', 'refined-lazy-return', 'refined-nested-body', 'refined-nested-failure'):
     print('counter := class:\n    var N:int = 0')
     print('Lazy(C:counter, N:int)<transacts><decides>:int =\n    N >= 0\n    set C.N += 1\n    N | Lazy[C, N - 1]')
 if kind.startswith('refined-'):
@@ -49,6 +49,7 @@ if kind.startswith('refined-'):
 value = {'composed': '(Two(0) | Two(2))', 'exclusive': 'Early(0)',
          'binding': '(Pick(I) | Pick(I))', 'typed-first': '(Two(0) | Two(2))',
          'typed-for': '(Two(0) | Two(2))', 'typed-exclusive': 'Early(0)',
+         'refined-nested-body': '', 'refined-nested-failure': '',
          'refined-for': 'if (D := dup[P]) then (D.C | D.C + 1) else 0',
          'refined-state': 'if (D := dup[P]) then (D.C | D.C + 1) else 0',
          'refined-failure': 'if (D := dup[P]) then (D.C | D.C + 1) else 0',
@@ -56,7 +57,22 @@ value = {'composed': '(Two(0) | Two(2))', 'exclusive': 'Early(0)',
          'refined-lazy-return': 'if (D := dup[P]) then (D.C | D.C + 1) else 0',
          'refined-lazy-failure': 'if (D := dup[P]) then (D.C | D.C + 1) else 0'}[kind]
 clauses = ', '.join(f'A{i} := {value}' for i in range(count))
-if kind in ('refined-state', 'refined-failure', 'refined-lazy-failure', 'refined-return', 'refined-lazy-return'):
+if kind in ('refined-nested-body', 'refined-nested-failure'):
+    params = ', '.join(f'P{i}:pair(a{i}, b{i})' for i in range(count))
+    tparams = ', '.join(f'a{i}:type, b{i}:type' for i in range(count))
+    clauses = ', '.join(f'A{i} := if (D := dup[P{i}]) then (D.C | D.C + 1) else 0, A{i} = 4' for i in range(count))
+    effects = '<decides>' if kind.endswith('failure') else ''
+    test = '\n            L > 0' if effects else ''
+    print(f'''Run({params} where {tparams})<transacts>{effects}:int =
+    C := counter{{}}
+    var Total:int = 0
+    R := for ({clauses}):
+        defer: set Total += 1
+        for (L := Lazy[C, 2]):
+            set Total += L{test}
+            Total
+    Total + R.Length''')
+elif kind in ('refined-state', 'refined-failure', 'refined-lazy-failure', 'refined-return', 'refined-lazy-return'):
     params = ', '.join(f'P{i}:pair(a{i}, b{i})' for i in range(count))
     tparams = ', '.join(f'a{i}:type, b{i}:type' for i in range(count))
     clauses = ', '.join(f'A{i} := if (D := dup[P{i}]) then (D.C | D.C + 1) else 0, A{i} = 4, set Total += A{i}' for i in range(count))
@@ -74,9 +90,9 @@ elif kind.startswith('typed-'):
     print(f'Run(Unused:t where t:type):int =\n    R := for ({clauses}):\n        E:[]t = array{{}}\n        E.Length\n    R.Length')
 else:
     print(f'Run(I:t where t:type):[]t = for ({clauses}) {{ I }}')
-if kind in ('refined-state', 'refined-failure', 'refined-lazy-failure', 'refined-return', 'refined-lazy-return'):
+if kind in ('refined-state', 'refined-failure', 'refined-lazy-failure', 'refined-return', 'refined-lazy-return', 'refined-nested-body', 'refined-nested-failure'):
     args = ', '.join('dup(int){A := 1, B := 2}' if i % 2 == 0 else 'dup(string){A := "s", B := "t"}' for i in range(count))
-    effects = '<decides>' if kind in ('refined-failure', 'refined-lazy-failure') else ''
+    effects = '<decides>' if kind in ('refined-failure', 'refined-lazy-failure', 'refined-nested-failure') else ''
     brackets = ('[', ']') if effects else ('(', ')')
     print(f'Main(){effects}:void = Print("{{Run{brackets[0]}{args}{brackets[1]}}}")')
 elif kind == 'refined-for':
