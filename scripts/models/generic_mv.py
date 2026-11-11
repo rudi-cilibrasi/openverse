@@ -31,7 +31,9 @@ The model:
   * overridden methods preserve those values through fixed/repeated/reordered
     root arguments, compound arguments, opened parameters and interface defaults;
   * effectful first-success helpers retain generic values and captures, with
-    explicit witnesses for types used only by the suffix's written types.
+    explicit witnesses for types used only by the suffix's written types;
+  * generic mutual trees retain each member's type instance, item effects,
+    value rollback, mutable captures and written-only witnesses.
 """
 import random, sys, os
 
@@ -796,6 +798,7 @@ class Gen:
         self.first_searches()
         self.method_dispatch()
         self.recursive_named()
+        self.mutual_generators()
 
     def method_dispatch(self):
         # Every gate range covers each hierarchy, with the same independent
@@ -1067,6 +1070,87 @@ class Gen:
             self.main.append(f'Print("cont written {{{written}({literal}).Length}}")')
             count = sum(a <= bound and b > cut for a in range(1, 5) for b in range(1, 5))
             self.m.out.append(f"cont written {count}")
+
+    def mutual_generators(self):
+        """Depth-first tree model with separate item and value transactions."""
+        rng = random.Random(self.seed * 1000033 + 453)
+        a, b, c, emit, cell, run = [self.fresh(n) for n in
+                                  ('MutA', 'MutB', 'MutC', 'MutValue', 'MutCell', 'MutRun')]
+        depth, first_depth = rng.randint(0, 3), rng.randint(0, 3)
+        cut, first_cut = rng.randint(0, 35), rng.randint(0, 35)
+        entry, first_entry = rng.randrange(3), rng.randrange(3)
+        x, y = rng.choice([('7', '"s"'), ('"s"', '7')])
+        payload = f'{x.strip(chr(34))} {y.strip(chr(34))}'
+        call = lambda i, x, y, n, h: [f'{a}[({x},{y},{n},{h})]',
+            f'{b}[({y},{x},{n},{h})]', f'{c}[(({x},{y}),{n},{h})]'][i]
+        self.paths.add('lazy')
+        self.consumers.append(f'''{cell} := class {{ var N:int=0 }}
+{emit}(X:t,Y:u,N:int where t:type,u:type)<transacts>:tuple(t,u,int) =
+    Print("mut value {{N}}")
+    (X,Y,N)
+{a}(X:a,Y:b,N:int,H:{cell} where a:type,b:subtype(comparable))<transacts><decides>:tuple(a,b,int) =
+    set H.N+=1
+    Print("mut visit 0 {{N}}")
+    if(N>0)then ({emit}(X,Y,10*N) | {b}[(Y,X,N-1,H)] | {emit}(X,Y,10*N+1))else {emit}(X,Y,0)
+{b}(Y:k,X:v,N:int,H:{cell},?E:[]v=Concatenate() where k:subtype(comparable),v:type)<transacts><decides>:tuple(v,k,int) =
+    set H.N+=1
+    Print("mut visit 1 {{N}}")
+    M:[k]v=map{{Y=>X}}
+    if(N>0)then ({emit}(X,Y,10*N+2) | {c}[((X,Y),N-1,H)] | {emit}(X,Y,10*N+3))else {emit}(X,Y,2)
+{c}(Z:tuple(c,d),N:int,H:{cell} where c:type,d:subtype(comparable))<transacts><decides>:tuple(c,d,int) =
+    set H.N+=1
+    Print("mut visit 2 {{N}}")
+    E:[]c=Concatenate()
+    if(N>0)then ({emit}(Z(0),Z(1),10*N+4) | {a}[Z(0),Z(1),N-1,H] | {emit}(Z(0),Z(1),10*N+5))else {emit}(Z(0),Z(1),4)
+{run}(X:b,Y:a,W:w where a:subtype(comparable),b:type,w:type):?tuple(b,a,int) =
+    H:={cell}{{}}
+    var Seen:int=0
+    Result:=option{{V:={call(first_entry, 'X', 'Y', first_depth, 'H')}, E:[]w=Concatenate(),set Seen+=V(2),V(2)>={first_cut},V}}
+    Print("mut state {{H.N}} {{Seen}}")
+    Result''')
+        h, option = self.fresh('MutState'), self.fresh('MutOption')
+        self.main += [f'{h}:={cell}{{}}',
+            f'for(V:={call(entry, x, y, depth, h)},set {h}.N+=V(2),V(2)>={cut}): Print("mut got {{V(0)}} {{V(1)}} {{V(2)}}")',
+            f'Print("mut total {{{h}.N}}")', f'{option}:={run}({x},{y},option{{7}})',
+            f'if(V:={option}?)then Print("mut first {{V(0)}} {{V(1)}} {{V(2)}}")else Print("mut none")']
+        out, total = self.m.out, 0
+
+        def all_values(member, n):
+            nonlocal total
+            total += 1
+            out.append(f'mut visit {member} {n}')
+            codes = [10*n+2*member, None, 10*n+2*member+1] if n else [2*member]
+            for code in codes:
+                if code is None:
+                    all_values((member+1) % 3, n-1)
+                elif code >= cut:
+                    total += code
+                    out.extend([f'mut value {code}', f'mut got {payload} {code}'])
+        all_values(entry, depth)
+        out.append(f'mut total {total}')
+        total, seen = 0, 0
+
+        def search(member, n):
+            nonlocal total, seen
+            start, old_total, old_seen = len(out), total, seen
+            total += 1
+            out.append(f'mut visit {member} {n}')
+            codes = [10*n+2*member, None, 10*n+2*member+1] if n else [2*member]
+            for code in codes:
+                if code is None:
+                    found = search((member+1) % 3, n-1)
+                    if found is not None:
+                        return found
+                elif code >= first_cut:
+                    seen += code
+                    out.append(f'mut value {code}')
+                    return code
+            del out[start:]
+            total, seen = old_total, old_seen
+            return None
+        found = search(first_entry, first_depth)
+        out.append(f'mut state {total} {seen}')
+        out.append('mut none' if found is None else f'mut first {payload} {found}')
 
     def text(self):
         pre = """pt := struct:

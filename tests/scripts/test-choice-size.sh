@@ -3,7 +3,7 @@
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
-for kind in composed exclusive binding typed-first typed-for typed-exclusive refined-for refined-state refined-failure lazy-first lazy-for lazy-effect-first lazy-effect-for lazy-alt-first lazy-alt-for lazy-failure-for lazy-alt-failure-for lazy-exclusive-failure-for refined-lazy-failure refined-return refined-lazy-return refined-nested-body refined-nested-failure lazy-generic-first construct-first construct-for construct-failure method-first method-for method-failure lazy-named-first lazy-named-for lazy-named-generic-first bound-first bound-for bound-failure covariant-first covariant-for covariant-failure tuple-super-first tuple-super-for tuple-super-failure lazy-tuple-first lazy-tuple-for lazy-tuple-generic-first immediate-suspends-refined immediate-suspends-composed immediate-suspends-exclusive immediate-suspends-nested refined-retry-first super-first super-for super-failure super-body; do
+for kind in composed exclusive binding typed-first typed-for typed-exclusive refined-for refined-state refined-failure lazy-first lazy-for lazy-effect-first lazy-effect-for lazy-alt-first lazy-alt-for lazy-failure-for lazy-alt-failure-for lazy-exclusive-failure-for refined-lazy-failure refined-return refined-lazy-return refined-nested-body refined-nested-failure lazy-generic-first construct-first construct-for construct-failure method-first method-for method-failure lazy-named-first lazy-named-for lazy-named-generic-first bound-first bound-for bound-failure covariant-first covariant-for covariant-failure tuple-super-first tuple-super-for tuple-super-failure lazy-tuple-first lazy-tuple-for lazy-tuple-generic-first immediate-suspends-refined immediate-suspends-composed immediate-suspends-exclusive immediate-suspends-nested refined-retry-first super-first super-for super-failure super-body mutual-generic-first mutual-generic-for mutual-generic-alt-first; do
   sizes=()
   for count in 4 8; do
     python3 - "$kind" "$count" >"$tmp/p.verse" <<'PY'
@@ -52,6 +52,22 @@ if kind.startswith('super-'):
     call = 'child{}.Run[]' if specs else 'child{}.Run()'
     print(f'Main()<transacts>{specs}:void = Print("{{{call}}}")')
     sys.exit(0)
+if kind.startswith('mutual-generic-'):
+    print('''Left(X:t,N:int where t:type)<transacts>:t =
+    Print("left {N}")
+    if(N>0)then(X|Right((X,N-1)))else X
+Right(X:u,N:int,?E:[]u=Concatenate() where u:type)<transacts>:u =
+    Print("right {N}")
+    if(N>0)then(X|Left((X,N-1)))else X''')
+    clauses = ', '.join(f'A{i}:=' +
+        ('(Left((I,1))|Right((I,1)))' if kind == 'mutual-generic-alt-first' else 'Left((I,1))')
+        for i in range(count))
+    if kind == 'mutual-generic-for':
+        print(f'Run(I:t where t:type)<transacts>:int =\n    R:=for({clauses}): I\n    R.Length')
+    else:
+        print(f'Run(I:t where t:type)<transacts>:int = if({clauses},E:[]t=Concatenate())then E.Length else -1')
+    print('Main():void = Print("{Run(7)}")')
+    raise SystemExit
 if kind.startswith('tuple-super-'):
     print('box(t:type) := class:\n    Both(X:t,Y:[]t)<transacts>:t = if(Y.Length=0) then (X|X) else X')
     print('child(u:type) := class(box(u)):\n    Both<override>(X:u,Y:[]u)<transacts>:u = (super:)Both((X,Y))')

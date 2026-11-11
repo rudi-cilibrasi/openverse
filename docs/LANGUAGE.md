@@ -967,12 +967,19 @@ Main():void =
   the function itself. So is a strongly connected group of such functions
   (#283), mutually recursive, each of that shape with its alternatives
   calls of the group's functions (or, as the last expression or a branch,
-  one such call), all of one result type, none generic:
+  one such call), all of one result type at the call:
   `Evens(N:int):int = N | Odds(N + 1)` with
   `Odds(N:int):int = Evens(N + 1)`. Its values are taken one at a time, as the place
   that takes them asks for them, in spatial order (depth first), so an
   infinite one works where the first success is taken, and a value never
-  reached is never computed. When parameters are named, each recursive call
+  reached is never computed. A group may be generic: its members can rename,
+  reorder or add type parameters, inferred from their arguments and the
+  result expected by the consumer. Each member keeps the same parameter
+  types throughout one search, as a self-recursive lazy generator does.
+  A pure mutual group that changes those types on recursive edges keeps
+  the eager route described below, including its restrictions and errors.
+
+  When parameters are named, each recursive call
   evaluates positional arguments first, then named arguments as written, then
   omitted defaults in declaration order, as an ordinary call does. Defaults see the
   declaration's scope and earlier parameters. A recursive self or mutual call

@@ -1,0 +1,21 @@
+A 2
+value 20
+got 7 s 20
+B 1
+value 12
+got 7 s 12
+C 0
+value 13
+got 7 s 13
+value 21
+got 7 s 21
+visits 3
+B 2
+C 1
+A 0
+value 0
+state 3 0
+first s 7 0
+none
+failed 0
+exit=0
