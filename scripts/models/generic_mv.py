@@ -729,12 +729,17 @@ class Gen:
             D = self.fresh("Dc")
             tyname = {"int": "int", "string": "string", "pt": "pt", "tup": "tuple(int, string)",
                       "animal": "animal", "arr": "[]int"}[ty.name]
-            ps = []
-            for (nm, kd) in p.params:
-                ps.append("%s:%s" % (nm, {"t": tyname, "arr": "[]" + tyname, "int": "int"}[kd]))
+            ps, inner_args, outer_args = [], [], []
+            for (nm, kd), arg in zip(p.params, args):
+                # Leave omitted arguments to the producer's default.
+                inner_args.append(nm if arg is not None else None)
+                if arg is not None:
+                    ps.append("%s:%s" % (nm, {"t": tyname, "arr": "[]" + tyname, "int": "int"}[kd]))
+                    outer_args.append(arg)
             self.consumers.append("%s(%s)<transacts><decides>:%s = first{Zc := %s; %s; Zc}" %
-                                  (D, ", ".join(ps), tyname, p.call([nm for nm, _ in p.params]), ty.pred("Zc", k)))
-            lines.append("if (%s := %s[%s]) then Print(%s) else Print(\"none\")" % (V, D, ", ".join(args), ty.show(V)))
+                                  (D, ", ".join(ps), tyname, p.call(inner_args), ty.pred("Zc", k)))
+            lines.append("if (%s := %s[%s]) then Print(%s) else Print(\"none\")" %
+                         (V, D, ", ".join(outer_args), ty.show(V)))
             e = m.first(p.top(vals, V) + [("test", prm)])
             m.out.append(ty.mshow(e[V]) if e is not None else "none")
         self.main.extend(lines)
