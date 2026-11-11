@@ -90,7 +90,7 @@ check "float fuzzing (${FUZZ_FLOATS:-200} programs, against Python's doubles)" s
 check "choice fuzzing (${FUZZ_CHOICE:-200} programs, against a backtracking model)" scripts/fuzz-choice.sh "${FUZZ_CHOICE:-200}" "$seed"
 check "scheduler model fuzzing (${FUZZ_MODEL_SCHED:-50} programs, against a model of the docs)" \
   scripts/fuzz-model-sched.sh "${FUZZ_MODEL_SCHED:-50}" "$seed"
-check "GADT model fuzzing (${FUZZ_MODEL_GADT:-150} programs, against fifteen models of the docs)" \
+check "GADT model fuzzing (${FUZZ_MODEL_GADT:-150} programs, against sixteen models of the docs)" \
   scripts/fuzz-model-gadt.sh "${FUZZ_MODEL_GADT:-150}" "$seed"
 check "source break model fuzzing (${FUZZ_MODEL_BREAKS:-60} programs)" \
   scripts/fuzz-model-breaks.sh "${FUZZ_MODEL_BREAKS:-60}" "$seed"

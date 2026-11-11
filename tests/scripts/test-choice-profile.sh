@@ -94,6 +94,14 @@ Bind(B:box(t),X:u where t:type,u:type):type{_(:u):u}=B.Same
 Main():void=
     F:=Bind(box(string){V:="s"},7)
     Print("{F(9)}")''',
+        'method-tuple': '''box(t:type):=class:
+    V:t
+    Id(X:u where u:type)<computes>:u=X
+Bind(B:box(t),X:a,Y:b where t:type,a:type,b:type)<computes>:type{_(:a,:b)<computes>:tuple(a,b)}=B.Id
+Main():void=
+    F:=Bind(box(string){V:="tag"},7,"s")
+    R:=F(9,"value")
+    Print("{R(0)} {R(1)}")''',
     }
     for name, text in positive.items():
         path = source(f'{name}.verse', text)
