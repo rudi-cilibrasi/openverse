@@ -9,6 +9,9 @@ kinds=(
   bound-failure
   bound-first
   bound-for
+  clause-break-composed
+  clause-break-exclusive
+  clause-break-refined
   clause-return-composed
   clause-return-exclusive
   clause-return-refined
@@ -90,6 +93,23 @@ for kind in "${kinds[@]}"; do
 import sys
 kind, count = sys.argv[1], int(sys.argv[2])
 print('Two(N:int):int = N | N + 1')
+if kind.startswith('clause-break-'):
+    print('pair(a:type,b:type) := class { A:a; B:b }')
+    print('dup(t:type) := class(pair(t,t)) { C:int=4 }')
+    print('Early(N:int):int =\n    if(N<0):return 0\n    N|N+1')
+    params = ','.join(f'P{i}:pair(a{i},b{i})' for i in range(count))
+    tparams = ','.join(f'a{i}:type,b{i}:type' for i in range(count))
+    values = [f'if(D{i}:=dup[P{i}])then(D{i}.C|D{i}.C+1)else 0' for i in range(count)]
+    generic = kind.endswith('refined')
+    if kind.endswith('composed'): values = ['(Two(0)|Two(2))'] * count
+    if kind.endswith('exclusive'): values = ['Early(0)'] * count
+    clauses = [f'A{i}:={v}' for i,v in enumerate(values)]
+    ret_ty, result, selected = ('a0', 'P0.A', 5) if generic else ('int', 'Total', 1)
+    clauses[1:1] = ['set Total+=A0', f'if(A0={selected})then break else 0']
+    print(f'Run({params} where {tparams})<suspends>:{ret_ty} =\n    var Total:int=0\n    defer:Print("source {{Total}}")\n    Sleep(0.0)\n    loop:\n        defer:Print("loop {{Total}}")\n        R:=for({",".join(clauses)}):\n            set Total+=1\n            A0\n        Print("rows {{R.Length}}")\n        break\n    Sleep(0.1)\n    {result}')
+    args = ','.join('dup(int){A:=1,B:=2}' if i%2==0 else 'dup(string){A:="s",B:="t"}' for i in range(count))
+    print(f'Main()<suspends>:void = Print("{{Run({args})}}")')
+    sys.exit(0)
 if kind.startswith('cross-super-'):
     print('''base(t:type) := class:
     Data:t

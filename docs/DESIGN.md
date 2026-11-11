@@ -351,6 +351,15 @@ The handler also encloses a moved continuation's clauses. A successful
 clause return gives the abort packet as a successful helper result, so
 the current filter commits its copy-outs before stopping the consumer.
 A failed return operand remains filter failure and rolls that prefix back.
+Source breaks in those clauses use a captured flag in the same packet.
+The helper runs clause-local cleanup and returns successfully; the caller
+copies back its state, runs the source loop's cleanup, then forwards the
+break through any enclosing refining lift or leaves the loop. Copied
+breaks keep their existing flag and cleanup path, so cleanup is not run
+twice. A new explicit loop owns its break target; a `for` body clears the
+inherited break target, while retaining source-return handling. Break-only
+consumers do not emit a synthetic source return in lexical contexts that
+forbid one.
 When the body has bottom type, its Core expression is followed by `void`,
 as for tuple and array literal elements. This gives generated arrays an
 inferred element type when suspension lowering saves them across a wait;
@@ -359,7 +368,7 @@ Nested consumers can discover continuations and refining branches in
 separate rounds; their discovery bound follows source nesting, and each
 round still has to add new requests.
 
-Suspending bodies and breaks from continuation clauses retain their
+Actual waiting bodies and first-success continuation exits retain their
 previous restrictions.
 Ordinary casts still use the selector path above.
 

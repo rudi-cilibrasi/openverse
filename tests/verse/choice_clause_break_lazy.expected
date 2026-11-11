@@ -1,0 +1,11 @@
+body 4 2 4
+body 4 2 5
+loop 11
+source 11
+result 99 2
+body 4 2 2 4
+body 4 2 2 5
+loop 2
+source 2
+result 99 3
+exit=0

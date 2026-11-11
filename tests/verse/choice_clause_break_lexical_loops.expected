@@ -1,0 +1,11 @@
+local defer 4
+source 4
+result 99 0
+local defer 4
+source 4
+result 99 0
+body
+defer done
+branch 4
+done 4
+exit=0
