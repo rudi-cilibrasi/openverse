@@ -1821,7 +1821,10 @@ def contForLiftOf (ctx : Ctx) (p : Pos) (b : String) (bty vty : Ty) (alts rest :
   let caps : List Local := (Choice.namesUsed (.block p (rest ++ [body]))).eraseDups.filterMap ctx.lookup
   let setNames := Choice.setsIn (.block p (rest ++ [body]))
   let sets := caps.filter fun l => l.mutable && setNames.contains l.name
-  if (caps.map (·.ty) ++ [bty, vty]).any (fun t => !(Ty.paramsC t).isEmpty) then throw "in a generic function"
+  let tps := ((bty :: caps.map (·.ty)).flatMap Ty.paramsC).foldl
+    (fun acc (n, cmp) => if acc.any (·.1 == n) then acc else acc ++ [(n, cmp)]) []
+  if vty.params.any (fun n => !tps.any (·.1 == n)) then
+    throw "a result type parameter is not determined by the continuation's arguments"
   let name := s!"$contf{p.line}_{p.col}_{key.hash}" ++ (if p.file.isEmpty then "" else s!"_{p.file}")
   let heap := ["reads", "writes", "allocates"].filter fun k => ctx.fnFx.contains k
   let copies := sets.map fun l => SExpr.decl p l.name (some l.ty.toSTy) true (.ident p s!"{l.name}$in")
@@ -1833,6 +1836,7 @@ def contForLiftOf (ctx : Ctx) (p : Pos) (b : String) (bty vty : Ty) (alts rest :
   let bodyE : SExpr := if sets.isEmpty then .block p (copies ++ [ffirst]) else
     .block p (copies ++ [.decl p vals none false ffirst, .tuple p (.ident p vals :: sets.map fun l => SExpr.ident p l.name)])
   return { key, pos := p, name, params,
+           tparams := tps.map fun (n, cmp) => { pos := p, name := n, constraint := if cmp then "comparable" else "type" },
            specs := (if heap.isEmpty then ["computes"] else heap) ++ ["decides"],
            ret, body := bodyE, binds := [], sets := sets.map (·.name),
            args := SExpr.ident p b :: caps.map (fun l => SExpr.ident p l.name) }
