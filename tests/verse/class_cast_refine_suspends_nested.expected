@@ -9,4 +9,6 @@ spawn worker
 spawn cleanup 7
 nested spawn observed 9
 nested spawn worker
+worker cancelled
+cancel observed 7
 exit=0

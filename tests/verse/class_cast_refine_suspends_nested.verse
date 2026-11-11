@@ -65,6 +65,19 @@ SpawnNested(P:pair(a, b), Q:pair(c, d) where a:type, b:type, c:type, d:type)<sus
             spawn{Worker("nested spawn worker")}
             ()
     Sleep(2.0)
+CancelledWorker()<suspends>:void =
+    defer: Print("worker cancelled")
+    Sleep(1.0)
+CancelWithShared(P:pair(a, b) where a:type, b:type)<suspends>:void =
+    var Value:int = 0
+    branch:
+        Sleep(0.5)
+        Print("cancel observed {Value}")
+    T := spawn{CancelledWorker()}
+    if (D := dup[P]):
+        set Value = 7
+        T.Cancel()
+    Sleep(2.0)
 Main()<suspends>:void =
     P := dup(int){A := 1, B := 2}
     Q := pair(int, string){A := 1, B := "q"}
@@ -74,3 +87,4 @@ Main()<suspends>:void =
     ImmediateThen(P)
     SpawnWithShared(P)
     SpawnNested(P, Q)
+    CancelWithShared(P)

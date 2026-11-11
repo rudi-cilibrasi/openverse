@@ -2850,8 +2850,9 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
   -- `else` is the caller's code, which may suspend as any)
   let isS (f : Nat) : Bool := ctx.sigs.any fun s => s.idx == f && s.suspends
   let immediateLifts := env.castRequests.filter (!·.waits) |>.map (·.name)
+  -- Cancellation itself is immediate. Keep scanning its receiver.
   let mayWait (f : Nat) : Bool :=
-    ctx.sigs.any fun s => s.idx == f && s.suspends && !immediateLifts.contains s.name
+    ctx.sigs.any fun s => s.idx == f && s.suspends && s.name != "$cancelMark" && !immediateLifts.contains s.name
   let startsTask (f : Nat) : Bool :=
     ctx.sigs.any fun s => s.idx == f && (s.name == "$spawnMark" || s.name == "$branchMark")
   let waits (e : Expr) : Bool := Suspend.countSusp mayWait (fun _ => false) false startsTask e > 0
