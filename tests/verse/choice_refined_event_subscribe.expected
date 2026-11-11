@@ -1,0 +1,12 @@
+heard 4 4
+heard 5 9
+heard 5 14
+heard 0 14
+heard 0 14
+heard 0 14
+sum 14
+heard 1 15
+heard 1 16
+heard 1 17
+sum 17
+exit=0

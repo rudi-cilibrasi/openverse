@@ -874,7 +874,10 @@ Main():void =
   A class cast in the condition can refine its selected branch's type
   arguments (#243), including written types that use that refinement. An
   immediate body can start a task with `spawn`; its arguments run in the
-  caller and must be immediate, while the spawned call can wait. In a `for`,
+  caller and must be immediate, while the spawned call can wait. Event
+  notifications, subscriptions and subscription cancellation use ordinary
+  immediate method calls. Their typed signatures determine whether a body
+  waits. In a `for`,
   its body may wait or perform a non-rollback operation in a `<suspends>`
   function outside a failure context. Each current filter commits before
   the next generator's source or body runs; each body finishes before the
