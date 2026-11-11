@@ -7528,7 +7528,7 @@ partial def elabMember (ctx : Ctx) (p : Pos) (r : R) (m : String) (exp : Option 
                       modify fun st => { st with fnNeeds := st.fnNeeds ++ [(key, t)] }
                       return ⟨.seq r.e (.prim .userErr []), t⟩
           let some x := (candidates.find? fun x => exp == some (typeOf x)).orElse fun _ => candidates.head?
-            | eerr p s!"'{f}' is a method of {sn} that cannot be used as a value: call it with {f}(…) (a generic method, one with named parameters, and one whose type does not mention each of its class's type parameters once, as a whole parameter or result type, are no values, #210)"
+            | eerr p s!"'{f}' is a method of {sn} that cannot be used as a value: call it with {f}(…) (a method with its own type parameters or named parameters is not a value, #210)"
           let cls := s!"{x}${f}$fn"
           let xargs := env.argsAt sn targs x
           let t ← fresh r.ty
@@ -7538,7 +7538,7 @@ partial def elabMember (ctx : Ctx) (p : Pos) (r : R) (m : String) (exp : Option 
           let own := typeOf x
           return ⟨.seq (.assign t r.e) (← coerce p rv own), own⟩
         if visibleOv.length == 1 then
-          eerr p s!"'{f}' is a method of {sn} that cannot be used as a value: call it with {f}(…) (a generic method, one with named parameters, and one whose type does not mention each of its class's type parameters once, as a whole parameter or result type, are no values, #210)"
+          eerr p s!"'{f}' is a method of {sn} that cannot be used as a value: call it with {f}(…) (a method with its own type parameters or named parameters is not a value, #210)"
         eerr p s!"class {sn} has no field '{f}'"
       eerr p s!"struct {sn} has no field '{f}'"
   | t, m => eerr p s!"{t.show} has no member '{m}'"
@@ -10678,7 +10678,11 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
           (l.opened.map (·.1)).filter fun v => tparams.any (·.1 == v) else
         match n.splitOn "." with
         | [c, m] =>
-          if effs.contains "override" && env.classes.contains c && env.isRefClass c && !m.startsWith "$" &&
+          -- Bound-method value adapters can open receiver parameters that
+          -- occur only inside a compound function type or not in it at all.
+          let valueCall := m == "$call" || m.startsWith "$call:"
+          if effs.contains "override" && env.classes.contains c && env.isRefClass c &&
+              (!m.startsWith "$" || valueCall) &&
               (match tys.head? with | some (.struct c' _) => c' == c | _ => false) then
             -- (#351: below an interface referred to through views, every
             -- type parameter, which a dispatch through a view may open)

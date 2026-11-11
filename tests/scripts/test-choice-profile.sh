@@ -65,6 +65,16 @@ Main()<suspends>:void=
         'defaults': '''item(t:type):=struct{V:t}
 Make(X:t,?B:item(t)=item{V:=X} where t:type):t=B.V
 Main():void=Print(Make("default"))''',
+        'method-value': '''box(t:type,u:type):=class:
+    V:t
+    Extra:u
+    Array(X:[]t):[]t=X
+    Size():int=3
+Run(B:box(a,b) where a:type,b:type):int=
+    F:=B.Array
+    G:=B.Size
+    F(array{}).Length+G()
+Main():void=Print("{Run(box(int,string){V:=7,Extra:="s"})}")''',
     }
     for name, text in positive.items():
         path = source(f'{name}.verse', text)

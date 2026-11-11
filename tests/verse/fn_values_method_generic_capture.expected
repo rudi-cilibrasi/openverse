@@ -1,0 +1,7 @@
+receiver 1
+same 2
+nested 3
+pair 4
+size 5
+result new new old new 34 5
+exit=0

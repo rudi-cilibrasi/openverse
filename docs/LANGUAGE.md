@@ -181,10 +181,14 @@ Main():void =
   type built from the primitive comparable types. Not where the type
   mentions type parameters (`Map(Xs, Identity)` with `Map` over
   `type{_(:t):u}`).
-- Generic methods, overloaded functions and methods and ones with named
-  parameters cannot be used as values, nor can a method whose type repeats,
-  nests or leaves out one of its class's type parameters (`box(t)`'s
-  `Same(X:t):t` is not done yet, #209; its `Size():int` leaves `t` out). Lambdas and
+- A bound method's class parameters may repeat, occur inside compound
+  parameter/result types, or be absent from its function signature (#209).
+  The captured receiver retains their types and hidden witnesses. This
+  includes generic callers, interface views/defaults, overrides and
+  suspending methods. The receiver is evaluated once when the value is
+  created; later calls observe that receiver's current fields.
+- Methods with their own type parameters, overloaded functions and methods,
+  and ones with named parameters cannot be used as values. Lambdas and
   nested functions are not released in Verse, so there are none.
 
 ## defer

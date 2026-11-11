@@ -9,6 +9,10 @@ kinds=(
   bound-failure
   bound-first
   bound-for
+  bound-method-first
+  bound-method-for
+  bound-method-nested-first
+  bound-method-phantom-first
   clause-break-composed
   clause-break-exclusive
   clause-break-refined
@@ -104,6 +108,34 @@ for kind in "${kinds[@]}"; do
 import sys
 kind, count = sys.argv[1], int(sys.argv[2])
 print('Two(N:int):int = N | N + 1')
+if kind.startswith('bound-method-'):
+    print('''cell:=class{var N:int=0}
+box(t:type,u:type):=class:
+    V:t
+    Extra:u
+    C:cell
+    Same(X:t)<transacts>:t=block{set C.N+=1;X}
+    Array(X:[]t)<transacts>:[]t=block{set C.N+=1;X}
+    Size()<transacts>:int=block{set C.N+=1;3}''')
+    nested, phantom = 'nested' in kind, 'phantom' in kind
+    params = ','.join(f'B{i}:box(a{i},b{i}),X{i}:' + (f'[]a{i}' if nested else f'a{i}') for i in range(count))
+    tparams = ','.join(f'a{i}:type,b{i}:type' for i in range(count))
+    method = 'Size' if phantom else 'Array' if nested else 'Same'
+    binds = '\n'.join(f'    F{i}:=B{i}.{method}' for i in range(count))
+    calls = [f'F{i}()' if phantom else f'F{i}(X{i})' for i in range(count)]
+    clauses = ','.join(f'A{i}:={call}|{call}' for i,call in enumerate(calls))
+    result = 'A0.Length' if nested else 'A0' if phantom else 'E.Length'
+    if kind.endswith('first'):
+        body = f'    if({clauses},E:[]b0=Concatenate())then {result} else -1'
+    else:
+        body = f'    R:=for({clauses},E:[]b0=Concatenate()):A0\n    R.Length'
+    print(f'Run({params} where {tparams})<transacts>:int=\n{binds}\n{body}')
+    args = []
+    for i in range(count):
+        ty, value, extra_ty, extra = ('int','7','string','"s"') if i%2==0 else ('string','"x"','int','9')
+        args.extend([f'box({ty},{extra_ty}){{V:={value},Extra:={extra},C:=cell{{}}}}', f'array{{{value}}}' if nested else value])
+    print(f'Main():void=Print("{{Run({",".join(args)})}}")')
+    sys.exit(0)
 if kind.startswith('recursive-return-'):
     eager = kind.endswith('eager')
     mutual = 'mutual' in kind

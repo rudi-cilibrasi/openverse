@@ -914,9 +914,13 @@ flowchart LR
   `$self.M(…)`, dispatched as any call of `M` is. The value takes the
   class nearest the receiver's static class whose type is the one
   expected, else the nearest (#219). A
-  generic class's value class has the class's type parameters; one that
-  repeats or nests them in its shape's type arguments is not built yet,
-  so such methods are no values (#171, #209).
+  generic class's value class has the class's type parameters. Repeated
+  and compound signature arguments give the shape ordinary GADT pins;
+  parameters absent from the signature are opened on dispatch. Generated
+  `$call…` implementations read those parameters' hidden witnesses from
+  the captured receiver's value class, as ordinary opened overrides do.
+  Calls keep their static function type, local refinement/bound evidence,
+  effects and suspension behavior (#209).
 - **`subscribable_event(t)`** is Verse code in a prelude (`subPrelude`):
   `event(t)` with an array of (subscription, handler) pairs, the handlers
   of type `type{_(:t):void}`, called under the refinement in `Signal`. A

@@ -1,0 +1,9 @@
+begin 1
+end 1
+cleanup 1
+done 1 8
+begin 2
+cancel
+cleanup 2
+raced 2
+exit=0
