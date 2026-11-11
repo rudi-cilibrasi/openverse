@@ -108,6 +108,10 @@ box(t:type):=class:
     Apply(F:type{_(:u)<computes>:u},X:u where u:type)<computes>:u=F(X)
 Run(B:box(t),X:u where t:type,u:type)<computes>:u=B.Apply(Id,X)
 Main():void=Print("{Run(box(string){V:="tag"},7)}")''',
+        'context-bound-method': '''box:=class:
+    Same(X:t where t:type)<computes>:t=X
+Apply(F:type{_(:t)<computes>:t},X:t where t:type)<computes>:t=F(X)
+Main():void=Print("{Apply(box{}.Same,7)}")''',
     }
     for name, text in positive.items():
         path = source(f'{name}.verse', text)

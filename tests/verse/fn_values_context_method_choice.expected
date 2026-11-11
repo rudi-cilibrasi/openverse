@@ -1,0 +1,9 @@
+miss 0
+receiver 1
+arg 2
+same 3
+value 3
+same 4
+value 4
+result 2 4
+exit=0

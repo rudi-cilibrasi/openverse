@@ -1,0 +1,5 @@
+receiver 1
+arg 2
+same 3
+result 7
+exit=0

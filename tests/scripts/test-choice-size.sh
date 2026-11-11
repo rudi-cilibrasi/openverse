@@ -15,6 +15,10 @@ kinds=(
   bound-method-phantom-first
   context-value-first
   context-value-for
+  context-method-first
+  context-method-for
+  context-method-nested
+  context-method-nested-dispatch
   clause-break-composed
   clause-break-exclusive
   clause-break-refined
@@ -226,6 +230,36 @@ if kind.startswith('first-return-'):
     args = ','.join('dup(int){A:=1,B:=2}' if i%2==0 else 'dup(string){A:="s",B:="t"}' for i in range(count)) if independent else 'dup(int){A:=1,B:=2}'
     call = f'Run({args},7)' + ('.Length' if generic else '')
     print(f'Main():void={call}' if void else f'Main():void=Print("{{{call}}}")')
+    sys.exit(0)
+if kind in ('context-method-nested', 'context-method-nested-dispatch'):
+    print('''box:=class:
+    Same(X:t where t:type)<computes>:t=X
+Apply(F:type{_(:t)<computes>:t},X:t where t:type)<computes>:t=F(X)''')
+    dispatch = kind.endswith('dispatch')
+    if dispatch:
+        print('''holder:=class:
+    Apply(F:type{_(:t)<computes>:t},X:t where t:type)<computes>:t=F(X)''')
+    receiver = 'box{}'
+    for _ in range(count * 4):
+        receiver = f'{"H.Apply" if dispatch else "Apply"}(({receiver}).Same,box{{}})'
+    prefix = '    H:=holder{}\n' if dispatch else ''
+    print(f'Main():void=\n{prefix}    F:type{{_(:int)<computes>:int}}=({receiver}).Same\n    Print("{{F(7)}}")')
+    sys.exit(0)
+if kind.startswith('context-method-'):
+    print('''box(h:type):=class:
+    V:h
+    Id(X:t where t:type)<computes>:t=X''')
+    print('Twice(F:type{_(:t)<computes>:t},X:t where t:type)<computes>:t=F(X)|F(X)')
+    params = ','.join(f'B{i}:box(h{i}),X{i}:t{i}' for i in range(count))
+    tparams = ','.join(f'h{i}:type,t{i}:type' for i in range(count))
+    clauses = ','.join(f'A{i}:=Twice(B{i}.Id,X{i})' for i in range(count))
+    if kind.endswith('first'):
+        body = f'    if({clauses},E:[]h0=Concatenate())then E.Length else -1'
+    else:
+        body = f'    R:=for({clauses},E:[]h0=Concatenate()):A0\n    R.Length'
+    print(f'Run({params} where {tparams})<computes>:int=\n{body}')
+    args = ','.join('box(string){V:="tag"},7' if i%2==0 else 'box(int){V:=3},"s"' for i in range(count))
+    print(f'Main():void=Print("{{Run({args})}}")')
     sys.exit(0)
 if kind.startswith('context-value-'):
     print('Id(X:t where t:type)<computes>:t=X')

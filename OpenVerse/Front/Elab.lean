@@ -396,6 +396,9 @@ structure ESt where
       its position and text (#74): computed once, so nested overloaded calls
       take polynomial time (it survives the trials' state being restored). -/
   natTys : Std.HashMap String (Option Ty) := {}
+  /-- Successful receiver-class probes, keyed by syntax and lexical typing
+      context. Shared by isolated trials so nested callbacks stay polynomial. -/
+  methodReceivers : Std.HashMap String (Option String) := {}
   /-- Functions wanted as values at closed function types no class of
       theirs gives (#214). -/
   fnNeeds : List (String × Ty) := []
@@ -433,7 +436,9 @@ abbrev EM := StateT ESt (Except String)
     during the construction probe, while its runtime slots/effects are reset. -/
 def restoreConstructProbe (ctx : Ctx) (saved : ESt) : EM Unit := do
   let hints := (← get).constructHints
-  set (if ctx.constructProbe then { saved with constructHints := hints } else saved)
+  let receivers := (← get).methodReceivers
+  let restored := if ctx.constructProbe then { saved with constructHints := hints } else saved
+  set { restored with methodReceivers := receivers }
 
 /-- A call of a recursive function with several values that its consumer
     takes lazily (#246), as code for the consumer to put in its loop: the
@@ -627,6 +632,50 @@ def Ctx.methodDecl? (ctx : Ctx) (c m : String) : Option String :=
   match best.find? (fun e => best.all fun e' => below (retOf e) (retOf e')) with
   | some e => some e
   | none => best.head?
+
+/-- A method-local instance needs an expected function type. Fields and
+    ambiguous overloads keep their ordinary lookup and diagnostics. -/
+def Ctx.methodValueNeedsType (ctx : Ctx) (c m : String) : Bool :=
+  if (ctx.types.fields c).any (·.1 == m) then false else
+  let visible := if ctx.hasMethod c m then [m] else
+    ((ctx.types.methodOverloads.lookup m).getD []).filter (ctx.hasMethod c ·)
+  match visible with
+  | [m] => match ctx.methodDecl? c m with
+    | some owner => (ctx.sig? s!"{owner}.{m}").any fun s => s.named.isEmpty &&
+        s.tparams.length > ((ctx.types.sparams.lookup owner).getD []).length
+    | none => false
+  | _ => false
+
+/-- Classify a bound value using an isolated receiver type probe. Its code,
+    slots, effects and helper requests never enter the actual call. -/
+def argNeedsTypeWith (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx) (a : SExpr) : EM Bool := do
+  if ctx.argNeedsType a then return true
+  match a with
+  | .ident _ n =>
+    return (ctx.lookup n).isNone && ctx.selfClass.any (ctx.methodValueNeedsType · n)
+  | .member _ receiver m =>
+    -- Unreferenced dispatch temporaries have fresh names in each trial;
+    -- they must not prevent sharing the same receiver's type lookup.
+    let locals := ctx.locals.filter fun l => l.name == "Self" || l.name == "$Self" ||
+      Choice.anyE (fun | .ident _ n => n == l.name | _ => false) receiver
+    let key := reprStr (receiver, locals.map (fun l => (l.name, l.ty)), ctx.types.tvars,
+      ctx.selfClass, ctx.selfMethod, ctx.fnFx, ctx.retTy, ctx.frameName, ctx.frameArgs, ctx.retries,
+      [ctx.canFail, ctx.inTaking, ctx.suspends, ctx.inLoop, ctx.inParamDefault, ctx.inDefer,
+       ctx.inBlock, ctx.inCtor, ctx.inArm, ctx.inBranch, ctx.inDefaultCheck, ctx.inRepeat,
+       ctx.inChoice, ctx.asWritten, ctx.constructProbe], ctx.defaults, ctx.inlineScopes,
+      ctx.constructOrigin, ctx.unrefine)
+    let saved ← get
+    if let some c := saved.methodReceivers[key]? then
+      return c.any (ctx.methodValueNeedsType · m)
+    match (elabE { ctx with typeOnly := true, callInstanceProbe := none } receiver none).run saved with
+    | .ok (r, probed) =>
+      let c := match r.ty with
+        | .struct c _ => if ctx.types.classes.contains c then some c else none
+        | _ => none
+      modify fun st => { st with methodReceivers := probed.methodReceivers.insert key c }
+      return c.any (ctx.methodValueNeedsType · m)
+    | .error _ => return false
+  | _ => return false
 
 /-- How `e` implements slot `r` of method `m`: its `(r:)m`, else its plain
     `m` when not abstract. -/
@@ -3334,11 +3383,11 @@ partial def elabGenericCallWith (elabE : Ctx → SExpr → Option Ty → EM R) (
   let bound (σ : List (String × Ty)) (t : Ty) := t.params.all fun v => (σ.lookup v).isSome
   -- Empty values and generic function identifiers need an expected type,
   -- so elaborate them after other arguments, while still evaluating in order.
-  let fromContext := ctx.argNeedsType
+  let contextual := (← given.mapM (fun (a, _) => argNeedsTypeWith elabE ctx a)).toArray
   let mut es : Array Expr := Array.replicate given.length (.lit .void)
   -- arguments left for the second pass; an argument whose type contains
   -- `false` (like `array{Err()}`) binds nothing, so it joins them
-  let mut deferred : Array Bool := (given.map (fromContext ·.1)).toArray
+  let mut deferred : Array Bool := contextual
   for pass in [0, 1] do
     for ((a, k), i) in given.zip (List.range given.length) do
       let pt := ptys[k]!
@@ -3349,7 +3398,7 @@ partial def elabGenericCallWith (elabE : Ctx → SExpr → Option Ty → EM R) (
         let e ← tryCatch (coerce a.pos r t) fun msg => throw s!"{msg} (in a call of {s.name})"
         es := es.set! i e
       else
-        if fromContext a then
+        if contextual[i]! then
           let v := (pt.params.filter fun v => (σ.lookup v).isNone).headD "t"
           eerr a.pos s!"cannot infer type parameter {v} of {s.name} from the arguments of this call"
         let r ← elabE ctx a none
@@ -3397,7 +3446,7 @@ partial def elabGenericCallWith (elabE : Ctx → SExpr → Option Ty → EM R) (
         -- (its type: the parameter's, or what the default gives a type
         -- parameter nothing else determined)
         let σ0 := σ
-        if !bound σ0 pt && fromContext d then
+        if !bound σ0 pt && (← argNeedsTypeWith elabE dctx d) then
           let v := (pt.params.filter fun v => (σ0.lookup v).isNone).headD "t"
           eerr p s!"cannot infer type parameter {v} of {s.name} from the arguments of this call"
         let (rd, σ1) ← fxAt p (do
@@ -5516,16 +5565,16 @@ partial def elabStmt (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM (R × Ctx) 
       let items ← decls.mapM fun
         | .decl q x (some sty) v a => do pure (q, x, v, a, ← resolveTy penv q sty)
         | d => eerr d.pos "internal: a $params clause (#235)"
-      let fromContext := ctx.argNeedsType
+      let contextual := (← items.mapM (fun (_, _, _, a, _) => argNeedsTypeWith elabE ctx a)).toArray
       let mut σ : List (String × Ty) := []
       let mut done : Array (Option (Expr × Ty)) := Array.replicate items.length none
-      let mut deferred : Array Bool := (items.map fun (_, _, _, a, _) => fromContext a).toArray
+      let mut deferred : Array Bool := contextual
       for pass in [0, 1] do
         for ((q, _, _, a, t0), i) in items.zipIdx do
           if (pass == 0) == deferred[i]! then continue
           let t := t0.subst σ
           if t.params.any names.contains then
-            if fromContext a then eerr q s!"cannot infer the type parameters of {fname} from the arguments of this call"
+            if contextual[i]! then eerr q s!"cannot infer the type parameters of {fname} from the arguments of this call"
             let r ← elabE ctx a none
             match t.matchArg ctx.types σ r.ty with
             | some σ' =>
@@ -5853,12 +5902,12 @@ partial def resolveOverload (ctx : Ctx) (p : Pos) (name : String) (ovs : List St
     let st ← get
     let r ← tryCatch (do return some (← elabE ctx a none).ty) (fun _ => pure none)
     let cache := (← get).natTys
-    set { st with natTys := cache.insert key r }
+    set { st with natTys := cache.insert key r, methodReceivers := (← get).methodReceivers }
     return r
   let coercible (t u : Ty) : EM Bool := do
     let st ← get
     let ok ← tryCatch (do discard <| coerce p ⟨.lit .void, t⟩ u; pure true) (fun _ => pure false)
-    set { st with natTys := (← get).natTys }
+    set { st with natTys := (← get).natTys, methodReceivers := (← get).methodReceivers }
     return ok
   let mut byNat : List String := []
   for o in cands do
@@ -5885,14 +5934,14 @@ partial def resolveOverload (ctx : Ctx) (p : Pos) (name : String) (ovs : List St
     let st ← get
     if !s.tparams.isEmpty then
       let ok ← tryCatch (do discard <| call o; pure true) (fun _ => pure false)
-      set { st with natTys := (← get).natTys }
+      set { st with natTys := (← get).natTys, methodReceivers := (← get).methodReceivers }
       return ok
     let ok ← tryCatch (do
         for (a, t) in argTys s do
           let r ← elabE ctx a (some t)
           discard <| coerce a.pos r t
         pure true) (fun _ => pure false)
-    set { st with natTys := (← get).natTys }
+    set { st with natTys := (← get).natTys, methodReceivers := (← get).methodReceivers }
     return ok
   -- the overloads the arguments' own types fit, then those the arguments
   -- elaborated at each one's parameter types fit
@@ -6021,7 +6070,7 @@ partial def elabApp (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (brack
     if ctx.retries ≥ 8 then return ← elabAppBase ctx p f args bracket exp
     let saved ← get
     -- (the state is restored between attempts, but not the overload cache)
-    let restore : EM Unit := do set { saved with natTys := (← get).natTys }
+    let restore : EM Unit := do set { saved with natTys := (← get).natTys, methodReceivers := (← get).methodReceivers }
     tryCatch (elabAppBase ctx p f args bracket exp) fun err => do
       -- (only a call refused for its arguments' shape is tried again: an
       -- error from inside the argument is the argument's)
@@ -6559,16 +6608,21 @@ partial def elabAppBase (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (b
         if let some et := exp then
           if !(et == .void) then
             if let some σ' := (declTy ms.ret).matchArg ctx.types σu et then σu := own? σ'
-        let fromContext := ctx.argNeedsType
-        let posPs := (ms.params.drop 1).take (npos - 1)
-        let mut done : Array (Option (Expr × Ty)) := Array.replicate posArgs.length none
-        let mut deferred : Array Bool := (posArgs.map fromContext).toArray
+        -- Infer from all given arguments before checking contextual values,
+        -- preserving positional then written named order in the emitted code.
+        let given : List (SExpr × Ty × Option String) :=
+          (posArgs.zip ((ms.params.drop 1).take (npos - 1))).map (fun (a, t) => (a, t, none)) ++
+          namedArgs.map (fun (_, n, rhs) =>
+            (rhs, ms.params[npos + (ms.named.findIdx? (·.1 == n)).get!]!, some n))
+        let contextual := (← given.mapM (fun (a, _, _) => argNeedsTypeWith elabE ctx a)).toArray
+        let mut done : Array (Option (Expr × Ty)) := Array.replicate given.length none
+        let mut deferred : Array Bool := contextual
         for pass in [0, 1] do
-          for ((a, t0), i) in (posArgs.zip posPs).zip (List.range posArgs.length) do
+          for ((a, t0, _), i) in given.zipIdx do
             if (pass == 0) == deferred[i]! then continue
             let t := (declTy t0).subst σu
             if t.params.any ownNames.contains then
-              if fromContext a then
+              if contextual[i]! then
                 eerr a.pos s!"cannot infer the type parameters of {m} from the arguments of this call"
               let r ← elabE ctx a none
               match t.matchArg ctx.types σu r.ty with
@@ -6582,37 +6636,15 @@ partial def elabAppBase (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (b
               | none => eerr a.pos s!"expected {showT t}, found {r.ty.show} (in a call of {m})"
             else
               done := done.set! i (some (← coerce a.pos (← elabE ctx a (some t)) t, t))
-        for d in done do
+        let mut namedSlots : List (String × Nat) := []
+        for ((_, _, name), d) in given.zip done.toList do
           let some (e, t) := d | eerr p s!"cannot infer the type parameters of {m} from the arguments of this call"
           let ta ← fresh t
           pre := pre.push (.assign ta e)
           locs := { name := s!"$arg{ta}", slot := ta, ty := t, mutable := false } :: locs
-          argIds := argIds.push (.ident mp s!"$arg{ta}")
-        let mut namedSlots : List (String × Nat) := []
-        for (ap, n, rhs) in namedArgs do
-          -- (at the own type parameters inferred so far; one it mentions
-          -- that is not yet bound is inferred from it, #119)
-          let t0 := (declTy (ms.params[npos + (ms.named.findIdx? (·.1 == n)).get!]!)).subst σu
-          let mut t := t0
-          let mut e : Expr := .lit .void
-          if t0.params.any ownNames.contains then
-            if fromContext rhs then
-              eerr ap s!"cannot infer the type parameters of {m} from the arguments of this call"
-            let r ← elabE ctx rhs none
-            match t0.matchArg ctx.types σu r.ty with
-            | some σ' =>
-              σu := own? σ'
-              t := t0.subst σu
-              if t.params.any ownNames.contains then
-                eerr ap s!"cannot infer the type parameters of {m} from this argument"
-              e ← coerce ap r t
-            | none => eerr ap s!"expected {showT t0}, found {r.ty.show} (in a call of {m})"
-          else
-            e ← coerce ap (← elabE ctx rhs (some t0)) t0
-          let ta ← fresh t
-          pre := pre.push (.assign ta e)
-          locs := { name := s!"$arg{ta}", slot := ta, ty := t, mutable := false } :: locs
-          namedSlots := namedSlots ++ [(n, ta)]
+          match name with
+          | none => argIds := argIds.push (.ident mp s!"$arg{ta}")
+          | some n => namedSlots := namedSlots ++ [(n, ta)]
         for (n, ta) in namedSlots do
           argIds := argIds.push (.decl mp s!"?{n}" none false (.ident mp s!"$arg{ta}"))
         let msRet := (declTy ms.ret).subst σu

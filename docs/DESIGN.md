@@ -994,6 +994,19 @@ flowchart LR
   also substitutes its tuple components into `$self`; parameters absent
   from the callable signature remain inferable from that field. Declared
   adapters retain precedence, and the receiver is stored once.
+  Contextual argument inference also recognizes generic method references.
+  `argNeedsTypeWith` obtains a receiver's declaration in an isolated
+  type-only elaboration, discarding its code, slots, effects and helper
+  requests. Only method-local parameters require deferral; fields and
+  nongeneric methods retain their inferable signatures. Actual elaboration
+  runs after other arguments fix the expected type and emits the receiver
+  exactly once. Successful receiver-class lookups are cached by the full
+  receiver syntax, local types, aliases, source scope and checking mode.
+  Isolated trials retain only this lookup metadata, preventing nested
+  callbacks from repeating receiver typing exponentially. Generic method
+  dispatch infers from all given positional
+  and named arguments together, then emits them in their original order
+  before evaluating the selected implementation's defaults.
 - **`subscribable_event(t)`** is Verse code in a prelude (`subPrelude`):
   `event(t)` with an array of (subscription, handler) pairs, the handlers
   of type `type{_(:t):void}`, called under the refinement in `Signal`. A
