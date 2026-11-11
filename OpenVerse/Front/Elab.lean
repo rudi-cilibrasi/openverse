@@ -2634,8 +2634,10 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
               let values ← elabForWith elabAlts elabBranchAlts elabE elabInts elabLoopGen elabSeq
                 cB p restCl bd (prepared := true) (firstDecides := true)
               let .arr value := values.ty | eerr b.pos "internal: staged for result"
-              set saved
-              let req ← match forStagePlanOf cA b.pos key (i :: restCl) bd value bodyFail with
+              let effects := (← get).fx
+              set { saved with fx := effects }
+              let allowed := heapFx.filter fun k => cA.fnFx.contains k || effects.any (·.1 == k)
+              let req ← match forStagePlanOf { cA with fnFx := allowed } b.pos key (i :: restCl) bd value bodyFail with
                 | .ok req => pure req
                 | .error why => eerr b.pos s!"cannot stage this refining for: {why} (#417)"
               modify fun st => { st with
@@ -2645,12 +2647,15 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
                 forStageUses := st.forStageUses + 1 }
               return (codeA, .prim .userErr [], value)
             let some plan := plan? | eerr b.pos "internal: staged for plan"
+            noteFx b.pos (heapFx.filter plan.specs.contains)
             let site := s!"{plan.base}$selected"
             let rootArgs := if stagePlan.isSome then stageArgs else
               plan.tparams.map fun tp => (cA.types.tvars.lookup tp.name).getD (.param tp.name (tp.constraint == "comparable"))
             let copyNames := if stagePlan.isSome then stageCopies else plan.copies.map (·.1)
             let borrowNames := if stagePlan.isSome then stageBorrows else plan.borrowed
-            let suffixCtx := { cA with locals := { name := b.name, slot := 0, ty, mutable := false } :: cA.locals }
+            let suffixCtx := { cA with
+              fnFx := heapFx.filter (fun k => cA.fnFx.contains k || plan.specs.contains k),
+              locals := { name := b.name, slot := 0, ty, mutable := false } :: cA.locals }
             let viewSub := (plan.tparams.map (·.name)).zip (rootArgs.map Ty.toSTy)
             let resultTy ← resolveTy cA.types b.pos (plan.value.substNames viewSub)
             let tailKey := "tail" ++ contKey suffixCtx b.pos b.name (restCl ++ [bd]) ++ reprStr resultTy ++
