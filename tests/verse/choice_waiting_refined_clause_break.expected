@@ -1,0 +1,10 @@
+body 4 4 8
+body 4 5 13
+loop cleanup 18
+done 18
+body 0 4 4
+body 0 5 9
+completed
+loop cleanup 9
+done 9
+exit=0

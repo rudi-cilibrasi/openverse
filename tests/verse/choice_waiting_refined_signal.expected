@@ -1,0 +1,8 @@
+signal body 4 4 8
+signal body 4 5 17
+signal body 5 4 26
+signal body 5 5 36
+signal done 36
+signal observed 8 136
+signal final 136
+exit=0

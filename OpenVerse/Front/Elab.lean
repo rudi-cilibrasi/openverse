@@ -311,6 +311,12 @@ structure Ctx where
   /-- A source return carried by a shared for continuation. -/
   forReturnSlot : Option String := none
   forExitPacket : Option SExpr := none
+  forStage : Option Choice.ForStagePlan := none
+  forStageArgs : List Ty := []
+  forStageFlat : Bool := false
+  forStageCopies : List String := []
+  forStageBorrows : List String := []
+  resumeStorage : List (String × SourceStorage) := []
   /-- Inside a block or construction kept with a choice in it (`$noLift`,
       #283): what it is, for the message. -/
   liftWhy : String := ""
@@ -373,6 +379,7 @@ structure ESt where
   pendingSuspendingCasts : Nat := 0
   /-- Pending casts that can wait on either path, for shared-slot checks. -/
   pendingWaitingCasts : Nat := 0
+  forStageUses : Nat := 0
   /-- Mutable locals captured by a branch or a potentially continuing rush arm. -/
   backgroundSlots : List Nat := []
   frameSlots : List (Nat × SourceStorage) := []
@@ -1960,6 +1967,26 @@ def forReturnBody? : SExpr → Bool
   | .app _ (.ident _ f) _ false => f == "$forReturns" || f == "$forReturnBody"
   | _ => false
 
+/-- Restore source exits for the current filter, while a body's own
+    marker restores only its return target at actual body entry. -/
+def forClauseExitScope (body inner : SExpr) : SExpr :=
+  match body with
+  | .app p (.ident _ f) [.block _ [metadata, breaking], mode, _] false =>
+    if f == "$forReturns" || f == "$forReturnBody" then
+      .app p (.ident p "$forClauseExits") [metadata, breaking, mode, inner] false
+    else inner
+  | .app p (.ident _ f) [metadata, mode, _] false =>
+    if f == "$forReturns" || f == "$forReturnBody" then
+      .app p (.ident p "$forReturnBody") [metadata, mode, inner] false
+    else inner
+  | _ => inner
+
+def forStageBodyAs (body inner : SExpr) : SExpr :=
+  match body with
+  | .app p f@(.ident _ n) [metadata, mode, _] false =>
+    if n == "$forReturns" || n == "$forReturnBody" then .app p f [metadata, mode, inner] false else inner
+  | _ => inner
+
 /-- Keep source breaks aimed at their original loop after adding the
     producer's private abort loop. Its own outcome abort is left alone. -/
 partial def forwardForBreaks (abort escaped : Nat) : Expr → Expr
@@ -2078,16 +2105,186 @@ def contForLiftOf (ctx : Ctx) (p : Pos) (b : String) (bty vty : Ty) (alts rest :
            ret, body := pruneConstructHints ctx name bodyE, binds := [], sets := sets.map (·.name),
            args := SExpr.ident p b :: caps.map (fun l => SExpr.ident p l.name) ++ typeArgs }
 
+/-- The resume interface keeps every caller/frame type argument. A result
+    alone can erase equations needed by borrowed frame-reference arguments. -/
+def forStagePlanOf (ctx : Ctx) (p : Pos) (key : String) (clauses : List SExpr)
+    (body : SExpr) (vty : Ty) (outcome : Bool) (required : List String := []) : Except String Choice.FirstLift := do
+  let qualify := match ctx.selfClass with | some c => selfQualify ctx c | none => id
+  let clauses := clauses.map qualify
+  let body := qualify body
+  let written := SExpr.block p (clauses ++ [body] ++ required.map (SExpr.ident p ·))
+  let used := Choice.namesUsed written
+  let caps := used.eraseDups.filterMap ctx.lookup
+  let setNames := Choice.setsIn written
+  let sets := caps.filter fun l => l.mutable && setNames.contains l.name
+  let inputs := caps.flatMap fun l => l.storage.toList.flatMap (·.args)
+  let (tps, _, _) ← contTypes ctx p inputs (vty :: sets.map (·.ty)) (.tuple p [])
+  let base := s!"$forStage{p.line}_{p.col}_{key.hash}"
+  let method := base ++ "$resume"
+  let specs := (if ctx.fnFx.isEmpty then ["computes"] else ctx.fnFx) ++ ["suspends"]
+  let copies := sets.map fun l => (l.name, l.ty.toSTy)
+  let borrowed := caps.filterMap fun l => if l.storage.isSome then some l.name else none
+  let plan : Choice.ForStagePlan := {
+    key, pos := p, base, method, tparams := tps,
+    value := vty.toSTy, copies, borrowed, specs, outcome }
+  let valueTy := if outcome then STy.opt (.arr plan.value) else .arr plan.value
+  let ret := if copies.isEmpty then valueTy else .tup (valueTy :: copies.map (·.2))
+  let cls := STop.classDef p base tps [] [] true [] []
+    [.fn p method [] [] ("$abstract" :: specs) ret (.tuple p [])]
+  return {
+    stageOnly := true, stagePlan := some plan, key, pos := p, name := base,
+    params := [], specs := ["computes"], ret := .name "void", body := .tuple p [],
+    binds := [], sets := [], args := [], extraFns := [cls] }
+
+/-- Storage and the ordered root view are part of generated-code identity. -/
+def forStageCaptureKey (ctx : Ctx) (args : List Ty) (caps : List Local) : String :=
+  let origins := caps.map fun l => s!"{l.name}:{l.mutable}:" ++ match l.storage with
+    | none => "local"
+    | some s => s!"{s.frame}:{s.name}:{reprStr s.args}"
+  s!"{ctx.frameName}:{ctx.refineScope}:{ctx.inChoice}:{ctx.inRepeat}:" ++
+    reprStr args ++ String.intercalate ";" origins
+
+def forStageView (base : String) (args : List STy) : STy :=
+  if args.isEmpty then .name base else .app base args
+
+def forStageCopyMetadata (p : Pos) (names : List String) : SExpr :=
+  .block p (names.map fun n => .set p (.ident p n) none (.ident p n))
+
+def forStageCopyNames (ids : List SExpr) : List String :=
+  ids.filterMap fun
+    | .set _ (.ident _ n) none _ => some n
+    | .ident _ n => some n
+    | _ => none
+
+/-- Give the immediate prefix an actual function boundary. A source exit
+    returns its normal packet even from nested source loops; ordinary prefix
+    failure still fails the call in the caller's original filter. -/
+def forStagePrefixOf (ctx : Ctx) (plan : Choice.ForStagePlan) (args : List Ty) (p : Pos)
+    (clauses : List SExpr) (body : SExpr) (flat : Bool := false)
+    (copyNames : List String := plan.copies.map (·.1))
+    (borrowNames : List String := plan.borrowed) : Except String Choice.FirstLift := do
+  let qualify := match ctx.selfClass with | some c => selfQualify ctx c | none => id
+  let clauses := clauses.map qualify
+  let body := qualify body
+  let written := SExpr.block p (clauses ++ [body] ++ (copyNames ++ borrowNames).map (SExpr.ident p ·))
+  let caps := (Choice.namesUsed written).eraseDups.filterMap ctx.lookup
+  let key := s!"prefix{flat}" ++ plan.key ++ contKey ctx p "$prepare" [written] ++ forStageCaptureKey ctx args caps
+  let name := s!"{plan.base}$prepare{key.hash}"
+  let (tps, more, witnesses) ← contTypes ctx p (caps.map (·.ty)) args written
+  let params := caps.map fun l => ({ name := if l.mutable then l.name ++ "$in" else l.name, ty := l.ty.toSTy } : SParam)
+  let init := caps.filterMap fun l => if !l.mutable then none else some
+    (SExpr.decl p l.name (some l.ty.toSTy) true
+      (.app p (.ident p "$refineCopyIn") [.ident p (l.name ++ "$in")] false))
+  let view := forStageView plan.base (args.map Ty.toSTy)
+  let stage := SExpr.app p (.ident p "$forStage")
+    [.str p [.text plan.base], .decl p "$stageView" (some view) false (.tuple p []),
+      forStageCopyMetadata p copyNames, .block p (borrowNames.map (SExpr.ident p ·)),
+      .ident p "true", .ident p (if flat then "true" else "false"), .block p clauses, body] false
+  let stage := forClauseExitScope body stage
+  let value := s!"{name}$value"
+  let code := if plan.copies.isEmpty then stage else SExpr.block p
+    [.decl p value none false stage, .tuple p (.ident p value :: copyNames.map (SExpr.ident p ·))]
+  let valueTy := if plan.outcome then STy.opt (.arr view) else .arr view
+  let σ := (plan.tparams.map (·.name)).zip (args.map Ty.toSTy)
+  let ret := if plan.copies.isEmpty then valueTy else .tup (valueTy :: plan.copies.map (fun (_, t) => t.substNames σ))
+  let storage := caps.filterMap fun l => l.storage.map fun s =>
+    (if l.mutable then l.name ++ "$in" else l.name,
+      ({ frame := s.frame, name := s.name, args := s.args.map Ty.toSTy } : Choice.ResumeStorage))
+  let info : Choice.ForResume := {
+    name, storage, inlineScopes := ctx.inlineScopes, liftTag := ctx.liftTag,
+    inRepeat := ctx.inRepeat, inChoice := ctx.inChoice }
+  return {
+    key, pos := p, name, params := params ++ more, tparams := tps,
+    specs := plan.specs.filter (· != "suspends") ++ ["decides"], ret,
+    body := pruneConstructHints ctx name (.block p (init ++ [code])),
+    binds := [], sets := copyNames,
+    args := caps.map (fun l => .ident p l.name) ++ witnesses.map (fun
+      | .app q (.ident _ "$witness") [.ident _ n] false =>
+        .app q (.ident q "$stageWitness") [.decl q n (some (.name n)) false (.tuple q [])] false
+      | e => e), resumes := [info] }
+
+/-- Close over the remaining generators/body without executing either.
+    A class retains existential bindings and supplies a typed resume method;
+    mutable local aliases still name their original source-frame storage. -/
+def forStageEnvOf (ctx : Ctx) (plan : Choice.ForStagePlan) (p : Pos)
+    (clauses : List SExpr) (body : SExpr) : Except String (Choice.FirstLift × SExpr × Ty) := do
+  let qualify := match ctx.selfClass with | some c => selfQualify ctx c | none => id
+  let clauses := clauses.map qualify
+  let body := qualify body
+  let written := SExpr.block p (clauses ++ [body] ++ (ctx.forStageCopies ++ ctx.forStageBorrows).map (SExpr.ident p ·))
+  let caps := (Choice.namesUsed written).eraseDups.filterMap ctx.lookup
+  let key := s!"env{ctx.forStageFlat}" ++ plan.key ++ contKey ctx p "$resume" [written] ++ forStageCaptureKey ctx ctx.forStageArgs caps
+  let name := s!"{plan.base}$env{key.hash}"
+  let args := ctx.forStageArgs
+  let (tps, _, _) ← contTypes ctx p (args ++ caps.map (·.ty) ++
+    caps.flatMap (fun l => l.storage.toList.flatMap (·.args))) [] written
+  let σ := (plan.tparams.map (·.name)).zip (args.map Ty.toSTy) ++
+    ctx.types.tvars.map fun (n, t) => (n, t.toSTy)
+  let rename := Choice.renameE [("Self", "$sourceSelf")]
+  let clauses := clauses.map fun e => rename (Refine.substTypes σ e)
+  let body := rename (Refine.substTypes σ body)
+  let body := match body with
+    | .app p (.ident _ "$forReturns") args false => .app p (.ident p "$forReturnBody") args false
+    | b => b
+  let localName (n : String) := if n == "Self" then "$sourceSelf" else n
+  let fields := caps.zipIdx.map fun (l, j) => (s!"$capture{j}", l.ty.toSTy, none, false)
+  let borrowed (l : Local) := l.storage.filter fun s =>
+    !(ctx.sig? s.frame).any (!·.suspends)
+  let init := caps.zipIdx.flatMap fun (l, j) =>
+    let value := SExpr.app p (.ident p "$forEnvCapture")
+      [.member p (.ident p "Self") s!"$capture{j}"] false
+    if (borrowed l).isSome then
+      let saved := s!"$captureInit{j}"
+      [SExpr.decl p saved (some l.ty.toSTy) false value,
+        .decl p (localName l.name) (some l.ty.toSTy) l.mutable
+          (.app p (.ident p "$forEnvInit") [.ident p saved] false)]
+    else [SExpr.decl p (localName l.name) (some l.ty.toSTy) l.mutable value]
+  let copies := ctx.forStageCopies.map fun n => SExpr.ident p (localName n)
+  let vals := s!"{name}$values"
+  let failed : SExpr := if copies.isEmpty then .ident p "false" else .tuple p (.ident p "false" :: copies)
+  let run := if plan.outcome then
+      SExpr.app p (.ident p "$forFirstOutcome") [.block p clauses, body, failed] false
+    else SExpr.app p (.ident p "$forFirst") [.block p clauses, body] false
+  let run := forClauseExitScope body run
+  let run := if ctx.forStageFlat then SExpr.app p (.ident p "$forStageFlatten") [run] false else run
+  let code := if copies.isEmpty then run else .block p
+    [.decl p vals none false run, .tuple p (.ident p vals :: copies)]
+  let valueTy := if plan.outcome then STy.opt (.arr (plan.value.substNames σ)) else .arr (plan.value.substNames σ)
+  let ret := if copies.isEmpty then valueTy else
+    .tup (valueTy :: plan.copies.map (fun (_, t) => t.substNames σ))
+  let method := STop.fn p plan.method [] [] ("override" :: plan.specs) ret
+    (pruneConstructHints ctx s!"{name}.{plan.method}" (.block p (init ++ [code])))
+  let storage := caps.filterMap fun l => (borrowed l).map fun s =>
+    (localName l.name, ({ frame := s.frame, name := s.name, args := s.args.map Ty.toSTy } : Choice.ResumeStorage))
+  let resumeInfo : Choice.ForResume := {
+    name := s!"{name}.{plan.method}", storage,
+    inlineScopes := ctx.inlineScopes, liftTag := ctx.liftTag }
+  let cls := STop.classDef p name tps [] [forStageView plan.base (args.map Ty.toSTy)] false fields [] [method]
+  let req : Choice.FirstLift := {
+    stageOnly := true, resumes := [resumeInfo], key, pos := p, name,
+    params := [], specs := ["computes"], ret := .name "void", body := .tuple p [],
+    binds := [], sets := [], args := [], extraFns := [cls] }
+  let obj := SExpr.construct p name (tps.map fun tp => .name tp.name)
+    (caps.zipIdx.map fun (l, j) => .decl p s!"$capture{j}" none false (.ident p l.name))
+  return (req, obj, .struct plan.base args)
+
 /-- A failed body is unwrapped in an iteration body. Inside an outcome
     producer, stop its private loop instead of failing the filter. -/
 def forOutcomeValues (ctx : Ctx) (p : Pos) (r : R) : EM R := do
   let .opt (.arr t) := r.ty | eerr p "internal: expected a for outcome"
-  let value := Expr.prim .query [r.e]
+  -- A waiting method returns before its outcome can be queried. Only the
+  -- saved option belongs in a condition; the call stays outside it.
+  let (before, input) ← if ctx.suspends && Suspend.hasSusp
+      (fun f => ctx.sigs.any fun s => s.idx == f && s.suspends) r.e then do
+      let slot ← fresh r.ty
+      pure ([Expr.assign slot r.e], Expr.local slot)
+    else pure ([], r.e)
+  let value := Expr.prim .query [input]
   if let some flag := ctx.forOutcomeSlot then
     let slot ← fresh (.arr t)
-    return ⟨.ite (.assign slot value) (.local slot)
-      (.seq (.assign flag (.lit (.logic false))) (.seq .brk (.prim .userErr []))), .arr t⟩
-  return ⟨value, .arr t⟩
+    return ⟨before.foldr Expr.seq (.ite (.assign slot value) (.local slot)
+      (.seq (.assign flag (.lit (.logic false))) (.seq .brk (.prim .userErr [])))), .arr t⟩
+  return ⟨before.foldr Expr.seq value, .arr t⟩
 
 /-- `for`: clauses are generators, bindings and filters; each generator opens
     a nested `forE`, and nested results are flattened (cartesian product,
@@ -2101,7 +2298,12 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
     (elabLoopGen : Ctx → Pos → List SExpr → EM LoopGen) (elabSeq : Ctx → List SExpr → Option Ty → EM (R × Ctx))
     (ctx : Ctx) (p : Pos) (clauses : List SExpr) (body : SExpr) (prepared : Bool := false)
     (firstDecides : Bool := false) (failure : Option SExpr := none) : EM R := do
-  let ctx := { ctx with liftWhy := "" }
+  let stagePlan := ctx.forStage
+  let stageArgs := ctx.forStageArgs
+  let stageFlat := ctx.forStageFlat
+  let stageCopies := ctx.forStageCopies
+  let stageBorrows := ctx.forStageBorrows
+  let ctx := { ctx with liftWhy := "", forStage := none, forStageArgs := [], forStageFlat := false, forStageCopies := [], forStageBorrows := [] }
   -- (a choice is a generator over its alternatives, #208; clauses lifted
   -- already, `prepared`, are not lifted again)
   let clauses := if prepared then clauses else
@@ -2161,7 +2363,26 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
     | _ =>
       let (r, c') ← elabSeq { c with canFail := true, inTaking := true } fs none
       return (r.e, c')
-  let rec build (c : Ctx) (gs : List (SExpr × List SExpr)) (bd : SExpr) : EM R := do
+  let rec build (c : Ctx) (gs : List (SExpr × List SExpr)) (bd : SExpr) (stageHere : Bool := true) : EM R := do
+    if let some plan := stagePlan.filter (fun _ => stageHere) then
+      let clauses := gs.flatMap fun (g, fs) => g :: fs
+      let (req, obj, ty) ← match forStageEnvOf { c with forStageArgs := stageArgs, forStageFlat := stageFlat, forStageCopies := stageCopies, forStageBorrows := stageBorrows } plan p clauses bd with
+        | .ok r => pure r
+        | .error why => eerr p s!"cannot stage this for: {why} (#417)"
+      let r ← if c.types.loopRequests.any (·.key == req.key) then do
+          -- Only this synthetic environment allocation is an implementation
+          -- effect. Its fields are local reads, evaluated before allocation.
+          let fx := (← get).fx
+          let r ← elabE c obj (some ty)
+          let e ← coerce p r ty
+          modify fun st => { st with fx }
+          pure (⟨e, ty⟩ : R)
+        else do
+          modify fun st => { st with loopFirst := st.loopFirst ++
+            [{ g := "", pos := p, itemCode := .lit .void, argSet := none, lift := .ok req }] }
+          pure (⟨.prim .userErr [], ty⟩ : R)
+      if gs.isEmpty then return r
+      return ⟨.prim .mkArr [r.e], .arr r.ty⟩
     -- (#314) filters `fs` with an exclusive choice among them, then the
     -- groups `more`: its guards pick a path into a selector; each path's
     -- clauses up to its first generator (its guards again, which bind its
@@ -2195,7 +2416,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
           let (_, ty, _, refined) ← elabBranchAlts { cA with canFail := true, inTaking := true, typeOnly := true }
             b.pos i b.ty b.place
           restoreConstructProbe cA st
-          if refined && forBodySafe cA bd then
+          if refined && stagePlan.isNone && forBodySafe cA bd then
             checkNewLocal cA b.pos b.name
             if cA.typeOnly then
               let slot ← fresh ty
@@ -2259,6 +2480,123 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
               let slot ← fresh values.ty
               let value ← if bodyFail then forOutcomeValues cA b.pos ⟨.local slot, values.ty⟩ else pure ⟨.local slot, values.ty⟩
               return (.seq codeA (.assign slot values.e), value.e, t)
+          -- A waiting body cannot move into a filter-bound continuation.
+          -- Prepare only this filter's prefix, then dispatch its typed
+          -- environment from the iteration body after the filter commits.
+          let sourceFail := match bd with
+            | .app _ (.ident _ f) [_, .ident _ mode, _] false =>
+              if f == "$forReturns" || f == "$forReturnBody" then mode == "true" else bodyFail
+            | _ => bodyFail
+          if refined && (stagePlan.isSome || (ctx.suspends && !sourceFail)) &&
+              !cA.inCtor && !cA.inParamDefault && !cA.inBlock && !cA.inDefer && cA.defaults.isEmpty then
+            checkNewLocal cA b.pos b.name
+            let restCl := after ++ moreCl
+            if cA.typeOnly then
+              let slot ← fresh ty
+              let cB := { cA with locals := { name := b.name, slot, ty, mutable := false } :: cA.locals }
+              let (f, a, t) ← exclIter cB after more bd
+              return (.seq codeA f, a, t)
+            let rootCaptures := (Choice.namesUsed (.block p (i :: restCl ++ [bd]))).filterMap cA.lookup
+            let key := "stage" ++ contKey cA b.pos b.name (i :: restCl ++ [bd]) ++
+              forStageCaptureKey cA [] (rootCaptures.filter (·.storage.isSome))
+            let plan? := stagePlan.orElse fun _ =>
+              cA.types.loopRequests.findSome? (fun l => l.stagePlan.filter (·.key == key))
+            if plan?.isNone then
+              let saved ← get
+              let slot ← fresh ty
+              let cB := { cA with
+                typeOnly := true, forStage := none,
+                locals := { name := b.name, slot, ty, mutable := false } :: cA.locals }
+              let values ← elabForWith elabAlts elabBranchAlts elabE elabInts elabLoopGen elabSeq
+                cB p restCl bd (prepared := true) (firstDecides := true)
+              let .arr value := values.ty | eerr b.pos "internal: staged for result"
+              set saved
+              let req ← match forStagePlanOf cA b.pos key (i :: restCl) bd value bodyFail with
+                | .ok req => pure req
+                | .error why => eerr b.pos s!"cannot stage this refining for: {why} (#417)"
+              modify fun st => { st with
+                loopFirst := st.loopFirst ++ [{ g := "", pos := b.pos, itemCode := .lit .void, argSet := none, lift := .ok req }],
+                pendingSuspendingCasts := st.pendingSuspendingCasts + 1,
+                pendingWaitingCasts := st.pendingWaitingCasts + 1,
+                forStageUses := st.forStageUses + 1 }
+              return (codeA, .prim .userErr [], value)
+            let some plan := plan? | eerr b.pos "internal: staged for plan"
+            let site := s!"{plan.base}$selected"
+            let rootArgs := if stagePlan.isSome then stageArgs else
+              plan.tparams.map fun tp => (cA.types.tvars.lookup tp.name).getD (.param tp.name (tp.constraint == "comparable"))
+            let copyNames := if stagePlan.isSome then stageCopies else plan.copies.map (·.1)
+            let borrowNames := if stagePlan.isSome then stageBorrows else plan.borrowed
+            let suffixCtx := { cA with locals := { name := b.name, slot := 0, ty, mutable := false } :: cA.locals }
+            let viewSub := (plan.tparams.map (·.name)).zip (rootArgs.map Ty.toSTy)
+            let resultTy ← resolveTy cA.types b.pos (plan.value.substNames viewSub)
+            let tailKey := "tail" ++ contKey suffixCtx b.pos b.name (restCl ++ [bd]) ++ reprStr resultTy ++
+              forStageCaptureKey cA rootArgs (borrowNames.filterMap cA.lookup)
+            let nextReq ← match forStagePlanOf suffixCtx b.pos tailKey restCl bd resultTy plan.outcome borrowNames with
+              | .ok req => pure req
+              | .error why => eerr b.pos s!"cannot type this waiting for's suffix: {why} (#417)"
+            if !cA.types.loopRequests.any (·.key == nextReq.key) then
+              modify fun st => { st with loopFirst := st.loopFirst ++
+                [{ g := "", pos := b.pos, itemCode := .lit .void, argSet := none, lift := .ok nextReq }] }
+              return (codeA, .prim .userErr [], if stagePlan.isSome then Ty.struct plan.base rootArgs else resultTy)
+            let some nextPlan := nextReq.stagePlan | eerr b.pos "internal: missing suffix plan"
+            let nextArgs := nextPlan.tparams.map fun tp =>
+              (cA.types.tvars.lookup tp.name).getD (.param tp.name (tp.constraint == "comparable"))
+            let nextCopies := nextPlan.copies.map (·.1)
+            let nextBorrows := nextPlan.borrowed
+            let suffix ← match forStagePrefixOf suffixCtx nextPlan nextArgs b.pos restCl bd stageFlat nextCopies nextBorrows with
+              | .ok req => pure req
+              | .error why => eerr b.pos s!"cannot share this waiting for's suffix: {why} (#335, #417)"
+            if !cA.types.loopRequests.any (·.key == suffix.key) then
+              modify fun st => { st with loopFirst := st.loopFirst ++
+                [{ g := "", pos := b.pos, itemCode := .lit .void, argSet := none, lift := .ok suffix }] }
+              return (codeA, .prim .userErr [], if stagePlan.isSome then Ty.struct plan.base rootArgs else resultTy)
+            let stageTypes := rootArgs.map Ty.toSTy
+            let consume (arm : SExpr) : SExpr :=
+              let clauses := Choice.prepare [.decl b.pos b.name (some ty.toSTy) false arm]
+                (choiceValues cA) (choiceField cA) (site := site) (fieldOrder := choiceOrder cA)
+                (keepExcl := true) (keepBranches := choiceHasCast cA)
+              let payload := site ++ "$suffix"
+              let packet := payload ++ "$packet"
+              let call := SExpr.app b.pos (.ident b.pos suffix.name) suffix.args true
+              let get (j : Nat) := SExpr.app b.pos (.ident b.pos packet) [.int b.pos (j : Int)] false
+              let tail : List SExpr := if nextCopies.isEmpty then [.decl b.pos payload none false call] else
+                .decl b.pos packet none false call ::
+                  (nextCopies.zipIdx.map fun (n, j) => .set b.pos (.ident b.pos n) none
+                    (.app b.pos (.ident b.pos "$refineCopyOut") [get (j + 1)] false)) ++
+                  [.decl b.pos payload none false (get 0)]
+              let clauses := clauses ++ tail
+              let body := forStageBodyAs bd (.app b.pos (.ident b.pos "$forResumeValues") [.ident b.pos payload, forStageCopyMetadata b.pos nextCopies, .block b.pos (nextBorrows.map (SExpr.ident b.pos ·))] false)
+              if stagePlan.isSome then
+                let stage := SExpr.app b.pos (.ident b.pos "$forStage")
+                  [.str b.pos [.text plan.base], .decl b.pos "$stageView" (some (forStageView plan.base stageTypes)) false (.tuple b.pos []),
+                    forStageCopyMetadata b.pos copyNames, .block b.pos (borrowNames.map (SExpr.ident b.pos ·)), .ident b.pos "false", .ident b.pos "true", .block b.pos clauses, body] false
+                .optionLit b.pos (forClauseExitScope bd stage)
+              else
+              let prepare := SExpr.app b.pos (.ident b.pos "$forPrepare")
+                [.str b.pos [.text plan.base], .decl b.pos "$stageView" (some (forStageView plan.base stageTypes)) false (.tuple b.pos []),
+                  forStageCopyMetadata b.pos copyNames, .block b.pos (borrowNames.map (SExpr.ident b.pos ·)), .ident b.pos "true", .block b.pos clauses, body] false
+              let code := if plan.copies.isEmpty then prepare else
+                let packet := site ++ "$packet"
+                let get (j : Nat) := SExpr.app b.pos (.ident b.pos packet) [.int b.pos (j : Int)] false
+                SExpr.block b.pos (.decl b.pos packet none false prepare ::
+                  (copyNames.zipIdx.map fun (n, j) => .set b.pos (.ident b.pos n) none
+                    (.app b.pos (.ident b.pos "$refineCopyOut") [get (j + 1)] false)) ++ [get 0])
+              .optionLit b.pos code
+            let selected := Choice.consumeBranches i site consume
+            let values ← elabE { cA with canFail := true, inTaking := true }
+              (.query b.pos selected) none
+            let slot ← fresh values.ty
+            if stagePlan.isSome then
+              let .arr value := values.ty | eerr b.pos "internal: prepared for environments"
+              return (.seq codeA (.assign slot values.e), .local slot, value)
+            let ready := site ++ "$ready"
+            let c := { bodyCtx cA with
+              canFail := sourceFail,
+              locals := { name := ready, slot, ty := values.ty, mutable := false } :: cA.locals }
+            let resumed ← elabE c (.app b.pos (.ident b.pos "$forResumeValues") [.ident b.pos ready, forStageCopyMetadata b.pos copyNames, .block b.pos (borrowNames.map (SExpr.ident b.pos ·))] false) none
+            modify fun st => { st with forStageUses := st.forStageUses + 1 }
+            let .arr value := resumed.ty | eerr b.pos "internal: staged for values"
+            return (.seq codeA (.assign slot values.e), resumed.e, value)
           let cl := pruneMethodBinding cA (fs[j]?.getD (.tuple p []))
           let (f, a, t) ← exclIter cA (Choice.bifToExcl cl ++ after) more bd
           return (.seq codeA f, a, t)
@@ -2308,7 +2646,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
         -- those clauses and the body a function of their own, #342's, which
         -- each path calls, instead of a copy in each)
         let restCl := after ++ moreCl
-        let contOK := restCl.any isCF && forBodySafe cA bd && xty.isSome
+        let contOK := stagePlan.isNone && restCl.any isCF && forBodySafe cA bd && xty.isSome
         let req := if !contOK || cA.typeOnly then none else
           cA.types.loopRequests.find? (·.key == (if bodyFail then "fo" else "f") ++ contKey cA gp x (altsS ++ restCl ++ [bd]))
         let fits (l : Choice.FirstLift) : Bool :=
@@ -2372,6 +2710,9 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
       -- never completes has Core's void type without changing its exit.
       let r := if r.ty == .never then { r with e := .seq r.e (.lit .void) } else r
       if let some failed := failure then
+        -- Waiting source bodies cannot fail. Their explicit source exits
+        -- already return packets, so no failure-capture rewrite is needed.
+        if c.suspends && !r.e.mayFail ctx.sigProg then return r
         let packet ← elabE { c with canFail := false } failed (some c.retTy)
         let hint ← fresh (.opt r.ty)
         return ⟨FailCapture.marked hint r.e (.ret packet.e), r.ty⟩
@@ -2632,7 +2973,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
     if pre.any isExcl then
       -- (named for the depth too: a for of an alternative's, inside this
       -- one's clauses, has the same position)
-      let r ← build ctx ((.gen p s!"$u{p.line}_{p.col}_{ctx.locals.length}" none (.arrayLit p [.tuple p []]), pre) :: gs) body
+      let r ← build ctx ((.gen p s!"$u{p.line}_{p.col}_{ctx.locals.length}" none (.arrayLit p [.tuple p []]), pre) :: gs) body false
       -- (a continuation's, #335: its filter, then its values, failing where
       -- the filter fails, as the caller's filter would with it copied in)
       if firstDecides then
@@ -4054,6 +4395,9 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
     -- written types mention)
     let t := (ctx.types.tvars.lookup n).getD (.param n false)
     return ⟨← witness ctx.types ctx.dictBase ctx.dictVars t, t⟩
+  | .app p (.ident _ "$stageWitness") [.decl _ _ (some ty) _ _] false => do
+    let ty ← resolveTy ctx.types p ty
+    return ⟨← witness ctx.types ctx.dictBase ctx.dictVars ty, ty⟩
   | .app p (.ident _ "$fxOf") [.ident _ f] false =>
     -- (an inlined call of a function with several values: its declared
     -- effects, as at a call, #235)
@@ -4062,6 +4406,81 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
   -- (a continuation's body, #335: clauses lifted already, failing where their
   -- first filter does, then the values)
   | .app p (.ident _ "$forFirst") [.block _ clauses, body] false => elabFor ctx p clauses body (prepared := true) (firstDecides := true)
+  | .app _ (.ident _ "$forEnvCapture") [value] false => do
+    let fx := (← get).fx
+    let r ← elabE ctx value exp
+    modify fun st => { st with fx }
+    return r
+  | .app p (.ident _ "$forStageFlatten") [value] false => do
+    let r ← elabE ctx value none
+    match r.ty with
+    | .arr (.arr t) => return ⟨.prim .flatten [r.e], .arr t⟩
+    | .opt (.arr (.arr t)) =>
+      let result ← fresh r.ty
+      let slot ← fresh (.arr (.arr t))
+      return ⟨.seq (.assign result r.e) (.ite (.assign slot (.prim .query [.local result]))
+        (.prim .mkSome [.prim .flatten [.local slot]]) (.lit .none)), .opt (.arr t)⟩
+    | _ => eerr p "internal: staged flatten values"
+  | .app p (.ident _ "$forPrepare") [.str _ [.text base], .decl _ _ (some view) _ _, .block _ copyIds, .block _ borrowIds, .ident _ flat, .block _ clauses, body] false => do
+    let some plan := ctx.types.loopRequests.findSome? (fun l => l.stagePlan.filter (·.base == base))
+      | eerr p "internal: missing for prepare plan"
+    let .struct _ args ← resolveTy ctx.types p view | eerr p "internal: for prepare view"
+    let copyNames := forStageCopyNames copyIds
+    let borrowNames := borrowIds.filterMap fun | .ident _ n => some n | _ => none
+    let req ← match forStagePrefixOf ctx plan args p clauses body (flat == "true") copyNames borrowNames with
+      | .ok req => pure req
+      | .error why => eerr p s!"cannot prepare this refining for: {why} (#417)"
+    if !ctx.types.loopRequests.any (·.key == req.key) then
+      modify fun st => { st with loopFirst := st.loopFirst ++
+        [{ g := "", pos := p, itemCode := .lit .void, argSet := none, lift := .ok req }] }
+      let ty ← resolveTy ctx.types p req.ret
+      return ⟨.prim .userErr [], ty⟩
+    elabApp ctx p (.ident p req.name) req.args true exp
+  | .app p (.ident _ "$forStage") [.str _ [.text base], .decl _ _ (some view) _ _, .block _ copyIds, .block _ borrowIds, .ident _ root, .ident _ flat, .block _ clauses, body] false => do
+    let some plan := (ctx.forStage.filter (·.base == base)).orElse fun _ =>
+        ctx.types.loopRequests.findSome? (fun l => l.stagePlan.filter (·.base == base))
+      | eerr p "internal: missing for stage plan"
+    let .struct _ args ← resolveTy ctx.types p view | eerr p "internal: for stage view"
+    let copyNames := forStageCopyNames copyIds
+    let borrowNames := borrowIds.filterMap fun | .ident _ n => some n | _ => none
+    let outcome := root == "true" && plan.outcome
+    let failed : SExpr := if plan.copies.isEmpty then .ident p "false" else
+      .tuple p (.ident p "false" :: copyNames.map (SExpr.ident p ·))
+    let r ← elabFor { ctx with
+      forStage := some plan, forStageArgs := args, forStageFlat := flat == "true", forStageCopies := copyNames, forStageBorrows := borrowNames,
+      forExitPacket := if outcome then some failed else ctx.forExitPacket } p clauses body
+      (prepared := true) (firstDecides := true)
+    if !outcome then return r
+    return ⟨.prim .mkSome [r.e], .opt r.ty⟩
+  | .app p (.ident _ "$forResumeValues") [envs, .block _ copyIds, .block _ _] false => do
+    let copyNames := forStageCopyNames copyIds
+    let input ← elabE ctx envs none
+    let r ← match input.ty with
+      | .opt (.arr _) => forOutcomeValues ctx p input
+      | _ => pure input
+    let .arr (.struct base _) := r.ty | eerr p "internal: for resume environments"
+    let some plan := ctx.types.loopRequests.findSome? (fun l => l.stagePlan.filter (·.base == base))
+      | eerr p "internal: missing for resume plan"
+    let slot ← fresh r.ty
+    let source := s!"{base}$ready"
+    let env := source ++ "$env"
+    let packet := source ++ "$packet"
+    let c := { ctx with forStage := none, locals := { name := source, slot, ty := r.ty, mutable := false } :: ctx.locals }
+    let call := SExpr.app p (.member p (.ident p env) plan.method) [] false
+    let body := if plan.copies.isEmpty then call else
+      let get (j : Nat) := SExpr.app p (.ident p packet) [.int p (j : Int)] false
+      SExpr.block p (.decl p packet none false call ::
+        (copyNames.zipIdx.map fun (n, j) => .set p (.ident p n) none
+          (.app p (.ident p "$refineCopyOut") [get (j + 1)] false)) ++ [get 0])
+    let body := if plan.outcome then .app p (.ident p "$forOutcomeValues") [body] false else body
+    -- Preparation never executes a real generator: each successful prefix
+    -- supplies exactly one environment. Dispatch directly, retaining the
+    -- enclosing outcome target across this suspending call.
+    let first := SExpr.app p (.ident p source) [.int p 0] true
+    let values ← elabE c (.ite p [.decl p env none false first] body
+      (some (.app p (.ident p "Err") [] false))) none
+    let .arr _ := values.ty | eerr p "internal: for resume values"
+    return ⟨.seq (.assign slot r.e) values.e, values.ty⟩
   | .app p (.ident _ "$forFirstOutcome") [.block _ clauses, body, failed] false => do
     let flag ← fresh .logic
     let r ← elabFor { ctx with forOutcomeSlot := some flag, forExitPacket := some failed } p clauses body
@@ -4604,8 +5023,14 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
       let slot ← fresh (.opt sourceRet)
       let breakName := name ++ "$break"
       let breaking ← if breaks then some <$> fresh .logic else pure none
-      let c := { ctx with locals := { name, slot, ty := .opt sourceRet, mutable := true } ::
-        (breaking.map (fun slot => ({ name := breakName, slot, ty := .logic, mutable := true } : Local))).toList ++ ctx.locals }
+      let storage (n : String) : Option SourceStorage := if ctx.suspends then
+        some { frame := ctx.frameName, name := n, args := ctx.frameArgs } else none
+      let returnLocal : Local := { name, slot, ty := .opt sourceRet, mutable := true, storage := storage name }
+      let breakLocal := breaking.map fun slot =>
+        ({ name := breakName, slot, ty := .logic, mutable := true, storage := storage breakName } : Local)
+      let extra := returnLocal :: breakLocal.toList
+      modify fun st => { st with frameSlots := st.frameSlots ++ extra.filterMap (fun l => l.storage.map (l.slot, ·)) }
+      let c := { ctx with locals := extra ++ ctx.locals }
       let flag ← fresh .logic
       let metadata := SExpr.set p (.ident p name) none (.ident p name)
       let metadata := if breaking.isSome then .block p [metadata, .set p (.ident p breakName) none (.ident p breakName)] else metadata
@@ -4615,7 +5040,8 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
       let r ← elabFor { c with forOutcomeSlot := some flag } p clauses body
       -- Only the consumer moves into a filter-bound continuation. Source
       -- cleanup and the final return remain in the suspending caller.
-      let waits := forContWaits ctx before (← get) [r.e]
+      let afterConsumer ← get
+      let waits := forContWaits ctx before afterConsumer [r.e] && before.forStageUses == afterConsumer.forStageUses
       let result ← fresh (.opt r.ty)
       let value ← fresh r.ty
       let returning := s!"{name}$value"
@@ -4648,11 +5074,8 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
       if !breaks && !returns then
         return ← elabFor ctx p clauses body
       if !ctx.suspends then return (← withExits).1
-      -- The marker permits source returns in the syntax guard. The typed
-      -- trial also detects waiting methods, function values and cast lifts.
-      -- Waiting consumers retain their original source-return lowering.
-      let marked := SExpr.app p (.ident p "$forReturns") [body] false
-      if !forBodySafe ctx marked then return ← elabFor ctx p clauses body
+      -- Immediate consumers and staged waiting consumers carry source exits.
+      -- Other waiting consumers retain their original source-return lowering.
       let st0 ← get
       if let some (r, waits) ← tryCatch (some <$> withExits) (fun _ => pure none) then
         if !waits then return r
@@ -4677,8 +5100,8 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
     if let some name := ctx.forBreakCapture then
       let some target := ctx.lookup name | eerr p "internal: missing for break slot"
       if target.ty != .logic then eerr p "internal: invalid for break type"
-      let some pack := ctx.forExitPacket | eerr p "internal: missing for break outcome"
       let ds ← elabDefers ctx ctx.defers
+      let some pack := ctx.forExitPacket | eerr p "internal: missing for break outcome"
       let out ← elabE { ctx with defers := [] } pack (some ctx.retTy)
       return ⟨.seq ds (.seq (.assign target.slot (.lit (.logic true))) (.ret out.e)), .never⟩
     -- the defers of the scopes it leaves, inside its loop
@@ -4704,7 +5127,6 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
     if let some name := ctx.forReturnSlot then
       let some target := ctx.lookup name | eerr p "internal: missing for return slot"
       let .opt ty := target.ty | eerr p "internal: invalid for return type"
-      let some pack := ctx.forExitPacket | eerr p "internal: missing for return outcome"
       let value ← match e? with
         | some e => coerce p (← elabE ctx e (some ty)) ty
         | none =>
@@ -4712,6 +5134,7 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
           pure (.lit .void)
       let saved ← fresh ty
       let ds ← elabDefers ctx ctx.defers
+      let some pack := ctx.forExitPacket | eerr p "internal: missing for return outcome"
       let out ← elabE { ctx with defers := [] } pack (some ctx.retTy)
       return ⟨.seq (.assign saved value) (.seq ds
         (.seq (.assign target.slot (.prim .mkSome [.local saved])) (.ret out.e))), .never⟩
@@ -4737,9 +5160,10 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
 partial def elabStmt (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM (R × Ctx) := do
   let (r, ctx') ← match se with
     | .decl p n sty isVar rhs => do
-      let (rhs, copied) := match rhs with
-        | .app _ (.ident _ "$refineCopyIn") [e@(.ident _ source)] false => (e, (ctx.lookup source).bind (·.storage))
-        | e => (e, none)
+      let (rhs, copied, envInit) := match rhs with
+        | .app _ (.ident _ "$refineCopyIn") [e@(.ident _ source)] false => (e, (ctx.lookup source).bind (·.storage), false)
+        | .app _ (.ident _ "$forEnvInit") [e@(.ident _ _)] false => (e, none, true)
+        | e => (e, none, false)
       if let .app dp (.ident _ "$defer") _ _ := rhs then eerr dp "defer: is a statement: it has no value"
       checkNewLocal ctx p n
       let ty? ← sty.mapM (resolveTy ctx.types p)
@@ -4749,10 +5173,13 @@ partial def elabStmt (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM (R × Ctx) 
         eerr p (if n.startsWith "$" then "cannot infer the type of this clause's value" else s!"cannot infer the type of '{n}'")
       let e ← coerce p r ty
       let slot ← fresh ty
-      let storage := copied.orElse fun _ => if isVar && ctx.suspends then
+      let storage := copied.orElse (fun _ => ctx.resumeStorage.lookup n) |>.orElse fun _ => if isVar && ctx.suspends then
         some { frame := ctx.frameName, name := s!"{p.file}:{p.line}:{p.col}:{n}", args := ctx.frameArgs } else none
       if let some s := storage then
         modify fun st => { st with frameSlots := st.frameSlots ++ [(slot, s)] }
+      if envInit then
+        if let .local result := e then
+          modify fun st => { st with frameCopies := st.frameCopies ++ [{ target := slot, result }] }
       pure (⟨.assign slot e, ty⟩,
         { ctx with locals := { name := n, slot, ty, mutable := isVar, storage } :: ctx.locals })
     | .app _ (.ident _ "$inlineScope") [.str _ [.text name]] false =>
@@ -8224,17 +8651,23 @@ def functionBodyCtx (opts : Options) (ctx : Ctx) (p : Pos) (name : String)
   let lifted := opts.castRequests.find? (·.name == name)
   let loopLift := opts.loopRequests.find? fun l => l.name == name || l.extraFns.any
     (fun | .fn _ n .. => n == name | _ => false)
+  let resume := opts.loopRequests.findSome? fun l => l.resumes.find? (·.name == name)
+  let resumeStorage ← ((resume.map (·.storage)).getD []).mapM fun (n, r) => do
+    let args ← r.args.mapM fun t => (resolveTy ctx.types p t).run' { env := ctx.types }
+    pure (n, { frame := r.frame, name := r.name, args : SourceStorage })
   let locals ← ctx.locals.mapM fun l => do
     let storage ← ((lifted.bind fun r => r.storage.lookup l.name)).mapM fun r => do
       let args ← r.args.mapM fun t => (resolveTy ctx.types p t).run' { env := ctx.types }
       return { frame := r.frame, name := r.name, args : SourceStorage }
-    pure { l with storage := storage.orElse fun _ => l.storage }
+    pure { l with storage := storage.orElse fun _ => (resumeStorage.lookup l.name).orElse fun _ => l.storage }
   let selfCls := (name.splitOn ".").headD ""
   return { ctx with
     locals := locals
+    resumeStorage
     frameName := name
     frameArgs := tps.map fun (v, c) => Ty.param v c
-    inRepeat := lifted.any (·.inRepeat)
+    inRepeat := (resume.map (·.inRepeat)).getD (lifted.any (·.inRepeat))
+    inChoice := (resume.map (·.inChoice)).getD ctx.inChoice
     refineExits := (lifted.map (·.exits)).getD {}
     inBlock := name.endsWith ".$block"
     inCtor := name.endsWith "$init"
@@ -8242,10 +8675,11 @@ def functionBodyCtx (opts : Options) (ctx : Ctx) (p : Pos) (name : String)
       | [c, _] => some c | _ => none
     selfMethod := match name.splitOn "." with | [_, m] => some m | _ => none
     liftTag := if scopeClass.isSome then s!"$in{selfCls}" else
-      (loopLift.map (·.liftTag)).getD (liftTagOf name)
+      (resume.map (·.liftTag)).getD ((loopLift.map (·.liftTag)).getD (liftTagOf name))
     refineScope := (lifted.map (·.continuationScope)).getD
-      (if loopLift.isSome then s!"$contScope{name.hash}" else "")
-    inlineScopes := (loopLift.map (·.inlineScopes)).getD ((lifted.map (·.inlineScopes)).getD []) }
+      (if loopLift.isSome || resume.isSome then s!"$contScope{name.hash}" else "")
+    inlineScopes := (resume.map (·.inlineScopes)).getD
+      ((loopLift.map (·.inlineScopes)).getD ((lifted.map (·.inlineScopes)).getD [])) }
 
 /-- The interface whose scope a class's copy of its default is elaborated
     in (#53): its `$copyOf:J` effect, which `copyIfaceDefaults` gives it. -/
@@ -9711,7 +10145,8 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   -- (in front, as the entry expression is the end)
   let resolved := Refine.functions opts.castRequests resolved ++ resolved
   -- (#246) the functions of their own of lazily taken calls
-  let resolved := opts.loopRequests.flatMap (fun l => STop.fn l.pos l.name l.params l.tparams l.specs l.ret l.body :: l.extraFns) ++ resolved
+  let resolved := opts.loopRequests.flatMap (fun l =>
+    (if l.stageOnly then [] else [STop.fn l.pos l.name l.params l.tparams l.specs l.ret l.body]) ++ l.extraFns) ++ resolved
   -- (the helpers after: they name nothing of the program's)
   -- function values (#210): the function types' interfaces, and a class
   -- for each function used as a value
@@ -10678,11 +11113,12 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
           (l.opened.map (·.1)).filter fun v => tparams.any (·.1 == v) else
         match n.splitOn "." with
         | [c, m] =>
-          -- Bound-method value adapters can open receiver parameters that
-          -- occur only inside a compound function type or not in it at all.
+          -- Bound-method value adapters and registered resume methods can
+          -- open receiver parameters absent from their value signatures.
           let valueCall := m == "$call" || m.startsWith "$call:"
+          let resumeCall := opts.loopRequests.any (fun l => l.resumes.any (·.name == n))
           if effs.contains "override" && env.classes.contains c && env.isRefClass c &&
-              (!m.startsWith "$" || valueCall) &&
+              (!m.startsWith "$" || valueCall || resumeCall) &&
               (match tys.head? with | some (.struct c' _) => c' == c | _ => false) then
             -- (#351: below an interface referred to through views, every
             -- type parameter, which a dispatch through a view may open)

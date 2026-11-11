@@ -849,17 +849,20 @@ Main():void =
 
   A class cast in the condition can refine its selected branch's type
   arguments (#243), including written types that use that refinement. In a `for`,
-  the shared consumer's body must have no suspension or non-rollback
-  operation. It may run inside a `<suspends>` function, with waits before
-  and after the consumer; immediate bodies still run between its filters.
-  A body may fail: this stops
+  its body may wait or perform a non-rollback operation in a `<suspends>`
+  function outside a failure context. Each current filter commits before
+  the next generator's source or body runs; each body finishes before the
+  producer advances. Mutable captures use their source storage, including
+  read-only uses after a wait, so earlier background tasks and cancellation
+  cleanup see the latest values. An immediate body may fail when the source
+  context permits failure: this stops
   the whole `for` and retains that iteration's effects, just as in an
   ordinary `for`. An enclosing failure context can still undo them.
   A `return` in the body leaves the source function, stopping later
   alternatives. Its operand is saved before body cleanup; source cleanup
-  then runs with the updated captured variables. This also applies to an
-  immediate shared consumer in a `<suspends>` caller, including after a
-  wait and inside nested or lazy consumers. A return in a `for` clause
+  then runs with the updated captured variables. This also applies to a
+  shared consumer in a `<suspends>` caller, including waiting return
+  operands and nested or lazy consumers. A return in a `for` clause
   also leaves the source function: a successful operand commits the
   current filter's writes before source cleanup; a failed operand still
   rejects that filter and rolls its writes back. Breaks inside the body's
@@ -867,9 +870,10 @@ Main():void =
   with `for`, a first-success condition or an `option`, including generic and
   mutually recursive producers. These keep their own rollback boundaries;
   ordinary body cleanup also runs when that iteration finishes.
-  Its suffix must also permit a shared continuation, including lazy calls.
-  Actual waiting bodies remain tracked in #417. Failure of the selected branch's
-  alternatives does not select the `else` branch.
+  Clause return operands still cannot wait inside their filter. The existing
+  restrictions on refining casts in deferred, default and concurrent-arm
+  contexts also apply here. Failure of the selected branch's alternatives
+  does not select the `else` branch.
 
   A choice inside a block is lifted with the block's clauses (#283): they
   become the failure context's, in order, so what they do is undone or kept

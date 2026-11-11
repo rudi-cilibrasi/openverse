@@ -100,6 +100,11 @@ kinds=(
   typed-exclusive
   typed-first
   typed-for
+  waiting-refined
+  waiting-refined-lazy
+  waiting-refined-opened
+  waiting-refined-return
+  waiting-refined-state
 )
 for kind in "${kinds[@]}"; do
   sizes=()
@@ -167,6 +172,44 @@ if kind.startswith('recursive-return-'):
     args = ','.join('1,2' if i%2==0 else '"x","y"' for i in range(count))
     print(f'Main():void = Print("{{Run({args})}}")')
     sys.exit(0)
+if kind.startswith('waiting-refined'):
+    opened = kind.endswith('opened')
+    lazy = kind.endswith('lazy')
+    returning = kind.endswith('return')
+    state = kind.endswith('state')
+    if opened:
+        print('expr(t:type):=class{}')
+        print('pairE(a:type,b:type):=class(expr(tuple(a,b))){L:a;R:b;C:int=4}')
+        params = ','.join(f'P{i}:expr(t{i})' for i in range(count))
+        tparams = ','.join(f't{i}:type' for i in range(count))
+        values = [f'if(D{i}:=pairE[P{i}])then(D{i}.C|D{i}.C+1)else 0' for i in range(count)]
+        args = ','.join('pairE(int,string){L:=1,R:="s"}' for _ in range(count))
+    else:
+        print('pair(a:type,b:type):=class{A:a;B:b}')
+        print('dup(t:type):=class(pair(t,t)){C:int=4}')
+        print('Lazy(N:int)<computes><decides>:int=\n    N>=0\n    N|Lazy[N-1]')
+        params = ','.join(f'P{i}:pair(a{i},b{i})' for i in range(count))
+        tparams = ','.join(f'a{i}:type,b{i}:type' for i in range(count))
+        values = [f'if(D{i}:=dup[P{i}])then ' +
+                  (f'Lazy[D{i}.C-3]' if lazy else f'(D{i}.C|D{i}.C+1)') + 'else 0'
+                  for i in range(count)]
+        args = ','.join('dup(int){A:=1,B:=2}' for _ in range(count))
+    clauses = []
+    for i, value in enumerate(values):
+        clauses.append(f'A{i}:={value}')
+        if state: clauses.append(f'set Total+=A{i}')
+    total = '+'.join(f'A{i}' for i in range(count))
+    print(f'Run({params} where {tparams})<suspends>:{"int" if returning else "void"} =')
+    if state: print('    var Total:int=0')
+    if returning: print('    defer:Print("source")')
+    print(f'    {"" if returning else "R:="}for({",".join(clauses)}):')
+    print('        Sleep(0.0)')
+    if opened: print('        Empty:[]t0=array{}')
+    if state: print('        set Total+=1')
+    print(f'        {"return " if returning else ""}{total}')
+    print('    -1' if returning else '    Print("rows {R.Length}' + (' {Total}' if state else '') + '")')
+    print(f'Main()<suspends>:void = ' + (f'Print("{{Run({args})}}")' if returning else f'Run({args})'))
+    raise SystemExit
 if kind.startswith('clause-break-'):
     print('pair(a:type,b:type) := class { A:a; B:b }')
     print('dup(t:type) := class(pair(t,t)) { C:int=4 }')
