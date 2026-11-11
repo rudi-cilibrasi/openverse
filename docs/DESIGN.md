@@ -261,7 +261,7 @@ marker. That block is the body of `first{…}`, `spawn`, `branch`, `sync`,
 apart.
 
 A source profile is checked before any of these transformations
-(`Front.SourceProfile.check`, at `elabProgram`'s public boundary). The
+(`Front.SourceProfile.check`, at the `elabProgramCore` boundary). The
 choice-free profile examines every loaded definition, nested default and
 refinement condition, plus the optional entry expression. It rejects
 source choice/generator constructs before helper generation, so ordinary

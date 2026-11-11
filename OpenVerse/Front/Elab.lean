@@ -9655,6 +9655,7 @@ def checkLoopFirst (fns : Array Fn) (uses : List LoopUse)
 /-- Elaborate a parsed program into a Verse Core program that passes `Prog.check`
     and `Prog.checkTypes`. -/
 def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except String Compiled := do
+  SourceProfile.check opts.profile allTops0r opts.entry
   -- rationals (#116): the helpers, for a program that may use them
   let isRatMarker : STop → Bool := fun
     | .const _ n _ _ => n == ratMarker || n == replaceAllMarker
@@ -11316,7 +11317,6 @@ partial def topDefaultCount : STop → Nat
     functions a constructor or an overload becomes shown as written: `K$init`
     is `K<constructor>`, `F$ov1` is `F` (names with `$` are never the user's). -/
 def elabProgram (allTops00 : List STop) (opts : Options := {}) : Except String Compiled :=
-  (SourceProfile.check opts.profile allTops00 opts.entry).bind fun _ =>
   let defaults := allTops00.foldl (fun n t => n + topDefaultCount t) 0
   let classes := allTops00.filter (fun | .classDef .. => true | _ => false) |>.length
   let rounds := max 4 (4 * (allTops00.foldl (fun n t => max n (topLiftDepth t)) 0 + defaults * (classes + 1)))

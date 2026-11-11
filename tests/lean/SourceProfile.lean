@@ -24,6 +24,7 @@ def main : IO Unit := do
   let tops ← requireOK "parse source" (parseProgram source)
   expectProfileError "compileTops" (compileTops tops [] false none false .choiceFree)
   expectProfileError "elabProgram" (elabProgram tops { profile := .choiceFree })
+  expectProfileError "elabProgramCore" (elabProgramCore tops { profile := .choiceFree })
   let plain := "Main():void=Print(\"ok\")"
   let plainTops ← requireOK "parse plain source" (parseProgram plain)
   let entry ← requireOK "parse entry" (parseExprText "first{1}")

@@ -730,7 +730,7 @@ as `Args`. For example, `openverse run Program.verse --no-choice -- --no-choice`
 passes the string `--no-choice` as one argument while enforcing the profile.
 
 The compiler API uses `Front.Options.profile := .choiceFree` with `compile`,
-`compileChecked` or `elabProgram`; `compileTops` and `compileWith` also accept
+`compileChecked`, `elabProgram` or `elabProgramCore`; `compileTops` and `compileWith` also accept
 an optional profile. The default is `.full`.
 
 Both profiles have deterministic execution: `Eval.det` / `Runs.det` establish
