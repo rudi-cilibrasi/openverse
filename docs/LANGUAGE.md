@@ -970,6 +970,13 @@ Main():void =
   the filters after it reject undoes what came before it, the caller's
   clauses too, unless a choice of the program's own came in between.
 
+  Cleanup stays with the scope that registered it. A returning branch runs
+  only the `defer:` blocks it reached, from the innermost scope outward and
+  last registered first, after saving each return value. A branch that falls
+  through runs its cleanup before the rest of the function. A `defer:` after
+  an earlier return path therefore runs only on paths that reach it; it may
+  also be the final statement of a void function.
+
   ```verse
   dice := class:
       Sides : int
@@ -1066,7 +1073,7 @@ Main():void =
   or field's default or a `defer:`, an
   overloaded one with an overload that calls the function's own name
   (a generic one's type arguments are inferred from the
-  arguments where it is inlined, as at a call, named ones too), a recursive one with a `defer:` of its own, or called by a recursive one (its body a function's, where it would run once), one with a `defer:` after a `return` (which may leave before it is reached), or with an `if`'s branch that has a `defer:` of its own, a `return` before its end and a path that does not return, one with a `return`
+  arguments where it is inlined, as at a call, named ones too), a recursive one with a `defer:` of its own, or called by a recursive one (its body a function's, where it would run once), one with a `return`
   other than in an `if`'s branches, or recursive with a `return`, a method whose name another class or interface
   also has, `<suspends>`, one used as a function value, and, since its body is inlined where other names may be
   in scope, one whose name is also the name of a parameter, local, field or

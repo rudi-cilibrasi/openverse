@@ -1,0 +1,24 @@
+case
+branch 0
+outer
+branch 0
+outer
+value 7 x 0
+value 7 y 1
+case
+fall
+branch 1
+late
+outer
+late
+outer
+value 7 x 0
+value 7 y 0
+case
+late
+outer
+late
+outer
+value 7 x 0
+value 7 y 0
+exit=0

@@ -72,6 +72,10 @@ kinds=(
   refined-retry-first
   refined-return
   refined-state
+  return-defer-failure
+  return-defer-first
+  return-defer-for
+  return-defer-method-first
   super-body
   super-failure
   super-first
@@ -109,6 +113,51 @@ if kind.startswith('clause-break-'):
     print(f'Run({params} where {tparams})<suspends>:{ret_ty} =\n    var Total:int=0\n    defer:Print("source {{Total}}")\n    Sleep(0.0)\n    loop:\n        defer:Print("loop {{Total}}")\n        R:=for({",".join(clauses)}):\n            set Total+=1\n            A0\n        Print("rows {{R.Length}}")\n        break\n    Sleep(0.1)\n    {result}')
     args = ','.join('dup(int){A:=1,B:=2}' if i%2==0 else 'dup(string){A:="s",B:="t"}' for i in range(count))
     print(f'Main()<suspends>:void = Print("{{Run({args})}}")')
+    sys.exit(0)
+if kind.startswith('return-defer-'):
+    method = kind.endswith('method-first')
+    if method:
+        print('''base(a:type) := class:
+    Anchor:a
+    var Count:int=0
+    Tick()<transacts>:void = set Count+=1
+child(b:type) := class(base(b)):
+    Pick(X:c,Y:c,Mode:int where c:type)<transacts>:tuple(b,c) =
+        defer:(super:)Tick()
+        if(Mode>=0):
+            defer:(super:)Tick()
+            if(Mode=0):return (Anchor,X)|(Anchor,Y)
+        defer:(super:)Tick()
+        (Anchor,X)|(Anchor,Y)''')
+        params = ','.join(f'P{i}:child(a{i}),X{i}:b{i},Y{i}:b{i}' for i in range(count))
+        tparams = ','.join(f'a{i}:type,b{i}:type' for i in range(count))
+        calls = [f'P{i}.Pick(X{i},Y{i},{[0,1,-1][i%3]})' for i in range(count)]
+        args = ','.join('child(int){Anchor:=7},"x","y"' if i%2==0 else 'child(string){Anchor:="s"},1,2' for i in range(count))
+        value, ty = 'A0(1)', 'b0'
+    else:
+        print('''cell := class { var N:int=0 }
+Produce(H:cell,X:t,Y:t,Mode:int where t:type)<transacts>:t =
+    defer:set H.N+=1
+    if(Mode>=0):
+        defer:set H.N+=10
+        if(Mode=0):return X|Y
+    defer:set H.N+=100
+    X|Y''')
+        params = 'H:cell,' + ','.join(f'X{i}:t{i},Y{i}:t{i}' for i in range(count))
+        tparams = ','.join(f't{i}:type' for i in range(count))
+        calls = [f'Produce(H,X{i},Y{i},{[0,1,-1][i%3]})' for i in range(count)]
+        args = 'cell{},' + ','.join('1,2' if i%2==0 else '"x","y"' for i in range(count))
+        value, ty = 'A0', 't0'
+    clauses = ','.join(f'A{i}:={call}' for i,call in enumerate(calls))
+    if kind.endswith('first'):
+        print(f'Run({params} where {tparams})<transacts>:int = if({clauses},E:[]{ty}=array{{{value}}})then E.Length else -1')
+    else:
+        fx = '<decides>' if kind.endswith('failure') else ''
+        check = '\n        1=1' if fx else ''
+        print(f'Run({params} where {tparams})<transacts>{fx}:int =\n    R:=for({clauses}):{check}\n        {value}\n    R.Length')
+    fx = '<decides>' if kind.endswith('failure') else ''
+    br = ('[',']') if fx else ('(',')')
+    print(f'Main(){fx}:void = Print("{{Run{br[0]}{args}{br[1]}}}")')
     sys.exit(0)
 if kind.startswith('cross-super-'):
     print('''base(t:type) := class:

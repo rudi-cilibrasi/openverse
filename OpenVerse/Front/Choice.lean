@@ -535,22 +535,6 @@ partial def pureVal (vals : List String) : SExpr → Bool
   | .optionLit _ (.block _ [e]) => pureVal vals e
   | _ => false
 
-/-- Statements every path of which ends in a `return` (#283). -/
-partial def alwaysRets (ss : List SExpr) : Bool :=
-  match ss.getLast? with
-  | some (.ret ..) => true
-  | some (.ite _ _ t (some u)) => alwaysRets (stmtsOf t) && alwaysRets (stmtsOf u)
-  | _ => false
-
-/-- An `if`'s branch with a `defer:` of its own and a `return` before its
-    end, with a path that does not return (#283): the rest of the function
-    would follow the branch's statements, and its `defer:` with them. -/
-def branchDeferBad : SExpr → Bool
-  | .ite _ _ t u? => (t :: u?.toList).any fun b =>
-      let ss := stmtsOf b
-      ss.any isDefer && ss.dropLast.any (anyE fun | .ret .. => true | _ => false) && !alwaysRets ss
-  | _ => false
-
 /-- A scope's `defer:`s, in order, each with the names its scope declares
     after it renamed (`$later'N`, shown as written): moved after the
     scope's value, they still cannot use those, as where they were (#283,
@@ -1367,7 +1351,40 @@ partial def tailReturns (ss : List SExpr) : List SExpr :=
     | .decl q x _ _ _ => ss ++ [.ret q (some (.ident q x))]
     | .ite q cs t u? =>
       init ++ [.ite q cs (.block q (tailReturns (stmtsOf t))) (u?.map fun u => .block q (tailReturns (stmtsOf u)))]
-    | e => init ++ [.ret e.pos (some e)]
+    | e => if isDefer e then ss ++ [.ret e.pos none] else init ++ [.ret e.pos (some e)]
+
+/-- A normalized returning conditional: branch selection adds no generator
+    boundary; only a branch's own choices generate values. -/
+def returnBranches (p : Pos) (k : String) (cs tb ub : List SExpr)
+    (multi : SExpr → Bool) (ret : Option STy) : List SExpr :=
+  if !multi (.block p tb) && !multi (.block p ub) then
+    [.ite p cs (.block p tb) (some (.block p ub))]
+  else
+  -- (a branch with a choice of its own: an exclusive choice of the two,
+  -- which a `for` compiles as this `if`, #314; the condition once)
+  let v := k ++ "v"
+  match boundIn cs with
+  | [] =>
+    let g (i : Int) : List SExpr := [.cmp p (.ident p k) [("=", .int p i)]]
+    [.decl p k none false (.ite p cs (.int p 0) (some (.int p 1))),
+      .decl p v ret false (mkExcl p [(g 0, .block p tb), (g 1, .block p ub)]), .ident p v]
+  | names =>
+    -- (the names the condition binds, for its branch: through an option,
+    -- each with its written type, a `var` still one)
+    let declOf (y : String) : Option STy × Bool :=
+      (cs.findSome? fun | .decl _ x t m _ => if x == y then some (t, m) else none | _ => none).getD (none, false)
+    let (val, binds) : SExpr × List SExpr := match names with
+      | [y] => let (t, m) := declOf y; (.ident p y, [.decl p y t m (.query p (.ident p k))])
+      | ys =>
+        let tt := k ++ "t"
+        (.tuple p (ys.map (SExpr.ident p ·)),
+          .decl p tt none false (.query p (.ident p k)) ::
+            ys.zipIdx.map fun (y, i) =>
+              let (t, m) := declOf y
+              SExpr.decl p y t m (.app p (.ident p tt) [.int p (i : Int)] false))
+    [.decl p k none false (.optionLit p (.block p (cs ++ [val]))),
+      .decl p v ret false (mkExcl p [(binds, .block p tb), ([.notE p (.query p (.ident p k))], .block p ub)]),
+      .ident p v]
 
 /-- A body's statements with its `return`s, in `if`s, taken out (#283):
     an `if` with a `return` in a branch, `S; if (C) { T } else { U }; R`,
@@ -1382,13 +1399,13 @@ partial def tailReturns (ss : List SExpr) : List SExpr :=
     condition's, are renamed for it (`fresh i ++ "'" ++ N`), so the rest
     copied into it may declare the same ones. `none` when a `return` is
     elsewhere (in a loop, a condition, an expression). -/
-partial def elimReturns (fresh : Nat → String) (n : Nat) (multi : SExpr → Bool := fun _ => false)
+partial def elimPlainReturns (fresh : Nat → String) (n : Nat) (multi : SExpr → Bool := fun _ => false)
     (ret : Option STy := none) : List SExpr → Option (List SExpr × Nat)
   | [] => some ([], n)
   | .ret p e? :: _ => some ([e?.getD (.tuple p [])], n)
   | s@(.ite p cs t u?) :: rest =>
     let hasRet := anyE fun | .ret .. => true | _ => false
-    if !hasRet s then (elimReturns fresh n multi ret rest).map fun (r, n') => (s :: r, n')
+    if !hasRet s then (elimPlainReturns fresh n multi ret rest).map fun (r, n') => (s :: r, n')
     else if cs.any hasRet then none
     else do
       let k := fresh n
@@ -1401,65 +1418,80 @@ partial def elimReturns (fresh : Nat → String) (n : Nat) (multi : SExpr → Bo
         ((ss.flatMap localsOf) ++ extra).eraseDups.map fun x => (x, s!"{k}{tg}'{x}")
       let ρt := own ts (boundIn cs) "t"
       let ρu := own us [] "u"
-      -- (a branch's own `defer:`s, #283: at its `return`, after the value,
-      -- or at its end, before the rest, as `deferLast` puts a block's)
-      let deferBranch (tg : String) (ss : List SExpr) : List SExpr :=
-        if !ss.any isDefer then ss else
-        let ds := deferBodies ss
-        let other := ss.filter (!isDefer ·)
-        match other.getLast? with
-        | some (.ret q e?) =>
-          let dv := s!"{k}{tg}$dv"
-          other.dropLast ++ [.decl q dv ret false (e?.getD (.tuple q [])), .block q (ds ++ [.int q 0]),
-            .ret q (some (.ident q dv))]
-        | _ => other ++ [.block p (ds ++ [.int p 0])]
-      -- (one with a `return` before its end always returns, `branchDeferBad`,
-      -- so the rest never follows it: its `defer:`s stay where they are,
-      -- in the blocks its own `if`s make, `deferLast` below)
-      let isRet := anyE fun | .ret .. => true | _ => false
       let ts := ts.map (renameE ρt)
       let us := us.map (renameE ρu)
-      let ts := if ts.dropLast.any isRet then ts else deferBranch "t" ts
-      let us := if us.dropLast.any isRet then us else deferBranch "u" us
-      let (tb, n1) ← elimReturns fresh (n + 1) multi ret (ts ++ rest)
-      let (ub, n2) ← elimReturns fresh n1 multi ret (us ++ rest)
-      -- (the blocks made, as any block's: their `defer:`s after their value,
-      -- so they run as each value leaves where they are spliced into a
-      -- path or a choice's alternative, #283)
-      let tb := deferLast p s!"{k}t$dvb" tb
-      let ub := deferLast p s!"{k}u$dvb" ub
+      let (tb, n1) ← elimPlainReturns fresh (n + 1) multi ret (ts ++ rest)
+      let (ub, n2) ← elimPlainReturns fresh n1 multi ret (us ++ rest)
       let cs := cs.map (renameE ρt)
-      if !multi (.block p tb) && !multi (.block p ub) then
-        some ([.ite p cs (.block p tb) (some (.block p ub))], n2)
-      else
-      -- (a branch with a choice of its own: an exclusive choice of the two,
-      -- which a `for` compiles as this `if`, #314; the condition once)
-      let v := k ++ "v"
-      match boundIn cs with
-      | [] =>
-        let g (i : Int) : List SExpr := [.cmp p (.ident p k) [("=", .int p i)]]
-        some ([.decl p k none false (.ite p cs (.int p 0) (some (.int p 1))),
-          .decl p v ret false (mkExcl p [(g 0, .block p tb), (g 1, .block p ub)]), .ident p v], n2)
-      | names =>
-        -- (the names the condition binds, for its branch: through an option,
-        -- each with its written type, a `var` still one)
-        let declOf (y : String) : Option STy × Bool :=
-          (cs.findSome? fun | .decl _ x t m _ => if x == y then some (t, m) else none | _ => none).getD (none, false)
-        let (val, binds) : SExpr × List SExpr := match names with
-          | [y] => let (t, m) := declOf y; (.ident p y, [.decl p y t m (.query p (.ident p k))])
-          | ys =>
-            let tt := k ++ "t"
-            (.tuple p (ys.map (SExpr.ident p ·)),
-              .decl p tt none false (.query p (.ident p k)) ::
-                ys.zipIdx.map fun (y, i) =>
-                  let (t, m) := declOf y
-                  SExpr.decl p y t m (.app p (.ident p tt) [.int p (i : Int)] false))
-        some ([.decl p k none false (.optionLit p (.block p (cs ++ [val]))),
-          .decl p v ret false (mkExcl p [(binds, .block p tb), ([.notE p (.query p (.ident p k))], .block p ub)]),
-          .ident p v], n2)
+      some (returnBranches p k cs tb ub multi ret, n2)
   | s :: rest =>
     if anyE (fun | .ret .. => true | _ => false) s then none
-    else (elimReturns fresh n multi ret rest).map fun (r, n') => (s :: r, n')
+    else (elimPlainReturns fresh n multi ret rest).map fun (r, n') => (s :: r, n')
+
+/-- The surrounding scope's fallthrough code and currently registered
+    cleanup, retained while normalizing an inner returning branch. -/
+structure ReturnScope where
+  pos : Pos
+  rest : List SExpr
+  defers : List SExpr
+
+/-- Execute one scope's reached registrations, last registered first. -/
+def runReturnDefers : List SExpr → List SExpr
+  | [] => []
+  | d :: ds => [.block d.pos (d :: ds ++ [.int d.pos 0])]
+
+/-- Normalize returns without moving cleanup across a lexical scope or an
+    earlier return path. Fallthrough unwinds this scope before resuming the
+    parent's continuation; a return saves its operand and unwinds every
+    active scope before yielding the saved value. -/
+partial def elimScopedReturns (fresh : Nat → String) (multi : SExpr → Bool) (ret : Option STy)
+    (n : Nat) (p : Pos) (ss ds : List SExpr) (outer : List ReturnScope) : Option (List SExpr × Nat) :=
+  match ss with
+  | [] => do
+    match outer with
+    | [] => some (runReturnDefers ds ++ [.tuple p []], n)
+    | scope :: parents =>
+      let (rest, n') ← elimScopedReturns fresh multi ret n scope.pos scope.rest scope.defers parents
+      some (runReturnDefers ds ++ rest, n')
+  | .ret q value :: _ =>
+    let cleanup := runReturnDefers ds ++ outer.flatMap fun scope => runReturnDefers scope.defers
+    let value := value.getD (.tuple q [])
+    if cleanup.isEmpty then some ([value], n) else
+    let saved := fresh n ++ "$value"
+    some (.decl q saved ret false value :: cleanup ++ [.ident q saved], n + 1)
+  | d@(.app _ (.ident _ "$defer") _ _) :: rest =>
+    -- A moved registration still cannot see declarations after it.
+    let later := (boundIn rest).map fun x => (x, s!"$later'{x}")
+    elimScopedReturns fresh multi ret n p rest (ds ++ [renameE later d]) outer
+  | s@(.ite q cs t u?) :: rest => do
+    let hasRet := anyE fun | .ret .. => true | _ => false
+    if !hasRet s then
+      let (rest, n') ← elimScopedReturns fresh multi ret n p rest ds outer
+      some (s :: rest, n')
+    else if cs.any hasRet then none else
+      let k := fresh n
+      let ts := stmtsOf t
+      let us := (u?.map stmtsOf).getD []
+      let own (ss : List SExpr) (extra : List String) (tag : String) :=
+        ((ss.flatMap localsOf) ++ extra).eraseDups.map fun x => (x, s!"{k}{tag}'{x}")
+      let ρt := own ts (boundIn cs) "t"
+      let ρu := own us [] "u"
+      let parents := { pos := p, rest, defers := ds } :: outer
+      let (tb, n1) ← elimScopedReturns fresh multi ret (n + 1) t.pos (ts.map (renameE ρt)) [] parents
+      let (ub, n2) ← elimScopedReturns fresh multi ret n1 q (us.map (renameE ρu)) [] parents
+      some (returnBranches q k (cs.map (renameE ρt)) tb ub multi ret, n2)
+  | s :: rest => do
+    if anyE (fun | .ret .. => true | _ => false) s then none else
+      let (rest, n') ← elimScopedReturns fresh multi ret n p rest ds outer
+      some (s :: rest, n')
+
+/-- Retain the existing plain-return shape, and preserve scope boundaries
+    when a returning function also has cleanup. -/
+def elimReturns (fresh : Nat → String) (n : Nat) (multi : SExpr → Bool := fun _ => false)
+    (ret : Option STy := none) (ss : List SExpr) : Option (List SExpr × Nat) :=
+  if ss.any (anyE isDefer) then
+    elimScopedReturns fresh multi ret n ((ss.head?.map (·.pos)).getD default) (tailReturns ss) [] []
+  else elimPlainReturns fresh n multi ret ss
 
 /-- A function's name as written: a method's function `C$M` as `C.M`, and
     `F$all` as `F` (#283). -/
@@ -1702,10 +1734,11 @@ partial def inlineCalls (mv : List (String × MFn)) (e : SExpr) (recs : List Str
         return .app p (.ident p "$loop") (.ident q g :: .block q (tmark ++ memberFrees ++ pds ++ unpack) :: .block q ps ::
           .block q cls :: .decl q (tag "$r") (tyOf f.ret) false tail' :: as'') false
       let body ← go (renameTypes ρ (renameE ren f.body))
-      -- (its own `defer:`s after its value, as `deferLast` puts a block's,
-      -- #283: the analysis has checked that none comes after a `return`)
+      -- Returning bodies keep registrations in their lexical scopes until
+      -- return normalization. Other bodies keep the existing value cleanup.
       let ss := stmtsOf body
-      let ds := deferBodies ss
+      let hasRet := anyE (fun | .ret .. => true | _ => false) body
+      let ds := if hasRet then [] else deferBodies ss
       -- (one ending in a `defer:`, a `void` one: they are its value, a block
       -- of them, as a block ending in one has)
       let lastD := ss.getLast?.any isDefer
@@ -1714,7 +1747,7 @@ partial def inlineCalls (mv : List (String × MFn)) (e : SExpr) (recs : List Str
       let ds := if lastD then [] else ds
       -- (its `return`s as guarded alternatives, #283)
       let ss := stmtsOf body
-      let ss := if anyE (fun | .ret .. => true | _ => false) body then
+      let ss := if hasRet then
           ((elimReturns (fun i => tag s!"$k{i}") 0
             (fun b => (stmtsOf b).any liftsHere || hasChoice (stmtsOf b)) (tyOf f.ret) ss).map (·.1)).getD ss else ss
       let r := tag "$r"
@@ -2634,15 +2667,9 @@ def inlineMulti (tops : List STop) (reserved : List String := []) (eager : List 
     -- value, #283; computed at the call or taken lazily, its body is a
     -- function's, where they would run once, or never)
     let ss := stmtsOf f.body
-    if anyE branchDeferBad f.body then
-      throw s!"{f.pos.show}: {shownFnName n} has several values and a branch of an if with a defer: of its own, a return before its end and a path that does not return, which the rest of the function would follow before the defer: runs: not supported yet (#283)"
     if ss.any isDefer then
       if recs.contains n || needAll.contains n then
         throw s!"{f.pos.show}: {shownFnName n} has several values and a defer:, and is recursive or called by a recursive one (so its values are computed at the call, or taken lazily): not supported yet (#235, #283)"
-      -- (one after a `return`, which may leave before it is reached)
-      let afterRet := (ss.dropWhile fun s => !anyE (fun | .ret .. => true | _ => false) s).any isDefer
-      if afterRet then
-        throw s!"{f.pos.show}: {shownFnName n} has several values and a defer: after a return, which may leave before the defer: is reached: not supported yet (#283)"
     -- (its body is inlined where other names may be in scope: so neither
     -- its name nor a name its body uses from outside may be bound anywhere)
     if binders.contains n then
