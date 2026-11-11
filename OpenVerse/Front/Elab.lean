@@ -1491,10 +1491,21 @@ def refineExits (p : Pos) (body : SExpr) (elseE : Option SExpr) (vars : List (St
     | l@(.loop ..) => some l
     | _ => none) body
   let ss := Choice.stmtsOf body
-  let endV : List SExpr := if always then ss else match vm, ss.getLast? with
-    | .raw _, some (.decl q y _ _ _) | .opt _, some (.decl q y _ _ _) => ss ++ [mk p none false (some (.ident q y)) copiesV]
-    | .raw _, some l | .opt _, some l => ss.dropLast ++ [mk p none false (some l) copiesV]
-    | _, _ => ss ++ [mk p none false none copiesV]
+  let (stmts, value) : List SExpr × Option SExpr := match vm, ss.getLast? with
+    | .raw _, some (.decl q y _ _ _) | .opt _, some (.decl q y _ _ _) => (ss, some (.ident q y))
+    | .raw _, some l | .opt _, some l => (ss.dropLast, some l)
+    | _, _ => (ss, none)
+  let hasDefer := ss.any fun
+    | .app _ (.ident _ "$defer") [_] false => true
+    | _ => false
+  let endV : List SExpr :=
+    if always then ss
+    else if vars.isEmpty || !hasDefer then stmts ++ [mk p none false value copiesV]
+    -- Leave the scope of the branch's defers before reading the copied slots.
+    -- A branch value is evaluated inside that scope and saved across cleanup.
+    else match value with
+      | some v => [mk p none false (some (.block p (stmts ++ [v]))) copiesV]
+      | none => [.block p stmts, mk p none false none copiesV]
   let thenB := SExpr.block p (copies ++ endV)
   let elseB : SExpr := match vm, elseE with
     | .raw _, some e | .opt _, some e => mk p none false (some e) outsV

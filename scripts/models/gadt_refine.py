@@ -392,11 +392,13 @@ for k in range(R.randint(0, 2)):
 R418 = random.Random(seed * 1000003 + 418)
 target = R418.choice(list(MENU))
 offset = R418.randint(1, 9)
+cleanup_offset = R418.choice([0, offset])
+cleanup = f"        defer: set Other += {cleanup_offset}\n" if cleanup_offset else ""
 loops.append(f'''VoidElse(P:pair(a, b), Start:int where a:type, b:type):int =
     var Total:int = Start
     var Other:int = 0
     if (D := {target}[P]):
-        set Total += D.C
+{cleanup}        set Total += D.C
         set Other = Total + {offset}
     else:
         set Other = -{offset}
@@ -407,7 +409,7 @@ for o in objs:
     main.append(f'    Print("void state {{VoidElse({o["name"]}, {start})}}")')
     if below(o['cls'], target):
         total = start + o['C']
-        other = total + offset
+        other = total + offset + cleanup_offset
     else:
         expect.append("void else")
         total, other = start, -offset

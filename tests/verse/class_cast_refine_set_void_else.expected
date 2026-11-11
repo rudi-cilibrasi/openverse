@@ -5,4 +5,7 @@ index 7
 index failed
 no update
 untouched 3
+defer 9
+cleanup observed 9
+result 7, copied 9
 exit=0
