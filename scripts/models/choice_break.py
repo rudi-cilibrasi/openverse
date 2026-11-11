@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Source-loop model for for filters: break crosses producers; failure rolls back.
 
-Some immediate consumers select their lazy sources under independent
+Some consumers select their lazy sources under independent
 refining casts. Both actual receivers hit, so the source-loop oracle and
-the existing random program distribution stay unchanged.
+the existing random program distribution stay unchanged, including waits.
+--unrefined emits the equivalent original sources for implementation controls.
 """
 import random
 import sys
@@ -16,7 +17,7 @@ cut_a, cut_b = rng.randint(0, 3), rng.randint(0, 3)
 refs_a, refs_b = rng.choice([False, True]), rng.choice([False, True])
 suspends, used = rng.choice([False, True]), rng.choice([False, True])
 waits = suspends and rng.choice([False, True])
-refined = bool(seed & 8) and not waits
+refined = bool(seed & 8) and "--unrefined" not in sys.argv[3:]
 body_delta, filter_delta, loop_delta, fn_delta = [rng.randint(1, 7) for _ in range(4)]
 reachable = [(a, b) for a in range(na, -1, -1) for b in range(nb, -1, -1)
              if a >= cut_a and b >= cut_b]

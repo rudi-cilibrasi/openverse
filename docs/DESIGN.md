@@ -151,7 +151,7 @@ not an `array{a₀, …}`, which would run `aₙ₋₁` before `a₀`'s value wa
   - Each alternative's `for` binds its value, calls it as a clause, and its values are flattened.
   - Both kinds of continuation retain the type parameters of their inputs, results and written types, including a generic method's `Self`. Parameters not determined by the inputs take an explicit witness argument, so a suffix with an annotation such as `E:[]t` can be shared even when no captured value has type `t`. The generated body substitutes the context's type aliases, and the key includes the written type instances and interface-default copy tag.
   - It is used only where the body passes `forBodySafe` (no suspension, non-rollback operation, escaping break, or unsupported marker), otherwise copied (tim-6e's review of #335). Prepared nested consumers, including lazy recursive groups and their generic/default bindings, remain inside the helper and are checked by their own elaboration. Body cleanup is local to that helper. Both non-failable and failable bodies may share lazy suffixes, including after a refining branch. Failable bodies and source returns use explicit outcomes, described below.
-  - An exclusive choice's own paths (#314's returns, #331's `if`s, `exclIter`) do the same (phase 2b): when the clauses after it have another such choice, every path ends with a call of the continuation, in the path's part of the iteration's filter, so a failure of its first filter undoes the path as the copy's would, and the path's generators take the continuation's values as their body (`build` takes the body as an argument for this). The first elaboration compiles the first path with the clauses after it, for the values' type, and asks for the continuation; the next compiles every path with the call. Ten calls of a function with a `return` and a choice after it in one `for` take 13 KB and 0.01 s to compile, where copying took 1.2 MB and 0.4 s. As in phase 2a, a `<suspends>` function, whose effects are not a continuation's, keeps the copies.
+  - An exclusive choice's own paths (#314's returns, #331's `if`s, `exclIter`) do the same (phase 2b): when the clauses after it have another such choice, every path ends with a call of the continuation, in the path's part of the iteration's filter, so a failure of its first filter undoes the path as the copy's would, and the path's generators take the continuation's values as their body (`build` takes the body as an argument for this). The first elaboration compiles the first path with the clauses after it, for the values' type, and asks for the continuation; the next compiles every path with the call. Ten calls of a function with a `return` and a choice after it in one `for` take 13 KB and 0.01 s to compile, where copying took 1.2 MB and 0.4 s. Immediate consumers can also share in a `<suspends>` caller; waiting refining consumers use the staged protocol below.
 
 Since the result is ordinary Verse Core, every theorem holds of it as it
 stands, and the C runtime runs it unchanged. What is new is proved in
@@ -397,8 +397,41 @@ Nested consumers can discover continuations and refining branches in
 separate rounds; their discovery bound follows source nesting, and each
 round still has to add new requests.
 
-Actual waiting bodies and first-success continuation exits retain their
-previous restrictions.
+Waiting refining consumers split preparation from execution. A generated
+immediate `<decides>` prefix runs exactly the current filter's remaining
+clauses, stopping before the next real generator's source/init or the body.
+Failure still fails the caller's filter. Success supplies one typed
+environment; a source return or break supplies the explicit exit packet
+successfully, committing copy-outs before caller cleanup. The environment's
+resume method runs outside that filter and uses the ordinary nested/lazy
+loops, awaiting each body before requesting the next producer value.
+
+The suffix prefix is declared in the unrefined context before selecting a
+cast branch. Its generic signature therefore remains shared across those
+branches. Each suffix has its own resume interface, so dispatch does not
+test every environment in the whole consumer at every stage. Environment
+fields retain selected bindings and opened/written-only type witnesses;
+the base view retains result/copy-out types and all ordered ancestor-frame
+arguments needed by borrowed captures. Registered private resume methods
+read added type parameters from their receiver like ordinary opened overrides.
+
+Borrowed dependencies include read-only captures and are carried through
+wrappers separately from copy-outs. Otherwise an intermediate wrapper
+could lack the ancestor reference its nested resume needs. Borrowed locals
+skip their synthetic snapshot initialization; prefix-local variables whose
+owner is immediate become worker-owned locals. Environment keys include
+their typed view, mutable flags and storage origins. Metadata names and
+view types remain in syntax, so refining-lift renaming and type substitution
+also update them. Staging is scoped to its owning consumer; a nested user
+`for` in a prefix expression still executes normally.
+
+Waiting outcomes are evaluated before their saved options are queried.
+Legal waiting bodies cannot fail, so they need no `FailCapture` rewrite;
+source exits already return packets. Immediate failable bodies retain that
+rewrite. Source body permissions and repetition restrictions are checked
+before extraction and restored at actual body entry. No new Core operation
+or interpreter behavior is needed, and all existing Core checks still run.
+First-success continuation exits retain their previous restrictions.
 Ordinary casts still use the selector path above.
 
 An `if` whose branches have more to lift than a choice of values (#283: a call of a function with several values, recursive or not, or a choice inside a branch's expression) is lifted whole too (`Choice.branchesLift`, which `hasLiftable` and `liftsAsIf` use). A block as a branch has its names renamed for its side (`$…'N`, `bifToExcl`), since the clauses after the `if` follow it in its path, with `$declNames` keeping the no-shadowing check, and its `defer:`s after its value (`deferLast`); not one with a range of its own, as for any block (#302). In a `for`, `bifToExcl` makes it the same exclusive choice, and `exclIter` lifts each branch's call or choice in its path, so the picked branch's own generators are the only ones (#331). Where the first success is taken, `prepare` makes it the choice of its branches, each guarded by the selector (`bifToExcl`, then `exclToChoice`), whose alternatives are lifted as any composed choice's (#296, #338). An `if` whose branches the elaborator takes as they are (`plainBranches`) keeps `elabBranchAlts`, so that code does not change, and so does an `F$all`'s body (`gensOf`, `guardBranches := false`), whose `arrOfE` gives the picked branch's array, whatever is in it. With no type written, the join is found by `elabBranchAlts` with `Ctx.typeOnly` set, which types a branch with something to lift as `option{…}` takes it: at its values' type. In a `for`, `exclIter` does so for `$joinOf`. Where the first success is taken, the guarded choice keeps `$joinOf` as its last argument, and `elabOneGo` types the binding at the join (for `set L = if …`, at `L`'s type) and drops it.
@@ -407,7 +440,7 @@ An `if` whose branches have more to lift than a choice of values (#283: a call o
 
 The names made for a path, and for a composed choice in a first-success context or a `for` (`$x…`, `$ct…`, `$cf…`), contain the binding's name. That name is tagged for the inlined call's site, while a position inside an inlined body is shared by every call of it. So two calls of the same function in one context don't clash. The one-element generator is named for the depth of its scope, since a `for` of an alternative's own has the same position.
 
-Each path copies the clauses after the choice and the body, so the code doubles with each such call in one `for`, as with #296's composed choices there. Where the first success is taken, those clauses are a function of their own since #335. A `for`'s still holds its body, which may `return`, suspend or signal, none of which a function in a failure context may do.
+Each path copies the clauses after the choice and the body, so the code doubles with each such call in one `for`, as with #296's composed choices there. Where the first success is taken, those clauses are a function of their own since #335. Ordinary waiting composed/exclusive consumers can still retain copies. Refining waiting consumers use the staged prefix/environment protocol above.
 `checkBody` reads an exclusive choice as an if-chain on its guards.
 Programs without one compile byte for byte as before. The last statement's branches return
 their values (`tailReturns`), and a `return` without a value gives `()`.
@@ -1860,8 +1893,8 @@ The class-copy tag and continuation-sharing keys remain separate.
 Source returns from an immediate consumer in a suspending caller use the
 same return packet as other shared bodies. Admission checks the consumer
 before adding source cleanup and the final return, which stay outside its
-filters. A discarded waiting or unsuccessful trial restores all frame and
-lift metadata before retaining the original consumer lowering.
+filters. Where staging cannot apply, a discarded waiting or unsuccessful trial
+restores all frame and lift metadata before retaining the original consumer lowering.
 
 Refining lifts that start `branch` or `rush` roots, directly or through
 another lift, share their source function's task scope (#419). Finishing

@@ -1,0 +1,17 @@
+before 4 4 8
+observer 108
+after 4 4 108
+before 4 5 113
+after 4 5 113
+before 5 4 122
+after 5 4 122
+before 5 5 127
+after 5 5 127
+observer done 127 4
+before 0 4 4
+observer 104
+after 0 4 104
+before 0 5 109
+after 0 5 109
+observer done 109 2
+exit=0

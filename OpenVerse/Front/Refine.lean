@@ -96,6 +96,7 @@ partial def anyOutsideLoops (pr : SExpr → Bool) (e : SExpr) : Bool :=
 partial def findPart (pr : SExpr → Bool) (outside : Bool) (e : SExpr) : Option SExpr :=
   if pr e then some e
   else match e with
+    | .app _ (.ident _ "$forPrepare") _ false => none
     | .loop .. => if outside then none else e.children.findSome? (findPart pr outside)
     | e => e.children.findSome? (findPart pr outside)
 

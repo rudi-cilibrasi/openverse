@@ -1911,6 +1911,38 @@ partial def valueUse? (mv : List String) : SExpr → Option (Pos × String)
   | .structDef _ _ fs => (fs.filterMap (·.2.2.1)).findSome? (valueUse? mv)
   | e => e.children.findSome? (valueUse? mv)
 
+/-- Source storage retained by a generated resume method. The method's
+    locals are initialized from its environment, then borrow these origins. -/
+structure ResumeStorage where
+  frame : String
+  name : String
+  args : List STy
+  deriving Inhabited
+
+/-- Metadata for a typed continuation environment's method. -/
+structure ForResume where
+  name : String
+  storage : List (String × ResumeStorage) := []
+  inlineScopes : List String := []
+  liftTag : String := ""
+  inRepeat : Bool := true
+  inChoice : Bool := false
+  deriving Inhabited
+
+/-- One filter's typed handoff to work that executes after it commits. -/
+structure ForStagePlan where
+  key : String
+  pos : Pos
+  base : String
+  method : String
+  tparams : List TParam
+  value : STy
+  copies : List (String × STy)
+  borrowed : List String
+  specs : List String
+  outcome : Bool := false
+  deriving Inhabited
+
 /-- (#246) A lazily taken call, where the first success is taken, whose
     clauses, conditions or calls of itself have effects: compiled as a
     function of its own, recursive, so that each alternative and each call
@@ -1921,6 +1953,10 @@ partial def valueUse? (mv : List String) : SExpr → Option (Pos × String)
     they bind and the final values of the `var`s they set (`binds`, then
     `sets`, then `true`). -/
 structure FirstLift where
+  /-- A stage request supplies classes rather than a callable helper. -/
+  stageOnly : Bool := false
+  resumes : List ForResume := []
+  stagePlan : Option ForStagePlan := none
   inlineScopes : List String := []
   /-- A class-copy context remains valid after moving its code. -/
   liftTag : String := ""
