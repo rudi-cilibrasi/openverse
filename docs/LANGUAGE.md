@@ -930,7 +930,10 @@ Main():void =
   implementation above. Its tuple form `(super:)M((A, B))` uses the inherited
   parameter types as the current class sees them, including renamed or
   compound type arguments. The receiver and tuple are each evaluated once,
-  in that order. A recursive overridden one is computed at the
+  in that order. A method may call another method through `(super:)` too;
+  extraction and helper functions retain the source class and receiver,
+  so inherited implementations, overloads and defaults use that scope.
+  A recursive overridden one is computed at the
   call (its implementations call each other through the dispatch), so
   it must be `<computes>`. Such a method is still checked as a member
   (`<final>`, its signature and effects against the one it overrides, an
@@ -1062,7 +1065,7 @@ Main():void =
   (a generic one's type arguments are inferred from the
   arguments where it is inlined, as at a call, named ones too), a recursive one with a `defer:` of its own, or called by a recursive one (its body a function's, where it would run once), one with a `defer:` after a `return` (which may leave before it is reached), or with an `if`'s branch that has a `defer:` of its own, a `return` before its end and a path that does not return, one with a `return`
   other than in an `if`'s branches, or recursive with a `return`, a method whose name another class or interface
-  also has, `<suspends>` or using `(super:)` of another method, one used as a function value, and, since its body is inlined where other names may be
+  also has, `<suspends>`, one used as a function value, and, since its body is inlined where other names may be
   in scope, one whose name is also the name of a parameter, local, field or
   method anywhere in the program, and a call of one where a name its body
   uses from outside is a parameter, local or member of `Self` in scope.

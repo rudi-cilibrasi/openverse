@@ -3951,8 +3951,10 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
       | _ => none
     elabE { ctx with defaults := defaults ++ ctx.defaults, inRepeat := flags % 2 == 1, inDefer := flags / 2 % 2 == 1, inDefaultCheck := flags / 4 % 2 == 1 } call exp
   | .app _ (.ident _ "$sourceSuper")
-      [.str _ [.text c], .str _ [.text method], .ident _ "Self", call] false =>
-    elabE { ctx with selfClass := some c, selfMethod := if method.isEmpty then none else some method } call exp
+      [.str _ [.text c], .str _ [.text method], .ident _ receiver, call] false => do
+    let some self := ctx.lookup receiver | eerr se.pos "internal: missing source method receiver"
+    let cctx := { ctx with locals := { self with name := "Self" } :: ctx.locals }
+    elabE { cctx with selfClass := some c, selfMethod := if method.isEmpty then none else some method } call exp
   | .app _ (.ident _ "$methodMiss") [] false => pure ⟨.prim .fail [], .never⟩
   | .app p (.ident _ "$allValues") [.block _ cs, value] false =>
     elabE ctx (.forE p (Choice.gensOf "" cs (choiceOrder ctx)) value) exp
