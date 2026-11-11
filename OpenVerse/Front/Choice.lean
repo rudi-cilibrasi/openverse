@@ -1919,6 +1919,21 @@ structure ResumeStorage where
   args : List STy
   deriving Inhabited
 
+/-- Lexical restrictions and active default dependencies survive moving
+    source expressions into a generated continuation. -/
+structure SourceContext where
+  inCtor : Bool := false
+  inParamDefault : Bool := false
+  inBlock : Bool := false
+  inDefer : Bool := false
+  inDefaultCheck : Bool := false
+  inRepeat : Bool := false
+  inChoice : Bool := false
+  inArm : Bool := false
+  inBranch : Bool := false
+  defaults : List (String × String) := []
+  deriving Inhabited, BEq, Repr
+
 /-- Metadata for a typed continuation environment's method. -/
 structure ForResume where
   name : String
@@ -1927,6 +1942,7 @@ structure ForResume where
   liftTag : String := ""
   inRepeat : Bool := true
   inChoice : Bool := false
+  sourceContext : SourceContext := {}
   deriving Inhabited
 
 /-- One filter's typed handoff to work that executes after it commits. -/
@@ -1953,6 +1969,7 @@ structure ForStagePlan where
     they bind and the final values of the `var`s they set (`binds`, then
     `sets`, then `true`). -/
 structure FirstLift where
+  sourceContext : SourceContext := {}
   /-- A stage request supplies classes rather than a callable helper. -/
   stageOnly : Bool := false
   resumes : List ForResume := []
