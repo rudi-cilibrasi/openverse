@@ -1689,10 +1689,23 @@ def writesTps (tps : List String) (e : SExpr) : Bool :=
     | .ident _ n => tps.contains n
     | _ => false) e
 
-/-- (#335) The type parameters of the function being elaborated, its own
-    (an inlined generic one's, `$tp…`, are substituted where it is). -/
-def ownTps (ctx : Ctx) : List String :=
-  ctx.types.tvars.filterMap fun (n, _) => if n.startsWith "$tp" then none else some n
+/-- A continuation keeps the parameters of its inputs, results and written
+    types. A parameter not determined by its inputs takes an explicit witness,
+    so a type used only by a local annotation is still inferred at the call. -/
+def contTypes (ctx : Ctx) (p : Pos) (inputs outputs : List Ty) (written : SExpr) :
+    Except String (List TParam × List SParam × List SExpr) := do
+  let inputTps := inputs.flatMap Ty.paramsC
+  let writtenTys := ctx.types.tvars.filterMap fun (n, t) =>
+    if writesTps [n] written then some t else none
+  let tps := (inputTps ++ (outputs ++ writtenTys).flatMap Ty.paramsC).foldl
+    (fun acc (n, cmp) => if acc.any (·.1 == n) then acc else acc ++ [(n, cmp)]) []
+  let extra := tps.filter fun (n, _) => !inputTps.any (·.1 == n)
+  let available := (ctx.types.tvars.map (·.2)).flatMap Ty.paramsC
+  if extra.any (fun (n, _) => !available.any (·.1 == n)) then
+    throw "a continuation type parameter has no witness in this context"
+  return (tps.map (fun (n, cmp) => { pos := p, name := n, constraint := if cmp then "comparable" else "type" }),
+    extra.map (fun (n, _) => { name := s!"$type{n}", ty := .name n }),
+    extra.map (fun (n, _) => .app p (.ident p "$witness") [.ident p n] false))
 
 /-- (#335) The key of a continuation: where the composed choice is, its
     binding, and the consumer's names the clauses after it use (in a method,
@@ -1705,11 +1718,16 @@ def contKey (ctx : Ctx) (p : Pos) (b : String) (rest : List SExpr) : String :=
   -- choice has the same place, with names of other types)
   let caps := (Choice.namesUsed (.block p rest)).eraseDups.filterMap fun n =>
     (ctx.lookup n).map fun l => s!"{n}:{l.ty.show}"
+  -- A type used only by a written annotation has no captured value. Its
+  -- instance still distinguishes helpers made at a shared source position.
+  let written := ctx.types.tvars.filterMap fun (n, t) =>
+    if writesTps [n] (.block p rest) then some s!"{n}:{reprStr t}" else none
+  let typed := if written.isEmpty then "" else "_types:" ++ String.intercalate "," written
   -- (and the places of the clauses after it: the same choice, inside an
   -- alternative of another one with a continuation, has the call of that
   -- one after it in the next elaboration, which may use the same names)
   let places := rest.map fun c => s!"{c.pos.line}.{c.pos.col}"
-  s!"k{p.line}_{p.col}_{p.file}_{b}_{String.intercalate "," caps}_{String.intercalate "," places}"
+  s!"k{p.line}_{p.col}_{p.file}_{b}_{String.intercalate "," caps}_{String.intercalate "," places}{typed}{ctx.liftTag}"
 
 /-- (#335) The function of its own that the clauses after a composed choice
     (#296) are compiled as, where the first success is taken and those
@@ -1724,14 +1742,10 @@ def contLiftOf (ctx c2 : Ctx) (p : Pos) (b : String) (alts rest : List SExpr)
     (fxB : List (String × Pos × Option String)) : Except String Choice.FirstLift := do
   if ctx.inCtor || ctx.inParamDefault || ctx.inBlock || ctx.inDefer || !ctx.defaults.isEmpty then
     throw "in a constructor, a default or a defer"
-  -- (in a generic function or class, where the clauses write its type
-  -- parameters, `E:[]t = array{}`, which the function would not have; an
-  -- inlined generic one's are substituted, below)
-  if writesTps (ownTps ctx) (.block p rest) then throw "where the clauses write a type parameter"
+  let written := SExpr.block p rest
   -- (the alternatives' names too: their types fix the binding's)
   let key := contKey ctx p b (alts ++ rest)
-  let σt : List (String × STy) := ctx.types.tvars.filterMap fun (n, t) =>
-    if n.startsWith "$tp" then some (n, t.toSTy) else none
+  let σt := ctx.types.tvars.map fun (n, t) => (n, t.toSTy)
   let rest := rest.map (Refine.substTypes σt)
   -- (in a method: the members of `Self` the clauses name bare, as members
   -- of `Self`, which the function takes as a parameter, as #279's do)
@@ -1753,10 +1767,7 @@ def contLiftOf (ctx c2 : Ctx) (p : Pos) (b : String) (alts rest : List SExpr)
     | none => throw s!"internal: name {n}"
   let some bl := bls.head? | throw "internal: no binding"
   if bl.mutable then throw "a var binding"
-  let tps := ((bl :: caps).flatMap fun l => l.ty.paramsC).foldl
-    (fun acc (n, cmp) => if acc.any (·.1 == n) then acc else acc ++ [(n, cmp)]) []
-  if bls.any (fun l => l.ty.params.any fun n => !tps.any (·.1 == n)) then
-    throw "a result type parameter is not determined by the continuation's arguments"
+  let (tps, typeParams, typeArgs) ← contTypes ctx p ((bl :: caps).map (·.ty)) (bls.map (·.ty)) written
   let name := s!"$cont{p.line}_{p.col}_{key.hash}" ++ (if p.file.isEmpty then "" else s!"_{p.file}")
   -- (its effects the function's own: its body is that function's code,
   -- and it may call what is asked for only in the next elaboration, a
@@ -1770,12 +1781,12 @@ def contLiftOf (ctx c2 : Ctx) (p : Pos) (b : String) (alts rest : List SExpr)
     caps.map fun l => { name := if sets.any (·.name == l.name) then s!"{l.name}$in" else l.name, ty := l.ty.toSTy }
   -- (`$firstP`: the clauses are lifted already, the consumer's, which lifting
   -- again would bind twice, as for #275's functions)
-  return { key, pos := p, name, params,
-           tparams := tps.map fun (n, cmp) => { pos := p, name := n, constraint := if cmp then "comparable" else "type" },
+  return { key, pos := p, name, params := params ++ typeParams, tparams := tps,
            specs := (if heap.isEmpty then ["computes"] else heap) ++ ["decides"],
            ret := .tup (bls.map (·.ty.toSTy) ++ sets.map (·.ty.toSTy) ++ [.name "logic"]),
            body := .block p (copies ++ [.app p (.ident p "$firstP") [.block p (rest ++ [tup])] false]),
-           binds, sets := sets.map (·.name), args := SExpr.ident p b :: caps.map (fun l => SExpr.ident p l.name),
+           binds, sets := sets.map (·.name),
+           args := SExpr.ident p b :: caps.map (fun l => SExpr.ident p l.name) ++ typeArgs,
            varBinds := (bls.filter (·.mutable)).map (·.name) }
 
 /-- (#335, phase 2) Whether a `for`'s body may run in a failure context, as
@@ -1802,12 +1813,9 @@ def contForLiftOf (ctx : Ctx) (p : Pos) (b : String) (bty vty : Ty) (alts rest :
     Except String Choice.FirstLift := do
   if ctx.inCtor || ctx.inParamDefault || ctx.inBlock || ctx.inDefer || !ctx.defaults.isEmpty then
     throw "in a constructor, a default or a defer"
-  -- (in a generic function or class, where the clauses or the body write
-  -- its type parameters, which the function would not have)
-  if writesTps (ownTps ctx) (.block p (rest ++ [body])) then throw "where the clauses write a type parameter"
+  let written := SExpr.block p (rest ++ [body])
   let key := "f" ++ contKey ctx p b (alts ++ rest ++ [body])
-  let σt : List (String × STy) := ctx.types.tvars.filterMap fun (n, t) =>
-    if n.startsWith "$tp" then some (n, t.toSTy) else none
+  let σt := ctx.types.tvars.map fun (n, t) => (n, t.toSTy)
   let rest := rest.map (Refine.substTypes σt)
   let body := Refine.substTypes σt body
   let (rest, body) ← match ctx.selfClass with
@@ -1821,10 +1829,7 @@ def contForLiftOf (ctx : Ctx) (p : Pos) (b : String) (bty vty : Ty) (alts rest :
   let caps : List Local := (Choice.namesUsed (.block p (rest ++ [body]))).eraseDups.filterMap ctx.lookup
   let setNames := Choice.setsIn (.block p (rest ++ [body]))
   let sets := caps.filter fun l => l.mutable && setNames.contains l.name
-  let tps := ((bty :: caps.map (·.ty)).flatMap Ty.paramsC).foldl
-    (fun acc (n, cmp) => if acc.any (·.1 == n) then acc else acc ++ [(n, cmp)]) []
-  if vty.params.any (fun n => !tps.any (·.1 == n)) then
-    throw "a result type parameter is not determined by the continuation's arguments"
+  let (tps, typeParams, typeArgs) ← contTypes ctx p (bty :: caps.map (·.ty)) [vty] written
   let name := s!"$contf{p.line}_{p.col}_{key.hash}" ++ (if p.file.isEmpty then "" else s!"_{p.file}")
   let heap := ["reads", "writes", "allocates"].filter fun k => ctx.fnFx.contains k
   let copies := sets.map fun l => SExpr.decl p l.name (some l.ty.toSTy) true (.ident p s!"{l.name}$in")
@@ -1835,11 +1840,10 @@ def contForLiftOf (ctx : Ctx) (p : Pos) (b : String) (bty vty : Ty) (alts rest :
   let ret : STy := if sets.isEmpty then .arr vty.toSTy else .tup (.arr vty.toSTy :: sets.map (·.ty.toSTy))
   let bodyE : SExpr := if sets.isEmpty then .block p (copies ++ [ffirst]) else
     .block p (copies ++ [.decl p vals none false ffirst, .tuple p (.ident p vals :: sets.map fun l => SExpr.ident p l.name)])
-  return { key, pos := p, name, params,
-           tparams := tps.map fun (n, cmp) => { pos := p, name := n, constraint := if cmp then "comparable" else "type" },
+  return { key, pos := p, name, params := params ++ typeParams, tparams := tps,
            specs := (if heap.isEmpty then ["computes"] else heap) ++ ["decides"],
            ret, body := bodyE, binds := [], sets := sets.map (·.name),
-           args := SExpr.ident p b :: caps.map (fun l => SExpr.ident p l.name) }
+           args := SExpr.ident p b :: caps.map (fun l => SExpr.ident p l.name) ++ typeArgs }
 
 /-- `for`: clauses are generators, bindings and filters; each generator opens
     a nested `forE`, and nested results are flattened (cartesian product,
@@ -6154,7 +6158,7 @@ partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
               tys := tys ++ [r.ty]
             let same := tys.all (some · == tys.head?)
             -- (what refuses it known before the trial, which then costs nothing)
-            let ok := same && !writesTps (ownTps ctx) (.block p rest)
+            let ok := same
             let (code1, c1) ← if ok then elabOneGo ctx ([.decl p t none false (alt a0 0)] ++
                 binds.zipIdx.map fun (n, i) => .decl p n none (vars.contains n) (.app p (.ident p t) [.int p (i : Int)] false))
               else pure (Expr.lit .void, ctx)
