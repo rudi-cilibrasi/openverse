@@ -1,0 +1,10 @@
+# expect: default computed by code reads the receiver
+base(t:type) := class:
+    Go(?N:int=0)<suspends>:void=Print("base")
+ib := class(base(int)):
+    Seed:int=3
+    Go<override>(?N:int=Seed)<suspends>:void=Print("body {N}")
+Start(P:base(t) where t:type):task(void)=spawn{P.Go()}
+Main():void=
+    T:=Start(ib{})
+    Print("spawned")

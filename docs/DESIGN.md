@@ -1425,12 +1425,16 @@ position in every class below the one that declares it.
   Helpers use the existing discovery rounds and are shared by implementation,
   supplied-name set and lexical default restrictions. They preserve the
   active default stack for recursive-default checks, and repetition/defer
-  restrictions through `$defaultContext`. Their heap effects are inferred
-  from the forwarding call and defaults before checking caller effects;
+  restrictions through `$defaultContext`. Their heap effects, and those
+  of enclosing refinement lifts, are inferred from their bodies together
+  before checking caller effects;
   a `<computes>` method may have an effectful default when its caller allows
   that effect. Suspended default helpers forward background-task ownership
   like refining lifts, while the method called inside remains an ordinary
-  callee that stops its own roots on return. A `<suspends>` method's refined
+  callee that stops its own roots on return. Spawned calls keep the existing
+  inline default binding and its restrictions: their argument/default
+  prefix must run before the task starts, and its waits must remain visible
+  to `elabSpawn`. A `<suspends>` method's refined
   call opens its types as
   `tcDispatchView` does (`suspendSelfGeneric`). A slot of
   such a type starts as an object of a class of an entry (a prototype or
@@ -1918,7 +1922,7 @@ Phase 3 (#20) adds a heap of objects, each with a class tag and fields
   (`tcDispatch`) tries the plain `if` typing first, and types a dispatch
   only against an expected type, since `μ` relates the call's result to
   it: a dispatch chain is assigned to a slot of the method's result type.
-  An omitted named argument whose default has no type of its own
+  In the inline binding of a spawned call, an omitted named argument whose default has no type of its own
   (`false`, `array{}`, `map{}`) is passed as `if (fail) then T else false`,
   with `T` a temporary of the parameter's type, so that the checker infers
   the argument's type as it does the others' (#175). When the dispatch

@@ -578,7 +578,10 @@ circle := class(shape, labelled):
   read and set through it too (each class's, at its own place).
   Omitted named arguments use the selected implementation's defaults,
   including computed defaults that read its receiver or earlier arguments
-  and defaults whose types are opened or refined by dispatch. Supplied
+  and defaults whose types are opened or refined by dispatch. A spawned
+  refined call retains the earlier restriction: its defaults cannot read
+  the receiver, use arguments at refined types, or need opened types.
+  Spawn arguments, including defaults, cannot wait. Supplied
   arguments run once in written order, then omitted defaults run in
   declaration order. Their effects count at the caller. Background tasks
   started in a suspending default belong to the caller; tasks started by
