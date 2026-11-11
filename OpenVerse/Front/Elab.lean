@@ -10548,7 +10548,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
                           suspends := effs.contains "suspends",
                           -- (a `block:`'s effects are inferred below, from none, as a
                           -- constant's: blocks that construct each other's classes)
-                          fx := if n.endsWith ".$block" || inferredBridge n || (n.splitOn "$default$").length > 1 then [] else allowedFx effs,
+                          fx := if n.endsWith ".$block" || defaultBridge n || (n.splitOn "$default$").length > 1 then [] else allowedFx effs,
                           isConst := false,
                           named := (ps.filter (·.named)).map fun q => (q.name, q.default),
                           pnames := ps.map (·.name), scope := copyScope? effs }
@@ -10599,7 +10599,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
                             decides := effs.contains "decides", isConst := false,
                             suspends := effs.contains "suspends",
                             -- (a parametric class's `block:`: inferred from none, #41)
-                            fx := if n.endsWith ".$block" || inferredBridge n then [] else allowedFx effs,
+                            fx := if n.endsWith ".$block" || defaultBridge n then [] else allowedFx effs,
                             tparams,
                             named := (ps.filter (·.named)).map fun q => (q.name, q.default),
                             pnames := ps.map (·.name), scope := copyScope? effs }
@@ -10673,7 +10673,8 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
                              inBlock := n.endsWith ".$block", selfClass := some ((n.splitOn ".").headD "") }
           match elabBodyOv ctx body (some s.ret) { env, nslots := ps.length, slotTys := s.params.toArray } with
           | .ok (_, st) =>
-            let fx := heapFx.filter fun k => st.fx.any (·.1 == k)
+            let fx := heapFx.filter fun k => st.fx.any (·.1 == k) ||
+              (opts.castRequests.any (·.name == n) && s.fx.contains k)
             if fx != s.fx then
               sigs := sigs.set! idx { s with fx }
               changed := true
@@ -10696,7 +10697,8 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
           match elabBodyOv ctx body (some g.ret)
               { env, nslots := ps.length + hidden.length, slotTys := (g.params ++ hidden).toArray } with
           | .ok (_, st) =>
-            let fx := heapFx.filter fun k => st.fx.any (·.1 == k)
+            let fx := heapFx.filter fun k => st.fx.any (·.1 == k) ||
+              (opts.castRequests.any (·.name == n) && g.fx.contains k)
             if fx != g.fx then
               gsigs := gsigs.set! gi { g with fx }
               changed := true
