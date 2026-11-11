@@ -5,8 +5,10 @@ A prefix default commits when the next field opens a generator. A scalar
 selected branch shares the earlier generator's filter. Rejected filters roll
 back allocations, writes and output; a failed body keeps them and stops all
 remaining values. Objects saved from later values share the prefix cell.
+An independent pure tree model covers eager recursive constructions too.
 """
 from pathlib import Path
+import itertools
 import random
 import subprocess
 import sys
@@ -159,12 +161,128 @@ Wrap(P:{cty}):{cty} = P
     return source, ''.join(line + '\n' for line in out), code
 
 
+def eager_program(seed):
+    """Enumerate pure recursive trees and field products in declaration order.
+
+    This models the source values directly, without an array/generator
+    lowering. Eager producers cannot allocate mutable objects or print.
+    Their consumers can reject filters, take one value, or fail in the body.
+    """
+    r = random.Random(seed * 1000003 + 28311)
+    ty, value = r.choice([('int', '7'), ('string', '"s"')])
+    shown = '7' if ty == 'int' else 's'
+    start, step, default = r.randint(1, 3), r.randint(2, 3), r.randint(3, 9)
+    order = ['V', 'K', 'J', 'D', 'E', 'T']
+    r.shuffle(order)
+    fields = {
+        'V': 'V:t', 'K': 'K:int', 'J': 'J:int',
+        'D': 'D:int = block{ N := Default(); N }',
+        'E': 'E:[]t = block{ Empty:[]t=Concatenate(); Empty }',
+        'T': 'T:int = Default()+1',
+    }
+    kind = r.choice(['plain', 'composed', 'branch', 'failure'])
+    kexpr = {
+        'plain': 'N*10 | N*10+1',
+        'composed': 'Pick(N*10) | Pick(N*10+2)',
+        'branch': 'if (Mod[N,2]=0) then (N*10 | N*10+1) else N*10+2',
+        'failure': 'None[] | N*10 | None[] | N*10+1',
+    }[kind]
+    implicit = r.choice([True, False])
+    inherited = r.choice([True, False])
+    name = 'base' if inherited else 'pack'
+    declaration = f'{name}(t:type) := class:\n' + ''.join('    ' + fields[f] + '\n' for f in order)
+    if inherited:
+        declaration += 'pack(u:type) := class(base(u)) {}\n'
+    ctor = 'pack' if implicit else 'pack(t)'
+    index = 'index{V:=N|N+1}'
+    if r.choice([True, False]):
+        index = f'outer{{Inner:={index}}}.Inner'
+    edge = f'X,{index}.V-Step'
+    if r.choice([True, False]):
+        edge += ',?Step:=Step'
+    source = f'''# eager constructor model seed {seed}
+Default()<computes>:int = {default}
+None()<computes><decides>:int =
+    false?
+    0
+Pick(N:int)<computes>:int = N | N+1
+index := struct {{ D:int=Default(); V:int }}
+outer := struct {{ D:int=Default(); Inner:index }}
+{declaration}
+R(X:t,N:int,?Step:int={step} where t:type)<computes><decides>:pack(t) =
+    if (N>0) then ({ctor}{{J:=0|1,K:={kexpr},V:=X|X}} | R[{edge}]) else {ctor}{{J:=0,K:=0,V:=X}}
+Fail()<decides>:int =
+    Print("fail")
+    false?
+    0
+'''
+    threshold, stop = r.randint(0, 3), r.randint(0, 2)
+    mode = r.choice(['for', 'first', 'fail'])
+    binding = f'P:=R[{value},{start}]'
+    predicate = f'Mod[P.K+P.J,3]>={threshold}'
+    line = '"value {P.V} {P.K} {P.J} {P.D} {P.E.Length} {P.T}"'
+    if mode == 'first':
+        source += f'''Main():void =
+    if ({binding},{predicate}) then Print({line}) else Print("none")
+'''
+    else:
+        specs = '<decides>' if mode == 'fail' else ''
+        failure = f'\n        if (Mod[P.K,3]={stop}) then Fail[] else 0' if mode == 'fail' else ''
+        source += f'''Main(){specs}:void =
+    Ps := for ({binding},{predicate}):
+        Print({line}){failure}
+        P
+    Print("length {{Ps.Length}}")
+'''
+
+    def values(n):
+        if n <= 0:
+            return [(0, 0)]
+        ks = {
+            'plain': [n*10, n*10+1],
+            'composed': list(range(n*10, n*10+4)),
+            'branch': [n*10, n*10+1] if n % 2 == 0 else [n*10+2],
+            'failure': [n*10, n*10+1],
+        }[kind]
+        choices = {'V': [shown, shown], 'K': ks, 'J': [0, 1]}
+        # Non-choice defaults have one value at their declaration position.
+        products = itertools.product(*(choices.get(f, [None]) for f in order))
+        result = []
+        for product in products:
+            record = dict(zip(order, product))
+            result.append((record['K'], record['J']))
+        for argument in [n, n+1]:
+            result.extend(values(argument-step))
+        return result
+
+    out, count, status = [], 0, 0
+    for k, j in values(start):
+        if (k+j) % 3 < threshold:
+            continue
+        out.append(f'value {shown} {k} {j} {default} 0 {default+1}')
+        count += 1
+        if mode == 'first':
+            break
+        if mode == 'fail' and k % 3 == stop:
+            out.append('fail')
+            status = 1
+            break
+    if mode == 'first' and count == 0:
+        out.append('none')
+    elif mode != 'first' and status == 0:
+        out.append(f'length {count}')
+    return source, ''.join(line + '\n' for line in out), status
+
+
 def main():
     bad = 0
     with tempfile.TemporaryDirectory(prefix='choice-defaults-') as directory:
         tmp = Path(directory)
-        for seed in range(FIRST, FIRST + COUNT):
-            source, want, status = program(seed)
+        cases = ((seed, variant, model) for seed in range(FIRST, FIRST + COUNT)
+                 for variant, model in [('defaults', program), ('eager', eager_program)])
+        for seed, variant, model in cases:
+            source, want, status = model(seed)
+            artifact = ROOT / f'fuzz-choice-{variant}-{seed}'
             path, vbc = tmp / 'p.verse', tmp / 'p.vbc'
             path.write_text(source)
             vbc.unlink(missing_ok=True)
@@ -172,18 +290,18 @@ def main():
                                   capture_output=True, text=True, timeout=30)
             if (lean.stdout, lean.returncode) != (want, status):
                 bad += 1
-                (ROOT / f'fuzz-choice-defaults-{seed}.verse').write_text(source)
-                (ROOT / f'fuzz-choice-defaults-{seed}.expected').write_text(want + f'exit={status}\n')
-                (ROOT / f'fuzz-choice-defaults-{seed}.actual').write_text(lean.stdout + f'exit={lean.returncode}\n' + lean.stderr)
-                print(f'MODEL MISMATCH seed {seed}: exit {lean.returncode}; {lean.stderr[:200]}', flush=True)
+                artifact.with_suffix('.verse').write_text(source)
+                artifact.with_suffix('.expected').write_text(want + f'exit={status}\n')
+                artifact.with_suffix('.actual').write_text(lean.stdout + f'exit={lean.returncode}\n' + lean.stderr)
+                print(f'MODEL MISMATCH {variant} seed {seed}: exit {lean.returncode}; {lean.stderr[:200]}', flush=True)
                 continue
             c = subprocess.run([str(ROOT / 'runtime/build/cverse'), str(vbc)],
                                capture_output=True, text=True, timeout=30)
             if (c.stdout, c.stderr, c.returncode) != (lean.stdout, lean.stderr, lean.returncode):
                 bad += 1
-                (ROOT / f'fuzz-choice-defaults-{seed}.verse').write_text(source)
-                print(f'C MISMATCH seed {seed}', flush=True)
-    print(f'choice-defaults: {COUNT} model programs from seed {FIRST}, {bad} bad')
+                artifact.with_suffix('.verse').write_text(source)
+                print(f'C MISMATCH {variant} seed {seed}', flush=True)
+    print(f'choice-defaults: {COUNT} default and {COUNT} eager model programs from seed {FIRST}, {bad} bad')
     return bool(bad)
 
 

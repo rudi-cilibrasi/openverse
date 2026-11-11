@@ -3780,6 +3780,8 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
     return ← elabE { ctx with constructHints := some hints, constructOrigin := some ctx.frameName } se exp
   match se with
   | .app _ (.ident _ "$methodMiss") [] false => pure ⟨.prim .fail [], .never⟩
+  | .app p (.ident _ "$allValues") [.block _ cs, value] false =>
+    elabE ctx (.forE p (Choice.gensOf "" cs (choiceOrder ctx)) value) exp
   | .app _ (.ident _ "$methodCast") [cast] false => elabE ctx cast exp
   | .app p (.ident _ "$constructProbe") [.str _ [.text site], .construct q n ts fs] false =>
     let r ← elabConstruct ctx q n ts (fs.map constructFieldsForTypes) exp

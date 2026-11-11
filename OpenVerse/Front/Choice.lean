@@ -1741,35 +1741,36 @@ mutual
     (marked `$each`) inside it. So an alternative that fails, or whose
     argument does, gives no values, and the others still do. At the written
     type `ty`, when there is one. -/
-partial def arrOfE (ty : Option STy := none) : SExpr → SExpr
+partial def arrOfE (ty : Option STy := none) (fieldOrder : String → FieldOrder := fun _ => {}) : SExpr → SExpr
   | .app p (.ident _ "$methodMiss") [] false => .arrayLit p []
   | .app p (.ident _ "$choice") as false =>
     match as with
-    | [a] => arrOfE ty a
-    | _ => .app p (.ident p "Concatenate") (as.map (arrOfE ty)) false
-  | .ite p cs t (some e) => .ite p cs (arrOfE ty t) (some (arrOfE ty e))
+    | [a] => arrOfE ty fieldOrder a
+    | _ => .app p (.ident p "Concatenate") (as.map (arrOfE ty fieldOrder)) false
+  | .ite p cs t (some e) => .ite p cs (arrOfE ty fieldOrder t) (some (arrOfE ty fieldOrder e))
   | a =>
     let p := a.pos
     let site := s!"a{p.line}_{p.col}"
     let v := s!"$a{p.line}_{p.col}"
-    .forE p (gensOf site [.decl p v ty false a]) (.ident p v)
+    .forE p (gensOf site [.decl p v ty false a] fieldOrder) (.ident p v)
 
 /-- Clauses for a `for` that goes through all their values (#235): each
     choice a generator over the array of its alternatives' values, each
     call of a recursive function with several values one over its array.
     Names made include `site`, so that nested ones differ. -/
-partial def gensOf (site : String) (cs : List SExpr) : List SExpr :=
+partial def gensOf (site : String) (cs : List SExpr)
+    (fieldOrder : String → FieldOrder := fun _ => {}) : List SExpr :=
   let nm (q : Pos) : String := s!"$e{sitePart site}{q.line}_{q.col}"
-  (prepare cs (site := site) (guardBranches := false)).flatMap fun c => match binding? c with
+  (prepare cs (site := site) (fieldOrder := fieldOrder) (guardBranches := false)).flatMap fun c => match binding? c with
     | some { pos := q, name := x, ty := ty, alts := as, branchy := none, each := none, .. } =>
-      let src := arrOfE ty (.app q (.ident q "$choice") as false)
+      let src := arrOfE ty fieldOrder (.app q (.ident q "$choice") as false)
       match ty with
       | none => [.gen q x none src]
       | some t => [.gen q (nm q) none src, .decl q x (some t) false (.ident q (nm q))]
     | some { pos := q, name := x, ty := ty, branchy := some i, .. } =>
       match ty with
-      | none => [.gen q x none (arrOfE none i)]
-      | some t => [.gen q (nm q) none (arrOfE (some t) i), .decl q x (some t) false (.ident q (nm q))]
+      | none => [.gen q x none (arrOfE none fieldOrder i)]
+      | some t => [.gen q (nm q) none (arrOfE (some t) fieldOrder i), .decl q x (some t) false (.ident q (nm q))]
     | some { pos := q, name := x, ty := ty, each := some a, .. } =>
       match ty with
       | none => [.gen q x none a]
@@ -1800,7 +1801,9 @@ def allBody (mvs : List String) (ret : STy) (b : SExpr) : SExpr :=
     | some (.decl q x _ _ _) => (ss, .ident q x)
     | some l => (ss.dropLast ++ [.decl l.pos "$val" (some ret) false l], .ident l.pos "$val")
     | none => ([], .tuple p [])
-  .forE p (gensOf "" cs) v
+  -- Field layouts and contextual construction instances belong to the
+  -- elaborator. Keep the clauses intact until it can supply them to gensOf.
+  .app p (.ident p "$allValues") [.block p cs, v] false
 
 /-- A name of `mv` used other than as a call's head: as a function value. -/
 partial def valueUse? (mv : List String) : SExpr → Option (Pos × String)
