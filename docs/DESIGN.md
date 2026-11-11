@@ -276,6 +276,21 @@ had none. tim-e1's model found it twice in #312's review: prints in the
 branch, then before the `if`, survived a rejected value. Even the
 caller's earlier clauses would show it.
 
+Recursive multi-value bodies normalize supported returns before recursion
+classification. For lazy analysis, generated branch scopes carry
+`$returnTail(block{…})`: only these scopes split into invocation prefixes
+and tail leaves. An ordinary source value block stays inside its value's
+rollback boundary. `elabLoopTailWith` compiles the selected path and saves
+its branch locals in continuation items; a failing selected prefix fails
+the invocation, without selecting else. Generic mutual-instance discovery
+uses those same leaf contexts. Effect discovery includes every path's
+prefix and condition. First-success helpers wrap each generated scope in
+an internal taking boundary, so branch-block renaming cannot rename the
+prepared consumer suffix and multiply helper identities. Eager array
+lowering erases the markers to ordinary blocks. Original source bodies
+still check return types/effects; recursive invocation cleanup remains
+refused, including cleanup inside a returning branch.
+
 When a branch, or the rest copied into it, has a choice of its own, the
 `if` becomes an *exclusive choice* instead (#314):
 `$excl(($k = 0) ⇒ block{T; R}, ($k = 1) ⇒ block{U; R})`, where at most one

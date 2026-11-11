@@ -993,8 +993,14 @@ Main():void =
   function with several values, its clauses have no choice, and its last
   expression is a choice, or an `if … else …` whose branches are choices or
   values, each alternative a value with no choice in it or a whole call of
-  the function itself. So is a strongly connected group of such functions
-  (#283), mutually recursive, each of that shape with its alternatives
+  the function itself. A returning branch may contain plain clauses and
+  nested conditionals before its value. A `return` at the end of the body or
+  in an `if` branch ends that invocation, yielding its operand's values in order;
+  statements after the return are skipped. These returns are normalized
+  before choosing lazy or eager recursion. A selected branch's prefix runs
+  before its values; if that prefix fails, the invocation fails without
+  trying another branch. A strongly connected group of such functions is
+  also taken lazily (#283), mutually recursive, each of that shape with its alternatives
   calls of the group's functions (or, as the last expression or a branch,
   one such call), all of one result type at the call:
   `Evens(N:int):int = N | Odds(N + 1)` with
@@ -1007,6 +1013,9 @@ Main():void =
   types throughout one search, as a self-recursive lazy generator does.
   A pure mutual group that changes those types on recursive edges keeps
   the eager route described below, including its restrictions and errors.
+  A returning `any`-valued group with recursive edges in an incomplete tail
+  conditional also uses that eager route, so the conditional erases all
+  yielded values to `void` while explicit returns retain their operands.
 
   When parameters are named, each recursive call
   evaluates positional arguments first, then named arguments as written, then
@@ -1074,7 +1083,7 @@ Main():void =
   overloaded one with an overload that calls the function's own name
   (a generic one's type arguments are inferred from the
   arguments where it is inlined, as at a call, named ones too), a recursive one with a `defer:` of its own, or called by a recursive one (its body a function's, where it would run once), one with a `return`
-  other than in an `if`'s branches, or recursive with a `return`, a method whose name another class or interface
+  other than at the end of its body or in an `if`'s branches, a method whose name another class or interface
   also has, `<suspends>`, one used as a function value, and, since its body is inlined where other names may be
   in scope, one whose name is also the name of a parameter, local, field or
   method anywhere in the program, and a call of one where a name its body

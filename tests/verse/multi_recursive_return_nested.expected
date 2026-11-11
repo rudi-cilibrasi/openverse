@@ -1,0 +1,15 @@
+visit 2
+special
+got 2
+visit 1
+tail
+got 2
+visit 0
+base
+got 1
+got 2
+visit 2
+special
+first b
+none
+exit=0

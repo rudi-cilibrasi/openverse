@@ -63,6 +63,10 @@ kinds=(
   own-method-failure
   own-method-first
   own-method-for
+  recursive-return-eager
+  recursive-return-first
+  recursive-return-for
+  recursive-return-mutual-first
   refined-failure
   refined-for
   refined-lazy-failure
@@ -100,6 +104,37 @@ for kind in "${kinds[@]}"; do
 import sys
 kind, count = sys.argv[1], int(sys.argv[2])
 print('Two(N:int):int = N | N + 1')
+if kind.startswith('recursive-return-'):
+    eager = kind.endswith('eager')
+    mutual = 'mutual' in kind
+    if eager:
+        print('Id(X:t where t:type)<computes>:t = X\nProduce(X:t,Y:t,N:int where t:type)<computes>:t =\n    if(N<=0):return X|Y\n    NextN:=N-1\n    return Id(Produce(X,Y,NextN))')
+    else:
+        target = 'Other' if mutual else 'Produce'
+        print(f'''Produce(X:t,Y:t,N:int where t:type)<transacts>:t =
+    if(N<=0):
+        Print("base")
+        V:=X
+        return V|Y
+    Print("visit")
+    NextN:=N-1
+    return X|{target}(Y,X,NextN)''')
+        if mutual:
+            print('''Other(Y:u,X:u,N:int where u:type)<transacts>:u =
+    if(N<=0):return Y|X
+    NextN:=N-1
+    Print("other")
+    return Y|Produce(X,Y,NextN)''')
+    params = ','.join(f'X{i}:t{i},Y{i}:t{i}' for i in range(count))
+    tparams = ','.join(f't{i}:type' for i in range(count))
+    clauses = ','.join(f'A{i}:=Produce(X{i},Y{i},2)' for i in range(count))
+    if kind.endswith('first'):
+        print(f'Run({params} where {tparams})<transacts>:int = if({clauses},E:[]t0=array{{A0}})then E.Length else -1')
+    else:
+        print(f'Run({params} where {tparams})<transacts>:int = (for({clauses}):A0).Length')
+    args = ','.join('1,2' if i%2==0 else '"x","y"' for i in range(count))
+    print(f'Main():void = Print("{{Run({args})}}")')
+    sys.exit(0)
 if kind.startswith('clause-break-'):
     print('pair(a:type,b:type) := class { A:a; B:b }')
     print('dup(t:type) := class(pair(t,t)) { C:int=4 }')

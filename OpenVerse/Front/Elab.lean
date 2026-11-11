@@ -1991,7 +1991,7 @@ def forBodySafe (ctx : Ctx) (body : SExpr) : Bool :=
   -- generic/default argument bindings) inside the body. Their ownership is
   -- checked when that consumer elaborates; they do not escape the helper.
   let safeMarkers := ["$sourceSuper", "$methodMiss", "$methodCast", "$methodCase", "$methodType", "$methodParams", "$inlineScope", "$inlineScopeEnd", "$inline", "$choice", "$excl", "$alt", "$firstP", "$first", "$each", "$noLift", "$fxOf",
-    "$forReturns", "$forReturnBody", "$forClauseExits", "$defer", "$loop", "$rec", "$recTo", "$group", "$member",
+    "$forReturns", "$forReturnBody", "$forClauseExits", "$defer", "$loop", "$rec", "$recTo", "$group", "$member", "$returnTail",
     "$tparams", "$params", "$defaults", "$paramDefault", "$freeNames", "$declNames", "$callArgs"]
   !(Refine.findPart (fun | .brk _ => true | _ => false) true body).isSome &&
     !(Choice.anyE (fun
@@ -3612,6 +3612,35 @@ def loopMemberCtx (ctx : Ctx) (entry member : String) (σ : List (String × Ty))
   let tvars := aliases ++ core.map (fun (n, cmp) => (n, Ty.param n cmp)) ++ ctx.types.tvars
   { ctx with types := { ctx.types with tvars } }
 
+/-- A lazy invocation selects one leaf after running its path's prefixes.
+    Leaf contexts retain branch bindings for saved continuation items. -/
+structure LoopTailCode where
+  select : Expr
+  arms : Array (Ctx × List SExpr)
+  itemCode : Expr
+  next : Nat
+
+partial def elabLoopTailWith (elabSeq : Ctx → List SExpr → Option Ty → EM (R × Ctx))
+    (ctx : Ctx) (tail : SExpr) (k start : Nat) : EM LoopTailCode := do
+  let vd : Expr := .lit .void
+  let c := { ctx with canFail := true, inTaking := true }
+  match tail with
+  | .app _ (.ident _ "$returnTail") [.block p ss] false =>
+    let (pre, value) := Choice.loopBlockParts p ss
+    let (r, ca) ← elabSeq c pre none
+    let code ← elabLoopTailWith elabSeq ca value k start
+    return { code with select := .seq r.e code.select, itemCode := .seq r.e code.itemCode }
+  | .ite _ cs t (some u) =>
+    let (cond, ca) ← elabSeq c cs none
+    let yes ← elabLoopTailWith elabSeq ca t k start
+    let no ← elabLoopTailWith elabSeq ctx u k yes.next
+    return { select := .ite cond.e yes.select no.select, arms := (yes.arms ++ no.arms),
+             itemCode := .seq cond.e (.seq yes.itemCode no.itemCode), next := no.next }
+  | value =>
+    let alts := (Choice.alts? value).getD [value]
+    return { select := .seq (.assign k (.lit (.int (start : Nat)))) vd,
+             arms := #[(ctx, alts)], itemCode := vd, next := start + alts.length }
+
 /-- (#283) `elabLoopGen` for a strongly connected group of functions with
     several values, taken lazily (`$group(tail, $member(H, params, clauses,
     r := tail)…)` in the marker): one stack of items `(k, every member's
@@ -3665,12 +3694,10 @@ partial def elabLoopGenGroupWith (elabE : Ctx → SExpr → Option Ty → EM R)
       let c := loopMemberCtx ctx g h ((instances.lookup h).getD [])
       let c := { c with locals := pls.reverse ++ c.locals, typeOnly := true, canFail := true, inTaking := true }
       let (_, cc) ← elabSeq c hcls none
-      let arms := if Choice.isBranchy htail || Choice.isBranchy.complete htail then Choice.arms htail else [(none, htail)]
-      for (cs?, value) in arms do
-        let ca ← match cs? with
-          | some cs => do let (_, ca) ← elabSeq cc cs none; pure ca
-          | none => pure cc
-        for alt in (Choice.alts? value).getD [value] do
+      let probeK ← fresh .int
+      let code ← elabLoopTailWith elabSeq cc htail probeK 0
+      for (ca, alts) in code.arms do
+        for alt in alts do
           let call := match alt with
             | .app q (.ident _ "$rec") as false => some (q, h, as)
             | .app q (.ident _ "$recTo") (.ident _ target :: as) false => some (q, target, as)
@@ -3708,28 +3735,18 @@ partial def elabLoopGenGroupWith (elabE : Ctx → SExpr → Option Ty → EM R)
   let names := ms.toList.map (·.1)
   -- (each member's clauses, then its branches' conditions, in its own
   -- context; the names each saves in an item: its parameters, then the others)
-  let mut infos : Array (R × Array (Option Expr × Ctx × List SExpr) × List Local) := #[]
+  let k ← fresh .int
+  let mut infos : Array (R × LoopTailCode × List Local) := #[]
   for (h, pls, mcls, mtail) in ms do
     let c := loopMemberCtx ctx g h ((instances.lookup h).getD [])
     let lctx : Ctx := { c with locals := pls.reverse ++ c.locals }
     let newOf (c : Ctx) : List Local := c.locals.take (c.locals.length - lctx.locals.length)
     let (rc, cc) ← elabSeq { lctx with canFail := true, inTaking := true } mcls none
-    -- (an `if` chain's branches even with no choice in them: a branch may
-    -- be a call of another member, `Choice.loopShape?`)
-    let arms : List (Option (List SExpr) × SExpr) :=
-      if Choice.isBranchy mtail || Choice.isBranchy.complete mtail then Choice.arms mtail else [(none, mtail)]
-    let mut armCode : Array (Option Expr × Ctx × List SExpr) := #[]
-    for (cs?, v) in arms do
-      let alts := (Choice.alts? v).getD [v]
-      match cs? with
-      | some cs =>
-        let (rcond, ca) ← elabSeq { cc with canFail := true, inTaking := true } cs none
-        armCode := armCode.push (some rcond.e, ca, alts)
-      | none => armCode := armCode.push (none, cc, alts)
+    let code ← elabLoopTailWith elabSeq cc mtail k 0
     let mut tls : List Local := pls
-    for l in (newOf cc ++ armCode.toList.flatMap fun (_, ca, _) => newOf ca).reverse do
+    for l in (newOf cc ++ code.arms.toList.flatMap fun (ca, _) => newOf ca).reverse do
       if !tls.any (·.slot == l.slot) then tls := tls ++ [l]
-    infos := infos.push (rc, armCode, tls)
+    infos := infos.push (rc, code, tls)
   -- (one item for all: every member's names, the members in order)
   let all : List Local := infos.toList.flatMap (·.2.2)
   let bases : List Nat := (infos.toList.foldl (fun (acc, n) (_, _, tls) => (acc ++ [n], n + tls.length)) ([], 0)).1
@@ -3742,7 +3759,6 @@ partial def elabLoopGenGroupWith (elabE : Ctx → SExpr → Option Ty → EM R)
   let cell ← fresh cellTy
   let sp ← fresh .int
   let it ← fresh tupTy
-  let k ← fresh .int
   let has ← fresh .logic
   let nx ← fresh .int
   let item (kE : Expr) (vals : List Expr) : Expr := .prim .mkTup (kE :: vals)
@@ -3760,7 +3776,7 @@ partial def elabLoopGenGroupWith (elabE : Ctx → SExpr → Option Ty → EM R)
   let mut total : Nat := 0
   for (_, armCode, _) in infos do
     offs := offs.push total
-    total := total + armCode.foldl (fun n (_, _, as) => n + as.length) 0
+    total := total + armCode.next
   let mut alts : Array Expr := #[]
   let mut values : Array (Nat × Expr) := #[]
   let mut itemCode : Expr := vd
@@ -3768,17 +3784,11 @@ partial def elabLoopGenGroupWith (elabE : Ctx → SExpr → Option Ty → EM R)
   let mut starts : Array Expr := #[]
   for ((rc, armCode, _), i) in infos.toList.zipIdx do
     let off := offs.getD i 0
-    itemCode := .seq itemCode rc.e
-    for (c?, _, _) in armCode do
-      if let some c := c? then itemCode := .seq itemCode c
-    let firsts : List Nat := (armCode.toList.foldl (fun (acc, n) (_, _, as) => (acc ++ [n], n + as.length)) ([], off)).1
-    let select : Expr := (armCode.toList.zip firsts).foldr (fun ((c?, _, _), st) acc =>
-      let set : Expr := .seq (.assign k (.lit (.int (st : Nat)))) vd
-      match c? with
-      | some c => .ite c set acc
-      | none => set) vd
+    itemCode := .seq itemCode (.seq rc.e armCode.itemCode)
+    let firsts : List Nat := (armCode.arms.toList.foldl (fun (acc, n) (_, as) => (acc ++ [n], n + as.length)) ([], off)).1
+    let select := .seq armCode.select (.assign k (p2 .add (.local k) (.lit (.int (off : Nat)))))
     starts := starts.push (.ite (.seq rc.e select) vd (.seq (.assign k (.lit (.int (total : Nat)))) vd))
-    for ((_, ca, as), first) in armCode.toList.zip firsts do
+    for ((ca, as), first) in armCode.arms.toList.zip firsts do
       for (a, j) in as.zipIdx do
         let gi := first + j
         let actx : Ctx := { ca with canFail := true, inTaking := true }
@@ -7153,19 +7163,12 @@ partial def elabLoopGen (ctx : Ctx) (p : Pos) (lp : List SExpr) : EM LoopGen := 
   let newOf (c : Ctx) : List Local := c.locals.take (c.locals.length - lctx.locals.length)
   -- (the clauses, then each branch's conditions)
   let (rc, cc) ← elabSeq { lctx with canFail := true, inTaking := true } cls none
-  let arms : List (Option (List SExpr) × SExpr) :=
-    if Choice.isBranchy tail then Choice.arms tail else [(none, tail)]
-  let mut armCode : Array (Option Expr × Ctx × List SExpr) := #[]
-  for (cs?, v) in arms do
-    let alts := (Choice.alts? v).getD [v]
-    match cs? with
-    | some cs =>
-      let (rcond, ca) ← elabSeq { cc with canFail := true, inTaking := true } cs none
-      armCode := armCode.push (some rcond.e, ca, alts)
-    | none => armCode := armCode.push (none, cc, alts)
+  let k ← fresh .int
+  let code ← elabLoopTailWith elabSeq cc tail k 0
+  let armCode := code.arms
   -- (every name to save in an item: the parameters, then the others)
   let mut tls : List Local := pls
-  for l in (newOf cc ++ armCode.toList.flatMap fun (_, ca, _) => newOf ca).reverse do
+  for l in (newOf cc ++ armCode.toList.flatMap fun (ca, _) => newOf ca).reverse do
     if !tls.any (·.slot == l.slot) then tls := tls ++ [l]
   let tupTy : Ty := .tup (.int :: tls.map (·.ty))
   let cellTy : Ty := .struct "$lazycell" [tupTy]
@@ -7176,7 +7179,6 @@ partial def elabLoopGen (ctx : Ctx) (p : Pos) (lp : List SExpr) : EM LoopGen := 
   let cell ← fresh cellTy
   let sp ← fresh .int
   let it ← fresh tupTy
-  let k ← fresh .int
   let has ← fresh .logic
   let nx ← fresh .int
   let item (kE : Expr) (vals : List Expr) : Expr := .prim .mkTup (kE :: vals)
@@ -7186,21 +7188,15 @@ partial def elabLoopGen (ctx : Ctx) (p : Pos) (lp : List SExpr) : EM LoopGen := 
       (.seq (.assign w (.prim .mkSome [.local cell]))
         (.seq (.assign sp (p2 .add (.local sp) (.lit (.int 1)))) vd))
   -- (the branch an item takes: the first alternative of it)
-  let total := armCode.foldl (fun n (_, _, as) => n + as.length) 0
-  let starts : List Nat := (armCode.toList.foldl (fun (acc, n) (_, _, as) => (acc ++ [n], n + as.length)) ([], 0)).1
-  let select : Expr := (armCode.toList.zip starts).foldr (fun ((c?, _, _), st) acc =>
-    let set : Expr := .seq (.assign k (.lit (.int (st : Nat)))) vd
-    match c? with
-    | some c => .ite c set acc
-    | none => set) vd
+  let total := code.next
+  let starts : List Nat := (armCode.toList.foldl (fun (acc, n) (_, as) => (acc ++ [n], n + as.length)) ([], 0)).1
+  let select := code.select
   -- (each alternative's code, numbered across the branches)
   let mut alts : Array Expr := #[]
   let mut values : Array (Nat × Expr) := #[]
-  let mut itemCode : Expr := rc.e
-  for (c?, _, _) in armCode do
-    if let some c := c? then itemCode := .seq itemCode c
+  let mut itemCode : Expr := .seq rc.e code.itemCode
   let mut argSet : Option Pos := none
-  for ((_, ca, as), start) in armCode.toList.zip starts do
+  for ((ca, as), start) in armCode.toList.zip starts do
     for (a, j) in as.zipIdx do
       let i := start + j
       let actx : Ctx := { ca with canFail := true, inTaking := true }
