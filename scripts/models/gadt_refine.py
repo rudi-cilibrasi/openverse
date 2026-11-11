@@ -570,6 +570,31 @@ for o in objs:
     expect.append(f"for cast {count}")
     main.append(f'    Print("for cast {{ForCast({o["name"]}, {threshold}, {limit})}}")')
 
+# Independent refinements must share the current mutable accumulator.
+pair_target = R417F.choice(list(MENU))
+pair_offset = R417F.randint(1, 5)
+loops.append(f'''ForPair(P:pair(a, b), Q:pair(c, d), Start:int where a:type, b:type, c:type, d:type):int =
+    var Total:int = Start
+    Values := for (V := if (D := {choice_target}[P]) then (D.C | D.C + {choice_offset}) else 0,
+        set Total += V, W := if (E := {pair_target}[Q]) then (E.C | E.C + {pair_offset}) else 0):
+        set Total += W
+        Print("for pair {{V}} {{W}} {{Total}}")
+        V + W
+    Print("paired state {{Total}} {{Values.Length}}")
+    Total''')
+for o in objs:
+    q, total = R417F.choice(objs), R417F.randint(-9, 9)
+    main.append(f'    Print("for paired {{ForPair({o["name"]}, {q["name"]}, {total})}}")')
+    left = [o['C'], o['C'] + choice_offset] if below(o['cls'], choice_target) else [0]
+    right = [q['C'], q['C'] + pair_offset] if below(q['cls'], pair_target) else [0]
+    for v in left:
+        total += v
+        for w in right:
+            total += w
+            expect.append(f"for pair {v} {w} {total}")
+    expect.append(f"paired state {total} {len(left) * len(right)}")
+    expect.append(f"for paired {total}")
+
 prog = [f"# genrefine seed {seed}"] + prog_cls + loops
 for f in funcs: prog.append(fix_iface(f, ftext(f)))
 prog += list(SHOWN.values())

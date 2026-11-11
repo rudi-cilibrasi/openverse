@@ -766,7 +766,8 @@ Main():void =
   arguments (#243), including written types that use that refinement. In a `for`,
   this currently requires a non-suspending consumer whose body is outside
   a failure context and has no non-local exit or non-rollback operation.
-  Other contexts remain tracked in #417. Failure of the selected branch's
+  Its suffix must also permit a shared continuation; lazy calls remain
+  unsupported. Other contexts remain tracked in #417. Failure of the selected branch's
   alternatives does not select the `else` branch.
 
   A choice inside a block is lifted with the block's clauses (#283): they

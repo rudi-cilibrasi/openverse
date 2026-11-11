@@ -273,13 +273,17 @@ In a `for`, an `if` with choices in its branches (#235's `$branchChoice`) is suc
 
 A refining cast's condition stays with its branch (`keepBranches`, #417).
 For a `for` whose body passes `forBodySafe` and cannot fail, `exclIter`
-puts the selected branch, suffix and body together under `$forFirst`.
-Its array is assigned in the current filter and read by its body, so the
+compiles the suffix and body once in a shared continuation, in their source
+context. The selected branch calls it under `$forFirst`, copying mutable
+captures back before traversing its returned array. This keeps nested
+refinements from retaining capture names that an outer lift renamed for
+copy-out. The array is assigned in the current filter and read by its body, so the
 first segment still rolls back with the preceding generator and later
 generators preserve their effects even when empty. `consumeBranches`
 renames condition locals and selects an option of that array; querying
 it after selection prevents failure of a branch's prefix from choosing
-the else branch. Failable and suspending bodies retain the old refusal.
+the else branch. Failable and suspending bodies and suffixes that cannot
+use a continuation (including lazy calls) retain the old refusal.
 Ordinary casts still use the selector path above.
 
 An `if` whose branches have more to lift than a choice of values (#283: a call of a function with several values, recursive or not, or a choice inside a branch's expression) is lifted whole too (`Choice.branchesLift`, which `hasLiftable` and `liftsAsIf` use). A block as a branch has its names renamed for its side (`$…'N`, `bifToExcl`), since the clauses after the `if` follow it in its path, with `$declNames` keeping the no-shadowing check, and its `defer:`s after its value (`deferLast`); not one with a range of its own, as for any block (#302). In a `for`, `bifToExcl` makes it the same exclusive choice, and `exclIter` lifts each branch's call or choice in its path, so the picked branch's own generators are the only ones (#331). Where the first success is taken, `prepare` makes it the choice of its branches, each guarded by the selector (`bifToExcl`, then `exclToChoice`), whose alternatives are lifted as any composed choice's (#296, #338). An `if` whose branches the elaborator takes as they are (`plainBranches`) keeps `elabBranchAlts`, so that code does not change, and so does an `F$all`'s body (`gensOf`, `guardBranches := false`), whose `arrOfE` gives the picked branch's array, whatever is in it. With no type written, the join is found by `elabBranchAlts` with `Ctx.typeOnly` set, which types a branch with something to lift as `option{…}` takes it: at its values' type. In a `for`, `exclIter` does so for `$joinOf`. Where the first success is taken, the guarded choice keeps `$joinOf` as its last argument, and `elabOneGo` types the binding at the join (for `set L = if …`, at `L`'s type) and drops it.

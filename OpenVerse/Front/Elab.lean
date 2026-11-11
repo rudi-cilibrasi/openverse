@@ -1954,17 +1954,50 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
               let cB := { cA with locals := { name := b.name, slot, ty, mutable := false } :: cA.locals }
               let (f, a, t) ← exclIter cB after more bd
               return (.seq codeA f, a, t)
-            let site := s!"$refineFor{b.pos.line}_{b.pos.col}{b.name}"
-            let consume (arm : SExpr) : SExpr :=
-              let cl := Choice.prepare [.decl b.pos b.name (some ty.toSTy) false arm]
-                (choiceValues cA) (choiceField cA) (site := site) (fieldOrder := choiceOrder cA)
-                (keepExcl := true) (keepBranches := choiceHasCast cA)
-              .optionLit b.pos (.app b.pos (.ident b.pos "$forFirst") [.block b.pos (cl ++ after ++ moreCl), bd] false)
-            let selected := Choice.consumeBranches i site consume
-            let values ← elabE { cA with canFail := true, inTaking := true } (.query b.pos selected) none
-            let .arr t := values.ty | eerr b.pos "internal: a refining for's values"
-            let slot ← fresh values.ty
-            return (.seq codeA (.assign slot values.e), .local slot, t)
+            let restCl := after ++ moreCl
+            let key := "f" ++ contKey cA b.pos b.name (i :: restCl ++ [bd])
+            let req := cA.types.loopRequests.find? (·.key == key)
+            let fits (l : Choice.FirstLift) : Bool :=
+              (l.specs.filter (["reads", "writes", "allocates"].contains ·)).all cA.fnFx.contains
+            let hasLoop := restCl.any
+              (Choice.anyE fun | .app _ (.ident _ "$loop") _ _ => true | _ => false)
+            if req.isNone && !hasLoop && (contForLiftOf cA b.pos b.name ty .void [i] restCl bd).toOption.isSome then
+              -- Elaborate the suffix once, in its source context. Otherwise
+              -- an inner lift can retain an outer var's old name after the
+              -- enclosing lift has renamed it for mutable copy-out.
+              let slot ← fresh ty
+              let cB := { cA with locals := { name := b.name, slot, ty, mutable := false } :: cA.locals }
+              let values ← elabForWith elabAlts elabBranchAlts elabE elabInts elabLoopGen elabSeq
+                cB p restCl bd (prepared := true) (firstDecides := true)
+              let .arr t := values.ty | eerr b.pos "internal: a refining for's suffix"
+              match contForLiftOf cA b.pos b.name ty t [i] restCl bd with
+              | .ok lift =>
+                modify fun st => { st with loopFirst := st.loopFirst ++
+                  [{ g := "", pos := b.pos, itemCode := .lit .void, argSet := none, lift := .ok lift }] }
+                return (codeA, .prim .userErr [], t)
+              | .error why => eerr b.pos s!"cannot share the refining for's suffix: {why} (#417)"
+            if let some l := req.filter fits then
+              let kv := s!"$refineFor{b.pos.line}_{b.pos.col}{b.name}v"
+              let kt := kv ++ "t"
+              let elem := kv ++ "e"
+              let call := SExpr.app b.pos (.ident b.pos l.name) l.args true
+              let callCl : List SExpr := if l.sets.isEmpty then [.decl b.pos kv none false call] else
+                [.decl b.pos kt none false call] ++
+                  l.sets.zipIdx.map (fun (n, j) => SExpr.set b.pos (.ident b.pos n) none
+                    (.app b.pos (.ident b.pos kt) [.int b.pos ((j + 1 : Nat) : Int)] false)) ++
+                  [.decl b.pos kv none false (.app b.pos (.ident b.pos kt) [.int b.pos 0] false)]
+              let site := s!"$refineFor{b.pos.line}_{b.pos.col}{b.name}"
+              let consume (arm : SExpr) : SExpr :=
+                let cl := Choice.prepare [.decl b.pos b.name (some ty.toSTy) false arm]
+                  (choiceValues cA) (choiceField cA) (site := site) (fieldOrder := choiceOrder cA)
+                  (keepExcl := true) (keepBranches := choiceHasCast cA)
+                .optionLit b.pos (.app b.pos (.ident b.pos "$forFirst")
+                  [.block b.pos (cl ++ callCl ++ [.gen b.pos elem none (.ident b.pos kv)]), .ident b.pos elem] false)
+              let selected := Choice.consumeBranches i site consume
+              let values ← elabE { cA with canFail := true, inTaking := true } (.query b.pos selected) none
+              let .arr t := values.ty | eerr b.pos "internal: a refining for's values"
+              let slot ← fresh values.ty
+              return (.seq codeA (.assign slot values.e), .local slot, t)
           let cl := fs[j]?.getD (.tuple p [])
           let (f, a, t) ← exclIter cA (Choice.bifToExcl cl ++ after) more bd
           return (.seq codeA f, a, t)
@@ -2302,7 +2335,10 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
         | .arr t => return ⟨.prim .flatten [loopE], .arr t⟩
         | _ => eerr p "internal: nested for"
   match pre with
-  | [] => build ctx gs body
+  | [] =>
+    let r ← build ctx gs body
+    if firstDecides && gs.isEmpty then return ⟨.prim .mkArr [r.e], .arr r.ty⟩
+    return r
   | _ =>
     -- (an exclusive choice among them, #314: its paths in this filter)
     -- (through a generator over one element, whose filters they are)

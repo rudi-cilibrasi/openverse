@@ -65,6 +65,13 @@ Typed(P:pair(a, b) where a:type, b:type):[]b =
     for (V:b = if (D := dup[P]) then (D.A | D.B) else P.B):
         E:[]b = array{V}
         V
+Independent(P:pair(a, b), Q:pair(c, d) where a:type, b:type, c:type, d:type):void =
+    var Total:int = 0
+    R := for (V := if (D := dup[P]) then (D.C | D.C + 1) else 0, set Total += V,
+        W := if (E := dup[Q]) then (E.C | E.C + 1) else 0):
+        set Total += W
+        V + W
+    Print("independent {Total} {R.Length}")
 Nested(P:pair(a, b) where a:type, b:type):void =
     for (V := if (false?) then -1 else if (D := dup[P], D.C > 0) then (D.C | D.C + 1) else 0):
         Print("nested {V}")
@@ -83,5 +90,9 @@ Main()<transacts>:void =
     Cleanup(Miss)
     for (V : Typed(Match)) { Print("typed {V}") }
     for (V : Typed(Miss)) { Print("typed {V}") }
+    Independent(Match, dup(string){A := "a", B := "b"})
+    Independent(Match, Miss)
+    Independent(Miss, Match)
+    Independent(Miss, Miss)
     Nested(Match)
     Nested(Miss)
