@@ -1,0 +1,8 @@
+recv 1
+arg 2
+default
+impl
+d 6
+none 2
+end 2
+exit=0

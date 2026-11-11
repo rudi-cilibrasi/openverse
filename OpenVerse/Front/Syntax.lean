@@ -211,6 +211,10 @@ partial def STy.bareNames : STy → List String
     a subclass gives it (#39). -/
 partial def STy.substNames (σ : List (String × STy)) : STy → STy
   | .name n => (σ.lookup n).getD (.name n)
+  -- The typed method prefix records this value's static result as an alias.
+  -- Materialize it when a lifted body's type substitution carries that alias.
+  | .app "$methodResult" [.name receiver] =>
+    (σ.lookup receiver).getD (.app "$methodResult" [.name receiver])
   | .arr t => .arr (t.substNames σ)
   | .opt t => .opt (t.substNames σ)
   | .tup ts => .tup (ts.map (STy.substNames σ))

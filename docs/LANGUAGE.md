@@ -913,9 +913,11 @@ Main():void =
   call (its implementations call each other through the dispatch), so
   it must be `<computes>`. Such a method is still checked as a member
   (`<final>`, its signature and effects against the one it overrides, an
-  abstract one implemented), but an override with several values must
-  return the same type as the method it overrides, not a narrower one, for
-  now. Since the dispatch is made before types, a call has the effects of
+  abstract one implemented). An override may return a subclass of its
+  declaration's result, including in a generic family. The receiver's
+  static class determines the result type: a `kennel.Get():dog` call
+  permits dog fields, while the same object called through
+  `shelter.Get():animal` exposes the animal result. A call has the effects of
   the method as the class that declares it declares them, whatever the
   receiver's type (an override may declare fewer). A parameter or local of the method named like a member is refused,
   as anywhere in a class.
