@@ -1,0 +1,6 @@
+Child()<suspends><computes>:void=
+    Print("start")
+    Sleep(0.0)
+    Print("after wait")
+Main()<computes>:void=
+    T:=spawn{Child()}

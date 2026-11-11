@@ -9996,7 +9996,6 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
     fsigs := fsigs ++ [([], VTy.void)]
     mainCall := .call (runIdx + 1) []
   fns := fns.map fun fn => { fn with body := Suspend.substCall resumeAnyMark (fun es => .call resumeAnyIdx es) fn.body }
-  fns := CompilerWrites.propagate fns0 fns
   -- (and the values of the scheduler's fields it adds, #362, for its prototype)
   return (fns, slotTys, fsigs, classTable, frameClasses, mainCall, framePins.toList,
     if leafy then [(match schedLit with | .lit v => v | _ => .none), .int (-1)] else [])
@@ -11673,6 +11672,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   slotTys := capturedSlots
   let fsigs0 := capturedSigs.fns
   fsigs := fsigs0
+  let beforeConcurrency := fns
   if usesConc then
     let (fns1, slotTys1, fsigs1, classTable1, frameClasses1, mainCall1, framePins1, schedMore) ←
       lowerOpening fun forced =>
@@ -11695,6 +11695,8 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
                       body := protoPrelude protoList mainCall }
     slotTys := slotTys.push []
     fsigs := fsigs ++ [([], if mainSig.suspends then VTy.void else mainSig.ret.toVTy env)]
+  if usesConc then
+    fns := CompilerWrites.propagate beforeConcurrency fns
   let P : Prog := { fns := fns.toList, main }
   if !P.check then
     let bad := P.fns.filter fun fn => (!fn.decides && fn.body.mayFail P) ||
