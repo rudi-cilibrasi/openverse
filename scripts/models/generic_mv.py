@@ -824,6 +824,10 @@ class Gen:
         # Model named/default arguments at every recursive edge, independently
         # of the compiler's argument binder. Some seeds use a mutual group.
         rng = random.Random(self.seed * 1000003 + 28307)
+        tuple_rng = random.Random(self.seed * 1000003 + 246140)
+        def positional(*args):
+            text = ','.join(args)
+            return f'({text})' if tuple_rng.random() < 0.5 else text
         meter, trace, even, odd, search, pair, eager, default, repeat, box, swap_all, swap_first = [self.fresh(n) for n in
             ('NamedMeter', 'NamedTrace', 'NamedEven', 'NamedOdd', 'NamedSearch', 'NamedPair', 'NamedEager', 'NamedDefault', 'NamedRepeat', 'NamedBox', 'NamedSwapAll', 'NamedSwapFirst')]
         mutual = rng.choice([False, True])
@@ -842,10 +846,12 @@ class Gen:
     Value''')
         for i, name in enumerate([even, odd] if mutual else [even]):
             target = [odd, even][i] if mutual else even
+            edge = positional('H', f'{trace}(H,"pos",N+{step})')
             self.consumers.append(f'''{name}(H:{meter}, N:int, ?A:int={default}[H,N,{offsets[i]}], ?B:int=A+{extra})<transacts><decides>:int =
     N <= {limit}
     Print("named visit {{N}} {{A}} {{B}} {{H.N}}")
-    A | {target}[?B:={trace}(H,"arg",N+{extra}),H,{trace}(H,"pos",N+{step})]''')
+    A | {target}[?B:={trace}(H,"arg",N+{extra}),{edge}]''')
+        generic_edge = positional('X', 'Other', 'N-1')
         self.consumers.append(f'''{search}(X:t, Y:t, H:{meter}, Cut:int where t:type)<transacts>:?t =
     var Current:t = X
     var Total:int = 0
@@ -862,7 +868,7 @@ class Gen:
 {repeat}(X:a,Other:b,N:int,?Y:a=block{{ O:=option{{ B:{box}(a)={box}{{V:=X|X}}; B }}; if(B:=O?)then B.V else X }} where a:type,b:type)<transacts><decides>:a =
     N > 0
     Print("named generic {{N}}")
-    Y | {repeat}[X,Other,N-1]
+    Y | {repeat}[{generic_edge}]
 {swap_all}(X:b,Y:b,Z:a,N:int where a:type,b:type)<transacts>:[]b = for(V:={repeat}[X,Z,N,?Y:=Y]): V
 {swap_first}(X:b,Y:b,Z:a,N:int where a:type,b:subtype(comparable))<transacts>:?b =
     if(V:={repeat}[X,Z,N,?Y:=Y],V=X)then option{{V}}else false''')

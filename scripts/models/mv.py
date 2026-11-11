@@ -334,6 +334,9 @@ R11 = random.Random(seed * 1000003 + 364)
 # ---- #371 (#283): at times two of the lazily taken generators (Gz) call each other instead of
 # themselves: a mutually recursive group, taken lazily as one. A generator of its own decides.
 R12 = random.Random(seed * 1000003 + 371)
+# Recursive tuple spelling changes only argument grouping. The CPS model
+# still evaluates the same arguments once, left to right, on self/mutual edges.
+RRecursiveTuple = random.Random(seed * 1000003 + 246140)
 # ---- #328 (with mvm): at times the test's class overrides Mv with several values of its own,
 #   MvT<override>(MpT:int):int = MpT * 3 | (super:)MvT(MpT) | MpT - 1
 # Run, the fields and the base MvT are then in a parent class, so the bare MvT(..) in Run
@@ -1245,6 +1248,8 @@ def show(e):
     if t in ('gcall', 'gself'):
         f = GFUNCS[e[1]]
         a = ", ".join(show(x) for x in e[2])
+        if t == 'gself' and RRecursiveTuple.random() < 0.5:
+            a = f"({a})"
         return f"{f['name']}[{a}]" if f['decides'] else f"{f['name']}({a})"
     if t == 'big':
         return f"(9223372036854775807 + {show(e[1])} * 0 + 1)"

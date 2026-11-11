@@ -1,0 +1,13 @@
+visit 2
+all 7 0
+receiver 1
+tuple 2
+visit 1
+all 7 2
+receiver 3
+tuple 4
+visit 0
+all 7 4
+visit 2
+first 7 4
+exit=0

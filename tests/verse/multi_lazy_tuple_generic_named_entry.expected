@@ -1,0 +1,23 @@
+visit 2
+visit 1
+visit 0
+all 9
+all 7
+all 7
+visit 2
+visit 1
+visit 0
+all t
+all s
+all s
+visit 2
+first 9
+visit 2
+first t
+method 2
+method t
+method 1
+method s
+method 0
+method s
+exit=0

@@ -3,7 +3,7 @@
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
-for kind in composed exclusive binding typed-first typed-for typed-exclusive refined-for refined-state refined-failure lazy-first lazy-for lazy-effect-first lazy-effect-for lazy-alt-first lazy-alt-for lazy-failure-for lazy-alt-failure-for lazy-exclusive-failure-for refined-lazy-failure refined-return refined-lazy-return refined-nested-body refined-nested-failure lazy-generic-first construct-first construct-for construct-failure method-first method-for method-failure lazy-named-first lazy-named-for lazy-named-generic-first bound-first bound-for bound-failure covariant-first covariant-for covariant-failure tuple-super-first tuple-super-for tuple-super-failure; do
+for kind in composed exclusive binding typed-first typed-for typed-exclusive refined-for refined-state refined-failure lazy-first lazy-for lazy-effect-first lazy-effect-for lazy-alt-first lazy-alt-for lazy-failure-for lazy-alt-failure-for lazy-exclusive-failure-for refined-lazy-failure refined-return refined-lazy-return refined-nested-body refined-nested-failure lazy-generic-first construct-first construct-for construct-failure method-first method-for method-failure lazy-named-first lazy-named-for lazy-named-generic-first bound-first bound-for bound-failure covariant-first covariant-for covariant-failure tuple-super-first tuple-super-for tuple-super-failure lazy-tuple-first lazy-tuple-for lazy-tuple-generic-first; do
   sizes=()
   for count in 4 8; do
     python3 - "$kind" "$count" >"$tmp/p.verse" <<'PY'
@@ -95,7 +95,7 @@ if kind.startswith('construct-'):
     print(f'Main(){specs}:void = Print("{{{call}}}")')
     sys.exit(0)
 if kind.startswith('lazy-'):
-    effectful = any(tag in kind for tag in ('effect', 'alt', 'failure', 'generic', 'named'))
+    effectful = any(tag in kind for tag in ('effect', 'alt', 'failure', 'generic', 'named', 'tuple'))
     failable = 'failure' in kind
     print('counter := class:\n    var N:int = 0')
     params = 'C:counter, N:int' if effectful else 'N:int'
@@ -103,6 +103,8 @@ if kind.startswith('lazy-'):
     if 'named' in kind:
         params += ', ?Step:int = 1'
         args += ', ?Step := Step'
+    if 'tuple' in kind:
+        args = f'({args})'
     effects = 'transacts' if effectful else 'computes'
     print(f'Lazy({params})<{effects}><decides>:int =\n    N >= 0')
     if effectful:

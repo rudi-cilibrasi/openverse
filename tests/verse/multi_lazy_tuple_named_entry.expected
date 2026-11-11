@@ -1,0 +1,17 @@
+note 20
+visit 2 20
+all 20 1
+visit 1 0
+all 0 1
+visit 0 0
+all 0 1
+note 40
+note 30
+visit 1 30
+visit 0 0
+first 0 3
+note 10
+inline 10 4
+note 3
+inline 3 5
+exit=0
