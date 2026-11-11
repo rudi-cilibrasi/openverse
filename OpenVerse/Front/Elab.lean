@@ -397,9 +397,9 @@ structure Ctx where
       of its own an earlier elaboration asked for (#275, #335), which is
       keyed by place and may take clauses that bind other names. -/
   typeOnly : Bool := false
-  /-- Isolated mutual-generator inference: return this call's canonical
-      argument types after normal binding, without requiring witnesses. -/
-  callArgsProbe : Option String := none
+  /-- Isolated mutual-generator inference: return this call's inferred type
+      arguments after normal binding, without requiring witnesses. -/
+  callInstanceProbe : Option String := none
   /-- (#283) Elaborating the call as written of an `$inlineOv(F, id, …)`,
       for types: the overload of `F` it takes is noted under `id`. -/
   ovPick : Option (Nat × String) := none
@@ -1881,6 +1881,16 @@ def firstLiftOf (ctx c2 : Ctx) (p : Pos) (g : String) (lp : List SExpr) (b : Str
     | none => throw s!"internal: name {n}"
   let (tps, typeParams, typeArgs) ← contTypes ctx p ((pls ++ caps).map (·.ty))
     (vty :: bls.map (·.ty)) written
+  -- A type determined by the entry's inputs may be absent from another
+  -- member's inputs. Every member must still infer the shared helper's
+  -- type parameters, including those used only by a producer result.
+  let memberInputs := instances.filterMap fun (h, σ) =>
+    if h == g then none else (ctx.sig? h).map fun sig =>
+      (sig.params.map (·.subst σ) ++ caps.map (·.ty)).flatMap Ty.params
+  let missing := tps.filter fun tp => memberInputs.any (!·.contains tp.name) &&
+    !typeParams.any (·.name == s!"$type{tp.name}")
+  let typeParams := typeParams ++ missing.map (fun tp => ({ name := s!"$type{tp.name}", ty := .name tp.name } : SParam))
+  let typeArgs := typeArgs ++ missing.map (fun tp => SExpr.app p (.ident p "$witness") [.ident p tp.name] false)
   let name := s!"$first{p.line}_{p.col}_{key.hash}" ++ (if p.file.isEmpty then "" else s!"_{p.file}")
   -- Every recursive edge, including a mutual member's, forwards the same
   -- witnesses; a type used only by the suffix has no producer argument.
@@ -1910,8 +1920,10 @@ def firstLiftOf (ctx c2 : Ctx) (p : Pos) (g : String) (lp : List SExpr) (b : Str
       let named := as.any fun | .decl _ n _ _ _ => n.startsWith "?" | _ => false
       if s.named.isEmpty && !named && as.length == tys.length then ([], as) else
       let n := s!"$recursiveArgs{q.line}_{q.col}"
+      let types := ((instances.lookup h).getD []).map fun (n, t) =>
+        SExpr.decl q n (some t.toSTy) false (.tuple q [])
       ([.decl q n (some (.tup (tys.map Ty.toSTy))) false
-          (.app q (.ident q "$callArgs") [.ident q h, .block q as] false)],
+          (.app q (.ident q "$callArgs") [.ident q h, .block q as, .block q types] false)],
         tys.zipIdx.map fun (_, j) => .app q (.ident q n) [.int q (j : Int)] false)
     | none => ([], as)
   let extraFns ← members.mapM fun
@@ -2756,7 +2768,7 @@ def defaultTypes (ctx : Ctx) (p : Pos) (s : Sig) (σ : List (String × Ty)) (d :
     argument's, left to right. An argument whose parameter type is already
     determined is elaborated against it, so `array{}` and `false` work. -/
 partial def elabGenericCallWith (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx) (p : Pos) (s : Sig) (args : List SExpr) (exp : Option Ty)
-    (packArgs : Bool := false) :
+    (packArgs : Bool := false) (inst : List (String × Ty) := []) :
     EM R := do
   let s := if packArgs then { s with ret := .tup s.params } else s
   -- named arguments (#119): positional ones, then named ones as written,
@@ -2786,7 +2798,7 @@ partial def elabGenericCallWith (elabE : Ctx → SExpr → Option Ty → EM R) (
   let given : List (SExpr × Nat) := (pos.zip (List.range npos)) ++ named.map fun (_, n, rhs) =>
     (rhs, npos + (s.named.findIdx? (·.1 == n)).getD 0)
   let ptys := s.params.toArray
-  let mut σ : List (String × Ty) := []
+  let mut σ : List (String × Ty) := inst
   if let some et := exp then
     if !(et == .void) then
       if let some σ' := s.ret.matchArg ctx.types σ et then σ := σ'
@@ -2885,8 +2897,8 @@ partial def elabGenericCallWith (elabE : Ctx → SExpr → Option Ty → EM R) (
     targs := targs.push t
   -- A lazy recursive edge needs the ordinary call's arguments/defaults,
   -- evaluated once in order, before pushing its next producer item.
-  if ctx.typeOnly && ctx.callArgsProbe == some s.name then
-    return ⟨.lit .void, .tup (s.params.map (·.subst σ))⟩
+  if ctx.typeOnly && ctx.callInstanceProbe == some s.name then
+    return ⟨.lit .void, .tup targs.toList⟩
   if packArgs then
     let values := if plain then es.toList else slots.toList.map (fun o => Expr.local o.get!)
     return ⟨steps.toList.foldr Expr.seq (.prim .mkTup values), s.ret.subst σ⟩
@@ -2911,14 +2923,14 @@ partial def elabGenericCallWith (elabE : Ctx → SExpr → Option Ty → EM R) (
     a method's receiver evaluated before its tuple. Normal call binding
     still checks the projections and evaluates named arguments and defaults. -/
 def elabRecursiveArgsWith (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx) (p : Pos)
-    (sig : Sig) (args : List SExpr) (types : List Ty) : EM R := do
+    (sig : Sig) (args : List SExpr) (types : List Ty) (inst : List (String × Ty) := []) : EM R := do
   let ty := Ty.tup types
   let isNamed : SExpr → Bool := fun | .decl _ n _ _ _ => n.startsWith "?" | _ => false
   let pos := args.filter (!isNamed ·)
   let off := if sig.pnames.head? == some "$Self" then 1 else 0
   let npos := sig.params.length - sig.named.length
   if pos.length != off + 1 || npos < off + 2 then
-    return ← elabGenericCallWith elabE ctx p sig args (some ty) (packArgs := true)
+    return ← elabGenericCallWith elabE ctx p sig args (some ty) (packArgs := true) (inst := inst)
   let mut ctx' := ctx
   let mut pre : List Expr := []
   let mut receiverArgs : List SExpr := []
@@ -2940,18 +2952,18 @@ def elabRecursiveArgsWith (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : 
   let parts := (List.range (npos - off)).map fun (i : Nat) =>
     SExpr.app tupleArg.pos (.ident tupleArg.pos name) [.int tupleArg.pos (i : Int)] false
   let packed ← elabGenericCallWith elabE ctx' p sig (receiverArgs ++ parts ++ args.filter isNamed)
-    (some ty) (packArgs := true)
+    (some ty) (packArgs := true) (inst := inst)
   return ⟨(pre ++ [Expr.assign slot tuple]).foldr Expr.seq packed.e, packed.ty⟩
 
 /-- Canonical arguments for a lazy producer edge. Calls already in
     positional form retain their lowering; tuple and named calls share
     the binding used by effectful first-success helpers. -/
 def elabLoopArgsWith (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx) (p : Pos) (g : String)
-    (args : List SExpr) (params : List Local) (slots : List Nat) : EM Expr := do
+    (args : List SExpr) (params : List Local) (slots : List Nat) (inst : List (String × Ty) := []) : EM Expr := do
   let named := args.any fun | .decl _ n _ _ _ => n.startsWith "?" | _ => false
   if let some sig := (ctx.sig? g).filter (fun s => !s.named.isEmpty || named || args.length != params.length) then
     let ty := Ty.tup (params.map (·.ty))
-    let packed ← elabRecursiveArgsWith elabE ctx p sig args (params.map (·.ty))
+    let packed ← elabRecursiveArgsWith elabE ctx p sig args (params.map (·.ty)) inst
     let packet ← fresh ty
     let assign := (slots.zipIdx).foldr (fun (sl, j) acc =>
       Expr.seq (.assign sl (.prim (.tupGet j) [.local packet])) acc) (.lit .void)
@@ -3720,10 +3732,10 @@ partial def elabLoopGenGroupWith (elabE : Ctx → SExpr → Option Ty → EM R)
             if (instances.lookup target).isSome then continue
             let some targetSig := ctx.sig? target | eerr q s!"internal: no signature for {target} (#283)"
             let attempt ← tryCatch (do
-              let packet ← elabE { ca with callArgsProbe := some target }
+              let packet ← elabE { ca with callInstanceProbe := some target }
                 (.app q (.ident q target) as targetSig.decides) (some rty)
               let .tup types := packet.ty | eerr q "internal: a mutual argument type packet"
-              pure (Except.ok (← loopInstanceOf ctx q targetSig types))) (fun err => pure (.error err))
+              pure (Except.ok ((targetSig.tparams.map (·.1)).zip types))) (fun err => pure (.error err))
             match attempt with
             | .ok σ =>
               instances := instances ++ [(target, σ)]
@@ -3838,7 +3850,7 @@ partial def elabLoopGenGroupWith (elabE : Ctx → SExpr → Option Ty → EM R)
             argSet := args'.findSome? fun a' =>
               if Choice.anyE (fun | .set .. => true | _ => false) a' then some a'.pos else none
           let ts ← hpls.mapM fun l => fresh l.ty
-          let assigns ← elabLoopArgsWith elabE actx q h args' hpls ts
+          let assigns ← elabLoopArgsWith elabE actx q h args' hpls ts ((instances.lookup h).getD [])
           itemCode := .seq itemCode assigns
           alts := alts.push (.ite assigns (.seq cont (push (startOf jm ts))) cont)
         | none =>
@@ -4153,6 +4165,14 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
     if let some (.tup types) := exp then
       return ← elabRecursiveArgsWith elabE ctx p sig args types
     elabGenericCallWith elabE ctx p sig args exp (packArgs := true)
+  | .app p (.ident _ "$callArgs") [.ident _ g, .block _ args, .block _ types] false =>
+    let some sig := ctx.sig? g | eerr p s!"internal: no signature for {g}'s arguments"
+    let inst ← types.mapM fun
+      | .decl q n (some t) _ _ => do pure (n, ← resolveTy ctx.types q t)
+      | _ => eerr p "internal: a recursive call's type instance"
+    if let some (.tup types) := exp then
+      return ← elabRecursiveArgsWith elabE ctx p sig args types inst
+    elabGenericCallWith elabE ctx p sig args exp (packArgs := true) (inst := inst)
   | .app p (.ident _ "$paramDefault") [.ident _ f, .ident _ n, .block _ earlier, d] false =>
     -- (#283) the default of a named parameter an inlined call of a function
     -- with several values omits: in the context a call gives it (the
