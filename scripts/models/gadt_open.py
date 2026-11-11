@@ -619,12 +619,18 @@ if R7.random() < 0.5:
     expect.extend(["cs 2", f"cs {n}"])
 # two interfaces at different type arguments (#351, views): wboth(t, u) gives wget its first
 # parameter and wput its second, so code generic over wput(u) dispatches through a view; Wp counts
-# its calls on the object in a var field, wone answers 100, and casts from wput go back to wboth
+# its calls on the object in a var field, wone answers 100, and casts from wput go back to wboth.
+# The same view serves field accesses, including a field inherited from wtagged. The leading
+# field of wget shifts their positions in wboth relative to wone.
 W_TEXT = ''
 if R9.random() < 0.5:
     W_TEXT = '''wget(t:type) := interface:
+    WPad:int = 0
     Wg()<transacts>:t
-wput(u:type) := interface:
+wtagged(u:type) := interface:
+    var WLast:?u = false
+wput(u:type) := interface(wtagged(u)):
+    var WItems:[]u = array{}
     Wp(X:u)<transacts>:int
 wboth(t:type, u:type) := class(wget(t), wput(u)):
     V:t
@@ -635,8 +641,19 @@ wboth(t:type, u:type) := class(wget(t), wput(u)):
         N
 wone(u:type) := class(wput(u)):
     Wp<override>(X:u)<transacts>:int = 100
+wnested(t:type, a:type, b:type) := class(wboth(t, tuple(a, b))):
+    WExtra:int = 0
 WCount(P:wput(u), X:u where u:type)<transacts>:int = P.Wp(X)
-WGet(G:wget(t) where t:type)<transacts>:t = G.Wg()'''
+WGet(G:wget(t) where t:type)<transacts>:t = G.Wg()
+WLastOf(P:wtagged(u) where u:type)<transacts>:?u = P.WLast
+WFields(P:wput(u) where u:type)<transacts>:tuple(?u, ?u) =
+    (WLastOf(P), option{P.WItems[0]})
+WInit(P:wput(u), X:u where u:type)<transacts>:void =
+    set P.WLast = option{X}
+    set P.WItems = array{X}
+WReplace(P:wput(u), X:u where u:type)<transacts><decides>:void =
+    set P.WLast? = X
+    set P.WItems[0] = X'''
     for i in range(R9.choice([1, 1, 2])):
         t, u = rtype(2), rtype(2); (x, xv), (y, _) = lit2(t), lit2(u)
         main.append(f"    Wb{i} := wboth({tyt(t)}, {tyt(u)}){{V := {x}}}")
@@ -645,12 +662,43 @@ WGet(G:wget(t) where t:type)<transacts>:t = G.Wg()'''
         main.append(f'    Print("wb{i}: {calls} {{{shname(t)}(WGet(Wb{i}))}}")')
         expect.append(f"wb{i}: {' '.join(str(j + 1) for j in range(k))} {show(xv, t)}")
     if R9.random() < 0.6:
-        t, u = rtype(2), rtype(2); (x, _), (y, _) = lit2(t), lit2(u)
-        kinds = [R9.random() < 0.5 for _ in range(R9.randint(1, 3))]
-        elems = [f"wboth({tyt(t)}, {tyt(u)}){{V := {x}}}" if b else f"wone({tyt(u)}){{}}" for b in kinds]
-        main.append(f"    Wps:[]wput({tyt(u)}) = array{{{', '.join(elems)}}}")
-        main.append(f'    for (P : Wps) {{ Print("wp {{P.Wp({y})}} {{if (B := wboth[P]) then "c" else "n"}}") }}')
-        expect.extend(f"wp {1 if b else 100} {'c' if b else 'n'}" for b in kinds)
+        t, u = rtype(2), rtype(2)
+        nested = R9.random() < 0.5
+        if nested:
+            u = Tup(u, R9.choice([INT, STR, LOG]))
+        x, _ = lit2(t)
+        y, yv = lit2(u)
+        z, zv = lit2(u)
+        while zv == yv:
+            z, zv = lit2(u)
+        receivers = [
+            (f"wboth({tyt(t)}, {tyt(u)}){{V := {x}}}", 'wp 1 c'),
+            (f"wone({tyt(u)}){{}}", 'wp 100 n'),
+        ]
+        if nested:
+            receivers.append((f"wnested({tyt(t)}, {tyt(u[1])}, {tyt(u[2])}){{V := {x}}}", 'wp 1 c'))
+        R9.shuffle(receivers)
+        elems = ', '.join(expr for expr, _ in receivers)
+        main.append(f"    Wps:[]wput({tyt(u)}) = array{{{elems}}}")
+        main.append('    for (P : Wps):')
+        main.append(f'        Print("wp {{P.Wp({y})}} {{if (B := wboth[P]) then "c" else "n"}}")')
+        fmt = shname(Opt(u))
+        for i, writes in enumerate([
+            [],
+            [f'WInit(P, {y})', f'if (WReplace[P, {z}], false?) then Err()'],
+            [f'if (WReplace[P, {z}]) then {{}} else Err()'],
+        ]):
+            main.extend(f'        {write}' for write in writes)
+            main.append(f'        WF{i} := WFields(P)')
+            main.append(f'        Print("fields {{{fmt}(WF{i}(0))}} {{{fmt}(WF{i}(1))}}")')
+        before, after = (show(('some', v), Opt(u)) for v in (yv, zv))
+        for _, dispatch_output in receivers:
+            expect.extend([
+                dispatch_output,
+                'fields n n',
+                f'fields {before} {before}',
+                f'fields {after} {after}',
+            ])
 # Sz's fstE rule with its call in the condition: a failed inner call is the
 # else (1), and its write to the inner pair's Hits is rolled back
 if SZ_COND:
