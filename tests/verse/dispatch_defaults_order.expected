@@ -1,0 +1,13 @@
+a 7
+b 8
+body 4 7 8
+r 15
+given-b 20
+a 7
+body 4 7 20
+r 27
+first 20
+second 10
+body 4 10 20
+r 30
+exit=0

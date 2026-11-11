@@ -1,5 +1,3 @@
-# expect: 10:52: cannot dispatch Put to class ib yet when a named argument's default computed by code uses an argument at a type, a, that the dispatch refines
-# (#142: X is an a where the dispatch is, an int in ib's default)
 Tick(S:string, N:int)<transacts>:int =
     Print("tick {S}")
     N

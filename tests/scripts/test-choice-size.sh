@@ -3,7 +3,7 @@
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
-for kind in composed exclusive binding typed-first typed-for typed-exclusive refined-for refined-state refined-failure lazy-first lazy-for lazy-effect-first lazy-effect-for lazy-alt-first lazy-alt-for lazy-failure-for lazy-alt-failure-for lazy-exclusive-failure-for refined-lazy-failure refined-return refined-lazy-return refined-nested-body refined-nested-failure lazy-generic-first construct-first construct-for construct-failure method-first method-for method-failure lazy-named-first lazy-named-for lazy-named-generic-first bound-first bound-for bound-failure covariant-first covariant-for covariant-failure tuple-super-first tuple-super-for tuple-super-failure lazy-tuple-first lazy-tuple-for lazy-tuple-generic-first immediate-suspends-refined immediate-suspends-composed immediate-suspends-exclusive immediate-suspends-nested refined-retry-first super-first super-for super-failure super-body mutual-generic-first mutual-generic-for mutual-generic-alt-first suspends-return suspends-return-generic suspends-return-lazy outer-effect-refined outer-effect-composed outer-effect-exclusive clause-return-refined clause-return-composed clause-return-exclusive own-method-first own-method-for own-method-failure own-method-covariant-first; do
+for kind in composed exclusive binding typed-first typed-for typed-exclusive refined-for refined-state refined-failure lazy-first lazy-for lazy-effect-first lazy-effect-for lazy-alt-first lazy-alt-for lazy-failure-for lazy-alt-failure-for lazy-exclusive-failure-for refined-lazy-failure refined-return refined-lazy-return refined-nested-body refined-nested-failure lazy-generic-first construct-first construct-for construct-failure method-first method-for method-failure lazy-named-first lazy-named-for lazy-named-generic-first bound-first bound-for bound-failure covariant-first covariant-for covariant-failure tuple-super-first tuple-super-for tuple-super-failure lazy-tuple-first lazy-tuple-for lazy-tuple-generic-first immediate-suspends-refined immediate-suspends-composed immediate-suspends-exclusive immediate-suspends-nested refined-retry-first super-first super-for super-failure super-body mutual-generic-first mutual-generic-for mutual-generic-alt-first suspends-return suspends-return-generic suspends-return-lazy outer-effect-refined outer-effect-composed outer-effect-exclusive clause-return-refined clause-return-composed clause-return-exclusive own-method-first own-method-for own-method-failure own-method-covariant-first dispatch-default-first dispatch-default-for dispatch-default-failure; do
   sizes=()
   for count in 4 8; do
     python3 - "$kind" "$count" >"$tmp/p.verse" <<'PY'
@@ -91,6 +91,20 @@ child(u:type) := class(base(u)):
     br = ('[',']') if kind.endswith('failure') else ('(',')')
     fx = '<decides>' if kind.endswith('failure') else ''
     print(f'Main(){fx}:void = Print("{{Run{br[0]}{args}{br[1]}}}")')
+    sys.exit(0)
+if kind.startswith('dispatch-default-'):
+    print('box(t:type) := class:\n    Get(?X:[]t=Concatenate())<computes>:int=X.Length')
+    print('fixed := class(box(int)):\n    A:int=1\n    Get<override>(?X:[]int=block{Print("default");array{A}})<computes>:int=X.Length')
+    clauses = ','.join(f'A{i}:=(Two(0)|Two(2)),N{i}:=P.Get()' for i in range(count))
+    if kind == 'dispatch-default-first':
+        print(f'Run(P:box(t) where t:type)<transacts>:int=if({clauses})then N0 else -1')
+    else:
+        specs = '<decides>' if kind == 'dispatch-default-failure' else ''
+        check = '\n        1=1' if specs else ''
+        print(f'Run(P:box(t) where t:type)<transacts>{specs}:int=\n    R:=for({clauses}):{check}\n        N0\n    R.Length')
+    specs = '<decides>' if kind == 'dispatch-default-failure' else ''
+    call = 'Run[fixed{}]' if specs else 'Run(fixed{})'
+    print(f'Main()<transacts>{specs}:void=Print("{{{call}}}")')
     sys.exit(0)
 if kind == 'refined-retry-first':
     print('pair(a:type,b:type) := class { A:a; B:b }')

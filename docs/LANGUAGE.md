@@ -576,6 +576,13 @@ circle := class(shape, labelled):
   interface, also for classes below that fix some of those type arguments
   (`ib := class(both(int, string))`) or add their own, and its fields are
   read and set through it too (each class's, at its own place).
+  Omitted named arguments use the selected implementation's defaults,
+  including computed defaults that read its receiver or earlier arguments
+  and defaults whose types are opened or refined by dispatch. Supplied
+  arguments run once in written order, then omitted defaults run in
+  declaration order. Their effects count at the caller. Background tasks
+  started in a suspending default belong to the caller; tasks started by
+  the method's body belong to that method.
   The interfaces a class lists may not reach one interface at two instances
   (`class(pi(int), pi(string))`). Inherited field defaults see their
   own class's type parameters. A cast `square[S]` takes its type arguments
@@ -621,12 +628,7 @@ circle := class(shape, labelled):
     condition (the first, or one after clauses that print, change an
     object and call nothing), whose branch is then a function of its own
     as described above (#243), or to one neither above
-    nor below it, and a named argument's default computed by code (not a
-    literal) in a call through one, or to a class that fixes type
-    arguments from generic code, when it reads the receiver (its field),
-    mentions the type arguments the dispatch opens, or uses an argument at
-    a type the dispatch refines (#351: others are evaluated in the call, as
-    that class's, once); a cast `T[X]` whose type
+    nor below it; a cast `T[X]` whose type
     arguments agree with `X`'s only under a refinement (`dup[P]` for
     `P:pair(a, b)`) other than as a clause of an `if`'s condition (the
     first, or one after clauses that print nothing, change no object and

@@ -66,117 +66,21 @@ partial def _root_.OpenVerse.Expr.pureArg : Expr → Bool
   | .prim .mkTup es => es.all Expr.pureArg
   | _ => false
 
-/-- `seq (assign t₁ v₁) (… (call f es))` as the call with each `vᵢ` (a
-    literal or a slot) in place of `tᵢ` in its arguments: a call whose
-    named arguments went through temporaries (#142). `typed` gives, for
-    some temporaries, what to put instead of their literal. -/
-partial def Expr.inlineArgTemps (e : Expr) (typed : List (Nat × Expr) := []) : Option Expr :=
-  -- (each temporary's value: one with no effect, or the one `typed` gives,
-  -- which has the earlier ones' in it already, a default computed by code,
-  -- evaluated in the call, #351; put in the call's arguments once, so a
-  -- value read there, `.local t`, stays a read)
+/-- Inline the pure argument temporaries around a dispatch call. Defaults
+    are evaluated by a separate typed implementation helper. -/
+partial def Expr.inlineArgTemps (e : Expr) : Option Expr :=
   let rec collect : Expr → Option (List (Nat × Expr) × Nat × List Expr)
     | .call f es => some ([], f, es)
-    | .seq (.assign t v0) rest =>
-      match (typed.lookup t).orElse (fun _ => if v0.pureArg then some v0 else none) with
-      | none => none
-      | some v => (collect rest).map fun (ts, f, es) => ((t, v) :: ts, f, es)
+    | .seq (.assign t v) rest =>
+      if v.pureArg then (collect rest).map fun (ts, f, es) => ((t, v) :: ts, f, es) else none
     | _ => none
-  -- (without `typed`, a temporary's value may be an earlier one's: as it is)
   let rec resolve (ts : List (Nat × Expr)) (fuel : Nat) (a : Expr) : Expr :=
     match fuel, a with
-    | f + 1, .local t' => match ts.lookup t' with
-      | some v => if typed.isEmpty then resolve ts f v else v
+    | f + 1, .local t => match ts.lookup t with
+      | some v => resolve ts f v
       | none => a
     | _, a => a
   (collect e).map fun (ts, f, es) => .call f (es.map (resolve ts (ts.length + 1)))
-
-/-- A literal with no type of its own: `false`, an empty `array{}`, `map{}`
-    or `""`, or a tuple holding one. -/
-partial def _root_.OpenVerse.Value.untyped : Value → Bool
-  | .none => true
-  | .arr a => a.isEmpty
-  | .tup vs => vs.any Value.untyped
-  | _ => false
-
-/-- A default with no type of its own: such a literal, or a tuple of
-    values holding one (`(false, 1)`). -/
-partial def _root_.OpenVerse.Expr.untypedDefault : Expr → Bool
-  | .lit v => v.untyped
-  | .prim .mkTup es => es.any Expr.untypedDefault
-  | _ => false
-
-/-- The temporaries of such a call (`seq (assign t v) (… call)`) whose
-    value is an omitted named argument's default with no type of its own
-    (`Expr.untypedDefault`, #175). -/
-def _root_.OpenVerse.Expr.untypedArgTemps : Expr → List Nat
-  | .seq (.assign t v) rest => if v.untypedDefault then t :: Expr.untypedArgTemps rest else Expr.untypedArgTemps rest
-  | .seq _ rest => Expr.untypedArgTemps rest
-  | _ => []
-
-/-- The value temporary `t` of such a call is assigned. -/
-def _root_.OpenVerse.Expr.argTempValue (t : Nat) : Expr → Expr
-  | .seq (.assign t' v) rest => if t' == t then v else Expr.argTempValue t rest
-  | _ => .lit .none
-
-/-- The arguments of such a call after its receiver. -/
-def _root_.OpenVerse.Expr.argsAfterRecv : Expr → List Expr
-  | .call _ (_ :: es) => es
-  | .seq _ rest => Expr.argsAfterRecv rest
-  | _ => []
-
-/-- The temporaries of such a call and their values, in order (#351). -/
-def _root_.OpenVerse.Expr.argTemps : Expr → List (Nat × Expr)
-  | .seq (.assign t v) rest => (t, v) :: Expr.argTemps rest
-  | .seq _ rest => Expr.argTemps rest
-  | _ => []
-
-/-- Whether `e` reads or writes slot `i` (#351). -/
-partial def _root_.OpenVerse.Expr.usesSlot (i : Nat) : Expr → Bool
-  | .local j => j == i
-  | .assign j e => j == i || e.usesSlot i
-  | .seq a b => a.usesSlot i || b.usesSlot i
-  | .prim _ es | .call _ es | .heap _ es => es.any (·.usesSlot i)
-  | .ite c t e => c.usesSlot i || t.usesSlot i || e.usesSlot i
-  | .forE j it f b => j == i || it.usesSlot i || f.usesSlot i || b.usesSlot i
-  | .loop b | .ret b | .print b => b.usesSlot i
-  | .lit _ | .brk => false
-
-/-- A value that may be computed twice (#351): no effect and no failure,
-    made of literals and slots (an array, tuple or option of them too), as
-    a default that another uses is put in both. -/
-partial def _root_.OpenVerse.Expr.dupOK : Expr → Bool
-  | .lit _ | .local _ => true
-  | .prim .mkTup es | .prim .mkArr es | .prim .mkSome es => es.all Expr.dupOK
-  | .ite (.prim .fail []) (.local _) v => v.dupOK
-  | _ => false
-
-/-- The slots `e` reads (#351). -/
-partial def _root_.OpenVerse.Expr.slotsRead : Expr → List Nat
-  | .local j => [j]
-  | .assign _ e | .loop e | .ret e | .print e => e.slotsRead
-  | .seq a b => a.slotsRead ++ b.slotsRead
-  | .prim _ es | .call _ es | .heap _ es => es.flatMap (·.slotsRead)
-  | .ite c t e => c.slotsRead ++ t.slotsRead ++ e.slotsRead
-  | .forE _ it f b => it.slotsRead ++ f.slotsRead ++ b.slotsRead
-  | .lit _ | .brk => []
-
-/-- `e` with its reads of slot `i` made `v` (#351). -/
-partial def _root_.OpenVerse.Expr.substSlot (e : Expr) (i : Nat) (v : Expr) : Expr :=
-  let go := fun (x : Expr) => x.substSlot i v
-  match e with
-  | .local j => if j == i then v else .local j
-  | .assign j x => .assign j (go x)
-  | .seq a b => .seq (go a) (go b)
-  | .prim q es => .prim q (es.map go)
-  | .call f es => .call f (es.map go)
-  | .heap h es => .heap h (es.map go)
-  | .ite c t x => .ite (go c) (go t) (go x)
-  | .forE j it f b => .forE j (go it) (go f) (go b)
-  | .loop b => .loop (go b)
-  | .ret b => .ret (go b)
-  | .print b => .print (go b)
-  | x => x
 
 structure SourceStorage where
   frame : String
@@ -230,6 +134,10 @@ structure Sig where
 
 /-- How many hidden parameters (values of type arguments) a function takes. -/
 def Sig.ndicts (s : Sig) : Nat := s.tparams.length - s.selfTps.length
+
+/-- Default-dispatch helpers are private forwarding functions, with defaults
+    evaluated in the selected implementation's own type context. -/
+def defaultBridge (n : String) : Bool := (n.splitOn "$dispatchDefaults").length > 1
 
 /-- Whether function `s` fits the closed function type `t` other than at its
     own types, as the value classes made for a type asked for do (#214, as
@@ -2876,7 +2784,9 @@ partial def elabGenericCallWith (elabE : Ctx → SExpr → Option Ty → EM R) (
         -- Written types belong to the callee, with the arguments inferred
         -- so far. A caller's type aliases are outside this default's scope.
         let (types, d) ← defaultTypes ctx p s σ d
-        let dctx := { ctx with locals := earlier, selfClass := selfC, inParamDefault := true,
+        let dctx := { ctx with locals := earlier, selfClass := selfC,
+                               selfMethod := if selfC.isSome then (s.name.splitOn ".").getLast? else none,
+                               inParamDefault := true,
                                types,
                                inLoop := false, canFail := ctx.canFail && s.decides,
                                suspends := ctx.suspends && s.suspends,
@@ -3937,6 +3847,11 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
     set st0
     return ← elabE { ctx with constructHints := some hints, constructOrigin := some ctx.frameName } se exp
   match se with
+  | .app _ (.ident _ "$defaultContext") [.block _ stack, .int _ flags, call] false =>
+    let defaults := stack.filterMap fun
+      | .tuple _ [.str _ [.text f], .str _ [.text n]] => some (f, n)
+      | _ => none
+    elabE { ctx with defaults := defaults ++ ctx.defaults, inRepeat := flags % 2 == 1, inDefer := flags / 2 % 2 == 1, inDefaultCheck := flags / 4 % 2 == 1 } call exp
   | .app _ (.ident _ "$sourceSuper")
       [.str _ [.text c], .str _ [.text method], .ident _ "Self", call] false =>
     elabE { ctx with selfClass := some c, selfMethod := if method.isEmpty then none else some method } call exp
@@ -5701,7 +5616,9 @@ partial def elabAppBase (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (b
               let key := (s.name, s!"?{n}")
               if ctx.defaults.contains key then
                 eerr p s!"the default of ?{n} of {name} uses itself (a call of {name} that omits ?{n})"
-              let dctx := { ctx with locals := earlier, selfClass := selfC, inParamDefault := true,
+              let dctx := { ctx with locals := earlier, selfClass := selfC,
+                                     selfMethod := if selfC.isSome then (s.name.splitOn ".").getLast? else none,
+                                     inParamDefault := true,
                                      inLoop := false, canFail := ctx.canFail && s.decides,
                                      suspends := ctx.suspends && s.suspends,
                                      defaults := key :: ctx.defaults }
@@ -5922,110 +5839,8 @@ partial def elabAppBase (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (b
         if msRet.params.any ownNames.contains then
           eerr p s!"cannot infer the type parameters of {m} from the arguments of this call"
         let mut acc : Expr := .prim .userErr []   -- no option set: unreachable
-        -- (an omitted named argument's default with no type of its own,
-        -- `false`, `array{}` or `map{}`, goes in a refined call `rcE` of
-        -- implementation `fname` of class `e` as `if (fail) then T else
-        -- false`, with `T` its temporary, whose type is the parameter's, so
-        -- that the checker infers it, as the rule infers the other
-        -- arguments' types, #175)
-        -- (when the dispatch opens type arguments (`opens`), #209, the
-        -- parameter's type in the implementation mentions them, and the
-        -- caller has no names for them: the temporary has the declaration's
-        -- type at the receiver's type arguments, which the dispatch's
-        -- refinement makes the implementation's)
-        -- (the refusals below are not expected: the temporary is an
-        -- argument of the call, which is in the implementation's parameter
-        -- order, and an override has its method's named parameters, in
-        -- order, `sameSigIn`; kept, as the old one, should those change)
-        let typedDefaults (fname e : String) (rcE : Expr) (opens : Bool) (rslot : Nat) (μ : List (String × Ty)) :
-            EM (List (Nat × Expr)) := do
-          let refuseOpen : EM Unit :=
-            eerr p s!"cannot dispatch {m} to class {e} yet when a named argument's default has no type of its own: its temporary would need the type arguments the dispatch opens (#209)"
-          let fs := (ctx.sig? fname).get!
-          let nposF := fs.params.length - fs.named.length
-          let mut typed : List (Nat × Expr) := []
-          for t in rcE.untypedArgTemps do
-            let mut tv := t
-            if opens then
-              let some i := rcE.argsAfterRecv.findIdx? (fun a => match a with | .local t' => t' == t | _ => false)
-                | refuseOpen
-              let some (n, _) := (if i + 1 < nposF then none else fs.named[i + 1 - nposF]?) | refuseOpen
-              let some j := ms.named.findIdx? (·.1 == n) | refuseOpen
-              let τ := (declTy ms.params[npos + j]!).subst σu
-              if τ.params.any ownNames.contains then refuseOpen
-              -- (the declaration's type must hold the default: an option
-              -- for `false`, an array or a map for `array{}`, `map{}` or
-              -- `""`; one at a bare type parameter, `?Extra:t`, cannot,
-              -- whatever the implementation's)
-              -- (a tuple's parts each, those with no type of their own)
-              let rec holdsV : Value → Ty → Bool
-                | .none, .opt _ => true
-                | .arr _, .arr _ | .arr _, .map _ _ => true
-                | .tup vs, .tup ts => vs.length == ts.length && (vs.zip ts).all fun (v, u) => !v.untyped || holdsV v u
-                | _, _ => false
-              let rec holds : Expr → Ty → Bool
-                | .lit v, u => holdsV v u
-                | .prim .mkTup es, .tup ts => es.length == ts.length && (es.zip ts).all fun (e, u) => !e.untypedDefault || holds e u
-                | _, _ => false
-              let holds := holds (rcE.argTempValue t) τ
-              if !holds then
-                eerr p s!"cannot dispatch {m} to class {e} yet when its default for ?{n} has no type of its own: {m} declares ?{n} as {τ.show} there, which the dispatch would have to open to hold the default; give ?{n} at the call (#209)"
-              tv ← fresh τ
-            typed := typed ++ [(t, .ite (.prim .fail []) (.local tv) (.local t))]
-          -- (#351) every temporary's value in the call, in order, each with
-          -- the earlier ones' in it (a default sees the parameters before
-          -- it), so none is read where its assignment no longer is: one
-          -- with no type of its own at its declaration's, as above; and a
-          -- default computed by code as its code, which the dispatch's
-          -- branch evaluates after the arguments before it, as the
-          -- temporaries did, typed where the dispatch is (its rule types the
-          -- call's arguments there): so not one that reads the receiver,
-          -- uses an argument at a type the dispatch refines, or has a type
-          -- that mentions the type arguments it opens; one that another uses
-          -- stores its value where it is, for that one to read
-          let pureF (x : Expr) : Bool := x.pureArg || match x with
-            | .ite (.prim .fail []) (.local _) v => v.pureArg
-            | _ => false
-          let temps := rcE.argTemps
-          let typedTv : List (Nat × Expr) := typed
-          let mut final : List (Nat × Expr) := []
-          for (t, v) in temps do
-            let what := s!"cannot dispatch {m} to class {e} yet when a named argument's default computed by code"
-            -- (the typed form of one with no type of its own, around its value)
-            let mut v' := match typedTv.lookup t with
-              | some (.ite c tvE _) => .ite c tvE v
-              | _ => v
-            for (t', f') in final do
-              if v'.usesSlot t' then
-                if f'.dupOK then v' := v'.substSlot t' f'
-                else
-                  -- (one computed by code: its value stored where it is in the
-                  -- call, which evaluates its arguments in order, and read
-                  -- here, so it runs once)
-                  final := final.map fun (a, b) => if a == t' then (a, match b with
-                    | .assign .. => b
-                    | _ => .assign t' b) else (a, b)
-            if !pureF v' then
-              if v'.usesSlot rslot then eerr p s!"{what} reads the receiver, as its field (#351)"
-              -- (an argument of the call at a type with a type parameter the
-              -- dispatch's refinement binds, which its branch sees otherwise)
-              let refined (x : String) : Bool := match μ.lookup x with
-                | some (.param y _) => y != x
-                | some _ => true
-                | none => false
-              for sl in v'.slotsRead do
-                if let some l := (locs.find? (·.slot == sl)).orElse fun _ => ctx.locals.find? (·.slot == sl) then
-                  if l.ty.params.any refined then
-                    eerr p s!"{what} uses an argument at a type, {l.ty.show}, that the dispatch refines (#351)"
-              if opens then
-                if let some i := rcE.argsAfterRecv.findIdx? (fun a => match a with | .local t' => t' == t | _ => false) then
-                  if let some (n, _) := (if i + 1 < nposF then none else fs.named[i + 1 - nposF]?) then
-                    if let some j := ms.named.findIdx? (·.1 == n) then
-                      let τ := (declTy ms.params[npos + j]!).subst σu
-                      if τ.params.any ownNames.contains then
-                        eerr p s!"{what} has a type, {τ.show}, that mentions the type arguments the dispatch opens (#351)"
-            final := final ++ [(t, v')]
-          return final
+        -- Supplied arguments have already been evaluated in caller order.
+        -- Default forwarding leaves only those typed locals in the dispatch.
         if env.viewed.contains c then
           -- (#351) a receiver through views: one test per class below, a
           -- dispatch that opens the class's Verse Core type arguments,
@@ -6075,7 +5890,7 @@ partial def elabAppBase (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (b
             let ctx' := { ctx with
               locals := selfL :: (locsF ++ ctx.locals.map fun l => { l with ty := l.ty.subst μF }),
               types := { env with tvars := env.tvars.map fun (n, t) => (n, t.subst μF) }, unrefine }
-            let rc ← elabApp ctx' p (.ident mp fname) (.ident mp selfName :: argIds.toList) bracket
+            let rc ← elabDefaultDispatch ctx' p fname (.ident mp selfName :: argIds.toList) bracket
               (some (msRet.subst μF))
             let rcE : Expr := match rc.e with
               | .seq (.ite (.prim .fail []) _ (.lit .void)) b => b
@@ -6083,8 +5898,7 @@ partial def elabAppBase (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (b
             -- (a dispatch through a view opens all of the class's type
             -- arguments: defaults with no type of their own at the
             -- declaration's, #209)
-            let typed ← typedDefaults fname e rcE true slot μF
-            let some (.call fi (.local s0 :: es)) := Expr.inlineArgTemps rcE typed
+            let some (.call fi (.local s0 :: es)) := Expr.inlineArgTemps rcE
               | eerr p s!"cannot dispatch {m} through a view to class {d} yet when a named argument's default is computed (#351)"
             if s0 != slot then eerr p s!"internal error: a dispatch through a view to class {d} (#351)"
             acc := .ite (.heap (.isTag [env.tagOf d]) [.local slot]) (.call fi (.local slot :: es)) acc
@@ -6199,7 +6013,7 @@ partial def elabAppBase (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (b
                 let ctx' := { ctx with
                   locals := selfL :: (locsF ++ ctx.locals.map fun l => { l with ty := l.ty.subst μF }),
                   types := { env with tvars := env.tvars.map fun (n, t) => (n, t.subst μF) }, unrefine }
-                let rc ← elabApp ctx' p (.ident mp fname) (.ident mp selfName :: argIds.toList) bracket
+                let rc ← elabDefaultDispatch ctx' p fname (.ident mp selfName :: argIds.toList) bracket
                   (some (msRet.subst μF))
                 -- (named arguments go through temporaries: put their values
                 -- in the call, which must have the rule's shape)
@@ -6208,8 +6022,7 @@ partial def elabAppBase (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (b
                 let rcE : Expr := match rc.e with
                   | .seq (.ite (.prim .fail []) _ (.lit .void)) b => b
                   | e => e
-                let typed ← typedDefaults fname e rcE (pins.length > rargs.length) slot μF
-                let some (.call fi (.local s0 :: es)) := Expr.inlineArgTemps rcE typed
+                let some (.call fi (.local s0 :: es)) := Expr.inlineArgTemps rcE
                   | eerr p s!"cannot dispatch {m} to class {e}, which fixes type arguments of {c}, when a named argument's default is computed (#142)"
                 if s0 != slot then eerr p s!"cannot dispatch {m} to class {e}, which fixes type arguments of {c} (#142)"
                 acc := .ite (.heap (.isTag (part.toList.map env.tagOf)) [.local slot]) (.call fi (.local slot :: es)) acc
@@ -7297,6 +7110,63 @@ partial def elabLoopGen (ctx : Ctx) (p : Pos) (lp : List SExpr) : EM LoopGen := 
     .ite (p2 .eq (.local k) (.lit (.int (i : Nat)))) e acc) (.prim .fail [])
   let after : Expr := .ite (p2 .ge (.local nx) (.lit (.int 0))) (push (item (.local nx) cur)) vd
   return { init, step, sp, has, value, after, vty := rty, itemCode, argSet }
+
+/-- Supply only the already-evaluated arguments to a selected implementation.
+    Omitted defaults run in a forwarding helper, after dispatch has refined
+    or opened the receiver's types. The helper's default stack preserves
+    recursive-default checks across generated function boundaries. -/
+partial def elabDefaultDispatch (ctx : Ctx) (p : Pos) (fname : String)
+    (args : List SExpr) (bracket : Bool) (exp : Option Ty) : EM R := do
+  let some s := ctx.sig? fname | eerr p s!"internal: no signature for {fname}"
+  let npos := s.params.length - s.named.length
+  let namedArgs := args.filterMap fun
+    | .decl q n _ _ rhs => if n.startsWith "?" then some (q, (n.drop 1).toString, rhs) else none
+    | _ => none
+  for ((q, n, _), i) in namedArgs.zipIdx do
+    if (namedArgs.take i).any (·.2.1 == n) then eerr q s!"?{n} is given twice"
+  let named := namedArgs.map fun (_, n, rhs) => (n, rhs)
+  let omitted := s.named.filter fun (n, _) => !named.any (·.1 == n)
+  if omitted.isEmpty then return ← elabApp ctx p (.ident p fname) args bracket exp
+  for (n, d) in omitted do
+    if d.isNone then eerr p s!"{fname} needs the argument ?{n}, which has no default"
+    if ctx.defaults.contains (fname, s!"?{n}") then
+      eerr p s!"the default of ?{n} of {fname} uses itself (a call of {fname} that omits ?{n})"
+  let positional := args.filter fun | .decl _ n .. => !n.startsWith "?" | _ => true
+  let given := (List.range npos) ++ (s.named.zipIdx.filterMap fun ((n, _), j) =>
+    if named.any (·.1 == n) then some (npos + j) else none)
+  let flags : Nat := (if ctx.inRepeat then 1 else 0) + (if ctx.inDefer then 2 else 0) +
+    (if ctx.inDefaultCheck then 4 else 0)
+  let key := s!"defaults:{fname}:{reprStr given}:{reprStr ctx.defaults}:{flags}"
+  let name := s!"{fname}$dispatchDefaults{key.hash}"
+  let actual := given.filterMap fun i => if i < npos then positional[i]? else
+    (s.named[i - npos]?).bind fun (n, _) => named.lookup n
+  if (ctx.sig? name).isSome then
+    return ← elabApp ctx p (.ident p name) actual bracket exp
+  let types := given.map fun i => s.params[i]!
+  let used := (s.ret :: types).flatMap Ty.params
+  let tps := s.tparams.filter fun (n, _) => used.contains n
+  let params : List SParam := given.map fun i =>
+    { name := s.pnames[i]!, ty := s.params[i]!.toSTy }
+  let forwarded := given.map fun i =>
+    let v := SExpr.ident p s.pnames[i]!
+    if i < npos then v else SExpr.decl p s!"?{(s.named[i - npos]!).1}" none false v
+  let stack := ctx.defaults.map fun (f, n) => SExpr.tuple p [.str p [.text f], .str p [.text n]]
+  let body := SExpr.app p (.ident p "$defaultContext")
+    [.block p stack, .int p (flags : Int), .app p (.ident p fname) forwarded bracket] false
+  let lift : Choice.FirstLift := {
+    key, pos := p, name, params,
+    tparams := tps.map fun (n, cmp) =>
+      { pos := p, name := n, constraint := if cmp then "comparable" else "type" },
+    specs := ["transacts"] ++ (if s.decides then ["decides"] else []) ++
+      (if s.suspends then ["suspends"] else []) ++ s.selfTps.map ("$selfTp:" ++ ·),
+    ret := s.ret.toSTy, body, binds := [], sets := [], args := [] }
+  modify fun st => { st with loopFirst := st.loopFirst ++
+    [{ g := "", pos := p, itemCode := .lit .void, argSet := none, lift := .ok lift }] }
+  noteFx p s.fx (some fname)
+  let recv ← elabE ctx positional[0]! none
+  -- This round only discovers the helper; it returns before Core checking.
+  return ⟨.call s.idx (recv.e :: List.replicate (s.params.length - 1 + s.ndicts) (.lit .void)),
+    exp.getD s.ret⟩
 
 /-- `e.m`: `.Length` of an array or string, or a field of a struct. -/
 partial def elabMember (ctx : Ctx) (p : Pos) (r : R) (m : String) (exp : Option Ty := none) : EM R := do
@@ -8607,7 +8477,7 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
   -- Only refining lifts borrow task ownership. Ordinary callees still
   -- stop their own roots when they return. A nested lift forwards through
   -- every enclosing lift, including one that starts no roots directly.
-  let lifts := lows.filter fun (_, name, _) => env.castRequests.any (·.name == name)
+  let lifts := lows.filter fun (_, name, _) => defaultBridge name || env.castRequests.any (·.name == name)
   let mut taskLifts := lifts.filterMap fun (gi, _, _) =>
     if Suspend.countSusp (· == branchMark) (fun _ => false) false (· == spawnMark) fns[gi]!.body > 0 ||
         Suspend.countArms (· == rushMark) fns[gi]!.body > 0 then some gi else none
@@ -10478,7 +10348,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
                           suspends := effs.contains "suspends",
                           -- (a `block:`'s effects are inferred below, from none, as a
                           -- constant's: blocks that construct each other's classes)
-                          fx := if n.endsWith ".$block" || (n.splitOn "$default$").length > 1 then [] else allowedFx effs,
+                          fx := if n.endsWith ".$block" || defaultBridge n || (n.splitOn "$default$").length > 1 then [] else allowedFx effs,
                           isConst := false,
                           named := (ps.filter (·.named)).map fun q => (q.name, q.default),
                           pnames := ps.map (·.name), scope := copyScope? effs }
@@ -10509,7 +10379,10 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       -- (#250: the function a cast's branch is lifted into, from the object,
       -- the cast's subject, its first parameter)
       let lifted := opts.castRequests.find? (·.name == n)
-      let selfTps : List String := if let some l := lifted then
+      let selfTps : List String := if defaultBridge n then
+          (effs.filterMap fun e => if e.startsWith "$selfTp:" then some (e.drop 8).toString else none).filter
+            (fun v => tparams.any (·.1 == v))
+        else if let some l := lifted then
           (l.opened.map (·.1)).filter fun v => tparams.any (·.1 == v) else
         match n.splitOn "." with
         | [c, m] =>
@@ -10526,7 +10399,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
                             decides := effs.contains "decides", isConst := false,
                             suspends := effs.contains "suspends",
                             -- (a parametric class's `block:`: inferred from none, #41)
-                            fx := if n.endsWith ".$block" then [] else allowedFx effs,
+                            fx := if n.endsWith ".$block" || defaultBridge n then [] else allowedFx effs,
                             tparams,
                             named := (ps.filter (·.named)).map fun q => (q.name, q.default),
                             pnames := ps.map (·.name), scope := copyScope? effs }
@@ -10591,14 +10464,14 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
               sigs := sigs.set! idx { sigs[idx]! with fx }
               changed := true
           | .error _ => pure ()
-        else if n.endsWith ".$block" then
+        else if n.endsWith ".$block" || defaultBridge n then
           let s := sigs[idx]!
           let locals := (ps.zip (List.range ps.length)).zip s.params |>.map fun ((prm, i), t) =>
             ({ name := prm.name, slot := i, ty := t, mutable := false } : Local)
           let ctx : Ctx := { sigs := sigs.toList ++ gsigs.toList, sigProg := mkSigProg sigs, types := env,
-                             locals := locals.reverse, retTy := .void,
-                             inBlock := true, selfClass := some ((n.dropEnd ".$block".length).toString) }
-          match elabBodyOv ctx body (some .void) { env, nslots := ps.length, slotTys := s.params.toArray } with
+                             locals := locals.reverse, retTy := s.ret, canFail := s.decides, suspends := s.suspends,
+                             inBlock := !defaultBridge n, selfClass := some ((n.splitOn ".").headD "") }
+          match elabBodyOv ctx body (some s.ret) { env, nslots := ps.length, slotTys := s.params.toArray } with
           | .ok (_, st) =>
             let fx := heapFx.filter fun k => st.fx.any (·.1 == k)
             if fx != s.fx then
@@ -10610,17 +10483,17 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     for (top, gi) in generics.zip (List.range generics.length) do
       match top with
       | .fn _ n ps _ _ _ body =>
-        if n.endsWith ".$block" then
+        if n.endsWith ".$block" || defaultBridge n then
           let g := gsigs[gi]!
           let locals := (ps.zip (List.range ps.length)).zip g.params |>.map fun ((prm, i), t) =>
             ({ name := prm.name, slot := i, ty := t, mutable := false } : Local)
           let hidden := g.tparams.map fun (v, c) => Ty.param v c
           let genv := { env with tvars := g.tparams.map fun (v, c) => (v, Ty.param v c) }
           let ctx : Ctx := { sigs := sigs.toList ++ gsigs.toList, sigProg := mkSigProg sigs, types := genv,
-                             locals := locals.reverse, retTy := .void, dictBase := ps.length,
+                             locals := locals.reverse, retTy := g.ret, canFail := g.decides, suspends := g.suspends, dictBase := ps.length,
                              dictVars := g.tparams.map (·.1),
-                             selfClass := some ((n.dropEnd ".$block".length).toString) }
-          match elabBodyOv ctx body (some .void)
+                             selfClass := some ((n.splitOn ".").headD "") }
+          match elabBodyOv ctx body (some g.ret)
               { env, nslots := ps.length + hidden.length, slotTys := (g.params ++ hidden).toArray } with
           | .ok (_, st) =>
             let fx := heapFx.filter fun k => st.fx.any (·.1 == k)
@@ -10758,6 +10631,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
         throw s!"{fp.show}: field '{f}' of {cname} must have the type it inherits, {t0.show}, not {t.show}"
     | none => pure ()
   if let some msg := defaultClashes[0]? then throw msg
+  let mut fieldDefaultNeeds : List Choice.FirstLift := []
   -- check every field default once, with its struct's type parameters opaque
   -- (a default is elaborated again, at its field's type, at each construction
   -- that omits the field)
@@ -10774,7 +10648,10 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
           let hσ := (((env.sparams.lookup home).getD []).map (·.1)).zip (env.argsAt n nps home)
           let ctx := { ctx with defaults := [(n, f)], types := { senv with tvars := hσ } }
           match (do coerce d.pos (← elabE ctx d (some ft)) ft : EM Expr).run { env } with
-          | .ok _ => pure ()
+          | .ok (_, st) =>
+            fieldDefaultNeeds := fieldDefaultNeeds ++ st.loopFirst.filterMap fun u => match u.lift with
+              | .ok l => if l.key.startsWith "defaults:" then some l else none
+              | _ => none
           | .error msg => throw s!"{msg} (in the default of field '{f}' of {n})"
     | _ => pure ()
   -- a function: its body under the type environment `env` (which binds the
@@ -10887,7 +10764,8 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   let mut castNeeds : List Refine.Lift := []
   -- (the lazily taken functions with several values that contexts taking
   -- their first success consume, #246)
-  let mut loopFirst : List LoopUse := []
+  let mut loopFirst : List LoopUse := fieldDefaultNeeds.map fun l =>
+    { g := "", pos := l.pos, itemCode := .lit .void, argSet := none, lift := .ok l }
   let mut eagerNeeds : List String := []
   for (top, idx) in tops.zip (List.range tops.length) do
     let sig := sigs[idx]!
@@ -10955,9 +10833,12 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   -- functions
   if !eagerNeeds.isEmpty then
     return { prog := default, sigs := { fns := [] }, slotTys := [], eagerNeeds := eagerNeeds.eraseDups }
-  if !fnNeeds.isEmpty || !castNeeds.isEmpty then
+  let defaults := loopFirst.filterMap fun u => match u.lift with
+    | .ok l => if l.key.startsWith "defaults:" then some l else none
+    | _ => none
+  if !fnNeeds.isEmpty || !castNeeds.isEmpty || !defaults.isEmpty then
     let casts := castNeeds.foldl (fun acc l => if acc.any (·.key == l.key) then acc else acc ++ [l]) []
-    return { prog := default, sigs := { fns := [] }, slotTys := [], fnNeeds := fnNeeds.eraseDups, castNeeds := casts }
+    return { prog := default, sigs := { fns := [] }, slotTys := [], fnNeeds := fnNeeds.eraseDups, castNeeds := casts, loopNeeds := defaults.foldl (fun acc l => if acc.any (·.key == l.key) then acc else acc ++ [l]) [] }
   let mainSig ← match sigs.toList.find? (·.name == (if opts.entry.isSome then "$Do" else "Main")) with
     | some s =>
       if s.isConst || !s.params.isEmpty then throw "Main must be a function with no parameters"
@@ -11141,11 +11022,20 @@ partial def topLiftDepth : STop → Nat
     methods.foldl (fun n t => max n (topLiftDepth t))
       (fields.foldl (fun n (_, _, e, _) => max n (e.map liftDepth |>.getD 0)) 0)
 
+/-- Named defaults can discover forwarding helpers along a dependency
+    chain. Interface copies may instantiate each source method per class. -/
+partial def topDefaultCount : STop → Nat
+  | .fn _ _ ps _ _ _ _ => (ps.filter (·.named)).length
+  | .classDef _ _ _ _ _ _ _ _ ms => ms.foldl (fun n m => n + topDefaultCount m) 0
+  | _ => 0
+
 /-- Elaborate a parsed program (`elabProgramCore`), with the names of the
     functions a constructor or an overload becomes shown as written: `K$init`
     is `K<constructor>`, `F$ov1` is `F` (names with `$` are never the user's). -/
 def elabProgram (allTops00 : List STop) (opts : Options := {}) : Except String Compiled :=
-  let rounds := max 4 (4 * allTops00.foldl (fun n t => max n (topLiftDepth t)) 0)
+  let defaults := allTops00.foldl (fun n t => n + topDefaultCount t) 0
+  let classes := allTops00.filter (fun | .classDef .. => true | _ => false) |>.length
+  let rounds := max 4 (4 * (allTops00.foldl (fun n t => max n (topLiftDepth t)) 0 + defaults * (classes + 1)))
   -- (#214) again with the functions wanted as values at closed function
   -- types: each round asks for new ones only, so a few rounds do
   let rec go (fuel : Nat) (opts : Options) : Except String Compiled := do
