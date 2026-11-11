@@ -1,0 +1,13 @@
+computes 8
+computes 9
+computes 9
+computes 10
+reads 8
+reads 9
+reads 9
+reads 10
+allocates 8
+allocates 9
+allocates 9
+allocates 10
+exit=0
