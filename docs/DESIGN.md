@@ -347,6 +347,10 @@ stops its private producer loop, then performs the actual return, including
 source defers. Its pre-existing escaping breaks are marked and forwarded
 outside the private loop without running their cleanup twice. Bottom
 element types round-trip through generated signatures as reserved `$never`.
+When the body has bottom type, its Core expression is followed by `void`,
+as for tuple and array literal elements. This gives generated arrays an
+inferred element type when suspension lowering saves them across a wait;
+the exit still transfers control before that final `void` can run.
 Nested consumers can discover continuations and refining branches in
 separate rounds; their discovery bound follows source nesting, and each
 round still has to add new requests.

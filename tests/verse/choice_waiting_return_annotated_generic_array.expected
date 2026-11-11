@@ -1,0 +1,7 @@
+rows 0
+empty int 9
+rows 0
+empty string t
+nonempty int 7
+nonempty string s
+exit=0

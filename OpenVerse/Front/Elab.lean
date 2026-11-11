@@ -2425,6 +2425,10 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
     match gs with
     | [] =>
       let r ← elabE (bodyCtx c) bd none
+      -- The generated arrays must infer their element type during
+      -- suspension lowering. As for array/tuple literals, a body that
+      -- never completes has Core's void type without changing its exit.
+      let r := if r.ty == .never then { r with e := .seq r.e (.lit .void) } else r
       if let some failed := failure then
         let packet ← elabE { c with canFail := false } failed (some c.retTy)
         let hint ← fresh (.opt r.ty)
