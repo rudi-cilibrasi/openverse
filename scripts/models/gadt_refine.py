@@ -522,6 +522,79 @@ for o in objs:
     main.append(f'    Print("first cast {{FirstCast({o["name"]}, {threshold})}} state {{{o["name"]}.N}}")')
     expect.append(f"first cast {result} state {o['N']}")
 
+# A scalar selected value shares A's filter. An actual choice starts a
+# generator, whose effects remain when the later W generator is empty.
+R417F = random.Random(seed * 1000003 + 41701)
+loops.append(f'''ForCast(P:pair(a, b), Threshold:int, Limit:int where a:type, b:type)<transacts>:int =
+    var Total:int = 0
+    Values := for (A := 1 | 2, set Total += A,
+        V := if (D := {choice_target}[ChoiceReceiver(P)]):
+            set P.N += {prefix_step}
+            ChoiceValue(P, {left_step}, D.C) | ChoiceValue(P, {right_step}, D.C + {choice_offset})
+        else:
+            ChoiceValue(P, {else_step}, -{choice_offset})
+        , V > Threshold, set Total += V, W := 1 | 2, W <= Limit):
+        set P.N += W
+        set Total += W
+        Print("for body {{A}} {{V}} {{W}} {{Total}} {{P.N}}")
+        W
+    Print("for state {{Total}} {{P.N}} {{Values.Length}}")
+    Values.Length''')
+for o in objs:
+    threshold = R417F.randint(-choice_offset - 1, 10)
+    limit = R417F.randint(0, 3)
+    total, count = 0, 0
+    for a in (1, 2):
+        before_total, before_n = total, o['N']
+        total += a
+        generated = below(o['cls'], choice_target)
+        if generated:
+            o['N'] += receiver_step + prefix_step
+            values = [(o['C'], left_step), (o['C'] + choice_offset, right_step)]
+        else:
+            values = [(-choice_offset, else_step)]
+        for value, step in values:
+            if value <= threshold:
+                if not generated:
+                    total, o['N'] = before_total, before_n
+                continue
+            o['N'] += step
+            total += value
+            for w in (1, 2):
+                if w <= limit:
+                    o['N'] += w
+                    total += w
+                    count += 1
+                    expect.append(f"for body {a} {value} {w} {total} {o['N']}")
+    expect.append(f"for state {total} {o['N']} {count}")
+    expect.append(f"for cast {count}")
+    main.append(f'    Print("for cast {{ForCast({o["name"]}, {threshold}, {limit})}}")')
+
+# Independent refinements must share the current mutable accumulator.
+pair_target = R417F.choice(list(MENU))
+pair_offset = R417F.randint(1, 5)
+loops.append(f'''ForPair(P:pair(a, b), Q:pair(c, d), Start:int where a:type, b:type, c:type, d:type):int =
+    var Total:int = Start
+    Values := for (V := if (D := {choice_target}[P]) then (D.C | D.C + {choice_offset}) else 0,
+        set Total += V, W := if (E := {pair_target}[Q]) then (E.C | E.C + {pair_offset}) else 0):
+        set Total += W
+        Print("for pair {{V}} {{W}} {{Total}}")
+        V + W
+    Print("paired state {{Total}} {{Values.Length}}")
+    Total''')
+for o in objs:
+    q, total = R417F.choice(objs), R417F.randint(-9, 9)
+    main.append(f'    Print("for paired {{ForPair({o["name"]}, {q["name"]}, {total})}}")')
+    left = [o['C'], o['C'] + choice_offset] if below(o['cls'], choice_target) else [0]
+    right = [q['C'], q['C'] + pair_offset] if below(q['cls'], pair_target) else [0]
+    for v in left:
+        total += v
+        for w in right:
+            total += w
+            expect.append(f"for pair {v} {w} {total}")
+    expect.append(f"paired state {total} {len(left) * len(right)}")
+    expect.append(f"for paired {total}")
+
 prog = [f"# genrefine seed {seed}"] + prog_cls + loops
 for f in funcs: prog.append(fix_iface(f, ftext(f)))
 prog += list(SHOWN.values())

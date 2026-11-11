@@ -1862,6 +1862,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
   -- already, `prepared`, are not lifted again)
   let clauses := if prepared then clauses else
     Choice.prepare clauses (choiceValues ctx) (choiceField ctx) (fieldOrder := choiceOrder ctx) (keepExcl := true)
+      (keepBranches := choiceHasCast ctx)
   -- (a call of a recursive function with several values, #235: a generator
   -- over the array of its values; at a written type, through a binding)
   let normGens (cs : List SExpr) : List SExpr := cs.flatMap fun c => match Choice.binding? c with
@@ -1880,14 +1881,15 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
       [.gen q tmp none arr, .decl q n (some t) false (.ident q tmp)]
     | _ => [c]
   -- split into groups: [filters before the first generator], then (generator, filters)…
+  let isBranch (c : SExpr) : Bool := (Choice.binding? c).any (·.branchy.isSome)
   let isGen : SExpr → Bool
     | .gen .. => true
     | .decl _ _ none false (.range ..) => true
-    | c => (Choice.binding? c).isSome
+    | c => !isBranch c && (Choice.binding? c).isSome
   -- (an exclusive choice's binding, #314: no generator, but paths)
   let isExcl : SExpr → Bool
     | .decl _ _ _ false (.app _ (.ident _ "$excl") _ false) => true
-    | _ => false
+    | c => isBranch c
   -- (a composed choice whose alternatives have values or clauses of their
   -- own, #283, or an exclusive one: what a continuation saves copying, #335)
   let isCF (x : SExpr) : Bool := isExcl x || (match Choice.binding? x with
@@ -1935,6 +1937,70 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
         let (codeA, cA) ← elabFilters c (fs.take j)
         let after := fs.drop (j + 1)
         let moreCl := more.flatMap fun (g', fs') => g' :: fs'
+        -- A refining condition must remain with the branch. A safe body
+        -- can run inside $forFirst with the suffix: its first segment
+        -- still belongs to this filter, and later generators keep their
+        -- effects even when empty. The option prevents failure of a
+        -- selected branch from choosing the else branch instead.
+        if let some b@{ branchy := some i, .. } := fs[j]?.bind Choice.binding? then
+          let st ← get
+          let (_, ty, _, refined) ← elabBranchAlts { cA with canFail := true, inTaking := true, typeOnly := true }
+            b.pos i b.ty b.place
+          set st
+          if refined && !bodyFail && forBodySafe cA bd then
+            checkNewLocal cA b.pos b.name
+            if cA.typeOnly then
+              let slot ← fresh ty
+              let cB := { cA with locals := { name := b.name, slot, ty, mutable := false } :: cA.locals }
+              let (f, a, t) ← exclIter cB after more bd
+              return (.seq codeA f, a, t)
+            let restCl := after ++ moreCl
+            let key := "f" ++ contKey cA b.pos b.name (i :: restCl ++ [bd])
+            let req := cA.types.loopRequests.find? (·.key == key)
+            let fits (l : Choice.FirstLift) : Bool :=
+              (l.specs.filter (["reads", "writes", "allocates"].contains ·)).all cA.fnFx.contains
+            let hasLoop := restCl.any
+              (Choice.anyE fun | .app _ (.ident _ "$loop") _ _ => true | _ => false)
+            if req.isNone && !hasLoop && (contForLiftOf cA b.pos b.name ty .void [i] restCl bd).toOption.isSome then
+              -- Elaborate the suffix once, in its source context. Otherwise
+              -- an inner lift can retain an outer var's old name after the
+              -- enclosing lift has renamed it for mutable copy-out.
+              let slot ← fresh ty
+              let cB := { cA with locals := { name := b.name, slot, ty, mutable := false } :: cA.locals }
+              let values ← elabForWith elabAlts elabBranchAlts elabE elabInts elabLoopGen elabSeq
+                cB p restCl bd (prepared := true) (firstDecides := true)
+              let .arr t := values.ty | eerr b.pos "internal: a refining for's suffix"
+              match contForLiftOf cA b.pos b.name ty t [i] restCl bd with
+              | .ok lift =>
+                modify fun st => { st with loopFirst := st.loopFirst ++
+                  [{ g := "", pos := b.pos, itemCode := .lit .void, argSet := none, lift := .ok lift }] }
+                return (codeA, .prim .userErr [], t)
+              | .error why => eerr b.pos s!"cannot share the refining for's suffix: {why} (#417)"
+            if let some l := req.filter fits then
+              let kv := s!"$refineFor{b.pos.line}_{b.pos.col}{b.name}v"
+              let kt := kv ++ "t"
+              let elem := kv ++ "e"
+              let call := SExpr.app b.pos (.ident b.pos l.name) l.args true
+              let callCl : List SExpr := if l.sets.isEmpty then [.decl b.pos kv none false call] else
+                [.decl b.pos kt none false call] ++
+                  l.sets.zipIdx.map (fun (n, j) => SExpr.set b.pos (.ident b.pos n) none
+                    (.app b.pos (.ident b.pos kt) [.int b.pos ((j + 1 : Nat) : Int)] false)) ++
+                  [.decl b.pos kv none false (.app b.pos (.ident b.pos kt) [.int b.pos 0] false)]
+              let site := s!"$refineFor{b.pos.line}_{b.pos.col}{b.name}"
+              let consume (arm : SExpr) : SExpr :=
+                let cl := Choice.prepare [.decl b.pos b.name (some ty.toSTy) false arm]
+                  (choiceValues cA) (choiceField cA) (site := site) (fieldOrder := choiceOrder cA)
+                  (keepExcl := true) (keepBranches := choiceHasCast cA)
+                .optionLit b.pos (.app b.pos (.ident b.pos "$forFirst")
+                  [.block b.pos (cl ++ callCl ++ [.gen b.pos elem none (.ident b.pos kv)]), .ident b.pos elem] false)
+              let selected := Choice.consumeBranches i site consume
+              let values ← elabE { cA with canFail := true, inTaking := true } (.query b.pos selected) none
+              let .arr t := values.ty | eerr b.pos "internal: a refining for's values"
+              let slot ← fresh values.ty
+              return (.seq codeA (.assign slot values.e), .local slot, t)
+          let cl := fs[j]?.getD (.tuple p [])
+          let (f, a, t) ← exclIter cA (Choice.bifToExcl cl ++ after) more bd
+          return (.seq codeA f, a, t)
         let some (.decl gp x xty _ (.app _ _ alts _)) := fs[j]? | eerr p "internal: an exclusive choice"
         let altsS := alts.filter fun | .app _ (.ident _ "$joinOf") _ _ => false | _ => true
         -- (an `if`'s, #331, with no type written: its branches' join, as the
@@ -1965,7 +2031,8 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
               | none => [.decl rp x xty false (.tuple rp [])]
             | e => [.decl e.pos x xty false e]
           normGens (Choice.prepare (gs ++ rcl) (choiceValues cA) (choiceField cA)
-            (site := s!"$x{x}a{i}") (fieldOrder := choiceOrder cA) (keepExcl := true))
+            (site := s!"$x{x}a{i}") (fieldOrder := choiceOrder cA) (keepExcl := true)
+            (keepBranches := choiceHasCast cA))
         -- (a path: its clauses up to its first generator into this filter, its
         -- generators into the body, with `pb` as the body; `flat`: `pb` is an
         -- array of the values, a continuation's, to flatten)
@@ -2059,7 +2126,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
             -- (its exclusive choices kept: this for compiles them, #314)
             Choice.prepare [.decl gp b.name b.ty false a] (choiceValues c) (choiceField c)
               (fieldOrder := choiceOrder c)
-              (site := s!"{site}a{i}") (keepExcl := true)
+              (site := s!"{site}a{i}") (keepExcl := true) (keepBranches := choiceHasCast c)
           let forW (cl : List SExpr) (bd : SExpr) : EM R :=
             elabForWith elabAlts elabBranchAlts elabE elabInts elabLoopGen elabSeq bctx p cl bd (prepared := true)
           -- (#335, phase 2: another such choice, or an exclusive one, in the
@@ -2268,7 +2335,10 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
         | .arr t => return ⟨.prim .flatten [loopE], .arr t⟩
         | _ => eerr p "internal: nested for"
   match pre with
-  | [] => build ctx gs body
+  | [] =>
+    let r ← build ctx gs body
+    if firstDecides && gs.isEmpty then return ⟨.prim .mkArr [r.e], .arr r.ty⟩
+    return r
   | _ =>
     -- (an exclusive choice among them, #314: its paths in this filter)
     -- (through a generator over one element, whose filters they are)
