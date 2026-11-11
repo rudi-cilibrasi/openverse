@@ -1494,6 +1494,19 @@ partial def writesTps (tps : List String) (e : SExpr) : Bool :=
     | .ident _ n => tps.contains n
     | _ => false) || e.children.any (writesTps tps)
 
+/-- A helper retains the source context's restrictions and dependency stack,
+    while its generated control flow still owns its own loops and exits. -/
+def sourceContextOf (ctx : Ctx) : Choice.SourceContext := {
+  inCtor := ctx.inCtor, inParamDefault := ctx.inParamDefault,
+  inBlock := ctx.inBlock, inDefer := ctx.inDefer,
+  inDefaultCheck := ctx.inDefaultCheck, inRepeat := ctx.inRepeat,
+  inChoice := ctx.inChoice, inArm := ctx.inArm, inBranch := ctx.inBranch,
+  defaults := ctx.defaults }
+
+def sourceContextKey (ctx : Ctx) : String :=
+  let scope := sourceContextOf ctx
+  if scope == ({} : Choice.SourceContext) then "" else "_source:" ++ reprStr scope
+
 /-- A lazy helper owns its producer and the complete prepared suffix. That
     suffix changes when a composed choice is replaced by a continuation call;
     source position and captured names alone would reuse the previous contract.
@@ -1506,7 +1519,7 @@ def firstKey (ctx : Ctx) (p : Pos) (lp : List SExpr) (b : String) (bty : Option 
     (ctx.lookup n).map fun l => (n, l.ty, l.mutable)
   let aliases := ctx.types.tvars.filter fun (n, _) =>
     writesTps [n] written || ((bty.map (Choice.styMentions [n])).getD false)
-  reprStr (p, b, bty, lp, rest, inputs, aliases, ctx.selfClass, ctx.liftTag, ctx.inlineScopes)
+  reprStr (p, b, bty, lp, rest, inputs, aliases, ctx.selfClass, ctx.liftTag, ctx.inlineScopes) ++ sourceContextKey ctx
 
 /-- A cast `T[X]`, `X` of type `xty`, that holds only under a refinement of
     the code's type parameters (#243): `T` fixes or repeats type arguments
@@ -1802,8 +1815,6 @@ def firstLiftOf (ctx c2 : Ctx) (p : Pos) (g : String) (lp : List SExpr) (b : Str
     (instances : List (String × List (String × Ty)) := []) :
     Except String Choice.FirstLift := do
   let [_, .block _ ps, .block _ cls, .decl _ _ _ _ tail] := lp | throw "internal: a $loop marker"
-  if ctx.inCtor || ctx.inParamDefault || ctx.inBlock || ctx.inDefer || !ctx.defaults.isEmpty then
-    throw "in a constructor, a default or a defer"
   let key := firstKey ctx p lp b bty rest
   let written := SExpr.block p (lp ++ rest)
   -- Written types use the context's current instances, including inlined
@@ -1903,7 +1914,7 @@ def firstLiftOf (ctx c2 : Ctx) (p : Pos) (g : String) (lp : List SExpr) (b : Str
       pure (STop.fn p (nameOf h) (hparams ++ capPs ++ typeParams) tps specs ret
         (pruneConstructHints ctx (nameOf h) body))
     | _ => throw "internal: a $member (#283)"
-  return { key, pos := p, name, inlineScopes := ctx.inlineScopes, liftTag := ctx.liftTag,
+  return { key, pos := p, name, sourceContext := sourceContextOf ctx, inlineScopes := ctx.inlineScopes, liftTag := ctx.liftTag,
            params := params ++ typeParams, tparams := tps, specs, ret,
            body := pruneConstructHints ctx name
              (Choice.firstBody name p b bty cls tail rest binds setsT capArgs (some vty.toSTy) nameOf recArgs),
@@ -1930,7 +1941,7 @@ def contKey (ctx : Ctx) (p : Pos) (b : String) (rest : List SExpr) : String :=
   -- alternative of another one with a continuation, has the call of that
   -- one after it in the next elaboration, which may use the same names)
   let places := rest.map fun c => s!"{c.pos.line}.{c.pos.col}"
-  s!"k{p.line}_{p.col}_{p.file}_{b}_{String.intercalate "," caps}_{String.intercalate "," places}{typed}{ctx.liftTag}{reprStr ctx.inlineScopes}"
+  s!"k{p.line}_{p.col}_{p.file}_{b}_{String.intercalate "," caps}_{String.intercalate "," places}{typed}{ctx.liftTag}{reprStr ctx.inlineScopes}{sourceContextKey ctx}"
 
 /-- (#335) The function of its own that the clauses after a composed choice
     (#296) are compiled as, where the first success is taken and those
@@ -1943,8 +1954,6 @@ def contKey (ctx : Ctx) (p : Pos) (b : String) (rest : List SExpr) : String :=
     why not, and the clauses are copied, as before. -/
 def contLiftOf (ctx c2 : Ctx) (p : Pos) (b : String) (alts rest : List SExpr)
     (fxB : List (String × Pos × Option String)) : Except String Choice.FirstLift := do
-  if ctx.inCtor || ctx.inParamDefault || ctx.inBlock || ctx.inDefer || !ctx.defaults.isEmpty then
-    throw "in a constructor, a default or a defer"
   let written := SExpr.block p rest
   -- (the alternatives' names too: their types fix the binding's)
   let key := contKey ctx p b (alts ++ rest)
@@ -1982,7 +1991,7 @@ def contLiftOf (ctx c2 : Ctx) (p : Pos) (b : String) (alts rest : List SExpr)
     caps.map fun l => { name := if sets.any (·.name == l.name) then s!"{l.name}$in" else l.name, ty := l.ty.toSTy }
   -- (`$firstP`: the clauses are lifted already, the consumer's, which lifting
   -- again would bind twice, as for #275's functions)
-  return { key, pos := p, name, inlineScopes := ctx.inlineScopes, liftTag := ctx.liftTag,
+  return { key, pos := p, name, sourceContext := sourceContextOf ctx, inlineScopes := ctx.inlineScopes, liftTag := ctx.liftTag,
            params := params ++ typeParams, tparams := tps,
            specs := (if heap.isEmpty then ["computes"] else heap) ++ ["decides"],
            ret := .tup (bls.map (·.ty.toSTy) ++ sets.map (·.ty.toSTy) ++ [.name "logic"]),
@@ -2087,8 +2096,6 @@ def restoreForContTrial (saved : ESt) : EM Unit := do
     and the clauses are copied, as before. -/
 def contForLiftOf (ctx : Ctx) (p : Pos) (b : String) (bty vty : Ty) (alts rest : List SExpr) (body : SExpr) (outcome : Bool := false) :
     Except String Choice.FirstLift := do
-  if ctx.inCtor || ctx.inParamDefault || ctx.inBlock || ctx.inDefer || !ctx.defaults.isEmpty then
-    throw "in a constructor, a default or a defer"
   let written := SExpr.block p (rest ++ [body])
   let key := (if outcome then "fo" else "f") ++ contKey ctx p b (alts ++ rest ++ [body])
   let σt := ctx.types.tvars.map fun (n, t) => (n, t.toSTy)
@@ -2134,7 +2141,7 @@ def contForLiftOf (ctx : Ctx) (p : Pos) (b : String) (bty vty : Ty) (alts rest :
   let ret : STy := if sets.isEmpty then valueTy else .tup (valueTy :: sets.map (·.ty.toSTy))
   let bodyE : SExpr := if sets.isEmpty then .block p (copies ++ [ffirst]) else
     .block p (copies ++ [.decl p vals none false ffirst, .tuple p (.ident p vals :: sets.map fun l => SExpr.ident p l.name)])
-  return { key, pos := p, name, inlineScopes := ctx.inlineScopes, liftTag := ctx.liftTag,
+  return { key, pos := p, name, sourceContext := sourceContextOf ctx, inlineScopes := ctx.inlineScopes, liftTag := ctx.liftTag,
            params := params ++ typeParams, tparams := tps,
            specs := (if heap.isEmpty then ["computes"] else heap) ++ ["decides"],
            ret, body := pruneConstructHints ctx name bodyE, binds := [], sets := sets.map (·.name),
@@ -2245,7 +2252,7 @@ def forStagePrefixOf (ctx : Ctx) (plan : Choice.ForStagePlan) (args : List Ty) (
       ({ frame := s.frame, name := s.name, args := s.args.map Ty.toSTy } : Choice.ResumeStorage))
   let info : Choice.ForResume := {
     name, storage, inlineScopes := ctx.inlineScopes, liftTag := ctx.liftTag,
-    inRepeat := ctx.inRepeat, inChoice := ctx.inChoice }
+    inRepeat := ctx.inRepeat, inChoice := ctx.inChoice, sourceContext := sourceContextOf ctx }
   return {
     key, pos := p, name, params := params ++ more, tparams := tps,
     specs := plan.specs.filter (· != "suspends") ++ ["decides"], ret,
@@ -2311,7 +2318,7 @@ def forStageEnvOf (ctx : Ctx) (plan : Choice.ForStagePlan) (p : Pos)
     (localName l.name, ({ frame := s.frame, name := s.name, args := s.args.map Ty.toSTy } : Choice.ResumeStorage))
   let resumeInfo : Choice.ForResume := {
     name := s!"{name}.{plan.method}", storage,
-    inlineScopes := ctx.inlineScopes, liftTag := ctx.liftTag }
+    inlineScopes := ctx.inlineScopes, liftTag := ctx.liftTag, sourceContext := sourceContextOf ctx }
   let cls := STop.classDef p name tps [] [forStageView plan.base (args.map Ty.toSTy)] false fields [] [method]
   let req : Choice.FirstLift := {
     stageOnly := true, resumes := [resumeInfo], key, pos := p, name,
@@ -8863,6 +8870,7 @@ def functionBodyCtx (opts : Options) (ctx : Ctx) (p : Pos) (name : String)
   let loopLift := opts.loopRequests.find? fun l => l.name == name || l.extraFns.any
     (fun | .fn _ n .. => n == name | _ => false)
   let resume := opts.loopRequests.findSome? fun l => l.resumes.find? (·.name == name)
+  let source := (resume.map (·.sourceContext)).getD ((loopLift.map (·.sourceContext)).getD {})
   let resumeStorage ← ((resume.map (·.storage)).getD []).mapM fun (n, r) => do
     let args ← r.args.mapM fun t => (resolveTy ctx.types p t).run' { env := ctx.types }
     pure (n, { frame := r.frame, name := r.name, args : SourceStorage })
@@ -8877,11 +8885,17 @@ def functionBodyCtx (opts : Options) (ctx : Ctx) (p : Pos) (name : String)
     resumeStorage
     frameName := name
     frameArgs := tps.map fun (v, c) => Ty.param v c
-    inRepeat := (resume.map (·.inRepeat)).getD (lifted.any (·.inRepeat))
-    inChoice := (resume.map (·.inChoice)).getD ctx.inChoice
+    inRepeat := source.inRepeat || (resume.map (·.inRepeat)).getD (lifted.any (·.inRepeat))
+    inChoice := source.inChoice || (resume.map (·.inChoice)).getD ctx.inChoice
+    inParamDefault := source.inParamDefault || ctx.inParamDefault
+    inDefer := source.inDefer || ctx.inDefer
+    inDefaultCheck := source.inDefaultCheck || ctx.inDefaultCheck
+    inArm := source.inArm || ctx.inArm
+    inBranch := source.inBranch || ctx.inBranch
+    defaults := source.defaults ++ ctx.defaults
     refineExits := (lifted.map (·.exits)).getD {}
-    inBlock := name.endsWith ".$block"
-    inCtor := name.endsWith "$init"
+    inBlock := source.inBlock || name.endsWith ".$block"
+    inCtor := source.inCtor || name.endsWith "$init"
     selfClass := scopeClass.orElse fun _ => match name.splitOn "." with
       | [c, _] => some c | _ => none
     selfMethod := match name.splitOn "." with | [_, m] => some m | _ => none
