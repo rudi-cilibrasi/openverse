@@ -1,0 +1,5 @@
+scope 7 1 99
+scope 7 2 99
+inherited 1
+inherited 2
+exit=0

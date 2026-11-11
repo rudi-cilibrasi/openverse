@@ -215,9 +215,27 @@ fields are first put in that order, which by itself changes nothing. Then
 they are lifted as a call's arguments. `Choice` works on syntax, so the
 elaborator passes the order in (`choiceOrder`, through `prepare`,
 `hasChoice` and `takeFirst?`). Each field's entry also says whether its default is more than a literal.
-Where the order is not known (an eager `F$all` template), a field is given
-twice, or such a default comes before the last choice (it would run after
-it), the construction is not lifted and the choice is refused there.
+Omitted computed defaults before the last choice become `$fieldDefault`
+operands in that order. The elaborator uses the same home-class scope,
+actual type arguments, cycle check and effect accounting as an ordinary
+default. `$fieldValue` keeps an earlier explicit operand's expected field
+type when it is bound before a choice. Allocation, class blocks and later
+defaults remain in the final construction.
+
+An implicit generic instance may come only from the original binding or
+call's expected type. A discarded type probe keeps each construction whole
+and checks its field choices with native typed consumers, including inline
+and lazy templates. It records the actual instance with its source position,
+active inline site, incoming lexical types, aliases and source/default scope.
+The real pass checks compatible instances and requires a unique result.
+Operands carry the contextual type metadata through continuation and refining
+helpers, specialized before their lexical aliases disappear. Compile-time
+inline scope markers carry the active call through nested consumers; helper
+keys and requests retain that scope. The metadata creates no runtime locals
+or extra written-type dependencies, while type substitution still updates
+it when a branch is refined.
+Where the order is not known (an eager `F$all` template), or a field is given
+twice, the construction stays in place for its normal error.
 A call's arguments are put in the order the call evaluates them,
 positional ones then named ones as written, and a named one's value is
 lifted like an argument. Every call path (direct, generic, a method's
@@ -229,7 +247,7 @@ A block or construction kept with a choice inside becomes
 until nothing is left (`liftCmp`, `liftOps`) do not try it again and
 again. The elaborator elaborates `e` with `liftWhy` set, and the choice's
 refusal says why: a range it binds (which only a `for`
-clause can), or the default that would run after the choice. A block's
+clause can), or a construction whose field order is unknown. A block's
 renamed locals are `$b…'N`, and messages show `N` (`shownName`).
 `hasLiftable` does not look inside a `.block` that is an argument of a `$…`
 marker. That block is the body of `first{…}`, `spawn`, `branch`, `sync`,
