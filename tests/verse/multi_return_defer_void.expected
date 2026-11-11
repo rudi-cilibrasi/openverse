@@ -1,0 +1,19 @@
+early
+last 1
+value
+last 2
+value
+case 0
+empty
+empty value
+case 1
+empty
+empty value
+case 2
+body 1
+empty
+empty value
+body 2
+empty
+empty value
+exit=0

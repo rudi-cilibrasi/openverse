@@ -198,15 +198,20 @@ the names its scope declares after it renamed (`$later'N`, shown as `N`,
 `deferBodies`), so it cannot use them, as where it was. As LANGUAGE.md
 lowers a `defer:` after the rest of its scope, they run as each value
 leaves the block, and not for a value whose clauses fail. The same goes
-for a function's own `defer:`s, after `$r0` in its `$inline` template (not
-after a `return`, which may leave first, and not in a recursive one or one
-reached from it, whose body is a function's); a branch's own, in
-`elimReturns`, at its `return` after the value or at its end before the
-rest of the function; one with a `return` before its end must always
-return (`branchDeferBad`), so the rest never follows it, and its
-`defer:`s stay in the blocks its own `if`s make. Every block
-`elimReturns` makes has its `defer:`s after its value too, as it may be
-spliced into a path or a choice's alternative; a block as a branch (`bifToExcl`); and a branch typed
+for a non-returning function's own `defer:`s, after `$r0` in its `$inline`
+template (not in a recursive one or one reached from it, whose body is a
+function's). Returning functions keep registrations until
+`elimScopedReturns` normalizes their scopes. Each `ReturnScope` retains
+its continuation and reached registrations. Branch fallthrough executes
+that branch's cleanup before resuming the parent's continuation. A return
+saves its operand at the declared result type, executes each active scope's
+cleanup from the inside outward, then yields the saved value. Registrations
+after an earlier return are reached only on fallthrough paths. Empty scope
+fallthrough yields void, and a final registration is followed by a void
+return. The existing plain-return shape remains for bodies without cleanup;
+both paths use the same exclusive branch constructor, without adding a
+generator boundary. The same block cleanup applies to a block as a branch
+(`bifToExcl`) and a branch typed
 apart as `option{…}` (`elabBranchAlts`), whose braces hold clauses. A
 `defer:`'s body is no failure context that takes a choice
 (`elabDefersCore` clears `inTaking`).

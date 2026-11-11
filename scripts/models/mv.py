@@ -65,6 +65,8 @@ flags: heavy     (with bif: more of them, longer chains, longer conditions)
        noaltch   (no alternative of a choice with several values of its own: a
                   choice, a call of a function with several values or of a
                   generator, #296; on with lazy otherwise)
+       retdefer-control (emit an equivalent pre-change layout of returning
+                  cleanup scopes, with the same independent trace oracle)
 """
 import copy
 import os
@@ -411,6 +413,11 @@ RT = LAZY and 'nort' not in flags and 'cf' not in flags
 # choice was reached), RT3's do not; p, e and q stay when both of a fall-through's
 # values are rejected (the choice after the if was reached).
 RT2 = RT and 'nort2' not in flags
+# Cleanup executes before each value leaves a returning scope. A branch
+# that falls through cleans up once before the later choice; registrations
+# after its returning path are reached only on fallthrough. Keep this draw
+# independent of the expression generator and its existing seed streams.
+RET_DEFER = RT2 and random.Random(seed * 1000003 + 283391).random() < 0.5
 REFUSED = [False]
 
 
@@ -1533,17 +1540,27 @@ def ev(e, st, k, mode):
             def alt_ret(s1, k2):
                 s1.out.append(f"p{chks(v + 1, s1)}")
                 s1.out.append('rt')
+                def leave(x, s):
+                    if RET_DEFER:
+                        s.out.extend([f'branch b {t.upper()}', f'branch a {t.upper()}', f'outer {t.upper()}'])
+                    return k2(x, s)
                 if t == 'rt2':
-                    return choice_point([val(99), val(98)], s1, k2, mode)
-                return k2(99, s1)
+                    return choice_point([val(99), val(98)], s1, leave, mode)
+                return leave(99, s1)
             def fall(y):
                 def th(s1, k2):
                     yy = chks(y, s1)
                     s1.out.append(f"p{yy}")
                     s1.out.append(f"e{yy}")
+                    if RET_DEFER and y == v:
+                        s1.out.extend([f'branch b {t.upper()}', f'branch a {t.upper()}'])
                     s1.out.append(f"q{yy}")
                     y10 = chks(yy * 10, s1)
-                    return choice_point([val(y10), lambda s2, k3: k3(chks(y10 + 1, s2), s2)], s1, k2, mode)
+                    def leave(x, s):
+                        if RET_DEFER:
+                            s.out.extend([f'late {t.upper()}', f'outer {t.upper()}'])
+                        return k2(x, s)
+                    return choice_point([val(y10), lambda s2, k3: k3(chks(y10 + 1, s2), s2)], s1, leave, mode)
                 return th
             return choice_point([fall(v), alt_ret, fall(v + 2)], s0, k, mode)
         return ev(e[1], st, krt2, mode)
@@ -2349,9 +2366,26 @@ if RT:
             '        Print("e{RTd}")\n    RTd := RTy * 10\n    RTd\n')
 if RT2:
     for nm, ret in (('RT2', '99 | 98'), ('RT3', '99')):
-        PRE += (f'{nm}(RTa:int):int =\n    RTy := RTa | RTa + 1 | RTa + 2\n    Print("p{{RTy}}")\n'
-                f'    if (RTy = RTa + 1):\n        Print("rt")\n        return {ret}\n    else:\n'
-                f'        Print("e{{RTy}}")\n    Print("q{{RTy}}")\n    RTy * 10 | RTy * 10 + 1\n')
+        if not RET_DEFER:
+            PRE += (f'{nm}(RTa:int):int =\n    RTy := RTa | RTa + 1 | RTa + 2\n    Print("p{{RTy}}")\n'
+                    f'    if (RTy = RTa + 1):\n        Print("rt")\n        return {ret}\n    else:\n'
+                    f'        Print("e{{RTy}}")\n    Print("q{{RTy}}")\n    RTy * 10 | RTy * 10 + 1\n')
+        else:
+            header = [f'{nm}(RTa:int):int =', f'    defer: Print("outer {nm}")',
+                      '    RTy := RTa | RTa + 1 | RTa + 2', '    Print("p{RTy}")']
+            branch = [f'        defer: Print("branch a {nm}")', f'        defer: Print("branch b {nm}")']
+            late = [f'    defer: Print("late {nm}")', '    Print("q{RTy}")', '    RTy * 10 | RTy * 10 + 1']
+            if 'retdefer-control' in flags:
+                # Ordinary pre-change scopes: a returning branch and an
+                # else that cleans up its fallthrough branch before the tail.
+                body = ['    if (RTy = RTa + 1):'] + branch + ['        Print("rt")', f'        return {ret}', '    else:',
+                    '        if (RTy = RTa):', *('    ' + s for s in branch), '            Print("e{RTy}")',
+                    '        else: Print("e{RTy}")', *('    ' + s for s in late[:-1]), '        return RTy * 10 | RTy * 10 + 1']
+            else:
+                body = ['    if (RTy <= RTa + 1):'] + branch + ['        if (RTy = RTa + 1):',
+                    '            Print("rt")', f'            return {ret}', '        Print("e{RTy}")',
+                    '    else: Print("e{RTy}")'] + late
+            PRE += '\n'.join(header + body) + '\n'
 if NAM:
     PRE += 'NAM(NU:int, ?NV:int = Tell("dv", NU)):int = NU + NV | NV * 2\n'
 if OVL:
