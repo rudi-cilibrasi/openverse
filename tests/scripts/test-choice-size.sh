@@ -3,13 +3,28 @@
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
-for kind in composed exclusive binding typed-first typed-for typed-exclusive refined-for refined-state refined-failure lazy-first lazy-for lazy-effect-first lazy-effect-for lazy-alt-first lazy-alt-for lazy-failure-for lazy-alt-failure-for lazy-exclusive-failure-for refined-lazy-failure refined-return refined-lazy-return refined-nested-body refined-nested-failure lazy-generic-first construct-first construct-for construct-failure method-first method-for method-failure lazy-named-first lazy-named-for lazy-named-generic-first bound-first bound-for bound-failure covariant-first covariant-for covariant-failure tuple-super-first tuple-super-for tuple-super-failure lazy-tuple-first lazy-tuple-for lazy-tuple-generic-first immediate-suspends-refined immediate-suspends-composed immediate-suspends-exclusive immediate-suspends-nested refined-retry-first super-first super-for super-failure super-body mutual-generic-first mutual-generic-for mutual-generic-alt-first; do
+for kind in composed exclusive binding typed-first typed-for typed-exclusive refined-for refined-state refined-failure lazy-first lazy-for lazy-effect-first lazy-effect-for lazy-alt-first lazy-alt-for lazy-failure-for lazy-alt-failure-for lazy-exclusive-failure-for refined-lazy-failure refined-return refined-lazy-return refined-nested-body refined-nested-failure lazy-generic-first construct-first construct-for construct-failure method-first method-for method-failure lazy-named-first lazy-named-for lazy-named-generic-first bound-first bound-for bound-failure covariant-first covariant-for covariant-failure tuple-super-first tuple-super-for tuple-super-failure lazy-tuple-first lazy-tuple-for lazy-tuple-generic-first immediate-suspends-refined immediate-suspends-composed immediate-suspends-exclusive immediate-suspends-nested refined-retry-first super-first super-for super-failure super-body mutual-generic-first mutual-generic-for mutual-generic-alt-first suspends-return suspends-return-generic suspends-return-lazy; do
   sizes=()
   for count in 4 8; do
     python3 - "$kind" "$count" >"$tmp/p.verse" <<'PY'
 import sys
 kind, count = sys.argv[1], int(sys.argv[2])
 print('Two(N:int):int = N | N + 1')
+if kind.startswith('suspends-return'):
+    print('pair(a:type,b:type) := class { A:a; B:b }')
+    print('dup(t:type) := class(pair(t,t)) { C:int=4 }')
+    print('counter := class { var N:int=0 }')
+    print('Lazy(H:counter,N:int)<transacts><decides>:int =\n    N>=0\n    set H.N+=1\n    N|Lazy[H,N-1]')
+    params = ','.join(f'P{i}:pair(a{i},b{i})' for i in range(count))
+    tparams = ','.join(f'a{i}:type,b{i}:type' for i in range(count))
+    clauses = ','.join(f'A{i}:=if(D{i}:=dup[P{i}])then(D{i}.C|D{i}.C+1)else 0' for i in range(count))
+    if kind.endswith('lazy'): clauses += ',L:=Lazy[H,2]'
+    generic = kind.endswith('generic')
+    ret_ty, result, fallback = ('a0','P0.A','P0.A') if generic else ('int','Total','-1')
+    print(f'Run({params} where {tparams})<suspends>:{ret_ty} =\n    var Total:int=0\n    H:=counter{{}}\n    defer:Print("source {{Total}}")\n    branch:\n        defer:Print("observer {{Total}}")\n        Sleep(1.0)\n    Sleep(0.0)\n    for({clauses}):\n        defer:set Total+=100\n        set Total+=A0\n        if(A0=5):return {result}\n        A0\n    Sleep(0.1)\n    {fallback}')
+    args = ','.join('dup(int){A:=1,B:=2}' if i%2==0 else 'dup(string){A:="s",B:="t"}' for i in range(count))
+    print(f'Main()<suspends>:void = Print("{{Run({args})}}")')
+    sys.exit(0)
 if kind == 'refined-retry-first':
     print('pair(a:type,b:type) := class { A:a; B:b }')
     print('dup(t:type) := class(pair(t,t)) { C:int=4 }')
