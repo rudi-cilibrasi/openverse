@@ -1,0 +1,6 @@
+receiver 1
+miss 1
+reject 1
+try 2
+hit 2
+exit=0

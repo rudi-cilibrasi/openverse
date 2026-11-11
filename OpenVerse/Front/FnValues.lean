@@ -327,15 +327,6 @@ def desugar (tops : List STop) (extra : List STop := []) (requests : List (Strin
   -- methods used as values (`X.M`, or `M` in the class's methods): each
   -- declaring class's method, its receiver a field `$self` (#210)
   let members := named.filterMap fun n => if n.startsWith "." then some (n.drop 1).toString else none
-  -- (a method value's class is valid when the class's type parameters
-  -- occur once each in the shape's type arguments, as whole types)
-  let valid (tps : List TParam) (targs : List STy) : Bool :=
-    let tpn := tps.map (·.name)
-    let bare := targs.filterMap fun | .name x => if tpn.contains x then some x else none | _ => none
-    let whole := targs.all fun t => match t with
-      | .name _ => true
-      | t => !tpn.any t.mentions
-    whole && tpn.all bare.contains && bare.eraseDups.length == bare.length
   -- (the declaration an override overrides: the nearest class or interface
   -- above that declares the method)
   let classOf (c : String) : Option (List TParam × List STy × List STop) := tops.findSome? fun
@@ -360,32 +351,20 @@ def desugar (tops : List STop) (extra : List STop := []) (requests : List (Strin
       | .classDef _ c tps _ _ _ _ _ ms => ms.filterMap fun
         | .fn mp m ps mtps effs r _ =>
           let targs := ps.map (·.ty) ++ [r]
-          -- (an override needs a class of its own only when its type is not
-          -- its declaration's, a narrower result, #219, or the declaration's
-          -- class cannot have one, as a generic interface's method that a
-          -- class implements at closed types: otherwise the declaration's
-          -- value dispatches to it, and one class per override in a long
-          -- chain of them makes code without end)
+          -- An override with a different signature needs its own value
+          -- class (a narrower result, #219). Otherwise the declaration's
+          -- adapter already dispatches to it, including generic receivers;
+          -- duplicating adapters along a chain grows their dispatch again.
           let needed := !effs.contains "override" || match declOf (tops.length + 1) c m with
-            | some (dtps, dtargs) =>
-              !(valid dtps dtargs) || dtargs.length != targs.length ||
+            | some (_, dtargs) =>
+              dtargs.length != targs.length ||
                 (dtargs.zip targs).any fun (a, b) => reprStr a != reprStr b
             | none => true
-          let tpn := tps.map (·.name)
-          -- (a class's type parameters only as whole, distinct type
-          -- arguments of the shape: one that repeats or nests them would
-          -- implement it under a refinement, not done yet, #209)
-          let bare := targs.filterMap fun | .name x => if tpn.contains x then some x else none | _ => none
-          let whole := targs.all fun t => match t with
-            | .name _ => true
-            | t => !tpn.any t.mentions
+          -- Repeated, compound and hidden receiver arguments use ordinary
+          -- GADT dispatch. The captured receiver retains their witnesses.
           let overloaded := (ms.filter fun | .fn _ m' .. => m' == m | _ => false).length > 1
-          -- (and every one of them: the class's type arguments must be
-          -- recoverable from the shape's, #53)
-          let complete := tpn.all bare.contains
           if members.contains m && needed && !overloaded && mtps.isEmpty && ps.all (!·.named) && !m.contains '$' &&
-              !m.startsWith "(" &&
-              whole && complete && bare.eraseDups.length == bare.length then
+              !m.startsWith "(" then
             some (mp, c, tps, m, ps, effs, r)
           else none
         | _ => none
