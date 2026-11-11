@@ -826,6 +826,9 @@ Main():void =
   it creates. Trailing defaults and the constructed class's blocks run for
   each completed value. Defaults retain their declaration scope and type
   arguments, including inherited defaults and implicit generic instances.
+  A construction inside a recursive function computed eagerly keeps this
+  order and these default types too. Its defaults and class blocks must
+  meet that function's effect restrictions.
 
   Refused for now: an alternative of a `set`'s choice, either side of `and`, the right of `or`,
   a range, or a block with a range of its own as a branch; and
