@@ -13,6 +13,8 @@ kinds=(
   bound-method-for
   bound-method-nested-first
   bound-method-phantom-first
+  context-value-first
+  context-value-for
   clause-break-composed
   clause-break-exclusive
   clause-break-refined
@@ -128,6 +130,20 @@ for kind in "${kinds[@]}"; do
 import sys
 kind, count = sys.argv[1], int(sys.argv[2])
 print('Two(N:int):int = N | N + 1')
+if kind.startswith('context-value-'):
+    print('Id(X:t where t:type)<computes>:t=X')
+    print('Twice(F:type{_(:t)<computes>:t},X:t where t:type)<computes>:t=F(X)|F(X)')
+    params = ','.join(f'X{i}:t{i}' for i in range(count))
+    tparams = ','.join(f't{i}:type' for i in range(count))
+    clauses = ','.join(f'A{i}:=Twice(Id,X{i})' for i in range(count))
+    if kind.endswith('first'):
+        body = f'    if({clauses},E:[]t0=Concatenate())then E.Length else -1'
+    else:
+        body = f'    R:=for({clauses},E:[]t0=Concatenate()):A0\n    R.Length'
+    print(f'Run({params} where {tparams})<computes>:int=\n{body}')
+    args = ','.join('7' if i%2==0 else '"s"' for i in range(count))
+    print(f'Main():void=Print("{{Run({args})}}")')
+    sys.exit(0)
 if kind.startswith('method-tuple-'):
     print('''box(t:type):=class:
     V:t

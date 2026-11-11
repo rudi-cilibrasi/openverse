@@ -567,8 +567,12 @@ every type it writes; its parameters are bound together by a `$params`
 clause, which infers the type arguments from the arguments as a generic
 call does (each argument checked against its parameter's type once the
 type parameters it mentions are bound, else inferring them; `false`,
-`array{}` and `map{}` last) and names them for the types after, the
-value's and the body's. With named parameters, the defaults of those
+`array{}`, `map{}` and generic function identifiers last) and names them for the types after, the
+value's and the body's. Ordinary, inline and generic method argument
+binding share `Ctx.argNeedsType`: locals, fields and visible methods take
+precedence over same-named generic top-level functions. Type inference can
+wait for later arguments while generated evaluation remains in written
+order. With named parameters, the defaults of those
 omitted follow in a `$defaults` clause (#283): in order, each seeing the
 parameters before it, at its parameter's type, or, when that mentions a
 type parameter nothing else determined, giving it its type argument, as a
