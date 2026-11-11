@@ -1,0 +1,6 @@
+default A
+default B 3
+body 3 4
+spawned
+done
+exit=0
