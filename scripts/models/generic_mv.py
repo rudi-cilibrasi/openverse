@@ -25,6 +25,9 @@ The model:
     classes for one t are refused (exit 4), `false`, `array{}` and a tuple for
     `[]t` convert, and `where t:subtype(comparable)` is checked at the call;
   * arguments are evaluated in order, the code before a choice once;
+  * composed and conditional choices in a generic for preserve mutable
+    state across generator boundaries; written-only result types retain
+    their type arguments even when no captured value determines them;
   * an effectful generator where the first success is taken inside a generic
     consumer is refused (exit 4).
 """
@@ -752,6 +755,55 @@ class Gen:
             self.producer(R.choice(kinds_i + kinds_l + kinds_e))
         for _ in range(R.randint(3, 7)):
             self.stmt()
+        self.for_continuations()
+
+    def for_continuations(self):
+        # Keep the seed's earlier producers and consumers unchanged. Scalar B
+        # belongs to A's filter; a choice B starts a new generator boundary.
+        rng = random.Random(self.seed * 1000003 + 335)
+        cut, limit, bound = rng.randint(0, 5), rng.randint(-1, 12), rng.randint(0, 5)
+        name = self.fresh("ContValues")
+        written = self.fresh("ContWritten")
+        pair = self.fresh("ContPair")
+        self.consumers.append(f'''{pair}(N:int)<computes>:int = N | N + 1
+{name}(X:t, Limit:int where t:type)<transacts>:[]tuple(t, int) =
+    var Total:int = 0
+    Values := for (A := {pair}(1) | {pair}(3), set Total += A,
+                   B := if (A > {cut}) then (10 | 11) else 0, B > Limit,
+                   C := {pair}(1) | {pair}(3), C <= {bound}):
+        set Total += B + C
+        (X, A * 100 + B * 10 + C)
+    Print("cont state {{Total}} {{Values.Length}}")
+    Values
+{written}(X:t where t:type):[][]t =
+    for (A := {pair}(1) | {pair}(3), A <= {bound}, B := {pair}(1) | {pair}(3), B > {cut}):
+        E:[]t = array{{}}
+        E''')
+        for literal in [str(rng.randint(-9, 9)), '"s"']:
+            value = literal.strip('"')
+            result = self.fresh("ContResult")
+            self.main.append(f"{result} := {name}({literal}, {limit})")
+            self.main.append(f'for (V : {result}) {{ Print("cont value {{V(0)}} {{V(1)}}") }}')
+            total, values = 0, []
+            for a in range(1, 5):
+                before = total
+                total += a
+                generated = a > cut
+                bs = [10, 11] if generated else [0]
+                for b in bs:
+                    if b <= limit:
+                        if not generated:
+                            total = before
+                        continue
+                    for c in range(1, 5):
+                        if c <= bound:
+                            total += b + c
+                            values.append(a * 100 + b * 10 + c)
+            self.m.out.append(f"cont state {total} {len(values)}")
+            self.m.out.extend(f"cont value {value} {code}" for code in values)
+            self.main.append(f'Print("cont written {{{written}({literal}).Length}}")')
+            count = sum(a <= bound and b > cut for a in range(1, 5) for b in range(1, 5))
+            self.m.out.append(f"cont written {count}")
 
     def text(self):
         pre = """pt := struct:
