@@ -74,6 +74,17 @@ LocalState(P:pair(a, b) where a:type, b:type):void =
         Print("set {Total}")
     else:
         Print("set missed {Total}")
+Sequential(P:pair(a, b), Q:pair(c, d) where a:type, b:type, c:type, d:type)<transacts>:void =
+    H := counter{}
+    var Total:int = 0
+    if (V := if (D := dup[P]) then (Touch(H, 1, D.C) | Touch(H, 2, D.C + 1)) else 0,
+        set Total += V,
+        W := if (E := dup[Q]) then (Touch(H, 10, V + E.C) | Touch(H, 20, V + E.C + 1)) else V,
+        set Total += W,
+        W > 8):
+        Print("sequential {V} {W} {Total} {H.N}")
+    else:
+        Print("sequential missed {Total} {H.N}")
 Main()<transacts>:void =
     Match := dup(int){A := 1, B := 2}
     Miss := pair(int, string){A := 1, B := "s"}
@@ -93,3 +104,5 @@ Main()<transacts>:void =
     Prior(Match, pair(int, int){A := 1, B := 2})
     LocalState(Match)
     LocalState(Miss)
+    Sequential(Match, Match)
+    Sequential(Match, Miss)

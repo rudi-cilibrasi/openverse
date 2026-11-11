@@ -1736,6 +1736,7 @@ structure FirstLift where
   pos : Pos
   name : String
   params : List SParam
+  tparams : List TParam := []
   specs : List String
   ret : STy
   body : SExpr
