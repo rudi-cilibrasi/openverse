@@ -30,6 +30,7 @@ import OpenVerse.Front.Choice
 import OpenVerse.Front.Refine
 import OpenVerse.Front.FrameRefs
 import OpenVerse.Front.SourceFrames
+import OpenVerse.Front.FailCapture
 import OpenVerse.Front.Types
 import Std.Data.HashMap
 
@@ -358,6 +359,8 @@ structure Ctx where
       (#208): a choice that reaches the elaborator here is in a place it
       cannot be lifted from. -/
   inTaking : Bool := false
+  /-- The internal loop that propagates a failed continuation outcome. -/
+  forOutcomeSlot : Option Nat := none
   /-- Inside a block or construction kept with a choice in it (`$noLift`,
       #283): what it is, for the message. -/
   liftWhy : String := ""
@@ -1821,12 +1824,12 @@ def forBodySafe (ctx : Ctx) (body : SExpr) : Bool :=
     the final values of the `var`s they set), called from each alternative's
     own `for`. Its binding's type `bty`, the values' type `vty`. Or why not,
     and the clauses are copied, as before. -/
-def contForLiftOf (ctx : Ctx) (p : Pos) (b : String) (bty vty : Ty) (alts rest : List SExpr) (body : SExpr) :
+def contForLiftOf (ctx : Ctx) (p : Pos) (b : String) (bty vty : Ty) (alts rest : List SExpr) (body : SExpr) (outcome : Bool := false) :
     Except String Choice.FirstLift := do
   if ctx.inCtor || ctx.inParamDefault || ctx.inBlock || ctx.inDefer || !ctx.defaults.isEmpty then
     throw "in a constructor, a default or a defer"
   let written := SExpr.block p (rest ++ [body])
-  let key := "f" ++ contKey ctx p b (alts ++ rest ++ [body])
+  let key := (if outcome then "fo" else "f") ++ contKey ctx p b (alts ++ rest ++ [body])
   let σt := ctx.types.tvars.map fun (n, t) => (n, t.toSTy)
   let rest := rest.map (Refine.substTypes σt)
   let body := Refine.substTypes σt body
@@ -1848,14 +1851,30 @@ def contForLiftOf (ctx : Ctx) (p : Pos) (b : String) (bty vty : Ty) (alts rest :
   let params : List SParam := { name := b, ty := bty.toSTy } ::
     caps.map fun l => { name := if sets.any (·.name == l.name) then s!"{l.name}$in" else l.name, ty := l.ty.toSTy }
   let vals := s!"{b}$vals"
-  let ffirst : SExpr := .app p (.ident p "$forFirst") [.block p rest, body] false
-  let ret : STy := if sets.isEmpty then .arr vty.toSTy else .tup (.arr vty.toSTy :: sets.map (·.ty.toSTy))
+  let valueTy : STy := if outcome then .opt (.arr vty.toSTy) else .arr vty.toSTy
+  let failure : SExpr := if sets.isEmpty then .ident p "false" else
+    .tuple p (.ident p "false" :: sets.map fun l => SExpr.ident p l.name)
+  let ffirst : SExpr := if outcome then
+      .app p (.ident p "$forFirstOutcome") [.block p rest, body, failure] false
+    else .app p (.ident p "$forFirst") [.block p rest, body] false
+  let ret : STy := if sets.isEmpty then valueTy else .tup (valueTy :: sets.map (·.ty.toSTy))
   let bodyE : SExpr := if sets.isEmpty then .block p (copies ++ [ffirst]) else
     .block p (copies ++ [.decl p vals none false ffirst, .tuple p (.ident p vals :: sets.map fun l => SExpr.ident p l.name)])
   return { key, pos := p, name, params := params ++ typeParams, tparams := tps,
            specs := (if heap.isEmpty then ["computes"] else heap) ++ ["decides"],
            ret, body := bodyE, binds := [], sets := sets.map (·.name),
            args := SExpr.ident p b :: caps.map (fun l => SExpr.ident p l.name) ++ typeArgs }
+
+/-- A failed body is unwrapped in an iteration body. Inside an outcome
+    producer, stop its private loop instead of failing the filter. -/
+def forOutcomeValues (ctx : Ctx) (p : Pos) (r : R) : EM R := do
+  let .opt (.arr t) := r.ty | eerr p "internal: expected a for outcome"
+  let value := Expr.prim .query [r.e]
+  if let some flag := ctx.forOutcomeSlot then
+    let slot ← fresh (.arr t)
+    return ⟨.ite (.assign slot value) (.local slot)
+      (.seq (.assign flag (.lit (.logic false))) (.seq .brk (.prim .userErr []))), .arr t⟩
+  return ⟨value, .arr t⟩
 
 /-- `for`: clauses are generators, bindings and filters; each generator opens
     a nested `forE`, and nested results are flattened (cartesian product,
@@ -1868,7 +1887,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
     (elabE : Ctx → SExpr → Option Ty → EM R) (elabInts : Ctx → Pos → List SExpr → EM (List Expr))
     (elabLoopGen : Ctx → Pos → List SExpr → EM LoopGen) (elabSeq : Ctx → List SExpr → Option Ty → EM (R × Ctx))
     (ctx : Ctx) (p : Pos) (clauses : List SExpr) (body : SExpr) (prepared : Bool := false)
-    (firstDecides : Bool := false) : EM R := do
+    (firstDecides : Bool := false) (failure : Option SExpr := none) : EM R := do
   let ctx := { ctx with liftWhy := "" }
   -- (a choice is a generator over its alternatives, #208; clauses lifted
   -- already, `prepared`, are not lifted again)
@@ -1915,9 +1934,9 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
       let fs := cs.takeWhile (!isGen ·)
       (g, fs) :: groups (cs.dropWhile (!isGen ·))
   let gs := groups rest
-  -- (where the body may fail: not in a continuation's own clauses, made
-  -- only where it may not, #335)
-  let bodyFail := ctx.canFail && !firstDecides
+  -- A failable continuation body returns an explicit outcome. Its first
+  -- filter still fails the call, so the caller retains that boundary.
+  let bodyFail := (ctx.canFail && !firstDecides) || failure.isSome
   let bodyCtx (c : Ctx) : Ctx := { c with canFail := bodyFail, inLoop := false, inRepeat := true }
   -- elaborate the filters of one generator (in a failure context)
   let elabFilters (c : Ctx) (fs : List SExpr) : EM (Expr × Ctx) := do
@@ -1959,7 +1978,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
           let (_, ty, _, refined) ← elabBranchAlts { cA with canFail := true, inTaking := true, typeOnly := true }
             b.pos i b.ty b.place
           set st
-          if refined && !bodyFail && forBodySafe cA bd then
+          if refined && forBodySafe cA bd then
             checkNewLocal cA b.pos b.name
             if cA.typeOnly then
               let slot ← fresh ty
@@ -1967,13 +1986,13 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
               let (f, a, t) ← exclIter cB after more bd
               return (.seq codeA f, a, t)
             let restCl := after ++ moreCl
-            let key := "f" ++ contKey cA b.pos b.name (i :: restCl ++ [bd])
+            let key := (if bodyFail then "fo" else "f") ++ contKey cA b.pos b.name (i :: restCl ++ [bd])
             let req := cA.types.loopRequests.find? (·.key == key)
             let fits (l : Choice.FirstLift) : Bool :=
               (l.specs.filter (["reads", "writes", "allocates"].contains ·)).all cA.fnFx.contains
             let hasLoop := restCl.any
               (Choice.anyE fun | .app _ (.ident _ "$loop") _ _ => true | _ => false)
-            if req.isNone && !hasLoop && (contForLiftOf cA b.pos b.name ty .void [i] restCl bd).toOption.isSome then
+            if req.isNone && !hasLoop && (contForLiftOf cA b.pos b.name ty .void [i] restCl bd bodyFail).toOption.isSome then
               -- Elaborate the suffix once, in its source context. Otherwise
               -- an inner lift can retain an outer var's old name after the
               -- enclosing lift has renamed it for mutable copy-out.
@@ -1981,8 +2000,9 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
               let cB := { cA with locals := { name := b.name, slot, ty, mutable := false } :: cA.locals }
               let values ← elabForWith elabAlts elabBranchAlts elabE elabInts elabLoopGen elabSeq
                 cB p restCl bd (prepared := true) (firstDecides := true)
+                  (failure := if bodyFail then some (.app p (.ident p "Err") [] false) else none)
               let .arr t := values.ty | eerr b.pos "internal: a refining for's suffix"
-              match contForLiftOf cA b.pos b.name ty t [i] restCl bd with
+              match contForLiftOf cA b.pos b.name ty t [i] restCl bd bodyFail with
               | .ok lift =>
                 modify fun st => { st with loopFirst := st.loopFirst ++
                   [{ g := "", pos := b.pos, itemCode := .lit .void, argSet := none, lift := .ok lift }] }
@@ -2003,13 +2023,21 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
                 let cl := Choice.prepare [.decl b.pos b.name (some ty.toSTy) false arm]
                   (choiceValues cA) (choiceField cA) (site := site) (fieldOrder := choiceOrder cA)
                   (keepExcl := true) (keepBranches := choiceHasCast cA)
-                .optionLit b.pos (.app b.pos (.ident b.pos "$forFirst")
-                  [.block b.pos (cl ++ callCl ++ [.gen b.pos elem none (.ident b.pos kv)]), .ident b.pos elem] false)
+                let vals : SExpr := if bodyFail then
+                  .app b.pos (.ident b.pos "$forOutcomeValues") [.ident b.pos kv] false
+                  else .ident b.pos kv
+                let clauses := .block b.pos (cl ++ callCl ++ [.gen b.pos elem none vals])
+                .optionLit b.pos (if bodyFail then
+                    .app b.pos (.ident b.pos "$forFirstOutcome")
+                      [clauses, .ident b.pos elem, .app b.pos (.ident b.pos "Err") [] false] false
+                  else .app b.pos (.ident b.pos "$forFirst") [clauses, .ident b.pos elem] false)
               let selected := Choice.consumeBranches i site consume
               let values ← elabE { cA with canFail := true, inTaking := true } (.query b.pos selected) none
-              let .arr t := values.ty | eerr b.pos "internal: a refining for's values"
+              let arrTy := if bodyFail then match values.ty with | .opt t => t | t => t else values.ty
+              let .arr t := arrTy | eerr b.pos "internal: a refining for's values"
               let slot ← fresh values.ty
-              return (.seq codeA (.assign slot values.e), .local slot, t)
+              let value ← if bodyFail then forOutcomeValues cA b.pos ⟨.local slot, values.ty⟩ else pure ⟨.local slot, values.ty⟩
+              return (.seq codeA (.assign slot values.e), value.e, t)
           let cl := fs[j]?.getD (.tuple p [])
           let (f, a, t) ← exclIter cA (Choice.bifToExcl cl ++ after) more bd
           return (.seq codeA f, a, t)
@@ -2061,9 +2089,9 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
         let restCl := after ++ moreCl
         let hasLoop := (altsS ++ restCl ++ [bd]).any
           (Choice.anyE fun | .app _ (.ident _ "$loop") _ _ => true | _ => false)
-        let contOK := restCl.any isCF && !hasLoop && !bodyFail && forBodySafe cA bd && xty.isSome
+        let contOK := restCl.any isCF && !hasLoop && forBodySafe cA bd && xty.isSome
         let req := if !contOK || cA.typeOnly then none else
-          cA.types.loopRequests.find? (·.key == "f" ++ contKey cA gp x (altsS ++ restCl ++ [bd]))
+          cA.types.loopRequests.find? (·.key == (if bodyFail then "fo" else "f") ++ contKey cA gp x (altsS ++ restCl ++ [bd]))
         let fits (l : Choice.FirstLift) : Bool :=
           (l.specs.filter (["reads", "writes", "allocates"].contains ·)).all cA.fnFx.contains
         let kv := s!"$xk{gp.line}_{gp.col}{x}v"
@@ -2076,7 +2104,8 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
                 [.decl gp kt none false call] ++
                   l.sets.zipIdx.map (fun (m, j) => SExpr.set gp (.ident gp m) none (.app gp (.ident gp kt) [.int gp ((j + 1 : Nat) : Int)] false)) ++
                   [.decl gp kv none false (.app gp (.ident gp kt) [.int gp 0] false)]
-              pure (alts.zipIdx.map fun ((gs, r), i) => (liftP gs r i ++ callCl, .ident gp kv, true))
+              let vals : SExpr := if bodyFail then .app gp (.ident gp "$forOutcomeValues") [.ident gp kv] false else .ident gp kv
+              pure (alts.zipIdx.map fun ((gs, r), i) => (liftP gs r i ++ callCl, vals, true))
             else pure (alts.zipIdx.map fun ((gs, r), i) => (liftP gs r i ++ restCl, bd, false))
           | none =>
             -- (the first elaboration: the first path with the clauses after
@@ -2086,10 +2115,10 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
               let bty ← resolveTy cA.types gp sty
               -- (what refuses it known before the trial, which then costs
               -- nothing: all but the values' type, #364's review)
-              if (contForLiftOf cA gp x bty .void altsS restCl bd).toOption.isSome then
+              if (contForLiftOf cA gp x bty .void altsS restCl bd bodyFail).toOption.isSome then
                 let st0 ← get
                 let (f0, a0, t0) ← runPath (liftP gs0 r0 0 ++ restCl) bd false
-                match contForLiftOf cA gp x bty t0 altsS restCl bd with
+                match contForLiftOf cA gp x bty t0 altsS restCl bd bodyFail with
                 | .ok lift =>
                   let use : LoopUse := { g := "", pos := gp, itemCode := .lit .void, argSet := none, lift := .ok lift }
                   modify fun st => { st with loopFirst := st.loopFirst ++ [use] }
@@ -2116,6 +2145,10 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
     match gs with
     | [] =>
       let r ← elabE (bodyCtx c) bd none
+      if let some failed := failure then
+        let packet ← elabE { c with canFail := false } failed (some c.retTy)
+        let hint ← fresh (.opt r.ty)
+        return ⟨FailCapture.marked hint r.e (.ret packet.e), r.ty⟩
       return r
     | (g, fs) :: more =>
       let declare (c : Ctx) (n : String) (ty : Ty) : EM (Nat × Ctx) := do
@@ -2140,7 +2173,8 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
               (fieldOrder := choiceOrder c)
               (site := s!"{site}a{i}") (keepExcl := true) (keepBranches := choiceHasCast c)
           let forW (cl : List SExpr) (bd : SExpr) : EM R :=
-            elabForWith elabAlts elabBranchAlts elabE elabInts elabLoopGen elabSeq bctx p cl bd (prepared := true)
+            elabForWith elabAlts elabBranchAlts elabE elabInts elabLoopGen elabSeq bctx p cl bd
+              (prepared := true) (failure := failure)
           -- (#335, phase 2: another such choice, or an exclusive one, in the
           -- clauses after it, and a body that may run in a failure context:
           -- those clauses and the body a function of their own, which each
@@ -2148,11 +2182,11 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
           let restCl := fs ++ moreClauses
           let hasLoop := (b.alts ++ restCl ++ [bd]).any
             (Choice.anyE fun | .app _ (.ident _ "$loop") _ _ => true | _ => false)
-          -- (not where the body may fail: a failure would fail one call, not
-          -- the for, #342's review)
-          if restCl.any isCF && !hasLoop && !bodyFail && forBodySafe c bd then
+          -- Failable bodies return outcomes so failure stops the entire
+          -- for, rather than merely rejecting one continuation call.
+          if restCl.any isCF && !hasLoop && forBodySafe c bd then
             let req := if c.typeOnly then none else
-              c.types.loopRequests.find? (·.key == "f" ++ contKey c gp b.name (b.alts ++ restCl ++ [bd]))
+              c.types.loopRequests.find? (·.key == (if bodyFail then "fo" else "f") ++ contKey c gp b.name (b.alts ++ restCl ++ [bd]))
             let fits (l : Choice.FirstLift) : Bool :=
               (l.specs.filter (["reads", "writes", "allocates"].contains ·)).all c.fnFx.contains
             if let some l := req then
@@ -2166,7 +2200,8 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
                     [.decl gp kt none false call] ++
                       l.sets.zipIdx.map (fun (m, j) => SExpr.set gp (.ident gp m) none (.app gp (.ident gp kt) [.int gp ((j + 1 : Nat) : Int)] false)) ++
                       [.decl gp kv none false (.app gp (.ident gp kt) [.int gp 0] false)]
-                  let r ← forW (liftA a i ++ callCl) (.ident gp kv)
+                  let vals : SExpr := if bodyFail then .app gp (.ident gp "$forOutcomeValues") [.ident gp kv] false else .ident gp kv
+                  let r ← forW (liftA a i ++ callCl) vals
                   match r.ty with
                   | .arr (.arr t) => parts := parts ++ [⟨.prim .flatten [r.e], .arr t⟩]
                   | _ => eerr gp "internal: a continuation's values"
@@ -2185,14 +2220,14 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
               -- (what refuses it known before the trial, which then costs nothing)
               -- (all its refusals but the values' type, #364's review)
               let known : Bool := match tys.head? with
-                | some bty => (contForLiftOf c gp b.name bty .void b.alts restCl bd).toOption.isSome
+                | some bty => (contForLiftOf c gp b.name bty .void b.alts restCl bd bodyFail).toOption.isSome
                 | none => false
               if same && known then
                 let r0 ← forW (liftA a0 0 ++ restCl) bd
                 match (do
                     let some bty := tys.head? | throw "no type"
                     let .arr vty := r0.ty | throw "no values"
-                    contForLiftOf c gp b.name bty vty b.alts restCl bd) with
+                    contForLiftOf c gp b.name bty vty b.alts restCl bd bodyFail) with
                 | .ok lift =>
                   let use : LoopUse := { g := "", pos := gp, itemCode := .lit .void, argSet := none, lift := .ok lift }
                   modify fun st => { st with loopFirst := st.loopFirst ++ [use] }
@@ -3527,6 +3562,17 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
   -- (a continuation's body, #335: clauses lifted already, failing where their
   -- first filter does, then the values)
   | .app p (.ident _ "$forFirst") [.block _ clauses, body] false => elabFor ctx p clauses body (prepared := true) (firstDecides := true)
+  | .app p (.ident _ "$forFirstOutcome") [.block _ clauses, body, failed] false => do
+    let flag ← fresh .logic
+    let r ← elabFor { ctx with forOutcomeSlot := some flag } p clauses body
+      (prepared := true) (firstDecides := true) (failure := some failed)
+    let result ← fresh (.opt r.ty)
+    return ⟨.seq (.assign flag (.lit (.logic true)))
+      (.seq (.assign result (.lit .none))
+        (.seq (.loop (.seq (.assign result (.prim .mkSome [r.e])) Expr.brkV))
+          (.ite (.prim .query [.local flag]) (.local result) (.lit .none)))), .opt r.ty⟩
+  | .app p (.ident _ "$forOutcomeValues") [value] false => do
+    forOutcomeValues ctx p (← elabE ctx value none)
   -- (#283) a call of an overloaded function with several values, as
   -- written, in the elaboration for types: the overload it takes noted
   | .app _ (.ident _ "$ovPick") [.int _ id, .ident _ f, call] false =>
@@ -4010,7 +4056,7 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
           set stAfter
         | none => set stAfter
       return ⟨.ite rc.e (← coerce p rt ty) (← coerce p re ty), ty⟩
-  | .forE p clauses body => elabFor ctx p clauses body
+  | .forE p clauses body => elabFor { ctx with forOutcomeSlot := none } p clauses body
   | .gen p _ _ _ => eerr p "a generator X : source can only appear in a for clause"
   | .loop _ body =>
     let lctx := { ctx with inLoop := true, inRepeat := true, loopDefers := ctx.defers.length, inChoice := false }
@@ -5814,9 +5860,9 @@ partial def elabSet (ctx : Ctx) (p : Pos) (lhs0 : SExpr) (op : Option String) (r
 
 /-- `for` (#208, #314): `elabForWith`, given this block's functions (#325). -/
 partial def elabFor (ctx : Ctx) (p : Pos) (clauses : List SExpr) (body : SExpr) (prepared : Bool := false)
-    (firstDecides : Bool := false) : EM R :=
+    (firstDecides : Bool := false) (failure : Option SExpr := none) : EM R :=
   elabForWith elabAlts (fun c q i t pl => elabBranchAlts c q i t pl) elabE elabInts elabLoopGen elabSeq ctx p clauses body
-    prepared firstDecides
+    prepared firstDecides failure
 
 /-- A condition's local types under its cast refinements. Its code is used
     only by the isolated branch-type probe. -/
@@ -10164,6 +10210,11 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   let loopNeeds ← checkLoopFirst fns loopFirst
   if !loopNeeds.isEmpty then
     return { prog := default, sigs := { fns := [] }, slotTys := [], loopNeeds }
+  let (capturedFns, capturedSlots, capturedSigs) ← FailCapture.lower fns slotTys S00
+  fns := capturedFns
+  slotTys := capturedSlots
+  let fsigs0 := capturedSigs.fns
+  fsigs := fsigs0
   if usesConc then
     let (fns1, slotTys1, fsigs1, classTable1, frameClasses1, mainCall1, framePins1, schedMore) ←
       lowerOpening fun forced =>
@@ -10187,7 +10238,10 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     slotTys := slotTys.push []
     fsigs := fsigs ++ [([], if mainSig.suspends then VTy.void else mainSig.ret.toVTy env)]
   let P : Prog := { fns := fns.toList, main }
-  if !P.check then throw "internal error: the elaborated program does not pass Prog.check"
+  if !P.check then
+    let bad := P.fns.filter fun fn => (!fn.decides && fn.body.mayFail P) ||
+      (!fn.writes && fn.body.writesHeap P) || !(fn.body.scoped P fn.nslots)
+    throw s!"internal error: the elaborated program does not pass Prog.check ({bad.map (·.name)})"
   if !P.checkControl then throw "internal error: the elaborated program does not pass Prog.checkControl"
   -- (the frame classes' pins after the classes', #244)
   let pins := (List.range classTable.length).map (fun t => (pins[t]?).getD []) ++ framePins

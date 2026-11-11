@@ -595,10 +595,72 @@ for o in objs:
     expect.append(f"paired state {total} {len(left) * len(right)}")
     expect.append(f"for paired {total}")
 
+# Failable bodies stop the whole consumer, with their output and writes.
+# Model generator boundaries directly: scalar clauses share the current
+# filter's snapshot; each choice creates a fresh boundary for its values.
+R417O = random.Random(seed * 1000003 + 41702)
+op, oq = R417O.choice(objs), R417O.choice(objs)
+threshold, limit = R417O.randint(-2, 7), R417O.randint(-1, 7)
+left = [op['C'], op['C'] + choice_offset] if below(op['cls'], choice_target) else [0]
+right = [oq['C'], oq['C'] + pair_offset] if below(oq['cls'], pair_target) else [0]
+stop = R417O.choice([999] + [v + w for v in left for w in right])
+loops.append(f'''OutcomeCall(P:pair(a, b), Value:int, Stop:int where a:type, b:type)<transacts><decides>:void =
+    set P.N += 3
+    Print("out call {{Value}} {{P.N}}")
+    Value <> Stop
+ForOutcome(P:pair(a, b), Q:pair(c, d), Stop:int where a:type, b:type, c:type, d:type)<transacts><decides>:void =
+    var Total:int = 0
+    Values := for (A := 1 | 2, set Total += A, Print("out prefix {{A}}"),
+        V := if (D := {choice_target}[P]) then (D.C | D.C + {choice_offset}) else 0,
+        V > {threshold}, set Total += V,
+        W := if (E := {pair_target}[Q]) then (E.C | E.C + {pair_offset}) else 0,
+        W <= {limit}):
+        set Total += W
+        set P.N += W
+        Print("out body {{A}} {{V}} {{W}} {{Total}} {{P.N}}")
+        OutcomeCall[P, V + W, Stop]
+        V + W
+    Print("out done {{Total}} {{P.N}} {{Values.Length}}")''')
+main.append(f'    ForOutcome[{op["name"]}, {oq["name"]}, {stop}]')
+total, count, stopped = 0, 0, False
+def snapshot(): return total, op['N'], len(expect)
+def restore(saved):
+    global total
+    total, op['N'], nout = saved
+    del expect[nout:]
+for a in (1, 2):
+    before_a = snapshot()
+    total += a
+    expect.append(f"out prefix {a}")
+    for v in left:
+        before_v = snapshot() if below(op['cls'], choice_target) else before_a
+        if v <= threshold:
+            restore(before_v)
+            continue
+        total += v
+        for w in right:
+            before_w = snapshot() if below(oq['cls'], pair_target) else before_v
+            if w > limit:
+                restore(before_w)
+                continue
+            total += w
+            op['N'] += w
+            expect.append(f"out body {a} {v} {w} {total} {op['N']}")
+            op['N'] += 3
+            expect.append(f"out call {v + w} {op['N']}")
+            if v + w == stop:
+                stopped = True
+                break
+            count += 1
+        if stopped: break
+    if stopped: break
+if not stopped:
+    expect.append(f"out done {total} {op['N']} {count}")
+
 prog = [f"# genrefine seed {seed}"] + prog_cls + loops
 for f in funcs: prog.append(fix_iface(f, ftext(f)))
 prog += list(SHOWN.values())
-prog.append("Main():void =")
+prog.append("Main()<transacts><decides>:void =")
 prog += main
 print('\n'.join(prog))
-open(out_exp, 'w').write("exit=0\n" + ''.join(l + '\n' for l in expect))
+open(out_exp, 'w').write(f"exit={1 if stopped else 0}\n" + ''.join(l + '\n' for l in expect))

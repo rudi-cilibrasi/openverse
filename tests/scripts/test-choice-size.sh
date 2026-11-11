@@ -3,7 +3,7 @@
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
-for kind in composed exclusive binding typed-first typed-for typed-exclusive refined-for refined-state; do
+for kind in composed exclusive binding typed-first typed-for typed-exclusive refined-for refined-state refined-failure; do
   sizes=()
   for count in 4 8; do
     python3 - "$kind" "$count" >"$tmp/p.verse" <<'PY'
@@ -19,13 +19,16 @@ value = {'composed': '(Two(0) | Two(2))', 'exclusive': 'Early(0)',
          'binding': '(Pick(I) | Pick(I))', 'typed-first': '(Two(0) | Two(2))',
          'typed-for': '(Two(0) | Two(2))', 'typed-exclusive': 'Early(0)',
          'refined-for': 'if (D := dup[P]) then (D.C | D.C + 1) else 0',
-         'refined-state': 'if (D := dup[P]) then (D.C | D.C + 1) else 0'}[kind]
+         'refined-state': 'if (D := dup[P]) then (D.C | D.C + 1) else 0',
+         'refined-failure': 'if (D := dup[P]) then (D.C | D.C + 1) else 0'}[kind]
 clauses = ', '.join(f'A{i} := {value}' for i in range(count))
-if kind == 'refined-state':
+if kind in ('refined-state', 'refined-failure'):
     params = ', '.join(f'P{i}:pair(a{i}, b{i})' for i in range(count))
     tparams = ', '.join(f'a{i}:type, b{i}:type' for i in range(count))
     clauses = ', '.join(f'A{i} := if (D := dup[P{i}]) then (D.C | D.C + 1) else 0, A{i} = 4, set Total += A{i}' for i in range(count))
-    print(f'Run({params} where {tparams}):int =\n    var Total:int = 0\n    R := for ({clauses}):\n        set Total += 1\n        Total\n    Total + R.Length')
+    effects = '<decides>' if kind == 'refined-failure' else ''
+    test = '\n        Total > 0' if kind == 'refined-failure' else ''
+    print(f'Run({params} where {tparams}){effects}:int =\n    var Total:int = 0\n    R := for ({clauses}):\n        set Total += 1{test}\n        Total\n    Total + R.Length')
 elif kind == 'refined-for':
     print(f'Run(I:t, P:pair(a, b) where t:type, a:type, b:type):[]t = for ({clauses}) {{ I }}')
 elif kind == 'typed-first':
@@ -34,9 +37,11 @@ elif kind.startswith('typed-'):
     print(f'Run(Unused:t where t:type):int =\n    R := for ({clauses}):\n        E:[]t = array{{}}\n        E.Length\n    R.Length')
 else:
     print(f'Run(I:t where t:type):[]t = for ({clauses}) {{ I }}')
-if kind == 'refined-state':
+if kind in ('refined-state', 'refined-failure'):
     args = ', '.join('dup(int){A := 1, B := 2}' if i % 2 == 0 else 'dup(string){A := "s", B := "t"}' for i in range(count))
-    print(f'Main():void = Print("{{Run({args})}}")')
+    effects = '<decides>' if kind == 'refined-failure' else ''
+    brackets = ('[', ']') if effects else ('(', ')')
+    print(f'Main(){effects}:void = Print("{{Run{brackets[0]}{args}{brackets[1]}}}")')
 elif kind == 'refined-for':
     print('Main():void = Print("{Run(7, dup(int){A := 1, B := 2}).Length}")')
 else:

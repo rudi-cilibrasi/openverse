@@ -32,14 +32,14 @@ for ((s=first; s<first+n; s++)); do
     if [[ $le == 4 ]] && grep -qF "$msg" "$tmp/l.err" && ! grep -q "internal" "$tmp/l.err"; then ref=$((ref+1)); continue; fi
     bad=$((bad+1)); save; echo "EXPECTED REFUSAL $g seed $s (exit $le, saved fuzz-model-gadt-$s.verse): $(head -c 200 "$tmp/l.err")"; continue
   fi
-  if [[ $le != 0 ]]; then
+  if [[ $le != "$want" ]]; then
     bad=$((bad+1)); save; echo "LEAN EXIT $le $g seed $s (saved fuzz-model-gadt-$s.verse): $(head -c 200 "$tmp/l.err")"; continue
   fi
   if ! diff -q <(tail -n +2 "$tmp/p.exp") "$tmp/l.out" > /dev/null; then
     bad=$((bad+1)); save; echo "MODEL MISMATCH $g seed $s (saved fuzz-model-gadt-$s.verse)"; continue
   fi
-  timeout 120 "$cv" "$tmp/p.vbc" > "$tmp/c.out" 2> /dev/null; ce=$?
-  if [[ $ce != 0 ]] || ! cmp -s "$tmp/l.out" "$tmp/c.out"; then
+  timeout 120 "$cv" "$tmp/p.vbc" > "$tmp/c.out" 2> "$tmp/c.err"; ce=$?
+  if [[ $ce != "$want" ]] || ! cmp -s "$tmp/l.out" "$tmp/c.out" || ! cmp -s "$tmp/l.err" "$tmp/c.err"; then
     bad=$((bad+1)); save; echo "C MISMATCH $g seed $s (C exit $ce, saved fuzz-model-gadt-$s.verse)"; continue
   fi
   ok=$((ok+1))

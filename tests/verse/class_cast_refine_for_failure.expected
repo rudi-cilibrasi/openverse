@@ -1,0 +1,4 @@
+body 4 5
+body 5 10
+fail 20
+exit=1
