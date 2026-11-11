@@ -9,6 +9,8 @@
 # starts under one or two refining casts. The casts finish before the source
 # suffix. Both conditions always succeed; the independent source scheduler
 # model stays unchanged, including function-owned tasks and cleanup order.
+# Some seeds route Hd through a choice loop returning a waiting call. Its
+# first iteration returns, so the independent scheduler model is unchanged.
 """Generator + reference model for concurrency in generic functions (PR #249).
 
 usage: gen.py SEED OUTDIR   -> writes OUTDIR/gSEED.verse and OUTDIR/gSEED.expected
@@ -1013,9 +1015,17 @@ def emit_refining_block(stmts, depth):
     return out
 
 
-def emit_program(fns, mstmts, refining=0):
+def emit_program(fns, mstmts, refining=0, waiting_returns=False):
     fns, gfns = fns
-    out = [PRELUDE.rstrip("\n")]
+    prelude = PRELUDE
+    if waiting_returns:
+        prelude = prelude.replace('Hd(X:t,', 'HdValue(X:t,')
+        prelude += '''Hd(X:t, Tag:string, K:int, D:float where t:type)<suspends>:t =
+    for(A:=0|1,B:=0|1):
+        return HdValue(X, Tag, K, D)
+    X
+'''
+    out = [prelude.rstrip("\n")]
     if refining:
         out += ['scope_pair(a:type, b:type) := class {}',
                 'scope_dup(t:type) := class(scope_pair(t, t)) {}']
@@ -1181,7 +1191,8 @@ def conc_gens(kind, gens, fr):
 def main():
     seed = int(sys.argv[1]); outdir = sys.argv[2]
     fns, mstmts = generate(seed)
-    src = emit_program(fns, mstmts, refining=(1 + bool(seed & 4)) if seed & 2 else 0)
+    src = emit_program(fns, mstmts, refining=(1 + bool(seed & 4)) if seed & 2 else 0,
+                       waiting_returns=bool(seed & 8))
     with open(os.path.join(outdir, f"g{seed}.verse"), "w") as f:
         f.write(src)
     try:
