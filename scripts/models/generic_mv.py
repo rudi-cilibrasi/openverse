@@ -795,6 +795,7 @@ class Gen:
         self.for_continuations()
         self.first_searches()
         self.method_dispatch()
+        self.recursive_named()
 
     def method_dispatch(self):
         # Every gate range covers each hierarchy, with the same independent
@@ -819,6 +820,104 @@ class Gen:
                 self.m.forall(seq, lambda e: self.m.out.append(f"method all {e['V']}"))
         self.main.append(f'for (V := {p.name}("x","y")) {{ Print("method string {{V}}") }}')
         self.m.forall(p.top({'X':'x','Y':'y'},'V'), lambda e: self.m.out.append(f"method string {e['V']}"))
+    def recursive_named(self):
+        # Model named/default arguments at every recursive edge, independently
+        # of the compiler's argument binder. Some seeds use a mutual group.
+        rng = random.Random(self.seed * 1000003 + 28307)
+        meter, trace, even, odd, search, pair, eager, default = [self.fresh(n) for n in
+            ('NamedMeter', 'NamedTrace', 'NamedEven', 'NamedOdd', 'NamedSearch', 'NamedPair', 'NamedEager', 'NamedDefault')]
+        mutual = rng.choice([False, True])
+        limit, start, step = rng.randint(0, 3), rng.randint(-1, 1), rng.randint(1, 2)
+        offsets, extra = [rng.randint(-2, 3), rng.randint(-2, 3)], rng.randint(1, 4)
+        default_limit = rng.randint(-1, limit + 1)
+        self.consumers.append(f'''{meter} := class:
+    var N:int = 0
+{trace}(H:{meter}, Label:string, Value:int)<transacts>:int =
+    set H.N += 1
+    Print("named {{Label}} {{Value}} {{H.N}}")
+    Value
+{default}(H:{meter}, N:int, Offset:int)<transacts><decides>:int =
+    Value := {trace}(H,"default",N+Offset)
+    N <= {default_limit}
+    Value''')
+        for i, name in enumerate([even, odd] if mutual else [even]):
+            target = [odd, even][i] if mutual else even
+            self.consumers.append(f'''{name}(H:{meter}, N:int, ?A:int={default}[H,N,{offsets[i]}], ?B:int=A+{extra})<transacts><decides>:int =
+    N <= {limit}
+    Print("named visit {{N}} {{A}} {{B}} {{H.N}}")
+    A | {target}[?B:={trace}(H,"arg",N+{extra}),H,{trace}(H,"pos",N+{step})]''')
+        self.consumers.append(f'''{search}(X:t, Y:t, H:{meter}, Cut:int where t:type)<transacts>:?t =
+    var Current:t = X
+    var Total:int = 0
+    Result := if (V := {even}[H,{start}], set Current = Y, set Total += V,
+        Print("named try {{V}} {{Total}}"), V >= Cut) then option{{Current}} else false
+    Print("named state {{Total}} {{H.N}}")
+    Result
+{pair}(X:t, ?Y:t=X where t:type)<computes>:t = X | Y
+{eager}(X:t, N:int, ?Y:t=X where t:type)<computes>:t =
+    if (N>0) then ({pair}(X,?Y:=Y) | {pair}(X) | {eager}(X,N-1)) else X''')
+        h = self.fresh('NamedHeap')
+        self.main.append(f'{h} := {meter}{{}}')
+        visits = 1 if start <= default_limit else 0
+        a, b = start + offsets[0], start + offsets[0] + extra
+        if visits:
+            self.m.out.append(f'named default {a} {visits}')
+        n, role = start, 0
+        while n <= limit and n <= default_limit:
+            self.m.out.append(f'named visit {n} {a} {b} {visits}')
+            self.m.out.append(f'named all {a}')
+            next_n, b = n + step, n + extra
+            # Failure of any argument/default rolls back that entire edge,
+            # including the supplied arguments evaluated before the default.
+            if next_n > default_limit: break
+            role = 1 - role if mutual else 0
+            a = next_n + offsets[role]
+            for label, value in [('pos', next_n), ('arg', b), ('default', a)]:
+                visits += 1
+                self.m.out.append(f'named {label} {value} {visits}')
+            n = next_n
+        self.main.append(f'for (V := {even}[{h},{start}]) {{ Print("named all {{V}}") }}')
+        self.main.append(f'Print("named visits {{{h}.N}}")')
+        self.m.out.append(f'named visits {visits}')
+        for literal, other, value in [('1', '2', '2'), ('"old"', '"new"', 'new')]:
+            cut = rng.randint(-2, limit + 5)
+            result = self.fresh('NamedResult')
+            self.main.append(f'if ({result} := {search}({literal},{other},{h},{cut})?) then Print("named value {{{result}}}") else Print("named none")')
+            saved, saved_visits = len(self.m.out), visits
+            n, role = start, 0
+            a, b = n + offsets[0], n + offsets[0] + extra
+            if n <= default_limit:
+                visits += 1
+                self.m.out.append(f'named default {a} {visits}')
+            succeeded = False
+            while n <= limit and n <= default_limit:
+                self.m.out.append(f'named visit {n} {a} {b} {visits}')
+                if a >= cut:
+                    self.m.out.append(f'named try {a} {a}')
+                    self.m.out.append(f'named state {a} {visits}')
+                    self.m.out.append(f'named value {value}')
+                    succeeded = True
+                    break
+                next_n, b = n + step, n + extra
+                if next_n > default_limit:
+                    break
+                role = 1 - role if mutual else 0
+                a = next_n + offsets[role]
+                for label, arg in [('pos', next_n), ('arg', b), ('default', a)]:
+                    visits += 1
+                    self.m.out.append(f'named {label} {arg} {visits}')
+                n = next_n
+            if not succeeded:
+                del self.m.out[saved:]
+                visits = saved_visits
+                self.m.out.append('named none')
+            depth = rng.randint(0, 3)
+            self.main.append(f'for (V := {eager}({literal},{depth},?Y:={other})) {{ Print("named eager {{V}}") }}')
+            x = literal.strip('"')
+            values = [x] if depth == 0 else [x, value, x, x] + [x] * (4 * (depth - 1) + 1)
+            self.m.out.extend(f'named eager {v}' for v in values)
+        self.main.append(f'Print("named final {{{h}.N}}")')
+        self.m.out.append(f'named final {visits}')
 
     def first_searches(self):
         # A separate stream covers nested effectful generic helpers and

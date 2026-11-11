@@ -1303,7 +1303,9 @@ def loopShape? (g : String) (mv : List String) (body : SExpr) (grp : List String
   let plain (e : SExpr) : Bool := !liftsHere (markCalls mv e) && !(namesUsed e).any grp.contains
   let isRec : SExpr → Bool
     | .app _ (.ident _ h) as _ => grp.contains h && as.all fun a =>
-        plain a && (match a with | .decl .. => false | _ => true)
+        match a with
+        | .decl _ n _ _ rhs => n.startsWith "?" && plain rhs
+        | _ => plain a
     | _ => false
   let inGroup := grp.length > 1
   let tail := match tail with
@@ -1567,7 +1569,7 @@ partial def inlineCalls (mv : List (String × MFn)) (e : SExpr) (recs : List Str
       let posVals ← if hasNamed then posAs.mapM go else pure []
       let namedVals ← if hasNamed then namedAs.mapM (fun (_, _, x) => go x) else pure []
       -- (a recursive one: the array of its values, computed at the call)
-      if recs.contains g && !loops.contains g then
+      if recs.contains g && !loops.contains g && !hasNamed then
         return .app p (.ident p "$each") [.app p (.ident q s!"{g}$all") as' false] false
       let site ← modifyGet fun n => (n, n + 1)
       if site ≥ 2000 then
@@ -1634,6 +1636,13 @@ partial def inlineCalls (mv : List (String × MFn)) (e : SExpr) (recs : List Str
           ((f.params.take off).map pdOf ++ [.decl q t (tyOf (.tup (tps.map (·.ty)))) false (.ident q "$arg")],
             (tps.zipIdx.map fun (sp, i) =>
               SExpr.decl q (tag sp.name) (tyOf sp.ty) false (.app q (.ident q t) [.int q (i : Int)] false)), as')
+      -- Eager recursive calls still bind named arguments/defaults exactly
+      -- as an inlined call. The array helper receives canonical parameters.
+      if recs.contains g && !loops.contains g then
+        let values := .app p (.ident p "$each")
+          [.app p (.ident q s!"{g}$all") (f.params.map fun sp => .ident q (tag sp.name)) false] false
+        return .app p (.ident p "$inline") (.ident q g ::
+          .block q (tmark ++ pds ++ unpack ++ [.decl q (tag "$r") (tyOf f.ret) false values]) :: as'') false
       -- (one taken lazily, #246: its parameters, its clauses and its last
       -- expression, its own calls marked, for its consumer to run)
       if loops.contains g then
@@ -1840,13 +1849,18 @@ structure FirstLift where
     copied first from parameters named `m$in`. -/
 def firstBody (helper : String) (p : Pos) (b : String) (bty : Option STy) (cls : List SExpr) (tail : SExpr)
     (rest : List SExpr) (binds : List String) (sets : List (String × STy)) (caps : List SExpr)
-    (ret : Option STy := none) (helperOf : String → String := fun _ => helper) : SExpr :=
+    (ret : Option STy := none) (helperOf : String → String := fun _ => helper)
+    (recArgs : Option String → Pos → List SExpr → List SExpr × List SExpr := fun _ _ as => ([], as)) : SExpr :=
   let tup : SExpr := .tuple p (binds.map (SExpr.ident p ·) ++ sets.map (fun (m, _) => SExpr.ident p m) ++
     [.ident p "true"])
+  let recur (target : Option String) (h : String) (q : Pos) (as : List SExpr) : SExpr :=
+    let (pre, args) := recArgs target q as
+    let call := SExpr.app q (.ident q h) (args ++ caps) true
+    if pre.isEmpty then call else .block q (pre ++ [call])
   let alt (a : SExpr) : SExpr := match a with
-    | .app q (.ident _ "$rec") as false => .app q (.ident q helper) (as ++ caps) true
+    | .app q (.ident _ "$rec") as false => recur none helper q as
     -- (a call of another function of the group, #283: its own function)
-    | .app q (.ident _ "$recTo") (.ident _ h :: as) false => .app q (.ident q (helperOf h)) (as ++ caps) true
+    | .app q (.ident _ "$recTo") (.ident _ h :: as) false => recur (some h) (helperOf h) q as
     | a =>
       -- (the value at the function's result type, then at the binding's)
       let v := match ret with
@@ -2475,7 +2489,7 @@ def inlineMulti (tops : List STop) (reserved : List String := []) : Except Strin
     let ret := (mfs.lookup g).map fun f => reprStr f.ret
     grp.all fun h => match mfs.lookup h with
       | some f => ((callees.lookup h).getD []).all grp.contains && (loopShape? h mv f.body grp).isSome &&
-          (grp.length == 1 || (f.tparams.isEmpty && some (reprStr f.ret) == ret && !f.params.any (·.named)))
+          (grp.length == 1 || (f.tparams.isEmpty && some (reprStr f.ret) == ret))
       | none => false
   let loops : List String := recs.filter fun g =>
     match mfs.lookup g with
@@ -2511,12 +2525,6 @@ def inlineMulti (tops : List STop) (reserved : List String := []) : Except Strin
   for (n, f) in mfs do
     if (fns.filter (·.1 == n)).length > 1 then
       throw s!"{f.pos.show}: {shownFnName n} has several values and is overloaded: such functions are not supported yet (#235)"
-    -- (a generic one's, and a generic class's method's, bound with its
-    -- type parameters, `$params`, as at a call, #283)
-    if f.params.any (·.named) && (recs.contains n || needAll.contains n) then
-      let what := if recs.contains n then "recursive" else
-        "called by a recursive one (so its values are computed at the call, F$all)"
-      throw s!"{f.pos.show}: {shownFnName n} has several values and named parameters, and is {what}: such functions are not supported yet (#235, #283)"
     -- (a `return` in an `if`'s branches becomes guarded alternatives, #283;
     -- not in a recursive one, computed or taken lazily from its body)
     if anyE (fun | .ret .. => true | _ => false) f.body then
@@ -2571,7 +2579,7 @@ def inlineMulti (tops : List STop) (reserved : List String := []) : Except Strin
   let go (e : SExpr) : StateT Nat (Except String) SExpr := inlineCalls mfs e recs loops clash (groups := loopGroups) (ovs := ovs)
   let goPs (ps : List SParam) : StateT Nat (Except String) (List SParam) :=
     ps.mapM fun sp => do return { sp with default := ← sp.default.mapM go }
-  let (tops', _) ← (tops.filterMapM (m := StateT Nat (Except String)) fun t => do
+  let (tops', nextSite) ← (tops.filterMapM (m := StateT Nat (Except String)) fun t => do
     match t with
     | .fn p n ps tps fx r b =>
       -- (an overload of an overloaded one, #283: as its own analysis says,
@@ -2593,8 +2601,15 @@ def inlineMulti (tops : List STop) (reserved : List String := []) : Except Strin
         | m => pure m
       return some (.classDef p n tps sp pa ii fs' ov ms')).run 0
   -- (`F$all` for each that needs one: the array of its values)
-  let alls : List STop := needAll.filterMap fun g => (mfs.lookup g).map fun f =>
-    .fn f.pos s!"{g}$all" f.params f.tparams (f.fx.filter (· != "decides")) (.arr f.ret) (allBody needAll f.ret f.body)
+  let (alls, _) ← (needAll.filterMapM (m := StateT Nat (Except String)) fun g => do
+    let some f := mfs.lookup g | return none
+    let namedCalls := (namesUsed f.body).any fun h =>
+      ((mfs.lookup h).map fun callee => callee.params.any (·.named)).getD false
+    let body ← if namedCalls then inlineCalls mfs f.body needAll [] clash (groups := loopGroups) (ovs := ovs)
+      else pure f.body
+    let ps := f.params.map fun sp => { sp with named := false, default := none }
+    return some (.fn f.pos s!"{g}$all" ps f.tparams (f.fx.filter (· != "decides"))
+      (.arr f.ret) (allBody (if namedCalls then [] else needAll) f.ret body))).run nextSite
   -- (#283) each overload of an overloaded one kept as `F$mvK` too, for
   -- its signature where its calls are inlined (effects, defaults)
   let ovKept : List STop := ovMv.flatMap fun f => (ovOf f).filterMap fun (k, p, m) =>

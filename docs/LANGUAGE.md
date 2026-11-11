@@ -947,14 +947,17 @@ Main():void =
   the function itself. So is a strongly connected group of such functions
   (#283), mutually recursive, each of that shape with its alternatives
   calls of the group's functions (or, as the last expression or a branch,
-  one such call), all of one result type, none generic, none with named
-  parameters: `Evens(N:int):int = N | Odds(N + 1)` with
+  one such call), all of one result type, none generic:
+  `Evens(N:int):int = N | Odds(N + 1)` with
   `Odds(N:int):int = Evens(N + 1)`. Its values are taken one at a time, as the place
   that takes them asks for them, in spatial order (depth first), so an
   infinite one works where the first success is taken, and a value never
-  reached is never computed. A call evaluates its arguments first; when
-  its clauses fail, it has no values, and what its arguments did stays, as
-  for a recursive call computed at the call. It may have effects:
+  reached is never computed. When parameters are named, each recursive call
+  evaluates positional arguments first, then named arguments as written, then
+  omitted defaults in declaration order, as an ordinary call does. Defaults see the
+  declaration's scope and earlier parameters. A call evaluates its arguments
+  first; when its clauses fail, it has no values, and what its arguments did
+  stays, as for a recursive call computed at the call. It may have effects:
   - in a `for`, its clauses run as its values are taken, between the
     iterations, and stay, as a `for` keeps the effects of clauses before a
     choice; what a value does is undone with its iteration when the
@@ -1008,8 +1011,7 @@ Main():void =
   or field's default or a `defer:`, an
   overloaded one with an overload that calls the function's own name
   (a generic one's type arguments are inferred from the
-  arguments where it is inlined, as at a call, named ones too), a recursive
-  one with named parameters, a recursive one with a `defer:` of its own, or called by a recursive one (its body a function's, where it would run once), one with a `defer:` after a `return` (which may leave before it is reached), or with an `if`'s branch that has a `defer:` of its own, a `return` before its end and a path that does not return, one with a `return`
+  arguments where it is inlined, as at a call, named ones too), a recursive one with a `defer:` of its own, or called by a recursive one (its body a function's, where it would run once), one with a `defer:` after a `return` (which may leave before it is reached), or with an `if`'s branch that has a `defer:` of its own, a `return` before its end and a path that does not return, one with a `return`
   other than in an `if`'s branches, or recursive with a `return`, a method whose name another class or interface
   also has, with its own method type parameters, `<suspends>` or using `(super:)` of another method, one used as a function value, and, since its body is inlined where other names may be
   in scope, one whose name is also the name of a parameter, local, field or

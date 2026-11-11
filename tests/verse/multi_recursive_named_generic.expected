@@ -1,0 +1,32 @@
+repeat 2
+b
+repeat 1
+a
+repeat 2
+repeat 1
+c
+repeat 2
+2
+repeat 1
+1
+empty 2
+s
+empty 1
+empty option
+e
+f
+e
+e
+e
+3
+4
+3
+3
+3
+method 2
+explicit
+method 1
+field
+method 2
+field
+exit=0
