@@ -595,6 +595,76 @@ for o in objs:
     expect.append(f"paired state {total} {len(left) * len(right)}")
     expect.append(f"for paired {total}")
 
+# Returns unwind body cleanup before source cleanup, with the operand
+# captured before either. Model source-level generator snapshots directly.
+R417R = random.Random(seed * 1000003 + 41703)
+return_cut = R417R.randint(-1, 7)
+body_cleanup, source_cleanup = R417R.randint(1, 5), R417R.randint(1, 5)
+loops.append(f'''ForReturn(P:pair(a, b), Q:pair(c, d), Stop:int where a:type, b:type, c:type, d:type)<transacts>:int =
+    var Total:int = 0
+    defer:
+        set Total += {source_cleanup}
+        set P.N += {source_cleanup}
+        Print("ret source {{Total}} {{P.N}}")
+    Values := for (A := 1 | 2, set Total += A, Print("ret prefix {{A}}"),
+        V := if (D := {choice_target}[P]) then (D.C | D.C + {choice_offset}) else 0,
+        V > {return_cut}, set Total += V,
+        W := if (E := {pair_target}[Q]) then (E.C | E.C + {pair_offset}) else 0):
+        defer:
+            set Total += {body_cleanup}
+            set P.N += {body_cleanup}
+            Print("ret cleanup {{Total}} {{P.N}}")
+        set Total += W
+        set P.N += W
+        Print("ret body {{A}} {{V}} {{W}} {{Total}} {{P.N}}")
+        if (V + W = Stop):
+            return Total
+        V + W
+    Print("ret done {{Total}} {{P.N}} {{Values.Length}}")
+    -1''')
+def model_return(p, q, stop):
+    total, count, answer, returned = 0, 0, -1, False
+    generated = below(p['cls'], choice_target)
+    left = [p['C'], p['C'] + choice_offset] if generated else [0]
+    right = [q['C'], q['C'] + pair_offset] if below(q['cls'], pair_target) else [0]
+    for a in (1, 2):
+        before_a = total, p['N'], len(expect)
+        total += a
+        expect.append(f"ret prefix {a}")
+        for v in left:
+            before_v = (total, p['N'], len(expect)) if generated else before_a
+            if v <= return_cut:
+                total, p['N'], nout = before_v
+                del expect[nout:]
+                continue
+            total += v
+            for w in right:
+                total += w
+                p['N'] += w
+                expect.append(f"ret body {a} {v} {w} {total} {p['N']}")
+                if v + w == stop:
+                    answer, returned = total, True
+                total += body_cleanup
+                p['N'] += body_cleanup
+                expect.append(f"ret cleanup {total} {p['N']}")
+                if returned: break
+                count += 1
+            if returned: break
+        if returned: break
+    if not returned:
+        expect.append(f"ret done {total} {p['N']} {count}")
+    total += source_cleanup
+    p['N'] += source_cleanup
+    expect.append(f"ret source {total} {p['N']}")
+    expect.append(f"ret value {answer}")
+for _ in range(3):
+    p, q = R417R.choice(objs), R417R.choice(objs)
+    left = [p['C'], p['C'] + choice_offset] if below(p['cls'], choice_target) else [0]
+    right = [q['C'], q['C'] + pair_offset] if below(q['cls'], pair_target) else [0]
+    stop = R417R.choice([999] + [v + w for v in left for w in right])
+    main.append(f'    Print("ret value {{ForReturn({p["name"]}, {q["name"]}, {stop})}}")')
+    model_return(p, q, stop)
+
 # Failable bodies stop the whole consumer, with their output and writes.
 # Model generator boundaries directly: scalar clauses share the current
 # filter's snapshot; each choice creates a fresh boundary for its values.

@@ -361,6 +361,9 @@ structure Ctx where
   inTaking : Bool := false
   /-- The internal loop that propagates a failed continuation outcome. -/
   forOutcomeSlot : Option Nat := none
+  /-- A source return carried by a shared for continuation. -/
+  forReturnSlot : Option String := none
+  forReturnExit : Option SExpr := none
   /-- Inside a block or construction kept with a choice in it (`$noLift`,
       #283): what it is, for the message. -/
   liftWhy : String := ""
@@ -543,6 +546,7 @@ partial def resolveTy (env : TyEnv) (p : Pos) : STy → EM Ty
   | .name "void" => pure .void
   | .name "float" => pure .float
   | .name "any" => pure .any
+  | .name "$never" => pure .never
   | .name n =>
     if let some t := env.tvars.lookup n then pure t
     else if (env.structs.lookup n).isSome then
@@ -1806,14 +1810,44 @@ def contLiftOf (ctx c2 : Ctx) (p : Pos) (b : String) (alts rest : List SExpr)
            args := SExpr.ident p b :: caps.map (fun l => SExpr.ident p l.name) ++ typeArgs,
            varBinds := (bls.filter (·.mutable)).map (·.name) }
 
-/-- (#335, phase 2) Whether a `for`'s body may run in a failure context, as
-    in a continuation: no `return`, no `break`, no suspension (none in a
-    function that cannot suspend), no `Signal`, no other marker than those
-    of choices and calls with several values. Conservative. -/
+/-- The return slot is written by a moved body's explicit return. Its
+    self-assignment is metadata for capture/write analysis, not executed. -/
+def forReturnBody? : SExpr → Bool
+  | .app _ (.ident _ f) _ false => f == "$forReturns" || f == "$forReturnBody"
+  | _ => false
+
+/-- Keep source breaks aimed at their original loop after adding the
+    producer's private abort loop. Its own outcome abort is left alone. -/
+partial def forwardForBreaks (abort escaped : Nat) : Expr → Expr
+  | e@(.loop _) => e
+  | e@(.ite (.prim .query [.local j]) yes (.seq .brk (.prim .userErr []))) =>
+    if j == abort then e else
+      .ite (.prim .query [.local j]) (forwardForBreaks abort escaped yes)
+        (forwardForBreaks abort escaped (.seq .brk (.prim .userErr [])))
+  | e@(.seq (.assign j (.lit (.logic false))) (.seq .brk (.prim .userErr []))) =>
+    if j == abort then e else .seq (.assign escaped (.lit (.logic true))) e
+  | .brk => .seq (.assign escaped (.lit (.logic true))) .brk
+  | .assign i e => .assign i (forwardForBreaks abort escaped e)
+  | .seq a b => .seq (forwardForBreaks abort escaped a) (forwardForBreaks abort escaped b)
+  | .prim p es => .prim p (es.map (forwardForBreaks abort escaped))
+  | .heap p es => .heap p (es.map (forwardForBreaks abort escaped))
+  | .call f es => .call f (es.map (forwardForBreaks abort escaped))
+  | .ite c t e => .ite (forwardForBreaks abort escaped c) (forwardForBreaks abort escaped t) (forwardForBreaks abort escaped e)
+  | .forE i a f b => .forE i (forwardForBreaks abort escaped a) (forwardForBreaks abort escaped f) (forwardForBreaks abort escaped b)
+  | .ret e => .ret (forwardForBreaks abort escaped e)
+  | .print e => .print (forwardForBreaks abort escaped e)
+  | e => e
+
+/-- Whether a `for` body can move into a continuation. Source returns
+    need an explicit outcome; breaks must stay inside the body's loops.
+    Suspension and non-rollback operations remain excluded. -/
 def forBodySafe (ctx : Ctx) (body : SExpr) : Bool :=
-  let safeMarkers := ["$inline", "$choice", "$excl", "$alt", "$firstP", "$first", "$each", "$noLift", "$fxOf"]
-  !ctx.suspends && !(Choice.anyE (fun
-    | .ret .. | .brk _ => true
+  let returns := forReturnBody? body
+  let safeMarkers := ["$inline", "$choice", "$excl", "$alt", "$firstP", "$first", "$each", "$noLift", "$fxOf",
+    "$forReturns", "$forReturnBody"] ++ (if returns then ["$defer"] else [])
+  !ctx.suspends && !(Refine.findPart (fun | .brk _ => true | _ => false) true body).isSome &&
+    !(Choice.anyE (fun
+    | .ret .. => !returns
     | .app _ (.ident _ f) _ _ =>
       (f.startsWith "$" && !safeMarkers.contains f) || f == "Sleep" ||
         ((ctx.sig? f).map fun s => s.suspends || s.fx.contains "no_rollback").getD false
@@ -1841,7 +1875,11 @@ def contForLiftOf (ctx : Ctx) (p : Pos) (b : String) (bty vty : Ty) (alts rest :
         throw "(super:)"
       pure (rest.map (selfQualify ctx c), selfQualify ctx c body)
     | none => pure (rest, body)
-  if (Refine.findPart (fun | .ret .. => true | _ => false) false (.block p (rest ++ [body]))).isSome then throw "a return"
+  if (Refine.findPart (fun | .ret .. => true | _ => false) false (.block p rest)).isSome ||
+      (!forReturnBody? body && (Refine.findPart (fun | .ret .. => true | _ => false) false body).isSome) then throw "a return"
+  let body := match body with
+    | .app q (.ident _ "$forReturns") args false => .app q (.ident q "$forReturnBody") args false
+    | b => b
   if (Refine.findPart (fun | .brk _ => true | _ => false) true (.block p rest)).isSome then throw "a break"
   let caps : List Local := (Choice.namesUsed (.block p (rest ++ [body]))).eraseDups.filterMap ctx.lookup
   let setNames := Choice.setsIn (.block p (rest ++ [body]))
@@ -1938,8 +1976,10 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
   let gs := groups rest
   -- A failable continuation body returns an explicit outcome. Its first
   -- filter still fails the call, so the caller retains that boundary.
-  let bodyFail := (ctx.canFail && !firstDecides) || failure.isSome
-  let bodyCtx (c : Ctx) : Ctx := { c with canFail := bodyFail, inLoop := false, inRepeat := true }
+  let bodyFail := (ctx.canFail && !firstDecides) || failure.isSome || forReturnBody? body
+  let bodyCtx (c : Ctx) : Ctx := { c with
+    canFail := bodyFail, inLoop := false, inRepeat := true,
+    forReturnExit := failure.orElse fun _ => c.forReturnExit }
   -- elaborate the filters of one generator (in a failure context)
   let elabFilters (c : Ctx) (fs : List SExpr) : EM (Expr × Ctx) := do
     match fs with
@@ -3008,7 +3048,9 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
     let sourceRet ← match ctx.refineExits.ret with
       | some (some (_, t), _) => resolveTy env p t
       | some (none, _) => pure .void
-      | none => pure ctx.retTy
+      | none => match ctx.forReturnSlot.bind ctx.lookup with
+        | some { ty := .opt t, .. } => pure t
+        | _ => pure ctx.retTy
     let retS := if sourceRet == .void then none else some sourceRet.toSTy
     let (thenB, elseB, tupS, t, after, exits) := refineExits p body0 elseE (setOut.map fun l => (l.name, l.ty.toSTy))
       retPart.isSome brkPart retS vm
@@ -3576,6 +3618,10 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
           (.ite (.prim .query [.local flag]) (.local result) (.lit .none)))), .opt r.ty⟩
   | .app p (.ident _ "$forOutcomeValues") [value] false => do
     forOutcomeValues ctx p (← elabE ctx value none)
+  | .app _ (.ident _ "$forReturns") [_, .ident _ mode, body] false =>
+    elabE { ctx with canFail := mode == "true" } body exp
+  | .app _ (.ident _ "$forReturnBody") [.set _ (.ident _ slot) none _, .ident _ mode, body] false =>
+    elabE { ctx with canFail := mode == "true", defers := [], forReturnSlot := some slot } body exp
   -- (#283) a call of an overloaded function with several values, as
   -- written, in the elaboration for types: the overload it takes noted
   | .app _ (.ident _ "$ovPick") [.int _ id, .ident _ f, call] false =>
@@ -4059,7 +4105,42 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
           set stAfter
         | none => set stAfter
       return ⟨.ite rc.e (← coerce p rt ty) (← coerce p re ty), ty⟩
-  | .forE p clauses body => elabFor { ctx with forOutcomeSlot := none } p clauses body
+  | .forE p clauses body => do
+    let ctx := { ctx with forOutcomeSlot := none }
+    if ctx.suspends || (Refine.findPart (fun | .ret .. => true | _ => false) false body).isNone then
+      return ← elabFor ctx p clauses body
+    let sourceRet ← match ctx.refineExits.ret with
+      | some (some (_, t), _) => resolveTy ctx.types p t
+      | some (none, _) => pure .void
+      | none => match ctx.forReturnSlot.bind ctx.lookup with
+        | some { ty := .opt t, .. } => pure t
+        | _ => pure ctx.retTy
+    let name := s!"$forReturn{p.line}_{p.col}_{ctx.locals.length}"
+    let slot ← fresh (.opt sourceRet)
+    let c := { ctx with locals := { name, slot, ty := .opt sourceRet, mutable := true } :: ctx.locals }
+    let flag ← fresh .logic
+    let metadata := SExpr.set p (.ident p name) none (.ident p name)
+    let body := SExpr.app p (.ident p "$forReturns")
+      [metadata, .ident p (if ctx.canFail then "true" else "false"), body] false
+    let r ← elabFor { c with forOutcomeSlot := some flag } p clauses body
+    let result ← fresh (.opt r.ty)
+    let value ← fresh r.ty
+    let returning := s!"{name}$value"
+    let ret ← elabE c (.ite p [.decl p returning none false (.query p (.ident p name))]
+      (.ret p (some (.ident p returning))) none) (some .void)
+    let failed := if ctx.canFail then Expr.prim .fail [] else .prim .userErr []
+    let normal := Expr.ite (.assign value (.prim .query [.local result])) (.local value) failed
+    let (run, after) ← if ctx.inLoop then do
+        let escaped ← fresh .logic
+        pure (Expr.seq (.assign escaped (.lit (.logic false))) (forwardForBreaks flag escaped r.e),
+          Expr.ite (.prim .query [.local escaped]) .brk (.lit .void))
+      else pure (r.e, Expr.lit .void)
+    let code := Expr.seq (.assign slot (.lit .none))
+      (.seq (.assign flag (.lit (.logic true)))
+        (.seq (.assign result (.lit .none))
+          (.seq (.loop (.seq (.assign result (.prim .mkSome [run])) Expr.brkV))
+            (.seq after (.seq ret.e normal)))))
+    return ⟨code, r.ty⟩
   | .gen p _ _ _ => eerr p "a generator X : source can only appear in a for clause"
   | .loop _ body =>
     let lctx := { ctx with inLoop := true, inRepeat := true, loopDefers := ctx.defers.length, inChoice := false }
@@ -4087,6 +4168,23 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
         | none, some e => pure [e]
         | none, none => pure []
       return ← elabRefineExit ctx p pre pack
+    -- Refining lifts above forward their return first. Here we are back
+    -- in the owning continuation: save the operand before local cleanup,
+    -- then return its abort packet with the latest mutable copy-outs.
+    if let some name := ctx.forReturnSlot then
+      let some target := ctx.lookup name | eerr p "internal: missing for return slot"
+      let .opt ty := target.ty | eerr p "internal: invalid for return type"
+      let some pack := ctx.forReturnExit | eerr p "internal: missing for return outcome"
+      let value ← match e? with
+        | some e => coerce p (← elabE ctx e (some ty)) ty
+        | none =>
+          if ty != .void then eerr p s!"return needs a value of type {ty.show}"
+          pure (.lit .void)
+      let saved ← fresh ty
+      let ds ← elabDefers ctx ctx.defers
+      let out ← elabE { ctx with defers := [] } pack (some ctx.retTy)
+      return ⟨.seq (.assign saved value) (.seq ds
+        (.seq (.assign target.slot (.prim .mkSome [.local saved])) (.ret out.e))), .never⟩
     let some e := e?
       | do
         if ctx.retTy != .void then eerr p s!"return needs a value of type {ctx.retTy.show}"
@@ -10313,10 +10411,25 @@ def stripOv (msg0 : String) : String := Id.run do
       i := i + 1
   return out
 
+/-- Nested consumers can discover a continuation and its refining branches
+    in separate rounds. Bound discovery by source nesting, rather than a
+    fixed four rounds; every round must still add a new request. -/
+partial def liftDepth (e : SExpr) : Nat :=
+  1 + e.children.foldl (fun n child => max n (liftDepth child)) 0
+
+partial def topLiftDepth : STop → Nat
+  | .fn _ _ ps _ _ _ body =>
+    (ps.filterMap (·.default)).foldl (fun n e => max n (liftDepth e)) (liftDepth body)
+  | .const _ _ _ e => liftDepth e
+  | .classDef _ _ _ _ _ _ fields _ methods =>
+    methods.foldl (fun n t => max n (topLiftDepth t))
+      (fields.foldl (fun n (_, _, e, _) => max n (e.map liftDepth |>.getD 0)) 0)
+
 /-- Elaborate a parsed program (`elabProgramCore`), with the names of the
     functions a constructor or an overload becomes shown as written: `K$init`
     is `K<constructor>`, `F$ov1` is `F` (names with `$` are never the user's). -/
 def elabProgram (allTops00 : List STop) (opts : Options := {}) : Except String Compiled :=
+  let rounds := max 4 (4 * allTops00.foldl (fun n t => max n (topLiftDepth t)) 0)
   -- (#214) again with the functions wanted as values at closed function
   -- types: each round asks for new ones only, so a few rounds do
   let rec go (fuel : Nat) (opts : Options) : Except String Compiled := do
@@ -10342,7 +10455,7 @@ def elabProgram (allTops00 : List STop) (opts : Options := {}) : Except String C
   -- (#351) and with hidden fields for all of the type parameters of the
   -- classes that ask for them, each round more
   let rec withWitness (fuel : Nat) (opts : Options) : Except String Compiled := do
-    let c ← go 4 opts
+    let c ← go rounds opts
     if c.witnessNeeds.isEmpty then return c
     match fuel with
     | fuel + 1 => withWitness fuel { opts with witnessAll := opts.witnessAll ++ c.witnessNeeds }
