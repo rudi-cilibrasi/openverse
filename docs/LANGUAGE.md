@@ -771,8 +771,10 @@ Main():void =
 
   A class cast in the condition can refine its selected branch's type
   arguments (#243), including written types that use that refinement. In a `for`,
-  this currently requires a non-suspending consumer whose body is outside
-  a failure context and has no non-local exit or non-rollback operation.
+  this currently requires a non-suspending consumer whose body has no
+  non-local exit or non-rollback operation. A body may fail: this stops
+  the whole `for` and retains that iteration's effects, just as in an
+  ordinary `for`. An enclosing failure context can still undo them.
   Its suffix must also permit a shared continuation; lazy calls remain
   unsupported. Other contexts remain tracked in #417. Failure of the selected branch's
   alternatives does not select the `else` branch.

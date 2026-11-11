@@ -36,6 +36,12 @@ if lake env lean -j1 --run tests/lean/SourceFrameRefs.lean >"$logs/frame-contrac
 else
   rc=$?; cat "$logs/frame-contracts"; exit "$rc"
 fi
+echo "== failure-capture contracts"
+if lake env lean -j1 --run tests/lean/FailCapture.lean >"$logs/failure-contracts" 2>&1; then
+  cat "$logs/failure-contracts"
+else
+  rc=$?; cat "$logs/failure-contracts"; exit "$rc"
+fi
 if grep -rnE '\bsorry\b|\badmit\b' OpenVerse/ Main.lean; then echo "error: sorry/admit in Lean sources" >&2; exit 1; fi
 scripts/gen-claims.sh --check
 echo "== C runtime"

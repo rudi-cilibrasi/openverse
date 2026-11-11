@@ -1,6 +1,6 @@
-# Review of #342: no continuation where the for's body may fail (in a
-# <decides> function, option{} or an if condition), as a failure must fail
-# the whole for, not one call; and continuations keyed with the names their
+# Review of #342: a body failure (in a <decides> function, option{} or
+# an if condition) must fail the whole for, not one continuation call.
+# Outcome continuations must retain this behavior. Also key them with the names their
 # alternatives use, as a for copied per alternative has one place but
 # alternatives of other types
 Two(X:int)<transacts>:int = X | X + 1
