@@ -134,9 +134,9 @@ Empty(V:a where a:type)<decides>:a =
 '''
 
 # Negative controls express facts not implied by the class test.
-mode = (case // len(shapes)) % 5
+mode = case % 5
 if mode == 4:
-    negative = case % 4
+    negative = (case // 5) % 4
     if negative == 0:
         body = 'if(D:=tight[P]) then 0 else block{if(NeedCmp[V,V]) then 1 else 2}'
     elif negative == 1:
