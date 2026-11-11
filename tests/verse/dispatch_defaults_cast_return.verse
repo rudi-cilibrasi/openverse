@@ -19,7 +19,14 @@ RunWaiting(P:pair(a,b),Q:base(c),X:c where a:type,b:type,c:type)<suspends><trans
             set Total+=Q.F(X)
             return Total
     -1
+RunClause(P:pair(a,b),Q:base(c),X:c where a:type,b:type,c:type)<suspends><transacts>:int=
+    if(D:=dup[P]):
+        Sleep(0.0)
+        for(A:=if(true?)then(0|1)else 2,if(A=0)then return Q.F(X)else 0,B:=0|1):
+            Print("unreachable body")
+    -1
 Main()<suspends><transacts>:void=
     C:=ib{}
     Print("sync {Run(dup(int){A:=1,B:=2},C,7)} {C.Calls}")
     Print("async {RunWaiting(dup(int){A:=1,B:=2},C,7)} {C.Calls}")
+    Print("clause {RunClause(dup(int){A:=1,B:=2},C,7)} {C.Calls}")
