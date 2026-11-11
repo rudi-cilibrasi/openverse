@@ -59,6 +59,7 @@ check "class-feature fuzzing (${FUZZ_CLASSES:-200} programs)" scripts/fuzz-class
 check "differential fuzzing (${FUZZ:-1000} random programs)" scripts/fuzz-diff.sh "${FUZZ:-1000}" "$seed"
 check "Verse test suite, Lean and C" scripts/test-verse.sh --c
 check "small integer value sharing" bash tests/scripts/test-small-int-cache.sh
+check "empty collection value sharing" bash tests/scripts/test-empty-value-cache.sh
 check "front-end mutation fuzzing (${FUZZ_FRONT:-500} mutants)" scripts/fuzz-front.sh "${FUZZ_FRONT:-500}" "$seed"
 check "QuickProof pins" scripts/check-quickproof-pins.sh
 check "fuzz runner checks" bash tests/scripts/test-fuzz-runners.sh

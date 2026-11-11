@@ -2117,7 +2117,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
         -- (each path's filter as `void`, as `failV` is, for the if-chain)
         let filt := Expr.seq codeA (.seq (.assign sel rsel.e)
           (pick (filts.map fun f => Expr.seq f (.lit .void)) Expr.failV))
-        return (filt, pick arrs (.lit (.arr #[])), t)
+        return (filt, pick arrs (.lit Value.emptyArray), t)
     match gs with
     | [] =>
       let r ← elabE (bodyCtx c) bd none
@@ -2248,7 +2248,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
         let done ← fresh .logic
         let d ← fresh .int
         let vd : Expr := .lit .void
-        let none : Expr := .lit (.arr #[])
+        let none : Expr := .lit Value.emptyArray
         let r ← fresh (.arr ity)
         let stepBody : Expr := .ite (p2 .eq (.local lg.sp) (.lit (.int 0)))
           (.seq (.assign done (.lit (.logic true))) none)
@@ -2278,7 +2278,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
             -- `for (V : M)` and `for (K -> V : M)`: over the (key, value) pairs
             let tmp ← fresh rs.ty
             let src := if (rs.e.mayFail ctx.sigProg) then
-                Expr.orE tmp rs.e (.lit (.arr #[])) else rs.e
+                Expr.orE tmp rs.e (.lit Value.emptyArray) else rs.e
             let tp ← fresh (.tup [kt, vt])
             let (pre, c1) ← match idx with
               | none => do
@@ -2299,7 +2299,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
               | t => eerr gp s!"a for generator needs an array, string or map, found {t.show}"
             let tmp ← fresh rs.ty
             let src0 := if (rs.e.mayFail ctx.sigProg) then
-                Expr.orE tmp rs.e (.lit (.arr #[])) else rs.e
+                Expr.orE tmp rs.e (.lit Value.emptyArray) else rs.e
             let ta ← fresh rs.ty
             let (islot, c1) ← declare c i .int
             let (xslot, c2) ← declare c1 x ty
@@ -2312,7 +2312,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
             | t => eerr gp s!"a for generator needs an array, string or map, found {t.show}"
           let tmp ← fresh rs.ty
           let src := if (rs.e.mayFail ctx.sigProg) then
-              Expr.orE tmp rs.e (.lit (.arr #[])) else rs.e
+              Expr.orE tmp rs.e (.lit Value.emptyArray) else rs.e
           let (slot, c1) ← declare c x ty
           pure (slot, src, c1, Expr.lit (.logic true))
         | .decl gp n _ false _ => do
@@ -3419,7 +3419,7 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
     | "false" =>
       match exp with
       | some (.opt t) => return ⟨.lit .none, .opt t⟩
-      | some (.arr t) => return ⟨.lit (.arr #[]), .arr t⟩
+      | some (.arr t) => return ⟨.lit Value.emptyArray, .arr t⟩
       | some .void => return ⟨.lit .void, .void⟩
       | _ => return ⟨.lit (.logic false), .logic⟩
     | _ =>
@@ -3762,7 +3762,7 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
       | _ => none
     match es with
     | [] => match elemExp with
-      | some t => return ⟨.lit (.arr #[]), .arr t⟩
+      | some t => return ⟨.lit Value.emptyArray, .arr t⟩
       | none => eerr p "the type of an empty array{} must be given (e.g. X:[]int = array{})"
     | e :: rest =>
       let r ← elabE ctx e elemExp
@@ -4627,7 +4627,7 @@ partial def elabAppBase (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (b
       -- the other (as a tuple of them converts to an array of arrays)
       match args with
       | [] => match exp with
-        | some (.arr t) => return ⟨.lit (.arr #[]), .arr t⟩
+        | some (.arr t) => return ⟨.lit Value.emptyArray, .arr t⟩
         | _ => eerr p "Concatenate() needs an expected array type"
       | [a] =>
         let r ← elabE ctx a (match exp with | some t => some (.arr t) | none => none)
@@ -6683,7 +6683,7 @@ partial def elabMapLit (ctx : Ctx) (p : Pos) (entries : List (SExpr × SExpr)) (
   match entries with
   | [] =>
     match kt?, vt? with
-    | some k, some v => return ⟨.lit (.arr #[]), .map k v⟩
+    | some k, some v => return ⟨.lit Value.emptyArray, .map k v⟩
     | _, _ => eerr p "the type of an empty map{} must be given (e.g. M:[string]int = map{})"
   | (k0, v0) :: _ =>
     let rk0 ← elabE ctx k0 kt?
@@ -6715,7 +6715,7 @@ partial def elabMapLit (ctx : Ctx) (p : Pos) (entries : List (SExpr × SExpr)) (
       let (tk, tv) := slots[i]!
       let later := ((List.range n).filter (· > i)).map fun j => Expr.prim .ne [.local tk, .local slots[j]!.1]
       let cond := later.foldr Expr.seq (.lit (.logic true))
-      Expr.ite cond (.prim .mkArr [.prim .mkTup [.local tk, .local tv]]) (.lit (.arr #[]))
+      Expr.ite cond (.prim .mkArr [.prim .mkTup [.local tk, .local tv]]) (.lit Value.emptyArray)
     let built := Expr.prim .flatten [.prim .mkArr items]
     return ⟨steps.toList.foldr Expr.seq built, .map kt vt⟩
 
