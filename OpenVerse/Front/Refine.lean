@@ -29,6 +29,14 @@ structure Exits where
   brk : Option (List SExpr) := none
   deriving Inhabited
 
+/-- The source storage of a mutable capture, before Core frame tags and
+    final slot numbers exist. -/
+structure Storage where
+  frame : String
+  name : String
+  args : List STy
+  deriving Inhabited
+
 /-- A refining cast's branch, lifted into a generic function (#243). -/
 structure Lift where
   /-- The `if`'s position and the name its condition binds: the key. -/
@@ -64,6 +72,7 @@ structure Lift where
   /-- Whether executing the lifted then-block can wait. The generated
       function may need `<suspends>` for the dispatch even when it never waits. -/
   waits : Bool := false
+  storage : List (String × Storage) := []
   deriving Inhabited
 
 def keyOf (p : Pos) (bound : String) (tag : String := "") : String := s!"{p.file}:{p.line}:{p.col}:{bound}{tag}"

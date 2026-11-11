@@ -1,0 +1,14 @@
+background 7
+lift 3 saved 7 copy 0
+source 9
+lift defer 7
+source defer 8
+nested 2 2
+condition read 1
+condition rollback 1
+condition background 1
+spawn argument 7
+first scope 7
+immediate 7 5
+immediate background 5
+exit=0

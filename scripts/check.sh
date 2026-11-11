@@ -47,6 +47,7 @@ check() {
   ( set +e; s=$SECONDS; "$@" >"$logs/$i" 2>&1; echo "$? $((SECONDS - s))" >"$logs/$i.rc" ) &
   pids+=($!)
 }
+check "source-frame rewrite contracts" lake env lean --run tests/lean/SourceFrameRefs.lean
 check "class-feature fuzzing (${FUZZ_CLASSES:-200} programs)" scripts/fuzz-classes.sh "${FUZZ_CLASSES:-200}" "$seed"
 check "differential fuzzing (${FUZZ:-1000} random programs)" scripts/fuzz-diff.sh "${FUZZ:-1000}" "$seed"
 check "Verse test suite, Lean and C" scripts/test-verse.sh --c

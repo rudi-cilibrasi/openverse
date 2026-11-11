@@ -1,4 +1,3 @@
-# expect: cannot suspend while it sets the var 'Value' used by an enclosing defer
 pair(t:type, u:type) := class:
     A:t
     B:u

@@ -44,6 +44,7 @@
   ordinary Verse Core, `Prog.checkTypes` checks it like any other code.
 -/
 import OpenVerse.Core.TypeCheck
+import OpenVerse.Front.FrameRefs
 
 namespace OpenVerse.Front.Suspend
 open OpenVerse
@@ -1612,7 +1613,8 @@ def lower (S : Sigs) (callee : Nat → Option Callee) (syncMark raceMark rushMar
     (branchMark : Nat) (branches : Array (Nat × Nat × Nat))
     (arity : Nat) (Γ : List VTy) (ρ : VTy) (frameTy : VTy) (schedTag nilTag resCellTag : Nat) (fnBase : Nat) (b : Expr)
     (leafF leafDepthF : Nat := 0) (isRoot : Bool := false) (leafy : Bool := false)
-    (resumeAnyFn leafMin : Nat := 0) (armTopTy : VTy := .opt .void) :
+    (resumeAnyFn leafMin : Nat := 0) (armTopTy : VTy := .opt .void)
+    (shared : List FrameRefs.Slot := []) (copies : List FrameRefs.CopyOut := []) :
     Except String Lowered := do
   let schedTy : VTy := .ref [schedTag] []
   let isM := fun f => f == syncMark || f == raceMark || f == rushMark
@@ -1620,9 +1622,16 @@ def lower (S : Sigs) (callee : Nat → Option Callee) (syncMark raceMark rushMar
   let sites := countSusp (fun f => isS f || f == branchMark) (fun _ => false) false (· == spawnMark) b +
     countArms (· == rushMark) b
   let armsTotal := countArms (fun f => isM f || f == branchMark) b
-  let b := shift 2 b
+  let b := FrameRefs.resolveCurrent (shift 2 b)
   let Γ0 := #[frameTy, schedTy] ++ Γ.toArray
-  let trans0 := #[true, true] ++ (List.replicate Γ.length false).toArray
+  let shared := shared.map fun s => { s with
+    localSlot := s.localSlot + 2,
+    frame := if s.frame == FrameRefs.currentSlot then 0 else s.frame + 2 }
+  let copies := copies.map fun c => { c with target := c.target + 2, result := c.result + 2 }
+  let rewritten ← FrameRefs.rewrite Γ0 shared copies b
+  let b := rewritten.body
+  let Γ0 := rewritten.slots
+  let trans0 := #[true, true] ++ (List.replicate (Γ0.size - 2) false).toArray
   let env : Env := { S, ρ, callee, syncMark, raceMark, rushMark, arity, sites, armsTotal, fnBase, schedTag, nilTag, resCellTag, spawnMark, spawns,
                      branchMark, branches, viaBase := fnBase + 2 * armsTotal, expTy := some ρ,
                      pcFld := pcF, rS := 0, regionTotal := 0, leafF, leafDepthF, isRoot, leafy, resumeAnyFn, leafMin, armTopTy }
