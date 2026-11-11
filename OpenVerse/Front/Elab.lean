@@ -28,6 +28,8 @@ import OpenVerse.Front.Modules
 import OpenVerse.Front.FnValues
 import OpenVerse.Front.Choice
 import OpenVerse.Front.Refine
+import OpenVerse.Front.FrameRefs
+import OpenVerse.Front.SourceFrames
 import OpenVerse.Front.Types
 import Std.Data.HashMap
 
@@ -175,11 +177,20 @@ partial def _root_.OpenVerse.Expr.substSlot (e : Expr) (i : Nat) (v : Expr) : Ex
   | .print b => .print (go b)
   | x => x
 
+structure SourceStorage where
+  frame : String
+  name : String
+  args : List Ty
+
+def SourceStorage.subst (s : SourceStorage) (σ : List (String × Ty)) : SourceStorage :=
+  { s with args := s.args.map (·.subst σ) }
+
 structure Local where
   name    : String
   slot    : Nat
   ty      : Ty
   mutable : Bool
+  storage : Option SourceStorage := none
 
 /-- The heap effects (`<transacts>` allows all of them). -/
 
@@ -274,6 +285,8 @@ structure Ctx where
   /-- The functions' `<decides>` flags, as a program, for `Expr.mayFail`. -/
   sigProg : Prog
   locals  : List Local := []
+  frameName : String := ""
+  frameArgs : List Ty := []
   canFail : Bool := false
   inLoop  : Bool := false
   /-- In a named parameter's default, elaborated at a call: no `return`. -/
@@ -404,6 +417,8 @@ structure ESt where
   pendingWaitingCasts : Nat := 0
   /-- Mutable locals captured by a branch or a potentially continuing rush arm. -/
   backgroundSlots : List Nat := []
+  frameSlots : List (Nat × SourceStorage) := []
+  frameCopies : List FrameRefs.CopyOut := []
   /-- The recursive functions with several values that a context taking
       its first success consumes lazily (#246), with where, and the code
       each runs once for all the values of an item (`LoopGen.itemCode`):
@@ -1516,7 +1531,8 @@ def refineExits (p : Pos) (body : SExpr) (elseE : Option SExpr) (vars : List (St
     pre ++ [.decl p rr tupS false val, .ident p rr]
   let copiesV := vars.map fun (n, _) => SExpr.ident p (cp n)
   let outsV := vars.map fun (n, _) => SExpr.ident p n
-  let copies := vars.map fun (n, t) => SExpr.decl p (cp n) (some t) true (.ident p n)
+  let copies := vars.map fun (n, t) => SExpr.decl p (cp n) (some t) true
+    (.app p (.ident p "$refineCopyIn") [.ident p n] false)
   let noRet : List SExpr := if hasRet then [.ident p "false"] else []
   let done (val? : Option SExpr) (varsV : List SExpr) := SExpr.block p (mk noRet false val? varsV)
   let exits : Refine.Exits := {
@@ -1562,7 +1578,8 @@ def refineExits (p : Pos) (body : SExpr) (elseE : Option SExpr) (vars : List (St
   let brk := match brkPart with
     | some (.brk _) | none => SExpr.brk p
     | some _ => Refine.liftedBreak p
-  let writes := vars.zipIdx.map fun ((nm, _), k) => SExpr.set p (.ident p nm) none (get (ci + k))
+  let writes := vars.zipIdx.map fun ((nm, _), k) => SExpr.set p (.ident p nm) none
+    (.app p (.ident p "$refineCopyOut") [get (ci + k)] false)
   let after : List SExpr := writes ++
     (if hasRet then [if retS.isSome then .ite p [.decl p rv none false (.query p (get 0))] (.ret p (some (.ident p rv))) none
       else .ite p [.query p (get 0)] (.ret p none) none] else []) ++
@@ -2513,6 +2530,15 @@ partial def elabGenericCallWith (elabE : Ctx → SExpr → Option Ty → EM R) (
 
 partial def elabSetWith (elabE : Ctx → SExpr → Option Ty → EM R) (elabMember : Ctx → Pos → R → String → EM R)
     (ctx : Ctx) (p : Pos) (lhs0 : SExpr) (op : Option String) (rhs0 : SExpr) : EM R := do
+  if let .app _ (.ident _ "$refineCopyOut") [rhs] false := rhs0 then
+    let r ← elabSetWith elabE elabMember ctx p lhs0 op rhs
+    match r.e with
+    | .assign target (.local result) =>
+      modify fun st => { st with frameCopies := st.frameCopies ++ [{ target, result }] }
+    | .assign target (.prim (.tupGet field) [.local result]) =>
+      modify fun st => { st with frameCopies := st.frameCopies ++ [{ target, result, field := some field }] }
+    | _ => eerr p "internal error: a refining copy-out is not a saved result"
+    return r
   -- (`$withOld(O, R)`: for `op=`, the old value was read into `O` before
   -- the code that computes `R`, as `set` evaluates, #208)
   let (rhs, oldIn) : SExpr × Option Expr := match rhs0 with
@@ -2979,6 +3005,14 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
     | none => pure ⟨.lit .void, .void⟩
     | some ee => elabE ctx ee exp
   let key := Refine.keyOf p D ctx.liftTag
+  let liftName := s!"$refine{p.line}_{p.col}_{D}" ++ (if p.file.isEmpty then "" else s!"_{p.file}") ++ ctx.liftTag
+  -- Keep a suspending lift's available parameters in a stable order from
+  -- discovery onward: locals it declares may themselves be borrowed by a
+  -- nested lift, whose frame reference needs exactly this argument order.
+  let availableTypes : List Ty := env.tvars.map (fun binding => Ty.subst μT binding.2) ++
+    opened.map (fun binding => Ty.param binding.1 binding.2.2)
+  let available := availableTypes.flatMap Ty.paramsC |>.foldl
+      (fun (acc : List (String × Bool)) (n, c) => if acc.any (·.1 == n) then acc else acc ++ [(n, c)]) []
   match env.castRequests.find? (·.key == key) with
   | none =>
     -- (first: the branch in the refined world)
@@ -2987,7 +3021,8 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
     let dslot ← fresh dTy
     let ctxB : Ctx := { ctx with
       locals := { name := D, slot := dslot, ty := dTy, mutable := false } ::
-        ctx.locals.map fun l => { l with ty := refine l.ty },
+        ctx.locals.map fun l => { l with ty := refine l.ty, storage := l.storage.map (·.subst μT) },
+      frameName := liftName, frameArgs := available.map fun (n, c) => Ty.param n c,
       -- (the source return's value and the lifted function's copy-out)
       retTy := (escRet.map (refine ·.1)).getD ctx.retTy,
       refineExits := (escRet.map (·.2)).getD {},
@@ -3006,13 +3041,8 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
     let thenWaits := ctx.suspends && (waitingThen != waiting0 || waits rb.e)
     if thenWaits then
       for l in caps do
-        let n := Choice.shownName l.name
-        if l.mutable && background.contains l.slot then
-          eerr p s!"the branch of the refining cast cannot suspend while it captures the var '{n}' shared with a background task (#243)"
-        -- Cancellation skips the copy back to the caller before its defers run.
-        if outsideWrites.contains l.slot && ctx.defers.any (fun (d, ls) =>
-            (ls.find? (·.name == l.name)).any (·.slot == l.slot) && (Choice.namesUsed d).contains l.name) then
-          eerr p s!"the branch of the refining cast cannot suspend while it sets the var '{n}' used by an enclosing defer (#243)"
+        if l.mutable && l.storage.isNone && (background.contains l.slot || outsideWrites.contains l.slot) then
+          eerr p s!"internal error: a suspending mutable capture '{Choice.shownName l.name}' has no source storage"
     let fxB := (← get).fx
     modify fun st => { st with fx := fx0 }
     for (k, q, via) in fxB do noteFx q [k] via
@@ -3034,9 +3064,14 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
     -- the call determines it)
     let written := ((Refine.typeNames body).filterMap fun w =>
       (env.tvars.lookup w).map refine).flatMap Ty.paramsC
-    let extra := written.foldl (fun acc (n, c) =>
+    let storage := caps.filterMap fun l => l.storage.map fun s =>
+      (l.name, s.subst μT)
+    let storageTypes := (storage.flatMap (fun (_, s) => s.args)).flatMap Ty.paramsC
+    let wanted := (if ctx.suspends then available else []) ++ storageTypes ++ written
+    let extra := wanted.foldl (fun acc (n, c) =>
       if tps.any (·.1 == n) || acc.any (·.1 == n) then acc else acc ++ [(n, c)]) []
-    let tps := tps ++ extra
+    let tps := if ctx.suspends then available ++ ((tps ++ extra).filter fun (n, _) => !available.any (·.1 == n))
+      else tps ++ extra
     -- (the opened ones' values come from the object's hidden fields; those
     -- of a cast this one is in, from its function's, #250)
     if let some (n, _) := tps.find? fun (n, _) =>
@@ -3055,12 +3090,13 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
       (if suspendsB then ["suspends"] else [])
     let lift : Refine.Lift := {
       pos := p, bound := D, target := T, tag := ctx.liftTag,
-      name := s!"$refine{p.line}_{p.col}_{D}" ++ (if p.file.isEmpty then "" else s!"_{p.file}") ++ ctx.liftTag,
+      name := liftName,
       params := ((D, dTy) :: sig).map (fun (n, t) => { name := n, ty := t.toSTy }) ++
         extra.map fun (n, _) => { name := s!"$type{n}", ty := .name n },
       tparams := tps.map fun (n, c) => { pos := p, name := n, constraint := if c then "comparable" else "type" },
       specs, ret := ret.toSTy, subst := σ, opened := opened.map fun (n, v, _) => (n, v), waits := thenWaits,
       exits := Refine.Exits.substTypes ((escRet.map (·.2)).getD {}) σ,
+      storage := storage.map fun (n, s) => (n, { frame := s.frame, name := s.name, args := s.args.map Ty.toSTy }),
       -- (made: a branch the elaborator made, for a cast with clauses
       -- after it, #286, which the source does not have as such)
       -- (and a tagged one, which the source's places do not find, #53)
@@ -3152,7 +3188,7 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
         | none => eerr p s!"cannot cast {withArticle rx.ty.show} to {shown} yet: the object's type arguments as {withArticle part[0]!} do not determine {T}'s (#250)"
       let dL : Local := { name := D, slot := y, ty := dTyX, mutable := false }
       let ctx' := { ctx with
-        locals := dL :: ctx.locals.map fun loc => { loc with ty := loc.ty.subst μF },
+        locals := dL :: ctx.locals.map fun loc => { loc with ty := loc.ty.subst μF, storage := loc.storage.map (·.subst μF) },
         types := { env with tvars := env.tvars.map fun (m, t) => (m, t.subst μF) } }
       let argOf (sp : SParam) : SExpr :=
         if sp.name.startsWith "$type" then .app p (.ident p "$witness") [.ident p (sp.name.drop 5).toString] false
@@ -3354,6 +3390,7 @@ partial def ovChosen (picks : List (Nat × String)) : SExpr → SExpr :=
       | none => some (.app p (.ident p "$ovUnresolved") [.ident q f] false)
     | _ => none
 
+set_option maxHeartbeats 800000 in
 mutual
 partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
   match se with
@@ -4026,6 +4063,9 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
 partial def elabStmt (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM (R × Ctx) := do
   let (r, ctx') ← match se with
     | .decl p n sty isVar rhs => do
+      let (rhs, copied) := match rhs with
+        | .app _ (.ident _ "$refineCopyIn") [e@(.ident _ source)] false => (e, (ctx.lookup source).bind (·.storage))
+        | e => (e, none)
       if let .app dp (.ident _ "$defer") _ _ := rhs then eerr dp "defer: is a statement: it has no value"
       checkNewLocal ctx p n
       let ty? ← sty.mapM (resolveTy ctx.types p)
@@ -4035,8 +4075,12 @@ partial def elabStmt (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM (R × Ctx) 
         eerr p (if n.startsWith "$" then "cannot infer the type of this clause's value" else s!"cannot infer the type of '{n}'")
       let e ← coerce p r ty
       let slot ← fresh ty
+      let storage := copied.orElse fun _ => if isVar && ctx.suspends then
+        some { frame := ctx.frameName, name := s!"{p.file}:{p.line}:{p.col}:{n}", args := ctx.frameArgs } else none
+      if let some s := storage then
+        modify fun st => { st with frameSlots := st.frameSlots ++ [(slot, s)] }
       pure (⟨.assign slot e, ty⟩,
-        { ctx with locals := { name := n, slot, ty, mutable := isVar } :: ctx.locals })
+        { ctx with locals := { name := n, slot, ty, mutable := isVar, storage } :: ctx.locals })
     | .app _ (.ident _ "$declNames") ns false => do
       -- (#283) the names a block whose choice is lifted binds (renamed for
       -- the place): not in scope where the block is, as for its own
@@ -7442,7 +7486,7 @@ def lowerOpening {α : Type} (low : List Nat → Except String α) : Except Stri
 def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsigs0 : List (List VTy × VTy))
     (protos : HeapTy) (pins : List (List (Option VTy))) (inFn : String → String → String)
     (fns0 : Array Fn) (slotTys0 : Array (List VTy)) (fsigsIn : List (List VTy × VTy)) (classTable0 : List (List VTy))
-    (forced : List Nat := []) :
+    (forced : List Nat := []) (frameInfo : Array FrameRefs.Info := #[]) :
     Except String (Array Fn × Array (List VTy) × List (List VTy × VTy) × List (List VTy) × Array (List VTy) × Expr ×
       List (List (Option VTy)) × List Value) := do
   let mut fns := fns0
@@ -7609,6 +7653,15 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
   let fsigs0 := fsigs0 ++ roots.toList.map fun (ri, _, _) => (slotTys[ri]!, VTy.void)
   fsigs := fsigs ++ roots.toList.map fun (ri, _, _) => (slotTys[ri]!, VTy.void)
   let lows := user ++ roots.toList
+  -- Spawn argument inference above still sees the original source call
+  -- signatures. From here onward generated refining calls carry typed
+  -- ancestor references; current-frame placeholders are resolved by lower.
+  let sourceFrames ← SourceFrames.prepare
+    (fun name => (lows.findIdx? (·.2.1 == name)).map (tagBase + ·)) fns slotTys fsigs0 frameInfo
+  fns := sourceFrames.fns
+  slotTys := sourceFrames.slots
+  fsigs := sourceFrames.sigs
+  let fsigs0 := sourceFrames.sigs
   let nFns := fns.size
   -- (#362: a root records the waiting frame to resume first, and the
   -- scheduler the one a resumption found, in fields of this type, after
@@ -7654,6 +7707,23 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
       Suspend.countArms (fun f => isMark f || f == branchMark) b)
   let frameTy (j : Nat) : VTy :=
     .ref [tagBase + j] ((List.range lows[j]!.2.2).map VTy.var)
+  let sourceBase (name : String) : Option Nat := do
+    let j ← lows.findIdx? (·.2.1 == name)
+    let (_, _, sites, arms) := parts[j]!
+    return Suspend.slotBaseOf sites arms
+  -- These layouts expose the original slot prefix to ANF type inference.
+  -- Lowering appends its transient slots without moving that prefix.
+  let sourceClasses := lows.zipIdx.map fun ((gi, _, _), j) =>
+    let (_, _, sites, arms) := parts[j]!
+    List.replicate (Suspend.slotBaseOf sites arms) VTy.void ++ slotTys[gi]!
+  let Ssource : Sigs := { fns := fsigs0, classes := classTable ++ sourceClasses, protos, pins }
+  for gi in List.range fns.size do
+    if lows.any (·.1 == gi) then continue
+    let shared ← SourceFrames.aliases sourceFrames gi sourceBase
+    let (fn, tys) ← SourceFrames.immediate Ssource fns[gi]! slotTys[gi]! shared
+      (sourceFrames.info[gi]?.getD {}).copies
+    fns := fns.set! gi fn
+    slotTys := slotTys.set! gi tys
   -- the methods called through `Typed.dispatch` (#142) of classes that fix
   -- type arguments (a generic one at or above the receiver's class is
   -- called without the refinement, so it is never one)
@@ -7850,7 +7920,7 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
     if let some ri := (env.fields d).findIdx? (·.1 == "$Root") then
       classTable := classTable.set (env.tagOf d) ((classTable[env.tagOf d]!).set ri (.opt rootAny))
   if leafy then classTable := classTable.set schedTag (classTable[schedTag]! ++ [parTy, .int])
-  let Sinf : Sigs := { fns := fsigs0 ++ extraSigs.toList ++ selfSigs.toList ++ rootSigs.toList, classes := classTable,
+  let Sinf : Sigs := { fns := fsigs0 ++ extraSigs.toList ++ selfSigs.toList ++ rootSigs.toList, classes := classTable ++ sourceClasses,
                        protos, pins }
   let mut newFns : Array Fn := #[]
   let mut newTys : Array (List VTy) := #[]
@@ -7941,8 +8011,10 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
     let branches : Array (Nat × Nat × Nat) := ((branchOf[j]?).getD []).toArray.map fun K =>
       (wrapFnBase + 3 * K + 1, wrapFnBase + 3 * K + 2, wrapTag K)
     let isRoot := j ≥ user.length || (mainSig.suspends && gi == mainSig.idx)
+    let shared ← SourceFrames.aliases sourceFrames gi sourceBase
     let low ← (Suspend.lower Sinf callee syncMark raceMark rushMark spawnMark spawns branchMark branches a Γ ρ (frameTy j)
-      schedTag nilTag resCellTag fnBase b leafF leafDepthF isRoot leafy resumeAnyMark leafDepthMin parTy).mapError fun e => inFn gname e
+      schedTag nilTag resCellTag fnBase b leafF leafDepthF isRoot leafy resumeAnyMark leafDepthMin parTy shared
+      (sourceFrames.info[gi]?.getD {}).copies).mapError fun e => inFn gname e
     -- its branches' wrappers: `tramp(w, sched)` resumes the arm (with the
     -- function's parameters from its frame) unless the function stopped
     -- it; `start(sched, frame)` makes the wrapper, registers it and runs
@@ -9849,7 +9921,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       (decides : Bool) (allowed : List String) (tps : List (String × Bool)) (body : SExpr)
       (suspends : Bool := false) (selfTps : List String := [])
       (selfFieldOf : Option (String → Option Nat) := none) (scopeClass : Option String := none) :
-      Except String (Fn × List VTy × List (String × Ty) × Option Pos × List Refine.Lift × List LoopUse) := do
+      Except String (Fn × List VTy × List (String × Ty) × Option Pos × List Refine.Lift × List LoopUse × FrameRefs.Info) := do
     -- (#209) the values of `selfTps` come from the receiver's hidden
     -- fields, in slots after the hidden parameters: a method's own class's
     -- (`C.M`), or as `selfFieldOf` says (a cast's branch, #250, the cast
@@ -9866,12 +9938,18 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     let env := if selfTps.isEmpty then env else
       { env with dictOrder := dictTps.map (·.1),
                  selfWitness := selfTps.map fun v => (v, selfField v) }
-    let locals := (ps.zip (List.range ps.length)).zip ptys |>.map fun ((prm, i), t) =>
-      ({ name := prm.name, slot := i, ty := t, mutable := false } : Local)
+    let lifted := opts.castRequests.find? (·.name == name)
+    let locals ← ((ps.zip (List.range ps.length)).zip ptys).mapM fun ((prm, i), t) => do
+      let storage ← ((lifted.bind fun l => l.storage.lookup prm.name)).mapM fun s => do
+        return {
+          frame := s.frame, name := s.name,
+          args := ← s.args.mapM fun t => (resolveTy env p t).run' { env } : SourceStorage }
+      pure ({ name := prm.name, slot := i, ty := t, mutable := false, storage } : Local)
     for (prm, i) in ps.zip (List.range ps.length) do
       if ps.take i |>.any (·.name == prm.name) then throw s!"{p.show}: duplicate parameter '{prm.name}'"
     let ctx : Ctx := { sigs := allSigs, sigProg, locals := locals.reverse, types := env, fnFx := allowed,
                        canFail := decides, retTy := ret, dictBase := ps.length, suspends,
+                       frameName := name, frameArgs := tps.map fun (v, c) => Ty.param v c,
                        refineExits := ((opts.castRequests.find? (·.name == name)).map (·.exits)).getD {},
                        dictVars := dictTps.map (·.1),
                        inBlock := name.endsWith ".$block",
@@ -9887,7 +9965,9 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
                          | _ => none }
     let hidden := dictTps.map fun (v, c) => Ty.param v c
     let arity := ps.length + hidden.length - selfTps.length
-    let st0 : ESt := { env, nslots := ps.length + hidden.length, slotTys := (ptys ++ hidden).toArray }
+    let st0 : ESt := {
+      env, nslots := ps.length + hidden.length, slotTys := (ptys ++ hidden).toArray,
+      frameSlots := locals.filterMap fun l => l.storage.map (l.slot, ·) }
     -- (#283) its calls of overloaded functions with several values chosen
     let ((r, _), st) ← elabBodyOv ctx body (some ret) st0
     let (e, st) ← (coerce p r ret).run st
@@ -9901,12 +9981,15 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     fxCheck name allowed st
     return ({ name, arity, nslots := st.nslots, decides, writes := allowed.contains "writes",
               body := initPrefixE arity inits e },
-      st.slotTys.toList.map (Ty.toVTy env), st.fnNeeds, st.errAt, st.castNeeds, st.loopFirst)
+      st.slotTys.toList.map (Ty.toVTy env), st.fnNeeds, st.errAt, st.castNeeds, st.loopFirst,
+      { explicit := ps.length, copies := st.frameCopies, slots := st.frameSlots.map fun (i, s) =>
+          (i, { frame := s.frame, name := s.name, args := s.args.map (Ty.toVTy env) }) })
   -- (the accessors come right after the functions, #157)
   env := { env with fieldAccBase := tops.length + gsigs.size }
   let genvOf (g : Sig) : TyEnv := { env with tvars := g.tparams.map fun (v, c) => (v, Ty.param v c) }
   let mut fns : Array Fn := #[]
   let mut slotTys : Array (List VTy) := #[]
+  let mut frameInfo : Array FrameRefs.Info := #[]
   let mut fnNeeds : List (String × Ty) := []
   -- (where each function calls `Err()`, by its index, #235)
   let mut errs : Array (Option Pos) := #[]
@@ -9918,13 +10001,14 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     let sig := sigs[idx]!
     match top with
     | .fn p n ps _ _ _ body =>
-      let (fn, tys, needs, err, casts, lf) ← elabFn env p n ps sig.params sig.ret sig.decides sig.fx [] body sig.suspends
+      let (fn, tys, needs, err, casts, lf, frames) ← elabFn env p n ps sig.params sig.ret sig.decides sig.fx [] body sig.suspends
       fnNeeds := fnNeeds ++ needs
       castNeeds := castNeeds ++ casts
       loopFirst := loopFirst ++ lf
       fns := fns.push fn
       errs := errs.push err
       slotTys := slotTys.push tys
+      frameInfo := frameInfo.push frames
     | .const p n _ body =>
       -- a constant is computed at each use, so it would be a new object each
       -- time (until Verse Core has global state)
@@ -9937,6 +10021,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       castNeeds := castNeeds ++ st.castNeeds
       loopFirst := loopFirst ++ st.loopFirst
       let tys := st.slotTys.toList.map (Ty.toVTy env)
+      frameInfo := frameInfo.push {}
       -- slots start like a function's (a class-typed one as a placeholder)
       let inits ← match st.slotTys.toList.mapM (slotDefault env 0 [] []) with
         | .ok ds => pure ds
@@ -9957,7 +10042,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       -- (a class's copy of an interface's default, #53, elaborated in the
       -- interface's scope)
       let scope := copyScope? effs
-      let (fn, tys, needs, err, casts, lf) ← elabFn (genvOf g) p n ps g.params g.ret g.decides g.fx g.tparams body g.suspends
+      let (fn, tys, needs, err, casts, lf, frames) ← elabFn (genvOf g) p n ps g.params g.ret g.decides g.fx g.tparams body g.suspends
         g.selfTps ((opts.castRequests.find? (·.name == n)).map fun l => fun v =>
           (l.opened.lookup v).bind (env.witnessField? l.target ·)) scope
       fnNeeds := fnNeeds ++ needs
@@ -9966,6 +10051,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       fns := fns.push fn
       errs := errs.push err
       slotTys := slotTys.push tys
+      frameInfo := frameInfo.push frames
     | _ => pure ()
   -- (#214) functions wanted as values at types no class of theirs gives:
   -- the program is elaborated again, with classes for them, so this one,
@@ -10051,7 +10137,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   if usesConc then
     let (fns1, slotTys1, fsigs1, classTable1, frameClasses1, mainCall1, framePins1, schedMore) ←
       lowerOpening fun forced =>
-        lowerConcurrency env sigs gsigs mainSig fsigs0 protos pins inFn fns slotTys fsigs classTable forced
+        lowerConcurrency env sigs gsigs mainSig fsigs0 protos pins inFn fns slotTys fsigs classTable forced frameInfo
     if !schedMore.isEmpty then
       let schedTag := env.tagOf "$sched"
       protoList := protoList.map fun (t, vs) => if t == schedTag then (t, vs ++ schedMore) else (t, vs)

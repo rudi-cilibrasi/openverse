@@ -497,11 +497,13 @@ circle := class(shape, labelled):
   branch's function is then `<suspends>`, and the `if` a suspends call of
   it, cancelled as any (its `defer:`s, then the caller's). The lifted branch
   cannot contain `branch` or `rush` because their background tasks belong
-  to the enclosing source function. The branch cannot suspend while
-  capturing an outer `var` shared with an earlier background task or
-  setting one used by an enclosing `defer:`. A `var` from outside it that the branch
-  sets is copied into the branch, which sets the copy, and is set from the
-  copy after the `if` (#243), so it has the value the branch left it. A
+  to the enclosing source function. In a `<suspends>` source function,
+  mutable captures share their source storage (#419). Writes are visible
+  to both the branch and earlier background tasks across waits; cancellation
+  also exposes the latest value to enclosing `defer:`s. Ordinary local copies
+  and saved return operands keep their captured values. In an immediate
+  source function, a `var` from outside the branch that it sets is copied
+  in and copied back after the `if` (#243). A
   `return` in the branch, or a `break` that leaves it, makes its function
   return what to do, which the caller then does after the `if` (#243): the
   enclosing function returns, or the loop is left, once the `var`s it set

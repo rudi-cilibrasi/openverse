@@ -11,6 +11,16 @@ export CHECK_TEST_EVENTS="$tmp/events"
 
 cat >"$fixture/bin/lake" <<'SH'
 #!/usr/bin/env bash
+if [[ $1 == env ]]; then
+  touch "$CHECK_TEST_EVENTS/source-frame-contracts"
+  if [[ $CHECK_TEST_FAIL_STEP == source-frame-contracts ]]; then
+    echo 'fixture source-frame failure detail'
+    exit 3
+  fi
+  echo 'source-frame rewrite contracts passed'
+  exit 0
+fi
+[[ $1 == build ]] || exit 88
 touch "$CHECK_TEST_EVENTS/lake"
 echo 'build progress that should be quiet on success'
 if [[ $CHECK_TEST_BUILD == fail ]]; then
@@ -61,7 +71,11 @@ for jobs in 1 2 08; do
   if grep -q 'build progress' "$tmp/log"; then die 'successful build was not compact'; fi
   grep -q '^check.sh: all checks passed$' "$tmp/log" || die 'missing check summary'
   [[ -f "$CHECK_TEST_EVENTS/fuzz-fields.sh" ]] || die 'last check did not run'
+  [[ -f "$CHECK_TEST_EVENTS/source-frame-contracts" ]] || die 'source-frame contracts did not run'
 done
+run_check 2 success 3 source-frame-contracts
+grep -q 'fixture source-frame failure detail' "$tmp/log" || die 'source-frame diagnostic was hidden'
+[[ ! -f "$CHECK_TEST_EVENTS/make" ]] || die 'continued after failed source-frame contracts'
 run_check 2 success 1 fuzz-classes.sh
 grep -q 'fixture check failure detail' "$tmp/log" || die 'check diagnostic was hidden'
 grep -qF 'check.sh: FAILED: class-feature fuzzing' "$tmp/log" || die 'failed check was not reported'

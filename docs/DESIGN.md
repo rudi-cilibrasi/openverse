@@ -1620,6 +1620,30 @@ targets may add (#157) get their superclasses in `supersMap` like every
 class, as `refTags` asks whether each is below a class at every
 conversion of a class type.
 
+In a suspending source function, mutable captures keep their storage in
+their defining frame (#419, `SourceFrames`, `FrameRefs`). Discovery records
+the defining function, declaration position and type arguments, resolving
+the actual field only after the final elaboration assigns slots. A lift
+takes hidden references to each ancestor frame it needs, before its hidden
+type witnesses. Its dispatch refines those references along with the
+receiver. A suspending lift retains all in-scope type parameters and passes
+otherwise undetermined ones explicit witnesses, so a nested lift can name
+the earlier lift's frame even when the earlier body uses only some of them.
+
+After spawn argument inference, calls receive the ancestor references;
+the current-frame placeholder becomes local 0 after suspension lowering
+shifts source slots. Provisional frame layouts expose the original slot
+prefix to ANF inference. Before ANF, shared reads and writes become heap
+accesses, including in conditions: a later helper sees earlier writes,
+and a failed condition rolls them back. A refined dispatch snapshots an
+aliased receiver in an ordinary slot, which survives a waiting argument;
+the existing `fixRefined` handles its eventual field representation.
+Immediate lifted helpers borrow the same storage, leaving their default
+initializations separate from live ancestor writes. Only marked synthetic
+copy-ins inherit storage, and only recorded saved-result copy-outs are
+omitted. User copies and return operands stay independent. This does not
+yet move branch/rush task ownership across a lift; those remain refused.
+
 A cast that opens type arguments (#250, `pairE[E]` for `E:expr(t)`)
 gives the target's type parameters past the object's arguments fresh
 names (`a'`, `b'`, avoiding the enclosing function's), and the refinement
