@@ -961,6 +961,14 @@ flowchart LR
   against the expected function type and checks their bounds. All witnesses
   remain in the value object, with the captured receiver. A value denotes
   one instance; no implicit polymorphic callable is introduced.
+  Method tuple adapters use the same symbolic packing/expansion as generic
+  functions. Binding first matches the adapter's `$self` type against the
+  receiver at its declaring class, then seeds `fnClassArgs` with those fixed
+  arguments. The expected function type can infer the remaining arguments
+  but cannot change the receiver's. Expanding a bare receiver parameter
+  also substitutes its tuple components into `$self`; parameters absent
+  from the callable signature remain inferable from that field. Declared
+  adapters retain precedence, and the receiver is stored once.
 - **`subscribable_event(t)`** is Verse code in a prelude (`subPrelude`):
   `event(t)` with an array of (subscription, handler) pairs, the handlers
   of type `type{_(:t):void}`, called under the refinement in `Signal`. A

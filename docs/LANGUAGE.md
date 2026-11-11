@@ -200,8 +200,17 @@ Main():void =
   type that determines one instance and satisfies its bounds (#209). The
   receiver fixes the class arguments; the expected type fixes the method
   arguments. The value retains both, including after its creator returns.
-  The declared parameter shape is retained. With no determining expected
-  type, the method cannot be bound as a value.
+  With no determining expected type, the method cannot be bound as a value.
+- Bound methods also pack and expand tuples at an expected function type,
+  including open types in generic code (#209). For example, a method
+  `Pair(X:a,Y:b):tuple(a,b)` can be a `type{_(:tuple(a,b)):tuple(a,b)}`.
+  A bare method parameter may stand for the whole tuple, whether its type
+  comes from the receiver or the method's own type parameters. The
+  receiver's arguments remain fixed; tuple adaptation cannot change them.
+  Empty and single-element tuples, comparable bounds, interface defaults,
+  overrides, failure and suspension use the same captured receiver and
+  argument order as ordinary calls. Without an expected function type,
+  a method value keeps its declared shape.
 - Overloaded functions and methods and ones with named parameters cannot
   be used as values. Lambdas and
   nested functions are not released in Verse, so there are none.

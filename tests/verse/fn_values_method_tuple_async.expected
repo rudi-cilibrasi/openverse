@@ -1,0 +1,10 @@
+receiver 1
+begin 2
+end 2
+cleanup 2
+done 2
+begin 3
+cancel
+cleanup 3
+finished
+exit=0
