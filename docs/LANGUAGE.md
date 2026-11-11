@@ -180,8 +180,10 @@ Main():void =
   `F:type{_(:t):t} = Identity`. The value retains those arguments and their
   witnesses after the creating function returns. Repeated and compound
   parameter/result types, comparable bounds, failure and suspension are
-  supported (#209). An open expected type uses the declared parameter
-  shape; tuple flattening/packing still requires a closed expected type.
+  supported (#209). Open expected types can also pack several parameters
+  into one tuple or expand a tuple parameter into separate parameters.
+  A bare generic parameter can instantiate to the tuple of the target
+  parameters. Empty and single-element tuples work on these paths too.
   Comparable arguments may also be unique classes or comparable value
   structs. With no determining expected
   type, a polymorphic identifier remains insufficient (`Map(Xs, Identity)`
@@ -194,8 +196,14 @@ Main():void =
   includes generic callers, interface views/defaults, overrides and
   suspending methods. The receiver is evaluated once when the value is
   created; later calls observe that receiver's current fields.
-- Methods with their own type parameters, overloaded functions and methods,
-  and ones with named parameters cannot be used as values. Lambdas and
+- A method with its own type parameters can be used at an expected function
+  type that determines one instance and satisfies its bounds (#209). The
+  receiver fixes the class arguments; the expected type fixes the method
+  arguments. The value retains both, including after its creator returns.
+  The declared parameter shape is retained. With no determining expected
+  type, the method cannot be bound as a value.
+- Overloaded functions and methods and ones with named parameters cannot
+  be used as values. Lambdas and
   nested functions are not released in Verse, so there are none.
 
 ## defer

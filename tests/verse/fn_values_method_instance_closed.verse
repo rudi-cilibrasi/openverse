@@ -1,4 +1,3 @@
-# expect: own type parameters
 box(t:type,u:type):=class:
     V:t
     Extra:u
@@ -11,4 +10,4 @@ box(t:type,u:type):=class:
 Main():void=
     B:=box(int,string){V:=1,Extra:="s"}
     F:type{_(:int):int}=B.Generic
-    Print("bad")
+    Print("{F(7)}")

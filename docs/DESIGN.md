@@ -954,6 +954,13 @@ flowchart LR
   the captured receiver's value class, as ordinary opened overrides do.
   Calls keep their static function type, local refinement/bound evidence,
   effects and suspension behavior (#209).
+  A method with its own parameters adds them after the class's in its
+  value class. They get private names before receiver substitution, so a
+  caller's `u` cannot capture the method's `u`. The receiver supplies the
+  class arguments, and `fnValueArgs` matches the remaining method arguments
+  against the expected function type and checks their bounds. All witnesses
+  remain in the value object, with the captured receiver. A value denotes
+  one instance; no implicit polymorphic callable is introduced.
 - **`subscribable_event(t)`** is Verse code in a prelude (`subPrelude`):
   `event(t)` with an array of (subscription, handler) pairs, the handlers
   of type `type{_(:t):void}`, called under the refinement in `Signal`. A
@@ -1007,8 +1014,14 @@ flowchart LR
   them as a generic receiver's does. Values can escape and be called under
   GADT refinements without borrowing the creator's slots. This also serves
   closed instances at the declared shape, including comparable classes and
-  value structs. Other closed requests keep the specialization path above;
-  open tuple reshaping remains separate.
+  value structs. Generic tuple adapters preserve symbolic parameters while
+  packing several inputs or expanding a tuple. A bare parameter becomes
+  the tuple of the target inputs; its comparable bound transfers to every
+  component. The declared shape is tried first. Each extra adapter is keyed
+  by the function and target shape, and `fnClassArgs` infers its instance
+  from the expected type. Tuple arguments are stored once before projection.
+  Other closed requests keep the specialization path above. These adapters
+  do not convert already-bound function values to different function types.
 
 ## Concurrency: suspends functions as frames
 
