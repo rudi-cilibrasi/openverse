@@ -234,6 +234,34 @@ typedef struct vx_res {
     vx_val v;      /* OK, RET */
 } vx_res;
 
+/* Shared result constructors. FAIL, ERR and LIMIT leave the unused value
+   field untouched. */
+static inline void vx_res_ok(vx_res *r, uint64_t tag, uint64_t bits)
+{
+    r->kind = VX_R_OK;
+    r->code = 0;
+    r->v.tag = tag;
+    r->v.bits = bits;
+}
+
+static inline void vx_res_fail(vx_res *r)
+{
+    r->kind = VX_R_FAIL;
+    r->code = 0;
+}
+
+static inline void vx_res_error(vx_res *r, int code)
+{
+    r->kind = VX_R_ERR;
+    r->code = code;
+}
+
+static inline void vx_res_limit(vx_res *r, int code)
+{
+    r->kind = VX_R_LIMIT;
+    r->code = code;
+}
+
 typedef struct vx_opts {
     uint64_t fuel;        /* Lean's fuel: eval/evalList/evalFor nesting  */
     uint64_t max_steps;   /* 0 = none; else a total-work budget (fuzzing) */

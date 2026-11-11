@@ -14,35 +14,14 @@
 #include <string.h>
 #include "vx_runtime.h"
 
-static void ok_val(vx_res *r, uint64_t tag, uint64_t bits)
-{
-    r->kind = VX_R_OK;
-    r->code = 0;
-    r->v.tag = tag;
-    r->v.bits = bits;
-}
-
 static void ok_copy(vx_res *r, const vx_val *v)
 {
-    ok_val(r, v->tag, v->bits);
-}
-
-static void fail(vx_res *r)
-{
-    r->kind = VX_R_FAIL;
-    r->code = 0;
-}
-
-static void err(vx_res *r, int code)
-{
-    r->kind = VX_R_ERR;
-    r->code = code;
+    vx_res_ok(r, v->tag, v->bits);
 }
 
 static void nomem(vx_res *r)
 {
-    r->kind = VX_R_LIMIT;
-    r->code = VX_L_MEMORY;
+    vx_res_limit(r, VX_L_MEMORY);
 }
 
 static int is(const vx_val *v, uint64_t tag)
@@ -59,11 +38,11 @@ static int64_t I(const vx_val *v)
 static void arith(vx_res *r, int rc, int64_t z)
 {
     if (rc == VX_OK)
-        ok_val(r, VX_T_INT, vx_bits_of(z));
+        vx_res_ok(r, VX_T_INT, vx_bits_of(z));
     else if (rc == VX_FAIL)
-        fail(r);
+        vx_res_fail(r);
     else
-        err(r, VX_E_OVERFLOW);
+        vx_res_error(r, VX_E_OVERFLOW);
 }
 
 /* cmpRes b left = if b then .ok left else .fail */
@@ -72,7 +51,7 @@ static void cmp(vx_res *r, int b, const vx_val *left)
     if (b)
         ok_copy(r, left);
     else
-        fail(r);
+        vx_res_fail(r);
 }
 
 /* asBytes vs = some _  (every element is a char) */
@@ -96,7 +75,7 @@ static int new_from(vx_ctx *c, uint64_t tag, const vx_val *src, size_t n, vx_res
     }
     if (n > 0)
         memcpy(vx_obj_elems(&c->heap, o), src, n * sizeof(vx_val));
-    ok_val(r, tag, o);
+    vx_res_ok(r, tag, o);
     return 1;
 }
 
@@ -114,7 +93,7 @@ static void str_of(vx_ctx *c, const char *s, size_t n, vx_res *r)
         e[k].tag = VX_T_CHAR;
         e[k].bits = (uint64_t)(unsigned char)s[k];
     }
-    ok_val(r, VX_T_ARR, o);
+    vx_res_ok(r, VX_T_ARR, o);
 }
 
 static double F(const vx_val *v)
@@ -124,7 +103,7 @@ static double F(const vx_val *v)
 
 static void ok_float(vx_res *r, double d)
 {
-    ok_val(r, VX_T_FLOAT, vx_fcanon(d));
+    vx_res_ok(r, VX_T_FLOAT, vx_fcanon(d));
 }
 
 /* VFloat.toIntRes: NaN or an infinity fails; out of range is the overflow error */
@@ -132,11 +111,11 @@ static void to_int(vx_res *r, int mode, const vx_val *v)
 {
     int64_t i;
     if (((v->bits >> 52) & 2047u) == 2047u)
-        fail(r);
+        vx_res_fail(r);
     else if (vx_ftoint(mode, v->bits, &i) == VX_OK)
-        ok_val(r, VX_T_INT, vx_bits_of(i));
+        vx_res_ok(r, VX_T_INT, vx_bits_of(i));
     else
-        err(r, VX_E_OVERFLOW);
+        vx_res_error(r, VX_E_OVERFLOW);
 }
 
 /* intBytes i: decimal, '-' for negatives (Lean's toString on Int). */
@@ -161,7 +140,7 @@ static void int_to_str(vx_ctx *c, int64_t i, vx_res *r)
         e[k].tag = VX_T_CHAR;
         e[k].bits = (uint64_t)(unsigned char)d[n - 1 - k];
     }
-    ok_val(r, VX_T_ARR, o);
+    vx_res_ok(r, VX_T_ARR, o);
 }
 
 /* .concat, [.arr xs, .arr ys] => .ok (.arr (xs ++ ys)) */
@@ -184,7 +163,7 @@ static void concat(vx_ctx *c, const vx_val *x, const vx_val *y, vx_res *r)
     e = vx_obj_elems(&c->heap, o);
     memcpy(e, vx_obj_elems(&c->heap, x->bits), nx * sizeof(vx_val));
     memcpy(e + nx, vx_obj_elems(&c->heap, y->bits), ny * sizeof(vx_val));
-    ok_val(r, VX_T_ARR, o);
+    vx_res_ok(r, VX_T_ARR, o);
 }
 
 /* .flatten, [.arr xss] => match flattenArrs xss with
@@ -194,14 +173,23 @@ static void flatten(vx_ctx *c, const vx_val *x, vx_res *r)
     size_t n = vx_obj_len(&c->heap, x->bits), k, total = 0, o, at = 0;
     const vx_val *xs = vx_obj_elems(&c->heap, x->bits);
     vx_val *e;
+    int too_big = 0;
     for (k = 0; k < n; k++) {
         if (xs[k].tag != VX_T_ARR) {
-            err(r, VX_E_TYPE);
+            vx_res_error(r, VX_E_TYPE);
             return;
         }
-        total += vx_obj_len(&c->heap, xs[k].bits);   /* < heap size: no overflow */
+        /* Repeated references can expand beyond the heap limit. Keep
+           checking the remaining types before reporting a memory limit. */
+        if (!too_big) {
+            size_t m = vx_obj_len(&c->heap, xs[k].bits);
+            if (m > c->heap.max - total)
+                too_big = 1;
+            else
+                total += m;
+        }
     }
-    if (vx_heap_alloc(&c->heap, total, &o) != VX_OK) {
+    if (too_big || vx_heap_alloc(&c->heap, total, &o) != VX_OK) {
         nomem(r);
         return;
     }
@@ -213,7 +201,7 @@ static void flatten(vx_ctx *c, const vx_val *x, vx_res *r)
             memcpy(e + at, vx_obj_elems(&c->heap, xs[k].bits), m * sizeof(vx_val));
         at += m;
     }
-    ok_val(r, VX_T_ARR, o);
+    vx_res_ok(r, VX_T_ARR, o);
 }
 
 /* .range, [.int a, .int b] => .ok (.arr (rangeVals a b)) -- a..b inclusive */
@@ -223,7 +211,7 @@ static void range(vx_ctx *c, int64_t a, int64_t b, vx_res *r)
     size_t o;
     vx_val *e;
     if (a > b) {
-        ok_val(r, VX_T_ARR, 0);
+        vx_res_ok(r, VX_T_ARR, 0);
         return;
     }
     last = vx_bits_of(b) - vx_bits_of(a);   /* count - 1, exact */
@@ -236,7 +224,7 @@ static void range(vx_ctx *c, int64_t a, int64_t b, vx_res *r)
         e[k].tag = VX_T_INT;
         e[k].bits = vx_bits_of(a) + k;
     }
-    ok_val(r, VX_T_ARR, o);
+    vx_res_ok(r, VX_T_ARR, o);
 }
 
 /* .arrSet, [.arr xs, .int i, v] =>
@@ -246,7 +234,7 @@ static void arr_set(vx_ctx *c, const vx_val *x, int64_t i, const vx_val *v, vx_r
     size_t n = vx_obj_len(&c->heap, x->bits), o;
     vx_val *e;
     if (i < 0 || (uint64_t)i >= (uint64_t)n) {
-        fail(r);
+        vx_res_fail(r);
         return;
     }
     if (vx_heap_alloc(&c->heap, n, &o) != VX_OK) {
@@ -257,7 +245,7 @@ static void arr_set(vx_ctx *c, const vx_val *x, int64_t i, const vx_val *v, vx_r
     memcpy(e, vx_obj_elems(&c->heap, x->bits), n * sizeof(vx_val));
     e[i].tag = v->tag;
     e[i].bits = v->bits;
-    ok_val(r, VX_T_ARR, o);
+    vx_res_ok(r, VX_T_ARR, o);
 }
 
 void vx_prim_apply(vx_ctx *c, uint32_t op, uint32_t k, const vx_val *a, size_t n, vx_res *r)
@@ -341,10 +329,10 @@ void vx_prim_apply(vx_ctx *c, uint32_t op, uint32_t k, const vx_val *a, size_t n
        | .query, [.some v] => .ok v */
     case VX_P_QUERY:
         if (n == 1 && is(&a[0], VX_T_LOGIC)) {
-            if (a[0].bits) ok_val(r, VX_T_LOGIC, 1); else fail(r);
+            if (a[0].bits) vx_res_ok(r, VX_T_LOGIC, 1); else vx_res_fail(r);
             return;
         }
-        if (n == 1 && is(&a[0], VX_T_NONE)) { fail(r); return; }
+        if (n == 1 && is(&a[0], VX_T_NONE)) { vx_res_fail(r); return; }
         if (n == 1 && is(&a[0], VX_T_SOME)) { ok_copy(r, vx_obj_elems(&c->heap, a[0].bits)); return; }
         break;
     /* | .mkArr, vs => .ok (.arr vs) */
@@ -379,14 +367,14 @@ void vx_prim_apply(vx_ctx *c, uint32_t op, uint32_t k, const vx_val *a, size_t n
             if (i >= 0 && (uint64_t)i < (uint64_t)vx_obj_len(&c->heap, a[0].bits))
                 ok_copy(r, &vx_obj_elems(&c->heap, a[0].bits)[i]);
             else
-                fail(r);
+                vx_res_fail(r);
             return;
         }
         break;
     /* | .len, [.arr xs] => .ok (.int xs.length) */
     case VX_P_LEN:
         if (n == 1 && is(&a[0], VX_T_ARR)) {
-            ok_val(r, VX_T_INT, (uint64_t)vx_obj_len(&c->heap, a[0].bits));
+            vx_res_ok(r, VX_T_INT, (uint64_t)vx_obj_len(&c->heap, a[0].bits));
             return;
         }
         break;
@@ -403,7 +391,7 @@ void vx_prim_apply(vx_ctx *c, uint32_t op, uint32_t k, const vx_val *a, size_t n
             if ((size_t)k < vx_obj_len(&c->heap, a[0].bits))
                 ok_copy(r, &vx_obj_elems(&c->heap, a[0].bits)[k]);
             else
-                err(r, VX_E_TYPE);
+                vx_res_error(r, VX_E_TYPE);
             return;
         }
         break;
@@ -424,17 +412,17 @@ void vx_prim_apply(vx_ctx *c, uint32_t op, uint32_t k, const vx_val *a, size_t n
             else if (is(&a[0], VX_T_ARR) && all_chars(&c->heap, a[0].bits))
                 ok_copy(r, &a[0]);
             else
-                err(r, VX_E_TYPE);
+                vx_res_error(r, VX_E_TYPE);
             return;
         }
         break;
     /* | .fail, [] => .fail */
     case VX_P_FAIL:
-        if (n == 0) { fail(r); return; }
+        if (n == 0) { vx_res_fail(r); return; }
         break;
     /* | .userErr, [] => .err .user */
     case VX_P_USERERR:
-        if (n == 0) { err(r, VX_E_USER); return; }
+        if (n == 0) { vx_res_error(r, VX_E_USER); return; }
         break;
     /* floats (#127): | .fadd, [.float a, .float b] => .ok (.float (canon (a + b))), … */
     case VX_P_FADD:
@@ -460,7 +448,7 @@ void vx_prim_apply(vx_ctx *c, uint32_t op, uint32_t k, const vx_val *a, size_t n
     case VX_P_FMAX:
         if (ff) {
             double x = F(&a[0]), y = F(&a[1]);
-            if (x != x || y != y) ok_val(r, VX_T_FLOAT, vx_fcanon(x != x ? x : y));
+            if (x != x || y != y) vx_res_ok(r, VX_T_FLOAT, vx_fcanon(x != x ? x : y));
             else if (op == VX_P_FMIN) ok_copy(r, y < x ? &a[1] : &a[0]);
             else ok_copy(r, x < y ? &a[1] : &a[0]);
             return;
@@ -520,17 +508,17 @@ void vx_prim_apply(vx_ctx *c, uint32_t op, uint32_t k, const vx_val *a, size_t n
     /* | .fisFinite, [.float a] => if isFinite a then .ok (.float a) else .fail */
     case VX_P_FISFINITE:
         if (f1) {
-            if (((a[0].bits >> 52) & 2047u) == 2047u) fail(r); else ok_copy(r, &a[0]);
+            if (((a[0].bits >> 52) & 2047u) == 2047u) vx_res_fail(r); else ok_copy(r, &a[0]);
             return;
         }
         break;
     /* | .fofBits, [.int i] => .ok (.float (canon (ofBits i))) (a float literal) */
     case VX_P_FOFBITS:
-        if (i1) { ok_val(r, VX_T_FLOAT, vx_fcanon(vx_fval(a[0].bits))); return; }
+        if (i1) { vx_res_ok(r, VX_T_FLOAT, vx_fcanon(vx_fval(a[0].bits))); return; }
         break;
     default:
         break;
     }
     /* | _, _ => .err .type */
-    err(r, VX_E_TYPE);
+    vx_res_error(r, VX_E_TYPE);
 }

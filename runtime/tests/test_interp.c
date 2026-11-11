@@ -167,6 +167,46 @@ static void rollback_cases(void)
     OK_OUT(&p, "7\n");
 }
 
+static void flatten_alias_cases(void)
+{
+    static const struct {
+        size_t inner, outer, max_heap;
+        int invalid_last, kind, code;
+        const char *out;
+    } cases[] = {
+        {3, 3, 64, 0, VX_R_OK, 0, "9\n"},
+        {0, 5, 16, 0, VX_R_OK, 0, "0\n"},
+        {3, 0, 16, 0, VX_R_OK, 0, "0\n"},
+        {6, 5, 20, 0, VX_R_LIMIT, VX_L_MEMORY, ""},
+        {6, 5, 20, 1, VX_R_ERR, VX_E_TYPE, ""},
+        /* A 2^32-element result needs only about 2 MiB of shared input.
+           Its size used to wrap to zero on 32-bit targets. */
+        {65536, 65536, (size_t)1 << 26, 0, VX_R_LIMIT, VX_L_MEMORY, ""},
+        {65536, 65536, (size_t)1 << 26, 1, VX_R_ERR, VX_E_TYPE, ""}
+    };
+    size_t i;
+    for (i = 0; i < sizeof cases / sizeof cases[0]; i++) {
+        tbuf p = {0};
+        tfn m = {0};
+        uint32_t init, body, outer, flat;
+        init = n_assign(&m, 0, n_prim(&m, VX_P_RANGE, 0, 2,
+                        n_int(&m, 0), n_int(&m, (int64_t)cases[i].inner - 1)));
+        body = n_local(&m, 0);
+        if (cases[i].invalid_last)
+            body = n_ite(&m, n_prim(&m, VX_P_EQ, 0, 2, n_local(&m, 2),
+                                   n_int(&m, (int64_t)cases[i].outer - 1)),
+                         n_int(&m, 7), body);
+        outer = n_for(&m, 2, n_prim(&m, VX_P_RANGE, 0, 2,
+                      n_int(&m, 0), n_int(&m, (int64_t)cases[i].outer - 1)), TRUE(&m), body);
+        flat = n_prim(&m, VX_P_FLATTEN, 0, 1, outer);
+        n_seq(&m, init, n_print_int(&m, n_prim(&m, VX_P_LEN, 0, 1, flat)));
+        main_only(&p, &m, 3, m.count - 1);
+        t_max_heap = cases[i].max_heap;
+        EXPECT(&p, cases[i].kind, cases[i].code, cases[i].out);
+    }
+    t_max_heap = 0;
+}
+
 static void prim_cases(void)
 {
     tbuf p = { 0 };
@@ -661,6 +701,7 @@ int main(void)
 {
     rollback_cases();
     prim_cases();
+    flatten_alias_cases();
     control_cases();
     fuel_cases();
     heap_cases();

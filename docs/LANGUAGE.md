@@ -740,7 +740,7 @@ Main():void =
     inside `not (…)` or on the left of `or`, which take its first success
     (#283): `(set A[5 | 1] = 8) or …` sets `A[1]`.
 
-  An `if … else if … else …` whose branches are choices, plain values,
+  An `if` chain whose branches are choices, plain values,
   expressions with choices or calls of functions with several values in
   them, or blocks with them (whose names are the branch's own, as any
   block's) may stand where a choice may (#235, #283). Its
@@ -751,6 +751,10 @@ Main():void =
   for (Z := if (V := M?) then (V | V * 10) else 0) { … }   # V, V * 10; or 0
   for (Z := if (V := M?) then Two(V) else Down(2)) { … }   # Two's values; or Down's
   ```
+
+  An `if` chain without a final `else` still has type `void`. Each value
+  of the selected branch gives one `void` result. If no condition
+  succeeds, the implicit branch gives one `void` result.
 
   The `if` itself adds no choice (#331): only the choices the program
   reaches are generators. In a `for`, when the branch it picks is a plain
@@ -791,9 +795,8 @@ Main():void =
   Refused for now: a choice inside a construction where a field it
   does not give, with a default that is more than a literal, comes before
   the choice (the default runs in its place); an
-  alternative of a `set`'s choice, either side of `and`, the right of `or`, a range,
-  or the branch of an `if` without
-  `else`, or a block with a range of its own as a branch; and
+  alternative of a `set`'s choice, either side of `and`, the right of `or`,
+  a range, or a block with a range of its own as a branch; and
   a choice anywhere outside these failure contexts. (A field reached
   through a receiver that is not a variable or `Self`, as `F().Items[…]`,
   is read after the choice, since only the receiver's value is bound
