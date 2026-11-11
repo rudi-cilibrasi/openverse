@@ -1063,7 +1063,7 @@ def TyEnv.refineComparable? (env : TyEnv) (μ : List (String × Ty)) (required :
   let known := env.tvars.flatMap fun (_, t) => t.paramsC.filterMap fun (n, cmp) =>
     if cmp then some (Ty.param n true) else none
   let names ← (known ++ required).foldlM (fun ns t => do
-    let needs ← ((t.subst μ).subst env.tvars).comparableNeeds? env
+    let needs ← (t.subst μ).comparableNeeds? env
     return (ns ++ needs).eraseDups) []
   let bounds := names.map fun n => (n, Ty.param n true)
   let μ := μ.map fun (n, t) => (n, t.subst bounds)
@@ -1079,6 +1079,17 @@ partial def Ty.commonBounds : Ty → Ty → Ty
   | .map a b, .map c d => .map (a.commonBounds c) (b.commonBounds d)
   | .struct n as, .struct _ bs => .struct n ((as.zip bs).map fun (a, b) => a.commonBounds b)
   | a, _ => a
+
+/-- Restore an outer scope's parameter bounds without reinterpreting
+    already-resolved parameter identities as lexical type aliases. -/
+partial def Ty.withParamBounds (bounds : List (String × Bool)) : Ty → Ty
+  | .param n _ => .param n ((bounds.lookup n).getD false)
+  | .arr t => .arr (t.withParamBounds bounds)
+  | .opt t => .opt (t.withParamBounds bounds)
+  | .tup ts => .tup (ts.map (Ty.withParamBounds bounds))
+  | .map k v => .map (k.withParamBounds bounds) (v.withParamBounds bounds)
+  | .struct n ts => .struct n (ts.map (Ty.withParamBounds bounds))
+  | t => t
 
 /-- Merge repeated parameter requirements, retaining the strongest bound
     without changing the parameter order. -/

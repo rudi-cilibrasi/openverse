@@ -1149,7 +1149,8 @@ partial def joinTy (env : TyEnv) (a b : Ty) (exp : Option Ty) (inner : Bool := f
       -- common one is below (at the same type arguments, #39)
       let up (U : String) (us : List Ty) : Bool :=
         env.isSub S U && env.isSub T U && env.upArgs S as U == us && env.upArgs T bs U == us
-      let atU (U : String) : Ty := .struct U (env.upArgs S as U)
+      let atU (U : String) : Ty :=
+        (Ty.struct U (env.upArgs S as U)).commonBounds (.struct U (env.upArgs T bs U))
       let cands := (env.supers S).filter fun U => up U (env.upArgs S as U)
       let common : Option Ty :=
         match cands.find? fun U => !(env.info U).isIface with
@@ -1159,7 +1160,7 @@ partial def joinTy (env : TyEnv) (a b : Ty) (exp : Option Ty) (inner : Bool := f
           | [U] => some (atU U)
           | _ => none
       match exp with
-      | some (.struct U us) => if env.classes.contains U && up U us then some (.struct U us) else common
+      | some (.struct U us) => if env.classes.contains U && up U us then some (atU U) else common
       | _ => common
     else none
   | .arr x, .arr y => (joinTy env x y (match exp with | some (.arr e) => some e | _ => none) true).map .arr
@@ -2697,8 +2698,7 @@ partial def substDefaultTypes (σ : List (String × STy)) (e : SExpr) : SExpr :=
     instantiations. Generated annotations keep the actual Core names, even
     when the caller and callee use the same names in a different order. -/
 def defaultTypes (ctx : Ctx) (p : Pos) (s : Sig) (σ : List (String × Ty)) (d : SExpr) : EM (TyEnv × SExpr) := do
-  let core := (σ.flatMap fun (_, t) => t.paramsC).foldl
-    (fun acc (n, cmp) => if acc.any (·.1 == n) then acc else acc ++ [(n, cmp)]) []
+  let core := Ty.mergeParamBounds (σ.flatMap fun (_, t) => t.paramsC)
   let foreign := core.filter fun (n, _) => !s.tparams.any (·.1 == n)
   let names := defaultTypeNames [] d
   let home := { ctx.types with tvars := σ }
@@ -6434,7 +6434,8 @@ partial def elabBranchAlts (ctx : Ctx) (p : Pos) (i : SExpr) (sty : Option STy) 
       if let some t := t? then discard <| coerce a.pos r t
     -- Report the original scope's bounds to the outer consumer. The arm's
     -- local comparable evidence must not constrain an unrefined else path.
-    return { r with ty := if ctx.typeOnly then (wanted.getD r.ty).subst ctx.types.tvars else r.ty }
+    let bounds := Ty.mergeParamBounds ((ctx.types.tvars.map (·.2) ++ ctx.locals.map (·.ty)).flatMap Ty.paramsC)
+    return { r with ty := if ctx.typeOnly then (wanted.getD r.ty).withParamBounds bounds else r.ty }
   let all : List (Nat × SExpr) := arms.zipIdx.flatMap fun ((_, arm), j) => ((Choice.alts? arm).getD [arm]).map (j, ·)
   -- (#366, the state before the alternatives, for the retries below)
   let st0 ← get

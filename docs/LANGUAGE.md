@@ -489,9 +489,19 @@ circle := class(shape, labelled):
   values, which the branch's own generic calls at them need, come from the
   object, which holds them in hidden fields as #209's existential classes'
   objects do. An opened parameter is as comparable as the one it stands
-  for, and also when a comparable type parameter's refinement mentions it
-  (`t:subtype(comparable)` refined to `tuple(a', b')`), as the object's type
-  argument for `t` is then comparable.
+  for, and also when comparability of a refined type requires that component
+  (`t:subtype(comparable)` refined to `tuple(a', b')`). A unique reference
+  such as `holder(a')` is comparable independently of `a'`, so it supplies
+  no bound on `a'`.
+
+  A successful test of a class with stronger `subtype(comparable)` bounds
+  also makes those bounds available in the branch, including when no type
+  equality changes. For example, testing `P:root(t)` against a subclass
+  `tight(t:subtype(comparable))` permits comparisons of `P`'s `t` fields
+  and captured `t` values there. The same bounds are available within a
+  selected scalar or multiple-value override. They do not escape to the
+  `else`, following code, or an array collected from a possibly empty
+  producer.
 
   The branch is compiled as a function of its own, generic over the
   enclosing function's type parameters, that takes the object (as `D`) and

@@ -3,13 +3,30 @@
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
-for kind in composed exclusive binding typed-first typed-for typed-exclusive refined-for refined-state refined-failure lazy-first lazy-for lazy-effect-first lazy-effect-for lazy-alt-first lazy-alt-for lazy-failure-for lazy-alt-failure-for lazy-exclusive-failure-for refined-lazy-failure refined-return refined-lazy-return refined-nested-body refined-nested-failure lazy-generic-first construct-first construct-for construct-failure method-first method-for method-failure lazy-named-first lazy-named-for lazy-named-generic-first; do
+for kind in composed exclusive binding typed-first typed-for typed-exclusive refined-for refined-state refined-failure lazy-first lazy-for lazy-effect-first lazy-effect-for lazy-alt-first lazy-alt-for lazy-failure-for lazy-alt-failure-for lazy-exclusive-failure-for refined-lazy-failure refined-return refined-lazy-return refined-nested-body refined-nested-failure lazy-generic-first construct-first construct-for construct-failure method-first method-for method-failure lazy-named-first lazy-named-for lazy-named-generic-first bound-first bound-for bound-failure; do
   sizes=()
   for count in 4 8; do
     python3 - "$kind" "$count" >"$tmp/p.verse" <<'PY'
 import sys
 kind, count = sys.argv[1], int(sys.argv[2])
 print('Two(N:int):int = N | N + 1')
+if kind.startswith('bound-'):
+    print('box(t:type) := class { A:t }')
+    print('tight(t:subtype(comparable),u:subtype(comparable)) := class(box(t)) { E:u }')
+    params = ', '.join(f'P{i}:box(t{i})' for i in range(count))
+    tparams = ', '.join(f't{i}:type' for i in range(count))
+    clauses = ', '.join(f'A{i}:=if(D:=tight[P{i}]) then (if(D.A=D.A,D.E=D.E) then(D.A|D.A) else D.A) else P{i}.A' for i in range(count))
+    if kind == 'bound-first':
+        print(f'Run({params} where {tparams}):int = if({clauses}, E:[]t0=array{{}}) then E.Length else -1')
+    else:
+        specs = '<decides>' if kind == 'bound-failure' else ''
+        test = '\n        1=1' if specs else ''
+        print(f'Run({params} where {tparams}){specs}:int =\n    R:=for({clauses}):{test}\n        A0\n    R.Length')
+    args = ', '.join('tight(int,string){A:=1,E:="s"}' if i%2==0 else 'tight(string,int){A:="s",E:=1}' for i in range(count))
+    specs = '<decides>' if kind == 'bound-failure' else ''
+    call = f'Run[{args}]' if specs else f'Run({args})'
+    print(f'Main(){specs}:void = Print("{{{call}}}")')
+    sys.exit(0)
 if kind.startswith('method-'):
     print('box(t:type) := class:\n    A:t\n    Both()<transacts>:t = A | A')
     print('fixed := class(box(int)):\n    Both<override>()<transacts>:int = A + 1 | A + 2')
