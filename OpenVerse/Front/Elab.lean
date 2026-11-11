@@ -1885,20 +1885,32 @@ def firstLiftOf (ctx c2 : Ctx) (p : Pos) (g : String) (lp : List SExpr) (b : Str
   let specs := (if heap.isEmpty then ["computes"] else heap) ++ ["decides"]
   let ret : STy := .tup (bls.map (·.ty.toSTy) ++ sets.map (·.ty.toSTy) ++ [.name "logic"])
   let setsT := sets.map fun l => (l.name, l.ty.toSTy)
+  let recArgs (target : Option String) (q : Pos) (as : List SExpr) : List SExpr × List SExpr :=
+    let h := target.getD g
+    match ctx.sig? h with
+    | some s =>
+      if s.named.isEmpty then ([], as) else
+      let tys := if h == g then pls.map (·.ty) else s.params
+      let n := s!"$recursiveArgs{q.line}_{q.col}"
+      ([.decl q n (some (.tup (tys.map Ty.toSTy))) false
+          (.app q (.ident q "$callArgs") [.ident q h, .block q as] false)],
+        tys.zipIdx.map fun (_, j) => .app q (.ident q n) [.int q (j : Int)] false)
+    | none => ([], as)
   let extraFns ← members.mapM fun
     | .app _ (.ident _ "$member") [.ident _ h, .block _ hps, .block _ hcls, .decl _ _ _ _ htail] false => do
       let some sig := ctx.sig? h | throw s!"internal: no signature for {h} (#283)"
       let hparams : List SParam ← (hps.zip sig.params).mapM fun
         | (.ident _ n, t) => pure { name := n, ty := t.toSTy }
         | _ => throw "internal: a $member parameter (#283)"
+      let body := Choice.firstBody (nameOf h) p b bty hcls htail rest binds setsT capArgs (some vty.toSTy) nameOf
+        (fun target => recArgs (some (target.getD h)))
       pure (STop.fn p (nameOf h) (hparams ++ capPs ++ typeParams) tps specs ret
-        (pruneConstructHints ctx (nameOf h)
-          (Choice.firstBody (nameOf h) p b bty hcls htail rest binds setsT capArgs (some vty.toSTy) nameOf)))
+        (pruneConstructHints ctx (nameOf h) body))
     | _ => throw "internal: a $member (#283)"
   return { key, pos := p, name, inlineScopes := ctx.inlineScopes,
            params := params ++ typeParams, tparams := tps, specs, ret,
            body := pruneConstructHints ctx name
-             (Choice.firstBody name p b bty cls tail rest binds setsT capArgs (some vty.toSTy) nameOf),
+             (Choice.firstBody name p b bty cls tail rest binds setsT capArgs (some vty.toSTy) nameOf recArgs),
            binds, sets := sets.map (·.name), args := pnames.map (SExpr.ident p ·) ++ caps.map (fun l => .ident p l.name) ++ typeArgs,
            varBinds := (bls.filter (·.mutable)).map (·.name), extraFns }
 
@@ -2023,7 +2035,7 @@ def forBodySafe (ctx : Ctx) (body : SExpr) : Bool :=
   -- checked when that consumer elaborates; they do not escape the helper.
   let safeMarkers := ["$methodMiss", "$methodCast", "$inlineScope", "$inlineScopeEnd", "$inline", "$choice", "$excl", "$alt", "$firstP", "$first", "$each", "$noLift", "$fxOf",
     "$forReturns", "$forReturnBody", "$defer", "$loop", "$rec", "$recTo", "$group", "$member",
-    "$tparams", "$params", "$defaults", "$paramDefault", "$freeNames", "$declNames"]
+    "$tparams", "$params", "$defaults", "$paramDefault", "$freeNames", "$declNames", "$callArgs"]
   !ctx.suspends && !(Refine.findPart (fun | .brk _ => true | _ => false) true body).isSome &&
     !(Choice.anyE (fun
     | .ret .. => !returns
@@ -2644,13 +2656,69 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
         return ⟨.prim .flatten [.forE slot (.lit (.arr #[.tup []])) filt inner.e], .arr t⟩
       | _ => eerr p "internal: nested for"
 
+/-- Bare type names written in a default, excluding names bound by a local
+    generic struct. Parametric type heads name declarations, not aliases. -/
+partial def defaultTypeNames (bound : List String) (e : SExpr) : List String :=
+  let bare := fun (t : STy) => (t.bareNames.filter (!bound.contains ·))
+  match e with
+  | .structDef _ tps fs =>
+    let own := bound ++ tps.map (·.name)
+    fs.flatMap fun (_, t, d, _) => t.bareNames.filter (!own.contains ·) ++
+      (d.toList.flatMap (defaultTypeNames own))
+  | _ =>
+    let own := match e with
+      | .decl _ _ (some t) _ _ | .refineDef _ _ t _ => bare t
+      | .construct _ _ ts _ => ts.flatMap bare
+      | _ => []
+    own ++ e.children.flatMap (defaultTypeNames bound)
+
+/-- Rename a default's type aliases without capturing a local struct's
+    parameters. Its nested consumers retain their own type binders. -/
+partial def substDefaultTypes (σ : List (String × STy)) (e : SExpr) : SExpr :=
+  Choice.mapE (fun
+    | .decl p n t v x => some (.decl p n (t.map (·.substNames σ)) v (substDefaultTypes σ x))
+    | .construct p n ts fs => some (.construct p n (ts.map (·.substNames σ)) (fs.map (substDefaultTypes σ)))
+    | .refineDef p n t cs => some (.refineDef p n (t.substNames σ) (cs.map (substDefaultTypes σ)))
+    | .structDef p tps fs =>
+      let σ' := σ.filter fun (n, _) => !tps.any (·.name == n)
+      some (.structDef p tps (fs.map fun (n, t, d, v) =>
+        (n, t.substNames σ', d.map (substDefaultTypes σ'), v)))
+    | .app p (.ident q "$witness") [.ident r n] false =>
+      match σ.lookup n with
+      | some (.name v) => some (.app p (.ident q "$witness") [.ident r v] false)
+      | _ => none
+    | _ => none) e
+
+/-- Default source annotations use private aliases for the callee's
+    instantiations. Generated annotations keep the actual Core names, even
+    when the caller and callee use the same names in a different order. -/
+def defaultTypes (ctx : Ctx) (p : Pos) (s : Sig) (σ : List (String × Ty)) (d : SExpr) : EM (TyEnv × SExpr) := do
+  let core := (σ.flatMap fun (_, t) => t.paramsC).foldl
+    (fun acc (n, cmp) => if acc.any (·.1 == n) then acc else acc ++ [(n, cmp)]) []
+  let foreign := core.filter fun (n, _) => !s.tparams.any (·.1 == n)
+  let names := defaultTypeNames [] d
+  let home := { ctx.types with tvars := σ }
+  for (n, _) in foreign do
+    if names.contains n then
+      discard <| resolveTy home p (.name n)
+  let alias (n : String) := s!"$defaultType_{s.name}_{n}"
+  let rename := s.tparams.map fun (n, _) => (n, STy.name (alias n))
+  for (n, _) in s.tparams do
+    if names.contains n && (σ.lookup n).isNone then
+      eerr p s!"cannot infer type parameter {n} of {s.name} from the arguments of this call"
+  let aliases := σ.map fun (n, t) => (alias n, t)
+  return ({ ctx.types with tvars := aliases ++ core.map (fun (n, cmp) => (n, Ty.param n cmp)) },
+    substDefaultTypes rename d)
+
 /-- A call of a generic function. Its type arguments are inferred by matching
     its signature: the result type against the expected type (unless that is
     `void`, which accepts anything), then each parameter type against its
     argument's, left to right. An argument whose parameter type is already
     determined is elaborated against it, so `array{}` and `false` work. -/
-partial def elabGenericCallWith (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx) (p : Pos) (s : Sig) (args : List SExpr) (exp : Option Ty) :
+partial def elabGenericCallWith (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx) (p : Pos) (s : Sig) (args : List SExpr) (exp : Option Ty)
+    (packArgs : Bool := false) :
     EM R := do
+  let s := if packArgs then { s with ret := .tup s.params } else s
   -- named arguments (#119): positional ones, then named ones as written,
   -- then the defaults of those omitted, as for other functions
   let isNamed : SExpr → Bool := fun | .decl _ n _ _ _ => n.startsWith "?" | _ => false
@@ -2737,7 +2805,11 @@ partial def elabGenericCallWith (elabE : Ctx → SExpr → Option Ty → EM R) (
         -- in its interface's scope, as its body, #53)
         let selfC : Option String :=
           if s.pnames.head? == some "Self" then s.scope.orElse fun _ => (s.name.splitOn ".").head? else none
+        -- Written types belong to the callee, with the arguments inferred
+        -- so far. A caller's type aliases are outside this default's scope.
+        let (types, d) ← defaultTypes ctx p s σ d
         let dctx := { ctx with locals := earlier, selfClass := selfC, inParamDefault := true,
+                               types,
                                inLoop := false, canFail := ctx.canFail && s.decides,
                                suspends := ctx.suspends && s.suspends,
                                defaults := key :: ctx.defaults }
@@ -2771,6 +2843,11 @@ partial def elabGenericCallWith (elabE : Ctx → SExpr → Option Ty → EM R) (
     if cmp && !valueCall && !t.comparable ctx.types then
       eerr p (notComparable ctx.types t s!"type parameter {v} of {s.name}")
     targs := targs.push t
+  -- A lazy recursive edge needs the ordinary call's arguments/defaults,
+  -- evaluated once in order, before pushing its next producer item.
+  if packArgs then
+    let values := if plain then es.toList else slots.toList.map (fun o => Expr.local o.get!)
+    return ⟨steps.toList.foldr Expr.seq (.prim .mkTup values), s.ret.subst σ⟩
   -- the hidden arguments: a value of each type argument (but those a
   -- method reads from its receiver, #209)
   -- (in a dispatch's branch that opens type arguments, #209, a type
@@ -2786,6 +2863,22 @@ partial def elabGenericCallWith (elabE : Ctx → SExpr → Option Ty → EM R) (
   if plain then return ⟨.call s.idx (es.toList ++ dicts), s.ret.subst σ⟩
   let call := Expr.call s.idx (slots.toList.map (fun o => Expr.local o.get!) ++ dicts)
   return ⟨steps.toList.foldr Expr.seq call, s.ret.subst σ⟩
+
+/-- Canonical arguments for a lazy producer edge. Positional-only calls
+    retain their existing lowering; named calls use normal call binding. -/
+def elabLoopArgsWith (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx) (p : Pos) (g : String)
+    (args : List SExpr) (params : List Local) (slots : List Nat) : EM Expr := do
+  if let some sig := (ctx.sig? g).filter (!·.named.isEmpty) then
+    let ty := Ty.tup (params.map (·.ty))
+    let packed ← elabGenericCallWith elabE ctx p sig args (some ty) (packArgs := true)
+    let packet ← fresh ty
+    let assign := (slots.zipIdx).foldr (fun (sl, j) acc =>
+      Expr.seq (.assign sl (.prim (.tupGet j) [.local packet])) acc) (.lit .void)
+    return .seq (.assign packet (← coerce p packed ty)) assign
+  let es ← (args.zip params).mapM fun (a, l) => do
+    let r ← elabE ctx a (some l.ty)
+    coerce a.pos r l.ty
+  return (es.zip slots).foldr (fun (e, sl) acc => .seq (.assign sl e) acc) (.lit .void)
 
 partial def elabSetWith (elabE : Ctx → SExpr → Option Ty → EM R) (elabMember : Ctx → Pos → R → String → EM R)
     (ctx : Ctx) (p : Pos) (lhs0 : SExpr) (op : Option String) (rhs0 : SExpr) : EM R := do
@@ -3609,16 +3702,13 @@ partial def elabLoopGenGroupWith (elabE : Ctx → SExpr → Option Ty → EM R)
         match call? with
         | some (jm, args', q) =>
           let some (h, hpls, _, _) := ms[jm]? | eerr q "internal: a call in a group (#283)"
-          if args'.length != hpls.length then
+          if args'.length != hpls.length && !(ctx.sig? h).any (!·.named.isEmpty) then
             eerr q s!"{h} takes {hpls.length} argument(s), found {args'.length}: a call of it with a tuple, in the body of a function of its group, is not supported yet (#246, #283)"
           if argSet.isNone then
             argSet := args'.findSome? fun a' =>
               if Choice.anyE (fun | .set .. => true | _ => false) a' then some a'.pos else none
           let ts ← hpls.mapM fun l => fresh l.ty
-          let es ← (args'.zip hpls).mapM fun (a', l) => do
-            let r ← elabE actx a' (some l.ty)
-            coerce a'.pos r l.ty
-          let assigns : Expr := (es.zip ts).foldr (fun (e, t) acc => .seq (.assign t e) acc) vd
+          let assigns ← elabLoopArgsWith elabE actx q h args' hpls ts
           itemCode := .seq itemCode assigns
           alts := alts.push (.ite assigns (.seq cont (push (startOf jm ts))) cont)
         | none =>
@@ -3922,6 +4012,9 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
         "choice, the right of and or or, a range, or a block with a range of its own as a branch")
     eerr p ("a choice (a | b) has several values, so it must be in a failure context that takes them: " ++
       "an if condition, a for's clauses, first{…}, option{…}, logic{…}, not, or the left of or (#208)")
+  | .app p (.ident _ "$callArgs") [.ident _ g, .block _ args] false =>
+    let some sig := ctx.sig? g | eerr p s!"internal: no signature for {g}'s arguments"
+    elabGenericCallWith elabE ctx p sig args exp (packArgs := true)
   | .app p (.ident _ "$paramDefault") [.ident _ f, .ident _ n, .block _ earlier, d] false =>
     -- (#283) the default of a named parameter an inlined call of a function
     -- with several values omits: in the context a call gives it (the
@@ -6829,16 +6922,13 @@ partial def elabLoopGen (ctx : Ctx) (p : Pos) (lp : List SExpr) : EM LoopGen := 
         | none => vd
       match a with
       | .app q (.ident _ "$rec") args' false =>
-        if args'.length != pls.length then
+        if args'.length != pls.length && !(ctx.sig? g).any (!·.named.isEmpty) then
           eerr q s!"{g} takes {pls.length} argument(s), found {args'.length}: a call of it with a tuple, in its own body, is not supported yet (#246)"
         if argSet.isNone then
           argSet := args'.findSome? fun a' =>
             if Choice.anyE (fun | .set .. => true | _ => false) a' then some a'.pos else none
         let ts ← pls.mapM fun l => fresh l.ty
-        let es ← (args'.zip pls).mapM fun (a', l) => do
-          let r ← elabE actx a' (some l.ty)
-          coerce a'.pos r l.ty
-        let assigns : Expr := (es.zip ts).foldr (fun (e, t) acc => .seq (.assign t e) acc) vd
+        let assigns ← elabLoopArgsWith elabE actx q g args' pls ts
         itemCode := .seq itemCode assigns
         -- (the item that resumes after the call, with the names as its
         -- arguments left them, below the one that starts it; when an

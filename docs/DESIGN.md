@@ -545,12 +545,29 @@ twice as long as the last one's whose body runs a step and gives that
 iteration's values: adding each value to an array would copy it each time,
 and the C runtime frees a call's cells only when it returns.
 
-A strongly connected group of such functions (#283: each one's alternatives calls of the group's functions; one result type, none generic, no named parameters) is taken lazily too, as one.
+A strongly connected group of such functions (#283: each one's alternatives calls of the group's functions; one result type, none generic) is taken lazily too, as one.
 - Its calls' marker is the called one's, with the others in its last expression: `$group(tail, $member(H, params, clauses, r := tail)…)`, each member's names tagged for the site. A call of the function itself is `$rec`, of another member `$recTo(H, …)` (`Choice.markRecG`).
 - In a group, a branch or the last expression may be a single call of another member with no choice of its own (`else Evens(N + 1)`), which a function alone could not be.
 - `elabLoopGenGroupWith` (before the mutual block, #325) builds one stack: an item holds every member's parameters and names, in one tuple, `k` the alternative, numbered across the members, or `-1 - i` to start member `i`. A call pushes the item that starts its callee, with that member's parameters from its arguments.
 - Where the first success is taken with effects, `firstLiftOf` makes one function of its own per member (`FirstLift.extraFns`), which call one another (`firstBody`'s `helperOf`).
 - A function alone keeps `elabLoopGen` and its code byte for byte.
+
+Named arguments and defaults are bound on every recursive edge. The lazy
+stack uses `elabGenericCallWith` in argument-packing mode: it evaluates the
+ordinary call's supplied arguments and defaults, then returns their values
+in parameter order without invoking the function. `itemCode` includes that
+evaluation, so effectful defaults also trigger first-success helper discovery.
+Those helpers use `$callArgs` to bind the same packet before their recursive
+call, forwarding captures and witnesses afterwards. Eager calls use the
+existing inline parameter/default clauses before taking each value from
+`F$all`; that helper has positional parameters only. A failed default therefore
+rejects that call at its filter boundary, and defaults inside eager bodies
+remain visible to the effect-freedom checks.
+Parameter defaults give the callee's inferred type arguments private aliases
+in their written annotations. Generated annotations retain actual Core type
+parameter names, including when the caller and callee permute the same names.
+Source annotations are checked in the declaration's scope before those Core
+names become available to later generated code.
 
 Where the first success is taken, the loop is exact only if what the
 clauses, conditions and arguments do is never to be undone: the Verse

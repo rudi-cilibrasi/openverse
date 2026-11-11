@@ -676,21 +676,21 @@ nested_cleanup, nested_source = R417N.randint(1, 5), R417N.randint(1, 5)
 nested_mutual = R417N.choice([False, True])
 nested_call = 'NestedEven' if nested_mutual else 'NestedLazy'
 prog_cls.append('nested_meter := class:\n    var N:int = 0')
-loops.append(f'''NestedLazy(H:nested_meter, N:int)<transacts><decides>:int =
+loops.append(f'''NestedLazy(H:nested_meter, N:int, ?Step:int=1)<transacts><decides>:int =
     N >= 0
     Print("nested lazy {{N}} {{H.N}}")
     set H.N += 1
-    N | NestedLazy[H, N - 1]
-NestedEven(H:nested_meter, N:int)<transacts><decides>:int =
+    N | NestedLazy[H, N - Step]
+NestedEven(H:nested_meter, N:int, ?Step:int=1)<transacts><decides>:int =
     N >= 0
     Print("nested even {{N}} {{H.N}}")
     set H.N += 1
-    N | NestedOdd[H, N - 1]
-NestedOdd(H:nested_meter, N:int)<transacts><decides>:int =
+    N | NestedOdd[H, N - Step, ?Step:=Step]
+NestedOdd(H:nested_meter, N:int, ?Step:int=1)<transacts><decides>:int =
     N >= 0
     Print("nested odd {{N}} {{H.N}}")
     set H.N += 2
-    N | NestedEven[H, N - 1]
+    N | NestedEven[H, N - Step]
 ForNested(P:pair(a, b), Q:pair(c, d), Stop:int where a:type, b:type, c:type, d:type)<transacts>:int =
     H := nested_meter{{}}
     var Total:int = 0

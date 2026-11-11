@@ -1,0 +1,48 @@
+initial B 7 1
+initial A 5 2
+visit 0 5 7 2
+all 5
+pos 1 3
+named B 20 4
+default A 10 5
+visit 1 10 20 5
+all 10
+pos 2 6
+named B 21 7
+default A 20 8
+state 8
+default A 0 9
+default B 1 10
+visit 0 0 1 10
+pos 1 11
+named B 20 12
+default A 10 13
+visit 1 10 20 13
+first 10 13
+none 13
+even default 1 14
+even 0 1
+group 0
+odd arg 2 15
+odd 1 2
+group 1
+even default 1 16
+even 3 1
+group 3
+odd arg 2 17
+odd default 2 18
+odd 0 2
+even default 1 19
+even 2 1
+group first 2
+maybe 10
+maybe 20
+maybe first 20
+eager 2
+eager 2
+eager 1
+eager 2
+eager 1
+eager 20
+eager 0
+exit=0
