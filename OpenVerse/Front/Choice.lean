@@ -1554,9 +1554,9 @@ partial def inlineCalls (mv : List (String × MFn)) (e : SExpr) (recs : List Str
       let off := if selfP then 1 else 0
       let arrayParam := !hasNamed && !selfP && match f.params with | [sp] => (match sp.ty with | .arr _ => true | _ => false) | _ => false
       let tupleArg := !hasNamed && as.length == 1 + off && f.params.length ≥ 2 + off
-      -- (one tuple argument, no named one, to several positional parameters:
-      -- expanded, as at a call)
-      let tupleNamed := hasNamed && namedAs.isEmpty && as.length == 1 + off && posPs.length ≥ 2 + off
+      -- (one tuple for the positional parameters, followed by supplied
+      -- named arguments and omitted defaults)
+      let tupleNamed := hasNamed && posAs.length == 1 + off && posPs.length ≥ 2 + off
       if hasNamed then
         if posAs.length != posPs.length && !tupleNamed then
           throw s!"{p.show}: {shownFnName g} takes {posPs.length - off} positional argument(s), found {posAs.length - off}"
@@ -1627,10 +1627,11 @@ partial def inlineCalls (mv : List (String × MFn)) (e : SExpr) (recs : List Str
         if tupleNamed then
           let t := tag "$tuple"
           let tps := posPs.drop off
-          ((posPs.take off).map pdOf ++ [.decl q t (tyOf (.tup (tps.map (·.ty)))) false (.ident q "$arg")],
+          ((posPs.take off).map pdOf ++ [.decl q t (tyOf (.tup (tps.map (·.ty)))) false (.ident q "$arg")] ++
+              namedAs.filterMap (fun (_, n, _) => (f.params.find? (·.name == n)).map pdOf),
             (tps.zipIdx.map fun (sp, i) =>
               SExpr.decl q (tag sp.name) (tyOf sp.ty) false (.app q (.ident q t) [.int q (i : Int)] false)) ++ dflts,
-            posVals)
+            posVals ++ namedVals)
         else if hasNamed then
           (posPs.map pdOf ++ namedAs.filterMap (fun (_, n, _) => (f.params.find? (·.name == n)).map pdOf), dflts,
             posVals ++ namedVals)

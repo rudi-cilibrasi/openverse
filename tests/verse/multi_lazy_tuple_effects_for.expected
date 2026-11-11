@@ -1,0 +1,25 @@
+visit 3
+body 3 0
+edge 3
+visit 2
+body 2 1
+edge 2
+visit 1
+body 1 2
+edge 1
+visit 0
+after 3
+visit 2
+edge 2
+visit 1
+nested 0 1 4
+edge 1
+visit 0
+visit 2
+edge 2
+visit 1
+nested 1 1 6
+edge 1
+visit 0
+done 7
+exit=0

@@ -1,0 +1,20 @@
+visit 2 0
+all 0 0
+note 1
+note 6
+visit 1 6
+all 6 2
+note 0
+note 7
+visit 0 7
+all 7 4
+note 5
+visit 2 5
+note 1
+note 6
+visit 1 6
+note 0
+note 7
+visit 0 7
+first 7 9
+exit=0

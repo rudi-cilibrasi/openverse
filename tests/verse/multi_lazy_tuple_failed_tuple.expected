@@ -1,0 +1,14 @@
+visit 2
+all 2 0
+edge 2
+visit 1
+all 1 1
+all 11 1
+all 12 1
+after 1
+visit 2
+edge 2
+visit 1
+first 11 2
+none 2
+exit=0
