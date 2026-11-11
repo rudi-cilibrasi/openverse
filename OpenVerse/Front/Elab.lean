@@ -2656,6 +2656,37 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
         return ⟨.prim .flatten [.forE slot (.lit (.arr #[.tup []])) filt inner.e], .arr t⟩
       | _ => eerr p "internal: nested for"
 
+/-- Bare type names written in a default, excluding names bound by a local
+    generic struct. Parametric type heads name declarations, not aliases. -/
+partial def defaultTypeNames (bound : List String) (e : SExpr) : List String :=
+  let bare := fun (t : STy) => (t.bareNames.filter (!bound.contains ·))
+  match e with
+  | .structDef _ tps fs =>
+    let own := bound ++ tps.map (·.name)
+    fs.flatMap fun (_, t, d, _) => t.bareNames.filter (!own.contains ·) ++
+      (d.toList.flatMap (defaultTypeNames own))
+  | _ =>
+    let own := match e with
+      | .decl _ _ (some t) _ _ | .refineDef _ _ t _ => bare t
+      | .construct _ _ ts _ => ts.flatMap bare
+      | _ => []
+    own ++ e.children.flatMap (defaultTypeNames bound)
+
+/-- A default's source annotations see the callee's inferred parameters.
+    Generated annotations also need the actual Core parameter names. Resolve
+    source names in the declaration's scope before making the Core names
+    available to annotations produced later by the elaborator. -/
+def defaultTypes (ctx : Ctx) (p : Pos) (s : Sig) (σ : List (String × Ty)) (d : SExpr) : EM TyEnv := do
+  let core := (σ.flatMap fun (_, t) => t.paramsC).foldl
+    (fun acc (n, cmp) => if acc.any (·.1 == n) then acc else acc ++ [(n, cmp)]) []
+  let foreign := core.filter fun (n, _) => !s.tparams.any (·.1 == n)
+  let names := defaultTypeNames [] d
+  let home := { ctx.types with tvars := σ }
+  for (n, _) in foreign do
+    if names.contains n then
+      discard <| resolveTy home p (.name n)
+  return { ctx.types with tvars := σ ++ core.map (fun (n, cmp) => (n, Ty.param n cmp)) }
+
 /-- A call of a generic function. Its type arguments are inferred by matching
     its signature: the result type against the expected type (unless that is
     `void`, which accepts anything), then each parameter type against its
@@ -2751,7 +2782,11 @@ partial def elabGenericCallWith (elabE : Ctx → SExpr → Option Ty → EM R) (
         -- in its interface's scope, as its body, #53)
         let selfC : Option String :=
           if s.pnames.head? == some "Self" then s.scope.orElse fun _ => (s.name.splitOn ".").head? else none
+        -- Written types belong to the callee, with the arguments inferred
+        -- so far. A caller's type aliases are outside this default's scope.
+        let types ← defaultTypes ctx p s σ d
         let dctx := { ctx with locals := earlier, selfClass := selfC, inParamDefault := true,
+                               types,
                                inLoop := false, canFail := ctx.canFail && s.decides,
                                suspends := ctx.suspends && s.suspends,
                                defaults := key :: ctx.defaults }

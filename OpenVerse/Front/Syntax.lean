@@ -199,6 +199,14 @@ inductive STop where
       (overrides : List String) → (methods : List STop) → STop
   deriving Repr, Inhabited
 
+/-- Type aliases mentioned as bare names; applications keep declaration heads. -/
+partial def STy.bareNames : STy → List String
+  | .name n => [n]
+  | .arr t | .opt t => t.bareNames
+  | .tup ts | .app _ ts => ts.flatMap STy.bareNames
+  | .map k v => k.bareNames ++ v.bareNames
+  | .fn ps _ r => ps.flatMap STy.bareNames ++ r.bareNames
+
 /-- Substitute type names: a parent's type parameters by the type arguments
     a subclass gives it (#39). -/
 partial def STy.substNames (σ : List (String × STy)) : STy → STy

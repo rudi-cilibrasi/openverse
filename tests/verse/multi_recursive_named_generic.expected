@@ -29,4 +29,8 @@ method 1
 field
 method 2
 field
+plain 0 0
+shadow 0 0
+infer 0
+boxed 0 0 0 0
 exit=0
