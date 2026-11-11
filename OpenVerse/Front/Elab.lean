@@ -2062,7 +2062,6 @@ partial def forBodySafe (ctx : Ctx) (body : SExpr) : Bool :=
       | .app _ (.ident _ f) _ _ =>
         (f.startsWith "$" && !safeMarkers.contains f) || f == "Sleep" ||
           ((ctx.sig? f).map fun s => s.suspends || s.fx.contains "no_rollback").getD false
-      | .app _ (.member _ _ m) _ _ => ["Signal", "Await", "Cancel", "Subscribe"].contains m
       | _ => false) || e.children.any blocked
   !(Refine.findPart (fun | .brk _ => true | _ => false) true body).isSome && !blocked body
 
