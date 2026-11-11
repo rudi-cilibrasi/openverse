@@ -472,7 +472,7 @@ class Gen:
         self.consumers = []    # source of generic consumers
         self.main = []
         self.m = Machine()
-        self.refuse = None
+        self.refusals = set()
         self.cnt = 0
         self.paths = set()
 
@@ -494,8 +494,7 @@ class Gen:
         """mode (for classes): same (one class), mixed (any classes), parent
         (the first argument that gives t through a variable of the parent's
         type). Returns the arguments, their values, the lines declaring such
-        variables, and whether a plain generic call refuses them (inference
-        binds t from the first argument; later ones must convert to it)."""
+        variables, and the static class arguments in inference order."""
         cls = R.choice(["cat", "dog"])
         out, vals, pre = [], {}, []
         st = []     # the static class of each argument that gives t, in order
@@ -547,9 +546,7 @@ class Gen:
             # (#392: Y omitted for its default X, its value drawn anyway; Producer.call names it)
             out[1] = None; vals["Y"] = vals["X"]
             if len(st) > 1: st.pop(1)
-        bad = bool(st) and any(c != st[0] and st[0] != "animal" for c in st[1:])
-        self.lastst = st[0] if st else None
-        return out, vals, pre, bad
+        return out, vals, pre, st
 
     def mixed_classes_unused(self, vals, p):
         cs = set()
@@ -572,19 +569,24 @@ class Gen:
         mode = R.choices(["same", "parent", "mixed"], [0.55, 0.35, 0.10])[0]
         form = R.choice(["for", "for", "forf", "for2", "if", "if", "ifp", "first", "option",
                          "logic", "not", "forexp", "gfor", "gif", "gopt", "gmv", "decides"])
-        args, vals, pre, mixed = self.args(p, ty, mode, choices=form not in ("gfor", "gif", "gopt", "decides"),
-                                           omit_ok=form not in ("gfor", "gif", "gopt", "gmv"))
-        st = self.lastst
+        args, vals, pre, classes = self.args(p, ty, mode, choices=form not in ("gfor", "gif", "gopt", "decides"),
+                                             omit_ok=form not in ("gfor", "gif", "gopt", "gmv"))
+        st = classes[0] if classes else None
         self.main.extend(pre)
         call = p.call(args)
         if form == "not" and ty.name == "tup": form = "for"
         fxlazy = (p.fx and p.path == "lazy") or (p.kind == "ILz" and p.helper.fx)
-        if form in ("gif", "gopt") and fxlazy and R.random() < 0.85:
-            form = "gfor"   # (mostly avoid a known refusal that discards the program)
-        if mixed and form != "decides":
+        if form in ("gif", "gopt") and fxlazy:
+            if R.random() < 0.85:
+                form = "gfor"   # (mostly avoid a known refusal that discards the program)
+            else:
+                recursive = p.helper if p.kind == "ILz" else p
+                self.refusals.add("not supported in a generic function yet: call %s in a for" % recursive.name)
+        if st in ("cat", "dog") and form != "decides":
             # (a call types as a plain generic call: t from the first
             # argument, which a sibling class's object does not convert to)
-            self.refuse = self.refuse or "sibling classes for one t (%s path)" % p.path
+            self.refusals.update("expected %s, found %s" % (st, actual)
+                                 for actual in classes[1:] if actual != st)
         m = self.m
         V = self.fresh("V")
         k = ty.kval()
@@ -693,8 +695,6 @@ class Gen:
                                       (G, ps, "subtype(comparable)" if p.cmp else "type", inner))
                 lines.append("%s := %s(%s, %s)" % (V, G, ", ".join(args), s))
                 lines.append("Print(%s)" % ty.show(V))
-                if p.fx and p.path == "lazy" or (p.kind == "ILz" and p.helper.fx):
-                    self.refuse = self.refuse or "effectful generator, first success, in a generic function"
                 m.out.extend(tells)
                 e = m.first(p.top(vals, "Zc"))
                 m.out.append(ty.mshow(e["Zc"] if e is not None else d))
@@ -702,8 +702,6 @@ class Gen:
                 self.consumers.append("%s(%s where t:%s):?t = option{%s}" %
                                       (G, ps, "subtype(comparable)" if p.cmp else "type", inner))
                 lines.append("if (%s := %s(%s)?) then Print(%s) else Print(\"none\")" % (V, G, ", ".join(args), ty.show(V)))
-                if p.fx and p.path == "lazy" or (p.kind == "ILz" and p.helper.fx):
-                    self.refuse = self.refuse or "effectful generator, first success, in a generic function"
                 # (the call is in the if's condition: its arguments' effects
                 # are undone when the option is empty)
                 snap = len(m.out)
@@ -783,15 +781,14 @@ def main():
     g = Gen(seed)
     g.program()
     src = g.text()
-    if g.refuse:
-        exp = "exit=4\n"
+    if g.refusals:
+        exp = "\n".join(sorted(g.refusals)) + "\nexit=4\n"
     else:
         exp = "".join(l + "\n" for l in g.m.out) + "exit=0\n"
     with open(os.path.join(outdir, "p.verse"), "w") as f: f.write(src)
     with open(os.path.join(outdir, "p.expected"), "w") as f: f.write(exp)
     with open(os.path.join(outdir, "p.meta"), "w") as f:
-        f.write("paths=%s kinds=%s refuse=%s\n" % (",".join(sorted(g.paths)),
-                ",".join(p.kind for p in g.prods), g.refuse or "-"))
+        f.write("paths=%s kinds=%s\n" % (",".join(sorted(g.paths)), ",".join(p.kind for p in g.prods)))
 
 if __name__ == "__main__":
     main()
