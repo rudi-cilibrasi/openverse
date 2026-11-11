@@ -1,9 +1,7 @@
-cell:=class{var N:int=7}
-Child(H:cell)<suspends><reads>:void=
-    Print("start {H.N}")
+Child()<suspends><reads>:void=
+    Print("start 7")
     Sleep(0.0)
     Print("after wait")
 Main()<reads>:void=
-    H:=cell{}
-    T:=spawn{Child(H)}
-    Print("main {H.N}")
+    T:=spawn{Child()}
+    Print("main 7")
