@@ -368,6 +368,30 @@ structure Ctx where
       cast as a later clause: not rewritten, `elabE`'s `.ite`. -/
   asWritten : Bool := false
 
+/-- Compiler-owned inferred functions must see a registered helper's
+    effects before their own signature can reach its fixed point. -/
+def Ctx.infersHeapFx (ctx : Ctx) : Bool :=
+  ctx.frameName.endsWith ".$block" || defaultBridge ctx.frameName ||
+    ctx.types.castRequests.any (·.name == ctx.frameName)
+
+/-- A generated frame does not make an immediate source operation suspend. -/
+def Ctx.sourceSuspends (ctx : Ctx) (f : Nat) : Bool :=
+  ctx.sigs.any fun s => s.idx == f && s.suspends &&
+    if s.name.startsWith "$refine" then
+      ((ctx.types.castRequests.find? (·.name == s.name)).map (·.sourceSuspends)).getD true
+    else if s.name.startsWith "$forStage" && s.name.endsWith "$resume" then
+      ((ctx.types.loopRequests.findSome? fun l =>
+        l.stagePlan.filter (fun p => s.name.endsWith ("." ++ p.method))).map (·.sourceSuspends)).getD true
+    else true
+
+def Ctx.sourceWaits (ctx : Ctx) (e : Expr) : Bool :=
+  Suspend.countSusp ctx.sourceSuspends (fun _ => false) false
+    (fun f => ctx.sigs.any fun s => s.idx == f && (s.name == "$spawnMark" || s.name == "$branchMark")) e > 0
+
+def Ctx.acceptsHelper (ctx : Ctx) (lift : Choice.FirstLift) : Bool :=
+  ctx.infersHeapFx ||
+    (lift.specs.filter (["reads", "writes", "allocates"].contains ·)).all ctx.fnFx.contains
+
 /-- A lazily taken call where the first success is taken (#246): its
     function, where, the code it runs once for all the values of an item,
     where an argument of a call of itself sets a name, and the function of
@@ -413,6 +437,8 @@ structure ESt where
   pendingSuspendingCasts : Nat := 0
   /-- Pending casts that can wait on either path, for shared-slot checks. -/
   pendingWaitingCasts : Nat := 0
+  /-- Source suspension hidden by provisional generated functions. -/
+  pendingSourceSuspends : Nat := 0
   forStageUses : Nat := 0
   /-- Mutable locals captured by a branch or a potentially continuing rush arm. -/
   backgroundSlots : List Nat := []
@@ -1568,6 +1594,14 @@ def sourceContextKey (ctx : Ctx) : String :=
   let scope := sourceContextOf ctx
   if scope == ({} : Choice.SourceContext) then "" else "_source:" ++ reprStr scope
 
+/-- Refined helpers keep their source copy tag and context identity separate. -/
+def refineTagOf (ctx : Ctx) : String :=
+  let source := sourceContextKey ctx
+  let inputs := ctx.locals.filterMap fun l =>
+    if (Choice.shownName l.name).startsWith "$" then none else some (l.name, l.ty, l.mutable)
+  let typing := reprStr (ctx.types.tvars, inputs, ctx.retTy, ctx.inlineScopes)
+  ctx.refineScope ++ ctx.liftTag ++ (if source.isEmpty then "" else s!"$source{(source ++ typing).hash}")
+
 def firstReturns (rest : List SExpr) : Bool :=
   (Refine.findPart (fun | .ret .. => true | _ => false) false (.block { line := 0, col := 0 } rest)).isSome
 
@@ -1733,12 +1767,9 @@ def superImpl (ctx : Ctx) (p : Pos) (c m : String) : EM String := do
 /-- What, in the branch of a cast that refines type arguments, would not
     mean the same once the branch is a function of its own (#243): its
     position and what it is. `muts` are the `var`s it uses from outside. -/
-def refineBranchWhy? (ctx : Ctx) (p : Pos) (body : SExpr) (muts : List String) (allowEsc : Bool := false) :
+def refineBranchWhy? (_ctx : Ctx) (_p : Pos) (body : SExpr) (muts : List String) (allowEsc : Bool := false) :
     Option (Pos × String) :=
-  if ctx.inDefer || ctx.inCtor || ctx.inBlock || ctx.inParamDefault || ctx.inArm || ctx.inBranch ||
-      !ctx.defaults.isEmpty || ctx.inDefaultCheck then
-    some (p, "it cannot be here yet: in a defer:, a constructor's items, a class's block: clause, a field's or parameter's default, or an arm of sync, race, rush or branch")
-  else if let some e := (if allowEsc then none else Refine.findPart (fun | .ret .. => true | _ => false) false body) then
+  if let some e := (if allowEsc then none else Refine.findPart (fun | .ret .. => true | _ => false) false body) then
     some (e.pos, "it cannot have a return yet")
   else if let some e := (if allowEsc then none else Refine.findPart (fun | .brk _ => true | _ => false) true body) then
     some (e.pos, "it cannot have a break that leaves it yet")
@@ -2267,7 +2298,8 @@ def contForLiftOf (ctx : Ctx) (p : Pos) (b : String) (bty vty : Ty) (alts rest :
 /-- The resume interface keeps every caller/frame type argument. A result
     alone can erase equations needed by borrowed frame-reference arguments. -/
 def forStagePlanOf (ctx : Ctx) (p : Pos) (key : String) (clauses : List SExpr)
-    (body : SExpr) (vty : Ty) (outcome : Bool) (required : List String := []) : Except String Choice.FirstLift := do
+    (body : SExpr) (vty : Ty) (outcome : Bool) (required : List String := [])
+    (sourceSuspends : Bool := false) : Except String Choice.FirstLift := do
   let qualify := match ctx.selfClass with | some c => selfQualify ctx c | none => id
   let clauses := clauses.map qualify
   let body := qualify body
@@ -2285,7 +2317,7 @@ def forStagePlanOf (ctx : Ctx) (p : Pos) (key : String) (clauses : List SExpr)
   let borrowed := caps.filterMap fun l => if l.storage.isSome then some l.name else none
   let plan : Choice.ForStagePlan := {
     key, pos := p, base, method, tparams := tps,
-    value := vty.toSTy, copies, borrowed, specs, outcome }
+    value := vty.toSTy, copies, borrowed, specs, outcome, sourceSuspends }
   let valueTy := if outcome then STy.opt (.arr plan.value) else .arr plan.value
   let ret := if copies.isEmpty then valueTy else .tup (valueTy :: copies.map (·.2))
   let cls := STop.classDef p base tps [] [] true [] []
@@ -2564,17 +2596,18 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
     let known := c.types.loopRequests.findSome? (fun l => l.stagePlan.filter (·.key == key))
     let value? ← if let some outer := stagePlan then do
         let subst := (outer.tparams.map (·.name)).zip (stageArgs.map Ty.toSTy)
-        pure (some (← resolveTy c.types q (outer.value.substNames subst), true, before.fx))
+        pure (some (← resolveTy c.types q (outer.value.substNames subst), true, before.fx, outer.sourceSuspends))
       else if let some plan := known then
-        pure (some (← resolveTy c.types q plan.value, true, before.fx))
+        pure (some (← resolveTy c.types q plan.value, true, before.fx, plan.sourceSuspends))
       else tryCatch (do
         let r ← elabForWith elabAlts elabBranchAlts elabE elabInts elabLoopGen elabSeq
           { bound with typeOnly := true } p rest bd (prepared := true) (firstDecides := true)
         let .arr value := r.ty | pure none
         let after ← get
-        pure (some (value, forContWaits c before after [r.e], after.fx))) (fun _ => pure none)
+        pure (some (value, forContWaits c before after [r.e], after.fx,
+          before.pendingSourceSuspends != after.pendingSourceSuspends || c.sourceWaits r.e))) (fun _ => pure none)
     set before
-    let some (value, waits, effects) := value? | return none
+    let some (value, waits, effects, sourceSuspends) := value? | return none
     if stagePlan.isNone && !waits && forBodySafe c bd then return none
     -- Refining lifts can infer their effects. Their initially empty fnFx
     -- is not an explicit computes restriction; retain the suffix's typed
@@ -2583,7 +2616,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
     let allowed := heapFx.filter fun fx => c.fnFx.contains fx || effects.any (·.1 == fx) ||
       (stagePlan.orElse fun _ => known).any (·.specs.contains fx)
     let bound := { bound with fnFx := allowed }
-    let request ← match forStagePlanOf bound q key rest bd value ((stagePlan.map (·.outcome)).getD bodyFail) required with
+    let request ← match forStagePlanOf bound q key rest bd value ((stagePlan.map (·.outcome)).getD bodyFail) required sourceSuspends with
       | .ok request => pure request
       | .error _ => return none
     let some plan := request.stagePlan | return none
@@ -2595,7 +2628,9 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
       | .error _ => return none
     let hasPlan := c.types.loopRequests.any (·.key == request.key)
     let hasPrefix := c.types.loopRequests.any (·.key == prepare.key)
-    modify fun st => { st with fx := effects }
+    modify fun st => { st with
+      fx := effects,
+      pendingSourceSuspends := st.pendingSourceSuspends + (if sourceSuspends then 1 else 0) }
     noteFx q (heapFx.filter fun fx => (stagePlan.orElse fun _ => known).any (·.specs.contains fx))
       (some prepare.name)
     if !c.typeOnly then
@@ -2679,7 +2714,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
             let key := (if bodyFail then "fo" else "f") ++ contKey cA b.pos b.name (i :: restCl ++ [bd])
             let req := cA.types.loopRequests.find? (·.key == key)
             let fits (l : Choice.FirstLift) : Bool :=
-              (l.specs.filter (["reads", "writes", "allocates"].contains ·)).all cA.fnFx.contains
+              cA.acceptsHelper l
             if req.isNone && (contForLiftOf cA b.pos b.name ty .void [i] restCl bd bodyFail).toOption.isSome then
               -- Elaborate the suffix once, in its source context. Otherwise
               -- an inner lift can retain an outer var's old name after the
@@ -2763,9 +2798,12 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
                 cB p restCl bd (prepared := true) (firstDecides := true)
               let .arr value := values.ty | eerr b.pos "internal: staged for result"
               let effects := (← get).fx
-              set { saved with fx := effects }
+              let sourceSuspends := saved.pendingSourceSuspends != (← get).pendingSourceSuspends || cA.sourceWaits values.e
+              set { saved with
+                fx := effects,
+                pendingSourceSuspends := saved.pendingSourceSuspends + (if sourceSuspends then 1 else 0) }
               let allowed := heapFx.filter fun k => cA.fnFx.contains k || effects.any (·.1 == k)
-              let req ← match forStagePlanOf { cA with fnFx := allowed } b.pos key (i :: restCl) bd value bodyFail with
+              let req ← match forStagePlanOf { cA with fnFx := allowed } b.pos key (i :: restCl) bd value bodyFail [] sourceSuspends with
                 | .ok req => pure req
                 | .error why => eerr b.pos s!"cannot stage this refining for: {why} (#417)"
               modify fun st => { st with
@@ -2775,6 +2813,8 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
                 forStageUses := st.forStageUses + 1 }
               return (codeA, .prim .userErr [], value)
             let some plan := plan? | eerr b.pos "internal: staged for plan"
+            if plan.sourceSuspends then
+              modify fun st => { st with pendingSourceSuspends := st.pendingSourceSuspends + 1 }
             noteFx b.pos (heapFx.filter plan.specs.contains)
             let site := s!"{plan.base}$selected"
             let rootArgs := if stagePlan.isSome then stageArgs else
@@ -2788,7 +2828,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
             let resultTy ← resolveTy cA.types b.pos (plan.value.substNames viewSub)
             let tailKey := "tail" ++ contKey suffixCtx b.pos b.name (restCl ++ [bd]) ++ reprStr resultTy ++
               forStageCaptureKey cA rootArgs (borrowNames.filterMap cA.lookup)
-            let nextReq ← match forStagePlanOf suffixCtx b.pos tailKey restCl bd resultTy plan.outcome borrowNames with
+            let nextReq ← match forStagePlanOf suffixCtx b.pos tailKey restCl bd resultTy plan.outcome borrowNames plan.sourceSuspends with
               | .ok req => pure req
               | .error why => eerr b.pos s!"cannot type this waiting for's suffix: {why} (#417)"
             if !cA.types.loopRequests.any (·.key == nextReq.key) then
@@ -2918,7 +2958,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
         let req := if !contOK || cA.typeOnly then none else
           cA.types.loopRequests.find? (·.key == (if bodyFail then "fo" else "f") ++ contKey cA gp x (altsS ++ restCl ++ [bd]))
         let fits (l : Choice.FirstLift) : Bool :=
-          (l.specs.filter (["reads", "writes", "allocates"].contains ·)).all cA.fnFx.contains
+          cA.acceptsHelper l
         let kv := s!"$xk{gp.line}_{gp.col}{x}v"
         let plan : List (List SExpr × SExpr × Bool) ← if let some (prepare, plan, _, true) := staged then
             let (callCl, resumed) := forStageInvoke gp prepare plan.borrowed bd
@@ -3044,7 +3084,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
             let req := if c.typeOnly then none else
               c.types.loopRequests.find? (·.key == (if bodyFail then "fo" else "f") ++ contKey c gp b.name (b.alts ++ restCl ++ [bd]))
             let fits (l : Choice.FirstLift) : Bool :=
-              (l.specs.filter (["reads", "writes", "allocates"].contains ·)).all c.fnFx.contains
+              c.acceptsHelper l
             if let some l := req then
               if fits l then
                 let kv := s!"{site}v"
@@ -4010,7 +4050,7 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
   let elseOf : EM R := match elseE with
     | none => pure ⟨.lit .void, .void⟩
     | some ee => elabE ctx ee exp
-  let tag := ctx.refineScope ++ ctx.liftTag
+  let tag := refineTagOf ctx
   let key := Refine.keyOf p D tag
   let liftName := s!"$refine{p.line}_{p.col}_{D}" ++ (if p.file.isEmpty then "" else s!"_{p.file}") ++ tag
   -- Keep a suspending lift's available parameters in a stable order from
@@ -4040,6 +4080,7 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
     let fx0 := (← get).fx
     let pending0 := (← get).pendingSuspendingCasts
     let waiting0 := (← get).pendingWaitingCasts
+    let source0 := (← get).pendingSourceSuspends
     let background := (← get).backgroundSlots
     modify fun st => { st with fx := [] }
     let retarget (h : ConstructHint) : ConstructHint :=
@@ -4050,6 +4091,7 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
     let rb ← elabE ctxB body (if elseE.isNone then some .void else exp.map refine)
     let waitingThen := (← get).pendingWaitingCasts
     let thenWaits := ctx.suspends && (waitingThen != waiting0 || waits rb.e)
+    let sourceSuspends := ctx.suspends && ((← get).pendingSourceSuspends != source0 || ctx.sourceWaits rb.e)
     if thenWaits then
       for l in caps do
         if l.mutable && l.storage.isNone && (background.contains l.slot || outsideWrites.contains l.slot) then
@@ -4104,10 +4146,11 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
       params := ((D, dTy) :: sig).map (fun (n, t) => { name := n, ty := t.toSTy }) ++
         extra.map fun (n, _) => { name := s!"$type{n}", ty := .name n },
       tparams := tps.map fun (n, c) => { pos := p, name := n, constraint := if c then "comparable" else "type" },
-      specs, ret := ret.toSTy, subst := σ, opened := opened.map fun (n, v, _) => (n, v), waits := thenWaits,
+      specs, ret := ret.toSTy, subst := σ, opened := opened.map fun (n, v, _) => (n, v), waits := thenWaits, sourceSuspends,
       exits := Refine.Exits.substTypes ((escRet.map (·.2)).getD {}) σ,
       storage := storage.map fun (n, s) => (n, { frame := s.frame, name := s.name, args := s.args.map Ty.toSTy }),
-      inRepeat := ctx.inRepeat, inlineScopes := ctx.inlineScopes,
+      inRepeat := ctx.inRepeat, sourceContext := sourceContextOf ctx, liftTag := some ctx.liftTag,
+      inlineScopes := ctx.inlineScopes,
       -- (made: a branch the elaborator made, for a cast with clauses
       -- after it, #286, which the source does not have as such)
       -- (and a tagged one, which the source's places do not find, #53)
@@ -4118,6 +4161,8 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
       modify fun st => { st with pendingSuspendingCasts := st.pendingSuspendingCasts + 1 }
     if thenWaits || elseWaits then
       modify fun st => { st with pendingWaitingCasts := st.pendingWaitingCasts + 1 }
+    if sourceSuspends || ctx.sourceWaits re.e then
+      modify fun st => { st with pendingSourceSuspends := st.pendingSourceSuspends + 1 }
     -- (a placeholder: this elaboration goes no further)
     return some ⟨if decides then .prim .fail [] else .prim .userErr [], τ'⟩
   | some l =>
@@ -5231,7 +5276,7 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
             let st0 ← get
             let re ← elabE ctx ee none
             set st0
-            match ctx.types.castRequests.find? (·.key == Refine.keyOf p d (ctx.refineScope ++ ctx.liftTag)) with
+            match ctx.types.castRequests.find? (·.key == Refine.keyOf p d (refineTagOf ctx)) with
             | some l => attempt (match l.ret with | .name "logic" => .void | _ => re.ty)
             | none =>
               if re.ty == .void then attempt .void
@@ -5702,7 +5747,6 @@ partial def elabConc (ctx : Ctx) (p : Pos) (isSync : Bool) (arms : List SExpr) (
   -- (an arm is a scope of its own: its defers are its own, and break and
   -- return cannot leave it)
   let armCtx := { ctx with defers := [], loopDefers := 0, inLoop := false, inArm := true }
-  let isS : Nat → Bool := fun f => ctx.sigs.any fun s => s.idx == f && s.suspends
   if isSync then
     let mut stmts : Array Expr := #[]
     let mut slots : Array Nat := #[]
@@ -5713,13 +5757,13 @@ partial def elabConc (ctx : Ctx) (p : Pos) (isSync : Bool) (arms : List SExpr) (
       | some (.tup ts) => if ts.length == arms.length then ts.map some else arms.map fun _ => none
       | _ => arms.map fun _ => none
     for (a, ae) in arms.zip armExp do
+      let sourceBefore := (← get).pendingSourceSuspends
       let r ← elabE armCtx a ae
       let r ← match ae with
         | some t => pure ⟨← coerce a.pos r t, t⟩
         | none => pure r
       -- (a spawn or a branch in an arm does not make it wait)
-      let skip : Nat → Bool := fun f => ctx.sigs.any fun s => s.idx == f && (s.name == "$spawnMark" || s.name == "$branchMark")
-      if Suspend.countSusp isS (fun _ => false) false skip r.e > 0 then async := async + 1
+      if sourceBefore != (← get).pendingSourceSuspends || ctx.sourceWaits r.e then async := async + 1
       let ty := if r.ty == .never then Ty.void else r.ty
       let t ← fresh ty
       stmts := stmts.push (.seq (.assign t r.e) (.lit .void))
@@ -5757,6 +5801,7 @@ partial def elabConc (ctx : Ctx) (p : Pos) (isSync : Bool) (arms : List SExpr) (
     the task, a `task(t)`. The lowering (`Suspend.lean`) turns the marker
     `$spawnMark(array{F(…), T})` into a new task root. -/
 partial def elabSpawn (ctx : Ctx) (p : Pos) (body : SExpr) : EM R := do
+  let sourceBefore := (← get).pendingSourceSuspends
   if ctx.inDefer then eerr p "spawn in a defer is not supported (#156)"
   if ctx.canFail && !ctx.inDefaultCheck then
     eerr p "spawn cannot be in a failure context (a condition, a filter, or a <decides> call's arguments) (#156)"
@@ -5786,6 +5831,7 @@ partial def elabSpawn (ctx : Ctx) (p : Pos) (body : SExpr) : EM R := do
           let cctx := { ctx with locals := { name, slot, ty := rx.ty, mutable := false } :: ctx.locals }
           let r ← elabApp { cctx with defers := [], suspends := true, canFail := false } q
             (.member mp (.ident mp name) ("$spawnMethod:" ++ m0)) args br none
+          modify fun st => { st with pendingSourceSuspends := sourceBefore }
           return ⟨.seq (.assign slot rx.e) r.e, r.ty⟩
       set saved
   -- (the call runs in the new task, which may wait, also when spawned from
@@ -5830,6 +5876,7 @@ partial def elabSpawn (ctx : Ctx) (p : Pos) (body : SExpr) : EM R := do
     if ft == .logic then Expr.lit (.logic false) else Expr.lit .none
   let spawnE : Expr := .seq (.assign t (.heap (.new tagT) fieldVals))
     (.seq (.call mark.idx [.prim .mkArr [.seq callE (.lit .void), .seq (.local t) (.lit .void)]]) (.local t))
+  modify fun st => { st with pendingSourceSuspends := sourceBefore }
   return ⟨pre.foldr Expr.seq spawnE, ty⟩
 
 /-- `branch:` (#156): its body runs as a background task over the enclosing
@@ -5843,7 +5890,9 @@ partial def elabBranch (ctx : Ctx) (p : Pos) (body : SExpr) : EM R := do
   if ctx.inRepeat then eerr p "branch cannot be in a loop or for body (Book of Verse ch. 14): call a function that branches"
   let some mark := ctx.sig? "$branchMark" | eerr p "internal error: no branch helper"
   let armCtx := { ctx with defers := [], loopDefers := 0, inLoop := false, inArm := true, inBranch := true }
+  let sourceBefore := (← get).pendingSourceSuspends
   let r ← elabE armCtx body none
+  modify fun st => { st with pendingSourceSuspends := sourceBefore }
   noteBackgroundCaptures ctx (Suspend.slotsOf r.e)
   return ⟨.call mark.idx [.prim .mkArr [.seq r.e (.lit .void)]], .void⟩
 
@@ -7603,7 +7652,7 @@ partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
             return (code, c2)
           | .error _ => set st0
         let request := request.filter fun l =>
-          (l.specs.filter (["reads", "writes", "allocates"].contains ·)).all ctx.fnFx.contains
+          ctx.acceptsHelper l
         let binds := (b.name :: Choice.boundIn rest).eraseDups
         let vars := rest.filterMap fun | .decl _ n _ true _ => some n | _ => none
         let tup := SExpr.tuple p (binds.map (SExpr.ident p ·) ++ [.ident p "true"])
@@ -7733,7 +7782,7 @@ partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
           -- (asked for where more effects are allowed than here, as in a
           -- function of its own of a call taken lazily, #246: copied)
           let fits (l : Choice.FirstLift) : Bool :=
-            (l.specs.filter (["reads", "writes", "allocates"].contains ·)).all ctx.fnFx.contains
+            ctx.acceptsHelper l
           if let some l := req then
             if !fits l then return ← finish (elabOneGo ctx copied)
             -- (the call a clause, whose failure goes back into the
@@ -8957,7 +9006,8 @@ def functionBodyCtx (opts : Options) (ctx : Ctx) (p : Pos) (name : String)
   let loopLift := opts.loopRequests.find? fun l => l.name == name || l.extraFns.any
     (fun | .fn _ n .. => n == name | _ => false)
   let resume := opts.loopRequests.findSome? fun l => l.resumes.find? (·.name == name)
-  let source := (resume.map (·.sourceContext)).getD ((loopLift.map (·.sourceContext)).getD {})
+  let source := (resume.map (·.sourceContext)).getD
+    ((loopLift.map (·.sourceContext)).getD ((lifted.map (·.sourceContext)).getD {}))
   let returnExit := loopLift.bind (·.returnExit)
   let resumeStorage ← ((resume.map (·.storage)).getD []).mapM fun (n, r) => do
     let args ← r.args.mapM fun t => (resolveTy ctx.types p t).run' { env := ctx.types }
@@ -8990,7 +9040,8 @@ def functionBodyCtx (opts : Options) (ctx : Ctx) (p : Pos) (name : String)
       | [c, _] => some c | _ => none
     selfMethod := match name.splitOn "." with | [_, m] => some m | _ => none
     liftTag := if scopeClass.isSome then s!"$in{selfCls}" else
-      (resume.map (·.liftTag)).getD ((loopLift.map (·.liftTag)).getD (liftTagOf name))
+      (resume.map (·.liftTag)).getD ((loopLift.map (·.liftTag)).getD
+        ((lifted.bind (·.liftTag)).getD (liftTagOf name)))
     refineScope := (lifted.map (·.continuationScope)).getD
       (if loopLift.isSome || resume.isSome then s!"$contScope{name.hash}" else "")
     inlineScopes := (resume.map (·.inlineScopes)).getD

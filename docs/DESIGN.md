@@ -1932,6 +1932,24 @@ targets may add (#157) get their superclasses in `supersMap` like every
 class, as `refTags` asks whether each is below a class at every
 conversion of a class type.
 
+Refining lifts also carry `SourceContext`, including default dependency
+stacks and the source's cleanup, constructor, class-block and concurrent-arm
+flags. Discovery and generated function checking restore the same scope.
+Their request identity includes that scope and its type environment, while
+the source class-copy tag stays separate. Different closed evaluations of
+one default therefore cannot reuse a helper with the wrong type witnesses.
+Compiler-owned inferred functions can consume a registered continuation's
+heap effects while their signatures reach a fixed point; final source
+checking still enforces the caller's declared effects.
+
+`sourceSuspends` records the source operation's suspension capability
+separately from actual waiting and generated frame requirements. Discovery
+carries this evidence through provisional refining and staged helpers, so
+`sync` can count an arm before the helper has executable code. Cancellation
+counts even if it completes immediately. Background `spawn` and `branch`
+bodies keep their evidence within the child; starting them does not make
+the parent arm suspend. The unselected `else` is checked separately too.
+
 In a suspending source function, mutable captures keep their storage in
 their defining frame (#419, `SourceFrames`, `FrameRefs`). Discovery records
 the defining function, declaration position and type arguments, resolving
@@ -1999,7 +2017,7 @@ opened frames are stopped through receiver-first `isTag` dispatches to
 
 A source function cannot start another flat task while awaiting a lifted
 call, so each helper's flat starts form a contiguous group in the source
-order. Refining casts in concurrent arms remain refused, and the source's
+order. Refining casts in concurrent arms preserve this ownership, and the source's
 `inRepeat` flag is carried by the lift so starts in loops/for bodies stay
 refused too; a live helper frame cannot then be overwritten at its call
 site. A `$branchMark` forces a physical suspending lift even when its arm
