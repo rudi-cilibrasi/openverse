@@ -601,6 +601,18 @@ def Ctx.sig? (ctx : Ctx) (n : String) : Option Sig := ctx.sigs.find? (·.name ==
 def Ctx.hasMethod (ctx : Ctx) (c m : String) : Bool :=
   (ctx.types.supers c).any fun e => (ctx.sig? s!"{e}.{m}").isSome
 
+/-- Arguments whose instance comes from the other arguments' types. A
+    local or member shadows a same-named generic top-level function. -/
+def Ctx.argNeedsType (ctx : Ctx) : SExpr → Bool
+  | .ident _ "false" | .arrayLit _ [] | .mapLit _ [] => true
+  | .ident _ n =>
+    (ctx.lookup n).isNone &&
+      !(ctx.selfClass.any fun c => (ctx.types.fields c).any (·.1 == n) || ctx.hasMethod c n ||
+        ((ctx.types.methodOverloads.lookup n).map (·.any (ctx.hasMethod c ·))).getD false) &&
+      (ctx.sig? n).any (fun f => !f.isConst && !f.tparams.isEmpty) &&
+      ctx.types.classes.contains s!"{n}$fn"
+  | _ => false
+
 /-- Where the method `m` of `c` is declared, for the signature of a call: the
     most specific of the declarations at or above `c` and, among several,
     one whose result is below the others' (overrides may narrow it). -/
@@ -3250,15 +3262,7 @@ partial def elabGenericCallWith (elabE : Ctx → SExpr → Option Ty → EM R) (
   let bound (σ : List (String × Ty)) (t : Ty) := t.params.all fun v => (σ.lookup v).isSome
   -- Empty values and generic function identifiers need an expected type,
   -- so elaborate them after other arguments, while still evaluating in order.
-  let fromContext : SExpr → Bool
-    | .ident _ "false" | .arrayLit _ [] | .mapLit _ [] => true
-    | .ident _ n =>
-      (ctx.lookup n).isNone &&
-        !(ctx.selfClass.any fun c => (ctx.types.fields c).any (·.1 == n) || ctx.hasMethod c n ||
-          ((ctx.types.methodOverloads.lookup n).map (·.any (ctx.hasMethod c ·))).getD false) &&
-        (ctx.sig? n).any (fun f => !f.isConst && !f.tparams.isEmpty) &&
-        ctx.types.classes.contains s!"{n}$fn"
-    | _ => false
+  let fromContext := ctx.argNeedsType
   let mut es : Array Expr := Array.replicate given.length (.lit .void)
   -- arguments left for the second pass; an argument whose type contains
   -- `false` (like `array{Err()}`) binds nothing, so it joins them
@@ -5440,9 +5444,7 @@ partial def elabStmt (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM (R × Ctx) 
       let items ← decls.mapM fun
         | .decl q x (some sty) v a => do pure (q, x, v, a, ← resolveTy penv q sty)
         | d => eerr d.pos "internal: a $params clause (#235)"
-      let fromContext : SExpr → Bool
-        | .ident _ "false" | .arrayLit _ [] | .mapLit _ [] => true
-        | _ => false
+      let fromContext := ctx.argNeedsType
       let mut σ : List (String × Ty) := []
       let mut done : Array (Option (Expr × Ty)) := Array.replicate items.length none
       let mut deferred : Array Bool := (items.map fun (_, _, _, a, _) => fromContext a).toArray
@@ -6485,9 +6487,7 @@ partial def elabAppBase (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (b
         if let some et := exp then
           if !(et == .void) then
             if let some σ' := (declTy ms.ret).matchArg ctx.types σu et then σu := own? σ'
-        let fromContext : SExpr → Bool
-          | .ident _ "false" | .arrayLit _ [] | .mapLit _ [] => true
-          | _ => false
+        let fromContext := ctx.argNeedsType
         let posPs := (ms.params.drop 1).take (npos - 1)
         let mut done : Array (Option (Expr × Ty)) := Array.replicate posArgs.length none
         let mut deferred : Array Bool := (posArgs.map fromContext).toArray
