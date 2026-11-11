@@ -1,6 +1,6 @@
 name = "openverse"
 version = "0.1.0"
-defaultTargets = ["OpenVerse", "openverse"]
+defaultTargets = ["OpenVerse", "openverse", "small_int_cache"]
 
 [[lean_lib]]
 name = "OpenVerse"
@@ -8,3 +8,7 @@ name = "OpenVerse"
 [[lean_exe]]
 name = "openverse"
 root = "Main"
+
+[[lean_exe]]
+name = "small_int_cache"
+root = "tests.lean.small_int_cache"

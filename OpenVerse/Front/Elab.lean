@@ -3289,9 +3289,9 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
   match se with
   | .int p n =>
     if !Int64.inRange n then eerr p s!"integer literal {n} does not fit in 64 bits"
-    return litAt ctx.types exp ⟨.lit (.int n), .int⟩
+    return litAt ctx.types exp ⟨.lit (Value.ofInt n), .int⟩
   | .char _ c => return ⟨.lit (.char c), .char⟩
-  | .char32 _ c => return ⟨.lit (.int c), .char32⟩
+  | .char32 _ c => return ⟨.lit (Value.ofInt c), .char32⟩
   | .float _ b => return litAt ctx.types exp ⟨.lit (.float b), .float⟩
   | .str p parts =>
     let pieces ← parts.mapM fun part => match part with
@@ -3527,7 +3527,7 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
     | none, some vals =>
       -- `color.Red`: an enumerator
       match vals.idxOf? m with
-      | some k => return ⟨.lit (.int k), .enum n⟩
+      | some k => return ⟨.lit (Value.ofInt k), .enum n⟩
       | none => eerr p s!"enum {n} has no value '{m}'"
     | _, _ => elabMember ctx p (← elabE ctx (.ident p n) none) m exp
   | .member p e m => elabMember ctx p (← elabE ctx e none) m exp

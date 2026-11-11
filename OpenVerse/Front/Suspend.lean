@@ -156,7 +156,7 @@ def reloadMark : Expr := .heap (.get 1000000009) []
 /-- "Stop the function's branches", filled in once they are known. -/
 def killMark : Expr := .heap (.get 1000000011) []
 
-def int (i : Int) : Expr := .lit (.int i)
+def int (i : Int) : Expr := .lit (Value.ofInt i)
 def vd : Expr := .lit .void
 def fr : Expr := .local frS
 def fget (f : Nat) : Expr := .heap (.get f) [fr]

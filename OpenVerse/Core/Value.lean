@@ -51,6 +51,28 @@ namespace Value
 /-- The unit value returned by `void` expressions. -/
 def void : Value := .tup []
 
+/-- Construct an integer value. Compiled code shares the wrappers for 0..1025. -/
+def ofInt (i : Int) : Value := .int i
+
+@[simp] theorem ofInt_eq_int (i : Int) : ofInt i = .int i := rfl
+
+private def smallInts : Array Value :=
+  Array.ofFn fun i : Fin 1026 => .int (i.val : Int)
+
+private def ofIntCached : Int → Value
+  | .ofNat n =>
+    if h : n < 1026 then smallInts[n]'(by simpa [smallInts] using h)
+    else .int (.ofNat n)
+  | .negSucc n => .int (.negSucc n)
+
+/-- Pooling changes physical sharing only, including at the cache boundaries. -/
+@[csimp] private theorem ofInt_eq_ofIntCached : @ofInt = @ofIntCached := by
+  funext i
+  cases i with
+  | ofNat n =>
+    by_cases h : n < 1026 <;> simp [ofInt, ofIntCached, smallInts, h]
+  | negSucc n => rfl
+
 /-- Build a Verse string from a Lean string (UTF-8 bytes). -/
 def ofString (s : String) : Value := .arr (s.toUTF8.toList.map fun b => .char b.toNat).toArray
 
@@ -170,7 +192,7 @@ def isOk : Res → Bool
 @[simp] theorem isOk_err (e : ErrKind) : (Res.err e).isOk = false := rfl
 
 /-- Range-checked `int` result. -/
-def ofInt (i : Int) : Res := if Int64.inRange i then .ok (.int i) else .err .overflow
+def ofInt (i : Int) : Res := if Int64.inRange i then .ok (Value.ofInt i) else .err .overflow
 end Res
 
 /-- The outcome of evaluating a list of expressions left to right. -/

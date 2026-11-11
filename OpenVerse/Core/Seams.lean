@@ -212,19 +212,19 @@ theorem mul_seam {a b : Int} (ha : InR a) (_hb : InR b) : Int64.inRange (a * b) 
 
 theorem apply_add {a b : Int} (ha : InR a) (hb : InR b) :
     Prim.apply .add [.int a, .int b] = if cAddFits a b then .ok (.int (a + b)) else .err .overflow := by
-  simp only [Prim.apply, Res.ofInt, add_seam ha hb]
+  simp only [Prim.apply, Res.ofInt, Value.ofInt, add_seam ha hb]
 
 theorem apply_sub {a b : Int} (ha : InR a) (hb : InR b) :
     Prim.apply .sub [.int a, .int b] = if cSubFits a b then .ok (.int (a - b)) else .err .overflow := by
-  simp only [Prim.apply, Res.ofInt, sub_seam ha hb]
+  simp only [Prim.apply, Res.ofInt, Value.ofInt, sub_seam ha hb]
 
 theorem apply_mul {a b : Int} (ha : InR a) (hb : InR b) :
     Prim.apply .mul [.int a, .int b] = if cMulFits a b then .ok (.int (a * b)) else .err .overflow := by
-  simp only [Prim.apply, Res.ofInt, mul_seam ha hb]
+  simp only [Prim.apply, Res.ofInt, Value.ofInt, mul_seam ha hb]
 
 theorem apply_neg {a : Int} (ha : InR a) :
     Prim.apply .neg [.int a] = if cNegFits a then .ok (.int (-a)) else .err .overflow := by
-  simp only [Prim.apply, Res.ofInt, neg_seam ha]
+  simp only [Prim.apply, Res.ofInt, Value.ofInt, neg_seam ha]
 
 theorem apply_floorDiv {a b : Int} (hb : b ≠ 0) :
     Prim.apply .floorDiv [.int a, .int b] = Res.ofInt (cFloorDiv a b) := by
