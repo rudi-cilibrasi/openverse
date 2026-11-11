@@ -11979,6 +11979,20 @@ def elabProgram (allTops00 : List STop) (opts : Options := {}) : Except String C
     let casts := c.castNeeds.filter fun l => !opts.castRequests.any (·.key == l.key)
     -- (#246) and with functions of their own for lazily taken calls
     let loops := c.loopNeeds.filter fun l => !opts.loopRequests.any (·.key == l.key)
+    -- A newly materialized dispatch-default helper can reveal heap effects
+    -- absent from an earlier suffix trial. Rediscover consumers after those
+    -- helpers have participated in effect inference; their cached stage
+    -- interfaces, prefixes and resume methods must agree on permissions.
+    -- Each restart retains the new bridges, so discovery still progresses.
+    let newDefaults := loops.filter fun l => defaultBridge l.name
+    if !newDefaults.isEmpty then
+      match fuel with
+      | fuel + 1 =>
+        let bridges := opts.loopRequests.filter fun l => defaultBridge l.name || spawnAdapter l.name
+        return ← go fuel { opts with
+          fnRequests := (opts.fnRequests ++ c.fnNeeds).eraseDups,
+          castRequests := [], loopRequests := bridges ++ newDefaults }
+      | 0 => throw "internal error: default forwarding helpers still to infer after several elaborations"
     match fuel, c.fnNeeds.filter (!opts.fnRequests.contains ·) with
     | fuel + 1, new@(_ :: _) =>
       go fuel { opts with fnRequests := opts.fnRequests ++ new, castRequests := opts.castRequests ++ casts,
