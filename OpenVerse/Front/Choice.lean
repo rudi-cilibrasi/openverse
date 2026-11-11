@@ -1943,6 +1943,13 @@ structure ForStagePlan where
   outcome : Bool := false
   deriving Inhabited
 
+/-- A source return's saved operand and exit packet for a first-success helper. -/
+structure FirstReturn where
+  ty : STy
+  value : Option String
+  packet : List SExpr
+  deriving Inhabited
+
 /-- (#246) A lazily taken call, where the first success is taken, whose
     clauses, conditions or calls of itself have effects: compiled as a
     function of its own, recursive, so that each alternative and each call
@@ -1953,6 +1960,7 @@ structure ForStagePlan where
     they bind and the final values of the `var`s they set (`binds`, then
     `sets`, then `true`). -/
 structure FirstLift where
+  returnExit : Option FirstReturn := none
   /-- A stage request supplies classes rather than a callable helper. -/
   stageOnly : Bool := false
   resumes : List ForResume := []
@@ -1988,9 +1996,10 @@ structure FirstLift where
 def firstBody (helper : String) (p : Pos) (b : String) (bty : Option STy) (cls : List SExpr) (tail : SExpr)
     (rest : List SExpr) (binds : List String) (sets : List (String × STy)) (caps : List SExpr)
     (ret : Option STy := none) (helperOf : String → String := fun _ => helper)
-    (recArgs : Option String → Pos → List SExpr → List SExpr × List SExpr := fun _ _ as => ([], as)) : SExpr :=
-  let tup : SExpr := .tuple p (binds.map (SExpr.ident p ·) ++ sets.map (fun (m, _) => SExpr.ident p m) ++
-    [.ident p "true"])
+    (recArgs : Option String → Pos → List SExpr → List SExpr × List SExpr := fun _ _ as => ([], as))
+    (normalResult : Option SExpr := none) : SExpr :=
+  let tup : SExpr := normalResult.getD (.tuple p (binds.map (SExpr.ident p ·) ++ sets.map (fun (m, _) => SExpr.ident p m) ++
+    [.ident p "true"]))
   let recur (target : Option String) (h : String) (q : Pos) (as : List SExpr) : SExpr :=
     let (pre, args) := recArgs target q as
     let call := SExpr.app q (.ident q h) (args ++ caps) true

@@ -34,6 +34,13 @@ kinds=(
   dispatch-default-first
   dispatch-default-for
   exclusive
+  first-return-composed
+  first-return-generic
+  first-return-independent
+  first-return-lazy
+  first-return-mutual
+  first-return-refined
+  first-return-void
   immediate-suspends-composed
   immediate-suspends-exclusive
   immediate-suspends-nested
@@ -128,6 +135,29 @@ for kind in "${kinds[@]}"; do
 import sys
 kind, count = sys.argv[1], int(sys.argv[2])
 print('Two(N:int):int = N | N + 1')
+if kind.startswith('first-return-'):
+    print('pair(a:type,b:type):=class{A:a;B:b}\ndup(t:type):=class(pair(t,t)){C:int=4}')
+    print('cell:=class{var N:int=0}')
+    target = 'Other' if kind.endswith('mutual') else 'Lazy'
+    print(f'Lazy(H:cell,N:int)<transacts><decides>:int=\n    N>=0\n    set H.N+=1\n    N|{target}[H,N-1]')
+    if kind.endswith('mutual'):
+        print('Other(H:cell,N:int)<transacts><decides>:int=\n    N>=0\n    set H.N+=1\n    N|Lazy[H,N-1]')
+    independent = kind.endswith('independent')
+    params = ','.join(f'P{i}:pair(a{i},b{i})' for i in range(count)) if independent else 'P:pair(a,b)'
+    types = ','.join(f'a{i}:type,b{i}:type' for i in range(count)) if independent else 'a:type,b:type'
+    values = [f'if(D{i}:=dup[P{i}])then(D{i}.C|D{i}.C+1)else 0' for i in range(count)] if independent else ['if(D:=dup[P])then(D.C|D.C+1)else 0']*count
+    if kind.endswith(('composed','generic','void')): values = ['(Two(0)|Two(2))']*count
+    if kind.endswith(('lazy','mutual')): values = ['Lazy[H,3]']*count
+    clauses = ','.join(f'A{i}:={value}' for i,value in enumerate(values))
+    generic, void = kind.endswith('generic'), kind.endswith('void')
+    ret, result = ('[]t','array{}') if generic else ('void','') if void else ('t','X')
+    clauses += ',set H.N+=1,set Total+=1,if(Total>0)then return '+result+' else 0'
+    final = 'array{X}' if generic else '{}' if void else 'X'
+    print(f'Run({params},X:t where {types},t:type)<transacts>:{ret}=\n    H:=cell{{}}\n    var Total:int=0\n    defer:Print("source {{Total}} {{H.N}}")\n    if({clauses}):Print("normal")\n    {final}')
+    args = ','.join('dup(int){A:=1,B:=2}' if i%2==0 else 'dup(string){A:="s",B:="t"}' for i in range(count)) if independent else 'dup(int){A:=1,B:=2}'
+    call = f'Run({args},7)' + ('.Length' if generic else '')
+    print(f'Main():void={call}' if void else f'Main():void=Print("{{{call}}}")')
+    sys.exit(0)
 if kind.startswith('method-tuple-'):
     print('''box(t:type):=class:
     V:t
