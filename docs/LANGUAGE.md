@@ -911,7 +911,8 @@ Main():void =
   parameter and result types still describe the call. A generic class's
   method is a function generic over its class's type parameters, inferred
   from the receiver as at a generic call. Methods may also declare type
-  parameters of their own, inferred from the supplied arguments. Overrides
+  parameters of their own, inferred from the supplied arguments, or from
+  omitted defaults when the static receiver selects one implementation. Overrides
   may rename these parameters; their signatures and bounds are still checked.
   Defaults retain the implementation's type scope. Tuple-form super calls
   infer the ancestor's method parameters at that call, and covariant result

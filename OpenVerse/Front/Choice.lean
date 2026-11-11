@@ -2114,7 +2114,8 @@ partial def rwFamCalls (anc : String → List String) (fams : List (String × MF
       let site := s!"{p.line}_{p.col}"
       let (r, dn, kv) := (s!"$r{site}", s!"$d{site}", s!"$kv{site}")
       let raw := s!"$receiver{site}"
-      let actual := if f.covariant then SExpr.ident p raw else recv
+      let keepStatic := f.covariant || !f.methodTps.isEmpty
+      let actual := if keepStatic then SExpr.ident p raw else recv
       let aN (i : Nat) : String := s!"$a{i}_{site}"
       -- (the arguments as a call evaluates them: positional, then named as
       -- written, #283)
@@ -2155,7 +2156,7 @@ partial def rwFamCalls (anc : String → List String) (fams : List (String × MF
             (namedArgs.zipIdx.map (fun (a, i) => SExpr.decl p (aN (posPs.length + i)) (tyAt a (posPs.length + i)) false (.ident p "$arg"))) ++
             posPs.zipIdx.map fun (sp, i) => SExpr.decl p (aN i) (some (tyR sp.ty)) false (.app p (.ident p t) [.int p (i : Int)] false)
         else args.zipIdx.map fun (a, i) => SExpr.decl p (aN i) (tyAt a i) false (.ident p "$arg")
-      let castTo (d : String) : SExpr := .app p (.ident p d) [if f.covariant then .ident p raw else .ident p r] true
+      let castTo (d : String) : SExpr := .app p (.ident p d) [if keepStatic then .ident p raw else .ident p r] true
       let alt (d : String) : List SExpr × SExpr :=
         let guard := if d == f.root then SExpr.decl p dn none false (.ident p r)
           else .decl p dn none false (castTo d)
@@ -2177,24 +2178,29 @@ partial def rwFamCalls (anc : String → List String) (fams : List (String × MF
       -- A refining implementation must keep its cast with its body. Most
       -- specific classes win before interface defaults, as ordinary dispatch
       -- does. A marked cast lets typing discard statically impossible cases.
-      let cases := if !f.refining && !f.covariant then mkExcl p (f.impls.map alt) else
-        let fallback := if f.impls.contains f.root && !f.covariant then
+      let cases := if !f.refining && !keepStatic then mkExcl p (f.impls.map alt) else
+        let fallback := if f.impls.contains f.root && !keepStatic then
           SExpr.app p (.ident q (methodFnName f.root m)) (.ident p r :: passed) br
           else .app p (.ident p "$methodMiss") [] false
         f.cases.foldr (fun (d, impl) rest =>
           let dn := dn ++ "$" ++ d
           let body := SExpr.app p (.ident q (methodFnName impl m)) (.ident p dn :: passed) br
-          if d == f.root && !f.covariant then
+          if d == f.root && !keepStatic then
             SExpr.block p [.decl p dn none false (.ident p r), body]
-          else SExpr.ite p [.decl p dn none false (.app p (.ident p (if f.covariant then "$methodCase" else "$methodCast")) [castTo d] false)] body (some rest)) fallback
+          else SExpr.ite p [.decl p dn none false (.app p (.ident p (if keepStatic then "$methodCase" else "$methodCast")) [castTo d] false)] body (some rest)) fallback
       let ret := if f.covariant then some (STy.app "$methodResult" [.name raw]) else f.ret.map tyR
       let ownTypes := f.methodTps.zipIdx.map fun (tp, i) =>
         SExpr.decl p s!"$methodTypeArg{i}" (some (.name (tpN tp.name))) false (.tuple p [])
+      -- A statically selected implementation's omitted defaults may infer
+      -- method parameters. Probe ordinary binding after supplied arguments
+      -- are saved; its defaults still run only in the selected body.
+      let inferTypes := if f.methodTps.isEmpty then [] else
+        [SExpr.app p (.ident p "$methodParams") [.ident p raw, .str p [.text m], .block p ownTypes, .block p passed] br]
       let resultType := if !f.covariant then [] else
         [SExpr.app p (.ident p "$methodType") [.ident p raw, .str p [.text m], .block p ownTypes] false]
-      let tmpl := head ++ resultType ++ [.decl p kv ret false cases]
+      let tmpl := head ++ inferTypes ++ resultType ++ [.decl p kv ret false cases]
       let dispatch := SExpr.app p (.ident p "$dispatch") (.ident q (methodFnName f.root m) :: .block p tmpl :: actual :: vals) false
-      if !f.covariant then dispatch else
+      if !keepStatic then dispatch else
         .block p [.decl p raw none false recv, dispatch]
   mapE (fun
     | .app p (.member q recv m) args br =>

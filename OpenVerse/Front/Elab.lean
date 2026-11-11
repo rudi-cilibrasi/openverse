@@ -2067,7 +2067,7 @@ def forBodySafe (ctx : Ctx) (body : SExpr) : Bool :=
   -- Prepared consumers keep lazy producer templates (including groups and
   -- generic/default argument bindings) inside the body. Their ownership is
   -- checked when that consumer elaborates; they do not escape the helper.
-  let safeMarkers := ["$sourceSuper", "$methodMiss", "$methodCast", "$methodCase", "$methodType", "$inlineScope", "$inlineScopeEnd", "$inline", "$choice", "$excl", "$alt", "$firstP", "$first", "$each", "$noLift", "$fxOf",
+  let safeMarkers := ["$sourceSuper", "$methodMiss", "$methodCast", "$methodCase", "$methodType", "$methodParams", "$inlineScope", "$inlineScopeEnd", "$inline", "$choice", "$excl", "$alt", "$firstP", "$first", "$each", "$noLift", "$fxOf",
     "$forReturns", "$forReturnBody", "$defer", "$loop", "$rec", "$recTo", "$group", "$member",
     "$tparams", "$params", "$defaults", "$paramDefault", "$freeNames", "$declNames", "$callArgs"]
   !(Refine.findPart (fun | .brk _ => true | _ => false) true body).isSome &&
@@ -4772,6 +4772,34 @@ partial def elabStmt (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM (R × Ctx) 
       pure (⟨.lit .void, .void⟩, { ctx with inlineScopes := name :: ctx.inlineScopes })
     | .app _ (.ident _ "$inlineScopeEnd") [] false =>
       pure (⟨.lit .void, .void⟩, { ctx with inlineScopes := ctx.inlineScopes.drop 1 })
+    | .app p (.ident _ "$methodParams") [.ident _ receiver, .str _ [.text method], .block _ ownTypes, .block _ args] _ => do
+      let aliases ← ownTypes.mapM fun
+        | .decl _ _ (some (.name n)) _ _ => pure n
+        | _ => eerr p "internal: a method's type parameter"
+      if aliases.all fun n => (ctx.types.tvars.lookup n).isSome then
+        pure (⟨.lit .void, .void⟩, ctx)
+      else
+        let some receiverLocal := ctx.lookup receiver | eerr p "internal: missing method receiver"
+        let .struct c _ := receiverLocal.ty | eerr p "method receiver is not a class or interface"
+        let some owner := ctx.methodDecl? c method | eerr p s!"{c} has no method {method}"
+        let root := (ctx.rootsOf c method).headD owner
+        let implementations := ((ctx.types.concreteBelow c).map (ctx.implFor? · root method)).eraseDups
+        let [some fname] := implementations
+          | eerr p s!"cannot infer the type parameters of {method} from the arguments of this call"
+        let cls := (fname.splitOn ".").head!
+        if !ctx.types.isSub c cls then
+          eerr p s!"cannot infer the type parameters of {method} from the arguments of this call"
+        -- The member's checking stub has erased defaults. The generated
+        -- implementation function retains their bodies and lexical scope.
+        let implementation := Choice.methodFnName cls method
+        let some sig := ctx.sig? implementation | eerr p "internal: missing method implementation"
+        let saved ← get
+        let packet ← elabGenericCallWith elabE { ctx with typeOnly := true, callInstanceProbe := some implementation }
+          p sig (.ident p receiver :: args) none
+        restoreConstructProbe ctx saved
+        let .tup types := packet.ty | eerr p "internal: a method argument type packet"
+        let own := types.drop ((ctx.types.sparams.lookup cls).getD []).length
+        pure (⟨.lit .void, .void⟩, { ctx with types := { ctx.types with tvars := ctx.types.tvars ++ aliases.zip own } })
     | .app p (.ident _ "$methodType") [.ident _ receiver, .str _ [.text method], .block _ ownTypes] false => do
       let some receiverLocal := ctx.lookup receiver | eerr p "internal: missing method receiver"
       let .struct c args := receiverLocal.ty | eerr p "method receiver is not a class or interface"
