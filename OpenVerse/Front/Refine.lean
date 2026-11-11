@@ -22,6 +22,13 @@ import OpenVerse.Front.Choice
 
 namespace OpenVerse.Front.Refine
 
+/-- How a lifted branch returns an explicit exit and copies its locals.
+    The return operand is bound before cleanup, and the tuple is read after. -/
+structure Exits where
+  ret : Option (Option (String × STy) × List SExpr) := none
+  brk : Option (List SExpr) := none
+  deriving Inhabited
+
 /-- A refining cast's branch, lifted into a generic function (#243). -/
 structure Lift where
   /-- The `if`'s position and the name its condition binds: the key. -/
@@ -53,6 +60,7 @@ structure Lift where
       class, as the copies and the interface's own default share the
       source's places (`Ctx.liftTag`); such a lift always has its `body`. -/
   tag : String := ""
+  exits : Exits := {}
   /-- Whether executing the lifted then-block can wait. The generated
       function may need `<suspends>` for the dispatch even when it never waits. -/
   waits : Bool := false
@@ -91,6 +99,17 @@ partial def substTypes (σ : List (String × STy)) : SExpr → SExpr :=
     | .decl p n (some t) v x => some (.decl p n (some (t.substNames σ)) v (substTypes σ x))
     | .construct p n ts fs => some (.construct p n (ts.map (·.substNames σ)) (fs.map (substTypes σ)))
     | _ => none
+
+def Exits.substTypes (exits : Exits) (σ : List (String × STy)) : Exits :=
+  { ret := exits.ret.map fun (binding, pack) =>
+      (binding.map fun (n, t) => (n, t.substNames σ), pack.map (Refine.substTypes σ))
+    brk := exits.brk.map (·.map (Refine.substTypes σ)) }
+
+def liftedBreak (p : Pos) : SExpr := .app p (.ident p "$refineBreak") [] false
+
+def isBreak : SExpr → Bool
+  | .brk _ | .app _ (.ident _ "$refineBreak") [] false => true
+  | _ => false
 
 /-- The branch of a refining cast that is the first clause of an `if`'s
     condition, `if (D := T[X], rest) then B else E`: the `if` of the rest,
