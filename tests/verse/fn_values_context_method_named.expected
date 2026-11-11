@@ -1,0 +1,6 @@
+receiver 1
+arg 2
+default 3
+same 4
+result 1 4
+exit=0

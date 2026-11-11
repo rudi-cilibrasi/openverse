@@ -1,0 +1,5 @@
+default 1
+make 2
+arg 3
+result 7 3
+exit=0

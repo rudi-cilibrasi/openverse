@@ -204,6 +204,13 @@ Main():void =
   type that determines one instance and satisfies its bounds (#209). The
   receiver fixes the class arguments; the expected type fixes the method
   arguments. The value retains both, including after its creator returns.
+  Other arguments of a call can determine the expected type:
+  `Apply(B.Same, X)` works when `Apply` expects `type{_(:t):t}` and `t`.
+  This includes unqualified methods inside their class, compound receiver
+  expressions, choices, tuple adapters and later named arguments. The
+  receiver runs once in written argument order, before later arguments and
+  omitted defaults. Fields and ordinary method values can still determine
+  the call's type arguments themselves.
   With no determining expected type, the method cannot be bound as a value.
 - Bound methods also pack and expand tuples at an expected function type,
   including open types in generic code (#209). For example, a method
