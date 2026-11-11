@@ -124,6 +124,9 @@ structure Callee where
   selfFns : Option (Nat × Nat × Nat × Nat) := none
   /-- The callee's number of type parameters (its frame's type arguments). -/
   ntp : Nat := 0
+  /-- A refining lift's background roots belong to its source function.
+      Stop them separately from cancelling its current work and defers. -/
+  stopTasksFn : Option Nat := none
   deriving Inhabited
 
 /-- Slots of a resume function: the frame, the scheduler. -/
@@ -562,6 +565,13 @@ structure Env where
   leafMin : Nat := 0
   armTopTy : VTy := .opt .void
 
+/-- One scope-owned cleanup, selected by its recorded start number. Its
+    action stops either an arm or the background roots of a lifted call. -/
+structure Kill where
+  order : Nat
+  stop : List Expr
+  deriving Inhabited
+
 structure St where
   /-- The functions' slot types (shared by the body and its arms). -/
   Γ : Array VTy
@@ -586,15 +596,12 @@ structure St where
   defers : Expr := vd
   /-- `spawn`s met so far. -/
   spawnNext : Nat := 0
-  /-- `branch`es met so far; for each, what stopping it needs (its wrapper's
-      field, class, `stop` function, a slot to read the wrapper into, the
-      arm's fields and cancel function) and what its trampoline needs (the
-      arm's resume function and done field). -/
+  /-- The background-arm wrappers numbered so far. -/
   branchNext : Nat := 0
-  kills : Array (Nat × Nat × Nat × Nat × Nat × Nat × Nat × Nat) := #[]
-  /-- The slot counting the starts of the function's branches and `rush`
-      arms, which each record theirs (the last entry of `kills`), so that
-      they are stopped last started first (#187). -/
+  /-- Cleanup actions for background arms and retained refining calls. -/
+  kills : Array Kill := #[]
+  /-- The slot counting background starts and forwarded task groups. Each
+      cleanup records its number in `Kill.order` (last started first, #187). -/
   seqSlot : Option Nat := none
   /-- By the order the `branch`es (and `rush` arms) are numbered in: each
       one's arm resume function, done field, and whether its wrapper runs
@@ -746,6 +753,27 @@ def newSite (fieldTy : VTy) : M Nat := do
     scheduler, the parameters. -/
 def armArgs : M (List Expr) := do
   return [fr, .local schS] ++ (List.range (← read).arity).map fun i => .local (i + 2)
+
+/-- A background arm is stopped once, including its pending callee/defers.
+    Children owned by this arm are stopped by the scope's hierarchy first. -/
+def armKill (wf tag stopFn y pcA doneA can order : Nat) : M Kill := do
+  let args ← armArgs
+  return { order, stop := [.assign y (fget wf),
+    .ite (.heap (.isTag [tag]) [.local y]) (.call stopFn [.local y, .local schS]) vd,
+    .ite (allOf [.prim .ne [fget pcA, int 0], .prim .eq [fget doneA, int 0]])
+      (.seq (seqVoid [.call can args, fset doneA (int 2)]) vd) vd] }
+
+/-- Keep a lifted call's background roots in the caller's cleanup order.
+    The returned number is executed only on arrival, before the callee runs;
+    its saved child frame remains available after the callee completes. -/
+def forwardTasks (c : Callee) (field : Nat) (wide : VTy) : M (List Expr) := do
+  let some stopFn := c.stopTasksFn | return []
+  let y ← freshT wide
+  let (order, number) ← startNumber
+  let stop := [.assign y (fget field),
+    .ite (.heap (.isTag [c.tag]) [.local y]) (.call stopFn [.local y, .local schS]) vd]
+  modify fun st => { st with kills := st.kills.push { order, stop } }
+  return [number]
 
 /-- Whether a type mentions a reference. -/
 partial def refIn : VTy → Bool
@@ -903,7 +931,7 @@ partial def block (e : Expr) (k : Option (Expr → Expr)) : M (List Expr) := do
         let k1 := (← get).kills.size
         let y ← freshT wide
         let (sk, number) ← startNumber
-        let killInfo := (childF site, wrapTag, stopFn, y, pcA, doneA, env.fnBase + 2 * a + 1, sk)
+        let killInfo ← armKill (childF site) wrapTag stopFn y pcA doneA (env.fnBase + 2 * a + 1) sk
         modify fun st => { st with arms := st.arms.set! a (res, can) }
         modify fun st => { st with kills := st.kills.push killInfo }
         -- (the branches and `rush` arms its arm starts are stopped with it)
@@ -1022,7 +1050,8 @@ partial def suspendAt (g : Nat) (c : Callee) (rs : List Expr) : M (Expr × Expr)
     else pure ((argSlots.zip rs).map (fun (a, r) => .assign a r) ++
       [.assign y (fget cf),
        .ite isC (.call c.initFn (.local y :: as)) (.seq (fset cf (.call c.newFn (newArgs as))) vd)])
-  let arrive : Expr := .ite (← seeking) vd (seqVoid (make ++ [fset env.pcFld (int k)]))
+  let number ← forwardTasks c cf wide
+  let arrive : Expr := .ite (← seeking) vd (seqVoid (make ++ number ++ [fset env.pcFld (int k)]))
   let pass := if c.passFields.isEmpty then [] else as
   let poll : Expr := seqVoid [.assign y (fget cf),
     .assign st (.ite isC (.call c.resumeFn (.local y :: .local schS :: pass)) (.prim .userErr []))]
@@ -1076,9 +1105,10 @@ partial def suspendSelf (us : List Nat) (y : Nat) (c : Callee) (rs : List Expr) 
   let arriveV ← via (.ite isR (.call arriveFn ((List.range (n + 3)).map Expr.local)) (.prim .userErr []))
     (ty :: σs ++ [wide, .ref [env.schedTag] []]) wide
   let st ← freshT .int
-  let arrive : Expr := .ite (← seeking) vd (seqVoid [
-    fset cf (.call arriveV (.local y :: rs ++ [fget cf, .local schS])),
-    fset env.pcFld (int k)])
+  let number ← forwardTasks c cf wide
+  let arrive : Expr := .ite (← seeking) vd (seqVoid (
+    [fset cf (.call arriveV (.local y :: rs ++ [fget cf, .local schS]))] ++
+    number ++ [fset env.pcFld (int k)]))
   let poll : Expr := seqVoid [.assign w (fget cf),
     .assign st (.ite (.heap (.isTag [c.tag]) [.local w]) (.call resumeFn [.local w, .local schS]) (.prim .userErr []))]
   let pend : Expr := .ite (.prim .eq [.local st, int 0]) (← waitThen false (.seq spillMark (.ret (int 0)))) vd
@@ -1239,9 +1269,10 @@ partial def suspendSelfOpen (us : List Nat) (y : Nat) (c : Callee) (rs : List Ex
   let arriveV ← via (.ite isR (.call newCellFn ((List.range (n + 3)).map Expr.local)) (.prim .userErr []))
     (ty :: σs ++ [cellTy, schedTy]) wide
   let st ← freshT .int
-  let arrive : Expr := .ite (← seeking) vd (seqVoid [
-    fset cf (.call arriveV (.local y :: rs ++ [.local cs, .local schS])),
-    fset env.pcFld (int k)])
+  let number ← forwardTasks c cf wide
+  let arrive : Expr := .ite (← seeking) vd (seqVoid (
+    [fset cf (.call arriveV (.local y :: rs ++ [.local cs, .local schS]))] ++
+    number ++ [fset env.pcFld (int k)]))
   let poll : Expr := seqVoid [.assign w (fget cf),
     .assign st (.ite (.heap (.isTag [c.tag]) [.local w]) (.call resumeFn [.local w, .local schS]) (.prim .userErr []))]
   let pend : Expr := .ite (.prim .eq [.local st, int 0]) (← waitThen false (.seq spillMark (.ret (int 0)))) vd
@@ -1349,7 +1380,8 @@ partial def concAt (isSync : Bool) (arms : List Expr) (isRush : Bool := false) :
       let mut goOn : Array Expr := #[]
       for (((res, can, pcA, doneA), (i, startFn, stopFn, wrapTag, site, sk)), j) in (info.toList.zip rushW.toList).zipIdx do
         let y ← freshT (.ref [wrapTag, env.schedTag] [])
-        modify fun st => { st with kills := st.kills.push (childF site, wrapTag, stopFn, y, pcA, doneA, can, sk) }
+        let kill ← armKill (childF site) wrapTag stopFn y pcA doneA can sk
+        modify fun st => { st with kills := st.kills.push kill }
         -- (the branches and `rush` arms this arm starts are stopped with it)
         let (lo, hi) := ranges.getD j (0, 0)
         modify fun st => ownKills st lo hi (st.kills.size - 1)
@@ -1594,6 +1626,8 @@ structure Lowered where
   /-- `resume` and `cancel`. -/
   body : LFn
   cancel : LFn
+  /-- A sharing lift stops its background roots only at its source exit. -/
+  stopTasks : Option LFn := none
   /-- Each arm's resume and cancel (functions `fnBase + 2a`, `+ 1`). -/
   arms : List (LFn × LFn)
   /-- The frame's field types. -/
@@ -1614,7 +1648,7 @@ def lower (S : Sigs) (callee : Nat → Option Callee) (syncMark raceMark rushMar
     (arity : Nat) (Γ : List VTy) (ρ : VTy) (frameTy : VTy) (schedTag nilTag resCellTag : Nat) (fnBase : Nat) (b : Expr)
     (leafF leafDepthF : Nat := 0) (isRoot : Bool := false) (leafy : Bool := false)
     (resumeAnyFn leafMin : Nat := 0) (armTopTy : VTy := .opt .void)
-    (shared : List FrameRefs.Slot := []) (copies : List FrameRefs.CopyOut := []) :
+    (shared : List FrameRefs.Slot := []) (copies : List FrameRefs.CopyOut := []) (shareTasks : Bool := false) :
     Except String Lowered := do
   let schedTy : VTy := .ref [schedTag] []
   let isM := fun f => f == syncMark || f == raceMark || f == rushMark
@@ -1642,7 +1676,6 @@ def lower (S : Sigs) (callee : Nat → Option Callee) (syncMark raceMark rushMar
   let base := slotBaseOf sites armsTotal
   -- stopping the branches: each wrapper marked done (through a test of its
   -- class), each arm still pending cancelled and marked dead
-  let args : List Expr := [fr, .local schS] ++ (List.range arity).map fun i => .local (i + 2)
   -- (last started first, by their start numbers, each cleared once it is
   -- stopped, #187: a loop picking the highest, in two transient slots)
   let bestS := st.Γ.size
@@ -1652,26 +1685,19 @@ def lower (S : Sigs) (callee : Nat → Option Callee) (syncMark raceMark rushMar
   -- they were)
   let st := if entries.isEmpty then st else
     { st with Γ := st.Γ ++ #[VTy.int, VTy.int], trans := st.trans ++ #[true, true] }
-  let pick : List Expr := [.assign bestS (int 0), .assign whichS (int (-1))] ++ entries.map fun ((_, _, _, _, _, _, _, sk), j) =>
-    .ite (.prim .lt [.local bestS, .local sk]) (.seq (seqVoid [.assign bestS (.local sk), .assign whichS (int (j : Nat))]) vd) vd
-  let stopOne : List Expr := entries.map fun ((wf, wrapTag, stopFn, y, pcA, doneA, can, sk), j) =>
-    .ite (.prim .eq [.local whichS, int (j : Nat)]) (.seq (seqVoid [.assign y (fget wf),
-      .ite (.heap (.isTag [wrapTag]) [.local y]) (.call stopFn [.local y, .local schS]) vd,
-      .ite (allOf [.prim .ne [fget pcA, int 0], .prim .eq [fget doneA, int 0]])
-        (.seq (seqVoid [.call can args, fset doneA (int 2)]) vd) vd,
-      .assign sk (int 0)]) vd) vd
+  let pick : List Expr := [.assign bestS (int 0), .assign whichS (int (-1))] ++ entries.map fun (k, j) =>
+    .ite (.prim .lt [.local bestS, .local k.order])
+      (.seq (seqVoid [.assign bestS (.local k.order), .assign whichS (int j)]) vd) vd
+  let stopBody (j : Nat) : Expr :=
+    let k := st.kills[j]!
+    seqVoid (k.stop ++ [.assign k.order (int 0)])
+  let stopOne : List Expr := entries.map fun (_, j) =>
+    .ite (.prim .eq [.local whichS, int j]) (.seq (stopBody j) vd) vd
   -- (#254: each stopped with what its own code started, which goes first,
   -- also last started first, so that each unwinds whole; the function's
   -- own last started first among them. Only where some are nested, so that
   -- the other functions' code stays as it was)
   let ownerOf (i : Nat) : Option Nat := (st.killOwner.find? (·.1 == i)).map (·.2)
-  let stopBody (j : Nat) : Expr :=
-    let (wf, wrapTag, stopFn, y, pcA, doneA, can, sk) := st.kills[j]!
-    seqVoid [.assign y (fget wf),
-      .ite (.heap (.isTag [wrapTag]) [.local y]) (.call stopFn [.local y, .local schS]) vd,
-      .ite (allOf [.prim .ne [fget pcA, int 0], .prim .eq [fget doneA, int 0]])
-        (.seq (seqVoid [.call can args, fset doneA (int 2)]) vd) vd,
-      .assign sk (int 0)]
   -- (a loop that picks the last started among `ids`, stops it and what it
   -- started, until none is left; one `else` chain, as the slots are shared)
   let rec loopOver (fuel : Nat) (ids : List Nat) : Expr :=
@@ -1679,7 +1705,7 @@ def lower (S : Sigs) (callee : Nat → Option Callee) (syncMark raceMark rushMar
     | 0 => vd
     | fuel + 1 =>
       let pickAmong : List Expr := [.assign bestS (int 0), .assign whichS (int (-1))] ++ ids.map fun j =>
-        let sk := (st.kills[j]!).2.2.2.2.2.2.2
+        let sk := st.kills[j]!.order
         .ite (.prim .lt [.local bestS, .local sk]) (.seq (seqVoid [.assign bestS (.local sk), .assign whichS (int j)]) vd) vd
       let dispatch : Expr := ids.foldr (fun j acc =>
         let kids := (List.range st.kills.size).filter (ownerOf · == some j)
@@ -1700,18 +1726,21 @@ def lower (S : Sigs) (callee : Nat → Option Callee) (syncMark raceMark rushMar
   -- (the refined tests on slots that become frame fields go through helpers
   -- of their own, after the refined suspending calls', #179)
   let prep (e : Expr) : StateM (Array (Expr × List VTy × VTy)) Expr :=
-    let e := fill vd vd kill e
+    let e := fill vd vd (if shareTasks then vd else kill) e
     fixRefined S st.Γ ρ (residentIn e) (env.viaBase + st.vias.size) none e
   -- (the arms' fields come after the slots, #362)
   let armBase := slotBaseOf sites armsTotal + (st.Γ.size - 2)
   let res := if leafy then fillArmTops armBase res else res
   let can := if leafy then fillArmTops armBase can else can
   let st := if leafy then { st with arms := st.arms.map fun (r, c) => (fillArmTops armBase r, fillArmTops armBase c) } else st
-  let ((res, can, arms), more) := (do
+  let ((res, can, arms, stop), more) := (do
       let r ← prep res
       let c ← prep can
       let as ← st.arms.toList.mapM fun (r, c) => do return (← prep r, ← prep c)
-      return (r, c, as) : StateM _ _).run #[]
+      let stop ← if shareTasks then
+          some <$> fixRefined S st.Γ .void (residentIn kill) (env.viaBase + st.vias.size) (some .void) kill
+        else pure none
+      return (r, c, as, stop) : StateM _ _).run #[]
   let finish (e : Expr) : LFn :=
     let resident := residentIn e
     let e := toFields (fun j => if resident j then some (base + (j - 2)) else none) e
@@ -1719,6 +1748,7 @@ def lower (S : Sigs) (callee : Nat → Option Callee) (syncMark raceMark rushMar
     let ren (j : Nat) : Nat := if j < 2 + arity then j else 2 + arity + ((used.idxOf? j).getD 0)
     { body := renumber ren e, slots := st.Γ.toList.take (2 + arity) ++ used.map fun j => (st.Γ[j]?).getD .int }
   return { body := finish res, cancel := finish can, arms := arms.map fun (r, c) => (finish r, finish c),
+           stopTasks := stop.map finish,
            branchArms := st.branchArms.toList, vias := st.vias.toList ++ more.toList,
            fields := [.int, ρ] ++ st.children.toList ++ List.replicate (2 * armsTotal) .int ++
              (st.Γ.toList.drop 2) ++ (if leafy then List.replicate armsTotal armTopTy else []) }

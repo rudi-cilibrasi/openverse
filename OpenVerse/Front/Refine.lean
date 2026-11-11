@@ -73,6 +73,8 @@ structure Lift where
       function may need `<suspends>` for the dispatch even when it never waits. -/
   waits : Bool := false
   storage : List (String × Storage) := []
+  /-- Source repetition context, preserved when the lift becomes a function. -/
+  inRepeat : Bool := false
   deriving Inhabited
 
 def keyOf (p : Pos) (bound : String) (tag : String := "") : String := s!"{p.file}:{p.line}:{p.col}:{bound}{tag}"

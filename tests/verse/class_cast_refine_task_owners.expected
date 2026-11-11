@@ -1,0 +1,55 @@
+after cast defer 7
+after cast 7
+after child woke 11
+after child defer 11
+after wait 11
+after source defer 11
+after cast 0
+after wait 0
+after source defer 0
+no-wait child
+no-wait child defer
+no-wait cast defer
+no-wait source
+no-wait source
+else typed
+else source
+else branch
+else source
+nested no-wait child
+nested no-wait source
+order cast defer 0
+order source end
+order source defer 8
+order after 8
+order last 8
+order rush 8
+order first 8
+order before 8
+cancel winner
+cancel cast defer 7
+cancel source defer 8
+cancel child 8
+cancel before 8
+return cast defer 8
+return source defer 9
+return child 9
+return operand 7
+nested task changed both frames
+nested source 9
+tree source defer
+tree after
+tree child
+tree parent
+ordinary return
+ordinary child cleanup
+after ordinary call
+reuse 1
+reuse 2
+opened child woke
+opened child defer
+opened source 4 opened
+opened source cancelled
+opened child cancelled
+opened cancelled value 8 cancelled
+exit=0

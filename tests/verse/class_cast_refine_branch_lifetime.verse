@@ -1,4 +1,3 @@
-# expect: it cannot contain branch because its tasks belong to the enclosing function
 pair(t:type, u:type) := class:
     A:t
     B:u
