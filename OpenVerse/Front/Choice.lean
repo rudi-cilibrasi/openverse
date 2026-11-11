@@ -1039,7 +1039,9 @@ def prepare (cs : List SExpr) (isVal : String → Bool := fun _ => false)
   -- branches to lift than the elaborator takes, #283, the choice of those,
   -- each guarded by its branch; not for an `F$all`'s, `gensOf`, whose `if`
   -- gives its branch's array, `arrOfE`)
-  if keepExcl then ps.flatMap bifToExcl else if !guardBranches then ps else ps.flatMap fun c => match c with
+  if keepExcl then ps.flatMap (fun c =>
+    if (binding? c).any (fun b => b.branchy.any keepBranches) then [c] else bifToExcl c)
+  else if !guardBranches then ps else ps.flatMap fun c => match c with
     | .decl _ _ _ false (.app _ (.ident _ b) is false) =>
       if (b == "$branchChoice" || b == "$branchChoiceAt") &&
           is.getLast?.any (fun i => !keepBranches i && liftsAsIf i && !plainBranches hasLiftable i) then

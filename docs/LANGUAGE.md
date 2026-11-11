@@ -762,6 +762,14 @@ Main():void =
   as the same function written with a `return` does (#314). When that
   branch is a choice, the choice is a generator, which keeps it.
 
+  A class cast in the condition can refine its selected branch's type
+  arguments (#243), including written types that use that refinement. In a `for`,
+  this currently requires a non-suspending consumer whose body is outside
+  a failure context and has no non-local exit or non-rollback operation.
+  Its suffix must also permit a shared continuation; lazy calls remain
+  unsupported. Other contexts remain tracked in #417. Failure of the selected branch's
+  alternatives does not select the `else` branch.
+
   A choice inside a block is lifted with the block's clauses (#283): they
   become the failure context's, in order, so what they do is undone or kept
   as its own clauses' effects are, and the block's last expression is the value. The
