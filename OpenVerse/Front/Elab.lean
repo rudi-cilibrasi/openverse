@@ -4786,7 +4786,11 @@ partial def elabStmt (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM (R × Ctx) 
         let implementations := ((ctx.types.concreteBelow c).map (ctx.implFor? · root method)).eraseDups
         let [some fname] := implementations
           | eerr p s!"cannot infer the type parameters of {method} from the arguments of this call"
-        let cls := (fname.splitOn ".").head!
+        let some member := ctx.sig? fname | eerr p "internal: missing method declaration"
+        -- Interface defaults may have been copied onto a concrete class
+        -- after method extraction. Their generated function belongs to the
+        -- original interface, whose parameters its receiver still supplies.
+        let cls := member.scope.getD (fname.splitOn ".").head!
         if !ctx.types.isSub c cls then
           eerr p s!"cannot infer the type parameters of {method} from the arguments of this call"
         -- The member's checking stub has erased defaults. The generated

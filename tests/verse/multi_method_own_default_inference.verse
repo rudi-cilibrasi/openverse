@@ -26,7 +26,13 @@ factory := class:
 kennel := class(factory):
     Make<override>(?X:u=DefaultString() where u:type)<transacts>:dog(u) =
         dog(u){Data:=X,Code:=1}|dog(u){Data:=X,Code:=2}
+iroot(a:type) := interface:
+    Implied(?X:t=DefaultInt() where t:type)<transacts>:t = X|X
+iextra(b:type,c:type) := interface(iroot(b)):
+    Implied<override>(?X:u=DefaultString() where u:type)<transacts>:u = X|X
+holder(x:type,y:type) := class(iextra(x,y)) {}
 All(C:leaf(z) where z:type):[]tuple(z,string,int) = for(V:=C.Pick()): V
+IfaceAll(H:holder(z,w) where z:type,w:type):[]string = for(V:=H.Implied()): V
 Main():void =
     C:=leaf(int){Value:=5}
     for(V:All(C)): Print("all {V(0)} {V(1)} {V(2)}")
@@ -35,3 +41,4 @@ Main():void =
     Print("count {C.Count}")
     for(V:=C.Discard()): Print("discard {V}")
     for(D:=kennel{}.Make()): Print("dog {D.Data} {D.Code}")
+    for(V:IfaceAll(holder(int,string){})): Print("interface {V}")

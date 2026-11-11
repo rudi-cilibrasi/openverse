@@ -10,4 +10,7 @@ discard 4
 child default
 dog s 1
 dog s 2
+child default
+interface s
+interface s
 exit=0
