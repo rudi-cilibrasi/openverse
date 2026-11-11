@@ -1,0 +1,5 @@
+body 4 5 5
+body 5 5 10
+source 10 2
+observe 10
+exit=0

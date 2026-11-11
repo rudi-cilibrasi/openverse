@@ -786,8 +786,10 @@ Main():void =
 
   A class cast in the condition can refine its selected branch's type
   arguments (#243), including written types that use that refinement. In a `for`,
-  this currently requires a non-suspending consumer whose body has no
-  non-rollback operation. A body may fail: this stops
+  the shared consumer's body must have no suspension or non-rollback
+  operation. It may run inside a `<suspends>` function, with waits before
+  and after the consumer; immediate bodies still run between its filters.
+  A body may fail: this stops
   the whole `for` and retains that iteration's effects, just as in an
   ordinary `for`. An enclosing failure context can still undo them.
   A `return` in the body leaves the source function, stopping later
@@ -798,7 +800,8 @@ Main():void =
   mutually recursive producers. These keep their own rollback boundaries;
   ordinary body cleanup also runs when that iteration finishes.
   Its suffix must also permit a shared continuation, including lazy calls.
-  Other contexts remain tracked in #417. Failure of the selected branch's
+  Actual waiting bodies and source returns from these shared consumers in
+  suspending functions remain tracked in #417. Failure of the selected branch's
   alternatives does not select the `else` branch.
 
   A choice inside a block is lifted with the block's clauses (#283): they

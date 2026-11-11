@@ -1,0 +1,6 @@
+body 4 4 0 3 8
+body 4 5 0 3 17
+body 5 4 0 3 26
+body 5 5 0 3 36
+source 36 4
+exit=0

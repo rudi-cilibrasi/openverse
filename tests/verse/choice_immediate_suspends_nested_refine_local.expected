@@ -1,0 +1,7 @@
+body 8 4
+body 9 9
+body 9 13
+body 10 18
+source 18 4
+observe 18
+exit=0

@@ -1,0 +1,9 @@
+before 5
+body 4 4 13
+body 4 5 22
+body 5 4 31
+body 5 5 41
+source 41 4
+observe 41
+end 41
+exit=0

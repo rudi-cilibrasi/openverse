@@ -1,0 +1,33 @@
+prefix 1
+selected
+b
+body 5 16
+prefix 2
+selected
+b
+body 5 33
+state 33 2
+state 0 0
+empty 21 0
+empty 3 0
+no fallback 1 0
+fallback
+value 99
+no fallback 0 1
+scalar 0 0 0
+scalar 3 0 4
+cleanup
+kept 5
+cleaned 1
+cleaned 0
+typed 1
+typed 2
+typed s
+independent 27 4
+independent 9 2
+independent 9 2
+independent 0 1
+nested 4
+nested 5
+nested 0
+exit=0

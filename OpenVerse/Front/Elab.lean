@@ -351,6 +351,9 @@ structure Ctx where
       other classes' copies, at the same place in the source but at other
       types. -/
   liftTag : String := ""
+  /-- A moved continuation's casts have fresh capture/storage metadata,
+      independently of the class-copy tag and continuation sharing keys. -/
+  refineScope : String := ""
   /-- In a method `c.M` (or `c.(r:)M`): `M` (or `(r:)M`), for `(super:)`. -/
   selfMethod : Option String := none
   /-- In a constructor's items (the function `K$init`, #72): no `return`. -/
@@ -1925,7 +1928,7 @@ def firstLiftOf (ctx c2 : Ctx) (p : Pos) (g : String) (lp : List SExpr) (b : Str
       pure (STop.fn p (nameOf h) (hparams ++ capPs ++ typeParams) tps specs ret
         (pruneConstructHints ctx (nameOf h) body))
     | _ => throw "internal: a $member (#283)"
-  return { key, pos := p, name, inlineScopes := ctx.inlineScopes,
+  return { key, pos := p, name, inlineScopes := ctx.inlineScopes, liftTag := ctx.liftTag,
            params := params ++ typeParams, tparams := tps, specs, ret,
            body := pruneConstructHints ctx name
              (Choice.firstBody name p b bty cls tail rest binds setsT capArgs (some vty.toSTy) nameOf recArgs),
@@ -2006,7 +2009,8 @@ def contLiftOf (ctx c2 : Ctx) (p : Pos) (b : String) (alts rest : List SExpr)
     caps.map fun l => { name := if sets.any (·.name == l.name) then s!"{l.name}$in" else l.name, ty := l.ty.toSTy }
   -- (`$firstP`: the clauses are lifted already, the consumer's, which lifting
   -- again would bind twice, as for #275's functions)
-  return { key, pos := p, name, inlineScopes := ctx.inlineScopes, params := params ++ typeParams, tparams := tps,
+  return { key, pos := p, name, inlineScopes := ctx.inlineScopes, liftTag := ctx.liftTag,
+           params := params ++ typeParams, tparams := tps,
            specs := (if heap.isEmpty then ["computes"] else heap) ++ ["decides"],
            ret := .tup (bls.map (·.ty.toSTy) ++ sets.map (·.ty.toSTy) ++ [.name "logic"]),
            body := pruneConstructHints ctx name
@@ -2045,7 +2049,8 @@ partial def forwardForBreaks (abort escaped : Nat) : Expr → Expr
 
 /-- Whether a `for` body can move into a continuation. Source returns
     need an explicit outcome; breaks must stay inside the body's loops.
-    Suspension and non-rollback operations remain excluded. -/
+    The enclosing function may suspend; the moved code must remain
+    immediate. Discovery also checks typed calls and pending cast lifts. -/
 def forBodySafe (ctx : Ctx) (body : SExpr) : Bool :=
   let returns := forReturnBody? body
   -- Prepared consumers keep lazy producer templates (including groups and
@@ -2054,7 +2059,7 @@ def forBodySafe (ctx : Ctx) (body : SExpr) : Bool :=
   let safeMarkers := ["$methodMiss", "$methodCast", "$methodCase", "$methodType", "$inlineScope", "$inlineScopeEnd", "$inline", "$choice", "$excl", "$alt", "$firstP", "$first", "$each", "$noLift", "$fxOf",
     "$forReturns", "$forReturnBody", "$defer", "$loop", "$rec", "$recTo", "$group", "$member",
     "$tparams", "$params", "$defaults", "$paramDefault", "$freeNames", "$declNames", "$callArgs"]
-  !ctx.suspends && !(Refine.findPart (fun | .brk _ => true | _ => false) true body).isSome &&
+  !(Refine.findPart (fun | .brk _ => true | _ => false) true body).isSome &&
     !(Choice.anyE (fun
     | .ret .. => !returns
     | .app _ (.ident _ f) _ _ =>
@@ -2062,6 +2067,14 @@ def forBodySafe (ctx : Ctx) (body : SExpr) : Bool :=
         ((ctx.sig? f).map fun s => s.suspends || s.fx.contains "no_rollback").getD false
     | .app _ (.member _ _ m) _ _ => ["Signal", "Await", "Cancel", "Subscribe"].contains m
     | _ => false) body)
+
+/-- A shared for continuation runs inside a filter, so cannot suspend.
+    Method/function-value calls need their typed signatures; a cast still
+    being discovered can hide its suspension behind a placeholder. -/
+def forContWaits (ctx : Ctx) (before after : ESt) (code : List Expr) : Bool :=
+  ctx.suspends && (before.pendingSuspendingCasts != after.pendingSuspendingCasts ||
+    before.pendingWaitingCasts != after.pendingWaitingCasts ||
+    code.any (Suspend.hasSusp fun f => ctx.sigs.any fun s => s.idx == f && s.suspends))
 
 /-- (#335, phase 2) The continuation of a composed choice in a `for`: a
     function that runs the clauses after it (`rest`) and the body, failing
@@ -2109,7 +2122,8 @@ def contForLiftOf (ctx : Ctx) (p : Pos) (b : String) (bty vty : Ty) (alts rest :
   let ret : STy := if sets.isEmpty then valueTy else .tup (valueTy :: sets.map (·.ty.toSTy))
   let bodyE : SExpr := if sets.isEmpty then .block p (copies ++ [ffirst]) else
     .block p (copies ++ [.decl p vals none false ffirst, .tuple p (.ident p vals :: sets.map fun l => SExpr.ident p l.name)])
-  return { key, pos := p, name, inlineScopes := ctx.inlineScopes, params := params ++ typeParams, tparams := tps,
+  return { key, pos := p, name, inlineScopes := ctx.inlineScopes, liftTag := ctx.liftTag,
+           params := params ++ typeParams, tparams := tps,
            specs := (if heap.isEmpty then ["computes"] else heap) ++ ["decides"],
            ret, body := pruneConstructHints ctx name bodyE, binds := [], sets := sets.map (·.name),
            args := SExpr.ident p b :: caps.map (fun l => SExpr.ident p l.name) ++ typeArgs }
@@ -2246,18 +2260,24 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
               -- Elaborate the suffix once, in its source context. Otherwise
               -- an inner lift can retain an outer var's old name after the
               -- enclosing lift has renamed it for mutable copy-out.
+              let st0 ← get
               let slot ← fresh ty
               let cB := { cA with locals := { name := b.name, slot, ty, mutable := false } :: cA.locals }
               let values ← elabForWith elabAlts elabBranchAlts elabE elabInts elabLoopGen elabSeq
                 cB p restCl bd (prepared := true) (firstDecides := true)
                   (failure := if bodyFail then some (.app p (.ident p "Err") [] false) else none)
               let .arr t := values.ty | eerr b.pos "internal: a refining for's suffix"
-              match contForLiftOf cA b.pos b.name ty t [i] restCl bd bodyFail with
-              | .ok lift =>
-                modify fun st => { st with loopFirst := st.loopFirst ++
-                  [{ g := "", pos := b.pos, itemCode := .lit .void, argSet := none, lift := .ok lift }] }
-                return (codeA, .prim .userErr [], t)
-              | .error why => eerr b.pos s!"cannot share the refining for's suffix: {why} (#417)"
+              if forContWaits cA st0 (← get) [values.e] then set st0 else
+                match contForLiftOf cA b.pos b.name ty t [i] restCl bd bodyFail with
+                | .ok lift =>
+                  -- This body moves to an immediate helper. Its trial's
+                  -- source-frame locals/cast requests do not exist in the
+                  -- final suspending caller; discover them in the helper.
+                  if cA.suspends then set st0
+                  modify fun st => { st with loopFirst := st.loopFirst ++
+                    [{ g := "", pos := b.pos, itemCode := .lit .void, argSet := none, lift := .ok lift }] }
+                  return (codeA, .prim .userErr [], t)
+                | .error why => eerr b.pos s!"cannot share the refining for's suffix: {why} (#417)"
             if let some l := req.filter fits then
               let kv := s!"$refineFor{b.pos.line}_{b.pos.col}{b.name}v"
               let kt := kv ++ "t"
@@ -2366,12 +2386,15 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
               if (contForLiftOf cA gp x bty .void altsS restCl bd bodyFail).toOption.isSome then
                 let st0 ← get
                 let (f0, a0, t0) ← runPath (liftP gs0 r0 0 ++ restCl) bd false
-                match contForLiftOf cA gp x bty t0 altsS restCl bd bodyFail with
-                | .ok lift =>
-                  let use : LoopUse := { g := "", pos := gp, itemCode := .lit .void, argSet := none, lift := .ok lift }
-                  modify fun st => { st with loopFirst := st.loopFirst ++ [use] }
-                  return (Expr.seq codeA f0, a0, t0)
-                | .error _ => set st0
+                if forContWaits cA st0 (← get) [f0, a0] then set st0 else
+                  match contForLiftOf cA gp x bty t0 altsS restCl bd bodyFail with
+                  | .ok lift =>
+                    if cA.suspends then set st0
+                    let use : LoopUse := { g := "", pos := gp, itemCode := .lit .void, argSet := none, lift := .ok lift }
+                    modify fun st => { st with loopFirst := st.loopFirst ++ [use] }
+                    if cA.suspends then return (codeA, .prim .userErr [], t0)
+                    return (Expr.seq codeA f0, a0, t0)
+                  | .error _ => set st0
             pure (alts.zipIdx.map fun ((gs, r), i) => (liftP gs r i ++ restCl, bd, false))
         let mut filts : Array Expr := #[]
         let mut arrs : Array Expr := #[]
@@ -2470,15 +2493,18 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
                 | none => false
               if same && known then
                 let r0 ← forW (liftA a0 0 ++ restCl) bd
-                match (do
-                    let some bty := tys.head? | throw "no type"
-                    let .arr vty := r0.ty | throw "no values"
-                    contForLiftOf c gp b.name bty vty b.alts restCl bd bodyFail) with
-                | .ok lift =>
-                  let use : LoopUse := { g := "", pos := gp, itemCode := .lit .void, argSet := none, lift := .ok lift }
-                  modify fun st => { st with loopFirst := st.loopFirst ++ [use] }
-                  return r0
-                | .error _ => set st0
+                if forContWaits c st0 (← get) [r0.e] then set st0 else
+                  match (do
+                      let some bty := tys.head? | throw "no type"
+                      let .arr vty := r0.ty | throw "no values"
+                      contForLiftOf c gp b.name bty vty b.alts restCl bd bodyFail) with
+                  | .ok lift =>
+                    if c.suspends then set st0
+                    let use : LoopUse := { g := "", pos := gp, itemCode := .lit .void, argSet := none, lift := .ok lift }
+                    modify fun st => { st with loopFirst := st.loopFirst ++ [use] }
+                    if c.suspends then return ⟨.prim .userErr [], r0.ty⟩
+                    return r0
+                  | .error _ => set st0
               else set st0
           let mut parts : List R := []
           for (a, i) in b.alts.zipIdx do
@@ -3413,8 +3439,9 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
   let elseOf : EM R := match elseE with
     | none => pure ⟨.lit .void, .void⟩
     | some ee => elabE ctx ee exp
-  let key := Refine.keyOf p D ctx.liftTag
-  let liftName := s!"$refine{p.line}_{p.col}_{D}" ++ (if p.file.isEmpty then "" else s!"_{p.file}") ++ ctx.liftTag
+  let tag := ctx.refineScope ++ ctx.liftTag
+  let key := Refine.keyOf p D tag
+  let liftName := s!"$refine{p.line}_{p.col}_{D}" ++ (if p.file.isEmpty then "" else s!"_{p.file}") ++ tag
   -- Keep a suspending lift's available parameters in a stable order from
   -- discovery onward: locals it declares may themselves be borrowed by a
   -- nested lift, whose frame reference needs exactly this argument order.
@@ -3501,7 +3528,7 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
     let specs := (if heap.isEmpty then ["computes"] else heap) ++ (if decides then ["decides"] else []) ++
       (if suspendsB then ["suspends"] else [])
     let lift : Refine.Lift := {
-      pos := p, bound := D, target := T, tag := ctx.liftTag,
+      pos := p, bound := D, target := T, tag, continuationScope := ctx.refineScope,
       name := liftName,
       params := ((D, dTy) :: sig).map (fun (n, t) => { name := n, ty := t.toSTy }) ++
         extra.map fun (n, _) => { name := s!"$type{n}", ty := .name n },
@@ -3513,7 +3540,7 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
       -- (made: a branch the elaborator made, for a cast with clauses
       -- after it, #286, which the source does not have as such)
       -- (and a tagged one, which the source's places do not find, #53)
-      body := if ctx.selfClass.isSome || made || D.startsWith "$" || !ctx.liftTag.isEmpty then some (pruneConstructHints ctxB liftName
+      body := if ctx.selfClass.isSome || made || D.startsWith "$" || !tag.isEmpty then some (pruneConstructHints ctxB liftName
         (pruneConstructHints { ctxB with frameName := ctx.frameName } liftName body)) else none }
     modify fun st => if st.castNeeds.any (·.key == key) then st else { st with castNeeds := st.castNeeds ++ [lift] }
     if suspendsB then
@@ -4427,7 +4454,7 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
             let st0 ← get
             let re ← elabE ctx ee none
             set st0
-            match ctx.types.castRequests.find? (·.key == Refine.keyOf p d ctx.liftTag) with
+            match ctx.types.castRequests.find? (·.key == Refine.keyOf p d (ctx.refineScope ++ ctx.liftTag)) with
             | some l => attempt (match l.ret with | .name "logic" => .void | _ => re.ty)
             | none =>
               if re.ty == .void then attempt .void
@@ -6753,7 +6780,11 @@ partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
             (choiceValues ctx) (choiceField ctx) (site := t) (fieldOrder := choiceOrder ctx)
             (keepBranches := choiceHasCast ctx)
           let tail := match request with
-            | some l => [SExpr.app p (.ident p l.name) l.args true]
+            | some l =>
+              -- The continuation is part of the search, before firstP
+              -- commits this value. Failure must retry the next alternative.
+              let result := t ++ "$continuation"
+              [.decl p result none false (.app p (.ident p l.name) l.args true), .ident p result]
             | none => rest ++ [tup]
           .optionLit p (.app p (.ident p "$firstP") [.block p (clauses ++ tail)] false)
         let selected := Choice.consumeBranches i t consume
@@ -10617,6 +10648,8 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       pure ({ name := prm.name, slot := i, ty := t, mutable := false, storage } : Local)
     for (prm, i) in ps.zip (List.range ps.length) do
       if ps.take i |>.any (·.name == prm.name) then throw s!"{p.show}: duplicate parameter '{prm.name}'"
+    let loopLift := opts.loopRequests.find? fun l => l.name == name || l.extraFns.any
+      (fun | .fn _ n .. => n == name | _ => false)
     let ctx : Ctx := { sigs := allSigs, sigProg, locals := locals.reverse, types := env, fnFx := allowed,
                        canFail := decides, retTy := ret, dictBase := ps.length, suspends,
                        frameName := name, frameArgs := tps.map fun (v, c) => Ty.param v c,
@@ -10630,9 +10663,11 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
                        selfClass := scopeClass.orElse fun _ => match name.splitOn "." with
                          | [c, _] => some c
                          | _ => none
-                       liftTag := if scopeClass.isSome then s!"$in{selfCls}" else liftTagOf name,
-                       inlineScopes := ((opts.loopRequests.find? fun l => l.name == name || l.extraFns.any
-                         (fun | .fn _ n .. => n == name | _ => false)).map (·.inlineScopes)).getD
+                       liftTag := if scopeClass.isSome then s!"$in{selfCls}" else
+                         (loopLift.map (·.liftTag)).getD (liftTagOf name),
+                       refineScope := (lifted.map (·.continuationScope)).getD
+                         (if loopLift.isSome then s!"$contScope{name.hash}" else ""),
+                       inlineScopes := (loopLift.map (·.inlineScopes)).getD
                            (((opts.castRequests.find? (·.name == name)).map (·.inlineScopes)).getD [])
                        selfMethod := match name.splitOn "." with
                          | [_, m] => some m

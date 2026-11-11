@@ -1762,6 +1762,13 @@ initializations separate from live ancestor writes. Only marked synthetic
 copy-ins inherit storage, and only recorded saved-result copy-outs are
 omitted. User copies and return operands stay independent.
 
+An immediate choice continuation in a suspending caller keeps value copies
+and normal copy-out. Admission checks its typed calls and pending refining
+lifts for suspension. Its discovery trial is disposable: the moved body
+discovers locals and nested lifts in the helper, whose refinement scope
+keeps their storage metadata distinct from the original source frame.
+The class-copy tag and continuation-sharing keys remain separate.
+
 Refining lifts that start `branch` or `rush` roots, directly or through
 another lift, share their source function's task scope (#419). Finishing
 or cancelling the helper runs its lexical cleanup while leaving those
