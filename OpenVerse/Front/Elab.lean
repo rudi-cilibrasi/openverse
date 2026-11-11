@@ -1628,6 +1628,24 @@ partial def selfQualify (ctx : Ctx) (c : String) (e : SExpr) : SExpr :=
     | .ident p n => if free n && (isField n || isMethod n) then some (.member p (.ident p "Self") n) else none
     | _ => none) e
 
+/-- A continuation keeps the parameters of its inputs, results and written
+    types. A parameter not determined by its inputs takes an explicit witness,
+    so a type used only by a local annotation is still inferred at the call. -/
+def contTypes (ctx : Ctx) (p : Pos) (inputs outputs : List Ty) (written : SExpr) :
+    Except String (List TParam × List SParam × List SExpr) := do
+  let inputTps := inputs.flatMap Ty.paramsC
+  let writtenTys := ctx.types.tvars.filterMap fun (n, t) =>
+    if writesTps [n] written then some t else none
+  let tps := (inputTps ++ (outputs ++ writtenTys).flatMap Ty.paramsC).foldl
+    (fun acc (n, cmp) => if acc.any (·.1 == n) then acc else acc ++ [(n, cmp)]) []
+  let extra := tps.filter fun (n, _) => !inputTps.any (·.1 == n)
+  let available := (ctx.types.tvars.map (·.2)).flatMap Ty.paramsC
+  if extra.any (fun (n, _) => !available.any (·.1 == n)) then
+    throw "a continuation type parameter has no witness in this context"
+  return (tps.map (fun (n, cmp) => { pos := p, name := n, constraint := if cmp then "comparable" else "type" }),
+    extra.map (fun (n, _) => { name := s!"$type{n}", ty := .name n }),
+    extra.map (fun (n, _) => .app p (.ident p "$witness") [.ident p n] false))
+
 /-- (#246) The function of its own a lazily taken call where the first
     success is taken is compiled as, when what it runs once for all the
     values of an item has effects (`Choice.FirstLift`): from the call
@@ -1641,10 +1659,11 @@ def firstLiftOf (ctx c2 : Ctx) (p : Pos) (g : String) (lp : List SExpr) (b : Str
   if ctx.inCtor || ctx.inParamDefault || ctx.inBlock || ctx.inDefer || !ctx.defaults.isEmpty then
     throw "in a constructor, a default or a defer"
   let key := firstKey ctx p lp b bty rest
-  -- (an inlined generic one's type parameters, #235: at the types the
-  -- call's `$params` gave, as the function of its own has no names for them)
-  let σt : List (String × STy) := ctx.types.tvars.filterMap fun (n, t) =>
-    if n.startsWith "$tp" then some (n, t.toSTy) else none
+  let written := SExpr.block p (lp ++ rest)
+  -- Written types use the context's current instances, including inlined
+  -- producer parameters and aliases from an enclosing refining cast.
+  let σt := ctx.types.tvars.map fun (n, t) => (n, t.toSTy)
+  let bty := bty.map (·.substNames σt)
   let cls := cls.map (Refine.substTypes σt)
   let tail := Refine.substTypes σt tail
   let rest := rest.map (Refine.substTypes σt)
@@ -1678,9 +1697,12 @@ def firstLiftOf (ctx c2 : Ctx) (p : Pos) (g : String) (lp : List SExpr) (b : Str
   let bls ← binds.mapM fun n => match c2.lookup n with
     | some l => pure l
     | none => throw s!"internal: name {n}"
-  if (pls ++ caps ++ bls).any (fun l => !(Ty.paramsC l.ty).isEmpty) then throw "in a generic function"
+  let (tps, typeParams, typeArgs) ← contTypes ctx p ((pls ++ caps).map (·.ty))
+    (vty :: bls.map (·.ty)) written
   let name := s!"$first{p.line}_{p.col}_{key.hash}" ++ (if p.file.isEmpty then "" else s!"_{p.file}")
-  let capArgs := caps.map fun l => SExpr.ident p l.name
+  -- Every recursive edge, including a mutual member's, forwards the same
+  -- witnesses; a type used only by the suffix has no producer argument.
+  let capArgs := caps.map (fun l => SExpr.ident p l.name) ++ typeParams.map (fun sp => .ident p sp.name)
   -- (#283) a function of a strongly connected group: the others' too, one
   -- function each, named after this one's
   let (tail, members) : SExpr × List SExpr := match tail with
@@ -1704,31 +1726,13 @@ def firstLiftOf (ctx c2 : Ctx) (p : Pos) (g : String) (lp : List SExpr) (b : Str
       let hparams : List SParam ← (hps.zip sig.params).mapM fun
         | (.ident _ n, t) => pure { name := n, ty := t.toSTy }
         | _ => throw "internal: a $member parameter (#283)"
-      pure (STop.fn p (nameOf h) (hparams ++ capPs) [] specs ret
+      pure (STop.fn p (nameOf h) (hparams ++ capPs ++ typeParams) tps specs ret
         (Choice.firstBody (nameOf h) p b bty hcls htail rest binds setsT capArgs (some vty.toSTy) nameOf))
     | _ => throw "internal: a $member (#283)"
-  return { key, pos := p, name, params, specs, ret,
+  return { key, pos := p, name, params := params ++ typeParams, tparams := tps, specs, ret,
            body := Choice.firstBody name p b bty cls tail rest binds setsT capArgs (some vty.toSTy) nameOf,
-           binds, sets := sets.map (·.name), args := pnames.map (SExpr.ident p ·) ++ capArgs,
+           binds, sets := sets.map (·.name), args := pnames.map (SExpr.ident p ·) ++ caps.map (fun l => .ident p l.name) ++ typeArgs,
            varBinds := (bls.filter (·.mutable)).map (·.name), extraFns }
-
-/-- A continuation keeps the parameters of its inputs, results and written
-    types. A parameter not determined by its inputs takes an explicit witness,
-    so a type used only by a local annotation is still inferred at the call. -/
-def contTypes (ctx : Ctx) (p : Pos) (inputs outputs : List Ty) (written : SExpr) :
-    Except String (List TParam × List SParam × List SExpr) := do
-  let inputTps := inputs.flatMap Ty.paramsC
-  let writtenTys := ctx.types.tvars.filterMap fun (n, t) =>
-    if writesTps [n] written then some t else none
-  let tps := (inputTps ++ (outputs ++ writtenTys).flatMap Ty.paramsC).foldl
-    (fun acc (n, cmp) => if acc.any (·.1 == n) then acc else acc ++ [(n, cmp)]) []
-  let extra := tps.filter fun (n, _) => !inputTps.any (·.1 == n)
-  let available := (ctx.types.tvars.map (·.2)).flatMap Ty.paramsC
-  if extra.any (fun (n, _) => !available.any (·.1 == n)) then
-    throw "a continuation type parameter has no witness in this context"
-  return (tps.map (fun (n, cmp) => { pos := p, name := n, constraint := if cmp then "comparable" else "type" }),
-    extra.map (fun (n, _) => { name := s!"$type{n}", ty := .name n }),
-    extra.map (fun (n, _) => .app p (.ident p "$witness") [.ident p n] false))
 
 /-- (#335) The key of a continuation: where the composed choice is, its
     binding, and the consumer's names the clauses after it use (in a method,

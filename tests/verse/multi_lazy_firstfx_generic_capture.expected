@@ -1,0 +1,51 @@
+nat 0 1
+nat 1 2
+nat 2 3
+try 2 2 1
+found 2 2 1
+state 2 1 3
+result b
+cell b 1
+none 0 1
+state 0 1 3
+rejected
+cell b 1
+nat 0 4
+nat 1 5
+try 1 1 1
+found 1 1 1
+state 1 1 5
+result 9
+cell 9 1
+walk 0 6
+first
+walk 0 7
+4
+nat 0 8
+nat 1 9
+nat 2 10
+nat 0 11
+nat 1 12
+nat 2 13
+witness 2 2
+even 3 14
+odd 2 16
+even 1 17
+odd 0 19
+even 3 20
+odd 2 22
+even 1 23
+odd 0 25
+group witness 0 0
+even 3 26
+odd 2 28
+even 1 29
+odd 0 31
+new
+even 3 32
+odd 2 34
+even 1 35
+odd 0 37
+20
+visits 37
+exit=0

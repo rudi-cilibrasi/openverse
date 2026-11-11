@@ -963,9 +963,9 @@ Main():void =
     arguments do with all the values that call leads to, when the context
     rejects them all (a tree walk that prints keeps only the path to the
     value taken). When those have effects, the call and the clauses after
-    it run as a function of their own, recursive (also in a method, taking
-    `Self`; not yet where those clauses call `(super:)` or use `Self` of a
-    generic class).
+    it run as a function of their own, recursive. This includes generic
+    functions and methods, with generic values, written types and `Self`.
+    Calls of `(super:)` in those clauses remain unsupported.
 
   ```verse
   Upto(A:int, B:int)<transacts><decides>:int =
@@ -1002,8 +1002,7 @@ Main():void =
   conditions or arguments have effects where the first success is taken
   and the clauses after it call `(super:)` or have a `return` or a `break`
   that leaves them (which would leave the function they run in), in a constructor, a parameter's
-  or field's default or a `defer:`, or where the names the clauses after it
-  use have type parameters (`Self` of a generic class among them), an
+  or field's default or a `defer:`, an
   overloaded one with an overload that calls the function's own name
   (a generic one's type arguments are inferred from the
   arguments where it is inlined, as at a call, named ones too), a recursive

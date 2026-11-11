@@ -524,11 +524,15 @@ the consumer's names those clauses use (the `var`s they set copied in,
 and given back in the tuple); the consumer calls it and binds the names
 from the tuple. In a method, the members of `Self` that those clauses
 name bare are made `Self.member` (`selfQualify`, as for #243's branches),
-and `Self`, a parameter of the method, is passed as any name. It is not yet
-done where they call `(super:)`, in a constructor or a default, or where
-the names passed have type parameters (`Self` of a generic class, a generic
-function's types).
-It is keyed by the call's place, its binding and the names it passes, as a
+and `Self`, a parameter of the method, is passed as any name. The helper
+retains the type parameters of its inputs, results and written types as a
+continuation does (`contTypes`). Types absent from its inputs take explicit
+witness parameters, forwarded on every recursive edge and between mutual
+members. Written annotations use the owning context's type aliases,
+including refinements from enclosing casts. It is not yet done where the
+clauses call `(super:)`, in a constructor or a default.
+It is keyed by the complete prepared producer and suffix, typed mutable
+inputs, written type instances and interface-copy context (`firstKey`), as a
 call in a function inlined at several sites is at one place. Being
 recursive, it reaches the recursion limit in a deep search: about 400,000
 levels in Lean, a few million in C.

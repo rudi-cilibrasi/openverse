@@ -1,0 +1,11 @@
+echo 0
+cast search 0
+cast search 1
+cast search 2
+refined 1
+echo 0
+cast search 0
+cast search 1
+cast search 2
+refined a
+exit=0

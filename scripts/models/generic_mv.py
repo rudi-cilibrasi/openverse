@@ -28,8 +28,8 @@ The model:
   * composed and conditional choices in a generic for preserve mutable
     state across generator boundaries; written-only result types retain
     their type arguments even when no captured value determines them;
-  * an effectful generator where the first success is taken inside a generic
-    consumer is refused (exit 4).
+  * effectful first-success helpers retain generic values and captures, with
+    explicit witnesses for types used only by the suffix's written types.
 """
 import random, sys, os
 
@@ -578,13 +578,6 @@ class Gen:
         self.main.extend(pre)
         call = p.call(args)
         if form == "not" and ty.name == "tup": form = "for"
-        fxlazy = (p.fx and p.path == "lazy") or (p.kind == "ILz" and p.helper.fx)
-        if form in ("gif", "gopt") and fxlazy:
-            if R.random() < 0.85:
-                form = "gfor"   # (mostly avoid a known refusal that discards the program)
-            else:
-                recursive = p.helper if p.kind == "ILz" else p
-                self.refusals.add("not supported in a generic function yet: call %s in a for" % recursive.name)
         if st in ("cat", "dog") and form != "decides":
             # (a call types as a plain generic call: t from the first
             # argument, which a sibling class's object does not convert to)
@@ -756,6 +749,71 @@ class Gen:
         for _ in range(R.randint(3, 7)):
             self.stmt()
         self.for_continuations()
+        self.first_searches()
+
+    def first_searches(self):
+        # A separate stream covers nested effectful generic helpers and
+        # mutable copy-out. Rejected inner searches roll back as a whole;
+        # outer producer prefixes survive until the entire search fails.
+        rng = random.Random(self.seed * 1000003 + 24603)
+        meter, count, walk, search, witness = [self.fresh(n) for n in
+                                             ('SearchMeter', 'SearchCount', 'SearchWalk', 'SearchGeneric', 'SearchWitness')]
+        limit = rng.randint(0, 4)
+        self.consumers.append(f'''{meter} := class:
+    var N:int = 0
+{count}(H:{meter}, I:int)<transacts><decides>:int =
+    I <= {limit}
+    set H.N += 1
+    Print("search outer {{I}} {{H.N}}")
+    I | {count}[H, I + 1]
+{walk}(H:{meter}, A:[]t, I:int where t:type)<transacts><decides>:t =
+    I < A.Length
+    set H.N += 1
+    Print("search inner {{I}} {{H.N}}")
+    A[I] | {walk}[H, A, I + 1]
+{search}(X:t, Y:t, H:{meter}, Cut:int where t:type)<transacts>:?t =
+    var Current:t = X
+    var Total:int = 0
+    Result := if (I := {count}[H, 0], J := {walk}[H, array{{Y, Current}}, 0],
+        set Total += I, set Current = J, Print("search try {{I}} {{Total}}"), I >= Cut):
+        option{{Current}}
+    else:
+        false
+    Print("search state {{Total}} {{H.N}}")
+    Result
+{witness}(Unused:t, H:{meter}, Cut:int where t:type)<transacts>:int =
+    if (I := {count}[H, 0], block{{ E:[]t = array{{}}; E.Length = 0 }}, I >= Cut) then I else -1''')
+        h = self.fresh('SearchHeap')
+        self.main.append(f'{h} := {meter}{{}}')
+        visits = 0
+        for literal, other, value in [('1', '2', '2'), ('"old"', '"new"', 'new')]:
+            cut = rng.randint(-1, limit + 2)
+            result = self.fresh('SearchResult')
+            self.main.append(f'if ({result} := {search}({literal}, {other}, {h}, {cut})?) then Print("search value {{{result}}}") else Print("search none")')
+            selected = max(0, cut)
+            if selected <= limit:
+                for i in range(selected + 1):
+                    visits += 1
+                    self.m.out.append(f'search outer {i} {visits}')
+                visits += 1
+                self.m.out.append(f'search inner 0 {visits}')
+                self.m.out.append(f'search try {selected} {selected}')
+                self.m.out.append(f'search state {selected} {visits}')
+                self.m.out.append(f'search value {value}')
+            else:
+                # The enclosing query also rolls back the wrapper's state
+                # print when it returns an empty option.
+                self.m.out.append('search none')
+            cut = rng.randint(-1, limit + 2)
+            self.main.append(f'Print("search witness {{{witness}({literal}, {h}, {cut})}}")')
+            selected = max(0, cut)
+            if selected <= limit:
+                for i in range(selected + 1):
+                    visits += 1
+                    self.m.out.append(f'search outer {i} {visits}')
+            self.m.out.append(f'search witness {selected if selected <= limit else -1}')
+        self.main.append(f'Print("search visits {{{h}.N}}")')
+        self.m.out.append(f'search visits {visits}')
 
     def for_continuations(self):
         # Keep the seed's earlier producers and consumers unchanged. Scalar B
