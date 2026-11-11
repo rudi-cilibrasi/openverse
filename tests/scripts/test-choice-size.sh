@@ -96,6 +96,10 @@ kinds=(
   method-instance-for
   method-tuple-first
   method-tuple-for
+  method-variance-first
+  method-variance-for
+  method-variance-pack-first
+  method-variance-pack-for
   mutual-generic-alt-first
   mutual-generic-first
   mutual-generic-for
@@ -244,6 +248,27 @@ Apply(F:type{_(:t)<computes>:t},X:t where t:type)<computes>:t=F(X)''')
         receiver = f'{"H.Apply" if dispatch else "Apply"}(({receiver}).Same,box{{}})'
     prefix = '    H:=holder{}\n' if dispatch else ''
     print(f'Main():void=\n{prefix}    F:type{{_(:int)<computes>:int}}=({receiver}).Same\n    Print("{{F(7)}}")')
+    sys.exit(0)
+if kind.startswith('method-variance-'):
+    pack = '-pack-' in kind
+    sig = 'X:rational,Y:rational' if pack else 'X:rational'
+    result = 'Floor(X)+Floor(Y)' if pack else 'Floor(X)'
+    print(f'''box(t:type):=class:
+    V:t
+    Pair({sig})<computes>:tuple(t,int)=(V,{result})''')
+    params = ','.join(f'B{i}:box(t{i})' for i in range(count))
+    tparams = ','.join(f't{i}:type' for i in range(count))
+    fparam = ':tuple(int,int)' if pack else ':int'
+    binds = '\n'.join(f'    F{i}:type{{_({fparam})<computes>:tuple(t{i},rational)}}=B{i}.Pair' for i in range(count))
+    arg = '(3,4)' if pack else '7'
+    clauses = ','.join(f'A{i}:=F{i}({arg})|F{i}({arg})' for i in range(count))
+    if kind.endswith('first'):
+        body = f'    if({clauses},E:[]t0=Concatenate())then E.Length else -1'
+    else:
+        body = f'    R:=for({clauses},E:[]t0=Concatenate()):Floor(A0(1))\n    R.Length'
+    print(f'Run({params} where {tparams})<computes>:int=\n{binds}\n{body}')
+    args = ','.join('box(int){V:=7}' if i%2==0 else 'box(string){V:="s"}' for i in range(count))
+    print(f'Main():void=Print("{{Run({args})}}")')
     sys.exit(0)
 if kind.startswith('context-method-'):
     print('''box(h:type):=class:

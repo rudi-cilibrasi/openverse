@@ -1,0 +1,9 @@
+begin 1 3
+end 1
+cleanup 1
+done value 1
+begin 2 4
+cancel
+cleanup 2
+finished 2
+exit=0

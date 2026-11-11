@@ -402,6 +402,7 @@ structure ESt where
   /-- Functions wanted as values at closed function types no class of
       theirs gives (#214). -/
   fnNeeds : List (String × Ty) := []
+  methodNeeds : List FnValues.MethodRequest := []
   /-- Where the function calls `Err()` first, if it does: a function whose
       values are all computed at a call (#235) may reach none. -/
   errAt : Option Pos := none
@@ -1148,6 +1149,67 @@ def coerce (p : Pos) (r : R) (target : Ty) : EM Expr := do
           if (litValue? r.e).isSome then eerr p s!"{showLit r.e} is not {withArticle n}: it does not meet its conditions"
           eerr p s!"{withArticle base.show} is {withArticle n} only after a cast: write {n}[X], which fails when X is not one"
     eerr p s!"expected {target.show}, found {r.ty.show}"
+
+/-- Build a variance adapter only when the ordinary parameter/result
+    conversions succeed. Its private parameters preserve the caller's bounds
+    without retaining caller names or borrowing its witness slots. -/
+def methodVarianceRequest (ctx : Ctx) (p : Pos) (owner method : String)
+    (receiver own target : Ty) : EM (Option (FnValues.MethodRequest × List Ty)) := do
+  let .struct on ots := own | return none
+  let .struct tn tts := target | return none
+  let some (n, oe) := FnValues.parseName on | return none
+  let some (k, te) := FnValues.parseName tn | return none
+  if ots.length != n + 1 || tts.length != k + 1 ||
+      !(FnValues.shapeOf k oe).within (FnValues.shapeOf k te) then return none
+  -- Exact signatures and ordinary effect subtyping keep their existing
+  -- adapter, including receiver bounds supplied by a GADT view.
+  if n == k && ots == tts then return none
+  let ps := ots.take n
+  let qs := tts.take k
+  let r := (ots.drop n).headD .void
+  let u := (tts.drop k).headD .void
+  let xs := (List.range k).map fun i => SExpr.ident p s!"$X{i}"
+  let tuple? : Ty → Option (List Ty)
+    | .void => some []
+    | .tup ts => some ts
+    | _ => none
+  let mut choices : List (String × List Ty × List Ty × List SExpr) := []
+  if n == k then choices := [("direct", ps, qs, xs)]
+  if let [q] := qs then
+    if let some es := tuple? q then
+      if es.length == n then
+        choices := choices ++ [("pack", ps, es, (List.range n).map fun i =>
+          .app p (.ident p "$X0") [.int p (i : Int)] false)]
+  if let [pt] := ps then
+    if let some es := tuple? pt then
+      if es.length == k then choices := choices ++ [("unpack", es, qs, [.tuple p xs])]
+  if n == 1 && k != 1 then
+    choices := choices ++ [("tuple", ps, [.tup qs], [.tuple p xs])]
+  let saved ← get
+  let fits (a b : Ty) : Bool :=
+    match (do
+      let slot ← fresh a
+      discard <| coerce p ⟨.local slot, a⟩ b).run { saved with env := ctx.types } with
+    | .ok _ => true
+    | .error _ => false
+  if !fits r u then return none
+  for (kind, ps, qs, args) in choices do
+    if !(qs.zip ps).all (fun (q, p) => fits q p) then continue
+    let vars := Ty.mergeParamBounds (receiver.paramsC ++ target.paramsC)
+    let names := vars.zipIdx.map fun ((n, _), i) => (n, STy.name s!"$methodVariance{i}")
+    let st := fun t : Ty => t.toSTy.substNames names
+    let receiver := st receiver
+    let params := (tts.take k).map st
+    let ret := st u
+    let bounds := vars.map (·.2)
+    let req : FnValues.MethodRequest := {
+      key := reprStr (owner, method, receiver, params, te, ret, bounds, kind),
+      pos := p, owner, method, receiver, params, effs := te, ret, args,
+      decides := oe.contains "decides",
+      tparams := vars.zipIdx.map fun ((_, cmp), i) => {
+        pos := p, name := s!"$methodVariance{i}", constraint := if cmp then "comparable" else "type" } }
+    return some (req, vars.map fun (n, cmp) => Ty.param n cmp)
+  return none
 
 /-- A type above both `a` and `b` (the expected one when it is, #32): two
     classes join at their nearest common supertype, and arrays, options,
@@ -3377,6 +3439,19 @@ partial def elabGenericCallWith (elabE : Ctx → SExpr → Option Ty → EM R) (
     (rhs, npos + (s.named.findIdx? (·.1 == n)).getD 0)
   let ptys := s.params.toArray
   let mut σ : List (String × Ty) := inst
+  -- Member dispatch has already saved the receiver in a typed local. Its
+  -- class arguments are fixed even when the expected result could infer a
+  -- wider type (or an argument is `false`); only method-local parameters
+  -- remain available for result-directed inference.
+  if s.pnames.head? == some "Self" || s.pnames.head? == some "$Self" then
+    if let (some (.struct owner patterns), some (.ident _ recv, _)) := (s.params.head?, given.head?) then
+      if let some binding := ctx.lookup recv then
+        if let .struct cls ts := binding.ty then
+          if ctx.types.isSub cls owner then
+            let fixed := (patterns.zip (ctx.types.upArgs cls ts owner)).filterMap fun
+              | (.param n _, t) => some (n, t)
+              | _ => none
+            σ := σ ++ fixed.filter (fun (n, _) => (σ.lookup n).isNone)
   if let some et := exp then
     if !(et == .void) then
       if let some σ' := s.ret.matchArg ctx.types σ et then σ := σ'
@@ -5095,7 +5170,7 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
   | .logicLit p e =>
     let e := (Choice.takeFirst? e (choiceOrder ctx)).getD e
     let r ← elabE { ctx with canFail := true, inTaking := true } e none
-    if !(r.e.mayFail ctx.sigProg) && (← get).fnNeeds.isEmpty && !ctx.typeOnly then eerr p "logic{…} needs an expression that can fail"
+    if !(r.e.mayFail ctx.sigProg) && (← get).fnNeeds.isEmpty && (← get).methodNeeds.isEmpty && !ctx.typeOnly then eerr p "logic{…} needs an expression that can fail"
     return ⟨Expr.logicE r.e, .logic⟩
   | e@(.ite _ [.decl _ _ none false (.app _ (.ident _ "$methodCast") _ false)] _ (some _)) =>
     elabE ctx (pruneMethodCases ctx e) exp
@@ -5241,7 +5316,7 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
       else elabSeq { ctx with canFail := true, inTaking := true } conds none
     -- (not while a function value is asked for, #214, #231: a call through
     -- it may fail once its class is made, in the elaboration that follows)
-    if !(rc.e.mayFail ctx.sigProg) && (← get).fnNeeds.isEmpty && !ctx.typeOnly then
+    if !(rc.e.mayFail ctx.sigProg) && (← get).fnNeeds.isEmpty && (← get).methodNeeds.isEmpty && !ctx.typeOnly then
       eerr p "the condition of this if cannot fail (Verse requires a failable condition)"
     let thenCtx := { ctxT with canFail := ctx.canFail, inTaking := ctx.inTaking }
     match elseE with
@@ -5760,7 +5835,8 @@ partial def elabSpawn (ctx : Ctx) (p : Pos) (body : SExpr) : EM R := do
   if ctx.inDefer then eerr p "spawn in a defer is not supported (#156)"
   if ctx.canFail && !ctx.inDefaultCheck then
     eerr p "spawn cannot be in a failure context (a condition, a filter, or a <decides> call's arguments) (#156)"
-  let some mark := ctx.sig? "$spawnMark" | eerr p "internal error: no spawn helper"
+  let some mark := ctx.sig? "$spawnMark"
+    | eerr p "spawn{…} takes a call of a <suspends> function (#156)"
   let call := match body with
     | .block _ [e] => e
     | e => e
@@ -5787,6 +5863,30 @@ partial def elabSpawn (ctx : Ctx) (p : Pos) (body : SExpr) : EM R := do
           let r ← elabApp { cctx with defers := [], suspends := true, canFail := false } q
             (.member mp (.ident mp name) ("$spawnMethod:" ++ m0)) args br none
           return ⟨.seq (.assign slot rx.e) r.e, r.ty⟩
+      set saved
+  -- Function values use their interface's spawn dispatch, including fields
+  -- and returned values. That path remains typed when a requested adapter
+  -- has not been generated yet. Save the value once before its arguments.
+  if let .app q f args br := call then
+    let value := match f with
+      | .ident _ n => (ctx.lookup n).isSome
+      | _ => true
+    if value then
+      let saved ← get
+      let rx? ← tryCatch (some <$> elabE { ctx with defers := [], suspends := true, canFail := false } f none)
+        (fun _ => pure none)
+      if let some rx := rx? then
+        if let .struct shape _ := rx.ty then
+          if (FnValues.parseName shape).isSome then
+            let isS (f : Nat) := ctx.sigs.any fun s => s.idx == f && s.suspends
+            if Suspend.countSusp isS (fun _ => false) false (· == mark.idx) rx.e > 0 then
+              eerr p "the arguments of a spawned call cannot suspend (#156)"
+            let slot ← fresh rx.ty
+            let name := s!"$spawnValue{slot}"
+            let cctx := { ctx with locals := { name, slot, ty := rx.ty, mutable := false } :: ctx.locals }
+            let r ← elabApp { cctx with defers := [], suspends := true, canFail := false } q
+              (.member f.pos (.ident f.pos name) ("$spawnMethod:" ++ FnValues.callOf shape)) args br none
+            return ⟨.seq (.assign slot rx.e) r.e, r.ty⟩
       set saved
   -- (the call runs in the new task, which may wait, also when spawned from
   -- an immediate function; its arguments may not)
@@ -7350,7 +7450,7 @@ partial def elabBranchAlts (ctx : Ctx) (p : Pos) (i : SExpr) (sty : Option STy) 
             else elabSeq { ctx with canFail := true, inTaking := true } cs none
           pure (rc, cT, false)
       refined := refined || refines
-      if !(rc.e.mayFail ctx.sigProg) && (← get).fnNeeds.isEmpty && !ctx.typeOnly then
+      if !(rc.e.mayFail ctx.sigProg) && (← get).fnNeeds.isEmpty && (← get).methodNeeds.isEmpty && !ctx.typeOnly then
         eerr p "the condition of this if cannot fail (Verse requires a failable condition)"
       conds := conds.push (some rc.e)
       ctxs := ctxs.push { cT with canFail := ctx.canFail, inTaking := ctx.inTaking }
@@ -8259,6 +8359,24 @@ partial def elabMember (ctx : Ctx) (p : Pos) (r : R) (m : String) (exp : Option 
                     if !env.fnRequests.contains (key, t) && fnTyFits env (typeOf x0) t then
                       modify fun st => { st with fnNeeds := st.fnNeeds ++ [(key, t)] }
                       return ⟨.seq r.e (.prim .userErr []), t⟩
+          -- A generic receiver fixes its method's signature too. Requested
+          -- adapters retain its witnesses and ordinary call conversions.
+          if let some target@(.struct shape _) := exp then
+            if (FnValues.parseName shape).isSome then
+              for x in candidates do
+                if !(methodTps x).isEmpty then continue
+                let receiver := Ty.struct x (env.argsAt sn targs x)
+                let some (req, args) ← methodVarianceRequest ctx p x f receiver (typeOf x) target | continue
+                if let some i := env.methodRequests.findIdx? (·.key == req.key) then
+                  let cls := req.className i
+                  let tv ← fresh r.ty
+                  let nm := s!"$recv{tv}"
+                  let ctx' := { ctx with locals := { name := nm, slot := tv, ty := r.ty, mutable := false } :: ctx.locals }
+                  let rv ← elabConstruct ctx' p cls [] [.decl p "$self" none false (.ident p nm)]
+                    (some (.struct cls args))
+                  return ⟨.seq (.assign tv r.e) (← coerce p rv target), target⟩
+                modify fun st => { st with methodNeeds := FnValues.mergeMethodRequests st.methodNeeds [req] }
+                return ⟨.seq r.e (.prim .userErr []), target⟩
           let some x := (candidates.find? fun x => exp == some (typeOf x)).orElse fun _ => candidates.head?
             | eerr p s!"'{f}' is a method of {sn} that cannot be used as a value: call it with {f}(…) (a method with named parameters is not a value, #210)"
           let cls := s!"{x}${f}$fn"
@@ -8475,6 +8593,7 @@ structure Compiled where
   /-- Functions wanted as values at closed function types no class of
       theirs gives (#214): the program is elaborated again, with them. -/
   fnNeeds : List (String × Ty) := []
+  methodNeeds : List FnValues.MethodRequest := []
   /-- Branches of casts that refine type arguments, to lift (#243): the
       program is elaborated again, with them. -/
   castNeeds : List Refine.Lift := []
@@ -8517,6 +8636,7 @@ structure Options where
   /-- Functions wanted as values at closed function types no class of
       theirs gave in an earlier elaboration (#214): a class for each. -/
   fnRequests : List (String × Ty) := []
+  methodRequests : List FnValues.MethodRequest := []
   /-- On an internal error (an elaborated function the checker rejects),
       also print that function's Verse Core, its slot types and signature,
       for a bug report (`OPENVERSE_DEBUG=1`). -/
@@ -10472,7 +10592,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   -- for each function used as a value
   -- (the entry expression is scanned too)
   let allTops00 := copyIfaceDefaults (FnValues.desugar (resolved.take (resolved.length - rawEntry.length) ++ helpers)
-    (resolved.drop (resolved.length - rawEntry.length)) (opts.fnRequests.map fun (n, t) => (n, t.toSTy)))
+    (resolved.drop (resolved.length - rawEntry.length)) (opts.fnRequests.map fun (n, t) => (n, t.toSTy)) opts.methodRequests)
   let entryTop := resolved.drop (resolved.length - rawEntry.length)
   -- the command line: `Args`, and an entry expression
   let defines (n : String) := allTops00.any fun
@@ -11037,7 +11157,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
                              let i := henv.info d
                              if i.isIface || i.isAbstract then m else
                              (henv.supers d).foldl (fun m T => m.insert T ((m[T]?.getD []) ++ [d])) m) {},
-                           abstracts := abstracts.toList, fnRequests := opts.fnRequests,
+                           abstracts := abstracts.toList, fnRequests := opts.fnRequests, methodRequests := opts.methodRequests,
                            castRequests := opts.castRequests, loopRequests := opts.loopRequests }
   env := { env with varFields := varFields, uniques := uniques,
                     overriders := (overridePairs.toList.map fun (_, dm, _) => (dm.splitOn ".").headD "") ++
@@ -11692,6 +11812,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     | none => pure ()
   if let some msg := defaultClashes[0]? then throw msg
   let mut fieldDefaultNeeds : List Choice.FirstLift := []
+  let mut fieldMethodNeeds : List FnValues.MethodRequest := []
   -- check every field default once, with its struct's type parameters opaque
   -- (a default is elaborated again, at its field's type, at each construction
   -- that omits the field)
@@ -11709,6 +11830,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
           let ctx := { ctx with defaults := [(n, f)], types := { senv with tvars := hσ } }
           match (do coerce d.pos (← elabE ctx d (some ft)) ft : EM Expr).run { env } with
           | .ok (_, st) =>
+            fieldMethodNeeds := FnValues.mergeMethodRequests fieldMethodNeeds st.methodNeeds
             fieldDefaultNeeds := fieldDefaultNeeds ++ st.loopFirst.filterMap fun u => match u.lift with
               | .ok l => if l.key.startsWith "defaults:" then some l else none
               | _ => none
@@ -11741,7 +11863,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       (decides : Bool) (allowed : List String) (tps : List (String × Bool)) (body : SExpr)
       (suspends : Bool := false) (selfTps : List String := [])
       (selfFieldOf : Option (String → Option Nat) := none) (scopeClass : Option String := none) :
-      Except String (Fn × List VTy × List (String × Ty) × Option Pos × List Refine.Lift × List LoopUse × FrameRefs.Info × List String) := do
+      Except String (Fn × List VTy × List (String × Ty) × Option Pos × List Refine.Lift × List LoopUse × FrameRefs.Info × List String × List FnValues.MethodRequest) := do
     -- (#209) the values of `selfTps` come from the receiver's hidden
     -- fields, in slots after the hidden parameters: a method's own class's
     -- (`C.M`), or as `selfFieldOf` says (a cast's branch, #250, the cast
@@ -11795,7 +11917,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
               body := initPrefixE arity inits e },
       spawnParamTypes env name (st.slotTys.toList.map (Ty.toVTy env)), st.fnNeeds, st.errAt, st.castNeeds, st.loopFirst,
       { explicit := ps.length, copies := st.frameCopies, slots := st.frameSlots.map fun (i, s) =>
-          (i, { frame := s.frame, name := s.name, args := s.args.map (Ty.toVTy env) }) }, st.eagerNeeds)
+          (i, { frame := s.frame, name := s.name, args := s.args.map (Ty.toVTy env) }) }, st.eagerNeeds, st.methodNeeds)
   -- (the accessors come right after the functions, #157)
   env := { env with fieldAccBase := tops.length + gsigs.size }
   let genvOf (g : Sig) : TyEnv := { env with tvars := g.tparams.map fun (v, c) => (v, Ty.param v c) }
@@ -11803,6 +11925,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   let mut slotTys : Array (List VTy) := #[]
   let mut frameInfo : Array FrameRefs.Info := #[]
   let mut fnNeeds : List (String × Ty) := []
+  let mut methodNeeds : List FnValues.MethodRequest := fieldMethodNeeds
   -- (where each function calls `Err()`, by its index, #235)
   let mut errs : Array (Option Pos) := #[]
   let mut castNeeds : List Refine.Lift := []
@@ -11815,9 +11938,10 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     let sig := sigs[idx]!
     match top with
     | .fn p n ps _ _ _ body =>
-      let (fn, tys, needs, err, casts, lf, frames, eager) ← elabFn env p n ps sig.params sig.ret sig.decides sig.fx [] body sig.suspends
+      let (fn, tys, needs, err, casts, lf, frames, eager, methodUses) ← elabFn env p n ps sig.params sig.ret sig.decides sig.fx [] body sig.suspends
       eagerNeeds := eagerNeeds ++ eager
       fnNeeds := fnNeeds ++ needs
+      methodNeeds := FnValues.mergeMethodRequests methodNeeds methodUses
       castNeeds := castNeeds ++ casts
       loopFirst := loopFirst ++ lf
       fns := fns.push fn
@@ -11833,6 +11957,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       let (r, st) ← elabBodyOv ctx body (some sig.ret) { env }
       let (e, st) ← (coerce p r.1 sig.ret).run st
       fnNeeds := fnNeeds ++ st.fnNeeds
+      methodNeeds := FnValues.mergeMethodRequests methodNeeds st.methodNeeds
       castNeeds := castNeeds ++ st.castNeeds
       loopFirst := loopFirst ++ st.loopFirst
       eagerNeeds := eagerNeeds ++ st.eagerNeeds
@@ -11858,10 +11983,11 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       -- (a class's copy of an interface's default, #53, elaborated in the
       -- interface's scope)
       let scope := copyScope? effs
-      let (fn, tys, needs, err, casts, lf, frames, eager) ← elabFn (genvOf g) p n ps g.params g.ret g.decides g.fx g.tparams body g.suspends
+      let (fn, tys, needs, err, casts, lf, frames, eager, methodUses) ← elabFn (genvOf g) p n ps g.params g.ret g.decides g.fx g.tparams body g.suspends
         g.selfTps ((opts.castRequests.find? (·.name == n)).map fun l => fun v =>
           (l.opened.lookup v).bind (env.witnessField? l.target ·)) scope
       fnNeeds := fnNeeds ++ needs
+      methodNeeds := FnValues.mergeMethodRequests methodNeeds methodUses
       eagerNeeds := eagerNeeds ++ eager
       castNeeds := castNeeds ++ casts
       loopFirst := loopFirst ++ lf
@@ -11880,9 +12006,9 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   let defaults := loopFirst.filterMap fun u => match u.lift with
     | .ok l => if l.key.startsWith "defaults:" then some l else none
     | _ => none
-  if !fnNeeds.isEmpty || !castNeeds.isEmpty || !defaults.isEmpty then
+  if !fnNeeds.isEmpty || !methodNeeds.isEmpty || !castNeeds.isEmpty || !defaults.isEmpty then
     let casts := castNeeds.foldl (fun acc l => if acc.any (·.key == l.key) then acc else acc ++ [l]) []
-    return { prog := default, sigs := { fns := [] }, slotTys := [], fnNeeds := fnNeeds.eraseDups, castNeeds := casts, loopNeeds := defaults.foldl (fun acc l => if acc.any (·.key == l.key) then acc else acc ++ [l]) [] }
+    return { prog := default, sigs := { fns := [] }, slotTys := [], fnNeeds := fnNeeds.eraseDups, methodNeeds, castNeeds := casts, loopNeeds := defaults.foldl (fun acc l => if acc.any (·.key == l.key) then acc else acc ++ [l]) [] }
   let mainSig ← match sigs.toList.find? (·.name == (if opts.entry.isSome then "$Do" else "Main")) with
     | some s =>
       if s.isConst || !s.params.isEmpty then throw "Main must be a function with no parameters"
@@ -12030,7 +12156,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
         s!" (in {((P.fns[f]?).map Fn.name).getD "?"}){dump}"
       | none => if !checkPrelude P S then " (the prototypes)" else ""
     throw s!"internal error: the elaborated program does not pass Prog.checkTypes{which}"
-  return { prog := P, sigs := S, slotTys := slotTys.toList, fnNeeds := fnNeeds.eraseDups }
+  return { prog := P, sigs := S, slotTys := slotTys.toList, fnNeeds := fnNeeds.eraseDups, methodNeeds }
 
 /-- `F$ovN` (an overload, #74) shown as `F`: every `$ov` and the digits after it removed. -/
 def stripOv (msg0 : String) : String := Id.run do
@@ -12097,6 +12223,7 @@ def elabProgram (allTops00 : List STop) (opts : Options := {}) : Except String C
     -- helpers have participated in effect inference; their cached stage
     -- interfaces, prefixes and resume methods must agree on permissions.
     -- Each restart retains the new bridges, so discovery still progresses.
+    let methods := c.methodNeeds.filter fun r => !opts.methodRequests.any (·.key == r.key)
     let newDefaults := loops.filter fun l => defaultBridge l.name
     if !newDefaults.isEmpty then
       match fuel with
@@ -12104,8 +12231,16 @@ def elabProgram (allTops00 : List STop) (opts : Options := {}) : Except String C
         let bridges := opts.loopRequests.filter fun l => defaultBridge l.name || spawnAdapter l.name
         return ← go fuel { opts with
           fnRequests := (opts.fnRequests ++ c.fnNeeds).eraseDups,
+          methodRequests := FnValues.mergeMethodRequests opts.methodRequests methods,
           castRequests := [], loopRequests := bridges ++ newDefaults }
       | 0 => throw "internal error: default forwarding helpers still to infer after several elaborations"
+    if !methods.isEmpty then
+      match fuel with
+      | fuel + 1 => return ← go fuel { opts with
+          methodRequests := FnValues.mergeMethodRequests opts.methodRequests methods,
+          fnRequests := (opts.fnRequests ++ c.fnNeeds).eraseDups,
+          castRequests := opts.castRequests ++ casts, loopRequests := opts.loopRequests ++ loops }
+      | 0 => throw "internal error: method variance adapters still to infer after several elaborations"
     match fuel, c.fnNeeds.filter (!opts.fnRequests.contains ·) with
     | fuel + 1, new@(_ :: _) =>
       go fuel { opts with fnRequests := opts.fnRequests ++ new, castRequests := opts.castRequests ++ casts,

@@ -300,6 +300,28 @@ structure GenericAdapter where
   /-- A bare parameter replaced by tuple components, also in a receiver. -/
   subst : List (String × STy) := []
 
+/-- A requested method adapter whose receiver fixes the source signature.
+    Parameters are freshened before recording it, so requests are independent
+    of the caller's type-variable names. -/
+structure MethodRequest where
+  key : String
+  pos : Pos
+  owner : String
+  method : String
+  tparams : List TParam
+  receiver : STy
+  params : List STy
+  effs : List String
+  ret : STy
+  args : List SExpr
+  decides : Bool
+
+def MethodRequest.className (r : MethodRequest) (i : Nat) : String :=
+  s!"{r.owner}${r.method}$fnVariance{i}"
+
+def mergeMethodRequests (old new : List MethodRequest) : List MethodRequest :=
+  new.foldl (fun acc r => if acc.any (·.key == r.key) then acc else acc ++ [r]) old
+
 /-- Tuple calls at the arities present in the program. A bare parameter can
     become the tuple of the target arguments; its comparable bound then
     belongs to every component. Existing declared-shape instances come first. -/
@@ -339,7 +361,8 @@ def genericAdapters (p : Pos) (n : String) (ps : List STy) (tps : List TParam) (
     that name may be meant, and then the class is never used). Generic and
     overloaded functions, functions with named parameters and hidden ones
     get none (the elaborator explains why such a function is no value). -/
-def desugar (tops : List STop) (extra : List STop := []) (requests : List (String × STy) := []) :
+def desugar (tops : List STop) (extra : List STop := []) (requests : List (String × STy) := [])
+    (methodRequests : List MethodRequest := []) :
     List STop := Id.run do
   -- (each class's fields, its own and its parents', in its methods: a
   -- field of that name is meant there)
@@ -443,13 +466,16 @@ def desugar (tops : List STop) (extra : List STop := []) (requests : List (Strin
       up ++ up.flatMap (ancOf fuel)
     | _, _ => []
   let anc := ancOf (defs.length + 1)
-  if values.isEmpty && mvalues.isEmpty && gvalues.isEmpty && (scans.all fun (s, _) => s.isEmpty) then return tops
+  if values.isEmpty && mvalues.isEmpty && gvalues.isEmpty && methodRequests.isEmpty &&
+      (scans.all fun (s, _) => s.isEmpty) then return tops
   -- every shape written, and each value's own (a value's type when nothing
   -- else gives one)
   let mut shapes : List Shape := []
   for s in scans.flatMap (·.1) ++ values.map (fun (_, _, ps, effs, _) => shapeOf ps.length effs) ++
       gvalues.map (fun (_, _, ps, _, effs, _) => shapeOf ps.length effs) ++
-      mvalues.map (fun (_, _, _, _, _, ps, effs, _) => shapeOf ps.length effs) do
+      mvalues.map (fun (_, _, _, _, _, ps, effs, _) => shapeOf ps.length effs) ++
+      methodRequests.flatMap (fun r => shapeOf r.params.length r.effs ::
+        r.receiver.fnShapes ++ r.params.flatMap STy.fnShapes ++ r.ret.fnShapes) do
     if !shapes.contains s then shapes := shapes ++ [s]
   let arities := (shapes.map (·.arity)).eraseDups
   for (p, n, ps, tps, effs, r) in gvalues do
@@ -590,6 +616,15 @@ def desugar (tops : List STop) (extra : List STop := []) (requests : List (Strin
           out := out ++ [.classDef p s!"{c}${m}$fn${k}" [] [] (vfits.map fun s' => STy.app s'.name (qs ++ [u])) false
             [("$self", .name c, none, false)] [] vmethods]
           k := k + 1
+  for (r, i) in methodRequests.zipIdx do
+    let own := shapeOf r.params.length r.effs
+    let fits := own :: (shapes.filter fun s => s != own && own.within s)
+    let methods := fits.map fun s =>
+      STop.fn r.pos s.call (params r.params) [] (s.effs ++ ["override"]) r.ret
+        (.app r.pos (.member r.pos (.ident r.pos "$self") r.method) r.args r.decides)
+    out := out ++ [.classDef r.pos (r.className i) r.tparams []
+      (fits.map fun s => STy.app s.name (r.params ++ [r.ret])) false
+      [("$self", r.receiver, none, false)] [] methods]
   return tops ++ out
 
 end FnValues

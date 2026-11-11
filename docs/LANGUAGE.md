@@ -154,12 +154,12 @@ Main():void =
   is a value of it if it fits it by variance (#214): its parameters may be
   above the type's (`Describe(A:animal)` is a `type{_(:dog):string}`) and
   its result below (`Count():int` is a `type{_():rational}`), with `int`
-  below `rational` and a class below the classes above it. A method does
-  too (#231) when the class that gives the receiver's value of it (the
-  nearest that declares or overrides it) has no type parameters:
+  below `rational` and a class below the classes above it. A method whose
+  signature is fixed by its receiver does too (#209, #231), including a
+  generic receiver and an open expected type in generic code:
   `Obj.Describe` is a `type{_(:dog):string}`, holding `Obj`, evaluated when
-  the value is made. (A subclass `gsub(t) := class(base)` may have them;
-  `abox := class(box(animal))` using `box(t)`'s method may not.) And a
+  the value is made. The receiver's class arguments remain fixed; argument
+  and result conversions use the ordinary call rules. And a
   tuple flattens and unflattens between parameters there (#231):
   - a function with one `tuple(int, string)` parameter is a
     `type{_(:int, :string):int}` (the call makes the tuple);
@@ -200,6 +200,11 @@ Main():void =
   includes generic callers, interface views/defaults, overrides and
   suspending methods. The receiver is evaluated once when the value is
   created; later calls observe that receiver's current fields.
+  For example, `box(t).Pair(X:rational):tuple(t,int)` can be bound as a
+  `type{_(:int):tuple(t,rational)}`. The adapter retains the receiver's
+  parameters and bounds, converts the argument before the call and the
+  result after it. Tuple packing/expansion can be combined with these
+  conversions. Effects and failure/suspension requirements still apply.
 - A method with its own type parameters can be used at an expected function
   type that determines one instance and satisfies its bounds (#209). The
   receiver fixes the class arguments; the expected type fixes the method
@@ -211,6 +216,8 @@ Main():void =
   receiver runs once in written argument order, before later arguments and
   omitted defaults. Fields and ordinary method values can still determine
   the call's type arguments themselves.
+  Variance does not select an instance of independent method parameters;
+  their declared types must match the determining expected type.
   With no determining expected type, the method cannot be bound as a value.
 - Bound methods also pack and expand tuples at an expected function type,
   including open types in generic code (#209). For example, a method
