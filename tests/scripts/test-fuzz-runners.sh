@@ -4,9 +4,10 @@ set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
 fixture="$tmp/repo with spaces"
-mkdir -p "$fixture/scripts" "$fixture/.lake/build/bin" "$fixture/runtime/build"
+mkdir -p "$fixture/scripts/models" "$fixture/.lake/build/bin" "$fixture/runtime/build"
 cp "$root/scripts/fuzz-choice.sh" "$root/scripts/fuzz-floats.sh" "$root/scripts/fuzz-expected.sh" "$fixture/scripts/"
-for kind in classes conc conc-poly fields front; do cp "$root/scripts/fuzz-$kind.sh" "$fixture/scripts/"; done
+cp "$root/scripts/models/generic_mv.py" "$fixture/scripts/models/"
+for kind in classes conc conc-poly fields front model-generic; do cp "$root/scripts/fuzz-$kind.sh" "$fixture/scripts/"; done
 export FUZZ_TEST_CALLS="$tmp/lean.calls" FUZZ_TEST_C_CALLS="$tmp/c.calls"
 
 cat >"$fixture/scripts/gen-choice.py" <<'PY'
@@ -42,6 +43,9 @@ printf 'run\n' >>"$FUZZ_TEST_CALLS"
 [[ $1 == run && $3 == --emit ]]
 emit=1
 case $FUZZ_TEST_MODE in
+  generic-class) echo "$2:45:16: expected dog, found cat" >&2; exit 4 ;;
+  generic-effect) echo "$2:37:40: not supported in a generic function yet: call PLFx4 in a for" >&2; exit 4 ;;
+  generic-unrelated) echo "$2:45:16: expected an expression" >&2; exit 4 ;;
   no-bytecode) emit=0 ;;
   no-bytecode-second) if grep -qx 'seed 2' "$2"; then emit=0; fi ;;
 esac
@@ -64,6 +68,7 @@ die() { echo "test-fuzz-runners: $*" >&2; cat "$tmp/log" >&2; exit 1; }
 run_case() {
   local kind=$1 mode=$2 bad=$3 rc want=0
   local args=(3 1)
+  if [[ $kind == model-generic ]]; then args=(1 20768992); fi
   if [[ $# -eq 4 ]]; then args+=("$4"); fi
   rm -f "$FUZZ_TEST_CALLS" "$FUZZ_TEST_C_CALLS" "$fixture"/fuzz-*.verse
   export FUZZ_TEST_MODE=$mode
@@ -106,6 +111,12 @@ chmod +x "$tmp/bin/python3"
 PATH="$tmp/bin:$PATH" run_case front generator-error 1
 grep -q 'GENERATOR FAILED seed 1' "$tmp/log" || die 'front did not report the generator'
 [[ ! -f "$FUZZ_TEST_CALLS" && ! -f "$FUZZ_TEST_C_CALLS" ]] || die 'front ran an incomplete batch'
+# Seed 20768992 predicts both a type mismatch and an effectful generator refusal.
+run_case model-generic generic-class 0
+run_case model-generic generic-effect 0
+run_case model-generic generic-unrelated 1
+grep -q 'EXPECTED REFUSAL seed 20768992' "$tmp/log" || die 'model-generic accepted an unrelated diagnostic'
+[[ ! -f "$FUZZ_TEST_C_CALLS" ]] || die 'model-generic ran a refusal in C'
 for mode in lean-mismatch lean-error no-bytecode c-mismatch c-error; do
   run_case choice "$mode" 3
   [[ $(cat "$fixture/fuzz-choice-3.verse") == 'seed 3' ]] || die "$mode did not save its input"

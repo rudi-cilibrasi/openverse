@@ -1564,9 +1564,15 @@ heap effects (the function declares exactly those, plus `<decides>` if
 `Refine.functions` makes the function from the branch for the next
 elaboration, which compiles the `if` as the dispatch. The cast's target
 class then counts as one that fixes type arguments, so it and the
-classes below it get pins in Verse Core. A suspension in the branch or
-the `else` (the dispatch would have to carry it through the lowering of
-`<suspends>` code) is refused for now. A `set` of an outside `var`, a `return` in the branch, and a `break` that
+classes below it get pins in Verse Core. When the branch or the `else`
+suspends (in a `<suspends>` function), the branch's function is
+`<suspends>`, so the dispatch, `ite (isTag us) (call $refine… (D ::
+captures)) Else`, is the shape of a suspends method's call through
+`Typed.dispatch`, which the lowering finds (`Suspend.dispatchTargets`)
+and lowers as one (`suspendSelfGeneric`, `suspendSelfOpen` for opened
+type arguments); the call's value goes in a temporary at its type, and
+the defers active there around the dispatch (`withDeferMark`, passed into
+`elabRefinedIfWith`). A `set` of an outside `var`, a `return` in the branch, and a `break` that
 leaves it are rewritten first (`refineExits`): the branch declares a copy
 of each such `var` (`$exit…'N`) and uses it in its place, and every way it
 leaves becomes a value of one tuple: what it says (an option of the

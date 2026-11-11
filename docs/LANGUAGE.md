@@ -492,9 +492,14 @@ circle := class(shape, labelled):
   enclosing function's type parameters, that takes the object (as `D`) and
   the locals the branch uses, at their refined types; the `if` becomes a
   dispatch to it, which Verse Core types as it types a refined method call
-  (`Typed.dispatch`), so nothing is assumed in Verse Core. So that the
-  branch means the same there, in a `<suspends>` function neither it nor
-  the `else` can suspend, for now. A `var` from outside it that the branch
+  (`Typed.dispatch`), so nothing is assumed in Verse Core. In a
+  `<suspends>` function the branch and the `else` may suspend (#243): the
+  branch's function is then `<suspends>`, and the `if` a suspends call of
+  it, cancelled as any (its `defer:`s, then the caller's). The lifted branch
+  cannot contain `branch` or `rush` because their background tasks belong
+  to the enclosing source function. The branch cannot suspend while
+  capturing an outer `var` shared with an earlier background task or
+  setting one used by an enclosing `defer:`. A `var` from outside it that the branch
   sets is copied into the branch, which sets the copy, and is set from the
   copy after the `if` (#243), so it has the value the branch left it. A
   `return` in the branch, or a `break` that leaves it, makes its function
@@ -593,7 +598,7 @@ circle := class(shape, labelled):
     class(i1(int), i2(string))`), other than as a clause of an `if`'s
     condition (the first, or one after clauses that print, change an
     object and call nothing), whose branch is then a function of its own
-    as below (#243: it cannot suspend, and so on), or to one neither above
+    as described above (#243), or to one neither above
     nor below it, and a named argument's default computed by code (not a
     literal) in a call through one, or to a class that fixes type
     arguments from generic code, when it reads the receiver (its field),
@@ -605,7 +610,7 @@ circle := class(shape, labelled):
     first, or one after clauses that print nothing, change no object and
     call nothing, #243), whose
     branch has a `return` or a `break` that leaves it where the `if`'s value
-    is used at a type not known there, whose branch or `else` suspends, whose branch calls
+    is used at a type not known there, whose branch calls
     `(super:)` of an overloaded method, or in a `defer:`, a constructor's items, a class's `block:` clause, a default
     or a concurrent arm (#243); a variable, in generic code, of a class or
     interface type that requires an instance of itself (`Next:node(t)`)
@@ -735,7 +740,7 @@ Main():void =
     inside `not (…)` or on the left of `or`, which take its first success
     (#283): `(set A[5 | 1] = 8) or …` sets `A[1]`.
 
-  An `if … else if … else …` whose branches are choices, plain values,
+  An `if` chain whose branches are choices, plain values,
   expressions with choices or calls of functions with several values in
   them, or blocks with them (whose names are the branch's own, as any
   block's) may stand where a choice may (#235, #283). Its
@@ -746,6 +751,10 @@ Main():void =
   for (Z := if (V := M?) then (V | V * 10) else 0) { … }   # V, V * 10; or 0
   for (Z := if (V := M?) then Two(V) else Down(2)) { … }   # Two's values; or Down's
   ```
+
+  An `if` chain without a final `else` still has type `void`. Each value
+  of the selected branch gives one `void` result. If no condition
+  succeeds, the implicit branch gives one `void` result.
 
   The `if` itself adds no choice (#331): only the choices the program
   reaches are generators. In a `for`, when the branch it picks is a plain
@@ -786,9 +795,8 @@ Main():void =
   Refused for now: a choice inside a construction where a field it
   does not give, with a default that is more than a literal, comes before
   the choice (the default runs in its place); an
-  alternative of a `set`'s choice, either side of `and`, the right of `or`, a range,
-  or the branch of an `if` without
-  `else`, or a block with a range of its own as a branch; and
+  alternative of a `set`'s choice, either side of `and`, the right of `or`,
+  a range, or a block with a range of its own as a branch; and
   a choice anywhere outside these failure contexts. (A field reached
   through a receiver that is not a variable or `Self`, as `F().Items[…]`,
   is read after the choice, since only the receiver's value is bound
