@@ -288,7 +288,7 @@ A `for` compiles it this way wherever its clauses go:
 - in an alternative with several values of its own, which is a `for` of its own (#283), `keepExcl` is passed again;
 - after a generator taken lazily (#246), the paths go into the filter of the one-element iteration that binds each value.
 
-In a `for`, an `if` with choices in its branches (#235's `$branchChoice`) is such an exclusive choice too (#331, `Choice.bifToExcl` in `prepare` with `keepExcl`). Its condition becomes a selector, or an option of the names it binds, and its branches become the alternatives, so only the picked branch's own choice generates, as the owner decided on #331. With no type written, the `if` goes along as `$joinOf`, and `exclIter` binds the choice's name at the branches' join, which `elabBranchAlts` computes apart (that code is not kept), as the `if`'s value had it. An `else if` is the else branch's own `if`, converted in turn when its path is prepared. Its selector is named for its place, since it binds the same name. The names a condition binds are renamed for its branch (`$…'N`, shown as `N`), since the clauses after the `if` follow it in its path, where they are not in scope; `$declNames` keeps the no-shadowing check where the `if` is. For `set L = if …`, `$joinOf` carries `L`, at whose type the branches are taken, as `elabBranchAlts` takes them. The join is elaborated with `Ctx.typeOnly`, which uses no function of its own that an earlier round asked for (#275's `$first…`, #335's continuations): those are keyed by place, and there the path's clauses bind the renamed names.
+In a `for`, an `if` with choices in its branches (#235's `$branchChoice`) is such an exclusive choice too (#331, `Choice.bifToExcl` in `prepare` with `keepExcl`). Its condition becomes a selector, or an option of the names it binds, and its branches become the alternatives, so only the picked branch's own choice generates, as the owner decided on #331. With no type written, the `if` goes along as `$joinOf`, and `exclIter` binds the choice's name at the branches' join, which `elabBranchAlts` computes apart (that code is not kept), as the `if`'s value had it. An `else if` is the else branch's own `if`, converted in turn when its path is prepared. Its selector is named for its place and first condition binder, since generated cases can share a source position and result name. The names a condition binds are renamed for its branch (`$…'N`, shown as `N`), since the clauses after the `if` follow it in its path, where they are not in scope; `$declNames` keeps the no-shadowing check where the `if` is. For `set L = if …`, `$joinOf` carries `L`, at whose type the branches are taken, as `elabBranchAlts` takes them. The join is elaborated with `Ctx.typeOnly`, which uses no function of its own that an earlier round asked for (#275's `$first…`, #335's continuations): those are keyed by place, and there the path's clauses bind the renamed names.
 
 A refining cast's condition stays with its branch (`keepBranches`, #417).
 For a `for` whose body passes `forBodySafe`, `exclIter`
@@ -378,7 +378,7 @@ Elab's `selfQualify`, which needs only the class definitions), then `Self`
 renamed. A generic class's is generic over the class's type parameters,
 `C$M($Self:C(t…), params…)`, and its type arguments are inferred from the
 receiver where it is inlined, as for any generic function with several
-values (#282); not yet when a class overrides it. `R.M(args)` becomes `C$M(R, args)`, and in the bodies of `C` and
+values (#282). `R.M(args)` becomes `C$M(R, args)`, and in the bodies of `C` and
 the classes below it, `M(args)` becomes `C$M(Self, args)`. Without types, `R.M`
 must name that method whatever `R` is: the name must be declared by one
 class or interface and overridden only below it (a family, `MFam`); for
@@ -388,7 +388,37 @@ implementation, if any, is one more implementation, `I$M`, whose guard
 (`I[$r]`, which always holds) comes after those of the classes below it
 that have their own. `inlineMulti` runs before #53's `copyIfaceDefaults`,
 so it sees the interface's default as written.
-Each implementation becomes its own function `D$M`. A generic family (#283, `MFam.rootTps`): the dispatch's receiver takes its type from the call, the template's written types are left out (they name the root's type parameters), each cast `D[$r]` infers `D`'s type arguments from the receiver's, as a cast to a generic class does, and `root$M$fam` is generic too; so every implementing class must give the root its own type parameters, all of them (`rootView`), or the family is refused, since a cast to a class that fixes them may be impossible for the receiver's type, which no dispatch, made before types, can know. Return types are compared through each class's view of the root's type parameters. A call
+Each implementation becomes its own function `D$M`. A generic family's
+receiver and arguments are bound at the declaring class's parameter types
+using `$params` and `MFam.rootTps`. Return types are compared through each
+class's view of the root (`rootView`). Families whose classes give the root
+a permutation of their own parameters keep the exclusive-choice route below.
+When an override fixes, repeats or adds parameters, `MFam.cases` pairs each
+source class with its most specific implementation. Class implementations
+win before interface defaults. The dispatch tests those classes deepest
+first with native `if` casts, keeping each refinement/opened type with its
+implementation. This also supplies hidden arguments to an inherited
+interface default that a cast to the interface itself could not open.
+
+`$methodCast` marks a generated case: once its receiver prefix is typed,
+`pruneMethodCases` tests the possible classes and their views/pins against
+its current type arguments. An impossible body is discarded; its condition
+becomes a failing typed binding, retaining a unique case identity. Feasible
+cases use ordinary refining-cast consumers (#417). Distinct condition
+binders distinguish `bifToExcl` temporaries at the shared source position;
+first-success preparation also retains the inlined binding's site.
+`$methodMiss` means no selected implementation: inline consumers see failure,
+eager arrays see `array{}`, and the never-called checking body sees `Err()`.
+Thus an exhaustive abstract-family dispatch does not add an `Err` effect to
+pure recursive producers.
+
+The branch type probe validates each producer at the refined expected type,
+then restores its original expected type for the outer join. It uses `pure`
+inside the producer probe so an early `return` cannot skip that restoration.
+Refining-helper calls, like method dispatches, map opened witness types back
+to the caller's own types under the pins; compound root arguments can then
+reuse an existing caller witness.
+A call
 `R.M(args)` of an overridden one is a dispatch,
 `$dispatch(root$M, block{ $r : root := $arg; $a… := $arg; $kv := $excl(…) }, R, args…)`.
 `inlineCalls` makes it an inlined call, its names tagged for the site, so

@@ -28,6 +28,8 @@ The model:
   * composed and conditional choices in a generic for preserve mutable
     state across generator boundaries; written-only result types retain
     their type arguments even when no captured value determines them;
+  * overridden methods preserve those values through fixed/repeated/reordered
+    root arguments, compound arguments, opened parameters and interface defaults;
   * effectful first-success helpers retain generic values and captures, with
     explicit witnesses for types used only by the suffix's written types.
 """
@@ -40,6 +42,7 @@ R387 = None
 # (#392: a named parameter with a default; a generator of its own decides, so seeds keep their
 # other programs)
 R392 = None
+RMethod = None
 
 # ---------------------------------------------------------------- types
 CLASSES = ["cat", "dog", "animal"]
@@ -140,7 +143,7 @@ def plain(x):
 class Producer:
     """A generic function with several values. params: list of (name, kind)
     with kind 't', 'arr' ([]t) or 'int'. path: inlined/lazy/eager."""
-    def __init__(self, kind, name):
+    def __init__(self, kind, name, method_shape=None):
         self.kind, self.name = kind, name
         self.fx = False
         self.decides = False
@@ -173,14 +176,54 @@ class Producer:
             # (#365: a generic class's method with several values, reached through a wrapper
             # that builds the receiver at its own type parameter)
             self.path = "inlined"; self.params = [("X", "t"), ("Y", "t")]; self.fx = True
-            self.ovr = R387.random() < 0.5
+            self.ovr = method_shape is not None or R387.random() < 0.5
             if self.ovr:
-                # (#387: overridden in a generic subclass, which reaches it with (super:); the
-                # receiver is typed at the base class, so the call dispatches: Y, then X | Y)
-                self.src = ("c%s(t:type) := class:\n    X:t\n    Y:t\n    M%s()<transacts>:t = X | Y\n"
-                            "d%s(t:type) := class(c%s(t)):\n    M%s<override>()<transacts>:t = Y | (super:)M%s()\n"
-                            "%s(X:t, Y:t where t:type)<transacts>:t =\n    R:c%s(t) = d%s(t){X := X, Y := Y}\n    R.M%s()"
-                            ) % (n, n, n, n, n, n, n, n, n, n)
+                # Every hierarchy has the same values Y, X, Y. Vary its
+                # representation independently of the value/effect model:
+                # fixed/repeated/reordered root arguments, opened extra
+                # parameters, a compound root argument, and interface defaults.
+                shape = method_shape or RMethod.choice(['plain', 'added', 'fixed', 'repeat', 'reorder', 'wrapped', 'interface'])
+                self.method_shape = shape
+                root_tps, child_tps, parent, receiver, ctor = {
+                    'plain': ('t:type', 't:type', f'c{n}(t)', f'c{n}(t)', f'd{n}(t)'),
+                    'added': ('t:type', 't:type,u:type', f'c{n}(t)', f'c{n}(t)', f'd{n}(t,int)'),
+                    'fixed': ('t:type,u:type', 't:type', f'c{n}(t,int)', f'c{n}(t,int)', f'd{n}(t)'),
+                    'repeat': ('t:type,u:type', 't:type', f'c{n}(t,t)', f'c{n}(t,t)', f'd{n}(t)'),
+                    'reorder': ('t:type,u:type', 'a:type,b:type', f'c{n}(b,a)', f'c{n}(t,int)', f'd{n}(int,t)'),
+                    'wrapped': ('t:type', 'u:type', f'c{n}(tuple(char,u))', f'c{n}(tuple(char,t))', f'd{n}(t)'),
+                }.get(shape, ('', '', '', f'c{n}(t)', f'e{n}(t,int)'))
+                extra_field = '\n    Extra:u' if shape == 'added' else ''
+                extra_value = ', Extra := 0' if shape == 'added' else ''
+                child_ty = 'b' if shape == 'reorder' else 'tuple(char,u)' if shape == 'wrapped' else 't'
+                x, y = ("('x',X)", "('y',Y)") if shape == 'wrapped' else ('X', 'Y')
+                values = f'{ctor}{{X := {x}, Y := {y}{extra_value}}}'
+                result = f'(R.M{n}())(1)' if shape == 'wrapped' else f'R.M{n}()'
+                if shape == 'interface':
+                    self.src = f'''c{n}(t:type) := interface:
+    HX{n}()<transacts>:t
+    HY{n}()<transacts>:t
+    M{n}()<transacts>:t = HX{n}() | HY{n}()
+d{n}(t:type,u:type) := interface(c{n}(t)):
+    M{n}<override>()<transacts>:t = HY{n}() | (super:)M{n}()
+e{n}(t:type,u:type) := class(d{n}(t,u)):
+    X:t
+    Y:t
+    Extra:u
+    HX{n}<override>()<transacts>:t = X
+    HY{n}<override>()<transacts>:t = Y
+{n}(X:t,Y:t where t:type)<transacts>:t =
+    R:c{n}(t) = e{n}(t,int){{X:=X,Y:=Y,Extra:=0}}
+    R.M{n}()'''
+                else:
+                    self.src = f'''c{n}({root_tps}) := class:
+    X:t
+    Y:t
+    M{n}()<transacts>:t = X | Y
+d{n}({child_tps}) := class({parent}):{extra_field}
+    M{n}<override>()<transacts>:{child_ty} = Y | (super:)M{n}()
+{n}(X:t,Y:t where t:type)<transacts>:t =
+    R:{receiver} = {values}
+    {result}'''
             else:
                 self.src = ("c%s(t:type) := class:\n    X:t\n    Y:t\n    M%s()<transacts>:t = X | Y\n"
                             "%s(X:t, Y:t where t:type)<transacts>:t = c%s(t){X := X, Y := Y}.M%s()") % (n, n, n, n, n)
@@ -466,10 +509,11 @@ class Machine:
 # ---------------------------------------------------------------- the program
 class Gen:
     def __init__(self, seed):
-        global R, R387, R392
+        global R, R387, R392, RMethod
         R = random.Random(seed)
         R387 = random.Random(seed * 1000003 + 387)
         R392 = random.Random(seed * 1000003 + 392)
+        RMethod = random.Random(seed * 1000003 + 283041)
         self.seed = seed
         self.prods = []
         self.consumers = []    # source of generic consumers
@@ -750,6 +794,31 @@ class Gen:
             self.stmt()
         self.for_continuations()
         self.first_searches()
+        self.method_dispatch()
+
+    def method_dispatch(self):
+        # Every gate range covers each hierarchy, with the same independent
+        # ordered-value oracle. Argument effects and rejected first searches
+        # distinguish dispatch selection from an extra generator boundary.
+        shapes = ['plain', 'added', 'fixed', 'repeat', 'reorder', 'wrapped', 'interface']
+        rng = random.Random(self.seed * 1000003 + 28304102)
+        p = Producer('IMeth', self.fresh('Dispatch'), shapes[self.seed % len(shapes)])
+        self.prods.append(p)
+        self.paths.add('inlined')
+        x, y, cut = rng.randint(-3, 5), rng.randint(-3, 5), rng.randint(-3, 5)
+        for first in [False, True]:
+            call = f'{p.name}(Tell("method left",{x}),Tell("method right",{y}))'
+            vals = {'X': ArgTell('method left',x), 'Y': ArgTell('method right',y)}
+            seq = p.top(vals,'V') + [('test', lambda e: e['V'] > cut)]
+            if first:
+                self.main.append(f'if (V := {call}, V > {cut}) then Print("method first {{V}}") else Print("method none")')
+                got = self.m.first(seq)
+                self.m.out.append(f"method first {got['V']}" if got is not None else 'method none')
+            else:
+                self.main.append(f'for (V := {call}, V > {cut}) {{ Print("method all {{V}}") }}')
+                self.m.forall(seq, lambda e: self.m.out.append(f"method all {e['V']}"))
+        self.main.append(f'for (V := {p.name}("x","y")) {{ Print("method string {{V}}") }}')
+        self.m.forall(p.top({'X':'x','Y':'y'},'V'), lambda e: self.m.out.append(f"method string {e['V']}"))
 
     def first_searches(self):
         # A separate stream covers nested effectful generic helpers and
@@ -903,7 +972,8 @@ def main():
     with open(os.path.join(outdir, "p.verse"), "w") as f: f.write(src)
     with open(os.path.join(outdir, "p.expected"), "w") as f: f.write(exp)
     with open(os.path.join(outdir, "p.meta"), "w") as f:
-        f.write("paths=%s kinds=%s\n" % (",".join(sorted(g.paths)), ",".join(p.kind for p in g.prods)))
+        f.write("paths=%s kinds=%s methods=%s\n" % (",".join(sorted(g.paths)), ",".join(p.kind for p in g.prods),
+                ",".join(getattr(p, "method_shape", "direct") for p in g.prods if p.kind == "IMeth")))
 
 if __name__ == "__main__":
     main()

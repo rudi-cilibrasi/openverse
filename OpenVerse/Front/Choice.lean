@@ -984,7 +984,9 @@ def bifToExcl (c : SExpr) : List SExpr :=
       | _, e => e
     -- (with the `if`'s place: an `else if`'s binds the same name, in the
     -- path of the one around it)
-    let k := s!"{x}$k{ip.line}_{ip.col}"
+    -- Generated dispatch cases share a source position and result name;
+    -- their distinct condition binders also distinguish these temporaries.
+    let k := s!"{x}$k{ip.line}_{ip.col}" ++ (boundIn cs).headD ""
     -- (#283) a block as a branch: its names renamed for it, `$…'N`, as the
     -- clauses after the `if` follow it in its path; as written, not in
     -- scope where the `if` is (`$declNames`), as for any block; its
@@ -1223,6 +1225,7 @@ partial def dispatchBlocks (e : SExpr) : SExpr :=
     calls are inlined. -/
 partial def checkBody : SExpr → SExpr :=
   mapE fun
+    | .app p (.ident _ "$methodMiss") [] false => some (.app p (.ident p "Err") [] false)
     -- (an exclusive choice, #314: an if-chain on its guards)
     | .app p (.ident _ "$excl") alts false =>
       some (alts.foldr (fun a acc => match a with
@@ -1730,6 +1733,7 @@ mutual
     argument does, gives no values, and the others still do. At the written
     type `ty`, when there is one. -/
 partial def arrOfE (ty : Option STy := none) : SExpr → SExpr
+  | .app p (.ident _ "$methodMiss") [] false => .arrayLit p []
   | .app p (.ident _ "$choice") as false =>
     match as with
     | [a] => arrOfE ty a
@@ -1966,6 +1970,10 @@ structure MFam where
       dispatch's receiver then takes its type from the call, and the casts
       to each implementing class infer theirs from it. -/
   rootTps : List TParam := []
+  /-- Dispatch casts may refine or open the receiver's type arguments. -/
+  refining : Bool := false
+  /-- Concrete class tests paired with the implementation they inherit. -/
+  cases : List (String × String) := []
   deriving Inhabited
 
 /-- The calls of the methods of `fams` in `e` (#283), `inC` the class whose
@@ -1982,6 +1990,10 @@ structure MFam where
       dynamic dispatch picks. Being exclusive, it is no generator in a
       `for`: what came before the call rolls back as at a call, unless the
       implementation reaches a choice of its own.
+      Families with fixed/repeated/added type arguments instead use native
+      cast conditionals over `MFam.cases`, so each selected implementation
+      retains its refinement and opened arguments. `$methodCast` lets typed
+      consumers discard impossible cases; `$methodMiss` supplies no values.
       With `trial`, it is a call of `root$M$fam` instead, for the fixpoint.
     - `M(args)` in the body of a class below the root is `Self.M(args)`.
     - `(super:)M(args)` is a call of the nearest implementation above. -/
@@ -2076,7 +2088,20 @@ partial def rwFamCalls (anc : String → List String) (fams : List (String × MF
       let head : List SExpr := if f.rootTps.isEmpty then recvB :: binds else
         .app p (.ident p "$tparams") (.ident p (shownFnName (methodFnName f.root m)) ::
           f.rootTps.map fun tp => .tuple p [.ident p (tpN tp.name), .ident p tp.constraint]) false :: recvB :: binds
-      let tmpl := head ++ [.decl p kv (f.ret.map tyR) false (mkExcl p (f.impls.map alt))]
+      -- A refining implementation must keep its cast with its body. Most
+      -- specific classes win before interface defaults, as ordinary dispatch
+      -- does. A marked cast lets typing discard statically impossible cases.
+      let cases := if !f.refining then mkExcl p (f.impls.map alt) else
+        let fallback := if f.impls.contains f.root then
+          SExpr.app p (.ident q (methodFnName f.root m)) (.ident p r :: passed) br
+          else .app p (.ident p "$methodMiss") [] false
+        f.cases.foldr (fun (d, impl) rest =>
+          let dn := dn ++ "$" ++ d
+          let body := SExpr.app p (.ident q (methodFnName impl m)) (.ident p dn :: passed) br
+          if d == f.root then
+            SExpr.block p [.decl p dn none false (.ident p r), body]
+          else SExpr.ite p [.decl p dn none false (.app p (.ident p "$methodCast") [castTo d] false)] body (some rest)) fallback
+      let tmpl := head ++ [.decl p kv (f.ret.map tyR) false cases]
       .app p (.ident p "$dispatch") (.ident q (methodFnName f.root m) :: .block p tmpl :: recv :: vals) false
   mapE (fun
     | .app p (.member q recv m) args br =>
@@ -2103,10 +2128,11 @@ partial def rwFamCalls (anc : String → List String) (fams : List (String × MF
     `C`'s bodies and its subclasses' `M(args)` and `Self.M(args)` become
     `C$M(Self, args)`. Inlining has no types, so `R.M` must name that
     method whatever `R` is: such a method's name is no other class's or
-    interface's member, no top-level name and no parameter or local, its
-    class is not generic, and it is not abstract, an override, generic,
-    `<suspends>`, or a user of `(super:)`. Those methods that turn out to
-    have several values are taken out of their class. -/
+    interface's member apart from its own override family, no top-level
+    name and no parameter or local. Class parameters become function
+    parameters; method type parameters, suspension and `(super:)` of
+    another method remain unsupported. Selected families keep stubs in
+    their classes for ordinary signature/override validation. -/
 def methodFns (tops : List STop) (reserved : List String := []) : Except String (List STop) := do
   let classes := tops.filterMap fun
     | .classDef _ n tps _ pa ii fs _ ms => some (n, (pa, ii, fs, ms, tps))
@@ -2172,31 +2198,10 @@ def methodFns (tops : List STop) (reserved : List String := []) : Except String 
     if roots.length > 1 then
       return some (s!"another class or interface has a method {n} too, not one it overrides, so a call R.{n}(…) cannot be known to be this one where it is inlined, before types are checked", none)
     for (c, m) in ds do
-      let some (_, ii, _, _, tps) := classes.lookup c | return some ("", none)
+      let some _ := classes.lookup c | return some ("", none)
       -- (an interface's, #283: the dispatch's root, as a class's; its
       -- default implementation, if it gives one, the alternative for the
       -- classes that have none of their own, as a class's own is)
-      -- (a generic class's: a function generic over its type parameters,
-      -- #283, inferred from the receiver where it is inlined, as at a call
-      -- of a generic one; not yet with overrides, whose dispatch tests
-      -- classes, not their type arguments)
-      -- (a generic one's overrides too, #283: the dispatch's casts infer
-      -- each class's type arguments from the receiver's; so each class
-      -- that has it must give the root's type parameters its own, all of
-      -- them, none fixed, as `sbox(t) := class(box(t))`, a cast to which
-      -- never fails for its type arguments)
-      if ds.length > 1 && c != r then
-        let ctps := tps.map (·.name)
-        let ok := match rootView (classes.length + 1) c r with
-          | some σ =>
-            let args := σ.map (·.2)
-            args.all (fun | .name x => ctps.contains x | _ => false) &&
-              ctps.all (fun x => args.any fun | .name y => y == x | _ => false) &&
-              (args.filterMap fun | .name y => some y | _ => none).eraseDups.length == args.length
-          | none => true
-        let rootGeneric := ((classes.lookup r).map fun (_, _, _, _, rtps) => !rtps.isEmpty).getD false
-        if rootGeneric && !ok then
-          return some (s!"{c.replace "::" "."} overrides it and gives {r.replace "::" "."}, which is generic, type arguments other than its own type parameters", none)
       if !(anc c).contains r then return some (s!"{c.replace "::" "."} overrides it without being below {r.replace "::" "."}", none)
       if let .fn _ _ _ mtps fx _ b := m then
         -- (an override that is `<decides>` where the declaration is not, or
@@ -2220,7 +2225,24 @@ def methodFns (tops : List STop) (reserved : List String := []) : Except String 
     let ret := (ds.find? (·.1 == root)).bind fun | (_, .fn _ _ _ _ _ r _) => some r | _ => none
     let params := ((ds.find? (·.1 == root)).bind fun | (_, .fn _ _ ps _ _ _ _) => some ps | _ => none).getD []
     let rootTps := ((classes.lookup root).map fun (_, _, _, _, tps) => tps).getD []
-    some (n, { root, impls, direct := impls == [root] && ds.length == 1, ret, params, rootTps })
+    let refining := ds.any fun (c, _) =>
+      if c == root then false else
+      let ctps := ((classes.lookup c).map fun (_, _, _, _, tps) => tps.map (·.name)).getD []
+      match rootView (classes.length + 1) c root with
+      | some σ =>
+        let args := σ.map (·.2)
+        !(args.all (fun | .name x => ctps.contains x | _ => false) &&
+          ctps.all (fun x => args.any fun | .name y => y == x | _ => false) &&
+          (args.filterMap fun | .name y => some y | _ => none).eraseDups.length == args.length)
+      | none => false
+    let isIface (c : String) := ((classes.lookup c).map fun (_, ii, _) => ii).getD false
+    let ordered := impls.mergeSort fun a b =>
+      if isIface a != isIface b then !isIface a else (anc a).length ≥ (anc b).length
+    let cases := classes.filterMap fun (c, (_, ii, _)) =>
+      if ii || !(anc c).contains root then none else
+      (ordered.find? (anc c).contains).map fun impl => (c, impl)
+    let cases := cases.mergeSort fun a b => (anc a.1).length ≥ (anc b.1).length
+    some (n, { root, impls, direct := impls == [root] && ds.length == 1, ret, params, rootTps, refining, cases })
   -- (which of them are interfaces: their defaults yield to classes', #375)
   let isIfaceC (c : String) : Bool := match classes.lookup c with
     | some (_, ii, _, _, _) => ii

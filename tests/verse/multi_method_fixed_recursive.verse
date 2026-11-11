@@ -1,0 +1,10 @@
+node(t:type) := class:
+    Down(N:int)<computes>:int = if (N > 0) then (N | Down(N - 1)) else 0
+fixed := class(node(int)):
+    Down<override>(N:int)<computes>:int = if (N > 0) then (N * 100 | Down(N - 2)) else -1
+mid(u:type) := class(node(u)) {}
+low := class(mid(int)):
+    Down<override>(N:int)<computes>:int = 7
+Main()<transacts>:void =
+    Ns:[]node(int) = array{node(int){},fixed{},mid(int){},low{}}
+    for (X : Ns,V := X.Down(3)) { Print("v {V}") }
