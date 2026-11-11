@@ -563,6 +563,11 @@ existing inline parameter/default clauses before taking each value from
 `F$all`; that helper has positional parameters only. A failed default therefore
 rejects that call at its filter boundary, and defaults inside eager bodies
 remain visible to the effect-freedom checks.
+Parameter defaults give the callee's inferred type arguments private aliases
+in their written annotations. Generated annotations retain actual Core type
+parameter names, including when the caller and callee permute the same names.
+Source annotations are checked in the declaration's scope before those Core
+names become available to later generated code.
 
 Where the first success is taken, the loop is exact only if what the
 clauses, conditions and arguments do is never to be undone: the Verse

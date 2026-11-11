@@ -25,6 +25,16 @@ defaultbox(t:type) := struct:
 Boxed(X:a,?B:?defaultbox(a)=option{ D:defaultbox(a)=defaultbox{V:=X|X}; D } where a:type):int =
     if (D := B?) then D.E.Length else -1
 BoxedCaller(X:t,Y:a where t:type,a:type):int = Boxed(X)
+BoxedPair(X:a,Y:b,?B:?defaultbox(a)=option{ D:defaultbox(a)=defaultbox{V:=X|X}; D } where a:type,b:type):int =
+    if (D := B?) then D.E.Length else -1
+BoxedSwap(X:b,Y:a where a:type,b:type):int = BoxedPair(X,Y)
+Both(X:a,Y:b,N:int,?D:a=block{ O:=option{ P:defaultbox(a)=defaultbox{V:=X|X}; P }; if(P:=O?)then P.V else X } where a:type,b:type)<transacts><decides>:tuple(a,int) =
+    N>0
+    Print("both {N}")
+    (D,N) | Both[X,Y,N-1]
+BothSwap(X:b,Y:a where a:type,b:type)<transacts>:[]b = for(V:=Both[X,Y,2]): V(0)
+FirstBothSwap(X:b,Y:a where a:type,b:type)<transacts>:?b =
+    if(V:=Both[X,Y,2],V(1)<2)then option{V(0)}else false
 Main()<transacts>:void =
     for (X := Repeat["a",2,?Y:="b"]): Print(X)
     if (X := Repeat["c",2,?Y:="d"], X = "c") then Print(X)
@@ -40,3 +50,8 @@ Main()<transacts>:void =
     Print("shadow {Shadow(7,"s")} {Shadow("s",7)}")
     Print("infer {Infer(7)}")
     Print("boxed {Boxed(7)} {Boxed("s")} {BoxedCaller(7,"s")} {BoxedCaller("s",7)}")
+    Print("swapped {BoxedSwap(7,"s")} {BoxedSwap("s",7)}")
+    for(V:BothSwap(7,"s")): Print("both value {V}")
+    for(V:BothSwap("s",7)): Print("both value {V}")
+    if(V:=FirstBothSwap(7,"s")?)then Print("both first {V}")
+    if(V:=FirstBothSwap("s",7)?)then Print("both first {V}")

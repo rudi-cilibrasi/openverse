@@ -824,8 +824,8 @@ class Gen:
         # Model named/default arguments at every recursive edge, independently
         # of the compiler's argument binder. Some seeds use a mutual group.
         rng = random.Random(self.seed * 1000003 + 28307)
-        meter, trace, even, odd, search, pair, eager, default, repeat = [self.fresh(n) for n in
-            ('NamedMeter', 'NamedTrace', 'NamedEven', 'NamedOdd', 'NamedSearch', 'NamedPair', 'NamedEager', 'NamedDefault', 'NamedRepeat')]
+        meter, trace, even, odd, search, pair, eager, default, repeat, box, swap_all, swap_first = [self.fresh(n) for n in
+            ('NamedMeter', 'NamedTrace', 'NamedEven', 'NamedOdd', 'NamedSearch', 'NamedPair', 'NamedEager', 'NamedDefault', 'NamedRepeat', 'NamedBox', 'NamedSwapAll', 'NamedSwapFirst')]
         mutual = rng.choice([False, True])
         limit, start, step = rng.randint(0, 3), rng.randint(-1, 1), rng.randint(1, 2)
         offsets, extra = [rng.randint(-2, 3), rng.randint(-2, 3)], rng.randint(1, 4)
@@ -856,10 +856,16 @@ class Gen:
 {pair}(X:t, ?Y:t=X where t:type)<computes>:t = X | Y
 {eager}(X:t, N:int, ?Y:t=X where t:type)<computes>:t =
     if (N>0) then ({pair}(X,?Y:=Y) | {pair}(X) | {eager}(X,N-1)) else X
-{repeat}(X:t,N:int,?Y:t=block{{ E:[]t=Concatenate(); X }} where t:type)<transacts><decides>:t =
+{box}(t:type) := struct:
+    E:[]t = Concatenate()
+    V:t
+{repeat}(X:a,Other:b,N:int,?Y:a=block{{ O:=option{{ B:{box}(a)={box}{{V:=X|X}}; B }}; if(B:=O?)then B.V else X }} where a:type,b:type)<transacts><decides>:a =
     N > 0
     Print("named generic {{N}}")
-    Y | {repeat}[X,N-1]''')
+    Y | {repeat}[X,Other,N-1]
+{swap_all}(X:b,Y:b,Z:a,N:int where a:type,b:type)<transacts>:[]b = for(V:={repeat}[X,Z,N,?Y:=Y]): V
+{swap_first}(X:b,Y:b,Z:a,N:int where a:type,b:subtype(comparable))<transacts>:?b =
+    if(V:={repeat}[X,Z,N,?Y:=Y],V=X)then option{{V}}else false''')
         h = self.fresh('NamedHeap')
         self.main.append(f'{h} := {meter}{{}}')
         visits = 1 if start <= default_limit else 0
@@ -920,16 +926,27 @@ class Gen:
             x = literal.strip('"')
             values = [x] if depth == 0 else [x, value, x, x] + [x] * (4 * (depth - 1) + 1)
             self.m.out.extend(f'named eager {v}' for v in values)
-            self.main.append(f'for (V := {repeat}[{literal},{depth},?Y:={other}]) {{ Print("named generic value {{V}}") }}')
+            self.main.append(f'for (V := {repeat}[{literal},0,{depth},?Y:={other}]) {{ Print("named generic value {{V}}") }}')
             for n in range(depth, 0, -1):
                 self.m.out.append(f'named generic {n}')
                 self.m.out.append(f'named generic value {value if n == depth else x}')
             result = self.fresh('NamedGenericResult')
-            self.main.append(f'if ({result} := {repeat}[{literal},{depth},?Y:={other}], {result}={literal}) then Print("named generic first {{{result}}}") else Print("named generic none")')
+            self.main.append(f'if ({result} := {repeat}[{literal},0,{depth},?Y:={other}], {result}={literal}) then Print("named generic first {{{result}}}") else Print("named generic none")')
             if depth > 1:
                 self.m.out.extend([f'named generic {depth}', f'named generic {depth-1}', f'named generic first {x}'])
             else:
                 self.m.out.append('named generic none')
+            opposite = '"unused"' if literal == '1' else '7'
+            self.main.append(f'for(V:{swap_all}({literal},{other},{opposite},{depth})): Print("named swap value {{V}}")')
+            self.m.out.extend(f'named generic {n}' for n in range(depth, 0, -1))
+            if depth:
+                self.m.out.extend(f'named swap value {v}' for v in [value] + [x] * (depth - 1))
+            result = self.fresh('NamedSwapResult')
+            self.main.append(f'if({result}:={swap_first}({literal},{other},{opposite},{depth})?)then Print("named swap first {{{result}}}")else Print("named swap none")')
+            if depth > 1:
+                self.m.out.extend([f'named generic {depth}', f'named generic {depth-1}', f'named swap first {x}'])
+            else:
+                self.m.out.append('named swap none')
         self.main.append(f'Print("named final {{{h}.N}}")')
         self.m.out.append(f'named final {visits}')
 

@@ -33,4 +33,19 @@ plain 0 0
 shadow 0 0
 infer 0
 boxed 0 0 0 0
+swapped 0 0
+both 2
+both 1
+both value 7
+both value 7
+both 2
+both 1
+both value s
+both value s
+both 2
+both 1
+both first 7
+both 2
+both 1
+both first s
 exit=0

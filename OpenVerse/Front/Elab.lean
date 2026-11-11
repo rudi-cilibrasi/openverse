@@ -2672,11 +2672,27 @@ partial def defaultTypeNames (bound : List String) (e : SExpr) : List String :=
       | _ => []
     own ++ e.children.flatMap (defaultTypeNames bound)
 
-/-- A default's source annotations see the callee's inferred parameters.
-    Generated annotations also need the actual Core parameter names. Resolve
-    source names in the declaration's scope before making the Core names
-    available to annotations produced later by the elaborator. -/
-def defaultTypes (ctx : Ctx) (p : Pos) (s : Sig) (σ : List (String × Ty)) (d : SExpr) : EM TyEnv := do
+/-- Rename a default's type aliases without capturing a local struct's
+    parameters. Its nested consumers retain their own type binders. -/
+partial def substDefaultTypes (σ : List (String × STy)) (e : SExpr) : SExpr :=
+  Choice.mapE (fun
+    | .decl p n t v x => some (.decl p n (t.map (·.substNames σ)) v (substDefaultTypes σ x))
+    | .construct p n ts fs => some (.construct p n (ts.map (·.substNames σ)) (fs.map (substDefaultTypes σ)))
+    | .refineDef p n t cs => some (.refineDef p n (t.substNames σ) (cs.map (substDefaultTypes σ)))
+    | .structDef p tps fs =>
+      let σ' := σ.filter fun (n, _) => !tps.any (·.name == n)
+      some (.structDef p tps (fs.map fun (n, t, d, v) =>
+        (n, t.substNames σ', d.map (substDefaultTypes σ'), v)))
+    | .app p (.ident q "$witness") [.ident r n] false =>
+      match σ.lookup n with
+      | some (.name v) => some (.app p (.ident q "$witness") [.ident r v] false)
+      | _ => none
+    | _ => none) e
+
+/-- Default source annotations use private aliases for the callee's
+    instantiations. Generated annotations keep the actual Core names, even
+    when the caller and callee use the same names in a different order. -/
+def defaultTypes (ctx : Ctx) (p : Pos) (s : Sig) (σ : List (String × Ty)) (d : SExpr) : EM (TyEnv × SExpr) := do
   let core := (σ.flatMap fun (_, t) => t.paramsC).foldl
     (fun acc (n, cmp) => if acc.any (·.1 == n) then acc else acc ++ [(n, cmp)]) []
   let foreign := core.filter fun (n, _) => !s.tparams.any (·.1 == n)
@@ -2685,7 +2701,14 @@ def defaultTypes (ctx : Ctx) (p : Pos) (s : Sig) (σ : List (String × Ty)) (d :
   for (n, _) in foreign do
     if names.contains n then
       discard <| resolveTy home p (.name n)
-  return { ctx.types with tvars := σ ++ core.map (fun (n, cmp) => (n, Ty.param n cmp)) }
+  let alias (n : String) := s!"$defaultType_{s.name}_{n}"
+  let rename := s.tparams.map fun (n, _) => (n, STy.name (alias n))
+  for (n, _) in s.tparams do
+    if names.contains n && (σ.lookup n).isNone then
+      eerr p s!"cannot infer type parameter {n} of {s.name} from the arguments of this call"
+  let aliases := σ.map fun (n, t) => (alias n, t)
+  return ({ ctx.types with tvars := aliases ++ core.map (fun (n, cmp) => (n, Ty.param n cmp)) },
+    substDefaultTypes rename d)
 
 /-- A call of a generic function. Its type arguments are inferred by matching
     its signature: the result type against the expected type (unless that is
@@ -2784,7 +2807,7 @@ partial def elabGenericCallWith (elabE : Ctx → SExpr → Option Ty → EM R) (
           if s.pnames.head? == some "Self" then s.scope.orElse fun _ => (s.name.splitOn ".").head? else none
         -- Written types belong to the callee, with the arguments inferred
         -- so far. A caller's type aliases are outside this default's scope.
-        let types ← defaultTypes ctx p s σ d
+        let (types, d) ← defaultTypes ctx p s σ d
         let dctx := { ctx with locals := earlier, selfClass := selfC, inParamDefault := true,
                                types,
                                inLoop := false, canFail := ctx.canFail && s.decides,
