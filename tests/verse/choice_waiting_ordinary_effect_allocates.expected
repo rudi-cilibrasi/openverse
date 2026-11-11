@@ -1,0 +1,4 @@
+composed allocates 11 10
+exclusive allocates 11 10
+nested-fn allocates 61 10
+exit=0

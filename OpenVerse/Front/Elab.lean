@@ -2187,6 +2187,24 @@ def forStageCopyNames (ids : List SExpr) : List String :=
     | .ident _ n => some n
     | _ => none
 
+/-- A shared prefix still runs in the alternative's current filter. Its
+    singleton environment is resumed only from that alternative's body. -/
+def forStageInvoke (p : Pos) (prepare : Choice.FirstLift) (borrowed : List String)
+    (body : SExpr) : List SExpr × SExpr :=
+  let payload := prepare.name ++ "$ready"
+  let packet := payload ++ "$packet"
+  let call := SExpr.app p (.ident p prepare.name) prepare.args true
+  let get (j : Nat) := SExpr.app p (.ident p packet) [.int p (j : Int)] false
+  let clauses := if prepare.sets.isEmpty then [.decl p payload none false call] else
+    .decl p packet none false call ::
+      (prepare.sets.zipIdx.map fun (n, j) => .set p (.ident p n) none
+        (.app p (.ident p "$refineCopyOut") [get (j + 1)] false)) ++
+      [.decl p payload none false (get 0)]
+  let resume := SExpr.app p (.ident p "$forResumeValues")
+    [.ident p payload, forStageCopyMetadata p prepare.sets,
+      .block p (borrowed.map (SExpr.ident p ·))] false
+  (clauses, forStageBodyAs body resume)
+
 /-- Give the immediate prefix an actual function boundary. A source exit
     returns its normal packet even from nested source loops; ordinary prefix
     failure still fails the call in the caller's original filter. -/
@@ -2394,10 +2412,84 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
     | _ =>
       let (r, c') ← elabSeq { c with canFail := true, inTaking := true } fs none
       return (r.e, c')
-  let rec build (c : Ctx) (gs : List (SExpr × List SExpr)) (bd : SExpr) (stageHere : Bool := true) : EM R := do
+  -- The ordinary composed/exclusive paths use the same handoff as a
+  -- refining path. Probe a suffix once at its binding's common type;
+  -- type-only probes recurse through these same shared suffixes.
+  let stagedSuffix (c : Ctx) (q : Pos) (name : String) (bty : Ty)
+      (alts rest : List SExpr) (bd : SExpr) (flat : Option Bool := none) :
+      EM (Option (Choice.FirstLift × Choice.ForStagePlan × Ty × Bool)) := do
+    let sourceFail := match bd with
+      | .app _ (.ident _ f) [_, .ident _ mode, _] false =>
+        if f == "$forReturns" || f == "$forReturnBody" then mode == "true" else bodyFail
+      | _ => bodyFail
+    if (stagePlan.isNone && (!c.suspends || sourceFail)) ||
+        c.inCtor || c.inParamDefault || c.inBlock || c.inDefer || !c.defaults.isEmpty then return none
+    checkNewLocal c q name
+    let before ← get
+    let slot ← fresh bty
+    let bound := { c with locals := { name, slot, ty := bty, mutable := false } :: c.locals }
+    let required := if stagePlan.isSome then stageBorrows else []
+    let written := SExpr.block q (rest ++ [bd] ++ required.map (SExpr.ident q ·))
+    let caps := (Choice.namesUsed written).eraseDups.filterMap bound.lookup
+    let key := "stageOrdinary" ++ contKey bound q name (alts ++ rest ++ [bd]) ++
+      forStageCaptureKey bound stageArgs caps
+    let known := c.types.loopRequests.findSome? (fun l => l.stagePlan.filter (·.key == key))
+    let value? ← if let some outer := stagePlan then do
+        let subst := (outer.tparams.map (·.name)).zip (stageArgs.map Ty.toSTy)
+        pure (some (← resolveTy c.types q (outer.value.substNames subst), true, before.fx))
+      else if let some plan := known then
+        pure (some (← resolveTy c.types q plan.value, true, before.fx))
+      else tryCatch (do
+        let r ← elabForWith elabAlts elabBranchAlts elabE elabInts elabLoopGen elabSeq
+          { bound with typeOnly := true } p rest bd (prepared := true) (firstDecides := true)
+        let .arr value := r.ty | pure none
+        let after ← get
+        pure (some (value, forContWaits c before after [r.e], after.fx))) (fun _ => pure none)
+    set before
+    let some (value, waits, effects) := value? | return none
+    if stagePlan.isNone && !waits && forBodySafe c bd then return none
+    -- Refining lifts can infer their effects. Their initially empty fnFx
+    -- is not an explicit computes restriction; retain the suffix's typed
+    -- effects, as immediate continuations do, and expose them to a parent
+    -- type-only probe as well.
+    let allowed := heapFx.filter fun fx => c.fnFx.contains fx || effects.any (·.1 == fx) ||
+      (stagePlan.orElse fun _ => known).any (·.specs.contains fx)
+    let bound := { bound with fnFx := allowed }
+    let request ← match forStagePlanOf bound q key rest bd value ((stagePlan.map (·.outcome)).getD bodyFail) required with
+      | .ok request => pure request
+      | .error _ => return none
+    let some plan := request.stagePlan | return none
+    let args := plan.tparams.map fun tp =>
+      (c.types.tvars.lookup tp.name).getD (.param tp.name (tp.constraint == "comparable"))
+    let flatten := stagePlan.isSome && flat.getD stageFlat
+    let prepare ← match forStagePrefixOf bound plan args q rest bd flatten with
+      | .ok prepare => pure prepare
+      | .error _ => return none
+    let hasPlan := c.types.loopRequests.any (·.key == request.key)
+    let hasPrefix := c.types.loopRequests.any (·.key == prepare.key)
+    modify fun st => { st with fx := effects }
+    noteFx q (heapFx.filter fun fx => (stagePlan.orElse fun _ => known).any (·.specs.contains fx))
+      (some prepare.name)
+    if !c.typeOnly then
+      for req in (if hasPlan then [] else [request]) ++ (if hasPrefix then [] else [prepare]) do
+        modify fun st => { st with loopFirst := st.loopFirst ++
+          [{ g := "", pos := q, itemCode := .lit .void, argSet := none, lift := .ok req }] }
+      modify fun st => { st with
+        forStageUses := st.forStageUses + 1,
+        pendingSuspendingCasts := st.pendingSuspendingCasts + (if c.suspends && (!hasPlan || !hasPrefix) then 1 else 0),
+        pendingWaitingCasts := st.pendingWaitingCasts + (if c.suspends && (!hasPlan || !hasPrefix) then 1 else 0) }
+    else
+      -- A type-only parent must still see the wait hidden by this staged
+      -- placeholder, including a function-value call in a nested for.
+      modify fun st => { st with
+        pendingSuspendingCasts := st.pendingSuspendingCasts + 1,
+        pendingWaitingCasts := st.pendingWaitingCasts + 1 }
+    return some (prepare, plan, value, !c.typeOnly && hasPlan && hasPrefix)
+  let rec build (c : Ctx) (gs : List (SExpr × List SExpr)) (bd : SExpr)
+      (stageHere : Bool := true) (flatOverride : Option Bool := none) : EM R := do
     if let some plan := stagePlan.filter (fun _ => stageHere) then
       let clauses := gs.flatMap fun (g, fs) => g :: fs
-      let (req, obj, ty) ← match forStageEnvOf { c with forStageArgs := stageArgs, forStageFlat := stageFlat, forStageCopies := stageCopies, forStageBorrows := stageBorrows } plan p clauses bd with
+      let (req, obj, ty) ← match forStageEnvOf { c with forStageArgs := stageArgs, forStageFlat := flatOverride.getD stageFlat, forStageCopies := stageCopies, forStageBorrows := stageBorrows } plan p clauses bd with
         | .ok r => pure r
         | .error why => eerr p s!"cannot stage this for: {why} (#417)"
       let r ← if c.types.loopRequests.any (·.key == req.key) then do
@@ -2422,11 +2514,12 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
     -- iteration's generator; each path's generators into the iteration's
     -- body, under it. The filter's code, the body's (an array of the
     -- values), and their type.
-    let rec exclIter (c : Ctx) (fs : List SExpr) (more : List (SExpr × List SExpr)) (bd : SExpr) : EM (Expr × Expr × Ty) := do
+    let rec exclIter (c : Ctx) (fs : List SExpr) (more : List (SExpr × List SExpr))
+        (bd : SExpr) (stageOverride : Option Bool := none) : EM (Expr × Expr × Ty) := do
       match fs.findIdx? isExcl with
       | none =>
         let (filt, c') ← elabFilters c fs
-        let inner ← build c' more bd
+        let inner ← build c' more bd (flatOverride := stageOverride)
         match more with
         | [] => return (filt, .prim .mkArr [inner.e], inner.ty)
         | _ => match inner.ty with
@@ -2452,7 +2545,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
             if cA.typeOnly then
               let slot ← fresh ty
               let cB := { cA with locals := { name := b.name, slot, ty, mutable := false } :: cA.locals }
-              let (f, a, t) ← exclIter cB after more bd
+              let (f, a, t) ← exclIter cB after more bd stageOverride
               return (.seq codeA f, a, t)
             let restCl := after ++ moreCl
             let key := (if bodyFail then "fo" else "f") ++ contKey cA b.pos b.name (i :: restCl ++ [bd])
@@ -2525,7 +2618,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
             if cA.typeOnly then
               let slot ← fresh ty
               let cB := { cA with locals := { name := b.name, slot, ty, mutable := false } :: cA.locals }
-              let (f, a, t) ← exclIter cB after more bd
+              let (f, a, t) ← exclIter cB after more bd stageOverride
               return (.seq codeA f, a, t)
             let rootCaptures := (Choice.namesUsed (.block p (i :: restCl ++ [bd]))).filterMap cA.lookup
             let key := "stage" ++ contKey cA b.pos b.name (i :: restCl ++ [bd]) ++
@@ -2574,7 +2667,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
               (cA.types.tvars.lookup tp.name).getD (.param tp.name (tp.constraint == "comparable"))
             let nextCopies := nextPlan.copies.map (·.1)
             let nextBorrows := nextPlan.borrowed
-            let suffix ← match forStagePrefixOf suffixCtx nextPlan nextArgs b.pos restCl bd stageFlat nextCopies nextBorrows with
+            let suffix ← match forStagePrefixOf suffixCtx nextPlan nextArgs b.pos restCl bd (stageOverride.getD stageFlat) nextCopies nextBorrows with
               | .ok req => pure req
               | .error why => eerr b.pos s!"cannot share this waiting for's suffix: {why} (#335, #417)"
             if !cA.types.loopRequests.any (·.key == suffix.key) then
@@ -2629,7 +2722,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
             let .arr value := resumed.ty | eerr b.pos "internal: staged for values"
             return (.seq codeA (.assign slot values.e), resumed.e, value)
           let cl := pruneMethodBinding cA (fs[j]?.getD (.tuple p []))
-          let (f, a, t) ← exclIter cA (Choice.bifToExcl cl ++ after) more bd
+          let (f, a, t) ← exclIter cA (Choice.bifToExcl cl ++ after) more bd stageOverride
           return (.seq codeA f, a, t)
         let some (.decl gp x xty _ (.app _ _ alts _)) := fs[j]? | eerr p "internal: an exclusive choice"
         let altsS := alts.filter fun | .app _ (.ident _ "$joinOf") _ _ => false | _ => true
@@ -2667,8 +2760,9 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
         -- generators into the body, with `pb` as the body; `flat`: `pb` is an
         -- array of the values, a continuation's, to flatten)
         let runPath (cl : List SExpr) (pb : SExpr) (flat : Bool) : EM (Expr × Expr × Ty) := do
-          let (f, a, t) ← exclIter cA (cl.takeWhile (!isGen ·)) (groups (cl.dropWhile (!isGen ·))) pb
-          if !flat then return (f, a, t)
+          let transfer := if stagePlan.isSome && flat then some true else stageOverride
+          let (f, a, t) ← exclIter cA (cl.takeWhile (!isGen ·)) (groups (cl.dropWhile (!isGen ·))) pb transfer
+          if !flat || stagePlan.isSome then return (f, a, t)
           match t with
           | .arr t' => return (f, .prim .flatten [a], t')
           | _ => eerr gp "internal: a continuation's values"
@@ -2677,13 +2771,26 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
         -- those clauses and the body a function of their own, #342's, which
         -- each path calls, instead of a copy in each)
         let restCl := after ++ moreCl
+        let staged ← if restCl.any isCF then
+            match xty with
+            | some ty => do
+              let bty ← resolveTy cA.types gp ty
+              stagedSuffix cA gp x bty altsS restCl bd stageOverride
+            | none => pure none
+          else pure none
+        if let some (_, _, value, false) := staged then
+          let value := (stagePlan.map fun plan => Ty.struct plan.base stageArgs).getD value
+          return (codeA, .prim .userErr [], value)
         let contOK := stagePlan.isNone && restCl.any isCF && forBodySafe cA bd && xty.isSome
         let req := if !contOK || cA.typeOnly then none else
           cA.types.loopRequests.find? (·.key == (if bodyFail then "fo" else "f") ++ contKey cA gp x (altsS ++ restCl ++ [bd]))
         let fits (l : Choice.FirstLift) : Bool :=
           (l.specs.filter (["reads", "writes", "allocates"].contains ·)).all cA.fnFx.contains
         let kv := s!"$xk{gp.line}_{gp.col}{x}v"
-        let plan : List (List SExpr × SExpr × Bool) ← match req with
+        let plan : List (List SExpr × SExpr × Bool) ← if let some (prepare, plan, _, true) := staged then
+            let (callCl, resumed) := forStageInvoke gp prepare plan.borrowed bd
+            pure (alts.zipIdx.map fun ((gs, r), i) => (liftP gs r i ++ callCl, resumed, true))
+          else match req with
           | some l =>
             if fits l then
               let call : SExpr := .app gp (.ident gp l.name) l.args true
@@ -2778,6 +2885,26 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
           -- those clauses and the body a function of their own, which each
           -- alternative's for calls, instead of a copy in each)
           let restCl := fs ++ moreClauses
+          if restCl.any isCF && c.suspends then
+            let saved ← get
+            let mut types : List Ty := []
+            for (a, i) in b.alts.zipIdx do
+              let r ← elabForWith elabAlts elabBranchAlts elabE elabInts elabLoopGen elabSeq
+                { bctx with typeOnly := true } p (liftA a i) (.ident gp b.name) (prepared := true)
+              if let .arr t := r.ty then types := types ++ [t]
+            set saved
+            if let some bty := types.head? then
+              if types.length == b.alts.length && types.all (· == bty) then
+                if let some (prepare, plan, value, ready) ← stagedSuffix c gp b.name bty b.alts restCl bd then
+                  if !ready then return ⟨.prim .userErr [], .arr value⟩
+                  let (callCl, resumed) := forStageInvoke gp prepare plan.borrowed bd
+                  let mut parts : List R := []
+                  for (a, i) in b.alts.zipIdx do
+                    let r ← forW (liftA a i ++ callCl) resumed
+                    let .arr (.arr t) := r.ty | eerr gp "internal: a staged continuation's values"
+                    parts := parts ++ [⟨.prim .flatten [r.e], .arr t⟩]
+                  let some first := parts.head? | eerr gp "internal: a choice without alternatives"
+                  return ⟨parts.tail.foldl (fun acc r => p2 .concat acc r.e) first.e, first.ty⟩
           -- Failable bodies return outcomes so failure stops the entire
           -- for, rather than merely rejecting one continuation call.
           if restCl.any isCF && forBodySafe c bd then
@@ -2855,7 +2982,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
         -- already: with an exclusive choice among the filters, #314, its
         -- paths in this filter and their values, flattened)
         let (iter, ity, flat) ← if fs.any isExcl then do
-            let (filtE, arr, ety) ← exclIter c1 fs more bd
+            let (filtE, arr, ety) ← exclIter c1 fs more bd flatOverride
             let bindX ← coerce gp ⟨lg.value, lg.vty⟩ ty
             let one ← fresh .void
             pure (Expr.prim .flatten [.forE one (.lit (.arr #[.tup []])) (.seq (.assign xs bindX) filtE) arr],
@@ -2863,7 +2990,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
           else do
             let (filt, c2) ← elabFilters c1 fs
             let bindX ← coerce gp ⟨lg.value, lg.vty⟩ ty
-            let inner ← build c2 more bd
+            let inner ← build c2 more bd (flatOverride := flatOverride)
             let one ← fresh .void
             pure (Expr.forE one (.lit (.arr #[.tup []])) (.seq (.assign xs bindX) filt) inner.e,
               inner.ty, more.isEmpty)
@@ -2975,7 +3102,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
       -- iteration's filter, so that a failure in one rolls back to this
       -- generator, as the `if` it stands for would)
       if fs.any isExcl then
-        let (filtE, arr, ety) ← exclIter c1 fs more bd
+        let (filtE, arr, ety) ← exclIter c1 fs more bd flatOverride
         let filt := match pre with
           | .lit _ => filtE
           | e => .seq e filtE
@@ -2985,7 +3112,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
         match pre with
         | .lit _ => filt
         | e => .seq e filt
-      let inner ← build c2 more bd
+      let inner ← build c2 more bd (flatOverride := flatOverride)
       let loopE := Expr.forE slot src filt inner.e
       match more with
       | [] => return ⟨loopE, .arr inner.ty⟩
@@ -9307,6 +9434,11 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
   -- (a branch's wrapper holds its home's frame, at its type arguments,
   -- which the scheduler's dispatch opens, #244)
   let ntpOfLow (j : Nat) : Nat := ((lows[j]?).map (·.2.2)).getD 0
+  -- A borrower keeps its arguments in its own frame, even without type
+  -- parameters. Keeping another copy in the caller would require a
+  -- recursive default for a caller passing its own source frame.
+  let ownArgs (j : Nat) : Bool := ntpOfLow j != 0 ||
+    ((lows[j]?).map fun (gi, _, _) => !(sourceFrames.refs[gi]?.getD []).isEmpty).getD false
   let wrapTy (K : Nat) : VTy := .ref [wrapTag K] ((List.range (ntpOfLow (branchHome[K]?.getD 0))).map VTy.var)
   let callee : Nat → Option Suspend.Callee := fun f =>
     if f == sleepIdx then
@@ -9323,14 +9455,14 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
         -- slots of their types, #256)
         some { tag := tagBase + j, newFn := nFns + 4 * j, initFn := nFns + 4 * j + 1,
                arriveFn := some (ownBase + 4 * j),
-               resumeFn := if ntp == 0 then gi else ownBase + 4 * j + 1,
-               cancelFn := some (if ntp == 0 then nFns + 4 * j + 2 else ownBase + 4 * j + 2),
+               resumeFn := if ownArgs j then ownBase + 4 * j + 1 else gi,
+               cancelFn := some (if ownArgs j then ownBase + 4 * j + 2 else nFns + 4 * j + 2),
                newCellFn := if opened j then some (ownBase + 4 * j + 3) else none,
                cellRes := if opened j then some (cellResOf j) else none,
                moreCells := (moreOf j).zipIdx.map fun (d, i) => (moreBase + moreOff j + i, d),
-               passFields := if ntp == 0 then (List.range fns[gi]!.arity).map fun i => Suspend.slotBaseOf sites arms + i
-                 else [],
-               resField := some Suspend.resF, generic := ntp != 0, newSched := true,
+               passFields := if ownArgs j then [] else
+                 (List.range fns[gi]!.arity).map fun i => Suspend.slotBaseOf sites arms + i,
+               resField := some Suspend.resF, generic := ownArgs j, newSched := true,
                resultFn := some (nFns + 4 * j + 3), ntp,
                stopTasksFn := (taskIndex j).map fun i => taskBase + 2 * i + 1,
                selfFns := (targets.idxOf? gi).map fun i =>
@@ -9357,8 +9489,8 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
   let stub : Fn := { name := "$unused", arity := 0, nslots := 0, decides := false, writes := false,
                      body := .prim .userErr [] }
   let wideOf (j : Nat) : VTy :=
-    if ntpOfLow j == 0 then .ref [tagBase + j, schedTag] []
-    else .ref [tagBase + j, nilTag] ((List.range (ntpOfLow j)).map VTy.var)
+    if ownArgs j then .ref [tagBase + j, nilTag] ((List.range (ntpOfLow j)).map VTy.var)
+    else .ref [tagBase + j, schedTag] []
   let mut ownFns : Array Fn := #[]
   let mut ownTys : Array (List VTy) := #[]
   for ((gi, gname, _), j) in lows.zipIdx do

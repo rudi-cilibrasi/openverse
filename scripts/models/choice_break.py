@@ -4,7 +4,9 @@
 Some consumers select their lazy sources under independent
 refining casts. Both actual receivers hit, so the source-loop oracle and
 the existing random program distribution stay unchanged, including waits.
+Plain, composed and exclusive wrappers enumerate the same lazy values.
 --unrefined emits the equivalent original sources for implementation controls.
+--plain-sources/--composed-sources/--exclusive-sources select that emitter profile.
 """
 import random
 import sys
@@ -18,6 +20,10 @@ refs_a, refs_b = rng.choice([False, True]), rng.choice([False, True])
 suspends, used = rng.choice([False, True]), rng.choice([False, True])
 waits = suspends and rng.choice([False, True])
 refined = bool(seed & 8) and "--unrefined" not in sys.argv[3:]
+source_style = ("plain", "composed", "exclusive")[seed % 3]
+for style in ("plain", "composed", "exclusive"):
+    if f"--{style}-sources" in sys.argv[3:]:
+        source_style = style
 body_delta, filter_delta, loop_delta, fn_delta = [rng.randint(1, 7) for _ in range(4)]
 reachable = [(a, b) for a in range(na, -1, -1) for b in range(nb, -1, -1)
              if a >= cut_a and b >= cut_b]
@@ -80,18 +86,31 @@ RefLazy(N:int)<transacts><decides>:counter =
     N >= 0
     counter{N:=N} | RefLazy[N-1]
 '''
+if source_style == "exclusive":
+    pre += '''ExLazy(N:int)<computes><decides>:int =
+    if(N<0):return Lazy[N]
+    Lazy[N]
+ExRefLazy(N:int)<transacts><decides>:counter =
+    if(N<0):return RefLazy[N]
+    RefLazy[N]
+'''
 if refined:
     pre += 'pair(a:type,b:type) := class {}\ndup(t:type) := class(pair(t,t)) { C:int }\n'
-source_a = f"{'RefLazy' if refs_a else 'Lazy'}[{na}]"
+def source(name, n):
+    if source_style == "composed":
+        return f"({name}[{n}]|{name}[-1])"
+    return f"{'Ex' if source_style == 'exclusive' else ''}{name}[{n}]"
+
+source_a = source('RefLazy' if refs_a else 'Lazy', na)
 if refined:
-    source_a = f"if(D:=dup[P])then {'RefLazy' if refs_a else 'Lazy'}[D.C]else {source_a}"
+    source_a = f"if(D:=dup[P])then {source('RefLazy' if refs_a else 'Lazy', 'D.C')}else {source_a}"
 clauses = [f"{'EA' if refs_a else 'A'} := {source_a}"]
 if refs_a:
     clauses.append("A := EA.N")
 clauses += ["set Total += A", "set H.N += A + 1", 'Print("a {A} {Total} {H.N}")', f"A >= {cut_a}"]
-source_b = f"{'RefLazy' if refs_b else 'Lazy'}[{nb}]"
+source_b = source('RefLazy' if refs_b else 'Lazy', nb)
 if refined:
-    source_b = f"if(E:=dup[Q])then {'RefLazy' if refs_b else 'Lazy'}[E.C]else {source_b}"
+    source_b = f"if(E:=dup[Q])then {source('RefLazy' if refs_b else 'Lazy', 'E.C')}else {source_b}"
 clauses.append(f"{'EB' if refs_b else 'B'} := {source_b}")
 if refs_b:
     clauses.append("B := EB.N")

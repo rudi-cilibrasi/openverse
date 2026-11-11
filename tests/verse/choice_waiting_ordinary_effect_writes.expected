@@ -1,0 +1,4 @@
+composed writes 11 11
+exclusive writes 11 11
+nested-fn writes 61 61
+exit=0
