@@ -1325,17 +1325,30 @@ def checkNewLocal (ctx : Ctx) (p : Pos) (n : String) : EM Unit := do
         ((ctx.types.methodOverloads.lookup n).map (·.any (ctx.hasMethod c ·))).getD false then
       eerr p s!"'{n}' is already a field or method of {c}; Verse does not allow shadowing"
 
-/-- The key of a `Choice.FirstLift`: where the call is, its binding and
-    the consumer's names it passes (its parameters, renamed for each site of
-    an inlined body it is in, and the names the clauses after it use), as
-    a call in a function's body inlined at several sites is at one place. -/
-def firstKey (ctx : Ctx) (p : Pos) (lp : List SExpr) (b : String) (rest : List SExpr) : String :=
-  let pnames := match lp with
-    | [_, .block _ ps, _, _] => ps.filterMap fun | .ident _ n => some n | _ => none
-    | _ => []
-  let caps := (Choice.namesUsed (.block p rest)).eraseDups.filter fun n =>
-    !pnames.contains n && (ctx.lookup n).isSome
-  s!"{p.line}_{p.col}_{p.file}_{b}_{String.intercalate "," (pnames ++ caps)}"
+/-- (#335) Whether `e` writes one of the type parameters `tps`: in a written
+    type, a construction's, or as a name. Conservative. -/
+def writesTps (tps : List String) (e : SExpr) : Bool :=
+  !tps.isEmpty && Choice.anyE (fun
+    | .decl _ _ (some t) _ _ => Choice.styMentions tps t
+    | .construct _ n ts _ => tps.contains n || ts.any (Choice.styMentions tps)
+    | .structDef _ _ fs => fs.any fun (_, t, _, _) => Choice.styMentions tps t
+    | .refineDef _ _ t _ => Choice.styMentions tps t
+    | .ident _ n => tps.contains n
+    | _ => false) e
+
+/-- A lazy helper owns its producer and the complete prepared suffix. That
+    suffix changes when a composed choice is replaced by a continuation call;
+    source position and captured names alone would reuse the previous contract.
+    The named type instances also distinguish an inlined body's output types
+    even when its producer parameters and captures have identical types. -/
+def firstKey (ctx : Ctx) (p : Pos) (lp : List SExpr) (b : String) (bty : Option STy)
+    (rest : List SExpr) : String :=
+  let written := SExpr.block p (lp ++ rest)
+  let inputs := (Choice.namesUsed written).eraseDups.filterMap fun n =>
+    (ctx.lookup n).map fun l => (n, l.ty, l.mutable)
+  let aliases := ctx.types.tvars.filter fun (n, _) =>
+    writesTps [n] written || ((bty.map (Choice.styMentions [n])).getD false)
+  reprStr (p, b, bty, lp, rest, inputs, aliases, ctx.selfClass, ctx.liftTag)
 
 /-- A cast `T[X]`, `X` of type `xty`, that holds only under a refinement of
     the code's type parameters (#243): `T` fixes or repeats type arguments
@@ -1621,7 +1634,7 @@ def firstLiftOf (ctx c2 : Ctx) (p : Pos) (g : String) (lp : List SExpr) (b : Str
   let [_, .block _ ps, .block _ cls, .decl _ _ _ _ tail] := lp | throw "internal: a $loop marker"
   if ctx.inCtor || ctx.inParamDefault || ctx.inBlock || ctx.inDefer || !ctx.defaults.isEmpty then
     throw "in a constructor, a default or a defer"
-  let key := firstKey ctx p lp b rest
+  let key := firstKey ctx p lp b bty rest
   -- (an inlined generic one's type parameters, #235: at the types the
   -- call's `$params` gave, as the function of its own has no names for them)
   let σt : List (String × STy) := ctx.types.tvars.filterMap fun (n, t) =>
@@ -1692,17 +1705,6 @@ def firstLiftOf (ctx c2 : Ctx) (p : Pos) (g : String) (lp : List SExpr) (b : Str
            body := Choice.firstBody name p b bty cls tail rest binds setsT capArgs (some vty.toSTy) nameOf,
            binds, sets := sets.map (·.name), args := pnames.map (SExpr.ident p ·) ++ capArgs,
            varBinds := (bls.filter (·.mutable)).map (·.name), extraFns }
-
-/-- (#335) Whether `e` writes one of the type parameters `tps`: in a written
-    type, a construction's, or as a name. Conservative. -/
-def writesTps (tps : List String) (e : SExpr) : Bool :=
-  !tps.isEmpty && Choice.anyE (fun
-    | .decl _ _ (some t) _ _ => Choice.styMentions tps t
-    | .construct _ n ts _ => tps.contains n || ts.any (Choice.styMentions tps)
-    | .structDef _ _ fs => fs.any fun (_, t, _, _) => Choice.styMentions tps t
-    | .refineDef _ _ t _ => Choice.styMentions tps t
-    | .ident _ n => tps.contains n
-    | _ => false) e
 
 /-- A continuation keeps the parameters of its inputs, results and written
     types. A parameter not determined by its inputs takes an explicit witness,
@@ -1992,7 +1994,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
               (l.specs.filter (["reads", "writes", "allocates"].contains ·)).all cA.fnFx.contains
             let hasLoop := restCl.any
               (Choice.anyE fun | .app _ (.ident _ "$loop") _ _ => true | _ => false)
-            if req.isNone && !hasLoop && (contForLiftOf cA b.pos b.name ty .void [i] restCl bd bodyFail).toOption.isSome then
+            if req.isNone && (!bodyFail || !hasLoop) && (contForLiftOf cA b.pos b.name ty .void [i] restCl bd bodyFail).toOption.isSome then
               -- Elaborate the suffix once, in its source context. Otherwise
               -- an inner lift can retain an outer var's old name after the
               -- enclosing lift has renamed it for mutable copy-out.
@@ -2089,7 +2091,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
         let restCl := after ++ moreCl
         let hasLoop := (altsS ++ restCl ++ [bd]).any
           (Choice.anyE fun | .app _ (.ident _ "$loop") _ _ => true | _ => false)
-        let contOK := restCl.any isCF && !hasLoop && forBodySafe cA bd && xty.isSome
+        let contOK := restCl.any isCF && (!bodyFail || !hasLoop) && forBodySafe cA bd && xty.isSome
         let req := if !contOK || cA.typeOnly then none else
           cA.types.loopRequests.find? (·.key == (if bodyFail then "fo" else "f") ++ contKey cA gp x (altsS ++ restCl ++ [bd]))
         let fits (l : Choice.FirstLift) : Bool :=
@@ -2184,7 +2186,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
             (Choice.anyE fun | .app _ (.ident _ "$loop") _ _ => true | _ => false)
           -- Failable bodies return outcomes so failure stops the entire
           -- for, rather than merely rejecting one continuation call.
-          if restCl.any isCF && !hasLoop && forBodySafe c bd then
+          if restCl.any isCF && (!bodyFail || !hasLoop) && forBodySafe c bd then
             let req := if c.typeOnly then none else
               c.types.loopRequests.find? (·.key == (if bodyFail then "fo" else "f") ++ contKey c gp b.name (b.alts ++ restCl ++ [bd]))
             let fits (l : Choice.FirstLift) : Bool :=
@@ -6150,8 +6152,7 @@ partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
           | some { branchy := some next, .. } => choiceHasCast ctx next
           | some { alts, .. } => alts.any Choice.hasLiftable
           | none => false
-        let hasLoop := rest.any (Choice.anyE fun | .app _ (.ident _ "$loop") _ false => true | _ => false)
-        if request.isNone && hasLater && !hasLoop then
+        if request.isNone && hasLater then
           let st0 ← get
           let slot ← fresh ty
           let c := { ctx with locals := { name := b.name, slot, ty, mutable := false } :: ctx.locals }
@@ -6194,7 +6195,7 @@ partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
       -- (when what it runs once for all the values of an item has effects,
       -- asked for by an earlier elaboration: a call of a function of its
       -- own that runs the clauses after it too, then the names they bind)
-      if let some l := (if ctx.typeOnly then none else ctx.types.loopRequests.find? (·.key == firstKey ctx p lp b.name rest)) then
+      if let some l := (if ctx.typeOnly then none else ctx.types.loopRequests.find? (·.key == firstKey ctx p lp b.name b.ty rest)) then
         let t := s!"$ft{p.line}_{p.col}"
         let get (i : Nat) : SExpr := .app p (.ident p t) [.int p (i : Int)] false
         return ← elabOneGo ctx ([.decl p t none false (.app p (.ident p l.name) l.args true)] ++
@@ -6275,11 +6276,7 @@ partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
         let isComposed (c : SExpr) : Bool := match Choice.binding? c with
           | some { place := none, branchy := none, each := none, alts := as, .. } => as.any Choice.hasLiftable
           | _ => false
-        -- (not where a call taken lazily is in it, #246: the function of its
-        -- own such a call may be compiled as takes the clauses after it, which
-        -- this changes between elaborations)
-        let hasLoop := (b.alts ++ rest).any (Choice.anyE fun | .app _ (.ident _ "$loop") _ _ => true | _ => false)
-        if rest.any isComposed && !hasLoop then
+        if rest.any isComposed then
           let req := if ctx.typeOnly then none else ctx.types.loopRequests.find? (·.key == contKey ctx p b.name (b.alts ++ rest))
           -- (asked for where more effects are allowed than here, as in a
           -- function of its own of a call taken lazily, #246: copied)
@@ -8658,7 +8655,16 @@ partial def exprWrites : Expr → Bool
     object, whose effects for values the context then rejects would stay,
     where the Verse Calculus undoes them with those values. (Its values are
     computed in the context's own failure context: undone with it.) -/
-def checkLoopFirst (fns : Array Fn) (uses : List LoopUse) : Except String (List Choice.FirstLift) := do
+def checkLoopFirst (fns : Array Fn) (uses : List LoopUse)
+    (registered : List Choice.FirstLift := []) : Except String (List Choice.FirstLift) := do
+  -- A continuation replaces the lazy call's suffix. Install these first so
+  -- effectful lazy helpers are requested for the prepared suffix they will
+  -- actually consume, rather than also keeping obsolete copies from trials.
+  let continuations := uses.foldl (fun acc u => match u.g, u.lift with
+    | "", .ok l =>
+      if registered.any (·.key == l.key) || acc.any (·.key == l.key) then acc else acc ++ [l]
+    | _, _ => acc) ([] : List Choice.FirstLift)
+  if !continuations.isEmpty then return continuations
   let mut needs : List Choice.FirstLift := []
   for u in uses do
     -- (a continuation, #335: asked for whenever it could be made; when not,
@@ -10207,7 +10213,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     | _ => none)
   -- (#246) and functions of their own for the lazily taken calls whose
   -- effects need them: the program is elaborated again, with them
-  let loopNeeds ← checkLoopFirst fns loopFirst
+  let loopNeeds ← checkLoopFirst fns loopFirst opts.loopRequests
   if !loopNeeds.isEmpty then
     return { prog := default, sigs := { fns := [] }, slotTys := [], loopNeeds }
   let (capturedFns, capturedSlots, capturedSigs) ← FailCapture.lower fns slotTys S00

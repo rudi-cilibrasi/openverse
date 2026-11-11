@@ -3,13 +3,34 @@
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
-for kind in composed exclusive binding typed-first typed-for typed-exclusive refined-for refined-state refined-failure; do
+for kind in composed exclusive binding typed-first typed-for typed-exclusive refined-for refined-state refined-failure lazy-first lazy-for lazy-effect-first lazy-effect-for lazy-alt-first lazy-alt-for; do
   sizes=()
   for count in 4 8; do
     python3 - "$kind" "$count" >"$tmp/p.verse" <<'PY'
 import sys
 kind, count = sys.argv[1], int(sys.argv[2])
 print('Two(N:int):int = N | N + 1')
+if kind.startswith('lazy-'):
+    effectful = 'effect' in kind or 'alt' in kind
+    print('counter := class:\n    var N:int = 0')
+    params = 'C:counter, N:int' if effectful else 'N:int'
+    args = 'C, N - 1' if effectful else 'N - 1'
+    effects = 'transacts' if effectful else 'computes'
+    print(f'Lazy({params})<{effects}><decides>:int =\n    N >= 0')
+    if effectful:
+        print('    set C.N += 1')
+    print(f'    N | Lazy[{args}]')
+    call = 'Lazy[C, 2]' if effectful else 'Lazy[2]'
+    value = f'({call} | Two(0))' if 'alt' in kind else '(Two(0) | Two(2))'
+    clauses = ', '.join(f'A{i} := {value}' for i in range(count))
+    if 'alt' not in kind:
+        clauses += f', L := {call}'
+    print('Main():void =\n    C := counter{}')
+    if kind.endswith('first'):
+        print(f'    if ({clauses}, A{count-1} = 1) then Print("{{A0}} {{C.N}}")')
+    else:
+        print(f'    R := for ({clauses}) {{ A0 }}\n    Print("{{R.Length}} {{C.N}}")')
+    sys.exit(0)
 print('Pick(X:t where t:type):t = X | X')
 print('Early(N:int):int =\n    if (N < 0):\n        return 0\n    N | N + 1')
 if kind.startswith('refined-'):
