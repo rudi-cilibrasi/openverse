@@ -1,4 +1,4 @@
-# expect: 4:4: box.Both has several values, but ibox overrides it and gives box, which is generic, type arguments other than its own type parameters
+# A fixed class override keeps the declaring family's result type.
 box(t : type) := class:
     A : t
     Both()<transacts>:t = A | A

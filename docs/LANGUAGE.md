@@ -884,14 +884,14 @@ Main():void =
   the interface dispatches on the receiver's class, as for an overridden
   method; an interface's default implementation is the alternative for
   the classes that have none of their own. A generic class's or
-  interface's method may be overridden too, the dispatch taking each
-  class's type arguments from the receiver's (#283), when each class that
-  has it gives the generic one its own type parameters, all of them, as
-  `sbox(t) := class(box(t))`; one that fixes or adds type arguments
-  (`ibox := class(box(int))`) is refused, for now. A generic
-  class's method is a function generic over the class's type parameters,
-  their arguments inferred from the receiver where it is inlined, as at a
-  call of a generic function (#283), when no class overrides it. A call of an overridden one dispatches on the
+  interface's method may be overridden too, including in a class that
+  fixes, repeats, reorders or adds type arguments (`ibox := class(box(int))`).
+  Dispatch tests the receiver's class and keeps its type equalities with the
+  selected implementation. Added type arguments are read from that class,
+  including for an inherited interface default. The declaring class's
+  parameter and result types still describe the call. A generic class's
+  method is a function generic over its class's type parameters, inferred
+  from the receiver as at a generic call. A call dispatches on the
   receiver's class as any method call does, adding no choice of its own
   (#314): in a `for`, a value the filters after it reject undoes what came
   before it, the receiver's and the arguments' effects and the earlier
@@ -1011,7 +1011,7 @@ Main():void =
   arguments where it is inlined, as at a call, named ones too), a recursive
   one with named parameters, a recursive one with a `defer:` of its own, or called by a recursive one (its body a function's, where it would run once), one with a `defer:` after a `return` (which may leave before it is reached), or with an `if`'s branch that has a `defer:` of its own, a `return` before its end and a path that does not return, one with a `return`
   other than in an `if`'s branches, or recursive with a `return`, a method whose name another class or interface
-  also has, overridden in a class that fixes or adds a generic class's type arguments, generic, `<suspends>` or using `(super:)`, one used as a function value, and, since its body is inlined where other names may be
+  also has, with its own method type parameters, `<suspends>` or using `(super:)` of another method, one used as a function value, and, since its body is inlined where other names may be
   in scope, one whose name is also the name of a parameter, local, field or
   method anywhere in the program, and a call of one where a name its body
   uses from outside is a parameter, local or member of `Self` in scope.
@@ -1468,6 +1468,6 @@ Main()<suspends>:void =
 arithmetic on rationals (see [rational](#rational)), float functions beyond those of [float](#float),
 the class features listed under [Classes](#classes), struct methods (Verse structs have none; classes do),
 `weak_map`, module paths `using{/Verse.org/…}` (accepted and ignored), overloading beyond [Overloading](#overloading), nested
-functions and lambdas (not released in Verse), choice beyond [Choice](#choice) (recursive functions with several values that have effects, other than generators, methods with several values whose name another class shares or that a class fixing a generic class's type arguments overrides), concurrency beyond [Concurrency](#concurrency), and effect checking
+functions and lambdas (not released in Verse), choice beyond [Choice](#choice) (recursive functions with several values that have effects, other than generators, methods with several values whose name an unrelated class shares), concurrency beyond [Concurrency](#concurrency), and effect checking
 other than `<decides>` and the heap effects (`<converges>` is accepted and
 ignored).

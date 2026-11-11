@@ -3,13 +3,28 @@
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
-for kind in composed exclusive binding typed-first typed-for typed-exclusive refined-for refined-state refined-failure lazy-first lazy-for lazy-effect-first lazy-effect-for lazy-alt-first lazy-alt-for lazy-failure-for lazy-alt-failure-for lazy-exclusive-failure-for refined-lazy-failure refined-return refined-lazy-return refined-nested-body refined-nested-failure lazy-generic-first construct-first construct-for construct-failure; do
+for kind in composed exclusive binding typed-first typed-for typed-exclusive refined-for refined-state refined-failure lazy-first lazy-for lazy-effect-first lazy-effect-for lazy-alt-first lazy-alt-for lazy-failure-for lazy-alt-failure-for lazy-exclusive-failure-for refined-lazy-failure refined-return refined-lazy-return refined-nested-body refined-nested-failure lazy-generic-first construct-first construct-for construct-failure method-first method-for method-failure; do
   sizes=()
   for count in 4 8; do
     python3 - "$kind" "$count" >"$tmp/p.verse" <<'PY'
 import sys
 kind, count = sys.argv[1], int(sys.argv[2])
 print('Two(N:int):int = N | N + 1')
+if kind.startswith('method-'):
+    print('box(t:type) := class:\n    A:t\n    Both()<transacts>:t = A | A')
+    print('fixed := class(box(int)):\n    Both<override>()<transacts>:int = A + 1 | A + 2')
+    print('extra(t:type,u:type) := class(box(t)):\n    E:u\n    Both<override>()<transacts>:t = A | A')
+    clauses = ', '.join(f'A{i} := P.Both()' for i in range(count))
+    if kind == 'method-first':
+        print(f'Run(P:box(t) where t:type):int = if ({clauses}, E:[]t = array{{}}) then E.Length else -1')
+    else:
+        specs = '<decides>' if kind == 'method-failure' else ''
+        test = '\n        1 = 1' if specs else ''
+        print(f'Run(P:box(t) where t:type){specs}:int =\n    R := for ({clauses}):{test}\n        A0\n    R.Length')
+    specs = '<decides>' if kind == 'method-failure' else ''
+    brackets = ('[', ']') if specs else ('(', ')')
+    print(f'Main(){specs}:void = Print("{{Run{brackets[0]}fixed{{A:=1}}{brackets[1]}}}")')
+    sys.exit(0)
 if kind.startswith('construct-'):
     print('Note(N:int)<transacts>:int =\n    Print("default {N}")\n    N')
     fields = '; '.join(f'D{i}:int = Note({i}); Y{i}:int' for i in range(count))

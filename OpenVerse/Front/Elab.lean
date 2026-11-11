@@ -1449,7 +1449,36 @@ def pruneConstructHints (ctx : Ctx) (target : String) (body : SExpr) : SExpr :=
 def choiceHasCast (ctx : Ctx) (i : SExpr) : Bool :=
   (Choice.arms i).any fun (cs, _) => cs.any fun clauses => clauses.any fun
     | .decl _ _ none false (.app _ (.ident _ target) [_] true) => ctx.types.classes.contains target
+    | .decl _ _ none false (.app _ (.ident _ "$methodCast") [ .app _ (.ident _ target) [_] true ] false) =>
+      ctx.types.classes.contains target
     | _ => false
+
+/-- A generated method dispatch can omit a class that cannot inhabit its
+    receiver's current type arguments. Other cases become ordinary refining
+    casts, kept with their selected implementation. Receivers are already
+    bound once by the dispatch's parameter prefix. -/
+partial def pruneMethodCases (ctx : Ctx) : SExpr → SExpr
+  | .ite p [.decl dp d none false (.app _ (.ident _ "$methodCast")
+      [cast@(.app _ (.ident _ target) [.ident _ x] true)] false)] body (some next) =>
+    let next := pruneMethodCases ctx next
+    let possible := match ctx.lookup x with
+      | some l => match l.ty.subst ctx.types.tvars with
+        | .struct source args => ((ctx.types.concreteBelow source).filter (ctx.types.isSub · target)).any fun c =>
+          (ctx.types.viewArgs? source c (ctx.types.coreArgs source args) (rigid := false)).isSome
+        | _ => true
+      | none => true
+    if possible then .ite p [.decl dp d none false cast] body (some next)
+    -- Keep an if and its unique binder even when it cannot select a body:
+    -- later exclusive lowering still needs a case boundary and a known type.
+    else .ite p [.decl dp d none false (.block p [.query p (.ident p "false"), .ident p x])]
+      (.app p (.ident p "$methodMiss") [] false) (some next)
+  | e => e
+
+/-- Normalize a dispatch condition after its receiver prefix is typed. -/
+def pruneMethodBinding (ctx : Ctx) : SExpr → SExpr
+  | .decl p n ty v (.app q f@(.ident _ "$branchChoice") [i] false) =>
+    .decl p n ty v (.app q f [pruneMethodCases ctx i] false)
+  | e => e
 
 /-- A local named `n` may be declared here: Verse has no shadowing. -/
 def checkNewLocal (ctx : Ctx) (p : Pos) (n : String) : EM Unit := do
@@ -1992,7 +2021,7 @@ def forBodySafe (ctx : Ctx) (body : SExpr) : Bool :=
   -- Prepared consumers keep lazy producer templates (including groups and
   -- generic/default argument bindings) inside the body. Their ownership is
   -- checked when that consumer elaborates; they do not escape the helper.
-  let safeMarkers := ["$inlineScope", "$inlineScopeEnd", "$inline", "$choice", "$excl", "$alt", "$firstP", "$first", "$each", "$noLift", "$fxOf",
+  let safeMarkers := ["$methodMiss", "$methodCast", "$inlineScope", "$inlineScopeEnd", "$inline", "$choice", "$excl", "$alt", "$firstP", "$first", "$each", "$noLift", "$fxOf",
     "$forReturns", "$forReturnBody", "$defer", "$loop", "$rec", "$recTo", "$group", "$member",
     "$tparams", "$params", "$defaults", "$paramDefault", "$freeNames", "$declNames"]
   !ctx.suspends && !(Refine.findPart (fun | .brk _ => true | _ => false) true body).isSome &&
@@ -2166,6 +2195,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
         -- effects even when empty. The option prevents failure of a
         -- selected branch from choosing the else branch instead.
         if let some b@{ branchy := some i, .. } := fs[j]?.bind Choice.binding? then
+          let i := pruneMethodCases cA i
           let st ← get
           let (_, ty, _, refined) ← elabBranchAlts { cA with canFail := true, inTaking := true, typeOnly := true }
             b.pos i b.ty b.place
@@ -2228,7 +2258,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
               let slot ← fresh values.ty
               let value ← if bodyFail then forOutcomeValues cA b.pos ⟨.local slot, values.ty⟩ else pure ⟨.local slot, values.ty⟩
               return (.seq codeA (.assign slot values.e), value.e, t)
-          let cl := fs[j]?.getD (.tuple p [])
+          let cl := pruneMethodBinding cA (fs[j]?.getD (.tuple p []))
           let (f, a, t) ← exclIter cA (Choice.bifToExcl cl ++ after) more bd
           return (.seq codeA f, a, t)
         let some (.decl gp x xty _ (.app _ _ alts _)) := fs[j]? | eerr p "internal: an exclusive choice"
@@ -3426,7 +3456,14 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
         | some θD => pure (mkX ((Ty.struct T targs).subst θD))
         | none => eerr p s!"cannot cast {withArticle rx.ty.show} to {shown} yet: the object's type arguments as {withArticle part[0]!} do not determine {T}'s (#250)"
       let dL : Local := { name := D, slot := y, ty := dTyX, mutable := false }
+      -- As for method dispatch, pass witnesses at the caller's own types.
+      -- Pins may equate one to a newly opened component of a compound type.
+      let unrefine := μF.filterMap fun (x, t) =>
+        if ctx.dictVars.contains x && t.params.any (·.startsWith "$ext") then
+          (ctx.types.tvars.lookup x).map (t, ·)
+        else none
       let ctx' := { ctx with
+        unrefine := unrefine ++ ctx.unrefine,
         locals := dL :: ctx.locals.map fun loc => { loc with ty := loc.ty.subst μF, storage := loc.storage.map (·.subst μF) },
         types := { env with tvars := env.tvars.map fun (m, t) => (m, t.subst μF) } }
       let argOf (sp : SParam) : SExpr :=
@@ -3652,6 +3689,8 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
     set st0
     return ← elabE { ctx with constructHints := some hints, constructOrigin := some ctx.frameName } se exp
   match se with
+  | .app _ (.ident _ "$methodMiss") [] false => pure ⟨.prim .fail [], .never⟩
+  | .app _ (.ident _ "$methodCast") [cast] false => elabE ctx cast exp
   | .app p (.ident _ "$constructProbe") [.str _ [.text site], .construct q n ts fs] false =>
     let r ← elabConstruct ctx q n ts (fs.map constructFieldsForTypes) exp
     modify fun st => { st with constructHints := constructHint ctx q n site r.ty :: st.constructHints }
@@ -4112,6 +4151,8 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
     let r ← elabE { ctx with canFail := true, inTaking := true } e none
     if !(r.e.mayFail ctx.sigProg) && (← get).fnNeeds.isEmpty && !ctx.typeOnly then eerr p "logic{…} needs an expression that can fail"
     return ⟨Expr.logicE r.e, .logic⟩
+  | e@(.ite _ [.decl _ _ none false (.app _ (.ident _ "$methodCast") _ false)] _ (some _)) =>
+    elabE ctx (pruneMethodCases ctx e) exp
   | .ite p conds thenE elseE =>
     -- (#243, #351) a cast as a later clause of the condition, `if (c₁, …,
     -- D := T[X], rest) then B else E`, that only the first clause may be
@@ -6221,6 +6262,7 @@ partial def elabChoiceTypeCondition (ctx : Ctx) : List SExpr → EM (R × Ctx ×
     its conditions bind, at their written type or their join. -/
 partial def elabBranchAlts (ctx : Ctx) (p : Pos) (i : SExpr) (sty : Option STy) (place : Option SExpr := none) :
     EM (Option Expr × Ty × List Expr × Bool) := do
+  let i := pruneMethodCases ctx i
   let arms := Choice.arms i
   let bi ← fresh .int
   let mut conds : Array (Option Expr) := #[]
@@ -6274,8 +6316,8 @@ partial def elabBranchAlts (ctx : Ctx) (p : Pos) (i : SExpr) (sty : Option STy) 
         | a, _ => a
       let r ← elabE c (.optionLit a.pos a) (t?.map .opt)
       match r.ty with
-      | .opt t => return ⟨r.e, t⟩
-      | _ => return r
+      | .opt t => pure ⟨r.e, t⟩
+      | _ => pure r
     else elabE c a t?
     if ctx.typeOnly then
       if let some t := t? then discard <| coerce a.pos r t
@@ -6448,6 +6490,7 @@ partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
             (.app q f (as.filter fun | .app _ (.ident _ "$joinOf") _ _ => false | _ => true) false))
         | none => pure cl
       | cl => pure cl
+    let cl := pruneMethodBinding ctx cl
     if let some b@{ branchy := some i, .. } := Choice.binding? cl then
       if choiceHasCast ctx i then
         let p := b.pos
@@ -6461,7 +6504,7 @@ partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
           if Choice.plainBranches Choice.hasLiftable i then
             return ← elabOneChoice ctx b rest
           return ← elabOneGo ctx (Choice.prepare [cl] (choiceValues ctx) (choiceField ctx)
-            (fieldOrder := choiceOrder ctx) ++ rest)
+            (site := b.name) (fieldOrder := choiceOrder ctx) ++ rest)
         if ctx.typeOnly then
           checkNewLocal ctx p b.name
           let slot ← fresh ty
