@@ -1552,7 +1552,10 @@ partial def inlineCalls (mv : List (String × MFn)) (e : SExpr) (recs : List Str
       -- at a time, so an earlier value can type a later empty container.
       let namedArg := fun | SExpr.decl _ n _ _ _ => n.startsWith "?" | _ => false
       let selfP := f.params.head?.any (·.name == "$Self")
-      let as := if selfP && !f.tparams.isEmpty && posPs.length >= 3 then
+      let classTps := match f.params.head?.map (·.ty) with
+        | some (.app _ ts) => ts.length
+        | _ => 0
+      let as := if selfP && f.tparams.length > classTps && posPs.length >= 3 then
           match as.filter (!namedArg ·) with
           | [receiver, .tuple _ fields] =>
             if fields.length == posPs.length - 1 then receiver :: fields ++ as.filter namedArg else as
@@ -1564,7 +1567,6 @@ partial def inlineCalls (mv : List (String × MFn)) (e : SExpr) (recs : List Str
         | _ => none
       -- (a method's function, #283: its receiver first, then the arguments
       -- as a method's; no array form for a method, as at its call)
-      let selfP := match f.params with | sp :: _ => sp.name == "$Self" | _ => false
       let off := if selfP then 1 else 0
       let arrayParam := !hasNamed && !selfP && match f.params with | [sp] => (match sp.ty with | .arr _ => true | _ => false) | _ => false
       let tupleArg := !hasNamed && as.length == 1 + off && f.params.length ≥ 2 + off
