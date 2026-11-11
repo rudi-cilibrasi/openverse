@@ -111,9 +111,11 @@ chmod +x "$tmp/bin/python3"
 PATH="$tmp/bin:$PATH" run_case front generator-error 1
 grep -q 'GENERATOR FAILED seed 1' "$tmp/log" || die 'front did not report the generator'
 [[ ! -f "$FUZZ_TEST_CALLS" && ! -f "$FUZZ_TEST_C_CALLS" ]] || die 'front ran an incomplete batch'
-# Seed 20768992 predicts both a type mismatch and an effectful generator refusal.
+# Seed 20768992 predicts a type mismatch. Generic effectful search is supported;
+# its former refusal must no longer let a broken compiler pass this runner.
 run_case model-generic generic-class 0
-run_case model-generic generic-effect 0
+run_case model-generic generic-effect 1
+grep -q 'EXPECTED REFUSAL seed 20768992' "$tmp/log" || die 'model-generic accepted the retired generic-search refusal'
 run_case model-generic generic-unrelated 1
 grep -q 'EXPECTED REFUSAL seed 20768992' "$tmp/log" || die 'model-generic accepted an unrelated diagnostic'
 [[ ! -f "$FUZZ_TEST_C_CALLS" ]] || die 'model-generic ran a refusal in C'

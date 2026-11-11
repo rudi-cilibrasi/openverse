@@ -1,5 +1,4 @@
-# expect: 9:27: Nat has several values, is recursive and may print in its clauses
-# (#246 step 2) in a generic class's method, the clauses after the call use Self, whose type has its type parameters
+# A lazy first-success helper captures a generic method's Self.
 Nat(N:int)<transacts><decides>:int =
     Print("at {N}")
     N | Nat[N + 1]

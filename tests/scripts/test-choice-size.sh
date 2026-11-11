@@ -3,7 +3,7 @@
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
-for kind in composed exclusive binding typed-first typed-for typed-exclusive refined-for refined-state refined-failure lazy-first lazy-for lazy-effect-first lazy-effect-for lazy-alt-first lazy-alt-for lazy-failure-for lazy-alt-failure-for lazy-exclusive-failure-for refined-lazy-failure refined-return refined-lazy-return refined-nested-body refined-nested-failure; do
+for kind in composed exclusive binding typed-first typed-for typed-exclusive refined-for refined-state refined-failure lazy-first lazy-for lazy-effect-first lazy-effect-for lazy-alt-first lazy-alt-for lazy-failure-for lazy-alt-failure-for lazy-exclusive-failure-for refined-lazy-failure refined-return refined-lazy-return refined-nested-body refined-nested-failure lazy-generic-first; do
   sizes=()
   for count in 4 8; do
     python3 - "$kind" "$count" >"$tmp/p.verse" <<'PY'
@@ -11,7 +11,7 @@ import sys
 kind, count = sys.argv[1], int(sys.argv[2])
 print('Two(N:int):int = N | N + 1')
 if kind.startswith('lazy-'):
-    effectful = 'effect' in kind or 'alt' in kind or 'failure' in kind
+    effectful = 'effect' in kind or 'alt' in kind or 'failure' in kind or 'generic' in kind
     failable = 'failure' in kind
     print('counter := class:\n    var N:int = 0')
     params = 'C:counter, N:int' if effectful else 'N:int'
@@ -30,6 +30,10 @@ if kind.startswith('lazy-'):
     if 'alt' not in kind:
         clauses += f', L := {call}'
     specs = '<decides>' if failable else ''
+    if kind == 'lazy-generic-first':
+        print(f'Run(Unused:t where t:type):int =\n    C := counter{{}}\n    if ({clauses}, E:[]t = array{{}}, A{count-1} = 1) then E.Length else -1')
+        print('Main():void = Print("{Run(7)} {Run(\"s\")}")')
+        sys.exit(0)
     print(f'Main(){specs}:void =\n    C := counter{{}}')
     if kind.endswith('first'):
         print(f'    if ({clauses}, A{count-1} = 1) then Print("{{A0}} {{C.N}}")')
