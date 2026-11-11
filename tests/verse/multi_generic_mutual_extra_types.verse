@@ -17,8 +17,15 @@ dup(t:type) := class(pair(t,t)) {}
 Refined(P:pair(a,b) where a:type,b:type):void =
     if(D:=dup[P]):
         for(V:=A[D.First,1]): Print("refined {V(1)}")
+root := class {}
+hidden(t:type) := class(root) { Value:t }
+Opened(P:root):void =
+    if(H:=hidden[P]):
+        if(V:=A[H.Value,1],V(1)=0)then Print("opened {V(1)}")
 Main():void =
     for(V:=A[7,2]): Print("got {V(0)} {V(1)}")
     if(V:=Pick("s",option{7})?)then Print("first {V}")
     Refined(dup(int){First:=1,Second:=2})
     Refined(dup(string){First:="a",Second:="b"})
+    Opened(hidden(int){Value:=7})
+    Opened(hidden(string){Value:="s"})
