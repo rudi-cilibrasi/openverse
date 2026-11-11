@@ -481,6 +481,47 @@ for o in objs:
     main.append(f'    Print("exit break {{ExitBreak({o["name"]}, {q["name"]}, {start})}}")')
     expect.append(f"exit break {total * 100 + other}")
 
+# #417: a class cast chooses one branch, and the consumer retries that
+# branch's alternatives. Receiver and prefix effects happen once.
+R417 = random.Random(seed * 1000003 + 417)
+choice_target = R417.choice(list(MENU))
+receiver_step = R417.randint(1, 5)
+prefix_step = R417.randint(1, 5)
+left_step = R417.randint(1, 5)
+right_step = R417.randint(1, 5)
+else_step = R417.randint(1, 5)
+choice_offset = R417.randint(1, 5)
+loops.append(f'''ChoiceReceiver(P:pair(a, b) where a:type, b:type)<transacts>:pair(a, b) =
+    set P.N += {receiver_step}
+    P
+ChoiceValue(P:pair(a, b), Step:int, Value:int where a:type, b:type)<transacts>:int =
+    set P.N += Step
+    Value
+FirstCast(P:pair(a, b), Threshold:int where a:type, b:type)<transacts>:int =
+    if (V := if (D := {choice_target}[ChoiceReceiver(P)]):
+        set P.N += {prefix_step}
+        ChoiceValue(P, {left_step}, D.C) | ChoiceValue(P, {right_step}, D.C + {choice_offset})
+    else:
+        ChoiceValue(P, {else_step}, -{choice_offset})
+    , V > Threshold):
+        V
+    else:
+        -999''')
+for o in objs:
+    threshold = R417.randint(-choice_offset - 1, 10)
+    result = -999
+    if below(o['cls'], choice_target):
+        for value, step in [(o['C'], left_step), (o['C'] + choice_offset, right_step)]:
+            if value > threshold:
+                result = value
+                o['N'] += receiver_step + prefix_step + step
+                break
+    elif -choice_offset > threshold:
+        result = -choice_offset
+        o['N'] += else_step
+    main.append(f'    Print("first cast {{FirstCast({o["name"]}, {threshold})}} state {{{o["name"]}.N}}")')
+    expect.append(f"first cast {result} state {o['N']}")
+
 prog = [f"# genrefine seed {seed}"] + prog_cls + loops
 for f in funcs: prog.append(fix_iface(f, ftext(f)))
 prog += list(SHOWN.values())

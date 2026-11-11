@@ -1287,6 +1287,13 @@ def choiceOrder (ctx : Ctx) (n : String) : List (String × Bool) :=
     | some d => !Choice.stable (fun _ => true) d
     | none => false)
 
+/-- Keep a class cast with its branch until its refinement can be applied.
+    A receiver bound by earlier clauses need not be in the context yet. -/
+def choiceHasCast (ctx : Ctx) (i : SExpr) : Bool :=
+  (Choice.arms i).any fun (cs, _) => cs.any fun clauses => clauses.any fun
+    | .decl _ _ none false (.app _ (.ident _ target) [_] true) => ctx.types.classes.contains target
+    | _ => false
+
 /-- A local named `n` may be declared here: Verse has no shadowing. -/
 def checkNewLocal (ctx : Ctx) (p : Pos) (n : String) : EM Unit := do
   if ctx.lookup n |>.isSome then
@@ -1367,6 +1374,20 @@ def refiningCast? (env : TyEnv) (T : String) (xty : Ty) (avoid : List String := 
     -- as a plain cast does not give them, #351)
     if !viewedS && cargs.length == rargs.length && opened.isEmpty && μ.all (names.contains ·.1) then none
     some (S, sargs, targs, common, eqs, opened)
+
+/-- Unify a refining cast's equations, preserving comparable opened types. -/
+def castRefinement? (env : TyEnv) (eqs : List (Ty × Ty)) (opened : List (String × String × Bool)) :
+    Option (List (String × Ty) × List (String × String × Bool)) := do
+  let coreFields (n : String) (ts : List Ty) : Option (List Ty) :=
+    if env.classes.contains n then none else some ((env.fields n ts).map (·.2.1))
+  let some μ := Ty.unifyEqs coreFields [] eqs | none
+  let cmpVars := env.tvars.filterMap fun (n, t) => match t with
+    | .param _ true => some n
+    | _ => none
+  let cmpOpen := (opened.filter fun (n, _, c) => !c && cmpVars.any fun v =>
+    ((Ty.param v true).subst μ).params.contains n).map (·.1)
+  let mkC (t : Ty) := t.subst (cmpOpen.map fun n => (n, Ty.param n true))
+  some (μ.map fun (v, t) => (v, mkC t), opened.map fun (n, v, c) => (n, v, c || cmpOpen.contains n))
 
 /-- The implementation `(super:)M` reaches in a method of class `c`: what
     the class inherits for the method's slot (`(r:)M`'s, or every slot of
@@ -1732,7 +1753,10 @@ def contLiftOf (ctx c2 : Ctx) (p : Pos) (b : String) (alts rest : List SExpr)
     | none => throw s!"internal: name {n}"
   let some bl := bls.head? | throw "internal: no binding"
   if bl.mutable then throw "a var binding"
-  if (caps ++ bls).any (fun l => !(Ty.paramsC l.ty).isEmpty) then throw "in a generic function"
+  let tps := ((bl :: caps).flatMap fun l => l.ty.paramsC).foldl
+    (fun acc (n, cmp) => if acc.any (·.1 == n) then acc else acc ++ [(n, cmp)]) []
+  if bls.any (fun l => l.ty.params.any fun n => !tps.any (·.1 == n)) then
+    throw "a result type parameter is not determined by the continuation's arguments"
   let name := s!"$cont{p.line}_{p.col}_{key.hash}" ++ (if p.file.isEmpty then "" else s!"_{p.file}")
   -- (its effects the function's own: its body is that function's code,
   -- and it may call what is asked for only in the next elaboration, a
@@ -1747,6 +1771,7 @@ def contLiftOf (ctx c2 : Ctx) (p : Pos) (b : String) (alts rest : List SExpr)
   -- (`$firstP`: the clauses are lifted already, the consumer's, which lifting
   -- again would bind twice, as for #275's functions)
   return { key, pos := p, name, params,
+           tparams := tps.map fun (n, cmp) => { pos := p, name := n, constraint := if cmp then "comparable" else "type" },
            specs := (if heap.isEmpty then ["computes"] else heap) ++ ["decides"],
            ret := .tup (bls.map (·.ty.toSTy) ++ sets.map (·.ty.toSTy) ++ [.name "logic"]),
            body := .block p (copies ++ [.app p (.ident p "$firstP") [.block p (rest ++ [tup])] false]),
@@ -1819,7 +1844,7 @@ def contForLiftOf (ctx : Ctx) (p : Pos) (b : String) (bty vty : Ty) (alts rest :
     calls as arguments (named as they are), so that it is a command of its
     own, with its own heartbeats (#325); `elabFor` in the block passes them. -/
 partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty × List Expr))
-    (elabBranchAlts : Ctx → Pos → SExpr → Option STy → Option SExpr → EM (Option Expr × Ty × List Expr))
+    (elabBranchAlts : Ctx → Pos → SExpr → Option STy → Option SExpr → EM (Option Expr × Ty × List Expr × Bool))
     (elabE : Ctx → SExpr → Option Ty → EM R) (elabInts : Ctx → Pos → List SExpr → EM (List Expr))
     (elabLoopGen : Ctx → Pos → List SExpr → EM LoopGen) (elabSeq : Ctx → List SExpr → Option Ty → EM (R × Ctx))
     (ctx : Ctx) (p : Pos) (clauses : List SExpr) (body : SExpr) (prepared : Bool := false)
@@ -1911,7 +1936,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
             let st ← get
             -- (for `set L = if …`, at `L`'s type; a branch with a call to
             -- lift typed as `option{…}` takes it, #283)
-            let (_, ty, _) ← elabBranchAlts { cA with canFail := true, inTaking := true, typeOnly := true } gp i none place
+            let (_, ty, _, _) ← elabBranchAlts { cA with canFail := true, inTaking := true, typeOnly := true } gp i none place
             set st
             pure (some ty.toSTy)
           | t, _ => pure t
@@ -2203,9 +2228,9 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
           -- alternative bound in the filter (so a failing one is skipped)
           let some b := Choice.binding? g | eerr g.pos "bad for clause"
           -- (an `if` with choices in its branches picks its branch first, once, #235)
-          let (pre, ty, es) ← match b.branchy with
+          let (pre, ty, es, _) ← match b.branchy with
             | some i => elabBranchAlts { c with canFail := true, inTaking := true } gp i b.ty b.place
-            | none => do let (ty, es) ← elabAlts { c with canFail := true } gp b; pure (none, ty, es)
+            | none => do let (ty, es) ← elabAlts { c with canFail := true } gp b; pure (none, ty, es, false)
           checkNewLocal c gp n
           let k ← fresh .int
           let (xs, c1) ← declare c n ty
@@ -2800,19 +2825,11 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
     (env.coreVars T).all fun (v, _) => !v.startsWith "$arg")
   let coreFields (n : String) (ts : List Ty) : Option (List Ty) :=
     if env.classes.contains n then none else some ((env.fields n ts).map (·.2.1))
-  let some μT := Ty.unifyEqs coreFields [] eqs | do set st0; return none
-  -- (#250: an opened parameter that a comparable type parameter's
-  -- refinement mentions, `t:subtype(comparable)` refined to `tuple(a', b')`,
-  -- is comparable too, as the object's type argument for `t` is)
-  let cmpVars : List String := env.tvars.filterMap fun (n, t) => match t with
+  let some (μT, opened) := castRefinement? env eqs opened | do set st0; return none
+  let cmpVars := env.tvars.filterMap fun (n, t) => match t with
     | .param _ true => some n
     | _ => none
-  let cmpOpen : List String := (opened.filter fun (n, _, c) => !c && cmpVars.any fun v =>
-    ((Ty.param v true).subst μT).params.contains n).map (·.1)
-  let mkC (t : Ty) : Ty := t.subst (cmpOpen.map fun n => (n, Ty.param n true))
-  let targs := targs.map mkC
-  let μT := μT.map fun (v, t) => (v, mkC t)
-  let opened := opened.map fun (n, v, c) => (n, v, c || cmpOpen.contains n)
+  let targs := targs.map fun t => t.subst (opened.filterMap fun (n, _, c) => if c then some (n, Ty.param n true) else none)
   let shown := (Ty.struct T targs).show
   -- (the locals the branch uses, in order of first use)
   let caps : List Local := (Choice.namesUsed body).filterMap fun n =>
@@ -2969,7 +2986,7 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
       -- (made: a branch the elaborator made, for a cast with clauses
       -- after it, #286, which the source does not have as such)
       -- (and a tagged one, which the source's places do not find, #53)
-      body := if ctx.selfClass.isSome || made || !ctx.liftTag.isEmpty then some body else none }
+      body := if ctx.selfClass.isSome || made || D.startsWith "$" || !ctx.liftTag.isEmpty then some body else none }
     modify fun st => if st.castNeeds.any (·.key == key) then st else { st with castNeeds := st.castNeeds ++ [lift] }
     if suspendsB then
       modify fun st => { st with pendingSuspendingCasts := st.pendingSuspendingCasts + 1 }
@@ -5682,22 +5699,56 @@ partial def elabFor (ctx : Ctx) (p : Pos) (clauses : List SExpr) (body : SExpr) 
   elabForWith elabAlts (fun c q i t pl => elabBranchAlts c q i t pl) elabE elabInts elabLoopGen elabSeq ctx p clauses body
     prepared firstDecides
 
+/-- A condition's local types under its cast refinements. Its code is used
+    only by the isolated branch-type probe. -/
+partial def elabChoiceTypeCondition (ctx : Ctx) : List SExpr → EM (R × Ctx × Bool)
+  | [] => pure (⟨.lit .void, .void⟩, ctx, false)
+  | cl :: rest => do
+    if let .decl p d none false (.app _ (.ident _ target) [x] true) := cl then
+      let st ← get
+      let rx ← elabE ctx x none
+      let env := ctx.types
+      if let some (source, _, targs, _, eqs, opened) := refiningCast? env target rx.ty (env.tvars.map (·.1)) then
+        if env.isRefClass source && (opened.isEmpty || env.isRefClass target) then
+          if let some (μ, opened) := castRefinement? env eqs opened then
+            let targs := targs.map fun t => t.subst (opened.filterMap fun (n, _, c) => if c then some (n, Ty.param n true) else none)
+            let refine (t : Ty) := t.subst μ
+            let ty := refine (.struct target targs)
+            let slot ← fresh ty
+            let c : Ctx := { ctx with
+              locals := { name := d, slot, ty, mutable := false } :: (ctx.locals.map fun l => { l with ty := refine l.ty }),
+              types := { env with tvars := (env.tvars.map (fun (n, t) => (n, refine t)) ++
+                opened.map (fun (n, _, cmp) => (n, Ty.param n cmp))) } }
+            let (r, c, _) ← elabChoiceTypeCondition c rest
+            return (⟨.seq Expr.failV r.e, r.ty⟩, c, true)
+      set st
+    let (r, c) ← if Choice.hasChoice [cl] (choiceOrder ctx) then elabOneClauses ctx [cl]
+      else elabSeq ctx [cl] none
+    let (tail, c, refined) ← elabChoiceTypeCondition c rest
+    return (⟨.seq r.e tail.e, tail.ty⟩, c, refined)
+
 /-- An `if … else if … else …` with choices in its branches (#235): code that
     picks the branch, once, into a fresh slot (each condition a failure
     context of its own, tried when the ones before failed), and every
     branch's alternatives guarded by it (`B = j; a`), each seeing the names
     its conditions bind, at their written type or their join. -/
 partial def elabBranchAlts (ctx : Ctx) (p : Pos) (i : SExpr) (sty : Option STy) (place : Option SExpr := none) :
-    EM (Option Expr × Ty × List Expr) := do
+    EM (Option Expr × Ty × List Expr × Bool) := do
   let arms := Choice.arms i
   let bi ← fresh .int
   let mut conds : Array (Option Expr) := #[]
   let mut ctxs : Array Ctx := #[]
+  let mut refined := false
   for (cs?, _) in arms do
     match cs? with
     | some cs =>
-      let (rc, cT) ← if Choice.hasChoice cs (choiceOrder ctx) then elabOneClauses { ctx with canFail := true } cs
-        else elabSeq { ctx with canFail := true, inTaking := true } cs none
+      let (rc, cT, refines) ← if ctx.typeOnly && choiceHasCast ctx i then
+          elabChoiceTypeCondition { ctx with canFail := true, inTaking := true } cs
+        else do
+          let (rc, cT) ← if Choice.hasChoice cs (choiceOrder ctx) then elabOneClauses { ctx with canFail := true } cs
+            else elabSeq { ctx with canFail := true, inTaking := true } cs none
+          pure (rc, cT, false)
+      refined := refined || refines
       if !(rc.e.mayFail ctx.sigProg) && (← get).fnNeeds.isEmpty && !ctx.typeOnly then
         eerr p "the condition of this if cannot fail (Verse requires a failable condition)"
       conds := conds.push (some rc.e)
@@ -5720,7 +5771,9 @@ partial def elabBranchAlts (ctx : Ctx) (p : Pos) (i : SExpr) (sty : Option STy) 
   -- choice in it, which only a failure context that takes its values
   -- compiles, at the type of those values, as `option{…}` takes them)
   let elabA (c : Ctx) (a : SExpr) (t? : Option Ty) : EM R := do
-    if ctx.typeOnly && Choice.hasLiftable a then
+    let wanted := t?
+    let t? := if ctx.typeOnly then t?.map (·.subst c.types.tvars) else t?
+    let r ← if ctx.typeOnly && Choice.hasLiftable a then do
       -- (a block's last value at the expected type, which `option{…}`
       -- does not pass into it, #383's review: `{ …; false }` against ?int;
       -- its `defer:`s after the value, as where it is lifted, #283, since
@@ -5737,6 +5790,9 @@ partial def elabBranchAlts (ctx : Ctx) (p : Pos) (i : SExpr) (sty : Option STy) 
       | .opt t => return ⟨r.e, t⟩
       | _ => return r
     else elabE c a t?
+    if ctx.typeOnly then
+      if let some t := t? then discard <| coerce a.pos r t
+    return { r with ty := if ctx.typeOnly then wanted.getD r.ty else r.ty }
   let all : List (Nat × SExpr) := arms.zipIdx.flatMap fun ((_, arm), j) => ((Choice.alts? arm).getD [arm]).map (j, ·)
   -- (#366, the state before the alternatives, for the retries below)
   let st0 ← get
@@ -5802,7 +5858,7 @@ partial def elabBranchAlts (ctx : Ctx) (p : Pos) (i : SExpr) (sty : Option STy) 
       | none => set stAfter
   let es ← rs.toList.mapM fun (j, a, r) => do
     return Expr.seq (.prim .eq [.local bi, .lit (.int j)]) (← coerce a.pos r ty)
-  return (some pick, ty, es)
+  return (some pick, ty, es, refined)
 
 /-- The alternatives of a choice (#208), at its written type or at their
     join (each one against the first's type, else on its own, as `if`'s
@@ -5881,7 +5937,8 @@ partial def elabOneClauses (ctx : Ctx) (cs : List SExpr) : EM (R × Ctx) := do
   let ctx := { ctx with liftWhy := "" }
   -- (a `break` here would leave `firstE`'s loop, not the program's)
   let (code, ctx') ← elabOneGo { ctx with inLoop := false, inChoice := ctx.inLoop, inTaking := true }
-    (Choice.prepare cs (choiceValues ctx) (choiceField ctx) (fieldOrder := choiceOrder ctx))
+    (Choice.prepare cs (choiceValues ctx) (choiceField ctx) (fieldOrder := choiceOrder ctx)
+      (keepBranches := choiceHasCast ctx))
   return (⟨Expr.firstE code, .void⟩, { ctx' with inLoop := ctx.inLoop, inChoice := ctx.inChoice, inTaking := ctx.inTaking })
 
 partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
@@ -5898,12 +5955,70 @@ partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
         match as.findSome? (fun | .app _ (.ident _ "$joinOf") (i :: l) false => some (i, l.head?) | _ => none) with
         | some (i, place) =>
           let st ← get
-          let (_, ty, _) ← elabBranchAlts { ctx with canFail := true, inTaking := true, typeOnly := true } p i none place
+          let (_, ty, _, _) ← elabBranchAlts { ctx with canFail := true, inTaking := true, typeOnly := true } p i none place
           set st
           pure (.decl p x (some ty.toSTy) false
             (.app q f (as.filter fun | .app _ (.ident _ "$joinOf") _ _ => false | _ => true) false))
         | none => pure cl
       | cl => pure cl
+    if let some b@{ branchy := some i, .. } := Choice.binding? cl then
+      if choiceHasCast ctx i then
+        let p := b.pos
+        let t := s!"$refineChoice{p.line}_{p.col}{b.name}"
+        -- Infer the element type before putting the remaining clauses in
+        -- the branch. Each option takes the branch's first value for types.
+        let st ← get
+        let (_, ty, _, refined) ← elabBranchAlts { ctx with typeOnly := true } p i b.ty b.place
+        set st
+        if !refined then
+          if Choice.plainBranches Choice.hasLiftable i then
+            return ← elabOneChoice ctx b rest
+          return ← elabOneGo ctx (Choice.prepare [cl] (choiceValues ctx) (choiceField ctx)
+            (fieldOrder := choiceOrder ctx) ++ rest)
+        if ctx.typeOnly then
+          checkNewLocal ctx p b.name
+          let slot ← fresh ty
+          return ← elabOneGo { ctx with locals := { name := b.name, slot, ty, mutable := false } :: ctx.locals } rest
+        let key := contKey ctx p b.name (i :: rest)
+        let request := ctx.types.loopRequests.find? (·.key == key)
+        let hasLater := rest.any fun cl => match Choice.binding? cl with
+          | some { branchy := some next, .. } => choiceHasCast ctx next
+          | some { alts, .. } => alts.any Choice.hasLiftable
+          | none => false
+        let hasLoop := rest.any (Choice.anyE fun | .app _ (.ident _ "$loop") _ false => true | _ => false)
+        if request.isNone && hasLater && !hasLoop then
+          let st0 ← get
+          let slot ← fresh ty
+          let c := { ctx with locals := { name := b.name, slot, ty, mutable := false } :: ctx.locals }
+          let (code, c2) ← elabOneGo c rest
+          let fx := (← get).fx
+          match contLiftOf ctx c2 p b.name [i] rest fx with
+          | .ok lift =>
+            modify fun s => { s with loopFirst := s.loopFirst ++
+              [{ g := "", pos := p, itemCode := .lit .void, argSet := none, lift := .ok lift }] }
+            return (code, c2)
+          | .error _ => set st0
+        let request := request.filter fun l =>
+          (l.specs.filter (["reads", "writes", "allocates"].contains ·)).all ctx.fnFx.contains
+        let binds := (b.name :: Choice.boundIn rest).eraseDups
+        let vars := rest.filterMap fun | .decl _ n _ true _ => some n | _ => none
+        let tup := SExpr.tuple p (binds.map (SExpr.ident p ·) ++ [.ident p "true"])
+        let consume (arm : SExpr) : SExpr :=
+          let clauses := Choice.prepare [.decl p b.name (some ty.toSTy) false arm]
+            (choiceValues ctx) (choiceField ctx) (site := t) (fieldOrder := choiceOrder ctx)
+            (keepBranches := choiceHasCast ctx)
+          let tail := match request with
+            | some l => [SExpr.app p (.ident p l.name) l.args true]
+            | none => rest ++ [tup]
+          .optionLit p (.app p (.ident p "$firstP") [.block p (clauses ++ tail)] false)
+        let selected := Choice.consumeBranches i t consume
+        -- A selected branch with no successful value gives none. Query it
+        -- after selection so an alternative's failure cannot select else.
+        let get (j : Nat) := SExpr.app p (.ident p t) [.int p (j : Int)] false
+        let unpack := binds.zipIdx.map fun (n, j) => SExpr.decl p n none (vars.contains n) (get j)
+        let writes := request.toList.flatMap fun l => l.sets.zipIdx.map fun (n, j) =>
+          SExpr.set p (.ident p n) none (get (l.binds.length + j))
+        return ← elabOneGo ctx ([.decl p t none false (.query p selected)] ++ unpack ++ writes)
     match Choice.binding? cl with
     | some b@{ each := some (.app _ (.ident _ "$loop") lp false), .. } =>
       -- (one taken lazily, #246: a loop over its values, each followed by
@@ -5984,7 +6099,7 @@ partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
         let liftAlt (a : SExpr) (i : Nat) : List SExpr :=
           Choice.prepare [.decl p b.name b.ty false a] (choiceValues ctx) (choiceField ctx)
             (fieldOrder := choiceOrder ctx)
-            (site := s!"{t}a{i}")
+            (site := s!"{t}a{i}") (keepBranches := choiceHasCast ctx)
         let alt (a : SExpr) (i : Nat) : SExpr :=
           .app p (.ident p "$firstP") [.block p (liftAlt a i ++ rest ++ [tup])] false
         let copied : List SExpr := [.decl p t none false (Choice.mk p (b.alts.zipIdx.map fun (a, i) => alt a i))] ++
@@ -6059,22 +6174,25 @@ partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
       let (inner, c2) ← elabOneGo c1 rest
       return (Expr.chooseFirst k x es inner, c2)
     | some b =>
-      let p := b.pos
-      let n := b.name
-      let (pre, ty, es) ← match b.branchy with
-        | some i => elabBranchAlts ctx p i b.ty b.place
-        | none => do let (ty, es) ← elabAlts ctx p b; pure (none, ty, es)
-      checkNewLocal ctx p n
-      let k ← fresh .int
-      let x ← fresh ty
-      let c1 := { ctx with locals := { name := n, slot := x, ty, mutable := false } :: ctx.locals }
-      let (inner, c2) ← elabOneGo c1 rest
-      let code := Expr.chooseFirst k x es inner
-      return ((pre.map (Expr.seq · code)).getD code, c2)
+      elabOneChoice ctx b rest
     | none =>
       let (r, c1) ← elabStmt ctx cl none
       let (inner, c2) ← elabOneGo c1 rest
       return (.seq r.e inner, c2)
+
+partial def elabOneChoice (ctx : Ctx) (b : Choice.Binding) (rest : List SExpr) : EM (Expr × Ctx) := do
+  let p := b.pos
+  let n := b.name
+  let (pre, ty, es, _) ← match b.branchy with
+    | some i => elabBranchAlts ctx p i b.ty b.place
+    | none => do let (ty, es) ← elabAlts ctx p b; pure (none, ty, es, false)
+  checkNewLocal ctx p n
+  let k ← fresh .int
+  let x ← fresh ty
+  let c1 := { ctx with locals := { name := n, slot := x, ty, mutable := false } :: ctx.locals }
+  let (inner, c2) ← elabOneGo c1 rest
+  let code := Expr.chooseFirst k x es inner
+  return ((pre.map (Expr.seq · code)).getD code, c2)
 
 /-- A call of a recursive function with several values that its consumer
     takes lazily (#246), `$loop(F, params, clauses, r := tail)`, its
@@ -8417,7 +8535,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   -- (in front, as the entry expression is the end)
   let resolved := Refine.functions opts.castRequests resolved ++ resolved
   -- (#246) the functions of their own of lazily taken calls
-  let resolved := opts.loopRequests.flatMap (fun l => STop.fn l.pos l.name l.params [] l.specs l.ret l.body :: l.extraFns) ++ resolved
+  let resolved := opts.loopRequests.flatMap (fun l => STop.fn l.pos l.name l.params l.tparams l.specs l.ret l.body :: l.extraFns) ++ resolved
   -- (the helpers after: they name nothing of the program's)
   -- function values (#210): the function types' interfaces, and a class
   -- for each function used as a value

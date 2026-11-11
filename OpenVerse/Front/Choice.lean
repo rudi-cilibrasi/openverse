@@ -1005,13 +1005,30 @@ def bifToExcl (c : SExpr) : List SExpr :=
        .decl p x ty false (withJoin (mkExcl ip [(binds, t), ([.notE ip (.query ip (.ident ip k))], u)]))]
   | c => [c]
 
+/-- Apply a consumer inside each selected branch. Condition names stay in
+    the branch, with fresh names so the consumer cannot refer to them. -/
+partial def consumeBranches (i : SExpr) (site : String) (consume : SExpr → SExpr) : SExpr :=
+  match i with
+  | .ite p cs t (some u) =>
+    let names := boundIn cs
+    let ren := names.map fun n => (n, s!"${site}{p.line}_{p.col}'{n}")
+    let written : List SExpr := if names.isEmpty then [] else
+      [.app p (.ident p "$declNames") (names.map fun n =>
+        .ident ((cs.findSome? fun | .decl q x _ _ _ => if x == n then some q else none | _ => none).getD p) n) false]
+    let shadows : List SExpr := match (localDecls t).find? fun (n, _) => names.contains n with
+      | some (n, q) => [.app p (.ident p "$shadows") [.ident q n] false]
+      | none => []
+    .block p (written ++ shadows ++ [.ite p (cs.map (renameE ren)) (consume (renameE ren t))
+      (some (consumeBranches u (site ++ "e") consume))])
+  | e => consume e
+
 /-- The clauses ready for compiling: choices inside expressions lifted, and
     each choice the value of a binding. `isVal` says which names are values
     (variables and fields in scope); the clauses' own bindings are too. -/
 def prepare (cs : List SExpr) (isVal : String → Bool := fun _ => false)
     (isField : String → String → Bool := fun _ _ => false) (site : String := "")
     (fieldOrder : String → List (String × Bool) := fun _ => []) (keepExcl : Bool := false)
-    (guardBranches : Bool := true) : List SExpr :=
+    (guardBranches : Bool := true) (keepBranches : SExpr → Bool := fun _ => false) : List SExpr :=
   -- (an exclusive choice is a `for`'s to compile, #314; elsewhere, where
   -- the first success is taken, the choice of its alternatives)
   let cs := if keepExcl then cs else cs.map exclToChoice
@@ -1025,7 +1042,7 @@ def prepare (cs : List SExpr) (isVal : String → Bool := fun _ => false)
   if keepExcl then ps.flatMap bifToExcl else if !guardBranches then ps else ps.flatMap fun c => match c with
     | .decl _ _ _ false (.app _ (.ident _ b) is false) =>
       if (b == "$branchChoice" || b == "$branchChoiceAt") &&
-          is.getLast?.any (fun i => liftsAsIf i && !plainBranches hasLiftable i) then
+          is.getLast?.any (fun i => !keepBranches i && liftsAsIf i && !plainBranches hasLiftable i) then
         -- (with no type written, the `if` still with it, `$joinOf`, for the
         -- elaborator to type the choice at the branches' join, `elabOneGo`)
         (bifToExcl c).map fun
@@ -1746,6 +1763,7 @@ structure FirstLift where
   pos : Pos
   name : String
   params : List SParam
+  tparams : List TParam := []
   specs : List String
   ret : STy
   body : SExpr

@@ -1,0 +1,6 @@
+option reverse 4
+array 1
+mixed
+typed 1
+typed s
+exit=0

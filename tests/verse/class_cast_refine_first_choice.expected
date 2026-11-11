@@ -1,0 +1,26 @@
+simple 5
+option 5
+simple missed
+option missed
+effects 5 121
+effects missed 0
+no fallback 0
+fallback 99 50
+more 5
+chain 5
+more missed
+chain 5
+more missed
+chain missed
+join 4
+join 8
+cleanup 5 100
+cleanup missed 0
+prior choice 0
+local 5 5
+set 5
+local missed 0
+set missed 0
+sequential 4 9 13 21
+sequential missed 0 0
+exit=0
