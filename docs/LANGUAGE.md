@@ -198,6 +198,11 @@ statement, not a value. Lowering: the deferred block is placed after the
 rest of its scope, and before each `return` (after its value) and `break`
 that leaves it.
 
+A `break` in a `for` filter leaves the enclosing source `loop`, including
+when the values come from lazy recursive producers. Internal producer and
+suspension loops forward it after its cleanup has run. Breaks in a body's
+own `loop` stay local; a `for` body itself is not a break target.
+
 ## Overloading
 
 Several functions may share a name when no call could fit two of them (Book of

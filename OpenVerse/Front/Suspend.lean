@@ -44,6 +44,7 @@
   ordinary Verse Core, `Prog.checkTypes` checks it like any other code.
 -/
 import OpenVerse.Core.TypeCheck
+import OpenVerse.Core.Control
 import OpenVerse.Front.FrameRefs
 
 namespace OpenVerse.Front.Suspend
@@ -782,6 +783,34 @@ partial def refIn : VTy → Bool
   | .tup ts => ts.any refIn
   | _ => false
 
+/-- Run `pre` before breaks that leave this expression; loops inside it
+    keep their own breaks. Used when a generated loop adds a control scope. -/
+partial def beforeBreak (pre : Expr) : Expr → Expr
+  | e@(.loop _) => e
+  | .brk => .seq pre .brk
+  | .assign j e => .assign j (beforeBreak pre e)
+  | .seq a b => .seq (beforeBreak pre a) (beforeBreak pre b)
+  | .prim p es => .prim p (es.map (beforeBreak pre))
+  | .heap p es => .heap p (es.map (beforeBreak pre))
+  | .call f es => .call f (es.map (beforeBreak pre))
+  | .ite c t e => .ite (beforeBreak pre c) (beforeBreak pre t) (beforeBreak pre e)
+  | .forE i a f b => .forE i (beforeBreak pre a) (beforeBreak pre f) (beforeBreak pre b)
+  | .ret e => .ret (beforeBreak pre e)
+  | .print e => .print (beforeBreak pre e)
+  | e => e
+
+/-- A `for` adds no break target. A replacement loop forwards an escaping
+    break after it exits, before returning its optional accumulated value. -/
+def protectForBreaks (filter body : Expr) : M (Expr × Expr × (Expr → Option Expr → Expr)) := do
+  if filter.brkSafe false && body.brkSafe false then
+    return (filter, body, fun loop value => value.map (Expr.seq loop) |>.getD loop)
+  let flag ← fresh .logic
+  let mark := beforeBreak (.assign flag (.lit (.logic true)))
+  let finish (loop : Expr) (value : Option Expr) : Expr :=
+    .seq (.assign flag (.lit (.logic false)))
+      (.seq loop (.ite (.prim .query [.local flag]) (.seq .brk (.prim .userErr [])) (value.getD vd)))
+  return (mark filter, mark body, finish)
+
 /-- `e` with each `for` whose element has a reference type turned into a
     loop over an index: its element slot then lives in the frame, initialised
     once, rather than being a real slot whose initial value would be a new
@@ -797,6 +826,7 @@ partial def loopify (e : Expr) (used : Bool := true) : M Expr := do
     let b' ← loopify b
     match refIn ty, τit?, τ? with
     | true, some τit, some τ =>
+      let (f', b', finish) ← protectForBreaks f' b'
       let a ← fresh τit
       let ix ← fresh .int
       let next : Expr := .assign ix (.prim .add [.local ix, int 1])
@@ -805,11 +835,11 @@ partial def loopify (e : Expr) (used : Bool := true) : M Expr := do
       if !used then
         -- (its value is dropped: no array of the body's values)
         return .seq (.assign a it') (.seq (.assign ix (int 0))
-          (.loop (.ite elem (.seq next (.ite f' (.seq b' vd) vd)) .brk)))
+          (finish (.loop (.ite elem (.seq next (.ite f' (.seq b' vd) vd)) .brk)) none))
       let acc ← fresh τ
       let add : Expr := .assign acc (.prim .concat [.local acc, .prim .mkArr [b']])
       return .seq (.assign a it') (.seq (.assign ix (int 0)) (.seq (.assign acc (.lit Value.emptyArray))
-        (.seq (.loop (.ite elem (.seq next (.ite f' (.seq add vd) vd)) .brk)) (.local acc))))
+        (finish (.loop (.ite elem (.seq next (.ite f' (.seq add vd) vd)) .brk)) (some (.local acc)))))
     | _, _, _ => return .forE i it' f' b'
   | .assign j x => return .assign j (← loopify x)
   | .seq x y => return .seq (← loopify x false) (← loopify y used)
@@ -881,6 +911,7 @@ partial def block (e : Expr) (k : Option (Expr → Expr)) : M (List Expr) := do
       let fe ← loopify (.forE i (.local a) filt body) k.isSome
       return pre ++ [← emit (pure (app k (retToDone (← read).inArmR (← read).leafOpt fe)))]
     -- a loop over an index (and the array of the body's values, when used)
+    let (filt, body, finish) ← protectForBreaks filt body
     let a ← fresh (← infer it)
     let ix ← fresh .int
     let next : Expr := .assign ix (.prim .add [.local ix, int 1])
@@ -889,12 +920,12 @@ partial def block (e : Expr) (k : Option (Expr → Expr)) : M (List Expr) := do
     match k with
     | none =>
       block (.seq (.assign a it) (.seq (.assign ix (int 0))
-        (.loop (.ite elem (.seq next (.ite filt (.seq body vd) vd)) .brk)))) none
+        (finish (.loop (.ite elem (.seq next (.ite filt (.seq body vd) vd)) .brk)) none))) none
     | some k =>
       let acc ← fresh (← infer e)
       let add : Expr := .assign acc (.prim .concat [.local acc, .prim .mkArr [body]])
       block (.seq (.assign a it) (.seq (.assign ix (int 0)) (.seq (.assign acc (.lit Value.emptyArray))
-        (.seq (.loop (.ite elem (.seq next (.ite filt (.seq add vd) vd)) .brk)) (.local acc))))) (some k)
+        (finish (.loop (.ite elem (.seq next (.ite filt (.seq add vd) vd)) .brk)) (some (.local acc)))))) (some k)
   | .call g es =>
     let env ← read
     if g == env.spawnMark then
@@ -1576,7 +1607,12 @@ where
   inCond (fld : Nat → Option Nat) (c : Expr) : List Expr × Expr × List Expr :=
     let mine := (assignsIn c).eraseDups.filterMap fun j => (fld j).map (j, ·)
     let fld' : Nat → Option Nat := fun j => if mine.any (·.1 == j) then none else fld j
-    (mine.map (fun (j, f) => .assign j (fget f)), toFields fld' c, mine.map fun (j, f) => fset f (.local j))
+    let store := mine.map fun (j, f) => fset f (.local j)
+    let c' := toFields fld' c
+    -- A break commits its current state while bypassing the success arm.
+    -- Preserve those cached writes before forwarding the control transfer.
+    let c' := if store.isEmpty then c' else beforeBreak (seqVoid store) c'
+    (mine.map (fun (j, f) => .assign j (fget f)), c', store)
   seqWith (pre : List Expr) (e : Expr) : Expr := pre.foldr (fun a acc => .seq a acc) e
 
 /-- `e` with its slots renamed by `ren`. -/
