@@ -783,7 +783,10 @@ Main():void =
   A `return` in the body leaves the source function, stopping later
   alternatives. Its operand is saved before body cleanup; source cleanup
   then runs with the updated captured variables. Breaks inside the body's
-  own `loop`s retain their targets.
+  own `loop`s retain their targets. The body may itself consume a lazy choice
+  with `for`, a first-success condition or an `option`, including generic and
+  mutually recursive producers. These keep their own rollback boundaries;
+  ordinary body cleanup also runs when that iteration finishes.
   Its suffix must also permit a shared continuation, including lazy calls.
   Other contexts remain tracked in #417. Failure of the selected branch's
   alternatives does not select the `else` branch.

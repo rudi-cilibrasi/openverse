@@ -665,6 +665,124 @@ for _ in range(3):
     main.append(f'    Print("ret value {{ForReturn({p["name"]}, {q["name"]}, {stop})}}")')
     model_return(p, q, stop)
 
+# Nested consumers retain their own producer/filter rollback boundaries inside
+# a shared body. First-success retries keep producer prefixes until the whole
+# condition fails; an enclosing option rolls back a failed nested body. Returns
+# save their operand before both the body and source cleanup.
+R417N = random.Random(seed * 1000003 + 41704)
+nested_depth = R417N.randint(-1, 3)
+nested_min, nested_cut = R417N.randint(-1, 3), R417N.randint(-1, 3)
+nested_cleanup, nested_source = R417N.randint(1, 5), R417N.randint(1, 5)
+nested_mutual = R417N.choice([False, True])
+nested_call = 'NestedEven' if nested_mutual else 'NestedLazy'
+prog_cls.append('nested_meter := class:\n    var N:int = 0')
+loops.append(f'''NestedLazy(H:nested_meter, N:int)<transacts><decides>:int =
+    N >= 0
+    Print("nested lazy {{N}} {{H.N}}")
+    set H.N += 1
+    N | NestedLazy[H, N - 1]
+NestedEven(H:nested_meter, N:int)<transacts><decides>:int =
+    N >= 0
+    Print("nested even {{N}} {{H.N}}")
+    set H.N += 1
+    N | NestedOdd[H, N - 1]
+NestedOdd(H:nested_meter, N:int)<transacts><decides>:int =
+    N >= 0
+    Print("nested odd {{N}} {{H.N}}")
+    set H.N += 2
+    N | NestedEven[H, N - 1]
+ForNested(P:pair(a, b), Q:pair(c, d), Stop:int where a:type, b:type, c:type, d:type)<transacts>:int =
+    H := nested_meter{{}}
+    var Total:int = 0
+    defer:
+        set Total += {nested_source}
+        Print("nested source {{Total}} {{H.N}}")
+    Values := for (V := if (D := {choice_target}[P]) then (D.C | D.C + {choice_offset}) else 0,
+        W := if (E := {pair_target}[Q]) then (E.C | E.C + {pair_offset}) else 0):
+        defer:
+            set Total += {nested_cleanup}
+            set H.N += {nested_cleanup}
+            Print("nested cleanup {{Total}} {{H.N}}")
+        A := for (Z := {nested_call}[H, {nested_depth}], set Total += Z,
+            Print("nested filter {{Z}} {{Total}}"), Z >= {nested_min}):
+            set Total += V + W
+            set H.N += W
+            Print("nested body {{V}} {{W}} {{Z}} {{Total}} {{H.N}}")
+            if (Z = Stop):
+                return Total
+            Z
+        if (Y := {nested_call}[H, {nested_depth}], set Total += Y, set H.N += Y,
+            Print("nested try {{Y}} {{Total}} {{H.N}}"), Y < {nested_cut}):
+            Print("nested first {{Y}} {{Total}} {{H.N}}")
+        else:
+            Print("nested none {{Total}} {{H.N}}")
+        O := option{{
+            for (Z := {nested_call}[H, {nested_depth}]):
+                Print("nested lost {{Z}}")
+                false?
+                Z
+        }}
+        if (O?) then Print("nested empty {{Total}} {{H.N}}") else Print("nested caught {{Total}} {{H.N}}")
+        Print("nested done {{Total}} {{H.N}} {{A.Length}}")
+        A.Length
+    Print("nested outer {{Total}} {{H.N}} {{Values.Length}}")
+    -1''')
+nested_events = [(z, 'even' if i % 2 == 0 else 'odd', 1 if i % 2 == 0 else 2)
+                 if nested_mutual else (z, 'lazy', 1)
+                 for i, z in enumerate(range(nested_depth, -1, -1))]
+for _ in range(3):
+    p, q = R417N.choice(objs), R417N.choice(objs)
+    stop = R417N.choice([999] + list(range(nested_depth + 1)))
+    main.append(f'    Print("nested value {{ForNested({p["name"]}, {q["name"]}, {stop})}}")')
+    left = [p['C'], p['C'] + choice_offset] if below(p['cls'], choice_target) else [0]
+    right = [q['C'], q['C'] + pair_offset] if below(q['cls'], pair_target) else [0]
+    total, meter, outer_count, answer, returned = 0, 0, 0, -1, False
+    for v in left:
+        for w in right:
+            inner_count = 0
+            for z, label, step in nested_events:
+                expect.append(f"nested {label} {z} {meter}")
+                meter += step
+                if z < nested_min: continue
+                total += z
+                expect.append(f"nested filter {z} {total}")
+                total += v + w
+                meter += w
+                expect.append(f"nested body {v} {w} {z} {total} {meter}")
+                if z == stop:
+                    answer, returned = total, True
+                    break
+                inner_count += 1
+            if not returned:
+                saved = total, meter, len(expect)
+                for y, label, step in nested_events:
+                    expect.append(f"nested {label} {y} {meter}")
+                    meter += step
+                    if y < nested_cut:
+                        total += y
+                        meter += y
+                        expect.append(f"nested try {y} {total} {meter}")
+                        expect.append(f"nested first {y} {total} {meter}")
+                        break
+                else:
+                    total, meter, nout = saved
+                    del expect[nout:]
+                    expect.append(f"nested none {total} {meter}")
+                status = 'caught' if nested_events else 'empty'
+                expect.append(f"nested {status} {total} {meter}")
+                expect.append(f"nested done {total} {meter} {inner_count}")
+            total += nested_cleanup
+            meter += nested_cleanup
+            expect.append(f"nested cleanup {total} {meter}")
+            if returned: break
+            outer_count += 1
+        if returned: break
+    if not returned:
+        expect.append(f"nested outer {total} {meter} {outer_count}")
+    total += nested_source
+    expect.append(f"nested source {total} {meter}")
+    expect.append(f"nested value {answer}")
+
 # Failable bodies stop the whole consumer, with their output and writes.
 # Model generator boundaries directly: scalar clauses share the current
 # filter's snapshot; each choice creates a fresh boundary for its values.
