@@ -3,7 +3,83 @@
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
-for kind in composed exclusive binding typed-first typed-for typed-exclusive refined-for refined-state refined-failure lazy-first lazy-for lazy-effect-first lazy-effect-for lazy-alt-first lazy-alt-for lazy-failure-for lazy-alt-failure-for lazy-exclusive-failure-for refined-lazy-failure refined-return refined-lazy-return refined-nested-body refined-nested-failure lazy-generic-first construct-first construct-for construct-failure method-first method-for method-failure lazy-named-first lazy-named-for lazy-named-generic-first bound-first bound-for bound-failure covariant-first covariant-for covariant-failure tuple-super-first tuple-super-for tuple-super-failure lazy-tuple-first lazy-tuple-for lazy-tuple-generic-first immediate-suspends-refined immediate-suspends-composed immediate-suspends-exclusive immediate-suspends-nested refined-retry-first super-first super-for super-failure super-body mutual-generic-first mutual-generic-for mutual-generic-alt-first suspends-return suspends-return-generic suspends-return-lazy outer-effect-refined outer-effect-composed outer-effect-exclusive clause-return-refined clause-return-composed clause-return-exclusive own-method-first own-method-for own-method-failure own-method-covariant-first dispatch-default-first dispatch-default-for dispatch-default-failure; do
+# Keep modes sorted on separate lines so independent additions merge cleanly.
+kinds=(
+  binding
+  bound-failure
+  bound-first
+  bound-for
+  clause-return-composed
+  clause-return-exclusive
+  clause-return-refined
+  composed
+  construct-failure
+  construct-first
+  construct-for
+  covariant-failure
+  covariant-first
+  covariant-for
+  dispatch-default-failure
+  dispatch-default-first
+  dispatch-default-for
+  exclusive
+  immediate-suspends-composed
+  immediate-suspends-exclusive
+  immediate-suspends-nested
+  immediate-suspends-refined
+  lazy-alt-failure-for
+  lazy-alt-first
+  lazy-alt-for
+  lazy-effect-first
+  lazy-effect-for
+  lazy-exclusive-failure-for
+  lazy-failure-for
+  lazy-first
+  lazy-for
+  lazy-generic-first
+  lazy-named-first
+  lazy-named-for
+  lazy-named-generic-first
+  lazy-tuple-first
+  lazy-tuple-for
+  lazy-tuple-generic-first
+  method-failure
+  method-first
+  method-for
+  mutual-generic-alt-first
+  mutual-generic-first
+  mutual-generic-for
+  outer-effect-composed
+  outer-effect-exclusive
+  outer-effect-refined
+  own-method-covariant-first
+  own-method-failure
+  own-method-first
+  own-method-for
+  refined-failure
+  refined-for
+  refined-lazy-failure
+  refined-lazy-return
+  refined-nested-body
+  refined-nested-failure
+  refined-retry-first
+  refined-return
+  refined-state
+  super-body
+  super-failure
+  super-first
+  super-for
+  suspends-return
+  suspends-return-generic
+  suspends-return-lazy
+  tuple-super-failure
+  tuple-super-first
+  tuple-super-for
+  typed-exclusive
+  typed-first
+  typed-for
+)
+for kind in "${kinds[@]}"; do
   sizes=()
   for count in 4 8; do
     python3 - "$kind" "$count" >"$tmp/p.verse" <<'PY'
