@@ -199,6 +199,21 @@ def fnFits (env : TyEnv) (s : Sig) (t : Ty) : Bool :=
     | none => false
   | _ => false
 
+/-- A generic value's instance at its own parameter/result shape. Unlike
+    closed specialization, the expected type may mention the caller's
+    parameters. Bounds are checked here before constructing its value class. -/
+def fnValueArgs (env : TyEnv) (s : Sig) (t : Ty) : Option (List Ty) := do
+  let .struct m ts := t | none
+  let some (k, es) := FnValues.parseName m | none
+  if k != s.params.length || ts.length != k + 1 then none else do
+    let own : FnValues.Shape := ⟨k, s.decides, s.suspends, s.fx⟩
+    if !own.within (FnValues.shapeOf k es) then none else do
+      let σ ← ((s.params ++ [s.ret]).zip ts).foldlM (fun σ (a, b) => a.matchArg env σ b) []
+      if !((s.params ++ [s.ret]).zip ts).all (fun (a, b) => (a.subst σ).eqv b) then none else
+      s.tparams.mapM fun (v, cmp) => do
+        let t ← σ.lookup v
+        if cmp && !t.comparable env then none else some t
+
 /-- A construction instance found with its original expected context. -/
 structure ConstructHint where
   pos : Pos
@@ -3090,10 +3105,16 @@ partial def elabGenericCallWith (elabE : Ctx → SExpr → Option Ty → EM R) (
     if !(et == .void) then
       if let some σ' := s.ret.matchArg ctx.types σ et then σ := σ'
   let bound (σ : List (String × Ty)) (t : Ty) := t.params.all fun v => (σ.lookup v).isSome
-  -- `false`, `array{}` and `map{}` take their type from context, so they are
+  -- Empty values and generic function identifiers need an expected type,
+  -- so they are
   -- elaborated after the other arguments (they are still evaluated in order)
   let fromContext : SExpr → Bool
     | .ident _ "false" | .arrayLit _ [] | .mapLit _ [] => true
+    | .ident _ n =>
+      (ctx.lookup n).isNone &&
+        !(ctx.selfClass.any fun c => (ctx.types.fields c).any (·.1 == n) || ctx.hasMethod c n) &&
+        (ctx.sig? n).any (fun f => !f.isConst && !f.tparams.isEmpty) &&
+        ctx.types.classes.contains s!"{n}$fn"
     | _ => false
   let mut es : Array Expr := Array.replicate given.length (.lit .void)
   -- arguments left for the second pass; an argument whose type contains
@@ -4336,6 +4357,17 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
               some (c, t) : Option (String × Ty)) then
             let r ← elabE ctx (.construct p cls [] []) none
             return ⟨← coerce p r ty, ty⟩
+          else if !s.tparams.isEmpty then
+            if let some ty := exp then
+              if ctx.types.classes.contains s!"{n}$fn" then
+                if let some args := fnValueArgs ctx.types s ty then
+                  let cls := s!"{n}$fn"
+                  let r ← elabConstruct ctx p cls [] [] (some (.struct cls args))
+                  return ⟨← coerce p r ty, ty⟩
+            if let some t := askFor then
+              modify fun st => { st with fnNeeds := st.fnNeeds ++ [(n, t)] }
+              return ⟨.prim .userErr [], t⟩
+            eerr p s!"'{n}' is generic: a function type determining all its type arguments and satisfying its bounds must be expected (#214, #209)"
           else if ctx.types.classes.contains s!"{n}$fn" then
             -- a function as a value (#210): its class's object, of the
             -- function type expected, else of its own
@@ -4359,8 +4391,6 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
           else if let some t := askFor then
             modify fun st => { st with fnNeeds := st.fnNeeds ++ [(n, t)] }
             return ⟨.prim .userErr [], t⟩
-          else if !s.tparams.isEmpty then
-            eerr p s!"'{n}' is generic: a generic function is a value only where a closed function type that is an instance of its type is expected (X:type\{…} = {n}, or as an argument of such a parameter), not at a type over type parameters, #214"
           else if !s.named.isEmpty then
             eerr p s!"'{n}' has named parameters: such a function cannot be used as a value (a function type has no named parameters)"
           else eerr p s!"'{n}' is a function: call it with {n}(…)"

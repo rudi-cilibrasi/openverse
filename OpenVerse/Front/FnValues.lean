@@ -395,6 +395,7 @@ def desugar (tops : List STop) (extra : List STop := []) (requests : List (Strin
   -- else gives one)
   let mut shapes : List Shape := []
   for s in scans.flatMap (·.1) ++ values.map (fun (_, _, ps, effs, _) => shapeOf ps.length effs) ++
+      gvalues.map (fun (_, _, ps, _, effs, _) => shapeOf ps.length effs) ++
       mvalues.map (fun (_, _, _, _, ps, effs, _) => shapeOf ps.length effs) do
     if !shapes.contains s then shapes := shapes ++ [s]
   let p0 : Pos := match tops.head? with
@@ -470,6 +471,17 @@ def desugar (tops : List STop) (extra : List STop := []) (requests : List (Strin
           k := k + 1
   for (p, n, ps, tps, effs, r) in gvalues do
     let own := shapeOf ps.length effs
+    -- An open expected type determines an ordinary generic value object.
+    -- Repeated/compound arguments refine its call like a generic receiver's;
+    -- hidden fields retain the witnesses after the creating function exits.
+    let fits := shapes.filter (own.within ·)
+    let args := (List.range ps.length).map fun i => SExpr.ident p s!"$X{i}"
+    let methods := fits.map fun s =>
+      STop.fn p s.call (params (ps.map (·.ty))) [] (s.effs ++ ["override"]) r
+        (.app p (.ident p n) args own.decides)
+    let fits := own :: fits.filter (· != own)
+    out := out ++ [.classDef p s!"{n}$fn" tps []
+      (fits.map fun s => STy.app s.name (ps.map (·.ty) ++ [r])) false [] [] methods]
     let tpn := tps.map (·.name)
     let mut k := 0
     for (qs, es, u) in requested n do
