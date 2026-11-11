@@ -3,7 +3,7 @@
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
-for kind in composed exclusive binding typed-first typed-for typed-exclusive refined-for refined-state refined-failure lazy-first lazy-for lazy-effect-first lazy-effect-for lazy-alt-first lazy-alt-for; do
+for kind in composed exclusive binding typed-first typed-for typed-exclusive refined-for refined-state refined-failure lazy-first lazy-for lazy-effect-first lazy-effect-for lazy-alt-first lazy-alt-for lazy-failure-for lazy-alt-failure-for lazy-exclusive-failure-for refined-lazy-failure; do
   sizes=()
   for count in 4 8; do
     python3 - "$kind" "$count" >"$tmp/p.verse" <<'PY'
@@ -11,7 +11,8 @@ import sys
 kind, count = sys.argv[1], int(sys.argv[2])
 print('Two(N:int):int = N | N + 1')
 if kind.startswith('lazy-'):
-    effectful = 'effect' in kind or 'alt' in kind
+    effectful = 'effect' in kind or 'alt' in kind or 'failure' in kind
+    failable = 'failure' in kind
     print('counter := class:\n    var N:int = 0')
     params = 'C:counter, N:int' if effectful else 'N:int'
     args = 'C, N - 1' if effectful else 'N - 1'
@@ -22,17 +23,26 @@ if kind.startswith('lazy-'):
     print(f'    N | Lazy[{args}]')
     call = 'Lazy[C, 2]' if effectful else 'Lazy[2]'
     value = f'({call} | Two(0))' if 'alt' in kind else '(Two(0) | Two(2))'
+    if 'exclusive' in kind:
+        print('Early(N:int):int =\n    if (N < 0):\n        return 0\n    N | N + 1')
+        value = 'Early(0)'
     clauses = ', '.join(f'A{i} := {value}' for i in range(count))
     if 'alt' not in kind:
         clauses += f', L := {call}'
-    print('Main():void =\n    C := counter{}')
+    specs = '<decides>' if failable else ''
+    print(f'Main(){specs}:void =\n    C := counter{{}}')
     if kind.endswith('first'):
         print(f'    if ({clauses}, A{count-1} = 1) then Print("{{A0}} {{C.N}}")')
+    elif failable:
+        print(f'    R := for ({clauses}):\n        A0 >= 0\n        A0\n    Print("{{R.Length}} {{C.N}}")')
     else:
         print(f'    R := for ({clauses}) {{ A0 }}\n    Print("{{R.Length}} {{C.N}}")')
     sys.exit(0)
 print('Pick(X:t where t:type):t = X | X')
 print('Early(N:int):int =\n    if (N < 0):\n        return 0\n    N | N + 1')
+if kind == 'refined-lazy-failure':
+    print('counter := class:\n    var N:int = 0')
+    print('Lazy(C:counter, N:int)<transacts><decides>:int =\n    N >= 0\n    set C.N += 1\n    N | Lazy[C, N - 1]')
 if kind.startswith('refined-'):
     print('pair(a:type, b:type) := class:\n    A:a\n    B:b')
     print('dup(t:type) := class(pair(t, t)):\n    C:int = 4')
@@ -41,15 +51,19 @@ value = {'composed': '(Two(0) | Two(2))', 'exclusive': 'Early(0)',
          'typed-for': '(Two(0) | Two(2))', 'typed-exclusive': 'Early(0)',
          'refined-for': 'if (D := dup[P]) then (D.C | D.C + 1) else 0',
          'refined-state': 'if (D := dup[P]) then (D.C | D.C + 1) else 0',
-         'refined-failure': 'if (D := dup[P]) then (D.C | D.C + 1) else 0'}[kind]
+         'refined-failure': 'if (D := dup[P]) then (D.C | D.C + 1) else 0',
+         'refined-lazy-failure': 'if (D := dup[P]) then (D.C | D.C + 1) else 0'}[kind]
 clauses = ', '.join(f'A{i} := {value}' for i in range(count))
-if kind in ('refined-state', 'refined-failure'):
+if kind in ('refined-state', 'refined-failure', 'refined-lazy-failure'):
     params = ', '.join(f'P{i}:pair(a{i}, b{i})' for i in range(count))
     tparams = ', '.join(f'a{i}:type, b{i}:type' for i in range(count))
     clauses = ', '.join(f'A{i} := if (D := dup[P{i}]) then (D.C | D.C + 1) else 0, A{i} = 4, set Total += A{i}' for i in range(count))
-    effects = '<decides>' if kind == 'refined-failure' else ''
-    test = '\n        Total > 0' if kind == 'refined-failure' else ''
-    print(f'Run({params} where {tparams}){effects}:int =\n    var Total:int = 0\n    R := for ({clauses}):\n        set Total += 1{test}\n        Total\n    Total + R.Length')
+    effects = '<decides>' if kind != 'refined-state' else ''
+    test = '\n        Total > 0' if effects else ''
+    init = '\n    C := counter{}' if kind == 'refined-lazy-failure' else ''
+    if init:
+        clauses += ', L := Lazy[C, 2]'
+    print(f'Run({params} where {tparams}){effects}:int ={init}\n    var Total:int = 0\n    R := for ({clauses}):\n        set Total += 1{test}\n        Total\n    Total + R.Length')
 elif kind == 'refined-for':
     print(f'Run(I:t, P:pair(a, b) where t:type, a:type, b:type):[]t = for ({clauses}) {{ I }}')
 elif kind == 'typed-first':
@@ -58,9 +72,9 @@ elif kind.startswith('typed-'):
     print(f'Run(Unused:t where t:type):int =\n    R := for ({clauses}):\n        E:[]t = array{{}}\n        E.Length\n    R.Length')
 else:
     print(f'Run(I:t where t:type):[]t = for ({clauses}) {{ I }}')
-if kind in ('refined-state', 'refined-failure'):
+if kind in ('refined-state', 'refined-failure', 'refined-lazy-failure'):
     args = ', '.join('dup(int){A := 1, B := 2}' if i % 2 == 0 else 'dup(string){A := "s", B := "t"}' for i in range(count))
-    effects = '<decides>' if kind == 'refined-failure' else ''
+    effects = '<decides>' if kind != 'refined-state' else ''
     brackets = ('[', ']') if effects else ('(', ')')
     print(f'Main(){effects}:void = Print("{{Run{brackets[0]}{args}{brackets[1]}}}")')
 elif kind == 'refined-for':

@@ -1,0 +1,6 @@
+visit 1 1
+visit 0 2
+body 1 4 1 0 4 9 visits 2
+body 1 4 1 0 5 18 visits 2
+fail 12
+exit=1

@@ -775,8 +775,8 @@ Main():void =
   non-local exit or non-rollback operation. A body may fail: this stops
   the whole `for` and retains that iteration's effects, just as in an
   ordinary `for`. An enclosing failure context can still undo them.
-  Its suffix must also permit a shared continuation; lazy calls remain
-  unsupported. Other contexts remain tracked in #417. Failure of the selected branch's
+  Its suffix must also permit a shared continuation, including lazy calls.
+  Other contexts remain tracked in #417. Failure of the selected branch's
   alternatives does not select the `else` branch.
 
   A choice inside a block is lifted with the block's clauses (#283): they
