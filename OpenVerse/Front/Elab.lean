@@ -1992,9 +1992,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
             let req := cA.types.loopRequests.find? (·.key == key)
             let fits (l : Choice.FirstLift) : Bool :=
               (l.specs.filter (["reads", "writes", "allocates"].contains ·)).all cA.fnFx.contains
-            let hasLoop := restCl.any
-              (Choice.anyE fun | .app _ (.ident _ "$loop") _ _ => true | _ => false)
-            if req.isNone && (!bodyFail || !hasLoop) && (contForLiftOf cA b.pos b.name ty .void [i] restCl bd bodyFail).toOption.isSome then
+            if req.isNone && (contForLiftOf cA b.pos b.name ty .void [i] restCl bd bodyFail).toOption.isSome then
               -- Elaborate the suffix once, in its source context. Otherwise
               -- an inner lift can retain an outer var's old name after the
               -- enclosing lift has renamed it for mutable copy-out.
@@ -2089,9 +2087,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
         -- those clauses and the body a function of their own, #342's, which
         -- each path calls, instead of a copy in each)
         let restCl := after ++ moreCl
-        let hasLoop := (altsS ++ restCl ++ [bd]).any
-          (Choice.anyE fun | .app _ (.ident _ "$loop") _ _ => true | _ => false)
-        let contOK := restCl.any isCF && (!bodyFail || !hasLoop) && forBodySafe cA bd && xty.isSome
+        let contOK := restCl.any isCF && forBodySafe cA bd && xty.isSome
         let req := if !contOK || cA.typeOnly then none else
           cA.types.loopRequests.find? (·.key == (if bodyFail then "fo" else "f") ++ contKey cA gp x (altsS ++ restCl ++ [bd]))
         let fits (l : Choice.FirstLift) : Bool :=
@@ -2182,11 +2178,9 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
           -- those clauses and the body a function of their own, which each
           -- alternative's for calls, instead of a copy in each)
           let restCl := fs ++ moreClauses
-          let hasLoop := (b.alts ++ restCl ++ [bd]).any
-            (Choice.anyE fun | .app _ (.ident _ "$loop") _ _ => true | _ => false)
           -- Failable bodies return outcomes so failure stops the entire
           -- for, rather than merely rejecting one continuation call.
-          if restCl.any isCF && (!bodyFail || !hasLoop) && forBodySafe c bd then
+          if restCl.any isCF && forBodySafe c bd then
             let req := if c.typeOnly then none else
               c.types.loopRequests.find? (·.key == (if bodyFail then "fo" else "f") ++ contKey c gp b.name (b.alts ++ restCl ++ [bd]))
             let fits (l : Choice.FirstLift) : Bool :=
@@ -2291,8 +2285,15 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
         let body : Expr := .seq (.assign acc (p2 .concat (.local acc) (.prim .flatten [round])))
           (.ite (p2 .eq (.local done) (.lit (.logic true))) Expr.brkV
             (.seq (.assign size (p2 .mul (.local size) (.lit (.int 2)))) vd))
+        -- A nested continuation's failed outcome breaks the nearest loop.
+        -- This producer catches that break before the private outcome loop,
+        -- so forward it before any enclosing generator can run another item.
+        let values := match c.forOutcomeSlot with
+          | some flag => Expr.ite (.prim .query [.local flag]) (.local acc)
+              (.seq .brk (.prim .userErr []))
+          | none => Expr.local acc
         let code : Expr := .seq lg.init (.seq (.assign acc none) (.seq (.assign size (.lit (.int 16)))
-          (.seq (.assign done (.lit (.logic false))) (.seq (.loop body) (.local acc)))))
+          (.seq (.assign done (.lit (.logic false))) (.seq (.loop body) values))))
         if flat then return ⟨code, .arr ity⟩
         match ity with
         | .arr t => return ⟨.prim .flatten [code], .arr t⟩

@@ -598,35 +598,69 @@ for o in objs:
 # Failable bodies stop the whole consumer, with their output and writes.
 # Model generator boundaries directly: scalar clauses share the current
 # filter's snapshot; each choice creates a fresh boundary for its values.
+# A lazy producer runs its clauses between bodies. Failed outcomes must
+# escape every producer, including lazy loops nested under X's generator.
 R417O = random.Random(seed * 1000003 + 41702)
 op, oq = R417O.choice(objs), R417O.choice(objs)
 threshold, limit = R417O.randint(-2, 7), R417O.randint(-1, 7)
 left = [op['C'], op['C'] + choice_offset] if below(op['cls'], choice_target) else [0]
 right = [oq['C'], oq['C'] + pair_offset] if below(oq['cls'], pair_target) else [0]
-stop = R417O.choice([999] + [v + w for v in left for w in right])
-loops.append(f'''OutcomeCall(P:pair(a, b), Value:int, Stop:int where a:type, b:type)<transacts><decides>:void =
+lazy_mode = R417O.choice(['none', 'suffix', 'composed', 'mutual'])
+lazy_depth, lazy_min = R417O.randint(-1, 2), R417O.randint(-1, 2)
+if lazy_mode == 'none':
+    events = [(0, None, 0)]
+    lazy_source = '0'
+else:
+    events = [(z, 'even' if i % 2 == 0 else 'odd', 1 if i % 2 == 0 else 2)
+              if lazy_mode == 'mutual' else (z, 'lazy', 1)
+              for i, z in enumerate(range(lazy_depth, -1, -1))]
+    lazy_source = f'OutcomeEven[H, {lazy_depth}]' if lazy_mode == 'mutual' else f'OutcomeLazy[H, {lazy_depth}]'
+    if lazy_mode == 'composed':
+        events += [(0, None, 0), (1, None, 0)]
+        lazy_source = f'({lazy_source} | (0 | 1))'
+stop = R417O.choice([999] + [v + w + z for v in left for w in right for z, _, _ in events])
+prog_cls.append('outcome_meter := class:\n    var N:int = 0')
+loops.append(f'''OutcomeLazy(H:outcome_meter, N:int)<transacts><decides>:int =
+    N >= 0
+    Print("out lazy {{N}} {{H.N}}")
+    set H.N += 1
+    N | OutcomeLazy[H, N - 1]
+OutcomeEven(H:outcome_meter, N:int)<transacts><decides>:int =
+    N >= 0
+    Print("out even {{N}} {{H.N}}")
+    set H.N += 1
+    N | OutcomeOdd[H, N - 1]
+OutcomeOdd(H:outcome_meter, N:int)<transacts><decides>:int =
+    N >= 0
+    Print("out odd {{N}} {{H.N}}")
+    set H.N += 2
+    N | OutcomeEven[H, N - 1]
+OutcomeCall(P:pair(a, b), Value:int, Stop:int where a:type, b:type)<transacts><decides>:void =
     set P.N += 3
     Print("out call {{Value}} {{P.N}}")
     Value <> Stop
 ForOutcome(P:pair(a, b), Q:pair(c, d), Stop:int where a:type, b:type, c:type, d:type)<transacts><decides>:void =
+    H := outcome_meter{{}}
     var Total:int = 0
     Values := for (A := 1 | 2, set Total += A, Print("out prefix {{A}}"),
         V := if (D := {choice_target}[P]) then (D.C | D.C + {choice_offset}) else 0,
-        V > {threshold}, set Total += V,
+        V > {threshold}, set Total += V, X := 1..2,
+        Z := {lazy_source}, set Total += Z, Z >= {lazy_min},
         W := if (E := {pair_target}[Q]) then (E.C | E.C + {pair_offset}) else 0,
         W <= {limit}):
         set Total += W
         set P.N += W
-        Print("out body {{A}} {{V}} {{W}} {{Total}} {{P.N}}")
-        OutcomeCall[P, V + W, Stop]
+        set H.N += X
+        Print("out body {{A}} {{V}} {{X}} {{Z}} {{W}} {{Total}} {{P.N}} {{H.N}}")
+        OutcomeCall[P, V + W + Z, Stop]
         V + W
-    Print("out done {{Total}} {{P.N}} {{Values.Length}}")''')
+    Print("out done {{Total}} {{P.N}} {{H.N}} {{Values.Length}}")''')
 main.append(f'    ForOutcome[{op["name"]}, {oq["name"]}, {stop}]')
-total, count, stopped = 0, 0, False
-def snapshot(): return total, op['N'], len(expect)
+total, meter, count, stopped = 0, 0, 0, False
+def snapshot(): return total, op['N'], meter, len(expect)
 def restore(saved):
-    global total
-    total, op['N'], nout = saved
+    global total, meter
+    total, op['N'], meter, nout = saved
     del expect[nout:]
 for a in (1, 2):
     before_a = snapshot()
@@ -638,24 +672,37 @@ for a in (1, 2):
             restore(before_v)
             continue
         total += v
-        for w in right:
-            before_w = snapshot() if below(oq['cls'], pair_target) else before_v
-            if w > limit:
-                restore(before_w)
-                continue
-            total += w
-            op['N'] += w
-            expect.append(f"out body {a} {v} {w} {total} {op['N']}")
-            op['N'] += 3
-            expect.append(f"out call {v + w} {op['N']}")
-            if v + w == stop:
-                stopped = True
-                break
-            count += 1
+        for x in (1, 2):
+            for z, label, step in events:
+                if label:
+                    expect.append(f"out {label} {z} {meter}")
+                    meter += step
+                before_z = snapshot()
+                total += z
+                if z < lazy_min:
+                    restore(before_z)
+                    continue
+                for w in right:
+                    before_w = snapshot() if below(oq['cls'], pair_target) else before_z
+                    if w > limit:
+                        restore(before_w)
+                        continue
+                    total += w
+                    op['N'] += w
+                    meter += x
+                    expect.append(f"out body {a} {v} {x} {z} {w} {total} {op['N']} {meter}")
+                    op['N'] += 3
+                    expect.append(f"out call {v + w + z} {op['N']}")
+                    if v + w + z == stop:
+                        stopped = True
+                        break
+                    count += 1
+                if stopped: break
+            if stopped: break
         if stopped: break
     if stopped: break
 if not stopped:
-    expect.append(f"out done {total} {op['N']} {count}")
+    expect.append(f"out done {total} {op['N']} {meter} {count}")
 
 prog = [f"# genrefine seed {seed}"] + prog_cls + loops
 for f in funcs: prog.append(fix_iface(f, ftext(f)))

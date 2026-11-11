@@ -149,7 +149,7 @@ not an `array{a₀, …}`, which would run `aₙ₋₁` before `a₀`'s value wa
   - It runs `$forFirst`: `elabFor`'s filter of the first group, then its values. So it fails exactly where the copied form's failure would undo the alternative's own last clauses, since those and the first segment after them were one filter. A later generator that gives nothing does not make it fail, as in the copied form.
   - Each alternative's `for` binds its value, calls it as a clause, and its values are flattened.
   - Both kinds of continuation retain the type parameters of their inputs, results and written types, including a generic method's `Self`. Parameters not determined by the inputs take an explicit witness argument, so a suffix with an annotation such as `E:[]t` can be shared even when no captured value has type `t`. The generated body substitutes the context's type aliases, and the key includes the written type instances and interface-default copy tag.
-  - It is used only where the body passes `forBodySafe` (no `return`, `break`, suspension, `Signal`, or other marker), otherwise copied (tim-6e's review of #335). Non-failable bodies may share lazy suffixes too, including after a refining branch. A failable body uses an explicit outcome, described below, and retains the lazy-suffix restriction.
+  - It is used only where the body passes `forBodySafe` (no `return`, `break`, suspension, `Signal`, or other marker), otherwise copied (tim-6e's review of #335). Both non-failable and failable bodies may share lazy suffixes, including after a refining branch. A failable body uses an explicit outcome, described below.
   - An exclusive choice's own paths (#314's returns, #331's `if`s, `exclIter`) do the same (phase 2b): when the clauses after it have another such choice, every path ends with a call of the continuation, in the path's part of the iteration's filter, so a failure of its first filter undoes the path as the copy's would, and the path's generators take the continuation's values as their body (`build` takes the body as an argument for this). The first elaboration compiles the first path with the clauses after it, for the values' type, and asks for the continuation; the next compiles every path with the call. Ten calls of a function with a `return` and a choice after it in one `for` take 13 KB and 0.01 s to compile, where copying took 1.2 MB and 0.4 s. As in phase 2a, a `<suspends>` function, whose effects are not a continuation's, keeps the copies.
 
 Since the result is ordinary Verse Core, every theorem holds of it as it
@@ -297,10 +297,16 @@ An ordinary `option{body}` would incorrectly roll back the failing body's
 effects. Nested producers propagate `none` through a private loop; the
 source iteration unwraps it in its body, outside the filter. This stops
 the entire consumer without swallowing failure or visiting later choices.
+A lazy producer's internal loop intercepts this break before it reaches the
+private outcome loop. On exit, that producer checks the outcome flag and
+forwards a failed outcome's break before exposing its accumulated values.
+Every nested lazy producer does the same, so an ordinary enclosing generator
+cannot run another iteration after body failure. The check reads only the
+flag; completed body effects and mutable copy-outs remain in place.
 The pass introduces no Core operations or changes to either interpreter;
 the resulting program passes the existing effect, scope, control and type
 checks. Suspending bodies, non-local exits and suffixes that cannot use a
-continuation (including lazy calls) retain their previous restrictions.
+continuation retain their previous restrictions.
 Ordinary casts still use the selector path above.
 
 An `if` whose branches have more to lift than a choice of values (#283: a call of a function with several values, recursive or not, or a choice inside a branch's expression) is lifted whole too (`Choice.branchesLift`, which `hasLiftable` and `liftsAsIf` use). A block as a branch has its names renamed for its side (`$…'N`, `bifToExcl`), since the clauses after the `if` follow it in its path, with `$declNames` keeping the no-shadowing check, and its `defer:`s after its value (`deferLast`); not one with a range of its own, as for any block (#302). In a `for`, `bifToExcl` makes it the same exclusive choice, and `exclIter` lifts each branch's call or choice in its path, so the picked branch's own generators are the only ones (#331). Where the first success is taken, `prepare` makes it the choice of its branches, each guarded by the selector (`bifToExcl`, then `exclToChoice`), whose alternatives are lifted as any composed choice's (#296, #338). An `if` whose branches the elaborator takes as they are (`plainBranches`) keeps `elabBranchAlts`, so that code does not change, and so does an `F$all`'s body (`gensOf`, `guardBranches := false`), whose `arrOfE` gives the picked branch's array, whatever is in it. With no type written, the join is found by `elabBranchAlts` with `Ctx.typeOnly` set, which types a branch with something to lift as `option{…}` takes it: at its values' type. In a `for`, `exclIter` does so for `$joinOf`. Where the first success is taken, the guarded choice keeps `$joinOf` as its last argument, and `elabOneGo` types the binding at the join (for `set L = if …`, at `L`'s type) and drops it.
