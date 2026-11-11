@@ -67,6 +67,7 @@ jobs:
             echo "FUZZ_FLOATS=$((200 * k))"; echo "FUZZ_CHOICE=$((200 * k))"; echo "FUZZ_MODEL_SCHED=$((50 * k))"
             echo "FUZZ_MODEL_GADT=$((150 * k))"; echo "FUZZ_MODEL_MV=$((140 * k))"; echo "FUZZ_CONC=$((160 * k))"
             echo "FUZZ_CONC_POLY=$((60 * k))"; echo "FUZZ_FIELDS=$((60 * k))"; echo "FUZZ_MODEL_GENERIC=$((150 * k))"
+            echo "FUZZ_MODEL_CONSTRUCT=$((60 * k))"
           } >> "$GITHUB_ENV"
           echo "first seed $seed, counts x$k"
 

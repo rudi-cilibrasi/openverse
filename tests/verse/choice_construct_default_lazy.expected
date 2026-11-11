@@ -1,0 +1,8 @@
+visit 0
+visit 1
+string 3
+visit 0
+visit 1
+int 3
+visits 4
+exit=0

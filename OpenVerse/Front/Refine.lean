@@ -75,6 +75,7 @@ structure Lift where
   storage : List (String × Storage) := []
   /-- Source repetition context, preserved when the lift becomes a function. -/
   inRepeat : Bool := false
+  inlineScopes : List String := []
   deriving Inhabited
 
 def keyOf (p : Pos) (bound : String) (tag : String := "") : String := s!"{p.file}:{p.line}:{p.col}:{bound}{tag}"
@@ -97,6 +98,7 @@ partial def findPart (pr : SExpr → Bool) (outside : Bool) (e : SExpr) : Option
 
 /-- The type names written in `e` (in declarations and constructions). -/
 partial def typeNames (e : SExpr) : List String :=
+  if let .app _ (.ident _ "$constructHints") _ false := e then [] else
   let own : List String := match e with
     | .decl _ _ (some t) _ _ => t.allNames
     | .construct _ _ ts _ => ts.flatMap STy.allNames

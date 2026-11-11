@@ -277,11 +277,29 @@ def fnFits (env : TyEnv) (s : Sig) (t : Ty) : Bool :=
     | none => false
   | _ => false
 
+/-- A construction instance found with its original expected context. -/
+structure ConstructHint where
+  pos : Pos
+  name : String
+  site : String
+  frame : String
+  origin : String
+  defaults : List (String × String)
+  selfClass : Option String
+  tag : String
+  inputs : List (String × Ty)
+  aliases : List (String × Ty)
+  ty : Ty
+
 structure Ctx where
   /-- How many retries without an expected type enclose this point: a later
       branch is elaborated against the first's type, else on its own (to
       join), at most a few levels deep (so nested ones stay linear). -/
   retries : Nat := 0
+  constructProbe : Bool := false
+  inlineScopes : List String := []
+  constructOrigin : Option String := none
+  constructHints : Option (List ConstructHint) := none
   sigs    : List Sig
   /-- The functions' `<decides>` flags, as a program, for `Expr.mayFail`. -/
   sigProg : Prog
@@ -436,9 +454,16 @@ structure ESt where
   /-- (#283) For a call of an overloaded function with several values: the
       overload the elaboration for types chose, by the call's `$inlineOv` id. -/
   ovPicks : List (Nat × String) := []
+  constructHints : List ConstructHint := []
   deriving Inhabited
 
 abbrev EM := StateT ESt (Except String)
+
+/-- Successful isolated branch typing contributes construction instances
+    during the construction probe, while its runtime slots/effects are reset. -/
+def restoreConstructProbe (ctx : Ctx) (saved : ESt) : EM Unit := do
+  let hints := (← get).constructHints
+  set (if ctx.constructProbe then { saved with constructHints := hints } else saved)
 
 /-- A call of a recursive function with several values that its consumer
     takes lazily (#246), as code for the consumer to put in its loop: the
@@ -1302,14 +1327,122 @@ def choiceField (ctx : Ctx) (n m : String) : Bool :=
   | some (.struct c _) => (ctx.types.fields c).any (·.1 == m)
   | _ => false
 
+/-- Contextual types travel with a lifted operand when a later pass moves
+    its clause into a continuation. The metadata has no runtime expressions. -/
+def ConstructHint.toExpr (h : ConstructHint) : SExpr :=
+  let p := h.pos
+  let entries (xs : List (String × Ty)) := xs.map fun (n, t) =>
+    SExpr.decl p n (some t.toSTy) false (.tuple p [])
+  .app p (.ident p "$constructHint")
+    [.str p [.text h.origin], .str p [.text h.frame], .str p [.text h.site],
+     .block p (h.defaults.map fun (n, f) => .tuple p [.str p [.text n], .str p [.text f]]),
+     .block p (entries h.inputs), .block p (entries h.aliases),
+     .decl p "$instance" (some h.ty.toSTy) false (.tuple p [])] false
+
 /-- For `Choice.prepare` (#283): a struct's or class's fields in declaration
     order, the order its constructions evaluate them in, each with whether
     its default is more than a literal. -/
-def choiceOrder (ctx : Ctx) (n : String) : List (String × Bool) :=
-  if (ctx.types.structs.lookup n).isNone then [] else
-  (ctx.types.fields n).map fun (f, _, d) => (f, match d with
-    | some d => !Choice.stable (fun _ => true) d
-    | none => false)
+def choiceOrder (ctx : Ctx) (n : String) : Choice.FieldOrder :=
+  { fields := if (ctx.types.structs.lookup n).isNone then [] else
+      (ctx.types.fields n).map fun (f, _, d) => (f, match d with
+        | some d => !Choice.stable (fun _ => true) d
+        | none => false)
+    probe := ctx.constructProbe, inlineSite := ctx.inlineScopes.headD "",
+    origin := ctx.constructOrigin.getD ctx.frameName,
+    hints := ((ctx.constructHints.getD []).filter (·.name == n)).map ConstructHint.toExpr }
+
+/-- Lift-generated operand names retain their position and kind between
+    the probe and real pass; inserting a default changes their counter only. -/
+def constructLocalName (n : String) : String :=
+  let suffix := (n.splitOn "@").getLast!
+  let parts := suffix.splitOn "_"
+  let numeric := fun (s : String) => s.toNat?.isSome
+  let lifting := if n.contains '@' then parts.length == 3 && parts.all numeric else
+    match parts with
+    | [head, col, counter] =>
+      numeric col && numeric counter &&
+        ["$t", "$c", "$b", "$s", "$dv"].any fun k => head.startsWith k && numeric (head.drop k.length).toString
+    | _ => false
+  if !lifting then n else String.intercalate "_" (n.splitOn "_").dropLast
+
+def constructHint (ctx : Ctx) (p : Pos) (n site : String) (ty : Ty) : ConstructHint :=
+  { pos := p, name := n, site, frame := ctx.frameName,
+    origin := ctx.constructOrigin.getD ctx.frameName, defaults := ctx.defaults,
+    selfClass := ctx.selfClass, tag := ctx.liftTag,
+    inputs := ctx.locals.map fun l => (constructLocalName l.name, l.ty),
+    aliases := ctx.types.tvars, ty }
+
+def constructInstance (ctx : Ctx) (p : Pos) (n : String) (ts : List STy) (site : String)
+    (origin : String) (metadata : List SExpr) : EM Ty := do
+  if !ts.isEmpty || ((ctx.types.sparams.lookup n).getD []).isEmpty then
+    return ← resolveTy ctx.types p (if ts.isEmpty then .name n else .app n ts)
+  let inputs := ctx.locals.map fun l => (constructLocalName l.name, l.ty)
+  let hints := (ctx.constructHints.getD []).filter fun h =>
+    h.pos.line == p.line && h.pos.col == p.col && h.pos.file == p.file && h.name == n &&
+    h.site == site && h.frame == ctx.frameName && h.origin == origin && h.defaults == ctx.defaults &&
+    h.selfClass == ctx.selfClass && h.tag == ctx.liftTag &&
+    h.inputs.all (inputs.contains ·) && h.aliases.all (ctx.types.tvars.contains ·)
+  let mut tys := (hints.map (·.ty)).eraseDups
+  if tys.isEmpty then
+    -- A continuation keeps only the lexical values/types its body needs.
+    -- Check every retained input against the original instance, and require
+    -- one resulting construction type across all compatible candidates.
+    for entry in metadata do
+      let .app hp (.ident _ "$constructHint")
+          [.str _ [.text root], .str _ [.text frame], .str _ [.text active], .block _ defaults,
+           .block _ ins, .block _ aliases, .decl _ "$instance" (some ty) _ _] false := entry | continue
+      if hp.line != p.line || hp.col != p.col || hp.file != p.file || root != origin || frame != ctx.frameName || active != site then continue
+      let ds := defaults.filterMap fun
+        | .tuple _ [.str _ [.text c], .str _ [.text f]] => some (c, f)
+        | _ => none
+      if ds != ctx.defaults then continue
+      let check (xs : List SExpr) (available : List (String × Ty)) : EM Bool := do
+        for x in xs do
+          let .decl _ key (some t) _ _ := x | return false
+          let actual := available.filter (·.1 == key) |>.map (·.2)
+          if !actual.isEmpty then
+            let expected ← resolveTy ctx.types p t
+            if !actual.contains expected then return false
+        return true
+      let candidate ← tryCatch (do
+        if !(← check ins inputs) || !(← check aliases ctx.types.tvars) then return none
+        return some (← resolveTy ctx.types p ty)) (fun _ => pure none)
+      if let some t := candidate then if !tys.contains t then tys := tys ++ [t]
+  match tys with
+  | [t] => return t
+  | [] => eerr p s!"cannot infer the type arguments of {n} before its field choices"
+  | _ => eerr p s!"the field choices of {n} have different construction instances here"
+
+/-- Specialize a moved clause's construction metadata before its lexical
+    type aliases disappear. Future refining/default scopes keep their own
+    records until that scope is lifted. Only lexical names (not normalized
+    lifting counters) constrain this transfer; later prefixes add temporaries. -/
+def pruneConstructHints (ctx : Ctx) (target : String) (body : SExpr) : SExpr :=
+  Choice.mapE (fun
+    | .app p (.ident _ "$constructHints") [.block bp entries] false =>
+      let entries := entries.filterMap fun entry => match entry with
+        | .app hp f [.str op [.text origin], .str sp [.text scope], site,
+            .block dp defaults, .block ip inputs, .block ap aliases, result] false =>
+          let ds := defaults.filterMap fun
+            | .tuple _ [.str _ [.text c], .str _ [.text n]] => some (c, n)
+            | _ => none
+          if scope != ctx.frameName || ds != ctx.defaults then some entry else
+          let agrees (xs : List SExpr) (available : List (String × Ty)) : Bool := xs.all fun
+            | .decl q key (some ty) _ _ =>
+              let actual := available.filter (·.1 == key) |>.map (·.2)
+              if actual.isEmpty then true else
+                match (resolveTy ctx.types q ty).run { env := ctx.types } with
+                | .ok (t, _) => actual.any fun a =>
+                  let a := a.subst ctx.types.tvars
+                  !a.params.isEmpty || !t.params.isEmpty || a == t
+                | .error _ => true
+            | _ => false
+          if !agrees inputs (ctx.locals.map fun l => (l.name, l.ty)) || !agrees aliases ctx.types.tvars then none else
+            some (.app hp f [.str op [.text origin], .str sp [.text target], site,
+              .block dp defaults, .block ip inputs, .block ap aliases, result] false)
+        | _ => none
+      some (.app p (.ident p "$constructHints") [.block bp entries] false)
+    | _ => none) body
 
 /-- Keep a class cast with its branch until its refinement can be applied.
     A receiver bound by earlier clauses need not be in the context yet. -/
@@ -1333,14 +1466,17 @@ def checkNewLocal (ctx : Ctx) (p : Pos) (n : String) : EM Unit := do
 
 /-- (#335) Whether `e` writes one of the type parameters `tps`: in a written
     type, a construction's, or as a name. Conservative. -/
-def writesTps (tps : List String) (e : SExpr) : Bool :=
-  !tps.isEmpty && Choice.anyE (fun
+partial def writesTps (tps : List String) (e : SExpr) : Bool :=
+  if tps.isEmpty then false else match e with
+  | .app _ (.ident _ "$constructHints") _ false => false
+  | e =>
+    (match e with
     | .decl _ _ (some t) _ _ => Choice.styMentions tps t
     | .construct _ n ts _ => tps.contains n || ts.any (Choice.styMentions tps)
     | .structDef _ _ fs => fs.any fun (_, t, _, _) => Choice.styMentions tps t
     | .refineDef _ _ t _ => Choice.styMentions tps t
     | .ident _ n => tps.contains n
-    | _ => false) e
+    | _ => false) || e.children.any (writesTps tps)
 
 /-- A lazy helper owns its producer and the complete prepared suffix. That
     suffix changes when a composed choice is replaced by a continuation call;
@@ -1354,7 +1490,7 @@ def firstKey (ctx : Ctx) (p : Pos) (lp : List SExpr) (b : String) (bty : Option 
     (ctx.lookup n).map fun l => (n, l.ty, l.mutable)
   let aliases := ctx.types.tvars.filter fun (n, _) =>
     writesTps [n] written || ((bty.map (Choice.styMentions [n])).getD false)
-  reprStr (p, b, bty, lp, rest, inputs, aliases, ctx.selfClass, ctx.liftTag)
+  reprStr (p, b, bty, lp, rest, inputs, aliases, ctx.selfClass, ctx.liftTag, ctx.inlineScopes)
 
 /-- A cast `T[X]`, `X` of type `xty`, that holds only under a refinement of
     the code's type parameters (#243): `T` fixes or repeats type arguments
@@ -1727,10 +1863,13 @@ def firstLiftOf (ctx c2 : Ctx) (p : Pos) (g : String) (lp : List SExpr) (b : Str
         | (.ident _ n, t) => pure { name := n, ty := t.toSTy }
         | _ => throw "internal: a $member parameter (#283)"
       pure (STop.fn p (nameOf h) (hparams ++ capPs ++ typeParams) tps specs ret
-        (Choice.firstBody (nameOf h) p b bty hcls htail rest binds setsT capArgs (some vty.toSTy) nameOf))
+        (pruneConstructHints ctx (nameOf h)
+          (Choice.firstBody (nameOf h) p b bty hcls htail rest binds setsT capArgs (some vty.toSTy) nameOf)))
     | _ => throw "internal: a $member (#283)"
-  return { key, pos := p, name, params := params ++ typeParams, tparams := tps, specs, ret,
-           body := Choice.firstBody name p b bty cls tail rest binds setsT capArgs (some vty.toSTy) nameOf,
+  return { key, pos := p, name, inlineScopes := ctx.inlineScopes,
+           params := params ++ typeParams, tparams := tps, specs, ret,
+           body := pruneConstructHints ctx name
+             (Choice.firstBody name p b bty cls tail rest binds setsT capArgs (some vty.toSTy) nameOf),
            binds, sets := sets.map (·.name), args := pnames.map (SExpr.ident p ·) ++ caps.map (fun l => .ident p l.name) ++ typeArgs,
            varBinds := (bls.filter (·.mutable)).map (·.name), extraFns }
 
@@ -1754,7 +1893,7 @@ def contKey (ctx : Ctx) (p : Pos) (b : String) (rest : List SExpr) : String :=
   -- alternative of another one with a continuation, has the call of that
   -- one after it in the next elaboration, which may use the same names)
   let places := rest.map fun c => s!"{c.pos.line}.{c.pos.col}"
-  s!"k{p.line}_{p.col}_{p.file}_{b}_{String.intercalate "," caps}_{String.intercalate "," places}{typed}{ctx.liftTag}"
+  s!"k{p.line}_{p.col}_{p.file}_{b}_{String.intercalate "," caps}_{String.intercalate "," places}{typed}{ctx.liftTag}{reprStr ctx.inlineScopes}"
 
 /-- (#335) The function of its own that the clauses after a composed choice
     (#296) are compiled as, where the first success is taken and those
@@ -1808,10 +1947,11 @@ def contLiftOf (ctx c2 : Ctx) (p : Pos) (b : String) (alts rest : List SExpr)
     caps.map fun l => { name := if sets.any (·.name == l.name) then s!"{l.name}$in" else l.name, ty := l.ty.toSTy }
   -- (`$firstP`: the clauses are lifted already, the consumer's, which lifting
   -- again would bind twice, as for #275's functions)
-  return { key, pos := p, name, params := params ++ typeParams, tparams := tps,
+  return { key, pos := p, name, inlineScopes := ctx.inlineScopes, params := params ++ typeParams, tparams := tps,
            specs := (if heap.isEmpty then ["computes"] else heap) ++ ["decides"],
            ret := .tup (bls.map (·.ty.toSTy) ++ sets.map (·.ty.toSTy) ++ [.name "logic"]),
-           body := .block p (copies ++ [.app p (.ident p "$firstP") [.block p (rest ++ [tup])] false]),
+           body := pruneConstructHints ctx name
+             (.block p (copies ++ [.app p (.ident p "$firstP") [.block p (rest ++ [tup])] false])),
            binds, sets := sets.map (·.name),
            args := SExpr.ident p b :: caps.map (fun l => SExpr.ident p l.name) ++ typeArgs,
            varBinds := (bls.filter (·.mutable)).map (·.name) }
@@ -1852,7 +1992,7 @@ def forBodySafe (ctx : Ctx) (body : SExpr) : Bool :=
   -- Prepared consumers keep lazy producer templates (including groups and
   -- generic/default argument bindings) inside the body. Their ownership is
   -- checked when that consumer elaborates; they do not escape the helper.
-  let safeMarkers := ["$inline", "$choice", "$excl", "$alt", "$firstP", "$first", "$each", "$noLift", "$fxOf",
+  let safeMarkers := ["$inlineScope", "$inlineScopeEnd", "$inline", "$choice", "$excl", "$alt", "$firstP", "$first", "$each", "$noLift", "$fxOf",
     "$forReturns", "$forReturnBody", "$defer", "$loop", "$rec", "$recTo", "$group", "$member",
     "$tparams", "$params", "$defaults", "$paramDefault", "$freeNames", "$declNames"]
   !ctx.suspends && !(Refine.findPart (fun | .brk _ => true | _ => false) true body).isSome &&
@@ -1910,9 +2050,9 @@ def contForLiftOf (ctx : Ctx) (p : Pos) (b : String) (bty vty : Ty) (alts rest :
   let ret : STy := if sets.isEmpty then valueTy else .tup (valueTy :: sets.map (·.ty.toSTy))
   let bodyE : SExpr := if sets.isEmpty then .block p (copies ++ [ffirst]) else
     .block p (copies ++ [.decl p vals none false ffirst, .tuple p (.ident p vals :: sets.map fun l => SExpr.ident p l.name)])
-  return { key, pos := p, name, params := params ++ typeParams, tparams := tps,
+  return { key, pos := p, name, inlineScopes := ctx.inlineScopes, params := params ++ typeParams, tparams := tps,
            specs := (if heap.isEmpty then ["computes"] else heap) ++ ["decides"],
-           ret, body := bodyE, binds := [], sets := sets.map (·.name),
+           ret, body := pruneConstructHints ctx name bodyE, binds := [], sets := sets.map (·.name),
            args := SExpr.ident p b :: caps.map (fun l => SExpr.ident p l.name) ++ typeArgs }
 
 /-- A failed body is unwrapped in an iteration body. Inside an outcome
@@ -2029,7 +2169,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
           let st ← get
           let (_, ty, _, refined) ← elabBranchAlts { cA with canFail := true, inTaking := true, typeOnly := true }
             b.pos i b.ty b.place
-          set st
+          restoreConstructProbe cA st
           if refined && forBodySafe cA bd then
             checkNewLocal cA b.pos b.name
             if cA.typeOnly then
@@ -2101,7 +2241,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
             -- (for `set L = if …`, at `L`'s type; a branch with a call to
             -- lift typed as `option{…}` takes it, #283)
             let (_, ty, _, _) ← elabBranchAlts { cA with canFail := true, inTaking := true, typeOnly := true } gp i none place
-            set st
+            restoreConstructProbe cA st
             pure (some ty.toSTy)
           | t, _ => pure t
         let alts : List (List SExpr × SExpr) := alts.filterMap fun
@@ -3127,6 +3267,11 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
     let waiting0 := (← get).pendingWaitingCasts
     let background := (← get).backgroundSlots
     modify fun st => { st with fx := [] }
+    let retarget (h : ConstructHint) : ConstructHint :=
+      if h.frame == ctx.frameName then { h with frame := liftName } else h
+    let ctxB := { ctxB with constructHints := ctxB.constructHints.map (·.map retarget) }
+    let body := pruneConstructHints ctxB liftName
+      (pruneConstructHints { ctxB with frameName := ctx.frameName } liftName body)
     let rb ← elabE ctxB body (if elseE.isNone then some .void else exp.map refine)
     let waitingThen := (← get).pendingWaitingCasts
     let thenWaits := ctx.suspends && (waitingThen != waiting0 || waits rb.e)
@@ -3189,11 +3334,12 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
       specs, ret := ret.toSTy, subst := σ, opened := opened.map fun (n, v, _) => (n, v), waits := thenWaits,
       exits := Refine.Exits.substTypes ((escRet.map (·.2)).getD {}) σ,
       storage := storage.map fun (n, s) => (n, { frame := s.frame, name := s.name, args := s.args.map Ty.toSTy }),
-      inRepeat := ctx.inRepeat,
+      inRepeat := ctx.inRepeat, inlineScopes := ctx.inlineScopes,
       -- (made: a branch the elaborator made, for a cast with clauses
       -- after it, #286, which the source does not have as such)
       -- (and a tagged one, which the source's places do not find, #53)
-      body := if ctx.selfClass.isSome || made || D.startsWith "$" || !ctx.liftTag.isEmpty then some body else none }
+      body := if ctx.selfClass.isSome || made || D.startsWith "$" || !ctx.liftTag.isEmpty then some (pruneConstructHints ctxB liftName
+        (pruneConstructHints { ctxB with frameName := ctx.frameName } liftName body)) else none }
     modify fun st => if st.castNeeds.any (·.key == key) then st else { st with castNeeds := st.castNeeds ++ [lift] }
     if suspendsB then
       modify fun st => { st with pendingSuspendingCasts := st.pendingSuspendingCasts + 1 }
@@ -3483,10 +3629,55 @@ partial def ovChosen (picks : List (Nat × String)) : SExpr → SExpr :=
       | none => some (.app p (.ident p "$ovUnresolved") [.ident q f] false)
     | _ => none
 
+/-- Check a construction's value choices at the field's expected type.
+    Keeping the original inline/lazy templates visits nested constructions
+    under their real parameter aliases, rather than replacing them by calls. -/
+def constructFieldsForTypes : SExpr → SExpr
+  | .decl p f t v x =>
+    .decl p f t v (if Choice.hasLiftable x then
+      .app x.pos (.ident x.pos "$constructValuesType") [x] false else x)
+  | e => e
+
 set_option maxHeartbeats 800000 in
 mutual
 partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
+  if !ctx.constructProbe && ctx.constructHints.isNone &&
+      Choice.anyE (fun
+        | e@(.construct _ n [] _) =>
+          !((ctx.types.sparams.lookup n).getD []).isEmpty && Choice.hasLiftable e
+        | _ => false) se then
+    let st0 ← get
+    discard <| elabE { ctx with constructProbe := true, typeOnly := true, constructOrigin := some ctx.frameName } se exp
+    let hints := (← get).constructHints
+    set st0
+    return ← elabE { ctx with constructHints := some hints, constructOrigin := some ctx.frameName } se exp
   match se with
+  | .app p (.ident _ "$constructProbe") [.str _ [.text site], .construct q n ts fs] false =>
+    let r ← elabConstruct ctx q n ts (fs.map constructFieldsForTypes) exp
+    modify fun st => { st with constructHints := constructHint ctx q n site r.ty :: st.constructHints }
+    return r
+  | .app p (.ident _ "$constructValuesType") [value] false =>
+    let name := s!"$constructValue{p.line}_{p.col}"
+    let (r, c) ← elabOneClauses { ctx with canFail := true, inTaking := true }
+      [.decl p name (exp.map Ty.toSTy) false value]
+    let some valueLocal := c.lookup name | eerr p "construction type probe did not bind its value"
+    return ⟨.seq r.e (.local valueLocal.slot), valueLocal.ty⟩
+  | .app p (.ident _ "$fieldDefault")
+      [.str _ [.text site], .str _ [.text origin], .app _ (.ident _ "$constructHints") [.block _ hints] false,
+       .construct q n ts [], .ident _ f] false =>
+    let ty ← constructInstance ctx q n ts site origin hints
+    let tas := match ty with | .struct _ tas => tas | _ => []
+    let some (_, t, some d) := (ctx.types.fields n tas).find? (·.1 == f)
+      | eerr p s!"field '{f}' of {n} has no default value"
+    return ⟨← elabFieldDefault ctx p n tas f t d, t⟩
+  | .app p (.ident _ "$fieldValue")
+      [.str _ [.text site], .str _ [.text origin], .app _ (.ident _ "$constructHints") [.block _ hints] false,
+       .construct q n ts [], .ident _ f, value] false =>
+    let ty ← constructInstance ctx q n ts site origin hints
+    let tas := match ty with | .struct _ tas => tas | _ => []
+    let some (_, t, _) := (ctx.types.fields n tas).find? (·.1 == f)
+      | eerr p s!"struct {n} has no field '{f}'"
+    return ⟨← coerce p (← elabE ctx value (some t)) t, t⟩
   | .int p n =>
     if !Int64.inRange n then eerr p s!"integer literal {n} does not fit in 64 bits"
     return litAt ctx.types exp ⟨.lit (Value.ofInt n), .int⟩
@@ -3655,7 +3846,7 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
       if ctx.liftWhy != "" then
         eerr p s!"a call of {Choice.shownFnName f}, which has several values, cannot be lifted from {ctx.liftWhy}, for now (#283)"
       eerr p (s!"a call of {Choice.shownFnName f}, which has several values, cannot be lifted from here, for now (#235): " ++
-        "not from a defer:'s body, a construction where a field's default runs before it, " ++
+        "not from a defer:'s body, " ++
         "an alternative of a set's choice, the right of " ++
         "and or or, a range, or a block with a range of its own as a branch")
     eerr p (s!"{Choice.shownFnName f} has several values, so a call of it must be in a failure context that takes them: " ++
@@ -3667,7 +3858,7 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
       if ctx.liftWhy != "" then
         eerr p s!"a call of {Choice.shownFnName f}, which has several values, cannot be lifted from {ctx.liftWhy}, for now (#283)"
       eerr p (s!"a call of {Choice.shownFnName f}, which has several values, cannot be lifted from here, for now (#235): " ++
-        "not from a defer:'s body, a construction where a field's default runs before it, " ++
+        "not from a defer:'s body, " ++
         "an alternative of a set's choice, the right of " ++
         "and or or, a range, or a block with a range of its own as a branch")
     eerr p (s!"{Choice.shownFnName f} has several values, so a call of it must be in a failure context that takes them: " ++
@@ -3678,7 +3869,7 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
       if ctx.liftWhy != "" then
         eerr p s!"a call of {Choice.shownFnName f}, which has several values, cannot be lifted from {ctx.liftWhy}, for now (#283)"
       eerr p (s!"a call of {Choice.shownFnName f}, which has several values, cannot be lifted from here, for now (#235): " ++
-        "not from a defer:'s body, a construction where a field's default runs before it, " ++
+        "not from a defer:'s body, " ++
         "an alternative of a set's choice, the right of " ++
         "and or or, a range, or a block with a range of its own as a branch")
     eerr p (s!"{Choice.shownFnName f} has several values, so a call of it must be in a failure context that takes them: " ++
@@ -3688,7 +3879,7 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
       eerr p s!"a choice (a | b) cannot be lifted from {ctx.liftWhy}, for now (#283)"
     if ctx.inTaking then
       eerr p ("a choice (a | b) cannot be lifted from here, for now (#208): not from a defer:'s body, " ++
-        "a construction where a field's default runs before it, an alternative of a set's " ++
+        "an alternative of a set's " ++
         "choice, the right of and or or, a range, or a block with a range of its own as a branch")
     eerr p ("a choice (a | b) has several values, so it must be in a failure context that takes them: " ++
       "an if condition, a for's clauses, first{…}, option{…}, logic{…}, not, or the left of or (#208)")
@@ -4251,6 +4442,10 @@ partial def elabStmt (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM (R × Ctx) 
         modify fun st => { st with frameSlots := st.frameSlots ++ [(slot, s)] }
       pure (⟨.assign slot e, ty⟩,
         { ctx with locals := { name := n, slot, ty, mutable := isVar, storage } :: ctx.locals })
+    | .app _ (.ident _ "$inlineScope") [.str _ [.text name]] false =>
+      pure (⟨.lit .void, .void⟩, { ctx with inlineScopes := name :: ctx.inlineScopes })
+    | .app _ (.ident _ "$inlineScopeEnd") [] false =>
+      pure (⟨.lit .void, .void⟩, { ctx with inlineScopes := ctx.inlineScopes.drop 1 })
     | .app _ (.ident _ "$declNames") ns false => do
       -- (#283) the names a block whose choice is lifted binds (renamed for
       -- the place): not in scope where the block is, as for its own
@@ -6248,7 +6443,7 @@ partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
         | some (i, place) =>
           let st ← get
           let (_, ty, _, _) ← elabBranchAlts { ctx with canFail := true, inTaking := true, typeOnly := true } p i none place
-          set st
+          restoreConstructProbe ctx st
           pure (.decl p x (some ty.toSTy) false
             (.app q f (as.filter fun | .app _ (.ident _ "$joinOf") _ _ => false | _ => true) false))
         | none => pure cl
@@ -6261,7 +6456,7 @@ partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
         -- the branch. Each option takes the branch's first value for types.
         let st ← get
         let (_, ty, _, refined) ← elabBranchAlts { ctx with typeOnly := true } p i b.ty b.place
-        set st
+        restoreConstructProbe ctx st
         if !refined then
           if Choice.plainBranches Choice.hasLiftable i then
             return ← elabOneChoice ctx b rest
@@ -6309,7 +6504,8 @@ partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
         let unpack := binds.zipIdx.map fun (n, j) => SExpr.decl p n none (vars.contains n) (get j)
         let writes := request.toList.flatMap fun l => l.sets.zipIdx.map fun (n, j) =>
           SExpr.set p (.ident p n) none (get (l.binds.length + j))
-        return ← elabOneGo ctx ([.decl p t none false (.query p selected)] ++ unpack ++ writes)
+        let (code, c) ← elabOneGo ctx ([.decl p t none false (.query p selected)] ++ unpack ++ writes)
+        return (code, { c with inlineScopes := Choice.inlineScopesAfter ctx.inlineScopes rest })
     match Choice.binding? cl with
     | some b@{ each := some (.app _ (.ident _ "$loop") lp false), .. } =>
       -- (one taken lazily, #246: a loop over its values, each followed by
@@ -6323,9 +6519,10 @@ partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
       if let some l := (if ctx.typeOnly then none else ctx.types.loopRequests.find? (·.key == firstKey ctx p lp b.name b.ty rest)) then
         let t := s!"$ft{p.line}_{p.col}"
         let get (i : Nat) : SExpr := .app p (.ident p t) [.int p (i : Int)] false
-        return ← elabOneGo ctx ([.decl p t none false (.app p (.ident p l.name) l.args true)] ++
+        let (code, c) ← elabOneGo ctx ([.decl p t none false (.app p (.ident p l.name) l.args true)] ++
           l.binds.zipIdx.map (fun (n, i) => .decl p n none (l.varBinds.contains n) (get i)) ++
           l.sets.zipIdx.map (fun (m, j) => .set p (.ident p m) none (get (l.binds.length + j))))
+        return (code, { c with inlineScopes := Choice.inlineScopesAfter ctx.inlineScopes rest })
       let fx0 := (← get).fx
       modify fun st => { st with fx := [] }
       let lg ← elabLoopGen ctx p lp
@@ -6381,6 +6578,9 @@ partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
         -- order and the clauses run for each; the first success gives the
         -- names they bind, in a tuple)
         let p := b.pos
+        let finish (action : EM (Expr × Ctx)) : EM (Expr × Ctx) := do
+          let (code, c) ← action
+          return (code, { c with inlineScopes := Choice.inlineScopesAfter ctx.inlineScopes rest })
         -- (with the binding's name: an inlined body's position is every
         -- site's, #314)
         let t := s!"$ct{p.line}_{p.col}{b.name}"
@@ -6408,7 +6608,7 @@ partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
           let fits (l : Choice.FirstLift) : Bool :=
             (l.specs.filter (["reads", "writes", "allocates"].contains ·)).all ctx.fnFx.contains
           if let some l := req then
-            if !fits l then return ← elabOneGo ctx copied
+            if !fits l then return ← finish (elabOneGo ctx copied)
             let get (i : Nat) : SExpr := .app p (.ident p t) [.int p (i : Int)] false
             -- (the call a clause, whose failure goes back into the
             -- alternative's own choices, then its tuple the value)
@@ -6416,9 +6616,9 @@ partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
             let altK (a : SExpr) (i : Nat) : SExpr :=
               .app p (.ident p "$firstP") [.block p (liftAlt a i ++
                 [.decl p kt none false (.app p (.ident p l.name) l.args true), .ident p kt])] false
-            return ← elabOneGo ctx ([.decl p t none false (Choice.mk p (b.alts.zipIdx.map fun (a, i) => altK a i))] ++
+            return ← finish (elabOneGo ctx ([.decl p t none false (Choice.mk p (b.alts.zipIdx.map fun (a, i) => altK a i))] ++
               l.binds.zipIdx.map (fun (n, i) => .decl p n none (l.varBinds.contains n) (get i)) ++
-              l.sets.zipIdx.map (fun (m, j) => .set p (.ident p m) none (get (l.binds.length + j))))
+              l.sets.zipIdx.map (fun (m, j) => .set p (.ident p m) none (get (l.binds.length + j)))))
           -- (the first elaboration: one alternative with the clauses after it,
           -- for their names' types and effects, and the function asked for;
           -- its code is not kept, as the next elaboration has the function)
@@ -6448,9 +6648,9 @@ partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
               modify fun st => { st with fx := fx0 }
               modify fun st => { st with loopFirst := st.loopFirst ++ [use] }
               for (k, q, via) in fxB do noteFx q [k] via
-              return (code1, c1)
+              return ← finish (pure (code1, c1))
             | .error _ => set st0
-        return ← elabOneGo ctx copied
+        return ← finish (elabOneGo ctx copied)
       let p := b.pos
       let n := b.name
       let (ty, es) ← elabAlts ctx p b
@@ -6764,6 +6964,17 @@ partial def elabMember (ctx : Ctx) (p : Pos) (r : R) (m : String) (exp : Option 
       eerr p s!"struct {sn} has no field '{f}'"
   | t, m => eerr p s!"{t.show} has no member '{m}'"
 
+/-- A default's declaration scope, actual home-class arguments and cycle
+    check, shared by ordinary and choice-lifted construction operands. -/
+partial def elabFieldDefault (ctx : Ctx) (p : Pos) (name : String) (tas : List Ty)
+    (f : String) (t : Ty) (d : SExpr) : EM Expr := do
+  let home := (ctx.types.defaultHome.lookup (name, f)).getD name
+  let hσ := (((ctx.types.sparams.lookup home).getD []).map (·.1)).zip (ctx.types.argsAt name tas home)
+  let dctx := { ctx with locals := [], selfClass := none, types := { ctx.types with tvars := hσ } }
+  if dctx.defaults.contains (name, f) then
+    eerr p s!"the default of field '{f}' of {name} depends on itself"
+  fxAt p (do coerce p (← elabE { dctx with defaults := (name, f) :: dctx.defaults } d (some t)) t)
+
 /-- `name{F := e, …}` or `name(t₁, …){F := e, …}`: the struct's fields in
     declaration order; omitted fields take their default values. The type
     arguments of a parametric struct are written, or are those of the
@@ -6777,9 +6988,6 @@ partial def elabConstruct (ctx : Ctx) (p : Pos) (name : String) (targs : List ST
     | ts, _ => resolveTy ctx.types p (.app name ts)
   let tas := match ty with | .struct _ tas => tas | _ => []
   let fs := ctx.types.fields name tas
-  -- a default is elaborated with the struct's own type parameters in scope
-  let σ := ((ctx.types.sparams.lookup name).getD [] |>.map (·.1)).zip tas
-  let dctx := { ctx with locals := [], types := { ctx.types with tvars := σ }, selfClass := none }
   let given ← args.mapM fun a => match a with
     | .decl _ f none false rhs => pure (f, rhs)
     | a => eerr a.pos "a struct field is given as Name := value"
@@ -6792,13 +7000,7 @@ partial def elabConstruct (ctx : Ctx) (p : Pos) (name : String) (targs : List ST
     match given.lookup f, dflt with
     | some rhs, _ => coerce p (← elabE ctx rhs (some t)) t
     | none, some d =>
-      -- the default is code of its home class, at its type arguments here
-      let home := (ctx.types.defaultHome.lookup (name, f)).getD name
-      let hσ := (((ctx.types.sparams.lookup home).getD []).map (·.1)).zip (ctx.types.argsAt name tas home)
-      let dctx := { dctx with types := { ctx.types with tvars := hσ } }
-      if dctx.defaults.contains (name, f) then
-        eerr p s!"the default of field '{f}' of {name} depends on itself"
-      fxAt p (do coerce p (← elabE { dctx with defaults := (name, f) :: dctx.defaults } d (some t)) t)
+      elabFieldDefault ctx p name tas f t d
     | none, none => eerr p s!"field '{f}' of {name} has no default value and must be given"
   if ctx.types.classes.contains name then
     let i := ctx.types.info name
@@ -10166,7 +10368,10 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
                        selfClass := scopeClass.orElse fun _ => match name.splitOn "." with
                          | [c, _] => some c
                          | _ => none
-                       liftTag := if scopeClass.isSome then s!"$in{selfCls}" else liftTagOf name
+                       liftTag := if scopeClass.isSome then s!"$in{selfCls}" else liftTagOf name,
+                       inlineScopes := ((opts.loopRequests.find? fun l => l.name == name || l.extraFns.any
+                         (fun | .fn _ n .. => n == name | _ => false)).map (·.inlineScopes)).getD
+                           (((opts.castRequests.find? (·.name == name)).map (·.inlineScopes)).getD [])
                        selfMethod := match name.splitOn "." with
                          | [_, m] => some m
                          | _ => none }

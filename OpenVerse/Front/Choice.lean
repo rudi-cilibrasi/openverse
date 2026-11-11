@@ -293,6 +293,7 @@ partial def hasLiftable : SExpr → Bool
   | .app _ (.ident _ "$noLift") _ false => false
   -- (an inlined function's parameter default, in its own context, #283)
   | .app _ (.ident _ "$paramDefault") _ false => false
+  | .app _ (.ident _ "$constructProbe") _ false => false
   -- (an exclusive choice, which a `for` compiles itself, #314)
   | .app _ (.ident _ "$excl") _ false => false
   | .app _ (.ident _ "$choice") _ false => true
@@ -345,6 +346,15 @@ partial def stable (isVal : String → Bool) : SExpr → Bool
   | .member _ (.ident _ n) _ => !isVal n
   | _ => false
 
+/-- Construction metadata supplied by the elaborator. A discarded type
+    probe keeps the construction whole so every field retains its expected type. -/
+structure FieldOrder where
+  fields : List (String × Bool) := []
+  probe : Bool := false
+  inlineSite : String := ""
+  origin : String := ""
+  hints : List SExpr := []
+
 structure LiftSt where
   next : Nat := 0
   /-- The clauses lifted so far, in order. -/
@@ -352,11 +362,12 @@ structure LiftSt where
   /-- Part of every name made: the call site of the function being inlined
       (#235), so two calls of one function do not make the same names. -/
   site : String := ""
+  inlineSite : String := ""
   /-- A struct's or class's fields in declaration order, the order its
       constructions evaluate them in, each with whether it has a default
       that is more than a literal (so runs where it is, #283); `[]` when not
       known here. -/
-  fieldOrder : String → List (String × Bool) := fun _ => []
+  fieldOrder : String → FieldOrder := fun _ => {}
 
 abbrev LM := StateM LiftSt
 
@@ -465,6 +476,7 @@ def markCalls (mv : List String) : SExpr → SExpr :=
     fields and named arguments aside. -/
 partial def localDecls (e : SExpr) : List (String × Pos) :=
   let rec go : SExpr → List (String × Pos)
+    | .app _ (.ident _ "$constructHints") _ false => []
     | .decl p n _ _ x => (if n.startsWith "?" then [] else [(n, p)]) ++ go x
     | .gen p x i src => (x :: i.toList).map (·, p) ++ go src
     | .construct _ _ _ fs => fs.flatMap fun | .decl _ _ _ _ x => go x | a => go a
@@ -652,14 +664,19 @@ partial def liftE (isVal : String → Bool) (isField : String → String → Boo
     match body.getLast? with
     | some (.decl q r _ _ _) =>
       let saved := (← get).site
-      modify fun s => { s with site := r }
+      let inlineSaved := (← get).inlineSite
+      modify fun s => { s with
+        site := r, inlineSite := r,
+        pre := s.pre.push (.app q (.ident q "$inlineScope") [.str q [.text r]] false) }
       -- (the body's own names are values too: its parameters and locals)
       let bound := boundIn tmpl
       let isVal' := fun n => isVal n || bound.contains n
       for c in body do
         for c' in normClauses (← liftClauseM isVal' isField c) r do
           modify fun s => { s with pre := s.pre.push c' }
-      modify fun s => { s with site := saved }
+      modify fun s => { s with
+        site := saved, inlineSite := inlineSaved,
+        pre := s.pre.push (.app q (.ident q "$inlineScopeEnd") [] false) }
       return .ident q r
     -- (no template: only seeing whether a body has several values)
     | _ => LM.bind e.pos "c" e
@@ -709,11 +726,15 @@ partial def liftE (isVal : String → Bool) (isField : String → String → Boo
     -- (#283) a construction's field values, as a call's arguments, in the
     -- order it evaluates them: its type's declaration order, not as written
     -- (so they are put in that order first, which changes nothing else).
-    -- Kept (so refused) when that order is unknown here, a field is given
-    -- twice (only the first is evaluated), or a field not given whose
-    -- default is more than a literal comes before the last choice (it would
-    -- run after it)
-    let ord := (← get).fieldOrder n
+    -- Keep unknown layouts and duplicate fields for their normal errors.
+    -- Computed defaults before a choice are explicit typed operands; object
+    -- allocation, blocks and trailing defaults remain in the construction.
+    let info := (← get).fieldOrder n
+    let active := (← get).inlineSite
+    let site := if active.isEmpty then info.inlineSite else active
+    if info.probe then
+      return .app p (.ident p "$constructProbe") [.str p [.text site], e] false
+    let ord := info.fields
     let names := fs.filterMap fun | .decl _ f none false _ => some f | _ => none
     if ord.isEmpty || names.length != fs.length then
       return noLift p "a construction here, whose fields' order is not known (in a recursive function computed eagerly)" e
@@ -724,8 +745,25 @@ partial def liftE (isVal : String → Bool) (isField : String → String → Boo
       | .decl _ f _ _ _, .decl _ g _ _ _ => idx f ≤ idx g
       | _, _ => true
     let lastAt := (fs.filterMap fun | .decl _ f _ _ x => if hasLiftable x then some (idx f) else none | _ => none).foldl max 0
-    if let some (f, _) := (ord.take lastAt).find? (fun (f, d) => d && !names.contains f) then
-      return noLift p s!"a construction of {n} that does not give field '{f}': its default comes before the choice, and would run after it" e
+    -- Defaults before the last choice are explicit operands of this
+    -- construction. The marker restores their home scope and field type.
+    let context : List SExpr := [.str p [.text site], .str p [.text info.origin],
+      .app p (.ident p "$constructHints") [.block p info.hints] false, .construct p n ts []]
+    let early := (ord.take lastAt).filter fun (f, d) => d && !names.contains f
+    let defaults := early.map fun (f, _) =>
+      SExpr.decl p f none false (.app p (.ident p "$fieldDefault")
+        (context ++ [.ident p f]) false)
+    let fs : List SExpr := (fs ++ defaults).mergeSort fun a b => match a, b with
+      | .decl _ f _ _ _, .decl _ g _ _ _ => idx f ≤ idx g
+      | _, _ => true
+    let fs : List SExpr := fs.map fun
+      | .decl q f t v x =>
+        if idx f < lastAt && !hasLiftable x && !stable isVal x &&
+            !(match x with | .app _ (.ident _ "$fieldDefault") _ false => true | _ => false) then
+          .decl q f t v (.app q (.ident q "$fieldValue")
+            (context ++ [.ident p f, x]) false)
+        else .decl q f t v x
+      | x => x
     let vals ← liftOps isVal isField (fs.map fun | .decl _ _ _ _ x => x | x => x)
     return .construct p n ts ((fs.zip vals).map fun
       | (.decl q f t v _, x) => .decl q f t v x
@@ -921,7 +959,7 @@ end
     it, then it. A binding or `set` whose value is a choice, or a clause that
     is one, stays as it is (`normClauses` makes it a binding). -/
 def liftClause (isVal : String → Bool) (isField : String → String → Bool) (c : SExpr)
-    (site : String := "") (fieldOrder : String → List (String × Bool) := fun _ => []) : List SExpr :=
+    (site : String := "") (fieldOrder : String → FieldOrder := fun _ => {}) : List SExpr :=
   (liftClauseM isVal isField c).run' { site, fieldOrder }
 
 /-- (#331) In a `for`, an `if` with choices in its branches as an exclusive
@@ -1027,7 +1065,7 @@ partial def consumeBranches (i : SExpr) (site : String) (consume : SExpr → SEx
     (variables and fields in scope); the clauses' own bindings are too. -/
 def prepare (cs : List SExpr) (isVal : String → Bool := fun _ => false)
     (isField : String → String → Bool := fun _ _ => false) (site : String := "")
-    (fieldOrder : String → List (String × Bool) := fun _ => []) (keepExcl : Bool := false)
+    (fieldOrder : String → FieldOrder := fun _ => {}) (keepExcl : Bool := false)
     (guardBranches : Bool := true) (keepBranches : SExpr → Bool := fun _ => false) : List SExpr :=
   -- (an exclusive choice is a `for`'s to compile, #314; elsewhere, where
   -- the first success is taken, the choice of its alternatives)
@@ -1057,8 +1095,16 @@ def prepare (cs : List SExpr) (isVal : String → Bool := fun _ => false)
       else [c]
     | c => [c]
 
+/-- The lexical inline scope after a prepared suffix. Consumer lowering
+    can compile the suffix in a nested block while returning its bound names. -/
+def inlineScopesAfter (initial : List String) (cs : List SExpr) : List String :=
+  cs.foldl (fun scopes c => match c with
+    | .app _ (.ident _ "$inlineScope") [.str _ [.text name]] false => name :: scopes
+    | .app _ (.ident _ "$inlineScopeEnd") [] false => scopes.drop 1
+    | _ => scopes) initial
+
 /-- Whether the clauses have a choice for their failure context to take. -/
-def hasChoice (cs : List SExpr) (fieldOrder : String → List (String × Bool) := fun _ => []) : Bool :=
+def hasChoice (cs : List SExpr) (fieldOrder : String → FieldOrder := fun _ => {}) : Bool :=
   (prepare cs (fieldOrder := fieldOrder)).any (fun c => (binding? c).isSome) ||
     -- (#283) or something to lift where a clause takes it (`liftsHere`): an
     -- inlined call with no choice in it, where an overloaded one's
@@ -1083,7 +1129,7 @@ def firstOfClauses (p : Pos) (cs : List SExpr) : SExpr :=
 /-- With a choice to take, `e` as the first success of it (#208): how
     `option{…}` and `logic{…}` (whose braces hold clauses), `not` and the left
     of `or` take a choice's values. -/
-def takeFirst? (e : SExpr) (fieldOrder : String → List (String × Bool) := fun _ => []) : Option SExpr :=
+def takeFirst? (e : SExpr) (fieldOrder : String → FieldOrder := fun _ => {}) : Option SExpr :=
   match e with
   | .block p cs => if hasChoice cs fieldOrder then some (firstOfClauses p cs) else none
   -- (#283) a `set` with a choice or a call with several values in its path
@@ -1117,6 +1163,7 @@ structure MFn where
 /-- The names `e` uses: as identifiers and as calls' heads. -/
 partial def namesUsed (e : SExpr) : List String :=
   let rec go : SExpr → List String
+    | .app _ (.ident _ "$constructHints") _ false => []
     | .ident _ n => [n]
     | .decl _ _ _ _ x => go x
     | .gen _ _ _ src => go src
@@ -1761,6 +1808,7 @@ partial def valueUse? (mv : List String) : SExpr → Option (Pos × String)
     they bind and the final values of the `var`s they set (`binds`, then
     `sets`, then `true`). -/
 structure FirstLift where
+  inlineScopes : List String := []
   key : String
   pos : Pos
   name : String

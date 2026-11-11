@@ -821,10 +821,13 @@ Main():void =
   of `first{…}`, `spawn`, `branch`, `sync`, `race`, `rush` or `defer:`:
   such a body takes its own choices or runs apart.
 
-  Refused for now: a choice inside a construction where a field it
-  does not give, with a default that is more than a literal, comes before
-  the choice (the default runs in its place); an
-  alternative of a `set`'s choice, either side of `and`, the right of `or`,
+  Omitted field defaults run in declaration order too. A computed default
+  before a choice runs once for that prefix; later values share any object
+  it creates. Trailing defaults and the constructed class's blocks run for
+  each completed value. Defaults retain their declaration scope and type
+  arguments, including inherited defaults and implicit generic instances.
+
+  Refused for now: an alternative of a `set`'s choice, either side of `and`, the right of `or`,
   a range, or a block with a range of its own as a branch; and
   a choice anywhere outside these failure contexts. (A field reached
   through a receiver that is not a variable or `Self`, as `F().Items[…]`,
@@ -1465,6 +1468,6 @@ Main()<suspends>:void =
 arithmetic on rationals (see [rational](#rational)), float functions beyond those of [float](#float),
 the class features listed under [Classes](#classes), struct methods (Verse structs have none; classes do),
 `weak_map`, module paths `using{/Verse.org/…}` (accepted and ignored), overloading beyond [Overloading](#overloading), nested
-functions and lambdas (not released in Verse), choice beyond [Choice](#choice) (recursive functions with several values that have effects, other than generators, methods with several values whose name another class shares or that a class fixing a generic class's type arguments overrides; a choice inside a construction whose default runs before it), concurrency beyond [Concurrency](#concurrency), and effect checking
+functions and lambdas (not released in Verse), choice beyond [Choice](#choice) (recursive functions with several values that have effects, other than generators, methods with several values whose name another class shares or that a class fixing a generic class's type arguments overrides), concurrency beyond [Concurrency](#concurrency), and effect checking
 other than `<decides>` and the heap effects (`<converges>` is accepted and
 ignored).

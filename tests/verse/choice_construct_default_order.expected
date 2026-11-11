@@ -1,0 +1,25 @@
+new cell
+tail
+block 1 10 cell 1
+got 1 10 cell 1
+tail
+block 1 20 cell 2
+got 1 20 cell 2
+new cell
+tail
+block 2 10 cell 1
+got 2 10 cell 1
+tail
+block 2 20 cell 2
+got 2 20 cell 2
+saved 1 10 cell 2
+saved 1 20 cell 2
+saved 2 10 cell 2
+saved 2 20 cell 2
+new cell
+tail
+block 1 20 cell 1
+first 1 20 cell 1
+new cell
+empty 0
+exit=0

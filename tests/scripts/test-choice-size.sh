@@ -3,13 +3,29 @@
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
-for kind in composed exclusive binding typed-first typed-for typed-exclusive refined-for refined-state refined-failure lazy-first lazy-for lazy-effect-first lazy-effect-for lazy-alt-first lazy-alt-for lazy-failure-for lazy-alt-failure-for lazy-exclusive-failure-for refined-lazy-failure refined-return refined-lazy-return refined-nested-body refined-nested-failure lazy-generic-first; do
+for kind in composed exclusive binding typed-first typed-for typed-exclusive refined-for refined-state refined-failure lazy-first lazy-for lazy-effect-first lazy-effect-for lazy-alt-first lazy-alt-for lazy-failure-for lazy-alt-failure-for lazy-exclusive-failure-for refined-lazy-failure refined-return refined-lazy-return refined-nested-body refined-nested-failure lazy-generic-first construct-first construct-for construct-failure; do
   sizes=()
   for count in 4 8; do
     python3 - "$kind" "$count" >"$tmp/p.verse" <<'PY'
 import sys
 kind, count = sys.argv[1], int(sys.argv[2])
 print('Two(N:int):int = N | N + 1')
+if kind.startswith('construct-'):
+    print('Note(N:int)<transacts>:int =\n    Print("default {N}")\n    N')
+    fields = '; '.join(f'D{i}:int = Note({i}); Y{i}:int' for i in range(count))
+    print(f'pack(t:type) := struct {{ E:[]t = Concatenate(); {fields} }}')
+    values = ', '.join(f'Y{i} := (Two(0) | Two(2))' for i in range(count))
+    binding = f'P:pack(t) = pack{{{values}}}'
+    if kind == 'construct-first':
+        print(f'Run(Unused:t where t:type):int = if ({binding}) then P.E.Length + P.Y0 else -1')
+    else:
+        specs = '<decides>' if kind == 'construct-failure' else ''
+        test = '\n        P.Y0 >= 0' if specs else ''
+        print(f'Run(Unused:t where t:type){specs}:int =\n    R := for ({binding}):{test}\n        P.E.Length + P.Y0\n    R.Length')
+    specs = '<decides>' if kind == 'construct-failure' else ''
+    call = 'Run[7]' if specs else 'Run(7)'
+    print(f'Main(){specs}:void = Print("{{{call}}}")')
+    sys.exit(0)
 if kind.startswith('lazy-'):
     effectful = 'effect' in kind or 'alt' in kind or 'failure' in kind or 'generic' in kind
     failable = 'failure' in kind
