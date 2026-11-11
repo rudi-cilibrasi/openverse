@@ -1427,7 +1427,10 @@ position in every class below the one that declares it.
   active default stack for recursive-default checks, and repetition/defer
   restrictions through `$defaultContext`. Their heap effects, and those
   of enclosing refinement lifts, are inferred from their bodies together
-  before checking caller effects;
+  before checking caller effects. Inference and final elaboration share
+  `functionBodyCtx`, preserving source exits, capture storage, witnesses
+  and continuation naming; the casts retain their discovery effects as
+  late default effects propagate;
   a `<computes>` method may have an effectful default when its caller allows
   that effect. Suspended default helpers forward background-task ownership
   like refining lifts, while the method called inside remains an ordinary

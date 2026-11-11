@@ -8172,6 +8172,36 @@ def liftTagOf (name : String) : String :=
     | none => ""
   else ""
 
+/-- Generated bodies use the same source exits, capture storage and naming
+    during effect inference and final elaboration. -/
+def functionBodyCtx (opts : Options) (ctx : Ctx) (p : Pos) (name : String)
+    (tps : List (String × Bool)) (scopeClass : Option String := none) : Except String Ctx := do
+  let lifted := opts.castRequests.find? (·.name == name)
+  let loopLift := opts.loopRequests.find? fun l => l.name == name || l.extraFns.any
+    (fun | .fn _ n .. => n == name | _ => false)
+  let locals ← ctx.locals.mapM fun l => do
+    let storage ← ((lifted.bind fun r => r.storage.lookup l.name)).mapM fun r => do
+      let args ← r.args.mapM fun t => (resolveTy ctx.types p t).run' { env := ctx.types }
+      return { frame := r.frame, name := r.name, args : SourceStorage }
+    pure { l with storage := storage.orElse fun _ => l.storage }
+  let selfCls := (name.splitOn ".").headD ""
+  return { ctx with
+    locals := locals
+    frameName := name
+    frameArgs := tps.map fun (v, c) => Ty.param v c
+    inRepeat := lifted.any (·.inRepeat)
+    refineExits := (lifted.map (·.exits)).getD {}
+    inBlock := name.endsWith ".$block"
+    inCtor := name.endsWith "$init"
+    selfClass := scopeClass.orElse fun _ => match name.splitOn "." with
+      | [c, _] => some c | _ => none
+    selfMethod := match name.splitOn "." with | [_, m] => some m | _ => none
+    liftTag := if scopeClass.isSome then s!"$in{selfCls}" else
+      (loopLift.map (·.liftTag)).getD (liftTagOf name)
+    refineScope := (lifted.map (·.continuationScope)).getD
+      (if loopLift.isSome then s!"$contScope{name.hash}" else "")
+    inlineScopes := (loopLift.map (·.inlineScopes)).getD ((lifted.map (·.inlineScopes)).getD []) }
+
 /-- The interface whose scope a class's copy of its default is elaborated
     in (#53): its `$copyOf:J` effect, which `copyIfaceDefaults` gives it. -/
 def copyScope? (effs : List String) : Option String :=
@@ -10654,7 +10684,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
         | .error _ => pure ()
       -- a class's `block:` clauses have the effects of their code, and so
       -- does a default an overloaded constructor fills in (#99)
-      | .fn _ n ps _ _ _ body =>
+      | .fn p n ps _ _ _ body =>
         if (n.splitOn "$default$").length > 1 then
           let ctx : Ctx := { sigs := sigs.toList ++ gsigs.toList, sigProg := mkSigProg sigs, types := env }
           match elabBodyOv ctx body (some sigs[idx]!.ret) { env } with
@@ -10668,10 +10698,10 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
           let s := sigs[idx]!
           let locals := (ps.zip (List.range ps.length)).zip s.params |>.map fun ((prm, i), t) =>
             ({ name := prm.name, slot := i, ty := t, mutable := false } : Local)
-          let ctx : Ctx := { sigs := sigs.toList ++ gsigs.toList, sigProg := mkSigProg sigs, types := env,
-                             locals := locals.reverse, retTy := s.ret, canFail := s.decides, suspends := s.suspends,
-                             inBlock := n.endsWith ".$block", selfClass := some ((n.splitOn ".").headD "") }
-          match elabBodyOv ctx body (some s.ret) { env, nslots := ps.length, slotTys := s.params.toArray } with
+          let base : Ctx := { sigs := sigs.toList ++ gsigs.toList, sigProg := mkSigProg sigs, types := env,
+                              locals := locals.reverse, retTy := s.ret, canFail := s.decides, suspends := s.suspends, fnFx := s.fx }
+          let ctx ← functionBodyCtx opts base p n s.tparams s.scope
+          match elabBodyOv ctx body (some s.ret) { env, nslots := ps.length, slotTys := s.params.toArray, frameSlots := ctx.locals.filterMap fun l => l.storage.map (l.slot, ·) } with
           | .ok (_, st) =>
             let fx := heapFx.filter fun k => st.fx.any (·.1 == k) ||
               (opts.castRequests.any (·.name == n) && s.fx.contains k)
@@ -10683,19 +10713,25 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     -- and so do those of a parametric class, generic (#39)
     for (top, gi) in generics.zip (List.range generics.length) do
       match top with
-      | .fn _ n ps _ _ _ body =>
+      | .fn p n ps _ _ _ body =>
         if n.endsWith ".$block" || inferredBridge n then
           let g := gsigs[gi]!
           let locals := (ps.zip (List.range ps.length)).zip g.params |>.map fun ((prm, i), t) =>
             ({ name := prm.name, slot := i, ty := t, mutable := false } : Local)
-          let hidden := g.tparams.map fun (v, c) => Ty.param v c
-          let genv := { env with tvars := g.tparams.map fun (v, c) => (v, Ty.param v c) }
-          let ctx : Ctx := { sigs := sigs.toList ++ gsigs.toList, sigProg := mkSigProg sigs, types := genv,
-                             locals := locals.reverse, retTy := g.ret, canFail := g.decides, suspends := g.suspends, dictBase := ps.length,
-                             dictVars := g.tparams.map (·.1),
-                             selfClass := some ((n.splitOn ".").headD "") }
+          let dictTps := g.tparams.filter (fun (v, _) => !g.selfTps.contains v) ++
+            g.tparams.filter (fun (v, _) => g.selfTps.contains v)
+          let hidden := dictTps.map fun (v, c) => Ty.param v c
+          let lifted := opts.castRequests.find? (·.name == n)
+          let selfField (v : String) := match lifted with
+            | some l => (l.opened.lookup v).bind (env.witnessField? l.target ·)
+            | none => env.witnessField? ((n.splitOn ".").headD "") v
+          let genv := { env with tvars := g.tparams.map fun (v, c) => (v, Ty.param v c), dictOrder := dictTps.map (·.1), selfWitness := g.selfTps.map fun v => (v, (selfField v).getD 0) }
+          let base : Ctx := { sigs := sigs.toList ++ gsigs.toList, sigProg := mkSigProg sigs, types := genv,
+                              locals := locals.reverse, retTy := g.ret, canFail := g.decides, suspends := g.suspends,
+                              dictBase := ps.length, dictVars := dictTps.map (·.1), fnFx := g.fx }
+          let ctx ← functionBodyCtx opts base p n g.tparams g.scope
           match elabBodyOv ctx body (some g.ret)
-              { env, nslots := ps.length + hidden.length, slotTys := (g.params ++ hidden).toArray } with
+              { env := genv, nslots := ps.length + hidden.length, slotTys := (g.params ++ hidden).toArray, frameSlots := ctx.locals.filterMap fun l => l.storage.map (l.slot, ·) } with
           | .ok (_, st) =>
             let fx := heapFx.filter fun k => st.fx.any (·.1 == k) ||
               (opts.castRequests.any (·.name == n) && g.fx.contains k)
@@ -10900,39 +10936,23 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     let env := if selfTps.isEmpty then env else
       { env with dictOrder := dictTps.map (·.1),
                  selfWitness := selfTps.map fun v => (v, selfField v) }
-    let lifted := opts.castRequests.find? (·.name == name)
-    let locals ← ((ps.zip (List.range ps.length)).zip ptys).mapM fun ((prm, i), t) => do
-      let storage ← ((lifted.bind fun l => l.storage.lookup prm.name)).mapM fun s => do
-        return {
-          frame := s.frame, name := s.name,
-          args := ← s.args.mapM fun t => (resolveTy env p t).run' { env } : SourceStorage }
-      pure ({ name := prm.name, slot := i, ty := t, mutable := false, storage } : Local)
+    let locals := ((ps.zip (List.range ps.length)).zip ptys).map fun ((prm, i), t) =>
+      ({ name := prm.name, slot := i, ty := t, mutable := false } : Local)
     for (prm, i) in ps.zip (List.range ps.length) do
       if ps.take i |>.any (·.name == prm.name) then throw s!"{p.show}: duplicate parameter '{prm.name}'"
-    let loopLift := opts.loopRequests.find? fun l => l.name == name || l.extraFns.any
-      (fun | .fn _ n .. => n == name | _ => false)
-    let ctx : Ctx := { sigs := allSigs, sigProg, locals := locals.reverse, types := env, fnFx := allowed,
-                       canFail := decides, retTy := ret, dictBase := ps.length, suspends,
-                       frameName := name, frameArgs := tps.map fun (v, c) => Ty.param v c,
-                       inRepeat := lifted.any (·.inRepeat),
-                       refineExits := ((opts.castRequests.find? (·.name == name)).map (·.exits)).getD {},
-                       dictVars := dictTps.map (·.1),
-                       inBlock := name.endsWith ".$block",
-                       inCtor := name.endsWith "$init",
-                       -- (an interface's default elaborated for a class, #53:
-                       -- its names resolve in the interface, `scopeClass`)
-                       selfClass := scopeClass.orElse fun _ => match name.splitOn "." with
-                         | [c, _] => some c
-                         | _ => none
-                       liftTag := if scopeClass.isSome then s!"$in{selfCls}" else
-                         (loopLift.map (·.liftTag)).getD (liftTagOf name),
-                       refineScope := (lifted.map (·.continuationScope)).getD
-                         (if loopLift.isSome then s!"$contScope{name.hash}" else ""),
-                       inlineScopes := (loopLift.map (·.inlineScopes)).getD
-                           (((opts.castRequests.find? (·.name == name)).map (·.inlineScopes)).getD [])
-                       selfMethod := match name.splitOn "." with
-                         | [_, m] => some m
-                         | _ => none }
+    let base : Ctx := {
+      sigs := allSigs
+      sigProg := sigProg
+      locals := locals.reverse
+      types := env
+      fnFx := allowed
+      canFail := decides
+      retTy := ret
+      dictBase := ps.length
+      suspends := suspends
+      dictVars := dictTps.map (·.1) }
+    let ctx ← functionBodyCtx opts base p name tps scopeClass
+    let locals := ctx.locals.reverse
     let hidden := dictTps.map fun (v, c) => Ty.param v c
     let arity := ps.length + hidden.length - selfTps.length
     let st0 : ESt := {
