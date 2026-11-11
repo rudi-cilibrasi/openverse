@@ -495,7 +495,11 @@ circle := class(shape, labelled):
   (`Typed.dispatch`), so nothing is assumed in Verse Core. In a
   `<suspends>` function the branch and the `else` may suspend (#243): the
   branch's function is then `<suspends>`, and the `if` a suspends call of
-  it, cancelled as any (its `defer:`s, then the caller's). A `var` from outside it that the branch
+  it, cancelled as any (its `defer:`s, then the caller's). The lifted branch
+  cannot contain `branch` or `rush` because their background tasks belong
+  to the enclosing source function. The branch cannot suspend while
+  capturing an outer `var` shared with an earlier background task or
+  setting one used by an enclosing `defer:`. A `var` from outside it that the branch
   sets is copied into the branch, which sets the copy, and is set from the
   copy after the `if` (#243), so it has the value the branch left it. A
   `return` in the branch, or a `break` that leaves it, makes its function
@@ -594,7 +598,7 @@ circle := class(shape, labelled):
     class(i1(int), i2(string))`), other than as a clause of an `if`'s
     condition (the first, or one after clauses that print, change an
     object and call nothing), whose branch is then a function of its own
-    as below (#243: it cannot suspend, and so on), or to one neither above
+    as described above (#243), or to one neither above
     nor below it, and a named argument's default computed by code (not a
     literal) in a call through one, or to a class that fixes type
     arguments from generic code, when it reads the receiver (its field),
