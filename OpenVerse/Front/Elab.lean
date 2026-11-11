@@ -396,6 +396,13 @@ structure ESt where
   /-- Branches of casts that refine type arguments, to lift into functions
       (#243): the program is elaborated again, with them. -/
   castNeeds : List Refine.Lift := []
+  /-- Encounters with suspending casts whose lift is still being discovered.
+      Their placeholder expressions have no suspension to scan. -/
+  pendingSuspendingCasts : Nat := 0
+  /-- Pending casts that can wait on either path, for shared-slot checks. -/
+  pendingWaitingCasts : Nat := 0
+  /-- Mutable locals captured by a branch or a potentially continuing rush arm. -/
+  backgroundSlots : List Nat := []
   /-- The recursive functions with several values that a context taking
       its first success consumes lazily (#246), with where, and the code
       each runs once for all the values of an item (`LoopGen.itemCode`):
@@ -453,6 +460,13 @@ def fxAt (p : Pos) (m : EM α) : EM α := do
 def noteFx (p : Pos) (ks : List String) (via : Option String := none) : EM Unit :=
   modify fun st => { st with fx := ks.foldl (fun acc k =>
     if acc.any (·.1 == k) then acc else acc ++ [(k, p, via)]) st.fx }
+
+/-- Record the outer mutable slots a task can still access after it starts. -/
+def noteBackgroundCaptures (ctx : Ctx) (uses : List Nat) : EM Unit := do
+  let slots := ctx.locals.filterMap fun l =>
+    if l.mutable && uses.contains l.slot then some l.slot else none
+  unless slots.isEmpty do
+    modify fun st => { st with backgroundSlots := (slots ++ st.backgroundSlots).eraseDups }
 
 /-- An elaborated expression and its type. -/
 structure R where
@@ -1402,6 +1416,11 @@ def refineBranchWhy? (ctx : Ctx) (p : Pos) (body : SExpr) (muts : List String) (
   else if ctx.inDefer || ctx.inCtor || ctx.inBlock || ctx.inParamDefault || ctx.inArm || ctx.inBranch ||
       !ctx.defaults.isEmpty || ctx.inDefaultCheck then
     some (p, "it cannot be here yet: in a defer:, a constructor's items, a class's block: clause, a field's or parameter's default, or an arm of sync, race, rush or branch")
+  else if let some (.app q (.ident _ n) _ _) := Refine.findPart (fun
+      | .app _ (.ident _ n) _ _ => n == "$branch" || n == "$rush"
+      | _ => false) false body then
+    let kw := if n == "$branch" then "branch" else "rush"
+    some (q, s!"it cannot contain {kw} because its tasks belong to the enclosing function")
   else if let some e := (if allowEsc then none else Refine.findPart (fun | .ret .. => true | _ => false) false body) then
     some (e.pos, "it cannot have a return yet")
   else if let some e := (if allowEsc then none else Refine.findPart (fun | .brk _ => true | _ => false) true body) then
@@ -2735,8 +2754,9 @@ partial def elabSetWith (elabE : Ctx → SExpr → Option Ty → EM R) (elabMemb
     with the object (as `D`) and those locals passed at their refined
     types. `none` when the cast does not refine: the plain path. -/
 partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr → Bool → Option Ty → EM R)
-    (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx) (p _dp : Pos) (D T : String) (x : SExpr) (body0 : SExpr)
-    (elseE : Option SExpr) (exp : Option Ty) (made : Bool := false) (escRet : Option Ty := none) :
+    (elabE : Ctx → SExpr → Option Ty → EM R) (withMark : Ctx → Expr → EM Expr) (ctx : Ctx) (p _dp : Pos) (D T : String) (x : SExpr) (body0 : SExpr)
+    (elseE : Option SExpr) (exp : Option Ty) (made : Bool := false) (escRet : Option Ty := none)
+    (outsideWrites : List Nat := []) :
     EM (Option R) := do
   let env := ctx.types
   if !env.classes.contains T then return none
@@ -2832,23 +2852,27 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
     let tupTy ← tupS.mapM (resolveTy env p ·)
     -- (the new branch is the elaborator's, so its function is made from it,
     -- `made`, not from the source)
-    let some rIf ← elabRefinedIfWith elabApp elabE ctx p _dp D T x thenB (some elseB) tupTy (made := true)
-        (escRet := if escapes then tupTy else none)
+    let some rIf ← elabRefinedIfWith elabApp elabE withMark ctx p _dp D T x thenB (some elseB) tupTy (made := true)
+        (escRet := if escapes then tupTy else none) (outsideWrites := outsideWrites ++ setOut.map (·.slot))
       | eerr p s!"internal: the cast to {shown} with sets, returns or breaks in its branch (#243)"
     let slot ← fresh rIf.ty
     let c := { ctx with locals := { name := t, slot, ty := rIf.ty, mutable := false } :: ctx.locals }
     let rest ← elabE c (.block p after) exp
     return some ⟨.seq (.assign slot rIf.e) rest.e, rest.ty⟩
-  -- (a suspension in the branch or in the `else`, which the dispatch to the
-  -- branch's function would have to carry, is refused for now)
+  -- (a suspension in the branch makes its function `<suspends>`, whose
+  -- dispatch the lowering takes as a suspends method's call, #243; the
+  -- `else` is the caller's code, which may suspend as any)
   let isS (f : Nat) : Bool := ctx.sigs.any fun s => s.idx == f && s.suspends
+  let immediateLifts := env.castRequests.filter (!·.waits) |>.map (·.name)
+  -- Cancellation itself is immediate. Keep scanning its receiver.
+  let mayWait (f : Nat) : Bool :=
+    ctx.sigs.any fun s => s.idx == f && s.suspends && s.name != "$cancelMark" && !immediateLifts.contains s.name
+  let startsTask (f : Nat) : Bool :=
+    ctx.sigs.any fun s => s.idx == f && (s.name == "$spawnMark" || s.name == "$branchMark")
+  let waits (e : Expr) : Bool := Suspend.countSusp mayWait (fun _ => false) false startsTask e > 0
   let elseOf : EM R := match elseE with
     | none => pure ⟨.lit .void, .void⟩
-    | some ee => do
-      let re ← elabE ctx ee exp
-      if ctx.suspends && Suspend.hasSusp isS re.e then
-        eerr ee.pos s!"the else of the cast to {shown}, which holds only under a refinement of the type arguments, cannot suspend yet: the if is a dispatch to its branch's function (#243)"
-      pure re
+    | some ee => elabE ctx ee exp
   let key := Refine.keyOf p D ctx.liftTag
   match env.castRequests.find? (·.key == key) with
   | none =>
@@ -2867,14 +2891,31 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
         opened.map (fun (n, _, c) => (n, Ty.param n c))) } }
     -- (its own effects, which its function declares; the enclosing one's too)
     let fx0 := (← get).fx
+    let pending0 := (← get).pendingSuspendingCasts
+    let waiting0 := (← get).pendingWaitingCasts
+    let background := (← get).backgroundSlots
     modify fun st => { st with fx := [] }
     let rb ← elabE ctxB body (if elseE.isNone then some .void else exp.map refine)
-    if ctx.suspends && Suspend.hasSusp isS rb.e then
-      eerr body.pos s!"the branch of the cast to {shown}, which holds only under a refinement of the type arguments, is compiled as a function of its own, so it cannot suspend yet (#243)"
+    let waitingThen := (← get).pendingWaitingCasts
+    let thenWaits := ctx.suspends && (waitingThen != waiting0 || waits rb.e)
+    if thenWaits then
+      for l in caps do
+        let n := Choice.shownName l.name
+        if l.mutable && background.contains l.slot then
+          eerr p s!"the branch of the refining cast cannot suspend while it captures the var '{n}' shared with a background task (#243)"
+        -- Cancellation skips the copy back to the caller before its defers run.
+        if outsideWrites.contains l.slot && ctx.defers.any (fun (d, ls) =>
+            (ls.find? (·.name == l.name)).any (·.slot == l.slot) && (Choice.namesUsed d).contains l.name) then
+          eerr p s!"the branch of the refining cast cannot suspend while it sets the var '{n}' used by an enclosing defer (#243)"
     let fxB := (← get).fx
     modify fun st => { st with fx := fx0 }
     for (k, q, via) in fxB do noteFx q [k] via
     let re ← elseOf
+    -- Preserve the dispatch shape when lowering either side. Task starts
+    -- need lowering too, but only a wait exposes copies of shared slots.
+    let hasPending := (← get).pendingSuspendingCasts != pending0
+    let suspendsB := ctx.suspends && (hasPending || Suspend.hasSusp isS rb.e || Suspend.hasSusp isS re.e)
+    let elseWaits := ctx.suspends && ((← get).pendingWaitingCasts != waitingThen || waits re.e)
     let τ' : Ty := if elseE.isNone then .void else exp.getD re.ty
     let ret := refine τ'
     discard <| coerce p rb ret
@@ -2904,19 +2945,24 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
       | .param m _ => if m == n then none else some (n, t'.toSTy)
       | _ => some (n, t'.toSTy)
     let heap := ["reads", "writes", "allocates"].filter fun k => fxB.any (·.1 == k)
-    let specs := (if heap.isEmpty then ["computes"] else heap) ++ (if decides then ["decides"] else [])
+    let specs := (if heap.isEmpty then ["computes"] else heap) ++ (if decides then ["decides"] else []) ++
+      (if suspendsB then ["suspends"] else [])
     let lift : Refine.Lift := {
       pos := p, bound := D, target := T, tag := ctx.liftTag,
       name := s!"$refine{p.line}_{p.col}_{D}" ++ (if p.file.isEmpty then "" else s!"_{p.file}") ++ ctx.liftTag,
       params := ((D, dTy) :: sig).map (fun (n, t) => { name := n, ty := t.toSTy }) ++
         extra.map fun (n, _) => { name := s!"$type{n}", ty := .name n },
       tparams := tps.map fun (n, c) => { pos := p, name := n, constraint := if c then "comparable" else "type" },
-      specs, ret := ret.toSTy, subst := σ, opened := opened.map fun (n, v, _) => (n, v),
+      specs, ret := ret.toSTy, subst := σ, opened := opened.map fun (n, v, _) => (n, v), waits := thenWaits,
       -- (made: a branch the elaborator made, for a cast with clauses
       -- after it, #286, which the source does not have as such)
       -- (and a tagged one, which the source's places do not find, #53)
       body := if ctx.selfClass.isSome || made || !ctx.liftTag.isEmpty then some body else none }
     modify fun st => if st.castNeeds.any (·.key == key) then st else { st with castNeeds := st.castNeeds ++ [lift] }
+    if suspendsB then
+      modify fun st => { st with pendingSuspendingCasts := st.pendingSuspendingCasts + 1 }
+    if thenWaits || elseWaits then
+      modify fun st => { st with pendingWaitingCasts := st.pendingWaitingCasts + 1 }
     -- (a placeholder: this elaboration goes no further)
     return some ⟨if decides then .prim .fail [] else .prim .userErr [], τ'⟩
   | some l =>
@@ -3006,15 +3052,23 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
         else .ident p sp.name
       let rc ← elabApp ctx' p (.ident p l.name) (l.params.map argOf)
         (l.specs.contains "decides") (some (τ'.subst μF))
-      let .call fi (.local s0 :: es) := rc.e
+      -- (a suspends call carries the defers active at it, which go around
+      -- the whole dispatch instead, as a method's, #243)
+      let rcE : Expr := match rc.e with
+        | .seq (.ite (.prim .fail []) _ (.lit .void)) b => b
+        | e => e
+      let .call fi (.local s0 :: es) := rcE
         | eerr p s!"cannot lift the branch of the cast to {shown} yet: its call is not a plain one (#243)"
       if s0 != y then eerr p s!"cannot lift the branch of the cast to {shown} yet (#243)"
       acc := .ite (.heap (.isTag (part.toList.map env.tagOf)) [.local y]) (.call fi (.local y :: es)) acc
       tested := part ++ tested
     let t ← fresh τ'
-    if pre.isEmpty then return some ⟨.assign t acc, τ'⟩
+    -- (its value in a temporary at its type, as a suspends call's takes,
+    -- and the defers active here around it when its function suspends)
+    let mark (e : Expr) : EM Expr := if l.specs.contains "suspends" then withMark ctx e else pure e
+    if pre.isEmpty then return some ⟨← mark (.assign t acc), τ'⟩
     let cond := pre.foldr Expr.seq (.heap (.isTag (tested.toList.map env.tagOf)) [.local y])
-    return some ⟨.assign t (.ite cond acc eE), τ'⟩
+    return some ⟨← mark (.assign t (.ite cond acc eE)), τ'⟩
 
 /-- (#283) `elabLoopGen` for a strongly connected group of functions with
     several values, taken lazily (`$group(tail, $member(H, params, clauses,
@@ -4064,6 +4118,8 @@ partial def elabConc (ctx : Ctx) (p : Pos) (isSync : Bool) (arms : List SExpr) (
     let mut rs : Array (Pos × R) := #[]
     for a in arms do
       rs := rs.push (a.pos, ← elabE armCtx a exp)
+    if isRush then
+      noteBackgroundCaptures ctx (rs.toList.flatMap fun (_, r) => Suspend.slotsOf r.e)
     -- (as an `if`'s branches: void when one is, `any` when nothing else is
     -- common)
     let mut ty : Ty := .never
@@ -4142,6 +4198,7 @@ partial def elabBranch (ctx : Ctx) (p : Pos) (body : SExpr) : EM R := do
   let some mark := ctx.sig? "$branchMark" | eerr p "internal error: no branch helper"
   let armCtx := { ctx with defers := [], loopDefers := 0, inLoop := false, inArm := true, inBranch := true }
   let r ← elabE armCtx body none
+  noteBackgroundCaptures ctx (Suspend.slotsOf r.e)
   return ⟨.call mark.idx [.prim .mkArr [.seq r.e (.lit .void)]], .void⟩
 
 partial def elabDefersCore (ctx : Ctx) (ds : List (SExpr × List Local)) : EM Expr := do
@@ -5292,7 +5349,7 @@ partial def elabCast (ctx : Ctx) (p : Pos) (T : String) (args : List SExpr) (bra
 /-- `elabRefinedIfWith`, given this block's functions (#325). -/
 partial def elabRefinedIf (ctx : Ctx) (p _dp : Pos) (D T : String) (x : SExpr) (body0 : SExpr)
     (elseE : Option SExpr) (exp : Option Ty) (made : Bool := false) : EM (Option R) :=
-  elabRefinedIfWith elabApp elabE ctx p _dp D T x body0 elseE exp made
+  elabRefinedIfWith elabApp elabE withDeferMark ctx p _dp D T x body0 elseE exp made
 
 /-- `elabGenericCallWith`, given this block's functions (#325). -/
 partial def elabGenericCall (ctx : Ctx) (p : Pos) (s : Sig) (args : List SExpr) (exp : Option Ty) :

@@ -53,6 +53,9 @@ structure Lift where
       class, as the copies and the interface's own default share the
       source's places (`Ctx.liftTag`); such a lift always has its `body`. -/
   tag : String := ""
+  /-- Whether executing the lifted then-block can wait. The generated
+      function may need `<suspends>` for the dispatch even when it never waits. -/
+  waits : Bool := false
   deriving Inhabited
 
 def keyOf (p : Pos) (bound : String) (tag : String := "") : String := s!"{p.file}:{p.line}:{p.col}:{bound}{tag}"

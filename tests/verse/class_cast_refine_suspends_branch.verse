@@ -1,4 +1,4 @@
-# expect: 8:20: the branch of the cast to dup(a), which holds only under a refinement of the type arguments, is compiled as a function of its own, so it cannot suspend yet
+# A refining cast's branch that suspends (#243): its function <suspends>, the dispatch a suspends call
 pair(t:type, u:type) := class:
     A:t
     B:u
