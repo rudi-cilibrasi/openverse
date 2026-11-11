@@ -107,7 +107,7 @@ def evalList (P : Prog) : Nat → St → List Expr → Option (LRes × St)
 def evalFor (P : Prog) : Nat → Nat → Expr → Expr → St → List Value → List Value →
     Option (Res × St)
   | 0, _, _, _, _, _, _ => none
-  | _+1, _, _, _, s, [], acc => some (.ok (.arr acc.reverse.toArray), s)
+  | _+1, _, _, _, s, [], acc => some (.ok (Value.ofArray acc.reverse.toArray), s)
   | n+1, i, filt, body, s, v :: vs, acc => match writeSlot s i v with
     | none => some (.err .slot, s)
     | some s₀ => match eval P n s₀ filt with

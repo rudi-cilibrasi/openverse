@@ -965,7 +965,7 @@ theorem hasTy_float {v} (h : hasTy Ξ v .float = true) : ∃ b, v = .float b := 
   cases v <;> simp_all [hasTy]
 
 theorem ofString_typed (s : String) : hasTy Ξ (Value.ofString s) VTy.str = true := by
-  simp only [Value.ofString, hasTy, VTy.str]
+  simp only [Value.ofString, Value.ofArray, hasTy, VTy.str]
   rw [allTy_iff]; intro v hv
   simp only [List.mem_map] at hv
   obtain ⟨b, _, rfl⟩ := hv

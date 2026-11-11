@@ -780,7 +780,7 @@ partial def loopify (e : Expr) (used : Bool := true) : M Expr := do
           (.loop (.ite elem (.seq next (.ite f' (.seq b' vd) vd)) .brk)))
       let acc ← fresh τ
       let add : Expr := .assign acc (.prim .concat [.local acc, .prim .mkArr [b']])
-      return .seq (.assign a it') (.seq (.assign ix (int 0)) (.seq (.assign acc (.lit (.arr #[])))
+      return .seq (.assign a it') (.seq (.assign ix (int 0)) (.seq (.assign acc (.lit Value.emptyArray))
         (.seq (.loop (.ite elem (.seq next (.ite f' (.seq add vd) vd)) .brk)) (.local acc))))
     | _, _, _ => return .forE i it' f' b'
   | .assign j x => return .assign j (← loopify x)
@@ -865,7 +865,7 @@ partial def block (e : Expr) (k : Option (Expr → Expr)) : M (List Expr) := do
     | some k =>
       let acc ← fresh (← infer e)
       let add : Expr := .assign acc (.prim .concat [.local acc, .prim .mkArr [body]])
-      block (.seq (.assign a it) (.seq (.assign ix (int 0)) (.seq (.assign acc (.lit (.arr #[])))
+      block (.seq (.assign a it) (.seq (.assign ix (int 0)) (.seq (.assign acc (.lit Value.emptyArray))
         (.seq (.loop (.ite elem (.seq next (.ite filt (.seq add vd) vd)) .brk)) (.local acc))))) (some k)
   | .call g es =>
     let env ← read

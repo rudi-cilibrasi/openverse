@@ -138,7 +138,7 @@ def evalForB (P : Prog) : Nat → Nat → Nat → Expr → Expr → St → List 
     Bounded (Res × St)
   | 0, _, _, _, _, _, _, _ => .fuel
   | _+1, 0, _, _, _, _, _, _ => .deep
-  | _+1, _+1, _, _, _, s, [], acc => .res (.ok (.arr acc.reverse.toArray), s)
+  | _+1, _+1, _, _, _, s, [], acc => .res (.ok (Value.ofArray acc.reverse.toArray), s)
   | n+1, d+1, i, filt, body, s, v :: vs, acc => match writeSlot s i v with
     | none => .res (.err .slot, s)
     | some s₀ => (evalB P n d s₀ filt).bind fun

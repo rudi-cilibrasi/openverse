@@ -133,9 +133,9 @@ def default : VTy → Value
   | .logic => .logic false
   | .char => .char 0
   | .float => .float 0
-  | .arr _ => .arr #[]
+  | .arr _ => Value.emptyArray
   | .opt _ => .none
-  | .tup ts => .tup (defaults ts)
+  | .tup ts => Value.ofTuple (defaults ts)
   -- no value has a type variable as its type; slots of such types are
   -- initialised from parameters instead (`DefaultE`)
   | .var _ => .void

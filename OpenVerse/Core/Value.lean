@@ -51,6 +51,38 @@ namespace Value
 /-- The unit value returned by `void` expressions. -/
 def void : Value := .tup []
 
+/-- The shared empty array, also used for empty maps and strings. -/
+def emptyArray : Value := .arr #[]
+
+/-- Construct an array value. Compiled code shares the empty wrapper. -/
+def ofArray (xs : Array Value) : Value := .arr xs
+
+@[simp] theorem ofArray_eq_arr (xs : Array Value) : ofArray xs = .arr xs := rfl
+
+private def ofArrayCached (xs : Array Value) : Value :=
+  if xs.isEmpty then emptyArray else .arr xs
+
+@[csimp] private theorem ofArray_eq_ofArrayCached : @ofArray = @ofArrayCached := by
+  funext xs
+  by_cases h : xs.isEmpty
+  · have hx := Array.empty_of_isEmpty h
+    subst xs
+    rfl
+  · simp [ofArray, ofArrayCached, h]
+
+/-- Construct a tuple value. Compiled code shares `void` for the empty tuple. -/
+def ofTuple (vs : List Value) : Value := .tup vs
+
+@[simp] theorem ofTuple_eq_tup (vs : List Value) : ofTuple vs = .tup vs := rfl
+
+private def ofTupleCached : List Value → Value
+  | [] => void
+  | vs => .tup vs
+
+@[csimp] private theorem ofTuple_eq_ofTupleCached : @ofTuple = @ofTupleCached := by
+  funext vs
+  cases vs <;> rfl
+
 /-- Construct an integer value. Compiled code shares the wrappers for 0..1025. -/
 def ofInt (i : Int) : Value := .int i
 
@@ -74,7 +106,7 @@ private def ofIntCached : Int → Value
   | negSucc n => rfl
 
 /-- Build a Verse string from a Lean string (UTF-8 bytes). -/
-def ofString (s : String) : Value := .arr (s.toUTF8.toList.map fun b => .char b.toNat).toArray
+def ofString (s : String) : Value := ofArray (s.toUTF8.toList.map fun b => .char b.toNat).toArray
 
 mutual
 /-- Decidable equality, written by hand: Lean cannot derive it for a nested inductive. -/

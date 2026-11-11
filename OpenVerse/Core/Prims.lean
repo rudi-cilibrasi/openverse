@@ -59,11 +59,11 @@ def VFloat.toIntRes (r : VFloat.Rounding) (b : UInt64) : Res :=
 
 /-- The string value of `ToString(v)`. -/
 def toStrValue : Value → Res
-  | .int i => .ok (.arr ((intBytes i).map Value.char).toArray)
-  | .char c => .ok (.arr #[.char c])
+  | .int i => .ok (Value.ofArray ((intBytes i).map Value.char).toArray)
+  | .char c => .ok (Value.ofArray #[.char c])
   | .float b => .ok (Value.ofString (VFloat.render b))
   | .arr vs => match asBytes vs.toList with
-    | some _ => .ok (.arr vs)
+    | some _ => .ok (Value.ofArray vs)
     | none => .err .type
   | _ => .err .type
 
@@ -123,14 +123,14 @@ def Prim.apply : Prim → List Value → Res
   | .query, [.logic b] => if b then .ok (.logic true) else .fail
   | .query, [.none] => .fail
   | .query, [.some v] => .ok v
-  | .mkArr, vs => .ok (.arr vs.toArray)
-  | .mkTup, vs => .ok (.tup vs)
+  | .mkArr, vs => .ok (Value.ofArray vs.toArray)
+  | .mkTup, vs => .ok (Value.ofTuple vs)
   | .mkSome, [v] => .ok (.some v)
-  | .concat, [.arr xs, .arr ys] => .ok (.arr (xs ++ ys))
+  | .concat, [.arr xs, .arr ys] => .ok (Value.ofArray (xs ++ ys))
   | .flatten, [.arr xss] => match flattenArrs xss.toList with
-    | some vs => .ok (.arr vs.toArray)
+    | some vs => .ok (Value.ofArray vs.toArray)
     | none => .err .type
-  | .range, [.int a, .int b] => .ok (.arr (rangeVals a b).toArray)
+  | .range, [.int a, .int b] => .ok (Value.ofArray (rangeVals a b).toArray)
   | .index, [.arr xs, .int i] =>
     if 0 ≤ i then match xs[i.toNat]? with
       | some v => .ok v
@@ -138,7 +138,7 @@ def Prim.apply : Prim → List Value → Res
     else .fail
   | .len, [.arr xs] => .ok (Value.ofInt xs.size)
   | .arrSet, [.arr xs, .int i, v] =>
-    if 0 ≤ i ∧ i.toNat < xs.size then .ok (.arr (xs.setIfInBounds i.toNat v)) else .fail
+    if 0 ≤ i ∧ i.toNat < xs.size then .ok (Value.ofArray (xs.setIfInBounds i.toNat v)) else .fail
   | .tupGet k, [.tup vs] => match vs[k]? with
     | some v => .ok v
     | none => .err .type
