@@ -189,7 +189,11 @@ Main():void =
   type, a polymorphic identifier remains insufficient (`Map(Xs, Identity)`
   cannot itself determine `Map`'s unknown result parameter).
   Other arguments can determine it first (`Apply(Identity, X)` when `Apply`
-  takes `type{_(:t):t}` and `t`); arguments still run in written order.
+  takes `type{_(:t):t}` and `t`), including inlined choice calls, recursive
+  producer calls and generic methods. Arguments still run in written order;
+  named arguments run as written before omitted defaults. A local, field or
+  visible method keeps its meaning when a generic top-level function has
+  the same name.
 - A bound method's class parameters may repeat, occur inside compound
   parameter/result types, or be absent from its function signature (#209).
   The captured receiver retains their types and hidden witnesses. This
