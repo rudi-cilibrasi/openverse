@@ -2219,6 +2219,18 @@ partial def rwFamCalls (anc : String → List String) (fams : List (String × MF
       | _, _ => none
     | _ => none) e
 
+/-- Preserve the lexical owner and receiver of super calls left after
+    selected multi-value families have been rewritten. These may call an
+    ordinary scalar or overloaded method that stays in its class. -/
+partial def sourceSuperCalls (c method : String) (e : SExpr) : SExpr :=
+  mapE (fun
+    | e@(.app _ (.ident _ "$sourceSuper") _ false) => some e
+    | .app p f@(.member _ (.ident _ "(super:)") _) args br =>
+      some (.app p (.ident p "$sourceSuper")
+        [.str p [.text c], .str p [.text method], .ident p "Self",
+          .app p f (args.map (sourceSuperCalls c method)) br] false)
+    | _ => none) e
+
 /-- Methods with several values (#283), as top-level functions that take
     `Self` explicitly, so that everything functions with several values
     have applies: `C$M($Self:C, params…)`, its body with the names of `C`'s
@@ -2230,7 +2242,7 @@ partial def rwFamCalls (anc : String → List String) (fams : List (String × MF
     interface's member apart from its own override family, no top-level
     name and no parameter or local. Class parameters become function
     parameters, followed by the method's own type parameters. Suspension
-    and `(super:)` of another method remain unsupported. Selected families keep stubs in
+    remains unsupported. Selected families keep stubs in
     their classes for ordinary signature/override validation. -/
 def methodFns (tops : List STop) (reserved : List String := []) : Except String (List STop) := do
   let classes := tops.filterMap fun
@@ -2267,11 +2279,6 @@ def methodFns (tops : List STop) (reserved : List String := []) : Except String 
   let declsOf (n : String) : List (String × STop) := decls.filter fun | (_, .fn _ x ..) => x == n | _ => false
   let isOverride : STop → Bool := fun | .fn _ _ _ _ fx _ _ => fx.contains "override" | _ => false
   let isAbstract : STop → Bool := fun | .fn _ _ _ _ fx _ _ => fx.contains "$abstract" | _ => false
-  -- (`(super:)` of another method than the one itself: its body leaves
-  -- the class, where that means nothing)
-  let otherSuper (n : String) (b : SExpr) : Bool :=
-    anyE (fun | .app _ (.member _ (.ident _ "(super:)") x) _ _ => x != n | .member _ (.ident _ "(super:)") _ => false | _ => false) b ||
-    anyE (fun | .member _ (.ident _ "(super:)") x => x != n | _ => false) (eraseCallHeads [n] b)
   -- (#283) the root's type parameters as class `c` sees them, through
   -- each parent's type arguments: `ibox := class(box(int))` sees `t` as
   -- `int`, so its override may write `int` where the root writes `t`
@@ -2302,14 +2309,13 @@ def methodFns (tops : List STop) (reserved : List String := []) : Except String 
       -- default implementation, if it gives one, the alternative for the
       -- classes that have none of their own, as a class's own is)
       if !(anc c).contains r then return some (s!"{c.replace "::" "."} overrides it without being below {r.replace "::" "."}", none)
-      if let .fn _ _ _ _ fx _ b := m then
+      if let .fn _ _ _ _ fx _ _ := m then
         -- (an override that is `<decides>` where the declaration is not, or
         -- the other way round: no family, for the elaborator's check of the
         -- override's signature to say so, not a call's brackets)
         let rootDecides := (ds.find? (·.1 == r)).any fun | (_, .fn _ _ _ _ rfx _ _) => rfx.contains "decides" | _ => false
         if fx.contains "decides" != rootDecides then return some ("", none)
         if fx.contains "suspends" then return some ("is <suspends>", some c)
-        if otherSuper n b then return some ("uses (super:) of another method", some c)
     if allFields.contains n || topNames.contains n || localBinders.contains n then
       return some (s!"{n} is also the name of a field, an enumerator, a member of a built-in type, a top-level name, a parameter or a local", none)
     return none
@@ -2371,7 +2377,7 @@ def methodFns (tops : List STop) (reserved : List String := []) : Except String 
       let qual := qualMembers isMethodName mem.contains free
       -- (now `M(…)` is `Self.M(…)`; then the calls of the selected ones;
       -- a parameter's default too, which sees the method's fields)
-      let fix := fun e => renameE [("Self", "$Self")] (rw fs trial (some c) (qual e))
+      let fix := fun e => renameE [("Self", "$Self")] (sourceSuperCalls c m (rw fs trial (some c) (qual e)))
       let ps' := ps.map fun sp => { sp with default := sp.default.map fix }
       -- (a generic class's type parameters the function's, `$Self` the
       -- class at them)

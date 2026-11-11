@@ -35,7 +35,9 @@ The model:
   * generic mutual trees retain each member's type instance, item effects,
     value rollback, mutable captures and written-only witnesses;
   * methods may infer their own type parameters independently of receiver
-    arguments, including through overrides, super tuples and interface defaults.
+    arguments, including through overrides, super tuples and interface defaults;
+  * a super call of another method keeps its lexical ancestor, whether the
+    target has one value or several, rather than dispatching to an override.
 """
 import random, sys, os, re
 
@@ -188,9 +190,10 @@ class Producer:
                 # parameters, a compound root argument, and interface defaults.
                 shape = method_shape or RMethod.choice(['plain', 'added', 'fixed', 'repeat', 'reorder', 'wrapped', 'interface'])
                 self.method_shape = shape
-                own = shape.startswith('own-')
+                cross = shape.startswith('cross-')
+                own = shape.startswith('own-') or cross
                 if own:
-                    shape = shape.removeprefix('own-')
+                    shape = shape.split('-', 1)[1]
                 root_tps, child_tps, parent, receiver, ctor = {
                     'plain': ('t:type', 't:type', f'c{n}(t)', f'c{n}(t)', f'd{n}(t)'),
                     'added': ('t:type', 't:type,u:type', f'c{n}(t)', f'c{n}(t)', f'd{n}(t,int)'),
@@ -211,11 +214,24 @@ class Producer:
                     receiver = re.sub(r'\bt\b', 'int', receiver)
                     ctor = re.sub(r'\bt\b', 'int', ctor)
                     anchor = "('a',0)" if shape == 'wrapped' else '0'
+                    root_method = f'    M{n}(V:r,W:r,?E:[]r=Concatenate() where r:type)<transacts>:r = V|W'
+                    child_method = f'    M{n}<override>(V:v,W:v,?E:[]v=Concatenate() where v:type)<transacts>:v = W|(super:)M{n}((V,W))'
+                    if cross:
+                        self.cross_multi = RMethod.choice([False, True])
+                        parent_body = 'V|W' if self.cross_multi else 'V'
+                        child_body = 'W|V' if self.cross_multi else 'W'
+                        # Both targets preserve the same independent Y,X,Y
+                        # oracle. The child's target override must not run.
+                        super_call = f'(super:)Parent{n}(V,W)'
+                        body = 'W|' + super_call + ('' if self.cross_multi else '|W')
+                        child_method = child_method.split(' = ', 1)[0] + ' = ' + body
+                        root_method += f'\n    Parent{n}(V:r,W:r,?E:[]r=Concatenate() where r:type)<transacts>:r = {parent_body}'
+                        child_method += f'\n    Parent{n}<override>(V:v,W:v,?E:[]v=Concatenate() where v:type)<transacts>:v = {child_body}'
                     if shape == 'interface':
                         declarations = f'''c{n}(t:type) := interface:
-    M{n}(V:r,W:r,?E:[]r=Concatenate() where r:type)<transacts>:r = V|W
+{root_method}
 d{n}(t:type,u:type) := interface(c{n}(t)):
-    M{n}<override>(V:v,W:v,?E:[]v=Concatenate() where v:type)<transacts>:v = W|(super:)M{n}((V,W))
+{child_method}
 e{n}(t:type,u:type) := class(d{n}(t,u)):
     Anchor:t
     Extra:u'''
@@ -223,9 +239,9 @@ e{n}(t:type,u:type) := class(d{n}(t,u)):
                     else:
                         declarations = f'''c{n}({root_tps}) := class:
     Anchor:t
-    M{n}(V:r,W:r,?E:[]r=Concatenate() where r:type)<transacts>:r = V|W
+{root_method}
 d{n}({child_tps}) := class({parent}):{extra_field}
-    M{n}<override>(V:v,W:v,?E:[]v=Concatenate() where v:type)<transacts>:v = W|(super:)M{n}((V,W))'''
+{child_method}'''
                         values = f'{ctor}{{Anchor:={anchor}{extra_value}}}'
                     self.src = declarations + f'''
 {n}(X:t,Y:t where t:type)<transacts>:t =
@@ -836,7 +852,7 @@ class Gen:
         # ordered-value oracle. Argument effects and rejected first searches
         # distinguish dispatch selection from an extra generator boundary.
         base_shapes = ['plain', 'added', 'fixed', 'repeat', 'reorder', 'wrapped', 'interface']
-        shapes = base_shapes + ['own-' + s for s in base_shapes]
+        shapes = base_shapes + ['own-' + s for s in base_shapes] + ['cross-' + s for s in base_shapes]
         rng = random.Random(self.seed * 1000003 + 28304102)
         p = Producer('IMeth', self.fresh('Dispatch'), shapes[self.seed % len(shapes)])
         self.prods.append(p)

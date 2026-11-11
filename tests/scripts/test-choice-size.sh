@@ -19,6 +19,10 @@ kinds=(
   covariant-failure
   covariant-first
   covariant-for
+  cross-super-failure
+  cross-super-first
+  cross-super-for
+  cross-super-lazy-first
   dispatch-default-failure
   dispatch-default-first
   dispatch-default-for
@@ -86,6 +90,33 @@ for kind in "${kinds[@]}"; do
 import sys
 kind, count = sys.argv[1], int(sys.argv[2])
 print('Two(N:int):int = N | N + 1')
+if kind.startswith('cross-super-'):
+    print('''base(t:type) := class:
+    Data:t
+    Scalar(X:u,?E:[]t=Concatenate() where u:type)<transacts>:tuple(t,u,int) =
+        Print("scalar")
+        (Data,X,E.Length)
+child(v:type) := class(base(v)):
+    Values(X:w where w:type)<transacts>:tuple(v,w,int) =
+        (super:)Scalar(X)|(super:)Scalar(X,?E:=array{Data})
+    Walk(X:w,N:int where w:type)<transacts><decides>:tuple(v,w,int) =
+        N>=0
+        (super:)Scalar(X)|Self.Walk[X,N-1]''')
+    params = ','.join(f'P{i}:child(a{i}),X{i}:b{i}' for i in range(count))
+    tparams = ','.join(f'a{i}:type,b{i}:type' for i in range(count))
+    lazy = kind.endswith('lazy-first')
+    clauses = ','.join(f'A{i}:=P{i}.Walk[X{i},1]' if lazy else f'A{i}:=P{i}.Values(X{i})' for i in range(count))
+    if kind.endswith('first'):
+        print(f'Run({params} where {tparams})<transacts>:int = if({clauses},E:[]b0=array{{A0(1)}})then E.Length else -1')
+    else:
+        fx = '<decides>' if kind.endswith('failure') else ''
+        check = '\n        1=1' if fx else ''
+        print(f'Run({params} where {tparams})<transacts>{fx}:int =\n    R:=for({clauses}):{check}\n        A0(1)\n    R.Length')
+    args = ','.join('child(int){Data:=7},"s"' if i%2==0 else 'child(string){Data:="a"},9' for i in range(count))
+    fx = '<decides>' if kind.endswith('failure') else ''
+    br = ('[',']') if fx else ('(',')')
+    print(f'Main(){fx}:void = Print("{{Run{br[0]}{args}{br[1]}}}")')
+    sys.exit(0)
 if kind.startswith('clause-return-'):
     print('pair(a:type,b:type) := class { A:a; B:b }')
     print('dup(t:type) := class(pair(t,t)) { C:int=4 }')
