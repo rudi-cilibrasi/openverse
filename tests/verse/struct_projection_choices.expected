@@ -1,0 +1,14 @@
+many 3
+many 4
+eager 2
+eager 3
+eager 1
+eager 2
+eager 0
+visit 3
+visit 2
+visit 1
+first 1
+none
+failed 0
+exit=0
