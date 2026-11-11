@@ -1081,6 +1081,17 @@ chain uses (the receiver, the arguments, and the slots each test binds the
 narrowed receiver to, which start as the caller's, so the function needs
 no initial values), and the root calls that.
 
+Source heap effects are checked before concurrency lowering. Starting a
+task also writes the scheduler's implementation state, even when the
+spawned call and its immediate callers have only `<computes>`, `<reads>`
+or `<allocates>`. The final Core functions must record those writes too.
+`Front/CompilerWrites.lean` compares the flags before and after lowering,
+then propagates newly introduced write requirements through callers to a
+fixed point, including recursive callers and generated dispatch and
+function-value helpers. Existing source writers are not propagation
+seeds. This changes only Core's implementation flags: source permissions
+and the independent Core write-soundness check remain in force.
+
 Each pass resumes `Main`'s frame, then every root whose suspension point
 is not -1 (done). It reaches a root through a test of its class
 (`Typed.dispatch` again, at a type that covers every root frame) and a

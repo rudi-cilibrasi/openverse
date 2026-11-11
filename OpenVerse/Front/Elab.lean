@@ -32,6 +32,7 @@ import OpenVerse.Front.Refine
 import OpenVerse.Front.FrameRefs
 import OpenVerse.Front.SourceFrames
 import OpenVerse.Front.FailCapture
+import OpenVerse.Front.CompilerWrites
 import OpenVerse.Front.Types
 import Std.Data.HashMap
 
@@ -9995,6 +9996,7 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
     fsigs := fsigs ++ [([], VTy.void)]
     mainCall := .call (runIdx + 1) []
   fns := fns.map fun fn => { fn with body := Suspend.substCall resumeAnyMark (fun es => .call resumeAnyIdx es) fn.body }
+  fns := CompilerWrites.propagate fns0 fns
   -- (and the values of the scheduler's fields it adds, #362, for its prototype)
   return (fns, slotTys, fsigs, classTable, frameClasses, mainCall, framePins.toList,
     if leafy then [(match schedLit with | .lit v => v | _ => .none), .int (-1)] else [])
