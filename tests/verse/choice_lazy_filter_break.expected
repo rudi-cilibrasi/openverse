@@ -1,0 +1,63 @@
+produce 2 1
+basic keep 2
+basic body 2 12
+produce 1 2
+basic filter 22
+basic loop 122
+basic function 122
+basic result 122
+produce 2 3
+produce 2 4
+double keep 2 2
+double body 4
+produce 1 5
+double loop 5
+double result 5
+produce 2 6
+produce 2 7
+nested keep 2 2
+produce 1 8
+nested loop 3
+nested result 3
+produce 2 9
+local keep 2
+local body loop
+local body after 2
+produce 1 10
+local keep 1
+local body loop
+local body after 1
+produce 0 11
+local result 3
+produce 1 12
+reset 0 1
+reset body 1
+produce 0 13
+produce 1 14
+reset 1 1
+reset body 1
+produce 0 15
+reset result 2
+produce 2 16
+return keep 2
+return body 2
+produce 1 17
+return loop
+return result -1
+produce 2 18
+suspend keep 2
+suspend body 2
+produce 1 19
+suspend loop
+reference keep 2
+reference body 2
+reference loop 3
+reference used 3
+reference keep 2
+reference body 2
+reference loop 3
+reference dropped 3
+rollback probe 2
+rollback loop 2
+rollback result 2
+exit=0

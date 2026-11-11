@@ -361,6 +361,8 @@ structure Ctx where
   inTaking : Bool := false
   /-- The internal loop that propagates a failed continuation outcome. -/
   forOutcomeSlot : Option Nat := none
+  /-- A source-loop break crossing the internal loops of lazy producers. -/
+  forBreakSlot : Option Nat := none
   /-- A source return carried by a shared for continuation. -/
   forReturnSlot : Option String := none
   forReturnExit : Option SExpr := none
@@ -1978,7 +1980,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
   -- filter still fails the call, so the caller retains that boundary.
   let bodyFail := (ctx.canFail && !firstDecides) || failure.isSome || forReturnBody? body
   let bodyCtx (c : Ctx) : Ctx := { c with
-    canFail := bodyFail, inLoop := false, inRepeat := true,
+    canFail := bodyFail, inLoop := false, inRepeat := true, forBreakSlot := none,
     forReturnExit := failure.orElse fun _ => c.forReturnExit }
   -- elaborate the filters of one generator (in a failure context)
   let elabFilters (c : Ctx) (fs : List SExpr) : EM (Expr × Ctx) := do
@@ -2332,6 +2334,12 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
           | some flag => Expr.ite (.prim .query [.local flag]) (.local acc)
               (.seq .brk (.prim .userErr []))
           | none => Expr.local acc
+        -- A source break has already run its lexical cleanup. Every lazy
+        -- loop crossed must forward it without exposing accumulated values.
+        let values := match c.forBreakSlot with
+          | some flag => Expr.ite (.prim .query [.local flag])
+              (.seq .brk (.prim .userErr [])) values
+          | none => values
         let code : Expr := .seq lg.init (.seq (.assign acc none) (.seq (.assign size (.lit (.int 16)))
           (.seq (.assign done (.lit (.logic false))) (.seq (.loop body) values))))
         if flat then return ⟨code, .arr ity⟩
@@ -4106,44 +4114,53 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
         | none => set stAfter
       return ⟨.ite rc.e (← coerce p rt ty) (← coerce p re ty), ty⟩
   | .forE p clauses body => do
-    let ctx := { ctx with forOutcomeSlot := none }
-    if ctx.suspends || (Refine.findPart (fun | .ret .. => true | _ => false) false body).isNone then
-      return ← elabFor ctx p clauses body
-    let sourceRet ← match ctx.refineExits.ret with
-      | some (some (_, t), _) => resolveTy ctx.types p t
-      | some (none, _) => pure .void
-      | none => match ctx.forReturnSlot.bind ctx.lookup with
-        | some { ty := .opt t, .. } => pure t
-        | _ => pure ctx.retTy
-    let name := s!"$forReturn{p.line}_{p.col}_{ctx.locals.length}"
-    let slot ← fresh (.opt sourceRet)
-    let c := { ctx with locals := { name, slot, ty := .opt sourceRet, mutable := true } :: ctx.locals }
-    let flag ← fresh .logic
-    let metadata := SExpr.set p (.ident p name) none (.ident p name)
-    let body := SExpr.app p (.ident p "$forReturns")
-      [metadata, .ident p (if ctx.canFail then "true" else "false"), body] false
-    let r ← elabFor { c with forOutcomeSlot := some flag } p clauses body
-    let result ← fresh (.opt r.ty)
-    let value ← fresh r.ty
-    let returning := s!"{name}$value"
-    let ret ← elabE c (.ite p [.decl p returning none false (.query p (.ident p name))]
-      (.ret p (some (.ident p returning))) none) (some .void)
-    let failed := if ctx.canFail then Expr.prim .fail [] else .prim .userErr []
-    let normal := Expr.ite (.assign value (.prim .query [.local result])) (.local value) failed
-    let (run, after) ← if ctx.inLoop then do
-        let escaped ← fresh .logic
-        pure (Expr.seq (.assign escaped (.lit (.logic false))) (forwardForBreaks flag escaped r.e),
-          Expr.ite (.prim .query [.local escaped]) .brk (.lit .void))
-      else pure (r.e, Expr.lit .void)
-    let code := Expr.seq (.assign slot (.lit .none))
-      (.seq (.assign flag (.lit (.logic true)))
-        (.seq (.assign result (.lit .none))
-          (.seq (.loop (.seq (.assign result (.prim .mkSome [run])) Expr.brkV))
-            (.seq after (.seq ret.e normal)))))
-    return ⟨code, r.ty⟩
+    let ownBreak ← if ctx.inLoop && ctx.forBreakSlot.isNone &&
+        (Refine.findPart Refine.isBreak true (.block p clauses)).isSome then
+        some <$> fresh .logic
+      else pure none
+    let ctx := { ctx with
+      forOutcomeSlot := none,
+      forBreakSlot := ownBreak.orElse fun _ => if ctx.inLoop then ctx.forBreakSlot else none }
+    let elaborate : EM R := do
+      if ctx.suspends || (Refine.findPart (fun | .ret .. => true | _ => false) false body).isNone then
+        return ← elabFor ctx p clauses body
+      let sourceRet ← match ctx.refineExits.ret with
+        | some (some (_, t), _) => resolveTy ctx.types p t
+        | some (none, _) => pure .void
+        | none => match ctx.forReturnSlot.bind ctx.lookup with
+          | some { ty := .opt t, .. } => pure t
+          | _ => pure ctx.retTy
+      let name := s!"$forReturn{p.line}_{p.col}_{ctx.locals.length}"
+      let slot ← fresh (.opt sourceRet)
+      let c := { ctx with locals := { name, slot, ty := .opt sourceRet, mutable := true } :: ctx.locals }
+      let flag ← fresh .logic
+      let metadata := SExpr.set p (.ident p name) none (.ident p name)
+      let body := SExpr.app p (.ident p "$forReturns")
+        [metadata, .ident p (if ctx.canFail then "true" else "false"), body] false
+      let r ← elabFor { c with forOutcomeSlot := some flag } p clauses body
+      let result ← fresh (.opt r.ty)
+      let value ← fresh r.ty
+      let returning := s!"{name}$value"
+      let ret ← elabE c (.ite p [.decl p returning none false (.query p (.ident p name))]
+        (.ret p (some (.ident p returning))) none) (some .void)
+      let failed := if ctx.canFail then Expr.prim .fail [] else .prim .userErr []
+      let normal := Expr.ite (.assign value (.prim .query [.local result])) (.local value) failed
+      let (run, after) ← if ctx.inLoop then do
+          let escaped ← fresh .logic
+          pure (Expr.seq (.assign escaped (.lit (.logic false))) (forwardForBreaks flag escaped r.e),
+            Expr.ite (.prim .query [.local escaped]) .brk (.lit .void))
+        else pure (r.e, Expr.lit .void)
+      let code := Expr.seq (.assign slot (.lit .none))
+        (.seq (.assign flag (.lit (.logic true)))
+          (.seq (.assign result (.lit .none))
+            (.seq (.loop (.seq (.assign result (.prim .mkSome [run])) Expr.brkV))
+              (.seq after (.seq ret.e normal)))))
+      return ⟨code, r.ty⟩
+    let r ← elaborate
+    return ⟨ownBreak.map (fun flag => Expr.seq (.assign flag (.lit (.logic false))) r.e) |>.getD r.e, r.ty⟩
   | .gen p _ _ _ => eerr p "a generator X : source can only appear in a for clause"
   | .loop _ body =>
-    let lctx := { ctx with inLoop := true, inRepeat := true, loopDefers := ctx.defers.length, inChoice := false }
+    let lctx := { ctx with inLoop := true, inRepeat := true, loopDefers := ctx.defers.length, inChoice := false, forBreakSlot := none }
     let r ← elabE lctx body none
     return ⟨.loop r.e, .void⟩
   | .brk p =>
@@ -4154,7 +4171,8 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
               else "break is only allowed inside loop (not for)")
     -- the defers of the scopes it leaves, inside its loop
     let ds ← elabDefers ctx (ctx.defers.take (ctx.defers.length - ctx.loopDefers))
-    return ⟨.seq ds .brk, .never⟩
+    let jump := ctx.forBreakSlot.map (fun flag => Expr.seq (.assign flag (.lit (.logic true))) .brk) |>.getD .brk
+    return ⟨.seq ds jump, .never⟩
   | .ret p e? =>
     if ctx.inParamDefault then eerr p "return is not allowed in a parameter's default"
     if ctx.inDefer then eerr p "return is not allowed in a defer: block"

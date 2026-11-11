@@ -303,6 +303,16 @@ forwards a failed outcome's break before exposing its accumulated values.
 Every nested lazy producer does the same, so an ordinary enclosing generator
 cannot run another iteration after body failure. The check reads only the
 flag; completed body effects and mutable copy-outs remain in place.
+
+Source filter breaks use a separate flag shared by consumers targeting the
+same source loop. The lexical break runs its cleanup and sets the flag;
+each lazy producer forwards it before exposing its accumulated values.
+Entering a body-local loop resets that target. Suspension lowering also
+preserves the control boundary when a `for` becomes an index loop: it
+marks escaping breaks and forwards them after the generated loop. Cached
+frame writes in a condition/filter are stored before an escaping break,
+which bypasses the ordinary success-arm stores. Failure still rolls back
+the condition, and loops inside it keep their own breaks.
 The pass introduces no Core operations or changes to either interpreter;
 the resulting program passes the existing effect, scope, control and type
 checks.

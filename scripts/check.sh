@@ -42,6 +42,12 @@ if lake env lean -j1 --run tests/lean/FailCapture.lean >"$logs/failure-contracts
 else
   rc=$?; cat "$logs/failure-contracts"; exit "$rc"
 fi
+echo "== suspension break contracts"
+if lake env lean -j1 --run tests/lean/SuspendBreaks.lean >"$logs/break-contracts" 2>&1; then
+  cat "$logs/break-contracts"
+else
+  rc=$?; cat "$logs/break-contracts"; exit "$rc"
+fi
 if grep -rnE '\bsorry\b|\badmit\b' OpenVerse/ Main.lean; then echo "error: sorry/admit in Lean sources" >&2; exit 1; fi
 scripts/gen-claims.sh --check
 echo "== C runtime"
@@ -77,6 +83,8 @@ check "scheduler model fuzzing (${FUZZ_MODEL_SCHED:-50} programs, against a mode
   scripts/fuzz-model-sched.sh "${FUZZ_MODEL_SCHED:-50}" "$seed"
 check "GADT model fuzzing (${FUZZ_MODEL_GADT:-150} programs, against five models of the docs)" \
   scripts/fuzz-model-gadt.sh "${FUZZ_MODEL_GADT:-150}" "$seed"
+check "source break model fuzzing (${FUZZ_MODEL_BREAKS:-60} programs)" \
+  scripts/fuzz-model-breaks.sh "${FUZZ_MODEL_BREAKS:-60}" "$seed"
 check "choice model fuzzing (${FUZZ_MODEL_MV:-140} programs, functions with several values too)" \
   scripts/fuzz-model-mv.sh "${FUZZ_MODEL_MV:-140}" "$seed"
 check "generic functions with several values (${FUZZ_MODEL_GENERIC:-150} programs, against a model of the docs)" \
