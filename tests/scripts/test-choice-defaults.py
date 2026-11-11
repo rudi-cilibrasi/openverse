@@ -6,6 +6,7 @@ selected branch shares the earlier generator's filter. Rejected filters roll
 back allocations, writes and output; a failed body keeps them and stops all
 remaining values. Objects saved from later values share the prefix cell.
 An independent pure tree model covers eager recursive constructions too.
+Direct projections exercise field types without an enclosing typed binding.
 """
 from pathlib import Path
 import itertools
@@ -274,12 +275,73 @@ Fail()<decides>:int =
     return source, ''.join(line + '\n' for line in out), status
 
 
+def projection_program(seed):
+    """Model struct values and producer results without Core type inference."""
+    r = random.Random(seed * 1000033 + 445)
+    x = r.choice(['7', '"s"', 'array{1,2}', 'option{7}', '(7,"s")'])
+    y = r.choice(['2', '"key"', "(2,'k')"])
+    n, depth, default = r.randint(2, 6), r.randint(1, 4), r.randint(10, 20)
+    fields = ['E:[]a=Concatenate()', 'O:?a=false', 'M:[b]a=map{}',
+              'T:tuple(?a,[]b)=(false,Concatenate())', 'W:leaf(a)=leaf{}',
+              'V:a', 'K:b', f'N:int={default}+0']
+    r.shuffle(fields)
+    suffix = r.choice(['N', 'E.Length', 'M.Length', 'T(1).Length', 'W.E.Length'])
+    omitted = r.choice([True, False])
+    scalar_fields = 'V:=X,K:=Y' + ('' if omitted else ',N:=N')
+    scalar = (default if omitted else n) if suffix == 'N' else 0
+    lower, cut = r.randint(n, n+2), r.randint(0, depth+1)
+    fail = r.choice([True, False])
+    stop = r.randint(0, depth+2)
+    failure = f'\n        if(V={stop})then Fail[] else 0' if fail else ''
+    specs = '<decides>' if fail else ''
+    source = f'''# struct projection model seed {seed}
+leaf(t:type) := struct {{ E:[]t=Concatenate() }}
+pack(a:type,b:subtype(comparable)) := struct:
+''' + ''.join('    ' + field + '\n' for field in fields) + f'''
+One(X:a,Y:b,N:int where a:type,b:subtype(comparable))<computes>:int = pack(a,b){{{scalar_fields}}}.{suffix}
+Swap(X:b,Y:a,N:int where a:subtype(comparable),b:type)<computes>:int = One(X,Y,N)
+Many(X:a,Y:b,N:int where a:type,b:subtype(comparable))<computes>:int = pack(a,b){{V:=X,N:=N|N+1,K:=Y}}.N
+Tree(X:a,Y:b,N:int where a:type,b:subtype(comparable))<computes>:int =
+    if(N>0)then (pack(a,b){{K:=Y,N:=N|N+1,V:=X}}.N | Tree(X,Y,N-1)) else pack(a,b){{K:=Y,N:=0,V:=X}}.N
+Lazy(X:a,Y:b,N:int where a:type,b:subtype(comparable))<transacts><decides>:int =
+    N>0
+    Print("visit {{N}}")
+    pack(a,b){{N:=N,V:=X,K:=Y}}.N | Lazy[X,Y,N-1]
+Fail()<decides>:int =
+    Print("fail")
+    false?
+    0
+Main(){specs}:void =
+    Print("one {{Swap({x},{y},{n})}}")
+    for(V:=Many({x},{y},{n}), V>={lower}): Print("many {{V}}")
+    for(V:=Tree({x},{y},{depth})):
+        Print("tree {{V}}"){failure}
+    if(V:=Lazy[{x},{y},{depth}], V<{cut})then Print("first {{V}}")else Print("none")
+'''
+    out = [f'one {scalar}']
+    out.extend(f'many {v}' for v in [n, n+1] if v >= lower)
+    tree = [v for level in range(depth, 0, -1) for v in [level, level+1]] + [0]
+    for v in tree:
+        out.append(f'tree {v}')
+        if fail and v == stop:
+            out.append('fail')
+            return source, ''.join(line + '\n' for line in out), 1
+    chosen = next((v for v in range(depth, 0, -1) if v < cut), None)
+    if chosen is None:
+        out.append('none')
+    else:
+        out.extend(f'visit {v}' for v in range(depth, chosen-1, -1))
+        out.append(f'first {chosen}')
+    return source, ''.join(line + '\n' for line in out), 0
+
+
 def main():
     bad = 0
     with tempfile.TemporaryDirectory(prefix='choice-defaults-') as directory:
         tmp = Path(directory)
         cases = ((seed, variant, model) for seed in range(FIRST, FIRST + COUNT)
-                 for variant, model in [('defaults', program), ('eager', eager_program)])
+                 for variant, model in [('defaults', program), ('eager', eager_program),
+                                        ('projection', projection_program)])
         for seed, variant, model in cases:
             source, want, status = model(seed)
             artifact = ROOT / f'fuzz-choice-{variant}-{seed}'
@@ -301,7 +363,7 @@ def main():
                 bad += 1
                 artifact.with_suffix('.verse').write_text(source)
                 print(f'C MISMATCH {variant} seed {seed}', flush=True)
-    print(f'choice-defaults: {COUNT} default and {COUNT} eager model programs from seed {FIRST}, {bad} bad')
+    print(f'choice-defaults: {COUNT} default, {COUNT} eager and {COUNT} projection model programs from seed {FIRST}, {bad} bad')
     return bool(bad)
 
 

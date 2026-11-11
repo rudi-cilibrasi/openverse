@@ -7296,7 +7296,11 @@ partial def elabConstruct (ctx : Ctx) (p : Pos) (name : String) (targs : List ST
       return ⟨.seq (.assign x (.heap (.new (ctx.types.tagOf name)) es)) (calls.foldr .seq (.local x)), ty⟩
     let x ← fresh ty
     return ⟨.assign x (classWrap ctx.types name name (.prim .mkTup es)), ty⟩
-  return ⟨.prim .mkTup es, ty⟩
+  -- A struct's fields may need their expected types (empty arrays/options
+  -- and computed defaults). Preserve the resolved instance before a Core
+  -- consumer, such as tuple projection, has to infer its operand's type.
+  let x ← fresh ty
+  return ⟨.assign x (.prim .mkTup es), ty⟩
 
 /-- `map{k₁ => v₁, …}`: entries are evaluated in order; a key given twice
     keeps its last value, at the position of its last occurrence (Book of
