@@ -202,6 +202,9 @@ A `break` in a `for` filter leaves the enclosing source `loop`, including
 when the values come from lazy recursive producers. Internal producer and
 suspension loops forward it after its cleanup has run. Breaks in a body's
 own `loop` stay local; a `for` body itself is not a break target.
+Shared continuations carry clause breaks back to the caller: the filter's
+writes commit before source-loop cleanup runs, including through refining
+casts. A new local loop keeps its own target even inside a lifted branch.
 
 ## Overloading
 

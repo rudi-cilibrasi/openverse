@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Source-loop model for for filters: break crosses producers; failure rolls back."""
+"""Source-loop model for for filters: break crosses producers; failure rolls back.
+
+Some immediate consumers select their lazy sources under independent
+refining casts. Both actual receivers hit, so the source-loop oracle and
+the existing random program distribution stay unchanged.
+"""
 import random
 import sys
 from pathlib import Path
@@ -11,6 +16,7 @@ cut_a, cut_b = rng.randint(0, 3), rng.randint(0, 3)
 refs_a, refs_b = rng.choice([False, True]), rng.choice([False, True])
 suspends, used = rng.choice([False, True]), rng.choice([False, True])
 waits = suspends and rng.choice([False, True])
+refined = bool(seed & 8) and not waits
 body_delta, filter_delta, loop_delta, fn_delta = [rng.randint(1, 7) for _ in range(4)]
 reachable = [(a, b) for a in range(na, -1, -1) for b in range(nb, -1, -1)
              if a >= cut_a and b >= cut_b]
@@ -73,11 +79,19 @@ RefLazy(N:int)<transacts><decides>:counter =
     N >= 0
     counter{N:=N} | RefLazy[N-1]
 '''
-clauses = [f"{'EA := RefLazy' if refs_a else 'A := Lazy'}[{na}]"]
+if refined:
+    pre += 'pair(a:type,b:type) := class {}\ndup(t:type) := class(pair(t,t)) { C:int }\n'
+source_a = f"{'RefLazy' if refs_a else 'Lazy'}[{na}]"
+if refined:
+    source_a = f"if(D:=dup[P])then {'RefLazy' if refs_a else 'Lazy'}[D.C]else {source_a}"
+clauses = [f"{'EA' if refs_a else 'A'} := {source_a}"]
 if refs_a:
     clauses.append("A := EA.N")
 clauses += ["set Total += A", "set H.N += A + 1", 'Print("a {A} {Total} {H.N}")', f"A >= {cut_a}"]
-clauses.append(f"{'EB := RefLazy' if refs_b else 'B := Lazy'}[{nb}]")
+source_b = f"{'RefLazy' if refs_b else 'Lazy'}[{nb}]"
+if refined:
+    source_b = f"if(E:=dup[Q])then {'RefLazy' if refs_b else 'Lazy'}[E.C]else {source_b}"
+clauses.append(f"{'EB' if refs_b else 'B'} := {source_b}")
 if refs_b:
     clauses.append("B := EB.N")
 clauses += ["set Total += B", "set H.N += B + 1", 'Print("b {B} {Total} {H.N}")', f"B >= {cut_b}",
@@ -101,7 +115,9 @@ body += '            Print("body {A} {B} {Total} {H.N}")\n            (A, B)'
 mode = '<suspends>' if suspends else '<transacts>'
 loop = ("R := " if used else "") + f"for ({', '.join(clauses)}):\n            {body}"
 finish = 'R.Length' if used else 'H.N'
-print(pre + f'''Run(H:counter){mode}:int =
+params = ',P:pair(a,b),Q:pair(c,d) where a:type,b:type,c:type,d:type' if refined else ''
+args = f',dup(int){{C:={na}}},dup(string){{C:={nb}}}' if refined else ''
+print(pre + f'''Run(H:counter{params}){mode}:int =
     var Total:int = 0
     defer:
         set Total += {fn_delta}
@@ -120,5 +136,5 @@ print(pre + f'''Run(H:counter){mode}:int =
     Total
 Main(){mode}:void =
     H := counter{{}}
-    Print("result {{Run(H)}} {{H.N}}")
+    Print("result {{Run(H{args})}} {{H.N}}")
 ''')
