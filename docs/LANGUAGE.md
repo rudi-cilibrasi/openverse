@@ -564,8 +564,8 @@ circle := class(shape, labelled):
   function (#419): it can outlive the cast and is stopped when that source
   function exits, after its own defers, in the documented task cleanup
   order. The cast's lexical defers still run when the cast finishes.
-  The existing restrictions on task starts in loop/for bodies and refining
-  casts in concurrent arms apply through lifted branches too. In a
+  The existing restrictions on task starts in loop/for bodies apply
+  through lifted branches too. In a
   `<suspends>` source function, mutable captures share their source storage
   (#419). Writes are visible
   to both the branch and earlier background tasks across waits; cancellation
@@ -582,9 +582,16 @@ circle := class(shape, labelled):
   fields and methods as anywhere in the method (its function takes `Self`
   too), and its `(super:)M(…)` calls the implementation the method's class
   inherits, as anywhere in the method (#243), including overloads selected
-  by the arguments under the refinement. Nor can such a cast be in a `defer:`,
-  a constructor's items, a class's `block:` clause, a field's or
-  parameter's default, or an arm of `sync`, `race`, `rush` or `branch`.
+  by the arguments under the refinement. Refining casts also work in
+  `defer:`, constructors, class `block:` clauses, field and parameter
+  defaults, and arms of `sync`, `race`, `rush` and `branch`, including
+  immediate first-success and `for` consumers. Waiting `for` bodies also
+  work in concurrent arms; a refining `for` with a waiting body in a
+  parameter default remains refused. Their source scope still determines
+  which returns, breaks, effects and task operations are allowed. Waiting
+  branches retain their source's mutable storage and cancellation cleanup.
+  A wait hidden inside a refining helper counts toward `sync`'s two
+  suspending arms; starting a background task does not.
   An interface can be parametric too (#53):
   `container(t) := interface: Get():t`, with `box(t) := class(container(t))`.
   A class gives the interfaces above it its first Verse Core type
@@ -686,8 +693,7 @@ circle := class(shape, labelled):
     first, or one after clauses that print nothing, change no object and
     call nothing, #243), whose
     branch has a `return` or a `break` that leaves it where the `if`'s value
-    is used at a type not known there, or in a `defer:`, a constructor's items, a class's `block:` clause, a default
-    or a concurrent arm (#243); a variable, in generic code, of a class or
+    is used at a type not known there (#243); a variable, in generic code, of a class or
     interface type that requires an instance of itself (`Next:node(t)`)
     at type arguments that every class below it fixes otherwise: its
     hidden placeholder object (#157) would have to hold itself (no program
@@ -917,9 +923,9 @@ Main():void =
   with `for`, a first-success condition or an `option`, including generic and
   mutually recursive producers. These keep their own rollback boundaries;
   ordinary body cleanup also runs when that iteration finishes.
-  Clause return operands still cannot wait inside their filter. The existing
-  restrictions on refining casts in deferred, default and concurrent-arm
-  contexts also apply here. Failure of the selected branch's alternatives
+  Clause return operands still cannot wait inside their filter. Refining
+  consumers retain the restrictions of their source scope, including in
+  defaults, cleanup and concurrent arms. Failure of the selected branch's alternatives
   does not select the `else` branch.
 
   A choice inside a block is lifted with the block's clauses (#283): they
