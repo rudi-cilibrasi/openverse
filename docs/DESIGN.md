@@ -1007,8 +1007,14 @@ flowchart LR
   them as a generic receiver's does. Values can escape and be called under
   GADT refinements without borrowing the creator's slots. This also serves
   closed instances at the declared shape, including comparable classes and
-  value structs. Other closed requests keep the specialization path above;
-  open tuple reshaping remains separate.
+  value structs. Generic tuple adapters preserve symbolic parameters while
+  packing several inputs or expanding a tuple. A bare parameter becomes
+  the tuple of the target inputs; its comparable bound transfers to every
+  component. The declared shape is tried first. Each extra adapter is keyed
+  by the function and target shape, and `fnClassArgs` infers its instance
+  from the expected type. Tuple arguments are stored once before projection.
+  Other closed requests keep the specialization path above. These adapters
+  do not convert already-bound function values to different function types.
 
 ## Concurrency: suspends functions as frames
 

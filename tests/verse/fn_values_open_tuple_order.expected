@@ -1,0 +1,6 @@
+packet 1
+many 2
+argument 3
+one 4
+result 7 s 9 state 4
+exit=0
