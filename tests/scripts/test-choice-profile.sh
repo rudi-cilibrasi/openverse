@@ -80,6 +80,13 @@ Bind(X:t where t:type):type{_(:t):t}=Id
 Main():void=
     F:=Bind(7)
     Print("{F(9)}")''',
+        'open-tuple-value': '''Id(X:t where t:type)<computes>:t=X
+Run(X:t,Y:u where t:type,u:type)<computes>:tuple(t,u)=
+    F:type{_(:t,:u)<computes>:tuple(t,u)}=Id
+    F(X,Y)
+Main():void=
+    R:=Run(7,"s")
+    Print("{R(0)} {R(1)}")''',
     }
     for name, text in positive.items():
         path = source(f'{name}.verse', text)

@@ -214,6 +214,19 @@ def fnValueArgs (env : TyEnv) (s : Sig) (t : Ty) : Option (List Ty) := do
         let t ← σ.lookup v
         if cmp && !t.comparable env then none else some t
 
+/-- A symbolic adapter's parameters come from its own first function shape,
+    including tuple adaptation. The original function signature stays intact. -/
+def fnClassArgs (env : TyEnv) (cls : String) (target : Ty) : Option (List Ty) := do
+  if !env.classes.contains cls then none else do
+    let iface ← (env.info cls).ifaces.head?
+    let (k, es) ← FnValues.parseName iface
+    let ts := (env.iargs.lookup (cls, iface)).getD []
+    let sig : Sig := {
+      idx := 0, name := cls, params := ts.take k, ret := (ts.drop k).headD .void,
+      decides := es.contains "decides", isConst := false,
+      tparams := (env.sparams.lookup cls).getD [], fx := allowedFx es, suspends := es.contains "suspends" }
+    fnValueArgs env sig target
+
 /-- A construction instance found with its original expected context. -/
 structure ConstructHint where
   pos : Pos
@@ -4359,11 +4372,12 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
             return ⟨← coerce p r ty, ty⟩
           else if !s.tparams.isEmpty then
             if let some ty := exp then
-              if ctx.types.classes.contains s!"{n}$fn" then
-                if let some args := fnValueArgs ctx.types s ty then
-                  let cls := s!"{n}$fn"
-                  let r ← elabConstruct ctx p cls [] [] (some (.struct cls args))
-                  return ⟨← coerce p r ty, ty⟩
+              if let .struct shape _ := ty then
+                if let some (k, _) := FnValues.parseName shape then
+                  for cls in [s!"{n}$fn", s!"{n}$fnPack", s!"{n}$fnUnpack{k}"] do
+                    let some args := fnClassArgs ctx.types cls ty | continue
+                    let r ← elabConstruct ctx p cls [] [] (some (.struct cls args))
+                    return ⟨← coerce p r ty, ty⟩
             if let some t := askFor then
               modify fun st => { st with fnNeeds := st.fnNeeds ++ [(n, t)] }
               return ⟨.prim .userErr [], t⟩

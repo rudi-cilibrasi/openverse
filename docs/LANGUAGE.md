@@ -180,8 +180,10 @@ Main():void =
   `F:type{_(:t):t} = Identity`. The value retains those arguments and their
   witnesses after the creating function returns. Repeated and compound
   parameter/result types, comparable bounds, failure and suspension are
-  supported (#209). An open expected type uses the declared parameter
-  shape; tuple flattening/packing still requires a closed expected type.
+  supported (#209). Open expected types can also pack several parameters
+  into one tuple or expand a tuple parameter into separate parameters.
+  A bare generic parameter can instantiate to the tuple of the target
+  parameters. Empty and single-element tuples work on these paths too.
   Comparable arguments may also be unique classes or comparable value
   structs. With no determining expected
   type, a polymorphic identifier remains insufficient (`Map(Xs, Identity)`

@@ -289,6 +289,48 @@ where
       ((ps ++ [r]).zip (qs ++ [u])).foldlM (fun θ (a, b) => matchTy tps θ a b) θ
   | a, b => if reprStr a == reprStr b then some θ else none
 
+/-- One generic value adapter, retaining symbolic types until its expected
+    function type determines an instance. Empty `suffix` is the declared shape. -/
+structure GenericAdapter where
+  suffix : String := ""
+  tparams : List TParam
+  params : List STy
+  ret : STy
+  args : List SExpr
+
+/-- Tuple calls at the arities present in the program. A bare parameter can
+    become the tuple of the target arguments; its comparable bound then
+    belongs to every component. Existing declared-shape instances come first. -/
+def genericAdapters (p : Pos) (n : String) (ps : List STy) (tps : List TParam) (r : STy)
+    (arities : List Nat) : List GenericAdapter := Id.run do
+  let xs (k : Nat) := (List.range k).map fun i => SExpr.ident p s!"$X{i}"
+  let mut out : List GenericAdapter := [{ tparams := tps, params := ps, ret := r, args := xs ps.length }]
+  if arities.contains 1 then
+    out := out ++ [{
+      suffix := "Pack", tparams := tps, params := [.tup ps], ret := r,
+      args := (List.range ps.length).map fun (i : Nat) => .app p (.ident p "$X0") [.int p (i : Int)] false }]
+  match ps with
+  | [.tup ts] =>
+    if arities.contains ts.length then
+      out := out ++ [{
+        suffix := s!"Unpack{ts.length}", tparams := tps, params := ts, ret := r,
+        args := [.tuple p (xs ts.length)] }]
+  | [.name v] =>
+    if let some tp := tps.find? (·.name == v) then
+      for k in arities do
+        let components := (List.range k).map fun i => { tp with name := s!"$tupleValue_{n}_{k}_{i}" }
+        let types := components.map fun t => STy.name t.name
+        let σ := [(v, STy.tup types)]
+        out := out ++ [{
+          suffix := s!"Unpack{k}",
+          tparams := tps.flatMap (fun t => if t.name == v then components else [t]),
+          params := types, ret := r.substNames σ, args := [.tuple p (xs k)] }]
+  | _ => pure ()
+  -- Never introduce an unusable extra class merely because a different
+  -- function type was written elsewhere. The original adapter is unchanged.
+  return out.take 1 ++ (out.drop 1).filter fun a =>
+    a.tparams.all fun tp => (a.params ++ [a.ret]).any (·.mentions tp.name)
+
 /-- Add the shapes' interfaces and the value classes of the functions used
     as values (#210). A function is used as a value when its name occurs
     other than as the head of a call (an over-approximation: a parameter of
@@ -398,6 +440,11 @@ def desugar (tops : List STop) (extra : List STop := []) (requests : List (Strin
       gvalues.map (fun (_, _, ps, _, effs, _) => shapeOf ps.length effs) ++
       mvalues.map (fun (_, _, _, _, ps, effs, _) => shapeOf ps.length effs) do
     if !shapes.contains s then shapes := shapes ++ [s]
+  let arities := (shapes.map (·.arity)).eraseDups
+  for (p, n, ps, tps, effs, r) in gvalues do
+    for a in genericAdapters p n (ps.map (·.ty)) tps r arities do
+      let s := shapeOf a.params.length effs
+      if !shapes.contains s then shapes := shapes ++ [s]
   let p0 : Pos := match tops.head? with
     | some (.fn p ..) | some (.const p ..) | some (.classDef p ..) => p
     | none => { line := 0, col := 0 }
@@ -471,17 +518,15 @@ def desugar (tops : List STop) (extra : List STop := []) (requests : List (Strin
           k := k + 1
   for (p, n, ps, tps, effs, r) in gvalues do
     let own := shapeOf ps.length effs
-    -- An open expected type determines an ordinary generic value object.
-    -- Repeated/compound arguments refine its call like a generic receiver's;
-    -- hidden fields retain the witnesses after the creating function exits.
-    let fits := shapes.filter (own.within ·)
-    let args := (List.range ps.length).map fun i => SExpr.ident p s!"$X{i}"
-    let methods := fits.map fun s =>
-      STop.fn p s.call (params (ps.map (·.ty))) [] (s.effs ++ ["override"]) r
-        (.app p (.ident p n) args own.decides)
-    let fits := own :: fits.filter (· != own)
-    out := out ++ [.classDef p s!"{n}$fn" tps []
-      (fits.map fun s => STy.app s.name (ps.map (·.ty) ++ [r])) false [] [] methods]
+    for a in genericAdapters p n (ps.map (·.ty)) tps r arities do
+      let sh := shapeOf a.params.length effs
+      let fits := shapes.filter (sh.within ·)
+      let methods := fits.map fun s =>
+        STop.fn p s.call (params a.params) [] (s.effs ++ ["override"]) a.ret
+          (.app p (.ident p n) a.args own.decides)
+      let fits := sh :: fits.filter (· != sh)
+      out := out ++ [.classDef p s!"{n}$fn{a.suffix}" a.tparams []
+        (fits.map fun s => STy.app s.name (a.params ++ [a.ret])) false [] [] methods]
     let tpn := tps.map (·.name)
     let mut k := 0
     for (qs, es, u) in requested n do

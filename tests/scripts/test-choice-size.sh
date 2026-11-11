@@ -62,6 +62,8 @@ kinds=(
   mutual-generic-for
   open-function-first
   open-function-for
+  open-tuple-first
+  open-tuple-for
   outer-effect-composed
   outer-effect-exclusive
   outer-effect-refined
@@ -115,6 +117,20 @@ for kind in "${kinds[@]}"; do
 import sys
 kind, count = sys.argv[1], int(sys.argv[2])
 print('Two(N:int):int = N | N + 1')
+if kind.startswith('open-tuple-'):
+    print('Id(X:t where t:type)<computes>:t=X')
+    params = ','.join(f'X{i}:a{i},Y{i}:b{i}' for i in range(count))
+    tparams = ','.join(f'a{i}:type,b{i}:type' for i in range(count))
+    binds = '\n'.join(f'    F{i}:type{{_(:a{i},:b{i})<computes>:tuple(a{i},b{i})}}=Id' for i in range(count))
+    clauses = ','.join(f'A{i}:=F{i}(X{i},Y{i})|F{i}(X{i},Y{i})' for i in range(count))
+    if kind.endswith('first'):
+        body = f'    if({clauses},E:[]a0=Concatenate())then E.Length else -1'
+    else:
+        body = f'    R:=for({clauses},E:[]a0=Concatenate()):A0\n    R.Length'
+    print(f'Run({params} where {tparams})<computes>:int=\n{binds}\n{body}')
+    args = ','.join('7,"s"' if i%2==0 else '"v",9' for i in range(count))
+    print(f'Main():void=Print("{{Run({args})}}")')
+    sys.exit(0)
 if kind.startswith('open-function-'):
     print('Id(X:t where t:type)<computes>:t=X')
     params = ','.join(f'X{i}:t{i}' for i in range(count))
