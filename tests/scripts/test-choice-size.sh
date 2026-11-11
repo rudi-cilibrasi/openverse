@@ -3,13 +3,32 @@
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
-for kind in composed exclusive binding typed-first typed-for typed-exclusive refined-for refined-state refined-failure lazy-first lazy-for lazy-effect-first lazy-effect-for lazy-alt-first lazy-alt-for lazy-failure-for lazy-alt-failure-for lazy-exclusive-failure-for refined-lazy-failure refined-return refined-lazy-return refined-nested-body refined-nested-failure lazy-generic-first construct-first construct-for construct-failure method-first method-for method-failure lazy-named-first lazy-named-for lazy-named-generic-first bound-first bound-for bound-failure covariant-first covariant-for covariant-failure tuple-super-first tuple-super-for tuple-super-failure lazy-tuple-first lazy-tuple-for lazy-tuple-generic-first immediate-suspends-refined immediate-suspends-composed immediate-suspends-exclusive immediate-suspends-nested refined-retry-first super-first super-for super-failure super-body mutual-generic-first mutual-generic-for mutual-generic-alt-first suspends-return suspends-return-generic suspends-return-lazy; do
+for kind in composed exclusive binding typed-first typed-for typed-exclusive refined-for refined-state refined-failure lazy-first lazy-for lazy-effect-first lazy-effect-for lazy-alt-first lazy-alt-for lazy-failure-for lazy-alt-failure-for lazy-exclusive-failure-for refined-lazy-failure refined-return refined-lazy-return refined-nested-body refined-nested-failure lazy-generic-first construct-first construct-for construct-failure method-first method-for method-failure lazy-named-first lazy-named-for lazy-named-generic-first bound-first bound-for bound-failure covariant-first covariant-for covariant-failure tuple-super-first tuple-super-for tuple-super-failure lazy-tuple-first lazy-tuple-for lazy-tuple-generic-first immediate-suspends-refined immediate-suspends-composed immediate-suspends-exclusive immediate-suspends-nested refined-retry-first super-first super-for super-failure super-body mutual-generic-first mutual-generic-for mutual-generic-alt-first suspends-return suspends-return-generic suspends-return-lazy outer-effect-refined outer-effect-composed outer-effect-exclusive; do
   sizes=()
   for count in 4 8; do
     python3 - "$kind" "$count" >"$tmp/p.verse" <<'PY'
 import sys
 kind, count = sys.argv[1], int(sys.argv[2])
 print('Two(N:int):int = N | N + 1')
+if kind.startswith('outer-effect-'):
+    print('pair(a:type,b:type) := class { A:a; B:b }')
+    print('dup(t:type) := class(pair(t,t)) { C:int=4 }')
+    print('cell := class { var N:int=0 }')
+    print('Early(N:int):int =\n    if(N<0):return 0\n    N|N+1')
+    effect, operand = ('writes', 'set H.N=N\n    N')
+    if kind.endswith('composed'): effect, operand = 'reads', 'H.N+N'
+    if kind.endswith('exclusive'): effect, operand = 'allocates', 'Unused:=cell{}\n    N'
+    print(f'Operand(H:cell,N:int)<{effect}>:int =\n    {operand}')
+    params = ','.join(f'P{i}:pair(a{i},b{i})' for i in range(count))
+    tparams = ','.join(f'a{i}:type,b{i}:type' for i in range(count))
+    values = [f'if(D{i}:=dup[P{i}])then(D{i}.C|D{i}.C+1)else 0' for i in range(count)]
+    if kind.endswith('composed'): values = ['(Two(0)|Two(2))'] * count
+    if kind.endswith('exclusive'): values = ['Early(0)'] * count
+    clauses = ','.join(f'A{i}:={v}' for i,v in enumerate(values))
+    print(f'Run(H:cell,Scope:pair(sx,sy),{params} where sx:type,sy:type,{tparams})<suspends>:int =\n    if(S:=dup[Scope]):\n        Sleep(0.0)\n        for({clauses}):return Operand(H,A0)\n    -1')
+    args = ','.join('dup(int){A:=1,B:=2}' if i%2==0 else 'dup(string){A:="s",B:="t"}' for i in range(count))
+    print(f'Main()<suspends>:void = Print("{{Run(cell{{}},dup(int){{A:=0,B:=0}},{args})}}")')
+    sys.exit(0)
 if kind.startswith('suspends-return'):
     print('pair(a:type,b:type) := class { A:a; B:b }')
     print('dup(t:type) := class(pair(t,t)) { C:int=4 }')

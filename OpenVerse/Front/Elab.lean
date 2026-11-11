@@ -2087,6 +2087,12 @@ def forContWaits (ctx : Ctx) (before after : ESt) (code : List Expr) : Bool :=
     before.pendingWaitingCasts != after.pendingWaitingCasts ||
     code.any (Suspend.hasSusp fun f => ctx.sigs.any fun s => s.idx == f && s.suspends))
 
+/-- An admitted continuation rediscovers its local/frame metadata in its
+    own helper. Its heap effects still belong to the enclosing source. -/
+def restoreForContTrial (saved : ESt) : EM Unit := do
+  let fx := (← get).fx
+  set { saved with fx }
+
 /-- (#335, phase 2) The continuation of a composed choice in a `for`: a
     function that runs the clauses after it (`rest`) and the body, failing
     where their first filter fails (`$forFirst`), and gives the values (and
@@ -2282,7 +2288,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
                   -- This body moves to an immediate helper. Its trial's
                   -- source-frame locals/cast requests do not exist in the
                   -- final suspending caller; discover them in the helper.
-                  if cA.suspends then set st0
+                  if cA.suspends then restoreForContTrial st0
                   modify fun st => { st with loopFirst := st.loopFirst ++
                     [{ g := "", pos := b.pos, itemCode := .lit .void, argSet := none, lift := .ok lift }] }
                   return (codeA, .prim .userErr [], t)
@@ -2398,7 +2404,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
                 if forContWaits cA st0 (← get) [f0, a0] then set st0 else
                   match contForLiftOf cA gp x bty t0 altsS restCl bd bodyFail with
                   | .ok lift =>
-                    if cA.suspends then set st0
+                    if cA.suspends then restoreForContTrial st0
                     let use : LoopUse := { g := "", pos := gp, itemCode := .lit .void, argSet := none, lift := .ok lift }
                     modify fun st => { st with loopFirst := st.loopFirst ++ [use] }
                     if cA.suspends then return (codeA, .prim .userErr [], t0)
@@ -2512,7 +2518,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
                       let .arr vty := r0.ty | throw "no values"
                       contForLiftOf c gp b.name bty vty b.alts restCl bd bodyFail) with
                   | .ok lift =>
-                    if c.suspends then set st0
+                    if c.suspends then restoreForContTrial st0
                     let use : LoopUse := { g := "", pos := gp, itemCode := .lit .void, argSet := none, lift := .ok lift }
                     modify fun st => { st with loopFirst := st.loopFirst ++ [use] }
                     if c.suspends then return ⟨.prim .userErr [], r0.ty⟩

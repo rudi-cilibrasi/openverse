@@ -1,0 +1,6 @@
+cleanup 18
+result 8 10
+result 8 8
+alloc 8
+result 8 10
+exit=0

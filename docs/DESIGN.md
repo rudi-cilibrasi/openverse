@@ -1772,6 +1772,10 @@ and normal copy-out. Admission checks its typed calls and pending refining
 lifts for suspension. Its discovery trial is disposable: the moved body
 discovers locals and nested lifts in the helper, whose refinement scope
 keeps their storage metadata distinct from the original source frame.
+An accepted trial retains its heap-effect records for the enclosing
+source or refining lift. Discarding those records would incorrectly give
+that lift a computes-only signature. Waiting and unsuccessful trials
+restore the entire saved state before elaborating the original consumer.
 The class-copy tag and continuation-sharing keys remain separate.
 
 Source returns from an immediate consumer in a suspending caller use the

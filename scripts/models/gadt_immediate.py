@@ -6,6 +6,8 @@ entering a later (possibly empty) generator commits that prefix. Bodies run
 without yielding. A delayed observer then sees and updates the source local.
 Some runs return from a body: save the operand, run body/source cleanup,
 and cancel the pending observer when the source function ends.
+Some put the consumer under an always-successful outer refining cast;
+each body writes its current total to an object, observed at source exit.
 The model enumerates these snapshots independently of frontend helpers.
 """
 import random
@@ -27,9 +29,11 @@ body_cleanup, source_cleanup = ret_rng.randint(1, 7), ret_rng.randint(1, 7)
 reachable = [(a, v, w, z) for a in [0, 1] for v in vs for w in ws for z in zs
              if v >= cut_v and w >= cut_w]
 stop = ret_rng.choice([None] + reachable) if returning else None
+scoped = bool(seed & 8)
 
 out = []
 total, count = start, 0
+heap = 0
 answer = None
 for a in [0, 1]:
     # The cast's selected arm always starts a real choice, keeping this prefix.
@@ -50,6 +54,7 @@ for a in [0, 1]:
                     total += nested_step
                 total += body_step + z
                 count += 1
+                heap = total
                 out.append(f'body {a} {v} {w} {z} {total}')
                 if (a, v, w, z) == stop:
                     answer = total
@@ -73,6 +78,8 @@ if answer is None:
 if returning:
     total += source_cleanup
     out.append(f'source cleanup {total}')
+if scoped:
+    out.append(f'heap {heap}')
 out.append(f'result {answer}')
 Path(sys.argv[2]).write_text('exit=0\n' + '\n'.join(out) + '\n')
 p = 'dup(int){A:=1,B:=2}' if p_hit else 'pair(int,string){A:=1,B:="s"}'
@@ -84,16 +91,8 @@ body_defer = (f'        defer:\n            set Total+={body_cleanup}\n'
               '            Print("body cleanup {Total}")\n') if returning else ''
 condition = ','.join(f'{n}={v}' for n, v in zip(['A', 'V', 'W', 'Z'], stop)) if stop else 'A=-99'
 return_clause = f'        if({condition}):return Total\n' if returning else ''
-print(f'''pair(a:type,b:type) := class {{ A:a; B:b }}
-dup(t:type) := class(pair(t,t)) {{ C:int }}
-Run(P:pair(a,b),Q:pair(c,d),Unused:t where a:type,b:type,c:type,d:type,t:type)<suspends>:int =
-    var Total:int={start}
-{source_defer}    branch:
-        Sleep(0.1)
-        Print("observe {{Total}}")
-        set Total+={observer_step}
-    Sleep(0.0)
-    Zs:[]int={z_source}
+heap_stamp = '        Stamp(H,Total)\n' if scoped else ''
+consumer = f'''    Zs:[]int={z_source}
     R:=for(A:=0|1,set Total+=A,Print("outer {{A}} {{Total}}"),
         V:=if(D:=dup[P])then(D.C|D.C+1)else(0|1),
         set Total+=V,Print("v {{A}} {{V}} {{Total}}"),V>={cut_v},
@@ -105,14 +104,32 @@ Run(P:pair(a,b),Q:pair(c,d),Unused:t where a:type,b:type,c:type,d:type,t:type)<s
             Value:b=F.A
             set Local+={nested_step}
         set Total+=Local-A+{body_step}+Z+Empty.Length
-        Print("body {{A}} {{V}} {{W}} {{Z}} {{Total}}")
+{heap_stamp}        Print("body {{A}} {{V}} {{W}} {{Z}} {{Total}}")
 {return_clause}        Total
     Print("rows {{R.Length}} {{Total}}")
     Sleep(0.2)
     Print("done {{Total}}")
     Total
-Main()<suspends>:void =
+'''
+if scoped:
+    consumer = consumer.removesuffix('    Total\n') + '    return Total\n'
+    consumer = '    if(Scoped:=dup[Scope]):\n' + ''.join('    ' + line for line in consumer.splitlines(True)) + '    -1\n'
+scope_param = ',Scope:pair(sx,sy)' if scoped else ''
+scope_types = ',sx:type,sy:type' if scoped else ''
+scope_arg = ',dup(int){A:=0,B:=0,C:=0}' if scoped else ''
+heap_prelude = 'stamp := class { var N:int=0 }\nStamp(H:stamp,N:int)<writes>:void = set H.N=N\n' if scoped else ''
+heap_setup = '    H:=stamp{}\n    defer:Print("heap {H.N}")\n' if scoped else ''
+print(f'''pair(a:type,b:type) := class {{ A:a; B:b }}
+dup(t:type) := class(pair(t,t)) {{ C:int }}
+{heap_prelude}Run(P:pair(a,b),Q:pair(c,d),Unused:t{scope_param} where a:type,b:type,c:type,d:type,t:type{scope_types})<suspends>:int =
+    var Total:int={start}
+{heap_setup}{source_defer}    branch:
+        Sleep(0.1)
+        Print("observe {{Total}}")
+        set Total+={observer_step}
+    Sleep(0.0)
+{consumer}Main()<suspends>:void =
     P:={p.replace('}',f',C:={pc}}}') if p_hit else p}
     Q:={q.replace('}',f',C:={qc}}}') if q_hit else q}
-    Print("result {{Run(P,Q,{rng.choice(['7', '"s"'])})}}")
+    Print("result {{Run(P,Q,{rng.choice(['7', '"s"'])}{scope_arg})}}")
 ''')
