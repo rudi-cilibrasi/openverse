@@ -5,6 +5,10 @@
 # for the review of #249 (generic task roots, #244). Since #316, every other spawn of Hd goes
 # through SpH, a generic immediate function that spawns it, so its roots are at its caller's
 # type arguments too (the statement's number picks the form, so seeds keep their programs).
+# Since #419, half of this generator's seeds put F's top-level branch/rush
+# starts under one or two refining casts. The casts finish before the source
+# suffix. Both conditions always succeed; the independent source scheduler
+# model stays unchanged, including function-owned tasks and cleanup order.
 """Generator + reference model for concurrency in generic functions (PR #249).
 
 usage: gen.py SEED OUTDIR   -> writes OUTDIR/gSEED.verse and OUTDIR/gSEED.expected
@@ -864,7 +868,7 @@ def emit_stmt(s, ind):
         return [p + f"var {s.var}:\u00a7TY\u00a7 = X", p + "if (N > 0):",
                 p + f'    I{s.idn} := \u00a7G\u00a7{s.fn}(X, "{{Tag}}g", N - 1, Me)', p + f"    set {s.var} = I{s.idn}"]
     if k == "fcall":
-        return [p + f'{s.var} := F{s.fn}(X, X, X, "{{Tag}}f", {s.n})']
+        return [p + f'{s.var} := F{s.fn}(X, X, X, "{{Tag}}f", {s.n}\u00a7RF\u00a7)']
     if k == "rec":
         i, w, t = f"I{s.idn}", f"W{s.idn}", f"T{s.idn}x"
         if s.wrap == "tup":
@@ -875,7 +879,7 @@ def emit_stmt(s, ind):
             a, b = mk("X"), mk("Y")
             unwrap = unw(i, w, s.var)
         zw = {"opt": "option{Z}", "arr": "array{Z}", "box": "bx(u){V := Z}", "tup": "(Z, Z)", "same": "Z"}[s.uwrap]
-        call = f'F{s.fn}({a}, {b}, {zw}, "{{Tag}}{suf}", N - 1)'
+        call = f'F{s.fn}({a}, {b}, {zw}, "{{Tag}}{suf}", N - 1\u00a7RF\u00a7)'
         out = [p + f"var {s.var}:t = X", p + "if (N > 0):"]
         if s.spawn:
             out.append(p + f"    {t} := spawn{{{call}}}")
@@ -988,16 +992,42 @@ def generate(seed):
     return (fns, gfns), mstmts
 
 
-def emit_program(fns, mstmts):
+def emit_refining_block(stmts, depth):
+    out = []
+    for s in stmts:
+        branch = s.k == 'branch'
+        rush = s.k == 'conc' and s.kind == 'rush'
+        if not depth or not (branch or rush):
+            out.extend(emit_stmt(s, 4))
+            continue
+        for level, (name, obj) in enumerate([('RO', 'RP'), ('RI', 'RQ')][:depth]):
+            bind = f'{s.var} := ' if rush and level == 0 else ''
+            out.append(' ' * (4 + level * 4) + bind + f'if ({name} := scope_dup[{obj}]):')
+        inner = s.var + 'Lifted' if rush else None
+        node = St('conc', var=inner, kind=s.kind, arms=s.arms) if rush else s
+        out.extend(emit_stmt(node, 4 + depth * 4))
+        if rush:
+            out.append(' ' * (4 + depth * 4) + inner)
+            for level in reversed(range(depth)):
+                out += [' ' * (4 + level * 4) + 'else:', ' ' * (8 + level * 4) + 'X']
+    return out
+
+
+def emit_program(fns, mstmts, refining=0):
     fns, gfns = fns
     out = [PRELUDE.rstrip("\n")]
+    if refining:
+        out += ['scope_pair(a:type, b:type) := class {}',
+                'scope_dup(t:type) := class(scope_pair(t, t)) {}']
     for i, f in enumerate(gfns):
         out.extend(emit_gfn(f, i, True))
         out.extend(emit_gfn(f, i, False))
     for f in fns:
-        out.append(f"{f.name}(X:t, Y:t, Z:u, Tag:string, N:int where t:type, u:type)<suspends>:t =")
-        out.extend(emit_block(f.body, 4))
-        out.append(f"    {f.ret}")
+        ps = ', RP:scope_pair(ra, rb), RQ:scope_pair(rc, rd)' if refining else ''
+        ts = ', ra:type, rb:type, rc:type, rd:type' if refining else ''
+        out.append(f"{f.name}(X:t, Y:t, Z:u, Tag:string, N:int{ps} where t:type, u:type{ts})<suspends>:t =")
+        out.extend(emit_refining_block(f.body, refining))
+        out.append('    ' + f.ret)
     out.append("Main()<suspends>:void =")
     pend = []
     for idx, (mode, arg) in enumerate(mstmts):
@@ -1009,7 +1039,7 @@ def emit_program(fns, mstmts):
             fi, inst, a, b, tag, dep = job
             mk = INSTS[inst][1]
             uk = list(INSTS)[(a * 7 + dep) % len(INSTS)]
-            return f'F{fi}({mk(a)}, {mk(b)}, {INSTS[uk][1](a + 500)}, "{tag}", {dep})'
+            return f'F{fi}({mk(a)}, {mk(b)}, {INSTS[uk][1](a + 500)}, "{tag}", {dep}\u00a7RF\u00a7)'
         if mode == "self":
             gi, generic, inst, a, tag, dep, aw = arg
             out.append(f"    ME{idx} := sticky_event(task({INSTS[inst][0]})){{}}")
@@ -1042,7 +1072,8 @@ def emit_program(fns, mstmts):
         out.append(f"    MR{idx} := MT{idx}.Await()")
         out.append(f'    Print("{job[4]} = {INSTS[job[1]][2](f"MR{idx}")}")')
     out.append('    Print("main end")')
-    return "\n".join(out) + "\n"
+    extra = ', scope_dup(int){}, scope_dup(string){}' if refining else ''
+    return ("\n".join(out) + "\n").replace('\u00a7RF\u00a7', extra)
 
 
 def model_program(fns, mstmts):
@@ -1150,7 +1181,7 @@ def conc_gens(kind, gens, fr):
 def main():
     seed = int(sys.argv[1]); outdir = sys.argv[2]
     fns, mstmts = generate(seed)
-    src = emit_program(fns, mstmts)
+    src = emit_program(fns, mstmts, refining=(1 + bool(seed & 4)) if seed & 2 else 0)
     with open(os.path.join(outdir, f"g{seed}.verse"), "w") as f:
         f.write(src)
     try:

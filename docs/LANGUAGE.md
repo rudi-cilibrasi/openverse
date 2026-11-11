@@ -495,10 +495,15 @@ circle := class(shape, labelled):
   (`Typed.dispatch`), so nothing is assumed in Verse Core. In a
   `<suspends>` function the branch and the `else` may suspend (#243): the
   branch's function is then `<suspends>`, and the `if` a suspends call of
-  it, cancelled as any (its `defer:`s, then the caller's). The lifted branch
-  cannot contain `branch` or `rush` because their background tasks belong
-  to the enclosing source function. In a `<suspends>` source function,
-  mutable captures share their source storage (#419). Writes are visible
+  it, cancelled as any (its `defer:`s, then the caller's). A `branch` or
+  continuing `rush` arm started there belongs to the enclosing source
+  function (#419): it can outlive the cast and is stopped when that source
+  function exits, after its own defers, in the documented task cleanup
+  order. The cast's lexical defers still run when the cast finishes.
+  The existing restrictions on task starts in loop/for bodies and refining
+  casts in concurrent arms apply through lifted branches too. In a
+  `<suspends>` source function, mutable captures share their source storage
+  (#419). Writes are visible
   to both the branch and earlier background tasks across waits; cancellation
   also exposes the latest value to enclosing `defer:`s. Ordinary local copies
   and saved return operands keep their captured values. In an immediate

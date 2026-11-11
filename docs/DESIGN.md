@@ -1641,8 +1641,33 @@ the existing `fixRefined` handles its eventual field representation.
 Immediate lifted helpers borrow the same storage, leaving their default
 initializations separate from live ancestor writes. Only marked synthetic
 copy-ins inherit storage, and only recorded saved-result copy-outs are
-omitted. User copies and return operands stay independent. This does not
-yet move branch/rush task ownership across a lift; those remain refused.
+omitted. User copies and return operands stay independent.
+
+Refining lifts that start `branch` or `rush` roots, directly or through
+another lift, share their source function's task scope (#419). Finishing
+or cancelling the helper runs its lexical cleanup while leaving those
+roots alive. A separate `stopTasks` function stops them without re-running
+the helper's lexical defers, including after its frame is marked done.
+Ordinary function calls own their tasks as before.
+
+Each call into a sharing lift adds a cleanup action through its saved
+child frame. It receives a start number on arrival, after the frame is
+stored and before its first resumption; seeking a pending call does not
+renumber it. The source's cleanup selects this action among its own
+branches and rush arms, after the source's defers. `Kill` records an
+action and an order slot; the common cleanup loop clears each order once
+stopped and preserves `killOwner`'s nested task hierarchy. Generic and
+opened frames are stopped through receiver-first `isTag` dispatches to
+`stopTasksOwn`, which reads the helper's parameters from its frame.
+
+A source function cannot start another flat task while awaiting a lifted
+call, so each helper's flat starts form a contiguous group in the source
+order. Refining casts in concurrent arms remain refused, and the source's
+`inRepeat` flag is carried by the lift so starts in loops/for bodies stay
+refused too; a live helper frame cannot then be overwritten at its call
+site. A `$branchMark` forces a physical suspending lift even when its arm
+finishes without waiting; pending discovery propagates that requirement
+through nested lifts.
 
 A cast that opens type arguments (#250, `pairE[E]` for `E:expr(t)`)
 gives the target's type parameters past the object's arguments fresh

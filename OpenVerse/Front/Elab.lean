@@ -1453,11 +1453,6 @@ def refineBranchWhy? (ctx : Ctx) (p : Pos) (body : SExpr) (muts : List String) (
   else if ctx.inDefer || ctx.inCtor || ctx.inBlock || ctx.inParamDefault || ctx.inArm || ctx.inBranch ||
       !ctx.defaults.isEmpty || ctx.inDefaultCheck then
     some (p, "it cannot be here yet: in a defer:, a constructor's items, a class's block: clause, a field's or parameter's default, or an arm of sync, race, rush or branch")
-  else if let some (.app q (.ident _ n) _ _) := Refine.findPart (fun
-      | .app _ (.ident _ n) _ _ => n == "$branch" || n == "$rush"
-      | _ => false) false body then
-    let kw := if n == "$branch" then "branch" else "rush"
-    some (q, s!"it cannot contain {kw} because its tasks belong to the enclosing function")
   else if let some e := (if allowEsc then none else Refine.findPart (fun | .ret .. => true | _ => false) false body) then
     some (e.pos, "it cannot have a return yet")
   else if let some e := (if allowEsc then none else Refine.findPart (fun | .brk _ => true | _ => false) true body) then
@@ -3050,7 +3045,8 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
     -- Preserve the dispatch shape when lowering either side. Task starts
     -- need lowering too, but only a wait exposes copies of shared slots.
     let hasPending := (← get).pendingSuspendingCasts != pending0
-    let suspendsB := ctx.suspends && (hasPending || Suspend.hasSusp isS rb.e || Suspend.hasSusp isS re.e)
+    let needsFrame (f : Nat) := isS f || ctx.sigs.any (fun s => s.idx == f && s.name == "$branchMark")
+    let suspendsB := ctx.suspends && (hasPending || Suspend.hasSusp needsFrame rb.e || Suspend.hasSusp needsFrame re.e)
     let elseWaits := ctx.suspends && ((← get).pendingWaitingCasts != waitingThen || waits re.e)
     let τ' : Ty := if elseE.isNone then .void else exp.getD re.ty
     let ret := refine τ'
@@ -3097,6 +3093,7 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
       specs, ret := ret.toSTy, subst := σ, opened := opened.map fun (n, v, _) => (n, v), waits := thenWaits,
       exits := Refine.Exits.substTypes ((escRet.map (·.2)).getD {}) σ,
       storage := storage.map fun (n, s) => (n, { frame := s.frame, name := s.name, args := s.args.map Ty.toSTy }),
+      inRepeat := ctx.inRepeat,
       -- (made: a branch the elaborator made, for a cast with clauses
       -- after it, #286, which the source does not have as such)
       -- (and a tagged one, which the source's places do not find, #53)
@@ -7762,9 +7759,23 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
   let moreOf (j : Nat) : List VTy := moreArr[j]?.getD []
   let moreOff (j : Nat) : Nat := offArr[j]?.getD 0
   let L := lows.length
+  -- Only refining lifts borrow task ownership. Ordinary callees still
+  -- stop their own roots when they return. A nested lift forwards through
+  -- every enclosing lift, including one that starts no roots directly.
+  let lifts := lows.filter fun (_, name, _) => env.castRequests.any (·.name == name)
+  let mut taskLifts := lifts.filterMap fun (gi, _, _) =>
+    if Suspend.countSusp (· == branchMark) (fun _ => false) false (· == spawnMark) fns[gi]!.body > 0 ||
+        Suspend.countArms (· == rushMark) fns[gi]!.body > 0 then some gi else none
+  for _ in List.range lifts.length do
+    for (gi, _, _) in lifts do
+      if !taskLifts.contains gi && (Suspend.callsOf fns[gi]!.body).any (fun (g, _) => taskLifts.contains g) then
+        taskLifts := taskLifts ++ [gi]
+  let taskFrames := lows.zipIdx.filterMap fun ((gi, _, _), j) => if taskLifts.contains gi then some j else none
   let ownBase := nFns + 4 * L
   let moreBase := ownBase + 4 * L
-  let selfBase := moreBase + moreOff L
+  let taskBase := moreBase + moreOff L
+  let taskIndex (j : Nat) := taskFrames.idxOf? j
+  let selfBase := taskBase + 2 * taskFrames.length
   let trampOf (k : Nat) : Nat := selfBase + targets.length + 2 * k
   -- the scheduler: its class's prototype
   let some schedLit := Suspend.coreDefault Sorig [] 0 schedTy
@@ -7825,6 +7836,7 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
                  else [],
                resField := some Suspend.resF, generic := ntp != 0, newSched := true,
                resultFn := some (nFns + 4 * j + 3), ntp,
+               stopTasksFn := (taskIndex j).map fun i => taskBase + 2 * i + 1,
                selfFns := (targets.idxOf? gi).map fun i =>
                  (ownBase + 4 * j, selfBase + i, ownBase + 4 * j + 1, ownBase + 4 * j + 2) }
       | none => none
@@ -7885,6 +7897,12 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
       ownFns := ownFns.push stub
       ownTys := ownTys.push (ps ++ [.ref [resCellTag] [d], schedTy])
       extraSigs := extraSigs.push (ps ++ [.ref [resCellTag] [d], schedTy], frameTy j)
+  -- Each sharing lift has a raw scope stop and a two-argument wrapper
+  -- which reads its parameters from its retained frame, as cancelOwn does.
+  for j in taskFrames do
+    let (gi, _, _) := lows[j]!
+    let ps := slotTys[gi]!.take fns[gi]!.arity
+    extraSigs := extraSigs ++ #[(frameTy j :: schedTy :: ps, VTy.void), ([frameTy j, schedTy], VTy.void)]
   -- each target's `take(self, frame)` (#142), whose first parameter is the
   -- receiver: the frame's result (its frame is made, resumed and cancelled
   -- through its `arrive`, `resumeOwn` and `cancelOwn`)
@@ -7924,6 +7942,8 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
                        protos, pins }
   let mut newFns : Array Fn := #[]
   let mut newTys : Array (List VTy) := #[]
+  let mut taskFns : Array Fn := #[]
+  let mut taskTys : Array (List VTy) := #[]
   let mut armFns : Array Fn := #[]
   let mut armTys : Array (List VTy) := #[]
   let mut armSigs : Array (List VTy × VTy) := #[]
@@ -8014,7 +8034,7 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
     let shared ← SourceFrames.aliases sourceFrames gi sourceBase
     let low ← (Suspend.lower Sinf callee syncMark raceMark rushMark spawnMark spawns branchMark branches a Γ ρ (frameTy j)
       schedTag nilTag resCellTag fnBase b leafF leafDepthF isRoot leafy resumeAnyMark leafDepthMin parTy shared
-      (sourceFrames.info[gi]?.getD {}).copies).mapError fun e => inFn gname e
+      (sourceFrames.info[gi]?.getD {}).copies (taskLifts.contains gi)).mapError fun e => inFn gname e
     -- its branches' wrappers: `tramp(w, sched)` resumes the arm (with the
     -- function's parameters from its frame) unless the function stopped
     -- it; `start(sched, frame)` makes the wrapper, registers it and runs
@@ -8218,6 +8238,15 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
     -- `g$cancel(frame, sched, params…)`: unwinds it
     newFns := newFns.push (← resumeLike s!"{gname}$cancel" low.cancel)
     newTys := newTys.push low.cancel.slots
+    if let some i := taskIndex j then
+      let some stop := low.stopTasks | throw s!"internal error: {gname} has no source task cleanup"
+      taskFns := taskFns.push (← resumeLike s!"{gname}$stopTasks" stop)
+      taskTys := taskTys.push stop.slots
+      let pass := (List.range a).map fun k => Expr.heap (.get (Suspend.slotBaseOf sites arms + k)) [.local 0]
+      taskFns := taskFns.push {
+        name := s!"{gname}$stopTasksOwn", arity := 2, nslots := 2, decides := false, writes := true,
+        body := .call (taskBase + 2 * i) (.local 0 :: .local 1 :: pass) }
+      taskTys := taskTys.push [frameTy j, schedTy]
     -- `g$result(frame)`
     newFns := newFns.push { name := s!"{gname}$result", arity := 1, nslots := 1, decides := false,
                             writes := false, body := .heap (.get Suspend.resF) [.local 0] }
@@ -8309,8 +8338,8 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
   let linkFn : Fn := { name := "$link", arity := 2, nslots := 4, decides := false, writes := true,
                        body := initPrefixE 2 [.heap (.new cellTag) [.local 1, .lit .none],
                          .heap (.new cellTag) [.local 1, .lit .none]] linkBody }
-  fns := fns ++ newFns ++ ownFns ++ selfFns ++ rootFns ++ [linkFn] ++ branchFns ++ armFns
-  slotTys := slotTys ++ newTys ++ ownTys ++ selfTys ++ rootTys ++ [[schedTy, rootAny, cellTy, cellTy]] ++ branchTys ++ armTys
+  fns := fns ++ newFns ++ ownFns ++ taskFns ++ selfFns ++ rootFns ++ [linkFn] ++ branchFns ++ armFns
+  slotTys := slotTys ++ newTys ++ ownTys ++ taskTys ++ selfTys ++ rootTys ++ [[schedTy, rootAny, cellTy, cellTy]] ++ branchTys ++ armTys
   fsigs := fsigs ++ extraSigs.toList ++ selfSigs.toList ++ rootSigs.toList ++ [([schedTy, rootAny], VTy.void)] ++
     branchSigs.toList ++ armSigs.toList
   -- the wrappers' classes, after the frames', then the cells', then `$nil`
@@ -9950,6 +9979,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     let ctx : Ctx := { sigs := allSigs, sigProg, locals := locals.reverse, types := env, fnFx := allowed,
                        canFail := decides, retTy := ret, dictBase := ps.length, suspends,
                        frameName := name, frameArgs := tps.map fun (v, c) => Ty.param v c,
+                       inRepeat := lifted.any (·.inRepeat),
                        refineExits := ((opts.castRequests.find? (·.name == name)).map (·.exits)).getD {},
                        dictVars := dictTps.map (·.1),
                        inBlock := name.endsWith ".$block",
