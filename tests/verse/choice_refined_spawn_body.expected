@@ -1,0 +1,11 @@
+child 4
+child 5
+for done
+done 4
+done 5
+child 4
+child 5
+immediate done
+done 4
+done 5
+exit=0

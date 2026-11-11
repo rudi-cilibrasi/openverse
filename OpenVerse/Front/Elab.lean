@@ -2044,7 +2044,7 @@ partial def forwardForBreaks (abort escaped : Nat) : Expr → Expr
     need an explicit outcome; breaks must stay inside the body's loops.
     The enclosing function may suspend; the moved code must remain
     immediate. Discovery also checks typed calls and pending cast lifts. -/
-def forBodySafe (ctx : Ctx) (body : SExpr) : Bool :=
+partial def forBodySafe (ctx : Ctx) (body : SExpr) : Bool :=
   let returns := forReturnBody? body
   -- Prepared consumers keep lazy producer templates (including groups and
   -- generic/default argument bindings) inside the body. Their ownership is
@@ -2052,14 +2052,19 @@ def forBodySafe (ctx : Ctx) (body : SExpr) : Bool :=
   let safeMarkers := ["$sourceSuper", "$methodMiss", "$methodCast", "$methodCase", "$methodType", "$methodParams", "$inlineScope", "$inlineScopeEnd", "$inline", "$choice", "$excl", "$alt", "$firstP", "$first", "$each", "$noLift", "$fxOf",
     "$forReturns", "$forReturnBody", "$forClauseExits", "$defer", "$loop", "$rec", "$recTo", "$group", "$member", "$returnTail",
     "$tparams", "$params", "$defaults", "$paramDefault", "$freeNames", "$declNames", "$callArgs"]
-  !(Refine.findPart (fun | .brk _ => true | _ => false) true body).isSome &&
-    !(Choice.anyE (fun
-    | .ret .. => !returns
-    | .app _ (.ident _ f) _ _ =>
-      (f.startsWith "$" && !safeMarkers.contains f) || f == "Sleep" ||
-        ((ctx.sig? f).map fun s => s.suspends || s.fx.contains "no_rollback").getD false
-    | .app _ (.member _ _ m) _ _ => ["Signal", "Await", "Cancel", "Subscribe"].contains m
-    | _ => false) body)
+  let rec blocked (e : SExpr) : Bool :=
+    match e with
+    -- Starting a task is immediate. elabSpawn checks its arguments in the
+    -- caller and the waiting callee in its own suspension context.
+    | .app _ (.ident _ "$spawn") _ false => false
+    | e => (match e with
+      | .ret .. => !returns
+      | .app _ (.ident _ f) _ _ =>
+        (f.startsWith "$" && !safeMarkers.contains f) || f == "Sleep" ||
+          ((ctx.sig? f).map fun s => s.suspends || s.fx.contains "no_rollback").getD false
+      | .app _ (.member _ _ m) _ _ => ["Signal", "Await", "Cancel", "Subscribe"].contains m
+      | _ => false) || e.children.any blocked
+  !(Refine.findPart (fun | .brk _ => true | _ => false) true body).isSome && !blocked body
 
 /-- A shared for continuation runs inside a filter, so cannot suspend.
     Method/function-value calls need their typed signatures; a cast still

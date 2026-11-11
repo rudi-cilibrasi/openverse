@@ -34,6 +34,7 @@ kinds=(
   dispatch-default-first
   dispatch-default-for
   exclusive
+  immediate-spawn-refined
   immediate-suspends-composed
   immediate-suspends-exclusive
   immediate-suspends-nested
@@ -128,6 +129,17 @@ for kind in "${kinds[@]}"; do
 import sys
 kind, count = sys.argv[1], int(sys.argv[2])
 print('Two(N:int):int = N | N + 1')
+if kind == 'immediate-spawn-refined':
+    print('pair(a:type,b:type) := class { A:a;B:b }')
+    print('dup(t:type) := class(pair(t,t)) { C:int=4 }')
+    print('Child(N:int,X:t,?E:[]t=Concatenate() where t:type)<suspends>:void=Sleep(0.0)')
+    params = ','.join(f'P{i}:pair(a{i},b{i})' for i in range(count))
+    tparams = ','.join(f'a{i}:type,b{i}:type' for i in range(count))
+    clauses = ','.join(f'A{i}:=if(D{i}:=dup[P{i}])then(D{i}.C|D{i}.C+1)else 0' for i in range(count))
+    print(f'Run({params},X:t where {tparams},t:type):int=\n    var Total:int=0\n    for({clauses}):\n        T:=spawn{{Child(A0,X)}}\n        set Total+=1\n    Total')
+    args = ','.join('dup(int){A:=1,B:=2}' if i%2==0 else 'dup(string){A:="s",B:="t"}' for i in range(count))
+    print(f'Main()<suspends>:void=\n    Print("{{Run({args},array{{7}})}}")\n    Sleep(1.0)')
+    sys.exit(0)
 if kind.startswith('method-tuple-'):
     print('''box(t:type):=class:
     V:t
