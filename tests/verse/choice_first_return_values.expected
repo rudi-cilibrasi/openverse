@@ -1,0 +1,11 @@
+void cleanup 108
+empty cleanup
+empty cleanup
+empty 0 0
+normal 5
+payload 2
+comparable 0
+nested cleanup
+nested 0
+indexed 1 2 s t
+exit=0
