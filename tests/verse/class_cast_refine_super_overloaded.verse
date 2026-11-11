@@ -1,5 +1,3 @@
-# expect: 13:8: the branch of the cast to dup(a), which holds only under a refinement of the type arguments, is compiled as a function of its own, so in a method, it cannot call (super:) of an overloaded method yet
-# (#243: an overloaded method's (super:) is resolved by the call's arguments, not before)
 pair(t:type, u:type) := class:
     A:t
     B:u

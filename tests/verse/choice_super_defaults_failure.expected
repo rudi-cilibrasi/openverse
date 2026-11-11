@@ -1,0 +1,9 @@
+visit 0
+visit 1
+visit 2
+default 1
+test 2 1 1
+got 2 1
+kept 1
+after 1
+exit=0

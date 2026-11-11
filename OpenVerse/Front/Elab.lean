@@ -1633,32 +1633,12 @@ def superImpl (ctx : Ctx) (p : Pos) (c m : String) : EM String := do
   | f :: g :: _, _ =>
     eerr p s!"(super:){m} is ambiguous here: {f} and {g} implement it for different interfaces above {c}; call it from a qualified (i:){m}"
 
-/-- The methods `e` names with `(super:)` (#243), each with where, and
-    whether it is called there (`(super:)M(…)`) rather than a value. -/
-partial def superNames (e : SExpr) : List (String × Pos × Bool) :=
-  match e with
-  | .app _ (.member mp (.ident _ "(super:)") m) args _ => (m, mp, true) :: args.flatMap superNames
-  | .member mp (.ident _ "(super:)") m => [(m, mp, false)]
-  | _ => e.children.flatMap superNames
-
-/-- `e` with its `(super:)M(…)` calls, for the methods `ren` resolves, direct
-    calls of the implementations they reach, `Self` first (#243). -/
-partial def superCalls (ren : List (String × String)) : SExpr → SExpr :=
-  Choice.mapE fun
-    | .app q (.member mp (.ident _ "(super:)") m) args br =>
-      (ren.lookup m).map fun impl => .app q (.ident mp impl) (.ident mp "Self" :: args.map (superCalls ren)) br
-    | _ => none
-
 /-- What, in the branch of a cast that refines type arguments, would not
     mean the same once the branch is a function of its own (#243): its
     position and what it is. `muts` are the `var`s it uses from outside. -/
 def refineBranchWhy? (ctx : Ctx) (p : Pos) (body : SExpr) (muts : List String) (allowEsc : Bool := false) :
     Option (Pos × String) :=
-  if ctx.selfClass.isSome && Choice.anyE (fun
-      | .ident _ n | .member _ _ n => (n.splitOn "(super:)").length > 1
-      | _ => false) body then
-    some (p, "in a method, it cannot call (super:) of an overloaded method yet")
-  else if ctx.inDefer || ctx.inCtor || ctx.inBlock || ctx.inParamDefault || ctx.inArm || ctx.inBranch ||
+  if ctx.inDefer || ctx.inCtor || ctx.inBlock || ctx.inParamDefault || ctx.inArm || ctx.inBranch ||
       !ctx.defaults.isEmpty || ctx.inDefaultCheck then
     some (p, "it cannot be here yet: in a defer:, a constructor's items, a class's block: clause, a field's or parameter's default, or an arm of sync, race, rush or branch")
   else if let some e := (if allowEsc then none else Refine.findPart (fun | .ret .. => true | _ => false) false body) then
@@ -1797,7 +1777,9 @@ def refineExits (p : Pos) (body : SExpr) (elseE : Option SExpr) (vars : List (St
 /-- In a method of class `c`, the branch of a cast that refines (#243), with
     the members of `Self` it names bare (its fields and methods, not shadowed
     by a local) made `Self.member`, as the elaborator reads them: its
-    function, of its own, takes `Self` as a parameter. -/
+    function, of its own, takes `Self` as a parameter. A super call keeps
+    its source method's lookup scope, including qualified slots and
+    overload resolution, and explicitly captures `Self`. -/
 partial def selfQualify (ctx : Ctx) (c : String) (e : SExpr) : SExpr :=
   let isMethod (n : String) : Bool := ctx.hasMethod c n ||
     ((ctx.types.methodOverloads.lookup n).map (·.any (ctx.hasMethod c ·))).getD false
@@ -1805,6 +1787,14 @@ partial def selfQualify (ctx : Ctx) (c : String) (e : SExpr) : SExpr :=
   let bound := Choice.localsOf e
   let free (n : String) : Bool := (ctx.lookup n).isNone && !bound.contains n && n != "Self"
   Choice.mapE (fun
+    | e@(.app _ (.ident _ "$sourceSuper") _ false) => some e
+    | .app p f@(.member _ (.ident _ "(super:)") _) args br =>
+      some (.app p (.ident p "$sourceSuper")
+        [.str p [.text c], .str p [.text (ctx.selfMethod.getD "")], .ident p "Self",
+          .app p f (args.map (selfQualify ctx c)) br] false)
+    | e@(.member p (.ident _ "(super:)") _) =>
+      some (.app p (.ident p "$sourceSuper")
+        [.str p [.text c], .str p [.text (ctx.selfMethod.getD "")], .ident p "Self", e] false)
     | .app p (.ident q n) args br =>
       if free n && (isMethod n || (isField n && !builtins.contains n && !softBuiltins.contains n)) then
         some (.app p (.member q (.ident q "Self") n) (args.map (selfQualify ctx c)) br)
@@ -1856,8 +1846,6 @@ def firstLiftOf (ctx c2 : Ctx) (p : Pos) (g : String) (lp : List SExpr) (b : Str
   -- of `Self`, which the function takes as a parameter, as #243's do)
   let rest ← match ctx.selfClass with
     | some c =>
-      if rest.any (Choice.anyE fun | .ident _ "(super:)" | .member _ (.ident _ "(super:)") _ => true | _ => false) then
-        throw "where the clauses after it call (super:)"
       pure (rest.map (selfQualify ctx c))
     | none => pure rest
   -- (a `return`, or a `break` that leaves them, would leave the function
@@ -1979,8 +1967,6 @@ def contLiftOf (ctx c2 : Ctx) (p : Pos) (b : String) (alts rest : List SExpr)
   -- of `Self`, which the function takes as a parameter, as #279's do)
   let rest ← match ctx.selfClass with
     | some c =>
-      if rest.any (Choice.anyE fun | .ident _ "(super:)" | .member _ (.ident _ "(super:)") _ => true | _ => false) then
-        throw "(super:)"
       pure (rest.map (selfQualify ctx c))
     | none => pure rest
   -- (a `return`, or a `break` that leaves them, would leave the function)
@@ -2056,7 +2042,7 @@ def forBodySafe (ctx : Ctx) (body : SExpr) : Bool :=
   -- Prepared consumers keep lazy producer templates (including groups and
   -- generic/default argument bindings) inside the body. Their ownership is
   -- checked when that consumer elaborates; they do not escape the helper.
-  let safeMarkers := ["$methodMiss", "$methodCast", "$methodCase", "$methodType", "$inlineScope", "$inlineScopeEnd", "$inline", "$choice", "$excl", "$alt", "$firstP", "$first", "$each", "$noLift", "$fxOf",
+  let safeMarkers := ["$sourceSuper", "$methodMiss", "$methodCast", "$methodCase", "$methodType", "$inlineScope", "$inlineScopeEnd", "$inline", "$choice", "$excl", "$alt", "$firstP", "$first", "$each", "$noLift", "$fxOf",
     "$forReturns", "$forReturnBody", "$defer", "$loop", "$rec", "$recTo", "$group", "$member",
     "$tparams", "$params", "$defaults", "$paramDefault", "$freeNames", "$declNames", "$callArgs"]
   !(Refine.findPart (fun | .brk _ => true | _ => false) true body).isSome &&
@@ -2093,8 +2079,6 @@ def contForLiftOf (ctx : Ctx) (p : Pos) (b : String) (bty vty : Ty) (alts rest :
   let body := Refine.substTypes σt body
   let (rest, body) ← match ctx.selfClass with
     | some c =>
-      if (body :: rest).any (Choice.anyE fun | .ident _ "(super:)" | .member _ (.ident _ "(super:)") _ => true | _ => false) then
-        throw "(super:)"
       pure (rest.map (selfQualify ctx c), selfQualify ctx c body)
     | none => pure (rest, body)
   if (Refine.findPart (fun | .ret .. => true | _ => false) false (.block p rest)).isSome ||
@@ -3341,24 +3325,6 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
   let some (S, sargs, targs, common, eqs, opened) := refiningCast? env T rx.ty (env.tvars.map (·.1))
     | do set st0; return none
   if !env.isRefClass S || (!opened.isEmpty && !env.isRefClass T) then set st0; return none
-  -- (in a method, its `(super:)M(…)` calls, as the method's class has them:
-  -- direct calls of the implementations they reach, `Self` first, as its
-  -- function has no class, each resolved where it is; not an overloaded
-  -- method's, whose arguments resolve it, as the elaborator's own (super:)
-  -- takes one an overload above the class declares)
-  let body ← match ctx.selfClass with
-    | some c => do
-      let above := (env.supers c).drop 1
-      let overloaded (m : String) : Bool := (ctx.methodDecl? c m).isNone &&
-        ((env.methodOverloads.lookup m).getD []).any fun o => above.any fun e => (ctx.sig? s!"{e}.{o}").isSome
-      let mut ren : List (String × String) := []
-      for (m, mp, called) in superNames body do
-        if !called then
-          eerr mp s!"(super:){m} cannot be used as a value: call it with (super:){m}(…), or name a method that calls it"
-        if overloaded m || ren.any (·.1 == m) then continue
-        ren := ren ++ [(m, ← superImpl ctx mp c m)]
-      pure (if ren.isEmpty then body else superCalls ren body)
-    | none => pure body
   -- (#250: `T` has Verse Core type arguments past the object's, or not as
   -- its own type parameters: its tests open them, as a method's dispatch does)
   let wide := !((env.coreVars T).length == (env.coreArgs S sargs).length &&
@@ -3850,6 +3816,9 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
     set st0
     return ← elabE { ctx with constructHints := some hints, constructOrigin := some ctx.frameName } se exp
   match se with
+  | .app _ (.ident _ "$sourceSuper")
+      [.str _ [.text c], .str _ [.text method], .ident _ "Self", call] false =>
+    elabE { ctx with selfClass := some c, selfMethod := if method.isEmpty then none else some method } call exp
   | .app _ (.ident _ "$methodMiss") [] false => pure ⟨.prim .fail [], .never⟩
   | .app p (.ident _ "$allValues") [.block _ cs, value] false =>
     elabE ctx (.forE p (Choice.gensOf "" cs (choiceOrder ctx)) value) exp
