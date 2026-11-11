@@ -1,0 +1,9 @@
+default 1
+source cleanup
+created 1
+result 7
+default 2
+waiting cleanup
+created 2
+result 9
+exit=0

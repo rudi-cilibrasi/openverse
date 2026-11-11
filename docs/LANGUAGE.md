@@ -581,10 +581,10 @@ circle := class(shape, labelled):
   read and set through it too (each class's, at its own place).
   Omitted named arguments use the selected implementation's defaults,
   including computed defaults that read its receiver or earlier arguments
-  and defaults whose types are opened or refined by dispatch. A spawned
-  refined call retains the earlier restriction: its defaults cannot read
-  the receiver, use arguments at refined types, or need opened types.
-  Spawn arguments, including defaults, cannot wait. Supplied
+  and defaults whose types are opened or refined by dispatch. This also
+  holds for spawned calls: defaults finish before the task starts, in the
+  selected implementation's scope. Spawn arguments, including defaults,
+  cannot wait. Supplied
   arguments run once in written order, then omitted defaults run in
   declaration order. Their effects count at the caller. Background tasks
   started in a suspending default belong to the caller; tasks started by
@@ -1390,9 +1390,13 @@ Main()<suspends>:void =
   rule), even through an arm.
 - **`spawn`.** `spawn{F(…)}` starts a task running the call, which must be
   of a suspends function or method (`spawn{Agent.Run()}`, also when
-  subclasses override `Run`). Its arguments are evaluated at once, and the
+  subclasses override `Run`). Its receiver and supplied arguments run once
+  in caller order, then omitted defaults run in declaration order, before
+  starting the task. This includes defaults using receiver fields, refined
+  arguments and opened types. Arguments and defaults cannot wait. The
   task runs at once up to its first wait. The value is a `task(t)`, where
-  `t` is `F`'s result type, and `T.Await()` waits for the task to end and
+  `t` is the result type at the receiver's static declaration, including
+  when an override returns a narrower class. `T.Await()` waits for the task to end and
   gives its result (at once if it has ended). A task is not tied to the
   code that spawned it: it runs until it ends or the program does. `spawn`
   is allowed in any function, immediate ones too, and in a field's default

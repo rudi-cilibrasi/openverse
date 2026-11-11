@@ -1,0 +1,9 @@
+receiver
+positional
+given B 9
+given A 7
+default C 10
+body 3 7 9 10
+spawned
+result 10 1
+exit=0
