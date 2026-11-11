@@ -498,11 +498,22 @@ partial def localDecls (e : SExpr) : List (String × Pos) :=
 partial def localsOf (e : SExpr) : List String :=
   ((localDecls e).map (·.1)).eraseDups
 
+/-- Rename value references embedded in generated method-result types. -/
+partial def renameValueTypes (ren : List (String × String)) : STy → STy
+  | .app "$methodResult" [.name n] => .app "$methodResult" [.name ((ren.lookup n).getD n)]
+  | .arr t => .arr (renameValueTypes ren t)
+  | .opt t => .opt (renameValueTypes ren t)
+  | .tup ts => .tup (ts.map (renameValueTypes ren))
+  | .map k v => .map (renameValueTypes ren k) (renameValueTypes ren v)
+  | .app n ts => .app n (ts.map (renameValueTypes ren))
+  | .fn ps fx r => .fn (ps.map (renameValueTypes ren)) fx (renameValueTypes ren r)
+  | t => t
+
 /-- `e` with the names in `ren` renamed, binders and uses. -/
 partial def renameE (ren : List (String × String)) : SExpr → SExpr :=
   mapE fun
     | .ident p n => (ren.lookup n).map (.ident p ·)
-    | .decl p n t v x => (ren.lookup n).map fun n' => .decl p n' t v (renameE ren x)
+    | .decl p n t v x => some (.decl p ((ren.lookup n).getD n) (t.map (renameValueTypes ren)) v (renameE ren x))
     | .gen p x i src => if (ren.lookup x).isSome || (i.bind fun j => ren.lookup j).isSome then
         some (.gen p ((ren.lookup x).getD x) (i.map fun j => (ren.lookup j).getD j) (renameE ren src)) else none
     | _ => none
@@ -1742,7 +1753,12 @@ mutual
     argument does, gives no values, and the others still do. At the written
     type `ty`, when there is one. -/
 partial def arrOfE (ty : Option STy := none) (fieldOrder : String → FieldOrder := fun _ => {}) : SExpr → SExpr
-  | .app p (.ident _ "$methodMiss") [] false => .arrayLit p []
+  | .app p (.ident _ "$methodMiss") [] false =>
+    match ty with
+    | none => .arrayLit p []
+    | some t =>
+      let empty := s!"$noMethodValues{p.line}_{p.col}"
+      .block p [.decl p empty (some (.arr t)) false (.arrayLit p []), .ident p empty]
   | .app p (.ident _ "$choice") as false =>
     match as with
     | [a] => arrOfE ty fieldOrder a
@@ -1978,7 +1994,7 @@ structure MFam where
   root : String
   impls : List String
   direct : Bool
-  /-- The declaring class's return type, which a dispatch's value has. -/
+  /-- The declaring class's return type, before static receiver selection. -/
   ret : Option STy := none
   /-- The declaring class's parameters, whose types a dispatch's arguments
       are bound at. -/
@@ -1989,6 +2005,8 @@ structure MFam where
   rootTps : List TParam := []
   /-- Dispatch casts may refine or open the receiver's type arguments. -/
   refining : Bool := false
+  /-- The static receiver's declaration determines a possibly narrower result. -/
+  covariant : Bool := false
   /-- Concrete class tests paired with the implementation they inherit. -/
   cases : List (String × String) := []
   deriving Inhabited
@@ -2011,6 +2029,9 @@ structure MFam where
       cast conditionals over `MFam.cases`, so each selected implementation
       retains its refinement and opened arguments. `$methodCast` lets typed
       consumers discard impossible cases; `$methodMiss` supplies no values.
+      A covariant family first saves the actual receiver, before its root
+      view is bound, and records its static declaration's result type.
+      Exact class cases can then omit implementations outside that view.
       With `trial`, it is a call of `root$M$fam` instead, for the fixpoint.
     - `M(args)` in the body of a class below the root is `Self.M(args)`.
     - `(super:)M(args)` is a call of the nearest implementation above. -/
@@ -2048,11 +2069,13 @@ partial def rwFamCalls (anc : String → List String) (fams : List (String × MF
     else if trial then .app p (.ident q (methodFnName f.root m ++ "$fam")) (recv :: args) br
     -- (its declaring class's the only implementation, an abstract override
     -- below it: that one, which dispatch always picks)
-    else if f.impls == [f.root] then plain p q (methodFnName f.root m) f recv args br
+    else if f.impls == [f.root] && !f.covariant then plain p q (methodFnName f.root m) f recv args br
     else
       -- (names of this call's own, `inlineCalls` tags them for each site)
       let site := s!"{p.line}_{p.col}"
       let (r, dn, kv) := (s!"$r{site}", s!"$d{site}", s!"$kv{site}")
+      let raw := s!"$receiver{site}"
+      let actual := if f.covariant then SExpr.ident p raw else recv
       let aN (i : Nat) : String := s!"$a{i}_{site}"
       -- (the arguments as a call evaluates them: positional, then named as
       -- written, #283)
@@ -2086,7 +2109,7 @@ partial def rwFamCalls (anc : String → List String) (fams : List (String × MF
           SExpr.decl p t (some (tyR (.tup (posPs.map (·.ty))))) false (.ident p "$arg") ::
             posPs.zipIdx.map fun (sp, i) => SExpr.decl p (aN i) (some (tyR sp.ty)) false (.app p (.ident p t) [.int p (i : Int)] false)
         else args.zipIdx.map fun (a, i) => SExpr.decl p (aN i) (tyAt a i) false (.ident p "$arg")
-      let castTo (d : String) : SExpr := .app p (.ident p d) [.ident p r] true
+      let castTo (d : String) : SExpr := .app p (.ident p d) [if f.covariant then .ident p raw else .ident p r] true
       let alt (d : String) : List SExpr × SExpr :=
         let guard := if d == f.root then SExpr.decl p dn none false (.ident p r)
           else .decl p dn none false (castTo d)
@@ -2108,18 +2131,22 @@ partial def rwFamCalls (anc : String → List String) (fams : List (String × MF
       -- A refining implementation must keep its cast with its body. Most
       -- specific classes win before interface defaults, as ordinary dispatch
       -- does. A marked cast lets typing discard statically impossible cases.
-      let cases := if !f.refining then mkExcl p (f.impls.map alt) else
-        let fallback := if f.impls.contains f.root then
+      let cases := if !f.refining && !f.covariant then mkExcl p (f.impls.map alt) else
+        let fallback := if f.impls.contains f.root && !f.covariant then
           SExpr.app p (.ident q (methodFnName f.root m)) (.ident p r :: passed) br
           else .app p (.ident p "$methodMiss") [] false
         f.cases.foldr (fun (d, impl) rest =>
           let dn := dn ++ "$" ++ d
           let body := SExpr.app p (.ident q (methodFnName impl m)) (.ident p dn :: passed) br
-          if d == f.root then
+          if d == f.root && !f.covariant then
             SExpr.block p [.decl p dn none false (.ident p r), body]
-          else SExpr.ite p [.decl p dn none false (.app p (.ident p "$methodCast") [castTo d] false)] body (some rest)) fallback
-      let tmpl := head ++ [.decl p kv (f.ret.map tyR) false cases]
-      .app p (.ident p "$dispatch") (.ident q (methodFnName f.root m) :: .block p tmpl :: recv :: vals) false
+          else SExpr.ite p [.decl p dn none false (.app p (.ident p (if f.covariant then "$methodCase" else "$methodCast")) [castTo d] false)] body (some rest)) fallback
+      let ret := if f.covariant then some (STy.app "$methodResult" [.name raw]) else f.ret.map tyR
+      let tmpl := head ++ [.decl p kv ret false cases]
+      let dispatch := SExpr.app p (.ident p "$dispatch") (.ident q (methodFnName f.root m) :: .block p tmpl :: actual :: vals) false
+      if !f.covariant then dispatch else
+        .block p [.decl p raw none false recv,
+          .app p (.ident p "$methodType") [.ident p raw, .str p [.text m]] false, dispatch]
   mapE (fun
     | .app p (.member q recv m) args br =>
       match fams.lookup m with
@@ -2240,6 +2267,11 @@ def methodFns (tops : List STop) (reserved : List String := []) : Except String 
     let impls := (ds.filter fun (_, m) => !isAbstract m).map (·.1)
     let impls := (impls.filter (· == root)) ++ impls.filter (· != root)
     let ret := (ds.find? (·.1 == root)).bind fun | (_, .fn _ _ _ _ _ r _) => some r | _ => none
+    let covariant := ds.any fun (c, m) => match ret, m with
+      | some r0, .fn _ _ _ _ _ r _ =>
+        let r0c := ((rootView (classes.length + 1) c root).map fun σ => r0.substNames σ).getD r0
+        c != root && !styEq (styNorm r) (styNorm r0c)
+      | _, _ => false
     let params := ((ds.find? (·.1 == root)).bind fun | (_, .fn _ _ ps _ _ _ _) => some ps | _ => none).getD []
     let rootTps := ((classes.lookup root).map fun (_, _, _, _, tps) => tps).getD []
     let refining := ds.any fun (c, _) =>
@@ -2262,7 +2294,7 @@ def methodFns (tops : List STop) (reserved : List String := []) : Except String 
       if ii || !(anc c).contains root then none else
       (ordered.find? (anc c).contains).map fun impl => (c, impl)
     let cases := cases.mergeSort fun a b => (anc a.1).length ≥ (anc b.1).length
-    some (n, { root, impls, direct := impls == [root] && ds.length == 1, ret, params, rootTps, refining, cases })
+    some (n, { root, impls, direct := impls == [root] && ds.length == 1, ret, params, rootTps, refining, covariant, cases })
   -- (which of them are interfaces: their defaults yield to classes', #375)
   let isIfaceC (c : String) : Bool := match classes.lookup c with
     | some (_, ii, _, _, _) => ii
@@ -2349,16 +2381,6 @@ def methodFns (tops : List STop) (reserved : List String := []) : Except String 
         if anyE (fun | .member _ (.ident _ "(super:)") x => x == n | _ => false) b &&
             (((anc c).drop 1).find? f.impls.contains).isNone then
           throw s!"{q.show}: nothing above {c.replace "::" "."} implements '{n}'"
-  -- (an override with several values that returns a narrower type than the
-  -- method it overrides: refused, since a dispatch, made before types, has
-  -- the declaring class's return type)
-  for (n, f) in sel do
-    if let some r0 := f.ret then
-      for (c, m) in declsOf n do
-        if let .fn q _ _ _ _ r _ := m then
-          let r0c := ((rootView (classes.length + 1) c f.root).map fun σ => r0.substNames σ).getD r0
-          if c != f.root && !styEq (styNorm r) (styNorm r0c) then
-            throw s!"{q.show}: {c.replace "::" "."}.{n} returns {styShow r}, where {f.root.replace "::" "."}.{n}, which it overrides and which has several values, returns {styShow r0}: an override in a family of methods with several values must return the same type (a narrower one is not supported yet, #283)"
   if sel.isEmpty then return tops
   -- (a parameter or local named like a member: refused, as in the class,
   -- since the body leaves it)

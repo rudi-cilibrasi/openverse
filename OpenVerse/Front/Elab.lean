@@ -600,6 +600,9 @@ partial def resolveTy (env : TyEnv) (p : Pos) : STy → EM Ty
     let kt ← resolveTy env p k
     if !kt.comparable env then eerr p (notComparable env kt "a map key")
     return .map kt (← resolveTy env p v)
+  | .app "$methodResult" [.name receiver] => do
+    let some t := env.tvars.lookup receiver | eerr p "internal: missing static method result"
+    return t
   | .app n args => do
     let ts ← args.mapM (resolveTy env p)
     -- (#220: its handlers take the value, so an event without one has none)
@@ -1450,8 +1453,8 @@ def pruneConstructHints (ctx : Ctx) (target : String) (body : SExpr) : SExpr :=
 def choiceHasCast (ctx : Ctx) (i : SExpr) : Bool :=
   (Choice.arms i).any fun (cs, _) => cs.any fun clauses => clauses.any fun
     | .decl _ _ none false (.app _ (.ident _ target) [_] true) => ctx.types.classes.contains target
-    | .decl _ _ none false (.app _ (.ident _ "$methodCast") [ .app _ (.ident _ target) [_] true ] false) =>
-      ctx.types.classes.contains target
+    | .decl _ _ none false (.app _ (.ident _ marker) [ .app _ (.ident _ target) [_] true ] false) =>
+      ["$methodCast", "$methodCase"].contains marker && ctx.types.classes.contains target
     | _ => false
 
 /-- A generated method dispatch can omit a class that cannot inhabit its
@@ -1459,17 +1462,23 @@ def choiceHasCast (ctx : Ctx) (i : SExpr) : Bool :=
     casts, kept with their selected implementation. Receivers are already
     bound once by the dispatch's parameter prefix. -/
 partial def pruneMethodCases (ctx : Ctx) : SExpr → SExpr
-  | .ite p [.decl dp d none false (.app _ (.ident _ "$methodCast")
-      [cast@(.app _ (.ident _ target) [.ident _ x] true)] false)] body (some next) =>
+  | e@(.ite p [.decl dp d none false (.app _ (.ident _ marker)
+      [cast@(.app _ (.ident _ target) [.ident _ x] true)] false)] body (some next)) =>
+    if !["$methodCast", "$methodCase"].contains marker then e else
     let next := pruneMethodCases ctx next
     let possible := match ctx.lookup x with
       | some l => match l.ty.subst ctx.types.tvars with
-        | .struct source args => ((ctx.types.concreteBelow source).filter (ctx.types.isSub · target)).any fun c =>
+        | .struct source args => ((ctx.types.concreteBelow source).filter fun c =>
+            if marker == "$methodCase" then c == target else ctx.types.isSub c target).any fun c =>
           ((ctx.types.viewArgs? source c (ctx.types.coreArgs source args) (rigid := false)).bind fun as =>
             ctx.types.refineComparable? [] (ctx.types.comparableArgs c as)).isSome
         | _ => true
       | none => true
     if possible then .ite p [.decl dp d none false cast] body (some next)
+    -- A covariant call has an explicit static result type. Drop an exact
+    -- class case outside that receiver's domain, including in kept bodies;
+    -- synthesizing a failing value here would make a pure checked body fail.
+    else if marker == "$methodCase" then next
     -- Keep an if and its unique binder even when it cannot select a body:
     -- later exclusive lowering still needs a case boundary and a known type.
     else .ite p [.decl dp d none false (.block p [.query p (.ident p "false"), .ident p x])]
@@ -1479,7 +1488,10 @@ partial def pruneMethodCases (ctx : Ctx) : SExpr → SExpr
 /-- Normalize a dispatch condition after its receiver prefix is typed. -/
 def pruneMethodBinding (ctx : Ctx) : SExpr → SExpr
   | .decl p n ty v (.app q f@(.ident _ "$branchChoice") [i] false) =>
-    .decl p n ty v (.app q f [pruneMethodCases ctx i] false)
+    let i := pruneMethodCases ctx i
+    match i with
+    | .ite .. => .decl p n ty v (.app q f [i] false)
+    | _ => .decl p n ty v i
   | e => e
 
 /-- A local named `n` may be declared here: Verse has no shadowing. -/
@@ -2038,7 +2050,7 @@ def forBodySafe (ctx : Ctx) (body : SExpr) : Bool :=
   -- Prepared consumers keep lazy producer templates (including groups and
   -- generic/default argument bindings) inside the body. Their ownership is
   -- checked when that consumer elaborates; they do not escape the helper.
-  let safeMarkers := ["$methodMiss", "$methodCast", "$inlineScope", "$inlineScopeEnd", "$inline", "$choice", "$excl", "$alt", "$firstP", "$first", "$each", "$noLift", "$fxOf",
+  let safeMarkers := ["$methodMiss", "$methodCast", "$methodCase", "$methodType", "$inlineScope", "$inlineScopeEnd", "$inline", "$choice", "$excl", "$alt", "$firstP", "$first", "$each", "$noLift", "$fxOf",
     "$forReturns", "$forReturnBody", "$defer", "$loop", "$rec", "$recTo", "$group", "$member",
     "$tparams", "$params", "$defaults", "$paramDefault", "$freeNames", "$declNames", "$callArgs"]
   !ctx.suspends && !(Refine.findPart (fun | .brk _ => true | _ => false) true body).isSome &&
@@ -3775,6 +3787,7 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
   | .app p (.ident _ "$allValues") [.block _ cs, value] false =>
     elabE ctx (.forE p (Choice.gensOf "" cs (choiceOrder ctx)) value) exp
   | .app _ (.ident _ "$methodCast") [cast] false => elabE ctx cast exp
+  | .app _ (.ident _ "$methodCase") [cast] false => elabE ctx cast exp
   | .app p (.ident _ "$constructProbe") [.str _ [.text site], .construct q n ts fs] false =>
     let r ← elabConstruct ctx q n ts (fs.map constructFieldsForTypes) exp
     modify fun st => { st with constructHints := constructHint ctx q n site r.ty :: st.constructHints }
@@ -4240,6 +4253,8 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
     return ⟨Expr.logicE r.e, .logic⟩
   | e@(.ite _ [.decl _ _ none false (.app _ (.ident _ "$methodCast") _ false)] _ (some _)) =>
     elabE ctx (pruneMethodCases ctx e) exp
+  | e@(.ite _ [.decl _ _ none false (.app _ (.ident _ "$methodCase") _ false)] _ (some _)) =>
+    elabE ctx (pruneMethodCases ctx e) exp
   | .ite p conds thenE elseE =>
     -- (#243, #351) a cast as a later clause of the condition, `if (c₁, …,
     -- D := T[X], rest) then B else E`, that only the first clause may be
@@ -4574,6 +4589,14 @@ partial def elabStmt (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM (R × Ctx) 
       pure (⟨.lit .void, .void⟩, { ctx with inlineScopes := name :: ctx.inlineScopes })
     | .app _ (.ident _ "$inlineScopeEnd") [] false =>
       pure (⟨.lit .void, .void⟩, { ctx with inlineScopes := ctx.inlineScopes.drop 1 })
+    | .app p (.ident _ "$methodType") [.ident _ receiver, .str _ [.text method]] false => do
+      let some receiverLocal := ctx.lookup receiver | eerr p "internal: missing method receiver"
+      let .struct c args := receiverLocal.ty | eerr p "method receiver is not a class or interface"
+      let some owner := ctx.methodDecl? c method | eerr p s!"{c} has no method {method}"
+      let some sg := ctx.sig? s!"{owner}.{method}" | eerr p "internal: missing method declaration"
+      let names := ((ctx.types.sparams.lookup owner).getD []).map (·.1)
+      let result := sg.ret.subst (names.zip (ctx.types.upArgs c args owner))
+      pure (⟨.lit .void, .void⟩, { ctx with types := { ctx.types with tvars := (receiver, result) :: ctx.types.tvars } })
     | .app _ (.ident _ "$declNames") ns false => do
       -- (#283) the names a block whose choice is lifted binds (renamed for
       -- the place): not in scope where the block is, as for its own
@@ -6757,6 +6780,10 @@ partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
         -- copy in each, which doubled the code with each such choice)
         let isComposed (c : SExpr) : Bool := match Choice.binding? c with
           | some { place := none, branchy := none, each := none, alts := as, .. } => as.any Choice.hasLiftable
+          -- A later typed dispatch stays a branch binding until its
+          -- receiver prefix is elaborated. Its lifted arms would copy
+          -- this same suffix once prepared, just as composed alternatives do.
+          | some { branchy := some i, .. } => !Choice.plainBranches Choice.hasLiftable i
           | _ => false
         if rest.any isComposed then
           let req := if ctx.typeOnly then none else ctx.types.loopRequests.find? (·.key == contKey ctx p b.name (b.alts ++ rest))
