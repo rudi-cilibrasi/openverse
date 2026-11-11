@@ -14,6 +14,8 @@ no fallback 1 0
 fallback
 value 99
 no fallback 0 1
+scalar 0 0 0
+scalar 3 0 4
 cleanup
 kept 5
 cleaned 1

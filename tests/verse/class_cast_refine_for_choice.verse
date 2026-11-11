@@ -43,6 +43,14 @@ NoFallback(P:pair(a, b) where a:type, b:type)<transacts>:void =
         Print("value {V}")
         V
     Print("no fallback {H.N} {R.Length}")
+ScalarNoFallback(P:pair(a, b) where a:type, b:type)<transacts>:void =
+    H := counter{}
+    One := array{1}
+    var Total:int = 0
+    R := for (A := 1 | 2, set Total += A,
+        V := if (D := dup[Read(P, H)]) then One[D.C] else (99 | 100)):
+        V
+    Print("scalar {Total} {H.N} {R.Length}")
 Cleanup(P:pair(a, b) where a:type, b:type)<transacts>:void =
     R := for (V := if (D := dup[P]):
         defer: Print("cleanup")
@@ -69,6 +77,8 @@ Main()<transacts>:void =
     LaterEmpty(Miss)
     NoFallback(Match)
     NoFallback(Miss)
+    ScalarNoFallback(Match)
+    ScalarNoFallback(Miss)
     Cleanup(Match)
     Cleanup(Miss)
     for (V : Typed(Match)) { Print("typed {V}") }
