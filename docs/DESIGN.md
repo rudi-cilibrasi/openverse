@@ -336,7 +336,7 @@ The pass introduces no Core operations or changes to either interpreter;
 the resulting program passes the existing effect, scope, control and type
 checks.
 
-A source `for` with body returns has an optional return slot. The body is
+A source `for` with body or clause returns has an optional return slot. The body is
 initially kept as written, so a copied body still returns directly. Moving
 it into a continuation preserves that slot as a mutable capture and gives
 the body a return handler. The handler saves the operand, runs body-local
@@ -347,6 +347,10 @@ stops its private producer loop, then performs the actual return, including
 source defers. Its pre-existing escaping breaks are marked and forwarded
 outside the private loop without running their cleanup twice. Bottom
 element types round-trip through generated signatures as reserved `$never`.
+The handler also encloses a moved continuation's clauses. A successful
+clause return gives the abort packet as a successful helper result, so
+the current filter commits its copy-outs before stopping the consumer.
+A failed return operand remains filter failure and rolls that prefix back.
 When the body has bottom type, its Core expression is followed by `void`,
 as for tuple and array literal elements. This gives generated arrays an
 inferred element type when suspension lowering saves them across a wait;
@@ -355,7 +359,7 @@ Nested consumers can discover continuations and refining branches in
 separate rounds; their discovery bound follows source nesting, and each
 round still has to add new requests.
 
-Suspending bodies and escapes from continuation clauses retain their
+Suspending bodies and breaks from continuation clauses retain their
 previous restrictions.
 Ordinary casts still use the selector path above.
 

@@ -1,0 +1,8 @@
+operand 4 1
+loop 104
+source 1104
+result 4 1
+clause 14
+source 14
+result 4 0
+exit=0

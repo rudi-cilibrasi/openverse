@@ -2030,7 +2030,7 @@ def contLiftOf (ctx c2 : Ctx) (p : Pos) (b : String) (alts rest : List SExpr)
            args := SExpr.ident p b :: caps.map (fun l => SExpr.ident p l.name) ++ typeArgs,
            varBinds := (bls.filter (·.mutable)).map (·.name) }
 
-/-- The return slot is written by a moved body's explicit return. Its
+/-- The return slot is written by a moved consumer's source return. Its
     self-assignment is metadata for capture/write analysis, not executed. -/
 def forReturnBody? : SExpr → Bool
   | .app _ (.ident _ f) _ false => f == "$forReturns" || f == "$forReturnBody"
@@ -2112,8 +2112,8 @@ def contForLiftOf (ctx : Ctx) (p : Pos) (b : String) (bty vty : Ty) (alts rest :
     | some c =>
       pure (rest.map (selfQualify ctx c), selfQualify ctx c body)
     | none => pure (rest, body)
-  if (Refine.findPart (fun | .ret .. => true | _ => false) false (.block p rest)).isSome ||
-      (!forReturnBody? body && (Refine.findPart (fun | .ret .. => true | _ => false) false body).isSome) then throw "a return"
+  if !forReturnBody? body &&
+      (Refine.findPart (fun | .ret .. => true | _ => false) false written).isSome then throw "a return"
   let body := match body with
     | .app q (.ident _ "$forReturns") args false => .app q (.ident q "$forReturnBody") args false
     | b => b
@@ -2134,6 +2134,12 @@ def contForLiftOf (ctx : Ctx) (p : Pos) (b : String) (bty vty : Ty) (alts rest :
   let ffirst : SExpr := if outcome then
       .app p (.ident p "$forFirstOutcome") [.block p rest, body, failure] false
     else .app p (.ident p "$forFirst") [.block p rest, body] false
+  let ffirst := match body with
+    | .app q (.ident _ "$forReturnBody") [metadata, mode, _] false =>
+      -- Clauses and body leave the same source function. A clause return
+      -- succeeds with the packet, committing this filter's copy-outs.
+      .app q (.ident q "$forReturnBody") [metadata, mode, ffirst] false
+    | _ => ffirst
   let ret : STy := if sets.isEmpty then valueTy else .tup (valueTy :: sets.map (·.ty.toSTy))
   let bodyE : SExpr := if sets.isEmpty then .block p (copies ++ [ffirst]) else
     .block p (copies ++ [.decl p vals none false ffirst, .tuple p (.ident p vals :: sets.map fun l => SExpr.ident p l.name)])
@@ -4103,7 +4109,7 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
   | .app p (.ident _ "$forFirst") [.block _ clauses, body] false => elabFor ctx p clauses body (prepared := true) (firstDecides := true)
   | .app p (.ident _ "$forFirstOutcome") [.block _ clauses, body, failed] false => do
     let flag ← fresh .logic
-    let r ← elabFor { ctx with forOutcomeSlot := some flag } p clauses body
+    let r ← elabFor { ctx with forOutcomeSlot := some flag, forReturnExit := some failed } p clauses body
       (prepared := true) (firstDecides := true) (failure := some failed)
     let result ← fresh (.opt r.ty)
     return ⟨.seq (.assign flag (.lit (.logic true)))
@@ -4662,7 +4668,7 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
               (.seq after (.seq ret.e normal)))))
       return (⟨code, r.ty⟩, waits)
     let elaborate : EM R := do
-      if (Refine.findPart (fun | .ret .. => true | _ => false) false body).isNone then
+      if (Refine.findPart (fun | .ret .. => true | _ => false) false (.block p (clauses ++ [body]))).isNone then
         return ← elabFor ctx p clauses body
       if !ctx.suspends then return (← withReturn).1
       -- The marker permits source returns in the syntax guard. The typed
