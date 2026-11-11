@@ -795,7 +795,10 @@ Main():void =
   alternatives. Its operand is saved before body cleanup; source cleanup
   then runs with the updated captured variables. This also applies to an
   immediate shared consumer in a `<suspends>` caller, including after a
-  wait and inside nested or lazy consumers. Breaks inside the body's
+  wait and inside nested or lazy consumers. A return in a `for` clause
+  also leaves the source function: a successful operand commits the
+  current filter's writes before source cleanup; a failed operand still
+  rejects that filter and rolls its writes back. Breaks inside the body's
   own `loop`s retain their targets. The body may itself consume a lazy choice
   with `for`, a first-success condition or an `option`, including generic and
   mutually recursive producers. These keep their own rollback boundaries;
