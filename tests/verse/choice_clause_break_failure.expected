@@ -1,0 +1,5 @@
+caught 0
+loop 4
+source 4
+result 99 4
+exit=0

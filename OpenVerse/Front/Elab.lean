@@ -4112,6 +4112,8 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
   | .app p (.ident _ "$spawn") [body] false => elabSpawn ctx p body
   | .app p (.ident _ "$branch") [body] false => elabBranch ctx p body
   | .app p (.ident _ "$refineBreak") [] false =>
+    if ctx.inChoice then
+      eerr p "break cannot leave the clauses of a failure context that has a choice (an if condition, first{…}, option{…}, …) (#208)"
     match ctx.refineExits.brk with
     | some pack =>
       if ctx.inDefer then eerr p "break cannot leave a defer: block"

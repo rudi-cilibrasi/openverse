@@ -1,0 +1,23 @@
+loop 4
+source 4
+result 99 0
+inner 4
+after inner 4
+outer 4
+source 4
+result 99 0
+loop 4
+source 4
+result 99 0
+loop 4
+source 4
+result 99 0
+inner 4
+after inner 4
+outer 104
+source 104
+result 99 0
+loop 8
+source 8
+result 99 0
+exit=0

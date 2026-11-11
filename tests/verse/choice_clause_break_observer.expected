@@ -1,0 +1,6 @@
+after 4
+observe 4
+observer cleanup 104
+source 104
+result 104 0
+exit=0
