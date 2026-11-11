@@ -428,10 +428,13 @@ environment array itself. This override is local to that consumer, so a
 nested user `for` and array-valued source bodies retain their own rank.
 Type-only suffix probes retain pending-wait evidence even when their
 executable result is a placeholder, including nested function-value calls.
-They also retain typed heap-effect evidence when an enclosing refining
-lift infers its signature. Cached plans expose those requirements to
-parent probes too. Generated helper permissions include that evidence;
-the original source function's effect constraints still apply.
+
+Both ordinary and refining staged suffix trials retain their typed heap
+effects when their provisional slots and requests are discarded. Root and
+tail resume interfaces inherit that evidence when an enclosing refining
+lift infers its signature. Cached plans expose the same requirements to
+parent probes. Generated helper permissions include those effects; the
+original source function's effect constraints still apply.
 
 Borrowed dependencies include read-only captures and are carried through
 wrappers separately from copy-outs. Otherwise an intermediate wrapper
