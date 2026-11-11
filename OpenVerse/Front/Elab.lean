@@ -5869,7 +5869,8 @@ partial def elabSpawn (ctx : Ctx) (p : Pos) (body : SExpr) : EM R := do
   -- has not been generated yet. Save the value once before its arguments.
   if let .app q f args br := call then
     let value := match f with
-      | .ident _ n => (ctx.lookup n).isSome
+      | .ident _ n => (ctx.lookup n).isSome || ctx.selfClass.any (fun c =>
+          (ctx.types.fields c).any (·.1 == n))
       | _ => true
     if value then
       let saved ← get
