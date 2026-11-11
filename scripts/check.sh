@@ -54,6 +54,7 @@ check "front-end mutation fuzzing (${FUZZ_FRONT:-500} mutants)" scripts/fuzz-fro
 check "QuickProof pins" scripts/check-quickproof-pins.sh
 check "fuzz runner checks" bash tests/scripts/test-fuzz-runners.sh
 check "check runner checks" bash tests/scripts/test-check.sh
+check "choice continuation code size" bash tests/scripts/test-choice-size.sh
 check "float fuzzing (${FUZZ_FLOATS:-200} programs, against Python's doubles)" scripts/fuzz-floats.sh "${FUZZ_FLOATS:-200}" "$seed"
 check "choice fuzzing (${FUZZ_CHOICE:-200} programs, against a backtracking model)" scripts/fuzz-choice.sh "${FUZZ_CHOICE:-200}" "$seed"
 check "scheduler model fuzzing (${FUZZ_MODEL_SCHED:-50} programs, against a model of the docs)" \
