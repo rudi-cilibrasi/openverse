@@ -94,7 +94,7 @@ theorem flattenArrsTR_go (vs acc : List Value) :
 
 /-- The elements of the inclusive range `a..b` (empty when `a > b`). -/
 def rangeVals (a b : Int) : List Value :=
-  (List.range (b + 1 - a).toNat).map fun (k : Nat) => .int (a + (k : Int))
+  (List.range (b + 1 - a).toNat).map fun (k : Nat) => Value.ofInt (a + (k : Int))
 
 /-- Comparison helper: succeed with the left operand when `b` holds. -/
 def cmpRes (b : Bool) (left : Value) : Res := if b then .ok left else .fail
@@ -110,10 +110,10 @@ def Prim.apply : Prim → List Value → Res
   | .ceilDiv, [.int a, .int b] => if b = 0 then .fail else Res.ofInt (ceilDivInt a b)
   | .quotient, [.int a, .int b] => if b = 0 then .fail else Res.ofInt (Int.ediv a b)
   | .modulo, [.int a, .int b] => if b = 0 then .fail else Res.ofInt (Int.emod a b)
-  | .lt, [.int a, .int b] => cmpRes (decide (a < b)) (.int a)
-  | .le, [.int a, .int b] => cmpRes (decide (a ≤ b)) (.int a)
-  | .gt, [.int a, .int b] => cmpRes (decide (a > b)) (.int a)
-  | .ge, [.int a, .int b] => cmpRes (decide (a ≥ b)) (.int a)
+  | .lt, [.int a, .int b] => cmpRes (decide (a < b)) (Value.ofInt a)
+  | .le, [.int a, .int b] => cmpRes (decide (a ≤ b)) (Value.ofInt a)
+  | .gt, [.int a, .int b] => cmpRes (decide (a > b)) (Value.ofInt a)
+  | .ge, [.int a, .int b] => cmpRes (decide (a ≥ b)) (Value.ofInt a)
   | .lt, [.char a, .char b] => cmpRes (decide (a < b)) (.char a)
   | .le, [.char a, .char b] => cmpRes (decide (a ≤ b)) (.char a)
   | .gt, [.char a, .char b] => cmpRes (decide (a > b)) (.char a)
@@ -136,7 +136,7 @@ def Prim.apply : Prim → List Value → Res
       | some v => .ok v
       | none => .fail
     else .fail
-  | .len, [.arr xs] => .ok (.int xs.size)
+  | .len, [.arr xs] => .ok (Value.ofInt xs.size)
   | .arrSet, [.arr xs, .int i, v] =>
     if 0 ≤ i ∧ i.toNat < xs.size then .ok (.arr (xs.setIfInBounds i.toNat v)) else .fail
   | .tupGet k, [.tup vs] => match vs[k]? with
