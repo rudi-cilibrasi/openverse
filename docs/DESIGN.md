@@ -1448,10 +1448,29 @@ position in every class below the one that declares it.
   a `<computes>` method may have an effectful default when its caller allows
   that effect. Suspended default helpers forward background-task ownership
   like refining lifts, while the method called inside remains an ordinary
-  callee that stops its own roots on return. Spawned calls keep the existing
-  inline default binding and its restrictions: their argument/default
-  prefix must run before the task starts, and its waits must remain visible
-  to `elabSpawn`. A `<suspends>` method's refined
+  callee that stops its own roots on return.
+
+  A spawned dispatch uses one immediate `D.$dispatchDefaultsSpawn…`
+  factory per concrete class, implementation, static declaration and
+  supplied-name set. The receiver and supplied arguments are already
+  evaluated. `$spawnBound` uses ordinary generic binding to pack the full
+  argument list, rejecting waits before starting the task. It then spawns
+  `D.$spawnBody…`, which calls the implementation with every argument
+  supplied. The adapter infers the original call before coercing its result
+  to the static declaration's result; this keeps invariant `task(t)` types
+  correct for covariant methods. Only the adapter and method body run in
+  the task. Factories retain default scopes, effect inference and lexical
+  restrictions, including in unused field defaults.
+
+  Factories and adapters take the concrete class's receiver and type
+  parameters, even for implementations inherited from a parent that does
+  not itself implement the interface. Dispatch tests that exact class tag;
+  `spawnParamTypes` preserves the singleton tag in their Core parameter
+  and slot types. This justifies their hidden witness reads. Discovery
+  requests the concrete class's full pins and receiver-held witnesses,
+  including root classes and classes without their own overrides.
+  Witness-discovery restarts are bounded by the source class count.
+  A `<suspends>` method's refined
   call opens its types as
   `tcDispatchView` does (`suspendSelfGeneric`). A slot of
   such a type starts as an object of a class of an entry (a prototype or
@@ -1939,14 +1958,10 @@ Phase 3 (#20) adds a heap of objects, each with a class tag and fields
   (`tcDispatch`) tries the plain `if` typing first, and types a dispatch
   only against an expected type, since `μ` relates the call's result to
   it: a dispatch chain is assigned to a slot of the method's result type.
-  In the inline binding of a spawned call, an omitted named argument whose default has no type of its own
-  (`false`, `array{}`, `map{}`) is passed as `if (fail) then T else false`,
-  with `T` a temporary of the parameter's type, so that the checker infers
-  the argument's type as it does the others' (#175). When the dispatch
-  opens type arguments, the parameter's type in the override mentions them
-  and the caller has no names for them, so `T` has the method's declared
-  type at the receiver's type arguments instead (`?t` for the override's
-  `?tuple(a, b)`), which `μ` makes the override's (#209). Likewise, the
+  Omitted defaults, including literals without a type of their own, bind
+  inside typed helpers at their implementation types. Spawn factories bind
+  them before their task marker, so no default is moved into the task or
+  hidden from the argument-wait check. The
   hidden arguments of a generic implementation (`W(X:u)` called as
   `E.W(X)` with `X:t`) are built in terms of the caller's type parameters
   (`t`'s value), not the opened ones its values are typed with in the

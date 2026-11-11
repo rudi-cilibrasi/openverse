@@ -76,6 +76,9 @@ kinds=(
   return-defer-first
   return-defer-for
   return-defer-method-first
+  spawn-default-composed
+  spawn-default-refined
+  spawn-default-view
   super-body
   super-failure
   super-first
@@ -185,6 +188,26 @@ child(v:type) := class(base(v)):
     fx = '<decides>' if kind.endswith('failure') else ''
     br = ('[',']') if fx else ('(',')')
     print(f'Main(){fx}:void = Print("{{Run{br[0]}{args}{br[1]}}}")')
+    sys.exit(0)
+if kind.startswith('spawn-default-'):
+    viewed = kind.endswith('view')
+    refined = not kind.endswith('composed')
+    print('pair(a:type,b:type) := class { A:a;B:b }')
+    print('dup(t:type) := class(pair(t,t)) { C:int=4 }')
+    root = 'sink' if viewed else 'base'
+    if viewed:
+        print('first(z:type) := interface { Tag():z }')
+        print('sink(t:type) := interface { Run(P:pair(a,b),?N:int=0 where a:type,b:type)<suspends>:int }')
+        print('impl(z:type,y:type) := class(first(z),sink(y)):\n    Marker:z\n    Seed:int=4\n    Tag<override>():z=Marker')
+        instance = 'impl(string,int){Marker:="x"}'
+    else:
+        print('base(t:type) := class { Run(P:pair(a,b),?N:int=0 where a:type,b:type)<suspends>:int=0 }')
+        print('impl(z:type) := class(base(int)):\n    Marker:z\n    Seed:int=4')
+        instance = 'impl(string){Marker:="x"}'
+    clauses = ','.join(f'A{i}:=if(D{i}:=dup[P])then(D{i}.C|D{i}.C+1)else 0' if refined else f'A{i}:=(Two(0)|Two(2))' for i in range(count))
+    print(f'    Run<override>(P:pair(c,d),?N:int=Seed where c:type,d:type)<suspends>:int=\n        var Total:int=0\n        for({clauses}):set Total+=1\n        Sleep(0.0)\n        N+Total')
+    print(f'Start(P:{root}(t),X:pair(a,b) where t:type,a:type,b:type):task(int)=spawn{{P.Run(X)}}')
+    print(f'Main()<suspends>:void=\n    T:=Start({instance},dup(int){{A:=1,B:=2}})\n    Print("{{T.Await()}}")')
     sys.exit(0)
 if kind.startswith('clause-return-'):
     print('pair(a:type,b:type) := class { A:a; B:b }')
