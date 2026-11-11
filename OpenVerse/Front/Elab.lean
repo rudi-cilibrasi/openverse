@@ -32,6 +32,7 @@ import OpenVerse.Front.Refine
 import OpenVerse.Front.FrameRefs
 import OpenVerse.Front.SourceFrames
 import OpenVerse.Front.FailCapture
+import OpenVerse.Front.CompilerWrites
 import OpenVerse.Front.Types
 import Std.Data.HashMap
 
@@ -11715,6 +11716,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   slotTys := capturedSlots
   let fsigs0 := capturedSigs.fns
   fsigs := fsigs0
+  let beforeConcurrency := fns
   if usesConc then
     let (fns1, slotTys1, fsigs1, classTable1, frameClasses1, mainCall1, framePins1, schedMore) ←
       lowerOpening fun forced =>
@@ -11737,6 +11739,8 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
                       body := protoPrelude protoList mainCall }
     slotTys := slotTys.push []
     fsigs := fsigs ++ [([], if mainSig.suspends then VTy.void else mainSig.ret.toVTy env)]
+  if usesConc then
+    fns := CompilerWrites.propagate beforeConcurrency fns
   let P : Prog := { fns := fns.toList, main }
   if !P.check then
     let bad := P.fns.filter fun fn => (!fn.decides && fn.body.mayFail P) ||
