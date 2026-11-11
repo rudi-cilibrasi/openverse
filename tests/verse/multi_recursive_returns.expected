@@ -1,0 +1,21 @@
+enter 2
+tail 2
+got 2
+enter 1
+tail 1
+got 1
+enter 0
+stop
+got 10
+got 11
+enter 2
+tail 2
+enter 1
+tail 1
+enter 0
+stop
+first 10
+reject
+eager 21
+eager 22
+exit=0

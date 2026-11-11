@@ -1281,13 +1281,60 @@ partial def renameTypes (ρ : List (String × String)) : SExpr → SExpr :=
     | .construct p n ts fs => some (.construct p ((ρ.lookup n).getD n) (ts.map (styRename ρ)) (fs.map (renameTypes ρ)))
     | _ => none
 
+/-- Split a tail block without losing the value of its final binding. -/
+def loopBlockParts (p : Pos) (ss : List SExpr) : List SExpr × SExpr :=
+  match ss.getLast? with
+  | none => ([], .tuple p [])
+  | some (.decl q x ..) => (ss, .ident q x)
+  | some value => (ss.dropLast, value)
+
+/-- An incomplete source conditional discards its values, including in a
+    nested tail block. Recursive edges still yield their erased result. -/
+partial def completeLoopTail (isRec : SExpr → Bool) (discarded : Bool) : SExpr → SExpr
+  | .app p (.ident q "$returnTail") [.block r ss] false =>
+    let (pre, value) := loopBlockParts r ss
+    .app p (.ident q "$returnTail") [.block r (pre ++ [completeLoopTail isRec discarded value])] false
+  | e@(.ite p cs t u) =>
+    let erased := discarded || !isBranchy.complete e
+    .ite p cs (completeLoopTail isRec erased t)
+      (some (completeLoopTail isRec erased (u.getD (.tuple p []))))
+  | e =>
+    let discard (a : SExpr) := if isRec a then a else
+      .block a.pos [.decl a.pos "$discard" (some (.name "void")) false a]
+    if !discarded then e else match alts? e with
+      | some as => mk e.pos (as.map discard)
+      | none => discard e
+
+/-- Invocation-path markers are consumed by lazy lowering. Eager array
+    lowering uses the same normalized body as ordinary source blocks. -/
+partial def eraseReturnTails : SExpr → SExpr :=
+  mapE fun
+    | .app _ (.ident _ "$returnTail") [body] false => some (eraseReturnTails body)
+    | _ => none
+
+/-- Visit only the value leaves of a recursive tail, retaining path scopes. -/
+partial def mapLoopTail (leaf : SExpr → SExpr) : SExpr → SExpr
+  | .app _ (.ident _ "$returnTail") [.block p ss] false =>
+    let (pre, value) := loopBlockParts p ss
+    -- Keep prepared consumer suffixes behind a taking boundary, so
+    -- branch-block renaming cannot give each copy a new helper identity.
+    let result := s!"$returnPath{p.line}_{p.col}"
+    .app p (.ident p "$first") [.block p (pre ++
+      [.decl p result none false (mapLoopTail leaf value), .ident p result])] false
+  | .ite p cs t u => .ite p cs (mapLoopTail leaf t) (u.map (mapLoopTail leaf))
+  | e => leaf e
+
+partial def loopTailOK (plain groupOK : SExpr → Bool) : SExpr → Bool
+  | .app _ (.ident _ "$returnTail") [.block p ss] false =>
+    let (pre, value) := loopBlockParts p ss
+    pre.all plain && loopTailOK plain groupOK value
+  | .ite _ cs t (some u) => cs.all plain && loopTailOK plain groupOK t && loopTailOK plain groupOK u
+  | e => groupOK e
+
 /-- The shape of a recursive function with several values that its
-    consumers take lazily (#246), from its body: its clauses, which have no
-    choice and call no function with several values, then its last
-    expression (or the value of its last binding), a choice or an
-    `if … else …` whose branches are choices or values, each alternative a
-    whole call of the function itself (`g`) or a value with no choice in
-    it. -/
+    consumers take lazily (#246), after normalizing source returns: plain
+    clauses and conditional tail paths, each leaf a choice or value whose
+    alternatives are whole calls of the recursive group or plain values. -/
 def loopShape? (g : String) (mv : List String) (body : SExpr) (grp : List String := [g]) :
     Option (List SExpr × SExpr) := do
   let ss := stmtsOf body
@@ -1306,28 +1353,9 @@ def loopShape? (g : String) (mv : List String) (body : SExpr) (grp : List String
         | .decl _ n _ _ rhs => n.startsWith "?" && plain rhs
         | _ => plain a
     | _ => false
-  let inGroup := grp.length > 1
-  let tail := match tail with
-    | .ite .. =>
-      if isBranchy.complete tail then tail else
-        -- An incomplete if discards its branch's values. The function
-        -- and its recursive group can only yield erased values (void
-        -- or any), so their calls stay whole alternatives.
-        let discard (a : SExpr) : SExpr :=
-          if isRec a then a else
-            .block a.pos [.decl a.pos "$discard" (some (.name "void")) false a]
-        fillElse tail fun arm => match alts? arm with
-          | some as => mk arm.pos (as.map discard)
-          | none => discard arm
-    | _ => tail
+  let tail := completeLoopTail isRec false tail
   let groupOK (e : SExpr) : Bool := ((alts? e).getD [e]).all fun a => isRec a || plain a
-  -- (in a group, #283, a branch, or the last expression, may be a call of
-  -- another function of it with no choice of its own: `else Evens(N + 1)`)
-  let tailOK :=
-    if isBranchy tail || (inGroup && isBranchy.complete tail) then
-      (arms tail).all fun (cs?, v) => (cs?.getD []).all plain && groupOK v
-    else (isChoice tail || (inGroup && isRec tail)) && groupOK tail
-  if cls.all plain && tailOK then some (cls, tail) else none
+  if cls.all plain && loopTailOK plain groupOK tail then some (cls, tail) else none
 
 /-- How many `if`s with a `return` in them `e` has (#283). -/
 partial def countRetIfs (e : SExpr) : Nat :=
@@ -1356,9 +1384,11 @@ partial def tailReturns (ss : List SExpr) : List SExpr :=
 /-- A normalized returning conditional: branch selection adds no generator
     boundary; only a branch's own choices generate values. -/
 def returnBranches (p : Pos) (k : String) (cs tb ub : List SExpr)
-    (multi : SExpr → Bool) (ret : Option STy) : List SExpr :=
+    (multi : SExpr → Bool) (ret : Option STy) (tailBlocks : Bool := false) : List SExpr :=
   if !multi (.block p tb) && !multi (.block p ub) then
-    [.ite p cs (.block p tb) (some (.block p ub))]
+    let scope (ss : List SExpr) := if tailBlocks then
+      SExpr.app p (.ident p "$returnTail") [.block p ss] false else .block p ss
+    [.ite p cs (scope tb) (some (scope ub))]
   else
   -- (a branch with a choice of its own: an exclusive choice of the two,
   -- which a `for` compiles as this `if`, #314; the condition once)
@@ -1400,12 +1430,12 @@ def returnBranches (p : Pos) (k : String) (cs tb ub : List SExpr)
     copied into it may declare the same ones. `none` when a `return` is
     elsewhere (in a loop, a condition, an expression). -/
 partial def elimPlainReturns (fresh : Nat → String) (n : Nat) (multi : SExpr → Bool := fun _ => false)
-    (ret : Option STy := none) : List SExpr → Option (List SExpr × Nat)
+    (ret : Option STy) (tailBlocks : Bool) : List SExpr → Option (List SExpr × Nat)
   | [] => some ([], n)
   | .ret p e? :: _ => some ([e?.getD (.tuple p [])], n)
   | s@(.ite p cs t u?) :: rest =>
     let hasRet := anyE fun | .ret .. => true | _ => false
-    if !hasRet s then (elimPlainReturns fresh n multi ret rest).map fun (r, n') => (s :: r, n')
+    if !hasRet s then (elimPlainReturns fresh n multi ret tailBlocks rest).map fun (r, n') => (s :: r, n')
     else if cs.any hasRet then none
     else do
       let k := fresh n
@@ -1420,13 +1450,13 @@ partial def elimPlainReturns (fresh : Nat → String) (n : Nat) (multi : SExpr �
       let ρu := own us [] "u"
       let ts := ts.map (renameE ρt)
       let us := us.map (renameE ρu)
-      let (tb, n1) ← elimPlainReturns fresh (n + 1) multi ret (ts ++ rest)
-      let (ub, n2) ← elimPlainReturns fresh n1 multi ret (us ++ rest)
+      let (tb, n1) ← elimPlainReturns fresh (n + 1) multi ret tailBlocks (ts ++ rest)
+      let (ub, n2) ← elimPlainReturns fresh n1 multi ret tailBlocks (us ++ rest)
       let cs := cs.map (renameE ρt)
-      some (returnBranches p k cs tb ub multi ret, n2)
+      some (returnBranches p k cs tb ub multi ret tailBlocks, n2)
   | s :: rest =>
     if anyE (fun | .ret .. => true | _ => false) s then none
-    else (elimPlainReturns fresh n multi ret rest).map fun (r, n') => (s :: r, n')
+    else (elimPlainReturns fresh n multi ret tailBlocks rest).map fun (r, n') => (s :: r, n')
 
 /-- The surrounding scope's fallthrough code and currently registered
     cleanup, retained while normalizing an inner returning branch. -/
@@ -1488,10 +1518,10 @@ partial def elimScopedReturns (fresh : Nat → String) (multi : SExpr → Bool) 
 /-- Retain the existing plain-return shape, and preserve scope boundaries
     when a returning function also has cleanup. -/
 def elimReturns (fresh : Nat → String) (n : Nat) (multi : SExpr → Bool := fun _ => false)
-    (ret : Option STy := none) (ss : List SExpr) : Option (List SExpr × Nat) :=
+    (ret : Option STy := none) (ss : List SExpr) (tailBlocks : Bool := false) : Option (List SExpr × Nat) :=
   if ss.any (anyE isDefer) then
     elimScopedReturns fresh multi ret n ((ss.head?.map (·.pos)).getD default) (tailReturns ss) [] []
-  else elimPlainReturns fresh n multi ret ss
+  else elimPlainReturns fresh n multi ret tailBlocks ss
 
 /-- A function's name as written: a method's function `C$M` as `C.M`, and
     `F$all` as `F` (#283). -/
@@ -1945,13 +1975,7 @@ def firstBody (helper : String) (p : Pos) (b : String) (bty : Option STy) (cls :
   let group (v : SExpr) : SExpr := match alts? v with
     | some as => mk v.pos (as.map alt)
     | none => alt v
-  let rec chain : List (Option (List SExpr) × SExpr) → SExpr
-    | [] => .tuple p []
-    | [(_, v)] => group v
-    | (some cs, v) :: more => .ite p cs (group v) (some (chain more))
-    | (none, v) :: _ => group v
-  -- (an `if` chain with no choice, in a group, #283, too)
-  let tail' := if isBranchy tail || isBranchy.complete tail then chain (arms tail) else group tail
+  let tail' := mapLoopTail group tail
   let copies := sets.map fun (m, t) => SExpr.decl p m (some t) true (.ident p s!"{m}$in")
   .block p (copies ++ cls ++
     [.app p (.ident p "$first") [.block p [.decl p "$R" none false tail', .ident p "$R"]] false])
@@ -2562,7 +2586,17 @@ def inlineMulti (tops : List STop) (reserved : List String := []) (eager : List 
         throw s!"{p.show}: {shownFnName f} is overloaded with several values, and this overload calls {shownFnName f}: not supported yet (#283)"
   let ovs : List (String × List String) := ovMv.map fun f =>
     (f, (ovOf f).map fun (k, _, _) => if mv.contains k then k else f)
-  let mfs := fns.filter fun (n, _) => mv.contains n && !ovMv.contains n
+  let rawMfs := fns.filter fun (n, _) => mv.contains n && !ovMv.contains n
+  -- Analyze recursive shapes after source returns have selected their paths.
+  -- Keep original bodies for checking and nonrecursive inline boundaries.
+  let mfs ← rawMfs.mapM fun (n, f) => do
+    if !anyE (fun | .ret .. => true | _ => false) f.body then return (n, f)
+    let retIfs := (stmtsOf f.body).foldl (init := 0) fun acc s => acc + countRetIfs s
+    if retIfs > 16 then
+      throw s!"{f.pos.show}: {shownFnName n} has several values and {retIfs} ifs with a return: more than 16, and the code of an inlined call doubles with each, until choices compose without copying the clauses after them (#283)"
+    let some (ss, _) := elimReturns (fun i => s!"$k{i}") 0 (fun _ => false) none (stmtsOf f.body) true
+      | throw s!"{f.pos.show}: {shownFnName n} has several values and a return other than in the branches of an if, which would leave its caller once inlined (#235, #283)"
+    return (n, { f with body := .block f.pos ss })
   -- (every name the program binds: parameters, locals, fields, methods)
   let binders : List String := (tops.flatMap fun
     | .fn _ _ ps _ _ _ b => ps.map (·.name) ++ localsOf b
@@ -2615,7 +2649,17 @@ def inlineMulti (tops : List STop) (reserved : List String := []) (eager : List 
       | some f => ((callees.lookup h).getD []).all grp.contains && (loopShape? h mv f.body grp).isSome
       | none => false
   let loops : List String := recs.filter fun g =>
-    if (groupOf g).any eager.contains then false else
+    let grp := groupOf g
+    -- An incomplete tail erases its values. A returning any-valued group
+    -- may also yield non-void values, so forwarding its recursive values
+    -- unchanged would lose that erasure. Keep ordinary eager lowering.
+    let returning := grp.any fun h => ((rawMfs.lookup h).map fun f =>
+      anyE (fun | .ret .. => true | _ => false) f.body).getD false
+    let erasesRecursive := returning && grp.any fun h => ((mfs.lookup h).map fun f =>
+      styEq f.ret (.name "any") && anyE (fun
+        | i@(.ite ..) => !isBranchy.complete i && (namesUsed i).any grp.contains
+        | _ => false) f.body).getD false
+    if grp.any eager.contains || erasesRecursive then false else
     match mfs.lookup g with
     | some f => if (groupOf g).length == 1 then (callees.lookup g).getD [] == [g] && (loopShape? g mv f.body).isSome
       else groupOK g
@@ -2636,46 +2680,35 @@ def inlineMulti (tops : List STop) (reserved : List String := []) (eager : List 
       let caller := (needAll.find? fun h => ((callees.lookup h).getD []).contains g).getD g
       let pos := ((mfs.lookup caller).map (·.pos)).getD (((ovOf g).head?.map (·.2.1)).getD default)
       throw s!"{pos.show}: {shownFnName caller} has several values and is recursive, or called by a recursive one (so its values are computed at the call, F$all), and it calls {shownFnName g}, which is overloaded with several values: not supported yet (#283)"
+  for (n, f) in rawMfs do
+    -- Recursive cleanup still needs an invocation scope, including when
+    -- normalization would remove its registration after an early return.
+    let hasReturn := anyE (fun | .ret .. => true | _ => false) f.body
+    if ((stmtsOf f.body).any isDefer || (hasReturn && anyE isDefer f.body)) &&
+        (recs.contains n || needAll.contains n) then
+      throw s!"{f.pos.show}: {shownFnName n} has several values and a defer:, and is recursive or called by a recursive one (so its values are computed at the call, or taken lazily): not supported yet (#235, #283)"
   -- (effect-free: <computes> and no local state; that nothing they may
   -- run prints or calls `Err()` is checked on their Verse Core code, which
   -- shows every call, `checkEager`)
   for g in needAll do
-    let some f := mfs.lookup g | continue
+    let some f := rawMfs.lookup g | continue
     let why (w : String) : String :=
       s!"{f.pos.show}: {shownFnName g} has several values and is recursive, or called by a recursive one, {w}: such a function must be <computes>, keep no local state, and reach nothing that prints or calls Err(), as all its values are computed at a call (#235)"
     if !f.fx.contains "computes" then throw (why "and it is not <computes>")
     if anyE (fun | .set .. | .decl _ _ _ true _ => true | _ => false) f.body then
       throw (why "and it has a var or a set")
-  for (n, f) in mfs do
+  for (n, f) in rawMfs do
     if (fns.filter (·.1 == n)).length > 1 then
       throw s!"{f.pos.show}: {shownFnName n} has several values and is overloaded: such functions are not supported yet (#235)"
-    -- (a `return` in an `if`'s branches becomes guarded alternatives, #283;
-    -- not in a recursive one, computed or taken lazily from its body)
-    if anyE (fun | .ret .. => true | _ => false) f.body then
-      if recs.contains n || needAll.contains n then
-        throw s!"{f.pos.show}: {shownFnName n} has several values, a return, and is recursive or called by a recursive one: not supported yet (#235, #283)"
-      -- (each `if` with a `return` composes choices, whose clauses after them
-      -- are copied for each alternative, #296: the code doubles with each)
-      let retIfs := (stmtsOf f.body).foldl (init := 0) fun acc s => acc + countRetIfs s
-      if retIfs > 16 then
-        throw s!"{f.pos.show}: {shownFnName n} has several values and {retIfs} ifs with a return: more than 16, and the code of an inlined call doubles with each, until choices compose without copying the clauses after them (#283)"
-      match elimReturns (fun i => s!"$k{i}") 0 (fun _ => false) none (stmtsOf f.body) with
-      | none =>
-        throw s!"{f.pos.show}: {shownFnName n} has several values and a return other than in the branches of an if, which would leave its caller once inlined (#235, #283)"
-      | some _ => pure ()
-    -- (its own `defer:`s run as each value leaves it, inlined after its
-    -- value, #283; computed at the call or taken lazily, its body is a
-    -- function's, where they would run once, or never)
-    let ss := stmtsOf f.body
-    if ss.any isDefer then
-      if recs.contains n || needAll.contains n then
-        throw s!"{f.pos.show}: {shownFnName n} has several values and a defer:, and is recursive or called by a recursive one (so its values are computed at the call, or taken lazily): not supported yet (#235, #283)"
     -- (its body is inlined where other names may be in scope: so neither
     -- its name nor a name its body uses from outside may be bound anywhere)
     if binders.contains n then
       throw s!"{f.pos.show}: {n} has several values, and {n} is also the name of a parameter, local, field or method: rename one, as calls of {n} are inlined (#235)"
     -- (a name its body uses from outside that is bound somewhere too is
     -- checked where the body is inlined, `$freeNames`, #283)
+  let mfs := mfs.map fun (n, f) =>
+    (n, if loops.contains n then f else if needAll.contains n then
+      { f with body := eraseReturnTails f.body } else (rawMfs.lookup n).getD f)
   -- (no use as a value)
   let defaults (ps : List SParam) : List SExpr := ps.filterMap (·.default)
   let bodies : List SExpr := tops.flatMap fun
@@ -2721,6 +2754,7 @@ def inlineMulti (tops : List STop) (reserved : List String := []) (eager : List 
   -- (`F$all` for each that needs one: the array of its values)
   let (alls, _) ← (needAll.filterMapM (m := StateT Nat (Except String)) fun g => do
     let some f := mfs.lookup g | return none
+    let f := { f with body := eraseReturnTails f.body }
     let namedCalls := (namesUsed f.body).any fun h =>
       ((mfs.lookup h).map fun callee => callee.params.any (·.named)).getD false
     let body ← if namedCalls then inlineCalls mfs f.body needAll [] clash (groups := loopGroups) (ovs := ovs)

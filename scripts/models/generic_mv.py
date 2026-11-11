@@ -7,7 +7,7 @@
 with a model of their output, written from docs/LANGUAGE.md ("Choice",
 "Functions with several values", "Parametric functions", the readings table).
 
-    usage: generic_mv.py SEED OUTDIR -> OUTDIR/p.verse, OUTDIR/p.expected, OUTDIR/p.meta
+    usage: generic_mv.py SEED OUTDIR [no-recursive-returns] -> OUTDIR/p.verse, OUTDIR/p.expected, OUTDIR/p.meta
 
 The model:
   * a call of a function with several values is a choice whose values come in
@@ -34,6 +34,8 @@ The model:
     explicit witnesses for types used only by the suffix's written types;
   * generic mutual trees retain each member's type instance, item effects,
     value rollback, mutable captures and written-only witnesses;
+  * early and terminal source returns yield the same ordered values as
+    explicit conditional tails, ending only their current invocation;
   * methods may infer their own type parameters independently of receiver
     arguments, including through overrides, super tuples and interface defaults;
   * a super call of another method keeps its lexical ancestor, whether the
@@ -49,6 +51,8 @@ R387 = None
 # other programs)
 R392 = None
 RMethod = None
+# Source-spelling variants share the existing independent value/effect model.
+RECURSIVE_RETURNS = "no-recursive-returns" not in sys.argv[3:]
 
 # ---------------------------------------------------------------- types
 CLASSES = ["cat", "dog", "animal"]
@@ -359,6 +363,17 @@ d{n}({child_tps}) := class({parent}):{extra_field}
                         "    N > 0\n    Id(%s[X, Y, N - 1]) | X | Id(%s[Y, X, N - 1])") % (n, n, n)
         else:
             raise ValueError(k)
+
+        if RECURSIVE_RETURNS and self.path in ("lazy", "eager") and random.Random(n).random() < 0.5:
+            lines = self.src.splitlines()
+            if len(lines) > 1:
+                lines[-1] = "    return " + lines[-1].strip()
+                if k == "LIf":
+                    lines[-1:] = ["    if(N=0): return Y", "    NextN:=N-1",
+                                  f"    return X | {n}[Y,X,NextN]"]
+                elif k in ("ERep", "ETree"):
+                    lines[1] = "    if(N<=0):\n        false?\n        return X"
+                self.src = "\n".join(lines)
 
     def bind_helper(self, h):
         """INest / ILz: an inlined generic function calling another."""
@@ -902,6 +917,12 @@ class Gen:
     N <= {limit}
     Print("named visit {{N}} {{A}} {{B}} {{H.N}}")
     A | {target}[?B:={trace}(H,"arg",N+{extra}),{edge}]''')
+        if RECURSIVE_RETURNS and random.Random(self.seed * 1000033 + 467).random() < 0.5:
+            for i in range(1 if not mutual else 2):
+                at = -1 - i
+                lines = self.consumers[at].splitlines()
+                lines[-1] = "    return " + lines[-1].strip()
+                self.consumers[at] = "\n".join(lines)
         generic_edge = positional('X', 'Other', 'N-1')
         self.consumers.append(f'''{search}(X:t, Y:t, H:{meter}, Cut:int where t:type)<transacts>:?t =
     var Current:t = X
@@ -1156,6 +1177,19 @@ class Gen:
     Result:=option{{V:={call(first_entry, 'X', 'Y', first_depth, 'H')}, E:[]w=Concatenate(),set Seen+=V(2),V(2)>={first_cut},V}}
     Print("mut state {{H.N}} {{Seen}}")
     Result''')
+        if RECURSIVE_RETURNS and random.Random(self.seed * 1000033 + 466).random() < 0.5:
+            source = self.consumers[-1]
+            for i in range(3):
+                visit = f'    Print("mut visit {i} {{N}}")\n'
+                source = source.replace(visit, "", 1)
+            for i, line in enumerate([line for line in source.splitlines() if line.startswith("    if(N>0)then")]):
+                tail, base = line.strip()[len("if(N>0)then "):].split("else ")
+                tail = tail[1:-1].replace("N-1", "NextN")
+                source = source.replace(line,
+                    f'    if(N<=0):\n        Print("mut visit {i} {{N}}")\n'
+                    f'        BaseN:={2*i}\n        return {base.replace(f",{2*i})", ",BaseN)")}\n'
+                    f'    Print("mut visit {i} {{N}}")\n    NextN:=N-1\n    return {tail}', 1)
+            self.consumers[-1] = source
         h, option = self.fresh('MutState'), self.fresh('MutOption')
         self.main += [f'{h}:={cell}{{}}',
             f'for(V:={call(entry, x, y, depth, h)},set {h}.N+=V(2),V(2)>={cut}): Print("mut got {{V(0)}} {{V(1)}} {{V(2)}}")',
