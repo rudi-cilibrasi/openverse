@@ -1,0 +1,3 @@
+echo 5
+result 2 21
+exit=0

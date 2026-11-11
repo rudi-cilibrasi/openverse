@@ -202,14 +202,15 @@ def fnFits (env : TyEnv) (s : Sig) (t : Ty) : Bool :=
 
 /-- A generic value's instance at its own parameter/result shape. Unlike
     closed specialization, the expected type may mention the caller's
-    parameters. Bounds are checked here before constructing its value class. -/
-def fnValueArgs (env : TyEnv) (s : Sig) (t : Ty) : Option (List Ty) := do
+    parameters. `fixed` pins a bound method's receiver arguments. Bounds
+    are checked here before constructing its value class. -/
+def fnValueArgs (env : TyEnv) (s : Sig) (t : Ty) (fixed : List (String × Ty) := []) : Option (List Ty) := do
   let .struct m ts := t | none
   let some (k, es) := FnValues.parseName m | none
   if k != s.params.length || ts.length != k + 1 then none else do
     let own : FnValues.Shape := ⟨k, s.decides, s.suspends, s.fx⟩
     if !own.within (FnValues.shapeOf k es) then none else do
-      let σ ← ((s.params ++ [s.ret]).zip ts).foldlM (fun σ (a, b) => a.matchArg env σ b) []
+      let σ ← ((s.params ++ [s.ret]).zip ts).foldlM (fun σ (a, b) => a.matchArg env σ b) fixed
       if !((s.params ++ [s.ret]).zip ts).all (fun (a, b) => (a.subst σ).eqv b) then none else
       s.tparams.mapM fun (v, cmp) => do
         let t ← σ.lookup v
@@ -217,7 +218,8 @@ def fnValueArgs (env : TyEnv) (s : Sig) (t : Ty) : Option (List Ty) := do
 
 /-- A symbolic adapter's parameters come from its own first function shape,
     including tuple adaptation. The original function signature stays intact. -/
-def fnClassArgs (env : TyEnv) (cls : String) (target : Ty) : Option (List Ty) := do
+def fnClassArgs (env : TyEnv) (cls : String) (target : Ty)
+    (fixed : List (String × Ty) := []) : Option (List Ty) := do
   if !env.classes.contains cls then none else do
     let iface ← (env.info cls).ifaces.head?
     let (k, es) ← FnValues.parseName iface
@@ -226,7 +228,7 @@ def fnClassArgs (env : TyEnv) (cls : String) (target : Ty) : Option (List Ty) :=
       idx := 0, name := cls, params := ts.take k, ret := (ts.drop k).headD .void,
       decides := es.contains "decides", isConst := false,
       tparams := (env.sparams.lookup cls).getD [], fx := allowedFx es, suspends := es.contains "suspends" }
-    fnValueArgs env sig target
+    fnValueArgs env sig target fixed
 
 /-- A construction instance found with its original expected context. -/
 structure ConstructHint where
@@ -7979,28 +7981,28 @@ partial def elabMember (ctx : Ctx) (p : Pos) (r : R) (m : String) (exp : Option 
             let σ := (((env.sparams.lookup cls).getD []).map (·.1)).zip (env.argsAt sn targs x)
             .struct i (((env.iargs.lookup (cls, i)).getD []).map (Ty.subst σ))
           let candidates := (env.supers sn).filter fun x => env.classes.contains s!"{x}${f}$fn"
-          -- Method-local parameters follow the receiver's in its value
-          -- class. The expected function type determines one instance;
-          -- its hidden fields retain those witnesses alongside `$self`.
+          -- Fix the captured receiver before inferring an adapter from
+          -- the expected function type. Tuple expansion can replace even
+          -- a receiver parameter with components; `$self` pins them all.
           let methodTps (x : String) := ((env.sparams.lookup s!"{x}${f}$fn").getD []).drop
             ((env.sparams.lookup x).getD []).length
-          if genericMethod fv || candidates.any (fun x => !(methodTps x).isEmpty) then
-            if let some target := exp then
+          if let some target@(.struct shape _) := exp then
+            if let some (k, _) := FnValues.parseName shape then
               for x in candidates do
-                let .struct shape ts := typeOf x | continue
-                let some (k, es) := FnValues.parseName shape | continue
-                let sig : Sig := {
-                  idx := 0, name := f, params := ts.take k, ret := (ts.drop k).headD .void,
-                  decides := es.contains "decides", isConst := false, tparams := methodTps x,
-                  fx := allowedFx es, suspends := es.contains "suspends" }
-                let some args := fnValueArgs env sig target | continue
-                let cls := s!"{x}${f}$fn"
-                let tv ← fresh r.ty
-                let nm := s!"$recv{tv}"
-                let ctx' := { ctx with locals := { name := nm, slot := tv, ty := r.ty, mutable := false } :: ctx.locals }
-                let rv ← elabConstruct ctx' p cls [] [.decl p "$self" none false (.ident p nm)]
-                  (some (.struct cls (env.argsAt sn targs x ++ args)))
-                return ⟨.seq (.assign tv r.e) (← coerce p rv target), target⟩
+                for cls in [s!"{x}${f}$fn", s!"{x}${f}$fnPack", s!"{x}${f}$fnUnpack{k}"] do
+                  if !env.classes.contains cls then continue
+                  let some (_, selfTy, _) := (env.fields cls []).find? (·.1 == "$self") | continue
+                  let receiver := Ty.struct x (env.argsAt sn targs x)
+                  let some fixed := selfTy.matchArg env [] receiver | continue
+                  if !(selfTy.subst fixed).eqv receiver then continue
+                  let some args := fnClassArgs env cls target fixed | continue
+                  let tv ← fresh r.ty
+                  let nm := s!"$recv{tv}"
+                  let ctx' := { ctx with locals := { name := nm, slot := tv, ty := r.ty, mutable := false } :: ctx.locals }
+                  let rv ← elabConstruct ctx' p cls [] [.decl p "$self" none false (.ident p nm)]
+                    (some (.struct cls args))
+                  return ⟨.seq (.assign tv r.e) (← coerce p rv target), target⟩
+          if genericMethod fv || candidates.any (fun x => !(methodTps x).isEmpty) then
             eerr p s!"'{f}' is a generic method of {sn}: a function type determining all its method type arguments and satisfying its bounds must be expected (#209)"
           -- (#231) wanted at a closed function type that no value class of
           -- it gives but that it fits by variance: a class made for that type,
