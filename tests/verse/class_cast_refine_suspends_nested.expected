@@ -4,4 +4,9 @@ else done
 background
 caller done
 observed 7
+spawn observed 7
+spawn worker
+spawn cleanup 7
+nested spawn observed 9
+nested spawn worker
 exit=0

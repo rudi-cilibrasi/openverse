@@ -399,6 +399,8 @@ structure ESt where
   /-- Encounters with suspending casts whose lift is still being discovered.
       Their placeholder expressions have no suspension to scan. -/
   pendingSuspendingCasts : Nat := 0
+  /-- Pending casts that can wait on either path, for shared-slot checks. -/
+  pendingWaitingCasts : Nat := 0
   /-- Mutable locals captured by a branch or a potentially continuing rush arm. -/
   backgroundSlots : List Nat := []
   /-- The recursive functions with several values that a context taking
@@ -2847,6 +2849,12 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
   -- dispatch the lowering takes as a suspends method's call, #243; the
   -- `else` is the caller's code, which may suspend as any)
   let isS (f : Nat) : Bool := ctx.sigs.any fun s => s.idx == f && s.suspends
+  let immediateLifts := env.castRequests.filter (!·.waits) |>.map (·.name)
+  let mayWait (f : Nat) : Bool :=
+    ctx.sigs.any fun s => s.idx == f && s.suspends && !immediateLifts.contains s.name
+  let startsTask (f : Nat) : Bool :=
+    ctx.sigs.any fun s => s.idx == f && (s.name == "$spawnMark" || s.name == "$branchMark")
+  let waits (e : Expr) : Bool := Suspend.countSusp mayWait (fun _ => false) false startsTask e > 0
   let elseOf : EM R := match elseE with
     | none => pure ⟨.lit .void, .void⟩
     | some ee => elabE ctx ee exp
@@ -2869,12 +2877,13 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
     -- (its own effects, which its function declares; the enclosing one's too)
     let fx0 := (← get).fx
     let pending0 := (← get).pendingSuspendingCasts
+    let waiting0 := (← get).pendingWaitingCasts
     let background := (← get).backgroundSlots
     modify fun st => { st with fx := [] }
     let rb ← elabE ctxB body (if elseE.isNone then some .void else exp.map refine)
-    let pendingThen := (← get).pendingSuspendingCasts
-    let thenSuspends := ctx.suspends && (pendingThen != pending0 || Suspend.hasSusp isS rb.e)
-    if thenSuspends then
+    let waitingThen := (← get).pendingWaitingCasts
+    let thenWaits := ctx.suspends && (waitingThen != waiting0 || waits rb.e)
+    if thenWaits then
       for l in caps do
         let n := Choice.shownName l.name
         if l.mutable && background.contains l.slot then
@@ -2887,10 +2896,11 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
     modify fun st => { st with fx := fx0 }
     for (k, q, via) in fxB do noteFx q [k] via
     let re ← elseOf
-    -- The dispatch suspends when either side does, including a nested cast
-    -- that still emits a placeholder in this pass.
-    let pendingElse := (← get).pendingSuspendingCasts != pendingThen
-    let suspendsB := thenSuspends || (ctx.suspends && (pendingElse || Suspend.hasSusp isS re.e))
+    -- Preserve the dispatch shape when lowering either side. Task starts
+    -- need lowering too, but only a wait exposes copies of shared slots.
+    let hasPending := (← get).pendingSuspendingCasts != pending0
+    let suspendsB := ctx.suspends && (hasPending || Suspend.hasSusp isS rb.e || Suspend.hasSusp isS re.e)
+    let elseWaits := ctx.suspends && ((← get).pendingWaitingCasts != waitingThen || waits re.e)
     let τ' : Ty := if elseE.isNone then .void else exp.getD re.ty
     let ret := refine τ'
     discard <| coerce p rb ret
@@ -2928,7 +2938,7 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
       params := ((D, dTy) :: sig).map (fun (n, t) => { name := n, ty := t.toSTy }) ++
         extra.map fun (n, _) => { name := s!"$type{n}", ty := .name n },
       tparams := tps.map fun (n, c) => { pos := p, name := n, constraint := if c then "comparable" else "type" },
-      specs, ret := ret.toSTy, subst := σ, opened := opened.map fun (n, v, _) => (n, v),
+      specs, ret := ret.toSTy, subst := σ, opened := opened.map fun (n, v, _) => (n, v), waits := thenWaits,
       -- (made: a branch the elaborator made, for a cast with clauses
       -- after it, #286, which the source does not have as such)
       -- (and a tagged one, which the source's places do not find, #53)
@@ -2936,6 +2946,8 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
     modify fun st => if st.castNeeds.any (·.key == key) then st else { st with castNeeds := st.castNeeds ++ [lift] }
     if suspendsB then
       modify fun st => { st with pendingSuspendingCasts := st.pendingSuspendingCasts + 1 }
+    if thenWaits || elseWaits then
+      modify fun st => { st with pendingWaitingCasts := st.pendingWaitingCasts + 1 }
     -- (a placeholder: this elaboration goes no further)
     return some ⟨if decides then .prim .fail [] else .prim .userErr [], τ'⟩
   | some l =>
