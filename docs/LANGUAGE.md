@@ -180,8 +180,10 @@ Main():void =
   `F:type{_(:t):t} = Identity`. The value retains those arguments and their
   witnesses after the creating function returns. Repeated and compound
   parameter/result types, comparable bounds, failure and suspension are
-  supported (#209). An open expected type uses the declared parameter
-  shape; tuple flattening/packing still requires a closed expected type.
+  supported (#209). Open expected types can also pack several parameters
+  into one tuple or expand a tuple parameter into separate parameters.
+  A bare generic parameter can instantiate to the tuple of the target
+  parameters. Empty and single-element tuples work on these paths too.
   Comparable arguments may also be unique classes or comparable value
   structs. With no determining expected
   type, a polymorphic identifier remains insufficient (`Map(Xs, Identity)`
@@ -194,8 +196,23 @@ Main():void =
   includes generic callers, interface views/defaults, overrides and
   suspending methods. The receiver is evaluated once when the value is
   created; later calls observe that receiver's current fields.
-- Methods with their own type parameters, overloaded functions and methods,
-  and ones with named parameters cannot be used as values. Lambdas and
+- A method with its own type parameters can be used at an expected function
+  type that determines one instance and satisfies its bounds (#209). The
+  receiver fixes the class arguments; the expected type fixes the method
+  arguments. The value retains both, including after its creator returns.
+  With no determining expected type, the method cannot be bound as a value.
+- Bound methods also pack and expand tuples at an expected function type,
+  including open types in generic code (#209). For example, a method
+  `Pair(X:a,Y:b):tuple(a,b)` can be a `type{_(:tuple(a,b)):tuple(a,b)}`.
+  A bare method parameter may stand for the whole tuple, whether its type
+  comes from the receiver or the method's own type parameters. The
+  receiver's arguments remain fixed; tuple adaptation cannot change them.
+  Empty and single-element tuples, comparable bounds, interface defaults,
+  overrides, failure and suspension use the same captured receiver and
+  argument order as ordinary calls. Without an expected function type,
+  a method value keeps its declared shape.
+- Overloaded functions and methods and ones with named parameters cannot
+  be used as values. Lambdas and
   nested functions are not released in Verse, so there are none.
 
 ## defer

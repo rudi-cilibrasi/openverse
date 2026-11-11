@@ -57,11 +57,17 @@ kinds=(
   method-failure
   method-first
   method-for
+  method-instance-first
+  method-instance-for
+  method-tuple-first
+  method-tuple-for
   mutual-generic-alt-first
   mutual-generic-first
   mutual-generic-for
   open-function-first
   open-function-for
+  open-tuple-first
+  open-tuple-for
   outer-effect-composed
   outer-effect-exclusive
   outer-effect-refined
@@ -122,6 +128,55 @@ for kind in "${kinds[@]}"; do
 import sys
 kind, count = sys.argv[1], int(sys.argv[2])
 print('Two(N:int):int = N | N + 1')
+if kind.startswith('method-tuple-'):
+    print('''box(t:type):=class:
+    V:t
+    Id(X:u where u:type)<computes>:u=X''')
+    params = ','.join(f'B{i}:box(h{i}),X{i}:a{i},Y{i}:b{i}' for i in range(count))
+    tparams = ','.join(f'h{i}:type,a{i}:type,b{i}:type' for i in range(count))
+    binds = '\n'.join(f'    F{i}:type{{_(:a{i},:b{i})<computes>:tuple(a{i},b{i})}}=B{i}.Id' for i in range(count))
+    clauses = ','.join(f'A{i}:=F{i}(X{i},Y{i})|F{i}(X{i},Y{i})' for i in range(count))
+    if kind.endswith('first'):
+        body = f'    if({clauses},E:[]h0=Concatenate())then E.Length else -1'
+    else:
+        body = f'    R:=for({clauses},E:[]h0=Concatenate()):A0\n    R.Length'
+    print(f'Run({params} where {tparams})<computes>:int=\n{binds}\n{body}')
+    args = ','.join('box(string){V:="tag"},7,"s"' if i%2==0 else 'box(int){V:=3},"v",9' for i in range(count))
+    print(f'Main():void=Print("{{Run({args})}}")')
+    sys.exit(0)
+if kind.startswith('method-instance-'):
+    print('''box(t:type):=class:
+    V:t
+    Same(X:u where u:type)<computes>:u=X''')
+    params = ','.join(f'B{i}:box(a{i}),X{i}:b{i}' for i in range(count))
+    tparams = ','.join(f'a{i}:type,b{i}:type' for i in range(count))
+    binds = '\n'.join(f'    F{i}:type{{_(:b{i})<computes>:b{i}}}=B{i}.Same' for i in range(count))
+    clauses = ','.join(f'A{i}:=F{i}(X{i})|F{i}(X{i})' for i in range(count))
+    if kind.endswith('first'):
+        body = f'    if({clauses},E:[]a0=Concatenate())then E.Length else -1'
+    else:
+        body = f'    R:=for({clauses},E:[]a0=Concatenate()):A0\n    R.Length'
+    print(f'Run({params} where {tparams})<computes>:int=\n{binds}\n{body}')
+    args = []
+    for i in range(count):
+        ty, value, x = ('int','7','"s"') if i%2==0 else ('string','"v"','9')
+        args.extend([f'box({ty}){{V:={value}}}',x])
+    print(f'Main():void=Print("{{Run({",".join(args)})}}")')
+    sys.exit(0)
+if kind.startswith('open-tuple-'):
+    print('Id(X:t where t:type)<computes>:t=X')
+    params = ','.join(f'X{i}:a{i},Y{i}:b{i}' for i in range(count))
+    tparams = ','.join(f'a{i}:type,b{i}:type' for i in range(count))
+    binds = '\n'.join(f'    F{i}:type{{_(:a{i},:b{i})<computes>:tuple(a{i},b{i})}}=Id' for i in range(count))
+    clauses = ','.join(f'A{i}:=F{i}(X{i},Y{i})|F{i}(X{i},Y{i})' for i in range(count))
+    if kind.endswith('first'):
+        body = f'    if({clauses},E:[]a0=Concatenate())then E.Length else -1'
+    else:
+        body = f'    R:=for({clauses},E:[]a0=Concatenate()):A0\n    R.Length'
+    print(f'Run({params} where {tparams})<computes>:int=\n{binds}\n{body}')
+    args = ','.join('7,"s"' if i%2==0 else '"v",9' for i in range(count))
+    print(f'Main():void=Print("{{Run({args})}}")')
+    sys.exit(0)
 if kind.startswith('open-function-'):
     print('Id(X:t where t:type)<computes>:t=X')
     params = ','.join(f'X{i}:t{i}' for i in range(count))

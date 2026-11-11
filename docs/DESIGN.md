@@ -968,6 +968,21 @@ flowchart LR
   the captured receiver's value class, as ordinary opened overrides do.
   Calls keep their static function type, local refinement/bound evidence,
   effects and suspension behavior (#209).
+  A method with its own parameters adds them after the class's in its
+  value class. They get private names before receiver substitution, so a
+  caller's `u` cannot capture the method's `u`. The receiver supplies the
+  class arguments, and `fnValueArgs` matches the remaining method arguments
+  against the expected function type and checks their bounds. All witnesses
+  remain in the value object, with the captured receiver. A value denotes
+  one instance; no implicit polymorphic callable is introduced.
+  Method tuple adapters use the same symbolic packing/expansion as generic
+  functions. Binding first matches the adapter's `$self` type against the
+  receiver at its declaring class, then seeds `fnClassArgs` with those fixed
+  arguments. The expected function type can infer the remaining arguments
+  but cannot change the receiver's. Expanding a bare receiver parameter
+  also substitutes its tuple components into `$self`; parameters absent
+  from the callable signature remain inferable from that field. Declared
+  adapters retain precedence, and the receiver is stored once.
 - **`subscribable_event(t)`** is Verse code in a prelude (`subPrelude`):
   `event(t)` with an array of (subscription, handler) pairs, the handlers
   of type `type{_(:t):void}`, called under the refinement in `Signal`. A
@@ -1021,8 +1036,14 @@ flowchart LR
   them as a generic receiver's does. Values can escape and be called under
   GADT refinements without borrowing the creator's slots. This also serves
   closed instances at the declared shape, including comparable classes and
-  value structs. Other closed requests keep the specialization path above;
-  open tuple reshaping remains separate.
+  value structs. Generic tuple adapters preserve symbolic parameters while
+  packing several inputs or expanding a tuple. A bare parameter becomes
+  the tuple of the target inputs; its comparable bound transfers to every
+  component. The declared shape is tried first. Each extra adapter is keyed
+  by the function and target shape, and `fnClassArgs` infers its instance
+  from the expected type. Tuple arguments are stored once before projection.
+  Other closed requests keep the specialization path above. These adapters
+  do not convert already-bound function values to different function types.
 
 ## Concurrency: suspends functions as frames
 
@@ -1094,6 +1115,18 @@ chain of tests becomes a suspends function `$dispatchK` of the slots the
 chain uses (the receiver, the arguments, and the slots each test binds the
 narrowed receiver to, which start as the caller's, so the function needs
 no initial values), and the root calls that.
+
+Source heap effects are checked before concurrency lowering. Starting a
+task also writes the scheduler's implementation state, even when the
+spawned call and its immediate callers have only `<computes>`, `<reads>`
+or `<allocates>`. The final Core functions must record those writes too.
+After creating the entry wrapper, `Front/CompilerWrites.lean` compares the
+flags before and after lowering, then propagates newly introduced write
+requirements through callers to a fixed point, including recursive callers,
+generated dispatch and function-value helpers, and the entry wrapper.
+Existing source writers are not propagation seeds. This changes only
+Core's implementation flags: source permissions and the independent Core
+write-soundness check remain in force.
 
 Each pass resumes `Main`'s frame, then every root whose suspension point
 is not -1 (done). It reaches a root through a test of its class

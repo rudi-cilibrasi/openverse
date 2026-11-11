@@ -1,0 +1,5 @@
+receiver 1
+packet 2
+pair 3
+result new old input
+exit=0

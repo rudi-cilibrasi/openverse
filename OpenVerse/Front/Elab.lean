@@ -32,6 +32,7 @@ import OpenVerse.Front.Refine
 import OpenVerse.Front.FrameRefs
 import OpenVerse.Front.SourceFrames
 import OpenVerse.Front.FailCapture
+import OpenVerse.Front.CompilerWrites
 import OpenVerse.Front.Types
 import Std.Data.HashMap
 
@@ -201,18 +202,33 @@ def fnFits (env : TyEnv) (s : Sig) (t : Ty) : Bool :=
 
 /-- A generic value's instance at its own parameter/result shape. Unlike
     closed specialization, the expected type may mention the caller's
-    parameters. Bounds are checked here before constructing its value class. -/
-def fnValueArgs (env : TyEnv) (s : Sig) (t : Ty) : Option (List Ty) := do
+    parameters. `fixed` pins a bound method's receiver arguments. Bounds
+    are checked here before constructing its value class. -/
+def fnValueArgs (env : TyEnv) (s : Sig) (t : Ty) (fixed : List (String × Ty) := []) : Option (List Ty) := do
   let .struct m ts := t | none
   let some (k, es) := FnValues.parseName m | none
   if k != s.params.length || ts.length != k + 1 then none else do
     let own : FnValues.Shape := ⟨k, s.decides, s.suspends, s.fx⟩
     if !own.within (FnValues.shapeOf k es) then none else do
-      let σ ← ((s.params ++ [s.ret]).zip ts).foldlM (fun σ (a, b) => a.matchArg env σ b) []
+      let σ ← ((s.params ++ [s.ret]).zip ts).foldlM (fun σ (a, b) => a.matchArg env σ b) fixed
       if !((s.params ++ [s.ret]).zip ts).all (fun (a, b) => (a.subst σ).eqv b) then none else
       s.tparams.mapM fun (v, cmp) => do
         let t ← σ.lookup v
         if cmp && !t.comparable env then none else some t
+
+/-- A symbolic adapter's parameters come from its own first function shape,
+    including tuple adaptation. The original function signature stays intact. -/
+def fnClassArgs (env : TyEnv) (cls : String) (target : Ty)
+    (fixed : List (String × Ty) := []) : Option (List Ty) := do
+  if !env.classes.contains cls then none else do
+    let iface ← (env.info cls).ifaces.head?
+    let (k, es) ← FnValues.parseName iface
+    let ts := (env.iargs.lookup (cls, iface)).getD []
+    let sig : Sig := {
+      idx := 0, name := cls, params := ts.take k, ret := (ts.drop k).headD .void,
+      decides := es.contains "decides", isConst := false,
+      tparams := (env.sparams.lookup cls).getD [], fx := allowedFx es, suspends := es.contains "suspends" }
+    fnValueArgs env sig target fixed
 
 /-- A construction instance found with its original expected context. -/
 structure ConstructHint where
@@ -4486,11 +4502,12 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
             return ⟨← coerce p r ty, ty⟩
           else if !s.tparams.isEmpty then
             if let some ty := exp then
-              if ctx.types.classes.contains s!"{n}$fn" then
-                if let some args := fnValueArgs ctx.types s ty then
-                  let cls := s!"{n}$fn"
-                  let r ← elabConstruct ctx p cls [] [] (some (.struct cls args))
-                  return ⟨← coerce p r ty, ty⟩
+              if let .struct shape _ := ty then
+                if let some (k, _) := FnValues.parseName shape then
+                  for cls in [s!"{n}$fn", s!"{n}$fnPack", s!"{n}$fnUnpack{k}"] do
+                    let some args := fnClassArgs ctx.types cls ty | continue
+                    let r ← elabConstruct ctx p cls [] [] (some (.struct cls args))
+                    return ⟨← coerce p r ty, ty⟩
             if let some t := askFor then
               modify fun st => { st with fnNeeds := st.fnNeeds ++ [(n, t)] }
               return ⟨.prim .userErr [], t⟩
@@ -8065,7 +8082,12 @@ partial def elabMember (ctx : Ctx) (p : Pos) (r : R) (m : String) (exp : Option 
         if visibleOv.length > 1 then
           eerr p s!"'{f}' is an overloaded method of {sn}: an overloaded method cannot be used as a value (Book of Verse ch. 6)"
         let hasValue := (ctx.types.supers sn).any fun x => ctx.types.classes.contains s!"{x}${f}$fn"
-        if ctx.hasMethod sn f || (visibleOv.length == 1 && hasValue) then
+        let genericMethod (m : String) : Bool :=
+          match ctx.methodDecl? sn m with
+          | some owner => (ctx.sig? s!"{owner}.{m}").any fun sg => sg.named.isEmpty &&
+              sg.tparams.length > ((ctx.types.sparams.lookup owner).getD []).length
+          | none => false
+        if ctx.hasMethod sn f || (visibleOv.length == 1 && (hasValue || genericMethod visibleOv.head!)) then
           -- a method as a value (#210): an object of the value class of the
           -- nearest class that declares or overrides it (#219: an override
           -- may narrow the result), holding the receiver, of its type, or
@@ -8086,6 +8108,29 @@ partial def elabMember (ctx : Ctx) (p : Pos) (r : R) (m : String) (exp : Option 
             let σ := (((env.sparams.lookup cls).getD []).map (·.1)).zip (env.argsAt sn targs x)
             .struct i (((env.iargs.lookup (cls, i)).getD []).map (Ty.subst σ))
           let candidates := (env.supers sn).filter fun x => env.classes.contains s!"{x}${f}$fn"
+          -- Fix the captured receiver before inferring an adapter from
+          -- the expected function type. Tuple expansion can replace even
+          -- a receiver parameter with components; `$self` pins them all.
+          let methodTps (x : String) := ((env.sparams.lookup s!"{x}${f}$fn").getD []).drop
+            ((env.sparams.lookup x).getD []).length
+          if let some target@(.struct shape _) := exp then
+            if let some (k, _) := FnValues.parseName shape then
+              for x in candidates do
+                for cls in [s!"{x}${f}$fn", s!"{x}${f}$fnPack", s!"{x}${f}$fnUnpack{k}"] do
+                  if !env.classes.contains cls then continue
+                  let some (_, selfTy, _) := (env.fields cls []).find? (·.1 == "$self") | continue
+                  let receiver := Ty.struct x (env.argsAt sn targs x)
+                  let some fixed := selfTy.matchArg env [] receiver | continue
+                  if !(selfTy.subst fixed).eqv receiver then continue
+                  let some args := fnClassArgs env cls target fixed | continue
+                  let tv ← fresh r.ty
+                  let nm := s!"$recv{tv}"
+                  let ctx' := { ctx with locals := { name := nm, slot := tv, ty := r.ty, mutable := false } :: ctx.locals }
+                  let rv ← elabConstruct ctx' p cls [] [.decl p "$self" none false (.ident p nm)]
+                    (some (.struct cls args))
+                  return ⟨.seq (.assign tv r.e) (← coerce p rv target), target⟩
+          if genericMethod fv || candidates.any (fun x => !(methodTps x).isEmpty) then
+            eerr p s!"'{f}' is a generic method of {sn}: a function type determining all its method type arguments and satisfying its bounds must be expected (#209)"
           -- (#231) wanted at a closed function type that no value class of
           -- it gives but that it fits by variance: a class made for that type,
           -- `{x}${f}$fn${k}` (the nearest class's, without type parameters),
@@ -8112,7 +8157,7 @@ partial def elabMember (ctx : Ctx) (p : Pos) (r : R) (m : String) (exp : Option 
                       modify fun st => { st with fnNeeds := st.fnNeeds ++ [(key, t)] }
                       return ⟨.seq r.e (.prim .userErr []), t⟩
           let some x := (candidates.find? fun x => exp == some (typeOf x)).orElse fun _ => candidates.head?
-            | eerr p s!"'{f}' is a method of {sn} that cannot be used as a value: call it with {f}(…) (a method with its own type parameters or named parameters is not a value, #210)"
+            | eerr p s!"'{f}' is a method of {sn} that cannot be used as a value: call it with {f}(…) (a method with named parameters is not a value, #210)"
           let cls := s!"{x}${f}$fn"
           let xargs := env.argsAt sn targs x
           let t ← fresh r.ty
@@ -8122,7 +8167,7 @@ partial def elabMember (ctx : Ctx) (p : Pos) (r : R) (m : String) (exp : Option 
           let own := typeOf x
           return ⟨.seq (.assign t r.e) (← coerce p rv own), own⟩
         if visibleOv.length == 1 then
-          eerr p s!"'{f}' is a method of {sn} that cannot be used as a value: call it with {f}(…) (a method with its own type parameters or named parameters is not a value, #210)"
+          eerr p s!"'{f}' is a method of {sn} that cannot be used as a value: call it with {f}(…) (a method with named parameters is not a value, #210)"
         eerr p s!"class {sn} has no field '{f}'"
       eerr p s!"struct {sn} has no field '{f}'"
   | t, m => eerr p s!"{t.show} has no member '{m}'"
@@ -11803,6 +11848,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   slotTys := capturedSlots
   let fsigs0 := capturedSigs.fns
   fsigs := fsigs0
+  let beforeConcurrency := fns
   if usesConc then
     let (fns1, slotTys1, fsigs1, classTable1, frameClasses1, mainCall1, framePins1, schedMore) ←
       lowerOpening fun forced =>
@@ -11825,6 +11871,8 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
                       body := protoPrelude protoList mainCall }
     slotTys := slotTys.push []
     fsigs := fsigs ++ [([], if mainSig.suspends then VTy.void else mainSig.ret.toVTy env)]
+  if usesConc then
+    fns := CompilerWrites.propagate beforeConcurrency fns
   let P : Prog := { fns := fns.toList, main }
   if !P.check then
     let bad := P.fns.filter fun fn => (!fn.decides && fn.body.mayFail P) ||
