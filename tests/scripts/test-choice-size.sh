@@ -18,6 +18,7 @@ kinds=(
   context-method-first
   context-method-for
   context-method-nested
+  context-method-nested-dispatch
   clause-break-composed
   clause-break-exclusive
   clause-break-refined
@@ -230,14 +231,19 @@ if kind.startswith('first-return-'):
     call = f'Run({args},7)' + ('.Length' if generic else '')
     print(f'Main():void={call}' if void else f'Main():void=Print("{{{call}}}")')
     sys.exit(0)
-if kind == 'context-method-nested':
+if kind in ('context-method-nested', 'context-method-nested-dispatch'):
     print('''box:=class:
     Same(X:t where t:type)<computes>:t=X
 Apply(F:type{_(:t)<computes>:t},X:t where t:type)<computes>:t=F(X)''')
+    dispatch = kind.endswith('dispatch')
+    if dispatch:
+        print('''holder:=class:
+    Apply(F:type{_(:t)<computes>:t},X:t where t:type)<computes>:t=F(X)''')
     receiver = 'box{}'
     for _ in range(count * 4):
-        receiver = f'Apply(({receiver}).Same,box{{}})'
-    print(f'Main():void=\n    F:type{{_(:int)<computes>:int}}=({receiver}).Same\n    Print("{{F(7)}}")')
+        receiver = f'{"H.Apply" if dispatch else "Apply"}(({receiver}).Same,box{{}})'
+    prefix = '    H:=holder{}\n' if dispatch else ''
+    print(f'Main():void=\n{prefix}    F:type{{_(:int)<computes>:int}}=({receiver}).Same\n    Print("{{F(7)}}")')
     sys.exit(0)
 if kind.startswith('context-method-'):
     print('''box(h:type):=class:

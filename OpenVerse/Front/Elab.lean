@@ -654,7 +654,11 @@ def argNeedsTypeWith (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx) 
   | .ident _ n =>
     return (ctx.lookup n).isNone && ctx.selfClass.any (ctx.methodValueNeedsType · n)
   | .member _ receiver m =>
-    let key := reprStr (receiver, ctx.locals.map (fun l => (l.name, l.ty)), ctx.types.tvars,
+    -- Unreferenced dispatch temporaries have fresh names in each trial;
+    -- they must not prevent sharing the same receiver's type lookup.
+    let locals := ctx.locals.filter fun l => l.name == "Self" || l.name == "$Self" ||
+      Choice.anyE (fun | .ident _ n => n == l.name | _ => false) receiver
+    let key := reprStr (receiver, locals.map (fun l => (l.name, l.ty)), ctx.types.tvars,
       ctx.selfClass, ctx.selfMethod, ctx.fnFx, ctx.retTy, ctx.frameName, ctx.frameArgs, ctx.retries,
       [ctx.canFail, ctx.inTaking, ctx.suspends, ctx.inLoop, ctx.inParamDefault, ctx.inDefer,
        ctx.inBlock, ctx.inCtor, ctx.inArm, ctx.inBranch, ctx.inDefaultCheck, ctx.inRepeat,
