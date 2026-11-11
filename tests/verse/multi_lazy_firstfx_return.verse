@@ -1,5 +1,4 @@
-# expect: 7:14: G has several values, is recursive and may print in its clauses
-# (#246, #283) the clauses after an effectful generator, where the first success is taken, run in a function of their own: a return there would leave it, not F; refused
+# A source return commits the retained recursive prefixes and skips later conditions.
 G(N:int)<transacts><decides>:int =
     Print("at {N}")
     N | G[N + 1]

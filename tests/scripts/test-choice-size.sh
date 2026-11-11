@@ -25,6 +25,26 @@ kinds=(
   construct-failure
   construct-first
   construct-for
+  context-block-composed
+  context-block-exclusive
+  context-block-first
+  context-block-lazy-first
+  context-constructor-composed
+  context-constructor-exclusive
+  context-constructor-first
+  context-constructor-lazy-first
+  context-defer-composed
+  context-defer-exclusive
+  context-defer-first
+  context-defer-lazy-first
+  context-field-default-composed
+  context-field-default-exclusive
+  context-field-default-first
+  context-field-default-lazy-first
+  context-param-default-composed
+  context-param-default-exclusive
+  context-param-default-first
+  context-param-default-lazy-first
   covariant-failure
   covariant-first
   covariant-for
@@ -36,6 +56,15 @@ kinds=(
   dispatch-default-first
   dispatch-default-for
   exclusive
+  immediate-event-refined
+  immediate-spawn-refined
+  first-return-composed
+  first-return-generic
+  first-return-independent
+  first-return-lazy
+  first-return-mutual
+  first-return-refined
+  first-return-void
   immediate-suspends-composed
   immediate-suspends-exclusive
   immediate-suspends-nested
@@ -130,6 +159,74 @@ for kind in "${kinds[@]}"; do
 import sys
 kind, count = sys.argv[1], int(sys.argv[2])
 print('Two(N:int):int = N | N + 1')
+if kind == 'immediate-event-refined':
+    print('pair(a:type,b:type) := class { A:a;B:b }')
+    print('dup(t:type) := class(pair(t,t)) { C:int=4 }')
+    print('Log(N:int):void={}')
+    params = ','.join(f'P{i}:pair(a{i},b{i})' for i in range(count))
+    tparams = ','.join(f'a{i}:type,b{i}:type' for i in range(count))
+    clauses = ','.join(f'A{i}:=if(D{i}:=dup[P{i}])then(D{i}.C|D{i}.C+1)else 0' for i in range(count))
+    print(f'Run({params},E:subscribable_event(int) where {tparams}):int=\n    var Total:int=0\n    for({clauses}):\n        C:=E.Subscribe(Log)\n        E.Signal(A0)\n        set Total+=1\n    Total')
+    args = ','.join('dup(int){A:=1,B:=2}' if i%2==0 else 'dup(string){A:="s",B:="t"}' for i in range(count))
+    print(f'Main():void=Print("{{Run({args},subscribable_event(int){{}})}}")')
+    sys.exit(0)
+if kind == 'immediate-spawn-refined':
+    print('pair(a:type,b:type) := class { A:a;B:b }')
+    print('dup(t:type) := class(pair(t,t)) { C:int=4 }')
+    print('Child(N:int,X:t,?E:[]t=Concatenate() where t:type)<suspends>:void=Sleep(0.0)')
+    params = ','.join(f'P{i}:pair(a{i},b{i})' for i in range(count))
+    tparams = ','.join(f'a{i}:type,b{i}:type' for i in range(count))
+    clauses = ','.join(f'A{i}:=if(D{i}:=dup[P{i}])then(D{i}.C|D{i}.C+1)else 0' for i in range(count))
+    print(f'Run({params},X:t where {tparams},t:type):int=\n    var Total:int=0\n    for({clauses}):\n        T:=spawn{{Child(A0,X)}}\n        set Total+=1\n    Total')
+    args = ','.join('dup(int){A:=1,B:=2}' if i%2==0 else 'dup(string){A:="s",B:="t"}' for i in range(count))
+    print(f'Main()<suspends>:void=\n    Print("{{Run({args},array{{7}})}}")\n    Sleep(1.0)')
+    sys.exit(0)
+if kind.startswith(('context-block-', 'context-constructor-', 'context-defer-', 'context-field-default-', 'context-param-default-')):
+    print('cell:=class{var N:int=0}')
+    print('Early(N:int):int=\n    if(N<0):return 0\n    N|N+1')
+    print('Lazy(N:int)<computes><decides>:int=\n    N>=0\n    N|Lazy[N-1]')
+    first = kind.endswith('first')
+    value = 'Lazy[3]' if kind.endswith('lazy-first') else 'Early(0)' if kind.endswith('exclusive') else '(Two(0)|Two(2))'
+    clauses = ','.join(f'A{i}:={value}' for i in range(count))
+    if first:
+        clauses += ',' + ','.join(f'set H.N+=A{i},A{i}=0' for i in range(count))
+        expr = f'block{{H:=cell{{}};if({clauses},E:[]t=Concatenate())then H.N+E.Length else -1}}'
+    else:
+        expr = f'block{{H:=cell{{}};R:=for({clauses}):block{{E:[]t=Concatenate();set H.N+=A0;E.Length}};R.Length+H.N}}'
+    if kind.startswith('context-param-default-'):
+        print(f'Run(X:t,?N:int={expr} where t:type):int=N\nMain():void=Print("{{Run(7)}}")')
+    elif kind.startswith('context-field-default-'):
+        print(f'box(t:type):=class{{Data:t;N:int={expr}}}\nRun(X:t where t:type):int=box(t){{Data:=X}}.N\nMain():void=Print("{{Run(7)}}")')
+    elif kind.startswith('context-constructor-'):
+        print(f'box(t:type):=class{{Data:t;N:int=0}}\nMake<constructor>(X:t where t:type):=box(t):\n    Data:=X\n    N:={expr}\nMain():void=Print("{{Make(7).N}}")')
+    elif kind.startswith('context-block-'):
+        print(f'box(t:type):=class:\n    Data:t\n    var N:int=0\n    block:set N={expr}\nRun(X:t where t:type):int=box(t){{Data:=X}}.N\nMain():void=Print("{{Run(7)}}")')
+    else:
+        print(f'Run(X:t where t:type):void=\n    defer:Print("{{{expr}}}")\n    Print("start")\nMain():void=Run(7)')
+    sys.exit(0)
+if kind.startswith('first-return-'):
+    print('pair(a:type,b:type):=class{A:a;B:b}\ndup(t:type):=class(pair(t,t)){C:int=4}')
+    print('cell:=class{var N:int=0}')
+    target = 'Other' if kind.endswith('mutual') else 'Lazy'
+    print(f'Lazy(H:cell,N:int)<transacts><decides>:int=\n    N>=0\n    set H.N+=1\n    N|{target}[H,N-1]')
+    if kind.endswith('mutual'):
+        print('Other(H:cell,N:int)<transacts><decides>:int=\n    N>=0\n    set H.N+=1\n    N|Lazy[H,N-1]')
+    independent = kind.endswith('independent')
+    params = ','.join(f'P{i}:pair(a{i},b{i})' for i in range(count)) if independent else 'P:pair(a,b)'
+    types = ','.join(f'a{i}:type,b{i}:type' for i in range(count)) if independent else 'a:type,b:type'
+    values = [f'if(D{i}:=dup[P{i}])then(D{i}.C|D{i}.C+1)else 0' for i in range(count)] if independent else ['if(D:=dup[P])then(D.C|D.C+1)else 0']*count
+    if kind.endswith(('composed','generic','void')): values = ['(Two(0)|Two(2))']*count
+    if kind.endswith(('lazy','mutual')): values = ['Lazy[H,3]']*count
+    clauses = ','.join(f'A{i}:={value}' for i,value in enumerate(values))
+    generic, void = kind.endswith('generic'), kind.endswith('void')
+    ret, result = ('[]t','array{}') if generic else ('void','') if void else ('t','X')
+    clauses += ',set H.N+=1,set Total+=1,if(Total>0)then return '+result+' else 0'
+    final = 'array{X}' if generic else '{}' if void else 'X'
+    print(f'Run({params},X:t where {types},t:type)<transacts>:{ret}=\n    H:=cell{{}}\n    var Total:int=0\n    defer:Print("source {{Total}} {{H.N}}")\n    if({clauses}):Print("normal")\n    {final}')
+    args = ','.join('dup(int){A:=1,B:=2}' if i%2==0 else 'dup(string){A:="s",B:="t"}' for i in range(count)) if independent else 'dup(int){A:=1,B:=2}'
+    call = f'Run({args},7)' + ('.Length' if generic else '')
+    print(f'Main():void={call}' if void else f'Main():void=Print("{{{call}}}")')
+    sys.exit(0)
 if kind.startswith('context-value-'):
     print('Id(X:t where t:type)<computes>:t=X')
     print('Twice(F:type{_(:t)<computes>:t},X:t where t:type)<computes>:t=F(X)|F(X)')

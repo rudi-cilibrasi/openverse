@@ -1,0 +1,7 @@
+read 14
+fallback 10
+outer -1
+write 4
+allocate 4
+state 4
+exit=0

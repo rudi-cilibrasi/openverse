@@ -876,7 +876,12 @@ Main():void =
   branch is a choice, the choice is a generator, which keeps it.
 
   A class cast in the condition can refine its selected branch's type
-  arguments (#243), including written types that use that refinement. In a `for`,
+  arguments (#243), including written types that use that refinement. An
+  immediate body can start a task with `spawn`; its arguments run in the
+  caller and must be immediate, while the spawned call can wait. Event
+  notifications, subscriptions and subscription cancellation use ordinary
+  immediate method calls. Their typed signatures determine whether a body
+  waits. In a `for`,
   its body may wait or perform a non-rollback operation in a `<suspends>`
   function outside a failure context. Each current filter commits before
   the next generator's source or body runs; each body finishes before the
@@ -1162,10 +1167,17 @@ Main():void =
   call, even where only the first success is taken and a value before the
   error would have been it.
 
+  A return in first-success clauses leaves the source function, including
+  after an effectful lazy generator. Its operand is saved before cleanup;
+  updated mutable captures reach source cleanup before it runs. A failed
+  return operand rejects that search path and tries the next alternative.
+  Shared helpers retain generic result types and witnesses even when only
+  the return type mentions a parameter.
+
   Refused for now: a recursive one that is not a generator and is not
   `<computes>`, or may print or call `Err()`, a generator whose clauses,
   conditions or arguments have effects where the first success is taken
-  and the clauses after it have a `return` or a `break`
+  and the clauses after it have a `break`
   that leaves them (which would leave the function they run in), in a constructor, a parameter's
   or field's default or a `defer:`, an
   overloaded one with an overload that calls the function's own name

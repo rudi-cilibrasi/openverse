@@ -270,7 +270,8 @@ METH = LAZY and 'nometh' not in flags
 # function, and nothing the condition did is rolled back (LANGUAGE.md); the
 # test prints its state in a defer:, so it is still checked. After a call of a
 # generator with effects where the first success is taken (run as a function
-# of its own, #275), such a clause is refused (#287), and so is the program.
+# of its own, #275), a return now uses an explicit source exit. The legacy
+# refusal flag preserves older source/oracle pairs for baseline controls.
 RET = LAZY and 'noret' not in flags
 # ---- #296, flag altch (on with lazy; noaltch turns it off): an alternative
 # of a choice in a test's code may have several values of its own (a choice
@@ -2196,12 +2197,12 @@ for ti in range(NT):
     has_ret = False
     if RET and kind in ('if', 'for') and R.random() < 0.35:
         # where: before the first clause with a lifted call (it runs), or, at
-        # times, after one whose call is at the clause's top (refused, #287)
+        # times, after one whose call is at the clause's top.
         lp = [lift_pos(c) if kind == 'if' else None for c in cl]
         j = next((i for i, x in enumerate(lp) if x), len(cl))
         if j < len(cl) and lp[j] == "top" and R.random() < 0.4:
             pos = R.randint(j + 1, len(cl))
-            REFUSED[0] = True
+            REFUSED[0] = 'legacy-first-return-refusal' in flags
         else:
             pos = R.randint(0, j)
         sc = [c[1] for c in cl[:pos] if c[0] in ('bind', 'range')]

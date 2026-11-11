@@ -1573,6 +1573,32 @@ partial def assignsIn : Expr → List Nat
   | .forE _ it f b => assignsIn it ++ assignsIn f ++ assignsIn b
   | _ => []
 
+/-- An exit leaves the condition's cached slots behind. Commit them before
+    private void cancellation calls and reload after callbacks; preserve the
+    return operand before the final commit without allocating a new slot. -/
+partial def beforeFrameExit (store load : Expr) (calls : List Nat) : Expr → Expr
+  | .ret e => .ret (.prim (.tupGet 0) [.prim .mkTup [beforeFrameExit store load calls e, store]])
+  | .ite c@(.heap (.isTag _) [.local _]) t@(.call f _) e =>
+    if calls.contains f then
+      -- Typed.dispatch needs the receiver test and call to stay adjacent.
+      -- Synchronize outside that whole dispatch, in its original context.
+      .seq store (.seq (.ite c t (beforeFrameExit store load calls e)) load)
+    else .ite (beforeFrameExit store load calls c) (beforeFrameExit store load calls t) (beforeFrameExit store load calls e)
+  | .call f es =>
+    let call := Expr.call f (es.map (beforeFrameExit store load calls))
+    if calls.contains f then
+      .seq store (.seq call load)
+    else call
+  | .assign j e => .assign j (beforeFrameExit store load calls e)
+  | .seq a b => .seq (beforeFrameExit store load calls a) (beforeFrameExit store load calls b)
+  | .prim p es => .prim p (es.map (beforeFrameExit store load calls))
+  | .heap p es => .heap p (es.map (beforeFrameExit store load calls))
+  | .ite c t e => .ite (beforeFrameExit store load calls c) (beforeFrameExit store load calls t) (beforeFrameExit store load calls e)
+  | .forE i a f b => .forE i (beforeFrameExit store load calls a) (beforeFrameExit store load calls f) (beforeFrameExit store load calls b)
+  | .loop e => .loop (beforeFrameExit store load calls e)
+  | .print e => .print (beforeFrameExit store load calls e)
+  | e => e
+
 /-- `e` with the slots `fld` maps read and written in the frame's fields.
     A condition (or a `for`'s filter) that assigns such a slot works on the
     slot itself, loaded from the field first, and the field is written
@@ -1580,26 +1606,26 @@ partial def assignsIn : Expr → List Nat
     reference interpreter keep the heap as it was, for the rollback, and so
     copy it (#225). A condition cannot suspend, so the slot holds the
     value throughout. -/
-partial def toFields (fld : Nat → Option Nat) : Expr → Expr
+partial def toFields (fld : Nat → Option Nat) (e : Expr) (exitCalls : List Nat := []) : Expr := match e with
   | .local j => match fld j with
     | some f => fget f
     | none => .local j
   | .assign j e => match fld j with
-    | some f => fset f (toFields fld e)
-    | none => .assign j (toFields fld e)
+    | some f => fset f (toFields fld e exitCalls)
+    | none => .assign j (toFields fld e exitCalls)
   | .forE i it f b =>
     let (load, f', store) := inCond fld f
-    .forE i (toFields fld it) (seqWith load f') (seqWith store (toFields fld b))
-  | .seq a b => .seq (toFields fld a) (toFields fld b)
-  | .prim p es => .prim p (es.map (toFields fld))
-  | .call g es => .call g (es.map (toFields fld))
-  | .heap op es => .heap op (es.map (toFields fld))
+    .forE i (toFields fld it exitCalls) (seqWith load f') (seqWith store (toFields fld b exitCalls))
+  | .seq a b => .seq (toFields fld a exitCalls) (toFields fld b exitCalls)
+  | .prim p es => .prim p (es.map (fun e => toFields fld e exitCalls))
+  | .call g es => .call g (es.map (fun e => toFields fld e exitCalls))
+  | .heap op es => .heap op (es.map (fun e => toFields fld e exitCalls))
   | .ite c t e =>
     let (load, c', store) := inCond fld c
-    .ite (seqWith load c') (seqWith store (toFields fld t)) (toFields fld e)
-  | .loop b => .loop (toFields fld b)
-  | .ret e => .ret (toFields fld e)
-  | .print e => .print (toFields fld e)
+    .ite (seqWith load c') (seqWith store (toFields fld t exitCalls)) (toFields fld e exitCalls)
+  | .loop b => .loop (toFields fld b exitCalls)
+  | .ret e => .ret (toFields fld e exitCalls)
+  | .print e => .print (toFields fld e exitCalls)
   | e => e
 where
   /-- A condition with the frame slots it assigns kept in their slots: the
@@ -1608,11 +1634,13 @@ where
     let mine := (assignsIn c).eraseDups.filterMap fun j => (fld j).map (j, ·)
     let fld' : Nat → Option Nat := fun j => if mine.any (·.1 == j) then none else fld j
     let store := mine.map fun (j, f) => fset f (.local j)
-    let c' := toFields fld' c
+    let c' := toFields fld' c exitCalls
     -- A break commits its current state while bypassing the success arm.
     -- Preserve those cached writes before forwarding the control transfer.
-    let c' := if store.isEmpty then c' else beforeBreak (seqVoid store) c'
-    (mine.map (fun (j, f) => .assign j (fget f)), c', store)
+    let load := mine.map fun (j, f) => Expr.assign j (fget f)
+    let c' := if store.isEmpty then c' else
+      beforeFrameExit (seqVoid store) (seqVoid load) exitCalls (beforeBreak (seqVoid store) c')
+    (load, c', store)
   seqWith (pre : List Expr) (e : Expr) : Expr := pre.foldr (fun a acc => .seq a acc) e
 
 /-- `e` with its slots renamed by `ren`. -/
@@ -1779,7 +1807,10 @@ def lower (S : Sigs) (callee : Nat → Option Callee) (syncMark raceMark rushMar
       return (r, c, as, stop) : StateM _ _).run #[]
   let finish (e : Expr) : LFn :=
     let resident := residentIn e
-    let e := toFields (fun j => if resident j then some (base + (j - 2)) else none) e
+    -- These private stop/cancel calls take frame and scheduler references.
+    -- Their callbacks can read or write the source frame before we return.
+    let exitCalls := ((callsOf kill).map (·.1)).eraseDups
+    let e := toFields (fun j => if resident j then some (base + (j - 2)) else none) e exitCalls
     let used := ((slotsOf e).filter (· ≥ 2 + arity)).eraseDups.mergeSort
     let ren (j : Nat) : Nat := if j < 2 + arity then j else 2 + arity + ((used.idxOf? j).getD 0)
     { body := renumber ren e, slots := st.Γ.toList.take (2 + arity) ++ used.map fun j => (st.Γ[j]?).getD .int }

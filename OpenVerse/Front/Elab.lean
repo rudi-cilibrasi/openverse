@@ -1506,6 +1506,72 @@ partial def writesTps (tps : List String) (e : SExpr) : Bool :=
     | .ident _ n => tps.contains n
     | _ => false) || e.children.any (writesTps tps)
 
+/-- A helper retains the source context's restrictions and dependency stack,
+    while its generated control flow still owns its own loops and exits. -/
+def sourceContextOf (ctx : Ctx) : Choice.SourceContext := {
+  inCtor := ctx.inCtor, inParamDefault := ctx.inParamDefault,
+  inBlock := ctx.inBlock, inDefer := ctx.inDefer,
+  inDefaultCheck := ctx.inDefaultCheck, inRepeat := ctx.inRepeat,
+  inChoice := ctx.inChoice, inArm := ctx.inArm, inBranch := ctx.inBranch,
+  defaults := ctx.defaults }
+
+def sourceContextKey (ctx : Ctx) : String :=
+  let scope := sourceContextOf ctx
+  if scope == ({} : Choice.SourceContext) then "" else "_source:" ++ reprStr scope
+
+def firstReturns (rest : List SExpr) : Bool :=
+  (Refine.findPart (fun | .ret .. => true | _ => false) false (.block { line := 0, col := 0 } rest)).isSome
+
+/-- The source return type remains separate from a helper's packet type. -/
+def firstReturnType (ctx : Ctx) : STy :=
+  let ty := match ctx.refineExits.ret with
+    | some (some (_, ty), _) => ty
+    | some (none, _) => .name "void"
+    | none => match ctx.forReturnSlot.bind ctx.lookup with
+      | some { ty := .opt t, .. } => t.toSTy
+      | _ => ctx.retTy.toSTy
+  ty.substNames (ctx.types.tvars.map fun (n, t) => (n, t.toSTy))
+
+def firstReturnKey (ctx : Ctx) (rest : List SExpr) : String :=
+  if !firstReturns rest then "" else
+    let ty := firstReturnType ctx
+    let bounds := Ty.mergeParamBounds ((ctx.types.tvars.map (·.2)).flatMap Ty.paramsC)
+      |>.filter fun (n, _) => Choice.styMentions [n] ty
+    "_return:" ++ reprStr (ty, bounds)
+
+/-- Normal success has all bound names. A return instead has the saved
+    operand; both outcomes copy back captures before the caller proceeds. -/
+def firstResult (p : Pos) (name : String) (binds sets : List Local) (source : Option Ty) :
+    STy × SExpr × Option Choice.FirstReturn :=
+  let values := binds.map fun l => SExpr.ident p l.name
+  let copied := sets.map fun l => SExpr.ident p l.name
+  match source with
+  | none => (.tup ((binds ++ sets).map (·.ty.toSTy) ++ [.name "logic"]),
+      .tuple p (values ++ copied ++ [.ident p "true"]), none)
+  | some ty =>
+    let ret := STy.tup (.opt (.tup (binds.map (·.ty.toSTy))) :: sets.map (·.ty.toSTy) ++ [.opt ty.toSTy, .name "logic"])
+    let value := if ty == .void then none else some (name ++ "$return")
+    let saved := (value.map (SExpr.ident p ·)).getD (.tuple p [])
+    let normal := SExpr.tuple p (.optionLit p (.tuple p values) :: copied ++ [.ident p "false", .ident p "true"])
+    let normal := SExpr.decl p (name ++ "$normal") (some ret) false normal
+    let returned := SExpr.tuple p (.ident p "false" :: copied ++ [.optionLit p saved, .ident p "true"])
+    (ret, normal, some { ty := ty.toSTy, value, packet := [returned] })
+
+/-- Update source captures before returning or exposing the normal bindings. -/
+def firstUnpack (p : Pos) (l : Choice.FirstLift) (packet : String) : List SExpr :=
+  let get (base : String) (j : Nat) := SExpr.app p (.ident p base) [.int p (j : Int)] false
+  if l.returnExit.isNone then
+    l.binds.zipIdx.map (fun (n, i) => .decl p n none (l.varBinds.contains n) (get packet i)) ++
+      l.sets.zipIdx.map (fun (n, j) => .set p (.ident p n) none (get packet (l.binds.length + j)))
+  else
+    let returned := packet ++ "$returned"
+    let normal := packet ++ "$normal"
+    l.sets.zipIdx.map (fun (n, j) => .set p (.ident p n) none (get packet (j + 1))) ++
+      [.ite p [.decl p returned none false (.query p (get packet (l.sets.length + 1)))]
+        (.ret p (some (.ident p returned))) none,
+        .decl p normal none false (.query p (get packet 0))] ++
+      l.binds.zipIdx.map (fun (n, j) => .decl p n none (l.varBinds.contains n) (get normal j))
+
 /-- A lazy helper owns its producer and the complete prepared suffix. That
     suffix changes when a composed choice is replaced by a continuation call;
     source position and captured names alone would reuse the previous contract.
@@ -1518,7 +1584,7 @@ def firstKey (ctx : Ctx) (p : Pos) (lp : List SExpr) (b : String) (bty : Option 
     (ctx.lookup n).map fun l => (n, l.ty, l.mutable)
   let aliases := ctx.types.tvars.filter fun (n, _) =>
     writesTps [n] written || ((bty.map (Choice.styMentions [n])).getD false)
-  reprStr (p, b, bty, lp, rest, inputs, aliases, ctx.selfClass, ctx.liftTag, ctx.inlineScopes)
+  reprStr (p, b, bty, lp, rest, inputs, aliases, ctx.selfClass, ctx.liftTag, ctx.inlineScopes) ++ sourceContextKey ctx ++ firstReturnKey ctx rest
 
 /-- A cast `T[X]`, `X` of type `xty`, that holds only under a refinement of
     the code's type parameters (#243): `T` fixes or repeats type arguments
@@ -1814,8 +1880,6 @@ def firstLiftOf (ctx c2 : Ctx) (p : Pos) (g : String) (lp : List SExpr) (b : Str
     (instances : List (String × List (String × Ty)) := []) :
     Except String Choice.FirstLift := do
   let [_, .block _ ps, .block _ cls, .decl _ _ _ _ tail] := lp | throw "internal: a $loop marker"
-  if ctx.inCtor || ctx.inParamDefault || ctx.inBlock || ctx.inDefer || !ctx.defaults.isEmpty then
-    throw "in a constructor, a default or a defer"
   let key := firstKey ctx p lp b bty rest
   let written := SExpr.block p (lp ++ rest)
   -- Written types use the context's current instances, including inlined
@@ -1833,8 +1897,9 @@ def firstLiftOf (ctx c2 : Ctx) (p : Pos) (g : String) (lp : List SExpr) (b : Str
     | none => pure rest
   -- (a `return`, or a `break` that leaves them, would leave the function
   -- of its own, not the consumer's)
-  if (Refine.findPart (fun | .ret .. => true | _ => false) false (.block p rest)).isSome then
-    throw "where the clauses after it have a return"
+  let source ← if firstReturns rest then
+      some <$> (resolveTy ctx.types p (firstReturnType ctx)).run' { env := ctx.types }
+    else pure none
   if (Refine.findPart (fun | .brk _ => true | _ => false) true (.block p rest)).isSome then
     throw "where the clauses after it have a break that leaves them"
   if suspends then throw "as the clauses after it suspend"
@@ -1854,7 +1919,7 @@ def firstLiftOf (ctx c2 : Ctx) (p : Pos) (g : String) (lp : List SExpr) (b : Str
     | some l => pure l
     | none => throw s!"internal: name {n}"
   let (tps, typeParams, typeArgs) ← contTypes ctx p ((pls ++ caps).map (·.ty))
-    (vty :: bls.map (·.ty)) written
+    (vty :: bls.map (·.ty) ++ source.toList) written
   -- A type determined by the entry's inputs may be absent from another
   -- member's inputs. Every member must still infer the shared helper's
   -- type parameters, including those used only by a producer result.
@@ -1884,7 +1949,7 @@ def firstLiftOf (ctx c2 : Ctx) (p : Pos) (g : String) (lp : List SExpr) (b : Str
     caps.map fun l => { name := if sets.any (·.name == l.name) then s!"{l.name}$in" else l.name, ty := l.ty.toSTy }
   let params : List SParam := pls.map (fun l => { name := l.name, ty := l.ty.toSTy }) ++ capPs
   let specs := (if heap.isEmpty then ["computes"] else heap) ++ ["decides"]
-  let ret : STy := .tup (bls.map (·.ty.toSTy) ++ sets.map (·.ty.toSTy) ++ [.name "logic"])
+  let (ret, normal, returnExit) := firstResult p name bls sets source
   let setsT := sets.map fun l => (l.name, l.ty.toSTy)
   let recArgs (target : Option String) (q : Pos) (as : List SExpr) : List SExpr × List SExpr :=
     let h := target.getD g
@@ -1911,14 +1976,15 @@ def firstLiftOf (ctx c2 : Ctx) (p : Pos) (g : String) (lp : List SExpr) (b : Str
         | (.ident _ n, t) => pure { name := n, ty := t.toSTy }
         | _ => throw "internal: a $member parameter (#283)"
       let body := Choice.firstBody (nameOf h) p b bty hcls htail rest binds setsT capArgs (some vty.toSTy) nameOf
-        (fun target => recArgs (some (target.getD h)))
+        (fun target => recArgs (some (target.getD h))) (if source.isSome then some normal else none)
       pure (STop.fn p (nameOf h) (hparams ++ capPs ++ typeParams) tps specs ret
         (pruneConstructHints ctx (nameOf h) body))
     | _ => throw "internal: a $member (#283)"
-  return { key, pos := p, name, inlineScopes := ctx.inlineScopes, liftTag := ctx.liftTag,
+  return { key, pos := p, name, returnExit, sourceContext := sourceContextOf ctx, inlineScopes := ctx.inlineScopes, liftTag := ctx.liftTag,
            params := params ++ typeParams, tparams := tps, specs, ret,
            body := pruneConstructHints ctx name
-             (Choice.firstBody name p b bty cls tail rest binds setsT capArgs (some vty.toSTy) nameOf recArgs),
+             (Choice.firstBody name p b bty cls tail rest binds setsT capArgs (some vty.toSTy) nameOf recArgs
+               (if source.isSome then some normal else none)),
            binds, sets := sets.map (·.name), args := pnames.map (SExpr.ident p ·) ++ caps.map (fun l => .ident p l.name) ++ typeArgs,
            varBinds := (bls.filter (·.mutable)).map (·.name), extraFns }
 
@@ -1942,7 +2008,7 @@ def contKey (ctx : Ctx) (p : Pos) (b : String) (rest : List SExpr) : String :=
   -- alternative of another one with a continuation, has the call of that
   -- one after it in the next elaboration, which may use the same names)
   let places := rest.map fun c => s!"{c.pos.line}.{c.pos.col}"
-  s!"k{p.line}_{p.col}_{p.file}_{b}_{String.intercalate "," caps}_{String.intercalate "," places}{typed}{ctx.liftTag}{reprStr ctx.inlineScopes}"
+  s!"k{p.line}_{p.col}_{p.file}_{b}_{String.intercalate "," caps}_{String.intercalate "," places}{typed}{ctx.liftTag}{reprStr ctx.inlineScopes}{sourceContextKey ctx}"
 
 /-- (#335) The function of its own that the clauses after a composed choice
     (#296) are compiled as, where the first success is taken and those
@@ -1955,11 +2021,9 @@ def contKey (ctx : Ctx) (p : Pos) (b : String) (rest : List SExpr) : String :=
     why not, and the clauses are copied, as before. -/
 def contLiftOf (ctx c2 : Ctx) (p : Pos) (b : String) (alts rest : List SExpr)
     (fxB : List (String × Pos × Option String)) : Except String Choice.FirstLift := do
-  if ctx.inCtor || ctx.inParamDefault || ctx.inBlock || ctx.inDefer || !ctx.defaults.isEmpty then
-    throw "in a constructor, a default or a defer"
   let written := SExpr.block p rest
   -- (the alternatives' names too: their types fix the binding's)
-  let key := contKey ctx p b (alts ++ rest)
+  let key := contKey ctx p b (alts ++ rest) ++ firstReturnKey ctx rest
   let σt := ctx.types.tvars.map fun (n, t) => (n, t.toSTy)
   let rest := rest.map (Refine.substTypes σt)
   -- (in a method: the members of `Self` the clauses name bare, as members
@@ -1969,7 +2033,9 @@ def contLiftOf (ctx c2 : Ctx) (p : Pos) (b : String) (alts rest : List SExpr)
       pure (rest.map (selfQualify ctx c))
     | none => pure rest
   -- (a `return`, or a `break` that leaves them, would leave the function)
-  if (Refine.findPart (fun | .ret .. => true | _ => false) false (.block p rest)).isSome then throw "a return"
+  let source ← if firstReturns rest then
+      some <$> (resolveTy ctx.types p (firstReturnType ctx)).run' { env := ctx.types }
+    else pure none
   if (Refine.findPart (fun | .brk _ => true | _ => false) true (.block p rest)).isSome then throw "a break"
   let caps : List Local := (Choice.namesUsed (.block p rest)).eraseDups.filterMap ctx.lookup
   let setNames := Choice.setsIn (.block p rest)
@@ -1980,24 +2046,23 @@ def contLiftOf (ctx c2 : Ctx) (p : Pos) (b : String) (alts rest : List SExpr)
     | none => throw s!"internal: name {n}"
   let some bl := bls.head? | throw "internal: no binding"
   if bl.mutable then throw "a var binding"
-  let (tps, typeParams, typeArgs) ← contTypes ctx p ((bl :: caps).map (·.ty)) (bls.map (·.ty)) written
+  let (tps, typeParams, typeArgs) ← contTypes ctx p ((bl :: caps).map (·.ty)) (bls.map (·.ty) ++ source.toList) written
   let name := s!"$cont{p.line}_{p.col}_{key.hash}" ++ (if p.file.isEmpty then "" else s!"_{p.file}")
   -- (its effects the function's own: its body is that function's code,
   -- and it may call what is asked for only in the next elaboration, a
   -- `$first…` or `$refine…`, whose effects this one cannot see)
   let heap := ["reads", "writes", "allocates"].filter fun k => ctx.fnFx.contains k || fxB.any (·.1 == k)
-  let tup : SExpr := .tuple p (binds.map (SExpr.ident p ·) ++ sets.map (fun l => SExpr.ident p l.name) ++
-    [.ident p "true"])
+  let (ret, tup, returnExit) := firstResult p name bls sets source
   -- (the `var`s it sets, copied from parameters named `m$in`, and given back)
   let copies := sets.map fun l => SExpr.decl p l.name (some l.ty.toSTy) true (.ident p s!"{l.name}$in")
   let params : List SParam := { name := b, ty := bl.ty.toSTy } ::
     caps.map fun l => { name := if sets.any (·.name == l.name) then s!"{l.name}$in" else l.name, ty := l.ty.toSTy }
   -- (`$firstP`: the clauses are lifted already, the consumer's, which lifting
   -- again would bind twice, as for #275's functions)
-  return { key, pos := p, name, inlineScopes := ctx.inlineScopes, liftTag := ctx.liftTag,
+  return { key, pos := p, name, returnExit, sourceContext := sourceContextOf ctx, inlineScopes := ctx.inlineScopes, liftTag := ctx.liftTag,
            params := params ++ typeParams, tparams := tps,
            specs := (if heap.isEmpty then ["computes"] else heap) ++ ["decides"],
-           ret := .tup (bls.map (·.ty.toSTy) ++ sets.map (·.ty.toSTy) ++ [.name "logic"]),
+           ret,
            body := pruneConstructHints ctx name
              (.block p (copies ++ [.app p (.ident p "$firstP") [.block p (rest ++ [tup])] false])),
            binds, sets := sets.map (·.name),
@@ -2056,7 +2121,7 @@ partial def forwardForBreaks (abort escaped : Nat) : Expr → Expr
     need an explicit outcome; breaks must stay inside the body's loops.
     The enclosing function may suspend; the moved code must remain
     immediate. Discovery also checks typed calls and pending cast lifts. -/
-def forBodySafe (ctx : Ctx) (body : SExpr) : Bool :=
+partial def forBodySafe (ctx : Ctx) (body : SExpr) : Bool :=
   let returns := forReturnBody? body
   -- Prepared consumers keep lazy producer templates (including groups and
   -- generic/default argument bindings) inside the body. Their ownership is
@@ -2064,14 +2129,18 @@ def forBodySafe (ctx : Ctx) (body : SExpr) : Bool :=
   let safeMarkers := ["$sourceSuper", "$methodMiss", "$methodCast", "$methodCase", "$methodType", "$methodParams", "$inlineScope", "$inlineScopeEnd", "$inline", "$choice", "$excl", "$alt", "$firstP", "$first", "$each", "$noLift", "$fxOf",
     "$forReturns", "$forReturnBody", "$forClauseExits", "$defer", "$loop", "$rec", "$recTo", "$group", "$member", "$returnTail",
     "$tparams", "$params", "$defaults", "$paramDefault", "$freeNames", "$declNames", "$callArgs"]
-  !(Refine.findPart (fun | .brk _ => true | _ => false) true body).isSome &&
-    !(Choice.anyE (fun
-    | .ret .. => !returns
-    | .app _ (.ident _ f) _ _ =>
-      (f.startsWith "$" && !safeMarkers.contains f) || f == "Sleep" ||
-        ((ctx.sig? f).map fun s => s.suspends || s.fx.contains "no_rollback").getD false
-    | .app _ (.member _ _ m) _ _ => ["Signal", "Await", "Cancel", "Subscribe"].contains m
-    | _ => false) body)
+  let rec blocked (e : SExpr) : Bool :=
+    match e with
+    -- Starting a task is immediate. elabSpawn checks its arguments in the
+    -- caller and the waiting callee in its own suspension context.
+    | .app _ (.ident _ "$spawn") _ false => false
+    | e => (match e with
+      | .ret .. => !returns
+      | .app _ (.ident _ f) _ _ =>
+        (f.startsWith "$" && !safeMarkers.contains f) || f == "Sleep" ||
+          ((ctx.sig? f).map fun s => s.suspends || s.fx.contains "no_rollback").getD false
+      | _ => false) || e.children.any blocked
+  !(Refine.findPart (fun | .brk _ => true | _ => false) true body).isSome && !blocked body
 
 /-- A shared for continuation runs inside a filter, so cannot suspend.
     Method/function-value calls need their typed signatures; a cast still
@@ -2095,8 +2164,6 @@ def restoreForContTrial (saved : ESt) : EM Unit := do
     and the clauses are copied, as before. -/
 def contForLiftOf (ctx : Ctx) (p : Pos) (b : String) (bty vty : Ty) (alts rest : List SExpr) (body : SExpr) (outcome : Bool := false) :
     Except String Choice.FirstLift := do
-  if ctx.inCtor || ctx.inParamDefault || ctx.inBlock || ctx.inDefer || !ctx.defaults.isEmpty then
-    throw "in a constructor, a default or a defer"
   let written := SExpr.block p (rest ++ [body])
   let key := (if outcome then "fo" else "f") ++ contKey ctx p b (alts ++ rest ++ [body])
   let σt := ctx.types.tvars.map fun (n, t) => (n, t.toSTy)
@@ -2142,7 +2209,7 @@ def contForLiftOf (ctx : Ctx) (p : Pos) (b : String) (bty vty : Ty) (alts rest :
   let ret : STy := if sets.isEmpty then valueTy else .tup (valueTy :: sets.map (·.ty.toSTy))
   let bodyE : SExpr := if sets.isEmpty then .block p (copies ++ [ffirst]) else
     .block p (copies ++ [.decl p vals none false ffirst, .tuple p (.ident p vals :: sets.map fun l => SExpr.ident p l.name)])
-  return { key, pos := p, name, inlineScopes := ctx.inlineScopes, liftTag := ctx.liftTag,
+  return { key, pos := p, name, sourceContext := sourceContextOf ctx, inlineScopes := ctx.inlineScopes, liftTag := ctx.liftTag,
            params := params ++ typeParams, tparams := tps,
            specs := (if heap.isEmpty then ["computes"] else heap) ++ ["decides"],
            ret, body := pruneConstructHints ctx name bodyE, binds := [], sets := sets.map (·.name),
@@ -2253,7 +2320,7 @@ def forStagePrefixOf (ctx : Ctx) (plan : Choice.ForStagePlan) (args : List Ty) (
       ({ frame := s.frame, name := s.name, args := s.args.map Ty.toSTy } : Choice.ResumeStorage))
   let info : Choice.ForResume := {
     name, storage, inlineScopes := ctx.inlineScopes, liftTag := ctx.liftTag,
-    inRepeat := ctx.inRepeat, inChoice := ctx.inChoice }
+    inRepeat := ctx.inRepeat, inChoice := ctx.inChoice, sourceContext := sourceContextOf ctx }
   return {
     key, pos := p, name, params := params ++ more, tparams := tps,
     specs := plan.specs.filter (· != "suspends") ++ ["decides"], ret,
@@ -2319,7 +2386,7 @@ def forStageEnvOf (ctx : Ctx) (plan : Choice.ForStagePlan) (p : Pos)
     (localName l.name, ({ frame := s.frame, name := s.name, args := s.args.map Ty.toSTy } : Choice.ResumeStorage))
   let resumeInfo : Choice.ForResume := {
     name := s!"{name}.{plan.method}", storage,
-    inlineScopes := ctx.inlineScopes, liftTag := ctx.liftTag }
+    inlineScopes := ctx.inlineScopes, liftTag := ctx.liftTag, sourceContext := sourceContextOf ctx }
   let cls := STop.classDef p name tps [] [forStageView plan.base (args.map Ty.toSTy)] false fields [] [method]
   let req : Choice.FirstLift := {
     stageOnly := true, resumes := [resumeInfo], key, pos := p, name,
@@ -2646,8 +2713,10 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
               let values ← elabForWith elabAlts elabBranchAlts elabE elabInts elabLoopGen elabSeq
                 cB p restCl bd (prepared := true) (firstDecides := true)
               let .arr value := values.ty | eerr b.pos "internal: staged for result"
-              set saved
-              let req ← match forStagePlanOf cA b.pos key (i :: restCl) bd value bodyFail with
+              let effects := (← get).fx
+              set { saved with fx := effects }
+              let allowed := heapFx.filter fun k => cA.fnFx.contains k || effects.any (·.1 == k)
+              let req ← match forStagePlanOf { cA with fnFx := allowed } b.pos key (i :: restCl) bd value bodyFail with
                 | .ok req => pure req
                 | .error why => eerr b.pos s!"cannot stage this refining for: {why} (#417)"
               modify fun st => { st with
@@ -2657,12 +2726,15 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
                 forStageUses := st.forStageUses + 1 }
               return (codeA, .prim .userErr [], value)
             let some plan := plan? | eerr b.pos "internal: staged for plan"
+            noteFx b.pos (heapFx.filter plan.specs.contains)
             let site := s!"{plan.base}$selected"
             let rootArgs := if stagePlan.isSome then stageArgs else
               plan.tparams.map fun tp => (cA.types.tvars.lookup tp.name).getD (.param tp.name (tp.constraint == "comparable"))
             let copyNames := if stagePlan.isSome then stageCopies else plan.copies.map (·.1)
             let borrowNames := if stagePlan.isSome then stageBorrows else plan.borrowed
-            let suffixCtx := { cA with locals := { name := b.name, slot := 0, ty, mutable := false } :: cA.locals }
+            let suffixCtx := { cA with
+              fnFx := heapFx.filter (fun k => cA.fnFx.contains k || plan.specs.contains k),
+              locals := { name := b.name, slot := 0, ty, mutable := false } :: cA.locals }
             let viewSub := (plan.tparams.map (·.name)).zip (rootArgs.map Ty.toSTy)
             let resultTy ← resolveTy cA.types b.pos (plan.value.substNames viewSub)
             let tailKey := "tail" ++ contKey suffixCtx b.pos b.name (restCl ++ [bd]) ++ reprStr resultTy ++
@@ -7480,7 +7552,7 @@ partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
           checkNewLocal ctx p b.name
           let slot ← fresh ty
           return ← elabOneGo { ctx with locals := { name := b.name, slot, ty, mutable := false } :: ctx.locals } rest
-        let key := contKey ctx p b.name (i :: rest)
+        let key := contKey ctx p b.name (i :: rest) ++ firstReturnKey ctx rest
         let request := ctx.types.loopRequests.find? (·.key == key)
         let hasLater := rest.any fun cl => match Choice.binding? cl with
           | some { branchy := some next, .. } => choiceHasCast ctx next
@@ -7522,7 +7594,10 @@ partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
         let unpack := binds.zipIdx.map fun (n, j) => SExpr.decl p n none (vars.contains n) (get j)
         let writes := request.toList.flatMap fun l => l.sets.zipIdx.map fun (n, j) =>
           SExpr.set p (.ident p n) none (get (l.binds.length + j))
-        let (code, c) ← elabOneGo ctx ([.decl p t none false (.query p selected)] ++ unpack ++ writes)
+        let unpack := match request with
+          | some l => firstUnpack p l t
+          | none => unpack ++ writes
+        let (code, c) ← elabOneGo ctx ([.decl p t none false (.query p selected)] ++ unpack)
         return (code, { c with inlineScopes := Choice.inlineScopesAfter ctx.inlineScopes rest })
     match Choice.binding? cl with
     | some b@{ each := some (.app _ (.ident _ "$loop") lp false), .. } =>
@@ -7536,10 +7611,8 @@ partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
       -- own that runs the clauses after it too, then the names they bind)
       if let some l := (if ctx.typeOnly then none else ctx.types.loopRequests.find? (·.key == firstKey ctx p lp b.name b.ty rest)) then
         let t := s!"$ft{p.line}_{p.col}"
-        let get (i : Nat) : SExpr := .app p (.ident p t) [.int p (i : Int)] false
         let (code, c) ← elabOneGo ctx ([.decl p t none false (.app p (.ident p l.name) l.args true)] ++
-          l.binds.zipIdx.map (fun (n, i) => .decl p n none (l.varBinds.contains n) (get i)) ++
-          l.sets.zipIdx.map (fun (m, j) => .set p (.ident p m) none (get (l.binds.length + j))))
+          firstUnpack p l t)
         return (code, { c with inlineScopes := Choice.inlineScopesAfter ctx.inlineScopes rest })
       let fx0 := (← get).fx
       modify fun st => { st with fx := [] }
@@ -7624,14 +7697,13 @@ partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
           | some { branchy := some i, .. } => !Choice.plainBranches Choice.hasLiftable i
           | _ => false
         if rest.any isComposed then
-          let req := if ctx.typeOnly then none else ctx.types.loopRequests.find? (·.key == contKey ctx p b.name (b.alts ++ rest))
+          let req := if ctx.typeOnly then none else ctx.types.loopRequests.find? (·.key == contKey ctx p b.name (b.alts ++ rest) ++ firstReturnKey ctx rest)
           -- (asked for where more effects are allowed than here, as in a
           -- function of its own of a call taken lazily, #246: copied)
           let fits (l : Choice.FirstLift) : Bool :=
             (l.specs.filter (["reads", "writes", "allocates"].contains ·)).all ctx.fnFx.contains
           if let some l := req then
             if !fits l then return ← finish (elabOneGo ctx copied)
-            let get (i : Nat) : SExpr := .app p (.ident p t) [.int p (i : Int)] false
             -- (the call a clause, whose failure goes back into the
             -- alternative's own choices, then its tuple the value)
             let kt := s!"{t}k"
@@ -7639,8 +7711,7 @@ partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
               .app p (.ident p "$firstP") [.block p (liftAlt a i ++
                 [.decl p kt none false (.app p (.ident p l.name) l.args true), .ident p kt])] false
             return ← finish (elabOneGo ctx ([.decl p t none false (Choice.mk p (b.alts.zipIdx.map fun (a, i) => altK a i))] ++
-              l.binds.zipIdx.map (fun (n, i) => .decl p n none (l.varBinds.contains n) (get i)) ++
-              l.sets.zipIdx.map (fun (m, j) => .set p (.ident p m) none (get (l.binds.length + j)))))
+              firstUnpack p l t))
           -- (the first elaboration: one alternative with the clauses after it,
           -- for their names' types and effects, and the function asked for;
           -- its code is not kept, as the next elaboration has the function)
@@ -8854,6 +8925,8 @@ def functionBodyCtx (opts : Options) (ctx : Ctx) (p : Pos) (name : String)
   let loopLift := opts.loopRequests.find? fun l => l.name == name || l.extraFns.any
     (fun | .fn _ n .. => n == name | _ => false)
   let resume := opts.loopRequests.findSome? fun l => l.resumes.find? (·.name == name)
+  let source := (resume.map (·.sourceContext)).getD ((loopLift.map (·.sourceContext)).getD {})
+  let returnExit := loopLift.bind (·.returnExit)
   let resumeStorage ← ((resume.map (·.storage)).getD []).mapM fun (n, r) => do
     let args ← r.args.mapM fun t => (resolveTy ctx.types p t).run' { env := ctx.types }
     pure (n, { frame := r.frame, name := r.name, args : SourceStorage })
@@ -8868,11 +8941,19 @@ def functionBodyCtx (opts : Options) (ctx : Ctx) (p : Pos) (name : String)
     resumeStorage
     frameName := name
     frameArgs := tps.map fun (v, c) => Ty.param v c
-    inRepeat := (resume.map (·.inRepeat)).getD (lifted.any (·.inRepeat))
-    inChoice := (resume.map (·.inChoice)).getD ctx.inChoice
-    refineExits := (lifted.map (·.exits)).getD {}
-    inBlock := name.endsWith ".$block"
-    inCtor := name.endsWith "$init"
+    inRepeat := source.inRepeat || (resume.map (·.inRepeat)).getD (lifted.any (·.inRepeat))
+    inChoice := source.inChoice || (resume.map (·.inChoice)).getD ctx.inChoice
+    inParamDefault := source.inParamDefault || ctx.inParamDefault
+    inDefer := source.inDefer || ctx.inDefer
+    inDefaultCheck := source.inDefaultCheck || ctx.inDefaultCheck
+    inArm := source.inArm || ctx.inArm
+    inBranch := source.inBranch || ctx.inBranch
+    defaults := source.defaults ++ ctx.defaults
+    refineExits := (returnExit.map fun r =>
+      { ret := some (r.value.map (fun n => (n, r.ty)), r.packet) : Refine.Exits }).getD
+        ((lifted.map (·.exits)).getD {})
+    inBlock := source.inBlock || name.endsWith ".$block"
+    inCtor := source.inCtor || name.endsWith "$init"
     selfClass := scopeClass.orElse fun _ => match name.splitOn "." with
       | [c, _] => some c | _ => none
     selfMethod := match name.splitOn "." with | [_, m] => some m | _ => none
@@ -11979,6 +12060,20 @@ def elabProgram (allTops00 : List STop) (opts : Options := {}) : Except String C
     let casts := c.castNeeds.filter fun l => !opts.castRequests.any (·.key == l.key)
     -- (#246) and with functions of their own for lazily taken calls
     let loops := c.loopNeeds.filter fun l => !opts.loopRequests.any (·.key == l.key)
+    -- A newly materialized dispatch-default helper can reveal heap effects
+    -- absent from an earlier suffix trial. Rediscover consumers after those
+    -- helpers have participated in effect inference; their cached stage
+    -- interfaces, prefixes and resume methods must agree on permissions.
+    -- Each restart retains the new bridges, so discovery still progresses.
+    let newDefaults := loops.filter fun l => defaultBridge l.name
+    if !newDefaults.isEmpty then
+      match fuel with
+      | fuel + 1 =>
+        let bridges := opts.loopRequests.filter fun l => defaultBridge l.name || spawnAdapter l.name
+        return ← go fuel { opts with
+          fnRequests := (opts.fnRequests ++ c.fnNeeds).eraseDups,
+          castRequests := [], loopRequests := bridges ++ newDefaults }
+      | 0 => throw "internal error: default forwarding helpers still to infer after several elaborations"
     match fuel, c.fnNeeds.filter (!opts.fnRequests.contains ·) with
     | fuel + 1, new@(_ :: _) =>
       go fuel { opts with fnRequests := opts.fnRequests ++ new, castRequests := opts.castRequests ++ casts,
