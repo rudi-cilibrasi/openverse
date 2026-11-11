@@ -396,6 +396,9 @@ structure ESt where
       its position and text (#74): computed once, so nested overloaded calls
       take polynomial time (it survives the trials' state being restored). -/
   natTys : Std.HashMap String (Option Ty) := {}
+  /-- Successful receiver-class probes, keyed by syntax and lexical typing
+      context. Shared by isolated trials so nested callbacks stay polynomial. -/
+  methodReceivers : Std.HashMap String (Option String) := {}
   /-- Functions wanted as values at closed function types no class of
       theirs gives (#214). -/
   fnNeeds : List (String × Ty) := []
@@ -433,7 +436,9 @@ abbrev EM := StateT ESt (Except String)
     during the construction probe, while its runtime slots/effects are reset. -/
 def restoreConstructProbe (ctx : Ctx) (saved : ESt) : EM Unit := do
   let hints := (← get).constructHints
-  set (if ctx.constructProbe then { saved with constructHints := hints } else saved)
+  let receivers := (← get).methodReceivers
+  let restored := if ctx.constructProbe then { saved with constructHints := hints } else saved
+  set { restored with methodReceivers := receivers }
 
 /-- A call of a recursive function with several values that its consumer
     takes lazily (#246), as code for the consumer to put in its loop: the
@@ -649,11 +654,22 @@ def argNeedsTypeWith (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx) 
   | .ident _ n =>
     return (ctx.lookup n).isNone && ctx.selfClass.any (ctx.methodValueNeedsType · n)
   | .member _ receiver m =>
+    let key := reprStr (receiver, ctx.locals.map (fun l => (l.name, l.ty)), ctx.types.tvars,
+      ctx.selfClass, ctx.selfMethod, ctx.fnFx, ctx.retTy, ctx.frameName, ctx.frameArgs, ctx.retries,
+      [ctx.canFail, ctx.inTaking, ctx.suspends, ctx.inLoop, ctx.inParamDefault, ctx.inDefer,
+       ctx.inBlock, ctx.inCtor, ctx.inArm, ctx.inBranch, ctx.inDefaultCheck, ctx.inRepeat,
+       ctx.inChoice, ctx.asWritten, ctx.constructProbe], ctx.defaults, ctx.inlineScopes,
+      ctx.constructOrigin, ctx.unrefine)
     let saved ← get
+    if let some c := saved.methodReceivers[key]? then
+      return c.any (ctx.methodValueNeedsType · m)
     match (elabE { ctx with typeOnly := true, callInstanceProbe := none } receiver none).run saved with
-    | .ok (r, _) => match r.ty with
-      | .struct c _ => return ctx.types.classes.contains c && ctx.methodValueNeedsType c m
-      | _ => return false
+    | .ok (r, probed) =>
+      let c := match r.ty with
+        | .struct c _ => if ctx.types.classes.contains c then some c else none
+        | _ => none
+      modify fun st => { st with methodReceivers := probed.methodReceivers.insert key c }
+      return c.any (ctx.methodValueNeedsType · m)
     | .error _ => return false
   | _ => return false
 
@@ -5882,12 +5898,12 @@ partial def resolveOverload (ctx : Ctx) (p : Pos) (name : String) (ovs : List St
     let st ← get
     let r ← tryCatch (do return some (← elabE ctx a none).ty) (fun _ => pure none)
     let cache := (← get).natTys
-    set { st with natTys := cache.insert key r }
+    set { st with natTys := cache.insert key r, methodReceivers := (← get).methodReceivers }
     return r
   let coercible (t u : Ty) : EM Bool := do
     let st ← get
     let ok ← tryCatch (do discard <| coerce p ⟨.lit .void, t⟩ u; pure true) (fun _ => pure false)
-    set { st with natTys := (← get).natTys }
+    set { st with natTys := (← get).natTys, methodReceivers := (← get).methodReceivers }
     return ok
   let mut byNat : List String := []
   for o in cands do
@@ -5914,14 +5930,14 @@ partial def resolveOverload (ctx : Ctx) (p : Pos) (name : String) (ovs : List St
     let st ← get
     if !s.tparams.isEmpty then
       let ok ← tryCatch (do discard <| call o; pure true) (fun _ => pure false)
-      set { st with natTys := (← get).natTys }
+      set { st with natTys := (← get).natTys, methodReceivers := (← get).methodReceivers }
       return ok
     let ok ← tryCatch (do
         for (a, t) in argTys s do
           let r ← elabE ctx a (some t)
           discard <| coerce a.pos r t
         pure true) (fun _ => pure false)
-    set { st with natTys := (← get).natTys }
+    set { st with natTys := (← get).natTys, methodReceivers := (← get).methodReceivers }
     return ok
   -- the overloads the arguments' own types fit, then those the arguments
   -- elaborated at each one's parameter types fit
@@ -6050,7 +6066,7 @@ partial def elabApp (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (brack
     if ctx.retries ≥ 8 then return ← elabAppBase ctx p f args bracket exp
     let saved ← get
     -- (the state is restored between attempts, but not the overload cache)
-    let restore : EM Unit := do set { saved with natTys := (← get).natTys }
+    let restore : EM Unit := do set { saved with natTys := (← get).natTys, methodReceivers := (← get).methodReceivers }
     tryCatch (elabAppBase ctx p f args bracket exp) fun err => do
       -- (only a call refused for its arguments' shape is tried again: an
       -- error from inside the argument is the argument's)

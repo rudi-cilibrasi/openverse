@@ -17,6 +17,7 @@ kinds=(
   context-value-for
   context-method-first
   context-method-for
+  context-method-nested
   clause-break-composed
   clause-break-exclusive
   clause-break-refined
@@ -228,6 +229,15 @@ if kind.startswith('first-return-'):
     args = ','.join('dup(int){A:=1,B:=2}' if i%2==0 else 'dup(string){A:="s",B:="t"}' for i in range(count)) if independent else 'dup(int){A:=1,B:=2}'
     call = f'Run({args},7)' + ('.Length' if generic else '')
     print(f'Main():void={call}' if void else f'Main():void=Print("{{{call}}}")')
+    sys.exit(0)
+if kind == 'context-method-nested':
+    print('''box:=class:
+    Same(X:t where t:type)<computes>:t=X
+Apply(F:type{_(:t)<computes>:t},X:t where t:type)<computes>:t=F(X)''')
+    receiver = 'box{}'
+    for _ in range(count * 4):
+        receiver = f'Apply(({receiver}).Same,box{{}})'
+    print(f'Main():void=\n    F:type{{_(:int)<computes>:int}}=({receiver}).Same\n    Print("{{F(7)}}")')
     sys.exit(0)
 if kind.startswith('context-method-'):
     print('''box(h:type):=class:
