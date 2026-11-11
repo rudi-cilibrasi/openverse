@@ -138,7 +138,7 @@ not an `array{a₀, …}`, which would run `aₙ₋₁` before `a₀`'s value wa
   failure goes back into the alternative's own values first, and the
   tuple is that `first{…}`'s value.
   - As #246's functions of their own, it is asked for by the first elaboration and made for the next. The first elaboration takes one alternative, for the names' types, and its code is not kept.
-  - The clauses are still copied, as before, in a constructor, a default, a `defer:`, after a `break` that leaves them, or with a `var` binding.
+  - The immediate shared path retains copies when a `break` leaves the suffix or the selected binding is a `var`. Unsupported staged contexts retain their source fallback.
   - A method's `(super:)` calls carry `$sourceSuper` metadata with the source class, method slot and an explicit `Self` capture. Elaboration restores that lookup scope at the call, so overloads are selected using the helper's actual argument types and the source method's inherited implementations. The same metadata serves first-success helpers, `for` continuations and refining casts; it disappears before Verse Core checking and suspension lowering.
   - They are also copied where the alternatives' values have different types (subclasses), since the function takes one type, and inside a function of its own of a call taken lazily that allows fewer effects than the function the continuation was asked for in.
   - The key has the captured names' types: a `for`'s body copied once per alternative has one place but names of other types.
