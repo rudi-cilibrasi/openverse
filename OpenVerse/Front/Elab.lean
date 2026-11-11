@@ -7952,7 +7952,12 @@ partial def elabMember (ctx : Ctx) (p : Pos) (r : R) (m : String) (exp : Option 
         if visibleOv.length > 1 then
           eerr p s!"'{f}' is an overloaded method of {sn}: an overloaded method cannot be used as a value (Book of Verse ch. 6)"
         let hasValue := (ctx.types.supers sn).any fun x => ctx.types.classes.contains s!"{x}${f}$fn"
-        if ctx.hasMethod sn f || (visibleOv.length == 1 && hasValue) then
+        let genericMethod (m : String) : Bool :=
+          match ctx.methodDecl? sn m with
+          | some owner => (ctx.sig? s!"{owner}.{m}").any fun sg => sg.named.isEmpty &&
+              sg.tparams.length > ((ctx.types.sparams.lookup owner).getD []).length
+          | none => false
+        if ctx.hasMethod sn f || (visibleOv.length == 1 && (hasValue || genericMethod visibleOv.head!)) then
           -- a method as a value (#210): an object of the value class of the
           -- nearest class that declares or overrides it (#219: an override
           -- may narrow the result), holding the receiver, of its type, or
@@ -7973,6 +7978,29 @@ partial def elabMember (ctx : Ctx) (p : Pos) (r : R) (m : String) (exp : Option 
             let σ := (((env.sparams.lookup cls).getD []).map (·.1)).zip (env.argsAt sn targs x)
             .struct i (((env.iargs.lookup (cls, i)).getD []).map (Ty.subst σ))
           let candidates := (env.supers sn).filter fun x => env.classes.contains s!"{x}${f}$fn"
+          -- Method-local parameters follow the receiver's in its value
+          -- class. The expected function type determines one instance;
+          -- its hidden fields retain those witnesses alongside `$self`.
+          let methodTps (x : String) := ((env.sparams.lookup s!"{x}${f}$fn").getD []).drop
+            ((env.sparams.lookup x).getD []).length
+          if genericMethod fv || candidates.any (fun x => !(methodTps x).isEmpty) then
+            if let some target := exp then
+              for x in candidates do
+                let .struct shape ts := typeOf x | continue
+                let some (k, es) := FnValues.parseName shape | continue
+                let sig : Sig := {
+                  idx := 0, name := f, params := ts.take k, ret := (ts.drop k).headD .void,
+                  decides := es.contains "decides", isConst := false, tparams := methodTps x,
+                  fx := allowedFx es, suspends := es.contains "suspends" }
+                let some args := fnValueArgs env sig target | continue
+                let cls := s!"{x}${f}$fn"
+                let tv ← fresh r.ty
+                let nm := s!"$recv{tv}"
+                let ctx' := { ctx with locals := { name := nm, slot := tv, ty := r.ty, mutable := false } :: ctx.locals }
+                let rv ← elabConstruct ctx' p cls [] [.decl p "$self" none false (.ident p nm)]
+                  (some (.struct cls (env.argsAt sn targs x ++ args)))
+                return ⟨.seq (.assign tv r.e) (← coerce p rv target), target⟩
+            eerr p s!"'{f}' is a generic method of {sn}: a function type determining all its method type arguments and satisfying its bounds must be expected (#209)"
           -- (#231) wanted at a closed function type that no value class of
           -- it gives but that it fits by variance: a class made for that type,
           -- `{x}${f}$fn${k}` (the nearest class's, without type parameters),
@@ -7999,7 +8027,7 @@ partial def elabMember (ctx : Ctx) (p : Pos) (r : R) (m : String) (exp : Option 
                       modify fun st => { st with fnNeeds := st.fnNeeds ++ [(key, t)] }
                       return ⟨.seq r.e (.prim .userErr []), t⟩
           let some x := (candidates.find? fun x => exp == some (typeOf x)).orElse fun _ => candidates.head?
-            | eerr p s!"'{f}' is a method of {sn} that cannot be used as a value: call it with {f}(…) (a method with its own type parameters or named parameters is not a value, #210)"
+            | eerr p s!"'{f}' is a method of {sn} that cannot be used as a value: call it with {f}(…) (a method with named parameters is not a value, #210)"
           let cls := s!"{x}${f}$fn"
           let xargs := env.argsAt sn targs x
           let t ← fresh r.ty
@@ -8009,7 +8037,7 @@ partial def elabMember (ctx : Ctx) (p : Pos) (r : R) (m : String) (exp : Option 
           let own := typeOf x
           return ⟨.seq (.assign t r.e) (← coerce p rv own), own⟩
         if visibleOv.length == 1 then
-          eerr p s!"'{f}' is a method of {sn} that cannot be used as a value: call it with {f}(…) (a method with its own type parameters or named parameters is not a value, #210)"
+          eerr p s!"'{f}' is a method of {sn} that cannot be used as a value: call it with {f}(…) (a method with named parameters is not a value, #210)"
         eerr p s!"class {sn} has no field '{f}'"
       eerr p s!"struct {sn} has no field '{f}'"
   | t, m => eerr p s!"{t.show} has no member '{m}'"

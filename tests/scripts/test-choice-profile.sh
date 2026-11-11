@@ -87,6 +87,13 @@ Run(X:t,Y:u where t:type,u:type)<computes>:tuple(t,u)=
 Main():void=
     R:=Run(7,"s")
     Print("{R(0)} {R(1)}")''',
+        'method-instance': '''box(t:type):=class:
+    V:t
+    Same(X:u where u:type):u=X
+Bind(B:box(t),X:u where t:type,u:type):type{_(:u):u}=B.Same
+Main():void=
+    F:=Bind(box(string){V:="s"},7)
+    Print("{F(9)}")''',
     }
     for name, text in positive.items():
         path = source(f'{name}.verse', text)

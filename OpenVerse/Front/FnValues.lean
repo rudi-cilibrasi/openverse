@@ -388,7 +388,7 @@ def desugar (tops : List STop) (extra : List STop := []) (requests : List (Strin
         | none => declOf fuel q m
       | none => none
     | _, _ => none
-  let mvalues : List (Pos × String × List TParam × String × List SParam × List String × STy) :=
+  let mvalues : List (Pos × String × List TParam × List TParam × String × List SParam × List String × STy) :=
     tops.flatMap fun
       | .classDef _ c tps _ _ _ _ _ ms => ms.filterMap fun
         | .fn mp m ps mtps effs r _ =>
@@ -405,9 +405,18 @@ def desugar (tops : List STop) (extra : List STop := []) (requests : List (Strin
           -- Repeated, compound and hidden receiver arguments use ordinary
           -- GADT dispatch. The captured receiver retains their witnesses.
           let overloaded := (ms.filter fun | .fn _ m' .. => m' == m | _ => false).length > 1
-          if members.contains m && needed && !overloaded && mtps.isEmpty && ps.all (!·.named) && !m.contains '$' &&
+          -- Member scanning also sees unrelated fields. A parameter absent
+          -- from the signature can never be inferred at value creation, and
+          -- an unused adapter would itself contain an uninferrable call.
+          let inferable := mtps.all fun tp => targs.any (·.mentions tp.name)
+          if members.contains m && needed && !overloaded && inferable && ps.all (!·.named) && !m.contains '$' &&
               !m.startsWith "(" then
-            some (mp, c, tps, m, ps, effs, r)
+            -- Keep method parameters apart from the receiver arguments a
+            -- caller substitutes: its `u` may be a different method's `u`.
+            let names := mtps.zipIdx.map fun (tp, i) => (tp.name, s!"$methodValue_{c}_{m}_{i}")
+            let σ := names.map fun (a, b) => (a, STy.name b)
+            some (mp, c, tps, mtps.map (fun tp => { tp with name := (names.lookup tp.name).getD tp.name }), m,
+              ps.map (fun sp => { sp with ty := sp.ty.substNames σ }), effs, r.substNames σ)
           else none
         | _ => none
       | _ => []
@@ -438,7 +447,7 @@ def desugar (tops : List STop) (extra : List STop := []) (requests : List (Strin
   let mut shapes : List Shape := []
   for s in scans.flatMap (·.1) ++ values.map (fun (_, _, ps, effs, _) => shapeOf ps.length effs) ++
       gvalues.map (fun (_, _, ps, _, effs, _) => shapeOf ps.length effs) ++
-      mvalues.map (fun (_, _, _, _, ps, effs, _) => shapeOf ps.length effs) do
+      mvalues.map (fun (_, _, _, _, _, ps, effs, _) => shapeOf ps.length effs) do
     if !shapes.contains s then shapes := shapes ++ [s]
   let arities := (shapes.map (·.arity)).eraseDups
   for (p, n, ps, tps, effs, r) in gvalues do
@@ -541,7 +550,7 @@ def desugar (tops : List STop) (extra : List STop := []) (requests : List (Strin
           if let some c := variant p n own k qs es u args then
             out := out ++ [c]
             k := k + 1
-  for (p, c, ctps, m, ps, effs, r) in mvalues do
+  for (p, c, ctps, mtps, m, ps, effs, r) in mvalues do
     let own := shapeOf ps.length effs
     let fits := shapes.filter (own.within ·)
     let targs := ps.map (·.ty) ++ [r]
@@ -551,12 +560,12 @@ def desugar (tops : List STop) (extra : List STop := []) (requests : List (Strin
       STop.fn p s.call (params (ps.map (·.ty))) [] (s.effs ++ ["override"]) r
         (.app p (.member p (.ident p "$self") m) args own.decides)
     let fits := own :: fits.filter (· != own)
-    out := out ++ [.classDef p s!"{c}${m}$fn" ctps [] (fits.map fun s => STy.app s.name targs) false
+    out := out ++ [.classDef p s!"{c}${m}$fn" (ctps ++ mtps) [] (fits.map fun s => STy.app s.name targs) false
       [("$self", selfTy, none, false)] [] methods]
     -- (#231) a method of a class without type parameters as a value at a
     -- closed function type it fits by variance, asked for as `.{c}${m}`:
     -- `{c}${m}$fn${k}`, holding the receiver
-    if ctps.isEmpty then
+    if ctps.isEmpty && mtps.isEmpty then
       let mut k := 0
       for (qs, es, u) in requested s!".{c}${m}" do
         let exact := qs.length == ps.length && ((ps.map (·.ty)).zip qs).all (fun (a, b) => reprStr (normS a) == reprStr (normS b)) &&
