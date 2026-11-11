@@ -68,6 +68,9 @@ structure Lift where
       class, as the copies and the interface's own default share the
       source's places (`Ctx.liftTag`); such a lift always has its `body`. -/
   tag : String := ""
+  /-- Refinements moved into an immediate continuation use its local
+      copies, rather than the source frame's capture metadata. -/
+  continuationScope : String := ""
   exits : Exits := {}
   /-- Whether executing the lifted then-block can wait. The generated
       function may need `<suspends>` for the dispatch even when it never waits. -/

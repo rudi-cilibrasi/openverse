@@ -1,0 +1,11 @@
+body 4 4
+body 5 9
+observer 109
+done 109
+result 2
+body 4 4
+body 5 9
+observer 109
+done 109
+result b
+exit=0

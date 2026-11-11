@@ -1842,6 +1842,8 @@ partial def valueUse? (mv : List String) : SExpr → Option (Pos × String)
     `sets`, then `true`). -/
 structure FirstLift where
   inlineScopes : List String := []
+  /-- A class-copy context remains valid after moving its code. -/
+  liftTag : String := ""
   key : String
   pos : Pos
   name : String

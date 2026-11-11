@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Model-based fuzzing of classes that fix, repeat, relate or hide type
-# arguments (GADTs, #209): random programs from seven independent models
+# arguments (GADTs, #209): random programs from eight independent models
 # (scripts/models/gadt_*.py, from the reviews of #236, #242, #243 and #250,
 # with the clauses after a cast from #277 and named arguments with defaults of no
 # type of their own through opening dispatches from #317, and covariant <suspends>
@@ -16,7 +16,7 @@ set -uo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 n="${1:-60}"; first="${2:-1}"
 ov="$root/.lake/build/bin/openverse"; cv="$root/runtime/build/cverse"
-gens=(gadt_rel gadt_rel2 gadt_exist gadt_refine gadt_open gadt_bounds gadt_covariant)
+gens=(gadt_rel gadt_rel2 gadt_exist gadt_refine gadt_open gadt_bounds gadt_covariant gadt_immediate)
 tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
 ok=0; ref=0; bad=0
 for ((s=first; s<first+n; s++)); do
