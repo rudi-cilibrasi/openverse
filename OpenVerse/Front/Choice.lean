@@ -1173,6 +1173,10 @@ structure MFn where
   ret : STy
   body : SExpr
 
+/-- A mutual producer's written types have their own lexical aliases,
+    separate from the consumer's and from the actual Core type names. -/
+def memberTypeName (member param : String) : String := s!"$groupType_{member}_{param}"
+
 /-- The names `e` uses: as identifiers and as calls' heads. -/
 partial def namesUsed (e : SExpr) : List String :=
   let rec go : SExpr → List String
@@ -1672,11 +1676,12 @@ partial def inlineCalls (mv : List (String × MFn)) (e : SExpr) (recs : List Str
             let some fh := mv.lookup h | throw s!"{p.show}: internal: the group of {g} (#283)"
             let tagH (n : String) : String := s!"${h.replace "::" "_"}_{n}_{site}"
             let renH := (fh.params.map (·.name) ++ localsOf fh.body).eraseDups.map fun n => (n, tagH n)
-            let some (clsH, tailH) := loopShape? h (mv.map (·.1)) (renameE renH fh.body) grp
+            let ρH := fh.tparams.map fun tp => (tp.name, memberTypeName h tp.name)
+            let some (clsH, tailH) := loopShape? h (mv.map (·.1)) (renameTypes ρH (renameE renH fh.body)) grp
               | throw s!"{p.show}: internal: the shape of {h} (#283)"
             members := members ++ [.app q (.ident q "$member") [.ident q h,
               .block q (fh.params.map fun sp => SExpr.ident q (tagH sp.name)), .block q clsH,
-              .decl q (tagH "$r") (some fh.ret) false (markRecG h grp tailH)] false]
+              .decl q (tagH "$r") (some (styRename ρH fh.ret)) false (markRecG h grp tailH)] false]
           pure (.app q (.ident q "$group") (markRecG g grp tail :: members) false)
         -- (the names the others' bodies use from outside too, checked not
         -- in scope here, as for its own, #371's review)
@@ -2444,7 +2449,7 @@ def methodFns (tops : List STop) (reserved : List String := []) : Except String 
     calls (see above); the program unchanged when there are none. Also
     whether some are taken lazily (#246), whose consumers need a class of
     stack cells. -/
-def inlineMulti (tops : List STop) (reserved : List String := []) : Except String (List STop × Bool) := do
+def inlineMulti (tops : List STop) (reserved : List String := []) (eager : List String := []) : Except String (List STop × Bool) := do
   -- (methods with several values as functions first, #283; `reserved`:
   -- the members of built-in types and of the prelude)
   let tops ← methodFns tops reserved
@@ -2507,8 +2512,9 @@ def inlineMulti (tops : List STop) (reserved : List String := []) : Except Strin
   -- lazily where they are consumed: computed eagerly, `F$all`, only for the
   -- recursive ones that call them
   -- (#283) or of a strongly connected group of such functions, each's
-  -- alternatives calls of the group's, all of one result type and none
-  -- generic: one stack of items for the group, tagged by function
+  -- alternatives calls of the group's: one stack of items for the group,
+  -- tagged by function. Parameter instances are inferred from those edges
+  -- when the group is elaborated in its consumer's context.
   let reachSet (g : String) : List String := Id.run do
     let mut seen : List String := []
     let mut todo := (callees.lookup g).getD []
@@ -2523,13 +2529,11 @@ def inlineMulti (tops : List STop) (reserved : List String := []) : Except Strin
     g :: (mfs.map (·.1)).filter fun h => h != g && (reachSet g).contains h && (reachSet h).contains g
   let groupOK (g : String) : Bool :=
     let grp := groupOf g
-    -- (`STy` has no equality: the written result types compared as shown)
-    let ret := (mfs.lookup g).map fun f => reprStr f.ret
     grp.all fun h => match mfs.lookup h with
-      | some f => ((callees.lookup h).getD []).all grp.contains && (loopShape? h mv f.body grp).isSome &&
-          (grp.length == 1 || (f.tparams.isEmpty && some (reprStr f.ret) == ret))
+      | some f => ((callees.lookup h).getD []).all grp.contains && (loopShape? h mv f.body grp).isSome
       | none => false
   let loops : List String := recs.filter fun g =>
+    if (groupOf g).any eager.contains then false else
     match mfs.lookup g with
     | some f => if (groupOf g).length == 1 then (callees.lookup g).getD [] == [g] && (loopShape? g mv f.body).isSome
       else groupOK g

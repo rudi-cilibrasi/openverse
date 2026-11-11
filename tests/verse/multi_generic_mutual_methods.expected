@@ -1,0 +1,12 @@
+left 2
+right 1 1
+got 7 1
+left 0
+got 7 2
+count 3
+right 2 1
+left 1
+right 0 1
+first s 2
+count 3
+exit=0
