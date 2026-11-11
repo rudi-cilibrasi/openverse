@@ -138,7 +138,8 @@ not an `array{a₀, …}`, which would run `aₙ₋₁` before `a₀`'s value wa
   failure goes back into the alternative's own values first, and the
   tuple is that `first{…}`'s value.
   - As #246's functions of their own, it is asked for by the first elaboration and made for the next. The first elaboration takes one alternative, for the names' types, and its code is not kept.
-  - The clauses are still copied, as before, in a constructor, a default, a `defer:`, after a `return` or a `break` that leaves them, with a `var` binding, with `(super:)`.
+  - The clauses are still copied, as before, in a constructor, a default, a `defer:`, after a `return` or a `break` that leaves them, or with a `var` binding.
+  - A method's `(super:)` calls carry `$sourceSuper` metadata with the source class, method slot and an explicit `Self` capture. Elaboration restores that lookup scope at the call, so overloads are selected using the helper's actual argument types and the source method's inherited implementations. The same metadata serves first-success helpers, `for` continuations and refining casts; it disappears before Verse Core checking and suspension lowering.
   - They are also copied where the alternatives' values have different types (subclasses), since the function takes one type, and inside a function of its own of a call taken lazily that allows fewer effects than the function the continuation was asked for in.
   - The key has the captured names' types: a `for`'s body copied once per alternative has one place but names of other types.
   - Lazy calls may occur in the alternatives or suffix. An effectful lazy call's `$first…` helper is keyed by its complete prepared producer and suffix, binding annotation, typed mutable inputs, referenced type aliases and interface-copy context. Replacing a suffix by a continuation call changes that helper's contract even when source positions and captured names stay the same. New continuation requests are installed before requesting effectful lazy helpers, avoiding obsolete copies of trial suffixes. Producer recursion remains a direct recursive helper call; values are still taken lazily with their original rollback boundaries.
@@ -594,8 +595,9 @@ retains the type parameters of its inputs, results and written types as a
 continuation does (`contTypes`). Types absent from its inputs take explicit
 witness parameters, forwarded on every recursive edge and between mutual
 members. Written annotations use the owning context's type aliases,
-including refinements from enclosing casts. It is not yet done where the
-clauses call `(super:)`, in a constructor or a default.
+including refinements from enclosing casts. Super calls retain their
+source method's scope through `$sourceSuper`, as in other continuations.
+This is not yet done in a constructor or a default.
 It is keyed by the complete prepared producer and suffix, typed mutable
 inputs, written type instances and interface-copy context (`firstKey`), as a
 call in a function inlined at several sites is at one place. Being
@@ -1730,11 +1732,10 @@ names of `Self`'s fields and methods are made `Self.member` first
 (`selfQualify`, by the elaborator's own rule for bare names), so its
 function takes `Self` as one of the locals it uses; the lift then carries
 that branch (`Lift.body`) rather than the source's. Its `(super:)M(…)`
-calls are resolved there too, as the method's class has them
-(`superImpl`, which the elaborator's own `(super:)` uses), into direct
-calls of the implementations they reach with `Self` first
-(`superCalls`), since the function has no class; an overloaded method's,
-which its arguments resolve, stays refused. The placeholder classes that pinning the
+calls keep their source class and qualified method slot in `$sourceSuper`
+metadata, as in choice continuations. They use ordinary super lookup
+(`superImpl`), including overload selection under the branch's refined
+argument types. The placeholder classes that pinning the
 targets may add (#157) get their superclasses in `supersMap` like every
 class, as `refTags` asks whether each is below a class at every
 conversion of a class type.

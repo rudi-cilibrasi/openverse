@@ -3,7 +3,7 @@
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
-for kind in composed exclusive binding typed-first typed-for typed-exclusive refined-for refined-state refined-failure lazy-first lazy-for lazy-effect-first lazy-effect-for lazy-alt-first lazy-alt-for lazy-failure-for lazy-alt-failure-for lazy-exclusive-failure-for refined-lazy-failure refined-return refined-lazy-return refined-nested-body refined-nested-failure lazy-generic-first construct-first construct-for construct-failure method-first method-for method-failure lazy-named-first lazy-named-for lazy-named-generic-first bound-first bound-for bound-failure covariant-first covariant-for covariant-failure tuple-super-first tuple-super-for tuple-super-failure lazy-tuple-first lazy-tuple-for lazy-tuple-generic-first immediate-suspends-refined immediate-suspends-composed immediate-suspends-exclusive immediate-suspends-nested refined-retry-first; do
+for kind in composed exclusive binding typed-first typed-for typed-exclusive refined-for refined-state refined-failure lazy-first lazy-for lazy-effect-first lazy-effect-for lazy-alt-first lazy-alt-for lazy-failure-for lazy-alt-failure-for lazy-exclusive-failure-for refined-lazy-failure refined-return refined-lazy-return refined-nested-body refined-nested-failure lazy-generic-first construct-first construct-for construct-failure method-first method-for method-failure lazy-named-first lazy-named-for lazy-named-generic-first bound-first bound-for bound-failure covariant-first covariant-for covariant-failure tuple-super-first tuple-super-for tuple-super-failure lazy-tuple-first lazy-tuple-for lazy-tuple-generic-first immediate-suspends-refined immediate-suspends-composed immediate-suspends-exclusive immediate-suspends-nested refined-retry-first super-first super-for super-failure super-body; do
   sizes=()
   for count in 4 8; do
     python3 - "$kind" "$count" >"$tmp/p.verse" <<'PY'
@@ -35,6 +35,22 @@ if kind.startswith('immediate-suspends-'):
     print(f'Run({params} where {tparams})<suspends>:int =\n    var Total:int=0\n    branch:\n        Sleep(0.1)\n        Print("observe {{Total}}")\n    Sleep(0.0)\n    R:=for({clauses}):\n        Empty:[]a0=Concatenate(){nested}\n        Empty.Length\n    Sleep(0.2)\n    R.Length')
     args = ','.join('dup(int){A:=1,B:=2}' if i%2==0 else 'dup(string){A:="s",B:="t"}' for i in range(count))
     print(f'Main()<suspends>:void = Print("{{Run({args})}}")')
+    sys.exit(0)
+if kind.startswith('super-'):
+    print('base := class:\n    Limit()<computes>:int = 1')
+    print('child := class(base):\n    Limit<override>()<computes>:int = 100')
+    clauses = ', '.join(f'A{i}:=(Two(0)|Two(2))' for i in range(count))
+    if kind == 'super-first':
+        print(f'    Run()<transacts>:int = if({clauses}, (super:)Limit()=1) then A0 else -1')
+    else:
+        specs = '<decides>' if kind == 'super-failure' else ''
+        suffix = '' if kind == 'super-body' else ', (super:)Limit()=1'
+        check = '\n            1=1' if specs else ''
+        body = 'A0+(super:)Limit()' if kind == 'super-body' else 'A0'
+        print(f'    Run()<transacts>{specs}:int =\n        R:=for({clauses}{suffix}):{check}\n            {body}\n        R.Length')
+    specs = '<decides>' if kind == 'super-failure' else ''
+    call = 'child{}.Run[]' if specs else 'child{}.Run()'
+    print(f'Main()<transacts>{specs}:void = Print("{{{call}}}")')
     sys.exit(0)
 if kind.startswith('tuple-super-'):
     print('box(t:type) := class:\n    Both(X:t,Y:[]t)<transacts>:t = if(Y.Length=0) then (X|X) else X')

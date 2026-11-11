@@ -1,0 +1,38 @@
+00:1
+01:1
+02:1
+03:1
+10:2
+11:2
+12:2
+13:2
+20:3
+21:3
+22:3
+23:3
+30:4
+31:4
+32:4
+33:4
+observe 16
+wait 00:0
+wait 01:0
+wait 02:0
+wait 03:0
+wait 10:1
+wait 11:1
+wait 12:1
+wait 13:1
+wait 20:2
+wait 21:2
+wait 22:2
+wait 23:2
+wait 30:3
+wait 31:3
+wait 32:3
+wait 33:3
+done 32
+refined 3:4
+refined 4:5
+refined 0:1
+exit=0

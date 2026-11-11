@@ -1,0 +1,6 @@
+before int
+int 3
+before str
+str 3
+no
+exit=0
