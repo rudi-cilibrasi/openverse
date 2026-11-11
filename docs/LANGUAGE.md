@@ -772,9 +772,13 @@ Main():void =
   A class cast in the condition can refine its selected branch's type
   arguments (#243), including written types that use that refinement. In a `for`,
   this currently requires a non-suspending consumer whose body has no
-  non-local exit or non-rollback operation. A body may fail: this stops
+  non-rollback operation. A body may fail: this stops
   the whole `for` and retains that iteration's effects, just as in an
   ordinary `for`. An enclosing failure context can still undo them.
+  A `return` in the body leaves the source function, stopping later
+  alternatives. Its operand is saved before body cleanup; source cleanup
+  then runs with the updated captured variables. Breaks inside the body's
+  own `loop`s retain their targets.
   Its suffix must also permit a shared continuation, including lazy calls.
   Other contexts remain tracked in #417. Failure of the selected branch's
   alternatives does not select the `else` branch.

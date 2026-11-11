@@ -94,7 +94,7 @@ partial def Ty.toSTy : Ty → STy
   | .int => .name "int" | .logic => .name "logic" | .char => .name "char" | .char32 => .name "char32"
   | .rational => .name "rational" | .float => .name "float" | .void => .name "void" | .any => .name "any"
   | .refine n | .enum n | .param n _ => .name n
-  | .never => .name "false"
+  | .never => .name "$never"
   | .arr .char => .name "string"
   | .arr t => .arr t.toSTy
   | .opt t => .opt t.toSTy

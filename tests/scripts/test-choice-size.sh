@@ -3,7 +3,7 @@
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
-for kind in composed exclusive binding typed-first typed-for typed-exclusive refined-for refined-state refined-failure lazy-first lazy-for lazy-effect-first lazy-effect-for lazy-alt-first lazy-alt-for lazy-failure-for lazy-alt-failure-for lazy-exclusive-failure-for refined-lazy-failure; do
+for kind in composed exclusive binding typed-first typed-for typed-exclusive refined-for refined-state refined-failure lazy-first lazy-for lazy-effect-first lazy-effect-for lazy-alt-first lazy-alt-for lazy-failure-for lazy-alt-failure-for lazy-exclusive-failure-for refined-lazy-failure refined-return refined-lazy-return; do
   sizes=()
   for count in 4 8; do
     python3 - "$kind" "$count" >"$tmp/p.verse" <<'PY'
@@ -40,7 +40,7 @@ if kind.startswith('lazy-'):
     sys.exit(0)
 print('Pick(X:t where t:type):t = X | X')
 print('Early(N:int):int =\n    if (N < 0):\n        return 0\n    N | N + 1')
-if kind == 'refined-lazy-failure':
+if kind in ('refined-lazy-failure', 'refined-lazy-return'):
     print('counter := class:\n    var N:int = 0')
     print('Lazy(C:counter, N:int)<transacts><decides>:int =\n    N >= 0\n    set C.N += 1\n    N | Lazy[C, N - 1]')
 if kind.startswith('refined-'):
@@ -52,15 +52,17 @@ value = {'composed': '(Two(0) | Two(2))', 'exclusive': 'Early(0)',
          'refined-for': 'if (D := dup[P]) then (D.C | D.C + 1) else 0',
          'refined-state': 'if (D := dup[P]) then (D.C | D.C + 1) else 0',
          'refined-failure': 'if (D := dup[P]) then (D.C | D.C + 1) else 0',
+         'refined-return': 'if (D := dup[P]) then (D.C | D.C + 1) else 0',
+         'refined-lazy-return': 'if (D := dup[P]) then (D.C | D.C + 1) else 0',
          'refined-lazy-failure': 'if (D := dup[P]) then (D.C | D.C + 1) else 0'}[kind]
 clauses = ', '.join(f'A{i} := {value}' for i in range(count))
-if kind in ('refined-state', 'refined-failure', 'refined-lazy-failure'):
+if kind in ('refined-state', 'refined-failure', 'refined-lazy-failure', 'refined-return', 'refined-lazy-return'):
     params = ', '.join(f'P{i}:pair(a{i}, b{i})' for i in range(count))
     tparams = ', '.join(f'a{i}:type, b{i}:type' for i in range(count))
     clauses = ', '.join(f'A{i} := if (D := dup[P{i}]) then (D.C | D.C + 1) else 0, A{i} = 4, set Total += A{i}' for i in range(count))
-    effects = '<decides>' if kind != 'refined-state' else ''
-    test = '\n        Total > 0' if effects else ''
-    init = '\n    C := counter{}' if kind == 'refined-lazy-failure' else ''
+    effects = '<decides>' if kind in ('refined-failure', 'refined-lazy-failure') else ''
+    test = ('\n        if (Total > 0):\n            return Total' if kind in ('refined-return', 'refined-lazy-return') else '\n        Total > 0' if effects else '')
+    init = '\n    C := counter{}' if kind in ('refined-lazy-failure', 'refined-lazy-return') else ''
     if init:
         clauses += ', L := Lazy[C, 2]'
     print(f'Run({params} where {tparams}){effects}:int ={init}\n    var Total:int = 0\n    R := for ({clauses}):\n        set Total += 1{test}\n        Total\n    Total + R.Length')
@@ -72,9 +74,9 @@ elif kind.startswith('typed-'):
     print(f'Run(Unused:t where t:type):int =\n    R := for ({clauses}):\n        E:[]t = array{{}}\n        E.Length\n    R.Length')
 else:
     print(f'Run(I:t where t:type):[]t = for ({clauses}) {{ I }}')
-if kind in ('refined-state', 'refined-failure', 'refined-lazy-failure'):
+if kind in ('refined-state', 'refined-failure', 'refined-lazy-failure', 'refined-return', 'refined-lazy-return'):
     args = ', '.join('dup(int){A := 1, B := 2}' if i % 2 == 0 else 'dup(string){A := "s", B := "t"}' for i in range(count))
-    effects = '<decides>' if kind != 'refined-state' else ''
+    effects = '<decides>' if kind in ('refined-failure', 'refined-lazy-failure') else ''
     brackets = ('[', ']') if effects else ('(', ')')
     print(f'Main(){effects}:void = Print("{{Run{brackets[0]}{args}{brackets[1]}}}")')
 elif kind == 'refined-for':
