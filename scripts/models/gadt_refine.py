@@ -388,6 +388,31 @@ for k in range(R.randint(0, 2)):
             Sv += 1
             if below(o['cls'], T): expect.append(f"{nm} {Sv}"); hits += 1
         expect.append(f"{nm} hits {hits}")
+# #418: the final set's value is discarded when the else gives void.
+R418 = random.Random(seed * 1000003 + 418)
+target = R418.choice(list(MENU))
+offset = R418.randint(1, 9)
+loops.append(f'''VoidElse(P:pair(a, b), Start:int where a:type, b:type):int =
+    var Total:int = Start
+    var Other:int = 0
+    if (D := {target}[P]):
+        set Total += D.C
+        set Other = Total + {offset}
+    else:
+        set Other = -{offset}
+        Print("void else")
+    Total * 100 + Other''')
+for o in objs:
+    start = R418.randint(0, 9)
+    main.append(f'    Print("void state {{VoidElse({o["name"]}, {start})}}")')
+    if below(o['cls'], target):
+        total = start + o['C']
+        other = total + offset
+    else:
+        expect.append("void else")
+        total, other = start, -offset
+    expect.append(f"void state {total * 100 + other}")
+
 prog = [f"# genrefine seed {seed}"] + prog_cls + loops
 for f in funcs: prog.append(fix_iface(f, ftext(f)))
 prog += list(SHOWN.values())

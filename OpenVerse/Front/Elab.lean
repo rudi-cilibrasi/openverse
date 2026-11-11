@@ -2802,13 +2802,16 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
       | some _, some .void => pure (some .none)
       | some _, some t => pure (some (if escapes then .opt t.toSTy else .raw (some t.toSTy)))
       | some ee, none =>
-        if !escapes then pure (some (.raw none))
-        else if escapesAlways (Choice.stmtsOf body) then pure (some .elseAfter)
+        if escapes && escapesAlways (Choice.stmtsOf body) then pure (some .elseAfter)
         else do
           let st ← get
           let τ? ← tryCatch (do pure (some (← elabE { ctx with typeOnly := true } ee none).ty)) fun _ => pure none
           set st
-          pure (τ?.map fun τ => if τ == .void then ExitVal.none else .opt τ.toSTy)
+          if !escapes then
+            -- Discard a statement's value before building the copy-out tuple.
+            pure (some (if τ?.any (· == .void) then .none else .raw none))
+          else
+            pure (τ?.map fun τ => if τ == .void then ExitVal.none else .opt τ.toSTy)
     let some vm := vm?
       | eerr ((retPart.orElse fun _ => brkPart).map (·.pos) |>.getD p) s!"the branch of the cast to {shown}, which holds only under a refinement of the type arguments, is compiled as a function of its own, so it cannot return or break out of it yet where the if's value is used at a type not known there (write it) (#243)"
     let retS := if ctx.retTy == .void then none else some ctx.retTy.toSTy
