@@ -1273,6 +1273,13 @@ def choiceOrder (ctx : Ctx) (n : String) : List (String × Bool) :=
     | some d => !Choice.stable (fun _ => true) d
     | none => false)
 
+/-- Keep a class cast with its branch until its refinement can be applied.
+    A receiver bound by earlier clauses need not be in the context yet. -/
+def choiceHasCast (ctx : Ctx) (i : SExpr) : Bool :=
+  (Choice.arms i).any fun (cs, _) => cs.any fun clauses => clauses.any fun
+    | .decl _ _ none false (.app _ (.ident _ target) [_] true) => ctx.types.classes.contains target
+    | _ => false
+
 /-- A local named `n` may be declared here: Verse has no shadowing. -/
 def checkNewLocal (ctx : Ctx) (p : Pos) (n : String) : EM Unit := do
   if ctx.lookup n |>.isSome then
@@ -2927,7 +2934,7 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
       -- (made: a branch the elaborator made, for a cast with clauses
       -- after it, #286, which the source does not have as such)
       -- (and a tagged one, which the source's places do not find, #53)
-      body := if ctx.selfClass.isSome || made || !ctx.liftTag.isEmpty then some body else none }
+      body := if ctx.selfClass.isSome || made || D.startsWith "$" || !ctx.liftTag.isEmpty then some body else none }
     modify fun st => if st.castNeeds.any (·.key == key) then st else { st with castNeeds := st.castNeeds ++ [lift] }
     -- (a placeholder: this elaboration goes no further)
     return some ⟨if decides then .prim .fail [] else .prim .userErr [], τ'⟩
@@ -5825,7 +5832,8 @@ partial def elabOneClauses (ctx : Ctx) (cs : List SExpr) : EM (R × Ctx) := do
   let ctx := { ctx with liftWhy := "" }
   -- (a `break` here would leave `firstE`'s loop, not the program's)
   let (code, ctx') ← elabOneGo { ctx with inLoop := false, inChoice := ctx.inLoop, inTaking := true }
-    (Choice.prepare cs (choiceValues ctx) (choiceField ctx) (fieldOrder := choiceOrder ctx))
+    (Choice.prepare cs (choiceValues ctx) (choiceField ctx) (fieldOrder := choiceOrder ctx)
+      (keepBranches := choiceHasCast ctx))
   return (⟨Expr.firstE code, .void⟩, { ctx' with inLoop := ctx.inLoop, inChoice := ctx.inChoice, inTaking := ctx.inTaking })
 
 partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
@@ -5848,6 +5856,38 @@ partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
             (.app q f (as.filter fun | .app _ (.ident _ "$joinOf") _ _ => false | _ => true) false))
         | none => pure cl
       | cl => pure cl
+    if let some b@{ branchy := some i, .. } := Choice.binding? cl then
+      if choiceHasCast ctx i then
+        let p := b.pos
+        let t := s!"$refineChoice{p.line}_{p.col}{b.name}"
+        -- Infer the element type before putting the remaining clauses in
+        -- the branch. Each option takes the branch's first value for types.
+        let st ← get
+        let expected ← match ← b.ty.mapM (resolveTy ctx.types p) with
+          | some ty => pure (some ty)
+          | none => match b.place with
+            | some l => tryCatch (do pure (some (← elabE ctx l none).ty)) fun _ => pure none
+            | none => pure none
+        let pv := t ++ "type"
+        let probe := Choice.consumeBranches i t (fun arm => .optionLit p
+          (.block p [.decl p pv (expected.map Ty.toSTy) false arm, .ident p pv]))
+        let r ← elabE { ctx with typeOnly := true } probe (expected.map .opt)
+        set st
+        let .opt ty := r.ty | eerr p "cannot infer the type of this if's choices"
+        let binds := (b.name :: Choice.boundIn rest).eraseDups
+        let vars := rest.filterMap fun | .decl _ n _ true _ => some n | _ => none
+        let tup := SExpr.tuple p (binds.map (SExpr.ident p ·) ++ [.ident p "true"])
+        let consume (arm : SExpr) : SExpr :=
+          let clauses := Choice.prepare [.decl p b.name (some ty.toSTy) false arm]
+            (choiceValues ctx) (choiceField ctx) (site := t) (fieldOrder := choiceOrder ctx)
+            (keepBranches := choiceHasCast ctx)
+          .optionLit p (.app p (.ident p "$firstP") [.block p (clauses ++ rest ++ [tup])] false)
+        let selected := Choice.consumeBranches i t consume
+        -- A selected branch with no successful value gives none. Query it
+        -- after selection so an alternative's failure cannot select else.
+        return ← elabOneGo ctx ([.decl p t none false (.query p selected)] ++
+          binds.zipIdx.map fun (n, j) => .decl p n none (vars.contains n)
+            (.app p (.ident p t) [.int p (j : Int)] false))
     match Choice.binding? cl with
     | some b@{ each := some (.app _ (.ident _ "$loop") lp false), .. } =>
       -- (one taken lazily, #246: a loop over its values, each followed by
@@ -5928,7 +5968,7 @@ partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
         let liftAlt (a : SExpr) (i : Nat) : List SExpr :=
           Choice.prepare [.decl p b.name b.ty false a] (choiceValues ctx) (choiceField ctx)
             (fieldOrder := choiceOrder ctx)
-            (site := s!"{t}a{i}")
+            (site := s!"{t}a{i}") (keepBranches := choiceHasCast ctx)
         let alt (a : SExpr) (i : Nat) : SExpr :=
           .app p (.ident p "$firstP") [.block p (liftAlt a i ++ rest ++ [tup])] false
         let copied : List SExpr := [.decl p t none false (Choice.mk p (b.alts.zipIdx.map fun (a, i) => alt a i))] ++
