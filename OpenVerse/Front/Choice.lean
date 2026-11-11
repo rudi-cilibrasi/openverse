@@ -2036,8 +2036,9 @@ structure MFam where
     - `M(args)` in the body of a class below the root is `Self.M(args)`.
     - `(super:)M(args)` is a call of the nearest implementation above. -/
 partial def rwFamCalls (anc : String → List String) (fams : List (String × MFam)) (trial : Bool)
-    (inC : Option String) (e : SExpr) (isIface : String → Bool := fun _ => false) : SExpr :=
-  let rw := fun x => rwFamCalls anc fams trial inC x isIface
+    (inC : Option String) (e : SExpr) (isIface : String → Bool := fun _ => false)
+    (typeView : String → String → List (String × STy) := fun _ _ => []) : SExpr :=
+  let rw := fun x => rwFamCalls anc fams trial inC x isIface typeView
   let below (f : MFam) (d : String) : List String := f.impls.filter fun x => x != d && (anc x).contains d
   -- (#375's review) an interface's default yields to every class's own
   -- implementation, as dispatch gives: a class's chain wins over the
@@ -2049,13 +2050,18 @@ partial def rwFamCalls (anc : String → List String) (fams : List (String × MF
   let superOrder (d : String) : List String :=
     let ancs := (anc d).drop 1
     ancs.filter (!isIface ·) ++ (ancs.filter isIface).mergeSort fun a b => (anc a).length ≥ (anc b).length
-  -- (a call of one implementation's function in a family with overrides,
-  -- the receiver first: one tuple argument to several positional
+  -- (a super call of one implementation's function, the receiver first:
+  -- normalize its tuple before recursive calls become $rec/$recTo edges;
+  -- one tuple argument to several positional
   -- parameters, and no named one, taken apart after the receiver, as at a
   -- call, #140, also where the function is not inlined, a kept body)
-  let plain (p q : Pos) (fn : String) (f : MFam) (recv : SExpr) (args : List SExpr) (br : Bool) : SExpr :=
+  let superCall (p q : Pos) (fn : String) (f : MFam) (recv : SExpr) (args : List SExpr) (br : Bool)
+      (view : List (String × STy)) : SExpr :=
     let named := fun | SExpr.decl _ n _ _ _ => n.startsWith "?" | _ => false
-    let posPs := f.params.filter (!·.named)
+    -- A super call is written in the caller class's type scope. Its
+    -- invariant parameter types are the root signature viewed there,
+    -- including renamed, fixed and compound inherited arguments.
+    let posPs := (f.params.filter (!·.named)).map fun sp => { sp with ty := sp.ty.substNames view }
     match args with
     | [a] =>
       if named a || posPs.length < 2 then .app p (.ident q fn) (recv :: args) br else
@@ -2069,7 +2075,7 @@ partial def rwFamCalls (anc : String → List String) (fams : List (String × MF
     else if trial then .app p (.ident q (methodFnName f.root m ++ "$fam")) (recv :: args) br
     -- (its declaring class's the only implementation, an abstract override
     -- below it: that one, which dispatch always picks)
-    else if f.impls == [f.root] && !f.covariant then plain p q (methodFnName f.root m) f recv args br
+    else if f.impls == [f.root] && !f.covariant then .app p (.ident q (methodFnName f.root m)) (recv :: args) br
     else
       -- (names of this call's own, `inlineCalls` tags them for each site)
       let site := s!"{p.line}_{p.col}"
@@ -2154,7 +2160,7 @@ partial def rwFamCalls (anc : String → List String) (fams : List (String × MF
         match recv, inC with
         | .ident _ "(super:)", some d =>
           match (superOrder d).find? f.impls.contains with
-          | some a => some (plain p q (methodFnName a m) f (.ident q "Self") (args.map rw) br)
+          | some a => some (superCall p q (methodFnName a m) f (.ident q "Self") (args.map rw) br (typeView d f.root))
           | none => none
         | _, _ => some (call p q m f (rw recv) (args.map rw) br)
       | none => none
@@ -2300,6 +2306,7 @@ def methodFns (tops : List STop) (reserved : List String := []) : Except String 
     | some (_, ii, _, _, _) => ii
     | none => false
   let rw := fun fs trial inC e => rwFamCalls anc fs trial inC e isIfaceC
+    (fun c root => (rootView (classes.length + 1) c root).getD [])
   -- (a method's body as the function's: its members qualified by `Self`,
   -- then `Self` the parameter `$Self`)
   let fnOf (fs : List (String × MFam)) (trial : Bool) (c : String) : STop → Option STop

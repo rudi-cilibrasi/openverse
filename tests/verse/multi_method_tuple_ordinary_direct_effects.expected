@@ -1,0 +1,9 @@
+recv 1
+arg 2
+arg 3
+body
+v 3
+v 4
+end 3
+none 3
+exit=0
