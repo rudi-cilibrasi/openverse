@@ -3,7 +3,7 @@
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
-for kind in composed exclusive binding typed-first typed-for typed-exclusive refined-for refined-state refined-failure lazy-first lazy-for lazy-effect-first lazy-effect-for lazy-alt-first lazy-alt-for lazy-failure-for lazy-alt-failure-for lazy-exclusive-failure-for refined-lazy-failure refined-return refined-lazy-return refined-nested-body refined-nested-failure lazy-generic-first construct-first construct-for construct-failure method-first method-for method-failure lazy-named-first lazy-named-for lazy-named-generic-first bound-first bound-for bound-failure covariant-first covariant-for covariant-failure tuple-super-first tuple-super-for tuple-super-failure lazy-tuple-first lazy-tuple-for lazy-tuple-generic-first immediate-suspends-refined immediate-suspends-composed immediate-suspends-exclusive immediate-suspends-nested refined-retry-first super-first super-for super-failure super-body mutual-generic-first mutual-generic-for mutual-generic-alt-first suspends-return suspends-return-generic suspends-return-lazy outer-effect-refined outer-effect-composed outer-effect-exclusive clause-return-refined clause-return-composed clause-return-exclusive; do
+for kind in composed exclusive binding typed-first typed-for typed-exclusive refined-for refined-state refined-failure lazy-first lazy-for lazy-effect-first lazy-effect-for lazy-alt-first lazy-alt-for lazy-failure-for lazy-alt-failure-for lazy-exclusive-failure-for refined-lazy-failure refined-return refined-lazy-return refined-nested-body refined-nested-failure lazy-generic-first construct-first construct-for construct-failure method-first method-for method-failure lazy-named-first lazy-named-for lazy-named-generic-first bound-first bound-for bound-failure covariant-first covariant-for covariant-failure tuple-super-first tuple-super-for tuple-super-failure lazy-tuple-first lazy-tuple-for lazy-tuple-generic-first immediate-suspends-refined immediate-suspends-composed immediate-suspends-exclusive immediate-suspends-nested refined-retry-first super-first super-for super-failure super-body mutual-generic-first mutual-generic-for mutual-generic-alt-first suspends-return suspends-return-generic suspends-return-lazy outer-effect-refined outer-effect-composed outer-effect-exclusive clause-return-refined clause-return-composed clause-return-exclusive own-method-first own-method-for own-method-failure own-method-covariant-first; do
   sizes=()
   for count in 4 8; do
     python3 - "$kind" "$count" >"$tmp/p.verse" <<'PY'
@@ -60,6 +60,37 @@ if kind.startswith('suspends-return'):
     print(f'Run({params} where {tparams})<suspends>:{ret_ty} =\n    var Total:int=0\n    H:=counter{{}}\n    defer:Print("source {{Total}}")\n    branch:\n        defer:Print("observer {{Total}}")\n        Sleep(1.0)\n    Sleep(0.0)\n    for({clauses}):\n        defer:set Total+=100\n        set Total+=A0\n        if(A0=5):return {result}\n        A0\n    Sleep(0.1)\n    {fallback}')
     args = ','.join('dup(int){A:=1,B:=2}' if i%2==0 else 'dup(string){A:="s",B:="t"}' for i in range(count))
     print(f'Main()<suspends>:void = Print("{{Run({args})}}")')
+    sys.exit(0)
+if kind.startswith('own-method-'):
+    covariant = kind == 'own-method-covariant-first'
+    if covariant:
+        print('''animal(a:type,b:type) := class { First:a; Second:b }
+dog(a:type,b:type) := class(animal(a,b)) { Code:int=1 }
+base(a:type) := class:
+    Anchor:a
+    Pick(X:b where b:type)<transacts>:animal(a,b) = animal(a,b){First:=Anchor,Second:=X}|animal(a,b){First:=Anchor,Second:=X}
+child(u:type) := class(base(u)):
+    Pick<override>(X:v where v:type)<transacts>:dog(u,v) = dog(u,v){First:=Anchor,Second:=X}|dog(u,v){First:=Anchor,Second:=X}''')
+    else:
+        print('''base(a:type) := class:
+    Anchor:a
+    Pick(X:b,Y:[]b,?E:?b=false where b:type)<transacts>:b = X|X
+child(u:type) := class(base(u)):
+    Pick<override>(X:v,Y:[]v,?E:?v=false where v:type)<transacts>:v = X|(super:)Pick((X,Y))''')
+    params = ','.join(f'P{i}:child(a{i}),X{i}:b{i}' for i in range(count))
+    tparams = ','.join(f'a{i}:type,b{i}:type' for i in range(count))
+    clauses = ','.join(f'A{i}:=P{i}.Pick(X{i})' if covariant else f'A{i}:=P{i}.Pick((X{i},array{{}}))' for i in range(count))
+    if kind.endswith('first'):
+        value = 'A0.Second' if covariant else 'A0'
+        print(f'Run({params} where {tparams})<transacts>:int = if({clauses},E:[]b0=array{{{value}}})then E.Length else -1')
+    else:
+        fx = '<decides>' if kind.endswith('failure') else ''
+        check = '\n        1=1' if fx else ''
+        print(f'Run({params} where {tparams})<transacts>{fx}:int =\n    R:=for({clauses}):{check}\n        A0\n    R.Length')
+    args = ','.join('child(int){Anchor:=7},"s"' if i%2==0 else 'child(string){Anchor:="a"},9' for i in range(count))
+    br = ('[',']') if kind.endswith('failure') else ('(',')')
+    fx = '<decides>' if kind.endswith('failure') else ''
+    print(f'Main(){fx}:void = Print("{{Run{br[0]}{args}{br[1]}}}")')
     sys.exit(0)
 if kind == 'refined-retry-first':
     print('pair(a:type,b:type) := class { A:a; B:b }')

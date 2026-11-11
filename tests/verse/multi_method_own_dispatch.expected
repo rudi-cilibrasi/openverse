@@ -1,0 +1,15 @@
+child 1
+base 0
+got 7 y
+got 7 x
+got 7 y
+child 1
+direct q
+base 0
+direct p
+direct q
+child 1
+base 0
+first 7 x
+none
+exit=0

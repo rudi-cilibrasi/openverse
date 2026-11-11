@@ -1,0 +1,12 @@
+all 7 y 99
+default 3
+all 7 x 3
+all 7 y 4
+default 3
+first 7 x
+none
+default 3
+generic 7 q 99
+generic 7 p 3
+generic 7 q 4
+exit=0
