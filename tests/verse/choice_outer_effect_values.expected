@@ -1,0 +1,44 @@
+value 8
+value 9
+value 9
+value 10
+result -1 10
+value 18
+value 19
+value 19
+value 20
+result -1 10
+alloc 8
+value 8
+alloc 9
+value 9
+alloc 10
+value 10
+alloc 11
+value 11
+alloc 9
+value 9
+alloc 10
+value 10
+alloc 11
+value 11
+alloc 12
+value 12
+alloc 10
+value 10
+alloc 11
+value 11
+alloc 12
+value 12
+alloc 13
+value 13
+alloc 11
+value 11
+alloc 12
+value 12
+alloc 13
+value 13
+alloc 14
+value 14
+result -1 10
+exit=0

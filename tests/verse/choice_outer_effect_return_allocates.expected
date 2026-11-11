@@ -1,0 +1,7 @@
+alloc 8
+result 8 10
+alloc 8
+result 8 10
+alloc 8
+result 8 10
+exit=0
