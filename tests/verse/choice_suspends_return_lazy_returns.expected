@@ -1,0 +1,13 @@
+lazy 2 1
+single body 6
+single loop 6
+single source 6
+single result 6
+lazy 2 2
+lazy 2 3
+double body 8
+double loop 8
+double source 8
+double result 8
+caught 3
+exit=0

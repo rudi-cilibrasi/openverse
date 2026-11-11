@@ -1770,6 +1770,12 @@ discovers locals and nested lifts in the helper, whose refinement scope
 keeps their storage metadata distinct from the original source frame.
 The class-copy tag and continuation-sharing keys remain separate.
 
+Source returns from an immediate consumer in a suspending caller use the
+same return packet as other shared bodies. Admission checks the consumer
+before adding source cleanup and the final return, which stay outside its
+filters. A discarded waiting or unsuccessful trial restores all frame and
+lift metadata before retaining the original consumer lowering.
+
 Refining lifts that start `branch` or `rush` roots, directly or through
 another lift, share their source function's task scope (#419). Finishing
 or cancelling the helper runs its lexical cleanup while leaving those

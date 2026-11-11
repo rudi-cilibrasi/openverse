@@ -4614,9 +4614,7 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
     let ctx := { ctx with
       forOutcomeSlot := none,
       forBreakSlot := ownBreak.orElse fun _ => if ctx.inLoop then ctx.forBreakSlot else none }
-    let elaborate : EM R := do
-      if ctx.suspends || (Refine.findPart (fun | .ret .. => true | _ => false) false body).isNone then
-        return ← elabFor ctx p clauses body
+    let withReturn : EM (R × Bool) := do
       let sourceRet ← match ctx.refineExits.ret with
         | some (some (_, t), _) => resolveTy ctx.types p t
         | some (none, _) => pure .void
@@ -4630,7 +4628,11 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
       let metadata := SExpr.set p (.ident p name) none (.ident p name)
       let body := SExpr.app p (.ident p "$forReturns")
         [metadata, .ident p (if ctx.canFail then "true" else "false"), body] false
+      let before ← get
       let r ← elabFor { c with forOutcomeSlot := some flag } p clauses body
+      -- Only the consumer moves into a filter-bound continuation. Source
+      -- cleanup and the final return remain in the suspending caller.
+      let waits := forContWaits ctx before (← get) [r.e]
       let result ← fresh (.opt r.ty)
       let value ← fresh r.ty
       let returning := s!"{name}$value"
@@ -4648,7 +4650,21 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
           (.seq (.assign result (.lit .none))
             (.seq (.loop (.seq (.assign result (.prim .mkSome [run])) Expr.brkV))
               (.seq after (.seq ret.e normal)))))
-      return ⟨code, r.ty⟩
+      return (⟨code, r.ty⟩, waits)
+    let elaborate : EM R := do
+      if (Refine.findPart (fun | .ret .. => true | _ => false) false body).isNone then
+        return ← elabFor ctx p clauses body
+      if !ctx.suspends then return (← withReturn).1
+      -- The marker permits source returns in the syntax guard. The typed
+      -- trial also detects waiting methods, function values and cast lifts.
+      -- Waiting consumers retain their original source-return lowering.
+      let marked := SExpr.app p (.ident p "$forReturns") [body] false
+      if !forBodySafe ctx marked then return ← elabFor ctx p clauses body
+      let st0 ← get
+      if let some (r, waits) ← tryCatch (some <$> withReturn) (fun _ => pure none) then
+        if !waits then return r
+      set st0
+      elabFor ctx p clauses body
     let r ← elaborate
     return ⟨ownBreak.map (fun flag => Expr.seq (.assign flag (.lit (.logic false))) r.e) |>.getD r.e, r.ty⟩
   | .gen p _ _ _ => eerr p "a generator X : source can only appear in a for clause"

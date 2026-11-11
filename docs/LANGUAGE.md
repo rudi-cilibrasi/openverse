@@ -793,14 +793,15 @@ Main():void =
   ordinary `for`. An enclosing failure context can still undo them.
   A `return` in the body leaves the source function, stopping later
   alternatives. Its operand is saved before body cleanup; source cleanup
-  then runs with the updated captured variables. Breaks inside the body's
+  then runs with the updated captured variables. This also applies to an
+  immediate shared consumer in a `<suspends>` caller, including after a
+  wait and inside nested or lazy consumers. Breaks inside the body's
   own `loop`s retain their targets. The body may itself consume a lazy choice
   with `for`, a first-success condition or an `option`, including generic and
   mutually recursive producers. These keep their own rollback boundaries;
   ordinary body cleanup also runs when that iteration finishes.
   Its suffix must also permit a shared continuation, including lazy calls.
-  Actual waiting bodies and source returns from these shared consumers in
-  suspending functions remain tracked in #417. Failure of the selected branch's
+  Actual waiting bodies remain tracked in #417. Failure of the selected branch's
   alternatives does not select the `else` branch.
 
   A choice inside a block is lifted with the block's clauses (#283): they
