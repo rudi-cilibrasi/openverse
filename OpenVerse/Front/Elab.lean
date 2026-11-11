@@ -6780,6 +6780,10 @@ partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
         -- copy in each, which doubled the code with each such choice)
         let isComposed (c : SExpr) : Bool := match Choice.binding? c with
           | some { place := none, branchy := none, each := none, alts := as, .. } => as.any Choice.hasLiftable
+          -- A later typed dispatch stays a branch binding until its
+          -- receiver prefix is elaborated. Its lifted arms would copy
+          -- this same suffix once prepared, just as composed alternatives do.
+          | some { branchy := some i, .. } => !Choice.plainBranches Choice.hasLiftable i
           | _ => false
         if rest.any isComposed then
           let req := if ctx.typeOnly then none else ctx.types.loopRequests.find? (·.key == contKey ctx p b.name (b.alts ++ rest))
