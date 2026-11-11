@@ -1,0 +1,24 @@
+return cleanup saw 9
+returned 7
+return cleanup saw 0
+returned 0
+void cleanup saw 9
+break left 9
+inner cleanup 17, 17
+outer cleanup 117, 134
+nested return left 117, 134
+nested returned 7
+outer cleanup 100, 100
+nested return left 100, 100
+nested returned -1
+loop cleanup 117
+nested break left 117
+loop cleanup 103
+nested break left 103
+contained 1118
+refined cleanup 9
+refined a
+decides cleanup 9
+decides 17
+return failed
+exit=0

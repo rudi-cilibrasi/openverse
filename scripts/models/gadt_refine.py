@@ -415,6 +415,72 @@ for o in objs:
         total, other = start, -offset
     expect.append(f"void state {total * 100 + other}")
 
+# #422: nested explicit exits save the return operand before cleanup, and
+# copy both locals after each lifted branch's cleanup.
+R422 = random.Random(seed * 1000003 + 422)
+outer_target = R422.choice(list(MENU))
+inner_target = R422.choice(list(MENU))
+outer_step = R422.randint(1, 9)
+inner_step = R422.randint(1, 9)
+tail_step = R422.randint(1, 9)
+loops.append(f'''ExitReturn(P:pair(a, b), Q:pair(c, d), Start:int where a:type, b:type, c:type, d:type):int =
+    var Total:int = Start
+    var Other:int = 0
+    defer: Print("exit locals {{Total}} {{Other}}")
+    if (D := {outer_target}[P]):
+        defer:
+            set Total += {outer_step}
+            set Other += Total
+        set Total += D.C
+        if (E := {inner_target}[Q]):
+            defer:
+                set Total += {inner_step}
+                set Other += Total
+            set Total += E.C
+            return Total
+    Total * 100 + Other''')
+loops.append(f'''ExitBreak(P:pair(a, b), Q:pair(c, d), Start:int where a:type, b:type, c:type, d:type):int =
+    var Total:int = Start
+    var Other:int = 0
+    loop:
+        if (D := {outer_target}[P]):
+            defer:
+                set Total += {outer_step}
+                set Other += Total
+            set Total += D.C
+            if (E := {inner_target}[Q]):
+                defer:
+                    set Total += {inner_step}
+                    set Other += Total
+                set Total += E.C
+                break
+            set Total += {tail_step}
+        break
+    Total * 100 + Other''')
+for o in objs:
+    q = R422.choice(objs)
+    start = R422.randint(0, 9)
+    total, other = start, 0
+    result = None
+    if below(o['cls'], outer_target):
+        total += o['C']
+        if below(q['cls'], inner_target):
+            total += q['C']
+            result = total
+            total += inner_step
+            other += total
+        total += outer_step
+        other += total
+    if result is None:
+        result = total * 100 + other
+    main.append(f'    Print("exit return {{ExitReturn({o["name"]}, {q["name"]}, {start})}}")')
+    expect.extend([f"exit locals {total} {other}", f"exit return {result}"])
+    if below(o['cls'], outer_target) and not below(q['cls'], inner_target):
+        total += tail_step
+        other += tail_step
+    main.append(f'    Print("exit break {{ExitBreak({o["name"]}, {q["name"]}, {start})}}")')
+    expect.append(f"exit break {total * 100 + other}")
+
 prog = [f"# genrefine seed {seed}"] + prog_cls + loops
 for f in funcs: prog.append(fix_iface(f, ftext(f)))
 prog += list(SHOWN.values())
