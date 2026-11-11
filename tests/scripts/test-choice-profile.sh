@@ -75,6 +75,11 @@ Run(B:box(a,b) where a:type,b:type):int=
     G:=B.Size
     F(array{}).Length+G()
 Main():void=Print("{Run(box(int,string){V:=7,Extra:="s"})}")''',
+        'open-function-value': '''Id(X:t where t:type):t=X
+Bind(X:t where t:type):type{_(:t):t}=Id
+Main():void=
+    F:=Bind(7)
+    Print("{F(9)}")''',
     }
     for name, text in positive.items():
         path = source(f'{name}.verse', text)

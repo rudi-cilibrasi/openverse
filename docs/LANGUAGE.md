@@ -175,12 +175,19 @@ Main():void =
   method's in `C`'s static class, so an override's narrower result type
   is the value's (#219), or, where a function type is expected, that of
   the class above that declares or overrides it with that type.
-- A generic function is a value where a closed function type that is an
-  instance of its type is expected (`F:int->int = Identity`, or an
-  `int->int` parameter); a `subtype(comparable)` type parameter only at a
-  type built from the primitive comparable types. Not where the type
-  mentions type parameters (`Map(Xs, Identity)` with `Map` over
-  `type{_(:t):u}`).
+- A generic function is a value where the expected function type determines
+  all its type arguments. This includes an open type in generic code:
+  `F:type{_(:t):t} = Identity`. The value retains those arguments and their
+  witnesses after the creating function returns. Repeated and compound
+  parameter/result types, comparable bounds, failure and suspension are
+  supported (#209). An open expected type uses the declared parameter
+  shape; tuple flattening/packing still requires a closed expected type.
+  Comparable arguments may also be unique classes or comparable value
+  structs. With no determining expected
+  type, a polymorphic identifier remains insufficient (`Map(Xs, Identity)`
+  cannot itself determine `Map`'s unknown result parameter).
+  Other arguments can determine it first (`Apply(Identity, X)` when `Apply`
+  takes `type{_(:t):t}` and `t`); arguments still run in written order.
 - A bound method's class parameters may repeat, occur inside compound
   parameter/result types, or be absent from its function signature (#209).
   The captured receiver retains their types and hidden witnesses. This

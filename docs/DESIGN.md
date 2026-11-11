@@ -975,9 +975,8 @@ flowchart LR
   through a function type may dispatch to it, so a value class's `$call…`
   demands no comparable type argument of the caller, as its type arguments
   are its receiver's, checked when the value was made (#218). The class
-  is made only when the class's type parameters each occur once in the
-  shape's type arguments, as whole types, so that it is always a valid
-  class (#53, #171).
+  retains the receiver's parameters and witnesses. Repeated, compound and
+  hidden parameters use the existing refinement/opening dispatch (#209).
 - **Variance and generic functions, by request** (#214). The pass cannot
   tell every place the elaborator expects a function type, so the
   elaborator asks. Where it expects a closed function type that a function
@@ -1000,10 +999,16 @@ flowchart LR
   instantiation, so a value of one function type does not convert to
   another by variance (that would need a wrapper object made at the
   conversion), and variance applies only where a closed type is written.
-  A generic function as a value at open types would need a class that
-  repeats type arguments (`Identity$fn(t)` implementing `$fn1(t, t)`);
-  the refinement that unifies is there now (#209), the value classes are
-  not yet.
+  At an open expected type, a generic function instead uses its generic
+  value class (`Identity$fn(t)` implementing `$fn1(t, t)`). `fnValueArgs`
+  matches its declared parameter/result shape against that expected type,
+  requires every argument and checks comparable bounds in the current
+  scope. The new object retains hidden witnesses, and its `$call…` reads
+  them as a generic receiver's does. Values can escape and be called under
+  GADT refinements without borrowing the creator's slots. This also serves
+  closed instances at the declared shape, including comparable classes and
+  value structs. Other closed requests keep the specialization path above;
+  open tuple reshaping remains separate.
 
 ## Concurrency: suspends functions as frames
 
