@@ -16,7 +16,11 @@ partial def elabExprValuesWith
     (elabMapLit : Ctx → Pos → List (SExpr × SExpr) → Option Ty → EM R)
     (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
   match se with
-  | .app p f args bracket => elabApp ctx p f args bracket exp
+  | .app p f args bracket => do
+    let r ← elabApp ctx p f args bracket exp
+    -- (#515) the calls of a failure context, for `--signal-no-rollback`
+    noteFailCalls ctx p "call" r.e
+    return r
   | .member p (.ident _ n) m =>
     if n == "(super:)" then
       eerr p s!"(super:){m} cannot be used as a value: call it with (super:){m}(…), or name a method that calls it"
@@ -28,7 +32,12 @@ partial def elabExprValuesWith
       | none => eerr p s!"enum {n} has no value '{m}'"
     | _, _ => elabMember ctx p (← elabE ctx (.ident p n) none) m exp
   | .member p e m => elabMember ctx p (← elabE ctx e none) m exp
-  | .construct p name targs args => elabConstruct ctx p name targs args exp
+  | .construct p name targs args => do
+    let r ← elabConstruct ctx p name targs args exp
+    -- (#515: a construction calls its classes' `block:`s, and constructor
+    -- functions)
+    noteFailCalls ctx p "construction" r.e
+    return r
   | .mapLit p entries => elabMapLit ctx p entries exp
   | .structDef p _ _ _ | .enumDef p _ _ | .refineDef p _ _ _ => eerr p "struct, enum and type definitions must be at the top level"
   | .query p e =>

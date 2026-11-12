@@ -125,6 +125,7 @@ scripts/worktree.sh feat/x                  # a worktree ../openverse-x on branc
 OPENVERSE_DEBUG=1 .lake/build/bin/openverse check F.verse   # an internal error also prints the rejected Verse Core
 .lake/build/bin/openverse core F.verse                      # each function's Verse Core, one statement per line
 .lake/build/bin/openverse check F.verse --no-choice         # enforce the choice-free source profile
+.lake/build/bin/openverse check F.verse --signal-no-rollback  # refuse an event Signal in a failure context
 ```
 
 `--no-choice` is an opt-in source profile for `check`, `core`, `emit`, and
@@ -133,6 +134,13 @@ imports and defaults. Ordinary failure, mutation, output and virtual-clock
 concurrency remain available. See [source profiles](docs/LANGUAGE.md#source-profiles).
 Normal compilation retains ordered choices and generators; their alternatives
 run at runtime. Both modes use the same deterministic Core semantics.
+
+`--event-fifo` and `--signal-no-rollback` are opt-in event policies whose
+defaults are undecided: the first resumes the tasks a `Signal` wakes in the
+order they began to wait (#513); the second refuses, before the program
+runs, an event's `Signal` that a failure context may call, as the published
+API's `<no_rollback>` `Signal` would be (#515). See
+[events](docs/LANGUAGE.md#concurrency).
 
 ```verse
 Half(N:int)<decides>:int =

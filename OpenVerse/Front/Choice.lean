@@ -1999,6 +1999,10 @@ structure FirstReturn where
     `sets`, then `true`). -/
 structure FirstLift where
   sourceContext : SourceContext := {}
+  /-- (#515, `--signal-no-rollback`) A `for`'s continuation made inside a
+      failure context where the code cannot fail (`Ctx.inRollback`): its
+      body runs inside that context too. -/
+  rollback : Bool := false
   returnExit : Option FirstReturn := none
   /-- A stage request supplies classes rather than a callable helper. -/
   stageOnly : Bool := false

@@ -218,6 +218,9 @@ structure TyEnv where
       of an interface below them that does), so a reference to it relates
       its type arguments to each class's through the class's view. -/
   viewed : List String := []
+  /-- (#515, `--signal-no-rollback`) Record the calls failure contexts make
+      (`ESt.failCalls`). -/
+  signalNoRollback : Bool := false
   /-- The hidden placeholder classes (#157): one below each generic class or
       interface whose concrete classes all fix its type arguments, so that a
       variable of its type at other type arguments has an initial value. The

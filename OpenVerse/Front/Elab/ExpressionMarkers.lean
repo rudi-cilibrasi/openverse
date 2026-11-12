@@ -17,7 +17,8 @@ partial def elabExprMarkersWith
     (next : Ctx → SExpr → Option Ty → EM R)
     (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
   match se with
-  | .app _ (.ident _ "$nofail") [e] false => elabE { ctx with canFail := false, inBlock := true } e exp
+  | .app _ (.ident _ "$nofail") [e] false =>
+    elabE { ctx with canFail := false, inRollback := ctx.inRollback || ctx.canFail, inBlock := true } e exp
   | .app p (.ident _ "$defer") _ _ => eerr p "defer: is a statement: it has no value"
   | .app p (.ident _ "$sync") arms false => elabConc ctx p true arms exp
   | .app p (.ident _ "$race") arms false => elabConc ctx p false arms exp
@@ -144,7 +145,8 @@ partial def elabExprMarkersWith
   | .app _ (.ident _ "$forClauseExits") [.set _ (.ident _ slot) none _, .set _ (.ident _ breaking) none _, .ident _ mode, body] false =>
     elabE { ctx with
       canFail := mode == "true", defers := [], forReturnSlot := some slot,
-      forBreakCapture := some breaking, forBreakSlot := none, inLoop := true, loopDefers := 0 } body exp
+      forBreakCapture := some breaking, forBreakSlot := none, inLoop := true, loopDefers := 0,
+      loopRollback := mode == "true" || ctx.inRollback } body exp
   -- (#283) a call of an overloaded function with several values, as
   -- written, in the elaboration for types: the overload it takes noted
   | .app _ (.ident _ "$ovPick") [.int _ id, .ident _ f, call] false =>
@@ -328,6 +330,7 @@ partial def elabExprMarkersWith
       eerr p s!"the default of ?{n} of {f} uses itself (a call of {f} that omits ?{n})"
     let dctx := { ctx with locals := locals.reverse, selfClass := none, inParamDefault := true,
                            inLoop := false, canFail := ctx.canFail && s.decides,
+                           inRollback := ctx.inRollback || ctx.canFail,
                            suspends := ctx.suspends && s.suspends, defaults := key :: ctx.defaults }
     let rd ← fxAt p (elabE dctx d exp)
     if !s.decides && rd.e.mayFail ctx.sigProg then

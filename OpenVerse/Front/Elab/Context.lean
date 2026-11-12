@@ -26,6 +26,7 @@ import OpenVerse.Front.ConcurrencyPrelude
 import OpenVerse.Front.PreludeNeeds
 import OpenVerse.Front.Profile
 import OpenVerse.Front.EffectPolicy
+import OpenVerse.Front.SignalAdmission
 import OpenVerse.Front.Suspend
 import OpenVerse.Front.Rational
 import OpenVerse.Front.Modules
@@ -287,6 +288,14 @@ structure Ctx where
   loopDefers : Nat := 0
   /-- In a `defer:` body, which cannot `return`. -/
   inDefer : Bool := false
+  /-- (#515, `--signal-no-rollback`) Inside a failure context of this
+      frame where the code itself cannot fail (a `defer:` body, a `block`,
+      a named argument's default): still rolled back with it. -/
+  inRollback : Bool := false
+  /-- (#515) The innermost loop is in a failure context (or inside one):
+      the `defer:`s a `break` runs, out of the scopes inside the loop, run
+      in that context, not in the one at the `break`. -/
+  loopRollback : Bool := false
   /-- In a class's `block:` clauses (one method, `$block`), where a `return`
       would skip the clauses after it. -/
   inBlock : Bool := false
@@ -424,6 +433,10 @@ structure LoopUse where
 structure ESt where
   /-- Pure mutual groups whose changing instances need eager generation. -/
   eagerNeeds : List String := []
+  /-- (#515, `--signal-no-rollback`) Each call (or construction, use of a
+      constant, `spawn`) in a failure context, what it is, and the Verse
+      Core functions it calls. -/
+  failCalls : Array ((Pos × String) × List Nat) := #[]
   /-- The program's types, for conversions between class types (`coerce`). -/
   env : TyEnv := {}
   nslots : Nat := 0
@@ -658,6 +671,22 @@ partial def resolveTy (env : TyEnv) (p : Pos) : STy → EM Ty
 
 def Ctx.lookup (ctx : Ctx) (n : String) : Option Local := ctx.locals.find? (·.name == n)
 def Ctx.sig? (ctx : Ctx) (n : String) : Option Sig := ctx.sigs.find? (·.name == n)
+
+/-- (#515) The context the `defer:`s an exit runs are elaborated in: inside
+    a failure context or not (`rollback`) as the exit's target is (`false`
+    for a `return`, which commits; the loop's for a `break`), not as the
+    exit itself is. -/
+def Ctx.exitDefers (ctx : Ctx) (rollback : Bool) : Ctx :=
+  { ctx with canFail := false, inRollback := rollback }
+
+/-- (#515, `--signal-no-rollback`) Record the functions code `e` at `p`
+    (`what` it is: a call, a construction, …) calls when it runs in a
+    failure context (or inside one, `inRollback`), for
+    `SignalAdmission.checkSites`. -/
+def noteFailCalls (ctx : Ctx) (p : Pos) (what : String) (e : Expr) : EM Unit := do
+  if ctx.types.signalNoRollback && (ctx.canFail || ctx.inRollback) then
+    let spawn := (ctx.sig? "$spawnMark").map (·.idx)
+    modify fun st => { st with failCalls := st.failCalls.push ((p, what), SignalAdmission.calls spawn e) }
 
 /-- Class or interface `c` has method `m`, its own or inherited. -/
 def Ctx.hasMethod (ctx : Ctx) (c m : String) : Bool :=

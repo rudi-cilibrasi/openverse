@@ -1741,6 +1741,25 @@ Main()<suspends>:void =
   `Signal` may be called in a failure context too, which Verse refuses
   (the API reference makes its `Signal` `<no_rollback>`): what the
   functions it calls do is rolled back with the context, as `Print` is.
+  With `--signal-no-rollback` (`openverse run`, `emit`, `check` and `core`,
+  opt-in until a default is chosen, #515), a program that may call an
+  event's `Signal` from a failure context is refused before it runs or is
+  emitted. A failure context is an `if`'s condition, a `for`'s clause, a
+  `<decides>` function's body, `option{…}`, `logic{…}`, `not`, the left of
+  `or`, a `first{…}` or a `do` expression, with everything that runs
+  inside it: a `block`, a named argument's default, a `defer:` (but not
+  one that a `return` or a `break` out of the failure context runs:
+  leaving it that way commits it). What it
+  runs counts: the functions it calls, the `block:`s of the classes it
+  constructs, the initialisers of the constants it uses, every
+  implementation a method call may pick, and every function of a function
+  value's type that is given as a value (conservatively), any of which may
+  reach the `Signal` of any kind of event. The error names the way to the
+  `Signal`. An `if`'s branches and a `for`'s body are not failure contexts
+  (unless the `if` or `for` is in one), also when the compiler moves the
+  body into a function of its own, and neither is the call a `spawn`
+  starts (its task runs it later; its arguments count). `Subscribe` and
+  `Cancel` in a failure context stay admitted, undone as above.
   A `subscribable_event()` is one without a value: `E.Signal()`,
   `E.Await()`, and functions of type `type{_():void}` to subscribe (#220).
   It is an `event(void)`, but not a `subscribable_event(t)`, whose
@@ -1842,7 +1861,7 @@ Main()<suspends>:void =
 | End of a program with tasks | not stated | the program ends when `Main` does; a `Main` that waits with no task able to run is an error (exit 2) (#156) |
 | Order of a `subscribable_event`'s functions | not stated (ch. 14's example lists them in subscription order) | subscription order; the tasks awaiting the event are woken first and go on after `Signal` returns (#210) |
 | Event waiter resumption | Epic's event/Signal API specifies suspension order | Main/spawn/source-arm scheduler order by default; with `--event-fifo`, suspension order across tasks and arms, after `Signal` returns and the signalling task waits; the default is undecided (#513) |
-| Signal in a failure context | the published Signal API describes no_rollback, alongside rendered transacts bits; versioned compiler behavior needs separate evidence | transactional Signal and callbacks are allowed and rolled back; an engine-compatible admission policy is tracked in #515 |
+| Signal in a failure context | the published Signal API describes no_rollback, alongside rendered transacts bits; versioned compiler behavior needs separate evidence | transactional Signal and callbacks are allowed and rolled back by default; with `--signal-no-rollback`, a program that may signal an event from a failure context is refused before it runs; the default is undecided (#515) |
 | Extent of a `<#>` comment | "everything indented by four spaces on subsequent lines" (§1.1) | the rest of the `<#>` line and every following line indented more than that line, whatever the amount (blank lines included); `<#>` may also follow code on a line |
 
 ## Not supported in v1

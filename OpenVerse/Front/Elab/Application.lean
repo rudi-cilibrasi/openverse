@@ -373,6 +373,7 @@ partial def elabAppBaseWith
                                      selfMethod := if selfC.isSome then (s.name.splitOn ".").getLast? else none,
                                      inParamDefault := true,
                                      inLoop := false, canFail := ctx.canFail && s.decides,
+                                     inRollback := ctx.inRollback || ctx.canFail,
                                      suspends := ctx.suspends && s.suspends,
                                      defaults := key :: ctx.defaults }
               let rd ← fxAt p (do coerce p (← elabE dctx d (some t)) t)
