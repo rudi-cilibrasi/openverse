@@ -517,7 +517,13 @@ private partial def commonUpper? (env : TyEnv) (types : List Ty) : Option Ty := 
   let selected ← match best with
     | [one] => some one
     | _ =>
-      if !best.all (fun | .struct name _ => env.classes.contains name | _ => false) then none else
+      let first ← best.head?
+      if best.all (fun other => env.boundSubtype first other && env.boundSubtype other first) then
+        -- Equivalent upper types (notably any/void and their containers)
+        -- have one domain. Pick a stable representative rather than making
+        -- argument order choose an instance or reporting false ambiguity.
+        some (best.foldl (fun old next => if reprStr next < reprStr old then next else old) first)
+      else if !best.all (fun | .struct name _ => env.classes.contains name | _ => false) then none else
       match best.filter (fun | .struct name _ => !(env.info name).isIface | _ => false) with
       | [one] => some one
       | _ => none

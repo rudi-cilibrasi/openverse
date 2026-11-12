@@ -299,9 +299,10 @@ private def contracts : IO Unit := do
     (resolved.params == [("a", true), ("b", true)])
   let upper (name : String) (ty : STy) := TParam.withUpperBound { line := 1, col := 1 } name ty
   let resolved ← getOK "specialized primitive and compound upper heads"
-    (resolveTParams types [upper "a" (.name "int"), upper "b" (.arr (.name "a")), upper "c" (.name "void")])
+    (resolveTParams types [upper "a" (.name "int"), upper "b" (.arr (.name "a")),
+      upper "c" (.name "void"), upper "d" (.tup [])])
   need "specialization retains equality guarantees without treating discard as one"
-    (resolved.params == [("a", true), ("b", true), ("c", false)] && resolved.bounds.length == 3)
+    (resolved.params == [("a", true), ("b", true), ("c", false), ("d", false)] && resolved.bounds.length == 4)
   need "void discards values without establishing a reverse conversion"
     (types.boundSubtype .int .void && !types.boundSubtype .void .int)
   for ty in [Ty.int, .param "opaque" false, .arr .int, .any, .void] do
@@ -329,6 +330,12 @@ private def contracts : IO Unit := do
     (!(Plan.tupleArray t []).valid {} [] && (tupleArrayDeclaration { line := 1, col := 1 } 0).toOption.isNone &&
       (find? {} [] ⟨.arr t, .void⟩).isNone)
   let peer := [Bound.mk t u, Bound.mk t (.param "v" false)]
+  for (a, b, expected) in [(Ty.any, Ty.void, Ty.any), (.void, .any, .any),
+      (.arr .any, .arr .void, .arr .any), (.arr .void, .arr .any, .arr .any)] do
+    let some inferred := SubtypeEvidence.infer {} peer [("u", a), ("v", b)] true
+      | throw (IO.userError "equivalent universal uppers must have a principal representative")
+    need "equivalent upper selection is stable under argument order and nesting"
+      (inferred.lookup "t" == some expected)
   for actual in [[("u", Ty.tup [.int, .int]), ("v", Ty.arr .rational)],
       [("v", Ty.arr .rational), ("u", Ty.tup [.int, .int])]] do
     let some inferred := SubtypeEvidence.infer {} peer actual true

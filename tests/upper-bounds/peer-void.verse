@@ -6,6 +6,7 @@ Item(C:counter,V:int)<transacts>:int=
     V
 Upper(Base:t,Value:u where t:type,u:subtype(t))<computes>:t=Value
 Keep(X:t where t:subtype(void))<computes>:t=X
+KeepZero(X:t where t:subtype(tuple()))<computes>:t=X
 Main():void=
     C:=counter{}
     V:void=Upper((),Item(C,7))
@@ -19,5 +20,5 @@ Main():void=
     Empty:?int=false
     N:?void=Upper(Base,Empty)
     if(N?)then Print("bad")else Print("none {C.N}")
-    R:=Keep(car{})
+    R:=Keep(KeepZero(car{}))
     Print("{R.Name} {C.N}")

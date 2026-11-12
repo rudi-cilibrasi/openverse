@@ -129,6 +129,9 @@ interfaces can overlap; their ambiguity is not resolved by declaration order.
 An invalid result-directed instance can retry from the original compiler state
 using arguments/defaults, without changing explicit instances or runtime
 argument evaluation.
+Mutually equivalent candidate uppers use a stable type representative. In
+particular, a mixture of `any` and `void`, including nested containers, must
+not introduce inference ambiguity or depend on argument order.
 
 Overload domains use each signature's own bound scope. Disjoint sibling-class
 bounds can be distinguished, while ancestor/interface and empty-container
@@ -161,7 +164,7 @@ construction, capture provenance or frontend lowering implements Verse's source
 semantics. Lean/C agreement is executable evidence, not that missing proof.
 
 Before source admission, #502 still requires the remaining relation audit
-(including function variance and full refinement/container
+(including comparable implications through universal discarding, function variance and full refinement/container
 interactions), operation-dictionary and generated/opened/refined adaptation audits,
 full construction/default/qualified-slot coverage, and a complete source
 acceptance run. Context-sensitive literal coercion must not silently become a

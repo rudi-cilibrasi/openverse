@@ -709,7 +709,7 @@ private partial def comparableUpper (env : TyEnv) (vars : List (String × Bool))
       (env.enums.lookup name).isSome || (env.refines.lookup name).isSome ||
       (env.classes.contains name && env.isUnique name)
   | .arr ty | .opt ty => comparableUpper env vars ty
-  | .tup parts => parts.all (comparableUpper env vars)
+  | .tup parts => !parts.isEmpty && parts.all (comparableUpper env vars)
   | .map key value => comparableUpper env vars key && comparableUpper env vars value
   | .app name _ => env.classes.contains name && env.isUnique name
   | .fn .. => false
