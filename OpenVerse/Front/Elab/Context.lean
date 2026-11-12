@@ -435,8 +435,9 @@ structure Requests where
       each, by key. -/
   casts : List Refine.Lift := []
   /-- Functions of their own for lazily taken calls whose effects need them
-      (#246), and the continuations, stages and helpers that consumers of
-      choices are lowered with (#335): by key. -/
+      (#246), the continuations, stages and helpers that consumers of
+      choices are lowered with (#335), and the helpers that forward calls
+      to the defaults of their named parameters: by key. -/
   loops : List Choice.FirstLift := []
   /-- Classes with a class parent that list an interface at type arguments
       that are not a prefix of their own (#351): hidden fields for all of
@@ -495,8 +496,10 @@ structure ESt where
   /-- What the elaboration of the function asks for, for the program to be
       elaborated again with it (`noteNeeds`): eager groups whose changing
       instances need eager generation, the families of uses of methods
-      (`Ctx.noteFamily`), functions and methods as values, and the
-      branches of refining casts. -/
+      (`Ctx.noteFamily`), functions and methods as values, the branches of
+      refining casts, and the helpers that forward calls to defaults. (The
+      functions of lazily taken calls are asked for once every function is
+      elaborated, `loopFirst`.) -/
   needs : Requests := {}
   /-- The program's types, for conversions between class types (`coerce`). -/
   env : TyEnv := {}

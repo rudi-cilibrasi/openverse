@@ -1783,8 +1783,7 @@ partial def elabSpawnBound (ctx : Ctx) (p : Pos) (fname adapter : String)
       specs := (if s.fx.isEmpty then ["computes"] else s.fx) ++ ["suspends"] ++ selfTps.map ("$selfTp:" ++ ·),
       ret := ret.toSTy, body := .app p (.ident p "$spawnResult") [.app p (.ident p fname) forwarded false] false,
       binds := [], sets := [], args := [] }
-    modify fun st => { st with loopFirst := st.loopFirst ++
-      [{ g := "", pos := p, itemCode := .lit .void, argSet := none, lift := .ok lift }] }
+    noteNeeds { loops := [lift] }
     return ⟨.lit .void, ctx.retTy⟩
   let slot ← fresh packed.ty
   let name := s!"$spawnArgs{slot}"
@@ -1850,8 +1849,7 @@ partial def elabSpawnDispatch (ctx : Ctx) (p : Pos) (cls fname declared : String
       [.block p stack, .int p (flags : Int), .app p (.ident p "$spawnBound")
         (.ident p fname :: .ident p adapter :: forwarded) false] false,
     binds := [], sets := [], args := [] }
-  modify fun st => { st with loopFirst := st.loopFirst ++
-    [{ g := "", pos := p, itemCode := .lit .void, argSet := none, lift := .ok lift }] }
+  noteNeeds { loops := [lift] }
   noteFx p s.fx (some fname)
   return ⟨.prim .userErr [], exp.getD (.struct (ctx.types.concurrencyName "task") [ret])⟩
 
@@ -1904,8 +1902,7 @@ partial def elabDefaultDispatch (ctx : Ctx) (p : Pos) (fname : String)
     specs := ["transacts"] ++ (if s.decides then ["decides"] else []) ++
       (if s.suspends then ["suspends"] else []) ++ s.selfTps.map ("$selfTp:" ++ ·),
     ret := s.ret.toSTy, body, binds := [], sets := [], args := [] }
-  modify fun st => { st with loopFirst := st.loopFirst ++
-    [{ g := "", pos := p, itemCode := .lit .void, argSet := none, lift := .ok lift }] }
+  noteNeeds { loops := [lift] }
   noteFx p s.fx (some fname)
   let recv ← elabE ctx positional[0]! none
   -- This round only discovers the helper; it returns before Core checking.

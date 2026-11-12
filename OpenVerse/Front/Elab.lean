@@ -1407,7 +1407,6 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       if env.isUnique cd.name || (env.fields cd.name).any (fun (f, _, _) => env.isVarField cd.name f) then
         fxCheck s!"construction of {cd.name}" allowed
           { fx := [("allocates", cd.pos, none)] }
-  let mut fieldDefaultNeeds : List Choice.FirstLift := []
   let mut fieldNeeds : Requests := {}
   -- check every field default once, with its struct's type parameters opaque
   -- (a default is elaborated again, at its field's type, at each construction
@@ -1429,10 +1428,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
           match (do coerce d.pos (← elabE ctx d (some ft)) ft : EM Expr).run { env } with
           | .ok (_, st) =>
             fxCheck s!"default of field '{f}' of {n}" allowed st
-            fieldNeeds := fieldNeeds.merge { methods := st.needs.methods }
-            fieldDefaultNeeds := fieldDefaultNeeds ++ st.loopFirst.filterMap fun u => match u.lift with
-              | .ok l => if l.key.startsWith "defaults:" then some l else none
-              | _ => none
+            fieldNeeds := fieldNeeds.merge { methods := st.needs.methods, loops := st.needs.loops }
           | .error msg => throw s!"{msg} (in the default of field '{f}' of {n})"
     | _ => pure ()
   -- a function: its body under the type environment `env` (which binds the
@@ -1553,25 +1549,21 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   let frameInfo := elaborated.map (·.frames)
   -- (the lazily taken functions with several values that contexts taking
   -- their first success consume, #246)
-  let loopFirst := fieldDefaultNeeds.map (fun l =>
-      ({ g := "", pos := l.pos, itemCode := .lit .void, argSet := none, lift := .ok l } : LoopUse)) ++
-    elaborated.toList.flatMap (·.loopFirst)
+  let loopFirst := elaborated.toList.flatMap (·.loopFirst)
   let mut needs := elaborated.foldl (fun acc f => acc.merge f.needs) fieldNeeds
-  -- (#214) functions wanted as values at types no class of theirs gives:
-  -- the program is elaborated again, with classes for them, so this one,
-  -- with placeholders, goes no further
-  -- (#243) and branches of casts that refine type arguments, lifted into
-  -- functions
-  -- (#283) and with the families of the uses of methods whose receivers'
-  -- classes this one found; those it did not reach, of no family, so that
-  -- the last elaboration has none to find (and knows what can fail)
+  -- (#283) the eager groups, and the families of the uses of methods whose
+  -- receivers' classes this one found; those it did not reach, of no
+  -- family, so that the last elaboration has none to find (and knows what
+  -- can fail): the program is elaborated again with them, so this one goes
+  -- no further
   if needs.families.isEmpty then needs := needs.merge { families := familySites.map fun (q, _) => (q, "") }
   if !needs.eager.isEmpty || !needs.families.isEmpty then
     return .asking { eager := needs.eager, families := needs.families }
-  let defaults := loopFirst.filterMap fun u => match u.lift with
-    | .ok l => if l.key.startsWith "defaults:" then some l else none
-    | _ => none
-  needs := needs.merge { loops := defaults }
+  -- (#214) and functions wanted as values at types no class of theirs
+  -- gives, adapters for methods wanted as values, (#243) branches of casts
+  -- that refine type arguments, lifted into functions, and helpers that
+  -- forward calls to the defaults of their named parameters: likewise, as
+  -- this one has placeholders for them
   if !needs.isEmpty then return .asking needs
   let mainSig ← match sigs.toList.find? (·.name == (if opts.entry.isSome then "$Do" else "Main")) with
     | some s =>
