@@ -343,7 +343,7 @@ partial def elabExprMarkersWith
   | .app p (.ident _ "$framePush") (.int _ j :: k :: lives) false =>
     let rk ← elabE ctx k none
     let some tys := frameLivesOf rk.ty | eerr p "internal: a frame's continuation (#283)"
-    let vals ← lives.mapM fun a => do return (← elabE ctx a none).e
+    let vals ← (lives.zip (tys.getD j.toNat [])).mapM fun (a, t) => do coerce a.pos (← elabE ctx a (some t)) t
     return ⟨framePush ctx tys j.toNat vals rk.e, rk.ty⟩
   | .app p (.ident _ "$frameApply") (k :: leaf :: frames) false =>
     let rk ← elabE ctx k none
