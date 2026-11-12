@@ -1,0 +1,15 @@
+key a
+rhs a
+body 7 11
+key a
+rhs a
+body 7 22
+key b
+rhs b
+body 7 33
+key b
+rhs b
+body 7 44
+done 4 44
+state ok
+exit=0

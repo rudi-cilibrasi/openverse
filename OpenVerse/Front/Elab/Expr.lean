@@ -434,7 +434,7 @@ partial def elabSeqIn (closed : Bool) (ctx : Ctx) (ss : List SExpr) (exp : Optio
     -- `defer: D` then the rest of the scope (Book of Verse ch. 7): the rest,
     -- with D pending for its returns and breaks, then D, then the rest's value
     if let .block _ [] := body then eerr p "a defer: block cannot be empty"
-    let (r2, ctx2) ← elabSeqIn closed { ctx with defers := (body, ctx.locals) :: ctx.defers } rest exp
+    let (r2, ctx2) ← elabSeqIn closed (ctx.withDefer body) rest exp
     let d ← elabDefers ctx [(body, ctx.locals)]
     let ctx2 := { ctx2 with defers := ctx.defers, loopDefers := ctx.loopDefers }
     match r2.ty with
@@ -482,14 +482,14 @@ partial def elabApp (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (brack
   let isNamed : SExpr → Bool := fun | .decl _ n _ _ _ => n.startsWith "?" | _ => false
   let positional := args.filter (!isNamed ·)
   let namedArgs := args.filter isNamed
-  -- A generated method function keeps its receiver as the first argument.
+  -- A method function keeps its receiver as the first argument.
   -- Inlining already spreads a following tuple, but kept/scalar/array calls
   -- reach this boundary directly. Instantiate from the actual receiver;
   -- callee type names have no meaning in the caller's lexical type scope.
   if let (.ident _ g, [receiver, tupleArg]) := (f, positional) then
     if let some s := ctx.sig? g then
       let npos := s.params.length - s.named.length
-      if s.pnames.head? == some "$Self" && npos ≥ 3 then
+      if s.hasReceiver && npos ≥ 3 then
         let r ← elabE ctx receiver none
         let some σ := s.params[0]!.matchArg ctx.types [] r.ty
           | eerr receiver.pos s!"expected {s.params[0]!.show}, found {r.ty.show} (the receiver of {Choice.shownFnName g})"

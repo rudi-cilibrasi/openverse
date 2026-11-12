@@ -55,9 +55,10 @@ with tempfile.TemporaryDirectory(prefix='openverse-effect-admission-') as direct
                 else not output.exists(), f'refused source changed bytecode output: {source}')
         return result
 
-    def accepted(source, stdout):
+    def accepted(source, stdout, extended=False):
         output.unlink(missing_ok=True)
-        result = run(OV + ['run', source, '--emit', output])
+        flags = ['--extended-defaults'] if extended else []
+        result = run(OV + ['run', source, *flags, '--emit', output])
         require((result.returncode, result.stdout, result.stderr) == (0, stdout, ''),
                 f'control failed: {source}; {result.returncode,result.stdout,result.stderr}; expected {stdout!r}')
         require(output.exists(), f'control emitted no bytecode: {source}')
@@ -78,7 +79,10 @@ with tempfile.TemporaryDirectory(prefix='openverse-effect-admission-') as direct
         control = tmp / 'control.verse'
         control.write_text(TAGS.sub('', source))
         name = fixture.stem.removeprefix('effect_admission_')
-        accepted(control, CONTROL_OUTPUT.get(name, ''))
+        # These stripped controls call an ordinary function in a field
+        # default; they isolate effect admission from convergence admission.
+        extended = name in {'predicts_field_default', 'struct_budget'}
+        accepted(control, CONTROL_OUTPUT.get(name, ''), extended=extended)
         # Every loaded source definition is checked, not only the entry path.
         dependency = tmp / 'Dependency.verse'
         root = tmp / 'Root.verse'
@@ -87,7 +91,7 @@ with tempfile.TemporaryDirectory(prefix='openverse-effect-admission-') as direct
         result = reject(root, needle, 'check')
         require('Dependency.verse' in result.stderr, f'import location missing: {result.stderr}')
         dependency.write_text(TAGS.sub('', dependency.read_text()))
-        accepted(root, '')
+        accepted(root, '', extended=extended)
 
     plain = tmp / 'Plain.verse'
     plain.write_text('Good()<computes>:int=1\nMain():void=Print("entry ran")\n')

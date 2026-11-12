@@ -459,6 +459,7 @@ partial def escapesAlways (ss : List SExpr) : Bool :=
   match ss.getLast? with
   | some (.ret ..) => true
   | some (.ite _ _ t (some u)) => escapesAlways (Choice.stmtsOf t) && escapesAlways (Choice.stmtsOf u)
+  | some (.app _ (.ident _ "$deferExits") [_, e] false) => escapesAlways [e]
   | e => e.any Refine.isBreak
 
 /-- How a refined branch's value leaves its function (#243): not at all
@@ -906,7 +907,7 @@ partial def forBodySafe (ctx : Ctx) (body : SExpr) : Bool :=
   -- generic/default argument bindings) inside the body. Their ownership is
   -- checked when that consumer elaborates; they do not escape the helper.
   let safeMarkers := ["$sourceSuper", "$methodMiss", "$methodCast", "$methodCase", "$methodType", "$methodParams", "$inlineScope", "$inlineScopeEnd", "$inline", "$choice", "$excl", "$alt", "$firstP", "$first", "$each", "$noLift", "$fxOf",
-    "$forReturns", "$forReturnBody", "$forClauseExits", "$choiceOperation", "$choiceGenericOperation", "$choiceCoercions", "$choiceDictionary", "$defer", "$loop", "$rec", "$recTo", "$group", "$member", "$returnTail",
+    "$forReturns", "$forReturnBody", "$forClauseExits", "$choiceOperation", "$choiceGenericOperation", "$choiceCoercions", "$choiceDictionary", "$defer", "$deferExits", "$loop", "$rec", "$recTo", "$group", "$member", "$returnTail",
     "$tparams", "$params", "$defaults", "$paramDefault", "$freeNames", "$declNames", "$callArgs", "$callSingleton", "$then"]
   let rec blocked (e : SExpr) : Bool :=
     match e with
@@ -1303,6 +1304,79 @@ def choiceFieldPath : SExpr → Bool
   | .member _ receiver _ => choiceFieldPath receiver
   | _ => false
 
+/-- Contiguous indices after one field. Source assignment evaluates all
+    keys before traversing the object or any of its value containers. -/
+partial def choiceIndexedField : SExpr → Option (SExpr × String × List SExpr)
+  | .app _ (.member _ receiver field) [index] true => some (receiver, field, [index])
+  | .app _ container [index] true => do
+    let (receiver, field, indices) ← choiceIndexedField container
+    some (receiver, field, indices ++ [index])
+  | _ => none
+
+abbrev ChoiceWriteStep := Pos × Option String × Option SExpr
+
+/-- The same source paths accepted by ordinary assignment. Calls are not
+    lvalues; keys are retained separately from traversal and reconstruction. -/
+partial def choiceWritePath : SExpr → Option (String × List ChoiceWriteStep)
+  | .ident _ n => some (n, [])
+  | .member p value field => (choiceWritePath value).map fun (n, ss) => (n, ss ++ [(p, some field, none)])
+  | .app p value [key] true => (choiceWritePath value).map fun (n, ss) => (n, ss ++ [(p, none, some key)])
+  | .query p value => (choiceWritePath value).map fun (n, ss) => (n, ss ++ [(p, some "?", none)])
+  | _ => none
+
+structure ChoicePathRow where
+  rootTy : Ty
+  objectTy : Ty
+  keys : List Ty
+  leaf : Ty
+  capture : Nat
+  prefixReads : Bool
+  prefixFails : Bool
+  tailFails : Bool
+
+/-- Locate the last reference object before evaluating the RHS. Everything
+    after it is a value container, read again after the RHS by ordinary set. -/
+def choicePathRow (env : TyEnv) (rootTy : Ty) (steps : List ChoiceWriteStep)
+    (compound : Bool) : Option ChoicePathRow := do
+  let mut ty := rootTy
+  let mut keys : List Ty := []
+  let mut failures : List Bool := []
+  let mut reads : List Bool := []
+  let mut lastRef : Option (Nat × Ty × String) := none
+  for ((_, field, key), i) in steps.zipIdx do
+    if let .struct cls _ := ty then
+      if env.isEmptyClass cls then none else pure ()
+    match field, key, ty with
+    | some "?", _, .opt next =>
+      ty := next
+      failures := failures ++ [true]
+      reads := reads ++ [false]
+    | some field, _, .struct cls args =>
+      if env.isRefClass cls then lastRef := some (i, ty, field)
+      let some (_, next, _) := (env.fields cls args).find? (·.1 == field) | none
+      ty := next
+      failures := failures ++ [false]
+      reads := reads ++ [env.isVarField cls field]
+    | none, some _, .arr next =>
+      keys := keys ++ [.int]
+      ty := next
+      failures := failures ++ [true]
+      reads := reads ++ [false]
+    | none, some _, .map keyTy next =>
+      keys := keys ++ [keyTy]
+      ty := next
+      failures := failures ++ [compound || i + 1 < steps.length]
+      reads := reads ++ [false]
+    | _, _, _ => none
+  let some (capture, objectTy, field) := lastRef | none
+  let .struct cls _ := objectTy | none
+  if !env.isVarField cls field then none else
+    some {
+      rootTy, objectTy, keys, leaf := ty, capture,
+      prefixReads := (reads.take capture).any id,
+      prefixFails := (failures.take capture).any id,
+      tailFails := (failures.drop capture).any id }
+
 /- Discover operations in lexical order, retaining immutable aliases only
     where their declarations are in scope. The source aliases remain intact:
     dictionary discovery needs their types, not a substitution of their values. -/
@@ -1323,17 +1397,26 @@ partial def choiceMemberOperations (bindings : ChoiceAliases) (body : SExpr) : L
   | .ite _ conditions yes no =>
     let (operations, visible) := choiceMemberOperationSeq bindings conditions
     operations ++ choiceMemberOperations visible yes ++ no.toList.flatMap (choiceMemberOperations bindings)
-  | e@(.set _ (.app _ (.member _ receiver _) [index] true) none value) =>
-    choiceMemberOperations bindings index ++ choiceMemberOperations bindings receiver ++
-      choiceMemberOperations bindings value ++ (if depends receiver then [(e, bindings)] else [])
-  | e@(.set _ target@(.member _ receiver _) op value) =>
+  | e@(.set _ target op value) =>
     let old := match value with
       | .app _ (.ident _ "$withOld") [saved, _] false => saved
       | _ => target
-    choiceMemberOperations bindings receiver ++
-      (if op.isSome then choiceMemberOperations bindings old else []) ++
-      choiceMemberOperations bindings value ++ (if depends receiver then [(e, bindings)] else [])
-  | .set _ _ _ value => choiceMemberOperations bindings value
+    match choiceIndexedField target with
+    | some (receiver, _, indices) =>
+      indices.flatMap (choiceMemberOperations bindings) ++ choiceMemberOperations bindings receiver ++
+        (if op.isSome then choiceMemberOperations bindings target ++ choiceMemberOperations bindings old else []) ++
+        choiceMemberOperations bindings value ++ (if depends receiver then [(e, bindings)] else [])
+    | none => match target with
+      | .member _ receiver _ =>
+        choiceMemberOperations bindings receiver ++
+          (if op.isSome then choiceMemberOperations bindings old else []) ++
+          choiceMemberOperations bindings value ++ (if depends receiver then [(e, bindings)] else [])
+      | _ => match choiceWritePath target with
+        | some (root, steps) =>
+          (steps.filterMap (·.2.2)).flatMap (choiceMemberOperations bindings) ++
+            choiceMemberOperations bindings value ++
+            (if names.contains root then [(e, bindings)] else [])
+        | none => choiceMemberOperations bindings value
   | .structDef .. | .enumDef .. | .refineDef .. => []
   | .app _ (.ident _ "$constructHints") _ _ => []
   | e => e.children.flatMap (choiceMemberOperations bindings)
@@ -1361,6 +1444,7 @@ structure ChoiceOperationCase where
   specs : List String
   methodVars : List (String × Bool) := []
   omittedDefaults : Bool := false
+  indexedDecides : Bool := true
 
 def choiceOrderedArguments (args : List SExpr) : List SExpr :=
   let named : SExpr → Bool := fun | .decl _ n .. => n.startsWith "?" | _ => false
@@ -1375,17 +1459,46 @@ def choiceForwardArguments (written values : List SExpr) : List SExpr :=
     | .decl p n _ _ _ => if n.startsWith "?" then .decl p n none false value else value
     | _ => value
 
+/-- Use the ordinary argument packer before discovering a dictionary.
+    Literal tuple fields stay separate for contextual generic inference;
+    a computed tuple stays one value, evaluated once in the caller. -/
+def choicePackArguments (sig : Sig) (args : List SExpr) (method : Bool) : List SExpr :=
+  let sig := if method then { sig with params := sig.params.drop 1, pnames := sig.pnames.drop 1 } else sig
+  let args := packCallArgs (args.head?.map SExpr.pos |>.getD { line := 0, col := 0 }) sig args false
+  let positional := args.filter fun | .decl _ n .. => !n.startsWith "?" | _ => true
+  let named := args.filter fun | .decl _ n .. => n.startsWith "?" | _ => false
+  let count := sig.params.length - sig.named.length
+  match positional with
+  | [.tuple _ fields] => if count != 1 then fields ++ named else args
+  | _ => args
+
+/-- Written arguments may share even when alternatives pack them into
+    different aggregate parameters. Keep each adapter's ordinary binder. -/
+def choicePositionalTypes (parameters : List Ty) (args : List SExpr) (raw : Bool) : Option (List Ty) := do
+  if raw then
+    if let [.tup [element]] := parameters then
+      if args.length == 1 then return [element]
+  if args.length == parameters.length then return parameters
+  match parameters, args with
+  | [.void], [] => some []
+  | [.tup elements], _ => if args.length == elements.length then some elements else none
+  | [.arr element], _ => if args.length > 1 then some (List.replicate args.length element) else none
+  | _, [_] => if parameters.length > 1 then some [Ty.tup parameters] else none
+  | _, _ => none
+
 /-- Parameter types in evaluation order. Omitted defaults stay in the
     original method call, in its own declaration and type scope. -/
-def choiceCallInputs (sig : Sig) (args : List SExpr) : Option (List Ty × Bool) := do
+def choiceCallInputs (sig : Sig) (args : List SExpr) (raw : Bool := false) : Option (List Ty × Bool) := do
   let npos := sig.params.length - sig.named.length - 1
   let positional := args.filter fun | .decl _ n .. => !n.startsWith "?" | _ => true
   let named := args.filterMap fun | .decl _ n .. => if n.startsWith "?" then some (n.drop 1).toString else none | _ => none
-  if positional.length != npos || named.eraseDups.length != named.length then none else do
+  if named.eraseDups.length != named.length then none else do
+  let positionalTypes := sig.params.drop 1 |>.take npos
+  let supplied ← choicePositionalTypes positionalTypes positional raw
   let indices ← named.mapM fun n => (sig.named.findIdx? (·.1 == n)).map (npos + ·)
   let omitted := sig.named.filter fun (n, _) => !named.contains n
   if omitted.any (·.2.isNone) then none else
-    some ((List.range npos ++ indices).map fun i => sig.params[i + 1]!, !omitted.isEmpty)
+    some (supplied ++ indices.map (fun i => sig.params[i + 1]!), !omitted.isEmpty)
 
 def choiceDefaultContext (ctx : Ctx) (body : SExpr) : SExpr :=
   let p := body.pos
@@ -1417,9 +1530,8 @@ partial def choiceOperationContexts (ctx : Ctx) (body : SExpr) : List (SExpr × 
     later generators have supplied their values. Only receiver-dependent
     columns independent of those method parameters belong to its object. -/
 def choiceGenericOperation (ctx : Ctx) (stem : String) (receiver : SExpr) (receiverTy : Ty) (ops : ChoiceOperations)
-    (call : SExpr) (cases : List ChoiceOperationCase) : Option ChoiceOperations := do
-  let .app p (.member _ _ method) arguments bracket := call | none
-  let arguments := choiceOrderedArguments arguments
+    (call : SExpr) (arguments : List SExpr) (cases : List ChoiceOperationCase) : Option ChoiceOperations := do
+  let .app p (.member _ _ method) _ bracket := call | none
   let borrows := cases.any (·.omittedDefaults)
   let count := (cases.head?.map (·.methodVars.length)).getD 0
   if count == 0 || cases.any (·.methodVars.length != count) then none else do
@@ -1505,6 +1617,135 @@ def choiceGenericOperation (ctx : Ctx) (stem : String) (receiver : SExpr) (recei
     casePrelude := (ops.casePrelude.zip bindings).map fun (old, next) => old ++ next,
     extraFns := ops.extraFns ++ definitions }
 
+/-- One checked first-order family for a path operation. Each case keeps
+    its own object/container layout, while the suffix carries type columns. -/
+def choicePathDictionary (stem role : String) (ops : ChoiceOperations)
+    (signature : List Ty) (rows : List (List Ty)) (specs : List String)
+    (bodies : List SExpr) : ChoiceOperations × String := Id.run do
+  let p : Pos := { line := 0, col := 0 }
+  let canonical := rows.map fun types =>
+    let vars := Ty.mergeParamBounds (types.flatMap Ty.paramsC)
+    let rename := vars.zipIdx.map fun ((n, b), i) => (n, Ty.param s!"$pathCanonical{i}" b)
+    (types.map (·.subst rename), vars)
+  let family := s!"$choiceOperationDictionary{(reprStr (role, specs, canonical.map (·.1), bodies)).hash}"
+  let names := (List.range signature.length).map fun i => s!"$pathType{i}"
+  let tparams := names.map fun n => ({ pos := p, name := n, constraint := "type" } : TParam)
+  let variables := names.map STy.name
+  let familyTy := STy.app family variables
+  let params (types : List STy) : List SParam := types.zipIdx.map fun (ty, i) => { name := s!"$pathInput{i}", ty }
+  let values := (List.range (signature.length - 1)).map fun i => SExpr.ident p s!"$pathInput{i}"
+  let iface := STop.classDef p family tparams [] [] true [] []
+    [.fn p "$apply" (params variables.dropLast) [] ("$abstract" :: specs) variables.getLast! (.tuple p [])]
+  let applyFn := STop.fn p (family ++ "$apply")
+    ({ name := "$Self", ty := familyTy } :: params variables.dropLast) tparams specs variables.getLast!
+    (.app p (.member p (.ident p "$Self") "$apply") values (specs.contains "decides"))
+  let name := s!"{stem}$op{ops.params.length}"
+  let mut definitions : List STop := [iface, applyFn]
+  let mut bindings : List (List SExpr) := []
+  for ((types, (canonicalTypes, vars)), i) in (rows.zip canonical).zipIdx do
+    let impl := s!"{family}$case{i}"
+    let canonicalVars := Ty.mergeParamBounds (canonicalTypes.flatMap Ty.paramsC)
+    let implTps := canonicalVars.map fun (n, b) =>
+      ({ pos := p, name := n, constraint := if b then "comparable" else "type" } : TParam)
+    definitions := definitions ++ [.classDef p impl implTps [] [.app family (canonicalTypes.map Ty.toSTy)] false [] []
+      [.fn p "$apply" (params (canonicalTypes.dropLast.map Ty.toSTy)) [] ("override" :: specs)
+        canonicalTypes.getLast!.toSTy bodies[i]!]]
+    let valueTy := STy.app family (types.map Ty.toSTy)
+    let value := SExpr.construct p impl (vars.map fun (n, _) => .name n) []
+    bindings := bindings ++ [[.decl p name (some valueTy) false
+      (.app p (.ident p "$choiceDictionary") [value] false)]]
+  return ({ ops with
+    params := ops.params ++ [(name, .struct family signature)],
+    casePrelude := (ops.casePrelude.zip bindings).map fun (old, next) => old ++ next,
+    extraFns := ops.extraFns ++ definitions }, name)
+
+/-- General reference-backed paths use separate capture, saved-leaf and
+    write dictionaries. All keys execute first; capturing a later reference
+    object may fail, and the RHS still executes in its original source scope. -/
+def choicePathOperation (ctx : Ctx) (stem : String) (ops0 : ChoiceOperations)
+    (bindings : ChoiceAliases) (call : SExpr) : Option ChoiceOperations := do
+  let .set p target op rhs0 := call | none
+  let (root, steps) ← choiceWritePath target
+  let rootTy ← (ops0.aliasTypes bindings).lookup root |>.orElse fun _ => (ctx.lookup root).map (·.ty)
+  let rows ← ops0.plan.instances.mapM fun instanceTypes =>
+    choicePathRow ctx.types ((rootTy.subst instanceTypes).subst ctx.types.tvars) steps op.isSome
+  if rows.isEmpty then none else do
+  let tailReads := rows.any fun row => steps.length - row.capture > 1
+  -- Keep the source diagnostic when the caller lacks a required heap
+  -- permission, instead of naming a generated dictionary in the error.
+  let needsRead := op.isSome || tailReads || rows.any (·.prefixReads)
+  if !ctx.fnFx.contains "writes" || (needsRead && !ctx.fnFx.contains "reads") then none else do
+  -- Retain the established field-only and contiguous-index protocols.
+  if rows.all (fun row =>
+      (steps.take row.capture).all (fun (_, field, key) => field != some "?" && field.isSome && key.isNone) &&
+      ((steps.drop row.capture).drop 1).all (fun (_, field, key) => field.isNone && key.isSome)) then none else do
+  let keys := steps.filterMap (·.2.2)
+  -- Keep a keyless path's transport argument distinct from a nullary call.
+  let packedTy (row : ChoicePathRow) := if keys.isEmpty then Ty.int else
+    if keys.length == 1 then row.keys.head! else Ty.tup row.keys
+  let (plan, keyTy) := ChoiceTypes.extend ctx.types stem ops0.plan (rows.map packedTy)
+  let (plan, objectTy) := ChoiceTypes.extend ctx.types stem plan (rows.map (·.objectTy))
+  let (plan, leafTy) := ChoiceTypes.extend ctx.types stem plan (rows.map (·.leaf))
+  let mut ops := choiceNumericConversions ctx stem { ops0 with plan }
+  let p0 : Pos := { line := 0, col := 0 }
+  let keyValue := SExpr.ident p0 "$pathInput0"
+  let stepKeys := steps.foldl (fun (acc : List (Option SExpr)) (_, _, key) =>
+    let i := acc.countP Option.isSome
+    acc ++ [key.map fun _ => if keys.length == 1 then keyValue else
+      SExpr.app p0 keyValue [.int p0 (Int.ofNat i)] false]) []
+  let build (value : SExpr) (ss : List ChoiceWriteStep) (ks : List (Option SExpr)) :=
+    (ss.zip ks).foldl (fun value ((_, field, _), key) =>
+      match field, key with
+      | some "?", _ => SExpr.query p0 value
+      | some field, _ => SExpr.member p0 value field
+      | _, some key => SExpr.app p0 value [key] true
+      | _, _ => value) value
+  let captureSpecs := (if rows.any (·.prefixReads) then ["reads"] else ["computes"]) ++
+    (if rows.any (·.prefixFails) then ["decides"] else [])
+  let (next, captureName) := choicePathDictionary stem "pathCapture" ops [keyTy, rootTy, objectTy]
+    (rows.map fun row => [packedTy row, row.rootTy, row.objectTy]) captureSpecs
+    (rows.map fun row => build (.ident p0 "$pathInput1") (steps.take row.capture) (stepKeys.take row.capture))
+  ops := next
+  let callOp (name : String) (specs : List String) (values : List SExpr) :=
+    SExpr.app p (.ident p "$choiceOperation")
+      (.str p [.text (FnValues.shapeOf values.length specs).name] :: .ident p name :: values) (specs.contains "decides")
+  let key := SExpr.ident p "$choiceIndexKey"
+  let object := SExpr.ident p "$choiceIndexObject"
+  let mut old := SExpr.tuple p []
+  let mut validation := SExpr.tuple p []
+  let (rhs, prepared) := match op, rhs0 with
+    | some _, .app _ (.ident _ "$withOld") [saved, rhs] false => (rhs, some saved)
+    | _, _ => (rhs0, none)
+  if op.isSome then
+    let readSpecs := ["reads"] ++ (if rows.any (·.tailFails) then ["decides"] else [])
+    let (next, readName) := choicePathDictionary stem "pathOld" ops [keyTy, objectTy, leafTy]
+      (rows.map fun row => [packedTy row, row.objectTy, row.leaf]) readSpecs
+      (rows.map fun row => build (.ident p0 "$pathInput1") (steps.drop row.capture) (stepKeys.drop row.capture))
+    ops := next
+    let read := callOp readName readSpecs [key, object]
+    match prepared with
+    | some saved => validation := read; old := ops.rewrite saved
+    | none => old := read
+  let writeSpecs := (if op.isSome || tailReads then ["reads", "writes"] else ["writes"]) ++
+    (if rows.any (·.tailFails) then ["decides"] else [])
+  let oldTy := if op.isSome then leafTy else Ty.void
+  let writeRhs := if op.isSome then SExpr.app p0 (.ident p0 "$choiceWithOld")
+    [.ident p0 "$pathInput2", .ident p0 "$pathInput3"] false else .ident p0 "$pathInput3"
+  let (next, writeName) := choicePathDictionary stem "pathWrite" ops [keyTy, objectTy, oldTy, leafTy, leafTy]
+    (rows.map fun row => [packedTy row, row.objectTy, if op.isSome then row.leaf else .void, row.leaf, row.leaf])
+    writeSpecs (rows.map fun row => .set p0
+      (build (.ident p0 "$pathInput1") (steps.drop row.capture) (stepKeys.drop row.capture)) op writeRhs)
+  ops := next
+  let sourceKey := if keys.isEmpty then SExpr.int p 0 else
+    if keys.length == 1 then ops.rewrite keys.head! else .tuple p (keys.map ops.rewrite)
+  let sourceObject := callOp captureName captureSpecs [key, .ident p root]
+  let invocation := SExpr.app p (.ident p "$choiceIndexedOperation")
+    [.str p [.text (FnValues.shapeOf 4 writeSpecs).name], .ident p writeName, sourceKey, sourceObject,
+      validation, old, ops.coercionContext (ops.rewrite rhs)] (writeSpecs.contains "decides")
+  some { ops with
+    knownTypes := ops.knownTypes ++ [(call, leafTy)],
+    replacements := ops.replacements ++ [(call, invocation)] }
+
 /-- Each dictionary implements the method at its original receiver and
     argument types. Omitted defaults retain their declaration scope and
     source context; their forwarding methods borrow caller task ownership. -/
@@ -1523,15 +1764,16 @@ def choiceOperations (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx)
     if seen.contains key then continue
     seen := key :: seen
     let sourceCtx := (contexts.find? (·.1 == call)).map (·.2) |>.getD ctx
-    let indexed := match call with
-      | .set _ (.app _ (.member ..) [_] true) none _ => true
-      | _ => false
+    if let some pathOps := choicePathOperation sourceCtx stem ops bindings call then
+      ops := pathOps
+      continue
+    let indices : List SExpr := match call with
+      | .set _ target _ _ => (choiceIndexedField target).map (·.2.2) |>.getD []
+      | _ => []
+    let indexed := !indices.isEmpty
     let details : Option (Pos × SExpr × String × List SExpr × Bool × Bool × Option (Option String)) := match call with
       | .app p (.member _ receiver method) arguments bracket => some (p, receiver, method, arguments, bracket, false, none)
       | .member p receiver field => some (p, receiver, field, [], false, true, none)
-      | .set p (.app _ (.member _ receiver field) [index] true) none value =>
-        if !choiceFieldPath receiver then none else
-        some (p, receiver, field, [index, value], true, false, some none)
       | .set p target@(.member _ receiver field) op value =>
         if !choiceFieldPath receiver then none else
         let arguments := match op, value with
@@ -1539,6 +1781,15 @@ def choiceOperations (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx)
           | some _, .app _ (.ident _ "$withOld") [saved, rhs] false => [saved, rhs]
           | some _, _ => [target, value]
         some (p, receiver, field, arguments, false, false, some op)
+      | .set p target op value => do
+        let (receiver, field, keys) ← choiceIndexedField target
+        if !choiceFieldPath receiver then none else
+        let index := if keys.length == 1 then keys.head! else SExpr.tuple p keys
+        let arguments := match op, value with
+          | none, _ => [index, value]
+          | some _, .app _ (.ident _ "$withOld") [saved, rhs] false => [index, saved, rhs]
+          | some _, _ => [index, target, value]
+        some (p, receiver, field, arguments, true, false, some op)
       | _ => none
     let some (p, receiver, method, arguments, bracket, isField, setter) := details | continue
     let arguments := choiceOrderedArguments arguments
@@ -1566,25 +1817,61 @@ def choiceOperations (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx)
       pure result
     let some receiverTy := receiverTy | continue
     if !(match receiverTy with | .param .. => true | .struct .. => setter.isSome | _ => false) then continue
+    let packings := ops.plan.instances.filterMap fun instanceTypes => do
+      let actual := (receiverTy.subst instanceTypes).subst ctx.types.tvars
+      let .struct cls types := actual | none
+      if callable then
+        let some (arity, _) := FnValues.parseName cls | none
+        let sig : Sig := { idx := 0, name := cls, params := types.take arity, ret := .void, decides := false, isConst := false }
+        some (choicePackArguments sig arguments false)
+      else if setter.isNone && !isField then
+        let owner ← ctx.methodDecl? cls method
+        let sig ← ctx.sig? s!"{owner}.{method}"
+        some (choicePackArguments sig arguments true)
+      else none
+    let packed := if packings.length == ops.plan.instances.length then
+      packings.head?.filter fun first => packings.all (· == first) else none
+    let rawPacking := packed.isNone
+    let fallbackArguments := if setter.isSome || isField then arguments else
+      match arguments.filter (fun | .decl _ n .. => !n.startsWith "?" | _ => true) with
+      | [.tuple _ fields] => fields ++ arguments.filter (fun | .decl _ n .. => n.startsWith "?" | _ => false)
+      | _ => arguments
+    let arguments := packed.getD fallbackArguments
     let mut cases : List ChoiceOperationCase := []
     for instanceTypes in ops.plan.instances do
       let actual := (receiverTy.subst instanceTypes).subst ctx.types.tvars
       if callable then
         let .struct name types := actual | break
         let some (arity, specs) := FnValues.parseName name | break
-        if arity != arguments.length || types.length != arity + 1 || specs.contains "decides" != bracket then break
-        cases := cases ++ [{ receiver := actual, inputs := types.dropLast, result := types.getLast!, specs }]
+        if types.length != arity + 1 || specs.contains "decides" != bracket then break
+        let some inputs := choicePositionalTypes types.dropLast arguments rawPacking | break
+        cases := cases ++ [{ receiver := actual, inputs, result := types.getLast!, specs }]
       else if let some op := setter then
         let .struct cls classArgs := actual | break
         if !ctx.types.isRefClass cls || !ctx.types.isVarField cls method then break
         let some (_, fieldTy, _) := (ctx.types.fields cls classArgs).find? (·.1 == method) | break
         if indexed then
-          let .arr leaf := fieldTy | break
+          let mut leaf := fieldTy
+          let mut keys : List Ty := []
+          let mut indexedDecides := op.isSome
+          for i in List.range indices.length do
+            match leaf with
+            | .arr next =>
+              keys := keys ++ [.int]
+              leaf := next
+              indexedDecides := true
+            | .map keyTy next =>
+              keys := keys ++ [keyTy]
+              leaf := next
+              indexedDecides := indexedDecides || i + 1 < indices.length
+            | _ => break
+          if keys.length != indices.length then break
+          let keyTy := if keys.length == 1 then keys.head! else Ty.tup keys
           -- Source paths evaluate keys before capturing their object.
           -- The adapter then reads the current array after the caller RHS.
           cases := cases ++ [{
-            receiver := .int, inputs := [actual, leaf],
-            result := leaf, specs := ["reads", "writes"] }]
+            receiver := keyTy, inputs := if op.isSome then [actual, leaf, leaf] else [actual, leaf],
+            result := leaf, specs := ["reads", "writes"], indexedDecides }]
           continue
         cases := cases ++ [{
           receiver := actual,
@@ -1609,7 +1896,7 @@ def choiceOperations (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx)
         let methodVars := own.zipIdx.map fun ((_, b), i) => (s!"$operationMethod{i}", b)
         let methodRename := own.zip methodVars |>.map fun ((old, _), (name, bound)) => (old, Ty.param name bound)
         if signature.decides != bracket then break
-        let some (supplied, omittedDefaults) := choiceCallInputs signature arguments | break
+        let some (supplied, omittedDefaults) := choiceCallInputs signature arguments rawPacking | break
         -- An omitted value can determine a method instance at this call.
         -- A dictionary quantified over that parameter would instead have
         -- to check the default at every rigid instance, which can reject
@@ -1636,11 +1923,14 @@ def choiceOperations (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx)
             if types.length == arity + 1 then
               ops := { ops with knownTypes := ops.knownTypes ++ [(call, types.getLast!)] }
       continue
+    let bracket := if indexed then cases.any (·.indexedDecides) else bracket
     if cases.any (!·.methodVars.isEmpty) then
-      if let some generic := choiceGenericOperation sourceCtx stem receiver receiverTy ops call cases then ops := generic
+      if let some generic := choiceGenericOperation sourceCtx stem receiver receiverTy ops call arguments cases then ops := generic
       continue
     let borrows := cases.any (·.omittedDefaults)
-    let mut extended := ops.plan
+    let (initialPlan, operationReceiverTy) := if indexed then
+      ChoiceTypes.extend ctx.types stem ops.plan (cases.map (·.receiver)) else (ops.plan, receiverTy)
+    let mut extended := initialPlan
     let mut inputs : List Ty := []
     for j in List.range arguments.length do
       let (next, input) := ChoiceTypes.extend ctx.types stem extended (cases.map fun row => row.inputs[j]!)
@@ -1658,7 +1948,7 @@ def choiceOperations (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx)
       let vars := Ty.mergeParamBounds ((types ++ [row.result]).flatMap Ty.paramsC)
       let rename := vars.zipIdx.map fun ((name, bound), i) => (name, Ty.param s!"$operationT{i}" bound)
       (types.map (·.subst rename), row.result.subst rename)
-    let operationName := if indexed then "$indexSet:" ++ method else
+    let operationName := if indexed then "$indexSet:" ++ method ++ (if indices.length == 1 then "" else s!":{indices.length}") ++ ((setter.getD none).map (":" ++ ·)).getD "" else
       if let some op := setter then "$set:" ++ method ++ ":" ++ op.getD "=" else
       if callable then "$invoke:" ++ method else if isField then "$field:" ++ method else method
     let context := if borrows then reprStr (choiceDefaultContext sourceCtx (.tuple p [])) else ""
@@ -1680,9 +1970,14 @@ def choiceOperations (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx)
       ({ name := "$Self", ty := familyTy } :: params variables.dropLast) tps specs variables.getLast!
       (.app p0 (.member p0 (.ident p0 "$Self") "$apply") values bracket)
     let name := s!"{stem}$op{ops.params.length}"
-    let ty := Ty.struct family ((if indexed then .int else receiverTy) :: inputs ++ [result])
+    let ty := Ty.struct family (operationReceiverTy :: inputs ++ [result])
     let operation := if indexed then
-      SExpr.set p0 (.app p0 (.member p0 values[1]! method) [values[0]!] true) none values[2]!
+      let op := setter.getD none
+      let rhs := if op.isSome then SExpr.app p0 (.ident p0 "$choiceWithOld") [values[2]!, values[3]!] false else values[2]!
+      let target := (List.range indices.length).foldl (fun target i =>
+        let index := if indices.length == 1 then values[0]! else SExpr.app p0 values[0]! [.int p0 (Int.ofNat i)] false
+        SExpr.app p0 target [index] true) (.member p0 values[1]! method)
+      SExpr.set p0 target op rhs
     else if let some op := setter then
       let rhs := if op.isSome then SExpr.app p0 (.ident p0 "$withOld") [values[1]!, values[2]!] false
         else values[1]!
@@ -1712,11 +2007,27 @@ def choiceOperations (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx)
       if setter.isSome && i + 1 == arguments.length then ops.coercionContext value else value
     let sourceValues := if indexed then [sourceArguments[0]!, ops.rewrite receiver, sourceArguments[1]!] else
       ops.rewrite receiver :: sourceArguments
+    let shape := SExpr.str p [.text (FnValues.shapeOf (arguments.length + 1) specs).name]
+    let invocation := if indexed && (setter.getD none).isSome then
+      let index := sourceArguments[0]!
+      let object := ops.rewrite receiver
+      let savedIndices : List (SExpr × SExpr) := indices.zipIdx.map fun (key, i) =>
+        (ops.rewrite key, if indices.length == 1 then SExpr.ident p "$choiceIndexKey" else
+          SExpr.app p (.ident p "$choiceIndexKey") [.int p (Int.ofNat i)] false)
+      let capture := fun (e : SExpr) =>
+        if let some (_, saved) := savedIndices.find? (·.1 == e) then some saved else
+        if e == object then some (SExpr.ident p "$choiceIndexObject") else none
+      let old := Choice.mapE capture sourceArguments[1]!
+      let validation := match call with
+        | .set _ target _ (.app _ (.ident _ "$withOld") _ false) =>
+          Choice.mapE capture (ops.rewrite target)
+        | _ => .tuple p []
+      SExpr.app p (.ident p "$choiceIndexedOperation") [shape, .ident p name, index, object, validation, old, sourceArguments[2]!] bracket
+    else SExpr.app p (.ident p "$choiceOperation") (shape :: .ident p name :: sourceValues) bracket
     ops := { ops with
       plan := finalPlan, params := ops.params ++ [(name, ty)],
       knownTypes := ops.knownTypes ++ [(call, result)],
-      replacements := ops.replacements ++ [(key, .app p (.ident p "$choiceOperation")
-        (.str p [.text (FnValues.shapeOf (arguments.length + 1) specs).name] :: .ident p name :: sourceValues) bracket)],
+      replacements := ops.replacements ++ [(key, invocation)],
       casePrelude := (ops.casePrelude.zip bindings).map fun (old, next) => old ++ next,
       extraFns := ops.extraFns ++ definitions }
   return ops

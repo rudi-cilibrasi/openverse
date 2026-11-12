@@ -272,6 +272,8 @@ partial def hasLiftable : SExpr → Bool
   | .app _ (.ident _ "$dispatch") _ false => true
   | .app _ (.ident _ "$each") _ false => true
   | .app _ (.ident _ "$loop") _ false => true
+  -- (a scope's `defer:`s pending for the exits in `e`, `deferExits`, #283)
+  | .app _ (.ident _ "$deferExits") [_, e] false => hasLiftable e
   | e@(.ite ..) => isBranchy e || branchesLift hasLiftable e
   | .app _ f args _ => headHas hasLiftable f || args.any fun
       -- (a named argument's value, #283)
@@ -599,6 +601,66 @@ def deferBodies (ss : List SExpr) : List SExpr :=
     let later := boundIn (ss.drop (i + 1))
     some (if later.isEmpty then s else renameE (renamedFor "$later" later) s)
 
+/-- Whether an exit in `e` can leave it: a `return`, or a `break` outside the
+    loops in `e` (marked `$refineBreak` in a branch lifted apart). -/
+partial def leaves : SExpr → Bool
+  | .ret .. | .brk _ | .app _ (.ident _ "$refineBreak") [] false => true
+  | .loop _ body => hasReturn body
+  | e => e.children.any leaves
+
+mutual
+/-- `e`, a statement or clause of a scope whose `defer:`s `ds` (in order)
+    `deferLast` moves after its value, with them pending for the exits in
+    it, as a scope's are for every `return` or `break` that leaves it (#283):
+    `$deferExits(ds, e)`, which the elaborator registers around `e` as it
+    does a `defer:` around the rest of its scope. So they run at each exit
+    that leaves `e`, after a `return`'s value and the cleanup of the scopes
+    inside `e`, wherever `e` is compiled to. A binding keeps its name, a
+    choice its alternatives (each with them), and the `if` of a choice of its
+    branches its shape (`deferExitsIf`). -/
+partial def deferExits (ds : List SExpr) (e : SExpr) : SExpr :=
+  if ds.isEmpty || !leaves e then e else
+  match e with
+  | .decl p x t v rhs => .decl p x t v (deferExits ds rhs)
+  | .gen p x i src => .gen p x i (deferExits ds src)
+  | .set p l op rhs => if leaves l then pending e else .set p l op (deferExits ds rhs)
+  | .app p f@(.ident _ "$choice") as false => .app p f (as.map (deferExits ds)) false
+  | .app p f@(.ident _ "$choiceAt") (l :: as) false => .app p f (l :: as.map (deferExits ds)) false
+  | .app p f@(.ident _ "$branchChoice") [i] false => .app p f [deferExitsIf ds i] false
+  | .app p f@(.ident _ "$branchChoiceAt") [l, i] false => .app p f [l, deferExitsIf ds i] false
+  | e => pending e
+where
+  pending (e : SExpr) : SExpr := .app e.pos (.ident e.pos "$deferExits") [.block e.pos ds, e] false
+
+/-- The `if` of a choice of its branches with the `defer:`s `ds` pending for
+    the exits in it (`deferExits`), its shape kept: in its conditions, a
+    scope of their own whose `defer:`s run where they end (`pendingIn`), in
+    each branch, and in the `else if`s of its chain. (A `defer:` among
+    conditions with a choice of their own is refused, #208: those are left
+    as they are, for the elaborator to refuse it.) -/
+partial def deferExitsIf (ds : List SExpr) : SExpr → SExpr
+  | .ite p cs t u =>
+    let (cs, own) := if cs.any liftsHere then (cs.map (deferExits ds), []) else pendingIn ds cs
+    .ite p (cs ++ if own.isEmpty then [] else [.block p (own ++ [.int p 0])]) (deferExits ds t)
+      (u.map (deferExitsIf ds))
+  | e => deferExits ds e
+
+/-- A scope's statements `ss` but its `defer:`s, each with those before it
+    pending for its exits, inside the `defer:`s `outer` of the scopes around
+    it (`deferExits`); and its `defer:`s in order (`deferBodies`), to run
+    where it ends. -/
+partial def pendingIn (outer ss : List SExpr) : List SExpr × List SExpr :=
+  let ds := deferBodies ss
+  ((ss.foldl (fun (out, n) s => if isDefer s then (out, n + 1)
+    else (out.push (deferExits outer (deferExits (ds.take n) s)), n)) (#[], 0)).1.toList, ds)
+end
+
+/-- `e` without the `defer:`s pending around it (`deferExits`), and how to
+    put them back. -/
+def underDeferExits : SExpr → SExpr × (SExpr → SExpr)
+  | .app q f@(.ident _ "$deferExits") [ds, e] false => (e, fun e' => .app q f [ds, e'] false)
+  | e => (e, id)
+
 /-- A scope's own `defer:` blocks after its value, as LANGUAGE.md lowers them
     (#283): its other statements, its value, a block of the `defer:`s in
     order (which runs them where it ends, last registered first, as the
@@ -608,14 +670,16 @@ def deferBodies (ss : List SExpr) : List SExpr :=
     value is bound to `dv` first, unless it reads nothing the block could
     change (`pureVal`), so it keeps the type its place gives it (`false`,
     `(Y, array{})`); a scope ending in a `defer:` has the block itself as
-    its value, as a block ending in one does. -/
+    its value, as a block ending in one does. Each statement has the
+    `defer:`s before it pending for its exits (`pendingIn`), so a `return`
+    or `break` that leaves the scope runs them as well. -/
 def deferLast (p : Pos) (dv : String) (ss : List SExpr) : List SExpr :=
-  match ss.getLast? with
+  if !ss.any isDefer then ss else
+  let (stmts, ds) := pendingIn [] ss
+  if ss.getLast?.any isDefer then stmts ++ [.block p ds] else
+  match stmts.getLast? with
   | some l =>
-    if !ss.any isDefer then ss else
-    let ds := deferBodies ss
-    let rest := ss.dropLast.filter (!isDefer ·)
-    if isDefer l then rest ++ [.block p ds] else
+    let rest := stmts.dropLast
     let run := SExpr.block p (ds ++ [.int p 0])
     let vals := ss.filterMap fun | .decl _ x _ false _ => some x | _ => none
     if pureVal vals l then rest ++ [run, l] else
@@ -698,6 +762,14 @@ partial def liftE (isVal : String → Bool) (isField : String → String → Boo
     bindParams isVal isField p pre args
     LM.bind p "c" (.app p (.ident q "$loop") [fn, ps, cls, tl] false)
   | .app p (.ident _ "$loop") _ false => LM.bind p "c" e
+  | .app _ (.ident _ "$deferExits") [.block _ ds, x] false =>
+    -- (#283) a scope's `defer:`s pending for the exits in `x`, `deferExits`:
+    -- and so for those in each clause lifted out of it
+    let saved := (← get).pre
+    modify fun s => { s with pre := #[] }
+    let x' ← liftE isVal isField x
+    modify fun s => { s with pre := saved ++ s.pre.map (deferExits ds) }
+    return deferExits ds x'
   | .app _ (.ident _ "$inline") (_ :: .block _ tmpl :: args) false =>
     -- a call of a function with several values (#235): the arguments, in
     -- order, into its (renamed) parameters, then its body's clauses, then
@@ -1028,14 +1100,18 @@ def bifToExcl (c : SExpr) : List SExpr :=
     -- scope where the `if` is (`$declNames`), as for any block; its
     -- `defer:`s after its value, `deferLast`, so they run as each of its
     -- values leaves it, in a `for`'s path or a choice's alternative
-    let blockNames (b : SExpr) : List SExpr := match b with
-      | .block .. => declNames ip (localDecls b)
+    -- (with the `defer:`s of a scope around the `if` pending for a branch's
+    -- exits, `deferExits`, around it)
+    let blockNames (b : SExpr) : List SExpr := match (underDeferExits b).1 with
+      | b@(.block ..) => declNames ip (localDecls b)
       | _ => []
-    let renameBlock (side : String) (b : SExpr) : SExpr := match b with
-      | .block .. => match renameE (renamedFor s!"${k}{side}" (localsOf b)) b with
-        | .block bp ss => .block bp (deferLast bp s!"${k}{side}$dv" ss)
-        | b' => b'
-      | b => b
+    let renameBlock (side : String) (b : SExpr) : SExpr :=
+      let (b, pending) := underDeferExits b
+      pending <| match b with
+        | .block .. => match renameE (renamedFor s!"${k}{side}" (localsOf b)) b with
+          | .block bp ss => .block bp (deferLast bp s!"${k}{side}$dv" ss)
+          | b' => b'
+        | b => b
     -- (the names the condition binds, for its branch, `exclOfIf`; renamed
     -- for the branch, `$…'N`, since the clauses after the `if` follow it in
     -- its path, where they are not in scope; as written, not in scope where
@@ -1043,8 +1119,8 @@ def bifToExcl (c : SExpr) : List SExpr :=
     let ρ := renamedFor s!"${k}" names
     let written := declNames ip (condDecls ip cs)
     -- (a then-block that binds a name its condition binds: shadowing)
-    let shadows := match t with
-      | .block .. => shadowsIn ip names t
+    let shadows := match (underDeferExits t).1 with
+      | t@(.block ..) => shadowsIn ip names t
       | _ => []
     let (sel, excl) := exclOfIf ip k (cs.map (renameE ρ)) (renameE ρ (renameBlock "t" t)) (renameBlock "u" u)
     shadows ++ blockNames t ++ blockNames u ++ written ++ [sel, .decl p x ty false (withJoin excl)]

@@ -348,7 +348,10 @@ def main():
             path, vbc = tmp / 'p.verse', tmp / 'p.vbc'
             path.write_text(source)
             vbc.unlink(missing_ok=True)
-            lean = subprocess.run([str(ROOT / '.lake/build/bin/openverse'), 'run', str(path), '--emit', str(vbc)],
+            # These two models deliberately exercise ordinary computed field
+            # defaults; the projection model retains checked admission.
+            flags = ['--extended-defaults'] if variant in ('defaults', 'eager') else []
+            lean = subprocess.run([str(ROOT / '.lake/build/bin/openverse'), 'run', str(path), *flags, '--emit', str(vbc)],
                                   capture_output=True, text=True, timeout=30)
             if (lean.stdout, lean.returncode) != (want, status):
                 bad += 1
