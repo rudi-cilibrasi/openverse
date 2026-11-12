@@ -297,7 +297,11 @@ Recursive multi-value bodies normalize supported returns before recursion
 classification. For lazy analysis, generated branch scopes carry
 `$returnTail(block{…})`: only these scopes split into invocation prefixes
 and tail leaves. An ordinary source value block stays inside its value's
-rollback boundary. `elabLoopTailWith` compiles the selected path and saves
+rollback boundary, and so does an `if` in a branch's place with no choice
+and no call of the group in it (`plainIfValues`, #283): it is made a block,
+one value, so its conditions run in the consumer's failure context with
+the value, as an inlined body's would, not once in the item's step, which
+kept a rejected value's conditions' effects in a `for`. `elabLoopTailWith` compiles the selected path and saves
 its branch locals in continuation items; a failing selected prefix fails
 the invocation, without selecting else. Generic mutual-instance discovery
 uses those same leaf contexts. Effect discovery includes every path's

@@ -1192,8 +1192,11 @@ Main():void =
   function with several values, its clauses have no choice, and its last
   expression is a choice, or an `if … else …` whose branches are choices or
   values, each alternative a value with no choice in it or a whole call of
-  the function itself. An alternative may also be a call of the function
-  with code after it (#283): `Count(N - 1) + 1`, `Tell("x", F(N - 1))`, the
+  the function itself. A branch that is an `if` with no choice and no call
+  of the function in it is one value, not a branch to pick: its conditions
+  are part of what that value does (#283). An alternative may also be a
+  call of the function with code after it (#283): `Count(N - 1) + 1`,
+  `Tell("x", F(N - 1))`, the
   call evaluated first (what comes before it in the alternative is a literal
   or one of the function's own parameters and locals, not a field or a
   constant), the code after it with no choice and no other such call, and
