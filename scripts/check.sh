@@ -98,6 +98,8 @@ check "overloading conformance matrix" bash tests/scripts/test-overload-conforma
 check "effect admission and executable controls" bash tests/scripts/test-effect-admission.sh
 check "construction effects and executable controls" bash tests/scripts/test-construction-effects.sh
 check "scheduler conformance traces and controls" bash tests/scripts/test-scheduler-conformance.sh
+check "bounded clock domain (${FUZZ_CLOCK_DOMAIN:-100} programs and boundary traces)" \
+  bash tests/scripts/test-clock-domain.sh "${FUZZ_CLOCK_DOMAIN:-100}" "$seed"
 check "overload domains (${FUZZ_OVERLOAD_SHAPES:-468} programs, across six contexts)" \
   bash scripts/fuzz-overload-shapes.sh "${FUZZ_OVERLOAD_SHAPES:-468}" "$seed"
 check "call packing (${FUZZ_CALL_PACKING:-60} programs, across ten contexts)" \

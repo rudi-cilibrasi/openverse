@@ -1,4 +1,4 @@
-# Each individual duration is supported; accumulated ticks overflow int64.
+# Each duration is supported; accumulated checked-int ticks deliberately overflow.
 Main()<suspends>:void=
     Print("before")
     var I:int=0

@@ -1,4 +1,4 @@
-# Known finite-duration cutoff, distinguished from an ordinary large timer.
+# Both sides of the former arbitrary cutoff are finite supported timers.
 Main()<suspends>:void=
     Sleep(999999999999999.0)
     Print("below cutoff")

@@ -1,0 +1,8 @@
+peer
+tick 1
+tick 2
+tick 3
+timer
+tick 4
+tick 5
+exit=0

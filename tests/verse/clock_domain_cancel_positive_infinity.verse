@@ -1,0 +1,12 @@
+Main()<suspends>:void=
+    race:
+        block:
+            defer:Print("cancelled")
+            Print("timer")
+            Sleep(1.0/0.0)
+            Print("bad")
+        block:
+            Print("peer")
+            Sleep(0.0)
+            Print("winner")
+    Print("done")

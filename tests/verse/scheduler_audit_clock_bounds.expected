@@ -1,2 +1,3 @@
 below cutoff
-exit=2
+above cutoff
+exit=0
