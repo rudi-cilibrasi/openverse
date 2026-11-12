@@ -291,9 +291,10 @@ def main : IO Unit := do
       unpack.tparams.length == 3 && unpack.tparams.any (·.name == "t") &&
       unpack.tparams.all (·.upperBound.isNone))
   let peers := FnValues.genericAdapters p "ComparablePeer" [.name "u"] [peer, comparable] (.name "u") [2]
-  need "peer comparability reaches each tuple component"
+  need "peer comparability does not strengthen the original tuple components"
     (peers.any fun adapter => adapter.suffix == "Unpack2" &&
-      adapter.tparams.all (·.constraint == "comparable") && adapter.relations.length == 1)
+      adapter.tparams.any (fun tp => tp.name == "t" && tp.constraint == "comparable") &&
+      (adapter.tparams.filter (·.name != "t")).all (·.constraint == "type") && adapter.relations.length == 1)
   let lower : TParam := { pos := p, name := "u", constraint := "type" }
   need "a known upper does not infer an absent lower"
     (!(FnValues.boundInferredNames [plain, lower] [.name "t"] [(.name "t", .name "u")]).contains "u")

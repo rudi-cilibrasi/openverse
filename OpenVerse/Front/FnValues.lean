@@ -361,15 +361,10 @@ where
       | some _ => false
 
 private def tupleComparable (tps : List TParam) (name : String) : Bool :=
-  go (tps.length + 1) name
-where
-  go : Nat → String → Bool
-    | 0, _ => false
-    | fuel + 1, name => match tps.find? (·.name == name) with
-      | none => false
-      | some tp => tp.constraint == "comparable" || match tp.upperBound with
-        | some (.name peer) => go fuel peer
-        | _ => false
+  -- A whole-tuple conversion to a comparable peer (possibly void) does not
+  -- establish equality for each original component. A direct comparable
+  -- constraint on this tuple parameter does establish it.
+  (tps.find? (·.name == name)).any (·.constraint == "comparable")
 
 /-- Tuple calls at the arities present in the program. A bare parameter can
     become the tuple of the target arguments; its comparable bound then

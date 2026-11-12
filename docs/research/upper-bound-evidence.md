@@ -126,6 +126,12 @@ element upper. Matching containers recurse only once per component; a second
 array join at every nesting level would make deep inference exponential.
 Comparable flags are intersected across equal type identities. Unrelated
 interfaces can overlap; their ambiguity is not resolved by declaration order.
+An explicit comparable constraint applies to that parameter. It does not
+automatically make a lower peer comparable: the upper may be `void` and
+discard a non-comparable value. Implied equality guarantees propagate only
+from equality-preserving numeric, unique-class and component bounds. Tuple
+adapters retain a whole-value relation without strengthening the original
+components merely because the converted upper supports equality.
 An invalid result-directed instance can retry from the original compiler state
 using arguments/defaults, without changing explicit instances or runtime
 argument evaluation.
@@ -164,7 +170,7 @@ construction, capture provenance or frontend lowering implements Verse's source
 semantics. Lean/C agreement is executable evidence, not that missing proof.
 
 Before source admission, #502 still requires the remaining relation audit
-(including comparable implications through universal discarding, function variance and full refinement/container
+(including function variance and full refinement/container
 interactions), operation-dictionary and generated/opened/refined adaptation audits,
 full construction/default/qualified-slot coverage, and a complete source
 acceptance run. Context-sensitive literal coercion must not silently become a
@@ -172,11 +178,9 @@ general subtype fact. The final source contract, documented restrictions,
 exact-head AI review and CI/full gate must all agree before the guard is removed
 and the issue is closed.
 
-One registered development positive currently exposes unfinished universal-bound
-adaptation. `peer-void-comparable` preserves a non-comparable class under a
-comparable peer instantiated as `void`: the upper accepts the value, but that
-must not imply that the original class supports equality. Its independent
-concrete control passes; the generic case must pass before admission.
-`peer-void-tuple-value` and its concrete control both pass, protecting the
-existing adapter path for a `subtype(void)` identity used as a tuple-taking
-function value.
+The universal-bound regressions include `peer-void-comparable`, which preserves
+a non-comparable class under a comparable peer instantiated as `void`, and
+`peer-void-tuple-value`, which uses a `subtype(void)` identity as a tuple-taking
+function value. Both have independent concrete controls. A negative refuses
+equality on the original lower peer under only a comparable upper; the numeric
+peer control verifies that equality-preserving bounds still allow equality.

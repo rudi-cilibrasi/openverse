@@ -728,16 +728,20 @@ def checkTParams (env : TyEnv) (tps : List TParam) : Except String (List (String
       | "comparable" => out := out.push (tp.name, true)
       | c => throw s!"{tp.pos.show}: unknown constraint subtype({c}) (expected type, comparable, or a retained upper-bound type)"
   if !tps.any (·.upperBound.isSome) then return out.toList
-  -- Unique classes and numeric refinements imply comparability; propagate
-  -- that implication through peer parameters, including forward references.
+  -- A comparable parameter can be instantiated as void, whose lower types
+  -- need not support equality. Propagate only guarantees from upper types
+  -- whose subtype conversions preserve equality, separately from explicit
+  -- comparable constraints on the parameters themselves.
+  let mut inherited := out.map fun (name, _) => (name, false)
   for _ in [0:tps.length + 1] do
-    let next := out.map fun (name, comparable) =>
+    let next := inherited.map fun (name, comparable) =>
       let implied := ((tps.find? (·.name == name)).bind (·.upperBound)).any
-        (comparableUpper env out.toList)
+        (comparableUpper env inherited.toList)
       (name, comparable || implied)
-    if next == out then break
-    out := next
-  return out.toList
+    if next == inherited then break
+    inherited := next
+  return out.toList.map fun (name, comparable) =>
+    (name, comparable || (inherited.toList.lookup name).getD false)
 
 structure ResolvedTParams where
   params : List (String × Bool)

@@ -305,6 +305,11 @@ private def contracts : IO Unit := do
     (resolved.params == [("a", true), ("b", true), ("c", false), ("d", false)] && resolved.bounds.length == 4)
   need "void discards values without establishing a reverse conversion"
     (types.boundSubtype .int .void && !types.boundSubtype .void .int)
+  let peers ← getOK "comparable upper with a potentially discarded lower"
+    (resolveTParams types [{ pos := { line := 1, col := 1 }, name := "t", constraint := "comparable" },
+      upper "u" (.name "t")])
+  need "comparable kinds alone do not imply equality before conversion"
+    (peers.params == [("t", true), ("u", false)])
   for ty in [Ty.int, .param "opaque" false, .arr .int, .any, .void] do
     let some discarded := find? types [] ⟨.void, ty⟩
       | throw (IO.userError "missing universal void evidence")
