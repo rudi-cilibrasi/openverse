@@ -18,25 +18,30 @@ first = int(sys.argv[2]) if len(sys.argv) > 2 else 1
 compiler = shlex.split(os.environ.get('OV_COMMAND', str(ROOT / '.lake/build/bin/openverse')))
 with tempfile.TemporaryDirectory(prefix='ov-call-packing-') as directory:
     source, bytecode = (Path(directory) / name for name in ('program.verse', 'program.vbc'))
-    expression = 'Get().Bad()'
-    for _ in range(24):
-        expression = f'One({expression})'
-    program = ('box:=class:\n    Bad(?X:[]t=array{} where t:type)<computes>:int=X.Length\n'
-               'Get()<computes>:box=box{}\n'
-               'One(P:tuple(t) where t:type)<computes>:t=P(0)\n'
-               'Main():void=\n    R:int=' + expression + '\n    Print("{R}")\n')
-    source.write_text(program)
-    try:
-        result = subprocess.run(compiler + ['run', str(source)], cwd=ROOT,
-                                capture_output=True, text=True, timeout=5)
-        valid = (result.returncode == 4 and not result.stdout
-                 and 'cannot infer type parameter t of box.Bad' in result.stderr)
-    except subprocess.TimeoutExpired:
-        valid = False
-    if not valid:
-        saved = ROOT / 'fuzz-call-packing-deep-method.verse'
-        saved.write_text(program)
-        raise SystemExit(f'nested returned-receiver inference: oracle/5-second bound failed, saved {saved.name}')
+    for name, header, expression, diagnostic in (
+            ('method', 'box:=class:\n    Bad(?X:[]t=array{} where t:type)<computes>:int=X.Length\n'
+             'Get()<computes>:box=box{}\n', 'Get().Bad()', 'cannot infer type parameter t of box.Bad'),
+            ('receiver', 'box(t:type):=class:\n    Bad()<computes>:int=0\n'
+             'Get(?X:[]t=array{} where t:type)<computes>:box(t)=box(t){}\n',
+             'Get().Bad()', 'cannot infer type parameter t of Get'),
+            ('callee', 'Id(X:t where t:type)<computes>:t=X\n'
+             'Get(?X:[]t=array{} where t:type)<computes>:type{_(:t)<computes>:t}=Id\n',
+             'Get()(7)', 'cannot infer type parameter t of Get')):
+        for _ in range(24):
+            expression = f'One({expression})'
+        program = (header + 'One(P:tuple(u) where u:type)<computes>:u=P(0)\n'
+                   'Main():void=\n    R:int=' + expression + '\n    Print("{R}")\n')
+        source.write_text(program)
+        try:
+            result = subprocess.run(compiler + ['run', str(source)], cwd=ROOT,
+                                    capture_output=True, text=True, timeout=5)
+            valid = result.returncode == 4 and not result.stdout and diagnostic in result.stderr
+        except subprocess.TimeoutExpired:
+            valid = False
+        if not valid:
+            saved = ROOT / f'fuzz-call-packing-deep-{name}.verse'
+            saved.write_text(program)
+            raise SystemExit(f'nested {name} inference: oracle/5-second bound failed, saved {saved.name}')
     # Adaptation must not create calls that fit two admitted declarations.
     for left, right in (
             ('P:tuple(int)', 'X:int'),
