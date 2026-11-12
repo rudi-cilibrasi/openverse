@@ -84,15 +84,20 @@ def ordered(x):
     return ~n if n >> 63 else n | (1 << 63)
 
 
+def exact_unary(name, x):
+    return (abs(x) < sys.float_info.min or math.isinf(x) or
+            (name == 'ArCosh' and x == 1))
+
+
 def cases(count, first):
     tiny = math.ulp(0.0)
     inputs = [0.0, -0.0, tiny, -tiny, 1e-320, -1e-320, 1e-20, -1e-20,
+              1.9246247400168677e-13, -1.9246247400168677e-13,
               0.5, -0.5, 1.0, -1.0, math.nextafter(1.0, 0.0),
               math.nextafter(1.0, math.inf), 2.0, -2.0, 20.0, -20.0,
               710.0, -710.0, 710.4758600739439, 711.0, 1e308, -1e308,
               sys.float_info.max, math.inf, -math.inf, math.nan]
-    rows = [(f'{name}({literal(x)})', unary_oracle(name, x),
-             abs(x) < 1e-10 and name != 'ArCosh')
+    rows = [(f'{name}({literal(x)})', unary_oracle(name, x), exact_unary(name, x))
             for name in UNARY for x in inputs]
     triples = [(0.0, 10.0, p) for p in [0.0, -0.0, 1.0, 0.5, -1.0, 2.0]]
     triples += [(1e308, -1e308, 0.5), (1e308, 1e308, 3.0),
@@ -107,8 +112,7 @@ def cases(count, first):
         rng = random.Random(seed)
         x = struct.unpack('>d', struct.pack('>Q', rng.getrandbits(64)))[0]
         name = UNARY[seed % len(UNARY)]
-        rows.append((f'{name}({literal(x)})', unary_oracle(name, x),
-                     abs(x) < 1e-10 and name != 'ArCosh'))
+        rows.append((f'{name}({literal(x)})', unary_oracle(name, x), exact_unary(name, x)))
         a, b = [rng.choice(inputs) if seed % 3 == 0 else rng.uniform(-1e100, 1e100)
                 for _ in range(2)]
         p = rng.choice(inputs) if seed % 2 == 0 else rng.uniform(-3, 3)
@@ -122,35 +126,46 @@ def main():
     count = int(sys.argv[1]) if len(sys.argv) > 1 else 64
     first = int(sys.argv[2]) if len(sys.argv) > 2 else 1
     rows = cases(count, first)
-    source = 'Main():void=\n' + ''.join(f'    Print("{{{e}}}")\n' for e, _, _ in rows)
     with tempfile.TemporaryDirectory(prefix='openverse-float-math-') as directory:
         tmp = Path(directory)
-        src, bc = tmp / 'p.verse', tmp / 'p.vbc'
-        src.write_text(source)
-        lean = subprocess.run([ROOT / '.lake/build/bin/openverse', 'run', src, '--emit', bc],
-                              capture_output=True, text=True, timeout=120)
-        c = None if lean.returncode else subprocess.run([ROOT / 'runtime/build/cverse', bc],
-                                                        capture_output=True, text=True, timeout=120)
-        reason = None
-        if lean.returncode or lean.stderr or c is None or (c.returncode, c.stdout, c.stderr) != (lean.returncode, lean.stdout, lean.stderr):
-            reason = f'Lean/C mismatch: Lean={lean.returncode, lean.stdout, lean.stderr}; C={c}'
-        elif len(lean.stdout.splitlines()) != len(rows):
-            reason = 'output count differs from oracle'
-        else:
-            for line, (expr, want, exact) in zip(lean.stdout.splitlines(), rows):
-                actual = float(line)
-                good = (line == 'NaN') if math.isnan(want) else (actual == want) if math.isinf(want) else (
-                    math.isfinite(actual) and abs(ordered(actual) - ordered(want)) <= (0 if exact else 2))
-                if actual == 0 and line != '0.0':
-                    good = False
-                if not good:
-                    reason = f'{expr}: got {line}, expected {want!r}'
-                    break
-        if reason:
-            saved = ROOT / f'fuzz-float-math-{first}.verse'
-            saved.write_text(source)
-            raise SystemExit(f'float-math: {reason}; saved {saved.name}')
-    print(f'float-math: {len(rows)} independent decimal/edge oracles, Lean and C matched')
+        # Keep source/evaluator depth independent of the nightly case count.
+        for offset in range(0, len(rows), 128):
+            batch = rows[offset:offset + 128]
+            source = 'Main():void=\n' + ''.join(f'    Print("{{{e}}}")\n' for e, _, _ in batch)
+            src, bc = tmp / 'p.verse', tmp / 'p.vbc'
+            src.write_text(source)
+            lean = subprocess.run([ROOT / '.lake/build/bin/openverse', 'run', src, '--emit', bc],
+                                  capture_output=True, text=True, timeout=120)
+            c = None if lean.returncode else subprocess.run([ROOT / 'runtime/build/cverse', bc],
+                                                            capture_output=True, text=True, timeout=120)
+            reason = None
+            if lean.returncode or lean.stderr or c is None or (c.returncode, c.stdout, c.stderr) != (lean.returncode, lean.stdout, lean.stderr):
+                reason = f'Lean/C mismatch: Lean={lean.returncode, lean.stdout, lean.stderr}; C={c}'
+            elif len(lean.stdout.splitlines()) != len(batch):
+                reason = 'output count differs from oracle'
+            else:
+                for line, (expr, want, exact) in zip(lean.stdout.splitlines(), batch):
+                    actual = float(line)
+                    good = (line == 'NaN') if math.isnan(want) else (actual == want) if math.isinf(want) else (
+                        math.isfinite(actual) and abs(ordered(actual) - ordered(want)) <= (0 if exact else 2))
+                    if actual == 0 and line != '0.0':
+                        good = False
+                    if math.isfinite(actual):
+                        if expr.startswith('Cosh(') and actual < 1:
+                            good = False
+                        if expr.startswith('Tanh(') and abs(actual) > 1:
+                            good = False
+                        if expr.startswith('ArCosh(') and actual < 0:
+                            good = False
+                    if not good:
+                        reason = f'{expr}: got {line}, expected {want!r}'
+                        break
+            if reason:
+                saved = ROOT / f'fuzz-float-math-{first}-{offset}.verse'
+                saved.write_text(source)
+                raise SystemExit(f'float-math: {reason}; saved {saved.name}')
+    print(f'float-math: {len(rows)} independent decimal/edge oracles '
+          f'({count} random cases from seed {first}), Lean and C matched')
 
 
 if __name__ == '__main__':
