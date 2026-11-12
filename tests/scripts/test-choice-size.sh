@@ -32,6 +32,18 @@ kinds=(
   setter-choice-first
   setter-choice-for
   setter-choice-waiting
+  resultalias-same-first
+  resultalias-same-for
+  resultalias-same-waiting
+  resultalias-different-first
+  resultalias-different-for
+  resultalias-different-waiting
+  resultalias-field-first
+  resultalias-field-for
+  resultalias-field-waiting
+  resultalias-generic-first
+  resultalias-generic-for
+  resultalias-generic-waiting
   alias-block-first
   alias-block-for
   alias-block-waiting
@@ -363,6 +375,42 @@ if kind.startswith('setter-'):
         print('    Rows:=for('+clauses+'):'+value)
         print('    Rows.Length')
     print(f'Main(){effects}:void=Print("{{Run()}}")')
+    sys.exit(0)
+if kind.startswith('resultalias-'):
+    _, shape, mode = kind.split('-')
+    generic = shape == 'generic'
+    waiting = mode == 'waiting'
+    effects = '<suspends>' if waiting else ''
+    print('Dup(X:t where t:type)<computes>:t=X|X')
+    print('Equal(X:t,Y:t where t:subtype(comparable))<computes>:int=if(X=Y)then 1 else 0')
+    for root, result in [('ca','ra'),('cb','rb')]:
+        print(result+('(t:subtype(comparable))' if generic else '')+':=class<computes>{K:int=1'+(';V:t' if generic else '')+'}')
+        if shape == 'field':
+            print(root+':=class{R:'+result+'='+result+'{}}')
+        else:
+            ret = root if shape=='same' else result+('(t)' if generic else '')
+            body = 'Self' if shape=='same' else ret+'{'+('V:=V' if generic else '')+'}'
+            params = 'Ignored:u where u:type' if generic else ''
+            print(root+('(t:subtype(comparable))' if generic else '')+':=class{K:int=1'+(';V:t' if generic else '')+';Me('+params+')<computes>'+effects+':'+ret+'=block{'+('Sleep(0.0);' if waiting else '')+body+'}}')
+    selected = 'Dup(P)|Dup(Q)' if generic else 'Dup(ca{})|Dup(cb{})'
+    clauses=','.join(f'A{i}:=({selected})' for i in range(count))
+    statements=[];terms=[]
+    for i in range(count):
+        value=f'A{i}.R' if shape=='field' else f'A{i}.Me('+ (f'A{(i+1)%count}' if generic else '')+')'
+        statements.extend([f'B{i}:={value}',f'C{i}:=B{i}'])
+        terms.append(f'C{i}.K'+(f'+Equal(C{i}.V,X)' if generic else ''))
+    if waiting and shape=='field':
+        statements.append('Sleep(0.0)')
+    value='block{'+';'.join(statements+['+'.join(terms)])+'}'
+    signature='P:ca(t),Q:cb(t),X:t where t:subtype(comparable)' if generic else ''
+    print(f'Run({signature}){effects}:int=')
+    if mode=='first':
+        print('    if('+clauses+',V:='+value+',V>0)then V else -1')
+    else:
+        print('    Rows:=for('+clauses+'):'+value)
+        print('    Rows.Length')
+    args='ca(int){V:=7},cb(int){V:=7},7' if generic else ''
+    print(f'Main(){effects}:void=Print("{{Run('+args+')}")')
     sys.exit(0)
 if kind.startswith('alias-'):
     _, shape, mode = kind.split('-')
@@ -1448,6 +1496,18 @@ PY
       if [[ $kind == *-first ]]; then
         expected=8
         [[ $kind == setter-simple-* || $kind == setter-array-* ]] && expected=4
+      fi
+      printf '%s\n' "$expected" >"$tmp/expected"
+      timeout "$limit" "$root/.lake/build/bin/openverse" run "$tmp/p.verse" >"$tmp/lean.out"
+      timeout "$limit" "$root/runtime/build/cverse" "$tmp/p.vbc" >"$tmp/c.out"
+      diff -u "$tmp/expected" "$tmp/lean.out"
+      diff -u "$tmp/expected" "$tmp/c.out"
+    fi
+    if [[ $kind == resultalias-* && $count == 4 ]]; then
+      expected=256
+      if [[ $kind == *-first ]]; then
+        expected=4
+        [[ $kind == resultalias-generic-* ]] && expected=8
       fi
       printf '%s\n' "$expected" >"$tmp/expected"
       timeout "$limit" "$root/.lake/build/bin/openverse" run "$tmp/p.verse" >"$tmp/lean.out"

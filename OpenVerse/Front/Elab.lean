@@ -2751,6 +2751,21 @@ def ChoiceOperations.context (ops : ChoiceOperations) (ctx : Ctx) : EM Ctx := do
 def ChoiceOperations.lift (ops : ChoiceOperations) (key : String) (lift : Choice.FirstLift) : Choice.FirstLift :=
   { lift with key, casePrelude := ops.casePrelude, extraFns := lift.extraFns ++ ops.extraFns }
 
+/-- The selected binding and immutable aliases, in reverse lexical order.
+    An alias retains its initializer so its checked result can be recovered
+    after the initializer's operations have been discovered. -/
+abbrev ChoiceAliases := List (String × Option SExpr)
+
+def ChoiceOperations.aliasTypes (ops : ChoiceOperations) (bindings : ChoiceAliases) : List (String × Ty) := Id.run do
+  let mut types : List (String × Ty) := []
+  for (name, source) in bindings.reverse do
+    let ty := match source with
+      | none => some ops.plan.binding
+      | some (.ident _ original) => types.lookup original
+      | some value => (ops.knownTypes.find? (·.1 == value)).map (·.2)
+    if let some ty := ty then types := (name, ty) :: types
+  return types
+
 /-- A source assignment may follow fields from a local, but not write
     through a call result. Index paths have a separate evaluation order. -/
 def choiceFieldPath : SExpr → Bool
@@ -2762,8 +2777,9 @@ def choiceFieldPath : SExpr → Bool
     where their declarations are in scope. The source aliases remain intact:
     dictionary discovery needs their types, not a substitution of their values. -/
 mutual
-partial def choiceMemberOperations (bindings : List String) (body : SExpr) : List (SExpr × List String) :=
-  let depends (receiver : SExpr) := (Choice.namesUsed receiver).any bindings.contains
+partial def choiceMemberOperations (bindings : ChoiceAliases) (body : SExpr) : List (SExpr × ChoiceAliases) :=
+  let names := bindings.map (·.1)
+  let depends (receiver : SExpr) := (Choice.namesUsed receiver).any names.contains
   match body with
   | e@(.app _ member@(.member _ receiver _) arguments _) =>
     choiceMemberOperations bindings receiver ++ arguments.flatMap (choiceMemberOperations bindings) ++
@@ -2789,14 +2805,18 @@ partial def choiceMemberOperations (bindings : List String) (body : SExpr) : Lis
   | .app _ (.ident _ "$constructHints") _ _ => []
   | e => e.children.flatMap (choiceMemberOperations bindings)
 
-partial def choiceMemberOperationSeq (bindings : List String) (statements : List SExpr) :
-    List (SExpr × List String) × List String := Id.run do
+partial def choiceMemberOperationSeq (bindings : ChoiceAliases) (statements : List SExpr) :
+    List (SExpr × ChoiceAliases) × ChoiceAliases := Id.run do
   let mut visible := bindings
   let mut operations := []
   for statement in statements do
     operations := operations ++ choiceMemberOperations visible statement
-    if let .decl _ name none false (.ident _ source) := statement then
-      if visible.contains source then visible := name :: visible
+    if let .decl _ name none false value := statement then
+      let candidate := match value with
+        | .ident .. | .member .. | .app _ (.member ..) _ _ => true
+        | _ => false
+      if candidate && (Choice.namesUsed value).any (fun n => visible.any (·.1 == n)) then
+        visible := (name, some value) :: visible
   return (operations, visible)
 end
 
@@ -2900,7 +2920,7 @@ def choiceOperations (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx)
   let mut ops : ChoiceOperations := { plan, bindingName := binding, casePrelude := plan.instances.map fun _ => [] }
   if !(match plan.binding with | .param .. => true | _ => false) then return ops
   let mut seen : List SExpr := []
-  for (call, bindings) in (choiceMemberOperationSeq [binding] suffix).1 do
+  for (call, bindings) in (choiceMemberOperationSeq [(binding, none)] suffix).1 do
     let key := call
     if seen.contains key then continue
     seen := key :: seen
@@ -2922,17 +2942,18 @@ def choiceOperations (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx)
     -- Preserve callee-before-argument evaluation, including a mutable
     -- callback replaced by one of its argument expressions.
     let receiver := if callable then callee else receiver
-    let direct := match receiver with | .ident _ n => bindings.contains n | _ => false
+    let aliases := ops.aliasTypes bindings
+    let direct := match receiver with | .ident _ n => aliases.lookup n | _ => none
     let known := (ops.knownTypes.find? (·.1 == receiver)).map (·.2)
-    let receiverTy ← if direct then pure (some ops.plan.binding) else if known.isSome then pure known else do
+    let receiverTy ← if direct.isSome then pure direct else if known.isSome then pure known else do
       let saved ← get
       let result ← tryCatch (do
         let probeCtx ← ops.context (← choiceTypeContext ctx ops.plan)
         let mut probeCtx := { probeCtx with typeOnly := true }
-        for name in bindings do
-          let slot ← fresh ops.plan.binding
+        for (name, ty) in aliases do
+          let slot ← fresh ty
           probeCtx := { probeCtx with
-            locals := { name, ty := ops.plan.binding, slot, mutable := false } :: probeCtx.locals }
+            locals := { name, ty, slot, mutable := false } :: probeCtx.locals }
         return some (← elabE probeCtx (ops.rewrite receiver) none).ty) (fun _ => pure none)
       set saved
       pure result

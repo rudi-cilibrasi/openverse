@@ -13,10 +13,11 @@ p.add_argument('--callable-fields', action='store_true')
 p.add_argument('--aliases', action='store_true')
 p.add_argument('--writes', action='store_true')
 p.add_argument('--nested-writes', action='store_true')
+p.add_argument('--result-aliases', action='store_true')
 a = p.parse_args()
 a.writes = a.writes or a.nested_writes
-a.aliases = a.aliases or (a.writes and a.seed % 2 == 0)
-a.members = a.members or a.aliases or a.writes
+a.aliases = a.aliases or ((a.writes or a.result_aliases) and a.seed % 2 == 0)
+a.members = a.members or a.aliases or a.writes or a.result_aliases
 a.generic_methods = (a.generic_methods or a.members) and not a.callable_fields
 a.members = a.members and not a.callable_fields
 a.methods = a.methods or a.generic_methods or a.callable_fields
@@ -137,6 +138,9 @@ lines.append(f'result {answer} state {h}')
 a.expected.write_text('exit=0\n' + '\n'.join(lines) + '\n')
 print('cell:=class{var N:int=0}\nInts(N:int)<computes>:[]int=for(I:=1..N):I\nbox(t:type):=class{V:t;K:int=0}\nbase:=class{K:int}\nca:=class(base){}\ncb:=class(base){}\nSame(X:t,?Y:t=X where t:subtype(comparable))<computes>:int=if(X=Y)then 1 else 0\nPrefix(H:cell,X:t,Y:t,Tag:int where t:type)<transacts>:t=\n    Print("p {Tag}")\n    set H.N+=Tag\n    X|Y')
 if a.methods:
+    if a.result_aliases:
+        for name, generic in [('ma',False),('mb',False),('ga',True),('gb',True)]:
+            print('result_'+name+('(t:type)' if generic else '')+':=class<computes>{K:int'+(';V:t' if generic else '')+'}')
     for name, generic, kind in [('ma', False, 'a'), ('mb', False, 'b'), ('ga', True, 'a'), ('gb', True, 'b')]:
         print(name + ('(t:type)' if generic else '') + ':=class:')
         print('    H:cell\n    ' + ('var ' if a.members or a.callable_fields else '') + 'K:int' + ('\n    V:t' if generic else ''))
@@ -146,11 +150,12 @@ if a.methods:
             continue
         method_params = (['Arg:int'] if method_arguments else []) + (['Ignored:u where u:type'] if a.generic_methods else [])
         method = 'Read' if a.members else 'Score'
-        result = name + ('(t)' if generic else '') if a.members else 'int'
+        result = ('result_' if a.result_aliases else '') + name + ('(t)' if generic else '') if a.members else 'int'
         print('    ' + method + '(' + ','.join(method_params) + ')<transacts>:' + result + '=')
         print('        Print("m ' + kind + ' {K}")')
         print('        set H.N+=' + ('1' if kind == 'a' else '2') + '*(K+1)' + ('+Arg' if method_arguments else ''))
-        print('        Self' if a.members else '        K')
+        returned = 'result_'+name+('(t)' if generic else '')+'{K:=K'+(',V:=V' if generic else '')+'}' if a.result_aliases else 'Self' if a.members else 'K'
+        print('        '+returned)
     if a.nested_writes:
         for name, generic in [('ma',False),('mb',False),('ga',True),('gb',True)]:
             print('holder_'+name+('(t:type)' if generic else '')+':=class{C:'+name+('(t)' if generic else '')+'}')
@@ -212,12 +217,18 @@ for i, d in enumerate(levels):
         if a.nested_writes and not a.control:
             receiver += '.C'
         clauses.append(f'set {receiver}.K+=WriteArgument(H,{i+1})')
+    if a.result_aliases:
+        returned = score if a.control else score.removesuffix('.K')
+        clauses.extend([f'Returned{i}:={returned}', f'Saved{i}:=Returned{i}'])
+        score = f'Saved{i}' if a.control else f'Saved{i}.K'
     clauses.extend([f'S{i}:={score}', f'Print("f {i} {{S{i}}}")', f"set H.N+={d['weight']}+S{i}", f'set Total+=S{i}+1', f"Mod[H.N+S{i},{d['mod']}]={d['want']}"])
 clauses.append('Z:=Items[0]' if mode == 'first' else 'Z:Items')
 score = '+'.join((f'S{i}' for i in range(n)))
 names = ('S0', f'S{n - 1}') if shape == 'fields' else ('A0', f'A{n - 1}')
 if a.aliases:
     names = tuple(name.replace('A', 'B') for name in names)
+if a.result_aliases and shape != 'fields':
+    names = ('Saved0', f'Saved{n-1}')
 packet = f'({names[0]},{names[1]},{score})' if packed else names[0]
 body = f'set H.N+={boost}+{score};set Total+={score};Print("body {{H.N}} {{Total}}");{packet}'
 effects = '<suspends><transacts>' if mode == 'waiting' else '<transacts>'
