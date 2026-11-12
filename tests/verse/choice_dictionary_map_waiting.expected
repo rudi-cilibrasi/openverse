@@ -1,0 +1,31 @@
+key a
+rhs a
+leave a
+body 3 11
+key a
+rhs a
+leave a
+body 3 22
+key b
+leave b
+source 2 23
+done -1 23
+key a
+rhs a
+leave a
+body 3 11
+key a
+rhs a
+leave a
+body 3 22
+key b
+rhs b
+leave b
+body 3 33
+key b
+rhs b
+leave b
+body 3 44
+source 4 44
+done 4 44
+exit=0

@@ -8,6 +8,36 @@ tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
 limit="${CHOICE_SIZE_TIMEOUT:-120}"
 # Keep modes sorted on separate lines so independent additions merge cleanly.
 kinds=(
+  mapwrite-plain-simple-first
+  mapwrite-plain-simple-for
+  mapwrite-plain-simple-waiting
+  mapwrite-plain-nested-first
+  mapwrite-plain-nested-for
+  mapwrite-plain-nested-waiting
+  mapwrite-plain-numeric-first
+  mapwrite-plain-numeric-for
+  mapwrite-plain-numeric-waiting
+  mapwrite-plain-contextual-first
+  mapwrite-plain-contextual-for
+  mapwrite-plain-contextual-waiting
+  mapwrite-plain-correlated-first
+  mapwrite-plain-correlated-for
+  mapwrite-plain-correlated-waiting
+  mapwrite-compound-simple-first
+  mapwrite-compound-simple-for
+  mapwrite-compound-simple-waiting
+  mapwrite-compound-nested-first
+  mapwrite-compound-nested-for
+  mapwrite-compound-nested-waiting
+  mapwrite-compound-numeric-first
+  mapwrite-compound-numeric-for
+  mapwrite-compound-numeric-waiting
+  mapwrite-compound-contextual-first
+  mapwrite-compound-contextual-for
+  mapwrite-compound-contextual-waiting
+  mapwrite-compound-correlated-first
+  mapwrite-compound-correlated-for
+  mapwrite-compound-correlated-waiting
   compoundindex-simple-first
   compoundindex-simple-for
   compoundindex-simple-waiting
@@ -390,6 +420,34 @@ for kind in "${kinds[@]}"; do
     python3 - "$kind" "$count" >"$tmp/p.verse" <<'PY'
 import sys
 kind, count = sys.argv[1], int(sys.argv[2])
+if kind.startswith('mapwrite-'):
+    _, op, shape, mode = kind.split('-')
+    n = count
+    print('Dup(X:t where t:type)<computes>:t=X|X')
+    keys={}
+    for cls,kind in [('ca','a'),('cb','b')]:
+     kt='string' if shape=='correlated' and kind=='b' else 'int';key='"k"' if kt=='string' else '0';keys[cls]=key
+     vt='rational' if shape=='numeric' and kind=='b' else '[]string' if shape=='contextual' and kind=='b' else '[]int' if shape=='contextual' else 'int'
+     value='array{"s"}' if shape=='contextual' and kind=='b' else 'array{1}' if shape=='contextual' else '1'
+     field='var Data:['+kt+']'+vt+'=map{'+key+'=>'+value+'}'
+     if shape=='nested':
+      print('leaf'+kind+':=class{'+field+'}');print(cls+':=class{C:leaf'+kind+'=leaf'+kind+'{}}')
+     else:print(cls+':=class{'+field+(';Key()<computes>:'+kt+'='+key if shape=='correlated' else '')+'}')
+    clauses=[f'A{i}:=(Dup(ca{{}})|Dup(cb{{}}))' for i in range(n)];writes=[]
+    for i in range(n):
+     target=f'A{i}'
+     if shape=='alias':clauses+=[f'B{i}:=A{i}',f'C{i}:=B{i}'];target=f'C{i}'
+     key=target+'.Key()' if shape=='correlated' else '0'
+     if shape=='nested':target+='.C'
+     writes.append('set '+target+'.Data['+key+']'+('+=' if op=='compound' else '=')+('array{}' if shape=='contextual' else '1'))
+    effects='<suspends>' if mode=='waiting' else '';print('Run()'+effects+':int=')
+    if mode=='first':print('    if('+','.join(clauses+writes)+')then 1 else -1')
+    else:
+     if mode=='waiting':body='block{'+('if('+','.join(writes)+'):{}' if op=='compound' else ';'.join(writes))+';Sleep(0.001);0}'
+     else:body='0'
+     print('    Rows:=for('+','.join(clauses+([] if mode=='waiting' else writes))+'):'+body+'\n    Rows.Length')
+    print('Main()'+effects+':void=Print("{Run()}")')
+    sys.exit(0)
 if kind.startswith('compoundindex-'):
     _, shape, mode = kind.split('-')
     n = count
@@ -1696,7 +1754,7 @@ PY
       diff -u "$tmp/expected" "$tmp/lean.out"
       diff -u "$tmp/expected" "$tmp/c.out"
     fi
-    if [[ ( $kind == named-* || $kind == conversion-* || $kind == indexwrite-* || $kind == compoundindex-* ) && $count == 4 ]]; then
+    if [[ ( $kind == named-* || $kind == conversion-* || $kind == indexwrite-* || $kind == compoundindex-* || $kind == mapwrite-* ) && $count == 4 ]]; then
       expected=256
       if [[ $kind == *-first ]]; then
         expected=1
