@@ -94,11 +94,17 @@ and what a QuickProof result relies on.
 not proved. It is compared with the Lean interpreter on the Verse test suite
 (`scripts/test-verse.sh --c`) and on random programs (`scripts/fuzz-diff.sh`),
 and it runs under ASan/UBSan. Some fuzzers also check both against a model of
-the documented semantics, written apart from the code it checks:
-`scripts/fuzz-model-gadt.sh` (classes that fix, repeat or hide type arguments,
-and casts on them), `scripts/fuzz-model-mv.sh` (choice and functions with
-several values) and `scripts/fuzz-model-sched.sh` (the scheduler), with the
-models in `scripts/models/`.
+the documented semantics, written apart from the code it checks, with the
+models in `scripts/models/`; `scripts/check.sh` runs each on fresh seeds:
+
+| Fuzzer | What its model predicts |
+|---|---|
+| `scripts/fuzz-model-mv.sh` | choice and functions with several values |
+| `scripts/fuzz-model-generic.sh` | generic functions with several values, on each compilation path and consumer |
+| `scripts/fuzz-model-heterogeneous.sh` | composed choices over mixed types: rollback, copy-outs, waiting and cancellation (with `--methods`, `--members` and other modes for dictionaries) |
+| `scripts/fuzz-model-breaks.sh` | `break` out of source loops, with rollback |
+| `scripts/fuzz-model-gadt.sh` | classes that fix, repeat or hide type arguments, and casts on them |
+| `scripts/fuzz-model-sched.sh` | the scheduler: `spawn`, `branch`, events, `sync`/`race`/`rush`, cancellation and `Sleep` |
 
 ## Using it
 
