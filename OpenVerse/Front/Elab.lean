@@ -849,10 +849,6 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
         -- (at the interface's Verse Core type arguments, which also hold
         -- those it gives its own parents, `c2(t)`'s `[]t, t`)
         if !((env.coreArgs i ia).isPrefixOf (core cd.name)) then
-          let showArgs (ts : List Ty) : String := if ts.isEmpty then "none" else ", ".intercalate (ts.map Ty.show)
-          -- (and, where they differ, as the interface holds them, #53)
-          let ica := env.coreArgs i ia
-          let gives := if ica == ia then showArgs ia else s!"{showArgs ia} (which {i} holds as {showArgs ica})"
           -- (#351) references to the interface go through views, each class
           -- below with its own; its fields would be at other places in its
           -- classes, which no view gives
@@ -882,7 +878,6 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     let d := (dm.splitOn ".").head!
     let q := (qm.splitOn ".").head!
     let mn := (dm.splitOn ".").getLast!
-    let (cd', cq) := (core d, core q)
     -- (not through views, #351: a dispatch through one opens the class's
     -- type arguments, related to the interface's by its view, which may
     -- have more, `q(t) := class(p(t), keyed(string, t))`)
