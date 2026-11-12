@@ -71,6 +71,8 @@ flags: heavy     (with bif: more of them, longer chains, longer conditions)
                   generator, #296; on with lazy otherwise)
        retdefer-control (emit an equivalent pre-change layout of returning
                   cleanup scopes, with the same independent trace oracle)
+       (a branchy generator's base branch is at times one if with a print in its
+                  condition, a value whose condition is undone with it, #283)
        noframes  (no return frame: a generator's call of itself with code after
                   it, or its choice bound with plain code after it, #283; on with
                   lazy otherwise)
@@ -454,6 +456,12 @@ RET_DEFER = RT2 and random.Random(seed * 1000003 + 283391).random() < 0.5
 # as the code after the last choice reached is). A generator of its own decides, so
 # seeds keep their other programs.
 RFR = random.Random(seed * 1000003 + 283283)
+# ---- #283: at times a branchy generator's base branch is one value that is an if with a
+# print in its condition, `if (N <= 1) then ((if (Print("frN"), A > k) then x else y)) else …`:
+# that if is the value (it has no choice), so its condition runs with the value and is undone
+# with it where the consumer rejects it, as any value's code is. A stream of its own, so seeds
+# without it keep their programs.
+RIFV = random.Random(seed * 1000003 + 283284)
 FRN = [0]
 
 
@@ -877,7 +885,12 @@ def gen_gfunc(i):
         if fx and R.random() < 0.5:
             c2 = [('print', fresh("c"))]
             conds = c2 + conds if R.random() < 0.5 else conds + c2
-        f['val'] = ('gbif', conds, alts(False), alts(True))
+        base = alts(False)
+        if LAZY and RIFV.random() < 0.5:
+            cond = [('print', ffresh()), ('filter', ('cmp', ('ref', 'A'), [(RIFV.choice(['>', '<']), ('lit', RIFV.randint(-1, 2)))]))]
+            pick = lambda: ('lit', RIFV.randint(-1, 4)) if RIFV.random() < 0.5 else ('ref', RIFV.choice(['N', 'A']))
+            base = [('ifx', cond, pick(), pick())]
+        f['val'] = ('gbif', conds, base, alts(True))
     f['stmts'] = stmts
     f['lifted'] = lifted(f)
     CTX.update(ctrs=None, nofail=False, nochoice=False, noprint=False, fmax=None, take=None)
