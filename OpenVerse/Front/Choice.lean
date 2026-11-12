@@ -1461,14 +1461,6 @@ structure ShapeOps where
   isRec : SExpr → Bool
   inert : SExpr → Bool
 
-/-- `mapLoopLeaves`, each leaf's normal form possibly missing. -/
-partial def mapLoopLeaves? (leaf : SExpr → Option SExpr) : SExpr → Option SExpr
-  | .app p (.ident q "$returnTail") [.block r ss] false => do
-    let (pre, value) := loopBlockParts r ss
-    return .app p (.ident q "$returnTail") [.block r (pre ++ [← mapLoopLeaves? leaf value])] false
-  | .ite p cs t u => do return .ite p cs (← mapLoopLeaves? leaf t) (← u.mapM (mapLoopLeaves? leaf))
-  | e => leaf e
-
 mutual
 /-- (#283) An alternative of a lazily taken group in the normal form its
     machine takes: a plain value; a whole call of the group; or a choice
@@ -1512,7 +1504,17 @@ partial def normAlt (ops : ShapeOps) (a : SExpr) : Option SExpr := do
     choice with a prefix, `$then(choice, h, frame, block{prefix})`, has the
     prefix run as its path's, before the choice. -/
 partial def normTail (ops : ShapeOps) (tail : SExpr) : Option SExpr :=
-  mapLoopLeaves? (fun v => do
+  match tail with
+  | .app p (.ident q "$returnTail") [.block r ss] false => do
+    let (pre, value) := loopBlockParts r ss
+    if pre.all ops.plain then
+      return .app p (.ident q "$returnTail") [.block r (pre ++ [← normTail ops value])] false
+    -- (a returning branch whose code before its value has choice points: as
+    -- a body, its code up to the first its path's)
+    let (cls, t) ← bodyTail? ops r pre value
+    return .app p (.ident q "$returnTail") [.block r (cls ++ [t])] false
+  | .ite p cs t u => do return .ite p cs (← normTail ops t) (← u.mapM (normTail ops))
+  | v => do
     match alts? v with
     | some as => return mk v.pos (← as.mapM (normAlt ops))
     | none =>
@@ -1521,7 +1523,7 @@ partial def normTail (ops : ShapeOps) (tail : SExpr) : Option SExpr :=
         if isChoice c then
           return .app q (.ident r "$returnTail") [.block q (pre ++ [.app q (.ident r "$then") [c, h, k] false])] false
         normAlt ops v
-      | a => return a) tail
+      | a => return a
 
 /-- (#283) The clauses and tail of code whose clauses `cls` are followed by
     `last`: the clauses up to the first that is not plain, and the rest as
