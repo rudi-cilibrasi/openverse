@@ -862,6 +862,41 @@ def Ctx.evidenceEnv (ctx : Ctx) : TyEnv :=
       let bound := capability.bound ctx.types
       (bound.base, bound.derived) }
 
+/-- Infer a signature's structured arguments through real views of opaque
+    inputs, without replacing a directly matched precise type parameter.
+    Distinct inferred instances remain ambiguous; equal ones share flags. -/
+partial def Ctx.matchArgument (ctx : Ctx) (substitution : List (String × Ty))
+    (pattern actual : Ty) : Option (List (String × Ty)) :=
+  go [] substitution pattern actual
+where
+  go (seen : List (Ty × Ty)) (substitution : List (String × Ty)) (pattern actual : Ty) :
+      Option (List (String × Ty)) := do
+    if let some result := pattern.matchArg ctx.types substitution actual then return result
+    if seen.contains (pattern, actual) then none else do
+      let seen := (pattern, actual) :: seen
+      match pattern, actual with
+      | _, .param .. =>
+        let results := (SubtypeEvidence.valueViews ctx.types ctx.evidenceTypes actual).filterMap fun view =>
+          go seen substitution pattern view
+        let first ← results.head?
+        if !results.all (fun result => result.length == first.length && first.all (fun (name, ty) =>
+            (result.lookup name).any (· == ty))) then none else
+          some (first.map fun (name, ty) => (name,
+            results.foldl (fun common result => common.commonBounds ((result.lookup name).getD ty)) ty))
+      | .arr p, .arr a | .opt p, .opt a => go seen substitution p a
+      | .arr p, .tup values => values.foldlM (fun current value => go seen current p value) substitution
+      | .tup ps, .tup values =>
+        if ps.length != values.length then none else
+          (ps.zip values).foldlM (fun current (p, value) => go seen current p value) substitution
+      | .map pk pv, .map ak av => do go seen (← go seen substitution pk ak) pv av
+      | .struct owner ps, .struct source values =>
+        let values := if owner != source && ctx.types.classes.contains source && ctx.types.isSub source owner then
+          ctx.types.upArgs source values owner else values
+        if (owner != source && !(ctx.types.classes.contains source && ctx.types.isSub source owner)) ||
+            ps.length != values.length then none else
+          (ps.zip values).foldlM (fun current (p, value) => go seen current p value) substitution
+      | _, _ => none
+
 def Ctx.checkInlineInstance (ctx : Ctx) (p : Pos) (formal : ResolvedTParams)
     (substitution : List (String × Ty)) (complete : Bool := true) :
     Except String (List (String × Ty)) := do

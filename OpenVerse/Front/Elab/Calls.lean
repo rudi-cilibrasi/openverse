@@ -191,6 +191,15 @@ partial def elabSubtypeUpWith (elabE : Ctx → SExpr → Option Ty → EM R)
   return ⟨.seq (.assign slot value.e) (.seq (.assign dictionarySlot dictionary.e)
     (← coerce p result target)), target⟩
 
+/-- Convert a once-elaborated argument after view-based inference. Ordinary
+    conversions keep their path; an actual dictionary handles an opaque view. -/
+partial def elabArgumentCoerceWith (elabE : Ctx → SExpr → Option Ty → EM R)
+    (ctx : Ctx) (p : Pos) (value : R) (target : Ty) : EM Expr := do
+  if value.ty != target && value.ty != .never && target != .void then
+    if let some plan := SubtypeEvidence.find? ctx.types ctx.evidenceTypes ⟨target, value.ty⟩ then
+      if plan.usesLocal then return (← elabSubtypeUpWith elabE ctx p value target plan).e
+  coerce p value target
+
 partial def elabContainerReceiverWith (elabE : Ctx → SExpr → Option Ty → EM R)
     (ctx : Ctx) (p : Pos) (value : R) (accepts : Ty → Bool) (operation : String) : EM R := do
   let view ← match ctx.containerView p value.ty accepts operation with
@@ -299,7 +308,7 @@ partial def elabGenericCallWith (elabE : Ctx → SExpr → Option Ty → EM R) (
           let v := (pt.params.filter fun v => (σ.lookup v).isNone).headD "t"
           eerr a.pos s!"cannot infer type parameter {v} of {s.name} from the arguments of this call"
         let r ← elabE ctx a none
-        match pt.matchArg ctx.types σ r.ty with
+        match ctx.matchArgument σ pt r.ty with
         | some σ' =>
           σ := σ'
           if !s.bounds.isEmpty then
@@ -309,7 +318,7 @@ partial def elabGenericCallWith (elabE : Ctx → SExpr → Option Ty → EM R) (
           if pass == 0 && !bound σ pt then
             deferred := deferred.set! i true
           else
-            es := es.set! i (← coerce a.pos r (pt.subst σ))
+            es := es.set! i (← elabArgumentCoerceWith elabE ctx a.pos r (pt.subst σ))
         | none => eerr a.pos s!"expected {(pt.subst σ).show}, found {r.ty.show} (in a call of {s.name})"
   -- the arguments, in their temporaries, then the defaults
   let inferred ← match SubtypeEvidence.infer (if s.bounds.isEmpty then ctx.types else ctx.evidenceEnv) s.bounds σ with
@@ -378,10 +387,10 @@ partial def elabGenericCallWith (elabE : Ctx → SExpr → Option Ty → EM R) (
         let (rd, σ1) ← fxAt p (do
           let r ← elabE dctx d (if bound σ0 pt then some (pt.subst σ0) else none)
           let σ1 ← if bound σ0 pt then pure σ0 else
-            match pt.matchArg ctx.types σ0 r.ty with
+            match dctx.matchArgument σ0 pt r.ty with
             | some σ' => pure σ'
             | none => eerr p s!"the default of ?{n} of {s.name} is a {r.ty.show}, not a {(pt.subst σ0).show}"
-          return (← coerce p r (pt.subst σ1), σ1))
+          return (← elabArgumentCoerceWith elabE dctx p r (pt.subst σ1), σ1))
         σ := σ1
         if !s.decides && rd.mayFail ctx.sigProg then
           eerr p s!"the default of ?{n} of {s.name} can fail, but {s.name} is not <decides>"
