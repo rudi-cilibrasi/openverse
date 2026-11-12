@@ -533,8 +533,16 @@ judge what can fail (`Ctx.failabilityKnown`), as a call may yet get several
 values, and the uses it does not reach are of no family, so the last one has
 none left. Each use is then rewritten as in a program with that family
 alone, so the fixpoint is exact, and so is the code. A family that has several values only through such uses has its
-own uses noted in a later round; each round notes more, so they end. A
-class below two roots of `M`, or an overloaded `M`, is refused when a family
+own uses noted in a later round; each round notes more, so they end. An
+overloaded method (#106) is one method for each of its lists, named as the
+elaborator names them, `M$ovK` (`MethodOverloads`, which both use); a
+family is of one of them. A call of an overloaded `M` (`R.M(args)`, bare,
+`(super:)`) is of the list an earlier elaboration found it takes, noted by
+the call's place as an overloaded function's call is (`Requests.overloads`,
+`Ctx.noteOverload`, `rwFamCalls`' `slotAt`), and as written, of one value,
+before; then of its family, by its class or a pick of its own. The
+methods of such a name keep stubs in their classes, so the elaborator's
+lists are the same. A class below two roots of `M` is refused when a family
 of `M` has several values. For
 an interface (#283) the dispatch's root is the interface, its receiver
 typed at it and cast to each implementing class, and its default
