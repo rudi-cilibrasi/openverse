@@ -39,3 +39,12 @@ check callable-view ambiguity/order and dummy receivers through spawn.
 The bound-only pair and API scans require function shapes mentioned only in
 upper-bound metadata to be discovered and materialized, including generated
 request headers and whole relations.
+
+The container-view pairs use actual whole-container dictionaries for indexing,
+queries, members and array methods. They retain precise generic results,
+receiver/argument order, shared object references, rollback and waiting/task
+cleanup. Interior mutation checks indices before traversal and old-leaf reads
+before the RHS. A negative refuses writeback through an opaque container's
+upper view; no inverse conversion or element relation is inferred. Empty
+literal arguments are typed explicitly when the ordinary generic inference
+rules cannot determine their precise type.

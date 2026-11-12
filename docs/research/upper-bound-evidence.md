@@ -169,6 +169,26 @@ the source storage type, evaluate indices/keys before traversal, and perform
 each bound view after reading its source container. Augmented updates retain
 their old-leaf read and their selected target across RHS mutation.
 
+Container operations also use actual whole-value views. Array/map indexing,
+tuple projection, option/logic query, array/map `Length` and the ordinary array
+methods run after a checked conversion of the receiver. Selection prefers a
+strict subtype; mutually convertible uppers use a stable representative.
+Unrelated applicable views are ambiguous. Equal view identities retain only
+their common comparable guarantees, independently of dictionary order.
+Declaration facts and dummy dictionaries cannot create an operational view,
+and a whole-container proof does not establish an element relation.
+
+An interior write may traverse a container view to reach a mutable object.
+The view executes during traversal, after index/key evaluation and after its
+source container has been read. Writes that would rebuild an opaque container
+through its upper view are refused: the conversion does not provide a checked
+way back to the source storage type. Readonly fields and ordinary effect checks
+still apply. Concrete controls check shared references, old-leaf reads before
+RHS mutation, rollback, and containers retained by waiting/escaping tasks.
+Empty option/array literals have explicit argument types where ordinary
+generic inference cannot determine the precise instance; the unbounded
+`Keep(array{})` control has the same inference restriction.
+
 Inference retains precise input bindings. It can infer nominal projections and
 common peer uppers, including component joins for matching containers. It does
 not enumerate every Cartesian combination of tuple-component upper types.
