@@ -1994,6 +1994,8 @@ structure FirstLift where
   tparams : List TParam := []
   specs : List String
   ret : STy
+  /-- Normalize a polymorphic result after inferring its input instance. -/
+  joinedRet : Option STy := none
   body : SExpr
   binds : List String
   sets : List String

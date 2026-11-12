@@ -114,6 +114,8 @@ check "scheduler model fuzzing (${FUZZ_MODEL_SCHED:-50} programs, against a mode
   scripts/fuzz-model-sched.sh "${FUZZ_MODEL_SCHED:-50}" "$seed"
 check "GADT model fuzzing (${FUZZ_MODEL_GADT:-150} programs, against twenty-seven models of the docs)" \
   scripts/fuzz-model-gadt.sh "${FUZZ_MODEL_GADT:-150}" "$seed"
+check "heterogeneous choice model fuzzing (${FUZZ_MODEL_HETEROGENEOUS:-120} programs)" \
+  scripts/fuzz-model-heterogeneous.sh "${FUZZ_MODEL_HETEROGENEOUS:-120}" "$seed"
 check "source break model fuzzing (${FUZZ_MODEL_BREAKS:-60} programs)" \
   scripts/fuzz-model-breaks.sh "${FUZZ_MODEL_BREAKS:-60}" "$seed"
 check "choice model fuzzing (${FUZZ_MODEL_MV:-140} programs, functions with several values too)" \

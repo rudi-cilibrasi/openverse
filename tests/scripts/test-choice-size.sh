@@ -82,6 +82,31 @@ kinds=(
   dispatch-default-first
   dispatch-default-for
   exclusive
+  heterogeneous-nested-for
+  heterogeneous-unused-first
+  heterogeneous-unused-for
+  heterogeneous-unused-waiting
+  heterogeneous-equal-first
+  heterogeneous-equal-for
+  heterogeneous-equal-waiting
+  heterogeneous-default-first
+  heterogeneous-default-for
+  heterogeneous-default-waiting
+  heterogeneous-array-first
+  heterogeneous-array-for
+  heterogeneous-array-waiting
+  heterogeneous-tuple-first
+  heterogeneous-tuple-for
+  heterogeneous-tuple-waiting
+  heterogeneous-box-first
+  heterogeneous-box-for
+  heterogeneous-box-waiting
+  heterogeneous-result-first
+  heterogeneous-result-for
+  heterogeneous-result-waiting
+  heterogeneous-fields-first
+  heterogeneous-fields-for
+  heterogeneous-fields-waiting
   immediate-event-refined
   immediate-spawn-refined
   first-return-composed
@@ -195,6 +220,43 @@ for kind in "${kinds[@]}"; do
 import sys
 kind, count = sys.argv[1], int(sys.argv[2])
 print('Two(N:int):int = N | N + 1')
+if kind == 'heterogeneous-nested-for':
+    print('Dup(X:t where t:type)<computes>:t=X|X')
+    print('Main():void=')
+    body = '0'
+    for i in range(count):
+        body = f'for(A{i}:=(Dup(1)|Dup("s"))):' + body
+    print('    Rows:=' + body)
+    print('    Print("{Rows.Length}")')
+    sys.exit(0)
+if kind.startswith('heterogeneous-'):
+    _, shape, mode = kind.split('-')
+    print('Dup(X:t where t:type)<computes>:t=X|X')
+    print('Same(X:t,?Y:t=X where t:subtype(comparable))<computes>:int=if(X=Y)then 1 else 0')
+    print('Default(X:t,?Y:[]t=Concatenate() where t:type)<computes>:int=Y.Length')
+    print('box(t:type):=class{V:t;K:int=1}')
+    print('base:=class{K:int=1}\nca:=class(base){}\ncb:=class(base){}')
+    values = {
+        'unused': ('1', '"s"'), 'equal': ('1', '"s"'), 'default': ('1', '"s"'),
+        'array': ('array{1}', '"s"'), 'tuple': ('(1,1)', '("s","s")'),
+        'box': ('box(int){V:=1}', 'box(string){V:="s"}'),
+        'result': ('1', '"s"'), 'fields': ('ca{}', 'cb{}'),
+    }
+    x, y = values[shape]
+    clauses = []
+    for i in range(count):
+        clauses.append(f'A{i}:=(Dup({x})|Dup({y}))')
+        score = '0' if shape in ('unused','result') else f'Same(A{i})' if shape=='equal' else f'Default(A{i})' if shape=='default' else f'A{i}.Length' if shape=='array' else f'if(A{i}(0)=A{i}(1))then 1 else 0' if shape=='tuple' else f'A{i}.K'
+        clauses.append(f'S{i}:={score}')
+    value = 'A0' if shape=='result' else '+'.join(f'S{i}' for i in range(count))
+    effects = '<suspends>' if mode=='waiting' else ''
+    print(f'Main(){effects}:void=')
+    if mode=='first':
+        print('    if('+','.join(clauses)+')then Print("{'+('0' if shape=='result' else value)+'}") else Print("none")')
+    else:
+        print('    Rows:=for('+','.join(clauses)+'):block{'+('Sleep(0.0);' if mode=='waiting' else '')+value+'}')
+        print('    Print("{Rows.Length}")')
+    sys.exit(0)
 if kind == 'immediate-event-refined':
     print('pair(a:type,b:type) := class { A:a;B:b }')
     print('dup(t:type) := class(pair(t,t)) { C:int=4 }')

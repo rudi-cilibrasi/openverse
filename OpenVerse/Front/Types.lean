@@ -1146,11 +1146,16 @@ def isClassTy (env : TyEnv) : Ty → Bool
   | .struct n _ => env.classes.contains n
   | _ => false
 
-/-- Two classes or interfaces with a supertype in common, whose failed join
-    is an ambiguity (two of them), not unrelated types joining at `any`. -/
+/-- A failed join is ambiguous only when two incomparable instantiated
+    interfaces remain. A common name at incompatible arguments is not a
+    common supertype: `box(int)` and `box(string)` can still join at `any`. -/
 def ambiguousJoin (env : TyEnv) : Ty → Ty → Bool
-  | .struct a _, .struct b _ =>
-    env.classes.contains a && env.classes.contains b && (env.supers a).any (env.supers b).contains
+  | .struct a as, .struct b bs =>
+    if !env.classes.contains a || !env.classes.contains b then false else
+    let common := (env.supers a).filter fun c =>
+      env.isSub b c && env.argsAt a as c == env.argsAt b bs c
+    if common.any (fun c => !(env.info c).isIface) then false else
+    (common.filter fun c => !common.any (fun d => c != d && env.isSub d c)).length > 1
   | _, _ => false
 
 end OpenVerse.Front
