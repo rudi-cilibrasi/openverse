@@ -1,0 +1,36 @@
+recv 3
+recv 30
+plain 4
+bare 3
+bare 30
+self 3
+self 30
+one 8
+b 6
+b 7
+b 5
+b 50
+b one 6
+b str 1
+b str 100
+sub bare 3
+sub bare 4
+sub bare 2
+sub bare 20
+sub one 14
+sub str 2
+sub str 100
+first 7
+all 1
+all 10
+all 2
+all 3
+all 1
+all 10
+top 1
+top 2
+below 1 10
+below 1 11
+below 2 20
+below 2 21
+exit=0

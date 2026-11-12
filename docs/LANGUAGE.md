@@ -364,6 +364,11 @@ Verse ch. 6): `Describe(X:int)`, `Describe(S:string)`, `Describe(X:int, Y:int)`.
   receiver's type that its arguments fit, then dispatches as usual; the
   overloads a class sees must be distinct. Each list is a method of its
   own (`M$ovN`, up to the names of type parameters).
+- **Several values** (#283). An overload of a function or a method may have
+  several values where another has one (see [Choice](#choice), "Functions
+  with several values"): a call takes the overload its arguments fit and
+  has its values, so a caller that reaches only overloads with one value
+  has one.
 - **Qualified implementations** (#125). `(i:)M<override>(…)` implements
   the overload of `i`'s `M` with its parameter list (as an override takes
   its method's), and `X.(i:)M(…)` picks among `i`'s overloads.
@@ -1180,9 +1185,17 @@ Main():void =
   An overloaded function may have several values too (#283): a call takes
   the overload its arguments fit, as any call does, and has that
   overload's values, inlined as it would be alone; an overload with one
-  value is an ordinary call. Without types where it is inlined, a function
-  that calls such an overloaded one is taken to have several values
-  whichever overload it reaches, for now.
+  value is an ordinary call. So a function whose calls reach only
+  overloads with one value has one value. The program is elaborated once
+  to find the overload each call takes, then again with each call of an
+  overload with several values inlined, wherever the call is (a function,
+  a constant, a default, a class block, the entry expression). An overload
+  may call its function's own name, so another overload, inlined there, or
+  itself, recursive (below); and a recursive one may call an overloaded
+  one, as it may call any function with several values. A call in
+  the clauses after a choice whose alternatives' values are of different
+  types, which are copied for each (#335), must take one overload in every
+  copy.
 
   A method with several values works the same way (#283): a call
   `R.M(args)` evaluates `R` first, once, then is inlined like a function's,
@@ -1200,9 +1213,15 @@ Main():void =
   So a class's `M` with one value stays an ordinary method wherever it is
   called, through a function too, and a function whose values come from
   another class's `M` through a receiver of that class has several values,
-  as when one family has the name. A class below two roots of `M` (one
+  as when one family has the name. An overloaded `M` (#106) is a method
+  for each of its parameter lists, each its own family: a call takes the
+  list its arguments fit, as any call does, found as an overloaded
+  function's call's overload is (the program elaborated once to find it,
+  then again), and then its family as above; bare, through `Self` or
+  `(super:)` too. So one list may have several values and another one.
+  A class below two roots of `M` (one
   listing two interfaces that both declare it) is refused when one of the
-  families has several values, and so is an overloaded `M`. Such a
+  families has several values. Such a
   method's name must be no field, no struct field, enumerator or member of
   a built-in type (`Length`, `Find`, `Signal`, …), no top-level name and no
   parameter or local. An
@@ -1232,7 +1251,9 @@ Main():void =
   implementation above. Its tuple form `(super:)M((A, B))` uses the inherited
   parameter types as the current class sees them, including renamed or
   compound type arguments. The receiver and tuple are each evaluated once,
-  in that order. A method may call another method through `(super:)` too;
+  in that order. A qualified call `R.(i:)M(…)` (#125) is a call in the
+  family of the root `i` is below, dispatched as `R.M(…)` is. A method may
+  call another method through `(super:)` too;
   extraction and helper functions retain the source class and receiver,
   so inherited implementations, overloads and defaults use that scope.
   A recursive overridden one is computed at the
@@ -1457,11 +1478,8 @@ Main():void =
   Tell("x", 1) + (1 | 2)` is refused, `T(N - 1) | Y + (1 | 2)` is not); and
   a choice whose values are of another type than the function's may not
   have a choice or a call of its group after it (`S := "a" | "bb"`, then
-  `T[N - 1] + S.Length`) (#283). Also an
-  overloaded one with an overload that calls the function's own name
-  (a generic one's type arguments are inferred from the
-  arguments where it is inlined, as at a call, named ones too), a recursive one with a `defer:` of its own, or called by a recursive one (its body a function's, where it would run once), one with a `return`
-  other than at the end of its body or in an `if`'s branches, an overloaded method, a method of a class or
+  `T[N - 1] + S.Length`) (#283). Also a recursive one with a `defer:` of its own, or called by a recursive one (its body a function's, where it would run once), one with a `return`
+  other than at the end of its body or in an `if`'s branches, a method of a class or
   interface below two others that each declare its name without `<override>`,
   `<suspends>`, one used as a function value, and, since its body is inlined where other names may be
   in scope, one whose name is also the name of a parameter, local, field or
@@ -2055,5 +2073,5 @@ Main()<suspends>:void =
 the class features listed under [Classes](#classes), struct methods (Verse structs have none; classes do),
 `weak_map`, module paths `using{/Verse.org/…}` (accepted and ignored), the
 specific overload/call gaps listed under [Overloading](#overloading), nested
-functions and lambdas (see [release evidence and proposed design](research/closure-design.md)), choice beyond [Choice](#choice) (overloaded methods with several values, and the choice points in sequence that recursive functions with several values with effects may not have yet, listed there), concurrency beyond [Concurrency](#concurrency), and the unsupported
+functions and lambdas (see [release evidence and proposed design](research/closure-design.md)), choice beyond [Choice](#choice) (the choice points in sequence that recursive functions with several values with effects may not have yet, listed there), concurrency beyond [Concurrency](#concurrency), and the unsupported
 effect/construction contracts listed under [Effect contracts](#effect-contracts).
