@@ -34,6 +34,7 @@ import OpenVerse.Front.SourceFrames
 import OpenVerse.Front.FailCapture
 import OpenVerse.Front.CompilerWrites
 import OpenVerse.Front.Types
+import OpenVerse.Front.ChoiceTypes
 import Std.Data.HashMap
 
 namespace OpenVerse.Front
@@ -458,6 +459,19 @@ structure ESt where
   deriving Inhabited
 
 abbrev EM := StateT ESt (Except String)
+
+/-- Give a disposable polymorphic suffix trial its own type witnesses.
+    The generated continuation will obtain them from its actual arguments. -/
+def choiceTypeContext (ctx : Ctx) (plan : ChoiceTypes.Plan) : EM Ctx := do
+  let types := { ctx.types with
+    tvars := plan.params.map (fun (n, c) => (n, Ty.param n c)) ++ ctx.types.tvars }
+  let names := ctx.dictVars ++ plan.params.map (·.1)
+  let base := (← get).nslots
+  for name in names do
+    let st ← get
+    let ty := (types.tvars.lookup name).getD (.param name false)
+    set { st with nslots := st.nslots + 1, slotTys := st.slotTys.push ty }
+  return { ctx with dictBase := base, dictVars := names, types }
 
 /-- Successful isolated branch typing contributes construction instances
     during the construction probe, while its runtime slots/effects are reset. -/
@@ -1342,6 +1356,64 @@ def join (p : Pos) (a b : Ty) (exp : Option Ty) : EM Ty := do
       if (exp.isNone || exp == some .any) && !ambiguousJoin (← get).env a b then return .any
       eerr p s!"the branches have different types: {a.show} and {b.show}"
 
+/-- A generated result packet joins each field independently. In particular,
+    an erased value must not erase the packet's remaining bindings/flags. -/
+partial def choiceResultType (env : TyEnv) (types : List Ty) : Option Ty := do
+  let first ← types.head?
+  if types.all (· == first) then return types.foldl Ty.commonBounds first
+  if let some children := types.mapM (fun | .arr t => some t | _ => none) then
+    return .arr (← choiceResultType env children)
+  if let some children := types.mapM (fun | .opt t => some t | _ => none) then
+    return .opt (← choiceResultType env children)
+  if let .tup ts := first then
+    if let some rows := types.mapM (fun
+        | .tup us => if us.length == ts.length then some us else none
+        | _ => none) then
+      return .tup (← (List.range ts.length).mapM fun j =>
+        choiceResultType env (rows.map fun row => row[j]!))
+  types.foldlM (fun a b =>
+    if a == .void || b == .void then some .void else
+    (joinTy env a b none).orElse fun _ =>
+      if ambiguousJoin env a b then none else some .any) first
+
+/-- A common class view suffices when the suffix only accesses fields whose
+    instantiated types agree in every alternative. Bare values, methods and
+    local type definitions keep their original static types instead. -/
+partial def choiceFieldsOnly (env : TyEnv) (binding : String) (types : List Ty)
+    (view : Ty) (body : SExpr) : Bool :=
+  match body with
+  | .member _ (.ident _ name) field =>
+    if name != binding then true else
+      match view with
+      | .struct base args =>
+        match (env.fields base args).find? (·.1 == field) with
+        | none => false
+        | some (_, ty, _) => types.all fun
+          | .struct n ts => ((env.fields n ts).find? (·.1 == field)).any fun (_, actual, _) =>
+              reprStr actual == reprStr ty
+          | _ => false
+      | _ => false
+  | .ident _ name => name != binding
+  | .structDef .. | .enumDef .. | .refineDef .. => false
+  | e => e.children.all (choiceFieldsOnly env binding types view)
+
+def choiceTypePlan (ctx : Ctx) (stem binding : String) (types : List Ty)
+    (suffix : List SExpr) : Option ChoiceTypes.Plan := do
+  let plan ← ChoiceTypes.generalize ctx.types stem types
+  let first ← types.head?
+  if let some view := types.tail.foldlM (fun a b => joinTy ctx.types a b none) first then
+    if let .struct n _ := view then
+      if ctx.types.classes.contains n &&
+          suffix.all (choiceFieldsOnly ctx.types binding types view) then
+        return { binding := view, params := [], instances := types.map fun _ => [] }
+  return plan
+
+def joinedChoiceResult (ctx : Ctx) (plan : ChoiceTypes.Plan) (lift : Choice.FirstLift) : EM Choice.FirstLift := do
+  let own ← resolveTy ctx.types lift.pos lift.ret
+  let some joined := choiceResultType ctx.types (plan.instances.map (own.subst ·))
+    | eerr lift.pos "the alternatives have ambiguous result types"
+  return { lift with joinedRet := if joined == own then none else some joined.toSTy }
+
 
 /-- `M[k]` on the map in slot `tm` with the key in slot `tk`: the value of the
     first pair whose key equals `k` (fails when there is none). `tp` is a
@@ -1718,6 +1790,15 @@ def firstResult (p : Pos) (name : String) (binds sets : List Local) (source : Op
     let normal := SExpr.decl p (name ++ "$normal") (some ret) false normal
     let returned := SExpr.tuple p (.ident p "false" :: copied ++ [.optionLit p saved, .ident p "true"])
     (ret, normal, some { ty := ty.toSTy, value, packet := [returned] })
+
+/-- Infer the callee's actual type arguments before joining its result.
+    An expected result type must not widen the input's instance first. -/
+def continuationBind (p : Pos) (lift : Choice.FirstLift) (name : String) (call : SExpr) : List SExpr :=
+  match lift.joinedRet with
+  | none => [.decl p name none false call]
+  | some ty =>
+    let raw := name ++ "$instance"
+    [.decl p raw none false call, .decl p name (some ty) false (.ident p raw)]
 
 /-- Update source captures before returning or exposing the normal bindings. -/
 def firstUnpack (p : Pos) (l : Choice.FirstLift) (packet : String) : List SExpr :=
@@ -3140,7 +3221,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
           -- those clauses and the body a function of their own, which each
           -- alternative's for calls, instead of a copy in each)
           let restCl := fs ++ moreClauses
-          if restCl.any isCF && c.suspends then
+          if c.suspends then
             let saved ← get
             let mut types : List Ty := []
             for (a, i) in b.alts.zipIdx do
@@ -3148,21 +3229,35 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
                 { bctx with typeOnly := true } p (liftA a i) (.ident gp b.name) (prepared := true)
               if let .arr t := r.ty then types := types ++ [t]
             set saved
-            if let some bty := types.head? then
-              if types.length == b.alts.length && types.all (· == bty) then
-                if let some (prepare, plan, value, ready) ← stagedSuffix c gp b.name bty b.alts restCl bd then
-                  if !ready then return ⟨.prim .userErr [], .arr value⟩
-                  let (callCl, resumed) := forStageInvoke gp prepare plan.borrowed bd
-                  let mut parts : List R := []
-                  for (a, i) in b.alts.zipIdx do
-                    let r ← forW (liftA a i ++ callCl) resumed
-                    let .arr (.arr t) := r.ty | eerr gp "internal: a staged continuation's values"
-                    parts := parts ++ [⟨.prim .flatten [r.e], .arr t⟩]
-                  let some first := parts.head? | eerr gp "internal: a choice without alternatives"
-                  return ⟨parts.tail.foldl (fun acc r => p2 .concat acc r.e) first.e, first.ty⟩
+            if types.length == b.alts.length then
+              let stem := s!"$choiceType{(contKey c gp b.name (b.alts ++ restCl ++ [bd])).hash}"
+              if let some typing := choiceTypePlan c stem b.name types (restCl ++ [bd]) then
+                let polymorphic := !typing.params.isEmpty
+                if !c.constructProbe && (!types.all (some · == types.head?) || restCl.any isCF) then
+                  let before ← get
+                  let poly ← if polymorphic then choiceTypeContext c typing else pure c
+                  let staged ← stagedSuffix poly gp b.name typing.binding b.alts restCl bd
+                  let after ← get
+                  set { after with nslots := before.nslots, slotTys := before.slotTys }
+                  if let some (prepare, plan, value, ready) := staged then
+                    let joined := if polymorphic then choiceResultType c.types (typing.instances.map (value.subst ·)) else some value
+                    if let some value := joined then
+                      if !ready then return ⟨.prim .userErr [], .arr value⟩
+                      let (callCl, resumed) := forStageInvoke gp prepare plan.borrowed bd
+                      let mut parts : List R := []
+                      for (a, i) in b.alts.zipIdx do
+                        let r ← forW (liftA a i ++ callCl) resumed
+                        let r ← if polymorphic then do
+                            let ty := Ty.arr (.arr value)
+                            pure (⟨← coerce gp r ty, ty⟩ : R)
+                          else pure r
+                        let .arr (.arr t) := r.ty | eerr gp "internal: a staged continuation's values"
+                        parts := parts ++ [⟨.prim .flatten [r.e], .arr t⟩]
+                      let some first := parts.head? | eerr gp "internal: a choice without alternatives"
+                      return ⟨parts.tail.foldl (fun acc r => p2 .concat acc r.e) first.e, first.ty⟩
           -- Failable bodies return outcomes so failure stops the entire
           -- for, rather than merely rejecting one continuation call.
-          if restCl.any isCF && forBodySafe c bd then
+          if forBodySafe c bd then
             let req := if c.typeOnly then none else
               c.types.loopRequests.find? (·.key == (if bodyFail then "fo" else "f") ++ contKey c gp b.name (b.alts ++ restCl ++ [bd]))
             let fits (l : Choice.FirstLift) : Bool :=
@@ -3173,9 +3268,9 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
                 let mut parts : List R := []
                 for (a, i) in b.alts.zipIdx do
                   let call : SExpr := .app gp (.ident gp l.name) l.args true
-                  let callCl : List SExpr := if l.sets.isEmpty then [.decl gp kv none false call] else
+                  let callCl : List SExpr := if l.sets.isEmpty then continuationBind gp l kv call else
                     let kt := s!"{site}t"
-                    [.decl gp kt none false call] ++
+                    continuationBind gp l kt call ++
                       l.sets.zipIdx.map (fun (m, j) => SExpr.set gp (.ident gp m) none (.app gp (.ident gp kt) [.int gp ((j + 1 : Nat) : Int)] false)) ++
                       [.decl gp kv none false (.app gp (.ident gp kt) [.int gp 0] false)]
                   let vals : SExpr := if bodyFail then .app gp (.ident gp "$forOutcomeValues") [.ident gp kv] false else .ident gp kv
@@ -3200,7 +3295,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
               let known : Bool := match tys.head? with
                 | some bty => (contForLiftOf c gp b.name bty .void b.alts restCl bd bodyFail).toOption.isSome
                 | none => false
-              if same && known then
+              if same && known && restCl.any isCF then
                 let r0 ← forW (liftA a0 0 ++ restCl) bd
                 if forContWaits c st0 (← get) [r0.e] then set st0 else
                   match (do
@@ -3214,6 +3309,36 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
                     if c.suspends then return ⟨.prim .userErr [], r0.ty⟩
                     return r0
                   | .error _ => set st0
+              else if !same && tys.length == b.alts.length && !c.constructProbe then
+                let stem := s!"$choiceType{(contKey c gp b.name (b.alts ++ restCl ++ [bd])).hash}"
+                let some plan := choiceTypePlan c stem b.name tys (restCl ++ [bd])
+                  | eerr gp "internal: a composed choice without value types"
+                let before ← get
+                modify fun st => { st with fx := [] }
+                let trial ← tryCatch (do
+                  let poly ← choiceTypeContext c plan
+                  let slot ← fresh plan.binding
+                  let bound := { poly with
+                    typeOnly := true,
+                    locals := { name := b.name, slot, ty := plan.binding, mutable := false } :: poly.locals }
+                  let r ← elabForWith elabAlts elabBranchAlts elabE elabInts elabLoopGen elabSeq
+                    bound p restCl bd (prepared := true) (failure := failure)
+                  if forContWaits c before (← get) [r.e] then return none
+                  let .arr value := r.ty | return none
+                  let some result := choiceResultType c.types (plan.instances.map (r.ty.subst ·)) | return none
+                  let effects := (← get).fx
+                  let allowed := heapFx.filter fun k => c.fnFx.contains k || effects.any (·.1 == k)
+                  let lift ← match contForLiftOf { poly with fnFx := allowed } gp b.name plan.binding value b.alts restCl bd bodyFail with
+                    | .ok lift => joinedChoiceResult poly plan lift
+                    | .error _ => return none
+                  return some (lift, result, effects)) (fun _ => pure none)
+                set before
+                if let some (lift, result, effects) := trial then
+                  modify fun st => { st with loopFirst := st.loopFirst ++
+                    [{ g := "", pos := gp, itemCode := .lit .void, argSet := none, lift := .ok lift }] }
+                  for (k, q, via) in effects do noteFx q [k] via
+                  return ⟨.prim .userErr [], result⟩
+                set st0
               else set st0
           let mut parts : List R := []
           for (a, i) in b.alts.zipIdx do
@@ -6069,9 +6194,9 @@ partial def resolveOverload (ctx : Ctx) (p : Pos) (name : String) (ovs : List St
   let cands := ovs.filter fun o => ((sigOf o).map fitsShape).getD false
   -- each argument's type alone, once (none: it needs an expected type)
   let natTy (a : SExpr) : EM (Option Ty) := do
-    -- (by position and shallow shape: a wrong hit could only make the
-    -- call below fail to elaborate, never take an overload the arguments
-    -- do not fit, as no call fits two)
+    -- Copied alternatives and polymorphic suffix trials revisit the same
+    -- expression with different lexical types. Cache that context too;
+    -- a stale natural type can otherwise select the wrong overload.
     let shape : String := match a with
       | .app _ (.ident _ f) as b => s!"app {f} {as.length} {b}"
       | .ident _ n => s!"id {n}"
@@ -6082,7 +6207,10 @@ partial def resolveOverload (ctx : Ctx) (p : Pos) (name : String) (ovs : List St
       | .arrayLit _ es => s!"arr {es.length}"
       | .bin _ o _ _ => s!"bin {o}"
       | _ => "_"
-    let key := s!"{a.pos.line}:{a.pos.col}:{a.pos.file}:{shape}"
+    let inputs := (Choice.namesUsed a).eraseDups.filterMap fun n =>
+      (ctx.lookup n).map fun l => (n, l.ty)
+    let typing := reprStr (inputs, ctx.types.tvars, ctx.selfClass, ctx.selfMethod)
+    let key := s!"{a.pos.line}:{a.pos.col}:{a.pos.file}:{shape}:{typing}"
     if let some r := (← get).natTys[key]? then return r
     let st ← get
     let r ← tryCatch (do return some (← elabE ctx a none).ty) (fun _ => pure none)
@@ -7933,7 +8061,7 @@ partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
           -- this same suffix once prepared, just as composed alternatives do.
           | some { branchy := some i, .. } => !Choice.plainBranches Choice.hasLiftable i
           | _ => false
-        if rest.any isComposed then
+        if !b.alts.isEmpty then
           let req := if ctx.typeOnly then none else ctx.types.loopRequests.find? (·.key == contKey ctx p b.name (b.alts ++ rest) ++ firstReturnKey ctx rest)
           -- (asked for where more effects are allowed than here, as in a
           -- function of its own of a call taken lazily, #246: copied)
@@ -7946,7 +8074,7 @@ partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
             let kt := s!"{t}k"
             let altK (a : SExpr) (i : Nat) : SExpr :=
               .app p (.ident p "$firstP") [.block p (liftAlt a i ++
-                [.decl p kt none false (.app p (.ident p l.name) l.args true), .ident p kt])] false
+                continuationBind p l kt (.app p (.ident p l.name) l.args true) ++ [.ident p kt])] false
             return ← finish (elabOneGo ctx ([.decl p t none false (Choice.mk p (b.alts.zipIdx.map fun (a, i) => altK a i))] ++
               firstUnpack p l t))
           -- (the first elaboration: one alternative with the clauses after it,
@@ -7966,8 +8094,9 @@ partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
                 (.app p (.ident p "$firstP") [.block p (liftAlt a i ++ [.ident p b.name])] false) none
               tys := tys ++ [r.ty]
             let same := tys.all (some · == tys.head?)
+            let prefixState ← get
             -- (what refuses it known before the trial, which then costs nothing)
-            let ok := same
+            let ok := same && rest.any isComposed
             let (code1, c1) ← if ok then elabOneGo ctx ([.decl p t none false (alt a0 0)] ++
                 binds.zipIdx.map fun (n, i) => .decl p n none (vars.contains n) (.app p (.ident p t) [.int p (i : Int)] false))
               else pure (Expr.lit .void, ctx)
@@ -7980,6 +8109,34 @@ partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
               for (k, q, via) in fxB do noteFx q [k] via
               return ← finish (pure (code1, c1))
             | .error _ => set st0
+            if !same && !ctx.constructProbe then
+              let stem := s!"$choiceType{(contKey ctx p b.name (b.alts ++ rest)).hash}"
+              if let some plan := choiceTypePlan ctx stem b.name tys rest then
+                set { prefixState with fx := [] }
+                let trial ← tryCatch (do
+                  let poly ← choiceTypeContext ctx plan
+                  let slot ← fresh plan.binding
+                  let bound := { poly with
+                    typeOnly := true,
+                    locals := { name := b.name, slot, ty := plan.binding, mutable := false } :: poly.locals }
+                  let (_, c2) ← elabOneGo bound rest
+                  let effects := (← get).fx
+                  let lift ← match contLiftOf poly c2 p b.name b.alts rest effects with
+                    | .ok lift => joinedChoiceResult poly plan lift
+                    | .error _ => return none
+                  return some (lift, effects)) (fun _ => pure none)
+                set prefixState
+                if let some (lift, effects) := trial then
+                  modify fun st => { st with fx := fx0, loopFirst := st.loopFirst ++
+                    [{ g := "", pos := p, itemCode := .lit .void, argSet := none, lift := .ok lift }] }
+                  for (k, q, via) in prefixState.fx ++ effects do noteFx q [k] via
+                  let packetTy ← resolveTy ctx.types p (lift.joinedRet.getD lift.ret)
+                  let packet ← fresh packetTy
+                  let name := t ++ "$probe"
+                  let bound := { ctx with locals := { name, slot := packet, ty := packetTy, mutable := false } :: ctx.locals }
+                  let (_, result) ← elabOneGo bound (firstUnpack p lift name)
+                  return ← finish (pure (.prim .userErr [], { result with locals := result.locals.filter (·.name != name) }))
+                set st0
         return ← finish (elabOneGo ctx copied)
       let p := b.pos
       let n := b.name
