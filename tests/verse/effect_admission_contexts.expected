@@ -1,0 +1,16 @@
+reject 0
+argument 1
+body 2
+callback 3 2
+default 3
+default-result 3 3
+explicit-result 7 3
+generic 4
+choice 4 4
+generic 5
+choice 5 5
+opened 6
+cast 6 6
+body 11
+live 13 11
+exit=0

@@ -16,7 +16,8 @@ spec.loader.exec_module(model)
 count = int(sys.argv[1]) if len(sys.argv) > 1 else model.PERIOD
 first = int(sys.argv[2]) if len(sys.argv) > 2 else 1
 # The override supports fresh Lean-module testing before a native rebuild.
-compiler = shlex.split(os.environ.get('OV_OVERLOAD_COMMAND', str(root / '.lake/build/bin/openverse')))
+override = os.environ.get('OV_OVERLOAD_COMMAND')
+compiler = shlex.split(override) if override else [str(root / '.lake/build/bin/openverse')]
 accepted = refused = 0
 
 

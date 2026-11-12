@@ -33,7 +33,7 @@ surface Verse is elaborated (`OpenVerse/Front/Elab.lean`) into Verse Core
 | Failure | failure contexts (`if` conditions, `for` clauses, `option{}`, `logic{}`, `not`, left of `or`, `<decides>` bodies) with rollback of `var` writes **and output** | ch. 8 |
 | Control | `if`/`else if`/`else` (all styles, `if:`…`then:`), `for` with `X : array`, `I -> X : array`, `X := a..b`, filters, bindings, several generators (cartesian product), `loop`/`break`, `return`, `case` with literal patterns and `_` | ch. 7 |
 | Choice | `a \| b \| …` with several values in spatial order, in a clause of an `if` condition, `first{…}`, `option{…}`, `logic{…}`, `not` or `or` (the first success) or of a `for` (all of them), also inside expressions (`(1 \| 2) + (10 \| 20)`, `X = 1 \| 2`); see [Choice](#choice) (#208) | (the Verse Calculus) |
-| Functions | a tuple argument expands into several parameters (`Describe(MyTuple)`), several arguments make a single array parameter (`Sum(1, 2, 3)`) (#134, #140; the array form for a plain call only; a generic or overloaded tuple expression must determine its own element types when the signature cannot yet be instantiated); recursion, mutual recursion, `<decides>` (called with `F[…]`; other functions with `F(…)`), named parameters `?P:t = default` passed as `?P := e` (positional, then named as written, then defaults; a default may use the parameters before it, and a method's default the method's fields; a call dispatched to an override evaluates that override's own default for an omitted argument; a default is evaluated at the call, its effects counting as the caller's, and cannot return, break or use itself), the heap effects `<computes>`, `<reads>`, `<writes>`, `<allocates>`, `<transacts>` (checked, see [Classes](#classes)), other effect specifiers accepted and ignored | ch. 6, 13 |
+| Functions | a tuple argument expands into several parameters (`Describe(MyTuple)`), several arguments make a single array parameter (`Sum(1, 2, 3)`) (#134, #140; the array form for a plain call only; a generic or overloaded tuple expression must determine its own element types when the signature cannot yet be instantiated); recursion, mutual recursion, `<decides>` (called with `F[…]`; other functions with `F(…)`), named parameters `?P:t = default` passed as `?P := e` (positional, then named as written, then defaults; a default may use the parameters before it, and a method's default the method's fields; a call dispatched to an override evaluates that override's own default for an omitted argument; a default is evaluated at the call, its effects counting as the caller's, and cannot return, break or use itself), the heap effects `<computes>`, `<reads>`, `<writes>`, `<allocates>`, `<transacts>` (checked, see [Classes](#classes)), unsupported effect contracts are diagnosed before lowering (see [Effect contracts](#effect-contracts)) | ch. 6, 13 |
 | Parametric functions | `F(X:t, … where t:type, u:subtype(comparable))`: type parameters in parameter types, the result type and local declarations; type arguments inferred at each call (see [Parametric functions](#parametric-functions)) | Types: where clauses |
 | Structs | `name := struct:` with typed fields and defaults, `name{F := e, …}` (each field given at most once, evaluated in declaration order), `S.F`, `set S.F = e` / `op=`, structural equality (a struct is the tuple of its fields in Verse Core) | ch. 9 |
 | Parametric structs | `pair(t:type, u:type) := struct:`, the type `pair(int, string)`, values `pair(int, string){First := 1, Second := "a"}` (or `pair{…}` where the expected type gives the type arguments); see [Parametric structs](#parametric-structs) | ch. 9 |
@@ -127,6 +127,33 @@ Combine(A:t1, B:t2 where t1:type, t2:type):tuple(t1, t2) = (A, B)
 - **Limits.** A generic `Main`, several constraints on one type parameter
   (also unsupported in the Book), explicit type arguments to a generic
   function, and generic constants are not supported.
+
+## Effect contracts
+
+The supported effect vocabulary is `computes`, `reads`, `writes`, `allocates`,
+`transacts`, `decides` and `suspends`. Function declarations and function types
+reject duplicate or contradictory effects, and reject unknown execution
+specifiers before lowering can erase them (#494).
+
+`predicts` and `converges` are explicitly unsupported, including on abstract
+signatures and function types. The pinned Book calls prediction unreleased
+and divergence checking planned; this does not establish their availability
+in every released engine. OpenVerse implements neither predicting call
+propagation nor termination contracts. Ordinary recursion and loops remain
+available; `computes` and execution fuel do not prove termination.
+
+Source `native`/`native_callable` tags cannot create trusted external bindings.
+Explicit internal/implicit effect spellings (`no_rollback`, `dictates`,
+`diverges`, `succeeds`, `fails`) and obsolete `varies` are rejected.
+Transactional output/events retain their documented OpenVerse policy (#495).
+
+Class/interface/struct construction budgets and effects on fields are also
+refused until their contracts can be checked (#508). Existing operation-level
+heap checks and declaration/access metadata remain separate. The
+[effect inventory](research/effect-conformance.md) records the implemented,
+partial and rejected contracts, source/release evidence, regression links and
+the native/proof boundary. Admission covers every loaded definition, defaults,
+nested types and entry expressions, in both source profiles.
 
 ## Function values
 
@@ -1754,6 +1781,5 @@ Main()<suspends>:void =
 the class features listed under [Classes](#classes), struct methods (Verse structs have none; classes do),
 `weak_map`, module paths `using{/Verse.org/…}` (accepted and ignored), the
 specific overload/call gaps listed under [Overloading](#overloading), nested
-functions and lambdas (not released in Verse), choice beyond [Choice](#choice) (recursive functions with several values that have effects, other than generators, methods with several values whose name an unrelated class shares), concurrency beyond [Concurrency](#concurrency), and effect checking
-other than `<decides>` and the heap effects (`<converges>` is accepted and
-ignored).
+functions and lambdas (not released in Verse), choice beyond [Choice](#choice) (recursive functions with several values that have effects, other than generators, methods with several values whose name an unrelated class shares), concurrency beyond [Concurrency](#concurrency), and the unsupported
+effect/construction contracts listed under [Effect contracts](#effect-contracts).

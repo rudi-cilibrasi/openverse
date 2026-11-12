@@ -22,6 +22,7 @@
 -/
 import OpenVerse.Front.Lexer
 import OpenVerse.Front.Syntax
+import OpenVerse.Front.EffectPolicy
 import OpenVerse.Front.Choice
 
 namespace OpenVerse.Front
@@ -147,6 +148,21 @@ def expectIdent : PM String := do
   match t.identName? with
   | some n => bump; return n
   | none => perr t s!"expected an identifier, found {t.tok.describe}"
+
+/-- Read specifier lists before deciding their declaration role. -/
+partial def parseSpecs : PM (List String) := do
+  let mut specs := #[]
+  repeat
+    let t ← peekT
+    if t.isSym "<" then
+      bump
+      let n ← match (← peekT).tok with
+        | .ident x => do bump; pure x
+        | _ => perr (← peekT) "expected an effect or specifier name"
+      expectSym ">"
+      specs := specs.push n
+    else break
+  return specs.toList
 
 mutual
 partial def parseType : PM STy := do
@@ -714,12 +730,13 @@ partial def parseCase (stop : Nat) : PM SExpr := do
 
 /-- One struct field: `[var] Name:type [= default]`. -/
 partial def parseField (c : Nat) : PM (String × STy × Option SExpr × Bool) := do
+  let start ← peekT
   let isVar := (← peekT).isKw "var"
   if isVar then bump
   let n ← expectIdent
   -- (`X<public>:int`: a field's access specifiers, accepted, not enforced)
-  while (← peekT).isSym "<" && ((← peekT 1).identName?).isSome && (← peekT 2).isSym ">" do
-    bump; bump; bump
+  let specs ← parseSpecs
+  ofExcept <| EffectPolicy.checkNonFunction start.pos "field" specs
   expectSym ":"
   let ty ← parseType
   let a ← peekT
@@ -730,8 +747,8 @@ partial def parseField (c : Nat) : PM (String × STy × Option SExpr × Bool) :=
 
 /-- `struct` (after the keyword): optional specifiers, then `:` + fields or `{ fields }`. -/
 partial def parseStructBody (p : Pos) : PM SExpr := do
-  while (← peekT).isSym "<" do
-    bump; bump; expectSym ">"
+  let specs ← parseSpecs
+  ofExcept <| EffectPolicy.checkNonFunction p "struct" specs
   let o ← peekT
   let mut fields := #[]
   if o.isSym ":" then
@@ -997,21 +1014,6 @@ def parseFnBody : PM SExpr := do
   else if t.isSym "{" then bump; parseBraced t.pos
   else parseExpr top
 
-/-- Skip `<specifier>` lists (`<public>`, `<decides>`, …), returning their names. -/
-partial def parseSpecs : PM (List String) := do
-  let mut specs := #[]
-  repeat
-    let t ← peekT
-    if t.isSym "<" then
-      bump
-      let n ← match (← peekT).tok with
-        | .ident x => do bump; pure x
-        | _ => perr (← peekT) "expected an effect or specifier name"
-      expectSym ">"
-      specs := specs.push n
-    else break
-  return specs.toList
-
 /-- A parameter list after its `(`, through the `)`: the parameters, and the
     type parameters of a `where` clause that ends it. -/
 partial def parseParamList : PM (Array SParam × Array TParam) := do
@@ -1140,6 +1142,7 @@ partial def parseClassItem (c : Nat) :
   if qual.isSome && (← peekT).isSym ":" then perr (← peekT) "only a method can be qualified with (interface:)"
   if (← peekT).isSym ":" then
     -- a field, `Name<override>:t = e` giving an inherited field a new default
+    ofExcept <| EffectPolicy.checkNonFunction t.pos "field" pre
     bump
     let ty ← parseType
     let a ← peekT
@@ -1266,6 +1269,7 @@ partial def parseTopsIn (col : Nat) (pfx : String) (braced : Bool := false) : PM
     if pre.contains "public" then tops := tops.push (marker t.pos s!"$public:{name}")
     -- `name := module:` and its definitions, indented (Book of Verse ch. 16)
     if n.isSym ":=" && (← peekT 1).isKw "module" then
+      ofExcept <| EffectPolicy.checkNonFunction t.pos "module" pre
       bump; bump
       let o ← peekT
       let inner ← if o.isSym ":" then do
@@ -1285,8 +1289,8 @@ partial def parseTopsIn (col : Nat) (pfx : String) (braced : Bool := false) : PM
       continue
     -- a constant has the effects of its initialiser (#35)
     if !n.isSym "(" then
-      if let some e := pre.find? (["computes", "reads", "writes", "allocates", "transacts", "decides",
-          "converges"].contains ·) then
+      ofExcept <| EffectPolicy.checkUnsupported t.pos pre
+      if let some e := pre.find? EffectPolicy.effectNames.contains then
         perr n s!"a constant cannot have the effect specifier <{e}>: it has the effects of its initialiser"
     if n.isSym "(" then
       bump
@@ -1316,6 +1320,7 @@ partial def parseTopsIn (col : Nat) (pfx : String) (braced : Bool := false) : PM
           (if targs.isEmpty then .name cls else .app cls targs) (.block ct.pos items))
         continue
       if (← peekT).isSym ":=" && ((← peekT 1).isKw "class" || (← peekT 1).isKw "interface") then
+        ofExcept <| EffectPolicy.checkNonFunction t.pos "type declaration" pre
         -- `name(t:type, …) := class …`: a parametric class (or interface, #53)
         let isIface := (← peekT 1).isKw "interface"
         bump; bump
@@ -1329,6 +1334,7 @@ partial def parseTopsIn (col : Nat) (pfx : String) (braced : Bool := false) : PM
         tops := tops.push (← parseClassBody t.pos name tparams isIface)
         continue
       if (← peekT).isSym ":=" && (← peekT 1).isKw "struct" then
+        ofExcept <| EffectPolicy.checkNonFunction t.pos "type declaration" pre
         -- `name(t:type, …) := struct …`: a parametric struct
         let d ← peekT
         bump
