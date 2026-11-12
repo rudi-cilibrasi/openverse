@@ -68,6 +68,7 @@ jobs:
             echo "FUZZ_FLOAT_MATH=$((64 * k))"
             echo "FUZZ_RATIONAL=$((120 * k))"
             echo "FUZZ_OVERLOAD_SHAPES=$((468 * k))"
+            echo "FUZZ_CALL_PACKING=$((60 * k))"
             echo "FUZZ_MODEL_GADT=$((150 * k))"; echo "FUZZ_MODEL_MV=$((140 * k))"; echo "FUZZ_CONC=$((160 * k))"
             echo "FUZZ_CONC_POLY=$((60 * k))"; echo "FUZZ_FIELDS=$((60 * k))"; echo "FUZZ_MODEL_GENERIC=$((150 * k))"
             echo "FUZZ_MODEL_CONSTRUCT=$((60 * k))"

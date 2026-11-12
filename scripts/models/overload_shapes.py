@@ -71,6 +71,13 @@ def generate(seed):
     reverse = index // (len(CASES) * len(CONTEXTS))
     case = CASES[row]
     ta, tb, distinct, va, vb = case[:5]
+    # A class-owned t is shared by both signatures, but t=void is a finite
+    # comparable witness: map[logic]void also packs into tuple(void), erasing
+    # its singleton element. Fixed tuple(int)/map[logic]int stays distinct.
+    # Other contexts here retain an additional Hint/Extra positional formal
+    # or match X by name, so their singleton argument is not repacked.
+    if context in ('method', 'qualified') and (ta, tb) == ('tuple(t)', '[logic]t'):
+        distinct = False
     related = len(case) > 5 and case[5]
     open_t = bool(re.search(r'\bt\b', ta + tb))
     tp = ['t:subtype(comparable)'] if open_t else []

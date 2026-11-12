@@ -94,6 +94,8 @@ check "construction effects and executable controls" bash tests/scripts/test-con
 check "scheduler conformance traces and controls" bash tests/scripts/test-scheduler-conformance.sh
 check "overload domains (${FUZZ_OVERLOAD_SHAPES:-468} programs, across six contexts)" \
   bash scripts/fuzz-overload-shapes.sh "${FUZZ_OVERLOAD_SHAPES:-468}" "$seed"
+check "call packing (${FUZZ_CALL_PACKING:-60} programs, across ten contexts)" \
+  bash tests/scripts/test-call-packing.sh "${FUZZ_CALL_PACKING:-60}" "$seed"
 check "choice-free source profile" bash tests/scripts/test-choice-profile.sh
 check "small integer value sharing" bash tests/scripts/test-small-int-cache.sh
 check "empty collection value sharing" bash tests/scripts/test-empty-value-cache.sh

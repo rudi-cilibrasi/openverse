@@ -1,0 +1,9 @@
+sub 8 direct 9
+base 1 super 20
+sub 2 dynamic 20
+20 23 2
+2
+sub 10 interface 20
+sub 11 qualified 20
+13
+exit=0

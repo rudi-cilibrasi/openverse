@@ -390,9 +390,32 @@ def TyEnv.namedDistinct (env : TyEnv) (na nb : List (String × Bool × Ty)) : Bo
 def TyEnv.paramsDistinct (env : TyEnv) (as bs : List Ty) : Bool :=
   let flat (xs : List Ty) : List Ty := match xs with
     | [.tup ts] => ts
+    | [.void] => []
     | _ => xs
-  let (as, bs) := if as.length != bs.length then (flat as, flat bs) else (as, bs)
-  as.length != bs.length || (as.zip bs).any fun (a, b) => env.disjoint a b
+  let apart (xs ys : List Ty) := xs.length != ys.length || (xs.zip ys).any fun (a, b) => env.disjoint a b
+  -- Both the original argument and its flattened fields are admitted.
+  -- Keep the direct overlap of void, arrays and opaque type parameters.
+  let packedApart (xs ys : List Ty) := match xs with
+    | [t] => if ys.length > 1 then env.disjoint t (.tup ys) else
+      match t with
+      | .param .. => !ys.isEmpty
+      | _ => true
+    | _ => true
+  -- A call can also supply one tuple containing the positional arguments.
+  -- In particular, tuple(int) both unpacks to int and packs into
+  -- tuple(tuple(int)). Compare that actual input shape with the other
+  -- formal, rather than applying the broader tuple/container admission
+  -- rules to a synthetic tuple (which would conflate int with ?int).
+  let tupleInputApart (xs ys : List Ty) := match ys with
+    | [t] => match t with
+      | .tup ts => apart xs ts
+      | .arr t => xs.isEmpty || xs.any (env.disjoint · t)
+      | .void | .any | .param .. => false
+      | _ => true
+    | _ => true
+  [as, flat as].all fun xs => [bs, flat bs].all fun ys =>
+    apart xs ys && packedApart xs ys && packedApart ys xs &&
+      tupleInputApart xs ys && tupleInputApart ys xs
 
 /-- The type arguments of the class or interface `T` above `d(args)` (along
     the parents, #39, #53), or `[]` when `T` is not above `d`. -/

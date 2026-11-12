@@ -3,9 +3,9 @@
 Issue [#493](https://github.com/rudi-cilibrasi/openverse/issues/493), initially
 measured against OpenVerse `c34adb6571f0703555922c83bba0756d98f5ebfc` (#499).
 The [original audit](https://github.com/rudi-cilibrasi/openverse/blob/458f3974d2785c95ab25f2786496c0c8dfe49f1b/docs/research/overloading-conformance.md)
-recorded 13 deviations. After #500, the [81-case matrix](../../tests/conformance/overloading/matrix.json)
-tracks 38 accepted programs, 36 conforming refusals, one intentional entry-point
-restriction and six remaining deviations. Seven original cases now meet their
+recorded 13 deviations. After #500 and #501, the [81-case matrix](../../tests/conformance/overloading/matrix.json)
+tracks 42 accepted programs, 36 conforming refusals, one intentional entry-point
+restriction and two remaining deviations. Eleven original cases now meet their
 expectations, including overloaded tuple expansion. Accepted programs have exact output/status oracles and run in both
 the Lean interpreter and C runtime. A refusal must have exit 4, the expected
 diagnostic and no emitted bytecode.
@@ -43,7 +43,7 @@ Negative fixtures state their expected diagnostic on the first line.
 | Primitive, class, enum domains and declared arity | [Selects a unique overload](../../tests/verse/overloading.verse); rejects [identical domains](../../tests/errors/overload_same.verse), [wrong arity](../../tests/errors/overload_arity.verse) and [no matching type](../../tests/errors/overload_no_fit.verse). |
 | Generic inference | [Generic overloads](../../tests/verse/overloading_generic.verse), [nested calls](../../tests/verse/overloading_generic_nested.verse), [repeated parameters with subtyping](../../tests/verse/overloading_generic_subtype.verse) and [comparable bounds](../../tests/verse/overload_audit_comparable.verse) work; a [bare type parameter overlaps a concrete type](../../tests/errors/overload_generic_overlap.verse). Declared-arity selection here does not prove general upstream packing behavior. |
 | Named parameters and defaults | [Required names distinguish overloads](../../tests/verse/overloading_named.verse), including [generic functions with defaults](../../tests/verse/overload_audit_generic_named.verse). [Name order](../../tests/errors/overload_named_order.verse), [default values](../../tests/errors/overload_named_default.verse) and an [optional extra name](../../tests/errors/overload_named_optional.verse) do not make overlapping overloads distinct; [missing required names](../../tests/errors/overload_named_missing.verse) are diagnosed. |
-| Argument shapes | [Ordinary tuple-to-many calls and concrete array packing](../../tests/verse/tuple_args.verse) work. [Function-value adapters](../../tests/verse/fn_values_unflatten.verse) also pack explicit/generic tuples. An [explicit tuple versus the same flattened types](../../tests/errors/overload_tuple_flat.verse) is correctly refused; [disjoint flattened types and overloaded tuple expansion](../../tests/verse/overload_shapes_flattened.verse) work. Ordinary packing gaps are listed below. |
+| Argument shapes | [Ordinary tuple-to-many calls and concrete array packing](../../tests/verse/tuple_args.verse) work. [Function-value adapters](../../tests/verse/fn_values_unflatten.verse) also pack explicit/generic tuples. An [explicit tuple versus the same flattened types](../../tests/errors/overload_tuple_flat.verse) is correctly refused; [disjoint flattened types and overloaded tuple expansion](../../tests/verse/overload_shapes_flattened.verse) work. Ordinary/generic tuple and array packing are covered by #501 and the call-packing fixtures below. |
 | Written evaluation order | [Trace](../../tests/verse/overload_audit_named_order.verse): positional argument, named `B` then `A` as written, omitted `D` then `E` in declaration order, selected body once. The other overload's defaults never run. |
 | Transaction boundaries | [Trace](../../tests/verse/overload_audit_rollback.verse): a failing suffix rolls back argument/default/body/suffix output and mutation; the retry evaluates each once. [Candidate effects](../../tests/verse/overload_audit_candidate_effects.verse) also leave an immediate pure overload usable without charging the discarded mutating overload. |
 | Effects and suspends | [Selected writes are enforced](../../tests/errors/overload_effect_name.verse); [effects alone](../../tests/errors/overload_audit_effects_only.verse) do not distinguish declarations. [Immediate and suspending overloads](../../tests/verse/overload_audit_suspends.verse) coexist; [calling the selected suspending overload from immediate code](../../tests/errors/overload_audit_suspends.verse) is refused. Normal calls inside suspending code are allowed; `spawn` is not the only valid context. |
@@ -63,10 +63,6 @@ with released-UEFN availability unverified.
 
 | Reproducer | Pinned expectation | Current observation | Follow-up |
 | --- | --- | --- | --- |
-| [Pack explicit tuple](../../tests/conformance/overloading/single_tuple_call.verse) | `F(3,"value")` supplies `tuple(int,string)`; print `value`. | Exit 4: `expected 1 argument(s), found 2`. | [#501](https://github.com/rudi-cilibrasi/openverse/issues/501) |
-| [Pack empty tuple](../../tests/conformance/overloading/empty_tuple_pack.verse) | `F()` supplies `tuple()`; print `7`. | Exit 4: `expected 1 argument(s), found 0`. | #501 |
-| [Pack generic tuple](../../tests/conformance/overloading/generic_tuple_pack.verse) | `Id(1,2)` at expected `tuple(int,int)`; print `1 2`. | Exit 4: `Id takes 1 argument(s), found 2`. | #501 |
-| [Pack generic array](../../tests/conformance/overloading/generic_array_pack.verse) | `Count(1,2)` supplies `[]t`; print `2`. Inference from array packing and parametric rules. | Exit 4: `Count takes 1 argument(s), found 2`. | #501 |
 | [Class upper bound](../../tests/conformance/overloading/class_bound.verse) | `t:subtype(vehicle)` accepts and preserves `car`; print its `Doors` value `2`, as in the subtype-preserving Book example. | Exit 4: `unknown constraint subtype(vehicle)`. | [#502](https://github.com/rudi-cilibrasi/openverse/issues/502) |
 | [Named function value](../../tests/conformance/overloading/named_capture.verse) | An optional-named function fits a zero-argument function type; call its default and print `7`, explicit Book example. | Exit 4: `has named parameters: such a function cannot be used as a value`. | [#503](https://github.com/rudi-cilibrasi/openverse/issues/503) |
 
@@ -157,10 +153,10 @@ period covers all combinations; nightly checks scale the range.
 After `lake build` and `make -C runtime`:
 
 ```sh
-# The 75 current-behavior/oracle checks; also part of scripts/check.sh.
+# The 79 current-behavior/oracle checks; also part of scripts/check.sh.
 bash tests/scripts/test-overload-conformance.sh
 
-# Also measure the six remaining deviations; write exact current observations.
+# Also measure the two remaining deviations; write exact current observations.
 bash tests/scripts/test-overload-conformance.sh --include-gaps --report /tmp/overloading.json
 
 # Both orders, six contexts, opaque generic patterns and real call oracles.
@@ -175,3 +171,51 @@ disagreement fails the audit. Known-gap reproducers live outside the ordinary
 positive/negative golden suites; no golden asserts a wrong acceptance or
 refusal as correctness. The JSON report preserves exact stdout/status/stderr
 and explicitly records the absence of Epic engine runs.
+
+## Call packing (#501)
+
+The four original packing reproducers now run as positive oracles. The
+[combined packing fixture](../../tests/verse/call_argument_packing.verse) covers
+explicit empty/singleton/multiple/nested tuples, bare generic tuples and
+expected arrays, generic array class joins, contextual values inferred from
+a named argument, and calls through function values.
+[Methods and constructors](../../tests/verse/call_argument_methods.verse),
+[multi-value and recursive calls](../../tests/verse/call_argument_values.verse),
+[rollback and named/default order](../../tests/verse/call_argument_order.verse),
+and [spawn/cancellation](../../tests/verse/call_argument_spawn.verse) retain
+receiver-first evaluation, each supplied field once, written named order,
+and omitted defaults in declaration order. Existing tuple-variable plus
+named-argument calls remain supported as an OpenVerse extension to the
+pinned Book restriction.
+
+Overload admission compares both direct and adapted domains. A single array
+formal can collide with several scalar formals; a bare generic formal can
+accept their argument tuple; singleton tuple/scalar and empty tuple/no-formal
+overloads also collide. The same `tuple(int)` value can unpack for `int`,
+wrap for `tuple(tuple(int))`, or convert to `[]int`, so these domains also
+overlap. Nested direct/flattened overlap and the existing wide `void` domain
+are included. These are declaration refusals, rather than
+an arbitrary preference for an overload with matching written arity.
+
+Packing applies at a function boundary, retaining nested tuple fields. A
+single scalar is not packed into an array; zero-element arrays use an explicit
+`array{}` value with an inferable element type. Zero-formal/array overloads
+remain distinct; scalar/array overloads can overlap through a tuple input. The
+generic-array extension combines the pinned array and parametric rules; it
+is not a claim of measured behavior in a released Epic compiler.
+
+The generated `test-call-packing.sh` gate varies numeric values across six
+shapes and ten caller contexts, comparing packed/explicit controls with exact
+independent numeric and evaluation-trace oracles in Lean and C. Its recursive
+context uses bounded tuple ranges for all six seed slots.
+
+The open class family `tuple(t)` versus `[logic]t` also overlaps after
+singleton packing even with `t:comparable`: `void` is comparable, and the
+[same map value](../../tests/verse/call_argument_void_witness.verse) fits both
+formals at `t=void`. The [open family is refused](../../tests/errors/call_pack_open_class_overlap.verse),
+while a [fixed int specialization](../../tests/verse/call_argument_fixed_class.verse)
+remains admitted. This finite erasure witness rules out using an occurs check
+to claim that the open signatures are disjoint. The domain model retains
+positive contexts with an additional positional hint or a named argument;
+the class generator adds a required option name only when multi-positional
+siblings would collide under the retained conservative tuple/option rule.

@@ -1946,11 +1946,15 @@ class Gen:
         else:
             L.append('%s(X:string):string = "str {X}"' % name)
         two = chance(0.5)
+        option_tag = opt and two
         if two:
             L.append('%s(X:int, Y:int):string = "two {X + Y}"' % name)
         tup = chance(0.3)
+        # tuple(char) both unpacks for char and converts to string ([]char).
+        char_tag = tup and not opt
         if tup:
-            L.append("%s(X:char):string = \"char {X}\"" % name)
+            tag = ',?Character:logic' if char_tag else ''
+            L.append('%s(X:char%s):string = "char {X}"' % (name, tag))
         used = []
         objtypes = self.trees[:2]
         inh = [i for i in self.ifaces if any(c.below(i) and not c.abstract for c in self.classes)]
@@ -1964,21 +1968,29 @@ class Gen:
             L.append('%s(X:%s):string = %s' % (name, t.name, body))
             used.append(t)
         if len(used) == 1 and chance(0.5):
+            option_tag = opt
             L.append('%s(X:%s, Y:int):string = "%s and {Y}"' % (name, used[0].name, used[0].name))
             if not used[0].abstract:
                 M.append('Print(%s(%s, %s))' % (name, self.construct_plain(used[0]), lit()))
+        # A whole tuple accepted by a multi-positional sibling overlaps ?int
+        # under the pinned tuple/option admission rule. Keep generating both
+        # families, distinguishing the option with a required name.
+        if option_tag:
+            L = [line.replace('(X:?int):', '(X:?int,?Option:logic):') for line in L]
         self.out += L
         M.append('Print(%s(%s))' % (name, lit()))
         if opt:
-            M.append('Print(%s(option{%s}))' % (name, lit()))
-            M.append('Print(%s(false))' % name)
+            tag = ',?Option:=true' if option_tag else ''
+            M.append('Print(%s(option{%s}%s))' % (name, lit(), tag))
+            M.append('Print(%s(false%s))' % (name, tag))
         else:
             M.append('Print(%s("%s"))' % (name, R.choice(['a', 'b'])))
             M.append('Print(%s(%s(%s)))' % (name, name, lit()))
         if two:
             M.append('Print(%s(%s, %s))' % (name, lit(), lit()))
         if tup:
-            M.append("Print(%s('%s'))" % (name, R.choice('abz')))
+            tag = ',?Character:=true' if char_tag else ''
+            M.append("Print(%s('%s'%s))" % (name, R.choice('abz'), tag))
         for t in used:
             for c in (t.subtree() if not t.is_iface else [c for c in self.classes if c.below(t)]):
                 if not c.abstract and chance(0.5):
