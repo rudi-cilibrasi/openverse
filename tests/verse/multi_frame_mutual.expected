@@ -1,0 +1,11 @@
+ev 3
+v 3
+ev 1
+v 20
+v 10
+v 20
+ev 3
+ev 1
+first 20
+none
+exit=0

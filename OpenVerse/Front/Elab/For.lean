@@ -3,6 +3,19 @@ import OpenVerse.Front.Elab.Continuations
 
 namespace OpenVerse.Front
 open OpenVerse
+/-- (#283, #331) The type of a choice of an `if`'s branches with no type
+    written, from its `$joinOf` (`Choice.joinOf?`): the branches' join, as
+    the `if`'s value has, found by elaborating the `if` apart for the type
+    only (that code is not kept); for `set L = if …`, at `L`'s type.
+    `elabBranchAlts` is the mutual block's, as for `elabForWith`. -/
+def joinOfType (elabBranchAlts : Ctx → Pos → SExpr → Option STy → Option SExpr → EM (Option Expr × Ty × List Expr × Bool))
+    (ctx : Ctx) (p : Pos) (alts : List SExpr) : EM (Option STy) := do
+  let some (i, place) := Choice.joinOf? alts | return none
+  let st ← get
+  let (_, ty, _, _) ← elabBranchAlts { ctx with canFail := true, inTaking := true, typeOnly := true } p i none place
+  restoreConstructProbe ctx st
+  return some ty.toSTy
+
 /-- `for`: clauses are generators, bindings and filters; each generator opens
     a nested `forE`, and nested results are flattened (cartesian product,
     leftmost outermost). The clauses are a failure context; the body is not.
@@ -29,20 +42,11 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
   -- (a call of a recursive function with several values, #235: a generator
   -- over the array of its values; at a written type, through a binding)
   let normGens (cs : List SExpr) : List SExpr := cs.flatMap fun c => match Choice.binding? c with
-    | some { each := some (.app _ (.ident _ "$loop") _ false), .. } => [c]
-    | some { pos := q, name := n, ty := none, each := some arr, .. } => [.gen q n none arr]
-    | some { pos := q, name := n, ty := some t, each := some arr, .. } =>
-      let tmp := s!"$e{q.line}_{q.col}"
-      [.gen q tmp none arr, .decl q n (some t) false (.ident q tmp)]
-    | _ => [c]
-  let clauses := clauses.flatMap fun c => match Choice.binding? c with
     -- (one taken lazily, #246: the binding stays, a generator of its own)
     | some { each := some (.app _ (.ident _ "$loop") _ false), .. } => [c]
-    | some { pos := q, name := n, ty := none, each := some arr, .. } => [.gen q n none arr]
-    | some { pos := q, name := n, ty := some t, each := some arr, .. } =>
-      let tmp := s!"$e{q.line}_{q.col}"
-      [.gen q tmp none arr, .decl q n (some t) false (.ident q tmp)]
+    | some { pos := q, name := n, ty, each := some arr, .. } => Choice.genOver "" q n ty arr
     | _ => [c]
+  let clauses := normGens clauses
   -- split into groups: [filters before the first generator], then (generator, filters)…
   let isBranch (c : SExpr) : Bool := (Choice.binding? c).any (·.branchy.isSome)
   let isGen : SExpr → Bool
@@ -55,9 +59,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
     | c => isBranch c
   -- (a composed choice whose alternatives have values or clauses of their
   -- own, #283, or an exclusive one: what a continuation saves copying, #335)
-  let isCF (x : SExpr) : Bool := isExcl x || (match Choice.binding? x with
-    | some { place := none, branchy := none, each := none, alts := xs, .. } => xs.any Choice.hasLiftable
-    | _ => false)
+  let isCF (x : SExpr) : Bool := isExcl x || (Choice.binding? x).any (·.composed)
   let pre := clauses.takeWhile (!isGen ·)
   let rest := clauses.dropWhile (!isGen ·)
   let rec groups : List SExpr → List (SExpr × List SExpr)
@@ -408,18 +410,12 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
           let (f, a, t) ← exclIter cA (Choice.bifToExcl cl ++ after) more bd stageOverride
           return (.seq codeA f, a, t)
         let some (.decl gp x xty _ (.app _ _ alts _)) := fs[j]? | eerr p "internal: an exclusive choice"
-        let altsS := alts.filter fun | .app _ (.ident _ "$joinOf") _ _ => false | _ => true
-        -- (an `if`'s, #331, with no type written: its branches' join, as the
-        -- `if`'s value has, found by elaborating it apart; that code is not kept)
-        let xty ← match xty, alts.findSome? (fun | .app _ (.ident _ "$joinOf") (i :: l) false => some (i, l.head?) | _ => none) with
-          | none, some (i, place) => do
-            let st ← get
-            -- (for `set L = if …`, at `L`'s type; a branch with a call to
-            -- lift typed as `option{…}` takes it, #283)
-            let (_, ty, _, _) ← elabBranchAlts { cA with canFail := true, inTaking := true, typeOnly := true } gp i none place
-            restoreConstructProbe cA st
-            pure (some ty.toSTy)
-          | t, _ => pure t
+        let altsS := alts.filter (!Choice.isJoinOf ·)
+        -- (an `if`'s, #331, with no type written: its branches' join; a
+        -- branch with a call to lift typed as `option{…}` takes it, #283)
+        let xty ← match xty with
+          | none => joinOfType elabBranchAlts cA gp alts
+          | t => pure t
         let alts : List (List SExpr × SExpr) := alts.filterMap fun
           | .app _ (.ident _ "$alt") [.block _ gs, r] false => some (gs, r)
           | _ => none
@@ -547,8 +543,8 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
       -- clauses to lift, #283: a for of its own for each alternative, with
       -- the clauses after it and the body, their values concatenated, so
       -- that each alternative's values come in order, with the body between)
-      if let some b@{ pos := gp, place := none, branchy := none, each := none, .. } := Choice.binding? g then
-        if b.alts.any Choice.hasLiftable then
+      if let some b@{ pos := gp, .. } := Choice.binding? g then
+        if b.composed then
           -- (with the binding's name: an inlined body's position is every
           -- site's, #314)
           let site := s!"$cf{gp.line}_{gp.col}{b.name}"

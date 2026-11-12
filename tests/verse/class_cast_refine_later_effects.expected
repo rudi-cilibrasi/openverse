@@ -1,0 +1,11 @@
+m1
+Second 1 1
+Second no 1
+Count 511 0 0 11
+Test dup 1011 not 1011
+r
+Ret 4 -1
+t
+Two 1 q
+Two no
+exit=0
