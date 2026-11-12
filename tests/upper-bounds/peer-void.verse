@@ -16,7 +16,8 @@ Main():void=
     Base:?void=false
     O:?void=Upper(Base,option{Item(C,11)})
     if(O?)then Print("some {C.N}")else Print("bad")
-    N:?void=Upper(Base,false)
+    Empty:?int=false
+    N:?void=Upper(Base,Empty)
     if(N?)then Print("bad")else Print("none {C.N}")
     R:=Keep(car{})
     Print("{R.Name} {C.N}")

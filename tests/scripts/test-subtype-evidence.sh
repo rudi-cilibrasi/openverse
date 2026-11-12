@@ -31,5 +31,10 @@ for name in relation-bottom-error relation-bottom-error-control; do
     exit 1
   fi
   diff -u "$out/$name.expected" "$out/$name.actual"
+  if ! grep -qx 'error: user' "$out/$name.stderr"; then
+    printf '%s: expected the same user error as the concrete control\n' "$name" >&2
+    cat "$out/$name.stderr" >&2
+    exit 1
+  fi
 done
 echo "subtype dictionary C trace passed"
