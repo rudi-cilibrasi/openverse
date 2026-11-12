@@ -51,7 +51,7 @@ partial def elabECore (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
     elabExprControl ctx se exp
 
 partial def elabExprMarkers (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R :=
-  elabExprMarkersWith elabE elabRefineExit (@elabConc) elabSpawn elabBranch elabApp (@elabFor) elabOneClauses elabOneGo elabExprValues ctx se exp
+  elabExprMarkersWith elabE elabRefineExit (@elabConc) elabSpawn elabBranch elabApp (@elabFor) elabOneClauses elabFirstGo elabExprValues ctx se exp
 
 partial def elabExprValues (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R :=
   elabExprValuesWith elabE (elabSeqIn true) elabApp ratCall elabCmp (@elabMember) elabConstruct elabMapLit ctx se exp
@@ -1248,11 +1248,37 @@ partial def elabAlts (ctx : Ctx) (p : Pos) (b : Choice.Binding) : EM (Ty × List
     `void`: an `if` and `first{…}` read their clauses' values through names. -/
 partial def elabOneClauses (ctx : Ctx) (cs : List SExpr) : EM (R × Ctx) := do
   let ctx := { ctx with liftWhy := "" }
-  -- (a `break` here would leave `firstE`'s loop, not the program's)
-  let (code, ctx') ← elabOneGo { ctx with inLoop := false, inChoice := ctx.inLoop, inTaking := true }
+  let (code, ctx') ← elabFirstGo ctx
     (Choice.prepare cs (choiceValues ctx) (choiceField ctx) (fieldOrder := choiceOrder ctx)
       (keepBranches := choiceHasCast ctx))
-  return (⟨Expr.firstE code, .void⟩, { ctx' with inLoop := ctx.inLoop, inChoice := ctx.inChoice, inTaking := ctx.inTaking })
+  return (⟨code, .void⟩, ctx')
+
+/-- `Expr.firstE` of the code of clauses lifted already (`elabOneGo`), and
+    the context after them. `firstE`'s loop takes the `break` that ends a
+    success, so a source `break` in them that leaves them for the enclosing
+    loop (#283) sets that loop's break flag first, `Ctx.forBreakSlot`, as one
+    in a `for`'s filters does, after the cleanup it leaves; the flag then
+    breaks again after `firstE`, so a break keeps what the clauses did up to
+    it, as with no choice. One that leaves as an exit packet
+    (`forBreakCapture`, `refineExits`) returns, through any loop. -/
+partial def elabFirstGo (ctx : Ctx) (cs : List SExpr) : EM (Expr × Ctx) := do
+  let after (c : Ctx) : Ctx := { c with
+    inLoop := ctx.inLoop, inChoice := ctx.inChoice, inTaking := ctx.inTaking, forBreakSlot := ctx.forBreakSlot }
+  if !ctx.inLoop || !firstBreaks cs then
+    -- (with no loop, a `break` is refused where it is; `inChoice` says
+    -- that none is expected here)
+    let (code, c) ← elabOneGo { ctx with inLoop := false, inChoice := ctx.inLoop, inTaking := true } cs
+    return (Expr.firstE code, after c)
+  if ctx.forBreakCapture.isSome || ctx.refineExits.brk.isSome then
+    let (code, c) ← elabOneGo { ctx with inTaking := true } cs
+    return (Expr.firstE code, after c)
+  -- (a `for` around these clauses has made the flag already, and resets it)
+  let flag ← match ctx.forBreakSlot with
+    | some flag => pure flag
+    | none => fresh .logic
+  let (code, c) ← elabOneGo { ctx with inTaking := true, forBreakSlot := some flag } cs
+  let code := Expr.seq (Expr.firstE code) (forwardSourceBreak flag (.lit .void))
+  return (if ctx.forBreakSlot.isNone then .seq (.assign flag (.lit (.logic false))) code else code, after c)
 
 partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
   | [] => return (Expr.brkV, ctx)

@@ -2098,7 +2098,11 @@ structure FirstReturn where
     `sets`, then `true`). -/
 structure FirstLift where
   sourceContext : SourceContext := {}
+  /-- The packets of the source exits its clauses have, a `return` and a
+      `break` that leaves them, the function's own exits as a refining
+      lift's are (`Refine.Exits`); the caller exits again (`firstUnpack`). -/
   returnExit : Option FirstReturn := none
+  breakExit : Option (List SExpr) := none
   /-- A stage request supplies classes rather than a callable helper. -/
   stageOnly : Bool := false
   resumes : List ForResume := []
