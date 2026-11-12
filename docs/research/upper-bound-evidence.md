@@ -210,6 +210,21 @@ type as comparable.
 An invalid result-directed instance can retry from the original compiler state
 using arguments/defaults, without changing explicit instances or runtime
 argument evaluation.
+Structured generic arguments can also be inferred through actual views of
+opaque inputs. Direct parameter matches retain the original precise type;
+otherwise nominal projections and nested container patterns use real lexical
+capabilities. Agreeing views share the inferred instance and its common
+comparable guarantees; distinct inferred instances are refused. Ordinary,
+inlined and method-local binding, including defaults, use the same rule.
+After inference, a checked conversion consumes the once-elaborated argument;
+the compiler does not reevaluate its source expression to obtain the view.
+
+The method-family and refinement integrations retain both subtype-dictionary
+and method-family discovery results. A receiver's family is reported after
+its proved view is resolved. Source/control pairs exercise bounded generic
+families sharing a method name, a receiver evaluated once while yielding
+multiple values, and actual evidence through refining option/boolean failure
+contexts with state and rollback.
 Mutually equivalent candidate uppers use a stable type representative. In
 particular, a mixture of `any` and `void`, including nested containers, must
 not introduce inference ambiguity or depend on argument order.

@@ -50,7 +50,8 @@ def main (args : List String) : IO Unit := do
   let containers := ["container-view-basic", "container-view-basic-control",
     "container-view-state", "container-view-state-control", "container-view-waiting", "container-view-waiting-control",
     "container-view-generic", "container-view-generic-control", "container-view-interior", "container-view-interior-control"]
-  let profiled := fifo ++ methodValues ++ callables ++ containers
+  let profiled := fifo ++ methodValues ++ callables ++ containers ++
+    ["bound-refine-contexts", "bound-refine-contexts-control"]
   let negative := ["choice-refusal", "default-refusal", "override-refusal", "overload-interface-refusal",
     "overload-ancestor-refusal", "overload-optional-refusal", "overload-empty-refusal", "overload-scope-refusal",
     "overload-value-refusal", "interior-readonly-refusal", "interior-effect-refusal",

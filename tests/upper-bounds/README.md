@@ -48,3 +48,8 @@ before the RHS. A negative refuses writeback through an opaque container's
 upper view; no inverse conversion or element relation is inferred. Empty
 literal arguments are typed explicitly when the ordinary generic inference
 rules cannot determine their precise type.
+
+The main-integration pairs cover bounded method families that share a name
+and proved member access inside refining failure contexts. A receiver counter
+checks once-only evaluation across multiple results. The refinement pair also
+requires identical bytecode in the choice-free profile.
