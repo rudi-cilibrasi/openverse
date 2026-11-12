@@ -740,9 +740,8 @@ def withCastClauses (ctx : Ctx) (cs : List SExpr) (after : SExpr) (isGen : SExpr
   match ← tryCatch (Except.ok <$> asWritten) (fun err => pure (Except.error err)) with
   | .ok r => return some r
   | .error err =>
-    let some (k, _) := castAt.find? (fun (_, q) => err.startsWith s!"{q.show}:") | throw err
+    let some (k, _) := (Refine.castRefusalAt? err).bind fun q => castAt.find? (·.2 == q) | throw err
     let some cast := Refine.castClause? cs[k]! | throw err
-    if !Refine.isCastRefusal err then throw err
     set st0
     if let some r ← alone k err then return some r
     match Refine.castRestClauses (cs.take k) cast (cs.drop (k + 1)) after isGen ctx.types.classes.contains

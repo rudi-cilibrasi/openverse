@@ -647,7 +647,7 @@ partial def elabCast (ctx : Ctx) (p : Pos) (T : String) (args : List SExpr) (bra
     if (refiningCast? env T r.ty).isNone then
       eerr p s!"{what} would leave {T}'s type arguments unknown: they are not {S}'s, and an interface has no hidden fields to read them from (#351, #53)"
     let theirs := if (env.sparams.lookup T).isNone then s!"the type arguments {T} fixes" else s!"{T}'s type arguments"
-    eerr p s!"{what} works {Refine.castRefusalNote}, D := {T}[X], whose rest then has {theirs} (#351)"
+    throw (Refine.castRefusal p s!"{what} works {Refine.castRefusalNote}, D := {T}[X], whose rest then has {theirs} (#351)")
   -- a parametric class's type arguments are those of the value (#39), in the
   -- same hierarchy
   let parametric := (env.sparams.lookup T).isSome || !(env.coreArgs T []).isEmpty
@@ -660,13 +660,13 @@ partial def elabCast (ctx : Ctx) (p : Pos) (T : String) (args : List SExpr) (bra
     let unknown := s!"cannot cast {withArticle r.ty.show} to {T}: {T} has type parameters that {S} does not have, which would be unknown here"
     -- (an interface has no hidden fields to read opened ones from, #53)
     if (env.info T).isIface then eerr p s!"{unknown}: an interface has no hidden fields to read them from (#53, #250)"
-    eerr p s!"{unknown}: a cast opens them {Refine.castRefusalNote}, D := {T}[X], whose rest then has them (#250)"
+    throw (Refine.castRefusal p s!"{unknown}: a cast opens them {Refine.castRefusalNote}, D := {T}[X], whose rest then has them (#250)")
   if bracket then
     match env.refineComparable? [] (env.comparableArgs T targs) with
     | none => eerr p s!"{withArticle r.ty.show} is never {withArticle T}: its type arguments do not satisfy {T}'s comparable bounds"
     | some μ =>
       if !μ.isEmpty then
-        eerr p s!"a cast to {T} strengthens comparable bounds, which works {Refine.castRefusalNote}, D := {T}[X], whose rest then has them (#209)"
+        throw (Refine.castRefusal p s!"a cast to {T} strengthens comparable bounds, which works {Refine.castRefusalNote}, D := {T}[X], whose rest then has them (#209)")
   let tty : Ty := .struct T targs
   if !bracket then
     if !env.isSub S T then
@@ -678,7 +678,7 @@ partial def elabCast (ctx : Ctx) (p : Pos) (T : String) (args : List SExpr) (bra
     eerr p s!"no class is below both {r.ty.show} and {T}, so {T}[…] would always fail"
   if parametric && env.coreArgs T targs != env.coreArgs S sargs then
     if (Ty.unifyEqs (fun _ _ => none) [] ((env.coreArgs S sargs).zip (env.coreArgs T targs))).isSome then
-      eerr p s!"cannot cast {withArticle r.ty.show} to {(Ty.struct T targs).show} here: their type arguments agree only under a refinement, which a cast gives {Refine.castRefusalNote}, D := {T}[X], whose rest is then typed under it (#209, #243)"
+      throw (Refine.castRefusal p s!"cannot cast {withArticle r.ty.show} to {(Ty.struct T targs).show} here: their type arguments agree only under a refinement, which a cast gives {Refine.castRefusalNote}, D := {T}[X], whose rest is then typed under it (#209, #243)")
     -- (in a class's copy of an interface's default, at type arguments the
     -- class fixes, it fails, as the interface's own default's would, #53)
     if !ctx.liftTag.isEmpty then return ⟨.prim .fail [], tty⟩

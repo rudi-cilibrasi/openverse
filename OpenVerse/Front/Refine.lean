@@ -164,12 +164,38 @@ def isNoValue : SExpr → Bool
   | _ => false
 
 /-- Where a cast that refines type arguments, opens them, or goes through
-    views is taken (#243, #250, #351): the refusal of one elsewhere says so,
-    and an `if` or a `for` whose clause it is looks for it, to take it so. -/
+    views is taken (#243, #250, #351), as the refusal of one elsewhere says. -/
 def castRefusalNote : String :=
   "only as a clause of a failure context (an if's condition, a for's clauses, a <decides> body, option{…}, …)"
 
-def isCastRefusal (err : String) : Bool := (err.splitOn castRefusalNote).length ≥ 2
+/-- What sets off the place a cast refusal carries: no message has it. -/
+def refusalMark : String := "\x01"
+
+/-- The refusal, at `p`, of a cast that only a failure context's clause may
+    be (#243, #250, #351), which an `if`, a `for` or `first{…}` whose clause
+    it is takes back (`withCastClauses`). The elaborator's errors are
+    strings, as `eerr` makes them: this one is its message, then the cast's
+    place between marks, which `castRefusalAt?` reads, so that what takes it
+    back depends on no message's words. `elabProgram` takes the place off
+    (`unmarked`): a user reads the message only. -/
+def castRefusal (p : Pos) (msg : String) : String :=
+  s!"{p.show}: {msg}{refusalMark}{p.line}:{p.col}:{p.file}{refusalMark}"
+
+/-- The place of the cast an error refuses (`castRefusal`), if it is one
+    (not one whose message another quotes). -/
+def castRefusalAt? (err : String) : Option Pos :=
+  match err.splitOn refusalMark with
+  | [_, place, ""] => match place.splitOn ":" with
+    | line :: col :: file =>
+      match line.toNat?, col.toNat? with
+      | some line, some col => some { line, col, file := ":".intercalate file }
+      | _, _ => none
+    | _ => none
+  | _ => none
+
+/-- An error as a user reads it: without the places of cast refusals. -/
+def unmarked (err : String) : String :=
+  String.join ((err.splitOn refusalMark).zipIdx.filterMap fun (part, i) => if i % 2 == 0 then some part else none)
 
 /-- A clause that casts, as a refining cast would be written: `D := T[X]`,
     or `T[X]`, whose value is then named `$cast…` for its branch. Its
