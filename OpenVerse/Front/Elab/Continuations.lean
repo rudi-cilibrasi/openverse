@@ -1347,25 +1347,6 @@ def choiceMethodTParams (p : Pos) (vars : List (String × Bool))
     | [bound] => some (TParam.withUpperBound p name bound.base.toSTy)
     | _ => none
 
-/-- Obligations needed to write the operation's concrete type applications.
-    Inspect arguments and declared upper heads, not arbitrary object fields.
-    Declaration names bound recursion even for polymorphic recursive heads. -/
-private partial def choiceTypeBounds (env : TyEnv) (types : List Ty) : List SubtypeEvidence.Bound :=
-  (types.flatMap (go [])).eraseDups
-where
-  go (seen : List String) : Ty → List SubtypeEvidence.Bound
-    | .arr ty | .opt ty => go seen ty
-    | .tup tys => tys.flatMap (go seen)
-    | .map key value => go seen key ++ go seen value
-    | .struct owner args =>
-      let nested := args.flatMap (go seen)
-      if seen.contains owner then nested else
-        let substitution := ((env.sparams.lookup owner).getD []).map (·.1) |>.zip args
-        let bounds := ((env.sbounds.lookup owner).getD []).map fun (base, derived) =>
-          SubtypeEvidence.Bound.mk (base.subst substitution) (derived.subst substitution)
-        nested ++ bounds ++ bounds.flatMap (fun bound => go (owner :: seen) bound.base)
-    | _ => []
-
 def choiceOrderedArguments (args : List SExpr) : List SExpr :=
   let named : SExpr → Bool := fun | .decl _ n .. => n.startsWith "?" | _ => false
   args.filter (!named ·) ++ args.filter named
@@ -1453,7 +1434,7 @@ def choiceGenericOperation (ctx : Ctx) (stem : String) (receiver : SExpr) (recei
   let boundTypes := bounds.flatMap fun bound => [bound.base, bound.derived]
   let applications := signature ++ boundTypes ++ cases.flatMap fun row => row.receiver :: row.inputs ++ [row.result]
   let unscoped := { ctx.types with boundFacts := [] }
-  let classBounds : List SubtypeEvidence.Bound := (choiceTypeBounds ctx.types applications).filter fun bound =>
+  let classBounds : List SubtypeEvidence.Bound := (SubtypeEvidence.applicationBounds ctx.types applications).filter fun bound =>
     !(bound.base.params ++ bound.derived.params).any methodNames.contains &&
       !unscoped.boundSubtype bound.derived bound.base
   let classBoundTypes : List Ty := classBounds.flatMap fun bound => [bound.base, bound.derived]
@@ -1683,7 +1664,7 @@ def choiceOperations (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx)
     let p0 : Pos := { line := 0, col := 0 }
     let unscoped := { ctx.types with boundFacts := [] }
     let classBounds : List (List SubtypeEvidence.Bound) := cases.map fun row =>
-      (choiceTypeBounds ctx.types (row.receiver :: row.inputs ++ [row.result])).filter fun bound =>
+      (SubtypeEvidence.applicationBounds ctx.types (row.receiver :: row.inputs ++ [row.result])).filter fun bound =>
         !unscoped.boundSubtype bound.derived bound.base
     let classVariables : List (List (String × Bool)) := (cases.zip classBounds).map fun (row, bounds) =>
       Ty.mergeParamBounds ((row.receiver :: row.inputs ++ [row.result] ++

@@ -12,6 +12,25 @@ structure Bound where
 
 instance : BEq Bound := ⟨fun a b => a.base == b.base && a.derived == b.derived⟩
 
+/-- Obligations needed to write concrete type applications in a generated
+    declaration. Inspect arguments and declared upper heads, not object fields.
+    Declaration names bound recursion even for polymorphic recursive heads. -/
+partial def applicationBounds (env : TyEnv) (types : List Ty) : List Bound :=
+  (types.flatMap (go [])).eraseDups
+where
+  go (seen : List String) : Ty → List Bound
+    | .arr ty | .opt ty => go seen ty
+    | .tup tys => tys.flatMap (go seen)
+    | .map key value => go seen key ++ go seen value
+    | .struct owner args =>
+      let nested := args.flatMap (go seen)
+      if seen.contains owner then nested else
+        let substitution := ((env.sparams.lookup owner).getD []).map (·.1) |>.zip args
+        let bounds := ((env.sbounds.lookup owner).getD []).map fun (base, derived) =>
+          Bound.mk (base.subst substitution) (derived.subst substitution)
+        nested ++ bounds ++ bounds.flatMap (fun bound => go (owner :: seen) bound.base)
+    | _ => []
+
 def Bound.subst (bound : Bound) (σ : List (String × Ty)) : Bound :=
   { base := bound.base.subst σ, derived := bound.derived.subst σ }
 

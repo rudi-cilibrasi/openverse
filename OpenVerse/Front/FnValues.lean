@@ -340,6 +340,7 @@ structure MethodRequest where
   ret : STy
   args : List SExpr
   decides : Bool
+  relations : List (STy × STy) := []
 
 def MethodRequest.className (r : MethodRequest) (i : Nat) : String :=
   s!"{r.owner}${r.method}$fnVariance{i}"
@@ -694,7 +695,8 @@ def desugar (tops : List STop) (extra : List STop := []) (requests : List (Strin
         (.app r.pos (.member r.pos (.ident r.pos "$self") r.method) r.args r.decides)
     out := out ++ [.classDef r.pos (r.className i) r.tparams []
       (fits.map fun s => STy.app s.name (r.params ++ [r.ret])) false
-      [("$self", r.receiver, none, false)] [] methods]
+      (SubtypeEvidence.relationFields r.pos (r.className i) r.relations ++
+        [("$self", r.receiver, none, false)]) [] methods]
   return tops ++ out
 
 end FnValues

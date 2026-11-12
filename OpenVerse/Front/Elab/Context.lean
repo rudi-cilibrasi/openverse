@@ -1471,9 +1471,9 @@ def roundRational (up : Bool) (e : Expr) : EM Expr := do
   let parts := [Expr.prim (.tupGet 0) [.local tr], .prim (.tupGet 1) [.local tr]]
   return .seq (.assign tr e) (Expr.orE tz (.prim op parts) (.lit (.int 0)))
 
-/-- Build a variance adapter only when the ordinary parameter/result
-    conversions succeed. Its private parameters preserve the caller's bounds
-    without retaining caller names or borrowing its witness slots. -/
+/-- Build a variance adapter when its conversions have ordinary or actual
+    lexical evidence. Private parameters and readonly proof fields preserve
+    the required relations without caller names or borrowed witness slots. -/
 def methodVarianceRequest (ctx : Ctx) (p : Pos) (owner method : String)
     (receiver own target : Ty) : EM (Option (FnValues.MethodRequest × List Ty)) := do
   let .struct on ots := own | return none
@@ -1507,24 +1507,39 @@ def methodVarianceRequest (ctx : Ctx) (p : Pos) (owner method : String)
   if n == 1 && k != 1 then
     choices := choices ++ [("tuple", ps, [.tup qs], [.tuple p xs])]
   let saved ← get
-  let fits (a b : Ty) : Bool :=
+  let ordinaryFits (a b : Ty) : Bool :=
     match (do
       let slot ← fresh a
       discard <| coerce p ⟨.local slot, a⟩ b).run { saved with env := ctx.types } with
     | .ok _ => true
     | .error _ => false
-  if !fits r u then return none
+  let conversion (a b : Ty) : Option (List SubtypeEvidence.Bound) := do
+    if ordinaryFits a b then return []
+    let bound := SubtypeEvidence.Bound.mk b a
+    let plan ← SubtypeEvidence.find? ctx.types ctx.evidenceTypes bound
+    if plan.valid ctx.types ctx.evidenceTypes then some [bound] else none
+  let some resultRelations := conversion r u | return none
   for (kind, ps, qs, args) in choices do
-    if !(qs.zip ps).all (fun (q, p) => fits q p) then continue
-    let vars := Ty.mergeParamBounds (receiver.paramsC ++ target.paramsC)
+    let some inputRelations := (qs.zip ps).mapM (fun (q, p) => conversion q p) | continue
+    let unscoped := { ctx.types with boundFacts := [] }
+    let applicationRelations := (SubtypeEvidence.applicationBounds ctx.types [receiver, own, target]).filter fun bound =>
+      !unscoped.boundSubtype bound.derived bound.base
+    let relations := (resultRelations ++ inputRelations.flatten ++ applicationRelations).eraseDups
+    if !relations.all (fun bound => (SubtypeEvidence.find? ctx.types ctx.evidenceTypes bound).any
+        (·.valid ctx.types ctx.evidenceTypes)) then continue
+    let vars := Ty.mergeParamBounds (receiver.paramsC ++ target.paramsC ++
+      relations.flatMap (fun bound => bound.base.paramsC ++ bound.derived.paramsC))
     let names := vars.zipIdx.map fun ((n, _), i) => (n, STy.name s!"$methodVariance{i}")
     let st := fun t : Ty => t.toSTy.substNames names
     let receiver := st receiver
     let params := (tts.take k).map st
     let ret := st u
     let bounds := vars.map (·.2)
+    let relations := relations.map fun bound => (st bound.base, st bound.derived)
+    let key := reprStr (owner, method, receiver, params, te, ret, bounds, kind) ++
+      (if relations.isEmpty then "" else reprStr relations)
     let req : FnValues.MethodRequest := {
-      key := reprStr (owner, method, receiver, params, te, ret, bounds, kind),
+      key, relations,
       pos := p, owner, method, receiver, params, effs := te, ret, args,
       decides := oe.contains "decides",
       tparams := vars.zipIdx.map fun ((_, cmp), i) => {

@@ -39,6 +39,10 @@ def main (args : List String) : IO Unit := do
   let fifo := ["fifo-bound-promotion", "fifo-bound-promotion-control",
     "fifo-bound-woken", "fifo-bound-woken-control", "fifo-bound-spawn", "fifo-bound-spawn-control",
     "fifo-bound-two-losers", "fifo-bound-two-losers-control", "fifo-bound-sleep", "fifo-bound-sleep-control"]
+  let methodValues := ["method-value-argument", "method-value-argument-control",
+    "method-value-result", "method-value-result-control", "method-value-state", "method-value-state-control",
+    "method-value-cancel", "method-value-cancel-control"]
+  let profiled := fifo ++ methodValues
   let negative := ["choice-refusal", "default-refusal", "override-refusal", "overload-interface-refusal",
     "overload-ancestor-refusal", "overload-optional-refusal", "overload-empty-refusal", "overload-scope-refusal",
     "overload-value-refusal", "interior-readonly-refusal", "interior-effect-refusal",
@@ -46,9 +50,11 @@ def main (args : List String) : IO Unit := do
     "peer-map-key-refusal", "peer-container-arity-refusal", "peer-container-narrow-refusal",
     "peer-refinement-narrow-refusal", "peer-refinement-literal-refusal", "default-undeclared-bound-refusal",
     "choice-method-bound-refusal", "peer-void-narrow-refusal", "peer-void-comparable-refusal",
-    "peer-comparable-equality-refusal", "choice-class-unproved-refusal"]
+    "peer-comparable-equality-refusal", "choice-class-unproved-refusal",
+    "method-value-argument-refusal", "method-value-result-refusal",
+    "method-value-stored-refusal", "method-value-stored-control-refusal"]
   let mut failures := 0
-  let cases := (positive ++ fifo ++ negative).map (fun name => (name, fifo.contains name, name)) ++
+  let cases := (positive ++ fifo ++ methodValues ++ negative).map (fun name => (name, fifo.contains name, name)) ++
     ["fifo-bound-sleep", "fifo-bound-sleep-control"].map (fun name => (name, false, name ++ "-default"))
   for (name, eventFifo, artifact) in cases do
     let root := s!"tests/upper-bounds/{name}"
@@ -80,7 +86,7 @@ def main (args : List String) : IO Unit := do
           IO.eprintln s!"FAIL {name}: Core admission or independent output oracle"
           failures := failures + 1
         else
-          if fifo.contains name then
+          if profiled.contains name then
             let strict ← match parseProgram source >>= fun tops =>
                 elabProgram tops { eventFifo, profile := .choiceFree } with
               | .ok strict => pure strict
