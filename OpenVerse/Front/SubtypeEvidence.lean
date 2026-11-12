@@ -66,6 +66,11 @@ def protocol (p : Pos) : List STop := Id.run do
         (.name "rational") (.ident p "$input")],
     .classDef p eraseFamily [tp "$subtypeC"] ["computes"] [dict (.name "any") c] false [] []
       [.fn p "Up" [input] [] ["override", "computes"] (.name "any") (.ident p "$input")],
+    .classDef p discardFamily [tp "$subtypeC"] ["computes"] [dict (.name "void") c] false [] []
+      [.fn p "Up" [input] [] ["override", "computes"] (.name "void") (.ident p "$input")],
+    .classDef p bottomFamily [tp "$subtypeA"] ["computes"] [dict a (.name "$never")] false [] []
+      [.fn p "Up" [{ name := "$input", ty := .name "$never" }] [] ["override", "computes"] a
+        (.app p (.ident p "Err") [] false)],
     lift arrayFamily [tp "$subtypeA", tp "$subtypeC"] (.arr a) (.arr c),
     lift optionFamily [tp "$subtypeA", tp "$subtypeC"] (.opt a) (.opt c),
     .classDef p mapFamily
@@ -164,6 +169,8 @@ inductive Plan where
   | identity : Ty → Plan
   | rational
   | erase : Ty → Plan
+  | discard : Ty → Plan
+  | bottom : Ty → Plan
   | nominal : (source target : String) → (args : List Ty) → Plan
   | local : String → Bound → Plan
   | field : (receiver field : String) → Bound → Plan
@@ -180,6 +187,8 @@ partial def Plan.bound (env : TyEnv) : Plan → Bound
   | .identity t => ⟨t, t⟩
   | .rational => ⟨.rational, .int⟩
   | .erase t => ⟨.any, t⟩
+  | .discard t => ⟨.void, t⟩
+  | .bottom t => ⟨t, .never⟩
   | .refinement source target => ⟨target, .refine source⟩
   | .nominal source target args =>
     ⟨.struct target (env.upArgs source args target), .struct source args⟩
@@ -283,7 +292,7 @@ def fieldsForBounds (env : TyEnv) (receiver : Ty) (bounds : List Bound) : List (
     slot. The caller supplies its current locals by name and resolved type. -/
 partial def Plan.valid (env : TyEnv) (locals : List (String × Ty)) : Plan → Bool
   | .identity _ => true
-  | .rational | .erase _ => true
+  | .rational | .erase _ | .discard _ | .bottom _ => true
   | .refinement source target => env.refinementSubtype source target
   | .nominal source target args =>
     env.isRefClass source && env.isRefClass target && env.isSub source target &&
@@ -302,7 +311,9 @@ partial def Plan.valid (env : TyEnv) (locals : List (String × Ty)) : Plan → B
 
 private def direct? (env : TyEnv) (base derived : Ty) : Option Plan := do
   if derived == base then return .identity derived
+  if derived == .never then return .bottom base
   if base == .any then return .erase derived
+  if base == .void then return .discard derived
   if derived == .int && base == .rational then return .rational
   if let .refine source := derived then
     if env.refinementSubtype source base then return .refinement source base
@@ -356,6 +367,8 @@ partial def Plan.value (env : TyEnv) (p : Pos) : Plan → SExpr
   | .identity t => .construct p identityFamily [t.toSTy] []
   | .rational => .construct p rationalFamily [] []
   | .erase t => .construct p eraseFamily [t.toSTy] []
+  | .discard t => .construct p discardFamily [t.toSTy] []
+  | .bottom t => .construct p bottomFamily [t.toSTy] []
   | .refinement source target => .construct p (refinementFamily source target) [] []
   | .nominal source target args => .construct p (nominalFamily source target) (args.map Ty.toSTy) []
   | .local name _ => .ident p name

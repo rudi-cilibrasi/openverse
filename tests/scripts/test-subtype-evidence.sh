@@ -19,8 +19,17 @@ for name in container-state container-state-control container-cancel container-c
   runtime/build/cverse "$out/$name.vbc" > "$out/$name.actual"
   diff -u "$out/$name.expected" "$out/$name.actual"
 done
-for name in relation-state relation-state-control relation-cancel relation-cancel-control; do
+for name in relation-state relation-state-control relation-cancel relation-cancel-control relation-discard-state relation-discard-state-control relation-discard-cancel relation-discard-cancel-control; do
   runtime/build/cverse "$out/$name.vbc" > "$out/$name.actual"
+  diff -u "$out/$name.expected" "$out/$name.actual"
+done
+for name in relation-bottom-error relation-bottom-error-control; do
+  status=0
+  runtime/build/cverse "$out/$name.vbc" > "$out/$name.actual" 2> "$out/$name.stderr" || status=$?
+  if [[ "$status" != 2 ]]; then
+    printf '%s: expected user error exit 2, got %s\n' "$name" "$status" >&2
+    exit 1
+  fi
   diff -u "$out/$name.expected" "$out/$name.actual"
 done
 echo "subtype dictionary C trace passed"

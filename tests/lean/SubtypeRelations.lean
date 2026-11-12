@@ -16,7 +16,7 @@ private def witness (p : Pos) (base derived : STy) : SExpr :=
   .app p (.ident p "$subtypeWitness") [.construct p family [base, derived] []] false
 
 private def rewrite (body : SExpr) : Except String SExpr := do
-  let rename (n : String) := if n == "evidence" then family else n
+  let rename (n : String) := if n == "evidence" then family else if n == "empty" then "$never" else n
   let resolver : Resolver := {
     val := fun _ n => pure (rename n), ty := fun _ n => pure (rename n),
     bind := fun _ _ => pure (), qual := fun _ _ => pure none }
@@ -26,17 +26,23 @@ private def rewrite (body : SExpr) : Except String SExpr := do
     | .app p (.ident _ "WideProof") [] false => some (witness p (.name "wide") (.name "small"))
     | .app p (.ident _ "FloatProof") [] false => some (witness p (.name "float") (.name "fsmall"))
     | .app p (.ident _ "NumericProof") [] false => some (witness p (.name "rational") (.name "int"))
+    | .app p (.ident _ "VoidProof") [] false => some (witness p (.name "void") (.name "int"))
+    | .app p (.ident _ "VoidArrayProof") [] false => some (witness p (.arr (.name "void")) (.arr (.name "int")))
+    | .app p (.ident _ "VoidOptionProof") [] false => some (witness p (.opt (.name "void")) (.opt (.name "int")))
+    | .app p (.ident _ "BottomProof") [] false => some (witness p (.name "int") (.name "$never"))
+    | .app p (.ident _ "BottomArrayProof") [] false => some (witness p (.arr (.name "int")) (.arr (.name "$never")))
+    | .app p (.ident _ "BottomOptionProof") [] false => some (witness p (.opt (.name "int")) (.opt (.name "$never")))
     | _ => none) body
   body.mapNamesM resolver
 
 private partial def rewriteTop : STop → Except String STop
   | .fn p name ps tps specs ret body => do
-    let rename (n : String) : Except String String := pure (if n == "evidence" then family else n)
+    let rename (n : String) : Except String String := pure (if n == "evidence" then family else if n == "empty" then "$never" else n)
     let ps ← ps.mapM fun param => do
       return { param with ty := ← param.ty.mapNamesM rename, default := ← param.default.mapM rewrite }
     return .fn p name ps tps specs (← ret.mapNamesM rename) (← rewrite body)
   | .classDef p name tps specs parents iface fields overrides methods => do
-    let rename (n : String) : Except String String := pure (if n == "evidence" then family else n)
+    let rename (n : String) : Except String String := pure (if n == "evidence" then family else if n == "empty" then "$never" else n)
     let fields ← fields.mapM fun (name, ty, value, mutable) => do
       return (name, ← ty.mapNamesM rename, ← value.mapM rewrite, mutable)
     return .classDef p name tps specs (← parents.mapM (·.mapNamesM rename)) iface fields overrides
@@ -151,6 +157,122 @@ Main()<suspends>:void=
     Print(\"after\")
 "
 
+private def discardProducers := "
+counter:=class<allocates>{var N:int=0}
+Item(C:counter,V:int)<transacts>:int=
+    set C.N+=1
+    Print(\"item {C.N} {V}\")
+    V
+Proof(C:counter)<transacts>:evidence(void,int)=
+    set C.N+=1
+    Print(\"proof {C.N}\")
+    VoidProof()
+"
+
+private def discardMain := "
+Main():void=
+    C:=counter{}
+    Drop(Item(C,7),Proof(C))
+    Print(\"discarded {C.N}\")
+    if(Drop(Item(C,8),Proof(C)),false?)then Print(\"bad\")else Print(\"rolled discard\")
+    A:=DropArray(array{Item(C,9),Item(C,10)},VoidArrayProof())
+    Print(\"array {A.Length} {C.N}\")
+    O:=DropOption(option{Item(C,11)},VoidOptionProof())
+    if(O?)then Print(\"some {C.N}\")else Print(\"bad\")
+    N:=DropOption(false,VoidOptionProof())
+    if(N?)then Print(\"bad\")else Print(\"none {C.N}\")
+    E:=BottomArray(array{},BottomArrayProof())
+    F:=BottomOption(false,BottomOptionProof())
+    if(F?)then Print(\"bad\")else Print(\"empty {E.Length} {C.N}\")
+"
+
+private def discardSource := discardProducers ++ "
+Drop(X:u,D:evidence(void,u) where u:type)<computes>:void=D.Up(X)
+DropArray(X:[]u,D:evidence([]void,[]u) where u:type)<computes>:[]void=D.Up(X)
+DropOption(X:?u,D:evidence(?void,?u) where u:type)<computes>:?void=D.Up(X)
+BottomArray(X:[]empty,D:evidence([]int,[]empty))<computes>:[]int=D.Up(X)
+BottomOption(X:?empty,D:evidence(?int,?empty))<computes>:?int=D.Up(X)
+" ++ discardMain
+
+private def discardControl := "
+counter:=class<allocates>{var N:int=0}
+Item(C:counter,V:int)<transacts>:int=
+    set C.N+=1
+    Print(\"item {C.N} {V}\")
+    V
+Token(C:counter)<transacts>:int=
+    set C.N+=1
+    Print(\"proof {C.N}\")
+    0
+Drop(X:int,D:int)<computes>:void=X
+DropArray(X:[]int,D:int)<computes>:[]void=X
+DropOption(X:?int,D:int)<computes>:?void=X
+BottomArray(X:[]empty,D:int)<computes>:[]int=X
+BottomOption(X:?empty,D:int)<computes>:?int=X
+" ++ (discardMain |>.replace "Proof(C)" "Token(C)"
+  |>.replace "VoidArrayProof()" "0" |>.replace "VoidOptionProof()" "0"
+  |>.replace "BottomArrayProof()" "0" |>.replace "BottomOptionProof()" "0")
+
+private def discardTrace := "item 1 7\nproof 2\ndiscarded 2\nrolled discard\nitem 3 9\nitem 4 10\narray 2 4\nitem 5 11\nsome 5\nnone 5\nempty 0 5\n"
+
+private def discardCancelSource := "
+holder(t:type):=class<computes>:
+    X:t
+    D:evidence(void,t)
+    Drop()<computes>:void=D.Up(X)
+Worker(X:t,D:evidence(void,t) where t:type)<suspends>:void=
+    H:=holder(t){X:=X,D:=D}
+    F:type{_()<computes>:void}=H.Drop
+    defer:
+        F()
+        Print(\"cleanup\")
+    Sleep(10.0)
+    Print(\"bad\")
+Main()<suspends>:void=
+    race:
+        Worker(7,VoidProof())
+        block:
+            Sleep(0.0)
+            Print(\"winner\")
+    Print(\"after\")
+"
+
+private def discardCancelControl := "
+holder:=class<computes>:
+    X:int
+    Drop()<computes>:void=X
+Worker(X:int)<suspends>:void=
+    H:=holder{X:=X}
+    F:type{_()<computes>:void}=H.Drop
+    defer:
+        F()
+        Print(\"cleanup\")
+    Sleep(10.0)
+    Print(\"bad\")
+Main()<suspends>:void=
+    race:
+        Worker(7)
+        block:
+            Sleep(0.0)
+            Print(\"winner\")
+    Print(\"after\")
+"
+
+private def bottomErrorSource := "
+Empty()<computes>:empty=
+    Print(\"before bottom\")
+    Err()
+Use(X:empty,D:evidence(int,empty))<computes>:int=D.Up(X)
+Main():void=Use(Empty(),BottomProof())
+"
+
+private def bottomErrorControl := "
+Empty()<computes>:empty=
+    Print(\"before bottom\")
+    Err()
+Main():void=Empty()
+"
+
 private def contracts : IO Unit := do
   let types : TyEnv := { refines := [
     ("small", .int, [(">=", .int 0), ("<=", .int 10)]),
@@ -180,8 +302,19 @@ private def contracts : IO Unit := do
     (resolveTParams types [upper "a" (.name "int"), upper "b" (.arr (.name "a")), upper "c" (.name "void")])
   need "specialization retains equality guarantees without treating discard as one"
     (resolved.params == [("a", true), ("b", true), ("c", false)] && resolved.bounds.length == 3)
-  need "admitting an upper type head does not invent a conversion to it"
-    (!types.boundSubtype .int .void)
+  need "void discards values without establishing a reverse conversion"
+    (types.boundSubtype .int .void && !types.boundSubtype .void .int)
+  for ty in [Ty.int, .param "opaque" false, .arr .int, .any, .void] do
+    let some discarded := find? types [] ⟨.void, ty⟩
+      | throw (IO.userError "missing universal void evidence")
+    need "void evidence retains its exact input and needs no fake capability"
+      (discarded.valid types [] && discarded.bound types == ⟨.void, ty⟩ && !discarded.usesLocal)
+    let some empty := find? types [] ⟨ty, .never⟩
+      | throw (IO.userError "missing bottom evidence")
+    need "bottom evidence cannot produce a successful value"
+      (empty.valid types [] && empty.bound types == ⟨ty, .never⟩ && types.boundSubtype .never ty)
+  need "a void bound does not permit reading a discarded value"
+    ((find? types [] ⟨.int, .void⟩).isNone && !types.boundSubtype .void .int)
   let t := Ty.param "t" false
   let u := Ty.param "u" false
   let locals := [("Element", (Bound.mk t u).ty)]
@@ -211,7 +344,11 @@ def main (args : List String) : IO Unit := do
   for (name, source, expected) in [("relation-state", stateSource, stateTrace),
       ("relation-state-control", stateControl, stateTrace),
       ("relation-cancel", cancelSource, "winner\ncleanup 7\nafter\n"),
-      ("relation-cancel-control", cancelControl, "winner\ncleanup 7\nafter\n")] do
+      ("relation-cancel-control", cancelControl, "winner\ncleanup 7\nafter\n"),
+      ("relation-discard-state", discardSource, discardTrace),
+      ("relation-discard-state-control", discardControl, discardTrace),
+      ("relation-discard-cancel", discardCancelSource, "winner\ncleanup\nafter\n"),
+      ("relation-discard-cancel-control", discardCancelControl, "winner\ncleanup\nafter\n")] do
     let compiled ← compile name source
     let strict ← compile (name ++ " choice-free") source .choiceFree
     need (name ++ ": profile preservation") (compiled.prog.encode == strict.prog.encode)
@@ -223,4 +360,16 @@ def main (args : List String) : IO Unit := do
     if let [out] := args then
       IO.FS.writeBinFile s!"{out}/{name}.vbc" compiled.prog.encode
       IO.FS.writeFile s!"{out}/{name}.expected" expected
-  IO.println "ordinary subtype relation contracts passed (refinements, tuple-array, inference, state, rollback, escaping cleanup)"
+  for (name, source) in [("relation-bottom-error", bottomErrorSource),
+      ("relation-bottom-error-control", bottomErrorControl)] do
+    let compiled ← compile name source
+    need (name ++ ": checked Core") (compiled.prog.check && compiled.prog.checkControl &&
+      compiled.prog.checkTypes compiled.sigs compiled.slotTys)
+    match compiled.prog.runB 1000000 10000 with
+    | .res (.err .user, output) =>
+      need (name ++ ": error preserves prior evaluation") (String.ofList (output.map Char.ofNat) == "before bottom\n")
+    | _ => throw (IO.userError (name ++ ": bottom returned a value or lost its error"))
+    if let [out] := args then
+      IO.FS.writeBinFile s!"{out}/{name}.vbc" compiled.prog.encode
+      IO.FS.writeFile s!"{out}/{name}.expected" "before bottom\n"
+  IO.println "ordinary subtype relation contracts passed (refinements, tuple-array, discard/bottom, inference, state, rollback, escaping cleanup)"

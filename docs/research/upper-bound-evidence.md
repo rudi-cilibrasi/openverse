@@ -13,6 +13,8 @@ argument type, dependent bounds, and comparable constraints. Its
 also describes covariance of both map keys and map values. These are pinned Book
 development requirements; no released Epic engine or SDK was executed for these
 contracts.
+The pinned [Types chapter](https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/docs/11_types.md#void-and-false)
+defines `void` as a universal discard supertype and `false` as empty bottom.
 
 The parser retains the full bound type, including qualified, generic and peer
 references. A declaration resolves its complete formal scope before validating
@@ -52,6 +54,8 @@ The checked families currently cover:
 | `int` to `rational` | Use the ordinary numeric embedding. |
 | Numeric refinement widening | Use the shared interval-containment check to widen to the numeric base, a containing refinement, or the existing rational upper of an int refinement. Literal membership never establishes the reverse subtype relation. |
 | Erasure to `any` | Evaluate the input before returning its erased representation. |
+| Discarding to `void` | Evaluate the input before discarding it. Container conversions preserve their shape. This does not make every input comparable or permit a conversion back from `void`. |
+| Bottom to any type | A checked `Up` body cannot return successfully. Its input must be evaluated first; errors and early exits propagate. Empty containers lift this relation without producing an element. |
 | Arrays and options | Carry a real component dictionary. Preserve order and option absence. |
 | Equal-arity tuples | Carry one real dictionary per component. Preserve shape and component evaluation order. |
 | Nonempty tuple to array | Carry one real dictionary per component to the common array element type. Save the tuple once and project components in order. |
@@ -61,6 +65,10 @@ Container proofs can be nested and composed with whole-value proofs. A supplied
 `[]u <: []t` proof does not establish `u <: t`. The same rule applies to compound
 relations retained by function-value adapters. Static entailment and executable
 planning both retain this distinction.
+Bottom retains its compiler-internal `$never` type and existing control-flow
+representation. This work does not add a source spelling for the empty type or
+give its erased Core representation an inhabited value. Both direct bottom
+elimination and dictionary `Up` use existing checked error/control operations.
 
 Tuple and tuple-to-array evidence is materialized once per arity. Nominal evidence is materialized
 once per declaration pair, preserving generic parameters and constraints rather
@@ -153,7 +161,7 @@ construction, capture provenance or frontend lowering implements Verse's source
 semantics. Lean/C agreement is executable evidence, not that missing proof.
 
 Before source admission, #502 still requires the remaining relation audit
-(including bottom, `void`, function variance and full refinement/container
+(including function variance and full refinement/container
 interactions), operation-dictionary and generated/opened/refined adaptation audits,
 full construction/default/qualified-slot coverage, and a complete source
 acceptance run. Context-sensitive literal coercion must not silently become a

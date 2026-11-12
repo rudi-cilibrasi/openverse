@@ -1316,8 +1316,8 @@ partial def convert (env : TyEnv) (e : Expr) (a b : Ty) : EM (Option Expr) := do
   match a, b with
   -- `int` is a subtype of `rational` (#116): `X` is `X / 1`
   | .int, .rational => return some (.prim .mkTup [e, .lit (.int 1)])
-  -- every value is an `any`, evaluated (#138)
-  | _, .any => return some (.seq e (.lit .void))
+  -- Every value can be erased or discarded, including within containers.
+  | _, .any | _, .void => return some (.seq e (.lit .void))
   -- a refinement is its base (#136); the base is the refinement only for a
   -- literal that meets its conditions (else a cast, `age[X]`)
   -- (a refinement within another's interval is one of it, #143)

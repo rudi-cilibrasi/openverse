@@ -1333,11 +1333,12 @@ def TyEnv.refinementSubtype (env : TyEnv) (source : String) (target : Ty) : Bool
         | _ => false)
   | none => false
 
-/-- Direct declaration subtyping, including the ordinary checked numeric
-    embedding and erasure to any. This stays separate from nominal ancestry
+/-- Direct declaration subtyping, including bottom, the ordinary checked
+    numeric embedding, and discarding to any/void. This stays separate from nominal ancestry
     used to choose a class/interface member view. -/
 def TyEnv.directBoundSubtype (env : TyEnv) (derived base : Ty) : Bool :=
-  env.nominalSubtype derived base || (derived == .int && base == .rational) || base == .any ||
+  env.nominalSubtype derived base || derived == .never ||
+    (derived == .int && base == .rational) || base == .any || base == .void ||
     match derived with
     | .refine source => env.refinementSubtype source base
     | _ => false

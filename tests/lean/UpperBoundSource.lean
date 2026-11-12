@@ -17,14 +17,15 @@ def main (args : List String) : IO Unit := do
     "peer-container-inference", "peer-map-keys", "peer-refinement", "peer-tuple-array",
     "choice-numeric-bound", "choice-numeric-bound-control", "choice-method-bound", "choice-method-bound-control",
     "choice-index-bound", "choice-index-bound-control", "choice-method-bound-only", "choice-method-varying-bound",
-    "choice-method-primitive-peer", "choice-method-primitive-peer-control", "choice-method-domain"]
+    "choice-method-primitive-peer", "choice-method-primitive-peer-control", "choice-method-domain",
+    "peer-void", "peer-void-control", "bottom-flow", "bottom-flow-control"]
   let negative := ["choice-refusal", "default-refusal", "override-refusal", "overload-interface-refusal",
     "overload-ancestor-refusal", "overload-optional-refusal", "overload-empty-refusal", "overload-scope-refusal",
     "overload-value-refusal", "interior-readonly-refusal", "interior-effect-refusal",
     "peer-tuple-comparable-refusal", "peer-tuple-relation-refusal", "peer-narrow-refusal", "peer-float-refusal",
     "peer-map-key-refusal", "peer-container-arity-refusal", "peer-container-narrow-refusal",
     "peer-refinement-narrow-refusal", "peer-refinement-literal-refusal", "default-undeclared-bound-refusal",
-    "choice-method-bound-refusal"]
+    "choice-method-bound-refusal", "peer-void-narrow-refusal", "peer-void-comparable-refusal"]
   let mut failures := 0
   for name in positive ++ negative do
     let root := s!"tests/upper-bounds/{name}"
