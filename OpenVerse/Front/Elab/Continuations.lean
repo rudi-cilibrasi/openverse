@@ -530,10 +530,13 @@ def refineExits (p : Pos) (body : SExpr) (elseE : Option SExpr) (vars : List (St
       | some v => [done (some (.block p (stmts ++ [v]))) copiesV]
       | none => [.block p stmts, done none copiesV]
   let thenB := SExpr.block p (copies ++ endV)
-  let elseB : SExpr := match vm, elseE with
-    | .raw _, some e | .opt _, some e => done (some e) outsV
-    | .none, some e => .block p [e, done none outsV]
-    | _, _ => done none outsV
+  let elseB : SExpr := match elseE with
+    -- (an `else` that gives no value fails: nothing to give the caller)
+    | some e => if Refine.isNoValue e then e else match vm with
+      | .raw _ | .opt _ => done (some e) outsV
+      | .none => .block p [e, done none outsV]
+      | .elseAfter => done none outsV
+    | none => done none outsV
   let t := s!"{tag}'t"
   let get (i : Nat) : SExpr := if n == 1 then .ident p t else .app p (.ident p t) [.int p (i : Int)] false
   let nRB := retC.length + brkC.length
@@ -611,7 +614,8 @@ def contTypes (ctx : Ctx) (p : Pos) (inputs outputs : List Ty) (written : SExpr)
     effects all that has (`fxB`); or why it cannot be yet. -/
 def firstLiftOf (ctx c2 : Ctx) (p : Pos) (g : String) (lp : List SExpr) (b : String) (bty : Option STy)
     (rest : List SExpr) (fxB : List (String × Pos × Option String)) (suspends : Bool) (vty : Ty)
-    (instances : List (String × List (String × Ty)) := []) :
+    (instances : List (String × List (String × Ty)) := [])
+    (frames : List (String × List String × SExpr) := []) (kTy : Option Ty := none) :
     Except String Choice.FirstLift := do
   let ctx := ctx.choiceCoercionScope
   let [_, .block _ ps, .block _ cls, .decl _ _ _ _ tail] := lp | throw "internal: a $loop marker"
@@ -678,11 +682,15 @@ def firstLiftOf (ctx c2 : Ctx) (p : Pos) (g : String) (lp : List SExpr) (b : Str
     | .app _ (.ident _ "$member") (.ident _ h :: _) false => some h
     | _ => none
   let nameOf (h : String) : String := if h == g then name else s!"{name}_{h.replace "::" "_"}"
+  let retName := s!"{name}$ret"
   let heap := ["reads", "writes", "allocates"].filter fun k =>
     fxB.any (·.1 == k) || ((g :: mnames).any fun h => ((ctx.sig? h).map (·.fx.contains k)).getD false)
   let capPs : List SParam :=
     caps.map fun l => { name := if sets.any (·.name == l.name) then s!"{l.name}$in" else l.name, ty := l.ty.toSTy }
-  let params : List SParam := pls.map (fun l => { name := l.name, ty := l.ty.toSTy }) ++ capPs
+  -- (#283) with return frames, the continuation they are pushed on, after
+  -- the parameters; empty at the consumer's call
+  let kPs : List SParam := kTy.toList.map fun t => { name := "$K", ty := t.toSTy }
+  let params : List SParam := pls.map (fun l => { name := l.name, ty := l.ty.toSTy }) ++ kPs ++ capPs
   let specs := (if heap.isEmpty then ["computes"] else heap) ++ ["decides"]
   let (ret, normal, returnExit) := firstResult p name bls sets source
   let setsT := sets.map fun l => (l.name, l.ty.toSTy)
@@ -711,17 +719,25 @@ def firstLiftOf (ctx c2 : Ctx) (p : Pos) (g : String) (lp : List SExpr) (b : Str
         | (.ident _ n, t) => pure { name := n, ty := t.toSTy }
         | _ => throw "internal: a $member parameter (#283)"
       let body := Choice.firstBody (nameOf h) p b bty hcls htail rest binds setsT capArgs (some vty.toSTy) nameOf
-        (fun target => recArgs (some (target.getD h))) (if source.isSome then some normal else none)
-      pure (STop.fn p (nameOf h) (hparams ++ capPs ++ typeParams) tps specs ret
+        (fun target => recArgs (some (target.getD h))) (if source.isSome then some normal else none) frames retName
+      pure (STop.fn p (nameOf h) (hparams ++ kPs ++ capPs ++ typeParams) tps specs ret
         (pruneConstructHints ctx (nameOf h) body))
     | _ => throw "internal: a $member (#283)"
+  -- (#283) with return frames: the function each value is given to, then to
+  -- the clauses after the call, once for all the values of every member
+  let retFns : List STop := kPs.map fun kp =>
+    STop.fn p retName ({ name := "$V", ty := vty.toSTy } :: kp :: capPs ++ typeParams) tps specs ret
+      (ctx.choiceCoercionBody <| pruneConstructHints ctx retName
+        (Choice.firstReturnBody p b bty rest binds setsT (some vty.toSTy) (if source.isSome then some normal else none) frames))
   return { key, pos := p, name, returnExit, sourceContext := sourceContextOf ctx, inlineScopes := ctx.inlineScopes, liftTag := ctx.liftTag,
            params := params ++ typeParams, tparams := tps, specs, ret,
            body := ctx.choiceCoercionBody <| pruneConstructHints ctx name
              (Choice.firstBody name p b bty cls tail rest binds setsT capArgs (some vty.toSTy) nameOf recArgs
-               (if source.isSome then some normal else none)),
-           binds, sets := sets.map (·.name), args := pnames.map (SExpr.ident p ·) ++ caps.map (fun l => .ident p l.name) ++ typeArgs,
-           varBinds := (bls.filter (·.mutable)).map (·.name), extraFns }
+               (if source.isSome then some normal else none) frames retName),
+           binds, sets := sets.map (·.name),
+           args := pnames.map (SExpr.ident p ·) ++ kPs.map (fun _ => .ident p "false") ++
+             caps.map (fun l => .ident p l.name) ++ typeArgs,
+           varBinds := (bls.filter (·.mutable)).map (·.name), extraFns := extraFns ++ retFns }
 
 /-- (#335) The key of a continuation: where the composed choice is, its
     binding, and the consumer's names the clauses after it use (in a method,
@@ -864,7 +880,7 @@ partial def forBodySafe (ctx : Ctx) (body : SExpr) : Bool :=
   -- checked when that consumer elaborates; they do not escape the helper.
   let safeMarkers := ["$sourceSuper", "$methodMiss", "$methodCast", "$methodCase", "$methodType", "$methodParams", "$inlineScope", "$inlineScopeEnd", "$inline", "$choice", "$excl", "$alt", "$firstP", "$first", "$each", "$noLift", "$fxOf",
     "$forReturns", "$forReturnBody", "$forClauseExits", "$choiceOperation", "$choiceGenericOperation", "$choiceCoercions", "$choiceDictionary", "$defer", "$loop", "$rec", "$recTo", "$group", "$member", "$returnTail",
-    "$tparams", "$params", "$defaults", "$paramDefault", "$freeNames", "$declNames", "$callArgs", "$callSingleton"]
+    "$tparams", "$params", "$defaults", "$paramDefault", "$freeNames", "$declNames", "$callArgs", "$callSingleton", "$then"]
   let rec blocked (e : SExpr) : Bool :=
     match e with
     -- Starting a task is immediate. elabSpawn checks its arguments in the

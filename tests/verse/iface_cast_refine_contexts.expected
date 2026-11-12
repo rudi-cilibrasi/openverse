@@ -1,0 +1,10 @@
+(2+3) = 5
+isz((0+0)) = true
+<(2+3),isz((0+0))> = (5, true)
+Lit 105
+Lit no
+Lits 2
+v
+OneW w
+OneW no
+exit=0
