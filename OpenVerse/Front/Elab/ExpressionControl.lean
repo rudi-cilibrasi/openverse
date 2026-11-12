@@ -21,96 +21,92 @@ partial def elabExprControlWith
     elabE ctx (pruneMethodCases ctx e) exp
   | e@(.ite _ [.decl _ _ none false (.app _ (.ident _ "$methodCase") _ false)] _ (some _)) =>
     elabE ctx (pruneMethodCases ctx e) exp
-  | .ite p conds thenE elseE =>
+  | .ite p conds0 thenE elseE =>
+    -- (a first clause the elaborator made, whose branch is its own too)
+    let (madeCast, conds) := Refine.unmade conds0
     -- (#243, #351) a cast as a later clause of the condition, `if (c₁, …,
-    -- D := T[X], rest) then B else E`, that only the first clause may be
-    -- (one that refines type arguments, opens them, or goes through a
+    -- D := T[X], rest) then B else E`, that only a failure context's clause
+    -- may be (one that refines type arguments, opens them, or goes through a
     -- view): as written first, and when that is refused for it, as `if (c₁,
     -- …) then (if (D := T[X], rest) then B else E) else E`, when the clauses
     -- before it have nothing its failure would undo (they print nothing,
-    -- change no object, and call nothing, which might)
-    -- (a clause `D := T[X]` past the first, which may be an index, `A[i]`,
-    -- as written: the one the refusal is at)
-    let castAt : List (Nat × Pos) := conds.zipIdx.filterMap fun
-      | (.decl _ _ none false (.app q (.ident _ _) [_] true), i) => if i > 0 then some (i, q) else none
-      | _ => none
+    -- change no object, and call nothing, which might), else with the cast
+    -- taking the rest as its branch in a clause of its own, `B` casting
+    -- again (`withCastClauses`)
     -- (as written for this `if` only: not the `if`s in it, nor those the
     -- cast's own path makes, #400's review)
     let asWritten := ctx.asWritten
     let ctx := { ctx with asWritten := false }
-    if !asWritten && !castAt.isEmpty then
-          let st0 ← get
-          let tried ← tryCatch (do pure (Except.ok (← elabE { ctx with asWritten := true } (.ite p conds thenE elseE) exp)))
-            fun err => pure (Except.error err)
-          match tried with
-          | .ok r => return r
-          | .error err =>
-            let some (k, _) := castAt.find? (fun (_, q) => err.startsWith s!"{q.show}:") | throw err
-            if (err.splitOn "only as the first clause of an if's condition").length < 2 then throw err
-            let castC := conds[k]!
-            set st0
-            -- (the clauses before it, apart: what they would leave behind)
-            let pre := conds.take k
-            let fx0 := (← get).fx
-            let n0 := (← get).nslots
-            modify fun s => { s with fx := [] }
-            let (rp, _) ← tryCatch (elabSeq { ctx with canFail := true, inTaking := true, asWritten := true } pre none)
-              fun _ => do set st0; throw err
-            let fxP := (← get).fx
-            set st0
-            modify fun s => { s with fx := fx0 }
-            -- (and a `var` set there, a slot they do not bind, which the
-            -- failure would restore, #400's review)
-            if rp.e.printsOrCalls || fxP.any (·.1 == "writes") || rp.e.assignsBelow n0 then
-              throw s!"{err} (and the clauses before it print, change an object or a var, or call a function, which its failure would have to undo: put it first)"
-            -- (the cast's branch is the elaborator's, not the source's: so a
-            -- clause after it, always, `true?`, which the lift then carries,
-            -- `made`)
-            -- (`true?`, which may fail, keeps them a condition when they
-            -- cannot fail themselves, as the whole condition could, as
-            -- `Refine.castRest` does)
-            let tq := SExpr.query p (.ident p "true")
-            let innerC := castC :: conds.drop (k + 1) ++ [tq]
-            match elseE with
-            | none => return ← elabE ctx (.ite p (pre ++ [tq]) (.ite p innerC thenE none) none) exp
-            | some ee =>
-              -- (the `else` once, outside the clauses' names, #400's review:
-              -- the branch gives an option of its value, or `true` for a
-              -- `void` `if`, `false` when a clause fails, as #286's)
-              let attempt (τ : Ty) : EM R := do
-                let isVoid := τ == .void
-                let v := s!"$lc{p.line}_{p.col}"
-                let thenV : SExpr := if isVoid then .block p [thenE, .ident p "true"]
-                  else .block p [.decl p v none false thenE, .optionLit p (.ident p v)]
-                let outer := SExpr.ite p (pre ++ [tq]) (.ite p innerC thenV (some (.ident p "false")))
-                  (some (.ident p "false"))
-                let rty : Ty := if isVoid then .logic else .opt τ
-                let r ← elabE ctx outer (some rty)
-                let t ← fresh rty
-                if isVoid then
-                  let eE ← elabE ctx ee none
-                  return ⟨.seq (.assign t r.e) (.ite (.prim .query [.local t]) (.lit .void) (.seq eE.e (.lit .void))), .void⟩
-                let eE ← coerce p (← elabE ctx ee (some τ)) τ
-                let xv ← fresh τ
-                return ⟨.seq (.assign t r.e) (.ite (.assign xv (.prim .query [.local t])) (.local xv) eE), τ⟩
-              match exp with
-              | some τ => return ← attempt τ
-              | none =>
-                let st1 ← get
-                let re ← elabE ctx ee none
-                set st1
-                if re.ty == .void then return ← attempt .void
-                return ← tryCatch (attempt re.ty) fun _ => do set st1; attempt .void
+    let nested (k : Nat) (err : String) : EM (Option R) := do
+      let castC := conds[k]!
+      let st0 ← get
+      -- (the clauses before it, apart: what they would leave behind)
+      let pre := conds.take k
+      let fx0 := (← get).fx
+      let n0 := (← get).nslots
+      modify fun s => { s with fx := [] }
+      let (rp, _) ← tryCatch (elabSeq { ctx with canFail := true, inTaking := true, asWritten := true } pre none)
+        fun _ => do set st0; throw err
+      let fxP := (← get).fx
+      set st0
+      modify fun s => { s with fx := fx0 }
+      -- (and a `var` set there, a slot they do not bind, which the
+      -- failure would restore, #400's review)
+      if rp.e.printsOrCalls || fxP.any (·.1 == "writes") || rp.e.assignsBelow n0 then return none
+      -- (the cast's branch is the elaborator's, not the source's: so a
+      -- clause after it, always, `true?`, which the lift then carries,
+      -- `made`)
+      -- (`true?`, which may fail, keeps them a condition when they
+      -- cannot fail themselves, as the whole condition could, as
+      -- `Refine.castRest` does)
+      let tq := SExpr.query p (.ident p "true")
+      let innerC := castC :: conds.drop (k + 1) ++ [tq]
+      match elseE with
+      | none => return some (← elabE ctx (.ite p (pre ++ [tq]) (.ite p innerC thenE none) none) exp)
+      | some ee =>
+        -- (the `else` once, outside the clauses' names, #400's review:
+        -- the branch gives an option of its value, or `true` for a
+        -- `void` `if`, `false` when a clause fails, as #286's)
+        let attempt (τ : Ty) : EM R := do
+          let isVoid := τ == .void
+          let v := s!"$lc{p.line}_{p.col}"
+          let thenV : SExpr := if isVoid then .block p [thenE, .ident p "true"]
+            else .block p [.decl p v none false thenE, .optionLit p (.ident p v)]
+          let outer := SExpr.ite p (pre ++ [tq]) (.ite p innerC thenV (some (.ident p "false")))
+            (some (.ident p "false"))
+          let rty : Ty := if isVoid then .logic else .opt τ
+          let r ← elabE ctx outer (some rty)
+          let t ← fresh rty
+          if isVoid then
+            let eE ← elabE ctx ee none
+            return ⟨.seq (.assign t r.e) (.ite (.prim .query [.local t]) (.lit .void) (.seq eE.e (.lit .void))), .void⟩
+          let eE ← coerce p (← elabE ctx ee (some τ)) τ
+          let xv ← fresh τ
+          return ⟨.seq (.assign t r.e) (.ite (.assign xv (.prim .query [.local t])) (.local xv) eE), τ⟩
+        match exp with
+        | some τ => return some (← attempt τ)
+        | none =>
+          let st1 ← get
+          let re ← elabE ctx ee none
+          set st1
+          if re.ty == .void then return some (← attempt .void)
+          return some (← tryCatch (attempt re.ty) fun _ => do set st1; attempt .void)
+    if !asWritten then
+      if let some r ← withCastClauses ctx conds thenE (fun _ => false)
+          (elabE { ctx with asWritten := true } (.ite p conds0 thenE elseE) exp)
+          (fun conds thenE => elabE ctx (.ite p conds thenE elseE) exp) (later := true) (alone := nested) then
+        return r
     -- (a cast that refines type arguments, as the whole condition, #243,
     -- or as its first clause, the cast having no effects to undo when the
     -- rest fails: `if (D := T[X], rest) then B` is `if (D := T[X]) then (if
     -- (rest) then B)`, and with an `else E`, the branch's function gives
     -- `option{B}`, or `false` when the rest fails, and `E` runs once, in the
     -- caller, not under the refinement, #286)
-    if let .decl dp d none false (.app _ (.ident _ T) [x] true) :: more := conds then
+    if let some (dp, d, T, x) := conds.head?.bind Refine.castClause? then
+      let more := conds.drop 1
       match more, elseE with
       | [], _ =>
-        match ← elabRefinedIf ctx p dp d T x thenE elseE exp with
+        match ← elabRefinedIf ctx p dp d T x thenE elseE exp (made := madeCast) with
         | some r => return r
         | none => pure ()
       | _, none =>
@@ -222,6 +218,18 @@ partial def elabExprControlWith
         | none => set stAfter
       return ⟨.ite rc.e (← coerce p rt ty) (← coerce p re ty), ty⟩
   | .forE p clauses body => do
+    -- (#243, #351) a clause that casts as only a failure context's clause
+    -- may: as written, else with the rest of its clauses as one block
+    let asWritten := ctx.asWritten
+    let ctx := { ctx with asWritten := false }
+    if !asWritten then
+      -- (a choice, all of whose values a `for` takes, is a generator)
+      let isGen : SExpr → Bool
+        | .gen .. | .decl _ _ none false (.range ..) => true
+        | c => Choice.hasChoice [c] (choiceOrder ctx)
+      if let some r ← withCastClauses ctx clauses body isGen (elabE { ctx with asWritten := true } se exp)
+          (fun clauses body => elabE ctx (.forE p clauses body) exp) then
+        return r
     let returns := (Refine.findPart (fun | .ret .. => true | _ => false) false (.block p (clauses ++ [body]))).isSome
     let breaks := (ctx.inLoop || ctx.refineExits.brk.isSome) &&
       (Refine.findPart Refine.isBreak true (.block p clauses)).isSome

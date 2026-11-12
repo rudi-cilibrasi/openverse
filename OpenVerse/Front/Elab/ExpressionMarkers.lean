@@ -353,6 +353,15 @@ partial def elabExprMarkersWith
     -- body), which sees their names
     if !ctx.canFail then
       eerr p "first{…} with a choice can fail, but it is not in a failure context (#208)"
+    -- (#243, #351) a clause that casts as only a failure context's clause
+    -- may: as written, else with the rest of its clauses as one block
+    let asWritten := ctx.asWritten
+    let ctx := { ctx with asWritten := false }
+    let value := items.getLastD (.tuple p [])
+    if !asWritten then
+      if let some r ← withCastClauses ctx items.dropLast value (fun _ => false) (elabE { ctx with asWritten := true } se exp)
+          (fun cs v => elabE ctx (.app p (.ident p "$first") [.block bp (cs ++ [v])] false) exp) then
+        return r
     let (rc, c1) ← elabOneClauses ctx items.dropLast
     let rv ← elabE c1 (items.getLastD (.tuple p [])) exp
     return ⟨.seq rc.e rv.e, rv.ty⟩
