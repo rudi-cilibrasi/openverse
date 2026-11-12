@@ -240,7 +240,7 @@ def fnFits (env : TyEnv) (s : Sig) (t : Ty) : Bool :=
           (qs.zip ps).all (fun (q, p) => subAt q p) && subAt s.ret u
         else
           match ((ps ++ [s.ret]).zip (qs ++ [u])).foldlM (fun σ (a, b) => a.matchArg env σ b) [] with
-          | some σ => match SubtypeEvidence.infer env s.bounds σ true with
+          | some σ => match SubtypeEvidence.infer env s.bounds σ true ((s.tparams.filter (·.2)).map (·.1)) with
             | some σ => s.tparams.all (fun (v, cmp) => match σ.lookup v with
                 | some x => !cmp || x.plainComparable
                 | none => false) && s.bounds.all (fun bound =>
@@ -261,7 +261,7 @@ def fnValueArgs (env : TyEnv) (s : Sig) (t : Ty) (fixed : List (String × Ty) :=
     let own : FnValues.Shape := ⟨k, s.decides, s.suspends, s.fx⟩
     if !own.within (FnValues.shapeOf k es) then none else do
       let σ ← ((s.params ++ [s.ret]).zip ts).foldlM (fun σ (a, b) => a.matchArg env σ b) fixed
-      let σ ← SubtypeEvidence.infer env s.bounds σ true
+      let σ ← SubtypeEvidence.infer env s.bounds σ true ((s.tparams.filter (·.2)).map (·.1))
       if !((s.params ++ [s.ret]).zip ts).all (fun (a, b) => (a.subst σ).eqv b) then none else
       if !s.bounds.all (fun bound => env.boundSubtype (bound.derived.subst σ) (bound.base.subst σ)) then none else
       s.tparams.mapM fun (v, cmp) => do
@@ -863,6 +863,7 @@ def Ctx.checkInlineInstance (ctx : Ctx) (p : Pos) (formal : ResolvedTParams)
     (substitution : List (String × Ty)) (complete : Bool := true) :
     Except String (List (String × Ty)) := do
   let some substitution := SubtypeEvidence.infer ctx.evidenceEnv formal.bounds substitution complete
+      ((formal.params.filter (·.2)).map (·.1))
     | throw s!"{p.show}: cannot infer a consistent upper-bound instance of this inlined call"
   for (name, comparable) in formal.params do
     match substitution.lookup name with

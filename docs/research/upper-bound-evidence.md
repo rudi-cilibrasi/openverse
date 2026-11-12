@@ -132,6 +132,10 @@ discard a non-comparable value. Implied equality guarantees propagate only
 from equality-preserving numeric, unique-class and component bounds. Tuple
 adapters retain a whole-value relation without strengthening the original
 components merely because the converted upper supports equality.
+When inferring such an upper, calls, function values and inline instances
+filter candidates by the upper's required kind. An available comparable upper
+may be selected through actual bound facts without marking the original lower
+type as comparable.
 An invalid result-directed instance can retry from the original compiler state
 using arguments/defaults, without changing explicit instances or runtime
 argument evaluation.

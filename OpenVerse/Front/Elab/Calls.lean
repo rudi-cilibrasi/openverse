@@ -379,7 +379,8 @@ partial def elabGenericCallWith (elabE : Ctx → SExpr → Option Ty → EM R) (
         steps := steps.push (.assign ta rd)
         slots := slots.set! k (some ta)
         roles := roles.set! k (roles[k]! || dctx.isTypeValue d)
-  let inferred ← match SubtypeEvidence.infer (if s.bounds.isEmpty then ctx.types else ctx.evidenceEnv) s.bounds σ true with
+  let inferred ← match SubtypeEvidence.infer (if s.bounds.isEmpty then ctx.types else ctx.evidenceEnv) s.bounds σ true
+      ((s.tparams.filter (·.2)).map (·.1)) with
     | some inferred => pure inferred
     | none => eerr p s!"cannot infer a consistent upper-bound instance of {s.name}"
   σ := inferred

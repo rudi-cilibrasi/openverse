@@ -335,6 +335,15 @@ private def contracts : IO Unit := do
     (!(Plan.tupleArray t []).valid {} [] && (tupleArrayDeclaration { line := 1, col := 1 } 0).toOption.isNone &&
       (find? {} [] ⟨.arr t, .void⟩).isNone)
   let peer := [Bound.mk t u, Bound.mk t (.param "v" false)]
+  let known := Ty.param "knownUpper" true
+  let originalType := Ty.param "original" false
+  let some inferred := SubtypeEvidence.infer { boundFacts := [(known, originalType)] }
+      [Bound.mk t u] [("u", originalType)] true ["t"]
+    | throw (IO.userError "kind-aware peer inference lost the available comparable upper")
+  need "selecting a comparable upper preserves the original lower's kind"
+    (inferred.lookup "t" == some known && inferred.lookup "u" == some originalType)
+  need "a missing comparable upper cannot be repaired by strengthening the lower"
+    ((SubtypeEvidence.infer {} [Bound.mk t u] [("u", originalType)] true ["t"]).isNone)
   for (a, b, expected) in [(Ty.any, Ty.void, Ty.any), (.void, .any, .any),
       (.arr .any, .arr .void, .arr .any), (.arr .void, .arr .any, .arr .any)] do
     let some inferred := SubtypeEvidence.infer {} peer [("u", a), ("v", b)] true

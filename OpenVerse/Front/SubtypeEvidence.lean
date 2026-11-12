@@ -477,26 +477,27 @@ private def upperViews (env : TyEnv) (derived : Ty) : List Ty :=
     joins' preference for a shared class when multiple nominal interfaces
     remain, and refuse unrelated interface ambiguity. Input bindings and
     their precise types are never replaced by this inferred upper type. -/
-private partial def commonUpper? (env : TyEnv) (types : List Ty) : Option Ty := do
+private partial def commonUpper? (env : TyEnv) (types : List Ty)
+    (comparable : Bool := false) : Option Ty := do
   let first ← types.head?
   -- Join corresponding components directly, avoiding a Cartesian product
   -- of every upper type of every tuple component.
   let structural : Option Ty := match first with
     | .arr _ => do
       let components ← types.mapM fun | .arr t => some t | _ => none
-      return .arr (← commonUpper? env components)
+      return .arr (← commonUpper? env components comparable)
     | .opt _ => do
       let components ← types.mapM fun | .opt t => some t | _ => none
-      return .opt (← commonUpper? env components)
+      return .opt (← commonUpper? env components comparable)
     | .map _ _ => do
       let components ← types.mapM fun | .map _ t => some t | _ => none
       let keys ← types.mapM fun | .map k _ => some k | _ => none
-      let key ← commonUpper? env keys
-      if !isComparable env key then none else return .map key (← commonUpper? env components)
+      let key ← commonUpper? env keys true
+      if !isComparable env key then none else return .map key (← commonUpper? env components comparable)
     | .tup parts => do
       let rows ← types.mapM fun | .tup ts => if ts.length == parts.length then some ts else none | _ => none
       let components ← (List.range parts.length).mapM fun i => do
-        commonUpper? env (← rows.mapM (·[i]?))
+        commonUpper? env (← rows.mapM (·[i]?)) comparable
       return .tup components
     | _ => none
   let tupleLengths := types.filterMap fun | .tup ts => some ts.length | _ => none
@@ -509,9 +510,9 @@ private partial def commonUpper? (env : TyEnv) (types : List Ty) : Option Ty := 
   let tupleArray : Option Ty := if !needsArray then none else do
     let parts ← types.mapM fun | .tup ts => some ts | .arr t => some [t] | _ => none
     let components := parts.flatten
-    if components.isEmpty then none else return .arr (← commonUpper? env components)
+    if components.isEmpty then none else return .arr (← commonUpper? env components comparable)
   let candidates := (mergeTypes (structural.toList ++ tupleArray.toList ++ types.flatMap (upperViews env))).filter fun candidate =>
-    types.all (env.boundSubtype · candidate)
+    (!comparable || isComparable env candidate) && types.all (env.boundSubtype · candidate)
   let best := candidates.filter fun candidate => !candidates.any fun other =>
     other != candidate && env.boundSubtype other candidate && !env.boundSubtype candidate other
   let selected ← match best with
@@ -532,7 +533,7 @@ private partial def commonUpper? (env : TyEnv) (types : List Ty) : Option Ty := 
   return (types.flatMap (upperViews env) |>.filter (· == selected)).foldl Ty.commonBounds selected
 
 private def peerInstances (env : TyEnv) (bounds : List Bound) (names : List String)
-    (substitution : List (String × Ty)) : Option (List (String × Ty)) := do
+    (substitution : List (String × Ty)) (comparable : List String) : Option (List (String × Ty)) := do
   let mut lowerTypes := names.map fun name => (name, (substitution.lookup name).toList)
   -- Propagate actual lower types through peer edges before choosing any
   -- upper. This also solves a cycle reached from a known argument.
@@ -568,7 +569,7 @@ private def peerInstances (env : TyEnv) (bounds : List Bound) (names : List Stri
   let mut result := substitution
   for (name, values) in lowerTypes do
     if (result.lookup name).isSome || pending.contains name || values.isEmpty then continue
-    let upper ← commonUpper? env values
+    let upper ← commonUpper? env values (comparable.contains name)
     result := (name, upper) :: result
   return result
 
@@ -587,7 +588,7 @@ def acceptsKnownBounds (env : TyEnv) (bounds : List Bound)
     argument's projected ancestor. Existing input bindings remain fixed. No
     unrelated interface is guessed to be an ancestor of an opaque parameter. -/
 def infer (env : TyEnv) (bounds : List Bound) (initial : List (String × Ty))
-    (peerTypes : Bool := false) : Option (List (String × Ty)) := do
+    (peerTypes : Bool := false) (comparable : List String := []) : Option (List (String × Ty)) := do
   if bounds.isEmpty then return initial
   let mut substitution := initial
   let names := (bounds.flatMap fun bound => bound.base.params ++ bound.derived.params).eraseDups
@@ -618,7 +619,7 @@ def infer (env : TyEnv) (bounds : List Bound) (initial : List (String × Ty))
             if (substitution.lookup name).isSome then (name, ty) else
               (name, solutions.foldl (fun ty solution => ty.commonBounds ((solution.lookup name).getD ty)) ty)
       | _ => pure ()
-    if peerTypes then substitution ← peerInstances env bounds names substitution
+    if peerTypes then substitution ← peerInstances env bounds names substitution comparable
     if substitution == previous then break
   return substitution
 
