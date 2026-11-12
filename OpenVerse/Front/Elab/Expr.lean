@@ -75,7 +75,8 @@ partial def elabRefineExit (ctx : Ctx) (p : Pos) (pre pack : List SExpr) : EM R 
     let r ← elabE ctx (.block p (pre ++ pack)) (some ctx.retTy)
     return ⟨.ret (← coerce p r ctx.retTy), .never⟩
   let (r, c) ← elabSeq ctx pre none
-  let ds ← elabDefers ctx ctx.defers
+  -- (a `break`'s target is its loop; a `return`'s caller passes `false`)
+  let ds ← elabDefers (ctx.exitDefers ctx.loopRollback) ctx.defers
   let out ← elabE { c with defers := [] } (.block p pack) (some ctx.retTy)
   let e := Expr.seq ds (.ret (← coerce p out ctx.retTy))
   return ⟨if pre.isEmpty then e else .seq r.e e, .never⟩
@@ -85,7 +86,8 @@ partial def elabRefineExit (ctx : Ctx) (p : Pos) (pre pack : List SExpr) : EM R 
     cancellation (#156): the defers run when a cancelled task unwinds. -/
 partial def withDeferMark (ctx : Ctx) (e : Expr) : EM Expr := do
   if ctx.defers.isEmpty then return e
-  return .seq (.ite (.prim .fail []) (← elabDefersCore ctx ctx.defers) (.lit .void)) e
+  -- (a cancelled task's unwinding: never in a failure context, #515)
+  return .seq (.ite (.prim .fail []) (← elabDefersCore (ctx.exitDefers false) ctx.defers) (.lit .void)) e
 
 /-- `sync:` (`isSync`) or `race:` with arms `arms` (#156): each arm's value
     goes to a slot (`race`: one slot of the arms' join type, written by the
@@ -158,6 +160,13 @@ partial def elabConc (ctx : Ctx) (p : Pos) (isSync : Bool) (arms : List SExpr) (
     the task, a `task(t)`. The lowering (`Suspend.lean`) turns the marker
     `$spawnMark(array{F(…), T})` into a new task root. -/
 partial def elabSpawn (ctx : Ctx) (p : Pos) (body : SExpr) : EM R := do
+  -- (#515: the task runs the call later, outside a failure context the
+  -- `spawn` is in; its arguments, evaluated now, are recorded here)
+  let r ← elabSpawnIn { ctx with inRollback := false } p body
+  noteFailCalls ctx p "spawn's arguments" r.e
+  return r
+
+partial def elabSpawnIn (ctx : Ctx) (p : Pos) (body : SExpr) : EM R := do
   let sourceBefore := (← get).pendingSourceSuspends
   if ctx.inDefer then eerr p "spawn in a defer is not supported (#156)"
   if ctx.canFail && !ctx.inDefaultCheck then
@@ -285,7 +294,8 @@ partial def elabDefersCore (ctx : Ctx) (ds : List (SExpr × List Local)) : EM Ex
   for (d, locs) in ds.reverse do
     -- (with the locals where it was registered: their slots still hold them)
     -- (no failure context that takes a choice's values, #283)
-    let dctx := { ctx with canFail := false, inDefer := true, inLoop := false, defers := [], loopDefers := 0,
+    let dctx := { ctx with canFail := false, inRollback := ctx.inRollback || ctx.canFail,
+                           inDefer := true, inLoop := false, defers := [], loopDefers := 0,
                            locals := locs, inTaking := false, liftWhy := "" }
     let r ← elabE dctx d none
     acc := .seq r.e acc

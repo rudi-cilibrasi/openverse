@@ -325,6 +325,7 @@ partial def elabExprControlWith
   | .loop _ body =>
     let lctx := { ctx with
       inLoop := true, inRepeat := true, loopDefers := ctx.defers.length,
+      loopRollback := ctx.canFail || ctx.inRollback,
       inChoice := false, forBreakSlot := none, forBreakCapture := none,
       refineExits := { ctx.refineExits with brk := none } }
     let r ← elabE lctx body none
@@ -338,12 +339,12 @@ partial def elabExprControlWith
     if let some name := ctx.forBreakCapture then
       let some target := ctx.lookup name | eerr p "internal: missing for break slot"
       if target.ty != .logic then eerr p "internal: invalid for break type"
-      let ds ← elabDefers ctx ctx.defers
+      let ds ← elabDefers (ctx.exitDefers ctx.loopRollback) ctx.defers
       let some pack := ctx.forExitPacket | eerr p "internal: missing for break outcome"
       let out ← elabE { ctx with defers := [] } pack (some ctx.retTy)
       return ⟨.seq ds (.seq (.assign target.slot (.lit (.logic true))) (.ret out.e)), .never⟩
     -- the defers of the scopes it leaves, inside its loop
-    let ds ← elabDefers ctx (ctx.defers.take (ctx.defers.length - ctx.loopDefers))
+    let ds ← elabDefers (ctx.exitDefers ctx.loopRollback) (ctx.defers.take (ctx.defers.length - ctx.loopDefers))
     let jump := ctx.forBreakSlot.map (fun flag => Expr.seq (.assign flag (.lit (.logic true))) .brk) |>.getD .brk
     return ⟨.seq ds jump, .never⟩
   | .ret p e? =>
@@ -358,7 +359,7 @@ partial def elabExprControlWith
         | some (_, t), none => eerr p s!"return needs a value of type {(← resolveTy ctx.types p t).show}"
         | none, some e => pure [e]
         | none, none => pure []
-      return ← elabRefineExit ctx p pre pack
+      return ← elabRefineExit { ctx with loopRollback := false } p pre pack
     -- Refining lifts above forward their return first. Here we are back
     -- in the owning continuation: save the operand before local cleanup,
     -- then return its abort packet with the latest mutable copy-outs.
@@ -371,7 +372,7 @@ partial def elabExprControlWith
           if ty != .void then eerr p s!"return needs a value of type {ty.show}"
           pure (.lit .void)
       let saved ← fresh ty
-      let ds ← elabDefers ctx ctx.defers
+      let ds ← elabDefers (ctx.exitDefers false) ctx.defers
       let some pack := ctx.forExitPacket | eerr p "internal: missing for return outcome"
       let out ← elabE { ctx with defers := [] } pack (some ctx.retTy)
       return ⟨.seq (.assign saved value) (.seq ds
@@ -379,13 +380,13 @@ partial def elabExprControlWith
     let some e := e?
       | do
         if ctx.retTy != .void then eerr p s!"return needs a value of type {ctx.retTy.show}"
-        return ⟨.seq (← elabDefers ctx ctx.defers) (.ret (.lit .void)), .never⟩
+        return ⟨.seq (← elabDefers (ctx.exitDefers false) ctx.defers) (.ret (.lit .void)), .never⟩
     let r ← elabE ctx e (some ctx.retTy)
     let v ← coerce p r ctx.retTy
     if ctx.defers.isEmpty then return ⟨.ret v, .never⟩
     -- the value first, then the defers of every scope it leaves
     let t ← fresh ctx.retTy
-    return ⟨.seq (.assign t v) (.seq (← elabDefers ctx ctx.defers) (.ret (.local t))), .never⟩
+    return ⟨.seq (.assign t v) (.seq (← elabDefers (ctx.exitDefers false) ctx.defers) (.ret (.local t))), .never⟩
   | .caseE p scrut arms => elabCase ctx p scrut arms exp
   | .decl p _ _ _ _ =>
     let (r, _) ← elabStmt ctx se exp

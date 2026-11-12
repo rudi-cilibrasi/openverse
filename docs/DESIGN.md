@@ -1437,6 +1437,31 @@ the probe goes on nowhere), and a `Signal` before its first turn gives it
 its turn in their order. The default prelude and lowering are unchanged, so a program
 compiled without the option is byte-identical to before.
 
+**Signal admission (opt-in, `Options.signalNoRollback`,
+`--signal-no-rollback`, #515).** The front end records each call,
+construction (its classes' `block:`s), use of a constant (its
+initialiser) and `spawn` (its arguments, not the spawned call) that it
+elaborates in a failure context (`Ctx.canFail`) or inside one where the
+code itself cannot fail (`Ctx.inRollback`: a `defer:` body, a `block`, a
+named argument's default), with the functions its Verse Core calls
+(`ESt.failCalls`, `noteFailCalls`). The `defer:`s an exit runs take the
+exit's target's context (`Ctx.exitDefers`): none for a `return`, which
+commits, the loop's (`Ctx.loopRollback`) for a `break`. After the program is elaborated,
+before the concurrency lowering, `SignalAdmission.maySignal` finds the
+functions from which the prelude's `signalAll`, which every kind of
+event's `Signal` calls, is reachable through calls (not through a
+`$spawnMark`'s spawned call). A method's dispatch and a function value's
+call are calls in Verse Core of every implementation (every function
+given as a value of that type), so both count, conservatively. The first
+recorded site that reaches one is refused, with the way to the `Signal`.
+A `for`'s continuation (#335, `$contf…`) is not followed from a site: its
+clauses are recorded where it is elaborated, and its body is not a
+failure context unless the source `for`'s body is, or the `for` is inside
+one (`FirstLift.rollback`, which starts the continuation's frame with
+`inRollback`; under the option, `contKey` tells the two apart, so a
+`defer:` run at a `return` and at the end of its scope has one of each). The default records
+nothing and refuses nothing.
+
 The roots are a list of cells `[root, next]` (adding one costs a cell; an
 array would be copied at each spawn, and C keeps every copy). A pass follows
 the list, reading each cell's next after its root ran, so a root added
