@@ -3,7 +3,7 @@
 # packets, mutable copy-outs, waiting state and cancellation oracle. Each
 # 120-seed cycle covers five input shapes in first-success, for and waiting
 # contexts, with empty/nonempty trailing generators and cancellation.
-#   usage: scripts/fuzz-model-heterogeneous.sh [COUNT [FIRST_SEED [--methods|--generic-methods|--members|--callable-fields|--aliases|--writes|--nested-writes|--result-aliases|--numeric-writes]]]
+#   usage: scripts/fuzz-model-heterogeneous.sh [COUNT [FIRST_SEED [--methods|--generic-methods|--members|--callable-fields|--aliases|--writes|--nested-writes|--result-aliases|--numeric-writes|--named-methods]]]
 set -uo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 n="${1:-120}"; first="${2:-1}"
@@ -11,8 +11,10 @@ mode_args=(); tag=heterogeneous
 case ${3:-} in
   --methods) mode_args+=(--methods); tag=dictionary ;;
   --generic-methods) mode_args+=(--generic-methods); tag=polymorphic-dictionary ;;
+  --named-methods) mode_args+=(--named-methods); tag=named-method-dictionary ;;
   --nested-writes) mode_args+=(--nested-writes); tag=nested-write-dictionary ;;
   --numeric-writes) mode_args+=(--numeric-writes); tag=numeric-write-dictionary ;;
+  --indexed-writes) mode_args+=(--indexed-writes); tag=indexed-write-dictionary ;;
   --writes) mode_args+=(--writes); tag=write-dictionary ;;
   --result-aliases) mode_args+=(--result-aliases); tag=result-alias-dictionary ;;
   --aliases) mode_args+=(--aliases); tag=alias-dictionary ;;

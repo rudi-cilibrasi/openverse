@@ -14,14 +14,16 @@ p.add_argument('--aliases', action='store_true')
 p.add_argument('--writes', action='store_true')
 p.add_argument('--nested-writes', action='store_true')
 p.add_argument('--result-aliases', action='store_true')
+p.add_argument('--named-methods', action='store_true')
 p.add_argument('--numeric-writes', action='store_true')
+p.add_argument('--indexed-writes', action='store_true')
 a = p.parse_args()
-a.writes = a.writes or a.nested_writes or a.numeric_writes
-a.aliases = a.aliases or ((a.writes or a.result_aliases) and a.seed % 2 == 0)
+a.writes = a.writes or a.nested_writes or a.numeric_writes or a.indexed_writes
+a.aliases = a.aliases or ((a.writes or a.result_aliases or a.named_methods) and a.seed % 2 == 0)
 a.members = a.members or a.aliases or a.writes or a.result_aliases
-a.generic_methods = (a.generic_methods or a.members) and not a.callable_fields
-a.members = a.members and not a.callable_fields and not a.numeric_writes
-a.methods = a.methods or a.generic_methods or a.callable_fields
+a.generic_methods = (a.generic_methods or a.members or (a.named_methods and a.seed // 5 % 2 == 0)) and not a.callable_fields
+a.members = a.members and not a.callable_fields and not a.numeric_writes and not a.indexed_writes
+a.methods = a.methods or a.generic_methods or a.callable_fields or a.named_methods
 r = random.Random(a.seed)
 method_arguments = a.methods and r.choice([False, True])
 mode = ['first', 'for', 'waiting'][a.seed % 3]
@@ -58,6 +60,9 @@ def filt(i, s, kind):
     if method_arguments:
         h += i + 1
         lines.append(f'arg {i + 1}')
+    if a.named_methods:
+        h += s + 2
+        lines.append(f'default {s}')
     if a.methods:
         h += (kind + 1) * (s + 1) + (i + 1 if method_arguments else 0)
         lines.append(f'm {chr(97 + kind)} {s}')
@@ -139,22 +144,32 @@ lines.append(f'result {answer} state {h}')
 a.expected.write_text('exit=0\n' + '\n'.join(lines) + '\n')
 print('cell:=class{var N:int=0}\nInts(N:int)<computes>:[]int=for(I:=1..N):I\nbox(t:type):=class{V:t;K:int=0}\nbase:=class{K:int}\nca:=class(base){}\ncb:=class(base){}\nSame(X:t,?Y:t=X where t:subtype(comparable))<computes>:int=if(X=Y)then 1 else 0\nPrefix(H:cell,X:t,Y:t,Tag:int where t:type)<transacts>:t=\n    Print("p {Tag}")\n    set H.N+=Tag\n    X|Y')
 if a.methods:
+    if a.named_methods:
+        print('Default(H:cell,K:int)<transacts>:int=block{Print("default {K}");set H.N+=K+2;K}')
     if a.result_aliases:
         for name, generic in [('ma',False),('mb',False),('ga',True),('gb',True)]:
             print('result_'+name+('(t:type)' if generic else '')+':=class<computes>{K:int'+(';V:t' if generic else '')+'}')
     for name, generic, kind in [('ma', False, 'a'), ('mb', False, 'b'), ('ga', True, 'a'), ('gb', True, 'b')]:
         print(name + ('(t:type)' if generic else '') + ':=class:')
         numeric_rat = a.numeric_writes and kind == 'b'
-        score_value = 'Floor(K)' if numeric_rat else 'K'
+        score_value = 'IndexedValue' if a.indexed_writes else 'Floor(K)' if numeric_rat else 'K'
         print('    H:cell\n    ' + ('var ' if a.members or a.callable_fields or a.writes else '') + 'K:' + ('rational' if numeric_rat else 'int') + ('\n    V:t' if generic else ''))
+        if a.indexed_writes:
+            print('    var Data:[]int')
         if a.callable_fields:
             callback_effects = '<reads><writes>' if kind == 'a' else '<transacts>'
             print('    F:type{_(:cell,:int' + (',:int' if method_arguments else '') + ')' + callback_effects + ':int}')
             continue
-        method_params = (['Arg:int'] if method_arguments else []) + (['Ignored:u where u:type'] if a.generic_methods else [])
+        method_params = (['Arg:int'] if method_arguments else []) + (['Ignored:u'] if a.generic_methods else [])
+        if a.named_methods:
+            method_params.append('?Stamp:int=Default(H,K)')
+        if a.generic_methods:
+            method_params[-1] += ' where u:type'
         method = 'Read' if a.members else 'Score'
         result = ('result_' if a.result_aliases else '') + name + ('(t)' if generic else '') if a.members else 'int'
         print('    ' + method + '(' + ','.join(method_params) + ')<transacts>:' + result + '=')
+        if a.indexed_writes:
+            print('        IndexedValue:=if(Item:=Data[0])then Item else 0')
         print('        Print("m ' + kind + ' {' + score_value + '}")')
         print('        set H.N+=' + ('1' if kind == 'a' else '2') + '*(' + score_value + '+1)' + ('+Arg' if method_arguments else ''))
         returned = 'result_'+name+('(t)' if generic else '')+'{K:=K'+(',V:=V' if generic else '')+'}' if a.result_aliases else 'Self' if a.members else score_value
@@ -173,7 +188,7 @@ if a.methods:
         print('write_payload:=class{var K:int;Kind:int}')
     control_ty = 'write_payload' if a.writes else 'tuple(int,int)'
     key, kind = ('X.K', 'X.Kind') if a.writes else ('X(0)', 'X(1)')
-    print('Score(H:cell,X:' + control_ty + (',Arg:int' if method_arguments else '') + (',Ignored:u where u:type' if a.generic_methods else '') + ')<transacts>:int=')
+    print('Score(H:cell,X:' + control_ty + (',Arg:int' if method_arguments else '') + (',Ignored:u' if a.generic_methods else '') + (',?Stamp:int=Default(H,'+key+')' if a.named_methods else '') + (' where u:type' if a.generic_methods else '') + ')<transacts>:int=')
     print(f'    if({kind}=0)then Print("m a {{{key}}}") else Print("m b {{{key}}}")')
     print(f'    set H.N+=({kind}+1)*({key}+1)' + ('+Arg' if method_arguments else '') + '\n    ' + key)
     if a.writes:
@@ -189,6 +204,8 @@ def payload(s, j):
         name = ('ga' if j == 0 else 'gb') if generic else ('ma' if j == 0 else 'mb')
         numeric_value = f'({2*s+1}/2)' if a.numeric_writes and j == 1 else str(s)
         value = name + ('(t)' if generic else '') + '{H:=H,K:=' + numeric_value + (',V:=X' if generic else '') + (',F:=Callback' + str(j) if a.callable_fields else '') + '}'
+        if a.indexed_writes:
+            value = value[:-1] + f',Data:=array{{{s}}}' + '}'
         return 'holder_'+name+('(t)' if generic else '')+'{C:='+value+'}' if a.nested_writes else value
     if a.control:
         return str(s)
@@ -220,7 +237,10 @@ for i, d in enumerate(levels):
         receiver = f'B{i}' if a.aliases else f'A{i}'
         if a.nested_writes and not a.control:
             receiver += '.C'
-        clauses.append(f'set {receiver}.K+=WriteArgument(H,{i+1})')
+        if a.indexed_writes and not a.control:
+            clauses.append(f'set {receiver}.Data[0]={receiver}.Data[0]+WriteArgument(H,{i+1})')
+        else:
+            clauses.append(f'set {receiver}.K+=WriteArgument(H,{i+1})')
     if a.result_aliases:
         returned = score if a.control else score.removesuffix('.K')
         clauses.extend([f'Returned{i}:={returned}', f'Saved{i}:=Returned{i}'])

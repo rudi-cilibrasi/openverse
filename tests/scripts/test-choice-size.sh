@@ -8,6 +8,39 @@ tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
 limit="${CHOICE_SIZE_TIMEOUT:-120}"
 # Keep modes sorted on separate lines so independent additions merge cleanly.
 kinds=(
+  indexwrite-simple-first
+  indexwrite-simple-for
+  indexwrite-simple-waiting
+  indexwrite-nested-first
+  indexwrite-nested-for
+  indexwrite-nested-waiting
+  indexwrite-numeric-first
+  indexwrite-numeric-for
+  indexwrite-numeric-waiting
+  indexwrite-contextual-first
+  indexwrite-contextual-for
+  indexwrite-contextual-waiting
+  indexwrite-alias-first
+  indexwrite-alias-for
+  indexwrite-alias-waiting
+  named-optional-first
+  named-optional-for
+  named-optional-waiting
+  named-partial-first
+  named-partial-for
+  named-partial-waiting
+  named-reordered-first
+  named-reordered-for
+  named-reordered-waiting
+  named-generic-first
+  named-generic-for
+  named-generic-waiting
+  named-inherited-first
+  named-inherited-for
+  named-inherited-waiting
+  named-waitingdefault-first
+  named-waitingdefault-for
+  named-waitingdefault-waiting
   setter-nested-first
   setter-nested-for
   setter-nested-waiting
@@ -342,6 +375,62 @@ for kind in "${kinds[@]}"; do
     python3 - "$kind" "$count" >"$tmp/p.verse" <<'PY'
 import sys
 kind, count = sys.argv[1], int(sys.argv[2])
+if kind.startswith('indexwrite-'):
+    _, shape, mode = kind.split('-')
+    n = count
+    print('Dup(X:t where t:type)<computes>:t=X|X')
+    for cls,kind in [('ca','a'),('cb','b')]:
+     ty='[]rational' if shape=='numeric' and kind=='b' else '[][]string' if shape=='contextual' and kind=='b' else '[][]int' if shape=='contextual' else '[]int'
+     value='array{array{"s"}}' if shape=='contextual' and kind=='b' else 'array{array{1}}' if shape=='contextual' else 'array{1,2}'
+     if shape=='nested':
+      print('leaf'+kind+':=class{var Data:'+ty+'='+value+'}')
+      print(cls+':=class{C:leaf'+kind+'=leaf'+kind+'{}}')
+     else:print(cls+':=class{var Data:'+ty+'='+value+'}')
+    clauses=[f'A{i}:=(Dup(ca{{}})|Dup(cb{{}}))' for i in range(n)]
+    writes=[]
+    for i in range(n):
+     target=f'A{i}'
+     if shape=='alias':
+      clauses += [f'B{i}:=A{i}',f'C{i}:=B{i}'];target=f'C{i}'
+     if shape=='nested':target+='.C'
+     writes.append('set '+target+'.Data[0]='+('array{}' if shape=='contextual' else '1'))
+    effects='<suspends>' if mode=='waiting' else ''
+    print('Run()'+effects+':int=')
+    if mode=='first':print('    if('+','.join(clauses+writes)+')then 1 else -1')
+    else:
+     body='block{if('+','.join(writes)+'):{};Sleep(0.001);0}' if mode=='waiting' else '0'
+     print('    Rows:=for('+','.join(clauses+([] if mode=='waiting' else writes))+'):'+body+'\n    Rows.Length')
+    print('Main()'+effects+':void=Print("{Run()}")')
+    sys.exit(0)
+if kind.startswith('named-'):
+    _, shape, mode = kind.split('-')
+    n = count
+    waiting=mode=='waiting'
+    print('Dup(X:t where t:type)<computes>:t=X|X')
+    if shape=='waitingdefault':
+     print('Next(X:int)'+('<suspends>' if waiting else '<computes>')+':int='+('block{Sleep(0.001);X}' if waiting else 'X'))
+    method='M(?X:int=K)<computes>:int=X'
+    args=lambda i:''
+    if shape=='partial':
+     method='M(?X:int=K,?Y:int=5)<computes>:int=X+Y';args=lambda i:'?Y:=3'
+    elif shape=='reordered':
+     method='M(?X:int=K,?Y:int=5)<computes>:int=X+Y';args=lambda i:'?Y:=3,?X:=4'
+    elif shape=='generic':
+     method='M(X:u,?Y:u=X where u:type)<computes>:u=Y';args=lambda i:f'A{i}.K,?Y:=A{i}.K'
+    elif shape=='waitingdefault':
+     method='M(?X:int=Next(K))'+('<suspends>' if waiting else '<computes>')+':int=X'
+    if shape=='inherited':
+     print('base:=class:\n    K:int\n    '+method+'\nca:=class(base){}\ncb:=class(base){}')
+    else:
+     for name in ['ca','cb']:print(name+':=class:\n    K:int\n    '+method)
+    clauses=','.join(f'A{i}:=(Dup(ca{{K:=1}})|Dup(cb{{K:=2}}))' for i in range(n))
+    value='+'.join(f'A{i}.M({args(i)})' for i in range(n))
+    print('Main()'+('<suspends>' if waiting else '')+':void=')
+    if mode=='first':print(f'    if({clauses},R:={value}):Print("ok")')
+    else:
+     body='block{Sleep(0.001);'+value+'}' if waiting else value
+     print(f'    Rows:=for({clauses}):{body}\n    Print("{{Rows.Length}}")')
+    sys.exit(0)
 print('Two(N:int):int = N | N + 1')
 if kind == 'heterogeneous-nested-for':
     print('Dup(X:t where t:type)<computes>:t=X|X')
@@ -1565,9 +1654,12 @@ PY
       diff -u "$tmp/expected" "$tmp/lean.out"
       diff -u "$tmp/expected" "$tmp/c.out"
     fi
-    if [[ $kind == conversion-* && $count == 4 ]]; then
+    if [[ ( $kind == named-* || $kind == conversion-* || $kind == indexwrite-* ) && $count == 4 ]]; then
       expected=256
-      [[ $kind == *-first ]] && expected=1
+      if [[ $kind == *-first ]]; then
+        expected=1
+        [[ $kind == named-* ]] && expected=ok
+      fi
       printf '%s\n' "$expected" >"$tmp/expected"
       timeout "$limit" "$root/.lake/build/bin/openverse" run "$tmp/p.verse" >"$tmp/lean.out"
       timeout "$limit" "$root/runtime/build/cverse" "$tmp/p.vbc" >"$tmp/c.out"

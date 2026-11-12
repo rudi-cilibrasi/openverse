@@ -1,0 +1,18 @@
+leave a
+body 1 1
+leave a
+body 2 2
+leave b
+source 2
+done -1 2
+leave a
+body 1 1
+leave a
+body 2 2
+leave b
+body 3 3
+leave b
+body 4 4
+source 4
+done 4 4
+exit=0

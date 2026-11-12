@@ -184,6 +184,10 @@ def Sig.hasReceiver (s : Sig) : Bool :=
     evaluated in the selected implementation's own type context. -/
 def defaultBridge (n : String) : Bool := (n.splitOn "$dispatchDefaults").length > 1
 
+/-- Dictionary forwarders evaluating omitted defaults retain caller task ownership. -/
+def choiceDefaultBridge (n : String) : Bool :=
+  n.startsWith "$choiceOperationDictionary" && (n.splitOn "$choiceDefault").length > 1
+
 /-- Spawn adapters take every argument already bound, including defaults. -/
 def spawnAdapter (n : String) : Bool := (n.splitOn "$spawnBody").length > 1
 

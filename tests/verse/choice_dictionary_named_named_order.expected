@@ -1,0 +1,26 @@
+given y
+default x a
+body 12 11
+given second y
+given second x
+second 29 16
+given y
+default x a
+body 44 27
+given second y
+given second x
+second 61 32
+given y
+default x b
+body 86 53
+given second y
+given second x
+second 113 58
+given y
+default x b
+body 138 79
+given second y
+given second x
+second 165 84
+done 4 84
+exit=0

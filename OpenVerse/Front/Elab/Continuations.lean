@@ -1283,6 +1283,9 @@ partial def choiceMemberOperations (bindings : ChoiceAliases) (body : SExpr) : L
   | .ite _ conditions yes no =>
     let (operations, visible) := choiceMemberOperationSeq bindings conditions
     operations ++ choiceMemberOperations visible yes ++ no.toList.flatMap (choiceMemberOperations bindings)
+  | e@(.set _ (.app _ (.member _ receiver _) [index] true) none value) =>
+    choiceMemberOperations bindings index ++ choiceMemberOperations bindings receiver ++
+      choiceMemberOperations bindings value ++ (if depends receiver then [(e, bindings)] else [])
   | e@(.set _ target@(.member _ receiver _) op value) =>
     let old := match value with
       | .app _ (.ident _ "$withOld") [saved, _] false => saved
@@ -1317,6 +1320,58 @@ structure ChoiceOperationCase where
   result : Ty
   specs : List String
   methodVars : List (String × Bool) := []
+  omittedDefaults : Bool := false
+
+def choiceOrderedArguments (args : List SExpr) : List SExpr :=
+  let named : SExpr → Bool := fun | .decl _ n .. => n.startsWith "?" | _ => false
+  args.filter (!named ·) ++ args.filter named
+
+def choiceArgumentValue : SExpr → SExpr
+  | arg@(.decl _ n _ _ value) => if n.startsWith "?" then value else arg
+  | value => value
+
+def choiceForwardArguments (written values : List SExpr) : List SExpr :=
+  (written.zip values).map fun (arg, value) => match arg with
+    | .decl p n _ _ _ => if n.startsWith "?" then .decl p n none false value else value
+    | _ => value
+
+/-- Parameter types in evaluation order. Omitted defaults stay in the
+    original method call, in its own declaration and type scope. -/
+def choiceCallInputs (sig : Sig) (args : List SExpr) : Option (List Ty × Bool) := do
+  let npos := sig.params.length - sig.named.length - 1
+  let positional := args.filter fun | .decl _ n .. => !n.startsWith "?" | _ => true
+  let named := args.filterMap fun | .decl _ n .. => if n.startsWith "?" then some (n.drop 1).toString else none | _ => none
+  if positional.length != npos || named.eraseDups.length != named.length then none else do
+  let indices ← named.mapM fun n => (sig.named.findIdx? (·.1 == n)).map (npos + ·)
+  let omitted := sig.named.filter fun (n, _) => !named.contains n
+  if omitted.any (·.2.isNone) then none else
+    some ((List.range npos ++ indices).map fun i => sig.params[i + 1]!, !omitted.isEmpty)
+
+def choiceDefaultContext (ctx : Ctx) (body : SExpr) : SExpr :=
+  let p := body.pos
+  let flags : Nat := (if ctx.inRepeat then 1 else 0) + (if ctx.inDefer then 2 else 0) + (if ctx.inDefaultCheck then 4 else 0)
+  let stack := ctx.defaults.map fun (f, n) => SExpr.tuple p [.str p [.text f], .str p [.text n]]
+  .app p (.ident p "$defaultContext") [.block p stack, .int p (flags : Int), body] false
+
+/-- Defaults are checked where the source call occurs, including a loop
+    or deferred body nested in the shared suffix. -/
+partial def choiceOperationContexts (ctx : Ctx) (body : SExpr) : List (SExpr × Ctx) :=
+  let here := match body with | .app _ (.member ..) _ _ => [(body, ctx)] | _ => []
+  here ++ (match body with
+    | .forE _ clauses value => clauses.flatMap (choiceOperationContexts ctx) ++
+        choiceOperationContexts { ctx with inRepeat := true } value
+    | .loop _ value => choiceOperationContexts { ctx with inRepeat := true } value
+    | .app _ (.ident _ "$defer") values _ => values.flatMap (choiceOperationContexts { ctx with inDefer := true })
+    | .app _ (.ident _ "$defaultContext") [.block _ stack, .int _ flags, value] false =>
+        let defaults := stack.filterMap fun
+          | .tuple _ [.str _ [.text f], .str _ [.text n]] => some (f, n)
+          | _ => none
+        choiceOperationContexts { ctx with
+          defaults := defaults ++ ctx.defaults,
+          inRepeat := flags % 2 == 1, inDefer := flags / 2 % 2 == 1,
+          inDefaultCheck := flags / 4 % 2 == 1 } value
+    | .structDef .. | .enumDef .. | .refineDef .. => []
+    | _ => body.children.flatMap (choiceOperationContexts ctx))
 
 /-- A generic dictionary quantifies method parameters at the call, after
     later generators have supplied their values. Only receiver-dependent
@@ -1324,6 +1379,8 @@ structure ChoiceOperationCase where
 def choiceGenericOperation (ctx : Ctx) (stem : String) (receiver : SExpr) (receiverTy : Ty) (ops : ChoiceOperations)
     (call : SExpr) (cases : List ChoiceOperationCase) : Option ChoiceOperations := do
   let .app p (.member _ _ method) arguments bracket := call | none
+  let arguments := choiceOrderedArguments arguments
+  let borrows := cases.any (·.omittedDefaults)
   let count := (cases.head?.map (·.methodVars.length)).getD 0
   if count == 0 || cases.any (·.methodVars.length != count) then none else do
   let methodVars := (List.range count).map fun i =>
@@ -1354,7 +1411,11 @@ def choiceGenericOperation (ctx : Ctx) (stem : String) (receiver : SExpr) (recei
     let vars := Ty.mergeParamBounds (types.flatMap Ty.paramsC) |>.filter (!methodNames.contains ·.1)
     let rename := vars.zipIdx.map fun ((n, b), i) => (n, Ty.param s!"$operationT{i}" b)
     (types.map (·.subst rename), vars, rename)
-  let family := s!"$choiceOperationDictionary{(reprStr (method, specs, methodVars, canonical.map (·.1))).hash}"
+  let context := if borrows then reprStr (choiceDefaultContext ctx (.tuple p [])) else ""
+  let labels := arguments.map fun | .decl _ n .. => n | _ => ""
+  let familyKey := if !borrows && labels.all (· == "") then reprStr (method, specs, methodVars, canonical.map (·.1)) else
+    reprStr (method, specs, methodVars, canonical.map (·.1), labels, context)
+  let family := s!"$choiceOperationDictionary{familyKey.hash}{if borrows then "$choiceDefault" else ""}"
   let classNames := classVars.zipIdx.map fun ((_, b), i) => (s!"$operationClass{i}", b)
   let classRename := classVars.zip classNames |>.map fun ((old, _), (name, bound)) => (old, Ty.param name bound)
   let declarationSignature := signature.map (·.subst classRename)
@@ -1379,9 +1440,11 @@ def choiceGenericOperation (ctx : Ctx) (stem : String) (receiver : SExpr) (recei
     let parentTy := STy.app family (actualClassArgs.map fun t => (Ty.subst rename t).toSTy)
     let implementationTypes := (row.receiver :: row.inputs ++ [row.result]).map (Ty.subst rename)
     let canonicalVars := vars.zipIdx.map fun ((_, b), j) => (s!"$operationT{j}", b)
+    let body := SExpr.app p0 (.member p0 values.head! method) (choiceForwardArguments arguments values.tail) bracket
+    let body := if borrows then choiceDefaultContext ctx body else body
     definitions := definitions ++ [STop.classDef p0 impl (tparams canonicalVars) [] [parentTy] false [] []
       [.fn p0 "$apply" (params implementationTypes.dropLast) methodTps ("override" :: specs)
-        implementationTypes.getLast!.toSTy (.app p0 (.member p0 values.head! method) values.tail bracket)]]
+        implementationTypes.getLast!.toSTy body]]
     let value := SExpr.construct p impl (vars.map fun (n, _) => .name n) []
     bindings := bindings ++ [[SExpr.decl p s!"{stem}$op{ops.params.length}" (some (.app family (actualClassArgs.map Ty.toSTy))) false
       (.app p (.ident p "$choiceDictionary") [value] false)]]
@@ -1393,7 +1456,7 @@ def choiceGenericOperation (ctx : Ctx) (stem : String) (receiver : SExpr) (recei
   let invocation := SExpr.app p (.ident p "$choiceGenericOperation")
     (.str p [.text (FnValues.shapeOf (arguments.length + 1) specs).name] :: .ident p name ::
       .block p methodMetadata :: .construct p "$choiceSignature" (signature.map Ty.toSTy) [] ::
-      .block p instances :: ops.rewrite receiver :: arguments.map ops.rewrite) bracket
+      .block p instances :: ops.rewrite receiver :: arguments.map (ops.rewrite ∘ choiceArgumentValue)) bracket
   some { ops with
     plan := extendedPlan,
     params := ops.params ++ [(name, .struct family (classVars.map fun (n, b) => .param n b))],
@@ -1403,20 +1466,32 @@ def choiceGenericOperation (ctx : Ctx) (stem : String) (receiver : SExpr) (recei
     extraFns := ops.extraFns ++ definitions }
 
 /-- Each dictionary implements the method at its original receiver and
-    argument types. Named defaults retain their source path until their
-    caller scope can be represented here. -/
+    argument types. Omitted defaults retain their declaration scope and
+    source context; their forwarding methods borrow caller task ownership. -/
 def choiceOperations (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx)
-    (stem binding : String) (plan : ChoiceTypes.Plan) (suffix : List SExpr) : EM ChoiceOperations := do
+    (stem binding : String) (plan : ChoiceTypes.Plan) (suffix : List SExpr)
+    (forBody : Option SExpr := none) : EM ChoiceOperations := do
   let mut ops : ChoiceOperations := { plan, bindingName := binding, casePrelude := plan.instances.map fun _ => [] }
   if !(match plan.binding with | .param .. => true | _ => false) then return ops
+  let source : List SExpr := match forBody with
+    | some value => suffix.dropLast ++ [.forE value.pos [] value]
+    | none => suffix
+  let contexts := source.flatMap (choiceOperationContexts ctx)
   let mut seen : List SExpr := []
   for (call, bindings) in (choiceMemberOperationSeq [(binding, none)] suffix).1 do
     let key := call
     if seen.contains key then continue
     seen := key :: seen
+    let sourceCtx := (contexts.find? (·.1 == call)).map (·.2) |>.getD ctx
+    let indexed := match call with
+      | .set _ (.app _ (.member ..) [_] true) none _ => true
+      | _ => false
     let details : Option (Pos × SExpr × String × List SExpr × Bool × Bool × Option (Option String)) := match call with
       | .app p (.member _ receiver method) arguments bracket => some (p, receiver, method, arguments, bracket, false, none)
       | .member p receiver field => some (p, receiver, field, [], false, true, none)
+      | .set p (.app _ (.member _ receiver field) [index] true) none value =>
+        if !choiceFieldPath receiver then none else
+        some (p, receiver, field, [index, value], true, false, some none)
       | .set p target@(.member _ receiver field) op value =>
         if !choiceFieldPath receiver then none else
         let arguments := match op, value with
@@ -1426,9 +1501,11 @@ def choiceOperations (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx)
         some (p, receiver, field, arguments, false, false, some op)
       | _ => none
     let some (p, receiver, method, arguments, bracket, isField, setter) := details | continue
+    let arguments := choiceOrderedArguments arguments
     let callee := match call with | .app _ fn _ _ => fn | _ => call
     let functionType := if isField then none else (ops.knownTypes.find? (·.1 == callee)).map (·.2)
     let callable := functionType.any fun | .param .. => true | _ => false
+    if callable && arguments.any (fun | .decl _ n .. => n.startsWith "?" | _ => false) then continue
     -- Preserve callee-before-argument evaluation, including a mutable
     -- callback replaced by one of its argument expressions.
     let receiver := if callable then callee else receiver
@@ -1461,6 +1538,14 @@ def choiceOperations (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx)
         let .struct cls classArgs := actual | break
         if !ctx.types.isRefClass cls || !ctx.types.isVarField cls method then break
         let some (_, fieldTy, _) := (ctx.types.fields cls classArgs).find? (·.1 == method) | break
+        if indexed then
+          let .arr leaf := fieldTy | break
+          -- Source paths evaluate keys before capturing their object.
+          -- The adapter then reads the current array after the caller RHS.
+          cases := cases ++ [{
+            receiver := .int, inputs := [actual, leaf],
+            result := leaf, specs := ["reads", "writes"] }]
+          continue
         cases := cases ++ [{
           receiver := actual,
           inputs := if op.isSome then [fieldTy, fieldTy] else [fieldTy],
@@ -1483,14 +1568,25 @@ def choiceOperations (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx)
         let own := signature.tparams.filter fun (n, _) => !classVars.any (·.1 == n)
         let methodVars := own.zipIdx.map fun ((_, b), i) => (s!"$operationMethod{i}", b)
         let methodRename := own.zip methodVars |>.map fun ((old, _), (name, bound)) => (old, Ty.param name bound)
-        if !signature.named.isEmpty || signature.params.length != arguments.length + 1 || signature.decides != bracket then break
+        if signature.decides != bracket then break
+        let some (supplied, omittedDefaults) := choiceCallInputs signature arguments | break
+        -- An omitted value can determine a method instance at this call.
+        -- A dictionary quantified over that parameter would instead have
+        -- to check the default at every rigid instance, which can reject
+        -- a valid source call (for example ?X:u=1 with no supplied u).
+        let suppliedNames := arguments.filterMap fun
+          | .decl _ n .. => if n.startsWith "?" then some (n.drop 1).toString else none
+          | _ => none
+        let npos := signature.params.length - signature.named.length
+        if signature.named.zipIdx.any (fun ((n, _), i) => !suppliedNames.contains n &&
+            signature.params[npos + i]!.params.any (fun v => own.any (·.1 == v))) then break
         let substitution := (classVars.map (·.1)).zip (ctx.types.upArgs cls classArgs owner)
-        let inputs := (signature.params.drop 1).map fun ty => ((ty.subst methodRename).subst substitution).subst ctx.types.tvars
+        let inputs := supplied.map fun ty => ((ty.subst methodRename).subst substitution).subst ctx.types.tvars
         let result := ((signature.ret.subst methodRename).subst substitution).subst ctx.types.tvars
         let specs := (if signature.fx.isEmpty then ["computes"] else signature.fx) ++
           (if signature.decides then ["decides"] else []) ++
           (if signature.suspends then ["suspends"] else [])
-        cases := cases ++ [{ receiver := actual, inputs, result, specs, methodVars }]
+        cases := cases ++ [{ receiver := actual, inputs, result, specs, methodVars, omittedDefaults }]
     if cases.length != plan.instances.length then
       -- A checked function-valued field fixes its result before its
       -- arguments are available, just as a monomorphic method does.
@@ -1501,8 +1597,9 @@ def choiceOperations (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx)
               ops := { ops with knownTypes := ops.knownTypes ++ [(call, types.getLast!)] }
       continue
     if cases.any (!·.methodVars.isEmpty) then
-      if let some generic := choiceGenericOperation ctx stem receiver receiverTy ops call cases then ops := generic
+      if let some generic := choiceGenericOperation sourceCtx stem receiver receiverTy ops call cases then ops := generic
       continue
+    let borrows := cases.any (·.omittedDefaults)
     let mut extended := ops.plan
     let mut inputs : List Ty := []
     for j in List.range arguments.length do
@@ -1521,9 +1618,14 @@ def choiceOperations (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx)
       let vars := Ty.mergeParamBounds ((types ++ [row.result]).flatMap Ty.paramsC)
       let rename := vars.zipIdx.map fun ((name, bound), i) => (name, Ty.param s!"$operationT{i}" bound)
       (types.map (·.subst rename), row.result.subst rename)
-    let operationName := if let some op := setter then "$set:" ++ method ++ ":" ++ op.getD "=" else
+    let operationName := if indexed then "$indexSet:" ++ method else
+      if let some op := setter then "$set:" ++ method ++ ":" ++ op.getD "=" else
       if callable then "$invoke:" ++ method else if isField then "$field:" ++ method else method
-    let family := s!"$choiceOperationDictionary{(reprStr (operationName, specs, canonical)).hash}"
+    let context := if borrows then reprStr (choiceDefaultContext sourceCtx (.tuple p [])) else ""
+    let labels := arguments.map fun | .decl _ n .. => n | _ => ""
+    let familyKey := if !borrows && labels.all (· == "") then reprStr (operationName, specs, canonical) else
+      reprStr (operationName, specs, canonical, labels, context)
+    let family := s!"$choiceOperationDictionary{familyKey.hash}{if borrows then "$choiceDefault" else ""}"
     let names := "$operationReceiver" :: ((List.range arguments.length).map fun i => s!"$operationArgument{i}") ++ ["$operationResult"]
     let variables := names.map STy.name
     let tps := names.map fun n => ({ pos := p0, name := n, constraint := "type" } : TParam)
@@ -1538,14 +1640,17 @@ def choiceOperations (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx)
       ({ name := "$Self", ty := familyTy } :: params variables.dropLast) tps specs variables.getLast!
       (.app p0 (.member p0 (.ident p0 "$Self") "$apply") values bracket)
     let name := s!"{stem}$op{ops.params.length}"
-    let ty := Ty.struct family (receiverTy :: inputs ++ [result])
-    let operation := if let some op := setter then
+    let ty := Ty.struct family ((if indexed then .int else receiverTy) :: inputs ++ [result])
+    let operation := if indexed then
+      SExpr.set p0 (.app p0 (.member p0 values[1]! method) [values[0]!] true) none values[2]!
+    else if let some op := setter then
       let rhs := if op.isSome then SExpr.app p0 (.ident p0 "$withOld") [values[1]!, values[2]!] false
         else values[1]!
       SExpr.set p0 (.member p0 values.head! method) op rhs
     else if callable then SExpr.app p0 values.head! values.tail bracket else
       if isField then SExpr.member p0 values.head! method else
-      .app p0 (.member p0 values.head! method) values.tail bracket
+      .app p0 (.member p0 values.head! method) (choiceForwardArguments arguments values.tail) bracket
+    let operation := if borrows then choiceDefaultContext sourceCtx operation else operation
     let mut definitions : List STop := [iface, applyFn]
     let mut bindings : List (List SExpr) := []
     for ((row, (canonicalInputs, canonicalRet)), i) in (cases.zip canonical).zipIdx do
@@ -1563,9 +1668,10 @@ def choiceOperations (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx)
       bindings := bindings ++ [[.decl p name (some valueTy) false
         (.app p (.ident p "$choiceDictionary") [value] false)]]
     let sourceArguments := arguments.mapIdx fun i value =>
-      let value := ops.rewrite value
+      let value := ops.rewrite (if !callable && !isField && setter.isNone then choiceArgumentValue value else value)
       if setter.isSome && i + 1 == arguments.length then ops.coercionContext value else value
-    let sourceValues := ops.rewrite receiver :: sourceArguments
+    let sourceValues := if indexed then [sourceArguments[0]!, ops.rewrite receiver, sourceArguments[1]!] else
+      ops.rewrite receiver :: sourceArguments
     ops := { ops with
       plan := finalPlan, params := ops.params ++ [(name, ty)],
       knownTypes := ops.knownTypes ++ [(call, result)],
