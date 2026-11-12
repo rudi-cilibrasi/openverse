@@ -44,10 +44,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
   let normGens (cs : List SExpr) : List SExpr := cs.flatMap fun c => match Choice.binding? c with
     -- (one taken lazily, #246: the binding stays, a generator of its own)
     | some { each := some (.app _ (.ident _ "$loop") _ false), .. } => [c]
-    | some { pos := q, name := n, ty := none, each := some arr, .. } => [.gen q n none arr]
-    | some { pos := q, name := n, ty := some t, each := some arr, .. } =>
-      let tmp := s!"$e{q.line}_{q.col}"
-      [.gen q tmp none arr, .decl q n (some t) false (.ident q tmp)]
+    | some { pos := q, name := n, ty, each := some arr, .. } => Choice.genOver "" q n ty arr
     | _ => [c]
   let clauses := normGens clauses
   -- split into groups: [filters before the first generator], then (generator, filters)…

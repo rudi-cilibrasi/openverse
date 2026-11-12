@@ -1761,6 +1761,16 @@ partial def inlineCalls (mv : List (String × MFn)) (e : SExpr) (recs : List Str
     | none => return .app p (← go (.ident q g)) (← as.mapM go) br
   | e => descendM go e
 
+/-- A generator of `x` over the array `src` (#235); at a written type `ty`,
+    one of a name of its own, `$e…` (with `site` in it, `madeName`), then
+    `x` bound to it at `ty`. -/
+def genOver (site : String) (q : Pos) (x : String) (ty : Option STy) (src : SExpr) : List SExpr :=
+  match ty with
+  | none => [.gen q x none src]
+  | some t =>
+    let e := madeName "e" site q
+    [.gen q e none src, .decl q x (some t) false (.ident q e)]
+
 mutual
 /-- The array of an expression's values, for a `$all` body (#235): a choice
     concatenates its alternatives' arrays, an `if` with choices in its
@@ -1794,21 +1804,11 @@ partial def arrOfE (ty : Option STy := none) (fieldOrder : String → FieldOrder
     Names made include `site`, so that nested ones differ. -/
 partial def gensOf (site : String) (cs : List SExpr)
     (fieldOrder : String → FieldOrder := fun _ => {}) : List SExpr :=
-  let nm (q : Pos) : String := madeName "e" site q
   (prepare cs (site := site) (fieldOrder := fieldOrder) (guardBranches := false)).flatMap fun c => match binding? c with
     | some { pos := q, name := x, ty := ty, alts := as, branchy := none, each := none, .. } =>
-      let src := arrOfE ty fieldOrder (.app q (.ident q "$choice") as false)
-      match ty with
-      | none => [.gen q x none src]
-      | some t => [.gen q (nm q) none src, .decl q x (some t) false (.ident q (nm q))]
-    | some { pos := q, name := x, ty := ty, branchy := some i, .. } =>
-      match ty with
-      | none => [.gen q x none (arrOfE none fieldOrder i)]
-      | some t => [.gen q (nm q) none (arrOfE (some t) fieldOrder i), .decl q x (some t) false (.ident q (nm q))]
-    | some { pos := q, name := x, ty := ty, each := some a, .. } =>
-      match ty with
-      | none => [.gen q x none a]
-      | some t => [.gen q (nm q) none a, .decl q x (some t) false (.ident q (nm q))]
+      genOver site q x ty (arrOfE ty fieldOrder (.app q (.ident q "$choice") as false))
+    | some { pos := q, name := x, ty := ty, branchy := some i, .. } => genOver site q x ty (arrOfE ty fieldOrder i)
+    | some { pos := q, name := x, ty := ty, each := some a, .. } => genOver site q x ty a
     | _ => [c]
 end
 
