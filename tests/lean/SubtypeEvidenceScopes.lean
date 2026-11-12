@@ -149,6 +149,54 @@ def main : IO Unit := do
       ((elabGenericCallWith elabE projectedCaller p projectedSig
         [.ident p "X", .arrayLit p []] expected).run { env := projected, nslots := 1, slotTys := #[leaf] })
     need "a partial result context cannot replace the valid projected instance" (result.ty == .arr .int)
+  let car := Ty.struct "car" []
+  let truck := Ty.struct "truck" []
+  let left := Ty.struct "left" []
+  let right := Ty.struct "right" []
+  let domains := { projected with
+    classes := projected.classes ++ ["truck", "left", "right"]
+    cinfo := projected.cinfo ++ [("truck", { parent := some "vehicle" }),
+      ("left", { isIface := true }), ("right", { isIface := true })] }
+  let cars := [(car, t)]
+  let trucks := [(truck, t)]
+  need "same-spelled overload formals have independent sibling bounds"
+    (domains.paramsDistinct [t] [t] cars trucks && domains.paramsDistinct [t] [t] trucks cars)
+  need "an ancestor bound still overlaps its descendant"
+    (!(domains.paramsDistinct [t] [u] cars [(vehicle, u)]))
+  need "uninhabited unrelated interfaces can have a common subtype"
+    (!(domains.paramsDistinct [t] [t] [(left, t)] [(right, t)]))
+  need "a forward peer chain carries its separating class bound"
+    (domains.paramsDistinct [t] [t] [(u, t), (car, u)] trucks)
+  need "a peer cycle is not evidence of domain separation"
+    (!(domains.paramsDistinct [t] [t] [(u, t), (t, u)] trucks))
+  need "any valid upper view can separate an intersection"
+    (domains.paramsDistinct [t] [t] [(left, t), (car, t)] trucks &&
+      domains.paramsDistinct [t] [t] [(car, t), (left, t)] trucks)
+  need "projected generic bounds retain their invariant arguments"
+    (domains.paramsDistinct [t] [t]
+      [(.struct "root" [.int], t)] [(.struct "root" [Ty.string], t)])
+  need "empty arrays still overlap despite disjoint element bounds"
+    (!(domains.paramsDistinct [.arr t] [.arr t] cars trucks))
+  need "flattening tuples retains the respective formal scopes"
+    (domains.paramsDistinct [.tup [t, .int]] [t, .int] cars trucks &&
+      domains.paramsDistinct [t, .int] [.tup [t, .int]] trucks cars)
+  need "tuple adaptation does not separate the same bounded domain"
+    (!(domains.paramsDistinct [.tup [t, .int]] [t, .int] cars cars))
+  need "tuple/map key comparison uses the map's own bound in either order"
+    (domains.disjointUnder [(.int, t)] cars (.tup [t]) (.map t .int) &&
+      domains.disjointUnder cars [(.int, t)] (.map t .int) (.tup [t]) &&
+      !(domains.disjointUnder cars [(.int, t)] (.tup [t]) (.map t .int)))
+  need "required named bounds can distinguish sibling overloads"
+    (domains.namedDistinct [("X", false, t)] [("X", false, t)] cars trucks)
+  need "omitting optional parameters still fits both overloads"
+    (!(domains.namedDistinct [("X", true, t)] [("X", true, t)] cars trucks))
+  let generic := { projectedSig with
+    params := [t], ret := .int,
+    tparams := [("t", false)], bounds := [⟨car, t⟩] }
+  let valueType (input : Ty) := Ty.struct (FnValues.shapeOf 1 ["computes"]).name [input, .int]
+  need "function-value overload matching checks the selected bound"
+    (fnValueArgs domains generic (valueType car) == some [car] &&
+      (fnValueArgs domains generic (valueType truck)).isNone)
   let parsed ← getOK "parse witness metadata fixture"
     (parseProgram "Echo(D:t where t:type):t=D|D\nMain():void=for(V:=Echo(7)){Print(\"{V}\")}")
   let marked := parsed.map fun

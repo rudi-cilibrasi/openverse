@@ -12102,7 +12102,12 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       ((mtps.zip (List.range mtps.length)).map fun (tp, i) => (tp.name, STy.name s!"$m{i}"))
     -- (and `string` is `[]char`)
     let ρ := ρ ++ [("string", STy.arr (.name "char"))]
-    reprStr (ps.map fun q => (q.named, if q.named then q.name else "", q.ty.substNames ρ))
+    let parameters := reprStr (ps.map fun q => (q.named, if q.named then q.name else "", q.ty.substNames ρ))
+    -- Method bounds distinguish overload lists; receiver bounds belong to
+    -- the surrounding class and may be stronger in an override's class.
+    let bounds := mtps.zipIdx.filterMap fun (tp, i) =>
+      tp.upperBound.map fun upper => (i, upper.substNames ρ)
+    if bounds.isEmpty then parameters else parameters ++ reprStr bounds
   -- (per class hierarchy: classes and interfaces connected by inheritance,
   -- so unrelated classes' methods of one name are not overloads)
   let classDefs : List (String × List TParam × List STy × List STop) :=
@@ -12197,7 +12202,10 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
               -- arguments must not capture them)
               let apart : List (String × STy) := (dmtps.zip (List.range dmtps.length)).map fun (tp, i) =>
                 (tp.name, STy.name s!"$own{i}")
-              let dmtps' := (dmtps.zip (List.range dmtps.length)).map fun (tp, i) => { tp with name := s!"$own{i}" }
+              let dmtps' := (dmtps.zip (List.range dmtps.length)).map fun (tp, i) =>
+                { tp with
+                  name := s!"$own{i}"
+                  upperBound := tp.upperBound.map fun upper => (upper.substNames apart).substNames σ }
               (k, sigText ctps dmtps' (dps.map fun q => { q with ty := (q.ty.substNames apart).substNames σ }), dps.length)
         match (cands.filter (·.2.1 == mine)).map (·.1) |>.eraseDups with
         | [k] => s!"{mn}$ov{k}"
@@ -13227,7 +13235,9 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   let sigsDistinct (sa sb : Sig) : Bool :=
     let pa := sa.params.take (sa.params.length - sa.named.length)
     let pb := sb.params.take (sb.params.length - sb.named.length)
-    env.paramsDistinct pa pb || env.namedDistinct (sigNamed sa) (sigNamed sb)
+    let ba := sa.bounds.map fun bound => (bound.base, bound.derived)
+    let bb := sb.bounds.map fun bound => (bound.base, bound.derived)
+    env.paramsDistinct pa pb ba bb || env.namedDistinct (sigNamed sa) (sigNamed sb) ba bb
   for (n, ms) in env.overloads do
     for (a, i) in ms.zip (List.range ms.length) do
       for b in ms.take i do
@@ -13243,10 +13253,24 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   -- the overloads of a method a class sees take parameters no call fits two
   -- of (#106: a subclass's new overload too; an override has its method's)
   for c in env.classes do
+    let classArgs := ((env.sparams.lookup c).getD []).map fun (v, k) => Ty.param v k
+    let receiverBounds := ((env.sbounds.lookup c).getD []).map fun (base, derived) =>
+      SubtypeEvidence.Bound.mk base derived
+    let methodDomain (owner : String) (sg : Sig) : Sig :=
+      let formals := (env.sparams.lookup owner).getD []
+      -- Receiver formals share this class's scope. Method formals belong
+      -- to the inherited declaration and must not capture those names.
+      let own := sg.tparams.drop formals.length
+      let renames := own.zipIdx.map fun ((v, k), i) =>
+        (v, Ty.param s!"$overloadDomain{sg.idx}_{i}" k)
+      let σ := (formals.map (·.1)).zip (env.upArgs c classArgs owner) ++ renames
+      { sg with
+        params := (sg.params.drop 1).map (·.subst σ)
+        bounds := sg.bounds.map (·.subst σ) ++ receiverBounds }
     for (mn, ms) in env.methodOverloads do
       let vis : List (String × Sig) := ms.filterMap fun o =>
         ((env.supers c).find? fun e => allSigs.any (·.name == s!"{e}.{o}")).bind fun e =>
-          (allSigs.find? (·.name == s!"{e}.{o}")).map fun sg => (s!"{e}.{o}", { sg with params := sg.params.drop 1 })
+          (allSigs.find? (·.name == s!"{e}.{o}")).map fun sg => (s!"{e}.{o}", methodDomain e sg)
       for ((a, sa), i) in vis.zip (List.range vis.length) do
         for (b, sb) in vis.take i do
           if !sigsDistinct sa sb then
