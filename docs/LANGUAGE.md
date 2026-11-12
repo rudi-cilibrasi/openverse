@@ -583,9 +583,10 @@ circle := class(shape, labelled):
   class(mid(int, string))` below `mid(a, b) := class(expr(tuple(a, b)))`)
   and override too. A cast in generic code that holds only under such a
   refinement is pattern matching on the class, as in a GADT (#243): as a
-  clause of an `if`'s condition, `D := T[X]` types the branch it guards,
-  and the clauses after it, under the refinement, where the code's type parameters are unified as `T`'s
-  type arguments say (written types in the branch included):
+  clause of a failure context, `D := T[X]` (or `T[X]` alone) types the
+  code after it in its failure context under the refinement, where the
+  code's type parameters are unified as `T`'s type arguments say (written
+  types included), and so the branch of the `if` whose condition it is in:
 
   ```verse
   Eval(E:expr(t) where t:type):t =
@@ -594,11 +595,38 @@ circle := class(shape, labelled):
       else Err()
   ```
 
-  A later clause may be such a cast too (#243), when the clauses before it
-  print nothing, change no object and call nothing, so that its failure
-  has nothing of theirs to undo: `if (N := Ns[0], N > 0, D := dup[P])` is
-  `if (N := Ns[0], N > 0) then (if (D := dup[P]) …)`, the `else` the same
-  in both.
+  It may be a clause of any failure context: a statement of a `<decides>`
+  body, or of a block in a failure context; a clause of `option{…}`,
+  `logic{…}` or `first{…}`; the operand of `not`, or of `and` or `or`; a
+  clause of an `if`'s condition or of a `for`. The rest of its failure
+  context is its branch: `pre; D := T[X]; rest` is `pre; if (D := T[X])
+  then {rest} else fail`, so its failure, or the rest's, undoes what `pre`
+  did, output included, as any failure context's does:
+
+  ```verse
+  AsLit(E:expr(t) where t:type)<decides>:t =
+      L := lit[E]
+      L.V                                     # t = int here
+  First(H:cell, P:pair(a, b) where a:type, b:type)<transacts>:?b =
+      option{set H.N += 1; D := dup[P]; D.A}  # undone when P is no dup
+  ```
+
+  In an `if`'s condition, and in a `for`'s clauses, the names reach the
+  branch, or the body, which runs outside the failure context. In an `if`,
+  when the clauses before the cast print nothing, change no object and
+  call nothing (always, when it is the first), so that its failure has
+  nothing of theirs to undo, the branch is part of the cast's: `if (N :=
+  Ns[0], N > 0, D := dup[P])` is `if (N := Ns[0], N > 0) then (if (D :=
+  dup[P]) …)`, the `else` the same in both. Otherwise, and in a `for`, the
+  cast takes the clauses after it, up to the `for`'s next generator, as
+  its branch in a clause of its own, and the branch or the body, when it
+  uses the cast's name or names
+  those clauses bind, casts the object again, which succeeds (an object's
+  class does not change), so that it is typed under the refinement too, as
+  it does a later cast among those clauses of a name bound before them that
+  is no `var`, when it uses that cast's name:
+  `if (Print("x"), D := dup[P], Y := D.A) then option{Y}` prints `x` only
+  when `P` is a `dup`, and its branch has `D` and `Y` with `b = a`.
 
   A cast can also open type arguments the object's type has no names for
   (#250): `if (P := pairE[E]) then (Eval(P.L), Eval(P.R))`, for
@@ -606,7 +634,9 @@ circle := class(shape, labelled):
   `b'` are `pairE`'s `a` and `b`, unknown but fixed for the branch; their
   values, which the branch's own generic calls at them need, come from the
   object, which holds them in hidden fields as #209's existential classes'
-  objects do. An opened parameter is as comparable as the one it stands
+  objects do. The value of what follows such a cast in its failure
+  context, and the names it binds that a branch or body uses, cannot be of
+  a type that names an opened one. An opened parameter is as comparable as the one it stands
   for, and also when comparability of a refined type requires that component
   (`t:subtype(comparable)` refined to `tuple(a', b')`). A unique reference
   such as `holder(a')` is comparable independently of `a'`, so it supplies
@@ -623,7 +653,7 @@ circle := class(shape, labelled):
 
   The branch is compiled as a function of its own, generic over the
   enclosing function's type parameters, that takes the object (as `D`) and
-  the locals the branch uses, at their refined types; the `if` becomes a
+  the locals the branch uses, at their refined types; the cast becomes a
   dispatch to it, which Verse Core types as it types a refined method call
   (`Typed.dispatch`), so nothing is assumed in Verse Core. In a
   `<suspends>` function the branch and the `else` may suspend (#243): the
@@ -646,8 +676,9 @@ circle := class(shape, labelled):
   return what to do, which the caller then does after the `if` (#243): the
   enclosing function returns, or the loop is left, once the `var`s it set
   have their values. Where the `if`'s value is used, its type must be known
-  for that (written, given by where it is, or the `else`'s) unless the
-  branch always returns or breaks. In a method, the branch names `Self`'s
+  for that (written, given by where it is, the `else`'s, or the branch's
+  own when the `else` gives none, as `Err()` or a failure context's
+  failure does) unless the branch always returns or breaks. In a method, the branch names `Self`'s
   fields and methods as anywhere in the method (its function takes `Self`
   too), and its `(super:)M(…)` calls the implementation the method's class
   inherits, as anywhere in the method (#243), including overloads selected
@@ -753,29 +784,30 @@ circle := class(shape, labelled):
 - **Comparability.** Other classes and interfaces are not comparable (Book §4.9), nor
   is a struct or container that holds one.
 - **Not yet supported** (each rejected with a message):
+  - a cast that refines type arguments, opens them, or goes through a
+    view (#243, #250, #351) anywhere but as a clause of a failure context:
+    inside an expression (`dup[P].C`: bind it, `D := dup[P]`), or outside
+    any failure context;
+  - in a `for`'s clauses, one past a generator after such a cast that uses
+    its name (#243);
+  - after a cast that opens type arguments, a value of its failure
+    context, or a name it binds that a branch or body uses, of a type that
+    names them (#250);
+  - a branch of such a cast with a `return`, or a `break` that leaves it,
+    where the `if`'s value is used at a type not known there (#243);
   - a cast from a reference to an interface that a class gives type
-    arguments that are not a prefix of its own, or to one above it (see
-    above, #351), to a class or
-    interface with type arguments, its own or ones it fixes (`c :=
-    class(i1(int), i2(string))`), other than as a clause of an `if`'s
-    condition (the first, or one after clauses that print, change an
-    object and call nothing), whose branch is then a function of its own
-    as described above (#243), or to one neither above
-    nor below it; a cast `T[X]` whose type
-    arguments agree with `X`'s only under a refinement (`dup[P]` for
-    `P:pair(a, b)`) other than as a clause of an `if`'s condition (the
-    first, or one after clauses that print nothing, change no object and
-    call nothing, #243), whose
-    branch has a `return` or a `break` that leaves it where the `if`'s value
-    is used at a type not known there (#243); a variable, in generic code, of a class or
-    interface type that requires an instance of itself (`Next:node(t)`)
-    at type arguments that every class below it fixes otherwise: its
-    hidden placeholder object (#157) would have to hold itself (no program
-    can build an object of such a type: each would need another first,
-    so use `?node(t)` for a link that may be absent); and, in code generic over an interface's parent, a
-    cast to an interface that gives that parent type arguments of its own
-    (`c2(t) := interface(container([]t))`) whose type parameters would be
-    unknown (#53).
+    arguments that are not a prefix of its own, or to one above it (#351),
+    to a class or interface neither above nor below it;
+  - a variable, in generic code, of a class or interface type that
+    requires an instance of itself (`Next:node(t)`) at type arguments that
+    every class below it fixes otherwise: its hidden placeholder object
+    (#157) would have to hold itself (no program can build an object of
+    such a type: each would need another first, so use `?node(t)` for a
+    link that may be absent);
+  - in code generic over an interface's parent, a cast to an interface
+    that gives that parent type arguments of its own (`c2(t) :=
+    interface(container([]t))`) whose type parameters would be unknown
+    (#53).
 
 ## Mutation, macros, tooling
 

@@ -227,8 +227,15 @@ partial def elabExprControlWith
       let isGen : SExpr → Bool
         | .gen .. | .decl _ _ none false (.range ..) => true
         | c => Choice.hasChoice [c] (choiceOrder ctx)
+      -- (the body, which casts again, at the element type expected, when
+      -- one is: the type the refinement must give its value)
+      let typed (b : SExpr) : SExpr := match exp with
+        | some (.arr t) =>
+          let v := s!"$forValue{p.line}_{p.col}"
+          .block b.pos [.decl b.pos v (some t.toSTy) false b, .ident b.pos v]
+        | _ => b
       if let some r ← withCastClauses ctx clauses body isGen (elabE { ctx with asWritten := true } se exp)
-          (fun clauses body => elabE ctx (.forE p clauses body) exp) then
+          (fun clauses body => elabE ctx (.forE p clauses (typed body)) exp) then
         return r
     let returns := (Refine.findPart (fun | .ret .. => true | _ => false) false (.block p (clauses ++ [body]))).isSome
     let breaks := (ctx.inLoop || ctx.refineExits.brk.isSome) &&

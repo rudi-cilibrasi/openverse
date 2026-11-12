@@ -6,7 +6,6 @@ open OpenVerse
 set_option maxHeartbeats 800000 in
 partial def elabExprValuesWith
     (elabE : Ctx → SExpr → Option Ty → EM R)
-    (elabStmt : Ctx → SExpr → Option Ty → EM (R × Ctx))
     (elabBlock : Ctx → List SExpr → Option Ty → EM (R × Ctx))
     (elabApp : Ctx → Pos → SExpr → List SExpr → Bool → Option Ty → EM R)
     (ratCall : Ctx → Pos → String → List Expr → EM Expr)
@@ -122,12 +121,10 @@ partial def elabExprValuesWith
     | _, ta, tb => eerr p s!"no operator '{op}' for {ta.show} and {tb.show}"
   | .cmp p a rest => elabCmp ctx p a rest
   | .andE _ a b =>
-    -- each operand is its own scope: names defined in `a` are not visible in
-    -- `b`, and names from either side do not escape the `and`
-    let stmt (e : SExpr) (exp : Option Ty) : EM R := do
-      if (Refine.castClause? e).isSome then operand ctx e exp else return (← elabStmt ctx e exp).1
-    let ra ← stmt a none
-    let rb ← stmt b exp
+    -- each operand is its own scope, a block: names defined in `a` are not
+    -- visible in `b`, and names from either side do not escape the `and`
+    let (ra, _) ← elabBlock ctx [a] none
+    let (rb, _) ← elabBlock ctx [b] exp
     return ⟨Expr.andE ra.e rb.e, rb.ty⟩
   | .orE p a b =>
     let a := (Choice.takeFirst? a (choiceOrder ctx)).getD a

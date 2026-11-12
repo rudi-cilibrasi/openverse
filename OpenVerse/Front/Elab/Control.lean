@@ -438,16 +438,18 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
           -- (an `else` that gives no value tells no type: the branch's own,
           -- under the refinement, when it ends, as the first elaboration
           -- finds it, if code outside it can name it)
-          let τ? ← if τ? != some .never then pure τ? else
+          let own? ← if τ? != some .never then pure none else
             tryCatch (do
               let τ := (← elabE { refined (← fresh dTy) with typeOnly := true } (Refine.exitsAsErr body) none).ty
               pure (if opened.any (fun (n, _, _) => τ.params.contains n) then none else some τ)) fun _ => pure none
+          let τ? := own?.orElse fun _ => τ?
           set st
           if !escapes then
             -- Discard a statement's value before building the copy-out tuple.
-            pure (some (if τ?.any (· == .void) then .none else .raw none))
+            pure (some (if τ?.any (· == .void) then .none else .raw (own?.map Ty.toSTy)))
           else
-            pure (τ?.map fun τ => if τ == .void then ExitVal.none else .opt τ.toSTy)
+            pure (τ?.bind fun τ => if τ == .never then none
+              else some (if τ == .void then ExitVal.none else .opt τ.toSTy))
     let some vm := vm?
       | eerr ((retPart.orElse fun _ => brkPart).map (·.pos) |>.getD p) s!"the branch of the cast to {shown}, which holds only under a refinement of the type arguments, is compiled as a function of its own, so it cannot return or break out of it yet where the if's value is used at a type not known there (write it) (#243)"
     let sourceRet ← match ctx.refineExits.ret with
@@ -743,7 +745,8 @@ def withCastClauses (ctx : Ctx) (cs : List SExpr) (after : SExpr) (isGen : SExpr
     if !Refine.isCastRefusal err then throw err
     set st0
     if let some r ← alone k err then return some r
-    match Refine.castRestClauses (cs.take k) cast (cs.drop (k + 1)) after isGen with
+    match Refine.castRestClauses (cs.take k) cast (cs.drop (k + 1)) after isGen ctx.types.classes.contains
+        (fun n => (ctx.lookup n).any (!·.mutable)) with
     | .ok (cs', after') => return some (← rebuild cs' after')
     | .error why => throw s!"{err} ({why})"
 
