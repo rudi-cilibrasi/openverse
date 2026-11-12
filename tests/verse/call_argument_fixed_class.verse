@@ -1,0 +1,10 @@
+i_int:=interface:
+    F(P:tuple(int))<computes>:string
+    F(P:[logic]int)<computes>:string
+base:=class(i_int):
+    F<override>(P:tuple(int))<computes>:string="tuple"
+    F<override>(P:[logic]int)<computes>:string="map"
+Main():void=
+    I:i_int=base{}
+    Print(I.F(7))
+    Print(I.F(map{true=>7}))

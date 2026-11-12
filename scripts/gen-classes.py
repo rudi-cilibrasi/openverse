@@ -1946,6 +1946,7 @@ class Gen:
         else:
             L.append('%s(X:string):string = "str {X}"' % name)
         two = chance(0.5)
+        option_tag = opt and two
         if two:
             L.append('%s(X:int, Y:int):string = "two {X + Y}"' % name)
         tup = chance(0.3)
@@ -1964,14 +1965,21 @@ class Gen:
             L.append('%s(X:%s):string = %s' % (name, t.name, body))
             used.append(t)
         if len(used) == 1 and chance(0.5):
+            option_tag = opt
             L.append('%s(X:%s, Y:int):string = "%s and {Y}"' % (name, used[0].name, used[0].name))
             if not used[0].abstract:
                 M.append('Print(%s(%s, %s))' % (name, self.construct_plain(used[0]), lit()))
+        # A whole tuple accepted by a multi-positional sibling overlaps ?int
+        # under the pinned tuple/option admission rule. Keep generating both
+        # families, distinguishing the option with a required name.
+        if option_tag:
+            L = [line.replace('(X:?int):', '(X:?int,?Option:logic):') for line in L]
         self.out += L
         M.append('Print(%s(%s))' % (name, lit()))
         if opt:
-            M.append('Print(%s(option{%s}))' % (name, lit()))
-            M.append('Print(%s(false))' % name)
+            tag = ',?Option:=true' if option_tag else ''
+            M.append('Print(%s(option{%s}%s))' % (name, lit(), tag))
+            M.append('Print(%s(false%s))' % (name, tag))
         else:
             M.append('Print(%s("%s"))' % (name, R.choice(['a', 'b'])))
             M.append('Print(%s(%s(%s)))' % (name, name, lit()))

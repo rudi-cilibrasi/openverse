@@ -206,3 +206,14 @@ The generated `test-call-packing.sh` gate varies numeric values across six
 shapes and ten caller contexts, comparing packed/explicit controls with exact
 independent numeric and evaluation-trace oracles in Lean and C. Its recursive
 context uses bounded tuple ranges for all six seed slots.
+
+The open class family `tuple(t)` versus `[logic]t` also overlaps after
+singleton packing even with `t:comparable`: `void` is comparable, and the
+[same map value](../../tests/verse/call_argument_void_witness.verse) fits both
+formals at `t=void`. The [open family is refused](../../tests/errors/call_pack_open_class_overlap.verse),
+while a [fixed int specialization](../../tests/verse/call_argument_fixed_class.verse)
+remains admitted. This finite erasure witness rules out using an occurs check
+to claim that the open signatures are disjoint. The domain model retains
+positive contexts with an additional positional hint or a named argument;
+the class generator adds a required option name only when multi-positional
+siblings would collide under the retained conservative tuple/option rule.

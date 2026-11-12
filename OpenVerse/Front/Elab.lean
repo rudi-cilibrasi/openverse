@@ -5353,9 +5353,12 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
             fun text => (text.splitOn " ").headD ""
           let noHint (s : Sig) := s.ret.params.isEmpty || missing.any fun v =>
             s.tparams.any (·.1 == v) && !s.ret.params.contains v
+          let fnValue : Ty → Bool := fun | .struct n _ => (FnValues.parseName n).isSome | _ => false
           let fixedResult := match a with
             | .app _ (.ident _ g) _ _ =>
-              (ctx.lookup g).isNone && (ctx.sig? g).any (·.ret.params.isEmpty)
+              match ctx.lookup g with
+              | some binding => fnValue binding.ty
+              | none => (ctx.sig? g).any (·.ret.params.isEmpty)
             | _ => false
           let probeState ← get
           let noResultEvidence := Choice.anyE (fun
@@ -5382,7 +5385,14 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
                     | [owner, method] => (some owner, method)
                     | _ => (cls, method)
                   else (cls, method)
-                (cls.bind fun c => (ctx.methodDecl? c method).bind fun owner => ctx.sig? s!"{owner}.{method}").any noHint
+                let fieldCall := match (elabE { ctx with typeOnly := true, callInstanceProbe := none } receiver none).run probeState with
+                  | .ok (⟨_, .struct c args⟩, _) =>
+                    let view := cls.getD c
+                    (ctx.methodDecl? view method).isNone &&
+                    !(((ctx.types.methodOverloads.lookup method).getD []).any (ctx.hasMethod view ·)) &&
+                    (ctx.types.fields view (ctx.types.upArgs c args view)).any fun (n, t, _) => n == method && fnValue t
+                  | _ => false
+                fieldCall || (cls.bind fun c => (ctx.methodDecl? c method).bind fun owner => ctx.sig? s!"{owner}.{method}").any noHint
             | .app _ callee _ _ =>
               -- A returned callable is also elaborated independently of
               -- the expected result of invoking it.

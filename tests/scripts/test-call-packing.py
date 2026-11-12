@@ -42,6 +42,30 @@ with tempfile.TemporaryDirectory(prefix='ov-call-packing-') as directory:
             saved = ROOT / f'fuzz-call-packing-deep-{name}.verse'
             saved.write_text(program)
             raise SystemExit(f'nested {name} inference: oracle/5-second bound failed, saved {saved.name}')
+    for name, setup, dispatch in (
+            ('local', 'G:type{_(:int)<computes>:int}=IntId', 'G'),
+            ('field', 'H:=holder{}', 'H.F')):
+        expression = 'Get()'
+        for _ in range(24):
+            expression = f'One({dispatch}({expression}))'
+        program = ('IntId(X:int)<computes>:int=X\n'
+                   'holder:=class{F:type{_(:int)<computes>:int}=IntId}\n'
+                   'box(t:type):=class{}\n'
+                   'Get(?X:[]t=array{} where t:type)<computes>:box(t)=box(t){}\n'
+                   'One(P:tuple(u) where u:type)<computes>:u=P(0)\n'
+                   'Main():void=\n    ' + setup + '\n    R:int=' + expression + '\n    Print("{R}")\n')
+        source.write_text(program)
+        try:
+            result = subprocess.run(compiler + ['run', str(source)], cwd=ROOT,
+                                    capture_output=True, text=True, timeout=5)
+            valid = (result.returncode == 4 and not result.stdout
+                     and 'cannot infer type parameter t of Get' in result.stderr)
+        except subprocess.TimeoutExpired:
+            valid = False
+        if not valid:
+            saved = ROOT / f'fuzz-call-packing-deep-{name}.verse'
+            saved.write_text(program)
+            raise SystemExit(f'nested fixed callable inference: oracle/5-second bound failed, saved {saved.name}')
     # Adaptation must not create calls that fit two admitted declarations.
     for left, right in (
             ('P:tuple(int)', 'X:int'),
