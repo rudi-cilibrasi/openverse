@@ -1322,6 +1322,7 @@ structure ChoiceOperationCase where
   specs : List String
   methodVars : List (String × Bool) := []
   omittedDefaults : Bool := false
+  indexedDecides : Bool := true
 
 def choiceOrderedArguments (args : List SExpr) : List SExpr :=
   let named : SExpr → Bool := fun | .decl _ n .. => n.startsWith "?" | _ => false
@@ -1544,12 +1545,15 @@ def choiceOperations (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx)
         if !ctx.types.isRefClass cls || !ctx.types.isVarField cls method then break
         let some (_, fieldTy, _) := (ctx.types.fields cls classArgs).find? (·.1 == method) | break
         if indexed then
-          let .arr leaf := fieldTy | break
+          let some (keyTy, leaf, indexedDecides) := (match fieldTy with
+            | .arr leaf => some (Ty.int, leaf, true)
+            | .map keyTy leaf => some (keyTy, leaf, op.isSome)
+            | _ => none) | break
           -- Source paths evaluate keys before capturing their object.
           -- The adapter then reads the current array after the caller RHS.
           cases := cases ++ [{
-            receiver := .int, inputs := if op.isSome then [actual, leaf, leaf] else [actual, leaf],
-            result := leaf, specs := ["reads", "writes"] }]
+            receiver := keyTy, inputs := if op.isSome then [actual, leaf, leaf] else [actual, leaf],
+            result := leaf, specs := ["reads", "writes"], indexedDecides }]
           continue
         cases := cases ++ [{
           receiver := actual,
@@ -1601,11 +1605,14 @@ def choiceOperations (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx)
             if types.length == arity + 1 then
               ops := { ops with knownTypes := ops.knownTypes ++ [(call, types.getLast!)] }
       continue
+    let bracket := if indexed then cases.any (·.indexedDecides) else bracket
     if cases.any (!·.methodVars.isEmpty) then
       if let some generic := choiceGenericOperation sourceCtx stem receiver receiverTy ops call cases then ops := generic
       continue
     let borrows := cases.any (·.omittedDefaults)
-    let mut extended := ops.plan
+    let (initialPlan, operationReceiverTy) := if indexed then
+      ChoiceTypes.extend ctx.types stem ops.plan (cases.map (·.receiver)) else (ops.plan, receiverTy)
+    let mut extended := initialPlan
     let mut inputs : List Ty := []
     for j in List.range arguments.length do
       let (next, input) := ChoiceTypes.extend ctx.types stem extended (cases.map fun row => row.inputs[j]!)
@@ -1645,7 +1652,7 @@ def choiceOperations (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx)
       ({ name := "$Self", ty := familyTy } :: params variables.dropLast) tps specs variables.getLast!
       (.app p0 (.member p0 (.ident p0 "$Self") "$apply") values bracket)
     let name := s!"{stem}$op{ops.params.length}"
-    let ty := Ty.struct family ((if indexed then .int else receiverTy) :: inputs ++ [result])
+    let ty := Ty.struct family (operationReceiverTy :: inputs ++ [result])
     let operation := if indexed then
       let op := setter.getD none
       let rhs := if op.isSome then SExpr.app p0 (.ident p0 "$withOld") [values[2]!, values[3]!] false else values[2]!
