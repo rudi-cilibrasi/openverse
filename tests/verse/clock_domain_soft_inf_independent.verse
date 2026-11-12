@@ -1,0 +1,11 @@
+Inf:float=0.0
+Main()<suspends>:void=
+    sync:
+        block:
+            Sleep(0.05)
+            Print("timer")
+        block:
+            Sleep(0.0)
+            Print("one")
+            Sleep(0.0)
+            Print("two")

@@ -1,0 +1,137 @@
+import OpenVerse.Front.Parser
+
+namespace OpenVerse.Front
+
+/-- The concurrency helpers (#156), written in Verse: the scheduler's
+    state (the clock, in ticks of 1/30 s, and the earliest tick a sleeping
+    task waits for), and `Sleep`'s frame with its `new`, `init` and `resume`.
+    `Sleep` itself is a stub that only marks the suspension point: the
+    lowering (`Suspend.lean`) calls the others in its place. -/
+def concPrelude : String := "
+sched := class:
+    var Now:int = 0
+    var Next:int = -1
+    var Progress:logic = false
+    var Head:?int = false
+    var Tail:?int = false
+    var Dead:logic = false
+    var CancelCur:logic = false
+    var CurTask:taskBase = taskBase{}
+taskBase := class:
+    var Done:logic = false
+    var Sch:?sched = false
+    var Cancelled:logic = false
+    var Running:logic = false
+    var Root:?int = false
+    var CancelReq:logic = false
+task(t:type) := class(taskBase):
+    var Result:?t = false
+waitf := class:
+    var Pc:int = 0
+    var T:taskBase
+waitNew(X:taskBase):waitf = waitf{T := X}
+waitInit(F:waitf, X:taskBase):void =
+    set F.Pc = 0
+    set F.T = X
+waitResume(F:waitf, C:sched):int =
+    if (F.T.Cancelled?):
+        set C.CancelCur = true
+        return 0
+    if (F.T.Done?) then return 1
+    if (F.Pc = 0):
+        set F.Pc = 1
+        set F.T.Sch = option{C}
+    0
+WaitDone(X:taskBase)<suspends><computes>:void = {}
+Await(T:task(t) where t:type)<suspends>:t =
+    WaitDone(T)
+    if (R := T.Result?) then R else Err()
+spawnMark(A:[]void)<computes>:void = {}
+cancelMark(X:taskBase)<suspends><computes>:void = {}
+branchMark(A:[]void)<computes>:void = {}
+evrec(t:type) := class(taskBase):
+    var Got:?t = false
+    var Next:?evrec(t) = false
+event(t:type) := class:
+    var Head:?evrec(t) = false
+    var Tail:?evrec(t) = false
+    Signal(X:t):void =
+        if (Head?) then signalAll(Self, X)
+signalAll(E:event(t), X:t where t:type):void =
+    var Cur:?evrec(t) = E.Head
+    set E.Head = false
+    set E.Tail = false
+    loop:
+        if (W := Cur?):
+            set W.Got = option{X}
+            set W.Done = true
+            if (S := W.Sch?) then set S.Progress = true
+            set Cur = W.Next
+        else:
+            break
+EvAwait(E:event(t) where t:type)<suspends>:t =
+    loop:
+        if (H := E.Head?, H.Done?):
+            set E.Head = H.Next
+        else:
+            break
+    if (E.Head?) {} else { set E.Tail = false }
+    W := evrec(t){}
+    if (L := E.Tail?) then set L.Next = option{W} else set E.Head = option{W}
+    set E.Tail = option{W}
+    defer:
+        set W.Done = true
+    WaitDone(W)
+    if (V := W.Got?) then V else Err()
+sticky_event(t:type) := class(event(t)):
+    var Last:?t = false
+    Signal<override>(X:t):void =
+        set Last = option{X}
+        if (Head?) then signalAll(Self, X)
+StickyAwait(E:sticky_event(t) where t:type)<suspends>:t =
+    if (V := E.Last?) then V else EvAwait(E)
+sleep := class:
+    var Pc:int = 0
+    var Secs:float = 0.0
+    var Wake:int = 0
+sleepNew(S:float):sleep = sleep{Secs := S}
+sleepInit(F:sleep, S:float):void =
+    set F.Pc = 0
+    set F.Secs = S
+sleepResume(F:sleep, C:sched):int =
+    if (F.Pc = 0):
+        set F.Pc = 1
+        if (F.Secs = 1.0 / 0.0):
+            set F.Wake = -1
+        else if (F.Secs >= 0.0):
+            Ticks:float = F.Secs * 30.0
+            if (Ticks < 9223372036854775808.0):
+                N:int = if (R := Round[Ticks]) then (if (R >= 1) then R else 1) else Err()
+                set F.Wake = C.Now + N
+            else:
+                Err()
+        else:
+            return 1
+    if (F.Wake < 0):
+        return 0
+    if (C.Now >= F.Wake):
+        return 1
+    if (C.Next < 0):
+        set C.Next = F.Wake
+    else if (F.Wake < C.Next):
+        set C.Next = F.Wake
+    0
+Sleep(S:float)<suspends><computes>:void = {}
+syncMark(A:[]void)<suspends><computes>:void = {}
+raceMark(A:[]void)<suspends><computes>:void = {}
+rushMark(A:[]void)<suspends><computes>:void = {}
+"
+
+def concTops (owned : List String := []) : Except String (List STop) :=
+  parsePrelude concPrelude (owned ++ ["sched", "Now", "Next", "sleep", "Pc", "Secs", "Wake", "sleepNew",
+    "sleepInit", "sleepResume", "Sleep", "Round", "Ticks", "syncMark", "raceMark", "S", "F", "C", "N", "R", "A",
+    "Progress", "Roots", "taskBase", "Done", "Result", "waitf", "T", "X", "waitNew", "waitInit", "waitResume",
+    "WaitDone", "Await", "spawnMark", "t", "Sch", "Dead", "evrec", "Got", "Next", "Head", "Tail", "Cur", "W", "L", "V",
+    "EvAwait", "E", "branchMark", "rushMark", "signalAll", "H", "StickyAwait", "Last", "CancelCur", "Cancelled", "Running", "Root", "CancelReq", "CurTask", "cancelMark"])
+
+end OpenVerse.Front

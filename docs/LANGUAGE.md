@@ -1760,10 +1760,21 @@ Main()<suspends>:void =
   `Main` goes on first, then each task in the order they were spawned, then
   again while a task ended, a `Signal` woke a task, or a task was cancelled
   (so that those waiting go on in the same tick). Arms that can go on in the same tick do so in source order. `Sleep(S)`
-  resumes after `Round(30·S)` ticks, at least one, so it always yields;
-  `Sleep(Inf)` never resumes; a negative or NaN `S` returns at once. Finite
-  durations at least `10^15` seconds also never resume, and accumulated tick
-  arithmetic can overflow int64; these numeric limits are tracked in #514.
+  uses the binary64 product `T = 30·S` and ties-to-even `Round(T)`, at least
+  one tick, for a supported nonnegative finite input. It always yields,
+  including either signed zero or a positive subnormal. The product must
+  be below `2^63`; the largest supported binary64 duration is exactly
+  `307445734561825792.0` seconds, giving `2^63 − 2048` ticks. The next
+  binary64 duration, `307445734561825856.0`, is outside this domain.
+  An unsupported finite input terminates immediately with `error: user`;
+  it is a fatal runtime error, not a failable result or an infinite wait.
+  `Sleep(Inf)` alone is the intentional indefinite timer; a negative or
+  NaN input returns at once. The virtual clock starts at zero and ranges
+  through `2^63 − 1`: if current time plus the requested ticks exceeds
+  that maximum, checked addition terminates with `error: overflow`, without
+  wrapping or clamping. These are reference-clock limits, not measured
+  engine limits (#514); ordinary source overrides do not alter the
+  scheduler's primitive rounding or infinity classification.
 - **The program.** A suspends `Main` runs under the scheduler. The program
   ends when `Main` does, even if tasks are still running; unfinished
   unstructured tasks are not cancelled, so their pending defers do not run.
@@ -1810,7 +1821,7 @@ Main()<suspends>:void =
 | Code before a choice | (the Verse Calculus is pure) | runs once, also within an expression (the operands before the choice are evaluated first, as written); each alternative runs the code after the choice, from where the choice was reached; in an `if` or `first{}`, one that leads to no success is rolled back (as backtracking does); in a `for`, the choice is a generator, so only an alternative whose own clauses fail is (#208) |
 | Precedence of `\|` | (not in the Book) | below `+`, above the comparisons: `X = 1 \| 2` is `X = (1 \| 2)` (#208) |
 | `Sleep(0.0)` | "may resume in the same tick" (ch. 14); the API reference: it always yields | always yields: resumes in the next tick (#156) |
-| `Sleep(S)` rounding | no fixed 30 Hz rounding rule in the pinned chapter or cited Epic timing description | `Round(30·S)` ticks, at least one: rounding to the nearest keeps `Sleep(0.1)` at 3 ticks despite binary floats (#156); numeric bounds are documented above and tracked in #514 |
+| `Sleep(S)` rounding | no fixed 30 Hz rounding rule in the pinned chapter or cited Epic timing description | binary64 `Round(30·S)`, ties to even, at least one tick: `Sleep(0.1)` stays at 3 ticks despite binary floats (#156); bounded inputs and checked clock accumulation follow the explicit reference policy above (#514) |
 | End of a program with tasks | not stated | the program ends when `Main` does; a `Main` that waits with no task able to run is an error (exit 2) (#156) |
 | Order of a `subscribable_event`'s functions | not stated (ch. 14's example lists them in subscription order) | subscription order; the tasks awaiting the event are woken first and go on after `Signal` returns (#210) |
 | Event waiter resumption | Epic's event/Signal API specifies suspension order | Main/spawn/source-arm scheduler order; FIFO compatibility and the Signal-return boundary are tracked in #513 |

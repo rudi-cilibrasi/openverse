@@ -38,10 +38,10 @@ the sources disagree, the table records that disagreement.
 
 | Rule | Upstream evidence | Reference scheduler and trace evidence | Classification |
 | --- | --- | --- | --- |
-| Clock and positive delays | The Book uses simulation updates. Epic permits variable update durations, independent of rendering. Neither cited timing description specifies a fixed 30 Hz rounding rule. | A virtual 30 Hz clock skips idle ticks. Positive finite delays below the cutoff use `max(1, Round(30*S))`. In [sleep](../../tests/verse/scheduler_audit_sleep.verse), `Sleep(0.04)` completes with the first one-tick sleeper. | Explicit reference timing policy; no engine-rate claim. The previous language-table attribution of upward rounding to the Book was unsupported and is removed. |
+| Clock and positive delays | The Book uses simulation updates. Epic permits variable update durations, independent of rendering. Neither cited timing description specifies a fixed 30 Hz rounding rule. | A virtual 30 Hz clock skips idle ticks. Supported nonnegative finite delays use `max(1, Round(30*S))` after binary64 multiplication and ties-to-even rounding. In [sleep](../../tests/verse/scheduler_audit_sleep.verse), `Sleep(0.04)` completes with the first one-tick sleeper. | Explicit reference timing policy; no engine-rate claim. The previous language-table attribution of upward rounding to the Book was unsupported and is removed. |
 | Zero delay | The pinned Book's NextTick discussion permits same-tick resumption for `Sleep(0.0)`. Epic's Sleep page specifies the next update. | Zero always yields and resumes in the next virtual tick; a peer runs before resumption in [sleep](../../tests/verse/scheduler_audit_sleep.verse). | Matches the published Sleep description; the Book snapshot differs. |
 | Negative, NaN and infinite delays | Epic describes negative durations as immediate and positive infinity as indefinite. The cited API does not specify NaN. | Negative/NaN durations return immediately; positive infinity never wakes. [Sleep](../../tests/verse/scheduler_audit_sleep.verse), [cancel](../../tests/verse/scheduler_audit_cancel.verse) and [deadlock](../../tests/verse/scheduler_audit_deadlock.verse) separate these cases. | Negative/infinite cases follow the API; NaN is a reference choice. |
-| Numeric limits | The cited timing sources give no matching finite cutoff or int64 accumulation limit. | Finite durations at least `10^15` seconds do not wake. Individually supported sleeps can accumulate past int64 ticks. [Bounds](../../tests/verse/scheduler_audit_clock_bounds.verse) exits 2 with `error: user`; [overflow](../../tests/verse/scheduler_audit_clock_overflow.verse) exits 2 with `error: overflow`. Smaller finite controls complete. | Measured numeric limitations, tracked in [#514](https://github.com/rudi-cilibrasi/openverse/issues/514); not measured engine limits. |
+| Numeric limits | The cited timing sources give no matching finite cutoff or int64 accumulation limit. | The binary64 product `30*S` must be below `2^63`. Finite inputs outside that domain terminate immediately with `error: user`; they do not become infinite waits. Current time plus the rounded ticks uses checked int64 addition and terminates with `error: overflow` beyond the clock maximum. [Bounds](../../tests/verse/scheduler_audit_clock_bounds.verse) now completes across the former cutoff; [overflow](../../tests/verse/scheduler_audit_clock_overflow.verse) retains its deliberate overflow result. | Explicit bounded reference-clock policy ([#514](https://github.com/rudi-cilibrasi/openverse/issues/514)); not measured engine limits. |
 | Structured completion and ties | The Book and Epic tutorial describe sync waiting for all, race cancelling losers, and rush allowing unfinished work to continue. | Arms run to a wait/end in source order. Same-tick race completion chooses the earlier arm; an immediate winner prevents later arms from starting. [Ties](../../tests/verse/scheduler_audit_ties.verse) records winner and cleanup. | Common completion behavior; the exact tie/start/cleanup ordering here is the tested reference policy, not a measured engine trace. |
 | Event fanout | The Book's prose conflicts between broadcast and one recipient. Epic's event/Signal descriptions resume all current awaiters. | One signal delivers the value to every current waiter. [Event order](../../tests/verse/scheduler_audit_event_order.verse) deliberately registers B before A and observes both receive 7. | Selects the published API's broadcast reading. |
 | Event wake order | Epic specifies suspension order. | Main precedes spawned roots; roots retain spawn order, and structured arms retain source order. B waits first but A resumes first in [event order](../../tests/verse/scheduler_audit_event_order.verse). | Published FIFO mismatch, tracked in [#513](https://github.com/rudi-cilibrasi/openverse/issues/513). |
@@ -49,6 +49,56 @@ the sources disagree, the table records that disagreement.
 | Subscriptions and event transactions | The Book describes transactional Subscribe/Cancel. Epic's signalable API invokes callbacks synchronously, but its Signal effects include no_rollback. | Callbacks execute synchronously in subscription order. Failed Signal restores callback state/output and pending waiter readiness. Failed Subscribe/Cancel restores the subscriber list. [Transactions](../../tests/verse/scheduler_audit_transactions.verse) counts exactly `2+3+4=9`; the waiter receives 2, never rolled-back 1. | Transactional reference policy. Engine-compatible failure-context admission is tracked in [#515](https://github.com/rudi-cilibrasi/openverse/issues/515), coordinated with #494. |
 | Cancellation and source return | The Book requires immediate, non-suspending cleanup; return in a concurrent arm leaves the enclosing function. | Nested defers run once; repeated Cancel is harmless. An arm return unwinds that arm, cancels its race siblings, runs surrounding defers, then stops the function's registered branches. [Cancel](../../tests/verse/scheduler_audit_cancel.verse), [source return](../../tests/verse/scheduler_audit_source_return.verse). | Lifetime/cleanup checks; the complete ordering is an OpenVerse policy, including function defers before registered branches. |
 | Creator and host lifetime | Structured concurrency constrains child lifetimes. The Book distinguishes spawn from branch. A standalone Main/process shutdown is not an engine-device lifetime rule. | A spawn survives its creating function; a branch does not. Main finishing ends this host without cancelling unfinished unstructured tasks, so their pending defers do not run. Main stalled with no possible wake exits 2. [Lifetime](../../tests/verse/scheduler_audit_lifetime.verse), [deadlock](../../tests/verse/scheduler_audit_deadlock.verse). | Explicit command-line host boundary, not a Fortnite session guarantee. |
+
+### Bounded clock domain (#514)
+
+For a nonnegative finite binary64 input `S`, the scheduler first computes the
+binary64 product `P = fl(30*S)`. It requires `P < 2^63`, then uses
+`max(1, RoundEven(P))` ticks. The guard precedes integer conversion: a finite
+out-of-range `Round` is an overflow error in Core, whereas this input-domain
+policy deliberately reports fatal `Err()` (`error: user`). It is not a
+`<decides>` failure and cannot be caught as a failed condition.
+
+| Boundary | Exact result |
+| --- | --- |
+| Largest supported binary64 seconds | `307445734561825792.0`, bits `0x4391111111111110` |
+| Its rounded ticks | `9223372036854773760 = 2^63 − 2048` |
+| Next binary64 seconds | `307445734561825856.0`, bits `0x4391111111111111`; its product rounds to `2^63` and is rejected |
+| Accumulated clock | starts at zero; supported values run through `9223372036854775807 = 2^63 − 1` |
+| Exact maximum-time control | the largest duration, followed by `68.23333333333333` seconds (2047 ticks), reaches the clock maximum |
+| Next zero/subnormal sleep there | one additional tick deliberately raises checked-int `error: overflow` |
+
+The floating quotient `2^63/30` is the first **unsupported** duration, so a
+comparison `S <= 2^63/30` would be wrong. At and above `2^52`, binary64
+products are integral; below it, rounded products are far inside int64.
+This establishes that the product guard covers representable rounded ticks.
+Clock accumulation retains Core's checked addition; no wrap or clamp is
+introduced. There are no new Core primitives, runtime operations, toolchain
+changes or proof-input changes. Compiled-program checks and the existing
+checked-int/heap proofs remain the trust boundary.
+
+Positive infinity alone is the intentional indefinite input. Negative
+values (including negative infinity) and NaNs retain their immediate
+reference behavior; both signed zeros and positive subnormals yield at
+least one tick. Infinite terminal deadlock and unsupported finite input
+share the generic `error: user` text, but differ observably: the
+[invalid finite race](../../tests/verse/clock_domain_fatal_first_unsupported.verse)
+errors before its peer starts, while the
+[infinite timer](../../tests/verse/clock_domain_cancel_positive_infinity.verse)
+can be cancelled and runs its cleanup. Fatal runtime errors do not promise
+cleanup unwinding. Primitive rounding and infinity classification are
+isolated from source-owned `Round`, `Inf` or `IsFinite`; explicit source
+calls and values keep their ordinary meaning.
+
+The [clock-domain gate](../../tests/scripts/test-clock-domain.py) checks exact
+stdout/stderr/status in Lean and C under both source profiles and requires
+identical bytecode. Its [independent model](../../scripts/models/clock_domain.py)
+uses exact fractions and binary64 quantization, without VM imports, across
+100 programs per complete period: two timers, a tick reference arm,
+cancellation races and accumulated time. It includes adjacent rounding and
+range boundaries, unsupported finite products, infinity, zero, subnormals
+and source overrides. Existing scheduler traces remain in the normal gate;
+the old finite-cutoff reproducer now has its intended finite-success oracle.
 
 The pinned Book labels `Task.Cancel`, `NextTick`, sticky events and subscribable
 events unreleased. OpenVerse implements cancellation, sticky and subscribable
@@ -61,21 +111,21 @@ branch/rush/source-return combinations.
 
 ## Compatibility decisions
 
-The reference policy remains the default for both source profiles. This audit
-adds no scheduler option and adopts no timing or rollback change. In
+The reference policy remains the default for both source profiles. The bounded-clock policy above updates numeric admission; it adds no
+scheduler option or rollback change. In
 particular, `--no-choice` permits the same clock, mutation, event transactions
 and cleanup behavior; it restricts source choices/generators, not engine
 compatibility.
 
-Three focused follow-ups carry the implementation decisions:
+Three focused issues carry the implementation decisions:
 
 - [#513](https://github.com/rudi-cilibrasi/openverse/issues/513): define FIFO
   resumption and the Signal-return boundary, including nested arms,
   cancellation and re-await. A different policy/default must be adopted
   explicitly before changing existing traces.
-- [#514](https://github.com/rudi-cilibrasi/openverse/issues/514): define finite
-  duration and accumulated-time bounds, then implement explicit admission or
-  clock behavior without silently treating supported finite time as infinity.
+- [#514](https://github.com/rudi-cilibrasi/openverse/issues/514): the bounded
+  clock domain above now defines finite duration admission and checked
+  accumulation; supported finite time is not silently treated as infinity.
 - [#515](https://github.com/rudi-cilibrasi/openverse/issues/515): establish
   versioned SDK failure-context rules and an explicit engine-compatible
   Signal admission policy. Retain reference rollback and unsupported
