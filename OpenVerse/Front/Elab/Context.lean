@@ -333,6 +333,11 @@ structure Ctx where
   /-- A moved continuation's casts have fresh capture/storage metadata,
       independently of the class-copy tag and continuation sharing keys. -/
   refineScope : String := ""
+  /-- In the branch of a refining cast elaborated for its type and effects
+      only (#243): the next elaboration calls the function made from it
+      instead, where the casts inside it are elaborated again, and the lifts
+      whose tags depend on the context (`refineTagOf`) are asked for. -/
+  inRefinedTrial : Bool := false
   /-- In a method `c.M` (or `c.(r:)M`): `M` (or `(r:)M`), for `(super:)`. -/
   selfMethod : Option String := none
   /-- In a constructor's items (the function `K$init`, #72): no `return`. -/

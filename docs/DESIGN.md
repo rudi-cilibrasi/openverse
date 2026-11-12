@@ -2264,7 +2264,12 @@ there, is lifted out by that lifting, marked `$liftCast` (`Refine.markCast`,
 which `Choice.hasLiftable` and `liftE` take as a value to bind, as a
 choice): the operands before it bound, then `$k… := T[X]`, a cast clause
 (`liftCastClause`, in `withCastClauses` and `elabSeqIn`; a `<decides>`
-body of one expression is the block of it, `elabBody`). In a sequence whose names
+body of one expression is the block of it, `elabBody`). A branch of an
+`if` in a failure context with such a cast in it, written as an
+expression, is the block of it instead (`Refine.castsOf`, the `blocks` of
+`withCastClauses`): lifting the cast out of the `if` would run it whichever
+branch runs. All three are taken when the cast is refused as written, so a
+program that compiled before keeps its code. In a sequence whose names
 end with it (a block, so a `<decides>` body or `option{…}`'s, and the
 operand of `not`, `and` and `or`), `pre; D := T[X]; rest` is `pre; if (D
 := T[X]) then {rest} else fail` (`elabSeqIn`; the `else` is
@@ -2298,10 +2303,13 @@ clause's values; as a local from outside the later cast's branch, it
 leaves that branch at its own type, not the refined one, so it can be cast
 again. An object that may name type arguments a cast opens (the first
 cast's, when the refusal says it opens, `Refine.CastRefusal.opens`, or a
-later cast's, which may) is not: `after` could not name its type. A `for`'s generator past the moved clauses whose source uses `D` has its
-source cast again in the same way, at the generator's place, and the body
-is cast again when it uses the names those generators bind; a filter there
-that uses `D` is refused. A later cast of an object computed among the
+later cast's, which may) is not: `after` could not name its type. A `for`'s clause past the moved clauses that uses `D` is cast again in the
+same way where it uses it, at that place: a generator's source, a range's
+bounds, a binding's value (so its name stays bound), each alternative of a
+choice (lifted out of the clause first, `lift`), or else the clause itself;
+the body is cast again when it uses the names those clauses bind. A use in
+a branch of an `if` with a choice in its branches is refused, since the
+choice's consumer keeps that `if` and its condition picks the branch. A later cast of an object computed among the
 moved clauses is cast again only when the branch or body is refused
 without it (`computed`), so that programs compiled before keep their code.
 Both `if`s are the elaborator's, marked `$made` (their
@@ -2358,9 +2366,32 @@ conversion of a class type.
 Refining lifts also carry `SourceContext`, including default dependency
 stacks and the source's cleanup, constructor, class-block and concurrent-arm
 flags. Discovery and generated function checking restore the same scope.
-Their request identity includes that scope and its type environment, while
-the source class-copy tag stays separate. Different closed evaluations of
-one default therefore cannot reuse a helper with the wrong type witnesses.
+A lift's key (`Refine.keyOf`) is its `if`'s place and bound name and a tag
+(`refineTagOf`): the class-copy tag (`Ctx.liftTag`), the continuation the
+cast was moved into (`Ctx.refineScope`, #453), and, in such a scope, a hash
+of the scope and of what the function made from the branch depends on
+there: the locals the `if` uses (with `Self` for the members it names
+bare), each with its type, mutability and frame storage; how the type
+variables their types mention are bound; what the type names written in it
+stand for; the type expected of it, which the function returns (a field's
+declared type at each construction); in a `<suspends>` function, all the
+type variables (a lift there takes them as type parameters); the inlined
+bodies it is in; and the source's return type when the branch returns.
+Different closed evaluations of one default therefore cannot reuse a helper
+with the wrong type witnesses, while evaluations that differ only in what
+the cast does not use (a parameter's default at calls that instantiate the
+other parameters differently) share one. Such a tag may differ between the
+trial of an enclosing cast's branch, which has the enclosing function's
+locals, its `var`s among them, and no type expected of the branch's value,
+and the function made from that branch, which has its captures as values
+and its result type; so in such a trial (`Ctx.inRefinedTrial`) a cast with
+such a tag asks for no lift, and the function, elaborated in the next round,
+asks for it. (Asked for from both, as when every local and type variable in
+scope was in the tag, each level of nesting in a `for`'s body lifted the
+casts inside it again, the earlier copies never called: 136 functions for 16
+levels instead of 16.) A nest of such casts takes one round per level;
+outside source contexts the tag is the place's alone, and a trial asks for
+the lifts that the next round's functions use.
 Waiting consumers can stage parameter defaults through the same protocol.
 Both ordinary composed suffixes and refining branches preserve the active
 default stack and source restrictions in their prefix and resume functions.
