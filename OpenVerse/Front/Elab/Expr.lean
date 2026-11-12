@@ -47,6 +47,16 @@ partial def elabSubtypeUp (ctx : Ctx) (p : Pos) (value : R) (target : Ty)
 partial def elabBoundReceiver (ctx : Ctx) (p : Pos) (value : R) (member : String) : EM R :=
   elabBoundReceiverWith elabE ctx p value member
 
+partial def elabCallableReceiver (ctx : Ctx) (p : Pos) (value : R) : EM R := do
+  let view ← match ctx.callableView p value.ty with
+    | .ok view => pure view
+    | .error message => throw message
+  let some target := view | return value
+  if target == value.ty then return value
+  let some plan := SubtypeEvidence.find? ctx.types ctx.evidenceTypes ⟨target, value.ty⟩
+    | eerr p "internal: a callable bound lost its lexical dictionary"
+  elabSubtypeUp ctx p value target plan
+
 partial def elabReceiverEvidence (ctx : Ctx) (p : Pos)
     (frame : SubtypeEvidence.Frame) : EM (List Expr) :=
   frame.receiverBounds.mapM fun (_, bound, field) => do
@@ -215,7 +225,8 @@ partial def elabSpawn (ctx : Ctx) (p : Pos) (body : SExpr) : EM R := do
             eerr p "the arguments of a spawned call cannot suspend (#156)"
           let slot ← fresh rx.ty
           let name := s!"$spawnReceiver{slot}"
-          let cctx := { ctx with locals := { name, slot, ty := rx.ty, mutable := false } :: ctx.locals }
+          let cctx := { ctx with locals := {
+            name, slot, ty := rx.ty, mutable := false, typeValue := ctx.isTypeValue obj } :: ctx.locals }
           let r ← elabApp { cctx with defers := [], suspends := true, canFail := false } q
             (.member mp (.ident mp name) ("$spawnMethod:" ++ m0)) args br none
           modify fun st => { st with pendingSourceSuspends := sourceBefore }
@@ -231,17 +242,22 @@ partial def elabSpawn (ctx : Ctx) (p : Pos) (body : SExpr) : EM R := do
       | _ => true
     if value then
       let saved ← get
-      let rx? ← tryCatch (some <$> elabE { ctx with defers := [], suspends := true, canFail := false } f none)
+      let rx? ← tryCatch (do
+        let value ← elabE { ctx with defers := [], suspends := true, canFail := false } f none
+        some <$> elabCallableReceiver ctx f.pos value)
         (fun _ => pure none)
       if let some rx := rx? then
         if let .struct shape _ := rx.ty then
           if (FnValues.parseName shape).isSome then
+            if !ctx.typeOnly && ctx.isTypeValue f then
+              eerr f.pos "dummy type value cannot be an executable function"
             let isS (f : Nat) := ctx.sigs.any fun s => s.idx == f && s.suspends
             if Suspend.countSusp isS (fun _ => false) false (· == mark.idx) rx.e > 0 then
               eerr p "the arguments of a spawned call cannot suspend (#156)"
             let slot ← fresh rx.ty
             let name := s!"$spawnValue{slot}"
-            let cctx := { ctx with locals := { name, slot, ty := rx.ty, mutable := false } :: ctx.locals }
+            let cctx := { ctx with locals := {
+              name, slot, ty := rx.ty, mutable := false, typeValue := ctx.isTypeValue f } :: ctx.locals }
             let r ← elabApp { cctx with defers := [], suspends := true, canFail := false } q
               (.member f.pos (.ident f.pos name) ("$spawnMethod:" ++ FnValues.callOf shape)) args br none
             return ⟨.seq (.assign slot rx.e) r.e, r.ty⟩
@@ -836,6 +852,7 @@ partial def elabMethod (ctx : Ctx) (p : Pos) (r : R) (m : String) (args : List S
 
 /-- `A[i]` on an array (failable) or `T(k)` on a tuple. -/
 partial def elabIndexLike (ctx : Ctx) (p : Pos) (r : R) (args : List SExpr) (bracket : Bool) : EM R := do
+  let r ← elabCallableReceiver ctx p r
   -- a call of a function value (#210): of its shape's method
   if let .struct n ts := r.ty then
     if let some (_, effs) := FnValues.parseName n then

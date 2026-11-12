@@ -25,9 +25,10 @@ partial def elabAppBaseWith
     if !bracket then eerr p s!"{name} can fail: call it with {name}[…]"
   let indexLike (source : SExpr) (value : R) : EM R := do
     if !ctx.typeOnly && ctx.isTypeValue source then
-      if let .struct name _ := value.ty then
-        if (FnValues.parseName name).isSome then
-          eerr source.pos "dummy type value cannot be an executable function"
+      let view ← match ctx.callableView source.pos value.ty with
+        | .ok view => pure view
+        | .error message => throw message
+      if view.isSome then eerr source.pos "dummy type value cannot be an executable function"
     elabIndexLike ctx p value args bracket
   match f with
   | .ident _ name =>

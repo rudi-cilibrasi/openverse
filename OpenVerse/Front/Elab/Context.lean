@@ -911,6 +911,22 @@ def Ctx.boundView (ctx : Ctx) (p : Pos) (derived : Ty) (member : String) : Excep
   | [view] => return some view
   | _ => throw s!"{p.show}: ambiguous bound member '{member}' of {derived.show} through {", ".intercalate (best.map Ty.show)}"
 
+/-- Select a function shape through actual lexical evidence, retaining the
+    usual effect-subtype preference and refusing unrelated callable views. -/
+def Ctx.callableView (ctx : Ctx) (p : Pos) (derived : Ty) : Except String (Option Ty) := do
+  if let .struct name _ := derived then
+    if (FnValues.parseName name).isSome then return some derived
+  let .param .. := derived | return none
+  let candidates := (SubtypeEvidence.views ctx.types ctx.evidenceTypes derived).filter fun
+    | .struct name _ => (FnValues.parseName name).isSome
+    | _ => false
+  let best := candidates.filter fun candidate =>
+    !candidates.any fun other => other != candidate && ctx.types.nominalSubtype other candidate
+  match best with
+  | [] => return none
+  | [view] => return some view
+  | _ => throw s!"{p.show}: ambiguous callable bound of {derived.show} through {", ".intercalate (best.map Ty.show)}"
+
 /-- Arguments whose instance comes from the other arguments' types. A
     local or member shadows a same-named generic top-level function. -/
 def Ctx.argNeedsType (ctx : Ctx) : SExpr → Bool

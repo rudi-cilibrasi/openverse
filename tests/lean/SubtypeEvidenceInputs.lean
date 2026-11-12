@@ -75,7 +75,20 @@ Keep(X:u where u:type)<computes>:u=X
 Caller(X:t,D:type{_(:t)<computes>:vehicle} where t:type)<computes>:int=Keep(D)(X).N"),
   ("ordinary callback input", "
 Use(X:t,F:type{_(:t)<computes>:vehicle} where t:type)<computes>:int=F(X).N
-Caller(X:t,D:type{_(:t)<computes>:vehicle} where t:type)<computes>:int=Use(X,D)")]
+Caller(X:t,D:type{_(:t)<computes>:vehicle} where t:type)<computes>:int=Use(X,D)"),
+  ("spawned function receiver", "
+Caller(D:type{_()<suspends>:int})<suspends>:void=spawn{D()}"),
+  ("returned spawned function receiver", "
+Keep(X:u where u:type)<computes>:u=X
+Caller(D:type{_()<suspends>:int})<suspends>:void=spawn{Keep(D)()}"),
+  ("spawned method receiver", "
+worker:=class<computes>:
+    Work()<suspends>:int=1
+Caller(D:worker)<suspends>:void=spawn{D.Work()}"),
+  ("opaque callable receiver", "
+Caller(D:t,E:evidence(type{_(:int)<computes>:int},t) where t:type)<computes>:int=D(7)"),
+  ("spawned opaque callable receiver", "
+Caller(D:t,E:evidence(type{_(:int)<suspends>:int},t) where t:type)<suspends>:void=spawn{D(7)}")]
 
 def main : IO Unit := do
   for (label, source) in cases do

@@ -42,7 +42,10 @@ def main (args : List String) : IO Unit := do
   let methodValues := ["method-value-argument", "method-value-argument-control",
     "method-value-result", "method-value-result-control", "method-value-state", "method-value-state-control",
     "method-value-cancel", "method-value-cancel-control"]
-  let profiled := fifo ++ methodValues
+  let callables := ["callable-upper", "callable-upper-control", "callable-default", "callable-default-control",
+    "callable-state", "callable-state-control", "callable-waiting", "callable-waiting-control",
+    "callable-decides", "callable-decides-control"]
+  let profiled := fifo ++ methodValues ++ callables
   let negative := ["choice-refusal", "default-refusal", "override-refusal", "overload-interface-refusal",
     "overload-ancestor-refusal", "overload-optional-refusal", "overload-empty-refusal", "overload-scope-refusal",
     "overload-value-refusal", "interior-readonly-refusal", "interior-effect-refusal",
@@ -52,9 +55,11 @@ def main (args : List String) : IO Unit := do
     "choice-method-bound-refusal", "peer-void-narrow-refusal", "peer-void-comparable-refusal",
     "peer-comparable-equality-refusal", "choice-class-unproved-refusal",
     "method-value-argument-refusal", "method-value-result-refusal",
-    "method-value-stored-refusal", "method-value-stored-control-refusal"]
+    "method-value-stored-refusal", "method-value-stored-control-refusal",
+    "callable-bracket-refusal", "callable-decides-refusal", "callable-suspends-refusal",
+    "callable-effect-refusal", "callable-unproved-refusal"]
   let mut failures := 0
-  let cases := (positive ++ fifo ++ methodValues ++ negative).map (fun name => (name, fifo.contains name, name)) ++
+  let cases := (positive ++ fifo ++ methodValues ++ callables ++ negative).map (fun name => (name, fifo.contains name, name)) ++
     ["fifo-bound-sleep", "fifo-bound-sleep-control"].map (fun name => (name, false, name ++ "-default"))
   for (name, eventFifo, artifact) in cases do
     let root := s!"tests/upper-bounds/{name}"
