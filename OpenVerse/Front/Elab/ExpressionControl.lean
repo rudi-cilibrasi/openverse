@@ -37,7 +37,7 @@ partial def elabExprControlWith
     -- cast's own path makes, #400's review)
     let asWritten := ctx.asWritten
     let ctx := { ctx with asWritten := false }
-    let nested (k : Nat) (err : String) : EM (Option R) := do
+    let nested (k : Nat) (_ : String) : EM (Option R) := do
       let castC := conds[k]!
       let st0 ← get
       -- (the clauses before it, apart: what they would leave behind)
@@ -45,8 +45,11 @@ partial def elabExprControlWith
       let fx0 := (← get).fx
       let n0 := (← get).nslots
       modify fun s => { s with fx := [] }
-      let (rp, _) ← tryCatch (elabSeq { ctx with canFail := true, inTaking := true, asWritten := true } pre none)
-        fun _ => do set st0; throw err
+      -- (ones that take a choice's values, which this cannot elaborate apart,
+      -- the cast's clause of its own takes too: `withCastClauses`)
+      let some (rp, _) ← tryCatch (some <$> elabSeq { ctx with canFail := true, inTaking := true, asWritten := true } pre none)
+          fun _ => do set st0; pure none
+        | return none
       let fxP := (← get).fx
       set st0
       modify fun s => { s with fx := fx0 }

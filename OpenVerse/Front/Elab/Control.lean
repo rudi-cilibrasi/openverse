@@ -542,7 +542,7 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
     -- (a local from outside the branch that it gives, at its own type there,
     -- which refines to its type in the branch: the most general)
     let own (v : SExpr) (t : Ty) : Ty := match v with
-      | .ident _ n => if n == D then refine t else ((ctx.lookup n).map (·.ty)).getD (refine t)
+      | .ident _ n => if Refine.isCastObj n then ((ctx.lookup n).map (·.ty)).getD (refine t) else refine t
       | _ => refine t
     let branchTy : Ty := match Refine.valueOf body, rb.ty with
       | .tuple _ vs, .tup ts => if vs.length == ts.length then .tup ((vs.zip ts).map fun (v, t) => own v t) else refine rb.ty
@@ -769,10 +769,21 @@ def withCastClauses (ctx : Ctx) (cs : List SExpr) (after : SExpr) (isGen : SExpr
     let some cast := Refine.castClause? cs[k]! | throw err
     set st0
     if let some r ← alone k err then return some r
-    match Refine.castRestClauses (cs.take k) cast refusal.opens (cs.drop (k + 1)) after isGen ctx.types.classes.contains
-        (fun n => (ctx.lookup n).any (!·.mutable)) with
-    | .ok (cs', after') => return some (← rebuild cs' after')
+    let moved (computed : Bool) := Refine.castRestClauses (cs.take k) cast refusal.opens (cs.drop (k + 1)) after
+      isGen ctx.types.classes.contains (fun n => (ctx.lookup n).any (!·.mutable)) computed
+    match moved false with
     | .error why => throw s!"{err} ({why})"
+    | .ok (cs', after', _) =>
+      -- (a later cast of an object computed among the moved clauses is cast
+      -- again from that object, bound first, when `after` needs it: when it
+      -- is refused without)
+      let st1 ← get
+      match ← tryCatch (Except.ok <$> rebuild cs' after') (fun err => pure (Except.error err)) with
+      | .ok r => return some r
+      | .error err1 =>
+        let .ok (cs'', after'', true) := moved true | throw err1
+        set st1
+        return some (← tryCatch (rebuild cs'' after'') fun _ => throw err1)
 
 /-- Infer a producer's signature instance from its canonical arguments. -/
 def loopInstanceOf (ctx : Ctx) (p : Pos) (sig : Sig) (types : List Ty) : EM (List (String × Ty)) := do
