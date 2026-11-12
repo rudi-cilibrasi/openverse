@@ -13,7 +13,8 @@ import subprocess
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[2]
-OV = shlex.split(os.environ.get('OV_EFFECT_COMMAND', str(ROOT / '.lake/build/bin/openverse')))
+override = os.environ.get('OV_EFFECT_COMMAND')
+OV = shlex.split(override) if override else [str(ROOT / '.lake/build/bin/openverse')]
 CV = ROOT / 'runtime/build/cverse'
 SPECS = ('computes reads writes allocates transacts decides suspends converges predicts '
          'no_rollback dictates diverges succeeds fails varies native native_callable fictional_effect').split()
