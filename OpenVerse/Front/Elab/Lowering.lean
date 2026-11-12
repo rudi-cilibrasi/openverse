@@ -12,6 +12,15 @@ structure Compiled where
   slotTys : List (List VTy)
   /-- Pure mutual groups that retain the eager polymorphic-recursion path. -/
   eagerNeeds : List String := []
+  /-- (#283) Recursive functions with several values whose values would be
+      computed at the call, but something they run prints or calls `Err()`:
+      the program is elaborated again, with them taken lazily if their shape
+      allows (`Options.lazyRequests`). -/
+  lazyNeeds : List String := []
+  /-- (#283) Uses `R.M` of a method several classes or interfaces declare
+      apart, each with the root `R`'s class is below: the program is
+      elaborated again, with each one's family (`Choice.famAt`). -/
+  familyNeeds : List (Pos × String) := []
   /-- Functions wanted as values at closed function types no class of
       theirs gives (#214): the program is elaborated again, with them. -/
   fnNeeds : List (String × Ty) := []
@@ -53,6 +62,13 @@ def checkTParams (env : TyEnv) (tps : List TParam) : Except String (List (String
 structure Options where
   profile : SourceProfile := .full
   eagerRequests : List String := []
+  /-- (#283) Recursive functions with several values that an earlier
+      elaboration found print or call `Err()` (`Compiled.lazyNeeds`). -/
+  lazyRequests : List String := []
+  /-- (#283) For each use `R.M` of a method several classes or interfaces
+      declare apart, by its place: the root its receiver's class is below,
+      as an earlier elaboration found (`Compiled.familyNeeds`). -/
+  familyPicks : List (Pos × String) := []
   args : Option (List String) := none
   entry : Option SExpr := none
   /-- Functions wanted as values at closed function types no class of
@@ -1844,8 +1860,9 @@ def shownFn (n : String) : String :=
     value), constructors (field defaults, `block:` clauses), constants, and
     parameter defaults (elaborated at the call). `errs` says where each
     function elaborated from the program calls `Err()`. -/
-def checkEager (fns : Array Fn) (errs : Array (Option Pos)) (posOf : String → Option Pos) :
-    Except String Unit := do
+def checkEager (fns : Array Fn) (errs : Array (Option Pos)) (posOf : String → Option Pos)
+    (lazy : List String := []) : Except String (List String) := do
+  let mut needs : List String := []
   for i in List.range fns.size do
     let fn := fns[i]!
     if !fn.name.endsWith "$all" then continue
@@ -1863,11 +1880,17 @@ def checkEager (fns : Array Fn) (errs : Array (Option Pos)) (posOf : String → 
         if exprPrints fj.body then some "print"
         else if let some (some _) := errs[j]? then some "call Err()" else none
       if let some what := what? then
-        throw s!"{loc}{g} has several values and is recursive, or called by a recursive one, and it may {what}{via}: such a function must be <computes>, keep no local state, and reach nothing that prints or calls Err(), as all its values are computed at a call (#235)"
+        -- (#283) taken lazily instead, if its shape allows, after another
+        -- elaboration; refused if it still is not
+        if !lazy.contains g then
+          needs := needs ++ [g]
+          break
+        throw s!"{loc}{g} has several values and is recursive, or called by a recursive one, and it may {what}{via}: {Choice.eagerWhy}"
       for (f, _) in Suspend.callsOf fj.body do
         if f < fns.size && !seen[f]! then
           seen := seen.set! f true
           todo := todo ++ [f]
+  return needs
 
 /-- Whether `e` itself changes an object (a field's `set`). -/
 partial def exprWrites : Expr → Bool

@@ -1,0 +1,15 @@
+box 7
+box 7
+ibox 4
+ibox 3
+ibox 3
+pair l
+pair r
+swap x!
+swap y!
+both 1 10
+both 1 10
+both 2 20
+both 2 20
+counter 42
+exit=0

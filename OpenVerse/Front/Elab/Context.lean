@@ -424,6 +424,9 @@ structure LoopUse where
 structure ESt where
   /-- Pure mutual groups whose changing instances need eager generation. -/
   eagerNeeds : List String := []
+  /-- (#283) At each of `TyEnv.familySites` elaborated: the root of its
+      method above its receiver's class, for the next round's inlining. -/
+  familyNeeds : List (Pos × String) := []
   /-- The program's types, for conversions between class types (`coerce`). -/
   env : TyEnv := {}
   nslots : Nat := 0
@@ -531,6 +534,11 @@ structure LoopGen where
 
   /-- Each mutual member's signature parameters at this invocation. -/
   instances : List (String × List (String × Ty)) := []
+  /-- (#283) The return frames of its calls with code after them, in order:
+      each one's hole, lives and code; and the type of the continuation
+      they are pushed on, when there are any. -/
+  frames : List (String × List String × SExpr) := []
+  kTy : Option Ty := none
 
 /-- Run `m`, attributing the heap effects it records first to `p` (a field
     or argument default: the effect is the construction's or the call's). -/
@@ -761,6 +769,24 @@ def Ctx.implAt (ctx : Ctx) (r m e : String) : Option String :=
 /-- The slots of method `m` above `c` (`TyEnv.rootsOf`). -/
 def Ctx.rootsOf (ctx : Ctx) (c m : String) : List String :=
   ctx.types.rootsOf (fun e => (ctx.sig? s!"{e}.{m}").isSome) c
+
+/-- Whether this elaboration knows if an expression can fail: not one for
+    types, nor one to be done again with functions as values (#214, #231)
+    or with the families of methods' uses (#283), which may make a call
+    fail or have several values. -/
+def Ctx.failabilityKnown (ctx : Ctx) : EM Bool := do
+  let st ← get
+  return st.fnNeeds.isEmpty && st.methodNeeds.isEmpty && ctx.types.familySites.isEmpty && !ctx.typeOnly
+
+/-- (#283) A use `R.M` at `p` whose family of methods only the class of
+    `R` tells, one of `TyEnv.familySites`: the root of `M` above that class
+    noted, none (`""`) for a receiver of another type. -/
+def Ctx.noteFamily (ctx : Ctx) (p : Pos) (recv : Ty) (m : String) : EM Unit := do
+  if ctx.types.familySites.contains (p, m) then
+    let root := match recv with
+      | .struct c _ => ((ctx.rootsOf c m).head?).getD ""
+      | _ => ""
+    modify fun st => { st with familyNeeds := (p, root) :: st.familyNeeds }
 
 /-- The function that implements slot `r` of method `m` for an instance of
     class `d` (#70). -/

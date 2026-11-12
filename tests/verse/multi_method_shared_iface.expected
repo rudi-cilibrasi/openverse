@@ -1,0 +1,25 @@
+shape 4
+shape 1
+shape 2
+shape 100
+shape 101
+circle 100
+circle 101
+both 44
+both 14
+both 24
+both 41
+both 11
+both 21
+both 42
+both 12
+both 22
+base 8
+base 9
+plain base 7
+plain 0
+frame 99
+frame 100
+frame -1
+first 3
+exit=0

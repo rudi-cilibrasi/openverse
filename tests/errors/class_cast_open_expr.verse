@@ -1,4 +1,4 @@
-# expect: pair has type parameters that base does not have, which would be unknown here: a cast opens them only as the first clause of an if's condition
+# expect: cannot cast a base(int) to pair here: the cast opens pair's type argument u for the code after it, outside which its value, a pair(int, u'), would name what is unknown (#250)
 base(t:type) := class:
     Value:t
 pair(t:type, u:type) := class(base(t)):

@@ -259,6 +259,8 @@ kinds=(
   context-method-for
   context-method-nested
   context-method-nested-dispatch
+  castclause-condition
+  castclause-decides
   clause-break-composed
   clause-break-exclusive
   clause-break-refined
@@ -433,6 +435,12 @@ kinds=(
   lazy-tuple-first
   lazy-tuple-for
   lazy-tuple-generic-first
+  logic-and-first
+  logic-and-for
+  logic-or-first
+  logic-or-for
+  setalt-first
+  setalt-for
   method-failure
   method-first
   method-for
@@ -458,6 +466,8 @@ kinds=(
   own-method-failure
   own-method-first
   own-method-for
+  recursive-frame-first
+  recursive-frame-for
   recursive-return-eager
   recursive-return-first
   recursive-return-for
@@ -635,6 +645,28 @@ if kind.startswith('compoundindex-'):
      body='block{if('+','.join(writes)+'):{};Sleep(0.001);0}' if mode=='waiting' else '0'
      print('    Rows:=for('+','.join(clauses+([] if mode=='waiting' else writes))+'):'+body+'\n    Rows.Length')
     print('Main()'+effects+':void=Print("{Run()}")')
+    sys.exit(0)
+if kind.startswith('castclause-'):
+    # (#243) refining casts as clauses after ones with effects, in a
+    # <decides> body or an if's condition: each takes the rest as its branch
+    n = count
+    print('pair(a:type, b:type) := class:\n    A:a\n    B:b')
+    print('dup(t:type) := class(pair(t, t)):\n    C:int = 4')
+    print('cell := class:\n    var N:int = 0')
+    tps = ', '.join(f'a{i}:type, b{i}:type' for i in range(n))
+    ps = ', '.join(f'P{i}:pair(a{i}, b{i})' for i in range(n))
+    total = ' + '.join(f'D{i}.C' for i in range(n))
+    ys = ', '.join('Y' for _ in range(n))
+    if kind == 'castclause-decides':
+        body = ''.join(f'    set H.N += 1\n    D{i} := dup[P{i}]\n' for i in range(n))
+        print(f'Run(H:cell, {ps} where {tps})<transacts><decides>:int =\n{body}    {total}')
+        call = f'if (V := Run[H, {ys}]) then V else -1'
+    else:
+        clauses = ', '.join(f'set H.N += 1, D{i} := dup[P{i}]' for i in range(n))
+        print(f'Run(H:cell, {ps} where {tps})<transacts>:int =\n    if ({clauses}) then {total} else -1')
+        call = f'Run(H, {ys})'
+    print('Main()<transacts>:void =\n    H := cell{}\n    Y:pair(int, int) = dup(int){A := 1, B := 2}')
+    print(f'    Print("{{{call}}} {{H.N}}")')
     sys.exit(0)
 if kind.startswith('indexwrite-'):
     _, shape, mode = kind.split('-')
@@ -1358,6 +1390,19 @@ box(t:type,u:type):=class:
         args.extend([f'box({ty},{extra_ty}){{V:={value},Extra:={extra},C:=cell{{}}}}', f'array{{{value}}}' if nested else value])
     print(f'Main():void=Print("{{Run({",".join(args)})}}")')
     sys.exit(0)
+if kind.startswith('recursive-frame-'):
+    # (#283) calls of itself with code after them, each a return frame: the
+    # frames' code is compiled once, not once per value
+    alts = ' | '.join(f'F[N - 1] + {i} | N * {i + 2}' for i in range(count))
+    print(f'''F(N:int)<transacts><decides>:int =
+    Print("f {{N}}")
+    N > 0
+    {alts}''')
+    if kind.endswith('first'):
+        print('Main()<transacts>:void = if (X := F[2], X > 100) then Print("{X}") else Print("none")')
+    else:
+        print('Main()<transacts>:void = Print("{(for (X := F[2], X > 100): X).Length}")')
+    sys.exit(0)
 if kind.startswith('recursive-return-'):
     eager = kind.endswith('eager')
     mutual = 'mutual' in kind
@@ -1774,6 +1819,32 @@ if kind.startswith('construct-'):
     call = 'Run[7]' if specs else 'Run(7)'
     print(f'Main(){specs}:void = Print("{{{call}}}")')
     sys.exit(0)
+if kind.startswith('logic-'):
+    # (#283) choices in the operands of `and` and on the right of `or`, with
+    # effects on the left; an `or` is lifted as the `if` it stands for
+    _, op, mode = kind.split('-')
+    print('counter := class:\n    var N:int = 0')
+    left = 'block{set C.N += 1; Two(0) > 0}' if op == 'and' else 'block{set C.N += 1; O?}'
+    clauses = ', '.join(f'A{i} := ({left} {op} Two(2))' for i in range(count))
+    print('Run(O:?int)<transacts>:int =\n    C := counter{}')
+    if mode == 'first':
+        print(f'    if ({clauses}, A{count-1} = 3) then C.N else -1')
+    else:
+        print(f'    R := for ({clauses}):\n        A0\n    R.Length + C.N')
+    print('Main()<transacts>:void = Print("{Run(false)}")')
+    sys.exit(0)
+if kind.startswith('setalt-'):
+    # (#283) a set's choice whose alternative has several values: each
+    # alternative runs the assignment itself
+    sets = ', '.join(f'set A{i} = Two(0) | 2' for i in range(count))
+    print('Run()<transacts>:int =')
+    for i in range(count): print(f'    var A{i}:int = 0')
+    if kind == 'setalt-first':
+        print(f'    if ({sets}, A{count-1} = 2) then A0 else -1')
+    else:
+        print(f'    R := for ({sets}):\n        A0\n    R.Length')
+    print('Main()<transacts>:void = Print("{Run()}")')
+    sys.exit(0)
 if kind.startswith('lazy-'):
     effectful = any(tag in kind for tag in ('effect', 'alt', 'failure', 'generic', 'named', 'tuple'))
     failable = 'failure' in kind
@@ -1882,6 +1953,13 @@ PY
       fi
       exit 1
     }
+    if [[ $kind == castclause-* && $count == 4 ]]; then
+      printf '%s\n' "16 4" >"$tmp/expected"
+      timeout "$limit" "$root/.lake/build/bin/openverse" run "$tmp/p.verse" >"$tmp/lean.out"
+      timeout "$limit" "$root/runtime/build/cverse" "$tmp/p.vbc" >"$tmp/c.out"
+      diff -u "$tmp/expected" "$tmp/lean.out"
+      diff -u "$tmp/expected" "$tmp/c.out"
+    fi
     if [[ $kind == alias-* && $count == 4 ]]; then
       expected=256
       [[ $kind == *-first ]] && expected=8
@@ -1921,6 +1999,18 @@ PY
         expected=1
         [[ $kind == named-* ]] && expected=ok
       fi
+      printf '%s\n' "$expected" >"$tmp/expected"
+      timeout "$limit" "$root/.lake/build/bin/openverse" run "$tmp/p.verse" >"$tmp/lean.out"
+      timeout "$limit" "$root/runtime/build/cverse" "$tmp/p.vbc" >"$tmp/c.out"
+      diff -u "$tmp/expected" "$tmp/lean.out"
+      diff -u "$tmp/expected" "$tmp/c.out"
+    fi
+    if [[ ( $kind == logic-* || $kind == setalt-* ) && $count == 4 ]]; then
+      case $kind in
+        logic-and-first) expected=4 ;; logic-and-for) expected=31 ;;
+        logic-or-first) expected=0 ;; logic-or-for) expected=16 ;;
+        setalt-first) expected=0 ;; setalt-for) expected=81 ;;
+      esac
       printf '%s\n' "$expected" >"$tmp/expected"
       timeout "$limit" "$root/.lake/build/bin/openverse" run "$tmp/p.verse" >"$tmp/lean.out"
       timeout "$limit" "$root/runtime/build/cverse" "$tmp/p.vbc" >"$tmp/c.out"

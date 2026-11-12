@@ -1,7 +1,8 @@
-# expect: works only as the first clause of an if's condition, D := one[X], whose branch then has one's type arguments (#351)
-# a cast of a reference through views to a class with type arguments takes
-# them from a dispatch, which only a cast that is the first clause of an
-# if's condition makes
+# A cast of a reference through views to a class with type arguments takes
+# them from a dispatch (#351), also as a later clause of an if's condition
+# after one that prints: the cast takes the clauses after it as its branch,
+# and the then-branch, which uses its name, casts again (#243). The Print
+# stays, as the cast succeeds.
 container(t:type) := interface:
     Get():t
 sink(u:type) := interface:
