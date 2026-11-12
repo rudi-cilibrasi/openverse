@@ -1,5 +1,4 @@
-# expect: 3:0: T has several values and is recursive, or called by a recursive one, and it is not <computes>
-# (a call of itself after another: not taken lazily yet, #283)
+# (#283) Choice points in sequence: a call of itself after another: the second call runs on each value of the first.
 T(N:int)<transacts>:int =
     if (N <= 0) then (1 | 2) else block:
         A := T(N - 1)

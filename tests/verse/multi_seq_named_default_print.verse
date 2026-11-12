@@ -1,5 +1,4 @@
-# expect: it may print
-# (a choice after its call of itself: all its values computed at a call, F$all, not taken lazily, #246, #283)
+# (#283) Choice points in sequence: a choice after its call of itself, with a named parameter whose default prints: taken lazily.
 Tell(N:int)<computes>:int =
     Print("default {N}")
     N

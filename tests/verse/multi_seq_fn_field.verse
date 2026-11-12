@@ -1,5 +1,4 @@
-# expect: 10:0: R has several values and is recursive, or called by a recursive one, and it may print (Loud does)
-# (a choice after its call of itself: all its values computed at a call, F$all, not taken lazily, #246, #283)
+# (#283) Choice points in sequence: a choice after its call of itself, in a <computes> function that prints (a function in a field): taken lazily.
 Loud(N:int)<computes>:int =
     Print("loud {N}")
     N
