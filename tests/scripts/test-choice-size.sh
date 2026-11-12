@@ -331,6 +331,10 @@ kinds=(
   own-method-for
   recursive-frame-first
   recursive-frame-for
+  recursive-sequence-first
+  recursive-sequence-for
+  recursive-sequence-calls-first
+  recursive-sequence-calls-for
   recursive-return-eager
   recursive-return-first
   recursive-return-for
@@ -1141,6 +1145,26 @@ if kind.startswith('recursive-frame-'):
     Print("f {{N}}")
     N > 0
     {alts}''')
+    if kind.endswith('first'):
+        print('Main()<transacts>:void = if (X := F[2], X > 100) then Print("{X}") else Print("none")')
+    else:
+        print('Main()<transacts>:void = Print("{(for (X := F[2], X > 100): X).Length}")')
+    sys.exit(0)
+if kind.startswith('recursive-sequence-'):
+    # (#283) choice points in sequence, each with code after it that reaches
+    # the next: each a continuation member, compiled once, its frame pushed
+    # once per value, not the code after it copied into each alternative;
+    # with calls, every other one a call of itself
+    calls = 'calls' in kind
+    steps = [f'    X{i + 1} := (F[N - 1] + X{i} | X{i} * {i + 2})' if calls and i % 2 == 1 else
+             f'    X{i + 1} := (X{i} + {i} | X{i} * {i + 2})\n    Print("x {{X{i + 1}}}")' for i in range(count)]
+    body = '\n'.join(steps)
+    print(f'''F(N:int)<transacts><decides>:int =
+    Print("f {{N}}")
+    N > 0
+    X0 := F[N - 1] | N
+{body}
+    X{count}''')
     if kind.endswith('first'):
         print('Main()<transacts>:void = if (X := F[2], X > 100) then Print("{X}") else Print("none")')
     else:

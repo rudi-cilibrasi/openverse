@@ -702,8 +702,9 @@ code after one call and the values of the names that code uses.
   alternative that is a call of the group evaluated before anything else in
   it, but literals and names, which read the same after the call, becomes
   `$then(call, h, frame)` (`frameOf?`), the frame the alternative with the
-  name `h` in the call's place. A frame's code has no choice and no other
-  call of the group, and sets no `var` bound before it, as it runs on a copy
+  name `h` in the call's place. A frame's code here has no choice and no
+  other call of the group (one that has is a continuation member, below),
+  and sets no `var` bound before it, as it runs on a copy
   of the names; a `var` it sets is made a cell first (`cellVars`): `var
   K:t = e` becomes `K := $varcell(t){$VCell := e}` and every use `K.$VCell`,
   so the frame's copy is a reference to the one object. The call's later
@@ -763,31 +764,90 @@ code after one call and the values of the names that code uses.
   (`Compiled.lazyNeeds`, `Options.lazyRequests`) with it taken lazily; one
   that still is not of the shape is refused as before.
 
-Not yet (#283), with the route each would take within the same mechanism:
-- *Choice points in sequence*: a frame whose code has a choice or another
-  call of the group (`X := T(N - 1)` then `X | X + 1`, or then
-  `Y := T(N - 1)`), and a choice before a call (`X := 1 | 2`, then
-  `F(N - 1) + X`). Applying such a frame reaches a generator boundary in the
-  middle of a value: its code up to there must be kept, not undone with
-  the value, and the rest started as items. Route: such code becomes a
-  member of the group, a *continuation member*, whose parameters are the
-  hole and the frame's names, typed where the frame is pushed (it has no
-  source signature, which the group machine and `FirstLift` now read
-  members' parameters from). Applying its frame runs that member's start
-  (its clauses and branch selection) inside the consumer's filter, pushes
-  the item of its first alternative with the rest of the continuation, and
-  the filter then succeeds with no value: a flag the `for`'s iteration
-  reads before its clauses and body, and a first-success condition reads as
-  success, so the pushes and the code before the boundary stay. `after` then
-  pushes the leaf's next alternative below that item (pop it, push the
-  next one, push it back), so the values keep spatial order. In `FirstLift`,
-  applying such a frame calls that member's function of its own with the
-  rest of the continuation and gives its packet. A choice before a call
-  uses the same members: the code after the first choice is a continuation
-  member started from each alternative, its index a parameter, so the
-  alternative's code runs in the member's clauses, one segment.
+**Choice points in sequence (#283).** The code after a call of the group may
+reach another choice point: a choice (`X := T(N - 1)`, then `X | X + 1`),
+another call (`T(N - 1) + T(N - 1)`, or `A := T(N - 1)` then
+`B := T(N - 1)`), and a choice may have a call after it (`X := 1 | 2`, then
+`T(N - 1) + X`). It is the same mechanism, with the normal form taken all the
+way: each choice point, a call of the group or a choice, is the head of the
+code after it, which is its frame.
+- `Choice.normAlt` makes an alternative `$then(point, hole, frame)`
+  (`frameOf?`, which now finds a choice too, and takes the code after the
+  point whatever it has): the frame is plain code, a return frame as
+  above, or, when it reaches another point, a *continuation member*
+  `$cont(block{clauses}, tail)` (`contBody?`, through `bodyTail?`, which
+  normalizes a function's body the same way), whose tail's alternatives are
+  in this form again. A choice's frame is shared by its alternatives: a
+  leaf `$then(a | b, h, frame)` is two alternatives, `a` and `b`, each with
+  that frame (`Choice.flatCount`, `loopFlatWith`), so the code after a
+  choice is compiled once, not copied into each alternative. A block that
+  starts with a choice bound, with plain code after it, is still the choice
+  of that code after each alternative (`lastChoiceTail`), at the top of a
+  body as before and now in a branch too. Programs that compiled before
+  have the same normal form, hole names included, so the same bytes.
+- So the three notions are one: a return frame is a continuation member
+  with no point in it, applied where the value is, all of it; a generator
+  alternative is an alternative of a member's leaf, the function's own or a
+  continuation member's, whose values go to the frames on its continuation.
+  What differs is how a member is entered: a function by a call, its
+  clauses a failure context of their own (when they fail the call has no
+  values and its arguments' effects stay); a continuation member by its
+  frame's application, its clauses part of the value's code before its
+  next point.
+- The group machine (`elabLoopGenGroupWith`; a function alone with
+  continuation members goes through it too) takes continuation members as
+  members after the group's functions, discovered from the frames of the
+  members' alternatives, their parameters the hole (at the group's result
+  type) and the frame's lives, their names in every item as the functions'
+  are. Their alternatives are numbered after the functions'; a `$rec` in
+  one calls the function whose code it is.
+- A continuation member's frame applied to a value (`memberArm`, in
+  `frameApplyWith`) runs the member's clauses and branch in the value's own
+  failure context: a leaf of one alternative goes on there (a value goes to
+  the frames after it, a call evaluates its arguments); a leaf of several
+  alternatives, or a call, is a choice point: the value's code stops there.
+  It leaves the item that resumes there (the leaf's first alternative, or
+  the callee's start) in `stash`, sets `bnd` and breaks, out of the
+  consumer's failure context, which keeps what the value did up to there,
+  as a `for` keeps the code before a choice. Each consumer catches that
+  break around the value (`elabOneGo`'s loop, `elabFor`'s round), and its
+  `after` pushes the stashed item above the next alternative's, so values
+  keep spatial order; any other break (a success, a source `break`) goes on.
+  The member's names are its items' too, so the arm keeps them before and
+  gives them back after: an item of the same member being taken (recursion)
+  keeps its own for its next alternative.
+- Where the first success is taken and what runs before a choice point (the
+  values, the frames, the members' clauses: with continuation members all
+  of `value` counts as the item's code) has effects, `FirstLift` makes each
+  continuation member a function of its own (`{name}_c{j}`, its parameters
+  the hole, the lives, `$K` and the captures; its `$rec` the function's
+  whose code it is), and `$ret` gives a value to its frames with
+  `$frameReturn`: a plain frame's code in turn, a continuation member's frame
+  a call of its function with the rest of the continuation, whose packet is
+  `$ret`'s; when no frame is left, the consumer's clauses (`firstValue`). A
+  choice with a frame pushes it on each alternative's continuation
+  (`firstBody`'s `altK`).
+- The size modes `recursive-sequence-first`, `-for`, `-calls-first` and
+  `-calls-for` check that a sequence of choice points grows linearly.
 
-With those, `F$all` would be needed by no shape and kept, if at all, only as
+Not yet (#283), each refused with a message, and the route each would take:
+- A choice whose values are of another type than the group's with a point
+  after it (`S := "a" | "bb"`, then `T[N - 1] + S.Length`): the frame loop
+  keeps one value slot, of the result type. Route: a slot per hole type,
+  each frame reading its hole from its own and writing the result type's.
+- A choice with code before it that is not literals or names, in one
+  alternative of several (`T(N - 1) | Tell("x", 1) + (1 | 2)`): that code
+  runs after the first choice and before the second, in that alternative
+  alone. Route: an alternative that is a continuation member entered
+  directly, with no hole (alone in its leaf it is that leaf's path code
+  already, `$returnTail`).
+- A point the normal form does not reach: in a condition (an `if` inside an
+  expression, `and`, `or`, `not`), a `set`'s value, a comparison's later
+  operand, a construction's field, a named argument, a loop. Route: more
+  cases of `frameOf?` (a `set` reads its old value before the point, as a
+  prefix), an `if`'s conditions as a member's path.
+
+With all of those, `F$all` would be needed by no shape and kept, if at all, only as
 an optimisation of effect-free ones. Deleting it (the owner's decision,
 since it changes the bytes of the 39 programs of the suite whose Core has
 an `F$all` today) would remove `allBody`, `arrOfE`, `gensOf`, `markAll`, the
@@ -796,11 +856,11 @@ refusals in `inlineMulti`, `checkEager` with its `lazyNeeds` round, and
 `eagerRequests`. It would also change semantics: values on demand, so an
 infinite effect-free one stops where the first success is taken, and an
 error in a value never reached no longer stops the program. It first needs
-the lazy route to cover what only `F$all` does now: choice points in
-sequence, a recursive one calling a function with several values outside
-its group, polymorphic recursion in a mutual group (`eagerNeeds`), and an
-`any`-valued returning group whose tail erases its values
-(`erasesRecursive`).
+the lazy route to cover what only `F$all` does now: the choice points in
+sequence above that are not yet taken lazily, a recursive one calling a
+function with several values outside its group, polymorphic recursion in a
+mutual group (`eagerNeeds`), and an `any`-valued returning group whose tail
+erases its values (`erasesRecursive`).
 
 Named arguments and defaults are bound on every recursive edge. The lazy
 stack uses `elabGenericCallWith` in argument-packing mode: it evaluates the

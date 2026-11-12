@@ -1260,8 +1260,7 @@ Main():void =
   of the function in it is one value, not a branch to pick: its conditions
   are part of what that value does (#283). An alternative may also be a
   call of the function with code after it (#283): `Count(N - 1) + 1`,
-  `Tell("x", F(N - 1))`, `Obj.F * 10 + F(N - 1)`, with the code after it
-  having no choice and no other such call. That code may set the
+  `Tell("x", F(N - 1))`, `Obj.F * 10 + F(N - 1)`. That code may set the
   function's `var`s: such a `var` is one object for the invocation, so the
   call's later values, and the later alternatives, see what a kept value
   set, and a rejected value's write is undone with it. What the
@@ -1287,6 +1286,37 @@ Main():void =
       if (V := Walk[2], V > 2) then Print("{V}")  # at 1 got 1, at 2 got 2, 3
       for (V := Count(2)) { Print("{V}") }        # 2, 2, 2
   ```
+
+  Choice points may come in sequence (#283): the code after a call of the
+  function, or after a choice, may reach another call or choice, and so on.
+  A choice after a call (`X := T[N - 1] | N`, then `X | X + 100`), a call
+  after a call (`U(N - 1) + U(N - 1)`, or `A := T(N - 1)` then
+  `B := T(N - 1)`), a call after a choice (`X := 1 | 2`, then
+  `V[N - 1] + X | N`), a choice in a call's argument (`G(N - 1 | N - 2)`),
+  and a choice bound in a branch with code after it (`if (N <= 0) then 0
+  else:` then `Y := Step(N - 1) + 1 | N * 10`, `set Local += Y`, `Local`) are
+  all read as written: each point's values come in order, the code after it
+  runs on each of them, the code before the next point once for each, and
+  the values of the last are the function's, in spatial order. So the code
+  between two points is what the first one's value does up to the second:
+  in a `for` it stays once the second is reached, even if the filter then
+  rejects every value after it, and where the first success is taken it is
+  undone with the path that leads to no success, as for an inlined body:
+
+  ```verse
+  T(N:int)<transacts><decides>:int =
+      N > 0
+      X := T[N - 1] | N
+      Print("t {N} {X}")      # once for each of X's values
+      X | X + 100
+  Main()<transacts>:void =
+      for (V := T[2], V > 100) { Print("v {V}") }
+          # t 1 1, t 2 1, v 101, t 2 101, v 101, v 201, t 2 2, v 102
+      if (V := T[2], V > 100) then Print("first {V}")   # t 1 1, t 2 1, first 101
+  ```
+
+  A branch's code before its choice runs when the branch is selected, as a
+  returning branch's does (below).
 
   A returning branch may contain plain clauses and
   nested conditionals before its value. A `return` at the end of the body or
@@ -1381,11 +1411,17 @@ Main():void =
   the return type mentions a parameter.
 
   Refused for now: a recursive one that is not of the generator shape
-  above (return frames included) and is not `<computes>`, keeps local
-  state, or may print or call `Err()`: in particular one with a choice, or
-  another call of its group, after a call of its group (`X := T(N - 1)`,
-  then `X | X + 1`, or then `Y := T(N - 1)`), and one with a choice before
-  such a call (`X := 1 | 2`, then `T(N - 1) + X`) (#283). Also an
+  above (return frames and choice points in sequence included) and is not
+  `<computes>`, keeps local state, or may print or call `Err()`. Its choice
+  points must be where the shape reads them, so not in a condition (of an
+  `if` inside an expression, `and`, `or`, `not`), a `set`'s value
+  (`set K += T(N - 1)`), a comparison's later operand, a construction's
+  field, a named argument or a loop; an alternative of several may have
+  nothing but literals and names before a choice in it (`T(N - 1) |
+  Tell("x", 1) + (1 | 2)` is refused, `T(N - 1) | Y + (1 | 2)` is not); and
+  a choice whose values are of another type than the function's may not
+  have a choice or a call of its group after it (`S := "a" | "bb"`, then
+  `T[N - 1] + S.Length`) (#283). Also an
   overloaded one with an overload that calls the function's own name
   (a generic one's type arguments are inferred from the
   arguments where it is inlined, as at a call, named ones too), a recursive one with a `defer:` of its own, or called by a recursive one (its body a function's, where it would run once), one with a `return`
@@ -1964,5 +2000,5 @@ Main()<suspends>:void =
 the class features listed under [Classes](#classes), struct methods (Verse structs have none; classes do),
 `weak_map`, module paths `using{/Verse.org/…}` (accepted and ignored), the
 specific overload/call gaps listed under [Overloading](#overloading), nested
-functions and lambdas (see [release evidence and proposed design](research/closure-design.md)), choice beyond [Choice](#choice) (recursive functions with several values that have effects and a choice or another recursive call after a recursive call, overloaded methods with several values), concurrency beyond [Concurrency](#concurrency), and the unsupported
+functions and lambdas (see [release evidence and proposed design](research/closure-design.md)), choice beyond [Choice](#choice) (overloaded methods with several values, and the choice points in sequence that recursive functions with several values with effects may not have yet, listed there), concurrency beyond [Concurrency](#concurrency), and the unsupported
 effect/construction contracts listed under [Effect contracts](#effect-contracts).

@@ -1,0 +1,26 @@
+u 1
+u 1
+u 2
+w 0
+u 2
+w 1
+u 1
+u 2
+w 1
+u 2
+w 2
+w 2
+u 2
+first 2
+od 1
+od 1
+e 0
+e 7
+od 1
+e 7
+e 14
+e 2
+od 1
+od 1
+first 7
+exit=0

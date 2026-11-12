@@ -55,6 +55,8 @@ R = None
 # their other programs)
 R387 = None
 RFrame = None
+# (#283: choice points in sequence in a lazy one, LSq, LSc, LSb; a stream of its own)
+RSeq = None
 # (#392: a named parameter with a default; a generator of its own decides, so seeds keep their
 # other programs)
 R392 = None
@@ -369,6 +371,22 @@ d{n}({child_tps}) := class({parent}):{extra_field}
             self.path = "lazy"; self.params = [("X", "t"), ("Y", "t"), ("N", "int")]; self.decides = True; self.fx = True
             self.src = ("%s(X:t, Y:t, N:int where t:type)<transacts><decides>:t =\n"
                         "    N > 0\n    Z := block{ W := Id(X); V := %s[Y, X, N - 1]; Print(\"%s {N}\"); W } | Y\n    Z") % (n, n, n)
+        elif k == "LSq":
+            # (#283: choice points in sequence: a call of itself followed by a choice)
+            self.path = "lazy"; self.params = [("X", "t"), ("Y", "t"), ("N", "int")]; self.decides = True; self.fx = True
+            self.src = ("%s(X:t, Y:t, N:int where t:type)<transacts><decides>:t =\n"
+                        "    N > 0\n    Z := %s[Y, X, N - 1] | X\n    Print(\"%s {N}\")\n    Z | Y") % (n, n, n)
+        elif k == "LSc":
+            # (#283: a choice followed by a call of itself, then by another choice)
+            self.path = "lazy"; self.params = [("X", "t"), ("Y", "t"), ("N", "int")]; self.decides = True; self.fx = True
+            self.src = ("%s(X:t, Y:t, N:int where t:type)<transacts><decides>:t =\n"
+                        "    N > 0\n    Z := X | Y\n    Print(\"%s {N}\")\n    W := %s[Z, X, N - 1] | Y\n    W | Z") % (n, n, n)
+        elif k == "LSb":
+            # (#283: two calls of itself in sequence, in an if's branch)
+            self.path = "lazy"; self.params = [("X", "t"), ("Y", "t"), ("N", "int")]; self.fx = True
+            self.src = ("%s(X:t, Y:t, N:int where t:type)<transacts>:t =\n"
+                        "    if (N <= 0) then X else:\n        Z := %s(Y, X, N - 1)\n        Print(\"%s {N}\")\n"
+                        "        W := %s(Z, Y, N - 1)\n        W | Z") % (n, n, n, n)
         elif k == "LCmp":
             self.path = "lazy"; self.params = [("A", "arr"), ("X", "t"), ("I", "int")]; self.decides = True; self.cmp = True
             self.src = ("%s(A:[]t, X:t, I:int where t:subtype(comparable))<decides>:t =\n"
@@ -393,7 +411,8 @@ d{n}({child_tps}) := class({parent}):{extra_field}
         if RECURSIVE_RETURNS and self.path in ("lazy", "eager") and random.Random(n).random() < 0.5:
             lines = self.src.splitlines()
             if len(lines) > 1:
-                lines[-1] = "    return " + lines[-1].strip()
+                # (the last line's own indentation: in an else block, LSb's)
+                lines[-1] = lines[-1][:len(lines[-1]) - len(lines[-1].lstrip())] + "return " + lines[-1].strip()
                 if k == "LIf":
                     lines[-1:] = ["    if(N=0): return Y", "    NextN:=N-1",
                                   f"    return X | {n}[Y,X,NextN]"]
@@ -527,6 +546,29 @@ d{n}({child_tps}) := class({parent}):{extra_field}
             back = ("print", "%s %d" % (self.name, a["N"]))
             return [("choice", [self.expand({"X": a["Y"], "Y": a["X"], "N": a["N"] - 1}, var) + [back] + V(a["X"]),
                                 V(a["Y"])])]
+        # (#283: a call of itself is a generator of its own, `("choice", [ins])`:
+        # what the code before it did stays when its clauses fail, in a for)
+        call = lambda b, v: [("choice", [self.expand(b, v)])]
+        back = ("print", "%s %d" % (self.name, a.get("N", 0)))
+        if k == "LSq":
+            if a["N"] <= 0: return [("cond", False)]
+            z = var + "z"
+            after = [back, ("choice2", var, z, a["Y"])]
+            return [("choice", [call({"X": a["Y"], "Y": a["X"], "N": a["N"] - 1}, z) + after,
+                                [("val", z, a["X"])] + after])]
+        if k == "LSc":
+            if a["N"] <= 0: return [("cond", False)]
+            z, w = var + "z", var + "w"
+            return [("choice", [[("val", z, a["X"])], [("val", z, a["Y"])]]), back,
+                    ("dyn", lambda env: [("choice", [call({"X": env[z], "Y": a["X"], "N": a["N"] - 1}, w),
+                                                     [("val", w, a["Y"])]])]),
+                    ("dyn", lambda env: [("choice", [[("val", var, env[w])], [("val", var, env[z])]])])]
+        if k == "LSb":
+            if a["N"] <= 0: return V(a["X"])
+            z, w = var + "z", var + "w"
+            return call({"X": a["Y"], "Y": a["X"], "N": a["N"] - 1}, z) + [back,
+                    ("dyn", lambda env: call({"X": env[z], "Y": a["Y"], "N": a["N"] - 1}, w)),
+                    ("dyn", lambda env: [("choice", [[("val", var, env[w])], [("val", var, env[z])]])])]
         if k == "LIf":
             if a["N"] < 0: return [("cond", False)]
             if a["N"] > 0:
@@ -611,12 +653,13 @@ class Machine:
 # ---------------------------------------------------------------- the program
 class Gen:
     def __init__(self, seed):
-        global R, R387, R392, RMethod, SHARED, RFrame
+        global R, R387, R392, RMethod, SHARED, RFrame, RSeq
         R = random.Random(seed)
         R387 = random.Random(seed * 1000003 + 387)
         R392 = random.Random(seed * 1000003 + 392)
         RMethod = random.Random(seed * 1000003 + 283041)
         RFrame = random.Random(seed * 1000003 + 283283)
+        RSeq = random.Random(seed * 1000003 + 283287)
         SHARED = random.Random(seed * 1000003 + 2834).random() < 0.4
         self.seed = seed
         self.prods = []
@@ -896,6 +939,7 @@ class Gen:
         self.producer(R.choice(kinds_i))
         lazy = R.choice(kinds_l)
         if RFrame.random() < 0.3: lazy = "LFr" if RFrame.random() < 0.5 else "LFp"
+        if RSeq.random() < 0.3: lazy = RSeq.choice(["LSq", "LSc", "LSb"])
         self.producer(lazy); self.producer(R.choice(kinds_e))
         for _ in range(R.randint(0, 2)):
             self.producer(R.choice(kinds_i + kinds_l + kinds_e))

@@ -1554,8 +1554,9 @@ end
 def eagerWhy : String :=
   "such a function must be <computes>, keep no local state, and reach nothing that prints or calls Err(), " ++
   "as all its values are computed at a call (#235), unless it is taken lazily: clauses, then a choice whose " ++
-  "alternatives are values or calls of its recursive group, each call followed by no choice and no other such call " ++
-  "(#246, #283)"
+  "alternatives are values, calls of its recursive group, or such a call or a choice with code after it that may " ++
+  "reach another, not in a condition, a set or a later operand of a comparison, and with nothing but literals " ++
+  "and names before a choice in one of several alternatives (#246, #283)"
 
 /-- (#283) Whether an alternative in normal form (`normAlt`) is one the
     lazy machine takes: its prefix plain, a choice's alternatives such again,

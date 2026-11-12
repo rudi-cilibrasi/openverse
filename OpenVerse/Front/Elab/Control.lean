@@ -817,6 +817,9 @@ structure LoopFrame where
   /-- Where the prefix sets a name, which the next alternative would see. -/
   preSet : Option Pos := none
   member : Option Nat := none
+  /-- (a choice's frame) the choice's alternatives, its values' types the
+      hole's: the group's result type, for now. -/
+  choice : List SExpr := []
 
 /-- (#283) An alternative of a tail's leaf flattened (`Choice.flatCount`), with
     the frames it adds to `frames`, in order: a value or a call of the group,
@@ -834,7 +837,7 @@ partial def loopFlatWith (elabSeq : Ctx → List SExpr → Option Ty → EM (R �
   let preSet := rest.findSome? fun e => if Choice.anyE (fun | .set .. => true | _ => false) e then some e.pos else none
   let j := frames.size
   let lives := (Choice.namesUsed k).eraseDups.filterMap fun n => if own.contains n then none else fc.lookup n
-  let frames := frames.push { hole := h, code := k, ctx := fc, pre, preSet, lives }
+  let frames := frames.push { hole := h, code := k, ctx := fc, pre, preSet, lives, choice := (Choice.alts? c).getD [] }
   match Choice.alts? c with
   | some cs =>
     cs.foldlM (fun (fr, acc) y => do
@@ -1042,6 +1045,16 @@ partial def elabLoopGenGroupWith (elabE : Ctx → SExpr → Option Ty → EM R)
           let some f := frameArr[j]? | continue
           let some (ccls, ctail) := Choice.contOf? f.code | continue
           let some kms := km? | eerr p "internal: a continuation member (#283)"
+          -- (a choice's values go through its frame at the group's result
+          -- type: one of another type is not taken yet)
+          if let some v := f.choice.find? (fun
+              | .app _ (.ident _ n) _ false => !["$rec", "$recTo", "$then"].contains n
+              | _ => true) then
+            let st ← get
+            let r ← elabE { ca with typeOnly := true, canFail := true, inTaking := true } v none
+            set st
+            if let .error _ ← tryCatch (Except.ok <$> coerce v.pos r rty) (fun e => pure (.error e)) then
+              eerr v.pos s!"a choice of values of type {r.ty.show}, with a choice or a call of {g}'s group after it: not supported yet, as {g}'s values are of type {rty.show} (#283)"
           let hl : Local := { name := f.hole, slot := ← fresh rty, ty := rty, mutable := false }
           let ls ← f.lives.mapM fun l => do return { l with slot := ← fresh l.ty }
           let lctx : Ctx := { f.ctx with locals := hl :: ls.reverse ++ f.ctx.locals }
