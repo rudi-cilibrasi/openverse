@@ -9558,11 +9558,15 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
       if !taskLifts.contains gi && (Suspend.callsOf fns[gi]!.body).any (fun (g, _) => taskLifts.contains g) then
         taskLifts := taskLifts ++ [gi]
   let taskFrames := lows.zipIdx.filterMap fun ((gi, _, _), j) => if taskLifts.contains gi then some j else none
+  -- Borrowed helpers can interleave roots with sibling arms. A shared
+  -- clock and single-root cleanup merge them in actual source start order.
+  let taskClockF : Option Nat := if taskFrames.isEmpty then none else some (leafF + if leafy then 2 else 0)
+  let taskStride := if taskClockF.isSome then 4 else 2
   let ownBase := nFns + 4 * L
   let moreBase := ownBase + 4 * L
   let taskBase := moreBase + moreOff L
   let taskIndex (j : Nat) := taskFrames.idxOf? j
-  let selfBase := taskBase + 2 * taskFrames.length
+  let selfBase := taskBase + taskStride * taskFrames.length
   let trampOf (k : Nat) : Nat := selfBase + targets.length + 2 * k
   -- the scheduler: its class's prototype
   let some schedLit := Suspend.coreDefault Sorig [] 0 schedTy
@@ -9628,7 +9632,8 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
                  (List.range fns[gi]!.arity).map fun i => Suspend.slotBaseOf sites arms + i,
                resField := some Suspend.resF, generic := ownArgs j, newSched := true,
                resultFn := some (nFns + 4 * j + 3), ntp,
-               stopTasksFn := (taskIndex j).map fun i => taskBase + 2 * i + 1,
+               stopTasksFn := (taskIndex j).map fun i => taskBase + taskStride * i + 1,
+               taskOrderFn := if taskClockF.isSome then (taskIndex j).map (fun i => taskBase + taskStride * i + 3) else none,
                selfFns := (targets.idxOf? gi).map fun i =>
                  (ownBase + 4 * j, selfBase + i, ownBase + 4 * j + 1, ownBase + 4 * j + 2) }
       | none => none
@@ -9689,12 +9694,14 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
       ownFns := ownFns.push stub
       ownTys := ownTys.push (ps ++ [.ref [resCellTag] [d], schedTy])
       extraSigs := extraSigs.push (ps ++ [.ref [resCellTag] [d], schedTy], frameTy j)
-  -- Each sharing lift has a raw scope stop and a two-argument wrapper
-  -- which reads its parameters from its retained frame, as cancelOwn does.
+  -- Sharing lifts expose a stop and optional latest-order query, each with
+  -- a wrapper reading parameters from the retained frame like cancelOwn.
   for j in taskFrames do
     let (gi, _, _) := lows[j]!
     let ps := slotTys[gi]!.take fns[gi]!.arity
     extraSigs := extraSigs ++ #[(frameTy j :: schedTy :: ps, VTy.void), ([frameTy j, schedTy], VTy.void)]
+    if taskClockF.isSome then
+      extraSigs := extraSigs ++ #[(frameTy j :: schedTy :: ps, VTy.int), ([frameTy j, schedTy], VTy.int)]
   -- each target's `take(self, frame)` (#142), whose first parameter is the
   -- receiver: the frame's result (its frame is made, resumed and cancelled
   -- through its `arrive`, `resumeOwn` and `cancelOwn`)
@@ -9730,6 +9737,7 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
     if let some ri := (env.fields d).findIdx? (·.1 == "$Root") then
       classTable := classTable.set (env.tagOf d) ((classTable[env.tagOf d]!).set ri (.opt rootAny))
   if leafy then classTable := classTable.set schedTag (classTable[schedTag]! ++ [parTy, .int])
+  if taskClockF.isSome then classTable := classTable.set schedTag (classTable[schedTag]! ++ [.int])
   let Sinf : Sigs := { fns := fsigs0 ++ extraSigs.toList ++ selfSigs.toList ++ rootSigs.toList, classes := classTable ++ sourceClasses,
                        protos, pins }
   let mut newFns : Array Fn := #[]
@@ -9826,7 +9834,7 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
     let shared ← SourceFrames.aliases sourceFrames gi sourceBase
     let low ← (Suspend.lower Sinf callee syncMark raceMark rushMark spawnMark spawns branchMark branches a Γ ρ (frameTy j)
       schedTag nilTag resCellTag fnBase b leafF leafDepthF isRoot leafy resumeAnyMark leafDepthMin parTy shared
-      (sourceFrames.info[gi]?.getD {}).copies (taskLifts.contains gi)).mapError fun e => inFn gname e
+      (sourceFrames.info[gi]?.getD {}).copies (taskLifts.contains gi) taskClockF).mapError fun e => inFn gname e
     -- its branches' wrappers: `tramp(w, sched)` resumes the arm (with the
     -- function's parameters from its frame) unless the function stopped
     -- it; `start(sched, frame)` makes the wrapper, registers it and runs
@@ -10037,8 +10045,16 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
       let pass := (List.range a).map fun k => Expr.heap (.get (Suspend.slotBaseOf sites arms + k)) [.local 0]
       taskFns := taskFns.push {
         name := s!"{gname}$stopTasksOwn", arity := 2, nslots := 2, decides := false, writes := true,
-        body := .call (taskBase + 2 * i) (.local 0 :: .local 1 :: pass) }
+        body := .call (taskBase + taskStride * i) (.local 0 :: .local 1 :: pass) }
       taskTys := taskTys.push [frameTy j, schedTy]
+      if taskClockF.isSome then
+        let some order := low.taskOrder | throw s!"internal error: {gname} has no source task order"
+        taskFns := taskFns.push (← resumeLike s!"{gname}$taskOrder" order)
+        taskTys := taskTys.push order.slots
+        taskFns := taskFns.push {
+          name := s!"{gname}$taskOrderOwn", arity := 2, nslots := 2, decides := false, writes := true,
+          body := .call (taskBase + taskStride * i + 2) (.local 0 :: .local 1 :: pass) }
+        taskTys := taskTys.push [frameTy j, schedTy]
     -- `g$result(frame)`
     newFns := newFns.push { name := s!"{gname}$result", arity := 1, nslots := 1, decides := false,
                             writes := false, body := .heap (.get Suspend.resF) [.local 0] }
@@ -10338,7 +10354,8 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
   fns := fns.map fun fn => { fn with body := Suspend.substCall resumeAnyMark (fun es => .call resumeAnyIdx es) fn.body }
   -- (and the values of the scheduler's fields it adds, #362, for its prototype)
   return (fns, slotTys, fsigs, classTable, frameClasses, mainCall, framePins.toList,
-    if leafy then [(match schedLit with | .lit v => v | _ => .none), .int (-1)] else [])
+    (if leafy then [(match schedLit with | .lit v => v | _ => .none), .int (-1)] else []) ++
+      (if taskClockF.isSome then [.int 0] else []))
 
 /-- Whether `e` itself prints (`Print`), for `checkEager`. -/
 partial def exprPrints : Expr → Bool
