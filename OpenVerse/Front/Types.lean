@@ -193,6 +193,13 @@ structure TyEnv where
   methodOverloads : List (String × List String) := []
   /-- The type parameters of each parametric struct (name, declared comparable). -/
   sparams : List (String × List (String × Bool)) := []
+  /-- Declared nominal upper bounds, as (base, derived) relations over the
+      declaration's own parameters. These govern type application validity;
+      executable upcasts additionally need a typed dictionary value. -/
+  sbounds : List (String × List (Ty × Ty)) := []
+  /-- Relations assumed in this declaration's type scope. They do not name
+      runtime slots and cannot themselves supply executable evidence. -/
+  boundFacts : List (Ty × Ty) := []
   /-- Each enum: its enumerators in order. -/
   enums : List (String × List String) := []
   /-- The refinement types (#136): each one's base type (int or float) and
@@ -1228,5 +1235,49 @@ def ambiguousJoin (env : TyEnv) : Ty → Ty → Bool
     if common.any (fun c => !(env.info c).isIface) then false else
     (common.filter fun c => !common.any (fun d => c != d && env.isSub d c)).length > 1
   | _, _ => false
+
+/-- Nominal ancestry at exact projected arguments. This is a type relation,
+    including uninhabited interfaces, independent of their representation. -/
+def TyEnv.nominalSubtype (env : TyEnv) (derived base : Ty) : Bool :=
+  derived == base || match derived, base with
+    | .struct source args, .struct target targets =>
+      env.classes.contains source && env.classes.contains target && env.isSub source target &&
+        args.length == ((env.sparams.lookup source).getD []).length &&
+        env.upArgs source args target == targets
+    | _, _ => false
+
+/-- Entail a nominal/dependent declaration constraint. Static facts permit
+    type applications; they never authorize an executable unchecked cast. -/
+def TyEnv.boundSubtype (env : TyEnv) (derived base : Ty) : Bool :=
+  go (env.boundFacts.length + 1) [] derived
+where
+  go : Nat → List Ty → Ty → Bool
+    | 0, _, _ => false
+    | fuel + 1, seen, current =>
+      env.nominalSubtype current base || (!seen.contains current &&
+        env.boundFacts.any fun (upper, lower) =>
+          env.nominalSubtype current lower && go fuel (current :: seen) upper)
+
+/-- Check this application's own bounds after its arguments are resolved. -/
+def Ty.checkBoundHead (env : TyEnv) : Ty → Except String Unit
+  | .struct name args => do
+    let σ := (((env.sparams.lookup name).getD []).map (·.1)).zip args
+    for (base, derived) in (env.sbounds.lookup name).getD [] do
+      let base := base.subst σ
+      let derived := derived.subst σ
+      unless env.boundSubtype derived base do
+        throw s!"type argument {derived.show} of {name} does not satisfy subtype({base.show})"
+  | _ => pure ()
+
+/-- Validate a previously resolved type tree, without revisiting nominal
+    field layouts. Initial type resolution checks only each head once. -/
+partial def Ty.checkBounds (env : TyEnv) : Ty → Except String Unit
+  | .arr t | .opt t => t.checkBounds env
+  | .tup ts => ts.forM (Ty.checkBounds env)
+  | .map k v => do k.checkBounds env; v.checkBounds env
+  | ty@(.struct _ args) => do
+    args.forM (Ty.checkBounds env)
+    ty.checkBoundHead env
+  | _ => pure ()
 
 end OpenVerse.Front

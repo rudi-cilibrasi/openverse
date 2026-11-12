@@ -144,6 +144,59 @@ def Plan.nominals : Plan → List (String × String)
   | .compose outer inner => (outer.nominals ++ inner.nominals).eraseDups
   | _ => []
 
+def Plan.usesLocal : Plan → Bool
+  | .local .. => true
+  | .compose outer inner => outer.usesLocal || inner.usesLocal
+  | _ => false
+
+/-- Nominal views proved by actual lexical dictionaries. Declaration facts
+    alone do not create a view from which executable members may be read. -/
+def views (env : TyEnv) (locals : List (String × Ty)) (derived : Ty) : List Ty :=
+  (locals.filterMap fun (_, ty) => do
+    let relation ← boundOf? ty
+    let .struct name _ := relation.base | none
+    if !env.classes.contains name then none else do
+      let plan ← find? env locals ⟨relation.base, derived⟩
+      if plan.usesLocal then some relation.base else none).eraseDups
+
+/-- Infer parameters which occur only inside a nominal upper bound from the
+    argument's projected ancestor. Existing input bindings remain fixed. No
+    unrelated interface is guessed to be an ancestor of an opaque parameter. -/
+def infer (env : TyEnv) (bounds : List Bound) (initial : List (String × Ty))
+    (peerTypes : Bool := false) : Option (List (String × Ty)) := do
+  if bounds.isEmpty then return initial
+  let mut substitution := initial
+  let names := (bounds.flatMap fun bound => bound.base.params ++ bound.derived.params).eraseDups
+  for _ in [0:names.length + 1] do
+    let previous := substitution
+    for bound in bounds do
+      if bound.derived.params.any (fun name => (substitution.lookup name).isNone) then continue
+      if bound.base.params.all (fun name => (substitution.lookup name).isSome) then continue
+      let derived := bound.derived.subst substitution
+      match bound.base with
+      | .param name _ =>
+        if peerTypes && (substitution.lookup name).isNone then
+          substitution := (name, derived) :: substitution
+      | .struct target _ =>
+        let candidates := derived :: (env.boundFacts.filterMap fun (upper, _) =>
+          if env.boundSubtype derived upper then some upper else none)
+        let projected := (candidates.filterMap fun
+          | .struct source args =>
+            if env.classes.contains source && env.isSub source target then
+              some (Ty.struct target (env.upArgs source args target)) else none
+          | _ => none).eraseDups
+        if projected.isEmpty then continue
+        let solutions ← projected.mapM (bound.base.matchArg env substitution)
+        let candidate ← solutions.head?
+        -- Multiple incompatible projections have no unique inferred
+        -- instance. Declaration order must not choose an arbitrary one.
+        if !solutions.all (fun other => names.all fun name =>
+            candidate.lookup name == other.lookup name) then none else
+          substitution := candidate
+      | _ => pure ()
+    if substitution == previous then break
+  return substitution
+
 /-- Physical frame layout shared by checking, call emission and body
     elaboration. Evidence arguments precede all type-value witnesses, so the
     latter keep a contiguous range even when some come from the receiver.

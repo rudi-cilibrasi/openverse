@@ -28,6 +28,82 @@ private def env : TyEnv := {
 
 private def pos : Pos := { line := 1, col := 1, file := "subtype-evidence.verse" }
 
+private def expectError (label needle : String) (result : Except String α) : IO Unit :=
+  match result with
+  | .error message => need label ((message.splitOn needle).length > 1)
+  | .ok _ => throw (IO.userError s!"{label}: expected refusal")
+
+private def resolutionContracts : IO Unit := do
+  let classes := env.classes ++ ["garage", "root", "leaf", "identity_base", "identity_child"]
+  let declarations := { env with
+    classes
+    structs := classes.map fun name => (name, [])
+    cinfo := env.cinfo ++ [("garage", {}), ("root", {}), ("leaf", { parent := some "root" }),
+      ("identity_base", {}), ("identity_child", { parent := some "identity_base" })]
+    uniques := ["identity_base"]
+    sparams := env.sparams ++ [("garage", [("g", false)]), ("root", [("r", false)]), ("leaf", [("l", false)])]
+    pargs := [("leaf", [.arr (.param "l" false)])]
+    sbounds := [("garage", [(.struct "vehicle" [], .param "g" false)])] }
+  let params (source : String) : IO (List TParam) := do
+    let tops ← getOK "parse formal bounds" (parseProgram (source ++ "\nMain():void={}"))
+    getSome "missing formal parameters" (tops.findSome? fun | .fn _ "F" _ tps .. => some tps | _ => none)
+  let tps ← params "F(X:v where u:subtype(garage(t)),t:subtype(vehicle),v:subtype(u)):v=X"
+  let resolved ← getOK "resolve forward/generic bounds" (resolveTParams declarations tps)
+  let scope := resolved.env declarations
+  need "bound parameters remain opaque" ((scope.tvars.lookup "v") == some (.param "v" false))
+  need "all peer relations remain available" (scope.boundSubtype (.param "v" false) (.struct "garage" [.param "t" false]))
+  let _ ← getOK "formal applications use declared facts"
+    ((resolveTy scope pos (.app "garage" [.name "t"])).run' { env := scope })
+  let bad ← params "F(X:u where t:type,u:subtype(garage(t))):u=X"
+  expectError "unproved nested generic bound" "does not satisfy subtype(vehicle)" (resolveTParams declarations bad)
+  let ambient := { declarations with boundFacts := [(.struct "vehicle" [], .param "t" false)] }
+  expectError "caller facts do not leak into a declaration" "does not satisfy subtype(vehicle)" (resolveTParams ambient bad)
+  let tps ← params "F(X:t where t:subtype(u),u:subtype(identity_child)):t=X"
+  let unique ← getOK "resolve implied comparability" (resolveTParams declarations tps)
+  need "unique implication follows ancestors and peer bounds" (unique.params == [("t", true), ("u", true)])
+  let tps ← params "F(X:t where t:subtype(vehicle)):t=X"
+  let ordinary ← getOK "ordinary class bound" (resolveTParams declarations tps)
+  need "ordinary class does not imply comparable" (ordinary.params == [("t", false)])
+  let tps ← params "F(X:t where t:subtype(u),u:subtype(t)):t=X"
+  let cycle ← getOK "resolve dependent cycle" (resolveTParams declarations tps)
+  need "cycle does not invent comparability" (cycle.params == [("t", false), ("u", false)])
+  let tps ← params "F(X:t where t:subtype(left)):t=X"
+  let _ ← getOK "interface bound" (resolveTParams declarations tps)
+  let tps ← params "F(X:t where t:subtype(missing)):t=X"
+  expectError "unknown upper type" "unknown type 'missing'" (resolveTParams declarations tps)
+  need "project generic ancestry without erasing arguments"
+    (declarations.boundSubtype (.struct "leaf" [.int]) (.struct "root" [.arr .int]))
+  need "incompatible generic arguments remain refused"
+    (!declarations.boundSubtype (.struct "leaf" [.int]) (.struct "root" [Ty.string]))
+  let good := Ty.arr (.struct "garage" [.struct "car" []])
+  let _ ← getOK "closed constrained class application" (good.checkBounds declarations)
+  expectError "nested bad class argument" "does not satisfy subtype(vehicle)"
+    ((Ty.arr (.struct "garage" [.int])).checkBounds declarations)
+  let relation : Bound := ⟨.struct "root" [.param "a" false], .param "u" false⟩
+  let actual := Ty.struct "leaf" [.int]
+  let inferred ← getSome "infer argument occurring only in a bound"
+    (SubtypeEvidence.infer declarations [relation] [("u", actual)] true)
+  need "bound projection retains precise input and solves the hidden argument"
+    (inferred.lookup "u" == some actual && inferred.lookup "a" == some (.arr .int))
+  let callerType := Ty.param "caller" false
+  let facts := { declarations with boundFacts := [(.struct "root" [.arr .int], callerType)] }
+  let inferred ← getSome "infer through an opaque nominal bound"
+    (SubtypeEvidence.infer facts [relation] [("u", callerType)] true)
+  need "opaque bound projection" (inferred.lookup "a" == some (.arr .int))
+  let conflict := { facts with boundFacts := facts.boundFacts ++ [(.struct "root" [Ty.string], callerType)] }
+  need "incompatible projections do not depend on declaration order"
+    ((SubtypeEvidence.infer conflict [relation] [("u", callerType)]).isNone &&
+      (SubtypeEvidence.infer { conflict with boundFacts := conflict.boundFacts.reverse } [relation] [("u", callerType)]).isNone)
+  need "static facts cannot supply an executable view" ((SubtypeEvidence.views facts [] callerType).isEmpty)
+  let signature : Sig := {
+    idx := 0, name := "Projected", params := [.param "u" false], ret := .param "u" false,
+    decides := false, isConst := false, tparams := [("a", false), ("u", false)], fx := [], bounds := [relation] }
+  let functionType := Ty.struct (FnValues.shapeOf 1 ["computes"]).name [actual, actual]
+  need "function-value instance uses the same bound inference"
+    (fnValueArgs declarations signature functionType == some [.arr .int, actual])
+  need "function value cannot replace an incompatible fixed argument"
+    ((fnValueArgs declarations signature functionType [("a", Ty.string)]).isNone)
+
 private partial def protocolParams (body : SExpr) : List TParam :=
   let own := match body with
     | .app _ (.ident _ marker) args false =>
@@ -100,12 +176,14 @@ private partial def rewriteTop (replacements : List (String × SExpr)) : STop �
   | .const p name ty body => return .const p name ty (← rewrite replacements body)
 
 private def source := "
-vehicle:=class<computes>{Speed:int=1}
+vehicle:=class<computes>:
+    Speed:int=1
+    ReadSpeed()<computes>:int=Speed
 car:=class<computes>(vehicle){Name:string=\"car\"}
 node(t:type):=class<computes>(vehicle){Value:t}
 box(t:type):=class<computes>{Value:t}
 Process(X:t,D:evidence(vehicle,t) where t:type)<computes>:t=
-    Print(\"speed {D.Up(X).Speed}\")
+    Print(\"speed {X.Speed}\")
     X
 UseBox(B:box(t),D:evidence(vehicle,t) where t:type)<computes>:t=Process(B.Value,D)
 closure(t:type):=class<computes>:
@@ -119,7 +197,10 @@ Walk(X:t,D:evidence(vehicle,t),N:int where t:type)<computes>:int=
         Y:=node(t){Value:=X,Speed:=N}
         return Walk(Y,NodeEvidence(),N-1)
     D.Up(X).Speed
-Widen(Base:t,Derived:u,D:evidence(t,u) where t:type,u:type)<computes>:t=D.Up(Derived)
+Widen(Base:t,Derived:u,D:evidence(t,u) where t:type,u:type)<computes>:t=Derived
+ReadBound(X:t,D:evidence(vehicle,t) where t:type)<computes>:int=X.ReadSpeed()
+BindBound(X:t,D:evidence(vehicle,t) where t:type)<computes>:type{_()<computes>:int}=X.ReadSpeed
+AsBase(X:t,D:evidence(vehicle,t) where t:type)<computes>:vehicle=X
 Main():void=
     C:=car{Speed:=9,Name:=\"precise\"}
     R:=Process(C,CarEvidence())
@@ -129,9 +210,83 @@ Main():void=
     Print(\"poly {Walk(C,CarEvidence(),3)}\")
     Print(\"composed {Widen(vehicle{},C,ComposedEvidence()).Speed}\")
     Print(\"identity {Widen(1,7,IntEvidence())}\")
+    Print(\"method {ReadBound(C,CarEvidence())}\")
+    BoundMethod:=BindBound(C,CarEvidence())
+    Print(\"bound method {BoundMethod()}\")
+    Print(\"widened {AsBase(C,CarEvidence()).Speed}\")
 "
 
-private def trace := "speed 9\nname precise\nspeed 9\nescape precise\npoly 1\ncomposed 9\nidentity 7\n"
+private def trace := "speed 9\nname precise\nspeed 9\nescape precise\npoly 1\ncomposed 9\nidentity 7\nmethod 9\nbound method 9\nwidened 9\n"
+
+private def stateSource := "
+vehicle:=class<allocates>:
+    var N:int=0
+    var Items:[]int=array{1}
+    ReadN()<reads>:int=N
+car:=class<allocates>(vehicle){Name:string=\"car\"}
+Touch(X:t,D:evidence(vehicle,t) where t:type)<transacts>:t=
+    Print(\"touch\")
+    set X.N+=1
+    X
+BindN(X:t,D:evidence(vehicle,t) where t:type)<computes>:type{_()<reads>:int}=X.ReadN
+SetPath(A:t,B:t,D:evidence(vehicle,t) where t:type)<transacts>:void=
+    var X:t=A
+    if(set X.Items[if(set X=B,true?)then 0 else 1]=7):Print(\"path\")
+Main():void=
+    A:=car{Name:=\"a\",Items:=array{1}}
+    B:=car{Name:=\"b\",N:=10,Items:=array{2}}
+    D:=CarEvidence()
+    Returned:=Touch(A,D)
+    Print(\"identity {Returned.Name} {A.N}\")
+    if(Touch(A,D),false?)then Print(\"bad\")else Print(\"rolled\")
+    Print(\"rollback {A.N}\")
+    Live:=BindN(A,D)
+    set A.N=4
+    Print(\"live {Live()}\")
+    SetPath(A,B,D)
+    if(AV:=A.Items[0],BV:=B.Items[0]):Print(\"path values {AV} {BV}\")
+"
+
+private def stateTrace := "touch\nidentity a 1\nrolled\nrollback 1\nlive 4\npath\npath values 1 7\n"
+
+private def stateControlSource := stateSource
+  |>.replace "    set X.N+=1" "    V:=D.Up(X)\n    set V.N+=1"
+  |>.replace "=X.ReadN" "=D.Up(X).ReadN"
+  |>.replace "    var X:t=A" "    var X:vehicle=D.Up(A)"
+  |>.replace "if(set X=B,true?)" "if(set X=D.Up(B),true?)"
+
+private def cancelSource := "
+vehicle:=class<allocates>{var N:int=0}
+car:=class<allocates>(vehicle){Name:string=\"a\"}
+Worker(X:t,D:evidence(vehicle,t) where t:type)<suspends>:void=
+    defer:Print(\"cleanup {X.N}\")
+    set X.N=5
+    Sleep(10.0)
+    Print(\"bad\")
+Main()<suspends>:void=
+    A:=car{}
+    D:=CarEvidence()
+    race:
+        Worker(A,D)
+        block:
+            Sleep(0.0)
+            Print(\"winner\")
+    Print(\"after {A.N} {A.Name}\")
+"
+
+private def cancelControlSource := cancelSource
+  |>.replace "{X.N}" "{D.Up(X).N}"
+  |>.replace "    set X.N=5" "    V:=D.Up(X)\n    set V.N=5"
+
+private def cancelTrace := "winner\ncleanup 5\nafter 5 a\n"
+
+private def checkTrace (label : String) (compiled : Compiled) (expected : String) : IO Unit := do
+  need s!"{label}: Core admission" (compiled.prog.check && compiled.prog.checkControl &&
+    compiled.prog.checkTypes compiled.sigs compiled.slotTys)
+  match compiled.prog.runB 1000000 10000 with
+  | .res (.ok _, output) =>
+    need s!"{label}: independent output" (ByteArray.mk (output.map Nat.toUInt8).toArray == expected.toUTF8)
+  | other => throw (IO.userError s!"{label}: {reprStr other}")
 
 /-- Run implicit call binding against a real checked callee, then move both
     evidence and its type witness to different slots in a new generic frame.
@@ -177,6 +332,7 @@ private def relocate (compiled : Compiled) : IO Compiled := do
   return relocated
 
 def main (args : List String) : IO Unit := do
+  resolutionContracts
   metadataContracts
   let vehicle := Ty.struct "vehicle" []
   let car := Ty.struct "car" []
@@ -250,9 +406,44 @@ def main (args : List String) : IO Unit := do
   | .error message =>
     need "wrong composition reaches a type diagnostic" ((message.splitOn "expected").length > 1)
   | .ok _ => throw (IO.userError "ill-typed dictionary composition passed the compiler")
+  let stateTops ← getOK "parse mutation/order control" (parseProgram stateSource)
+  let stateTops ← getOK "rewrite mutation/order control" (stateTops.mapM (rewriteTop replacements))
+  let carNominal ← getOK "state nominal dictionary" (nominal env pos "car" "vehicle")
+  let state ← getOK "checked mutation/order control" (elabProgram (protocol pos ++ [carNominal] ++ stateTops))
+  need "state control passes Core admission" (state.prog.check && state.prog.checkControl &&
+    state.prog.checkTypes state.sigs state.slotTys)
+  match state.prog.runB 1000000 10000 with
+  | .res (.ok _, output) =>
+    need "independent identity/rollback/live/path-order trace" (ByteArray.mk (output.map Nat.toUInt8).toArray == stateTrace.toUTF8)
+  | other => throw (IO.userError s!"bound state control failed: {reprStr other}")
+  let badState := stateSource.replace "Touch(X:t,D:evidence(vehicle,t) where t:type)<transacts>"
+    "Touch(X:t,D:evidence(vehicle,t) where t:type)<computes>"
+  let badStateTops ← getOK "parse forbidden bound write" (parseProgram badState)
+  let badStateTops ← getOK "rewrite forbidden bound write" (badStateTops.mapM (rewriteTop replacements))
+  let refusedWrite := elabProgram (protocol pos ++ [carNominal] ++ badStateTops)
+  expectError "bound write retains its source effect budget" "<computes>" refusedWrite
+  expectError "bound write names the source function" "Touch" refusedWrite
+  let controlTops ← getOK "parse independent state control" (parseProgram stateControlSource)
+  let controlTops ← getOK "rewrite independent state control" (controlTops.mapM (rewriteTop replacements))
+  let control ← getOK "compile independent state control" (elabProgram (protocol pos ++ [carNominal] ++ controlTops))
+  checkTrace "explicit state control" control stateTrace
+  let cancellation ← getOK "parse cancellation control" (parseProgram cancelSource)
+  let cancellation ← getOK "rewrite cancellation control" (cancellation.mapM (rewriteTop replacements))
+  let cancellation ← getOK "compile cancellation control" (elabProgram (protocol pos ++ [carNominal] ++ cancellation))
+  checkTrace "bound cancellation" cancellation cancelTrace
+  let cancelControl ← getOK "parse explicit cancellation control" (parseProgram cancelControlSource)
+  let cancelControl ← getOK "rewrite explicit cancellation control" (cancelControl.mapM (rewriteTop replacements))
+  let cancelControl ← getOK "compile explicit cancellation control" (elabProgram (protocol pos ++ [carNominal] ++ cancelControl))
+  checkTrace "explicit cancellation control" cancelControl cancelTrace
   if let [out] := args then
     IO.FS.writeBinFile (out ++ "/evidence.vbc") compiled.prog.encode
     IO.FS.writeFile (out ++ "/evidence.expected") trace
     IO.FS.writeBinFile (out ++ "/relocated.vbc") relocated.prog.encode
     IO.FS.writeFile (out ++ "/relocated.expected") trace
-  IO.println "subtype dictionary contracts passed (checked Core, precise/escaping results, polymorphic recursion, dependent composition)"
+    IO.FS.writeBinFile (out ++ "/state.vbc") state.prog.encode
+    IO.FS.writeFile (out ++ "/state.expected") stateTrace
+    for (name, compiled, expected) in [("state-control", control, stateTrace),
+        ("cancel", cancellation, cancelTrace), ("cancel-control", cancelControl, cancelTrace)] do
+      IO.FS.writeBinFile (out ++ s!"/{name}.vbc") compiled.prog.encode
+      IO.FS.writeFile (out ++ s!"/{name}.expected") expected
+  IO.println "subtype dictionary contracts passed (checked Core, precise/escaping results, inference, member calls/coercion, state/order/rollback/cancellation)"

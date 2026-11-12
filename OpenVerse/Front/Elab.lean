@@ -157,6 +157,11 @@ def Sig.evidenceLocals (s : Sig) : List Local :=
   s.frame.evidence.map fun (index, bound, slot) =>
     { name := s.evidenceName index, slot, ty := bound.ty, mutable := false }
 
+def Sig.typeEnv (s : Sig) (env : TyEnv) : TyEnv :=
+  { env with
+    tvars := s.tparams.map fun (name, comparable) => (name, Ty.param name comparable)
+    boundFacts := s.bounds.map fun bound => (bound.base, bound.derived) }
+
 /-- The implicit receiver, distinguished from an ordinary parameter that a
     source function happens to name Self. Extracted methods use $Self. -/
 def Sig.hasReceiver (s : Sig) : Bool :=
@@ -221,8 +226,11 @@ def fnFits (env : TyEnv) (s : Sig) (t : Ty) : Bool :=
           (qs.zip ps).all (fun (q, p) => subAt q p) && subAt s.ret u
         else
           match ((ps ++ [s.ret]).zip (qs ++ [u])).foldlM (fun σ (a, b) => a.matchArg env σ b) [] with
-          | some σ => s.tparams.all fun (v, cmp) => match σ.lookup v with
-            | some x => !cmp || x.plainComparable
+          | some σ => match SubtypeEvidence.infer env s.bounds σ true with
+            | some σ => s.tparams.all (fun (v, cmp) => match σ.lookup v with
+                | some x => !cmp || x.plainComparable
+                | none => false) && s.bounds.all (fun bound =>
+                  env.boundSubtype (bound.derived.subst σ) (bound.base.subst σ))
             | none => false
           | none => false
     | none => false
@@ -239,7 +247,9 @@ def fnValueArgs (env : TyEnv) (s : Sig) (t : Ty) (fixed : List (String × Ty) :=
     let own : FnValues.Shape := ⟨k, s.decides, s.suspends, s.fx⟩
     if !own.within (FnValues.shapeOf k es) then none else do
       let σ ← ((s.params ++ [s.ret]).zip ts).foldlM (fun σ (a, b) => a.matchArg env σ b) fixed
+      let σ ← SubtypeEvidence.infer env s.bounds σ true
       if !((s.params ++ [s.ret]).zip ts).all (fun (a, b) => (a.subst σ).eqv b) then none else
+      if !s.bounds.all (fun bound => env.boundSubtype (bound.derived.subst σ) (bound.base.subst σ)) then none else
       s.tparams.mapM fun (v, cmp) => do
         let t ← σ.lookup v
         if cmp && !t.comparable env then none else some t
@@ -255,7 +265,8 @@ def fnClassArgs (env : TyEnv) (cls : String) (target : Ty)
     let sig : Sig := {
       idx := 0, name := cls, params := ts.take k, ret := (ts.drop k).headD .void,
       decides := es.contains "decides", isConst := false,
-      tparams := (env.sparams.lookup cls).getD [], fx := allowedFx es, suspends := es.contains "suspends" }
+      tparams := (env.sparams.lookup cls).getD [], fx := allowedFx es, suspends := es.contains "suspends",
+      bounds := ((env.sbounds.lookup cls).getD []).map fun (base, derived) => ⟨base, derived⟩ }
     fnValueArgs env sig target fixed
 
 /-- A construction instance found with its original expected context. -/
@@ -660,6 +671,9 @@ partial def resolveTy (env : TyEnv) (p : Pos) : STy → EM Ty
       for ((v, c), t) in ps.zip ts do
         if c && !t.comparable env then eerr p (notComparable env t s!"type argument {v} of {n}")
       let t := Ty.struct n ts
+      match t.checkBoundHead env with
+      | .error message => eerr p message
+      | .ok _ => pure ()
       if t.sizeUpTo env (maxTySize + 1) > maxTySize then
         eerr p s!"the type {n}(…) is too large: its Verse Core representation has more than {maxTySize} nodes"
       return t
@@ -670,9 +684,35 @@ partial def resolveTy (env : TyEnv) (p : Pos) : STy → EM Ty
 def Ctx.lookup (ctx : Ctx) (n : String) : Option Local := ctx.locals.find? (·.name == n)
 def Ctx.sig? (ctx : Ctx) (n : String) : Option Sig := ctx.sigs.find? (·.name == n)
 
+def Ctx.evidenceEnv (ctx : Ctx) : TyEnv :=
+  { ctx.types with boundFacts := ctx.types.boundFacts ++ ctx.locals.filterMap fun binding =>
+    (SubtypeEvidence.boundOf? binding.ty).map fun bound => (bound.base, bound.derived) }
+
 /-- Class or interface `c` has method `m`, its own or inherited. -/
 def Ctx.hasMethod (ctx : Ctx) (c m : String) : Bool :=
   (ctx.types.supers c).any fun e => (ctx.sig? s!"{e}.{m}").isSome
+
+/-- Prefer the most specific available nominal view. Unrelated interfaces
+    with the same member remain ambiguous; neither becomes a disjoint domain. -/
+def Ctx.boundView (ctx : Ctx) (p : Pos) (derived : Ty) (member : String) : Except String (Option Ty) := do
+  let .param .. := derived | return none
+  let locals := ctx.locals.map fun binding => (binding.name, binding.ty)
+  let visible (owner method : String) := ctx.hasMethod owner method ||
+    ((ctx.types.methodOverloads.lookup method).getD []).any (ctx.hasMethod owner ·)
+  let candidates := (SubtypeEvidence.views ctx.types locals derived).filter fun
+    | .struct owner args =>
+      if member.startsWith "(" then
+        match (member.drop 1).toString.splitOn ":)" with
+        | [qualified, method] => ctx.types.isSub owner qualified && visible qualified method
+        | _ => false
+      else (ctx.types.fields owner args).any (·.1 == member) || visible owner member
+    | _ => false
+  let best := candidates.filter fun candidate =>
+    !candidates.any fun other => other != candidate && ctx.types.nominalSubtype other candidate
+  match best with
+  | [] => return none
+  | [view] => return some view
+  | _ => throw s!"{p.show}: ambiguous bound member '{member}' of {derived.show} through {", ".intercalate (best.map Ty.show)}"
 
 /-- Arguments whose instance comes from the other arguments' types. A
     local or member shadows a same-named generic top-level function. -/
@@ -4153,6 +4193,10 @@ partial def elabGenericCallWith (elabE : Ctx → SExpr → Option Ty → EM R) (
             es := es.set! i (← coerce a.pos r (pt.subst σ))
         | none => eerr a.pos s!"expected {(pt.subst σ).show}, found {r.ty.show} (in a call of {s.name})"
   -- the arguments, in their temporaries, then the defaults
+  let inferred ← match SubtypeEvidence.infer ctx.evidenceEnv s.bounds σ with
+    | some inferred => pure inferred
+    | none => eerr p s!"cannot infer a consistent upper-bound instance of {s.name}"
+  σ := inferred
   let mut steps : Array Expr := #[]
   let mut slots : Array (Option Nat) := Array.replicate s.params.length none
   if !plain then
@@ -4204,6 +4248,10 @@ partial def elabGenericCallWith (elabE : Ctx → SExpr → Option Ty → EM R) (
         let ta ← fresh (pt.subst σ)
         steps := steps.push (.assign ta rd)
         slots := slots.set! k (some ta)
+  let inferred ← match SubtypeEvidence.infer ctx.evidenceEnv s.bounds σ true with
+    | some inferred => pure inferred
+    | none => eerr p s!"cannot infer a consistent upper-bound instance of {s.name}"
+  σ := inferred
   let mut targs : Array Ty := #[]
   for (v, cmp) in s.tparams do
     let some t := σ.lookup v
@@ -4307,9 +4355,10 @@ def elabLoopArgsWith (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx) 
   return (es.zip slots).foldr (fun (e, sl) acc => .seq (.assign sl e) acc) (.lit .void)
 
 partial def elabSetWith (elabE : Ctx → SExpr → Option Ty → EM R) (elabMember : Ctx → Pos → R → String → EM R)
-    (ctx : Ctx) (p : Pos) (lhs0 : SExpr) (op : Option String) (rhs0 : SExpr) : EM R := do
+    (ctx : Ctx) (p : Pos) (lhs0 : SExpr) (op : Option String) (rhs0 : SExpr)
+    (rootInit : Option (String × Expr) := none) : EM R := do
   if let .app _ (.ident _ "$refineCopyOut") [rhs] false := rhs0 then
-    let r ← elabSetWith elabE elabMember ctx p lhs0 op rhs
+    let r ← elabSetWith elabE elabMember ctx p lhs0 op rhs rootInit
     match r.e with
     | .assign target (.local result) =>
       modify fun st => { st with frameCopies := st.frameCopies ++ [{ target, result }] }
@@ -4487,6 +4536,9 @@ partial def elabSetWith (elabE : Ctx → SExpr → Option Ty → EM R) (elabMemb
     -- the intermediate containers: level 0 is a copy of the variable, taken
     -- after the indices, so that the right-hand side cannot change what is
     -- rebuilt (as for `set A[i] = e`); the variable is written once, last
+    if let some (name, value) := rootInit then
+      if name != root then eerr p "internal: bound set initializes a different path root"
+      pre := pre.push (.assign l.slot value)
     let c0 ← fresh l.ty
     pre := pre.push (.assign c0 (.local l.slot))
     cur := c0
@@ -5260,6 +5312,40 @@ def constructFieldsForTypes : SExpr → SExpr
 set_option maxHeartbeats 800000 in
 mutual
 partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
+  let result ← elabERaw ctx se exp
+  if let some target := exp then
+    if target != .void && result.ty != target && result.ty != .never &&
+        (!result.ty.params.isEmpty || !target.params.isEmpty) then
+      let locals := ctx.locals.map fun binding => (binding.name, binding.ty)
+      if let some plan := SubtypeEvidence.find? ctx.types locals ⟨target, result.ty⟩ then
+        if plan.usesLocal then return ← elabSubtypeUp ctx se.pos result target plan
+  return result
+
+/-- Save the operand before building a checked dictionary call. Both its
+    precise input and widened result are typed in this frame. -/
+partial def elabSubtypeUp (ctx : Ctx) (p : Pos) (value : R) (target : Ty)
+    (plan : SubtypeEvidence.Plan) : EM R := do
+  let locals := ctx.locals.map fun binding => (binding.name, binding.ty)
+  if !plan.valid ctx.types locals || plan.bound ctx.types != ⟨target, value.ty⟩ then
+    eerr p "internal: subtype view has no valid lexical evidence"
+  let slot ← fresh value.ty
+  let name := s!"$subtypeInput{slot}"
+  let inner := { ctx with locals := { name, slot, ty := value.ty, mutable := false } :: ctx.locals }
+  let call := SExpr.app p (.member p (plan.value ctx.types p) "Up") [.ident p name] false
+  let result ← elabE inner call (some target)
+  return ⟨.seq (.assign slot value.e) (← coerce p result target), target⟩
+
+partial def elabBoundReceiver (ctx : Ctx) (p : Pos) (value : R) (member : String) : EM R := do
+  let view ← match ctx.boundView p value.ty member with
+    | .ok view => pure view
+    | .error message => throw message
+  let some target := view | return value
+  let locals := ctx.locals.map fun binding => (binding.name, binding.ty)
+  let some plan := SubtypeEvidence.find? ctx.types locals ⟨target, value.ty⟩
+    | eerr p "internal: a bound view lost its lexical dictionary"
+  elabSubtypeUp ctx p value target plan
+
+partial def elabERaw (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
   if !ctx.constructProbe && ctx.constructHints.isNone &&
       Choice.anyE (fun
         | e@(.construct _ n [] _) =>
@@ -7594,7 +7680,7 @@ partial def elabAppBase (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (b
           return ← elabApp ctx p (.ident mp "$StickyAwait") [obj] false exp
         else pure ()
       | _ => pure ()
-    let r0 ← elabE ctx obj none
+    let r0 ← elabBoundReceiver ctx p (← elabE ctx obj none) m0
     -- `X.(i:)M(…)`: `X` as an `i`, so `i`'s `M` (a qualified call)
     let (r, m) ← match r0.ty, m0.startsWith "(", (m0.drop 1).toString.splitOn ":)" with
       | .struct c ts, true, [q, mq] =>
@@ -8417,8 +8503,32 @@ partial def elabCmp (ctx : Ctx) (p : Pos) (a : SExpr) (rest : List (String × SE
       prevTy := rb.ty
     return ⟨steps.foldr Expr.seq (.local t0), ra.ty⟩
 
-/-- `elabSetWith`, given this block's functions (#325). -/
-partial def elabSet (ctx : Ctx) (p : Pos) (lhs0 : SExpr) (op : Option String) (rhs0 : SExpr) : EM R :=
+/-- Bound objects keep their identity when a mutable field/path is written.
+    Only the path's root changes; index expressions and the RHS retain the
+    precise source variable and their ordinary order. -/
+partial def elabSet (ctx : Ctx) (p : Pos) (lhs0 : SExpr) (op : Option String) (rhs0 : SExpr) : EM R := do
+  let rec firstField : SExpr → Option (String × String)
+    | .member _ (.ident _ root) field => some (root, field)
+    | .member _ receiver _ | .app _ receiver _ true | .query _ receiver => firstField receiver
+    | _ => none
+  if let some (root, field) := firstField lhs0 then
+    if let some binding := ctx.lookup root then
+      if let .param .. := binding.ty then
+        let receiver ← elabBoundReceiver ctx p ⟨.local binding.slot, binding.ty⟩ field
+        if receiver.ty != binding.ty then
+          let slot ← fresh receiver.ty
+          let name := s!"$subtypeSet{slot}"
+          let rec replaceRoot : SExpr → SExpr
+            | .ident q n => if n == root then .ident q name else .ident q n
+            | .member q value member => .member q (replaceRoot value) member
+            | .app q value args true => .app q (replaceRoot value) args true
+            | .query q value => .query q (replaceRoot value)
+            | value => value
+          let inner := { ctx with locals := { name, slot, ty := receiver.ty, mutable := false } :: ctx.locals }
+          let direct := match lhs0 with | .member _ (.ident _ _) _ => true | _ => false
+          let rootPrelude := if direct then none else some (name, receiver.e)
+          let result ← elabSetWith elabE (fun c q r m => elabMember c q r m) inner p (replaceRoot lhs0) op rhs0 rootPrelude
+          return ⟨if direct then .seq (.assign slot receiver.e) result.e else result.e, result.ty⟩
   elabSetWith elabE (fun c q r m => elabMember c q r m) ctx p lhs0 op rhs0
 
 /-- `for` (#208, #314): `elabForWith`, given this block's functions (#325). -/
@@ -9277,6 +9387,7 @@ partial def elabDefaultDispatch (ctx : Ctx) (p : Pos) (fname : String)
 
 /-- `e.m`: `.Length` of an array or string, or a field of a struct. -/
 partial def elabMember (ctx : Ctx) (p : Pos) (r : R) (m : String) (exp : Option Ty := none) : EM R := do
+  let r ← elabBoundReceiver ctx p r m
   match r.ty, m with
   | .arr _, "Length" => return ⟨.prim .len [r.e], .int⟩
   | .map _ _, "Length" => return ⟨.prim .len [r.e], .int⟩
@@ -9689,20 +9800,67 @@ def typeNames : List String :=
 def checkTParams (env : TyEnv) (tps : List TParam) : Except String (List (String × Bool)) := do
   let mut out : Array (String × Bool) := #[]
   for tp in tps do
-    -- Bound syntax is retained before its dictionary ABI is introduced. It
-    -- must not become an unconstrained parameter in any intermediate pass.
-    if tp.upperBound.isSome then
-      throw s!"{tp.pos.show}: unknown constraint subtype({tp.constraint}) (checked upper-bound evidence is not implemented yet, #502)"
     if out.any (·.1 == tp.name) then
       throw s!"{tp.pos.show}: type parameter {tp.name} is declared twice (several constraints on one type parameter are not supported)"
     if typeNames.contains tp.name || (env.structs.lookup tp.name).isSome ||
         (env.enums.lookup tp.name).isSome then
       throw s!"{tp.pos.show}: type parameter {tp.name} has the name of a type"
-    match tp.constraint with
-    | "type" => out := out.push (tp.name, false)
-    | "comparable" => out := out.push (tp.name, true)
-    | c => throw s!"{tp.pos.show}: unknown constraint subtype({c}) (openverse supports {tp.name}:type and {tp.name}:subtype(comparable))"
+    if tp.upperBound.isSome then out := out.push (tp.name, false) else
+      match tp.constraint with
+      | "type" => out := out.push (tp.name, false)
+      | "comparable" => out := out.push (tp.name, true)
+      | c => throw s!"{tp.pos.show}: unknown constraint subtype({c}) (expected type, comparable, or a retained upper-bound type)"
+  if !tps.any (·.upperBound.isSome) then return out.toList
+  -- Unique class bounds imply comparability; propagate that implication
+  -- through peer parameters, including forward references and cycles.
+  for _ in [0:tps.length + 1] do
+    let next := out.map fun (name, comparable) =>
+      let implied := match (tps.find? (·.name == name)).bind (·.upperBound) with
+        | some (.name upper) =>
+          (out.toList.lookup upper).getD false ||
+            (env.classes.contains upper && env.isUnique upper)
+        | some (.app upper _) => env.classes.contains upper && env.isUnique upper
+        | _ => false
+      (name, comparable || implied)
+    if next == out then break
+    out := next
   return out.toList
+
+structure ResolvedTParams where
+  params : List (String × Bool)
+  bounds : List SubtypeEvidence.Bound
+
+def ResolvedTParams.env (resolved : ResolvedTParams) (outer : TyEnv) : TyEnv :=
+  { outer with
+    tvars := resolved.params.map fun (name, comparable) => (name, Ty.param name comparable)
+    boundFacts := resolved.bounds.map fun bound => (bound.base, bound.derived) }
+
+/-- Resolve the complete formal scope before validating nominal applications
+    in the bounds. Peer references never become aliases for their upper type. -/
+def resolveTParams (env : TyEnv) (tps : List TParam) : Except String ResolvedTParams := do
+  let params ← checkTParams env tps
+  if !tps.any (·.upperBound.isSome) then return { params, bounds := [] }
+  let formal := { env with
+    tvars := params.map fun (name, comparable) => (name, Ty.param name comparable)
+    boundFacts := [], sbounds := [] }
+  let bounds ← tps.filterMapM fun parameter => do
+    let some upper := parameter.upperBound | pure none
+    let base ← (resolveTy formal parameter.pos upper).run' { env := formal }
+    match base with
+    | .struct name _ =>
+      unless env.classes.contains name do
+        throw s!"{parameter.pos.show}: subtype({base.show}) must name a class, interface, or type parameter"
+    | .param .. => pure ()
+    | _ => throw s!"{parameter.pos.show}: subtype({base.show}) must name a class, interface, or type parameter"
+    let derived := Ty.param parameter.name ((params.lookup parameter.name).getD false)
+    pure (some ({ base, derived } : SubtypeEvidence.Bound))
+  let resolved : ResolvedTParams := { params, bounds }
+  let checked := resolved.env env
+  for (parameter, bound) in (tps.filter (·.upperBound.isSome)).zip bounds do
+    match bound.base.checkBounds checked with
+    | .error message => throw s!"{parameter.pos.show}: {message} (in the upper bound of {parameter.name})"
+    | .ok _ => pure ()
+  return resolved
 
 /-- How a program is compiled from the command line: its shell arguments,
     bound to `Args : []string` (unless the program defines `Args`), and an
@@ -12357,6 +12515,42 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
             throw s!"{cd.pos.show}: {cd.name} gives {q} the type argument {ty.show} for {v}, which must be comparable"
         iargs := iargs.push ((cd.name, q), tys)
   env := { env with iargs := iargs.toList }
+  -- Resolve every constrained nominal header before validating any use of
+  -- one. This makes forward declarations independent of source order.
+  let constrainedTypes := allTops.filterMap fun
+    | .const p name none (.structDef _ tps _ _) =>
+      if tps.any (·.upperBound.isSome) then some (p, name, tps) else none
+    | _ => none
+  if !constrainedTypes.isEmpty then
+    let declarations ← constrainedTypes.mapM fun (p, name, tps) => do
+      let resolved ← resolveTParams { env with sbounds := [] } tps
+      pure (p, name, resolved)
+    env := { env with sbounds := declarations.map fun (_, name, resolved) =>
+      (name, resolved.bounds.map fun bound => (bound.base, bound.derived)) }
+    for (p, _, resolved) in declarations do
+      let scope := resolved.env env
+      for bound in resolved.bounds do
+        match bound.base.checkBounds scope with
+        | .error message => throw s!"{p.show}: {message}"
+        | .ok _ => pure ()
+    for (name, fields) in env.structs do
+      let scope := { env with
+        tvars := ((env.sparams.lookup name).getD []).map fun (v, c) => (v, Ty.param v c)
+        boundFacts := (env.sbounds.lookup name).getD [] }
+      for (field, ty, _) in fields do
+        match ty.checkBounds scope with
+        | .error message => throw s!"field '{field}' of {name}: {message}"
+        | .ok _ => pure ()
+      for (owner, args) in ((env.pargs.lookup name).toList.map fun args =>
+          ((env.info name).parent.getD "", args)) ++
+          (env.iargs.filterMap fun ((source, target), args) =>
+            if source == name then some (target, args) else none) do
+        -- An omitted generic interface prefix is resolved by the existing
+        -- interface-layout checks; explicit arguments are checked here.
+        if !args.isEmpty then
+          match (Ty.struct owner args).checkBounds scope with
+          | .error message => throw s!"parent {owner} of {name}: {message}"
+          | .ok _ => pure ()
   -- a class overrides a method only if its Verse Core type arguments are its
   -- own distinct type parameters, as many as the declaring class's: code
   -- generic over that class can then call its implementation (it could not
@@ -12648,8 +12842,9 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     match top with
     | .fn p n ps tps effs ret _ =>
       if n == "Main" then throw s!"{p.show}: Main cannot be generic"
-      let tparams ← checkTParams env tps
-      let genv := { env with tvars := tparams.map fun (v, c) => (v, Ty.param v c) }
+      let resolved ← resolveTParams env tps
+      let tparams := resolved.params
+      let genv := resolved.env env
       let (tys, rt) ← fnTypes genv p n ps effs ret
       if (["converges", "computes", "transacts"].filter effs.contains).length > 1 then
         throw s!"{p.show}: {n} has more than one of <converges>, <computes> and <transacts> (they exclude each other)"
@@ -12689,7 +12884,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
                             suspends := effs.contains "suspends",
                             -- (a parametric class's `block:`: inferred from none, #41)
                             fx := if n.endsWith ".$block" || defaultBridge n then [] else allowedFx effs,
-                            tparams,
+                            tparams, bounds := resolved.bounds,
                             named := (ps.filter (·.named)).map fun q => (q.name, q.default),
                             pnames := ps.map (·.name), scope := copyScope? effs }
     | _ => pure ()
@@ -12785,7 +12980,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
           let selfField (v : String) := match lifted with
             | some l => (l.opened.lookup v).bind (env.witnessField? l.target ·)
             | none => env.witnessField? ((n.splitOn ".").headD "") v
-          let genv := { env with tvars := g.tparams.map fun (v, c) => (v, Ty.param v c), dictOrder := dictTps.map (·.1), selfWitness := g.selfTps.map fun v => (v, (selfField v).getD 0) }
+          let genv := { g.typeEnv env with dictOrder := dictTps.map (·.1), selfWitness := g.selfTps.map fun v => (v, (selfField v).getD 0) }
           let base : Ctx := { sigs := sigs.toList ++ gsigs.toList, sigProg := mkSigProg sigs, types := genv,
                               locals := locals.reverse, retTy := g.ret, canFail := g.decides, suspends := g.suspends,
                               dictBase := g.frame.witnessBase, dictVars := dictTps.map (·.1), fnFx := g.fx }
@@ -12921,7 +13116,9 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     if !sigOk then
       throw s!"{cp.show}: {c} uses {impl} for {decl}, but their types differ at {q}'s type arguments (as code generic over {q} sees them), so it could not call it (#53)"
   for (fp, cname, f, sty) in fieldOverrides do
-    let cenv := { env with tvars := ((env.sparams.lookup cname).getD []).map fun (v, c) => (v, Ty.param v c) }
+    let cenv := { env with
+      tvars := ((env.sparams.lookup cname).getD []).map fun (v, c) => (v, Ty.param v c)
+      boundFacts := (env.sbounds.lookup cname).getD [] }
     let (t, _) ← (resolveTy cenv fp sty).run {}
     match fieldIndex (env.fields cname) f with
     | some (_, t0) =>
@@ -12963,7 +13160,9 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     match t with
     | .const _ n none (.structDef _ _ _ _) =>
       let nps := ((env.sparams.lookup n).getD []).map fun (v, c) => Ty.param v c
-      let senv := { env with tvars := (env.sparams.lookup n).getD [] |>.map fun (v, c) => (v, Ty.param v c) }
+      let senv := { env with
+        tvars := (env.sparams.lookup n).getD [] |>.map fun (v, c) => (v, Ty.param v c)
+        boundFacts := (env.sbounds.lookup n).getD [] }
       let allowed := env.constructionFx[n]?.getD heapFx
       let ctx : Ctx := { sigs := allSigs, sigProg, types := senv, canFail := true,
                           fnFx := allowed, inDefaultCheck := true }
@@ -13059,7 +13258,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
           (i, { frame := s.frame, name := s.name, args := s.args.map (Ty.toVTy env) }) }, st.eagerNeeds, st.methodNeeds)
   -- (the accessors come right after the functions, #157)
   env := { env with fieldAccBase := tops.length + gsigs.size }
-  let genvOf (g : Sig) : TyEnv := { env with tvars := g.tparams.map fun (v, c) => (v, Ty.param v c) }
+  let genvOf (g : Sig) : TyEnv := g.typeEnv env
   let mut fns : Array Fn := #[]
   let mut slotTys : Array (List VTy) := #[]
   let mut frameInfo : Array FrameRefs.Info := #[]
