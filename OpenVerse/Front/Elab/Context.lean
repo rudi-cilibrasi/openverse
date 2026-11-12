@@ -922,11 +922,20 @@ partial def Ctx.isTypeValue (ctx : Ctx) : SExpr → Bool
   | .ident _ name => (ctx.lookup name).any (·.typeValue)
   | .app _ (.ident _ "$choiceCoercions") [_, body] false => ctx.isTypeValue body
   | .app _ (.ident _ "$deferExits") [_, body] false => ctx.isTypeValue body
-  | .app _ (.ident _ name) args false =>
+  | .app _ (.ident _ name) args _ =>
     if ["$typeValue", "$witness", "$stageWitness"].contains name then true
     else if ["$refineCopyIn", "$refineCopyOut", "$forEnvCapture", "$forEnvInit"].contains name then
       args.any ctx.isTypeValue
-    else (ctx.lookup name).any (·.typeValue) || args.any ctx.isTypeValue
+    else
+      let binding := ctx.lookup name
+      let carries := match binding, ctx.sig? name with
+        | none, some signature => args.zipIdx.any fun (argument, i) =>
+          !signature.typeValues.contains i && ctx.isTypeValue argument
+        | _, _ => args.any ctx.isTypeValue
+      -- Declared metadata arguments (including generated witnesses) do
+      -- not make an independent data result metadata. MetadataFlow
+      -- checks the actual return, including a returned metadata formal.
+      binding.any (·.typeValue) || carries
   | .member _ value field => field.startsWith "$w." || ctx.isTypeValue value
   | .app _ value args _ => ctx.isTypeValue value || args.any ctx.isTypeValue
   | .decl _ _ _ _ value | .query _ value | .optionLit _ value => ctx.isTypeValue value

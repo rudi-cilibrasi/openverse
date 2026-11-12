@@ -33,7 +33,7 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
   -- origins need a marker; wrapping forwarding/control expressions can
   -- change the saved-local shape required by refinement copy-out.
   let origin := match se with
-    | .ident .. => ctx.isTypeValue se
+    | .ident _ name => name == "$witness"
     | .member _ _ field => field.startsWith "$w."
     | .app _ (.ident _ name) _ false => ["$typeValue", "$witness", "$stageWitness"].contains name
     | _ => false

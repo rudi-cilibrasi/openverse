@@ -1816,7 +1816,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   let metadataFields := env.classes.toArray.map fun c =>
     (env.fields c).zipIdx.filterMap fun ((name, _, _), i) =>
       if name.startsWith "$w." then some i else none
-  MetadataFlow.check fns metadataInfo metadataFields
+  MetadataFlow.check fns metadataInfo metadataFields opts.debug
   let (capturedFns, capturedSlots, capturedSigs) ← FailCapture.lower fns slotTys S00
   fns := capturedFns
   slotTys := capturedSlots

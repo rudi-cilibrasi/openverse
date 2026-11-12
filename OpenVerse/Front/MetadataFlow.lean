@@ -66,11 +66,16 @@ private structure State where
   summaries : Array Summary := #[]
   indices : Std.HashMap Key Nat := {}
   changed : Bool := false
+  debug : Bool := false
+  active : Option Key := none
 
 private abbrev M := StateT State (Except String)
 
-private def refuse (fn : Fn) (info : Info) (what : String) : M α :=
-  throw s!"{info.pos.show}: dummy type value cannot {what} (in {fn.name})"
+private def refuse (fn : Fn) (info : Info) (what : String) (details : String := "") : M α := do
+  let st ← get
+  let context := if st.debug then
+    s!"\nmetadata context: {reprStr st.active}\ninputs: {info.inputs}; seeds: {info.seeds}\n{details}\n{reprStr (info.body.getD fn.body)}" else ""
+  throw s!"{info.pos.show}: dummy type value cannot {what} (in {fn.name}){context}"
 
 private def request (key : Key) : M (Option Bool) := do
   let st ← get
@@ -90,10 +95,10 @@ private partial def expr (fns : Array Fn) (infos : Array Info)
     let some role := out.value | return out
     let role := role || info.seeds.contains i
     if role && info.uses.contains i then
-      refuse fn info "be an executable function or method receiver"
+      refuse fn info "be an executable function or method receiver" s!"receiver slot {i}, value {reprStr e}"
     if info.shared.contains i && out.slots.initialized[i]?.getD false && role &&
         !(out.slots.sharedMetadata[i]?.getD false) then
-      refuse fn info "enter a shared local containing executable data"
+      refuse fn info "enter a shared local containing executable data" s!"shared slot {i}, value {reprStr e}"
     let first := !(out.slots.initialized[i]?.getD false)
     return { out with
       value := some role
@@ -209,7 +214,8 @@ end
 /-- Solve recursive call contexts and loop back edges to a fixed point.
     Hidden witnesses do not taint an unrelated result: return roles come
     from the body, rather than the union of physical call arguments. -/
-def check (fns : Array Fn) (infos : Array Info) (fields : Array (List Nat)) : Except String Unit := do
+def check (fns : Array Fn) (infos : Array Info) (fields : Array (List Nat))
+    (debug : Bool := false) : Except String Unit := do
   let action : M Unit := do
     for i in [:fns.size] do
       let info := infos[i]?.getD {}
@@ -222,6 +228,7 @@ def check (fns : Array Fn) (infos : Array Info) (fields : Array (List Nat)) : Ex
         let (i, args) := summary.key
         let some fn := fns[i]? | throw "internal: metadata call has no body"
         let info := infos[i]?.getD {}
+        modify fun st => { st with active := some summary.key }
         let values := (List.range fn.nslots).map (fun i =>
           info.inputs.contains i || args[i]?.getD false) |>.toArray
         let initialized := (List.range fn.nslots).map (fun i => i < fn.arity : Nat → Bool) |>.toArray
@@ -231,6 +238,6 @@ def check (fns : Array Fn) (infos : Array Info) (fields : Array (List Nat)) : Ex
         if result != summary.result then
           modify fun st => { st with summaries := st.summaries.modify index (fun s => { s with result }), changed := true }
       growing := (← get).changed
-  discard <| action.run {}
+  discard <| action.run { debug }
 
 end OpenVerse.Front.MetadataFlow

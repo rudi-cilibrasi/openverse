@@ -34,9 +34,12 @@ returns `base`. A lexical name alone, a declaration fact, or a dummy type-value
 witness cannot supply that value. Plans retain symbolic names, resolve current
 slots at the use site, and only search visible bindings and compiler-owned
 readonly proof fields. They do not walk arbitrary user object graphs.
-A call result conservatively retains the dummy role when its callee or any
-written argument carries that role, including ordinary generic forwarding
-calls. This rule does not infer arbitrary function return dependencies.
+A call result conservatively retains the dummy role when its callee or an
+ordinary value argument carries that role, including generic forwarding
+calls. Declared metadata inputs, including compiler witnesses, do not taint an
+independent real result. The flow analysis checks the actual return when a
+callee returns a metadata formal. The source heuristic does not infer arbitrary
+function return dependencies.
 Argument binding also refuses dummy inputs to executable proof and function
 formals, including proof data exposed through containers or object fields.
 This check uses the callee's declared domain. An unconstrained parametric
@@ -58,8 +61,8 @@ object field or a shared local initialized with executable data. Checking the
 write protects every alias, including aliases obtained by indexed reads or
 passed to an unannotated helper. Compiler-owned `$w.` fields retain their
 metadata role without tainting unrelated object fields. This analysis adds no
-Core opcode or runtime tag. `MetadataStorage.lean` retains 14 real/dummy
-rejection pairs and eight opaque-forwarding, real-overwrite and rollback pairs,
+Core opcode or runtime tag. `MetadataStorage.lean` retains 15 real/dummy
+rejection pairs and ten opaque-forwarding, real-overwrite and rollback pairs,
 including a later GADT refinement and suspension-frame storage. These are
 compiler-API contracts under the public source guard; they do not complete the
 remaining generated-storage and source-admission audits.

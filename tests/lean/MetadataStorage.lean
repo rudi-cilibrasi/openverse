@@ -9,7 +9,9 @@ private partial def roles (dummy : Bool) : STop → Except String STop
     let ps ← ps.mapM fun param => do
       return { param with
         ty := ← param.ty.mapNamesM rename
-        typeValue := dummy && name == "Caller" && param.name == "Dummy" }
+        typeValue := (dummy && ((name == "Caller" && param.name == "Dummy") ||
+          (name == "ForwardMeta" && param.name == "M"))) ||
+          (name == "IgnoreMeta" && param.name == "M") }
     return .fn p name ps tps specs (← ret.mapNamesM rename) body
   | .classDef p name tps specs parents iface fields overrides methods => do
     let rename (n : String) : Except String String :=
@@ -28,6 +30,8 @@ private def cases : List (String × String) := [
     caller "    var Stored:u=D\n    set Stored=Keep(Dummy)\n    P.Up(Stored).Up(X).N"),
   ("helper local", "Keep(V:v where v:type)<transacts>:v=\n    var Stored:v=V\n    set Stored=V\n    Stored\n" ++
     caller "    var Stored:u=D\n    set Stored=Keep(Dummy)\n    P.Up(Stored).Up(X).N"),
+  ("returned metadata formal", "ForwardMeta(M:v where v:type)<computes>:v=M\n" ++
+    caller "    var Stored:u=D\n    set Stored=ForwardMeta(Dummy)\n    P.Up(Stored).Up(X).N"),
   ("recursive helper", "Keep(V:v,N:int where v:type)<computes>:v=if(N>0)then Keep(V,N-1)else V\n" ++
     caller "    var Stored:u=D\n    set Stored=Keep(Dummy,2)\n    P.Up(Stored).Up(X).N"),
   ("branch join", caller "    var Stored:u=D\n    if(true?)then set Stored=Dummy\n    P.Up(Stored).Up(X).N"),
@@ -45,6 +49,8 @@ private def cases : List (String × String) := [
   ("function stored in local", "Caller(F:type{_()<computes>:int},Dummy:type{_()<computes>:int})<transacts>:int=\n    var Stored:type{_()<computes>:int}=F\n    set Stored=Dummy\n    Stored()")]
 
 private def forwards : List (String × String) := [
+  ("metadata argument with real return", "IgnoreMeta(M:u,Real:evidence(vehicle,t) where u:type,t:type)<computes>:evidence(vehicle,t)=Real\nCaller(X:t,D:evidence(vehicle,t),Dummy:u where t:type,u:type)<computes>:int=IgnoreMeta(Dummy,D).Up(X).N"),
+  ("metadata argument with real failable return", "IgnoreMeta(M:u,Real:evidence(vehicle,t) where u:type,t:type)<decides><computes>:evidence(vehicle,t)=block{true?;Real}\nCaller(X:t,D:evidence(vehicle,t),Dummy:u where t:type,u:type)<computes>:int=if(Proof:=IgnoreMeta[Dummy,D])then Proof.Up(X).N else 0"),
   ("opaque mutable local", "Caller(Dummy:u where u:type)<transacts>:u=\n    var Stored:u=Dummy\n    set Stored=Dummy\n    Stored"),
   ("opaque overwritten local", "Caller(D:u,Dummy:u where u:type)<transacts>:u=\n    var Stored:u=D\n    set Stored=Dummy\n    Stored"),
   ("opaque updated array", "Caller(D:u,Dummy:u where u:type)<transacts>:[]u=\n    var Stored:[]u=array{D}\n    if(set Stored[0]=Dummy){}\n    Stored"),
