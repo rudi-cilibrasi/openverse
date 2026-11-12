@@ -587,6 +587,11 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
           throw s!"{cd.pos.show}: {cd.name} inherits {mn} from both {clsOf f} and {clsOf g}: override it in {cd.name}"
       | _ => pure ()
   let allTops := expanded.toList
+  -- (#283) the methods that are a family's stub (`Choice.familyStub`), as
+  -- functions: name, where declared, and as written
+  let stubs : List (String × Pos × String) := allTops.filterMap fun
+    | .fn q n _ _ _ _ b => if Choice.isFamilyStub b then some (n, q, Choice.shownFnName n) else none
+    | _ => none
   -- the type definitions: `name := struct …` and `name := enum …`
   let isTypeDef : STop → Bool
     | .const _ _ none (.structDef ..) | .const _ _ none (.enumDef ..) | .const _ _ none (.refineDef ..) => true
@@ -1565,6 +1570,15 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   if usesConc then
     fns := CompilerWrites.propagate beforeConcurrency fns
   let P : Prog := { fns := fns.toList, main }
+  -- (#283) no function calls a family's stub (`Choice.familyStub`): each
+  -- call of the family's method was rewritten not to be one, and a call of
+  -- it would run its `Err()`. Whatever code made it, a call names its
+  -- function (dispatch is a test of the class, then a call), so a stub no
+  -- call names never runs
+  for fn in P.fns do
+    for (g, _) in Suspend.callsOf fn.body do
+      if let some (q, shown) := (P.fns[g]?).bind fun callee => stubs.lookup callee.name then
+        throw s!"{q.show}: a call of {shown}, a method with several values, is compiled as a call of a method of one value (in {Choice.shownFnName fn.name}), its family not known where it is chosen: not supported yet (#283)"
   if !P.check then
     let bad := P.fns.filter fun fn => (!fn.decides && fn.body.mayFail P) ||
       (!fn.writes && fn.body.writesHeap P) || !(fn.body.scoped P fn.nslots)

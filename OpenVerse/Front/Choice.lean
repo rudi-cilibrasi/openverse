@@ -2621,6 +2621,18 @@ def famAt (anc : String → List String) (fams : List (String × MFam)) (shared 
   | .ident _ "Self", some d => fs.find? fun f => (anc d).contains f.root
   | _, _ => (picks.lookup q).bind fun r => fs.find? (·.root == r)
 
+/-- (#283) The body a method of a family with several values keeps in its
+    class, where the elaborator still checks it as a member, while its
+    implementation is a function and each call of it is rewritten: no call
+    may name it (`Err()` if one did; the elaborator refuses a program with
+    one). -/
+def familyStub (p : Pos) : SExpr := .app p (.ident p "$familyStub") [] false
+
+/-- Whether `e` is a family's stub (`familyStub`). -/
+def isFamilyStub : SExpr → Bool
+  | .app _ (.ident _ "$familyStub") [] false => true
+  | _ => false
+
 /-- A method's name as a qualified call writes it (`(c:)M`, #125): `c` and
     `M`; `M` alone otherwise. -/
 def qualified (m : String) : Option String × String :=
@@ -3135,7 +3147,7 @@ def methodFns (tops : List STop) (reserved : List String := []) (picks : List (P
   -- which no call reaches: so the elaborator still checks it as a member,
   -- <final>, its signature and effects against the one it overrides, an
   -- abstract one implemented)
-  let stub (q : Pos) : SExpr := .app q (.ident q "Err") [] false
+  let stub (q : Pos) : SExpr := familyStub q
   -- (one overridden nowhere, `direct`, is taken out, as there is nothing
   -- to check it against, unless its name is `shared`, or overloaded: a use
   -- the elaboration picks the family or list of then calls it as written,
