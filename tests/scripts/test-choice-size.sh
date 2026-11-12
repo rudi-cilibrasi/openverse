@@ -108,6 +108,22 @@ kinds=(
   polymorphic-erased-for
   polymorphic-erased-waiting
   polymorphic-awaiting-waiting
+  getter-simple-first
+  getter-simple-for
+  getter-simple-waiting
+  getter-mixed-first
+  getter-mixed-for
+  getter-mixed-waiting
+  getter-chained-first
+  getter-chained-for
+  getter-chained-waiting
+  getter-generic-first
+  getter-generic-for
+  getter-generic-waiting
+  getter-lengths-first
+  getter-lengths-for
+  getter-lengths-waiting
+  getter-awaiting-waiting
   exclusive
   heterogeneous-nested-for
   heterogeneous-unused-first
@@ -255,6 +271,41 @@ if kind == 'heterogeneous-nested-for':
         body = f'for(A{i}:=(Dup(1)|Dup("s"))):' + body
     print('    Rows:=' + body)
     print('    Print("{Rows.Length}")')
+    sys.exit(0)
+if kind.startswith('getter-'):
+    _, shape, mode = kind.split('-')
+    generic = shape == 'generic'
+    awaiting = shape == 'awaiting'
+    print('Dup(X:t where t:type)<computes>:t=X|X')
+    print('Equal(X:t,Y:t where t:subtype(comparable))<computes>:int=if(X=Y)then 1 else 0')
+    for cls in ['ca','cb']:
+        print(cls + ('(t:subtype(comparable))' if generic else '') + ':=class:')
+        print('    K:int=1' + ('\n    V:t' if generic else ''))
+        result = cls + ('(t)' if generic else '') if shape in ('chained','generic','awaiting') else 'int'
+        value = 'Self' if shape in ('chained','generic','awaiting') else 'K'
+        print('    M()<computes>' + ('<suspends>' if awaiting else '') + ':' + result + '=block{' + ('Sleep(0.0);' if awaiting else '') + value + '}')
+    params=[];tparams=[];main=[]
+    if generic:
+        for i in range(count):
+            params.extend([f'P{i}:ca(t{i})',f'Q{i}:cb(t{i})',f'V{i}:t{i}'])
+            tparams.append(f't{i}:subtype(comparable)')
+            typ, value = ('int','7') if i%2==0 else ('string','"s"')
+            main.extend([f'ca({typ}){{V:={value}}}',f'cb({typ}){{V:={value}}}',value])
+    values = 'map{1=>1})|Dup("s"))' if shape == 'lengths' else 'ca{})|Dup(cb{}))'
+    clauses=','.join(f'A{i}:=(Dup(' + (f'P{i})|Dup(Q{i}))' if generic else values) for i in range(count))
+    terms=[]
+    for i in range(count):
+        terms.append(f'Equal(A{i}.V,V{i})+Equal(A{i}.M().V,V{i})' if generic else f'A{i}.Length' if shape=='lengths' else f'A{i}.K+A{i}.M()' if shape=='mixed' else f'A{i}.M().K' if shape in ('chained','awaiting') else f'A{i}.K')
+    value='+'.join(terms)
+    effects='<suspends>' if mode=='waiting' else ''
+    signature=','.join(params)+(' where '+','.join(tparams) if generic else '')
+    print(f'Run({signature}){effects}:int=')
+    if mode=='first':
+        print('    if('+clauses+',V:='+value+',V>0)then V else -1')
+    else:
+        print('    Rows:=for('+clauses+'):'+value)
+        print('    Rows.Length')
+    print(f'Main(){effects}:void=Print("{{Run('+','.join(main)+')}")')
     sys.exit(0)
 if kind.startswith('polymorphic-'):
     _, shape, mode = kind.split('-')
