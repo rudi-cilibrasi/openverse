@@ -13,6 +13,39 @@ partial def elabExprInitialWith
     (next : Ctx → SExpr → Option Ty → EM R)
     (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
   match se with
+  | .app p (.ident _ "$choiceFixedOperation") [.block _ metadata, .block _ labels, invocation] false =>
+    if ctx.typeOnly then
+      let .app _ (.ident _ "$choiceOperation") (_ :: _ :: _ :: values) _ := invocation
+        | eerr p "internal: invalid fixed operation call"
+      if labels.length != values.length then eerr p "internal: invalid fixed operation arguments"
+      let arguments ← (labels.zip values).mapM fun
+        | (.str _ [.text label], value) => pure (if label == "" then value else .decl p label none false value)
+        | _ => eerr p "internal: invalid fixed operation label"
+      let saved ← get
+      for entry in metadata do
+        let .tuple _ [.str _ [.text implementation], .construct _ "$choiceReceiver" [receiver] [],
+            .construct _ "$choiceMethodInstance" types [], .block _ equations] := entry
+          | eerr p "internal: invalid fixed operation instance"
+        let substitution : List (String × Ty) ← equations.mapM fun
+          | .tuple _ [.construct _ "$choiceVariable" [.name n] [], .construct _ "$choiceInstance" [ty] []] => do
+            pure (n, ← resolveTy ctx.types p ty)
+          | _ => eerr p "internal: invalid fixed operation equation"
+        let c : Ctx := { ctx with
+          types := { ctx.types with tvars := substitution ++ ctx.types.tvars },
+          locals := ctx.locals.map fun l => { l with ty := l.ty.subst substitution } }
+        let receiver ← resolveTy c.types p receiver
+        let expected ← types.mapM (resolveTy c.types p)
+        let some sig := c.sig? implementation | eerr p "internal: missing fixed operation method"
+        let name := "$choiceOperationReceiver"
+        let slot ← fresh receiver
+        let c := { c with
+          callInstanceProbe := some implementation,
+          locals := { name, slot, ty := receiver, mutable := false } :: c.locals }
+        let packet ← elabGenericCallWith elabE c p sig (.ident p name :: arguments) (exp.map (·.subst substitution))
+        if reprStr packet.ty != reprStr (Ty.tup expected) then
+          eerr p "operation inference depends on its expected result"
+        set saved
+    elabE ctx invocation exp
   | .app p (.ident _ "$choiceCoercions") [.block _ metadata, body] false =>
     let rules ← metadata.mapM fun
       | .tuple _ [.ident _ name, .construct _ "$choiceConversion" [source, target] []] => do

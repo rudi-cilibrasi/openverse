@@ -8,6 +8,15 @@ tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
 limit="${CHOICE_SIZE_TIMEOUT:-120}"
 # Keep modes sorted on separate lines so independent additions merge cleanly.
 kinds=(
+  methodinstance-family-first
+  methodinstance-family-for
+  methodinstance-family-waiting
+  methodinstance-default-first
+  methodinstance-default-for
+  methodinstance-default-waiting
+  methodinstance-partial-first
+  methodinstance-partial-for
+  methodinstance-partial-waiting
   callpacking-tuplevar-first
   callpacking-tuplevar-for
   callpacking-tuplevar-waiting
@@ -585,6 +594,31 @@ for kind in "${kinds[@]}"; do
     python3 - "$kind" "$count" >"$tmp/p.verse" <<'PY'
 import sys
 kind, count = sys.argv[1], int(sys.argv[2])
+if kind.startswith('methodinstance-'):
+    _, shape, mode = kind.split('-')
+    waiting = mode == 'waiting'
+    effects = '<suspends>' if waiting else ''
+    print('Dup(X:t where t:type)<computes>:t=X|X')
+    if shape == 'family':
+        for name in ['foo', 'bar']:
+            print(name+'(t:type):=class<computes>{V:t}')
+    for cls, result, default in [('ca','foo',1),('cb','bar',2)]:
+        params = 'X:u where u:type' if shape == 'family' else ('I:u,' if shape == 'partial' else '')+'?X:u='+str(default)+' where u:type'
+        ret = result+'(u)' if shape == 'family' else 'u'
+        value = result+'(u){V:=X}' if shape == 'family' else 'X'
+        print(cls+':=class{M('+params+')<computes>'+effects+':'+ret+'=block{'+('Sleep(0.0);' if waiting else '')+value+'}}')
+    clauses = ','.join(f'A{i}:=(Dup(ca{{}})|Dup(cb{{}}))' for i in range(count))
+    statements = [f'B{i}:=A{i}.M('+('' if shape == 'default' else '7')+')' for i in range(count)]
+    terms = [f'B{i}'+('.V' if shape == 'family' else '') for i in range(count)]
+    value = 'block{'+';'.join(statements+['+'.join(terms)])+'}'
+    print('Run()'+effects+':int=')
+    if mode == 'first':
+        print('    if('+clauses+',V:='+value+',V>0)then V else -1')
+    else:
+        print('    Rows:=for('+clauses+'):'+value)
+        print('    Rows.Length')
+    print('Main()'+effects+':void=Print("{Run()}")')
+    sys.exit(0)
 if kind.startswith('callpacking-'):
     rest=kind.removeprefix('callpacking-')
     shape,mode=rest.rsplit('-',1)
@@ -2137,6 +2171,18 @@ PY
       fi
       printf '%s\n' "$expected" >"$tmp/expected"
       timeout "$limit" "$root/.lake/build/bin/openverse" run "$tmp/p.verse" "${compat[@]}" >"$tmp/lean.out"
+      timeout "$limit" "$root/runtime/build/cverse" "$tmp/p.vbc" >"$tmp/c.out"
+      diff -u "$tmp/expected" "$tmp/lean.out"
+      diff -u "$tmp/expected" "$tmp/c.out"
+    fi
+    if [[ $kind == methodinstance-* && $count == 4 ]]; then
+      expected=256
+      if [[ $kind == *-first ]]; then
+        expected=4
+        [[ $kind == methodinstance-family-* ]] && expected=28
+      fi
+      printf '%s\n' "$expected" >"$tmp/expected"
+      timeout "$limit" "$root/.lake/build/bin/openverse" run "$tmp/p.verse" >"$tmp/lean.out"
       timeout "$limit" "$root/runtime/build/cverse" "$tmp/p.vbc" >"$tmp/c.out"
       diff -u "$tmp/expected" "$tmp/lean.out"
       diff -u "$tmp/expected" "$tmp/c.out"

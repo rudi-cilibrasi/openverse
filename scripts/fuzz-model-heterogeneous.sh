@@ -28,6 +28,7 @@ case ${3:-} in
   --packed-default-methods) mode_args+=(--packed-default-methods); tag=packed-default-method-dictionary ;;
   --writes) mode_args+=(--writes); tag=write-dictionary ;;
   --result-aliases) mode_args+=(--result-aliases); tag=result-alias-dictionary ;;
+  --associated-methods) mode_args+=(--associated-methods); tag=associated-method-dictionary ;;
   --aliases) mode_args+=(--aliases); tag=alias-dictionary ;;
   --members) mode_args+=(--members); tag=member-dictionary ;;
   --callable-fields) mode_args+=(--callable-fields); tag=callable-field-dictionary ;;
