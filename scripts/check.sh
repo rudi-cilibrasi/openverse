@@ -60,6 +60,12 @@ if lake env lean -j1 --run tests/lean/SourceProfile.lean >"$logs/profile-contrac
 else
   rc=$?; cat "$logs/profile-contracts"; exit "$rc"
 fi
+echo "== effect admission compiler API contracts"
+if lake env lean -j1 --run tests/lean/EffectPolicy.lean >"$logs/effect-contracts" 2>&1; then
+  cat "$logs/effect-contracts"
+else
+  rc=$?; cat "$logs/effect-contracts"; exit "$rc"
+fi
 if grep -rnE '\bsorry\b|\badmit\b' OpenVerse/ Main.lean; then echo "error: sorry/admit in Lean sources" >&2; exit 1; fi
 scripts/gen-claims.sh --check
 echo "== C runtime"
@@ -83,6 +89,7 @@ check "class-feature fuzzing (${FUZZ_CLASSES:-200} programs)" scripts/fuzz-class
 check "differential fuzzing (${FUZZ:-1000} random programs)" scripts/fuzz-diff.sh "${FUZZ:-1000}" "$seed"
 check "Verse test suite, Lean and C" scripts/test-verse.sh --c
 check "overloading conformance matrix" bash tests/scripts/test-overload-conformance.sh
+check "effect admission and executable controls" bash tests/scripts/test-effect-admission.sh
 check "overload domains (${FUZZ_OVERLOAD_SHAPES:-468} programs, across six contexts)" \
   bash scripts/fuzz-overload-shapes.sh "${FUZZ_OVERLOAD_SHAPES:-468}" "$seed"
 check "choice-free source profile" bash tests/scripts/test-choice-profile.sh

@@ -1,0 +1,5 @@
+begin 1
+cancel
+cleanup 2
+state 2
+exit=0

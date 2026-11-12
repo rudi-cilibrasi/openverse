@@ -23,6 +23,7 @@ import OpenVerse.Core.TypeCheck
 import OpenVerse.Core.Control
 import OpenVerse.Front.Parser
 import OpenVerse.Front.Profile
+import OpenVerse.Front.EffectPolicy
 import OpenVerse.Front.Suspend
 import OpenVerse.Front.Rational
 import OpenVerse.Front.Modules
@@ -10814,6 +10815,7 @@ def checkLoopFirst (fns : Array Fn) (uses : List LoopUse)
 /-- Elaborate a parsed program into a Verse Core program that passes `Prog.check`
     and `Prog.checkTypes`. -/
 def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except String Compiled := do
+  EffectPolicy.check allTops0r opts.entry
   SourceProfile.check opts.profile allTops0r opts.entry
   -- rationals (#116): the helpers, for a program that may use them
   let isRatMarker : STop → Bool := fun
@@ -10872,6 +10874,17 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   -- (#246) the functions of their own of lazily taken calls
   let resolved := opts.loopRequests.flatMap (fun l =>
     (if l.stageOnly then [] else [STop.fn l.pos l.name l.params l.tparams l.specs l.ret l.body]) ++ l.extraFns) ++ resolved
+  -- Public compiler requests must not launder annotations through generated
+  -- source or through function shapes that normalize their effect lists.
+  EffectPolicy.check (resolved ++ helpers)
+  for (_, ty) in opts.fnRequests do
+    EffectPolicy.checkTy { line := 0, col := 0 } ty.toSTy
+  for request in opts.methodRequests do
+    EffectPolicy.checkSpecs request.pos request.key request.effs
+    EffectPolicy.checkTy request.pos request.receiver
+    request.params.forM (EffectPolicy.checkTy request.pos)
+    EffectPolicy.checkTy request.pos request.ret
+    request.args.forM (EffectPolicy.checkExpr · request.pos.file)
   -- (the helpers after: they name nothing of the program's)
   -- function values (#210): the function types' interfaces, and a class
   -- for each function used as a value
