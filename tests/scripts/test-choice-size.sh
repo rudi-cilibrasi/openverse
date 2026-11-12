@@ -8,6 +8,60 @@ tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
 limit="${CHOICE_SIZE_TIMEOUT:-120}"
 # Keep modes sorted on separate lines so independent additions merge cleanly.
 kinds=(
+  objectpath-plain-opt-array-first
+  objectpath-plain-opt-array-for
+  objectpath-plain-opt-array-waiting
+  objectpath-plain-array-opt-first
+  objectpath-plain-array-opt-for
+  objectpath-plain-array-opt-waiting
+  objectpath-plain-opt-only-first
+  objectpath-plain-opt-only-for
+  objectpath-plain-opt-only-waiting
+  objectpath-plain-reference-array-first
+  objectpath-plain-reference-array-for
+  objectpath-plain-reference-array-waiting
+  objectpath-plain-reference-map-first
+  objectpath-plain-reference-map-for
+  objectpath-plain-reference-map-waiting
+  objectpath-plain-value-field-first
+  objectpath-plain-value-field-for
+  objectpath-plain-value-field-waiting
+  objectpath-plain-mixed-query-first
+  objectpath-plain-mixed-query-for
+  objectpath-plain-mixed-query-waiting
+  objectpath-plain-contextual-first
+  objectpath-plain-contextual-for
+  objectpath-plain-contextual-waiting
+  objectpath-plain-alias-reference-first
+  objectpath-plain-alias-reference-for
+  objectpath-plain-alias-reference-waiting
+  objectpath-compound-opt-array-first
+  objectpath-compound-opt-array-for
+  objectpath-compound-opt-array-waiting
+  objectpath-compound-array-opt-first
+  objectpath-compound-array-opt-for
+  objectpath-compound-array-opt-waiting
+  objectpath-compound-opt-only-first
+  objectpath-compound-opt-only-for
+  objectpath-compound-opt-only-waiting
+  objectpath-compound-reference-array-first
+  objectpath-compound-reference-array-for
+  objectpath-compound-reference-array-waiting
+  objectpath-compound-reference-map-first
+  objectpath-compound-reference-map-for
+  objectpath-compound-reference-map-waiting
+  objectpath-compound-value-field-first
+  objectpath-compound-value-field-for
+  objectpath-compound-value-field-waiting
+  objectpath-compound-mixed-query-first
+  objectpath-compound-mixed-query-for
+  objectpath-compound-mixed-query-waiting
+  objectpath-compound-contextual-first
+  objectpath-compound-contextual-for
+  objectpath-compound-contextual-waiting
+  objectpath-compound-alias-reference-first
+  objectpath-compound-alias-reference-for
+  objectpath-compound-alias-reference-waiting
   multiindex-plain-simple-first
   multiindex-plain-simple-for
   multiindex-plain-simple-waiting
@@ -456,6 +510,41 @@ for kind in "${kinds[@]}"; do
     python3 - "$kind" "$count" >"$tmp/p.verse" <<'PY'
 import sys
 kind, count = sys.argv[1], int(sys.argv[2])
+if kind.startswith('objectpath-'):
+    _,op,rest=kind.split('-',2)
+    shape,mode=rest.rsplit('-',1)
+    n=count
+    print('Dup(X:t where t:type)<computes>:t=X|X')
+    for cls,tag in [('ca','a'),('cb','b')]:
+        leaf='[]int' if shape=='contextual' and tag=='a' else '[]string' if shape=='contextual' else 'int' if tag=='a' else 'rational'
+        value='array{1}' if shape=='contextual' and tag=='a' else 'array{"s"}' if shape=='contextual' else '1'
+        keyTy='int' if tag=='a' else 'string';key='0' if tag=='a' else '"k"'
+        if shape in ['reference-array','reference-map','mixed-query','alias-reference']:
+            print('leaf'+tag+':=class{var Data:'+('?' if shape=='mixed-query' else '')+'[]'+leaf+'='+('option{' if shape=='mixed-query' else '')+'array{'+value+'}'+('}' if shape=='mixed-query' else '')+'}')
+        if shape=='value-field':
+            print('state'+tag+':=struct{X:'+leaf+';Tail:int=9}')
+            field='var Data:state'+tag+'=state'+tag+'{X:='+value+'}'
+        elif shape in ['reference-array','alias-reference']:field='var Items:[]leaf'+tag+'=array{leaf'+tag+'{}}'
+        elif shape=='reference-map':field='var Items:['+keyTy+']leaf'+tag+'=map{'+key+'=>leaf'+tag+'{}};Key()<computes>:'+keyTy+'='+key
+        elif shape=='mixed-query':field='var Items:?['+keyTy+']?leaf'+tag+'=option{map{'+key+'=>option{leaf'+tag+'{}}}};Key()<computes>:'+keyTy+'='+key
+        else:
+            ty='[]?'+leaf if shape=='array-opt' else '?'+leaf if shape=='opt-only' else '?[]'+leaf
+            initial='array{option{'+value+'}}' if shape=='array-opt' else 'option{'+value+'}' if shape=='opt-only' else 'option{array{'+value+'}}'
+            field='var Data:'+ty+'='+initial
+        print(cls+':=class{'+field+'}')
+    clauses=[f'A{i}:=(Dup(ca{{}})|Dup(cb{{}}))' for i in range(n)];writes=[]
+    for i in range(n):
+        target=f'A{i}'
+        if shape=='alias-reference':clauses+=[f'B{i}:=A{i}',f'C{i}:=B{i}'];target=f'C{i}'
+        tail='.Data[0]?' if shape=='array-opt' else '.Data?' if shape=='opt-only' else '.Data.X' if shape=='value-field' else '.Items[0].Data[0]' if shape in ['reference-array','alias-reference'] else '.Items['+target+'.Key()].Data[0]' if shape=='reference-map' else '.Items?['+target+'.Key()]?.Data?[0]' if shape=='mixed-query' else '.Data?[0]'
+        writes.append('set '+target+tail+('+=' if op=='compound' else '=')+('array{}' if shape=='contextual' else '1'))
+    print('Run()'+('<suspends>' if mode=='waiting' else '')+':int=')
+    if mode=='first':print('    if('+','.join(clauses+writes)+')then 1 else -1')
+    else:
+        body=('block{'+(';'.join(writes) if shape=='value-field' else 'if('+','.join(writes)+'):{}')+';Sleep(0.001);0}') if mode=='waiting' else '0'
+        print('    Rows:=for('+','.join(clauses+([] if mode=='waiting' else writes))+'):'+body+'\n    Rows.Length')
+    print('Main()'+('<suspends>' if mode=='waiting' else '')+':void=Print("{Run()}")')
+    sys.exit(0)
 if kind.startswith('multiindex-'):
     _,op,shape,mode=kind.split('-')
     n=count
@@ -1817,7 +1906,7 @@ PY
       diff -u "$tmp/expected" "$tmp/lean.out"
       diff -u "$tmp/expected" "$tmp/c.out"
     fi
-    if [[ ( $kind == named-* || $kind == conversion-* || $kind == indexwrite-* || $kind == compoundindex-* || $kind == mapwrite-* || $kind == multiindex-* ) && $count == 4 ]]; then
+    if [[ ( $kind == named-* || $kind == conversion-* || $kind == indexwrite-* || $kind == compoundindex-* || $kind == mapwrite-* || $kind == multiindex-* || $kind == objectpath-* ) && $count == 4 ]]; then
       expected=256
       if [[ $kind == *-first ]]; then
         expected=1
