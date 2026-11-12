@@ -1,0 +1,7 @@
+call 1
+call 2
+stop 2
+call 2
+body 2
+after 2
+exit=0

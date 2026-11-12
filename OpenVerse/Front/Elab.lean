@@ -8105,6 +8105,14 @@ partial def elabIndexLike (ctx : Ctx) (p : Pos) (r : R) (args : List SExpr) (bra
       let nm := s!"$fnval{t}"
       let ctx' := { ctx with locals := { name := nm, slot := t, ty := r.ty, mutable := false } :: ctx.locals }
       let rc ← elabApp ctx' p (.member p (.ident p nm) (FnValues.callOf n)) args bracket none
+      -- A type-only operation dictionary may discard this call's Expr
+      -- while retaining its result type. Keep the source wait visible to
+      -- the enclosing continuation; merely reading a callable stays immediate.
+      if ctx.typeOnly && effs.contains "suspends" then
+        modify fun st => { st with
+          pendingSuspendingCasts := st.pendingSuspendingCasts + 1,
+          pendingWaitingCasts := st.pendingWaitingCasts + 1,
+          pendingSourceSuspends := st.pendingSourceSuspends + 1 }
       return ⟨.seq (.assign t r.e) rc.e, rc.ty⟩
   match r.ty, args, bracket with
   | .arr t, [i], true =>

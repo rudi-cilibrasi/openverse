@@ -296,8 +296,10 @@ if kind.startswith('member-'):
             print(cls + ':=class{K:int=1;M(Ignored:u where u:type)<computes>:' + cls + '=Self}')
     elif result:
         print('ra:=class<computes>{K:int=1}\nrb:=class<computes>{K:int=1}')
-        print('MakeA(X:any)<computes>:ra=ra{}\nMakeB(X:any)<computes>:rb=rb{}')
-        print('ca:=class{F:type{_(:any)<computes>:ra}=MakeA}\ncb:=class{F:type{_(:any)<computes>:rb}=MakeB}')
+        effects = '<computes>' + ('<suspends>' if mode == 'waiting' else '')
+        wait = 'Sleep(0.0);' if mode == 'waiting' else ''
+        print('MakeA(X:any)' + effects + ':ra=block{' + wait + 'ra{}}\nMakeB(X:any)' + effects + ':rb=block{' + wait + 'rb{}}')
+        print('ca:=class{F:type{_(:any)' + effects + ':ra}=MakeA}\ncb:=class{F:type{_(:any)' + effects + ':rb}=MakeB}')
     else:
         for cls,ty,value,name in [('ca','int','7','Integer'),('cb','string','"s"','String')]:
             effects='<computes>' + ('<suspends>' if awaiting else '')
