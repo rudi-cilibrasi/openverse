@@ -1287,6 +1287,12 @@ def choiceOperations (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx)
       | .member p receiver field => some (p, receiver, field, [], false, true)
       | _ => none
     let some (p, receiver, method, arguments, bracket, isField) := details | continue
+    let callee := match call with | .app _ fn _ _ => fn | _ => call
+    let functionType := if isField then none else (ops.knownTypes.find? (·.1 == callee)).map (·.2)
+    let callable := functionType.any fun | .param .. => true | _ => false
+    -- Preserve callee-before-argument evaluation, including a mutable
+    -- callback replaced by one of its argument expressions.
+    let receiver := if callable then callee else receiver
     let direct := match receiver with | .ident _ n => n == binding | _ => false
     let known := (ops.knownTypes.find? (·.1 == receiver)).map (·.2)
     let receiverTy ← if direct then pure (some ops.plan.binding) else if known.isSome then pure known else do
@@ -1305,7 +1311,12 @@ def choiceOperations (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx)
     let mut cases : List ChoiceOperationCase := []
     for instanceTypes in ops.plan.instances do
       let actual := (receiverTy.subst instanceTypes).subst ctx.types.tvars
-      if isField then
+      if callable then
+        let .struct name types := actual | break
+        let some (arity, specs) := FnValues.parseName name | break
+        if arity != arguments.length || types.length != arity + 1 || specs.contains "decides" != bracket then break
+        cases := cases ++ [{ receiver := actual, inputs := types.dropLast, result := types.getLast!, specs }]
+      else if isField then
         match actual with
         | .arr _ | .map .. =>
           if method != "Length" then break
@@ -1360,7 +1371,7 @@ def choiceOperations (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx)
       let vars := Ty.mergeParamBounds ((types ++ [row.result]).flatMap Ty.paramsC)
       let rename := vars.zipIdx.map fun ((name, bound), i) => (name, Ty.param s!"$operationT{i}" bound)
       (types.map (·.subst rename), row.result.subst rename)
-    let family := s!"$choiceOperationDictionary{(reprStr ((if isField then "$field:" ++ method else method), specs, canonical)).hash}"
+    let family := s!"$choiceOperationDictionary{(reprStr ((if callable then "$invoke:" ++ method else if isField then "$field:" ++ method else method), specs, canonical)).hash}"
     let names := "$operationReceiver" :: ((List.range arguments.length).map fun i => s!"$operationArgument{i}") ++ ["$operationResult"]
     let variables := names.map STy.name
     let tps := names.map fun n => ({ pos := p0, name := n, constraint := "type" } : TParam)
@@ -1376,7 +1387,8 @@ def choiceOperations (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx)
       (.app p0 (.member p0 (.ident p0 "$Self") "$apply") values bracket)
     let name := s!"{stem}$op{ops.params.length}"
     let ty := Ty.struct family (receiverTy :: inputs ++ [result])
-    let operation := if isField then SExpr.member p0 values.head! method else
+    let operation := if callable then SExpr.app p0 values.head! values.tail bracket else
+      if isField then SExpr.member p0 values.head! method else
       .app p0 (.member p0 values.head! method) values.tail bracket
     let mut definitions : List STop := [iface, applyFn]
     let mut bindings : List (List SExpr) := []
