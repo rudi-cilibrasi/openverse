@@ -34,12 +34,19 @@ The model:
     explicit witnesses for types used only by the suffix's written types;
   * generic mutual trees retain each member's type instance, item effects,
     value rollback, mutable captures and written-only witnesses;
+  * a lazy one may bind its call of itself with code after it, which runs
+    on each of the call's values (a return frame, #283), and what it reads
+    before that call (a call of a function) is read once, before it;
   * early and terminal source returns yield the same ordered values as
     explicit conditional tails, ending only their current invocation;
   * methods may infer their own type parameters independently of receiver
     arguments, including through overrides, super tuples and interface defaults;
   * a super call of another method keeps its lexical ancestor, whether the
-    target has one value or several, rather than dispatching to an override.
+    target has one value or several, rather than dispatching to an override;
+  * methods of one name declared apart in unrelated classes and interfaces are
+    each the root of a family of their own: a call through a receiver of a
+    class below one of them has that family's values, and one of a class
+    whose method of that name is ordinary has its one value.
 """
 import random, sys, os, re
 
@@ -47,10 +54,15 @@ R = None
 # (#387: an overridden method of a generic class; a generator of its own decides, so seeds keep
 # their other programs)
 R387 = None
+RFrame = None
 # (#392: a named parameter with a default; a generator of its own decides, so seeds keep their
 # other programs)
 R392 = None
 RMethod = None
+# (#283: at times every method with several values is named Vals, declared apart in the
+# programs' unrelated classes and interfaces, beside an ordinary Vals of a class of its own,
+# called at the end; a generator of its own decides, so seeds keep their other programs)
+SHARED = False
 # Source-spelling variants share the existing independent value/effect model.
 RECURSIVE_RETURNS = "no-recursive-returns" not in sys.argv[3:]
 
@@ -345,6 +357,18 @@ d{n}({child_tps}) := class({parent}):{extra_field}
             self.path = "lazy"; self.params = [("X", "t"), ("Y", "t"), ("N", "int")]; self.decides = True; self.fx = True
             self.src = ("%s(X:t, Y:t, N:int where t:type)<transacts><decides>:t =\n"
                         "    Print(\"%s {N}\")\n    N > 0\n    %s[X, Y, N - 1] | X | %s[Y, X, N - 1]") % (n, n, n, n)
+        elif k == "LFr":
+            # (#283: the call of itself bound, with code after it that runs on
+            # each of its values, a return frame; taken lazily as it prints)
+            self.path = "lazy"; self.params = [("X", "t"), ("Y", "t"), ("N", "int")]; self.decides = True; self.fx = True
+            self.src = ("%s(X:t, Y:t, N:int where t:type)<transacts><decides>:t =\n"
+                        "    N > 0\n    Z := %s[Y, X, N - 1] | X\n    Print(\"%s {N}\")\n    Z") % (n, n, n)
+        elif k == "LFp":
+            # (#283: a call of a function before its call of itself, bound once
+            # before it, the frame using that value after each of the call's)
+            self.path = "lazy"; self.params = [("X", "t"), ("Y", "t"), ("N", "int")]; self.decides = True; self.fx = True
+            self.src = ("%s(X:t, Y:t, N:int where t:type)<transacts><decides>:t =\n"
+                        "    N > 0\n    Z := block{ W := Id(X); V := %s[Y, X, N - 1]; Print(\"%s {N}\"); W } | Y\n    Z") % (n, n, n)
         elif k == "LCmp":
             self.path = "lazy"; self.params = [("A", "arr"), ("X", "t"), ("I", "int")]; self.decides = True; self.cmp = True
             self.src = ("%s(A:[]t, X:t, I:int where t:subtype(comparable))<decides>:t =\n"
@@ -363,6 +387,8 @@ d{n}({child_tps}) := class({parent}):{extra_field}
                         "    N > 0\n    Id(%s[X, Y, N - 1]) | X | Id(%s[Y, X, N - 1])") % (n, n, n)
         else:
             raise ValueError(k)
+        if k == "IMeth" and SHARED:
+            self.src = re.sub(rf"\bM{n}\b", "Vals", self.src)
 
         if RECURSIVE_RETURNS and self.path in ("lazy", "eager") and random.Random(n).random() < 0.5:
             lines = self.src.splitlines()
@@ -489,6 +515,18 @@ d{n}({child_tps}) := class({parent}):{extra_field}
             l = self.expand({"X": a["X"], "Y": a["Y"], "N": a["N"] - 1}, var)
             r = self.expand({"X": a["Y"], "Y": a["X"], "N": a["N"] - 1}, var)
             return out + [("choice", [l, V(a["X"]), r])]
+        if k == "LFr":
+            # (the frame's print after each value of the call, and after X)
+            if a["N"] <= 0: return [("cond", False)]
+            back = ("print", "%s %d" % (self.name, a["N"]))
+            return [("choice", [self.expand({"X": a["Y"], "Y": a["X"], "N": a["N"] - 1}, var) + [back],
+                                V(a["X"]) + [back]])]
+        if k == "LFp":
+            # (each value of the call prints, then the value is X, read before it)
+            if a["N"] <= 0: return [("cond", False)]
+            back = ("print", "%s %d" % (self.name, a["N"]))
+            return [("choice", [self.expand({"X": a["Y"], "Y": a["X"], "N": a["N"] - 1}, var) + [back] + V(a["X"]),
+                                V(a["Y"])])]
         if k == "LIf":
             if a["N"] < 0: return [("cond", False)]
             if a["N"] > 0:
@@ -573,11 +611,13 @@ class Machine:
 # ---------------------------------------------------------------- the program
 class Gen:
     def __init__(self, seed):
-        global R, R387, R392, RMethod
+        global R, R387, R392, RMethod, SHARED, RFrame
         R = random.Random(seed)
         R387 = random.Random(seed * 1000003 + 387)
         R392 = random.Random(seed * 1000003 + 392)
         RMethod = random.Random(seed * 1000003 + 283041)
+        RFrame = random.Random(seed * 1000003 + 283283)
+        SHARED = random.Random(seed * 1000003 + 2834).random() < 0.4
         self.seed = seed
         self.prods = []
         self.consumers = []    # source of generic consumers
@@ -851,7 +891,12 @@ class Gen:
         kinds_l = ["LElems", "LRep", "LTree", "LIf", "LFx", "LFx2", "LFxTree", "LCmp", "LW"]
         kinds_e = ["ERep", "ERev", "ETree", "EW"]
         # one of each path at least, then a few more
-        self.producer(R.choice(kinds_i)); self.producer(R.choice(kinds_l)); self.producer(R.choice(kinds_e))
+        # (#283: at times the lazy one has a return frame, LFr, from a stream of
+        # its own, so seeds without it keep their programs)
+        self.producer(R.choice(kinds_i))
+        lazy = R.choice(kinds_l)
+        if RFrame.random() < 0.3: lazy = "LFr" if RFrame.random() < 0.5 else "LFp"
+        self.producer(lazy); self.producer(R.choice(kinds_e))
         for _ in range(R.randint(0, 2)):
             self.producer(R.choice(kinds_i + kinds_l + kinds_e))
         for _ in range(R.randint(3, 7)):
@@ -861,6 +906,9 @@ class Gen:
         self.method_dispatch()
         self.recursive_named()
         self.mutual_generators()
+        if SHARED:
+            self.main.append('Print("plain {plainvals{}.Vals()}")')
+            self.m.out.append("plain 0")
 
     def method_dispatch(self):
         # Every gate range covers each hierarchy, with the same independent
@@ -1257,6 +1305,8 @@ Tell(S:string, X:int)<transacts>:int =
     Print(S)
     X
 """
+        if SHARED:
+            pre += "plainvals := class:\n    Vals()<transacts>:int = 0\n"
         body = pre + "\n".join(p.src for p in self.prods) + "\n"
         if self.consumers: body += "\n".join(self.consumers) + "\n"
         body += "Main():void =\n" + "".join("    %s\n" % l for l in self.main)

@@ -12,6 +12,15 @@ structure Compiled where
   slotTys : List (List VTy)
   /-- Pure mutual groups that retain the eager polymorphic-recursion path. -/
   eagerNeeds : List String := []
+  /-- (#283) Recursive functions with several values whose values would be
+      computed at the call, but something they run prints or calls `Err()`:
+      the program is elaborated again, with them taken lazily if their shape
+      allows (`Options.lazyRequests`). -/
+  lazyNeeds : List String := []
+  /-- (#283) Uses `R.M` of a method several classes or interfaces declare
+      apart, each with the root `R`'s class is below: the program is
+      elaborated again, with each one's family (`Choice.famAt`). -/
+  familyNeeds : List (Pos × String) := []
   /-- Functions wanted as values at closed function types no class of
       theirs gives (#214): the program is elaborated again, with them. -/
   fnNeeds : List (String × Ty) := []
@@ -53,6 +62,13 @@ def checkTParams (env : TyEnv) (tps : List TParam) : Except String (List (String
 structure Options where
   profile : SourceProfile := .full
   eagerRequests : List String := []
+  /-- (#283) Recursive functions with several values that an earlier
+      elaboration found print or call `Err()` (`Compiled.lazyNeeds`). -/
+  lazyRequests : List String := []
+  /-- (#283) For each use `R.M` of a method several classes or interfaces
+      declare apart, by its place: the root its receiver's class is below,
+      as an earlier elaboration found (`Compiled.familyNeeds`). -/
+  familyPicks : List (Pos × String) := []
   args : Option (List String) := none
   entry : Option SExpr := none
   /-- Functions wanted as values at closed function types no class of
@@ -309,6 +325,15 @@ lazycell(t:type) := class:
 
 def lazyTops : Except String (List STop) := parsePrelude lazyPrelude ["lazycell", "LItem", "LNext"]
 
+/-- (#283) A `var` of a lazily taken recursive function that a return frame
+    sets, as a cell (`Choice.cellVars`). -/
+def varcellPrelude : String := "
+varcell(t:type) := class:
+    var VCell:t
+"
+
+def varcellTops : Except String (List STop) := parsePrelude varcellPrelude ["varcell", "VCell"]
+
 /-- `subscribable_event(t)` (#210): an event whose `Signal` also calls the
     functions subscribed to it, each `Subscribe` giving a `cancelable` whose
     `Cancel` unsubscribes it. Added, with the concurrency prelude it
@@ -380,6 +405,7 @@ def functionBodyCtx (opts : Options) (ctx : Ctx) (p : Pos) (name : String)
   let source := (resume.map (·.sourceContext)).getD
     ((loopLift.map (·.sourceContext)).getD ((lifted.map (·.sourceContext)).getD {}))
   let returnExit := loopLift.bind (·.returnExit)
+  let breakExit := loopLift.bind (·.breakExit)
   let resumeStorage ← ((resume.map (·.storage)).getD []).mapM fun (n, r) => do
     let args ← r.args.mapM fun t => (resolveTy ctx.types p t).run' { env := ctx.types }
     pure (n, { frame := r.frame, name := r.name, args : SourceStorage })
@@ -402,9 +428,8 @@ def functionBodyCtx (opts : Options) (ctx : Ctx) (p : Pos) (name : String)
     inArm := source.inArm || ctx.inArm
     inBranch := source.inBranch || ctx.inBranch
     defaults := source.defaults ++ ctx.defaults
-    refineExits := (returnExit.map fun r =>
-      { ret := some (r.value.map (fun n => (n, r.ty)), r.packet) : Refine.Exits }).getD
-        ((lifted.map (·.exits)).getD {})
+    refineExits := if returnExit.isNone && breakExit.isNone then (lifted.map (·.exits)).getD {} else
+      { ret := returnExit.map fun r => (r.value.map (fun n => (n, r.ty)), r.packet), brk := breakExit }
     inBlock := source.inBlock || name.endsWith ".$block"
     inCtor := source.inCtor || name.endsWith "$init"
     selfClass := scopeClass.orElse fun _ => match name.splitOn "." with
@@ -1196,6 +1221,7 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
   let waitRootF := fieldIdx "$taskBase" "$WaitRoot"
   let wokenNextF := fieldIdx "$taskBase" "$WokenNext"
   let pendingF := fieldIdx "$taskBase" "$Pending"
+  let probeF := fieldIdx "$sched" "$Probe"
   let waitfTF := fieldIdx "$waitf" "$T"
   -- (`CurRoot := some x` and back, around a run, in FIFO mode)
   let setCur (sch x : Expr) : Expr := .heap (.set curRootF) [sch, .prim .mkSome [x]]
@@ -1276,7 +1302,18 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
       branchSigs := branchSigs.push ([wrapTy K, schedTy], .int)
       -- (a `rush` loser's wrapper only registers it: it already started)
       let register : Expr := .call linkIdx [.local 0, .local 2]
-      let start : Expr := .seq (Suspend.seqVoid (if !runNow then [register] else [register,
+      -- (#513: and, in FIFO mode, probes it as its own root, so that the
+      -- waiters in it record that root, not the function's, which no
+      -- longer runs it: a `Signal` before its first turn then gives it its
+      -- turn in their order; the probe goes on nowhere, `$Probe`)
+      let probe : List Expr := if !fifo then [] else [
+        .assign 5 (.heap (.get curRootF) [.local 0]),
+        .heap (.set probeF) [.local 0, .lit (.logic true)],
+        setCur (.local 0) (.local 2),
+        .assign 3 (.call (wrapFnBase + 3 * K) [.local 2, .local 0]),
+        .heap (.set curRootF) [.local 0, .local 5],
+        .heap (.set probeF) [.local 0, .lit (.logic false)]] ++ forget (.local 0)
+      let start : Expr := .seq (Suspend.seqVoid (if !runNow then register :: probe else [register,
         .assign 4 (.heap (.get cancelCurF) [.local 0]),
         .heap (.set cancelCurF) [.local 0, .lit (.logic false)]] ++
         -- (#513: its run is the branch's, for the waiters it records)
@@ -1832,8 +1869,9 @@ def shownFn (n : String) : String :=
     value), constructors (field defaults, `block:` clauses), constants, and
     parameter defaults (elaborated at the call). `errs` says where each
     function elaborated from the program calls `Err()`. -/
-def checkEager (fns : Array Fn) (errs : Array (Option Pos)) (posOf : String → Option Pos) :
-    Except String Unit := do
+def checkEager (fns : Array Fn) (errs : Array (Option Pos)) (posOf : String → Option Pos)
+    (lazy : List String := []) : Except String (List String) := do
+  let mut needs : List String := []
   for i in List.range fns.size do
     let fn := fns[i]!
     if !fn.name.endsWith "$all" then continue
@@ -1851,11 +1889,17 @@ def checkEager (fns : Array Fn) (errs : Array (Option Pos)) (posOf : String → 
         if exprPrints fj.body then some "print"
         else if let some (some _) := errs[j]? then some "call Err()" else none
       if let some what := what? then
-        throw s!"{loc}{g} has several values and is recursive, or called by a recursive one, and it may {what}{via}: such a function must be <computes>, keep no local state, and reach nothing that prints or calls Err(), as all its values are computed at a call (#235)"
+        -- (#283) taken lazily instead, if its shape allows, after another
+        -- elaboration; refused if it still is not
+        if !lazy.contains g then
+          needs := needs ++ [g]
+          break
+        throw s!"{loc}{g} has several values and is recursive, or called by a recursive one, and it may {what}{via}: {Choice.eagerWhy}"
       for (f, _) in Suspend.callsOf fj.body do
         if f < fns.size && !seen[f]! then
           seen := seen.set! f true
           todo := todo ++ [f]
+  return needs
 
 /-- Whether `e` itself changes an object (a field's `set`). -/
 partial def exprWrites : Expr → Bool

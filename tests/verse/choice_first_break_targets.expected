@@ -1,0 +1,14 @@
+inner cleanup 1
+outer 1
+outer cleanup 1
+inner cleanup 2
+outer 2
+outer cleanup 2
+Y=5
+first: V=5
+first 5
+option 2
+option: V=105
+body 1 0 V=105
+for: V=1105
+exit=0

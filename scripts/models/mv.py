@@ -8,8 +8,10 @@
 # consumers in methods from the review of #279, a return in a test's clauses from #284 and #287,
 # alternatives with several values from the review of #296, blocks and constructions from #302,
 # named arguments from #305, functions with several values and named parameters from #307,
-# methods with several values from #310 (overridden from #328), returns in functions with several values from #312,
-# and a choice after such a return's if, or in its value, from #318.
+# methods with several values from #310 (overridden from #328, of one name in unrelated classes from #283's
+# shared families), returns in functions with several values from #312,
+# and a choice after such a return's if, or in its value, from #318;
+# return frames (a recursive call with code after it) from #283.
 """Random programs with choices INSIDE expressions (PR #234, phase 2), and an
 independent model written from docs/LANGUAGE.md's "Choice" section (not from
 scripts/gen-choice.py, and not from the lifting code).
@@ -56,6 +58,8 @@ flags: heavy     (with bif: more of them, longer chains, longer conditions)
                   whose value is a choice; on with lazy otherwise, #312)
        nomvm     (no bare call, in a test that runs as a method, of that class's own
                   method with several values; on with meth otherwise, #310)
+       noshared  (no program whose tests' methods with several values all have one
+                  name, which mvm and meth give at times otherwise, #283)
        nonam     (no call of NAM(NU, ?NV := …), a function with several values and a
                   named parameter whose default prints; on with lazy otherwise)
        nona      (no call of NA(A, ?P := …, ?Q := …) with named arguments in a test's
@@ -67,6 +71,11 @@ flags: heavy     (with bif: more of them, longer chains, longer conditions)
                   generator, #296; on with lazy otherwise)
        retdefer-control (emit an equivalent pre-change layout of returning
                   cleanup scopes, with the same independent trace oracle)
+       (a branchy generator's base branch is at times one if with a print in its
+                  condition, a value whose condition is undone with it, #283)
+       noframes  (no return frame: a generator's call of itself with code after
+                  it, or its choice bound with plain code after it, #283; on with
+                  lazy otherwise)
 """
 import copy
 import os
@@ -377,6 +386,17 @@ R16 = random.Random(seed * 1000003 + 383)
 # computed and before the caller's clauses after it; a value whose clauses fail rolls it back with
 # the rest of its effects. A generator of its own decides, so seeds keep their other programs.
 R17 = random.Random(seed * 1000003 + 391)
+# ---- #283 (with mvm and meth; noshared turns it off): at times the tests' methods with several
+# values all have one name, Mv, instead of MvT: each test's class (or interface) declares it apart,
+# the root of a family of its own, and a call's receiver picks the family. A call is bare, as
+# before, or through Self, both of the enclosing class, or through MeT, a local of the class Run
+# is in (or of the interface) bound to Self, whose family only its type tells: the same values
+# either way. An unrelated class has an ordinary Mv,
+#   pmv := class: Mv(Mp:int):int = Mp * 1000
+# called at times on a new pmv in a test that runs as a method: one value, its argument's times
+# 1000, with nothing to undo. A generator of its own decides, so seeds keep their other programs.
+R18 = random.Random(seed * 1000003 + 2833)
+SHARED = METH and MVM and 'noshared' not in flags and R18.random() < 0.4
 # ---- #312, flag rt (on with lazy; nort turns it off): a test's expression may call
 #   RT(RTa:int):int =
 #       RTy := RTa | RTa + 1 | RTa + 2
@@ -419,6 +439,42 @@ RT2 = RT and 'nort2' not in flags
 # after its returning path are reached only on fallthrough. Keep this draw
 # independent of the expression generator and its existing seed streams.
 RET_DEFER = RT2 and random.Random(seed * 1000003 + 283391).random() < 0.5
+# ---- #283, flag frames (on with lazy; noframes turns it off): a generator's call of
+# itself may have code after it, which runs on each of the call's values (a return
+# frame): an alternative `Gz0(N - 1, A) + e` (e any value, with no var), `L + Gz0(…)`
+# (L a literal or name, read where it is written), or `Tell("fN", Gz0(…))`; and a
+# <decides> one may bind its choice and have plain code after it,
+#   Gz0(N:int, A:int)<decides>:int =
+#       …clauses…
+#       Wf := (A | Gz0(N - 1, A) | …)
+#       Print("fN")         (statements with no var, set or choice)
+#       Wf + A              (a value)
+# which is the choice of `Wf := a; …; Wf + A` for each alternative a. The model is
+# the same CPS inlining: the frame's code runs on each value as the caller's own
+# code after the call returns it, so where a value is rejected what the frames did
+# with it is undone with it (in a for: the frames are part of the value's segment,
+# as the code after the last choice reached is). A generator of its own decides, so
+# seeds keep their other programs.
+RFR = random.Random(seed * 1000003 + 283283)
+# ---- #283: at times a branchy generator's base branch is one value that is an if with a
+# print in its condition, `if (N <= 1) then ((if (Print("frN"), A > k) then x else y)) else …`:
+# that if is the value (it has no choice), so its condition runs with the value and is undone
+# with it where the consumer rejects it, as any value's code is. A stream of its own, so seeds
+# without it keep their programs.
+RIFV = random.Random(seed * 1000003 + 283284)
+RPRE = random.Random(seed * 1000003 + 283285)
+# ---- #283: at times the code after a bound choice sets a var of the generator (`set V += Wf`)
+# and its value reads it: every later value and alternative sees what a kept value set, a
+# rejected one's write is undone; a stream of its own.
+RVAR = random.Random(seed * 1000003 + 283286)
+FRN = [0]
+
+
+def ffresh():
+    """a name for a frame's print, from a counter of its own (#283)."""
+    FRN[0] += 1
+    return f"fr{FRN[0]}"
+FRAMES = LAZY and 'noframes' not in flags and 'cf' not in flags
 REFUSED = [False]
 
 
@@ -470,10 +526,37 @@ def leaf(scope, vars_):
     return ('lit', R.randint(-1, 5))
 
 
+def mvm_ok(ch):
+    """whether a call of the test's class's own method with several values may be here
+    (its values' count aside, `mvm_fits`)."""
+    return (MVM and CTX.get('meth') and METH and ch and NCH[0] < 4 and CTX['fmax'] is None
+            and not CTX['nochoice'] and not CTX.get('inset') and not CTX.get('inbif'))
+
+
+def mvm_fits():
+    return not MV or PROD[0] * 2 <= CTX['plim']
+
+
+def gen_mvm(scope, vars_, d, ch):
+    NCH[0] += 1
+    if MV:
+        PROD[0] *= 2
+    CTX['mvm_used'] = True
+    arg = ('ref', CTX['mvm'][1]) if R.random() < 0.4 else gen_e(scope, vars_, d + 1, ch)
+    # (#283: in a program whose methods share a name, through a receiver at times)
+    form = R18.choice(['bare', 'self', 'me']) if SHARED else 'bare'
+    if form == 'me':
+        CTX['mvm_me'] = True
+    return ('mvm', arg, CTX['mvm'], form)
+
+
 def gen_e(scope, vars_, d, ch):
     """an int expression; ch: whether a choice may be inside (liftably)."""
     if CTX['nochoice']:
         ch = False
+    # (#283: in a program whose methods share a name, such calls more often)
+    if SHARED and mvm_ok(ch) and mvm_fits() and R18.random() < 0.2:
+        return gen_mvm(scope, vars_, d, ch)
     # (#314: returns in functions with several values, often enough that two calls of one
     # land in one first-success context, as in #318's review)
     if (RT2 and ch and NCH[0] < 4 and CTX['fmax'] is None and not CTX.get('inset') and not CTX.get('inbif')
@@ -559,15 +642,10 @@ def gen_e(scope, vars_, d, ch):
         if MV:
             PROD[0] *= 3
         return ('rt', gen_e(scope, vars_, d + 1, ch))
-    if (k < 0.48 and MVM and CTX.get('meth') and METH and ch and NCH[0] < 4 and CTX['fmax'] is None
-            and not CTX['nochoice'] and not CTX.get('inset') and not CTX.get('inbif') and R.random() < 0.9
-            and (not MV or PROD[0] * 2 <= CTX['plim'])):
-        NCH[0] += 1
-        if MV:
-            PROD[0] *= 2
-        CTX['mvm_used'] = True
-        arg = ('ref', CTX['mvm'][1]) if R.random() < 0.4 else gen_e(scope, vars_, d + 1, ch)
-        return ('mvm', arg, CTX['mvm'])
+    if k < 0.48 and mvm_ok(ch) and R.random() < 0.9 and mvm_fits():
+        return gen_mvm(scope, vars_, d, ch)
+    if SHARED and CTX.get('meth') and CTX['fmax'] is None and R18.random() < 0.06:
+        return ('pmv', gen_e(scope, vars_, d + 1, ch))
     if (k < 0.48 and NAM and ch and NCH[0] < 4 and CTX['fmax'] is None and not CTX['nochoice']
             and not CTX.get('inset') and not CTX.get('inbif') and R.random() < 0.5
             and (not MV or PROD[0] * 2 <= CTX['plim'])):
@@ -651,7 +729,32 @@ def gub(fi, n):
         alts = f['val'][2] if n <= f['lo'] else f['val'][3]
     if 'cf' in flags:
         alts = alts[:1]
-    return sum(gub(a[1], n - 1) if a[0] == 'gself' else 1 for a in alts)     # (the callee's, #371)
+    return sum(gub(c[1], n - 1) if (c := frame_call(a)) is not None else 1 for a in alts)     # (the callee's, #371)
+
+
+def frame_call(a):
+    """the call of a generator in alternative a: the whole alternative, or the
+    one in a return frame after it (#283), else None."""
+    if a[0] == 'gself':
+        return a
+    if a[0] == 'bin':
+        c = frame_call(a[2])
+        return c if c is not None else frame_call(a[3])
+    if a[0] == 'tell':
+        return frame_call(a[2])
+    return None
+
+
+def frame_prefix(a):
+    """what alternative a evaluates before the call in its return frame (#283),
+    which runs with the call's arguments."""
+    if a[0] == 'bin' and frame_call(a) is not None:
+        if frame_call(a[2]) is None:
+            return [a[2]] + frame_prefix(a[3])
+        return frame_prefix(a[2])
+    if a[0] == 'tell':
+        return frame_prefix(a[2])
+    return []
 
 
 def gen_gcall(scope, vars_, d):
@@ -723,6 +826,11 @@ def gen_gfunc(i):
             stmts.append(('sset', R.choice(vs), R.choice(['=', '+=']), gen_e(sc, vs, 1, False)))
         elif ctr and fx:
             stmts.append(('snext', 'C'))
+    # (#283: at times a var the code after a bound call sets, RVAR)
+    want_var = dec and FRAMES and RVAR.random() < 0.3
+    if want_var and not vs:
+        stmts.append(('svar', 'Vk', ('lit', RVAR.randint(0, 3))))
+        vs = vs + ['Vk']
     allsc = sc + vs
 
     def value():
@@ -746,6 +854,32 @@ def gen_gfunc(i):
         args = [('bin', '-', ('ref', 'N'), ('lit', 1)), a] + ([('ref', 'C')] if ctr else [])
         return ('gself', i, args)
 
+    def simple():
+        # (a literal or a name; RFR only, so seeds keep their other programs)
+        return ('lit', RFR.randint(-1, 3)) if RFR.random() < 0.5 else ('ref', RFR.choice(sc))
+
+    def framed(c):
+        # (#283: code after the call, which runs on each of its values; no var
+        # in it, which it would run on a copy of)
+        k = RFR.random()
+        if k < 0.3:
+            f = ('bin', RFR.choice(['+', '-', '*']), c, simple())
+        elif k < 0.5:
+            f = ('bin', RFR.choice(['+', '*']), simple(), c)
+        elif k < 0.7:
+            f = ('tell', ffresh(), c)
+        elif k < 0.85:
+            f = ('bin', '+', ('tell', ffresh(), c), ('tell', ffresh(), simple()))
+        else:
+            f = c
+        # (#283: what the alternative reads before the call that may not read
+        # the same after it, a call that prints or changes an object, runs
+        # once before it; a stream of its own)
+        if RPRE.random() < 0.35:
+            pre = ('cnext', 'C') if ctr and RPRE.random() < 0.5 else ('tell', ffresh(), simple())
+            return ('bin', RPRE.choice(['+', '*']), pre, f)
+        return f
+
     def alts(withself):
         out = [value() for _ in range(R.randint(1, 2))]
         if withself:
@@ -753,9 +887,31 @@ def gen_gfunc(i):
                 out.insert(R.randint(0, len(out)), selfcall())
         if len(out) == 1 and not withself and R.random() < 0.5:
             out.append(value())
+        if FRAMES and withself and RFR.random() < 0.5:
+            out = [framed(a) if a[0] == 'gself' else a for a in out]
         return out
     if dec:
         f['val'] = ('gchoice', alts(True))
+        if FRAMES and (want_var or RFR.random() < 0.3):
+            # (#283: the choice bound, plain code after it, then a value)
+            post = []
+            for j in range(RFR.randint(0, 2)):
+                k = RFR.random()
+                if k < 0.4:
+                    post.append(('sprint', ffresh()))
+                elif k < 0.7:
+                    post.append(('slet', f"Wp{j}", ('bin', RFR.choice(['+', '*']), ('ref', 'Wf'), simple())))
+                elif ctr:
+                    post.append(('snext', 'C'))
+                else:
+                    post.append(('sfilt', ('cmp', ('ref', 'Wf'), [(RFR.choice(['>', '<>']), ('lit', RFR.randint(-2, 2)))])))
+            names = ['Wf'] + [c[1] for c in post if c[0] == 'slet']
+            last = ('bin', RFR.choice(['+', '-', '*']), ('ref', RFR.choice(names)), simple())
+            if vs and (want_var or RVAR.random() < 0.5):
+                v = RVAR.choice(vs)
+                post.append(('sset', v, '+=', ('ref', 'Wf')))
+                last = ('bin', '+', ('ref', v), last)
+            f['bound'] = ('Wf', post, ('tell', ffresh(), last) if RFR.random() < 0.3 else last)
     else:
         conds = [('filter', ('cmp', ('ref', 'N'), [('<=', ('lit', f['lo']))]))]
         # (a condition that always succeeds, so that N <= lo picks the base:
@@ -763,7 +919,12 @@ def gen_gfunc(i):
         if fx and R.random() < 0.5:
             c2 = [('print', fresh("c"))]
             conds = c2 + conds if R.random() < 0.5 else conds + c2
-        f['val'] = ('gbif', conds, alts(False), alts(True))
+        base = alts(False)
+        if LAZY and RIFV.random() < 0.5:
+            cond = [('print', ffresh()), ('filter', ('cmp', ('ref', 'A'), [(RIFV.choice(['>', '<']), ('lit', RIFV.randint(-1, 2)))]))]
+            pick = lambda: ('lit', RIFV.randint(-1, 4)) if RIFV.random() < 0.5 else ('ref', RIFV.choice(['N', 'A']))
+            base = [('ifx', cond, pick(), pick())]
+        f['val'] = ('gbif', conds, base, alts(True))
     f['stmts'] = stmts
     f['lifted'] = lifted(f)
     CTX.update(ctrs=None, nofail=False, nochoice=False, noprint=False, fmax=None, take=None)
@@ -789,7 +950,7 @@ def lifted(f):
     arguments print or change an object, or those arguments set a name."""
     v = f['val']
     alts = v[1] if v[0] == 'gchoice' else v[2] + v[3]
-    args = [a[2] for a in alts if a[0] == 'gself']
+    args = [c[2] for a in alts if (c := frame_call(a)) is not None] + [x for a in alts for x in frame_prefix(a)]
     conds = v[1] if v[0] == 'gbif' else []
     return (has_node(f['stmts'], FX_NODES) or has_node(conds, FX_NODES) or has_node(args, FX_NODES)
             or has_node(args, ('bset', 'setv')))
@@ -806,7 +967,12 @@ def show_gfunc(f):
     L = [f"{f['name']}({ps}){'<decides>' if f['decides'] else ''}:int ="]
     L += ["    " + show_s(c) for c in f['stmts']]
     v = f['val']
-    if v[0] == 'gchoice':
+    if v[0] == 'gchoice' and f.get('bound'):
+        x, post, last = f['bound']
+        L.append(f"    {x} := " + show_galts(v[1]))
+        L += ["    " + show_s(c) for c in post]
+        L.append("    " + show(last))
+    elif v[0] == 'gchoice':
         L.append("    " + show_galts(v[1]))
     else:
         L.append(f"    if ({show_cl(v[1], ', ')}) then {show_galts(v[2])} else {show_galts(v[3])}")
@@ -817,9 +983,14 @@ def gen_call(fi, vals, st, k, mode):
     GFRAME[0] += 1
     fr = f"g{GFRAME[0]}"
     f = GFUNCS[fi]
-    own = set(p for p, _ in f['params']) | binders_of(f['stmts'], set()) | binders_of(f['val'], set())
-    stmts = rename(f['stmts'], own, fr)
-    val = rename(f['val'], own, fr)
+    stmts, val = f['stmts'], f['val']
+    if f.get('bound'):
+        # (#283: its choice bound, the code after it run on each of its values)
+        x, post, last = f['bound']
+        stmts, val = stmts + [('slet', x, val)] + post, last
+    own = set(p for p, _ in f['params']) | binders_of(stmts, set()) | binders_of(val, set())
+    stmts = rename(stmts, own, fr)
+    val = rename(val, own, fr)
     for (p, _), v in zip(f['params'], vals):
         st.binds[f"{fr}.{p}"] = v
     LASTG[0] = f.get('lifted', False)
@@ -1216,7 +1387,10 @@ def show(e):
     if t == 'blk':
         return f'block{{ {e[1]} := {show(e[2])}; {show(e[3])} }}'
     if t == 'mvm':
-        return f'Mv{e[2][0]}({show(e[1])})'
+        recv = {'bare': '', 'self': 'Self.', 'me': f'Me{e[2][0]}.'}[e[3]]
+        return f'{recv}Mv{"" if SHARED else e[2][0]}({show(e[1])})'
+    if t == 'pmv':
+        return f'pmv{{}}.Mv({show(e[1])})'
     if t == 'rt':
         return f'RT({show(e[1])})'
     if t in ('rt2', 'rt3'):
@@ -1371,7 +1545,7 @@ def top_choice_e(e):
         return False
     if t == 'cadd':
         return top_choice_e(e[2])
-    if t in ('tell', 'pos', 'even', 'add'):
+    if t in ('tell', 'pos', 'even', 'add', 'pmv'):
         return top_choice_e(e[-1])
     if t == 'bin':
         return top_choice_e(e[2]) or top_choice_e(e[3])
@@ -1565,6 +1739,8 @@ def ev(e, st, k, mode):
                 return th
             return choice_point([fall(v), alt_ret, fall(v + 2)], s0, k, mode)
         return ev(e[1], st, krt2, mode)
+    if t == 'pmv':
+        return ev(e[1], st, lambda v, s: k(chks(v * 1000, s), s), mode)
     if t == 'mvm':
         def kmvm(v, s0):
             def alt1(s1, k2):
@@ -2124,7 +2300,16 @@ if LAZY:
     # not, with or without effects, run apart or not where the first success is taken)
     def retarget(f, j):
         v = f['val']
-        fix = lambda alts: [('gself', j, a[2]) if a[0] == 'gself' else a for a in alts]
+        def to_j(a):
+            # (a call in a return frame too, #283)
+            if a[0] == 'gself':
+                return ('gself', j, a[2])
+            if a[0] == 'bin' and frame_call(a) is not None:
+                return ('bin', a[1], to_j(a[2]), to_j(a[3]))
+            if a[0] == 'tell' and frame_call(a) is not None:
+                return ('tell', a[1], to_j(a[2]))
+            return a
+        fix = lambda alts: [to_j(a) for a in alts]
         f['val'] = ('gchoice', fix(v[1])) if v[0] == 'gchoice' else ('gbif', v[1], fix(v[2]), fix(v[3]))
     pairs = [(a, b) for a in range(len(GFUNCS)) for b in range(a + 1, len(GFUNCS))
              if all(GFUNCS[a][x] == GFUNCS[b][x] for x in ('decides', 'ctr', 'first_ok', 'lifted'))]
@@ -2160,6 +2345,7 @@ for ti in range(NT):
     CTX['meth'] = meth
     CTX['mvm'] = (ti, f"N{ti}a")
     CTX['mvm_used'] = False
+    CTX['mvm_me'] = False
     CTX['mvm_const'] = R.random() < 0.5
     L = [f"{name}():void ="]
     for v in vars_:
@@ -2224,7 +2410,8 @@ for ti in range(NT):
         ifc = CTX.get('mvm_used') and R13.random() < 0.5
         dflt = CTX.get('mvm_used') and SNX['dflt']     # (#375: the interface's default)
         ifc = ifc or dflt
-        M = ([f"i{ti} := interface:", f"    Mv{ti}(Mp{ti}:int):int" + (f" = Mp{ti} * 5 | Mp{ti} + 7" if dflt else "")]
+        mv = "Mv" if SHARED else f"Mv{ti}"         # (#283: one name for every test's)
+        M = ([f"i{ti} := interface:", f"    {mv}(Mp{ti}:int):int" + (f" = Mp{ti} * 5 | Mp{ti} + 7" if dflt else "")]
              if ifc else []) + [
              f"{top} := class(tbase{f', i{ti}' if ifc else ''}):", f"    var {vars_[0]}:int = 0",
              f"    var {vars_[1]}{'<private>' if priv else ''}:int = 0"]
@@ -2233,14 +2420,17 @@ for ti in range(NT):
         if CTX.get('mvm_used'):
             M.append(f"    Hp{ti}(Hq{ti}:int):int = Hq{ti} * 2")
             if not dflt:
-                M.append(f"    Mv{ti}{'<override>' if ifc else ''}(Mp{ti}:int):int = Mp{ti} + Nx() | Mp{ti} + Hp{ti}(N{ti}a)")
+                M.append(f"    {mv}{'<override>' if ifc else ''}(Mp{ti}:int):int = Mp{ti} + Nx() | Mp{ti} + Hp{ti}(N{ti}a)")
         M.append("    Run():void =")
+        if CTX.get('mvm_me'):
+            # (#283: Self as the class Run is in, or as the interface, which only types tell)
+            M.append(f"        Me{ti}:{f'i{ti}' if ifc and R18.random() < 0.5 else top} = Self")
         M += ["    " + l for l in L[3:]]
         if split:
             M.append(f"{name}c := class({name}b):")
             if ovr:
                 M += ["    Nx<override>()<transacts>:int =", "        set Cn += 2", "        Cn - 2"]
-            M.append(f"    Mv{ti}<override>(Mp{ti}:int):int = Mp{ti} * 3 | (super:)Mv{ti}(Mp{ti}) | Mp{ti} - 1")
+            M.append(f"    {mv}<override>(Mp{ti}:int):int = Mp{ti} * 3 | (super:){mv}(Mp{ti}) | Mp{ti} - 1")
         M.append(f"{name}():void = {name}c{{}}.Run()")
         if CTX.get('mvm_used') and CTX.get('mvm_const'):
             M.insert(0, f"N{ti}a:int = {100 + ti}")    # (a constant named like the field)
@@ -2389,6 +2579,8 @@ if RT2:
             PRE += '\n'.join(header + body) + '\n'
 if NAM:
     PRE += 'NAM(NU:int, ?NV:int = Tell("dv", NU)):int = NU + NV | NV * 2\n'
+if SHARED:
+    PRE += 'pmv := class:\n    Mv(Mp:int):int = Mp * 1000\n'
 if OVL:
     PRE += ('Ov(OA:int):int = OA + 1 | OA * 2\nOv(OA:int, OB:int):int = OA - OB | OB * 3\n'
             'Ov(OS:string):int = OS.Length | 0\n')

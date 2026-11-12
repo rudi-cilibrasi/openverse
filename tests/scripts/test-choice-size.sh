@@ -126,6 +126,10 @@ kinds=(
   clause-return-composed
   clause-return-exclusive
   clause-return-refined
+  first-break-composed
+  first-break-exclusive
+  first-break-lazy
+  first-break-refined
   composed
   construct-failure
   construct-first
@@ -294,6 +298,12 @@ kinds=(
   lazy-tuple-first
   lazy-tuple-for
   lazy-tuple-generic-first
+  logic-and-first
+  logic-and-for
+  logic-or-first
+  logic-or-for
+  setalt-first
+  setalt-for
   method-failure
   method-first
   method-for
@@ -319,6 +329,8 @@ kinds=(
   own-method-failure
   own-method-first
   own-method-for
+  recursive-frame-first
+  recursive-frame-for
   recursive-return-eager
   recursive-return-first
   recursive-return-for
@@ -1121,6 +1133,19 @@ box(t:type,u:type):=class:
         args.extend([f'box({ty},{extra_ty}){{V:={value},Extra:={extra},C:=cell{{}}}}', f'array{{{value}}}' if nested else value])
     print(f'Main():void=Print("{{Run({",".join(args)})}}")')
     sys.exit(0)
+if kind.startswith('recursive-frame-'):
+    # (#283) calls of itself with code after them, each a return frame: the
+    # frames' code is compiled once, not once per value
+    alts = ' | '.join(f'F[N - 1] + {i} | N * {i + 2}' for i in range(count))
+    print(f'''F(N:int)<transacts><decides>:int =
+    Print("f {{N}}")
+    N > 0
+    {alts}''')
+    if kind.endswith('first'):
+        print('Main()<transacts>:void = if (X := F[2], X > 100) then Print("{X}") else Print("none")')
+    else:
+        print('Main()<transacts>:void = Print("{(for (X := F[2], X > 100): X).Length}")')
+    sys.exit(0)
 if kind.startswith('recursive-return-'):
     eager = kind.endswith('eager')
     mutual = 'mutual' in kind
@@ -1206,6 +1231,28 @@ if kind.startswith('clause-break-'):
     print(f'Run({params} where {tparams})<suspends>:{ret_ty} =\n    var Total:int=0\n    defer:Print("source {{Total}}")\n    Sleep(0.0)\n    loop:\n        defer:Print("loop {{Total}}")\n        R:=for({",".join(clauses)}):\n            set Total+=1\n            A0\n        Print("rows {{R.Length}}")\n        break\n    Sleep(0.1)\n    {result}')
     args = ','.join('dup(int){A:=1,B:=2}' if i%2==0 else 'dup(string){A:="s",B:="t"}' for i in range(count))
     print(f'Main()<suspends>:void = Print("{{Run({args})}}")')
+    sys.exit(0)
+if kind.startswith('first-break-'):
+    # (#283) a break in an if's clauses, after the first of its choices: the
+    # clauses after a composed one are compiled once (#335), and so are an
+    # effectful lazy generator's (#246), each giving the break back
+    print('pair(a:type,b:type) := class { A:a; B:b }')
+    print('dup(t:type) := class(pair(t,t)) { C:int=4 }')
+    print('cell := class { var N:int=0 }')
+    print('Early(N:int):int =\n    if(N<0):return 0\n    N|N+1')
+    print('Lazy(H:cell,N:int)<transacts><decides>:int =\n    N>=0\n    set H.N+=1\n    N|Lazy[H,N-1]')
+    params = ','.join(f'P{i}:pair(a{i},b{i})' for i in range(count))
+    tparams = ','.join(f'a{i}:type,b{i}:type' for i in range(count))
+    shape = kind[len('first-break-'):]
+    values = {'composed': ['(Two(0)|Two(2))'] * count, 'exclusive': ['Early(0)'] * count,
+              'lazy': ['Lazy[H,1]'] * count}.get(shape,
+              [f'if(D{i}:=dup[P{i}])then(D{i}.C|D{i}.C+1)else 0' for i in range(count)])
+    clauses = [f'A{i}:={v}' for i, v in enumerate(values)]
+    clauses[1:1] = ['set Total+=A0', f'if(A0={5 if shape == "refined" else 1})then break else 0']
+    clauses.append('A0+A1<0')
+    print(f'Run(H:cell,{params} where {tparams})<suspends>:int =\n    var Total:int=0\n    defer:Print("source {{Total}}")\n    Sleep(0.0)\n    loop:\n        defer:Print("loop {{Total}}")\n        if({",".join(clauses)}):\n            Print("bad")\n        Print("bad suffix")\n        break\n    Total')
+    args = ','.join('dup(int){A:=1,B:=2}' if i%2==0 else 'dup(string){A:="s",B:="t"}' for i in range(count))
+    print(f'Main()<suspends>:void = Print("{{Run(cell{{}},{args})}}")')
     sys.exit(0)
 if kind.startswith('return-defer-'):
     method = kind.endswith('method-first')
@@ -1537,6 +1584,32 @@ if kind.startswith('construct-'):
     call = 'Run[7]' if specs else 'Run(7)'
     print(f'Main(){specs}:void = Print("{{{call}}}")')
     sys.exit(0)
+if kind.startswith('logic-'):
+    # (#283) choices in the operands of `and` and on the right of `or`, with
+    # effects on the left; an `or` is lifted as the `if` it stands for
+    _, op, mode = kind.split('-')
+    print('counter := class:\n    var N:int = 0')
+    left = 'block{set C.N += 1; Two(0) > 0}' if op == 'and' else 'block{set C.N += 1; O?}'
+    clauses = ', '.join(f'A{i} := ({left} {op} Two(2))' for i in range(count))
+    print('Run(O:?int)<transacts>:int =\n    C := counter{}')
+    if mode == 'first':
+        print(f'    if ({clauses}, A{count-1} = 3) then C.N else -1')
+    else:
+        print(f'    R := for ({clauses}):\n        A0\n    R.Length + C.N')
+    print('Main()<transacts>:void = Print("{Run(false)}")')
+    sys.exit(0)
+if kind.startswith('setalt-'):
+    # (#283) a set's choice whose alternative has several values: each
+    # alternative runs the assignment itself
+    sets = ', '.join(f'set A{i} = Two(0) | 2' for i in range(count))
+    print('Run()<transacts>:int =')
+    for i in range(count): print(f'    var A{i}:int = 0')
+    if kind == 'setalt-first':
+        print(f'    if ({sets}, A{count-1} = 2) then A0 else -1')
+    else:
+        print(f'    R := for ({sets}):\n        A0\n    R.Length')
+    print('Main()<transacts>:void = Print("{Run()}")')
+    sys.exit(0)
 if kind.startswith('lazy-'):
     effectful = any(tag in kind for tag in ('effect', 'alt', 'failure', 'generic', 'named', 'tuple'))
     failable = 'failure' in kind
@@ -1645,6 +1718,15 @@ PY
       fi
       exit 1
     }
+    if [[ $kind == first-break-* && $count == 4 ]]; then
+      selected=1
+      [[ $kind == first-break-refined ]] && selected=5
+      printf 'loop %s\nsource %s\n%s\n' "$selected" "$selected" "$selected" >"$tmp/expected"
+      timeout "$limit" "$root/.lake/build/bin/openverse" run "$tmp/p.verse" >"$tmp/lean.out"
+      timeout "$limit" "$root/runtime/build/cverse" "$tmp/p.vbc" >"$tmp/c.out"
+      diff -u "$tmp/expected" "$tmp/lean.out"
+      diff -u "$tmp/expected" "$tmp/c.out"
+    fi
     if [[ $kind == castclause-* && $count == 4 ]]; then
       printf '%s\n' "16 4" >"$tmp/expected"
       timeout "$limit" "$root/.lake/build/bin/openverse" run "$tmp/p.verse" >"$tmp/lean.out"
@@ -1691,6 +1773,18 @@ PY
         expected=1
         [[ $kind == named-* ]] && expected=ok
       fi
+      printf '%s\n' "$expected" >"$tmp/expected"
+      timeout "$limit" "$root/.lake/build/bin/openverse" run "$tmp/p.verse" >"$tmp/lean.out"
+      timeout "$limit" "$root/runtime/build/cverse" "$tmp/p.vbc" >"$tmp/c.out"
+      diff -u "$tmp/expected" "$tmp/lean.out"
+      diff -u "$tmp/expected" "$tmp/c.out"
+    fi
+    if [[ ( $kind == logic-* || $kind == setalt-* ) && $count == 4 ]]; then
+      case $kind in
+        logic-and-first) expected=4 ;; logic-and-for) expected=31 ;;
+        logic-or-first) expected=0 ;; logic-or-for) expected=16 ;;
+        setalt-first) expected=0 ;; setalt-for) expected=81 ;;
+      esac
       printf '%s\n' "$expected" >"$tmp/expected"
       timeout "$limit" "$root/.lake/build/bin/openverse" run "$tmp/p.verse" >"$tmp/lean.out"
       timeout "$limit" "$root/runtime/build/cverse" "$tmp/p.vbc" >"$tmp/c.out"
