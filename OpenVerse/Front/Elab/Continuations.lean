@@ -1884,6 +1884,7 @@ def choiceFixedOperationCase (elabE : Ctx → SExpr → Option Ty → EM R) (ctx
     if substitution.any (fun (_, ty) => ty.params.any (row.methodVars.map (·.1)).contains) then return none
     return some { row with
       inputs := row.inputs.map (·.subst substitution), result := row.result.subst substitution,
+      methodBounds := row.methodBounds.map (fun bound => bound.subst substitution),
       methodVars := [], fixedInstance := some (implementation, types) }) (fun _ => pure none)
   set saved
   return result
@@ -2096,7 +2097,8 @@ def choiceOperations (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx)
     let p0 : Pos := { line := 0, col := 0 }
     let unscoped := { ctx.types with boundFacts := [] }
     let classBounds : List (List SubtypeEvidence.Bound) := cases.map fun row =>
-      (SubtypeEvidence.applicationBounds ctx.types (row.receiver :: row.inputs ++ [row.result])).filter fun bound =>
+      (SubtypeEvidence.applicationBounds ctx.types (row.receiver :: row.inputs ++ [row.result]) ++
+        row.methodBounds).filter fun bound =>
         !unscoped.boundSubtype bound.derived bound.base
     let classVariables : List (List (String × Bool)) := (cases.zip classBounds).map fun (row, bounds) =>
       Ty.mergeParamBounds ((row.receiver :: row.inputs ++ [row.result] ++
