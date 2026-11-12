@@ -171,3 +171,12 @@ acceptance run. Context-sensitive literal coercion must not silently become a
 general subtype fact. The final source contract, documented restrictions,
 exact-head AI review and CI/full gate must all agree before the guard is removed
 and the issue is closed.
+
+One registered development positive currently exposes unfinished universal-bound
+adaptation. `peer-void-comparable` preserves a non-comparable class under a
+comparable peer instantiated as `void`: the upper accepts the value, but that
+must not imply that the original class supports equality. Its independent
+concrete control passes; the generic case must pass before admission.
+`peer-void-tuple-value` and its concrete control both pass, protecting the
+existing adapter path for a `subtype(void)` identity used as a tuple-taking
+function value.
