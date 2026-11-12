@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 # Model-based fuzzing of classes that fix, repeat, relate or hide type
-# arguments (GADTs, #209): random programs from twenty-seven independent models
+# arguments (GADTs, #209): random programs from twenty-eight independent models
 # (scripts/models/gadt_*.py, from the reviews of #236, #242, #243 and #250,
 # with the clauses after a cast from #277 and named arguments with defaults of no
 # type of their own through opening dispatches from #317, and covariant <suspends>
 # overrides through them from #324, also spawned on a value of the class itself from
 # #321, and through a class between that redeclares it narrower from #337; interfaces that
 # give a parent interface other type arguments from #344, their defaults from #347, also in
-# classes giving composite arguments from #355),
+# classes giving composite arguments from #355; interfaces referred to through views, with
+# fields and defaults, from the reviews of #390, #399, #405 and #523, gadt_views),
 # each predicting the program's output, or the message of the refusal it
 # expects. Each seed uses one model in turn. Lean must match the model, and C
 # must match Lean; no program may hit an internal error.
@@ -16,7 +17,7 @@ set -uo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 n="${1:-60}"; first="${2:-1}"
 ov="$root/.lake/build/bin/openverse"; cv="$root/runtime/build/cverse"
-gens=(gadt_rel gadt_rel2 gadt_exist gadt_refine gadt_open gadt_bounds gadt_covariant gadt_immediate gadt_super gadt_defaults gadt_spawn_defaults gadt_method_values gadt_function_values gadt_function_tuples gadt_method_instances gadt_method_tuples gadt_spawn_callers gadt_spawn_body gadt_event_body gadt_first_returns gadt_choice_values gadt_waiting_effects gadt_context_methods gadt_method_variance gadt_contexts gadt_task_order gadt_waiting_contexts)
+gens=(gadt_rel gadt_rel2 gadt_exist gadt_refine gadt_open gadt_bounds gadt_covariant gadt_immediate gadt_super gadt_defaults gadt_spawn_defaults gadt_method_values gadt_function_values gadt_function_tuples gadt_method_instances gadt_method_tuples gadt_spawn_callers gadt_spawn_body gadt_event_body gadt_first_returns gadt_choice_values gadt_waiting_effects gadt_context_methods gadt_method_variance gadt_contexts gadt_task_order gadt_waiting_contexts gadt_views)
 tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
 ok=0; ref=0; bad=0
 for ((s=first; s<first+n; s++)); do

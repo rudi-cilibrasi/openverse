@@ -111,6 +111,7 @@ check "front-end mutation fuzzing (${FUZZ_FRONT:-500} mutants)" scripts/fuzz-fro
 check "QuickProof pins" scripts/check-quickproof-pins.sh
 check "fuzz runner checks" bash tests/scripts/test-fuzz-runners.sh
 check "check runner checks" bash tests/scripts/test-check.sh
+check "front-end C translation-unit size" bash tests/scripts/test-frontend-c-size.sh
 check "choice continuation code size" bash tests/scripts/test-choice-size.sh
 check "construction/default choice models (${FUZZ_MODEL_CONSTRUCT:-60} seeds each)" \
   bash tests/scripts/test-choice-defaults.sh "${FUZZ_MODEL_CONSTRUCT:-60}" "$seed"
@@ -131,8 +132,10 @@ check "rational arithmetic fuzzing (${FUZZ_RATIONAL:-120} programs, against exac
 check "choice fuzzing (${FUZZ_CHOICE:-200} programs, against a backtracking model)" scripts/fuzz-choice.sh "${FUZZ_CHOICE:-200}" "$seed"
 check "scheduler model fuzzing (${FUZZ_MODEL_SCHED:-50} programs, against a model of the docs)" \
   scripts/fuzz-model-sched.sh "${FUZZ_MODEL_SCHED:-50}" "$seed"
-check "GADT model fuzzing (${FUZZ_MODEL_GADT:-150} programs, against twenty-seven models of the docs)" \
+check "GADT model fuzzing (${FUZZ_MODEL_GADT:-150} programs, against twenty-eight models of the docs)" \
   scripts/fuzz-model-gadt.sh "${FUZZ_MODEL_GADT:-150}" "$seed"
+check "FIFO event model fuzzing (${FUZZ_MODEL_FIFO:-60} programs, --event-fifo)" \
+  scripts/fuzz-model-fifo.sh "${FUZZ_MODEL_FIFO:-60}" "$seed"
 check "heterogeneous choice model fuzzing (${FUZZ_MODEL_HETEROGENEOUS:-120} programs)" \
   scripts/fuzz-model-heterogeneous.sh "${FUZZ_MODEL_HETEROGENEOUS:-120}" "$seed"
 check "choice operation dictionary model fuzzing (${FUZZ_MODEL_DICTIONARY:-120} programs)" \

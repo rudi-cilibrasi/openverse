@@ -267,8 +267,11 @@ Main():void =
   argument order as ordinary calls. Without an expected function type,
   a method value keeps its declared shape.
 - Overloaded functions and methods and ones with named parameters cannot
-  be used as values. Lambdas and
-  nested functions are not released in Verse, so there are none.
+  be used as values. Local function declarations and lambda expressions are
+  unsupported. The pinned Book marks nested functions unreleased and arrow
+  lambdas unsupported; this is not a versioned UEFN compatibility result.
+  See the [closure design and release evidence](research/closure-design.md)
+  for the proposed capture/lifetime rules and implementation gates.
 
 ## defer
 
@@ -1712,9 +1715,10 @@ Main()<suspends>:void =
   API's: once the task that signalled waits or ends (`Signal` returns
   first), each woken task's turn comes in that order, before the
   scheduler's own order goes on; tasks they wake take their turns after
-  them. A task is a spawned task, `Main` or a `branch`; waiters in the arms
-  of one task's `sync`, `race` or `rush` go on when their task does, at the
-  turn of the first of them to have waited, in the arms' order; a `rush`
+  them. A task is a spawned task, `Main` or a `branch`, and waiters in the
+  arms of one task's `sync`, `race` or `rush` each take their own turn too
+  (resuming the task for one arm's turn leaves its other woken arms
+  waiting for theirs); a `rush`
   arm that goes on after the `rush` (a task of its own then), signalled
   before its first turn as one, goes on at its turn in the scheduler's
   order. A waiter cancelled before its turn does not go on, and a wait
@@ -1837,7 +1841,7 @@ Main()<suspends>:void =
 | `Sleep(S)` rounding | no fixed 30 Hz rounding rule in the pinned chapter or cited Epic timing description | binary64 `Round(30·S)`, ties to even, at least one tick: `Sleep(0.1)` stays at 3 ticks despite binary floats (#156); bounded inputs and checked clock accumulation follow the explicit reference policy above (#514) |
 | End of a program with tasks | not stated | the program ends when `Main` does; a `Main` that waits with no task able to run is an error (exit 2) (#156) |
 | Order of a `subscribable_event`'s functions | not stated (ch. 14's example lists them in subscription order) | subscription order; the tasks awaiting the event are woken first and go on after `Signal` returns (#210) |
-| Event waiter resumption | Epic's event/Signal API specifies suspension order | Main/spawn/source-arm scheduler order by default; with `--event-fifo`, suspension order across tasks, after `Signal` returns and the signalling task waits (arms of one task in arm order); the default is undecided (#513) |
+| Event waiter resumption | Epic's event/Signal API specifies suspension order | Main/spawn/source-arm scheduler order by default; with `--event-fifo`, suspension order across tasks and arms, after `Signal` returns and the signalling task waits; the default is undecided (#513) |
 | Signal in a failure context | the published Signal API describes no_rollback, alongside rendered transacts bits; versioned compiler behavior needs separate evidence | transactional Signal and callbacks are allowed and rolled back; an engine-compatible admission policy is tracked in #515 |
 | Extent of a `<#>` comment | "everything indented by four spaces on subsequent lines" (§1.1) | the rest of the `<#>` line and every following line indented more than that line, whatever the amount (blank lines included); `<#>` may also follow code on a line |
 
@@ -1847,5 +1851,5 @@ Main()<suspends>:void =
 the class features listed under [Classes](#classes), struct methods (Verse structs have none; classes do),
 `weak_map`, module paths `using{/Verse.org/…}` (accepted and ignored), the
 specific overload/call gaps listed under [Overloading](#overloading), nested
-functions and lambdas (not released in Verse), choice beyond [Choice](#choice) (recursive functions with several values that have effects, other than generators, methods with several values whose name an unrelated class shares), concurrency beyond [Concurrency](#concurrency), and the unsupported
+functions and lambdas (see [release evidence and proposed design](research/closure-design.md)), choice beyond [Choice](#choice) (recursive functions with several values that have effects, other than generators, methods with several values whose name an unrelated class shares), concurrency beyond [Concurrency](#concurrency), and the unsupported
 effect/construction contracts listed under [Effect contracts](#effect-contracts).

@@ -104,8 +104,9 @@ models in `scripts/models/`. `scripts/check.sh` runs each from a fixed seed (`FU
 | `scripts/fuzz-model-generic.sh` | generic functions with several values, on each compilation path and consumer |
 | `scripts/fuzz-model-heterogeneous.sh` | composed choices over mixed types: rollback, copy-outs, waiting and cancellation (with `--methods`, `--members` and other modes for dictionaries) |
 | `scripts/fuzz-model-breaks.sh` | `break` out of source loops, with rollback |
-| `scripts/fuzz-model-gadt.sh` | classes that fix, repeat or hide type arguments, and casts on them |
+| `scripts/fuzz-model-gadt.sh` | classes that fix, repeat or hide type arguments, and casts on them; interfaces seen through views (fields, defaults, generic calls) |
 | `scripts/fuzz-model-sched.sh` | the scheduler: `spawn`, `branch`, events, `sync`/`race`/`rush`, cancellation and `Sleep` |
+| `scripts/fuzz-model-fifo.sh` | FIFO event resumption (`--event-fifo`): waiters in tasks, `Main`, branches and arms, signal chains |
 
 ## Using it
 
