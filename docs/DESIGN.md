@@ -697,7 +697,12 @@ code after one call and the values of the names that code uses.
   `$then(call, h, frame)` (`frameOf?`), the frame the alternative with the
   name `h` in the call's place. A frame's code has no choice and no other
   call of the group, and sets no `var` bound before it, as it runs on a copy
-  of the names. What the alternative evaluates before the call, other than
+  of the names; a `var` it sets is made a cell first (`cellVars`): `var
+  K:t = e` becomes `K := $varcell(t){$VCell := e}` and every use `K.$VCell`,
+  so the frame's copy is a reference to the one object. The call's later
+  values and the caller's later alternatives see what a kept value set, and
+  the journal undoes a rejected one's write; `$varcell` is a prelude class
+  added only to programs that make one. What the alternative evaluates before the call, other than
   literals and its own names, is bound to names first (`$pre…`, a block's
   clauses before the call as they are): `$then(call, h, frame, block{pre})`.
   The loop elaborates that prefix once (`loopFramesWith`) and runs it with
@@ -774,12 +779,6 @@ Not yet (#283), with the route each would take within the same mechanism:
   uses the same members: the code after the first choice is a continuation
   member started from each alternative, its index a parameter, so the
   alternative's code runs in the member's clauses, one segment.
-- *A `var` set after a call*: the frame runs on a copy of the names, but the
-  call's later values, and the caller's later alternatives, must see what
-  a kept value set. Route: such a `var` (a `var` has a written type) becomes
-  a cell, a private class with one `var` field, allocated in the
-  invocation's clauses; items and frames keep the reference, and the
-  journal undoes a rejected value's write.
 
 With those, `F$all` would be needed by no shape and kept, if at all, only as
 an optimisation of effect-free ones. Deleting it (the owner's decision,

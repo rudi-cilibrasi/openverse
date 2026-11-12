@@ -1,0 +1,12 @@
+F 1 K 11
+F 2 K 31
+v 31
+F 2 K 33
+v 33
+none
+F 1 K 11
+F 2 K 31
+first 31
+g 302 seen 2
+g 202 seen 3
+exit=0

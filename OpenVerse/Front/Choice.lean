@@ -1438,8 +1438,8 @@ def lastChoiceTail (plain : SExpr → Bool) (cls : List SExpr) (last : SExpr) :
 def eagerWhy : String :=
   "such a function must be <computes>, keep no local state, and reach nothing that prints or calls Err(), " ++
   "as all its values are computed at a call (#235), unless it is taken lazily: clauses, then a choice whose " ++
-  "alternatives are values or calls of its recursive group, each call followed by no choice, no other such call " ++
-  "and no set of a var (#246, #283)"
+  "alternatives are values or calls of its recursive group, each call followed by no choice and no other such call " ++
+  "(#246, #283)"
 
 /-- The shape of a recursive function with several values that its
     consumers take lazily (#246), after normalizing source returns: plain
@@ -1448,7 +1448,7 @@ def eagerWhy : String :=
     With `frames` (#283), an alternative may also be a call of the group
     with code after it, which runs on each of its values (`$then`), and the
     body's last choice may be bound by a clause with plain code after it. -/
-def loopShape? (g : String) (mv : List String) (body : SExpr) (grp : List String := [g])
+def loopShapeOf? (g : String) (mv : List String) (body : SExpr) (grp : List String := [g])
     (frames : Bool := false) (params : List String := []) : Option (List SExpr × SExpr) := do
   let ss := stmtsOf body
   let last ← ss.getLast?
@@ -1479,6 +1479,31 @@ def loopShape? (g : String) (mv : List String) (body : SExpr) (grp : List String
     | _ => false
   let groupOK (e : SExpr) : Bool := ((alts? e).getD [e]).all fun a => isRec a || plain a || framed a
   if cls.all plain && loopTailOK plain groupOK tail then some (cls, tail) else none
+
+/-- (#283) A function's `var`s made cells: `var K:t = e` becomes
+    `K := $varcell(t){$VCell := e}`, and each use of `K`, read or `set`, is
+    `K.$VCell`. A return frame runs on a copy of the names it uses, but a
+    cell is one object: what a value's frame sets, every later value of the
+    call and every later alternative sees, and a rejected value's write is
+    undone with it, as the inlined body's `var` would be. -/
+partial def cellVars (vs : List String) : SExpr → SExpr :=
+  mapE fun
+    | .decl p x (some t) true rhs =>
+      if vs.contains x then
+        some (.decl p x none false (.construct p "$varcell" [t] [.decl p "$VCell" none false (cellVars vs rhs)]))
+      else none
+    | .ident p x => if vs.contains x then some (.member p (.ident p x) "$VCell") else none
+    | _ => none
+
+/-- `loopShapeOf?`; with `frames`, when a frame sets a `var` (#283), with the
+    function's `var`s that are set made cells (`cellVars`). -/
+def loopShape? (g : String) (mv : List String) (body : SExpr) (grp : List String := [g])
+    (frames : Bool := false) (params : List String := []) : Option (List SExpr × SExpr) :=
+  (loopShapeOf? g mv body grp frames params).orElse fun _ =>
+    let set := setsIn body
+    let vs := ((localDecls body).map (·.1)).eraseDups.filter fun x =>
+      set.contains x && anyE (fun | .decl _ y (some _) true _ => y == x | _ => false) body
+    if !frames || vs.isEmpty then none else loopShapeOf? g mv (cellVars vs body) grp frames params
 
 /-- How many `if`s with a `return` in them `e` has (#283). -/
 partial def countRetIfs (e : SExpr) : Nat :=

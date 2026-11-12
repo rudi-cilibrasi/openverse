@@ -325,6 +325,15 @@ lazycell(t:type) := class:
 
 def lazyTops : Except String (List STop) := parsePrelude lazyPrelude ["lazycell", "LItem", "LNext"]
 
+/-- (#283) A `var` of a lazily taken recursive function that a return frame
+    sets, as a cell (`Choice.cellVars`). -/
+def varcellPrelude : String := "
+varcell(t:type) := class:
+    var VCell:t
+"
+
+def varcellTops : Except String (List STop) := parsePrelude varcellPrelude ["varcell", "VCell"]
+
 /-- `subscribable_event(t)` (#210): an event whose `Signal` also calls the
     functions subscribed to it, each `Subscribe` giving a `cancelable` whose
     `Cancel` unsubscribes it. Added, with the concurrency prelude it
