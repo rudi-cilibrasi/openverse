@@ -631,11 +631,13 @@ where
 
 /-- The `if` of a choice of its branches with the `defer:`s `ds` pending for
     the exits in it (`deferExits`), its shape kept: in its conditions, a
-    scope of their own whose `defer:`s run where it ends (`pendingIn`), in
-    each branch, and in the `else if`s of its chain. -/
+    scope of their own whose `defer:`s run where they end (`pendingIn`), in
+    each branch, and in the `else if`s of its chain. (A `defer:` among
+    conditions with a choice of their own is refused, #208: those are left
+    as they are, for the elaborator to refuse it.) -/
 partial def deferExitsIf (ds : List SExpr) : SExpr → SExpr
   | .ite p cs t u =>
-    let (cs, own) := pendingIn ds cs
+    let (cs, own) := if cs.any liftsHere then (cs.map (deferExits ds), []) else pendingIn ds cs
     .ite p (cs ++ if own.isEmpty then [] else [.block p (own ++ [.int p 0])]) (deferExits ds t)
       (u.map (deferExitsIf ds))
   | e => deferExits ds e
