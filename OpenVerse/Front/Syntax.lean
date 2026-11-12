@@ -10,7 +10,7 @@ structure Pos where
   col  : Nat
   /-- The file, for a definition imported from another file (#27). -/
   file : String := ""
-  deriving Repr, Inhabited
+  deriving Repr, Inhabited, BEq
 
 def Pos.show (p : Pos) : String :=
   if p.file.isEmpty then s!"{p.line}:{p.col}" else s!"{p.file}:{p.line}:{p.col}"
@@ -32,7 +32,7 @@ inductive STy where
   /-- `type{_(:t₁, …)<effects>:r}` or `t₁->r`: a function type (#210), its
       parameter types, effect specifiers and result type. -/
   | fn   : List STy → List String → STy → STy
-  deriving Repr, Inhabited
+  deriving Repr, Inhabited, BEq
 
 /-- Fold over written type names in source order, including application
     heads (`box` in `box(t)`) and function parameter and result types. -/
@@ -81,7 +81,7 @@ structure TParam where
   name : String
   /-- The constraint as written: `type`, or the argument of `subtype(…)`. -/
   constraint : String
-  deriving Repr, Inhabited
+  deriving Repr, Inhabited, BEq
 
 mutual
 inductive SExpr where
@@ -139,11 +139,11 @@ inductive SExpr where
   | construct : Pos → String → List STy → List SExpr → SExpr
   /-- `map{k => v, …}`. -/
   | mapLit   : Pos → List (SExpr × SExpr) → SExpr
-  deriving Repr, Inhabited
+  deriving Repr, Inhabited, BEq
 inductive SPart where
   | text : String → SPart
   | code : SExpr → SPart
-  deriving Repr, Inhabited
+  deriving Repr, Inhabited, BEq
 end
 
 def SExpr.pos : SExpr → Pos

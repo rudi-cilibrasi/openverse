@@ -2687,13 +2687,20 @@ def forOutcomeValues (ctx : Ctx) (p : Pos) (r : R) : EM R := do
     generated adapters are instantiated before calling the shared suffix. -/
 structure ChoiceOperations where
   plan : ChoiceTypes.Plan
+  bindingName : String := ""
   params : List (String × Ty) := []
-  replacements : List (String × SExpr) := []
+  replacements : List (SExpr × SExpr) := []
   casePrelude : List (List SExpr) := []
   extraFns : List STop := []
 
 def ChoiceOperations.rewrite (ops : ChoiceOperations) (body : SExpr) : SExpr :=
-  Choice.mapE (fun e => ops.replacements.lookup (reprStr e)) body
+  if ops.replacements.isEmpty then body else
+  Choice.mapE (fun
+    -- Compare source calls structurally. Rendering generated metadata
+    -- for every lookup can dominate waiting-suffix discovery.
+    | call@(.app _ (.member _ (.ident _ name) _) _ _) =>
+      if name == ops.bindingName then (ops.replacements.find? (·.1 == call)).map (·.2) else none
+    | _ => none) body
 
 def ChoiceOperations.context (ops : ChoiceOperations) (ctx : Ctx) : EM Ctx := do
   let mut ctx := ctx
@@ -2800,7 +2807,7 @@ def choiceGenericOperation (ctx : Ctx) (stem binding : String) (ops : ChoiceOper
   some { ops with
     plan := extendedPlan,
     params := ops.params ++ [(name, .struct family (classVars.map fun (n, b) => .param n b))],
-    replacements := ops.replacements ++ [(reprStr call, invocation)],
+    replacements := ops.replacements ++ [(call, invocation)],
     casePrelude := (ops.casePrelude.zip bindings).map fun (old, next) => old ++ next,
     extraFns := ops.extraFns ++ definitions }
 
@@ -2809,11 +2816,11 @@ def choiceGenericOperation (ctx : Ctx) (stem binding : String) (ops : ChoiceOper
     caller scope can be represented here. -/
 def choiceOperations (_elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx)
     (stem binding : String) (plan : ChoiceTypes.Plan) (suffix : List SExpr) : EM ChoiceOperations := do
-  let mut ops : ChoiceOperations := { plan, casePrelude := plan.instances.map fun _ => [] }
+  let mut ops : ChoiceOperations := { plan, bindingName := binding, casePrelude := plan.instances.map fun _ => [] }
   if !(match plan.binding with | .param .. => true | _ => false) then return ops
-  let mut seen : List String := []
+  let mut seen : List SExpr := []
   for call in suffix.flatMap (choiceMethodCalls binding) do
-    let key := reprStr call
+    let key := call
     if seen.contains key then continue
     seen := key :: seen
     let .app p (.member _ _ method) arguments bracket := call | continue
