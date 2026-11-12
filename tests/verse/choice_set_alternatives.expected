@@ -1,0 +1,31 @@
+p 1
+p 2
+p 7
+o 1
+o -1
+pet a
+pet a
+pet a
+i
+a 0 1
+a 0 2
+a 0 7
+b 1 7
+b 2 7
+b 9 7
+b 9 1
+b 9 2
+b 9 9
+h 11
+h 12
+h 3
+t
+if 3
+visit 1
+visit 2
+visit 3
+upto 3
+macro 5 5
+rolled back 0
+end 5
+exit=0
