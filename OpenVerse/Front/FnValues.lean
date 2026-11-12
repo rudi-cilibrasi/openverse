@@ -1,4 +1,4 @@
-import OpenVerse.Front.Syntax
+import OpenVerse.Front.SubtypeSyntax
 
 /-!
 Function values (#210), defunctionalised before elaboration.
@@ -305,6 +305,25 @@ structure GenericAdapter where
   args : List SExpr
   /-- A bare parameter replaced by tuple components, also in a receiver. -/
   subst : List (String × STy) := []
+  /-- Complete relations that cannot be represented by a bound on one
+      component after a whole formal becomes a tuple. -/
+  relations : List (STy × STy) := []
+
+/-- Parameters known from the value shape also determine parameters in their
+    upper bounds. The converse is not inference: an upper type alone cannot
+    determine an absent lower type. -/
+def boundInferredNames (tps : List TParam) (types : List STy)
+    (relations : List (STy × STy) := []) : List String := Id.run do
+  let names := tps.map (·.name)
+  let mut known := names.filter fun name => types.any (·.mentions name)
+  let bounds := relations ++ tps.filterMap fun tp => tp.upperBound.map (·, STy.name tp.name)
+  for _ in [0:tps.length + 1] do
+    let before := known
+    for (upper, lower) in bounds do
+      if (lower.bareNames.filter names.contains).all known.contains then
+        known := (known ++ upper.bareNames.filter names.contains).eraseDups
+    if known == before then break
+  return known
 
 /-- A requested method adapter whose receiver fixes the source signature.
     Parameters are freshened before recording it, so requests are independent
@@ -341,6 +360,17 @@ where
       | some (.name peer) => tps.any (·.name == peer) && go fuel peer
       | some _ => false
 
+private def tupleComparable (tps : List TParam) (name : String) : Bool :=
+  go (tps.length + 1) name
+where
+  go : Nat → String → Bool
+    | 0, _ => false
+    | fuel + 1, name => match tps.find? (·.name == name) with
+      | none => false
+      | some tp => tp.constraint == "comparable" || match tp.upperBound with
+        | some (.name peer) => go fuel peer
+        | _ => false
+
 /-- Tuple calls at the arities present in the program. A bare parameter can
     become the tuple of the target arguments; its comparable bound then
     belongs to every component. Existing declared-shape instances come first. -/
@@ -361,18 +391,39 @@ def genericAdapters (p : Pos) (n : String) (ps : List STy) (tps : List TParam) (
   | [.name v] =>
     if let some tp := tps.find? (fun tp => tp.name == v && tupleInstancePossible tps v) then
       for k in arities do
-        let components := (List.range k).map fun i => { tp with name := s!"$tupleValue_{n}_{k}_{i}" }
+        let components := (List.range k).map fun i => ({
+          pos := tp.pos, name := s!"$tupleValue_{n}_{k}_{i}",
+          constraint := if tupleComparable tps v then "comparable" else "type" } : TParam)
         let types := components.map fun t => STy.name t.name
         let σ := [(v, STy.tup types)]
+        -- Keep the entire relation. tuple(a,b) <: t says nothing about
+        -- whether a <: t or b <: t, even when t occurs only in this bound.
+        let retained := tps.flatMap fun original => if original.name == v then components else
+          let upper := original.upperBound.map (·.substNames σ)
+          -- Keep bounds still expressible on the retained binder. Besides
+          -- avoiding redundant proofs, this retains comparability implied
+          -- by a nominal unique bound before field types are resolved.
+          let upper := upper.filter fun | .name _ | .app .. => true | _ => false
+          [{ original with
+            upperBound := upper,
+            constraint := if upper.isSome then original.constraint else
+              if tupleComparable tps original.name then "comparable" else "type" }]
+        let relations := tps.filterMap fun original => do
+          let base ← original.upperBound
+          let base := base.substNames σ
+          if retained.any (fun kept => kept.name == original.name &&
+              kept.upperBound.any (fun upper => reprStr upper == reprStr base)) then none else
+            some (base, (STy.name original.name).substNames σ)
         out := out ++ [{
           suffix := s!"Unpack{k}",
-          tparams := tps.flatMap (fun t => if t.name == v then components else [t]),
+          tparams := retained, relations,
           params := types, ret := r.substNames σ, args := [.tuple p (xs k)], subst := σ }]
   | _ => pure ()
   -- Never introduce an unusable extra class merely because a different
   -- function type was written elsewhere. The original adapter is unchanged.
   return out.take 1 ++ (out.drop 1).filter fun a =>
-    a.tparams.all fun tp => (a.params ++ [a.ret] ++ captured.map (·.substNames a.subst)).any (·.mentions tp.name)
+    let known := boundInferredNames a.tparams (a.params ++ [a.ret] ++ captured.map (·.substNames a.subst)) a.relations
+    a.tparams.all fun tp => known.contains tp.name
 
 /-- Add the shapes' interfaces and the value classes of the functions used
     as values (#210). A function is used as a value when its name occurs
@@ -452,7 +503,8 @@ def desugar (tops : List STop) (extra : List STop := []) (requests : List (Strin
           -- Member scanning also sees unrelated fields. A parameter absent
           -- from the signature can never be inferred at value creation, and
           -- an unused adapter would itself contain an uninferrable call.
-          let inferable := mtps.all fun tp => targs.any (·.mentions tp.name)
+          let known := boundInferredNames (tps ++ mtps) (targs ++ [STy.app c (tps.map fun tp => .name tp.name)])
+          let inferable := mtps.all fun tp => known.contains tp.name
           if members.contains m && needed && !overloaded && inferable && ps.all (!·.named) && !m.contains '$' &&
               !m.startsWith "(" then
             -- Keep method parameters apart from the receiver arguments a
@@ -586,8 +638,10 @@ def desugar (tops : List STop) (extra : List STop := []) (requests : List (Strin
         STop.fn p s.call (params a.params) [] (s.effs ++ ["override"]) a.ret
           (.app p (.ident p n) a.args own.decides)
       let fits := sh :: fits.filter (· != sh)
-      out := out ++ [.classDef p s!"{n}$fn{a.suffix}" a.tparams []
-        (fits.map fun s => STy.app s.name (a.params ++ [a.ret])) false [] [] methods]
+      let owner := s!"{n}$fn{a.suffix}"
+      out := out ++ [.classDef p owner a.tparams []
+        (fits.map fun s => STy.app s.name (a.params ++ [a.ret])) false
+        (SubtypeEvidence.relationFields p owner a.relations) [] methods]
     let tpn := tps.map (·.name)
     let mut k := 0
     for (qs, es, u) in requested n do
@@ -612,9 +666,11 @@ def desugar (tops : List STop) (extra : List STop := []) (requests : List (Strin
         STop.fn p s.call (params a.params) [] (s.effs ++ ["override"]) a.ret
           (.app p (.member p (.ident p "$self") m) a.args own.decides)
       let fits := sh :: fits.filter (· != sh)
-      out := out ++ [.classDef p s!"{c}${m}$fn{a.suffix}" a.tparams []
+      let owner := s!"{c}${m}$fn{a.suffix}"
+      out := out ++ [.classDef p owner a.tparams []
         (fits.map fun s => STy.app s.name (a.params ++ [a.ret])) false
-        [("$self", selfTy.substNames a.subst, none, false)] [] methods]
+        ([("$self", selfTy.substNames a.subst, none, false)] ++
+          SubtypeEvidence.relationFields p owner a.relations) [] methods]
     -- (#231) a method of a class without type parameters as a value at a
     -- closed function type it fits by variance, asked for as `.{c}${m}`:
     -- `{c}${m}$fn${k}`, holding the receiver

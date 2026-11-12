@@ -11,10 +11,12 @@ def main (args : List String) : IO Unit := do
   let positive := ["process", "holder", "value", "refined", "choice-valid", "default-valid",
     "context", "override-valid", "receiver-override", "state", "cancel", "interior-path",
     "interior-containers", "interior-nested", "interior-state", "interior-cancel", "overload",
-    "overload-shapes", "overload-values", "overload-inherited", "overload-projected", "overload-state", "peer-tuple-value"]
+    "overload-shapes", "overload-values", "overload-inherited", "overload-projected", "overload-state",
+    "peer-tuple-value", "peer-tuple-values", "peer-tuple-method", "peer-tuple-unique", "peer-numeric", "peer-any"]
   let negative := ["choice-refusal", "default-refusal", "override-refusal", "overload-interface-refusal",
     "overload-ancestor-refusal", "overload-optional-refusal", "overload-empty-refusal", "overload-scope-refusal",
-    "overload-value-refusal", "interior-readonly-refusal", "interior-effect-refusal"]
+    "overload-value-refusal", "interior-readonly-refusal", "interior-effect-refusal",
+    "peer-tuple-comparable-refusal", "peer-tuple-relation-refusal"]
   let mut failures := 0
   for name in positive ++ negative do
     let root := s!"tests/upper-bounds/{name}"

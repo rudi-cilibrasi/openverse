@@ -223,6 +223,31 @@ def main : IO Unit := do
   need "comparable tuple adapters retain component comparability"
     (tuples.any fun adapter => adapter.suffix == "Unpack2" &&
       adapter.tparams.all (fun tp => tp.constraint == "comparable" && tp.upperBound.isNone))
+  let plain : TParam := { pos := p, name := "t", constraint := "type" }
+  let peers := FnValues.genericAdapters p "Split" [.name "u"] [plain, peer] (.name "u") [2]
+  let some unpack := peers.find? (·.suffix == "Unpack2")
+    | throw (IO.userError "peer tuple adapter lost its bound-only parameter")
+  need "tuple adapters retain the complete relation without distributing it"
+    (reprStr unpack.relations == reprStr [(STy.name "t", STy.tup unpack.params)] &&
+      unpack.tparams.length == 3 && unpack.tparams.any (·.name == "t") &&
+      unpack.tparams.all (·.upperBound.isNone))
+  let peers := FnValues.genericAdapters p "ComparablePeer" [.name "u"] [peer, comparable] (.name "u") [2]
+  need "peer comparability reaches each tuple component"
+    (peers.any fun adapter => adapter.suffix == "Unpack2" &&
+      adapter.tparams.all (·.constraint == "comparable") && adapter.relations.length == 1)
+  let lower : TParam := { pos := p, name := "u", constraint := "type" }
+  need "a known upper does not infer an absent lower"
+    (!(FnValues.boundInferredNames [plain, lower] [.name "t"] [(.name "t", .name "u")]).contains "u")
+  let floating := TParam.withUpperBound p "v" (.name "v")
+  let peers := FnValues.genericAdapters p "Phantom" [.name "u"] [plain, peer, floating] (.name "u") [2]
+  need "an unreachable bound cycle does not create an unusable tuple class"
+    (!peers.any (·.suffix.startsWith "Unpack"))
+  let capturedBound := TParam.withUpperBound p "v" (.name "vehicle")
+  let peers := FnValues.genericAdapters p "Captured" [.name "u"] [capturedBound, plain, peer]
+    (.name "u") [2] [.app "holder" [.name "v"]]
+  need "retained receiver bounds keep their nominal comparability information"
+    (peers.any fun adapter => adapter.suffix == "Unpack2" && adapter.relations.length == 1 &&
+      adapter.tparams.any (fun tp => tp.name == "v" && reprStr tp.upperBound == reprStr capturedBound.upperBound))
   let source := "vehicle:=class<computes>{Speed:int=9}\nF(X:t,D:evidence(vehicle,t) where t:type)<computes>:int=X.Speed\nMain():void={}"
   let parsed ← getOK "parse role-controlled dictionary parameters" (parseProgram source)
   let roles (tops : List STop) (typeValue : Bool) : IO (List STop) := tops.mapM fun

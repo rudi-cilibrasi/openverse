@@ -12786,21 +12786,29 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   -- Resolve every constrained nominal header before validating any use of
   -- one. This makes forward declarations independent of source order.
   let constrainedTypes := allTops.filterMap fun
-    | .const p name none (.structDef _ tps _ _) =>
-      if tps.any (·.upperBound.isSome) then some (p, name, tps) else none
+    | .const p name none (.structDef _ tps _ fields) =>
+      let relations := fields.filterMap fun (field, ty, _, mutable) =>
+        SubtypeEvidence.declaredRelation? name field ty mutable
+      if tps.any (·.upperBound.isSome) || !relations.isEmpty then some (p, name, tps, relations) else none
     | _ => none
   if !constrainedTypes.isEmpty then
-    let declarations ← constrainedTypes.mapM fun (p, name, tps) => do
+    let declarations ← constrainedTypes.mapM fun (p, name, tps, relations) => do
       let resolved ← resolveTParams { env with sbounds := [] } tps
-      pure (p, name, resolved)
+      let scope := resolved.env { env with sbounds := [] }
+      let extra ← relations.mapM fun (base, derived) => do
+        let base ← (resolveTy scope p base).run' { env := scope }
+        let derived ← (resolveTy scope p derived).run' { env := scope }
+        pure (SubtypeEvidence.Bound.mk base derived)
+      pure (p, name, { resolved with bounds := resolved.bounds ++ extra })
     env := { env with sbounds := declarations.map fun (_, name, resolved) =>
       (name, resolved.bounds.map fun bound => (bound.base, bound.derived)) }
     for (p, _, resolved) in declarations do
       let scope := resolved.env env
       for bound in resolved.bounds do
-        match bound.base.checkBounds scope with
-        | .error message => throw s!"{p.show}: {message}"
-        | .ok _ => pure ()
+        for ty in [bound.base, bound.derived] do
+          match ty.checkBounds scope with
+          | .error message => throw s!"{p.show}: {message}"
+          | .ok _ => pure ()
     for (name, fields) in env.structs do
       let scope := { env with
         tvars := ((env.sparams.lookup name).getD []).map fun (v, c) => (v, Ty.param v c)
@@ -13111,6 +13119,20 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     | .fn p n ps tps effs ret _ =>
       if n == "Main" then throw s!"{p.show}: Main cannot be generic"
       let resolved ← resolveTParams env tps
+      let resolved ← match ps.head? with
+        | some receiver => do
+          let unchecked := resolved.env { env with sbounds := [] }
+          let ty ← (resolveTy unchecked p receiver.ty).run' { env := unchecked }
+          match ty with
+          | .struct owner args =>
+            if ["Self", "$Self"].contains receiver.name && n.startsWith (owner ++ ".") then
+              let σ := (((env.sparams.lookup owner).getD []).map (·.1)).zip args
+              let extra := ((env.sbounds.lookup owner).getD []).map fun (base, derived) =>
+                (SubtypeEvidence.Bound.mk base derived).subst σ
+              pure { resolved with bounds := (resolved.bounds ++ extra).eraseDups }
+            else pure resolved
+          | _ => pure resolved
+        | none => pure resolved
       let tparams := resolved.params
       let genv := resolved.env env
       let (tys, rt) ← fnTypes genv p n ps effs ret

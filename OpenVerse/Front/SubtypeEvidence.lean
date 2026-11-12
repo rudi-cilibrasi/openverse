@@ -5,16 +5,6 @@ import OpenVerse.Front.Types
 
 namespace OpenVerse.Front.SubtypeEvidence
 
-def family : String := "$subtypeEvidence"
-def identityFamily : String := "$subtypeIdentity"
-def composeFamily : String := "$subtypeCompose"
-
-/-- Readonly fields owned by the compiler, distinct from type-value witness
-    fields: a witness can contain a dummy value and is never an upcast proof. -/
-def fieldPrefix : String := "$subtype."
-
-def fieldName (owner parameter : String) : String := s!"{fieldPrefix}{owner}.{parameter}"
-
 structure Bound where
   base : Ty
   derived : Ty
@@ -83,12 +73,18 @@ def nominal (env : TyEnv) (p : Pos) (source target : String) : Except String STo
   let own := params.map fun (name, comparable) => Ty.param name comparable
   let derived := Ty.struct source own
   let base := Ty.struct target (env.upArgs source own target)
+  let sourceBounds := (env.sbounds.lookup source).getD []
+  let covered := params.filterMap fun (name, comparable) =>
+    sourceBounds.find? fun (_, derived) => derived == .param name comparable
   let tps := params.map fun (name, comparable) =>
-    match ((env.sbounds.lookup source).getD []).find? (fun (_, derived) => derived == .param name comparable) with
+    match sourceBounds.find? (fun (_, derived) => derived == .param name comparable) with
     | some (base, _) => TParam.withUpperBound p name base.toSTy
     | none => ({ pos := p, name, constraint := if comparable then "comparable" else "type" } : TParam)
-  return .classDef p (nominalFamily source target) tps ["computes"]
-    [(.struct family [base, derived] : Ty).toSTy] false [] []
+  let owner := nominalFamily source target
+  let extra := (sourceBounds.filter (!covered.contains ·)).map fun (base, derived) =>
+    (base.toSTy, derived.toSTy)
+  return .classDef p owner tps ["computes"]
+    [(.struct family [base, derived] : Ty).toSTy] false (relationFields p owner extra) []
     [.fn p "Up" [{ name := "$input", ty := derived.toSTy }] [] ["override", "computes"]
       base.toSTy (.ident p "$input")]
 

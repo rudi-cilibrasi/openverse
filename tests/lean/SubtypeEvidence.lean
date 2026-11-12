@@ -504,6 +504,27 @@ private def stagedHelperControlSource := stagedHelperSource
 
 private def stagedHelperTrace := "stage 4\n9\n9\n4\n4\n"
 
+private def tupleRelationSource := "
+bridge_base(a:type,b:type,t:type):=interface<computes>:
+    Keep(X:tuple(a,b))<computes>:t
+tuple_bridge(a:type,b:type,t:type):=class<computes>(bridge_base(a,b,t)):
+    Keep<override>(X:tuple(a,b))<computes>:t=X
+Main():void=
+    B:=tuple_bridge(int,string,tuple(int,string)){}
+    R:=B.Keep((1,\"s\"))
+    Print(\"tuple relation {R(0)} {R(1)}\")
+    D:=TupleEvidence()
+    S:=D.Up(B).Keep((2,\"n\"))
+    Print(\"nominal tuple {S(0)} {S(1)}\")
+"
+
+private def tupleRelations (tops : List STop) : List STop := tops.map fun
+  | .classDef p "tuple_bridge" tps specs parents iface fields overrides methods =>
+    .classDef p "tuple_bridge" tps specs parents iface
+      (fields ++ relationFields p "tuple_bridge"
+        [(.name "t", .tup [.name "a", .name "b"])]) overrides methods
+  | top => top
+
 private def receiverStateSource := "
 vehicle:=class<allocates>:
     var N:int=0
@@ -1125,6 +1146,22 @@ def main (args : List String) : IO Unit := do
     (stagedHelper.prog.fns.any fun fn => fn.name.startsWith "$forStage" && (fn.name.splitOn "$env").length > 1)
   let stagedHelperControl ← receiverCompile "explicit waiting stage evidence" stagedHelperControlSource
   checkTrace "explicit waiting stage evidence" stagedHelperControl stagedHelperTrace
+  let tupleTops ← getOK "parse compound adapter proof" (parseProgram tupleRelationSource)
+  let tupleType := Ty.tup [.int, Ty.string]
+  let tupleArgs := [Ty.int, Ty.string, tupleType]
+  let tupleTops ← getOK "rewrite compound nominal proof" (tupleTops.mapM (rewriteTop
+    [("TupleEvidence", witness (.struct "bridge_base" tupleArgs) (.struct "tuple_bridge" tupleArgs))]))
+  let tupleRelation ← getOK "checked compound adapter proof" (elabProgram (tupleRelations tupleTops))
+  let tupleRelationTrace := "tuple relation 1 s\nnominal tuple 2 n\n"
+  checkTrace "compound adapter proof" tupleRelation tupleRelationTrace
+  let tupleStrict ← getOK "choice-free compound adapter proof"
+    (elabProgram (tupleRelations tupleTops) { profile := .choiceFree })
+  need "compound adapter proof preserves the admitted profile"
+    (tupleRelation.prog.encode == tupleStrict.prog.encode)
+  let badTupleTops ← getOK "parse invalid compound adapter instance" (parseProgram
+    "tuple_bridge(a:type,b:type,t:type):=class<computes>{}\nMain():void=B:=tuple_bridge(int,string,int){}")
+  expectError "whole-value constraint cannot be erased at construction" "does not satisfy subtype(int)"
+    (elabProgram (tupleRelations badTupleTops))
   let entryTops ← getOK "entry-only dictionary declarations"
     (parseProgram "vehicle:=class<computes>{Speed:int=9}\ncar:=class<computes>(vehicle){}\nMain():void={}")
   let entry := SExpr.member pos
@@ -1172,7 +1209,8 @@ def main (args : List String) : IO Unit := do
         ("composed-helper", composedHelper, composedHelperTrace),
         ("composed-helper-control", composedHelperControl, composedHelperTrace),
         ("staged-helper", stagedHelper, stagedHelperTrace),
-        ("staged-helper-control", stagedHelperControl, stagedHelperTrace)] do
+        ("staged-helper-control", stagedHelperControl, stagedHelperTrace),
+        ("tuple-relation", tupleRelation, tupleRelationTrace)] do
       IO.FS.writeBinFile (out ++ s!"/{name}.vbc") compiled.prog.encode
       IO.FS.writeFile (out ++ s!"/{name}.expected") expected
   IO.println "subtype dictionary contracts passed (checked Core, precise/escaping results, inference, member calls/coercion, state/order/rollback/cancellation)"
