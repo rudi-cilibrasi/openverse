@@ -81,7 +81,18 @@ structure TParam where
   name : String
   /-- The constraint as written: `type`, or the argument of `subtype(…)`. -/
   constraint : String
+  /-- A non-comparable upper bound, retained as a type rather than a name:
+      it may be qualified, parametric, or refer to another type parameter. -/
+  upperBound : Option STy := none
   deriving Repr, Inhabited, BEq
+
+/-- Keep the established type/comparable spelling while retaining the full
+    source type of other bounds. Admission is the elaborator's responsibility. -/
+def TParam.withUpperBound (p : Pos) (name : String) (bound : STy) : TParam :=
+  match bound with
+  | .name "comparable" => { pos := p, name, constraint := "comparable" }
+  | .name n | .app n _ => { pos := p, name, constraint := n, upperBound := some bound }
+  | _ => { pos := p, name, constraint := "bound", upperBound := some bound }
 
 mutual
 inductive SExpr where

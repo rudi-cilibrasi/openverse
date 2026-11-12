@@ -9652,6 +9652,10 @@ def typeNames : List String :=
 def checkTParams (env : TyEnv) (tps : List TParam) : Except String (List (String × Bool)) := do
   let mut out : Array (String × Bool) := #[]
   for tp in tps do
+    -- Bound syntax is retained before its dictionary ABI is introduced. It
+    -- must not become an unconstrained parameter in any intermediate pass.
+    if tp.upperBound.isSome then
+      throw s!"{tp.pos.show}: unknown constraint subtype({tp.constraint}) (checked upper-bound evidence is not implemented yet, #502)"
     if out.any (·.1 == tp.name) then
       throw s!"{tp.pos.show}: type parameter {tp.name} is declared twice (several constraints on one type parameter are not supported)"
     if typeNames.contains tp.name || (env.structs.lookup tp.name).isSome ||
@@ -11650,6 +11654,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     EffectPolicy.checkTy { line := 0, col := 0 } ty.toSTy
   for request in opts.methodRequests do
     EffectPolicy.checkSpecs request.pos request.key request.effs
+    EffectPolicy.checkTParams request.tparams
     EffectPolicy.checkTy request.pos request.receiver
     request.params.forM (EffectPolicy.checkTy request.pos)
     EffectPolicy.checkTy request.pos request.ret

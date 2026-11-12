@@ -1038,14 +1038,14 @@ partial def parseParamList : PM (Array SParam × Array TParam) := do
       expectSym ":"
       let kt ← peekT
       let k ← expectIdent
-      let c ← if k == "subtype" then do
+      let tp ← if k == "subtype" then do
           expectSym "("
-          let a ← expectIdent
+          let a ← parseType
           expectSym ")"
-          pure a
-        else if k == "type" then pure "type"
+          pure (TParam.withUpperBound vt.pos v a)
+        else if k == "type" then pure { pos := vt.pos, name := v, constraint := "type" }
         else perr kt s!"expected 'type' or 'subtype(…)' for type parameter {v}, found {kt.tok.describe}"
-      tps := tps.push { pos := vt.pos, name := v, constraint := c }
+      tps := tps.push tp
       if (← peekT).isSym "," then bump else break
   expectSym ")"
   return (ps, tps)
@@ -1326,11 +1326,10 @@ partial def parseTopsIn (col : Nat) (pfx : String) (braced : Bool := false) : PM
         bump; bump
         if !tps.isEmpty then perr n "a parametric type takes its parameters without a where clause"
         let tparams ← ps.toList.mapM fun prm => do
-          let c ← match prm.named, prm.default, prm.ty with
-            | false, none, .name "type" => pure "type"
-            | false, none, .app "subtype" [.name c] => pure c
+          match prm.named, prm.default, prm.ty with
+            | false, none, .name "type" => pure { pos := t.pos, name := prm.name, constraint := "type" }
+            | false, none, .app "subtype" [bound] => pure (TParam.withUpperBound t.pos prm.name bound)
             | _, _, _ => perr n s!"a parameter of a parametric type is written {prm.name}:type or {prm.name}:subtype(…)"
-          pure ({ pos := t.pos, name := prm.name, constraint := c } : TParam)
         tops := tops.push (← parseClassBody t.pos name tparams isIface)
         continue
       if (← peekT).isSym ":=" && (← peekT 1).isKw "struct" then
@@ -1340,11 +1339,10 @@ partial def parseTopsIn (col : Nat) (pfx : String) (braced : Bool := false) : PM
         bump
         if !tps.isEmpty then perr d "a parametric type takes its parameters without a where clause"
         let tparams ← ps.toList.mapM fun prm => do
-          let c ← match prm.named, prm.default, prm.ty with
-            | false, none, .name "type" => pure "type"
-            | false, none, .app "subtype" [.name c] => pure c
+          match prm.named, prm.default, prm.ty with
+            | false, none, .name "type" => pure { pos := t.pos, name := prm.name, constraint := "type" }
+            | false, none, .app "subtype" [bound] => pure (TParam.withUpperBound t.pos prm.name bound)
             | _, _, _ => perr n s!"a parameter of a parametric type is written {prm.name}:type or {prm.name}:subtype(…)"
-          pure ({ pos := t.pos, name := prm.name, constraint := c } : TParam)
         match ← parseFnBody with
         | .structDef bp [] specs fs => tops := tops.push (.const t.pos name none (.structDef bp tparams specs fs))
         | _ => perr d s!"only structs can be parametric in openverse ({name})"

@@ -145,18 +145,22 @@ partial def _root_.OpenVerse.Front.SExpr.tyNames : SExpr → List String
   | .caseE _ e arms => e.tyNames ++ arms.flatMap fun (q, v) => (q.map SExpr.tyNames).getD [] ++ v.tyNames
   | .set _ l _ e => l.tyNames ++ e.tyNames
   | .mapLit _ kvs => kvs.flatMap fun (k, v) => k.tyNames ++ v.tyNames
-  | .structDef _ _ _ fs => fs.flatMap fun (_, t, d, _) => t.allNames ++ (d.map SExpr.tyNames).getD []
+  | .structDef _ tps _ fs =>
+    tps.flatMap (fun tp => tp.upperBound.toList.flatMap STy.allNames) ++
+      fs.flatMap fun (_, t, d, _) => t.allNames ++ (d.map SExpr.tyNames).getD []
   | .refineDef _ _ t cs => t.allNames ++ cs.flatMap SExpr.tyNames
   | .str _ parts => parts.flatMap fun | .code e => e.tyNames | .text _ => []
   | _ => []
 
 /-- Whether a definition mentions the type `n`. -/
 partial def _root_.OpenVerse.Front.STop.usesType (n : String) : STop → Bool
-  | .fn _ _ ps _ _ r body =>
-    (ps.flatMap (·.ty.allNames) ++ r.allNames ++ body.tyNames).contains n
+  | .fn _ _ ps tps _ r body =>
+    (tps.flatMap (fun tp => tp.upperBound.toList.flatMap STy.allNames) ++
+      ps.flatMap (·.ty.allNames) ++ r.allNames ++ body.tyNames).contains n
   | .const _ _ t e => ((t.map STy.allNames).getD [] ++ e.tyNames).contains n
-  | .classDef _ _ _ _ parents _ fields _ methods =>
-    (parents.flatMap STy.allNames ++ fields.flatMap (fun (_, t, d, _) => t.allNames ++ (d.map SExpr.tyNames).getD [])).contains n ||
+  | .classDef _ _ tps _ parents _ fields _ methods =>
+    (tps.flatMap (fun tp => tp.upperBound.toList.flatMap STy.allNames) ++ parents.flatMap STy.allNames ++
+      fields.flatMap (fun (_, t, d, _) => t.allNames ++ (d.map SExpr.tyNames).getD [])).contains n ||
       methods.any (STop.usesType n)
 
 mutual
