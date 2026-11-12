@@ -1,0 +1,11 @@
+rhs a
+body 10
+rhs a
+body 20
+rhs b
+body 30
+rhs b
+body 40
+done 4 40
+state ok
+exit=0

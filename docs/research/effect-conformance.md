@@ -123,14 +123,43 @@ inside a generated helper still pays that source type's declared budget.
 The same contracts survive generic instantiation, refining contexts and
 receiver/function-value adapters; no Core or VM rule changes are needed.
 
-These are **heap** contracts. The Book additionally restricts class field
-initializers to convergent expressions, allowing effectful construction as a
-special case (`3582` tests). OpenVerse does not enforce that implicit termination
-rule ([#511](https://github.com/rudi-cilibrasi/openverse/issues/511)); ordinary function calls in defaults remain available with their heap
-budgets checked. Explicit `<converges>` remains refused. OpenVerse's existing
-multi-value/failable-default extension also retains its normal caller failure
-checks; data types cannot declare `<decides>` or `<suspends>`. A heap budget does
-not assert termination, single-valuedness, purity of output or engine behavior.
+These are **heap** contracts. The pinned `3582` tests separately restrict class
+field initializers and permit effectful construction as an exception. This is
+source evidence, not a released-engine execution result.
+
+Initializer admission (#511) is checked independently, after implementation
+helpers have been materialized. Every class/interface/struct field default is
+checked at its declaration's opaque type arguments, including inherited homes,
+unused definitions and imports. Ordinary source functions retain a private
+provenance marker through lowering: calling one is refused even if its body
+returns a literal. The checker follows compiler implementation calls and
+constant aliases, so function-value/default/dispatch adapters cannot hide a
+source call. It memoizes checked bodies and rejects recursive helper cycles.
+
+Primitive expressions, finite Core `for` traversal and failure are separate
+from divergence. A loop is accepted when its checked body cannot return an
+ordinary value and repeat. `InitializerConvergence.mayNormal_of_eval` proves
+that control-flow fact in the existing Core semantics; it admits finite
+`first` lowering and single-iteration source loops without an execution-fuel
+argument. Other loops have an explicit refusal boundary.
+
+Construction blocks retain the Book's exception; their bodies have no new
+termination assertion. Compiler-owned rational and ReplaceAll expansions
+retain their finite intrinsic contract: Euclid/continued fractions decrease
+absolute remainders, and replacement advances through a finite input. These
+intrinsic implementation arguments are not a new general Lean termination
+theorem. Source spellings or effect annotations cannot supply a trusted entry.
+Existing Core safety, rollback and interpreter-agreement claims are unchanged.
+
+`--extended-defaults` / `Options.extendedDefaults := true` explicitly select
+the previous OpenVerse extension for ordinary computed/callback/spawn defaults.
+Heap budgets and all caller failure/suspension/profile checks remain enforced.
+Seventeen existing fixtures select that mode; heap/default and lexical-field
+models select it only where they exercise the extension. Finite multi-value
+selection and failable primitive defaults remain admitted by the checked mode.
+Explicit `<converges>` remains refused in both modes. Data types still cannot
+declare `<decides>` or `<suspends>`. Neither a heap budget nor compatibility
+mode asserts termination, single-valuedness, output purity or engine behavior.
 
 ## Verification
 
@@ -140,6 +169,8 @@ After `lake build` and `make -C runtime`:
 lake env lean --run tests/lean/EffectPolicy.lean
 bash tests/scripts/test-effect-admission.sh
 bash tests/scripts/test-construction-effects.sh
+lake env lean --run tests/lean/InitializerConvergence.lean
+bash tests/scripts/test-initializer-convergence.sh
 ```
 
 The API contract covers direct AST input and all public source compiler entry

@@ -1,0 +1,19 @@
+outer a
+key a
+rhs a
+body 3 11
+outer a
+key a
+rhs a
+body 3 22
+outer b
+key b
+rhs b
+body 3 33
+outer b
+key b
+rhs b
+body 3 44
+done 4 44
+state ok
+exit=0

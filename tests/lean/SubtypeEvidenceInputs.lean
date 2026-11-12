@@ -90,7 +90,40 @@ Caller(D:t,E:evidence(type{_(:int)<computes>:int},t) where t:type)<computes>:int
   ("spawned opaque callable receiver", "
 Caller(D:t,E:evidence(type{_(:int)<suspends>:int},t) where t:type)<suspends>:void=spawn{D(7)}")]
 
+private def indexedInputContracts : IO Unit := do
+  for position in [:4] do
+    let inputs := ["K", "O", "L", "R"]
+    let proof := "evidence(vehicle,vehicle)"
+    let types := inputs.zipIdx |>.map fun (_, i) => if i == position then proof else "int"
+    let operation := "operation(" ++ String.intercalate "," (types ++ ["int"]) ++ ")"
+    let parameters := String.intercalate "," ((inputs.zip types).map fun (name, ty) => name ++ ":" ++ ty)
+    let values := inputs.zipIdx |>.map fun (_, i) => if i == position then "D" else "0"
+    let source := "vehicle:=class<computes>{N:int=7}\n" ++
+      "operation(k:type,o:type,l:type,r:type,z:type):=class<computes>{}\n" ++
+      s!"Apply(Op:{operation},{parameters})<computes>:int={inputs[position]!}.Up(vehicle{{}}).N\n" ++
+      s!"Caller(D:{proof},Op:{operation})<computes>:int=Indexed(Op,{values[0]!},{values[1]!},(),{values[2]!},{values[3]!})\n" ++
+      "Main():void={}"
+    let parsed ← getOK "indexed operation input: parse" (parseProgram source)
+    let rewrite : STop → STop := fun
+      | .fn p name ps tps specs ret body =>
+        let body := Choice.mapE (fun
+          | .app p (.ident _ "Indexed") args false => some (.app p (.ident p "$choiceIndexedOperation")
+              (.str p [.text (FnValues.shapeOf 4 ["computes"]).name] :: args) false)
+          | _ => none) body
+        .fn p (if name == "Apply" then "operation$apply" else name) ps tps specs ret body
+      | top => top
+    let actual ← getOK "indexed operation: real roles" (parsed.mapM (roles false))
+    let compiled ← getOK "indexed operation: real control" (elabProgram (actual.map rewrite))
+    need "indexed operation: real input passes all Core checks"
+      (compiled.prog.check && compiled.prog.checkControl && compiled.prog.checkTypes compiled.sigs compiled.slotTys)
+    let dummy ← getOK "indexed operation: dummy roles" (parsed.mapM (roles true))
+    match elabProgram (dummy.map rewrite) with
+    | .ok _ => throw (IO.userError s!"indexed operation: dummy input {inputs[position]!} became executable evidence")
+    | .error message => need s!"indexed operation: wrong refusal: {message}"
+        ((message.splitOn "dummy type value cannot").length > 1)
+
 def main : IO Unit := do
+  indexedInputContracts
   for (label, source) in cases do
     let parsed ← getOK s!"{label}: parse" (parseProgram
       ("vehicle:=class<computes>{N:int=7}\n" ++ source ++ "\nMain():void={}"))
@@ -143,4 +176,4 @@ def main : IO Unit := do
   need "unconstrained generic forwarding stays opaque" (!exposesEvidence env t)
   need "declared peer domains expose evidence"
     (exposesEvidence { env with boundFacts := [(proof, .param "u" false), (.param "u" false, t)] } t)
-  IO.println s!"subtype evidence input contracts passed ({cases.length} real/dummy call controls, {builtins.length} builtin controls)"
+  IO.println s!"subtype evidence input contracts passed ({cases.length} real/dummy call controls, {builtins.length} builtin controls, 4 indexed input controls)"

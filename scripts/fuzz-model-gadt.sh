@@ -27,7 +27,12 @@ for ((s=first; s<first+n; s++)); do
   python3 -I "$root/scripts/models/$g.py" "$s" "$tmp/p.exp" > "$tmp/p.verse" 2> "$tmp/gen.err" ||
     { bad=$((bad+1)); echo "GENERATOR FAILED $g seed $s: $(tail -1 "$tmp/gen.err")"; continue; }
   rm -f "$tmp/p.vbc"
-  timeout 120 "$ov" run "$tmp/p.verse" --emit "$tmp/p.vbc" > "$tmp/l.out" 2> "$tmp/l.err"; le=$?
+  # Only these lexical-field variants call ordinary Sum/Lazy default helpers.
+  compat=()
+  if [[ $g == gadt_contexts ]] && (( s % 9 == 1 && (s / 9) % 4 >= 2 )); then
+    compat+=(--extended-defaults)
+  fi
+  timeout 120 "$ov" run "$tmp/p.verse" "${compat[@]}" --emit "$tmp/p.vbc" > "$tmp/l.out" 2> "$tmp/l.err"; le=$?
   want=$(head -1 "$tmp/p.exp" | sed 's/exit=//')
   if [[ $want == 4 ]]; then
     msg=$(sed -n 2p "$tmp/p.exp")
