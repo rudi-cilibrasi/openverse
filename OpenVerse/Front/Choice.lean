@@ -871,48 +871,53 @@ partial def liftClauseM (isVal : String → Bool) (isField : String → String �
     | .decl p x ty v rhs => .decl p x ty v (orIf site rhs)
     | .set p l op rhs => .set p l op (orIf site rhs)
     | c => c
+  -- (a `set`'s path's indices bound, then for `op=` its old value, as `set`
+  -- evaluates them before the new value, `setPrefix`; those clauses lifted
+  -- in turn when the indices have a choice or a call with several values
+  -- to lift, #283)
+  let setPrefixM (q : Pos) (l : SExpr) (op : Option String) : LM (List SExpr × Option String × SExpr) := do
+    let (h, o?, l') := setPrefix q l op site
+    return (← if pathHas hasLiftable l then liftAll h else pure h, o?, l')
+  -- (`set L op= r` with `r`'s code lifted, after `L`'s prefix: `wrap` puts
+  -- the `set` in its place)
+  let liftSet (q : Pos) (l : SExpr) (op : Option String) (r : SExpr) (wrap : SExpr → SExpr) :
+      LM (List SExpr) := do
+    let (h, o?, l') ← setPrefixM q l op
+    return h ++ (← run do return wrap (.set q l' op (withOld q o? (← liftE isVal isField r))))
+  -- (`set L = i` with the `if` lifted whole, #235, #283: after `L`'s
+  -- prefix, bound to a name of its own at `L`'s type, then set)
+  let setIf (p : Pos) (l i : SExpr) : LM (List SExpr) := do
+    let (h, _, l') ← setPrefixM p l none
+    let n := madeName "c" site p
+    return h ++ [.decl p n none false (.app p (.ident p "$branchChoiceAt") [l', i] false), .set p l' none (.ident p n)]
   -- (#283) a `set` with a choice or a call with several values in its
   -- path's indices: each index bound, lifted, in order, then for `op=` the
   -- old value, then the new one's code, as `set` evaluates (before the
   -- cases below, which take the path as it is)
   if let .set p l op rhs := c then
     if pathHas hasLiftable l then
-      match alts? rhs, op with
-      | some as, _ =>
+      match alts? rhs with
+      | some as =>
         let (h, s) := setClauses p l op as p site
         return (← liftAll h) ++ [s]
-      | none, none =>
-        if liftsAsIf rhs then
-          -- (an `if` lifted whole, #235, #283: at `L`'s type, as below)
-          let (h, _, l') := setPrefix p l none site
-          let n := madeName "c" site p
-          return (← liftAll h) ++ [.decl p n none false (.app p (.ident p "$branchChoiceAt") [l', rhs] false),
-            .set p l' none (.ident p n)]
-        let (h, _, l') := setPrefix p l none site
-        return (← liftAll h) ++ (← run do return .set p l' none (← liftE isVal isField rhs))
-      | none, some _ =>
-        let (h, o?, l') := setPrefix p l op site
-        return (← liftAll h) ++ (← run do return .set p l' op (withOld p o? (← liftE isVal isField rhs)))
+      | none =>
+        if op.isNone && liftsAsIf rhs then return ← setIf p l rhs
+        return ← liftSet p l op rhs id
+  -- (an `if` with choices in its branches as a binding's value, lifted
+  -- whole: at its written type, #235, a `var`'s through a name of its own;
+  -- as a `set`'s, at `L`'s. Otherwise it is lifted as any value is, below.)
+  match c with
+  | .decl p x ty false i@(.ite ..) =>
+    if liftsAsIf i then return [.decl p x ty false (.app p (.ident p "$branchChoice") [i] false)]
+  | .decl p x ty true i@(.ite ..) =>
+    if liftsAsIf i then
+      let n := madeName "c" site p
+      return [.decl p n ty false (.app p (.ident p "$branchChoice") [i] false), .decl p x ty true (.ident p n)]
+  | .set p l none i@(.ite ..) =>
+    if liftsAsIf i then return ← setIf p l i
+  | _ => pure ()
   match c with
   | .app _ (.ident _ "$choice") _ false => return [c]
-  -- (an `if` with choices in its branches as a binding's value: at its
-  -- written type, #235)
-  | .decl p x ty false rhs@(.ite ..) =>
-    if liftsAsIf rhs then return [.decl p x ty false (.app p (.ident p "$branchChoice") [rhs] false)] else
-      if !hasLiftable rhs then return [c] else run do return .decl p x ty false (← liftE isVal isField rhs)
-  | .decl p x ty true rhs@(.ite ..) =>
-    if liftsAsIf rhs then
-      let n := madeName "c" site p
-      return [.decl p n ty false (.app p (.ident p "$branchChoice") [rhs] false), .decl p x ty true (.ident p n)]
-    else if !hasLiftable rhs then return [c] else run do return .decl p x ty true (← liftE isVal isField rhs)
-  | .set p l none rhs@(.ite ..) =>
-    if liftsAsIf rhs then
-      let (h, _, l') := setPrefix p l none site
-      let n := madeName "c" site p
-      return h ++ [.decl p n none false (.app p (.ident p "$branchChoiceAt") [l', rhs] false), .set p l' none (.ident p n)]
-    else if !hasLiftable rhs then return [c] else
-      let (h, o?, l') := setPrefix p l none site
-      return h ++ (← run do return .set p l' none (withOld p o? (← liftE isVal isField rhs)))
   -- (`set L = …` as the last clause of a macro, which names its value)
   | .decl p x ty v (.set q l op r) =>
     if pathHas hasLiftable l then
@@ -922,22 +927,14 @@ partial def liftClauseM (isVal : String → Bool) (isField : String → String �
       | some as =>
         let (h, s) := setClauses q l op as q site
         return (← liftAll h) ++ [.decl p x ty v s]
-      | none =>
-        let (h, o?, l') := setPrefix q l op site
-        return (← liftAll h) ++ (← run do return .decl p x ty v (.set q l' op (withOld q o? (← liftE isVal isField r))))
+      | none => liftSet q l op r (.decl p x ty v ·)
     else
-    if isChoice r || !hasLiftable r then return [c] else
-      let (h, o?, l') := setPrefix q l op site
-      return h ++ (← run do return .decl p x ty v (.set q l' op (withOld q o? (← liftE isVal isField r))))
+    if isChoice r || !hasLiftable r then return [c] else liftSet q l op r (.decl p x ty v ·)
   | .decl p x ty v rhs =>
     if isChoice rhs || !hasLiftable rhs then return [c] else run do
       return .decl p x ty v (← liftE isVal isField rhs)
   | .set p l op rhs =>
-    if isChoice rhs || !hasLiftable rhs then return [c] else
-      -- (the path's indices, then for `op=` the old value, then the
-      -- lifted code, as `set` evaluates)
-      let (h, o?, l') := setPrefix p l op site
-      return h ++ (← run do return .set p l' op (withOld p o? (← liftE isVal isField rhs)))
+    if isChoice rhs || !hasLiftable rhs then return [c] else liftSet p l op rhs id
   | .gen p x i src =>
     if !hasLiftable src then return [c] else run do return .gen p x i (← liftE isVal isField src)
   | e => if !hasLiftable e then return [c] else run (liftE isVal isField e)
