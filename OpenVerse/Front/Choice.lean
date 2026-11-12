@@ -436,6 +436,33 @@ partial def mapE (f : SExpr → Option SExpr) (e : SExpr) : SExpr :=
 def mkExcl (p : Pos) (alts : List (List SExpr × SExpr)) : SExpr :=
   .app p (.ident p "$excl") (alts.map fun (gs, r) => .app p (.ident p "$alt") [.block p gs, r] false) false
 
+/-- `if (cs) then t else u` as an exclusive choice of its two branches
+    (#314), its conditions taken once, first, by the binding of `k` that
+    comes with it: with no names bound, `k := if (cs) then 0 else 1`, each
+    branch guarded by `k = 0` or `k = 1`; otherwise `k := option{cs; the
+    names}`, the then branch's guards binding the names again from `k?`
+    (each with its written type, a `var` still one), the else branch's
+    `not k?`. -/
+def exclOfIf (p : Pos) (k : String) (cs : List SExpr) (t u : SExpr) : SExpr × SExpr :=
+  match boundIn cs with
+  | [] =>
+    let g (i : Int) : List SExpr := [.cmp p (.ident p k) [("=", .int p i)]]
+    (.decl p k none false (.ite p cs (.int p 0) (some (.int p 1))), mkExcl p [(g 0, t), (g 1, u)])
+  | names =>
+    let declOf (y : String) : Option STy × Bool :=
+      (cs.findSome? fun | .decl _ x yt m _ => if x == y then some (yt, m) else none | _ => none).getD (none, false)
+    let (val, binds) : SExpr × List SExpr := match names with
+      | [y] => let (yt, m) := declOf y; (.ident p y, [.decl p y yt m (.query p (.ident p k))])
+      | ys =>
+        let tt := k ++ "t"
+        (.tuple p (ys.map (SExpr.ident p ·)),
+          .decl p tt none false (.query p (.ident p k)) ::
+            ys.zipIdx.map fun (y, i) =>
+              let (yt, m) := declOf y
+              SExpr.decl p y yt m (.app p (.ident p tt) [.int p (i : Int)] false))
+    (.decl p k none false (.optionLit p (.block p (cs ++ [val]))),
+      mkExcl p [(binds, t), ([.notE p (.query p (.ident p k))], u)])
+
 /-- `e` with its exclusive choices as choices (#314). Not inside a nested
     `for`, unless `deep`: its own clauses keep theirs, for it to compile as
     `if`s (`deep`, for an effect-free body, where a choice is as exact). -/
@@ -993,7 +1020,8 @@ def bifToExcl (c : SExpr) : List SExpr :=
     -- path of the one around it)
     -- Generated dispatch cases share a source position and result name;
     -- their distinct condition binders also distinguish these temporaries.
-    let k := s!"{x}$k{ip.line}_{ip.col}" ++ (boundIn cs).headD ""
+    let names := boundIn cs
+    let k := s!"{x}$k{ip.line}_{ip.col}" ++ names.headD ""
     -- (#283) a block as a branch: its names renamed for it, `$…'N`, as the
     -- clauses after the `if` follow it in its path; as written, not in
     -- scope where the `if` is (`$declNames`), as for any block; its
@@ -1007,43 +1035,18 @@ def bifToExcl (c : SExpr) : List SExpr :=
         | .block bp ss => .block bp (deferLast bp s!"${k}{side}$dv" ss)
         | b' => b'
       | b => b
-    let checks := blockNames t ++ blockNames u
-    let t0 := t
-    let t := renameBlock "t" t
-    let u := renameBlock "u" u
-    match boundIn cs with
-    | [] =>
-      let g (i : Int) : List SExpr := [.cmp ip (.ident ip k) [("=", .int ip i)]]
-      checks ++ [.decl ip k none false (.ite ip cs (.int ip 0) (some (.int ip 1))),
-       .decl p x ty false (withJoin (mkExcl ip [(g 0, t), (g 1, u)]))]
-    | names =>
-      -- (the names the condition binds, for its branch: through an option,
-      -- each with its written type, a `var` still one; renamed for the
-      -- branch, `$…'N`, since the clauses after the `if` follow it in its
-      -- path, where they are not in scope)
-      let ρ := renamedFor s!"${k}" names
-      -- (as written, they are not in scope where the `if` is: no shadowing)
-      let written := declNames ip (condDecls ip cs)
-      -- (a then-block that binds a name its condition binds: shadowing)
-      let shadows := match t0 with
-        | .block .. => shadowsIn ip names t0
-        | _ => []
-      let cs := cs.map (renameE ρ)
-      let t := renameE ρ t
-      let names := names.map fun y => (ρ.lookup y).getD y
-      let declOf (y : String) : Option STy × Bool :=
-        (cs.findSome? fun | .decl _ x t m _ => if x == y then some (t, m) else none | _ => none).getD (none, false)
-      let (val, binds) : SExpr × List SExpr := match names with
-        | [y] => let (t, m) := declOf y; (.ident ip y, [.decl ip y t m (.query ip (.ident ip k))])
-        | ys =>
-          let tt := k ++ "t"
-          (.tuple ip (ys.map (SExpr.ident ip ·)),
-            .decl ip tt none false (.query ip (.ident ip k)) ::
-              ys.zipIdx.map fun (y, i) =>
-                let (t, m) := declOf y
-                SExpr.decl ip y t m (.app ip (.ident ip tt) [.int ip (i : Int)] false))
-      shadows ++ checks ++ written ++ [.decl ip k none false (.optionLit ip (.block ip (cs ++ [val]))),
-       .decl p x ty false (withJoin (mkExcl ip [(binds, t), ([.notE ip (.query ip (.ident ip k))], u)]))]
+    -- (the names the condition binds, for its branch, `exclOfIf`; renamed
+    -- for the branch, `$…'N`, since the clauses after the `if` follow it in
+    -- its path, where they are not in scope; as written, not in scope where
+    -- the `if` is either: no shadowing)
+    let ρ := renamedFor s!"${k}" names
+    let written := declNames ip (condDecls ip cs)
+    -- (a then-block that binds a name its condition binds: shadowing)
+    let shadows := match t with
+      | .block .. => shadowsIn ip names t
+      | _ => []
+    let (sel, excl) := exclOfIf ip k (cs.map (renameE ρ)) (renameE ρ (renameBlock "t" t)) (renameBlock "u" u)
+    shadows ++ blockNames t ++ blockNames u ++ written ++ [sel, .decl p x ty false (withJoin excl)]
   | c => [c]
 
 /-- Apply a consumer inside each selected branch. Condition names stay in
@@ -1361,28 +1364,8 @@ def returnBranches (p : Pos) (k : String) (cs tb ub : List SExpr)
   -- (a branch with a choice of its own: an exclusive choice of the two,
   -- which a `for` compiles as this `if`, #314; the condition once)
   let v := k ++ "v"
-  match boundIn cs with
-  | [] =>
-    let g (i : Int) : List SExpr := [.cmp p (.ident p k) [("=", .int p i)]]
-    [.decl p k none false (.ite p cs (.int p 0) (some (.int p 1))),
-      .decl p v ret false (mkExcl p [(g 0, .block p tb), (g 1, .block p ub)]), .ident p v]
-  | names =>
-    -- (the names the condition binds, for its branch: through an option,
-    -- each with its written type, a `var` still one)
-    let declOf (y : String) : Option STy × Bool :=
-      (cs.findSome? fun | .decl _ x t m _ => if x == y then some (t, m) else none | _ => none).getD (none, false)
-    let (val, binds) : SExpr × List SExpr := match names with
-      | [y] => let (t, m) := declOf y; (.ident p y, [.decl p y t m (.query p (.ident p k))])
-      | ys =>
-        let tt := k ++ "t"
-        (.tuple p (ys.map (SExpr.ident p ·)),
-          .decl p tt none false (.query p (.ident p k)) ::
-            ys.zipIdx.map fun (y, i) =>
-              let (t, m) := declOf y
-              SExpr.decl p y t m (.app p (.ident p tt) [.int p (i : Int)] false))
-    [.decl p k none false (.optionLit p (.block p (cs ++ [val]))),
-      .decl p v ret false (mkExcl p [(binds, .block p tb), ([.notE p (.query p (.ident p k))], .block p ub)]),
-      .ident p v]
+  let (sel, excl) := exclOfIf p k cs (.block p tb) (.block p ub)
+  [sel, .decl p v ret false excl, .ident p v]
 
 /-- The names of a branch that a `return` is taken out of, renamed for it
     (`tag'N`): its statements' locals and `extra` (its condition's), so the
