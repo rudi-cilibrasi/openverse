@@ -112,6 +112,14 @@ Main():void=Print("{Run(box(string){V:="tag"},7)}")''',
     Same(X:t where t:type)<computes>:t=X
 Apply(F:type{_(:t)<computes>:t},X:t where t:type)<computes>:t=F(X)
 Main():void=Print("{Apply(box{}.Same,7)}")''',
+        'method-variance': '''box(t:type):=class:
+    V:t
+    Pair(X:rational)<computes>:tuple(t,int)=(V,Floor(X))
+Bind(B:box(t) where t:type)<computes>:type{_(:int)<computes>:tuple(t,rational)}=B.Pair
+Main():void=
+    F:=Bind(box(string){V:="tag"})
+    R:=F(7)
+    Print("{R(0)} {Floor(R(1))}")''',
     }
     for name, text in positive.items():
         path = source(f'{name}.verse', text)

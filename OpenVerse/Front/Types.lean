@@ -216,6 +216,8 @@ structure TyEnv where
   fieldAccBase : Nat := 0
   /-- The functions asked for as values at closed function types (#214). -/
   fnRequests : List (String × Ty) := []
+  /-- Typed variance adapters for methods with a fixed receiver signature. -/
+  methodRequests : List FnValues.MethodRequest := []
   /-- The order of the slots holding values of the type parameters, when it
       is not that of `tvars` (a method that reads some from its receiver,
       #209, has those after the others). -/
