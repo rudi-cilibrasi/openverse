@@ -96,11 +96,13 @@ check "choice continuation source contexts (${FUZZ_MODEL_CONTEXTS:-60} seed pair
   bash tests/scripts/test-choice-contexts.sh "${FUZZ_MODEL_CONTEXTS:-60}" "$seed"
 check "refining casts in source contexts (${FUZZ_MODEL_REFINE_CONTEXTS:-144} seed pairs)" \
   bash tests/scripts/test-refining-contexts.sh "${FUZZ_MODEL_REFINE_CONTEXTS:-144}" "$seed"
+check "refining source-task cleanup (${FUZZ_MODEL_TASK_ORDER:-64} seed pairs)" \
+  bash tests/scripts/test-refining-task-order.sh "${FUZZ_MODEL_TASK_ORDER:-64}" "$seed"
 check "float fuzzing (${FUZZ_FLOATS:-200} programs, against Python's doubles)" scripts/fuzz-floats.sh "${FUZZ_FLOATS:-200}" "$seed"
 check "choice fuzzing (${FUZZ_CHOICE:-200} programs, against a backtracking model)" scripts/fuzz-choice.sh "${FUZZ_CHOICE:-200}" "$seed"
 check "scheduler model fuzzing (${FUZZ_MODEL_SCHED:-50} programs, against a model of the docs)" \
   scripts/fuzz-model-sched.sh "${FUZZ_MODEL_SCHED:-50}" "$seed"
-check "GADT model fuzzing (${FUZZ_MODEL_GADT:-150} programs, against twenty-five models of the docs)" \
+check "GADT model fuzzing (${FUZZ_MODEL_GADT:-150} programs, against twenty-six models of the docs)" \
   scripts/fuzz-model-gadt.sh "${FUZZ_MODEL_GADT:-150}" "$seed"
 check "source break model fuzzing (${FUZZ_MODEL_BREAKS:-60} programs)" \
   scripts/fuzz-model-breaks.sh "${FUZZ_MODEL_BREAKS:-60}" "$seed"
