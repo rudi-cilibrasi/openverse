@@ -90,6 +90,10 @@ jobs:
             echo "FUZZ_MODEL_COMPOUND_MAP_DICTIONARY=$((120 * k))"
             echo "FUZZ_MODEL_MULTIPLE_INDEX_DICTIONARY=$((120 * k))"
             echo "FUZZ_MODEL_COMPOUND_MULTIPLE_INDEX_DICTIONARY=$((120 * k))"
+            echo "FUZZ_MODEL_QUERY_PATH_DICTIONARY=$((120 * k))"
+            echo "FUZZ_MODEL_COMPOUND_QUERY_PATH_DICTIONARY=$((120 * k))"
+            echo "FUZZ_MODEL_REFERENCE_PATH_DICTIONARY=$((120 * k))"
+            echo "FUZZ_MODEL_COMPOUND_REFERENCE_PATH_DICTIONARY=$((120 * k))"
           } >> "$GITHUB_ENV"
           echo "first seed $seed, counts x$k"
 

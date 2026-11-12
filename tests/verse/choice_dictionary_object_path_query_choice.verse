@@ -1,0 +1,13 @@
+cell:=class{var N:int=0}
+Index(H:cell)<transacts>:int=block{Print("key");set H.N+=1;0}
+ca:=class{var Data:?[]int=option{array{1}}}
+cb:=class{var Data:?[]int=option{array{10}}}
+Dup(X:t where t:type)<computes>:t=X|X
+Main():void=
+    H:=cell{}
+    P:=ca{}
+    Q:=cb{}
+    Rows:=for(A:=(Dup(P)|Dup(Q)),R:=set A.Data?[Index(H)]+=(1|2)):R
+    Print("{Rows.Length} {H.N}")
+    for(V:Rows):Print("{V}")
+    if(X:=P.Data?[0],Y:=Q.Data?[0]):Print("done {X} {Y}")
