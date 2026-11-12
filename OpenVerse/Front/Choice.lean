@@ -605,6 +605,7 @@ partial def leaves : SExpr → Bool
   | .loop _ body => hasReturn body
   | e => e.children.any leaves
 
+mutual
 /-- `e`, a statement or clause of a scope whose `defer:`s `ds` (in order)
     `deferLast` moves after its value, with them pending for the exits in
     it, as a scope's are for every `return` or `break` that leaves it (#283):
@@ -613,8 +614,7 @@ partial def leaves : SExpr → Bool
     that leaves `e`, after a `return`'s value and the cleanup of the scopes
     inside `e`, wherever `e` is compiled to. A binding keeps its name, a
     choice its alternatives (each with them), and the `if` of a choice of its
-    branches its shape: its conditions and branches each, the `else if`s of
-    its chain too. -/
+    branches its shape (`deferExitsIf`). -/
 partial def deferExits (ds : List SExpr) (e : SExpr) : SExpr :=
   if ds.isEmpty || !leaves e then e else
   match e with
@@ -623,14 +623,32 @@ partial def deferExits (ds : List SExpr) (e : SExpr) : SExpr :=
   | .set p l op rhs => if leaves l then pending e else .set p l op (deferExits ds rhs)
   | .app p f@(.ident _ "$choice") as false => .app p f (as.map (deferExits ds)) false
   | .app p f@(.ident _ "$choiceAt") (l :: as) false => .app p f (l :: as.map (deferExits ds)) false
-  | .app p f@(.ident _ "$branchChoice") [i] false => .app p f [branches i] false
-  | .app p f@(.ident _ "$branchChoiceAt") [l, i] false => .app p f [l, branches i] false
+  | .app p f@(.ident _ "$branchChoice") [i] false => .app p f [deferExitsIf ds i] false
+  | .app p f@(.ident _ "$branchChoiceAt") [l, i] false => .app p f [l, deferExitsIf ds i] false
   | e => pending e
 where
   pending (e : SExpr) : SExpr := .app e.pos (.ident e.pos "$deferExits") [.block e.pos ds, e] false
-  branches : SExpr → SExpr
-    | .ite p cs t u => .ite p (cs.map (deferExits ds)) (deferExits ds t) (u.map branches)
-    | e => deferExits ds e
+
+/-- The `if` of a choice of its branches with the `defer:`s `ds` pending for
+    the exits in it (`deferExits`), its shape kept: in its conditions, a
+    scope of their own whose `defer:`s run where it ends (`pendingIn`), in
+    each branch, and in the `else if`s of its chain. -/
+partial def deferExitsIf (ds : List SExpr) : SExpr → SExpr
+  | .ite p cs t u =>
+    let (cs, own) := pendingIn ds cs
+    .ite p (cs ++ if own.isEmpty then [] else [.block p (own ++ [.int p 0])]) (deferExits ds t)
+      (u.map (deferExitsIf ds))
+  | e => deferExits ds e
+
+/-- A scope's statements `ss` but its `defer:`s, each with those before it
+    pending for its exits, inside the `defer:`s `outer` of the scopes around
+    it (`deferExits`); and its `defer:`s in order (`deferBodies`), to run
+    where it ends. -/
+partial def pendingIn (outer ss : List SExpr) : List SExpr × List SExpr :=
+  let ds := deferBodies ss
+  ((ss.foldl (fun (out, n) s => if isDefer s then (out, n + 1)
+    else (out.push (deferExits outer (deferExits (ds.take n) s)), n)) (#[], 0)).1.toList, ds)
+end
 
 /-- `e` without the `defer:`s pending around it (`deferExits`), and how to
     put them back. -/
@@ -648,13 +666,11 @@ def underDeferExits : SExpr → SExpr × (SExpr → SExpr)
     change (`pureVal`), so it keeps the type its place gives it (`false`,
     `(Y, array{})`); a scope ending in a `defer:` has the block itself as
     its value, as a block ending in one does. Each statement has the
-    `defer:`s before it pending for its exits (`deferExits`), so a `return`
+    `defer:`s before it pending for its exits (`pendingIn`), so a `return`
     or `break` that leaves the scope runs them as well. -/
 def deferLast (p : Pos) (dv : String) (ss : List SExpr) : List SExpr :=
   if !ss.any isDefer then ss else
-  let ds := deferBodies ss
-  let stmts := (ss.foldl (fun (out, n) s =>
-    if isDefer s then (out, n + 1) else (out.push (deferExits (ds.take n) s), n)) (#[], 0)).1.toList
+  let (stmts, ds) := pendingIn [] ss
   if ss.getLast?.any isDefer then stmts ++ [.block p ds] else
   match stmts.getLast? with
   | some l =>

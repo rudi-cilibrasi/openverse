@@ -11,6 +11,9 @@ Shapes(B:logic)<transacts>:void =
         if (X := block{ defer: Print("alternative d"); Y := 2 | 1; Z := (if (Y = 2) then break else 5) | 6; Z }, X > 5) then Print("not reached")
     loop:
         if (X := block{ defer: Print("branch d"); Y := 2 | 1; Z := if (Y = 2) then { break } else { 3 | 4 }; Z }, X > 3) then Print("not reached")
+    # (such an if's conditions are a scope of their own, inside the block)
+    loop:
+        if (X := block{ defer: Print("condition d"); Y := 2 | 1; Z := if (defer: Print("condition's d"), Y = 2, break) then { 3 | 4 } else { 5 | 6 }; Z }, X > 5) then Print("not reached")
     loop:
         for (X := block{ defer: Print("for branch d"); Y := 1 | 2; Z := if (Y = 2) then { break } else { 3 | 4 }; Z }):
             Print("for {X}")
