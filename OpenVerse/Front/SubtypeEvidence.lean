@@ -63,11 +63,21 @@ def nominal (env : TyEnv) (p : Pos) (source target : String) : Except String STo
   let derived := Ty.struct source own
   let base := Ty.struct target (env.upArgs source own target)
   let tps := params.map fun (name, comparable) =>
-    ({ pos := p, name, constraint := if comparable then "comparable" else "type" } : TParam)
+    match ((env.sbounds.lookup source).getD []).find? (fun (_, derived) => derived == .param name comparable) with
+    | some (base, _) => TParam.withUpperBound p name base.toSTy
+    | none => ({ pos := p, name, constraint := if comparable then "comparable" else "type" } : TParam)
   return .classDef p (nominalFamily source target) tps ["computes"]
     [(.struct family [base, derived] : Ty).toSTy] false [] []
     [.fn p "Up" [{ name := "$input", ty := derived.toSTy }] [] ["override", "computes"]
       base.toSTy (.ident p "$input")]
+
+def declarationName : STop → String
+  | .fn _ name .. | .classDef _ name .. | .const _ name .. => name
+
+def mergeRequests (old added : List STop) : List STop :=
+  added.foldl (fun result declaration =>
+    if result.any (fun old => declarationName old == declarationName declaration) then result
+    else result ++ [declaration]) old
 
 inductive Plan where
   | identity : Ty → Plan

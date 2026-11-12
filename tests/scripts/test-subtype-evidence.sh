@@ -6,7 +6,7 @@ out="$(mktemp -d)"
 trap 'rm -rf "$out"' EXIT
 make -s -C runtime build/cverse
 lake env lean --run tests/lean/SubtypeEvidence.lean "$out"
-for name in evidence relocated state state-control cancel cancel-control; do
+for name in evidence relocated state state-control cancel cancel-control materialized materialized-state materialized-cancel materialized-defaults materialized-entry; do
   runtime/build/cverse "$out/$name.vbc" > "$out/$name.actual"
   diff -u "$out/$name.expected" "$out/$name.actual"
 done

@@ -466,6 +466,8 @@ structure ESt where
       theirs gives (#214). -/
   fnNeeds : List (String × Ty) := []
   methodNeeds : List FnValues.MethodRequest := []
+  /-- Canonical generic upcast dictionaries discovered in this frame. -/
+  subtypeNeeds : List STop := []
   /-- Where the function calls `Err()` first, if it does: a function whose
       values are all computed at a call (#235) may reach none. -/
   errAt : Option Pos := none
@@ -4108,6 +4110,21 @@ def packCallArgs (p : Pos) (s : Sig) (args : List SExpr)
   | .param .. => if user.length != 1 then return packed (.tuple p user) else return args
   | _ => return args
 
+/-- Materialize a dictionary family on demand, at its declaration's own type
+    parameters. Discovery stubs never reach the final Core admission checks. -/
+partial def elabSubtypeValueWith (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx)
+    (p : Pos) (plan : SubtypeEvidence.Plan) (bound : SubtypeEvidence.Bound) : EM R := do
+  let missing := plan.nominals.filter fun (source, target) =>
+    !ctx.types.classes.contains (SubtypeEvidence.nominalFamily source target)
+  if !missing.isEmpty then
+    let declarations ← missing.mapM fun (source, target) =>
+      match SubtypeEvidence.nominal ctx.types p source target with
+      | .ok declaration => pure declaration
+      | .error message => eerr p message
+    modify fun state => { state with subtypeNeeds := SubtypeEvidence.mergeRequests state.subtypeNeeds declarations }
+    return ⟨.prim .userErr [], bound.ty⟩
+  elabE ctx (plan.value ctx.types p) (some bound.ty)
+
 /-- A call of a generic function. Its type arguments are inferred by matching
     its signature: the result type against the expected type (unless that is
     `void`, which accepts anything), then each parameter type against its
@@ -4292,7 +4309,7 @@ partial def elabGenericCallWith (elabE : Ctx → SExpr → Option Ty → EM R) (
         eerr p s!"cannot call {s.name} here yet: its type parameter {v} would mention type arguments that the dispatch opens, apart from the caller's, and no value of those can be passed (#209)"
       witness ctx.types ctx.dictBase ctx.dictVars t
   let evidence ← evidencePlans.mapM fun (required, plan) => do
-    coerce p (← elabE ctx (plan.value ctx.types p) (some required.ty)) required.ty
+    coerce p (← elabSubtypeValueWith elabE ctx p plan required) required.ty
   if plain then return ⟨.call s.idx (es.toList ++ evidence ++ dicts), s.ret.subst σ⟩
   let call := Expr.call s.idx (slots.toList.map (fun o => Expr.local o.get!) ++ evidence ++ dicts)
   return ⟨steps.toList.foldr Expr.seq call, s.ret.subst σ⟩
@@ -5331,9 +5348,15 @@ partial def elabSubtypeUp (ctx : Ctx) (p : Pos) (value : R) (target : Ty)
   let slot ← fresh value.ty
   let name := s!"$subtypeInput{slot}"
   let inner := { ctx with locals := { name, slot, ty := value.ty, mutable := false } :: ctx.locals }
-  let call := SExpr.app p (.member p (plan.value ctx.types p) "Up") [.ident p name] false
+  let dictionary ← elabSubtypeValueWith elabE ctx p plan ⟨target, value.ty⟩
+  let dictionarySlot ← fresh dictionary.ty
+  let dictionaryName := s!"$subtypeDictionary{dictionarySlot}"
+  let inner := { inner with locals :=
+    { name := dictionaryName, slot := dictionarySlot, ty := dictionary.ty, mutable := false } :: inner.locals }
+  let call := SExpr.app p (.member p (.ident p dictionaryName) "Up") [.ident p name] false
   let result ← elabE inner call (some target)
-  return ⟨.seq (.assign slot value.e) (← coerce p result target), target⟩
+  return ⟨.seq (.assign slot value.e) (.seq (.assign dictionarySlot dictionary.e)
+    (← coerce p result target)), target⟩
 
 partial def elabBoundReceiver (ctx : Ctx) (p : Pos) (value : R) (member : String) : EM R := do
   let view ← match ctx.boundView p value.ty member with
@@ -5357,6 +5380,14 @@ partial def elabERaw (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
     set st0
     return ← elabE { ctx with constructHints := some hints, constructOrigin := some ctx.frameName } se exp
   match se with
+  | .app p (.ident _ "$subtypeWitness") [.construct _ "$subtypeEvidence" [base, derived] []] false =>
+    let base ← resolveTy ctx.types p base
+    let derived ← resolveTy ctx.types p derived
+    let locals := ctx.locals.map fun binding => (binding.name, binding.ty)
+    let bound : SubtypeEvidence.Bound := ⟨base, derived⟩
+    let some plan := SubtypeEvidence.find? ctx.types locals bound
+      | eerr p s!"type {derived.show} does not satisfy subtype({base.show})"
+    elabSubtypeValueWith elabE ctx p plan bound
   | .app p (.ident _ "$choiceDictionary") [factory@(.construct _ cls _ [])] false =>
     if !cls.startsWith "$choiceOperationDictionary" then eerr p "internal: invalid dictionary allocation"
     -- Only the generated dictionary object is an implementation effect.
@@ -9780,6 +9811,7 @@ structure Compiled where
       theirs gives (#214): the program is elaborated again, with them. -/
   fnNeeds : List (String × Ty) := []
   methodNeeds : List FnValues.MethodRequest := []
+  subtypeNeeds : List STop := []
   /-- Branches of casts that refine type arguments, to lift (#243): the
       program is elaborated again, with them. -/
   castNeeds : List Refine.Lift := []
@@ -9874,6 +9906,8 @@ structure Options where
       theirs gave in an earlier elaboration (#214): a class for each. -/
   fnRequests : List (String × Ty) := []
   methodRequests : List FnValues.MethodRequest := []
+  /-- Canonical subtype dictionaries from an earlier discovery pass. -/
+  subtypeRequests : List STop := []
   /-- On an internal error (an elaborated function the checker rejects),
       also print that function's Verse Core, its slot types and signature,
       for a bug report (`OPENVERSE_DEBUG=1`). -/
@@ -11830,7 +11864,20 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       if generated.contains name then continue
       generated := name :: generated
     loopTops := loopTops ++ [top]
-  let resolved := loopTops ++ resolved
+  for request in opts.subtypeRequests do
+    match request with
+    | .classDef p name .. =>
+      if !name.startsWith "$subtypeNominal" then
+        throw s!"{p.show}: internal: invalid subtype dictionary request"
+    | _ => throw "internal: a subtype dictionary request must be a class"
+  let resolved := opts.subtypeRequests ++ loopTops ++ resolved
+  let needsSubtype := allTops0r.any UpperBounds.hasBounds || !opts.subtypeRequests.isEmpty ||
+    resolved.any (·.usesType SubtypeEvidence.family)
+  let definesSubtype := (resolved ++ helpers).any fun
+    | .classDef _ name .. => name == SubtypeEvidence.family
+    | _ => false
+  let helpers := helpers ++ (if needsSubtype && !definesSubtype then
+    SubtypeEvidence.protocol { line := 0, col := 0 } else [])
   -- Public compiler requests must not launder annotations through generated
   -- source or through function shapes that normalize their effect lists.
   EffectPolicy.check (resolved ++ helpers)
@@ -13153,6 +13200,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
           { fx := [("allocates", cd.pos, none)] }
   let mut fieldDefaultNeeds : List Choice.FirstLift := []
   let mut fieldMethodNeeds : List FnValues.MethodRequest := []
+  let mut fieldSubtypeNeeds : List STop := []
   -- check every field default once, with its struct's type parameters opaque
   -- (a default is elaborated again, at its field's type, at each construction
   -- that omits the field)
@@ -13176,6 +13224,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
           | .ok (_, st) =>
             fxCheck s!"default of field '{f}' of {n}" allowed st
             fieldMethodNeeds := FnValues.mergeMethodRequests fieldMethodNeeds st.methodNeeds
+            fieldSubtypeNeeds := SubtypeEvidence.mergeRequests fieldSubtypeNeeds st.subtypeNeeds
             fieldDefaultNeeds := fieldDefaultNeeds ++ st.loopFirst.filterMap fun u => match u.lift with
               | .ok l => if l.key.startsWith "defaults:" then some l else none
               | _ => none
@@ -13191,7 +13240,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       (suspends : Bool := false) (selfTps : List String := [])
       (selfFieldOf : Option (String → Option Nat) := none) (scopeClass : Option String := none)
       (evidenceSignature : Option Sig := none) :
-      Except String (Fn × List VTy × List (String × Ty) × Option Pos × List Refine.Lift × List LoopUse × FrameRefs.Info × List String × List FnValues.MethodRequest) := do
+      Except String (Fn × List VTy × List (String × Ty) × Option Pos × List Refine.Lift × List LoopUse × FrameRefs.Info × List String × List FnValues.MethodRequest × List STop) := do
     -- (#209) the values of `selfTps` come from the receiver's hidden
     -- fields, in slots after the hidden parameters: a method's own class's
     -- (`C.M`), or as `selfFieldOf` says (a cast's branch, #250, the cast
@@ -13255,7 +13304,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
               body := initPrefixE arity inits e },
       spawnParamTypes env name (st.slotTys.toList.map (Ty.toVTy env)), st.fnNeeds, st.errAt, st.castNeeds, st.loopFirst,
       { explicit := ps.length, copies := st.frameCopies, slots := st.frameSlots.map fun (i, s) =>
-          (i, { frame := s.frame, name := s.name, args := s.args.map (Ty.toVTy env) }) }, st.eagerNeeds, st.methodNeeds)
+          (i, { frame := s.frame, name := s.name, args := s.args.map (Ty.toVTy env) }) }, st.eagerNeeds, st.methodNeeds, st.subtypeNeeds)
   -- (the accessors come right after the functions, #157)
   env := { env with fieldAccBase := tops.length + gsigs.size }
   let genvOf (g : Sig) : TyEnv := g.typeEnv env
@@ -13264,6 +13313,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   let mut frameInfo : Array FrameRefs.Info := #[]
   let mut fnNeeds : List (String × Ty) := []
   let mut methodNeeds : List FnValues.MethodRequest := fieldMethodNeeds
+  let mut subtypeNeeds : List STop := fieldSubtypeNeeds
   -- (where each function calls `Err()`, by its index, #235)
   let mut errs : Array (Option Pos) := #[]
   let mut castNeeds : List Refine.Lift := []
@@ -13276,11 +13326,12 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     let sig := sigs[idx]!
     match top with
     | .fn p n ps _ _ _ body =>
-      let (fn, tys, needs, err, casts, lf, frames, eager, methodUses) ← elabFn env p n ps sig.params sig.ret sig.decides sig.fx [] body sig.suspends
+      let (fn, tys, needs, err, casts, lf, frames, eager, methodUses, subtypeUses) ← elabFn env p n ps sig.params sig.ret sig.decides sig.fx [] body sig.suspends
         (evidenceSignature := some sig)
       eagerNeeds := eagerNeeds ++ eager
       fnNeeds := fnNeeds ++ needs
       methodNeeds := FnValues.mergeMethodRequests methodNeeds methodUses
+      subtypeNeeds := SubtypeEvidence.mergeRequests subtypeNeeds subtypeUses
       castNeeds := castNeeds ++ casts
       loopFirst := loopFirst ++ lf
       fns := fns.push fn
@@ -13297,6 +13348,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       let (e, st) ← (coerce p r.1 sig.ret).run st
       fnNeeds := fnNeeds ++ st.fnNeeds
       methodNeeds := FnValues.mergeMethodRequests methodNeeds st.methodNeeds
+      subtypeNeeds := SubtypeEvidence.mergeRequests subtypeNeeds st.subtypeNeeds
       castNeeds := castNeeds ++ st.castNeeds
       loopFirst := loopFirst ++ st.loopFirst
       eagerNeeds := eagerNeeds ++ st.eagerNeeds
@@ -13322,11 +13374,12 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       -- (a class's copy of an interface's default, #53, elaborated in the
       -- interface's scope)
       let scope := copyScope? effs
-      let (fn, tys, needs, err, casts, lf, frames, eager, methodUses) ← elabFn (genvOf g) p n ps g.params g.ret g.decides g.fx g.tparams body g.suspends
+      let (fn, tys, needs, err, casts, lf, frames, eager, methodUses, subtypeUses) ← elabFn (genvOf g) p n ps g.params g.ret g.decides g.fx g.tparams body g.suspends
         g.selfTps ((opts.castRequests.find? (·.name == n)).map fun l => fun v =>
           (l.opened.lookup v).bind (env.witnessField? l.target ·)) scope (some g)
       fnNeeds := fnNeeds ++ needs
       methodNeeds := FnValues.mergeMethodRequests methodNeeds methodUses
+      subtypeNeeds := SubtypeEvidence.mergeRequests subtypeNeeds subtypeUses
       eagerNeeds := eagerNeeds ++ eager
       castNeeds := castNeeds ++ casts
       loopFirst := loopFirst ++ lf
@@ -13341,13 +13394,15 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   -- (#243) and branches of casts that refine type arguments, lifted into
   -- functions
   if !eagerNeeds.isEmpty then
-    return { prog := default, sigs := { fns := [] }, slotTys := [], eagerNeeds := eagerNeeds.eraseDups }
+    return { prog := default, sigs := { fns := [] }, slotTys := [], eagerNeeds := eagerNeeds.eraseDups, subtypeNeeds }
   let defaults := loopFirst.filterMap fun u => match u.lift with
     | .ok l => if l.key.startsWith "defaults:" then some l else none
     | _ => none
-  if !fnNeeds.isEmpty || !methodNeeds.isEmpty || !castNeeds.isEmpty || !defaults.isEmpty then
+  if !fnNeeds.isEmpty || !methodNeeds.isEmpty || !castNeeds.isEmpty || !defaults.isEmpty || !subtypeNeeds.isEmpty then
     let casts := castNeeds.foldl (fun acc l => if acc.any (·.key == l.key) then acc else acc ++ [l]) []
-    return { prog := default, sigs := { fns := [] }, slotTys := [], fnNeeds := fnNeeds.eraseDups, methodNeeds, castNeeds := casts, loopNeeds := defaults.foldl (fun acc l => if acc.any (·.key == l.key) then acc else acc ++ [l]) [] }
+    return {
+      prog := default, sigs := { fns := [] }, slotTys := [], fnNeeds := fnNeeds.eraseDups, methodNeeds, subtypeNeeds,
+      castNeeds := casts, loopNeeds := defaults.foldl (fun acc l => if acc.any (·.key == l.key) then acc else acc ++ [l]) [] }
   let mainSig ← match sigs.toList.find? (·.name == (if opts.entry.isSome then "$Do" else "Main")) with
     | some s =>
       if s.isConst || !s.params.isEmpty then throw "Main must be a function with no parameters"
@@ -13551,6 +13606,14 @@ def elabProgram (allTops00 : List STop) (opts : Options := {}) : Except String C
   -- types: each round asks for new ones only, so a few rounds do
   let rec go (fuel : Nat) (opts : Options) : Except String Compiled := do
     let c ← elabProgramCore allTops00 opts
+    let subtypes := c.subtypeNeeds.filter fun request => !opts.subtypeRequests.any
+      (fun old => SubtypeEvidence.declarationName old == SubtypeEvidence.declarationName request)
+    if !subtypes.isEmpty then
+      match fuel with
+      | fuel + 1 => return ← go fuel { opts with
+          subtypeRequests := SubtypeEvidence.mergeRequests opts.subtypeRequests subtypes }
+      | 0 => throw "internal error: subtype dictionaries still to materialize after several elaborations"
+    if !c.subtypeNeeds.isEmpty then throw "internal error: an existing subtype dictionary was requested again"
     if !c.eagerNeeds.isEmpty then return c
     -- (#243) and with the branches of casts that refine type arguments
     let casts := c.castNeeds.filter fun l => !opts.castRequests.any (·.key == l.key)

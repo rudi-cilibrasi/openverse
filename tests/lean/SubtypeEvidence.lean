@@ -160,6 +160,15 @@ private def resolutionContracts : IO Unit := do
     (SubtypeEvidence.infer weakFacts [relation] [("u", callerType)] true)
   need "nominal projections cannot select the first comparable flag"
     (((inferred.lookup "a").getD .void).paramsC == [("q", false)])
+  let constrained := { declarations with sbounds :=
+    [("node", [(.struct "vehicle" [], .param "t" false)])] }
+  let dictionary ← getOK "retain bounds on a nominal dictionary family"
+    (nominal constrained pos "node" "vehicle")
+  match dictionary with
+  | .classDef _ _ [parameter] .. =>
+    need "a generic dictionary does not erase its nominal parameter bound"
+      (reprStr parameter.upperBound == reprStr (some (STy.name "vehicle")))
+  | _ => throw (IO.userError "unexpected nominal dictionary declaration")
 
 private partial def protocolParams (body : SExpr) : List TParam :=
   let own := match body with
@@ -310,6 +319,25 @@ Main():void=
 "
 
 private def stateTrace := "touch\nidentity a 1\nrolled\nrollback 1\nlive 4\npath\npath values 1 7\n"
+
+private def witness (base derived : Ty) : SExpr :=
+  .app pos (.ident pos "$subtypeWitness")
+    [.construct pos family [base.toSTy, derived.toSTy] []] false
+
+private def defaultSource := "
+vehicle:=class<computes>{Speed:int=7}
+car:=class<computes>(vehicle){}
+F(X:t,?D:evidence(vehicle,t)=DefaultEvidence() where t:type)<computes>:int=X.Speed
+holder:=class<computes>:
+    D:evidence(vehicle,car)=CarEvidence()
+    Value()<computes>:int=D.Up(car{}).Speed
+Main():void=
+    Print(\"named {F(car{Speed:=9})}\")
+    H:=holder{}
+    Print(\"field {H.Value()}\")
+"
+
+private def defaultTrace := "named 9\nfield 7\n"
 
 private def stateControlSource := stateSource
   |>.replace "    set X.N+=1" "    V:=D.Up(X)\n    set V.N+=1"
@@ -541,6 +569,40 @@ def main (args : List String) : IO Unit := do
   let cancelControl ← getOK "rewrite explicit cancellation control" (cancelControl.mapM (rewriteTop replacements))
   let cancelControl ← getOK "compile explicit cancellation control" (elabProgram (protocol pos ++ [carNominal] ++ cancelControl))
   checkTrace "explicit cancellation control" cancelControl cancelTrace
+  let automatic := [
+    ("CarEvidence", witness vehicle car),
+    ("TruckEvidence", witness vehicle (.struct "truck" [])),
+    ("NodeEvidence", witness vehicle (.struct "node" [t])),
+    ("ComposedEvidence", witness vehicle car),
+    ("IntEvidence", witness .int .int),
+    ("DefaultEvidence", witness vehicle t)]
+  let materialize (label source : String) : IO Compiled := do
+    let parsed ← getOK s!"{label}: parse" (parseProgram source)
+    let rewritten ← getOK s!"{label}: rewrite" (parsed.mapM (rewriteTop automatic))
+    getOK s!"{label}: compile" (elabProgram rewritten)
+  let materialized ← materialize "automatic dictionaries" source
+  checkTrace "automatic dictionaries" materialized trace
+  need "materialization finishes every request" materialized.subtypeNeeds.isEmpty
+  for source in ["car", "truck", "node"] do
+    let name := nominalFamily source "vehicle" ++ ".Up"
+    need s!"one generic dictionary family for {source}"
+      ((materialized.prog.fns.filter (·.name == name)).length == 1)
+  let autoState ← materialize "automatic state" stateSource
+  checkTrace "automatic state" autoState stateTrace
+  let autoCancel ← materialize "automatic cancellation" cancelSource
+  checkTrace "automatic cancellation" autoCancel cancelTrace
+  let autoDefaults ← materialize "automatic defaults" defaultSource
+  checkTrace "automatic defaults" autoDefaults defaultTrace
+  let entryTops ← getOK "entry-only dictionary declarations"
+    (parseProgram "vehicle:=class<computes>{Speed:int=9}\ncar:=class<computes>(vehicle){}\nMain():void={}")
+  let entry := SExpr.member pos
+    (.app pos (.member pos (witness vehicle car) "Up") [.construct pos "car" [] []] false) "Speed"
+  let autoEntry ← getOK "entry-only dictionary discovery" (elabProgram entryTops { entry := some entry })
+  checkTrace "entry-only dictionary discovery" autoEntry "9\n"
+  let badRequest := STop.classDef pos "$subtypeNominalBad" [] ["predicts"] [] false [] [] []
+  let main := STop.fn pos "Main" [] [] [] (.name "void") (.tuple pos [])
+  expectError "materialized dictionary effects remain checked" "<predicts>"
+    (elabProgramCore [main] { subtypeRequests := [badRequest] })
   if let [out] := args then
     IO.FS.writeBinFile (out ++ "/evidence.vbc") compiled.prog.encode
     IO.FS.writeFile (out ++ "/evidence.expected") trace
@@ -549,7 +611,10 @@ def main (args : List String) : IO Unit := do
     IO.FS.writeBinFile (out ++ "/state.vbc") state.prog.encode
     IO.FS.writeFile (out ++ "/state.expected") stateTrace
     for (name, compiled, expected) in [("state-control", control, stateTrace),
-        ("cancel", cancellation, cancelTrace), ("cancel-control", cancelControl, cancelTrace)] do
+        ("cancel", cancellation, cancelTrace), ("cancel-control", cancelControl, cancelTrace),
+        ("materialized", materialized, trace), ("materialized-state", autoState, stateTrace),
+        ("materialized-cancel", autoCancel, cancelTrace), ("materialized-defaults", autoDefaults, defaultTrace),
+        ("materialized-entry", autoEntry, "9\n")] do
       IO.FS.writeBinFile (out ++ s!"/{name}.vbc") compiled.prog.encode
       IO.FS.writeFile (out ++ s!"/{name}.expected") expected
   IO.println "subtype dictionary contracts passed (checked Core, precise/escaping results, inference, member calls/coercion, state/order/rollback/cancellation)"
