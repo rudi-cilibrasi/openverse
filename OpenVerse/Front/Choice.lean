@@ -2497,7 +2497,7 @@ def methodFns (tops : List STop) (reserved : List String := []) (picks : List (P
     for (c, _) in classes do
       if (anc c).contains r then
         if let some r' := rs.find? fun x => x != r && (anc c).contains x then
-          return some (s!"{shown c} is below both {shown r} and {shown r'}, which declare {n} apart", none)
+          return some (s!"{shown c} is below both {shown r} and {shown r'}, which each declare {n} without <override>", none)
     let ds := famDecls n r
     for (c, m) in ds do
       let some _ := classes.lookup c | return some ("", none)

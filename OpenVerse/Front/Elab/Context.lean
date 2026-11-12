@@ -765,6 +765,14 @@ def Ctx.implAt (ctx : Ctx) (r m e : String) : Option String :=
 def Ctx.rootsOf (ctx : Ctx) (c m : String) : List String :=
   ctx.types.rootsOf (fun e => (ctx.sig? s!"{e}.{m}").isSome) c
 
+/-- Whether this elaboration knows if an expression can fail: not one for
+    types, nor one to be done again with functions as values (#214, #231)
+    or with the families of methods' uses (#283), which may make a call
+    fail or have several values. -/
+def Ctx.failabilityKnown (ctx : Ctx) : EM Bool := do
+  let st ← get
+  return st.fnNeeds.isEmpty && st.methodNeeds.isEmpty && ctx.types.familySites.isEmpty && !ctx.typeOnly
+
 /-- (#283) A use `R.M` at `p` whose family of methods only the class of
     `R` tells, one of `TyEnv.familySites`: the root of `M` above that class
     noted, none (`""`) for a receiver of another type. -/

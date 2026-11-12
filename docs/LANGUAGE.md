@@ -1089,21 +1089,20 @@ Main():void =
   with `Self` the receiver, and so is `M(args)` in its class's methods and
   those of the classes below it. A recursive one is taken lazily, and a
   named parameter's default sees the fields. Each class or interface that
-  declares `M` without `<override>` is the root of a family of its own,
-  `M` and its overrides in the classes below it, and `R.M(args)` is a call
-  in the family of the root that `R`'s class is below (#283). When one
-  class or interface declares `M` (overrides aside), that is known before
-  types are checked. When unrelated ones do, the receiver's class tells:
+  declares `M` without `<override>` is the root of a family of its own:
+  `M` and its overrides in the classes below it. `R.M(args)` is a call in
+  the family of the root that `R`'s class is below (#283). When one class
+  or interface declares `M`, overrides aside, that is known before types
+  are checked. When unrelated ones do, the receiver's class tells:
   `M(args)` and `Self.M(args)` in a class's methods are in that class's
-  family, and for any other receiver the program is elaborated once for
-  the receivers' classes, then again with each call in its family. So `M`
-  of a class whose `M` has one value is an ordinary method wherever it is
-  called, and a function whose values come from a call of another family's
-  `M` through a receiver of that family's class has several values, as for
-  a name only one family has; a receiver of a class below no root whose
-  `M` has several values makes an ordinary call. A class below two roots of
-  `M` (as one listing two interfaces that both declare `M`) is refused when
-  either family has several values, and so is an overloaded one. Such a
+  family, and for any other receiver the program is elaborated once to
+  find the receivers' classes, then again with each call in its family.
+  So a class's `M` with one value stays an ordinary method wherever it is
+  called, through a function too, and a function whose values come from
+  another class's `M` through a receiver of that class has several values,
+  as when one family has the name. A class below two roots of `M` (one
+  listing two interfaces that both declare it) is refused when one of the
+  families has several values, and so is an overloaded `M`. Such a
   method's name must be no field, no struct field, enumerator or member of
   a built-in type (`Length`, `Find`, `Signal`, …), no top-level name and no
   parameter or local. An

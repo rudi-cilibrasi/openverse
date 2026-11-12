@@ -1041,7 +1041,7 @@ partial def elabBranchAlts (ctx : Ctx) (p : Pos) (i : SExpr) (sty : Option STy) 
             else elabSeq { ctx with canFail := true, inTaking := true } cs none
           pure (rc, cT, false)
       refined := refined || refines
-      if !(rc.e.mayFail ctx.sigProg) && (← get).fnNeeds.isEmpty && (← get).methodNeeds.isEmpty && !ctx.typeOnly then
+      if !(rc.e.mayFail ctx.sigProg) && (← ctx.failabilityKnown) then
         eerr p "the condition of this if cannot fail (Verse requires a failable condition)"
       conds := conds.push (some rc.e)
       ctxs := ctxs.push { cT with canFail := ctx.canFail, inTaking := ctx.inTaking }

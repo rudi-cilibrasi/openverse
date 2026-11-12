@@ -1572,7 +1572,9 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   -- (#243) and branches of casts that refine type arguments, lifted into
   -- functions
   -- (#283) and with the families of the uses of methods whose receivers'
-  -- classes this one found
+  -- classes this one found; those it did not reach, of no family, so that
+  -- the last elaboration has none to find (and knows what can fail)
+  if familyNeeds.isEmpty then familyNeeds := familySites.map fun (q, _) => (q, "")
   if !eagerNeeds.isEmpty || !familyNeeds.isEmpty then
     return { prog := default, sigs := { fns := [] }, slotTys := [], eagerNeeds := eagerNeeds.eraseDups,
              familyNeeds := familyNeeds.eraseDups }

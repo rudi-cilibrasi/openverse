@@ -496,9 +496,11 @@ as a stub, a direct one too, for them to type), with one value in the
 fixpoint; at each (`TyEnv.familySites`) `Ctx.noteFamily` notes the root of
 `M` above the receiver's static class by the place of `R.M`
 (`Compiled.familyNeeds`), and the program is elaborated again with them
-(`Options.familyPicks`), as for `eagerRequests`. Each use is then rewritten
-as in a program with that family alone, so the fixpoint is exact, and so is
-the code. A family that has several values only through such uses has its
+(`Options.familyPicks`), as for `eagerRequests`. That elaboration does not
+judge what can fail (`Ctx.failabilityKnown`), as a call may yet get several
+values, and the uses it does not reach are of no family, so the last one has
+none left. Each use is then rewritten as in a program with that family
+alone, so the fixpoint is exact, and so is the code. A family that has several values only through such uses has its
 own uses noted in a later round; each round notes more, so they end. A
 class below two roots of `M`, or an overloaded `M`, is refused when a family
 of `M` has several values. For
