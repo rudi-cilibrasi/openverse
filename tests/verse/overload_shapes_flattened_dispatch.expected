@@ -1,0 +1,10 @@
+low 1 0
+strings ab 0
+strings cd 7
+tuple 3
+strings ef
+strings gh
+tuple 5 8
+strings ij 9
+strings kl 10
+exit=0

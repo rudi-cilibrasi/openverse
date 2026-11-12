@@ -323,12 +323,13 @@ def TyEnv.slotImpls (env : TyEnv) (impl : String → Option String) (ups : List 
    | some e => [e]
    | none => best).filterMap impl
 
-/-- No value has both types (Book of Verse ch. 6, overloading): `void`, a
-    type parameter and `never` overlap everything; two arrays, maps or options
-    share the empty one (and `?t` and `logic` share `false`); a tuple overlaps
-    an array, map or option; a class or interface overlaps an interface and
-    the classes above and below it; otherwise different kinds, structs,
-    enums and unrelated classes are disjoint. -/
+/-- Disjoint overload domains (Book ch. 6 and `IndistinctOverloads.versetest`).
+    Empty containers and unknown types remain overlapping. A nonempty tuple
+    separates from an array if one element does, from a map if its key is
+    disjoint from int, and from an option if its element is disjoint from int.
+    Function types cannot separate from arrays or maps, regardless of their
+    signatures; this is an admission rule, not a container/function coercion.
+    Class/interface and numeric overlap rules are unchanged. -/
 partial def TyEnv.disjoint (env : TyEnv) : Ty → Ty → Bool
   | .void, _ | _, .void | .param .., _ | _, .param .. | .never, _ | _, .never => false
   -- (every value is an any, #138)
@@ -346,7 +347,11 @@ partial def TyEnv.disjoint (env : TyEnv) : Ty → Ty → Bool
   | .arr _, .arr _ | .arr _, .map .. | .map .., .arr _ | .map .., .map .. | .opt _, .opt _ => false
   -- `false` is also an empty array, an empty option and a logic
   | .opt _, .logic | .logic, .opt _ | .arr _, .opt _ | .opt _, .arr _ | .arr _, .logic | .logic, .arr _ => false
-  | .tup _, .arr _ | .arr _, .tup _ | .tup _, .map .. | .map .., .tup _ | .tup _, .opt _ | .opt _, .tup _ => false
+  | .tup ts, .arr t | .arr t, .tup ts => ts.any (env.disjoint · t)
+  | .tup ts, .map k _ | .map k _, .tup ts => !ts.isEmpty && env.disjoint .int k
+  | .tup ts, .opt t | .opt t, .tup ts => !ts.isEmpty && env.disjoint .int t
+  | .struct n _, .arr _ | .arr _, .struct n _ |
+    .struct n _, .map .. | .map .., .struct n _ => (FnValues.parseName n).isNone
   | .struct a as, .struct b bs =>
     let isCls (x : String) := env.classes.contains x
     let iface (x : String) := isCls x && (env.info x).isIface
@@ -376,15 +381,15 @@ def TyEnv.namedDistinct (env : TyEnv) (na nb : List (String × Bool × Ty)) : Bo
     | some (_, _, ta), some (_, _, tb) => !env.disjoint ta tb
     | _, _ => false)
 
-/-- Two overloads' parameters: no call fits both. They differ in number (a
-    single tuple parameter overlaps as many parameters as it has elements),
-    or some position's types are disjoint. -/
+/-- Two overloads' parameters: no call fits both. Compare a single explicit
+    tuple with the other signature's flattened types, including their domains,
+    rather than treating equal flattened arity alone as ambiguity. -/
 def TyEnv.paramsDistinct (env : TyEnv) (as bs : List Ty) : Bool :=
-  let flat (xs ys : List Ty) : Bool := match xs with
-    | [.tup ts] => ts.length == ys.length
-    | _ => false
-  if as.length != bs.length then !(flat as bs || flat bs as)
-  else (as.zip bs).any fun (a, b) => env.disjoint a b
+  let flat (xs : List Ty) : List Ty := match xs with
+    | [.tup ts] => ts
+    | _ => xs
+  let (as, bs) := if as.length != bs.length then (flat as, flat bs) else (as, bs)
+  as.length != bs.length || (as.zip bs).any fun (a, b) => env.disjoint a b
 
 /-- The type arguments of the class or interface `T` above `d(args)` (along
     the parents, #39, #53), or `[]` when `T` is not above `d`. -/
