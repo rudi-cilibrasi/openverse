@@ -944,6 +944,9 @@ def Ctx.hasMethod (ctx : Ctx) (c m : String) : Bool :=
 private def Ctx.selectValueView (ctx : Ctx) (p : Pos) (derived : Ty) (candidates : List Ty)
     (operation : String) : Except String (Option Ty) := do
   let locals := ctx.evidenceTypes
+  let candidates := candidates.foldl (fun result ty =>
+    if result.any (· == ty) then result.map (fun old => if old == ty then old.commonBounds ty else old)
+    else result ++ [ty]) []
   let converts (source target : Ty) :=
     (SubtypeEvidence.find? ctx.types locals ⟨target, source⟩).any (·.valid ctx.types locals)
   let best := candidates.filter fun candidate => !candidates.any fun other =>
@@ -967,6 +970,26 @@ def Ctx.valueView (ctx : Ctx) (p : Pos) (derived : Ty) (accepts : Ty → Bool)
 def Ctx.containerView (ctx : Ctx) (p : Pos) (derived : Ty) (accepts : Ty → Bool)
     (operation : String) : Except String (Option Ty) :=
   ctx.valueView p derived accepts operation
+
+/-- An array shape for a built-in operation, with every required level
+    supported by actual whole-value or component capabilities. -/
+def Ctx.arrayView (ctx : Ctx) (p : Pos) (derived : Ty) (depth : Nat)
+    (operation : String) : Except String (Option Ty) := do
+  let rec hasShape (ty : Ty) : Nat → Bool
+    | 0 => true
+    | n + 1 => match ty with | .arr element => hasShape element n | _ => false
+  if hasShape derived depth then return some derived
+  let rec candidates (ty : Ty) : Nat → List Ty
+    | 0 => [ty]
+    | n + 1 =>
+      let views := ty :: SubtypeEvidence.valueViews ctx.types ctx.evidenceTypes ty
+      views.flatMap fun
+        | .arr element => (candidates element n).map Ty.arr
+        | _ => []
+  let supported := (candidates derived depth).filter fun target =>
+    (SubtypeEvidence.find? ctx.types ctx.evidenceTypes ⟨target, derived⟩).any fun plan =>
+      plan.usesLocal && plan.valid ctx.types ctx.evidenceTypes
+  ctx.selectValueView p derived supported operation
 
 def Ctx.boundView (ctx : Ctx) (p : Pos) (derived : Ty) (member : String) : Except String (Option Ty) := do
   let .param .. := derived | return none

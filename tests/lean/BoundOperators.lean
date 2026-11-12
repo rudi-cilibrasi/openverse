@@ -37,9 +37,13 @@ def main : IO Unit := do
       (joins ctx [.arr a, .arr b] (some (.arr vehicle)) == some (.arr vehicle))
     need "an expected result does not invent reverse narrowing"
       (joins ctx [.arr a, .arr b] (some (.arr car)) == some (.arr vehicle))
+    need "actual value proofs infer a common map view"
+      (joins ctx [.map .int a, .map .int b] == some (.map .int vehicle))
   for ctx in [context [], context (actual.map fun l => { l with typeValue := true })] do
     need "static facts and dummy proofs do not authorize an operational join"
       ((joins ctx [.arr a, .arr b] (some (.arr vehicle))).isNone)
+    need "static facts and dummy proofs do not authorize a map join"
+      ((joins ctx [.map .int a, .map .int b] (some (.map .int vehicle))).isNone)
   let whole := context [proof "A" (.arr vehicle) (.arr a), proof "B" (.arr vehicle) (.arr b)]
   need "whole-array proofs can join their whole values"
     (joins whole [.arr a, .arr b] == some (.arr vehicle))

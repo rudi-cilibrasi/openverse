@@ -214,6 +214,17 @@ partial def elabContainerReceiverWith (elabE : Ctx → SExpr → Option Ty → E
     (ctx : Ctx) (p : Pos) (value : R) (accepts : Ty → Bool) (operation : String) : EM R :=
   elabValueViewWith elabE ctx p value accepts operation
 
+partial def elabArrayArgumentWith (elabE : Ctx → SExpr → Option Ty → EM R)
+    (ctx : Ctx) (p : Pos) (value : R) (depth : Nat) (operation : String) : EM R := do
+  let view ← match ctx.arrayView p value.ty depth operation with
+    | .ok view => pure view
+    | .error message => throw message
+  let some target := view | return value
+  if target == value.ty then return value
+  let some plan := SubtypeEvidence.find? ctx.types ctx.evidenceTypes ⟨target, value.ty⟩
+    | eerr p "internal: an array argument lost its lexical dictionary"
+  elabSubtypeUpWith elabE ctx p value target plan
+
 /-- Keep opaque operands precise outside the operation. Numeric and optional
     array views must come from actual proofs, including refined numeric uppers. -/
 partial def elabArithmeticOperandWith (elabE : Ctx → SExpr → Option Ty → EM R)

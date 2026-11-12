@@ -200,6 +200,19 @@ common interfaces remain ambiguous unless an explicit supported result selects
 one. Whole-array proofs can convert whole inputs without establishing element
 relations.
 
+The `Concatenate` built-in also uses checked views. Its single-argument form
+requires two array levels; component proofs and composed whole/component proofs
+may supply the missing shape. Shallow views are discarded before selecting a
+flattening view. The variadic form retains its ordinary first-array element type
+and converts later arguments to that type. `ConcatenateMaps` uses whole map
+views and, when an ordinary join fails, actual key/value capabilities for the
+common map type. Conversion retains raw entry order; merging updates the first
+matching key in place and appends new keys in argument order. Widening keys does
+not silently canonicalize the converted first map. Paired source controls cover
+precise elements, empty inputs, numeric keys, discard keys, once-only argument
+evaluation, shared references, rollback, failure, escaping tasks and cancellation.
+Both built-ins retain identical admitted bytecode under `--no-choice`.
+
 Arithmetic operands can use actual integer, rational, float or numeric
 refinement uppers. The checked conversion feeds the ordinary unary/binary
 operators and `Abs`, `Min`, `Max`, `Floor` and `Ceil` paths. Integer division
@@ -268,6 +281,14 @@ comparable guarantees; distinct inferred instances are refused. Ordinary,
 inlined and method-local binding, including defaults, use the same rule.
 After inference, a checked conversion consumes the once-elaborated argument;
 the compiler does not reevaluate its source expression to obtain the view.
+Parameters occurring only inside structural bound heads can collect lower-type
+observations from arrays, options, tuples and maps. All incoming observations
+and peer edges are collected before choosing a common upper; unresolved
+compound dependencies defer that choice. Existing supplied bindings remain
+fixed. Multiple opaque projections must agree, including their common
+comparable guarantees. This only proposes an instance: it adds no component
+facts, and the call must still supply evidence for every complete instantiated
+relation. An empty tuple contributes no element instance.
 
 The method-family and refinement integrations retain both subtype-dictionary
 and method-family discovery results. A receiver's family is reported after
@@ -287,6 +308,10 @@ following the pinned Book's
 Bounded named wrappers may call those overloads and escape as values.
 
 ## Verification and remaining admission work
+
+The [acceptance matrix](upper-bound-acceptance.md) maps every #502 requirement
+to concrete artifacts and the evidence still needed for admission. The rows
+are obligations, not a claim that the guarded draft has completed the issue.
 
 `tests/scripts/test-subtype-evidence.sh` runs scope/API contracts and exact
 checked Lean/C artifacts. The container controls use ordinary concrete

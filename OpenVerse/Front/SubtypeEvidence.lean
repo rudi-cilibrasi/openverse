@@ -575,6 +575,41 @@ def joinView? (env : TyEnv) (locals : List (String × Ty)) (types : List Ty)
     | some plans => plans.any (·.usesLocal) && plans.all (·.valid env locals)
     | none => false
 
+/-- Observe unknown parameters inside a covariant bound head. This proposes
+    instances only: it neither distributes a whole-container proof nor adds
+    component facts. Calls still prove the complete instantiated relation.
+    Distinct views of an opaque input must agree before contributing lowers. -/
+private partial def structuralLowers (env : TyEnv) (fixed : List (String × Ty))
+    (pattern actual : Ty) : Option (List (String × Ty)) :=
+  go [] pattern actual
+where
+  go (seen : List (Ty × Ty)) (pattern actual : Ty) : Option (List (String × Ty)) := do
+    if actual == .never then return []
+    if pattern.params.all (fun name => (fixed.lookup name).isSome) then
+      if env.boundSubtype actual (pattern.subst fixed) then return [] else none
+    match pattern, actual with
+    | .param name _, _ =>
+      if actual.hasNever then return [] else return [(name, actual)]
+    | .arr p, .arr a | .opt p, .opt a => go seen p a
+    | .arr p, .tup values => return (← values.mapM (go seen p)).flatten
+    | .tup ps, .tup values =>
+      if ps.length != values.length then none else
+        return (← (ps.zip values).mapM fun (p, a) => go seen p a).flatten
+    | .map pk pv, .map ak av => return (← go seen pk ak) ++ (← go seen pv av)
+    | .struct .., .struct .. =>
+      return (← pattern.matchArg env fixed actual).filter fun (name, _) => (fixed.lookup name).isNone
+    | _, _ =>
+      if seen.contains (pattern, actual) then none else do
+        let results := (upperViews env actual).filterMap fun view =>
+          if view == actual then none else go ((pattern, actual) :: seen) pattern view
+        let first ← results.head?
+        let keys := (first.map (·.1)).eraseDups
+        if !results.all (fun result => (result.map (·.1)).eraseDups.length == keys.length &&
+            keys.all (fun name => mergeTypes (result.filterMap fun (n, ty) => if n == name then some ty else none) ==
+              mergeTypes (first.filterMap fun (n, ty) => if n == name then some ty else none))) then none else
+          return first.map fun (name, ty) => (name, results.foldl (fun common result =>
+            (result.filterMap fun (n, ty) => if n == name && ty == common then some ty else none).foldl Ty.commonBounds common) ty)
+
 private def peerInstances (env : TyEnv) (bounds : List Bound) (names : List String)
     (substitution : List (String × Ty)) (comparable : List String) : Option (List (String × Ty)) := do
   let mut lowerTypes := names.map fun name => (name, (substitution.lookup name).toList)
@@ -583,31 +618,36 @@ private def peerInstances (env : TyEnv) (bounds : List Bound) (names : List Stri
   for _ in [0:names.length + 1] do
     let previous := lowerTypes
     for bound in bounds do
-      let .param upper _ := bound.base | continue
       let values := if bound.derived.params.all (fun n => (substitution.lookup n).isSome) then
           [bound.derived.subst substitution]
         else match bound.derived with
           | .param lower _ => (lowerTypes.lookup lower).getD []
           | _ => []
-      lowerTypes := lowerTypes.map fun (name, old) =>
-        (name, if name == upper then mergeTypes (old ++ values) else old)
+      match bound.base with
+      | .param upper _ =>
+        lowerTypes := lowerTypes.map fun (name, old) =>
+          (name, if name == upper then mergeTypes (old ++ values) else old)
+      | .arr .. | .opt .. | .tup .. | .map .. =>
+        for value in values do
+          let observations ← structuralLowers env substitution bound.base value
+          lowerTypes := lowerTypes.map fun (name, old) =>
+            (name, mergeTypes (old ++ observations.filterMap fun (n, ty) => if n == name then some ty else none))
+      | _ => pure ()
     if (lowerTypes.zip previous).all (fun ((name, values), (oldName, oldValues)) =>
         name == oldName && values.length == oldValues.length &&
         (values.zip oldValues).all (fun (a, b) => a == b && a.paramsC == b.paramsC)) then break
   -- A compound lower type may depend on another inferred instance. Do not
   -- commit a narrower upper before all its incoming constraints are known.
-  let mut pending := bounds.filterMap fun bound => do
-    let .param upper _ := bound.base | none
-    if bound.derived.params.all (fun n => (substitution.lookup n).isSome) then none else
+  let mut pending := bounds.flatMap fun bound =>
+    if bound.derived.params.all (fun n => (substitution.lookup n).isSome) then [] else
     match bound.derived with
-    | .param lower _ => if ((lowerTypes.lookup lower).getD []).isEmpty then some upper else none
-    | _ => some upper
+    | .param lower _ => if ((lowerTypes.lookup lower).getD []).isEmpty then bound.base.params else []
+    | _ => bound.base.params
   for _ in [0:names.length + 1] do
     let previous := pending
     for bound in bounds do
-      if let (.param upper _, .param lower _) := (bound.base, bound.derived) then
-        if (substitution.lookup lower).isNone && pending.contains lower then
-          pending := (upper :: pending).eraseDups
+      if bound.derived.params.any (fun lower => (substitution.lookup lower).isNone && pending.contains lower) then
+        pending := (bound.base.params ++ pending).eraseDups
     if pending.length == previous.length then break
   let mut result := substitution
   for (name, values) in lowerTypes do
@@ -627,9 +667,9 @@ def acceptsKnownBounds (env : TyEnv) (bounds : List Bound)
       env.boundSubtype (bound.derived.subst substitution) (bound.base.subst substitution)
     else true
 
-/-- Infer parameters which occur only inside a nominal upper bound from the
-    argument's projected ancestor. Existing input bindings remain fixed. No
-    unrelated interface is guessed to be an ancestor of an opaque parameter. -/
+/-- Infer bound-only parameters from nominal projections, structural lower
+    observations and peer constraints. Existing input bindings remain fixed.
+    No unrelated interface is guessed to be an ancestor of an opaque parameter. -/
 def infer (env : TyEnv) (bounds : List Bound) (initial : List (String × Ty))
     (peerTypes : Bool := false) (comparable : List String := []) : Option (List (String × Ty)) := do
   if bounds.isEmpty then return initial

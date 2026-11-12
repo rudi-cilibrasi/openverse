@@ -104,6 +104,30 @@ def main : IO Unit := do
     | .error message =>
       need s!"{label}: wrong refusal: {message}"
         ((message.splitOn "dummy type value cannot").length > 1)
+  let builtins := [
+    ("whole-array flatten", "Caller(A:t,D:evidence([][]int,t) where t:type)<computes>:[]int=Concatenate(A)",
+      "Concatenate takes arrays, or an array of arrays"),
+    ("component-array flatten", "Caller(A:[]t,D:evidence([]int,t) where t:type)<computes>:[]int=Concatenate(A)",
+      "Concatenate takes arrays, or an array of arrays"),
+    ("composed-array flatten", "Caller(A:t,D:evidence([]a,t),E:evidence([]int,a) where t:type,a:type)<computes>:[]int=Concatenate(A)",
+      "Concatenate takes arrays, or an array of arrays"),
+    ("variadic concatenate", "Caller(A:t,B:[]int,D:evidence([]int,t) where t:type)<computes>:[]int=Concatenate(A,B)",
+      "Concatenate takes arrays, found t"),
+    ("whole-map concatenate", "Caller(A:t,D:evidence([int]int,t) where t:type)<computes>:[int]int=ConcatenateMaps(A)",
+      "ConcatenateMaps takes maps, not t"),
+    ("map-value concatenate", "Caller(A:[int]t,B:[int]int,D:evidence(int,t) where t:type)<computes>:[int]int=ConcatenateMaps(A,B)",
+      "ConcatenateMaps takes maps of one type"),
+    ("map-key concatenate", "Caller(A:[t]int,B:[rational]int,D:evidence(rational,t) where t:subtype(comparable))<computes>:[rational]int=ConcatenateMaps(A,B)",
+      "ConcatenateMaps takes maps of one type")]
+  for (label, source, refusal) in builtins do
+    let parsed ← getOK s!"{label}: parse" (parseProgram (source ++ "\nMain():void={}"))
+    let compiled ← getOK s!"{label}: actual proof control" (elabProgram (← getOK label (parsed.mapM (roles false))))
+    need s!"{label}: real proof passes all Core admission checks"
+      (compiled.prog.check && compiled.prog.checkControl && compiled.prog.checkTypes compiled.sigs compiled.slotTys)
+    let dummy ← getOK s!"{label}: dummy roles" (parsed.mapM (roles true))
+    match elabProgram dummy with
+    | .ok _ => throw (IO.userError s!"{label}: a dummy input supplied a builtin view")
+    | .error message => need s!"{label}: wrong refusal: {message}" ((message.splitOn refusal).length > 1)
   let t := Ty.param "t" false
   let proof := (Bound.mk (.struct "vehicle" []) t).ty
   let env : TyEnv := {
@@ -119,4 +143,4 @@ def main : IO Unit := do
   need "unconstrained generic forwarding stays opaque" (!exposesEvidence env t)
   need "declared peer domains expose evidence"
     (exposesEvidence { env with boundFacts := [(proof, .param "u" false), (.param "u" false, t)] } t)
-  IO.println s!"subtype evidence input contracts passed ({cases.length} real/dummy call controls)"
+  IO.println s!"subtype evidence input contracts passed ({cases.length} real/dummy call controls, {builtins.length} builtin controls)"

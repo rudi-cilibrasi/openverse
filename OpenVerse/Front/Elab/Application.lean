@@ -80,6 +80,7 @@ partial def elabAppBaseWith
         | _ => eerr p "Concatenate() needs an expected array type"
       | [a] =>
         let r ← elabE ctx a (match exp with | some t => some (.arr t) | none => none)
+        let r ← elabArrayArgumentWith elabE ctx a.pos r 2 "Concatenate"
         match r.ty with
         | .arr (.arr t) =>
           -- (through a typed temporary: an empty literal has no type of its own)
@@ -88,11 +89,12 @@ partial def elabAppBaseWith
         | t => eerr p s!"Concatenate takes arrays, or an array of arrays, found {t.show}"
       | a :: rest =>
         let r0 ← elabE ctx a exp
+        let r0 ← elabArrayArgumentWith elabE ctx a.pos r0 1 "Concatenate"
         let .arr t := r0.ty | eerr a.pos s!"Concatenate takes arrays, found {r0.ty.show}"
         let mut acc := r0.e
         for b in rest do
           let rb ← elabE ctx b (some (.arr t))
-          acc := p2 .concat acc (← coerce b.pos rb (.arr t))
+          acc := p2 .concat acc (← elabArgumentCoerceWith elabE ctx b.pos rb (.arr t))
         return ⟨acc, .arr t⟩
     | "any" =>
       -- `any(X)`: X as an `any` (#138), evaluated
@@ -115,7 +117,10 @@ partial def elabAppBaseWith
           let mut found : Option Ty := none
           for a in args do
             if found.isNone then
-              found ← tryCatch (do let r ← elabE ctx a none; pure (match r.ty with | t@(.map ..) => some t | _ => none))
+              found ← tryCatch (do
+                let r ← elabE ctx a none
+                let r ← elabContainerReceiverWith elabE ctx a.pos r (fun | .map .. => true | _ => false) "ConcatenateMaps"
+                pure (match r.ty with | t@(.map ..) => some t | _ => none))
                 (fun _ => pure none)
           set st
           pure found
@@ -123,19 +128,22 @@ partial def elabAppBaseWith
       let mut jt? : Option Ty := none
       for a in args do
         let r ← elabE ctx a mapExp
+        let r ← elabContainerReceiverWith elabE ctx a.pos r (fun | .map .. => true | _ => false) "ConcatenateMaps"
         let .map _ _ := r.ty | eerr a.pos s!"ConcatenateMaps takes maps, not {r.ty.show}"
         match jt? with
         | none => jt? := some r.ty
         | some j =>
           let j' ← tryCatch (join a.pos j r.ty mapExp) (fun _ =>
-            eerr a.pos s!"ConcatenateMaps takes maps of one type, not {j.show} and {r.ty.show}")
+            match SubtypeEvidence.joinView? ctx.types ctx.evidenceTypes [j, r.ty] mapExp with
+            | some target => pure target
+            | none => eerr a.pos s!"ConcatenateMaps takes maps of one type, not {j.show} and {r.ty.show}")
           jt? := some j'
         rs := rs.push r
       let some jt := jt? | eerr p "ConcatenateMaps takes at least one map"
       let .map kt vt := jt | eerr p s!"ConcatenateMaps takes maps, not {jt.show}"
       let tm ← fresh jt
       let some r0 := rs[0]? | eerr p "ConcatenateMaps takes at least one map"
-      let mut code : Expr := .assign tm (← coerce a0.pos r0 jt)
+      let mut code : Expr := .assign tm (← elabArgumentCoerceWith elabE ctx a0.pos r0 jt)
       for (r, a) in rs.toList.tail.zip args.tail do
         let ts ← fresh jt
         let tpair ← fresh (.tup [kt, vt])
@@ -145,7 +153,7 @@ partial def elabAppBaseWith
         let tidx ← fresh .int
         let put := Expr.seq (.assign tk (.prim (.tupGet 0) [.local tpair]))
           (.seq (.assign tv (.prim (.tupGet 1) [.local tpair])) (mapPut tm tk tv ti tidx))
-        code := .seq code (.seq (.assign ts (← coerce a.pos r jt)) (.forE tpair (.local ts) (.lit (.logic true)) put))
+        code := .seq code (.seq (.assign ts (← elabArgumentCoerceWith elabE ctx a.pos r jt)) (.forE tpair (.local ts) (.lit (.logic true)) put))
       return ⟨.seq code (.local tm), jt⟩
     | "ToString" =>
       match args with

@@ -65,4 +65,39 @@ def main : IO Unit := do
     | .ok (some (.arr (.param "a" comparable))) =>
       need "duplicate identities intersect comparable flags" (!comparable)
     | _ => throw (IO.userError "lost the equal array view")
+  let arrays2 := Ty.arr (.arr .int)
+  need "opaque nested arrays provide a flattening view"
+    (viewIs (some arrays2) ((context [proof "D" arrays2 t]).arrayView p t 2 "Concatenate"))
+  for locals in [[], [proof "D" arrays2 t true]] do
+    need "flattening cannot use static facts or dummy dictionaries"
+      (viewIs none ((context locals).arrayView p t 2 "Concatenate"))
+  need "component proofs establish a nested array shape"
+    (viewIs (some arrays2) ((context [proof "D" (.arr .int) a]).arrayView p (.arr a) 2 "Concatenate"))
+  let composed := context [proof "Whole" (.arr a) t, proof "Element" (.arr .int) a]
+  need "whole and component proofs compose for flattening"
+    (viewIs (some arrays2) (composed.arrayView p t 2 "Concatenate"))
+  let wholeOnly := context [proof "Whole" arrays2 (.arr a)]
+  need "a whole proof can expose the complete nested array"
+    (viewIs (some arrays2) (wholeOnly.arrayView p (.arr a) 2 "Concatenate"))
+  need "a whole flattening view does not create an element proof"
+    ((find? wholeOnly.types wholeOnly.evidenceTypes ⟨.arr .int, a⟩).isNone)
+  for locals in [[proof "Flat" (.arr .int) t, proof "Nested" arrays2 t],
+      [proof "Nested" arrays2 t, proof "Flat" (.arr .int) t]] do
+    need "inapplicable shallow views do not make flattening ambiguous"
+      (viewIs (some arrays2) ((context locals).arrayView p t 2 "Concatenate"))
+  for locals in [[proof "Ints" arrays2 t, proof "Floats" (.arr (.arr .float)) t],
+      [proof "Floats" (.arr (.arr .float)) t, proof "Ints" arrays2 t]] do
+    need "unrelated nested array views remain ambiguous"
+      (match (context locals).arrayView p t 2 "Concatenate" with | .error _ => true | _ => false)
+  need "ordinary shallow arrays cannot be flattened without evidence"
+    (viewIs none ((context []).arrayView p (.arr .int) 2 "Concatenate"))
+  let u := Ty.param "u" false
+  let v := Ty.param "v" false
+  let paths := [proof "U" (.arr u) t, proof "V" (.arr v) t,
+    proof "Marked" (.arr marked) u, proof "Plain" (.arr a) v]
+  for locals in [paths, paths.reverse] do
+    match (context locals).arrayView p t 2 "Concatenate" with
+    | .ok (some (.arr (.arr (.param "a" comparable)))) =>
+      need "converging array views intersect comparable guarantees" (!comparable)
+    | _ => throw (IO.userError "lost the composed array view")
   IO.println "container view contracts passed (real evidence, specificity, equivalence, ambiguity and whole relations)"

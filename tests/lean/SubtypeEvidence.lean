@@ -168,6 +168,49 @@ private def resolutionContracts : IO Unit := do
     (SubtypeEvidence.infer weakFacts [relation] [("u", callerType)] true)
   need "nominal projections cannot select the first comparable flag"
     (((inferred.lookup "a").getD .void).paramsC == [("q", false)])
+  let a := Ty.param "a" false
+  let u := Ty.param "u" false
+  let v := Ty.param "v" false
+  let car := Ty.struct "car" []
+  let truck := Ty.struct "truck" []
+  let structural : List Bound := [⟨.arr a, u⟩, ⟨.arr (.param "e" false), a⟩]
+  for constraints in [structural, structural.reverse] do
+    let inferred ← getSome "infer the intermediate element from a nested structural bound"
+      (SubtypeEvidence.infer declarations constraints [("u", .arr (.arr car)), ("e", car)] true)
+    need "structural inference preserves the precise nested input"
+      (inferred.lookup "a" == some (.arr car) && inferred.lookup "u" == some (.arr (.arr car)))
+  for head in [Ty.arr, Ty.opt, fun ty => Ty.map .int ty, fun ty => Ty.tup [ty, .int]] do
+    let constraints : List Bound := [⟨head a, u⟩, ⟨head a, v⟩]
+    for bounds in [constraints, constraints.reverse] do
+      let inferred ← getSome "aggregate structural lower observations before choosing an upper"
+        (SubtypeEvidence.infer declarations bounds [("u", head car), ("v", head truck)] true)
+      need "structural bounds share the common nominal element without replacing inputs"
+        (inferred.lookup "a" == some (.struct "vehicle" []) &&
+          inferred.lookup "u" == some (head car) && inferred.lookup "v" == some (head truck))
+  let opaqueFacts := { declarations with boundFacts := [(.arr car, callerType)] }
+  let inferred ← getSome "infer a structural bound from a whole opaque view"
+    (SubtypeEvidence.infer opaqueFacts [⟨.arr a, u⟩] [("u", callerType)] true)
+  need "whole-view inference chooses an instance without distributing its proof"
+    (inferred.lookup "a" == some car &&
+      !opaqueFacts.boundSubtype callerType car &&
+      (SubtypeEvidence.find? opaqueFacts [] ⟨.arr car, callerType⟩).isNone)
+  for views in [[(.arr car, callerType), (.arr truck, callerType)],
+      [(.arr truck, callerType), (.arr car, callerType)]] do
+    need "distinct opaque structural projections remain ambiguous"
+      ((SubtypeEvidence.infer { declarations with boundFacts := views }
+        [⟨.arr a, u⟩] [("u", callerType)] true).isNone)
+  let inferred ← getSome "a fixed component can accept a narrower structural input"
+    (SubtypeEvidence.infer declarations [⟨.tup [a, .param "e" false], u⟩]
+      [("u", .tup [car, .int]), ("e", .rational)] true)
+  need "structural observations retain fixed wider components" (inferred.lookup "a" == some car)
+  let incomplete ← getSome "an empty tuple contributes no element observation"
+    (SubtypeEvidence.infer declarations [⟨.arr a, u⟩] [("u", .tup [])] true)
+  need "empty structural input cannot invent an element instance" ((incomplete.lookup "a").isNone)
+  for arguments in [flagInputs, flagInputs.reverse] do
+    let inferred ← getSome "structural observations share only common comparable guarantees"
+      (SubtypeEvidence.infer declarations [⟨.arr a, u⟩, ⟨.arr a, v⟩] arguments true)
+    need "structural inference does not strengthen comparable flags"
+      (((inferred.lookup "a").getD .void).paramsC == [("q", false)])
   let constrained := { declarations with sbounds :=
     [("node", [(.struct "vehicle" [], .param "t" false)])] }
   let dictionary ← getOK "retain bounds on a nominal dictionary family"
