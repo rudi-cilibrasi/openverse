@@ -343,8 +343,8 @@ structure Ctx where
       `branch` there would start again before the last one ended. -/
   inRepeat : Bool := false
   /-- In the clauses of an `if` condition or `first{…}` that bind a choice
-      (#208), inside a `loop`: a `break` there would leave the loop they are
-      compiled to, not that one. -/
+      (#208), inside a `loop`, that have no `break` that leaves them: the
+      loop they are compiled to does not forward one (`elabFirstGo`). -/
   inChoice : Bool := false
   /-- In the clauses of a failure context that takes a choice's values
       (#208): a choice that reaches the elaborator here is in a place it
@@ -352,7 +352,8 @@ structure Ctx where
   inTaking : Bool := false
   /-- The internal loop that propagates a failed continuation outcome. -/
   forOutcomeSlot : Option Nat := none
-  /-- A source-loop break crossing the internal loops of lazy producers. -/
+  /-- A source-loop break crossing the internal loops of lazy producers and
+      of first successes (`firstE`), each of which forwards it. -/
   forBreakSlot : Option Nat := none
   /-- A source break carried by a shared for continuation. -/
   forBreakCapture : Option String := none
@@ -666,6 +667,11 @@ partial def resolveTy (env : TyEnv) (p : Pos) : STy → EM Ty
 
 def Ctx.lookup (ctx : Ctx) (n : String) : Option Local := ctx.locals.find? (·.name == n)
 def Ctx.sig? (ctx : Ctx) (n : String) : Option Sig := ctx.sigs.find? (·.name == n)
+
+/-- `ctx` with the `defer:` body `d` pending for every `return` and `break`
+    that leaves its scope (#80), with the locals in scope here. -/
+def Ctx.withDefer (ctx : Ctx) (d : SExpr) : Ctx :=
+  { ctx with defers := (d, ctx.locals) :: ctx.defers }
 
 /-- Class or interface `c` has method `m`, its own or inherited. -/
 def Ctx.hasMethod (ctx : Ctx) (c m : String) : Bool :=
@@ -1618,5 +1624,33 @@ def toStringOf (p : Pos) (r0 : R) : EM Expr := do
   | .int | .char | .float => pure (.prim .toStr [r.e])
   | .arr .char => pure r.e
   | t => eerr p s!"no ToString for {t.show} (Verse defines it for int, float, char, char32 and string)"
+
+/-- Canonicalise the user positional arguments before binding a call. A
+    receiver is not part of the argument tuple; named arguments retain their
+    written order. A lone scalar keeps its meaning for arrays and bare type
+    parameters. Empty arrays still require an explicit array value. -/
+def packCallArgs (p : Pos) (s : Sig) (args : List SExpr)
+    (hasReceiver : Bool := true) : List SExpr := Id.run do
+  let isNamed : SExpr → Bool := fun | .decl _ n _ _ _ => n.startsWith "?" | _ => false
+  let off := if hasReceiver && s.hasReceiver then 1 else 0
+  let pos := args.filter (!isNamed ·)
+  let user := pos.drop off
+  let named := args.filter isNamed
+  let [pt] := s.params.drop off |>.take (s.params.length - s.named.length - off)
+    | return args
+  let packed := fun a => pos.take off ++ [a] ++ named
+  match pt with
+  | .void => if user.isEmpty then return packed (.tuple p []) else return args
+  | .tup _ =>
+    if user.length != 1 then return packed (.tuple p user)
+    if let .tup [_] := pt then
+      let [a] := user | return args
+      match a with
+      | .tuple _ [_] | .app _ (.ident _ "$callSingleton") [_] false => return args
+      | _ => return packed (.app a.pos (.ident a.pos "$callSingleton") [a] false)
+    return args
+  | .arr _ => if user.length > 1 then return packed (.arrayLit p user) else return args
+  | .param .. => if user.length != 1 then return packed (.tuple p user) else return args
+  | _ => return args
 
 end OpenVerse.Front

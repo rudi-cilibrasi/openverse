@@ -71,6 +71,8 @@ flags: heavy     (with bif: more of them, longer chains, longer conditions)
                   generator, #296; on with lazy otherwise)
        retdefer-control (emit an equivalent pre-change layout of returning
                   cleanup scopes, with the same independent trace oracle)
+       (a branchy generator's base branch is at times one if with a print in its
+                  condition, a value whose condition is undone with it, #283)
        noframes  (no return frame: a generator's call of itself with code after
                   it, or its choice bound with plain code after it, #283; on with
                   lazy otherwise)
@@ -437,6 +439,13 @@ RT2 = RT and 'nort2' not in flags
 # after its returning path are reached only on fallthrough. Keep this draw
 # independent of the expression generator and its existing seed streams.
 RET_DEFER = RT2 and random.Random(seed * 1000003 + 283391).random() < 0.5
+# ---- #283, with ret: at times the test's return is in a block of its own with a choice of its
+# own and a defer: (its clauses lifted into the test's), returning on some of its values:
+#   Xn := block{ defer: Print("rbN"); Wn := a | b; if (Wn op L) then return else true; Wn }
+# The defer: runs as each value leaves the block, and at the return, which leaves it, before the
+# test's own: LANGUAGE.md's rule for any scope, whether its clauses are lifted or not. A
+# generator of its own decides, so seeds keep their other programs.
+RRB = random.Random(seed * 1000003 + 283392)
 # ---- #283, flag frames (on with lazy; noframes turns it off): a generator's call of
 # itself may have code after it, which runs on each of the call's values (a return
 # frame): an alternative `Gz0(N - 1, A) + e` (e any value, with no var), `L + Gz0(…)`
@@ -454,6 +463,17 @@ RET_DEFER = RT2 and random.Random(seed * 1000003 + 283391).random() < 0.5
 # as the code after the last choice reached is). A generator of its own decides, so
 # seeds keep their other programs.
 RFR = random.Random(seed * 1000003 + 283283)
+# ---- #283: at times a branchy generator's base branch is one value that is an if with a
+# print in its condition, `if (N <= 1) then ((if (Print("frN"), A > k) then x else y)) else …`:
+# that if is the value (it has no choice), so its condition runs with the value and is undone
+# with it where the consumer rejects it, as any value's code is. A stream of its own, so seeds
+# without it keep their programs.
+RIFV = random.Random(seed * 1000003 + 283284)
+RPRE = random.Random(seed * 1000003 + 283285)
+# ---- #283: at times the code after a bound choice sets a var of the generator (`set V += Wf`)
+# and its value reads it: every later value and alternative sees what a kept value set, a
+# rejected one's write is undone; a stream of its own.
+RVAR = random.Random(seed * 1000003 + 283286)
 FRN = [0]
 
 
@@ -732,6 +752,18 @@ def frame_call(a):
     return None
 
 
+def frame_prefix(a):
+    """what alternative a evaluates before the call in its return frame (#283),
+    which runs with the call's arguments."""
+    if a[0] == 'bin' and frame_call(a) is not None:
+        if frame_call(a[2]) is None:
+            return [a[2]] + frame_prefix(a[3])
+        return frame_prefix(a[2])
+    if a[0] == 'tell':
+        return frame_prefix(a[2])
+    return []
+
+
 def gen_gcall(scope, vars_, d):
     cands = [(i, n) for i in range(len(GFUNCS)) for n in range(0, 4)
              if 1 <= gub(i, n) and gub(i, n) * PROD[0] <= CTX['plim']
@@ -801,6 +833,11 @@ def gen_gfunc(i):
             stmts.append(('sset', R.choice(vs), R.choice(['=', '+=']), gen_e(sc, vs, 1, False)))
         elif ctr and fx:
             stmts.append(('snext', 'C'))
+    # (#283: at times a var the code after a bound call sets, RVAR)
+    want_var = dec and FRAMES and RVAR.random() < 0.3
+    if want_var and not vs:
+        stmts.append(('svar', 'Vk', ('lit', RVAR.randint(0, 3))))
+        vs = vs + ['Vk']
     allsc = sc + vs
 
     def value():
@@ -833,14 +870,22 @@ def gen_gfunc(i):
         # in it, which it would run on a copy of)
         k = RFR.random()
         if k < 0.3:
-            return ('bin', RFR.choice(['+', '-', '*']), c, simple())
-        if k < 0.5:
-            return ('bin', RFR.choice(['+', '*']), simple(), c)
-        if k < 0.7:
-            return ('tell', ffresh(), c)
-        if k < 0.85:
-            return ('bin', '+', ('tell', ffresh(), c), ('tell', ffresh(), simple()))
-        return c
+            f = ('bin', RFR.choice(['+', '-', '*']), c, simple())
+        elif k < 0.5:
+            f = ('bin', RFR.choice(['+', '*']), simple(), c)
+        elif k < 0.7:
+            f = ('tell', ffresh(), c)
+        elif k < 0.85:
+            f = ('bin', '+', ('tell', ffresh(), c), ('tell', ffresh(), simple()))
+        else:
+            f = c
+        # (#283: what the alternative reads before the call that may not read
+        # the same after it, a call that prints or changes an object, runs
+        # once before it; a stream of its own)
+        if RPRE.random() < 0.35:
+            pre = ('cnext', 'C') if ctr and RPRE.random() < 0.5 else ('tell', ffresh(), simple())
+            return ('bin', RPRE.choice(['+', '*']), pre, f)
+        return f
 
     def alts(withself):
         out = [value() for _ in range(R.randint(1, 2))]
@@ -854,7 +899,7 @@ def gen_gfunc(i):
         return out
     if dec:
         f['val'] = ('gchoice', alts(True))
-        if FRAMES and RFR.random() < 0.3:
+        if FRAMES and (want_var or RFR.random() < 0.3):
             # (#283: the choice bound, plain code after it, then a value)
             post = []
             for j in range(RFR.randint(0, 2)):
@@ -869,6 +914,10 @@ def gen_gfunc(i):
                     post.append(('sfilt', ('cmp', ('ref', 'Wf'), [(RFR.choice(['>', '<>']), ('lit', RFR.randint(-2, 2)))])))
             names = ['Wf'] + [c[1] for c in post if c[0] == 'slet']
             last = ('bin', RFR.choice(['+', '-', '*']), ('ref', RFR.choice(names)), simple())
+            if vs and (want_var or RVAR.random() < 0.5):
+                v = RVAR.choice(vs)
+                post.append(('sset', v, '+=', ('ref', 'Wf')))
+                last = ('bin', '+', ('ref', v), last)
             f['bound'] = ('Wf', post, ('tell', ffresh(), last) if RFR.random() < 0.3 else last)
     else:
         conds = [('filter', ('cmp', ('ref', 'N'), [('<=', ('lit', f['lo']))]))]
@@ -877,7 +926,12 @@ def gen_gfunc(i):
         if fx and R.random() < 0.5:
             c2 = [('print', fresh("c"))]
             conds = c2 + conds if R.random() < 0.5 else conds + c2
-        f['val'] = ('gbif', conds, alts(False), alts(True))
+        base = alts(False)
+        if LAZY and RIFV.random() < 0.5:
+            cond = [('print', ffresh()), ('filter', ('cmp', ('ref', 'A'), [(RIFV.choice(['>', '<']), ('lit', RIFV.randint(-1, 2)))]))]
+            pick = lambda: ('lit', RIFV.randint(-1, 4)) if RIFV.random() < 0.5 else ('ref', RIFV.choice(['N', 'A']))
+            base = [('ifx', cond, pick(), pick())]
+        f['val'] = ('gbif', conds, base, alts(True))
     f['stmts'] = stmts
     f['lifted'] = lifted(f)
     CTX.update(ctrs=None, nofail=False, nochoice=False, noprint=False, fmax=None, take=None)
@@ -903,7 +957,7 @@ def lifted(f):
     arguments print or change an object, or those arguments set a name."""
     v = f['val']
     alts = v[1] if v[0] == 'gchoice' else v[2] + v[3]
-    args = [c[2] for a in alts if (c := frame_call(a)) is not None]
+    args = [c[2] for a in alts if (c := frame_call(a)) is not None] + [x for a in alts for x in frame_prefix(a)]
     conds = v[1] if v[0] == 'gbif' else []
     return (has_node(f['stmts'], FX_NODES) or has_node(conds, FX_NODES) or has_node(args, FX_NODES)
             or has_node(args, ('bset', 'setv')))
@@ -1565,6 +1619,9 @@ def show_c(c):
         return f"logic{{{show_cl(c[1], '; ')}}}?"
     if t == 'ret':
         return f"if ({show(c[1])[1:-1]}) then return else true"
+    if t == 'rblk':
+        return (f'{c[1]} := block{{ defer: Print("{c[5]}"); {c[2]} := {show(c[3])}; '
+                f'if ({show(c[4])[1:-1]}) then return else true; {c[2]} }}')
     raise AssertionError(c)
 
 
@@ -2086,6 +2143,18 @@ def run_clauses(cl, st, k, mode):
         if first_inner(lambda s, kk: ev(c[1], s, kk, 'first'), st) is not None:
             raise Return(st)       # (leaves the test with the state as it is)
         return nxt(st)
+    if t == 'rblk':
+        # (each value of the block's choice: its return leaves the block, running its
+        # defer:, else the value does as it leaves the block)
+        def krb(v, s):
+            s.binds[c[2]] = v
+            leaving = first_inner(lambda s2, kk: ev(c[4], s2, kk, 'first'), s) is not None
+            s.out.append(c[5])
+            if leaving:
+                raise Return(s)
+            s.binds[c[1]] = v
+            return nxt(s)
+        return ev(c[3], st, krb, mode)
     if t == 'logic':
         res = first_inner(lambda s, kk: run_clauses(c[1], s, lambda s2: kk(None, s2), 'first'), st)
         if res is None:
@@ -2347,6 +2416,14 @@ for ti in range(NT):
         sc = [c[1] for c in cl[:pos] if c[0] in ('bind', 'range')]
         cl.insert(pos, ('ret', ('cmp', leaf(sc, vars_), [(R.choice(OPS), leaf(sc, vars_))])))
         has_ret = True
+        if RRB.random() < 0.4 and not lift_block() and (not MV or PROD[0] * 2 <= CTX['plim']):
+            if MV:
+                PROD[0] *= 2
+            w = fresh("W")
+            alts = [('tell', fresh("t"), ('lit', RRB.randint(-1, 5))), ('lit', RRB.randint(-1, 5))]
+            RRB.shuffle(alts)
+            cl[pos] = ('rblk', fresh("X"), w, ('choice', alts),
+                       ('cmp', ('ref', w), [(RRB.choice(OPS), ('lit', RRB.randint(-1, 5)))]), fresh("rb"))
     show_state = ('Print("st {' + vars_[0] + '} {' + vars_[1] + '} {K.C} {J.C} '
                   '{A[0] or 9}{A[1] or 9}{A[2] or 9}{A[3] or 9} {F}' + (' {Cn}' if meth else '') + '")')
 

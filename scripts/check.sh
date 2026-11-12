@@ -178,6 +178,10 @@ check "reference path choice dictionary model fuzzing (${FUZZ_MODEL_REFERENCE_PA
   scripts/fuzz-model-heterogeneous.sh "${FUZZ_MODEL_REFERENCE_PATH_DICTIONARY:-120}" "$seed" --reference-path-writes
 check "compound reference path choice dictionary model fuzzing (${FUZZ_MODEL_COMPOUND_REFERENCE_PATH_DICTIONARY:-120} programs)" \
   scripts/fuzz-model-heterogeneous.sh "${FUZZ_MODEL_COMPOUND_REFERENCE_PATH_DICTIONARY:-120}" "$seed" --compound-reference-path-writes
+check "packed method choice dictionary model fuzzing (${FUZZ_MODEL_PACKED_METHOD_DICTIONARY:-120} programs)" \
+  scripts/fuzz-model-heterogeneous.sh "${FUZZ_MODEL_PACKED_METHOD_DICTIONARY:-120}" "$seed" --packed-methods
+check "packed default method choice dictionary model fuzzing (${FUZZ_MODEL_PACKED_DEFAULT_DICTIONARY:-120} programs)" \
+  scripts/fuzz-model-heterogeneous.sh "${FUZZ_MODEL_PACKED_DEFAULT_DICTIONARY:-120}" "$seed" --packed-default-methods
 check "source break model fuzzing (${FUZZ_MODEL_BREAKS:-60} programs)" \
   scripts/fuzz-model-breaks.sh "${FUZZ_MODEL_BREAKS:-60}" "$seed"
 check "choice model fuzzing (${FUZZ_MODEL_MV:-140} programs, functions with several values too)" \

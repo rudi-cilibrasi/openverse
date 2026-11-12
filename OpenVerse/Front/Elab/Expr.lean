@@ -51,7 +51,7 @@ partial def elabECore (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
     elabExprControl ctx se exp
 
 partial def elabExprMarkers (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R :=
-  elabExprMarkersWith elabE elabRefineExit (@elabConc) elabSpawn elabBranch elabApp (@elabFor) elabOneClauses elabOneGo elabExprValues ctx se exp
+  elabExprMarkersWith elabE elabRefineExit (@elabConc) elabSpawn elabBranch elabApp (@elabFor) elabOneClauses elabFirstGo elabExprValues ctx se exp
 
 partial def elabExprValues (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R :=
   elabExprValuesWith elabE (elabSeqIn true) elabApp ratCall elabCmp (@elabMember) elabConstruct elabMapLit ctx se exp
@@ -434,7 +434,7 @@ partial def elabSeqIn (closed : Bool) (ctx : Ctx) (ss : List SExpr) (exp : Optio
     -- `defer: D` then the rest of the scope (Book of Verse ch. 7): the rest,
     -- with D pending for its returns and breaks, then D, then the rest's value
     if let .block _ [] := body then eerr p "a defer: block cannot be empty"
-    let (r2, ctx2) ← elabSeqIn closed { ctx with defers := (body, ctx.locals) :: ctx.defers } rest exp
+    let (r2, ctx2) ← elabSeqIn closed (ctx.withDefer body) rest exp
     let d ← elabDefers ctx [(body, ctx.locals)]
     let ctx2 := { ctx2 with defers := ctx.defers, loopDefers := ctx.loopDefers }
     match r2.ty with
@@ -470,14 +470,14 @@ partial def elabApp (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (brack
   let isNamed : SExpr → Bool := fun | .decl _ n _ _ _ => n.startsWith "?" | _ => false
   let positional := args.filter (!isNamed ·)
   let namedArgs := args.filter isNamed
-  -- A generated method function keeps its receiver as the first argument.
+  -- A method function keeps its receiver as the first argument.
   -- Inlining already spreads a following tuple, but kept/scalar/array calls
   -- reach this boundary directly. Instantiate from the actual receiver;
   -- callee type names have no meaning in the caller's lexical type scope.
   if let (.ident _ g, [receiver, tupleArg]) := (f, positional) then
     if let some s := ctx.sig? g then
       let npos := s.params.length - s.named.length
-      if s.pnames.head? == some "$Self" && npos ≥ 3 then
+      if s.hasReceiver && npos ≥ 3 then
         let r ← elabE ctx receiver none
         let some σ := s.params[0]!.matchArg ctx.types [] r.ty
           | eerr receiver.pos s!"expected {s.params[0]!.show}, found {r.ty.show} (the receiver of {Choice.shownFnName g})"
@@ -1248,11 +1248,37 @@ partial def elabAlts (ctx : Ctx) (p : Pos) (b : Choice.Binding) : EM (Ty × List
     `void`: an `if` and `first{…}` read their clauses' values through names. -/
 partial def elabOneClauses (ctx : Ctx) (cs : List SExpr) : EM (R × Ctx) := do
   let ctx := { ctx with liftWhy := "" }
-  -- (a `break` here would leave `firstE`'s loop, not the program's)
-  let (code, ctx') ← elabOneGo { ctx with inLoop := false, inChoice := ctx.inLoop, inTaking := true }
+  let (code, ctx') ← elabFirstGo ctx
     (Choice.prepare cs (choiceValues ctx) (choiceField ctx) (fieldOrder := choiceOrder ctx)
       (keepBranches := choiceHasCast ctx))
-  return (⟨Expr.firstE code, .void⟩, { ctx' with inLoop := ctx.inLoop, inChoice := ctx.inChoice, inTaking := ctx.inTaking })
+  return (⟨code, .void⟩, ctx')
+
+/-- `Expr.firstE` of the code of clauses lifted already (`elabOneGo`), and
+    the context after them. `firstE`'s loop takes the `break` that ends a
+    success, so a source `break` in them that leaves them for the enclosing
+    loop (#283) sets that loop's break flag first, `Ctx.forBreakSlot`, as one
+    in a `for`'s filters does, after the cleanup it leaves; the flag then
+    breaks again after `firstE`, so a break keeps what the clauses did up to
+    it, as with no choice. One that leaves as an exit packet
+    (`forBreakCapture`, `refineExits`) returns, through any loop. -/
+partial def elabFirstGo (ctx : Ctx) (cs : List SExpr) : EM (Expr × Ctx) := do
+  let after (c : Ctx) : Ctx := { c with
+    inLoop := ctx.inLoop, inChoice := ctx.inChoice, inTaking := ctx.inTaking, forBreakSlot := ctx.forBreakSlot }
+  if !ctx.inLoop || !firstBreaks cs then
+    -- (with no loop, a `break` is refused where it is; `inChoice` says
+    -- that none is expected here)
+    let (code, c) ← elabOneGo { ctx with inLoop := false, inChoice := ctx.inLoop, inTaking := true } cs
+    return (Expr.firstE code, after c)
+  if ctx.forBreakCapture.isSome || ctx.refineExits.brk.isSome then
+    let (code, c) ← elabOneGo { ctx with inTaking := true } cs
+    return (Expr.firstE code, after c)
+  -- (a `for` around these clauses has made the flag already, and resets it)
+  let flag ← match ctx.forBreakSlot with
+    | some flag => pure flag
+    | none => fresh .logic
+  let (code, c) ← elabOneGo { ctx with inTaking := true, forBreakSlot := some flag } cs
+  let code := Expr.seq (Expr.firstE code) (forwardSourceBreak flag (.lit .void))
+  return (if ctx.forBreakSlot.isNone then .seq (.assign flag (.lit (.logic false))) code else code, after c)
 
 partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
   | [] => return (Expr.brkV, ctx)
@@ -1616,7 +1642,7 @@ partial def elabLoopGen (ctx : Ctx) (p : Pos) (lp : List SExpr) : EM LoopGen := 
   -- (#283) the return frames of the alternatives that are calls with code
   -- after them, and the continuation they are pushed on, the last name
   -- each item keeps
-  let frames := loopFrames armCode.toList
+  let frames ← loopFramesWith elabSeq armCode.toList
   let lives := frames.map fun f => f.lives.map (·.ty)
   let kl? : Option Local ← if frames.isEmpty then pure none else do
     let kTy := frameContTy lives
@@ -1658,11 +1684,17 @@ partial def elabLoopGen (ctx : Ctx) (p : Pos) (lp : List SExpr) : EM LoopGen := 
         | some n => push (item (.lit (.int (n : Nat))) cur)
         | none => vd
       -- (a call with code after it: its return frame, pushed with it, #283)
-      let frameLives : List Local := ((frames[fi]?).map LoopFrame.lives).getD []
+      let fr? : Option LoopFrame := frames[fi]?
+      let frameLives : List Local := (fr?.map LoopFrame.lives).getD []
       let (a, kE) : SExpr × Option Expr := match a, kl? with
-        | .app _ (.ident _ "$then") [c, _, _] false, some kl =>
+        | .app _ (.ident _ "$then") (c :: _) false, some kl =>
           (c, some (framePush ctx lives fi (frameLives.map (Expr.local ·.slot)) (.local kl.slot)))
         | a, _ => (a, none)
+      -- (its prefix, if any: before the arguments, in whose context they are)
+      let pre? : Option Expr := if kE.isSome then fr?.bind (·.pre) else none
+      let actx : Ctx := match pre?, fr? with
+        | some _, some f => { f.ctx with canFail := true, inTaking := true }
+        | _, _ => actx
       if kE.isSome then fi := fi + 1
       match a with
       | .app q (.ident _ "$rec") args' false =>
@@ -1671,6 +1703,8 @@ partial def elabLoopGen (ctx : Ctx) (p : Pos) (lp : List SExpr) : EM LoopGen := 
             if Choice.anyE (fun | .set .. => true | _ => false) a' then some a'.pos else none
         let ts ← pls.mapM fun l => fresh l.ty
         let assigns ← elabLoopArgsWith elabE actx q g args' pls ts
+        let assigns := match pre? with | some e => Expr.seq e assigns | none => assigns
+        if argSet.isNone && pre?.isSome then argSet := fr?.bind (·.preSet)
         itemCode := .seq itemCode assigns
         -- (the item that resumes after the call, with the names as its
         -- arguments left them, below the one that starts it; when an

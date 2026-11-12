@@ -269,6 +269,8 @@ partial def hasLiftable : SExpr → Bool
   | .app _ (.ident _ "$dispatch") _ false => true
   | .app _ (.ident _ "$each") _ false => true
   | .app _ (.ident _ "$loop") _ false => true
+  -- (a scope's `defer:`s pending for the exits in `e`, `deferExits`, #283)
+  | .app _ (.ident _ "$deferExits") [_, e] false => hasLiftable e
   | e@(.ite ..) => isBranchy e || branchesLift hasLiftable e
   | .app _ f args _ => headHas hasLiftable f || args.any fun
       -- (a named argument's value, #283)
@@ -596,6 +598,66 @@ def deferBodies (ss : List SExpr) : List SExpr :=
     let later := boundIn (ss.drop (i + 1))
     some (if later.isEmpty then s else renameE (renamedFor "$later" later) s)
 
+/-- Whether an exit in `e` can leave it: a `return`, or a `break` outside the
+    loops in `e` (marked `$refineBreak` in a branch lifted apart). -/
+partial def leaves : SExpr → Bool
+  | .ret .. | .brk _ | .app _ (.ident _ "$refineBreak") [] false => true
+  | .loop _ body => hasReturn body
+  | e => e.children.any leaves
+
+mutual
+/-- `e`, a statement or clause of a scope whose `defer:`s `ds` (in order)
+    `deferLast` moves after its value, with them pending for the exits in
+    it, as a scope's are for every `return` or `break` that leaves it (#283):
+    `$deferExits(ds, e)`, which the elaborator registers around `e` as it
+    does a `defer:` around the rest of its scope. So they run at each exit
+    that leaves `e`, after a `return`'s value and the cleanup of the scopes
+    inside `e`, wherever `e` is compiled to. A binding keeps its name, a
+    choice its alternatives (each with them), and the `if` of a choice of its
+    branches its shape (`deferExitsIf`). -/
+partial def deferExits (ds : List SExpr) (e : SExpr) : SExpr :=
+  if ds.isEmpty || !leaves e then e else
+  match e with
+  | .decl p x t v rhs => .decl p x t v (deferExits ds rhs)
+  | .gen p x i src => .gen p x i (deferExits ds src)
+  | .set p l op rhs => if leaves l then pending e else .set p l op (deferExits ds rhs)
+  | .app p f@(.ident _ "$choice") as false => .app p f (as.map (deferExits ds)) false
+  | .app p f@(.ident _ "$choiceAt") (l :: as) false => .app p f (l :: as.map (deferExits ds)) false
+  | .app p f@(.ident _ "$branchChoice") [i] false => .app p f [deferExitsIf ds i] false
+  | .app p f@(.ident _ "$branchChoiceAt") [l, i] false => .app p f [l, deferExitsIf ds i] false
+  | e => pending e
+where
+  pending (e : SExpr) : SExpr := .app e.pos (.ident e.pos "$deferExits") [.block e.pos ds, e] false
+
+/-- The `if` of a choice of its branches with the `defer:`s `ds` pending for
+    the exits in it (`deferExits`), its shape kept: in its conditions, a
+    scope of their own whose `defer:`s run where they end (`pendingIn`), in
+    each branch, and in the `else if`s of its chain. (A `defer:` among
+    conditions with a choice of their own is refused, #208: those are left
+    as they are, for the elaborator to refuse it.) -/
+partial def deferExitsIf (ds : List SExpr) : SExpr → SExpr
+  | .ite p cs t u =>
+    let (cs, own) := if cs.any liftsHere then (cs.map (deferExits ds), []) else pendingIn ds cs
+    .ite p (cs ++ if own.isEmpty then [] else [.block p (own ++ [.int p 0])]) (deferExits ds t)
+      (u.map (deferExitsIf ds))
+  | e => deferExits ds e
+
+/-- A scope's statements `ss` but its `defer:`s, each with those before it
+    pending for its exits, inside the `defer:`s `outer` of the scopes around
+    it (`deferExits`); and its `defer:`s in order (`deferBodies`), to run
+    where it ends. -/
+partial def pendingIn (outer ss : List SExpr) : List SExpr × List SExpr :=
+  let ds := deferBodies ss
+  ((ss.foldl (fun (out, n) s => if isDefer s then (out, n + 1)
+    else (out.push (deferExits outer (deferExits (ds.take n) s)), n)) (#[], 0)).1.toList, ds)
+end
+
+/-- `e` without the `defer:`s pending around it (`deferExits`), and how to
+    put them back. -/
+def underDeferExits : SExpr → SExpr × (SExpr → SExpr)
+  | .app q f@(.ident _ "$deferExits") [ds, e] false => (e, fun e' => .app q f [ds, e'] false)
+  | e => (e, id)
+
 /-- A scope's own `defer:` blocks after its value, as LANGUAGE.md lowers them
     (#283): its other statements, its value, a block of the `defer:`s in
     order (which runs them where it ends, last registered first, as the
@@ -605,14 +667,16 @@ def deferBodies (ss : List SExpr) : List SExpr :=
     value is bound to `dv` first, unless it reads nothing the block could
     change (`pureVal`), so it keeps the type its place gives it (`false`,
     `(Y, array{})`); a scope ending in a `defer:` has the block itself as
-    its value, as a block ending in one does. -/
+    its value, as a block ending in one does. Each statement has the
+    `defer:`s before it pending for its exits (`pendingIn`), so a `return`
+    or `break` that leaves the scope runs them as well. -/
 def deferLast (p : Pos) (dv : String) (ss : List SExpr) : List SExpr :=
-  match ss.getLast? with
+  if !ss.any isDefer then ss else
+  let (stmts, ds) := pendingIn [] ss
+  if ss.getLast?.any isDefer then stmts ++ [.block p ds] else
+  match stmts.getLast? with
   | some l =>
-    if !ss.any isDefer then ss else
-    let ds := deferBodies ss
-    let rest := ss.dropLast.filter (!isDefer ·)
-    if isDefer l then rest ++ [.block p ds] else
+    let rest := stmts.dropLast
     let run := SExpr.block p (ds ++ [.int p 0])
     let vals := ss.filterMap fun | .decl _ x _ false _ => some x | _ => none
     if pureVal vals l then rest ++ [run, l] else
@@ -694,6 +758,14 @@ partial def liftE (isVal : String → Bool) (isField : String → String → Boo
     bindParams isVal isField p pre args
     LM.bind p "c" (.app p (.ident q "$loop") [fn, ps, cls, tl] false)
   | .app p (.ident _ "$loop") _ false => LM.bind p "c" e
+  | .app _ (.ident _ "$deferExits") [.block _ ds, x] false =>
+    -- (#283) a scope's `defer:`s pending for the exits in `x`, `deferExits`:
+    -- and so for those in each clause lifted out of it
+    let saved := (← get).pre
+    modify fun s => { s with pre := #[] }
+    let x' ← liftE isVal isField x
+    modify fun s => { s with pre := saved ++ s.pre.map (deferExits ds) }
+    return deferExits ds x'
   | .app _ (.ident _ "$inline") (_ :: .block _ tmpl :: args) false =>
     -- a call of a function with several values (#235): the arguments, in
     -- order, into its (renamed) parameters, then its body's clauses, then
@@ -1024,14 +1096,18 @@ def bifToExcl (c : SExpr) : List SExpr :=
     -- scope where the `if` is (`$declNames`), as for any block; its
     -- `defer:`s after its value, `deferLast`, so they run as each of its
     -- values leaves it, in a `for`'s path or a choice's alternative
-    let blockNames (b : SExpr) : List SExpr := match b with
-      | .block .. => declNames ip (localDecls b)
+    -- (with the `defer:`s of a scope around the `if` pending for a branch's
+    -- exits, `deferExits`, around it)
+    let blockNames (b : SExpr) : List SExpr := match (underDeferExits b).1 with
+      | b@(.block ..) => declNames ip (localDecls b)
       | _ => []
-    let renameBlock (side : String) (b : SExpr) : SExpr := match b with
-      | .block .. => match renameE (renamedFor s!"${k}{side}" (localsOf b)) b with
-        | .block bp ss => .block bp (deferLast bp s!"${k}{side}$dv" ss)
-        | b' => b'
-      | b => b
+    let renameBlock (side : String) (b : SExpr) : SExpr :=
+      let (b, pending) := underDeferExits b
+      pending <| match b with
+        | .block .. => match renameE (renamedFor s!"${k}{side}" (localsOf b)) b with
+          | .block bp ss => .block bp (deferLast bp s!"${k}{side}$dv" ss)
+          | b' => b'
+        | b => b
     -- (the names the condition binds, for its branch, `exclOfIf`; renamed
     -- for the branch, `$…'N`, since the clauses after the `if` follow it in
     -- its path, where they are not in scope; as written, not in scope where
@@ -1039,8 +1115,8 @@ def bifToExcl (c : SExpr) : List SExpr :=
     let ρ := renamedFor s!"${k}" names
     let written := declNames ip (condDecls ip cs)
     -- (a then-block that binds a name its condition binds: shadowing)
-    let shadows := match t with
-      | .block .. => shadowsIn ip names t
+    let shadows := match (underDeferExits t).1 with
+      | t@(.block ..) => shadowsIn ip names t
       | _ => []
     let (sel, excl) := exclOfIf ip k (cs.map (renameE ρ)) (renameE ρ (renameBlock "t" t)) (renameBlock "u" u)
     shadows ++ blockNames t ++ blockNames u ++ written ++ [sel, .decl p x ty false (withJoin excl)]
@@ -1299,6 +1375,24 @@ partial def loopTailOK (plain groupOK : SExpr → Bool) : SExpr → Bool
   | .ite _ cs t (some u) => cs.all plain && loopTailOK plain groupOK t && loopTailOK plain groupOK u
   | e => groupOK e
 
+/-- A recursive tail with each `if` in a branch's place that has no choice
+    and no call of the group in it (`plain`, no returning path) made a block:
+    a value, whose conditions run with it and are undone with it, as any
+    value's code is, not a branch the invocation selects once for all its
+    values. The tail's own `if` stays its branch. -/
+partial def plainIfValues (plain : SExpr → Bool) : SExpr → SExpr
+  | .app p (.ident q "$returnTail") [.block r ss] false =>
+    let (pre, value) := loopBlockParts r ss
+    .app p (.ident q "$returnTail") [.block r (pre ++ [leaf value])] false
+  | .ite p cs t u => .ite p cs (leaf t) (u.map leaf)
+  | e => e
+where
+  leaf (e : SExpr) : SExpr := match e with
+    | .ite p .. =>
+      if plain e && !anyE (fun | .app _ (.ident _ "$returnTail") _ false => true | _ => false) e then .block p [e]
+      else plainIfValues plain e
+    | e => plainIfValues plain e
+
 /-- Visit the value leaves of a recursive tail, keeping its path scopes as
     they are (`mapLoopTail` puts each behind a taking boundary instead). -/
 partial def mapLoopLeaves (leaf : SExpr → SExpr) : SExpr → SExpr
@@ -1321,51 +1415,68 @@ partial def inert (own : List String) : SExpr → Bool
   | _ => false
 
 /-- (#283) An alternative that is a call of the recursive group (`isCall`)
-    with code after it: the call, evaluated before anything else in the
-    alternative but inert operands, and the alternative with the name `h` in
-    the call's place, its return frame, which runs on each of the call's
-    values. Everything after the call is `plain`. -/
-partial def frameOf? (isCall plain inert : SExpr → Bool) (h : String) (e : SExpr) : Option (SExpr × SExpr) :=
+    with code after it: the call; the alternative with the name `h` in the
+    call's place, its return frame, which runs on each of the call's values;
+    and the clauses that run before the call, once (its prefix). What is
+    evaluated before the call is kept in place when it reads the same after
+    it (`inert`), else bound to a name in the prefix (`$pre…`), so it is
+    still read once, before the call: a field, a constant, a call of a
+    function. Everything after the call is `plain`. -/
+partial def frameOf? (isCall plain inert : SExpr → Bool) (h : String) (e : SExpr) :
+    Option (SExpr × SExpr × List SExpr) :=
   let go := frameOf? isCall plain inert h
-  -- (the operand with the call: those before it inert, those after it plain)
-  let inList (es : List SExpr) : Option (SExpr × List SExpr) := do
+  -- (the operand with the call: those before it bound first unless inert,
+  -- those after it plain)
+  let inList (es : List SExpr) : Option (SExpr × List SExpr × List SExpr) := do
     let i ← es.findIdx? (!plain ·)
-    let (c, ei) ← go es[i]!
-    guard ((es.take i).all inert && (es.drop (i + 1)).all plain)
-    return (c, es.set i ei)
-  if isCall e then some (e, .ident e.pos h) else
+    let (c, ei, pre) ← go es[i]!
+    guard ((es.drop (i + 1)).all plain)
+    let (before, bound) := (es.take i).foldr (fun x (acc, ds) =>
+      if inert x then (x :: acc, ds) else
+        let t := s!"$pre{x.pos.line}_{x.pos.col}"
+        (.ident x.pos t :: acc, .decl x.pos t none false x :: ds)) ([], [])
+    return (c, before ++ [ei] ++ es.drop (i + 1), bound ++ pre)
+  if isCall e then some (e, .ident e.pos h, []) else
   match e with
   | .bin p o a b => do
-    let (c, as) ← inList [a, b]
-    return (c, .bin p o as[0]! as[1]!)
-  | .neg p a => do let (c, a') ← go a; return (c, .neg p a')
-  | .member p a m => do let (c, a') ← go a; return (c, .member p a' m)
+    let (c, as, pre) ← inList [a, b]
+    return (c, .bin p o as[0]! as[1]!, pre)
+  | .neg p a => do let (c, a', pre) ← go a; return (c, .neg p a', pre)
+  | .member p a m => do let (c, a', pre) ← go a; return (c, .member p a' m, pre)
   | .cmp p a rest => do
     guard (rest.all (plain ·.2))
-    let (c, a') ← go a
-    return (c, .cmp p a' rest)
-  | .tuple p es => do let (c, es') ← inList es; return (c, .tuple p es')
-  | .arrayLit p es => do let (c, es') ← inList es; return (c, .arrayLit p es')
+    let (c, a', pre) ← go a
+    return (c, .cmp p a' rest, pre)
+  | .tuple p es => do let (c, es', pre) ← inList es; return (c, .tuple p es', pre)
+  | .arrayLit p es => do let (c, es', pre) ← inList es; return (c, .arrayLit p es', pre)
   | .app p f@(.ident ..) as br => do
     guard (as.all fun | .decl .. => false | _ => true)
-    let (c, as') ← inList as
-    return (c, .app p f as' br)
+    let (c, as', pre) ← inList as
+    return (c, .app p f as' br, pre)
   -- (an index, or a call of a value: its head first)
   | .app p f as br => do
     guard (as.all plain)
-    let (c, f') ← go f
-    return (c, .app p f' as br)
+    let (c, f', pre) ← go f
+    return (c, .app p f' as br, pre)
   | .str p ps => do
     let codes := ps.filterMap fun | .code c => some c | .text _ => none
-    let (c, codes') ← inList codes
+    let (c, codes', pre) ← inList codes
     let (ps', _) := ps.foldl (fun (acc, rest) part => match part, rest with
       | .code _, x :: xs => (acc ++ [SPart.code x], xs)
       | part, xs => (acc ++ [part], xs)) (([] : List SPart), codes')
-    return (c, .str p ps')
-  | .block p (.decl q x t false rhs :: ss) => do
-    guard (ss.all plain)
-    let (c, rhs') ← go rhs
-    return (c, .block p (.decl q x t false rhs' :: ss))
+    return (c, .str p ps', pre)
+  -- (a block: its clauses before the one with the call run before the call)
+  | .block p ss => do
+    let i ← ss.findIdx? (!plain ·)
+    let rest := ss.drop (i + 1)
+    guard (rest.all plain)
+    match ss[i]! with
+    | .decl q x t false rhs =>
+      let (c, rhs', pre) ← go rhs
+      return (c, .block p (.decl q x t false rhs' :: rest), ss.take i ++ pre)
+    | s =>
+      let (c, s', pre) ← go s
+      return (c, .block p (s' :: rest), ss.take i ++ pre)
   | _ => none
 
 /-- (#283) A tail with return frames: each alternative that is a call of the
@@ -1375,7 +1486,9 @@ def framedTail (isRec plain inert : SExpr → Bool) (tail : SExpr) : SExpr :=
     let frame (a : SExpr) : SExpr := if isRec a || plain a then a else
       let h := s!"$frame{a.pos.line}_{a.pos.col}"
       match frameOf? isRec plain inert h a with
-      | some (c, k) => .app a.pos (.ident a.pos "$then") [c, .ident a.pos h, k] false
+      | some (c, k, []) => .app a.pos (.ident a.pos "$then") [c, .ident a.pos h, k] false
+      -- (with the clauses that run before the call, its prefix)
+      | some (c, k, pre) => .app a.pos (.ident a.pos "$then") [c, .ident a.pos h, k, .block a.pos pre] false
       | none => a
     match alts? v with
     | some as => mk v.pos (as.map frame)
@@ -1401,8 +1514,8 @@ def lastChoiceTail (plain : SExpr → Bool) (cls : List SExpr) (last : SExpr) :
 def eagerWhy : String :=
   "such a function must be <computes>, keep no local state, and reach nothing that prints or calls Err(), " ++
   "as all its values are computed at a call (#235), unless it is taken lazily: clauses, then a choice whose " ++
-  "alternatives are values or calls of its recursive group, each call after only literals and the function's own " ++
-  "names in its alternative, and followed by no choice, no other such call and no set of a var (#246, #283)"
+  "alternatives are values or calls of its recursive group, each call followed by no choice and no other such call " ++
+  "(#246, #283)"
 
 /-- The shape of a recursive function with several values that its
     consumers take lazily (#246), after normalizing source returns: plain
@@ -1411,7 +1524,7 @@ def eagerWhy : String :=
     With `frames` (#283), an alternative may also be a call of the group
     with code after it, which runs on each of its values (`$then`), and the
     body's last choice may be bound by a clause with plain code after it. -/
-def loopShape? (g : String) (mv : List String) (body : SExpr) (grp : List String := [g])
+def loopShapeOf? (g : String) (mv : List String) (body : SExpr) (grp : List String := [g])
     (frames : Bool := false) (params : List String := []) : Option (List SExpr × SExpr) := do
   let ss := stmtsOf body
   let last ← ss.getLast?
@@ -1431,17 +1544,42 @@ def loopShape? (g : String) (mv : List String) (body : SExpr) (grp : List String
     | _ => false
   let (cls, tail) := if frames && !cls.all plain then
       (lastChoiceTail plain cls last).getD (cls, tail) else (cls, tail)
-  let tail := completeLoopTail isRec false tail
+  let tail := plainIfValues plain (completeLoopTail isRec false tail)
   let tail := if frames then framedTail isRec plain (inert (params ++ localsOf body)) tail else tail
   -- (a frame's code sets no `var` bound before it: it runs on a copy of
   -- the names; an object's field it may set)
   let isVar (n : String) : Bool := anyE (fun | .decl _ x _ true _ => x == n | _ => false) body
   let framed : SExpr → Bool
-    | .app _ (.ident _ "$then") [c, _, k] false =>
-      isRec c && plain k && (setsIn k).all fun n => (localsOf k).contains n || !isVar n
+    | .app _ (.ident _ "$then") (c :: _ :: k :: pre) false =>
+      isRec c && plain k && pre.all plain && (setsIn k).all fun n => (localsOf k).contains n || !isVar n
     | _ => false
   let groupOK (e : SExpr) : Bool := ((alts? e).getD [e]).all fun a => isRec a || plain a || framed a
   if cls.all plain && loopTailOK plain groupOK tail then some (cls, tail) else none
+
+/-- (#283) A function's `var`s made cells: `var K:t = e` becomes
+    `K := $varcell(t){$VCell := e}`, and each use of `K`, read or `set`, is
+    `K.$VCell`. A return frame runs on a copy of the names it uses, but a
+    cell is one object: what a value's frame sets, every later value of the
+    call and every later alternative sees, and a rejected value's write is
+    undone with it, as the inlined body's `var` would be. -/
+partial def cellVars (vs : List String) : SExpr → SExpr :=
+  mapE fun
+    | .decl p x (some t) true rhs =>
+      if vs.contains x then
+        some (.decl p x none false (.construct p "$varcell" [t] [.decl p "$VCell" none false (cellVars vs rhs)]))
+      else none
+    | .ident p x => if vs.contains x then some (.member p (.ident p x) "$VCell") else none
+    | _ => none
+
+/-- `loopShapeOf?`; with `frames`, when a frame sets a `var` (#283), with the
+    function's `var`s that are set made cells (`cellVars`). -/
+def loopShape? (g : String) (mv : List String) (body : SExpr) (grp : List String := [g])
+    (frames : Bool := false) (params : List String := []) : Option (List SExpr × SExpr) :=
+  (loopShapeOf? g mv body grp frames params).orElse fun _ =>
+    let set := setsIn body
+    let vs := ((localDecls body).map (·.1)).eraseDups.filter fun x =>
+      set.contains x && anyE (fun | .decl _ y (some _) true _ => y == x | _ => false) body
+    if !frames || vs.isEmpty then none else loopShapeOf? g mv (cellVars vs body) grp frames params
 
 /-- How many `if`s with a `return` in them `e` has (#283). -/
 partial def countRetIfs (e : SExpr) : Nat :=
@@ -2036,7 +2174,11 @@ structure FirstReturn where
     `sets`, then `true`). -/
 structure FirstLift where
   sourceContext : SourceContext := {}
+  /-- The packets of the source exits its clauses have, a `return` and a
+      `break` that leaves them, the function's own exits as a refining
+      lift's are (`Refine.Exits`); the caller exits again (`firstUnpack`). -/
   returnExit : Option FirstReturn := none
+  breakExit : Option (List SExpr) := none
   /-- A stage request supplies classes rather than a callable helper. -/
   stageOnly : Bool := false
   resumes : List ForResume := []
@@ -2122,11 +2264,15 @@ def firstBody (helper : String) (p : Pos) (b : String) (bty : Option STy) (cls :
     | .app q (.ident _ "$recTo") (.ident _ h :: as) false => some (recur (some h) (helperOf h) q as k)
     | _ => none
   let alt (a : SExpr) : SExpr := match a with
-    | .app q (.ident _ "$then") [c, .ident _ h, _] false =>
-      -- (#283) a call with code after it: its frame on the continuation
+    | .app q (.ident _ "$then") (c :: .ident _ h :: _ :: pre) false =>
+      -- (#283) a call with code after it: its frame on the continuation,
+      -- after its prefix, if any
       let j := (frames.findIdx? (·.1 == h)).getD 0
       let lives := (((frames[j]?).map (·.2.1)).getD []).map (SExpr.ident q ·)
-      (call [.app q (.ident q "$framePush") (.int q (j : Int) :: .ident q "$K" :: lives) false] c).getD a
+      match call [.app q (.ident q "$framePush") (.int q (j : Int) :: .ident q "$K" :: lives) false] c, pre with
+      | some e, [.block _ ss] => .block q (ss ++ [e])
+      | some e, _ => e
+      | none, _ => a
     | a =>
       match call (kont a.pos) a with
       | some c => c

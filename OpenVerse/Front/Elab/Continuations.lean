@@ -234,6 +234,11 @@ def refineTagOf (ctx : Ctx) : String :=
 def firstReturns (rest : List SExpr) : Bool :=
   (Refine.findPart (fun | .ret .. => true | _ => false) false (.block { line := 0, col := 0 } rest)).isSome
 
+/-- Whether the clauses have a `break` that leaves them (not one in a loop
+    of theirs). -/
+def firstBreaks (rest : List SExpr) : Bool :=
+  (Refine.findPart Refine.isBreak true (.block { line := 0, col := 0 } rest)).isSome
+
 /-- The source return type remains separate from a helper's packet type. -/
 def firstReturnType (ctx : Ctx) : STy :=
   let ty := match ctx.refineExits.ret with
@@ -251,23 +256,34 @@ def firstReturnKey (ctx : Ctx) (rest : List SExpr) : String :=
       |>.filter fun (n, _) => Choice.styMentions [n] ty
     "_return:" ++ reprStr (ty, bounds)
 
-/-- Normal success has all bound names. A return instead has the saved
-    operand; both outcomes copy back captures before the caller proceeds. -/
-def firstResult (p : Pos) (name : String) (binds sets : List Local) (source : Option Ty) :
-    STy × SExpr × Option Choice.FirstReturn :=
+/-- Normal success has all bound names. A return (of the source type, when
+    the clauses have one) instead has the saved operand, and a break that
+    leaves them (`breaks`) says so; every outcome copies back captures before
+    the caller proceeds. The packet: an option of the bound names, the
+    copies, then an option of the operand and a `logic` for the break, those
+    the clauses have. Gives its type, the normal one, and the exits'. -/
+def firstResult (p : Pos) (name : String) (binds sets : List Local) (source : Option Ty) (breaks : Bool) :
+    STy × SExpr × Option Choice.FirstReturn × Option (List SExpr) :=
   let values := binds.map fun l => SExpr.ident p l.name
   let copied := sets.map fun l => SExpr.ident p l.name
-  match source with
-  | none => (.tup ((binds ++ sets).map (·.ty.toSTy) ++ [.name "logic"]),
-      .tuple p (values ++ copied ++ [.ident p "true"]), none)
-  | some ty =>
-    let ret := STy.tup (.opt (.tup (binds.map (·.ty.toSTy))) :: sets.map (·.ty.toSTy) ++ [.opt ty.toSTy, .name "logic"])
-    let value := if ty == .void then none else some (name ++ "$return")
-    let saved := (value.map (SExpr.ident p ·)).getD (.tuple p [])
-    let normal := SExpr.tuple p (.optionLit p (.tuple p values) :: copied ++ [.ident p "false", .ident p "true"])
-    let normal := SExpr.decl p (name ++ "$normal") (some ret) false normal
-    let returned := SExpr.tuple p (.ident p "false" :: copied ++ [.optionLit p saved, .ident p "true"])
-    (ret, normal, some { ty := ty.toSTy, value, packet := [returned] })
+  if source.isNone && !breaks then
+    (.tup ((binds ++ sets).map (·.ty.toSTy) ++ [.name "logic"]),
+      .tuple p (values ++ copied ++ [.ident p "true"]), none, none)
+  else
+    let retC := source.toList.map fun ty => STy.opt ty.toSTy
+    let brkC : List STy := if breaks then [.name "logic"] else []
+    let ret := STy.tup (.opt (.tup (binds.map (·.ty.toSTy))) :: sets.map (·.ty.toSTy) ++ retC ++ brkC ++ [.name "logic"])
+    let noRet := source.toList.map fun _ => SExpr.ident p "false"
+    let brk (b : Bool) : List SExpr := if breaks then [.ident p (toString b)] else []
+    let packet (bound : SExpr) (ret : List SExpr) (broke : Bool) :=
+      SExpr.tuple p (bound :: copied ++ ret ++ brk broke ++ [.ident p "true"])
+    let normal := SExpr.decl p (name ++ "$normal") (some ret) false
+      (packet (.optionLit p (.tuple p values)) noRet false)
+    let returnExit := source.map fun ty =>
+      let value := if ty == .void then none else some (name ++ "$return")
+      let saved := (value.map (SExpr.ident p ·)).getD (.tuple p [])
+      { ty := ty.toSTy, value, packet := [packet (.ident p "false") [.optionLit p saved] false] }
+    (ret, normal, returnExit, if breaks then some [packet (.ident p "false") noRet true] else none)
 
 /-- Infer the callee's actual type arguments before joining its result.
     An expected result type must not widen the input's instance first. -/
@@ -278,19 +294,24 @@ def continuationBind (p : Pos) (lift : Choice.FirstLift) (name : String) (call :
     let raw := name ++ "$instance"
     [.decl p raw none false call, .decl p name (some ty) false (.ident p raw)]
 
-/-- Update source captures before returning or exposing the normal bindings. -/
+/-- Update source captures before returning, breaking (here, where the
+    clauses are, which may be a function of their own again) or exposing
+    the normal bindings. -/
 def firstUnpack (p : Pos) (l : Choice.FirstLift) (packet : String) : List SExpr :=
   let get (base : String) (j : Nat) := SExpr.app p (.ident p base) [.int p (j : Int)] false
-  if l.returnExit.isNone then
+  if l.returnExit.isNone && l.breakExit.isNone then
     l.binds.zipIdx.map (fun (n, i) => .decl p n none (l.varBinds.contains n) (get packet i)) ++
       l.sets.zipIdx.map (fun (n, j) => .set p (.ident p n) none (get packet (l.binds.length + j)))
   else
     let returned := packet ++ "$returned"
     let normal := packet ++ "$normal"
-    l.sets.zipIdx.map (fun (n, j) => .set p (.ident p n) none (get packet (j + 1))) ++
-      [.ite p [.decl p returned none false (.query p (get packet (l.sets.length + 1)))]
-        (.ret p (some (.ident p returned))) none,
-        .decl p normal none false (.query p (get packet 0))] ++
+    let exits := l.sets.length + 1
+    let returning : List SExpr := if l.returnExit.isNone then [] else
+      [.ite p [.decl p returned none false (.query p (get packet exits))] (.ret p (some (.ident p returned))) none]
+    let breaking : List SExpr := if l.breakExit.isNone then [] else
+      [.ite p [.query p (get packet (exits + returning.length))] (Refine.liftedBreak p) none]
+    l.sets.zipIdx.map (fun (n, j) => .set p (.ident p n) none (get packet (j + 1))) ++ returning ++ breaking ++
+      [.decl p normal none false (.query p (get packet 0))] ++
       l.binds.zipIdx.map (fun (n, j) => .decl p n none (l.varBinds.contains n) (get normal j))
 
 /-- A lazy helper owns its producer and the complete prepared suffix. That
@@ -438,6 +459,7 @@ partial def escapesAlways (ss : List SExpr) : Bool :=
   match ss.getLast? with
   | some (.ret ..) => true
   | some (.ite _ _ t (some u)) => escapesAlways (Choice.stmtsOf t) && escapesAlways (Choice.stmtsOf u)
+  | some (.app _ (.ident _ "$deferExits") [_, e] false) => escapesAlways [e]
   | e => e.any Refine.isBreak
 
 /-- How a refined branch's value leaves its function (#243): not at all
@@ -509,10 +531,7 @@ def refineExits (p : Pos) (body : SExpr) (elseE : Option SExpr) (vars : List (St
   let body := Choice.renameE ren body
   -- Mark breaks that leave this lift. A nested lift forwards the marker
   -- after copying back into this frame, just as it forwards a return.
-  let body := Choice.mapE (fun
-    | .brk q => some (Refine.liftedBreak q)
-    | l@(.loop ..) => some l
-    | _ => none) body
+  let body := Refine.liftBreaks body
   let ss := Choice.stmtsOf body
   let (stmts, value) : List SExpr × Option SExpr := match vm, ss.getLast? with
     | .raw _, some (.decl q y _ _ _) | .opt _, some (.decl q y _ _ _) => (ss, some (.ident q y))
@@ -634,13 +653,13 @@ def firstLiftOf (ctx c2 : Ctx) (p : Pos) (g : String) (lp : List SExpr) (b : Str
     | some c =>
       pure (rest.map (selfQualify ctx c))
     | none => pure rest
-  -- (a `return`, or a `break` that leaves them, would leave the function
-  -- of its own, not the consumer's)
+  -- (a `return`, or a `break` that leaves them, leaves the function of its
+  -- own with a packet, and the consumer leaves as it says: `firstResult`)
   let source ← if firstReturns rest then
       some <$> (resolveTy ctx.types p (firstReturnType ctx)).run' { env := ctx.types }
     else pure none
-  if (Refine.findPart (fun | .brk _ => true | _ => false) true (.block p rest)).isSome then
-    throw "where the clauses after it have a break that leaves them"
+  let breaks := firstBreaks rest
+  let rest := if breaks then rest.map Refine.liftBreaks else rest
   if suspends then throw "as the clauses after it suspend"
   let pnames := ps.filterMap fun | .ident _ n => some n | _ => none
   let pls ← pnames.mapM fun n => match ctx.lookup n with
@@ -692,7 +711,8 @@ def firstLiftOf (ctx c2 : Ctx) (p : Pos) (g : String) (lp : List SExpr) (b : Str
   let kPs : List SParam := kTy.toList.map fun t => { name := "$K", ty := t.toSTy }
   let params : List SParam := pls.map (fun l => { name := l.name, ty := l.ty.toSTy }) ++ kPs ++ capPs
   let specs := (if heap.isEmpty then ["computes"] else heap) ++ ["decides"]
-  let (ret, normal, returnExit) := firstResult p name bls sets source
+  let (ret, normal, returnExit, breakExit) := firstResult p name bls sets source breaks
+  let normal? := if returnExit.isSome || breakExit.isSome then some normal else none
   let setsT := sets.map fun l => (l.name, l.ty.toSTy)
   let recArgs (target : Option String) (q : Pos) (as : List SExpr) : List SExpr × List SExpr :=
     let h := target.getD g
@@ -719,7 +739,7 @@ def firstLiftOf (ctx c2 : Ctx) (p : Pos) (g : String) (lp : List SExpr) (b : Str
         | (.ident _ n, t) => pure { name := n, ty := t.toSTy }
         | _ => throw "internal: a $member parameter (#283)"
       let body := Choice.firstBody (nameOf h) p b bty hcls htail rest binds setsT capArgs (some vty.toSTy) nameOf
-        (fun target => recArgs (some (target.getD h))) (if source.isSome then some normal else none) frames retName
+        (fun target => recArgs (some (target.getD h))) normal? frames retName
       pure (STop.fn p (nameOf h) (hparams ++ kPs ++ capPs ++ typeParams) tps specs ret
         (pruneConstructHints ctx (nameOf h) body))
     | _ => throw "internal: a $member (#283)"
@@ -728,12 +748,12 @@ def firstLiftOf (ctx c2 : Ctx) (p : Pos) (g : String) (lp : List SExpr) (b : Str
   let retFns : List STop := kPs.map fun kp =>
     STop.fn p retName ({ name := "$V", ty := vty.toSTy } :: kp :: capPs ++ typeParams) tps specs ret
       (ctx.choiceCoercionBody <| pruneConstructHints ctx retName
-        (Choice.firstReturnBody p b bty rest binds setsT (some vty.toSTy) (if source.isSome then some normal else none) frames))
-  return { key, pos := p, name, returnExit, sourceContext := sourceContextOf ctx, inlineScopes := ctx.inlineScopes, liftTag := ctx.liftTag,
+        (Choice.firstReturnBody p b bty rest binds setsT (some vty.toSTy) normal? frames))
+  return { key, pos := p, name, returnExit, breakExit, sourceContext := sourceContextOf ctx, inlineScopes := ctx.inlineScopes, liftTag := ctx.liftTag,
            params := params ++ typeParams, tparams := tps, specs, ret,
            body := ctx.choiceCoercionBody <| pruneConstructHints ctx name
              (Choice.firstBody name p b bty cls tail rest binds setsT capArgs (some vty.toSTy) nameOf recArgs
-               (if source.isSome then some normal else none) frames retName),
+               normal? frames retName),
            binds, sets := sets.map (·.name),
            args := pnames.map (SExpr.ident p ·) ++ kPs.map (fun _ => .ident p "false") ++
              caps.map (fun l => .ident p l.name) ++ typeArgs,
@@ -784,11 +804,13 @@ def contLiftOf (ctx c2 : Ctx) (p : Pos) (b : String) (alts rest : List SExpr)
     | some c =>
       pure (rest.map (selfQualify ctx c))
     | none => pure rest
-  -- (a `return`, or a `break` that leaves them, would leave the function)
+  -- (a `return`, or a `break` that leaves them, leaves the function with a
+  -- packet, and the caller leaves as it says: `firstResult`)
   let source ← if firstReturns rest then
       some <$> (resolveTy ctx.types p (firstReturnType ctx)).run' { env := ctx.types }
     else pure none
-  if (Refine.findPart (fun | .brk _ => true | _ => false) true (.block p rest)).isSome then throw "a break"
+  let breaks := firstBreaks rest
+  let rest := if breaks then rest.map Refine.liftBreaks else rest
   let caps : List Local := (Choice.namesUsed (ctx.choiceCoercionBody (.block p rest))).eraseDups.filterMap ctx.lookup
   let setNames := Choice.setsIn (.block p rest)
   let sets := caps.filter fun l => l.mutable && setNames.contains l.name
@@ -804,14 +826,14 @@ def contLiftOf (ctx c2 : Ctx) (p : Pos) (b : String) (alts rest : List SExpr)
   -- and it may call what is asked for only in the next elaboration, a
   -- `$first…` or `$refine…`, whose effects this one cannot see)
   let heap := ["reads", "writes", "allocates"].filter fun k => ctx.fnFx.contains k || fxB.any (·.1 == k)
-  let (ret, tup, returnExit) := firstResult p name bls sets source
+  let (ret, tup, returnExit, breakExit) := firstResult p name bls sets source breaks
   -- (the `var`s it sets, copied from parameters named `m$in`, and given back)
   let copies := sets.map fun l => SExpr.decl p l.name (some l.ty.toSTy) true (.ident p s!"{l.name}$in")
   let params : List SParam := { name := b, ty := bl.ty.toSTy } ::
     caps.map fun l => { name := if sets.any (·.name == l.name) then s!"{l.name}$in" else l.name, ty := l.ty.toSTy }
   -- (`$firstP`: the clauses are lifted already, the consumer's, which lifting
   -- again would bind twice, as for #275's functions)
-  return { key, pos := p, name, returnExit, sourceContext := sourceContextOf ctx, inlineScopes := ctx.inlineScopes, liftTag := ctx.liftTag,
+  return { key, pos := p, name, returnExit, breakExit, sourceContext := sourceContextOf ctx, inlineScopes := ctx.inlineScopes, liftTag := ctx.liftTag,
            params := params ++ typeParams, tparams := tps,
            specs := (if heap.isEmpty then ["computes"] else heap) ++ ["decides"],
            ret,
@@ -847,6 +869,12 @@ def forStageBodyAs (body inner : SExpr) : SExpr :=
     if n == "$forReturns" || n == "$forReturnBody" then .app p f [metadata, mode, inner] false else inner
   | _ => inner
 
+/-- After a generated loop that a source break crosses (a lazy producer's,
+    a first success's `firstE`): break again when the break flag is set,
+    else `otherwise`. The break ran its cleanup where it is written. -/
+def forwardSourceBreak (flag : Nat) (otherwise : Expr) : Expr :=
+  .ite (.prim .query [.local flag]) (.seq .brk (.prim .userErr [])) otherwise
+
 /-- Keep source breaks aimed at their original loop after adding the
     producer's private abort loop. Its own outcome abort is left alone. -/
 partial def forwardForBreaks (abort escaped : Nat) : Expr → Expr
@@ -879,7 +907,7 @@ partial def forBodySafe (ctx : Ctx) (body : SExpr) : Bool :=
   -- generic/default argument bindings) inside the body. Their ownership is
   -- checked when that consumer elaborates; they do not escape the helper.
   let safeMarkers := ["$sourceSuper", "$methodMiss", "$methodCast", "$methodCase", "$methodType", "$methodParams", "$inlineScope", "$inlineScopeEnd", "$inline", "$choice", "$excl", "$alt", "$firstP", "$first", "$each", "$noLift", "$fxOf",
-    "$forReturns", "$forReturnBody", "$forClauseExits", "$choiceOperation", "$choiceGenericOperation", "$choiceCoercions", "$choiceDictionary", "$defer", "$loop", "$rec", "$recTo", "$group", "$member", "$returnTail",
+    "$forReturns", "$forReturnBody", "$forClauseExits", "$choiceOperation", "$choiceGenericOperation", "$choiceCoercions", "$choiceDictionary", "$defer", "$deferExits", "$loop", "$rec", "$recTo", "$group", "$member", "$returnTail",
     "$tparams", "$params", "$defaults", "$paramDefault", "$freeNames", "$declNames", "$callArgs", "$callSingleton", "$then"]
   let rec blocked (e : SExpr) : Bool :=
     match e with
@@ -1431,17 +1459,46 @@ def choiceForwardArguments (written values : List SExpr) : List SExpr :=
     | .decl p n _ _ _ => if n.startsWith "?" then .decl p n none false value else value
     | _ => value
 
+/-- Use the ordinary argument packer before discovering a dictionary.
+    Literal tuple fields stay separate for contextual generic inference;
+    a computed tuple stays one value, evaluated once in the caller. -/
+def choicePackArguments (sig : Sig) (args : List SExpr) (method : Bool) : List SExpr :=
+  let sig := if method then { sig with params := sig.params.drop 1, pnames := sig.pnames.drop 1 } else sig
+  let args := packCallArgs (args.head?.map SExpr.pos |>.getD { line := 0, col := 0 }) sig args false
+  let positional := args.filter fun | .decl _ n .. => !n.startsWith "?" | _ => true
+  let named := args.filter fun | .decl _ n .. => n.startsWith "?" | _ => false
+  let count := sig.params.length - sig.named.length
+  match positional with
+  | [.tuple _ fields] => if count != 1 then fields ++ named else args
+  | _ => args
+
+/-- Written arguments may share even when alternatives pack them into
+    different aggregate parameters. Keep each adapter's ordinary binder. -/
+def choicePositionalTypes (parameters : List Ty) (args : List SExpr) (raw : Bool) : Option (List Ty) := do
+  if raw then
+    if let [.tup [element]] := parameters then
+      if args.length == 1 then return [element]
+  if args.length == parameters.length then return parameters
+  match parameters, args with
+  | [.void], [] => some []
+  | [.tup elements], _ => if args.length == elements.length then some elements else none
+  | [.arr element], _ => if args.length > 1 then some (List.replicate args.length element) else none
+  | _, [_] => if parameters.length > 1 then some [Ty.tup parameters] else none
+  | _, _ => none
+
 /-- Parameter types in evaluation order. Omitted defaults stay in the
     original method call, in its own declaration and type scope. -/
-def choiceCallInputs (sig : Sig) (args : List SExpr) : Option (List Ty × Bool) := do
+def choiceCallInputs (sig : Sig) (args : List SExpr) (raw : Bool := false) : Option (List Ty × Bool) := do
   let npos := sig.params.length - sig.named.length - 1
   let positional := args.filter fun | .decl _ n .. => !n.startsWith "?" | _ => true
   let named := args.filterMap fun | .decl _ n .. => if n.startsWith "?" then some (n.drop 1).toString else none | _ => none
-  if positional.length != npos || named.eraseDups.length != named.length then none else do
+  if named.eraseDups.length != named.length then none else do
+  let positionalTypes := sig.params.drop 1 |>.take npos
+  let supplied ← choicePositionalTypes positionalTypes positional raw
   let indices ← named.mapM fun n => (sig.named.findIdx? (·.1 == n)).map (npos + ·)
   let omitted := sig.named.filter fun (n, _) => !named.contains n
   if omitted.any (·.2.isNone) then none else
-    some ((List.range npos ++ indices).map fun i => sig.params[i + 1]!, !omitted.isEmpty)
+    some (supplied ++ indices.map (fun i => sig.params[i + 1]!), !omitted.isEmpty)
 
 def choiceDefaultContext (ctx : Ctx) (body : SExpr) : SExpr :=
   let p := body.pos
@@ -1473,9 +1530,8 @@ partial def choiceOperationContexts (ctx : Ctx) (body : SExpr) : List (SExpr × 
     later generators have supplied their values. Only receiver-dependent
     columns independent of those method parameters belong to its object. -/
 def choiceGenericOperation (ctx : Ctx) (stem : String) (receiver : SExpr) (receiverTy : Ty) (ops : ChoiceOperations)
-    (call : SExpr) (cases : List ChoiceOperationCase) : Option ChoiceOperations := do
-  let .app p (.member _ _ method) arguments bracket := call | none
-  let arguments := choiceOrderedArguments arguments
+    (call : SExpr) (arguments : List SExpr) (cases : List ChoiceOperationCase) : Option ChoiceOperations := do
+  let .app p (.member _ _ method) _ bracket := call | none
   let borrows := cases.any (·.omittedDefaults)
   let count := (cases.head?.map (·.methodVars.length)).getD 0
   if count == 0 || cases.any (·.methodVars.length != count) then none else do
@@ -1761,14 +1817,35 @@ def choiceOperations (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx)
       pure result
     let some receiverTy := receiverTy | continue
     if !(match receiverTy with | .param .. => true | .struct .. => setter.isSome | _ => false) then continue
+    let packings := ops.plan.instances.filterMap fun instanceTypes => do
+      let actual := (receiverTy.subst instanceTypes).subst ctx.types.tvars
+      let .struct cls types := actual | none
+      if callable then
+        let some (arity, _) := FnValues.parseName cls | none
+        let sig : Sig := { idx := 0, name := cls, params := types.take arity, ret := .void, decides := false, isConst := false }
+        some (choicePackArguments sig arguments false)
+      else if setter.isNone && !isField then
+        let owner ← ctx.methodDecl? cls method
+        let sig ← ctx.sig? s!"{owner}.{method}"
+        some (choicePackArguments sig arguments true)
+      else none
+    let packed := if packings.length == ops.plan.instances.length then
+      packings.head?.filter fun first => packings.all (· == first) else none
+    let rawPacking := packed.isNone
+    let fallbackArguments := if setter.isSome || isField then arguments else
+      match arguments.filter (fun | .decl _ n .. => !n.startsWith "?" | _ => true) with
+      | [.tuple _ fields] => fields ++ arguments.filter (fun | .decl _ n .. => n.startsWith "?" | _ => false)
+      | _ => arguments
+    let arguments := packed.getD fallbackArguments
     let mut cases : List ChoiceOperationCase := []
     for instanceTypes in ops.plan.instances do
       let actual := (receiverTy.subst instanceTypes).subst ctx.types.tvars
       if callable then
         let .struct name types := actual | break
         let some (arity, specs) := FnValues.parseName name | break
-        if arity != arguments.length || types.length != arity + 1 || specs.contains "decides" != bracket then break
-        cases := cases ++ [{ receiver := actual, inputs := types.dropLast, result := types.getLast!, specs }]
+        if types.length != arity + 1 || specs.contains "decides" != bracket then break
+        let some inputs := choicePositionalTypes types.dropLast arguments rawPacking | break
+        cases := cases ++ [{ receiver := actual, inputs, result := types.getLast!, specs }]
       else if let some op := setter then
         let .struct cls classArgs := actual | break
         if !ctx.types.isRefClass cls || !ctx.types.isVarField cls method then break
@@ -1819,7 +1896,7 @@ def choiceOperations (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx)
         let methodVars := own.zipIdx.map fun ((_, b), i) => (s!"$operationMethod{i}", b)
         let methodRename := own.zip methodVars |>.map fun ((old, _), (name, bound)) => (old, Ty.param name bound)
         if signature.decides != bracket then break
-        let some (supplied, omittedDefaults) := choiceCallInputs signature arguments | break
+        let some (supplied, omittedDefaults) := choiceCallInputs signature arguments rawPacking | break
         -- An omitted value can determine a method instance at this call.
         -- A dictionary quantified over that parameter would instead have
         -- to check the default at every rigid instance, which can reject
@@ -1848,7 +1925,7 @@ def choiceOperations (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx)
       continue
     let bracket := if indexed then cases.any (·.indexedDecides) else bracket
     if cases.any (!·.methodVars.isEmpty) then
-      if let some generic := choiceGenericOperation sourceCtx stem receiver receiverTy ops call cases then ops := generic
+      if let some generic := choiceGenericOperation sourceCtx stem receiver receiverTy ops call arguments cases then ops := generic
       continue
     let borrows := cases.any (·.omittedDefaults)
     let (initialPlan, operationReceiverTy) := if indexed then

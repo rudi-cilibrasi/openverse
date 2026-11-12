@@ -8,6 +8,48 @@ tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
 limit="${CHOICE_SIZE_TIMEOUT:-120}"
 # Keep modes sorted on separate lines so independent additions merge cleanly.
 kinds=(
+  callpacking-tuplevar-first
+  callpacking-tuplevar-for
+  callpacking-tuplevar-waiting
+  callpacking-tuple-generic-first
+  callpacking-tuple-generic-for
+  callpacking-tuple-generic-waiting
+  callpacking-literal-generic-first
+  callpacking-literal-generic-for
+  callpacking-literal-generic-waiting
+  callpacking-arraypack-first
+  callpacking-arraypack-for
+  callpacking-arraypack-waiting
+  callpacking-tuplepack-first
+  callpacking-tuplepack-for
+  callpacking-tuplepack-waiting
+  callpacking-singleton-first
+  callpacking-singleton-for
+  callpacking-singleton-waiting
+  callpacking-unit-first
+  callpacking-unit-for
+  callpacking-unit-waiting
+  callpacking-named-first
+  callpacking-named-for
+  callpacking-named-waiting
+  callpacking-callable-first
+  callpacking-callable-for
+  callpacking-callable-waiting
+  callpacking-callable-array-first
+  callpacking-callable-array-for
+  callpacking-callable-array-waiting
+  callpacking-mixedpack-first
+  callpacking-mixedpack-for
+  callpacking-mixedpack-waiting
+  callpacking-mixedliteral-first
+  callpacking-mixedliteral-for
+  callpacking-mixedliteral-waiting
+  callpacking-mixedsingle-first
+  callpacking-mixedsingle-for
+  callpacking-mixedsingle-waiting
+  callpacking-mixedunit-first
+  callpacking-mixedunit-for
+  callpacking-mixedunit-waiting
   objectpath-plain-varying-boundary-first
   objectpath-plain-varying-boundary-for
   objectpath-plain-varying-boundary-waiting
@@ -267,6 +309,17 @@ kinds=(
   clause-return-composed
   clause-return-exclusive
   clause-return-refined
+  first-break-composed
+  first-break-exclusive
+  first-break-lazy
+  first-break-refined
+  block-exits-first-composed
+  block-exits-first-exclusive
+  block-exits-first-lazy
+  block-exits-first-refined
+  block-exits-for-composed
+  block-exits-for-exclusive
+  block-exits-for-refined
   composed
   construct-failure
   construct-first
@@ -526,6 +579,37 @@ for kind in "${kinds[@]}"; do
     python3 - "$kind" "$count" >"$tmp/p.verse" <<'PY'
 import sys
 kind, count = sys.argv[1], int(sys.argv[2])
+if kind.startswith('callpacking-'):
+    rest=kind.removeprefix('callpacking-')
+    shape,mode=rest.rsplit('-',1)
+    n=count
+    print('Dup(X:t where t:type)<computes>:t=X|X')
+    if shape in ['callable','callable-array']:
+        params='X:int,Y:int' if shape=='callable' else 'X:[]int'
+        for name,fx in [('FA','<reads><writes>'),('FB','<transacts>')]:print(name+'('+params+')'+fx+':int=1')
+    for cls,tag in [('ca','a'),('cb','b')]:
+        if shape in ['callable','callable-array']:
+            inputs=':int,:int' if shape=='callable' else ':[]int';fx='<reads><writes>' if tag=='a' else '<transacts>'
+            fields='F:type{_('+inputs+')'+fx+':int}='+('FA' if tag=='a' else 'FB')
+        else:
+            params=('X:tuple(int,int)' if tag=='a' else 'X:[]int') if shape=='mixedpack' else ('X:tuple(int,int)' if tag=='a' else 'X:int,Y:int') if shape=='mixedliteral' else ('X:tuple(int)' if tag=='a' else 'X:int') if shape=='mixedsingle' else ('X:tuple()' if tag=='a' else '') if shape=='mixedunit' else 'X:int,Y:int' if shape=='tuplevar' else 'X:u,Y:u where u:type' if shape=='tuple-generic' else 'A:[]u,B:?u,C:u,?Stamp:int=3 where u:type' if shape=='literal-generic' else 'X:[]u where u:type' if shape=='arraypack' else 'X:tuple(int,int)' if shape in ['tuplepack','named'] else 'X:tuple(int)' if shape=='singleton' else 'X:tuple()'
+            if shape=='named':params+=',?Stamp:int=3'
+            ret='u' if shape=='tuple-generic' else 'int';body='X' if shape=='tuple-generic' else '1'
+            fields='M('+params+')<computes>:'+ret+'='+body
+        print(cls+':=class{'+fields+'}')
+    clauses=[f'A{i}:=(Dup(ca{{}})|Dup(cb{{}}))' for i in range(n)];calls=[]
+    for i in range(n):
+        args='PairValue' if shape in ['tuplevar','tuple-generic','callable'] else '(array{},false,7)' if shape=='literal-generic' else '1,2' if shape in ['arraypack','tuplepack','named','callable-array','mixedpack'] else '(1,2)' if shape=='mixedliteral' else '7' if shape in ['singleton','mixedsingle'] else ''
+        calls.append(f'A{i}.'+('F' if shape.startswith('callable') else 'M')+'('+args+')')
+    params='V:t where t:type' if shape=='tuple-generic' else ''
+    print('Run('+params+')'+('<suspends>' if mode=='waiting' else '')+':int=')
+    print('    PairValue:='+('(V,V)' if shape=='tuple-generic' else '(1,2)'))
+    if mode=='first':print('    if('+','.join(clauses+calls)+')then 1 else -1')
+    else:
+        body='block{'+(';'.join(calls))+';Sleep(0.001);0}' if mode=='waiting' else '0'
+        print('    Rows:=for('+','.join(clauses+([] if mode=='waiting' else calls))+'):'+body+'\n    Rows.Length')
+    print('Main()'+('<suspends>' if mode=='waiting' else '')+':void=Print("{Run('+('7' if shape=='tuple-generic' else '')+')}")')
+    sys.exit(0)
 if kind.startswith('objectpath-'):
     _,op,rest=kind.split('-',2)
     shape,mode=rest.rsplit('-',1)
@@ -1489,6 +1573,58 @@ if kind.startswith('clause-break-'):
     args = ','.join('dup(int){A:=1,B:=2}' if i%2==0 else 'dup(string){A:="s",B:="t"}' for i in range(count))
     print(f'Main()<suspends>:void = Print("{{Run({args})}}")')
     sys.exit(0)
+if kind.startswith('first-break-'):
+    # (#283) a break in an if's clauses, after the first of its choices: the
+    # clauses after a composed one are compiled once (#335), and so are an
+    # effectful lazy generator's (#246), each giving the break back
+    print('pair(a:type,b:type) := class { A:a; B:b }')
+    print('dup(t:type) := class(pair(t,t)) { C:int=4 }')
+    print('cell := class { var N:int=0 }')
+    print('Early(N:int):int =\n    if(N<0):return 0\n    N|N+1')
+    print('Lazy(H:cell,N:int)<transacts><decides>:int =\n    N>=0\n    set H.N+=1\n    N|Lazy[H,N-1]')
+    params = ','.join(f'P{i}:pair(a{i},b{i})' for i in range(count))
+    tparams = ','.join(f'a{i}:type,b{i}:type' for i in range(count))
+    shape = kind[len('first-break-'):]
+    values = {'composed': ['(Two(0)|Two(2))'] * count, 'exclusive': ['Early(0)'] * count,
+              'lazy': ['Lazy[H,1]'] * count}.get(shape,
+              [f'if(D{i}:=dup[P{i}])then(D{i}.C|D{i}.C+1)else 0' for i in range(count)])
+    clauses = [f'A{i}:={v}' for i, v in enumerate(values)]
+    clauses[1:1] = ['set Total+=A0', f'if(A0={5 if shape == "refined" else 1})then break else 0']
+    clauses.append('A0+A1<0')
+    print(f'Run(H:cell,{params} where {tparams})<suspends>:int =\n    var Total:int=0\n    defer:Print("source {{Total}}")\n    Sleep(0.0)\n    loop:\n        defer:Print("loop {{Total}}")\n        if({",".join(clauses)}):\n            Print("bad")\n        Print("bad suffix")\n        break\n    Total')
+    args = ','.join('dup(int){A:=1,B:=2}' if i%2==0 else 'dup(string){A:="s",B:="t"}' for i in range(count))
+    print(f'Main()<suspends>:void = Print("{{Run(cell{{}},{args})}}")')
+    sys.exit(0)
+if kind.startswith('block-exits-'):
+    # (#283) a block with choices and a defer: of its own, lifted into an
+    # if's condition or a for's clauses, with a break after each choice and a
+    # return at the end: each exit runs the block's cleanup, placed once for
+    # each exit, however many paths reach it
+    print('pair(a:type,b:type) := class { A:a; B:b }')
+    print('dup(t:type) := class(pair(t,t)) { C:int=4 }')
+    print('cell := class { var N:int=0 }')
+    print('Early(N:int):int =\n    if(N<0):return 0\n    N|N+1')
+    print('Lazy(H:cell,N:int)<transacts><decides>:int =\n    N>=0\n    set H.N+=1\n    N|Lazy[H,N-1]')
+    params = ','.join(f'P{i}:pair(a{i},b{i})' for i in range(count))
+    tparams = ','.join(f'a{i}:type,b{i}:type' for i in range(count))
+    consumer, shape = kind[len('block-exits-'):].split('-')
+    values = {'composed': ['(Two(0)|Two(2))'] * count, 'exclusive': ['Early(0)'] * count,
+              'lazy': ['Lazy[H,1]'] * count}.get(shape,
+              [f'if(D{i}:=dup[P{i}])then(D{i}.C|D{i}.C+1)else 0' for i in range(count)])
+    selected = 5 if shape == 'refined' else 1
+    stmts = ['defer:Print("block {Total}")']
+    for i, v in enumerate(values):
+        stmts += [f'A{i}:={v}', f'set Total+=A{i}', f'if(A{i}={selected if i == 0 else 9})then break else 0']
+    stmts += ['if(A1=9)then return -1 else 0', 'A0+A1<0']
+    block = 'block{' + ';'.join(stmts) + '}'
+    if consumer == 'first':
+        use = f'if(Z:={block}):\n            Print("bad")\n        Print("bad suffix")'
+    else:
+        use = f'R:=for(Z:={block}):\n            set Total+=1\n            Z\n        Print("rows {{R.Length}}")'
+    print(f'Run(H:cell,{params} where {tparams})<suspends>:int =\n    var Total:int=0\n    defer:Print("source {{Total}}")\n    Sleep(0.0)\n    loop:\n        defer:Print("loop {{Total}}")\n        {use}\n        break\n    Total')
+    args = ','.join('dup(int){A:=1,B:=2}' if i%2==0 else 'dup(string){A:="s",B:="t"}' for i in range(count))
+    print(f'Main()<suspends>:void = Print("{{Run(cell{{}},{args})}}")')
+    sys.exit(0)
 if kind.startswith('return-defer-'):
     method = kind.endswith('method-first')
     if method:
@@ -1953,6 +2089,24 @@ PY
       fi
       exit 1
     }
+    if [[ $kind == first-break-* && $count == 4 ]]; then
+      selected=1
+      [[ $kind == first-break-refined ]] && selected=5
+      printf 'loop %s\nsource %s\n%s\n' "$selected" "$selected" "$selected" >"$tmp/expected"
+      timeout "$limit" "$root/.lake/build/bin/openverse" run "$tmp/p.verse" >"$tmp/lean.out"
+      timeout "$limit" "$root/runtime/build/cverse" "$tmp/p.vbc" >"$tmp/c.out"
+      diff -u "$tmp/expected" "$tmp/lean.out"
+      diff -u "$tmp/expected" "$tmp/c.out"
+    fi
+    if [[ $kind == block-exits-first-* && $count == 4 ]]; then
+      selected=1
+      [[ $kind == *-refined ]] && selected=5
+      printf 'block %s\nloop %s\nsource %s\n%s\n' "$selected" "$selected" "$selected" "$selected" >"$tmp/expected"
+      timeout "$limit" "$root/.lake/build/bin/openverse" run "$tmp/p.verse" >"$tmp/lean.out"
+      timeout "$limit" "$root/runtime/build/cverse" "$tmp/p.vbc" >"$tmp/c.out"
+      diff -u "$tmp/expected" "$tmp/lean.out"
+      diff -u "$tmp/expected" "$tmp/c.out"
+    fi
     if [[ $kind == castclause-* && $count == 4 ]]; then
       printf '%s\n' "16 4" >"$tmp/expected"
       timeout "$limit" "$root/.lake/build/bin/openverse" run "$tmp/p.verse" >"$tmp/lean.out"
@@ -1993,7 +2147,7 @@ PY
       diff -u "$tmp/expected" "$tmp/lean.out"
       diff -u "$tmp/expected" "$tmp/c.out"
     fi
-    if [[ ( $kind == named-* || $kind == conversion-* || $kind == indexwrite-* || $kind == compoundindex-* || $kind == mapwrite-* || $kind == multiindex-* || $kind == objectpath-* ) && $count == 4 ]]; then
+    if [[ ( $kind == named-* || $kind == conversion-* || $kind == indexwrite-* || $kind == compoundindex-* || $kind == mapwrite-* || $kind == multiindex-* || $kind == objectpath-* || $kind == callpacking-* ) && $count == 4 ]]; then
       expected=256
       if [[ $kind == *-first ]]; then
         expected=1

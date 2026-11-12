@@ -24,6 +24,8 @@ case ${3:-} in
   --compound-query-path-writes) mode_args+=(--compound-query-path-writes); tag=compound-query-path-write-dictionary ;;
   --reference-path-writes) mode_args+=(--reference-path-writes); tag=reference-path-write-dictionary ;;
   --compound-reference-path-writes) mode_args+=(--compound-reference-path-writes); tag=compound-reference-path-write-dictionary ;;
+  --packed-methods) mode_args+=(--packed-methods); tag=packed-method-dictionary ;;
+  --packed-default-methods) mode_args+=(--packed-default-methods); tag=packed-default-method-dictionary ;;
   --writes) mode_args+=(--writes); tag=write-dictionary ;;
   --result-aliases) mode_args+=(--result-aliases); tag=result-alias-dictionary ;;
   --aliases) mode_args+=(--aliases); tag=alias-dictionary ;;
