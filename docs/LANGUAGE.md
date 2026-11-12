@@ -1065,10 +1065,13 @@ Main():void =
   once the value is computed, before the clauses after it, last registered
   first. A value whose clauses fail runs none, since what they did is
   rolled back with them. A `return` or `break` inside the block that leaves
-  it does not run them, for now:
+  it runs them too, as for any scope ([defer](#defer)): after the cleanup of
+  the scopes inside the block it leaves, and after a `return`'s value:
 
   ```verse
   for (X := block{ defer: Print("d"); Y := 1 | 2; Y * 10 }) { Print(X) }   # d 10 d 20
+  loop:
+      if (X := block{ defer: Print("d"); Y := 1 | 2; if (Y = 2) then break; Y }, X > 5) then …   # d
   ```
 
   The operands of `and`, and the right of `or`, are lifted as blocks

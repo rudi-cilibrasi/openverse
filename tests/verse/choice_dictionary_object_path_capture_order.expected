@@ -1,0 +1,19 @@
+outer a
+inner a
+rhs a
+body 13
+outer a
+inner a
+rhs a
+body 26
+outer b
+inner b
+rhs b
+body 39
+outer b
+inner b
+rhs b
+body 52
+done 4 52
+state ok
+exit=0

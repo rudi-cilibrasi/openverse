@@ -443,6 +443,13 @@ RT2 = RT and 'nort2' not in flags
 # after its returning path are reached only on fallthrough. Keep this draw
 # independent of the expression generator and its existing seed streams.
 RET_DEFER = RT2 and random.Random(seed * 1000003 + 283391).random() < 0.5
+# ---- #283, with ret: at times the test's return is in a block of its own with a choice of its
+# own and a defer: (its clauses lifted into the test's), returning on some of its values:
+#   Xn := block{ defer: Print("rbN"); Wn := a | b; if (Wn op L) then return else true; Wn }
+# The defer: runs as each value leaves the block, and at the return, which leaves it, before the
+# test's own: LANGUAGE.md's rule for any scope, whether its clauses are lifted or not. A
+# generator of its own decides, so seeds keep their other programs.
+RRB = random.Random(seed * 1000003 + 283392)
 # ---- #283, flag frames (on with lazy; noframes turns it off): a generator's call of
 # itself may have code after it, which runs on each of the call's values (a return
 # frame): an alternative `Gz0(N - 1, A) + e` (e any value, with no var), `L + Gz0(…)`
@@ -1729,6 +1736,9 @@ def show_c(c):
         return f"logic{{{show_cl(c[1], '; ')}}}?"
     if t == 'ret':
         return f"if ({show(c[1])[1:-1]}) then return else true"
+    if t == 'rblk':
+        return (f'{c[1]} := block{{ defer: Print("{c[5]}"); {c[2]} := {show(c[3])}; '
+                f'if ({show(c[4])[1:-1]}) then return else true; {c[2]} }}')
     raise AssertionError(c)
 
 
@@ -2258,6 +2268,18 @@ def run_clauses(cl, st, k, mode):
         if first_inner(lambda s, kk: ev(c[1], s, kk, 'first'), st) is not None:
             raise Return(st)       # (leaves the test with the state as it is)
         return nxt(st)
+    if t == 'rblk':
+        # (each value of the block's choice: its return leaves the block, running its
+        # defer:, else the value does as it leaves the block)
+        def krb(v, s):
+            s.binds[c[2]] = v
+            leaving = first_inner(lambda s2, kk: ev(c[4], s2, kk, 'first'), s) is not None
+            s.out.append(c[5])
+            if leaving:
+                raise Return(s)
+            s.binds[c[1]] = v
+            return nxt(s)
+        return ev(c[3], st, krb, mode)
     if t == 'logic':
         res = first_inner(lambda s, kk: run_clauses(c[1], s, lambda s2: kk(None, s2), 'first'), st)
         if res is None:
@@ -2520,6 +2542,14 @@ for ti in range(NT):
         sc = [c[1] for c in cl[:pos] if c[0] in ('bind', 'range')]
         cl.insert(pos, ('ret', ('cmp', leaf(sc, vars_), [(R.choice(OPS), leaf(sc, vars_))])))
         has_ret = True
+        if RRB.random() < 0.4 and not lift_block() and (not MV or PROD[0] * 2 <= CTX['plim']):
+            if MV:
+                PROD[0] *= 2
+            w = fresh("W")
+            alts = [('tell', fresh("t"), ('lit', RRB.randint(-1, 5))), ('lit', RRB.randint(-1, 5))]
+            RRB.shuffle(alts)
+            cl[pos] = ('rblk', fresh("X"), w, ('choice', alts),
+                       ('cmp', ('ref', w), [(RRB.choice(OPS), ('lit', RRB.randint(-1, 5)))]), fresh("rb"))
     show_state = ('Print("st {' + vars_[0] + '} {' + vars_[1] + '} {K.C} {J.C} '
                   '{A[0] or 9}{A[1] or 9}{A[2] or 9}{A[3] or 9} {F}' + (' {Cn}' if meth else '') + '")')
 

@@ -17,9 +17,17 @@ partial def elabSetWith (elabE : Ctx → SExpr → Option Ty → EM R) (elabMemb
     return r
   -- (`$withOld(O, R)`: for `op=`, the old value was read into `O` before
   -- the code that computes `R`, as `set` evaluates, #208)
-  let (rhs, oldIn) : SExpr × Option Expr := match rhs0 with
-    | .app _ (.ident _ "$withOld") [.ident _ o, r] false => (r, (ctx.lookup o).map (fun l => Expr.local l.slot))
-    | r => (r, none)
+  -- Private indexed adapters have already read/validated the leaf in the
+  -- caller. Reading it again here would move bounds failure before the
+  -- saved-value arithmetic, and prevent a map key deleted by the RHS
+  -- from being reinserted. Legacy $withOld retains its source validation.
+  let (rhs, oldIn, preloaded) ← match rhs0 with
+    | .app _ (.ident _ "$choiceWithOld") [.ident _ o, r] false => do
+      let some binding := ctx.lookup o | eerr p "internal: missing saved indexed value"
+      pure (r, some (Expr.local binding.slot), true)
+    | .app _ (.ident _ "$withOld") [.ident _ o, r] false =>
+      pure (r, (ctx.lookup o).map (fun l => Expr.local l.slot), false)
+    | r => pure (r, none, false)
   -- the right side at the target's type; for `set F *= N` of a float, an
   -- int too (#127), so without it when that fails
   let rhsAt (t : Ty) : EM R :=
@@ -206,7 +214,7 @@ partial def elabSetWith (elabE : Ctx → SExpr → Option Ty → EM R) (elabMemb
         -- Verse: `set X += e` is `set X = X + e`; #58): the rest of the path,
         -- read now, gives the old leaf (it fails as `P` would, and is read
         -- again for the rebuild below)
-        if op.isSome then
+        if op.isSome && !preloaded then
           let mut c2 := cur
           for k2 in [k:stepsA.size] do
             let (_, f2, _) := stepsA[k2]!
@@ -234,9 +242,10 @@ partial def elabSetWith (elabE : Ctx → SExpr → Option Ty → EM R) (elabMemb
       | none => coerce p r leafTy
       | some o =>
         -- (only an `op=` reads the old value: a read can have an effect)
-        let old ← match oldLeaf with
-          | some t => pure (Expr.local t)
-          | none => readStep lc lty lf lkey
+        let old ← if preloaded then pure (oldIn.getD (.prim .userErr [])) else
+          match oldLeaf with
+            | some t => pure (Expr.local t)
+            | none => readStep lc lty lf lkey
         combine old leafTy o r
     let tv ← fresh leafTy
     pre := pre.push (.assign tv leaf)
