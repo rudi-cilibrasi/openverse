@@ -125,6 +125,24 @@ constrained dictionary types independently of capture order. Dummy captures,
 mutable proof fields and declaration facts alone do not create these fields;
 construction still supplies real dictionaries from the current frame.
 
+Method values with a fixed receiver can adapt their parameter and result
+types through actual bound evidence. An argument conversion runs from the
+expected parameter to the method's parameter; the result conversion runs
+from the method's result to the expected result. The adapter stores the
+required whole relations, including constraints on nominal type applications,
+as readonly proof fields. Its private type parameters and identity include
+those relations after renaming. Construction must supply real current-frame
+dictionaries; declaration facts and dummy type values cannot create an
+adapter. Whole-tuple proofs remain whole and do not imply component facts.
+
+This preserves the existing distinction between adapting a method expression
+and converting a previously materialized function value. The latter still
+requires matching parameter/result types under the ordinary function-value
+rules; a class upper bound does not introduce function-object variance.
+`method-value-stored-refusal` and its concrete control document that baseline
+restriction. The positive method-value controls cover escaping captures,
+once-only receiver evaluation, mutation, rollback and cancellation.
+
 Member lookup uses actual nominal views. Root and interior mutation preserve
 the source storage type, evaluate indices/keys before traversal, and perform
 each bound view after reading its source container. Augmented updates retain
@@ -179,6 +197,14 @@ measure progress, an isolated experimental checkout relaxes only that guard;
 every positive still must pass Core admission, its exact Lean oracle and the C
 oracle. A generic unsupported-feature diagnostic is not a correct negative
 result. No admission bypass is published.
+
+The FIFO integration fixtures exercise rush-arm promotion before and after an
+event signal, a rush inside a spawned task, multiple continuing arms, and a
+sleep-only rush under both scheduler modes. Bounded and concrete versions
+share independent state/order/cleanup oracles. The source owner remains alive
+through the event signals and final wait; returning earlier would correctly
+cancel its continuing arms. These cases also require identical bytecode with
+the choice-free profile, as do the method-value adaptation controls.
 
 The existing Core checker and semantic proofs apply to the emitted Core under
 their stated hypotheses. They do not prove that bound inference, dictionary
