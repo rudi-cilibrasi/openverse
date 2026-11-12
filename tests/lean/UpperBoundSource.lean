@@ -48,7 +48,7 @@ def main (args : List String) : IO Unit := do
     "callable-generic", "callable-generic-control"]
   let containers := ["container-view-basic", "container-view-basic-control",
     "container-view-state", "container-view-state-control", "container-view-waiting", "container-view-waiting-control",
-    "container-view-generic", "container-view-generic-control"]
+    "container-view-generic", "container-view-generic-control", "container-view-interior", "container-view-interior-control"]
   let profiled := fifo ++ methodValues ++ callables ++ containers
   let negative := ["choice-refusal", "default-refusal", "override-refusal", "overload-interface-refusal",
     "overload-ancestor-refusal", "overload-optional-refusal", "overload-empty-refusal", "overload-scope-refusal",
@@ -61,7 +61,9 @@ def main (args : List String) : IO Unit := do
     "method-value-argument-refusal", "method-value-result-refusal",
     "method-value-stored-refusal", "method-value-stored-control-refusal",
     "callable-bracket-refusal", "callable-decides-refusal", "callable-suspends-refusal",
-    "callable-effect-refusal", "callable-effect-control-refusal", "callable-unproved-refusal"]
+    "callable-effect-refusal", "callable-effect-control-refusal", "callable-unproved-refusal",
+    "container-view-unproved-refusal", "container-view-query-unproved-refusal", "container-view-element-refusal",
+    "container-view-method-refusal", "container-view-effect-refusal", "container-view-storage-refusal"]
   let mut failures := 0
   let cases := (positive ++ fifo ++ methodValues ++ callables ++ containers ++ negative).map (fun name => (name, fifo.contains name, name)) ++
     ["fifo-bound-sleep", "fifo-bound-sleep-control"].map (fun name => (name, false, name ++ "-default"))

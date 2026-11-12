@@ -85,7 +85,11 @@ partial def elabSetWith (elabE : Ctx → SExpr → Option Ty → EM R) (elabMemb
   let general : List (Pos × Option String × Option SExpr) → Bool
     | steps@(_ :: _ :: _) => !steps.isEmpty
     | steps => steps.any (·.2.1 == some "?")
-  if let some (root, steps) := path lhs then if general steps then
+  let opaqueIndex (root : String) (steps : List (Pos × Option String × Option SExpr)) : Bool :=
+    (ctx.lookup root).any (fun binding => match binding.ty with
+      | .param .. => steps.any (fun (_, field, key) => field == some "?" || key.isSome)
+      | _ => false)
+  if let some (root, steps) := path lhs then if general steps || opaqueIndex root steps then
     -- `set X.p = e` with a path of two or more steps (Book of Verse §3.5, §9.3):
     -- the indices and keys are evaluated once, left to right; then each
     -- intermediate container is read (an index or an intermediate key that
@@ -108,9 +112,14 @@ partial def elabSetWith (elabE : Ctx → SExpr → Option Ty → EM R) (elabMemb
     for (sp, f?, k?) in steps do
       rawTys := rawTys.push ty
       let mut view := none
-      if let (some field, .param ..) := (f?, ty) then
+      if let .param .. := ty then
         let input ← fresh ty
-        let receiver ← elabBoundReceiverWith elabE ctx sp ⟨.local input, ty⟩ field
+        let source : R := ⟨.local input, ty⟩
+        let receiver ← match f?, k? with
+          | some "?", _ => elabContainerReceiverWith elabE ctx sp source (fun | .opt _ => true | _ => false) "query"
+          | some field, _ => elabBoundReceiverWith elabE ctx sp source field
+          | none, some _ => elabContainerReceiverWith elabE ctx sp source (fun | .arr _ | .map .. => true | _ => false) "index"
+          | _, _ => pure source
         if receiver.ty != ty then
           view := some (input, receiver)
           ty := receiver.ty
@@ -144,6 +153,11 @@ partial def elabSetWith (elabE : Ctx → SExpr → Option Ty → EM R) (elabMemb
       match tysA[k]! with
       | .struct sn _ => ctx.types.isRefClass sn
       | _ => false
+    for (view, index) in views.toList.zipIdx do
+      if let some (_, receiver) := view then
+        let container := match receiver.ty with | .arr _ | .map .. | .opt _ => true | _ => false
+        if container && !(refLevel?.any (index < ·)) then
+          eerr p s!"cannot write through a container upper bound: source storage must retain {rawTys[index]!.show}"
     if let some kr := refLevel? then
       let (sp, f?, _) := steps.toArray[kr]!
       match tysA[kr]!, f? with

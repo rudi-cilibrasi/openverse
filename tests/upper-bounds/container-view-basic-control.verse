@@ -20,7 +20,8 @@ Main():void=
     Print("map {M(1)} {M(2)}")
     T:=Tuple((7,"s"))
     Print("tuple {T(1)} {T(2)} {T(0)(1)}")
-    Print("option {Option(option{7})} {Option(false)}")
+    Empty:?int=false
+    Print("option {Option(option{7})} {Option(Empty)}")
     Yes:logic=true
     No:logic=false
     if(Truth(Yes)?)then Print("logic true")else Print("bad")
