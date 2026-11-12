@@ -1331,12 +1331,113 @@ partial def loopTailOK (plain groupOK : SExpr → Bool) : SExpr → Bool
   | .ite _ cs t (some u) => cs.all plain && loopTailOK plain groupOK t && loopTailOK plain groupOK u
   | e => groupOK e
 
+/-- Visit the value leaves of a recursive tail, keeping its path scopes as
+    they are (`mapLoopTail` puts each behind a taking boundary instead). -/
+partial def mapLoopLeaves (leaf : SExpr → SExpr) : SExpr → SExpr
+  | .app p (.ident q "$returnTail") [.block r ss] false =>
+    let (pre, value) := loopBlockParts r ss
+    .app p (.ident q "$returnTail") [.block r (pre ++ [mapLoopLeaves leaf value])] false
+  | .ite p cs t u => .ite p cs (mapLoopLeaves leaf t) (u.map (mapLoopLeaves leaf))
+  | e => leaf e
+
+/-- Literals and names, which read the same after a call as before it, since
+    a callee cannot change its caller's names. Not a field: the call may
+    change it. -/
+partial def inert : SExpr → Bool
+  | .int .. | .char .. | .char32 .. | .float .. | .ident .. => true
+  | .str _ ps => ps.all fun | .text _ => true | .code _ => false
+  | .neg _ e => inert e
+  | .tuple _ es | .arrayLit _ es => es.all inert
+  | _ => false
+
+/-- (#283) An alternative that is a call of the recursive group (`isCall`)
+    with code after it: the call, evaluated before anything else in the
+    alternative but inert operands, and the alternative with the name `h` in
+    the call's place, its return frame, which runs on each of the call's
+    values. Everything after the call is `plain`. -/
+partial def frameOf? (isCall plain : SExpr → Bool) (h : String) (e : SExpr) : Option (SExpr × SExpr) :=
+  let go := frameOf? isCall plain h
+  -- (the operand with the call: those before it inert, those after it plain)
+  let inList (es : List SExpr) : Option (SExpr × List SExpr) := do
+    let i ← es.findIdx? (!plain ·)
+    let (c, ei) ← go es[i]!
+    guard ((es.take i).all inert && (es.drop (i + 1)).all plain)
+    return (c, es.set i ei)
+  if isCall e then some (e, .ident e.pos h) else
+  match e with
+  | .bin p o a b => do
+    let (c, as) ← inList [a, b]
+    return (c, .bin p o as[0]! as[1]!)
+  | .neg p a => do let (c, a') ← go a; return (c, .neg p a')
+  | .member p a m => do let (c, a') ← go a; return (c, .member p a' m)
+  | .cmp p a rest => do
+    guard (rest.all (plain ·.2))
+    let (c, a') ← go a
+    return (c, .cmp p a' rest)
+  | .tuple p es => do let (c, es') ← inList es; return (c, .tuple p es')
+  | .arrayLit p es => do let (c, es') ← inList es; return (c, .arrayLit p es')
+  | .app p f@(.ident ..) as br => do
+    guard (as.all fun | .decl .. => false | _ => true)
+    let (c, as') ← inList as
+    return (c, .app p f as' br)
+  | .str p ps => do
+    let codes := ps.filterMap fun | .code c => some c | .text _ => none
+    let (c, codes') ← inList codes
+    let (ps', _) := ps.foldl (fun (acc, rest) part => match part, rest with
+      | .code _, x :: xs => (acc ++ [SPart.code x], xs)
+      | part, xs => (acc ++ [part], xs)) (([] : List SPart), codes')
+    return (c, .str p ps')
+  | .block p (.decl q x t false rhs :: ss) => do
+    guard (ss.all plain)
+    let (c, rhs') ← go rhs
+    return (c, .block p (.decl q x t false rhs' :: ss))
+  | _ => none
+
+/-- (#283) A tail with return frames: each alternative that is a call of the
+    group with code after it (`frameOf?`) as `$then(call, h, frame)`. -/
+def framedTail (isRec plain : SExpr → Bool) (tail : SExpr) : SExpr :=
+  mapLoopLeaves (fun v =>
+    let frame (a : SExpr) : SExpr := if isRec a || plain a then a else
+      let h := s!"$frame{a.pos.line}_{a.pos.col}"
+      match frameOf? isRec plain h a with
+      | some (c, k) => .app a.pos (.ident a.pos "$then") [c, .ident a.pos h, k] false
+      | none => a
+    match alts? v with
+    | some as => mk v.pos (as.map frame)
+    | none => frame v) tail
+
+/-- (#283) A body whose last choice, or call of the group, is bound by a
+    clause with plain code after it, `S; X := a | b; T; v`: the clauses `S`,
+    and the choice of `block{X := a; T; v}` and `block{X := b; T; v}`, whose
+    calls of the group then have return frames (`framedTail`). -/
+def lastChoiceTail (plain : SExpr → Bool) (cls : List SExpr) (last : SExpr) :
+    Option (List SExpr × SExpr) := do
+  let i ← cls.findIdx? (!plain ·)
+  guard ((cls.drop (i + 1)).all plain)
+  let .decl q x t false rhs := cls[i]! | none
+  let after := cls.drop (i + 1) ++ [last]
+  let alt (a : SExpr) : SExpr := .block a.pos (.decl q x t false a :: after)
+  return (cls.take i, match alts? rhs with
+    | some as => mk rhs.pos (as.map alt)
+    | none => alt rhs)
+
+/-- Why a recursive function with several values whose values are computed
+    at the call must be effect-free, and when it is taken lazily instead. -/
+def eagerWhy : String :=
+  "such a function must be <computes>, keep no local state, and reach nothing that prints or calls Err(), " ++
+  "as all its values are computed at a call (#235), unless it is taken lazily: clauses, then a choice whose " ++
+  "alternatives are values or calls of its recursive group, each call followed by no choice, no other such call " ++
+  "and no set of a var (#246, #283)"
+
 /-- The shape of a recursive function with several values that its
     consumers take lazily (#246), after normalizing source returns: plain
     clauses and conditional tail paths, each leaf a choice or value whose
-    alternatives are whole calls of the recursive group or plain values. -/
-def loopShape? (g : String) (mv : List String) (body : SExpr) (grp : List String := [g]) :
-    Option (List SExpr × SExpr) := do
+    alternatives are whole calls of the recursive group or plain values.
+    With `frames` (#283), an alternative may also be a call of the group
+    with code after it, which runs on each of its values (`$then`), and the
+    body's last choice may be bound by a clause with plain code after it. -/
+def loopShape? (g : String) (mv : List String) (body : SExpr) (grp : List String := [g])
+    (frames : Bool := false) : Option (List SExpr × SExpr) := do
   let ss := stmtsOf body
   let last ← ss.getLast?
   let cls := ss.dropLast
@@ -1353,8 +1454,18 @@ def loopShape? (g : String) (mv : List String) (body : SExpr) (grp : List String
         | .decl _ n _ _ rhs => n.startsWith "?" && plain rhs
         | _ => plain a
     | _ => false
+  let (cls, tail) := if frames && !cls.all plain then
+      (lastChoiceTail plain cls last).getD (cls, tail) else (cls, tail)
   let tail := completeLoopTail isRec false tail
-  let groupOK (e : SExpr) : Bool := ((alts? e).getD [e]).all fun a => isRec a || plain a
+  let tail := if frames then framedTail isRec plain tail else tail
+  -- (a frame's code sets no `var` bound before it: it runs on a copy of
+  -- the names; an object's field it may set)
+  let isVar (n : String) : Bool := anyE (fun | .decl _ x _ true _ => x == n | _ => false) body
+  let framed : SExpr → Bool
+    | .app _ (.ident _ "$then") [c, _, k] false =>
+      isRec c && plain k && (setsIn k).all fun n => (localsOf k).contains n || !isVar n
+    | _ => false
+  let groupOK (e : SExpr) : Bool := ((alts? e).getD [e]).all fun a => isRec a || plain a || framed a
   if cls.all plain && loopTailOK plain groupOK tail then some (cls, tail) else none
 
 /-- How many `if`s with a `return` in them `e` has (#283). -/
@@ -1757,7 +1868,7 @@ partial def inlineCalls (mv : List (String × MFn)) (e : SExpr) (recs : List Str
       -- expression, its own calls marked, for its consumer to run)
       if loops.contains g then
         let grp := (groups.lookup g).getD [g]
-        let some (cls, tail) := loopShape? g (mv.map (·.1)) (renameTypes ρ (renameE ren f.body)) grp
+        let some (cls, tail) := loopShape? g (mv.map (·.1)) (renameTypes ρ (renameE ren f.body)) grp (frames := true)
           | throw s!"{p.show}: internal: the shape of {g} (#246)"
         let ps := f.params.map fun sp => SExpr.ident q (tag sp.name)
         -- (#283) a function of a strongly connected group: the others'
@@ -1771,7 +1882,7 @@ partial def inlineCalls (mv : List (String × MFn)) (e : SExpr) (recs : List Str
             let tagH (n : String) : String := s!"${h.replace "::" "_"}_{n}_{site}"
             let renH := (fh.params.map (·.name) ++ localsOf fh.body).eraseDups.map fun n => (n, tagH n)
             let ρH := fh.tparams.map fun tp => (tp.name, memberTypeName h tp.name)
-            let some (clsH, tailH) := loopShape? h (mv.map (·.1)) (renameTypes ρH (renameE renH fh.body)) grp
+            let some (clsH, tailH) := loopShape? h (mv.map (·.1)) (renameTypes ρH (renameE renH fh.body)) grp (frames := true)
               | throw s!"{p.show}: internal: the shape of {h} (#283)"
             members := members ++ [.app q (.ident q "$member") [.ident q h,
               .block q (fh.params.map fun sp => SExpr.ident q (tagH sp.name)), .block q clsH,
@@ -2035,23 +2146,41 @@ structure FirstLift where
     clauses after the call (`rest`, the value bound to `b` first) and the
     tuple of what they bind, each call of itself a call of `helper` with the
     captured names after its arguments. The `var`s the clauses set are
-    copied first from parameters named `m$in`. -/
+    copied first from parameters named `m$in`. With return frames (#283,
+    `frames`: each one's hole, lives and code), the continuation `$K` comes
+    after the arguments: a call with code after it pushes its frame on it,
+    and a value is given to it, as the lazy loop does. -/
 def firstBody (helper : String) (p : Pos) (b : String) (bty : Option STy) (cls : List SExpr) (tail : SExpr)
     (rest : List SExpr) (binds : List String) (sets : List (String × STy)) (caps : List SExpr)
     (ret : Option STy := none) (helperOf : String → String := fun _ => helper)
     (recArgs : Option String → Pos → List SExpr → List SExpr × List SExpr := fun _ _ as => ([], as))
-    (normalResult : Option SExpr := none) : SExpr :=
+    (normalResult : Option SExpr := none) (frames : List (String × List String × SExpr) := []) : SExpr :=
   let tup : SExpr := normalResult.getD (.tuple p (binds.map (SExpr.ident p ·) ++ sets.map (fun (m, _) => SExpr.ident p m) ++
     [.ident p "true"]))
-  let recur (target : Option String) (h : String) (q : Pos) (as : List SExpr) : SExpr :=
+  let kont (q : Pos) : List SExpr := if frames.isEmpty then [] else [.ident q "$K"]
+  let recur (target : Option String) (h : String) (q : Pos) (as : List SExpr) (k : List SExpr) : SExpr :=
     let (pre, args) := recArgs target q as
-    let call := SExpr.app q (.ident q h) (args ++ caps) true
+    let call := SExpr.app q (.ident q h) (args ++ k ++ caps) true
     if pre.isEmpty then call else .block q (pre ++ [call])
-  let alt (a : SExpr) : SExpr := match a with
-    | .app q (.ident _ "$rec") as false => recur none helper q as
+  let call (k : List SExpr) : SExpr → Option SExpr
+    | .app q (.ident _ "$rec") as false => some (recur none helper q as k)
     -- (a call of another function of the group, #283: its own function)
-    | .app q (.ident _ "$recTo") (.ident _ h :: as) false => recur (some h) (helperOf h) q as
+    | .app q (.ident _ "$recTo") (.ident _ h :: as) false => some (recur (some h) (helperOf h) q as k)
+    | _ => none
+  let alt (a : SExpr) : SExpr := match a with
+    | .app q (.ident _ "$then") [c, .ident _ h, _] false =>
+      -- (#283) a call with code after it: its frame on the continuation
+      let j := (frames.findIdx? (·.1 == h)).getD 0
+      let lives := (((frames[j]?).map (·.2.1)).getD []).map (SExpr.ident q ·)
+      (call [.app q (.ident q "$framePush") (.int q (j : Int) :: .ident q "$K" :: lives) false] c).getD a
     | a =>
+      match call (kont a.pos) a with
+      | some c => c
+      | none =>
+      -- (a value, given to the continuation's frames, #283)
+      let a := if frames.isEmpty then a else
+        .app a.pos (.ident a.pos "$frameApply") (.ident a.pos "$K" :: a :: frames.map fun (h, lives, code) =>
+          .app a.pos (.ident a.pos "$frame") [.ident a.pos h, .block a.pos (lives.map (SExpr.ident a.pos ·)), code] false) false
       -- (the value at the function's result type, then at the binding's)
       let v := match ret with
         | some t => SExpr.app a.pos (.ident a.pos "$first") [.block a.pos [.decl a.pos s!"{b}$v" (some t) false a,
@@ -2717,7 +2846,8 @@ def methodFns (tops : List STop) (reserved : List String := []) (picks : List (P
     stack cells, and the uses of methods whose family an elaboration is
     to pick (`methodFns`, by `picks`). -/
 def inlineMulti (tops : List STop) (reserved : List String := []) (eager : List String := [])
-    (picks : List (Pos × String) := []) : Except String (List STop × Bool × List (Pos × String)) := do
+    (picks : List (Pos × String) := []) (lazy : List String := []) :
+    Except String (List STop × Bool × List (Pos × String)) := do
   -- (methods with several values as functions first, #283; `reserved`:
   -- the members of built-in types and of the prelude)
   let (tops, sites) ← methodFns tops reserved picks
@@ -2805,11 +2935,20 @@ def inlineMulti (tops : List STop) (reserved : List String := []) (eager : List 
     return seen
   let groupOf (g : String) : List String :=
     g :: (mfs.map (·.1)).filter fun h => h != g && (reachSet g).contains h && (reachSet h).contains g
-  let groupOK (g : String) : Bool :=
+  let groupOK (g : String) (frames : Bool) : Bool :=
     let grp := groupOf g
     grp.all fun h => match mfs.lookup h with
-      | some f => ((callees.lookup h).getD []).all grp.contains && (loopShape? h mv f.body grp).isSome
+      | some f => ((callees.lookup h).getD []).all grp.contains && (loopShape? h mv f.body grp frames).isSome
       | none => false
+  -- (#283) one whose calls of its group have code after them (return
+  -- frames) is taken lazily too, unless its values can be computed at the
+  -- call: when its group is <computes> and keeps no local state, as before,
+  -- and nothing it runs prints or calls Err() (`lazy`, after a first
+  -- elaboration that found it did)
+  let computable (g : String) : Bool := (groupOf g).all fun h => !lazy.contains h &&
+    match rawMfs.lookup h with
+    | some f => f.fx.contains "computes" && !anyE (fun | .set .. | .decl _ _ _ true _ => true | _ => false) f.body
+    | none => false
   let loops : List String := recs.filter fun g =>
     let grp := groupOf g
     -- An incomplete tail erases its values. A returning any-valued group
@@ -2822,10 +2961,11 @@ def inlineMulti (tops : List STop) (reserved : List String := []) (eager : List 
         | i@(.ite ..) => !isBranchy.complete i && (namesUsed i).any grp.contains
         | _ => false) f.body).getD false
     if grp.any eager.contains || erasesRecursive then false else
-    match mfs.lookup g with
-    | some f => if (groupOf g).length == 1 then (callees.lookup g).getD [] == [g] && (loopShape? g mv f.body).isSome
-      else groupOK g
-    | none => false
+    let shaped (frames : Bool) : Bool := match mfs.lookup g with
+      | some f => if (groupOf g).length == 1 then (callees.lookup g).getD [] == [g] && (loopShape? g mv f.body (frames := frames)).isSome
+        else groupOK g frames
+      | none => false
+    shaped false || (!computable g && shaped true)
   let loopGroups : List (String × List String) :=
     loops.filterMap fun g => let grp := groupOf g; if grp.length > 1 then some (g, grp) else none
   let mut needAll := recs.filter (!loops.contains ·)
@@ -2855,7 +2995,7 @@ def inlineMulti (tops : List STop) (reserved : List String := []) (eager : List 
   for g in needAll do
     let some f := rawMfs.lookup g | continue
     let why (w : String) : String :=
-      s!"{f.pos.show}: {shownFnName g} has several values and is recursive, or called by a recursive one, {w}: such a function must be <computes>, keep no local state, and reach nothing that prints or calls Err(), as all its values are computed at a call (#235)"
+      s!"{f.pos.show}: {shownFnName g} has several values and is recursive, or called by a recursive one, {w}: {eagerWhy}"
     if !f.fx.contains "computes" then throw (why "and it is not <computes>")
     if anyE (fun | .set .. | .decl _ _ _ true _ => true | _ => false) f.body then
       throw (why "and it has a var or a set")

@@ -337,6 +337,26 @@ partial def elabExprMarkersWith
     -- (#283) a block or construction kept: elaborated as it is, its choice
     -- refused with why
     elabE { ctx with liftWhy := why } e exp
+  -- (#283) a lazily taken call's function of its own with return frames:
+  -- frame `j` pushed on the continuation `k`, holding the lives' values,
+  -- and a value given to the continuation's frames, as the lazy loop does
+  | .app p (.ident _ "$framePush") (.int _ j :: k :: lives) false =>
+    let rk ← elabE ctx k none
+    let some tys := frameLivesOf rk.ty | eerr p "internal: a frame's continuation (#283)"
+    let vals ← lives.mapM fun a => do return (← elabE ctx a none).e
+    return ⟨framePush ctx tys j.toNat vals rk.e, rk.ty⟩
+  | .app p (.ident _ "$frameApply") (k :: leaf :: frames) false =>
+    let rk ← elabE ctx k none
+    let some tys := frameLivesOf rk.ty | eerr p "internal: a frame's continuation (#283)"
+    let rl ← elabE ctx leaf exp
+    let rty := exp.getD rl.ty
+    let fs ← (frames.zip tys).mapM fun
+      | (.app _ (.ident _ "$frame") [.ident _ h, .block _ lives, code] false, ts) =>
+        pure ({ hole := h, code, ctx, lives := (lives.zip ts).filterMap fun
+          | (.ident _ n, t) => some { name := n, slot := 0, ty := t, mutable := false }
+          | _ => none } : LoopFrame)
+      | _ => eerr p "internal: a return frame (#283)"
+    return ⟨← frameApplyWith elabE ctx p fs rty rk.e (← coerce leaf.pos rl rty), rty⟩
   | .app p (.ident _ "$firstP") [.block _ items] false =>
     -- (#246) `first{…}` of clauses that are lifted already (a consumer's,
     -- taken into a lazily taken call's function of its own): not again,

@@ -1,0 +1,17 @@
+at 1 got 1
+at 2 got 2
+at 3 got 3
+v 4
+at 2 got 2
+at 3 got 3
+v 4
+at 3 got 3
+v 4
+--
+--
+none
+at 1 got 1
+at 2 got 2
+at 3 got 3
+first 4
+exit=0
