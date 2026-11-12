@@ -87,6 +87,10 @@ partial def fillElse (e : SExpr) (arm : SExpr → SExpr := id) : SExpr :=
     line 2); nothing outside one. -/
 def sitePart (site : String) : String := if site.isEmpty then "" else site ++ "@"
 
+/-- The name made for what is bound of kind `k` from `p` (`$c12_5` for a
+    choice at 12:5), with an inlined call's `site` in it (`sitePart`). -/
+def madeName (k site : String) (p : Pos) : String := s!"${k}{sitePart site}{p.line}_{p.col}"
+
 /-- (#283) An `if` with something
     to lift in a branch that `isBranchy` leaves there: a call with several
     values, or a choice inside a branch's expression (`has`, `hasLiftable`,
@@ -119,7 +123,7 @@ def plainBranches (has : SExpr → Bool) (e : SExpr) : Bool :=
     and the path with those names in their places: `set` evaluates them
     before the new value. -/
 partial def hoistPath (q : Pos) (l : SExpr) (site : String := "") : List SExpr × SExpr :=
-  let nm (n : Nat) : String := s!"$i{sitePart site}{q.line}_{q.col}_{n}"
+  let nm (n : Nat) : String := s!"{madeName "i" site q}_{n}"
   let rec go (n : Nat) : SExpr → List SExpr × SExpr × Nat
     | .app r base args true =>
       let (h, base', n) := go n base
@@ -148,7 +152,7 @@ def setPrefix (q : Pos) (l : SExpr) (op : Option String) (site : String := "") :
   match op with
   | none => (h, none, l')
   | some _ =>
-    let o := s!"$o{sitePart site}{q.line}_{q.col}"
+    let o := madeName "o" site q
     (h ++ [.decl q o none false l'], some o, l')
 
 /-- The new value of a `set` whose old one is in `o?`. -/
@@ -306,7 +310,7 @@ def liftsAsIf (e : SExpr) : Bool :=
 def orIf (site : String) : SExpr → SExpr
   | e@(.orE p a b) =>
     if !liftsHere b then e else
-    let t := s!"$or{sitePart site}{p.line}_{p.col}"
+    let t := madeName "or" site p
     .ite p [.decl p t none false (.block a.pos [a])] (.ident p t) (some (.block b.pos [b]))
   | e => e
 
@@ -319,7 +323,7 @@ def orIf (site : String) : SExpr → SExpr
 def setClauses (p : Pos) (l : SExpr) (op : Option String) (as : List SExpr) (q : Pos) (site : String := "") :
     List SExpr × SExpr :=
   let (h, o?, l') := setPrefix q l op site
-  let c := s!"$c{sitePart site}{q.line}_{q.col}"
+  let c := madeName "c" site q
   match op with
   | none =>
     if as.any hasLiftable then
@@ -333,7 +337,7 @@ def setClauses (p : Pos) (l : SExpr) (op : Option String) (as : List SExpr) (q :
     bind the choice first. -/
 def normClauses (cs : List SExpr) (site : String := "") : List SExpr :=
   cs.flatMap fun c =>
-    let nm (p : Pos) : String := s!"$c{sitePart site}{p.line}_{p.col}"
+    let nm (p : Pos) : String := madeName "c" site p
     match c with
     | .app p (.ident _ "$choice") _ false => [.decl p (nm p) none false c]
     | .set p l op rhs => match alts? rhs with
@@ -390,7 +394,7 @@ structure LiftSt where
 abbrev LM := StateM LiftSt
 
 def LM.fresh (p : Pos) (k : String) : LM String :=
-  modifyGet fun s => (s!"${k}{sitePart s.site}{p.line}_{p.col}_{s.next}", { s with next := s.next + 1 })
+  modifyGet fun s => (s!"{madeName k s.site p}_{s.next}", { s with next := s.next + 1 })
 
 /-- Add `c` to the clauses lifted so far. -/
 def LM.push (c : SExpr) : LM Unit :=
@@ -881,7 +885,7 @@ partial def liftClauseM (isVal : String → Bool) (isField : String → String �
         if liftsAsIf rhs then
           -- (an `if` lifted whole, #235, #283: at `L`'s type, as below)
           let (h, _, l') := setPrefix p l none site
-          let n := s!"$c{sitePart site}{p.line}_{p.col}"
+          let n := madeName "c" site p
           return (← liftAll h) ++ [.decl p n none false (.app p (.ident p "$branchChoiceAt") [l', rhs] false),
             .set p l' none (.ident p n)]
         let (h, _, l') := setPrefix p l none site
@@ -898,13 +902,13 @@ partial def liftClauseM (isVal : String → Bool) (isField : String → String �
       if !hasLiftable rhs then return [c] else run do return .decl p x ty false (← liftE isVal isField rhs)
   | .decl p x ty true rhs@(.ite ..) =>
     if liftsAsIf rhs then
-      let n := s!"$c{sitePart site}{p.line}_{p.col}"
+      let n := madeName "c" site p
       return [.decl p n ty false (.app p (.ident p "$branchChoice") [rhs] false), .decl p x ty true (.ident p n)]
     else if !hasLiftable rhs then return [c] else run do return .decl p x ty true (← liftE isVal isField rhs)
   | .set p l none rhs@(.ite ..) =>
     if liftsAsIf rhs then
       let (h, _, l') := setPrefix p l none site
-      let n := s!"$c{sitePart site}{p.line}_{p.col}"
+      let n := madeName "c" site p
       return h ++ [.decl p n none false (.app p (.ident p "$branchChoiceAt") [l', rhs] false), .set p l' none (.ident p n)]
     else if !hasLiftable rhs then return [c] else
       let (h, o?, l') := setPrefix p l none site
@@ -1802,7 +1806,7 @@ partial def arrOfE (ty : Option STy := none) (fieldOrder : String → FieldOrder
     Names made include `site`, so that nested ones differ. -/
 partial def gensOf (site : String) (cs : List SExpr)
     (fieldOrder : String → FieldOrder := fun _ => {}) : List SExpr :=
-  let nm (q : Pos) : String := s!"$e{sitePart site}{q.line}_{q.col}"
+  let nm (q : Pos) : String := madeName "e" site q
   (prepare cs (site := site) (fieldOrder := fieldOrder) (guardBranches := false)).flatMap fun c => match binding? c with
     | some { pos := q, name := x, ty := ty, alts := as, branchy := none, each := none, .. } =>
       let src := arrOfE ty fieldOrder (.app q (.ident q "$choice") as false)
