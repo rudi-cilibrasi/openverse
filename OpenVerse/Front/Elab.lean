@@ -5357,15 +5357,25 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
             | .app _ (.ident _ g) _ _ =>
               (ctx.lookup g).isNone && (ctx.sig? g).any (·.ret.params.isEmpty)
             | _ => false
+          let probeState ← get
           let noResultEvidence := Choice.anyE (fun
             | .app q (.ident _ g) _ _ =>
               err.startsWith s!"{q.show}:" && (ctx.lookup g).isNone &&
                 ((ctx.sig? g).orElse fun _ => ctx.sig? s!"{g}$init").any noHint
-            | .app q (.member _ (.ident _ receiver) method) _ _ =>
-              err.startsWith s!"{q.show}:" && ((ctx.lookup receiver).bind fun binding =>
-                match binding.ty with
-                | .struct cls _ => (ctx.methodDecl? cls method).bind fun owner => ctx.sig? s!"{owner}.{method}"
-                | _ => none).any noHint
+            | .app q (.member _ receiver method) _ _ =>
+              if !err.startsWith s!"{q.show}:" then false else
+              let cls := match receiver with
+                | .ident _ "(super:)" => ctx.selfClass.bind fun c => (ctx.types.info c).parent
+                | _ => match (elabE { ctx with typeOnly := true, callInstanceProbe := none } receiver none).run probeState with
+                  | .ok (⟨_, .struct cls _⟩, _) => some cls
+                  | _ => none
+              let method := if method.startsWith "$spawnMethod:" then (method.drop 13).toString else method
+              let (cls, method) := if method.startsWith "(" then
+                  match (method.drop 1).toString.splitOn ":)" with
+                  | [owner, method] => (some owner, method)
+                  | _ => (cls, method)
+                else (cls, method)
+              (cls.bind fun c => (ctx.methodDecl? c method).bind fun owner => ctx.sig? s!"{owner}.{method}").any noHint
             | _ => false) a
           -- A result hint cannot supply an unrelated parameter of the
           -- failing producer. Retrying it at every enclosing singleton
