@@ -90,7 +90,8 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     "Signal", "Await", "Cancel"] ++ helpers.flatMap fun
       | .classDef _ _ _ _ _ _ fs _ ms => fs.map (·.1) ++ ms.filterMap fun | .fn _ m .. => some m | _ => none
       | _ => []
-  let (resolved, lazy) ← Choice.inlineMulti resolved reserved opts.eagerRequests
+  -- (#283) and the uses of methods whose family the receiver's class picks
+  let (resolved, lazy, familySites) ← Choice.inlineMulti resolved reserved opts.eagerRequests opts.familyPicks
   -- (#246) the class of the stack cells of lazily taken ones
   let helpers := helpers ++ (← if lazy then lazyTops else pure [])
   -- the branches of casts that refine type arguments, as functions (#243)
@@ -708,7 +709,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
                              let i := henv.info d
                              if i.isIface || i.isAbstract then m else
                              (henv.supers d).foldl (fun m T => m.insert T ((m[T]?.getD []) ++ [d])) m) {},
-                           abstracts := abstracts.toList, fnRequests := opts.fnRequests, methodRequests := opts.methodRequests,
+                           abstracts := abstracts.toList, fnRequests := opts.fnRequests, familySites, methodRequests := opts.methodRequests,
                            castRequests := opts.castRequests, loopRequests := opts.loopRequests }
   env := { env with varFields := varFields, uniques := uniques,
                     overriders := (overridePairs.toList.map fun (_, dm, _) => (dm.splitOn ".").headD "") ++
@@ -1425,7 +1426,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       (decides : Bool) (allowed : List String) (tps : List (String × Bool)) (body : SExpr)
       (suspends : Bool := false) (selfTps : List String := [])
       (selfFieldOf : Option (String → Option Nat) := none) (scopeClass : Option String := none) :
-      Except String (Fn × List VTy × List (String × Ty) × Option Pos × List Refine.Lift × List LoopUse × FrameRefs.Info × List String × List FnValues.MethodRequest) := do
+      Except String (Fn × List VTy × List (String × Ty) × Option Pos × List Refine.Lift × List LoopUse × FrameRefs.Info × List String × List FnValues.MethodRequest × List (Pos × String)) := do
     -- (#209) the values of `selfTps` come from the receiver's hidden
     -- fields, in slots after the hidden parameters: a method's own class's
     -- (`C.M`), or as `selfFieldOf` says (a cast's branch, #250, the cast
@@ -1482,7 +1483,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
               body := initPrefixE arity inits e },
       spawnParamTypes env name (st.slotTys.toList.map (Ty.toVTy env)), st.fnNeeds, st.errAt, st.castNeeds, st.loopFirst,
       { explicit := ps.length, copies := st.frameCopies, slots := st.frameSlots.map fun (i, s) =>
-          (i, { frame := s.frame, name := s.name, args := s.args.map (Ty.toVTy env) }) }, st.eagerNeeds, st.methodNeeds)
+          (i, { frame := s.frame, name := s.name, args := s.args.map (Ty.toVTy env) }) }, st.eagerNeeds, st.methodNeeds, st.familyNeeds)
   -- (the accessors come right after the functions, #157)
   env := { env with fieldAccBase := tops.length + gsigs.size }
   let genvOf (g : Sig) : TyEnv := { env with tvars := g.tparams.map fun (v, c) => (v, Ty.param v c) }
@@ -1499,12 +1500,14 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   let mut loopFirst : List LoopUse := fieldDefaultNeeds.map fun l =>
     { g := "", pos := l.pos, itemCode := .lit .void, argSet := none, lift := .ok l }
   let mut eagerNeeds : List String := []
+  let mut familyNeeds : List (Pos × String) := []
   for (top, idx) in tops.zip (List.range tops.length) do
     let sig := sigs[idx]!
     match top with
     | .fn p n ps _ _ _ body =>
-      let (fn, tys, needs, err, casts, lf, frames, eager, methodUses) ← elabFn env p n ps sig.params sig.ret sig.decides sig.fx [] body sig.suspends
+      let (fn, tys, needs, err, casts, lf, frames, eager, methodUses, family) ← elabFn env p n ps sig.params sig.ret sig.decides sig.fx [] body sig.suspends
       eagerNeeds := eagerNeeds ++ eager
+      familyNeeds := familyNeeds ++ family
       fnNeeds := fnNeeds ++ needs
       methodNeeds := FnValues.mergeMethodRequests methodNeeds methodUses
       castNeeds := castNeeds ++ casts
@@ -1526,6 +1529,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       castNeeds := castNeeds ++ st.castNeeds
       loopFirst := loopFirst ++ st.loopFirst
       eagerNeeds := eagerNeeds ++ st.eagerNeeds
+      familyNeeds := familyNeeds ++ st.familyNeeds
       let tys := st.slotTys.toList.map (Ty.toVTy env)
       frameInfo := frameInfo.push {}
       -- slots start like a function's (a class-typed one as a placeholder)
@@ -1548,12 +1552,13 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       -- (a class's copy of an interface's default, #53, elaborated in the
       -- interface's scope)
       let scope := copyScope? effs
-      let (fn, tys, needs, err, casts, lf, frames, eager, methodUses) ← elabFn (genvOf g) p n ps g.params g.ret g.decides g.fx g.tparams body g.suspends
+      let (fn, tys, needs, err, casts, lf, frames, eager, methodUses, family) ← elabFn (genvOf g) p n ps g.params g.ret g.decides g.fx g.tparams body g.suspends
         g.selfTps ((opts.castRequests.find? (·.name == n)).map fun l => fun v =>
           (l.opened.lookup v).bind (env.witnessField? l.target ·)) scope
       fnNeeds := fnNeeds ++ needs
       methodNeeds := FnValues.mergeMethodRequests methodNeeds methodUses
       eagerNeeds := eagerNeeds ++ eager
+      familyNeeds := familyNeeds ++ family
       castNeeds := castNeeds ++ casts
       loopFirst := loopFirst ++ lf
       fns := fns.push fn
@@ -1566,8 +1571,11 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   -- with placeholders, goes no further
   -- (#243) and branches of casts that refine type arguments, lifted into
   -- functions
-  if !eagerNeeds.isEmpty then
-    return { prog := default, sigs := { fns := [] }, slotTys := [], eagerNeeds := eagerNeeds.eraseDups }
+  -- (#283) and with the families of the uses of methods whose receivers'
+  -- classes this one found
+  if !eagerNeeds.isEmpty || !familyNeeds.isEmpty then
+    return { prog := default, sigs := { fns := [] }, slotTys := [], eagerNeeds := eagerNeeds.eraseDups,
+             familyNeeds := familyNeeds.eraseDups }
   let defaults := loopFirst.filterMap fun u => match u.lift with
     | .ok l => if l.key.startsWith "defaults:" then some l else none
     | _ => none
@@ -1779,7 +1787,7 @@ def elabProgram (allTops00 : List STop) (opts : Options := {}) : Except String C
   -- types: each round asks for new ones only, so a few rounds do
   let rec go (fuel : Nat) (opts : Options) : Except String Compiled := do
     let c ← elabProgramCore allTops00 opts
-    if !c.eagerNeeds.isEmpty then return c
+    if !c.eagerNeeds.isEmpty || !c.familyNeeds.isEmpty then return c
     -- (#243) and with the branches of casts that refine type arguments
     let casts := c.castNeeds.filter fun l => !opts.castRequests.any (·.key == l.key)
     -- (#246) and with functions of their own for lazily taken calls
@@ -1836,14 +1844,19 @@ def elabProgram (allTops00 : List STop) (opts : Options := {}) : Except String C
     | .fn .. => 1
     | .classDef _ _ _ _ _ _ _ _ ms => ms.length
     | _ => 0) 1
+  -- (#283) Likewise with the family of each use of a method whose receiver's
+  -- class picks it: each round notes the uses it found, which may make
+  -- more methods have several values, whose uses the next one notes.
   let rec withEager (fuel : Nat) (opts : Options) : Except String Compiled := do
     let c ← withWitness (max 8 (classes + 1)) opts
-    if c.eagerNeeds.isEmpty then return c
+    if c.eagerNeeds.isEmpty && c.familyNeeds.isEmpty then return c
     let new := c.eagerNeeds.filter (!opts.eagerRequests.contains ·)
-    match fuel, new with
+    let picks := c.familyNeeds.filter (!opts.familyPicks.contains ·)
+    match fuel, new ++ picks.map (·.2) with
     | fuel + 1, _ :: _ =>
-      withEager fuel { opts with eagerRequests := opts.eagerRequests ++ new, loopRequests := [], castRequests := [] }
-    | _, _ => throw "internal error: mutual generator instances still changing after eager lowering (#283)"
+      withEager fuel { opts with eagerRequests := opts.eagerRequests ++ new, familyPicks := opts.familyPicks ++ picks,
+                                 loopRequests := [], castRequests := [] }
+    | _, _ => throw "internal error: mutual generator instances or methods' families still changing after eager lowering (#283)"
   (withEager count opts).mapError fun msg =>
     FnValues.pretty (((stripOv (msg.replace "$init" "<constructor>")).replace "::" ".").replace "$replaceAll" "ReplaceAll")
 

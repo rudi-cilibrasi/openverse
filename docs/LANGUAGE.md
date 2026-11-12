@@ -1088,12 +1088,25 @@ Main():void =
   `R.M(args)` evaluates `R` first, once, then is inlined like a function's,
   with `Self` the receiver, and so is `M(args)` in its class's methods and
   those of the classes below it. A recursive one is taken lazily, and a
-  named parameter's default sees the fields. Inlining happens before
-  types are checked, so `R.M` has to name that method whatever `R` is:
-  such a method's name must be no other member than it and its overrides
-  (in classes below the class or interface that declares it), no struct
-  field, enumerator or member of a built-in type (`Length`, `Find`,
-  `Signal`, …), no top-level name and no parameter or local. An
+  named parameter's default sees the fields. Each class or interface that
+  declares `M` without `<override>` is the root of a family of its own,
+  `M` and its overrides in the classes below it, and `R.M(args)` is a call
+  in the family of the root that `R`'s class is below (#283). When one
+  class or interface declares `M` (overrides aside), that is known before
+  types are checked. When unrelated ones do, the receiver's class tells:
+  `M(args)` and `Self.M(args)` in a class's methods are in that class's
+  family, and for any other receiver the program is elaborated once for
+  the receivers' classes, then again with each call in its family. So `M`
+  of a class whose `M` has one value is an ordinary method wherever it is
+  called, and a function whose values come from a call of another family's
+  `M` through a receiver of that family's class has several values, as for
+  a name only one family has; a receiver of a class below no root whose
+  `M` has several values makes an ordinary call. A class below two roots of
+  `M` (as one listing two interfaces that both declare `M`) is refused when
+  either family has several values, and so is an overloaded one. Such a
+  method's name must be no field, no struct field, enumerator or member of
+  a built-in type (`Length`, `Find`, `Signal`, …), no top-level name and no
+  parameter or local. An
   interface's method is such a family's root too (#283): a call through
   the interface dispatches on the receiver's class, as for an overridden
   method; an interface's default implementation is the alternative for
@@ -1277,8 +1290,9 @@ Main():void =
   overloaded one with an overload that calls the function's own name
   (a generic one's type arguments are inferred from the
   arguments where it is inlined, as at a call, named ones too), a recursive one with a `defer:` of its own, or called by a recursive one (its body a function's, where it would run once), one with a `return`
-  other than at the end of its body or in an `if`'s branches, a method whose name another class or interface
-  also has, `<suspends>`, one used as a function value, and, since its body is inlined where other names may be
+  other than at the end of its body or in an `if`'s branches, an overloaded method, a method of a class or
+  interface below two others that each declare its name without `<override>`,
+  `<suspends>`, one used as a function value, and, since its body is inlined where other names may be
   in scope, one whose name is also the name of a parameter, local, field or
   method anywhere in the program, and a call of one where a name its body
   uses from outside is a parameter, local or member of `Self` in scope.
@@ -1851,5 +1865,5 @@ Main()<suspends>:void =
 the class features listed under [Classes](#classes), struct methods (Verse structs have none; classes do),
 `weak_map`, module paths `using{/Verse.org/…}` (accepted and ignored), the
 specific overload/call gaps listed under [Overloading](#overloading), nested
-functions and lambdas (see [release evidence and proposed design](research/closure-design.md)), choice beyond [Choice](#choice) (recursive functions with several values that have effects, other than generators, methods with several values whose name an unrelated class shares), concurrency beyond [Concurrency](#concurrency), and the unsupported
+functions and lambdas (see [release evidence and proposed design](research/closure-design.md)), choice beyond [Choice](#choice) (recursive functions with several values that have effects, other than generators, overloaded methods with several values), concurrency beyond [Concurrency](#concurrency), and the unsupported
 effect/construction contracts listed under [Effect contracts](#effect-contracts).

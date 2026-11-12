@@ -424,6 +424,9 @@ structure LoopUse where
 structure ESt where
   /-- Pure mutual groups whose changing instances need eager generation. -/
   eagerNeeds : List String := []
+  /-- (#283) At each of `TyEnv.familySites` elaborated: the root of its
+      method above its receiver's class, for the next round's inlining. -/
+  familyNeeds : List (Pos × String) := []
   /-- The program's types, for conversions between class types (`coerce`). -/
   env : TyEnv := {}
   nslots : Nat := 0
@@ -761,6 +764,16 @@ def Ctx.implAt (ctx : Ctx) (r m e : String) : Option String :=
 /-- The slots of method `m` above `c` (`TyEnv.rootsOf`). -/
 def Ctx.rootsOf (ctx : Ctx) (c m : String) : List String :=
   ctx.types.rootsOf (fun e => (ctx.sig? s!"{e}.{m}").isSome) c
+
+/-- (#283) A use `R.M` at `p` whose family of methods only the class of
+    `R` tells, one of `TyEnv.familySites`: the root of `M` above that class
+    noted, none (`""`) for a receiver of another type. -/
+def Ctx.noteFamily (ctx : Ctx) (p : Pos) (recv : Ty) (m : String) : EM Unit := do
+  if ctx.types.familySites.contains (p, m) then
+    let root := match recv with
+      | .struct c _ => ((ctx.rootsOf c m).head?).getD ""
+      | _ => ""
+    modify fun st => { st with familyNeeds := (p, root) :: st.familyNeeds }
 
 /-- The function that implements slot `r` of method `m` for an instance of
     class `d` (#70). -/

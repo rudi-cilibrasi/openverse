@@ -484,9 +484,24 @@ renamed. A generic class's is generic over the class's type parameters,
 `C$M($Self:C(t…), params…)`, and its type arguments are inferred from the
 receiver where it is inlined, as for any generic function with several
 values (#282). `R.M(args)` becomes `C$M(R, args)`, and in the bodies of `C` and
-the classes below it, `M(args)` becomes `C$M(Self, args)`. Without types, `R.M`
-must name that method whatever `R` is: the name must be declared by one
-class or interface and overridden only below it (a family, `MFam`); for
+the classes below it, `M(args)` becomes `C$M(Self, args)`. Each class or
+interface that declares `M` without `<override>` is the root of a family
+(`MFam`), `M` and its overrides below it. When one root declares `M`,
+`R.M` names its family whatever `R` is, without types. When unrelated ones
+do (`shared`), `famAt` takes the family of the root the receiver's class is
+below: `Self`'s and a bare call's from the enclosing class, known without
+types, any other receiver's from an earlier elaboration. The first leaves
+those uses as written, ordinary calls (a family's method stays in its class
+as a stub, a direct one too, for them to type), with one value in the
+fixpoint; at each (`TyEnv.familySites`) `Ctx.noteFamily` notes the root of
+`M` above the receiver's static class by the place of `R.M`
+(`Compiled.familyNeeds`), and the program is elaborated again with them
+(`Options.familyPicks`), as for `eagerRequests`. Each use is then rewritten
+as in a program with that family alone, so the fixpoint is exact, and so is
+the code. A family that has several values only through such uses has its
+own uses noted in a later round; each round notes more, so they end. A
+class below two roots of `M`, or an overloaded `M`, is refused when a family
+of `M` has several values. For
 an interface (#283) the dispatch's root is the interface, its receiver
 typed at it and cast to each implementing class, and its default
 implementation, if any, is one more implementation, `I$M`, whose guard

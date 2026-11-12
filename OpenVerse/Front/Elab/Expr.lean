@@ -1840,6 +1840,7 @@ partial def elabDefaultDispatch (ctx : Ctx) (p : Pos) (fname : String)
 
 /-- `e.m`: `.Length` of an array or string, or a field of a struct. -/
 partial def elabMember (ctx : Ctx) (p : Pos) (r : R) (m : String) (exp : Option Ty := none) : EM R := do
+  ctx.noteFamily p r.ty m
   match r.ty, m with
   | .arr _, "Length" => return ⟨.prim .len [r.e], .int⟩
   | .map _ _, "Length" => return ⟨.prim .len [r.e], .int⟩
