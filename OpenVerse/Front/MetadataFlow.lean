@@ -119,7 +119,13 @@ private partial def expr (fns : Array Fn) (infos : Array Info)
     if out.value.isNone then return out
     let value := match op, es with
       | .fail, _ | .userErr, _ | .query, [.lit (.logic false)] | .query, [.lit .none] => none
-      | _, _ => some (args.any id)
+      | .query, _ | .mkArr, _ | .mkTup, _ | .mkSome, _ | .concat, _ | .index, _ |
+          .arrSet, _ | .flatten, _ | .tupGet _, _ |
+          .lt, _ | .le, _ | .gt, _ | .ge, _ | .eq, _ | .ne, _ |
+          .flt, _ | .fle, _ | .fgt, _ | .fge, _ => some (args.any id)
+      -- Length, formatting and arithmetic construct fresh scalar data;
+      -- they cannot preserve a dictionary, function or opaque payload.
+      | _, _ => some false
     return { out with value }
   | .heap op es => do
     let (args, out) ← arguments fns infos fields fn info slots es

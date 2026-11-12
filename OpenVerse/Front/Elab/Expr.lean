@@ -29,7 +29,15 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
   let ctx := ctx.choiceCoercionScope
   let result ← elabECore ctx se exp
   let result ← choiceCoerceResult ctx se.pos result exp
-  if ctx.typeOnly || !ctx.isTypeValue se || result.ty == .never || result.ty == .void then return result
+  -- Dataflow propagates roles through ordinary expressions. Only metadata
+  -- origins need a marker; wrapping forwarding/control expressions can
+  -- change the saved-local shape required by refinement copy-out.
+  let origin := match se with
+    | .ident .. => ctx.isTypeValue se
+    | .member _ _ field => field.startsWith "$w."
+    | .app _ (.ident _ name) _ false => ["$typeValue", "$witness", "$stageWitness"].contains name
+    | _ => false
+  if ctx.typeOnly || !origin || result.ty == .never || result.ty == .void then return result
   if let .ident .. := se then
     if let .local slot := result.e then
       modify fun st => { st with metadataSeeds := slot :: st.metadataSeeds }
