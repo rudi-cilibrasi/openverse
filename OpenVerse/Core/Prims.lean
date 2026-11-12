@@ -127,88 +127,221 @@ def rangeVals (a b : Int) : List Value :=
 /-- Comparison helper: succeed with the left operand when `b` holds. -/
 def cmpRes (b : Bool) (left : Value) : Res := if b then .ok left else .fail
 
-/-- The meaning of each primitive. -/
-def Prim.apply : Prim → List Value → Res
-  | .add, [.int a, .int b, .int c, .int d] => ratArith .add a b c d
-  | .sub, [.int a, .int b, .int c, .int d] => ratArith .sub a b c d
-  | .mul, [.int a, .int b, .int c, .int d] => ratArith .mul a b c d
-  | .quotient, [.int a, .int b, .int c, .int d] => ratArith .quotient a b c d
-  | .add, [.int a, .int b] => Res.ofInt (a + b)
-  | .sub, [.int a, .int b] => Res.ofInt (a - b)
-  | .mul, [.int a, .int b] => Res.ofInt (a * b)
-  | .neg, [.int a] => Res.ofInt (-a)
-  | .abs, [.int a] => Res.ofInt (if a < 0 then -a else a)
-  | .floorDiv, [.int a, .int b] => if b = 0 then .fail else Res.ofInt (floorDivInt a b)
-  | .ceilDiv, [.int a, .int b] => if b = 0 then .fail else Res.ofInt (ceilDivInt a b)
-  | .quotient, [.int a, .int b] => if b = 0 then .fail else Res.ofInt (Int.ediv a b)
-  | .modulo, [.int a, .int b] => if b = 0 then .fail else Res.ofInt (Int.emod a b)
-  | .lt, [.int a, .int b] => cmpRes (decide (a < b)) (Value.ofInt a)
-  | .le, [.int a, .int b] => cmpRes (decide (a ≤ b)) (Value.ofInt a)
-  | .gt, [.int a, .int b] => cmpRes (decide (a > b)) (Value.ofInt a)
-  | .ge, [.int a, .int b] => cmpRes (decide (a ≥ b)) (Value.ofInt a)
-  | .lt, [.char a, .char b] => cmpRes (decide (a < b)) (.char a)
-  | .le, [.char a, .char b] => cmpRes (decide (a ≤ b)) (.char a)
-  | .gt, [.char a, .char b] => cmpRes (decide (a > b)) (.char a)
-  | .ge, [.char a, .char b] => cmpRes (decide (a ≥ b)) (.char a)
-  | .eq, [a, b] => cmpRes (decide (a = b)) a
-  | .ne, [a, b] => cmpRes (decide (a ≠ b)) a
-  | .query, [.logic b] => if b then .ok (.logic true) else .fail
-  | .query, [.none] => .fail
-  | .query, [.some v] => .ok v
-  | .mkArr, vs => .ok (Value.ofArray vs.toArray)
-  | .mkTup, vs => .ok (Value.ofTuple vs)
-  | .mkSome, [v] => .ok (.some v)
-  | .concat, [.arr xs, .arr ys] => .ok (Value.ofArray (xs ++ ys))
-  | .flatten, [.arr xss] => match flattenArrs xss.toList with
-    | some vs => .ok (Value.ofArray vs.toArray)
-    | none => .err .type
-  | .range, [.int a, .int b] => .ok (Value.ofArray (rangeVals a b).toArray)
-  | .index, [.arr xs, .int i] =>
-    if 0 ≤ i then match xs[i.toNat]? with
+/-- The meaning of each primitive. Select the operation first so a
+    proof about one family does not expand other families' argument shapes. -/
+def Prim.apply (op : Prim) (vs : List Value) : Res :=
+  match op with
+  | .add => match vs with
+    | [.int a, .int b, .int c, .int d] => ratArith .add a b c d
+    | [.int a, .int b] => Res.ofInt (a + b)
+    | _ => .err .type
+  | .sub => match vs with
+    | [.int a, .int b, .int c, .int d] => ratArith .sub a b c d
+    | [.int a, .int b] => Res.ofInt (a - b)
+    | _ => .err .type
+  | .mul => match vs with
+    | [.int a, .int b, .int c, .int d] => ratArith .mul a b c d
+    | [.int a, .int b] => Res.ofInt (a * b)
+    | _ => .err .type
+  | .quotient => match vs with
+    | [.int a, .int b, .int c, .int d] => ratArith .quotient a b c d
+    | [.int a, .int b] => if b = 0 then .fail else Res.ofInt (Int.ediv a b)
+    | _ => .err .type
+  | .neg => match vs with
+    | [.int a] => Res.ofInt (-a)
+    | _ => .err .type
+  | .abs => match vs with
+    | [.int a] => Res.ofInt (if a < 0 then -a else a)
+    | _ => .err .type
+  | .floorDiv => match vs with
+    | [.int a, .int b] => if b = 0 then .fail else Res.ofInt (floorDivInt a b)
+    | _ => .err .type
+  | .ceilDiv => match vs with
+    | [.int a, .int b] => if b = 0 then .fail else Res.ofInt (ceilDivInt a b)
+    | _ => .err .type
+  | .modulo => match vs with
+    | [.int a, .int b] => if b = 0 then .fail else Res.ofInt (Int.emod a b)
+    | _ => .err .type
+  | .lt => match vs with
+    | [.int a, .int b] => cmpRes (decide (a < b)) (Value.ofInt a)
+    | [.char a, .char b] => cmpRes (decide (a < b)) (.char a)
+    | _ => .err .type
+  | .le => match vs with
+    | [.int a, .int b] => cmpRes (decide (a ≤ b)) (Value.ofInt a)
+    | [.char a, .char b] => cmpRes (decide (a ≤ b)) (.char a)
+    | _ => .err .type
+  | .gt => match vs with
+    | [.int a, .int b] => cmpRes (decide (a > b)) (Value.ofInt a)
+    | [.char a, .char b] => cmpRes (decide (a > b)) (.char a)
+    | _ => .err .type
+  | .ge => match vs with
+    | [.int a, .int b] => cmpRes (decide (a ≥ b)) (Value.ofInt a)
+    | [.char a, .char b] => cmpRes (decide (a ≥ b)) (.char a)
+    | _ => .err .type
+  | .eq => match vs with
+    | [a, b] => cmpRes (decide (a = b)) a
+    | _ => .err .type
+  | .ne => match vs with
+    | [a, b] => cmpRes (decide (a ≠ b)) a
+    | _ => .err .type
+  | .query => match vs with
+    | [.logic b] => if b then .ok (.logic true) else .fail
+    | [.none] => .fail
+    | [.some v] => .ok v
+    | _ => .err .type
+  | .mkArr => .ok (Value.ofArray vs.toArray)
+  | .mkTup => .ok (Value.ofTuple vs)
+  | .mkSome => match vs with
+    | [v] => .ok (.some v)
+    | _ => .err .type
+  | .concat => match vs with
+    | [.arr xs, .arr ys] => .ok (Value.ofArray (xs ++ ys))
+    | _ => .err .type
+  | .flatten => match vs with
+    | [.arr xss] => match flattenArrs xss.toList with
+      | some vs => .ok (Value.ofArray vs.toArray)
+      | none => .err .type
+    | _ => .err .type
+  | .range => match vs with
+    | [.int a, .int b] => .ok (Value.ofArray (rangeVals a b).toArray)
+    | _ => .err .type
+  | .index => match vs with
+    | [.arr xs, .int i] =>
+      if 0 ≤ i then match xs[i.toNat]? with
+        | some v => .ok v
+        | none => .fail
+      else .fail
+    | _ => .err .type
+  | .len => match vs with
+    | [.arr xs] => .ok (Value.ofInt xs.size)
+    | _ => .err .type
+  | .arrSet => match vs with
+    | [.arr xs, .int i, v] =>
+      if 0 ≤ i ∧ i.toNat < xs.size then .ok (Value.ofArray (xs.setIfInBounds i.toNat v)) else .fail
+    | _ => .err .type
+  | .tupGet k => match vs with
+    | [.tup vs] => match vs[k]? with
       | some v => .ok v
-      | none => .fail
-    else .fail
-  | .len, [.arr xs] => .ok (Value.ofInt xs.size)
-  | .arrSet, [.arr xs, .int i, v] =>
-    if 0 ≤ i ∧ i.toNat < xs.size then .ok (Value.ofArray (xs.setIfInBounds i.toNat v)) else .fail
-  | .tupGet k, [.tup vs] => match vs[k]? with
-    | some v => .ok v
-    | none => .err .type
-  | .toStr, [v] => toStrValue v
-  | .fadd, [.float a, .float b] => .ok (.float (VFloat.canon (VFloat.ofBits a + VFloat.ofBits b)))
-  | .fsub, [.float a, .float b] => .ok (.float (VFloat.canon (VFloat.ofBits a - VFloat.ofBits b)))
-  | .fmul, [.float a, .float b] => .ok (.float (VFloat.canon (VFloat.ofBits a * VFloat.ofBits b)))
-  | .fdiv, [.float a, .float b] => .ok (.float (VFloat.canon (VFloat.ofBits a / VFloat.ofBits b)))
-  | .fneg, [.float a] => .ok (.float (VFloat.canon (-VFloat.ofBits a)))
-  | .fabs, [.float a] => .ok (.float (VFloat.canon (VFloat.ofBits a).abs))
-  | .fmin, [.float a, .float b] => .ok (.float (VFloat.fmin a b))
-  | .fmax, [.float a, .float b] => .ok (.float (VFloat.fmax a b))
-  | .flt, [.float a, .float b] => cmpRes (decide (VFloat.ofBits a < VFloat.ofBits b)) (.float a)
-  -- (`NaN <= NaN` and `NaN >= NaN` succeed, as NaN equals itself, #132)
-  | .fle, [.float a, .float b] => cmpRes (a == b || decide (VFloat.ofBits a ≤ VFloat.ofBits b)) (.float a)
-  | .fgt, [.float a, .float b] => cmpRes (decide (VFloat.ofBits b < VFloat.ofBits a)) (.float a)
-  | .fge, [.float a, .float b] => cmpRes (a == b || decide (VFloat.ofBits b ≤ VFloat.ofBits a)) (.float a)
-  | .fofInt, [.int i] => .ok (.float (VFloat.canon (Float.ofInt i)))
-  | .ffloor, [.float a] => VFloat.toIntRes .floor a
-  | .fceil, [.float a] => VFloat.toIntRes .ceil a
-  | .fround, [.float a] => VFloat.toIntRes .round a
-  | .ftrunc, [.float a] => VFloat.toIntRes .trunc a
-  | .fsqrt, [.float a] => .ok (.float (VFloat.canon (VFloat.ofBits a).sqrt))
-  | .fexp, [.float a] => .ok (.float (VFloat.canon (VFloat.ofBits a).exp))
-  | .fln, [.float a] => .ok (.float (VFloat.canon (VFloat.ofBits a).log))
-  | .fsin, [.float a] => .ok (.float (VFloat.canon (VFloat.ofBits a).sin))
-  | .fcos, [.float a] => .ok (.float (VFloat.canon (VFloat.ofBits a).cos))
-  | .ftan, [.float a] => .ok (.float (VFloat.canon (VFloat.ofBits a).tan))
-  | .fasin, [.float a] => .ok (.float (VFloat.canon (VFloat.clamp1 (VFloat.ofBits a)).asin))
-  | .facos, [.float a] => .ok (.float (VFloat.canon (VFloat.clamp1 (VFloat.ofBits a)).acos))
-  | .fatan, [.float a] => .ok (.float (VFloat.canon (VFloat.ofBits a).atan))
-  | .fpow, [.float a, .float b] => .ok (.float (VFloat.canon (Float.pow (VFloat.ofBits a) (VFloat.ofBits b))))
-  | .fatan2, [.float a, .float b] => .ok (.float (VFloat.canon (Float.atan2 (VFloat.ofBits a) (VFloat.ofBits b))))
-  | .fisFinite, [.float a] => if VFloat.isFinite a then .ok (.float a) else .fail
-  | .fofBits, [.int i] => .ok (.float (VFloat.canon (VFloat.ofBits (UInt64.ofNat (i % (2 ^ 64 : Int)).toNat))))
-  | .fail, [] => .fail
-  | .userErr, [] => .err .user
-  | _, _ => .err .type
+      | none => .err .type
+    | _ => .err .type
+  | .toStr => match vs with
+    | [v] => toStrValue v
+    | _ => .err .type
+  | .fadd => match vs with
+    | [.float a, .float b] => .ok (.float (VFloat.canon (VFloat.ofBits a + VFloat.ofBits b)))
+    | _ => .err .type
+  | .fsub => match vs with
+    | [.float a, .float b] => .ok (.float (VFloat.canon (VFloat.ofBits a - VFloat.ofBits b)))
+    | _ => .err .type
+  | .fmul => match vs with
+    | [.float a, .float b] => .ok (.float (VFloat.canon (VFloat.ofBits a * VFloat.ofBits b)))
+    | _ => .err .type
+  | .fdiv => match vs with
+    | [.float a, .float b] => .ok (.float (VFloat.canon (VFloat.ofBits a / VFloat.ofBits b)))
+    | _ => .err .type
+  | .fneg => match vs with
+    | [.float a] => .ok (.float (VFloat.canon (-VFloat.ofBits a)))
+    | _ => .err .type
+  | .fabs => match vs with
+    | [.float a] => .ok (.float (VFloat.canon (VFloat.ofBits a).abs))
+    | _ => .err .type
+  | .fmin => match vs with
+    | [.float a, .float b] => .ok (.float (VFloat.fmin a b))
+    | _ => .err .type
+  | .fmax => match vs with
+    | [.float a, .float b] => .ok (.float (VFloat.fmax a b))
+    | _ => .err .type
+  | .flt => match vs with
+    | [.float a, .float b] => cmpRes (decide (VFloat.ofBits a < VFloat.ofBits b)) (.float a)
+    -- (`NaN <= NaN` and `NaN >= NaN` succeed, as NaN equals itself, #132)
+    | _ => .err .type
+  | .fle => match vs with
+    | [.float a, .float b] => cmpRes (a == b || decide (VFloat.ofBits a ≤ VFloat.ofBits b)) (.float a)
+    | _ => .err .type
+  | .fgt => match vs with
+    | [.float a, .float b] => cmpRes (decide (VFloat.ofBits b < VFloat.ofBits a)) (.float a)
+    | _ => .err .type
+  | .fge => match vs with
+    | [.float a, .float b] => cmpRes (a == b || decide (VFloat.ofBits b ≤ VFloat.ofBits a)) (.float a)
+    | _ => .err .type
+  | .fofInt => match vs with
+    | [.int i] => .ok (.float (VFloat.canon (Float.ofInt i)))
+    | _ => .err .type
+  | .ffloor => match vs with
+    | [.float a] => VFloat.toIntRes .floor a
+    | _ => .err .type
+  | .fceil => match vs with
+    | [.float a] => VFloat.toIntRes .ceil a
+    | _ => .err .type
+  | .fround => match vs with
+    | [.float a] => VFloat.toIntRes .round a
+    | _ => .err .type
+  | .ftrunc => match vs with
+    | [.float a] => VFloat.toIntRes .trunc a
+    | _ => .err .type
+  | .fsqrt => match vs with
+    | [.float a] => .ok (.float (VFloat.canon (VFloat.ofBits a).sqrt))
+    | _ => .err .type
+  | .fexp => match vs with
+    | [.float a] => .ok (.float (VFloat.canon (VFloat.ofBits a).exp))
+    | _ => .err .type
+  | .fln => match vs with
+    | [.float a] => .ok (.float (VFloat.canon (VFloat.ofBits a).log))
+    | _ => .err .type
+  | .fsin => match vs with
+    | [.float a] => .ok (.float (VFloat.canon (VFloat.ofBits a).sin))
+    | _ => .err .type
+  | .fcos => match vs with
+    | [.float a] => .ok (.float (VFloat.canon (VFloat.ofBits a).cos))
+    | _ => .err .type
+  | .ftan => match vs with
+    | [.float a] => .ok (.float (VFloat.canon (VFloat.ofBits a).tan))
+    | _ => .err .type
+  | .fasin => match vs with
+    | [.float a] => .ok (.float (VFloat.canon (VFloat.clamp1 (VFloat.ofBits a)).asin))
+    | _ => .err .type
+  | .facos => match vs with
+    | [.float a] => .ok (.float (VFloat.canon (VFloat.clamp1 (VFloat.ofBits a)).acos))
+    | _ => .err .type
+  | .fatan => match vs with
+    | [.float a] => .ok (.float (VFloat.canon (VFloat.ofBits a).atan))
+    | _ => .err .type
+  | .fpow => match vs with
+    | [.float a, .float b] => .ok (.float (VFloat.canon (Float.pow (VFloat.ofBits a) (VFloat.ofBits b))))
+    | _ => .err .type
+  | .fatan2 => match vs with
+    | [.float a, .float b] => .ok (.float (VFloat.canon (Float.atan2 (VFloat.ofBits a) (VFloat.ofBits b))))
+    | _ => .err .type
+  | .fsinh => match vs with
+    | [.float a] => .ok (.float (VFloat.canon (VFloat.ofBits a).sinh))
+    | _ => .err .type
+  | .fcosh => match vs with
+    | [.float a] => .ok (.float (VFloat.canon (VFloat.ofBits a).cosh))
+    | _ => .err .type
+  | .ftanh => match vs with
+    | [.float a] => .ok (.float (VFloat.canon (VFloat.ofBits a).tanh))
+    | _ => .err .type
+  | .fasinh => match vs with
+    | [.float a] => .ok (.float (VFloat.canon (VFloat.ofBits a).asinh))
+    | _ => .err .type
+  | .facosh => match vs with
+    | [.float a] => .ok (.float (VFloat.canon (VFloat.ofBits a).acosh))
+    | _ => .err .type
+  | .fatanh => match vs with
+    | [.float a] => .ok (.float (VFloat.canon (VFloat.ofBits a).atanh))
+    | _ => .err .type
+  | .fisFinite => match vs with
+    | [.float a] => if VFloat.isFinite a then .ok (.float a) else .fail
+    | _ => .err .type
+  | .fofBits => match vs with
+    | [.int i] => .ok (.float (VFloat.canon (VFloat.ofBits (UInt64.ofNat (i % (2 ^ 64 : Int)).toNat))))
+    | _ => .err .type
+  | .fail => match vs with
+    | [] => .fail
+    | _ => .err .type
+  | .userErr => match vs with
+    | [] => .err .user
+    | _ => .err .type
 
 /-- The primitives whose application can fail (be caught by a failure context). -/
 def Prim.failable : Prim → Bool
@@ -228,14 +361,10 @@ theorem Prim.apply_ne_fail {p : Prim} (h : p.failable = false) (vs : List Value)
     have hc : ∀ p q, checkedRationalRes p q ≠ .fail := by
       intro p q; unfold checkedRationalRes; split <;> simp
     intro n d; unfold rationalRes; exact hc _ _
-  intro hf
-  unfold Prim.apply at hf
-  split at hf <;> first
-    | (simp [Prim.failable] at h; done)
-    | (simp only [ratArith] at hf; split at hf <;> first | simp at hf | exact hr _ _ hf)
-    | exact h1 _ hf
-    | exact h3 _ hf
-    | (split at hf <;> simp at hf)
-    | simp at hf
+  cases p <;> simp [Prim.failable] at h
+  all_goals
+    simp only [Prim.apply, ratArith]
+    repeat' split
+    all_goals simp_all
 
 end OpenVerse

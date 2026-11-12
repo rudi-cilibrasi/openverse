@@ -1,6 +1,6 @@
 # openverse_store: harness check
 
-By `tools/qp check` on 2026-11-07 22:35: upstream 7336cd864b97, quickproof fab76ef.
+By `tools/qp check` on 2026-11-12 01:09: upstream 805fd2194515, quickproof fab76ef.
 
 ## Native runs (ASan/UBSan, 3000 runs per harness)
 
@@ -39,8 +39,8 @@ Survivors (an equivalent mutant, behaviour no law checks, or a failure the nativ
 - `runtime/src/store.c:154` in `vx_store_move_slots`: `for (i = 0; i < s->nslots; i++) {` with `1`
 - `runtime/src/store.c:168` in `vx_store_move_journal`: `for (i = 0; i < s->jlen; i++) {` with `<=`
 - `runtime/src/store.c:183` in `vx_store_move_out`: `for (i = 0; i < s->olen; i++)` with `1`
-- `runtime/src/store.c:96` in `vx_store_rollback`: `if (sl < s->nslots) {` with `<=`
 - `runtime/src/store.c:85` in `vx_store_mark`: `s->depth = s->depth + 1;` with `2`
+- `runtime/src/store.c:96` in `vx_store_rollback`: `if (sl < s->nslots) {` with `<=`
 - `runtime/src/store.c:152` in `vx_store_move_slots`: `if (nslots < s->nslots)` with `<=`
 - `runtime/src/store.c:168` in `vx_store_move_journal`: `for (i = 0; i < s->jlen; i++) {` with `1`
 

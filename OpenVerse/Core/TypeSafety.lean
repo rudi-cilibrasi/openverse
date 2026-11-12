@@ -1057,7 +1057,8 @@ theorem prim_typed {op ts τ ρ} {vs : List Value} (hp : PrimTy op ts τ) (hv : 
     all_goals
       obtain ⟨x, rfl⟩ := hasTy_float hv
       simp only [List.mem_cons, List.mem_nil_iff, or_false] at hop
-      rcases hop with rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl <;>
+      rcases hop with rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl |
+        rfl | rfl | rfl | rfl | rfl | rfl <;>
         simp only [Prim.apply] <;> (repeat' split) <;> simp [ResOK, hasTy]
   | fcmp hop =>
     rcases vs with _ | ⟨a, _ | ⟨b, _ | ⟨_, _⟩⟩⟩ <;> simp only [allTys, Bool.and_eq_true, Bool.false_eq_true, and_false, and_true] at hv

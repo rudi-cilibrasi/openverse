@@ -56,6 +56,8 @@ inductive Prim where
   -- `ArcTan(Y, X)`; `IsFinite[F]` (failable)
   | fsqrt | fexp | fln | fsin | fcos | ftan | fasin | facos | fatan
   | fpow | fatan2 | fisFinite
+  -- hyperbolic functions and their inverses (#490)
+  | fsinh | fcosh | ftanh | fasinh | facosh | fatanh
   deriving Repr, DecidableEq, Inhabited
 
 /-- Operations on the heap (#20). Each is a function of the values of its

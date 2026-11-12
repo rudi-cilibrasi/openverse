@@ -393,7 +393,7 @@ inductive PrimTy : Prim → List VTy → VTy → Prop
   | farith {op} : op ∈ [Prim.fadd, .fsub, .fmul, .fdiv, .fmin, .fmax, .fpow, .fatan2] →
       PrimTy op [.float, .float] .float
   | funary {op} : op ∈ [Prim.fneg, .fabs, .fsqrt, .fexp, .fln, .fsin, .fcos, .ftan, .fasin, .facos,
-      .fatan, .fisFinite] → PrimTy op [.float] .float
+      .fatan, .fisFinite, .fsinh, .fcosh, .ftanh, .fasinh, .facosh, .fatanh] → PrimTy op [.float] .float
   | fcmp {op} : op ∈ [Prim.flt, .fle, .fgt, .fge] → PrimTy op [.float, .float] .float
   | fofInt : PrimTy .fofInt [.int] .float
   | fofBits : PrimTy .fofBits [.int] .float

@@ -566,6 +566,12 @@ void vx_prim_apply(vx_ctx *c, uint32_t op, uint32_t k, const vx_val *a, size_t n
     case VX_P_FATAN:  if (f1) { ok_float(r, atan(F(&a[0]))); return; } break;
     case VX_P_FPOW:   if (ff) { ok_float(r, pow(F(&a[0]), F(&a[1]))); return; } break;
     case VX_P_FATAN2: if (ff) { ok_float(r, atan2(F(&a[0]), F(&a[1]))); return; } break;
+    case VX_P_FSINH:  if (f1) { ok_float(r, sinh(F(&a[0]))); return; } break;
+    case VX_P_FCOSH:  if (f1) { ok_float(r, cosh(F(&a[0]))); return; } break;
+    case VX_P_FTANH:  if (f1) { ok_float(r, tanh(F(&a[0]))); return; } break;
+    case VX_P_FASINH: if (f1) { ok_float(r, asinh(F(&a[0]))); return; } break;
+    case VX_P_FACOSH: if (f1) { ok_float(r, acosh(F(&a[0]))); return; } break;
+    case VX_P_FATANH: if (f1) { ok_float(r, atanh(F(&a[0]))); return; } break;
     /* | .fisFinite, [.float a] => if isFinite a then .ok (.float a) else .fail */
     case VX_P_FISFINITE:
         if (f1) {

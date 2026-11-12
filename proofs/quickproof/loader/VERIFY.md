@@ -1,32 +1,30 @@
 # qp verify of openverse_loader
 
-Run by `scripts/check-quickproof.sh --check loader arith store` on 2026-11-07: a contract freshly assembled from the
-pinned openverse commit (7336cd864b97, float math #132), with `proof/src/` copied over it and committed, checked by `qp verify --brief`.
+Replayed on 2026-11-12 by `scripts/check-quickproof.sh --check loader`,
+with the published image pinned in the script. The C contract is assembled
+from `805fd2194515789c7ad0f43689071113031e75f2` (scalar float math #490).
+The loader source is unchanged; the header and the proof specification
+now permit primitive codes through 64.
 
-```
-[0:00] qp verify: a fresh clone of <work>/openverse_loader-proof at 176d6ee6db9a
-[0:00] framework: the 16 trusted files are identical to this verifier's
-[0:00] frozen files: 18 files changed since the contract (`contract`), none of them frozen
-[0:01] Clight generated again: identical to the committed files
-[1:51] build: 10/26 files
-[1:51] build: 11/26 files
-[5:57] build: 13/26 files
-[5:57] build: 16/26 files
-[9:01] build: 19/26 files
-[10:49] build: 21/26 files
-[15:46] build: 24/26 files
-[28:08] build: 26/26 files
-[38:15] build: 26/26 files, 2294 s
-[38:16] statements and axioms: 1 theorem probed
-[38:49] the contract commit 7a22d9796f6b: a clone, its statements built without the proof
-[38:56] build of the contract commit: 7/7 files, 6 s
-[38:57] statements and axioms of the contract commit: 1 theorem probed
-[39:04] statements compared with the contract: identical
-[39:04] Admitted, admit, Axiom, Parameter, Conjecture in the sources of the proof: none
+# Verification of <work> at 283628c73cd0
 
-theorem            result  axioms
-loader_wellscoped  PROVED  13: standard + VST malloc
-```
+- date: 2026-11-12 00:48
+- framework: quickproof/ at fab76ef826ae (not a release tag of this verifier's repository)
+- framework trusted files (16: the statement, the libc, the translation chain): identical to this verifier (/opt/quickproof)
+- contract commit: 87fb0fa3174d (`contract`)
+- files changed since the contract: 18; frozen files changed: none
+- regenerated code.v: identical to the committed files
+- the statements compared with: the contract commit's own files with no proof in them (none) and its unit files (src/units.v or src/units/*.v); generated again: src/contracts/loader_wellscoped.v
+- elaborated statement and whole_prog of `loader_wellscoped`: identical to the contract
+- `Admitted`/`admit`/`Axiom`/`Parameter`/`Conjecture` in the Coq sources of the proof (src/ and the other files of _CoqProject; comments excluded): none
+- `Print Assumptions` was printed once for all theorems together (of a definition that names each of them): the axioms given for each theorem are those of all of them, an upper bound of its own
+- the framework after the translation and the builds: unchanged
+- the run: 2 build jobs on 12 CPUs, load 3.7 at the start; checks before the build 0 min, the build and probes 40 min, the contract commit 0 min, in all 40 min
 
-The full report: <work>/home/.cache/quickproof/verify/openverse_loader-proof-176d6ee6db/VERIFY.md
-Verdict: PASS (exit 0).
+| theorem | result | Print Assumptions |
+|---|---|---|
+| `loader_wellscoped` | PROVED | ClassicalDedekindReals.sig_not_dec, ClassicalDedekindReals.sig_forall_dec, Axioms.prop_ext, lib.Axioms.proof_irr, library.mem_mgr, library.malloc_token_valid_pointer, library.malloc_token_local_facts, library.malloc_token, FunctionalExtensionality.functional_extensionality_dep, Eqdep.Eq_rect_eq.eq_rect_eq, library.create_mem_mgr, Classical_Prop.classic, Ensembles.Extensionality_Ensembles |
+
+PASS means: the frozen files, the regenerated Clight and every statement are those of the contract, every statement is QuickProof.Contract.harness_safe on this verifier's framework, and every claimed theorem is proved.
+
+**Verdict: PASS (exit 0).**

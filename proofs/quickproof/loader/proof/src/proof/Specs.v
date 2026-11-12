@@ -67,7 +67,7 @@ Definition node_ok (nfns nslots: Z) (al: list Z) (nb: Z) (j: Z) (x: node) : Prop
   (n_tag x = 1 -> n_a x < nslots) /\
   (n_tag x = 2 -> n_a x < nslots /\ n_b x < j) /\
   (n_tag x = 3 -> n_a x < j /\ n_b x < j) /\
-  (n_tag x = 4 -> n_op x <= 58 /\ (n_a x = 0 \/ n_op x = 25) /\ args_ok al j x) /\
+  (n_tag x = 4 -> n_op x <= 64 /\ (n_a x = 0 \/ n_op x = 25) /\ args_ok al j x) /\
   (n_tag x = 5 -> n_a x < nfns /\ args_ok al j x) /\
   (n_tag x = 6 -> n_a x < j /\ n_b x < j /\ n_c x < j) /\
   (n_tag x = 7 -> n_a x < nslots /\ n_b x < j /\ n_c x < j /\ n_d x < j) /\

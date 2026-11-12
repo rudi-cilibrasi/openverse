@@ -112,3 +112,18 @@ or equivalence of the C implementation. `scripts/fuzz-rational.sh` uses
 Python's arbitrary-precision `Fraction` as an independent result/error and
 order/rollback oracle, with Lean/C comparisons; C edge tests also run under
 ASan/UBSan.
+
+## 5. Floating mathematical functions
+
+The type-safety proofs cover the float results of the hyperbolic primitives
+(#490), including NaN and infinities. Their numerical values are supplied
+by Lean's `Float` externs and C libm. The existing QuickProof arithmetic
+law is about integer arithmetic; it does not prove libm accuracy or engine
+equivalence. Scalar-math tests compare both runtimes with independent
+800-digit decimal formulas, exact domain/zero/infinity cases and separately
+rounded `Lerp` operations. Normal finite hyperbolic results allow two ulps;
+zeros, subnormal arguments, specified special values and `Lerp` require
+exact agreement. The affected header/loader
+proof pins are replayed when the primitive code range changes.
+The subnormal identities are implementation regression guards, not an
+upstream promise of correct rounding for every small normal input.
