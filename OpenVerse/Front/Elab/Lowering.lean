@@ -359,13 +359,13 @@ def liftTagOf (name : String) : String :=
 
 /-- Generated bodies use the same source exits, capture storage and naming
     during effect inference and final elaboration. -/
-def functionBodyCtx (opts : Options) (ctx : Ctx) (p : Pos) (name : String)
+def functionBodyCtx (req : Requests) (ctx : Ctx) (p : Pos) (name : String)
     (tps : List (String × Bool)) (scopeClass : Option String := none) : Except String Ctx := do
-  let lifted := opts.requests.casts.find? (·.name == name)
+  let lifted := req.casts.find? (·.name == name)
   let loopLift := if name.startsWith "$choiceOperationDictionary" then none else
-    opts.requests.loops.find? fun l => l.name == name || l.extraFns.any
+    req.loops.find? fun l => l.name == name || l.extraFns.any
       (fun | .fn _ n .. => n == name | _ => false)
-  let resume := opts.requests.loops.findSome? fun l => l.resumes.find? (·.name == name)
+  let resume := req.loops.findSome? fun l => l.resumes.find? (·.name == name)
   let source := (resume.map (·.sourceContext)).getD
     ((loopLift.map (·.sourceContext)).getD ((lifted.map (·.sourceContext)).getD {}))
   let returnExit := loopLift.bind (·.returnExit)

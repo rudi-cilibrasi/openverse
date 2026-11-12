@@ -1213,7 +1213,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
             ({ name := prm.name, slot := i, ty := t, mutable := false } : Local)
           let base : Ctx := { sigs := sigs.toList ++ gsigs.toList, sigProg := mkSigProg sigs, types := env,
                               locals := locals.reverse, retTy := s.ret, canFail := s.decides, suspends := s.suspends, fnFx := s.fx }
-          let ctx ← functionBodyCtx opts base p n s.tparams s.scope
+          let ctx ← functionBodyCtx opts.requests base p n s.tparams s.scope
           match elabBodyOv ctx body (some s.ret) { env, nslots := ps.length, slotTys := s.params.toArray, frameSlots := ctx.locals.filterMap fun l => l.storage.map (l.slot, ·) } with
           | .ok (_, st) =>
             let fx := heapFx.filter fun k => st.fx.any (·.1 == k) ||
@@ -1242,7 +1242,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
           let base : Ctx := { sigs := sigs.toList ++ gsigs.toList, sigProg := mkSigProg sigs, types := genv,
                               locals := locals.reverse, retTy := g.ret, canFail := g.decides, suspends := g.suspends,
                               dictBase := ps.length, dictVars := dictTps.map (·.1), fnFx := g.fx }
-          let ctx ← functionBodyCtx opts base p n g.tparams g.scope
+          let ctx ← functionBodyCtx opts.requests base p n g.tparams g.scope
           match elabBodyOv ctx body (some g.ret)
               { env := genv, nslots := ps.length + hidden.length, slotTys := (g.params ++ hidden).toArray, frameSlots := ctx.locals.filterMap fun l => l.storage.map (l.slot, ·) } with
           | .ok (_, st) =>
@@ -1472,7 +1472,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       dictBase := ps.length
       suspends := suspends
       dictVars := dictTps.map (·.1) }
-    let ctx ← functionBodyCtx opts base p name tps scopeClass
+    let ctx ← functionBodyCtx opts.requests base p name tps scopeClass
     let locals := ctx.locals.reverse
     let hidden := dictTps.map fun (v, c) => Ty.param v c
     let arity := ps.length + hidden.length - selfTps.length
