@@ -10,7 +10,8 @@
 # named arguments from #305, functions with several values and named parameters from #307,
 # methods with several values from #310 (overridden from #328, of one name in unrelated classes from #283's
 # shared families), returns in functions with several values from #312,
-# and a choice after such a return's if, or in its value, from #318.
+# and a choice after such a return's if, or in its value, from #318;
+# return frames (a recursive call with code after it) from #283.
 """Random programs with choices INSIDE expressions (PR #234, phase 2), and an
 independent model written from docs/LANGUAGE.md's "Choice" section (not from
 scripts/gen-choice.py, and not from the lifting code).
@@ -70,6 +71,9 @@ flags: heavy     (with bif: more of them, longer chains, longer conditions)
                   generator, #296; on with lazy otherwise)
        retdefer-control (emit an equivalent pre-change layout of returning
                   cleanup scopes, with the same independent trace oracle)
+       noframes  (no return frame: a generator's call of itself with code after
+                  it, or its choice bound with plain code after it, #283; on with
+                  lazy otherwise)
 """
 import copy
 import os
@@ -433,6 +437,31 @@ RT2 = RT and 'nort2' not in flags
 # after its returning path are reached only on fallthrough. Keep this draw
 # independent of the expression generator and its existing seed streams.
 RET_DEFER = RT2 and random.Random(seed * 1000003 + 283391).random() < 0.5
+# ---- #283, flag frames (on with lazy; noframes turns it off): a generator's call of
+# itself may have code after it, which runs on each of the call's values (a return
+# frame): an alternative `Gz0(N - 1, A) + e` (e any value, with no var), `L + Gz0(…)`
+# (L a literal or name, read where it is written), or `Tell("fN", Gz0(…))`; and a
+# <decides> one may bind its choice and have plain code after it,
+#   Gz0(N:int, A:int)<decides>:int =
+#       …clauses…
+#       Wf := (A | Gz0(N - 1, A) | …)
+#       Print("fN")         (statements with no var, set or choice)
+#       Wf + A              (a value)
+# which is the choice of `Wf := a; …; Wf + A` for each alternative a. The model is
+# the same CPS inlining: the frame's code runs on each value as the caller's own
+# code after the call returns it, so where a value is rejected what the frames did
+# with it is undone with it (in a for: the frames are part of the value's segment,
+# as the code after the last choice reached is). A generator of its own decides, so
+# seeds keep their other programs.
+RFR = random.Random(seed * 1000003 + 283283)
+FRN = [0]
+
+
+def ffresh():
+    """a name for a frame's print, from a counter of its own (#283)."""
+    FRN[0] += 1
+    return f"fr{FRN[0]}"
+FRAMES = LAZY and 'noframes' not in flags and 'cf' not in flags
 REFUSED = [False]
 
 
@@ -687,7 +716,19 @@ def gub(fi, n):
         alts = f['val'][2] if n <= f['lo'] else f['val'][3]
     if 'cf' in flags:
         alts = alts[:1]
-    return sum(gub(a[1], n - 1) if a[0] == 'gself' else 1 for a in alts)     # (the callee's, #371)
+    return sum(gub(c[1], n - 1) if (c := frame_call(a)) is not None else 1 for a in alts)     # (the callee's, #371)
+
+
+def frame_call(a):
+    """the call of a generator in alternative a: the whole alternative, or the
+    one in a return frame after it (#283), else None."""
+    if a[0] == 'gself':
+        return a
+    if a[0] == 'bin':
+        return a[2] if a[2][0] == 'gself' else (a[3] if a[3][0] == 'gself' else None)
+    if a[0] == 'tell' and a[2][0] == 'gself':
+        return a[2]
+    return None
 
 
 def gen_gcall(scope, vars_, d):
@@ -782,6 +823,24 @@ def gen_gfunc(i):
         args = [('bin', '-', ('ref', 'N'), ('lit', 1)), a] + ([('ref', 'C')] if ctr else [])
         return ('gself', i, args)
 
+    def simple():
+        # (a literal or a name; RFR only, so seeds keep their other programs)
+        return ('lit', RFR.randint(-1, 3)) if RFR.random() < 0.5 else ('ref', RFR.choice(sc))
+
+    def framed(c):
+        # (#283: code after the call, which runs on each of its values; no var
+        # in it, which it would run on a copy of)
+        k = RFR.random()
+        if k < 0.3:
+            return ('bin', RFR.choice(['+', '-', '*']), c, simple())
+        if k < 0.5:
+            return ('bin', RFR.choice(['+', '*']), simple(), c)
+        if k < 0.7:
+            return ('tell', ffresh(), c)
+        if k < 0.85:
+            return ('bin', '+', ('tell', ffresh(), c), ('tell', ffresh(), simple()))
+        return c
+
     def alts(withself):
         out = [value() for _ in range(R.randint(1, 2))]
         if withself:
@@ -789,9 +848,27 @@ def gen_gfunc(i):
                 out.insert(R.randint(0, len(out)), selfcall())
         if len(out) == 1 and not withself and R.random() < 0.5:
             out.append(value())
+        if FRAMES and withself and RFR.random() < 0.5:
+            out = [framed(a) if a[0] == 'gself' else a for a in out]
         return out
     if dec:
         f['val'] = ('gchoice', alts(True))
+        if FRAMES and RFR.random() < 0.3:
+            # (#283: the choice bound, plain code after it, then a value)
+            post = []
+            for j in range(RFR.randint(0, 2)):
+                k = RFR.random()
+                if k < 0.4:
+                    post.append(('sprint', ffresh()))
+                elif k < 0.7:
+                    post.append(('slet', f"Wp{j}", ('bin', RFR.choice(['+', '*']), ('ref', 'Wf'), simple())))
+                elif ctr:
+                    post.append(('snext', 'C'))
+                else:
+                    post.append(('sfilt', ('cmp', ('ref', 'Wf'), [(RFR.choice(['>', '<>']), ('lit', RFR.randint(-2, 2)))])))
+            names = ['Wf'] + [c[1] for c in post if c[0] == 'slet']
+            last = ('bin', RFR.choice(['+', '-', '*']), ('ref', RFR.choice(names)), simple())
+            f['bound'] = ('Wf', post, ('tell', ffresh(), last) if RFR.random() < 0.3 else last)
     else:
         conds = [('filter', ('cmp', ('ref', 'N'), [('<=', ('lit', f['lo']))]))]
         # (a condition that always succeeds, so that N <= lo picks the base:
@@ -825,7 +902,7 @@ def lifted(f):
     arguments print or change an object, or those arguments set a name."""
     v = f['val']
     alts = v[1] if v[0] == 'gchoice' else v[2] + v[3]
-    args = [a[2] for a in alts if a[0] == 'gself']
+    args = [c[2] for a in alts if (c := frame_call(a)) is not None]
     conds = v[1] if v[0] == 'gbif' else []
     return (has_node(f['stmts'], FX_NODES) or has_node(conds, FX_NODES) or has_node(args, FX_NODES)
             or has_node(args, ('bset', 'setv')))
@@ -842,7 +919,12 @@ def show_gfunc(f):
     L = [f"{f['name']}({ps}){'<decides>' if f['decides'] else ''}:int ="]
     L += ["    " + show_s(c) for c in f['stmts']]
     v = f['val']
-    if v[0] == 'gchoice':
+    if v[0] == 'gchoice' and f.get('bound'):
+        x, post, last = f['bound']
+        L.append(f"    {x} := " + show_galts(v[1]))
+        L += ["    " + show_s(c) for c in post]
+        L.append("    " + show(last))
+    elif v[0] == 'gchoice':
         L.append("    " + show_galts(v[1]))
     else:
         L.append(f"    if ({show_cl(v[1], ', ')}) then {show_galts(v[2])} else {show_galts(v[3])}")
@@ -853,9 +935,14 @@ def gen_call(fi, vals, st, k, mode):
     GFRAME[0] += 1
     fr = f"g{GFRAME[0]}"
     f = GFUNCS[fi]
-    own = set(p for p, _ in f['params']) | binders_of(f['stmts'], set()) | binders_of(f['val'], set())
-    stmts = rename(f['stmts'], own, fr)
-    val = rename(f['val'], own, fr)
+    stmts, val = f['stmts'], f['val']
+    if f.get('bound'):
+        # (#283: its choice bound, the code after it run on each of its values)
+        x, post, last = f['bound']
+        stmts, val = stmts + [('slet', x, val)] + post, last
+    own = set(p for p, _ in f['params']) | binders_of(stmts, set()) | binders_of(val, set())
+    stmts = rename(stmts, own, fr)
+    val = rename(val, own, fr)
     for (p, _), v in zip(f['params'], vals):
         st.binds[f"{fr}.{p}"] = v
     LASTG[0] = f.get('lifted', False)
@@ -2165,7 +2252,16 @@ if LAZY:
     # not, with or without effects, run apart or not where the first success is taken)
     def retarget(f, j):
         v = f['val']
-        fix = lambda alts: [('gself', j, a[2]) if a[0] == 'gself' else a for a in alts]
+        def to_j(a):
+            # (a call in a return frame too, #283)
+            if a[0] == 'gself':
+                return ('gself', j, a[2])
+            if a[0] == 'bin' and frame_call(a) is not None:
+                return ('bin', a[1], to_j(a[2]), to_j(a[3]))
+            if a[0] == 'tell' and frame_call(a) is not None:
+                return ('tell', a[1], to_j(a[2]))
+            return a
+        fix = lambda alts: [to_j(a) for a in alts]
         f['val'] = ('gchoice', fix(v[1])) if v[0] == 'gchoice' else ('gbif', v[1], fix(v[2]), fix(v[3]))
     pairs = [(a, b) for a in range(len(GFUNCS)) for b in range(a + 1, len(GFUNCS))
              if all(GFUNCS[a][x] == GFUNCS[b][x] for x in ('decides', 'ctr', 'first_ok', 'lifted'))]
