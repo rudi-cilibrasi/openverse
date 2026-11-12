@@ -39,7 +39,9 @@ done
 for f in "$root"/tests/errors/*.verse; do
   n="$(basename "$f" .verse)"
   want="$(sed -n 's/^# expect: //p' "$f" | head -1)"
-  "$ov" check "$f" >/dev/null 2>"$tmp/$n.err"; code=$?
+  # NAME.args: options, one per line (`--signal-no-rollback`)
+  extra=(); [[ -f "$root/tests/errors/$n.args" ]] && mapfile -t extra <"$root/tests/errors/$n.args"
+  "$ov" check "$f" "${extra[@]}" >/dev/null 2>"$tmp/$n.err"; code=$?
   if [[ $code -ne 4 ]] || ! grep -qF "$want" "$tmp/$n.err"; then
     echo "FAIL errors/$n: exit $code, wanted 4 and '$want', got: $(cat "$tmp/$n.err")"
     fail=$((fail+1)); continue

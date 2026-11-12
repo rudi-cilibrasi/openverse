@@ -781,7 +781,11 @@ def contKey (ctx : Ctx) (p : Pos) (b : String) (rest : List SExpr) : String :=
   -- alternative of another one with a continuation, has the call of that
   -- one after it in the next elaboration, which may use the same names)
   let places := rest.map fun c => s!"{c.pos.line}.{c.pos.col}"
-  s!"k{p.line}_{p.col}_{p.file}_{b}_{String.intercalate "," caps}_{String.intercalate "," places}{typed}{ctx.liftTag}{reprStr ctx.inlineScopes}{sourceContextKey ctx}"
+  -- (#515, `--signal-no-rollback`: inside a failure context or not, as a
+  -- `defer:` run at a `return` and at the end of its scope is, each its own
+  -- continuation, whose frame starts so, `FirstLift.rollback`)
+  let rollback := if ctx.types.signalNoRollback && ctx.inRollback then "_rollback" else ""
+  s!"k{p.line}_{p.col}_{p.file}_{b}_{String.intercalate "," caps}_{String.intercalate "," places}{typed}{ctx.liftTag}{reprStr ctx.inlineScopes}{sourceContextKey ctx}{rollback}"
 
 /-- (#335) The function of its own that the clauses after a composed choice
     (#296) are compiled as, where the first success is taken and those
@@ -993,6 +997,7 @@ def contForLiftOf (ctx : Ctx) (p : Pos) (b : String) (bty vty : Ty) (alts rest :
   let bodyE : SExpr := if sets.isEmpty then .block p (copies ++ [ffirst]) else
     .block p (copies ++ [.decl p vals none false ffirst, .tuple p (.ident p vals :: sets.map fun l => SExpr.ident p l.name)])
   return { key, pos := p, name, sourceContext := sourceContextOf ctx, inlineScopes := ctx.inlineScopes, liftTag := ctx.liftTag,
+           rollback := ctx.types.signalNoRollback && ctx.inRollback,
            params := params ++ typeParams, tparams := tps,
            specs := (if heap.isEmpty then ["computes"] else heap) ++ ["decides"],
            ret, body := ctx.choiceCoercionBody (pruneConstructHints ctx name bodyE), binds := [], sets := sets.map (·.name),

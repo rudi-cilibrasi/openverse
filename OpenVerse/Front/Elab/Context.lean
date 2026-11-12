@@ -26,6 +26,7 @@ import OpenVerse.Front.ConcurrencyPrelude
 import OpenVerse.Front.PreludeNeeds
 import OpenVerse.Front.Profile
 import OpenVerse.Front.EffectPolicy
+import OpenVerse.Front.SignalAdmission
 import OpenVerse.Front.Suspend
 import OpenVerse.Front.Rational
 import OpenVerse.Front.Modules
@@ -324,6 +325,14 @@ structure Ctx where
   loopDefers : Nat := 0
   /-- In a `defer:` body, which cannot `return`. -/
   inDefer : Bool := false
+  /-- (#515, `--signal-no-rollback`) Inside a failure context of this
+      frame where the code itself cannot fail (a `defer:` body, a `block`,
+      a named argument's default): still rolled back with it. -/
+  inRollback : Bool := false
+  /-- (#515) The innermost loop is in a failure context (or inside one):
+      the `defer:`s a `break` runs, out of the scopes inside the loop, run
+      in that context, not in the one at the `break`. -/
+  loopRollback : Bool := false
   /-- In a class's `block:` clauses (one method, `$block`), where a `return`
       would skip the clauses after it. -/
   inBlock : Bool := false
@@ -462,6 +471,10 @@ structure LoopUse where
 structure ESt where
   /-- Pure mutual groups whose changing instances need eager generation. -/
   eagerNeeds : List String := []
+  /-- (#515, `--signal-no-rollback`) Each call (or construction, use of a
+      constant, `spawn`) in a failure context, what it is, and the Verse
+      Core functions it calls. -/
+  failCalls : Array ((Pos × String) × List Nat) := #[]
   /-- (#283) At each of `TyEnv.familySites` elaborated: the root of its
       method above its receiver's class, for the next round's inlining. -/
   familyNeeds : List (Pos × String) := []
@@ -931,6 +944,21 @@ def Ctx.captureEvidence (ctx : Ctx) (captures : List Local) (excluded : List Str
     if excluded.contains name || captures.any (·.name == name) then none else
       (ctx.lookup name).map fun binding => { binding with mutable := false, storage := none }
   captures ++ added
+/-- (#515) The context the `defer:`s an exit runs are elaborated in: inside
+    a failure context or not (`rollback`) as the exit's target is (`false`
+    for a `return`, which commits; the loop's for a `break`), not as the
+    exit itself is. -/
+def Ctx.exitDefers (ctx : Ctx) (rollback : Bool) : Ctx :=
+  { ctx with canFail := false, inRollback := rollback }
+
+/-- (#515, `--signal-no-rollback`) Record the functions code `e` at `p`
+    (`what` it is: a call, a construction, …) calls when it runs in a
+    failure context (or inside one, `inRollback`), for
+    `SignalAdmission.checkSites`. -/
+def noteFailCalls (ctx : Ctx) (p : Pos) (what : String) (e : Expr) : EM Unit := do
+  if ctx.types.signalNoRollback && (ctx.canFail || ctx.inRollback) then
+    let spawn := (ctx.sig? "$spawnMark").map (·.idx)
+    modify fun st => { st with failCalls := st.failCalls.push ((p, what), SignalAdmission.calls spawn e) }
 
 /-- `ctx` with the `defer:` body `d` pending for every `return` and `break`
     that leaves its scope (#80), with the locals in scope here. -/
