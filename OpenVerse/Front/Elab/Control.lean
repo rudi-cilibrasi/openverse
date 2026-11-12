@@ -795,21 +795,24 @@ def withCastClauses (ctx : Ctx) (cs : List SExpr) (after : SExpr) (isGen : SExpr
     let some cast := Refine.castClause? cs[k]! | throw err
     set st0
     if let some r ← alone k err then return some r
+    let bound := Choice.boundIn cs
+    let lift (c : SExpr) : List SExpr :=
+      Choice.liftClause (fun n => choiceValues ctx n || bound.contains n) (choiceField ctx) c (fieldOrder := choiceOrder ctx)
     let moved (computed : Bool) := Refine.castRestClauses (cs.take k) cast refusal.opens (cs.drop (k + 1)) after
-      isGen ctx.types.classes.contains (fun n => (ctx.lookup n).any (!·.mutable)) computed
-    match moved false with
-    | .error why => throw s!"{err} ({why})"
-    | .ok (cs', after', _) =>
-      -- (a later cast of an object computed among the moved clauses is cast
-      -- again from that object, bound first, when `after` needs it: when it
-      -- is refused without)
-      let st1 ← get
-      match ← tryCatch (Except.ok <$> rebuild cs' after') (fun err => pure (Except.error err)) with
-      | .ok r => return some r
-      | .error err1 =>
-        let .ok (cs'', after'', true) := moved true | throw err1
-        set st1
-        return some (← tryCatch (rebuild cs'' after'') fun _ => throw err1)
+      isGen ctx.types.classes.contains (fun n => (ctx.lookup n).any (!·.mutable)) computed lift
+    let (cs', after', _) ← match moved false with
+      | .ok r => pure r
+      | .error why => throw s!"{err} ({why})"
+    -- (a later cast of an object computed among the moved clauses is cast
+    -- again from that object, bound first, when `after` needs it: when it
+    -- is refused without)
+    let st1 ← get
+    match ← tryCatch (Except.ok <$> rebuild cs' after') (fun err => pure (Except.error err)) with
+    | .ok r => return some r
+    | .error err1 =>
+      let .ok (cs'', after'', true) := moved true | throw err1
+      set st1
+      return some (← tryCatch (rebuild cs'' after'') fun _ => throw err1)
 
 /-- Infer a producer's signature instance from its canonical arguments. -/
 def loopInstanceOf (ctx : Ctx) (p : Pos) (sig : Sig) (types : List Ty) : EM (List (String × Ty)) := do

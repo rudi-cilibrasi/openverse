@@ -14,7 +14,8 @@ computes among the clauses or of a parameter, whose refinement the branch's
 value needs (d = c, for an option of the second's A as a ?d). At times
 the cast is inside an expression, `C0 := Peek[H, 1] + T[P].C`, after a call
 with an effect that runs first; a for's clauses at times end with a
-generator over values of the cast's, `Y2 : array{D.C, D.C + 1}`; or the
+generator over values of the cast's, `Y2 : array{D.C, D.C + 1}`, and then a
+filter or a binding that uses the cast; or the
 cast is in a branch of an if written as an expression in a <decides> body,
 evaluated only when that branch is. Clauses
 before the cast print, add to a cell's var field or call a <decides> function
@@ -206,8 +207,11 @@ elif context == 'for':
     G2 = f'Ps:[]{root}(a, b), H:cell where a:type, b:type'
     # (at times a generator after the clauses, over values of the cast's)
     gen2 = (not bare) and ch(0.4)
-    clauses = ["P : Ps"] + body + (['Y2 : array{D.C, D.C + 1}'] if gen2 else [])
-    body2 = '        Print("y{Y2}")\n' if gen2 else ''
+    # (and after it a filter of the cast's, or a binding of it the body uses)
+    post = R.choice(['none', 'filter', 'bind']) if gen2 else 'none'
+    clauses = ["P : Ps"] + body + (['Y2 : array{D.C, D.C + 1}'] if gen2 else []) + \
+        {'none': [], 'filter': ['Y2 > D.C'], 'bind': ['W2 := Y2 + D.C']}[post]
+    body2 = ('        Print("y{Y2}")\n' if gen2 else '') + ('        Print("w{W2}")\n' if post == 'bind' else '')
     fn = (f'F({G2})<transacts>:int =\n    R := for ({", ".join(clauses)}):\n'
           f'{body2}        {body_t}\n        H.N\n    R.Length\n')
     def model_all(os):
@@ -219,7 +223,9 @@ elif context == 'for':
             except Fail:
                 st.back(s0); continue
             for y2 in ((o[3], o[3] + 1) if gen2 else (None,)):
+                if post == 'filter' and not y2 > o[3]: continue
                 if gen2: st.out.append(f'y{y2}')
+                if post == 'bind': st.out.append(f'w{y2 + o[3]}')
                 body_r(env); count += 1
         st.out.append(f'F {count} {st.n}')
 elif context == 'branch':
