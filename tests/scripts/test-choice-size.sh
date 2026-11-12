@@ -374,7 +374,7 @@ if kind.startswith('named-'):
     elif shape=='reordered':
      method='M(?X:int=K,?Y:int=5)<computes>:int=X+Y';args=lambda i:'?Y:=3,?X:=4'
     elif shape=='generic':
-     method='M(X:u,?Y:u=X where u:type)<computes>:u=Y';args=lambda i:f'A{i}.K'
+     method='M(X:u,?Y:u=X where u:type)<computes>:u=Y';args=lambda i:f'A{i}.K,?Y:=A{i}.K'
     elif shape=='waitingdefault':
      method='M(?X:int=Next(K))'+('<suspends>' if waiting else '<computes>')+':int=X'
     if shape=='inherited':

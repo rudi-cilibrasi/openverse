@@ -1550,6 +1550,16 @@ def choiceOperations (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx)
         let methodRename := own.zip methodVars |>.map fun ((old, _), (name, bound)) => (old, Ty.param name bound)
         if signature.decides != bracket then break
         let some (supplied, omittedDefaults) := choiceCallInputs signature arguments | break
+        -- An omitted value can determine a method instance at this call.
+        -- A dictionary quantified over that parameter would instead have
+        -- to check the default at every rigid instance, which can reject
+        -- a valid source call (for example ?X:u=1 with no supplied u).
+        let suppliedNames := arguments.filterMap fun
+          | .decl _ n .. => if n.startsWith "?" then some (n.drop 1).toString else none
+          | _ => none
+        let npos := signature.params.length - signature.named.length
+        if signature.named.zipIdx.any (fun ((n, _), i) => !suppliedNames.contains n &&
+            signature.params[npos + i]!.params.any (fun v => own.any (·.1 == v))) then break
         let substitution := (classVars.map (·.1)).zip (ctx.types.upArgs cls classArgs owner)
         let inputs := supplied.map fun ty => ((ty.subst methodRename).subst substitution).subst ctx.types.tvars
         let result := ((signature.ret.subst methodRename).subst substitution).subst ctx.types.tvars
