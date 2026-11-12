@@ -773,7 +773,7 @@ def contLiftOf (ctx c2 : Ctx) (p : Pos) (b : String) (alts rest : List SExpr)
       some <$> (resolveTy ctx.types p (firstReturnType ctx)).run' { env := ctx.types }
     else pure none
   if (Refine.findPart (fun | .brk _ => true | _ => false) true (.block p rest)).isSome then throw "a break"
-  let caps : List Local := (Choice.namesUsed written).eraseDups.filterMap ctx.lookup
+  let caps : List Local := (Choice.namesUsed (ctx.choiceCoercionBody (.block p rest))).eraseDups.filterMap ctx.lookup
   let setNames := Choice.setsIn (.block p rest)
   let sets := caps.filter fun l => l.mutable && setNames.contains l.name
   let binds := (b :: Choice.boundIn rest).eraseDups
@@ -919,7 +919,7 @@ def contForLiftOf (ctx : Ctx) (p : Pos) (b : String) (bty vty : Ty) (alts rest :
     | .app _ (.ident _ "$forReturnBody") [.block _ [_, .set _ (.ident _ _) none _], _, _] false => true
     | _ => false
   if !breaks && (Refine.findPart Refine.isBreak true (.block p rest)).isSome then throw "a break"
-  let caps : List Local := (Choice.namesUsed written).eraseDups.filterMap ctx.lookup
+  let caps : List Local := (Choice.namesUsed (ctx.choiceCoercionBody (.block p (rest ++ [body])))).eraseDups.filterMap ctx.lookup
   let setNames := Choice.setsIn (.block p (rest ++ [body]))
   let sets := caps.filter fun l => l.mutable && setNames.contains l.name
   let (tps, typeParams, typeArgs) ← contTypes ctx p (bty :: caps.map (·.ty)) [vty] written
