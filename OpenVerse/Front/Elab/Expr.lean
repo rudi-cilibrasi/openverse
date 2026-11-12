@@ -54,7 +54,7 @@ partial def elabExprMarkers (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R :=
   elabExprMarkersWith elabE elabRefineExit (@elabConc) elabSpawn elabBranch elabApp (@elabFor) elabOneClauses elabOneGo elabExprValues ctx se exp
 
 partial def elabExprValues (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R :=
-  elabExprValuesWith elabE elabStmt elabSeq elabApp ratCall elabCmp (@elabMember) elabConstruct elabMapLit ctx se exp
+  elabExprValuesWith elabE (elabSeqIn true) elabApp ratCall elabCmp (@elabMember) elabConstruct elabMapLit ctx se exp
 
 partial def elabExprControl (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R :=
   elabExprControlWith elabE elabStmt elabDefers elabRefineExit elabSeq (@elabRefinedIf) elabSet (@elabFor) elabOneClauses elabCase ctx se exp
@@ -417,14 +417,24 @@ partial def resolveOverload (ctx : Ctx) (p : Pos) (name : String) (ovs : List St
     eerr p s!"this call of {name} fits more than one overload: {" and ".intercalate shown}"
 
 /-- A sequence of statements, threading the scope; the value is the last one's. -/
-partial def elabSeq (ctx : Ctx) (ss : List SExpr) (exp : Option Ty) : EM (R × Ctx) := do
+partial def elabSeq (ctx : Ctx) (ss : List SExpr) (exp : Option Ty) : EM (R × Ctx) :=
+  elabSeqIn false ctx ss exp
+
+/-- `elabSeq`, and, for a sequence whose names end with it (`closed`: a
+    block) in a failure context, a cast that refines type arguments there
+    takes the rest of the sequence as its branch (#243): `pre; D := T[X];
+    rest` is `pre; if (D := T[X]) then {rest} else fail`, the rest typed
+    under the refinement, and its failure, or the cast's, the sequence's, so
+    that what `pre` did is undone with it. A bare `T[X]` is so too, its
+    value named for the branch. -/
+partial def elabSeqIn (closed : Bool) (ctx : Ctx) (ss : List SExpr) (exp : Option Ty) : EM (R × Ctx) := do
   match ss with
   | [] => return (⟨.lit .void, .void⟩, ctx)
   | .app p (.ident _ "$defer") [body] false :: rest =>
     -- `defer: D` then the rest of the scope (Book of Verse ch. 7): the rest,
     -- with D pending for its returns and breaks, then D, then the rest's value
     if let .block _ [] := body then eerr p "a defer: block cannot be empty"
-    let (r2, ctx2) ← elabSeq { ctx with defers := (body, ctx.locals) :: ctx.defers } rest exp
+    let (r2, ctx2) ← elabSeqIn closed { ctx with defers := (body, ctx.locals) :: ctx.defers } rest exp
     let d ← elabDefers ctx [(body, ctx.locals)]
     let ctx2 := { ctx2 with defers := ctx.defers, loopDefers := ctx.loopDefers }
     match r2.ty with
@@ -433,10 +443,15 @@ partial def elabSeq (ctx : Ctx) (ss : List SExpr) (exp : Option Ty) : EM (R × C
     | ty =>
       let t ← fresh ty
       return (⟨.seq (.assign t r2.e) (.seq d (.local t)), ty⟩, ctx2)
-  | [s] => elabStmt ctx s exp
   | s :: rest =>
+    if closed && ctx.canFail then
+      if let some (p, d, T, x) := Refine.castClause? s then
+        let branch := if rest.isEmpty then .ident p d else .block p rest
+        if let some r ← elabRefinedIf ctx p p d T x branch (some (Refine.noValue p)) exp (made := true) then
+          return (r, ctx)
+    if rest.isEmpty then return ← elabStmt ctx s exp
     let (r, ctx') ← elabStmt ctx s none
-    let (r2, ctx'') ← elabSeq ctx' rest exp
+    let (r2, ctx'') ← elabSeqIn closed ctx' rest exp
     return (⟨.seq r.e r2.e, r2.ty⟩, ctx'')
 
 partial def elabArgs (ctx : Ctx) (p : Pos) (args : List SExpr) (tys : List Ty) : EM (List Expr) := do
@@ -614,8 +629,8 @@ partial def elabCast (ctx : Ctx) (p : Pos) (T : String) (args : List SExpr) (bra
     | .struct S sargs => if env.classes.contains S then pure (S, sargs) else eerr p s!"cannot cast {withArticle S} to {T}"
     | t => eerr p s!"cannot cast {withArticle t.show} to {T}"
   -- (#351) from a reference through views, a cast to a class or interface
-  -- with Verse Core type arguments takes them from a dispatch: as the first
-  -- clause of an if's condition, whose branch is a function of its own
+  -- with Verse Core type arguments takes them from a dispatch: as a clause
+  -- of a failure context, whose rest is a function of its own
   if bracket && env.viewed.contains S && !(env.coreArgs T (((env.sparams.lookup T).getD []).map fun (v, k) => Ty.param v k)).isEmpty then
     let what := s!"a cast of {withArticle r.ty.show}, an interface referred to through views, to {T}"
     if !(env.isSub S T || env.isSub T S) then
@@ -627,12 +642,12 @@ partial def elabCast (ctx : Ctx) (p : Pos) (T : String) (args : List SExpr) (bra
     if ((env.concreteBelow S).filter (env.isSub · T)).all fun d =>
         (env.viewArgs? S d (env.coreArgs S sargs) (rigid := false)).isNone then
       eerr p s!"{withArticle r.ty.show} is never {withArticle T}: no class below both gives {S} those type arguments, so {T}[…] would always fail"
-    -- (one the first clause of an if's condition does not take either: an
-    -- interface whose type arguments the cast would open, #53)
+    -- (one a clause does not take either: an interface whose type
+    -- arguments the cast would open, #53)
     if (refiningCast? env T r.ty).isNone then
       eerr p s!"{what} would leave {T}'s type arguments unknown: they are not {S}'s, and an interface has no hidden fields to read them from (#351, #53)"
     let theirs := if (env.sparams.lookup T).isNone then s!"the type arguments {T} fixes" else s!"{T}'s type arguments"
-    eerr p s!"{what} works only as the first clause of an if's condition, D := {T}[X], whose branch then has {theirs} (#351)"
+    eerr p s!"{what} works {Refine.castRefusalNote}, D := {T}[X], whose rest then has {theirs} (#351)"
   -- a parametric class's type arguments are those of the value (#39), in the
   -- same hierarchy
   let parametric := (env.sparams.lookup T).isSome || !(env.coreArgs T []).isEmpty
@@ -642,13 +657,16 @@ partial def elabCast (ctx : Ctx) (p : Pos) (T : String) (args : List SExpr) (bra
     eerr p s!"cannot cast {withArticle S} to {T}: {T}'s type arguments would be unknown (they are not {S}'s)"
   let targs := if env.isSub S T then env.upArgs S sargs T else env.argsBelow S sargs T
   if parametric && (env.coreArgs T targs).length > (env.coreArgs S sargs).length then
-    eerr p s!"cannot cast {withArticle r.ty.show} to {T}: {T} has type parameters that {S} does not have, which would be unknown here: a cast opens them only as the first clause of an if's condition, D := {T}[X], whose branch then has them (#250)"
+    let unknown := s!"cannot cast {withArticle r.ty.show} to {T}: {T} has type parameters that {S} does not have, which would be unknown here"
+    -- (an interface has no hidden fields to read opened ones from, #53)
+    if (env.info T).isIface then eerr p s!"{unknown}: an interface has no hidden fields to read them from (#53, #250)"
+    eerr p s!"{unknown}: a cast opens them {Refine.castRefusalNote}, D := {T}[X], whose rest then has them (#250)"
   if bracket then
     match env.refineComparable? [] (env.comparableArgs T targs) with
     | none => eerr p s!"{withArticle r.ty.show} is never {withArticle T}: its type arguments do not satisfy {T}'s comparable bounds"
     | some μ =>
       if !μ.isEmpty then
-        eerr p s!"a cast to {T} strengthens comparable bounds, which works only as the first clause of an if's condition, D := {T}[X] (#209)"
+        eerr p s!"a cast to {T} strengthens comparable bounds, which works {Refine.castRefusalNote}, D := {T}[X], whose rest then has them (#209)"
   let tty : Ty := .struct T targs
   if !bracket then
     if !env.isSub S T then
@@ -660,7 +678,7 @@ partial def elabCast (ctx : Ctx) (p : Pos) (T : String) (args : List SExpr) (bra
     eerr p s!"no class is below both {r.ty.show} and {T}, so {T}[…] would always fail"
   if parametric && env.coreArgs T targs != env.coreArgs S sargs then
     if (Ty.unifyEqs (fun _ _ => none) [] ((env.coreArgs S sargs).zip (env.coreArgs T targs))).isSome then
-      eerr p s!"cannot cast {withArticle r.ty.show} to {(Ty.struct T targs).show} here: their type arguments agree only under a refinement, which a cast gives only as the first clause of an if's condition, D := {T}[X], whose branch is then typed under it (#209, #243)"
+      eerr p s!"cannot cast {withArticle r.ty.show} to {(Ty.struct T targs).show} here: their type arguments agree only under a refinement, which a cast gives {Refine.castRefusalNote}, D := {T}[X], whose rest is then typed under it (#209, #243)"
     -- (in a class's copy of an interface's default, at type arguments the
     -- class fixes, it fails, as the interface's own default's would, #53)
     if !ctx.liftTag.isEmpty then return ⟨.prim .fail [], tty⟩

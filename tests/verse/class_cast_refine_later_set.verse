@@ -1,5 +1,5 @@
-# expect: 10:27: cannot cast a pair(a, b) to dup(a) here
-# (#243: the var set before the cast would keep its value when the cast fails, which undoes the whole condition)
+# A refining cast after a clause that sets a var (#243): when the cast
+# fails, the whole condition fails and the var takes its value back.
 pair(t:type, u:type) := class:
     A:t
     B:u

@@ -1956,7 +1956,7 @@ would have to undo, so `Else` runs from the same state either way, and
 `true?` keeps `rest` a condition when it cannot fail itself, as the whole
 condition could. `Else` is written twice, once inside the function, but
 runs once. Leading casts chain: the second is the first clause of the
-`if` of the rest, lifted in turn (`Refine.functions` walks that `if` too). A cast after other clauses that only a first clause may be (one
+`if` of the rest, lifted in turn (`Refine.functions` walks that `if` too). A cast after other clauses that only a failure context's clause may be (one
 that refines, opens type arguments, or goes through a view) is first
 elaborated as written (`Ctx.asWritten`), so nothing that compiles changes;
 when that is refused at it, the `if` becomes `if (before, true?) then (if
@@ -1966,6 +1966,36 @@ function (`Expr.printsOrCalls`, on their code elaborated apart), so that
 the cast's failure has nothing of theirs to undo. The inner `if` always
 has a clause after the cast, so its branch is the lift's (`made`), not the
 source's. `Else` is written twice, and runs once.
+
+Those are one rule's cases: a cast that only such a clause may be takes
+the rest of its failure context as its branch. In a sequence whose names
+end with it (a block, so a `<decides>` body or `option{…}`'s, and the
+operand of `not`, `and` and `or`), `pre; D := T[X]; rest` is `pre; if (D
+:= T[X]) then {rest} else fail` (`elabSeqIn`; the `else` is
+`Refine.noValue`, which gives no value at every type). That `if` takes
+its type from the branch, refined, which code outside it must be able to
+name (`Lift.retOfBranch`, so the dispatch takes it too), and its copy-out
+tuple, for an outside `var` the branch sets, from the branch's type found
+apart under the refinement (an `else` of type `never` tells none). In an
+`if`'s condition, a `for`'s clauses and `first{…}`'s, whose names reach
+the branch, body or value, the cast is first elaborated as written
+(`withCastClauses`, which the `if`'s later clauses above share); when
+refused there, and the clauses before it have something to undo (or it is
+in a `for` or `first{…}`), it takes the clauses after it, up to a `for`'s
+next generator, as the branch of a clause of its own, `if (D := T[X']) then
+first{rest; names} else fail` (`Refine.castRestClauses`), so their failure
+undoes the clauses before it. The names those clauses bind that later code
+uses are its value, bound again after it; a branch or body that uses them,
+or `D`, casts `X'` (bound once) again, `if (D := T[X']) then after else
+Err()`, at its own place, so it is typed under the refinement too: an
+object's class does not change, so that dispatch reaches the class the
+first one did. So it does each later cast among those clauses of a local
+bound before them that is no `var` (the object, without a slot of its
+own), when it uses that cast's name or one bound after it: a value of the
+branch at a refined type, such an object included, would leave it at that
+type, which is no longer a refining cast's. Both `if`s are the elaborator's, marked `$made` (their
+branches are the lifts'). A `for`'s rebuilt body is at the element type
+expected, when one is.
 
 It takes two elaborations, as function values at closed types do
 (#214): the first finds the cast (`elabRefinedIf`), elaborates `Body`

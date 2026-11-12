@@ -1,0 +1,13 @@
+Opt 2
+Opt no
+OptC 8 -1
+in
+Undo 5
+Undo no 5
+Undo no 5
+Logic
+Not 0 1
+And 1 0 0
+Or 1 0 1 0
+First 6 -1 5 -1
+exit=0
