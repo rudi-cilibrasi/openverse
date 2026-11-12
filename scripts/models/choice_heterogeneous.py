@@ -10,7 +10,9 @@ p.add_argument('--methods', action='store_true')
 p.add_argument('--generic-methods', action='store_true')
 p.add_argument('--members', action='store_true')
 p.add_argument('--callable-fields', action='store_true')
+p.add_argument('--aliases', action='store_true')
 a = p.parse_args()
+a.members = a.members or a.aliases
 a.generic_methods = (a.generic_methods or a.members) and not a.callable_fields
 a.members = a.members and not a.callable_fields
 a.methods = a.methods or a.generic_methods or a.callable_fields
@@ -180,10 +182,16 @@ for i, d in enumerate(levels):
     if a.methods:
         extra = ','.join(([f'Argument(H,{i+1})'] if method_arguments else []) + (['X'] if a.generic_methods else []))
         score = f'Score(H,A{i}' + (',' + extra if extra else '') + ')' if a.control else f'A{i}.F(A{i}.H,A{i}.K' + (',' + extra if extra else '') + ')' if a.callable_fields else f'A{i}.' + ('Read' if a.members else 'Score') + f'({extra})' + ('.K' if a.members else '')
-    clauses.extend([f"A{i}:=({'|'.join(producers)})", f'S{i}:={score}', f'Print("f {i} {{S{i}}}")', f"set H.N+={d['weight']}+S{i}", f'set Total+=S{i}+1', f"Mod[H.N+S{i},{d['mod']}]={d['want']}"])
+    clauses.append(f"A{i}:=({'|'.join(producers)})")
+    if a.aliases:
+        clauses.extend([f'Alias{i}:=A{i}', f'B{i}:=Alias{i}'])
+        score = score.replace(f'A{i}', f'B{i}')
+    clauses.extend([f'S{i}:={score}', f'Print("f {i} {{S{i}}}")', f"set H.N+={d['weight']}+S{i}", f'set Total+=S{i}+1', f"Mod[H.N+S{i},{d['mod']}]={d['want']}"])
 clauses.append('Z:=Items[0]' if mode == 'first' else 'Z:Items')
 score = '+'.join((f'S{i}' for i in range(n)))
 names = ('S0', f'S{n - 1}') if shape == 'fields' else ('A0', f'A{n - 1}')
+if a.aliases:
+    names = tuple(name.replace('A', 'B') for name in names)
 packet = f'({names[0]},{names[1]},{score})' if packed else names[0]
 body = f'set H.N+={boost}+{score};set Total+={score};Print("body {{H.N}} {{Total}}");{packet}'
 effects = '<suspends><transacts>' if mode == 'waiting' else '<transacts>'
