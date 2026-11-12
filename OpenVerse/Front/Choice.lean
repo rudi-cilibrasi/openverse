@@ -202,7 +202,8 @@ each: those of arithmetic, comparisons, calls (the receiver first), member
 access, `?`, tuples, arrays, maps and string interpolation; a call's
 named arguments after its positional ones, as they are evaluated; a
 block's clauses; a construction's fields, in its type's declaration order,
-as they are evaluated (#283). A choice elsewhere (a branch that is more
+as they are evaluated; the operands of `and`, each as a block, and the
+right of `or`, as the `if` it stands for (`orIf`) (#283). A choice elsewhere (a branch that is more
 than a value, an alternative, which the elaborator takes apart) is not
 lifted here. -/
 
@@ -287,6 +288,7 @@ partial def pathHas (has : SExpr → Bool) : SExpr → Bool
   | .member _ base _ | .query _ base => pathHas has base
   | _ => false
 
+mutual
 /-- Whether `e` has a choice that lifting reaches. -/
 partial def hasLiftable : SExpr → Bool
   -- (a block or construction kept, with why, `$noLift`, #283)
@@ -311,6 +313,10 @@ partial def hasLiftable : SExpr → Bool
       | a@(.block ..) => !(match f with | .ident _ n => n.startsWith "$" | _ => false) && hasLiftable a
       | a => hasLiftable a
   | .bin _ _ a b => hasLiftable a || hasLiftable b
+  -- (#283) the operands of `and`, and the right of `or` (its left is a
+  -- failure context, which takes its own): each a clause, of a scope of its own
+  | .andE _ a b => liftsHere a || liftsHere b
+  | .orE _ _ b => liftsHere b
   | .cmp _ a rest => hasLiftable a || rest.any (hasLiftable ·.2)
   | .member _ e _ | .query _ e | .neg _ e => hasLiftable e
   | .tuple _ es | .arrayLit _ es => es.any hasLiftable
@@ -318,16 +324,34 @@ partial def hasLiftable : SExpr → Bool
   | .mapLit _ kvs => kvs.any fun (k, v) => hasLiftable k || hasLiftable v
   -- (a construction's field values and a block's clauses, #283)
   | .construct _ _ _ fs => fs.any fun | .decl _ _ _ _ x => hasLiftable x | x => hasLiftable x
-  | .block _ ss => ss.any fun
-      | .decl _ _ _ _ x | .gen _ _ _ x => hasLiftable x
-      | .set _ l _ x => hasLiftable x || pathHas hasLiftable l
-      | x => hasLiftable x
+  | .block _ ss => ss.any liftsHere
   | _ => false
+
+/-- A clause with something to lift into the clauses it is among: in a
+    binding's value or a generator's source, in a `set`'s value or path, or
+    in the clause itself. -/
+partial def liftsHere : SExpr → Bool
+  | .decl _ _ _ _ x | .gen _ _ _ x => hasLiftable x
+  | .set _ l _ x => hasLiftable x || pathHas hasLiftable l
+  | x => hasLiftable x
+end
 
 /-- An `if` that can lift directly at the binding's expected type.
     An incomplete chain first needs a binding of its own at void. -/
 def liftsAsIf (e : SExpr) : Bool :=
   isBranchy.complete e && (isBranchy e || branchesLift hasLiftable e)
+
+/-- (#283) `A or B` with something to lift on its right, as the `if` it
+    stands for, `if (T := A) then T else B`: its condition takes the first
+    success of `A`, as the left of `or` does, and its values are otherwise
+    `B`'s; each operand a block, a scope of its own. Lifted as any `if` with
+    choices in its branches is, at a binding's or `set`'s place too. -/
+def orIf (site : String) : SExpr → SExpr
+  | e@(.orE p a b) =>
+    if !liftsHere b then e else
+    let t := s!"$or{sitePart site}{p.line}_{p.col}"
+    .ite p [.decl p t none false (.block a.pos [a])] (.ident p t) (some (.block b.pos [b]))
+  | e => e
 
 /-- The same whenever evaluated, and typed by where they are (so they keep
     their expected type in place), so not bound to a name of their own:
@@ -697,6 +721,13 @@ partial def liftE (isVal : String → Bool) (isField : String → String → Boo
   | .bin p o a b => match ← liftOps isVal isField [a, b] with
     | [a', b'] => return .bin p o a' b'
     | _ => return e
+  -- (#283) `A and B`: its operands in order, each a block, as each is a scope
+  -- of its own: `A` a clause, then `B` the value
+  | .andE _ a b =>
+    for c in normClauses (← liftClauseM isVal isField (.block a.pos [a])) (← get).site do
+      modify fun s => { s with pre := s.pre.push c }
+    liftE isVal isField (.block b.pos [b])
+  | .orE .. => liftE isVal isField (orIf (← get).site e)
   | .cmp p a rest => liftCmp isVal isField p (a :: rest.map (·.2)) (rest.map (·.1))
   | .member p x m => return .member p (← liftE isVal isField x) m
   | .query p x => return .query p (← liftE isVal isField x)
@@ -878,6 +909,12 @@ partial def liftClauseM (isVal : String → Bool) (isField : String → String �
     for c in h do out := out ++ (← liftClauseM isVal isField c)
     return out
   let site := (← get).site
+  -- (#283) a binding's or a `set`'s `A or B` as its `if`, which is then
+  -- lifted as one in that place, with no binding of its own
+  let c : SExpr := match c with
+    | .decl p x ty v rhs => .decl p x ty v (orIf site rhs)
+    | .set p l op rhs => .set p l op (orIf site rhs)
+    | c => c
   -- (#283) a `set` with a choice or a call with several values in its
   -- path's indices: each index bound, lifted, in order, then for `op=` the
   -- old value, then the new one's code, as `set` evaluates (before the
@@ -1103,14 +1140,10 @@ def inlineScopesAfter (initial : List String) (cs : List SExpr) : List String :=
 /-- Whether the clauses have a choice for their failure context to take. -/
 def hasChoice (cs : List SExpr) (fieldOrder : String → FieldOrder := fun _ => {}) : Bool :=
   (prepare cs (fieldOrder := fieldOrder)).any (fun c => (binding? c).isSome) ||
-    -- (#283) or something to lift where a clause takes it (`liftsHere`): an
-    -- inlined call with no choice in it, where an overloaded one's
-    -- overload has one value, still has its clauses to lift
-    cs.any fun
-      | .decl _ _ _ _ rhs => hasLiftable rhs
-      | .set _ l _ rhs => hasLiftable rhs || pathHas hasLiftable l
-      | .gen _ _ _ src => hasLiftable src
-      | e => hasLiftable e
+    -- (#283) or something to lift where a clause takes it: an inlined call
+    -- with no choice in it, where an overloaded one's overload has one
+    -- value, still has its clauses to lift
+    cs.any liftsHere
 
 /-- `first{cs}`, the last clause naming its value. -/
 def firstOfClauses (p : Pos) (cs : List SExpr) : SExpr :=
@@ -1244,15 +1277,6 @@ partial def checkBody : SExpr → SExpr :=
         | a :: rest => .ite p [.query p (.ident p "false")] (checkBody a) (some (chain rest))
       some (chain as)
     | _ => none
-
-/-- A statement where a choice or a call of a function of `mv` (marked) is
-    lifted into the body's own clauses: the body then has several values. -/
-def liftsHere (c : SExpr) : Bool :=
-  match c with
-  | .decl _ _ _ _ rhs => hasLiftable rhs
-  | .set _ l _ rhs => hasLiftable rhs || pathHas hasLiftable l
-  | .gen _ _ _ src => hasLiftable src
-  | e => hasLiftable e
 
 /-- Whether the body writes a type that mentions one of `tps`: in a
     binding's type or a construction's type arguments. -/

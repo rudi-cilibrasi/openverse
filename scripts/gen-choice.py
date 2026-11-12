@@ -11,7 +11,8 @@ print, change the variable `N` or fail; range generators; filters; and
 clauses that print or change `N`; and choices inside expressions, as
 `X := (a | b) + (c | d)` and `(Print(...); X) + (a | b) > c`, which the model
 expands into the clauses they are lifted to (the code before a choice
-first, once, then each choice in order). The expected output comes from the model
+first, once, then each choice in order); and choices in the operands of
+`and` and on the right of `or`, also under `not` (#283). The expected output comes from the model
 below, a backtracking interpreter written from the semantics in
 docs/LANGUAGE.md ("Choice"), not from the compiler:
 
@@ -21,7 +22,11 @@ docs/LANGUAGE.md ("Choice"), not from the compiler:
   too), later alternatives never run, and a failed condition leaves no trace;
 - a `for` takes all of them: a choice is a generator whose alternative is
   bound in its filter, so a failing alternative is skipped and rolled back,
-  while the effects of a successful filter and of the body stay.
+  while the effects of a successful filter and of the body stay;
+- `A and B` is A's clauses, then B's; the left of `or` takes its own first
+  success, which is then the `or`'s only value (no generator, as the `if`
+  it stands for), and only when it has none are the right's values the
+  `or`'s; `not` takes its first success and keeps nothing.
 """
 import random
 import sys
@@ -155,6 +160,10 @@ def clause_src(c):
 def apply(c, st):
     """A clause that is no generator: whether it succeeds (mutating st)."""
     k = c[0]
+    if k == 'not':
+        # (a failure context of its own, which takes the first success of
+        # its clauses; nothing it does stays)
+        return one(c[1], st.copy()) is None
     if k == 'bindsum':
         st.env[c[1]] = st.env[c[2]] + st.env[c[3]]
         return True
@@ -169,20 +178,46 @@ def apply(c, st):
     raise ValueError(c)
 
 
+def alts_at(c, st):
+    """A generator's alternatives, from st."""
+    k = c[0]
+    if k == 'choice':
+        return flat_alts(c[2])
+    if k == 'bchoice':
+        return flat_alts(c[3] if st.n > c[2] else c[4])
+    if k == 'rcall':
+        lo = st.env[c[3][1]] if c[3][0] == 'name' else c[3][1]
+        return [('lit', v) for v in range(lo, c[4] + 1)]
+    if k == 'or':
+        return c[4]
+    return [('lit', v) for v in range(c[2], c[3] + 1)]
+
+
+def or_left(c, st):
+    """The left of `or`, a failure context of its own that takes the first
+    success of its clauses: the state after it, with the `or`'s name bound
+    to its value (the names it binds are its own), or None."""
+    r = one(c[2], st.copy())
+    if r is None:
+        return None
+    v = r.env[c[3]]
+    r.env = dict(st.env)
+    r.env[c[1]] = v
+    return r
+
+
 def one(cls, st):
     """The first success of the clauses from st (a new state), or None."""
     if not cls:
         return st
     c, rest = cls[0], cls[1:]
-    if c[0] in ('choice', 'bchoice', 'rcall'):
-        if c[0] == 'choice':
-            alts = flat_alts(c[2])
-        elif c[0] == 'bchoice':
-            alts = flat_alts(c[3] if st.n > c[2] else c[4])
-        else:
-            lo = st.env[c[3][1]] if c[3][0] == 'name' else c[3][1]
-            alts = [('lit', v) for v in range(lo, c[4] + 1)]
-        for a in alts:
+    if c[0] == 'or':
+        # (its left's value, if it has one, is its only one: its right never runs)
+        r = or_left(c, st)
+        if r is not None:
+            return one(rest, r)
+    if is_gen(c):
+        for a in alts_at(c, st):
             s2 = st.copy()
             v = alt_eval(a, s2)
             if v is None:
@@ -214,60 +249,41 @@ def expand(cls):
 
 
 def is_gen(c):
-    return c[0] in ('choice', 'range', 'bchoice', 'rcall')
+    return c[0] in ('choice', 'range', 'bchoice', 'rcall', 'or')
 
 
 def run_for(cls, body, st):
-    """A for: each success of the clauses runs body(st); effects stay."""
-    pre = []
-    i = 0
-    while i < len(cls) and not is_gen(cls[i]):
-        pre.append(cls[i]); i += 1
-    groups = []
-    while i < len(cls):
-        g = cls[i]; i += 1
-        fs = []
-        while i < len(cls) and not is_gen(cls[i]):
-            fs.append(cls[i]); i += 1
-        groups.append((g, fs))
-
-    def filters(fs, s):
-        for f in fs:
-            if not apply(f, s):
-                return False
-        return True
-
-    def build(gs):
-        if not gs:
+    """A for: each success of the clauses runs body(st). A generator's
+    alternative and the clauses after it, up to the next generator, are one
+    unit: rolled back when one of them fails, else kept (in st) before the
+    next generator runs, as the body's effects are. An `or` whose left
+    succeeds has that one value, and is no generator (as the `if` it stands
+    for, #331): the clauses after it are in the same unit as those before."""
+    def go(i, s):
+        if i == len(cls):
+            st.assign(s)
             body(st)
             return
-        (g, fs), more = gs[0], gs[1:]
-        if g[0] == 'choice':
-            items = [('alt', a) for a in flat_alts(g[2])]
-        elif g[0] == 'bchoice':
-            items = [('alt', a) for a in flat_alts(g[3] if st.n > g[2] else g[4])]
-        elif g[0] == 'rcall':
-            lo = st.env[g[3][1]] if g[3][0] == 'name' else g[3][1]
-            items = [('alt', ('lit', v)) for v in range(lo, g[4] + 1)]
-        else:
-            items = [('val', v) for v in range(g[2], g[3] + 1)]
-        for kind, x in items:
+        c = cls[i]
+        if c[0] == 'or':
+            r = or_left(c, s)
+            if r is not None:
+                go(i + 1, r)
+                return
+        if not is_gen(c):
+            if apply(c, s):
+                go(i + 1, s)
+            return
+        st.assign(s)
+        for a in alts_at(c, st):
             s0 = st.copy()
-            v = alt_eval(x, s0) if kind == 'alt' else x
+            v = alt_eval(a, s0)
             if v is None:
                 continue
-            s0.env[g[1]] = v
-            if not filters(fs, s0):
-                continue
-            st.assign(s0)
-            build(more)
+            s0.env[c[1]] = v
+            go(i + 1, s0)
 
-    if pre:
-        s0 = st.copy()
-        if not filters(pre, s0):
-            return
-        st.assign(s0)
-    build(groups)
+    go(0, st.copy())
 
 
 # --- generation -------------------------------------------------------------
@@ -351,6 +367,62 @@ class Gen:
         src = f'{name} := ({choice_src(al)}) + ({choice_src(ar)})'
         return ('sugar', src, [('choice', a, al), ('choice', b, ar), ('bindsum', name, a, b)]), name
 
+    def operand(self, names):
+        """An operand of `and` or `or` that may fail: its source, the clauses
+        it is, and the name of its value. Its names are its own."""
+        op = self.rng.choice(list(OPS))
+        if names and self.rng.random() < 0.4:
+            x = self.rng.choice(names)
+            c = self.rng.randint(0, 9)
+            return f'{x} {op} {c}', [('cmp', ('var', x), op, c)], x
+        y = self.fresh_tag('L')
+        alts = self.plain_alts()
+        c = self.rng.randint(0, 9)
+        return (f'({y} := {choice_src(alts)}; {y} {op} {c})',
+                [('choice', y, alts), ('cmp', ('var', y), op, c)], y)
+
+    def values(self, names):
+        """A choice, or a call of a function with several values: its source
+        and its alternatives."""
+        if self.fns and self.rng.random() < 0.3:
+            f, off, tag = self.rng.choice(self.fns)
+            ref = ('name', self.rng.choice(names)) if names and self.rng.random() < 0.6 else ('lit', self.rng.randint(0, 9))
+            return f'{f}({ref[1]})', [('pv', tag, ref, 0), ('pv', None, ref, off)]
+        alts = self.plain_alts()
+        return f'({choice_src(alts)})', alts
+
+    def logic(self, name, names):
+        """A clause with a choice in an operand of `and` or on the right of
+        `or` (#283), and what it is: `A and B` is A's clauses, then B's; the
+        left of `or` takes its first success, and only when it has none are
+        the `or`'s values the right's. Each operand is a scope of its own."""
+        # (a filter binds no name: only after one, as for `sugar`'s, so that
+        # clauses with a choice bind a name, which `first{…}` gives)
+        r = self.rng.random() * (1 if names else 0.7)
+        self.tag += 1
+        a = f'$a{self.tag}'
+        if r < 0.35:
+            # a binding: name := (A and B)
+            src, cls, _ = self.operand(names)
+            vsrc, alts = self.values(names)
+            return ('sugar', f'{name} := ({src} and {vsrc})', cls + [('choice', name, alts)]), name
+        if r < 0.7:
+            # a binding: name := (A or B)
+            src, cls, v = self.operand(names)
+            vsrc, alts = self.values(names)
+            return ('sugar', f'{name} := ({src} or {vsrc})', [('or', name, cls, v, alts)]), name
+        # a filter: A and (B) op c, alone or under `not`, which takes its
+        # first success and keeps nothing it does
+        src, cls, _ = self.operand(names)
+        vsrc, alts = self.values(names)
+        op = self.rng.choice(list(OPS))
+        c = self.rng.randint(0, 9)
+        filt = cls + [('choice', a, alts), ('cmp', ('var', a), op, c)]
+        src = f'{src} and {vsrc} {op} {c}'
+        if r < 0.85:
+            return ('sugar', src, filt), None
+        return ('sugar', f'not ({src})', [('not', filt)]), None
+
     def clauses(self, prefix, in_for):
         """1-5 clauses with at least one choice."""
         cls = []
@@ -380,7 +452,12 @@ class Gen:
                 cls.append(c); has_choice = True
                 if bound:
                     names.append(bound)
-            elif in_for and r < 0.68:
+            elif r < 0.68:
+                c, bound = self.logic(name, names)
+                cls.append(c); has_choice = True
+                if bound:
+                    names.append(bound)
+            elif in_for and r < 0.76:
                 lo = self.rng.randint(0, 2)
                 cls.append(('range', name, lo, lo + self.rng.randint(0, 2))); names.append(name)
             else:
