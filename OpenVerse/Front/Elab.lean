@@ -11808,7 +11808,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   let defines0 (n : String) : Option Pos := resolved.findSome? fun
     | .classDef p m .. | .fn p m .. | .const p m .. => if m == n then some p else none
   let owned := PreludeNeeds.names.filter (defines0 · |>.isSome)
-  let requestTops := Refine.functions opts.castRequests resolved ++
+  let requestTops := opts.subtypeRequests ++ Refine.functions opts.castRequests resolved ++
     opts.loopRequests.flatMap (fun l =>
       STop.fn l.pos l.name l.params l.tparams l.specs l.ret l.body :: l.extraFns) ++
     opts.methodRequests.map (fun r => STop.fn r.pos "$methodRequest"

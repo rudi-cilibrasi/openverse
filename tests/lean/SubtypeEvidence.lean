@@ -214,6 +214,15 @@ private def metadataContracts : IO Unit := do
       need "inlining renames peer parameter in the bound" (element.startsWith "$tp" &&
         constraints.any (fun parameter => parameter.name == element && parameter.constraint == "type"))
     | _ => throw (IO.userError s!"inlining lost the bound type: {reprStr bound}")
+  for (source, needed) in [
+      ("F(X:t where t:subtype(event(int))):t=X", "event"),
+      ("C(t:subtype(task(int))):=class{}", "task"),
+      ("S(t:subtype(sticky_event(int))):=struct{}", "sticky_event")] do
+    let tops ← getOK "parse bound library dependencies" (parseProgram (source ++ "\nMain():void={}"))
+    need s!"prelude sees upper-bound dependency {needed}" ((PreludeNeeds.uses tops).contains needed)
+  let shadowed ← getOK "parse peer named event"
+    (parseProgram "F(X:t where event:type,t:subtype(event)):t=X\nMain():void={}")
+  need "a bound peer is not a nominal prelude dependency" (!(PreludeNeeds.uses shadowed).contains "event")
 
 private def rewrite (replacements : List (String × SExpr)) (body : SExpr) : Except String SExpr := do
   let rename (name : String) := if name == "evidence" then family else name
@@ -579,7 +588,10 @@ def main (args : List String) : IO Unit := do
   let materialize (label source : String) : IO Compiled := do
     let parsed ← getOK s!"{label}: parse" (parseProgram source)
     let rewritten ← getOK s!"{label}: rewrite" (parsed.mapM (rewriteTop automatic))
-    getOK s!"{label}: compile" (elabProgram rewritten)
+    let full ← getOK s!"{label}: compile" (elabProgram rewritten)
+    let strict ← getOK s!"{label}: choice-free compile" (elabProgram rewritten { profile := .choiceFree })
+    need s!"{label}: profile preserves admitted bytecode" (full.prog.encode == strict.prog.encode)
+    return full
   let materialized ← materialize "automatic dictionaries" source
   checkTrace "automatic dictionaries" materialized trace
   need "materialization finishes every request" materialized.subtypeNeeds.isEmpty
@@ -598,11 +610,20 @@ def main (args : List String) : IO Unit := do
   let entry := SExpr.member pos
     (.app pos (.member pos (witness vehicle car) "Up") [.construct pos "car" [] []] false) "Speed"
   let autoEntry ← getOK "entry-only dictionary discovery" (elabProgram entryTops { entry := some entry })
+  let strictEntry ← getOK "choice-free entry-only dictionary discovery"
+    (elabProgram entryTops { entry := some entry, profile := .choiceFree })
+  need "entry dictionary preserves admitted bytecode" (autoEntry.prog.encode == strictEntry.prog.encode)
   checkTrace "entry-only dictionary discovery" autoEntry "9\n"
   let badRequest := STop.classDef pos "$subtypeNominalBad" [] ["predicts"] [] false [] [] []
   let main := STop.fn pos "Main" [] [] [] (.name "void") (.tuple pos [])
   expectError "materialized dictionary effects remain checked" "<predicts>"
     (elabProgramCore [main] { subtypeRequests := [badRequest] })
+  let task := STy.app "task" [.name "int"]
+  let taskDictionary := STop.classDef pos "$subtypeNominalPrelude" [] ["computes"]
+    [.app family [task, task]] false [] []
+    [.fn pos "Up" [{ name := "X", ty := task }] [] ["override", "computes"] task (.ident pos "X")]
+  let _ ← getOK "materialized subtype request loads its own library types"
+    (elabProgram [main] { subtypeRequests := [taskDictionary] })
   if let [out] := args then
     IO.FS.writeBinFile (out ++ "/evidence.vbc") compiled.prog.encode
     IO.FS.writeFile (out ++ "/evidence.expected") trace
