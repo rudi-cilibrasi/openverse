@@ -43,7 +43,8 @@ structure Storage where
 
 /-- A refining cast's branch, lifted into a generic function (#243). -/
 structure Lift where
-  /-- The `if`'s position and the name its condition binds: the key. -/
+  /-- The `if`'s position and the name its condition binds: with `tag`, the
+      key. -/
   pos : Pos
   bound : String
   /-- The class cast to: it and the classes below it get pins in Verse
@@ -72,9 +73,11 @@ structure Lift where
   /-- The branch, when it is not taken from the source as written: in a
       method, with the members of `Self` it names bare made `Self.member`. -/
   body : Option SExpr := none
-  /-- In a class's copy of an interface's default (#53): `$in` and the
-      class, as the copies and the interface's own default share the
-      source's places (`Ctx.liftTag`); such a lift always has its `body`. -/
+  /-- What tells it apart from the other lifts of its place, the rest of its
+      key (`refineTagOf`): the continuation it was moved into, a class's
+      copy of an interface's default (#53: `$in` and the class), and in a
+      source context, what its function depends on there. A lift with a tag
+      always has its `body`, which the source's places do not find. -/
   tag : String := ""
   /-- Refinements moved into an immediate continuation use its local
       copies, rather than the source frame's capture metadata. -/

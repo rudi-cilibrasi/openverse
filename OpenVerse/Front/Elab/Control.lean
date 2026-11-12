@@ -383,6 +383,9 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
     (outsideWrites : List Nat := []) :
     EM (Option R) := do
   let ctx := ctx.choiceCoercionScope
+  -- (the lift's tag is of the branch as written, before choice conversions
+  -- wrap it, as `elabExprControlWith` computes it too)
+  let written := body0
   let body0 := ctx.choiceCoercionBody body0
   let env := ctx.types
   if !env.classes.contains T then return none
@@ -495,7 +498,7 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
   let elseOf : EM R := match elseE with
     | none => pure ⟨.lit .void, .void⟩
     | some ee => elabE ctx ee exp
-  let tag := refineTagOf ctx
+  let tag := refineTagOf ctx x written elseE exp
   let key := Refine.keyOf p D tag
   let liftName := s!"$refine{p.line}_{p.col}_{D}" ++ (if p.file.isEmpty then "" else s!"_{p.file}") ++ tag
   -- Keep a suspending lift's available parameters in a stable order from
@@ -509,6 +512,7 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
     -- (first: the branch in the refined world)
     let dslot ← fresh dTy
     let ctxB : Ctx := { refined dslot with
+      inRefinedTrial := true,
       frameName := liftName, frameArgs := available.map fun (n, c) => Ty.param n c,
       -- (the source return's value and the lifted function's copy-out)
       retTy := (escRet.map (refine ·.1)).getD ctx.retTy,
@@ -608,7 +612,12 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
       -- (and a tagged one, which the source's places do not find, #53)
       body := if ctx.selfClass.isSome || made || D.startsWith "$" || !tag.isEmpty || !ctx.choiceCoercions.isEmpty then some (pruneConstructHints ctxB liftName
         (pruneConstructHints { ctxB with frameName := ctx.frameName } liftName body)) else none }
-    noteNeeds { casts := [lift] }
+    -- (not from the trial of an enclosing cast's branch when its tag
+    -- depends on the context, `refineTagOf`: the next elaboration calls the
+    -- function made from that branch, whose context differs, and the cast
+    -- asks for its lift there)
+    unless ctx.inRefinedTrial && !(sourceContextKey ctx).isEmpty do
+      noteNeeds { casts := [lift] }
     if suspendsB then
       modify fun st => { st with pendingSuspendingCasts := st.pendingSuspendingCasts + 1 }
     if thenWaits || elseWaits then

@@ -2329,9 +2329,32 @@ conversion of a class type.
 Refining lifts also carry `SourceContext`, including default dependency
 stacks and the source's cleanup, constructor, class-block and concurrent-arm
 flags. Discovery and generated function checking restore the same scope.
-Their request identity includes that scope and its type environment, while
-the source class-copy tag stays separate. Different closed evaluations of
-one default therefore cannot reuse a helper with the wrong type witnesses.
+A lift's key (`Refine.keyOf`) is its `if`'s place and bound name and a tag
+(`refineTagOf`): the class-copy tag (`Ctx.liftTag`), the continuation the
+cast was moved into (`Ctx.refineScope`, #453), and, in such a scope, a hash
+of the scope and of what the function made from the branch depends on
+there: the locals the `if` uses (with `Self` for the members it names
+bare), each with its type, mutability and frame storage; how the type
+variables their types mention are bound; what the type names written in it
+stand for; the type expected of it, which the function returns (a field's
+declared type at each construction); in a `<suspends>` function, all the
+type variables (a lift there takes them as type parameters); the inlined
+bodies it is in; and the source's return type when the branch returns.
+Different closed evaluations of one default therefore cannot reuse a helper
+with the wrong type witnesses, while evaluations that differ only in what
+the cast does not use (a parameter's default at calls that instantiate the
+other parameters differently) share one. Such a tag may differ between the
+trial of an enclosing cast's branch, which has the enclosing function's
+locals, its `var`s among them, and no type expected of the branch's value,
+and the function made from that branch, which has its captures as values
+and its result type; so in such a trial (`Ctx.inRefinedTrial`) a cast with
+such a tag asks for no lift, and the function, elaborated in the next round,
+asks for it. (Asked for from both, as when every local and type variable in
+scope was in the tag, each level of nesting in a `for`'s body lifted the
+casts inside it again, the earlier copies never called: 136 functions for 16
+levels instead of 16.) A nest of such casts takes one round per level;
+outside source contexts the tag is the place's alone, and a trial asks for
+the lifts that the next round's functions use.
 Waiting consumers can stage parameter defaults through the same protocol.
 Both ordinary composed suffixes and refining branches preserve the active
 default stack and source restrictions in their prefix and resume functions.
