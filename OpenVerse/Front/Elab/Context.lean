@@ -809,6 +809,7 @@ partial def Ctx.isTypeValue (ctx : Ctx) : SExpr → Bool
   | .ident _ "$witness" => true
   | .ident _ name => (ctx.lookup name).any (·.typeValue)
   | .app _ (.ident _ "$choiceCoercions") [_, body] false => ctx.isTypeValue body
+  | .app _ (.ident _ "$deferExits") [_, body] false => ctx.isTypeValue body
   | .app _ (.ident _ name) args false =>
     if ["$typeValue", "$witness", "$stageWitness"].contains name then true
     else if ["$refineCopyIn", "$refineCopyOut", "$forEnvCapture", "$forEnvInit"].contains name then

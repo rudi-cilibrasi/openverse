@@ -325,6 +325,11 @@ The main integration also retains those captures when a shared continuation
 forwards a clause break. A paired fixture carries a precise bounded value in a
 shared recursive-frame variable, checks committed versus rejected cell writes,
 and checks state copyback and cleanup on a composed-choice clause break.
+Lifted-block defer exits retain actual evidence for their cleanup and precise
+return values. A paired source control checks cleanup order and rollback of
+rejected mutations on return and break. The private defer-exit wrapper keeps
+the returned body's type-value role; a dummy mentioned only in a deferred body
+does not taint an independent real result or create an executable proof.
 
 The existing Core checker and semantic proofs apply to the emitted Core under
 their stated hypotheses. They do not prove that bound inference, dictionary

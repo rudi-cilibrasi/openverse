@@ -129,6 +129,13 @@ def main : IO Unit := do
     (contKey actual p "B" written != contKey markedCaller p "B" written)
   let unused : Local := { name := "Unused", slot := 1, ty := proof, mutable := false, typeValue := true }
   let extra := { actual with locals := unused :: actual.locals }
+  let deferredDummy := SExpr.block p [.app p (.ident p "$defer") [.ident p "Unused"] false]
+  need "deferred metadata does not taint a real returned dictionary"
+    (!extra.isTypeValue (.app p (.ident p "$deferExits")
+      [deferredDummy, .ident p "$typeActualProof"] false))
+  need "a defer-exit wrapper cannot promote a dummy returned dictionary"
+    (markedCaller.isTypeValue (.app p (.ident p "$deferExits")
+      [.block p [], .ident p "$typeActualProof"] false))
   need "unused dummy names do not multiply continuation identities"
     (firstKey actual p [] "B" none written == firstKey extra p [] "B" none written)
   need "provenance is not guessed from a lexical name"
@@ -147,6 +154,7 @@ def main : IO Unit := do
     ("generic forwarding call", .app p (.ident p "Keep") [value] false),
     ("nested forwarding calls", .app p (.ident p "Keep") [.app p (.ident p "Keep") [value] false] false),
     ("choice conversion body", .app p (.ident p "$choiceCoercions") [.block p [], value] false),
+    ("defer-exit body", .app p (.ident p "$deferExits") [.block p [], value] false),
     ("final declaration", .block p [.decl p "Inner" none false value]),
     ("statement then final declaration", .block p [.int p 0, .decl p "Inner" none false value]),
     ("explicit inner result", .block p [.decl p "Inner" none false value, .ident p "Inner"]),
