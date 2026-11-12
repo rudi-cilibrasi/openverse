@@ -156,6 +156,8 @@ check "member-result alias choice dictionary model fuzzing (${FUZZ_MODEL_RESULT_
   scripts/fuzz-model-heterogeneous.sh "${FUZZ_MODEL_RESULT_ALIAS_DICTIONARY:-120}" "$seed" --result-aliases
 check "named/default choice dictionary model fuzzing (${FUZZ_MODEL_NAMED_DICTIONARY:-120} programs)" \
   scripts/fuzz-model-heterogeneous.sh "${FUZZ_MODEL_NAMED_DICTIONARY:-120}" "$seed" --named-methods
+check "numeric field write choice dictionary model fuzzing (${FUZZ_MODEL_NUMERIC_WRITE_DICTIONARY:-120} programs)" \
+  scripts/fuzz-model-heterogeneous.sh "${FUZZ_MODEL_NUMERIC_WRITE_DICTIONARY:-120}" "$seed" --numeric-writes
 check "source break model fuzzing (${FUZZ_MODEL_BREAKS:-60} programs)" \
   scripts/fuzz-model-breaks.sh "${FUZZ_MODEL_BREAKS:-60}" "$seed"
 check "choice model fuzzing (${FUZZ_MODEL_MV:-140} programs, functions with several values too)" \
