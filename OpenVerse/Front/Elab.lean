@@ -1074,7 +1074,25 @@ partial def convert (env : TyEnv) (e : Expr) (a b : Ty) : EM (Option Expr) := do
     | .local _ | .prim (.tupGet _) _ => return some (.prim .userErr [])
     | _ => pure ()
   -- references: the same value has both types (Verse Core subtyping, #32)
-  if refUp env a b then return some e
+  if refUp env a b then
+    -- (#351: to an interface referred to through views, from a reference
+    -- whose classes include one whose view gives other type arguments,
+    -- closed ones that differ, which no object of that type can be: a test
+    -- of the others, its object always one of them)
+    match a.toVTy env, b.toVTy env with
+    | .ref ts as, .vref es bs =>
+      if (VTy.ref ts as).sub (.vref es bs) then return some e
+      let closedOff (t : Nat) : Bool := match es.find? (·.1 == t) with
+        | some (_, φ) =>
+          φ.all (·.varsBelow as.length) &&
+            ((φ.map (VTy.inst as)).zip bs).any fun (u, w) => !u.mentionsVar && !w.mentionsVar && decide (u ≠ w)
+        | none => false
+      let fits := ts.filter (!closedOff ·)
+      if fits.length == ts.length || !(VTy.ref fits as).sub (.vref es bs) then return some e
+      let x ← modifyGet fun s => (s.nslots, { s with nslots := s.nslots + 1, slotTys := s.slotTys.push a })
+      let y ← modifyGet fun s => (s.nslots, { s with nslots := s.nslots + 1, slotTys := s.slotTys.push b })
+      return some (.seq (.assign x e) (.ite (.assign y (.heap (.isTag fits) [.local x])) (.local y) (.prim .userErr [])))
+    | _, _ => return some e
   -- no value has a class type with no concrete class below it (an interface
   -- nothing implements, an abstract class with no subclass): the conversion
   -- to a type above it is unreachable (#98)
@@ -1488,7 +1506,12 @@ def setFieldAt (env : TyEnv) (p : Pos) (sn : String) (targs : List Ty) (obj : Na
   let tv ← fresh t
   let mut acc : Expr := .prim .userErr []   -- no class: unreachable
   let mut refined := false
+  -- (#351: through views, only the classes that can be the object, as a
+  -- read; typed even when none can)
+  let viewedSn := env.viewed.contains sn
+  if viewedSn then refined := true
   for (d, kd) in (ds.zip pos).reverse do
+    if viewedSn && (env.viewArgs? sn d (env.coreArgs sn targs) (rigid := false)).isNone then continue
     match env.fieldAcc.idxOf? (d, f) with
     | some i =>
       -- (a class that fixes the type arguments: its setter, under the
@@ -7372,7 +7395,7 @@ partial def elabAppBase (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (b
               Ty.param s!"$ext{i}" (match t with | .param _ k => k | _ => false)
             let view := if env.viewed.contains c then env.viewOf c d X else X.take rargs.length
             let atX := X.zipIdx.map fun (x, j) => (pinArg j, x)
-            let pins := (X.zip (env.corePins d)).filterMap fun (x, pin) =>
+            let pins := (X.zip (env.dispatchPins d)).filterMap fun (x, pin) =>
               pin.map fun t => (x, t.subst atX)
             let fields (n : String) (ts : List Ty) : Option (List Ty) :=
               if env.classes.contains n then none else some ((env.fields n ts).map (·.2.1))
@@ -7418,7 +7441,7 @@ partial def elabAppBase (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (b
               Ty.param s!"$ext{i}" (match t with | .param _ k => k | _ => false)
             let view := env.viewOf c d X
             let atX := X.zipIdx.map fun (x, j) => (pinArg j, x)
-            let pinEqs := (X.zip (env.corePins d)).filterMap fun (x, pin) => match pin with
+            let pinEqs := (X.zip (env.dispatchPins d)).filterMap fun (x, pin) => match pin with
               | some pt => some (x, pt.subst atX)
               | none => none
             let coreFields (n : String) (ts : List Ty) : Option (List Ty) :=
@@ -8886,7 +8909,13 @@ partial def elabMember (ctx : Ctx) (p : Pos) (r : R) (m : String) (exp : Option 
         let x ← fresh r.ty
         let mut acc : Expr := .prim .userErr []   -- no class: unreachable
         let mut refined := false
+        -- (#351: through views, only the classes whose view and pins can
+        -- give the reference's type arguments, as a method's dispatch
+        -- tests; the read is typed even when none can)
+        let viewedSn := env.viewed.contains sn
+        if viewedSn then refined := true
         for (d, kd) in (ds.zip pos).reverse do
+          if viewedSn && (env.viewArgs? sn d (env.coreArgs sn targs) (rigid := false)).isNone then continue
           match env.fieldAcc.idxOf? (d, f) with
           | some i =>
             -- (a class that fixes the type arguments: its getter, under the

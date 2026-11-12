@@ -500,7 +500,29 @@ partial def TyEnv.viewOf (env : TyEnv) (n d : String) (X : List Ty) : List Ty :=
   let rargs := ((env.sparams.lookup r).getD []).map fun (v, _) => match vars.findIdx? (·.1 == v) with
     | some j => X.getD j Ty.void
     | none => Ty.void
-  env.coreArgs n (env.upArgs r rargs n)
+  -- (a part that is one of the class's Verse Core type arguments, which it
+  -- fixes to a compound of its own, is that one's place: the view of `i0` at
+  -- `c1(t) := class(i2(tuple(t, int)))` is its first, `X 0`, not
+  -- `tuple(X 1, int)`, so that a reference with only that first one, an
+  -- `i2(…)`, fits it, #351)
+  let rec hasParam : Ty → Bool
+    | .param .. => true
+    | .arr u | .opt u => hasParam u
+    | .tup us | .struct _ us => us.any hasParam
+    | .map k v => hasParam k || hasParam v
+    | _ => false
+  let places := ((env.coreArgs r rargs).zipIdx.filter fun (t, _) =>
+    (match t with | .param .. => false | _ => true) && hasParam t).map fun (t, j) => (t, X.getD j Ty.void)
+  let rec back (t : Ty) : Ty := match places.find? (·.1 == t) with
+    | some (_, x) => x
+    | none => match t with
+      | .arr u => .arr (back u)
+      | .opt u => .opt (back u)
+      | .tup us => .tup (us.map back)
+      | .struct m us => .struct m (us.map back)
+      | .map k v => .map (back k) (back v)
+      | u => u
+  (env.coreArgs n (env.upArgs r rargs n)).map back
 
 /-- The type arguments of `d` below `T`, for an instance of `T(targs)`: its
     type parameters at their places among the Verse Core type arguments. -/
@@ -547,7 +569,11 @@ def TyEnv.fieldsSeen (env : TyEnv) (T : String) (targs : List Ty) (d : String) :
     match env.fieldSrc d f with
     | some D =>
       let tD := (((env.fields D).find? (·.1 == f)).map (·.2.1)).getD t
-      let σ := (((env.sparams.lookup D).getD []).map (·.1)).zip (env.argsAt T targs D)
+      -- (an interface referred to through views is not at a prefix of the
+      -- object's type arguments: its own are those `d` gives it, #351)
+      let dArgs := if env.viewed.contains D && D != d then env.upArgs d (env.argsAt T targs d) D
+        else env.argsAt T targs D
+      let σ := (((env.sparams.lookup D).getD []).map (·.1)).zip dArgs
       (f, tD.subst σ, dflt)
     | none => (f, t, dflt)
 
@@ -834,11 +860,14 @@ def TyEnv.corePins (env : TyEnv) (d : String) : List (Option Ty) :=
     opens them (`Typed.dispatch_view`, #351). A dispatch tests classes
     whose Verse Core pins agree, so it groups them by these. -/
 def TyEnv.dispatchPins (env : TyEnv) (d : String) : List (Option Ty) :=
-  let ps := env.corePins d
   if !(env.info d).isIface && !env.phs.contains d && env.viewed.any (env.isSub d ·) then
+    -- (its own pins, also when nothing else makes it pinned: they relate
+    -- its type arguments, `c3(t) := class(c0(t, t), …)`'s second to its
+    -- first, which the view alone may not give)
+    let ps := env.pinsOf d
     let n := (env.coreArgs d (((env.sparams.lookup d).getD []).map fun (v, c) => Ty.param v c)).length
     ps ++ List.replicate (n - ps.length) none
-  else ps
+  else env.corePins d
 
 /-- Code generic over `T` can treat a `d` below it under the refinement
     its pins give (#142, #209): `d`'s pins determine its Verse Core type
@@ -996,7 +1025,7 @@ def TyEnv.viewArgs? (env : TyEnv) (n d : String) (args : List Ty) (rigid : Bool 
   let vars := env.coreVars d
   let X := (List.range vars.length).map fun j => Ty.param s!"$vw{j}" false
   let atX := X.zipIdx.map fun (x, j) => (pinArg j, x)
-  let pinEqs := (X.zip (env.corePins d)).filterMap fun (x, pin) => pin.map fun pt => (x, pt.subst atX)
+  let pinEqs := (X.zip (env.dispatchPins d)).filterMap fun (x, pin) => pin.map fun pt => (x, pt.subst atX)
   let coreFields (m : String) (ts : List Ty) : Option (List Ty) :=
     if env.classes.contains m then none else some ((env.fields m ts).map (·.2.1))
   match Ty.unifyEqs coreFields [] ((env.viewOf n d X).zip args ++ pinEqs) with
