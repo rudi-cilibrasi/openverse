@@ -133,7 +133,17 @@ def main : IO Unit := do
     ("conditional binding result", .ite p [.decl p "Inner" none false value, .query p (.ident p "true")]
       (.ident p "Inner") (some (.ident p "Other"))),
     ("queried option", .query p (.optionLit p value)),
-    ("map lookup", .app p (.mapLit p [(.int p 1, value)]) [.int p 1] true)]
+    ("map lookup", .app p (.mapLit p [(.int p 1, value)]) [.int p 1] true),
+    ("for body result", .app p (.forE p [.gen p "I" none (.arrayLit p [.int p 1])] value) [.int p 0] true),
+    ("for bound result", .app p (.forE p [.gen p "Captured" none (.arrayLit p [value])]
+      (.ident p "Captured")) [.int p 0] true),
+    ("for later declaration", .app p (.forE p [.gen p "Captured" none (.arrayLit p [value]),
+      .decl p "Saved" none false (.ident p "Captured")] (.ident p "Saved")) [.int p 0] true),
+    ("for dependent generator", .app p (.forE p [.gen p "First" none (.arrayLit p [value]),
+      .gen p "Second" none (.arrayLit p [.ident p "First"])] (.ident p "Second")) [.int p 0] true),
+    ("map generator bound result", .app p (.forE p
+      [.gen p "Captured" (some "Key") (.mapLit p [(.int p 1, value)])]
+      (.ident p "Captured")) [.int p 0] true)]
   for dummyRole in [true, false] do
     let scope := { caller with
       canFail := true,
@@ -154,6 +164,15 @@ def main : IO Unit := do
       else
         discard <| getOK s!"{shape} retains usable real evidence"
           (aliasScope.checkInlineInstance p formal [("t", t)])
+    let independent := SExpr.app p (.forE p
+      [.gen p "Captured" none (.arrayLit p [.ident p "Witness"])] (.ident p "Other")) [.int p 0] true
+    let (result, _) ← getOK "a generator can return an independent real proof"
+      ((elabStmt scope (.decl p "Independent" none false independent) none).run
+        { env, nslots := 2, slotTys := #[proof, proof] })
+    let independentScope := { result.2 with locals := result.2.locals.filter (·.name == "Independent") }
+    need "a dummy generator input does not taint an independent real result"
+      (!(independentScope.lookup "Independent").any (·.typeValue) &&
+        (find? env independentScope.evidenceTypes ⟨vehicle, t⟩).any (·.valid env independentScope.evidenceTypes))
   refused "inlining needs executable evidence even with a static fact"
     (({ caller with locals := [], types := ambient } : Ctx).checkInlineInstance p formal [("t", t)])
   let _ ← getOK "omitted defaults can complete an inlined instance later"

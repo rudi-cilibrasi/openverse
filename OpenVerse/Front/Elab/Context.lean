@@ -804,13 +804,25 @@ partial def Ctx.isTypeValue (ctx : Ctx) : SExpr → Bool
       (scope, role)) (ctx, false)
     result
   | .ite _ conditions yes no =>
-    let scope := conditions.foldl (fun scope condition => match condition with
-      | .decl _ name _ _ value => { scope with locals :=
-          { name, slot := 0, ty := .void, mutable := false, typeValue := scope.isTypeValue value } :: scope.locals }
-      | _ => scope) ctx
+    let scope := throughClauses ctx conditions
     scope.isTypeValue yes || no.any ctx.isTypeValue
+  | .forE _ clauses body => (throughClauses ctx clauses).isTypeValue body
   | .caseE _ _ arms => arms.any fun (_, body) => ctx.isTypeValue body
   | _ => false
+where
+  /-- The names returned by a clause inherit its source value's role. A
+      generator's body is analyzed in the scope of all preceding clauses,
+      independently of whether those clauses themselves carry dummy data. -/
+  throughClauses (ctx : Ctx) (clauses : List SExpr) : Ctx :=
+    clauses.foldl (fun scope condition => match condition with
+      | .decl _ name _ _ value => { scope with locals :=
+          { name, slot := 0, ty := .void, mutable := false, typeValue := scope.isTypeValue value } :: scope.locals }
+      | .gen _ name key source =>
+        let role := scope.isTypeValue source
+        let names := name :: key.toList
+        { scope with locals := (names.map fun name =>
+          { name, slot := 0, ty := .void, mutable := false, typeValue := role }) ++ scope.locals }
+      | _ => scope) ctx
 
 def Ctx.evidenceEnv (ctx : Ctx) : TyEnv :=
   let locals := ctx.evidenceTypes
