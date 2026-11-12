@@ -801,21 +801,36 @@ partial def elabLoopTailWith (elabSeq : Ctx → List SExpr → Option Ty → EM 
     runs on each of the call's values, bound to `hole`. `lives` are the names
     of the alternative's context (`ctx`) the code uses: their values when
     the call is made are kept in the frame, pushed on the continuation of
-    the call's items. -/
+    the call's items. `pre`: the clauses that run before the call, with its
+    arguments (what the alternative reads before the call that may not read
+    the same after it, bound to names), elaborated once; `ctx` has their
+    names. -/
 structure LoopFrame where
   hole : String
   lives : List Local
   code : SExpr
   ctx : Ctx
+  pre : Option Expr := none
+  /-- Where the prefix sets a name, which the next alternative would see. -/
+  preSet : Option Pos := none
 
 /-- The return frames of a tail's alternatives, in the order of its arms. -/
-def loopFrames (arms : List (Ctx × List SExpr)) : List LoopFrame :=
-  arms.flatMap fun (ca, as) => as.filterMap fun
-    | .app _ (.ident _ "$then") [_, .ident _ h, k] false =>
-      let own := h :: Choice.localsOf k
-      some { hole := h, code := k, ctx := ca,
-             lives := (Choice.namesUsed k).eraseDups.filterMap fun n => if own.contains n then none else ca.lookup n }
-    | _ => none
+def loopFramesWith (elabSeq : Ctx → List SExpr → Option Ty → EM (R × Ctx))
+    (arms : List (Ctx × List SExpr)) : EM (List LoopFrame) := do
+  let mut out : List LoopFrame := []
+  for (ca, as) in arms do
+    for a in as do
+      if let .app _ (.ident _ "$then") (_ :: .ident _ h :: k :: rest) false := a then
+        let (pre, c) ← match rest with
+          | [.block _ ss] => do
+            let (r, c) ← elabSeq { ca with canFail := true, inTaking := true } ss none
+            pure (some r.e, { c with canFail := ca.canFail, inTaking := ca.inTaking })
+          | _ => pure (none, ca)
+        let own := h :: Choice.localsOf k
+        let preSet := rest.findSome? fun e => if Choice.anyE (fun | .set .. => true | _ => false) e then some e.pos else none
+        out := out ++ [{ hole := h, code := k, ctx := c, pre, preSet,
+                         lives := (Choice.namesUsed k).eraseDups.filterMap fun n => if own.contains n then none else c.lookup n }]
+  return out
 
 /-- A return frame's lives' values (`void` for none, as `tuple()` is). -/
 def frameLivesTy (ts : List Ty) : Ty := if ts.isEmpty then .void else .tup ts
@@ -933,7 +948,7 @@ partial def elabLoopGenGroupWith (elabE : Ctx → SExpr → Option Ty → EM R)
       for (ca, alts) in code.arms do
         for alt in alts do
           let alt := match alt with
-            | .app _ (.ident _ "$then") [c, _, _] false => c
+            | .app _ (.ident _ "$then") (c :: _) false => c
             | a => a
           let call := match alt with
             | .app q (.ident _ "$rec") as false => some (q, h, as)
@@ -987,7 +1002,7 @@ partial def elabLoopGenGroupWith (elabE : Ctx → SExpr → Option Ty → EM R)
   -- (#283) the return frames of the alternatives that are calls with code
   -- after them, and the continuation they are pushed on, which every item
   -- keeps, after every member's names
-  let frames := loopFrames (infos.toList.flatMap fun (_, code, _) => code.arms.toList)
+  let frames ← loopFramesWith elabSeq (infos.toList.flatMap fun (_, code, _) => code.arms.toList)
   let lives := frames.map fun f => f.lives.map (·.ty)
   let kl? : Option Local ← if frames.isEmpty then pure none else do
     let kTy := frameContTy lives
@@ -1046,9 +1061,15 @@ partial def elabLoopGenGroupWith (elabE : Ctx → SExpr → Option Ty → EM R)
           | none => vd
         -- (a call with code after it: its return frame, pushed with it)
         let (a, frame?) := match a, kl? with
-          | .app _ (.ident _ "$then") [c, _, _] false, some kl => (c, some (fi, kl))
+          | .app _ (.ident _ "$then") (c :: _) false, some kl => (c, some (fi, kl))
           | a, _ => (a, none)
         if frame?.isSome then fi := fi + 1
+        -- (its prefix, if any: before the arguments, in whose context they are)
+        let fr? := frame?.bind fun (j, _) => frames[j]?
+        let pre? := fr?.bind (·.pre)
+        let actx : Ctx := match pre?, fr? with
+          | some _, some f => { f.ctx with canFail := true, inTaking := true }
+          | _, _ => actx
         let call? : Option (Nat × List SExpr × Pos) := match a with
           | .app q (.ident _ "$rec") args' false => some (i, args', q)
           | .app q (.ident _ "$recTo") (.ident _ h :: args') false => (names.idxOf? h).map (·, args', q)
@@ -1059,8 +1080,10 @@ partial def elabLoopGenGroupWith (elabE : Ctx → SExpr → Option Ty → EM R)
           if argSet.isNone then
             argSet := args'.findSome? fun a' =>
               if Choice.anyE (fun | .set .. => true | _ => false) a' then some a'.pos else none
+          if argSet.isNone then argSet := fr?.bind (·.preSet)
           let ts ← hpls.mapM fun l => fresh l.ty
           let assigns ← elabLoopArgsWith elabE actx q h args' hpls ts ((instances.lookup h).getD [])
+          let assigns := match pre? with | some e => Expr.seq e assigns | none => assigns
           itemCode := .seq itemCode assigns
           let kE := frame?.map fun (j, kl) =>
             framePush ctx lives j (((frames[j]?).map (·.lives)).getD [] |>.map (Expr.local ·.slot)) (.local kl.slot)

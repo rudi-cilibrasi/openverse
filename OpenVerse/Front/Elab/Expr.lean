@@ -1616,7 +1616,7 @@ partial def elabLoopGen (ctx : Ctx) (p : Pos) (lp : List SExpr) : EM LoopGen := 
   -- (#283) the return frames of the alternatives that are calls with code
   -- after them, and the continuation they are pushed on, the last name
   -- each item keeps
-  let frames := loopFrames armCode.toList
+  let frames ← loopFramesWith elabSeq armCode.toList
   let lives := frames.map fun f => f.lives.map (·.ty)
   let kl? : Option Local ← if frames.isEmpty then pure none else do
     let kTy := frameContTy lives
@@ -1658,11 +1658,17 @@ partial def elabLoopGen (ctx : Ctx) (p : Pos) (lp : List SExpr) : EM LoopGen := 
         | some n => push (item (.lit (.int (n : Nat))) cur)
         | none => vd
       -- (a call with code after it: its return frame, pushed with it, #283)
-      let frameLives : List Local := ((frames[fi]?).map LoopFrame.lives).getD []
+      let fr? : Option LoopFrame := frames[fi]?
+      let frameLives : List Local := (fr?.map LoopFrame.lives).getD []
       let (a, kE) : SExpr × Option Expr := match a, kl? with
-        | .app _ (.ident _ "$then") [c, _, _] false, some kl =>
+        | .app _ (.ident _ "$then") (c :: _) false, some kl =>
           (c, some (framePush ctx lives fi (frameLives.map (Expr.local ·.slot)) (.local kl.slot)))
         | a, _ => (a, none)
+      -- (its prefix, if any: before the arguments, in whose context they are)
+      let pre? : Option Expr := if kE.isSome then fr?.bind (·.pre) else none
+      let actx : Ctx := match pre?, fr? with
+        | some _, some f => { f.ctx with canFail := true, inTaking := true }
+        | _, _ => actx
       if kE.isSome then fi := fi + 1
       match a with
       | .app q (.ident _ "$rec") args' false =>
@@ -1671,6 +1677,8 @@ partial def elabLoopGen (ctx : Ctx) (p : Pos) (lp : List SExpr) : EM LoopGen := 
             if Choice.anyE (fun | .set .. => true | _ => false) a' then some a'.pos else none
         let ts ← pls.mapM fun l => fresh l.ty
         let assigns ← elabLoopArgsWith elabE actx q g args' pls ts
+        let assigns := match pre? with | some e => Expr.seq e assigns | none => assigns
+        if argSet.isNone && pre?.isSome then argSet := fr?.bind (·.preSet)
         itemCode := .seq itemCode assigns
         -- (the item that resumes after the call, with the names as its
         -- arguments left them, below the one that starts it; when an
