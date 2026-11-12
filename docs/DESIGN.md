@@ -723,10 +723,14 @@ code after one call and the values of the names that code uses.
 - Where the first success is taken and the clauses, conditions or
   arguments have effects, `FirstLift`'s function takes `$K` after the
   parameters, empty at the consumer's call: a call with a frame passes
-  `$framePush(j, $K, names…)`, and each value is `$frameApply($K, v,
-  frames…)` before the consumer's clauses, which the elaborator compiles
-  with the loop's own `framePush` and `frameApplyWith`. So each frame runs in
-  the failure context of the value it runs on, as in the Verse Calculus.
+  `$framePush(j, $K, names…)`, and each value is passed to one more function
+  of its own, `$ret`, whose body gives it to `$frameApply($K, $V, frames…)`
+  and then to the consumer's clauses (`firstReturnBody`); the elaborator
+  compiles both markers with the loop's own `framePush` and
+  `frameApplyWith`. The call of `$ret` is the value's alternative, so each
+  frame runs in the failure context of the value it runs on, as in the
+  Verse Calculus, and the frames' code is compiled once, not once per value
+  (the size modes `recursive-frame-first` and `-for`).
 - A group with no `$then` makes no `$K` and keeps its code byte for byte:
   the generator of #246 is the instance whose continuation stays empty.
 - One that is effect-free (`<computes>`, no local state, nothing it runs
