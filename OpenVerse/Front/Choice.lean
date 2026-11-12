@@ -2000,6 +2000,8 @@ structure FirstLift where
   binds : List String
   sets : List String
   args : List SExpr
+  /-- Bind operation dictionaries at each alternative's precise instance. -/
+  casePrelude : List (List SExpr) := []
   /-- The names of `binds` that are `var`s, bound so again. -/
   varBinds : List String := []
   /-- (#283) For a call of a function of a strongly connected group: the

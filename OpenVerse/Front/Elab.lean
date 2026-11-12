@@ -2368,7 +2368,7 @@ partial def forBodySafe (ctx : Ctx) (body : SExpr) : Bool :=
   -- generic/default argument bindings) inside the body. Their ownership is
   -- checked when that consumer elaborates; they do not escape the helper.
   let safeMarkers := ["$sourceSuper", "$methodMiss", "$methodCast", "$methodCase", "$methodType", "$methodParams", "$inlineScope", "$inlineScopeEnd", "$inline", "$choice", "$excl", "$alt", "$firstP", "$first", "$each", "$noLift", "$fxOf",
-    "$forReturns", "$forReturnBody", "$forClauseExits", "$defer", "$loop", "$rec", "$recTo", "$group", "$member", "$returnTail",
+    "$forReturns", "$forReturnBody", "$forClauseExits", "$choiceOperation", "$choiceDictionary", "$defer", "$loop", "$rec", "$recTo", "$group", "$member", "$returnTail",
     "$tparams", "$params", "$defaults", "$paramDefault", "$freeNames", "$declNames", "$callArgs"]
   let rec blocked (e : SExpr) : Bool :=
     match e with
@@ -2659,6 +2659,129 @@ def forOutcomeValues (ctx : Ctx) (p : Pos) (r : R) : EM R := do
       (.seq (.assign flag (.lit (.logic false))) (.seq .brk (.prim .userErr [])))), .arr t⟩
   return ⟨before.foldr Expr.seq value, .arr t⟩
 
+/-- Operation dictionaries retain the selected value's precise type. The
+    generated adapters are instantiated before calling the shared suffix. -/
+structure ChoiceOperations where
+  plan : ChoiceTypes.Plan
+  params : List (String × Ty) := []
+  replacements : List (String × SExpr) := []
+  casePrelude : List (List SExpr) := []
+  extraFns : List STop := []
+
+def ChoiceOperations.rewrite (ops : ChoiceOperations) (body : SExpr) : SExpr :=
+  Choice.mapE (fun e => ops.replacements.lookup (reprStr e)) body
+
+def ChoiceOperations.context (ops : ChoiceOperations) (ctx : Ctx) : EM Ctx := do
+  let mut ctx := ctx
+  for (name, ty) in ops.params do
+    let slot ← fresh ty
+    ctx := { ctx with locals := { name, slot, ty, mutable := false } :: ctx.locals }
+  return ctx
+
+def ChoiceOperations.lift (ops : ChoiceOperations) (key : String) (lift : Choice.FirstLift) : Choice.FirstLift :=
+  { lift with key, casePrelude := ops.casePrelude, extraFns := lift.extraFns ++ ops.extraFns }
+
+partial def choiceMethodCalls (binding : String) (body : SExpr) : List SExpr :=
+  match body with
+  | e@(.app _ (.member _ (.ident _ name) _) arguments _) =>
+    arguments.flatMap (choiceMethodCalls binding) ++ (if name == binding then [e] else [])
+  | .structDef .. | .enumDef .. | .refineDef .. => []
+  | .app _ (.ident _ "$constructHints") _ _ => []
+  | e => e.children.flatMap (choiceMethodCalls binding)
+
+/-- A concrete operation contract before abstracting its type columns. -/
+structure ChoiceOperationCase where
+  receiver : Ty
+  inputs : List Ty
+  result : Ty
+  specs : List String
+
+/-- Each dictionary implements the method at its original receiver and
+    argument types. Named defaults and method-local type parameters retain
+    their source path until their caller scope can be represented here. -/
+def choiceOperations (_elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx)
+    (stem binding : String) (plan : ChoiceTypes.Plan) (suffix : List SExpr) : EM ChoiceOperations := do
+  let mut ops : ChoiceOperations := { plan, casePrelude := plan.instances.map fun _ => [] }
+  if !(match plan.binding with | .param .. => true | _ => false) then return ops
+  let mut seen : List String := []
+  for call in suffix.flatMap (choiceMethodCalls binding) do
+    let key := reprStr call
+    if seen.contains key then continue
+    seen := key :: seen
+    let .app p (.member _ _ method) arguments bracket := call | continue
+    let mut cases : List ChoiceOperationCase := []
+    for instanceTypes in plan.instances do
+      let actual := (plan.binding.subst instanceTypes).subst ctx.types.tvars
+      let .struct cls classArgs := actual | break
+      let some owner := ctx.methodDecl? cls method | break
+      let some signature := ctx.sig? s!"{owner}.{method}" | break
+      let classVars := (ctx.types.sparams.lookup owner).getD []
+      if signature.tparams.any (fun (n, _) => !classVars.any (·.1 == n)) then break
+      if !signature.named.isEmpty || signature.params.length != arguments.length + 1 || signature.decides != bracket then break
+      let substitution := (classVars.map (·.1)).zip (ctx.types.upArgs cls classArgs owner)
+      let inputs := (signature.params.drop 1).map fun ty => (ty.subst substitution).subst ctx.types.tvars
+      let result := (signature.ret.subst substitution).subst ctx.types.tvars
+      let specs := (if signature.fx.isEmpty then ["computes"] else signature.fx) ++
+        (if signature.decides then ["decides"] else []) ++
+        (if signature.suspends then ["suspends"] else [])
+      cases := cases ++ [{ receiver := actual, inputs, result, specs }]
+    if cases.length != plan.instances.length then continue
+    let mut extended := ops.plan
+    let mut inputs : List Ty := []
+    for j in List.range arguments.length do
+      let (next, input) := ChoiceTypes.extend ctx.types stem extended (cases.map fun row => row.inputs[j]!)
+      extended := next
+      inputs := inputs ++ [input]
+    let (finalPlan, result) := ChoiceTypes.extend ctx.types stem extended (cases.map (·.result))
+    let specs := (if cases.any (·.specs.contains "suspends") then ["suspends"] else []) ++
+      (if bracket then ["decides"] else []) ++
+      (let effects := heapFx.filter fun k => cases.any fun row => (allowedFx row.specs).contains k
+       if effects.isEmpty then ["computes"] else effects)
+    let p0 : Pos := { line := 0, col := 0 }
+    let canonical := cases.map fun row =>
+      let types := row.receiver :: row.inputs
+      let vars := Ty.mergeParamBounds ((types ++ [row.result]).flatMap Ty.paramsC)
+      let rename := vars.zipIdx.map fun ((name, bound), i) => (name, Ty.param s!"$operationT{i}" bound)
+      (types.map (·.subst rename), row.result.subst rename)
+    let family := s!"$choiceOperationDictionary{(reprStr (method, specs, canonical)).hash}"
+    let names := "$operationReceiver" :: ((List.range arguments.length).map fun i => s!"$operationArgument{i}") ++ ["$operationResult"]
+    let variables := names.map STy.name
+    let tps := names.map fun n => ({ pos := p0, name := n, constraint := "type" } : TParam)
+    let familyTy := STy.app family variables
+    let params (types : List STy) : List SParam := types.zipIdx.map fun (ty, i) => { name := s!"$input{i}", ty }
+    let values := (List.range (arguments.length + 1)).map fun i => SExpr.ident p0 s!"$input{i}"
+    let iface := STop.classDef p0 family tps [] [] true [] []
+      [.fn p0 "$apply" (params variables.dropLast) [] ("$abstract" :: specs) variables.getLast! (.tuple p0 [])]
+    let applyFn := STop.fn p0 (family ++ "$apply")
+      ({ name := "$dictionary", ty := familyTy } :: params variables.dropLast) tps specs variables.getLast!
+      (.app p0 (.member p0 (.ident p0 "$dictionary") "$apply") values bracket)
+    let name := s!"{stem}$op{ops.params.length}"
+    let ty := Ty.struct family (plan.binding :: inputs ++ [result])
+    let mut definitions : List STop := [iface, applyFn]
+    let mut bindings : List (List SExpr) := []
+    for ((row, (canonicalInputs, canonicalRet)), i) in (cases.zip canonical).zipIdx do
+      let impl := s!"{family}$case{i}"
+      let vars := Ty.mergeParamBounds ((row.receiver :: row.inputs ++ [row.result]).flatMap Ty.paramsC)
+      let canonicalVars := Ty.mergeParamBounds ((canonicalInputs ++ [canonicalRet]).flatMap Ty.paramsC)
+      let implTps := canonicalVars.map fun (n, cmp) =>
+        ({ pos := p0, name := n, constraint := if cmp then "comparable" else "type" } : TParam)
+      let parentTy := STy.app family ((canonicalInputs ++ [canonicalRet]).map Ty.toSTy)
+      definitions := definitions ++ [.classDef p0 impl implTps [] [parentTy] false [] []
+        [.fn p0 "$apply" (params (canonicalInputs.map Ty.toSTy)) [] ("override" :: specs) canonicalRet.toSTy
+          (.app p0 (.member p0 values.head! method) values.tail bracket)]]
+      let valueTy := STy.app family ((row.receiver :: row.inputs ++ [row.result]).map Ty.toSTy)
+      let value := SExpr.construct p impl (vars.map fun (n, _) => .name n) []
+      bindings := bindings ++ [[.decl p name (some valueTy) false
+        (.app p (.ident p "$choiceDictionary") [value] false)]]
+    let sourceValues := .ident p binding :: arguments.map ops.rewrite
+    ops := { ops with
+      plan := finalPlan, params := ops.params ++ [(name, ty)],
+      replacements := ops.replacements ++ [(key, .app p (.ident p "$choiceOperation")
+        (.str p [.text (FnValues.shapeOf (arguments.length + 1) specs).name] :: .ident p name :: sourceValues) bracket)],
+      casePrelude := (ops.casePrelude.zip bindings).map fun (old, next) => old ++ next,
+      extraFns := ops.extraFns ++ definitions }
+  return ops
+
 /-- `for`: clauses are generators, bindings and filters; each generator opens
     a nested `forE`, and nested results are flattened (cartesian product,
     leftmost outermost). The clauses are a failure context; the body is not.
@@ -2740,7 +2863,8 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
   -- refining path. Probe a suffix once at its binding's common type;
   -- type-only probes recurse through these same shared suffixes.
   let stagedSuffix (c : Ctx) (q : Pos) (name : String) (bty : Ty)
-      (alts rest : List SExpr) (bd : SExpr) (flat : Option Bool := none) :
+      (alts rest : List SExpr) (bd : SExpr) (flat : Option Bool := none)
+      (extraTops : List STop := []) :
       EM (Option (Choice.FirstLift × Choice.ForStagePlan × Ty × Bool)) := do
     let sourceFail := match bd with
       | .app _ (.ident _ f) [_, .ident _ mode, _] false =>
@@ -2790,6 +2914,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
     let prepare ← match forStagePrefixOf bound plan args q rest bd flatten with
       | .ok prepare => pure prepare
       | .error _ => return none
+    let prepare := { prepare with extraFns := prepare.extraFns ++ extraTops }
     let hasPlan := c.types.loopRequests.any (·.key == request.key)
     let hasPrefix := c.types.loopRequests.any (·.key == prepare.key)
     modify fun st => { st with
@@ -3236,8 +3361,11 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
                 let polymorphic := !typing.params.isEmpty
                 if !c.constructProbe && (!types.all (some · == types.head?) || restCl.any isCF) then
                   let before ← get
-                  let poly ← if polymorphic then choiceTypeContext c typing else pure c
-                  let staged ← stagedSuffix poly gp b.name typing.binding b.alts restCl bd
+                  let operations ← choiceOperations elabE c stem b.name typing (restCl ++ [bd])
+                  let typing := operations.plan
+                  let poly ← operations.context (← if polymorphic then choiceTypeContext c typing else pure c)
+                  let staged ← stagedSuffix poly gp b.name typing.binding b.alts
+                    (restCl.map operations.rewrite) (operations.rewrite bd) (extraTops := operations.extraFns)
                   let after ← get
                   set { after with nslots := before.nslots, slotTys := before.slotTys }
                   if let some (prepare, plan, value, ready) := staged then
@@ -3247,7 +3375,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
                       let (callCl, resumed) := forStageInvoke gp prepare plan.borrowed bd
                       let mut parts : List R := []
                       for (a, i) in b.alts.zipIdx do
-                        let r ← forW (liftA a i ++ callCl) resumed
+                        let r ← forW (liftA a i ++ (operations.casePrelude[i]?.getD []) ++ callCl) resumed
                         let r ← if polymorphic then do
                             let ty := Ty.arr (.arr value)
                             pure (⟨← coerce gp r ty, ty⟩ : R)
@@ -3275,7 +3403,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
                       l.sets.zipIdx.map (fun (m, j) => SExpr.set gp (.ident gp m) none (.app gp (.ident gp kt) [.int gp ((j + 1 : Nat) : Int)] false)) ++
                       [.decl gp kv none false (.app gp (.ident gp kt) [.int gp 0] false)]
                   let vals : SExpr := if bodyFail then .app gp (.ident gp "$forOutcomeValues") [.ident gp kv] false else .ident gp kv
-                  let r ← forW (liftA a i ++ callCl) vals
+                  let r ← forW (liftA a i ++ (l.casePrelude[i]?.getD []) ++ callCl) vals
                   match r.ty with
                   | .arr (.arr t) => parts := parts ++ [⟨.prim .flatten [r.e], .arr t⟩]
                   | _ => eerr gp "internal: a continuation's values"
@@ -3317,13 +3445,15 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
                 let before ← get
                 modify fun st => { st with fx := [] }
                 let trial ← tryCatch (do
-                  let poly ← choiceTypeContext c plan
+                  let operations ← choiceOperations elabE c stem b.name plan (restCl ++ [bd])
+                  let plan := operations.plan
+                  let poly ← operations.context (← choiceTypeContext c plan)
                   let slot ← fresh plan.binding
                   let bound := { poly with
                     typeOnly := true,
                     locals := { name := b.name, slot, ty := plan.binding, mutable := false } :: poly.locals }
                   let r ← elabForWith elabAlts elabBranchAlts elabE elabInts elabLoopGen elabSeq
-                    bound p restCl bd (prepared := true) (failure := failure)
+                    bound p (restCl.map operations.rewrite) (operations.rewrite bd) (prepared := true) (failure := failure)
                   -- With no remaining clauses, ordinary elabFor returns
                   -- the body itself; the generated $forFirst wraps it in
                   -- one array, even when the body is another for.
@@ -3333,8 +3463,11 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
                   let some result := choiceResultType c.types (plan.instances.map (r.ty.subst ·)) | return none
                   let effects := (← get).fx
                   let allowed := heapFx.filter fun k => c.fnFx.contains k || effects.any (·.1 == k)
-                  let lift ← match contForLiftOf { poly with fnFx := allowed } gp b.name plan.binding value b.alts restCl bd bodyFail with
-                    | .ok lift => joinedChoiceResult poly plan lift
+                  let lift ← match contForLiftOf { poly with fnFx := allowed } gp b.name plan.binding value b.alts
+                    (restCl.map operations.rewrite) (operations.rewrite bd) bodyFail with
+                    | .ok lift =>
+                      let key := (if bodyFail then "fo" else "f") ++ contKey c gp b.name (b.alts ++ restCl ++ [bd])
+                      joinedChoiceResult poly plan (operations.lift key lift)
                     | .error _ => return none
                   return some (lift, result, effects)) (fun _ => pure none)
                 set before
@@ -4783,6 +4916,32 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
     set st0
     return ← elabE { ctx with constructHints := some hints, constructOrigin := some ctx.frameName } se exp
   match se with
+  | .app p (.ident _ "$choiceDictionary") [factory@(.construct _ cls _ [])] false =>
+    if !cls.startsWith "$choiceOperationDictionary" then eerr p "internal: invalid dictionary allocation"
+    -- Only the generated dictionary object is an implementation effect.
+    -- Its hidden witness fields contain no source expressions.
+    let effects := (← get).fx
+    let r ← elabE ctx factory exp
+    modify fun st => { st with fx := effects }
+    return r
+  | .app p (.ident _ "$choiceOperation") (.str _ [.text shape] :: .ident _ name :: values) bracket =>
+    let some dictionary := ctx.lookup name | eerr p "internal: no operation dictionary"
+    let .struct family types := dictionary.ty | eerr p "internal: invalid operation dictionary"
+    if types.length != values.length + 1 then eerr p "internal: invalid operation arity"
+    let some (_, effects) := FnValues.parseName shape | eerr p "internal: invalid operation shape"
+    if ctx.typeOnly then
+      if effects.contains "suspends" && !ctx.suspends then eerr p "an operation dictionary suspends here"
+      if effects.contains "decides" && !ctx.canFail then eerr p "an operation dictionary can fail here"
+      for (value, input) in values.zip types.dropLast do
+        discard <| coerce p (← elabE ctx value (some input)) input
+      noteFx p (allowedFx effects) (some name)
+      if effects.contains "suspends" then
+        modify fun st => { st with
+          pendingSuspendingCasts := st.pendingSuspendingCasts + 1,
+          pendingWaitingCasts := st.pendingWaitingCasts + 1,
+          pendingSourceSuspends := st.pendingSourceSuspends + 1 }
+      return ⟨.prim .userErr [], types.getLast!⟩
+    elabE ctx (.app p (.ident p (family ++ "$apply")) (.ident p name :: values) bracket) exp
   | .app _ (.ident _ "$spawnResult") [call] false => elabE ctx call none
   | .app p (.ident _ "$spawnBound") (.ident _ fname :: .ident _ adapter :: args) false =>
     elabSpawnBound ctx p fname adapter args
@@ -8078,7 +8237,7 @@ partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
             -- alternative's own choices, then its tuple the value)
             let kt := s!"{t}k"
             let altK (a : SExpr) (i : Nat) : SExpr :=
-              .app p (.ident p "$firstP") [.block p (liftAlt a i ++
+              .app p (.ident p "$firstP") [.block p (liftAlt a i ++ (l.casePrelude[i]?.getD []) ++
                 continuationBind p l kt (.app p (.ident p l.name) l.args true) ++ [.ident p kt])] false
             return ← finish (elabOneGo ctx ([.decl p t none false (Choice.mk p (b.alts.zipIdx.map fun (a, i) => altK a i))] ++
               firstUnpack p l t))
@@ -8119,15 +8278,19 @@ partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
               if let some plan := choiceTypePlan ctx stem b.name tys rest then
                 set { prefixState with fx := [] }
                 let trial ← tryCatch (do
-                  let poly ← choiceTypeContext ctx plan
+                  let operations ← choiceOperations elabE ctx stem b.name plan rest
+                  let plan := operations.plan
+                  let poly ← operations.context (← choiceTypeContext ctx plan)
                   let slot ← fresh plan.binding
                   let bound := { poly with
                     typeOnly := true,
                     locals := { name := b.name, slot, ty := plan.binding, mutable := false } :: poly.locals }
-                  let (_, c2) ← elabOneGo bound rest
+                  let (_, c2) ← elabOneGo bound (rest.map operations.rewrite)
                   let effects := (← get).fx
-                  let lift ← match contLiftOf poly c2 p b.name b.alts rest effects with
-                    | .ok lift => joinedChoiceResult poly plan lift
+                  let lift ← match contLiftOf poly c2 p b.name b.alts (rest.map operations.rewrite) effects with
+                    | .ok lift =>
+                      let key := contKey ctx p b.name (b.alts ++ rest) ++ firstReturnKey ctx rest
+                      joinedChoiceResult poly plan (operations.lift key lift)
                     | .error _ => return none
                   return some (lift, effects)) (fun _ => pure none)
                 set prefixState
@@ -9348,8 +9511,9 @@ def liftTagOf (name : String) : String :=
 def functionBodyCtx (opts : Options) (ctx : Ctx) (p : Pos) (name : String)
     (tps : List (String × Bool)) (scopeClass : Option String := none) : Except String Ctx := do
   let lifted := opts.castRequests.find? (·.name == name)
-  let loopLift := opts.loopRequests.find? fun l => l.name == name || l.extraFns.any
-    (fun | .fn _ n .. => n == name | _ => false)
+  let loopLift := if name.startsWith "$choiceOperationDictionary" then none else
+    opts.loopRequests.find? fun l => l.name == name || l.extraFns.any
+      (fun | .fn _ n .. => n == name | _ => false)
   let resume := opts.loopRequests.findSome? fun l => l.resumes.find? (·.name == name)
   let source := (resume.map (·.sourceContext)).getD
     ((loopLift.map (·.sourceContext)).getD ((lifted.map (·.sourceContext)).getD {}))
@@ -10887,8 +11051,18 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   -- (in front, as the entry expression is the end)
   let resolved := Refine.functions opts.castRequests resolved ++ resolved
   -- (#246) the functions of their own of lazily taken calls
-  let resolved := opts.loopRequests.flatMap (fun l =>
-    (if l.stageOnly then [] else [STop.fn l.pos l.name l.params l.tparams l.specs l.ret l.body]) ++ l.extraFns) ++ resolved
+  let mut generated : List String := []
+  let mut loopTops : List STop := []
+  for top in opts.loopRequests.flatMap (fun l =>
+      (if l.stageOnly then [] else [STop.fn l.pos l.name l.params l.tparams l.specs l.ret l.body]) ++ l.extraFns) do
+    let name := match top with
+      | .fn _ n .. | .classDef _ n .. => n
+      | _ => ""
+    if name.startsWith "$choiceOperationDictionary" then
+      if generated.contains name then continue
+      generated := name :: generated
+    loopTops := loopTops ++ [top]
+  let resolved := loopTops ++ resolved
   -- Public compiler requests must not launder annotations through generated
   -- source or through function shapes that normalize their effect lists.
   EffectPolicy.check (resolved ++ helpers)
@@ -11887,9 +12061,10 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
           -- Bound-method value adapters and registered resume methods can
           -- open receiver parameters absent from their value signatures.
           let valueCall := m == "$call" || m.startsWith "$call:"
+          let dictionaryCall := m == "$apply" && c.startsWith "$choiceOperationDictionary"
           let resumeCall := opts.loopRequests.any (fun l => l.resumes.any (·.name == n))
           if effs.contains "override" && env.classes.contains c && env.isRefClass c &&
-              (!m.startsWith "$" || valueCall || resumeCall) &&
+              (!m.startsWith "$" || valueCall || dictionaryCall || resumeCall) &&
               (match tys.head? with | some (.struct c' _) => c' == c | _ => false) then
             -- (#351: below an interface referred to through views, every
             -- type parameter, which a dispatch through a view may open)
