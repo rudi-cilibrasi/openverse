@@ -95,6 +95,15 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     opts.lazyRequests
   -- (#246) the class of the stack cells of lazily taken ones
   let helpers := helpers ++ (← if lazy then lazyTops else pure [])
+  -- (#283) and of the cells of the vars their frames set
+  let cells (e : SExpr) : Bool := Choice.anyE (fun | .construct _ "$varcell" .. => true | _ => false) e
+  let cellsIn (ps : List SParam) (b : SExpr) : Bool := cells b || ps.any (·.default.any cells)
+  let usesCells := lazy && resolved.any fun
+    | .fn _ _ ps _ _ _ b => cellsIn ps b
+    | .const _ _ _ e => cells e
+    | .classDef _ _ _ _ _ _ fs _ ms => fs.any (·.2.2.1.any cells) ||
+        ms.any fun | .fn _ _ ps _ _ _ b => cellsIn ps b | _ => false
+  let helpers := helpers ++ (← if usesCells then varcellTops else pure [])
   -- the branches of casts that refine type arguments, as functions (#243)
   -- (in front, as the entry expression is the end)
   let resolved := Refine.functions opts.castRequests resolved ++ resolved

@@ -126,6 +126,10 @@ kinds=(
   clause-return-composed
   clause-return-exclusive
   clause-return-refined
+  first-break-composed
+  first-break-exclusive
+  first-break-lazy
+  first-break-refined
   composed
   construct-failure
   construct-first
@@ -1228,6 +1232,28 @@ if kind.startswith('clause-break-'):
     args = ','.join('dup(int){A:=1,B:=2}' if i%2==0 else 'dup(string){A:="s",B:="t"}' for i in range(count))
     print(f'Main()<suspends>:void = Print("{{Run({args})}}")')
     sys.exit(0)
+if kind.startswith('first-break-'):
+    # (#283) a break in an if's clauses, after the first of its choices: the
+    # clauses after a composed one are compiled once (#335), and so are an
+    # effectful lazy generator's (#246), each giving the break back
+    print('pair(a:type,b:type) := class { A:a; B:b }')
+    print('dup(t:type) := class(pair(t,t)) { C:int=4 }')
+    print('cell := class { var N:int=0 }')
+    print('Early(N:int):int =\n    if(N<0):return 0\n    N|N+1')
+    print('Lazy(H:cell,N:int)<transacts><decides>:int =\n    N>=0\n    set H.N+=1\n    N|Lazy[H,N-1]')
+    params = ','.join(f'P{i}:pair(a{i},b{i})' for i in range(count))
+    tparams = ','.join(f'a{i}:type,b{i}:type' for i in range(count))
+    shape = kind[len('first-break-'):]
+    values = {'composed': ['(Two(0)|Two(2))'] * count, 'exclusive': ['Early(0)'] * count,
+              'lazy': ['Lazy[H,1]'] * count}.get(shape,
+              [f'if(D{i}:=dup[P{i}])then(D{i}.C|D{i}.C+1)else 0' for i in range(count)])
+    clauses = [f'A{i}:={v}' for i, v in enumerate(values)]
+    clauses[1:1] = ['set Total+=A0', f'if(A0={5 if shape == "refined" else 1})then break else 0']
+    clauses.append('A0+A1<0')
+    print(f'Run(H:cell,{params} where {tparams})<suspends>:int =\n    var Total:int=0\n    defer:Print("source {{Total}}")\n    Sleep(0.0)\n    loop:\n        defer:Print("loop {{Total}}")\n        if({",".join(clauses)}):\n            Print("bad")\n        Print("bad suffix")\n        break\n    Total')
+    args = ','.join('dup(int){A:=1,B:=2}' if i%2==0 else 'dup(string){A:="s",B:="t"}' for i in range(count))
+    print(f'Main()<suspends>:void = Print("{{Run(cell{{}},{args})}}")')
+    sys.exit(0)
 if kind.startswith('return-defer-'):
     method = kind.endswith('method-first')
     if method:
@@ -1692,6 +1718,15 @@ PY
       fi
       exit 1
     }
+    if [[ $kind == first-break-* && $count == 4 ]]; then
+      selected=1
+      [[ $kind == first-break-refined ]] && selected=5
+      printf 'loop %s\nsource %s\n%s\n' "$selected" "$selected" "$selected" >"$tmp/expected"
+      timeout "$limit" "$root/.lake/build/bin/openverse" run "$tmp/p.verse" >"$tmp/lean.out"
+      timeout "$limit" "$root/runtime/build/cverse" "$tmp/p.vbc" >"$tmp/c.out"
+      diff -u "$tmp/expected" "$tmp/lean.out"
+      diff -u "$tmp/expected" "$tmp/c.out"
+    fi
     if [[ $kind == castclause-* && $count == 4 ]]; then
       printf '%s\n' "16 4" >"$tmp/expected"
       timeout "$limit" "$root/.lake/build/bin/openverse" run "$tmp/p.verse" >"$tmp/lean.out"

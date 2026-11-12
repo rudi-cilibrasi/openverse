@@ -761,8 +761,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
         -- A source break has already run its lexical cleanup. Every lazy
         -- loop crossed must forward it without exposing accumulated values.
         let values := match c.forBreakSlot with
-          | some flag => Expr.ite (.prim .query [.local flag])
-              (.seq .brk (.prim .userErr [])) values
+          | some flag => forwardSourceBreak flag values
           | none => values
         let code : Expr := .seq lg.init (.seq (.assign acc none) (.seq (.assign size (.lit (.int 16)))
           (.seq (.assign done (.lit (.logic false))) (.seq (.loop body) values))))

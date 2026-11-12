@@ -142,6 +142,15 @@ def isBreak : SExpr → Bool
   | .brk _ | .app _ (.ident _ "$refineBreak") [] false => true
   | _ => false
 
+/-- `e`, compiled as a function of its own, with its breaks that leave it
+    marked: each returns its function's break packet (`Exits.brk`), and the
+    caller breaks again. A loop inside it keeps its own. -/
+def liftBreaks (e : SExpr) : SExpr :=
+  Choice.mapE (fun
+    | .brk q => some (liftedBreak q)
+    | l@(.loop ..) => some l
+    | _ => none) e
+
 /-- `e` with its `return`s, and its `break`s that leave it, made `Err()`:
     for the type of what it gives when it ends. -/
 def exitsAsErr (e : SExpr) : SExpr :=
