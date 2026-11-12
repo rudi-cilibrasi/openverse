@@ -17,7 +17,9 @@ p.add_argument('--result-aliases', action='store_true')
 p.add_argument('--named-methods', action='store_true')
 p.add_argument('--numeric-writes', action='store_true')
 p.add_argument('--indexed-writes', action='store_true')
+p.add_argument('--compound-index-writes', action='store_true')
 a = p.parse_args()
+a.indexed_writes = a.indexed_writes or a.compound_index_writes
 a.writes = a.writes or a.nested_writes or a.numeric_writes or a.indexed_writes
 a.aliases = a.aliases or ((a.writes or a.result_aliases or a.named_methods) and a.seed % 2 == 0)
 a.members = a.members or a.aliases or a.writes or a.result_aliases
@@ -238,7 +240,8 @@ for i, d in enumerate(levels):
         if a.nested_writes and not a.control:
             receiver += '.C'
         if a.indexed_writes and not a.control:
-            clauses.append(f'set {receiver}.Data[0]={receiver}.Data[0]+WriteArgument(H,{i+1})')
+            clauses.append(f'set {receiver}.Data[0]+=WriteArgument(H,{i+1})' if a.compound_index_writes else
+                           f'set {receiver}.Data[0]={receiver}.Data[0]+WriteArgument(H,{i+1})')
         else:
             clauses.append(f'set {receiver}.K+=WriteArgument(H,{i+1})')
     if a.result_aliases:

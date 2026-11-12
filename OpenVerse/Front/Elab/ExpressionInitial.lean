@@ -98,6 +98,30 @@ partial def elabExprInitialWith
         pendingWaitingCasts := st.pendingWaitingCasts + 1,
         pendingSourceSuspends := st.pendingSourceSuspends + 1 }
     return ⟨.prim .userErr [], result⟩
+  | .app p (.ident _ "$choiceIndexedOperation") [shape, dictionary@(.ident _ name), index, object, validation, old, rhs] bracket =>
+    let some binding := ctx.lookup name | eerr p "internal: no indexed operation dictionary"
+    let .struct _ [keyTy, objectTy, oldTy, rhsTy, _] := binding.ty | eerr p "internal: invalid indexed operation signature"
+    let keySlot ← fresh keyTy
+    let objectSlot ← fresh objectTy
+    let oldSlot ← fresh oldTy
+    let rhsSlot ← fresh rhsTy
+    let keyValue ← coerce p (← elabE ctx index (some keyTy)) keyTy
+    let objectValue ← coerce p (← elabE ctx object (some objectTy)) objectTy
+    let inner := { ctx with
+      locals := { name := "$choiceIndexKey", slot := keySlot, ty := keyTy, mutable := false } ::
+        { name := "$choiceIndexObject", slot := objectSlot, ty := objectTy, mutable := false } :: ctx.locals }
+    let checked ← elabE inner validation none
+    let oldValue ← coerce p (← elabE inner old (some oldTy)) oldTy
+    let rhsValue ← coerce p (← elabE ctx rhs (some rhsTy)) rhsTy
+    let final := { inner with
+      locals := { name := "$choiceIndexOld", slot := oldSlot, ty := oldTy, mutable := false } ::
+        { name := "$choiceIndexRHS", slot := rhsSlot, ty := rhsTy, mutable := false } :: inner.locals }
+    let invocation := SExpr.app p (.ident p "$choiceOperation")
+      [shape, dictionary, .ident p "$choiceIndexKey", .ident p "$choiceIndexObject",
+        .ident p "$choiceIndexOld", .ident p "$choiceIndexRHS"] bracket
+    let result ← elabE final invocation exp
+    return ⟨.seq (.assign keySlot keyValue) (.seq (.assign objectSlot objectValue)
+      (.seq checked.e (.seq (.assign oldSlot oldValue) (.seq (.assign rhsSlot rhsValue) result.e)))), result.ty⟩
   | .app p (.ident _ "$choiceOperation") (.str _ [.text shape] :: .ident _ name :: values) bracket =>
     let some dictionary := ctx.lookup name | eerr p "internal: no operation dictionary"
     let .struct family types := dictionary.ty | eerr p "internal: invalid operation dictionary"
