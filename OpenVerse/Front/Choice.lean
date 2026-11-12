@@ -463,6 +463,18 @@ def exclOfIf (p : Pos) (k : String) (cs : List SExpr) (t u : SExpr) : SExpr × S
     (.decl p k none false (.optionLit p (.block p (cs ++ [val]))),
       mkExcl p [(binds, t), ([.notE p (.query p (.ident p k))], u)])
 
+/-- The `$joinOf` that goes with the choice of an `if`'s branches when no
+    type is written (`bifToExcl`): the `if`, and for `set L = if …` the
+    place `L`, from which the elaborator types the choice at the branches'
+    join. Not an alternative. -/
+def isJoinOf : SExpr → Bool
+  | .app _ (.ident _ "$joinOf") _ _ => true
+  | _ => false
+
+/-- The `if` and place of the `$joinOf` among a choice's alternatives. -/
+def joinOf? (as : List SExpr) : Option (SExpr × Option SExpr) :=
+  as.findSome? fun | .app _ (.ident _ "$joinOf") (i :: l) false => some (i, l.head?) | _ => none
+
 /-- `e` with its exclusive choices as choices (#314). Not inside a nested
     `for`, unless `deep`: its own clauses keep theirs, for it to compile as
     `if`s (`deep`, for an effect-free body, where a choice is as exact). -/
@@ -471,7 +483,7 @@ partial def exclToChoice (e : SExpr) (deep : Bool := false) : SExpr :=
   mapE (fun
     | f@(.forE ..) => if deep then none else some f
     | .app p (.ident q "$excl") alts false =>
-      let alts := alts.filter fun | .app _ (.ident _ "$joinOf") _ _ => false | _ => true
+      let alts := alts.filter (!isJoinOf ·)
       some (.app p (.ident q "$choice") (alts.map fun
         | .app _ (.ident _ "$alt") [.block bp gs, .block _ rs] false => .block bp ((gs ++ rs).map go)
         | .app _ (.ident _ "$alt") [.block bp gs, r] false => .block bp (gs.map go ++ [go r])
@@ -1089,7 +1101,7 @@ def prepare (cs : List SExpr) (isVal : String → Bool := fun _ => false)
         -- elaborator to type the choice at the branches' join, `elabOneGo`)
         (bifToExcl c).map fun
           | .decl p x ty v e@(.app _ (.ident _ "$excl") as false) =>
-            let joins := as.filter fun | .app _ (.ident _ "$joinOf") _ _ => true | _ => false
+            let joins := as.filter isJoinOf
             match exclToChoice e with
             | .app q f cs b => .decl p x ty v (.app q f (cs ++ joins) b)
             | e' => .decl p x ty v e'

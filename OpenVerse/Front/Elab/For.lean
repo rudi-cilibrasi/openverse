@@ -3,6 +3,19 @@ import OpenVerse.Front.Elab.Continuations
 
 namespace OpenVerse.Front
 open OpenVerse
+/-- (#283, #331) The type of a choice of an `if`'s branches with no type
+    written, from its `$joinOf` (`Choice.joinOf?`): the branches' join, as
+    the `if`'s value has, found by elaborating the `if` apart for the type
+    only (that code is not kept); for `set L = if …`, at `L`'s type.
+    `elabBranchAlts` is the mutual block's, as for `elabForWith`. -/
+def joinOfType (elabBranchAlts : Ctx → Pos → SExpr → Option STy → Option SExpr → EM (Option Expr × Ty × List Expr × Bool))
+    (ctx : Ctx) (p : Pos) (alts : List SExpr) : EM (Option STy) := do
+  let some (i, place) := Choice.joinOf? alts | return none
+  let st ← get
+  let (_, ty, _, _) ← elabBranchAlts { ctx with canFail := true, inTaking := true, typeOnly := true } p i none place
+  restoreConstructProbe ctx st
+  return some ty.toSTy
+
 /-- `for`: clauses are generators, bindings and filters; each generator opens
     a nested `forE`, and nested results are flattened (cartesian product,
     leftmost outermost). The clauses are a failure context; the body is not.
@@ -408,18 +421,12 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
           let (f, a, t) ← exclIter cA (Choice.bifToExcl cl ++ after) more bd stageOverride
           return (.seq codeA f, a, t)
         let some (.decl gp x xty _ (.app _ _ alts _)) := fs[j]? | eerr p "internal: an exclusive choice"
-        let altsS := alts.filter fun | .app _ (.ident _ "$joinOf") _ _ => false | _ => true
-        -- (an `if`'s, #331, with no type written: its branches' join, as the
-        -- `if`'s value has, found by elaborating it apart; that code is not kept)
-        let xty ← match xty, alts.findSome? (fun | .app _ (.ident _ "$joinOf") (i :: l) false => some (i, l.head?) | _ => none) with
-          | none, some (i, place) => do
-            let st ← get
-            -- (for `set L = if …`, at `L`'s type; a branch with a call to
-            -- lift typed as `option{…}` takes it, #283)
-            let (_, ty, _, _) ← elabBranchAlts { cA with canFail := true, inTaking := true, typeOnly := true } gp i none place
-            restoreConstructProbe cA st
-            pure (some ty.toSTy)
-          | t, _ => pure t
+        let altsS := alts.filter (!Choice.isJoinOf ·)
+        -- (an `if`'s, #331, with no type written: its branches' join; a
+        -- branch with a call to lift typed as `option{…}` takes it, #283)
+        let xty ← match xty with
+          | none => joinOfType elabBranchAlts cA gp alts
+          | t => pure t
         let alts : List (List SExpr × SExpr) := alts.filterMap fun
           | .app _ (.ident _ "$alt") [.block _ gs, r] false => some (gs, r)
           | _ => none

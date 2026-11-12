@@ -1247,13 +1247,8 @@ partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
     -- only, `$joinOf` (for `set L = if …`, at `L`'s type)
     let cl ← match cl with
       | .decl p x none false (.app q f@(.ident _ "$choice") as false) =>
-        match as.findSome? (fun | .app _ (.ident _ "$joinOf") (i :: l) false => some (i, l.head?) | _ => none) with
-        | some (i, place) =>
-          let st ← get
-          let (_, ty, _, _) ← elabBranchAlts { ctx with canFail := true, inTaking := true, typeOnly := true } p i none place
-          restoreConstructProbe ctx st
-          pure (.decl p x (some ty.toSTy) false
-            (.app q f (as.filter fun | .app _ (.ident _ "$joinOf") _ _ => false | _ => true) false))
+        match ← joinOfType (fun c pos i t pl => elabBranchAlts c pos i t pl) ctx p as with
+        | some ty => pure (.decl p x (some ty) false (.app q f (as.filter (!Choice.isJoinOf ·)) false))
         | none => pure cl
       | cl => pure cl
     let cl := pruneMethodBinding ctx cl
