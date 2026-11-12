@@ -584,6 +584,22 @@ def restoreConstructProbe (ctx : Ctx) (saved : ESt) : EM Unit := do
   let restored := if ctx.constructProbe then { saved with constructHints := hints } else saved
   set { restored with methodReceivers := receivers }
 
+/-- A return frame's lives' values (`void` for none, as `tuple()` is). -/
+def frameLivesTy (ts : List Ty) : Ty := if ts.isEmpty then .void else .tup ts
+
+/-- A frame on a continuation: one option per return frame, the one of the
+    call that pushed it holding its lives' values. -/
+def frameTy (lives : List (List Ty)) : Ty := .tup (lives.map fun ts => .opt (frameLivesTy ts))
+
+/-- The continuation of a lazily taken recursive group (#283): its frames,
+    innermost first, a list of `$lazycell`s. -/
+def frameContTy (lives : List (List Ty)) : Ty := .opt (.struct "$lazycell" [frameTy lives])
+
+/-- The lives' types of each return frame, from its continuation's type. -/
+def frameLivesOf : Ty → Option (List (List Ty))
+  | .opt (.struct "$lazycell" [.tup fs]) => fs.mapM fun | .opt .void => some [] | .opt (.tup ts) => some ts | _ => none
+  | _ => none
+
 /-- A call of a recursive function with several values that its consumer
     takes lazily (#246), as code for the consumer to put in its loop: the
     stack of items to run, a step that runs one of them, the slot that says
@@ -623,6 +639,12 @@ structure LoopGen where
       they are pushed on, when there are any. -/
   frames : List (String × List String × SExpr) := []
   kTy : Option Ty := none
+  /-- (#283) With continuation members: the flag a value sets when it comes
+      to a choice point in a member's code, then breaking out of the
+      consumer's failure context so that what it did up to there stays; the
+      consumer reads it after catching that break, and its `after` pushes
+      the item that resumes there. -/
+  bnd : Option Nat := none
 
 /-- Run `m`, attributing the heap effects it records first to `p` (a field
     or argument default: the effect is the construction's or the call's). -/

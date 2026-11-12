@@ -741,10 +741,17 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
         let vd : Expr := .lit .void
         let none : Expr := .lit Value.emptyArray
         let r ← fresh (.arr ity)
+        -- (#283) a value that comes to a continuation member's choice point
+        -- breaks out of the iteration, keeping what it did, with `bnd` set:
+        -- it has no values of its own; any other break goes on
+        let taken : Expr := match lg.bnd with
+          | some b => .seq (.assign b (.lit (.logic false))) (.seq (.assign r none)
+              (.seq (.loop (.seq (.assign r iter) (.seq (.assign b (.lit (.logic true))) Expr.brkV)))
+                (.ite (.prim .query [.local b]) (.seq lg.after (.local r)) (.seq .brk (.prim .userErr [])))))
+          | none => .seq (.assign r iter) (.seq lg.after (.local r))
         let stepBody : Expr := .ite (p2 .eq (.local lg.sp) (.lit (.int 0)))
           (.seq (.assign done (.lit (.logic true))) none)
-          (.seq lg.step (.ite (.prim .query [.local lg.has])
-            (.seq (.assign r iter) (.seq lg.after (.local r))) none))
+          (.seq lg.step (.ite (.prim .query [.local lg.has]) taken none))
         let round : Expr := .forE d (p2 .range (.lit (.int 1)) (.local size))
           (p2 .eq (.local done) (.lit (.logic false))) stepBody
         let body : Expr := .seq (.assign acc (p2 .concat (.local acc) (.prim .flatten [round])))

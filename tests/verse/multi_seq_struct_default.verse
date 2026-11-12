@@ -1,5 +1,4 @@
-# expect: 5:0: Count has several values and is recursive, or called by a recursive one, and it may print
-# (a choice after its call of itself: all its values computed at a call, F$all, not taken lazily, #246, #283)
+# (#283) Choice points in sequence: a choice after its call of itself, in a <computes> function that prints (a struct's field default): taken lazily.
 pt := struct<computes>:
     X:int = (Print("struct field"); 0)
 Count(N:int)<computes><decides>:int =

@@ -743,12 +743,33 @@ def firstLiftOf (ctx c2 : Ctx) (p : Pos) (g : String) (lp : List SExpr) (b : Str
       pure (STop.fn p (nameOf h) (hparams ++ kPs ++ capPs ++ typeParams) tps specs ret
         (pruneConstructHints ctx (nameOf h) body))
     | _ => throw "internal: a $member (#283)"
+  -- (#283) each continuation member a function of its own too, named after
+  -- its frame, which a value its frame is applied to is given to (with the
+  -- frame's lives and the rest of the continuation, `firstReturnBody`): its
+  -- clauses, then the first success of its tail's alternatives; its calls of
+  -- the function whose code it is are that one's
+  let livesTys : List (List Ty) := (kTy.bind frameLivesOf).getD []
+  let memberFn (j : Nat) : Option String :=
+    (frames[j]?).bind fun (_, _, code) => (Choice.contOf? code).map fun _ => s!"{name}_c{j}"
+  let origin (h : String) : String :=
+    ((g, tail) :: members.filterMap (fun
+      | .app _ (.ident _ "$member") [.ident _ m, _, _, .decl _ _ _ _ mt] false => some (m, mt)
+      | _ => none)).find? (fun (_, t) => (Choice.contHoles t).contains h) |>.map (·.1) |>.getD g
+  let contFns : List STop := frames.zipIdx.filterMap fun ((h, lives, code), j) => do
+    let fn ← memberFn j
+    let (ccls, ctail) ← Choice.contOf? code
+    let src := origin h
+    let lps := (lives.zip (livesTys.getD j [])).map fun (n, t) => ({ name := n, ty := t.toSTy } : SParam)
+    let body := Choice.firstBody (nameOf src) p b bty ccls ctail rest binds setsT capArgs (some vty.toSTy) nameOf
+      (fun target => recArgs (some (target.getD src))) normal? frames retName
+    return STop.fn p fn ({ name := h, ty := vty.toSTy } :: lps ++ kPs ++ capPs ++ typeParams) tps specs ret
+      (pruneConstructHints ctx fn body)
   -- (#283) with return frames: the function each value is given to, then to
   -- the clauses after the call, once for all the values of every member
   let retFns : List STop := kPs.map fun kp =>
     STop.fn p retName ({ name := "$V", ty := vty.toSTy } :: kp :: capPs ++ typeParams) tps specs ret
       (ctx.choiceCoercionBody <| pruneConstructHints ctx retName
-        (Choice.firstReturnBody p b bty rest binds setsT (some vty.toSTy) normal? frames))
+        (Choice.firstReturnBody p b bty rest binds setsT (some vty.toSTy) normal? frames memberFn capArgs))
   return { key, pos := p, name, returnExit, breakExit, sourceContext := sourceContextOf ctx, inlineScopes := ctx.inlineScopes, liftTag := ctx.liftTag,
            params := params ++ typeParams, tparams := tps, specs, ret,
            body := ctx.choiceCoercionBody <| pruneConstructHints ctx name
@@ -757,7 +778,7 @@ def firstLiftOf (ctx c2 : Ctx) (p : Pos) (g : String) (lp : List SExpr) (b : Str
            binds, sets := sets.map (·.name),
            args := pnames.map (SExpr.ident p ·) ++ kPs.map (fun _ => .ident p "false") ++
              caps.map (fun l => .ident p l.name) ++ typeArgs,
-           varBinds := (bls.filter (·.mutable)).map (·.name), extraFns := extraFns ++ retFns }
+           varBinds := (bls.filter (·.mutable)).map (·.name), extraFns := extraFns ++ contFns ++ retFns }
 
 /-- (#335) The key of a continuation: where the composed choice is, its
     binding, and the consumer's names the clauses after it use (in a method,
