@@ -72,6 +72,12 @@ if lake env lean -j1 --run tests/lean/ConcurrencyPrelude.lean >"$logs/prelude-co
 else
   rc=$?; cat "$logs/prelude-contracts"; exit "$rc"
 fi
+echo "== initializer convergence compiler API contracts"
+if lake env lean -j1 --run tests/lean/InitializerConvergence.lean >"$logs/initializer-contracts" 2>&1; then
+  cat "$logs/initializer-contracts"
+else
+  rc=$?; cat "$logs/initializer-contracts"; exit "$rc"
+fi
 if grep -rnE '\bsorry\b|\badmit\b' OpenVerse/ Main.lean; then echo "error: sorry/admit in Lean sources" >&2; exit 1; fi
 scripts/gen-claims.sh --check
 echo "== C runtime"
@@ -97,6 +103,8 @@ check "Verse test suite, Lean and C" scripts/test-verse.sh --c
 check "overloading conformance matrix" bash tests/scripts/test-overload-conformance.sh
 check "effect admission and executable controls" bash tests/scripts/test-effect-admission.sh
 check "construction effects and executable controls" bash tests/scripts/test-construction-effects.sh
+check "initializer convergence and extended-default models" \
+  bash tests/scripts/test-initializer-convergence.sh "${FUZZ_MODEL_INITIALIZERS:-96}" "$seed"
 check "scheduler conformance traces and controls" bash tests/scripts/test-scheduler-conformance.sh
 check "bounded clock domain (${FUZZ_CLOCK_DOMAIN:-100} programs and boundary traces)" \
   bash tests/scripts/test-clock-domain.sh "${FUZZ_CLOCK_DOMAIN:-100}" "$seed"
