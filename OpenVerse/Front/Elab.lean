@@ -693,6 +693,20 @@ def Ctx.evidenceEnv (ctx : Ctx) : TyEnv :=
       let bound := capability.bound ctx.types
       (bound.base, bound.derived) }
 
+/-- Member lookup and implicit coercions can use a dictionary absent from
+    the source's lexical names. A generated function must capture that
+    typed capability too, then resolve it in its own frame. Added captures
+    are readonly snapshots; ordinary source captures retain their storage. -/
+def Ctx.captureEvidence (ctx : Ctx) (captures : List Local) (excluded : List String := []) : List Local :=
+  let names := (SubtypeEvidence.capabilities ctx.types
+    (ctx.locals.map fun binding => (binding.name, binding.ty))).filterMap fun
+      | .local name _ | .field name _ _ => some name
+      | _ => none
+  let added := names.eraseDups.filterMap fun name =>
+    if excluded.contains name || captures.any (·.name == name) then none else
+      (ctx.lookup name).map fun binding => { binding with mutable := false, storage := none }
+  captures ++ added
+
 /-- Class or interface `c` has method `m`, its own or inherited. -/
 def Ctx.hasMethod (ctx : Ctx) (c m : String) : Bool :=
   (ctx.types.supers c).any fun e => (ctx.sig? s!"{e}.{m}").isSome
@@ -1944,8 +1958,8 @@ def firstUnpack (p : Pos) (l : Choice.FirstLift) (packet : String) : List SExpr 
 def firstKey (ctx : Ctx) (p : Pos) (lp : List SExpr) (b : String) (bty : Option STy)
     (rest : List SExpr) : String :=
   let written := SExpr.block p (lp ++ rest)
-  let inputs := (Choice.namesUsed written).eraseDups.filterMap fun n =>
-    (ctx.lookup n).map fun l => (n, l.ty, l.mutable)
+  let inputs := (ctx.captureEvidence ((Choice.namesUsed written).eraseDups.filterMap ctx.lookup)).map fun l =>
+    (l.name, l.ty, l.mutable)
   let aliases := ctx.types.tvars.filter fun (n, _) =>
     writesTps [n] written || ((bty.map (Choice.styMentions [n])).getD false)
   reprStr (p, b, bty, lp, rest, inputs, aliases, ctx.selfClass, ctx.liftTag, ctx.inlineScopes) ++ sourceContextKey ctx ++ firstReturnKey ctx rest
@@ -2269,8 +2283,8 @@ def firstLiftOf (ctx c2 : Ctx) (p : Pos) (g : String) (lp : List SExpr) (b : Str
     | some l => pure l
     | none => throw s!"internal: parameter {n}"
   -- (the consumer's names the clauses after it use, in order of first use)
-  let caps : List Local := (Choice.namesUsed (.block p rest)).eraseDups.filterMap fun n =>
-    if pnames.contains n then none else ctx.lookup n
+  let caps : List Local := ctx.captureEvidence ((Choice.namesUsed (.block p rest)).eraseDups.filterMap fun n =>
+    if pnames.contains n then none else ctx.lookup n) pnames
   let setNames := Choice.setsIn (.block p rest)
   let sets := caps.filter fun l => l.mutable && setNames.contains l.name
   -- (its own binding too: a call in the clauses of another such call's
@@ -2358,8 +2372,8 @@ def contKey (ctx : Ctx) (p : Pos) (b : String) (rest : List SExpr) : String :=
     | none => rest
   -- (with their types: a `for`'s body copied once per alternative of a
   -- choice has the same place, with names of other types)
-  let caps := (Choice.namesUsed (.block p rest)).eraseDups.filterMap fun n =>
-    (ctx.lookup n).map fun l => s!"{n}:{reprStr l.ty}"
+  let caps := (ctx.captureEvidence ((Choice.namesUsed (.block p rest)).eraseDups.filterMap ctx.lookup)).map fun l =>
+    s!"{l.name}:{reprStr l.ty}"
   -- A type used only by a written annotation has no captured value. Its
   -- instance still distinguishes helpers made at a shared source position.
   let written := ctx.types.tvars.filterMap fun (n, t) =>
@@ -2398,7 +2412,7 @@ def contLiftOf (ctx c2 : Ctx) (p : Pos) (b : String) (alts rest : List SExpr)
       some <$> (resolveTy ctx.types p (firstReturnType ctx)).run' { env := ctx.types }
     else pure none
   if (Refine.findPart (fun | .brk _ => true | _ => false) true (.block p rest)).isSome then throw "a break"
-  let caps : List Local := (Choice.namesUsed (.block p rest)).eraseDups.filterMap ctx.lookup
+  let caps : List Local := ctx.captureEvidence ((Choice.namesUsed (.block p rest)).eraseDups.filterMap ctx.lookup)
   let setNames := Choice.setsIn (.block p rest)
   let sets := caps.filter fun l => l.mutable && setNames.contains l.name
   let binds := (b :: Choice.boundIn rest).eraseDups
@@ -2543,7 +2557,7 @@ def contForLiftOf (ctx : Ctx) (p : Pos) (b : String) (bty vty : Ty) (alts rest :
     | .app _ (.ident _ "$forReturnBody") [.block _ [_, .set _ (.ident _ _) none _], _, _] false => true
     | _ => false
   if !breaks && (Refine.findPart Refine.isBreak true (.block p rest)).isSome then throw "a break"
-  let caps : List Local := (Choice.namesUsed (.block p (rest ++ [body]))).eraseDups.filterMap ctx.lookup
+  let caps : List Local := ctx.captureEvidence ((Choice.namesUsed (.block p (rest ++ [body]))).eraseDups.filterMap ctx.lookup)
   let setNames := Choice.setsIn (.block p (rest ++ [body]))
   let sets := caps.filter fun l => l.mutable && setNames.contains l.name
   let (tps, typeParams, typeArgs) ← contTypes ctx p (bty :: caps.map (·.ty)) [vty] written
@@ -2586,7 +2600,7 @@ def forStagePlanOf (ctx : Ctx) (p : Pos) (key : String) (clauses : List SExpr)
   let body := qualify body
   let written := SExpr.block p (clauses ++ [body] ++ required.map (SExpr.ident p ·))
   let used := Choice.namesUsed written
-  let caps := used.eraseDups.filterMap ctx.lookup
+  let caps := ctx.captureEvidence (used.eraseDups.filterMap ctx.lookup)
   let setNames := Choice.setsIn written
   let sets := caps.filter fun l => l.mutable && setNames.contains l.name
   let inputs := caps.flatMap fun l => l.storage.toList.flatMap (·.args)
@@ -2660,7 +2674,7 @@ def forStagePrefixOf (ctx : Ctx) (plan : Choice.ForStagePlan) (args : List Ty) (
   let clauses := clauses.map fun e => Refine.substTypes σt (qualify e)
   let body := Refine.substTypes σt (qualify body)
   let written := SExpr.block p (clauses ++ [body] ++ (copyNames ++ borrowNames).map (SExpr.ident p ·))
-  let caps := (Choice.namesUsed written).eraseDups.filterMap ctx.lookup
+  let caps := ctx.captureEvidence ((Choice.namesUsed written).eraseDups.filterMap ctx.lookup)
   let key := s!"prefix{flat}" ++ plan.key ++ contKey ctx p "$prepare" [written] ++ forStageCaptureKey ctx args caps
   let name := s!"{plan.base}$prepare{key.hash}"
   let (tps, more, witnesses) ← contTypes ctx p (caps.map (·.ty)) args written
@@ -2705,7 +2719,7 @@ def forStageEnvOf (ctx : Ctx) (plan : Choice.ForStagePlan) (p : Pos)
   let clauses := clauses.map qualify
   let body := qualify body
   let written := SExpr.block p (clauses ++ [body] ++ (ctx.forStageCopies ++ ctx.forStageBorrows).map (SExpr.ident p ·))
-  let caps := (Choice.namesUsed written).eraseDups.filterMap ctx.lookup
+  let caps := ctx.captureEvidence ((Choice.namesUsed written).eraseDups.filterMap ctx.lookup)
   let key := s!"env{ctx.forStageFlat}" ++ plan.key ++ contKey ctx p "$resume" [written] ++ forStageCaptureKey ctx ctx.forStageArgs caps
   let name := s!"{plan.base}$env{key.hash}"
   let args := ctx.forStageArgs
@@ -3238,7 +3252,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
     let bound := { c with locals := { name, slot, ty := bty, mutable := false } :: c.locals }
     let required := if stagePlan.isSome then stageBorrows else []
     let written := SExpr.block q (rest ++ [bd] ++ required.map (SExpr.ident q ·))
-    let caps := (Choice.namesUsed written).eraseDups.filterMap bound.lookup
+    let caps := bound.captureEvidence ((Choice.namesUsed written).eraseDups.filterMap bound.lookup)
     let key := "stageOrdinary" ++ contKey bound q name (alts ++ rest ++ [bd]) ++
       forStageCaptureKey bound stageArgs caps
     let known := c.types.loopRequests.findSome? (fun l => l.stagePlan.filter (·.key == key))
@@ -3432,7 +3446,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
               let cB := { cA with locals := { name := b.name, slot, ty, mutable := false } :: cA.locals }
               let (f, a, t) ← exclIter cB after more bd stageOverride
               return (.seq codeA f, a, t)
-            let rootCaptures := (Choice.namesUsed (.block p (i :: restCl ++ [bd]))).filterMap cA.lookup
+            let rootCaptures := cA.captureEvidence ((Choice.namesUsed (.block p (i :: restCl ++ [bd]))).filterMap cA.lookup)
             let key := "stage" ++ contKey cA b.pos b.name (i :: restCl ++ [bd]) ++
               forStageCaptureKey cA [] (rootCaptures.filter (·.storage.isSome))
             let plan? := stagePlan.orElse fun _ =>
@@ -4770,8 +4784,8 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
   let targs := targs.map fun t => t.subst (opened.filterMap fun (n, _, c) => if c then some (n, Ty.param n true) else none)
   let shown := (Ty.struct T targs).show
   -- (the locals the branch uses, in order of first use)
-  let caps : List Local := (Choice.namesUsed body).filterMap fun n =>
-    if n == D then none else ctx.locals.find? (·.name == n)
+  let caps : List Local := ctx.captureEvidence ((Choice.namesUsed body).filterMap fun n =>
+    if n == D then none else ctx.locals.find? (·.name == n)) [D]
   -- (the `var`s from outside it that the branch sets, its `return`s and its
   -- `break`s that leave it, `refineExits`: copies in the branch, and its
   -- function returns what they say, which the caller does after the `if`;
@@ -7050,8 +7064,8 @@ partial def resolveOverload (ctx : Ctx) (p : Pos) (name : String) (ovs : List St
       | .arrayLit _ es => s!"arr {es.length}"
       | .bin _ o _ _ => s!"bin {o}"
       | _ => "_"
-    let inputs := (Choice.namesUsed a).eraseDups.filterMap fun n =>
-      (ctx.lookup n).map fun l => (n, l.ty)
+    let inputs := (ctx.captureEvidence ((Choice.namesUsed a).eraseDups.filterMap ctx.lookup)).map fun l =>
+      (l.name, l.ty)
     let typing := reprStr (inputs, ctx.types.tvars, ctx.selfClass, ctx.selfMethod)
     let key := s!"{a.pos.line}:{a.pos.col}:{a.pos.file}:{shape}:{typing}"
     if let some r := (← get).natTys[key]? then return r

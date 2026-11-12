@@ -366,6 +366,144 @@ Main():void=
 
 private def receiverTrace := "direct 9 precise 9\nopened 9\npermuted 9\ninherited 4 precise\n"
 
+private def refinedSource := "
+vehicle:=class<computes>:
+    Speed:int=1
+    ReadSpeed()<computes>:int=Speed
+car:=class<computes>(vehicle){Name:string=\"precise\"}
+pair(a:type,b:type):=class<computes>{A:a;B:b}
+dup(v:type):=class<computes>(pair(v,v)){}
+tagged(k:type,v:type):=class<computes>(pair(v,v)){Tag:k}
+Use(P:pair(a,b),D:evidence(vehicle,a) where a:type,b:type)<computes>:void=
+    if(Q:=dup[P]):Print(\"refined {Q.A.Speed}\")
+Fallback()<computes>:int=0
+Bind(P:pair(a,b),D:evidence(vehicle,a) where a:type,b:type)<computes>:type{_()<computes>:int}=
+    if(Q:=dup[P])then Q.A.ReadSpeed else Fallback
+Precise(P:pair(a,b),D:evidence(vehicle,a) where a:type,b:type)<computes>:a=
+    if(Q:=dup[P])then Q.A else P.A
+Opened(P:pair(a,b),D:evidence(vehicle,a) where a:type,b:type)<computes>:int=
+    if(Q:=tagged[P])then Q.A.Speed else 0
+carrier(s:type,t:type):=class<computes>:
+    P:pair(s,t)
+    ReceiverEvidence:evidence(vehicle,s)
+    Read()<computes>:int=if(Q:=dup[P])then Q.A.Speed else 0
+Main():void=
+    C:=car{Speed:=9}
+    P:=dup(car){A:=C,B:=C}
+    D:=CarEvidence()
+    Use(P,D)
+    F:=Bind(P,D)
+    Print(\"bound {F()}\")
+    Print(\"precise {Precise(P,D).Name}\")
+    T:=tagged(string,car){A:=car{Speed:=4},B:=C,Tag:=\"tag\"}
+    Print(\"opened {Opened(T,D)}\")
+    H:=carrier(car,car){P:=P,ReceiverEvidence:=D}
+    Print(\"receiver {H.Read()}\")
+"
+
+private def refinedControlSource := refinedSource
+  |>.replace "Q.A.ReadSpeed" "D.Up(Q.A).ReadSpeed"
+  |>.replace "Q.A.Speed" "D.Up(Q.A).Speed"
+  -- A method's proof lives in its receiver instead of an explicit D.
+  |>.replace "Read()<computes>:int=if(Q:=dup[P])then D.Up(Q.A).Speed"
+    "Read()<computes>:int=if(Q:=dup[P])then ReceiverEvidence.Up(Q.A).Speed"
+
+private def refinedTrace := "refined 9\nbound 9\nprecise precise\nopened 4\nreceiver 9\n"
+
+private def refinedStateSource := "
+vehicle:=class<allocates>:
+    var N:int=0
+    ReadN()<reads>:int=N
+car:=class<allocates>(vehicle){Name:string=\"a\"}
+pair(a:type,b:type):=class<computes>{A:a;B:b}
+dup(v:type):=class<computes>(pair(v,v)){}
+Touch(P:pair(a,b),D:evidence(vehicle,a) where a:type,b:type)<transacts>:a=
+    if(Q:=dup[P]):
+        A:=Q.A
+        Print(\"touch\")
+        set A.N+=1
+        return Q.A
+    P.A
+Fallback()<reads>:int=0
+Bind(P:pair(a,b),D:evidence(vehicle,a) where a:type,b:type)<computes>:type{_()<reads>:int}=
+    if(Q:=dup[P])then Q.A.ReadN else Fallback
+Main():void=
+    A:=car{}
+    P:=dup(car){A:=A,B:=A}
+    D:=CarEvidence()
+    R:=Touch(P,D)
+    Print(\"identity {R.Name} {A.N}\")
+    if(Touch(P,D),false?)then Print(\"bad\")else Print(\"rolled\")
+    Print(\"rollback {A.N}\")
+    F:=Bind(P,D)
+    set A.N=4
+    Print(\"live {F()}\")
+"
+
+private def refinedStateControlSource := refinedStateSource
+  |>.replace "A:=Q.A" "A:=D.Up(Q.A)"
+  |>.replace "Q.A.ReadN" "D.Up(Q.A).ReadN"
+
+private def refinedCancelSource := "
+vehicle:=class<allocates>{var N:int=0}
+car:=class<allocates>(vehicle){Name:string=\"a\"}
+pair(a:type,b:type):=class<computes>{A:a;B:b}
+dup(v:type):=class<computes>(pair(v,v)){}
+Worker(P:pair(a,b),D:evidence(vehicle,a) where a:type,b:type)<suspends>:void=
+    if(Q:=dup[P]):
+        A:=Q.A
+        defer:Print(\"cleanup {A.N}\")
+        set A.N=5
+        Sleep(10.0)
+        Print(\"bad\")
+Main()<suspends>:void=
+    A:=car{}
+    P:=dup(car){A:=A,B:=A}
+    D:=CarEvidence()
+    race:
+        Worker(P,D)
+        block:
+            Sleep(0.0)
+            Print(\"winner\")
+    Print(\"after {A.N} {A.Name}\")
+"
+
+private def refinedCancelControlSource := refinedCancelSource
+  |>.replace "A:=Q.A" "A:=D.Up(Q.A)"
+
+private def composedHelperSource : String :=
+  let clauses := (List.range 14).map fun i => s!"A{i}:=(Steps(H,0)|Steps(H,2)),A{i}=0,set H.N+=1"
+  "vehicle:=class<computes>{Speed:int=9}\ncar:=class<computes>(vehicle){}\n" ++
+  "counter:=class<allocates>{var N:int=0}\nSteps(H:counter,N:int)<computes>:int=N|N+1\n" ++
+  "F(X:t,D:evidence(vehicle,t),H:counter where t:type)<transacts>:[]int=\n    for(" ++
+  ",".intercalate clauses ++ "){X.Speed}\nMain():void=\n    H:=counter{}\n" ++
+  "    R:=F(car{},CarEvidence(),H)\n    if(V:=R[0]):Print(\"composed {R.Length} {V} {H.N}\")\n"
+
+private def composedHelperControlSource := composedHelperSource
+  |>.replace "{X.Speed}" "{D.Up(X).Speed}"
+
+private def composedHelperTrace := "composed 1 9 14\n"
+
+private def stagedHelperSource := "
+vehicle:=class<computes>{Speed:int=9}
+car:=class<computes>(vehicle){}
+pair(a:type,b:type):=class<computes>{A:a;B:b}
+dup(v:type):=class<computes>(pair(v,v)){}
+F(P:pair(a,b),D:evidence(vehicle,a) where a:type,b:type)<suspends>:[]int=
+    for(A:a=if(Q:=dup[P])then(Q.A|Q.B)else P.A,B:=(0|1)):
+        Sleep(0.0)
+        A.Speed
+Main()<suspends>:void=
+    R:=F(dup(car){A:=car{},B:=car{Speed:=4}},CarEvidence())
+    Print(\"stage {R.Length}\")
+    for(V:R):Print(\"{V}\")
+"
+
+private def stagedHelperControlSource := stagedHelperSource
+  |>.replace "A.Speed" "D.Up(A).Speed"
+
+private def stagedHelperTrace := "stage 4\n9\n9\n4\n4\n"
+
 private def receiverStateSource := "
 vehicle:=class<allocates>:
     var N:int=0
@@ -485,6 +623,31 @@ private def receiverContracts : IO Unit := do
     types := declarations
     locals := [{ name := "Self", slot := 8, ty := .struct "holder" [], mutable := false }] }
   need "receiver facts participate in inference" (receiverCtx.evidenceEnv.boundSubtype v vehicle)
+  let captures := receiverCtx.captureEvidence []
+  need "implicit receiver evidence becomes a typed capture"
+    (captures.map (·.name) == ["Self"] && captures.map (·.ty) == [.struct "holder" []])
+  let describe (locals : List Local) := locals.map fun binding =>
+    (binding.name, binding.slot, binding.ty, binding.mutable,
+      binding.storage.map fun source => (source.frame, source.name, source.args))
+  need "source captures are not duplicated or rewritten"
+    (reprStr (describe (receiverCtx.captureEvidence receiverCtx.locals)) == reprStr (describe receiverCtx.locals))
+  need "a branch binding excludes a shadowed outer capability"
+    ((receiverCtx.captureEvidence [] ["Self"]).isEmpty)
+  let storedLocals := receiverCtx.locals.map fun binding =>
+    { binding with mutable := true, storage := some { frame := "Caller", name := binding.name, args := [t] } }
+  let stored := { receiverCtx with locals := storedLocals }
+  need "implicit proof roots are readonly snapshots in the helper"
+    ((stored.captureEvidence []).all fun binding => !binding.mutable && binding.storage.isNone)
+  need "lexically used mutable roots retain their source storage"
+    ((stored.captureEvidence stored.locals).all fun binding => binding.mutable && binding.storage.isSome)
+  let withValue := { receiverCtx with locals :=
+    { name := "X", slot := 0, ty := v, mutable := false } :: receiverCtx.locals }
+  let withoutProof := { withValue with locals := withValue.locals.take 1 }
+  let suffix := [SExpr.member pos (.ident pos "X") "Speed"]
+  need "continuation cache identity includes implicit evidence"
+    (contKey withValue pos "A" suffix != contKey withoutProof pos "A" suffix)
+  need "first-success cache identity includes implicit evidence"
+    (firstKey withValue pos [] "A" none suffix != firstKey withoutProof pos [] "A" none suffix)
   let generic := { declarations with
     structs := [("holder", [(one, (Bound.mk vehicle t).ty, none)])]
     sparams := [("holder", [("t", false)])] }
@@ -628,7 +791,9 @@ private def checkTrace (label : String) (compiled : Compiled) (expected : String
     compiled.prog.checkTypes compiled.sigs compiled.slotTys)
   match compiled.prog.runB 1000000 10000 with
   | .res (.ok _, output) =>
-    need s!"{label}: independent output" (ByteArray.mk (output.map Nat.toUInt8).toArray == expected.toUTF8)
+    let actual := ByteArray.mk (output.map Nat.toUInt8).toArray
+    need s!"{label}: independent output; expected {reprStr expected}, found {reprStr (String.fromUTF8! actual)}"
+      (actual == expected.toUTF8)
   | other => throw (IO.userError s!"{label}: {reprStr other}")
 
 /-- Run implicit call binding against a real checked callee, then move both
@@ -883,6 +1048,30 @@ def main (args : List String) : IO Unit := do
   checkTrace "receiver cancellation" receiverCancel cancelTrace
   let receiverCancelControl ← receiverCompile "explicit receiver cancellation" receiverCancelControlSource
   checkTrace "explicit receiver cancellation" receiverCancelControl cancelTrace
+  let refined ← receiverCompile "refined helper evidence" refinedSource
+  checkTrace "refined helper evidence" refined refinedTrace
+  let refinedControl ← receiverCompile "explicit refined helper evidence" refinedControlSource
+  checkTrace "explicit refined helper evidence" refinedControl refinedTrace
+  let refinedState ← receiverCompile "refined state" refinedStateSource
+  checkTrace "refined state" refinedState receiverStateTrace
+  let refinedStateControl ← receiverCompile "explicit refined state" refinedStateControlSource
+  checkTrace "explicit refined state" refinedStateControl receiverStateTrace
+  let refinedCancel ← receiverCompile "refined cancellation" refinedCancelSource
+  checkTrace "refined cancellation" refinedCancel cancelTrace
+  let refinedCancelControl ← receiverCompile "explicit refined cancellation" refinedCancelControlSource
+  checkTrace "explicit refined cancellation" refinedCancelControl cancelTrace
+  let composedHelper ← receiverCompile "composed helper evidence" composedHelperSource
+  checkTrace "composed helper evidence" composedHelper composedHelperTrace
+  need "composed evidence control actually creates continuation functions"
+    (composedHelper.prog.fns.any (·.name.startsWith "$contf"))
+  let composedHelperControl ← receiverCompile "explicit composed helper evidence" composedHelperControlSource
+  checkTrace "explicit composed helper evidence" composedHelperControl composedHelperTrace
+  let stagedHelper ← receiverCompile "waiting stage evidence" stagedHelperSource
+  checkTrace "waiting stage evidence" stagedHelper stagedHelperTrace
+  need "waiting evidence control actually captures a resume environment"
+    (stagedHelper.prog.fns.any fun fn => fn.name.startsWith "$forStage" && (fn.name.splitOn "$env").length > 1)
+  let stagedHelperControl ← receiverCompile "explicit waiting stage evidence" stagedHelperControlSource
+  checkTrace "explicit waiting stage evidence" stagedHelperControl stagedHelperTrace
   let entryTops ← getOK "entry-only dictionary declarations"
     (parseProgram "vehicle:=class<computes>{Speed:int=9}\ncar:=class<computes>(vehicle){}\nMain():void={}")
   let entry := SExpr.member pos
@@ -917,7 +1106,16 @@ def main (args : List String) : IO Unit := do
         ("receiver-state", receiverState, receiverStateTrace),
         ("receiver-state-control", receiverStateControl, receiverStateTrace),
         ("receiver-cancel", receiverCancel, cancelTrace),
-        ("receiver-cancel-control", receiverCancelControl, cancelTrace)] do
+        ("receiver-cancel-control", receiverCancelControl, cancelTrace),
+        ("refined", refined, refinedTrace), ("refined-control", refinedControl, refinedTrace),
+        ("refined-state", refinedState, receiverStateTrace),
+        ("refined-state-control", refinedStateControl, receiverStateTrace),
+        ("refined-cancel", refinedCancel, cancelTrace),
+        ("refined-cancel-control", refinedCancelControl, cancelTrace),
+        ("composed-helper", composedHelper, composedHelperTrace),
+        ("composed-helper-control", composedHelperControl, composedHelperTrace),
+        ("staged-helper", stagedHelper, stagedHelperTrace),
+        ("staged-helper-control", stagedHelperControl, stagedHelperTrace)] do
       IO.FS.writeBinFile (out ++ s!"/{name}.vbc") compiled.prog.encode
       IO.FS.writeFile (out ++ s!"/{name}.expected") expected
   IO.println "subtype dictionary contracts passed (checked Core, precise/escaping results, inference, member calls/coercion, state/order/rollback/cancellation)"
