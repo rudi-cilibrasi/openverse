@@ -821,8 +821,14 @@ callback-based control/call helpers, expression elaboration, and final lowering.
 Application and statement handlers receive the recursive entry points as
 callbacks; their public wrappers keep the original signatures. This keeps each
 generated C translation unit below the browser build's 8 MiB optimization
-threshold. `test-frontend-c-size.sh` follows the generated import closure and
-checks that budget, so stale build files do not affect the result. Resource
+threshold. The expression entry point uses an exhaustive constructor router
+and four ordered handler stages. Only unmatched generated calls fall through
+between stages; recursive elaboration enters the public function, retaining its
+construction probe once per call. This also limits individual function control
+flow, which otherwise exhausts memory in Wasm code generation.
+`test-frontend-c-size.sh` follows the generated import closure and checks both
+the 8 MiB unit budget and a 1 MiB function budget. Stale build files do not
+affect the result. Resource
 measurements still use the browser's Emscripten `-O1` flags and memory limit;
 file size alone does not prove a memory bound.
 

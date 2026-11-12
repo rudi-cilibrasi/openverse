@@ -1,0 +1,378 @@
+/- A contiguous expression-handler stage; fallthrough preserves source pattern order. -/
+import OpenVerse.Front.Elab.Control
+
+namespace OpenVerse.Front
+open OpenVerse
+set_option maxHeartbeats 800000 in
+partial def elabExprControlWith
+    (elabE : Ctx → SExpr → Option Ty → EM R)
+    (elabStmt : Ctx → SExpr → Option Ty → EM (R × Ctx))
+    (elabDefers : Ctx → List (SExpr × List Local) → EM Expr)
+    (elabRefineExit : Ctx → Pos → List SExpr → List SExpr → EM R)
+    (elabSeq : Ctx → List SExpr → Option Ty → EM (R × Ctx))
+    (elabRefinedIf : Ctx → Pos → Pos → String → String → SExpr → SExpr → Option SExpr → Option Ty → (made : optParam Bool false) → EM (Option R))
+    (elabSet : Ctx → Pos → SExpr → Option String → SExpr → EM R)
+    (elabFor : Ctx → Pos → List SExpr → SExpr → (prepared : optParam Bool false) → (firstDecides : optParam Bool false) → (failure : optParam (Option SExpr) none) → EM R)
+    (elabOneClauses : Ctx → List SExpr → EM (R × Ctx))
+    (elabCase : Ctx → Pos → SExpr → List (Option SExpr × SExpr) → Option Ty → EM R)
+    (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
+  match se with
+  | e@(.ite _ [.decl _ _ none false (.app _ (.ident _ "$methodCast") _ false)] _ (some _)) =>
+    elabE ctx (pruneMethodCases ctx e) exp
+  | e@(.ite _ [.decl _ _ none false (.app _ (.ident _ "$methodCase") _ false)] _ (some _)) =>
+    elabE ctx (pruneMethodCases ctx e) exp
+  | .ite p conds thenE elseE =>
+    -- (#243, #351) a cast as a later clause of the condition, `if (c₁, …,
+    -- D := T[X], rest) then B else E`, that only the first clause may be
+    -- (one that refines type arguments, opens them, or goes through a
+    -- view): as written first, and when that is refused for it, as `if (c₁,
+    -- …) then (if (D := T[X], rest) then B else E) else E`, when the clauses
+    -- before it have nothing its failure would undo (they print nothing,
+    -- change no object, and call nothing, which might)
+    -- (a clause `D := T[X]` past the first, which may be an index, `A[i]`,
+    -- as written: the one the refusal is at)
+    let castAt : List (Nat × Pos) := conds.zipIdx.filterMap fun
+      | (.decl _ _ none false (.app q (.ident _ _) [_] true), i) => if i > 0 then some (i, q) else none
+      | _ => none
+    -- (as written for this `if` only: not the `if`s in it, nor those the
+    -- cast's own path makes, #400's review)
+    let asWritten := ctx.asWritten
+    let ctx := { ctx with asWritten := false }
+    if !asWritten && !castAt.isEmpty then
+          let st0 ← get
+          let tried ← tryCatch (do pure (Except.ok (← elabE { ctx with asWritten := true } (.ite p conds thenE elseE) exp)))
+            fun err => pure (Except.error err)
+          match tried with
+          | .ok r => return r
+          | .error err =>
+            let some (k, _) := castAt.find? (fun (_, q) => err.startsWith s!"{q.show}:") | throw err
+            if (err.splitOn "only as the first clause of an if's condition").length < 2 then throw err
+            let castC := conds[k]!
+            set st0
+            -- (the clauses before it, apart: what they would leave behind)
+            let pre := conds.take k
+            let fx0 := (← get).fx
+            let n0 := (← get).nslots
+            modify fun s => { s with fx := [] }
+            let (rp, _) ← tryCatch (elabSeq { ctx with canFail := true, inTaking := true, asWritten := true } pre none)
+              fun _ => do set st0; throw err
+            let fxP := (← get).fx
+            set st0
+            modify fun s => { s with fx := fx0 }
+            -- (and a `var` set there, a slot they do not bind, which the
+            -- failure would restore, #400's review)
+            if rp.e.printsOrCalls || fxP.any (·.1 == "writes") || rp.e.assignsBelow n0 then
+              throw s!"{err} (and the clauses before it print, change an object or a var, or call a function, which its failure would have to undo: put it first)"
+            -- (the cast's branch is the elaborator's, not the source's: so a
+            -- clause after it, always, `true?`, which the lift then carries,
+            -- `made`)
+            -- (`true?`, which may fail, keeps them a condition when they
+            -- cannot fail themselves, as the whole condition could, as
+            -- `Refine.castRest` does)
+            let tq := SExpr.query p (.ident p "true")
+            let innerC := castC :: conds.drop (k + 1) ++ [tq]
+            match elseE with
+            | none => return ← elabE ctx (.ite p (pre ++ [tq]) (.ite p innerC thenE none) none) exp
+            | some ee =>
+              -- (the `else` once, outside the clauses' names, #400's review:
+              -- the branch gives an option of its value, or `true` for a
+              -- `void` `if`, `false` when a clause fails, as #286's)
+              let attempt (τ : Ty) : EM R := do
+                let isVoid := τ == .void
+                let v := s!"$lc{p.line}_{p.col}"
+                let thenV : SExpr := if isVoid then .block p [thenE, .ident p "true"]
+                  else .block p [.decl p v none false thenE, .optionLit p (.ident p v)]
+                let outer := SExpr.ite p (pre ++ [tq]) (.ite p innerC thenV (some (.ident p "false")))
+                  (some (.ident p "false"))
+                let rty : Ty := if isVoid then .logic else .opt τ
+                let r ← elabE ctx outer (some rty)
+                let t ← fresh rty
+                if isVoid then
+                  let eE ← elabE ctx ee none
+                  return ⟨.seq (.assign t r.e) (.ite (.prim .query [.local t]) (.lit .void) (.seq eE.e (.lit .void))), .void⟩
+                let eE ← coerce p (← elabE ctx ee (some τ)) τ
+                let xv ← fresh τ
+                return ⟨.seq (.assign t r.e) (.ite (.assign xv (.prim .query [.local t])) (.local xv) eE), τ⟩
+              match exp with
+              | some τ => return ← attempt τ
+              | none =>
+                let st1 ← get
+                let re ← elabE ctx ee none
+                set st1
+                if re.ty == .void then return ← attempt .void
+                return ← tryCatch (attempt re.ty) fun _ => do set st1; attempt .void
+    -- (a cast that refines type arguments, as the whole condition, #243,
+    -- or as its first clause, the cast having no effects to undo when the
+    -- rest fails: `if (D := T[X], rest) then B` is `if (D := T[X]) then (if
+    -- (rest) then B)`, and with an `else E`, the branch's function gives
+    -- `option{B}`, or `false` when the rest fails, and `E` runs once, in the
+    -- caller, not under the refinement, #286)
+    if let .decl dp d none false (.app _ (.ident _ T) [x] true) :: more := conds then
+      match more, elseE with
+      | [], _ =>
+        match ← elabRefinedIf ctx p dp d T x thenE elseE exp with
+        | some r => return r
+        | none => pure ()
+      | _, none =>
+        match ← elabRefinedIf ctx p dp d T x (Refine.castRest p more thenE none) none exp (made := true) with
+        | some r => return r
+        | none => pure ()
+      | _, some ee =>
+        -- (at the if's type `τ`: void, the branch's function says whether
+        -- the rest succeeded)
+        -- (the branch runs outside any failure context, in the branch's
+        -- function and in the caller, which keeps its result first: when
+        -- it fails, the if fails, as a branch does; only `false`, the rest
+        -- having failed, runs `E`)
+        let attempt (τ : Ty) : EM (Option R) := do
+          let isVoid := τ == .void
+          let v := s!"$cv{p.line}_{p.col}"
+          let thenV : SExpr := if isVoid then .block p [thenE, .ident p "true"]
+            else .block p [.decl p v none false thenE, .optionLit p (.ident p v)]
+          let inner := Refine.castRest p more thenV (some (.ident p "false"))
+          let rty : Ty := if isVoid then .logic else .opt τ
+          match ← elabRefinedIf ctx p dp d T x inner (some (.ident p "false")) (some rty) (made := true) with
+          | some r =>
+            let t ← fresh rty
+            if isVoid then
+              let eE ← elabE ctx ee none
+              return some ⟨.seq (.assign t r.e) (.ite (.prim .query [.local t]) (.lit .void) (.seq eE.e (.lit .void))), .void⟩
+            let eE ← coerce p (← elabE ctx ee (some τ)) τ
+            let xv ← fresh τ
+            return some ⟨.seq (.assign t r.e) (.ite (.assign xv (.prim .query [.local t])) (.local xv) eE), τ⟩
+          | none => return none
+        -- (without an expected type: the else's, else void, as a statement
+        -- whose branches' types differ)
+        -- (a later elaboration decides as the first did: by the result
+        -- type of the function it asked for, `logic` for void)
+        let r? ← match exp with
+          | some t => attempt t
+          | none => do
+            let st0 ← get
+            let re ← elabE ctx ee none
+            set st0
+            match ctx.types.castRequests.find? (·.key == Refine.keyOf p d (refineTagOf ctx)) with
+            | some l => attempt (match l.ret with | .name "logic" => .void | _ => re.ty)
+            | none =>
+              if re.ty == .void then attempt .void
+              else tryCatch (attempt re.ty) fun _ => attempt .void
+        if let some r := r? then return r
+    let (rc, ctxT) ← if Choice.hasChoice conds (choiceOrder ctx) then elabOneClauses { ctx with canFail := true } conds
+      else elabSeq { ctx with canFail := true, inTaking := true } conds none
+    -- (not while a function value is asked for, #214, #231: a call through
+    -- it may fail once its class is made, in the elaboration that follows)
+    if !(rc.e.mayFail ctx.sigProg) && (← get).fnNeeds.isEmpty && (← get).methodNeeds.isEmpty && !ctx.typeOnly then
+      eerr p "the condition of this if cannot fail (Verse requires a failable condition)"
+    let thenCtx := { ctxT with canFail := ctx.canFail, inTaking := ctx.inTaking }
+    match elseE with
+    | none =>
+      let rt ← elabE thenCtx thenE (some .void)
+      return ⟨.ite rc.e (← coerce p rt .void) (.lit .void), .void⟩
+    | some ee =>
+      -- (#366) a then branch that needs the else branch's type (`array{}`
+      -- first): the else on its own first, then the then against it; when
+      -- that fails too, the then branch's own error, as before
+      let st0 ← get
+      let rt? ← tryCatch (do pure (Except.ok (← elabE thenCtx thenE exp))) fun e => pure (Except.error e)
+      let rt ← match rt? with
+        | .ok rt => pure rt
+        | .error err =>
+          if exp.isSome || ctx.retries ≥ 3 then throw err
+          let c2 := { ctx with retries := ctx.retries + 1 }
+          let alt? ← tryCatch (do
+              let re ← elabE c2 ee none
+              let rt ← elabE { thenCtx with retries := ctx.retries + 1 } thenE (some re.ty)
+              let ty ← join p rt.ty re.ty none
+              pure (some ⟨Expr.ite rc.e (← coerce p rt ty) (← coerce p re ty), ty⟩)) fun _ => pure none
+          match alt? with
+          | some r => return r
+          | none => throw err
+      -- the else branch against the then branch's type (for `array{}`,
+      -- `false`), else on its own, to join with it (#32)
+      let re ← match exp with
+        | some _ => elabE ctx ee exp
+        | none =>
+          if ctx.retries ≥ 3 then elabE ctx ee (some rt.ty)
+          else
+            let c2 := { ctx with retries := ctx.retries + 1 }
+            tryCatch (elabE c2 ee (some rt.ty)) fun _ => elabE c2 ee none
+      let ty ← join p rt.ty re.ty exp
+      -- (#366) with nothing in common, the then branch against the else
+      -- branch's type instead: `if (C) then false else option{4}` is a
+      -- `?int`, as the other order is; else `any`, as before
+      -- (from the state before the branches, the else on its own first:
+      -- the first try's code and slots are not kept. Each retry raises
+      -- `retries`, so an `if` nested n deep without a type is elaborated at
+      -- most a constant number of times per level for the first three
+      -- levels and once below: bounded, though multiplicative, tim-cc's
+      -- review of #368)
+      if ty == .any && exp.isNone && rt.ty != .any && re.ty != .any && ctx.retries < 3 then
+        let stAfter ← get
+        set st0
+        let c2 := { ctx with retries := ctx.retries + 1 }
+        match ← tryCatch (do
+            let re' ← elabE c2 ee none
+            let rt' ← elabE { thenCtx with retries := ctx.retries + 1 } thenE (some re'.ty)
+            pure (some (rt', re'))) (fun _ => pure none) with
+        | some (rt', re') =>
+          if let some ty' := joinTy (← get).env rt'.ty re'.ty none then
+            if ty' != .any then
+              return ⟨.ite rc.e (← coerce p rt' ty') (← coerce p re' ty'), ty'⟩
+          set stAfter
+        | none => set stAfter
+      return ⟨.ite rc.e (← coerce p rt ty) (← coerce p re ty), ty⟩
+  | .forE p clauses body => do
+    let returns := (Refine.findPart (fun | .ret .. => true | _ => false) false (.block p (clauses ++ [body]))).isSome
+    let breaks := (ctx.inLoop || ctx.refineExits.brk.isSome) &&
+      (Refine.findPart Refine.isBreak true (.block p clauses)).isSome
+    let ownBreak ← if ctx.inLoop && breaks && ctx.forBreakSlot.isNone then
+        some <$> fresh .logic
+      else pure none
+    let ctx := { ctx with
+      forOutcomeSlot := none,
+      forBreakSlot := ownBreak.orElse fun _ => if ctx.inLoop then ctx.forBreakSlot else none }
+    let withExits : EM (R × Bool) := do
+      let sourceRet ← match ctx.refineExits.ret with
+        | some (some (_, t), _) => resolveTy ctx.types p t
+        | some (none, _) => pure .void
+        | none => match ctx.forReturnSlot.bind ctx.lookup with
+          | some { ty := .opt t, .. } => pure t
+          | _ => pure ctx.retTy
+      let name := s!"$forReturn{p.line}_{p.col}_{ctx.locals.length}"
+      let slot ← fresh (.opt sourceRet)
+      let breakName := name ++ "$break"
+      let breaking ← if breaks then some <$> fresh .logic else pure none
+      let storage (n : String) : Option SourceStorage := if ctx.suspends then
+        some { frame := ctx.frameName, name := n, args := ctx.frameArgs } else none
+      let returnLocal : Local := { name, slot, ty := .opt sourceRet, mutable := true, storage := storage name }
+      let breakLocal := breaking.map fun slot =>
+        ({ name := breakName, slot, ty := .logic, mutable := true, storage := storage breakName } : Local)
+      let extra := returnLocal :: breakLocal.toList
+      modify fun st => { st with frameSlots := st.frameSlots ++ extra.filterMap (fun l => l.storage.map (l.slot, ·)) }
+      let c := { ctx with locals := extra ++ ctx.locals }
+      let flag ← fresh .logic
+      let metadata := SExpr.set p (.ident p name) none (.ident p name)
+      let metadata := if breaking.isSome then .block p [metadata, .set p (.ident p breakName) none (.ident p breakName)] else metadata
+      let body := SExpr.app p (.ident p "$forReturns")
+        [metadata, .ident p (if ctx.canFail then "true" else "false"), body] false
+      let before ← get
+      let r ← elabFor { c with forOutcomeSlot := some flag } p clauses body
+      -- Only the consumer moves into a filter-bound continuation. Source
+      -- cleanup and the final return remain in the suspending caller.
+      let afterConsumer ← get
+      let waits := forContWaits ctx before afterConsumer [r.e] && before.forStageUses == afterConsumer.forStageUses
+      let result ← fresh (.opt r.ty)
+      let value ← fresh r.ty
+      let returning := s!"{name}$value"
+      -- Break-only consumers can occur in a defer, branch or constructor,
+      -- whose lexical checks must never see an invented source return.
+      let ret ← if returns then
+          elabE c (.ite p [.decl p returning none false (.query p (.ident p name))]
+            (.ret p (some (.ident p returning))) none) (some .void)
+        else pure ⟨.lit .void, .void⟩
+      let failed := if ctx.canFail then Expr.prim .fail [] else .prim .userErr []
+      let normal := Expr.ite (.assign value (.prim .query [.local result])) (.local value) failed
+      let leaving := Expr.seq ret.e normal
+      let leaving ← if breaking.isSome then do
+          let stop ← elabE c (.ite p [.query p (.ident p breakName)] (Refine.liftedBreak p) none) (some .void)
+          pure (Expr.seq stop.e leaving)
+        else pure leaving
+      let (run, after) ← if ctx.inLoop then do
+          let escaped ← fresh .logic
+          pure (Expr.seq (.assign escaped (.lit (.logic false))) (forwardForBreaks flag escaped r.e),
+            Expr.ite (.prim .query [.local escaped]) .brk (.lit .void))
+        else pure (r.e, Expr.lit .void)
+      let code := Expr.seq (.assign slot (.lit .none))
+        (.seq (.assign flag (.lit (.logic true)))
+          (.seq (.assign result (.lit .none))
+            (.seq (.loop (.seq (.assign result (.prim .mkSome [run])) Expr.brkV))
+              (.seq after leaving))))
+      let code := (breaking.map fun slot => Expr.seq (.assign slot (.lit (.logic false))) code).getD code
+      return (⟨code, r.ty⟩, waits)
+    let elaborate : EM R := do
+      if !breaks && !returns then
+        return ← elabFor ctx p clauses body
+      if !ctx.suspends then return (← withExits).1
+      -- Immediate consumers and staged waiting consumers carry source exits.
+      -- Other waiting consumers retain their original source-return lowering.
+      let st0 ← get
+      if let some (r, waits) ← tryCatch (some <$> withExits) (fun _ => pure none) then
+        if !waits then return r
+      set st0
+      elabFor ctx p clauses body
+    let r ← elaborate
+    return ⟨ownBreak.map (fun flag => Expr.seq (.assign flag (.lit (.logic false))) r.e) |>.getD r.e, r.ty⟩
+  | .gen p _ _ _ => eerr p "a generator X : source can only appear in a for clause"
+  | .loop _ body =>
+    let lctx := { ctx with
+      inLoop := true, inRepeat := true, loopDefers := ctx.defers.length,
+      inChoice := false, forBreakSlot := none, forBreakCapture := none,
+      refineExits := { ctx.refineExits with brk := none } }
+    let r ← elabE lctx body none
+    return ⟨.loop r.e, .void⟩
+  | .brk p =>
+    if ctx.inChoice then
+      eerr p "break cannot leave the clauses of a failure context that has a choice (an if condition, first{…}, option{…}, …) (#208)"
+    if !ctx.inLoop then
+      eerr p (if ctx.inDefer then "break is only allowed inside loop (not for), and cannot leave a defer: block"
+              else "break is only allowed inside loop (not for)")
+    if let some name := ctx.forBreakCapture then
+      let some target := ctx.lookup name | eerr p "internal: missing for break slot"
+      if target.ty != .logic then eerr p "internal: invalid for break type"
+      let ds ← elabDefers ctx ctx.defers
+      let some pack := ctx.forExitPacket | eerr p "internal: missing for break outcome"
+      let out ← elabE { ctx with defers := [] } pack (some ctx.retTy)
+      return ⟨.seq ds (.seq (.assign target.slot (.lit (.logic true))) (.ret out.e)), .never⟩
+    -- the defers of the scopes it leaves, inside its loop
+    let ds ← elabDefers ctx (ctx.defers.take (ctx.defers.length - ctx.loopDefers))
+    let jump := ctx.forBreakSlot.map (fun flag => Expr.seq (.assign flag (.lit (.logic true))) .brk) |>.getD .brk
+    return ⟨.seq ds jump, .never⟩
+  | .ret p e? =>
+    if ctx.inParamDefault then eerr p "return is not allowed in a parameter's default"
+    if ctx.inDefer then eerr p "return is not allowed in a defer: block"
+    if ctx.inCtor then eerr p "return is not allowed in a constructor (it would skip the items after it)"
+    if ctx.inBlock then eerr p "return is not allowed in a block: clause (it would skip the clauses after it)"
+    if ctx.inBranch then eerr p "return is not allowed in a branch (Book of Verse ch. 14)"
+    if let some (binding, pack) := ctx.refineExits.ret then
+      let pre ← match binding, e? with
+        | some (n, t), some e => pure [SExpr.decl p n (some t) false e]
+        | some (_, t), none => eerr p s!"return needs a value of type {(← resolveTy ctx.types p t).show}"
+        | none, some e => pure [e]
+        | none, none => pure []
+      return ← elabRefineExit ctx p pre pack
+    -- Refining lifts above forward their return first. Here we are back
+    -- in the owning continuation: save the operand before local cleanup,
+    -- then return its abort packet with the latest mutable copy-outs.
+    if let some name := ctx.forReturnSlot then
+      let some target := ctx.lookup name | eerr p "internal: missing for return slot"
+      let .opt ty := target.ty | eerr p "internal: invalid for return type"
+      let value ← match e? with
+        | some e => coerce p (← elabE ctx e (some ty)) ty
+        | none =>
+          if ty != .void then eerr p s!"return needs a value of type {ty.show}"
+          pure (.lit .void)
+      let saved ← fresh ty
+      let ds ← elabDefers ctx ctx.defers
+      let some pack := ctx.forExitPacket | eerr p "internal: missing for return outcome"
+      let out ← elabE { ctx with defers := [] } pack (some ctx.retTy)
+      return ⟨.seq (.assign saved value) (.seq ds
+        (.seq (.assign target.slot (.prim .mkSome [.local saved])) (.ret out.e))), .never⟩
+    let some e := e?
+      | do
+        if ctx.retTy != .void then eerr p s!"return needs a value of type {ctx.retTy.show}"
+        return ⟨.seq (← elabDefers ctx ctx.defers) (.ret (.lit .void)), .never⟩
+    let r ← elabE ctx e (some ctx.retTy)
+    let v ← coerce p r ctx.retTy
+    if ctx.defers.isEmpty then return ⟨.ret v, .never⟩
+    -- the value first, then the defers of every scope it leaves
+    let t ← fresh ctx.retTy
+    return ⟨.seq (.assign t v) (.seq (← elabDefers ctx ctx.defers) (.ret (.local t))), .never⟩
+  | .caseE p scrut arms => elabCase ctx p scrut arms exp
+  | .decl p _ _ _ _ =>
+    let (r, _) ← elabStmt ctx se exp
+    let _ := p
+    return r
+  | .set p lhs op rhs => elabSet ctx p lhs op rhs
+  | _ => eerr se.pos "internal: expression routed to the wrong elaboration stage"
+
+end OpenVerse.Front
