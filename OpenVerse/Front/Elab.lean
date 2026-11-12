@@ -11400,14 +11400,15 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   let defines0 (n : String) : Option Pos := resolved.findSome? fun
     | .classDef p m .. | .fn p m .. | .const p m .. => if m == n then some p else none
   let owned := PreludeNeeds.names.filter (defines0 · |>.isSome)
-  let concurrencyNames := owned.map fun n => (n, "$" ++ n)
   let requestTops := Refine.functions opts.castRequests resolved ++
     opts.loopRequests.flatMap (fun l =>
       STop.fn l.pos l.name l.params l.tparams l.specs l.ret l.body :: l.extraFns) ++
     opts.methodRequests.map (fun r => STop.fn r.pos "$methodRequest"
       ((r.receiver :: r.params).map fun t => { name := "$arg", ty := t }) r.tparams r.effs r.ret (.block r.pos r.args))
-  let uses := (resolved ++ requestTops).flatMap (PreludeNeeds.top []) ++
+  let uses := PreludeNeeds.uses (resolved ++ requestTops) ++
     opts.fnRequests.flatMap (fun (_, t) => t.helperUses)
+  let privateNames := PreludeNeeds.privateNames owned uses
+  let concurrencyNames := privateNames.map fun n => (n, "$" ++ n)
   let needs (n : String) := uses.contains ((concurrencyNames.lookup n).getD n)
   let usesSubVoid := uses.contains "$subev0"
   if usesSubVoid && owned.contains "subscribable_event" then
@@ -11419,8 +11420,8 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   let usesConc := usesSub || uses.contains "$suspends" || PreludeNeeds.names.any needs
   -- Keep source overrides, but isolate helper dependencies from them: builtin
   -- sticky_event still extends the builtin event when source owns event.
-  let helpers := helpers ++ (← if usesConc then concTops owned else pure []) ++
-    (← if usesSub then subTops owned else pure []) ++ (← if usesSubVoid then subVoidTops owned else pure [])
+  let helpers := helpers ++ (← if usesConc then concTops privateNames else pure []) ++
+    (← if usesSub then subTops privateNames else pure []) ++ (← if usesSubVoid then subVoidTops privateNames else pure [])
   -- Collect source contracts while every declaration still has its source
   -- identity. Function-value classes, continuation frames and constructor
   -- field packets implement source expressions; they acquire no extra source

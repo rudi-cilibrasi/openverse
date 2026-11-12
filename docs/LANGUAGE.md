@@ -1693,13 +1693,14 @@ Main()<suspends>:void =
   ```
 - **Library types.** `event`, `sticky_event`, `task`, `subscribable_event`
   and `cancelable` are available wherever their types are used, including
-  immediate functions, unused loaded definitions, nested annotations,
+  immediate functions, casts, unused loaded definitions, nested annotations,
   imports and command-line `do` expressions (#518). Type use alone does
   not require `<suspends>`; waiting and cancellation still follow their
   ordinary effect/context checks. A program's own definitions and module
   names retain their meaning, including methods named `Signal`, `Await`
   or `Cancel`. Library dependencies retain their built-in meaning when a
-  program owns one of those type names.
+  program owns one of those type names. Undemanded helper types do not
+  reserve names against unrelated generic parameters or callbacks.
 - **`event`.** An `event(t){}` has `E.Await()`, which waits for the next
   `E.Signal(X)` and gives `X`, and `E.Signal(X)`, which wakes every task
   waiting at that moment, each with `X` (the API's reading; the Book's text
