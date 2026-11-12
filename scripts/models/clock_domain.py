@@ -114,7 +114,8 @@ def boundary():
     return low
 
 
-# A complete period covers each IEEE input class in all four source contexts.
+# A period covers each input class in pair/tick/race contexts and eight
+# exact accumulation sequences; source Round variants remain independent.
 VALUES = [0, 1, 0x8000000000000000, 0x8000000000000001, bits(-1.0),
           0xfff0000000000000, 0x7ff8000000000000, 0x7ff0000000000000,
           bits(999999999999999.0), bits(1e15), bits(1e16),

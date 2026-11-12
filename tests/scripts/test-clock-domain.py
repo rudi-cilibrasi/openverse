@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import shlex
+import signal
 import subprocess
 import sys
 import tempfile
@@ -20,9 +21,21 @@ compiler = shlex.split(override) if override else [str(ROOT / '.lake/build/bin/o
 checks = 0
 
 
-def run(args):
-    return subprocess.run([str(a) for a in args], cwd=ROOT, text=True,
-                          capture_output=True, timeout=30)
+def run(args, timeout=30):
+    command = [str(a) for a in args]
+    process = subprocess.Popen(command, cwd=ROOT, text=True,
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                               start_new_session=True)
+    try:
+        stdout, stderr = process.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        stdout, stderr = process.communicate()
+        raise subprocess.TimeoutExpired(command, timeout, stdout, stderr)
+    return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
 
 
 with tempfile.TemporaryDirectory(prefix='openverse-clock-domain-') as directory:
