@@ -191,6 +191,16 @@ partial def elabSubtypeUpWith (elabE : Ctx → SExpr → Option Ty → EM R)
   return ⟨.seq (.assign slot value.e) (.seq (.assign dictionarySlot dictionary.e)
     (← coerce p result target)), target⟩
 
+partial def elabContainerReceiverWith (elabE : Ctx → SExpr → Option Ty → EM R)
+    (ctx : Ctx) (p : Pos) (value : R) (accepts : Ty → Bool) (operation : String) : EM R := do
+  let view ← match ctx.containerView p value.ty accepts operation with
+    | .ok view => pure view
+    | .error message => throw message
+  let some target := view | return value
+  let some plan := SubtypeEvidence.find? ctx.types ctx.evidenceTypes ⟨target, value.ty⟩
+    | eerr p "internal: a container view lost its lexical dictionary"
+  elabSubtypeUpWith elabE ctx p value target plan
+
 partial def elabBoundReceiverWith (elabE : Ctx → SExpr → Option Ty → EM R)
     (ctx : Ctx) (p : Pos) (value : R) (member : String) : EM R := do
   let view ← match ctx.boundView p value.ty member with

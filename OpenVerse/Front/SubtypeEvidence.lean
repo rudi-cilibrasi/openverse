@@ -478,6 +478,15 @@ private def mergeTypes (types : List Ty) : List Ty :=
     if result.any (· == ty) then result.map (fun old => if old == ty then old.commonBounds ty else old)
     else result ++ [ty]) []
 
+/-- Whole-value views available from real capabilities, without distributing
+    container relations to their elements or using declaration facts alone.
+    Equal identities retain only their common comparable guarantees. -/
+def valueViews (env : TyEnv) (locals : List (String × Ty)) (derived : Ty) : List Ty :=
+  mergeTypes ((capabilities env locals).filterMap fun capability => do
+    let relation := capability.bound env
+    let plan ← find? env locals ⟨relation.base, derived⟩
+    if plan.usesLocal && plan.valid env locals then some relation.base else none)
+
 private def upperViews (env : TyEnv) (derived : Ty) : List Ty :=
   let known := derived :: env.boundFacts.filterMap fun (upper, _) =>
     if env.boundSubtype derived upper then some upper else none

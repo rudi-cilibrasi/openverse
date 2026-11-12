@@ -891,8 +891,33 @@ def Ctx.captureEvidence (ctx : Ctx) (captures : List Local) (excluded : List Str
 def Ctx.hasMethod (ctx : Ctx) (c m : String) : Bool :=
   (ctx.types.supers c).any fun e => (ctx.sig? s!"{e}.{m}").isSome
 
+/-- Select an operational container view using actual whole-value proofs.
+    Prefer a strict subtype; equivalent views use a stable representative. -/
+def Ctx.containerView (ctx : Ctx) (p : Pos) (derived : Ty) (accepts : Ty → Bool)
+    (operation : String) : Except String (Option Ty) := do
+  let .param .. := derived | return none
+  let locals := ctx.evidenceTypes
+  let candidates := (SubtypeEvidence.valueViews ctx.types locals derived).filter accepts
+  let converts (source target : Ty) :=
+    (SubtypeEvidence.find? ctx.types locals ⟨target, source⟩).any (·.valid ctx.types locals)
+  let best := candidates.filter fun candidate => !candidates.any fun other =>
+    other != candidate && converts other candidate && !converts candidate other
+  match best with
+  | [] => return none
+  | first :: rest =>
+    if rest.all (fun other => converts first other && converts other first) then
+      return some (rest.foldl (fun selected next =>
+        if reprStr next < reprStr selected then next else selected) first)
+    throw s!"{p.show}: ambiguous bound {operation} of {derived.show} through {", ".intercalate (best.map Ty.show)}"
+
 def Ctx.boundView (ctx : Ctx) (p : Pos) (derived : Ty) (member : String) : Except String (Option Ty) := do
   let .param .. := derived | return none
+  let container ← ctx.containerView p derived (fun
+    | .arr _ => ["Length", "Slice", "Find", "RemoveFirstElement", "RemoveElement", "Remove",
+        "RemoveAllElements", "ReplaceFirstElement", "ReplaceElement", "ReplaceAllElements",
+        "ReplaceAll", "Insert", "Last"].contains member
+    | .map .. => member == "Length"
+    | _ => false) s!"member '{member}'"
   let locals := ctx.evidenceTypes
   let visible (owner method : String) := ctx.hasMethod owner method ||
     ((ctx.types.methodOverloads.lookup method).getD []).any (ctx.hasMethod owner ·)
@@ -907,8 +932,10 @@ def Ctx.boundView (ctx : Ctx) (p : Pos) (derived : Ty) (member : String) : Excep
   let best := candidates.filter fun candidate =>
     !candidates.any fun other => other != candidate && ctx.types.nominalSubtype other candidate
   match best with
-  | [] => return none
-  | [view] => return some view
+  | [] => return container
+  | [view] =>
+    if container.isNone then return some view
+    throw s!"{p.show}: ambiguous bound member '{member}' of {derived.show}"
   | _ => throw s!"{p.show}: ambiguous bound member '{member}' of {derived.show} through {", ".intercalate (best.map Ty.show)}"
 
 /-- Select a function shape through actual lexical evidence, retaining the

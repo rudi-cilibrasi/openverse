@@ -46,7 +46,10 @@ def main (args : List String) : IO Unit := do
     "callable-state", "callable-state-control", "callable-waiting", "callable-waiting-control",
     "callable-decides", "callable-decides-control", "callable-bound-only", "callable-bound-only-control",
     "callable-generic", "callable-generic-control"]
-  let profiled := fifo ++ methodValues ++ callables
+  let containers := ["container-view-basic", "container-view-basic-control",
+    "container-view-state", "container-view-state-control", "container-view-waiting", "container-view-waiting-control",
+    "container-view-generic", "container-view-generic-control"]
+  let profiled := fifo ++ methodValues ++ callables ++ containers
   let negative := ["choice-refusal", "default-refusal", "override-refusal", "overload-interface-refusal",
     "overload-ancestor-refusal", "overload-optional-refusal", "overload-empty-refusal", "overload-scope-refusal",
     "overload-value-refusal", "interior-readonly-refusal", "interior-effect-refusal",
@@ -60,7 +63,7 @@ def main (args : List String) : IO Unit := do
     "callable-bracket-refusal", "callable-decides-refusal", "callable-suspends-refusal",
     "callable-effect-refusal", "callable-effect-control-refusal", "callable-unproved-refusal"]
   let mut failures := 0
-  let cases := (positive ++ fifo ++ methodValues ++ callables ++ negative).map (fun name => (name, fifo.contains name, name)) ++
+  let cases := (positive ++ fifo ++ methodValues ++ callables ++ containers ++ negative).map (fun name => (name, fifo.contains name, name)) ++
     ["fifo-bound-sleep", "fifo-bound-sleep-control"].map (fun name => (name, false, name ++ "-default"))
   for (name, eventFifo, artifact) in cases do
     let root := s!"tests/upper-bounds/{name}"

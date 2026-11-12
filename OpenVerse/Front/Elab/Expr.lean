@@ -852,6 +852,19 @@ partial def elabMethod (ctx : Ctx) (p : Pos) (r : R) (m : String) (args : List S
 
 /-- `A[i]` on an array (failable) or `T(k)` on a tuple. -/
 partial def elabIndexLike (ctx : Ctx) (p : Pos) (r : R) (args : List SExpr) (bracket : Bool) : EM R := do
+  let containers : Ty → Bool := fun
+    | .arr _ | .map .. => bracket
+    | .tup _ => !bracket
+    | _ => false
+  let container ← match ctx.containerView p r.ty containers "index" with
+    | .ok view => pure view
+    | .error message => throw message
+  if container.isSome then
+    let callable ← match ctx.callableView p r.ty with
+      | .ok view => pure view
+      | .error message => throw message
+    if callable.isSome then eerr p s!"ambiguous callable/index bound of {r.ty.show}"
+  let r ← elabContainerReceiverWith elabE ctx p r containers "index"
   let r ← elabCallableReceiver ctx p r
   -- a call of a function value (#210): of its shape's method
   if let .struct n ts := r.ty then

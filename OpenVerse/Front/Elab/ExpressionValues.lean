@@ -33,6 +33,9 @@ partial def elabExprValuesWith
   | .structDef p _ _ _ | .enumDef p _ _ | .refineDef p _ _ _ => eerr p "struct, enum and type definitions must be at the top level"
   | .query p e =>
     let r ← elabE ctx e none
+    let r ← elabContainerReceiverWith elabE ctx p r (fun
+      | .opt _ | .logic => true
+      | _ => false) "query"
     match r.ty with
     | .opt t => return ⟨.prim .query [r.e], t⟩
     | .logic => return ⟨.prim .query [r.e], .logic⟩
