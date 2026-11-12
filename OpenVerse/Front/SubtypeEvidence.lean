@@ -9,6 +9,12 @@ def family : String := "$subtypeEvidence"
 def identityFamily : String := "$subtypeIdentity"
 def composeFamily : String := "$subtypeCompose"
 
+/-- Readonly fields owned by the compiler, distinct from type-value witness
+    fields: a witness can contain a dummy value and is never an upcast proof. -/
+def fieldPrefix : String := "$subtype."
+
+def fieldName (owner parameter : String) : String := s!"{fieldPrefix}{owner}.{parameter}"
+
 structure Bound where
   base : Ty
   derived : Ty
@@ -20,6 +26,21 @@ def Bound.subst (bound : Bound) (σ : List (String × Ty)) : Bound :=
   { base := bound.base.subst σ, derived := bound.derived.subst σ }
 
 def Bound.ty (bound : Bound) : Ty := .struct family [bound.base, bound.derived]
+
+/-- Bounds on reference classes are carried by private readonly dictionaries.
+    Value structs keep their existing equality representation. Inherited
+    fields are substituted by the ordinary class-field layout pass. -/
+def addFields (tops : List STop) : List STop := tops.map fun
+  | .classDef p owner params specs parents iface fields overrides methods =>
+    let proofs := params.filterMap fun parameter => do
+      let base ← parameter.upperBound
+      let name := fieldName owner parameter.name
+      if fields.any (·.1 == name) then none else
+        let ty := STy.app family [base, .name parameter.name]
+        some (name, ty, some (.app p (.ident p "$subtypeWitness")
+          [.construct p family [base, .name parameter.name] []] false), false)
+    .classDef p owner params specs parents iface (fields ++ proofs) overrides methods
+  | top => top
 
 /-- Only an actual dictionary type establishes a relation. In particular, a
     matching lexical name alone carries no evidence. -/
@@ -83,6 +104,7 @@ inductive Plan where
   | identity : Ty → Plan
   | nominal : (source target : String) → (args : List Ty) → Plan
   | local : String → Bound → Plan
+  | field : (receiver field : String) → Bound → Plan
   | compose : Plan → Plan → Plan
   deriving Repr, Inhabited
 
@@ -91,7 +113,42 @@ def Plan.bound (env : TyEnv) : Plan → Bound
   | .nominal source target args =>
     ⟨.struct target (env.upArgs source args target), .struct source args⟩
   | .local _ bound => bound
+  | .field _ _ bound => bound
   | .compose outer inner => ⟨(outer.bound env).base, (inner.bound env).derived⟩
+
+private def fieldBound? (env : TyEnv) (ty : Ty) (field : String) : Option Bound := do
+  let .struct owner args := ty | none
+  if !env.isRefClass owner || !field.startsWith fieldPrefix || env.isVarField owner field then none else do
+    let (_, fieldTy, _) ← (env.fields owner args).find? (·.1 == field)
+    boundOf? fieldTy
+
+/-- Only current lexical values and compiler-owned readonly proof fields
+    carry executable evidence. Do not search arbitrary object graphs, mutable
+    fields, or the dummy values stored in hidden type-value witness fields. -/
+def capabilities (env : TyEnv) (locals : List (String × Ty)) : List Plan :=
+  (locals.map (·.1)).eraseDups.flatMap fun name =>
+    match locals.lookup name with
+    | none => []
+    | some ty =>
+      ((boundOf? ty).map (Plan.local name)).toList ++
+      (match ty with
+       | .struct owner args => if !env.isRefClass owner then [] else
+           (env.fields owner args).filterMap fun (field, fieldTy, _) =>
+             if !field.startsWith fieldPrefix || env.isVarField owner field then none
+             else (boundOf? fieldTy).map (Plan.field name field)
+       | _ => [])
+
+/-- Match constraints to the receiver's own resolved field layout. Caller
+    evidence slots never determine a field or a slot in the callee. -/
+def fieldsForBounds (env : TyEnv) (receiver : Ty) (bounds : List Bound) : List (Nat × Nat) :=
+  match receiver with
+  | .struct owner args =>
+    if !env.isRefClass owner then [] else
+      bounds.zipIdx.filterMap fun (bound, index) => do
+        let field ← (env.fields owner args).findIdx? fun (name, ty, _) =>
+          name.startsWith fieldPrefix && !env.isVarField owner name && boundOf? ty == some bound
+        return (index, field)
+  | _ => []
 
 /-- Validate even plans supplied through the compiler API. A stale/cross-frame
     assumption cannot be repaired with a similarly named or typed unrelated
@@ -102,6 +159,8 @@ def Plan.valid (env : TyEnv) (locals : List (String × Ty)) : Plan → Bool
     env.isRefClass source && env.isRefClass target && env.isSub source target &&
       args.length == ((env.sparams.lookup source).getD []).length
   | .local name bound => ((locals.lookup name).bind boundOf?) == some bound
+  | .field receiver fieldLabel bound =>
+    ((locals.lookup receiver).bind (fieldBound? env · fieldLabel)) == some bound
   | .compose outer inner => outer.valid env locals && inner.valid env locals &&
       (outer.bound env).derived == (inner.bound env).base
 
@@ -119,19 +178,20 @@ private def direct? (env : TyEnv) (base derived : Ty) : Option Plan := do
     context cannot perform this upcast. A visited-type set terminates cycles
     in dependent bounds without discarding an available acyclic path. -/
 def find? (env : TyEnv) (locals : List (String × Ty)) (bound : Bound) : Option Plan :=
-  go (locals.length + 1) [] bound.derived
+  let available := capabilities env locals
+  go available (available.length + 1) [] bound.derived
 where
-  go : Nat → List Ty → Ty → Option Plan
-    | 0, _, _ => none
-    | fuel + 1, seen, derived => do
+  go : List Plan → Nat → List Ty → Ty → Option Plan
+    | _, 0, _, _ => none
+    | available, fuel + 1, seen, derived => do
       if let some plan := direct? env bound.base derived then return plan
       if seen.contains derived then none else do
-        locals.findSome? fun (name, ty) => do
-          let relation ← boundOf? ty
+        available.findSome? fun capability => do
+          let relation := capability.bound env
           let before ← direct? env relation.derived derived
-          let outer ← go fuel (derived :: seen) relation.base
-          let inner := if relation.derived == derived then Plan.local name relation
-            else .compose (.local name relation) before
+          let outer ← go available fuel (derived :: seen) relation.base
+          let inner := if relation.derived == derived then capability
+            else .compose capability before
           if relation.base == bound.base then some inner else some (.compose outer inner)
 
 /-- Surface expression with symbolic lexical captures. The elaborator resolves
@@ -140,6 +200,7 @@ def Plan.value (env : TyEnv) (p : Pos) : Plan → SExpr
   | .identity t => .construct p identityFamily [t.toSTy] []
   | .nominal source target args => .construct p (nominalFamily source target) (args.map Ty.toSTy) []
   | .local name _ => .ident p name
+  | .field receiver fieldLabel _ => .member p (.ident p receiver) fieldLabel
   | .compose outer inner =>
     let left := outer.bound env
     let right := inner.bound env
@@ -155,15 +216,15 @@ def Plan.nominals : Plan → List (String × String)
   | _ => []
 
 def Plan.usesLocal : Plan → Bool
-  | .local .. => true
+  | .local .. | .field .. => true
   | .compose outer inner => outer.usesLocal || inner.usesLocal
   | _ => false
 
 /-- Nominal views proved by actual lexical dictionaries. Declaration facts
     alone do not create a view from which executable members may be read. -/
 def views (env : TyEnv) (locals : List (String × Ty)) (derived : Ty) : List Ty :=
-  (locals.filterMap fun (_, ty) => do
-    let relation ← boundOf? ty
+  ((capabilities env locals).filterMap fun capability => do
+    let relation := capability.bound env
     let .struct name _ := relation.base | none
     if !env.classes.contains name then none else do
       let plan ← find? env locals ⟨relation.base, derived⟩
@@ -246,6 +307,17 @@ private def peerInstances (env : TyEnv) (bounds : List Bound) (names : List Stri
     let upper ← commonUpper? env values
     result := (name, upper) :: result
   return result
+
+/-- An expected result can suggest an instance, but cannot force a known
+    violation of a declaration bound (for example t := any under vehicle).
+    Leave incomplete constraints for argument/default inference. This is a
+    static filter; every executable relation still requires a dictionary. -/
+def acceptsKnownBounds (env : TyEnv) (bounds : List Bound)
+    (substitution : List (String × Ty)) : Bool :=
+  bounds.all fun bound =>
+    if (bound.base.params ++ bound.derived.params).all (fun name => (substitution.lookup name).isSome) then
+      env.boundSubtype (bound.derived.subst substitution) (bound.base.subst substitution)
+    else true
 
 /-- Infer parameters which occur only inside a nominal upper bound from the
     argument's projected ancestor. Existing input bindings remain fixed. No

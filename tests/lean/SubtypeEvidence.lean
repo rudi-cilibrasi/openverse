@@ -333,6 +333,250 @@ private def witness (base derived : Ty) : SExpr :=
   .app pos (.ident pos "$subtypeWitness")
     [.construct pos family [base.toSTy, derived.toSTy] []] false
 
+private def receiverSource := "
+vehicle:=class<computes>:
+    Speed:int=1
+    ReadSpeed()<computes>:int=Speed
+car:=class<computes>(vehicle){Name:string=\"precise\"}
+readable:=interface<computes>:
+    Read()<computes>:int
+root(a:type,b:type):=interface<computes>:
+    Read()<computes>:int
+carrier(s:type,t:type):=class<computes>(readable,root(t,s)):
+    X:s
+    Label:t
+    ReceiverEvidence:evidence(vehicle,s)
+    Read<override>()<computes>:int=X.Speed
+    Reveal()<computes>:s=X
+    Bind()<computes>:type{_()<computes>:int}=X.ReadSpeed
+child(u:type):=class<computes>(carrier(u,int)){}
+ReadVia(R:root(a,b) where a:type,b:type)<computes>:int=R.Read()
+Main():void=
+    C:=car{Speed:=9}
+    H:=carrier(car,string){X:=C,Label:=\"label\",ReceiverEvidence:=CarEvidence()}
+    F:=H.Bind()
+    Print(\"direct {H.Read()} {H.Reveal().Name} {F()}\")
+    R:readable=H
+    Print(\"opened {R.Read()}\")
+    Print(\"permuted {ReadVia(H)}\")
+    K:=child(car){X:=car{Speed:=4},Label:=7,ReceiverEvidence:=CarEvidence()}
+    I:readable=K
+    Print(\"inherited {I.Read()} {K.Reveal().Name}\")
+"
+
+private def receiverTrace := "direct 9 precise 9\nopened 9\npermuted 9\ninherited 4 precise\n"
+
+private def receiverStateSource := "
+vehicle:=class<allocates>:
+    var N:int=0
+    ReadN()<reads>:int=N
+car:=class<allocates>(vehicle){Name:string=\"a\"}
+carrier(s:type,t:type):=class<computes>:
+    X:s
+    Label:t
+    ReceiverEvidence:evidence(vehicle,s)
+    Touch()<transacts>:s=
+        V:=X
+        Print(\"touch\")
+        set V.N+=1
+        X
+    Bind()<computes>:type{_()<reads>:int}=X.ReadN
+    Read()<reads>:int=X.N
+Main():void=
+    A:=car{}
+    H:=carrier(car,int){X:=A,Label:=7,ReceiverEvidence:=CarEvidence()}
+    R:=H.Touch()
+    Print(\"identity {R.Name} {A.N}\")
+    if(H.Touch(),false?)then Print(\"bad\")else Print(\"rolled\")
+    Print(\"rollback {H.Read()}\")
+    F:=H.Bind()
+    set A.N=4
+    Print(\"live {F()}\")
+"
+
+private def receiverStateControlSource := receiverStateSource
+  |>.replace "V:=X" "V:=ReceiverEvidence.Up(X)"
+  |>.replace "=X.ReadN" "=ReceiverEvidence.Up(X).ReadN"
+  |>.replace "=X.N" "=ReceiverEvidence.Up(X).N"
+
+private def receiverStateTrace := "touch\nidentity a 1\nrolled\nrollback 1\nlive 4\n"
+
+private def receiverCancelSource := "
+vehicle:=class<allocates>{var N:int=0}
+car:=class<allocates>(vehicle){Name:string=\"a\"}
+carrier(s:type,t:type):=class<computes>:
+    X:s
+    Label:t
+    ReceiverEvidence:evidence(vehicle,s)
+    Run()<suspends>:void=
+        V:=X
+        defer:Print(\"cleanup {V.N}\")
+        set V.N=5
+        Sleep(10.0)
+        Print(\"bad\")
+Main()<suspends>:void=
+    A:=car{}
+    H:=carrier(car,int){X:=A,Label:=7,ReceiverEvidence:=CarEvidence()}
+    race:
+        H.Run()
+        block:
+            Sleep(0.0)
+            Print(\"winner\")
+    Print(\"after {A.N} {A.Name}\")
+"
+
+private def receiverCancelControlSource := receiverCancelSource
+  |>.replace "V:=X" "V:=ReceiverEvidence.Up(X)"
+
+/-- Compiler-API fixture: explicit, checked source dictionaries become private
+    receiver fields. Source upper-bound syntax is still guarded. -/
+private partial def receiverFields : STop → STop
+  | .classDef p owner params specs parents iface fields overrides methods =>
+    .classDef p owner params specs parents iface
+      (fields.map fun (name, ty, value, mutable) =>
+        (if name == "ReceiverEvidence" then fieldName "carrier" "s" else name,
+         ty, value.map privateFields, mutable)) overrides (methods.map receiverFields)
+  | .fn p name ps params specs ret body => .fn p name ps params specs ret (privateFields body)
+  | .const p name ty body => .const p name ty (privateFields body)
+where
+  privateFields (body : SExpr) : SExpr := Choice.mapE (fun
+    | .ident p "ReceiverEvidence" => some (.ident p (fieldName "carrier" "s"))
+    | .member p value "ReceiverEvidence" =>
+      some (.member p (privateFields value) (fieldName "carrier" "s"))
+    | .construct p name ts fields => some (.construct p name ts (fields.map fun
+        | .decl p name ty mutable value => .decl p
+            (if name == "ReceiverEvidence" then fieldName "carrier" "s" else name)
+            ty mutable (privateFields value)
+        | value => privateFields value))
+    | .decl p "ReceiverEvidence" ty mutable value =>
+      some (.decl p (fieldName "carrier" "s") ty mutable value)
+    | _ => none) body
+
+private def receiverContracts : IO Unit := do
+  let t := Ty.param "t" false
+  let u := Ty.param "u" false
+  let v := Ty.param "v" false
+  let vehicle := Ty.struct "vehicle" []
+  let one := fieldName "holder" "one"
+  let two := fieldName "holder" "two"
+  let three := fieldName "holder" "three"
+  let declarations := { env with
+    classes := "holder" :: env.classes
+    structs := [("holder", [(one, (Bound.mk vehicle t).ty, none),
+      (two, (Bound.mk t u).ty, none), (three, (Bound.mk u v).ty, none),
+      ("$w.proof", (Bound.mk vehicle v).ty, none), ("UserProof", (Bound.mk vehicle v).ty, none)])] }
+  let locals := [("Self", Ty.struct "holder" [])]
+  let plan ← getSome "receiver evidence follows every field in a single local"
+    (find? declarations locals ⟨vehicle, v⟩)
+  need "receiver plan uses checked fields" (plan.valid declarations locals && plan.usesLocal)
+  need "receiver plan cannot survive a missing or changed receiver"
+    (!plan.valid declarations [] && !plan.valid declarations [("Self", .int)])
+  need "receiver evidence excludes type-value and arbitrary user fields"
+    ((capabilities declarations locals).length == 3)
+  need "value structs cannot supply implicit receiver evidence"
+    ((capabilities { declarations with classes := env.classes } locals).isEmpty)
+  let mutable := { declarations with varFields := [("holder", one)] }
+  need "mutable dictionary fields cannot authorize a view"
+    ((find? mutable locals ⟨vehicle, v⟩).isNone && !plan.valid mutable locals)
+  need "shadowed receiver cannot expose an older lexical value"
+    ((find? declarations (("Self", .int) :: locals) ⟨vehicle, v⟩).isNone)
+  let receiverCtx : Ctx := {
+    sigs := [], sigProg := { fns := [], main := 0 }
+    types := declarations
+    locals := [{ name := "Self", slot := 8, ty := .struct "holder" [], mutable := false }] }
+  need "receiver facts participate in inference" (receiverCtx.evidenceEnv.boundSubtype v vehicle)
+  let generic := { declarations with
+    structs := [("holder", [(one, (Bound.mk vehicle t).ty, none)])]
+    sparams := [("holder", [("t", false)])] }
+  let captured := [("Self", Ty.struct "holder" [u])]
+  let plan ← getSome "instantiate receiver proof type" (find? generic captured ⟨vehicle, u⟩)
+  need "same field name with another instance is not evidence"
+    (!plan.valid generic [("Self", .struct "holder" [v])])
+  need "receiver constraints use the current resolved layout"
+    (fieldsForBounds generic
+      (.struct "holder" [u]) [⟨vehicle, u⟩, ⟨vehicle, v⟩] == [(0, 0)])
+  let defaultEnv := { generic with
+    structs := generic.structs ++ [("vehicle", []), (family, [])]
+    sparams := generic.sparams ++ [(family, [("a", false), ("d", false)])] }
+  let defaultCtx : Ctx := {
+    sigs := [], sigProg := { fns := [], main := 0 }, types := defaultEnv
+    locals := [{ name := "ActualProof", slot := 19, ty := (Bound.mk vehicle u).ty, mutable := false }] }
+  let (actual, _) ← getOK "proof defaults use the caller's actual dictionary"
+    ((elabFieldDefault defaultCtx pos "holder" [u] one (Bound.mk vehicle u).ty
+      (witness vehicle t)).run { env := defaultEnv })
+  need "default proof has no borrowed declaration frame slot" (reprStr actual == reprStr (Expr.local 19))
+  let receiverFrame : Frame := {
+    explicit := [.struct "holder" [u]], params := [("u", false)],
+    bounds := [⟨vehicle, u⟩], selfBounds := [(0, 0)] }
+  let (inits, _) ← getOK "initialize evidence from the current receiver"
+    ((elabReceiverEvidence defaultCtx pos receiverFrame).run { env := defaultEnv })
+  need "receiver initialization reads its own field"
+    (reprStr inits == reprStr [Expr.heap (.get 0) [.local 0]])
+  expectError "receiver initialization refuses an unrelated field type" "wrong type"
+    ((elabReceiverEvidence defaultCtx pos { receiverFrame with bounds := [⟨vehicle, v⟩] }).run
+      { env := defaultEnv })
+  expectError "receiver initialization refuses a missing field" "field is missing"
+    ((elabReceiverEvidence defaultCtx pos { receiverFrame with selfBounds := [(0, 8)] }).run
+      { env := defaultEnv })
+  let formal := { defaultCtx with
+    types := { defaultEnv with tvars := [("t", t)], boundFacts := [(vehicle, t)] }
+    locals := [], defaults := [("holder", one)], inDefaultCheck := true }
+  let (checked, _) ← getOK "formal proof default is checked under the declaration's bound"
+    ((elabE formal (witness vehicle t) (some (Bound.mk vehicle t).ty)).run { env := defaultEnv })
+  need "formal default placeholder has the exact dictionary type" (checked.ty == (Bound.mk vehicle t).ty)
+  expectError "a formal placeholder cannot become executable evidence" "does not satisfy subtype(vehicle)"
+    ((elabE { formal with inDefaultCheck := false } (witness vehicle t) none).run { env := defaultEnv })
+  expectError "ordinary defaults do not acquire compiler proof privileges" "does not satisfy subtype(vehicle)"
+    ((elabE { formal with defaults := [("holder", "UserProof")] } (witness vehicle t) none).run
+      { env := defaultEnv })
+  let _ ← getOK "nested construction is checked formally before real evidence is available"
+    ((elabFieldDefault { defaultCtx with
+      locals := [], inDefaultCheck := true
+      types := { defaultEnv with boundFacts := [(vehicle, u)] } }
+      pos "holder" [u] one (Bound.mk vehicle u).ty (witness vehicle t)).run { env := defaultEnv })
+  expectError "formal constraints alone cannot execute a proof default" "does not satisfy subtype(vehicle)"
+    ((elabFieldDefault { defaultCtx with locals := [], types := { defaultEnv with
+      boundFacts := [(vehicle, u)] } } pos "holder" [u] one (Bound.mk vehicle u).ty
+      (witness vehicle t)).run { env := defaultEnv })
+  let parsed ← getOK "parse bounded class fields"
+    (parseProgram "holder(t:subtype(vehicle)):=class<computes>{X:t}\npacket(t:subtype(vehicle)):=struct{X:t}\nMain():void={}")
+  let added := addFields parsed
+  need "proof field injection is idempotent" (reprStr (addFields added) == reprStr added)
+  let fields ← getSome "missing generated proof field" (added.findSome? fun
+    | .classDef _ "holder" _ _ _ _ fields .. => some fields
+    | _ => none)
+  need "bounded class carries one readonly typed proof with a checked default"
+    (fields.length == 2 && fields.any fun (name, ty, value, mutable) =>
+      name == fieldName "holder" "t" && !mutable && value.isSome &&
+      reprStr ty == reprStr (STy.app family [.name "vehicle", .name "t"]))
+  let packet (tops : List STop) := tops.findSome? fun
+    | .const _ "packet" _ body => some (reprStr body)
+    | _ => none
+  need "value struct representation is unchanged" (packet parsed == packet added)
+
+private def resultInferenceContracts : IO Unit := do
+  let t := Ty.param "t" false
+  let vehicle := Ty.struct "vehicle" []
+  let car := Ty.struct "car" []
+  let types := { env with structs := env.classes.map fun name => (name, []) }
+  let identity : Sig := {
+    idx := 0, name := "BoundIdentity", params := [t], ret := t,
+    decides := false, isConst := false, pnames := ["X"], tparams := [("t", false)],
+    fx := [], bounds := [⟨vehicle, t⟩] }
+  for (pattern, actual, expected) in [(t, car, Ty.any), (.arr t, .arr car, .arr .any)] do
+    let signature := { identity with params := [pattern], ret := pattern }
+    let ctx : Ctx := {
+      sigs := [signature], sigProg := { fns := [], main := 0 }, types,
+      locals := [{ name := "X", slot := 0, ty := actual, mutable := false }] }
+    for resultType in [none, some expected] do
+      let (result, _) ← getOK "a wider result context preserves a valid closed argument instance"
+        ((elabGenericCallWith elabE ctx pos signature [.ident pos "X"] resultType).run
+          { env := types, nslots := 1, slotTys := #[actual] })
+      need "result inference retains the precise argument type" (result.ty == actual)
+    expectError "fixed invalid instances remain refused" "does not satisfy subtype(vehicle)"
+      ((elabGenericCallWith elabE ctx pos signature [.ident pos "X"] (some expected)
+        (inst := [("t", .any)])).run { env := types, nslots := 1, slotTys := #[actual] })
+
 private def defaultSource := "
 vehicle:=class<computes>{Speed:int=7}
 car:=class<computes>(vehicle){}
@@ -409,6 +653,17 @@ private def relocate (compiled : Compiled) : IO Compiled := do
     ((elabGenericCallWith elabE ctx pos sig [.ident pos "X"] none).run state)
   need "implicit evidence call result remains opaque" (result.ty == caller)
   need "implicit call needs no new slot" (state.nslots == 6)
+  let (widened, _) ← getOK "a bounded result can widen to any after argument inference"
+    ((elabGenericCallWith elabE ctx pos sig [.ident pos "X"] (some .any)).run state)
+  need "result context preserves the precise bounded call and its actual witnesses"
+    (widened.ty == caller && reprStr widened.e == reprStr result.e)
+  let shadowed := { ctx with locals :=
+    { name := "CurrentEvidence", slot := 3, ty := .int, mutable := false } :: ctx.locals ++
+    [{ name := "Live", slot := 1, ty := required.ty, mutable := false }] }
+  let (visible, _) ← getOK "shadowed proof search continues to another visible dictionary"
+    ((elabGenericCallWith elabE shadowed pos sig [.ident pos "X"] none).run state)
+  need "the shadowed proof never becomes an executable argument"
+    (reprStr visible.e == reprStr (Expr.call index [.local 0, .local 1, .local 5]))
   let badCtx := { ctx with locals := ctx.locals.take 1 }
   match (elabGenericCallWith elabE badCtx pos sig [.ident pos "X"] none).run state with
   | .error message => need "missing implicit evidence refused" ((message.splitOn "does not satisfy subtype").length > 1)
@@ -475,6 +730,8 @@ private def relocateCommon (compiled : Compiled) : IO Compiled := do
 def main (args : List String) : IO Unit := do
   resolutionContracts
   metadataContracts
+  receiverContracts
+  resultInferenceContracts
   let vehicle := Ty.struct "vehicle" []
   let car := Ty.struct "car" []
   let node := Ty.struct "node" [.int]
@@ -605,6 +862,27 @@ def main (args : List String) : IO Unit := do
   checkTrace "automatic cancellation" autoCancel cancelTrace
   let autoDefaults ← materialize "automatic defaults" defaultSource
   checkTrace "automatic defaults" autoDefaults defaultTrace
+  let receiverTops ← getOK "parse receiver dictionaries" (parseProgram receiverSource)
+  let receiverTops ← getOK "rewrite receiver dictionaries" (receiverTops.mapM (rewriteTop automatic))
+  let receiverTops := receiverTops.map receiverFields
+  let receiver ← getOK "checked receiver dictionaries" (elabProgram receiverTops)
+  checkTrace "receiver dictionaries" receiver receiverTrace
+  let strictReceiver ← getOK "choice-free receiver dictionaries"
+    (elabProgram receiverTops { profile := .choiceFree })
+  need "receiver dictionaries preserve admitted profile bytecode"
+    (receiver.prog.encode == strictReceiver.prog.encode)
+  let receiverCompile (label source : String) : IO Compiled := do
+    let parsed ← getOK s!"{label}: parse" (parseProgram source)
+    let rewritten ← getOK s!"{label}: rewrite" (parsed.mapM (rewriteTop automatic))
+    getOK s!"{label}: compile" (elabProgram (rewritten.map receiverFields))
+  let receiverState ← receiverCompile "receiver state" receiverStateSource
+  checkTrace "receiver state" receiverState receiverStateTrace
+  let receiverStateControl ← receiverCompile "explicit receiver state" receiverStateControlSource
+  checkTrace "explicit receiver state" receiverStateControl receiverStateTrace
+  let receiverCancel ← receiverCompile "receiver cancellation" receiverCancelSource
+  checkTrace "receiver cancellation" receiverCancel cancelTrace
+  let receiverCancelControl ← receiverCompile "explicit receiver cancellation" receiverCancelControlSource
+  checkTrace "explicit receiver cancellation" receiverCancelControl cancelTrace
   let entryTops ← getOK "entry-only dictionary declarations"
     (parseProgram "vehicle:=class<computes>{Speed:int=9}\ncar:=class<computes>(vehicle){}\nMain():void={}")
   let entry := SExpr.member pos
@@ -635,7 +913,11 @@ def main (args : List String) : IO Unit := do
         ("cancel", cancellation, cancelTrace), ("cancel-control", cancelControl, cancelTrace),
         ("materialized", materialized, trace), ("materialized-state", autoState, stateTrace),
         ("materialized-cancel", autoCancel, cancelTrace), ("materialized-defaults", autoDefaults, defaultTrace),
-        ("materialized-entry", autoEntry, "9\n")] do
+        ("materialized-entry", autoEntry, "9\n"), ("receiver", receiver, receiverTrace),
+        ("receiver-state", receiverState, receiverStateTrace),
+        ("receiver-state-control", receiverStateControl, receiverStateTrace),
+        ("receiver-cancel", receiverCancel, cancelTrace),
+        ("receiver-cancel-control", receiverCancelControl, cancelTrace)] do
       IO.FS.writeBinFile (out ++ s!"/{name}.vbc") compiled.prog.encode
       IO.FS.writeFile (out ++ s!"/{name}.expected") expected
   IO.println "subtype dictionary contracts passed (checked Core, precise/escaping results, inference, member calls/coercion, state/order/rollback/cancellation)"

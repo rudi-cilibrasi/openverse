@@ -687,8 +687,11 @@ def Ctx.lookup (ctx : Ctx) (n : String) : Option Local := ctx.locals.find? (·.n
 def Ctx.sig? (ctx : Ctx) (n : String) : Option Sig := ctx.sigs.find? (·.name == n)
 
 def Ctx.evidenceEnv (ctx : Ctx) : TyEnv :=
-  { ctx.types with boundFacts := ctx.types.boundFacts ++ ctx.locals.filterMap fun binding =>
-    (SubtypeEvidence.boundOf? binding.ty).map fun bound => (bound.base, bound.derived) }
+  let locals := ctx.locals.map fun binding => (binding.name, binding.ty)
+  { ctx.types with boundFacts := ctx.types.boundFacts ++
+    (SubtypeEvidence.capabilities ctx.types locals).map fun capability =>
+      let bound := capability.bound ctx.types
+      (bound.base, bound.derived) }
 
 /-- Class or interface `c` has method `m`, its own or inherited. -/
 def Ctx.hasMethod (ctx : Ctx) (c m : String) : Bool :=
@@ -4178,7 +4181,8 @@ partial def elabGenericCallWith (elabE : Ctx → SExpr → Option Ty → EM R) (
             σ := σ ++ fixed.filter (fun (n, _) => (σ.lookup n).isNone)
   if let some et := exp then
     if !(et == .void) then
-      if let some σ' := s.ret.matchArg ctx.types σ et then σ := σ'
+      if let some σ' := s.ret.matchArg ctx.types σ et then
+        if s.bounds.isEmpty || SubtypeEvidence.acceptsKnownBounds ctx.evidenceEnv s.bounds σ' then σ := σ'
   let bound (σ : List (String × Ty)) (t : Ty) := t.params.all fun v => (σ.lookup v).isSome
   -- Empty values and generic function identifiers need an expected type,
   -- so elaborate them after other arguments, while still evaluating in order.
@@ -4210,7 +4214,7 @@ partial def elabGenericCallWith (elabE : Ctx → SExpr → Option Ty → EM R) (
             es := es.set! i (← coerce a.pos r (pt.subst σ))
         | none => eerr a.pos s!"expected {(pt.subst σ).show}, found {r.ty.show} (in a call of {s.name})"
   -- the arguments, in their temporaries, then the defaults
-  let inferred ← match SubtypeEvidence.infer ctx.evidenceEnv s.bounds σ with
+  let inferred ← match SubtypeEvidence.infer (if s.bounds.isEmpty then ctx.types else ctx.evidenceEnv) s.bounds σ with
     | some inferred => pure inferred
     | none => eerr p s!"cannot infer a consistent upper-bound instance of {s.name}"
   σ := inferred
@@ -4265,7 +4269,7 @@ partial def elabGenericCallWith (elabE : Ctx → SExpr → Option Ty → EM R) (
         let ta ← fresh (pt.subst σ)
         steps := steps.push (.assign ta rd)
         slots := slots.set! k (some ta)
-  let inferred ← match SubtypeEvidence.infer ctx.evidenceEnv s.bounds σ true with
+  let inferred ← match SubtypeEvidence.infer (if s.bounds.isEmpty then ctx.types else ctx.evidenceEnv) s.bounds σ true with
     | some inferred => pure inferred
     | none => eerr p s!"cannot infer a consistent upper-bound instance of {s.name}"
   σ := inferred
@@ -5368,6 +5372,21 @@ partial def elabBoundReceiver (ctx : Ctx) (p : Pos) (value : R) (member : String
     | eerr p "internal: a bound view lost its lexical dictionary"
   elabSubtypeUp ctx p value target plan
 
+/-- Initialize receiver evidence through checked getters, including fields
+    seen through interface views. Every index is checked against this
+    frame's receiver and the exact dictionary type it must supply. -/
+partial def elabReceiverEvidence (ctx : Ctx) (p : Pos)
+    (frame : SubtypeEvidence.Frame) : EM (List Expr) :=
+  frame.receiverBounds.mapM fun (_, bound, field) => do
+    let some receiver := frame.explicit.head? | eerr p "internal: receiver evidence has no receiver"
+    let .struct owner args := receiver | eerr p "internal: receiver evidence needs a class"
+    if !ctx.types.isRefClass owner then eerr p "internal: receiver evidence needs a reference class"
+    let some (fieldName, fieldTy, _) := (ctx.types.fields owner args)[field]?
+      | eerr p "internal: receiver evidence field is missing"
+    if !fieldName.startsWith SubtypeEvidence.fieldPrefix || ctx.types.isVarField owner fieldName || fieldTy != bound.ty then
+      eerr p "internal: receiver evidence field has the wrong type"
+    coerce p (← elabMember ctx p ⟨.local 0, receiver⟩ fieldName) bound.ty
+
 partial def elabERaw (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
   if !ctx.constructProbe && ctx.constructHints.isNone &&
       Choice.anyE (fun
@@ -5385,6 +5404,12 @@ partial def elabERaw (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
     let derived ← resolveTy ctx.types p derived
     let locals := ctx.locals.map fun binding => (binding.name, binding.ty)
     let bound : SubtypeEvidence.Bound := ⟨base, derived⟩
+    -- The formal default check validates a compiler-owned proof field's
+    -- declared relation. Its placeholder is discarded; construction must
+    -- supply a real dictionary in the caller's current lexical context.
+    if ctx.inDefaultCheck && ctx.defaults.any (fun (_, field) => field.startsWith SubtypeEvidence.fieldPrefix) &&
+        ctx.types.boundSubtype derived base then
+      return ⟨.prim .userErr [], bound.ty⟩
     let some plan := SubtypeEvidence.find? ctx.types locals bound
       | eerr p s!"type {derived.show} does not satisfy subtype({base.show})"
     elabSubtypeValueWith elabE ctx p plan bound
@@ -9612,6 +9637,17 @@ partial def elabFieldDefault (ctx : Ctx) (p : Pos) (name : String) (tas : List T
   let dctx := { ctx with locals := [], selfClass := none, types := { ctx.types with tvars := hσ } }
   if dctx.defaults.contains (name, f) then
     eerr p s!"the default of field '{f}' of {name} depends on itself"
+  if f.startsWith SubtypeEvidence.fieldPrefix && !ctx.types.isVarField name f then
+    if let (.app _ (.ident _ "$subtypeWitness") [.construct _ "$subtypeEvidence" [base, derived] []] false,
+        some bound) := (d, SubtypeEvidence.boundOf? t) then
+      let declared ← resolveTy dctx.types p (.app SubtypeEvidence.family [base, derived])
+      if declared != t then eerr p "internal: a receiver proof default has the wrong type"
+      if ctx.inDefaultCheck && ctx.types.boundSubtype bound.derived bound.base then
+        return .prim .userErr []
+      let locals := ctx.locals.map fun binding => (binding.name, binding.ty)
+      let some plan := SubtypeEvidence.find? ctx.types locals bound
+        | eerr p s!"type {bound.derived.show} does not satisfy subtype({bound.base.show}) in construction of {name}"
+      return ← fxAt p (do coerce p (← elabSubtypeValueWith elabE ctx p plan bound) t)
   fxAt p (do coerce p (← elabE { dctx with defaults := (name, f) :: dctx.defaults } d (some t)) t)
 
 /-- `name{F := e, …}` or `name(t₁, …){F := e, …}`: the struct's fields in
@@ -11905,8 +11941,9 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   -- function values (#210): the function types' interfaces, and a class
   -- for each function used as a value
   -- (the entry expression is scanned too)
-  let allTops00 := copyIfaceDefaults (FnValues.desugar (resolved.take (resolved.length - rawEntry.length) ++ helpers)
-    (resolved.drop (resolved.length - rawEntry.length)) (opts.fnRequests.map fun (n, t) => (n, t.toSTy)) opts.methodRequests)
+  let allTops00 := copyIfaceDefaults (SubtypeEvidence.addFields
+    (FnValues.desugar (resolved.take (resolved.length - rawEntry.length) ++ helpers)
+      (resolved.drop (resolved.length - rawEntry.length)) (opts.fnRequests.map fun (n, t) => (n, t.toSTy)) opts.methodRequests))
   let entryTop := resolved.drop (resolved.length - rawEntry.length)
   -- the command line: `Args`, and an entry expression
   let defines (n : String) := allTops00.any fun
@@ -12926,12 +12963,14 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
           else []
         | _ => []
       -- generic functions come after the others
+      let selfBounds := (tys.head?.map fun receiver =>
+        SubtypeEvidence.fieldsForBounds env receiver resolved.bounds).getD []
       gsigs := gsigs.push { idx := tops.length + gidx, name := n, params := tys, ret := rt, selfTps,
                             decides := effs.contains "decides", isConst := false,
                             suspends := effs.contains "suspends",
                             -- (a parametric class's `block:`: inferred from none, #41)
                             fx := if n.endsWith ".$block" || defaultBridge n then [] else allowedFx effs,
-                            tparams, bounds := resolved.bounds,
+                            tparams, bounds := resolved.bounds, selfBounds,
                             named := (ps.filter (·.named)).map fun q => (q.name, q.default),
                             pnames := ps.map (·.name), scope := copyScope? effs }
     | _ => pure ()
@@ -13284,14 +13323,14 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     let st0 : ESt := {
       env, nslots := ps.length + hidden.length, slotTys := (ptys ++ hidden).toArray,
       frameSlots := locals.filterMap fun l => l.storage.map (l.slot, ·) }
+    let (receiverInits, st0) ← (elabReceiverEvidence ctx p frame).run st0
     -- (#283) its calls of overloaded functions with several values chosen
     let ((r, _), st) ← elabBodyOv ctx body (some ret) st0
     let (e, st) ← (coerce p r ret).run st
     let e := if ret == .void then Expr.seq e (.lit .void) else e
     let selfInits : List Expr := (dictTps.drop (dictTps.length - selfTps.length)).map fun (v, _) =>
       .heap (.get (selfField v)) [.local 0]
-    let selfInits := selfInits ++ frame.receiverFields.map fun field =>
-      Expr.heap (.get field) [.local 0]
+    let selfInits := selfInits ++ receiverInits
     let inits ← match (st.slotTys.toList.drop (ps.length + hidden.length)).mapM
         (slotDefault env frame.witnessBase frame.argumentTypes []) with
       | .ok ds => pure (selfInits ++ ds)
