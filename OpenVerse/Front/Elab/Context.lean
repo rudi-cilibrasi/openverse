@@ -460,6 +460,21 @@ def Requests.merge (a b : Requests) : Requests where
   loops := mergeByKey (·.key) a.loops b.loops
   witnesses := mergeByKey id a.witnesses b.witnesses
 
+/-- Those of `xs` whose key none of `old` has. -/
+def dropByKey [BEq κ] (key : α → κ) (xs old : List α) : List α :=
+  xs.filter fun x => !old.any (key x == key ·)
+
+/-- Those of `r` whose key `old` does not have: what is new in `r`. -/
+def Requests.without (r old : Requests) : Requests where
+  eager := dropByKey id r.eager old.eager
+  lazy := dropByKey id r.lazy old.lazy
+  families := dropByKey id r.families old.families
+  fns := dropByKey id r.fns old.fns
+  methods := dropByKey (·.key) r.methods old.methods
+  casts := dropByKey (·.key) r.casts old.casts
+  loops := dropByKey (·.key) r.loops old.loops
+  witnesses := dropByKey id r.witnesses old.witnesses
+
 def Requests.isEmpty (r : Requests) : Bool :=
   r.eager.isEmpty && r.lazy.isEmpty && r.families.isEmpty && r.fns.isEmpty && r.methods.isEmpty &&
     r.casts.isEmpty && r.loops.isEmpty && r.witnesses.isEmpty

@@ -1774,92 +1774,91 @@ partial def topDefaultCount : STop → Nat
   | .classDef _ _ _ _ _ _ _ _ ms => ms.foldl (fun n m => n + topDefaultCount m) 0
   | _ => 0
 
+/-- What an elaboration asks for (`Requests`) is of three tiers, by what it
+    changes, and an elaboration asks for one tier at a time
+    (`elabProgramCore` goes no further than the first it finds):
+    1. how the source's choices are inlined (#283): eager groups, lazily
+       taken functions, and the families of methods' uses;
+    2. the classes' layout (#351): hidden fields for all of a class's type
+       parameters;
+    3. the functions added: functions as values (#214), method adapters, the
+       branches of refining casts (#243), and the functions of lazily taken
+       calls and the helpers of consumers of choices (#246, #335). -/
+def Requests.tier (r : Requests) : Nat :=
+  if !r.eager.isEmpty || !r.families.isEmpty || !r.lazy.isEmpty then 1
+  else if !r.witnesses.isEmpty then 2
+  else 3
+
+/-- The requests of tier `k` and of the tiers above it (`Requests.tier`). -/
+def Requests.upTo (r : Requests) (k : Nat) : Requests :=
+  if k ≥ 3 then r else
+  { eager := r.eager, families := r.families, lazy := r.lazy, witnesses := if k = 2 then r.witnesses else [] }
+
 /-- Elaborate a parsed program (`elabProgramCore`), with the names of the
     functions a constructor or an overload becomes shown as written: `K$init`
-    is `K<constructor>`, `F$ov1` is `F` (names with `$` are never the user's). -/
+    is `K<constructor>`, `F$ov1` is `F` (names with `$` are never the user's).
+
+    It is elaborated in rounds: as long as an elaboration asks for something
+    new, the program is elaborated again with it. A round that asks for more
+    of one tier (`Requests.tier`) is followed by one with the requests of that
+    tier and of the tiers above it only, as what the source or the classes
+    are changes what the tiers below ask for: those are asked for again, and
+    their budgets of rounds start again. -/
 def elabProgram (allTops00 : List STop) (opts : Options := {}) : Except String Compiled :=
   let defaults := allTops00.foldl (fun n t => n + topDefaultCount t) 0
   let classes := allTops00.filter (fun | .classDef .. => true | _ => false) |>.length
+  -- (tier 3: each round asks for new functions only, so a few rounds do)
   let rounds := max 4 (4 * (allTops00.foldl (fun n t => max n (topLiftDepth t)) 0 + defaults * (classes + 1)))
-  -- (#214) again with the functions wanted as values at closed function
-  -- types: each round asks for new ones only, so a few rounds do
-  let rec go (fuel : Nat) (opts : Options) : Except String Compiled := do
-    let c ← elabProgramCore allTops00 opts
-    if !c.needs.eager.isEmpty || !c.needs.families.isEmpty || !c.needs.lazy.isEmpty then return c
-    -- (#243) and with the branches of casts that refine type arguments
-    let casts := c.needs.casts.filter fun l => !opts.requests.casts.any (·.key == l.key)
-    -- (#246) and with functions of their own for lazily taken calls
-    let loops := c.needs.loops.filter fun l => !opts.requests.loops.any (·.key == l.key)
-    -- A newly materialized dispatch-default helper can reveal heap effects
-    -- absent from an earlier suffix trial. Rediscover consumers after those
-    -- helpers have participated in effect inference; their cached stage
-    -- interfaces, prefixes and resume methods must agree on permissions.
-    -- Each restart retains the new bridges, so discovery still progresses.
-    let methods := c.needs.methods.filter fun r => !opts.requests.methods.any (·.key == r.key)
-    let newDefaults := loops.filter fun l => defaultBridge l.name
-    if !newDefaults.isEmpty then
-      match fuel with
-      | fuel + 1 =>
-        let bridges := opts.requests.loops.filter fun l => defaultBridge l.name || spawnAdapter l.name
-        return ← go fuel { opts with requests := { opts.requests with
-          fns := (opts.requests.fns ++ c.needs.fns).eraseDups,
-          methods := FnValues.mergeMethodRequests opts.requests.methods methods,
-          casts := [], loops := bridges ++ newDefaults } }
-      | 0 => throw "internal error: default forwarding helpers still to infer after several elaborations"
-    if !methods.isEmpty then
-      match fuel with
-      | fuel + 1 => return ← go fuel { opts with requests := { opts.requests with
-          methods := FnValues.mergeMethodRequests opts.requests.methods methods,
-          fns := (opts.requests.fns ++ c.needs.fns).eraseDups,
-          casts := opts.requests.casts ++ casts, loops := opts.requests.loops ++ loops } }
-      | 0 => throw "internal error: method variance adapters still to infer after several elaborations"
-    match fuel, c.needs.fns.filter (!opts.requests.fns.contains ·) with
-    | fuel + 1, new@(_ :: _) =>
-      go fuel { opts with requests := { opts.requests with
-        fns := opts.requests.fns ++ new, casts := opts.requests.casts ++ casts, loops := opts.requests.loops ++ loops } }
-    | fuel + 1, [] =>
-      if casts.isEmpty && loops.isEmpty then
-        if c.needs.casts.isEmpty && c.needs.loops.isEmpty then return c
-        throw "internal error: a cast that refines type arguments, or a lazily taken call's function, was asked for again (#243, #246)"
-      go fuel { opts with requests := { opts.requests with
-        casts := opts.requests.casts ++ casts, loops := opts.requests.loops ++ loops } }
-    | 0, [] =>
-      if c.needs.casts.isEmpty && c.needs.loops.isEmpty then return c
-      throw "internal error: casts that refine type arguments, or lazily taken calls, still to lift after several elaborations (#243, #246)"
-    -- (a program with a placeholder left is never given out)
-    | 0, _ :: _ => throw "internal error: functions still wanted as values after several elaborations (#214)"
-  -- (#351) and with hidden fields for all of the type parameters of the
-  -- classes that ask for them, each round more
-  let rec withWitness (fuel : Nat) (opts : Options) : Except String Compiled := do
-    let c ← go rounds opts
-    if c.needs.witnesses.isEmpty then return c
-    match fuel with
-    | fuel + 1 => withWitness fuel { opts with requests := { opts.requests with
-        witnesses := opts.requests.witnesses ++ c.needs.witnesses } }
-    | 0 => throw "internal error: classes still asking for hidden fields after several elaborations (#351)"
-  -- A restart discards helpers prepared for the lazy group; their bodies
+  -- (tier 2: each round asks for more classes' hidden fields)
+  let witnessRounds := max 8 (classes + 1)
+  -- (tier 1: each round notes the uses of methods it found, which may make
+  -- more methods have several values, whose uses the next one notes. A
+  -- restart discards helpers prepared for the lazy group; their bodies
   -- must be discovered again after its calls become eager. Each restart
-  -- forces a new source function's group, so source definitions bound it.
-  let count := allTops00.foldl (fun n t => n + match t with
+  -- forces a new source function's group, so source definitions bound it.)
+  let eagerRounds := allTops00.foldl (fun n t => n + match t with
     | .fn .. => 1
     | .classDef _ _ _ _ _ _ _ _ ms => ms.length
     | _ => 0) 1
-  -- (#283) Likewise with the family of each use of a method whose receiver's
-  -- class picks it: each round notes the uses it found, which may make
-  -- more methods have several values, whose uses the next one notes.
-  let rec withEager (fuel : Nat) (opts : Options) : Except String Compiled := do
-    let c ← withWitness (max 8 (classes + 1)) opts
-    if c.needs.eager.isEmpty && c.needs.families.isEmpty && c.needs.lazy.isEmpty then return c
-    let new := c.needs.eager.filter (!opts.requests.eager.contains ·)
-    let picks := c.needs.families.filter (!opts.requests.families.contains ·)
-    let lazy := c.needs.lazy.filter (!opts.requests.lazy.contains ·)
-    match fuel, new ++ picks.map (·.2) ++ lazy with
-    | fuel + 1, _ :: _ =>
-      withEager fuel { opts with requests := { opts.requests with
-        eager := opts.requests.eager ++ new, families := opts.requests.families ++ picks,
-        lazy := opts.requests.lazy ++ lazy, loops := [], casts := [] } }
-    | _, _ => throw "internal error: mutual generator instances or methods' families still changing after eager lowering (#283)"
-  (withEager count opts).mapError fun msg =>
+  let rec loop (eagerFuel witnessFuel fuel : Nat) (req : Requests) : Except String Compiled := do
+    let c ← elabProgramCore allTops00 { opts with requests := req }
+    let new := c.needs.without req
+    match c.needs.tier with
+    | 1 =>
+      match eagerFuel, new.isEmpty with
+      | eagerFuel + 1, false => loop eagerFuel witnessRounds rounds ((req.upTo 1).merge new)
+      | _, _ => throw "internal error: mutual generator instances or methods' families still changing after eager lowering (#283)"
+    | 2 =>
+      match witnessFuel with
+      | witnessFuel + 1 => loop eagerFuel witnessFuel rounds ((req.upTo 2).merge new)
+      | 0 => throw "internal error: classes still asking for hidden fields after several elaborations (#351)"
+    | _ =>
+      if new.isEmpty then
+        -- (functions and methods are asked for only when not requested yet)
+        if c.needs.casts.isEmpty && c.needs.loops.isEmpty then return c
+        if fuel == 0 then
+          throw "internal error: casts that refine type arguments, or lazily taken calls, still to lift after several elaborations (#243, #246)"
+        throw "internal error: a cast that refines type arguments, or a lazily taken call's function, was asked for again (#243, #246)"
+      let newDefaults := new.loops.filter fun l => defaultBridge l.name
+      match fuel with
+      | 0 =>
+        if !newDefaults.isEmpty then throw "internal error: default forwarding helpers still to infer after several elaborations"
+        if !new.methods.isEmpty then throw "internal error: method variance adapters still to infer after several elaborations"
+        -- (a program with a placeholder left is never given out)
+        if !new.fns.isEmpty then throw "internal error: functions still wanted as values after several elaborations (#214)"
+        throw "internal error: casts that refine type arguments, or lazily taken calls, still to lift after several elaborations (#243, #246)"
+      | fuel + 1 =>
+        if newDefaults.isEmpty then return ← loop eagerFuel witnessFuel fuel (req.merge new)
+        -- A newly materialized dispatch-default helper can reveal heap effects
+        -- absent from an earlier suffix trial. Rediscover consumers after those
+        -- helpers have participated in effect inference; their cached stage
+        -- interfaces, prefixes and resume methods must agree on permissions.
+        -- Each restart retains the new bridges, so discovery still progresses.
+        let bridges := req.loops.filter fun l => defaultBridge l.name || spawnAdapter l.name
+        loop eagerFuel witnessFuel fuel { req.merge { fns := new.fns, methods := new.methods } with
+          casts := [], loops := bridges ++ newDefaults }
+  termination_by (eagerFuel, witnessFuel, fuel)
+  (loop eagerRounds witnessRounds rounds opts.requests).mapError fun msg =>
     FnValues.pretty (((stripOv (msg.replace "$init" "<constructor>")).replace "::" ".").replace "$replaceAll" "ReplaceAll")
 
 /-- Parse and elaborate Verse source text. -/
