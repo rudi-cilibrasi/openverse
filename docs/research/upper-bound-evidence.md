@@ -267,6 +267,10 @@ suffixes, precise array element results, and bound-member reads before the
 recursive call. The prefix runs once before recursion; rejected consumers undo
 its output. The same pair checks rollback of a lazy branch's value-only `if`.
 Its concrete version uses `car` directly and shares an explicit output oracle.
+Return-frame snapshots also retain implicit lexical evidence, including
+readonly proof fields whose names are absent from the written suffix. Snapshot
+contracts require usable actual proofs and refuse dummy values, mutable proof
+fields and static declaration facts.
 
 The existing Core checker and semantic proofs apply to the emitted Core under
 their stated hypotheses. They do not prove that bound inference, dictionary

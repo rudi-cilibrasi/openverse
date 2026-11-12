@@ -102,6 +102,26 @@ def main : IO Unit := do
   let actual := { caller with locals :=
     [{ name := "$typeActualProof", slot := 0, ty := proof, mutable := false }] }
   let markedCaller := { actual with locals := actual.locals.map fun binding => { binding with typeValue := true } }
+  let frameSource := SExpr.app p (.ident p "$then")
+    [.ident p "$rec", .ident p "$Hole", .member p (.ident p "X") "N"] false
+  let objectProof := { actual with locals :=
+    [{ name := "Holder", slot := 0, ty := box, mutable := false }] }
+  let dummyObject := { objectProof with locals := objectProof.locals.map fun l => { l with typeValue := true } }
+  let mutableField := { objectProof with types := { env with varFields := [("bounded_box", field)] } }
+  let staticOnly := { actual with locals := [], types := ambient }
+  for (label, dictionaryCtx, admits) in [("real", actual, true), ("dummy", markedCaller, false),
+      ("readonly field", objectProof, true), ("dummy object", dummyObject, false),
+      ("mutable field", mutableField, false), ("static fact", staticOnly, false)] do
+    let frameCtx := { dictionaryCtx with locals :=
+      { name := "X", slot := 1, ty := t, mutable := false } :: dictionaryCtx.locals }
+    let (frames, _) ← getOK s!"{label} recursive return-frame capture"
+      ((loopFramesWith elabSeq [(frameCtx, [frameSource])]).run
+        { env := frameCtx.types, nslots := 2,
+          slotTys := #[(dictionaryCtx.locals.head?.map (·.ty)).getD .void, t] })
+    let [frame] := frames | throw (IO.userError "expected one recursive return frame")
+    let snapshot := { frameCtx with locals := frame.lives }
+    need s!"{label} frame snapshot retains exactly its executable evidence"
+      ((find? snapshot.types snapshot.evidenceTypes ⟨vehicle, t⟩).isSome == admits)
   let written := [SExpr.ident p "$typeActualProof"]
   need "first-success cache distinguishes a lexically used dummy from a proof"
     (firstKey actual p [] "B" none written != firstKey markedCaller p [] "B" none written)

@@ -877,8 +877,10 @@ def loopFramesWith (elabSeq : Ctx → List SExpr → Option Ty → EM (R × Ctx)
           | _ => pure (none, ca)
         let own := h :: Choice.localsOf k
         let preSet := rest.findSome? fun e => if Choice.anyE (fun | .set .. => true | _ => false) e then some e.pos else none
+        let lives := c.captureEvidence ((Choice.namesUsed k).eraseDups.filterMap fun n =>
+          if own.contains n then none else c.lookup n) own
         out := out ++ [{ hole := h, code := k, ctx := c, pre, preSet,
-                         lives := (Choice.namesUsed k).eraseDups.filterMap fun n => if own.contains n then none else c.lookup n }]
+                         lives }]
   return out
 
 /-- A return frame's lives' values (`void` for none, as `tuple()` is). -/
