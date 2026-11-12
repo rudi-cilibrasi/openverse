@@ -679,6 +679,7 @@ def firstLiftOf (ctx c2 : Ctx) (p : Pos) (g : String) (lp : List SExpr) (b : Str
     | .app _ (.ident _ "$member") (.ident _ h :: _) false => some h
     | _ => none
   let nameOf (h : String) : String := if h == g then name else s!"{name}_{h.replace "::" "_"}"
+  let retName := s!"{name}$ret"
   let heap := ["reads", "writes", "allocates"].filter fun k =>
     fxB.any (·.1 == k) || ((g :: mnames).any fun h => ((ctx.sig? h).map (·.fx.contains k)).getD false)
   let capPs : List SParam :=
@@ -715,19 +716,25 @@ def firstLiftOf (ctx c2 : Ctx) (p : Pos) (g : String) (lp : List SExpr) (b : Str
         | (.ident _ n, t) => pure { name := n, ty := t.toSTy }
         | _ => throw "internal: a $member parameter (#283)"
       let body := Choice.firstBody (nameOf h) p b bty hcls htail rest binds setsT capArgs (some vty.toSTy) nameOf
-        (fun target => recArgs (some (target.getD h))) (if source.isSome then some normal else none) frames
+        (fun target => recArgs (some (target.getD h))) (if source.isSome then some normal else none) frames retName
       pure (STop.fn p (nameOf h) (hparams ++ kPs ++ capPs ++ typeParams) tps specs ret
         (pruneConstructHints ctx (nameOf h) body))
     | _ => throw "internal: a $member (#283)"
+  -- (#283) with return frames: the function each value is given to, then to
+  -- the clauses after the call, once for all the values of every member
+  let retFns : List STop := kPs.map fun kp =>
+    STop.fn p retName ({ name := "$V", ty := vty.toSTy } :: kp :: capPs ++ typeParams) tps specs ret
+      (ctx.choiceCoercionBody <| pruneConstructHints ctx retName
+        (Choice.firstReturnBody p b bty rest binds setsT (some vty.toSTy) (if source.isSome then some normal else none) frames))
   return { key, pos := p, name, returnExit, sourceContext := sourceContextOf ctx, inlineScopes := ctx.inlineScopes, liftTag := ctx.liftTag,
            params := params ++ typeParams, tparams := tps, specs, ret,
            body := ctx.choiceCoercionBody <| pruneConstructHints ctx name
              (Choice.firstBody name p b bty cls tail rest binds setsT capArgs (some vty.toSTy) nameOf recArgs
-               (if source.isSome then some normal else none) frames),
+               (if source.isSome then some normal else none) frames retName),
            binds, sets := sets.map (·.name),
            args := pnames.map (SExpr.ident p ·) ++ kPs.map (fun _ => .ident p "false") ++
              caps.map (fun l => .ident p l.name) ++ typeArgs,
-           varBinds := (bls.filter (·.mutable)).map (·.name), extraFns }
+           varBinds := (bls.filter (·.mutable)).map (·.name), extraFns := extraFns ++ retFns }
 
 /-- (#335) The key of a continuation: where the composed choice is, its
     binding, and the consumer's names the clauses after it use (in a method,

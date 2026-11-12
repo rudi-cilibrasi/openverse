@@ -725,9 +725,10 @@ def frame_call(a):
     if a[0] == 'gself':
         return a
     if a[0] == 'bin':
-        return a[2] if a[2][0] == 'gself' else (a[3] if a[3][0] == 'gself' else None)
-    if a[0] == 'tell' and a[2][0] == 'gself':
-        return a[2]
+        c = frame_call(a[2])
+        return c if c is not None else frame_call(a[3])
+    if a[0] == 'tell':
+        return frame_call(a[2])
     return None
 
 

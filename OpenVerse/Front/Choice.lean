@@ -2141,6 +2141,31 @@ structure FirstLift where
   extraFns : List STop := []
   deriving Inhabited
 
+/-- (#246) A value of a lazily taken call, in its function of its own: at the
+    function's result type `ret`, then bound to the binding `b`, then the
+    consumer's clauses after the call (`rest`, lifted already, `$firstP`,
+    which lifting again would bind twice), then the tuple `tup` of what they
+    bind. -/
+def firstValue (b : String) (bty ret : Option STy) (rest : List SExpr) (tup : SExpr) (a : SExpr) : SExpr :=
+  let v := match ret with
+    | some t => SExpr.app a.pos (.ident a.pos "$first") [.block a.pos [.decl a.pos s!"{b}$v" (some t) false a,
+        .ident a.pos s!"{b}$v"]] false
+    | none => a
+  .app a.pos (.ident a.pos "$firstP") [.block a.pos ([.decl a.pos b bty false v] ++ rest ++ [tup])] false
+
+/-- (#283) The body of a `FirstLift`'s function that takes each value `$V`
+    of a lazily taken call with return frames: the value given to the
+    continuation `$K`'s frames (`$frameApply`), then as `firstValue`. -/
+def firstReturnBody (p : Pos) (b : String) (bty : Option STy) (rest : List SExpr) (binds : List String)
+    (sets : List (String × STy)) (ret : Option STy) (normalResult : Option SExpr)
+    (frames : List (String × List String × SExpr)) : SExpr :=
+  let tup : SExpr := normalResult.getD (.tuple p (binds.map (SExpr.ident p ·) ++ sets.map (fun (m, _) => SExpr.ident p m) ++
+    [.ident p "true"]))
+  let v := SExpr.app p (.ident p "$frameApply") (.ident p "$K" :: .ident p "$V" :: frames.map fun (h, lives, code) =>
+    .app p (.ident p "$frame") [.ident p h, .block p (lives.map (SExpr.ident p ·)), code] false) false
+  let copies := sets.map fun (m, t) => SExpr.decl p m (some t) true (.ident p s!"{m}$in")
+  .block p (copies ++ [firstValue b bty ret rest tup v])
+
 /-- The body of a `FirstLift` (#246): the function's clauses, then the first
     success of its last expression, each value followed by the consumer's
     clauses after the call (`rest`, the value bound to `b` first) and the
@@ -2149,12 +2174,15 @@ structure FirstLift where
     copied first from parameters named `m$in`. With return frames (#283,
     `frames`: each one's hole, lives and code), the continuation `$K` comes
     after the arguments: a call with code after it pushes its frame on it,
-    and a value is given to it, as the lazy loop does. -/
+    and a value is given to it, then to the clauses after the call, by the
+    function `retFn` (`firstReturnBody`), so that the frames' code and those
+    clauses are not copied into each value. -/
 def firstBody (helper : String) (p : Pos) (b : String) (bty : Option STy) (cls : List SExpr) (tail : SExpr)
     (rest : List SExpr) (binds : List String) (sets : List (String × STy)) (caps : List SExpr)
     (ret : Option STy := none) (helperOf : String → String := fun _ => helper)
     (recArgs : Option String → Pos → List SExpr → List SExpr × List SExpr := fun _ _ as => ([], as))
-    (normalResult : Option SExpr := none) (frames : List (String × List String × SExpr) := []) : SExpr :=
+    (normalResult : Option SExpr := none) (frames : List (String × List String × SExpr) := [])
+    (retFn : String := "") : SExpr :=
   let tup : SExpr := normalResult.getD (.tuple p (binds.map (SExpr.ident p ·) ++ sets.map (fun (m, _) => SExpr.ident p m) ++
     [.ident p "true"]))
   let kont (q : Pos) : List SExpr := if frames.isEmpty then [] else [.ident q "$K"]
@@ -2178,17 +2206,8 @@ def firstBody (helper : String) (p : Pos) (b : String) (bty : Option STy) (cls :
       | some c => c
       | none =>
       -- (a value, given to the continuation's frames, #283)
-      let a := if frames.isEmpty then a else
-        .app a.pos (.ident a.pos "$frameApply") (.ident a.pos "$K" :: a :: frames.map fun (h, lives, code) =>
-          .app a.pos (.ident a.pos "$frame") [.ident a.pos h, .block a.pos (lives.map (SExpr.ident a.pos ·)), code] false) false
-      -- (the value at the function's result type, then at the binding's)
-      let v := match ret with
-        | some t => SExpr.app a.pos (.ident a.pos "$first") [.block a.pos [.decl a.pos s!"{b}$v" (some t) false a,
-            .ident a.pos s!"{b}$v"]] false
-        | none => a
-      -- (`$firstP`: `first{…}` of clauses that are lifted already, the
-      -- consumer's, which lifting again would bind twice)
-      .app a.pos (.ident a.pos "$firstP") [.block a.pos ([.decl a.pos b bty false v] ++ rest ++ [tup])] false
+      if frames.isEmpty then firstValue b bty ret rest tup a
+      else .app a.pos (.ident a.pos retFn) ([a, .ident a.pos "$K"] ++ caps) true
   let group (v : SExpr) : SExpr := match alts? v with
     | some as => mk v.pos (as.map alt)
     | none => alt v
