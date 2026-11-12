@@ -166,6 +166,10 @@ check "map field write choice dictionary model fuzzing (${FUZZ_MODEL_MAP_WRITE_D
   scripts/fuzz-model-heterogeneous.sh "${FUZZ_MODEL_MAP_WRITE_DICTIONARY:-120}" "$seed" --map-writes
 check "compound map choice dictionary model fuzzing (${FUZZ_MODEL_COMPOUND_MAP_DICTIONARY:-120} programs)" \
   scripts/fuzz-model-heterogeneous.sh "${FUZZ_MODEL_COMPOUND_MAP_DICTIONARY:-120}" "$seed" --compound-map-writes
+check "multiple-index choice dictionary model fuzzing (${FUZZ_MODEL_MULTIPLE_INDEX_DICTIONARY:-120} programs)" \
+  scripts/fuzz-model-heterogeneous.sh "${FUZZ_MODEL_MULTIPLE_INDEX_DICTIONARY:-120}" "$seed" --multiple-index-writes
+check "compound multiple-index choice dictionary model fuzzing (${FUZZ_MODEL_COMPOUND_MULTIPLE_INDEX_DICTIONARY:-120} programs)" \
+  scripts/fuzz-model-heterogeneous.sh "${FUZZ_MODEL_COMPOUND_MULTIPLE_INDEX_DICTIONARY:-120}" "$seed" --compound-multiple-index-writes
 check "source break model fuzzing (${FUZZ_MODEL_BREAKS:-60} programs)" \
   scripts/fuzz-model-breaks.sh "${FUZZ_MODEL_BREAKS:-60}" "$seed"
 check "choice model fuzzing (${FUZZ_MODEL_MV:-140} programs, functions with several values too)" \

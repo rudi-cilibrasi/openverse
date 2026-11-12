@@ -18,6 +18,8 @@ case ${3:-} in
   --compound-index-writes) mode_args+=(--compound-index-writes); tag=compound-index-write-dictionary ;;
   --map-writes) mode_args+=(--map-writes); tag=map-write-dictionary ;;
   --compound-map-writes) mode_args+=(--compound-map-writes); tag=compound-map-write-dictionary ;;
+  --multiple-index-writes) mode_args+=(--multiple-index-writes); tag=multiple-index-write-dictionary ;;
+  --compound-multiple-index-writes) mode_args+=(--compound-multiple-index-writes); tag=compound-multiple-index-write-dictionary ;;
   --writes) mode_args+=(--writes); tag=write-dictionary ;;
   --result-aliases) mode_args+=(--result-aliases); tag=result-alias-dictionary ;;
   --aliases) mode_args+=(--aliases); tag=alias-dictionary ;;
