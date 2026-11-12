@@ -44,7 +44,8 @@ def main (args : List String) : IO Unit := do
     "method-value-cancel", "method-value-cancel-control"]
   let callables := ["callable-upper", "callable-upper-control", "callable-default", "callable-default-control",
     "callable-state", "callable-state-control", "callable-waiting", "callable-waiting-control",
-    "callable-decides", "callable-decides-control", "callable-bound-only", "callable-bound-only-control"]
+    "callable-decides", "callable-decides-control", "callable-bound-only", "callable-bound-only-control",
+    "callable-generic", "callable-generic-control"]
   let profiled := fifo ++ methodValues ++ callables
   let negative := ["choice-refusal", "default-refusal", "override-refusal", "overload-interface-refusal",
     "overload-ancestor-refusal", "overload-optional-refusal", "overload-empty-refusal", "overload-scope-refusal",
@@ -57,7 +58,7 @@ def main (args : List String) : IO Unit := do
     "method-value-argument-refusal", "method-value-result-refusal",
     "method-value-stored-refusal", "method-value-stored-control-refusal",
     "callable-bracket-refusal", "callable-decides-refusal", "callable-suspends-refusal",
-    "callable-effect-refusal", "callable-unproved-refusal"]
+    "callable-effect-refusal", "callable-effect-control-refusal", "callable-unproved-refusal"]
   let mut failures := 0
   let cases := (positive ++ fifo ++ methodValues ++ callables ++ negative).map (fun name => (name, fifo.contains name, name)) ++
     ["fifo-bound-sleep", "fifo-bound-sleep-control"].map (fun name => (name, false, name ++ "-default"))
