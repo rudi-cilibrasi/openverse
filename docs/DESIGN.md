@@ -697,7 +697,12 @@ code after one call and the values of the names that code uses.
   `$then(call, h, frame)` (`frameOf?`), the frame the alternative with the
   name `h` in the call's place. A frame's code has no choice and no other
   call of the group, and sets no `var` bound before it, as it runs on a copy
-  of the names.
+  of the names. What the alternative evaluates before the call, other than
+  literals and its own names, is bound to names first (`$pre…`, a block's
+  clauses before the call as they are): `$then(call, h, frame, block{pre})`.
+  The loop elaborates that prefix once (`loopFramesWith`) and runs it with
+  the call's arguments, in the item's step, as an argument's code, which
+  stays when the callee's clauses fail; the frame keeps its names.
 - The loop's items keep one more name, the continuation `$K`, a list of
   `$lazycell`s, innermost frame first. A frame is a tuple with one option
   per `$then` of the group, the one of the call that pushed it holding its
@@ -746,19 +751,50 @@ code after one call and the values of the names that code uses.
   (`Compiled.lazyNeeds`, `Options.lazyRequests`) with it taken lazily; one
   that still is not of the shape is refused as before.
 
-Not yet: a frame whose code has a choice, or another call of the group
-(`X := T(N - 1)` then `X | X + 1`, or then `Y := T(N - 1)`): sequential
-choice points. Applying such a frame reaches a generator boundary in the
-middle of a value: its code up to there would have to be kept, not undone
-with the value, and the rest started as items. The route, within the same
-loop: a frame's code ends at its first choice or call by pushing items from
-inside the consumer's filter, which then succeeds without a value (a flag
-the consumer's iteration reads before its own clauses, and that a
-first-success consumer reads as "not yet"), so that segment is kept as a
-generator boundary keeps it; `FirstLift` compiles such frame code as the
-CPS code it already is, a choice in `first{…}` and a call of the function
-of its own. With that, `F$all` would be needed by no shape, only as an
-optimisation of effect-free ones.
+Not yet (#283), with the route each would take within the same mechanism:
+- *Choice points in sequence*: a frame whose code has a choice or another
+  call of the group (`X := T(N - 1)` then `X | X + 1`, or then
+  `Y := T(N - 1)`), and a choice before a call (`X := 1 | 2`, then
+  `F(N - 1) + X`). Applying such a frame reaches a generator boundary in the
+  middle of a value: its code up to there must be kept, not undone with
+  the value, and the rest started as items. Route: such code becomes a
+  member of the group, a *continuation member*, whose parameters are the
+  hole and the frame's names, typed where the frame is pushed (it has no
+  source signature, which the group machine and `FirstLift` now read
+  members' parameters from). Applying its frame runs that member's start
+  (its clauses and branch selection) inside the consumer's filter, pushes
+  the item of its first alternative with the rest of the continuation, and
+  the filter then succeeds with no value: a flag the `for`'s iteration
+  reads before its clauses and body, and a first-success condition reads as
+  success, so the pushes and the code before the boundary stay. `after` then
+  pushes the leaf's next alternative below that item (pop it, push the
+  next one, push it back), so the values keep spatial order. In `FirstLift`,
+  applying such a frame calls that member's function of its own with the
+  rest of the continuation and gives its packet. A choice before a call
+  uses the same members: the code after the first choice is a continuation
+  member started from each alternative, its index a parameter, so the
+  alternative's code runs in the member's clauses, one segment.
+- *A `var` set after a call*: the frame runs on a copy of the names, but the
+  call's later values, and the caller's later alternatives, must see what
+  a kept value set. Route: such a `var` (a `var` has a written type) becomes
+  a cell, a private class with one `var` field, allocated in the
+  invocation's clauses; items and frames keep the reference, and the
+  journal undoes a rejected value's write.
+
+With those, `F$all` would be needed by no shape and kept, if at all, only as
+an optimisation of effect-free ones. Deleting it (the owner's decision,
+since it changes the bytes of the 39 programs of the suite whose Core has
+an `F$all` today) would remove `allBody`, `arrOfE`, `gensOf`, `markAll`, the
+`$each` consumers in `elabOneGo` and `elabFor`, `needAll` and the eager
+refusals in `inlineMulti`, `checkEager` with its `lazyNeeds` round, and
+`eagerRequests`. It would also change semantics: values on demand, so an
+infinite effect-free one stops where the first success is taken, and an
+error in a value never reached no longer stops the program. It first needs
+the lazy route to cover what only `F$all` does now: choice points in
+sequence, a recursive one calling a function with several values outside
+its group, polymorphic recursion in a mutual group (`eagerNeeds`), and an
+`any`-valued returning group whose tail erases its values
+(`erasesRecursive`).
 
 Named arguments and defaults are bound on every recursive edge. The lazy
 stack uses `elabGenericCallWith` in argument-packing mode: it evaluates the

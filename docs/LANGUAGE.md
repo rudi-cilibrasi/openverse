@@ -1248,11 +1248,12 @@ Main():void =
   of the function in it is one value, not a branch to pick: its conditions
   are part of what that value does (#283). An alternative may also be a
   call of the function with code after it (#283): `Count(N - 1) + 1`,
-  `Tell("x", F(N - 1))`, the
-  call evaluated first (what comes before it in the alternative is a literal
-  or one of the function's own parameters and locals, not a field or a
-  constant), the code after it with no choice and no other such call, and
-  setting no `var`. That code is the call's *return frame*: it runs on each
+  `Tell("x", F(N - 1))`, `Obj.F * 10 + F(N - 1)`, with the code after it
+  having no choice and no other such call, and setting no `var`. What the
+  alternative evaluates before the call (a field, a constant, a call of a
+  function, a block's clauses), other than literals and the function's own
+  names, runs once before the call, after the clauses, as the call's
+  arguments do, and the code after the call uses its value. That code is the call's *return frame*: it runs on each
   of the call's values, as part of that value, and its result is the
   alternative's value. The last expression may also be a clause binding the
   choice, with such code after it, which then runs on each of the choice's
@@ -1367,9 +1368,8 @@ Main():void =
   above (return frames included) and is not `<computes>`, keeps local
   state, or may print or call `Err()`: in particular one with a choice, or
   another call of its group, after a call of its group (`X := T(N - 1)`,
-  then `X | X + 1`, or then `Y := T(N - 1)`), one whose call comes after
-  an operand that is not a literal or a name of its own, and one that sets
-  a `var` after a call of its group (#283). Also a generator whose clauses,
+  then `X | X + 1`, or then `Y := T(N - 1)`), and one that sets a `var`
+  after a call of its group (#283). Also a generator whose clauses,
   conditions or arguments have effects where the first success is taken
   and the clauses after it have a `break`
   that leaves them (which would leave the function they run in), in a constructor, a parameter's

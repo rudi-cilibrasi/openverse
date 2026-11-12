@@ -1343,51 +1343,68 @@ partial def inert (own : List String) : SExpr → Bool
   | _ => false
 
 /-- (#283) An alternative that is a call of the recursive group (`isCall`)
-    with code after it: the call, evaluated before anything else in the
-    alternative but inert operands, and the alternative with the name `h` in
-    the call's place, its return frame, which runs on each of the call's
-    values. Everything after the call is `plain`. -/
-partial def frameOf? (isCall plain inert : SExpr → Bool) (h : String) (e : SExpr) : Option (SExpr × SExpr) :=
+    with code after it: the call; the alternative with the name `h` in the
+    call's place, its return frame, which runs on each of the call's values;
+    and the clauses that run before the call, once (its prefix). What is
+    evaluated before the call is kept in place when it reads the same after
+    it (`inert`), else bound to a name in the prefix (`$pre…`), so it is
+    still read once, before the call: a field, a constant, a call of a
+    function. Everything after the call is `plain`. -/
+partial def frameOf? (isCall plain inert : SExpr → Bool) (h : String) (e : SExpr) :
+    Option (SExpr × SExpr × List SExpr) :=
   let go := frameOf? isCall plain inert h
-  -- (the operand with the call: those before it inert, those after it plain)
-  let inList (es : List SExpr) : Option (SExpr × List SExpr) := do
+  -- (the operand with the call: those before it bound first unless inert,
+  -- those after it plain)
+  let inList (es : List SExpr) : Option (SExpr × List SExpr × List SExpr) := do
     let i ← es.findIdx? (!plain ·)
-    let (c, ei) ← go es[i]!
-    guard ((es.take i).all inert && (es.drop (i + 1)).all plain)
-    return (c, es.set i ei)
-  if isCall e then some (e, .ident e.pos h) else
+    let (c, ei, pre) ← go es[i]!
+    guard ((es.drop (i + 1)).all plain)
+    let (before, bound) := (es.take i).foldr (fun x (acc, ds) =>
+      if inert x then (x :: acc, ds) else
+        let t := s!"$pre{x.pos.line}_{x.pos.col}"
+        (.ident x.pos t :: acc, .decl x.pos t none false x :: ds)) ([], [])
+    return (c, before ++ [ei] ++ es.drop (i + 1), bound ++ pre)
+  if isCall e then some (e, .ident e.pos h, []) else
   match e with
   | .bin p o a b => do
-    let (c, as) ← inList [a, b]
-    return (c, .bin p o as[0]! as[1]!)
-  | .neg p a => do let (c, a') ← go a; return (c, .neg p a')
-  | .member p a m => do let (c, a') ← go a; return (c, .member p a' m)
+    let (c, as, pre) ← inList [a, b]
+    return (c, .bin p o as[0]! as[1]!, pre)
+  | .neg p a => do let (c, a', pre) ← go a; return (c, .neg p a', pre)
+  | .member p a m => do let (c, a', pre) ← go a; return (c, .member p a' m, pre)
   | .cmp p a rest => do
     guard (rest.all (plain ·.2))
-    let (c, a') ← go a
-    return (c, .cmp p a' rest)
-  | .tuple p es => do let (c, es') ← inList es; return (c, .tuple p es')
-  | .arrayLit p es => do let (c, es') ← inList es; return (c, .arrayLit p es')
+    let (c, a', pre) ← go a
+    return (c, .cmp p a' rest, pre)
+  | .tuple p es => do let (c, es', pre) ← inList es; return (c, .tuple p es', pre)
+  | .arrayLit p es => do let (c, es', pre) ← inList es; return (c, .arrayLit p es', pre)
   | .app p f@(.ident ..) as br => do
     guard (as.all fun | .decl .. => false | _ => true)
-    let (c, as') ← inList as
-    return (c, .app p f as' br)
+    let (c, as', pre) ← inList as
+    return (c, .app p f as' br, pre)
   -- (an index, or a call of a value: its head first)
   | .app p f as br => do
     guard (as.all plain)
-    let (c, f') ← go f
-    return (c, .app p f' as br)
+    let (c, f', pre) ← go f
+    return (c, .app p f' as br, pre)
   | .str p ps => do
     let codes := ps.filterMap fun | .code c => some c | .text _ => none
-    let (c, codes') ← inList codes
+    let (c, codes', pre) ← inList codes
     let (ps', _) := ps.foldl (fun (acc, rest) part => match part, rest with
       | .code _, x :: xs => (acc ++ [SPart.code x], xs)
       | part, xs => (acc ++ [part], xs)) (([] : List SPart), codes')
-    return (c, .str p ps')
-  | .block p (.decl q x t false rhs :: ss) => do
-    guard (ss.all plain)
-    let (c, rhs') ← go rhs
-    return (c, .block p (.decl q x t false rhs' :: ss))
+    return (c, .str p ps', pre)
+  -- (a block: its clauses before the one with the call run before the call)
+  | .block p ss => do
+    let i ← ss.findIdx? (!plain ·)
+    let rest := ss.drop (i + 1)
+    guard (rest.all plain)
+    match ss[i]! with
+    | .decl q x t false rhs =>
+      let (c, rhs', pre) ← go rhs
+      return (c, .block p (.decl q x t false rhs' :: rest), ss.take i ++ pre)
+    | s =>
+      let (c, s', pre) ← go s
+      return (c, .block p (s' :: rest), ss.take i ++ pre)
   | _ => none
 
 /-- (#283) A tail with return frames: each alternative that is a call of the
@@ -1397,7 +1414,9 @@ def framedTail (isRec plain inert : SExpr → Bool) (tail : SExpr) : SExpr :=
     let frame (a : SExpr) : SExpr := if isRec a || plain a then a else
       let h := s!"$frame{a.pos.line}_{a.pos.col}"
       match frameOf? isRec plain inert h a with
-      | some (c, k) => .app a.pos (.ident a.pos "$then") [c, .ident a.pos h, k] false
+      | some (c, k, []) => .app a.pos (.ident a.pos "$then") [c, .ident a.pos h, k] false
+      -- (with the clauses that run before the call, its prefix)
+      | some (c, k, pre) => .app a.pos (.ident a.pos "$then") [c, .ident a.pos h, k, .block a.pos pre] false
       | none => a
     match alts? v with
     | some as => mk v.pos (as.map frame)
@@ -1423,8 +1442,8 @@ def lastChoiceTail (plain : SExpr → Bool) (cls : List SExpr) (last : SExpr) :
 def eagerWhy : String :=
   "such a function must be <computes>, keep no local state, and reach nothing that prints or calls Err(), " ++
   "as all its values are computed at a call (#235), unless it is taken lazily: clauses, then a choice whose " ++
-  "alternatives are values or calls of its recursive group, each call after only literals and the function's own " ++
-  "names in its alternative, and followed by no choice, no other such call and no set of a var (#246, #283)"
+  "alternatives are values or calls of its recursive group, each call followed by no choice, no other such call " ++
+  "and no set of a var (#246, #283)"
 
 /-- The shape of a recursive function with several values that its
     consumers take lazily (#246), after normalizing source returns: plain
@@ -1459,8 +1478,8 @@ def loopShape? (g : String) (mv : List String) (body : SExpr) (grp : List String
   -- the names; an object's field it may set)
   let isVar (n : String) : Bool := anyE (fun | .decl _ x _ true _ => x == n | _ => false) body
   let framed : SExpr → Bool
-    | .app _ (.ident _ "$then") [c, _, k] false =>
-      isRec c && plain k && (setsIn k).all fun n => (localsOf k).contains n || !isVar n
+    | .app _ (.ident _ "$then") (c :: _ :: k :: pre) false =>
+      isRec c && plain k && pre.all plain && (setsIn k).all fun n => (localsOf k).contains n || !isVar n
     | _ => false
   let groupOK (e : SExpr) : Bool := ((alts? e).getD [e]).all fun a => isRec a || plain a || framed a
   if cls.all plain && loopTailOK plain groupOK tail then some (cls, tail) else none
@@ -2146,11 +2165,15 @@ def firstBody (helper : String) (p : Pos) (b : String) (bty : Option STy) (cls :
     | .app q (.ident _ "$recTo") (.ident _ h :: as) false => some (recur (some h) (helperOf h) q as k)
     | _ => none
   let alt (a : SExpr) : SExpr := match a with
-    | .app q (.ident _ "$then") [c, .ident _ h, _] false =>
-      -- (#283) a call with code after it: its frame on the continuation
+    | .app q (.ident _ "$then") (c :: .ident _ h :: _ :: pre) false =>
+      -- (#283) a call with code after it: its frame on the continuation,
+      -- after its prefix, if any
       let j := (frames.findIdx? (·.1 == h)).getD 0
       let lives := (((frames[j]?).map (·.2.1)).getD []).map (SExpr.ident q ·)
-      (call [.app q (.ident q "$framePush") (.int q (j : Int) :: .ident q "$K" :: lives) false] c).getD a
+      match call [.app q (.ident q "$framePush") (.int q (j : Int) :: .ident q "$K" :: lives) false] c, pre with
+      | some e, [.block _ ss] => .block q (ss ++ [e])
+      | some e, _ => e
+      | none, _ => a
     | a =>
       match call (kont a.pos) a with
       | some c => c
