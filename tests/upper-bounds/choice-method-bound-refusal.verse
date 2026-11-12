@@ -1,30 +1,12 @@
-vehicle:=class<allocates>:
-    var N:int=1
-    ReadN()<reads>:int=N
-car:=class<allocates>(vehicle){Name:string="a"}
-Read(X:t,?V:int=X.N where t:subtype(vehicle))<reads>:int=V
-ca:=class:
-    var K:int=0
-    Apply(X:u,?V:int=Read(X) where u:subtype(car))<transacts>:int=
-        set K=V
-        V
-cb:=class:
-    var K:rational=0
-    Apply(X:u,?V:int=Read(X) where u:subtype(car))<transacts>:int=
-        set K=V
-        V
+vehicle:=class<computes>{}
+car:=class<computes>(vehicle){}
+ca:=class<computes>:
+    K:int=0
+    Apply(X:u where u:subtype(car))<computes>:int=7
+cb:=class<computes>:
+    K:rational=0
+    Apply(X:u where u:subtype(car))<computes>:int=7
 Dup(X:t where t:type)<computes>:t=X|X
-Run(X:t where t:subtype(vehicle))<suspends>:t=
-    defer:Print("cleanup {X.N}")
-    P:=ca{}
-    Q:=cb{}
-    Rows:=for(A:=(Dup(P)|Dup(Q))):
-        A.Apply(X)
-        Sleep(0.1)
-        set X.N+=1
-        Print("row {X.N}")
-        0
-    Print("rows {Rows.Length}")
-    if(Q.K=4)then Print("columns {P.K} 4")else Print("bad columns")
-    X
-Main()<suspends>:void=Run(vehicle{})
+Run(X:t where t:subtype(vehicle))<computes>:[]int=
+    for(A:=(Dup(ca{})|Dup(cb{}))):A.Apply(X)
+Main():void=Print("{Run(vehicle{}).Length}")
