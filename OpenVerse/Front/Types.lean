@@ -50,6 +50,16 @@ inductive Ty where
   | param : String → (comparable : Bool) → Ty
   deriving Repr, Inhabited
 
+/-- Nominal helper dependencies of an already resolved API type. Parameters
+    are identities, not nominal types with the same spelling. -/
+partial def Ty.helperUses : Ty → List String
+  | .arr t | .opt t => t.helperUses
+  | .tup ts => ts.flatMap Ty.helperUses
+  | .map k v => k.helperUses ++ v.helperUses
+  | .struct n ts => n :: (if (FnValues.parseName n).any (fun (_, es) => es.contains "suspends")
+      then ["$suspends"] else []) ++ ts.flatMap Ty.helperUses
+  | _ => []
+
 partial def Ty.eqv : Ty → Ty → Bool
   | .int, .int | .logic, .logic | .char, .char | .char32, .char32 | .rational, .rational | .float, .float | .void, .void | .never, .never => true
   | .any, .any => true
@@ -140,6 +150,9 @@ structure ClassInfo where
 
 /-- The user-defined types of a program. -/
 structure TyEnv where
+  /-- Public helper names owned by source declarations use private identities
+      inside the prelude. Source types themselves keep their resolved names. -/
+  concurrencyNames : List (String × String) := []
   /-- Source construction contracts, collected before helper generation.
       Compiler implementation types have no source-declared budget. -/
   constructionFx : Std.HashMap String (List String) := {}
@@ -256,6 +269,9 @@ structure TyEnv where
   deriving Inhabited
 
 /-- The fields of struct `n` applied to the type arguments `args`. -/
+def TyEnv.concurrencyName (env : TyEnv) (n : String) : String :=
+  (env.concurrencyNames.lookup n).getD n
+
 def TyEnv.fields (env : TyEnv) (n : String) (args : List Ty := []) : List (String × Ty × Option SExpr) :=
   let fs := (env.structs.lookup n).getD []
   match env.sparams.lookup n with

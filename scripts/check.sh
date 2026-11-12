@@ -66,6 +66,12 @@ if lake env lean -j1 --run tests/lean/EffectPolicy.lean >"$logs/effect-contracts
 else
   rc=$?; cat "$logs/effect-contracts"; exit "$rc"
 fi
+echo "== concurrency-prelude compiler API contracts"
+if lake env lean -j1 --run tests/lean/ConcurrencyPrelude.lean >"$logs/prelude-contracts" 2>&1; then
+  cat "$logs/prelude-contracts"
+else
+  rc=$?; cat "$logs/prelude-contracts"; exit "$rc"
+fi
 if grep -rnE '\bsorry\b|\badmit\b' OpenVerse/ Main.lean; then echo "error: sorry/admit in Lean sources" >&2; exit 1; fi
 scripts/gen-claims.sh --check
 echo "== C runtime"

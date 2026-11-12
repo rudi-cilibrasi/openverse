@@ -101,6 +101,8 @@ def pretty (msg : String) : String :=
     else if w.startsWith "$fn" then "a function type"
     -- (the prelude's `subscribable_event()`, #220)
     else if w == "$subev0" then "subscribable_event()"
+    else if ["$event", "$sticky_event", "$task", "$subscribable_event", "$cancelable"].contains
+        ((w.splitOn ".").headD "") then (w.drop 1).toString
     else w
   Id.run do
     let mut out := ""
