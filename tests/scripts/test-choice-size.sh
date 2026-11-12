@@ -137,6 +137,10 @@ kinds=(
   member-callback-result-for
   member-callback-result-waiting
   member-awaiting-waiting
+  member-mixed-first
+  member-mixed-for
+  member-mixed-waiting
+  member-mixed-awaiting-waiting
   exclusive
   heterogeneous-nested-for
   heterogeneous-unused-first
@@ -289,7 +293,8 @@ if kind.startswith('member-'):
     shape, mode = '-'.join(kind.split('-')[1:-1]), kind.split('-')[-1]
     future = shape == 'future'
     result = shape == 'callback-result'
-    awaiting = shape == 'awaiting'
+    awaiting = shape in ('awaiting','mixed-awaiting')
+    mixed = shape in ('mixed','mixed-awaiting')
     print('Dup(X:t where t:type)<computes>:t=X|X')
     if future:
         for cls in ['ca','cb']:
@@ -302,8 +307,10 @@ if kind.startswith('member-'):
         print('ca:=class{F:type{_(:any)' + effects + ':ra}=MakeA}\ncb:=class{F:type{_(:any)' + effects + ':rb}=MakeB}')
     else:
         for cls,ty,value,name in [('ca','int','7','Integer'),('cb','string','"s"','String')]:
-            effects='<computes>' + ('<suspends>' if awaiting else '')
-            print(name + '(X:' + ty + ')' + effects + ':int=block{' + ('Sleep(0.0);' if awaiting else '') + '1}')
+            waits = awaiting and (not mixed or cls == 'cb')
+            effects=('<reads><writes>' if cls=='ca' else '<transacts>') if mixed else '<computes>'
+            effects += '<suspends>' if waits else ''
+            print(name + '(X:' + ty + ')' + effects + ':int=block{' + ('Sleep(0.0);' if waits else '') + '1}')
             print(cls + ':=class{V:' + ty + '=' + value + ';F:type{_(:' + ty + ')' + effects + ':int}=' + name + '}')
     clauses=','.join(f'A{i}:=(Dup(ca{{}})|Dup(cb{{}}))' for i in range(count))
     terms=[]
