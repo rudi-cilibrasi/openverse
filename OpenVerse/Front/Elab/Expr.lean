@@ -1601,7 +1601,7 @@ partial def elabLoopGen (ctx : Ctx) (p : Pos) (lp : List SExpr) : EM LoopGen := 
     return ← tryCatch (elabLoopGenGroupWith elabE elabSeq ctx p g ps cls rsty tail0 members) fun _ => do
       -- Polymorphic recursion was already accepted through F$all. Restart
       -- choice lowering for this group, with all eager restrictions intact.
-      modify fun st => { st with eagerNeeds := g :: st.eagerNeeds }
+      noteNeeds { eager := [g] }
       let sp ← fresh .int
       let has ← fresh .logic
       return { init := .lit .void, step := .lit .void, sp, has, value := .prim .fail [],
@@ -2063,7 +2063,7 @@ partial def elabMember (ctx : Ctx) (p : Pos) (r : R) (m : String) (exp : Option 
                   | none =>
                     let key := s!".{x0}${f}"
                     if !env.fnRequests.contains (key, t) && fnTyFits env (typeOf x0) t then
-                      modify fun st => { st with fnNeeds := st.fnNeeds ++ [(key, t)] }
+                      noteNeeds { fns := [(key, t)] }
                       return ⟨.seq r.e (.prim .userErr []), t⟩
           -- A generic receiver fixes its method's signature too. Requested
           -- adapters retain its witnesses and ordinary call conversions.
@@ -2081,7 +2081,7 @@ partial def elabMember (ctx : Ctx) (p : Pos) (r : R) (m : String) (exp : Option 
                   let rv ← elabConstruct ctx' p cls [] [.decl p "$self" none false (.ident p nm)]
                     (some (.struct cls args))
                   return ⟨.seq (.assign tv r.e) (← coerce p rv target), target⟩
-                modify fun st => { st with methodNeeds := FnValues.mergeMethodRequests st.methodNeeds [req] }
+                noteNeeds { methods := [req] }
                 return ⟨.seq r.e (.prim .userErr []), target⟩
           let some x := (candidates.find? fun x => exp == some (typeOf x)).orElse fun _ => candidates.head?
             | eerr p s!"'{f}' is a method of {sn} that cannot be used as a value: call it with {f}(…) (a method with named parameters is not a value, #210)"

@@ -241,7 +241,7 @@ partial def elabExprInitialWith
                     let r ← elabConstruct ctx p cls [] [] (some (.struct cls args))
                     return ⟨← coerce p r ty, ty⟩
             if let some t := askFor then
-              modify fun st => { st with fnNeeds := st.fnNeeds ++ [(n, t)] }
+              noteNeeds { fns := [(n, t)] }
               return ⟨.prim .userErr [], t⟩
             eerr p s!"'{n}' is generic: a function type determining all its type arguments and satisfying its bounds must be expected (#214, #209)"
           else if ctx.types.classes.contains s!"{n}$fn" then
@@ -261,11 +261,11 @@ partial def elabExprInitialWith
             | some e => return ⟨e, ty⟩
             | none =>
               if let some t := askFor then
-                modify fun st => { st with fnNeeds := st.fnNeeds ++ [(n, t)] }
+                noteNeeds { fns := [(n, t)] }
                 return ⟨.prim .userErr [], t⟩
               return r
           else if let some t := askFor then
-            modify fun st => { st with fnNeeds := st.fnNeeds ++ [(n, t)] }
+            noteNeeds { fns := [(n, t)] }
             return ⟨.prim .userErr [], t⟩
           else if !s.named.isEmpty then
             eerr p s!"'{n}' has named parameters: such a function cannot be used as a value (a function type has no named parameters)"

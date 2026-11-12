@@ -1400,7 +1400,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
         fxCheck s!"construction of {cd.name}" allowed
           { fx := [("allocates", cd.pos, none)] }
   let mut fieldDefaultNeeds : List Choice.FirstLift := []
-  let mut fieldMethodNeeds : List FnValues.MethodRequest := []
+  let mut fieldNeeds : Requests := {}
   -- check every field default once, with its struct's type parameters opaque
   -- (a default is elaborated again, at its field's type, at each construction
   -- that omits the field)
@@ -1421,7 +1421,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
           match (do coerce d.pos (← elabE ctx d (some ft)) ft : EM Expr).run { env } with
           | .ok (_, st) =>
             fxCheck s!"default of field '{f}' of {n}" allowed st
-            fieldMethodNeeds := FnValues.mergeMethodRequests fieldMethodNeeds st.methodNeeds
+            fieldNeeds := fieldNeeds.merge { methods := st.needs.methods }
             fieldDefaultNeeds := fieldDefaultNeeds ++ st.loopFirst.filterMap fun u => match u.lift with
               | .ok l => if l.key.startsWith "defaults:" then some l else none
               | _ => none
@@ -1436,7 +1436,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       (decides : Bool) (allowed : List String) (tps : List (String × Bool)) (body : SExpr)
       (suspends : Bool := false) (selfTps : List String := [])
       (selfFieldOf : Option (String → Option Nat) := none) (scopeClass : Option String := none) :
-      Except String (Fn × List VTy × List (String × Ty) × Option Pos × List Refine.Lift × List LoopUse × FrameRefs.Info × List String × List FnValues.MethodRequest × List (Pos × String)) := do
+      Except String (Fn × List VTy × Requests × Option Pos × List LoopUse × FrameRefs.Info) := do
     -- (#209) the values of `selfTps` come from the receiver's hidden
     -- fields, in slots after the hidden parameters: a method's own class's
     -- (`C.M`), or as `selfFieldOf` says (a cast's branch, #250, the cast
@@ -1491,36 +1491,28 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
         fxCheck s!"construction block of {(name.dropEnd ".$block".length).toString}" budget st
     return ({ name, arity, nslots := st.nslots, decides, writes := allowed.contains "writes",
               body := initPrefixE arity inits e },
-      spawnParamTypes env name (st.slotTys.toList.map (Ty.toVTy env)), st.fnNeeds, st.errAt, st.castNeeds, st.loopFirst,
+      spawnParamTypes env name (st.slotTys.toList.map (Ty.toVTy env)), st.needs, st.errAt, st.loopFirst,
       { explicit := ps.length, copies := st.frameCopies, slots := st.frameSlots.map fun (i, s) =>
-          (i, { frame := s.frame, name := s.name, args := s.args.map (Ty.toVTy env) }) }, st.eagerNeeds, st.methodNeeds, st.familyNeeds)
+          (i, { frame := s.frame, name := s.name, args := s.args.map (Ty.toVTy env) }) })
   -- (the accessors come right after the functions, #157)
   env := { env with fieldAccBase := tops.length + gsigs.size }
   let genvOf (g : Sig) : TyEnv := { env with tvars := g.tparams.map fun (v, c) => (v, Ty.param v c) }
   let mut fns : Array Fn := #[]
   let mut slotTys : Array (List VTy) := #[]
   let mut frameInfo : Array FrameRefs.Info := #[]
-  let mut fnNeeds : List (String × Ty) := []
-  let mut methodNeeds : List FnValues.MethodRequest := fieldMethodNeeds
+  let mut needs := fieldNeeds
   -- (where each function calls `Err()`, by its index, #235)
   let mut errs : Array (Option Pos) := #[]
-  let mut castNeeds : List Refine.Lift := []
   -- (the lazily taken functions with several values that contexts taking
   -- their first success consume, #246)
   let mut loopFirst : List LoopUse := fieldDefaultNeeds.map fun l =>
     { g := "", pos := l.pos, itemCode := .lit .void, argSet := none, lift := .ok l }
-  let mut eagerNeeds : List String := []
-  let mut familyNeeds : List (Pos × String) := []
   for (top, idx) in tops.zip (List.range tops.length) do
     let sig := sigs[idx]!
     match top with
     | .fn p n ps _ _ _ body =>
-      let (fn, tys, needs, err, casts, lf, frames, eager, methodUses, family) ← elabFn env p n ps sig.params sig.ret sig.decides sig.fx [] body sig.suspends
-      eagerNeeds := eagerNeeds ++ eager
-      familyNeeds := familyNeeds ++ family
-      fnNeeds := fnNeeds ++ needs
-      methodNeeds := FnValues.mergeMethodRequests methodNeeds methodUses
-      castNeeds := castNeeds ++ casts
+      let (fn, tys, fnNeeds, err, lf, frames) ← elabFn env p n ps sig.params sig.ret sig.decides sig.fx [] body sig.suspends
+      needs := needs.merge fnNeeds
       loopFirst := loopFirst ++ lf
       fns := fns.push fn
       errs := errs.push err
@@ -1534,12 +1526,8 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       let ctx : Ctx := { sigs := allSigs, sigProg, types := env }
       let (r, st) ← elabBodyOv ctx body (some sig.ret) { env }
       let (e, st) ← (coerce p r.1 sig.ret).run st
-      fnNeeds := fnNeeds ++ st.fnNeeds
-      methodNeeds := FnValues.mergeMethodRequests methodNeeds st.methodNeeds
-      castNeeds := castNeeds ++ st.castNeeds
+      needs := needs.merge st.needs
       loopFirst := loopFirst ++ st.loopFirst
-      eagerNeeds := eagerNeeds ++ st.eagerNeeds
-      familyNeeds := familyNeeds ++ st.familyNeeds
       let tys := st.slotTys.toList.map (Ty.toVTy env)
       frameInfo := frameInfo.push {}
       -- slots start like a function's (a class-typed one as a placeholder)
@@ -1562,14 +1550,10 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       -- (a class's copy of an interface's default, #53, elaborated in the
       -- interface's scope)
       let scope := copyScope? effs
-      let (fn, tys, needs, err, casts, lf, frames, eager, methodUses, family) ← elabFn (genvOf g) p n ps g.params g.ret g.decides g.fx g.tparams body g.suspends
+      let (fn, tys, fnNeeds, err, lf, frames) ← elabFn (genvOf g) p n ps g.params g.ret g.decides g.fx g.tparams body g.suspends
         g.selfTps ((opts.requests.casts.find? (·.name == n)).map fun l => fun v =>
           (l.opened.lookup v).bind (env.witnessField? l.target ·)) scope
-      fnNeeds := fnNeeds ++ needs
-      methodNeeds := FnValues.mergeMethodRequests methodNeeds methodUses
-      eagerNeeds := eagerNeeds ++ eager
-      familyNeeds := familyNeeds ++ family
-      castNeeds := castNeeds ++ casts
+      needs := needs.merge fnNeeds
       loopFirst := loopFirst ++ lf
       fns := fns.push fn
       errs := errs.push err
@@ -1584,16 +1568,14 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   -- (#283) and with the families of the uses of methods whose receivers'
   -- classes this one found; those it did not reach, of no family, so that
   -- the last elaboration has none to find (and knows what can fail)
-  if familyNeeds.isEmpty then familyNeeds := familySites.map fun (q, _) => (q, "")
-  if !eagerNeeds.isEmpty || !familyNeeds.isEmpty then
-    return .asking { eager := eagerNeeds.eraseDups, families := familyNeeds.eraseDups }
+  if needs.families.isEmpty then needs := needs.merge { families := familySites.map fun (q, _) => (q, "") }
+  if !needs.eager.isEmpty || !needs.families.isEmpty then
+    return .asking { eager := needs.eager, families := needs.families }
   let defaults := loopFirst.filterMap fun u => match u.lift with
     | .ok l => if l.key.startsWith "defaults:" then some l else none
     | _ => none
-  if !fnNeeds.isEmpty || !methodNeeds.isEmpty || !castNeeds.isEmpty || !defaults.isEmpty then
-    let casts := castNeeds.foldl (fun acc l => if acc.any (·.key == l.key) then acc else acc ++ [l]) []
-    return .asking { fns := fnNeeds.eraseDups, methods := methodNeeds, casts,
-                     loops := defaults.foldl (fun acc l => if acc.any (·.key == l.key) then acc else acc ++ [l]) [] }
+  needs := needs.merge { loops := defaults }
+  if !needs.isEmpty then return .asking needs
   let mainSig ← match sigs.toList.find? (·.name == (if opts.entry.isSome then "$Do" else "Main")) with
     | some s =>
       if s.isConst || !s.params.isEmpty then throw "Main must be a function with no parameters"
