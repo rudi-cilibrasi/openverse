@@ -307,6 +307,10 @@ Return-frame snapshots also retain implicit lexical evidence, including
 readonly proof fields whose names are absent from the written suffix. Snapshot
 contracts require usable actual proofs and refuse dummy values, mutable proof
 fields and static declaration facts.
+The main integration also retains those captures when a shared continuation
+forwards a clause break. A paired fixture carries a precise bounded value in a
+shared recursive-frame variable, checks committed versus rejected cell writes,
+and checks state copyback and cleanup on a composed-choice clause break.
 
 The existing Core checker and semantic proofs apply to the emitted Core under
 their stated hypotheses. They do not prove that bound inference, dictionary
