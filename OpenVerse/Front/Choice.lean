@@ -171,10 +171,10 @@ each: those of arithmetic, comparisons, calls (the receiver first), member
 access, `?`, tuples, arrays, maps and string interpolation; a call's
 named arguments after its positional ones, as they are evaluated; a
 block's clauses; a construction's fields, in its type's declaration order,
-as they are evaluated; the operands of `and`, each as a block, and the
-right of `or`, as the `if` it stands for (`orIf`) (#283). A choice elsewhere (a branch that is more
-than a value, an alternative, which the elaborator takes apart) is not
-lifted here. -/
+as they are evaluated; a range's bounds; the operands of `and`, each as a
+block, and the right of `or`, as the `if` it stands for (`orIf`) (#283). A
+choice elsewhere (a branch that is more than a value, an alternative, which
+the elaborator takes apart) is not lifted here. -/
 
 /-- The variable a `set` path starts from. -/
 partial def rootName? : SExpr → Option String
