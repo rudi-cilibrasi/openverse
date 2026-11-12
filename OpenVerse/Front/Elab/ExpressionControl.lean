@@ -94,10 +94,16 @@ partial def elabExprControlWith
           set st1
           if re.ty == .void then return some (← attempt .void)
           return some (← tryCatch (attempt re.ty) fun _ => do set st1; attempt .void)
+    -- (and in a failure context, the branches, which are in it too: a cast
+    -- in one that is an expression makes it the block of it)
+    let branches : List (SExpr × (SExpr → EM R)) := if !ctx.canFail then [] else
+      (thenE, fun b => elabE ctx (.ite p conds0 b elseE) exp) ::
+        elseE.toList.map fun ee => (ee, fun b => elabE ctx (.ite p conds0 thenE (some b)) exp)
     if !asWritten then
       if let some r ← withCastClauses ctx conds thenE (fun _ => false)
           (elabE { ctx with asWritten := true } (.ite p conds0 thenE elseE) exp)
-          (fun conds thenE => elabE ctx (.ite p conds thenE elseE) exp) (later := true) (alone := nested) then
+          (fun conds thenE => elabE ctx (.ite p conds thenE elseE) exp) (later := true) (alone := nested)
+          (blocks := branches) then
         return r
     -- (a cast that refines type arguments, as the whole condition, #243,
     -- or as its first clause, the cast having no effects to undo when the
@@ -123,13 +129,16 @@ partial def elabExprControlWith
         -- function and in the caller, which keeps its result first: when
         -- it fails, the if fails, as a branch does; only `false`, the rest
         -- having failed, runs `E`)
+        let v := s!"$cv{p.line}_{p.col}"
+        let innerOf (τ : Ty) : SExpr :=
+          let thenV : SExpr := if τ == .void then .block p [thenE, .ident p "true"]
+            else .block p [.decl p v none false thenE, .optionLit p (.ident p v)]
+          Refine.castRest p more thenV (some (.ident p "false"))
+        let rtyOf (τ : Ty) : Ty := if τ == .void then .logic else .opt τ
         let attempt (τ : Ty) : EM (Option R) := do
           let isVoid := τ == .void
-          let v := s!"$cv{p.line}_{p.col}"
-          let thenV : SExpr := if isVoid then .block p [thenE, .ident p "true"]
-            else .block p [.decl p v none false thenE, .optionLit p (.ident p v)]
-          let inner := Refine.castRest p more thenV (some (.ident p "false"))
-          let rty : Ty := if isVoid then .logic else .opt τ
+          let inner := innerOf τ
+          let rty : Ty := rtyOf τ
           match ← elabRefinedIf ctx p dp d T x inner (some (.ident p "false")) (some rty) (made := true) with
           | some r =>
             let t ← fresh rty
@@ -150,7 +159,10 @@ partial def elabExprControlWith
             let st0 ← get
             let re ← elabE ctx ee none
             set st0
-            match ctx.types.castRequests.find? (·.key == Refine.keyOf p d (refineTagOf ctx)) with
+            -- (in a source context, the lift's tag depends on its type)
+            let asked (τ : Ty) := ctx.types.castRequests.find? (·.key ==
+              Refine.keyOf p d (refineTagOf ctx x (innerOf τ) (some (.ident p "false")) (some (rtyOf τ))))
+            match (asked .void).orElse fun _ => asked re.ty with
             | some l => attempt (match l.ret with | .name "logic" => .void | _ => re.ty)
             | none =>
               if re.ty == .void then attempt .void

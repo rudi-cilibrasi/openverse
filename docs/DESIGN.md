@@ -533,8 +533,16 @@ judge what can fail (`Ctx.failabilityKnown`), as a call may yet get several
 values, and the uses it does not reach are of no family, so the last one has
 none left. Each use is then rewritten as in a program with that family
 alone, so the fixpoint is exact, and so is the code. A family that has several values only through such uses has its
-own uses noted in a later round; each round notes more, so they end. A
-class below two roots of `M`, or an overloaded `M`, is refused when a family
+own uses noted in a later round; each round notes more, so they end. An
+overloaded method (#106) is one method for each of its lists, named as the
+elaborator names them, `M$ovK` (`MethodOverloads`, which both use); a
+family is of one of them. A call of an overloaded `M` (`R.M(args)`, bare,
+`(super:)`) is of the list an earlier elaboration found it takes, noted by
+the call's place as an overloaded function's call is (`Requests.overloads`,
+`Ctx.noteOverload`, `rwFamCalls`' `slotAt`), and as written, of one value,
+before; then of its family, by its class or a pick of its own. The
+methods of such a name keep stubs in their classes, so the elaborator's
+lists are the same. A class below two roots of `M` is refused when a family
 of `M` has several values. For
 an interface (#283) the dispatch's root is the interface, its receiver
 typed at it and cast to each implementing class, and its default
@@ -592,7 +600,9 @@ that binds the receiver and the arguments, then the if-chain on the guards
 (ending in `Err()`, which a call never reaches) or the choice.
 Each method of a family stays in its class as a stub, `Err()`, which no call reaches, so that the elaborator still checks it as a member: `<final>`, its signature and effects against the one it overrides, and an abstract one implemented. The dispatch's arguments are bound at the declaring class's parameter types, so `array{}` or `false` gets the type it needs, and one tuple argument to several parameters is taken apart, as at a call. An override that returns a narrower type is refused, since the dispatch is made before types and has the declaring class's return type. An `F$all` body turns every exclusive choice into a choice, nested `for`s included, which is exact as it is effect-free.
 A call has the declaring class's effects, which bound every implementation's. Parameters' defaults are rewritten too, so a call in a default is refused as any call with several values is outside a failure context, instead of reaching a stub. When the declaring class's implementation is the only one (an abstract override below it), the call is of that function, with no dispatch. A call of one implementation's function in a family with overrides (that one, or `(super:)`) takes one tuple argument apart after the receiver, also where it is not inlined.
-`(super:)M(…)` calls the nearest implementation above directly. For the
+`(super:)M(…)` calls the nearest implementation above directly, and a
+qualified call `R.(c:)M(…)` (#125) dispatches in the family of the root `c`
+is below, needing no pick. For the
 fixpoint, a family's calls go through `root$M$fam`, whose body calls
 every implementation, since the dispatch has a choice in it whatever the
 implementations are, and would make every caller one with several values. Its
@@ -665,12 +675,29 @@ The cost: all values are computed even where one is taken, so an
 infinite generator never stops, and an error (an overflow) in a value a
 first success would not have reached stops the program.
 
-Overloaded functions with several values (#283) need the overload a call takes, which only types decide.
-- `inlineMulti` gives each overload a function of its own for the analysis, `F$mvK` (K its place, as the elaborator numbers `F$ovK`). `F` itself becomes a stand-in that calls them all, so a function that calls `F` has several values when an overload does.
-- A call becomes `$inlineOv(F, id, F(args), candidates…)`: each overload's own inlined call (the call as written for one with one value, a placeholder for one whose shape the call does not fit).
-- `elabFn` elaborates a body with markers twice. First for types (`Ctx.typeOnly`), each marker its call as written (`$ovPick`), the kept overloads typing it as any call. `resolveOverload`'s call notes the overload taken under the marker's id (`ESt.ovPicks`). Then for real, each marker its chosen candidate (`ovChosen`).
-- The arguments are made once for the call and its candidates, so a nested call keeps one id.
-- The overloads with several values are also kept as `F$mvK`, for their signatures where they are inlined.
+Overloaded functions with several values (#283) need the overload a call
+takes, which only types decide: it is decided in rounds, as the family of a
+method's use is (below, "Elaboration in rounds").
+- `inlineMulti` gives each overload a function of its own, `F$mvK` (K its
+  place, as the elaborator numbers `F$ovK`).
+- A call of `F` whose overload an earlier elaboration found, by the call's
+  place (`Requests.overloads`), is a call of that overload's function
+  (`pickOverloads`), the others calls as written, of one value in the
+  fixpoint. So which functions have several values is exact: one that
+  reaches only an overload with one value has one.
+- At the calls of an `F` with an overload that has several values that are
+  not picked yet (`TyEnv.overloadSites`), `resolveOverload`'s call notes the
+  overload taken (`Ctx.noteOverload`), and the program is elaborated again
+  with them. That elaboration does not judge what can fail
+  (`Ctx.failabilityKnown`), as a call may yet get several values; the calls
+  it does not reach take none, so the last one has none left.
+- An overload with several values is kept for checking, as itself and as
+  `F$mvK`, for its signature where its calls are inlined (effects,
+  defaults).
+- A call is of one overload wherever its code is elaborated: one in clauses
+  copied for alternatives of a choice whose values are of different types
+  (#335), that takes one overload in a copy and another in another, is
+  refused.
 
 A self-recursive one shaped as a generator (#246; `Choice.loopShape?`:
 clauses without choices, then a choice, or an `if … else …` of choices and
@@ -1081,8 +1108,9 @@ The block then needs between 120000 and 160000 heartbeats. A function with a def
 Some of what a program needs is known only once its types are: a function
 used as a value at a type no class of its gives (#214), a cast's branch as
 a function (#243), a lazily taken call's function of its own (#246), the
-family of a method's use (#283), hidden fields for all of a class's type
-parameters (#351), and more. An elaboration (`elabProgramCore`) that finds
+family of a method's use and the overload a call takes, where they decide
+how the source's choices are inlined (#283), hidden fields for all of a
+class's type parameters (#351), and more. An elaboration (`elabProgramCore`) that finds
 such a need records it (`noteNeeds` in a function's `ESt.needs`, or one of
 `elabProgramCore`'s own checks), with a placeholder where a value was
 wanted, and goes no further than the step that found it: its result asks for
@@ -1095,7 +1123,8 @@ order of the functions made for them.
 
 What is asked for is of three tiers, by what it changes (`Requests.tier`),
 and an elaboration asks for one tier at a time: 1. how the source's
-choices are inlined (eager groups, lazily taken functions, families),
+choices are inlined (eager groups, lazily taken functions, families,
+overloads),
 2. the classes' layout (hidden fields), 3. the functions added (functions
 and methods as values, cast branches, the functions of lazily taken calls,
 continuations and default helpers). A round that asks for more of one tier
@@ -2276,7 +2305,12 @@ there, is lifted out by that lifting, marked `$liftCast` (`Refine.markCast`,
 which `Choice.hasLiftable` and `liftE` take as a value to bind, as a
 choice): the operands before it bound, then `$k… := T[X]`, a cast clause
 (`liftCastClause`, in `withCastClauses` and `elabSeqIn`; a `<decides>`
-body of one expression is the block of it, `elabBodyOv`). In a sequence whose names
+body of one expression is the block of it, `elabBody`). A branch of an
+`if` in a failure context with such a cast in it, written as an
+expression, is the block of it instead (`Refine.castsOf`, the `blocks` of
+`withCastClauses`): lifting the cast out of the `if` would run it whichever
+branch runs. All three are taken when the cast is refused as written, so a
+program that compiled before keeps its code. In a sequence whose names
 end with it (a block, so a `<decides>` body or `option{…}`'s, and the
 operand of `not`, `and` and `or`), `pre; D := T[X]; rest` is `pre; if (D
 := T[X]) then {rest} else fail` (`elabSeqIn`; the `else` is
@@ -2310,10 +2344,13 @@ clause's values; as a local from outside the later cast's branch, it
 leaves that branch at its own type, not the refined one, so it can be cast
 again. An object that may name type arguments a cast opens (the first
 cast's, when the refusal says it opens, `Refine.CastRefusal.opens`, or a
-later cast's, which may) is not: `after` could not name its type. A `for`'s generator past the moved clauses whose source uses `D` has its
-source cast again in the same way, at the generator's place, and the body
-is cast again when it uses the names those generators bind; a filter there
-that uses `D` is refused. A later cast of an object computed among the
+later cast's, which may) is not: `after` could not name its type. A `for`'s clause past the moved clauses that uses `D` is cast again in the
+same way where it uses it, at that place: a generator's source, a range's
+bounds, a binding's value (so its name stays bound), each alternative of a
+choice (lifted out of the clause first, `lift`), or else the clause itself;
+the body is cast again when it uses the names those clauses bind. A use in
+a branch of an `if` with a choice in its branches is refused, since the
+choice's consumer keeps that `if` and its condition picks the branch. A later cast of an object computed among the
 moved clauses is cast again only when the branch or body is refused
 without it (`computed`), so that programs compiled before keep their code.
 Both `if`s are the elaborator's, marked `$made` (their
@@ -2370,9 +2407,32 @@ conversion of a class type.
 Refining lifts also carry `SourceContext`, including default dependency
 stacks and the source's cleanup, constructor, class-block and concurrent-arm
 flags. Discovery and generated function checking restore the same scope.
-Their request identity includes that scope and its type environment, while
-the source class-copy tag stays separate. Different closed evaluations of
-one default therefore cannot reuse a helper with the wrong type witnesses.
+A lift's key (`Refine.keyOf`) is its `if`'s place and bound name and a tag
+(`refineTagOf`): the class-copy tag (`Ctx.liftTag`), the continuation the
+cast was moved into (`Ctx.refineScope`, #453), and, in such a scope, a hash
+of the scope and of what the function made from the branch depends on
+there: the locals the `if` uses (with `Self` for the members it names
+bare), each with its type, mutability and frame storage; how the type
+variables their types mention are bound; what the type names written in it
+stand for; the type expected of it, which the function returns (a field's
+declared type at each construction); in a `<suspends>` function, all the
+type variables (a lift there takes them as type parameters); the inlined
+bodies it is in; and the source's return type when the branch returns.
+Different closed evaluations of one default therefore cannot reuse a helper
+with the wrong type witnesses, while evaluations that differ only in what
+the cast does not use (a parameter's default at calls that instantiate the
+other parameters differently) share one. Such a tag may differ between the
+trial of an enclosing cast's branch, which has the enclosing function's
+locals, its `var`s among them, and no type expected of the branch's value,
+and the function made from that branch, which has its captures as values
+and its result type; so in such a trial (`Ctx.inRefinedTrial`) a cast with
+such a tag asks for no lift, and the function, elaborated in the next round,
+asks for it. (Asked for from both, as when every local and type variable in
+scope was in the tag, each level of nesting in a `for`'s body lifted the
+casts inside it again, the earlier copies never called: 136 functions for 16
+levels instead of 16.) A nest of such casts takes one round per level;
+outside source contexts the tag is the place's alone, and a trial asks for
+the lifts that the next round's functions use.
 Waiting consumers can stage parameter defaults through the same protocol.
 Both ordinary composed suffixes and refining branches preserve the active
 default stack and source restrictions in their prefix and resume functions.

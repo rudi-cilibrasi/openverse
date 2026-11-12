@@ -1,0 +1,24 @@
+Pick -1 1
+Pick 40 2
+Pick 6 3
+Pick -1 4
+Pick no 4
+Pick 6 5
+Pick -1 6
+Pick 40 7
+Pick no 7
+Pick -1 8
+Pick no 8
+Pick no 8
+Same 1 2
+Self 4
+Two 8
+Two no
+Stmt 12
+Stmt no 12
+Stmt 12
+Br 0 1
+Br 1 5
+Br 0 1
+Br 1 no
+exit=0

@@ -14,6 +14,7 @@
   where their behaviour is proved).
 -/
 import OpenVerse.Front.Syntax
+import OpenVerse.Front.MethodOverloads
 
 namespace OpenVerse.Front.Choice
 
@@ -1997,10 +1998,12 @@ def elimReturns (fresh : Nat → String) (n : Nat) (multi : SExpr → Bool := fu
     `F$all` as `F` (#283). -/
 def shownFnName (n : String) : String :=
   let n := if n.endsWith "$all" then String.ofList (n.toList.take (n.length - 4)) else n
-  -- (an overload's own name, #283, `F$mvK`: its function's)
-  let n := match n.splitOn "$mv" with
+  -- (an overload's own name, #283, `F$mvK`, or an overloaded method's,
+  -- `C$M$ovK`: its function's or method's)
+  let base (sep n : String) : String := match n.splitOn sep with
     | [f, k] => if !f.isEmpty && k.all Char.isDigit && !k.isEmpty then f else n
     | _ => n
+  let n := base "$ov" (base "$mv" n)
   if n.startsWith "$" then n else (n.replace "::" ".").replace "$" "."
 
 /-- The calls of `g` in `e` (its consumer's code, #246) as `$rec(args)`. -/
@@ -2025,10 +2028,10 @@ def markRecG (g : String) (grp : List String) : SExpr → SExpr :=
 partial def inlineCalls (mv : List (String × MFn)) (e : SExpr) (recs : List String := [])
     (loops : List String := []) (clash : List (String × List String) := [])
     (inDflt : List (String × String) := []) (groups : List (String × List String) := [])
-    (ovs : List (String × List String) := []) (fieldOrder : String → FieldOrder := fun _ => {}) :
+    (fieldOrder : String → FieldOrder := fun _ => {}) :
     StateT Nat (Except String) SExpr := do
   -- (`inDflt`: the defaults being inlined, function and parameter, #283)
-  let go := fun x => inlineCalls mv x recs loops clash inDflt groups ovs fieldOrder
+  let go := fun x => inlineCalls mv x recs loops clash inDflt groups fieldOrder
   match e with
   | .app p (.ident _ "$dispatch") (.ident q g :: .block tp tmpl :: as) false =>
     -- (an overridden method's dispatch, #283: an inlined call whose
@@ -2055,25 +2058,7 @@ partial def inlineCalls (mv : List (String × MFn)) (e : SExpr) (recs : List Str
     let tmpl := if ρt.isEmpty then tmpl else tmpl.map renTps
     let tmpl' ← (tmpl.map (renameE ren)).mapM go
     return .app p (.ident p "$inline") (.ident q g :: .block tp tmpl' :: (← as.mapM go)) false
-  -- (#283) a call of an overloaded function with several values: the
-  -- call as written, for the elaborator to choose the overload as at any
-  -- call, then each overload's own inlined call, `$inlineOv(F, id, call,
-  -- candidates…)`, `id` its own
-  -- (one made already, in arguments made once for the call as written and
-  -- its candidates: kept, with its id)
-  | e@(.app _ (.ident _ "$inlineOv") _ false) => return e
   | .app p (.ident q g) as br =>
-    if let some ks := ovs.lookup g then do
-      let id ← modifyGet fun n => (n, n + 1)
-      -- (the arguments made once, so a call of such a function in them has
-      -- one id in the call as written and in every candidate)
-      let as' ← as.mapM go
-      let call : SExpr := .app p (.ident q g) as' br
-      -- (an overload the call's shape does not fit, which no resolution
-      -- takes: a placeholder)
-      let cands ← ks.mapM fun k => if k == g then pure call else
-        tryCatch (go (.app p (.ident q k) as' br)) fun _ => pure (.app p (.ident p "$ovUnresolved") [.ident q g] false)
-      return .app p (.ident p "$inlineOv") (.ident q g :: .int p (id : Int) :: call :: cands) false
     match mv.lookup g with
     | some f =>
       -- (as at a call: several arguments to a single array parameter, and
@@ -2181,7 +2166,7 @@ partial def inlineCalls (mv : List (String × MFn)) (e : SExpr) (recs : List Str
             -- (one that calls `g` again omitting it: as at a call)
             if inDflt.contains (g, sp.name) then
               throw s!"{p.show}: the default of ?{sp.name} of {shownFnName g} uses itself (a call of {shownFnName g} that omits ?{sp.name})"
-            let d' ← inlineCalls mv (renameTypes ρ d) recs loops clash ((g, sp.name) :: inDflt) groups ovs fieldOrder
+            let d' ← inlineCalls mv (renameTypes ρ d) recs loops clash ((g, sp.name) :: inDflt) groups fieldOrder
             let earlier := (f.params.take k).map fun e => SExpr.tuple q [.ident q e.name, .ident q (tag e.name)]
             return some (.decl q (tag sp.name) (tyOf sp.ty) false
               (.app q (.ident q "$paramDefault") [.ident q g, .ident q sp.name, .block q earlier, d'] false))
@@ -2630,6 +2615,61 @@ def multiValued (fns : List (String × MFn)) : List String := Id.run do
         mv := mv ++ [n]; changed := true
   return mv
 
+/-- (#283) The place of an overload among its function's, `K` of `F$ovK`,
+    as the elaborator names it. -/
+def overloadIndex? (o : String) : Option Nat :=
+  match o.splitOn "$ov" with
+  | [_, k] => k.toNat?
+  | _ => none
+
+/-- (#283) `e` with each call of an overloaded function of `ovs` whose
+    overload an earlier elaboration found, by the call's place (`picks`: the
+    overload as the elaborator names it, `F$ovK`, or none), a call of that
+    overload's own function `F$mvK`, if `sel` says so. -/
+partial def pickOverloads (ovs : List String) (picks : List (Pos × String)) (sel : String → Bool)
+    (e : SExpr) : SExpr :=
+  mapE (fun
+    | .app p (.ident q f) as br => do
+      guard (ovs.contains f)
+      let k ← overloadIndex? (← picks.lookup p)
+      let g := s!"{f}$mv{k}"
+      guard (sel g)
+      return .app p (.ident q g) (as.map (pickOverloads ovs picks sel)) br
+    | _ => none) e
+
+/-- The calls `F(args)` in `e`, by their place (#283). -/
+partial def callUses (e : SExpr) : List (Pos × String) :=
+  (match e with | .app p (.ident _ f) _ _ => [(p, f)] | _ => []) ++ e.children.flatMap callUses
+
+/-- The overloaded functions of `tops` (#74): the names defined more than
+    once, as the elaborator takes them (not `Main`, not a module's member). -/
+def overloadedFns (tops : List STop) : List String :=
+  let ns := tops.filterMap fun | .fn _ n .. => some n | _ => none
+  (ns.filter fun n => (ns.filter (· == n)).length > 1 && !n.contains '.' && n != "Main").eraseDups
+
+/-- (#283) The overloads of function `f` of `tops`, each a function of its
+    own, `f$mvK` (K its place among them, as the elaborator numbers them,
+    `f$ovK`), with where it is defined. -/
+def overloadsOf (tops : List STop) (f : String) : List (String × Pos × MFn) :=
+  (tops.filterMap fun
+    | .fn p n ps tps fx r b => if n == f then some (p, (⟨p, ps, tps, fx, r, b⟩ : MFn)) else none
+    | _ => none).zipIdx.map fun ((p, m), k) => (s!"{f}$mv{k}", p, m)
+
+/-- (#283) The functions of `tops` whose fixpoint says which have several
+    values (`multiCandidates`, `multiValued`), each overload of an overloaded
+    one a function of its own (`overloadsOf`), and each call whose overload
+    an earlier elaboration picked (`picks`) one of that overload's function
+    when `sel` says so; until then a call is as written, of one value. -/
+def overloadCandidates (tops : List STop) (picks : List (Pos × String)) (sel : String → Bool) :
+    List (String × MFn) :=
+  let ovs := overloadedFns tops
+  let picked : SExpr → SExpr := if picks.isEmpty then id else pickOverloads ovs picks sel
+  let pk (m : MFn) : MFn :=
+    { m with body := picked m.body, params := m.params.map fun sp => { sp with default := sp.default.map picked } }
+  ((multiCandidates tops).filter (!ovs.contains ·.1)).map (fun (n, m) => (n, pk m)) ++
+    ovs.flatMap fun f => (overloadsOf tops f).filterMap fun (k, _, m) =>
+      if m.fx.contains "suspends" then none else some (k, pk m)
+
 /-- The name of the function a method `m` of class `c` with several values
     becomes (#283). -/
 def methodFnName (c m : String) : String := s!"{c}${m}"
@@ -2731,6 +2771,13 @@ def famAt (anc : String → List String) (fams : List (String × MFam)) (shared 
   | .ident _ "Self", some d => fs.find? fun f => (anc d).contains f.root
   | _, _ => (picks.lookup q).bind fun r => fs.find? (·.root == r)
 
+/-- A method's name as a qualified call writes it (`(c:)M`, #125): `c` and
+    `M`; `M` alone otherwise. -/
+def qualified (m : String) : Option String × String :=
+  match m.startsWith "(", (m.drop 1).toString.splitOn ":)" with
+  | true, [c, m'] => (some c, m')
+  | _, _ => (none, m)
+
 /-- The calls of the methods of `fams` in `e` (#283), `inC` the class whose
     body this is (`anc` gives a class's ancestors, nearest first), each of
     the family `famAt` gives (`shared`, `picks`):
@@ -2755,12 +2802,18 @@ def famAt (anc : String → List String) (fams : List (String × MFam)) (shared 
       Exact class cases can then omit implementations outside that view.
       With `trial`, it is a call of `root$M$fam` instead, for the fixpoint.
     - `M(args)` in the body of a class below the root is `Self.M(args)`.
-    - `(super:)M(args)` is a call of the nearest implementation above. -/
+    - `(super:)M(args)` is a call of the nearest implementation above.
+    - `R.(c:)M(args)` (#125) is a call in the family of the root `c` is
+      below.
+    A call's `M` is the method it calls, `slotAt` its place and the name as
+    written: of an overloaded method, the list the call takes (`M$ovK`), an
+    earlier elaboration found, none before. -/
 partial def rwFamCalls (anc : String → List String) (fams : List (String × MFam)) (trial : Bool)
     (inC : Option String) (e : SExpr) (isIface : String → Bool := fun _ => false)
     (typeView : String → String → List (String × STy) := fun _ _ => [])
-    (shared : String → Bool := fun _ => false) (picks : List (Pos × String) := []) : SExpr :=
-  let rw := fun x => rwFamCalls anc fams trial inC x isIface typeView shared picks
+    (shared : String → Bool := fun _ => false) (picks : List (Pos × String) := [])
+    (slotAt : Pos → String → Option String := fun _ m => some m) : SExpr :=
+  let rw := fun x => rwFamCalls anc fams trial inC x isIface typeView shared picks slotAt
   let below (f : MFam) (d : String) : List String := f.impls.filter fun x => x != d && (anc x).contains d
   -- (#375's review) an interface's default yields to every class's own
   -- implementation, as dispatch gives: a class's chain wins over the
@@ -2903,19 +2956,24 @@ partial def rwFamCalls (anc : String → List String) (fams : List (String × MF
       if !keepStatic then dispatch else
         .block p [.decl p raw none false recv, dispatch]
   mapE (fun
-    | .app p (.member q recv m) args br =>
-      match recv, inC with
-      | .ident _ "(super:)", some d =>
+    | .app p (.member q recv m) args br => do
+      let (within, m) := qualified m
+      let m ← slotAt p m
+      match recv, inC, within with
+      | .ident _ "(super:)", some d, _ =>
         -- (the nearest implementation above `d` of a family of `m`: of
         -- `d`'s own, the only one above it)
         let impl := (superOrder d).findSome? fun a => (fams.find? fun (x, f) => x == m && f.impls.contains a).map (a, ·.2)
         impl.map fun (a, f) => superCall p q (methodFnName a m) f (.ident q "Self") (args.map rw) br (typeView d f.root)
-      | _, _ => (famAt anc fams shared picks inC q recv m).map fun f => call p q m f (rw recv) (args.map rw) br
-    | .app p (.ident q m) args br =>
-      match inC with
-      | some d => ((fams.find? fun (x, f) => x == m && (anc d).contains f.root).map (·.2)).map fun f =>
-          call p q m f (.ident q "Self") (args.map rw) br
-      | none => none
+      | _, _, some c =>
+        ((fams.find? fun (x, f) => x == m && (anc c).contains f.root).map (·.2)).map fun f =>
+          call p q m f (rw recv) (args.map rw) br
+      | _, _, none => (famAt anc fams shared picks inC q recv m).map fun f => call p q m f (rw recv) (args.map rw) br
+    | .app p (.ident q m) args br => do
+      let d ← inC
+      let m ← slotAt p m
+      ((fams.find? fun (x, f) => x == m && (anc d).contains f.root).map (·.2)).map fun f =>
+        call p q m f (.ident q "Self") (args.map rw) br
     | _ => none) e
 
 /-- Preserve the lexical owner and receiver of super calls left after
@@ -2930,9 +2988,13 @@ partial def sourceSuperCalls (c method : String) (e : SExpr) : SExpr :=
           .app p f (args.map (sourceSuperCalls c method)) br] false)
     | _ => none) e
 
-/-- The uses `R.M` in `e`, calls and values: where, `R` and `M`. -/
-partial def memberUses (e : SExpr) : List (Pos × SExpr × String) :=
-  (match e with | .member q r m => [(q, r, m)] | _ => []) ++ e.children.flatMap memberUses
+/-- The uses `R.M` in `e`, calls and values: where the call is (none for a
+    value), where `R.M` is, `R` and `M`. -/
+partial def memberUses (e : SExpr) : List (Option Pos × Pos × SExpr × String) :=
+  match e with
+  | .app p (.member q r m) as _ => (some p, q, r, m) :: (r :: as).flatMap memberUses
+  | .member q r m => (none, q, r, m) :: e.children.flatMap memberUses
+  | _ => e.children.flatMap memberUses
 
 /-- Methods with several values (#283), as top-level functions that take
     `Self` explicitly, so that everything functions with several values
@@ -2952,13 +3014,33 @@ partial def memberUses (e : SExpr) : List (Pos × SExpr × String) :=
     no parameter or local. Class parameters become function parameters,
     followed by the method's own type parameters. Suspension remains
     unsupported. Selected families keep stubs in their classes for
-    ordinary signature/override validation. -/
-def methodFns (tops : List STop) (reserved : List String := []) (picks : List (Pos × String) := []) :
-    Except String (List STop × List (Pos × String)) := do
+    ordinary signature/override validation.
+    Each list of an overloaded method (#106) is a method of its own, as the
+    elaborator names it (`M$ovK`, `MethodOverloads`), a family's method
+    one of them; a call's, the one an earlier elaboration found it takes,
+    noted by the call's place (`overloadPicks`). The calls not picked yet
+    of a method with a list that has several values are returned too, for
+    the elaboration to note; they stay as written until then. -/
+def methodFns (tops : List STop) (reserved : List String := []) (picks : List (Pos × String) := [])
+    (overloadPicks : List (Pos × String) := []) :
+    Except String (List STop × List (Pos × String) × List (Pos × String)) := do
   let classes := tops.filterMap fun
     | .classDef _ n tps _ pa ii fs _ ms => some (n, (pa, ii, fs, ms, tps))
     | _ => none
-  if classes.isEmpty then return (tops, [])
+  if classes.isEmpty then return (tops, [], [])
+  -- (#106) a method declaration's name is its list's (`M$ovK`) if its name
+  -- is overloaded; a call's, the list picked for it, none before
+  let mo := MethodOverloads.of tops
+  let overloaded (m : String) : Bool := mo.lists.any (·.1.2 == m)
+  let slotOf (c : String) : STop → STop
+    | .fn p m ps mtps fx r b =>
+      let ctps := ((classes.lookup c).map (·.2.2.2.2)).getD []
+      .fn p (mo.name c m ctps mtps ps (fx.contains "override") none) ps mtps fx r b
+    | d => d
+  let slotAt (p : Pos) (m : String) : Option String :=
+    if overloaded m then (overloadPicks.lookup p).filter (· != "") else some m
+  -- (a method's name as written, for messages)
+  let written (n : String) : String := (n.splitOn "$ov").headD n
   let parentNames (pa : List STy) : List String := pa.filterMap fun | .name n => some n | .app n _ => some n | _ => none
   let rec ancestors (fuel : Nat) (c : String) : List String := match fuel with
     | 0 => [c]
@@ -2983,7 +3065,7 @@ def methodFns (tops : List STop) (reserved : List String := []) (picks : List (P
     | _ => []
   -- (every declaration of each method name: class, method)
   let decls : List (String × STop) := classes.flatMap fun (c, (_, _, _, ms, _)) => ms.filterMap fun
-    | m@(.fn _ n ..) => if n.startsWith "$" || n.startsWith "(" then none else some (c, m)
+    | m@(.fn _ n ..) => if n.startsWith "$" || n.startsWith "(" then none else some (c, slotOf c m)
     | _ => none
   let names : List String := (decls.filterMap fun | (_, .fn _ n ..) => some n | _ => none).eraseDups
   let declsOf (n : String) : List (String × STop) := decls.filter fun | (_, .fn _ x ..) => x == n | _ => false
@@ -3020,7 +3102,7 @@ def methodFns (tops : List STop) (reserved : List String := []) (picks : List (P
   -- (and, for a reason of one declaration's own, its class)
   let whyNot (n r : String) : Option (String × Option String) := Id.run do
     let rs := rootsOf n
-    if rs.isEmpty then return some (s!"no class declares {n} without <override>", none)
+    if rs.isEmpty then return some (s!"no class declares {written n} without <override>", none)
     -- (another declaration without <override> in `r`, above it or below
     -- it: an overload, or one missing its <override>, which the elaborator
     -- says)
@@ -3029,12 +3111,12 @@ def methodFns (tops : List STop) (reserved : List String := []) (picks : List (P
       let sig : STop → List STy := fun | .fn _ _ ps .. => ps.map (styNorm ·.ty) | _ => []
       let same := kin.all fun (_, m) => kin.all fun (_, m') =>
         (sig m).length == (sig m').length && ((sig m).zip (sig m')).all fun (x, y) => styEq x y
-      return some (if same then "" else s!"{n} is overloaded", none)
+      return some (if same then "" else s!"{written n} is overloaded", none)
     -- (a class below `r` and another root: a slot of each, #70)
     for (c, _) in classes do
       if (anc c).contains r then
         if let some r' := rs.find? fun x => x != r && (anc c).contains x then
-          return some (s!"{shown c} is below both {shown r} and {shown r'}, which each declare {n} without <override>", none)
+          return some (s!"{shown c} is below both {shown r} and {shown r'}, which each declare {written n} without <override>", none)
     let ds := famDecls n r
     for (c, m) in ds do
       let some _ := classes.lookup c | return some ("", none)
@@ -3050,6 +3132,7 @@ def methodFns (tops : List STop) (reserved : List String := []) (picks : List (P
         let rootDecides := (ds.find? (·.1 == r)).any fun | (_, .fn _ _ _ _ rfx _ _) => rfx.contains "decides" | _ => false
         if fx.contains "decides" != rootDecides then return some ("", none)
         if fx.contains "suspends" then return some ("is <suspends>", some c)
+    let n := written n
     if allFields.contains n || topNames.contains n || localBinders.contains n then
       return some (s!"{n} is also the name of a field, an enumerator, a member of a built-in type, a top-level name, a parameter or a local", none)
     return none
@@ -3096,7 +3179,7 @@ def methodFns (tops : List STop) (reserved : List String := []) (picks : List (P
     | some (_, ii, _, _, _) => ii
     | none => false
   let rw := fun fs trial inC e => rwFamCalls anc fs trial inC e isIfaceC
-    (fun c root => (rootView (classes.length + 1) c root).getD []) shared picks
+    (fun c root => (rootView (classes.length + 1) c root).getD []) shared picks slotAt
   -- (a method's body as the function's: its members qualified by `Self`,
   -- then `Self` the parameter `$Self`)
   let fnOf (fs : List (String × MFam)) (trial : Bool) (c : String) : STop → Option STop
@@ -3145,7 +3228,11 @@ def methodFns (tops : List STop) (reserved : List String := []) (picks : List (P
   -- (in the trial, calls of the families go through `$fam`)
   let trialFns := fams.flatMap fun (n, f) =>
     f.impls.filterMap fun c => ((declsOf n).find? (·.1 == c)).bind fun (_, m) => fnOf fams true c m
-  let mv := multiValued (multiCandidates (rwTops fams true ++ trialFns ++ famFns))
+  -- (and the calls of overloaded functions as `inlineMulti` takes them,
+  -- `overloadCandidates`)
+  let mv := multiValued (overloadCandidates (rwTops fams true ++ trialFns ++ famFns) overloadPicks fun _ => true)
+  let pickedAll : SExpr → SExpr :=
+    if overloadPicks.isEmpty then id else pickOverloads (overloadedFns tops) overloadPicks fun _ => true
   let famHas (n : String) (f : MFam) : Bool :=
     mv.contains (if f.direct then methodFnName f.root n else methodFnName f.root n ++ "$fam")
   -- (a method with several values whose declarations cannot become
@@ -3156,29 +3243,29 @@ def methodFns (tops : List STop) (reserved : List String := []) (picks : List (P
         if why != "" then
           let multi := (famDecls n r).find? fun (c, m) => match m with
             | .fn _ _ _ _ _ _ b =>
-              let b' := markCalls mv (rw fams true (some c) b)
+              let b' := markCalls mv (pickedAll (rw fams true (some c) b))
               let ss := stmtsOf b'
               hasChoice ss || ss.any liftsHere || anyE (fun | .ret _ (some e) => hasLiftable e | _ => false) b'
             | _ => false
           if let some (c1, .fn p1 ..) := multi then
             match atC with
-            | none => throw s!"{p1.show}: {shown c1}.{n} has several values, but {why}: such methods are not supported yet (#283)"
+            | none => throw s!"{p1.show}: {shown c1}.{written n} has several values, but {why}: such methods are not supported yet (#283)"
             | some c0 =>
               -- (said of the declaration it is about, #328's review)
               let p0 := (((declsOf n).find? (·.1 == c0)).bind fun | (_, .fn q ..) => some q | _ => none).getD p1
               if c0 == c1 then
-                throw s!"{p0.show}: {shown c0}.{n} has several values, but it {why}: such methods are not supported yet (#283)"
-              throw s!"{p0.show}: {shown c0}.{n} {why}, and {shown c1}.{n} has several values: such methods are not supported yet (#283)"
+                throw s!"{p0.show}: {shown c0}.{written n} has several values, but it {why}: such methods are not supported yet (#283)"
+              throw s!"{p0.show}: {shown c0}.{written n} {why}, and {shown c1}.{written n} has several values: such methods are not supported yet (#283)"
   let sel := fams.filter fun (n, f) => famHas n f
   -- (`(super:)M(…)` with nothing above implementing M: as the elaborator
   -- says, before the body leaves its class, #328's review)
   for (n, f) in sel do
     for (c, m) in famDecls n f.root do
       if let .fn q _ _ _ _ _ b := m then
-        if anyE (fun | .member _ (.ident _ "(super:)") x => x == n | _ => false) b &&
+        if anyE (fun | .app p (.member _ (.ident _ "(super:)") x) .. => slotAt p x == some n | _ => false) b &&
             (((anc c).drop 1).find? f.impls.contains).isNone then
-          throw s!"{q.show}: nothing above {shown c} implements '{n}'"
-  if sel.isEmpty then return (tops, [])
+          throw s!"{q.show}: nothing above {shown c} implements '{written n}'"
+  if sel.isEmpty then return (tops, [], [])
   -- (a parameter or local named like a member: refused, as in the class,
   -- since the body leaves it)
   for (n, f) in sel do
@@ -3186,7 +3273,7 @@ def methodFns (tops : List STop) (reserved : List String := []) (picks : List (P
       if let some (_, .fn p _ ps _ _ _ b) := (declsOf n).find? (·.1 == c) then
         let mem := members c
         if let some sp := ps.find? (mem.contains ·.name) then
-          throw s!"{p.show}: parameter '{sp.name}' of {n} is already a field or method of {c.replace "::" "."}; Verse does not allow shadowing"
+          throw s!"{p.show}: parameter '{sp.name}' of {written n} is already a field or method of {c.replace "::" "."}; Verse does not allow shadowing"
         if let some (x, q) := (localDecls b).find? (mem.contains ·.1) then
           throw s!"{q.show}: '{x}' is already a field or method of {c.replace "::" "."}; Verse does not allow shadowing"
   -- (the program with those methods out of their classes and their calls
@@ -3200,16 +3287,20 @@ def methodFns (tops : List STop) (reserved : List String := []) (picks : List (P
   -- abstract one implemented)
   let stub (q : Pos) : SExpr := .app q (.ident q "Err") [] false
   -- (one overridden nowhere, `direct`, is taken out, as there is nothing
-  -- to check it against, unless its name is `shared`: a use the
-  -- elaboration picks the family of then calls it as written, `famAt`)
+  -- to check it against, unless its name is `shared`, or overloaded: a use
+  -- the elaboration picks the family or list of then calls it as written,
+  -- and the elaborator names an overloaded one's lists as here)
+  let slotName (c : String) (d : STop) : String := match slotOf c d with
+    | .fn _ m .. => m
+    | _ => ""
   let out := (rwTops sel false).map fun
     | .classDef p n tps sp pa ii fs ov ms =>
       .classDef p n tps sp pa ii fs ov ((ms.filter fun
-          | .fn _ m .. => !(selAt n m).any (·.direct && !shared m)
+          | d@(.fn _ m ..) => let x := slotName n d; !(selAt n x).any (·.direct && !shared x && !mo.overloaded n m)
           | _ => true).map fun
         | d@(.fn p2 m ps tps2 fx r _) =>
           -- (an abstract one, or one with no body, as written)
-          if (selAt n m).isNone || fx.contains "$abstract" then d
+          if (selAt n (slotName n d)).isNone || fx.contains "$abstract" then d
           else .fn p2 m (ps.map fun sp => { sp with default := sp.default.map fun d => stub d.pos }) tps2 fx r (stub p2)
         | s => s)
     | t => t
@@ -3233,12 +3324,17 @@ def methodFns (tops : List STop) (reserved : List String := []) (picks : List (P
           | _ => false
         if anyE use b then
           let p := ((stmtsOf b).find? (anyE use)).map (·.pos) |>.getD b.pos
-          throw s!"{p.show}: {shown f.root}.{m} has several values, so it cannot be used as a function value (#235, #283)"
+          throw s!"{p.show}: {shown f.root}.{written m} has several values, so it cannot be used as a function value (#235, #283)"
   -- (#283) the uses `R.M` of a `shared` name of a selected family that
   -- only `R`'s class can tell, not picked yet: the elaboration notes the
   -- root that class is below, for the next round (`Requests.families`)
-  let sites := (tops.flatMap bodiesOf).flatMap fun (inC, b) => (memberUses b).filterMap fun (q, r, m) =>
-    let byClass := match r, inC with
+  -- (a use of an overloaded name, of the list picked for it)
+  let sites := (tops.flatMap bodiesOf).flatMap fun (inC, b) => (memberUses b).filterMap fun (cp, q, r, m) => do
+    let (within, m) := qualified m
+    let m ← match cp with
+      | some p => slotAt p m
+      | none => if overloaded m then none else some m
+    let byClass := within.isSome || match r, inC with
       | .ident _ "Self", some _ | .ident _ "(super:)", _ => true
       | _, _ => false
     if shared m && selNames.contains m && !byClass && (picks.lookup q).isNone then some (q, m) else none
@@ -3246,47 +3342,62 @@ def methodFns (tops : List STop) (reserved : List String := []) (picks : List (P
   for (q, r) in picks do
     if let some (_, r') := picks.find? fun (q', r') => q' == q && r' != r then
       throw s!"{q.show}: internal: a receiver of a class below {shown r} and of one below {shown r'} (#283)"
-  return (out ++ implFns sel, sites)
+  -- (#106) the calls of an overloaded method with a selected list whose
+  -- list is not picked yet, `R.M(args)` or, in a class's body, `M(args)`:
+  -- the elaboration notes the list each takes, for the next round
+  -- (`Requests.overloads`)
+  let methodsOf (c : String) : List String := (anc c).flatMap fun d => match classes.lookup d with
+    | some (_, _, _, ms, _) => ms.filterMap fun | .fn _ m .. => some m | _ => none
+    | none => []
+  let pending (m : String) : Bool := overloaded m && sel.any fun (x, _) => written x == m
+  let calls (inC : Option String) : SExpr → List (Pos × String) := fun b =>
+    ((memberUses b).filterMap fun (cp, _, _, m) => cp.map (·, (qualified m).2)) ++
+      match inC with
+      | some c => (callUses b).filter fun (_, m) => (methodsOf c).contains m
+      | none => []
+  let ovSites := (tops.flatMap bodiesOf).flatMap fun (inC, b) =>
+    (calls inC b).filter fun (p, m) => pending m && (overloadPicks.lookup p).isNone
+  return (out ++ implFns sel, sites, ovSites.eraseDups)
 
 /-- The functions of the program that have several values, inlined at their
     calls (see above); the program unchanged when there are none. Also
     whether some are taken lazily (#246), whose consumers need a class of
-    stack cells, and the uses of methods whose family an elaboration is
-    to pick (`methodFns`, by `picks`). -/
+    stack cells, the uses of methods whose family an elaboration is to pick
+    (`methodFns`, by `picks`), and the calls of overloaded functions whose
+    overload an elaboration is to pick (by `overloadPicks`). -/
 def inlineMulti (tops : List STop) (reserved : List String := []) (eager : List String := [])
-    (picks : List (Pos × String) := []) (lazy : List String := []) :
-    Except String (List STop × Bool × List (Pos × String)) := do
+    (picks : List (Pos × String) := []) (lazy : List String := []) (overloadPicks : List (Pos × String) := []) :
+    Except String (List STop × Bool × List (Pos × String) × List (Pos × String)) := do
   -- (methods with several values as functions first, #283; `reserved`:
   -- the members of built-in types and of the prelude)
-  let (tops, sites) ← methodFns tops reserved picks
-  -- (#283) overloaded functions: each overload a function of its own for
-  -- the analysis, `F$mvK` (K its place among them, as the elaborator
-  -- numbers them, `F$ovK`), and `F` one that calls them all, so a function
-  -- calling `F` has several values when they do
-  let fnNamesAll := tops.filterMap fun | .fn _ n .. => some n | _ => none
-  let ovNamesAll := (fnNamesAll.filter fun n =>
-    (fnNamesAll.filter (· == n)).length > 1 && !n.contains '.' && n != "Main").eraseDups
-  let ovOf (f : String) : List (String × Pos × MFn) := (tops.filterMap fun
-    | .fn p n ps tps fx r b => if n == f then some (p, (⟨p, ps, tps, fx, r, b⟩ : MFn)) else none
-    | _ => none).zipIdx.map fun ((p, m), k) => (s!"{f}$mv{k}", p, m)
-  let cands0 := multiCandidates tops
-  let fns : List (String × MFn) := cands0.filter (!ovNamesAll.contains ·.1) ++
-    ovNamesAll.flatMap (fun f => (ovOf f).filterMap fun (k, _, m) =>
-      if m.fx.contains "suspends" then none else some (k, m)) ++
-    ovNamesAll.filterMap fun f => (ovOf f).head?.map fun (_, p, _) =>
-      (f, (⟨p, [], [], [], .name "void", .tuple p ((ovOf f).map fun (k, _, _) => .app p (.ident p k) [] false)⟩ : MFn))
-  let mv := multiValued fns
-  if mv.isEmpty then return (tops, false, sites)
-  -- (none calling one of them, for now; an overload with one value is
-  -- called as written, `F` itself in `ovs`)
-  let ovMv := ovNamesAll.filter mv.contains
-  for f in ovMv do
-    for (_, p, m) in ovOf f do
-      if (namesUsed m.body).contains f then
-        throw s!"{p.show}: {shownFnName f} is overloaded with several values, and this overload calls {shownFnName f}: not supported yet (#283)"
-  let ovs : List (String × List String) := ovMv.map fun f =>
-    (f, (ovOf f).map fun (k, _, _) => if mv.contains k then k else f)
-  let rawMfs := fns.filter fun (n, _) => mv.contains n && !ovMv.contains n
+  let (tops, sites, methodOvSites) ← methodFns tops reserved picks overloadPicks
+  -- (#283) overloaded functions: each overload a function of its own,
+  -- `F$mvK`. A call of `F` is one of the overload the arguments' types
+  -- pick, which an earlier elaboration noted by its place (`overloadPicks`),
+  -- and as written, with one value, until then (`overloadCandidates`)
+  let ovNamesAll := overloadedFns tops
+  let ovOf := overloadsOf tops
+  -- (which have several values, with every picked call one of its
+  -- overload's function; then the functions with the calls of those that
+  -- have several values so, the others' calls as written)
+  let mv := multiValued (overloadCandidates tops overloadPicks fun _ => true)
+  let fns := overloadCandidates tops overloadPicks mv.contains
+  if mv.isEmpty then return (tops, false, sites, methodOvSites)
+  -- (the overloaded ones with an overload that has several values: their
+  -- calls not picked yet are noted by the elaboration, for the next one)
+  let ovMv := ovNamesAll.filter fun f => (ovOf f).any (mv.contains ·.1)
+  -- (one call takes one overload wherever its code is elaborated; not one
+  -- in the clauses after a choice whose alternatives' values are of
+  -- different types, copied for each, #335)
+  let ovShown (o : String) : String :=
+    let f := (o.splitOn "$ov").headD o
+    match ((overloadIndex? o).bind fun k => (ovOf f)[k]?) with
+    | some (_, _, m) => s!"{shownFnName f}({", ".intercalate (m.params.map (styShow ·.ty))})"
+    | none => shownFnName o
+  for (q, o) in overloadPicks do
+    if let some (_, o') := overloadPicks.find? fun (q', o') => q' == q && o' != o then
+      throw s!"{q.show}: this call takes the overload {ovShown o} in the clauses copied for one alternative of a choice and {ovShown o'} in those copied for another, and which overload with several values a call takes is decided before types: not supported yet (#283)"
+  let rawMfs := fns.filter (mv.contains ·.1)
   -- (#283) a struct's fields in declaration order, the order its
   -- constructions evaluate them in, for the lifter where a lazily taken
   -- group's code is normalized; not a generic one's, whose construction the
@@ -3396,13 +3507,6 @@ def inlineMulti (tops : List STop) (reserved : List String := []) (eager : List 
     for g in needAll do
       for h in (callees.lookup g).getD [] do
         if !needAll.contains h then needAll := needAll ++ [h]; grew := true
-  -- (#283) one computed eagerly cannot reach an overloaded one, whose
-  -- overload only types choose: refused, for now
-  for g in needAll do
-    if ovMv.contains g then
-      let caller := (needAll.find? fun h => ((callees.lookup h).getD []).contains g).getD g
-      let pos := ((mfs.lookup caller).map (·.pos)).getD (((ovOf g).head?.map (·.2.1)).getD default)
-      throw s!"{pos.show}: {shownFnName caller} has several values and is recursive, or called by a recursive one (so its values are computed at the call, F$all), and it calls {shownFnName g}, which is overloaded with several values: not supported yet (#283)"
   for (n, f) in rawMfs do
     -- Recursive cleanup still needs an invocation scope, including when
     -- normalization would remove its registration after an early return.
@@ -3450,8 +3554,9 @@ def inlineMulti (tops : List STop) (reserved : List String := []) (eager : List 
     let own := f.params.map (·.name) ++ localsOf f.body
     let us := (namesUsed f.body).eraseDups.filter fun u => u != n && !own.contains u && binders.contains u
     if us.isEmpty || (recs.contains n && !loops.contains n) then none else some (n, us)
-  let go (e : SExpr) : StateT Nat (Except String) SExpr := inlineCalls mfs e recs loops clash (groups := loopGroups) (ovs := ovs)
-    (fieldOrder := fieldOrder)
+  let picked : SExpr → SExpr := if overloadPicks.isEmpty then id else pickOverloads ovNamesAll overloadPicks mv.contains
+  let go (e : SExpr) : StateT Nat (Except String) SExpr :=
+    inlineCalls mfs (picked e) recs loops clash (groups := loopGroups) (fieldOrder := fieldOrder)
   let goPs (ps : List SParam) : StateT Nat (Except String) (List SParam) :=
     ps.mapM fun sp => do return { sp with default := ← sp.default.mapM go }
   let (tops', nextSite) ← (tops.filterMapM (m := StateT Nat (Except String)) fun t => do
@@ -3481,7 +3586,7 @@ def inlineMulti (tops : List STop) (reserved : List String := []) (eager : List 
     let f := { f with body := eraseReturnTails f.body }
     let namedCalls := (namesUsed f.body).any fun h =>
       ((mfs.lookup h).map fun callee => callee.params.any (·.named)).getD false
-    let body ← if namedCalls then inlineCalls mfs f.body needAll [] clash (groups := loopGroups) (ovs := ovs)
+    let body ← if namedCalls then inlineCalls mfs f.body needAll [] clash (groups := loopGroups) (fieldOrder := fieldOrder)
       else pure f.body
     let ps := f.params.map fun sp => { sp with named := false, default := none }
     return some (.fn f.pos s!"{g}$all" ps f.tparams (f.fx.filter (· != "decides"))
@@ -3490,6 +3595,10 @@ def inlineMulti (tops : List STop) (reserved : List String := []) (eager : List 
   -- its signature where its calls are inlined (effects, defaults)
   let ovKept : List STop := ovMv.flatMap fun f => (ovOf f).filterMap fun (k, p, m) =>
     if mv.contains k then some (.fn p k m.params m.tparams m.fx m.ret (checkBody m.body)) else none
-  return (tops' ++ ovKept ++ alls, !loops.isEmpty, sites)
+  -- (#283) the calls of those with an overload that has several values whose
+  -- overload is not picked yet: the elaboration notes it, for the next one
+  -- (`Requests.overloads`)
+  let ovSites := (bodies.flatMap callUses).filter fun (q, f) => ovMv.contains f && (overloadPicks.lookup q).isNone
+  return (tops' ++ ovKept ++ alls, !loops.isEmpty, sites, (ovSites ++ methodOvSites).eraseDups)
 
 end OpenVerse.Front.Choice

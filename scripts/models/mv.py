@@ -88,6 +88,11 @@ flags: heavy     (with bif: more of them, longer chains, longer conditions)
                   its bound choice: a named argument, a construction's field, a
                   comparison's later operand, a set's value, an if's branch, or's
                   right, #283; on with seq otherwise)
+       noovw     (no overloads Ow of one name with one value or several, OwOne calling
+                  the one with one value, OwR recursive, owc/owd's overloaded method Om,
+                  #283's overloads picked in rounds; on in half the programs otherwise)
+       noovm     (no second list, of one value, of a test's class's method with several
+                  values; on in half the programs with mvm and meth otherwise)
 """
 import copy
 import os
@@ -386,6 +391,30 @@ R14 = random.Random(seed * 1000003 + 375)
 # alternative is a value. A generator of its own decides, so seeds keep their other programs.
 R15 = random.Random(seed * 1000003 + 380)
 OVL = 'noovl' not in flags and R15.random() < 0.5
+# ---- #283's overloads picked in rounds: at times overloads of one name where some have one value
+# and others several, a function calling only one with one value, one calling its own name, a
+# recursive one calling an overload, and an overloaded method with several values:
+#   Ow(OA:int)<computes>:int = OA * 5                         (one value)
+#   Ow(OS:string)<computes>:int = OS.Length | 9               (called with a string literal)
+#   Ow(OA:int, OB:int)<computes>:int = Ow(OA) | Ow("{OB}")    (its own name: OA * 5, then the
+#                                                               length of OB written, its sign too, then 9)
+#   OwOne(OA:int)<computes>:int = Ow(OA) + 1                  (one value, so also outside a failure
+#                                                               context: Main prints one first)
+#   OwR(N:int)<computes><decides>:int = (N > 0; Ow(N, N) | OwR[N - 1])
+#                                                             (recursive, so computed at the call)
+#   owc := class: Om()<computes>:int = 3 | 6, Om(X:int)<computes>:int = X + 3
+#   owd := class(owc): Om<override>()<computes>:int = 103 | (super:)Om()
+# A call takes the overload its arguments fit; they run first, left to right. A generator of its
+# own decides, so seeds keep their other programs.
+R19 = random.Random(seed * 1000003 + 569)
+OVW = 'noovw' not in flags and R19.random() < 0.5
+# ---- the same (with mvm and meth; noovm turns it off): at times a test's class whose method with
+# several values its test calls (#310, MvT, or Mv when they share the name) also declares it with
+# another list, of one value, MvT(MpT:int, MqT:int):int = MpT * 10 + MqT, which the test calls at
+# times, bare or through Self. A call of either then takes its list first (then its family, when
+# the classes share the name). A generator of its own decides, so seeds keep their other programs.
+R20 = random.Random(seed * 1000003 + 5690)
+OVM = METH and MVM and 'noovm' not in flags and R20.random() < 0.5
 # ---- #383 (#283): at times a branch of a branchy if is a block whose bound value has several
 # values, a choice or a call with several values, and whose value uses the bound name:
 #   if (…) then block{ BT := (a | b); BT + e } else …
@@ -546,7 +575,8 @@ class Return(Exception):
 
 # the kinds of node whose insides are failure contexts of their own (or an
 # inlined function's arguments), where a lifted call's clauses are not the test's
-NESTED = ('not', 'logic', 'optor', 'orx', 'ifx', 'bif', 'mcall', 'choice', 'blk', 'cons', 'na', 'nam', 'mvm', 'rt', 'rt2', 'rt3', 'ovl')
+NESTED = ('not', 'logic', 'optor', 'orx', 'ifx', 'bif', 'mcall', 'choice', 'blk', 'cons', 'na', 'nam', 'mvm', 'rt', 'rt2', 'rt3', 'ovl',
+          'ow2')
 
 
 def lift_pos(x):
@@ -599,6 +629,11 @@ def mvm_fits():
 
 
 def gen_mvm(scope, vars_, d, ch):
+    if OVM and R20.random() < 0.35:
+        # (the method's other list, of one value: an ordinary call, after its arguments)
+        CTX['mvm_used'] = True
+        return ('mvm2', gen_e(scope, vars_, d + 1, ch), gen_e(scope, vars_, d + 1, ch), CTX['mvm'],
+                R20.choice(['bare', 'self']))
     NCH[0] += 1
     if MV:
         PROD[0] *= 2
@@ -654,6 +689,23 @@ def gen_e(scope, vars_, d, ch):
         if kind == 's':
             return ('ovl', 's', [], R15.choice(['', 'a', 'xyz', 'hello']))
         return ('ovl', kind, [gen_e(scope, vars_, d + 1, ch) for _ in range(kind)], None)
+    if (OVW and CTX['fmax'] is None and not CTX.get('inset') and not CTX.get('inbif')
+            and R19.random() < 0.1):
+        kind = R19.choice(['owone', 'ow1', 'om1', 'ows', 'ow2', 'om', 'owr'])
+        if kind in ('owone', 'ow1', 'om1'):
+            return (kind, gen_e(scope, vars_, d + 1, ch))     # (one value)
+        n = 6 if kind == 'owr' else 3
+        if ch and NCH[0] < 4 and not CTX['nochoice'] and (not MV or PROD[0] * n <= CTX['plim']):
+            NCH[0] += 1
+            if MV:
+                PROD[0] *= n
+            if kind == 'ows':
+                return ('ows', R19.choice(['', 'a', 'xyz']))
+            if kind == 'ow2':
+                return ('ow2', gen_e(scope, vars_, d + 1, ch), gen_e(scope, vars_, d + 1, ch))
+            if kind == 'om':
+                return ('om', R19.choice(['c', 'd']))
+            return ('owr', R19.randint(0, 2))
     k = R.random()
     if ch and NCH[0] < 4 and k < 0.22 and (not MV or PROD[0] * 3 <= CTX['plim']):
         NCH[0] += 1
@@ -1677,12 +1729,26 @@ def show(e):
         return f'{recv}Mv{"" if SHARED else e[2][0]}({show(e[1])})'
     if t == 'pmv':
         return f'pmv{{}}.Mv({show(e[1])})'
+    if t == 'mvm2':
+        return f'{"Self." if e[4] == "self" else ""}Mv{"" if SHARED else e[3][0]}({show(e[1])}, {show(e[2])})'
     if t == 'rt':
         return f'RT({show(e[1])})'
     if t in ('rt2', 'rt3'):
         return f'{t.upper()}({show(e[1])})'
     if t == 'ovl':
         return f'Ov("{e[3]}")' if e[1] == 's' else f'Ov({", ".join(show(x) for x in e[2])})'
+    if t in ('owone', 'ow1'):
+        return f'{"OwOne" if t == "owone" else "Ow"}({show(e[1])})'
+    if t == 'om1':
+        return f'owc{{}}.Om({show(e[1])})'
+    if t == 'ows':
+        return f'Ow("{e[1]}")'
+    if t == 'ow2':
+        return f'Ow({show(e[1])}, {show(e[2])})'
+    if t == 'om':
+        return f'ow{e[1]}{{}}.Om()'
+    if t == 'owr':
+        return f'OwR[{e[1]}]'
     if t in ('na', 'nam'):
         items = [f'?{n} := {show(x)}' for n, x in e[2]]
         items.insert(e[3], show(e[1]))
@@ -1825,8 +1891,10 @@ def failable(scope, vars_):
 
 def top_choice_e(e):
     t = e[0]
-    if t in ('choice', 'bif', 'mcall', 'rcall', 'gcall', 'nam', 'mvm', 'rt', 'rt2', 'rt3', 'ovl'):
+    if t in ('choice', 'bif', 'mcall', 'rcall', 'gcall', 'nam', 'mvm', 'rt', 'rt2', 'rt3', 'ovl', 'ows', 'ow2', 'om', 'owr'):
         return True
+    if t in ('owone', 'ow1', 'om1'):
+        return top_choice_e(e[1])
     if t in ('lit', 'ref', 'next', 'bprint', 'bset', 'optor', 'orx', 'ifx', 'obj', 'cnext', 'big', 'snx'):
         return False
     if t == 'cadd':
@@ -1835,7 +1903,7 @@ def top_choice_e(e):
         return top_choice_e(e[-1])
     if t == 'bin':
         return top_choice_e(e[2]) or top_choice_e(e[3])
-    if t in ('tw', 'twt', 'cons'):
+    if t in ('tw', 'twt', 'cons', 'mvm2'):
         return top_choice_e(e[1]) or top_choice_e(e[2])
     if t == 'blk':
         return top_choice_e(e[2]) or top_choice_e(e[3])
@@ -2036,6 +2104,9 @@ def ev(e, st, k, mode):
         return ev(e[1], st, krt2, mode)
     if t == 'pmv':
         return ev(e[1], st, lambda v, s: k(chks(v * 1000, s), s), mode)
+    if t == 'mvm2':
+        return ev(e[1], st, lambda a, s0: ev(e[2], s0, lambda b, s1: k(chks(chks(a * 10, s1) + b, s1), s1), mode),
+                  mode)
     if t == 'mvm':
         def kmvm(v, s0):
             def alt1(s1, k2):
@@ -2068,6 +2139,36 @@ def ev(e, st, k, mode):
                 alts = [lambda s1, k2: k2(chks(got[0] - got[1], s1), s1), lambda s1, k2: k2(chks(got[1] * 3, s1), s1)]
             return choice_point(alts, s0, k, mode)
         return kargs(0, [], st)
+    if t in ('owone', 'ow1', 'om1'):
+        # (an overload with one value: an ordinary call, after its argument)
+        def kow(v, s):
+            if t == 'om1':
+                return k(chks(v + 3, s), s)
+            w = chks(v * 5, s)
+            return k(chks(w + 1, s) if t == 'owone' else w, s)
+        return ev(e[1], st, kow, mode)
+    if t == 'ows':
+        return choice_point([lambda s1, k2: k2(len(e[1]), s1), lambda s1, k2: k2(9, s1)], st, k, mode)
+    if t == 'ow2':
+        # (its arguments, then Ow(OA) | Ow("{OB}"): OA * 5, then OB's length written, then 9)
+        def kow2(a, s0):
+            def kb(b, s1):
+                return choice_point([lambda s2, k2: k2(chks(a * 5, s2), s2),
+                                     lambda s2, k2: choice_point([lambda s3, k3: k3(len(str(b)), s3),
+                                                                  lambda s3, k3: k3(9, s3)], s2, k2, mode)],
+                                    s1, k, mode)
+            return ev(e[2], s0, kb, mode)
+        return ev(e[1], st, kow2, mode)
+    if t == 'om':
+        base = [lambda s1, k2: k2(3, s1), lambda s1, k2: k2(6, s1)]
+        if e[1] == 'c':
+            return choice_point(base, st, k, mode)
+        return choice_point([lambda s1, k2: k2(103, s1), lambda s1, k2: choice_point(base, s1, k2, mode)],
+                            st, k, mode)
+    if t == 'owr':
+        # (OwR[N]: Ow(N, N)'s values, then OwR[N - 1]'s; none from 0)
+        vs = [x for n in range(e[1], 0, -1) for x in (n * 5, len(str(n)), 9)]
+        return choice_point([(lambda x: lambda s1, k2: k2(x, s1))(x) for x in vs], st, k, mode)
     if t == 'nam':
         def knam(vu, s0):
             def finish(nv, s):
@@ -2743,6 +2844,8 @@ for ti in range(NT):
             M += ["    Nx<override>()<transacts>:int =", "        set Cn += 2", "        Cn - 2"]
         if CTX.get('mvm_used'):
             M.append(f"    Hp{ti}(Hq{ti}:int):int = Hq{ti} * 2")
+            if OVM:
+                M.append(f"    {mv}(Mp{ti}:int, Mq{ti}:int):int = Mp{ti} * 10 + Mq{ti}")
             if not dflt:
                 M.append(f"    {mv}{'<override>' if ifc else ''}(Mp{ti}:int):int = Mp{ti} + Nx() | Mp{ti} + Hp{ti}(N{ti}a)")
         M.append("    Run():void =")
@@ -2908,6 +3011,17 @@ if SHARED:
 if OVL:
     PRE += ('Ov(OA:int):int = OA + 1 | OA * 2\nOv(OA:int, OB:int):int = OA - OB | OB * 3\n'
             'Ov(OS:string):int = OS.Length | 0\n')
+if OVW:
+    PRE += ('Ow(OA:int)<computes>:int = OA * 5\nOw(OS:string)<computes>:int = OS.Length | 9\n'
+            'Ow(OA:int, OB:int)<computes>:int = Ow(OA) | Ow("{OB}")\nOwOne(OA:int)<computes>:int = Ow(OA) + 1\n'
+            'OwR(N:int)<computes><decides>:int =\n    N > 0\n    Ow(N, N) | OwR[N - 1]\n'
+            'owc := class:\n    Om()<computes>:int = 3 | 6\n    Om(X:int)<computes>:int = X + 3\n'
+            'owd := class(owc):\n    Om<override>()<computes>:int = 103 | (super:)Om()\n')
+    # (Main first prints a call of the function that reaches only an overload with one value,
+    # outside a failure context)
+    OWK = R19.randint(-3, 12)
+    src_main.insert(1, f'    Print("ow {{OwOne({OWK})}}")')
+    out.insert(0, f"ow {OWK * 5 + 1}")
 if NA:
     PRE += 'NA(A:int, ?P:int = Tell("dp", A), ?Q:int = P + 1):int = A * 100 + P * 10 + Q\n'
 if CB:

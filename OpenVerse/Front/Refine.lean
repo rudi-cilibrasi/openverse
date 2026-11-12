@@ -43,7 +43,8 @@ structure Storage where
 
 /-- A refining cast's branch, lifted into a generic function (#243). -/
 structure Lift where
-  /-- The `if`'s position and the name its condition binds: the key. -/
+  /-- The `if`'s position and the name its condition binds: with `tag`, the
+      key. -/
   pos : Pos
   bound : String
   /-- The class cast to: it and the classes below it get pins in Verse
@@ -72,9 +73,11 @@ structure Lift where
   /-- The branch, when it is not taken from the source as written: in a
       method, with the members of `Self` it names bare made `Self.member`. -/
   body : Option SExpr := none
-  /-- In a class's copy of an interface's default (#53): `$in` and the
-      class, as the copies and the interface's own default share the
-      source's places (`Ctx.liftTag`); such a lift always has its `body`. -/
+  /-- What tells it apart from the other lifts of its place, the rest of its
+      key (`refineTagOf`): the continuation it was moved into, a class's
+      copy of an interface's default (#53: `$in` and the class), and in a
+      source context, what its function depends on there. A lift with a tag
+      always has its `body`, which the source's places do not find. -/
   tag : String := ""
   /-- Refinements moved into an immediate continuation use its local
       copies, rather than the source frame's capture metadata. -/
@@ -260,6 +263,18 @@ partial def castsIn (isClass : String → Bool) (c : SExpr) : List Pos :=
   | .app .. => if (castClause? c).isSome then inner c else go c
   | e => go e
 
+/-- The places of the casts to a class in an expression that is not a
+    clause of its failure context but is evaluated in it (an `if`'s branch):
+    it, or one inside it that the lifting of choices reaches. As the block
+    of the expression, each is a clause of that block, or lifted to be one
+    (`elabSeqIn`), and runs only where the expression does. -/
+def castsOf (isClass : String → Bool) (e : SExpr) : List Pos :=
+  match e with
+  | .block .. => []
+  | .app q (.ident _ T) [_] true | .decl _ _ none false (.app q (.ident _ T) [_] true) =>
+    (if isClass T then [q] else []) ++ castsIn isClass e
+  | _ => castsIn isClass e
+
 /-- Clause `c` with the cast at `q` inside it marked to be a clause of its
     own (`$liftCast`), which the lifting of choices then makes it
     (`Choice.liftE`): the operands evaluated before it bound to names first,
@@ -296,9 +311,10 @@ def isCastObj (n : String) : Bool := n.startsWith "$castObj"
     as a sequence's cast does (`elabSeqIn`), so that their failure, or its
     own, is the clauses': the names they bind that later code uses are its
     value, bound again after it. `after` casts the object again, `if (D :=
-    T[X']) then after`, when it uses `D` or a name bound after it (as does a
-    later generator's source that uses `D`), and so
-    each cast after it to a class (`isClass`): each succeeds as the first one
+    T[X']) then after`, when it uses `D` or a name bound after it, as does a
+    clause past the generator that uses `D`, where it uses it (a choice in
+    it lifted out first, `lift`, and each alternative cast again); and so `after`
+    casts each cast after it to a class (`isClass`): each succeeds as the first one
     did (an object's class does not change), so that `after` is typed under
     their refinements too. A later cast's object is a local fixed before the
     clauses (`isFixed`), or else one computed among them, bound to a name
@@ -310,28 +326,47 @@ def isCastObj (n : String) : Bool := n.startsWith "$castObj"
 def castRestClauses (pre : List SExpr) (cast : Pos × String × String × SExpr) (opens : Bool)
     (rest : List SExpr) (after : SExpr) (isGen : SExpr → Bool := fun _ => false)
     (isClass : String → Bool := fun _ => true) (isFixed : String → Bool := fun _ => false)
-    (computed : Bool := true) : Except String (List SExpr × SExpr × Bool) := do
+    (computed : Bool := true) (lift : SExpr → List SExpr := fun c => [c]) :
+    Except String (List SExpr × SExpr × Bool) := do
   let (p, d, T, x) := cast
   let branch0 := rest.takeWhile (!isGen ·)
   let later := rest.dropWhile (!isGen ·)
   let uses (e : SExpr) : Bool := (Choice.namesUsed e).contains d
-  -- (past the next generator, only a generator's source may use `D`, which
-  -- casts the object again, as `after` does: a filter there would need
-  -- the refinement as a clause, where only this cast's clause has it)
-  if later.any fun | .gen .. => false | c => uses c then
-    throw s!"a clause after it, past a generator or a choice, uses {d}"
+  -- (past the next generator, a clause that uses `D` casts the object again
+  -- where it uses it, as `after` does: a generator's source, a range's
+  -- bounds, a binding's value, so the clause still binds its names, or
+  -- else the clause itself)
   let laterUses := later.any uses
-  -- (and the names those generators bind, of a type the refinement gives)
-  let laterNames := later.flatMap fun | .gen _ y i src => if uses src then y :: i.toList else [] | _ => []
-  let usedLater := (Choice.namesUsed (.block p later)).filter (· != d)
-  let usedAfter := Choice.namesUsed after
   let obj := castObj
   let castOf (q : Pos) (e T : String) (y : SExpr) : SExpr := .decl q e none false (.app q (.ident q T) [y] true)
+  -- (at the clause's place, or the alternative's)
+  let wrap (q : Pos) (e : SExpr) : SExpr := if !uses e then e else
+    .ite q [made (castOf q d T (.ident q (obj p)))] e (some (.app q (.ident q "Err") [] false))
+  -- (a choice's alternatives each, so it stays a choice of the clause's)
+  let again (q : Pos) (e : SExpr) : SExpr := match Choice.alts? e with
+    | some as => if uses e then Choice.mk e.pos (as.map fun a => wrap a.pos a) else e
+    | none => wrap q e
+  -- (a choice inside such a clause lifted out of it first, `lift`, so it
+  -- is a choice of the clauses, its alternatives each cast again)
+  let later := later.flatMap fun c => if uses c then lift c else [c]
+  -- (but not one in a branch of an `if` that takes a choice's values, which
+  -- the `if` keeps: its condition decides which branch's values there are)
+  if later.any fun c => uses c && Choice.anyE (fun
+      | .app _ (.ident _ n) _ false => n == "$branchChoice" || n == "$branchChoiceAt"
+      | _ => false) c then
+    throw s!"a clause after it, past a generator, uses {d} in an if with a choice in its branches"
   let later := later.map fun
-    | .gen q y i src =>
-      if uses src then .gen q y i (.ite q [made (castOf q d T (.ident q (obj p)))] src
-        (some (.app q (.ident q "Err") [] false))) else .gen q y i src
-    | c => c
+    | .gen q y i src => .gen q y i (again q src)
+    | .decl q n t v (.range q' a b) => .decl q n t v (.range q' (wrap a.pos a) (wrap b.pos b))
+    | .decl q n t v e => .decl q n t v (again q e)
+    | c => again c.pos c
+  -- (and the names those clauses bind, of types the refinement gives)
+  let laterNames := later.flatMap fun
+    | .gen _ y i src => if uses src then y :: i.toList else []
+    | .decl _ n _ _ e => if uses e then [n] else []
+    | _ => []
+  let usedLater := (Choice.namesUsed (.block p later)).filter (· != d)
+  let usedAfter := Choice.namesUsed after
   -- (the later casts' objects to cast again, and the names whose values may
   -- name opened type arguments: what casts bind, and what uses those)
   let (objs, branch, _) := branch0.foldl (fun (objs, cs, tainted) c => match c with

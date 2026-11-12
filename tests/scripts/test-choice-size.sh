@@ -8,6 +8,18 @@ tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
 limit="${CHOICE_SIZE_TIMEOUT:-120}"
 # Keep modes sorted on separate lines so independent additions merge cleanly.
 kinds=(
+  methodinstance-family-first
+  methodinstance-family-for
+  methodinstance-family-waiting
+  methodinstance-packed-first
+  methodinstance-packed-for
+  methodinstance-packed-waiting
+  methodinstance-default-first
+  methodinstance-default-for
+  methodinstance-default-waiting
+  methodinstance-partial-first
+  methodinstance-partial-for
+  methodinstance-partial-waiting
   callpacking-tuplevar-first
   callpacking-tuplevar-for
   callpacking-tuplevar-waiting
@@ -508,6 +520,13 @@ kinds=(
   mutual-generic-alt-first
   mutual-generic-first
   mutual-generic-for
+  nested-casts-body
+  nested-casts-for-body
+  nested-casts-for-clauses
+  nested-casts-for-return
+  nested-casts-for-state
+  nested-casts-for-value
+  nested-casts-suspends
   open-function-first
   open-function-for
   open-tuple-first
@@ -591,6 +610,34 @@ for kind in "${kinds[@]}"; do
     python3 - "$kind" "$count" >"$tmp/p.verse" <<'PY'
 import sys
 kind, count = sys.argv[1], int(sys.argv[2])
+if kind.startswith('methodinstance-'):
+    _, shape, mode = kind.split('-')
+    waiting = mode == 'waiting'
+    effects = '<suspends>' if waiting else ''
+    print('Dup(X:t where t:type)<computes>:t=X|X')
+    family = shape in ('family', 'packed')
+    if family:
+        for name in ['foo', 'bar']:
+            print(name+'(t:type):=class<computes>{V:t}')
+    for cls, result, default in [('ca','foo',1),('cb','bar',2)]:
+        params = 'X:u'+(',Y:int' if shape == 'packed' else '')+' where u:type' if family else ('I:u,' if shape == 'partial' else '')+'?X:u='+str(default)+' where u:type'
+        ret = result+'(u)' if family else 'u'
+        value = result+'(u){V:=X}' if family else 'X'
+        print(cls+':=class{M('+params+')<computes>'+effects+':'+ret+'=block{'+('Sleep(0.0);' if waiting else '')+value+'}}')
+    clauses = ','.join(f'A{i}:=(Dup(ca{{}})|Dup(cb{{}}))' for i in range(count))
+    statements = [f'B{i}:=A{i}.M('+('Packed' if shape == 'packed' else '' if shape == 'default' else '7')+')' for i in range(count)]
+    terms = [f'B{i}'+('.V' if family else '') for i in range(count)]
+    value = 'block{'+';'.join(statements+['+'.join(terms)])+'}'
+    print('Run()'+effects+':int=')
+    if shape == 'packed':
+        print('    Packed:tuple(int,int)=(7,2)')
+    if mode == 'first':
+        print('    if('+clauses+',V:='+value+',V>0)then V else -1')
+    else:
+        print('    Rows:=for('+clauses+'):'+value)
+        print('    Rows.Length')
+    print('Main()'+effects+':void=Print("{Run()}")')
+    sys.exit(0)
 if kind.startswith('callpacking-'):
     rest=kind.removeprefix('callpacking-')
     shape,mode=rest.rsplit('-',1)
@@ -763,6 +810,47 @@ if kind.startswith('castclause-'):
         call = f'Run(H, {ys})'
     print('Main()<transacts>:void =\n    H := cell{}\n    Y:pair(int, int) = dup(int){A := 1, B := 2}')
     print(f'    Print("{{{call}}} {{H.N}}")')
+    sys.exit(0)
+if kind.startswith('nested-casts-'):
+    # (#243) refining casts each in the branch of the one before: each one's
+    # lift is made once, also in a for's body or clauses (a source context,
+    # whose lifts' tags depend on what their branches use)
+    place = kind.removeprefix('nested-casts-')
+    n = count
+    print('pair(a:type, b:type) := class:\n    A:a\n    B:b')
+    print('dup(t:type) := class(pair(t, t)):\n    C:int = 4')
+    tps = ', '.join(f'a{i}:type, b{i}:type' for i in range(n))
+    ps = ', '.join(f'P{i}:pair(a{i}, b{i})' for i in range(n))
+    total = ' + '.join(f'D{i}.C' for i in range(n))
+    # (the casts as statements, the innermost doing `leaf`; with `state`,
+    # each adds to a var first, and has no else)
+    def nest(i, ind, leaf, state=False):
+        sp = '    ' * ind
+        if i == n: return f'{sp}{leaf}\n'
+        if state: return f'{sp}if (D{i} := dup[P{i}]):\n{sp}    set Total += D{i}.C\n{nest(i + 1, ind + 1, leaf, state)}'
+        return f'{sp}if (D{i} := dup[P{i}]):\n{nest(i + 1, ind + 1, leaf)}{sp}else:\n{sp}    {i}\n'
+    def value(i):
+        return f'{total} + I' if i == n else f'(if (D{i} := dup[P{i}]) then {value(i + 1)} else {i})'
+    first = '\n    if (X := R[0]) then X else -1'
+    effects = '<suspends>' if place == 'suspends' else ''
+    head = f'Run({ps} where {tps}){effects}:int =\n'
+    if place == 'body':
+        print(head + nest(0, 1, total), end='')
+    elif place == 'for-body':
+        print(head + '    R := for (I := 1..2):\n' + nest(0, 2, f'{total} + I') + first.strip('\n'))
+    elif place == 'for-value':
+        print(head + f'    R := for (I := 1..2):\n        {value(0)}' + first)
+    elif place == 'for-clauses':
+        casts = ', '.join(f'D{i} := dup[P{i}]' for i in range(n))
+        print(head + f'    R := for (I := 1..2, {casts}):\n        {total} + I' + first)
+    else:
+        leaf = {'for-state': 'set Total += I', 'for-return': 'if (I > 1):\n' + '    ' * (n + 3) + 'return Total',
+                'suspends': 'Sleep(0.0)'}[place]
+        print(head + '    var Total:int = 0\n    for (I := 1..2):\n' + nest(0, 2, leaf, state=True) + '    Total')
+    # (all of the casts succeed; then the last one fails)
+    args = lambda last: ', '.join(['Y'] * (n - 1) + [last])
+    print(f'Main(){effects}:void =\n    Y:pair(int, int) = dup(int){{A := 1, B := 2}}\n    Z:pair(int, int) = pair(int, int){{A := 1, B := 2}}')
+    print(f'    Print("{{Run({args("Y")})}} {{Run({args("Z")})}}")')
     sys.exit(0)
 if kind.startswith('indexwrite-'):
     _, shape, mode = kind.split('-')
@@ -2164,6 +2252,20 @@ PY
       diff -u "$tmp/expected" "$tmp/lean.out"
       diff -u "$tmp/expected" "$tmp/c.out"
     fi
+    if [[ $kind == nested-casts-* && $count == 4 ]]; then
+      case $kind in
+        nested-casts-body) expected='16 3' ;;
+        nested-casts-for-body|nested-casts-for-value) expected='17 3' ;;
+        nested-casts-for-clauses) expected='17 -1' ;;
+        nested-casts-for-state) expected='35 24' ;;
+        nested-casts-for-return|nested-casts-suspends) expected='32 24' ;;
+      esac
+      printf '%s\n' "$expected" >"$tmp/expected"
+      timeout "$limit" "$root/.lake/build/bin/openverse" run "$tmp/p.verse" "${compat[@]}" >"$tmp/lean.out"
+      timeout "$limit" "$root/runtime/build/cverse" "$tmp/p.vbc" >"$tmp/c.out"
+      diff -u "$tmp/expected" "$tmp/lean.out"
+      diff -u "$tmp/expected" "$tmp/c.out"
+    fi
     if [[ $kind == alias-* && $count == 4 ]]; then
       expected=256
       [[ $kind == *-first ]] && expected=8
@@ -2181,6 +2283,18 @@ PY
       fi
       printf '%s\n' "$expected" >"$tmp/expected"
       timeout "$limit" "$root/.lake/build/bin/openverse" run "$tmp/p.verse" "${compat[@]}" >"$tmp/lean.out"
+      timeout "$limit" "$root/runtime/build/cverse" "$tmp/p.vbc" >"$tmp/c.out"
+      diff -u "$tmp/expected" "$tmp/lean.out"
+      diff -u "$tmp/expected" "$tmp/c.out"
+    fi
+    if [[ $kind == methodinstance-* && $count == 4 ]]; then
+      expected=256
+      if [[ $kind == *-first ]]; then
+        expected=4
+        [[ $kind == methodinstance-family-* || $kind == methodinstance-packed-* ]] && expected=28
+      fi
+      printf '%s\n' "$expected" >"$tmp/expected"
+      timeout "$limit" "$root/.lake/build/bin/openverse" run "$tmp/p.verse" >"$tmp/lean.out"
       timeout "$limit" "$root/runtime/build/cverse" "$tmp/p.vbc" >"$tmp/c.out"
       diff -u "$tmp/expected" "$tmp/lean.out"
       diff -u "$tmp/expected" "$tmp/c.out"

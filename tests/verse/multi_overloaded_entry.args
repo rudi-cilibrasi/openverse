@@ -1,0 +1,2 @@
+do
+for (X := Two(5), Y := Two("ab")) { X + Y }.Length

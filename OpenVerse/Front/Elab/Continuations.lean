@@ -223,14 +223,6 @@ def sourceContextKey (ctx : Ctx) : String :=
   source ++ (if ctx.choiceCoercions.isEmpty then "" else "_conversions:" ++
     reprStr (ctx.choiceCoercions.map fun (dictionary, source, target) => (dictionary.name, source, target)))
 
-/-- Refined helpers keep their source copy tag and context identity separate. -/
-def refineTagOf (ctx : Ctx) : String :=
-  let source := sourceContextKey ctx
-  let inputs := ctx.locals.filterMap fun l =>
-    if (Choice.shownName l.name).startsWith "$" then none else some (l.name, l.ty, l.mutable)
-  let typing := reprStr (ctx.types.tvars, inputs, ctx.retTy, ctx.inlineScopes)
-  ctx.refineScope ++ ctx.liftTag ++ (if source.isEmpty then "" else s!"$source{(source ++ typing).hash}")
-
 def firstReturns (rest : List SExpr) : Bool :=
   (Refine.findPart (fun | .ret .. => true | _ => false) false (.block { line := 0, col := 0 } rest)).isSome
 
@@ -608,6 +600,55 @@ partial def selfQualify (ctx : Ctx) (c : String) (e : SExpr) : SExpr :=
     | .ident p n => if free n && (isField n || isMethod n) then some (.member p (.ident p "Self") n) else none
     | _ => none) e
 
+/-- (#243) The tag of a refining cast's lift, after its place and bound
+    name in its key (`Refine.keyOf`) and in its function's name: of the `if`
+    that casts `x`, with branch `body`, `else` `els` and expected type
+    `exp`. A lift is one function, made from the branch as typed where the
+    cast first asks for it, and each elaboration of the cast with the same
+    key calls it. The tag tells apart the lifts of one place:
+    - `refineScope`: the immediate continuation the cast was moved into
+      (#453), whose own copies of the locals the branch captures have their
+      own storage.
+    - `liftTag`: a class's copy of an interface's default (#53).
+    - In a source context (`sourceContextKey`, #497: a `defer:`, a
+      constructor, a class's `block:`, a default, a concurrent arm, a loop's
+      body, choice conversions), whose code may be elaborated in several
+      typing contexts (a field's default at each construction that omits it,
+      a parameter's at each call): a hash of that context and of what the
+      function depends on in it, and of nothing else in scope, so that
+      evaluations that differ only in what the cast does not use share one
+      lift. That is the locals the `if` uses (and `Self`, for the members it
+      names bare), each with its type, mutability and frame storage; how the
+      type variables their types mention are bound; the types the type names
+      written in it stand for; the type expected of it (a field's declared
+      type at a construction, say), which its function returns; in a
+      `<suspends>` function, all the type variables (its lifts' type
+      parameters, `available` in `elabRefinedIfWith`); the inlined bodies it
+      is in; and the source's return type, when the branch returns.
+    Such a tag may differ between the trial of an enclosing cast's branch
+    (`Ctx.inRefinedTrial`) and the function made from that branch, which has
+    the trial's captured `var`s as values and its result type as the type
+    expected of the branch's value, so the cast asks for its lift from the
+    function only: asked for from both, each level of nesting lifted the
+    casts inside it once more, the earlier copies never called. -/
+def refineTagOf (ctx : Ctx) (x body : SExpr) (els : Option SExpr) (exp : Option Ty) : String :=
+  let source := sourceContextKey ctx
+  if source.isEmpty then ctx.refineScope ++ ctx.liftTag else
+  let ctx := ctx.choiceCoercionScope
+  let cast := SExpr.block x.pos (x :: body :: els.toList)
+  let cast := match ctx.selfClass with
+    | some c => selfQualify ctx c cast
+    | none => cast
+  let inputs := (Choice.namesUsed cast).filterMap fun n => (ctx.lookup n).map fun l =>
+    (n, l.ty, l.mutable, l.storage.map fun s => (s.frame, s.name, s.args))
+  let vars := (Ty.mergeParamBounds (inputs.flatMap (·.2.1.paramsC))).map fun (v, _) =>
+    (v, ctx.types.tvars.lookup v)
+  let written := (Refine.typeNames cast ++ Choice.namesUsed cast).filterMap (ctx.types.tvars.lookup ·)
+  let available := if ctx.suspends then Ty.mergeParamBounds ((ctx.types.tvars.map (·.2)).flatMap Ty.paramsC) else []
+  let uses := reprStr (inputs, vars, written, exp.map (·.subst ctx.types.tvars), available, ctx.inlineScopes) ++
+    firstReturnKey ctx [body]
+  ctx.refineScope ++ ctx.liftTag ++ s!"$source{(source ++ uses).hash}"
+
 /-- A continuation keeps the parameters of its inputs, results and written
     types. A parameter not determined by its inputs takes an explicit witness,
     so a type used only by a local annotation is still inferred at the call. -/
@@ -943,7 +984,7 @@ partial def forBodySafe (ctx : Ctx) (body : SExpr) : Bool :=
   -- generic/default argument bindings) inside the body. Their ownership is
   -- checked when that consumer elaborates; they do not escape the helper.
   let safeMarkers := ["$sourceSuper", "$methodMiss", "$methodCast", "$methodCase", "$methodType", "$methodParams", "$inlineScope", "$inlineScopeEnd", "$inline", "$choice", "$excl", "$alt", "$firstP", "$first", "$each", "$noLift", "$fxOf",
-    "$forReturns", "$forReturnBody", "$forClauseExits", "$choiceOperation", "$choiceGenericOperation", "$choiceCoercions", "$choiceDictionary", "$defer", "$deferExits", "$loop", "$rec", "$recTo", "$group", "$member", "$returnTail",
+    "$forReturns", "$forReturnBody", "$forClauseExits", "$choiceOperation", "$choiceGenericOperation", "$choiceFixedOperation", "$choiceCoercions", "$choiceDictionary", "$defer", "$deferExits", "$loop", "$rec", "$recTo", "$group", "$member", "$returnTail",
     "$tparams", "$params", "$defaults", "$paramDefault", "$freeNames", "$declNames", "$callArgs", "$callSingleton", "$then"]
   let rec blocked (e : SExpr) : Bool :=
     match e with
@@ -1481,6 +1522,8 @@ structure ChoiceOperationCase where
   specs : List String
   methodVars : List (String × Bool) := []
   omittedDefaults : Bool := false
+  instanceDefaults : Bool := false
+  fixedInstance : Option (String × List Ty) := none
   indexedDecides : Bool := true
 
 def choiceOrderedArguments (args : List SExpr) : List SExpr :=
@@ -1569,6 +1612,7 @@ partial def choiceOperationContexts (ctx : Ctx) (body : SExpr) : List (SExpr × 
 def choiceGenericOperation (ctx : Ctx) (stem : String) (receiver : SExpr) (receiverTy : Ty) (ops : ChoiceOperations)
     (call : SExpr) (arguments : List SExpr) (cases : List ChoiceOperationCase) : Option ChoiceOperations := do
   let .app p (.member _ _ method) _ bracket := call | none
+  if cases.any (·.instanceDefaults) then none else do
   let borrows := cases.any (·.omittedDefaults)
   let count := (cases.head?.map (·.methodVars.length)).getD 0
   if count == 0 || cases.any (·.methodVars.length != count) then none else do
@@ -1783,6 +1827,69 @@ def choicePathOperation (ctx : Ctx) (stem : String) (ops0 : ChoiceOperations)
     knownTypes := ops.knownTypes ++ [(call, leafTy)],
     replacements := ops.replacements ++ [(call, invocation)] }
 
+/-- A computed tuple passed to several positional parameters is one source
+    operand. Instance probes need only typed projections of its value; the
+    real dictionary invocation retains that operand and evaluates it once. -/
+def choiceInstanceArguments (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx)
+    (p : Pos) (sig : Sig) (arguments : List SExpr) : EM (Ctx × List SExpr) := do
+  let arguments := packCallArgs p sig arguments
+  let named : SExpr → Bool := fun | .decl _ n .. => n.startsWith "?" | _ => false
+  let positional := arguments.filter (!named ·)
+  let off := if sig.hasReceiver then 1 else 0
+  let count := sig.params.length - sig.named.length - off
+  if count <= 1 || positional.length != off + 1 then return (ctx, arguments)
+  let operand := positional[off]!
+  let value ← elabE ctx operand none
+  let .tup types := value.ty | eerr p "operation arguments are not a tuple"
+  if types.length != count then eerr p "operation argument tuple has the wrong length"
+  let slot ← fresh value.ty
+  let name := "$choiceOperationTuple"
+  let c := { ctx with locals := { name, slot, ty := value.ty, mutable := false } :: ctx.locals }
+  let fields := (List.range count).map fun i =>
+    SExpr.app p (.ident p name) [.int p (Int.ofNat i)] false
+  return (c, positional.take off ++ fields ++ arguments.filter named)
+
+/-- Specialize only an instance established by the ordinary argument/default
+    binder. Missing later-generator locals leave the generic fallback intact.
+    The emitted marker rechecks result-directed inference at the real call. -/
+def choiceFixedOperationCase (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx)
+    (ops : ChoiceOperations) (aliases : List (String × Ty)) (instanceTypes : List (String × Ty))
+    (p : Pos) (method : String) (arguments : List SExpr) (row : ChoiceOperationCase) : EM (Option ChoiceOperationCase) := do
+  let saved ← get
+  let result ← tryCatch (do
+    let .struct cls _ := row.receiver | pure none
+    let some owner := ctx.methodDecl? cls method | pure none
+    let implementation := s!"{owner}.{method}"
+    let some sig := ctx.sig? implementation | pure none
+    let classVars := (ctx.types.sparams.lookup owner).getD []
+    let own := sig.tparams.filter fun (n, _) => !classVars.any (·.1 == n)
+    if own.length != row.methodVars.length then return none
+    let c ← ops.context (← choiceTypeContext ctx ops.plan)
+    let mut c := { c with
+      typeOnly := true, callInstanceProbe := some implementation,
+      types := { c.types with tvars := instanceTypes ++ c.types.tvars },
+      locals := c.locals.map fun l => { l with ty := l.ty.subst instanceTypes } }
+    for (name, ty) in aliases do
+      let ty := ty.subst instanceTypes
+      c := { c with locals := { name, ty, slot := ← fresh ty, mutable := false } :: c.locals }
+    let name := "$choiceOperationReceiver"
+    c := { c with locals := { name, ty := row.receiver, slot := ← fresh row.receiver, mutable := false } :: c.locals }
+    let (packedContext, arguments) ← choiceInstanceArguments elabE c p sig (.ident p name :: arguments.map ops.rewrite)
+    let packet ← elabE packedContext (.app p (.ident p "$callArgs")
+      [.ident p implementation, .block p arguments] false) none
+    let .tup types := packet.ty | pure none
+    if types.length != sig.tparams.length then return none
+    let inferred := (sig.tparams.map (·.1)).zip types
+    let substitution ← (own.zip row.methodVars).mapM fun ((original, _), (name, _)) => do
+      let some ty := inferred.lookup original | eerr p "internal: missing operation instance"
+      pure (name, ty)
+    if substitution.any (fun (_, ty) => ty.params.any (row.methodVars.map (·.1)).contains) then return none
+    return some { row with
+      inputs := row.inputs.map (·.subst substitution), result := row.result.subst substitution,
+      methodVars := [], fixedInstance := some (implementation, types) }) (fun _ => pure none)
+  set saved
+  return result
+
 /-- Each dictionary implements the method at its original receiver and
     argument types. Omitted defaults retain their declaration scope and
     source context; their forwarding methods borrow caller task ownership. -/
@@ -1942,15 +2049,15 @@ def choiceOperations (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx)
           | .decl _ n .. => if n.startsWith "?" then some (n.drop 1).toString else none
           | _ => none
         let npos := signature.params.length - signature.named.length
-        if signature.named.zipIdx.any (fun ((n, _), i) => !suppliedNames.contains n &&
-            signature.params[npos + i]!.params.any (fun v => own.any (·.1 == v))) then break
+        let instanceDefaults := signature.named.zipIdx.any (fun ((n, _), i) => !suppliedNames.contains n &&
+            signature.params[npos + i]!.params.any (fun v => own.any (·.1 == v)))
         let substitution := (classVars.map (·.1)).zip (ctx.types.upArgs cls classArgs owner)
         let inputs := supplied.map fun ty => ((ty.subst methodRename).subst substitution).subst ctx.types.tvars
         let result := ((signature.ret.subst methodRename).subst substitution).subst ctx.types.tvars
         let specs := (if signature.fx.isEmpty then ["computes"] else signature.fx) ++
           (if signature.decides then ["decides"] else []) ++
           (if signature.suspends then ["suspends"] else [])
-        cases := cases ++ [{ receiver := actual, inputs, result, specs, methodVars, omittedDefaults }]
+        cases := cases ++ [{ receiver := actual, inputs, result, specs, methodVars, omittedDefaults, instanceDefaults }]
     if cases.length != plan.instances.length then
       -- A checked function-valued field fixes its result before its
       -- arguments are available, just as a monomorphic method does.
@@ -1962,8 +2069,15 @@ def choiceOperations (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx)
       continue
     let bracket := if indexed then cases.any (·.indexedDecides) else bracket
     if cases.any (!·.methodVars.isEmpty) then
-      if let some generic := choiceGenericOperation sourceCtx stem receiver receiverTy ops call arguments cases then ops := generic
-      continue
+      if let some generic := choiceGenericOperation sourceCtx stem receiver receiverTy ops call arguments cases then
+        ops := generic
+        continue
+      let mut fixed : List ChoiceOperationCase := []
+      for (row, instanceTypes) in cases.zip ops.plan.instances do
+        let some checked ← choiceFixedOperationCase elabE sourceCtx ops aliases instanceTypes p method arguments row | break
+        fixed := fixed ++ [checked]
+      if fixed.length != cases.length then continue
+      cases := fixed
     let borrows := cases.any (·.omittedDefaults)
     let (initialPlan, operationReceiverTy) := if indexed then
       ChoiceTypes.extend ctx.types stem ops.plan (cases.map (·.receiver)) else (ops.plan, receiverTy)
@@ -2061,6 +2175,17 @@ def choiceOperations (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx)
         | _ => .tuple p []
       SExpr.app p (.ident p "$choiceIndexedOperation") [shape, .ident p name, index, object, validation, old, sourceArguments[2]!] bracket
     else SExpr.app p (.ident p "$choiceOperation") (shape :: .ident p name :: sourceValues) bracket
+    let invocation := if cases.any (·.fixedInstance.isSome) then
+      let metadata := (cases.zip finalPlan.instances).map fun (row, instanceTypes) =>
+        let (implementation, types) := row.fixedInstance.getD ("", [])
+        let equations := instanceTypes.map fun (n, ty) => SExpr.tuple p
+          [.construct p "$choiceVariable" [.name n] [], .construct p "$choiceInstance" [ty.toSTy] []]
+        SExpr.tuple p [.str p [.text implementation], .construct p "$choiceReceiver" [row.receiver.toSTy] [],
+          .construct p "$choiceMethodInstance" (types.map Ty.toSTy) [], .block p equations]
+      let labels := arguments.map fun | .decl _ n .. => SExpr.str p [.text n] | _ => SExpr.str p [.text ""]
+      SExpr.app p (.ident p "$choiceFixedOperation")
+        [.block p metadata, .block p labels, invocation] false
+      else invocation
     ops := { ops with
       plan := finalPlan, params := ops.params ++ [(name, ty)],
       knownTypes := ops.knownTypes ++ [(call, result)],

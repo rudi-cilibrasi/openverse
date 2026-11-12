@@ -364,6 +364,11 @@ Verse ch. 6): `Describe(X:int)`, `Describe(S:string)`, `Describe(X:int, Y:int)`.
   receiver's type that its arguments fit, then dispatches as usual; the
   overloads a class sees must be distinct. Each list is a method of its
   own (`M$ovN`, up to the names of type parameters).
+- **Several values** (#283). An overload of a function or a method may have
+  several values where another has one (see [Choice](#choice), "Functions
+  with several values"): a call takes the overload its arguments fit and
+  has its values, so a caller that reaches only overloads with one value
+  has one.
 - **Qualified implementations** (#125). `(i:)M<override>(…)` implements
   the overload of `i`'s `M` with its parameter list (as an override takes
   its method's), and `X.(i:)M(…)` picks among `i`'s overloads.
@@ -620,7 +625,11 @@ circle := class(shape, labelled):
   clause of an `if`'s condition or of a `for`. Inside such a clause, in an
   operand it evaluates in order (`dup[P].C > 3`, `F(dup[P])`), it is lifted
   out to be a clause of its own first, as a choice there is: the operands
-  evaluated before it are bound first, so they still run before it. The
+  evaluated before it are bound first, so they still run before it. A
+  branch of an `if` in a failure context is in it too: one written as an
+  expression with such a cast in it (`if (N > 0) then dup[P].C else 0`) is
+  the block of it, where the cast is a clause, so it runs only when that
+  branch does. The
   rest of its failure context is its branch: `pre; D := T[X]; rest` is
   `pre; if (D := T[X]) then {rest} else fail`, so its failure, or the
   rest's, undoes what `pre` did, output included, as any failure
@@ -653,9 +662,12 @@ circle := class(shape, labelled):
   the type it has there, but not its refinement:
   `if (Print("x"), D := dup[P], Y := D.A) then option{Y}` prints `x` only
   when `P` is a `dup`, and its branch has `D` and `Y` with `b = a`. A
-  `for`'s generator past that one whose source uses the cast's name casts
-  the object again there too (`for (P : Ps, D := dup[P], Y : D.Items)`),
-  and so does the body when it uses the names such generators bind.
+  `for`'s clause past that generator that uses the cast's name casts the
+  object again there too, where it uses it: a generator's source, a
+  binding's value (so it still binds its name), a range's bounds, each
+  alternative of a choice, or else the clause as a whole (`for (P : Ps, D
+  := dup[P], Y : D.Items, Y > D.C)`); and so does the body when it uses the
+  names those clauses bind.
 
   A cast can also open type arguments the object's type has no names for
   (#250): `if (P := pairE[E]) then (Eval(P.L), Eval(P.R))`, for
@@ -814,12 +826,12 @@ circle := class(shape, labelled):
   is a struct or container that holds one.
 - **Not yet supported** (each rejected with a message):
   - a cast that refines type arguments, opens them, or goes through a
-    view (#243, #250, #351) outside any failure context, or inside a clause
-    where lifting does not reach it: in a branch of an `if` that is an
-    expression, `then dup[P].C` (write it as a clause of a block there,
-    `then (D := dup[P]; D.C)`);
-  - in a `for`'s clauses, a filter past a generator after such a cast that
-    uses its name (#243): only a generator's source there may;
+    view (#243, #250, #351) outside any failure context, or inside an
+    expression where the lifting of choices does not reach it (in a
+    nested failure context of its own, such as an `option{…}` inside the
+    clause, it is that context's);
+  - in a `for`'s clauses, a clause past a generator after such a cast that
+    uses its name in a branch of an `if` with a choice in its branches (#243);
   - after a cast that opens type arguments, a value of its failure
     context, or a name it binds that a branch or body uses, of a type that
     names them (#250);
@@ -1173,9 +1185,17 @@ Main():void =
   An overloaded function may have several values too (#283): a call takes
   the overload its arguments fit, as any call does, and has that
   overload's values, inlined as it would be alone; an overload with one
-  value is an ordinary call. Without types where it is inlined, a function
-  that calls such an overloaded one is taken to have several values
-  whichever overload it reaches, for now.
+  value is an ordinary call. So a function whose calls reach only
+  overloads with one value has one value. The program is elaborated once
+  to find the overload each call takes, then again with each call of an
+  overload with several values inlined, wherever the call is (a function,
+  a constant, a default, a class block, the entry expression). An overload
+  may call its function's own name, so another overload, inlined there, or
+  itself, recursive (below); and a recursive one may call an overloaded
+  one, as it may call any function with several values. A call in
+  the clauses after a choice whose alternatives' values are of different
+  types, which are copied for each (#335), must take one overload in every
+  copy.
 
   A method with several values works the same way (#283): a call
   `R.M(args)` evaluates `R` first, once, then is inlined like a function's,
@@ -1193,9 +1213,15 @@ Main():void =
   So a class's `M` with one value stays an ordinary method wherever it is
   called, through a function too, and a function whose values come from
   another class's `M` through a receiver of that class has several values,
-  as when one family has the name. A class below two roots of `M` (one
+  as when one family has the name. An overloaded `M` (#106) is a method
+  for each of its parameter lists, each its own family: a call takes the
+  list its arguments fit, as any call does, found as an overloaded
+  function's call's overload is (the program elaborated once to find it,
+  then again), and then its family as above; bare, through `Self` or
+  `(super:)` too. So one list may have several values and another one.
+  A class below two roots of `M` (one
   listing two interfaces that both declare it) is refused when one of the
-  families has several values, and so is an overloaded `M`. Such a
+  families has several values. Such a
   method's name must be no field, no struct field, enumerator or member of
   a built-in type (`Length`, `Find`, `Signal`, …), no top-level name and no
   parameter or local. An
@@ -1225,7 +1251,9 @@ Main():void =
   implementation above. Its tuple form `(super:)M((A, B))` uses the inherited
   parameter types as the current class sees them, including renamed or
   compound type arguments. The receiver and tuple are each evaluated once,
-  in that order. A method may call another method through `(super:)` too;
+  in that order. A qualified call `R.(i:)M(…)` (#125) is a call in the
+  family of the root `i` is below, dispatched as `R.M(…)` is. A method may
+  call another method through `(super:)` too;
   extraction and helper functions retain the source class and receiver,
   so inherited implementations, overloads and defaults use that scope.
   A recursive overridden one is computed at the
@@ -1460,11 +1488,8 @@ Main():void =
   operands, an `if`'s branch, the right of `or`), so not in a condition
   (an `if`'s, `not`'s, the left of `or`) or a loop, where a call would
   take the function's values while its own are being taken, nor in a
-  class's or generic struct's construction (#283). Also an
-  overloaded one with an overload that calls the function's own name
-  (a generic one's type arguments are inferred from the
-  arguments where it is inlined, as at a call, named ones too), a recursive one with a `defer:` of its own, or called by a recursive one (its body a function's, where it would run once), one with a `return`
-  other than at the end of its body or in an `if`'s branches, an overloaded method, a method of a class or
+  class's or generic struct's construction (#283). Also a recursive one with a `defer:` of its own, or called by a recursive one (its body a function's, where it would run once), one with a `return`
+  other than at the end of its body or in an `if`'s branches, a method of a class or
   interface below two others that each declare its name without `<override>`,
   `<suspends>`, one used as a function value, and, since its body is inlined where other names may be
   in scope, one whose name is also the name of a parameter, local, field or
@@ -2058,5 +2083,5 @@ Main()<suspends>:void =
 the class features listed under [Classes](#classes), struct methods (Verse structs have none; classes do),
 `weak_map`, module paths `using{/Verse.org/…}` (accepted and ignored), the
 specific overload/call gaps listed under [Overloading](#overloading), nested
-functions and lambdas (see [release evidence and proposed design](research/closure-design.md)), choice beyond [Choice](#choice) (overloaded methods with several values, and the choice points in sequence that recursive functions with several values with effects may not have yet, listed there), concurrency beyond [Concurrency](#concurrency), and the unsupported
+functions and lambdas (see [release evidence and proposed design](research/closure-design.md)), choice beyond [Choice](#choice) (the choice points in sequence that recursive functions with several values with effects may not have yet, listed there), concurrency beyond [Concurrency](#concurrency), and the unsupported
 effect/construction contracts listed under [Effect contracts](#effect-contracts).

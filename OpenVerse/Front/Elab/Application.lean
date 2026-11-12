@@ -56,10 +56,8 @@ partial def elabAppBaseWith
     else
     if let some ovs := ctx.types.overloads.lookup name then
       resolveOverload ctx p name ovs ctx.sig? (fun o => do
-        -- (#283) the overload an `$inlineOv`'s call as written takes
-        if let some (id, f) := ctx.ovPick then
-          if f == name then modify fun st => { st with ovPicks := (id, o) :: st.ovPicks }
-        elabApp { ctx with ovPick := none } p (.ident p o) args bracket exp) args
+        ctx.noteOverload p name o
+        elabApp ctx p (.ident p o) args bracket exp) args
     else
     -- (a soft built-in the program defines is the program's)
     let builtinName := if (softBuiltins.contains name || name == "any") && (ctx.sig? name).isSome then "$program" else name
@@ -399,8 +397,10 @@ partial def elabAppBaseWith
         (ctx.sig? s!"{owner}.{o}").map fun sg => { sg with params := sg.params.drop 1 }
       let vis := ms.filter fun o => (declAbove o).isSome
       if !vis.isEmpty then
-        return ← resolveOverload ctx p m vis sigOf
-          (fun o => elabApp ctx p (.member mp (.ident mp "(super:)") o) args bracket exp) args
+        return ← resolveOverload ctx p m vis sigOf (fun o => do
+          ctx.noteOverload p m o
+          elabApp ctx p (.member mp (.ident mp "(super:)") o) args bracket exp) args
+    ctx.noteOverload p m m
     let impl ← superImpl ctx p c m
     elabApp ctx p (.ident mp impl) (.ident mp "Self" :: args) bracket exp
   | .member mp obj m0 =>
@@ -468,7 +468,12 @@ partial def elabAppBaseWith
             | _ => o
           else o
         if !vis.isEmpty then
-          return ← resolveOverload ctx p m vis sigOf (fun o => elabApp ctx p (.member mp obj ((if spawning then "$spawnMethod:" else "") ++ qualOf o)) args bracket exp) args
+          return ← resolveOverload ctx p m vis sigOf (fun o => do
+            ctx.noteOverload p m o
+            elabApp ctx p (.member mp obj ((if spawning then "$spawnMethod:" else "") ++ qualOf o)) args bracket exp) args
+      -- (#283) a method overloaded in another hierarchy than `c`'s: the
+      -- call takes `c`'s one list
+      ctx.noteOverload p m m
       if let (true, some owner) := (env.classes.contains c, ctx.methodDecl? c m) then
         -- the slots the call covers (#70): every class below `c` must implement
         -- them alike, or the call must say which

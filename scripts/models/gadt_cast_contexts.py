@@ -14,7 +14,10 @@ computes among the clauses or of a parameter, whose refinement the branch's
 value needs (d = c, for an option of the second's A as a ?d). At times
 the cast is inside an expression, `C0 := Peek[H, 1] + T[P].C`, after a call
 with an effect that runs first; a for's clauses at times end with a
-generator over values of the cast's, `Y2 : array{D.C, D.C + 1}`. Clauses
+generator over values of the cast's, `Y2 : array{D.C, D.C + 1}`, and then a
+filter or a binding that uses the cast; or the
+cast is in a branch of an if written as an expression in a <decides> body,
+evaluated only when that branch is. Clauses
 before the cast print, add to a cell's var field or call a <decides> function
 that does; clauses after it compare, print and add, and bind names that later
 code uses. The value is the object's C, or a field whose type is the code's
@@ -32,13 +35,13 @@ seed = int(sys.argv[1]); out_exp = sys.argv[2]
 R = random.Random(seed)
 def ch(p): return R.random() < p
 
-CONTEXTS = ['decides', 'option', 'not', 'if', 'for', 'first', 'second']
+CONTEXTS = ['decides', 'option', 'not', 'if', 'for', 'first', 'second', 'branch']
 context = CONTEXTS[seed % len(CONTEXTS)]
 target = R.choice(['dup', 'fixi'])
 bare = context in ('not',) or (context in ('decides', 'option', 'if', 'second') and ch(0.15))
 refined_value = (not bare) and context in ('decides', 'option') and ch(0.4)
 # (the cast inside an expression: its C, after a call that adds 1 first)
-inside = (not bare) and (not refined_value) and ch(0.3)
+inside = (not bare) and (not refined_value) and context != 'branch' and ch(0.3)
 IFACE = ch(0.3)
 CDEF = {'dup': R.randint(1, 6), 'fixi': R.randint(1, 6)}
 
@@ -204,8 +207,11 @@ elif context == 'for':
     G2 = f'Ps:[]{root}(a, b), H:cell where a:type, b:type'
     # (at times a generator after the clauses, over values of the cast's)
     gen2 = (not bare) and ch(0.4)
-    clauses = ["P : Ps"] + body + (['Y2 : array{D.C, D.C + 1}'] if gen2 else [])
-    body2 = '        Print("y{Y2}")\n' if gen2 else ''
+    # (and after it a filter of the cast's, or a binding of it the body uses)
+    post = R.choice(['none', 'filter', 'bind']) if gen2 else 'none'
+    clauses = ["P : Ps"] + body + (['Y2 : array{D.C, D.C + 1}'] if gen2 else []) + \
+        {'none': [], 'filter': ['Y2 > D.C'], 'bind': ['W2 := Y2 + D.C']}[post]
+    body2 = ('        Print("y{Y2}")\n' if gen2 else '') + ('        Print("w{W2}")\n' if post == 'bind' else '')
     fn = (f'F({G2})<transacts>:int =\n    R := for ({", ".join(clauses)}):\n'
           f'{body2}        {body_t}\n        H.N\n    R.Length\n')
     def model_all(os):
@@ -217,9 +223,34 @@ elif context == 'for':
             except Fail:
                 st.back(s0); continue
             for y2 in ((o[3], o[3] + 1) if gen2 else (None,)):
+                if post == 'filter' and not y2 > o[3]: continue
                 if gen2: st.out.append(f'y{y2}')
+                if post == 'bind': st.out.append(f'w{y2 + o[3]}')
                 body_r(env); count += 1
         st.out.append(f'F {count} {st.n}')
+elif context == 'branch':
+    k = R.randint(0, 3)
+    side = R.choice(['then', 'else'])
+    castv = f'{target}[P].C + H.N'
+    other = 'H.N - 100'
+    tb, eb = (castv, other) if side == 'then' else (other, castv)
+    G3 = 'P:pair(a, b), H:cell, N0:int where a:type, b:type'
+    fn = (f'F({G3})<transacts><decides>:int =\n' + ''.join(f'    {t}\n' for t, _ in pres) +
+          f'    if (N0 > {k}) then {tb} else {eb}\n')
+    ns = {}
+    call = lambda o: f'    if (V := F[{o[4]}, H, {ns[id(o)]}]) then Print("F {{V}} {{H.N}}") else Print("F no {{H.N}}")'
+    def model(o):
+        s0 = st.snap(); env = {}
+        try:
+            for _, r in pres: r(st, env)
+            taken = 'then' if ns[id(o)] > k else 'else'
+            if taken == side:
+                cast_run(st, env, o); v = o[3] + st.n
+            else:
+                v = st.n - 100
+            st.out.append(f'F {v} {st.n}')
+        except Fail:
+            st.back(s0); st.out.append(f'F no {st.n}')
 elif context == 'second':
     computed = ch(0.6)
     k2 = R.randint(1, 3)
@@ -302,6 +333,7 @@ if context == 'for':
 else:
     for o in objs:
         if context == 'second': qs[id(o)] = make_q()
+        if context == 'branch': ns[id(o)] = R.randint(0, 5)
         main.append(call(o))
         model(o)
 if inside:

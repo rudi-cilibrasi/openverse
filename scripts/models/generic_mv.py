@@ -50,7 +50,10 @@ The model:
   * methods of one name declared apart in unrelated classes and interfaces are
     each the root of a family of their own: a call through a receiver of a
     class below one of them has that family's values, and one of a class
-    whose method of that name is ordinary has its one value.
+    whose method of that name is ordinary has its one value;
+  * generic overloads (#283), told apart by arity: a call takes the overload
+    its arguments fit and has its values (one, or several), an overload may
+    call its function's own name, and so may a generic class's method's list.
 """
 import random, sys, os, re
 
@@ -962,6 +965,59 @@ class Gen:
         if SHARED:
             self.main.append('Print("plain {plainvals{}.Vals()}")')
             self.m.out.append("plain 0")
+        self.generic_overloads()
+
+    def generic_overloads(self):
+        # (#283: generic overloads with several values or one, told apart by arity; their own
+        # stream decides, so seeds keep their other programs)
+        rng = random.Random(self.seed * 1000003 + 5692)
+        if rng.random() >= 0.5:
+            self.ovsrc = ""
+            return
+        self.ovsrc = (
+            "Gov(X:t, Y:t where t:type)<transacts>:t = X | Y\n"
+            "Gov(X:int)<transacts>:int = X * 7\n"
+            "Gov(X:t, Y:t, Z:t where t:type)<transacts>:t = Gov(X, Z) | Y\n"
+            "GovOne(X:int)<transacts>:int = Gov(X) + 1\n"
+            "govbox(t:type) := class:\n"
+            "    V:t\n"
+            "    Get()<transacts>:t = V | V\n"
+            "    Get(W:t, U:t)<transacts>:t = W | Get() | U\n")
+        def lit(v):
+            return '"%s"' % v if isinstance(v, str) else str(v)
+        def pick():
+            return rng.choice([lambda: rng.randint(-3, 9), lambda: rng.choice(["p", "qq", ""])])()
+        out = self.m.out
+        for _ in range(rng.randint(1, 4)):
+            k = rng.choice(["two", "one", "three", "get", "get2", "first"])
+            if k in ("two", "three", "get2", "first"):
+                a = pick()
+                b, c = [(rng.randint(-3, 9) if isinstance(a, int) else rng.choice(["p", "qq", ""])) for _ in range(2)]
+            if k == "two":
+                self.main.append('for (A := Gov(%s, %s)) { Print("gov2 {A}") }' % (lit(a), lit(b)))
+                out += ["gov2 %s" % x for x in (a, b)]
+            elif k == "one":
+                n = rng.randint(-3, 9)
+                self.main.append('Print("gov1 {GovOne(%d)}")' % n)
+                out.append("gov1 %d" % (n * 7 + 1))
+            elif k == "three":
+                self.main.append('for (A := Gov(%s, %s, %s)) { Print("gov3 {A}") }' % (lit(a), lit(b), lit(c)))
+                out += ["gov3 %s" % x for x in (a, c, b)]
+            elif k == "get":
+                v = pick()
+                ty = "int" if isinstance(v, int) else "string"
+                self.main.append('for (A := govbox(%s){V := %s}.Get()) { Print("get {A}") }' % (ty, lit(v)))
+                out += ["get %s" % x for x in (v, v)]
+            elif k == "get2":
+                ty = "int" if isinstance(a, int) else "string"
+                self.main.append('for (A := govbox(%s){V := %s}.Get(%s, %s)) { Print("get2 {A}") }' % (ty, lit(a), lit(b), lit(c)))
+                out += ["get2 %s" % x for x in (b, a, a, c)]
+            else:
+                # (where the first success is taken: the first value other than the first argument)
+                self.main.append('if (A := Gov(%s, %s, %s), A <> %s) then Print("govf {A}") else Print("govf none")'
+                                 % (lit(a), lit(b), lit(c), lit(a)))
+                rest = [x for x in (a, c, b) if x != a]
+                out.append("govf %s" % rest[0] if rest else "govf none")
 
     def method_dispatch(self):
         # Every gate range covers each hierarchy, with the same independent
@@ -1401,6 +1457,7 @@ Tell(S:string, X:int)<transacts>:int =
             pre += "plainvals := class:\n    Vals()<transacts>:int = 0\n"
         body = pre + "\n".join(p.src for p in self.prods) + "\n"
         if self.consumers: body += "\n".join(self.consumers) + "\n"
+        body += getattr(self, "ovsrc", "")
         body += "Main():void =\n" + "".join("    %s\n" % l for l in self.main)
         return body
 
