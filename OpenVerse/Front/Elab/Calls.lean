@@ -90,12 +90,24 @@ partial def elabSubtypeValueWith (elabE : Ctx → SExpr → Option Ty → EM R) 
     !ctx.types.classes.contains (SubtypeEvidence.nominalFamily source target)
   let tuples := plan.tupleArities.filter fun arity =>
     !ctx.types.classes.contains (SubtypeEvidence.tupleFamily arity)
-  if !missing.isEmpty || !tuples.isEmpty then
+  let tupleArrays := plan.tupleArrayArities.filter fun arity =>
+    !ctx.types.classes.contains (SubtypeEvidence.tupleArrayFamily arity)
+  let refinements := plan.refinements.filter fun (source, target) =>
+    !ctx.types.classes.contains (SubtypeEvidence.refinementFamily source target)
+  if !missing.isEmpty || !tuples.isEmpty || !tupleArrays.isEmpty || !refinements.isEmpty then
     let declarations ← missing.mapM fun (source, target) =>
       match SubtypeEvidence.nominal ctx.types p source target with
       | .ok declaration => pure declaration
       | .error message => eerr p message
     let declarations := declarations ++ tuples.map (SubtypeEvidence.tupleDeclaration p)
+    let declarations ← tupleArrays.foldlM (fun declarations arity =>
+      match SubtypeEvidence.tupleArrayDeclaration p arity with
+      | .ok declaration => pure (declarations ++ [declaration])
+      | .error message => eerr p message) declarations
+    let declarations ← refinements.foldlM (fun declarations (source, target) =>
+      match SubtypeEvidence.refinementDeclaration ctx.types p source target with
+      | .ok declaration => pure (declarations ++ [declaration])
+      | .error message => eerr p message) declarations
     modify fun state => { state with subtypeNeeds := SubtypeEvidence.mergeRequests state.subtypeNeeds declarations }
     return ⟨.prim .userErr [], bound.ty⟩
   elabE ctx (plan.value ctx.types p) (some bound.ty)
@@ -123,6 +135,10 @@ partial def elabSubtypeLiftWith (elabE : Ctx → SExpr → Option Ty → EM R) (
     | .tup cs, .tup bases => do
       if cs.length != bases.length then eerr p "internal: subtype tuple arities differ"
       pure ((bases.zip cs).zipIdx.map (fun ((a, c), i) =>
+        (SubtypeEvidence.Bound.mk a c, Expr.prim (.tupGet i) [.local inputSlot])), none)
+    | .tup cs, .arr a => do
+      if cs.isEmpty then eerr p "internal: an empty tuple is not a tuple-to-array subtype"
+      pure (cs.zipIdx.map (fun (c, i) =>
         (SubtypeEvidence.Bound.mk a c, Expr.prim (.tupGet i) [.local inputSlot])), none)
     | _, _ => eerr p "internal: unsupported subtype container shape"
   if components.length != dictionaries.length then eerr p "internal: missing subtype component dictionaries"
@@ -153,6 +169,7 @@ partial def elabSubtypeLiftWith (elabE : Ctx → SExpr → Option Ty → EM R) (
       pure (.forE element (.local inputSlot) (.lit (.logic true))
         (.prim .mkTup [key, output]))
     | .tup _, .tup _, none, _ => pure (.prim .mkTup outputs)
+    | .tup _, .arr _, none, _ => pure (.prim .mkArr outputs)
     | _, _, _, _ => eerr p "internal: invalid subtype traversal"
   return ⟨setup.foldr (fun (slot, expression) rest => .seq (.assign slot expression) rest) body, target⟩
 

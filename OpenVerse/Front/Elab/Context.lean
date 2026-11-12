@@ -710,14 +710,14 @@ def checkTParams (env : TyEnv) (tps : List TParam) : Except String (List (String
       | "comparable" => out := out.push (tp.name, true)
       | c => throw s!"{tp.pos.show}: unknown constraint subtype({c}) (expected type, comparable, or a retained upper-bound type)"
   if !tps.any (·.upperBound.isSome) then return out.toList
-  -- Unique class bounds imply comparability; propagate that implication
-  -- through peer parameters, including forward references and cycles.
+  -- Unique classes and numeric refinements imply comparability; propagate
+  -- that implication through peer parameters, including forward references.
   for _ in [0:tps.length + 1] do
     let next := out.map fun (name, comparable) =>
       let implied := match (tps.find? (·.name == name)).bind (·.upperBound) with
         | some (.name upper) =>
           (out.toList.lookup upper).getD false ||
-            (env.classes.contains upper && env.isUnique upper)
+            (env.classes.contains upper && env.isUnique upper) || (env.refines.lookup upper).isSome
         | some (.app upper _) => env.classes.contains upper && env.isUnique upper
         | _ => false
       (name, comparable || implied)
@@ -747,8 +747,8 @@ def resolveTParams (env : TyEnv) (tps : List TParam) : Except String ResolvedTPa
     | .struct name _ =>
       unless env.classes.contains name do
         throw s!"{parameter.pos.show}: subtype({base.show}) must name a class, interface, or type parameter"
-    | .param .. => pure ()
-    | _ => throw s!"{parameter.pos.show}: subtype({base.show}) must name a class, interface, or type parameter"
+    | .param .. | .refine .. => pure ()
+    | _ => throw s!"{parameter.pos.show}: subtype({base.show}) must name a class, interface, refinement, or type parameter"
     let derived := Ty.param parameter.name ((params.lookup parameter.name).getD false)
     pure (some ({ base, derived } : SubtypeEvidence.Bound))
   let resolved : ResolvedTParams := { params, bounds }
@@ -1188,54 +1188,6 @@ def litAt (env : TyEnv) (exp : Option Ty) (r : R) : R :=
     | some (base, conds), some v => if base == r.ty && refineHolds conds v then ⟨r.e, .refine n⟩ else r
     | _, _ => r
   | _ => r
-
-/-- `v < w` on numbers of one base. -/
-def numLt : Value → Value → Bool
-  | .int x, .int y => x < y
-  | .float x, .float y => VFloat.ofBits x < VFloat.ofBits y
-  | _, _ => false
-
-def numNeg : Value → Value
-  | .int x => .int (-x)
-  | .float x => .float (VFloat.canon (-(VFloat.ofBits x)))
-  | v => v
-
-/-- A refinement's interval: its tightest lower and upper bounds, each with
-    whether it is strict (#143). -/
-def refineInterval (conds : List (String × Value)) : Option (Value × Bool) × Option (Value × Bool) :=
-  conds.foldl (fun (lo, hi) (op0, b0) =>
-    -- (an int's strict bound is the next one, not strict: `< 10` is `<= 9`)
-    let (op, b) : String × Value := match op0, b0 with
-      | "<", .int x => ("<=", .int (x - 1))
-      | ">", .int x => (">=", .int (x + 1))
-      | o, v => (o, v)
-    let strict := op == "<" || op == ">"
-    if op == ">" || op == ">=" then
-      let lo' := match lo with
-        | none => some (b, strict)
-        | some (l, ls) => if numLt l b || (l == b && strict && !ls) then some (b, strict) else some (l, ls)
-      (lo', hi)
-    else
-      let hi' := match hi with
-        | none => some (b, strict)
-        | some (h, hs) => if numLt b h || (h == b && strict && !hs) then some (b, strict) else some (h, hs)
-      (lo, hi')) (none, none)
-
-/-- Interval `a` lies within `b`. -/
-def intervalWithin (a b : Option (Value × Bool) × Option (Value × Bool)) : Bool :=
-  let lowOk := match a.1, b.1 with
-    | _, none => true
-    | none, some _ => false
-    | some (al, as), some (bl, bs) => numLt bl al || (al == bl && (as || !bs))
-  let highOk := match a.2, b.2 with
-    | _, none => true
-    | none, some _ => false
-    | some (ah, as), some (bh, bs) => numLt ah bh || (ah == bh && (as || !bs))
-  lowOk && highOk
-
-/-- The interval of `-X` for `X` in `i`. -/
-def intervalNeg (i : Option (Value × Bool) × Option (Value × Bool)) : Option (Value × Bool) × Option (Value × Bool) :=
-  (i.2.map fun (v, s) => (numNeg v, s), i.1.map fun (v, s) => (numNeg v, s))
 
 /-- A refinement's value as its base (#136): operators, comparisons and
     ToString see the base type. -/

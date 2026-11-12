@@ -13,6 +13,7 @@ def arrayFamily : String := "$subtypeArray"
 def optionFamily : String := "$subtypeOption"
 def mapFamily : String := "$subtypeMap"
 def tupleFamily (arity : Nat) : String := s!"$subtypeTuple{arity}"
+def tupleArrayFamily (arity : Nat) : String := s!"$subtypeTupleArray{arity}"
 
 /-- Readonly compiler proofs are separate from dummy type-value fields. -/
 def fieldPrefix : String := "$subtype."

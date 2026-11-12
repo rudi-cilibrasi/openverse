@@ -1271,11 +1271,76 @@ def TyEnv.nominalSubtype (env : TyEnv) (derived base : Ty) : Bool :=
         env.upArgs source args target == targets
     | _, _ => false
 
+/-- `v < w` on numbers of one base. -/
+def numLt : Value → Value → Bool
+  | .int x, .int y => x < y
+  | .float x, .float y => VFloat.ofBits x < VFloat.ofBits y
+  | _, _ => false
+
+def numNeg : Value → Value
+  | .int x => .int (-x)
+  | .float x => .float (VFloat.canon (-(VFloat.ofBits x)))
+  | v => v
+
+/-- A refinement's interval: its tightest lower and upper bounds, each with
+    whether it is strict (#143). -/
+def refineInterval (conds : List (String × Value)) : Option (Value × Bool) × Option (Value × Bool) :=
+  conds.foldl (fun (lo, hi) (op0, b0) =>
+    -- (an int's strict bound is the next one, not strict: `< 10` is `<= 9`)
+    let (op, b) : String × Value := match op0, b0 with
+      | "<", .int x => ("<=", .int (x - 1))
+      | ">", .int x => (">=", .int (x + 1))
+      | o, v => (o, v)
+    let strict := op == "<" || op == ">"
+    if op == ">" || op == ">=" then
+      let lo' := match lo with
+        | none => some (b, strict)
+        | some (l, ls) => if numLt l b || (l == b && strict && !ls) then some (b, strict) else some (l, ls)
+      (lo', hi)
+    else
+      let hi' := match hi with
+        | none => some (b, strict)
+        | some (h, hs) => if numLt b h || (h == b && strict && !hs) then some (b, strict) else some (h, hs)
+      (lo, hi')) (none, none)
+
+/-- Interval `a` lies within `b`. -/
+def intervalWithin (a b : Option (Value × Bool) × Option (Value × Bool)) : Bool :=
+  let lowOk := match a.1, b.1 with
+    | _, none => true
+    | none, some _ => false
+    | some (al, as), some (bl, bs) => numLt bl al || (al == bl && (as || !bs))
+  let highOk := match a.2, b.2 with
+    | _, none => true
+    | none, some _ => false
+    | some (ah, as), some (bh, bs) => numLt ah bh || (ah == bh && (as || !bs))
+  lowOk && highOk
+
+/-- The interval of `-X` for `X` in `i`. -/
+def intervalNeg (i : Option (Value × Bool) × Option (Value × Bool)) : Option (Value × Bool) × Option (Value × Bool) :=
+  (i.2.map fun (v, s) => (numNeg v, s), i.1.map fun (v, s) => (numNeg v, s))
+
+/-- A refinement may widen to its numeric base, an existing numeric upper,
+    or a containing refinement of the same base. Literal membership is not
+    a general subtype relation from the base back into a refinement. -/
+def TyEnv.refinementSubtype (env : TyEnv) (source : String) (target : Ty) : Bool :=
+  match env.refines.lookup source with
+  | some (base, conditions) =>
+    (base == .int || base == .float) &&
+      (target == base || (base == .int && target == .rational) || match target with
+        | .refine name => match env.refines.lookup name with
+          | some (other, bounds) => base == other && intervalWithin (refineInterval conditions) (refineInterval bounds)
+          | none => false
+        | _ => false)
+  | none => false
+
 /-- Direct declaration subtyping, including the ordinary checked numeric
     embedding and erasure to any. This stays separate from nominal ancestry
     used to choose a class/interface member view. -/
 def TyEnv.directBoundSubtype (env : TyEnv) (derived base : Ty) : Bool :=
-  env.nominalSubtype derived base || (derived == .int && base == .rational) || base == .any
+  env.nominalSubtype derived base || (derived == .int && base == .rational) || base == .any ||
+    match derived with
+    | .refine source => env.refinementSubtype source base
+    | _ => false
 
 /-- Entail a declaration constraint. Static facts permit
     type applications; they never authorize an executable unchecked cast. -/
@@ -1292,6 +1357,7 @@ where
               go seen k l && go seen c a
           | .tup cs, .tup bases => cs.length == bases.length &&
               (cs.zip bases).all (fun (c, a) => go seen c a)
+          | .tup cs, .arr a => !cs.isEmpty && cs.all (fun c => go seen c a)
           | _, _ => false
         return structural || env.boundFacts.any fun (upper, lower) =>
           go seen current lower && go seen upper target)

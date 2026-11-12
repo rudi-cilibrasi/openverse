@@ -19,6 +19,8 @@ references. A declaration resolves its complete formal scope before validating
 constrained applications. Its own facts justify those applications; facts from
 an unrelated caller do not repair an unconstrained declaration. Type variables
 remain opaque rather than being replaced by upper types.
+Numeric refinements are also supported bound heads in the draft. Their implied
+comparability propagates through peer bounds, alongside unique-class bounds.
 
 Executable conversion requires an actual value of the compiler-owned
 `$subtypeEvidence(base,derived)` interface. Its `Up` method accepts `derived` and
@@ -35,9 +37,11 @@ The checked families currently cover:
 | Nominal class/interface ancestry | Check the ordinary upcast at exact projected arguments. Preserve source declaration constraints. |
 | Transitivity | Compose actual dictionaries whose intermediate types match. |
 | `int` to `rational` | Use the ordinary numeric embedding. |
+| Numeric refinement widening | Use the shared interval-containment check to widen to the numeric base, a containing refinement, or the existing rational upper of an int refinement. Literal membership never establishes the reverse subtype relation. |
 | Erasure to `any` | Evaluate the input before returning its erased representation. |
 | Arrays and options | Carry a real component dictionary. Preserve order and option absence. |
 | Equal-arity tuples | Carry one real dictionary per component. Preserve shape and component evaluation order. |
+| Nonempty tuple to array | Carry one real dictionary per component to the common array element type. Save the tuple once and project components in order. |
 | Maps | Carry separate key and value dictionaries. Both key types must be comparable. Convert entries in order without reinserting them. |
 
 Container proofs can be nested and composed with whole-value proofs. A supplied
@@ -45,10 +49,13 @@ Container proofs can be nested and composed with whole-value proofs. A supplied
 relations retained by function-value adapters. Static entailment and executable
 planning both retain this distinction.
 
-Tuple evidence is materialized once per arity. Nominal evidence is materialized
+Tuple and tuple-to-array evidence is materialized once per arity. Nominal evidence is materialized
 once per declaration pair, preserving generic parameters and constraints rather
 than creating a new class for every closed instance. Missing declarations cause
 compiler discovery/restart; discovery placeholders must not reach final Core.
+Refinement evidence is materialized per source/result pair. Its ordinary `Up`
+body uses the same interval helpers as concrete coercion. Those pure helpers
+live below elaboration so static entailment and conversion share the rule.
 
 The container `Up` bodies use a private, typed elaboration form. It checks the
 input/result shapes and every supplied dictionary type, then emits existing Core
@@ -80,6 +87,9 @@ their old-leaf read and their selected target across RHS mutation.
 Inference retains precise input bindings. It can infer nominal projections and
 common peer uppers, including component joins for matching containers. It does
 not enumerate every Cartesian combination of tuple-component upper types.
+Mixed tuples/arrays and different tuple arities can join through their common
+element upper. Matching containers recurse only once per component; a second
+array join at every nesting level would make deep inference exponential.
 Comparable flags are intersected across equal type identities. Unrelated
 interfaces can overlap; their ambiguity is not resolved by declaration order.
 An invalid result-directed instance can retry from the original compiler state
@@ -117,8 +127,8 @@ construction, capture provenance or frontend lowering implements Verse's source
 semantics. Lean/C agreement is executable evidence, not that missing proof.
 
 Before source admission, #502 still requires the remaining relation audit
-(including refinements, bottom, `void`, tuple/array relations and function
-variance), operation-dictionary and generated/opened/refined adaptation audits,
+(including bottom, `void`, function variance and full refinement/container
+interactions), operation-dictionary and generated/opened/refined adaptation audits,
 full construction/default/qualified-slot coverage, and a complete source
 acceptance run. Context-sensitive literal coercion must not silently become a
 general subtype fact. The final source contract, documented restrictions,

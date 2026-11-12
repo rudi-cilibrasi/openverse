@@ -97,6 +97,33 @@ def tupleDeclaration (p : Pos) (arity : Nat) : STop :=
       (.app p (.ident p "$subtypeLift")
         (.ident p "$input" :: names.map (fun i => .ident p s!"$element{i}")) false)]
 
+def tupleArrayDeclaration (p : Pos) (arity : Nat) : Except String STop := do
+  if arity == 0 then throw "an empty tuple is void, not a tuple-to-array subtype"
+  let names := List.range arity
+  let base := STy.name "$tupleA"
+  let derived := names.map fun i => STy.name s!"$tupleC{i}"
+  let params := ("$tupleA" :: names.map (fun i => s!"$tupleC{i}")).map
+    fun name => ({ pos := p, name, constraint := "type" } : TParam)
+  let fields := derived.zipIdx.map fun (ty, i) =>
+    (s!"$element{i}", STy.app family [base, ty], none, false)
+  return .classDef p (tupleArrayFamily arity) params ["computes"]
+    [.app family [.arr base, .tup derived]] false fields []
+    [.fn p "Up" [{ name := "$input", ty := .tup derived }] [] ["override", "computes"] (.arr base)
+      (.app p (.ident p "$subtypeLift")
+        (.ident p "$input" :: names.map (fun i => .ident p s!"$element{i}")) false)]
+
+def refinementFamily (source : String) (target : Ty) : String :=
+  s!"$subtypeRefinement{source.length}_{source}{target.show.length}_{target.show}"
+
+/-- Refinement widening is checked by the same ordinary conversion as a
+    concrete source result. It never uses a literal to invent membership. -/
+def refinementDeclaration (env : TyEnv) (p : Pos) (source : String) (target : Ty) : Except String STop := do
+  unless env.refinementSubtype source target do throw s!"invalid refinement subtype evidence for {source}"
+  return .classDef p (refinementFamily source target) [] ["computes"]
+    [.app family [target.toSTy, .name source]] false [] []
+    [.fn p "Up" [{ name := "$input", ty := .name source }] [] ["override", "computes"]
+      target.toSTy (.ident p "$input")]
+
 def nominalFamily (source target : String) : String :=
   s!"$subtypeNominal{source.length}_{source}{target.length}_{target}"
 
@@ -145,12 +172,15 @@ inductive Plan where
   | option : Plan → Plan
   | map : Plan → Plan → Plan
   | tuple : List Plan → Plan
+  | tupleArray : Ty → List Plan → Plan
+  | refinement : String → Ty → Plan
   deriving Repr, Inhabited
 
 partial def Plan.bound (env : TyEnv) : Plan → Bound
   | .identity t => ⟨t, t⟩
   | .rational => ⟨.rational, .int⟩
   | .erase t => ⟨.any, t⟩
+  | .refinement source target => ⟨target, .refine source⟩
   | .nominal source target args =>
     ⟨.struct target (env.upArgs source args target), .struct source args⟩
   | .local _ bound => bound
@@ -162,6 +192,7 @@ partial def Plan.bound (env : TyEnv) : Plan → Bound
       .map (key.bound env).derived (element.bound env).derived⟩
   | .tuple elements => ⟨.tup (elements.map fun e => (e.bound env).base),
       .tup (elements.map fun e => (e.bound env).derived)⟩
+  | .tupleArray element elements => ⟨.arr element, .tup (elements.map fun e => (e.bound env).derived)⟩
 
 private def fieldBound? (env : TyEnv) (ty : Ty) (field : String) : Option Bound := do
   let .struct owner args := ty | none
@@ -232,6 +263,7 @@ def fieldsForBounds (env : TyEnv) (receiver : Ty) (bounds : List Bound) : List (
 partial def Plan.valid (env : TyEnv) (locals : List (String × Ty)) : Plan → Bool
   | .identity _ => true
   | .rational | .erase _ => true
+  | .refinement source target => env.refinementSubtype source target
   | .nominal source target args =>
     env.isRefClass source && env.isRefClass target && env.isSub source target &&
       args.length == ((env.sparams.lookup source).getD []).length
@@ -244,11 +276,15 @@ partial def Plan.valid (env : TyEnv) (locals : List (String × Ty)) : Plan → B
   | .map key element => isComparable env (key.bound env).base &&
       isComparable env (key.bound env).derived && key.valid env locals && element.valid env locals
   | .tuple elements => elements.all (·.valid env locals)
+  | .tupleArray element elements => !elements.isEmpty && elements.all fun plan =>
+      plan.valid env locals && (plan.bound env).base == element
 
 private def direct? (env : TyEnv) (base derived : Ty) : Option Plan := do
   if derived == base then return .identity derived
   if base == .any then return .erase derived
   if derived == .int && base == .rational then return .rational
+  if let .refine source := derived then
+    if env.refinementSubtype source base then return .refinement source base
   let (.struct source args, .struct target targets) := (derived, base) | none
   if env.isRefClass source && env.isRefClass target && env.isSub source target &&
       args.length == ((env.sparams.lookup source).getD []).length &&
@@ -281,6 +317,9 @@ where
           if bases.length == cs.length then
             ((bases.zip cs).mapM fun (a, c) => go available seen ⟨a, c⟩).map Plan.tuple
           else none
+        | .arr a, .tup cs =>
+          if cs.isEmpty then none else
+            (cs.mapM fun c => go available seen ⟨a, c⟩).map (Plan.tupleArray a)
         | _, _ => none
       if let some plan := structural then return plan
       available.findSome? fun capability => do
@@ -296,6 +335,7 @@ partial def Plan.value (env : TyEnv) (p : Pos) : Plan → SExpr
   | .identity t => .construct p identityFamily [t.toSTy] []
   | .rational => .construct p rationalFamily [] []
   | .erase t => .construct p eraseFamily [t.toSTy] []
+  | .refinement source target => .construct p (refinementFamily source target) [] []
   | .nominal source target args => .construct p (nominalFamily source target) (args.map Ty.toSTy) []
   | .local name _ => .ident p name
   | .field receiver fieldLabel _ => .member p (.ident p receiver) fieldLabel
@@ -323,6 +363,10 @@ partial def Plan.value (env : TyEnv) (p : Pos) : Plan → SExpr
     .construct p (tupleFamily elements.length)
       (bounds.map (·.base.toSTy) ++ bounds.map (·.derived.toSTy))
       (elements.zipIdx.map fun (element, i) => .decl p s!"$element{i}" none false (element.value env p))
+  | .tupleArray element elements =>
+    .construct p (tupleArrayFamily elements.length)
+      (element.toSTy :: elements.map (fun e => (e.bound env).derived.toSTy))
+      (elements.zipIdx.map fun (component, i) => .decl p s!"$element{i}" none false (component.value env p))
 
 /-- All canonical nominal families needed by a plan, in stable dependency
     order. Repeated instantiations share their single generic declaration. -/
@@ -331,14 +375,29 @@ partial def Plan.nominals : Plan → List (String × String)
   | .compose outer inner => (outer.nominals ++ inner.nominals).eraseDups
   | .array element | .option element => element.nominals
   | .map key element => (key.nominals ++ element.nominals).eraseDups
-  | .tuple elements => (elements.flatMap Plan.nominals).eraseDups
+  | .tuple elements | .tupleArray _ elements => (elements.flatMap Plan.nominals).eraseDups
   | _ => []
 
 partial def Plan.tupleArities : Plan → List Nat
   | .tuple elements => (elements.length :: elements.flatMap Plan.tupleArities).eraseDups
+  | .tupleArray _ elements => (elements.flatMap Plan.tupleArities).eraseDups
   | .array element | .option element => element.tupleArities
   | .map key element => (key.tupleArities ++ element.tupleArities).eraseDups
   | .compose outer inner => (outer.tupleArities ++ inner.tupleArities).eraseDups
+  | _ => []
+
+partial def Plan.tupleArrayArities : Plan → List Nat
+  | .tupleArray _ elements => (elements.length :: elements.flatMap Plan.tupleArrayArities).eraseDups
+  | .tuple elements => (elements.flatMap Plan.tupleArrayArities).eraseDups
+  | .array element | .option element => element.tupleArrayArities
+  | .map key element | .compose key element => (key.tupleArrayArities ++ element.tupleArrayArities).eraseDups
+  | _ => []
+
+partial def Plan.refinements : Plan → List (String × Ty)
+  | .refinement source target => [(source, target)]
+  | .tuple elements | .tupleArray _ elements => (elements.flatMap Plan.refinements).eraseDups
+  | .array element | .option element => element.refinements
+  | .map key element | .compose key element => (key.refinements ++ element.refinements).eraseDups
   | _ => []
 
 partial def Plan.usesLocal : Plan → Bool
@@ -346,7 +405,7 @@ partial def Plan.usesLocal : Plan → Bool
   | .compose outer inner => outer.usesLocal || inner.usesLocal
   | .array element | .option element => element.usesLocal
   | .map key element => key.usesLocal || element.usesLocal
-  | .tuple elements => elements.any Plan.usesLocal
+  | .tuple elements | .tupleArray _ elements => elements.any Plan.usesLocal
   | _ => false
 
 /-- Nominal views proved by actual lexical dictionaries. Declaration facts
@@ -369,6 +428,10 @@ private def mergeTypes (types : List Ty) : List Ty :=
 private def upperViews (env : TyEnv) (derived : Ty) : List Ty :=
   let known := derived :: env.boundFacts.filterMap fun (upper, _) =>
     if env.boundSubtype derived upper then some upper else none
+  let known := known ++ known.filterMap fun
+    | .refine source => (env.refines.lookup source).bind fun (base, _) =>
+        if env.refinementSubtype source base then some base else none
+    | _ => none
   let nominal := known ++ known.flatMap fun
     | .struct source args => if env.classes.contains source then
         (env.supers source).map fun target => Ty.struct target (env.upArgs source args target)
@@ -402,7 +465,18 @@ private partial def commonUpper? (env : TyEnv) (types : List Ty) : Option Ty := 
         commonUpper? env (← rows.mapM (·[i]?))
       return .tup components
     | _ => none
-  let candidates := (mergeTypes (structural.toList ++ upperViews env first)).filter fun candidate =>
+  let tupleLengths := types.filterMap fun | .tup ts => some ts.length | _ => none
+  let needsArray := !tupleLengths.isEmpty &&
+    (types.any (fun | .arr _ => true | _ => false) ||
+      tupleLengths.any (· != tupleLengths.headD 0))
+  -- Matching arrays/tuples already recurse componentwise above. Only a
+  -- mixed shape needs this second join; recursing twice at every matching
+  -- container depth would make deeply nested inference exponential.
+  let tupleArray : Option Ty := if !needsArray then none else do
+    let parts ← types.mapM fun | .tup ts => some ts | .arr t => some [t] | _ => none
+    let components := parts.flatten
+    if components.isEmpty then none else return .arr (← commonUpper? env components)
+  let candidates := (mergeTypes (structural.toList ++ tupleArray.toList ++ types.flatMap (upperViews env))).filter fun candidate =>
     types.all (env.boundSubtype · candidate)
   let best := candidates.filter fun candidate => !candidates.any fun other =>
     other != candidate && env.boundSubtype other candidate && !env.boundSubtype candidate other

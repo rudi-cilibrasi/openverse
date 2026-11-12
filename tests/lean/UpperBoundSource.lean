@@ -14,12 +14,13 @@ def main (args : List String) : IO Unit := do
     "overload-shapes", "overload-values", "overload-inherited", "overload-projected", "overload-state",
     "peer-tuple-value", "peer-tuple-values", "peer-tuple-method", "peer-tuple-unique", "peer-numeric", "peer-any",
     "peer-inference", "peer-state", "peer-cancel", "peer-containers-control", "peer-containers",
-    "peer-container-inference", "peer-map-keys"]
+    "peer-container-inference", "peer-map-keys", "peer-refinement", "peer-tuple-array"]
   let negative := ["choice-refusal", "default-refusal", "override-refusal", "overload-interface-refusal",
     "overload-ancestor-refusal", "overload-optional-refusal", "overload-empty-refusal", "overload-scope-refusal",
     "overload-value-refusal", "interior-readonly-refusal", "interior-effect-refusal",
     "peer-tuple-comparable-refusal", "peer-tuple-relation-refusal", "peer-narrow-refusal", "peer-float-refusal",
-    "peer-map-key-refusal", "peer-container-arity-refusal", "peer-container-narrow-refusal"]
+    "peer-map-key-refusal", "peer-container-arity-refusal", "peer-container-narrow-refusal",
+    "peer-refinement-narrow-refusal", "peer-refinement-literal-refusal"]
   let mut failures := 0
   for name in positive ++ negative do
     let root := s!"tests/upper-bounds/{name}"
