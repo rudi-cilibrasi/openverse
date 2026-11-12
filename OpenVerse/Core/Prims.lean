@@ -127,6 +127,9 @@ def rangeVals (a b : Int) : List Value :=
 /-- Comparison helper: succeed with the left operand when `b` holds. -/
 def cmpRes (b : Bool) (left : Value) : Res := if b then .ok left else .fail
 
+-- The equation compiler needs this budget for the combined four-int
+-- rational shapes and unary float families. Keep it local to the dispatcher.
+set_option maxHeartbeats 1000000 in
 /-- The meaning of each primitive. -/
 def Prim.apply : Prim → List Value → Res
   | .add, [.int a, .int b, .int c, .int d] => ratArith .add a b c d
