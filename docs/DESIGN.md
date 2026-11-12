@@ -2235,7 +2235,12 @@ there, is lifted out by that lifting, marked `$liftCast` (`Refine.markCast`,
 which `Choice.hasLiftable` and `liftE` take as a value to bind, as a
 choice): the operands before it bound, then `$k… := T[X]`, a cast clause
 (`liftCastClause`, in `withCastClauses` and `elabSeqIn`; a `<decides>`
-body of one expression is the block of it, `elabBodyOv`). In a sequence whose names
+body of one expression is the block of it, `elabBodyOv`). A branch of an
+`if` in a failure context with such a cast in it, written as an
+expression, is the block of it instead (`Refine.castsOf`, the `blocks` of
+`withCastClauses`): lifting the cast out of the `if` would run it whichever
+branch runs. All three are taken when the cast is refused as written, so a
+program that compiled before keeps its code. In a sequence whose names
 end with it (a block, so a `<decides>` body or `option{…}`'s, and the
 operand of `not`, `and` and `or`), `pre; D := T[X]; rest` is `pre; if (D
 := T[X]) then {rest} else fail` (`elabSeqIn`; the `else` is

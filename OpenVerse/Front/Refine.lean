@@ -263,6 +263,18 @@ partial def castsIn (isClass : String → Bool) (c : SExpr) : List Pos :=
   | .app .. => if (castClause? c).isSome then inner c else go c
   | e => go e
 
+/-- The places of the casts to a class in an expression that is not a
+    clause of its failure context but is evaluated in it (an `if`'s branch):
+    it, or one inside it that the lifting of choices reaches. As the block
+    of the expression, each is a clause of that block, or lifted to be one
+    (`elabSeqIn`), and runs only where the expression does. -/
+def castsOf (isClass : String → Bool) (e : SExpr) : List Pos :=
+  match e with
+  | .block .. => []
+  | .app q (.ident _ T) [_] true | .decl _ _ none false (.app q (.ident _ T) [_] true) =>
+    (if isClass T then [q] else []) ++ castsIn isClass e
+  | _ => castsIn isClass e
+
 /-- Clause `c` with the cast at `q` inside it marked to be a clause of its
     own (`$liftCast`), which the lifting of choices then makes it
     (`Choice.liftE`): the operands evaluated before it bound to names first,
