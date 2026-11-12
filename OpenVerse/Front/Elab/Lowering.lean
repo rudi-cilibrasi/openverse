@@ -920,7 +920,7 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
   -- Only refining lifts borrow task ownership. Ordinary callees still
   -- stop their own roots when they return. A nested lift forwards through
   -- every enclosing lift, including one that starts no roots directly.
-  let lifts := lows.filter fun (_, name, _) => defaultBridge name || env.castRequests.any (·.name == name)
+  let lifts := lows.filter fun (_, name, _) => defaultBridge name || choiceDefaultBridge name || env.castRequests.any (·.name == name)
   let mut taskLifts := lifts.filterMap fun (gi, _, _) =>
     if Suspend.countSusp (· == branchMark) (fun _ => false) false (· == spawnMark) fns[gi]!.body > 0 ||
         Suspend.countArms (· == rushMark) fns[gi]!.body > 0 then some gi else none

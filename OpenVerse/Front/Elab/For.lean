@@ -582,7 +582,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
                 let polymorphic := !typing.params.isEmpty
                 if !c.constructProbe && (!types.all (some · == types.head?) || restCl.any isCF) then
                   let before ← get
-                  let operations ← choiceOperations elabE c stem b.name typing (restCl ++ [bd])
+                  let operations ← choiceOperations elabE c stem b.name typing (restCl ++ [bd]) (forBody := some bd)
                   let typing := operations.plan
                   let poly ← operations.context (← if polymorphic then choiceTypeContext c typing else pure c)
                   let staged ← stagedSuffix poly gp b.name typing.binding b.alts
@@ -666,7 +666,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
                 let before ← get
                 modify fun st => { st with fx := [] }
                 let trial ← tryCatch (do
-                  let operations ← choiceOperations elabE c stem b.name plan (restCl ++ [bd])
+                  let operations ← choiceOperations elabE c stem b.name plan (restCl ++ [bd]) (forBody := some bd)
                   let plan := operations.plan
                   let poly ← operations.context (← choiceTypeContext c plan)
                   let slot ← fresh plan.binding

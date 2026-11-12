@@ -8,6 +8,24 @@ tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
 limit="${CHOICE_SIZE_TIMEOUT:-120}"
 # Keep modes sorted on separate lines so independent additions merge cleanly.
 kinds=(
+  named-optional-first
+  named-optional-for
+  named-optional-waiting
+  named-partial-first
+  named-partial-for
+  named-partial-waiting
+  named-reordered-first
+  named-reordered-for
+  named-reordered-waiting
+  named-generic-first
+  named-generic-for
+  named-generic-waiting
+  named-inherited-first
+  named-inherited-for
+  named-inherited-waiting
+  named-waitingdefault-first
+  named-waitingdefault-for
+  named-waitingdefault-waiting
   setter-nested-first
   setter-nested-for
   setter-nested-waiting
@@ -342,6 +360,35 @@ for kind in "${kinds[@]}"; do
     python3 - "$kind" "$count" >"$tmp/p.verse" <<'PY'
 import sys
 kind, count = sys.argv[1], int(sys.argv[2])
+if kind.startswith('named-'):
+    _, shape, mode = kind.split('-')
+    n = count
+    waiting=mode=='waiting'
+    print('Dup(X:t where t:type)<computes>:t=X|X')
+    if shape=='waitingdefault':
+     print('Next(X:int)'+('<suspends>' if waiting else '<computes>')+':int='+('block{Sleep(0.001);X}' if waiting else 'X'))
+    method='M(?X:int=K)<computes>:int=X'
+    args=lambda i:''
+    if shape=='partial':
+     method='M(?X:int=K,?Y:int=5)<computes>:int=X+Y';args=lambda i:'?Y:=3'
+    elif shape=='reordered':
+     method='M(?X:int=K,?Y:int=5)<computes>:int=X+Y';args=lambda i:'?Y:=3,?X:=4'
+    elif shape=='generic':
+     method='M(X:u,?Y:u=X where u:type)<computes>:u=Y';args=lambda i:f'A{i}.K,?Y:=A{i}.K'
+    elif shape=='waitingdefault':
+     method='M(?X:int=Next(K))'+('<suspends>' if waiting else '<computes>')+':int=X'
+    if shape=='inherited':
+     print('base:=class:\n    K:int\n    '+method+'\nca:=class(base){}\ncb:=class(base){}')
+    else:
+     for name in ['ca','cb']:print(name+':=class:\n    K:int\n    '+method)
+    clauses=','.join(f'A{i}:=(Dup(ca{{K:=1}})|Dup(cb{{K:=2}}))' for i in range(n))
+    value='+'.join(f'A{i}.M({args(i)})' for i in range(n))
+    print('Main()'+('<suspends>' if waiting else '')+':void=')
+    if mode=='first':print(f'    if({clauses},R:={value}):Print("ok")')
+    else:
+     body='block{Sleep(0.001);'+value+'}' if waiting else value
+     print(f'    Rows:=for({clauses}):{body}\n    Print("{{Rows.Length}}")')
+    sys.exit(0)
 print('Two(N:int):int = N | N + 1')
 if kind == 'heterogeneous-nested-for':
     print('Dup(X:t where t:type)<computes>:t=X|X')
@@ -1565,9 +1612,12 @@ PY
       diff -u "$tmp/expected" "$tmp/lean.out"
       diff -u "$tmp/expected" "$tmp/c.out"
     fi
-    if [[ $kind == conversion-* && $count == 4 ]]; then
+    if [[ ( $kind == named-* || $kind == conversion-* ) && $count == 4 ]]; then
       expected=256
-      [[ $kind == *-first ]] && expected=1
+      if [[ $kind == *-first ]]; then
+        expected=1
+        [[ $kind == named-* ]] && expected=ok
+      fi
       printf '%s\n' "$expected" >"$tmp/expected"
       timeout "$limit" "$root/.lake/build/bin/openverse" run "$tmp/p.verse" >"$tmp/lean.out"
       timeout "$limit" "$root/runtime/build/cverse" "$tmp/p.vbc" >"$tmp/c.out"

@@ -82,6 +82,7 @@ jobs:
             echo "FUZZ_MODEL_WRITE_DICTIONARY=$((120 * k))"
             echo "FUZZ_MODEL_NESTED_WRITE_DICTIONARY=$((120 * k))"
             echo "FUZZ_MODEL_RESULT_ALIAS_DICTIONARY=$((120 * k))"
+            echo "FUZZ_MODEL_NAMED_DICTIONARY=$((120 * k))"
             echo "FUZZ_MODEL_NUMERIC_WRITE_DICTIONARY=$((120 * k))"
           } >> "$GITHUB_ENV"
           echo "first seed $seed, counts x$k"
