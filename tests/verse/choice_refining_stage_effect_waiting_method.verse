@@ -6,7 +6,7 @@ listener:=class:
     Add(N:int):void=
         set Sum+=N
         Print("heard {N} {Sum}")
-worker:=class:
+worker:=class<computes>:
     Signal(H:cell,N:int)<suspends><reads>:int=
         Sleep(0.1)
         H.N+N

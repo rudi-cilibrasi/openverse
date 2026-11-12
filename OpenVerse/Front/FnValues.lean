@@ -143,7 +143,7 @@ partial def _root_.OpenVerse.Front.SExpr.tyNames : SExpr → List String
   | .caseE _ e arms => e.tyNames ++ arms.flatMap fun (q, v) => (q.map SExpr.tyNames).getD [] ++ v.tyNames
   | .set _ l _ e => l.tyNames ++ e.tyNames
   | .mapLit _ kvs => kvs.flatMap fun (k, v) => k.tyNames ++ v.tyNames
-  | .structDef _ _ fs => fs.flatMap fun (_, t, d, _) => t.allNames ++ (d.map SExpr.tyNames).getD []
+  | .structDef _ _ _ fs => fs.flatMap fun (_, t, d, _) => t.allNames ++ (d.map SExpr.tyNames).getD []
   | .refineDef _ _ t cs => t.allNames ++ cs.flatMap SExpr.tyNames
   | .str _ parts => parts.flatMap fun | .code e => e.tyNames | .text _ => []
   | _ => []
@@ -178,7 +178,7 @@ partial def _root_.OpenVerse.Front.SExpr.scan : SExpr → List Shape × List Str
   | .decl _ _ t _ e =>
     let (s, n) := e.scan
     ((t.map STy.fnShapes).getD [] ++ s, n)
-  | .structDef _ _ fs =>
+  | .structDef _ _ _ fs =>
     let (s, n) := scanL (fs.filterMap (·.2.2.1))
     (fs.flatMap (·.2.1.fnShapes) ++ s, n)
   | .refineDef _ _ t cs =>

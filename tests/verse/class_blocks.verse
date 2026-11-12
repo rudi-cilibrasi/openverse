@@ -16,7 +16,7 @@ doubled := class(counter):
         set Count *= 2
         Print("doubled {Name} to {Count}")
 
-quiet := class:
+quiet := class<computes>:
     N:int
     block:
         Print("quiet {N}")

@@ -2,7 +2,7 @@
 pair(a:type,b:type) := class { A:a;B:b }
 dup(t:type) := class(pair(t,t)) { C:int=4 }
 cell := class { var N:int=10 }
-token := class<unique>:
+token := class<allocates><unique>:
     V:int
     block:Print("alloc {V}")
 Two(N:int)<computes>:int=N|N+1

@@ -129,7 +129,7 @@ inductive SExpr where
   | set      : Pos → SExpr → Option String → SExpr → SExpr
   /-- `struct: fields` — each field: name, type, default value, `var`; the
       type parameters of a parametric struct `name(t:type) := struct: …`. -/
-  | structDef : Pos → List TParam → List (String × STy × Option SExpr × Bool) → SExpr
+  | structDef : Pos → List TParam → List String → List (String × STy × Option SExpr × Bool) → SExpr
   /-- `enum:` (closed) or `enum<open>:`, which may gain values (Book of Verse ch. 9). -/
   | enumDef  : Pos → List String → (isOpen : Bool) → SExpr
   /-- `type{_X:t where c₁, c₂, …}`: a refinement type (Book of Verse ch. 11):
@@ -152,7 +152,7 @@ def SExpr.pos : SExpr → Pos
   | .orE p _ _ | .range p _ _ | .tuple p _ | .block p _ | .arrayLit p _
   | .optionLit p _ | .logicLit p _ | .ite p _ _ _ | .forE p _ _ | .gen p _ _ _
   | .loop p _ | .brk p | .ret p _ | .caseE p _ _ | .decl p _ _ _ _ | .set p _ _ _
-  | .structDef p _ _ | .enumDef p _ _ | .refineDef p _ _ _ | .construct p _ _ _ | .mapLit p _ => p
+  | .structDef p _ _ _ | .enumDef p _ _ | .refineDef p _ _ _ | .construct p _ _ _ | .mapLit p _ => p
 
 /-- Immediate expression children, in source order, including call heads,
     construction field bindings and case patterns. Type definitions are

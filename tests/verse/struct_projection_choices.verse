@@ -1,5 +1,5 @@
 # Direct projection in inline, lazy and eager producers, including defaults.
-box(t:type) := struct { E:[]t=Concatenate(); V:int }
+box(t:type) := struct<computes> { E:[]t=Concatenate(); V:int }
 Many(X:t,N:int where t:type)<computes>:int = box(t){V:=N|N+1}.V
 Eager(X:t,N:int where t:type)<computes>:int =
     if(N>0)then (box(t){V:=N|N+1}.V | Eager(X,N-1)) else box(t){V:=0}.V
@@ -7,7 +7,7 @@ Lazy(X:t,N:int where t:type)<transacts><decides>:int =
     N>0
     Print("visit {N}")
     box(t){V:=N}.V | Lazy[X,N-1]
-bad(t:type) := struct { E:[]t=Concatenate(); D:int=None[]; V:int }
+bad(t:type) := struct<computes> { E:[]t=Concatenate(); D:int=None[]; V:int }
 None()<computes><decides>:int =
     false?
     0

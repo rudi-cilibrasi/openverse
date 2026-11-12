@@ -1,5 +1,5 @@
 # overloaded <computes> constructors that fill in defaults (#80 review)
-p := class:
+p := class<computes>:
     A:int = 1
     B:int = 0
 K<constructor>(X:int)<computes> := p:

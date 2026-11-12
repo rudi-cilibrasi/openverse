@@ -54,7 +54,7 @@ effect guarantee.
 | Role or metadata | Behavior and boundary |
 | --- | --- |
 | `native`, `native_callable` | Refused as source annotations on retained declarations/types and at discarded field/struct sites. The source cannot create an FFI binding or bypass effect/type checks by adding a tag. Parser-supported enum syntax already rejects them. |
-| Class/interface/struct heap budgets | Explicit annotations are refused until their construction contracts can be enforced. Operation-level allocation/default/block effects still follow the existing checks. Implementation is tracked in [#508](https://github.com/rudi-cilibrasi/openverse/issues/508). [Class](../../tests/errors/effect_admission_class_budget.verse), [interface](../../tests/errors/effect_admission_interface_budget.verse), [struct](../../tests/errors/effect_admission_struct_budget.verse). |
+| Class/interface/struct heap budgets | Heap annotations are admitted and enforced. No heap annotation means all three permissions, also with metadata such as `unique` or `public`. `decides` and `suspends` are invalid on data types. [#508](https://github.com/rudi-cilibrasi/openverse/issues/508) enforces default/block/allocation budgets, inherited requirements and declared use-site charges. [Class](../../tests/errors/effect_admission_class_budget.verse), [interface](../../tests/errors/effect_admission_interface_budget.verse), [struct](../../tests/errors/effect_admission_struct_budget.verse). |
 | Effects on fields, constants or modules | Refused where the annotation cannot describe the declared value. Field access metadata is separate. Constants retain effects inferred from their initializers; a forgotten `suspends`/`predicts` prefix cannot disappear. |
 | Function declaration metadata | `public`, `internal`, `private`, `protected`, `override`, `final`, `abstract`, `constructor` retain their existing role-dependent handling. They are not function-type effects. This policy does not complete access/final-member semantics. |
 | Other type/access metadata | Existing class/struct/enum/access rules and limitations remain separate from effect admission. This inventory does not certify every accepted non-effect attribute. |
@@ -65,7 +65,7 @@ effect guarantee.
 `EffectPolicy.check` runs at `elabProgramCore` before source rewriting, over
 every loaded definition, parameter/field default, construction type argument,
 nested function type, struct/refinement leaf and optional entry expression.
-Parser checks cover annotations discarded from fields, structs, modules and
+Struct annotations are retained through module and choice rewriting. Parser checks cover annotations discarded from fields, modules and
 parametric type declarations. These checks apply to the ordinary and
 `--no-choice` profiles, and all source CLI commands share them.
 
@@ -95,6 +95,43 @@ check, not a Lean proof of frontend correctness or termination. In particular,
 `computes` restricts heap access; transactional `Print` is not a heap permission
 and remains available under the current output policy.
 
+## Construction contracts (#508)
+
+The pinned `Tests/Effects.versetest` supplies the heap default and inheritance
+rules directly: empty unannotated types have the transacts budget; an empty
+`class<transacts>` still requires all three heap permissions at its call site;
+and a subtype must include the declared effects of its superclass and every
+parent interface. A subtype may widen the budget. These requirements apply to
+unused definitions too. A pure factory therefore declares its data type
+`class<computes>` or `struct<computes>`, rather than relying on an empty body
+to erase a default transacts contract. Existing pure-construction fixtures now
+state that contract explicitly.
+
+Source contracts are recorded after module resolution and before choice,
+function-value and continuation generation. Each construction charges its
+contract as well as the effects of the supplied fields, omitted defaults and
+class blocks. All defaults are checked at their home type arguments, including
+inherited interface defaults. Mutable fields and inherited unique identity
+require allocation at the type definition, even when never instantiated.
+Constructor functions keep their own declared effects; their expanded bodies
+and selected delegations must include the data type's construction budget.
+
+Compiler implementation types (function-value adapters, constructor field
+packets and continuation frames) have no invented user construction contract.
+They retain their existing operation-level checks. Constructing a source type
+inside a generated helper still pays that source type's declared budget.
+The same contracts survive generic instantiation, refining contexts and
+receiver/function-value adapters; no Core or VM rule changes are needed.
+
+These are **heap** contracts. The Book additionally restricts class field
+initializers to convergent expressions, allowing effectful construction as a
+special case (`3582` tests). OpenVerse does not enforce that implicit termination
+rule ([#511](https://github.com/rudi-cilibrasi/openverse/issues/511)); ordinary function calls in defaults remain available with their heap
+budgets checked. Explicit `<converges>` remains refused. OpenVerse's existing
+multi-value/failable-default extension also retains its normal caller failure
+checks; data types cannot declare `<decides>` or `<suspends>`. A heap budget does
+not assert termination, single-valuedness, purity of output or engine behavior.
+
 ## Verification
 
 After `lake build` and `make -C runtime`:
@@ -102,6 +139,7 @@ After `lake build` and `make -C runtime`:
 ```sh
 lake env lean --run tests/lean/EffectPolicy.lean
 bash tests/scripts/test-effect-admission.sh
+bash tests/scripts/test-construction-effects.sh
 ```
 
 The API contract covers direct AST input and all public source compiler entry
@@ -113,6 +151,19 @@ executable control with an independent output oracle, run in Lean and C;
 unused imported variants check the same admission and source-file diagnostic.
 Entry-expression and real missing-heap/callback-permission probes are included.
 The suite currently reports 781 checks.
+
+The construction suite independently enumerates all eight heap subsets for
+class/struct call contracts, defaults in classes/interfaces/structs, and
+class/interface inheritance edges. Empty types isolate declared permissions
+from actual operations; unused definitions isolate definition checking from
+reachability. It also checks default spellings, conflicting effects, mutable
+and unique allocation, diamonds, imported negative cases with widened
+executable controls, and generic/qualified/constructor/callback/choice paths.
+It reports 1,411 checks across 581 cases. Four ordinary fixtures have explicit
+Lean/C output oracles for initializer/block order, generic delegation and
+escaping bound callbacks, choice helpers, rollback and cancellation cleanup.
+Compiler API tests include explicit data contracts supplied in materialized
+helper requests, as well as direct source/AST entry points.
 
 The new ordinary fixtures exercise generic/default/interface/bound callback
 calls, source-order rollback, choice continuations, refining casts and

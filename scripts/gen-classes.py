@@ -1067,11 +1067,34 @@ class Gen:
             [dv for i in c.all_ifaces() for (_, dv) in getattr(i, 'fover', {}).values()]
         if any(h in d for h in self.helpers for d in defaults) or any(f.constructs for f in c.all_fields()):
             return None
-        eff = frozenset('a') if (any(f.var for f in c.all_fields()) or chain[-1].unique) else frozenset()
+        eff = c.construction_eff
         if delegate:
             if delegate['eff'] is None:
                 return None
             eff = eff | delegate['eff']
+        return eff
+
+    def construction_eff(self, data):
+        """Declare data budgets before making constructors with narrow effects.
+
+        Parents precede children. Defaults using helpers/constructed objects
+        and class blocks retain the conservative full budget; simple data
+        preserves allocation-only and computes constructor coverage.
+        """
+        if data.is_iface:
+            fields = fields_of_type(data)
+            chain, ifaces, parents = [], data.closure(), data.parents
+        else:
+            fields, chain, ifaces = data.all_fields(), data.chain(), data.all_ifaces()
+            parents = ([data.parent] if data.parent else []) + data.ifaces
+        defaults = [f.default or '' for f in fields] + [v for a in chain for v in a.over.values()] + \
+            [dv for i in ifaces for (_, dv) in getattr(i, 'fover', {}).values()]
+        unknown = (any(a.has_block for a in chain) or any(f.constructs for f in fields) or
+                   any(h in d for h in self.helpers for d in defaults))
+        eff = ALL if unknown else (frozenset('a') if any(f.var for f in fields) or
+                                   any(a.unique for a in chain) else frozenset())
+        for parent in parents:
+            eff |= parent.construction_eff
         return eff
 
     def ctor(self, c, name, ptypes, earlier, alone):
@@ -2221,6 +2244,13 @@ class Gen:
             i.lines = self.emit_iface(i)
         for c in self.classes:
             self.emit_class_bodies(c)
+        # The heap contract is a declaration: descendants include every
+        # parent's budget even when they override a field default.
+        for data in self.ifaces + self.classes:
+            data.construction_eff = self.construction_eff(data)
+            tag = '<transacts>' if data.construction_eff == ALL else efftext(data.construction_eff)
+            keyword = 'interface' if data.is_iface else 'class'
+            data.lines[0] = data.lines[0].replace(' := ' + keyword, ' := ' + keyword + tag, 1)
         self.gen_ctors()
         for i in self.ifaces:
             self.out += i.lines

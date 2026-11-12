@@ -2,7 +2,7 @@
 pair(a:type,b:type):=class{}
 dup(t:type):=class(pair(t,t)){C:int=4}
 cell:=class{var N:int=30}
-token:=class<unique>{V:int}
+token:=class<allocates><unique>{V:int}
 Reading(H:cell,N:int)<suspends><reads>:int=
     Sleep(0.01)
     H.N+N

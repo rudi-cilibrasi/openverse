@@ -1,5 +1,5 @@
 # a recursive function with several values, taken lazily in an if (#246): its first value constructs a class whose block: prints
-reader := class:
+reader := class<computes>:
     block:
         Print("constructed")
     V:int = 7

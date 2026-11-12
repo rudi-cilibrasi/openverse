@@ -116,8 +116,8 @@ partial def SExpr.mapNamesM (r : Resolver) : SExpr → Except String SExpr := fu
     if !n.startsWith "?" then r.bind p n
     return .decl p n (← ty.mapM (goT p)) v (← go x)
   | .set p l o rhs => return .set p (← go l) o (← go rhs)
-  | .structDef p tps fs =>
-    return .structDef p tps (← fs.mapM fun (n, t, d, v) => do return (n, ← goT p t, ← d.mapM go, v))
+  | .structDef p tps specs fs =>
+    return .structDef p tps specs (← fs.mapM fun (n, t, d, v) => do return (n, ← goT p t, ← d.mapM go, v))
   | .enumDef .. | .refineDef .. => return e
   | .construct p n ts fs => return .construct p (← r.ty p n) (← ts.mapM (goT p)) (← fs.mapM goField)
   | .mapLit p kvs => return .mapLit p (← kvs.mapM fun (k, v) => do return (← go k, ← go v))

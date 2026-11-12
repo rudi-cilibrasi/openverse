@@ -1,0 +1,9 @@
+rollback 0 0
+make 2 1
+keep 2 1
+make 5 2
+work 5
+cancel
+cleanup 7 2
+state 7 2
+exit=0

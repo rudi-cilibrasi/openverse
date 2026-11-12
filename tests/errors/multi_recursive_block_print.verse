@@ -1,6 +1,6 @@
 # expect: 7:0: R has several values and is recursive, or called by a recursive one, and it may print (the block: of reader does)
 # (its call of itself inside an alternative: all its values computed at a call, F$all, not taken lazily, #246)
-reader := class:
+reader := class<computes>:
     block:
         Print("constructed")
     V:int = 7

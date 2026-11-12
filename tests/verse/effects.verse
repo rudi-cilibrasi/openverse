@@ -2,17 +2,17 @@
 # <reads>, <writes>, <allocates>, <transacts>. A function with none has
 # them all.
 
-counter := class:
+counter := class<allocates>:
     var Count:int = 0
     Get()<reads>:int = Count
     Bump()<transacts>:void = set Count += 1
 
-point := class:
+point := class<computes>:
     X:int
     # immutable fields have no heap effect
     Sum(O:point)<computes>:int = X + O.X
 
-token := class<unique>:
+token := class<allocates><unique>:
     N:int
 
 # a var local is not a heap effect

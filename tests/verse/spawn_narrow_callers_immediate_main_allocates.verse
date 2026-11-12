@@ -1,4 +1,4 @@
-token:=class<unique>{V:int}
+token:=class<allocates><unique>{V:int}
 Child()<suspends><allocates>:void=
     Obj:=token{V:=7}
     Print("start {Obj.V}")

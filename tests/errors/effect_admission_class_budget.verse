@@ -1,4 +1,4 @@
-# expect: construction/field effect budgets
+# expect: construction of c
 c:=class<computes>:
     var N:int=0
     block:

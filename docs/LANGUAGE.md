@@ -147,9 +147,13 @@ Explicit internal/implicit effect spellings (`no_rollback`, `dictates`,
 `diverges`, `succeeds`, `fails`) and obsolete `varies` are rejected.
 Transactional output/events retain their documented OpenVerse policy (#495).
 
-Class/interface/struct construction budgets and effects on fields are also
-refused until their contracts can be checked (#508). Existing operation-level
-heap checks and declaration/access metadata remain separate. The
+Class/interface/struct heap construction budgets are enforced on definitions
+and callers (#508). No heap annotation means `transacts`; `computes` permits
+none; `reads`, `writes` and `allocates` permit those named. A subtype must
+include its parent types' construction budgets. Data types cannot declare
+`decides` or `suspends`. Effects on fields are refused; declaration/access
+metadata remains separate. The Book's additional implicit convergence rule
+for field initializers is tracked in #511. The
 [effect inventory](research/effect-conformance.md) records the implemented,
 partial and rejected contracts, source/release evidence, regression links and
 the native/proof boundary. Admission covers every loaded definition, defaults,
@@ -717,7 +721,9 @@ circle := class(shape, labelled):
   body with an effect its function does not allow is an error, and so is
   an override that allows more than what it overrides, and a field that
   is a `var` through one parent and not through another. Variables and values are not the heap:
-  `var` locals and immutable classes have no effect. Lean proves that a
+  `var` locals need no heap permission, and immutable construction requires
+  no operation-level allocation permission. A data type's declared construction
+  budget still counts at every construction, even for an empty type. Lean proves that a
   function without `writes` keeps every existing object as it was
   (`Prog.accepted_no_writes`). A constant cannot hold an object with `var`
   fields or of a `<unique>` class, since it is computed at each use.
@@ -725,7 +731,9 @@ circle := class(shape, labelled):
   constructed, after its fields are given, those of the classes above it
   first, each class's in order; they see the fields by name, as a method
   does, and their effects are those of their code (a parametric class's
-  too). Interfaces have none.
+  too), checked within the class's construction budget. Field defaults and
+  required mutable/unique allocation must fit the budget even when no caller
+  constructs the type. Interfaces have no blocks.
 - **`<unique>`.** A `<unique>` class (and every class below it) is
   comparable: `=` and `<>` test identity, so two instances with equal
   fields differ, and an alias equals its original.

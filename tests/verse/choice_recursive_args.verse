@@ -23,11 +23,11 @@ Opt(N:int)<computes><decides>:?int =
 Empty(N:int)<computes><decides>:[]int =
     N > 0
     array{} | Empty[N - 1]
-animal := class:
+animal := class<computes>:
     Name():string = "animal"
-dog := class(animal):
+dog := class<computes>(animal):
     Name<override>():string = "dog"
-cat := class(animal):
+cat := class<computes>(animal):
     Name<override>():string = "cat"
 Pets(N:int)<computes><decides>:animal =
     N > 0

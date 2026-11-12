@@ -35,7 +35,7 @@ def main : IO Unit := do
   -- visitors treat as leaves. Refusals must occur before unrelated typing.
   let places : List STop := [
     .const p "Unused" (some (.arr bad)) (.arrayLit p []),
-    .const p "Packet" none (.structDef p [] [("F", bad, none, false)]),
+    .const p "Packet" none (.structDef p [] [] [("F", bad, none, false)]),
     .const p "Refined" none (.refineDef p "X" (.name "int")
       [.decl p "F" (some bad) false (.ident p "Never")]),
     .fn p "Unused" [defaultParam] [] [] (.name "int") (.int p 1),
@@ -70,4 +70,31 @@ def main : IO Unit := do
       (elabProgramCore [.fn p "Main" [] [] specs (.name "void") (.tuple p [])])
   let _ ← requireOK "supported" (compile
     "F(X:int)<computes>:int=X+1\nMain():void=Print(\"{F(3)}\")")
+  let construction := "cell:=class<computes>{var N:int=0}\nMain():void={}"
+  expectError "construction compile" "construction of cell" (compile construction)
+  expectError "construction checked" "construction of cell" (compileChecked construction)
+  expectError "construction with" "construction of cell" (compileWith construction [] none)
+  let constructionTops ← requireOK "construction parse" (parseProgram construction)
+  expectError "construction tops" "construction of cell" (compileTops constructionTops [] false none)
+  expectError "construction program" "construction of cell" (elabProgram constructionTops)
+  expectError "construction core" "construction of cell" (elabProgramCore constructionTops)
+  for effect in ["decides", "suspends"] do
+    expectError "AST data effect" s!"<{effect}> is not allowed"
+      (elabProgramCore [.const p "Packet" none (.structDef p [] [effect] []), main])
+  let packet := STop.const p "Packet" none (.structDef p [] ["computes"] [])
+  let usePacket := STop.fn p "Use" [] [] ["computes"] (.name "Packet")
+    (.construct p "Packet" [] [])
+  let _ ← requireOK "AST pure struct" (elabProgramCore [packet, usePacket, main])
+  expectError "AST default construction budget" "declared construction budget"
+    (elabProgramCore [STop.const p "Packet" none (.structDef p [] [] []), usePacket, main])
+  let materializedCell (specs : List String) := STop.classDef p "Cell" [] specs [] false
+    [("N", .name "int", some (.int p 0), true)] [] []
+  let stage (specs : List String) : Choice.FirstLift :=
+    { (default : Choice.FirstLift) with
+        stageOnly := true, key := "api-stage", name := "$stage", pos := p,
+        extraFns := [materializedCell specs] }
+  expectError "materialized data budget" "construction of Cell"
+    (elabProgramCore [main] { loopRequests := [stage ["computes"]] })
+  let _ ← requireOK "materialized allocating budget"
+    (elabProgramCore [main] { loopRequests := [stage ["allocates"]] })
   IO.println "effect admission compiler API contracts passed"

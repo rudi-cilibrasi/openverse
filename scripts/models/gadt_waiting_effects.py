@@ -40,7 +40,7 @@ specs = "".join(f"<{f}>" for f in fx)
 print(f'''pair(a:type,b:type):=class{{}}
 dup(t:type):=class(pair(t,t)){{C:int=4}}
 cell:=class{{var N:int=0}}
-token:=class<unique>{{V:int}}
+token:=class<allocates><unique>{{V:int}}
 Use(P:pair(a,b),Q:pair(c,d),S:pair(e,f),H:cell,B:int where a:type,b:type,c:type,d:type,e:type,f:type)<suspends>{specs}:int=''')
 indent = "    "
 for i in range(depth):

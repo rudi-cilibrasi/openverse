@@ -140,6 +140,9 @@ structure ClassInfo where
 
 /-- The user-defined types of a program. -/
 structure TyEnv where
+  /-- Source construction contracts, collected before helper generation.
+      Compiler implementation types have no source-declared budget. -/
+  constructionFx : Std.HashMap String (List String) := {}
   /-- Each struct: its fields in order (name, type, default value). The
       field types of a parametric struct mention its parameters as `Ty.param`. -/
   structs : List (String × List (String × Ty × Option SExpr)) := []

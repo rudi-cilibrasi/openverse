@@ -748,7 +748,7 @@ partial def parseField (c : Nat) : PM (String × STy × Option SExpr × Bool) :=
 /-- `struct` (after the keyword): optional specifiers, then `:` + fields or `{ fields }`. -/
 partial def parseStructBody (p : Pos) : PM SExpr := do
   let specs ← parseSpecs
-  ofExcept <| EffectPolicy.checkNonFunction p "struct" specs
+  ofExcept <| EffectPolicy.checkData p "struct" specs
   let o ← peekT
   let mut fields := #[]
   if o.isSym ":" then
@@ -773,7 +773,7 @@ partial def parseStructBody (p : Pos) : PM SExpr := do
       if a.isSym "," || a.isSym ";" then bump; continue
       fields := fields.push (← parseField 0)
   else perr o "expected ':' or '{' after struct"
-  return .structDef p [] fields.toList
+  return .structDef p [] specs fields.toList
 
 /-- `enum` (after the keyword): `:` + values or `{ values }`. -/
 partial def parseEnumBody (p : Pos) : PM SExpr := do
@@ -1346,7 +1346,7 @@ partial def parseTopsIn (col : Nat) (pfx : String) (braced : Bool := false) : PM
             | _, _, _ => perr n s!"a parameter of a parametric type is written {prm.name}:type or {prm.name}:subtype(…)"
           pure ({ pos := t.pos, name := prm.name, constraint := c } : TParam)
         match ← parseFnBody with
-        | .structDef bp [] fs => tops := tops.push (.const t.pos name none (.structDef bp tparams fs))
+        | .structDef bp [] specs fs => tops := tops.push (.const t.pos name none (.structDef bp tparams specs fs))
         | _ => perr d s!"only structs can be parametric in openverse ({name})"
         continue
       let effs ← parseSpecs

@@ -3,7 +3,7 @@
 # every effect, is the first to leave A to its default; the <computes> one is then
 # charged with its effects. Swapping the last two constructors makes it compile
 # and print 10 (bug2_ctor_overload_default_effects_ok.verse).
-p := class:
+p := class<computes>:
     A:int = 10
 K<constructor>(X:int) := p:
     A := X
