@@ -103,7 +103,7 @@ partial def elabSubtypeValueWith (elabE : Ctx → SExpr → Option Ty → EM R) 
 /-- Compiler-owned container Up bodies. Every component conversion is an
     ordinary checked call on an explicitly supplied dictionary. The input
     and dictionaries are saved once; traversal preserves array/map order,
-    map keys (even duplicate entries), option absence and tuple shape. No
+    map entry order (even duplicate keys), option absence and tuple shape. No
     runtime cast or map reconstruction is involved. -/
 partial def elabSubtypeLiftWith (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx)
     (p : Pos) (input : SExpr) (dictionaries : List SExpr) (exp : Option Ty) : EM R := do
@@ -115,10 +115,11 @@ partial def elabSubtypeLiftWith (elabE : Ctx → SExpr → Option Ty → EM R) (
       let element ← fresh c
       pure ([(SubtypeEvidence.Bound.mk a c, Expr.local element)], some element)
     | .map k c, .map l a => do
-      if k != l || !isComparable ctx.types (k.commonBounds l) then
-        eerr p "internal: subtype map keys must be equal and comparable"
+      if !isComparable ctx.types k || !isComparable ctx.types l then
+        eerr p "internal: subtype map keys must be comparable"
       let element ← fresh (.tup [k, c])
-      pure ([(SubtypeEvidence.Bound.mk a c, Expr.prim (.tupGet 1) [.local element])], some element)
+      pure ([(SubtypeEvidence.Bound.mk l k, Expr.prim (.tupGet 0) [.local element]),
+        (SubtypeEvidence.Bound.mk a c, Expr.prim (.tupGet 1) [.local element])], some element)
     | .tup cs, .tup bases => do
       if cs.length != bases.length then eerr p "internal: subtype tuple arities differ"
       pure ((bases.zip cs).zipIdx.map (fun ((a, c), i) =>
@@ -148,9 +149,9 @@ partial def elabSubtypeLiftWith (elabE : Ctx → SExpr → Option Ty → EM R) (
     | .opt _, .opt _, some element, [output] =>
       pure (.ite (.assign element (.prim .query [.local inputSlot]))
         (.prim .mkSome [output]) (.lit .none))
-    | .map _ _, .map _ _, some element, [output] =>
+    | .map _ _, .map _ _, some element, [key, output] =>
       pure (.forE element (.local inputSlot) (.lit (.logic true))
-        (.prim .mkTup [.prim (.tupGet 0) [.local element], output]))
+        (.prim .mkTup [key, output]))
     | .tup _, .tup _, none, _ => pure (.prim .mkTup outputs)
     | _, _, _, _ => eerr p "internal: invalid subtype traversal"
   return ⟨setup.foldr (fun (slot, expression) rest => .seq (.assign slot expression) rest) body, target⟩

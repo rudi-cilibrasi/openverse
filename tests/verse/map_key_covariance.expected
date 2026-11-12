@@ -1,0 +1,9 @@
+make 1
+key 2 value 7
+key 1 value 8
+entries 2 count 1
+empty 0
+key only
+value only 9
+rolled
+after 1

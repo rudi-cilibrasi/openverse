@@ -46,6 +46,8 @@ def protocol (p : Pos) : List STop := Id.run do
   let a := STy.name "$subtypeA"
   let b := STy.name "$subtypeB"
   let c := STy.name "$subtypeC"
+  let ka := STy.name "$subtypeKA"
+  let kc := STy.name "$subtypeKC"
   let dict (base derived : STy) := STy.app family [base, derived]
   let input : SParam := { name := "$input", ty := c }
   let up (value : SExpr) := SExpr.app p (.member p value "Up") [.ident p "$input"] false
@@ -66,8 +68,13 @@ def protocol (p : Pos) : List STop := Id.run do
       [.fn p "Up" [input] [] ["override", "computes"] (.name "any") (.ident p "$input")],
     lift arrayFamily [tp "$subtypeA", tp "$subtypeC"] (.arr a) (.arr c),
     lift optionFamily [tp "$subtypeA", tp "$subtypeC"] (.opt a) (.opt c),
-    lift mapFamily [{ pos := p, name := "$subtypeK", constraint := "comparable" },
-      tp "$subtypeA", tp "$subtypeC"] (.map (.name "$subtypeK") a) (.map (.name "$subtypeK") c),
+    .classDef p mapFamily
+      [{ pos := p, name := "$subtypeKA", constraint := "comparable" },
+       { pos := p, name := "$subtypeKC", constraint := "comparable" }, tp "$subtypeA", tp "$subtypeC"]
+      ["computes"] [dict (.map ka a) (.map kc c)] false
+      [("$key", dict ka kc, none, false), ("$element", dict a c, none, false)] []
+      [.fn p "Up" [{ name := "$input", ty := .map kc c }] [] ["override", "computes"] (.map ka a)
+        (.app p (.ident p "$subtypeLift") [.ident p "$input", .ident p "$key", .ident p "$element"] false)],
     .classDef p composeFamily [tp "$subtypeA", tp "$subtypeB", tp "$subtypeC"]
       ["computes"] [dict a c] false
       [("$outer", dict a b, none, false), ("$inner", dict b c, none, false)] []
@@ -136,7 +143,7 @@ inductive Plan where
   | compose : Plan → Plan → Plan
   | array : Plan → Plan
   | option : Plan → Plan
-  | map : Ty → Plan → Plan
+  | map : Plan → Plan → Plan
   | tuple : List Plan → Plan
   deriving Repr, Inhabited
 
@@ -151,7 +158,8 @@ partial def Plan.bound (env : TyEnv) : Plan → Bound
   | .compose outer inner => ⟨(outer.bound env).base, (inner.bound env).derived⟩
   | .array element => ⟨.arr (element.bound env).base, .arr (element.bound env).derived⟩
   | .option element => ⟨.opt (element.bound env).base, .opt (element.bound env).derived⟩
-  | .map key element => ⟨.map key (element.bound env).base, .map key (element.bound env).derived⟩
+  | .map key element => ⟨.map (key.bound env).base (element.bound env).base,
+      .map (key.bound env).derived (element.bound env).derived⟩
   | .tuple elements => ⟨.tup (elements.map fun e => (e.bound env).base),
       .tup (elements.map fun e => (e.bound env).derived)⟩
 
@@ -233,7 +241,8 @@ partial def Plan.valid (env : TyEnv) (locals : List (String × Ty)) : Plan → B
   | .compose outer inner => outer.valid env locals && inner.valid env locals &&
       (outer.bound env).derived == (inner.bound env).base
   | .array element | .option element => element.valid env locals
-  | .map key element => isComparable env key && element.valid env locals
+  | .map key element => isComparable env (key.bound env).base &&
+      isComparable env (key.bound env).derived && key.valid env locals && element.valid env locals
   | .tuple elements => elements.all (·.valid env locals)
 
 private def direct? (env : TyEnv) (base derived : Ty) : Option Plan := do
@@ -264,8 +273,10 @@ where
         | .arr a, .arr c => (go available seen ⟨a, c⟩).map Plan.array
         | .opt a, .opt c => (go available seen ⟨a, c⟩).map Plan.option
         | .map k a, .map l c =>
-          let key := k.commonBounds l
-          if k == l && isComparable env key then (go available seen ⟨a, c⟩).map (Plan.map key) else none
+          if !isComparable env k || !isComparable env l then none else do
+            let key ← go available seen ⟨k, l⟩
+            let element ← go available seen ⟨a, c⟩
+            return .map key element
         | .tup bases, .tup cs =>
           if bases.length == cs.length then
             ((bases.zip cs).mapM fun (a, c) => go available seen ⟨a, c⟩).map Plan.tuple
@@ -303,9 +314,10 @@ partial def Plan.value (env : TyEnv) (p : Pos) : Plan → SExpr
     .construct p optionFamily [bound.base.toSTy, bound.derived.toSTy]
       [.decl p "$element" none false (element.value env p)]
   | .map key element =>
+    let keys := key.bound env
     let bound := element.bound env
-    .construct p mapFamily [key.toSTy, bound.base.toSTy, bound.derived.toSTy]
-      [.decl p "$element" none false (element.value env p)]
+    .construct p mapFamily [keys.base.toSTy, keys.derived.toSTy, bound.base.toSTy, bound.derived.toSTy]
+      [.decl p "$key" none false (key.value env p), .decl p "$element" none false (element.value env p)]
   | .tuple elements =>
     let bounds := elements.map (·.bound env)
     .construct p (tupleFamily elements.length)
@@ -317,20 +329,23 @@ partial def Plan.value (env : TyEnv) (p : Pos) : Plan → SExpr
 partial def Plan.nominals : Plan → List (String × String)
   | .nominal source target _ => [(source, target)]
   | .compose outer inner => (outer.nominals ++ inner.nominals).eraseDups
-  | .array element | .option element | .map _ element => element.nominals
+  | .array element | .option element => element.nominals
+  | .map key element => (key.nominals ++ element.nominals).eraseDups
   | .tuple elements => (elements.flatMap Plan.nominals).eraseDups
   | _ => []
 
 partial def Plan.tupleArities : Plan → List Nat
   | .tuple elements => (elements.length :: elements.flatMap Plan.tupleArities).eraseDups
-  | .array element | .option element | .map _ element => element.tupleArities
+  | .array element | .option element => element.tupleArities
+  | .map key element => (key.tupleArities ++ element.tupleArities).eraseDups
   | .compose outer inner => (outer.tupleArities ++ inner.tupleArities).eraseDups
   | _ => []
 
 partial def Plan.usesLocal : Plan → Bool
   | .local .. | .field .. => true
   | .compose outer inner => outer.usesLocal || inner.usesLocal
-  | .array element | .option element | .map _ element => element.usesLocal
+  | .array element | .option element => element.usesLocal
+  | .map key element => key.usesLocal || element.usesLocal
   | .tuple elements => elements.any Plan.usesLocal
   | _ => false
 
@@ -376,10 +391,10 @@ private partial def commonUpper? (env : TyEnv) (types : List Ty) : Option Ty := 
     | .opt _ => do
       let components ← types.mapM fun | .opt t => some t | _ => none
       return .opt (← commonUpper? env components)
-    | .map key _ => do
-      let components ← types.mapM fun | .map k t => if k == key then some t else none | _ => none
+    | .map _ _ => do
+      let components ← types.mapM fun | .map _ t => some t | _ => none
       let keys ← types.mapM fun | .map k _ => some k | _ => none
-      let key := keys.foldl Ty.commonBounds key
+      let key ← commonUpper? env keys
       if !isComparable env key then none else return .map key (← commonUpper? env components)
     | .tup parts => do
       let rows ← types.mapM fun | .tup ts => if ts.length == parts.length then some ts else none | _ => none

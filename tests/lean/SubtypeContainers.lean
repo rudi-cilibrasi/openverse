@@ -48,7 +48,9 @@ private def header := "
 ArrayUp(X:[]u,D:evidence(t,u) where t:type,u:type)<computes>:[]t=X
 OptionUp(X:?u,D:evidence(t,u) where t:type,u:type)<computes>:?t=X
 MapUp(X:[int]u,D:evidence(t,u) where t:type,u:type)<computes>:[int]t=X
+KeyMapUp(X:[k]u,Keys:evidence(j,k),D:evidence(t,u) where j:subtype(comparable),k:subtype(comparable),t:type,u:type)<computes>:[j]t=X
 TupleUp(X:tuple(u,string),D:evidence(t,u) where t:type,u:type)<computes>:tuple(t,string)=X
+TripleUp(X:tuple(u,string,u),D:evidence(t,u) where t:type,u:type)<computes>:tuple(t,string,t)=X
 Nested(X:[]?tuple(u,string),D:evidence(t,u) where t:type,u:type)<computes>:[]?tuple(t,string)=X
 holder(t:type,u:type):=class<computes>:
     Values:[]u
@@ -76,10 +78,14 @@ Main():void=
     if(V:=OptionUp(option{8},D)?,V=8):Print(\"some 8\")
     M:=MapUp(map{2=>9,1=>4},D)
     if(V:=M[2],V=9):Print(\"map 9 {M.Length}\")
+    K:=KeyMapUp(map{2=>14,1=>15},D,D)
+    if(V:=K[2],V=14):Print(\"keys 14 {K.Length}\")
     ME:[int]int=map{}
     Print(\"empty map {MapUp(ME,D).Length}\")
     T:=TupleUp((10,\"tag\"),D)
     if(T(0)=10):Print(\"tuple 10 {T(1)}\")
+    Triple:=TripleUp((16,\"tail\",17),D)
+    if(Triple(0)=16,Triple(2)=17):Print(\"triple 16 {Triple(1)} 17\")
     Input:[]?tuple(int,string)=array{false,option{(11,\"nested\")}}
     N:=Nested(Input,D)
     if(O2:=N[0],O2?)then Print(\"bad\")else Print(\"nested none\")
@@ -90,7 +96,7 @@ Main():void=
     if(V:=B[0],V=12):Print(\"escaped 12\")
 "
 
-private def stateTrace := "value 1\narray 7 2\nrolled\ncount 1\nempty 0\nnone\nsome 8\nmap 9 2\nempty map 0\ntuple 10 tag\nnested none\nnested 11 nested\nescaped 12\n"
+private def stateTrace := "value 1\narray 7 2\nrolled\ncount 1\nempty 0\nnone\nsome 8\nmap 9 2\nkeys 14 2\nempty map 0\ntuple 10 tag\ntriple 16 tail 17\nnested none\nnested 11 nested\nescaped 12\n"
 
 private def cancelSource := header ++ "
 Worker(X:[]u,D:evidence(rational,u) where u:type)<suspends>:void=
@@ -118,6 +124,7 @@ private def cancelTrace := "winner\ncleanup 7\nafter\n"
     which predate the evidence path. It shares neither the new plans nor
     the new component-dictionary traversal. -/
 private def concrete (source : String) : String := source
+  |>.replace "where j:subtype(comparable),k:subtype(comparable),t:type,u:type" ""
   |>.replace "where t:type,u:type" ""
   |>.replace "where u:type" ""
   |>.replace "holder(t:type,u:type)" "holder"
@@ -125,6 +132,11 @@ private def concrete (source : String) : String := source
   |>.replace "holder(rational,u)" "holder"
   |>.replace "evidence(t,u)" "evidence(rational,int)"
   |>.replace "evidence(rational,u)" "evidence(rational,int)"
+  |>.replace "evidence(j,k)" "evidence(rational,int)"
+  |>.replace "[k]u" "[int]int"
+  |>.replace "[j]t" "[rational]rational"
+  |>.replace "tuple(u,string,u)" "tuple(int,string,int)"
+  |>.replace "tuple(t,string,t)" "tuple(rational,string,rational)"
   |>.replace "tuple(u,string)" "tuple(int,string)"
   |>.replace "tuple(t,string)" "tuple(rational,string)"
   |>.replace "[]u" "[]int"
@@ -140,7 +152,7 @@ Main():void=
     M:=MapUp(Raw(),Numeric())
     Print(\"entries {M.Length}\")
     for(K->V:M):
-        if(V=7)then Print(\"{K}:7\")else if(V=8)then Print(\"{K}:8\")else Print(\"{K}:9\")
+        if(K=2,V=7)then Print(\"2:7\")else if(K=2,V=8)then Print(\"2:8\")else if(K=1,V=9)then Print(\"1:9\")else Print(\"bad entry\")
 "
 
 private def contracts : IO Unit := do
@@ -164,9 +176,18 @@ private def contracts : IO Unit := do
     ((find? {} whole ⟨t, u⟩).isNone &&
       !({ ({} : TyEnv) with boundFacts := [(.arr t, .arr u)] }.boundSubtype u t))
   need "a whole-container proof remains directly usable" ((find? {} whole ⟨.arr t, .arr u⟩).isSome)
-  need "map keys stay invariant" ((find? {} [] ⟨.map .rational .rational, .map .int .int⟩).isNone)
+  need "map keys widen through checked comparable evidence"
+    ((find? {} [] ⟨.map .rational .rational, .map .int .int⟩).any fun plan => plan.valid {} [])
+  let j := Ty.param "j" true
+  let k := Ty.param "k" true
+  need "a value proof cannot substitute for missing key evidence"
+    ((find? {} locals ⟨.map j t, .map k u⟩).isNone)
+  let keyLocals := ("Key", (Bound.mk j k).ty) :: locals
+  need "keys and values use their own real lexical proofs"
+    ((find? {} keyLocals ⟨.map j t, .map k u⟩).any fun plan => plan.valid {} keyLocals)
+  need "map key narrowing is refused" ((find? {} [] ⟨.map .int .rational, .map .rational .int⟩).isNone)
   need "tuple arity stays exact" ((find? {} [] ⟨.tup [.rational], .tup [.int, .int]⟩).isNone)
-  need "an API plan cannot invent comparable map keys" (!(Plan.map t (.identity .int)).valid {} [])
+  need "an API plan cannot invent comparable map keys" (!(Plan.map (.identity t) (.identity .int)).valid {} [])
   let composed := locals ++ [("After", (Bound.mk v (.arr t)).ty)]
   need "component conversion can precede a whole-container capability"
     ((find? {} composed ⟨v, .arr u⟩).any fun plan => plan.valid {} composed)
@@ -179,6 +200,9 @@ private def contracts : IO Unit := do
   need "container peer inference chooses the component upper" (inferred.lookup "t" == some (.arr .rational))
   need "tuple materialization deduplicates its arity"
     ((Plan.tuple [.tuple [.rational, .rational], .rational]).tupleArities == [2])
+  need "map keys retain component materialization requests"
+    ((Plan.map (.tuple [.rational, .identity .string]) (.identity .int)).tupleArities == [2] &&
+      (Plan.map (.nominal "child" "base" []) (.identity .int)).nominals == [("child", "base")])
 
 def main (args : List String) : IO Unit := do
   contracts
@@ -191,7 +215,9 @@ def main (args : List String) : IO Unit := do
     let strict ← compile (name ++ " choice-free") source .choiceFree
     need (name ++ ": admitted source preserves profile bytecode") (compiled.prog.encode == strict.prog.encode)
     artifacts := artifacts ++ [(name, compiled, expected)]
-  for (name, source) in [("container-map-order", mapSource), ("container-map-order-control", concrete mapSource)] do
+  let keyMapSource := mapSource.replace "MapUp(Raw(),Numeric())" "KeyMapUp(Raw(),Numeric(),Numeric())"
+  for (name, source) in [("container-map-order", mapSource), ("container-map-order-control", concrete mapSource),
+      ("container-map-key-order", keyMapSource), ("container-map-key-order-control", concrete keyMapSource)] do
     let compiled ← compile name source
     -- Exercise all values admitted by the map's Core type, including raw
     -- duplicate keys. A conversion must not silently canonicalize entries.

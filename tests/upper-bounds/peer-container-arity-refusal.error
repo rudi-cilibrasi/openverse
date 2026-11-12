@@ -1,1 +1,1 @@
-does not satisfy subtype(tuple(rational,string))
+does not satisfy subtype(tuple(rational, string))

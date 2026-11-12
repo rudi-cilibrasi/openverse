@@ -1359,13 +1359,16 @@ partial def convert (env : TyEnv) (e : Expr) (a b : Ty) : EM (Option Expr) := do
       let x ← modifyGet fun s => (s.nslots, { s with nslots := s.nslots + 1, slotTys := s.slotTys.push a })
       return some (.seq (.assign x e) (.ite (.assign i (.prim .query [.local x])) (.prim .mkSome [c]) (.lit .none)))
     | none => return none
-  -- a map of convertible values is a map of the converted ones (#297)
+  -- Maps are covariant in comparable keys and in values. Traverse the
+  -- existing entries, preserving order/cardinality rather than reinserting.
   | .map k a', .map k' b' =>
-    if k != k' then return none
+    if !isComparable env k || !isComparable env k' then return none
     let i ← modifyGet fun s => (s.nslots, { s with nslots := s.nslots + 1, slotTys := s.slotTys.push (.tup [k, a']) })
-    match ← convert env (.prim (.tupGet 1) [.local i]) a' b' with
-    | some c => return some (.forE i e (.lit (.logic true)) (.prim .mkTup [.prim (.tupGet 0) [.local i], c]))
-    | none => return none
+    let keyExpr := Expr.prim (.tupGet 0) [.local i]
+    let valueExpr := Expr.prim (.tupGet 1) [.local i]
+    let some key ← (if k == k' then pure (some keyExpr) else convert env keyExpr k k') | return none
+    let some c ← (if a' == b' then pure (some valueExpr) else convert env valueExpr a' b') | return none
+    return some (.forE i e (.lit (.logic true)) (.prim .mkTup [key, c]))
   -- a tuple of convertible elements is a tuple of the converted ones
   | .tup ts, .tup us =>
     if ts.length != us.length then return none

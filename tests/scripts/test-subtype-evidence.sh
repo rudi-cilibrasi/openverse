@@ -12,7 +12,7 @@ for name in evidence relocated state state-control cancel cancel-control materia
   runtime/build/cverse "$out/$name.vbc" > "$out/$name.actual"
   diff -u "$out/$name.expected" "$out/$name.actual"
 done
-for name in container-state container-state-control container-cancel container-cancel-control container-map-order container-map-order-control; do
+for name in container-state container-state-control container-cancel container-cancel-control container-map-order container-map-order-control container-map-key-order container-map-key-order-control; do
   runtime/build/cverse "$out/$name.vbc" > "$out/$name.actual"
   diff -u "$out/$name.expected" "$out/$name.actual"
 done

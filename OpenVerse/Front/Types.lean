@@ -1288,7 +1288,8 @@ where
         let seen := (current, target) :: seen
         let structural := match current, target with
           | .arr c, .arr a | .opt c, .opt a => go seen c a
-          | .map k c, .map l a => k == l && isComparable env (k.commonBounds l) && go seen c a
+          | .map k c, .map l a => isComparable env k && isComparable env l &&
+              go seen k l && go seen c a
           | .tup cs, .tup bases => cs.length == bases.length &&
               (cs.zip bases).all (fun (c, a) => go seen c a)
           | _, _ => false
