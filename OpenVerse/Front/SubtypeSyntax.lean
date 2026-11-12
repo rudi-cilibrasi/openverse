@@ -7,6 +7,8 @@ namespace OpenVerse.Front.SubtypeEvidence
 def family : String := "$subtypeEvidence"
 def identityFamily : String := "$subtypeIdentity"
 def composeFamily : String := "$subtypeCompose"
+def rationalFamily : String := "$subtypeRational"
+def eraseFamily : String := "$subtypeErase"
 
 /-- Readonly compiler proofs are separate from dummy type-value fields. -/
 def fieldPrefix : String := "$subtype."

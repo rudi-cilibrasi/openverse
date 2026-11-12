@@ -1271,7 +1271,13 @@ def TyEnv.nominalSubtype (env : TyEnv) (derived base : Ty) : Bool :=
         env.upArgs source args target == targets
     | _, _ => false
 
-/-- Entail a nominal/dependent declaration constraint. Static facts permit
+/-- Direct declaration subtyping, including the ordinary checked numeric
+    embedding and erasure to any. This stays separate from nominal ancestry
+    used to choose a class/interface member view. -/
+def TyEnv.directBoundSubtype (env : TyEnv) (derived base : Ty) : Bool :=
+  env.nominalSubtype derived base || (derived == .int && base == .rational) || base == .any
+
+/-- Entail a declaration constraint. Static facts permit
     type applications; they never authorize an executable unchecked cast. -/
 def TyEnv.boundSubtype (env : TyEnv) (derived base : Ty) : Bool :=
   go (env.boundFacts.length + 1) [] derived
@@ -1279,9 +1285,9 @@ where
   go : Nat → List Ty → Ty → Bool
     | 0, _, _ => false
     | fuel + 1, seen, current =>
-      env.nominalSubtype current base || (!seen.contains current &&
+      env.directBoundSubtype current base || (!seen.contains current &&
         env.boundFacts.any fun (upper, lower) =>
-          env.nominalSubtype current lower && go fuel (current :: seen) upper)
+          env.directBoundSubtype current lower && go fuel (current :: seen) upper)
 
 /-- Check this application's own bounds after its arguments are resolved. -/
 def Ty.checkBoundHead (env : TyEnv) : Ty → Except String Unit

@@ -54,6 +54,11 @@ def protocol (p : Pos) : List STop := Id.run do
       [.fn p "Up" [input] [] ["$abstract", "computes"] a (.tuple p [])],
     .classDef p identityFamily [tp "$subtypeC"] ["computes"] [dict c c] false [] []
       [.fn p "Up" [input] [] ["override", "computes"] c (.ident p "$input")],
+    .classDef p rationalFamily [] ["computes"] [dict (.name "rational") (.name "int")] false [] []
+      [.fn p "Up" [{ name := "$input", ty := .name "int" }] [] ["override", "computes"]
+        (.name "rational") (.ident p "$input")],
+    .classDef p eraseFamily [tp "$subtypeC"] ["computes"] [dict (.name "any") c] false [] []
+      [.fn p "Up" [input] [] ["override", "computes"] (.name "any") (.ident p "$input")],
     .classDef p composeFamily [tp "$subtypeA", tp "$subtypeB", tp "$subtypeC"]
       ["computes"] [dict a c] false
       [("$outer", dict a b, none, false), ("$inner", dict b c, none, false)] []
@@ -98,6 +103,8 @@ def mergeRequests (old added : List STop) : List STop :=
 
 inductive Plan where
   | identity : Ty → Plan
+  | rational
+  | erase : Ty → Plan
   | nominal : (source target : String) → (args : List Ty) → Plan
   | local : String → Bound → Plan
   | field : (receiver field : String) → Bound → Plan
@@ -106,6 +113,8 @@ inductive Plan where
 
 def Plan.bound (env : TyEnv) : Plan → Bound
   | .identity t => ⟨t, t⟩
+  | .rational => ⟨.rational, .int⟩
+  | .erase t => ⟨.any, t⟩
   | .nominal source target args =>
     ⟨.struct target (env.upArgs source args target), .struct source args⟩
   | .local _ bound => bound
@@ -180,6 +189,7 @@ def fieldsForBounds (env : TyEnv) (receiver : Ty) (bounds : List Bound) : List (
     slot. The caller supplies its current locals by name and resolved type. -/
 def Plan.valid (env : TyEnv) (locals : List (String × Ty)) : Plan → Bool
   | .identity _ => true
+  | .rational | .erase _ => true
   | .nominal source target args =>
     env.isRefClass source && env.isRefClass target && env.isSub source target &&
       args.length == ((env.sparams.lookup source).getD []).length
@@ -191,6 +201,8 @@ def Plan.valid (env : TyEnv) (locals : List (String × Ty)) : Plan → Bool
 
 private def direct? (env : TyEnv) (base derived : Ty) : Option Plan := do
   if derived == base then return .identity derived
+  if base == .any then return .erase derived
+  if derived == .int && base == .rational then return .rational
   let (.struct source args, .struct target targets) := (derived, base) | none
   if env.isRefClass source && env.isRefClass target && env.isSub source target &&
       args.length == ((env.sparams.lookup source).getD []).length &&
@@ -223,6 +235,8 @@ where
     each name in the new frame; no caller frame's numeric slot is retained. -/
 def Plan.value (env : TyEnv) (p : Pos) : Plan → SExpr
   | .identity t => .construct p identityFamily [t.toSTy] []
+  | .rational => .construct p rationalFamily [] []
+  | .erase t => .construct p eraseFamily [t.toSTy] []
   | .nominal source target args => .construct p (nominalFamily source target) (args.map Ty.toSTy) []
   | .local name _ => .ident p name
   | .field receiver fieldLabel _ => .member p (.ident p receiver) fieldLabel
@@ -265,11 +279,12 @@ private def mergeTypes (types : List Ty) : List Ty :=
 private def upperViews (env : TyEnv) (derived : Ty) : List Ty :=
   let known := derived :: env.boundFacts.filterMap fun (upper, _) =>
     if env.boundSubtype derived upper then some upper else none
-  mergeTypes (known ++ known.flatMap fun
+  let nominal := known ++ known.flatMap fun
     | .struct source args => if env.classes.contains source then
         (env.supers source).map fun target => Ty.struct target (env.upArgs source args target)
       else []
-    | _ => [])
+    | _ => []
+  mergeTypes (nominal ++ (if nominal.contains .int then [.rational] else []) ++ [.any])
 
 /-- A common upper type supported by the nominal relation. Match ordinary
     joins' preference for a shared class when multiple nominal interfaces

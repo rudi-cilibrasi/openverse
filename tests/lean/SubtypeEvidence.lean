@@ -141,6 +141,14 @@ private def resolutionContracts : IO Unit := do
     (SubtypeEvidence.infer ambiguous peerBounds (("t", .struct "left" []) :: ambiguousInputs) true)
   need "an explicit interface is a valid shared upper"
     (peerBounds.all fun bound => ambiguous.boundSubtype (bound.derived.subst peers) (bound.base.subst peers))
+  for inputs in [[("u", Ty.int), ("v", Ty.rational)], [("v", Ty.rational), ("u", Ty.int)]] do
+    let peers ← getSome "infer the ordinary numeric common upper" (SubtypeEvidence.infer declarations peerBounds inputs true)
+    need "numeric peer inference preserves lower instances"
+      (peers.lookup "t" == some .rational && peers.lookup "u" == some .int && peers.lookup "v" == some .rational)
+  let peers ← getSome "infer erased common upper" (SubtypeEvidence.infer declarations peerBounds
+    [("u", .int), ("v", Ty.string)] true)
+  need "unrelated primitive inputs join at any without inventing comparability"
+    (peers.lookup "t" == some .any && !((peers.lookup "t").getD .void).comparable declarations)
   let peerSignature : Sig := { signature with
     params := [.param "u" false, .param "v" false], ret := .void,
     tparams := [("t", false), ("u", false), ("v", false)], bounds := peerBounds }
@@ -524,6 +532,77 @@ private def tupleRelations (tops : List STop) : List STop := tops.map fun
       (fields ++ relationFields p "tuple_bridge"
         [(.name "t", .tup [.name "a", .name "b"])]) overrides methods
   | top => top
+
+private def ordinaryStateSource := "
+Upper(Base:t,Value:u,D:evidence(t,u) where t:type,u:type)<computes>:t=Value
+Accept(Base:any,Value:u,D:evidence(any,u) where u:type)<computes>:void={}
+counter:=class<allocates>:
+    var N:int=0
+    Base()<transacts>:rational=
+        set N+=1
+        Print(\"base {N}\")
+        0
+    BaseAny()<transacts>:any=
+        set N+=1
+        Print(\"any {N}\")
+        0
+    Value()<transacts>:int=
+        set N+=1
+        Print(\"value {N}\")
+        7
+Main():void=
+    H:=counter{}
+    R:=Upper(H.Base(),H.Value(),RationalEvidence())
+    if(R=7)then Print(\"numeric 7\")else Print(\"bad\")
+    if(Upper(H.Base(),H.Value(),RationalEvidence()),false?)then Print(\"bad\")else Print(\"rolled numeric\")
+    Print(\"count {H.N}\")
+    Accept(H.BaseAny(),H.Value(),AnyEvidence())
+    Print(\"erased {H.N}\")
+    if(Accept(H.BaseAny(),H.Value(),AnyEvidence()),false?)then Print(\"bad\")else Print(\"rolled erase\")
+    Print(\"after {H.N}\")
+"
+
+private def ordinaryStateControlSource := ordinaryStateSource
+  |>.replace "Upper(Base:t,Value:u,D:evidence(t,u) where t:type,u:type)<computes>:t=Value"
+    "Upper(Base:rational,Value:int,D:evidence(rational,int))<computes>:rational=Value"
+  |>.replace "Accept(Base:any,Value:u,D:evidence(any,u) where u:type)<computes>:void={}"
+    "Accept(Base:any,Value:int,D:evidence(any,int))<computes>:void={}"
+
+private def ordinaryStateTrace := "base 1\nvalue 2\nnumeric 7\nrolled numeric\ncount 2\nany 3\nvalue 4\nerased 4\nrolled erase\nafter 4\n"
+
+private def ordinaryRelaySource := "
+Relay(X:u,D:evidence(int,u) where u:type)<computes>:rational=X
+carrier(s:type,t:type):=class<computes>:
+    Value:t
+    ReceiverEvidence:evidence(s,t)
+    Up()<computes>:s=Value
+Worker(F:type{_()<computes>:rational})<suspends>:void=
+    defer:
+        if(F()=7):Print(\"cleanup 7\")
+    Sleep(10.0)
+    Print(\"bad\")
+Main()<suspends>:void=
+    if(Relay(7,IntEvidence())=7):Print(\"relay 7\")
+    H:=carrier(rational,int){Value:=7,ReceiverEvidence:=RationalEvidence()}
+    F:type{_()<computes>:rational}=H.Up
+    race:
+        Worker(F)
+        block:
+            Sleep(0.0)
+            Print(\"winner\")
+    Print(\"after\")
+"
+
+private def ordinaryRelayControlSource := ordinaryRelaySource
+  |>.replace "Relay(X:u,D:evidence(int,u) where u:type)<computes>:rational=X"
+    "Relay(X:int,D:evidence(int,int))<computes>:rational=X"
+  |>.replace "carrier(s:type,t:type):=class<computes>:" "carrier:=class<computes>:"
+  |>.replace "Value:t" "Value:int"
+  |>.replace "ReceiverEvidence:evidence(s,t)" "ReceiverEvidence:evidence(rational,int)"
+  |>.replace "Up()<computes>:s=Value" "Up()<computes>:rational=Value"
+  |>.replace "carrier(rational,int)" "carrier"
+
+private def ordinaryRelayTrace := "relay 7\nwinner\ncleanup 7\nafter\n"
 
 private def receiverStateSource := "
 vehicle:=class<allocates>:
@@ -973,6 +1052,18 @@ def main (args : List String) : IO Unit := do
   need "nominal plan validation" (carPlan.valid env [])
   need "wrong generic projection refused" ((find? env [] ⟨.struct "node" [Ty.string], node⟩).isNone)
   need "unrelated interfaces are not evidence" ((find? env [] ⟨.struct "left" [], .struct "right" []⟩).isNone)
+  let numeric ← getSome "numeric embedding plan" (find? env [] ⟨.rational, .int⟩)
+  need "numeric plan is checked and separate from nominal ancestry"
+    (numeric.valid env [] && numeric.bound env == ⟨.rational, .int⟩ && !(env.nominalSubtype .int .rational))
+  need "numeric narrowing is not evidence" ((find? env [] ⟨.int, .rational⟩).isNone)
+  need "float conversion is not int subtyping" ((find? env [] ⟨.float, .int⟩).isNone)
+  let erased ← getSome "generic erasure plan" (find? env [] ⟨.any, u⟩)
+  need "erasure needs no fabricated local capability"
+    (erased.valid env [] && erased.bound env == ⟨.any, u⟩ && !erased.usesLocal && erased.nominals.isEmpty)
+  let toInt := [("AsInt", (Bound.mk .int u).ty)]
+  let composed ← getSome "numeric conversion after actual opaque evidence" (find? env toInt ⟨.rational, u⟩)
+  need "ordinary conversion composes with real lexical evidence" (composed.valid env toInt && composed.usesLocal)
+  need "erasure does not invent a downcast" ((find? env [] ⟨.int, .any⟩).isNone)
   need "interface overlap remains possible" ((find? env [] ⟨.struct "left" [], .struct "both" []⟩).isSome &&
     (find? env [] ⟨.struct "right" [], .struct "both" []⟩).isSome)
   let locals := [("TU", (Bound.mk t u).ty), ("UV", (Bound.mk u v).ty)]
@@ -1072,7 +1163,9 @@ def main (args : List String) : IO Unit := do
     ("NodeEvidence", witness vehicle (.struct "node" [t])),
     ("ComposedEvidence", witness vehicle car),
     ("IntEvidence", witness .int .int),
-    ("DefaultEvidence", witness vehicle t)]
+    ("DefaultEvidence", witness vehicle t),
+    ("RationalEvidence", witness .rational .int),
+    ("AnyEvidence", witness .any .int)]
   let materialize (label source : String) : IO Compiled := do
     let parsed ← getOK s!"{label}: parse" (parseProgram source)
     let rewritten ← getOK s!"{label}: rewrite" (parsed.mapM (rewriteTop automatic))
@@ -1106,6 +1199,14 @@ def main (args : List String) : IO Unit := do
     let parsed ← getOK s!"{label}: parse" (parseProgram source)
     let rewritten ← getOK s!"{label}: rewrite" (parsed.mapM (rewriteTop automatic))
     getOK s!"{label}: compile" (elabProgram (rewritten.map receiverFields))
+  let ordinaryState ← receiverCompile "ordinary subtype state" ordinaryStateSource
+  checkTrace "ordinary subtype state" ordinaryState ordinaryStateTrace
+  let ordinaryStateControl ← receiverCompile "concrete ordinary subtype state" ordinaryStateControlSource
+  checkTrace "concrete ordinary subtype state" ordinaryStateControl ordinaryStateTrace
+  let ordinaryRelay ← receiverCompile "ordinary subtype relay/cancellation" ordinaryRelaySource
+  checkTrace "ordinary subtype relay/cancellation" ordinaryRelay ordinaryRelayTrace
+  let ordinaryRelayControl ← receiverCompile "concrete ordinary relay/cancellation" ordinaryRelayControlSource
+  checkTrace "concrete ordinary relay/cancellation" ordinaryRelayControl ordinaryRelayTrace
   let receiverState ← receiverCompile "receiver state" receiverStateSource
   checkTrace "receiver state" receiverState receiverStateTrace
   let receiverStateControl ← receiverCompile "explicit receiver state" receiverStateControlSource
@@ -1211,6 +1312,12 @@ def main (args : List String) : IO Unit := do
         ("staged-helper", stagedHelper, stagedHelperTrace),
         ("staged-helper-control", stagedHelperControl, stagedHelperTrace),
         ("tuple-relation", tupleRelation, tupleRelationTrace)] do
+      IO.FS.writeBinFile (out ++ s!"/{name}.vbc") compiled.prog.encode
+      IO.FS.writeFile (out ++ s!"/{name}.expected") expected
+    for (name, compiled, expected) in [("ordinary-state", ordinaryState, ordinaryStateTrace),
+        ("ordinary-state-control", ordinaryStateControl, ordinaryStateTrace),
+        ("ordinary-relay", ordinaryRelay, ordinaryRelayTrace),
+        ("ordinary-relay-control", ordinaryRelayControl, ordinaryRelayTrace)] do
       IO.FS.writeBinFile (out ++ s!"/{name}.vbc") compiled.prog.encode
       IO.FS.writeFile (out ++ s!"/{name}.expected") expected
   IO.println "subtype dictionary contracts passed (checked Core, precise/escaping results, inference, member calls/coercion, state/order/rollback/cancellation)"
