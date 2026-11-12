@@ -463,6 +463,10 @@ RFR = random.Random(seed * 1000003 + 283283)
 # without it keep their programs.
 RIFV = random.Random(seed * 1000003 + 283284)
 RPRE = random.Random(seed * 1000003 + 283285)
+# ---- #283: at times the code after a bound choice sets a var of the generator (`set V += Wf`)
+# and its value reads it: every later value and alternative sees what a kept value set, a
+# rejected one's write is undone; a stream of its own.
+RVAR = random.Random(seed * 1000003 + 283286)
 FRN = [0]
 
 
@@ -822,6 +826,11 @@ def gen_gfunc(i):
             stmts.append(('sset', R.choice(vs), R.choice(['=', '+=']), gen_e(sc, vs, 1, False)))
         elif ctr and fx:
             stmts.append(('snext', 'C'))
+    # (#283: at times a var the code after a bound call sets, RVAR)
+    want_var = dec and FRAMES and RVAR.random() < 0.3
+    if want_var and not vs:
+        stmts.append(('svar', 'Vk', ('lit', RVAR.randint(0, 3))))
+        vs = vs + ['Vk']
     allsc = sc + vs
 
     def value():
@@ -883,7 +892,7 @@ def gen_gfunc(i):
         return out
     if dec:
         f['val'] = ('gchoice', alts(True))
-        if FRAMES and RFR.random() < 0.3:
+        if FRAMES and (want_var or RFR.random() < 0.3):
             # (#283: the choice bound, plain code after it, then a value)
             post = []
             for j in range(RFR.randint(0, 2)):
@@ -898,6 +907,10 @@ def gen_gfunc(i):
                     post.append(('sfilt', ('cmp', ('ref', 'Wf'), [(RFR.choice(['>', '<>']), ('lit', RFR.randint(-2, 2)))])))
             names = ['Wf'] + [c[1] for c in post if c[0] == 'slet']
             last = ('bin', RFR.choice(['+', '-', '*']), ('ref', RFR.choice(names)), simple())
+            if vs and (want_var or RVAR.random() < 0.5):
+                v = RVAR.choice(vs)
+                post.append(('sset', v, '+=', ('ref', 'Wf')))
+                last = ('bin', '+', ('ref', v), last)
             f['bound'] = ('Wf', post, ('tell', ffresh(), last) if RFR.random() < 0.3 else last)
     else:
         conds = [('filter', ('cmp', ('ref', 'N'), [('<=', ('lit', f['lo']))]))]
