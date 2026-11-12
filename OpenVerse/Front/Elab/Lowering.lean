@@ -5,36 +5,19 @@ namespace OpenVerse.Front
 open OpenVerse
 /-- An elaborated program and the certificate under which it type-checks:
     `prog.check`, `prog.checkTypes sigs slotTys` and `prog.checkControl` hold,
-    so `Prog.accepted` applies to it. -/
+    so `Prog.accepted` applies to it. Unless the elaboration asks for
+    something (`needs`): it then went no further, and the program is to be
+    elaborated again with it (`Compiled.asking`). -/
 structure Compiled where
   prog    : Prog
   sigs    : Sigs
   slotTys : List (List VTy)
-  /-- Pure mutual groups that retain the eager polymorphic-recursion path. -/
-  eagerNeeds : List String := []
-  /-- (#283) Recursive functions with several values whose values would be
-      computed at the call, but something they run prints or calls `Err()`:
-      the program is elaborated again, with them taken lazily if their shape
-      allows (`Options.lazyRequests`). -/
-  lazyNeeds : List String := []
-  /-- (#283) Uses `R.M` of a method several classes or interfaces declare
-      apart, each with the root `R`'s class is below: the program is
-      elaborated again, with each one's family (`Choice.famAt`). -/
-  familyNeeds : List (Pos × String) := []
-  /-- Functions wanted as values at closed function types no class of
-      theirs gives (#214): the program is elaborated again, with them. -/
-  fnNeeds : List (String × Ty) := []
-  methodNeeds : List FnValues.MethodRequest := []
-  /-- Branches of casts that refine type arguments, to lift (#243): the
-      program is elaborated again, with them. -/
-  castNeeds : List Refine.Lift := []
-  /-- Lazily taken calls whose effects need functions of their own (#246):
-      the program is elaborated again, with them. -/
-  loopNeeds : List Choice.FirstLift := []
-  /-- Classes with a class parent that list an interface at type arguments
-      that are not a prefix of their own (#351): the program is elaborated
-      again, with hidden fields for all of their type parameters. -/
-  witnessNeeds : List String := []
+  needs : Requests := {}
+
+/-- An elaboration that goes no further, as the program is to be elaborated
+    again with `needs`. -/
+def Compiled.asking (needs : Requests) : Compiled :=
+  { prog := default, sigs := { fns := [] }, slotTys := [], needs }
 
 /-- Names a type parameter cannot have. -/
 def typeNames : List String :=
@@ -58,41 +41,22 @@ def checkTParams (env : TyEnv) (tps : List TParam) : Except String (List (String
 
 /-- How a program is compiled from the command line: its shell arguments,
     bound to `Args : []string` (unless the program defines `Args`), and an
-    expression to run instead of `Main`. -/
+    expression to run instead of `Main`; and what earlier elaborations of it
+    asked for (`requests`, which `elabProgram` gives). -/
 structure Options where
   profile : SourceProfile := .full
-  eagerRequests : List String := []
-  /-- (#283) Recursive functions with several values that an earlier
-      elaboration found print or call `Err()` (`Compiled.lazyNeeds`). -/
-  lazyRequests : List String := []
-  /-- (#283) For each use `R.M` of a method several classes or interfaces
-      declare apart, by its place: the root its receiver's class is below,
-      as an earlier elaboration found (`Compiled.familyNeeds`). -/
-  familyPicks : List (Pos × String) := []
   args : Option (List String) := none
   entry : Option SExpr := none
-  /-- Functions wanted as values at closed function types no class of
-      theirs gave in an earlier elaboration (#214): a class for each. -/
-  fnRequests : List (String × Ty) := []
-  methodRequests : List FnValues.MethodRequest := []
   /-- On an internal error (an elaborated function the checker rejects),
       also print that function's Verse Core, its slot types and signature,
       for a bug report (`OPENVERSE_DEBUG=1`). -/
   debug : Bool := false
-  /-- Branches of casts that refine type arguments, found in an earlier
-      elaboration (#243): a function for each. -/
-  castRequests : List Refine.Lift := []
-  /-- Lazily taken calls whose effects need functions of their own, found
-      in an earlier elaboration (#246). -/
-  loopRequests : List Choice.FirstLift := []
-  /-- Classes whose type parameters all get hidden fields, found in an
-      earlier elaboration (#351, `Compiled.witnessNeeds`). -/
-  witnessAll : List String := []
   /-- (#513) Resume the tasks an event's `Signal` wakes in the order they
       began to wait (FIFO), the published API's order, instead of the
       scheduler's (`Main`, then the roots in spawn order): opt-in, so that
       existing traces keep theirs until a default is chosen. -/
   eventFifo : Bool := false
+  requests : Requests := {}
 
 /-- A class or interface definition, as parsed. -/
 structure CDef where
@@ -397,11 +361,11 @@ def liftTagOf (name : String) : String :=
     during effect inference and final elaboration. -/
 def functionBodyCtx (opts : Options) (ctx : Ctx) (p : Pos) (name : String)
     (tps : List (String × Bool)) (scopeClass : Option String := none) : Except String Ctx := do
-  let lifted := opts.castRequests.find? (·.name == name)
+  let lifted := opts.requests.casts.find? (·.name == name)
   let loopLift := if name.startsWith "$choiceOperationDictionary" then none else
-    opts.loopRequests.find? fun l => l.name == name || l.extraFns.any
+    opts.requests.loops.find? fun l => l.name == name || l.extraFns.any
       (fun | .fn _ n .. => n == name | _ => false)
-  let resume := opts.loopRequests.findSome? fun l => l.resumes.find? (·.name == name)
+  let resume := opts.requests.loops.findSome? fun l => l.resumes.find? (·.name == name)
   let source := (resume.map (·.sourceContext)).getD
     ((loopLift.map (·.sourceContext)).getD ((lifted.map (·.sourceContext)).getD {}))
   let returnExit := loopLift.bind (·.returnExit)

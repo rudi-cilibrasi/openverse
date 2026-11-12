@@ -410,6 +410,39 @@ def Ctx.acceptsHelper (ctx : Ctx) (lift : Choice.FirstLift) : Bool :=
   ctx.infersHeapFx ||
     (lift.specs.filter (["reads", "writes", "allocates"].contains ·)).all ctx.fnFx.contains
 
+/-- What an elaboration of the program asks for that only types tell, for
+    the program to be elaborated again with it (`Compiled.needs`), and what
+    earlier elaborations asked for (`Options.requests`): `elabProgram`
+    elaborates the program in rounds until one asks for nothing new. -/
+structure Requests where
+  /-- Pure mutual groups that retain the eager polymorphic-recursion path. -/
+  eager : List String := []
+  /-- (#283) Recursive functions with several values whose values would be
+      computed at the call, but something they run prints or calls
+      `Err()`: taken lazily if their shape allows. -/
+  lazy : List String := []
+  /-- (#283) For each use `R.M` of a method several classes or interfaces
+      declare apart, by its place: the root its receiver's class is below,
+      whose family it takes (`Choice.famAt`). -/
+  families : List (Pos × String) := []
+  /-- Functions wanted as values at closed function types no class of
+      theirs gives (#214): a class for each. -/
+  fns : List (String × Ty) := []
+  /-- Methods wanted as values at function types their own fit only by
+      variance: an adapter for each, by key. -/
+  methods : List FnValues.MethodRequest := []
+  /-- Branches of casts that refine type arguments (#243): a function for
+      each, by key. -/
+  casts : List Refine.Lift := []
+  /-- Functions of their own for lazily taken calls whose effects need them
+      (#246), and the continuations, stages and helpers that consumers of
+      choices are lowered with (#335): by key. -/
+  loops : List Choice.FirstLift := []
+  /-- Classes with a class parent that list an interface at type arguments
+      that are not a prefix of their own (#351): hidden fields for all of
+      their type parameters. -/
+  witnesses : List String := []
+
 /-- A lazily taken call where the first success is taken (#246): its
     function, where, the code it runs once for all the values of an item,
     where an argument of a call of itself sets a name, and the function of
