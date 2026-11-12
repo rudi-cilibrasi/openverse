@@ -1063,6 +1063,22 @@ def refineConds (p : Pos) (v : String) (base : Ty) (conds : List SExpr) :
       | _, _ => throw s!"{p.show}: a refinement's condition compares {v} with a literal number"
     | _ => throw s!"{p.show}: a refinement's condition is a comparison of {v} with a literal number"
 
+/-- (#351) For a reference of type `a` converted to `b`, an interface
+    referred to through views: the classes of `a`'s reference that can be a
+    `b` (those whose view gives `b`'s type arguments, unless closed ones
+    differ), and whether a reference to them is a `b` in Verse Core. -/
+def TyEnv.viewFits (env : TyEnv) (a b : Ty) : Option (List Nat × Bool) :=
+  match a.toVTy env, b.toVTy env with
+  | .ref ts as, .vref es bs =>
+    let closedOff (t : Nat) : Bool := match es.find? (·.1 == t) with
+      | some (_, φ) =>
+        φ.all (·.varsBelow as.length) &&
+          ((φ.map (VTy.inst as)).zip bs).any fun (u, w) => !u.mentionsVar && !w.mentionsVar && decide (u ≠ w)
+      | none => false
+    let fits := ts.filter (!closedOff ·)
+    some (fits, (VTy.ref fits as).sub (.vref es bs))
+  | _, _ => none
+
 /-- Convert a value `e` of type `a` to the supertype `b`, when `a` is a class
     below the class or interface `b`, or an array or option of such (arrays
     and options are covariant): the options of the classes below `a` move to
@@ -1081,20 +1097,14 @@ partial def convert (env : TyEnv) (e : Expr) (a b : Ty) : EM (Option Expr) := do
     -- whose classes include one whose view gives other type arguments,
     -- closed ones that differ, which no object of that type can be: a test
     -- of the others, its object always one of them)
-    match a.toVTy env, b.toVTy env with
-    | .ref ts as, .vref es bs =>
+    match a.toVTy env, b.toVTy env, env.viewFits a b with
+    | .ref ts as, .vref es bs, some (fits, ok) =>
       if (VTy.ref ts as).sub (.vref es bs) then return some e
-      let closedOff (t : Nat) : Bool := match es.find? (·.1 == t) with
-        | some (_, φ) =>
-          φ.all (·.varsBelow as.length) &&
-            ((φ.map (VTy.inst as)).zip bs).any fun (u, w) => !u.mentionsVar && !w.mentionsVar && decide (u ≠ w)
-        | none => false
-      let fits := ts.filter (!closedOff ·)
-      if fits.length == ts.length || !(VTy.ref fits as).sub (.vref es bs) then return some e
+      if fits.length == ts.length || !ok then return some e
       let x ← modifyGet fun s => (s.nslots, { s with nslots := s.nslots + 1, slotTys := s.slotTys.push a })
       let y ← modifyGet fun s => (s.nslots, { s with nslots := s.nslots + 1, slotTys := s.slotTys.push b })
       return some (.seq (.assign x e) (.ite (.assign y (.heap (.isTag fits) [.local x])) (.local y) (.prim .userErr [])))
-    | _, _ => return some e
+    | _, _, _ => return some e
   -- no value has a class type with no concrete class below it (an interface
   -- nothing implements, an abstract class with no subclass): the conversion
   -- to a type above it is unreachable (#98)
@@ -7506,7 +7516,17 @@ partial def elabAppBase (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (b
         -- that type: a direct call (the receiver evaluated first, as `Self`)
         let clsOf (fname : String) : String := (fname.splitOn ".").head!
         let direct : Option String := match (ds.map (ctx.implFor? · root m)).eraseDups with
-          | [some fname] => if env.isSub c (clsOf fname) then some fname else none
+          | [some fname] =>
+            let e := clsOf fname
+            if !env.isSub c e then none
+            -- (#351: at an interface referred to through views, only when
+            -- the receiver converts to it; otherwise each class's test,
+            -- which a class's pins refine by, `i1(t)` as an `i1(char)`)
+            else if env.viewed.contains e && !env.viewed.contains c && c != e then
+              match env.viewFits (.struct c targs) (.struct e (if env.isSub c e then env.upArgs c targs e else [])) with
+              | some (_, false) => none
+              | _ => some fname
+            else some fname
           | _ => none
         -- the receiver as an instance of class `e`, above or below `c` (#39)
         let argsAt (e : String) : List Ty :=
@@ -7756,8 +7776,12 @@ partial def elabAppBase (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (b
             let plainSusp := ms.suspends && env.isSub c e && !((ctx.sig? fname).map (·.tparams.isEmpty)).getD true
             -- (an implementation at or above the receiver's class is called
             -- at the receiver's type arguments, which it takes as they are)
-            if !plainSusp && !env.isSub c e && cls.any fun d =>
-                !(needOf (env.corePins d)).isEmpty || eLen > rargs.length then
+            -- (#351: also one above it, the default of an interface referred
+            -- to through views, when the receiver does not convert to it: a
+            -- class's pins refine it, as Verse Core's are, `dispatchPins`)
+            let viewedAbove := env.isSub c e && env.viewed.contains e && !env.viewed.contains c && c != e
+            if !plainSusp && (!env.isSub c e || viewedAbove) && cls.any fun d =>
+                !(needOf (env.dispatchPins d)).isEmpty || eLen > rargs.length then
               -- one test per set of pins among the classes using `e`'s
               -- implementation: `Typed.dispatch` refines by the pins all the
               -- tested classes share, which may fix more than `e`'s (and it
