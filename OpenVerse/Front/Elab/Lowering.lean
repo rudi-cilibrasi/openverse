@@ -61,6 +61,9 @@ def checkTParams (env : TyEnv) (tps : List TParam) : Except String (List (String
     expression to run instead of `Main`. -/
 structure Options where
   profile : SourceProfile := .full
+  /-- Explicit compatibility mode for OpenVerse's extended field defaults.
+      It retains heap/failure checks, without asserting initializer convergence. -/
+  extendedDefaults : Bool := false
   eagerRequests : List String := []
   /-- (#283) Recursive functions with several values that an earlier
       elaboration found print or call `Err()` (`Compiled.lazyNeeds`). -/

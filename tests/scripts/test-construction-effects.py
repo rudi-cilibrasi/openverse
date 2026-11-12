@@ -44,12 +44,14 @@ with tempfile.TemporaryDirectory(prefix='openverse-construction-effects-') as di
     source = tmp / 'Case.verse'
     output = tmp / 'Case.vbc'
 
-    def case(label, text, admitted, needle='', stdout='ok\n', profile=False):
+    def case(label, text, admitted, needle='', stdout='ok\n', profile=False, extended=False):
         global cases
         cases += 1
         source.write_text(text)
         output.write_bytes(b'existing bytecode')
         extra = ['--no-choice'] if profile else []
+        if extended:
+            extra.append('--extended-defaults')
         result = run(OV + ['run', source, '--emit', output] + extra)
         if admitted:
             require((result.returncode, result.stdout, result.stderr) == (0, stdout, ''),
@@ -89,7 +91,7 @@ with tempfile.TemporaryDirectory(prefix='openverse-construction-effects-') as di
         text = (f'Default(){tags(required)}:int=7\n'
                 f'data:={kind}{tags(budget)}{{Value:int=Default()}}\n' + main)
         case(f'{kind} default {required}/{budget}', text, required <= budget,
-             "default of field 'Value' of data")
+             "default of field 'Value' of data", extended=True)
 
     for spelling in ['', '<public>', '<transacts>', '<reads><writes><allocates>']:
         for kind in ['class', 'struct']:
@@ -139,13 +141,15 @@ with tempfile.TemporaryDirectory(prefix='openverse-construction-effects-') as di
         # These controls establish that the enclosing source remains valid.
         for tag in ('computes', 'reads', 'writes', 'allocates', 'transacts'):
             text = text.replace(f'<{tag}>', '')
-        case(fixture.stem + ' widened control', text, True, stdout='')
+        case(fixture.stem + ' widened control', text, True, stdout='', extended=True)
 
     for fixture in sorted((ROOT / 'tests/verse').glob('construction_effects_*.verse')):
         expected = fixture.with_suffix('.expected').read_text()
         stdout, exit_code = expected.rsplit('exit=', 1)
         require(int(exit_code.strip()) == 0, f'{fixture}: nonzero oracle')
-        case(fixture.stem, fixture.read_text(), True, stdout=stdout)
+        args = fixture.with_suffix('.args')
+        extended = args.exists() and '--extended-defaults' in args.read_text().splitlines()
+        case(fixture.stem, fixture.read_text(), True, stdout=stdout, extended=extended)
 
 print(f'construction-effects: {checks} checks across {cases} cases, '
       'declared calls/defaults/inheritance and Lean/C traces agree')

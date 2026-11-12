@@ -144,9 +144,10 @@ specifiers before lowering can erase them (#494).
 `predicts` and `converges` are explicitly unsupported, including on abstract
 signatures and function types. The pinned Book calls prediction unreleased
 and divergence checking planned; this does not establish their availability
-in every released engine. OpenVerse implements neither predicting call
-propagation nor termination contracts. Ordinary recursion and loops remain
-available; `computes` and execution fuel do not prove termination.
+in every released engine. OpenVerse does not implement predicting call
+propagation or explicit function termination contracts. Ordinary recursion
+and loops remain available outside the initializer admission boundary;
+`computes` and execution fuel do not prove termination.
 
 Source `native`/`native_callable` tags cannot create trusted external bindings.
 Explicit internal/implicit effect spellings (`no_rollback`, `dictates`,
@@ -158,8 +159,22 @@ and callers (#508). No heap annotation means `transacts`; `computes` permits
 none; `reads`, `writes` and `allocates` permit those named. A subtype must
 include its parent types' construction budgets. Data types cannot declare
 `decides` or `suspends`. Effects on fields are refused; declaration/access
-metadata remains separate. The Book's additional implicit convergence rule
-for field initializers is tracked in #511. The
+metadata remains separate. Field defaults also have an independent convergence
+admission boundary (#511). Ordinary source function calls are refused there,
+including calls through constants, methods and function values, even in unused
+definitions. Effectful object construction retains the Book's exception.
+Finite primitives, failure, finite `for` expressions and `first` searches whose
+generated loops cannot repeat remain available. Unknown loops and recursive
+compiler-helper call graphs are refused. This checks admission, not a general
+termination theorem for construction blocks or native primitives.
+
+`--extended-defaults` on `run`, `emit`, `check` or `core` explicitly retains
+OpenVerse's extended computed defaults, including ordinary helper/callback and
+spawn defaults. It makes no convergence assertion; heap, failure, suspension,
+source-profile and Core checks still apply. Compiler clients use
+`Options.extendedDefaults := true` (or the final compatibility argument of
+`compileWith`/`compileTops`). Existing extension fixtures select this option
+explicitly. The
 [effect inventory](research/effect-conformance.md) records the implemented,
 partial and rejected contracts, source/release evidence, regression links and
 the native/proof boundary. Admission covers every loaded definition, defaults,
