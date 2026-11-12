@@ -5351,20 +5351,34 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
             throw err
           let missing := ((err.splitOn "cannot infer type parameter ")[1]?).map
             fun text => (text.splitOn " ").headD ""
-          let noHint (s : Sig) := s.ret.params.isEmpty || missing.any fun v =>
+          let memberName (g : String) := ctx.selfClass.any fun c =>
+            ctx.hasMethod c g || ((ctx.types.methodOverloads.lookup g).getD []).any (ctx.hasMethod c ·) ||
+            ((ctx.types.fields c).any (·.1 == g) && !builtins.contains g && !softBuiltins.contains g)
+          let callSig (g : String) : Option Sig :=
+            if memberName g then
+              ctx.selfClass.bind fun c => (ctx.methodDecl? c g).bind fun owner => ctx.sig? s!"{owner}.{g}"
+            else (ctx.sig? g).orElse fun _ => ctx.sig? s!"{g}$init"
+          let resultContext (s : Sig) :=
+            let owner := if s.pnames.head? == some "Self" || s.pnames.head? == some "$Self" then
+                match s.params.head? with
+                | some (.struct c _) => ((ctx.types.sparams.lookup c).getD []).map (·.1)
+                | _ => []
+              else []
+            s.ret.params.any fun v => s.tparams.any (·.1 == v) && !owner.contains v
+          let noHint (s : Sig) := !resultContext s || missing.any fun v =>
             s.tparams.any (·.1 == v) && !s.ret.params.contains v
           let fnValue : Ty → Bool := fun | .struct n _ => (FnValues.parseName n).isSome | _ => false
           let fixedResult := match a with
             | .app _ (.ident _ g) _ _ =>
               match ctx.lookup g with
               | some binding => fnValue binding.ty
-              | none => (ctx.sig? g).any (·.ret.params.isEmpty)
+              | none => (callSig g).any (fun s => !resultContext s)
             | _ => false
           let probeState ← get
           let noResultEvidence := Choice.anyE (fun
             | .app q (.ident _ g) _ _ =>
               err.startsWith s!"{q.show}:" && (ctx.lookup g).isNone &&
-                ((ctx.sig? g).orElse fun _ => ctx.sig? s!"{g}$init").any noHint
+                (callSig g).any noHint
             | .app q (.member _ receiver method) _ _ =>
               if !err.startsWith s!"{q.show}:" &&
                   !Choice.anyE (fun e => err.startsWith s!"{e.pos.show}:") receiver then false else
