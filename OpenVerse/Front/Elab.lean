@@ -2392,7 +2392,7 @@ partial def forBodySafe (ctx : Ctx) (body : SExpr) : Bool :=
   -- generic/default argument bindings) inside the body. Their ownership is
   -- checked when that consumer elaborates; they do not escape the helper.
   let safeMarkers := ["$sourceSuper", "$methodMiss", "$methodCast", "$methodCase", "$methodType", "$methodParams", "$inlineScope", "$inlineScopeEnd", "$inline", "$choice", "$excl", "$alt", "$firstP", "$first", "$each", "$noLift", "$fxOf",
-    "$forReturns", "$forReturnBody", "$forClauseExits", "$choiceOperation", "$choiceDictionary", "$defer", "$loop", "$rec", "$recTo", "$group", "$member", "$returnTail",
+    "$forReturns", "$forReturnBody", "$forClauseExits", "$choiceOperation", "$choiceGenericOperation", "$choiceDictionary", "$defer", "$loop", "$rec", "$recTo", "$group", "$member", "$returnTail",
     "$tparams", "$params", "$defaults", "$paramDefault", "$freeNames", "$declNames", "$callArgs", "$callSingleton"]
   let rec blocked (e : SExpr) : Bool :=
     match e with
@@ -2719,10 +2719,94 @@ structure ChoiceOperationCase where
   inputs : List Ty
   result : Ty
   specs : List String
+  methodVars : List (String × Bool) := []
+
+/-- A generic dictionary quantifies method parameters at the call, after
+    later generators have supplied their values. Only receiver-dependent
+    columns independent of those method parameters belong to its object. -/
+def choiceGenericOperation (ctx : Ctx) (stem binding : String) (ops : ChoiceOperations)
+    (call : SExpr) (cases : List ChoiceOperationCase) : Option ChoiceOperations := do
+  let .app p (.member _ _ method) arguments bracket := call | none
+  let count := (cases.head?.map (·.methodVars.length)).getD 0
+  if count == 0 || cases.any (·.methodVars.length != count) then none else do
+  let methodVars := (List.range count).map fun i =>
+    (s!"$operationMethod{i}", cases.any fun row => (row.methodVars[i]!).2)
+  let methodTypes := methodVars.map fun (n, b) => (n, Ty.param n b)
+  let methodNames := methodVars.map (·.1)
+  let cases := cases.map fun (row : ChoiceOperationCase) => { row with
+    inputs := row.inputs.map (Ty.subst methodTypes), result := row.result.subst methodTypes }
+  let mut extended := ops.plan
+  let mut inputs : List Ty := []
+  for j in List.range arguments.length do
+    let (next, input) := ChoiceTypes.extend ctx.types stem extended (cases.map fun row => row.inputs[j]!)
+    extended := next
+    inputs := inputs ++ [input]
+  let (extendedPlan, result) := ChoiceTypes.extend ctx.types stem extended (cases.map (·.result))
+  -- An associated type containing a method parameter cannot be fixed
+  -- before that method is invoked. Such a type needs a richer schema.
+  if extendedPlan.instances.any (fun row => row.any fun (_, ty) => ty.params.any methodNames.contains) then none else do
+  let signature := ops.plan.binding :: inputs ++ [result]
+  let classVars := Ty.mergeParamBounds (signature.flatMap Ty.paramsC) |>.filter (!methodNames.contains ·.1)
+  let p0 : Pos := { line := 0, col := 0 }
+  let specs := (if cases.any (·.specs.contains "suspends") then ["suspends"] else []) ++
+    (if bracket then ["decides"] else []) ++
+    (let effects := heapFx.filter fun k => cases.any fun row => (allowedFx row.specs).contains k
+     if effects.isEmpty then ["computes"] else effects)
+  let canonical := cases.map fun row =>
+    let types := row.receiver :: row.inputs ++ [row.result]
+    let vars := Ty.mergeParamBounds (types.flatMap Ty.paramsC) |>.filter (!methodNames.contains ·.1)
+    let rename := vars.zipIdx.map fun ((n, b), i) => (n, Ty.param s!"$operationT{i}" b)
+    (types.map (·.subst rename), vars, rename)
+  let family := s!"$choiceOperationDictionary{(reprStr (method, specs, methodVars, canonical.map (·.1))).hash}"
+  let classNames := classVars.zipIdx.map fun ((_, b), i) => (s!"$operationClass{i}", b)
+  let classRename := classVars.zip classNames |>.map fun ((old, _), (name, bound)) => (old, Ty.param name bound)
+  let declarationSignature := signature.map (·.subst classRename)
+  let classArgs := classNames.map fun (n, _) => STy.name n
+  let tparams (vars : List (String × Bool)) : List TParam := vars.map fun (name, bound) =>
+    { pos := p0, name, constraint := if bound then "comparable" else "type" }
+  let params (types : List Ty) : List SParam := types.zipIdx.map fun (ty, i) => { name := s!"$input{i}", ty := ty.toSTy }
+  let values := (List.range (arguments.length + 1)).map fun i => SExpr.ident p0 s!"$input{i}"
+  let methodTps := tparams methodVars
+  let iface := STop.classDef p0 family (tparams classNames) [] [] true [] []
+    [.fn p0 "$apply" (params declarationSignature.dropLast) methodTps ("$abstract" :: specs)
+      declarationSignature.getLast!.toSTy (.tuple p0 [])]
+  let applyFn := STop.fn p0 (family ++ "$apply")
+    ({ name := "$Self", ty := .app family classArgs } :: params declarationSignature.dropLast)
+    (tparams classNames ++ methodTps) specs declarationSignature.getLast!.toSTy
+    (.app p0 (.member p0 (.ident p0 "$Self") "$apply") values bracket)
+  let mut definitions : List STop := [iface, applyFn]
+  let mut bindings : List (List SExpr) := []
+  for (((row, (_, vars, rename)), instanceTypes), i) in (cases.zip canonical |>.zip extendedPlan.instances).zipIdx do
+    let impl := s!"{family}$case{i}"
+    let actualClassArgs := classVars.map fun (name, bound) => (Ty.param name bound).subst instanceTypes
+    let parentTy := STy.app family (actualClassArgs.map fun t => (Ty.subst rename t).toSTy)
+    let implementationTypes := (row.receiver :: row.inputs ++ [row.result]).map (Ty.subst rename)
+    let canonicalVars := vars.zipIdx.map fun ((_, b), j) => (s!"$operationT{j}", b)
+    definitions := definitions ++ [STop.classDef p0 impl (tparams canonicalVars) [] [parentTy] false [] []
+      [.fn p0 "$apply" (params implementationTypes.dropLast) methodTps ("override" :: specs)
+        implementationTypes.getLast!.toSTy (.app p0 (.member p0 values.head! method) values.tail bracket)]]
+    let value := SExpr.construct p impl (vars.map fun (n, _) => .name n) []
+    bindings := bindings ++ [[SExpr.decl p s!"{stem}$op{ops.params.length}" (some (.app family (actualClassArgs.map Ty.toSTy))) false
+      (.app p (.ident p "$choiceDictionary") [value] false)]]
+  let name := s!"{stem}$op{ops.params.length}"
+  let methodMetadata := methodVars.map fun (n, b) => SExpr.tuple p [.str p [.text n], .int p (if b then 1 else 0)]
+  let instances := extendedPlan.instances.map fun row => SExpr.block p (extendedPlan.params.map fun (n, b) =>
+    SExpr.tuple p [.construct p "$choiceVariable" [(Ty.param n b).toSTy] [],
+      .construct p "$choiceInstance" [((row.lookup n).getD (.param n b)).toSTy] []])
+  let invocation := SExpr.app p (.ident p "$choiceGenericOperation")
+    (.str p [.text (FnValues.shapeOf (arguments.length + 1) specs).name] :: .ident p name ::
+      .block p methodMetadata :: .construct p "$choiceSignature" (signature.map Ty.toSTy) [] ::
+      .block p instances :: .ident p binding :: arguments.map ops.rewrite) bracket
+  some { ops with
+    plan := extendedPlan,
+    params := ops.params ++ [(name, .struct family (classVars.map fun (n, b) => .param n b))],
+    replacements := ops.replacements ++ [(reprStr call, invocation)],
+    casePrelude := (ops.casePrelude.zip bindings).map fun (old, next) => old ++ next,
+    extraFns := ops.extraFns ++ definitions }
 
 /-- Each dictionary implements the method at its original receiver and
-    argument types. Named defaults and method-local type parameters retain
-    their source path until their caller scope can be represented here. -/
+    argument types. Named defaults retain their source path until their
+    caller scope can be represented here. -/
 def choiceOperations (_elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx)
     (stem binding : String) (plan : ChoiceTypes.Plan) (suffix : List SExpr) : EM ChoiceOperations := do
   let mut ops : ChoiceOperations := { plan, casePrelude := plan.instances.map fun _ => [] }
@@ -2740,16 +2824,21 @@ def choiceOperations (_elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx)
       let some owner := ctx.methodDecl? cls method | break
       let some signature := ctx.sig? s!"{owner}.{method}" | break
       let classVars := (ctx.types.sparams.lookup owner).getD []
-      if signature.tparams.any (fun (n, _) => !classVars.any (·.1 == n)) then break
+      let own := signature.tparams.filter fun (n, _) => !classVars.any (·.1 == n)
+      let methodVars := own.zipIdx.map fun ((_, b), i) => (s!"$operationMethod{i}", b)
+      let methodRename := own.zip methodVars |>.map fun ((old, _), (name, bound)) => (old, Ty.param name bound)
       if !signature.named.isEmpty || signature.params.length != arguments.length + 1 || signature.decides != bracket then break
       let substitution := (classVars.map (·.1)).zip (ctx.types.upArgs cls classArgs owner)
-      let inputs := (signature.params.drop 1).map fun ty => (ty.subst substitution).subst ctx.types.tvars
-      let result := (signature.ret.subst substitution).subst ctx.types.tvars
+      let inputs := (signature.params.drop 1).map fun ty => ((ty.subst methodRename).subst substitution).subst ctx.types.tvars
+      let result := ((signature.ret.subst methodRename).subst substitution).subst ctx.types.tvars
       let specs := (if signature.fx.isEmpty then ["computes"] else signature.fx) ++
         (if signature.decides then ["decides"] else []) ++
         (if signature.suspends then ["suspends"] else [])
-      cases := cases ++ [{ receiver := actual, inputs, result, specs }]
+      cases := cases ++ [{ receiver := actual, inputs, result, specs, methodVars }]
     if cases.length != plan.instances.length then continue
+    if cases.any (!·.methodVars.isEmpty) then
+      if let some generic := choiceGenericOperation ctx stem binding ops call cases then ops := generic
+      continue
     let mut extended := ops.plan
     let mut inputs : List Ty := []
     for j in List.range arguments.length do
@@ -4979,6 +5068,71 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
     let r ← elabE ctx factory exp
     modify fun st => { st with fx := effects }
     return r
+  | .app p (.ident _ "$choiceGenericOperation")
+      (.str _ [.text shape] :: .ident _ name :: .block _ metadata ::
+        .construct _ "$choiceSignature" schema [] :: .block _ instances :: values) bracket =>
+    let some dictionary := ctx.lookup name | eerr p "internal: no generic operation dictionary"
+    let .struct family _ := dictionary.ty | eerr p "internal: invalid generic operation dictionary"
+    if !ctx.typeOnly then
+      return ← elabE ctx (.app p (.ident p (family ++ "$apply")) (.ident p name :: values) bracket) exp
+    let some (_, effects) := FnValues.parseName shape | eerr p "internal: invalid generic operation shape"
+    if effects.contains "suspends" && !ctx.suspends then eerr p "an operation dictionary suspends here"
+    if effects.contains "decides" && !ctx.canFail then eerr p "an operation dictionary can fail here"
+    let methodVars ← metadata.mapM fun
+      | .tuple _ [.str _ [.text n], .int _ b] => pure (n, b == 1)
+      | _ => eerr p "internal: invalid operation method parameter"
+    let methodNames := methodVars.map (·.1)
+    let make (probeCtx : Ctx) : EM (Sig × List (String × Ty)) := do
+      let types := { probeCtx.types with tvars := methodVars.map (fun (n, b) => (n, Ty.param n b)) ++ probeCtx.types.tvars }
+      let signature ← schema.mapM (resolveTy types p)
+      if signature.length != values.length + 1 then eerr p "internal: invalid operation signature"
+      let fixed := Ty.mergeParamBounds (signature.flatMap Ty.paramsC) |>.filter (!methodNames.contains ·.1)
+      let sig : Sig := {
+        idx := 0, name := family ++ "$probe", params := signature.dropLast,
+        ret := signature.getLast!, tparams := methodVars, decides := bracket, isConst := false,
+        fx := allowedFx effects, suspends := effects.contains "suspends" }
+      return (sig, fixed.map fun (n, b) => (n, Ty.param n b))
+    let (sig, fixed) ← make ctx
+    let r ← elabGenericCallWith elabE { ctx with callInstanceProbe := some sig.name } p sig values exp (inst := fixed)
+    let .tup arguments := r.ty | eerr p "internal: missing operation type arguments"
+    let after ← get
+    -- Return-directed inference must commute with specializing the
+    -- receiver. A differing choice needs an instance-specific lowering.
+    for entry in instances do
+      let .block _ equations := entry | eerr p "internal: invalid operation instance"
+      let mut substitution : List (String × Ty) := []
+      let mut applies := true
+      for equation in equations do
+        let .tuple _ [.construct _ "$choiceVariable" [left] [], .construct _ "$choiceInstance" [right] []] := equation
+          | eerr p "internal: invalid operation equation"
+        let left ← resolveTy ctx.types p left
+        let right ← resolveTy ctx.types p right
+        match left with
+        | .param n _ => substitution := substitution ++ [(n, right)]
+        | _ => if left != right then applies := false
+      if !applies then continue
+      let actual := { ctx with
+        types := { ctx.types with tvars := substitution ++ ctx.types.tvars },
+        locals := ctx.locals.map fun l => { l with
+          ty := l.ty.subst substitution,
+          storage := l.storage.map fun s => { s with args := s.args.map (·.subst substitution) } } }
+      let check ← tryCatch (do
+        let (instanceSig, fixed) ← make actual
+        let result ← elabGenericCallWith elabE { actual with callInstanceProbe := some instanceSig.name }
+          p instanceSig values (exp.map (·.subst substitution)) (inst := fixed)
+        return some result.ty) (fun _ => pure none)
+      set after
+      let expected := Ty.tup (arguments.map (·.subst substitution))
+      if check.any (fun ty => reprStr ty != reprStr expected) || check.isNone then
+        eerr p "operation inference depends on the receiver instance"
+    let result := sig.ret.subst (methodNames.zip arguments)
+    noteFx p (allowedFx effects) (some name)
+    if effects.contains "suspends" then
+      modify fun st => { st with
+        pendingSuspendingCasts := st.pendingSuspendingCasts + 1,
+        pendingWaitingCasts := st.pendingWaitingCasts + 1,
+        pendingSourceSuspends := st.pendingSourceSuspends + 1 }
+    return ⟨.prim .userErr [], result⟩
   | .app p (.ident _ "$choiceOperation") (.str _ [.text shape] :: .ident _ name :: values) bracket =>
     let some dictionary := ctx.lookup name | eerr p "internal: no operation dictionary"
     let .struct family types := dictionary.ty | eerr p "internal: invalid operation dictionary"
