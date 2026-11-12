@@ -866,13 +866,15 @@ code after it, which is its frame.
   type (`firstBody`'s `retOf`), and `$frameReturn` gives the final value at
   the result type its name, `$Vfin`.
 
+- An alternative, one of several, with code before a choice in it (`T(N -
+  1) | Tell("x", 1) + (1 | 2)`): that code runs after the choice it is an
+  alternative of and before its own. It enters a continuation member that
+  runs that code and then its choice, `$then((), h, $cont(code, $then(choice,
+  …)))` (`Choice.enterOf`): a value of no use, `()`, whose frame's hole is
+  `void`, so it is a value with a frame as any choice's alternative is. Alone
+  in its leaf, that code is the leaf's path code instead (`$returnTail`).
+
 Not yet (#283), each refused with a message, and the route each would take:
-- A choice with code before it that is not literals or names, in one
-  alternative of several (`T(N - 1) | Tell("x", 1) + (1 | 2)`): that code
-  runs after the first choice and before the second, in that alternative
-  alone. Route: an alternative that is a continuation member entered
-  directly, with no hole (alone in its leaf it is that leaf's path code
-  already, `$returnTail`).
 - A point the normal form does not reach: in a condition (an `if` inside an
   expression, `and`, `or`, `not`), a `set`'s value, a comparison's later
   operand, a construction's field, a named argument, a loop. Route: more

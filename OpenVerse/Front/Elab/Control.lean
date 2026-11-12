@@ -910,9 +910,11 @@ partial def loopFlatWith (elabE : Ctx → SExpr → Option Ty → EM R)
   let preSet := rest.findSome? fun e => if Choice.anyE (fun | .set .. => true | _ => false) e then some e.pos else none
   let j := frames.size
   let lives := (Choice.namesUsed k).eraseDups.filterMap fun n => if own.contains n then none else fc.lookup n
-  let inTy ← match Choice.alts? c with
-    | some cs => probeHoleWith elabE ca rty cs
-    | none => pure none
+  let inTy ← match Choice.alts? c, c with
+    | some cs, _ => probeHoleWith elabE ca rty cs
+    | none, .app _ (.ident _ "$rec") _ false | none, .app _ (.ident _ "$recTo") _ false => pure none
+    -- (a value entering a member, `Choice.enterOf`: its own type)
+    | none, _ => probeHoleWith elabE ca rty [c]
   let outTy := (outer.head?.bind (frames[·]?)).bind (·.inTy)
   let frames := frames.push { hole := h, code := k, ctx := fc, pre, preSet, lives, inTy, outTy }
   match Choice.alts? c with

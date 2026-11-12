@@ -1532,6 +1532,19 @@ def hasContinuation (tail : SExpr) : Bool :=
     | .app _ (.ident _ "$then") (c :: _) false => isChoice c
     | _ => false) tail
 
+/-- (#283) An alternative, one of several, with code before a choice in it,
+    `$then(choice, h, frame, block{code})`: that code runs after the choice
+    the alternative is of, and before its own, so it enters a continuation
+    member that runs that code, then its choice, through a hole of no value,
+    `$then((), h', $cont(code, $then(choice, h, frame)))`. Alone in its leaf
+    it is the leaf's path code instead (`normTail`). -/
+def enterOf (a : SExpr) : SExpr := match a with
+  | .app q (.ident r "$then") [c, .ident hq h, k, .block _ pre] false =>
+    if !isChoice c then a else
+    .app q (.ident r "$then") [.tuple q [], .ident hq s!"{h}e",
+      .app q (.ident q "$cont") [.block q pre, .app q (.ident r "$then") [c, .ident hq h, k] false] false] false
+  | a => a
+
 /-- The tests a lazily taken group's shape is made with (#246, #283): `plain`
     code has no choice and no call of the group or of a function with several
     values; `isRec`, a whole call of the group with plain arguments; `inert`,
@@ -1570,11 +1583,10 @@ partial def normAlt (ops : ShapeOps) (a : SExpr) : Option SExpr := do
     let k := renameE [(hole, h)] k
     let c ← match alts? c with
       | some cs => do
-        -- (a choice's own alternatives have no prefix: nothing runs
-        -- between it and them)
+        -- (one of its alternatives with code before a choice of its own
+        -- enters a member that runs it, `enterOf`)
         let cs ← cs.mapM (normAlt ops)
-        guard (cs.all fun | .app _ (.ident _ "$then") [c', _, _, _] false => !isChoice c' | _ => true)
-        pure (mk c.pos cs)
+        pure (mk c.pos (cs.map enterOf))
       | none => pure c
     let k ← if ops.plain k then some k else contBody? ops k
     let q := a.pos
@@ -1596,7 +1608,7 @@ partial def normTail (ops : ShapeOps) (tail : SExpr) : Option SExpr :=
   | .ite p cs t u => do return .ite p cs (← normTail ops t) (← u.mapM (normTail ops))
   | v => do
     match alts? v with
-    | some as => return mk v.pos (← as.mapM (normAlt ops))
+    | some as => return mk v.pos ((← as.mapM (normAlt ops)).map enterOf)
     | none =>
       match ← normAlt ops v with
       | .app q (.ident r "$then") [c, h, k, .block _ pre] false =>
@@ -1653,7 +1665,7 @@ partial def altOK (ops : ShapeOps) (isVar : String → Bool) (a : SExpr) : Bool 
       -- (a choice with code before it is a whole leaf, that code its path's,
       -- `normTail`; not yet one alternative among others)
       (pre.isEmpty || !isChoice c) &&
-      pre.all ops.plain && ((alts? c).map (·.all (altOK ops isVar))).getD (ops.isRec c) &&
+      pre.all ops.plain && ((alts? c).map (·.all (altOK ops isVar))).getD (ops.isRec c || ops.plain c) &&
         (setsIn k).all (fun n => (localsOf k).contains n || !isVar n) &&
         (ops.plain k || match contOf? k with
           | some (cls, tail) => cls.all ops.plain && loopTailOK ops.plain leafOK tail
@@ -2459,7 +2471,8 @@ partial def firstBody (helper : String) (p : Pos) (b : String) (bty : Option STy
       match call [pushed fs' q] c, pre with
       | some e, [.block _ ss] => .block q (ss ++ [e])
       | some e, _ => e
-      | none, _ => a
+      -- (a value entering a member, `enterOf`)
+      | none, _ => valueTo fs' c
     | a =>
       match call (if frames.isEmpty then [] else [pushed fs a.pos]) a with
       | some c => c

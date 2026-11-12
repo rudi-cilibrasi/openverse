@@ -1347,7 +1347,9 @@ Main():void =
   A branch's code before its choice runs when the branch is selected, as a
   returning branch's does (below). The choice's values may be of another
   type than the function's (`S := "a" | "bb"`, then `T[N - 1] + S.Length`,
-  or `S := "{T[N - 1]}" | "x"`).
+  or `S := "{T[N - 1]}" | "x"`). An alternative's code before a choice in
+  it runs each time that alternative is taken, before that choice
+  (`T(N - 1) | Tell("x", 1) + (1 | 2)`).
 
   A returning branch may contain plain clauses and
   nested conditionals before its value. A `return` at the end of the body or
@@ -1447,10 +1449,7 @@ Main():void =
   points must be where the shape reads them, so not in a condition (of an
   `if` inside an expression, `and`, `or`, `not`), a `set`'s value
   (`set K += T(N - 1)`), a comparison's later operand, a construction's
-  field, a named argument or a loop; an alternative of several may have
-  nothing but literals and names before a choice in it (`T(N - 1) |
-  Tell("x", 1) + (1 | 2)` is refused, `T(N - 1) | Y + (1 | 2)` is not)
-  (#283). Also an
+  field, a named argument or a loop (#283). Also an
   overloaded one with an overload that calls the function's own name
   (a generic one's type arguments are inferred from the
   arguments where it is inlined, as at a call, named ones too), a recursive one with a `defer:` of its own, or called by a recursive one (its body a function's, where it would run once), one with a `return`

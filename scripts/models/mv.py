@@ -82,6 +82,8 @@ flags: heavy     (with bif: more of them, longer chains, longer conditions)
                   with frames otherwise)
        notyped   (no choice of strings in a generator with a choice point after it,
                   #283; on with seq otherwise)
+       noenter   (no alternative, one of several, with code before a choice in it,
+                  #283; on with seq otherwise)
 """
 import copy
 import os
@@ -495,6 +497,11 @@ RSEQ = random.Random(seed * 1000003 + 283287)
 # with a choice of strings in its expression, `(("a" | "bb").Length + 2)`: the code after a choice
 # whose values are not the generator's type; a stream of its own.
 RTY = random.Random(seed * 1000003 + 283288)
+# ---- #283, flag enter (on with seq; noenter turns it off): an alternative, one of several, with
+# code before a choice in it, `Tell("sqN", 2) + (Gz0(N - 1, A) | 3)`: that code runs after the
+# generator's choice point and before the alternative's own, once for each time the alternative
+# is taken; a stream of its own.
+RENT = random.Random(seed * 1000003 + 283289)
 SQN = [0]
 USED = set()     # (generator, in a for): the calls the tests make, for MVSEQ's statistics
 FRN = [0]
@@ -513,6 +520,7 @@ def ffresh():
 FRAMES = LAZY and 'noframes' not in flags and 'cf' not in flags
 SEQ = FRAMES and 'noseq' not in flags
 TYPED = SEQ and 'notyped' not in flags
+ENTER = SEQ and 'noenter' not in flags
 REFUSED = [False]
 
 
@@ -990,6 +998,8 @@ def gen_gfunc(i):
         seq_shapes(f, i, sc, ctr)
     if TYPED:
         typed_shapes(f, i, sc, ctr)
+    if ENTER:
+        enter_shapes(f, i, sc, ctr)
     f['stmts'] = stmts
     f['lifted'] = lifted(f)
     CTX.update(ctrs=None, nofail=False, nochoice=False, noprint=False, fmax=None, take=None)
@@ -1087,6 +1097,27 @@ def typed_shapes(f, i, sc, ctr):
             alts.insert(RTY.randint(0, len(alts)),
                         ('bin', '+', ('slen', ('choice', [lit(), lit()])), ('lit', RTY.randint(0, 3))))
             f['seq'] = f.get('seq', set()) | {'typed-expr'}
+
+
+def enter_shapes(f, i, sc, ctr):
+    """(#283, flag enter) an alternative, one of several, in generator f, made already, with code
+    before a choice of its own (RENT alone): a call, then a choice of a call of itself or of
+    values."""
+    v = f['val']
+    if RENT.random() < 0.25:
+        alts = v[1] if v[0] == 'gchoice' else v[3]
+        if alts and alts[0][0] != 'gblk' and not f.get('bound'):
+            a = ('ref', RENT.choice(sc)) if RENT.random() < 0.5 else ('lit', RENT.randint(0, 3))
+            inner = [('lit', RENT.randint(0, 4)), ('lit', RENT.randint(0, 4))]
+            if RENT.random() < 0.6:
+                inner[RENT.randint(0, 1)] = ('gself', i, [('bin', '-', ('ref', 'N'), ('lit', 1)), a] +
+                                             ([('ref', 'C')] if ctr else []))
+            # (the code before the choice a call that prints, or one of a function with no effects,
+            # which is still read once, before it)
+            pre = (('tell', sqfresh(), ('lit', RENT.randint(1, 3))) if RENT.random() < 0.6 else
+                   ('tw', ('lit', RENT.randint(0, 2)), a))
+            alts.insert(RENT.randint(0, len(alts)), ('bin', RENT.choice(['+', '*']), pre, ('choice', inner)))
+            f['seq'] = f.get('seq', set()) | {'enter'}
 
 
 FX_NODES = ('sprint', 'snext', 'tell', 'bprint', 'cnext', 'cadd', 'print', 'next', 'add', 'seti', 'setf')
