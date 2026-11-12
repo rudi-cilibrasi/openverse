@@ -1,0 +1,2 @@
+do
+block{E:=event(int){};E.Signal(1);Print("entry")}

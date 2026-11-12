@@ -1691,6 +1691,15 @@ Main()<suspends>:void =
       Print(B.Await())    # after 1 second: b data
       Print(A.Await())    # after 2 seconds: a data
   ```
+- **Library types.** `event`, `sticky_event`, `task`, `subscribable_event`
+  and `cancelable` are available wherever their types are used, including
+  immediate functions, unused loaded definitions, nested annotations,
+  imports and command-line `do` expressions (#518). Type use alone does
+  not require `<suspends>`; waiting and cancellation still follow their
+  ordinary effect/context checks. A program's own definitions and module
+  names retain their meaning, including methods named `Signal`, `Await`
+  or `Cancel`. Library dependencies retain their built-in meaning when a
+  program owns one of those type names.
 - **`event`.** An `event(t){}` has `E.Await()`, which waits for the next
   `E.Signal(X)` and gives `X`, and `E.Signal(X)`, which wakes every task
   waiting at that moment, each with `X` (the API's reading; the Book's text
@@ -1718,6 +1727,10 @@ Main()<suspends>:void =
   `E.Await()`, and functions of type `type{_():void}` to subscribe (#220).
   It is an `event(void)`, but not a `subscribable_event(t)`, whose
   functions take a value.
+  The `subscribable_event()` shorthand selects the built-in no-payload
+  form; a source-defined class of that name uses its ordinary construction
+  syntax with explicit type arguments when parametric. A program using
+  the built-in subscribable form cannot also define its own `cancelable`.
   The Book marks subscribable events as not yet released in Verse;
   openverse follows the Book's description of them.
 - **Arms.** Arms share the enclosing function's variables. An arm is a

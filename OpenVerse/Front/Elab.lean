@@ -22,6 +22,7 @@ import OpenVerse.Core.Derived
 import OpenVerse.Core.TypeCheck
 import OpenVerse.Core.Control
 import OpenVerse.Front.Parser
+import OpenVerse.Front.PreludeNeeds
 import OpenVerse.Front.Profile
 import OpenVerse.Front.EffectPolicy
 import OpenVerse.Front.Suspend
@@ -634,7 +635,7 @@ partial def resolveTy (env : TyEnv) (p : Pos) : STy → EM Ty
   | .app n args => do
     let ts ← args.mapM (resolveTy env p)
     -- (#220: its handlers take the value, so an event without one has none)
-    if n == "subscribable_event" && ts == [.void] && env.classes.contains "$subscription" then
+    if n == env.concurrencyName "subscribable_event" && ts == [.void] && env.classes.contains "$subscription" then
       eerr p "subscribable_event(void) is not supported: an event without a value is subscribable_event(), whose functions take none (#220)"
     match env.sparams.lookup n with
     | some ps =>
@@ -6611,11 +6612,12 @@ partial def elabSpawn (ctx : Ctx) (p : Pos) (body : SExpr) : EM R := do
   -- suspension belongs to its arguments, including inline defaults.
   if (pre ++ es).any (fun x => waits x > 0) || arms.any (fun x => waits x > 1) then
     eerr p "the arguments of a spawned call cannot suspend (#156)"
-  let ty : Ty := .struct "task" [r.ty]
-  let tagT := ctx.types.tagOf "task"
+  let task := ctx.types.concurrencyName "task"
+  let ty : Ty := .struct task [r.ty]
+  let tagT := ctx.types.tagOf task
   let t ← fresh ty
   -- (its fields: the done flag `false`, the others empty options)
-  let fieldVals := (ctx.types.fields "task" [r.ty]).map fun (_, ft, _) =>
+  let fieldVals := (ctx.types.fields task [r.ty]).map fun (_, ft, _) =>
     if ft == .logic then Expr.lit (.logic false) else Expr.lit .none
   let spawnE : Expr := .seq (.assign t (.heap (.new tagT) fieldVals))
     (.seq (.call mark.idx [.prim .mkArr [.seq callE (.lit .void), .seq (.local t) (.lit .void)]]) (.local t))
@@ -7349,25 +7351,34 @@ partial def elabAppBase (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (b
     -- lowering turns into the cancellation of the task's root
     if m0 == "Cancel" && args.isEmpty then
       let rt ← elabE ctx obj none
-      if let .struct "task" [_] := rt.ty then
-        if !ctx.suspends then eerr p "Cancel suspends: it can only be called in a <suspends> function (#156)"
-        if ctx.inDefer then eerr p "Cancel suspends, and a defer cannot suspend (#156)"
-        if ctx.canFail then eerr p "Cancel suspends, and a failure context (a condition, a filter, or a <decides> call's arguments) cannot (#156)"
-        let some mark := ctx.sig? "$cancelMark" | eerr p "internal error: no Cancel helper"
-        let t ← fresh rt.ty
-        return ⟨.seq (.assign t rt.e) (.call mark.idx [.local t]), .void⟩
+      if let .struct n [_] := rt.ty then
+        if n == ctx.types.concurrencyName "task" then
+          if !ctx.suspends then eerr p "Cancel suspends: it can only be called in a <suspends> function (#156)"
+          if ctx.inDefer then eerr p "Cancel suspends, and a defer cannot suspend (#156)"
+          if ctx.canFail then eerr p "Cancel suspends, and a failure context (a condition, a filter, or a <decides> call's arguments) cannot (#156)"
+          let some mark := ctx.sig? "$cancelMark" | eerr p "internal error: no Cancel helper"
+          let t ← fresh rt.ty
+          return ⟨.seq (.assign t rt.e) (.call mark.idx [.local t]), .void⟩
     -- `E.Signal()` of an `event()` (#156): with the value `void`
     if m0 == "Signal" && args.isEmpty then
       match (← elabE ctx obj none).ty with
-      | .struct "event" [.void] | .struct "sticky_event" [.void] | .struct "$subev0" [] =>
-        return ← elabApp ctx p (.member mp obj "Signal") [.tuple p []] bracket exp
+      | .struct n ts =>
+        if ((n == ctx.types.concurrencyName "event" || n == ctx.types.concurrencyName "sticky_event") &&
+            ts == [.void]) || (n == "$subev0" && ts.isEmpty) then
+          return ← elabApp ctx p (.member mp obj "Signal") [.tuple p []] bracket exp
+        else pure ()
       | _ => pure ()
     if m0 == "Await" && args.isEmpty then
       match (← elabE ctx obj none).ty with
-      | .struct "task" [_] => return ← elabApp ctx p (.ident mp "$Await") [obj] false exp
-      | .struct "event" [_] | .struct "subscribable_event" [_] | .struct "$subev0" [] =>
-        return ← elabApp ctx p (.ident mp "$EvAwait") [obj] false exp
-      | .struct "sticky_event" [_] => return ← elabApp ctx p (.ident mp "$StickyAwait") [obj] false exp
+      | .struct n ts =>
+        if n == ctx.types.concurrencyName "task" && ts.length == 1 then
+          return ← elabApp ctx p (.ident mp "$Await") [obj] false exp
+        else if ((n == ctx.types.concurrencyName "event" || n == ctx.types.concurrencyName "subscribable_event") &&
+            ts.length == 1) || (n == "$subev0" && ts.isEmpty) then
+          return ← elabApp ctx p (.ident mp "$EvAwait") [obj] false exp
+        else if n == ctx.types.concurrencyName "sticky_event" && ts.length == 1 then
+          return ← elabApp ctx p (.ident mp "$StickyAwait") [obj] false exp
+        else pure ()
       | _ => pure ()
     let r0 ← elabE ctx obj none
     -- `X.(i:)M(…)`: `X` as an `i`, so `i`'s `M` (a qualified call)
@@ -7523,7 +7534,7 @@ partial def elabAppBase (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (b
           let skip (f : Nat) := ctx.sigs.any fun s => s.idx == f && s.name == "$spawnMark"
           if pre.any (fun e => Suspend.countSusp isS (fun _ => false) false skip e > 0) then
             eerr p "the arguments of a spawned call cannot suspend (#156)"
-          let taskTy := Ty.struct "task" [msRet]
+          let taskTy := Ty.struct (ctx.types.concurrencyName "task") [msRet]
           let rargs := env.coreArgs c targs
           let mut acc : Expr := .prim .userErr []
           for d in ds.reverse do
@@ -8858,7 +8869,8 @@ partial def elabLoopGen (ctx : Ctx) (p : Pos) (lp : List SExpr) : EM LoopGen := 
 partial def elabSpawnBound (ctx : Ctx) (p : Pos) (fname adapter : String)
     (args : List SExpr) : EM R := do
   let some s := ctx.sig? fname | eerr p s!"internal: no spawn signature for {fname}"
-  let .struct "task" [ret] := ctx.retTy | eerr p "internal: no spawn factory result"
+  let .struct task [ret] := ctx.retTy | eerr p "internal: no spawn factory result"
+  if task != ctx.types.concurrencyName "task" then eerr p "internal: no spawn factory task identity"
   let before := (← get).pendingSuspendingCasts
   let packed ← elabGenericCallWith elabE { ctx with suspends := true } p s args none (packArgs := true)
   let isS (f : Nat) := ctx.sigs.any fun s => s.idx == f && s.suspends
@@ -8949,7 +8961,7 @@ partial def elabSpawnDispatch (ctx : Ctx) (p : Pos) (cls fname declared : String
     tparams := tps.map fun (n, c) =>
       { pos := p, name := n, constraint := if c then "comparable" else "type" },
     specs := ["transacts"] ++ cps.map (fun (n, _) => "$selfTp:" ++ n),
-    ret := (Ty.struct "task" [ret]).toSTy,
+    ret := (Ty.struct (ctx.types.concurrencyName "task") [ret]).toSTy,
     body := .app p (.ident p "$defaultContext")
       [.block p stack, .int p (flags : Int), .app p (.ident p "$spawnBound")
         (.ident p fname :: .ident p adapter :: forwarded) false] false,
@@ -8957,7 +8969,7 @@ partial def elabSpawnDispatch (ctx : Ctx) (p : Pos) (cls fname declared : String
   modify fun st => { st with loopFirst := st.loopFirst ++
     [{ g := "", pos := p, itemCode := .lit .void, argSet := none, lift := .ok lift }] }
   noteFx p s.fx (some fname)
-  return ⟨.prim .userErr [], exp.getD (.struct "task" [ret])⟩
+  return ⟨.prim .userErr [], exp.getD (.struct (ctx.types.concurrencyName "task") [ret])⟩
 
 /-- Supply only the already-evaluated arguments to a selected implementation.
     Omitted defaults run in a forwarding helper, after dispatch has refined
@@ -9802,12 +9814,12 @@ raceMark(A:[]void)<suspends><computes>:void = {}
 rushMark(A:[]void)<suspends><computes>:void = {}
 "
 
-def concTops : Except String (List STop) :=
-  parsePrelude concPrelude ["sched", "Now", "Next", "sleep", "Pc", "Secs", "Wake", "sleepNew",
+def concTops (owned : List String := []) : Except String (List STop) :=
+  parsePrelude concPrelude (owned ++ ["sched", "Now", "Next", "sleep", "Pc", "Secs", "Wake", "sleepNew",
     "sleepInit", "sleepResume", "Sleep", "syncMark", "raceMark", "S", "F", "C", "N", "R", "A",
     "Progress", "Roots", "taskBase", "Done", "Result", "waitf", "T", "X", "waitNew", "waitInit", "waitResume",
     "WaitDone", "Await", "spawnMark", "t", "Sch", "Dead", "evrec", "Got", "Next", "Head", "Tail", "Cur", "W", "L", "V",
-    "EvAwait", "E", "branchMark", "rushMark", "signalAll", "H", "StickyAwait", "Last", "CancelCur", "Cancelled", "Running", "Root", "CancelReq", "CurTask", "cancelMark"]
+    "EvAwait", "E", "branchMark", "rushMark", "signalAll", "H", "StickyAwait", "Last", "CancelCur", "Cancelled", "Running", "Root", "CancelReq", "CurTask", "cancelMark"])
 
 /-- The class of the cells of the stack a lazily taken function with
     several values runs its calls from (#246): an item, and the cells
@@ -9862,11 +9874,11 @@ subev0 := class(event(void)):
         S
 "
 
-def subTops : Except String (List STop) :=
-  parsePrelude subPrelude ["subscription", "Live", "Handlers", "Hs", "H", "S", "F", "X", "t", "Head", "signalAll"]
+def subTops (owned : List String := []) : Except String (List STop) :=
+  parsePrelude subPrelude (owned ++ ["subscription", "Live", "Handlers", "Hs", "H", "S", "F", "X", "t", "Head", "signalAll"])
 
-def subVoidTops : Except String (List STop) :=
-  parsePrelude subVoidPrelude ["subscription", "Live", "Handlers", "Hs", "H", "S", "F", "X", "Head", "signalAll", "subev0"]
+def subVoidTops (owned : List String := []) : Except String (List STop) :=
+  parsePrelude subVoidPrelude (owned ++ ["subscription", "Live", "Handlers", "Hs", "H", "S", "F", "X", "Head", "signalAll", "subev0"])
 
 /-- The tag of the lifts of the refining casts in a function (#53, #243):
     a branch lifted from a class's copy of an interface's default, whose
@@ -10306,8 +10318,8 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
       let k := roots.size
       let n := hs.length
       let body : Expr := .seq
-        (.heap (.set (fieldIdx "task" "$Result")) [.local 0, .prim .mkSome [.call h ((List.range n).map (fun i => Expr.local (i + 1)))]])
-        (.seq (.heap (.set (fieldIdx "task" "$Done")) [.local 0, .lit (.logic true)]) (.lit .void))
+        (.heap (.set (fieldIdx (env.concurrencyName "task") "$Result")) [.local 0, .prim .mkSome [.call h ((List.range n).map (fun i => Expr.local (i + 1)))]])
+        (.seq (.heap (.set (fieldIdx (env.concurrencyName "task") "$Done")) [.local 0, .lit (.logic true)]) (.lit .void))
       let Γk := ttyT :: atys.toList
       fns := fns.push { name := s!"$spawn{k}", arity := n + 1, nslots := n + 1, decides := false,
                         writes := true, body }
@@ -10690,11 +10702,11 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
   -- recorded is forgotten: the other's frames record afresh when they wait,
   -- as one that recorded before in this resumption is in an arm of a
   -- `sync`, `race` or `rush`, which records itself or forgets, #362)
-  let tDoneF := fieldIdx "task" "$Done"
-  let tCancelledF := fieldIdx "task" "$Cancelled"
-  let runningF := fieldIdx "task" "$Running"
-  let rootF := fieldIdx "task" "$Root"
-  let cancelReqF := fieldIdx "task" "$CancelReq"
+  let tDoneF := fieldIdx (env.concurrencyName "task") "$Done"
+  let tCancelledF := fieldIdx (env.concurrencyName "task") "$Cancelled"
+  let runningF := fieldIdx (env.concurrencyName "task") "$Running"
+  let rootF := fieldIdx (env.concurrencyName "task") "$Root"
+  let cancelReqF := fieldIdx (env.concurrencyName "task") "$CancelReq"
   -- (#260: the task whose code runs, a dummy one for `Main`'s; a branch's
   -- wrapper records it as its owner, which is running while the branch
   -- runs)
@@ -11375,25 +11387,6 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     | _ => pure ()
   let helpers ← if usesRat then ratTops else pure []
   let helpers := helpers ++ (← if usesReplaceAll then replaceAllTops else pure [])
-  -- concurrency (#156): the helpers, for a program with a <suspends> function
-  -- (and `subscribable_event`, which extends the concurrency prelude's
-  -- `event`, #210)
-  -- (unless the program defines its own)
-  let defines0 (n : String) : Option Pos := allTops0r.findSome? fun
-    | .classDef p m .. | .fn p m .. | .const p m .. => if m == n then some p else none
-  let usesSubVoid := (defines0 "subscribable_event").isNone && allTops0r.any (·.usesType "$subev0")
-  let usesSub := usesSubVoid || (defines0 "subscribable_event").isNone && allTops0r.any (·.usesType "subscribable_event")
-  if usesSub then
-    if let some p := defines0 "cancelable" then
-      throw s!"{p.show}: cancelable is the type subscribable_event's Subscribe gives: a program that uses subscribable_event cannot define its own (#210)"
-  let usesConc := usesSub || allTops0r.any fun
-    | .fn _ _ _ _ effs _ _ => effs.contains "suspends"
-    | .classDef _ _ _ _ _ _ _ _ ms => ms.any fun
-      | .fn _ _ _ _ effs _ _ => effs.contains "suspends"
-      | _ => false
-    | _ => false
-  let helpers := helpers ++ (← if usesConc then concTops else pure []) ++ (← if usesSub then subTops else pure []) ++
-    (← if usesSubVoid then subVoidTops else pure [])
   let allTops000 := allTops0r.filter (!isRatMarker ·)
   -- modules (#112): every reference to a member, qualified (the entry
   -- expression's too)
@@ -11401,6 +11394,33 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     | some e => [.fn e.pos "$Do" [] [] ["decides"] (.name "void") (.app e.pos (.ident e.pos "$Show") [e] false)]
     | none => []
   let resolved ← resolveModules (allTops000 ++ rawEntry)
+  -- Resolve source names before deciding which soft-library definitions are
+  -- needed. A module's own event and a type parameter named task are distinct
+  -- from the global helper types. Include public API/generated entry paths.
+  let defines0 (n : String) : Option Pos := resolved.findSome? fun
+    | .classDef p m .. | .fn p m .. | .const p m .. => if m == n then some p else none
+  let owned := PreludeNeeds.names.filter (defines0 · |>.isSome)
+  let concurrencyNames := owned.map fun n => (n, "$" ++ n)
+  let requestTops := Refine.functions opts.castRequests resolved ++
+    opts.loopRequests.flatMap (fun l =>
+      STop.fn l.pos l.name l.params l.tparams l.specs l.ret l.body :: l.extraFns) ++
+    opts.methodRequests.map (fun r => STop.fn r.pos "$methodRequest"
+      ((r.receiver :: r.params).map fun t => { name := "$arg", ty := t }) r.tparams r.effs r.ret (.block r.pos r.args))
+  let uses := (resolved ++ requestTops).flatMap (PreludeNeeds.top []) ++
+    opts.fnRequests.flatMap (fun (_, t) => t.helperUses)
+  let needs (n : String) := uses.contains ((concurrencyNames.lookup n).getD n)
+  let usesSubVoid := uses.contains "$subev0"
+  if usesSubVoid && owned.contains "subscribable_event" then
+    throw "subscribable_event() is the built-in no-payload shorthand; apply a program's own subscribable_event with explicit type arguments"
+  let usesSub := usesSubVoid || needs "subscribable_event" || needs "cancelable"
+  if usesSub then
+    if let some p := defines0 "cancelable" then
+      throw s!"{p.show}: cancelable is the type subscribable_event's Subscribe gives: a program that uses subscribable_event cannot define its own (#210)"
+  let usesConc := usesSub || uses.contains "$suspends" || PreludeNeeds.names.any needs
+  -- Keep source overrides, but isolate helper dependencies from them: builtin
+  -- sticky_event still extends the builtin event when source owns event.
+  let helpers := helpers ++ (← if usesConc then concTops owned else pure []) ++
+    (← if usesSub then subTops owned else pure []) ++ (← if usesSubVoid then subVoidTops owned else pure [])
   -- Collect source contracts while every declaration still has its source
   -- identity. Function-value classes, continuation frames and constructor
   -- field packets implement source expressions; they acquire no extra source
@@ -12027,7 +12047,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   let varFields : List (String × String) := cdefs.flatMap fun cd =>
     (fullOf cd.name).filterMap fun (f, _, _, isVar) => if isVar then some (cd.name, f) else none
   let uniques : List String := (cdefs.filter (·.specs.contains "unique")).map (·.name)
-  let mut env : TyEnv := { constructionFx, classes := henv.classes, cinfo := henv.cinfo, cinfoMap := henv.cinfoMap,
+  let mut env : TyEnv := { constructionFx, concurrencyNames, classes := henv.classes, cinfo := henv.cinfo, cinfoMap := henv.cinfoMap,
                            classIx := henv.classes.zipIdx.foldl (fun m (n, i) => m.insert n i) {},
                            belowReady := true,
                            supersMap := henv.classes.foldl (fun m d => m.insert d (henv.supers d)) {},
