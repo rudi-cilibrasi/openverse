@@ -37,7 +37,7 @@ private def operation (vars : List (String × Bool)) (bounds : List Bound) : Opt
     receiver := .struct name [], inputs := [input], result := .int, specs := ["computes"],
     methodVars := vars, methodBounds := bounds, omittedDefaults := true } : ChoiceOperationCase)
   choiceGenericOperation { sigs := [], sigProg := { fns := [], main := 0 }, types }
-    "$testOperation" (.ident p "Row") row { plan } call cases
+    "$testOperation" (.ident p "Row") row { plan } call [.ident p "X"] cases
 
 private partial def methodParams : STop → List (List TParam)
   | .fn _ _ _ tps .. => [tps]
@@ -61,7 +61,7 @@ private def classOperation (upper : Ty) : Option ChoiceOperations :=
     receiver := .struct name args, inputs := [u], result := .int, specs := ["computes"],
     methodVars := [("$operationMethod0", false)], methodBounds := [⟨t, u⟩] } : ChoiceOperationCase)
   choiceGenericOperation { sigs := [], sigProg := { fns := [], main := 0 }, types := env }
-    "$testClassOperation" (.ident p "Row") row { plan } call cases
+    "$testClassOperation" (.ident p "Row") row { plan } call [.ident p "X"] cases
 
 private def declarationParams : STop → List TParam
   | .fn _ _ _ tps .. | .classDef _ _ tps .. => tps
