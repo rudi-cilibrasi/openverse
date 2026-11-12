@@ -17,6 +17,7 @@
     the core theorems) before anyone runs it.
 -/
 import OpenVerse.Front.Elab.Lowering
+import OpenVerse.Front.SignalAdmission
 import OpenVerse.Front.InitializerConvergence
 
 namespace OpenVerse.Front
@@ -1445,7 +1446,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       (decides : Bool) (allowed : List String) (tps : List (String × Bool)) (body : SExpr)
       (suspends : Bool := false) (selfTps : List String := [])
       (selfFieldOf : Option (String → Option Nat) := none) (scopeClass : Option String := none) :
-      Except String (Fn × List VTy × List (String × Ty) × Option Pos × List Refine.Lift × List LoopUse × FrameRefs.Info × List String × List FnValues.MethodRequest × List (Pos × String)) := do
+      Except String (Fn × List VTy × List (String × Ty) × Option Pos × List Refine.Lift × List LoopUse × FrameRefs.Info × List String × List FnValues.MethodRequest × List (Pos × String) × Array ((Pos × String) × List Nat)) := do
     -- (#209) the values of `selfTps` come from the receiver's hidden
     -- fields, in slots after the hidden parameters: a method's own class's
     -- (`C.M`), or as `selfFieldOf` says (a cast's branch, #250, the cast
@@ -1502,9 +1503,9 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
               body := initPrefixE arity inits e },
       spawnParamTypes env name (st.slotTys.toList.map (Ty.toVTy env)), st.fnNeeds, st.errAt, st.castNeeds, st.loopFirst,
       { explicit := ps.length, copies := st.frameCopies, slots := st.frameSlots.map fun (i, s) =>
-          (i, { frame := s.frame, name := s.name, args := s.args.map (Ty.toVTy env) }) }, st.eagerNeeds, st.methodNeeds, st.familyNeeds)
+          (i, { frame := s.frame, name := s.name, args := s.args.map (Ty.toVTy env) }) }, st.eagerNeeds, st.methodNeeds, st.familyNeeds, st.failCalls)
   -- (the accessors come right after the functions, #157)
-  env := { env with fieldAccBase := tops.length + gsigs.size }
+  env := { env with fieldAccBase := tops.length + gsigs.size, signalNoRollback := opts.signalNoRollback }
   let genvOf (g : Sig) : TyEnv := { env with tvars := g.tparams.map fun (v, c) => (v, Ty.param v c) }
   let mut fns : Array Fn := #[]
   let mut slotTys : Array (List VTy) := #[]
@@ -1520,11 +1521,13 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     { g := "", pos := l.pos, itemCode := .lit .void, argSet := none, lift := .ok l }
   let mut eagerNeeds : List String := []
   let mut familyNeeds : List (Pos × String) := []
+  let mut failCalls : Array ((Pos × String) × List Nat) := #[]
   for (top, idx) in tops.zip (List.range tops.length) do
     let sig := sigs[idx]!
     match top with
     | .fn p n ps _ _ _ body =>
-      let (fn, tys, needs, err, casts, lf, frames, eager, methodUses, family) ← elabFn env p n ps sig.params sig.ret sig.decides sig.fx [] body sig.suspends
+      let (fn, tys, needs, err, casts, lf, frames, eager, methodUses, family, fc) ← elabFn env p n ps sig.params sig.ret sig.decides sig.fx [] body sig.suspends
+      failCalls := failCalls ++ fc
       eagerNeeds := eagerNeeds ++ eager
       familyNeeds := familyNeeds ++ family
       fnNeeds := fnNeeds ++ needs
@@ -1543,6 +1546,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       let ctx : Ctx := { sigs := allSigs, sigProg, types := env }
       let (r, st) ← elabBodyOv ctx body (some sig.ret) { env }
       let (e, st) ← (coerce p r.1 sig.ret).run st
+      failCalls := failCalls ++ st.failCalls
       fnNeeds := fnNeeds ++ st.fnNeeds
       methodNeeds := FnValues.mergeMethodRequests methodNeeds st.methodNeeds
       castNeeds := castNeeds ++ st.castNeeds
@@ -1571,13 +1575,14 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       -- (a class's copy of an interface's default, #53, elaborated in the
       -- interface's scope)
       let scope := copyScope? effs
-      let (fn, tys, needs, err, casts, lf, frames, eager, methodUses, family) ← elabFn (genvOf g) p n ps g.params g.ret g.decides g.fx g.tparams body g.suspends
+      let (fn, tys, needs, err, casts, lf, frames, eager, methodUses, family, fc) ← elabFn (genvOf g) p n ps g.params g.ret g.decides g.fx g.tparams body g.suspends
         g.selfTps ((opts.castRequests.find? (·.name == n)).map fun l => fun v =>
           (l.opened.lookup v).bind (env.witnessField? l.target ·)) scope
       fnNeeds := fnNeeds ++ needs
       methodNeeds := FnValues.mergeMethodRequests methodNeeds methodUses
       eagerNeeds := eagerNeeds ++ eager
       familyNeeds := familyNeeds ++ family
+      failCalls := failCalls ++ fc
       castNeeds := castNeeds ++ casts
       loopFirst := loopFirst ++ lf
       fns := fns.push fn
@@ -1673,6 +1678,10 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     | _ => none)) opts.lazyRequests
   if !lazyNeeds.isEmpty then
     return { prog := default, sigs := { fns := [] }, slotTys := [], lazyNeeds }
+  -- (#515, `--signal-no-rollback`) no event signal from a failure context
+  if opts.signalNoRollback then
+    if let some ((p, what), way) := SignalAdmission.checkSites fns failCalls then
+      throw s!"{p.show}: this {what} may signal an event ({" → ".intercalate way}) in a failure context, which --signal-no-rollback refuses: the published Verse API makes an event's Signal <no_rollback> (#515)"
   -- (#246) and functions of their own for the lazily taken calls whose
   -- effects need them: the program is elaborated again, with them
   let loopNeeds ← checkLoopFirst fns loopFirst opts.loopRequests
@@ -1910,12 +1919,13 @@ def compile (src : String) (opts : Options := {}) : Except String Prog := do
     bound to `Args` when given or mentioned, and an optional `do` expression. -/
 def compileTops (tops : List STop) (args : List String) (mentionsArgs : Bool) (doExpr : Option String)
     (debug : Bool := false) (profile : SourceProfile := .full) (eventFifo : Bool := false)
-    (extendedDefaults : Bool := false) : Except String Prog := do
+    (extendedDefaults : Bool := false) (signalNoRollback : Bool := false) : Except String Prog := do
   let entry ← match doExpr with
     | some t => some <$> parseExprText t
     | none => pure none
   let useArgs := !args.isEmpty || mentionsArgs
-  return (← elabProgram tops { args := if useArgs then some args else none, entry, debug, profile, eventFifo, extendedDefaults }).prog
+  let opts : Options := { args := if useArgs then some args else none, entry, debug, profile, eventFifo, extendedDefaults }
+  return (← elabProgram tops { opts with signalNoRollback }).prog
 
 /-- Compile with shell arguments (bound to `Args` when given or used) and an
     optional `do` expression, as `openverse run FILE ARG… do EXPR` does. -/

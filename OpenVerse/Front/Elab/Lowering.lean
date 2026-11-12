@@ -96,6 +96,11 @@ structure Options where
       scheduler's (`Main`, then the roots in spawn order): opt-in, so that
       existing traces keep theirs until a default is chosen. -/
   eventFifo : Bool := false
+  /-- (#515) Refuse a program that may call an event's `Signal` from a
+      failure context (the published API's `<no_rollback>`), instead of
+      rolling the signal back with its context: opt-in
+      (`SignalAdmission`). -/
+  signalNoRollback : Bool := false
 
 /-- A class or interface definition, as parsed. -/
 structure CDef where
@@ -427,6 +432,7 @@ def functionBodyCtx (opts : Options) (ctx : Ctx) (p : Pos) (name : String)
     inChoice := source.inChoice || (resume.map (·.inChoice)).getD ctx.inChoice
     inParamDefault := source.inParamDefault || ctx.inParamDefault
     inDefer := source.inDefer || ctx.inDefer
+    inRollback := loopLift.any (·.rollback) || ctx.inRollback
     inDefaultCheck := source.inDefaultCheck || ctx.inDefaultCheck
     inArm := source.inArm || ctx.inArm
     inBranch := source.inBranch || ctx.inBranch
