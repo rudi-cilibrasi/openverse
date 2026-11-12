@@ -532,6 +532,8 @@ partial def elabAppBaseWith
         if ms.named.isEmpty && args.length + 1 != ms.params.length then
           eerr p s!"{m} takes {ms.params.length - 1} argument(s), found {args.length}"
         let slot ← fresh r.ty
+        if !ctx.typeOnly then
+          modify fun st => { st with metadataUses := slot :: st.metadataUses }
         let recv := s!"$recv{slot}"
         let ds := env.concreteBelow c
         -- one implementation for every class below the receiver's type, above

@@ -44,6 +44,26 @@ forwarder may still return metadata, retaining its role. Saved method receivers
 and arguments keep their roles across dispatch; dummy receivers cannot execute
 methods or function calls. Hidden `$w.` fields remain metadata.
 
+Mutable storage also receives a compiler-only provenance check before failure
+capture, shared-cell and concurrency lowering (#572). It follows local writes,
+container updates, return values and opaque helper arguments to a fixed point
+across branches, loops and recursive calls. A failed condition restores the
+incoming roles. A later real overwrite can clear an ordinary local's role;
+metadata-only locals may still forward opaque values, including across a wait.
+Evaluating a function or method receiver requires executable data even when
+dispatch has no concrete implementation and lowers to an error expression.
+
+Shared storage has a stricter boundary: metadata cannot enter an ordinary
+object field or a shared local initialized with executable data. Checking the
+write protects every alias, including aliases obtained by indexed reads or
+passed to an unannotated helper. Compiler-owned `$w.` fields retain their
+metadata role without tainting unrelated object fields. This analysis adds no
+Core opcode or runtime tag. `MetadataStorage.lean` retains 14 real/dummy
+rejection pairs and eight opaque-forwarding, real-overwrite and rollback pairs,
+including a later GADT refinement and suspension-frame storage. These are
+compiler-API contracts under the public source guard; they do not complete the
+remaining generated-storage and source-admission audits.
+
 The checked families currently cover:
 
 | Relation | Executable evidence |

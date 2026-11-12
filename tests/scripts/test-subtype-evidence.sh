@@ -7,6 +7,7 @@ trap 'rm -rf "$out"' EXIT
 make -s -C runtime build/cverse
 lake env lean --run tests/lean/SubtypeEvidenceScopes.lean
 lake env lean --run tests/lean/SubtypeEvidenceInputs.lean
+lake env lean --run tests/lean/MetadataStorage.lean
 lake env lean --run tests/lean/ChoiceBoundMethods.lean
 lake env lean --run tests/lean/BoundMethodValues.lean
 lake env lean --run tests/lean/CallableBounds.lean

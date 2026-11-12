@@ -27,6 +27,7 @@ import OpenVerse.Front.PreludeNeeds
 import OpenVerse.Front.Profile
 import OpenVerse.Front.EffectPolicy
 import OpenVerse.Front.SignalAdmission
+import OpenVerse.Front.MetadataFlow
 import OpenVerse.Front.Suspend
 import OpenVerse.Front.Rational
 import OpenVerse.Front.Modules
@@ -469,6 +470,10 @@ structure LoopUse where
   lift : Except String Choice.FirstLift
 
 structure ESt where
+  /-- Compiler-only dummy provenance, retained until metadata admission. -/
+  metadataSeeds : List Nat := []
+  metadataUses : List Nat := []
+  metadataWrites : List (Nat × Nat) := []
   /-- Pure mutual groups whose changing instances need eager generation. -/
   eagerNeeds : List String := []
   /-- (#515, `--signal-no-rollback`) Each call (or construction, use of a
@@ -1945,7 +1950,10 @@ def setFieldAt (env : TyEnv) (p : Pos) (sn : String) (targs : List Ty) (obj : Na
   let p0 := pos.headD k
   let tyOK := env.fieldTyAgrees sn targs f
   -- (not through views: each class's setter, #351)
-  if tyOK && pos.all (· == p0) && !env.viewed.contains sn then return .heap (.set p0) [.local obj, v]
+  if tyOK && pos.all (· == p0) && !env.viewed.contains sn then
+    if f.startsWith "$w." then
+      modify fun st => { st with metadataWrites := (obj, p0) :: st.metadataWrites }
+    return .heap (.set p0) [.local obj, v]
   if let some d := ds.find? fun d => !env.sameCore d sn && (env.fieldAcc.idxOf? (d, f)).isNone then
     if !tyOK then
       eerr p s!"field '{f}' of {sn} has another type in {d}, which takes it from another interface, and {d} has type parameters that {sn} does not have: setting it through {sn} is not supported yet (#205)"
@@ -1967,6 +1975,8 @@ def setFieldAt (env : TyEnv) (p : Pos) (sn : String) (targs : List Ty) (obj : Na
       refined := true
     | none =>
       let yd ← fresh (.struct d (env.argsAt sn targs d))
+      if f.startsWith "$w." then
+        modify fun st => { st with metadataWrites := (yd, kd) :: st.metadataWrites }
       acc := .ite (.assign yd (.heap (.isTag [env.tagOf d]) [.local obj])) (.heap (.set kd) [.local yd, .local tv]) acc
   if refined then
     -- (checked against the field's type, as the refined calls need one)

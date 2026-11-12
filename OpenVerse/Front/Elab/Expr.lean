@@ -28,7 +28,17 @@ partial def choiceCoerceResult (ctx : Ctx) (p : Pos) (r : R) (exp : Option Ty) :
 partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
   let ctx := ctx.choiceCoercionScope
   let result ← elabECore ctx se exp
-  choiceCoerceResult ctx se.pos result exp
+  let result ← choiceCoerceResult ctx se.pos result exp
+  if ctx.typeOnly || !ctx.isTypeValue se || result.ty == .never || result.ty == .void then return result
+  if let .ident .. := se then
+    if let .local slot := result.e then
+      modify fun st => { st with metadataSeeds := slot :: st.metadataSeeds }
+      return result
+  -- A wrapper can mark an otherwise real local as metadata. Give that
+  -- occurrence its own slot; never change the original local's role.
+  let slot ← fresh result.ty
+  modify fun st => { st with metadataSeeds := slot :: st.metadataSeeds }
+  return ⟨.assign slot result.e, result.ty⟩
 
 partial def elabECore (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
   let result ← elabERaw ctx se exp
@@ -910,6 +920,8 @@ partial def elabIndexLike (ctx : Ctx) (p : Pos) (r : R) (args : List SExpr) (bra
       if args.length != k && !(args.length == 1 && k > 1) then
         eerr p s!"a value of type {r.ty.show} takes {k} argument(s), found {args.length}"
       let t ← fresh r.ty
+      if !ctx.typeOnly then
+        modify fun st => { st with metadataUses := t :: st.metadataUses }
       let nm := s!"$fnval{t}"
       let ctx' := { ctx with locals := { name := nm, slot := t, ty := r.ty, mutable := false } :: ctx.locals }
       let rc ← elabApp ctx' p (.member p (.ident p nm) (FnValues.callOf n)) args bracket none

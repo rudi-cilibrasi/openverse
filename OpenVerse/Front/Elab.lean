@@ -1562,7 +1562,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       (suspends : Bool := false) (selfTps : List String := [])
       (selfFieldOf : Option (String → Option Nat) := none) (scopeClass : Option String := none)
       (evidenceSignature : Option Sig := none) :
-      Except String (Fn × List VTy × List (String × Ty) × Option Pos × List Refine.Lift × List LoopUse × FrameRefs.Info × List String × List FnValues.MethodRequest × List STop × List (Pos × String) × Array ((Pos × String) × List Nat)) := do
+      Except String (Fn × List VTy × List (String × Ty) × Option Pos × List Refine.Lift × List LoopUse × FrameRefs.Info × List String × List FnValues.MethodRequest × List STop × List (Pos × String) × Array ((Pos × String) × List Nat) × MetadataFlow.Info) := do
     -- (#209) the values of `selfTps` come from the receiver's hidden
     -- fields, in slots after the hidden parameters: a method's own class's
     -- (`C.M`), or as `selfFieldOf` says (a cast's branch, #250, the cast
@@ -1624,17 +1624,29 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     if name.endsWith ".$block" then
       if let some budget := env.constructionFx[(name.dropEnd ".$block".length).toString]? then
         fxCheck s!"construction block of {(name.dropEnd ".$block".length).toString}" budget st
+    let inputs := (locals.filter (·.typeValue)).map (·.slot) ++
+      (List.range dictTps.length).map (frame.witnessBase + ·)
+    let required := signature.params.zipIdx.filterMap fun (ty, i) =>
+      if !signature.typeValues.contains i && (SubtypeEvidence.exposesEvidence env ty ||
+          (i == 0 && ((signature.hasReceiver && !name.endsWith ".$block") ||
+            ["$Await", "$EvAwait", "$StickyAwait", "$cancelMark"].contains name))) then some i else none
+    let roles : MetadataFlow.Info := {
+      pos := p, inputs, required, seeds := inputs ++ st.metadataSeeds
+      uses := st.metadataUses
+      shared := st.frameSlots.map (·.1), metadataWrites := st.metadataWrites
+      body := some (initPrefixE arity selfInits e) }
     return ({ name, arity, nslots := st.nslots, decides, writes := allowed.contains "writes",
               body := initPrefixE arity inits e },
       spawnParamTypes env name (st.slotTys.toList.map (Ty.toVTy env)), st.fnNeeds, st.errAt, st.castNeeds, st.loopFirst,
       { explicit := ps.length, copies := st.frameCopies, slots := st.frameSlots.map fun (i, s) =>
-          (i, { frame := s.frame, name := s.name, args := s.args.map (Ty.toVTy env) }) }, st.eagerNeeds, st.methodNeeds, st.subtypeNeeds, st.familyNeeds, st.failCalls)
+          (i, { frame := s.frame, name := s.name, args := s.args.map (Ty.toVTy env) }) }, st.eagerNeeds, st.methodNeeds, st.subtypeNeeds, st.familyNeeds, st.failCalls, roles)
   -- (the accessors come right after the functions, #157)
   env := { env with fieldAccBase := tops.length + gsigs.size, signalNoRollback := opts.signalNoRollback }
   let genvOf (g : Sig) : TyEnv := g.typeEnv env
   let mut fns : Array Fn := #[]
   let mut slotTys : Array (List VTy) := #[]
   let mut frameInfo : Array FrameRefs.Info := #[]
+  let mut metadataInfo : Array MetadataFlow.Info := #[]
   let mut fnNeeds : List (String × Ty) := []
   let mut methodNeeds : List FnValues.MethodRequest := fieldMethodNeeds
   let mut subtypeNeeds : List STop := fieldSubtypeNeeds
@@ -1652,7 +1664,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     let sig := sigs[idx]!
     match top with
     | .fn p n ps _ _ _ body =>
-      let (fn, tys, needs, err, casts, lf, frames, eager, methodUses, subtypeUses, family, fc) ← elabFn env p n ps sig.params sig.ret sig.decides sig.fx [] body sig.suspends
+      let (fn, tys, needs, err, casts, lf, frames, eager, methodUses, subtypeUses, family, fc, roles) ← elabFn env p n ps sig.params sig.ret sig.decides sig.fx [] body sig.suspends
         (evidenceSignature := some sig)
       failCalls := failCalls ++ fc
       eagerNeeds := eagerNeeds ++ eager
@@ -1666,6 +1678,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       errs := errs.push err
       slotTys := slotTys.push tys
       frameInfo := frameInfo.push frames
+      metadataInfo := metadataInfo.push roles
     | .const p n _ body =>
       -- a constant is computed at each use, so it would be a new object each
       -- time (until Verse Core has global state)
@@ -1684,6 +1697,9 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       familyNeeds := familyNeeds ++ st.familyNeeds
       let tys := st.slotTys.toList.map (Ty.toVTy env)
       frameInfo := frameInfo.push {}
+      metadataInfo := metadataInfo.push {
+        pos := p, seeds := st.metadataSeeds, uses := st.metadataUses
+        metadataWrites := st.metadataWrites, body := some e }
       -- slots start like a function's (a class-typed one as a placeholder)
       let inits ← match st.slotTys.toList.mapM (slotDefault env 0 [] []) with
         | .ok ds => pure ds
@@ -1704,7 +1720,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       -- (a class's copy of an interface's default, #53, elaborated in the
       -- interface's scope)
       let scope := copyScope? effs
-      let (fn, tys, needs, err, casts, lf, frames, eager, methodUses, subtypeUses, family, fc) ← elabFn (genvOf g) p n ps g.params g.ret g.decides g.fx g.tparams body g.suspends
+      let (fn, tys, needs, err, casts, lf, frames, eager, methodUses, subtypeUses, family, fc, roles) ← elabFn (genvOf g) p n ps g.params g.ret g.decides g.fx g.tparams body g.suspends
         g.selfTps ((opts.castRequests.find? (·.name == n)).map fun l => fun v =>
           (l.opened.lookup v).bind (env.witnessField? l.target ·)) scope (some g)
       fnNeeds := fnNeeds ++ needs
@@ -1719,6 +1735,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       errs := errs.push err
       slotTys := slotTys.push tys
       frameInfo := frameInfo.push frames
+      metadataInfo := metadataInfo.push roles
     | _ => pure ()
   -- (#214) functions wanted as values at types no class of theirs gives:
   -- the program is elaborated again, with classes for them, so this one,
@@ -1783,10 +1800,13 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     fns := fns.push { name := s!"{d}.$get.{f}", arity := 1, nslots := 1, decides := false, writes := false,
                       body := .heap (.get kd) [.local 0] }
     slotTys := slotTys.push [selfTy]
+    metadataInfo := metadataInfo.push {}
     accSigs := accSigs.push ([selfTy], fTy)
     fns := fns.push { name := s!"{d}.$set.{f}", arity := 2, nslots := 2, decides := false, writes := true,
                       body := .heap (.set kd) [.local 0, .local 1] }
     slotTys := slotTys.push [selfTy, fTy]
+    metadataInfo := metadataInfo.push {
+      metadataWrites := if f.startsWith "$w." then [(0, kd)] else [] }
     accSigs := accSigs.push ([selfTy, fTy], fTy)
   let fsigs0 := fsigs0 ++ accSigs.toList
   let mut fsigs := fsigs0
@@ -1802,6 +1822,8 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   for gi in List.range fns.size do
     let fn := fns[gi]!
     fns := fns.set! gi { fn with body := Suspend.pruneDead S00 ((slotTys[gi]?).getD []) fn.body }
+    metadataInfo := metadataInfo.modify gi fun info => { info with
+      body := info.body.map (Suspend.pruneDead S00 ((slotTys[gi]?).getD [])) }
   -- (#235) the functions with several values computed at their calls
   let lazyNeeds ← checkEager fns errs (fun g => ((tops ++ generics).findSome? fun
     | .fn p n .. => if n == g then some p else none
@@ -1831,6 +1853,10 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       | .ok (_, checked) => verified := checked
       | .error reason =>
         throw s!"{pos.show}: default of field '{field}' of {owner} requires convergence: {reason} (#511; --extended-defaults retains the OpenVerse extension without a convergence assertion)"
+  let metadataFields := env.classes.toArray.map fun c =>
+    (env.fields c).zipIdx.filterMap fun ((name, _, _), i) =>
+      if name.startsWith "$w." then some i else none
+  MetadataFlow.check fns metadataInfo metadataFields
   let (capturedFns, capturedSlots, capturedSigs) ← FailCapture.lower fns slotTys S00
   fns := capturedFns
   slotTys := capturedSlots
