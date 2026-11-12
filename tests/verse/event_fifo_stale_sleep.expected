@@ -1,0 +1,6 @@
+T race lost the wait
+signal
+got X 1
+R woke from sleep
+T woke from sleep
+exit=0
