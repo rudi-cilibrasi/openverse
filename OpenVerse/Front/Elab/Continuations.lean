@@ -327,11 +327,25 @@ def Ctx.choiceCoercionBody (ctx : Ctx) (body : SExpr) : SExpr :=
   .app p (.ident p "$choiceCoercions") [.block p (ctx.choiceCoercions.map fun (dictionary, source, target) =>
     .tuple p [.ident p dictionary.name, .construct p "$choiceConversion" [source.toSTy, target.toSTy] []]), body] false
 
+/-- (#243, #246, #335) The locals in scope that `code` uses, in order of
+    first use: what a function made from `code` takes as parameters. A
+    generated function is keyed by what its code depends on, these with what
+    of them it depends on among them (`firstKey`, `contKey`, `refineTagOf`),
+    so that each elaboration of the code that would make the same function
+    finds it, and none that would make another does. -/
+def Ctx.usedLocals (ctx : Ctx) (code : SExpr) : List Local :=
+  (Choice.namesUsed code).filterMap ctx.lookup
+
+/-- (#246, #338) The key of a lazily taken call's function of its own: its
+    place, binding and code (`lp`, the clauses with it, `rest`, those after
+    it), the locals they use with their types and whether they are `var`s,
+    the type variables they write (or the binding's type names) as bound
+    here, `Self`'s class, the class copy and inlined bodies it is in, the
+    source context and the source's return type when they return. -/
 def firstKey (ctx : Ctx) (p : Pos) (lp : List SExpr) (b : String) (bty : Option STy)
     (rest : List SExpr) : String :=
   let written := SExpr.block p (lp ++ rest)
-  let inputs := (Choice.namesUsed written).eraseDups.filterMap fun n =>
-    (ctx.lookup n).map fun l => (n, l.ty, l.mutable)
+  let inputs := (ctx.usedLocals written).map fun l => (l.name, l.ty, l.mutable)
   let aliases := ctx.types.tvars.filter fun (n, _) =>
     writesTps [n] written || ((bty.map (Choice.styMentions [n])).getD false)
   reprStr (p, b, bty, lp, rest, inputs, aliases, ctx.selfClass, ctx.liftTag, ctx.inlineScopes) ++ sourceContextKey ctx ++ firstReturnKey ctx rest
@@ -625,12 +639,9 @@ partial def selfQualify (ctx : Ctx) (c : String) (e : SExpr) : SExpr :=
       `<suspends>` function, all the type variables (its lifts' type
       parameters, `available` in `elabRefinedIfWith`); the inlined bodies it
       is in; and the source's return type, when the branch returns.
-    Such a tag may differ between the trial of an enclosing cast's branch
-    (`Ctx.inRefinedTrial`) and the function made from that branch, which has
-    the trial's captured `var`s as values and its result type as the type
-    expected of the branch's value, so the cast asks for its lift from the
-    function only: asked for from both, each level of nesting lifted the
-    casts inside it once more, the earlier copies never called. -/
+    The tag in a trial (`Ctx.trial`) may differ from the tag in the function
+    the trial's code is compiled in, so a lift is asked for from a trial only
+    where it does not (`Ctx.keepsLifts`). -/
 def refineTagOf (ctx : Ctx) (x body : SExpr) (els : Option SExpr) (exp : Option Ty) : String :=
   let source := sourceContextKey ctx
   if source.isEmpty then ctx.refineScope ++ ctx.liftTag else
@@ -639,8 +650,8 @@ def refineTagOf (ctx : Ctx) (x body : SExpr) (els : Option SExpr) (exp : Option 
   let cast := match ctx.selfClass with
     | some c => selfQualify ctx c cast
     | none => cast
-  let inputs := (Choice.namesUsed cast).filterMap fun n => (ctx.lookup n).map fun l =>
-    (n, l.ty, l.mutable, l.storage.map fun s => (s.frame, s.name, s.args))
+  let inputs := (ctx.usedLocals cast).map fun l =>
+    (l.name, l.ty, l.mutable, l.storage.map fun s => (s.frame, s.name, s.args))
   let vars := (Ty.mergeParamBounds (inputs.flatMap (·.2.1.paramsC))).map fun (v, _) =>
     (v, ctx.types.tvars.lookup v)
   let written := (Refine.typeNames cast ++ Choice.namesUsed cast).filterMap (ctx.types.tvars.lookup ·)
@@ -648,6 +659,28 @@ def refineTagOf (ctx : Ctx) (x body : SExpr) (els : Option SExpr) (exp : Option 
   let uses := reprStr (inputs, vars, written, exp.map (·.subst ctx.types.tvars), available, ctx.inlineScopes) ++
     firstReturnKey ctx [body]
   ctx.refineScope ++ ctx.liftTag ++ s!"$source{(source ++ uses).hash}"
+
+/-- `ctx` for a trial of `t`. Code in a continuation's trial moves with the
+    continuation, whatever trial inside it elaborates it. -/
+def Ctx.withTrial (ctx : Ctx) (t : Trial) : Ctx :=
+  { ctx with trial := if ctx.trial == some .continuation then ctx.trial else some t }
+
+/-- (#243, #453) Whether a refining cast's lift asked for here is kept: an
+    elaboration that is a trial (`Ctx.trial`) leaves no request that the
+    function its code is compiled in would make otherwise, which makes it
+    in the next elaboration. A continuation has a scope of its own
+    (`refineScope`, in its casts' tags), so no lift asked for in its trial
+    is the one its function asks for; nor one in a branch's trial whose tag
+    depends on the source context, which the function made from the branch
+    computes with its own captures and result type (`refineTagOf`). Asked
+    for there, each level of nesting lifted the casts inside it once more,
+    the earlier copies never called. A continuation asked for in a trial is
+    kept: its key (`contKey`) is the same in the function. -/
+def Ctx.keepsLifts (ctx : Ctx) : Bool :=
+  match ctx.trial with
+  | none => true
+  | some .branch => (sourceContextKey ctx).isEmpty
+  | some .continuation => false
 
 /-- A continuation keeps the parameters of its inputs, results and written
     types. A parameter not determined by its inputs takes an explicit witness,
@@ -821,17 +854,30 @@ def firstLiftOf (ctx c2 : Ctx) (p : Pos) (g : String) (lp : List SExpr) (b : Str
              caps.map (fun l => .ident p l.name) ++ typeArgs,
            varBinds := (bls.filter (·.mutable)).map (·.name), extraFns := extraFns ++ contFns ++ retFns }
 
-/-- (#335) The key of a continuation: where the composed choice is, its
-    binding, and the consumer's names the clauses after it use (in a method,
-    once its members are `Self`'s, as in the function), as `firstKey`. -/
+/-- (#335) The key of a continuation, the function the clauses after a
+    composed choice (and a `for`'s body) are compiled in: what its code
+    depends on, as `firstKey`'s. The choice's place and binding; the locals
+    the clauses use (`Ctx.usedLocals`; in a method, once its members are
+    `Self`'s, as in the function) with their types (#338: a `for`'s body
+    copied once per alternative of a choice has the same place, with names
+    of other types); the clauses' places (#349: the same choice inside an
+    alternative of another one with a continuation has that one's call after
+    it in the next elaboration); the type variables they write, as bound here
+    (#427: a type only an annotation names still tells instances apart); the
+    class copy (#427) and the inlined bodies (#441) it is in; the source
+    context (#485); and with `--signal-no-rollback`, whether it is in a
+    failure context (#515). It is the same in a trial of the clauses
+    (`Ctx.trial`) as in the function they are compiled in, which the trial
+    asks for, so the next elaboration finds it: nothing in it names the
+    scope it is computed in (a generated local the clauses use is named by
+    its place alone, as `$forReturn…` is). -/
 def contKey (ctx : Ctx) (p : Pos) (b : String) (rest : List SExpr) : String :=
   let rest := match ctx.selfClass with
     | some c => rest.map (selfQualify ctx c)
     | none => rest
   -- (with their types: a `for`'s body copied once per alternative of a
   -- choice has the same place, with names of other types)
-  let caps := (Choice.namesUsed (.block p rest)).eraseDups.filterMap fun n =>
-    (ctx.lookup n).map fun l => s!"{n}:{reprStr l.ty}"
+  let caps := (ctx.usedLocals (.block p rest)).map fun l => s!"{l.name}:{reprStr l.ty}"
   -- A type used only by a written annotation has no captured value. Its
   -- instance still distinguishes helpers made at a shared source position.
   let written := ctx.types.tvars.filterMap fun (n, t) =>

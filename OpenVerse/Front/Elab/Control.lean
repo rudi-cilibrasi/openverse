@@ -511,8 +511,7 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
   | none =>
     -- (first: the branch in the refined world)
     let dslot ← fresh dTy
-    let ctxB : Ctx := { refined dslot with
-      inRefinedTrial := true,
+    let ctxB : Ctx := { (refined dslot).withTrial .branch with
       frameName := liftName, frameArgs := available.map fun (n, c) => Ty.param n c,
       -- (the source return's value and the lifted function's copy-out)
       retTy := (escRet.map (refine ·.1)).getD ctx.retTy,
@@ -612,12 +611,7 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
       -- (and a tagged one, which the source's places do not find, #53)
       body := if ctx.selfClass.isSome || made || D.startsWith "$" || !tag.isEmpty || !ctx.choiceCoercions.isEmpty then some (pruneConstructHints ctxB liftName
         (pruneConstructHints { ctxB with frameName := ctx.frameName } liftName body)) else none }
-    -- (not from the trial of an enclosing cast's branch when its tag
-    -- depends on the context, `refineTagOf`: the next elaboration calls the
-    -- function made from that branch, whose context differs, and the cast
-    -- asks for its lift there)
-    unless ctx.inRefinedTrial && !(sourceContextKey ctx).isEmpty do
-      noteNeeds { casts := [lift] }
+    if ctx.keepsLifts then noteNeeds { casts := [lift] }
     if suspendsB then
       modify fun st => { st with pendingSuspendingCasts := st.pendingSuspendingCasts + 1 }
     if thenWaits || elseWaits then

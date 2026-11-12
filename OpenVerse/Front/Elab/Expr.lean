@@ -1346,14 +1346,14 @@ partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
         if request.isNone && hasLater then
           let st0 ← get
           let slot ← fresh ty
-          let c := { ctx with locals := { name := b.name, slot, ty, mutable := false } :: ctx.locals }
+          let c := { ctx.withTrial .continuation with locals := { name := b.name, slot, ty, mutable := false } :: ctx.locals }
           let (code, c2) ← elabOneGo c rest
           let fx := (← get).fx
           match contLiftOf ctx c2 p b.name [i] rest fx with
           | .ok lift =>
             modify fun s => { s with loopFirst := s.loopFirst ++
               [{ g := "", pos := p, itemCode := .lit .void, argSet := none, lift := .ok lift }] }
-            return (code, c2)
+            return (code, { c2 with trial := ctx.trial })
           | .error _ => set st0
         let request := request.filter fun l =>
           ctx.acceptsHelper l
@@ -1527,9 +1527,10 @@ partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
             let prefixState ← get
             -- (what refuses it known before the trial, which then costs nothing)
             let ok := same && rest.any isComposed
-            let (code1, c1) ← if ok then elabOneGo ctx ([.decl p t none false (alt a0 0)] ++
+            let (code1, c1) ← if ok then elabOneGo (ctx.withTrial .continuation) ([.decl p t none false (alt a0 0)] ++
                 binds.zipIdx.map fun (n, i) => .decl p n none (vars.contains n) (.app p (.ident p t) [.int p (i : Int)] false))
               else pure (Expr.lit .void, ctx)
+            let c1 := { c1 with trial := ctx.trial }
             let fxB := (← get).fx
             match (if ok then contLiftOf ctx c1 p b.name b.alts rest fxB else .error "alternatives of different types") with
             | .ok lift =>

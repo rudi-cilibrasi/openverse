@@ -164,6 +164,7 @@ not an `array{a₀, …}`, which would run `aₙ₋₁` before `a₀`'s value wa
   - Both kinds of continuation retain the type parameters of their inputs, results and written types, including a generic method's `Self`. Parameters not determined by the inputs take an explicit witness argument, so a suffix with an annotation such as `E:[]t` can be shared even when no captured value has type `t`. The generated body substitutes the context's type aliases, and the key includes the written type instances and interface-default copy tag.
   - This immediate protocol is used where the body passes `forBodySafe` (no suspension, non-rollback operation, escaping break, or unsupported marker). Waiting consumers use the staged protocol below; unsupported contexts retain copies (tim-6e's review of #335). Starting a task with `spawn` is immediate: the body check leaves its callee to `elabSpawn`, which checks caller arguments for waits and failure contexts before checking the callee in its task context. Prepared nested consumers, including lazy recursive groups and their generic/default bindings, remain inside the helper and are checked by their own elaboration. Body cleanup is local to that helper. Both non-failable and failable bodies may share lazy suffixes, including after a refining branch. Failable bodies and source returns use explicit outcomes, described below.
   - Method calls are classified from their typed code during the continuation trial. Names such as `Signal`, `Subscribe`, `Cancel` and `Await` alone do not imply suspension: event notification, subscription and subscription cancellation are immediate, transactional operations. A genuinely suspending method still needs a suspending source context and the staged continuation protocol below.
+  - A continuation is keyed by what its code depends on (`contKey`, as `firstKey` and `refineTagOf`, over `Ctx.usedLocals`): the clauses' places, the locals they use with their types, the type variables they write as bound there, and the context. The key is the same in the trial that asks for it (`Ctx.trial`) and in the function of an enclosing continuation that the next round compiles the clauses in, so a continuation asked for in a trial is the one used, and nesting takes no more rounds. A generated local the clauses use is named by its place alone for this: a `for`'s return slot (`$forReturn…`, #437) was numbered by the locals in scope, which differ between the source and each continuation's function, so each level of `for`s nested with refining choices made the continuations inside it again (136 for 16 levels, 120 never called). A refining cast's lift asked for in a continuation's trial is not kept (`Ctx.keepsLifts`): its tag has the continuation's own scope, which the trial does not.
   - Continuations also share code inside parameter and field defaults, constructors, class blocks and cleanup. `FirstLift` and staged-resume metadata carry the source's lexical restrictions and active default-dependency stack. Effect inference and final elaboration restore them in each helper; helper keys include this context so a request checked in one scope cannot stand in for another. Moving code therefore retains restrictions on returns, suspension, spawning, repeated/concurrent execution and recursive default dependencies.
   - An exclusive choice's own paths (#314's returns, #331's `if`s, `exclIter`) do the same (phase 2b): when the clauses after it have another such choice, every path ends with a call of the continuation, in the path's part of the iteration's filter, so a failure of its first filter undoes the path as the copy's would, and the path's generators take the continuation's values as their body (`build` takes the body as an argument for this). The first elaboration compiles the first path with the clauses after it, for the values' type, and asks for the continuation; the next compiles every path with the call. Ten calls of a function with a `return` and a choice after it in one `for` take 13 KB and 0.01 s to compile, where copying took 1.2 MB and 0.4 s. Immediate consumers can also share in a `<suspends>` caller; waiting refining consumers use the staged protocol below.
 
@@ -2384,9 +2385,10 @@ other parameters differently) share one. Such a tag may differ between the
 trial of an enclosing cast's branch, which has the enclosing function's
 locals, its `var`s among them, and no type expected of the branch's value,
 and the function made from that branch, which has its captures as values
-and its result type; so in such a trial (`Ctx.inRefinedTrial`) a cast with
+and its result type; so in such a trial (`Ctx.trial`, a branch's) a cast with
 such a tag asks for no lift, and the function, elaborated in the next round,
-asks for it. (Asked for from both, as when every local and type variable in
+asks for it (`Ctx.keepsLifts`). A continuation's trial asks for no lift at
+all: the continuation's function has a scope of its own (`refineScope`). (Asked for from both, as when every local and type variable in
 scope was in the tag, each level of nesting in a `for`'s body lifted the
 casts inside it again, the earlier copies never called: 136 functions for 16
 levels instead of 16.) A nest of such casts takes one round per level;
@@ -2437,7 +2439,9 @@ An immediate choice continuation in a suspending caller keeps value copies
 and normal copy-out. Admission checks its typed calls and pending refining
 lifts for suspension. Its discovery trial is disposable: the moved body
 discovers locals and nested lifts in the helper, whose refinement scope
-keeps their storage metadata distinct from the original source frame.
+keeps their storage metadata distinct from the original source frame. In
+any caller, a continuation's trial asks for no refining lift
+(`Ctx.keepsLifts`), as only the helper's scope is the one used.
 An accepted trial retains its heap-effect records for the enclosing
 source or refining lift. Discarding those records would incorrectly give
 that lift a computes-only signature. Waiting and unsuccessful trials

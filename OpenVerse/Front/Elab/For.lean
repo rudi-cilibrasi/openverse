@@ -233,7 +233,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
               -- enclosing lift has renamed it for mutable copy-out.
               let st0 ← get
               let slot ← fresh ty
-              let cB := { cA with locals := { name := b.name, slot, ty, mutable := false } :: cA.locals }
+              let cB := { cA.withTrial .continuation with locals := { name := b.name, slot, ty, mutable := false } :: cA.locals }
               let values ← elabForWith elabAlts elabBranchAlts elabE elabInts elabLoopGen elabSeq
                 cB p restCl bd (prepared := true) (firstDecides := true)
                   (failure := if bodyFail then some (.app p (.ident p "Err") [] false) else none)
@@ -438,13 +438,14 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
         -- (a path: its clauses up to its first generator into this filter, its
         -- generators into the body, with `pb` as the body; `flat`: `pb` is an
         -- array of the values, a continuation's, to flatten)
-        let runPath (cl : List SExpr) (pb : SExpr) (flat : Bool) : EM (Expr × Expr × Ty) := do
+        let runPathIn (c : Ctx) (cl : List SExpr) (pb : SExpr) (flat : Bool) : EM (Expr × Expr × Ty) := do
           let transfer := if stagePlan.isSome && flat then some true else stageOverride
-          let (f, a, t) ← exclIter cA (cl.takeWhile (!isGen ·)) (groups (cl.dropWhile (!isGen ·))) pb transfer
+          let (f, a, t) ← exclIter c (cl.takeWhile (!isGen ·)) (groups (cl.dropWhile (!isGen ·))) pb transfer
           if !flat || stagePlan.isSome then return (f, a, t)
           match t with
           | .arr t' => return (f, .prim .flatten [a], t')
           | _ => eerr gp "internal: a continuation's values"
+        let runPath := runPathIn cA
         -- (#335, phase 2b: another such choice, or an exclusive one, in the
         -- clauses after it, and a body that may run in a failure context:
         -- those clauses and the body a function of their own, #342's, which
@@ -491,7 +492,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
               -- nothing: all but the values' type, #364's review)
               if (contForLiftOf cA gp x bty .void altsS restCl bd bodyFail).toOption.isSome then
                 let st0 ← get
-                let (f0, a0, t0) ← runPath (liftP gs0 r0 0 ++ restCl) bd false
+                let (f0, a0, t0) ← runPathIn (cA.withTrial .continuation) (liftP gs0 r0 0 ++ restCl) bd false
                 if forContWaits cA st0 (← get) [f0, a0] then set st0 else
                   match contForLiftOf cA gp x bty t0 altsS restCl bd bodyFail with
                   | .ok lift =>
@@ -556,9 +557,10 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
             Choice.prepare [.decl gp b.name b.ty false a] (choiceValues c) (choiceField c)
               (fieldOrder := choiceOrder c)
               (site := s!"{site}a{i}") (keepExcl := true) (keepBranches := choiceHasCast c)
-          let forW (cl : List SExpr) (bd : SExpr) : EM R :=
-            elabForWith elabAlts elabBranchAlts elabE elabInts elabLoopGen elabSeq bctx p cl bd
+          let forWIn (c : Ctx) (cl : List SExpr) (bd : SExpr) : EM R :=
+            elabForWith elabAlts elabBranchAlts elabE elabInts elabLoopGen elabSeq c p cl bd
               (prepared := true) (failure := failure)
+          let forW := forWIn bctx
           -- (#335, phase 2: another such choice, or an exclusive one, in the
           -- clauses after it, and a body that may run in a failure context:
           -- those clauses and the body a function of their own, which each
@@ -642,7 +644,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
                 | some bty => (contForLiftOf c gp b.name bty .void b.alts restCl bd bodyFail).toOption.isSome
                 | none => false
               if same && known && restCl.any isCF then
-                let r0 ← forW (liftA a0 0 ++ restCl) bd
+                let r0 ← forWIn (bctx.withTrial .continuation) (liftA a0 0 ++ restCl) bd
                 if forContWaits c st0 (← get) [r0.e] then set st0 else
                   match (do
                       let some bty := tys.head? | throw "no type"
