@@ -95,7 +95,8 @@ not proved. It is compared with the Lean interpreter on the Verse test suite
 (`scripts/test-verse.sh --c`) and on random programs (`scripts/fuzz-diff.sh`),
 and it runs under ASan/UBSan. Some fuzzers also check both against a model of
 the documented semantics, written apart from the code it checks, with the
-models in `scripts/models/`; `scripts/check.sh` runs each on fresh seeds:
+models in `scripts/models/`. `scripts/check.sh` runs each from a fixed seed (`FUZZ_SEED`,
+1 by default), and the nightly workflow runs ten times as many from a seed that changes daily:
 
 | Fuzzer | What its model predicts |
 |---|---|
