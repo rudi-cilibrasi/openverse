@@ -8,6 +8,42 @@ tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
 limit="${CHOICE_SIZE_TIMEOUT:-120}"
 # Keep modes sorted on separate lines so independent additions merge cleanly.
 kinds=(
+  setter-nested-first
+  setter-nested-for
+  setter-nested-waiting
+  setter-varying-first
+  setter-varying-for
+  setter-varying-waiting
+  setter-deep-first
+  setter-deep-for
+  setter-deep-waiting
+  setter-simple-first
+  setter-simple-for
+  setter-simple-waiting
+  setter-compound-first
+  setter-compound-for
+  setter-compound-waiting
+  setter-array-first
+  setter-array-for
+  setter-array-waiting
+  setter-alias-first
+  setter-alias-for
+  setter-alias-waiting
+  setter-choice-first
+  setter-choice-for
+  setter-choice-waiting
+  resultalias-same-first
+  resultalias-same-for
+  resultalias-same-waiting
+  resultalias-different-first
+  resultalias-different-for
+  resultalias-different-waiting
+  resultalias-field-first
+  resultalias-field-for
+  resultalias-field-waiting
+  resultalias-generic-first
+  resultalias-generic-for
+  resultalias-generic-waiting
   alias-block-first
   alias-block-for
   alias-block-waiting
@@ -297,6 +333,84 @@ if kind == 'heterogeneous-nested-for':
         body = f'for(A{i}:=(Dup(1)|Dup("s"))):' + body
     print('    Rows:=' + body)
     print('    Print("{Rows.Length}")')
+    sys.exit(0)
+if kind.startswith('setter-'):
+    _, shape, mode = kind.split('-')
+    print('Dup(X:t where t:type)<computes>:t=X|X')
+    nested = shape in ('nested','varying','deep')
+    alternatives=[]
+    if nested:
+        print('leaf:=class{var K:int=1}\nother:=class{var K:int=1}\nmid:=class{C:leaf}')
+        for cls in ['ca','cb']:
+            ty = 'mid' if shape=='deep' else 'other' if shape=='varying' and cls=='cb' else 'leaf'
+            print(cls + ':=class{C:' + ty + '}')
+            value = 'mid{C:=leaf{}}' if shape=='deep' else ty+'{}'
+            alternatives.append(cls+'{C:='+value+'}')
+    else:
+        for cls,ty,value in [('ca','[]int','array{1}'),('cb','[]string','array{"s"}')]:
+            print(cls + ':=class{var K:' + (ty if shape == 'array' else 'int') + '=' + (value if shape == 'array' else '1') + '}')
+            alternatives.append(cls+'{}')
+    clauses=','.join(f'A{i}:=(Dup({alternatives[0]})|Dup({alternatives[1]}))' for i in range(count))
+    statements=[];terms=[]
+    for i in range(count):
+        name=f'A{i}'
+        if shape == 'alias':
+            statements.extend([f'B{i}:={name}',f'C{i}:=B{i}'])
+            name=f'C{i}'
+        if nested:
+            name += '.C.C' if shape=='deep' else '.C'
+        statements.append(f'set {name}.K' + ('=' if shape=='simple' else '+=') + ('array{}' if shape=='array' else '(1|2)' if shape=='choice' else '1'))
+        terms.append(name+'.K'+('.Length' if shape=='array' else ''))
+    if shape == 'choice':
+        clauses += ',' + ','.join(statements)
+        statements=[]
+    value='block{'+';'.join(statements+['+'.join(terms)])+'}'
+    effects='<suspends>' if mode=='waiting' else ''
+    if mode=='waiting':
+        value='block{Sleep(0.0);'+value+'}'
+    print(f'Run(){effects}:int=')
+    if mode=='first':
+        print('    if('+clauses+',V:='+value+',V>0)then V else -1')
+    else:
+        print('    Rows:=for('+clauses+'):'+value)
+        print('    Rows.Length')
+    print(f'Main(){effects}:void=Print("{{Run()}}")')
+    sys.exit(0)
+if kind.startswith('resultalias-'):
+    _, shape, mode = kind.split('-')
+    generic = shape == 'generic'
+    waiting = mode == 'waiting'
+    effects = '<suspends>' if waiting else ''
+    print('Dup(X:t where t:type)<computes>:t=X|X')
+    print('Equal(X:t,Y:t where t:subtype(comparable))<computes>:int=if(X=Y)then 1 else 0')
+    for root, result in [('ca','ra'),('cb','rb')]:
+        print(result+('(t:subtype(comparable))' if generic else '')+':=class<computes>{K:int=1'+(';V:t' if generic else '')+'}')
+        if shape == 'field':
+            print(root+':=class{R:'+result+'='+result+'{}}')
+        else:
+            ret = root if shape=='same' else result+('(t)' if generic else '')
+            body = 'Self' if shape=='same' else ret+'{'+('V:=V' if generic else '')+'}'
+            params = 'Ignored:u where u:type' if generic else ''
+            print(root+('(t:subtype(comparable))' if generic else '')+':=class{K:int=1'+(';V:t' if generic else '')+';Me('+params+')<computes>'+effects+':'+ret+'=block{'+('Sleep(0.0);' if waiting else '')+body+'}}')
+    selected = 'Dup(P)|Dup(Q)' if generic else 'Dup(ca{})|Dup(cb{})'
+    clauses=','.join(f'A{i}:=({selected})' for i in range(count))
+    statements=[];terms=[]
+    for i in range(count):
+        value=f'A{i}.R' if shape=='field' else f'A{i}.Me('+ (f'A{(i+1)%count}' if generic else '')+')'
+        statements.extend([f'B{i}:={value}',f'C{i}:=B{i}'])
+        terms.append(f'C{i}.K'+(f'+Equal(C{i}.V,X)' if generic else ''))
+    if waiting and shape=='field':
+        statements.append('Sleep(0.0)')
+    value='block{'+';'.join(statements+['+'.join(terms)])+'}'
+    signature='P:ca(t),Q:cb(t),X:t where t:subtype(comparable)' if generic else ''
+    print(f'Run({signature}){effects}:int=')
+    if mode=='first':
+        print('    if('+clauses+',V:='+value+',V>0)then V else -1')
+    else:
+        print('    Rows:=for('+clauses+'):'+value)
+        print('    Rows.Length')
+    args='ca(int){V:=7},cb(int){V:=7},7' if generic else ''
+    print(f'Main(){effects}:void=Print("{{Run('+args+')}")')
     sys.exit(0)
 if kind.startswith('alias-'):
     _, shape, mode = kind.split('-')
@@ -1371,6 +1485,30 @@ PY
     if [[ $kind == alias-* && $count == 4 ]]; then
       expected=256
       [[ $kind == *-first ]] && expected=8
+      printf '%s\n' "$expected" >"$tmp/expected"
+      timeout "$limit" "$root/.lake/build/bin/openverse" run "$tmp/p.verse" >"$tmp/lean.out"
+      timeout "$limit" "$root/runtime/build/cverse" "$tmp/p.vbc" >"$tmp/c.out"
+      diff -u "$tmp/expected" "$tmp/lean.out"
+      diff -u "$tmp/expected" "$tmp/c.out"
+    fi
+    if [[ $kind == setter-* && $kind != setter-choice-* && $count == 4 ]]; then
+      expected=256
+      if [[ $kind == *-first ]]; then
+        expected=8
+        [[ $kind == setter-simple-* || $kind == setter-array-* ]] && expected=4
+      fi
+      printf '%s\n' "$expected" >"$tmp/expected"
+      timeout "$limit" "$root/.lake/build/bin/openverse" run "$tmp/p.verse" >"$tmp/lean.out"
+      timeout "$limit" "$root/runtime/build/cverse" "$tmp/p.vbc" >"$tmp/c.out"
+      diff -u "$tmp/expected" "$tmp/lean.out"
+      diff -u "$tmp/expected" "$tmp/c.out"
+    fi
+    if [[ $kind == resultalias-* && $count == 4 ]]; then
+      expected=256
+      if [[ $kind == *-first ]]; then
+        expected=4
+        [[ $kind == resultalias-generic-* ]] && expected=8
+      fi
       printf '%s\n' "$expected" >"$tmp/expected"
       timeout "$limit" "$root/.lake/build/bin/openverse" run "$tmp/p.verse" >"$tmp/lean.out"
       timeout "$limit" "$root/runtime/build/cverse" "$tmp/p.vbc" >"$tmp/c.out"

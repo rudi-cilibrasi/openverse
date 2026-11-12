@@ -1,0 +1,18 @@
+leave 100
+body 4 4
+leave 100
+body 7 7
+leave 2
+source 7 2
+done -1 7 2
+leave 100
+body 4 4
+leave 100
+body 7 7
+leave 100
+body 5 5
+leave 100
+body 8 8
+source 7 8
+done 4 7 8
+exit=0

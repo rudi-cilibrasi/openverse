@@ -11,8 +11,13 @@ p.add_argument('--generic-methods', action='store_true')
 p.add_argument('--members', action='store_true')
 p.add_argument('--callable-fields', action='store_true')
 p.add_argument('--aliases', action='store_true')
+p.add_argument('--writes', action='store_true')
+p.add_argument('--nested-writes', action='store_true')
+p.add_argument('--result-aliases', action='store_true')
 a = p.parse_args()
-a.members = a.members or a.aliases
+a.writes = a.writes or a.nested_writes
+a.aliases = a.aliases or ((a.writes or a.result_aliases) and a.seed % 2 == 0)
+a.members = a.members or a.aliases or a.writes or a.result_aliases
 a.generic_methods = (a.generic_methods or a.members) and not a.callable_fields
 a.members = a.members and not a.callable_fields
 a.methods = a.methods or a.generic_methods or a.callable_fields
@@ -46,6 +51,9 @@ def prefix(i, j):
 def filt(i, s, kind):
     global h, total
     d = levels[i]
+    if a.writes:
+        h += i + 1
+        lines.append(f'write {i + 1}')
     if method_arguments:
         h += i + 1
         lines.append(f'arg {i + 1}')
@@ -65,7 +73,8 @@ def search(i, values):
         h, total, lines = (saved[0], saved[1], list(saved[2]))
         prefix(i, j)
         base = (h, total, list(lines))
-        for s in d['scores'][j]:
+        for original in d['scores'][j]:
+            s = original + (i + 1 if a.writes else 0)
             h, total, lines = (base[0], base[1], list(base[2]))
             if not filt(i, s, j):
                 continue
@@ -83,7 +92,8 @@ def walk(i, values):
     d = levels[i]
     for j in range(2):
         prefix(i, j)
-        for s in d['scores'][j]:
+        for original in d['scores'][j]:
+            s = original + (i + 1 if a.writes else 0)
             saved = (h, total, len(lines))
             if not filt(i, s, j):
                 h, total = saved[:2]
@@ -128,6 +138,9 @@ lines.append(f'result {answer} state {h}')
 a.expected.write_text('exit=0\n' + '\n'.join(lines) + '\n')
 print('cell:=class{var N:int=0}\nInts(N:int)<computes>:[]int=for(I:=1..N):I\nbox(t:type):=class{V:t;K:int=0}\nbase:=class{K:int}\nca:=class(base){}\ncb:=class(base){}\nSame(X:t,?Y:t=X where t:subtype(comparable))<computes>:int=if(X=Y)then 1 else 0\nPrefix(H:cell,X:t,Y:t,Tag:int where t:type)<transacts>:t=\n    Print("p {Tag}")\n    set H.N+=Tag\n    X|Y')
 if a.methods:
+    if a.result_aliases:
+        for name, generic in [('ma',False),('mb',False),('ga',True),('gb',True)]:
+            print('result_'+name+('(t:type)' if generic else '')+':=class<computes>{K:int'+(';V:t' if generic else '')+'}')
     for name, generic, kind in [('ma', False, 'a'), ('mb', False, 'b'), ('ga', True, 'a'), ('gb', True, 'b')]:
         print(name + ('(t:type)' if generic else '') + ':=class:')
         print('    H:cell\n    ' + ('var ' if a.members or a.callable_fields else '') + 'K:int' + ('\n    V:t' if generic else ''))
@@ -137,11 +150,15 @@ if a.methods:
             continue
         method_params = (['Arg:int'] if method_arguments else []) + (['Ignored:u where u:type'] if a.generic_methods else [])
         method = 'Read' if a.members else 'Score'
-        result = name + ('(t)' if generic else '') if a.members else 'int'
+        result = ('result_' if a.result_aliases else '') + name + ('(t)' if generic else '') if a.members else 'int'
         print('    ' + method + '(' + ','.join(method_params) + ')<transacts>:' + result + '=')
         print('        Print("m ' + kind + ' {K}")')
         print('        set H.N+=' + ('1' if kind == 'a' else '2') + '*(K+1)' + ('+Arg' if method_arguments else ''))
-        print('        Self' if a.members else '        K')
+        returned = 'result_'+name+('(t)' if generic else '')+'{K:=K'+(',V:=V' if generic else '')+'}' if a.result_aliases else 'Self' if a.members else 'K'
+        print('        '+returned)
+    if a.nested_writes:
+        for name, generic in [('ma',False),('mb',False),('ga',True),('gb',True)]:
+            print('holder_'+name+('(t:type)' if generic else '')+':=class{C:'+name+('(t)' if generic else '')+'}')
     if a.callable_fields:
         for kind in range(2):
             callback_effects = '<reads><writes>' if kind == 0 else '<transacts>'
@@ -149,19 +166,26 @@ if a.methods:
             print('    Print("m ' + chr(97 + kind) + ' {K}")')
             print('    set H.N+=' + str(kind + 1) + '*(K+1)' + ('+Arg' if method_arguments else ''))
             print('    K')
-    print('Score(H:cell,X:tuple(int,int)' + (',Arg:int' if method_arguments else '') + (',Ignored:u where u:type' if a.generic_methods else '') + ')<transacts>:int=')
-    print('    if(X(1)=0)then Print("m a {X(0)}") else Print("m b {X(0)}")')
-    print('    set H.N+=(X(1)+1)*(X(0)+1)' + ('+Arg' if method_arguments else '') + '\n    X(0)')
+    if a.writes:
+        print('write_payload:=class{var K:int;Kind:int}')
+    control_ty = 'write_payload' if a.writes else 'tuple(int,int)'
+    key, kind = ('X.K', 'X.Kind') if a.writes else ('X(0)', 'X(1)')
+    print('Score(H:cell,X:' + control_ty + (',Arg:int' if method_arguments else '') + (',Ignored:u where u:type' if a.generic_methods else '') + ')<transacts>:int=')
+    print(f'    if({kind}=0)then Print("m a {{{key}}}") else Print("m b {{{key}}}")')
+    print(f'    set H.N+=({kind}+1)*({key}+1)' + ('+Arg' if method_arguments else '') + '\n    ' + key)
+    if a.writes:
+        print('WriteArgument(H:cell,N:int)<transacts>:int=block{Print("write {N}");set H.N+=N;N}')
     print('Argument(H:cell,N:int)<transacts>:int=block{Print("arg {N}");set H.N+=N;N}')
 clauses = []
 
 def payload(s, j):
     if a.methods:
         if a.control:
-            return f'({s},{j})'
+            return f'write_payload{{K:={s},Kind:={j}}}' if a.writes else f'({s},{j})'
         generic = shape not in ('primitive', 'fields')
         name = ('ga' if j == 0 else 'gb') if generic else ('ma' if j == 0 else 'mb')
-        return name + ('(t)' if generic else '') + '{H:=H,K:=' + str(s) + (',V:=X' if generic else '') + (',F:=Callback' + str(j) if a.callable_fields else '') + '}'
+        value = name + ('(t)' if generic else '') + '{H:=H,K:=' + str(s) + (',V:=X' if generic else '') + (',F:=Callback' + str(j) if a.callable_fields else '') + '}'
+        return 'holder_'+name+('(t)' if generic else '')+'{C:='+value+'}' if a.nested_writes else value
     if a.control:
         return str(s)
     if shape == 'primitive':
@@ -182,16 +206,29 @@ for i, d in enumerate(levels):
     if a.methods:
         extra = ','.join(([f'Argument(H,{i+1})'] if method_arguments else []) + (['X'] if a.generic_methods else []))
         score = f'Score(H,A{i}' + (',' + extra if extra else '') + ')' if a.control else f'A{i}.F(A{i}.H,A{i}.K' + (',' + extra if extra else '') + ')' if a.callable_fields else f'A{i}.' + ('Read' if a.members else 'Score') + f'({extra})' + ('.K' if a.members else '')
+    if a.nested_writes and not a.control:
+        score = score.replace(f'A{i}.', f'A{i}.C.')
     clauses.append(f"A{i}:=({'|'.join(producers)})")
     if a.aliases:
         clauses.extend([f'Alias{i}:=A{i}', f'B{i}:=Alias{i}'])
         score = score.replace(f'A{i}', f'B{i}')
+    if a.writes:
+        receiver = f'B{i}' if a.aliases else f'A{i}'
+        if a.nested_writes and not a.control:
+            receiver += '.C'
+        clauses.append(f'set {receiver}.K+=WriteArgument(H,{i+1})')
+    if a.result_aliases:
+        returned = score if a.control else score.removesuffix('.K')
+        clauses.extend([f'Returned{i}:={returned}', f'Saved{i}:=Returned{i}'])
+        score = f'Saved{i}' if a.control else f'Saved{i}.K'
     clauses.extend([f'S{i}:={score}', f'Print("f {i} {{S{i}}}")', f"set H.N+={d['weight']}+S{i}", f'set Total+=S{i}+1', f"Mod[H.N+S{i},{d['mod']}]={d['want']}"])
 clauses.append('Z:=Items[0]' if mode == 'first' else 'Z:Items')
 score = '+'.join((f'S{i}' for i in range(n)))
 names = ('S0', f'S{n - 1}') if shape == 'fields' else ('A0', f'A{n - 1}')
 if a.aliases:
     names = tuple(name.replace('A', 'B') for name in names)
+if a.result_aliases and shape != 'fields':
+    names = ('Saved0', f'Saved{n-1}')
 packet = f'({names[0]},{names[1]},{score})' if packed else names[0]
 body = f'set H.N+={boost}+{score};set Total+={score};Print("body {{H.N}} {{Total}}");{packet}'
 effects = '<suspends><transacts>' if mode == 'waiting' else '<transacts>'
