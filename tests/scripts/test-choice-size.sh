@@ -118,6 +118,8 @@ kinds=(
   context-method-for
   context-method-nested
   context-method-nested-dispatch
+  castclause-condition
+  castclause-decides
   clause-break-composed
   clause-break-exclusive
   clause-break-refined
@@ -323,6 +325,8 @@ kinds=(
   own-method-failure
   own-method-first
   own-method-for
+  recursive-frame-first
+  recursive-frame-for
   recursive-return-eager
   recursive-return-first
   recursive-return-for
@@ -381,6 +385,28 @@ for kind in "${kinds[@]}"; do
     python3 - "$kind" "$count" >"$tmp/p.verse" <<'PY'
 import sys
 kind, count = sys.argv[1], int(sys.argv[2])
+if kind.startswith('castclause-'):
+    # (#243) refining casts as clauses after ones with effects, in a
+    # <decides> body or an if's condition: each takes the rest as its branch
+    n = count
+    print('pair(a:type, b:type) := class:\n    A:a\n    B:b')
+    print('dup(t:type) := class(pair(t, t)):\n    C:int = 4')
+    print('cell := class:\n    var N:int = 0')
+    tps = ', '.join(f'a{i}:type, b{i}:type' for i in range(n))
+    ps = ', '.join(f'P{i}:pair(a{i}, b{i})' for i in range(n))
+    total = ' + '.join(f'D{i}.C' for i in range(n))
+    ys = ', '.join('Y' for _ in range(n))
+    if kind == 'castclause-decides':
+        body = ''.join(f'    set H.N += 1\n    D{i} := dup[P{i}]\n' for i in range(n))
+        print(f'Run(H:cell, {ps} where {tps})<transacts><decides>:int =\n{body}    {total}')
+        call = f'if (V := Run[H, {ys}]) then V else -1'
+    else:
+        clauses = ', '.join(f'set H.N += 1, D{i} := dup[P{i}]' for i in range(n))
+        print(f'Run(H:cell, {ps} where {tps})<transacts>:int =\n    if ({clauses}) then {total} else -1')
+        call = f'Run(H, {ys})'
+    print('Main()<transacts>:void =\n    H := cell{}\n    Y:pair(int, int) = dup(int){A := 1, B := 2}')
+    print(f'    Print("{{{call}}} {{H.N}}")')
+    sys.exit(0)
 if kind.startswith('indexwrite-'):
     _, shape, mode = kind.split('-')
     n = count
@@ -1103,6 +1129,19 @@ box(t:type,u:type):=class:
         args.extend([f'box({ty},{extra_ty}){{V:={value},Extra:={extra},C:=cell{{}}}}', f'array{{{value}}}' if nested else value])
     print(f'Main():void=Print("{{Run({",".join(args)})}}")')
     sys.exit(0)
+if kind.startswith('recursive-frame-'):
+    # (#283) calls of itself with code after them, each a return frame: the
+    # frames' code is compiled once, not once per value
+    alts = ' | '.join(f'F[N - 1] + {i} | N * {i + 2}' for i in range(count))
+    print(f'''F(N:int)<transacts><decides>:int =
+    Print("f {{N}}")
+    N > 0
+    {alts}''')
+    if kind.endswith('first'):
+        print('Main()<transacts>:void = if (X := F[2], X > 100) then Print("{X}") else Print("none")')
+    else:
+        print('Main()<transacts>:void = Print("{(for (X := F[2], X > 100): X).Length}")')
+    sys.exit(0)
 if kind.startswith('recursive-return-'):
     eager = kind.endswith('eager')
     mutual = 'mutual' in kind
@@ -1653,6 +1692,13 @@ PY
       fi
       exit 1
     }
+    if [[ $kind == castclause-* && $count == 4 ]]; then
+      printf '%s\n' "16 4" >"$tmp/expected"
+      timeout "$limit" "$root/.lake/build/bin/openverse" run "$tmp/p.verse" >"$tmp/lean.out"
+      timeout "$limit" "$root/runtime/build/cverse" "$tmp/p.vbc" >"$tmp/c.out"
+      diff -u "$tmp/expected" "$tmp/lean.out"
+      diff -u "$tmp/expected" "$tmp/c.out"
+    fi
     if [[ $kind == alias-* && $count == 4 ]]; then
       expected=256
       [[ $kind == *-first ]] && expected=8
