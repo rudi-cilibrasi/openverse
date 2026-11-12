@@ -1218,14 +1218,6 @@ partial def checkBody : SExpr → SExpr :=
       some (chain as)
     | _ => none
 
-/-- Whether the body writes a type that mentions one of `tps`: in a
-    binding's type or a construction's type arguments. -/
-partial def writesTypes (tps : List String) (e : SExpr) : Bool :=
-  anyE (fun
-    | .decl _ _ (some t) _ _ => styMentions tps t
-    | .construct _ n ts _ => tps.contains n || ts.any (styMentions tps)
-    | _ => false) e
-
 /-- A written type with the names of `ρ` renamed. -/
 partial def styRename (ρ : List (String × String)) : STy → STy
   | .name n => .name ((ρ.lookup n).getD n)
