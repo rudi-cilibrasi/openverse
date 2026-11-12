@@ -34,7 +34,8 @@ def main (args : List String) : IO Unit := do
     "choice-class-state",
     "choice-class-state-control", "choice-class-varying", "choice-class-varying-control",
     "choice-class-compound", "choice-class-compound-control",
-    "choice-class-fields", "choice-class-fields-control"]
+    "choice-class-fields", "choice-class-fields-control",
+    "choice-class-waiting-value", "choice-class-waiting-value-control"]
   let negative := ["choice-refusal", "default-refusal", "override-refusal", "overload-interface-refusal",
     "overload-ancestor-refusal", "overload-optional-refusal", "overload-empty-refusal", "overload-scope-refusal",
     "overload-value-refusal", "interior-readonly-refusal", "interior-effect-refusal",

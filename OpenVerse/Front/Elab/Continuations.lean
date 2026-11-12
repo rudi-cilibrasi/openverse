@@ -1103,6 +1103,15 @@ def forStageEnvOf (ctx : Ctx) (plan : Choice.ForStagePlan) (p : Pos)
   let localName (n : String) := if n == "Self" then "$sourceSelf" else n
   let captureName (l : Local) (j : Nat) := if l.typeValue then s!"$w.capture{j}" else s!"$capture{j}"
   let fields := caps.zipIdx.map fun (l, j) => (captureName l j, l.ty.toSTy, none, false)
+  -- Captured values may themselves have constrained types. Their local
+  -- annotations are checked before every capture has been initialized, so
+  -- retain the actual captured relations on Self as readonly proof fields.
+  -- Dummy type values contribute no capability, and construction must still
+  -- provide each dictionary from the caller's current frame.
+  let relations := (SubtypeEvidence.capabilities ctx.types (caps.map fun l =>
+    (l.name, if l.typeValue then Ty.void else l.ty))).map (fun plan => plan.bound ctx.types) |>.eraseDups
+  let fields := fields ++ SubtypeEvidence.relationFields p name (relations.map fun bound =>
+    (bound.base.toSTy, bound.derived.toSTy))
   let borrowed (l : Local) := l.storage.filter fun s =>
     !(ctx.sig? s.frame).any (!·.suspends)
   let init := caps.zipIdx.flatMap fun (l, j) =>

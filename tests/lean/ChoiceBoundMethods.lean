@@ -134,4 +134,29 @@ def main : IO Unit := do
   let renamed ← getSome "alpha-renamed class dependency"
     (classOperation (.struct "root" [.param "renamed" false]))
   need "class-bound identity ignores lexical dependency spellings" (familyName dependent == familyName renamed)
+  let proof := (Bound.mk vehicle t).ty
+  let proofField := fieldName "carrier" "t"
+  let stage : Choice.ForStagePlan := {
+    key := "bound-capture", pos := p, base := "$testStage", method := "$resume",
+    tparams := [{ pos := p, name := "t", constraint := "type" }], value := .name "int",
+    specs := ["suspends"], copies := [], borrowed := [] }
+  for (dummy, mutableProof) in [(false, false), (true, false), (false, true)] do
+    let env := { types with
+      classes := "carrier" :: types.classes,
+      structs := ("carrier", [(proofField, proof, none)]) :: types.structs,
+      sparams := ("carrier", [("t", false)]) :: types.sparams,
+      varFields := if mutableProof then [("carrier", proofField)] else [],
+      boundFacts := [(vehicle, t)] }
+    let ctx : Ctx := {
+      sigs := [], sigProg := { fns := [], main := 0 }, types := env,
+      forStageArgs := [t],
+      locals := [{ name := "Carrier", slot := 0, ty := .struct "carrier" [t], mutable := false, typeValue := dummy }] }
+    let (request, _, _) ← getOK "retain actual captured relations before local initialization"
+      (forStageEnvOf ctx stage p [] (.block p [.ident p "Carrier", .int p 0]))
+    let relations := request.extraFns.flatMap fun
+      | .classDef _ owner _ _ _ _ fields _ _ => fields.filterMap fun (name, ty, _, mutable) =>
+          declaredRelation? owner name ty mutable
+      | _ => []
+    need "resume fields preserve only actual readonly proof capabilities"
+      (relations.length == (if dummy || mutableProof then 0 else 1))
   IO.println "choice bound-method contracts passed (class/method domains, real evidence, bound-only inference and cache identity)"

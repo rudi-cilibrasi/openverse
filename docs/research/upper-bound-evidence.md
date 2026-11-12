@@ -119,6 +119,11 @@ dependencies; ordinary method, field and write operations retain them on each
 implementation. Canonical identities include the retained class obligations.
 Constructing a dictionary still requires actual current-frame evidence.
 An unrepresentable class contract keeps the checked per-case source path.
+Waiting environments retain actual captured relations as readonly proof
+fields before their typed capture locals are initialized. This preserves
+constrained dictionary types independently of capture order. Dummy captures,
+mutable proof fields and declaration facts alone do not create these fields;
+construction still supplies real dictionaries from the current frame.
 
 Member lookup uses actual nominal views. Root and interior mutation preserve
 the source storage type, evaluate indices/keys before traversal, and perform
