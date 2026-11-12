@@ -84,6 +84,9 @@ flags: heavy     (with bif: more of them, longer chains, longer conditions)
                   #283; on with seq otherwise)
        noenter   (no alternative, one of several, with code before a choice in it,
                   #283; on with seq otherwise)
+       nolifted  (no call of a generator of itself where the lifter takes it, after
+                  its bound choice: a named argument, a construction's field, a
+                  comparison's later operand, a set's value, #283; on with seq otherwise)
 """
 import copy
 import os
@@ -502,6 +505,13 @@ RTY = random.Random(seed * 1000003 + 283288)
 # generator's choice point and before the alternative's own, once for each time the alternative
 # is taken; a stream of its own.
 RENT = random.Random(seed * 1000003 + 283289)
+# ---- #283, flag lifted (on with seq; nolifted turns it off): after a <decides> generator's bound
+# choice, a statement with a call of itself where the lifter takes it: a named argument,
+# `Wl := NA(N, ?P := Gz0[N - 1, A])`; a construction's field, in its type's order whatever the
+# written one, `Wl := PS(pt{Y := Gz0[N - 1, A], X := 2})`; a comparison's later operand,
+# `Wl := (5 > Gz0[N - 1, A])`; or `set Vk += Gz0[N - 1, A]`, its old value read before the call;
+# a stream of its own.
+RLIFT = random.Random(seed * 1000003 + 283292)
 SQN = [0]
 USED = set()     # (generator, in a for): the calls the tests make, for MVSEQ's statistics
 FRN = [0]
@@ -521,6 +531,7 @@ FRAMES = LAZY and 'noframes' not in flags and 'cf' not in flags
 SEQ = FRAMES and 'noseq' not in flags
 TYPED = SEQ and 'notyped' not in flags
 ENTER = SEQ and 'noenter' not in flags
+LIFTED = SEQ and 'nolifted' not in flags
 REFUSED = [False]
 
 
@@ -1000,6 +1011,8 @@ def gen_gfunc(i):
         typed_shapes(f, i, sc, ctr)
     if ENTER:
         enter_shapes(f, i, sc, ctr)
+    if LIFTED:
+        lifted_shapes(f, i, sc, ctr, stmts)
     f['stmts'] = stmts
     f['lifted'] = lifted(f)
     CTX.update(ctrs=None, nofail=False, nochoice=False, noprint=False, fmax=None, take=None)
@@ -1118,6 +1131,32 @@ def enter_shapes(f, i, sc, ctr):
                    ('tw', ('lit', RENT.randint(0, 2)), a))
             alts.insert(RENT.randint(0, len(alts)), ('bin', RENT.choice(['+', '*']), pre, ('choice', inner)))
             f['seq'] = f.get('seq', set()) | {'enter'}
+
+
+def lifted_shapes(f, i, sc, ctr, stmts):
+    """(#283, flag lifted) after a <decides> generator's bound choice, a statement with a call of
+    itself where the lifter takes it (RLIFT alone)."""
+    if not f['decides'] or RLIFT.random() >= 0.25:
+        return
+    a = ('ref', RLIFT.choice(sc)) if RLIFT.random() < 0.5 else ('lit', RLIFT.randint(0, 3))
+    call = ('gself', i, [('bin', '-', ('ref', 'N'), ('lit', 1)), a] + ([('ref', 'C')] if ctr else []))
+    kinds = (['na'] if NA else []) + (['cons'] if CB else []) + ['cmp', 'set']
+    kind = RLIFT.choice(kinds)
+    x, post, last = f.get('bound') or ('Wf', [], ('ref', 'Wf'))
+    if kind == 'na':
+        st = ('slet', 'Wl', ('na', ('ref', 'N'), [('P', call)], RLIFT.randint(0, 1)))
+    elif kind == 'cons':
+        st = ('slet', 'Wl', ('cons', ('lit', RLIFT.randint(0, 3)), call, RLIFT.random() < 0.5))
+    elif kind == 'cmp':
+        st = ('slet', 'Wl', ('cmp', ('lit', RLIFT.randint(1, 6)), [(RLIFT.choice(['>', '>=']), call)]))
+    else:
+        if not any(c[0] == 'svar' and c[1] == 'Vl' for c in stmts):
+            stmts.append(('svar', 'Vl', ('lit', RLIFT.randint(0, 3))))
+        st = ('sset', 'Vl', '+=', call)
+    post = post + [st]
+    last = ('bin', '+', ('ref', 'Vl' if kind == 'set' else 'Wl'), last)
+    f['bound'] = (x, post, last)
+    f['seq'] = f.get('seq', set()) | {'lifted-' + kind}
 
 
 FX_NODES = ('sprint', 'snext', 'tell', 'bprint', 'cnext', 'cadd', 'print', 'next', 'add', 'seti', 'setf')

@@ -272,6 +272,8 @@ partial def hasLiftable : SExpr → Bool
   | .app _ (.ident _ "$dispatch") _ false => true
   | .app _ (.ident _ "$each") _ false => true
   | .app _ (.ident _ "$loop") _ false => true
+  -- (#283) a call of a lazily taken group, in its own code (`markPoints`)
+  | .app _ (.ident _ "$point") _ false => true
   -- (a scope's `defer:`s pending for the exits in `e`, `deferExits`, #283)
   | .app _ (.ident _ "$deferExits") [_, e] false => hasLiftable e
   | e@(.ite ..) => isBranchy e || branchesLift hasLiftable e
@@ -762,6 +764,9 @@ partial def liftE (isVal : String → Bool) (isField : String → String → Boo
     bindParams isVal isField p pre args
     LM.bind p "c" (.app p (.ident q "$loop") [fn, ps, cls, tl] false)
   | .app p (.ident _ "$loop") _ false => LM.bind p "c" e
+  -- (#283) a call of a lazily taken group in its own code: its arguments,
+  -- then the call bound, as a choice is (`markPoints`)
+  | .app p (.ident q "$point") [c] false => LM.bind p "c" (.app p (.ident q "$point") [← liftE isVal isField c] false)
   | .app _ (.ident _ "$deferExits") [.block _ ds, x] false =>
     -- (#283) a scope's `defer:`s pending for the exits in `x`, `deferExits`:
     -- and so for those in each clause lifted out of it
@@ -1553,6 +1558,47 @@ structure ShapeOps where
   plain : SExpr → Bool
   isRec : SExpr → Bool
   inert : SExpr → Bool
+  /-- A call of the group, whatever its arguments. -/
+  isCall : SExpr → Bool := isRec
+  /-- A struct's or class's fields in declaration order, for the lifter. -/
+  fieldOrder : String → FieldOrder := fun _ => {}
+
+/-- (#283) The calls of a lazily taken group in `e` marked for the lifter,
+    `$point(call)`, which binds each where it binds a choice (`liftE`). -/
+partial def markPoints (isCall : SExpr → Bool) (e : SExpr) : SExpr :=
+  mapE (fun x => if !isCall x then none else match x with
+    | .app p f as br => some (.app p (.ident p "$point") [.app p f (as.map (markPoints isCall)) br] false)
+    | _ => none) e
+
+/-- The marks of `markPoints` taken off. -/
+partial def unmarkPoints : SExpr → SExpr :=
+  mapE fun
+    | .app _ (.ident _ "$point") [c] false => some (unmarkPoints c)
+    | _ => none
+
+/-- (#283) Code whose first choice point `frameOf?` does not reach, lifted as
+    the lifter lifts any clause (`liftClause`): its first statement with a
+    point, or the code itself as a value, each point bound to a name of its
+    own first, as the code evaluates it (a comparison's later operand, a
+    `set`'s value after its old value, a call's named argument, `and`'s
+    operands, `or`'s right, a construction's field in its type's order). None
+    when nothing is lifted: the point is where the lifter does not take it
+    either (a condition, a loop), which takes it as a failure context's. -/
+def liftPoints? (ops : ShapeOps) (a : SExpr) : Option SExpr := do
+  let isVal (n : String) : Bool := ops.inert (.ident a.pos n)
+  let lift (c : SExpr) : List SExpr :=
+    (liftClause isVal (fun _ _ => false) (markPoints ops.isCall c) (fieldOrder := ops.fieldOrder)).map unmarkPoints
+  match a with
+  | .block p ss =>
+    let i ← ss.findIdx? (!ops.plain ·)
+    let lifted := lift ss[i]!
+    guard (lifted.length > 1)
+    return .block p (ss.take i ++ lifted ++ ss.drop (i + 1))
+  | e =>
+    let v := madeName "lv" "" e.pos
+    let lifted := lift (.decl e.pos v none false e)
+    guard (lifted.length > 1)
+    return .block e.pos (lifted ++ [.ident e.pos v])
 
 mutual
 /-- (#283) An alternative of a lazily taken group in the normal form its
@@ -1576,7 +1622,10 @@ partial def normAlt (ops : ShapeOps) (a : SExpr) : Option SExpr := do
   let isPoint (e : SExpr) : Bool := ops.isRec e || isChoice e
   let hole := "$hole"
   match frameOf? isPoint ops.plain ops.inert hole a with
-  | none => none
+  | none =>
+    -- (a point `frameOf?` does not reach, but the lifter does: lifted)
+    let a' ← liftPoints? ops a
+    normAlt ops a'
   | some (c, k, pre) => do
     let h := if ops.isRec c && ops.plain k then s!"$frame{a.pos.line}_{a.pos.col}"
       else s!"$frame{c.pos.line}_{c.pos.col}{if ops.isRec c then "k" else "c"}"
@@ -1681,7 +1730,8 @@ partial def altOK (ops : ShapeOps) (isVar : String → Bool) (a : SExpr) : Bool 
     with code after it, which runs on each of its values (`$then`), and the
     clauses may end at a choice point with code after it (`bodyTail?`). -/
 def loopShapeOf? (g : String) (mv : List String) (body : SExpr) (grp : List String := [g])
-    (frames : Bool := false) (params : List String := []) : Option (List SExpr × SExpr) := do
+    (frames : Bool := false) (params : List String := [])
+    (fieldOrder : String → FieldOrder := fun _ => {}) : Option (List SExpr × SExpr) := do
   let ss := stmtsOf body
   let last ← ss.getLast?
   let cls := ss.dropLast
@@ -1703,7 +1753,10 @@ def loopShapeOf? (g : String) (mv : List String) (body : SExpr) (grp : List Stri
     let groupOK (e : SExpr) : Bool := ((alts? e).getD [e]).all fun a => isRec a || plain a
     if cls.all plain && loopTailOK plain groupOK tail then some (cls, tail) else none
   else
-  let ops : ShapeOps := { plain, isRec, inert := inert (params ++ localsOf body) }
+  let isCall : SExpr → Bool
+    | .app _ (.ident _ h) _ _ => grp.contains h
+    | _ => false
+  let ops : ShapeOps := { plain, isRec, inert := inert (params ++ localsOf body), isCall, fieldOrder }
   let (cls, tail) ← bodyTail? ops body.pos cls last
   let isVar (n : String) : Bool := anyE (fun | .decl _ x _ true _ => x == n | _ => false) body
   let groupOK (e : SExpr) : Bool := ((alts? e).getD [e]).all (altOK ops isVar)
@@ -1727,12 +1780,13 @@ partial def cellVars (vs : List String) : SExpr → SExpr :=
 /-- `loopShapeOf?`; with `frames`, when a frame sets a `var` (#283), with the
     function's `var`s that are set made cells (`cellVars`). -/
 def loopShape? (g : String) (mv : List String) (body : SExpr) (grp : List String := [g])
-    (frames : Bool := false) (params : List String := []) : Option (List SExpr × SExpr) :=
-  (loopShapeOf? g mv body grp frames params).orElse fun _ =>
+    (frames : Bool := false) (params : List String := [])
+    (fieldOrder : String → FieldOrder := fun _ => {}) : Option (List SExpr × SExpr) :=
+  (loopShapeOf? g mv body grp frames params fieldOrder).orElse fun _ =>
     let set := setsIn body
     let vs := ((localDecls body).map (·.1)).eraseDups.filter fun x =>
       set.contains x && anyE (fun | .decl _ y (some _) true _ => y == x | _ => false) body
-    if !frames || vs.isEmpty then none else loopShapeOf? g mv (cellVars vs body) grp frames params
+    if !frames || vs.isEmpty then none else loopShapeOf? g mv (cellVars vs body) grp frames params fieldOrder
 
 /-- How many `if`s with a `return` in them `e` has (#283). -/
 partial def countRetIfs (e : SExpr) : Nat :=
@@ -1911,9 +1965,10 @@ def markRecG (g : String) (grp : List String) : SExpr → SExpr :=
 partial def inlineCalls (mv : List (String × MFn)) (e : SExpr) (recs : List String := [])
     (loops : List String := []) (clash : List (String × List String) := [])
     (inDflt : List (String × String) := []) (groups : List (String × List String) := [])
-    (ovs : List (String × List String) := []) : StateT Nat (Except String) SExpr := do
+    (ovs : List (String × List String) := []) (fieldOrder : String → FieldOrder := fun _ => {}) :
+    StateT Nat (Except String) SExpr := do
   -- (`inDflt`: the defaults being inlined, function and parameter, #283)
-  let go := fun x => inlineCalls mv x recs loops clash inDflt groups ovs
+  let go := fun x => inlineCalls mv x recs loops clash inDflt groups ovs fieldOrder
   match e with
   | .app p (.ident _ "$dispatch") (.ident q g :: .block tp tmpl :: as) false =>
     -- (an overridden method's dispatch, #283: an inlined call whose
@@ -2066,7 +2121,7 @@ partial def inlineCalls (mv : List (String × MFn)) (e : SExpr) (recs : List Str
             -- (one that calls `g` again omitting it: as at a call)
             if inDflt.contains (g, sp.name) then
               throw s!"{p.show}: the default of ?{sp.name} of {shownFnName g} uses itself (a call of {shownFnName g} that omits ?{sp.name})"
-            let d' ← inlineCalls mv (renameTypes ρ d) recs loops clash ((g, sp.name) :: inDflt) groups ovs
+            let d' ← inlineCalls mv (renameTypes ρ d) recs loops clash ((g, sp.name) :: inDflt) groups ovs fieldOrder
             let earlier := (f.params.take k).map fun e => SExpr.tuple q [.ident q e.name, .ident q (tag e.name)]
             return some (.decl q (tag sp.name) (tyOf sp.ty) false
               (.app q (.ident q "$paramDefault") [.ident q g, .ident q sp.name, .block q earlier, d'] false))
@@ -2114,7 +2169,7 @@ partial def inlineCalls (mv : List (String × MFn)) (e : SExpr) (recs : List Str
       if loops.contains g then
         let grp := (groups.lookup g).getD [g]
         let some (cls, tail) := loopShape? g (mv.map (·.1)) (renameTypes ρ (renameE ren f.body)) grp (frames := true)
-            (f.params.map (tag ·.name))
+            (f.params.map (tag ·.name)) fieldOrder
           | throw s!"{p.show}: internal: the shape of {g} (#246)"
         let ps := f.params.map fun sp => SExpr.ident q (tag sp.name)
         -- (#283) a function of a strongly connected group: the others'
@@ -2129,7 +2184,7 @@ partial def inlineCalls (mv : List (String × MFn)) (e : SExpr) (recs : List Str
             let renH := (fh.params.map (·.name) ++ localsOf fh.body).eraseDups.map fun n => (n, tagH n)
             let ρH := fh.tparams.map fun tp => (tp.name, memberTypeName h tp.name)
             let some (clsH, tailH) := loopShape? h (mv.map (·.1)) (renameTypes ρH (renameE renH fh.body)) grp (frames := true)
-              (fh.params.map (tagH ·.name))
+              (fh.params.map (tagH ·.name)) fieldOrder
               | throw s!"{p.show}: internal: the shape of {h} (#283)"
             members := members ++ [.app q (.ident q "$member") [.ident q h,
               .block q (fh.params.map fun sp => SExpr.ident q (tagH sp.name)), .block q clsH,
@@ -3170,6 +3225,17 @@ def inlineMulti (tops : List STop) (reserved : List String := []) (eager : List 
   let ovs : List (String × List String) := ovMv.map fun f =>
     (f, (ovOf f).map fun (k, _, _) => if mv.contains k then k else f)
   let rawMfs := fns.filter fun (n, _) => mv.contains n && !ovMv.contains n
+  -- (#283) a struct's fields in declaration order, the order its
+  -- constructions evaluate them in, for the lifter where a lazily taken
+  -- group's code is normalized; not a generic one's, whose construction the
+  -- elaborator infers, nor a class's, as for any choice)
+  let structOrders : List (String × FieldOrder) := tops.filterMap fun
+    | .const _ n _ (.structDef _ tps _ fs) => if !tps.isEmpty then none else
+      some (n, { fields := fs.map fun (f, _, d, _) => (f, match d with
+        | some d => !stable (fun _ => true) d
+        | none => false) })
+    | _ => none
+  let fieldOrder (n : String) : FieldOrder := (structOrders.lookup n).getD {}
   -- Analyze recursive shapes after source returns have selected their paths.
   -- Keep original bodies for checking and nonrecursive inline boundaries.
   let mfs ← rawMfs.mapM fun (n, f) => do
@@ -3230,7 +3296,7 @@ def inlineMulti (tops : List STop) (reserved : List String := []) (eager : List 
     let grp := groupOf g
     grp.all fun h => match mfs.lookup h with
       | some f => ((callees.lookup h).getD []).all grp.contains &&
-        (loopShape? h mv f.body grp frames (f.params.map (·.name))).isSome
+        (loopShape? h mv f.body grp frames (f.params.map (·.name)) fieldOrder).isSome
       | none => false
   -- (#283) one whose calls of its group have code after them (return
   -- frames) is taken lazily too, unless its values can be computed at the
@@ -3255,7 +3321,7 @@ def inlineMulti (tops : List STop) (reserved : List String := []) (eager : List 
     if grp.any eager.contains || erasesRecursive then false else
     let shaped (frames : Bool) : Bool := match mfs.lookup g with
       | some f => if (groupOf g).length == 1 then (callees.lookup g).getD [] == [g] &&
-          (loopShape? g mv f.body (frames := frames) (params := f.params.map (·.name))).isSome
+          (loopShape? g mv f.body (frames := frames) (params := f.params.map (·.name)) (fieldOrder := fieldOrder)).isSome
         else groupOK g frames
       | none => false
     shaped false || (!computable g && shaped true)
@@ -3323,6 +3389,7 @@ def inlineMulti (tops : List STop) (reserved : List String := []) (eager : List 
     let us := (namesUsed f.body).eraseDups.filter fun u => u != n && !own.contains u && binders.contains u
     if us.isEmpty || (recs.contains n && !loops.contains n) then none else some (n, us)
   let go (e : SExpr) : StateT Nat (Except String) SExpr := inlineCalls mfs e recs loops clash (groups := loopGroups) (ovs := ovs)
+    (fieldOrder := fieldOrder)
   let goPs (ps : List SParam) : StateT Nat (Except String) (List SParam) :=
     ps.mapM fun sp => do return { sp with default := ← sp.default.mapM go }
   let (tops', nextSite) ← (tops.filterMapM (m := StateT Nat (Except String)) fun t => do

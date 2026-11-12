@@ -869,6 +869,14 @@ code after it, which is its frame.
   type (`firstBody`'s `retOf`), and `$frameReturn` gives the final value at
   the result type its name, `$Vfin`.
 
+- A point where `frameOf?` does not look (a comparison's later operand, a
+  `set`'s value after its old value, a named argument, a struct's field in
+  its declaration order, `and`'s operands) is reached by the rule the lifter
+  uses for a choice there: the first statement with one is lifted
+  (`liftPoints?`, `liftClause`, each call of the group marked `$point` so
+  the lifter binds it as it binds a choice), then decomposed again. The
+  struct field orders come from the source (`inlineMulti`), for non-generic
+  structs, as the elaborator gives the lifter.
 - An alternative, one of several, with code before a choice in it (`T(N -
   1) | Tell("x", 1) + (1 | 2)`): that code runs after the choice it is an
   alternative of and before its own. It enters a continuation member that
@@ -878,11 +886,21 @@ code after it, which is its frame.
   in its leaf, that code is the leaf's path code instead (`$returnTail`).
 
 Not yet (#283), each refused with a message, and the route each would take:
-- A point the normal form does not reach: in a condition (an `if` inside an
-  expression, `and`, `or`, `not`), a `set`'s value, a comparison's later
-  operand, a construction's field, a named argument, a loop. Route: more
-  cases of `frameOf?` (a `set` reads its old value before the point, as a
-  prefix), an `if`'s conditions as a member's path.
+- A point in an `if` inside an expression (the right of `or` is one, as
+  `orIf` makes it), which the lifter makes an exclusive choice. Route: the
+  `if` as a point whose leaves' values go to one frame shared across its
+  branches (frames identified by their hole, not by their place), entered as
+  `enterOf` enters a member, its conditions the member's path.
+- A call of the group in a condition (an `if`'s, `not`'s, the left of
+  `or`) or a loop: there it is a consumer of the group nested in the group's
+  own code, which takes its first success or all its values while the
+  group's are being taken, not a choice point of it. The group's code is a
+  template inlined where it is consumed; a consumer inside it would need
+  the template inside itself. Route: the group as functions of its own,
+  called from its own code, as `FirstLift` makes them for one consumer.
+- A construction of a class or a generic struct with a point in a field:
+  the lifter keeps those (`$noLift`) for any choice, as their fields'
+  order is known only to the elaborator.
 
 With all of those, `F$all` would be needed by no shape and kept, if at all, only as
 an optimisation of effect-free ones. Deleting it (the owner's decision,

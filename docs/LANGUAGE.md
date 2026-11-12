@@ -1349,7 +1349,11 @@ Main():void =
   type than the function's (`S := "a" | "bb"`, then `T[N - 1] + S.Length`,
   or `S := "{T[N - 1]}" | "x"`). An alternative's code before a choice in
   it runs each time that alternative is taken, before that choice
-  (`T(N - 1) | Tell("x", 1) + (1 | 2)`).
+  (`T(N - 1) | Tell("x", 1) + (1 | 2)`). A call of the function where the
+  lifter takes a choice is a choice point there, in the same order: in a
+  comparison's later operand (`5 > T[N - 1]`), a `set`'s value after its
+  old value (`set K += T(N - 1)`), a named argument (`Tw(1, ?B := T(N -
+  1))`), a struct's field in its declaration order, `and`'s operands.
 
   A returning branch may contain plain clauses and
   nested conditionals before its value. A `return` at the end of the body or
@@ -1446,10 +1450,12 @@ Main():void =
   Refused for now: a recursive one that is not of the generator shape
   above (return frames and choice points in sequence included) and is not
   `<computes>`, keeps local state, or may print or call `Err()`. Its choice
-  points must be where the shape reads them, so not in a condition (of an
-  `if` inside an expression, `and`, `or`, `not`), a `set`'s value
-  (`set K += T(N - 1)`), a comparison's later operand, a construction's
-  field, a named argument or a loop (#283). Also an
+  points must be where a choice is lifted from (a comparison's later
+  operand, a `set`'s value, a named argument, a struct's field, `and`'s
+  operands, all taken as the lifter takes a choice there), so not in a
+  condition (an `if`'s, `not`'s, the left of `or`), a loop, an `if` inside
+  an expression or the right of `or`, or a class's or generic struct's
+  construction (#283). Also an
   overloaded one with an overload that calls the function's own name
   (a generic one's type arguments are inferred from the
   arguments where it is inlined, as at a call, named ones too), a recursive one with a `defer:` of its own, or called by a recursive one (its body a function's, where it would run once), one with a `return`
