@@ -3,7 +3,7 @@
 # packets, mutable copy-outs, waiting state and cancellation oracle. Each
 # 120-seed cycle covers five input shapes in first-success, for and waiting
 # contexts, with empty/nonempty trailing generators and cancellation.
-#   usage: scripts/fuzz-model-heterogeneous.sh [COUNT [FIRST_SEED [--methods|--generic-methods|--members]]]
+#   usage: scripts/fuzz-model-heterogeneous.sh [COUNT [FIRST_SEED [--methods|--generic-methods|--members|--callable-fields]]]
 set -uo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 n="${1:-120}"; first="${2:-1}"
@@ -12,6 +12,7 @@ case ${3:-} in
   --methods) mode_args+=(--methods); tag=dictionary ;;
   --generic-methods) mode_args+=(--generic-methods); tag=polymorphic-dictionary ;;
   --members) mode_args+=(--members); tag=member-dictionary ;;
+  --callable-fields) mode_args+=(--callable-fields); tag=callable-field-dictionary ;;
 esac
 ov="$root/.lake/build/bin/openverse"; cv="$root/runtime/build/cverse"
 tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT

@@ -2715,6 +2715,7 @@ structure ChoiceOperations where
   bindingName : String := ""
   params : List (String × Ty) := []
   replacements : List (SExpr × SExpr) := []
+  knownTypes : List (SExpr × Ty) := []
   casePrelude : List (List SExpr) := []
   extraFns : List STop := []
 
@@ -2741,9 +2742,9 @@ def ChoiceOperations.lift (ops : ChoiceOperations) (key : String) (lift : Choice
 partial def choiceMemberOperations (binding : String) (body : SExpr) : List SExpr :=
   let depends (receiver : SExpr) := (Choice.namesUsed receiver).contains binding
   match body with
-  | e@(.app _ (.member _ receiver _) arguments _) =>
+  | e@(.app _ member@(.member _ receiver _) arguments _) =>
     choiceMemberOperations binding receiver ++ arguments.flatMap (choiceMemberOperations binding) ++
-      (if depends receiver then [e] else [])
+      (if depends receiver then [member, e] else [])
   | e@(.member _ receiver _) =>
     choiceMemberOperations binding receiver ++ (if depends receiver then [e] else [])
   | .set _ _ _ value => choiceMemberOperations binding value
@@ -2839,6 +2840,7 @@ def choiceGenericOperation (ctx : Ctx) (stem : String) (receiver : SExpr) (recei
     plan := extendedPlan,
     params := ops.params ++ [(name, .struct family (classVars.map fun (n, b) => .param n b))],
     replacements := ops.replacements ++ [(call, invocation)],
+    knownTypes := ops.knownTypes ++ (if result.params.any methodNames.contains then [] else [(call, result)]),
     casePrelude := (ops.casePrelude.zip bindings).map fun (old, next) => old ++ next,
     extraFns := ops.extraFns ++ definitions }
 
@@ -2860,7 +2862,8 @@ def choiceOperations (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx)
       | _ => none
     let some (p, receiver, method, arguments, bracket, isField) := details | continue
     let direct := match receiver with | .ident _ n => n == binding | _ => false
-    let receiverTy ← if direct then pure (some ops.plan.binding) else do
+    let known := (ops.knownTypes.find? (·.1 == receiver)).map (·.2)
+    let receiverTy ← if direct then pure (some ops.plan.binding) else if known.isSome then pure known else do
       let saved ← get
       let result ← tryCatch (do
         let probeCtx ← ops.context (← choiceTypeContext ctx ops.plan)
@@ -2902,7 +2905,15 @@ def choiceOperations (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx)
           (if signature.decides then ["decides"] else []) ++
           (if signature.suspends then ["suspends"] else [])
         cases := cases ++ [{ receiver := actual, inputs, result, specs, methodVars }]
-    if cases.length != plan.instances.length then continue
+    if cases.length != plan.instances.length then
+      -- A checked function-valued field fixes its result before its
+      -- arguments are available, just as a monomorphic method does.
+      if let .app _ member _ _ := call then
+        if let some (Ty.struct name types) := (ops.knownTypes.find? (·.1 == member)).map (·.2) then
+          if let some (arity, _) := FnValues.parseName name then
+            if types.length == arity + 1 then
+              ops := { ops with knownTypes := ops.knownTypes ++ [(call, types.getLast!)] }
+      continue
     if cases.any (!·.methodVars.isEmpty) then
       if let some generic := choiceGenericOperation ctx stem receiver receiverTy ops call cases then ops := generic
       continue
@@ -2960,6 +2971,7 @@ def choiceOperations (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx)
     let sourceValues := ops.rewrite receiver :: arguments.map ops.rewrite
     ops := { ops with
       plan := finalPlan, params := ops.params ++ [(name, ty)],
+      knownTypes := ops.knownTypes ++ [(call, result)],
       replacements := ops.replacements ++ [(key, .app p (.ident p "$choiceOperation")
         (.str p [.text (FnValues.shapeOf (arguments.length + 1) specs).name] :: .ident p name :: sourceValues) bracket)],
       casePrelude := (ops.casePrelude.zip bindings).map fun (old, next) => old ++ next,
