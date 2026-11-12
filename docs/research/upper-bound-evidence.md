@@ -143,6 +143,23 @@ rules; a class upper bound does not introduce function-object variance.
 restriction. The positive method-value controls cover escaping captures,
 once-only receiver evaluation, mutation, rollback and cancellation.
 
+An opaque value whose upper bound is a function type can be called through
+that proved function shape. Selection uses actual lexical dictionaries and
+prefers a unique nominal subtype, including the ordinary effect hierarchy;
+unrelated callable views are ambiguous in either dictionary order. Static
+facts or dummy dictionaries do not create a view. The checked `Up` call saves
+the receiver once before its arguments. Arity, argument/result types, failure
+brackets, suspension and effect checks then use the ordinary function-value
+path. This does not create structural variance between function objects.
+
+Spawn dispatch uses the same proved callable view and preserves the source
+value's dummy role on its saved receiver. A dummy function or method receiver
+cannot become executable through a generated spawn local. The input-role
+controls cover ordinary and returned function values, method receivers, and
+opaque callable values, with matching real controls. Source pairs cover
+defaults, exact returned function types, receiver/argument evaluation order,
+boxed callbacks, rollback, escaping tasks, waiting calls and cancellation.
+
 Member lookup uses actual nominal views. Root and interior mutation preserve
 the source storage type, evaluate indices/keys before traversal, and perform
 each bound view after reading its source container. Augmented updates retain
