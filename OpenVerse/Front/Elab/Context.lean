@@ -917,6 +917,13 @@ def Ctx.sig? (ctx : Ctx) (n : String) : Option Sig := ctx.sigs.find? (·.name ==
 def Ctx.evidenceTypes (ctx : Ctx) : List (String × Ty) :=
   ctx.locals.map fun binding => (binding.name, if binding.typeValue then .void else binding.ty)
 
+/-- Update the source hint after a definite mutable-local assignment. MetadataFlow
+    still checks actual values across calls, branches, loops and rollback. -/
+def Ctx.withTypeValue (ctx : Ctx) (name : String) (role : Bool) : Ctx :=
+  { ctx with locals := ctx.locals.map fun binding =>
+      if binding.name == name && binding.mutable then { binding with typeValue := role }
+      else binding }
+
 partial def Ctx.isTypeValue (ctx : Ctx) : SExpr → Bool
   | .ident _ "$witness" => true
   | .ident _ name => (ctx.lookup name).any (·.typeValue)
@@ -949,8 +956,9 @@ partial def Ctx.isTypeValue (ctx : Ctx) : SExpr → Bool
     let (_, result) := values.foldl (fun (scope, _) value =>
       let role := scope.isTypeValue value
       let scope := match value with
-        | .decl _ name _ _ body => { scope with locals :=
-            { name, slot := 0, ty := .void, mutable := false, typeValue := scope.isTypeValue body } :: scope.locals }
+        | .decl _ name _ mutable body => { scope with locals :=
+            { name, slot := 0, ty := .void, mutable, typeValue := scope.isTypeValue body } :: scope.locals }
+        | .set _ (.ident _ name) _ _ => scope.withTypeValue name role
         | _ => scope
       (scope, role)) (ctx, false)
     result
@@ -966,8 +974,10 @@ where
       independently of whether those clauses themselves carry dummy data. -/
   throughClauses (ctx : Ctx) (clauses : List SExpr) : Ctx :=
     clauses.foldl (fun scope condition => match condition with
-      | .decl _ name _ _ value => { scope with locals :=
-          { name, slot := 0, ty := .void, mutable := false, typeValue := scope.isTypeValue value } :: scope.locals }
+      | .decl _ name _ mutable value => { scope with locals :=
+          { name, slot := 0, ty := .void, mutable, typeValue := scope.isTypeValue value } :: scope.locals }
+      | assignment@(.set _ (.ident _ name) _ _) =>
+        scope.withTypeValue name (scope.isTypeValue assignment)
       | .gen _ name key source =>
         let role := scope.isTypeValue source
         let names := name :: key.toList

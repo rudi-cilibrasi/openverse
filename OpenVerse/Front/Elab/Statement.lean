@@ -236,6 +236,9 @@ partial def elabStmtWith (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : C
           if k == "comparable" && !(isComparable ctx.types t) then
             eerr p (notComparable ctx.types t s!"{fname}'s type argument for {shownTp n}")
       pure (⟨.seq code (.lit .void), .void⟩, { c with types := { c.types with tvars := c.types.tvars ++ σ } })
+    | .set _ (.ident _ name) _ _ => do
+      let r ← elabE ctx se exp
+      pure (r, ctx.withTypeValue name (ctx.isTypeValue se))
     | _ => do pure (← elabE ctx se exp, ctx)
   if !ctx.canFail && (r.e.mayFail ctx.sigProg) then
     eerr se.pos ("this expression can fail, but it is not in a failure context (an if " ++
