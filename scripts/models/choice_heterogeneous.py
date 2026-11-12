@@ -7,7 +7,9 @@ p.add_argument('seed', type=int)
 p.add_argument('expected', type=Path)
 p.add_argument('--control', action='store_true')
 p.add_argument('--methods', action='store_true')
+p.add_argument('--generic-methods', action='store_true')
 a = p.parse_args()
+a.methods = a.methods or a.generic_methods
 r = random.Random(a.seed)
 method_arguments = a.methods and r.choice([False, True])
 mode = ['first', 'for', 'waiting'][a.seed % 3]
@@ -123,11 +125,12 @@ if a.methods:
     for name, generic, kind in [('ma', False, 'a'), ('mb', False, 'b'), ('ga', True, 'a'), ('gb', True, 'b')]:
         print(name + ('(t:type)' if generic else '') + ':=class:')
         print('    H:cell\n    K:int' + ('\n    V:t' if generic else ''))
-        print('    Score(' + ('Arg:int' if method_arguments else '') + ')<transacts>:int=')
+        method_params = (['Arg:int'] if method_arguments else []) + (['Ignored:u where u:type'] if a.generic_methods else [])
+        print('    Score(' + ','.join(method_params) + ')<transacts>:int=')
         print('        Print("m ' + kind + ' {K}")')
         print('        set H.N+=' + ('1' if kind == 'a' else '2') + '*(K+1)' + ('+Arg' if method_arguments else ''))
         print('        K')
-    print('Score(H:cell,X:tuple(int,int)' + (',Arg:int' if method_arguments else '') + ')<transacts>:int=')
+    print('Score(H:cell,X:tuple(int,int)' + (',Arg:int' if method_arguments else '') + (',Ignored:u where u:type' if a.generic_methods else '') + ')<transacts>:int=')
     print('    if(X(1)=0)then Print("m a {X(0)}") else Print("m b {X(0)}")')
     print('    set H.N+=(X(1)+1)*(X(0)+1)' + ('+Arg' if method_arguments else '') + '\n    X(0)')
     print('Argument(H:cell,N:int)<transacts>:int=block{Print("arg {N}");set H.N+=N;N}')
@@ -158,7 +161,7 @@ for i, d in enumerate(levels):
         producers.append(f"Prefix(H,{x},{y},{d['tags'][j]})")
     score = f'A{i}' if a.control else f'Same(A{i})' if shape == 'primitive' else f'A{i}.Length' if shape == 'array' else f'if(A{i}(0)=A{i}(1))then 1 else 0' if shape == 'tuple' else f'A{i}.K'
     if a.methods:
-        extra = f'Argument(H,{i+1})' if method_arguments else ''
+        extra = ','.join(([f'Argument(H,{i+1})'] if method_arguments else []) + (['X'] if a.generic_methods else []))
         score = f'Score(H,A{i}' + (',' + extra if extra else '') + ')' if a.control else f'A{i}.Score({extra})'
     clauses.extend([f"A{i}:=({'|'.join(producers)})", f'S{i}:={score}', f'Print("f {i} {{S{i}}}")', f"set H.N+={d['weight']}+S{i}", f'set Total+=S{i}+1', f"Mod[H.N+S{i},{d['mod']}]={d['want']}"])
 clauses.append('Z:=Items[0]' if mode == 'first' else 'Z:Items')

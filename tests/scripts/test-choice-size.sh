@@ -98,6 +98,16 @@ kinds=(
   dictionary-generic-arguments-waiting
   dictionary-awaiting-waiting
   dictionary-generic-awaiting-waiting
+  polymorphic-identity-first
+  polymorphic-identity-for
+  polymorphic-identity-waiting
+  polymorphic-generic-first
+  polymorphic-generic-for
+  polymorphic-generic-waiting
+  polymorphic-erased-first
+  polymorphic-erased-for
+  polymorphic-erased-waiting
+  polymorphic-awaiting-waiting
   exclusive
   heterogeneous-nested-for
   heterogeneous-unused-first
@@ -245,6 +255,48 @@ if kind == 'heterogeneous-nested-for':
         body = f'for(A{i}:=(Dup(1)|Dup("s"))):' + body
     print('    Rows:=' + body)
     print('    Print("{Rows.Length}")')
+    sys.exit(0)
+if kind.startswith('polymorphic-'):
+    _, shape, mode = kind.split('-')
+    generic = shape == 'generic'
+    awaiting = shape == 'awaiting'
+    print('Dup(X:t where t:type)<computes>:t=X|X')
+    print('Equal(X:t,Y:t where t:subtype(comparable))<computes>:int=if(X=Y)then 1 else 0')
+    for cls in ['ca','cb']:
+        print(cls + ('(t:subtype(comparable))' if generic else '') + ':=class<unique>:')
+        if generic:
+            print('    V:t')
+        result = 'tuple(t,u)' if generic else 'u'
+        value = '(V,X)' if generic else 'X'
+        print('    M(X:u where u:type)<computes>' + ('<suspends>' if awaiting else '') + ':' + result + '=block{' + ('Sleep(0.0);' if awaiting else '') + value + '}')
+    params=[];tparams=[];main=[]
+    if generic:
+        for i in range(count):
+            params.extend([f'P{i}:ca(t{i})',f'Q{i}:cb(t{i})',f'V{i}:t{i}'])
+            tparams.append(f't{i}:subtype(comparable)')
+            typ, value = ('int','7') if i%2==0 else ('string','"s"')
+            main.extend([f'ca({typ}){{V:={value}}}',f'cb({typ}){{V:={value}}}',value])
+    clauses=','.join(f'A{i}:=(Dup(' + (f'P{i})|Dup(Q{i}))' if generic else 'ca{})|Dup(cb{}))') for i in range(count))
+    terms=[]
+    for i in range(count):
+        later=f'A{(i+1)%count}'
+        call=f'A{i}.M({later})'
+        if generic:
+            terms.append(f'Equal({call}(0),V{i})+Equal({call}(1),{later})')
+        elif shape == 'erased':
+            terms.append(f'block{{Erased:any={call};Equal(A{i},A{i})}}')
+        else:
+            terms.append(f'Equal({call},{later})')
+    value='+'.join(terms)
+    effects='<suspends>' if mode=='waiting' else ''
+    signature=','.join(params)+(' where '+','.join(tparams) if generic else '')
+    print(f'Run({signature}){effects}:int=')
+    if mode=='first':
+        print('    if('+clauses+',V:='+value+',V>0)then V else -1')
+    else:
+        print('    Rows:=for('+clauses+'):'+value)
+        print('    Rows.Length')
+    print(f'Main(){effects}:void=Print("{{Run('+','.join(main)+')}")')
     sys.exit(0)
 if kind.startswith('dictionary-'):
     _, shape, mode = kind.split('-') if kind.count('-') == 2 else ('dictionary', '-'.join(kind.split('-')[1:-1]), kind.split('-')[-1])
