@@ -1,7 +1,6 @@
 {
   "reference": {
     "book_commit": "beaa719ba165cbf33eff462f2b0fe078a6dd9ab0",
-    "openverse_baseline": "c34adb6571f0703555922c83bba0756d98f5ebfc",
     "released_reference": {
       "version": "UEFN 38.00",
       "date": "2025-11-01",
@@ -9,7 +8,9 @@
       "scope": "Published entity/agent subtype-overlap rule only; no engine execution."
     },
     "epic_engine_runs": false,
-    "book_release_status": "Development specification/test snapshot, not evidence of released-engine behavior."
+    "book_release_status": "Development specification/test snapshot, not evidence of released-engine behavior.",
+    "initial_audit_baseline": "c34adb6571f0703555922c83bba0756d98f5ebfc",
+    "resolved_with_issue": 500
   },
   "cases": [
     {
@@ -519,123 +520,107 @@
     {
       "id": "tuple_map",
       "path": "tests/conformance/overloading/tuple_map.verse",
-      "classification": "known-gap",
+      "classification": "supported",
       "sources": [
         "https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/docs/06_functions.md#types",
         "https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/Tests/IndistinctOverloads.versetest"
       ],
       "basis": "explicit-book-example",
       "issue": 500,
-      "expected": {
-        "exit": 0,
-        "stdout": ""
-      },
-      "observed": {
+      "expectation": "Admit tuple(a) versus [logic]a.",
+      "note": "Resolved with #500; original expectation and reproducer retained. ",
+      "historical_observation": {
         "exit": 4,
         "diagnostic": "parameters a call cannot tell apart"
       },
-      "expectation": "Admit tuple(a) versus [logic]a.",
-      "note": ""
+      "resolved_with_issue": 500
     },
     {
       "id": "tuple_option",
       "path": "tests/conformance/overloading/tuple_option.verse",
-      "classification": "known-gap",
+      "classification": "supported",
       "sources": [
         "https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/docs/06_functions.md#types",
         "https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/Tests/IndistinctOverloads.versetest"
       ],
       "basis": "explicit-book-example",
       "issue": 500,
-      "expected": {
-        "exit": 0,
-        "stdout": ""
-      },
-      "observed": {
+      "expectation": "Admit tuple(a) versus ?a when a is a class.",
+      "note": "Resolved with #500; original expectation and reproducer retained. ",
+      "historical_observation": {
         "exit": 4,
         "diagnostic": "parameters a call cannot tell apart"
       },
-      "expectation": "Admit tuple(a) versus ?a when a is a class.",
-      "note": ""
+      "resolved_with_issue": 500
     },
     {
       "id": "tuple_array",
       "path": "tests/conformance/overloading/tuple_array.verse",
-      "classification": "known-gap",
+      "classification": "supported",
       "sources": [
         "https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/docs/06_functions.md#types",
         "https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/Tests/IndistinctOverloads.versetest"
       ],
       "basis": "explicit-book-example",
       "issue": 500,
-      "expected": {
-        "exit": 0,
-        "stdout": ""
-      },
-      "observed": {
+      "expectation": "Admit tuple(a,b) versus []a when a and b are unrelated classes.",
+      "note": "Resolved with #500; original expectation and reproducer retained. ",
+      "historical_observation": {
         "exit": 4,
         "diagnostic": "parameters a call cannot tell apart"
       },
-      "expectation": "Admit tuple(a,b) versus []a when a and b are unrelated classes.",
-      "note": ""
+      "resolved_with_issue": 500
     },
     {
       "id": "tuple_flat_disjoint",
       "path": "tests/conformance/overloading/tuple_flat_disjoint.verse",
-      "classification": "known-gap",
+      "classification": "supported",
       "sources": [
         "https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/docs/06_functions.md#flattening-and-unflattening"
       ],
       "basis": "inference-from-flattening-and-disjointness",
       "issue": 500,
-      "expected": {
-        "exit": 0,
-        "stdout": "ints\n"
-      },
-      "observed": {
+      "expectation": "Admit an explicit tuple(int,int) overload alongside (string,string).",
+      "note": "Resolved with #500; original expectation and reproducer retained. ",
+      "historical_observation": {
         "exit": 4,
         "diagnostic": "parameters a call cannot tell apart"
       },
-      "expectation": "Admit an explicit tuple(int,int) overload alongside (string,string).",
-      "note": ""
+      "resolved_with_issue": 500
     },
     {
       "id": "function_array",
-      "path": "tests/conformance/overloading/function_array.verse",
-      "classification": "known-gap",
+      "path": "tests/errors/overload_shapes_function_array.verse",
+      "classification": "conforming-refusal",
       "sources": [
         "https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/Tests/IndistinctOverloads.versetest"
       ],
       "basis": "explicit-upstream-test",
       "issue": 500,
-      "expected": {
-        "exit": 4,
-        "diagnostic": "parameters a call cannot tell apart"
-      },
-      "observed": {
+      "expectation": "Reject callable/container overload declarations as indistinct, before executing Main.",
+      "historical_observation": {
         "exit": 0,
         "stdout": "array\n"
       },
-      "expectation": "Reject callable/container overload declarations as indistinct, before executing Main."
+      "resolved_with_issue": 500,
+      "note": "Resolved with #500; original expectation and reproducer retained. "
     },
     {
       "id": "function_map",
-      "path": "tests/conformance/overloading/function_map.verse",
-      "classification": "known-gap",
+      "path": "tests/errors/overload_shapes_function_map.verse",
+      "classification": "conforming-refusal",
       "sources": [
         "https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/Tests/IndistinctOverloads.versetest"
       ],
       "basis": "explicit-upstream-test",
       "issue": 500,
-      "expected": {
-        "exit": 4,
-        "diagnostic": "parameters a call cannot tell apart"
-      },
-      "observed": {
+      "expectation": "Reject callable/container overload declarations as indistinct, before executing Main.",
+      "historical_observation": {
         "exit": 0,
         "stdout": "map\n"
       },
-      "expectation": "Reject callable/container overload declarations as indistinct, before executing Main."
+      "resolved_with_issue": 500,
+      "note": "Resolved with #500; original expectation and reproducer retained. "
     },
     {
       "id": "single_tuple_call",
@@ -720,22 +705,19 @@
     {
       "id": "overloaded_tuple_unpack",
       "path": "tests/conformance/overloading/overloaded_tuple_unpack.verse",
-      "classification": "known-gap",
+      "classification": "supported",
       "sources": [
         "https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/docs/06_functions.md#flattening-and-unflattening"
       ],
       "basis": "inference-from-explicit-flattening-rule",
       "issue": 501,
-      "expected": {
-        "exit": 0,
-        "stdout": "pair 1\ntwo 30\nstate 1\n"
-      },
-      "observed": {
+      "expectation": "Unpack the argument tuple before choosing the two-int overload; evaluate its producer once.",
+      "note": "Resolved with #500; original expectation and reproducer retained. ",
+      "historical_observation": {
         "exit": 4,
         "diagnostic": "expected string, found tuple(int, int)"
       },
-      "expectation": "Unpack the argument tuple before choosing the two-int overload; evaluate its producer once.",
-      "note": ""
+      "resolved_with_issue": 500
     },
     {
       "id": "class_bound",
@@ -776,6 +758,118 @@
       },
       "expectation": "Adapt an optional-named function to a zero-argument function value, applying its default at call time.",
       "note": ""
+    },
+    {
+      "id": "overload_shapes_tuples",
+      "path": "tests/verse/overload_shapes_tuples.verse",
+      "classification": "supported",
+      "sources": [
+        "https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/docs/06_functions.md#types",
+        "https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/docs/06_functions.md#flattening-and-unflattening"
+      ],
+      "note": "Calls exercise the corrected distinctness rules; source order and rollback retain exact output oracles."
+    },
+    {
+      "id": "overload_shapes_flattened",
+      "path": "tests/verse/overload_shapes_flattened.verse",
+      "classification": "supported",
+      "sources": [
+        "https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/docs/06_functions.md#types",
+        "https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/docs/06_functions.md#flattening-and-unflattening"
+      ],
+      "note": "Calls exercise the corrected distinctness rules; source order and rollback retain exact output oracles."
+    },
+    {
+      "id": "overload_shapes_order_rollback",
+      "path": "tests/verse/overload_shapes_order_rollback.verse",
+      "classification": "supported",
+      "sources": [
+        "https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/docs/06_functions.md#types",
+        "https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/docs/06_functions.md#flattening-and-unflattening"
+      ],
+      "note": "Calls exercise the corrected distinctness rules; source order and rollback retain exact output oracles."
+    },
+    {
+      "id": "error_overload_shapes_tuple_int_map",
+      "path": "tests/errors/overload_shapes_tuple_int_map.verse",
+      "classification": "conforming-refusal",
+      "sources": [
+        "https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/docs/06_functions.md#types"
+      ],
+      "note": "Preserve indistinct callable/container or empty/int-indexed/generic overlap."
+    },
+    {
+      "id": "error_overload_shapes_tuple_int_option",
+      "path": "tests/errors/overload_shapes_tuple_int_option.verse",
+      "classification": "conforming-refusal",
+      "sources": [
+        "https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/docs/06_functions.md#types"
+      ],
+      "note": "Preserve indistinct callable/container or empty/int-indexed/generic overlap."
+    },
+    {
+      "id": "error_overload_shapes_tuple_empty",
+      "path": "tests/errors/overload_shapes_tuple_empty.verse",
+      "classification": "conforming-refusal",
+      "sources": [
+        "https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/docs/06_functions.md#types"
+      ],
+      "note": "Preserve indistinct callable/container or empty/int-indexed/generic overlap."
+    },
+    {
+      "id": "error_overload_shapes_generic_unknown",
+      "path": "tests/errors/overload_shapes_generic_unknown.verse",
+      "classification": "conforming-refusal",
+      "sources": [
+        "https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/docs/06_functions.md#types"
+      ],
+      "note": "Preserve indistinct callable/container or empty/int-indexed/generic overlap."
+    },
+    {
+      "id": "overload_shapes_selected_effects",
+      "path": "tests/verse/overload_shapes_selected_effects.verse",
+      "classification": "supported",
+      "sources": [
+        "https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/docs/06_functions.md#effects",
+        "https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/docs/06_functions.md#flattening-and-unflattening"
+      ],
+      "note": "Tuple expansion selects the right failure/suspension/heap effects before enforcing them."
+    },
+    {
+      "id": "error_overload_shapes_producer_error",
+      "path": "tests/errors/overload_shapes_producer_error.verse",
+      "classification": "conforming-refusal",
+      "sources": [
+        "https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/docs/06_functions.md#flattening-and-unflattening"
+      ],
+      "note": "A tuple expansion retry preserves a type error inside its producer."
+    },
+    {
+      "id": "error_overload_shapes_nested_unknown",
+      "path": "tests/errors/overload_shapes_nested_unknown.verse",
+      "classification": "conforming-refusal",
+      "sources": [
+        "https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/docs/06_functions.md#flattening-and-unflattening"
+      ],
+      "note": "Unknown nested producer errors must retain their diagnostic and bounded elaboration."
+    },
+    {
+      "id": "error_overload_shapes_nested_type_error",
+      "path": "tests/errors/overload_shapes_nested_type_error.verse",
+      "classification": "conforming-refusal",
+      "sources": [
+        "https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/docs/06_functions.md#flattening-and-unflattening"
+      ],
+      "note": "Nested tuple type errors must retain their diagnostic and bounded elaboration."
+    },
+    {
+      "id": "overload_shapes_flattened_dispatch",
+      "path": "tests/verse/overload_shapes_flattened_dispatch.verse",
+      "classification": "supported",
+      "sources": [
+        "https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/docs/06_functions.md#flattening-and-unflattening"
+      ],
+      "note": "Disjoint flattened types through a generic inherited interface, named defaults, generic functions and constructors."
     }
   ]
 }

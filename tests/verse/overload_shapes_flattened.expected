@@ -1,0 +1,7 @@
+tuple 3
+strings ab
+strings cd
+tuple ef
+ints 7
+ints 11
+exit=0

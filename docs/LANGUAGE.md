@@ -258,8 +258,9 @@ Several functions may share a name when no call could fit two of them (Book of
 Verse ch. 6): `Describe(X:int)`, `Describe(S:string)`, `Describe(X:int, Y:int)`.
 - **Distinct overloads.** Overloads take different numbers of parameters, or
   disjoint types at some position. A single tuple parameter and the same
-  flattened positional types are refused as overlapping. Distinct flattened
-  element types are currently also refused; see the audit below.
+  flattened positional types are compared element by element: the same
+  domains overlap, while a disjoint position distinguishes the overloads.
+  See the [complete tuple/container table](research/overloading-conformance.md#tuplecontainer-rules).
 - **Overlapping types:** `void`, a type parameter, two array, map or option
   types (they share the empty one), an array, option or `logic` with
   another (`false` is each), and a
@@ -268,6 +269,13 @@ Verse ch. 6): `Describe(X:int)`, `Describe(S:string)`, `Describe(X:int, Y:int)`.
   so are one parametric class's instances at disjoint type arguments). Function
   types overlap regardless of their signatures or effects. A pair that overlaps is refused where the later
   one is defined.
+- **Tuples and containers** (#500). A tuple and an array are distinct if
+  any tuple element is distinct from the array element. A nonempty tuple
+  and a map are distinct if the map key is distinct from `int`; a nonempty
+  tuple and an option are distinct if the option element is distinct from
+  `int`. Empty tuples retain their container overlap. Function types cannot
+  distinguish overloads from arrays or maps, regardless of signature or
+  effects. This does not introduce container/function conversions.
 - **Calls.** A call takes the overload whose parameter types its arguments
   fit. With subtyping, a `square` fits `Describe(B:shape)`. Each argument's
   own type is found once, and the arguments are elaborated at a
@@ -302,11 +310,11 @@ Verse ch. 6): `Describe(X:int)`, `Describe(S:string)`, `Describe(X:int, Y:int)`.
   entry-point policy. This is separate from ordinary Verse overload rules.
 - **Measured gaps.** The [pinned conformance audit](research/overloading-conformance.md)
   records reproducers, diagnostics, source rules and regression links:
-  - tuple/container distinctness is too conservative, while function/array
-    and function/map overloads are incorrectly accepted (#500);
   - ordinary calls do not pack arguments into an explicit or generic tuple
-    parameter, generic array packing is incomplete, and an overloaded call
-    may select by arity before expanding a tuple argument (#501);
+    parameter, and generic array packing is incomplete (#501). A tuple
+    argument that does not fit a one-argument overload can expand into a
+    different overload's positional parameters; its receiver and producer
+    are evaluated once, before named arguments and defaults;
   - generic upper bounds other than `type` and `subtype(comparable)` are
     unsupported (#502);
   - named-parameter function values and default-eliding adapters are

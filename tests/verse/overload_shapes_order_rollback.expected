@@ -1,0 +1,9 @@
+reject 0
+receiver 1
+tuple 2
+B 3
+A 4
+default 5
+body 10 4 3 5
+result 22 5
+exit=0

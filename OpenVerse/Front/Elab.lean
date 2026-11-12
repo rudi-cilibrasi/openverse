@@ -6257,10 +6257,19 @@ partial def elabApp (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (brack
     -- (the state is restored between attempts, but not the overload cache)
     let restore : EM Unit := do set { saved with natTys := (← get).natTys, methodReceivers := (← get).methodReceivers }
     tryCatch (elabAppBase ctx p f args bracket exp) fun err => do
-      -- (only a call refused for its arguments' shape is tried again: an
-      -- error from inside the argument is the argument's)
-      let shapeErr := ["argument(s)", "overload", "expected tuple"].any fun k => (err.splitOn k).length > 1
-      if !shapeErr then throw err
+      -- A one-argument candidate may fail its type, effects or call syntax
+      -- before discovering a tuple for a different flattened overload.
+      -- Keep the existing shape retries. Additional errors must originate
+      -- at this call, or report a tuple mismatch at its argument: retrying
+      -- arbitrary nested producer errors causes repeated failed elaboration.
+      -- The argument must independently elaborate to a tuple and the expanded
+      -- call must pass ordinary checks; otherwise retain the original error.
+      let shapeErr := ["argument(s)", "overload", "expected tuple"].any
+        fun k => (err.splitOn k).length > 1
+      let callErr := err.startsWith s!"{p.show}:"
+      let tupleErr := err.startsWith s!"{a.pos.show}:" &&
+        (err.splitOn ", found tuple(").length > 1
+      if !(shapeErr || callErr || tupleErr) then throw err
       restore
       let c2 := { ctx with retries := ctx.retries + 1 }
       -- a method's receiver is evaluated first, then the tuple

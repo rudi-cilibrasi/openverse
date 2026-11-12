@@ -83,6 +83,8 @@ check "class-feature fuzzing (${FUZZ_CLASSES:-200} programs)" scripts/fuzz-class
 check "differential fuzzing (${FUZZ:-1000} random programs)" scripts/fuzz-diff.sh "${FUZZ:-1000}" "$seed"
 check "Verse test suite, Lean and C" scripts/test-verse.sh --c
 check "overloading conformance matrix" bash tests/scripts/test-overload-conformance.sh
+check "overload domains (${FUZZ_OVERLOAD_SHAPES:-468} programs, across six contexts)" \
+  bash scripts/fuzz-overload-shapes.sh "${FUZZ_OVERLOAD_SHAPES:-468}" "$seed"
 check "choice-free source profile" bash tests/scripts/test-choice-profile.sh
 check "small integer value sharing" bash tests/scripts/test-small-int-cache.sh
 check "empty collection value sharing" bash tests/scripts/test-empty-value-cache.sh
