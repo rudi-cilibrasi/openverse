@@ -160,8 +160,9 @@ partial def elabExprControlWith
     let (rc, ctxT) ← if Choice.hasChoice conds (choiceOrder ctx) then elabOneClauses { ctx with canFail := true } conds
       else elabSeq { ctx with canFail := true, inTaking := true } conds none
     -- (not while a function value is asked for, #214, #231: a call through
-    -- it may fail once its class is made, in the elaboration that follows)
-    if !(rc.e.mayFail ctx.sigProg) && (← get).fnNeeds.isEmpty && (← get).methodNeeds.isEmpty && !ctx.typeOnly then
+    -- it may fail once its class is made, in the elaboration that follows;
+    -- likewise for the families of methods' uses, #283: `failabilityKnown`)
+    if !(rc.e.mayFail ctx.sigProg) && (← ctx.failabilityKnown) then
       eerr p "the condition of this if cannot fail (Verse requires a failable condition)"
     let thenCtx := { ctxT with canFail := ctx.canFail, inTaking := ctx.inTaking }
     match elseE with

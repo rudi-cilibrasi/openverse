@@ -8,7 +8,8 @@
 # consumers in methods from the review of #279, a return in a test's clauses from #284 and #287,
 # alternatives with several values from the review of #296, blocks and constructions from #302,
 # named arguments from #305, functions with several values and named parameters from #307,
-# methods with several values from #310 (overridden from #328), returns in functions with several values from #312,
+# methods with several values from #310 (overridden from #328, of one name in unrelated classes from #283's
+# shared families), returns in functions with several values from #312,
 # and a choice after such a return's if, or in its value, from #318.
 """Random programs with choices INSIDE expressions (PR #234, phase 2), and an
 independent model written from docs/LANGUAGE.md's "Choice" section (not from
@@ -56,6 +57,8 @@ flags: heavy     (with bif: more of them, longer chains, longer conditions)
                   whose value is a choice; on with lazy otherwise, #312)
        nomvm     (no bare call, in a test that runs as a method, of that class's own
                   method with several values; on with meth otherwise, #310)
+       noshared  (no program whose tests' methods with several values all have one
+                  name, which mvm and meth give at times otherwise, #283)
        nonam     (no call of NAM(NU, ?NV := …), a function with several values and a
                   named parameter whose default prints; on with lazy otherwise)
        nona      (no call of NA(A, ?P := …, ?Q := …) with named arguments in a test's
@@ -377,6 +380,17 @@ R16 = random.Random(seed * 1000003 + 383)
 # computed and before the caller's clauses after it; a value whose clauses fail rolls it back with
 # the rest of its effects. A generator of its own decides, so seeds keep their other programs.
 R17 = random.Random(seed * 1000003 + 391)
+# ---- #283 (with mvm and meth; noshared turns it off): at times the tests' methods with several
+# values all have one name, Mv, instead of MvT: each test's class (or interface) declares it apart,
+# the root of a family of its own, and a call's receiver picks the family. A call is bare, as
+# before, or through Self, both of the enclosing class, or through MeT, a local of the class Run
+# is in (or of the interface) bound to Self, whose family only its type tells: the same values
+# either way. An unrelated class has an ordinary Mv,
+#   pmv := class: Mv(Mp:int):int = Mp * 1000
+# called at times on a new pmv in a test that runs as a method: one value, its argument's times
+# 1000, with nothing to undo. A generator of its own decides, so seeds keep their other programs.
+R18 = random.Random(seed * 1000003 + 2833)
+SHARED = METH and MVM and 'noshared' not in flags and R18.random() < 0.4
 # ---- #312, flag rt (on with lazy; nort turns it off): a test's expression may call
 #   RT(RTa:int):int =
 #       RTy := RTa | RTa + 1 | RTa + 2
@@ -470,10 +484,37 @@ def leaf(scope, vars_):
     return ('lit', R.randint(-1, 5))
 
 
+def mvm_ok(ch):
+    """whether a call of the test's class's own method with several values may be here
+    (its values' count aside, `mvm_fits`)."""
+    return (MVM and CTX.get('meth') and METH and ch and NCH[0] < 4 and CTX['fmax'] is None
+            and not CTX['nochoice'] and not CTX.get('inset') and not CTX.get('inbif'))
+
+
+def mvm_fits():
+    return not MV or PROD[0] * 2 <= CTX['plim']
+
+
+def gen_mvm(scope, vars_, d, ch):
+    NCH[0] += 1
+    if MV:
+        PROD[0] *= 2
+    CTX['mvm_used'] = True
+    arg = ('ref', CTX['mvm'][1]) if R.random() < 0.4 else gen_e(scope, vars_, d + 1, ch)
+    # (#283: in a program whose methods share a name, through a receiver at times)
+    form = R18.choice(['bare', 'self', 'me']) if SHARED else 'bare'
+    if form == 'me':
+        CTX['mvm_me'] = True
+    return ('mvm', arg, CTX['mvm'], form)
+
+
 def gen_e(scope, vars_, d, ch):
     """an int expression; ch: whether a choice may be inside (liftably)."""
     if CTX['nochoice']:
         ch = False
+    # (#283: in a program whose methods share a name, such calls more often)
+    if SHARED and mvm_ok(ch) and mvm_fits() and R18.random() < 0.2:
+        return gen_mvm(scope, vars_, d, ch)
     # (#314: returns in functions with several values, often enough that two calls of one
     # land in one first-success context, as in #318's review)
     if (RT2 and ch and NCH[0] < 4 and CTX['fmax'] is None and not CTX.get('inset') and not CTX.get('inbif')
@@ -559,15 +600,10 @@ def gen_e(scope, vars_, d, ch):
         if MV:
             PROD[0] *= 3
         return ('rt', gen_e(scope, vars_, d + 1, ch))
-    if (k < 0.48 and MVM and CTX.get('meth') and METH and ch and NCH[0] < 4 and CTX['fmax'] is None
-            and not CTX['nochoice'] and not CTX.get('inset') and not CTX.get('inbif') and R.random() < 0.9
-            and (not MV or PROD[0] * 2 <= CTX['plim'])):
-        NCH[0] += 1
-        if MV:
-            PROD[0] *= 2
-        CTX['mvm_used'] = True
-        arg = ('ref', CTX['mvm'][1]) if R.random() < 0.4 else gen_e(scope, vars_, d + 1, ch)
-        return ('mvm', arg, CTX['mvm'])
+    if k < 0.48 and mvm_ok(ch) and R.random() < 0.9 and mvm_fits():
+        return gen_mvm(scope, vars_, d, ch)
+    if SHARED and CTX.get('meth') and CTX['fmax'] is None and R18.random() < 0.06:
+        return ('pmv', gen_e(scope, vars_, d + 1, ch))
     if (k < 0.48 and NAM and ch and NCH[0] < 4 and CTX['fmax'] is None and not CTX['nochoice']
             and not CTX.get('inset') and not CTX.get('inbif') and R.random() < 0.5
             and (not MV or PROD[0] * 2 <= CTX['plim'])):
@@ -1216,7 +1252,10 @@ def show(e):
     if t == 'blk':
         return f'block{{ {e[1]} := {show(e[2])}; {show(e[3])} }}'
     if t == 'mvm':
-        return f'Mv{e[2][0]}({show(e[1])})'
+        recv = {'bare': '', 'self': 'Self.', 'me': f'Me{e[2][0]}.'}[e[3]]
+        return f'{recv}Mv{"" if SHARED else e[2][0]}({show(e[1])})'
+    if t == 'pmv':
+        return f'pmv{{}}.Mv({show(e[1])})'
     if t == 'rt':
         return f'RT({show(e[1])})'
     if t in ('rt2', 'rt3'):
@@ -1371,7 +1410,7 @@ def top_choice_e(e):
         return False
     if t == 'cadd':
         return top_choice_e(e[2])
-    if t in ('tell', 'pos', 'even', 'add'):
+    if t in ('tell', 'pos', 'even', 'add', 'pmv'):
         return top_choice_e(e[-1])
     if t == 'bin':
         return top_choice_e(e[2]) or top_choice_e(e[3])
@@ -1565,6 +1604,8 @@ def ev(e, st, k, mode):
                 return th
             return choice_point([fall(v), alt_ret, fall(v + 2)], s0, k, mode)
         return ev(e[1], st, krt2, mode)
+    if t == 'pmv':
+        return ev(e[1], st, lambda v, s: k(chks(v * 1000, s), s), mode)
     if t == 'mvm':
         def kmvm(v, s0):
             def alt1(s1, k2):
@@ -2160,6 +2201,7 @@ for ti in range(NT):
     CTX['meth'] = meth
     CTX['mvm'] = (ti, f"N{ti}a")
     CTX['mvm_used'] = False
+    CTX['mvm_me'] = False
     CTX['mvm_const'] = R.random() < 0.5
     L = [f"{name}():void ="]
     for v in vars_:
@@ -2224,7 +2266,8 @@ for ti in range(NT):
         ifc = CTX.get('mvm_used') and R13.random() < 0.5
         dflt = CTX.get('mvm_used') and SNX['dflt']     # (#375: the interface's default)
         ifc = ifc or dflt
-        M = ([f"i{ti} := interface:", f"    Mv{ti}(Mp{ti}:int):int" + (f" = Mp{ti} * 5 | Mp{ti} + 7" if dflt else "")]
+        mv = "Mv" if SHARED else f"Mv{ti}"         # (#283: one name for every test's)
+        M = ([f"i{ti} := interface:", f"    {mv}(Mp{ti}:int):int" + (f" = Mp{ti} * 5 | Mp{ti} + 7" if dflt else "")]
              if ifc else []) + [
              f"{top} := class(tbase{f', i{ti}' if ifc else ''}):", f"    var {vars_[0]}:int = 0",
              f"    var {vars_[1]}{'<private>' if priv else ''}:int = 0"]
@@ -2233,14 +2276,17 @@ for ti in range(NT):
         if CTX.get('mvm_used'):
             M.append(f"    Hp{ti}(Hq{ti}:int):int = Hq{ti} * 2")
             if not dflt:
-                M.append(f"    Mv{ti}{'<override>' if ifc else ''}(Mp{ti}:int):int = Mp{ti} + Nx() | Mp{ti} + Hp{ti}(N{ti}a)")
+                M.append(f"    {mv}{'<override>' if ifc else ''}(Mp{ti}:int):int = Mp{ti} + Nx() | Mp{ti} + Hp{ti}(N{ti}a)")
         M.append("    Run():void =")
+        if CTX.get('mvm_me'):
+            # (#283: Self as the class Run is in, or as the interface, which only types tell)
+            M.append(f"        Me{ti}:{f'i{ti}' if ifc and R18.random() < 0.5 else top} = Self")
         M += ["    " + l for l in L[3:]]
         if split:
             M.append(f"{name}c := class({name}b):")
             if ovr:
                 M += ["    Nx<override>()<transacts>:int =", "        set Cn += 2", "        Cn - 2"]
-            M.append(f"    Mv{ti}<override>(Mp{ti}:int):int = Mp{ti} * 3 | (super:)Mv{ti}(Mp{ti}) | Mp{ti} - 1")
+            M.append(f"    {mv}<override>(Mp{ti}:int):int = Mp{ti} * 3 | (super:){mv}(Mp{ti}) | Mp{ti} - 1")
         M.append(f"{name}():void = {name}c{{}}.Run()")
         if CTX.get('mvm_used') and CTX.get('mvm_const'):
             M.insert(0, f"N{ti}a:int = {100 + ti}")    # (a constant named like the field)
@@ -2389,6 +2435,8 @@ if RT2:
             PRE += '\n'.join(header + body) + '\n'
 if NAM:
     PRE += 'NAM(NU:int, ?NV:int = Tell("dv", NU)):int = NU + NV | NV * 2\n'
+if SHARED:
+    PRE += 'pmv := class:\n    Mv(Mp:int):int = Mp * 1000\n'
 if OVL:
     PRE += ('Ov(OA:int):int = OA + 1 | OA * 2\nOv(OA:int, OB:int):int = OA - OB | OB * 3\n'
             'Ov(OS:string):int = OS.Length | 0\n')

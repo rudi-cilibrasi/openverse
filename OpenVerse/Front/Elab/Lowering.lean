@@ -12,6 +12,10 @@ structure Compiled where
   slotTys : List (List VTy)
   /-- Pure mutual groups that retain the eager polymorphic-recursion path. -/
   eagerNeeds : List String := []
+  /-- (#283) Uses `R.M` of a method several classes or interfaces declare
+      apart, each with the root `R`'s class is below: the program is
+      elaborated again, with each one's family (`Choice.famAt`). -/
+  familyNeeds : List (Pos × String) := []
   /-- Functions wanted as values at closed function types no class of
       theirs gives (#214): the program is elaborated again, with them. -/
   fnNeeds : List (String × Ty) := []
@@ -53,6 +57,10 @@ def checkTParams (env : TyEnv) (tps : List TParam) : Except String (List (String
 structure Options where
   profile : SourceProfile := .full
   eagerRequests : List String := []
+  /-- (#283) For each use `R.M` of a method several classes or interfaces
+      declare apart, by its place: the root its receiver's class is below,
+      as an earlier elaboration found (`Compiled.familyNeeds`). -/
+  familyPicks : List (Pos × String) := []
   args : Option (List String) := none
   entry : Option SExpr := none
   /-- Functions wanted as values at closed function types no class of
