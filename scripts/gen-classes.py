@@ -1950,8 +1950,11 @@ class Gen:
         if two:
             L.append('%s(X:int, Y:int):string = "two {X + Y}"' % name)
         tup = chance(0.3)
+        # tuple(char) both unpacks for char and converts to string ([]char).
+        char_tag = tup and not opt
         if tup:
-            L.append("%s(X:char):string = \"char {X}\"" % name)
+            tag = ',?Character:logic' if char_tag else ''
+            L.append('%s(X:char%s):string = "char {X}"' % (name, tag))
         used = []
         objtypes = self.trees[:2]
         inh = [i for i in self.ifaces if any(c.below(i) and not c.abstract for c in self.classes)]
@@ -1986,7 +1989,8 @@ class Gen:
         if two:
             M.append('Print(%s(%s, %s))' % (name, lit(), lit()))
         if tup:
-            M.append("Print(%s('%s'))" % (name, R.choice('abz')))
+            tag = ',?Character:=true' if char_tag else ''
+            M.append("Print(%s('%s'%s))" % (name, R.choice('abz'), tag))
         for t in used:
             for c in (t.subtree() if not t.is_iface else [c for c in self.classes if c.below(t)]):
                 if not c.abstract and chance(0.5):

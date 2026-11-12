@@ -191,14 +191,16 @@ pinned Book restriction.
 Overload admission compares both direct and adapted domains. A single array
 formal can collide with several scalar formals; a bare generic formal can
 accept their argument tuple; singleton tuple/scalar and empty tuple/no-formal
-overloads also collide. Nested direct/flattened overlap and the existing
-wide `void` domain are included. These are declaration refusals, rather than
+overloads also collide. The same `tuple(int)` value can unpack for `int`,
+wrap for `tuple(tuple(int))`, or convert to `[]int`, so these domains also
+overlap. Nested direct/flattened overlap and the existing wide `void` domain
+are included. These are declaration refusals, rather than
 an arbitrary preference for an overload with matching written arity.
 
 Packing applies at a function boundary, retaining nested tuple fields. A
 single scalar is not packed into an array; zero-element arrays use an explicit
-`array{}` value with an inferable element type. These array policies preserve
-the existing scalar/array and zero-formal/array overload distinctions. The
+`array{}` value with an inferable element type. Zero-formal/array overloads
+remain distinct; scalar/array overloads can overlap through a tuple input. The
 generic-array extension combines the pinned array and parametric rules; it
 is not a claim of measured behavior in a released Epic compiler.
 

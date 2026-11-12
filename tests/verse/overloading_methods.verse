@@ -13,7 +13,7 @@ base := class(printer):
 
 loud := class(base):
     Show<override>(S:string):string = "LOUD {(super:)Show(S)}"
-    Show(C:char):string = "char"
+    Show(C:char,?Character:logic):string = "char"
 
 Main():void =
     B := base{}
@@ -23,7 +23,7 @@ Main():void =
     L := loud{}
     Print(L.Show(3))
     Print(L.Show("b"))
-    Print(L.Show('z'))
+    Print(L.Show('z',?Character:=true))
     P:printer = loud{}
     Print(P.Show("c"))
     Ps:[]printer = array{base{}, loud{}}
