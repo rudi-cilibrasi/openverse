@@ -44,7 +44,7 @@ def main (args : List String) : IO Unit := do
     "method-value-cancel", "method-value-cancel-control"]
   let callables := ["callable-upper", "callable-upper-control", "callable-default", "callable-default-control",
     "callable-state", "callable-state-control", "callable-waiting", "callable-waiting-control",
-    "callable-decides", "callable-decides-control"]
+    "callable-decides", "callable-decides-control", "callable-bound-only", "callable-bound-only-control"]
   let profiled := fifo ++ methodValues ++ callables
   let negative := ["choice-refusal", "default-refusal", "override-refusal", "overload-interface-refusal",
     "overload-ancestor-refusal", "overload-optional-refusal", "overload-empty-refusal", "overload-scope-refusal",

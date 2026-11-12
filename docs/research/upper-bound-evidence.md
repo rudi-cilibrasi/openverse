@@ -159,6 +159,10 @@ controls cover ordinary and returned function values, method receivers, and
 opaque callable values, with matching real controls. Source pairs cover
 defaults, exact returned function types, receiver/argument evaluation order,
 boxed callbacks, rollback, escaping tasks, waiting calls and cancellation.
+Function-shape discovery includes upper bounds on functions, classes, structs
+and methods, as well as retained generated-request headers and relations.
+A shape written only in a bound must be materialized before type resolution;
+an unrelated annotation or runtime call is not needed to make it available.
 
 Member lookup uses actual nominal views. Root and interior mutation preserve
 the source storage type, evaluate indices/keys before traversal, and perform

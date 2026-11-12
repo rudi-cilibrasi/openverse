@@ -36,3 +36,6 @@ argument order, boxed callbacks, rollback, spawned tasks, waiting calls and
 cancellation. Negative cases retain the ordinary bracket, suspension and
 effect restrictions and refuse an unproved callable. The API contracts also
 check callable-view ambiguity/order and dummy receivers through spawn.
+The bound-only pair and API scans require function shapes mentioned only in
+upper-bound metadata to be discovered and materialized, including generated
+request headers and whole relations.

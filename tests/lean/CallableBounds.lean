@@ -51,4 +51,35 @@ def main : IO Unit := do
       need "unrelated callable views diagnose ambiguity"
         ((message.splitOn "ambiguous callable bound").length > 1)
     | .ok _ => throw (IO.userError "unrelated callable views were selected")
+  let fnType := "type{_(:int)<computes>:int}"
+  for declaration in [
+      s!"Apply(F:t where t:subtype({fnType}))<computes>:int=F(7)",
+      "box(t:subtype(" ++ fnType ++ ")):=class<computes>{F:t}",
+      "box(t:subtype(" ++ fnType ++ ")):=struct{F:t}",
+      s!"box:=class<computes>:\n    Apply(F:t where t:subtype({fnType}))<computes>:int=F(7)"] do
+    let .ok tops := parseProgram (declaration ++ "\nMain():void={}")
+      | throw (IO.userError "bound-only shape parse")
+    let shapes := tops.flatMap fun top => (top.scan).1
+    need "source scans discover shapes written only in upper bounds" (shapes.any (·.name == pureShape))
+    let generated := FnValues.desugar tops
+    need "bound-only shapes are materialized" (generated.any fun
+      | .classDef _ name .. => name == pureShape
+      | _ => false)
+  let functionType := STy.fn [.name "int", .name "int"] ["computes"] (.name "int")
+  let functionName := (FnValues.shapeOf 2 ["computes"]).name
+  let request : FnValues.MethodRequest := {
+    key := "metadata-shape", pos := p, owner := "reader", method := "Read"
+    tparams := [{ name := "t", constraint := "type" }]
+    receiver := .name "reader", params := [.name "int"], effs := ["computes"]
+    ret := .name "int", args := [.ident p "$X0"], decides := false }
+  for request in [{ request with relations := [(functionType, .name "t")] },
+      { request with tparams := [{ name := "t", upperBound := some functionType }] }] do
+    need "method-request relation/header metadata contributes shapes"
+      ((FnValues.desugar [] [] [] [request]).any fun
+        | .classDef _ name .. => name == functionName
+        | _ => false)
+  need "explicit function requests contribute shapes"
+    ((FnValues.desugar [] [] [("Requested", functionType)]).any fun
+      | .classDef _ name .. => name == functionName
+      | _ => false)
   IO.println "callable bound contracts passed (actual evidence, effects, ambiguity and order)"

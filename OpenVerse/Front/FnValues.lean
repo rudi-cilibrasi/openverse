@@ -184,9 +184,9 @@ partial def _root_.OpenVerse.Front.SExpr.scan : SExpr → List Shape × List Str
   | .decl _ _ t _ e =>
     let (s, n) := e.scan
     ((t.map STy.fnShapes).getD [] ++ s, n)
-  | .structDef _ _ _ fs =>
+  | .structDef _ tps _ fs =>
     let (s, n) := scanL (fs.filterMap (·.2.2.1))
-    (fs.flatMap (·.2.1.fnShapes) ++ s, n)
+    (tps.flatMap (fun tp => tp.upperBound.toList.flatMap STy.fnShapes) ++ fs.flatMap (·.2.1.fnShapes) ++ s, n)
   | .refineDef _ _ t cs =>
     let (s, n) := scanL cs
     (t.fnShapes ++ s, n)
@@ -209,21 +209,23 @@ partial def _root_.OpenVerse.Front.SParam.scan (q : SParam) : List Shape × List
     method, `.M`. -/
 partial def _root_.OpenVerse.Front.STop.scan (bound : List String := []) (meths : List String := []) :
     STop → List Shape × List String
-  | .fn _ _ ps _ _ r body =>
+  | .fn _ _ ps tps _ r body =>
     let (s, n) := scanL [body]
     let pss := ps.map SParam.scan
     let mine := ps.map (·.name) ++ bound
-    (r.fnShapes ++ pss.flatMap (·.1) ++ s, (pss.flatMap (·.2) ++ n).filter (!mine.contains ·))
+    (tps.flatMap (fun tp => tp.upperBound.toList.flatMap STy.fnShapes) ++
+      r.fnShapes ++ pss.flatMap (·.1) ++ s, (pss.flatMap (·.2) ++ n).filter (!mine.contains ·))
   | .const _ _ t e =>
     let (s, n) := e.scan
     ((t.map STy.fnShapes).getD [] ++ s, n)
-  | .classDef _ _ _ _ parents _ fields _ methods =>
+  | .classDef _ _ tps _ parents _ fields _ methods =>
     let ms := methods.map (STop.scan bound)
     let (s, n) := scanL (fields.filterMap (·.2.2.1))
     let self (x : String) : String := if meths.contains x then "." ++ x else x
     -- (a field's default is elaborated without `Self`: it names the
     -- top-level function, not a method or field of the class)
-    (parents.flatMap STy.fnShapes ++ fields.flatMap (·.2.1.fnShapes) ++ s ++ ms.flatMap (·.1),
+    (tps.flatMap (fun tp => tp.upperBound.toList.flatMap STy.fnShapes) ++
+      parents.flatMap STy.fnShapes ++ fields.flatMap (·.2.1.fnShapes) ++ s ++ ms.flatMap (·.1),
       n ++ (ms.flatMap (·.2)).map self)
 
 /-- The function types inside a type: parameters, effects, result. -/
@@ -533,7 +535,7 @@ def desugar (tops : List STop) (extra : List STop := []) (requests : List (Strin
       up ++ up.flatMap (ancOf fuel)
     | _, _ => []
   let anc := ancOf (defs.length + 1)
-  if values.isEmpty && mvalues.isEmpty && gvalues.isEmpty && methodRequests.isEmpty &&
+  if values.isEmpty && mvalues.isEmpty && gvalues.isEmpty && requests.isEmpty && methodRequests.isEmpty &&
       (scans.all fun (s, _) => s.isEmpty) then return tops
   -- every shape written, and each value's own (a value's type when nothing
   -- else gives one)
@@ -542,7 +544,10 @@ def desugar (tops : List STop) (extra : List STop := []) (requests : List (Strin
       gvalues.map (fun (_, _, ps, _, effs, _) => shapeOf ps.length effs) ++
       mvalues.map (fun (_, _, _, _, _, ps, effs, _) => shapeOf ps.length effs) ++
       methodRequests.flatMap (fun r => shapeOf r.params.length r.effs ::
-        r.receiver.fnShapes ++ r.params.flatMap STy.fnShapes ++ r.ret.fnShapes) do
+        r.receiver.fnShapes ++ r.params.flatMap STy.fnShapes ++ r.ret.fnShapes ++
+        r.tparams.flatMap (fun tp => tp.upperBound.toList.flatMap STy.fnShapes) ++
+        r.relations.flatMap (fun (upper, lower) => upper.fnShapes ++ lower.fnShapes)) ++
+      requests.flatMap (fun (_, ty) => ty.fnShapes) do
     if !shapes.contains s then shapes := shapes ++ [s]
   let arities := (shapes.map (·.arity)).eraseDups
   for (p, n, ps, tps, effs, r) in gvalues do
