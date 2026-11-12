@@ -267,8 +267,11 @@ Main():void =
   argument order as ordinary calls. Without an expected function type,
   a method value keeps its declared shape.
 - Overloaded functions and methods and ones with named parameters cannot
-  be used as values. Lambdas and
-  nested functions are not released in Verse, so there are none.
+  be used as values. Local function declarations and lambda expressions are
+  unsupported. The pinned Book marks nested functions unreleased and arrow
+  lambdas unsupported; this is not a versioned UEFN compatibility result.
+  See the [closure design and release evidence](research/closure-design.md)
+  for the proposed capture/lifetime rules and implementation gates.
 
 ## defer
 
@@ -1848,5 +1851,5 @@ Main()<suspends>:void =
 the class features listed under [Classes](#classes), struct methods (Verse structs have none; classes do),
 `weak_map`, module paths `using{/Verse.org/…}` (accepted and ignored), the
 specific overload/call gaps listed under [Overloading](#overloading), nested
-functions and lambdas (not released in Verse), choice beyond [Choice](#choice) (recursive functions with several values that have effects, other than generators, methods with several values whose name an unrelated class shares), concurrency beyond [Concurrency](#concurrency), and the unsupported
+functions and lambdas (see [release evidence and proposed design](research/closure-design.md)), choice beyond [Choice](#choice) (recursive functions with several values that have effects, other than generators, methods with several values whose name an unrelated class shares), concurrency beyond [Concurrency](#concurrency), and the unsupported
 effect/construction contracts listed under [Effect contracts](#effect-contracts).
