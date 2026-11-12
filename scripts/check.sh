@@ -162,6 +162,26 @@ check "indexed field write choice dictionary model fuzzing (${FUZZ_MODEL_INDEXED
   scripts/fuzz-model-heterogeneous.sh "${FUZZ_MODEL_INDEXED_WRITE_DICTIONARY:-120}" "$seed" --indexed-writes
 check "compound indexed choice dictionary model fuzzing (${FUZZ_MODEL_COMPOUND_INDEX_DICTIONARY:-120} programs)" \
   scripts/fuzz-model-heterogeneous.sh "${FUZZ_MODEL_COMPOUND_INDEX_DICTIONARY:-120}" "$seed" --compound-index-writes
+check "map field write choice dictionary model fuzzing (${FUZZ_MODEL_MAP_WRITE_DICTIONARY:-120} programs)" \
+  scripts/fuzz-model-heterogeneous.sh "${FUZZ_MODEL_MAP_WRITE_DICTIONARY:-120}" "$seed" --map-writes
+check "compound map choice dictionary model fuzzing (${FUZZ_MODEL_COMPOUND_MAP_DICTIONARY:-120} programs)" \
+  scripts/fuzz-model-heterogeneous.sh "${FUZZ_MODEL_COMPOUND_MAP_DICTIONARY:-120}" "$seed" --compound-map-writes
+check "multiple-index choice dictionary model fuzzing (${FUZZ_MODEL_MULTIPLE_INDEX_DICTIONARY:-120} programs)" \
+  scripts/fuzz-model-heterogeneous.sh "${FUZZ_MODEL_MULTIPLE_INDEX_DICTIONARY:-120}" "$seed" --multiple-index-writes
+check "compound multiple-index choice dictionary model fuzzing (${FUZZ_MODEL_COMPOUND_MULTIPLE_INDEX_DICTIONARY:-120} programs)" \
+  scripts/fuzz-model-heterogeneous.sh "${FUZZ_MODEL_COMPOUND_MULTIPLE_INDEX_DICTIONARY:-120}" "$seed" --compound-multiple-index-writes
+check "query path choice dictionary model fuzzing (${FUZZ_MODEL_QUERY_PATH_DICTIONARY:-120} programs)" \
+  scripts/fuzz-model-heterogeneous.sh "${FUZZ_MODEL_QUERY_PATH_DICTIONARY:-120}" "$seed" --query-path-writes
+check "compound query path choice dictionary model fuzzing (${FUZZ_MODEL_COMPOUND_QUERY_PATH_DICTIONARY:-120} programs)" \
+  scripts/fuzz-model-heterogeneous.sh "${FUZZ_MODEL_COMPOUND_QUERY_PATH_DICTIONARY:-120}" "$seed" --compound-query-path-writes
+check "reference path choice dictionary model fuzzing (${FUZZ_MODEL_REFERENCE_PATH_DICTIONARY:-120} programs)" \
+  scripts/fuzz-model-heterogeneous.sh "${FUZZ_MODEL_REFERENCE_PATH_DICTIONARY:-120}" "$seed" --reference-path-writes
+check "compound reference path choice dictionary model fuzzing (${FUZZ_MODEL_COMPOUND_REFERENCE_PATH_DICTIONARY:-120} programs)" \
+  scripts/fuzz-model-heterogeneous.sh "${FUZZ_MODEL_COMPOUND_REFERENCE_PATH_DICTIONARY:-120}" "$seed" --compound-reference-path-writes
+check "packed method choice dictionary model fuzzing (${FUZZ_MODEL_PACKED_METHOD_DICTIONARY:-120} programs)" \
+  scripts/fuzz-model-heterogeneous.sh "${FUZZ_MODEL_PACKED_METHOD_DICTIONARY:-120}" "$seed" --packed-methods
+check "packed default method choice dictionary model fuzzing (${FUZZ_MODEL_PACKED_DEFAULT_DICTIONARY:-120} programs)" \
+  scripts/fuzz-model-heterogeneous.sh "${FUZZ_MODEL_PACKED_DEFAULT_DICTIONARY:-120}" "$seed" --packed-default-methods
 check "source break model fuzzing (${FUZZ_MODEL_BREAKS:-60} programs)" \
   scripts/fuzz-model-breaks.sh "${FUZZ_MODEL_BREAKS:-60}" "$seed"
 check "choice model fuzzing (${FUZZ_MODEL_MV:-140} programs, functions with several values too)" \

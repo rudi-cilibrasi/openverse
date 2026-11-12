@@ -16,6 +16,16 @@ case ${3:-} in
   --numeric-writes) mode_args+=(--numeric-writes); tag=numeric-write-dictionary ;;
   --indexed-writes) mode_args+=(--indexed-writes); tag=indexed-write-dictionary ;;
   --compound-index-writes) mode_args+=(--compound-index-writes); tag=compound-index-write-dictionary ;;
+  --map-writes) mode_args+=(--map-writes); tag=map-write-dictionary ;;
+  --compound-map-writes) mode_args+=(--compound-map-writes); tag=compound-map-write-dictionary ;;
+  --multiple-index-writes) mode_args+=(--multiple-index-writes); tag=multiple-index-write-dictionary ;;
+  --compound-multiple-index-writes) mode_args+=(--compound-multiple-index-writes); tag=compound-multiple-index-write-dictionary ;;
+  --query-path-writes) mode_args+=(--query-path-writes); tag=query-path-write-dictionary ;;
+  --compound-query-path-writes) mode_args+=(--compound-query-path-writes); tag=compound-query-path-write-dictionary ;;
+  --reference-path-writes) mode_args+=(--reference-path-writes); tag=reference-path-write-dictionary ;;
+  --compound-reference-path-writes) mode_args+=(--compound-reference-path-writes); tag=compound-reference-path-write-dictionary ;;
+  --packed-methods) mode_args+=(--packed-methods); tag=packed-method-dictionary ;;
+  --packed-default-methods) mode_args+=(--packed-default-methods); tag=packed-default-method-dictionary ;;
   --writes) mode_args+=(--writes); tag=write-dictionary ;;
   --result-aliases) mode_args+=(--result-aliases); tag=result-alias-dictionary ;;
   --aliases) mode_args+=(--aliases); tag=alias-dictionary ;;

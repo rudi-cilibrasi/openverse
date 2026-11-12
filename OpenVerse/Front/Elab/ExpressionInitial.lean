@@ -106,7 +106,9 @@ partial def elabExprInitialWith
     let oldSlot ← fresh oldTy
     let rhsSlot ← fresh rhsTy
     let keyValue ← coerce p (← elabE ctx index (some keyTy)) keyTy
-    let objectValue ← coerce p (← elabE ctx object (some objectTy)) objectTy
+    let keyContext := { ctx with
+      locals := { name := "$choiceIndexKey", slot := keySlot, ty := keyTy, mutable := false } :: ctx.locals }
+    let objectValue ← coerce p (← elabE keyContext object (some objectTy)) objectTy
     let inner := { ctx with
       locals := { name := "$choiceIndexKey", slot := keySlot, ty := keyTy, mutable := false } ::
         { name := "$choiceIndexObject", slot := objectSlot, ty := objectTy, mutable := false } :: ctx.locals }

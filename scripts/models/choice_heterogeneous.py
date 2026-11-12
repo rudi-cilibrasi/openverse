@@ -18,16 +18,37 @@ p.add_argument('--named-methods', action='store_true')
 p.add_argument('--numeric-writes', action='store_true')
 p.add_argument('--indexed-writes', action='store_true')
 p.add_argument('--compound-index-writes', action='store_true')
+p.add_argument('--map-writes', action='store_true')
+p.add_argument('--compound-map-writes', action='store_true')
+p.add_argument('--multiple-index-writes', action='store_true')
+p.add_argument('--compound-multiple-index-writes', action='store_true')
+p.add_argument('--query-path-writes', action='store_true')
+p.add_argument('--compound-query-path-writes', action='store_true')
+p.add_argument('--reference-path-writes', action='store_true')
+p.add_argument('--compound-reference-path-writes', action='store_true')
+p.add_argument('--packed-methods', action='store_true')
+p.add_argument('--packed-default-methods', action='store_true')
 a = p.parse_args()
+a.packed_methods = a.packed_methods or a.packed_default_methods
+a.named_methods = a.named_methods or a.packed_default_methods
+a.generic_methods = a.generic_methods or a.packed_methods
+a.query_path_writes = a.query_path_writes or a.compound_query_path_writes
+a.reference_path_writes = a.reference_path_writes or a.compound_reference_path_writes
+a.multiple_index_writes = a.multiple_index_writes or a.compound_multiple_index_writes
+a.map_writes = a.map_writes or a.compound_map_writes
+a.compound_index_writes = a.compound_index_writes or a.compound_map_writes or a.compound_multiple_index_writes
+a.compound_index_writes = a.compound_index_writes or a.compound_query_path_writes or a.compound_reference_path_writes
 a.indexed_writes = a.indexed_writes or a.compound_index_writes
+a.indexed_writes = a.indexed_writes or a.map_writes or a.multiple_index_writes
+a.indexed_writes = a.indexed_writes or a.query_path_writes or a.reference_path_writes
 a.writes = a.writes or a.nested_writes or a.numeric_writes or a.indexed_writes
-a.aliases = a.aliases or ((a.writes or a.result_aliases or a.named_methods) and a.seed % 2 == 0)
+a.aliases = a.aliases or ((a.writes or a.result_aliases or a.named_methods or a.packed_methods) and a.seed % 2 == 0)
 a.members = a.members or a.aliases or a.writes or a.result_aliases
 a.generic_methods = (a.generic_methods or a.members or (a.named_methods and a.seed // 5 % 2 == 0)) and not a.callable_fields
 a.members = a.members and not a.callable_fields and not a.numeric_writes and not a.indexed_writes
 a.methods = a.methods or a.generic_methods or a.callable_fields or a.named_methods
 r = random.Random(a.seed)
-method_arguments = a.methods and r.choice([False, True])
+method_arguments = a.packed_methods or (a.methods and r.choice([False, True]))
 mode = ['first', 'for', 'waiting'][a.seed % 3]
 shape = ['primitive', 'array', 'tuple', 'box', 'fields'][a.seed // 3 % 5]
 empty = a.seed // 15 % 2 == 0
@@ -146,6 +167,8 @@ lines.append(f'result {answer} state {h}')
 a.expected.write_text('exit=0\n' + '\n'.join(lines) + '\n')
 print('cell:=class{var N:int=0}\nInts(N:int)<computes>:[]int=for(I:=1..N):I\nbox(t:type):=class{V:t;K:int=0}\nbase:=class{K:int}\nca:=class(base){}\ncb:=class(base){}\nSame(X:t,?Y:t=X where t:subtype(comparable))<computes>:int=if(X=Y)then 1 else 0\nPrefix(H:cell,X:t,Y:t,Tag:int where t:type)<transacts>:t=\n    Print("p {Tag}")\n    set H.N+=Tag\n    X|Y')
 if a.methods:
+    if a.reference_path_writes:
+        print('path_leaf:=class{var Value:[]int}')
     if a.named_methods:
         print('Default(H:cell,K:int)<transacts>:int=block{Print("default {K}");set H.N+=K+2;K}')
     if a.result_aliases:
@@ -157,7 +180,7 @@ if a.methods:
         score_value = 'IndexedValue' if a.indexed_writes else 'Floor(K)' if numeric_rat else 'K'
         print('    H:cell\n    ' + ('var ' if a.members or a.callable_fields or a.writes else '') + 'K:' + ('rational' if numeric_rat else 'int') + ('\n    V:t' if generic else ''))
         if a.indexed_writes:
-            print('    var Data:[]int')
+            print('    var Data:' + ('?[]int' if a.query_path_writes else '[]path_leaf' if a.reference_path_writes else '[int]int' if a.map_writes else '[][]int' if a.multiple_index_writes else '[]int'))
         if a.callable_fields:
             callback_effects = '<reads><writes>' if kind == 'a' else '<transacts>'
             print('    F:type{_(:cell,:int' + (',:int' if method_arguments else '') + ')' + callback_effects + ':int}')
@@ -171,7 +194,8 @@ if a.methods:
         result = ('result_' if a.result_aliases else '') + name + ('(t)' if generic else '') if a.members else 'int'
         print('    ' + method + '(' + ','.join(method_params) + ')<transacts>:' + result + '=')
         if a.indexed_writes:
-            print('        IndexedValue:=if(Item:=Data[0])then Item else 0')
+            access = 'Data?[0]' if a.query_path_writes else 'Data[0].Value[0]' if a.reference_path_writes else 'Data[0][0]' if a.multiple_index_writes else 'Data[0]'
+            print('        IndexedValue:=if(Item:=' + access + ')then Item else 0')
         print('        Print("m ' + kind + ' {' + score_value + '}")')
         print('        set H.N+=' + ('1' if kind == 'a' else '2') + '*(' + score_value + '+1)' + ('+Arg' if method_arguments else ''))
         returned = 'result_'+name+('(t)' if generic else '')+'{K:=K'+(',V:=V' if generic else '')+'}' if a.result_aliases else 'Self' if a.members else score_value
@@ -196,6 +220,8 @@ if a.methods:
     if a.writes:
         print('WriteArgument(H:cell,N:int)<transacts>:int=block{Print("write {N}");set H.N+=N;N}')
     print('Argument(H:cell,N:int)<transacts>:int=block{Print("arg {N}");set H.N+=N;N}')
+    if a.packed_methods:
+        print('PackedArgument(H:cell,N:int,X:t where t:type)<transacts>:tuple(int,t)=(Argument(H,N),X)')
 clauses = []
 
 def payload(s, j):
@@ -207,7 +233,8 @@ def payload(s, j):
         numeric_value = f'({2*s+1}/2)' if a.numeric_writes and j == 1 else str(s)
         value = name + ('(t)' if generic else '') + '{H:=H,K:=' + numeric_value + (',V:=X' if generic else '') + (',F:=Callback' + str(j) if a.callable_fields else '') + '}'
         if a.indexed_writes:
-            value = value[:-1] + f',Data:=array{{{s}}}' + '}'
+            initial = f'option{{array{{{s}}}}}' if a.query_path_writes else f'array{{path_leaf{{Value:=array{{{s}}}}}}}' if a.reference_path_writes else f'map{{0=>{s}}}' if a.map_writes else f'array{{array{{{s}}}}}' if a.multiple_index_writes else f'array{{{s}}}'
+            value = value[:-1] + ',Data:=' + initial + '}'
         return 'holder_'+name+('(t)' if generic else '')+'{C:='+value+'}' if a.nested_writes else value
     if a.control:
         return str(s)
@@ -228,6 +255,8 @@ for i, d in enumerate(levels):
     score = f'A{i}' if a.control else f'Same(A{i})' if shape == 'primitive' else f'A{i}.Length' if shape == 'array' else f'if(A{i}(0)=A{i}(1))then 1 else 0' if shape == 'tuple' else f'A{i}.K'
     if a.methods:
         extra = ','.join(([f'Argument(H,{i+1})'] if method_arguments else []) + (['X'] if a.generic_methods else []))
+        if a.packed_methods and not a.control:
+            extra = f'PackedArgument(H,{i+1},X)'
         score = f'Score(H,A{i}' + (',' + extra if extra else '') + ')' if a.control else f'A{i}.F(A{i}.H,A{i}.K' + (',' + extra if extra else '') + ')' if a.callable_fields else f'A{i}.' + ('Read' if a.members else 'Score') + f'({extra})' + ('.K' if a.members else '')
     if a.nested_writes and not a.control:
         score = score.replace(f'A{i}.', f'A{i}.C.')
@@ -240,8 +269,10 @@ for i, d in enumerate(levels):
         if a.nested_writes and not a.control:
             receiver += '.C'
         if a.indexed_writes and not a.control:
-            clauses.append(f'set {receiver}.Data[0]+=WriteArgument(H,{i+1})' if a.compound_index_writes else
-                           f'set {receiver}.Data[0]={receiver}.Data[0]+WriteArgument(H,{i+1})')
+            access = '.Data?[0]' if a.query_path_writes else '.Data[0].Value[0]' if a.reference_path_writes else '.Data[0][0]' if a.multiple_index_writes else '.Data[0]'
+            target = receiver + access
+            clauses.append(f'set {target}+=WriteArgument(H,{i+1})' if a.compound_index_writes else
+                           f'set {target}={target}+WriteArgument(H,{i+1})')
         else:
             clauses.append(f'set {receiver}.K+=WriteArgument(H,{i+1})')
     if a.result_aliases:
