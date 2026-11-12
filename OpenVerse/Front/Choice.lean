@@ -392,9 +392,13 @@ abbrev LM := StateM LiftSt
 def LM.fresh (p : Pos) (k : String) : LM String :=
   modifyGet fun s => (s!"${k}{sitePart s.site}{p.line}_{p.col}_{s.next}", { s with next := s.next + 1 })
 
+/-- Add `c` to the clauses lifted so far. -/
+def LM.push (c : SExpr) : LM Unit :=
+  modify fun s => { s with pre := s.pre.push c }
+
 def LM.bind (p : Pos) (k : String) (e : SExpr) (ty : Option STy := none) : LM SExpr := do
   let x ← LM.fresh p k
-  modify fun s => { s with pre := s.pre.push (.decl p x ty false e) }
+  LM.push (.decl p x ty false e)
   return .ident p x
 
 /-- `e` with `go` applied to each subexpression a rewrite descends into:
@@ -556,7 +560,7 @@ partial def bindParams (isVal : String → Bool) (isField : String → String �
     (args : List SExpr) (unpacks : Bool := true) : LM Unit := do
   let (frees, pre) := pre.partition fun | .app _ (.ident _ "$freeNames") _ false => true | _ => false
   for fr in frees do
-    modify fun s => { s with pre := s.pre.push fr }
+    LM.push fr
   let (marks, pre) := pre.partition fun | .app _ (.ident _ "$tparams") _ false => true | _ => false
   let (pds, unpack) := (pre.take args.length, pre.drop args.length)
   match marks with
@@ -575,16 +579,16 @@ partial def bindParams (isVal : String → Bool) (isField : String → String �
       match pd with
       | .decl q x ty v _ => binds := binds.push (.decl q x ty v a'')
       | _ => pure ()
-    modify fun s => { s with pre := s.pre.push (.app p (.ident p "$params") (.block p binds.toList :: tps) false) }
+    LM.push (.app p (.ident p "$params") (.block p binds.toList :: tps) false)
   | _ =>
     for (pd, a) in pds.zip args do
       let a' ← liftE isVal isField a
       match pd with
-      | .decl q x ty v _ => modify fun s => { s with pre := s.pre.push (.decl q x ty v a') }
+      | .decl q x ty v _ => LM.push (.decl q x ty v a')
       | _ => pure ()
   if unpacks then
     for u in unpack do
-      modify fun s => { s with pre := s.pre.push u }
+      LM.push u
 
 /-- `e` with its liftable choices lifted (into the state's clauses). -/
 partial def liftE (isVal : String → Bool) (isField : String → String → Bool) (e : SExpr) : LM SExpr := do
@@ -612,7 +616,7 @@ partial def liftE (isVal : String → Bool) (isField : String → String → Boo
     -- consumer of that binding takes its values one at a time (a call
     -- whose clauses fail has none, and what its arguments did stays, as
     -- for one computed at the call)
-    modify fun s => { s with pre := s.pre.push (.app fn.pos (.ident fn.pos "$fxOf") [fn] false) }
+    LM.push (.app fn.pos (.ident fn.pos "$fxOf") [fn] false)
     bindParams isVal isField p pre args
     LM.bind p "c" (.app p (.ident q "$loop") [fn, ps, cls, tl] false)
   | .app p (.ident _ "$loop") _ false => LM.bind p "c" e
@@ -627,24 +631,20 @@ partial def liftE (isVal : String → Bool) (isField : String → String → Boo
     -- (the callee's declared effects, which the caller must allow, as at a
     -- call: noted by `$fxOf`, since no call is left)
     if let .app _ _ (fn :: _) _ := e then
-      modify fun s => { s with pre := s.pre.push (.app fn.pos (.ident fn.pos "$fxOf") [fn] false) }
+      LM.push (.app fn.pos (.ident fn.pos "$fxOf") [fn] false)
     bindParams isVal isField e.pos (marks ++ tmpl.take args.length) args (unpacks := false)
     match body.getLast? with
     | some (.decl q r _ _ _) =>
       let saved := (← get).site
       let inlineSaved := (← get).inlineSite
-      modify fun s => { s with
-        site := r, inlineSite := r,
-        pre := s.pre.push (.app q (.ident q "$inlineScope") [.str q [.text r]] false) }
+      modify fun s => { s with site := r, inlineSite := r }
+      LM.push (.app q (.ident q "$inlineScope") [.str q [.text r]] false)
       -- (the body's own names are values too: its parameters and locals)
       let bound := boundIn tmpl
       let isVal' := fun n => isVal n || bound.contains n
-      for c in body do
-        for c' in normClauses (← liftClauseM isVal' isField c) r do
-          modify fun s => { s with pre := s.pre.push c' }
-      modify fun s => { s with
-        site := saved, inlineSite := inlineSaved,
-        pre := s.pre.push (.app q (.ident q "$inlineScopeEnd") [] false) }
+      for c in body do liftInto isVal' isField c
+      modify fun s => { s with site := saved, inlineSite := inlineSaved }
+      LM.push (.app q (.ident q "$inlineScopeEnd") [] false)
       return .ident q r
     -- (no template: only seeing whether a body has several values)
     | _ => LM.bind e.pos "c" e
@@ -677,8 +677,7 @@ partial def liftE (isVal : String → Bool) (isField : String → String → Boo
   -- (#283) `A and B`: its operands in order, each a block, as each is a scope
   -- of its own: `A` a clause, then `B` the value
   | .andE _ a b =>
-    for c in normClauses (← liftClauseM isVal isField (.block a.pos [a])) (← get).site do
-      modify fun s => { s with pre := s.pre.push c }
+    liftInto isVal isField (.block a.pos [a])
     liftE isVal isField (.block b.pos [b])
   | .orE .. => liftE isVal isField (orIf (← get).site e)
   | .cmp p a rest => liftCmp isVal isField p (a :: rest.map (·.2)) (rest.map (·.1))
@@ -762,29 +761,24 @@ partial def liftE (isVal : String → Bool) (isField : String → String → Boo
     -- `$declNames`: Verse has no shadowing)
     let decls := localDecls e
     if !decls.isEmpty then
-      modify fun s => { s with pre := s.pre.push (.app p (.ident p "$declNames") (decls.map fun (n, q) => .ident q n) false) }
+      LM.push (.app p (.ident p "$declNames") (decls.map fun (n, q) => .ident q n) false)
     -- (`'` sets the name written apart, `shownName`)
     let ren := (localsOf e).map fun n => (n, s!"{tag}'{n}")
     let ss := stmtsOf (renameE ren (.block p ssD))
     let bound := boundIn ss
     let isVal' := fun n => isVal n || bound.contains n
-    let site := (← get).site
     let (init, last) := (ss.dropLast, ss.getLast?)
-    for c in init do
-      for c' in normClauses (← liftClauseM isVal' isField c) site do
-        modify fun s => { s with pre := s.pre.push c' }
+    for c in init do liftInto isVal' isField c
     match last with
     | some c@(.decl q x _ _ _) =>
-      for c' in normClauses (← liftClauseM isVal' isField c) site do
-        modify fun s => { s with pre := s.pre.push c' }
+      liftInto isVal' isField c
       return .ident q x
     -- (#283) a `set` with something to lift, as the value: bound to a name
     -- of its own, as `X := (set …)` is
     | some l@(.set q sl _ r) =>
       if !(pathHas hasLiftable sl || hasLiftable r) then liftE isVal' isField l else
       let x ← LM.fresh q "s"
-      for c' in normClauses (← liftClauseM isVal' isField (.decl q x none false l)) site do
-        modify fun s => { s with pre := s.pre.push c' }
+      liftInto isVal' isField (.decl q x none false l)
       return .ident q x
     | some l => liftE isVal' isField l
     | none => return .tuple p []
@@ -818,14 +812,14 @@ partial def liftCmp (isVal : String → Bool) (isField : String → String → B
       hs := hs.push (← if stable isVal o then pure o else LM.bind o.pos "t" o)
     let h0 := hs[0]!
     if j ≥ 2 then
-      modify fun s => { s with pre := s.pre.push (.cmp p h0 ((syms.take (j - 1)).zip (hs.toList.drop 1))) }
+      LM.push (.cmp p h0 ((syms.take (j - 1)).zip (hs.toList.drop 1)))
     let oj ← liftE isVal isField os[j]!
     let rest := oj :: os.drop (j + 1)
     let r ← if hasLiftable oj then pure (.cmp p hs.back! ((syms.drop (j - 1)).zip rest))
       else liftCmp isVal isField p (hs.back! :: rest) (syms.drop (j - 1))
     if j == 1 then return r
     -- (the rest checked as a clause; the chain's value is its first operand)
-    modify fun s => { s with pre := s.pre.push r }
+    LM.push r
     return h0
 
 /-- Operands evaluated left to right: the liftable choices of each are
@@ -845,6 +839,11 @@ partial def liftOps (isVal : String → Bool) (isField : String → String → B
       else if i == j then out := out.push (← liftE isVal isField e)
       else out := out.push e
     return out.toList
+
+/-- The clause `c` lifted into the state's clauses, each choice the value of
+    a binding (`normClauses`), named for the current site. -/
+partial def liftInto (isVal : String → Bool) (isField : String → String → Bool) (c : SExpr) : LM Unit := do
+  for c' in normClauses (← liftClauseM isVal isField c) (← get).site do LM.push c'
 
 /-- `liftClause` in the current state (an inlined body's clauses, #235). -/
 partial def liftClauseM (isVal : String → Bool) (isField : String → String → Bool) (c : SExpr) :
