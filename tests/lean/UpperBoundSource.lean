@@ -36,6 +36,9 @@ def main (args : List String) : IO Unit := do
     "choice-class-compound", "choice-class-compound-control",
     "choice-class-fields", "choice-class-fields-control",
     "choice-class-waiting-value", "choice-class-waiting-value-control"]
+  let fifo := ["fifo-bound-promotion", "fifo-bound-promotion-control",
+    "fifo-bound-woken", "fifo-bound-woken-control", "fifo-bound-spawn", "fifo-bound-spawn-control",
+    "fifo-bound-two-losers", "fifo-bound-two-losers-control", "fifo-bound-sleep", "fifo-bound-sleep-control"]
   let negative := ["choice-refusal", "default-refusal", "override-refusal", "overload-interface-refusal",
     "overload-ancestor-refusal", "overload-optional-refusal", "overload-empty-refusal", "overload-scope-refusal",
     "overload-value-refusal", "interior-readonly-refusal", "interior-effect-refusal",
@@ -45,10 +48,12 @@ def main (args : List String) : IO Unit := do
     "choice-method-bound-refusal", "peer-void-narrow-refusal", "peer-void-comparable-refusal",
     "peer-comparable-equality-refusal", "choice-class-unproved-refusal"]
   let mut failures := 0
-  for name in positive ++ negative do
+  let cases := (positive ++ fifo ++ negative).map (fun name => (name, fifo.contains name, name)) ++
+    ["fifo-bound-sleep", "fifo-bound-sleep-control"].map (fun name => (name, false, name ++ "-default"))
+  for (name, eventFifo, artifact) in cases do
     let root := s!"tests/upper-bounds/{name}"
     let source ← IO.FS.readFile (root ++ ".verse")
-    let result := parseProgram source >>= elabProgram
+    let result := parseProgram source >>= fun tops => elabProgram tops { eventFifo }
     if negative.contains name then
       let fragment := (← IO.FS.readFile (root ++ ".error")).trimAscii.toString
       match result with
@@ -75,7 +80,14 @@ def main (args : List String) : IO Unit := do
           IO.eprintln s!"FAIL {name}: Core admission or independent output oracle"
           failures := failures + 1
         else
-          IO.FS.writeBinFile s!"{out}/{name}.vbc" compiled.prog.encode
-          IO.FS.writeBinFile s!"{out}/{name}.expected" expected
-          IO.println s!"ok {name}: checked Lean oracle"
+          if fifo.contains name then
+            let strict ← match parseProgram source >>= fun tops =>
+                elabProgram tops { eventFifo, profile := .choiceFree } with
+              | .ok strict => pure strict
+              | .error message => throw (IO.userError s!"{artifact}: --no-choice refused: {message}")
+            unless strict.prog.encode == compiled.prog.encode do
+              throw (IO.userError s!"{artifact}: --no-choice changed admitted bytecode")
+          IO.FS.writeBinFile s!"{out}/{artifact}.vbc" compiled.prog.encode
+          IO.FS.writeBinFile s!"{out}/{artifact}.expected" expected
+          IO.println s!"ok {artifact}: checked Lean oracle"
   if failures != 0 then throw (IO.userError s!"upper-bound source contract: {failures} failure(s)")
