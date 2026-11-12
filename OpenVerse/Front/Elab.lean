@@ -5376,13 +5376,27 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
           let noHint (s : Sig) := !resultContext s || missing.any fun v =>
             s.tparams.any (·.1 == v) && !s.ret.params.contains v
           let fnValue : Ty → Bool := fun | .struct n _ => (FnValues.parseName n).isSome | _ => false
+          let probeState ← get
+          let typedField (receiver : SExpr) (method : String) : Bool :=
+            match (elabE { ctx with typeOnly := true, callInstanceProbe := none } receiver none).run probeState with
+            | .ok (⟨_, .struct c args⟩, _) =>
+              let method := if method.startsWith "$spawnMethod:" then (method.drop 13).toString else method
+              let (view, method) := if method.startsWith "(" then
+                  match (method.drop 1).toString.splitOn ":)" with
+                  | [owner, method] => (owner, method)
+                  | _ => (c, method)
+                else (c, method)
+              (ctx.methodDecl? view method).isNone &&
+                !(((ctx.types.methodOverloads.lookup method).getD []).any (ctx.hasMethod view ·)) &&
+                (ctx.types.fields view (ctx.types.upArgs c args view)).any fun (n, t, _) => n == method && fnValue t
+            | _ => false
           let fixedResult := match a with
             | .app _ (.ident _ g) _ _ =>
               match ctx.lookup g with
               | some binding => fnValue binding.ty
               | none => (callSig g).any (fun s => !resultContext s)
+            | .app _ (.member _ receiver method) _ _ => typedField receiver method
             | _ => false
-          let probeState ← get
           let noResultEvidence := Choice.anyE (fun
             | .app q (.ident _ g) _ _ =>
               err.startsWith s!"{q.show}:" && (ctx.lookup g).isNone &&
@@ -5407,14 +5421,7 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
                     | [owner, method] => (some owner, method)
                     | _ => (cls, method)
                   else (cls, method)
-                let fieldCall := match (elabE { ctx with typeOnly := true, callInstanceProbe := none } receiver none).run probeState with
-                  | .ok (⟨_, .struct c args⟩, _) =>
-                    let view := cls.getD c
-                    (ctx.methodDecl? view method).isNone &&
-                    !(((ctx.types.methodOverloads.lookup method).getD []).any (ctx.hasMethod view ·)) &&
-                    (ctx.types.fields view (ctx.types.upArgs c args view)).any fun (n, t, _) => n == method && fnValue t
-                  | _ => false
-                fieldCall || (cls.bind fun c => (ctx.methodDecl? c method).bind fun owner => ctx.sig? s!"{owner}.{method}").any noHint
+                (cls.bind fun c => (ctx.methodDecl? c method).bind fun owner => ctx.sig? s!"{owner}.{method}").any noHint
             | .app _ callee _ _ =>
               -- A returned callable is also elaborated independently of
               -- the expected result of invoking it.
