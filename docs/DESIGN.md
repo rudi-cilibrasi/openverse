@@ -1232,6 +1232,22 @@ done (woken, or of waits that were cancelled, which mark their record in a
 `Signal`, which has no scheduler of its own, can make the scheduler pass
 again in the same tick.
 
+**FIFO resumption (opt-in, `Options.eventFifo`, `--event-fifo`, #513).**
+The prelude is `concPreludeFifo`: the scheduler keeps the root running
+(`$CurRoot`, set by `$Run` around `Main`'s and each root's run, and by a
+spawn's or branch's `start` around its first run) and a list of the
+waiters `Signal` woke (`$WokenHead`/`$WokenTail`, each `$taskBase`'s
+`$WokenNext`), which `signalAll` appends to in the event's order. A waiter
+records the root it waits in (`$WaitRoot`) each time `$waitResume` polls
+it: a statement the lowering adds after its slots' initialisations, as the
+two root fields are typed `?rootAny` only in the class table (the
+prelude's code never touches them, so no temporary of their written type,
+`?int`, holds one). After `Main`'s run and after each root's in a pass,
+`$Run` drains the list: each woken waiter's root, not done, runs (`Main`
+at its turn too), and the waiters those runs wake join the same loop. The
+default prelude and lowering are unchanged, so a program compiled without
+the option is byte-identical to before.
+
 The roots are a list of cells `[root, next]` (adding one costs a cell; an
 array would be copied at each spawn, and C keeps every copy). A pass follows
 the list, reading each cell's next after its root ran, so a root added
