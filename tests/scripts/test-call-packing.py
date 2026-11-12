@@ -15,7 +15,8 @@ model = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(model)
 count = int(sys.argv[1]) if len(sys.argv) > 1 else model.PERIOD
 first = int(sys.argv[2]) if len(sys.argv) > 2 else 1
-compiler = shlex.split(os.environ.get('OV_COMMAND', str(ROOT / '.lake/build/bin/openverse')))
+override = os.environ.get('OV_COMMAND')
+compiler = shlex.split(override) if override else [str(ROOT / '.lake/build/bin/openverse')]
 with tempfile.TemporaryDirectory(prefix='ov-call-packing-') as directory:
     source, bytecode = (Path(directory) / name for name in ('program.verse', 'program.vbc'))
     for name, header, expression, diagnostic in (
@@ -83,6 +84,8 @@ with tempfile.TemporaryDirectory(prefix='ov-call-packing-') as directory:
             ('P:[]int', 'X:int,Y:int'),
             ('P:t where t:type', 'X:int,Y:string'),
             ('P:tuple(int)', 'P:tuple(tuple(int))'),
+            ('X:int', 'P:tuple(tuple(int))'),
+            ('X:int', 'P:[]int'),
             ('P:void', 'X:string,Y:string')):
         for params in ((left, right), (right, left)):
             program = f'F({params[0]}):int=1\nF({params[1]}):int=2\nMain():void={{}}\n'

@@ -297,6 +297,10 @@ Verse ch. 6): `Describe(X:int)`, `Describe(S:string)`, `Describe(X:int, Y:int)`.
   disjoint types at some position. A single tuple parameter and the same
   flattened positional types are compared element by element: the same
   domains overlap, while a disjoint position distinguishes the overloads.
+  The comparison also includes a tuple containing the positional inputs.
+  Thus `int` overlaps `tuple(tuple(int))` and `[]int`: a `tuple(int)`
+  argument can unpack for the scalar, wrap for the nested tuple, or convert
+  to the array. This does not implicitly turn a scalar into an array.
   See the [complete tuple/container table](research/overloading-conformance.md#tuplecontainer-rules).
 - **Overlapping types:** `void`, a type parameter, two array, map or option
   types (they share the empty one), an array, option or `logic` with

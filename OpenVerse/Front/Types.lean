@@ -401,8 +401,21 @@ def TyEnv.paramsDistinct (env : TyEnv) (as bs : List Ty) : Bool :=
       | .param .. => !ys.isEmpty
       | _ => true
     | _ => true
+  -- A call can also supply one tuple containing the positional arguments.
+  -- In particular, tuple(int) both unpacks to int and packs into
+  -- tuple(tuple(int)). Compare that actual input shape with the other
+  -- formal, rather than applying the broader tuple/container admission
+  -- rules to a synthetic tuple (which would conflate int with ?int).
+  let tupleInputApart (xs ys : List Ty) := match ys with
+    | [t] => match t with
+      | .tup ts => apart xs ts
+      | .arr t => xs.isEmpty || xs.any (env.disjoint · t)
+      | .void | .any | .param .. => false
+      | _ => true
+    | _ => true
   [as, flat as].all fun xs => [bs, flat bs].all fun ys =>
-    apart xs ys && packedApart xs ys && packedApart ys xs
+    apart xs ys && packedApart xs ys && packedApart ys xs &&
+      tupleInputApart xs ys && tupleInputApart ys xs
 
 /-- The type arguments of the class or interface `T` above `d(args)` (along
     the parents, #39, #53), or `[]` when `T` is not above `d`. -/
