@@ -506,14 +506,15 @@ RTY = random.Random(seed * 1000003 + 283288)
 # generator's choice point and before the alternative's own, once for each time the alternative
 # is taken; a stream of its own.
 RENT = random.Random(seed * 1000003 + 283289)
-# ---- #283, flag lifted (on with seq; nolifted turns it off): after a <decides> generator's bound
-# choice, a statement with a call of itself where the lifter takes it: a named argument,
-# `Wl := NA(N, ?P := Gz0[N - 1, A])`; a construction's field, in its type's order whatever the
-# written one, `Wl := PS(pt{Y := Gz0[N - 1, A], X := 2})`; a comparison's later operand,
-# `Wl := (5 > Gz0[N - 1, A])`; `set Vk += Gz0[N - 1, A]`, its old value read before the call, or
-# `set Vk = Gz0[N - 1, A] + Vk`; an `if` in an expression with the call in a branch,
-# `Wl := (if (N > 1) then Gz0[N - 1, A] else (1 | 5))`; `or`'s right, `Wl := (N = 0 or
-# Gz0[N - 1, A] > 1)`; a stream of its own.
+# ---- #283, flag lifted (on with seq; nolifted turns it off): after a generator's bound choice,
+# a statement with a call of itself where the lifter takes it. In a <decides> one's, guarded by N
+# so that its calls end: `or`'s right, `Wl := (N = 0 or Gz0[N - 1, A] > 1)`, a comparison's
+# later operand in it, `Wl := (N = 0 or 5 > Gz0[N - 1, A])`, an `if`'s branch, `Wl := (if (N > 0)
+# then Gz0[N - 1, A] else (1 | 5))`. In the block of another's else: a named argument,
+# `Wl := NA(N, ?P := Gz0(N - 1, A))`; a construction's field, in its type's order whatever the
+# written one, `Wl := PS(pt{Y := Gz0(N - 1, A), X := 2})`; `set Vl += Gz0(N - 1, A)`, its old
+# value read before the call, or `set Vl = Gz0(N - 1, A) + Vl`; an `if`'s branch. A stream of
+# its own.
 RLIFT = random.Random(seed * 1000003 + 283292)
 SQN = [0]
 USED = set()     # (generator, in a for): the calls the tests make, for MVSEQ's statistics
@@ -802,6 +803,11 @@ def ub_e(e, n):
     if isinstance(e, tuple) and e and isinstance(e[0], str):
         if e[0] in ('gself', 'gcall'):
             return gub(e[1], n - 1)
+        if e[0] == 'slet' and e[1] == 'Wl' and e[2][0] in ('orx', 'ifx'):
+            # (#283, flag lifted: or's values its left's or its right's, an if's one branch's,
+            # so that a call guarded by N, which ends, has a bound that does not)
+            x = e[2]
+            return ub_e(x[1], n) + ub_e(x[2], n) if x[0] == 'orx' else ub_e(x[2], n) + ub_e(x[3], n)
         if e[0] == 'choice':
             return sum(ub_e(a, n) for a in e[1])
         if e[0] == 'gblk':
@@ -1137,40 +1143,60 @@ def enter_shapes(f, i, sc, ctr):
 
 
 def lifted_shapes(f, i, sc, ctr, stmts):
-    """(#283, flag lifted) after a <decides> generator's bound choice, a statement with a call of
-    itself where the lifter takes it (RLIFT alone)."""
-    if not f['decides'] or RLIFT.random() >= 0.25:
+    """(#283, flag lifted) after a generator's bound choice, a statement with a call of itself
+    where the lifter takes it (RLIFT alone): in a <decides> one's, guarded by N so that the
+    calls end (`or`'s right, a later comparison operand in it, an `if`'s branch); in the block of
+    another's else, where N - 1 is at least its base's (a named argument, a struct's field, a
+    `set`'s value, an `if`'s branch)."""
+    v = f['val']
+    blk = not f['decides'] and v[0] == 'gbif' and v[3] and v[3][0][0] == 'gblk'
+    # (more often in an else's block, which is rarer)
+    if RLIFT.random() >= (0.7 if blk else 0.25) or not (f['decides'] or blk):
         return
     a = ('ref', RLIFT.choice(sc)) if RLIFT.random() < 0.5 else ('lit', RLIFT.randint(0, 3))
     call = ('gself', i, [('bin', '-', ('ref', 'N'), ('lit', 1)), a] + ([('ref', 'C')] if ctr else []))
-    kinds = (['na'] if NA else []) + (['cons'] if CB else []) + ['cmp', 'set', 'if', 'or', 'set=']
-    kind = RLIFT.choice(kinds)
-    x, post, last = f.get('bound') or ('Wf', [], ('ref', 'Wf'))
-    if kind == 'na':
-        st = ('slet', 'Wl', ('na', ('ref', 'N'), [('P', call)], RLIFT.randint(0, 1)))
-    elif kind == 'cons':
-        st = ('slet', 'Wl', ('cons', ('lit', RLIFT.randint(0, 3)), call, RLIFT.random() < 0.5))
-    elif kind == 'cmp':
-        st = ('slet', 'Wl', ('cmp', ('lit', RLIFT.randint(1, 6)), [(RLIFT.choice(['>', '>=']), call)]))
-    elif kind == 'if':
-        # (an `if` in an expression with the call in a branch, the other a value or a choice)
-        other = (('lit', RLIFT.randint(0, 3)) if RLIFT.random() < 0.5 else
-                 ('choice', [('lit', RLIFT.randint(0, 3)), ('lit', RLIFT.randint(4, 7))]))
-        cond = [('filter', ('cmp', ('ref', 'N'), [(RLIFT.choice(['>', '<']), ('lit', RLIFT.randint(0, 2)))]))]
-        st = ('slet', 'Wl', ('ifx', cond, call, other) if RLIFT.random() < 0.5 else ('ifx', cond, other, call))
-    elif kind == 'or':
-        # (`or` with the call on its right, as its `if`'s else)
-        st = ('slet', 'Wl', ('orx', ('cmp', ('ref', 'N'), [('=', ('lit', RLIFT.randint(0, 2)))]),
-                             ('cmp', call, [(RLIFT.choice(['>', '>=']), ('lit', RLIFT.randint(0, 3)))])))
+    lo = f['lo']
+    other = (('lit', RLIFT.randint(0, 3)) if RLIFT.random() < 0.5 else
+             ('choice', [('lit', RLIFT.randint(0, 3)), ('lit', RLIFT.randint(4, 7))]))
+    if f['decides']:
+        kind = RLIFT.choice(['cmp', 'if', 'or'])
+        base = ('cmp', ('ref', 'N'), [('=', ('lit', lo))])
+        if kind == 'cmp':
+            # (N = lo or K > call: the call a comparison's later operand, in or's right)
+            e = ('orx', base, ('cmp', ('lit', RLIFT.randint(1, 6)), [(RLIFT.choice(['>', '>=']), call)]))
+        elif kind == 'or':
+            e = ('orx', base, ('cmp', call, [(RLIFT.choice(['>', '>=']), ('lit', RLIFT.randint(0, 3)))]))
+        else:
+            e = (('ifx', [('filter', ('cmp', ('ref', 'N'), [('>', ('lit', lo))]))], call, other)
+                 if RLIFT.random() < 0.5 else
+                 ('ifx', [('filter', ('cmp', ('ref', 'N'), [('<=', ('lit', lo))]))], other, call))
+        st = ('slet', 'Wl', e)
+        x, post, last = f.get('bound') or ('Wf', [], ('ref', 'Wf'))
     else:
-        if not any(c[0] == 'svar' and c[1] == 'Vl' for c in stmts):
-            stmts.append(('svar', 'Vl', ('lit', RLIFT.randint(0, 3))))
-        # (`set =`: the old value read after the call, from the var each
-        # value of it has set)
-        st = ('sset', 'Vl', '+=', call) if kind == 'set' else ('sset', 'Vl', '=', ('bin', '+', call, ('ref', 'Vl')))
+        kinds = (['na'] if NA else []) + (['cons'] if CB else []) + ['set', 'set=', 'if']
+        kind = RLIFT.choice(kinds)
+        if kind == 'na':
+            st = ('slet', 'Wl', ('na', ('ref', 'N'), [('P', call)], RLIFT.randint(0, 1)))
+        elif kind == 'cons':
+            st = ('slet', 'Wl', ('cons', ('lit', RLIFT.randint(0, 3)), call, RLIFT.random() < 0.5))
+        elif kind == 'if':
+            # (in the else, N > lo: either branch may be taken)
+            cond = [('filter', ('cmp', ('ref', 'N'), [(RLIFT.choice(['>', '<']), ('lit', RLIFT.randint(lo, lo + 2)))]))]
+            st = ('slet', 'Wl', ('ifx', cond, call, other) if RLIFT.random() < 0.5 else ('ifx', cond, other, call))
+        else:
+            if not any(c[0] == 'svar' and c[1] == 'Vl' for c in stmts):
+                stmts.append(('svar', 'Vl', ('lit', RLIFT.randint(0, 3))))
+            # (`set +=` reads the old value before the call, `set =` after it, from the var each
+            # value of it has set)
+            st = (('sset', 'Vl', '+=', call) if kind == 'set' else
+                  ('sset', 'Vl', '=', ('bin', '+', call, ('ref', 'Vl'))))
+        _, x, galts, post, last = v[3][0]
     post = post + [st]
     last = ('bin', '+', ('ref', 'Vl' if kind in ('set', 'set=') else 'Wl'), last)
-    f['bound'] = (x, post, last)
+    if f['decides']:
+        f['bound'] = (x, post, last)
+    else:
+        v[3][0] = ('gblk', x, galts, post, last)
     f['seq'] = f.get('seq', set()) | {'lifted-' + kind}
 
 
