@@ -75,12 +75,11 @@ partial def arms : SExpr → List (Option (List SExpr) × SExpr)
   | .ite p cs t none => [(some cs, t), (none, .tuple p [])]
   | e => [(none, e)]
 
-/-- Supply the implicit void arm of an incomplete `if` chain, applying
-    `arm` to the written branches. -/
-partial def fillElse (e : SExpr) (arm : SExpr → SExpr := id) : SExpr :=
+/-- Supply the implicit void arm of an incomplete `if` chain. -/
+partial def fillElse (e : SExpr) : SExpr :=
   match e with
-  | .ite p cs t u => .ite p cs (arm t) (some ((u.map (fillElse · arm)).getD (.tuple p [])))
-  | _ => arm e
+  | .ite p cs t u => .ite p cs t (some ((u.map fillElse).getD (.tuple p [])))
+  | _ => e
 
 /-- The part of a made name that names an inlined call's site (#235), set
     apart from the position after it (site 1 at line 12 is not site 11 at
@@ -328,17 +327,17 @@ def orIf (site : String) : SExpr → SExpr
     the alternatives take `L`'s type; when one has something to lift (#283),
     by each running the assignment itself, the `set` its block's value, as
     a composed choice's alternatives are lifted one by one. -/
-def setClauses (p : Pos) (l : SExpr) (op : Option String) (as : List SExpr) (q : Pos) (site : String := "") :
+def setClauses (p : Pos) (l : SExpr) (op : Option String) (as : List SExpr) (site : String := "") :
     List SExpr × SExpr :=
-  let (h, o?, l') := setPrefix q l op site
-  let c := madeName "c" site q
+  let (h, o?, l') := setPrefix p l op site
+  let c := madeName "c" site p
   match op with
   | none =>
     if as.any hasLiftable then
-      (h ++ [.decl q c none false (.app q (.ident q "$choice") (as.map fun a => .block a.pos [.set p l' none a]) false)],
-        .ident q c)
-    else (h ++ [.decl q c none false (.app q (.ident q "$choiceAt") (l' :: as) false)], .set p l' none (.ident q c))
-  | some _ => (h ++ [.decl q c none false (.app q (.ident q "$choice") as false)], .set p l' op (withOld q o? (.ident q c)))
+      (h ++ [.decl p c none false (.app p (.ident p "$choice") (as.map fun a => .block a.pos [.set p l' none a]) false)],
+        .ident p c)
+    else (h ++ [.decl p c none false (.app p (.ident p "$choiceAt") (l' :: as) false)], .set p l' none (.ident p c))
+  | some _ => (h ++ [.decl p c none false (.app p (.ident p "$choice") as false)], .set p l' op (withOld p o? (.ident p c)))
 
 /-- The clauses, with each choice the value of a binding: a clause that is a
     choice gets a name of its own, and `set L = a | b` and `var X:t = a | b`
@@ -349,13 +348,13 @@ def normClauses (cs : List SExpr) (site : String := "") : List SExpr :=
     match c with
     | .app p (.ident _ "$choice") _ false => [.decl p (nm p) none false c]
     | .set p l op rhs => match alts? rhs with
-      | some as => let (h, s) := setClauses p l op as p site; h ++ [s]
+      | some as => let (h, s) := setClauses p l op as site; h ++ [s]
       | none => [c]
     | .decl p x ty true rhs =>
       if isChoice rhs then [.decl p (nm p) ty false rhs, .decl p x ty true (.ident p (nm p))] else [c]
     -- (`set L = a | b` as the last clause of a macro, which names its value)
     | .decl p x ty false (.set q l op rhs) => match alts? rhs with
-      | some as => let (h, s) := setClauses q l op as q site; h ++ [.decl p x ty false s]
+      | some as => let (h, s) := setClauses q l op as site; h ++ [.decl p x ty false s]
       | none => [c]
     | c => [c]
 
@@ -945,7 +944,7 @@ partial def liftClauseM (isVal : String → Bool) (isField : String → String �
     if pathHas hasLiftable l then
       match alts? rhs with
       | some as =>
-        let (h, s) := setClauses p l op as p site
+        let (h, s) := setClauses p l op as site
         return (← liftAll h) ++ [s]
       | none =>
         if op.isNone && liftsAsIf rhs then return ← setIf p l rhs
@@ -972,7 +971,7 @@ partial def liftClauseM (isVal : String → Bool) (isField : String → String �
       -- indices, as for a `set` clause
       match alts? r with
       | some as =>
-        let (h, s) := setClauses q l op as q site
+        let (h, s) := setClauses q l op as site
         return (← liftAll h) ++ [.decl p x ty v s]
       | none => liftSet q l op r (.decl p x ty v ·)
     else
