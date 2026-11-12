@@ -76,6 +76,7 @@ jobs:
             echo "FUZZ_MODEL_HETEROGENEOUS=$((120 * k))"; echo "FUZZ_MODEL_DICTIONARY=$((120 * k))"
             echo "FUZZ_MODEL_POLYMORPHIC_DICTIONARY=$((120 * k))"
             echo "FUZZ_MODEL_MEMBER_DICTIONARY=$((120 * k))"
+            echo "FUZZ_MODEL_CALLABLE_DICTIONARY=$((120 * k))"
           } >> "$GITHUB_ENV"
           echo "first seed $seed, counts x$k"
 

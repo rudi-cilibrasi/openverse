@@ -9,9 +9,11 @@ p.add_argument('--control', action='store_true')
 p.add_argument('--methods', action='store_true')
 p.add_argument('--generic-methods', action='store_true')
 p.add_argument('--members', action='store_true')
+p.add_argument('--callable-fields', action='store_true')
 a = p.parse_args()
-a.generic_methods = a.generic_methods or a.members
-a.methods = a.methods or a.generic_methods
+a.generic_methods = (a.generic_methods or a.members) and not a.callable_fields
+a.members = a.members and not a.callable_fields
+a.methods = a.methods or a.generic_methods or a.callable_fields
 r = random.Random(a.seed)
 method_arguments = a.methods and r.choice([False, True])
 mode = ['first', 'for', 'waiting'][a.seed % 3]
@@ -126,7 +128,10 @@ print('cell:=class{var N:int=0}\nInts(N:int)<computes>:[]int=for(I:=1..N):I\nbox
 if a.methods:
     for name, generic, kind in [('ma', False, 'a'), ('mb', False, 'b'), ('ga', True, 'a'), ('gb', True, 'b')]:
         print(name + ('(t:type)' if generic else '') + ':=class:')
-        print('    H:cell\n    ' + ('var ' if a.members else '') + 'K:int' + ('\n    V:t' if generic else ''))
+        print('    H:cell\n    ' + ('var ' if a.members or a.callable_fields else '') + 'K:int' + ('\n    V:t' if generic else ''))
+        if a.callable_fields:
+            print('    F:type{_(:cell,:int' + (',:int' if method_arguments else '') + ')<transacts>:int}')
+            continue
         method_params = (['Arg:int'] if method_arguments else []) + (['Ignored:u where u:type'] if a.generic_methods else [])
         method = 'Read' if a.members else 'Score'
         result = name + ('(t)' if generic else '') if a.members else 'int'
@@ -134,6 +139,12 @@ if a.methods:
         print('        Print("m ' + kind + ' {K}")')
         print('        set H.N+=' + ('1' if kind == 'a' else '2') + '*(K+1)' + ('+Arg' if method_arguments else ''))
         print('        Self' if a.members else '        K')
+    if a.callable_fields:
+        for kind in range(2):
+            print('Callback' + str(kind) + '(H:cell,K:int' + (',Arg:int' if method_arguments else '') + ')<transacts>:int=')
+            print('    Print("m ' + chr(97 + kind) + ' {K}")')
+            print('    set H.N+=' + str(kind + 1) + '*(K+1)' + ('+Arg' if method_arguments else ''))
+            print('    K')
     print('Score(H:cell,X:tuple(int,int)' + (',Arg:int' if method_arguments else '') + (',Ignored:u where u:type' if a.generic_methods else '') + ')<transacts>:int=')
     print('    if(X(1)=0)then Print("m a {X(0)}") else Print("m b {X(0)}")')
     print('    set H.N+=(X(1)+1)*(X(0)+1)' + ('+Arg' if method_arguments else '') + '\n    X(0)')
@@ -146,7 +157,7 @@ def payload(s, j):
             return f'({s},{j})'
         generic = shape not in ('primitive', 'fields')
         name = ('ga' if j == 0 else 'gb') if generic else ('ma' if j == 0 else 'mb')
-        return name + ('(t)' if generic else '') + '{H:=H,K:=' + str(s) + (',V:=X' if generic else '') + '}'
+        return name + ('(t)' if generic else '') + '{H:=H,K:=' + str(s) + (',V:=X' if generic else '') + (',F:=Callback' + str(j) if a.callable_fields else '') + '}'
     if a.control:
         return str(s)
     if shape == 'primitive':
@@ -166,7 +177,7 @@ for i, d in enumerate(levels):
     score = f'A{i}' if a.control else f'Same(A{i})' if shape == 'primitive' else f'A{i}.Length' if shape == 'array' else f'if(A{i}(0)=A{i}(1))then 1 else 0' if shape == 'tuple' else f'A{i}.K'
     if a.methods:
         extra = ','.join(([f'Argument(H,{i+1})'] if method_arguments else []) + (['X'] if a.generic_methods else []))
-        score = f'Score(H,A{i}' + (',' + extra if extra else '') + ')' if a.control else f'A{i}.' + ('Read' if a.members else 'Score') + f'({extra})' + ('.K' if a.members else '')
+        score = f'Score(H,A{i}' + (',' + extra if extra else '') + ')' if a.control else f'A{i}.F(A{i}.H,A{i}.K' + (',' + extra if extra else '') + ')' if a.callable_fields else f'A{i}.' + ('Read' if a.members else 'Score') + f'({extra})' + ('.K' if a.members else '')
     clauses.extend([f"A{i}:=({'|'.join(producers)})", f'S{i}:={score}', f'Print("f {i} {{S{i}}}")', f"set H.N+={d['weight']}+S{i}", f'set Total+=S{i}+1', f"Mod[H.N+S{i},{d['mod']}]={d['want']}"])
 clauses.append('Z:=Items[0]' if mode == 'first' else 'Z:Items')
 score = '+'.join((f'S{i}' for i in range(n)))
