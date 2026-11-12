@@ -1244,7 +1244,32 @@ Main():void =
   function with several values, its clauses have no choice, and its last
   expression is a choice, or an `if … else …` whose branches are choices or
   values, each alternative a value with no choice in it or a whole call of
-  the function itself. A returning branch may contain plain clauses and
+  the function itself. An alternative may also be a call of the function
+  with code after it (#283): `Count(N - 1) + 1`, `Tell("x", F(N - 1))`, the
+  call evaluated first (what comes before it in the alternative is a literal
+  or one of the function's own parameters and locals, not a field or a
+  constant), the code after it with no choice and no other such call, and
+  setting no `var`. That code is the call's *return frame*: it runs on each
+  of the call's values, as part of that value, and its result is the
+  alternative's value. The last expression may also be a clause binding the
+  choice, with such code after it, which then runs on each of the choice's
+  values:
+
+  ```verse
+  Walk(N:int)<transacts><decides>:int =
+      N > 0
+      X := Walk[N - 1] | N         # the values of Walk[N - 1], then N
+      Print("at {N} got {X}")      # runs on each, part of that value
+      X + 1
+  Count(N:int)<transacts>:int =
+      if (N <= 0) then 0 else (Count(N - 1) + 1 | N)
+  Main()<transacts>:void =
+      for (V := Walk[2]) { Print("v {V}") }       # at 1 got 1, at 2 got 2, v 3, at 2 got 2, v 3
+      if (V := Walk[2], V > 2) then Print("{V}")  # at 1 got 1, at 2 got 2, 3
+      for (V := Count(2)) { Print("{V}") }        # 2, 2, 2
+  ```
+
+  A returning branch may contain plain clauses and
   nested conditionals before its value. A `return` at the end of the body or
   in an `if` branch ends that invocation, yielding its operand's values in order;
   statements after the return are skipped. These returns are normalized
@@ -1281,7 +1306,7 @@ Main():void =
   - in a `for`, its clauses run as its values are taken, between the
     iterations, and stay, as a `for` keeps the effects of clauses before a
     choice; what a value does is undone with its iteration when the
-    filter rejects it;
+    filter rejects it, the return frames it went through included (#283);
   - where the first success is taken (an `if` condition, `first{…}`,
     `option{…}`, `logic{…}`, `not`, the left of `or`), effects are undone as
     the Verse Calculus undoes them: what a value does with that value, and
@@ -1309,7 +1334,10 @@ Main():void =
   The others, if they are `<computes>`, keep no local state (no `var`, no
   `set`), and nothing they may run prints or calls `Err()`, have their
   values computed at the call, all of them, in order, as an array the call
-  then takes them from (#235).
+  then takes them from (#235). So do those with return frames that are so
+  effect-free (#283): taken either way, their values are the same, but an
+  infinite one does not stop. Those with return frames that have effects
+  are taken lazily.
   What it may run is followed through its Verse Core code, so through every
   call: the functions it calls, each implementation a method call may
   dispatch to, each function of a function value's type that the program
@@ -1332,8 +1360,13 @@ Main():void =
   Shared helpers retain generic result types and witnesses even when only
   the return type mentions a parameter.
 
-  Refused for now: a recursive one that is not a generator and is not
-  `<computes>`, or may print or call `Err()`, a generator whose clauses,
+  Refused for now: a recursive one that is not of the generator shape
+  above (return frames included) and is not `<computes>`, keeps local
+  state, or may print or call `Err()`: in particular one with a choice, or
+  another call of its group, after a call of its group (`X := T(N - 1)`,
+  then `X | X + 1`, or then `Y := T(N - 1)`), one whose call comes after
+  an operand that is not a literal or a name of its own, and one that sets
+  a `var` after a call of its group (#283). Also a generator whose clauses,
   conditions or arguments have effects where the first success is taken
   and the clauses after it have a `break`
   that leaves them (which would leave the function they run in), in a constructor, a parameter's
@@ -1916,5 +1949,5 @@ Main()<suspends>:void =
 the class features listed under [Classes](#classes), struct methods (Verse structs have none; classes do),
 `weak_map`, module paths `using{/Verse.org/…}` (accepted and ignored), the
 specific overload/call gaps listed under [Overloading](#overloading), nested
-functions and lambdas (see [release evidence and proposed design](research/closure-design.md)), choice beyond [Choice](#choice) (recursive functions with several values that have effects, other than generators, overloaded methods with several values), concurrency beyond [Concurrency](#concurrency), and the unsupported
+functions and lambdas (see [release evidence and proposed design](research/closure-design.md)), choice beyond [Choice](#choice) (recursive functions with several values that have effects and a choice or another recursive call after a recursive call, overloaded methods with several values), concurrency beyond [Concurrency](#concurrency), and the unsupported
 effect/construction contracts listed under [Effect contracts](#effect-contracts).

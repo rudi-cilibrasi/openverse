@@ -1372,6 +1372,7 @@ partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
       -- (the values at the function's result type, at the type arguments
       -- this call gives, for a generic one)
       let lift := firstLiftOf ctx c2 p g lp b.name b.ty rest fxB (ctx.suspends && Suspend.hasSusp isS inner) lg.vty lg.instances
+        lg.frames lg.kTy
       modify fun st => { st with loopFirst := st.loopFirst ++
         [{ g, pos := p, itemCode := lg.itemCode, argSet := lg.argSet, lift }] }
       let bindX ← coerce p ⟨lg.value, lg.vty⟩ ty
@@ -1617,6 +1618,15 @@ partial def elabLoopGen (ctx : Ctx) (p : Pos) (lp : List SExpr) : EM LoopGen := 
   let mut tls : List Local := pls
   for l in (newOf cc ++ armCode.toList.flatMap fun (ca, _) => newOf ca).reverse do
     if !tls.any (·.slot == l.slot) then tls := tls ++ [l]
+  -- (#283) the return frames of the alternatives that are calls with code
+  -- after them, and the continuation they are pushed on, the last name
+  -- each item keeps
+  let frames := loopFrames armCode.toList
+  let lives := frames.map fun f => f.lives.map (·.ty)
+  let kl? : Option Local ← if frames.isEmpty then pure none else do
+    let kTy := frameContTy lives
+    pure (some { name := "$K", slot := ← fresh kTy, ty := kTy, mutable := false })
+  tls := tls ++ kl?.toList
   let tupTy : Ty := .tup (.int :: tls.map (·.ty))
   let cellTy : Ty := .struct "$lazycell" [tupTy]
   let cfs := ctx.types.fields "$lazycell" [tupTy]
@@ -1643,6 +1653,7 @@ partial def elabLoopGen (ctx : Ctx) (p : Pos) (lp : List SExpr) : EM LoopGen := 
   let mut values : Array (Nat × Expr) := #[]
   let mut itemCode : Expr := .seq rc.e code.itemCode
   let mut argSet : Option Pos := none
+  let mut fi : Nat := 0
   for ((ca, as), start) in armCode.toList.zip starts do
     for (a, j) in as.zipIdx do
       let i := start + j
@@ -1651,6 +1662,13 @@ partial def elabLoopGen (ctx : Ctx) (p : Pos) (lp : List SExpr) : EM LoopGen := 
       let cont : Expr := match next? with
         | some n => push (item (.lit (.int (n : Nat))) cur)
         | none => vd
+      -- (a call with code after it: its return frame, pushed with it, #283)
+      let frameLives : List Local := ((frames[fi]?).map LoopFrame.lives).getD []
+      let (a, kE) : SExpr × Option Expr := match a, kl? with
+        | .app _ (.ident _ "$then") [c, _, _] false, some kl =>
+          (c, some (framePush ctx lives fi (frameLives.map (Expr.local ·.slot)) (.local kl.slot)))
+        | a, _ => (a, none)
+      if kE.isSome then fi := fi + 1
       match a with
       | .app q (.ident _ "$rec") args' false =>
         if argSet.isNone then
@@ -1662,7 +1680,8 @@ partial def elabLoopGen (ctx : Ctx) (p : Pos) (lp : List SExpr) : EM LoopGen := 
         -- (the item that resumes after the call, with the names as its
         -- arguments left them, below the one that starts it; when an
         -- argument fails, only the first)
-        let start := item (.lit (.int (-1))) (ts.map Expr.local ++ cur.drop pls.length)
+        let vals := ts.map Expr.local ++ cur.drop pls.length
+        let start := item (.lit (.int (-1))) (match kE with | some e => vals.dropLast ++ [e] | none => vals)
         alts := alts.push (.ite assigns (.seq cont (push start)) cont)
       | _ =>
         let r ← elabE actx a (some rty)
@@ -1677,6 +1696,9 @@ partial def elabLoopGen (ctx : Ctx) (p : Pos) (lp : List SExpr) : EM LoopGen := 
   -- other names as they are)
   let init : Expr := .seq (.assign w (.lit .none)) (.seq (.assign sp (.lit (.int 0)))
     (push (item (.lit (.int (-1))) (args.map (Expr.local ·.slot) ++ cur.drop pls.length))))
+  let init : Expr := match kl? with
+    | some kl => .seq (.assign kl.slot (.lit .none)) init
+    | none => init
   let step : Expr := Expr.seq (.assign sp (p2 .sub (.local sp) (.lit (.int 1))))
     (.seq (.ite (.assign cell (.prim .query [.local w]))
         (.seq (.assign it (.heap (.get itemF) [.local cell])) (.seq (.assign w (.heap (.get nextF) [.local cell])) vd)) vd)
@@ -1689,8 +1711,13 @@ partial def elabLoopGen (ctx : Ctx) (p : Pos) (lp : List SExpr) : EM LoopGen := 
   -- (the value of the alternative the step came to, which it left in `k`)
   let value : Expr := values.toList.foldr (fun (i, e) acc =>
     .ite (p2 .eq (.local k) (.lit (.int (i : Nat)))) e acc) (.prim .fail [])
+  -- (#283) given to the frames of the item's continuation
+  let value ← match kl? with
+    | some kl => frameApplyWith elabE ctx p frames rty (.local kl.slot) value
+    | none => pure value
   let after : Expr := .ite (p2 .ge (.local nx) (.lit (.int 0))) (push (item (.local nx) cur)) vd
-  return { init, step, sp, has, value, after, vty := rty, itemCode, argSet }
+  return { init, step, sp, has, value, after, vty := rty, itemCode, argSet,
+           frames := frames.map (fun f => (f.hole, f.lives.map (·.name), f.code)), kTy := kl?.map (·.ty) }
 
 /-- Bind a selected spawn's defaults in the caller, then spawn an adapter
     whose result is the static declaration's result (task types are invariant). -/
