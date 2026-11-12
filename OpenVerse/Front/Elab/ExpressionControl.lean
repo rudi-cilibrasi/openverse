@@ -123,13 +123,16 @@ partial def elabExprControlWith
         -- function and in the caller, which keeps its result first: when
         -- it fails, the if fails, as a branch does; only `false`, the rest
         -- having failed, runs `E`)
+        let v := s!"$cv{p.line}_{p.col}"
+        let innerOf (τ : Ty) : SExpr :=
+          let thenV : SExpr := if τ == .void then .block p [thenE, .ident p "true"]
+            else .block p [.decl p v none false thenE, .optionLit p (.ident p v)]
+          Refine.castRest p more thenV (some (.ident p "false"))
+        let rtyOf (τ : Ty) : Ty := if τ == .void then .logic else .opt τ
         let attempt (τ : Ty) : EM (Option R) := do
           let isVoid := τ == .void
-          let v := s!"$cv{p.line}_{p.col}"
-          let thenV : SExpr := if isVoid then .block p [thenE, .ident p "true"]
-            else .block p [.decl p v none false thenE, .optionLit p (.ident p v)]
-          let inner := Refine.castRest p more thenV (some (.ident p "false"))
-          let rty : Ty := if isVoid then .logic else .opt τ
+          let inner := innerOf τ
+          let rty : Ty := rtyOf τ
           match ← elabRefinedIf ctx p dp d T x inner (some (.ident p "false")) (some rty) (made := true) with
           | some r =>
             let t ← fresh rty
@@ -150,7 +153,10 @@ partial def elabExprControlWith
             let st0 ← get
             let re ← elabE ctx ee none
             set st0
-            match ctx.types.castRequests.find? (·.key == Refine.keyOf p d (refineTagOf ctx)) with
+            -- (in a source context, the lift's tag depends on its type)
+            let asked (τ : Ty) := ctx.types.castRequests.find? (·.key ==
+              Refine.keyOf p d (refineTagOf ctx x (innerOf τ) (some (.ident p "false")) (some (rtyOf τ))))
+            match (asked .void).orElse fun _ => asked re.ty with
             | some l => attempt (match l.ret with | .name "logic" => .void | _ => re.ty)
             | none =>
               if re.ty == .void then attempt .void

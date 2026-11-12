@@ -223,14 +223,6 @@ def sourceContextKey (ctx : Ctx) : String :=
   source ++ (if ctx.choiceCoercions.isEmpty then "" else "_conversions:" ++
     reprStr (ctx.choiceCoercions.map fun (dictionary, source, target) => (dictionary.name, source, target)))
 
-/-- Refined helpers keep their source copy tag and context identity separate. -/
-def refineTagOf (ctx : Ctx) : String :=
-  let source := sourceContextKey ctx
-  let inputs := ctx.locals.filterMap fun l =>
-    if (Choice.shownName l.name).startsWith "$" then none else some (l.name, l.ty, l.mutable)
-  let typing := reprStr (ctx.types.tvars, inputs, ctx.retTy, ctx.inlineScopes)
-  ctx.refineScope ++ ctx.liftTag ++ (if source.isEmpty then "" else s!"$source{(source ++ typing).hash}")
-
 def firstReturns (rest : List SExpr) : Bool :=
   (Refine.findPart (fun | .ret .. => true | _ => false) false (.block { line := 0, col := 0 } rest)).isSome
 
@@ -607,6 +599,55 @@ partial def selfQualify (ctx : Ctx) (c : String) (e : SExpr) : SExpr :=
       else some (.app p (.ident q n) (args.map (selfQualify ctx c)) br)
     | .ident p n => if free n && (isField n || isMethod n) then some (.member p (.ident p "Self") n) else none
     | _ => none) e
+
+/-- (#243) The tag of a refining cast's lift, after its place and bound
+    name in its key (`Refine.keyOf`) and in its function's name: of the `if`
+    that casts `x`, with branch `body`, `else` `els` and expected type
+    `exp`. A lift is one function, made from the branch as typed where the
+    cast first asks for it, and each elaboration of the cast with the same
+    key calls it. The tag tells apart the lifts of one place:
+    - `refineScope`: the immediate continuation the cast was moved into
+      (#453), whose own copies of the locals the branch captures have their
+      own storage.
+    - `liftTag`: a class's copy of an interface's default (#53).
+    - In a source context (`sourceContextKey`, #497: a `defer:`, a
+      constructor, a class's `block:`, a default, a concurrent arm, a loop's
+      body, choice conversions), whose code may be elaborated in several
+      typing contexts (a field's default at each construction that omits it,
+      a parameter's at each call): a hash of that context and of what the
+      function depends on in it, and of nothing else in scope, so that
+      evaluations that differ only in what the cast does not use share one
+      lift. That is the locals the `if` uses (and `Self`, for the members it
+      names bare), each with its type, mutability and frame storage; how the
+      type variables their types mention are bound; the types the type names
+      written in it stand for; the type expected of it (a field's declared
+      type at a construction, say), which its function returns; in a
+      `<suspends>` function, all the type variables (its lifts' type
+      parameters, `available` in `elabRefinedIfWith`); the inlined bodies it
+      is in; and the source's return type, when the branch returns.
+    Such a tag may differ between the trial of an enclosing cast's branch
+    (`Ctx.inRefinedTrial`) and the function made from that branch, which has
+    the trial's captured `var`s as values and its result type as the type
+    expected of the branch's value, so the cast asks for its lift from the
+    function only: asked for from both, each level of nesting lifted the
+    casts inside it once more, the earlier copies never called. -/
+def refineTagOf (ctx : Ctx) (x body : SExpr) (els : Option SExpr) (exp : Option Ty) : String :=
+  let source := sourceContextKey ctx
+  if source.isEmpty then ctx.refineScope ++ ctx.liftTag else
+  let ctx := ctx.choiceCoercionScope
+  let cast := SExpr.block x.pos (x :: body :: els.toList)
+  let cast := match ctx.selfClass with
+    | some c => selfQualify ctx c cast
+    | none => cast
+  let inputs := (Choice.namesUsed cast).filterMap fun n => (ctx.lookup n).map fun l =>
+    (n, l.ty, l.mutable, l.storage.map fun s => (s.frame, s.name, s.args))
+  let vars := (Ty.mergeParamBounds (inputs.flatMap (·.2.1.paramsC))).map fun (v, _) =>
+    (v, ctx.types.tvars.lookup v)
+  let written := (Refine.typeNames cast ++ Choice.namesUsed cast).filterMap (ctx.types.tvars.lookup ·)
+  let available := if ctx.suspends then Ty.mergeParamBounds ((ctx.types.tvars.map (·.2)).flatMap Ty.paramsC) else []
+  let uses := reprStr (inputs, vars, written, exp.map (·.subst ctx.types.tvars), available, ctx.inlineScopes) ++
+    firstReturnKey ctx [body]
+  ctx.refineScope ++ ctx.liftTag ++ s!"$source{(source ++ uses).hash}"
 
 /-- A continuation keeps the parameters of its inputs, results and written
     types. A parameter not determined by its inputs takes an explicit witness,
