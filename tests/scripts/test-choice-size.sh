@@ -11,6 +11,9 @@ kinds=(
   methodinstance-family-first
   methodinstance-family-for
   methodinstance-family-waiting
+  methodinstance-packed-first
+  methodinstance-packed-for
+  methodinstance-packed-waiting
   methodinstance-default-first
   methodinstance-default-for
   methodinstance-default-waiting
@@ -599,19 +602,22 @@ if kind.startswith('methodinstance-'):
     waiting = mode == 'waiting'
     effects = '<suspends>' if waiting else ''
     print('Dup(X:t where t:type)<computes>:t=X|X')
-    if shape == 'family':
+    family = shape in ('family', 'packed')
+    if family:
         for name in ['foo', 'bar']:
             print(name+'(t:type):=class<computes>{V:t}')
     for cls, result, default in [('ca','foo',1),('cb','bar',2)]:
-        params = 'X:u where u:type' if shape == 'family' else ('I:u,' if shape == 'partial' else '')+'?X:u='+str(default)+' where u:type'
-        ret = result+'(u)' if shape == 'family' else 'u'
-        value = result+'(u){V:=X}' if shape == 'family' else 'X'
+        params = 'X:u'+(',Y:int' if shape == 'packed' else '')+' where u:type' if family else ('I:u,' if shape == 'partial' else '')+'?X:u='+str(default)+' where u:type'
+        ret = result+'(u)' if family else 'u'
+        value = result+'(u){V:=X}' if family else 'X'
         print(cls+':=class{M('+params+')<computes>'+effects+':'+ret+'=block{'+('Sleep(0.0);' if waiting else '')+value+'}}')
     clauses = ','.join(f'A{i}:=(Dup(ca{{}})|Dup(cb{{}}))' for i in range(count))
-    statements = [f'B{i}:=A{i}.M('+('' if shape == 'default' else '7')+')' for i in range(count)]
-    terms = [f'B{i}'+('.V' if shape == 'family' else '') for i in range(count)]
+    statements = [f'B{i}:=A{i}.M('+('Packed' if shape == 'packed' else '' if shape == 'default' else '7')+')' for i in range(count)]
+    terms = [f'B{i}'+('.V' if family else '') for i in range(count)]
     value = 'block{'+';'.join(statements+['+'.join(terms)])+'}'
     print('Run()'+effects+':int=')
+    if shape == 'packed':
+        print('    Packed:tuple(int,int)=(7,2)')
     if mode == 'first':
         print('    if('+clauses+',V:='+value+',V>0)then V else -1')
     else:
@@ -2179,7 +2185,7 @@ PY
       expected=256
       if [[ $kind == *-first ]]; then
         expected=4
-        [[ $kind == methodinstance-family-* ]] && expected=28
+        [[ $kind == methodinstance-family-* || $kind == methodinstance-packed-* ]] && expected=28
       fi
       printf '%s\n' "$expected" >"$tmp/expected"
       timeout "$limit" "$root/.lake/build/bin/openverse" run "$tmp/p.verse" >"$tmp/lean.out"

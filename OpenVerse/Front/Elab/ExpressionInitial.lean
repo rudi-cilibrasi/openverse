@@ -41,7 +41,8 @@ partial def elabExprInitialWith
         let c := { c with
           callInstanceProbe := some implementation,
           locals := { name, slot, ty := receiver, mutable := false } :: c.locals }
-        let packet ← elabGenericCallWith elabE c p sig (.ident p name :: arguments) (exp.map (·.subst substitution))
+        let (c, arguments) ← choiceInstanceArguments elabE c p sig (.ident p name :: arguments)
+        let packet ← elabGenericCallWith elabE c p sig arguments (exp.map (·.subst substitution))
         if reprStr packet.ty != reprStr (Ty.tup expected) then
           eerr p "operation inference depends on its expected result"
         set saved

@@ -1754,6 +1754,28 @@ def choicePathOperation (ctx : Ctx) (stem : String) (ops0 : ChoiceOperations)
     knownTypes := ops.knownTypes ++ [(call, leafTy)],
     replacements := ops.replacements ++ [(call, invocation)] }
 
+/-- A computed tuple passed to several positional parameters is one source
+    operand. Instance probes need only typed projections of its value; the
+    real dictionary invocation retains that operand and evaluates it once. -/
+def choiceInstanceArguments (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx)
+    (p : Pos) (sig : Sig) (arguments : List SExpr) : EM (Ctx × List SExpr) := do
+  let arguments := packCallArgs p sig arguments
+  let named : SExpr → Bool := fun | .decl _ n .. => n.startsWith "?" | _ => false
+  let positional := arguments.filter (!named ·)
+  let off := if sig.hasReceiver then 1 else 0
+  let count := sig.params.length - sig.named.length - off
+  if count <= 1 || positional.length != off + 1 then return (ctx, arguments)
+  let operand := positional[off]!
+  let value ← elabE ctx operand none
+  let .tup types := value.ty | eerr p "operation arguments are not a tuple"
+  if types.length != count then eerr p "operation argument tuple has the wrong length"
+  let slot ← fresh value.ty
+  let name := "$choiceOperationTuple"
+  let c := { ctx with locals := { name, slot, ty := value.ty, mutable := false } :: ctx.locals }
+  let fields := (List.range count).map fun i =>
+    SExpr.app p (.ident p name) [.int p (Int.ofNat i)] false
+  return (c, positional.take off ++ fields ++ arguments.filter named)
+
 /-- Specialize only an instance established by the ordinary argument/default
     binder. Missing later-generator locals leave the generic fallback intact.
     The emitted marker rechecks result-directed inference at the real call. -/
@@ -1779,8 +1801,9 @@ def choiceFixedOperationCase (elabE : Ctx → SExpr → Option Ty → EM R) (ctx
       c := { c with locals := { name, ty, slot := ← fresh ty, mutable := false } :: c.locals }
     let name := "$choiceOperationReceiver"
     c := { c with locals := { name, ty := row.receiver, slot := ← fresh row.receiver, mutable := false } :: c.locals }
-    let packet ← elabE c (.app p (.ident p "$callArgs")
-      [.ident p implementation, .block p (.ident p name :: arguments.map ops.rewrite)] false) none
+    let (packedContext, arguments) ← choiceInstanceArguments elabE c p sig (.ident p name :: arguments.map ops.rewrite)
+    let packet ← elabE packedContext (.app p (.ident p "$callArgs")
+      [.ident p implementation, .block p arguments] false) none
     let .tup types := packet.ty | pure none
     if types.length != sig.tparams.length then return none
     let inferred := (sig.tparams.map (·.1)).zip types
