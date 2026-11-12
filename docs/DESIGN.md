@@ -1932,6 +1932,30 @@ targets may add (#157) get their superclasses in `supersMap` like every
 class, as `refTags` asks whether each is below a class at every
 conversion of a class type.
 
+Refining lifts also carry `SourceContext`, including default dependency
+stacks and the source's cleanup, constructor, class-block and concurrent-arm
+flags. Discovery and generated function checking restore the same scope.
+Their request identity includes that scope and its type environment, while
+the source class-copy tag stays separate. Different closed evaluations of
+one default therefore cannot reuse a helper with the wrong type witnesses.
+Waiting consumers can stage parameter defaults through the same protocol.
+Both ordinary composed suffixes and refining branches preserve the active
+default stack and source restrictions in their prefix and resume functions.
+Their body runs after its filter commits, including through generic method
+and interface dispatch; cancellation unwinds active body cleanup before
+source cleanup, with background starts still owned by the caller.
+Compiler-owned inferred functions can consume a registered continuation's
+heap effects while their signatures reach a fixed point; final source
+checking still enforces the caller's declared effects.
+
+`sourceSuspends` records the source operation's suspension capability
+separately from actual waiting and generated frame requirements. Discovery
+carries this evidence through provisional refining and staged helpers, so
+`sync` can count an arm before the helper has executable code. Cancellation
+counts even if it completes immediately. Background `spawn` and `branch`
+bodies keep their evidence within the child; starting them does not make
+the parent arm suspend. The unselected `else` is checked separately too.
+
 In a suspending source function, mutable captures keep their storage in
 their defining frame (#419, `SourceFrames`, `FrameRefs`). Discovery records
 the defining function, declaration position and type arguments, resolving
@@ -1987,24 +2011,24 @@ roots alive. A separate `stopTasks` function stops them without re-running
 the helper's lexical defers, including after its frame is marked done.
 Ordinary function calls own their tasks as before.
 
-Each call into a sharing lift adds a cleanup action through its saved
-child frame. It receives a start number on arrival, after the frame is
-stored and before its first resumption; seeking a pending call does not
-renumber it. The source's cleanup selects this action among its own
-branches and rush arms, after the source's defers. `Kill` records an
-action and an order slot; the common cleanup loop clears each order once
-stopped and preserves `killOwner`'s nested task hierarchy. Generic and
-opened frames are stopped through receiver-first `isTag` dispatches to
-`stopTasksOwn`, which reads the helper's parameters from its frame.
+Tasks started by a sharing lift may interleave with sibling concurrent
+arms. When a program has such borrowed task roots, all starts use one
+compiler-generated scheduler clock. A saved child frame exposes its
+latest live root's number and a stop action for that root's entire owned
+subtree. The source's cleanup repeatedly selects the latest root among
+its direct starts and borrowed frames, after running the source's defers.
+After stopping one borrowed root it queries that frame again, so roots
+started A, C, B stop B, C, A even when A and B belong to the same helper.
+`killOwner` keeps nested task subtrees atomic within that selection.
+Generic and opened frames use receiver-first `isTag` dispatches to the
+query and `stopTasksOwn` wrappers, which recover parameters from the
+retained frame. Programs without borrowed roots retain local numbering.
 
-A source function cannot start another flat task while awaiting a lifted
-call, so each helper's flat starts form a contiguous group in the source
-order. Refining casts in concurrent arms remain refused, and the source's
-`inRepeat` flag is carried by the lift so starts in loops/for bodies stay
-refused too; a live helper frame cannot then be overwritten at its call
-site. A `$branchMark` forces a physical suspending lift even when its arm
-finishes without waiting; pending discovery propagates that requirement
-through nested lifts.
+Refining casts in concurrent arms preserve this ownership. Their source
+`inRepeat` flag still refuses starts in loops/for bodies, so a live helper
+frame cannot be overwritten at its call site. A `$branchMark` forces a
+physical suspending lift even when its arm finishes without waiting;
+pending discovery propagates that requirement through nested lifts.
 
 A cast that opens type arguments (#250, `pairE[E]` for `E:expr(t)`)
 gives the target's type parameters past the object's arguments fresh

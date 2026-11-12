@@ -49,6 +49,28 @@ kinds=(
   context-param-default-exclusive
   context-param-default-first
   context-param-default-lazy-first
+  context-refining-block-first
+  context-refining-block-for
+  context-refining-branch-first
+  context-refining-branch-for
+  context-refining-branch-waiting
+  context-refining-constructor-first
+  context-refining-constructor-for
+  context-refining-defer-first
+  context-refining-defer-for
+  context-refining-field-first
+  context-refining-field-for
+  context-refining-parameter-first
+  context-refining-parameter-for
+  context-refining-race-first
+  context-refining-race-for
+  context-refining-race-waiting
+  context-refining-rush-first
+  context-refining-rush-for
+  context-refining-rush-waiting
+  context-refining-sync-first
+  context-refining-sync-for
+  context-refining-sync-waiting
   covariant-failure
   covariant-first
   covariant-for
@@ -147,6 +169,12 @@ kinds=(
   typed-exclusive
   typed-first
   typed-for
+  waiting-default-method-composed
+  waiting-default-method-lazy
+  waiting-default-method-refined
+  waiting-default-parameter-composed
+  waiting-default-parameter-lazy
+  waiting-default-parameter-refined
   waiting-composed
   waiting-composed-lazy
   waiting-exclusive
@@ -211,6 +239,56 @@ if kind.startswith(('context-block-', 'context-constructor-', 'context-defer-', 
         print(f'box(t:type):=class:\n    Data:t\n    var N:int=0\n    block:set N={expr}\nRun(X:t where t:type):int=box(t){{Data:=X}}.N\nMain():void=Print("{{Run(7)}}")')
     else:
         print(f'Run(X:t where t:type):void=\n    defer:Print("{{{expr}}}")\n    Print("start")\nMain():void=Run(7)')
+    sys.exit(0)
+if kind.startswith('context-refining-'):
+    context, mode = kind.removeprefix('context-refining-').rsplit('-', 1)
+    print('pair(a:type,b:type):=class{}\ndup(t:type):=class(pair(t,t)){C:int=4}')
+    print('cell:=class{var N:int=0}')
+    types = ','.join(f'a{i}:type,b{i}:type' for i in range(count))
+    targs = ','.join(f'a{i},b{i}' for i in range(count))
+    params = ','.join(f'P{i}:pair(a{i},b{i})' for i in range(count))
+    names = ','.join(f'P{i}' for i in range(count))
+    fields = ';'.join(f'P{i}:pair(a{i},b{i})' for i in range(count))
+    assignments = ','.join(f'P{i}:=P{i}' for i in range(count))
+    clauses = ','.join(f'A{i}:=if(D{i}:=dup[P{i}])then(D{i}.C|D{i}.C+1)else 0,A{i}=4' for i in range(count))
+    if mode == 'first':
+        tail = f'if({clauses},set H.N+=1)then H.N else -1'
+    else:
+        wait = 'Sleep(0.0);' if mode == 'waiting' else ''
+        tail = f'R:=for({clauses}):block{{{wait}E:[]a0=Concatenate();set H.N+=1;E.Length}};R.Length+H.N'
+    expr = f'block{{H:=cell{{}};{tail}}}'
+    actuals = ','.join('dup(int){}' if i%2==0 else 'dup(string){}' for i in range(count))
+    if context == 'parameter':
+        print(f'Run({params},?N:int={expr} where {types}):int=N')
+        print(f'Use({params} where {types}):int=Run({names})')
+    elif context == 'field':
+        print('Pair(N:int where a:type,b:type):pair(a,b)=pair(a,b){}')
+        fields = ';'.join(f'Data{i}:pair(a{i},b{i})' for i in range(count))
+        assignments = ','.join(f'Data{i}:=P{i}' for i in range(count))
+        locals = ';'.join(f'P{i}:pair(a{i},b{i})=Pair(0)' for i in range(count))
+        expr = f'block{{{locals};{expr}}}'
+        print(f'box({types}):=class{{{fields};N:int={expr}}}')
+        print(f'Use({params} where {types}):int=box({targs}){{{assignments}}}.N')
+    elif context == 'constructor':
+        print(f'box({types}):=class{{{fields};N:int=0}}')
+        items = '\n'.join(f'    P{i}:=P{i}' for i in range(count))
+        print(f'Make<constructor>({params} where {types}):=box({targs}):\n{items}\n    N:={expr}')
+        print(f'Use({params} where {types}):int=Make({names}).N')
+    elif context == 'block':
+        items = '\n'.join(f'    P{i}:pair(a{i},b{i})' for i in range(count))
+        print(f'box({types}):=class:\n{items}\n    var N:int=0\n    block:set N={expr}')
+        print(f'Use({params} where {types}):int=box({targs}){{{assignments}}}.N')
+    elif context == 'defer':
+        print(f'Use({params} where {types}):void=\n    defer:Print("{{{expr}}}")\n    Print("start")')
+    elif context == 'branch':
+        print(f'Use({params} where {types})<suspends>:void=\n    branch:\n        Print("{{{expr}}}")\n        Sleep(0.1)\n    Sleep(0.2)')
+    else:
+        result = 'R(0)' if context == 'sync' else 'R'
+        print(f'Use({params} where {types})<suspends>:int=\n    R:={context}:\n        block:\n            N:={expr}\n            Sleep(0.1)\n            N\n        block:\n            Sleep(0.2)\n            -1\n    {result}')
+    call = f'Use({actuals})'
+    body = call if context in ['defer','branch'] else f'Print("{{{call}}}")'
+    suspends = '<suspends>' if context in ['sync','race','rush','branch'] else ''
+    print(f'Main(){suspends}:void={body}')
     sys.exit(0)
 if kind.startswith('first-return-'):
     print('pair(a:type,b:type):=class{A:a;B:b}\ndup(t:type):=class(pair(t,t)){C:int=4}')
@@ -362,6 +440,27 @@ if kind.startswith('open-function-'):
     print(f'Run({params} where {tparams})<computes>:int=\n{binds}\n{body}')
     args = ','.join('7' if i%2==0 else '"s"' for i in range(count))
     print(f'Main():void=Print("{{Run({args})}}")')
+    sys.exit(0)
+if kind.startswith('waiting-default-'):
+    shape, mode = kind.removeprefix('waiting-default-').rsplit('-', 1)
+    print('pair(a:type,b:type):=class{}\ndup(t:type):=class(pair(t,t)){C:int=4}\ncell:=class{var N:int=0}')
+    print('Lazy(N:int)<computes><decides>:int=block{N>=0;N|Lazy[N-1]}')
+    params = ','.join(f'P{i}:pair(a{i},b{i})' for i in range(count))
+    types = ','.join(f'a{i}:type,b{i}:type' for i in range(count))
+    names = ','.join(f'P{i}' for i in range(count))
+    values = [f'if(D{i}:=dup[P{i}])then ' + (f'Lazy[D{i}.C]' if mode == 'lazy' else f'(D{i}.C|D{i}.C+1)') + ' else 0' for i in range(count)]
+    if mode == 'composed': values = ['(Two(0)|Two(2))']*count
+    clauses = ','.join(f'A{i}:={v},A{i}=0' if mode == 'composed' else f'A{i}:={v},A{i}=4' for i,v in enumerate(values))
+    expr = f'block{{H:=cell{{}};R:=for({clauses}):block{{Sleep(0.0);E:[]a0=Concatenate();set H.N+=1;E.Length}};R.Length+H.N}}'
+    header = f'Run({params},?N:int={expr} where {types})<suspends>:int=N'
+    if shape == 'method':
+        print('box(t:type):=class:\n    X:t\n    ' + header)
+        print('B:=box(string){X:="tag"}')
+    else: print(header)
+    call = ('B.' if shape == 'method' else '') + f'Run({names})'
+    print(f'Use({params} where {types})<suspends>:int={call}')
+    actual = ','.join('dup(int){}' if i%2==0 else 'dup(string){}' for i in range(count))
+    print(f'Main()<suspends>:void=Print("{{Use({actual})}}")')
     sys.exit(0)
 if kind.startswith('waiting-') and not kind.startswith('waiting-refined'):
     print('''Early(N:int)<computes>:int =

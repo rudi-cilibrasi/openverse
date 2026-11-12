@@ -1,0 +1,6 @@
+body 10
+after 10
+source 10
+background 10
+result 1 state 10
+exit=0

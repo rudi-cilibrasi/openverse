@@ -75,9 +75,15 @@ structure Lift where
   /-- Whether executing the lifted then-block can wait. The generated
       function may need `<suspends>` for the dispatch even when it never waits. -/
   waits : Bool := false
+  /-- Source suspension capability, distinct from frame-only lowering. -/
+  sourceSuspends : Bool := false
   storage : List (String × Storage) := []
   /-- Source repetition context, preserved when the lift becomes a function. -/
   inRepeat : Bool := false
+  /-- Lexical restrictions and active default dependencies of the source. -/
+  sourceContext : Choice.SourceContext := {}
+  /-- The original copy tag, separate from context-sensitive request identity. -/
+  liftTag : Option String := none
   inlineScopes : List String := []
   deriving Inhabited
 

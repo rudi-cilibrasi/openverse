@@ -1957,6 +1957,8 @@ structure ForStagePlan where
   borrowed : List String
   specs : List String
   outcome : Bool := false
+  /-- Source operations requiring a suspending context, excluding task starts. -/
+  sourceSuspends : Bool := false
   deriving Inhabited
 
 /-- A source return's saved operand and exit packet for a first-success helper. -/

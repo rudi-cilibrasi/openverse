@@ -1,4 +1,3 @@
-# expect: or an arm of sync, race, rush or branch
 pair(a:type, b:type) := class {}
 dup(t:type) := class(pair(t, t)) {}
 Run(P:pair(a, b) where a:type, b:type)<suspends>:void =
