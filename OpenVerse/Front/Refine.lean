@@ -134,6 +134,15 @@ def isBreak : SExpr → Bool
   | .brk _ | .app _ (.ident _ "$refineBreak") [] false => true
   | _ => false
 
+/-- `e`, compiled as a function of its own, with its breaks that leave it
+    marked: each returns its function's break packet (`Exits.brk`), and the
+    caller breaks again. A loop inside it keeps its own. -/
+def liftBreaks (e : SExpr) : SExpr :=
+  Choice.mapE (fun
+    | .brk q => some (liftedBreak q)
+    | l@(.loop ..) => some l
+    | _ => none) e
+
 /-- The branch of a refining cast that is the first clause of an `if`'s
     condition, `if (D := T[X], rest) then B else E`: the `if` of the rest,
     `if (rest, true?) then B else E` (the cast has no effects to undo when

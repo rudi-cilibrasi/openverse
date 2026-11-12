@@ -313,7 +313,7 @@ partial def elabExprControlWith
     return ⟨.loop r.e, .void⟩
   | .brk p =>
     if ctx.inChoice then
-      eerr p "break cannot leave the clauses of a failure context that has a choice (an if condition, first{…}, option{…}, …) (#208)"
+      eerr p "internal: a break in first-success clauses that do not forward one (#283)"
     if !ctx.inLoop then
       eerr p (if ctx.inDefer then "break is only allowed inside loop (not for), and cannot leave a defer: block"
               else "break is only allowed inside loop (not for)")

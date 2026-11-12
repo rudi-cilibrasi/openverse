@@ -1,4 +1,3 @@
-# expect: first clause of an if's condition
 pair(a:type,b:type) := class { A:a;B:b }
 dup(t:type) := class(pair(t,t)) { C:int=4 }
 Use(P:pair(a,b),Q:pair(c,d) where a:type,b:type,c:type,d:type)<suspends>:int =

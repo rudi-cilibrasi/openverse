@@ -33,7 +33,7 @@ partial def elabExprMarkersWith
     (elabApp : Ctx → Pos → SExpr → List SExpr → Bool → Option Ty → EM R)
     (elabFor : Ctx → Pos → List SExpr → SExpr → (prepared : optParam Bool false) → (firstDecides : optParam Bool false) → (failure : optParam (Option SExpr) none) → EM R)
     (elabOneClauses : Ctx → List SExpr → EM (R × Ctx))
-    (elabOneGo : Ctx → List SExpr → EM (Expr × Ctx))
+    (elabFirstGo : Ctx → List SExpr → EM (Expr × Ctx))
     (next : Ctx → SExpr → Option Ty → EM R)
     (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
   match se with
@@ -45,8 +45,6 @@ partial def elabExprMarkersWith
   | .app p (.ident _ "$spawn") [body] false => elabSpawn ctx p body
   | .app p (.ident _ "$branch") [body] false => elabBranch ctx p body
   | .app p (.ident _ "$refineBreak") [] false =>
-    if ctx.inChoice then
-      eerr p "break cannot leave the clauses of a failure context that has a choice (an if condition, first{…}, option{…}, …) (#208)"
     match ctx.refineExits.brk with
     | some pack =>
       if ctx.inDefer then eerr p "break cannot leave a defer: block"
@@ -327,11 +325,9 @@ partial def elabExprMarkersWith
     -- (#246) `first{…}` of clauses that are lifted already (a consumer's,
     -- taken into a lazily taken call's function of its own): not again,
     -- which would bind their lifted names a second time
-    let (code, c1) ← elabOneGo { ctx with inLoop := false, inChoice := ctx.inLoop, inTaking := true, canFail := true }
-      items.dropLast
-    let c1 := { c1 with inLoop := ctx.inLoop, inChoice := ctx.inChoice, inTaking := ctx.inTaking, canFail := ctx.canFail }
-    let rv ← elabE c1 (items.getLastD (.tuple p [])) exp
-    return ⟨.seq (Expr.firstE code) rv.e, rv.ty⟩
+    let (code, c1) ← elabFirstGo { ctx with canFail := true } items.dropLast
+    let rv ← elabE { c1 with canFail := ctx.canFail } (items.getLastD (.tuple p [])) exp
+    return ⟨.seq code rv.e, rv.ty⟩
   | .app p (.ident _ "$first") [.block bp items] false =>
     -- `first{…}` and `first(…){…}`: without a choice, a block
     if !Choice.hasChoice items.dropLast (choiceOrder ctx) then return ← elabE ctx (.block bp items) exp
