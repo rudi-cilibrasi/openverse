@@ -137,6 +137,8 @@ check "choice operation dictionary model fuzzing (${FUZZ_MODEL_DICTIONARY:-120} 
   scripts/fuzz-model-heterogeneous.sh "${FUZZ_MODEL_DICTIONARY:-120}" "$seed" --methods
 check "polymorphic choice dictionary model fuzzing (${FUZZ_MODEL_POLYMORPHIC_DICTIONARY:-120} programs)" \
   scripts/fuzz-model-heterogeneous.sh "${FUZZ_MODEL_POLYMORPHIC_DICTIONARY:-120}" "$seed" --generic-methods
+check "field and method choice dictionary model fuzzing (${FUZZ_MODEL_MEMBER_DICTIONARY:-120} programs)" \
+  scripts/fuzz-model-heterogeneous.sh "${FUZZ_MODEL_MEMBER_DICTIONARY:-120}" "$seed" --members
 check "source break model fuzzing (${FUZZ_MODEL_BREAKS:-60} programs)" \
   scripts/fuzz-model-breaks.sh "${FUZZ_MODEL_BREAKS:-60}" "$seed"
 check "choice model fuzzing (${FUZZ_MODEL_MV:-140} programs, functions with several values too)" \

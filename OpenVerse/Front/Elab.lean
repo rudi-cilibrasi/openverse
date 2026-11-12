@@ -2694,13 +2694,14 @@ structure ChoiceOperations where
   casePrelude : List (List SExpr) := []
   extraFns : List STop := []
 
-def ChoiceOperations.rewrite (ops : ChoiceOperations) (body : SExpr) : SExpr :=
+partial def ChoiceOperations.rewrite (ops : ChoiceOperations) (body : SExpr) : SExpr :=
   if ops.replacements.isEmpty then body else
   Choice.mapE (fun
-    -- Compare source calls structurally. Rendering generated metadata
-    -- for every lookup can dominate waiting-suffix discovery.
-    | call@(.app _ (.member _ (.ident _ name) _) _ _) =>
-      if name == ops.bindingName then (ops.replacements.find? (·.1 == call)).map (·.2) else none
+    -- Getters are values, not assignment targets. Retain the source path
+    -- for the complete lvalue; discovery falls back if it needs its layout.
+    | .set p target op value => some (.set p target op (ops.rewrite value))
+    | call@(.app _ (.member ..) _ _) | call@(.member ..) =>
+      (ops.replacements.find? (·.1 == call)).map (·.2)
     | _ => none) body
 
 def ChoiceOperations.context (ops : ChoiceOperations) (ctx : Ctx) : EM Ctx := do
@@ -2713,13 +2714,18 @@ def ChoiceOperations.context (ops : ChoiceOperations) (ctx : Ctx) : EM Ctx := do
 def ChoiceOperations.lift (ops : ChoiceOperations) (key : String) (lift : Choice.FirstLift) : Choice.FirstLift :=
   { lift with key, casePrelude := ops.casePrelude, extraFns := lift.extraFns ++ ops.extraFns }
 
-partial def choiceMethodCalls (binding : String) (body : SExpr) : List SExpr :=
+partial def choiceMemberOperations (binding : String) (body : SExpr) : List SExpr :=
+  let depends (receiver : SExpr) := (Choice.namesUsed receiver).contains binding
   match body with
-  | e@(.app _ (.member _ (.ident _ name) _) arguments _) =>
-    arguments.flatMap (choiceMethodCalls binding) ++ (if name == binding then [e] else [])
+  | e@(.app _ (.member _ receiver _) arguments _) =>
+    choiceMemberOperations binding receiver ++ arguments.flatMap (choiceMemberOperations binding) ++
+      (if depends receiver then [e] else [])
+  | e@(.member _ receiver _) =>
+    choiceMemberOperations binding receiver ++ (if depends receiver then [e] else [])
+  | .set _ _ _ value => choiceMemberOperations binding value
   | .structDef .. | .enumDef .. | .refineDef .. => []
   | .app _ (.ident _ "$constructHints") _ _ => []
-  | e => e.children.flatMap (choiceMethodCalls binding)
+  | e => e.children.flatMap (choiceMemberOperations binding)
 
 /-- A concrete operation contract before abstracting its type columns. -/
 structure ChoiceOperationCase where
@@ -2732,7 +2738,7 @@ structure ChoiceOperationCase where
 /-- A generic dictionary quantifies method parameters at the call, after
     later generators have supplied their values. Only receiver-dependent
     columns independent of those method parameters belong to its object. -/
-def choiceGenericOperation (ctx : Ctx) (stem binding : String) (ops : ChoiceOperations)
+def choiceGenericOperation (ctx : Ctx) (stem : String) (receiver : SExpr) (receiverTy : Ty) (ops : ChoiceOperations)
     (call : SExpr) (cases : List ChoiceOperationCase) : Option ChoiceOperations := do
   let .app p (.member _ _ method) arguments bracket := call | none
   let count := (cases.head?.map (·.methodVars.length)).getD 0
@@ -2753,7 +2759,7 @@ def choiceGenericOperation (ctx : Ctx) (stem binding : String) (ops : ChoiceOper
   -- An associated type containing a method parameter cannot be fixed
   -- before that method is invoked. Such a type needs a richer schema.
   if extendedPlan.instances.any (fun row => row.any fun (_, ty) => ty.params.any methodNames.contains) then none else do
-  let signature := ops.plan.binding :: inputs ++ [result]
+  let signature := receiverTy :: inputs ++ [result]
   let classVars := Ty.mergeParamBounds (signature.flatMap Ty.paramsC) |>.filter (!methodNames.contains ·.1)
   let p0 : Pos := { line := 0, col := 0 }
   let specs := (if cases.any (·.specs.contains "suspends") then ["suspends"] else []) ++
@@ -2804,7 +2810,7 @@ def choiceGenericOperation (ctx : Ctx) (stem binding : String) (ops : ChoiceOper
   let invocation := SExpr.app p (.ident p "$choiceGenericOperation")
     (.str p [.text (FnValues.shapeOf (arguments.length + 1) specs).name] :: .ident p name ::
       .block p methodMetadata :: .construct p "$choiceSignature" (signature.map Ty.toSTy) [] ::
-      .block p instances :: .ident p binding :: arguments.map ops.rewrite) bracket
+      .block p instances :: ops.rewrite receiver :: arguments.map ops.rewrite) bracket
   some { ops with
     plan := extendedPlan,
     params := ops.params ++ [(name, .struct family (classVars.map fun (n, b) => .param n b))],
@@ -2815,37 +2821,66 @@ def choiceGenericOperation (ctx : Ctx) (stem binding : String) (ops : ChoiceOper
 /-- Each dictionary implements the method at its original receiver and
     argument types. Named defaults retain their source path until their
     caller scope can be represented here. -/
-def choiceOperations (_elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx)
+def choiceOperations (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx)
     (stem binding : String) (plan : ChoiceTypes.Plan) (suffix : List SExpr) : EM ChoiceOperations := do
   let mut ops : ChoiceOperations := { plan, bindingName := binding, casePrelude := plan.instances.map fun _ => [] }
   if !(match plan.binding with | .param .. => true | _ => false) then return ops
   let mut seen : List SExpr := []
-  for call in suffix.flatMap (choiceMethodCalls binding) do
+  for call in suffix.flatMap (choiceMemberOperations binding) do
     let key := call
     if seen.contains key then continue
     seen := key :: seen
-    let .app p (.member _ _ method) arguments bracket := call | continue
+    let details : Option (Pos × SExpr × String × List SExpr × Bool × Bool) := match call with
+      | .app p (.member _ receiver method) arguments bracket => some (p, receiver, method, arguments, bracket, false)
+      | .member p receiver field => some (p, receiver, field, [], false, true)
+      | _ => none
+    let some (p, receiver, method, arguments, bracket, isField) := details | continue
+    let direct := match receiver with | .ident _ n => n == binding | _ => false
+    let receiverTy ← if direct then pure (some ops.plan.binding) else do
+      let saved ← get
+      let result ← tryCatch (do
+        let probeCtx ← ops.context (← choiceTypeContext ctx ops.plan)
+        let slot ← fresh ops.plan.binding
+        let probeCtx := { probeCtx with
+          typeOnly := true,
+          locals := { name := binding, ty := ops.plan.binding, slot, mutable := false } :: probeCtx.locals }
+        return some (← elabE probeCtx (ops.rewrite receiver) none).ty) (fun _ => pure none)
+      set saved
+      pure result
+    let some receiverTy := receiverTy | continue
+    if !(match receiverTy with | .param .. => true | _ => false) then continue
     let mut cases : List ChoiceOperationCase := []
-    for instanceTypes in plan.instances do
-      let actual := (plan.binding.subst instanceTypes).subst ctx.types.tvars
-      let .struct cls classArgs := actual | break
-      let some owner := ctx.methodDecl? cls method | break
-      let some signature := ctx.sig? s!"{owner}.{method}" | break
-      let classVars := (ctx.types.sparams.lookup owner).getD []
-      let own := signature.tparams.filter fun (n, _) => !classVars.any (·.1 == n)
-      let methodVars := own.zipIdx.map fun ((_, b), i) => (s!"$operationMethod{i}", b)
-      let methodRename := own.zip methodVars |>.map fun ((old, _), (name, bound)) => (old, Ty.param name bound)
-      if !signature.named.isEmpty || signature.params.length != arguments.length + 1 || signature.decides != bracket then break
-      let substitution := (classVars.map (·.1)).zip (ctx.types.upArgs cls classArgs owner)
-      let inputs := (signature.params.drop 1).map fun ty => ((ty.subst methodRename).subst substitution).subst ctx.types.tvars
-      let result := ((signature.ret.subst methodRename).subst substitution).subst ctx.types.tvars
-      let specs := (if signature.fx.isEmpty then ["computes"] else signature.fx) ++
-        (if signature.decides then ["decides"] else []) ++
-        (if signature.suspends then ["suspends"] else [])
-      cases := cases ++ [{ receiver := actual, inputs, result, specs, methodVars }]
+    for instanceTypes in ops.plan.instances do
+      let actual := (receiverTy.subst instanceTypes).subst ctx.types.tvars
+      if isField then
+        match actual with
+        | .arr _ | .map .. =>
+          if method != "Length" then break
+          cases := cases ++ [{ receiver := actual, inputs := [], result := .int, specs := ["computes"] }]
+        | .struct cls classArgs =>
+          let some (_, result, _) := (ctx.types.fields cls classArgs).find? (·.1 == method) | break
+          let specs := if ctx.types.isVarField cls method then ["reads"] else ["computes"]
+          cases := cases ++ [{ receiver := actual, inputs := [], result, specs }]
+        | _ => break
+      else
+        let .struct cls classArgs := actual | break
+        let some owner := ctx.methodDecl? cls method | break
+        let some signature := ctx.sig? s!"{owner}.{method}" | break
+        let classVars := (ctx.types.sparams.lookup owner).getD []
+        let own := signature.tparams.filter fun (n, _) => !classVars.any (·.1 == n)
+        let methodVars := own.zipIdx.map fun ((_, b), i) => (s!"$operationMethod{i}", b)
+        let methodRename := own.zip methodVars |>.map fun ((old, _), (name, bound)) => (old, Ty.param name bound)
+        if !signature.named.isEmpty || signature.params.length != arguments.length + 1 || signature.decides != bracket then break
+        let substitution := (classVars.map (·.1)).zip (ctx.types.upArgs cls classArgs owner)
+        let inputs := (signature.params.drop 1).map fun ty => ((ty.subst methodRename).subst substitution).subst ctx.types.tvars
+        let result := ((signature.ret.subst methodRename).subst substitution).subst ctx.types.tvars
+        let specs := (if signature.fx.isEmpty then ["computes"] else signature.fx) ++
+          (if signature.decides then ["decides"] else []) ++
+          (if signature.suspends then ["suspends"] else [])
+        cases := cases ++ [{ receiver := actual, inputs, result, specs, methodVars }]
     if cases.length != plan.instances.length then continue
     if cases.any (!·.methodVars.isEmpty) then
-      if let some generic := choiceGenericOperation ctx stem binding ops call cases then ops := generic
+      if let some generic := choiceGenericOperation ctx stem receiver receiverTy ops call cases then ops := generic
       continue
     let mut extended := ops.plan
     let mut inputs : List Ty := []
@@ -2864,7 +2899,7 @@ def choiceOperations (_elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx)
       let vars := Ty.mergeParamBounds ((types ++ [row.result]).flatMap Ty.paramsC)
       let rename := vars.zipIdx.map fun ((name, bound), i) => (name, Ty.param s!"$operationT{i}" bound)
       (types.map (·.subst rename), row.result.subst rename)
-    let family := s!"$choiceOperationDictionary{(reprStr (method, specs, canonical)).hash}"
+    let family := s!"$choiceOperationDictionary{(reprStr ((if isField then "$field:" ++ method else method), specs, canonical)).hash}"
     let names := "$operationReceiver" :: ((List.range arguments.length).map fun i => s!"$operationArgument{i}") ++ ["$operationResult"]
     let variables := names.map STy.name
     let tps := names.map fun n => ({ pos := p0, name := n, constraint := "type" } : TParam)
@@ -2879,7 +2914,9 @@ def choiceOperations (_elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx)
       ({ name := "$Self", ty := familyTy } :: params variables.dropLast) tps specs variables.getLast!
       (.app p0 (.member p0 (.ident p0 "$Self") "$apply") values bracket)
     let name := s!"{stem}$op{ops.params.length}"
-    let ty := Ty.struct family (plan.binding :: inputs ++ [result])
+    let ty := Ty.struct family (receiverTy :: inputs ++ [result])
+    let operation := if isField then SExpr.member p0 values.head! method else
+      .app p0 (.member p0 values.head! method) values.tail bracket
     let mut definitions : List STop := [iface, applyFn]
     let mut bindings : List (List SExpr) := []
     for ((row, (canonicalInputs, canonicalRet)), i) in (cases.zip canonical).zipIdx do
@@ -2891,12 +2928,12 @@ def choiceOperations (_elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx)
       let parentTy := STy.app family ((canonicalInputs ++ [canonicalRet]).map Ty.toSTy)
       definitions := definitions ++ [.classDef p0 impl implTps [] [parentTy] false [] []
         [.fn p0 "$apply" (params (canonicalInputs.map Ty.toSTy)) [] ("override" :: specs) canonicalRet.toSTy
-          (.app p0 (.member p0 values.head! method) values.tail bracket)]]
+          operation]]
       let valueTy := STy.app family ((row.receiver :: row.inputs ++ [row.result]).map Ty.toSTy)
       let value := SExpr.construct p impl (vars.map fun (n, _) => .name n) []
       bindings := bindings ++ [[.decl p name (some valueTy) false
         (.app p (.ident p "$choiceDictionary") [value] false)]]
-    let sourceValues := .ident p binding :: arguments.map ops.rewrite
+    let sourceValues := ops.rewrite receiver :: arguments.map ops.rewrite
     ops := { ops with
       plan := finalPlan, params := ops.params ++ [(name, ty)],
       replacements := ops.replacements ++ [(key, .app p (.ident p "$choiceOperation")
