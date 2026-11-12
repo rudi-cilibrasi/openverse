@@ -60,10 +60,10 @@ structure Lift where
   /-- The refinement, on the enclosing function's type parameters, for the
       types written in the branch. -/
   subst : List (String × STy)
-  /-- Whether `ret` is the branch's own type: its `else` gives no value and
-      nothing around it gave one (a cast with the rest of a failure context
-      as its branch), so the dispatch takes it too. -/
-  retOfBranch : Bool := false
+  /-- The branch's own type, which `ret` is under the refinement, when the
+      dispatch takes it: its `else` gives no value and nothing around it gave
+      one (a cast with the rest of a failure context as its branch). -/
+  branchTy : Option STy := none
   /-- The type arguments the cast opens (#250), which `target` has and the
       object's type does not name: each type parameter of the function made
       for them, with the name of `target`'s type parameter it stands for,
@@ -171,24 +171,31 @@ def castRefusalNote : String :=
 /-- What sets off the place a cast refusal carries: no message has it. -/
 def refusalMark : String := "\x01"
 
-/-- The refusal, at `p`, of a cast that only a failure context's clause may
-    be (#243, #250, #351), which an `if`, a `for` or `first{…}` whose clause
-    it is takes back (`withCastClauses`). The elaborator's errors are
-    strings, as `eerr` makes them: this one is its message, then the cast's
-    place between marks, which `castRefusalAt?` reads, so that what takes it
-    back depends on no message's words. `elabProgram` takes the place off
-    (`unmarked`): a user reads the message only. -/
-def castRefusal (p : Pos) (msg : String) : String :=
-  s!"{p.show}: {msg}{refusalMark}{p.line}:{p.col}:{p.file}{refusalMark}"
+/-- A cast refused where it is, which only a failure context's clause may be
+    (#243, #250, #351): its place, and whether it opens type arguments,
+    which name nothing outside what follows it. -/
+structure CastRefusal where
+  pos : Pos
+  opens : Bool
+  deriving Inhabited
 
-/-- The place of the cast an error refuses (`castRefusal`), if it is one
-    (not one whose message another quotes). -/
-def castRefusalAt? (err : String) : Option Pos :=
+/-- The refusal `r`, which an `if`, a `for` or `first{…}` whose clause the
+    cast is takes back (`withCastClauses`). The elaborator's errors are
+    strings, as `eerr` makes them: this one is its message, then `r` between
+    marks, which `castRefusal?` reads, so that what takes it back depends on
+    no message's words. `elabProgram` takes `r` off (`unmarked`): a user
+    reads the message only. -/
+def castRefusal (r : CastRefusal) (msg : String) : String :=
+  s!"{r.pos.show}: {msg}{refusalMark}{r.pos.line}:{r.pos.col}:{if r.opens then 1 else 0}:{r.pos.file}{refusalMark}"
+
+/-- The cast refusal an error is (`castRefusal`), if it is one (not one
+    whose message another quotes). -/
+def castRefusal? (err : String) : Option CastRefusal :=
   match err.splitOn refusalMark with
-  | [_, place, ""] => match place.splitOn ":" with
-    | line :: col :: file =>
+  | [_, r, ""] => match r.splitOn ":" with
+    | line :: col :: opens :: file =>
       match line.toNat?, col.toNat? with
-      | some line, some col => some { line, col, file := ":".intercalate file }
+      | some line, some col => some { pos := { line, col, file := ":".intercalate file }, opens := opens == "1" }
       | _, _ => none
     | _ => none
   | _ => none
@@ -196,6 +203,13 @@ def castRefusalAt? (err : String) : Option Pos :=
 /-- An error as a user reads it: without the places of cast refusals. -/
 def unmarked (err : String) : String :=
   String.join ((err.splitOn refusalMark).zipIdx.filterMap fun (part, i) => if i % 2 == 0 then some part else none)
+
+/-- The expression whose value a branch gives: its last statement's,
+    through blocks and `first{…}`. -/
+partial def valueOf : SExpr → SExpr
+  | .block p ss => (ss.getLast?.map valueOf).getD (.tuple p [])
+  | .app p (.ident _ "$first") [.block _ ss] false => (ss.getLast?.map valueOf).getD (.tuple p [])
+  | e => e
 
 /-- A clause that casts, as a refining cast would be written: `D := T[X]`,
     or `T[X]`, whose value is then named `$cast…` for its branch. Its
@@ -237,50 +251,71 @@ def castRest (p : Pos) (more : List SExpr) (body : SExpr) (els : Option SExpr) :
     own, is the clauses': the names they bind that later code uses are its
     value, bound again after it. `after` casts the object again, `if (D :=
     T[X']) then after`, when it uses `D` or a name bound after it, and so
-    each cast after it to a class (`isClass`) of a local fixed before the
-    clauses (`isFixed`): each succeeds as the first one did (an object's
-    class does not change), so that `after` is typed under their
-    refinements too. The new clauses and `after`, or why not. -/
-def castRestClauses (pre : List SExpr) (cast : Pos × String × String × SExpr) (rest : List SExpr)
-    (after : SExpr) (isGen : SExpr → Bool := fun _ => false) (isClass : String → Bool := fun _ => true)
-    (isFixed : String → Bool := fun _ => false) : Except String (List SExpr × SExpr) := do
+    each cast after it to a class (`isClass`): each succeeds as the first one
+    did (an object's class does not change), so that `after` is typed under
+    their refinements too. A later cast's object is a local fixed before the
+    clauses (`isFixed`), or else one computed among them, bound to a name
+    first, which is one of their values, unless it may name type arguments a
+    cast among them opens (this one, when it `opens`, or a later one, which
+    may): `after` has no name for those. The new clauses and `after`, or why
+    not. -/
+def castRestClauses (pre : List SExpr) (cast : Pos × String × String × SExpr) (opens : Bool)
+    (rest : List SExpr) (after : SExpr) (isGen : SExpr → Bool := fun _ => false)
+    (isClass : String → Bool := fun _ => true) (isFixed : String → Bool := fun _ => false) :
+    Except String (List SExpr × SExpr) := do
   let (p, d, T, x) := cast
-  let branch := rest.takeWhile (!isGen ·)
+  let branch0 := rest.takeWhile (!isGen ·)
   let later := rest.dropWhile (!isGen ·)
   let usedLater := Choice.namesUsed (.block p later)
   if usedLater.contains d then
     throw s!"a clause after it, past a generator or a choice, uses {d}"
   let usedAfter := Choice.namesUsed after
-  let obj := s!"$castObj{p.line}_{p.col}"
+  let obj (q : Pos) : String := s!"$castObj{q.line}_{q.col}"
+  let castOf (q : Pos) (e T : String) (y : SExpr) : SExpr := .decl q e none false (.app q (.ident q T) [y] true)
+  -- (the later casts' objects to cast again, and the names whose values may
+  -- name opened type arguments: what casts bind, and what uses those)
+  let (objs, branch, _) := branch0.foldl (fun (objs, cs, tainted) c => match c with
+    | .decl q e none false (.app _ (.ident _ T') [x'] true) =>
+      let mayName := (Choice.namesUsed x').any tainted.contains
+      if !isClass T' then (objs, cs ++ [c], if mayName then tainted ++ [e] else tainted)
+      else if let .ident _ n := x' then
+        if isFixed n then (objs ++ [(e, T', x', none)], cs ++ [c], tainted ++ [e])
+        else if mayName then (objs, cs ++ [c], tainted ++ [e])
+        else (objs ++ [(e, T', .ident q (obj q), some (obj q))], cs ++ [.decl q (obj q) none false x', castOf q e T' (.ident q (obj q))], tainted ++ [e])
+      else if mayName then (objs, cs ++ [c], tainted ++ [e])
+      else (objs ++ [(e, T', .ident q (obj q), some (obj q))], cs ++ [.decl q (obj q) none false x', castOf q e T' (.ident q (obj q))], tainted ++ [e])
+    | .decl _ n _ _ v => (objs, cs ++ [c], if (Choice.namesUsed v).any tainted.contains then tainted ++ [n] else tainted)
+    | c => (objs, cs ++ [c], tainted)) (([] : List (String × String × SExpr × Option String)), ([] : List SExpr), if opens then [d] else [])
   -- (the casts `after` casts again, each when it uses its name or one bound
   -- after it, and no clause past a generator does: this one, of its object
-  -- bound once, and those of a fixed local to a class after it)
+  -- bound once, and those after it)
   let names (cs : List SExpr) : List String := cs.filterMap fun | .decl _ n _ _ _ => some n | _ => none
-  let casts : List (Nat × String × String × SExpr) := (0, d, T, .ident p obj) :: branch.zipIdx.filterMap fun
-    | (.decl _ e none false (.app _ (.ident _ T') [y@(.ident _ n)] true), i) =>
-      if isClass T' && isFixed n then some (i + 1, e, T', y) else none
-    | _ => none
-  let again : List (String × String × SExpr) := casts.filterMap fun (k, e, T', y) =>
-    if !usedLater.contains e && (e :: names (branch.drop k)).any usedAfter.contains then some (e, T', y) else none
+  let rec fromCast (e : String) : List SExpr → List SExpr
+    | [] => []
+    | c@(.decl _ n _ _ _) :: cs => if n == e then c :: cs else fromCast e cs
+    | _ :: cs => fromCast e cs
+  let again := ((d, T, .ident p (obj p), none) :: objs).filter fun (e, _) =>
+    !usedLater.contains e && (e :: names (if e == d then branch else fromCast e branch)).any usedAfter.contains
   let kept : List (String × Bool) := branch.filterMap fun
     | .decl _ n _ v _ =>
-      if !again.any (·.1 == n) && (usedLater ++ usedAfter).contains n then some (n, v) else none
+      if again.any (·.1 == n) then none
+      else if (usedLater ++ usedAfter).contains n || again.any (·.2.2.2 == some n) then some (n, v)
+      else none
     | _ => none
   let vals := s!"$castVals{p.line}_{p.col}"
   let value : SExpr := match kept with
     | [(n, _)] => .ident p n
     | ns => .tuple p (ns.map fun (n, _) => .ident p n)
-  let castOf (q : Pos) (e T : String) (y : SExpr) : SExpr := .decl q e none false (.app q (.ident q T) [y] true)
   let headAgain := again.any (·.1 == d)
-  let tail := SExpr.ite p [made (castOf p d T (if headAgain then .ident p obj else x))]
+  let tail := SExpr.ite p [made (castOf p d T (if headAgain then .ident p (obj p) else x))]
     (.app p (.ident p "$first") [.block p (branch ++ [value])] false) (some (noValue p))
   let get (i : Nat) : SExpr := if kept.length == 1 then .ident p vals else .app p (.ident p vals) [.int p (i : Int)] false
-  let clauses := pre ++ (if headAgain then [.decl p obj none false x] else []) ++
+  let clauses := pre ++ (if headAgain then [.decl p (obj p) none false x] else []) ++
     (if kept.isEmpty then [tail] else
       .decl p vals none false tail :: kept.zipIdx.map fun ((n, v), i) => .decl p n none v (get i)) ++ later
   -- (at `after`'s place: the first casts are at the casts' own)
   let q := after.pos
-  let after := again.foldr (fun (e, T', y) acc =>
+  let after := again.foldr (fun (e, T', y, _) acc =>
     .ite q [made (castOf q e T' y)] acc (some (.app q (.ident q "Err") [] false))) after
   return (clauses, after)
 

@@ -539,7 +539,15 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
     -- `elabSeqIn`: the branch's type, which code outside it must be able to
     -- name)
     let retOfBranch := elseE.isSome && exp.isNone && re.ty == .never
-    let τ' : Ty := if elseE.isNone then .void else if retOfBranch then refine rb.ty else exp.getD re.ty
+    -- (a local from outside the branch that it gives, at its own type there,
+    -- which refines to its type in the branch: the most general)
+    let own (v : SExpr) (t : Ty) : Ty := match v with
+      | .ident _ n => if n == D then refine t else ((ctx.lookup n).map (·.ty)).getD (refine t)
+      | _ => refine t
+    let branchTy : Ty := match Refine.valueOf body, rb.ty with
+      | .tuple _ vs, .tup ts => if vs.length == ts.length then .tup ((vs.zip ts).map fun (v, t) => own v t) else refine rb.ty
+      | v, t => own v t
+    let τ' : Ty := if elseE.isNone then .void else if retOfBranch then branchTy else exp.getD re.ty
     if let some (n, v, _) := opened.find? fun (n, _, _) => τ'.params.contains n then
       eerr p s!"cannot cast {withArticle rx.ty.show} to {T} here: the cast opens {T}'s type argument {v} for the code after it, outside which its value, {withArticle τ'.show}, would name what is unknown (#250)"
     let ret := refine τ'
@@ -581,7 +589,7 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
       params := ((D, dTy) :: sig).map (fun (n, t) => { name := n, ty := t.toSTy }) ++
         extra.map fun (n, _) => { name := s!"$type{n}", ty := .name n },
       tparams := tps.map fun (n, c) => { pos := p, name := n, constraint := if c then "comparable" else "type" },
-      specs, ret := ret.toSTy, retOfBranch, subst := σ, opened := opened.map fun (n, v, _) => (n, v), waits := thenWaits, sourceSuspends,
+      specs, ret := ret.toSTy, branchTy := if retOfBranch then some τ'.toSTy else none, subst := σ, opened := opened.map fun (n, v, _) => (n, v), waits := thenWaits, sourceSuspends,
       exits := Refine.Exits.substTypes ((escRet.map (·.2)).getD {}) σ,
       storage := storage.map fun (n, s) => (n, { frame := s.frame, name := s.name, args := s.args.map Ty.toSTy }),
       inRepeat := ctx.inRepeat, sourceContext := sourceContextOf ctx, liftTag := some ctx.liftTag,
@@ -611,14 +619,14 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
     let re ← elseOf
     -- (the branch's own type, when the first elaboration took it; at
     -- another expected type, refused as it was there)
-    let τ' : Ty ← if elseE.isNone then pure .void else match exp, l.retOfBranch with
-      | some t, true =>
+    let τ' : Ty ← if elseE.isNone then pure .void else match exp, l.branchTy with
+      | some t, some _ =>
         let ret ← resolveTy env p l.ret
         if ret != t.subst μT then eerr p s!"expected {t.show}, found {ret.show} (the branch of the cast to {shown})"
         pure t
-      | some t, false => pure t
-      | none, true => resolveTy env p l.ret
-      | none, false => pure re.ty
+      | some t, none => pure t
+      | none, some t => resolveTy env p t
+      | none, none => pure re.ty
     let eE ← coerce p re τ'
     let rargs := env.coreArgs S sargs
     let atR := rargs.zipIdx.map fun (r, j) => (pinArg j, r)
@@ -740,11 +748,12 @@ def withCastClauses (ctx : Ctx) (cs : List SExpr) (after : SExpr) (isGen : SExpr
   match ← tryCatch (Except.ok <$> asWritten) (fun err => pure (Except.error err)) with
   | .ok r => return some r
   | .error err =>
-    let some (k, _) := (Refine.castRefusalAt? err).bind fun q => castAt.find? (·.2 == q) | throw err
+    let some refusal := Refine.castRefusal? err | throw err
+    let some (k, _) := castAt.find? (·.2 == refusal.pos) | throw err
     let some cast := Refine.castClause? cs[k]! | throw err
     set st0
     if let some r ← alone k err then return some r
-    match Refine.castRestClauses (cs.take k) cast (cs.drop (k + 1)) after isGen ctx.types.classes.contains
+    match Refine.castRestClauses (cs.take k) cast refusal.opens (cs.drop (k + 1)) after isGen ctx.types.classes.contains
         (fun n => (ctx.lookup n).any (!·.mutable)) with
     | .ok (cs', after') => return some (← rebuild cs' after')
     | .error why => throw s!"{err} ({why})"

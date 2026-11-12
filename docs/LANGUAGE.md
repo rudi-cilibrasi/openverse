@@ -623,8 +623,11 @@ circle := class(shape, labelled):
   uses the cast's name or names
   those clauses bind, casts the object again, which succeeds (an object's
   class does not change), so that it is typed under the refinement too, as
-  it does a later cast among those clauses of a name bound before them that
-  is no `var`, when it uses that cast's name:
+  it does each later cast among those clauses whose name it uses, from that
+  cast's object (bound to a name first, when computed there), unless the
+  object may name type arguments a cast opens (the first, when it opens,
+  or another among them): then the branch has the later cast's name, with
+  the type it has there, but not its refinement:
   `if (Print("x"), D := dup[P], Y := D.A) then option{Y}` prints `x` only
   when `P` is a `dup`, and its branch has `D` and `Y` with `b = a`.
 
