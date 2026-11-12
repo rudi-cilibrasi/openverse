@@ -242,6 +242,11 @@ def noLift (p : Pos) (why : String) (e : SExpr) : SExpr :=
 def shownName (n : String) : String :=
   if n.startsWith "$" && n.contains '\'' then ((n.splitOn "'").getLast?.getD n) else n
 
+/-- The names `ns` renamed for a place, `tag'N` (`tag` a made name, so
+    `shownName` gives `N` back), so they stay its own there. -/
+def renamedFor (tag : String) (ns : List String) : List (String × String) :=
+  ns.map fun n => (n, s!"{tag}'{n}")
+
 /-- Whether a `set` path's indices have something to lift (`has`,
     `hasLiftable`), #283: a choice, or a call with several values. -/
 partial def pathHas (has : SExpr → Bool) : SExpr → Bool
@@ -524,7 +529,7 @@ def deferBodies (ss : List SExpr) : List SExpr :=
   ss.zipIdx.filterMap fun (s, i) =>
     if !isDefer s then none else
     let later := boundIn (ss.drop (i + 1))
-    some (if later.isEmpty then s else renameE (later.map fun n => (n, s!"$later'{n}")) s)
+    some (if later.isEmpty then s else renameE (renamedFor "$later" later) s)
 
 /-- A scope's own `defer:` blocks after its value, as LANGUAGE.md lowers them
     (#283): its other statements, its value, a block of the `defer:`s in
@@ -766,9 +771,7 @@ partial def liftE (isVal : String → Bool) (isField : String → String → Boo
     let decls := localDecls e
     if !decls.isEmpty then
       LM.push (.app p (.ident p "$declNames") (decls.map fun (n, q) => .ident q n) false)
-    -- (`'` sets the name written apart, `shownName`)
-    let ren := (localsOf e).map fun n => (n, s!"{tag}'{n}")
-    let ss := stmtsOf (renameE ren (.block p ssD))
+    let ss := stmtsOf (renameE (renamedFor tag (localsOf e)) (.block p ssD))
     let bound := boundIn ss
     let isVal' := fun n => isVal n || bound.contains n
     let (init, last) := (ss.dropLast, ss.getLast?)
@@ -983,7 +986,7 @@ def bifToExcl (c : SExpr) : List SExpr :=
         | ds => [.app ip (.ident ip "$declNames") (ds.map fun (n, q) => .ident q n) false]
       | _ => []
     let renameBlock (side : String) (b : SExpr) : SExpr := match b with
-      | .block .. => match renameE ((localsOf b).map fun n => (n, s!"${k}{side}'{n}")) b with
+      | .block .. => match renameE (renamedFor s!"${k}{side}" (localsOf b)) b with
         | .block bp ss => .block bp (deferLast bp s!"${k}{side}$dv" ss)
         | b' => b'
       | b => b
@@ -1001,7 +1004,7 @@ def bifToExcl (c : SExpr) : List SExpr :=
       -- each with its written type, a `var` still one; renamed for the
       -- branch, `$…'N`, since the clauses after the `if` follow it in its
       -- path, where they are not in scope)
-      let ρ := names.map fun y => (y, s!"${k}'{y}")
+      let ρ := renamedFor s!"${k}" names
       -- (as written, they are not in scope where the `if` is: no shadowing)
       let written : SExpr := .app ip (.ident ip "$declNames") (names.map fun y =>
         .ident ((cs.findSome? fun | .decl q x _ _ _ => if x == y then some q else none | _ => none).getD ip) y) false
@@ -1036,7 +1039,7 @@ partial def consumeBranches (i : SExpr) (site : String) (consume : SExpr → SEx
   match i with
   | .ite p cs t (some u) =>
     let names := boundIn cs
-    let ren := names.map fun n => (n, s!"${site}{p.line}_{p.col}'{n}")
+    let ren := renamedFor s!"${site}{p.line}_{p.col}" names
     let written : List SExpr := if names.isEmpty then [] else
       [.app p (.ident p "$declNames") (names.map fun n =>
         .ident ((cs.findSome? fun | .decl q x _ _ _ => if x == n then some q else none | _ => none).getD p) n) false]
@@ -1372,6 +1375,12 @@ def returnBranches (p : Pos) (k : String) (cs tb ub : List SExpr)
       .decl p v ret false (mkExcl p [(binds, .block p tb), ([.notE p (.query p (.ident p k))], .block p ub)]),
       .ident p v]
 
+/-- The names of a branch that a `return` is taken out of, renamed for it
+    (`tag'N`): its statements' locals and `extra` (its condition's), so the
+    rest of the body copied into it may declare the same ones (#283). -/
+def branchNames (tag : String) (ss : List SExpr) (extra : List String) : List (String × String) :=
+  renamedFor tag ((ss.flatMap localsOf) ++ extra).eraseDups
+
 /-- A body's statements with its `return`s, in `if`s, taken out (#283):
     an `if` with a `return` in a branch, `S; if (C) { T } else { U }; R`,
     becomes the value `S; if (C) then block{ T; R } else block{ U; R }`, a
@@ -1400,10 +1409,8 @@ partial def elimPlainReturns (fresh : Nat → String) (n : Nat) (multi : SExpr �
           (tailReturns (stmtsOf t), tailReturns ((u?.map stmtsOf).getD []))
         else (stmtsOf t, (u?.map stmtsOf).getD [])
       -- (a branch's names, and its condition's, are its own)
-      let own (ss : List SExpr) (extra : List String) (tg : String) : List (String × String) :=
-        ((ss.flatMap localsOf) ++ extra).eraseDups.map fun x => (x, s!"{k}{tg}'{x}")
-      let ρt := own ts (boundIn cs) "t"
-      let ρu := own us [] "u"
+      let ρt := branchNames s!"{k}t" ts (boundIn cs)
+      let ρu := branchNames s!"{k}u" us []
       let ts := ts.map (renameE ρt)
       let us := us.map (renameE ρu)
       let (tb, n1) ← elimPlainReturns fresh (n + 1) multi ret tailBlocks (ts ++ rest)
@@ -1447,7 +1454,7 @@ partial def elimScopedReturns (fresh : Nat → String) (multi : SExpr → Bool) 
     some (.decl q saved ret false value :: cleanup ++ [.ident q saved], n + 1)
   | d@(.app _ (.ident _ "$defer") _ _) :: rest =>
     -- A moved registration still cannot see declarations after it.
-    let later := (boundIn rest).map fun x => (x, s!"$later'{x}")
+    let later := renamedFor "$later" (boundIn rest)
     elimScopedReturns fresh multi ret n p rest (ds ++ [renameE later d]) outer
   | s@(.ite q cs t u?) :: rest => do
     let hasRet := anyE fun | .ret .. => true | _ => false
@@ -1458,10 +1465,8 @@ partial def elimScopedReturns (fresh : Nat → String) (multi : SExpr → Bool) 
       let k := fresh n
       let ts := stmtsOf t
       let us := (u?.map stmtsOf).getD []
-      let own (ss : List SExpr) (extra : List String) (tag : String) :=
-        ((ss.flatMap localsOf) ++ extra).eraseDups.map fun x => (x, s!"{k}{tag}'{x}")
-      let ρt := own ts (boundIn cs) "t"
-      let ρu := own us [] "u"
+      let ρt := branchNames s!"{k}t" ts (boundIn cs)
+      let ρu := branchNames s!"{k}u" us []
       let parents := { pos := p, rest, defers := ds } :: outer
       let (tb, n1) ← elimScopedReturns fresh multi ret (n + 1) t.pos (ts.map (renameE ρt)) [] parents
       let (ub, n2) ← elimScopedReturns fresh multi ret n1 q (us.map (renameE ρu)) [] parents
