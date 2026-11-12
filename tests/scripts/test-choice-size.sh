@@ -32,6 +32,24 @@ kinds=(
   setter-choice-first
   setter-choice-for
   setter-choice-waiting
+  conversion-literal-first
+  conversion-literal-for
+  conversion-literal-waiting
+  conversion-monomorphic-first
+  conversion-monomorphic-for
+  conversion-monomorphic-waiting
+  conversion-generic-first
+  conversion-generic-for
+  conversion-generic-waiting
+  conversion-default-first
+  conversion-default-for
+  conversion-default-waiting
+  conversion-refined-first
+  conversion-refined-for
+  conversion-refined-waiting
+  conversion-refineddefault-first
+  conversion-refineddefault-for
+  conversion-refineddefault-waiting
   resultalias-same-first
   resultalias-same-for
   resultalias-same-waiting
@@ -333,6 +351,38 @@ if kind == 'heterogeneous-nested-for':
         body = f'for(A{i}:=(Dup(1)|Dup("s"))):' + body
     print('    Rows:=' + body)
     print('    Print("{Rows.Length}")')
+    sys.exit(0)
+if kind.startswith('conversion-'):
+    _, shape, mode = kind.split('-')
+    effects = '<suspends>' if mode=='waiting' else ''
+    waiting = 'Sleep(0.0);' if mode=='waiting' else ''
+    refined = shape in ('refined','refineddefault')
+    print('ca:=class{var K:int=1}\ncb:=class{var K:rational=1}\nDup(X:t where t:type)<computes>:t=X|X')
+    if refined:
+        print('pair(a:type,b:type):=class{A:a;B:b}\ndup(t:type):=class(pair(t,t)){C:int=1}')
+    if shape=='monomorphic':
+        print('Value(X:int)<computes>'+effects+':int=block{'+waiting+'X}')
+    elif shape=='default':
+        print('Value(?X:t=1 where t:type)<computes>'+effects+':t=block{'+waiting+'X}')
+    elif shape=='refineddefault':
+        print('Value(P:pair(x,y),?X:t=if(D:=dup[P])then D.C else 4 where x:type,y:type,t:type)<computes>'+effects+':t=block{'+waiting+'X}')
+    elif shape in ('generic','refined'):
+        print('Value(X:t where t:type)<computes>'+effects+':t=block{'+waiting+'X}')
+    clauses=','.join(f'A{i}:=(Dup(ca{{}})|Dup(cb{{}}))' for i in range(count))
+    rhs='1' if shape=='literal' else 'Value()' if shape=='default' else 'Value(P)' if shape=='refineddefault' else 'if(D:=dup[P])then Value(D.C) else Value(4)' if shape=='refined' else 'Value(1)'
+    statements=[f'set A{i}.K' + ('=' if refined else '+=') + rhs for i in range(count)]
+    if mode=='waiting' and shape=='literal':
+        statements.append('Sleep(0.0)')
+    value='block{'+';'.join(statements+['0'])+'}'
+    signature='P:pair(a,b) where a:type,b:type' if refined else ''
+    print('Run('+signature+')'+effects+':int=')
+    if mode=='first':
+        print('    if('+clauses+',Done:='+value+',Done=0)then 1 else -1')
+    else:
+        print('    Rows:=for('+clauses+'):'+value)
+        print('    Rows.Length')
+    args='dup(int){A:=1,B:=2}' if refined else ''
+    print('Main()'+effects+':void=Print("{Run('+args+')}" )')
     sys.exit(0)
 if kind.startswith('setter-'):
     _, shape, mode = kind.split('-')
@@ -1509,6 +1559,15 @@ PY
         expected=4
         [[ $kind == resultalias-generic-* ]] && expected=8
       fi
+      printf '%s\n' "$expected" >"$tmp/expected"
+      timeout "$limit" "$root/.lake/build/bin/openverse" run "$tmp/p.verse" >"$tmp/lean.out"
+      timeout "$limit" "$root/runtime/build/cverse" "$tmp/p.vbc" >"$tmp/c.out"
+      diff -u "$tmp/expected" "$tmp/lean.out"
+      diff -u "$tmp/expected" "$tmp/c.out"
+    fi
+    if [[ $kind == conversion-* && $count == 4 ]]; then
+      expected=256
+      [[ $kind == *-first ]] && expected=1
       printf '%s\n' "$expected" >"$tmp/expected"
       timeout "$limit" "$root/.lake/build/bin/openverse" run "$tmp/p.verse" >"$tmp/lean.out"
       timeout "$limit" "$root/runtime/build/cverse" "$tmp/p.vbc" >"$tmp/c.out"

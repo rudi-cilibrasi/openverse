@@ -13,6 +13,18 @@ partial def elabExprInitialWith
     (next : Ctx → SExpr → Option Ty → EM R)
     (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
   match se with
+  | .app p (.ident _ "$choiceCoercions") [.block _ metadata, body] false =>
+    let rules ← metadata.mapM fun
+      | .tuple _ [.ident _ name, .construct _ "$choiceConversion" [source, target] []] => do
+        let some dictionary := ctx.lookup name | eerr p "internal: missing choice conversion dictionary"
+        return (dictionary, ← resolveTy ctx.types p source, ← resolveTy ctx.types p target)
+      | _ => eerr p "internal: invalid choice conversion evidence"
+    let inherited := ctx.choiceCoercions.map fun (dictionary, source, target) =>
+      ({ dictionary with ty := dictionary.ty.subst ctx.types.tvars }, source.subst ctx.types.tvars, target.subst ctx.types.tvars)
+    let rules := (rules ++ inherited).foldl (fun collected entry =>
+      if collected.any (fun old => old.1.name == entry.1.name && old.2 == entry.2) then collected
+      else collected ++ [entry]) ([] : List (Local × Ty × Ty))
+    elabE { ctx with choiceCoercions := rules } body exp
   | .app p (.ident _ "$choiceDictionary") [factory@(.construct _ cls _ [])] false =>
     if !cls.startsWith "$choiceOperationDictionary" then eerr p "internal: invalid dictionary allocation"
     -- Only the generated dictionary object is an implementation effect.

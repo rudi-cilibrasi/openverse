@@ -14,12 +14,13 @@ p.add_argument('--aliases', action='store_true')
 p.add_argument('--writes', action='store_true')
 p.add_argument('--nested-writes', action='store_true')
 p.add_argument('--result-aliases', action='store_true')
+p.add_argument('--numeric-writes', action='store_true')
 a = p.parse_args()
-a.writes = a.writes or a.nested_writes
+a.writes = a.writes or a.nested_writes or a.numeric_writes
 a.aliases = a.aliases or ((a.writes or a.result_aliases) and a.seed % 2 == 0)
 a.members = a.members or a.aliases or a.writes or a.result_aliases
 a.generic_methods = (a.generic_methods or a.members) and not a.callable_fields
-a.members = a.members and not a.callable_fields
+a.members = a.members and not a.callable_fields and not a.numeric_writes
 a.methods = a.methods or a.generic_methods or a.callable_fields
 r = random.Random(a.seed)
 method_arguments = a.methods and r.choice([False, True])
@@ -143,7 +144,9 @@ if a.methods:
             print('result_'+name+('(t:type)' if generic else '')+':=class<computes>{K:int'+(';V:t' if generic else '')+'}')
     for name, generic, kind in [('ma', False, 'a'), ('mb', False, 'b'), ('ga', True, 'a'), ('gb', True, 'b')]:
         print(name + ('(t:type)' if generic else '') + ':=class:')
-        print('    H:cell\n    ' + ('var ' if a.members or a.callable_fields else '') + 'K:int' + ('\n    V:t' if generic else ''))
+        numeric_rat = a.numeric_writes and kind == 'b'
+        score_value = 'Floor(K)' if numeric_rat else 'K'
+        print('    H:cell\n    ' + ('var ' if a.members or a.callable_fields or a.writes else '') + 'K:' + ('rational' if numeric_rat else 'int') + ('\n    V:t' if generic else ''))
         if a.callable_fields:
             callback_effects = '<reads><writes>' if kind == 'a' else '<transacts>'
             print('    F:type{_(:cell,:int' + (',:int' if method_arguments else '') + ')' + callback_effects + ':int}')
@@ -152,9 +155,9 @@ if a.methods:
         method = 'Read' if a.members else 'Score'
         result = ('result_' if a.result_aliases else '') + name + ('(t)' if generic else '') if a.members else 'int'
         print('    ' + method + '(' + ','.join(method_params) + ')<transacts>:' + result + '=')
-        print('        Print("m ' + kind + ' {K}")')
-        print('        set H.N+=' + ('1' if kind == 'a' else '2') + '*(K+1)' + ('+Arg' if method_arguments else ''))
-        returned = 'result_'+name+('(t)' if generic else '')+'{K:=K'+(',V:=V' if generic else '')+'}' if a.result_aliases else 'Self' if a.members else 'K'
+        print('        Print("m ' + kind + ' {' + score_value + '}")')
+        print('        set H.N+=' + ('1' if kind == 'a' else '2') + '*(' + score_value + '+1)' + ('+Arg' if method_arguments else ''))
+        returned = 'result_'+name+('(t)' if generic else '')+'{K:=K'+(',V:=V' if generic else '')+'}' if a.result_aliases else 'Self' if a.members else score_value
         print('        '+returned)
     if a.nested_writes:
         for name, generic in [('ma',False),('mb',False),('ga',True),('gb',True)]:
@@ -184,7 +187,8 @@ def payload(s, j):
             return f'write_payload{{K:={s},Kind:={j}}}' if a.writes else f'({s},{j})'
         generic = shape not in ('primitive', 'fields')
         name = ('ga' if j == 0 else 'gb') if generic else ('ma' if j == 0 else 'mb')
-        value = name + ('(t)' if generic else '') + '{H:=H,K:=' + str(s) + (',V:=X' if generic else '') + (',F:=Callback' + str(j) if a.callable_fields else '') + '}'
+        numeric_value = f'({2*s+1}/2)' if a.numeric_writes and j == 1 else str(s)
+        value = name + ('(t)' if generic else '') + '{H:=H,K:=' + numeric_value + (',V:=X' if generic else '') + (',F:=Callback' + str(j) if a.callable_fields else '') + '}'
         return 'holder_'+name+('(t)' if generic else '')+'{C:='+value+'}' if a.nested_writes else value
     if a.control:
         return str(s)
