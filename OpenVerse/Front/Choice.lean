@@ -501,6 +501,9 @@ partial def exclToChoice (e : SExpr) (deep : Bool := false) : SExpr :=
 partial def anyE (pr : SExpr → Bool) (e : SExpr) : Bool :=
   pr e || e.children.any (anyE pr)
 
+/-- Whether `e` has a `return` in it. -/
+def hasReturn : SExpr → Bool := anyE fun | .ret .. => true | _ => false
+
 /-- The statements of a body. -/
 def stmtsOf : SExpr → List SExpr
   | .block _ ss => ss
@@ -1350,8 +1353,7 @@ def loopShape? (g : String) (mv : List String) (body : SExpr) (grp : List String
 partial def countRetIfs (e : SExpr) : Nat :=
   match e with
   | .ite _ cs t u? =>
-    let hasRet := anyE (fun | .ret .. => true | _ => false)
-    (if hasRet t || u?.any hasRet then 1 else 0) + (cs.map countRetIfs).foldl (· + ·) 0 +
+    (if hasReturn t || u?.any hasReturn then 1 else 0) + (cs.map countRetIfs).foldl (· + ·) 0 +
       ((stmtsOf t).map countRetIfs).foldl (· + ·) 0 + ((u?.map fun u => ((stmtsOf u).map countRetIfs).foldl (· + ·) 0).getD 0)
   | .block _ ss => (ss.map countRetIfs).foldl (· + ·) 0
   | _ => 0
@@ -1409,9 +1411,8 @@ partial def elimPlainReturns (fresh : Nat → String) (n : Nat) (multi : SExpr �
   | [] => some ([], n)
   | .ret p e? :: _ => some ([e?.getD (.tuple p [])], n)
   | s@(.ite p cs t u?) :: rest =>
-    let hasRet := anyE fun | .ret .. => true | _ => false
-    if !hasRet s then (elimPlainReturns fresh n multi ret tailBlocks rest).map fun (r, n') => (s :: r, n')
-    else if cs.any hasRet then none
+    if !hasReturn s then (elimPlainReturns fresh n multi ret tailBlocks rest).map fun (r, n') => (s :: r, n')
+    else if cs.any hasReturn then none
     else do
       let k := fresh n
       -- (the last statement of a body: its branches' values are returned)
@@ -1428,7 +1429,7 @@ partial def elimPlainReturns (fresh : Nat → String) (n : Nat) (multi : SExpr �
       let cs := cs.map (renameE ρt)
       some (returnBranches p k cs tb ub multi ret tailBlocks, n2)
   | s :: rest =>
-    if anyE (fun | .ret .. => true | _ => false) s then none
+    if hasReturn s then none
     else (elimPlainReturns fresh n multi ret tailBlocks rest).map fun (r, n') => (s :: r, n')
 
 /-- The surrounding scope's fallthrough code and currently registered
@@ -1467,11 +1468,10 @@ partial def elimScopedReturns (fresh : Nat → String) (multi : SExpr → Bool) 
     let later := renamedFor "$later" (boundIn rest)
     elimScopedReturns fresh multi ret n p rest (ds ++ [renameE later d]) outer
   | s@(.ite q cs t u?) :: rest => do
-    let hasRet := anyE fun | .ret .. => true | _ => false
-    if !hasRet s then
+    if !hasReturn s then
       let (rest, n') ← elimScopedReturns fresh multi ret n p rest ds outer
       some (s :: rest, n')
-    else if cs.any hasRet then none else
+    else if cs.any hasReturn then none else
       let k := fresh n
       let ts := stmtsOf t
       let us := (u?.map stmtsOf).getD []
@@ -1482,7 +1482,7 @@ partial def elimScopedReturns (fresh : Nat → String) (multi : SExpr → Bool) 
       let (ub, n2) ← elimScopedReturns fresh multi ret n1 q (us.map (renameE ρu)) [] parents
       some (returnBranches q k (cs.map (renameE ρt)) tb ub multi ret, n2)
   | s :: rest => do
-    if anyE (fun | .ret .. => true | _ => false) s then none else
+    if hasReturn s then none else
       let (rest, n') ← elimScopedReturns fresh multi ret n p rest ds outer
       some (s :: rest, n')
 
