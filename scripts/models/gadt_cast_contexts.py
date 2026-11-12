@@ -11,7 +11,9 @@ dup (b = a) or fixi (a = int) in a
 effects, a for's clauses, or first{...} after or before a choice; or, after
 clauses with effects in an if, a second cast, to dup, of an object a call
 computes among the clauses or of a parameter, whose refinement the branch's
-value needs (d = c, for an option of the second's A as a ?d). Clauses
+value needs (d = c, for an option of the second's A as a ?d). At times
+the cast is inside an expression, `C0 := Peek[H, 1] + T[P].C`, after a call
+with an effect that runs first. Clauses
 before the cast print, add to a cell's var field or call a <decides> function
 that does; clauses after it compare, print and add, and bind names that later
 code uses. The value is the object's C, or a field whose type is the code's
@@ -34,6 +36,8 @@ context = CONTEXTS[seed % len(CONTEXTS)]
 target = R.choice(['dup', 'fixi'])
 bare = context in ('not',) or (context in ('decides', 'option', 'if', 'second') and ch(0.15))
 refined_value = (not bare) and context in ('decides', 'option') and ch(0.4)
+# (the cast inside an expression: its C, after a call that adds 1 first)
+inside = (not bare) and (not refined_value) and ch(0.3)
 IFACE = ch(0.3)
 CDEF = {'dup': R.randint(1, 6), 'fixi': R.randint(1, 6)}
 
@@ -97,6 +101,7 @@ cast_name = 'D'
 def cast_text(x='P'):
     return f'{target}[{x}]' if bare else f'D := {target}[{x}]'
 def cast_run(st, env, obj):
+    if inside: st.n += 1
     if not below(obj[0], target): raise Fail()
     env['D'] = obj
 
@@ -292,6 +297,8 @@ else:
         if context == 'second': qs[id(o)] = make_q()
         main.append(call(o))
         model(o)
+if inside:
+    fn = fn.replace(f'D := {target}[P]', f'C0 := Peek[H, 1] + {target}[P].C').replace('D.C', '(C0 - 1)')
 print(hdr)
 print(fn.rstrip('\n'))
 print('\n'.join(main))

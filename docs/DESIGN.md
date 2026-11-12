@@ -1945,7 +1945,13 @@ has a clause after the cast, so its branch is the lift's (`made`), not the
 source's. `Else` is written twice, and runs once.
 
 Those are one rule's cases: a cast that only such a clause may be takes
-the rest of its failure context as its branch. In a sequence whose names
+the rest of its failure context as its branch. One inside a clause, in an
+operand that the lifting of choices reaches (`Refine.castsIn`), refused
+there, is lifted out by that lifting, marked `$liftCast` (`Refine.markCast`,
+which `Choice.hasLiftable` and `liftE` take as a value to bind, as a
+choice): the operands before it bound, then `$k… := T[X]`, a cast clause
+(`liftCastClause`, in `withCastClauses` and `elabSeqIn`; a `<decides>`
+body of one expression is the block of it, `elabBodyOv`). In a sequence whose names
 end with it (a block, so a `<decides>` body or `option{…}`'s, and the
 operand of `not`, `and` and `or`), `pre; D := T[X]; rest` is `pre; if (D
 := T[X]) then {rest} else fail` (`elabSeqIn`; the `else` is

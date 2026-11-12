@@ -449,8 +449,20 @@ partial def elabSeqIn (closed : Bool) (ctx : Ctx) (ss : List SExpr) (exp : Optio
         let branch := if rest.isEmpty then .ident p d else .block p rest
         if let some r ← elabRefinedIf ctx p p d T x branch (some (Refine.noValue p)) exp (made := true) then
           return (r, ctx)
-    if rest.isEmpty then return ← elabStmt ctx s exp
-    let (r, ctx') ← elabStmt ctx s none
+    -- (a cast inside the statement that only a clause may be, refused
+    -- there: lifted out to be a statement of its own, `liftCastClause`)
+    let stmtExp := if rest.isEmpty then exp else none
+    let inner := if closed && ctx.canFail then Refine.castsIn ctx.types.classes.contains s else []
+    let (r, ctx') ← if inner.isEmpty then elabStmt ctx s stmtExp else
+      match ← tryCatch (Except.ok <$> elabStmt ctx s stmtExp) (fun err => pure (Except.error err)) with
+      | .ok rc => pure rc
+      | .error err =>
+        match Refine.castRefusal? err with
+        | some r =>
+          if inner.contains r.pos then return ← elabSeqIn closed ctx (liftCastClause ctx [] r.pos s ++ rest) exp
+          throw err
+        | none => throw err
+    if rest.isEmpty then return (r, ctx')
     let (r2, ctx'') ← elabSeqIn closed ctx' rest exp
     return (⟨.seq r.e r2.e, r2.ty⟩, ctx'')
 
@@ -2233,6 +2245,11 @@ end
     as written (`ovForTypes`), noting the overload each takes; then each
     call its chosen overload's inlined call (`ovChosen`). -/
 def elabBodyOv (ctx : Ctx) (body : SExpr) (ret : Option Ty) (st0 : ESt) : Except String ((R × Ctx) × ESt) := do
+  -- (a <decides> body of one expression with a cast in it: the block of it,
+  -- where a cast that refines takes the rest as its branch, `elabSeqIn`)
+  let body := match body with
+    | .block .. => body
+    | e => if ctx.canFail && !(Refine.castsIn ctx.types.classes.contains e).isEmpty then .block e.pos [e] else e
   if !Choice.anyE (fun | .app _ (.ident _ "$inlineOv") _ false => true | _ => false) body then
     return ← (elabStmt ctx body ret).run st0
   let ((_, _), stT) ← (elabStmt { ctx with typeOnly := true } (ovForTypes body) ret).run st0

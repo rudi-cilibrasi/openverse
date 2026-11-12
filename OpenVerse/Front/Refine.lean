@@ -231,6 +231,36 @@ def unmade : List SExpr → Bool × List SExpr
   | .app _ (.ident _ "$made") [c] false :: cs => (true, c :: cs)
   | cs => (false, cs)
 
+/-- The places of the casts to a class (`isClass`) inside clause `c`, but
+    not the one it is (`castClause?`), where the lifting of choices reaches
+    (`Choice.liftE`): in the operands it evaluates in order, not in a branch
+    of an `if`, a block, nor a failure context of its own. -/
+partial def castsIn (isClass : String → Bool) (c : SExpr) : List Pos :=
+  let here (e : SExpr) : List Pos := match e with
+    | .app q (.ident _ T) [_] true => if isClass T then [q] else []
+    | _ => []
+  let rec go (e : SExpr) : List Pos := match e with
+    | .app _ (.ident _ n) _ _ => if n.startsWith "$" then [] else e.children.flatMap go ++ here e
+    | .app .. | .member .. | .bin .. | .cmp .. | .query .. | .neg .. | .tuple .. | .arrayLit ..
+    | .str .. | .mapLit .. | .construct .. => e.children.flatMap go ++ here e
+    | _ => []
+  let inner : SExpr → List Pos := fun x => x.children.flatMap go
+  match c with
+  | .decl _ _ _ _ v => if (castClause? c).isSome then inner v else go v
+  | .set _ _ _ v | .gen _ _ _ v => go v
+  | .app .. => if (castClause? c).isSome then inner c else go c
+  | e => go e
+
+/-- Clause `c` with the cast at `q` inside it marked to be a clause of its
+    own (`$liftCast`), which the lifting of choices then makes it
+    (`Choice.liftE`): the operands evaluated before it bound to names first,
+    so they still run before it, the cast bound to a name, and `c` with
+    that name in its place. -/
+def markCast (q : Pos) (c : SExpr) : SExpr :=
+  Choice.mapE (fun
+    | e@(.app p (.ident _ _) [_] true) => if p == q then some (.app p (.ident p "$liftCast") [e] false) else none
+    | _ => none) c
+
 /-- The branch of a refining cast that is the first clause of an `if`'s
     condition, `if (D := T[X], rest) then B else E`: the `if` of the rest,
     `if (rest, true?) then B else E` (the cast has no effects to undo when

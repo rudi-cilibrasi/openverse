@@ -724,6 +724,14 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
     let cond := pre.foldr Expr.seq (.heap (.isTag (tested.toList.map env.tagOf)) [.local y])
     return some ⟨← mark (.assign t (.ite cond acc eE)), τ'⟩
 
+/-- (#243) Clause `c` with the cast at `q` inside it, which only a failure
+    context's clause may be, lifted out to be one before it, as a choice
+    there is (`Refine.markCast`, `Choice.liftClause`). `bound`: names the
+    clauses before it bind, which are values too. -/
+def liftCastClause (ctx : Ctx) (bound : List String) (q : Pos) (c : SExpr) : List SExpr :=
+  Choice.liftClause (fun n => choiceValues ctx n || bound.contains n) (choiceField ctx) (Refine.markCast q c)
+    (fieldOrder := choiceOrder ctx)
+
 /-- (#243, #351) A failure context's clauses `cs`, then `after` (an `if`'s
     branch, a `for`'s body, a `first{…}`'s value), with a clause `D :=
     T[X]`, or `T[X]` of a class (past the first, if `later`), that only such
@@ -733,7 +741,9 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
     nothing before it needs undoing), else `rebuild` with the cast taking
     the clauses after it, up to the next generator (`isGen`), as its branch
     in a clause of its own, and `after` casting again
-    (`Refine.castRestClauses`). `none` without such a clause. -/
+    (`Refine.castRestClauses`). Such a cast inside a clause is lifted out to
+    be a clause of its own first (`liftCastClause`). `none` without a cast
+    to a class. -/
 def withCastClauses (ctx : Ctx) (cs : List SExpr) (after : SExpr) (isGen : SExpr → Bool) (asWritten : EM R)
     (rebuild : List SExpr → SExpr → EM R) (later : Bool := false)
     (alone : Nat → String → EM (Option R) := fun _ _ => pure none) : EM (Option R) := do
@@ -743,12 +753,18 @@ def withCastClauses (ctx : Ctx) (cs : List SExpr) (after : SExpr) (isGen : SExpr
     | (.app q (.ident _ T) [_] true, i) =>
       if (later && i == 0) || !ctx.types.classes.contains T then none else some (i, q)
     | _ => none
-  if castAt.isEmpty then return none
+  let inner : List (Nat × Pos) := cs.zipIdx.flatMap fun (c, i) =>
+    (Refine.castsIn ctx.types.classes.contains c).map (i, ·)
+  if castAt.isEmpty && inner.isEmpty then return none
   let st0 ← get
   match ← tryCatch (Except.ok <$> asWritten) (fun err => pure (Except.error err)) with
   | .ok r => return some r
   | .error err =>
     let some refusal := Refine.castRefusal? err | throw err
+    if let some (k, _) := inner.find? (·.2 == refusal.pos) then
+      set st0
+      let lifted := liftCastClause ctx (Choice.boundIn (cs.take k)) refusal.pos cs[k]!
+      return some (← rebuild (cs.take k ++ lifted ++ cs.drop (k + 1)) after)
     let some (k, _) := castAt.find? (·.2 == refusal.pos) | throw err
     let some cast := Refine.castClause? cs[k]! | throw err
     set st0

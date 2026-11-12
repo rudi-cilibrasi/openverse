@@ -598,10 +598,14 @@ circle := class(shape, labelled):
   It may be a clause of any failure context: a statement of a `<decides>`
   body, or of a block in a failure context; a clause of `option{…}`,
   `logic{…}` or `first{…}`; the operand of `not`, or of `and` or `or`; a
-  clause of an `if`'s condition or of a `for`. The rest of its failure
-  context is its branch: `pre; D := T[X]; rest` is `pre; if (D := T[X])
-  then {rest} else fail`, so its failure, or the rest's, undoes what `pre`
-  did, output included, as any failure context's does:
+  clause of an `if`'s condition or of a `for`. Inside such a clause, in an
+  operand it evaluates in order (`dup[P].C > 3`, `F(dup[P])`), it is lifted
+  out to be a clause of its own first, as a choice there is: the operands
+  evaluated before it are bound first, so they still run before it. The
+  rest of its failure context is its branch: `pre; D := T[X]; rest` is
+  `pre; if (D := T[X]) then {rest} else fail`, so its failure, or the
+  rest's, undoes what `pre` did, output included, as any failure
+  context's does:
 
   ```verse
   AsLit(E:expr(t) where t:type)<decides>:t =
@@ -788,9 +792,10 @@ circle := class(shape, labelled):
   is a struct or container that holds one.
 - **Not yet supported** (each rejected with a message):
   - a cast that refines type arguments, opens them, or goes through a
-    view (#243, #250, #351) anywhere but as a clause of a failure context:
-    inside an expression (`dup[P].C`: bind it, `D := dup[P]`), or outside
-    any failure context;
+    view (#243, #250, #351) outside any failure context, or inside a clause
+    where lifting does not reach it: in a branch of an `if` that is an
+    expression, `then dup[P].C` (write it as a clause of a block there,
+    `then (D := dup[P]; D.C)`);
   - in a `for`'s clauses, one past a generator after such a cast that uses
     its name (#243);
   - after a cast that opens type arguments, a value of its failure
