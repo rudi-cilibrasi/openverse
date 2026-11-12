@@ -90,6 +90,7 @@ check "differential fuzzing (${FUZZ:-1000} random programs)" scripts/fuzz-diff.s
 check "Verse test suite, Lean and C" scripts/test-verse.sh --c
 check "overloading conformance matrix" bash tests/scripts/test-overload-conformance.sh
 check "effect admission and executable controls" bash tests/scripts/test-effect-admission.sh
+check "construction effects and executable controls" bash tests/scripts/test-construction-effects.sh
 check "overload domains (${FUZZ_OVERLOAD_SHAPES:-468} programs, across six contexts)" \
   bash scripts/fuzz-overload-shapes.sh "${FUZZ_OVERLOAD_SHAPES:-468}" "$seed"
 check "choice-free source profile" bash tests/scripts/test-choice-profile.sh

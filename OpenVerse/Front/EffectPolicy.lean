@@ -35,7 +35,7 @@ def checkUnsupported (p : Pos) (specs : List String) : Except String Unit := do
 def checkNonFunction (p : Pos) (kind : String) (specs : List String) : Except String Unit := do
   checkUnsupported p specs
   if let some sp := specs.find? effectNames.contains then
-    reject p s!"<{sp}> on a {kind} is unsupported: construction/field effect budgets are not enforced (#494)"
+    reject p s!"<{sp}> on a {kind} is unsupported: effect specifiers are not supported at this declaration position (#494)"
 
 /-- Declaration metadata is separate from effects; its existing access and
     override semantics remain the elaborator's responsibility. Compiler-only
@@ -60,6 +60,22 @@ def checkSpecs (p : Pos) (subject : String) (specs : List String)
     if !typeOnly && (metadata.contains sp || sp.startsWith "$") then continue
     reject p s!"unknown or unsupported {if typeOnly then "function-type effect" else "function specifier"} <{sp}> on {subject} (#494)"
 
+/-- Construction has the same heap family as functions, but is immediate and
+    cannot declare failure. Declaration metadata retains its separate meaning. -/
+def checkData (p : Pos) (kind : String) (specs : List String) : Except String Unit := do
+  checkUnsupported p specs
+  checkSpecs p kind (specs.filter effectNames.contains)
+  for sp in ["decides", "suspends"] do
+    if specs.contains sp then reject p s!"<{sp}> is not allowed on a {kind}: construction effects are heap effects"
+
+/-- No heap specifier means transacts, also for data types (pinned
+    Tests/Effects.versetest). Metadata does not change that default. -/
+def constructionFx (specs : List String) : List String :=
+  let heap := ["reads", "writes", "allocates"]
+  if specs.contains "computes" then []
+  else if specs.contains "transacts" || !(heap.any specs.contains) then heap
+  else heap.filter specs.contains
+
 partial def checkTy (p : Pos) : STy → Except String Unit
   | .name _ => pure ()
   | .arr t | .opt t => checkTy p t
@@ -75,7 +91,8 @@ partial def checkExpr (e : SExpr) (file : String := "") : Except String Unit := 
   match e with
   | .decl _ _ ty _ _ => ty.forM (checkTy p)
   | .construct _ _ args _ => args.forM (checkTy p)
-  | .structDef _ _ fields =>
+  | .structDef _ _ specs fields =>
+    checkData p "struct" specs
     for (_, ty, value, _) in fields do
       checkTy p ty
       value.forM (checkExpr · p.file)
@@ -98,7 +115,7 @@ partial def checkTop (top : STop) (owner : String := "") : Except String Unit :=
     ty.forM (checkTy p)
     checkExpr value p.file
   | .classDef p name _ specs parents _ fields _ methods =>
-    checkNonFunction p "class/interface" specs
+    checkData p "class/interface" specs
     parents.forM (checkTy p)
     for (_, ty, value, _) in fields do
       checkTy p ty

@@ -1,3 +1,4 @@
-# expect: construction/field effect budgets
-i:=interface<transacts>{}
+# expect: construction of i must allow
+required:=interface<transacts>{}
+i:=interface<computes>(required){}
 Main():void={}

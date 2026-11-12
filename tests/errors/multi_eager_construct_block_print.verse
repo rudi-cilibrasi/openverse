@@ -1,5 +1,5 @@
 # expect: it may print
-box := class:
+box := class<computes>:
     D:int = 1+2
     V:int
     block:

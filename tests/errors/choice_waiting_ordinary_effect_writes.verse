@@ -2,7 +2,7 @@
 pair(a:type,b:type):=class{}
 dup(t:type):=class(pair(t,t)){}
 cell:=class{var N:int=10}
-token:=class<unique>{V:int}
+token:=class<allocates><unique>{V:int}
 Two(N:int)<computes>:int=N|N+1
 Early(N:int)<computes>:int=
     if(N<0):return N

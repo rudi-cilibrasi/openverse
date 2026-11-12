@@ -415,7 +415,7 @@ partial def mapE (f : SExpr → Option SExpr) (e : SExpr) : SExpr :=
         | .decl q fn t v x => .decl q fn t v (go x)
         | a => go a)
     | .mapLit p kvs => .mapLit p (kvs.map fun (k, v) => (go k, go v))
-    | .structDef p tps fs => .structDef p tps (fs.map fun (n, t, d, v) => (n, t, d.map go, v))
+    | .structDef p tps specs fs => .structDef p tps specs (fs.map fun (n, t, d, v) => (n, t, d.map go, v))
     | e => e
 
 /-- An exclusive choice (#314): at most one alternative's `guards` hold,
@@ -1180,7 +1180,7 @@ partial def namesUsed (e : SExpr) : List String :=
     | .ret _ x => (x.map go).getD []
     | .caseE _ sc arms => go sc ++ arms.flatMap fun (pt, v) => ((pt.map go).getD []) ++ go v
     | .mapLit _ kvs => kvs.flatMap fun (k, v) => go k ++ go v
-    | .structDef _ _ fs => fs.flatMap fun (_, _, d, _) => (d.map go).getD []
+    | .structDef _ _ _ fs => fs.flatMap fun (_, _, d, _) => (d.map go).getD []
     | _ => []
   (go e).eraseDups
 
@@ -1821,7 +1821,7 @@ partial def inlineCalls (mv : List (String × MFn)) (e : SExpr) (recs : List Str
       | .decl q fn t v x => do return .decl q fn t v (← go x)
       | a => go a)
   | .mapLit p kvs => return .mapLit p (← kvs.mapM fun (k, v) => do return (← go k, ← go v))
-  | .structDef p tps fs => return .structDef p tps (← fs.mapM fun (n, t, d, v) => do return (n, t, ← d.mapM go, v))
+  | .structDef p tps specs fs => return .structDef p tps specs (← fs.mapM fun (n, t, d, v) => do return (n, t, ← d.mapM go, v))
   | e => return e
 
 mutual
@@ -1908,7 +1908,7 @@ partial def valueUse? (mv : List String) : SExpr → Option (Pos × String)
   | .app _ (.ident _ "$dispatch") (_ :: as) _ => as.findSome? (valueUse? mv)
   | .app _ (.ident _ _) as _ => as.findSome? (valueUse? mv)
   | .ident p n => if mv.contains n then some (p, n) else none
-  | .structDef _ _ fs => (fs.filterMap (·.2.2.1)).findSome? (valueUse? mv)
+  | .structDef _ _ _ fs => (fs.filterMap (·.2.2.1)).findSome? (valueUse? mv)
   | e => e.children.findSome? (valueUse? mv)
 
 /-- Source storage retained by a generated resume method. The method's
@@ -2386,7 +2386,7 @@ def methodFns (tops : List STop) (reserved : List String := []) : Except String 
   -- and of the prelude, `reserved`: `R.M` may be any of them)
   let allFields : List String := classes.flatMap (fun (_, (_, _, fs, _, _)) => fs.map (·.1)) ++
     tops.flatMap (fun
-      | .const _ _ _ (.structDef _ _ fs) => fs.map (·.1)
+      | .const _ _ _ (.structDef _ _ _ fs) => fs.map (·.1)
       | .const _ _ _ (.enumDef _ vs _) => vs
       | _ => []) ++ reserved
   let topNames : List String := tops.filterMap fun | .fn _ n .. | .const _ n .. | .classDef _ n .. => some n
@@ -2666,7 +2666,7 @@ def inlineMulti (tops : List STop) (reserved : List String := []) (eager : List 
   -- (every name the program binds: parameters, locals, fields, methods)
   let binders : List String := (tops.flatMap fun
     | .fn _ _ ps _ _ _ b => ps.map (·.name) ++ localsOf b
-    | .const _ _ _ (.structDef _ _ fs) => fs.map (·.1)
+    | .const _ _ _ (.structDef _ _ _ fs) => fs.map (·.1)
     | .classDef _ _ _ _ _ _ fs _ ms => fs.map (·.1) ++ ms.flatMap fun
         | .fn _ m ps _ _ _ b => m :: ps.map (·.name) ++ localsOf b
         | _ => []

@@ -1,7 +1,7 @@
 # Construction keeps the expected types of every field through projection.
-dead(t:type) := struct { E:[]t=Concatenate(); V:int }
-plain := struct { E:[]int=Concatenate(); V:int }
-pack(a:type,b:subtype(comparable)) := struct:
+dead(t:type) := struct<computes> { E:[]t=Concatenate(); V:int }
+plain := struct<computes> { E:[]int=Concatenate(); V:int }
+pack(a:type,b:subtype(comparable)) := struct<computes>:
     E:[]a = Concatenate()
     O:?a = false
     M:[b]a = map{}

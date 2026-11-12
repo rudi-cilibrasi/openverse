@@ -30,7 +30,7 @@ Touch(B:box(t) where t:type):box(t)=
     set B.C.N+=1
     Print("receiver {{B.C.N}}")
     B
-adapter(t:type):=class:
+adapter(t:type):=class<computes>:
     B:box(t)
     Call(X:int):tuple(t,rational)=
         R:tuple(t,int)=B.Pair(X)
@@ -59,7 +59,7 @@ elif mode == 1:
         Print("try {{C.N}}")
         X=V
         (X,C.N)
-adapter(t:subtype(comparable)):=class:
+adapter(t:subtype(comparable)):=class<computes>:
     B:box(t)
     Call(X:t)<transacts><decides>:tuple(t,rational)=
         R:tuple(t,int)=B.Match[X]
@@ -74,8 +74,8 @@ Main():void=Run(box({ty}){{V:={old},C:=cell{{}}}},{new})''')
     lines = ['miss 0', 'reject 0', 'try 1', 'hit 1 1']
 elif mode == 2:
     value = 'adapter(t){B:=B}.Call' if control else 'B.Make'
-    print(f'''animal(t:type):=class{{V:t}}
-dog(t:type):=class(animal(t)){{N:int={n}}}
+    print(f'''animal(t:type):=class<computes>{{V:t}}
+dog(t:type):=class<computes>(animal(t)){{N:int={n}}}
 source(t:type):=interface:
     Get():t
     Make(X:animal(t))<computes>:dog(t)=dog(t){{V:=X.V}}
@@ -83,7 +83,7 @@ box(t:type,h:type):=class(source(t)):
     V:t
     Hidden:h
     Get<override>():t=V
-adapter(t:type):=class:
+adapter(t:type):=class<computes>:
     B:source(t)
     Call(X:dog(t))<computes>:animal(t)=
         R:dog(t)=B.Make(X)
@@ -101,7 +101,7 @@ elif mode == 3:
 extra(a:subtype(comparable),b:subtype(comparable)):=class(root(a)):
     Hidden:b
     Pair(P:tuple(a,rational))<computes>:tuple(b,int)=(Hidden,Floor(P(1)))
-adapter(a:subtype(comparable),b:subtype(comparable)):=class:
+adapter(a:subtype(comparable),b:subtype(comparable)):=class<computes>:
     B:extra(a,b)
     Call(X:a,Y:int)<computes>:tuple(b,rational)=
         R:tuple(b,int)=B.Pair((X,Y))
@@ -135,7 +135,7 @@ Touch(B:box(t) where t:type):box(t)=
     set B.C.N+=1
     Print("receiver {{B.C.N}}")
     B
-adapter(t:type):=class:
+adapter(t:type):=class<computes>:
     B:box(t)
     Call(X:int)<suspends>:tuple(t,rational)=
         R:tuple(t,int)=B.Later(X)
@@ -159,13 +159,13 @@ else:
     print(f'''box(t:type):=class:
     V:t
     Pair(X:rational)<computes>:tuple(t,int)=(V,Floor(X))
-adapter(t:type):=class:
+adapter(t:type):=class<computes>:
     B:box(t)
     Call(X:int)<computes>:tuple(t,rational)=
         R:tuple(t,int)=B.Pair(X)
         R
 Bind(B:box(t) where t:type)<computes>:type{{_(:int)<computes>:tuple(t,rational)}}={value}
-holder(t:type):=class:
+holder(t:type):=class<computes>:
     B:box(t)
     F:type{{_(:int)<computes>:tuple(t,rational)}}
 Call(B:box(t),?F:type{{_(:int)<computes>:tuple(t,rational)}}=Bind(B) where t:type)<computes>:tuple(t,rational)=F({x})

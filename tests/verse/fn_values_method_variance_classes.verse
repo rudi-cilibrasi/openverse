@@ -1,5 +1,5 @@
-animal(t:type):=class{V:t}
-dog(t:type):=class(animal(t)){N:int=7}
+animal(t:type):=class<computes>{V:t}
+dog(t:type):=class<computes>(animal(t)){N:int=7}
 box(t:type,h:type):=class:
     Hidden:h
     Make(A:animal(t))<computes>:dog(t)=dog(t){V:=A.V}

@@ -34,7 +34,7 @@ else:
 Path(sys.argv[2]).write_text("exit=0\n" + "\n".join(lines) + "\n")
 
 print(f'''cell:=class{{var N:int=0}}
-token:=class<unique>{{V:int}}
+token:=class<allocates><unique>{{V:int}}
 Child(H:cell,X:t,N:int where t:type)<suspends><{fx}>:t=
     defer:Print("cleanup {{N}}")
     Print("start {{N}}")''')
@@ -64,9 +64,9 @@ A(H:cell,X:t,N:int,D:int where t:type)<{fx}>:task(t)=
     if(D<=0):return Start(H,X,N)
     B(H,X,N,D-1)''')
     elif style == 2:
-        print(f'''iface(t:type):=interface:
+        print(f'''iface(t:type):=interface<computes>:
     Launch(H:cell,X:t,N:int)<{fx}>:task(t)
-carrier(t:type):=class(iface(t)):
+carrier(t:type):=class<computes>(iface(t)):
     Launch<override>(H:cell,X:t,N:int)<{fx}>:task(t)=Start(H,X,N)
 Entry({params})<{fx}>:task(t)=
     B:iface(t)=carrier(t){{}}

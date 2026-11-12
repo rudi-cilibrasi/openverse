@@ -1,6 +1,6 @@
 # Covariant recursive dispatch is checked and collected at each declaration result type.
-animal := class { N:int }
-dog := class(animal) { Bark:int=7 }
+animal := class<computes> { N:int }
+dog := class<computes>(animal) { Bark:int=7 }
 shelter := class:
     Get(N:int)<computes>:animal = if(N>0) then (animal{N:=N} | Get(N-1)) else animal{N:=0}
 kennel := class(shelter):

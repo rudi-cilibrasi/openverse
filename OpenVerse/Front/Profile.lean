@@ -26,7 +26,7 @@ partial def checkExpr (e : SExpr) (file : String := "") : Except String Unit := 
   | .forE .. => reject pos "for consumers (including collection iteration)"
   | .gen .. => reject pos "generator clauses"
   | .range .. => reject pos "ranges"
-  | .structDef _ _ fields =>
+  | .structDef _ _ _ fields =>
     for (_, _, value, _) in fields do
       if let some value := value then checkExpr value file
   | .refineDef _ _ _ conditions => conditions.forM (checkExpr · file)

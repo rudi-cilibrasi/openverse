@@ -1728,7 +1728,7 @@ partial def writesTps (tps : List String) (e : SExpr) : Bool :=
     (match e with
     | .decl _ _ (some t) _ _ => Choice.styMentions tps t
     | .construct _ n ts _ => tps.contains n || ts.any (Choice.styMentions tps)
-    | .structDef _ _ fs => fs.any fun (_, t, _, _) => Choice.styMentions tps t
+    | .structDef _ _ _ fs => fs.any fun (_, t, _, _) => Choice.styMentions tps t
     | .refineDef _ _ t _ => Choice.styMentions tps t
     | .ident _ n => tps.contains n
     | _ => false) || e.children.any (writesTps tps)
@@ -3544,7 +3544,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
 partial def defaultTypeNames (bound : List String) (e : SExpr) : List String :=
   let bare := fun (t : STy) => (t.bareNames.filter (!bound.contains ·))
   match e with
-  | .structDef _ tps fs =>
+  | .structDef _ tps _ fs =>
     let own := bound ++ tps.map (·.name)
     fs.flatMap fun (_, t, d, _) => t.bareNames.filter (!own.contains ·) ++
       (d.toList.flatMap (defaultTypeNames own))
@@ -3562,9 +3562,9 @@ partial def substDefaultTypes (σ : List (String × STy)) (e : SExpr) : SExpr :=
     | .decl p n t v x => some (.decl p n (t.map (·.substNames σ)) v (substDefaultTypes σ x))
     | .construct p n ts fs => some (.construct p n (ts.map (·.substNames σ)) (fs.map (substDefaultTypes σ)))
     | .refineDef p n t cs => some (.refineDef p n (t.substNames σ) (cs.map (substDefaultTypes σ)))
-    | .structDef p tps fs =>
+    | .structDef p tps specs fs =>
       let σ' := σ.filter fun (n, _) => !tps.any (·.name == n)
-      some (.structDef p tps (fs.map fun (n, t, d, v) =>
+      some (.structDef p tps specs (fs.map fun (n, t, d, v) =>
         (n, t.substNames σ', d.map (substDefaultTypes σ'), v)))
     | .app p (.ident q "$witness") [.ident r n] false =>
       match σ.lookup n with
@@ -5198,7 +5198,7 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
   | .member p e m => elabMember ctx p (← elabE ctx e none) m exp
   | .construct p name targs args => elabConstruct ctx p name targs args exp
   | .mapLit p entries => elabMapLit ctx p entries exp
-  | .structDef p _ _ | .enumDef p _ _ | .refineDef p _ _ _ => eerr p "struct, enum and type definitions must be at the top level"
+  | .structDef p _ _ _ | .enumDef p _ _ | .refineDef p _ _ _ => eerr p "struct, enum and type definitions must be at the top level"
   | .query p e =>
     let r ← elabE ctx e none
     match r.ty with
@@ -8677,6 +8677,13 @@ partial def elabFieldDefault (ctx : Ctx) (p : Pos) (name : String) (tas : List T
     expected type. -/
 partial def elabConstruct (ctx : Ctx) (p : Pos) (name : String) (targs : List STy) (args : List SExpr)
     (exp : Option Ty) : EM R := do
+  let result ← elabConstructionValue ctx p name targs args exp
+  if let some fx := ctx.types.constructionFx[name]? then
+    noteFx p fx (some s!"constructs {name} (declared construction budget)")
+  return result
+
+partial def elabConstructionValue (ctx : Ctx) (p : Pos) (name : String) (targs : List STy) (args : List SExpr)
+    (exp : Option Ty) : EM R := do
   if (ctx.types.structs.lookup name).isNone then eerr p s!"unknown struct '{name}'"
   let ty ← match targs, exp with
     | [], some (.struct n ts) => if n == name then pure (.struct n ts) else resolveTy ctx.types p (.name name)
@@ -9084,7 +9091,7 @@ def expandCtors (ctors : List (Pos × String × List SParam × List TParam × Li
     let tpTys : List STy := sparams.map fun tp => STy.name tp.name
     let fieldsSTy : STy := if sparams.isEmpty then .name fieldsTy else .app fieldsTy tpTys
     if !fs.isEmpty && !out.any (fun | .const _ n _ _ => n == fieldsTy | _ => false) then
-      out := out.push (.const p fieldsTy none (.structDef p sparams (fs.map fun f => (f, tyOf f, none, false))))
+      out := out.push (.const p fieldsTy none (.structDef p sparams [] (fs.map fun f => (f, tyOf f, none, false))))
     let mut body : Array SExpr := #[]
     let mut di := 0
     for it in items do
@@ -10857,6 +10864,14 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     | some e => [.fn e.pos "$Do" [] [] ["decides"] (.name "void") (.app e.pos (.ident e.pos "$Show") [e] false)]
     | none => []
   let resolved ← resolveModules (allTops000 ++ rawEntry)
+  -- Collect source contracts while every declaration still has its source
+  -- identity. Function-value classes, continuation frames and constructor
+  -- field packets implement source expressions; they acquire no extra source
+  -- contract merely because their implementation uses a data type.
+  let constructionFx := resolved.foldl (fun budgets top => match top with
+    | .classDef _ n _ specs .. | .const _ n _ (.structDef _ _ specs _) =>
+      budgets.insert n (EffectPolicy.constructionFx specs)
+    | _ => budgets) ({} : Std.HashMap String (List String))
   -- functions with several values (#235): inlined at their calls
   -- (#283) the members of built-in types and of the prelude: a method with
   -- several values may not be named like one, as `R.M` could be it
@@ -10877,6 +10892,17 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   -- Public compiler requests must not launder annotations through generated
   -- source or through function shapes that normalize their effect lists.
   EffectPolicy.check (resolved ++ helpers)
+  -- A materialized request can itself carry an explicit data contract.
+  -- Enforce it too; unannotated implementation types retain inferred effects.
+  let constructionFx := (resolved ++ helpers).foldl (fun budgets top =>
+    let data := match top with
+      | .classDef _ n _ specs .. | .const _ n _ (.structDef _ _ specs _) => some (n, specs)
+      | _ => none
+    match data with
+    | some (n, specs) =>
+      if budgets.contains n || !specs.any EffectPolicy.effectNames.contains then budgets
+      else budgets.insert n (EffectPolicy.constructionFx specs)
+    | none => budgets) constructionFx
   for (_, ty) in opts.fnRequests do
     EffectPolicy.checkTy { line := 0, col := 0 } ty.toSTy
   for request in opts.methodRequests do
@@ -11114,6 +11140,13 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       seen := seen ++ new
       frontier := new.flatMap directUp
     if seen.contains cd.name then throw s!"{cd.pos.show}: {cd.name} inherits from itself"
+  for cd in cdefs do
+    if let some allowed := constructionFx[cd.name]? then
+      for parent in cd.parents do
+        if let some required := constructionFx[parent]? then
+          for effect in required do
+            if !allowed.contains effect then
+              throw s!"{cd.pos.show}: construction of {cd.name} must allow <{effect}> declared by parent {parent}; add <{effect}> or <transacts> to {cd.name}"
   -- the type arguments `c` gives `T` above it, as written in terms of `c`'s
   -- type parameters (through parents of both kinds, #39, #53)
   let supArgsSTy (c T : String) : Option (List STy) := Id.run do
@@ -11318,7 +11351,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   for cd in cdefs do
     let n := cd.name
     let fs := fullOf n
-    expanded := expanded.push (.const cd.pos n none (.structDef cd.pos cd.tps fs))
+    expanded := expanded.push (.const cd.pos n none (.structDef cd.pos cd.tps cd.specs fs))
     let selfTy : STy := if cd.tps.isEmpty then .name n else .app n (cd.tps.map fun tp => STy.name tp.name)
     for (m, mi) in cd.methods.zip (List.range cd.methods.length) do
       match m with
@@ -11447,7 +11480,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   let varFields : List (String × String) := cdefs.flatMap fun cd =>
     (fullOf cd.name).filterMap fun (f, _, _, isVar) => if isVar then some (cd.name, f) else none
   let uniques : List String := (cdefs.filter (·.specs.contains "unique")).map (·.name)
-  let mut env : TyEnv := { classes := henv.classes, cinfo := henv.cinfo, cinfoMap := henv.cinfoMap,
+  let mut env : TyEnv := { constructionFx, classes := henv.classes, cinfo := henv.cinfo, cinfoMap := henv.cinfoMap,
                            classIx := henv.classes.zipIdx.foldl (fun m (n, i) => m.insert n i) {},
                            belowReady := true,
                            supersMap := henv.classes.foldl (fun m d => m.insert d (henv.supers d)) {},
@@ -11481,7 +11514,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     | .const _ n none (.enumDef _ vals isOpen) =>
       env := { env with enums := env.enums ++ [(n, vals)],
                         openEnums := if isOpen then env.openEnums ++ [n] else env.openEnums }
-    | .const _ n none (.structDef _ _ _) => env := { env with structs := env.structs ++ [(n, [])] }
+    | .const _ n none (.structDef _ _ _ _) => env := { env with structs := env.structs ++ [(n, [])] }
     | .const p n none (.refineDef _ v sty conds) =>
       -- a refinement type (#136)
       let (base, _) ← (resolveTy env p sty).run {}
@@ -11490,14 +11523,14 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   -- the type parameters of parametric structs
   for t in allTops do
     match t with
-    | .const _ n none (.structDef _ tps@(_ :: _) _) =>
+    | .const _ n none (.structDef _ tps@(_ :: _) _ _) =>
       env := { env with sparams := env.sparams ++ [(n, ← checkTParams env tps)] }
     | _ => pure ()
   let shell := env
   let mut structs := #[]
   for t in allTops do
     match t with
-    | .const p n none (.structDef _ _ fs) =>
+    | .const p n none (.structDef _ _ _ fs) =>
       let senv := { shell with tvars := (shell.sparams.lookup n).getD [] |>.map fun (v, c) => (v, Ty.param v c) }
       let fields ← fs.mapM fun (f, sty, d, _) => do
         let (ty, _) ← (resolveTy senv p sty).run {}
@@ -12109,36 +12142,6 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
         throw s!"{fp.show}: field '{f}' of {cname} must have the type it inherits, {t0.show}, not {t.show}"
     | none => pure ()
   if let some msg := defaultClashes[0]? then throw msg
-  let mut fieldDefaultNeeds : List Choice.FirstLift := []
-  let mut fieldMethodNeeds : List FnValues.MethodRequest := []
-  -- check every field default once, with its struct's type parameters opaque
-  -- (a default is elaborated again, at its field's type, at each construction
-  -- that omits the field)
-  for t in allTops do
-    match t with
-    | .const _ n none (.structDef _ _ _) =>
-      let nps := ((env.sparams.lookup n).getD []).map fun (v, c) => Ty.param v c
-      let senv := { env with tvars := (env.sparams.lookup n).getD [] |>.map fun (v, c) => (v, Ty.param v c) }
-      let ctx : Ctx := { sigs := allSigs, sigProg, types := senv, canFail := true, inDefaultCheck := true }
-      for (f, ft, d) in (env.structs.lookup n).getD [] do
-        if let some d := d then
-          -- (an inherited default sees its home class's type parameters, #39)
-          let home := (env.defaultHome.lookup (n, f)).getD n
-          let hσ := (((env.sparams.lookup home).getD []).map (·.1)).zip (env.argsAt n nps home)
-          let ctx := { ctx with defaults := [(n, f)], types := { senv with tvars := hσ } }
-          match (do coerce d.pos (← elabE ctx d (some ft)) ft : EM Expr).run { env } with
-          | .ok (_, st) =>
-            fieldMethodNeeds := FnValues.mergeMethodRequests fieldMethodNeeds st.methodNeeds
-            fieldDefaultNeeds := fieldDefaultNeeds ++ st.loopFirst.filterMap fun u => match u.lift with
-              | .ok l => if l.key.startsWith "defaults:" then some l else none
-              | _ => none
-          | .error msg => throw s!"{msg} (in the default of field '{f}' of {n})"
-    | _ => pure ()
-  -- a function: its body under the type environment `env` (which binds the
-  -- type parameters `tps` of a generic function to themselves), after the
-  -- initialisation of every non-parameter slot (OpenVerse.Core.Typing); its
-  -- frame starts with its parameters, then one hidden parameter per type
-  -- parameter, holding a value of that type
   -- what each heap effect is, for messages
   let fxWhat : String → String
     | "reads" => "reads a var field"
@@ -12157,6 +12160,46 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
           let spec := if allowed.isEmpty then "<computes>" else String.intercalate "" (allowed.map (s!"<{·}>"))
           let fix := if allowed.isEmpty then "remove <computes>" else s!"add <{k}> or <transacts>"
           throw s!"{kp.show}: {name} {what}, which its effects ({spec}) do not allow: {fix}"
+  -- A mutable or unique instance needs allocation even when no source
+  -- expression uses the type. Inherited mutable fields/identity count too.
+  for cd in cdefs do
+    if let some allowed := env.constructionFx[cd.name]? then
+      if env.isUnique cd.name || (env.fields cd.name).any (fun (f, _, _) => env.isVarField cd.name f) then
+        fxCheck s!"construction of {cd.name}" allowed
+          { fx := [("allocates", cd.pos, none)] }
+  let mut fieldDefaultNeeds : List Choice.FirstLift := []
+  let mut fieldMethodNeeds : List FnValues.MethodRequest := []
+  -- check every field default once, with its struct's type parameters opaque
+  -- (a default is elaborated again, at its field's type, at each construction
+  -- that omits the field)
+  for t in allTops do
+    match t with
+    | .const _ n none (.structDef _ _ _ _) =>
+      let nps := ((env.sparams.lookup n).getD []).map fun (v, c) => Ty.param v c
+      let senv := { env with tvars := (env.sparams.lookup n).getD [] |>.map fun (v, c) => (v, Ty.param v c) }
+      let allowed := env.constructionFx[n]?.getD heapFx
+      let ctx : Ctx := { sigs := allSigs, sigProg, types := senv, canFail := true,
+                          fnFx := allowed, inDefaultCheck := true }
+      for (f, ft, d) in (env.structs.lookup n).getD [] do
+        if let some d := d then
+          -- (an inherited default sees its home class's type parameters, #39)
+          let home := (env.defaultHome.lookup (n, f)).getD n
+          let hσ := (((env.sparams.lookup home).getD []).map (·.1)).zip (env.argsAt n nps home)
+          let ctx := { ctx with defaults := [(n, f)], types := { senv with tvars := hσ } }
+          match (do coerce d.pos (← elabE ctx d (some ft)) ft : EM Expr).run { env } with
+          | .ok (_, st) =>
+            fxCheck s!"default of field '{f}' of {n}" allowed st
+            fieldMethodNeeds := FnValues.mergeMethodRequests fieldMethodNeeds st.methodNeeds
+            fieldDefaultNeeds := fieldDefaultNeeds ++ st.loopFirst.filterMap fun u => match u.lift with
+              | .ok l => if l.key.startsWith "defaults:" then some l else none
+              | _ => none
+          | .error msg => throw s!"{msg} (in the default of field '{f}' of {n})"
+    | _ => pure ()
+  -- a function: its body under the type environment `env` (which binds the
+  -- type parameters `tps` of a generic function to themselves), after the
+  -- initialisation of every non-parameter slot (OpenVerse.Core.Typing); its
+  -- frame starts with its parameters, then one hidden parameter per type
+  -- parameter, holding a value of that type
   let elabFn (env : TyEnv) (p : Pos) (name : String) (ps : List SParam) (ptys : List Ty) (ret : Ty)
       (decides : Bool) (allowed : List String) (tps : List (String × Bool)) (body : SExpr)
       (suspends : Bool := false) (selfTps : List String := [])
@@ -12211,6 +12254,9 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       | .ok ds => pure (selfInits ++ ds)
       | .error msg => throw s!"{p.show}: in {name}: {msg}"
     fxCheck name allowed st
+    if name.endsWith ".$block" then
+      if let some budget := env.constructionFx[(name.dropEnd ".$block".length).toString]? then
+        fxCheck s!"construction block of {(name.dropEnd ".$block".length).toString}" budget st
     return ({ name, arity, nslots := st.nslots, decides, writes := allowed.contains "writes",
               body := initPrefixE arity inits e },
       spawnParamTypes env name (st.slotTys.toList.map (Ty.toVTy env)), st.fnNeeds, st.errAt, st.castNeeds, st.loopFirst,

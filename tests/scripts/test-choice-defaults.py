@@ -191,9 +191,9 @@ def eager_program(seed):
     implicit = r.choice([True, False])
     inherited = r.choice([True, False])
     name = 'base' if inherited else 'pack'
-    declaration = f'{name}(t:type) := class:\n' + ''.join('    ' + fields[f] + '\n' for f in order)
+    declaration = f'{name}(t:type) := class<computes>:\n' + ''.join('    ' + fields[f] + '\n' for f in order)
     if inherited:
-        declaration += 'pack(u:type) := class(base(u)) {}\n'
+        declaration += 'pack(u:type) := class<computes>(base(u)) {}\n'
     ctor = 'pack' if implicit else 'pack(t)'
     index = 'index{V:=N|N+1}'
     if r.choice([True, False]):
@@ -207,8 +207,8 @@ None()<computes><decides>:int =
     false?
     0
 Pick(N:int)<computes>:int = N | N+1
-index := struct {{ D:int=Default(); V:int }}
-outer := struct {{ D:int=Default(); Inner:index }}
+index := struct<computes> {{ D:int=Default(); V:int }}
+outer := struct<computes> {{ D:int=Default(); Inner:index }}
 {declaration}
 R(X:t,N:int,?Step:int={step} where t:type)<computes><decides>:pack(t) =
     if (N>0) then ({ctor}{{J:=0|1,K:={kexpr},V:=X|X}} | R[{edge}]) else {ctor}{{J:=0,K:=0,V:=X}}
@@ -295,8 +295,8 @@ def projection_program(seed):
     failure = f'\n        if(V={stop})then Fail[] else 0' if fail else ''
     specs = '<decides>' if fail else ''
     source = f'''# struct projection model seed {seed}
-leaf(t:type) := struct {{ E:[]t=Concatenate() }}
-pack(a:type,b:subtype(comparable)) := struct:
+leaf(t:type) := struct<computes> {{ E:[]t=Concatenate() }}
+pack(a:type,b:subtype(comparable)) := struct<computes>:
 ''' + ''.join('    ' + field + '\n' for field in fields) + f'''
 One(X:a,Y:b,N:int where a:type,b:subtype(comparable))<computes>:int = pack(a,b){{{scalar_fields}}}.{suffix}
 Swap(X:b,Y:a,N:int where a:subtype(comparable),b:type)<computes>:int = One(X,Y,N)

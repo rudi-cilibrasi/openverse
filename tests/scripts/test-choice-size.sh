@@ -787,7 +787,7 @@ if kind.startswith('clause-return-'):
 if kind.startswith('outer-effect-'):
     print('pair(a:type,b:type) := class { A:a; B:b }')
     print('dup(t:type) := class(pair(t,t)) { C:int=4 }')
-    print('cell := class { var N:int=0 }')
+    print('cell := class<allocates> { var N:int=0 }')
     print('Early(N:int):int =\n    if(N<0):return 0\n    N|N+1')
     effect, operand = ('writes', 'set H.N=N\n    N')
     if kind.endswith('composed'): effect, operand = 'reads', 'H.N+N'

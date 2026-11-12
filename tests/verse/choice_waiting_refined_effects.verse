@@ -1,7 +1,7 @@
 pair(a:type,b:type):=class{}
 dup(t:type):=class(pair(t,t)){C:int=4}
 cell:=class{var N:int=10}
-token:=class<unique>{V:int}
+token:=class<allocates><unique>{V:int}
 Read(P:pair(a,b),Q:pair(c,d),H:cell where a:type,b:type,c:type,d:type)<suspends><reads>:int=
     if(Outer:=dup[P]):
         for(V:=if(D:=dup[Q])then(D.C|D.C+1)else 0):

@@ -1,5 +1,5 @@
 cell:=class{var N:int=0}
-token:=class<unique>{V:int}
+token:=class<allocates><unique>{V:int}
 Child(H:cell,X:t,N:int where t:type)<suspends><allocates>:t=
     defer:Print("cleanup {N}")
     Print("start {N}")
@@ -8,9 +8,9 @@ Child(H:cell,X:t,N:int where t:type)<suspends><allocates>:t=
     Sleep(0.1)
     Print("end {N}")
     X
-iface(t:type):=interface:
+iface(t:type):=interface<computes>:
     Launch(H:cell,X:t,N:int)<allocates>:task(t)
-carrier(t:type):=class(iface(t)):
+carrier(t:type):=class<computes>(iface(t)):
     Launch<override>(H:cell,X:t,N:int)<allocates>:task(t)=Start(H,X,N)
 Entry(H:cell,X:t,N:int where t:type)<allocates>:task(t)=
     B:iface(t)=carrier(t){}

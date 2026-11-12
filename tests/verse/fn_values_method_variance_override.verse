@@ -1,5 +1,5 @@
-animal(t:type):=class{V:t}
-dog(t:type):=class(animal(t)){N:int=7}
+animal(t:type):=class<computes>{V:t}
+dog(t:type):=class<computes>(animal(t)){N:int=7}
 base(t:type):=class:
     Make(X:animal(t))<computes>:animal(t)=X
 child(a:type,h:type):=class(base(a)):

@@ -1,5 +1,5 @@
 # a value that prints through a struct field's default, rejected by the if's next clause: undone with it (#246)
-pt := struct:
+pt := struct<computes>:
     X:int = (Print("struct field"); 0)
 Count(N:int)<computes><decides>:int =
     N > 0

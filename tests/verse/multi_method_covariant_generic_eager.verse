@@ -1,6 +1,6 @@
 # Recursive covariant calls carry the same generic receiver/result witnesses.
-animal(t:type) := class { V:t }
-dog(t:type) := class(animal(t)) { Bark:int=7 }
+animal(t:type) := class<computes> { V:t }
+dog(t:type) := class<computes>(animal(t)) { Bark:int=7 }
 shelter(t:type) := class:
     Get(N:int,X:t)<computes>:animal(t) = if(N>0) then (animal(t){V:=X}|Get(N-1,X)) else animal(t){V:=X}
 kennel(t:type) := class(shelter(t)):

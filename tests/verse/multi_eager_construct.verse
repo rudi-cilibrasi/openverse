@@ -1,8 +1,8 @@
 # Eager recursion lifts fields in declaration order, including nested calls.
-box := struct:
+box := struct<computes>:
     D:int = 1+2
     V:int
-pair := struct:
+pair := struct<computes>:
     A:int
     D:int = block{ N := 7; N }
     B:int

@@ -1,6 +1,6 @@
 # a parametric class's block: has the effects of its code (#39): this one
-# only prints, so <computes> code can construct the class
-tagged(t:type) := class:
+# only prints; its explicit <computes> contract admits pure construction
+tagged(t:type) := class<computes>:
     Value:t
     block:
         Print("made one")

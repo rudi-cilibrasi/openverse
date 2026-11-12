@@ -1,6 +1,6 @@
 # a block that constructs its own class (#41 review): its effects are those
-# of its code, found from none, so <computes> code may construct it
-rec := class:
+# of its code, found from none, within its declared construction budget
+rec := class<computes>:
     D:int
     block:
         Print("rec {D}")

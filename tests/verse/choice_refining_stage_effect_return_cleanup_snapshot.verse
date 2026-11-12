@@ -1,7 +1,7 @@
 pair(a:type,b:type):=class{}
 dup(t:type):=class(pair(t,t)){C:int=4}
 cell:=class{var N:int=30}
-token:=class<unique>{V:int}
+token:=class<allocates><unique>{V:int}
 Reading(H:cell,N:int)<suspends><reads>:int=
     Sleep(0.01)
     H.N+N
@@ -14,7 +14,7 @@ Allocating(H:cell,N:int)<suspends><allocates>:int=
     T:=token{V:=N}
     T.V
 Wait(N:int)<suspends><computes>:int=block{Sleep(0.01);N}
-worker:=class:
+worker:=class<computes>:
     Read(H:cell,N:int)<reads>:int=H.N+N
     Write(H:cell,N:int)<suspends><writes>:int=Writing(H,N)
     ReadAlloc(H:cell,N:int)<reads><allocates>:int=

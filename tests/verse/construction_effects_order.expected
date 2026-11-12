@@ -1,0 +1,8 @@
+interface default
+base default
+derived default
+base block
+derived block 12
+result 3 4 5 12
+packet 9
+exit=0
