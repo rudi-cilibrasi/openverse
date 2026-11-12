@@ -1179,7 +1179,8 @@ Main():void =
   overload with several values inlined, wherever the call is (a function,
   a constant, a default, a class block, the entry expression). An overload
   may call its function's own name, so another overload, inlined there, or
-  itself, recursive (below). A call in
+  itself, recursive (below); and a recursive one may call an overloaded
+  one, as it may call any function with several values. A call in
   the clauses after a choice whose alternatives' values are of different
   types, which are copied for each (#335), must take one overload in every
   copy.

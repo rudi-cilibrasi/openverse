@@ -3275,13 +3275,6 @@ def inlineMulti (tops : List STop) (reserved : List String := []) (eager : List 
     for g in needAll do
       for h in (callees.lookup g).getD [] do
         if !needAll.contains h then needAll := needAll ++ [h]; grew := true
-  -- (#283) one computed eagerly cannot reach an overload of an overloaded
-  -- one: refused, for now
-  for g in needAll do
-    if let some ov := ovMv.find? fun f => (ovOf f).any (·.1 == g) then
-      let caller := (needAll.find? fun h => ((callees.lookup h).getD []).contains g).getD g
-      let pos := ((mfs.lookup caller).map (·.pos)).getD (((ovOf ov).head?.map (·.2.1)).getD default)
-      throw s!"{pos.show}: {shownFnName caller} has several values and is recursive, or called by a recursive one (so its values are computed at the call, F$all), and it calls {shownFnName ov}, which is overloaded with several values: not supported yet (#283)"
   for (n, f) in rawMfs do
     -- Recursive cleanup still needs an invocation scope, including when
     -- normalization would remove its registration after an early return.
