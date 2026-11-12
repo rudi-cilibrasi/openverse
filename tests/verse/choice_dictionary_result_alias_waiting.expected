@@ -1,0 +1,71 @@
+pure 0
+body 1 0
+pure 0
+body 2 0
+pure 0
+body 3 0
+pure 0
+body 4 0
+pure 0
+body 5 0
+pure 0
+body 6 0
+pure 0
+body 7 0
+pure 0
+body 8 0
+enter 0
+leave 7
+body 10 7
+enter 7
+leave 9
+body 12 9
+enter 9
+leave 9
+source 9 12
+background 9
+result -1 state 9
+pure 0
+body 1 0
+pure 0
+body 2 0
+pure 0
+body 3 0
+pure 0
+body 4 0
+pure 0
+body 5 0
+pure 0
+body 6 0
+pure 0
+body 7 0
+pure 0
+body 8 0
+enter 0
+leave 7
+body 10 7
+enter 7
+leave 9
+body 12 9
+enter 9
+leave 11
+body 14 11
+enter 11
+leave 13
+body 16 13
+enter 13
+leave 15
+body 18 15
+enter 15
+leave 17
+body 20 17
+enter 17
+leave 19
+body 22 19
+enter 19
+leave 21
+body 24 21
+source 21 24
+background 21
+result 16 state 21
+exit=0
