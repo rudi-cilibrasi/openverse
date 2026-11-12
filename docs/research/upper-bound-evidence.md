@@ -28,6 +28,9 @@ returns `base`. A lexical name alone, a declaration fact, or a dummy type-value
 witness cannot supply that value. Plans retain symbolic names, resolve current
 slots at the use site, and only search visible bindings and compiler-owned
 readonly proof fields. They do not walk arbitrary user object graphs.
+A call result conservatively retains the dummy role when its callee or any
+written argument carries that role, including ordinary generic forwarding
+calls. This rule does not infer arbitrary function return dependencies.
 
 The checked families currently cover:
 
@@ -78,6 +81,12 @@ projection and alpha-renaming; receiver constraints remain separate. Tuple
 function-value adapters retain a complete substituted relation in readonly proof
 fields and preserve parameters inferred only through bounds. They propagate
 comparability only when the original relation implies it.
+Named defaults receive actual dictionaries for the callee's declared relations,
+saved in fresh locals of the current call frame. The default keeps only earlier
+parameters and these private proof names; unrelated caller source names stay
+outside its scope. The final call reuses those saved dictionaries. Earlier
+argument/default roles remain attached to their saved values, so a dummy
+argument cannot become an actual default-scope proof.
 
 Member lookup uses actual nominal views. Root and interior mutation preserve
 the source storage type, evaluate indices/keys before traversal, and perform

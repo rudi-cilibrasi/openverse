@@ -307,11 +307,14 @@ partial def elabGenericCallWith (elabE : Ctx → SExpr → Option Ty → EM R) (
   σ := inferred
   let mut steps : Array Expr := #[]
   let mut slots : Array (Option Nat) := Array.replicate s.params.length none
+  let mut roles : Array Bool := s.params.toArray.mapIdx fun index _ => s.typeValues.contains index
+  let mut defaultEvidence : List (SubtypeEvidence.Bound × Local) := []
   if !plain then
-    for ((_, k), i) in given.zip (List.range given.length) do
+    for ((argument, k), i) in given.zip (List.range given.length) do
       let ta ← fresh (ptys[k]!.subst σ)
       steps := steps.push (.assign ta es[i]!)
       slots := slots.set! k (some ta)
+      roles := roles.set! k (roles[k]! || ctx.isTypeValue argument)
     for ((n, dflt), j) in s.named.zip (List.range s.named.length) do
       let k := npos + j
       if slots[k]!.isNone then
@@ -319,7 +322,24 @@ partial def elabGenericCallWith (elabE : Ctx → SExpr → Option Ty → EM R) (
         let pt := ptys[k]!
         -- (the default sees the parameters before it, in their temporaries)
         let earlier : List Local := ((s.pnames.zip (List.range k)).filterMap fun (pn, j) =>
-          (slots[j]!).map fun sl => ({ name := pn, slot := sl, ty := ptys[j]!.subst σ, mutable := false, typeValue := s.typeValues.contains j } : Local)).reverse
+          (slots[j]!).map fun sl => ({ name := pn, slot := sl, ty := ptys[j]!.subst σ, mutable := false, typeValue := roles[j]! } : Local)).reverse
+        -- A named default sees the callee's declared relations at this
+        -- actual instance, never arbitrary caller source names. Resolve
+        -- actual dictionaries now, save them in fresh current-frame slots,
+        -- and reuse those same values for the final call's proof arguments.
+        for declared in s.bounds do
+          if !(declared.base.params ++ declared.derived.params).all (fun name => (σ.lookup name).isSome) then continue
+          let required := declared.subst σ
+          if defaultEvidence.any (·.1 == required) then continue
+          let proofCtx := { ctx with locals := defaultEvidence.map (·.2) ++ earlier ++ ctx.locals }
+          let some plan := SubtypeEvidence.find? proofCtx.types proofCtx.evidenceTypes required | continue
+          if !plan.valid proofCtx.types proofCtx.evidenceTypes then eerr p "internal: invalid default subtype evidence"
+          let proof ← elabSubtypeValueWith elabE proofCtx p plan required
+          let slot ← fresh required.ty
+          steps := steps.push (.assign slot (← coerce p proof required.ty))
+          let saved : Local := {
+            name := s!"$subtypeDefault_{s.name}_{slot}", slot, ty := required.ty, mutable := false }
+          defaultEvidence := defaultEvidence ++ [(required, saved)]
         let key := (s.name, s!"?{n}")
         if ctx.defaults.contains key then
           eerr p s!"the default of ?{n} of {s.name} uses itself (a call of {s.name} that omits ?{n})"
@@ -330,7 +350,7 @@ partial def elabGenericCallWith (elabE : Ctx → SExpr → Option Ty → EM R) (
         -- Written types belong to the callee, with the arguments inferred
         -- so far. A caller's type aliases are outside this default's scope.
         let (types, d) ← defaultTypes ctx p s σ d
-        let dctx := { ctx with locals := earlier, selfClass := selfC,
+        let dctx := { ctx with locals := defaultEvidence.map (·.2) ++ earlier, selfClass := selfC,
                                selfMethod := if selfC.isSome then (s.name.splitOn ".").getLast? else none,
                                inParamDefault := true,
                                types,
@@ -356,6 +376,7 @@ partial def elabGenericCallWith (elabE : Ctx → SExpr → Option Ty → EM R) (
         let ta ← fresh (pt.subst σ)
         steps := steps.push (.assign ta rd)
         slots := slots.set! k (some ta)
+        roles := roles.set! k (roles[k]! || dctx.isTypeValue d)
   let inferred ← match SubtypeEvidence.infer (if s.bounds.isEmpty then ctx.types else ctx.evidenceEnv) s.bounds σ true with
     | some inferred => pure inferred
     | none => eerr p s!"cannot infer a consistent upper-bound instance of {s.name}"
@@ -400,6 +421,7 @@ partial def elabGenericCallWith (elabE : Ctx → SExpr → Option Ty → EM R) (
         eerr p s!"cannot call {s.name} here yet: its type parameter {v} would mention type arguments that the dispatch opens, apart from the caller's, and no value of those can be passed (#209)"
       witness ctx.types ctx.dictBase ctx.dictVars t
   let evidence ← evidencePlans.mapM fun (required, plan) => do
+    if let some (_, saved) := defaultEvidence.find? (·.1 == required) then return Expr.local saved.slot
     coerce p (← elabSubtypeValueWith elabE ctx p plan required) required.ty
   if plain then return ⟨.call s.idx (es.toList ++ evidence ++ dicts), s.ret.subst σ⟩
   let call := Expr.call s.idx (slots.toList.map (fun o => Expr.local o.get!) ++ evidence ++ dicts)

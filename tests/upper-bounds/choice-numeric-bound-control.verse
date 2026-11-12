@@ -1,8 +1,11 @@
-vehicle:=class<allocates>{var N:int=1}
+vehicle:=class<allocates>:
+    var N:int=1
+    ReadN()<reads>:int=N
 car:=class<allocates>(vehicle){Name:string="a"}
 ca:=class{var K:int=0}
 cb:=class{var K:rational=0}
-Read(X:car,?V:int=X.N)<reads>:int=V
+Read(X:car,?V:int=X.N,?F:type{_()<reads>:int}=X.ReadN)<reads>:int=
+    if(F()=V)then V else -1
 IntStep(X:car,P:ca)<suspends>:void=
     set P.K=Read(X)
     Sleep(0.1)

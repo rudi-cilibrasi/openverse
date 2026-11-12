@@ -1,9 +1,12 @@
-vehicle:=class<allocates>{var N:int=1}
+vehicle:=class<allocates>:
+    var N:int=1
+    ReadN()<reads>:int=N
 car:=class<allocates>(vehicle){Name:string="a"}
 ca:=class{var K:int=0}
 cb:=class{var K:rational=0}
 Dup(X:t where t:type)<computes>:t=X|X
-Read(X:t,?V:int=X.N where t:subtype(vehicle))<reads>:int=V
+Read(X:t,?V:int=X.N,?F:type{_()<reads>:int}=X.ReadN where t:subtype(vehicle))<reads>:int=
+    if(F()=V)then V else -1
 Run(X:t where t:subtype(vehicle))<suspends>:t=
     defer:Print("cleanup {X.N}")
     P:=ca{}

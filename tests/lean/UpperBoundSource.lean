@@ -21,7 +21,7 @@ def main (args : List String) : IO Unit := do
     "overload-value-refusal", "interior-readonly-refusal", "interior-effect-refusal",
     "peer-tuple-comparable-refusal", "peer-tuple-relation-refusal", "peer-narrow-refusal", "peer-float-refusal",
     "peer-map-key-refusal", "peer-container-arity-refusal", "peer-container-narrow-refusal",
-    "peer-refinement-narrow-refusal", "peer-refinement-literal-refusal"]
+    "peer-refinement-narrow-refusal", "peer-refinement-literal-refusal", "default-undeclared-bound-refusal"]
   let mut failures := 0
   for name in positive ++ negative do
     let root := s!"tests/upper-bounds/{name}"
