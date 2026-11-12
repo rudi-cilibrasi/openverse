@@ -1266,7 +1266,13 @@ woken waiter is `$Pending` until its turn (`signalAll` marks it, the drain
 unmarks it), and `$waitResume` reports a pending one as still waiting: a
 task resumed for one waiter's turn goes on only there, leaving its other
 woken arms for their turns, and no poll lets a woken task go on before
-its turn. The default prelude and lowering are unchanged, so a program
+its turn. A `rush` arm that goes on after the `rush` becomes a root
+that the function no longer runs, while the waiters in it recorded the
+function's: its wrapper's `start`, which registers it, also probes it
+once as its own root (`$CurRoot` the wrapper, `$Probe` set: `waitResume`
+records the root and `waitResume` and `sleepResume` report waiting, so
+the probe goes on nowhere), and a `Signal` before its first turn gives it
+its turn in their order. The default prelude and lowering are unchanged, so a program
 compiled without the option is byte-identical to before.
 
 The roots are a list of cells `[root, next]` (adding one costs a cell; an
