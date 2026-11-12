@@ -138,6 +138,35 @@ def capabilities (env : TyEnv) (locals : List (String × Ty)) : List Plan :=
              else (boundOf? fieldTy).map (Plan.field name field)
        | _ => [])
 
+/-- Source declarations must state their constraints. Compiler-owned
+    helpers can instead carry them in actual captured dictionary objects. -/
+def helperContext (name : String) : Bool :=
+  name.startsWith "$" || ["$dispatchDefaults", "$spawnBody", ".$call"].any fun part =>
+    (name.splitOn part).length > 1
+
+def parameterFacts (env : TyEnv) (parameters : List (Ty × Bool))
+    (allowFields : Bool := false) : List (Ty × Ty) :=
+  let actual := parameters.zipIdx.map fun ((ty, typeValue), i) =>
+    (s!"$argument{i}", if typeValue then Ty.void else ty)
+  if allowFields then (capabilities env actual).map fun plan =>
+    let bound := plan.bound env
+    (bound.base, bound.derived)
+  else actual.filterMap fun (_, ty) =>
+    (boundOf? ty).map fun bound => (bound.base, bound.derived)
+
+/-- Only real readonly compiler captures can justify generated environment
+    fields. Hidden type-value fields never contribute facts. A user class's
+    ordinary object fields cannot invent a missing declaration constraint. -/
+def fieldFacts (env : TyEnv) (owner : String)
+    (fields : List (String × Ty × Option SExpr)) : List (Ty × Ty) :=
+  fields.flatMap fun (name, ty, _) =>
+    if env.isVarField owner name || name.startsWith "$w." then []
+    else if name.startsWith fieldPrefix then
+      (boundOf? ty).toList.map fun bound => (bound.base, bound.derived)
+    else if (owner.startsWith "$" || owner.endsWith "$fn") && name.startsWith "$capture" then
+      parameterFacts env [(ty, false)] true
+    else []
+
 /-- Match constraints to the receiver's own resolved field layout. Caller
     evidence slots never determine a field or a slot in the callee. -/
 def fieldsForBounds (env : TyEnv) (receiver : Ty) (bounds : List Bound) : List (Nat × Nat) :=

@@ -586,6 +586,10 @@ partial def bindParams (isVal : String → Bool) (isField : String → String �
     modify fun s => { s with pre := s.pre.push fr }
   let (marks, pre) := pre.partition fun | .app _ (.ident _ "$tparams") _ false => true | _ => false
   let (pds, unpack) := (pre.take args.length, pre.drop args.length)
+  let marked (template value : SExpr) := match template with
+    | .decl _ _ _ _ (.app q (.ident _ "$typeValue") [_] false) =>
+      SExpr.app q (.ident q "$typeValue") [value] false
+    | _ => value
   match marks with
   | .app _ _ tps _ :: _ =>
     -- (each argument evaluated where it is, in order: one that a later
@@ -600,14 +604,14 @@ partial def bindParams (isVal : String → Bool) (isField : String → String �
       let later := (args.drop (i + 1)).any hasLiftable
       let a'' ← if later && !fromContext a' && !stable isVal a' then LM.bind a.pos "t" a' else pure a'
       match pd with
-      | .decl q x ty v _ => binds := binds.push (.decl q x ty v a'')
+      | .decl q x ty v _ => binds := binds.push (.decl q x ty v (marked pd a''))
       | _ => pure ()
     modify fun s => { s with pre := s.pre.push (.app p (.ident p "$params") (.block p binds.toList :: tps) false) }
   | _ =>
     for (pd, a) in pds.zip args do
       let a' ← liftE isVal isField a
       match pd with
-      | .decl q x ty v _ => modify fun s => { s with pre := s.pre.push (.decl q x ty v a') }
+      | .decl q x ty v _ => modify fun s => { s with pre := s.pre.push (.decl q x ty v (marked pd a')) }
       | _ => pure ()
   if unpacks then
     for u in unpack do
@@ -1701,7 +1705,9 @@ partial def inlineCalls (mv : List (String × MFn)) (e : SExpr) (recs : List Str
       -- (with named parameters: the positional ones, then the named ones
       -- given, as written, then the defaults of those omitted, in order,
       -- each in its own context, `$paramDefault`, as at a call)
-      let pdOf (sp : SParam) : SExpr := .decl q (tag sp.name) (tyOf sp.ty) false (.ident q "$arg")
+      let markValue (sp : SParam) (value : SExpr) :=
+        if sp.typeValue then SExpr.app q (.ident q "$typeValue") [value] false else value
+      let pdOf (sp : SParam) : SExpr := .decl q (tag sp.name) (tyOf sp.ty) false (markValue sp (.ident q "$arg"))
       let dflts ← if !hasNamed then pure [] else
         f.params.zipIdx.filterMapM fun (sp, k) => do
           match sp.default with
@@ -1713,7 +1719,7 @@ partial def inlineCalls (mv : List (String × MFn)) (e : SExpr) (recs : List Str
             let d' ← inlineCalls mv (renameTypes ρ d) recs loops clash ((g, sp.name) :: inDflt) groups ovs
             let earlier := (f.params.take k).map fun e => SExpr.tuple q [.ident q e.name, .ident q (tag e.name)]
             return some (.decl q (tag sp.name) (tyOf sp.ty) false
-              (.app q (.ident q "$paramDefault") [.ident q g, .ident q sp.name, .block q earlier, d'] false))
+              (markValue sp (.app q (.ident q "$paramDefault") [.ident q g, .ident q sp.name, .block q earlier, d'] false)))
           | none => return none
       -- (a generic one's: together, after its `$params`, `$defaults`, so a
       -- default can give a type parameter nothing else determined its type
@@ -1728,15 +1734,15 @@ partial def inlineCalls (mv : List (String × MFn)) (e : SExpr) (recs : List Str
           ((posPs.take off).map pdOf ++ [.decl q t (tyOf (.tup (tps.map (·.ty)))) false (.ident q "$arg")] ++
               namedAs.filterMap (fun (_, n, _) => (f.params.find? (·.name == n)).map pdOf),
             (tps.zipIdx.map fun (sp, i) =>
-              SExpr.decl q (tag sp.name) (tyOf sp.ty) false (.app q (.ident q t) [.int q (i : Int)] false)) ++ dflts,
+              SExpr.decl q (tag sp.name) (tyOf sp.ty) false (markValue sp (.app q (.ident q t) [.int q (i : Int)] false))) ++ dflts,
             posVals ++ namedVals)
         else if hasNamed then
           (posPs.map pdOf ++ namedAs.filterMap (fun (_, n, _) => (f.params.find? (·.name == n)).map pdOf), dflts,
             posVals ++ namedVals)
         else if as.length == f.params.length then
-          (f.params.map fun sp => SExpr.decl q (tag sp.name) (tyOf sp.ty) false (.ident q "$arg"), [], as')
+          (f.params.map pdOf, [], as')
         else if arrayParam then
-          (f.params.map fun sp => SExpr.decl q (tag sp.name) (tyOf sp.ty) false (.ident q "$arg"), [],
+          (f.params.map pdOf, [],
             [.arrayLit p as'])
         else
           -- (the tuple bound once, its elements into the parameters; a
@@ -1745,7 +1751,7 @@ partial def inlineCalls (mv : List (String × MFn)) (e : SExpr) (recs : List Str
           let tps := f.params.drop off
           ((f.params.take off).map pdOf ++ [.decl q t (tyOf (.tup (tps.map (·.ty)))) false (.ident q "$arg")],
             (tps.zipIdx.map fun (sp, i) =>
-              SExpr.decl q (tag sp.name) (tyOf sp.ty) false (.app q (.ident q t) [.int q (i : Int)] false)), as')
+              SExpr.decl q (tag sp.name) (tyOf sp.ty) false (markValue sp (.app q (.ident q t) [.int q (i : Int)] false))), as')
       -- Eager recursive calls still bind named arguments/defaults exactly
       -- as an inlined call. The array helper receives canonical parameters.
       if recs.contains g && !loops.contains g then

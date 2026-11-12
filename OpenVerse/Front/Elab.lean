@@ -103,6 +103,7 @@ structure Local where
   ty      : Ty
   mutable : Bool
   storage : Option SourceStorage := none
+  typeValue : Bool := false
 
 /-- The heap effects (`<transacts>` allows all of them). -/
 
@@ -142,6 +143,8 @@ structure Sig where
   bounds : List SubtypeEvidence.Bound := []
   /-- Evidence recovered from the receiver: constraint index and field. -/
   selfBounds : List (Nat × Nat) := []
+  /-- Explicit parameters that carry dummy type values rather than data. -/
+  typeValues : List Nat := []
   deriving Inhabited
 
 def Sig.frame (s : Sig) : SubtypeEvidence.Frame :=
@@ -160,7 +163,9 @@ def Sig.evidenceLocals (s : Sig) : List Local :=
 def Sig.typeEnv (s : Sig) (env : TyEnv) : TyEnv :=
   { env with
     tvars := s.tparams.map fun (name, comparable) => (name, Ty.param name comparable)
-    boundFacts := s.bounds.map fun bound => (bound.base, bound.derived) }
+    boundFacts := s.bounds.map (fun bound => (bound.base, bound.derived)) ++
+      SubtypeEvidence.parameterFacts env (s.params.zipIdx.map fun (ty, i) =>
+        (ty, s.typeValues.contains i)) (SubtypeEvidence.helperContext s.name) }
 
 /-- The implicit receiver, distinguished from an ordinary parameter that a
     source function happens to name Self. Extracted methods use $Self. -/
@@ -683,11 +688,59 @@ partial def resolveTy (env : TyEnv) (p : Pos) : STy → EM Ty
       if (env.structs.lookup n).isSome then eerr p s!"struct {n} takes no type arguments"
       else eerr p s!"unknown parametric type '{n}' (only structs can be parametric)"
 
+/-- Resolve every formal type before checking constrained applications, so
+    a later proof parameter can justify an earlier type. Only actual proof
+    parameters contribute facts; type values and object fields do not. -/
+def resolveSignatureTypes (env : TyEnv) (p : Pos) (ps : List SParam) (ret : STy)
+    (name : String := "") :
+    Except String (List Ty × Ty) := do
+  let unchecked := { env with sbounds := [] }
+  let tys ← (ps.mapM fun param => resolveTy unchecked p param.ty).run' { env := unchecked }
+  let rt ← (resolveTy unchecked p ret).run' { env := unchecked }
+  let facts := SubtypeEvidence.parameterFacts env ((ps.zip tys).map fun (param, ty) =>
+    (ty, param.typeValue)) (SubtypeEvidence.helperContext name)
+  let checked := { env with boundFacts := env.boundFacts ++ facts }
+  for ty in tys ++ [rt] do
+    match ty.checkBounds checked with
+    | .ok _ => pure ()
+    | .error message => throw s!"{p.show}: {message}"
+  return (tys, rt)
+
 def Ctx.lookup (ctx : Ctx) (n : String) : Option Local := ctx.locals.find? (·.name == n)
 def Ctx.sig? (ctx : Ctx) (n : String) : Option Sig := ctx.sigs.find? (·.name == n)
 
+/-- A shadowing type-value binding remains in the lexical map as a
+    non-capability, so filtering it cannot expose an outer proof. -/
+def Ctx.evidenceTypes (ctx : Ctx) : List (String × Ty) :=
+  ctx.locals.map fun binding => (binding.name, if binding.typeValue then .void else binding.ty)
+
+/-- Keep dummy provenance when compiler-created witnesses are renamed or
+    copied into another frame. This marker never changes emitted code. -/
+partial def Ctx.isTypeValue (ctx : Ctx) : SExpr → Bool
+  | .ident _ "$witness" => true
+  | .ident _ name => (ctx.lookup name).any (·.typeValue)
+  | .app _ (.ident _ name) args false =>
+    if ["$typeValue", "$witness", "$stageWitness"].contains name then true
+    else if ["$refineCopyIn", "$refineCopyOut", "$forEnvCapture", "$forEnvInit"].contains name then
+      args.any ctx.isTypeValue
+    else (ctx.lookup name).any (·.typeValue)
+  | .member _ value field => field.startsWith "$w." || ctx.isTypeValue value
+  | .app _ value _ _ => ctx.isTypeValue value
+  | .tuple _ values | .arrayLit _ values => values.any ctx.isTypeValue
+  | .block _ values =>
+    let (_, result) := values.foldl (fun (scope, _) value =>
+      let role := scope.isTypeValue value
+      let scope := match value with
+        | .decl _ name _ _ body => { scope with locals :=
+            { name, slot := 0, ty := .void, mutable := false, typeValue := scope.isTypeValue body } :: scope.locals }
+        | _ => scope
+      (scope, role)) (ctx, false)
+    result
+  | .ite _ _ yes no => ctx.isTypeValue yes || no.any ctx.isTypeValue
+  | _ => false
+
 def Ctx.evidenceEnv (ctx : Ctx) : TyEnv :=
-  let locals := ctx.locals.map fun binding => (binding.name, binding.ty)
+  let locals := ctx.evidenceTypes
   { ctx.types with boundFacts := ctx.types.boundFacts ++
     (SubtypeEvidence.capabilities ctx.types locals).map fun capability =>
       let bound := capability.bound ctx.types
@@ -698,8 +751,7 @@ def Ctx.evidenceEnv (ctx : Ctx) : TyEnv :=
     typed capability too, then resolve it in its own frame. Added captures
     are readonly snapshots; ordinary source captures retain their storage. -/
 def Ctx.captureEvidence (ctx : Ctx) (captures : List Local) (excluded : List String := []) : List Local :=
-  let names := (SubtypeEvidence.capabilities ctx.types
-    (ctx.locals.map fun binding => (binding.name, binding.ty))).filterMap fun
+  let names := (SubtypeEvidence.capabilities ctx.types ctx.evidenceTypes).filterMap fun
       | .local name _ | .field name _ _ => some name
       | _ => none
   let added := names.eraseDups.filterMap fun name =>
@@ -715,7 +767,7 @@ def Ctx.hasMethod (ctx : Ctx) (c m : String) : Bool :=
     with the same member remain ambiguous; neither becomes a disjoint domain. -/
 def Ctx.boundView (ctx : Ctx) (p : Pos) (derived : Ty) (member : String) : Except String (Option Ty) := do
   let .param .. := derived | return none
-  let locals := ctx.locals.map fun binding => (binding.name, binding.ty)
+  let locals := ctx.evidenceTypes
   let visible (owner method : String) := ctx.hasMethod owner method ||
     ((ctx.types.methodOverloads.lookup method).getD []).any (ctx.hasMethod owner ·)
   let candidates := (SubtypeEvidence.views ctx.types locals derived).filter fun
@@ -2241,7 +2293,7 @@ def contTypes (ctx : Ctx) (p : Pos) (inputs outputs : List Ty) (written : SExpr)
   if extra.any (fun (n, _) => !available.any (·.1 == n)) then
     throw "a continuation type parameter has no witness in this context"
   return (tps.map (fun (n, cmp) => { pos := p, name := n, constraint := if cmp then "comparable" else "type" }),
-    extra.map (fun (n, _) => { name := s!"$type{n}", ty := .name n }),
+    extra.map (fun (n, _) => { name := s!"$type{n}", ty := .name n, typeValue := true }),
     extra.map (fun (n, _) => .app p (.ident p "$witness") [.ident p n] false))
 
 /-- (#246) The function of its own a lazily taken call where the first
@@ -2303,7 +2355,7 @@ def firstLiftOf (ctx c2 : Ctx) (p : Pos) (g : String) (lp : List SExpr) (b : Str
       (sig.params.map (·.subst σ) ++ caps.map (·.ty)).flatMap Ty.params
   let missing := tps.filter fun tp => memberInputs.any (!·.contains tp.name) &&
     !typeParams.any (·.name == s!"$type{tp.name}")
-  let typeParams := typeParams ++ missing.map (fun tp => ({ name := s!"$type{tp.name}", ty := .name tp.name } : SParam))
+  let typeParams := typeParams ++ missing.map (fun tp => ({ name := s!"$type{tp.name}", ty := .name tp.name, typeValue := true } : SParam))
   let typeArgs := typeArgs ++ missing.map (fun tp => SExpr.app p (.ident p "$witness") [.ident p tp.name] false)
   let name := s!"$first{p.line}_{p.col}_{key.hash}" ++ (if p.file.isEmpty then "" else s!"_{p.file}")
   -- Every recursive edge, including a mutual member's, forwards the same
@@ -2321,8 +2373,8 @@ def firstLiftOf (ctx c2 : Ctx) (p : Pos) (g : String) (lp : List SExpr) (b : Str
   let heap := ["reads", "writes", "allocates"].filter fun k =>
     fxB.any (·.1 == k) || ((g :: mnames).any fun h => ((ctx.sig? h).map (·.fx.contains k)).getD false)
   let capPs : List SParam :=
-    caps.map fun l => { name := if sets.any (·.name == l.name) then s!"{l.name}$in" else l.name, ty := l.ty.toSTy }
-  let params : List SParam := pls.map (fun l => { name := l.name, ty := l.ty.toSTy }) ++ capPs
+    caps.map fun l => { name := if sets.any (·.name == l.name) then s!"{l.name}$in" else l.name, ty := l.ty.toSTy, typeValue := l.typeValue }
+  let params : List SParam := pls.map (fun l => { name := l.name, ty := l.ty.toSTy, typeValue := l.typeValue }) ++ capPs
   let specs := (if heap.isEmpty then ["computes"] else heap) ++ ["decides"]
   let (ret, normal, returnExit) := firstResult p name bls sets source
   let setsT := sets.map fun l => (l.name, l.ty.toSTy)
@@ -2431,7 +2483,7 @@ def contLiftOf (ctx c2 : Ctx) (p : Pos) (b : String) (alts rest : List SExpr)
   -- (the `var`s it sets, copied from parameters named `m$in`, and given back)
   let copies := sets.map fun l => SExpr.decl p l.name (some l.ty.toSTy) true (.ident p s!"{l.name}$in")
   let params : List SParam := { name := b, ty := bl.ty.toSTy } ::
-    caps.map fun l => { name := if sets.any (·.name == l.name) then s!"{l.name}$in" else l.name, ty := l.ty.toSTy }
+    caps.map fun l => { name := if sets.any (·.name == l.name) then s!"{l.name}$in" else l.name, ty := l.ty.toSTy, typeValue := l.typeValue }
   -- (`$firstP`: the clauses are lifted already, the consumer's, which lifting
   -- again would bind twice, as for #275's functions)
   return { key, pos := p, name, returnExit, sourceContext := sourceContextOf ctx, inlineScopes := ctx.inlineScopes, liftTag := ctx.liftTag,
@@ -2565,7 +2617,7 @@ def contForLiftOf (ctx : Ctx) (p : Pos) (b : String) (bty vty : Ty) (alts rest :
   let heap := ["reads", "writes", "allocates"].filter fun k => ctx.fnFx.contains k
   let copies := sets.map fun l => SExpr.decl p l.name (some l.ty.toSTy) true (.ident p s!"{l.name}$in")
   let params : List SParam := { name := b, ty := bty.toSTy } ::
-    caps.map fun l => { name := if sets.any (·.name == l.name) then s!"{l.name}$in" else l.name, ty := l.ty.toSTy }
+    caps.map fun l => { name := if sets.any (·.name == l.name) then s!"{l.name}$in" else l.name, ty := l.ty.toSTy, typeValue := l.typeValue }
   let vals := s!"{b}$vals"
   let valueTy : STy := if outcome then .opt (.arr vty.toSTy) else .arr vty.toSTy
   let failure : SExpr := if sets.isEmpty then .ident p "false" else
@@ -2678,7 +2730,7 @@ def forStagePrefixOf (ctx : Ctx) (plan : Choice.ForStagePlan) (args : List Ty) (
   let key := s!"prefix{flat}" ++ plan.key ++ contKey ctx p "$prepare" [written] ++ forStageCaptureKey ctx args caps
   let name := s!"{plan.base}$prepare{key.hash}"
   let (tps, more, witnesses) ← contTypes ctx p (caps.map (·.ty)) args written
-  let params := caps.map fun l => ({ name := if l.mutable then l.name ++ "$in" else l.name, ty := l.ty.toSTy } : SParam)
+  let params := caps.map fun l => ({ name := if l.mutable then l.name ++ "$in" else l.name, ty := l.ty.toSTy, typeValue := l.typeValue } : SParam)
   let init := caps.filterMap fun l => if !l.mutable then none else some
     (SExpr.decl p l.name (some l.ty.toSTy) true
       (.app p (.ident p "$refineCopyIn") [.ident p (l.name ++ "$in")] false))
@@ -2734,12 +2786,13 @@ def forStageEnvOf (ctx : Ctx) (plan : Choice.ForStagePlan) (p : Pos)
     | .app p (.ident _ "$forReturns") args false => .app p (.ident p "$forReturnBody") args false
     | b => b
   let localName (n : String) := if n == "Self" then "$sourceSelf" else n
-  let fields := caps.zipIdx.map fun (l, j) => (s!"$capture{j}", l.ty.toSTy, none, false)
+  let captureName (l : Local) (j : Nat) := if l.typeValue then s!"$w.capture{j}" else s!"$capture{j}"
+  let fields := caps.zipIdx.map fun (l, j) => (captureName l j, l.ty.toSTy, none, false)
   let borrowed (l : Local) := l.storage.filter fun s =>
     !(ctx.sig? s.frame).any (!·.suspends)
   let init := caps.zipIdx.flatMap fun (l, j) =>
     let value := SExpr.app p (.ident p "$forEnvCapture")
-      [.member p (.ident p "Self") s!"$capture{j}"] false
+      [.member p (.ident p "Self") (captureName l j)] false
     if (borrowed l).isSome then
       let saved := s!"$captureInit{j}"
       [SExpr.decl p saved (some l.ty.toSTy) false value,
@@ -2772,7 +2825,7 @@ def forStageEnvOf (ctx : Ctx) (plan : Choice.ForStagePlan) (p : Pos)
     params := [], specs := ["computes"], ret := .name "void", body := .tuple p [],
     binds := [], sets := [], args := [], extraFns := [cls] }
   let obj := SExpr.construct p name (tps.map fun tp => .name tp.name)
-    (caps.zipIdx.map fun (l, j) => .decl p s!"$capture{j}" none false (.ident p l.name))
+    (caps.zipIdx.map fun (l, j) => .decl p (captureName l j) none false (.ident p l.name))
   return (req, obj, .struct plan.base args)
 
 /-- A failed body is unwrapped in an iteration body. Inside an outcome
@@ -4246,7 +4299,7 @@ partial def elabGenericCallWith (elabE : Ctx → SExpr → Option Ty → EM R) (
         let pt := ptys[k]!
         -- (the default sees the parameters before it, in their temporaries)
         let earlier : List Local := ((s.pnames.zip (List.range k)).filterMap fun (pn, j) =>
-          (slots[j]!).map fun sl => ({ name := pn, slot := sl, ty := ptys[j]!.subst σ, mutable := false } : Local)).reverse
+          (slots[j]!).map fun sl => ({ name := pn, slot := sl, ty := ptys[j]!.subst σ, mutable := false, typeValue := s.typeValues.contains j } : Local)).reverse
         let key := (s.name, s!"?{n}")
         if ctx.defaults.contains key then
           eerr p s!"the default of ?{n} of {s.name} uses itself (a call of {s.name} that omits ?{n})"
@@ -4302,7 +4355,7 @@ partial def elabGenericCallWith (elabE : Ctx → SExpr → Option Ty → EM R) (
   -- lexical form until ordinary elaboration resolves the current frame.
   let evidencePlans ← s.frame.callBounds.mapM fun (_, required) => do
     let required := required.subst σ
-    let locals := ctx.locals.map fun binding => (binding.name, binding.ty)
+    let locals := ctx.evidenceTypes
     let some plan := SubtypeEvidence.find? ctx.types locals required
       | eerr p s!"type {required.derived.show} does not satisfy subtype({required.base.show}) in a call of {s.name}"
     if !plan.valid ctx.types locals then eerr p "internal: invalid subtype evidence plan"
@@ -4947,8 +5000,9 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
     let lift : Refine.Lift := {
       pos := p, bound := D, target := T, tag, continuationScope := ctx.refineScope,
       name := liftName,
-      params := ((D, dTy) :: sig).map (fun (n, t) => { name := n, ty := t.toSTy }) ++
-        extra.map fun (n, _) => { name := s!"$type{n}", ty := .name n },
+      params := { name := D, ty := dTy.toSTy } ::
+        (caps.zip sig).map (fun (binding, (name, ty)) => { name, ty := ty.toSTy, typeValue := binding.typeValue }) ++
+        extra.map fun (n, _) => { name := s!"$type{n}", ty := .name n, typeValue := true },
       tparams := tps.map fun (n, c) => { pos := p, name := n, constraint := if c then "comparable" else "type" },
       specs, ret := ret.toSTy, subst := σ, opened := opened.map fun (n, v, _) => (n, v), waits := thenWaits, sourceSuspends,
       exits := Refine.Exits.substTypes ((escRet.map (·.2)).getD {}) σ,
@@ -5053,7 +5107,7 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
         locals := dL :: ctx.locals.map fun loc => { loc with ty := loc.ty.subst μF, storage := loc.storage.map (·.subst μF) },
         types := { env with tvars := env.tvars.map fun (m, t) => (m, t.subst μF) } }
       let argOf (sp : SParam) : SExpr :=
-        if sp.name.startsWith "$type" then .app p (.ident p "$witness") [.ident p (sp.name.drop 5).toString] false
+        if sp.typeValue && sp.name.startsWith "$type" then .app p (.ident p "$witness") [.ident p (sp.name.drop 5).toString] false
         else .ident p sp.name
       let rc ← elabApp ctx' p (.ident p l.name) (l.params.map argOf)
         (l.specs.contains "decides") (some (τ'.subst μF))
@@ -5351,7 +5405,7 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
   if let some target := exp then
     if target != .void && result.ty != target && result.ty != .never &&
         (!result.ty.params.isEmpty || !target.params.isEmpty) then
-      let locals := ctx.locals.map fun binding => (binding.name, binding.ty)
+      let locals := ctx.evidenceTypes
       if let some plan := SubtypeEvidence.find? ctx.types locals ⟨target, result.ty⟩ then
         if plan.usesLocal then return ← elabSubtypeUp ctx se.pos result target plan
   return result
@@ -5360,7 +5414,7 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
     precise input and widened result are typed in this frame. -/
 partial def elabSubtypeUp (ctx : Ctx) (p : Pos) (value : R) (target : Ty)
     (plan : SubtypeEvidence.Plan) : EM R := do
-  let locals := ctx.locals.map fun binding => (binding.name, binding.ty)
+  let locals := ctx.evidenceTypes
   if !plan.valid ctx.types locals || plan.bound ctx.types != ⟨target, value.ty⟩ then
     eerr p "internal: subtype view has no valid lexical evidence"
   let slot ← fresh value.ty
@@ -5381,7 +5435,7 @@ partial def elabBoundReceiver (ctx : Ctx) (p : Pos) (value : R) (member : String
     | .ok view => pure view
     | .error message => throw message
   let some target := view | return value
-  let locals := ctx.locals.map fun binding => (binding.name, binding.ty)
+  let locals := ctx.evidenceTypes
   let some plan := SubtypeEvidence.find? ctx.types locals ⟨target, value.ty⟩
     | eerr p "internal: a bound view lost its lexical dictionary"
   elabSubtypeUp ctx p value target plan
@@ -5413,10 +5467,11 @@ partial def elabERaw (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
     set st0
     return ← elabE { ctx with constructHints := some hints, constructOrigin := some ctx.frameName } se exp
   match se with
+  | .app _ (.ident _ "$typeValue") [value] false => elabE ctx value exp
   | .app p (.ident _ "$subtypeWitness") [.construct _ "$subtypeEvidence" [base, derived] []] false =>
     let base ← resolveTy ctx.types p base
     let derived ← resolveTy ctx.types p derived
-    let locals := ctx.locals.map fun binding => (binding.name, binding.ty)
+    let locals := ctx.evidenceTypes
     let bound : SubtypeEvidence.Bound := ⟨base, derived⟩
     -- The formal default check validates a compiler-owned proof field's
     -- declared relation. Its placeholder is discarded; construction must
@@ -6601,8 +6656,10 @@ partial def elabStmt (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM (R × Ctx) 
       if envInit then
         if let .local result := e then
           modify fun st => { st with frameCopies := st.frameCopies ++ [{ target := slot, result }] }
-      pure (⟨.assign slot e, ty⟩,
-        { ctx with locals := { name := n, slot, ty, mutable := isVar, storage } :: ctx.locals })
+      let binding : Local := {
+        name := n, slot, ty, mutable := isVar, storage
+        typeValue := ctx.isTypeValue rhs }
+      pure (⟨.assign slot e, ty⟩, { ctx with locals := binding :: ctx.locals })
     | .app _ (.ident _ "$inlineScope") [.str _ [.text name]] false =>
       pure (⟨.lit .void, .void⟩, { ctx with inlineScopes := name :: ctx.inlineScopes })
     | .app _ (.ident _ "$inlineScopeEnd") [] false =>
@@ -6723,12 +6780,12 @@ partial def elabStmt (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM (R × Ctx) 
               eerr p (notComparable ctx.types t s!"{fname}'s type argument for {((n.dropWhile (· != '_')).drop 1).toString}")
       let mut code : Expr := .lit .void
       let mut c := ctx
-      for ((q, x, v, _, _), d) in items.zip done.toList do
+      for ((q, x, v, a, _), d) in items.zip done.toList do
         let some (e, t) := d | eerr q s!"cannot infer the type parameters of {fname} from the arguments of this call"
         checkNewLocal c q x
         let slot ← fresh t
         code := .seq code (.assign slot e)
-        c := { c with locals := { name := x, slot, ty := t, mutable := v } :: c.locals }
+        c := { c with locals := { name := x, slot, ty := t, mutable := v, typeValue := ctx.isTypeValue a } :: c.locals }
       pure (⟨.seq code (.lit .void), .void⟩, { c with types := { c.types with tvars := c.types.tvars ++ σ } })
     | .app p (.ident _ "$defaults") (.block _ decls :: tps) false => do
       -- (#283) the defaults an inlined generic call omits, after its
@@ -6778,7 +6835,7 @@ partial def elabStmt (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM (R × Ctx) 
         checkNewLocal c q x
         let slot ← fresh t'
         code := .seq code (.assign slot e)
-        c := { c with locals := { name := x, slot, ty := t', mutable := v } :: c.locals }
+        c := { c with locals := { name := x, slot, ty := t', mutable := v, typeValue := c.isTypeValue a } :: c.locals }
       for (n, k) in open_ do
         match σ.lookup n with
         | none => eerr p s!"cannot infer type parameter {shownTp n} of {fname} from the arguments of this call"
@@ -7670,7 +7727,7 @@ partial def elabAppBase (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (b
               let ta ← fresh t
               -- (the default sees the parameters before it, in their temporaries)
               let earlier : List Local := ((s.pnames.zip (List.range k)).filterMap fun (pn, j) =>
-                (slots[j]!).map fun sl => ({ name := pn, slot := sl, ty := ptys[j]!, mutable := false } : Local)).reverse
+                (slots[j]!).map fun sl => ({ name := pn, slot := sl, ty := ptys[j]!, mutable := false, typeValue := s.typeValues.contains j } : Local)).reverse
               -- (a method's: its receiver's fields too, through `Self`; a
               -- copy's in its interface's scope, as its body, #53)
               let selfC : Option String :=
@@ -9320,7 +9377,8 @@ partial def elabSpawnBound (ctx : Ctx) (p : Pos) (fname adapter : String)
       if i < npos then value else .decl p s!"?{(s.named[i - npos]!).1}" none false value
     let lift : Choice.FirstLift := {
       key := s!"defaults:spawnBody:{adapter}", pos := p, name := adapter,
-      params := (s.pnames.zip params).map fun (n, t) => { name := n, ty := t.toSTy },
+      params := (s.pnames.zip params).zipIdx.map fun ((n, t), i) =>
+        { name := n, ty := t.toSTy, typeValue := s.typeValues.contains i },
       tparams := tps.map fun (n, c) =>
         { pos := p, name := n, constraint := if c then "comparable" else "type" },
       specs := (if s.fx.isEmpty then ["computes"] else s.fx) ++ ["suspends"] ++ selfTps.map ("$selfTp:" ++ ·),
@@ -9384,7 +9442,7 @@ partial def elabSpawnDispatch (ctx : Ctx) (p : Pos) (cls fname declared : String
   let stack := ctx.defaults.map fun (f, n) => SExpr.tuple p [.str p [.text f], .str p [.text n]]
   let lift : Choice.FirstLift := {
     key, pos := p, name,
-    params := given.map fun i => { name := s.pnames[i]!, ty := fullParams[i]!.toSTy },
+    params := given.map fun i => { name := s.pnames[i]!, ty := fullParams[i]!.toSTy, typeValue := s.typeValues.contains i },
     tparams := tps.map fun (n, c) =>
       { pos := p, name := n, constraint := if c then "comparable" else "type" },
     specs := ["transacts"] ++ cps.map (fun (n, _) => "$selfTp:" ++ n),
@@ -9433,7 +9491,7 @@ partial def elabDefaultDispatch (ctx : Ctx) (p : Pos) (fname : String)
   let used := (s.ret :: types).flatMap Ty.params
   let tps := s.tparams.filter fun (n, _) => used.contains n
   let params : List SParam := given.map fun i =>
-    { name := s.pnames[i]!, ty := s.params[i]!.toSTy }
+    { name := s.pnames[i]!, ty := s.params[i]!.toSTy, typeValue := s.typeValues.contains i }
   let forwarded := given.map fun i =>
     let v := SExpr.ident p s.pnames[i]!
     if i < npos then v else SExpr.decl p s!"?{(s.named[i - npos]!).1}" none false v
@@ -9658,7 +9716,7 @@ partial def elabFieldDefault (ctx : Ctx) (p : Pos) (name : String) (tas : List T
       if declared != t then eerr p "internal: a receiver proof default has the wrong type"
       if ctx.inDefaultCheck && ctx.types.boundSubtype bound.derived bound.base then
         return .prim .userErr []
-      let locals := ctx.locals.map fun binding => (binding.name, binding.ty)
+      let locals := ctx.evidenceTypes
       let some plan := SubtypeEvidence.find? ctx.types locals bound
         | eerr p s!"type {bound.derived.show} does not satisfy subtype({bound.base.show}) in construction of {name}"
       return ← fxAt p (do coerce p (← elabSubtypeValueWith elabE ctx p plan bound) t)
@@ -12634,7 +12692,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     for (name, fields) in env.structs do
       let scope := { env with
         tvars := ((env.sparams.lookup name).getD []).map fun (v, c) => (v, Ty.param v c)
-        boundFacts := (env.sbounds.lookup name).getD [] }
+        boundFacts := (env.sbounds.lookup name).getD [] ++ SubtypeEvidence.fieldFacts env name fields }
       for (field, ty, _) in fields do
         match ty.checkBounds scope with
         | .error message => throw s!"field '{field}' of {name}: {message}"
@@ -12901,8 +12959,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
         throw s!"{p.show}: {n} is both <suspends> and <decides>, which exclude each other"
       if n.endsWith "$init" then
         throw s!"{p.show}: a <suspends> constructor is not supported (#156)"
-    let (tys, _) ← ((ps.mapM fun prm => resolveTy env p prm.ty).run {})
-    let (rt, _) ← (resolveTy env p ret).run {}
+    let (tys, rt) ← resolveSignatureTypes env p ps ret n
     -- named parameters come last (Book of Verse §8.2)
     let rec namedLast : List SParam → Bool
       | [] => true
@@ -12926,7 +12983,8 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
                           fx := if n.endsWith ".$block" || defaultBridge n || (n.splitOn "$default$").length > 1 then [] else allowedFx effs,
                           isConst := false,
                           named := (ps.filter (·.named)).map fun q => (q.name, q.default),
-                          pnames := ps.map (·.name), scope := copyScope? effs }
+                          pnames := ps.map (·.name), scope := copyScope? effs,
+                          typeValues := ps.zipIdx.filterMap fun (param, i) => if param.typeValue then some i else none }
     | .const p n sty _ =>
       let rt ← match sty with
         | some t => do let (rt, _) ← (resolveTy env p t).run {}; pure rt
@@ -12986,7 +13044,8 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
                             fx := if n.endsWith ".$block" || defaultBridge n then [] else allowedFx effs,
                             tparams, bounds := resolved.bounds, selfBounds,
                             named := (ps.filter (·.named)).map fun q => (q.name, q.default),
-                            pnames := ps.map (·.name), scope := copyScope? effs }
+                            pnames := ps.map (·.name), scope := copyScope? effs,
+                            typeValues := ps.zipIdx.filterMap fun (param, i) => if param.typeValue then some i else none }
     | _ => pure ()
   let mkSigProg (sigs : Array Sig) : Prog :=
     { fns := (sigs ++ gsigs).toList.map fun s =>
@@ -13051,7 +13110,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
         else if n.endsWith ".$block" || inferredBridge n then
           let s := sigs[idx]!
           let locals := (ps.zip (List.range ps.length)).zip s.params |>.map fun ((prm, i), t) =>
-            ({ name := prm.name, slot := i, ty := t, mutable := false } : Local)
+            ({ name := prm.name, slot := i, ty := t, mutable := false, typeValue := prm.typeValue } : Local)
           let base : Ctx := { sigs := sigs.toList ++ gsigs.toList, sigProg := mkSigProg sigs, types := env,
                               locals := locals.reverse, retTy := s.ret, canFail := s.decides, suspends := s.suspends, fnFx := s.fx }
           let ctx ← functionBodyCtx opts base p n s.tparams s.scope
@@ -13071,7 +13130,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
         if n.endsWith ".$block" || inferredBridge n then
           let g := gsigs[gi]!
           let locals := (ps.zip (List.range ps.length)).zip g.params |>.map fun ((prm, i), t) =>
-            ({ name := prm.name, slot := i, ty := t, mutable := false } : Local)
+            ({ name := prm.name, slot := i, ty := t, mutable := false, typeValue := prm.typeValue } : Local)
           let locals := locals ++ g.evidenceLocals
           let dictTps := g.tparams.filter (fun (v, _) => !g.selfTps.contains v) ++
             g.tparams.filter (fun (v, _) => g.selfTps.contains v)
@@ -13299,7 +13358,9 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     -- (`C.M`), or as `selfFieldOf` says (a cast's branch, #250, the cast
     -- target's, of the object, its first parameter too)
     let signature := evidenceSignature.getD {
-      idx := 0, name, params := ptys, ret, decides, isConst := false, tparams := tps, selfTps }
+      idx := 0, name, params := ptys, ret, decides, isConst := false, tparams := tps, selfTps,
+      typeValues := ps.zipIdx.filterMap fun (param, i) => if param.typeValue then some i else none }
+    let env := signature.typeEnv env
     let frame := signature.frame
     if !frame.valid then throw s!"{p.show}: internal: invalid generic evidence frame for {name}"
     let dictTps := frame.orderedParams
@@ -13315,7 +13376,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       { env with dictOrder := dictTps.map (·.1),
                  selfWitness := selfTps.map fun v => (v, selfField v) }
     let locals := ((ps.zip (List.range ps.length)).zip ptys).map fun ((prm, i), t) =>
-      ({ name := prm.name, slot := i, ty := t, mutable := false } : Local)
+      ({ name := prm.name, slot := i, ty := t, mutable := false, typeValue := prm.typeValue } : Local)
     let locals := locals ++ signature.evidenceLocals
     for (prm, i) in ps.zip (List.range ps.length) do
       if ps.take i |>.any (·.name == prm.name) then throw s!"{p.show}: duplicate parameter '{prm.name}'"

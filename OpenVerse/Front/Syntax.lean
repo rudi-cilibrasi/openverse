@@ -193,6 +193,9 @@ structure SParam where
   named : Bool := false
   /-- `?Name:t = e`: the value when the call omits it. -/
   default : Option SExpr := none
+  /-- Compiler-only type-value argument. Its dummy value can initialize
+      slots, but cannot establish an executable subtype relation. -/
+  typeValue : Bool := false
   deriving Repr, Inhabited
 
 /-- A top-level definition. A function's type parameters are those of its
