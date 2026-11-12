@@ -2372,25 +2372,35 @@ def firstValue (b : String) (bty ret : Option STy) (rest : List SExpr) (tup : SE
 def firstReturnBody (p : Pos) (b : String) (bty : Option STy) (rest : List SExpr) (binds : List String)
     (sets : List (String × STy)) (ret : Option STy) (normalResult : Option SExpr)
     (frames : List (String × List String × SExpr)) (memberFn : Nat → Option String := fun _ => none)
-    (caps : List SExpr := []) : SExpr :=
+    (caps : List SExpr := []) (frameTys : List (Option STy × Option STy) := []) : SExpr :=
   let tup : SExpr := normalResult.getD (.tuple p (binds.map (SExpr.ident p ·) ++ sets.map (fun (m, _) => SExpr.ident p m) ++
     [.ident p "true"]))
   let copies := sets.map fun (m, t) => SExpr.decl p m (some t) true (.ident p s!"{m}$in")
   let liveIds (lives : List String) : List SExpr := lives.map (SExpr.ident p ·)
-  if (List.range frames.length).all (memberFn · |>.isNone) then
+  if (List.range frames.length).all (memberFn · |>.isNone) && frameTys.all (fun (i, o) => i.isNone && o.isNone) then
     let v := SExpr.app p (.ident p "$frameApply") (.ident p "$K" :: .ident p "$V" :: frames.map fun (h, lives, code) =>
       .app p (.ident p "$frame") [.ident p h, .block p (liveIds lives), code] false) false
     .block p (copies ++ [firstValue b bty ret rest tup v])
   else
   -- (#283) with continuation members: a member's frame calls its function
   -- with the value, its lives and the rest of the continuation, whose packet
-  -- is this one's; when no frame is left, the value as `firstValue`
+  -- is this one's; when no frame is left, the value as `firstValue`, `$Vfin`
+  -- at the result type; a frame's hole's and code's types when other ones
+  let tys (j : Nat) : List SExpr := match frameTys[j]? with
+    | some (i, o) => if i.isNone && o.isNone then [] else
+      [.block p ((i.toList.map fun t => SExpr.decl p "$in" (some t) false (.tuple p [])) ++
+        o.toList.map fun t => SExpr.decl p "$out" (some t) false (.tuple p []))]
+    | none => []
   let entry (j : Nat) (h : String) (lives : List String) (code : SExpr) : SExpr := match memberFn j with
-    | some fn => .app p (.ident p "$frameCall") [.ident p h, .block p (liveIds lives),
-        .app p (.ident p fn) (.ident p h :: liveIds lives ++ [.ident p "$Krest"] ++ caps) true] false
-    | none => .app p (.ident p "$frame") [.ident p h, .block p (liveIds lives), code] false
+    | some fn => .app p (.ident p "$frameCall") ([.ident p h, .block p (liveIds lives),
+        .app p (.ident p fn) (.ident p h :: liveIds lives ++ [.ident p "$Krest"] ++ caps) true] ++ tys j) false
+    | none => .app p (.ident p "$frame") ([.ident p h, .block p (liveIds lives), code] ++ tys j) false
+  -- (with a frame of another type, the final value in a name of its own)
+  let fin : List SExpr := if frameTys.all (fun (i, o) => i.isNone && o.isNone) then
+      [firstValue b bty ret rest tup (.ident p "$V")]
+    else [.block p [.decl p "$Vfin" ret false (.tuple p [])], firstValue b bty ret rest tup (.ident p "$Vfin")]
   .block p (copies ++ [.app p (.ident p "$frameReturn") (.ident p "$K" :: .ident p "$V" ::
-    firstValue b bty ret rest tup (.ident p "$V") :: frames.zipIdx.map fun ((h, lives, code), j) => entry j h lives code) false])
+    fin ++ frames.zipIdx.map fun ((h, lives, code), j) => entry j h lives code) false])
 
 /-- The body of a `FirstLift` (#246): the function's clauses, then the first
     success of its last expression, each value followed by the consumer's
@@ -2408,7 +2418,8 @@ partial def firstBody (helper : String) (p : Pos) (b : String) (bty : Option STy
     (ret : Option STy := none) (helperOf : String → String := fun _ => helper)
     (recArgs : Option String → Pos → List SExpr → List SExpr × List SExpr := fun _ _ as => ([], as))
     (normalResult : Option SExpr := none) (frames : List (String × List String × SExpr) := [])
-    (retFn : String := "") : SExpr :=
+    (retFn : String := "") (frameTys : List (Option STy × Option STy) := [])
+    (retOf : Option STy → String := fun _ => retFn) (ownTy : Option STy := none) : SExpr :=
   let tup : SExpr := normalResult.getD (.tuple p (binds.map (SExpr.ident p ·) ++ sets.map (fun (m, _) => SExpr.ident p m) ++
     [.ident p "true"]))
   let recur (target : Option String) (h : String) (q : Pos) (as : List SExpr) (k : List SExpr) : SExpr :=
@@ -2420,10 +2431,20 @@ partial def firstBody (helper : String) (p : Pos) (b : String) (bty : Option STy
     -- (a call of another function of the group, #283: its own function)
     | .app q (.ident _ "$recTo") (.ident _ h :: as) false => some (recur (some h) (helperOf h) q as k)
     | _ => none
-  -- (an alternative whose values go to the continuation `kE`, `$K` itself
-  -- when none)
-  let rec altK (kE : Option SExpr) (a : SExpr) : SExpr :=
-    let kOf (q : Pos) : SExpr := kE.getD (.ident q "$K")
+  -- (the continuation `$K` with the frames `fs` pushed on it, innermost
+  -- first: each its index, its lives and where)
+  let pushed (fs : List (Nat × List SExpr × Pos)) (q0 : Pos) : SExpr :=
+    fs.foldr (fun (j, lives, q) acc => .app q (.ident q "$framePush") (.int q (j : Int) :: acc :: lives) false)
+      (.ident ((fs.getLast?.map (·.2.2)).getD q0) "$K")
+  -- (a value, given to the continuation's frames, #283: by the function for
+  -- its type, the first frame's hole's, or else this code's own)
+  let valueTo (fs : List (Nat × List SExpr × Pos)) (a : SExpr) : SExpr :=
+    let t := match fs.head? with
+      | some (j, _, _) => (frameTys[j]?).bind (·.1)
+      | none => ownTy
+    .app a.pos (.ident a.pos (retOf t)) ([a, pushed fs a.pos] ++ caps) true
+  -- (an alternative whose values go to the frames `fs`, then `$K`)
+  let rec altK (fs : List (Nat × List SExpr × Pos)) (a : SExpr) : SExpr :=
     match a with
     | .app q (.ident _ "$then") (c :: .ident _ h :: _ :: pre) false =>
       -- (#283) a choice point with code after it: its frame on the
@@ -2431,22 +2452,21 @@ partial def firstBody (helper : String) (p : Pos) (b : String) (bty : Option STy
       -- alternatives' (`Choice.flatCount`)
       let j := (frames.findIdx? (·.1 == h)).getD 0
       let lives := (((frames[j]?).map (·.2.1)).getD []).map (SExpr.ident q ·)
-      let kE' := SExpr.app q (.ident q "$framePush") (.int q (j : Int) :: kOf q :: lives) false
+      let fs' := (j, lives, q) :: fs
       match alts? c with
-      | some cs => mk q (cs.map (altK (some kE')))
+      | some cs => mk q (cs.map (altK fs'))
       | none =>
-      match call [kE'] c, pre with
+      match call [pushed fs' q] c, pre with
       | some e, [.block _ ss] => .block q (ss ++ [e])
       | some e, _ => e
       | none, _ => a
     | a =>
-      match call (if frames.isEmpty then [] else [kOf a.pos]) a with
+      match call (if frames.isEmpty then [] else [pushed fs a.pos]) a with
       | some c => c
       | none =>
-      -- (a value, given to the continuation's frames, #283)
       if frames.isEmpty then firstValue b bty ret rest tup a
-      else .app a.pos (.ident a.pos retFn) ([a, kOf a.pos] ++ caps) true
-  let alt := altK none
+      else valueTo fs a
+  let alt := altK []
   let group (v : SExpr) : SExpr := match alts? v with
     | some as => mk v.pos (as.map alt)
     | none => alt v

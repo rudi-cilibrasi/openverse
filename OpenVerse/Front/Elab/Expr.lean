@@ -1416,7 +1416,7 @@ partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
       -- (the values at the function's result type, at the type arguments
       -- this call gives, for a generic one)
       let lift := firstLiftOf ctx c2 p g lp b.name b.ty rest fxB (ctx.suspends && Suspend.hasSusp isS inner) lg.vty lg.instances
-        lg.frames lg.kTy
+        lg.frames lg.kTy lg.frameTys
       modify fun st => { st with loopFirst := st.loopFirst ++
         [{ g, pos := p, itemCode := lg.itemCode, argSet := lg.argSet, lift }] }
       let bindX ← coerce p ⟨lg.value, lg.vty⟩ ty
@@ -1678,7 +1678,7 @@ partial def elabLoopGen (ctx : Ctx) (p : Pos) (lp : List SExpr) : EM LoopGen := 
   -- (#283) the return frames of the alternatives that are calls with code
   -- after them, and the continuation they are pushed on, the last name
   -- each item keeps
-  let frames ← loopFramesWith elabSeq armCode.toList
+  let frames ← loopFramesWith elabE elabSeq rty armCode.toList
   let lives := frames.map fun f => f.lives.map (·.ty)
   let kl? : Option Local ← if frames.isEmpty then pure none else do
     let kTy := frameContTy lives

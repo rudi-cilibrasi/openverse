@@ -861,14 +861,43 @@ structure LoopFrame where
   /-- Where the prefix sets a name, which the next alternative would see. -/
   preSet : Option Pos := none
   member : Option Nat := none
-  /-- (a choice's frame) the choice's alternatives, its values' types the
-      hole's: the group's result type, for now. -/
-  choice : List SExpr := []
+  /-- The hole's type, when not the group's result type: a choice's values'
+      (`probeHoleWith`). -/
+  inTy : Option Ty := none
+  /-- The type of what the code gives, when not the group's result type:
+      the hole's of the frame after it (a choice's frame its values go to). -/
+  outTy : Option Ty := none
+
+/-- (#283) The type of the values of a choice that go through its frame, when
+    it is not the group's result type `rty` (they do not coerce to it): its
+    first alternative's, a value's, or the code's after a call in it. None
+    when that is a call of the group, whose values are at `rty`. -/
+def probeHoleWith (elabE : Ctx → SExpr → Option Ty → EM R) (ca : Ctx) (rty : Ty) (cs : List SExpr) :
+    EM (Option Ty) := do
+  let st ← get
+  let some (c, e) ← (match cs.head? with
+    | some (.app _ (.ident _ "$rec") _ false) | some (.app _ (.ident _ "$recTo") _ false) => pure none
+    | some (.app _ (.ident _ "$then") (.app _ (.ident _ _) _ false :: .ident _ h :: k :: _) false) =>
+      if (Choice.contOf? k).isSome then pure none else do
+      let hl : Local := { name := h, slot := ← fresh rty, ty := rty, mutable := false }
+      pure (some ({ ca with locals := hl :: ca.locals }, k))
+    | some a => pure (some (ca, a))
+    | none => pure none) | set st; return none
+  -- (a probe only: when the value does not elaborate apart, as a call's
+  -- code that reads a name its prefix binds, the result type)
+  let ty? ← tryCatch (do
+      let r ← elabE { c with typeOnly := true, canFail := true, inTaking := true } e none
+      let fits ← tryCatch (do let _ ← coerce e.pos r rty; pure true) (fun _ => pure false)
+      pure (if fits then none else some r.ty))
+    (fun _ => pure none)
+  set st
+  return ty?
 
 /-- (#283) An alternative of a tail's leaf flattened (`Choice.flatCount`), with
     the frames it adds to `frames`, in order: a value or a call of the group,
     and the frames its values go through, innermost first. -/
-partial def loopFlatWith (elabSeq : Ctx → List SExpr → Option Ty → EM (R × Ctx))
+partial def loopFlatWith (elabE : Ctx → SExpr → Option Ty → EM R)
+    (elabSeq : Ctx → List SExpr → Option Ty → EM (R × Ctx)) (rty : Ty)
     (ca : Ctx) (frames : Array LoopFrame) (a : SExpr) (outer : List Nat := []) :
     EM (Array LoopFrame × List (SExpr × List Nat)) := do
   let .app _ (.ident _ "$then") (c :: .ident _ h :: k :: rest) false := a | return (frames, [(a, outer)])
@@ -881,21 +910,26 @@ partial def loopFlatWith (elabSeq : Ctx → List SExpr → Option Ty → EM (R �
   let preSet := rest.findSome? fun e => if Choice.anyE (fun | .set .. => true | _ => false) e then some e.pos else none
   let j := frames.size
   let lives := (Choice.namesUsed k).eraseDups.filterMap fun n => if own.contains n then none else fc.lookup n
-  let frames := frames.push { hole := h, code := k, ctx := fc, pre, preSet, lives, choice := (Choice.alts? c).getD [] }
+  let inTy ← match Choice.alts? c with
+    | some cs => probeHoleWith elabE ca rty cs
+    | none => pure none
+  let outTy := (outer.head?.bind (frames[·]?)).bind (·.inTy)
+  let frames := frames.push { hole := h, code := k, ctx := fc, pre, preSet, lives, inTy, outTy }
   match Choice.alts? c with
   | some cs =>
     cs.foldlM (fun (fr, acc) y => do
-      let (fr, ys) ← loopFlatWith elabSeq ca fr y (j :: outer)
+      let (fr, ys) ← loopFlatWith elabE elabSeq rty ca fr y (j :: outer)
       pure (fr, acc ++ ys)) (frames, [])
   | none => return (frames, [(c, j :: outer)])
 
 /-- The return frames of a tail's alternatives, in the order of its arms. -/
-def loopFramesWith (elabSeq : Ctx → List SExpr → Option Ty → EM (R × Ctx))
+def loopFramesWith (elabE : Ctx → SExpr → Option Ty → EM R)
+    (elabSeq : Ctx → List SExpr → Option Ty → EM (R × Ctx)) (rty : Ty)
     (arms : List (Ctx × List SExpr)) : EM (List LoopFrame) := do
   let mut out : Array LoopFrame := #[]
   for (ca, as) in arms do
     for a in as do
-      out := (← loopFlatWith elabSeq ca out a).1
+      out := (← loopFlatWith elabE elabSeq rty ca out a).1
   return out.toList
 
 /-- The continuation `k` with frame `j` pushed on it, holding `vals`. -/
@@ -917,8 +951,9 @@ def framePush (ctx : Ctx) (lives : List (List Ty)) (j : Nat) (vals : List Expr) 
     value `v` it came to (it alone, when no member left it). -/
 def frameApplyWith (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx) (p : Pos)
     (frames : List LoopFrame) (rty : Ty) (k leaf : Expr)
-    (memberArm : Nat → Nat → Nat → Nat → EM Expr := fun _ _ _ _ => pure (.lit .void))
-    (result : Nat → Expr := Expr.local) : EM Expr := do
+    (memberArm : Nat → Nat → (Option Ty → Nat) → Nat → EM Expr := fun _ _ _ _ => pure (.lit .void))
+    (result : Nat → Expr := Expr.local)
+    (leafAt : Option ((Option Ty → Nat) → Expr) := none) (leafTys : List Ty := []) : EM Expr := do
   let vd : Expr := .lit .void
   let lives := frames.map fun f => f.lives.map (·.ty)
   let fty := frameTy lives
@@ -930,26 +965,41 @@ def frameApplyWith (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx) (p
   let kk ← fresh (frameContTy lives)
   let cell ← fresh cellTy
   let fr ← fresh fty
+  -- (#283) a value slot of each other type a frame's hole or code has (a
+  -- choice's frame's), `v` the group's result type's
+  let mut tys : List Ty := []
+  for t in leafTys ++ frames.flatMap (fun f => f.inTy.toList ++ f.outTy.toList) do
+    if !tys.contains t then tys := tys ++ [t]
+  let mut typed : List (Ty × Nat) := []
+  for t in tys do typed := typed ++ [(t, ← fresh t)]
+  let slotOf (t : Option Ty) : Nat := match t with
+    | some ty => ((typed.find? (·.1 == ty)).map (·.2)).getD v
+    | none => v
   let mut arms : List (Nat × Nat × Expr) := []
   for (f, j) in frames.zipIdx do
     let t ← fresh (frameLivesTy (f.lives.map (·.ty)))
     if f.member.isSome then
-      arms := arms ++ [(j, t, ← memberArm j t v kk)]
+      arms := arms ++ [(j, t, ← memberArm j t slotOf kk)]
       continue
     let ls ← f.lives.mapM fun l => do return { l with slot := ← fresh l.ty }
-    let h ← fresh rty
-    let hole : Local := { name := f.hole, slot := h, ty := rty, mutable := false }
+    let (inTy, outTy) := (f.inTy.getD rty, f.outTy.getD rty)
+    let h ← fresh inTy
+    let hole : Local := { name := f.hole, slot := h, ty := inTy, mutable := false }
     let c : Ctx := { f.ctx with canFail := true, inTaking := true, locals := hole :: ls.reverse ++ f.ctx.locals }
-    let r ← elabE c f.code (some rty)
-    let e ← coerce f.code.pos r rty
+    let r ← elabE c f.code (some outTy)
+    let e ← coerce f.code.pos r outTy
     let unpack := ls.zipIdx.foldr (fun (l, i) acc => Expr.seq (.assign l.slot (.prim (.tupGet i) [.local t])) acc) vd
-    arms := arms ++ [(j, t, .seq unpack (.seq (.assign h (.local v)) (.seq (.assign v e) vd)))]
+    arms := arms ++ [(j, t, .seq unpack (.seq (.assign h (.local (slotOf f.inTy))) (.seq (.assign (slotOf f.outTy) e) vd)))]
   let dispatch : Expr := arms.foldr (fun (j, t, body) acc =>
     .ite (.assign t (.prim .query [.prim (.tupGet j) [.local fr]])) body acc) vd
   let step : Expr := .ite (.assign cell (.prim .query [.local kk]))
     (.seq (.assign fr (.heap (.get itemF) [.local cell])) (.seq (.assign kk (.heap (.get nextF) [.local cell])) dispatch))
     Expr.brkV
-  return .seq (.assign v leaf) (.seq (.assign kk k) (.seq (.loop step) (result v)))
+  -- (a leaf of a type of its own sets that type's slot itself)
+  let start : Expr := match leafAt with
+    | some code => code slotOf
+    | none => .assign v leaf
+  return .seq start (.seq (.assign kk k) (.seq (.loop step) (result v)))
 
 /-- (#283) `elabLoopGen` for a strongly connected group of functions with
     several values, taken lazily (`$group(tail, $member(H, params, clauses,
@@ -1074,6 +1124,9 @@ partial def elabLoopGenGroupWith (elabE : Ctx → SExpr → Option Ty → EM R)
   let mut flats : Array (List (List (SExpr × List Nat))) := #[]
   -- (the function each member's code is of: its `$rec` calls that one)
   let mut origin : Array Nat := (List.range nSrc).toArray
+  -- (the type of each member's values, when not the group's result type: a
+  -- continuation member's that a choice's frame takes)
+  let mut outs : Array (Option Ty) := (List.replicate nSrc none).toArray
   let mut mi := 0
   while mi < infos.size do
     let some (_, mcode, _) := infos[mi]? | break
@@ -1082,24 +1135,17 @@ partial def elabLoopGenGroupWith (elabE : Ctx → SExpr → Option Ty → EM R)
       let mut fl : List (SExpr × List Nat) := []
       for a in as do
         let n0 := frameArr.size
-        let (fr, xs) ← loopFlatWith elabSeq ca frameArr a
+        let (fr, xs) ← loopFlatWith elabE elabSeq rty ca frameArr a
         frameArr := fr
         fl := fl ++ xs
         for j in [n0:frameArr.size] do
           let some f := frameArr[j]? | continue
           let some (ccls, ctail) := Choice.contOf? f.code | continue
           let some kms := km? | eerr p "internal: a continuation member (#283)"
-          -- (a choice's values go through its frame at the group's result
-          -- type: one of another type is not taken yet)
-          if let some v := f.choice.find? (fun
-              | .app _ (.ident _ n) _ false => !["$rec", "$recTo", "$then"].contains n
-              | _ => true) then
-            let st ← get
-            let r ← elabE { ca with typeOnly := true, canFail := true, inTaking := true } v none
-            set st
-            if let .error _ ← tryCatch (Except.ok <$> coerce v.pos r rty) (fun e => pure (.error e)) then
-              eerr v.pos s!"a choice of values of type {r.ty.show}, with a choice or a call of {g}'s group after it: not supported yet, as {g}'s values are of type {rty.show} (#283)"
-          let hl : Local := { name := f.hole, slot := ← fresh rty, ty := rty, mutable := false }
+          -- (its hole at its choice's values' type; its values at the type
+          -- the frame after it takes, `outs`)
+          let hty := f.inTy.getD rty
+          let hl : Local := { name := f.hole, slot := ← fresh hty, ty := hty, mutable := false }
           let ls ← f.lives.mapM fun l => do return { l with slot := ← fresh l.ty }
           let lctx : Ctx := { f.ctx with locals := hl :: ls.reverse ++ f.ctx.locals }
           let newOf (c : Ctx) : List Local := c.locals.take (c.locals.length - lctx.locals.length)
@@ -1111,6 +1157,7 @@ partial def elabLoopGenGroupWith (elabE : Ctx → SExpr → Option Ty → EM R)
           frameArr := frameArr.set! j { f with member := some infos.size }
           infos := infos.push (rc, code, tls)
           origin := origin.push (origin.getD mi 0)
+          outs := outs.push f.outTy
       armFlats := armFlats ++ [fl]
     flats := flats.push armFlats
     mi := mi + 1
@@ -1184,8 +1231,13 @@ partial def elabLoopGenGroupWith (elabE : Ctx → SExpr → Option Ty → EM R)
   -- (each alternative's code by its number: a continuation member's leaf of
   -- one alternative has none here)
   let mut alts : Array (Nat × Expr) := #[]
-  let mut values : Array (Nat × Expr) := #[]
+  let mut values : Array (Nat × Option Ty × Expr) := #[]
   let mut kInits : Array (Nat × Expr) := #[]
+  -- (#283) the type of a value of member `i` going to the frames `fs`: the
+  -- hole's of the first, else the member's own, when not the result type
+  let valueTy (i : Nat) (fs : List Nat) : Option Ty := match fs.head? with
+    | some j => (frames[j]?).bind (·.inTy)
+    | none => outs.getD i none
   let mut itemCode : Expr := vd
   let mut argSet : Option Pos := none
   let mut starts : Array Expr := #[]
@@ -1222,8 +1274,9 @@ partial def elabLoopGenGroupWith (elabE : Ctx → SExpr → Option Ty → EM R)
           alts := alts.push (gi, .ite assigns (.seq cont (push (startOf jm ts kE))) cont)
         | none =>
           if inline then continue
-          let r ← elabE actx a (some rty)
-          values := values.push (gi, ← coerce a.pos r rty)
+          let vty := valueTy i fs
+          let r ← elabE actx a (some (vty.getD rty))
+          values := values.push (gi, vty, ← coerce a.pos r (vty.getD rty))
           if let some kl := kl? then
             if !fs.isEmpty then kInits := kInits.push (gi, pushAll fs (.local kl.slot))
           let nextK : Int := match next? with | some n => (n : Int) | none => -1
@@ -1234,7 +1287,7 @@ partial def elabLoopGenGroupWith (elabE : Ctx → SExpr → Option Ty → EM R)
   -- value given to the frames after it or a call whose item it leaves, or,
   -- at a choice, the item of its first alternative: both a choice point,
   -- where the value's code stops (`bnd`)
-  let memberArm (fj t v kk : Nat) : EM Expr := do
+  let memberArm (fj t : Nat) (slotOf : Option Ty → Nat) (kk : Nat) : EM Expr := do
     let some f := frames[fj]? | eerr p "internal: a continuation member's frame (#283)"
     let (some mi, some kms, some b, some st) := (f.member, km?, bnd?, stash?)
       | eerr p "internal: a continuation member (#283)"
@@ -1261,9 +1314,10 @@ partial def elabLoopGenGroupWith (elabE : Ctx → SExpr → Option Ty → EM R)
             let (ts, assigns) ← argsOf actx fr? jm args' q
             pure (Expr.seq assigns (stop (startOf jm ts (some (pushAll fs (.local kk))))))
           | none =>
-            let r ← elabE actx a (some rty)
-            let e ← coerce a.pos r rty
-            pure (Expr.seq (.assign v e) (.seq (.assign kk (pushAll fs (.local kk))) restore))
+            let vty := valueTy mi fs
+            let r ← elabE actx a (some (vty.getD rty))
+            let e ← coerce a.pos r (vty.getD rty)
+            pure (Expr.seq (.assign (slotOf vty) e) (.seq (.assign kk (pushAll fs (.local kk))) restore))
         | _ => pure (stop (item (.lit (.int ((off + lf : Nat) : Int))) (cur.dropLast ++ [.local kk])))
       leaves := leaves ++ [(lf, code)]
       lf := lf + fl.length
@@ -1271,7 +1325,7 @@ partial def elabLoopGenGroupWith (elabE : Ctx → SExpr → Option Ty → EM R)
       .ite (p2 .eq (.local kms) (.lit (.int (i : Nat)))) c acc) vd
     let unpack := ls.zipIdx.foldr (fun (l, i) acc => Expr.seq (.assign l.slot (.prim (.tupGet i) [.local t])) acc) vd
     return .seq (.assign saved (.prim .mkTup (tls.map (Expr.local ·.slot))))
-      (.seq unpack (.seq (.assign hl.slot (.local v)) (.seq rc.e (.seq mcode.select dispatch))))
+      (.seq unpack (.seq (.assign hl.slot (.local (slotOf f.inTy))) (.seq rc.e (.seq mcode.select dispatch))))
   let dispatch : Expr := alts.toList.foldr (fun (i, a) acc =>
     .ite (p2 .eq (.local k) (.lit (.int (i : Nat)))) a acc) vd
   let unpack : Expr := (all.zipIdx).foldr (fun (l, j) acc =>
@@ -1294,8 +1348,14 @@ partial def elabLoopGenGroupWith (elabE : Ctx → SExpr → Option Ty → EM R)
     (.seq (.assign has (.lit (.logic false)))
     (.seq (.ite (p2 .lt (.local k) (.lit (.int 0))) start vd)
       dispatch)))))
-  let value : Expr := values.toList.foldr (fun (i, e) acc =>
+  let value : Expr := values.toList.foldr (fun (i, _, e) acc =>
     .ite (p2 .eq (.local k) (.lit (.int (i : Nat)))) e acc) (.prim .fail [])
+  -- (#283) a value of a type of its own, for a choice's frame, set into its
+  -- type's slot
+  let leafTys : List Ty := values.toList.filterMap (·.2.1)
+  let leafAt : Option ((Option Ty → Nat) → Expr) := if leafTys.isEmpty then none else
+    some fun slotOf => values.toList.foldr (fun (i, t, e) acc =>
+      .ite (p2 .eq (.local k) (.lit (.int (i : Nat)))) (.seq (.assign (slotOf t) e) vd) acc) (.prim .fail [])
   -- (#283) given to the frames of the item's continuation, with those of
   -- the value's own alternative, if any, on top
   let value ← match kl? with
@@ -1304,9 +1364,9 @@ partial def elabLoopGenGroupWith (elabE : Ctx → SExpr → Option Ty → EM R)
         .ite (p2 .eq (.local k) (.lit (.int (i : Nat)))) e acc) (.local kl.slot)
       -- (when a value came to a member's choice point: out of the
       -- consumer's failure context, which keeps what it did)
-      frameApplyWith elabE ctx p frames rty k0 value memberArm fun v => match bnd? with
+      frameApplyWith elabE ctx p frames rty k0 value memberArm (fun v => match bnd? with
         | some b => .ite (.prim .query [.local b]) (.seq .brk (.prim .userErr [])) (.local v)
-        | none => .local v
+        | none => .local v) leafAt leafTys
     | none => pure value
   -- (#283) what a value runs where it may come to a member's choice point
   -- runs once for all the values after it there, as clauses do
@@ -1321,7 +1381,8 @@ partial def elabLoopGenGroupWith (elabE : Ctx → SExpr → Option Ty → EM R)
         (.seq (.assign st (.lit .none)) (push (.local r))) vd))
     | none => pure after
   return { init, step, sp, has, value, after, vty := rty, itemCode, argSet, instances, bnd := bnd?,
-           frames := frames.map (fun f => (f.hole, f.lives.map (·.name), f.code)), kTy := kl?.map (·.ty) }
+           frames := frames.map (fun f => (f.hole, f.lives.map (·.name), f.code)),
+           frameTys := frames.map (fun f => (f.inTy, f.outTy)), kTy := kl?.map (·.ty) }
 
 /-- (#283) A body for the elaboration that chooses overloads: each
     `$inlineOv(F, id, call, …)` its call as written, `$ovPick(id, F, call)`. -/

@@ -80,6 +80,8 @@ flags: heavy     (with bif: more of them, longer chains, longer conditions)
                   followed by a choice or by another call, a choice followed by a
                   call, a choice bound in a branch with code after it, #283; on
                   with frames otherwise)
+       notyped   (no choice of strings in a generator with a choice point after it,
+                  #283; on with seq otherwise)
 """
 import copy
 import os
@@ -487,6 +489,12 @@ RVAR = random.Random(seed * 1000003 + 283286)
 # it, `else: Wb := (…); …; Wb + 1` (a `gblk`). The model is the same CPS inlining: the code after a
 # choice point runs on each of its values, the code before the next one once for each of them.
 RSEQ = random.Random(seed * 1000003 + 283287)
+# ---- #283, flag typed (on with seq; notyped turns it off): a <decides> generator's bound choice
+# of strings, `Ws := ("a" | "{Gz0[N - 1, A]}" | "bb")` (a call of itself in it, whose value the
+# string's code takes), with a choice point after it that reads `Ws.Length`, and an alternative
+# with a choice of strings in its expression, `(("a" | "bb").Length + 2)`: the code after a choice
+# whose values are not the generator's type; a stream of its own.
+RTY = random.Random(seed * 1000003 + 283288)
 SQN = [0]
 USED = set()     # (generator, in a for): the calls the tests make, for MVSEQ's statistics
 FRN = [0]
@@ -504,6 +512,7 @@ def ffresh():
     return f"fr{FRN[0]}"
 FRAMES = LAZY and 'noframes' not in flags and 'cf' not in flags
 SEQ = FRAMES and 'noseq' not in flags
+TYPED = SEQ and 'notyped' not in flags
 REFUSED = [False]
 
 
@@ -979,6 +988,8 @@ def gen_gfunc(i):
         f['val'] = ('gbif', conds, base, alts(True))
     if SEQ:
         seq_shapes(f, i, sc, ctr)
+    if TYPED:
+        typed_shapes(f, i, sc, ctr)
     f['stmts'] = stmts
     f['lifted'] = lifted(f)
     CTX.update(ctrs=None, nofail=False, nochoice=False, noprint=False, fmax=None, take=None)
@@ -1042,6 +1053,40 @@ def seq_shapes(f, i, sc, ctr):
             last = ('bin', '+', seq_call(i, sc + ['Wb'], ctr), ('ref', 'Wb'))
         f['val'] = ('gbif', v[1], v[2], [('gblk', 'Wb', v[3], post, last)])
         f['seq'] = f.get('seq', set()) | {'branch-block'}
+
+
+def typed_shapes(f, i, sc, ctr):
+    """(#283, flag typed) choices of strings in generator f, made already, from RTY alone: its
+    bound choice of strings (a <decides> one), and an alternative with a choice of strings in
+    its expression."""
+    def call(a):
+        return ('gself', i, [('bin', '-', ('ref', 'N'), ('lit', 1)), a] + ([('ref', 'C')] if ctr else []))
+    # (no empty string: `if (false?) then "" else ""` is refused as an internal error, which
+    # the body a function with several values keeps for checking makes of `("" | "")`, a bug
+    # apart from #283)
+    lit = lambda: ('str', RTY.choice(['a', 'bb', 'ccc', 'dddd']))
+    v = f['val']
+    if f['decides'] and RTY.random() < 0.25:
+        strs = [lit() for _ in range(RTY.randint(1, 2))]
+        if RTY.random() < 0.5:
+            strs.insert(RTY.randint(0, len(strs)), ('sfmt', call(('ref', RTY.choice(sc)))))
+        v[1][:] = strs if len(strs) > 1 else strs + [lit()]
+        post = [('sprint', sqfresh())] if RTY.random() < 0.6 else []
+        n = ('slen', ('ref', 'Ws'))
+        if RTY.random() < 0.5:
+            last = ('choice', [('bin', '+', call(n), n), ('ref', 'N')])
+        else:
+            last = ('bin', '*', call(('ref', 'A')), n)
+        f['bound'] = ('Ws', post, last)
+        f['seq'] = f.get('seq', set()) | {'typed-choice'}
+    if RTY.random() < 0.2:
+        alts = v[1] if v[0] == 'gchoice' else v[3]
+        # (in the generator's own choice, not in a bound one, whose values
+        # the code after it takes)
+        if alts and alts[0][0] != 'gblk' and not f.get('bound'):
+            alts.insert(RTY.randint(0, len(alts)),
+                        ('bin', '+', ('slen', ('choice', [lit(), lit()])), ('lit', RTY.randint(0, 3))))
+            f['seq'] = f.get('seq', set()) | {'typed-expr'}
 
 
 FX_NODES = ('sprint', 'snext', 'tell', 'bprint', 'cnext', 'cadd', 'print', 'next', 'add', 'seti', 'setf')
@@ -1492,6 +1537,12 @@ def show(e):
     t = e[0]
     if t == 'lit':
         return str(e[1])
+    if t == 'str':
+        return f'"{e[1]}"'
+    if t == 'sfmt':
+        return '"{' + show(e[1]) + '}"'
+    if t == 'slen':
+        return f'{show(e[1])}.Length'
     if t == 'ref':
         return e[1]
     if t == 'tell':
@@ -1807,6 +1858,12 @@ def ev(e, st, k, mode):
         return k(e[1], st)
     if t == 'ref':
         return k(lookup(st, e[1]), st)
+    if t == 'str':
+        return k(e[1], st)
+    if t == 'sfmt':
+        return ev(e[1], st, lambda v, s: k(str(v), s), mode)
+    if t == 'slen':
+        return ev(e[1], st, lambda v, s: k(len(v), s), mode)
     if t == 'tell':
         def k2(v, s):
             s.out.append(e[1])
@@ -2754,7 +2811,9 @@ if os.environ.get('MVSEQ'):
     # for or where the first success is taken, with effects run as a function of its own or not)
     used = [(k, 'for' if isfor else ('first-lifted' if GFUNCS[i]['lifted'] else 'first'))
             for i, isfor in sorted(USED) for k in sorted(GFUNCS[i].get('seq', ()))]
-    print(f"seq {sum(1 for f in GFUNCS if f.get('seq'))} " + " ".join(sorted({f"{k}/{c}" for k, c in used})), file=sys.stderr)
+    made = sorted({k for f in GFUNCS for k in f.get('seq', ())})
+    print(f"seq {sum(1 for f in GFUNCS if f.get('seq'))} " + " ".join(sorted({f"{k}/{c}" for k, c in used})) +
+          f" made={','.join(made)}", file=sys.stderr)
 if os.environ.get('MVSTATS'):
     print(f"stats gens={len(GFUNCS)} gfor={STATS['gfor']} gfirst={STATS['gfirst']} gback={STATS['gback']} lfirst={STATS['lfirst']} lback={STATS['lback']} lmeth={STATS['lmeth']}", file=sys.stderr)
 if SKIPRET[0]:

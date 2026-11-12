@@ -851,11 +851,22 @@ code after it, which is its frame.
 - The size modes `recursive-sequence-first`, `-for`, `-calls-first` and
   `-calls-for` check that a sequence of choice points grows linearly.
 
+- A choice's values may be of another type than the group's (`S := "a" |
+  "bb"`, then `T[N - 1] + S.Length`): its frame's hole is at their type
+  (`probeHoleWith`: the choice's first alternative's, a value's or the code's
+  after a call in it, when it does not coerce to the result type, so frames
+  that compiled before keep theirs), and the code of a frame that a choice's
+  frame comes after gives that type (`LoopFrame.inTy`, `outTy`). The frame
+  loop keeps a value slot for each such type besides the result type's: a
+  frame reads its hole from its type's slot and writes its code's value to
+  its own (`frameApplyWith`), and a value of such a choice starts in its
+  type's. A continuation member's own values are at the type of the frame
+  after it. Where the first success is taken, each such type has a `$ret`
+  function of its own, `{name}$retN`, the value given to the one of its
+  type (`firstBody`'s `retOf`), and `$frameReturn` gives the final value at
+  the result type its name, `$Vfin`.
+
 Not yet (#283), each refused with a message, and the route each would take:
-- A choice whose values are of another type than the group's with a point
-  after it (`S := "a" | "bb"`, then `T[N - 1] + S.Length`): the frame loop
-  keeps one value slot, of the result type. Route: a slot per hole type,
-  each frame reading its hole from its own and writing the result type's.
 - A choice with code before it that is not literals or names, in one
   alternative of several (`T(N - 1) | Tell("x", 1) + (1 | 2)`): that code
   runs after the first choice and before the second, in that alternative
