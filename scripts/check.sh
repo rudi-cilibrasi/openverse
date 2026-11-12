@@ -103,6 +103,7 @@ check "waiting consumers in parameter defaults (${FUZZ_MODEL_WAITING_DEFAULTS:-1
 check "float fuzzing (${FUZZ_FLOATS:-200} programs, against Python's doubles)" scripts/fuzz-floats.sh "${FUZZ_FLOATS:-200}" "$seed"
 check "scalar float math (${FUZZ_FLOAT_MATH:-64} random cases and fixed edges)" \
   bash tests/scripts/test-float-math.sh "${FUZZ_FLOAT_MATH:-64}" "$seed"
+check "rational arithmetic fuzzing (${FUZZ_RATIONAL:-120} programs, against exact fractions)" scripts/fuzz-rational.sh "${FUZZ_RATIONAL:-120}" "$seed"
 check "choice fuzzing (${FUZZ_CHOICE:-200} programs, against a backtracking model)" scripts/fuzz-choice.sh "${FUZZ_CHOICE:-200}" "$seed"
 check "scheduler model fuzzing (${FUZZ_MODEL_SCHED:-50} programs, against a model of the docs)" \
   scripts/fuzz-model-sched.sh "${FUZZ_MODEL_SCHED:-50}" "$seed"

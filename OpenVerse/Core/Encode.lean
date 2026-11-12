@@ -42,8 +42,8 @@ def primCode : Prim → Nat × Nat
   | .fsqrt => (47, 0) | .fexp => (48, 0) | .fln => (49, 0) | .fsin => (50, 0) | .fcos => (51, 0)
   | .ftan => (52, 0) | .fasin => (53, 0) | .facos => (54, 0) | .fatan => (55, 0) | .fpow => (56, 0)
   | .fatan2 => (57, 0) | .fisFinite => (58, 0)
-  | .fsinh => (64, 0) | .fcosh => (65, 0) | .ftanh => (66, 0)
-  | .fasinh => (67, 0) | .facosh => (68, 0) | .fatanh => (69, 0)
+  | .fsinh => (59, 0) | .fcosh => (60, 0) | .ftanh => (61, 0)
+  | .fasinh => (62, 0) | .facosh => (63, 0) | .fatanh => (64, 0)
 
 /-- The node table under construction. -/
 abbrev EncM := StateM (Array ByteArray)

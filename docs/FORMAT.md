@@ -95,6 +95,16 @@ the function's header (whose `nnodes` is 4).
 | 8 | modulo | 18 | mkSome | 28 | userErr |
 | 9 | lt | 19 | concat | | |
 
+Codes 0 (`add`), 1 (`sub`), 2 (`mul`) and 7 (`quotient`) also have a
+four-int rational form (#489): arguments `(a,b,c,d)` denote `a/b` and
+`c/d`, and the result is the reduced tuple `(numerator,denominator)`.
+Operand denominators must be positive; otherwise the result is the
+overflow error. `quotient` fails on `c = 0`; the other forms never fail.
+Final parts must fit int64 with a positive denominator. Intermediate
+products and sums are exact and may exceed int64. The existing two-int
+forms are unchanged. Four-argument arithmetic requires a runtime with
+this extension; opcode numbers and the loader's accepted format are unchanged.
+
 Floats (#127):
 
 | code | prim | code | prim | code | prim |
@@ -110,9 +120,9 @@ The mathematical functions (#132): 47 fsqrt, 48 fexp, 49 fln, 50 fsin,
 51 fcos, 52 ftan, 53 fasin, 54 facos, 55 fatan, 56 fpow, 57 fatan2,
 58 fisFinite.
 
-The hyperbolic functions (#490): 64 fsinh, 65 fcosh, 66 ftanh,
-67 fasinh, 68 facosh, 69 fatanh. These take one float and return a float.
-Codes 59–63 are reserved and rejected. Existing codes retain their values;
+The hyperbolic functions (#490): 59 fsinh, 60 fcosh, 61 ftanh,
+62 fasinh, 63 facosh, 64 fatanh. These take one float and return a float.
+Existing codes retain their values;
 older runtimes reject programs using these new codes. `Lerp` uses the
 existing floating arithmetic primitives and needs no new code.
 
@@ -126,7 +136,7 @@ the end with no bytes left over and:
 3. every child index of node `j` is `< j`;
 4. every slot (LOCAL, ASSIGN, FOR) is `< nslots` of its function;
 5. every CALL names a function `< nfns` whose `arity` equals the call's `n`;
-6. every PRIM code is `≤ 58` or in `64..69`, `k = 0` unless the code is 25, every LIT
+6. every PRIM code is `≤ 64`, `k = 0` unless the code is 25, every LIT
    tag is `≤ 6` with LOGIC `≤ 1`, and every HEAP op is `≤ 4`, with `k = 0`
    for `tag`;
 7. the counts stay within the limits in `runtime/include/openverse.h`.

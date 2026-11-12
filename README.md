@@ -171,6 +171,12 @@ Trusted, besides Lean's kernel:
   its Lean restatement are the same formula (`docs/SEAMS.md`);
 - the gap between CompCert's C and the GCC build of `cverse`.
 
+Exact rational arithmetic (#489) is an OpenVerse extension. Its Lean Core
+semantics and safety proofs cover the four-int primitive forms; the C
+128-bit implementation is tested against independent fraction oracles and
+sanitizers, outside QuickProof's existing scalar arithmetic law. See
+[the rational seam](docs/SEAMS.md#4-rational-arithmetic).
+
 Verse, Unreal Engine and Fortnite are trademarks of Epic Games. openverse is
 an independent implementation written from the public
 [Book of Verse](https://verselang.github.io/book/) and the

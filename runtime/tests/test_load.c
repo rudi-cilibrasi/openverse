@@ -323,10 +323,6 @@ static void violations(void)
     CHECK_EQ(load_one(&f, 0, 0, 0), VX_LOAD_PRIM);
     {
         uint32_t code;
-        for (code = VX_P_FISFINITE + 1; code < VX_P_FSINH; code++) {
-            n_prim(&f, code, 0, 0);
-            CHECK_EQ(load_one(&f, 0, 0, 0), VX_LOAD_PRIM);
-        }
         for (code = VX_P_FSINH; code <= VX_P_FATANH; code++) {
             n_prim(&f, code, 0, 0);
             CHECK_EQ(load_one(&f, 0, 0, 0), VX_LOAD_OK);

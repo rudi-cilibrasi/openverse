@@ -635,6 +635,11 @@ def tc : Expr → Option VTy → Option VTy
   | .prim op es, m => tcPrim op es m
 /-- `tc` for a primitive application. -/
 def tcPrim : Prim → List Expr → Option VTy → Option VTy
+  | .add, [a, b, c, d], m | .sub, [a, b, c, d], m
+  | .mul, [a, b, c, d], m | .quotient, [a, b, c, d], m =>
+    if (tc a (some .int)).isSome && (tc b (some .int)).isSome &&
+        (tc c (some .int)).isSome && (tc d (some .int)).isSome then
+      expect m (.tup [.int, .int]) else none
   | .add, [a, b], m | .sub, [a, b], m | .mul, [a, b], m | .floorDiv, [a, b], m
   | .ceilDiv, [a, b], m | .quotient, [a, b], m | .modulo, [a, b], m =>
     if (tc a (some .int)).isSome && (tc b (some .int)).isSome then expect m .int else none
@@ -839,7 +844,20 @@ theorem tcPrim_sound_of {op : Prim} {es : List Expr} {m τ} (ih : ∀ e ∈ es, 
       exact ⟨.cons (chk (by simp) hc.1) (.cons (chk (by simp) hc.2) .nil), h1, h2⟩
     · simp at hh
   cases op with
-  | add | sub | mul | floorDiv | ceilDiv | quotient | modulo =>
+  | add | sub | mul | quotient =>
+    rcases es with _ | ⟨a, _ | ⟨b, _ | ⟨c, _ | ⟨d, _ | ⟨e, rest⟩⟩⟩⟩⟩ <;>
+      simp only [tcPrim] at h <;> try (simp at h; done)
+    all_goals first
+      | (obtain ⟨hl, hs, hm⟩ := arith2 rfl h
+         exact ⟨.sub (.prim hl (.arith (by simp))) hs, hm⟩)
+      | (split at h
+         · next hc =>
+           simp only [Bool.and_eq_true] at hc
+           exact expect_typed h (.prim (.cons (chk (by simp) hc.1.1.1)
+             (.cons (chk (by simp) hc.1.1.2) (.cons (chk (by simp) hc.1.2)
+             (.cons (chk (by simp) hc.2) .nil)))) (.rational (by simp)))
+         · simp at h)
+  | floorDiv | ceilDiv | modulo =>
     rcases es with _ | ⟨a, _ | ⟨b, _ | ⟨c, rest⟩⟩⟩ <;> simp only [tcPrim] at h <;> try (simp at h; done)
     all_goals
       obtain ⟨hl, hs, hm⟩ := arith2 rfl h

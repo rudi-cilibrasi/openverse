@@ -891,14 +891,32 @@ unchanged; only its bound on primitive codes grows.
 
 A `rational` (#116) is a front-end type whose Verse Core form is the tuple
 (numerator, denominator), in lowest terms with a positive denominator. Tuple
-equality is then rational equality, and nothing changes in Core, the proofs
-or the C runtime.
+equality is then rational equality. The original quotient construction and
+ordering need no new Core operations or C runtime support.
 
 `Front/Rational.lean` holds the helpers as Verse source: normalising
 `X / Y`, and ordering. A program whose source has `/` or `rational` gets
 them added. They are parsed with their names renamed to `$ratMake` etc.,
 which no program can write. The ordering compares the continued fractions of
 the two rationals rather than cross-multiplying, so no step overflows.
+
+Rational arithmetic (#489) extends `add`, `sub`, `mul` and `quotient` with
+four-int forms `(a,b,c,d)`, returning the reduced parts of the result on
+`a/b` and `c/d`. The frontend saves both rational operands in order before
+projecting their parts. Unary negation saves one operand and negates its
+numerator. The ordinary two-int forms and loader remain unchanged.
+
+`Core/Prims.lean` defines these operations with exact `Int` intermediates
+and checks int64 bounds after gcd reduction and sign normalization. C uses
+signed 128-bit intermediates: with int64 numerators and positive int64
+denominators, each product and each add/subtract sum fits that range.
+Unsigned magnitudes support reduction without negating a signed minimum.
+Only rational division can fail, on a zero divisor; an unrepresentable
+reduced result raises overflow. The extended primitive typing, checker
+soundness, type-safety, scoping and control proofs build as before. The C
+wide implementation is tested against independent exact-fraction oracles;
+it is outside QuickProof's existing two-int arithmetic law. See
+[the rational seam](SEAMS.md#4-rational-arithmetic).
 
 ## Generic functions: polymorphic Verse Core
 

@@ -1,0 +1,15 @@
+add -1 0
+sub 1 2
+mul -1 0
+neg -1 0
+mixed-add-left 1 2
+mixed-add-right 2 3
+mixed-sub-left 2 3
+mixed-sub-right -2 -1
+mixed-mul-left -2 -1
+mixed-mul-right 1 2
+generic 0 1
+div -1 0
+mixed-div-left -3 -2
+mixed-div-right 0 1
+exit=0

@@ -366,6 +366,8 @@ def ViewRefines (ps : List (Option VTy)) (φ a X : List VTy) (μ : Nat → VTy) 
 /-- The typing of primitives: `PrimTy op ts τ` when `op` applied to values
     of types `ts` gives a value of type `τ`. -/
 inductive PrimTy : Prim → List VTy → VTy → Prop
+  | rational {op} : op ∈ [Prim.add, .sub, .mul, .quotient] →
+      PrimTy op [.int, .int, .int, .int] (.tup [.int, .int])
   | arith {op} : op ∈ [Prim.add, .sub, .mul, .floorDiv, .ceilDiv, .quotient, .modulo] →
       PrimTy op [.int, .int] .int
   | unary {op} : op ∈ [Prim.neg, .abs] → PrimTy op [.int] .int
