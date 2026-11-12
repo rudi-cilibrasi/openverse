@@ -637,7 +637,10 @@ circle := class(shape, labelled):
   or another among them): then the branch has the later cast's name, with
   the type it has there, but not its refinement:
   `if (Print("x"), D := dup[P], Y := D.A) then option{Y}` prints `x` only
-  when `P` is a `dup`, and its branch has `D` and `Y` with `b = a`.
+  when `P` is a `dup`, and its branch has `D` and `Y` with `b = a`. A
+  `for`'s generator past that one whose source uses the cast's name casts
+  the object again there too (`for (P : Ps, D := dup[P], Y : D.Items)`),
+  and so does the body when it uses the names such generators bind.
 
   A cast can also open type arguments the object's type has no names for
   (#250): `if (P := pairE[E]) then (Eval(P.L), Eval(P.R))`, for
@@ -800,8 +803,8 @@ circle := class(shape, labelled):
     where lifting does not reach it: in a branch of an `if` that is an
     expression, `then dup[P].C` (write it as a clause of a block there,
     `then (D := dup[P]; D.C)`);
-  - in a `for`'s clauses, one past a generator after such a cast that uses
-    its name (#243);
+  - in a `for`'s clauses, a filter past a generator after such a cast that
+    uses its name (#243): only a generator's source there may;
   - after a cast that opens type arguments, a value of its failure
     context, or a name it binds that a branch or body uses, of a type that
     names them (#250);

@@ -296,7 +296,8 @@ def isCastObj (n : String) : Bool := n.startsWith "$castObj"
     as a sequence's cast does (`elabSeqIn`), so that their failure, or its
     own, is the clauses': the names they bind that later code uses are its
     value, bound again after it. `after` casts the object again, `if (D :=
-    T[X']) then after`, when it uses `D` or a name bound after it, and so
+    T[X']) then after`, when it uses `D` or a name bound after it (as does a
+    later generator's source that uses `D`), and so
     each cast after it to a class (`isClass`): each succeeds as the first one
     did (an object's class does not change), so that `after` is typed under
     their refinements too. A later cast's object is a local fixed before the
@@ -313,12 +314,24 @@ def castRestClauses (pre : List SExpr) (cast : Pos × String × String × SExpr)
   let (p, d, T, x) := cast
   let branch0 := rest.takeWhile (!isGen ·)
   let later := rest.dropWhile (!isGen ·)
-  let usedLater := Choice.namesUsed (.block p later)
-  if usedLater.contains d then
+  let uses (e : SExpr) : Bool := (Choice.namesUsed e).contains d
+  -- (past the next generator, only a generator's source may use `D`, which
+  -- casts the object again, as `after` does: a filter there would need
+  -- the refinement as a clause, where only this cast's clause has it)
+  if later.any fun | .gen .. => false | c => uses c then
     throw s!"a clause after it, past a generator or a choice, uses {d}"
+  let laterUses := later.any uses
+  -- (and the names those generators bind, of a type the refinement gives)
+  let laterNames := later.flatMap fun | .gen _ y i src => if uses src then y :: i.toList else [] | _ => []
+  let usedLater := (Choice.namesUsed (.block p later)).filter (· != d)
   let usedAfter := Choice.namesUsed after
   let obj := castObj
   let castOf (q : Pos) (e T : String) (y : SExpr) : SExpr := .decl q e none false (.app q (.ident q T) [y] true)
+  let later := later.map fun
+    | .gen q y i src =>
+      if uses src then .gen q y i (.ite q [made (castOf q d T (.ident q (obj p)))] src
+        (some (.app q (.ident q "Err") [] false))) else .gen q y i src
+    | c => c
   -- (the later casts' objects to cast again, and the names whose values may
   -- name opened type arguments: what casts bind, and what uses those)
   let (objs, branch, _) := branch0.foldl (fun (objs, cs, tainted) c => match c with
@@ -340,7 +353,8 @@ def castRestClauses (pre : List SExpr) (cast : Pos × String × String × SExpr)
     | c@(.decl _ n _ _ _) :: cs => if n == e then c :: cs else fromCast e cs
     | _ :: cs => fromCast e cs
   let again := ((d, T, .ident p (obj p), none) :: objs).filter fun (e, _) =>
-    !usedLater.contains e && (e :: names (if e == d then branch else fromCast e branch)).any usedAfter.contains
+    !usedLater.contains e &&
+      (e :: (if e == d then names branch ++ laterNames else names (fromCast e branch))).any usedAfter.contains
   let kept : List (String × Bool) := branch.filterMap fun
     | .decl _ n _ v _ =>
       if again.any (·.1 == n) then none
@@ -351,7 +365,7 @@ def castRestClauses (pre : List SExpr) (cast : Pos × String × String × SExpr)
   let value : SExpr := match kept with
     | [(n, _)] => .ident p n
     | ns => .tuple p (ns.map fun (n, _) => .ident p n)
-  let headAgain := again.any (·.1 == d)
+  let headAgain := again.any (·.1 == d) || laterUses
   let tail := SExpr.ite p [made (castOf p d T (if headAgain then .ident p (obj p) else x))]
     (.app p (.ident p "$first") [.block p (branch ++ [value])] false) (some (noValue p))
   let get (i : Nat) : SExpr := if kept.length == 1 then .ident p vals else .app p (.ident p vals) [.int p (i : Int)] false

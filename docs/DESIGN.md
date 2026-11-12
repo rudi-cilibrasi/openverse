@@ -2132,7 +2132,13 @@ clause's values; as a local from outside the later cast's branch, it
 leaves that branch at its own type, not the refined one, so it can be cast
 again. An object that may name type arguments a cast opens (the first
 cast's, when the refusal says it opens, `Refine.CastRefusal.opens`, or a
-later cast's, which may) is not: `after` could not name its type. Both `if`s are the elaborator's, marked `$made` (their
+later cast's, which may) is not: `after` could not name its type. A `for`'s generator past the moved clauses whose source uses `D` has its
+source cast again in the same way, at the generator's place, and the body
+is cast again when it uses the names those generators bind; a filter there
+that uses `D` is refused. A later cast of an object computed among the
+moved clauses is cast again only when the branch or body is refused
+without it (`computed`), so that programs compiled before keep their code.
+Both `if`s are the elaborator's, marked `$made` (their
 branches are the lifts'). A `for`'s rebuilt body is at the element type
 expected, when one is.
 

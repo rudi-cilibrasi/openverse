@@ -13,7 +13,8 @@ clauses with effects in an if, a second cast, to dup, of an object a call
 computes among the clauses or of a parameter, whose refinement the branch's
 value needs (d = c, for an option of the second's A as a ?d). At times
 the cast is inside an expression, `C0 := Peek[H, 1] + T[P].C`, after a call
-with an effect that runs first. Clauses
+with an effect that runs first; a for's clauses at times end with a
+generator over values of the cast's, `Y2 : array{D.C, D.C + 1}`. Clauses
 before the cast print, add to a cell's var field or call a <decides> function
 that does; clauses after it compare, print and add, and bind names that later
 code uses. The value is the object's C, or a field whose type is the code's
@@ -201,8 +202,12 @@ elif context == 'for':
     elif use == 'name': body_t, body_r = f'Print("b{{{names[-1]}}}")', (lambda env: st.out.append(f'b{env[names[-1]]}'))
     else: body_t, body_r = 'set H.N += 100', (lambda env: setattr(st, 'n', st.n + 100))
     G2 = f'Ps:[]{root}(a, b), H:cell where a:type, b:type'
-    fn = (f'F({G2})<transacts>:int =\n    R := for ({", ".join(["P : Ps"] + body)}):\n'
-          f'        {body_t}\n        H.N\n    R.Length\n')
+    # (at times a generator after the clauses, over values of the cast's)
+    gen2 = (not bare) and ch(0.4)
+    clauses = ["P : Ps"] + body + (['Y2 : array{D.C, D.C + 1}'] if gen2 else [])
+    body2 = '        Print("y{Y2}")\n' if gen2 else ''
+    fn = (f'F({G2})<transacts>:int =\n    R := for ({", ".join(clauses)}):\n'
+          f'{body2}        {body_t}\n        H.N\n    R.Length\n')
     def model_all(os):
         count = 0
         for o in os:
@@ -211,7 +216,9 @@ elif context == 'for':
                 run_clauses(o, env)
             except Fail:
                 st.back(s0); continue
-            body_r(env); count += 1
+            for y2 in ((o[3], o[3] + 1) if gen2 else (None,)):
+                if gen2: st.out.append(f'y{y2}')
+                body_r(env); count += 1
         st.out.append(f'F {count} {st.n}')
 elif context == 'second':
     computed = ch(0.6)
