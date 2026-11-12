@@ -21,7 +21,8 @@ def main (args : List String) : IO Unit := do
     "peer-void", "peer-void-control", "bottom-flow", "bottom-flow-control",
     "peer-void-join", "peer-void-join-control", "peer-void-comparable", "peer-void-comparable-control",
     "peer-void-tuple-value", "peer-void-tuple-value-control",
-    "peer-numeric-comparable", "peer-numeric-comparable-control"]
+    "peer-numeric-comparable", "peer-numeric-comparable-control",
+    "choice-nested-spawn-bound", "choice-nested-spawn-bound-control"]
   let negative := ["choice-refusal", "default-refusal", "override-refusal", "overload-interface-refusal",
     "overload-ancestor-refusal", "overload-optional-refusal", "overload-empty-refusal", "overload-scope-refusal",
     "overload-value-refusal", "interior-readonly-refusal", "interior-effect-refusal",
