@@ -145,6 +145,8 @@ check "callable field choice dictionary model fuzzing (${FUZZ_MODEL_CALLABLE_DIC
   scripts/fuzz-model-heterogeneous.sh "${FUZZ_MODEL_CALLABLE_DICTIONARY:-120}" "$seed" --callable-fields
 check "alias choice dictionary model fuzzing (${FUZZ_MODEL_ALIAS_DICTIONARY:-120} programs)" \
   scripts/fuzz-model-heterogeneous.sh "${FUZZ_MODEL_ALIAS_DICTIONARY:-120}" "$seed" --aliases
+check "field write choice dictionary model fuzzing (${FUZZ_MODEL_WRITE_DICTIONARY:-120} programs)" \
+  scripts/fuzz-model-heterogeneous.sh "${FUZZ_MODEL_WRITE_DICTIONARY:-120}" "$seed" --writes
 check "source break model fuzzing (${FUZZ_MODEL_BREAKS:-60} programs)" \
   scripts/fuzz-model-breaks.sh "${FUZZ_MODEL_BREAKS:-60}" "$seed"
 check "choice model fuzzing (${FUZZ_MODEL_MV:-140} programs, functions with several values too)" \

@@ -8,6 +8,21 @@ tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
 limit="${CHOICE_SIZE_TIMEOUT:-120}"
 # Keep modes sorted on separate lines so independent additions merge cleanly.
 kinds=(
+  setter-simple-first
+  setter-simple-for
+  setter-simple-waiting
+  setter-compound-first
+  setter-compound-for
+  setter-compound-waiting
+  setter-array-first
+  setter-array-for
+  setter-array-waiting
+  setter-alias-first
+  setter-alias-for
+  setter-alias-waiting
+  setter-choice-first
+  setter-choice-for
+  setter-choice-waiting
   alias-block-first
   alias-block-for
   alias-block-waiting
@@ -297,6 +312,35 @@ if kind == 'heterogeneous-nested-for':
         body = f'for(A{i}:=(Dup(1)|Dup("s"))):' + body
     print('    Rows:=' + body)
     print('    Print("{Rows.Length}")')
+    sys.exit(0)
+if kind.startswith('setter-'):
+    _, shape, mode = kind.split('-')
+    print('Dup(X:t where t:type)<computes>:t=X|X')
+    for cls,ty,value in [('ca','[]int','array{1}'),('cb','[]string','array{"s"}')]:
+        print(cls + ':=class{var K:' + (ty if shape == 'array' else 'int') + '=' + (value if shape == 'array' else '1') + '}')
+    clauses=','.join(f'A{i}:=(Dup(ca{{}})|Dup(cb{{}}))' for i in range(count))
+    statements=[];terms=[]
+    for i in range(count):
+        name=f'A{i}'
+        if shape == 'alias':
+            statements.extend([f'B{i}:={name}',f'C{i}:=B{i}'])
+            name=f'C{i}'
+        statements.append(f'set {name}.K' + ('=' if shape=='simple' else '+=') + ('array{}' if shape=='array' else '(1|2)' if shape=='choice' else '1'))
+        terms.append(name+'.K'+('.Length' if shape=='array' else ''))
+    if shape == 'choice':
+        clauses += ',' + ','.join(statements)
+        statements=[]
+    value='block{'+';'.join(statements+['+'.join(terms)])+'}'
+    effects='<suspends>' if mode=='waiting' else ''
+    if mode=='waiting':
+        value='block{Sleep(0.0);'+value+'}'
+    print(f'Run(){effects}:int=')
+    if mode=='first':
+        print('    if('+clauses+',V:='+value+',V>0)then V else -1')
+    else:
+        print('    Rows:=for('+clauses+'):'+value)
+        print('    Rows.Length')
+    print(f'Main(){effects}:void=Print("{{Run()}}")')
     sys.exit(0)
 if kind.startswith('alias-'):
     _, shape, mode = kind.split('-')
@@ -1371,6 +1415,18 @@ PY
     if [[ $kind == alias-* && $count == 4 ]]; then
       expected=256
       [[ $kind == *-first ]] && expected=8
+      printf '%s\n' "$expected" >"$tmp/expected"
+      timeout "$limit" "$root/.lake/build/bin/openverse" run "$tmp/p.verse" >"$tmp/lean.out"
+      timeout "$limit" "$root/runtime/build/cverse" "$tmp/p.vbc" >"$tmp/c.out"
+      diff -u "$tmp/expected" "$tmp/lean.out"
+      diff -u "$tmp/expected" "$tmp/c.out"
+    fi
+    if [[ $kind == setter-* && $kind != setter-choice-* && $count == 4 ]]; then
+      expected=256
+      if [[ $kind == *-first ]]; then
+        expected=8
+        [[ $kind == setter-simple-* || $kind == setter-array-* ]] && expected=4
+      fi
       printf '%s\n' "$expected" >"$tmp/expected"
       timeout "$limit" "$root/.lake/build/bin/openverse" run "$tmp/p.verse" >"$tmp/lean.out"
       timeout "$limit" "$root/runtime/build/cverse" "$tmp/p.vbc" >"$tmp/c.out"
