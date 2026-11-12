@@ -599,14 +599,14 @@ partial def elabAppBaseWith
               if contextual[i]! then
                 eerr a.pos s!"cannot infer the type parameters of {m} from the arguments of this call"
               let r ← elabE ctx a none
-              match t.matchArg ctx.types σu r.ty with
+              match ctx.matchArgument σu t r.ty with
               | some σ' =>
                 σu := own? σ'
                 let t' := t.subst σu
                 if t'.params.any ownNames.contains then
                   if pass == 0 then deferred := deferred.set! i true
                   else eerr a.pos s!"cannot infer the type parameters of {m} from this argument"
-                else done := done.set! i (some (← coerce a.pos r t', t'))
+                else done := done.set! i (some (← elabArgumentCoerceWith elabE ctx a.pos r t', t'))
               | none => eerr a.pos s!"expected {showT t}, found {r.ty.show} (in a call of {m})"
             else
               done := done.set! i (some (← coerce a.pos (← elabE ctx a (some t)) t, t))

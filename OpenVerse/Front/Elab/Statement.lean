@@ -138,7 +138,7 @@ partial def elabStmtWith (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : C
           if t.params.any names.contains then
             if contextual[i]! then eerr q s!"cannot infer the type parameters of {fname} from the arguments of this call"
             let r ← elabE ctx a none
-            match t.matchArg ctx.types σ r.ty with
+            match ctx.matchArgument σ t r.ty with
             | some σ' =>
               σ := σ'.filter fun (v, _) => names.contains v
               if !formal.bounds.isEmpty then
@@ -149,7 +149,7 @@ partial def elabStmtWith (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : C
               if t'.params.any names.contains then
                 if pass == 0 then deferred := deferred.set! i true
                 else eerr q s!"cannot infer the type parameters of {fname} from this argument"
-              else done := done.set! i (some (← coerce q r t', t'))
+              else done := done.set! i (some (← elabArgumentCoerceWith elabE ctx q r t', t'))
             | none => eerr q s!"expected {shown t}, found {r.ty.show} (in a call of {fname})"
           else
             done := done.set! i (some (← coerce q (← elabE ctx a (some t)) t, t))
@@ -214,11 +214,11 @@ partial def elabStmtWith (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : C
           if fromContext a then
             eerr p s!"cannot infer type parameter {shownTp ((t.params.filter names.contains).headD "t")} of {fname} from the arguments of this call"
           let r ← elabE c a none
-          match t.matchArg ctx.types σ r.ty with
+          match c.matchArgument σ t r.ty with
           | some σ' =>
             σ := σ'.filter fun (n, _) => names.contains n
             t' := t.subst σ
-            e ← coerce q r t'
+            e ← elabArgumentCoerceWith elabE c q r t'
           | none => eerr q s!"expected {shown t}, found {r.ty.show} (the default of a parameter of {fname})"
         else
           e ← coerce q (← elabE c a (some t)) t

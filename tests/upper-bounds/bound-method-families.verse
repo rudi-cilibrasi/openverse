@@ -10,13 +10,19 @@ pair(a:subtype(vehicle)):=class<computes>:
     Vals()<reads>:a=L|R
 counter:=class<computes>:
     Vals()<computes>:int=42
-Collect(B:t where t:subtype(box(car)))<reads>:[]car=for(X:=B.Vals()):X
+probe:=class<allocates>{var N:int=0}
+Take(B:t,C:probe where t:subtype(box(car)))<transacts>:t=
+    set C.N+=1
+    B
+Collect(B:t,C:probe where t:subtype(box(car)))<transacts>:[]car=for(X:=Take(B,C).Vals()):X
 Main()<transacts>:void=
     A:=car{Name:="a"}
     B:=car{Name:="b",N:=9}
-    Rows:=Collect(box(car){Item:=A})
+    C:=probe{}
+    Rows:=Collect(box(car){Item:=A},C)
     for(X:Rows):
         Print("box {X.Name} {Read(X)}")
+    Print("calls {C.N}")
     for(X:=pair(car){L:=A,R:=B}.Vals()):
         Print("pair {X.Name} {Read(X)}")
     Print("counter {counter{}.Vals()}")
