@@ -81,6 +81,23 @@ kinds=(
   dispatch-default-failure
   dispatch-default-first
   dispatch-default-for
+  dictionary-simple-first
+  dictionary-simple-for
+  dictionary-simple-waiting
+  dictionary-arguments-first
+  dictionary-arguments-for
+  dictionary-arguments-waiting
+  dictionary-correlated-first
+  dictionary-correlated-for
+  dictionary-correlated-waiting
+  dictionary-generic-first
+  dictionary-generic-for
+  dictionary-generic-waiting
+  dictionary-generic-arguments-first
+  dictionary-generic-arguments-for
+  dictionary-generic-arguments-waiting
+  dictionary-awaiting-waiting
+  dictionary-generic-awaiting-waiting
   exclusive
   heterogeneous-nested-for
   heterogeneous-unused-first
@@ -228,6 +245,51 @@ if kind == 'heterogeneous-nested-for':
         body = f'for(A{i}:=(Dup(1)|Dup("s"))):' + body
     print('    Rows:=' + body)
     print('    Print("{Rows.Length}")')
+    sys.exit(0)
+if kind.startswith('dictionary-'):
+    _, shape, mode = kind.split('-') if kind.count('-') == 2 else ('dictionary', '-'.join(kind.split('-')[1:-1]), kind.split('-')[-1])
+    generic = shape.startswith('generic')
+    arguments = shape.endswith('arguments')
+    awaiting = shape.endswith('awaiting')
+    correlated = shape == 'correlated'
+    print('Dup(X:t where t:type)<computes>:t=X|X')
+    print('Equal(X:t,Y:t where t:subtype(comparable))<computes>:int=if(X=Y)then 1 else 0')
+    cmp = 'subtype(comparable)' if arguments else 'type'
+    if correlated:
+        print('base:=class<unique>{Me()<computes>:base=Self}')
+        print('ca:=class(base){Me<override>()<computes>:ca=Self}')
+        print('cb:=class(base){Me<override>()<computes>:cb=Self}')
+    else:
+        for cls in ['ca','cb']:
+            print(cls + ('(t:'+cmp+')' if generic else '') + ':=class:')
+            print('    K:int=1' + ('\n    V:t' if generic else ''))
+            margs = 'X:t' if arguments and generic else 'X:int' if arguments else ''
+            value = 'if(X=V)then 1 else 0' if arguments and generic else 'K+X' if arguments else 'K'
+            print('    M('+margs+')<computes>'+('<suspends>' if awaiting else '')+':int=block{'+('Sleep(0.0);' if awaiting else '')+value+'}')
+    params=[];tparams=[];main=[]
+    if generic:
+        for i in range(count):
+            params.extend([f'P{i}:ca(t{i})',f'Q{i}:cb(t{i})'])
+            tparams.append(f't{i}:{cmp}')
+            typ, value = ('int','7') if i%2==0 else ('string','"s"')
+            main.extend([f'ca({typ}){{V:={value}}}',f'cb({typ}){{V:={value}}}'])
+            if arguments:
+                params.append(f'V{i}:t{i}');main.append(value)
+    clauses=','.join(f'A{i}:=(Dup('+ (f'P{i})|Dup(Q{i}))' if generic else 'ca{})|Dup(cb{}))') for i in range(count))
+    values=[]
+    for i in range(count):
+        value=f'Equal(A{i},A{i}.Me())' if correlated else f'A{i}.M('+ (f'V{i}' if arguments and generic else '1' if arguments else '') + ')'
+        values.append(value)
+    value='+'.join(values)
+    effects='<suspends>' if mode=='waiting' else ''
+    signature=','.join(params)+(' where '+','.join(tparams) if generic else '')
+    print(f'Run({signature}){effects}:int=')
+    if mode=='first':
+        print('    if('+clauses+',V:='+value+',V>0)then V else -1')
+    else:
+        print('    Rows:=for('+clauses+'):'+value)
+        print('    Rows.Length')
+    print(f'Main(){effects}:void=Print("{{Run('+','.join(main)+')}")')
     sys.exit(0)
 if kind.startswith('heterogeneous-'):
     _, shape, mode = kind.split('-')

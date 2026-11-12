@@ -58,4 +58,15 @@ def generalize (env : TyEnv) (stem : String) (types : List Ty) : Option Plan := 
       instances := (List.range types.length).map fun j =>
         columns.map fun (column, name, _) => (name, column[j]!) }
 
+/-- Extend the same equations with an operation's result types. A result
+    column equal to an input column retains that input's type parameter. -/
+def extend (env : TyEnv) (stem : String) (plan : Plan) (types : List Ty) : Plan × Ty :=
+  let columns := plan.params.map fun (name, bound) =>
+    (plan.instances.map fun row => (row.lookup name).getD .void, name, bound)
+  let (ty, columns) := (abstract env stem types).run columns
+  ({ plan with
+      params := columns.map fun (_, name, bound) => (name, bound)
+      instances := (List.range plan.instances.length).map fun j =>
+        columns.map fun (column, name, _) => (name, column[j]!) }, ty)
+
 end OpenVerse.Front.ChoiceTypes

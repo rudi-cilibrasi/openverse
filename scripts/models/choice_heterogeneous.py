@@ -6,8 +6,10 @@ p = argparse.ArgumentParser()
 p.add_argument('seed', type=int)
 p.add_argument('expected', type=Path)
 p.add_argument('--control', action='store_true')
+p.add_argument('--methods', action='store_true')
 a = p.parse_args()
 r = random.Random(a.seed)
+method_arguments = a.methods and r.choice([False, True])
 mode = ['first', 'for', 'waiting'][a.seed % 3]
 shape = ['primitive', 'array', 'tuple', 'box', 'fields'][a.seed // 3 % 5]
 empty = a.seed // 15 % 2 == 0
@@ -33,9 +35,15 @@ def prefix(i, j):
     h += tag
     lines.append(f'p {tag}')
 
-def filt(i, s):
+def filt(i, s, kind):
     global h, total
     d = levels[i]
+    if method_arguments:
+        h += i + 1
+        lines.append(f'arg {i + 1}')
+    if a.methods:
+        h += (kind + 1) * (s + 1) + (i + 1 if method_arguments else 0)
+        lines.append(f'm {chr(97 + kind)} {s}')
     lines.append(f'f {i} {s}')
     h += d['weight'] + s
     total += s + 1
@@ -51,7 +59,7 @@ def search(i, values):
         base = (h, total, list(lines))
         for s in d['scores'][j]:
             h, total, lines = (base[0], base[1], list(base[2]))
-            if not filt(i, s):
+            if not filt(i, s, j):
                 continue
             if i + 1 < n:
                 found = search(i + 1, values + [s])
@@ -69,7 +77,7 @@ def walk(i, values):
         prefix(i, j)
         for s in d['scores'][j]:
             saved = (h, total, len(lines))
-            if not filt(i, s):
+            if not filt(i, s, j):
                 h, total = saved[:2]
                 del lines[saved[2]:]
                 continue
@@ -111,9 +119,27 @@ if mode == 'waiting':
 lines.append(f'result {answer} state {h}')
 a.expected.write_text('exit=0\n' + '\n'.join(lines) + '\n')
 print('cell:=class{var N:int=0}\nInts(N:int)<computes>:[]int=for(I:=1..N):I\nbox(t:type):=class{V:t;K:int=0}\nbase:=class{K:int}\nca:=class(base){}\ncb:=class(base){}\nSame(X:t,?Y:t=X where t:subtype(comparable))<computes>:int=if(X=Y)then 1 else 0\nPrefix(H:cell,X:t,Y:t,Tag:int where t:type)<transacts>:t=\n    Print("p {Tag}")\n    set H.N+=Tag\n    X|Y')
+if a.methods:
+    for name, generic, kind in [('ma', False, 'a'), ('mb', False, 'b'), ('ga', True, 'a'), ('gb', True, 'b')]:
+        print(name + ('(t:type)' if generic else '') + ':=class:')
+        print('    H:cell\n    K:int' + ('\n    V:t' if generic else ''))
+        print('    Score(' + ('Arg:int' if method_arguments else '') + ')<transacts>:int=')
+        print('        Print("m ' + kind + ' {K}")')
+        print('        set H.N+=' + ('1' if kind == 'a' else '2') + '*(K+1)' + ('+Arg' if method_arguments else ''))
+        print('        K')
+    print('Score(H:cell,X:tuple(int,int)' + (',Arg:int' if method_arguments else '') + ')<transacts>:int=')
+    print('    if(X(1)=0)then Print("m a {X(0)}") else Print("m b {X(0)}")')
+    print('    set H.N+=(X(1)+1)*(X(0)+1)' + ('+Arg' if method_arguments else '') + '\n    X(0)')
+    print('Argument(H:cell,N:int)<transacts>:int=block{Print("arg {N}");set H.N+=N;N}')
 clauses = []
 
 def payload(s, j):
+    if a.methods:
+        if a.control:
+            return f'({s},{j})'
+        generic = shape not in ('primitive', 'fields')
+        name = ('ga' if j == 0 else 'gb') if generic else ('ma' if j == 0 else 'mb')
+        return name + ('(t)' if generic else '') + '{H:=H,K:=' + str(s) + (',V:=X' if generic else '') + '}'
     if a.control:
         return str(s)
     if shape == 'primitive':
@@ -131,6 +157,9 @@ for i, d in enumerate(levels):
         x, y = [payload(s, j) for s in d['scores'][j]]
         producers.append(f"Prefix(H,{x},{y},{d['tags'][j]})")
     score = f'A{i}' if a.control else f'Same(A{i})' if shape == 'primitive' else f'A{i}.Length' if shape == 'array' else f'if(A{i}(0)=A{i}(1))then 1 else 0' if shape == 'tuple' else f'A{i}.K'
+    if a.methods:
+        extra = f'Argument(H,{i+1})' if method_arguments else ''
+        score = f'Score(H,A{i}' + (',' + extra if extra else '') + ')' if a.control else f'A{i}.Score({extra})'
     clauses.extend([f"A{i}:=({'|'.join(producers)})", f'S{i}:={score}', f'Print("f {i} {{S{i}}}")', f"set H.N+={d['weight']}+S{i}", f'set Total+=S{i}+1', f"Mod[H.N+S{i},{d['mod']}]={d['want']}"])
 clauses.append('Z:=Items[0]' if mode == 'first' else 'Z:Items')
 score = '+'.join((f'S{i}' for i in range(n)))
@@ -138,7 +167,7 @@ names = ('S0', f'S{n - 1}') if shape == 'fields' else ('A0', f'A{n - 1}')
 packet = f'({names[0]},{names[1]},{score})' if packed else names[0]
 body = f'set H.N+={boost}+{score};set Total+={score};Print("body {{H.N}} {{Total}}");{packet}'
 effects = '<suspends><transacts>' if mode == 'waiting' else '<transacts>'
-print(f'Use(H:cell){effects}:int=\n    var Total:int=0\n    defer:Print("source {{H.N}} {{Total}}")')
+print('Use(H:cell'+(',X:t where t:type' if a.methods else '')+f'){effects}:int=\n    var Total:int=0\n    defer:Print("source {{H.N}} {{Total}}")')
 if mode == 'waiting':
     print(f'    branch:\n        defer:Print("background {{H.N}}")\n        Sleep(0.05)\n        set H.N+={bump}\n        Sleep(100.0)')
 print('    Items:[]int=array{' + ('' if empty else '0') + '}')
@@ -153,7 +182,7 @@ else:
     print('    10000*Rows.Length+100*Total+Sum')
 print('Main()' + ('<suspends>' if mode == 'waiting' else '') + ':void=\n    H:=cell{}')
 if cancel:
-    print('    R:=race:\n        Use(H)\n        block{Sleep(0.25);-1}')
+    print('    R:=race:\n        Use(H'+(',array{7}' if a.methods else '')+')\n        block{Sleep(0.25);-1}')
 else:
-    print('    R:=Use(H)')
+    print('    R:=Use(H'+(',array{7}' if a.methods else '')+')')
 print('    Print("result {R} state {H.N}")')
