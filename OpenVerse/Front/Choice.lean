@@ -273,6 +273,8 @@ partial def hasLiftable : SExpr → Bool
   | .app _ (.ident _ "$dispatch") _ false => true
   | .app _ (.ident _ "$each") _ false => true
   | .app _ (.ident _ "$loop") _ false => true
+  -- (#283) a call of a lazily taken group, in its own code (`markPoints`)
+  | .app _ (.ident _ "$point") _ false => true
   -- (a scope's `defer:`s pending for the exits in `e`, `deferExits`, #283)
   | .app _ (.ident _ "$deferExits") [_, e] false => hasLiftable e
   | e@(.ite ..) => isBranchy e || branchesLift hasLiftable e
@@ -763,6 +765,9 @@ partial def liftE (isVal : String → Bool) (isField : String → String → Boo
     bindParams isVal isField p pre args
     LM.bind p "c" (.app p (.ident q "$loop") [fn, ps, cls, tl] false)
   | .app p (.ident _ "$loop") _ false => LM.bind p "c" e
+  -- (#283) a call of a lazily taken group in its own code: its arguments,
+  -- then the call bound, as a choice is (`markPoints`)
+  | .app p (.ident q "$point") [c] false => LM.bind p "c" (.app p (.ident q "$point") [← liftE isVal isField c] false)
   | .app _ (.ident _ "$deferExits") [.block _ ds, x] false =>
     -- (#283) a scope's `defer:`s pending for the exits in `x`, `deferExits`:
     -- and so for those in each clause lifted out of it
@@ -1407,6 +1412,31 @@ partial def mapLoopLeaves (leaf : SExpr → SExpr) : SExpr → SExpr
   | .ite p cs t u => .ite p cs (mapLoopLeaves leaf t) (u.map (mapLoopLeaves leaf))
   | e => leaf e
 
+/-- `mapLoopLeaves`, each leaf with its index, in order. -/
+partial def mapLoopLeavesIdx (leaf : Nat → SExpr → SExpr) (e : SExpr) : SExpr :=
+  (go e).run' 0
+where
+  go : SExpr → StateM Nat SExpr
+    | .app p (.ident q "$returnTail") [.block r ss] false => do
+      let (pre, value) := loopBlockParts r ss
+      return .app p (.ident q "$returnTail") [.block r (pre ++ [← go value])] false
+    | .ite p cs t u => do
+      let t' ← go t
+      return .ite p cs t' (← u.mapM go)
+    | e => do
+      let i ← get
+      set (i + 1)
+      return leaf i e
+
+/-- (#283) The frame code of an `if`'s leaves after its first, which has the
+    code: the frame is that one, its hole's last (`loopFlatWith`), so the
+    code after the `if` is not copied into each leaf. -/
+def sameFrame (p : Pos) : SExpr := .app p (.ident p "$sameFrame") [] false
+
+def isSameFrame : SExpr → Bool
+  | .app _ (.ident _ "$sameFrame") [] false => true
+  | _ => false
+
 /-- A hole or a prefix's name, made by `frameOf?` (#283): a name of the
     function's own, which a continuation member has as a parameter. -/
 def madeLocal (n : String) : Bool := n.startsWith "$frame" || n.startsWith "$pre"
@@ -1450,6 +1480,11 @@ partial def frameOf? (isPoint plain inert : SExpr → Bool) (h : String) (e : SE
   | .bin p o a b => do
     let (c, as, pre) ← inList [a, b]
     return (c, .bin p o as[0]! as[1]!, pre)
+  -- (#283) `A or B` with a point on its right: the `if` it stands for
+  | .orE p a b => if plain a && !plain b then
+      let t := madeName "or" "" p
+      go (.ite p [.decl p t none false (.block a.pos [a])] (.ident p t) (some (.block b.pos [b])))
+    else none
   | .neg p a => do let (c, a', pre) ← go a; return (c, .neg p a', pre)
   | .member p a m => do let (c, a', pre) ← go a; return (c, .member p a' m, pre)
   | .cmp p a rest => do
@@ -1513,9 +1548,11 @@ def contOf? : SExpr → Option (List SExpr × SExpr)
     choice, each with that frame too, the frame shared. -/
 partial def flatCount (a : SExpr) : Nat :=
   match a with
-  | .app _ (.ident _ "$then") (c :: _) false => match alts? c with
-    | some cs => (cs.map flatCount).foldl (· + ·) 0
-    | none => 1
+  | .app _ (.ident _ "$then") (c :: _) false => match alts? c, c with
+    | some cs, _ => (cs.map flatCount).foldl (· + ·) 0
+    -- (an `if`'s leaf with a frame of its own: its count)
+    | none, .app _ (.ident _ "$then") _ false => flatCount c
+    | none, _ => 1
   | _ => 1
 
 /-- (#283) The holes of the frames in a tail that are continuation members,
@@ -1533,6 +1570,19 @@ def hasContinuation (tail : SExpr) : Bool :=
     | .app _ (.ident _ "$then") (c :: _) false => isChoice c
     | _ => false) tail
 
+/-- (#283) An alternative, one of several, with code before a choice in it,
+    `$then(choice, h, frame, block{code})`: that code runs after the choice
+    the alternative is of, and before its own, so it enters a continuation
+    member that runs that code, then its choice, through a hole of no value,
+    `$then((), h', $cont(code, $then(choice, h, frame)))`. Alone in its leaf
+    it is the leaf's path code instead (`normTail`). -/
+def enterOf (a : SExpr) : SExpr := match a with
+  | .app q (.ident r "$then") [c, .ident hq h, k, .block _ pre] false =>
+    if !isChoice c then a else
+    .app q (.ident r "$then") [.tuple q [], .ident hq s!"{h}e",
+      .app q (.ident q "$cont") [.block q pre, .app q (.ident r "$then") [c, .ident hq h, k] false] false] false
+  | a => a
+
 /-- The tests a lazily taken group's shape is made with (#246, #283): `plain`
     code has no choice and no call of the group or of a function with several
     values; `isRec`, a whole call of the group with plain arguments; `inert`,
@@ -1541,6 +1591,59 @@ structure ShapeOps where
   plain : SExpr → Bool
   isRec : SExpr → Bool
   inert : SExpr → Bool
+  /-- A call of the group, whatever its arguments. -/
+  isCall : SExpr → Bool := isRec
+  /-- A struct's or class's fields in declaration order, for the lifter. -/
+  fieldOrder : String → FieldOrder := fun _ => {}
+
+/-- (#283) The calls of a lazily taken group in `e` marked for the lifter,
+    `$point(call)`, which binds each where it binds a choice (`liftE`). -/
+partial def markPoints (isCall : SExpr → Bool) (e : SExpr) : SExpr :=
+  mapE (fun x => if !isCall x then none else match x with
+    | .app p f as br => some (.app p (.ident p "$point") [.app p f (as.map (markPoints isCall)) br] false)
+    | _ => none) e
+
+/-- The marks of `markPoints` taken off. -/
+partial def unmarkPoints : SExpr → SExpr :=
+  mapE fun
+    | .app _ (.ident _ "$point") [c] false => some (unmarkPoints c)
+    | _ => none
+
+/-- (#283) Code whose first choice point `frameOf?` does not reach, lifted as
+    the lifter lifts any clause (`liftClause`): its first statement with a
+    point, or the code itself as a value, each point bound to a name of its
+    own first, as the code evaluates it (a comparison's later operand, a
+    `set`'s value after its old value, a call's named argument, `and`'s
+    operands, `or`'s right, a construction's field in its type's order). None
+    when nothing is lifted: the point is where the lifter does not take it
+    either (a condition, a loop), which takes it as a failure context's. -/
+def liftPoints? (ops : ShapeOps) (a : SExpr) : Option SExpr := do
+  let isVal (n : String) : Bool := ops.inert (.ident a.pos n)
+  -- (an `if` with a point in a branch the lifter binds as an exclusive
+  -- choice is bound as itself, a point of the normal form, `ifPoint`)
+  let whole : SExpr → SExpr
+    | .decl p x ty false (.app _ (.ident _ "$branchChoice") [i] false)
+    | .decl p x ty false (.app _ (.ident _ "$branchChoiceAt") [_, i] false) => .decl p x ty false i
+    | c => c
+  let lift (c : SExpr) : List SExpr :=
+    (liftClause isVal (fun _ _ => false) (markPoints ops.isCall c) (fieldOrder := ops.fieldOrder)).map
+      (whole ∘ unmarkPoints)
+  -- (none where the lifter keeps something, `$noLift`: a construction
+  -- whose fields' order it does not know, as a class's, where the function
+  -- is then not of the shape, as before)
+  let kept (cs : List SExpr) : Bool :=
+    cs.any (anyE fun | .app _ (.ident _ "$noLift") _ false => true | _ => false)
+  match a with
+  | .block p ss =>
+    let i ← ss.findIdx? (!ops.plain ·)
+    let lifted := lift ss[i]!
+    guard (lifted.length > 1 && !kept lifted)
+    return .block p (ss.take i ++ lifted ++ ss.drop (i + 1))
+  | e =>
+    let v := madeName "lv" "" e.pos
+    let lifted := lift (.decl e.pos v none false e)
+    guard (lifted.length > 1 && !kept lifted)
+    return .block e.pos (lifted ++ [.ident e.pos v])
 
 mutual
 /-- (#283) An alternative of a lazily taken group in the normal form its
@@ -1561,21 +1664,38 @@ partial def normAlt (ops : ShapeOps) (a : SExpr) : Option SExpr := do
   if let .block _ ss@(_ :: _ :: _) := a then
     if let some ([], tail) := lastChoiceTail ops.plain ss.dropLast ss.getLast! then
       if let some as := alts? tail then return mk a.pos (← as.mapM (normAlt ops))
-  let isPoint (e : SExpr) : Bool := ops.isRec e || isChoice e
+  -- (#283) an `if` with plain conditions and a point in a branch is one too:
+  -- its branch's values go to the code after it
+  let ifPoint : SExpr → Bool
+    | e@(.ite _ cs _ (some _)) => cs.all ops.plain && !ops.plain e
+    | _ => false
+  let isPoint (e : SExpr) : Bool := ops.isRec e || isChoice e || ifPoint e
   let hole := "$hole"
   match frameOf? isPoint ops.plain ops.inert hole a with
-  | none => none
+  | none =>
+    -- (a point `frameOf?` does not reach, but the lifter does: lifted)
+    let a' ← liftPoints? ops a
+    normAlt ops a'
   | some (c, k, pre) => do
     let h := if ops.isRec c && ops.plain k then s!"$frame{a.pos.line}_{a.pos.col}"
-      else s!"$frame{c.pos.line}_{c.pos.col}{if ops.isRec c then "k" else "c"}"
+      else s!"$frame{c.pos.line}_{c.pos.col}{if ops.isRec c then "k" else if ifPoint c then "i" else "c"}"
     let k := renameE [(hole, h)] k
+    if ifPoint c then
+      -- (an `if`: entered as `enterOf` enters a member, its conditions the
+      -- member's path, each leaf's values going to the frame, one for all,
+      -- its code in the first leaf only, `sameFrame`)
+      let k ← if ops.plain k then some k else contBody? ops k
+      let tail := mapLoopLeavesIdx (fun i v => .app v.pos (.ident v.pos "$then")
+        [v, .ident v.pos h, if i == 0 then k else sameFrame v.pos] false) (← normTail ops c)
+      let q := a.pos
+      return .app q (.ident q "$then") [.tuple q [], .ident q s!"{h}e",
+        .app q (.ident q "$cont") [.block q pre, tail] false] false
     let c ← match alts? c with
       | some cs => do
-        -- (a choice's own alternatives have no prefix: nothing runs
-        -- between it and them)
+        -- (one of its alternatives with code before a choice of its own
+        -- enters a member that runs it, `enterOf`)
         let cs ← cs.mapM (normAlt ops)
-        guard (cs.all fun | .app _ (.ident _ "$then") [c', _, _, _] false => !isChoice c' | _ => true)
-        pure (mk c.pos cs)
+        pure (mk c.pos (cs.map enterOf))
       | none => pure c
     let k ← if ops.plain k then some k else contBody? ops k
     let q := a.pos
@@ -1597,7 +1717,7 @@ partial def normTail (ops : ShapeOps) (tail : SExpr) : Option SExpr :=
   | .ite p cs t u => do return .ite p cs (← normTail ops t) (← u.mapM (normTail ops))
   | v => do
     match alts? v with
-    | some as => return mk v.pos (← as.mapM (normAlt ops))
+    | some as => return mk v.pos ((← as.mapM (normAlt ops)).map enterOf)
     | none =>
       match ← normAlt ops v with
       | .app q (.ident r "$then") [c, h, k, .block _ pre] false =>
@@ -1638,8 +1758,8 @@ def eagerWhy : String :=
   "such a function must be <computes>, keep no local state, and reach nothing that prints or calls Err(), " ++
   "as all its values are computed at a call (#235), unless it is taken lazily: clauses, then a choice whose " ++
   "alternatives are values, calls of its recursive group, or such a call or a choice with code after it that may " ++
-  "reach another, not in a condition, a set or a later operand of a comparison, and with nothing but literals " ++
-  "and names before a choice in one of several alternatives (#246, #283)"
+  "reach another, not in a condition (an if's, not's, the left of or) or a loop, which would take a call's values " ++
+  "while its own are taken, nor in a field of a class's or a generic struct's construction (#246, #283)"
 
 /-- (#283) Whether an alternative in normal form (`normAlt`) is one the
     lazy machine takes: its prefix plain, a choice's alternatives such again,
@@ -1654,7 +1774,8 @@ partial def altOK (ops : ShapeOps) (isVar : String → Bool) (a : SExpr) : Bool 
       -- (a choice with code before it is a whole leaf, that code its path's,
       -- `normTail`; not yet one alternative among others)
       (pre.isEmpty || !isChoice c) &&
-      pre.all ops.plain && ((alts? c).map (·.all (altOK ops isVar))).getD (ops.isRec c) &&
+      pre.all ops.plain && ((alts? c).map (·.all (altOK ops isVar))).getD
+        (ops.isRec c || ops.plain c || (match c with | .app _ (.ident _ "$then") _ false => altOK ops isVar c | _ => false)) &&
         (setsIn k).all (fun n => (localsOf k).contains n || !isVar n) &&
         (ops.plain k || match contOf? k with
           | some (cls, tail) => cls.all ops.plain && loopTailOK ops.plain leafOK tail
@@ -1670,7 +1791,8 @@ partial def altOK (ops : ShapeOps) (isVar : String → Bool) (a : SExpr) : Bool 
     with code after it, which runs on each of its values (`$then`), and the
     clauses may end at a choice point with code after it (`bodyTail?`). -/
 def loopShapeOf? (g : String) (mv : List String) (body : SExpr) (grp : List String := [g])
-    (frames : Bool := false) (params : List String := []) : Option (List SExpr × SExpr) := do
+    (frames : Bool := false) (params : List String := [])
+    (fieldOrder : String → FieldOrder := fun _ => {}) : Option (List SExpr × SExpr) := do
   let ss := stmtsOf body
   let last ← ss.getLast?
   let cls := ss.dropLast
@@ -1692,7 +1814,10 @@ def loopShapeOf? (g : String) (mv : List String) (body : SExpr) (grp : List Stri
     let groupOK (e : SExpr) : Bool := ((alts? e).getD [e]).all fun a => isRec a || plain a
     if cls.all plain && loopTailOK plain groupOK tail then some (cls, tail) else none
   else
-  let ops : ShapeOps := { plain, isRec, inert := inert (params ++ localsOf body) }
+  let isCall : SExpr → Bool
+    | .app _ (.ident _ h) _ _ => grp.contains h
+    | _ => false
+  let ops : ShapeOps := { plain, isRec, inert := inert (params ++ localsOf body), isCall, fieldOrder }
   let (cls, tail) ← bodyTail? ops body.pos cls last
   let isVar (n : String) : Bool := anyE (fun | .decl _ x _ true _ => x == n | _ => false) body
   let groupOK (e : SExpr) : Bool := ((alts? e).getD [e]).all (altOK ops isVar)
@@ -1716,12 +1841,13 @@ partial def cellVars (vs : List String) : SExpr → SExpr :=
 /-- `loopShapeOf?`; with `frames`, when a frame sets a `var` (#283), with the
     function's `var`s that are set made cells (`cellVars`). -/
 def loopShape? (g : String) (mv : List String) (body : SExpr) (grp : List String := [g])
-    (frames : Bool := false) (params : List String := []) : Option (List SExpr × SExpr) :=
-  (loopShapeOf? g mv body grp frames params).orElse fun _ =>
+    (frames : Bool := false) (params : List String := [])
+    (fieldOrder : String → FieldOrder := fun _ => {}) : Option (List SExpr × SExpr) :=
+  (loopShapeOf? g mv body grp frames params fieldOrder).orElse fun _ =>
     let set := setsIn body
     let vs := ((localDecls body).map (·.1)).eraseDups.filter fun x =>
       set.contains x && anyE (fun | .decl _ y (some _) true _ => y == x | _ => false) body
-    if !frames || vs.isEmpty then none else loopShapeOf? g mv (cellVars vs body) grp frames params
+    if !frames || vs.isEmpty then none else loopShapeOf? g mv (cellVars vs body) grp frames params fieldOrder
 
 /-- How many `if`s with a `return` in them `e` has (#283). -/
 partial def countRetIfs (e : SExpr) : Nat :=
@@ -1901,10 +2027,11 @@ def markRecG (g : String) (grp : List String) : SExpr → SExpr :=
     `loops` by `$loop(F, …)` (#246). -/
 partial def inlineCalls (mv : List (String × MFn)) (e : SExpr) (recs : List String := [])
     (loops : List String := []) (clash : List (String × List String) := [])
-    (inDflt : List (String × String) := []) (groups : List (String × List String) := []) :
+    (inDflt : List (String × String) := []) (groups : List (String × List String) := [])
+    (fieldOrder : String → FieldOrder := fun _ => {}) :
     StateT Nat (Except String) SExpr := do
   -- (`inDflt`: the defaults being inlined, function and parameter, #283)
-  let go := fun x => inlineCalls mv x recs loops clash inDflt groups
+  let go := fun x => inlineCalls mv x recs loops clash inDflt groups fieldOrder
   match e with
   | .app p (.ident _ "$dispatch") (.ident q g :: .block tp tmpl :: as) false =>
     -- (an overridden method's dispatch, #283: an inlined call whose
@@ -2039,7 +2166,7 @@ partial def inlineCalls (mv : List (String × MFn)) (e : SExpr) (recs : List Str
             -- (one that calls `g` again omitting it: as at a call)
             if inDflt.contains (g, sp.name) then
               throw s!"{p.show}: the default of ?{sp.name} of {shownFnName g} uses itself (a call of {shownFnName g} that omits ?{sp.name})"
-            let d' ← inlineCalls mv (renameTypes ρ d) recs loops clash ((g, sp.name) :: inDflt) groups
+            let d' ← inlineCalls mv (renameTypes ρ d) recs loops clash ((g, sp.name) :: inDflt) groups fieldOrder
             let earlier := (f.params.take k).map fun e => SExpr.tuple q [.ident q e.name, .ident q (tag e.name)]
             return some (.decl q (tag sp.name) (tyOf sp.ty) false
               (.app q (.ident q "$paramDefault") [.ident q g, .ident q sp.name, .block q earlier, d'] false))
@@ -2087,7 +2214,7 @@ partial def inlineCalls (mv : List (String × MFn)) (e : SExpr) (recs : List Str
       if loops.contains g then
         let grp := (groups.lookup g).getD [g]
         let some (cls, tail) := loopShape? g (mv.map (·.1)) (renameTypes ρ (renameE ren f.body)) grp (frames := true)
-            (f.params.map (tag ·.name))
+            (f.params.map (tag ·.name)) fieldOrder
           | throw s!"{p.show}: internal: the shape of {g} (#246)"
         let ps := f.params.map fun sp => SExpr.ident q (tag sp.name)
         -- (#283) a function of a strongly connected group: the others'
@@ -2102,7 +2229,7 @@ partial def inlineCalls (mv : List (String × MFn)) (e : SExpr) (recs : List Str
             let renH := (fh.params.map (·.name) ++ localsOf fh.body).eraseDups.map fun n => (n, tagH n)
             let ρH := fh.tparams.map fun tp => (tp.name, memberTypeName h tp.name)
             let some (clsH, tailH) := loopShape? h (mv.map (·.1)) (renameTypes ρH (renameE renH fh.body)) grp (frames := true)
-              (fh.params.map (tagH ·.name))
+              (fh.params.map (tagH ·.name)) fieldOrder
               | throw s!"{p.show}: internal: the shape of {h} (#283)"
             members := members ++ [.app q (.ident q "$member") [.ident q h,
               .block q (fh.params.map fun sp => SExpr.ident q (tagH sp.name)), .block q clsH,
@@ -2357,25 +2484,35 @@ def firstValue (b : String) (bty ret : Option STy) (rest : List SExpr) (tup : SE
 def firstReturnBody (p : Pos) (b : String) (bty : Option STy) (rest : List SExpr) (binds : List String)
     (sets : List (String × STy)) (ret : Option STy) (normalResult : Option SExpr)
     (frames : List (String × List String × SExpr)) (memberFn : Nat → Option String := fun _ => none)
-    (caps : List SExpr := []) : SExpr :=
+    (caps : List SExpr := []) (frameTys : List (Option STy × Option STy) := []) : SExpr :=
   let tup : SExpr := normalResult.getD (.tuple p (binds.map (SExpr.ident p ·) ++ sets.map (fun (m, _) => SExpr.ident p m) ++
     [.ident p "true"]))
   let copies := sets.map fun (m, t) => SExpr.decl p m (some t) true (.ident p s!"{m}$in")
   let liveIds (lives : List String) : List SExpr := lives.map (SExpr.ident p ·)
-  if (List.range frames.length).all (memberFn · |>.isNone) then
+  if (List.range frames.length).all (memberFn · |>.isNone) && frameTys.all (fun (i, o) => i.isNone && o.isNone) then
     let v := SExpr.app p (.ident p "$frameApply") (.ident p "$K" :: .ident p "$V" :: frames.map fun (h, lives, code) =>
       .app p (.ident p "$frame") [.ident p h, .block p (liveIds lives), code] false) false
     .block p (copies ++ [firstValue b bty ret rest tup v])
   else
   -- (#283) with continuation members: a member's frame calls its function
   -- with the value, its lives and the rest of the continuation, whose packet
-  -- is this one's; when no frame is left, the value as `firstValue`
+  -- is this one's; when no frame is left, the value as `firstValue`, `$Vfin`
+  -- at the result type; a frame's hole's and code's types when other ones
+  let tys (j : Nat) : List SExpr := match frameTys[j]? with
+    | some (i, o) => if i.isNone && o.isNone then [] else
+      [.block p ((i.toList.map fun t => SExpr.decl p "$in" (some t) false (.tuple p [])) ++
+        o.toList.map fun t => SExpr.decl p "$out" (some t) false (.tuple p []))]
+    | none => []
   let entry (j : Nat) (h : String) (lives : List String) (code : SExpr) : SExpr := match memberFn j with
-    | some fn => .app p (.ident p "$frameCall") [.ident p h, .block p (liveIds lives),
-        .app p (.ident p fn) (.ident p h :: liveIds lives ++ [.ident p "$Krest"] ++ caps) true] false
-    | none => .app p (.ident p "$frame") [.ident p h, .block p (liveIds lives), code] false
+    | some fn => .app p (.ident p "$frameCall") ([.ident p h, .block p (liveIds lives),
+        .app p (.ident p fn) (.ident p h :: liveIds lives ++ [.ident p "$Krest"] ++ caps) true] ++ tys j) false
+    | none => .app p (.ident p "$frame") ([.ident p h, .block p (liveIds lives), code] ++ tys j) false
+  -- (with a frame of another type, the final value in a name of its own)
+  let fin : List SExpr := if frameTys.all (fun (i, o) => i.isNone && o.isNone) then
+      [firstValue b bty ret rest tup (.ident p "$V")]
+    else [.block p [.decl p "$Vfin" ret false (.tuple p [])], firstValue b bty ret rest tup (.ident p "$Vfin")]
   .block p (copies ++ [.app p (.ident p "$frameReturn") (.ident p "$K" :: .ident p "$V" ::
-    firstValue b bty ret rest tup (.ident p "$V") :: frames.zipIdx.map fun ((h, lives, code), j) => entry j h lives code) false])
+    fin ++ frames.zipIdx.map fun ((h, lives, code), j) => entry j h lives code) false])
 
 /-- The body of a `FirstLift` (#246): the function's clauses, then the first
     success of its last expression, each value followed by the consumer's
@@ -2393,7 +2530,8 @@ partial def firstBody (helper : String) (p : Pos) (b : String) (bty : Option STy
     (ret : Option STy := none) (helperOf : String → String := fun _ => helper)
     (recArgs : Option String → Pos → List SExpr → List SExpr × List SExpr := fun _ _ as => ([], as))
     (normalResult : Option SExpr := none) (frames : List (String × List String × SExpr) := [])
-    (retFn : String := "") : SExpr :=
+    (retFn : String := "") (frameTys : List (Option STy × Option STy) := [])
+    (retOf : Option STy → String := fun _ => retFn) (ownTy : Option STy := none) : SExpr :=
   let tup : SExpr := normalResult.getD (.tuple p (binds.map (SExpr.ident p ·) ++ sets.map (fun (m, _) => SExpr.ident p m) ++
     [.ident p "true"]))
   let recur (target : Option String) (h : String) (q : Pos) (as : List SExpr) (k : List SExpr) : SExpr :=
@@ -2405,10 +2543,20 @@ partial def firstBody (helper : String) (p : Pos) (b : String) (bty : Option STy
     -- (a call of another function of the group, #283: its own function)
     | .app q (.ident _ "$recTo") (.ident _ h :: as) false => some (recur (some h) (helperOf h) q as k)
     | _ => none
-  -- (an alternative whose values go to the continuation `kE`, `$K` itself
-  -- when none)
-  let rec altK (kE : Option SExpr) (a : SExpr) : SExpr :=
-    let kOf (q : Pos) : SExpr := kE.getD (.ident q "$K")
+  -- (the continuation `$K` with the frames `fs` pushed on it, innermost
+  -- first: each its index, its lives and where)
+  let pushed (fs : List (Nat × List SExpr × Pos)) (q0 : Pos) : SExpr :=
+    fs.foldr (fun (j, lives, q) acc => .app q (.ident q "$framePush") (.int q (j : Int) :: acc :: lives) false)
+      (.ident ((fs.getLast?.map (·.2.2)).getD q0) "$K")
+  -- (a value, given to the continuation's frames, #283: by the function for
+  -- its type, the first frame's hole's, or else this code's own)
+  let valueTo (fs : List (Nat × List SExpr × Pos)) (a : SExpr) : SExpr :=
+    let t := match fs.head? with
+      | some (j, _, _) => (frameTys[j]?).bind (·.1)
+      | none => ownTy
+    .app a.pos (.ident a.pos (retOf t)) ([a, pushed fs a.pos] ++ caps) true
+  -- (an alternative whose values go to the frames `fs`, then `$K`)
+  let rec altK (fs : List (Nat × List SExpr × Pos)) (a : SExpr) : SExpr :=
     match a with
     | .app q (.ident _ "$then") (c :: .ident _ h :: _ :: pre) false =>
       -- (#283) a choice point with code after it: its frame on the
@@ -2416,22 +2564,24 @@ partial def firstBody (helper : String) (p : Pos) (b : String) (bty : Option STy
       -- alternatives' (`Choice.flatCount`)
       let j := (frames.findIdx? (·.1 == h)).getD 0
       let lives := (((frames[j]?).map (·.2.1)).getD []).map (SExpr.ident q ·)
-      let kE' := SExpr.app q (.ident q "$framePush") (.int q (j : Int) :: kOf q :: lives) false
-      match alts? c with
-      | some cs => mk q (cs.map (altK (some kE')))
-      | none =>
-      match call [kE'] c, pre with
+      let fs' := (j, lives, q) :: fs
+      match alts? c, c with
+      | some cs, _ => mk q (cs.map (altK fs'))
+      -- (a leaf of an `if` that is a point, with that frame after its own)
+      | none, .app _ (.ident _ "$then") _ false => altK fs' c
+      | none, _ =>
+      match call [pushed fs' q] c, pre with
       | some e, [.block _ ss] => .block q (ss ++ [e])
       | some e, _ => e
-      | none, _ => a
+      -- (a value entering a member, `enterOf`)
+      | none, _ => valueTo fs' c
     | a =>
-      match call (if frames.isEmpty then [] else [kOf a.pos]) a with
+      match call (if frames.isEmpty then [] else [pushed fs a.pos]) a with
       | some c => c
       | none =>
-      -- (a value, given to the continuation's frames, #283)
       if frames.isEmpty then firstValue b bty ret rest tup a
-      else .app a.pos (.ident a.pos retFn) ([a, kOf a.pos] ++ caps) true
-  let alt := altK none
+      else valueTo fs a
+  let alt := altK []
   let group (v : SExpr) : SExpr := match alts? v with
     | some as => mk v.pos (as.map alt)
     | none => alt v
@@ -3248,6 +3398,17 @@ def inlineMulti (tops : List STop) (reserved : List String := []) (eager : List 
     if let some (_, o') := overloadPicks.find? fun (q', o') => q' == q && o' != o then
       throw s!"{q.show}: this call takes the overload {ovShown o} in the clauses copied for one alternative of a choice and {ovShown o'} in those copied for another, and which overload with several values a call takes is decided before types: not supported yet (#283)"
   let rawMfs := fns.filter (mv.contains ·.1)
+  -- (#283) a struct's fields in declaration order, the order its
+  -- constructions evaluate them in, for the lifter where a lazily taken
+  -- group's code is normalized; not a generic one's, whose construction the
+  -- elaborator infers, nor a class's, as for any choice)
+  let structOrders : List (String × FieldOrder) := tops.filterMap fun
+    | .const _ n _ (.structDef _ tps _ fs) => if !tps.isEmpty then none else
+      some (n, { fields := fs.map fun (f, _, d, _) => (f, match d with
+        | some d => !stable (fun _ => true) d
+        | none => false) })
+    | _ => none
+  let fieldOrder (n : String) : FieldOrder := (structOrders.lookup n).getD {}
   -- Analyze recursive shapes after source returns have selected their paths.
   -- Keep original bodies for checking and nonrecursive inline boundaries.
   let mfs ← rawMfs.mapM fun (n, f) => do
@@ -3308,7 +3469,7 @@ def inlineMulti (tops : List STop) (reserved : List String := []) (eager : List 
     let grp := groupOf g
     grp.all fun h => match mfs.lookup h with
       | some f => ((callees.lookup h).getD []).all grp.contains &&
-        (loopShape? h mv f.body grp frames (f.params.map (·.name))).isSome
+        (loopShape? h mv f.body grp frames (f.params.map (·.name)) fieldOrder).isSome
       | none => false
   -- (#283) one whose calls of its group have code after them (return
   -- frames) is taken lazily too, unless its values can be computed at the
@@ -3333,7 +3494,7 @@ def inlineMulti (tops : List STop) (reserved : List String := []) (eager : List 
     if grp.any eager.contains || erasesRecursive then false else
     let shaped (frames : Bool) : Bool := match mfs.lookup g with
       | some f => if (groupOf g).length == 1 then (callees.lookup g).getD [] == [g] &&
-          (loopShape? g mv f.body (frames := frames) (params := f.params.map (·.name))).isSome
+          (loopShape? g mv f.body (frames := frames) (params := f.params.map (·.name)) (fieldOrder := fieldOrder)).isSome
         else groupOK g frames
       | none => false
     shaped false || (!computable g && shaped true)
@@ -3395,7 +3556,7 @@ def inlineMulti (tops : List STop) (reserved : List String := []) (eager : List 
     if us.isEmpty || (recs.contains n && !loops.contains n) then none else some (n, us)
   let picked : SExpr → SExpr := if overloadPicks.isEmpty then id else pickOverloads ovNamesAll overloadPicks mv.contains
   let go (e : SExpr) : StateT Nat (Except String) SExpr :=
-    inlineCalls mfs (picked e) recs loops clash (groups := loopGroups)
+    inlineCalls mfs (picked e) recs loops clash (groups := loopGroups) (fieldOrder := fieldOrder)
   let goPs (ps : List SParam) : StateT Nat (Except String) (List SParam) :=
     ps.mapM fun sp => do return { sp with default := ← sp.default.mapM go }
   let (tops', nextSite) ← (tops.filterMapM (m := StateT Nat (Except String)) fun t => do
@@ -3425,7 +3586,7 @@ def inlineMulti (tops : List STop) (reserved : List String := []) (eager : List 
     let f := { f with body := eraseReturnTails f.body }
     let namedCalls := (namesUsed f.body).any fun h =>
       ((mfs.lookup h).map fun callee => callee.params.any (·.named)).getD false
-    let body ← if namedCalls then inlineCalls mfs f.body needAll [] clash (groups := loopGroups)
+    let body ← if namedCalls then inlineCalls mfs f.body needAll [] clash (groups := loopGroups) (fieldOrder := fieldOrder)
       else pure f.body
     let ps := f.params.map fun sp => { sp with named := false, default := none }
     return some (.fn f.pos s!"{g}$all" ps f.tparams (f.fx.filter (· != "decides"))

@@ -1,0 +1,77 @@
+x 1 4
+x 2 4
+x 3 4
+nested 4
+nested 300
+x 3 200
+nested 200
+nested 300
+x 2 100
+x 3 100
+nested 100
+nested 300
+x 3 200
+nested 200
+nested 300
+x 2 3
+x 3 3
+nested 3
+nested 300
+x 3 200
+nested 200
+nested 300
+x 1 4
+x 2 4
+x 3 4
+first 300
+y 3
+y 2
+bound 100
+bound 3
+bound 20
+bound 3
+bound 100
+bound 3
+bound 20
+bound 3
+y 3
+y 2
+first 100
+text 3
+text 200
+text 5
+text 200
+text 3
+text 200
+text 5
+text 200
+first 200
+e 0 0
+e 1 100
+e 2 101
+either 103
+either 100
+e 2 100
+either 102
+either 100
+e 0 0
+e 1 100
+e 2 101
+first 103
+in 1
+statement 2
+statement 200
+in 100
+statement 2
+statement 200
+k 2
+k 1
+setting 31
+setting 200
+setting 131
+setting 200
+setting 252
+setting 200
+setting 352
+setting 200
+exit=0

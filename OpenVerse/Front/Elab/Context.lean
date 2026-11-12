@@ -643,6 +643,8 @@ structure LoopGen where
       each one's hole, lives and code; and the type of the continuation
       they are pushed on, when there are any. -/
   frames : List (String × List String × SExpr) := []
+  /-- Each frame's hole's and code's types, when not the result type. -/
+  frameTys : List (Option Ty × Option Ty) := []
   kTy : Option Ty := none
   /-- (#283) With continuation members: the flag a value sets when it comes
       to a choice point in a member's code, then breaking out of the
