@@ -207,6 +207,65 @@ static void flatten_alias_cases(void)
     t_max_heap = 0;
 }
 
+static void rational_cases(void)
+{
+    static const struct {
+        uint32_t op;
+        int64_t a, b, c, d;
+        int kind, code;
+        int64_t numerator, denominator;
+    } cases[] = {
+        {VX_P_ADD, 1, 2, 1, 3, VX_R_OK, 0, 5, 6},
+        {VX_P_SUB, 1, 2, 2, 3, VX_R_OK, 0, -1, 6},
+        {VX_P_MUL, -2, 3, 9, 4, VX_R_OK, 0, -3, 2},
+        {VX_P_QUOTIENT, 2, 3, -4, 5, VX_R_OK, 0, -5, 6},
+        {VX_P_ADD, 1, INT64_MAX, INT64_MAX-1, INT64_MAX, VX_R_OK, 0, 1, 1},
+        {VX_P_ADD, INT64_MAX, INT64_MAX-1, INT64_MIN, INT64_MAX-1, VX_R_OK, 0, -1, INT64_MAX-1},
+        {VX_P_ADD, INT64_MIN, INT64_MAX, INT64_MAX-1, INT64_MAX, VX_R_OK, 0, -2, INT64_MAX},
+        {VX_P_ADD, INT64_MIN, INT64_MAX, INT64_MIN, INT64_MAX, VX_R_ERR, VX_E_OVERFLOW, 0, 0},
+        {VX_P_SUB, INT64_MAX, INT64_MAX, INT64_MIN, INT64_MAX, VX_R_ERR, VX_E_OVERFLOW, 0, 0},
+        {VX_P_SUB, INT64_MIN, 1, INT64_MIN, 1, VX_R_OK, 0, 0, 1},
+        {VX_P_MUL, INT64_MAX, 2, 2, INT64_MAX, VX_R_OK, 0, 1, 1},
+        {VX_P_QUOTIENT, INT64_MIN, 1, INT64_MIN, 1, VX_R_OK, 0, 1, 1},
+        {VX_P_QUOTIENT, 0, INT64_MAX, -1, INT64_MAX, VX_R_OK, 0, 0, 1},
+        {VX_P_ADD, INT64_MIN, 1, INT64_MIN, 1, VX_R_ERR, VX_E_OVERFLOW, 0, 0},
+        {VX_P_SUB, INT64_MAX, 1, INT64_MIN, 1, VX_R_ERR, VX_E_OVERFLOW, 0, 0},
+        {VX_P_MUL, INT64_MIN, 1, -1, 1, VX_R_ERR, VX_E_OVERFLOW, 0, 0},
+        {VX_P_QUOTIENT, 1, 1, INT64_MIN, 1, VX_R_ERR, VX_E_OVERFLOW, 0, 0},
+        {VX_P_QUOTIENT, 1, 1, 0, 1, VX_R_FAIL, 0, 0, 0},
+        /* Raw Core denominator guards, including the signed minimum. */
+        {VX_P_ADD, INT64_MIN, INT64_MIN, INT64_MIN, INT64_MIN, VX_R_ERR, VX_E_OVERFLOW, 0, 0},
+        {VX_P_MUL, 1, 0, 2, 3, VX_R_ERR, VX_E_OVERFLOW, 0, 0},
+        {VX_P_QUOTIENT, 1, 1, 2, -1, VX_R_ERR, VX_E_OVERFLOW, 0, 0}
+    };
+    size_t i;
+    for (i = 0; i < sizeof cases / sizeof cases[0]; i++) {
+        tbuf p = {0};
+        tfn m = {0};
+        char out[96];
+        uint32_t value = n_prim(&m, cases[i].op, 0, 4,
+            n_int(&m, cases[i].a), n_int(&m, cases[i].b),
+            n_int(&m, cases[i].c), n_int(&m, cases[i].d));
+        if (cases[i].kind == VX_R_OK) {
+            uint32_t save = n_assign(&m, 0, value);
+            uint32_t a = n_print_int(&m, n_prim(&m, VX_P_TUPGET, 0, 1, n_local(&m, 0)));
+            uint32_t b = n_print_int(&m, n_prim(&m, VX_P_TUPGET, 1, 1, n_local(&m, 0)));
+            n_seq(&m, save, n_seq(&m, a, b));
+            snprintf(out, sizeof out, "%lld\n%lld\n", (long long)cases[i].numerator,
+                     (long long)cases[i].denominator);
+        } else out[0] = 0;
+        main_only(&p, &m, 1, m.count - 1);
+        EXPECT(&p, cases[i].kind, cases[i].code, out);
+    }
+    {
+        tbuf p = {0};
+        tfn m = {0};
+        n_prim(&m, VX_P_ADD, 0, 4, n_int(&m, 1), n_int(&m, 1), n_char(&m, 'x'), n_int(&m, 1));
+        main_only(&p, &m, 0, m.count - 1);
+        EXPECT(&p, VX_R_ERR, VX_E_TYPE, "");
+    }
+}
+
 static void prim_cases(void)
 {
     tbuf p = { 0 };
@@ -701,6 +760,7 @@ int main(void)
 {
     rollback_cases();
     prim_cases();
+    rational_cases();
     flatten_alias_cases();
     control_cases();
     fuel_cases();

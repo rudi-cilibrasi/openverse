@@ -18,6 +18,8 @@ namespace OpenVerse
     (`Prim.apply`); only `print` (a separate node) touches the output. -/
 inductive Prim where
   -- int arithmetic (overflow is a runtime error)
+  -- add/sub/mul also take four int rational parts, returning a reduced
+  -- numerator/denominator pair (#489); quotient has the division form.
   | add | sub | mul | neg | abs
   -- failable integer division (fail when the divisor is 0):
   -- `Floor(X/Y)`, `Ceil(X/Y)`, and the Euclidean `Quotient[X,Y]`, `Mod[X,Y]`

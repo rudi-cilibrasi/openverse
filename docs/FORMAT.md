@@ -95,6 +95,16 @@ the function's header (whose `nnodes` is 4).
 | 8 | modulo | 18 | mkSome | 28 | userErr |
 | 9 | lt | 19 | concat | | |
 
+Codes 0 (`add`), 1 (`sub`), 2 (`mul`) and 7 (`quotient`) also have a
+four-int rational form (#489): arguments `(a,b,c,d)` denote `a/b` and
+`c/d`, and the result is the reduced tuple `(numerator,denominator)`.
+Operand denominators must be positive; otherwise the result is the
+overflow error. `quotient` fails on `c = 0`; the other forms never fail.
+Final parts must fit int64 with a positive denominator. Intermediate
+products and sums are exact and may exceed int64. The existing two-int
+forms are unchanged. Four-argument arithmetic requires a runtime with
+this extension; opcode numbers and the loader's accepted format are unchanged.
+
 Floats (#127):
 
 | code | prim | code | prim | code | prim |

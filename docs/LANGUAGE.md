@@ -1357,13 +1357,31 @@ Main():void =
   an int.
 - `rational` is a type of variables, parameters, results, fields and
   containers. It is comparable, so it can be a map key.
-- There are no rational literals, no arithmetic on rationals (`R + 1`,
-  `R / 2`), and no `ToString` of one.
+- There are no rational literals and no `ToString` of one.
+- Arithmetic is an **OpenVerse extension** (#489): `+`, binary `-`, `*`
+  and unary `-` on rationals return a rational with `<computes>` behavior.
+  Either binary operand may be an int. `/` on rational/rational or mixed
+  int/rational operands is `<computes><decides>` and fails on a zero
+  divisor. `+=`, `-=`, `*=` and the failable `/=` work on rational mutable
+  values and paths, with the usual read-before-right-operand order and
+  rollback rules. Int/int and float arithmetic keep their existing behavior.
+
+The [Book's pinned rational section](https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/docs/02_primitives.md#rationals)
+documents quotient construction, conversions and normalization. Its
+[operator table](https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/docs/04_operators.md#basic-arithmetic)
+does not specify the arithmetic family above. These overloads are an
+OpenVerse design decision, not a claim of released-UEFN conformance.
 
 In Verse Core a rational is the tuple of its numerator and denominator, in
 lowest terms with a positive denominator. Its parts are 64-bit ints, so
 `X / Y` raises the overflow error when the result's numerator or
 denominator is out of range, as in `(-2^63) / -3` or `1 / (-2^63)`.
+Arithmetic checks these bounds **after reduction**, using exact intermediate
+products/sums. Cancellation can therefore succeed even when intermediate
+values exceed int64; a reduced result outside the range raises overflow,
+which is an error rather than a recoverable failure. Zero is always `0/1`.
+`Floor(R / S)` and `Ceil(R / S)` first compute the rational quotient; the
+existing direct int/int rounding path remains unchanged.
 
 ## char32
 
@@ -1662,7 +1680,7 @@ Main()<suspends>:void =
 
 ## Not supported in v1
 
-arithmetic on rationals (see [rational](#rational)), float functions beyond those of [float](#float),
+`ToString` of rationals (see [rational](#rational)), float functions beyond those of [float](#float),
 the class features listed under [Classes](#classes), struct methods (Verse structs have none; classes do),
 `weak_map`, module paths `using{/Verse.org/…}` (accepted and ignored), overloading beyond [Overloading](#overloading), nested
 functions and lambdas (not released in Verse), choice beyond [Choice](#choice) (recursive functions with several values that have effects, other than generators, methods with several values whose name an unrelated class shares), concurrency beyond [Concurrency](#concurrency), and effect checking

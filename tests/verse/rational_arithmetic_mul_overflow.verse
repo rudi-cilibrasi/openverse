@@ -1,0 +1,4 @@
+Main():void=
+    V:rational=9223372036854775807
+    Print("before")
+    Print("{Floor(V*2)}")
