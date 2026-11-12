@@ -124,6 +124,8 @@ def main : IO Unit := do
     (caller.checkInlineInstance p formal [("t", t)])
   let aliases (value : SExpr) : List (String × SExpr) := [
     ("direct", value),
+    ("generic forwarding call", .app p (.ident p "Keep") [value] false),
+    ("nested forwarding calls", .app p (.ident p "Keep") [.app p (.ident p "Keep") [value] false] false),
     ("choice conversion body", .app p (.ident p "$choiceCoercions") [.block p [], value] false),
     ("final declaration", .block p [.decl p "Inner" none false value]),
     ("statement then final declaration", .block p [.int p 0, .decl p "Inner" none false value]),
@@ -146,8 +148,13 @@ def main : IO Unit := do
       [.gen p "Captured" (some "Key") (.mapLit p [(.int p 1, value)])]
       (.ident p "Captured")) [.int p 0] true)]
   for dummyRole in [true, false] do
+    let keep : Sig := {
+      idx := 0, name := "Keep", params := [u], ret := u, tparams := [("u", false)],
+      decides := false, isConst := false, pnames := ["X"], fx := [] }
     let scope := { caller with
       canFail := true,
+      sigs := [keep], sigProg := { fns := [
+        { name := "Keep", arity := 2, nslots := 2, decides := false, writes := false, body := .local 0 }], main := 0 },
       locals := (caller.locals.map fun binding => { binding with typeValue := dummyRole }) ++
         [{ name := "Other", slot := 1, ty := proof, mutable := false }] }
     for (shape, rhs) in aliases (.ident p "Witness") do

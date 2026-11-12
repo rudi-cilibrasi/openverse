@@ -789,9 +789,9 @@ partial def Ctx.isTypeValue (ctx : Ctx) : SExpr → Bool
     if ["$typeValue", "$witness", "$stageWitness"].contains name then true
     else if ["$refineCopyIn", "$refineCopyOut", "$forEnvCapture", "$forEnvInit"].contains name then
       args.any ctx.isTypeValue
-    else (ctx.lookup name).any (·.typeValue)
+    else (ctx.lookup name).any (·.typeValue) || args.any ctx.isTypeValue
   | .member _ value field => field.startsWith "$w." || ctx.isTypeValue value
-  | .app _ value _ _ => ctx.isTypeValue value
+  | .app _ value args _ => ctx.isTypeValue value || args.any ctx.isTypeValue
   | .decl _ _ _ _ value | .query _ value | .optionLit _ value => ctx.isTypeValue value
   | .set _ receiver op value => ctx.isTypeValue value || (op.isSome && ctx.isTypeValue receiver)
   | .tuple _ values | .arrayLit _ values => values.any ctx.isTypeValue
