@@ -15,6 +15,7 @@ case ${3:-} in
   --nested-writes) mode_args+=(--nested-writes); tag=nested-write-dictionary ;;
   --numeric-writes) mode_args+=(--numeric-writes); tag=numeric-write-dictionary ;;
   --indexed-writes) mode_args+=(--indexed-writes); tag=indexed-write-dictionary ;;
+  --compound-index-writes) mode_args+=(--compound-index-writes); tag=compound-index-write-dictionary ;;
   --writes) mode_args+=(--writes); tag=write-dictionary ;;
   --result-aliases) mode_args+=(--result-aliases); tag=result-alias-dictionary ;;
   --aliases) mode_args+=(--aliases); tag=alias-dictionary ;;

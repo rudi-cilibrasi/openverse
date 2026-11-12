@@ -1280,8 +1280,12 @@ partial def choiceMemberOperations (bindings : ChoiceAliases) (body : SExpr) : L
   | .ite _ conditions yes no =>
     let (operations, visible) := choiceMemberOperationSeq bindings conditions
     operations ++ choiceMemberOperations visible yes ++ no.toList.flatMap (choiceMemberOperations bindings)
-  | e@(.set _ (.app _ (.member _ receiver _) [index] true) none value) =>
+  | e@(.set _ target@(.app _ (.member _ receiver _) [index] true) op value) =>
+    let old := match value with
+      | .app _ (.ident _ "$withOld") [saved, _] false => saved
+      | _ => target
     choiceMemberOperations bindings index ++ choiceMemberOperations bindings receiver ++
+      (if op.isSome then choiceMemberOperations bindings old else []) ++
       choiceMemberOperations bindings value ++ (if depends receiver then [(e, bindings)] else [])
   | e@(.set _ target@(.member _ receiver _) op value) =>
     let old := match value with
@@ -1481,14 +1485,18 @@ def choiceOperations (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx)
     seen := key :: seen
     let sourceCtx := (contexts.find? (·.1 == call)).map (·.2) |>.getD ctx
     let indexed := match call with
-      | .set _ (.app _ (.member ..) [_] true) none _ => true
+      | .set _ (.app _ (.member ..) [_] true) _ _ => true
       | _ => false
     let details : Option (Pos × SExpr × String × List SExpr × Bool × Bool × Option (Option String)) := match call with
       | .app p (.member _ receiver method) arguments bracket => some (p, receiver, method, arguments, bracket, false, none)
       | .member p receiver field => some (p, receiver, field, [], false, true, none)
-      | .set p (.app _ (.member _ receiver field) [index] true) none value =>
+      | .set p target@(.app _ (.member _ receiver field) [index] true) op value =>
         if !choiceFieldPath receiver then none else
-        some (p, receiver, field, [index, value], true, false, some none)
+        let arguments := match op, value with
+          | none, _ => [index, value]
+          | some _, .app _ (.ident _ "$withOld") [saved, rhs] false => [index, saved, rhs]
+          | some _, _ => [index, target, value]
+        some (p, receiver, field, arguments, true, false, some op)
       | .set p target@(.member _ receiver field) op value =>
         if !choiceFieldPath receiver then none else
         let arguments := match op, value with
@@ -1540,7 +1548,7 @@ def choiceOperations (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx)
           -- Source paths evaluate keys before capturing their object.
           -- The adapter then reads the current array after the caller RHS.
           cases := cases ++ [{
-            receiver := .int, inputs := [actual, leaf],
+            receiver := .int, inputs := if op.isSome then [actual, leaf, leaf] else [actual, leaf],
             result := leaf, specs := ["reads", "writes"] }]
           continue
         cases := cases ++ [{
@@ -1615,7 +1623,7 @@ def choiceOperations (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx)
       let vars := Ty.mergeParamBounds ((types ++ [row.result]).flatMap Ty.paramsC)
       let rename := vars.zipIdx.map fun ((name, bound), i) => (name, Ty.param s!"$operationT{i}" bound)
       (types.map (·.subst rename), row.result.subst rename)
-    let operationName := if indexed then "$indexSet:" ++ method else
+    let operationName := if indexed then "$indexSet:" ++ method ++ ((setter.getD none).map (":" ++ ·)).getD "" else
       if let some op := setter then "$set:" ++ method ++ ":" ++ op.getD "=" else
       if callable then "$invoke:" ++ method else if isField then "$field:" ++ method else method
     let context := if borrows then reprStr (choiceDefaultContext sourceCtx (.tuple p [])) else ""
@@ -1639,7 +1647,9 @@ def choiceOperations (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx)
     let name := s!"{stem}$op{ops.params.length}"
     let ty := Ty.struct family ((if indexed then .int else receiverTy) :: inputs ++ [result])
     let operation := if indexed then
-      SExpr.set p0 (.app p0 (.member p0 values[1]! method) [values[0]!] true) none values[2]!
+      let op := setter.getD none
+      let rhs := if op.isSome then SExpr.app p0 (.ident p0 "$withOld") [values[2]!, values[3]!] false else values[2]!
+      SExpr.set p0 (.app p0 (.member p0 values[1]! method) [values[0]!] true) op rhs
     else if let some op := setter then
       let rhs := if op.isSome then SExpr.app p0 (.ident p0 "$withOld") [values[1]!, values[2]!] false
         else values[1]!
@@ -1669,11 +1679,19 @@ def choiceOperations (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx)
       if setter.isSome && i + 1 == arguments.length then ops.coercionContext value else value
     let sourceValues := if indexed then [sourceArguments[0]!, ops.rewrite receiver, sourceArguments[1]!] else
       ops.rewrite receiver :: sourceArguments
+    let shape := SExpr.str p [.text (FnValues.shapeOf (arguments.length + 1) specs).name]
+    let invocation := if indexed && (setter.getD none).isSome then
+      let index := sourceArguments[0]!
+      let object := ops.rewrite receiver
+      let old := Choice.mapE (fun e =>
+        if e == index then some (.ident p "$choiceIndexKey") else
+        if e == object then some (.ident p "$choiceIndexObject") else none) sourceArguments[1]!
+      SExpr.app p (.ident p "$choiceIndexedOperation") [shape, .ident p name, index, object, old, sourceArguments[2]!] bracket
+    else SExpr.app p (.ident p "$choiceOperation") (shape :: .ident p name :: sourceValues) bracket
     ops := { ops with
       plan := finalPlan, params := ops.params ++ [(name, ty)],
       knownTypes := ops.knownTypes ++ [(call, result)],
-      replacements := ops.replacements ++ [(key, .app p (.ident p "$choiceOperation")
-        (.str p [.text (FnValues.shapeOf (arguments.length + 1) specs).name] :: .ident p name :: sourceValues) bracket)],
+      replacements := ops.replacements ++ [(key, invocation)],
       casePrelude := (ops.casePrelude.zip bindings).map fun (old, next) => old ++ next,
       extraFns := ops.extraFns ++ definitions }
   return ops

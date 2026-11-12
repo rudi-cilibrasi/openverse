@@ -160,6 +160,8 @@ check "numeric field write choice dictionary model fuzzing (${FUZZ_MODEL_NUMERIC
   scripts/fuzz-model-heterogeneous.sh "${FUZZ_MODEL_NUMERIC_WRITE_DICTIONARY:-120}" "$seed" --numeric-writes
 check "indexed field write choice dictionary model fuzzing (${FUZZ_MODEL_INDEXED_WRITE_DICTIONARY:-120} programs)" \
   scripts/fuzz-model-heterogeneous.sh "${FUZZ_MODEL_INDEXED_WRITE_DICTIONARY:-120}" "$seed" --indexed-writes
+check "compound indexed choice dictionary model fuzzing (${FUZZ_MODEL_COMPOUND_INDEX_DICTIONARY:-120} programs)" \
+  scripts/fuzz-model-heterogeneous.sh "${FUZZ_MODEL_COMPOUND_INDEX_DICTIONARY:-120}" "$seed" --compound-index-writes
 check "source break model fuzzing (${FUZZ_MODEL_BREAKS:-60} programs)" \
   scripts/fuzz-model-breaks.sh "${FUZZ_MODEL_BREAKS:-60}" "$seed"
 check "choice model fuzzing (${FUZZ_MODEL_MV:-140} programs, functions with several values too)" \
