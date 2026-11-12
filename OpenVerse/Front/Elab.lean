@@ -566,7 +566,7 @@ def builtins : List String :=
     definition, if any, is the one a call means. -/
 def softBuiltins : List String :=
   ["Round", "Int", "Sqrt", "Exp", "Ln", "Log", "Pow", "Sin", "Cos", "Tan", "ArcSin", "ArcCos", "ArcTan",
-   "IsFinite", "Concatenate"]
+   "IsFinite", "Concatenate", "Sinh", "Cosh", "Tanh", "ArSinh", "ArCosh", "ArTanh", "Lerp"]
 
 partial def resolveTy (env : TyEnv) (p : Pos) : STy → EM Ty
   | .name "int" => pure .int
@@ -6391,10 +6391,12 @@ partial def elabAppBase (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (b
         return ⟨.prim .abs [← coerce a.pos r .int], .int⟩
       | _ => eerr p "Abs takes one argument"
     | "Sqrt" | "Exp" | "Ln" | "Log" | "Pow" | "Sin" | "Cos" | "Tan" | "ArcSin" | "ArcCos" | "ArcTan"
-    | "IsFinite" =>
+    | "IsFinite" | "Sinh" | "Cosh" | "Tanh" | "ArSinh" | "ArCosh" | "ArTanh" | "Lerp" =>
       -- the mathematical functions of floats (#132); only IsFinite fails
       if name == "IsFinite" then needBracket name
       else if bracket then eerr p s!"{name} cannot fail: call it with {name}(…)"
+      if ["Sinh", "Cosh", "Tanh", "ArSinh", "ArCosh", "ArTanh", "Lerp"].contains name then
+        noteFx p ["reads"] (some name)
       let fl (a : SExpr) : EM Expr := do
         let r := widenR ctx.types (← elabE ctx a (some .float))
         if r.ty != .float then eerr a.pos s!"{name} takes floats, found {r.ty.show}"
@@ -6403,8 +6405,21 @@ partial def elabAppBase (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (b
         | "Sqrt" => some .fsqrt | "Exp" => some .fexp | "Ln" => some .fln | "Sin" => some .fsin
         | "Cos" => some .fcos | "Tan" => some .ftan | "ArcSin" => some .fasin | "ArcCos" => some .facos
         | "ArcTan" => some .fatan | "IsFinite" => some .fisFinite
+        | "Sinh" => some .fsinh | "Cosh" => some .fcosh | "Tanh" => some .ftanh
+        | "ArSinh" => some .fasinh | "ArCosh" => some .facosh | "ArTanh" => some .fatanh
         | _ => none
       match name, args with
+      | "Lerp", [a, b, parameter] =>
+        let ta ← fresh .float
+        let ea ← fl a
+        let tb ← fresh .float
+        let eb ← fl b
+        let tp ← fresh .float
+        let ep ← fl parameter
+        let one := Expr.lit (.float 0x3FF0000000000000)
+        let blend := p2 .fadd (p2 .fmul (.local ta) (p2 .fsub one (.local tp)))
+          (p2 .fmul (.local tb) (.local tp))
+        return ⟨.seq (.assign ta ea) (.seq (.assign tb eb) (.seq (.assign tp ep) blend)), .float⟩
       | "Pow", [a, b] => return ⟨p2 .fpow (← fl a) (← fl b), .float⟩
       | "ArcTan", [y, x] => return ⟨p2 .fatan2 (← fl y) (← fl x), .float⟩
       | "Log", [b, x] =>
@@ -6416,8 +6431,8 @@ partial def elabAppBase (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (b
       | n, [a] =>
         match unary n with
         | some op => return ⟨.prim op [← fl a], .float⟩
-        | none => eerr p s!"{name} takes two floats"
-      | _, _ => eerr p s!"{name} takes {if name == "Pow" || name == "Log" then "two floats" else if name == "ArcTan" then "one or two floats" else "one float"}"
+        | none => eerr p s!"{name} takes {if name == "Lerp" then "three" else "two"} floats"
+      | _, _ => eerr p s!"{name} takes {if name == "Lerp" then "three floats" else if name == "Pow" || name == "Log" then "two floats" else if name == "ArcTan" then "one or two floats" else "one float"}"
     | "Round" | "Int" =>
       -- a float to an int (#127): `Round` ties to even, `Int` towards zero;
       -- failing on NaN, an infinity or out of range

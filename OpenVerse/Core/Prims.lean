@@ -172,6 +172,12 @@ def Prim.apply : Prim → List Value → Res
   | .fatan, [.float a] => .ok (.float (VFloat.canon (VFloat.ofBits a).atan))
   | .fpow, [.float a, .float b] => .ok (.float (VFloat.canon (Float.pow (VFloat.ofBits a) (VFloat.ofBits b))))
   | .fatan2, [.float a, .float b] => .ok (.float (VFloat.canon (Float.atan2 (VFloat.ofBits a) (VFloat.ofBits b))))
+  | .fsinh, [.float a] => .ok (.float (VFloat.canon (VFloat.ofBits a).sinh))
+  | .fcosh, [.float a] => .ok (.float (VFloat.canon (VFloat.ofBits a).cosh))
+  | .ftanh, [.float a] => .ok (.float (VFloat.canon (VFloat.ofBits a).tanh))
+  | .fasinh, [.float a] => .ok (.float (VFloat.canon (VFloat.ofBits a).asinh))
+  | .facosh, [.float a] => .ok (.float (VFloat.canon (VFloat.ofBits a).acosh))
+  | .fatanh, [.float a] => .ok (.float (VFloat.canon (VFloat.ofBits a).atanh))
   | .fisFinite, [.float a] => if VFloat.isFinite a then .ok (.float a) else .fail
   | .fofBits, [.int i] => .ok (.float (VFloat.canon (VFloat.ofBits (UInt64.ofNat (i % (2 ^ 64 : Int)).toNat))))
   | .fail, [] => .fail

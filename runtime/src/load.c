@@ -209,6 +209,8 @@ static int load_prim(vx_ld *r, vx_program *p, uint32_t j, vx_node *nd)
         return VX_LOAD_TRUNCATED;
     if (code > VX_P_LAST)
         return VX_LOAD_PRIM;
+    if (code > VX_P_FISFINITE && code < VX_P_FSINH)
+        return VX_LOAD_PRIM;
     if (rd_u32(r, &k) != VX_LOAD_OK)
         return VX_LOAD_TRUNCATED;
     if (k != 0 && code != VX_P_TUPGET)

@@ -202,7 +202,14 @@ int    vx_store_move_out(vx_store *s, uint8_t *out, size_t ocap);
 #define VX_P_FPOW     56
 #define VX_P_FATAN2   57
 #define VX_P_FISFINITE 58
-#define VX_P_LAST     58
+/* scalar hyperbolic math (#490); 59--63 reserved for rational arithmetic */
+#define VX_P_FSINH    64
+#define VX_P_FCOSH    65
+#define VX_P_FTANH    66
+#define VX_P_FASINH   67
+#define VX_P_FACOSH   68
+#define VX_P_FATANH   69
+#define VX_P_LAST     69
 
 /*
  * One node.  Child indices are into the node table of the same function.

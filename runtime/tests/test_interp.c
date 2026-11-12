@@ -305,6 +305,60 @@ static void prim_cases(void)
     OK_OUT(&p, "abcd\naXcd\nabcd\nout\nnoset\nxyz\nq\n");
 }
 
+/* ABI and special-value cases bypass the source type checker (#490). */
+static void hyperbolic_cases(void)
+{
+    static const struct { uint32_t op; uint64_t bits; const char *out; } cases[] = {
+        { VX_P_FSINH, 0, "0.0\n" },
+        { VX_P_FSINH, UINT64_C(0x8000000000000000), "0.0\n" },
+        { VX_P_FSINH, 1, "5e-324\n" },
+        { VX_P_FCOSH, 0, "1.0\n" },
+        { VX_P_FTANH, 0, "0.0\n" },
+        { VX_P_FTANH, 1, "5e-324\n" },
+        { VX_P_FASINH, 1, "5e-324\n" },
+        { VX_P_FATANH, 1, "5e-324\n" },
+        { VX_P_FACOSH, UINT64_C(0x3ff0000000000000), "0.0\n" },
+        { VX_P_FACOSH, 0, "NaN\n" },
+        { VX_P_FATANH, UINT64_C(0x3ff0000000000000), "Inf\n" },
+        { VX_P_FATANH, UINT64_C(0xbff0000000000000), "-Inf\n" },
+        { VX_P_FATANH, UINT64_C(0x4000000000000000), "NaN\n" },
+        { VX_P_FSINH, UINT64_C(0x7ff0000000000000), "Inf\n" },
+        { VX_P_FCOSH, UINT64_C(0xfff0000000000000), "Inf\n" },
+        { VX_P_FTANH, UINT64_C(0xfff0000000000000), "-1.0\n" },
+        { VX_P_FASINH, UINT64_C(0xfff0000000000000), "-Inf\n" },
+        { VX_P_FACOSH, UINT64_C(0x7ff0000000000000), "Inf\n" },
+        { VX_P_FATANH, UINT64_C(0x7ff0000000000000), "NaN\n" },
+        { VX_P_FSINH, UINT64_C(0x7ff8000000000001), "NaN\n" }
+    };
+    static const uint32_t ops[] = {
+        VX_P_FSINH, VX_P_FCOSH, VX_P_FTANH,
+        VX_P_FASINH, VX_P_FACOSH, VX_P_FATANH
+    };
+    tbuf p = { 0 };
+    tfn f = { 0 };
+    size_t i;
+    for (i = 0; i < sizeof cases / sizeof cases[0]; i++) {
+        int64_t bits;
+        uint32_t x;
+        memcpy(&bits, &cases[i].bits, sizeof bits);
+        x = n_prim(&f, VX_P_FOFBITS, 0, 1, n_int(&f, bits));
+        n_print(&f, n_prim(&f, VX_P_TOSTR, 0, 1, n_prim(&f, cases[i].op, 0, 1, x)));
+        main_only(&p, &f, 0, f.count - 1);
+        OK_OUT(&p, cases[i].out);
+    }
+    for (i = 0; i < sizeof ops / sizeof ops[0]; i++) {
+        n_prim(&f, ops[i], 0, 0);
+        main_only(&p, &f, 0, f.count - 1);
+        EXPECT(&p, VX_R_ERR, VX_E_TYPE, "");
+        n_prim(&f, ops[i], 0, 1, n_int(&f, 1));
+        main_only(&p, &f, 0, f.count - 1);
+        EXPECT(&p, VX_R_ERR, VX_E_TYPE, "");
+        n_prim(&f, ops[i], 0, 2, n_int(&f, 1), n_int(&f, 2));
+        main_only(&p, &f, 0, f.count - 1);
+        EXPECT(&p, VX_R_ERR, VX_E_TYPE, "");
+    }
+}
+
 static void control_cases(void)
 {
     tbuf p = { 0 };
@@ -701,6 +755,7 @@ int main(void)
 {
     rollback_cases();
     prim_cases();
+    hyperbolic_cases();
     flatten_alias_cases();
     control_cases();
     fuel_cases();
