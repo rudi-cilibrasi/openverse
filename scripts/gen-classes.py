@@ -573,6 +573,7 @@ class Gen:
         self.fovered = set()    # fields an interface gives a new default
         self.phase = 'decl'     # 'decl' while generating bodies, 'main' after
         self.helpers = []
+        self.extended_defaults = False
 
     def fresh(self, p):
         self.n += 1
@@ -797,6 +798,7 @@ class Gen:
             return {'opt': 'false', 'arr': 'array{}', 'map': 'map{}'}[ty[0]]
         if ty == 'int':
             if self.helpers and chance(0.2):
+                self.extended_defaults = True
                 return '%s(%s)' % (R.choice(self.helpers), lit())
             return lit(0, 20)
         return '"%s"' % R.choice(['red', 'blue', 'n', 'ok', ''])
@@ -2307,7 +2309,10 @@ def main():
     R = random.Random(seed)
     g = Gen()
     GEN.append(g)
-    sys.stdout.write(g.gen())
+    source = g.gen()
+    if g.extended_defaults:
+        sys.stdout.write('# openverse: extended-defaults\n')
+    sys.stdout.write(source)
 
 
 if __name__ == '__main__':

@@ -244,6 +244,8 @@ partial def elabExprInitialWith
             | _ => none
           if s.isConst then
             noteFx p s.fx (some s!"uses the constant {n}")
+            -- (#515: a use runs the constant's initialiser)
+            noteFailCalls ctx p s!"use of the constant {n}" (.call s.idx [])
             return ⟨.call s.idx [], s.ret⟩
           else if let some (cls, ty) := (do
               -- (#214) a value class made for the function type expected,

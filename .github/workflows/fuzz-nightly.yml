@@ -74,6 +74,7 @@ jobs:
             echo "FUZZ_MODEL_FIFO=$((60 * k))"
             echo "FUZZ_CONC_POLY=$((60 * k))"; echo "FUZZ_FIELDS=$((60 * k))"; echo "FUZZ_MODEL_GENERIC=$((150 * k))"
             echo "FUZZ_MODEL_CONSTRUCT=$((60 * k))"
+            echo "FUZZ_MODEL_INITIALIZERS=$((96 * k))"
             echo "FUZZ_MODEL_HETEROGENEOUS=$((120 * k))"; echo "FUZZ_MODEL_DICTIONARY=$((120 * k))"
             echo "FUZZ_MODEL_POLYMORPHIC_DICTIONARY=$((120 * k))"
             echo "FUZZ_MODEL_MEMBER_DICTIONARY=$((120 * k))"

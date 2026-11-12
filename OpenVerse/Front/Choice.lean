@@ -2311,6 +2311,10 @@ structure FirstReturn where
     `sets`, then `true`). -/
 structure FirstLift where
   sourceContext : SourceContext := {}
+  /-- (#515, `--signal-no-rollback`) A `for`'s continuation made inside a
+      failure context where the code cannot fail (`Ctx.inRollback`): its
+      body runs inside that context too. -/
+  rollback : Bool := false
   /-- The packets of the source exits its clauses have, a `return` and a
       `break` that leaves them, the function's own exits as a refining
       lift's are (`Refine.Exits`); the caller exits again (`firstUnpack`). -/

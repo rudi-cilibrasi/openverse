@@ -171,6 +171,7 @@ partial def elabGenericCallWith (elabE : Ctx → SExpr → Option Ty → EM R) (
                                inParamDefault := true,
                                types,
                                inLoop := false, canFail := ctx.canFail && s.decides,
+                               inRollback := ctx.inRollback || ctx.canFail,
                                suspends := ctx.suspends && s.suspends,
                                defaults := key :: ctx.defaults }
         -- (its type: the parameter's, or what the default gives a type

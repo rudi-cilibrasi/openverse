@@ -144,9 +144,10 @@ specifiers before lowering can erase them (#494).
 `predicts` and `converges` are explicitly unsupported, including on abstract
 signatures and function types. The pinned Book calls prediction unreleased
 and divergence checking planned; this does not establish their availability
-in every released engine. OpenVerse implements neither predicting call
-propagation nor termination contracts. Ordinary recursion and loops remain
-available; `computes` and execution fuel do not prove termination.
+in every released engine. OpenVerse does not implement predicting call
+propagation or explicit function termination contracts. Ordinary recursion
+and loops remain available outside the initializer admission boundary;
+`computes` and execution fuel do not prove termination.
 
 Source `native`/`native_callable` tags cannot create trusted external bindings.
 Explicit internal/implicit effect spellings (`no_rollback`, `dictates`,
@@ -158,8 +159,22 @@ and callers (#508). No heap annotation means `transacts`; `computes` permits
 none; `reads`, `writes` and `allocates` permit those named. A subtype must
 include its parent types' construction budgets. Data types cannot declare
 `decides` or `suspends`. Effects on fields are refused; declaration/access
-metadata remains separate. The Book's additional implicit convergence rule
-for field initializers is tracked in #511. The
+metadata remains separate. Field defaults also have an independent convergence
+admission boundary (#511). Ordinary source function calls are refused there,
+including calls through constants, methods and function values, even in unused
+definitions. Effectful object construction retains the Book's exception.
+Finite primitives, failure, finite `for` expressions and `first` searches whose
+generated loops cannot repeat remain available. Unknown loops and recursive
+compiler-helper call graphs are refused. This checks admission, not a general
+termination theorem for construction blocks or native primitives.
+
+`--extended-defaults` on `run`, `emit`, `check` or `core` explicitly retains
+OpenVerse's extended computed defaults, including ordinary helper/callback and
+spawn defaults. It makes no convergence assertion; heap, failure, suspension,
+source-profile and Core checks still apply. Compiler clients use
+`Options.extendedDefaults := true` (or the final compatibility argument of
+`compileWith`/`compileTops`). Existing extension fixtures select this option
+explicitly. The
 [effect inventory](research/effect-conformance.md) records the implemented,
 partial and rejected contracts, source/release evidence, regression links and
 the native/proof boundary. Admission covers every loaded definition, defaults,
@@ -1892,6 +1907,25 @@ Main()<suspends>:void =
   `Signal` may be called in a failure context too, which Verse refuses
   (the API reference makes its `Signal` `<no_rollback>`): what the
   functions it calls do is rolled back with the context, as `Print` is.
+  With `--signal-no-rollback` (`openverse run`, `emit`, `check` and `core`,
+  opt-in until a default is chosen, #515), a program that may call an
+  event's `Signal` from a failure context is refused before it runs or is
+  emitted. A failure context is an `if`'s condition, a `for`'s clause, a
+  `<decides>` function's body, `option{…}`, `logic{…}`, `not`, the left of
+  `or`, a `first{…}` or a `do` expression, with everything that runs
+  inside it: a `block`, a named argument's default, a `defer:` (but not
+  one that a `return` or a `break` out of the failure context runs:
+  leaving it that way commits it). What it
+  runs counts: the functions it calls, the `block:`s of the classes it
+  constructs, the initialisers of the constants it uses, every
+  implementation a method call may pick, and every function of a function
+  value's type that is given as a value (conservatively), any of which may
+  reach the `Signal` of any kind of event. The error names the way to the
+  `Signal`. An `if`'s branches and a `for`'s body are not failure contexts
+  (unless the `if` or `for` is in one), also when the compiler moves the
+  body into a function of its own, and neither is the call a `spawn`
+  starts (its task runs it later; its arguments count). `Subscribe` and
+  `Cancel` in a failure context stay admitted, undone as above.
   A `subscribable_event()` is one without a value: `E.Signal()`,
   `E.Await()`, and functions of type `type{_():void}` to subscribe (#220).
   It is an `event(void)`, but not a `subscribable_event(t)`, whose
@@ -1994,7 +2028,7 @@ Main()<suspends>:void =
 | End of a program with tasks | not stated | the program ends when `Main` does; a `Main` that waits with no task able to run is an error (exit 2) (#156) |
 | Order of a `subscribable_event`'s functions | not stated (ch. 14's example lists them in subscription order) | subscription order; the tasks awaiting the event are woken first and go on after `Signal` returns (#210) |
 | Event waiter resumption | Epic's event/Signal API specifies suspension order | Main/spawn/source-arm scheduler order by default; with `--event-fifo`, suspension order across tasks and arms, after `Signal` returns and the signalling task waits; the default is undecided (#513) |
-| Signal in a failure context | the published Signal API describes no_rollback, alongside rendered transacts bits; versioned compiler behavior needs separate evidence | transactional Signal and callbacks are allowed and rolled back; an engine-compatible admission policy is tracked in #515 |
+| Signal in a failure context | the published Signal API describes no_rollback, alongside rendered transacts bits; versioned compiler behavior needs separate evidence | transactional Signal and callbacks are allowed and rolled back by default; with `--signal-no-rollback`, a program that may signal an event from a failure context is refused before it runs; the default is undecided (#515) |
 | Extent of a `<#>` comment | "everything indented by four spaces on subsequent lines" (§1.1) | the rest of the `<#>` line and every following line indented more than that line, whatever the amount (blank lines included); `<#>` may also follow code on a line |
 
 ## Not supported in v1

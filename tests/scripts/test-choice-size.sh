@@ -578,6 +578,12 @@ kinds=(
   waiting-refined-state
 )
 for kind in "${kinds[@]}"; do
+  # These six schemas deliberately retain ordinary computed field defaults.
+  compat=()
+  case $kind in
+    construct-first|construct-for|construct-failure|context-field-default-lazy-first|context-refining-field-first|context-refining-field-for)
+      compat+=(--extended-defaults) ;;
+  esac
   sizes=()
   for count in 4 8; do
     python3 - "$kind" "$count" >"$tmp/p.verse" <<'PY'
@@ -2104,7 +2110,7 @@ elif kind == 'refined-for':
 else:
     print('Main():void = Print("{Run(7)}")' if kind.startswith('typed-') else 'Main():void = Print("{Run(7).Length}")')
 PY
-    timeout "$limit" "$root/.lake/build/bin/openverse" emit "$tmp/p.verse" -o "$tmp/p.vbc" || {
+    timeout "$limit" "$root/.lake/build/bin/openverse" emit "$tmp/p.verse" "${compat[@]}" -o "$tmp/p.vbc" || {
       rc=$?
       if (( rc == 124 )); then
         echo "test-choice-size: $kind with $count choices did not compile within ${limit} s (CHOICE_SIZE_TIMEOUT)" >&2
@@ -2133,7 +2139,7 @@ PY
     fi
     if [[ $kind == castclause-* && $count == 4 ]]; then
       printf '%s\n' "16 4" >"$tmp/expected"
-      timeout "$limit" "$root/.lake/build/bin/openverse" run "$tmp/p.verse" >"$tmp/lean.out"
+      timeout "$limit" "$root/.lake/build/bin/openverse" run "$tmp/p.verse" "${compat[@]}" >"$tmp/lean.out"
       timeout "$limit" "$root/runtime/build/cverse" "$tmp/p.vbc" >"$tmp/c.out"
       diff -u "$tmp/expected" "$tmp/lean.out"
       diff -u "$tmp/expected" "$tmp/c.out"
@@ -2142,7 +2148,7 @@ PY
       expected=256
       [[ $kind == *-first ]] && expected=8
       printf '%s\n' "$expected" >"$tmp/expected"
-      timeout "$limit" "$root/.lake/build/bin/openverse" run "$tmp/p.verse" >"$tmp/lean.out"
+      timeout "$limit" "$root/.lake/build/bin/openverse" run "$tmp/p.verse" "${compat[@]}" >"$tmp/lean.out"
       timeout "$limit" "$root/runtime/build/cverse" "$tmp/p.vbc" >"$tmp/c.out"
       diff -u "$tmp/expected" "$tmp/lean.out"
       diff -u "$tmp/expected" "$tmp/c.out"
@@ -2154,7 +2160,7 @@ PY
         [[ $kind == setter-simple-* || $kind == setter-array-* ]] && expected=4
       fi
       printf '%s\n' "$expected" >"$tmp/expected"
-      timeout "$limit" "$root/.lake/build/bin/openverse" run "$tmp/p.verse" >"$tmp/lean.out"
+      timeout "$limit" "$root/.lake/build/bin/openverse" run "$tmp/p.verse" "${compat[@]}" >"$tmp/lean.out"
       timeout "$limit" "$root/runtime/build/cverse" "$tmp/p.vbc" >"$tmp/c.out"
       diff -u "$tmp/expected" "$tmp/lean.out"
       diff -u "$tmp/expected" "$tmp/c.out"
@@ -2166,7 +2172,7 @@ PY
         [[ $kind == resultalias-generic-* ]] && expected=8
       fi
       printf '%s\n' "$expected" >"$tmp/expected"
-      timeout "$limit" "$root/.lake/build/bin/openverse" run "$tmp/p.verse" >"$tmp/lean.out"
+      timeout "$limit" "$root/.lake/build/bin/openverse" run "$tmp/p.verse" "${compat[@]}" >"$tmp/lean.out"
       timeout "$limit" "$root/runtime/build/cverse" "$tmp/p.vbc" >"$tmp/c.out"
       diff -u "$tmp/expected" "$tmp/lean.out"
       diff -u "$tmp/expected" "$tmp/c.out"
@@ -2178,7 +2184,7 @@ PY
         [[ $kind == named-* ]] && expected=ok
       fi
       printf '%s\n' "$expected" >"$tmp/expected"
-      timeout "$limit" "$root/.lake/build/bin/openverse" run "$tmp/p.verse" >"$tmp/lean.out"
+      timeout "$limit" "$root/.lake/build/bin/openverse" run "$tmp/p.verse" "${compat[@]}" >"$tmp/lean.out"
       timeout "$limit" "$root/runtime/build/cverse" "$tmp/p.vbc" >"$tmp/c.out"
       diff -u "$tmp/expected" "$tmp/lean.out"
       diff -u "$tmp/expected" "$tmp/c.out"
@@ -2190,7 +2196,7 @@ PY
         setalt-first) expected=0 ;; setalt-for) expected=81 ;;
       esac
       printf '%s\n' "$expected" >"$tmp/expected"
-      timeout "$limit" "$root/.lake/build/bin/openverse" run "$tmp/p.verse" >"$tmp/lean.out"
+      timeout "$limit" "$root/.lake/build/bin/openverse" run "$tmp/p.verse" "${compat[@]}" >"$tmp/lean.out"
       timeout "$limit" "$root/runtime/build/cverse" "$tmp/p.vbc" >"$tmp/c.out"
       diff -u "$tmp/expected" "$tmp/lean.out"
       diff -u "$tmp/expected" "$tmp/c.out"
