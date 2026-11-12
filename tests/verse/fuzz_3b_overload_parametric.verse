@@ -1,5 +1,5 @@
-# Refused as overlapping overloads, though no value is both a box(int) and a box(string).
-# LANGUAGE.md does not list two instances of one parametric class among overlapping types.
+# Regression: box(int) and box(string) are distinct overload domains.
+# This previously failed with an overlap diagnostic.
 box(t:type) := class:
     Value:t
 Show(B:box(int)):string = "int box {B.Value}"

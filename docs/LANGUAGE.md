@@ -257,14 +257,16 @@ casts. A new local loop keeps its own target even inside a lifted branch.
 Several functions may share a name when no call could fit two of them (Book of
 Verse ch. 6): `Describe(X:int)`, `Describe(S:string)`, `Describe(X:int, Y:int)`.
 - **Distinct overloads.** Overloads take different numbers of parameters, or
-  disjoint types at some position. A single tuple parameter counts as many
-  parameters as its elements.
+  disjoint types at some position. A single tuple parameter and the same
+  flattened positional types are refused as overlapping. Distinct flattened
+  element types are currently also refused; see the audit below.
 - **Overlapping types:** `void`, a type parameter, two array, map or option
   types (they share the empty one), an array, option or `logic` with
-  another (`false` is each), a tuple and an array, map or option, and a
+  another (`false` is each), and a
   class or interface with an interface or a class above or below it (but a
   `<final>` class and an interface it does not implement are disjoint, and
-  so are one parametric class's instances at disjoint type arguments). A pair that overlaps is refused where the later
+  so are one parametric class's instances at disjoint type arguments). Function
+  types overlap regardless of their signatures or effects. A pair that overlaps is refused where the later
   one is defined.
 - **Calls.** A call takes the overload whose parameter types its arguments
   fit. With subtyping, a `square` fits `Describe(B:shape)`. Each argument's
@@ -283,8 +285,8 @@ Verse ch. 6): `Describe(X:int)`, `Describe(S:string)`, `Describe(X:int, Y:int)`.
   overload is told apart from the others by its number of parameters, or
   by a type its pattern cannot take (`?t` against `int`). A call matches
   the arguments' types against its patterns as inference does, and infers
-  its type arguments as for any generic call. (Generic functions take no
-  named parameters.)
+  its type arguments as for any generic call. Named parameters and defaults
+  work in generic overloads too.
 - **Methods.** A class or interface may declare a method with several
   parameter lists, and a subclass may override one overload (with its
   list) and add others. A call takes the overload visible at the
@@ -294,7 +296,22 @@ Verse ch. 6): `Describe(X:int)`, `Describe(S:string)`, `Describe(X:int, Y:int)`.
 - **Qualified implementations** (#125). `(i:)M<override>(…)` implements
   the overload of `i`'s `M` with its parameter list (as an override takes
   its method's), and `X.(i:)M(…)` picks among `i`'s overloads.
-- **Not yet supported:** overloading `Main`.
+- **Constructors.** Constructor names may overload, including generic
+  constructors, defaults and delegation. The arguments select one overload.
+- **Entry point.** `Main` must have one definition under the OpenVerse CLI's
+  entry-point policy. This is separate from ordinary Verse overload rules.
+- **Measured gaps.** The [pinned conformance audit](research/overloading-conformance.md)
+  records reproducers, diagnostics, source rules and regression links:
+  - tuple/container distinctness is too conservative, while function/array
+    and function/map overloads are incorrectly accepted (#500);
+  - ordinary calls do not pack arguments into an explicit or generic tuple
+    parameter, generic array packing is incomplete, and an overloaded call
+    may select by arity before expanding a tuple argument (#501);
+  - generic upper bounds other than `type` and `subtype(comparable)` are
+    unsupported (#502);
+  - named-parameter function values and default-eliding adapters are
+    unsupported, although the pinned Book describes them (#503). This
+    differs from overloaded-name capture, which the Book forbids.
 
 ## Parametric structs
 
@@ -619,9 +636,10 @@ circle := class(shape, labelled):
   through a default `c2` gives one of `container`'s methods, which means
   in every class what it means in `c2`: its names, its parameters and
   their defaults, and `(super:)` resolve as in `c2`, whatever members the
-  class adds (only a method of `c2` used as a value, `H := F`, is refused
-  where the class overloads it); so may
-  one without type parameters (`intI := interface(container(int))`). A
+  class adds. An unambiguous method captured as a value in `c2` retains
+  that scope even when the class adds overloads. An interface without type
+  parameters may also extend an instantiated interface
+  (`intI := interface(container(int))`). A
   class may give the interfaces it lists any type arguments
   (`both(t, u) := class(container(t), sink(u))`, `c := class(i1(int),
   i2(string))`): a reference to an interface that a class gives type
@@ -1682,7 +1700,8 @@ Main()<suspends>:void =
 
 `ToString` of rationals (see [rational](#rational)), float functions beyond those of [float](#float),
 the class features listed under [Classes](#classes), struct methods (Verse structs have none; classes do),
-`weak_map`, module paths `using{/Verse.org/…}` (accepted and ignored), overloading beyond [Overloading](#overloading), nested
+`weak_map`, module paths `using{/Verse.org/…}` (accepted and ignored), the
+specific overload/call gaps listed under [Overloading](#overloading), nested
 functions and lambdas (not released in Verse), choice beyond [Choice](#choice) (recursive functions with several values that have effects, other than generators, methods with several values whose name an unrelated class shares), concurrency beyond [Concurrency](#concurrency), and effect checking
 other than `<decides>` and the heap effects (`<converges>` is accepted and
 ignored).

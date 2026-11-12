@@ -1,0 +1,5 @@
+pure 7 0
+rollback 0
+write 1
+live 42 1
+exit=0

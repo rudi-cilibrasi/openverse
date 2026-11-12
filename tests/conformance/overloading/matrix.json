@@ -1,0 +1,781 @@
+{
+  "reference": {
+    "book_commit": "beaa719ba165cbf33eff462f2b0fe078a6dd9ab0",
+    "openverse_baseline": "c34adb6571f0703555922c83bba0756d98f5ebfc",
+    "released_reference": {
+      "version": "UEFN 38.00",
+      "date": "2025-11-01",
+      "url": "https://dev.epicgames.com/documentation/fortnite/38-00-fortnite-ecosystem-updates-and-release-notes?lang=en-US",
+      "scope": "Published entity/agent subtype-overlap rule only; no engine execution."
+    },
+    "epic_engine_runs": false,
+    "book_release_status": "Development specification/test snapshot, not evidence of released-engine behavior."
+  },
+  "cases": [
+    {
+      "id": "overloading",
+      "path": "tests/verse/overloading.verse",
+      "classification": "supported",
+      "sources": [
+        "https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/docs/06_functions.md#overloading"
+      ],
+      "note": "Primitive/class/enum domains, different arities, failure and nested overloaded calls."
+    },
+    {
+      "id": "overloading_named",
+      "path": "tests/verse/overloading_named.verse",
+      "classification": "supported",
+      "sources": [
+        "https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/docs/06_functions.md#named-parameters"
+      ],
+      "note": "Required names distinguish overloads; explicit names and optional defaults select the implementation."
+    },
+    {
+      "id": "overloading_generic",
+      "path": "tests/verse/overloading_generic.verse",
+      "classification": "supported",
+      "sources": [
+        "https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/docs/06_functions.md#parametric-functions"
+      ],
+      "note": "OpenVerse selects generic and concrete overloads by declared arity; this alone does not establish general upstream packing behavior."
+    },
+    {
+      "id": "overloading_generic_nested",
+      "path": "tests/verse/overloading_generic_nested.verse",
+      "classification": "supported",
+      "sources": [
+        "https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/docs/06_functions.md#overloading"
+      ],
+      "note": "Nested generic overload calls."
+    },
+    {
+      "id": "overloading_generic_subtype",
+      "path": "tests/verse/overloading_generic_subtype.verse",
+      "classification": "supported",
+      "sources": [
+        "https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/docs/06_functions.md#type-constraints"
+      ],
+      "note": "Repeated generic parameters reconcile class subtyping; a non-generic position distinguishes overloads."
+    },
+    {
+      "id": "overload_audit_generic_named",
+      "path": "tests/verse/overload_audit_generic_named.verse",
+      "classification": "supported",
+      "sources": [
+        "https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/docs/06_functions.md#named-parameters"
+      ],
+      "note": "Generic overloads accept named arguments/defaults; stale documentation saying otherwise is removed."
+    },
+    {
+      "id": "overload_audit_comparable",
+      "path": "tests/verse/overload_audit_comparable.verse",
+      "classification": "supported",
+      "sources": [
+        "https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/docs/06_functions.md#type-constraints"
+      ],
+      "note": "Supported comparable upper bound in an overload."
+    },
+    {
+      "id": "tuple_args",
+      "path": "tests/verse/tuple_args.verse",
+      "classification": "supported",
+      "sources": [
+        "https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/docs/06_functions.md#flattening-and-unflattening"
+      ],
+      "note": "Ordinary tuple-to-many calls and concrete array packing; this does not cover overloaded adaptation."
+    },
+    {
+      "id": "fn_values_unflatten",
+      "path": "tests/verse/fn_values_unflatten.verse",
+      "classification": "supported",
+      "sources": [
+        "https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/docs/06_functions.md#flattening-and-unflattening"
+      ],
+      "note": "Function-value adapters pack tuples, including a generic tuple parameter; ordinary calls differ."
+    },
+    {
+      "id": "overload_audit_named_order",
+      "path": "tests/verse/overload_audit_named_order.verse",
+      "classification": "supported",
+      "sources": [
+        "https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/docs/06_functions.md#evaluation-order"
+      ],
+      "note": "Positional, explicitly named arguments as written, then two omitted defaults in declaration order; selected body only."
+    },
+    {
+      "id": "overload_audit_rollback",
+      "path": "tests/verse/overload_audit_rollback.verse",
+      "classification": "supported",
+      "sources": [
+        "https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/docs/06_functions.md#evaluation-order"
+      ],
+      "note": "The failed transaction rolls back arguments, defaults, body and suffix output/mutation; retry runs once."
+    },
+    {
+      "id": "overload_audit_candidate_effects",
+      "path": "tests/verse/overload_audit_candidate_effects.verse",
+      "classification": "supported",
+      "sources": [
+        "https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/docs/06_functions.md#effects"
+      ],
+      "note": "Discarded overload effects do not contaminate a computes call; the selected mutating overload rolls back on failure."
+    },
+    {
+      "id": "overload_audit_suspends",
+      "path": "tests/verse/overload_audit_suspends.verse",
+      "classification": "supported",
+      "sources": [
+        "https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/docs/06_functions.md#overloading-with-suspends"
+      ],
+      "note": "Immediate overload plus spawned/awaited suspending overload; cleanup follows its final output."
+    },
+    {
+      "id": "overloading_methods",
+      "path": "tests/verse/overloading_methods.verse",
+      "classification": "supported",
+      "sources": [
+        "https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/docs/06_functions.md#overloads-in-subclasses"
+      ],
+      "note": "Inheritance, override-one/add-another, super, interface dispatch and source receiver scope."
+    },
+    {
+      "id": "overloading_methods_permuted",
+      "path": "tests/verse/overloading_methods_permuted.verse",
+      "classification": "supported",
+      "sources": [
+        "https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/docs/06_functions.md#overloads-in-subclasses"
+      ],
+      "note": "Method overload declaration order permutation."
+    },
+    {
+      "id": "overloading_methods_permuted2",
+      "path": "tests/verse/overloading_methods_permuted2.verse",
+      "classification": "supported",
+      "sources": [
+        "https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/docs/06_functions.md#overloads-in-subclasses"
+      ],
+      "note": "Second method overload declaration order permutation."
+    },
+    {
+      "id": "iface_default_copies_overloads",
+      "path": "tests/verse/iface_default_copies_overloads.verse",
+      "classification": "supported",
+      "sources": [
+        "https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/docs/06_functions.md#interfaces-with-overloaded-methods"
+      ],
+      "note": "Both overloads of a transformed generic interface default reach the correct class implementation."
+    },
+    {
+      "id": "overload_audit_interface_value_scope",
+      "path": "tests/verse/overload_audit_interface_value_scope.verse",
+      "classification": "supported",
+      "sources": [
+        "https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/docs/06_functions.md#capture"
+      ],
+      "note": "An unambiguous method captured in the interface default scope remains valid when the implementing class adds an overload."
+    },
+    {
+      "id": "overloading_qualified",
+      "path": "tests/verse/overloading_qualified.verse",
+      "classification": "supported",
+      "sources": [
+        "https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/docs/06_functions.md#interfaces-with-overloaded-methods"
+      ],
+      "note": "Independent qualified interface implementations and calls; OpenVerse qualification syntax."
+    },
+    {
+      "id": "overloading_qualified_param",
+      "path": "tests/verse/overloading_qualified_param.verse",
+      "classification": "supported",
+      "sources": [
+        "https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/docs/06_functions.md#interfaces-with-overloaded-methods"
+      ],
+      "note": "Qualified implementations through a parametric interface."
+    },
+    {
+      "id": "overloading_qualified_mixed",
+      "path": "tests/verse/overloading_qualified_mixed.verse",
+      "classification": "supported",
+      "sources": [
+        "https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/docs/06_functions.md#interfaces-with-overloaded-methods"
+      ],
+      "note": "Qualified and unqualified implementations of different overload slots."
+    },
+    {
+      "id": "dispatch_defaults_overload",
+      "path": "tests/verse/dispatch_defaults_overload.verse",
+      "classification": "supported",
+      "sources": [
+        "https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/docs/06_functions.md#named-parameters"
+      ],
+      "note": "Defaults follow the selected override through a generic base receiver."
+    },
+    {
+      "id": "constructors_overloaded",
+      "path": "tests/verse/constructors_overloaded.verse",
+      "classification": "supported",
+      "sources": [
+        "https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/docs/06_functions.md#overloading"
+      ],
+      "note": "Constructor overload dispatch and delegation."
+    },
+    {
+      "id": "constructors_overloaded_defaults",
+      "path": "tests/verse/constructors_overloaded_defaults.verse",
+      "classification": "supported",
+      "sources": [
+        "https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/docs/06_functions.md#named-parameters"
+      ],
+      "note": "Constructor defaults keep lexical scope."
+    },
+    {
+      "id": "constructors_overloaded_generic3",
+      "path": "tests/verse/constructors_overloaded_generic3.verse",
+      "classification": "supported",
+      "sources": [
+        "https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/docs/06_functions.md#parametric-functions"
+      ],
+      "note": "Generic constructor overloads with renamed type parameters."
+    },
+    {
+      "id": "constructors_overloaded_effects",
+      "path": "tests/verse/constructors_overloaded_effects.verse",
+      "classification": "supported",
+      "sources": [
+        "https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/docs/06_functions.md#effects"
+      ],
+      "note": "Selected constructor effects; other overloads do not execute."
+    },
+    {
+      "id": "fuzz_3_overload_iface_vs_final",
+      "path": "tests/verse/fuzz_3_overload_iface_vs_final.verse",
+      "classification": "supported",
+      "sources": [
+        "https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/docs/06_functions.md#types"
+      ],
+      "note": "A final non-implementing class is distinct from an interface."
+    },
+    {
+      "id": "fuzz_3b_overload_parametric",
+      "path": "tests/verse/fuzz_3b_overload_parametric.verse",
+      "classification": "supported",
+      "sources": [
+        "https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/docs/06_functions.md#types"
+      ],
+      "note": "Distinct concrete arguments of one generic class distinguish overloads."
+    },
+    {
+      "id": "error_overload_same",
+      "path": "tests/errors/overload_same.verse",
+      "classification": "conforming-refusal",
+      "sources": [
+        "https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/docs/06_functions.md#overloading"
+      ],
+      "note": "Identical positional domains are ambiguous."
+    },
+    {
+      "id": "error_overload_arity",
+      "path": "tests/errors/overload_arity.verse",
+      "classification": "conforming-refusal",
+      "sources": [
+        "https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/docs/06_functions.md#overloading"
+      ],
+      "note": "No overload has the supplied arity."
+    },
+    {
+      "id": "error_overload_no_fit",
+      "path": "tests/errors/overload_no_fit.verse",
+      "classification": "conforming-refusal",
+      "sources": [
+        "https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/docs/06_functions.md#overloading"
+      ],
+      "note": "No overload accepts the supplied argument type."
+    },
+    {
+      "id": "error_overload_named_order",
+      "path": "tests/errors/overload_named_order.verse",
+      "classification": "conforming-refusal",
+      "sources": [
+        "https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/docs/06_functions.md#named-parameters"
+      ],
+      "note": "Permuting named parameters does not distinguish domains."
+    },
+    {
+      "id": "error_overload_named_default",
+      "path": "tests/errors/overload_named_default.verse",
+      "classification": "conforming-refusal",
+      "sources": [
+        "https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/docs/06_functions.md#named-parameters"
+      ],
+      "note": "Changing a default does not distinguish domains."
+    },
+    {
+      "id": "error_overload_named_optional",
+      "path": "tests/errors/overload_named_optional.verse",
+      "classification": "conforming-refusal",
+      "sources": [
+        "https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/docs/06_functions.md#named-parameters"
+      ],
+      "note": "An optional extra name overlaps the overload without it."
+    },
+    {
+      "id": "error_overload_named_missing",
+      "path": "tests/errors/overload_named_missing.verse",
+      "classification": "conforming-refusal",
+      "sources": [
+        "https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/docs/06_functions.md#named-parameters"
+      ],
+      "note": "A required named argument is missing."
+    },
+    {
+      "id": "error_overload_generic_overlap",
+      "path": "tests/errors/overload_generic_overlap.verse",
+      "classification": "conforming-refusal",
+      "sources": [
+        "https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/docs/06_functions.md#types"
+      ],
+      "note": "A bare generic parameter overlaps int."
+    },
+    {
+      "id": "error_overload_arrays",
+      "path": "tests/errors/overload_arrays.verse",
+      "classification": "conforming-refusal",
+      "sources": [
+        "https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/docs/06_functions.md#types"
+      ],
+      "note": "Different array element types share the empty array; string is []char."
+    },
+    {
+      "id": "error_overload_option_logic",
+      "path": "tests/errors/overload_option_logic.verse",
+      "classification": "conforming-refusal",
+      "sources": [
+        "https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/docs/06_functions.md#types"
+      ],
+      "note": "Option and logic share false."
+    },
+    {
+      "id": "error_overload_false_array",
+      "path": "tests/errors/overload_false_array.verse",
+      "classification": "conforming-refusal",
+      "sources": [
+        "https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/docs/06_functions.md#types"
+      ],
+      "note": "Array and logic share false."
+    },
+    {
+      "id": "error_overload_false_string",
+      "path": "tests/errors/overload_false_string.verse",
+      "classification": "conforming-refusal",
+      "sources": [
+        "https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/docs/06_functions.md#types"
+      ],
+      "note": "String and logic share false."
+    },
+    {
+      "id": "error_overload_iface",
+      "path": "tests/errors/overload_iface.verse",
+      "classification": "conforming-refusal",
+      "sources": [
+        "https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/docs/06_functions.md#types"
+      ],
+      "note": "Interface domains can overlap."
+    },
+    {
+      "id": "error_overload_class",
+      "path": "tests/errors/overload_class.verse",
+      "classification": "conforming-refusal",
+      "sources": [
+        "https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/docs/06_functions.md#types"
+      ],
+      "note": "An interface can overlap a non-final class."
+    },
+    {
+      "id": "error_overload_subclass",
+      "path": "tests/errors/overload_subclass.verse",
+      "classification": "conforming-refusal",
+      "sources": [
+        "https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/docs/06_functions.md#types"
+      ],
+      "note": "Related classes overlap: synthetic model of the entity/agent release-note rule, without SDK execution."
+    },
+    {
+      "id": "error_overload_parametric_iface",
+      "path": "tests/errors/overload_parametric_iface.verse",
+      "classification": "conforming-refusal",
+      "sources": [
+        "https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/docs/06_functions.md#types"
+      ],
+      "note": "Interface instances are conservatively overlapping."
+    },
+    {
+      "id": "error_overload_tuple_flat",
+      "path": "tests/errors/overload_tuple_flat.verse",
+      "classification": "conforming-refusal",
+      "sources": [
+        "https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/docs/06_functions.md#flattening-and-unflattening"
+      ],
+      "note": "An explicit tuple and the same flattened positional types cannot overload."
+    },
+    {
+      "id": "error_overload_effect_name",
+      "path": "tests/errors/overload_effect_name.verse",
+      "classification": "conforming-refusal",
+      "sources": [
+        "https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/docs/06_functions.md#effects"
+      ],
+      "note": "The selected overload requires writes; its caller cannot claim computes."
+    },
+    {
+      "id": "error_overload_audit_effects_only",
+      "path": "tests/errors/overload_audit_effects_only.verse",
+      "classification": "conforming-refusal",
+      "sources": [
+        "https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/docs/06_functions.md#effects"
+      ],
+      "note": "Function effects alone do not distinguish overloads."
+    },
+    {
+      "id": "error_overload_audit_function_domains",
+      "path": "tests/errors/overload_audit_function_domains.verse",
+      "classification": "conforming-refusal",
+      "sources": [
+        "https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/docs/06_functions.md#types"
+      ],
+      "note": "Different callback argument/result domains do not distinguish overloads."
+    },
+    {
+      "id": "error_overload_audit_suspends",
+      "path": "tests/errors/overload_audit_suspends.verse",
+      "classification": "conforming-refusal",
+      "sources": [
+        "https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/docs/06_functions.md#overloading-with-suspends"
+      ],
+      "note": "The selected suspending overload requires a suspending context or spawn."
+    },
+    {
+      "id": "error_overload_value",
+      "path": "tests/errors/overload_value.verse",
+      "classification": "conforming-refusal",
+      "sources": [
+        "https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/docs/06_functions.md#capture"
+      ],
+      "note": "An overloaded top-level name cannot be captured, even where a type could select it."
+    },
+    {
+      "id": "error_fn_value_method_overloaded",
+      "path": "tests/errors/fn_value_method_overloaded.verse",
+      "classification": "conforming-refusal",
+      "sources": [
+        "https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/docs/06_functions.md#capture"
+      ],
+      "note": "An overloaded method name cannot be captured."
+    },
+    {
+      "id": "error_ctor_overload_same",
+      "path": "tests/errors/ctor_overload_same.verse",
+      "classification": "conforming-refusal",
+      "sources": [
+        "https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/docs/06_functions.md#overloading"
+      ],
+      "note": "Overlapping constructor signatures are rejected."
+    },
+    {
+      "id": "error_method_overload_subclass",
+      "path": "tests/errors/method_overload_subclass.verse",
+      "classification": "conforming-refusal",
+      "sources": [
+        "https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/docs/06_functions.md#overloads-in-subclasses"
+      ],
+      "note": "A new overlapping inherited signature is not an exact override."
+    },
+    {
+      "id": "error_method_siblings_not_overloads",
+      "path": "tests/errors/method_siblings_not_overloads.verse",
+      "classification": "conforming-refusal",
+      "sources": [
+        "https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/docs/06_functions.md#overloads-in-subclasses"
+      ],
+      "note": "Methods in unrelated sibling receiver classes do not combine into an overload set."
+    },
+    {
+      "id": "error_overloading_qualified_nomatch",
+      "path": "tests/errors/overloading_qualified_nomatch.verse",
+      "classification": "conforming-refusal",
+      "sources": [
+        "https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/docs/06_functions.md#interfaces-with-overloaded-methods"
+      ],
+      "note": "Qualified calls cannot silently select a different interface slot."
+    },
+    {
+      "id": "error_overload_main",
+      "path": "tests/errors/overload_main.verse",
+      "classification": "intentional-restriction",
+      "sources": [
+        "https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/docs/06_functions.md#overloading"
+      ],
+      "note": "OpenVerse CLI entry selection requires one Main; this is an intentional entry-point policy, not a demonstrated Verse compatibility defect."
+    },
+    {
+      "id": "tuple_map",
+      "path": "tests/conformance/overloading/tuple_map.verse",
+      "classification": "known-gap",
+      "sources": [
+        "https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/docs/06_functions.md#types",
+        "https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/Tests/IndistinctOverloads.versetest"
+      ],
+      "basis": "explicit-book-example",
+      "issue": 500,
+      "expected": {
+        "exit": 0,
+        "stdout": ""
+      },
+      "observed": {
+        "exit": 4,
+        "diagnostic": "parameters a call cannot tell apart"
+      },
+      "expectation": "Admit tuple(a) versus [logic]a.",
+      "note": ""
+    },
+    {
+      "id": "tuple_option",
+      "path": "tests/conformance/overloading/tuple_option.verse",
+      "classification": "known-gap",
+      "sources": [
+        "https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/docs/06_functions.md#types",
+        "https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/Tests/IndistinctOverloads.versetest"
+      ],
+      "basis": "explicit-book-example",
+      "issue": 500,
+      "expected": {
+        "exit": 0,
+        "stdout": ""
+      },
+      "observed": {
+        "exit": 4,
+        "diagnostic": "parameters a call cannot tell apart"
+      },
+      "expectation": "Admit tuple(a) versus ?a when a is a class.",
+      "note": ""
+    },
+    {
+      "id": "tuple_array",
+      "path": "tests/conformance/overloading/tuple_array.verse",
+      "classification": "known-gap",
+      "sources": [
+        "https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/docs/06_functions.md#types",
+        "https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/Tests/IndistinctOverloads.versetest"
+      ],
+      "basis": "explicit-book-example",
+      "issue": 500,
+      "expected": {
+        "exit": 0,
+        "stdout": ""
+      },
+      "observed": {
+        "exit": 4,
+        "diagnostic": "parameters a call cannot tell apart"
+      },
+      "expectation": "Admit tuple(a,b) versus []a when a and b are unrelated classes.",
+      "note": ""
+    },
+    {
+      "id": "tuple_flat_disjoint",
+      "path": "tests/conformance/overloading/tuple_flat_disjoint.verse",
+      "classification": "known-gap",
+      "sources": [
+        "https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/docs/06_functions.md#flattening-and-unflattening"
+      ],
+      "basis": "inference-from-flattening-and-disjointness",
+      "issue": 500,
+      "expected": {
+        "exit": 0,
+        "stdout": "ints\n"
+      },
+      "observed": {
+        "exit": 4,
+        "diagnostic": "parameters a call cannot tell apart"
+      },
+      "expectation": "Admit an explicit tuple(int,int) overload alongside (string,string).",
+      "note": ""
+    },
+    {
+      "id": "function_array",
+      "path": "tests/conformance/overloading/function_array.verse",
+      "classification": "known-gap",
+      "sources": [
+        "https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/Tests/IndistinctOverloads.versetest"
+      ],
+      "basis": "explicit-upstream-test",
+      "issue": 500,
+      "expected": {
+        "exit": 4,
+        "diagnostic": "parameters a call cannot tell apart"
+      },
+      "observed": {
+        "exit": 0,
+        "stdout": "array\n"
+      },
+      "expectation": "Reject callable/container overload declarations as indistinct, before executing Main."
+    },
+    {
+      "id": "function_map",
+      "path": "tests/conformance/overloading/function_map.verse",
+      "classification": "known-gap",
+      "sources": [
+        "https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/Tests/IndistinctOverloads.versetest"
+      ],
+      "basis": "explicit-upstream-test",
+      "issue": 500,
+      "expected": {
+        "exit": 4,
+        "diagnostic": "parameters a call cannot tell apart"
+      },
+      "observed": {
+        "exit": 0,
+        "stdout": "map\n"
+      },
+      "expectation": "Reject callable/container overload declarations as indistinct, before executing Main."
+    },
+    {
+      "id": "single_tuple_call",
+      "path": "tests/conformance/overloading/single_tuple_call.verse",
+      "classification": "known-gap",
+      "sources": [
+        "https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/docs/06_functions.md#flattening-and-unflattening"
+      ],
+      "basis": "explicit-book-example",
+      "issue": 501,
+      "expected": {
+        "exit": 0,
+        "stdout": "value\n"
+      },
+      "observed": {
+        "exit": 4,
+        "diagnostic": "expected 1 argument(s), found 2"
+      },
+      "expectation": "Pack positional arguments into the explicit tuple parameter.",
+      "note": ""
+    },
+    {
+      "id": "empty_tuple_pack",
+      "path": "tests/conformance/overloading/empty_tuple_pack.verse",
+      "classification": "known-gap",
+      "sources": [
+        "https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/docs/06_functions.md#flattening-and-unflattening"
+      ],
+      "basis": "explicit-book-example",
+      "issue": 501,
+      "expected": {
+        "exit": 0,
+        "stdout": "7\n"
+      },
+      "observed": {
+        "exit": 4,
+        "diagnostic": "expected 1 argument(s), found 0"
+      },
+      "expectation": "Supply the empty tuple when called with no arguments.",
+      "note": ""
+    },
+    {
+      "id": "generic_tuple_pack",
+      "path": "tests/conformance/overloading/generic_tuple_pack.verse",
+      "classification": "known-gap",
+      "sources": [
+        "https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/docs/06_functions.md#parametric-functions"
+      ],
+      "basis": "explicit-book-example",
+      "issue": 501,
+      "expected": {
+        "exit": 0,
+        "stdout": "1 2\n"
+      },
+      "observed": {
+        "exit": 4,
+        "diagnostic": "Id takes 1 argument(s), found 2"
+      },
+      "expectation": "Infer t as tuple(int,int) from the expected result and packed arguments.",
+      "note": ""
+    },
+    {
+      "id": "generic_array_pack",
+      "path": "tests/conformance/overloading/generic_array_pack.verse",
+      "classification": "known-gap",
+      "sources": [
+        "https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/docs/06_functions.md#flattening-and-unflattening"
+      ],
+      "basis": "inference-from-array-packing-and-parametric-rules",
+      "issue": 501,
+      "expected": {
+        "exit": 0,
+        "stdout": "2\n"
+      },
+      "observed": {
+        "exit": 4,
+        "diagnostic": "Count takes 1 argument(s), found 2"
+      },
+      "expectation": "Pack positional values into a generic []t parameter.",
+      "note": ""
+    },
+    {
+      "id": "overloaded_tuple_unpack",
+      "path": "tests/conformance/overloading/overloaded_tuple_unpack.verse",
+      "classification": "known-gap",
+      "sources": [
+        "https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/docs/06_functions.md#flattening-and-unflattening"
+      ],
+      "basis": "inference-from-explicit-flattening-rule",
+      "issue": 501,
+      "expected": {
+        "exit": 0,
+        "stdout": "pair 1\ntwo 30\nstate 1\n"
+      },
+      "observed": {
+        "exit": 4,
+        "diagnostic": "expected string, found tuple(int, int)"
+      },
+      "expectation": "Unpack the argument tuple before choosing the two-int overload; evaluate its producer once.",
+      "note": ""
+    },
+    {
+      "id": "class_bound",
+      "path": "tests/conformance/overloading/class_bound.verse",
+      "classification": "known-gap",
+      "sources": [
+        "https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/docs/06_functions.md#type-constraints"
+      ],
+      "basis": "explicit-book-example",
+      "issue": 502,
+      "expected": {
+        "exit": 0,
+        "stdout": "2\n"
+      },
+      "observed": {
+        "exit": 4,
+        "diagnostic": "unknown constraint subtype(vehicle)"
+      },
+      "expectation": "Accept a class upper bound and preserve the exact car result subtype.",
+      "note": ""
+    },
+    {
+      "id": "named_capture",
+      "path": "tests/conformance/overloading/named_capture.verse",
+      "classification": "known-gap",
+      "sources": [
+        "https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/docs/06_functions.md#named-parameters"
+      ],
+      "basis": "explicit-book-example",
+      "issue": 503,
+      "expected": {
+        "exit": 0,
+        "stdout": "7\n"
+      },
+      "observed": {
+        "exit": 4,
+        "diagnostic": "has named parameters: such a function cannot be used as a value"
+      },
+      "expectation": "Adapt an optional-named function to a zero-argument function value, applying its default at call time.",
+      "note": ""
+    }
+  ]
+}

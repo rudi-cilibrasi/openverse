@@ -82,6 +82,7 @@ check() {
 check "class-feature fuzzing (${FUZZ_CLASSES:-200} programs)" scripts/fuzz-classes.sh "${FUZZ_CLASSES:-200}" "$seed"
 check "differential fuzzing (${FUZZ:-1000} random programs)" scripts/fuzz-diff.sh "${FUZZ:-1000}" "$seed"
 check "Verse test suite, Lean and C" scripts/test-verse.sh --c
+check "overloading conformance matrix" bash tests/scripts/test-overload-conformance.sh
 check "choice-free source profile" bash tests/scripts/test-choice-profile.sh
 check "small integer value sharing" bash tests/scripts/test-small-int-cache.sh
 check "empty collection value sharing" bash tests/scripts/test-empty-value-cache.sh
