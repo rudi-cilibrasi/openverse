@@ -1108,6 +1108,29 @@ partial def elabLoopGenGroupWith (elabE : Ctx → SExpr → Option Ty → EM R)
   -- (the continuation `base` with the frames `fs` pushed, innermost on top)
   let pushAll (fs : List Nat) (base : Expr) : Expr := fs.foldr (fun j acc =>
     framePush ctx lives j (((frames[j]?).map (·.lives)).getD [] |>.map (Expr.local ·.slot)) acc) base
+  -- (an alternative of member `i` in its leaf's context `ca`, with its frames
+  -- `fs`: its own frame's prefix, if any, before its arguments, in whose
+  -- context they are; and, a call of the group's function, the callee, the
+  -- arguments and where; a `$rec` of a continuation member is of the
+  -- function whose code it is)
+  let altOf (i : Nat) (ca : Ctx) (fs : List Nat) (a : SExpr) :
+      Ctx × Option LoopFrame × Option (Nat × List SExpr × Pos) :=
+    let fr? := fs.head?.bind (frames[·]?)
+    let actx : Ctx := match fr?.bind (·.pre), fr? with
+      | some _, some f => { f.ctx with canFail := true, inTaking := true }
+      | _, _ => { ca with canFail := true, inTaking := true }
+    (actx, fr?, match a with
+      | .app q (.ident _ "$rec") args' false => some (origin.getD i 0, args', q)
+      | .app q (.ident _ "$recTo") (.ident _ h :: args') false => (names.idxOf? h).map (·, args', q)
+      | _ => none)
+  -- (that call's arguments set into slots of their own for its parameters,
+  -- after the prefix)
+  let argsOf (actx : Ctx) (fr? : Option LoopFrame) (jm : Nat) (args' : List SExpr) (q : Pos) :
+      EM (List Nat × Expr) := do
+    let some (h, hpls, _, _) := ms[jm]? | eerr q "internal: a call in a group (#283)"
+    let ts ← hpls.mapM fun l => fresh l.ty
+    let assigns ← elabLoopArgsWith elabE actx q h args' hpls ts ((instances.lookup h).getD [])
+    return (ts, match fr?.bind (·.pre) with | some e => Expr.seq e assigns | none => assigns)
   -- (the alternatives, numbered across the members' branches)
   let mut offs : Array Nat := #[]
   let mut total : Nat := 0
@@ -1124,8 +1147,8 @@ partial def elabLoopGenGroupWith (elabE : Ctx → SExpr → Option Ty → EM R)
   let mut starts : Array Expr := #[]
   for ((rc, armCode, _), i) in infos.toList.zipIdx do
     let off := offs.getD i 0
-    let member := i < nSrc
-    if member then
+    let isFn := i < nSrc
+    if isFn then
       itemCode := .seq itemCode (.seq rc.e armCode.itemCode)
       let select := .seq armCode.select (.assign k (p2 .add (.local k) (.lit (.int (off : Nat)))))
       starts := starts.push (.ite (.seq rc.e select) vd (.seq (.assign k (.lit (.int (total : Nat)))) vd))
@@ -1134,25 +1157,14 @@ partial def elabLoopGenGroupWith (elabE : Ctx → SExpr → Option Ty → EM R)
     for (((ca, _), fl), first) in (armCode.arms.toList.zip armFlats).zip firsts do
       -- (a continuation member's leaf with one alternative runs where the
       -- member's code does, in its frame's application, `memberArm`)
-      let inline := !member && fl.length == 1
+      let inline := !isFn && fl.length == 1
       for ((a, fs), j) in fl.zipIdx do
         let gi := first + j
-        let actx : Ctx := { ca with canFail := true, inTaking := true }
         let next? : Option Nat := if j + 1 < fl.length then some (gi + 1) else none
         let cont : Expr := match next? with
           | some n => push (item (.lit (.int (n : Nat))) cur)
           | none => vd
-        -- (its own frame, if any, and its prefix: before the arguments, in
-        -- whose context they are)
-        let fr? := fs.head?.bind (frames[·]?)
-        let pre? := fr?.bind (·.pre)
-        let actx : Ctx := match pre?, fr? with
-          | some _, some f => { f.ctx with canFail := true, inTaking := true }
-          | _, _ => actx
-        let call? : Option (Nat × List SExpr × Pos) := match a with
-          | .app q (.ident _ "$rec") args' false => some (origin.getD i 0, args', q)
-          | .app q (.ident _ "$recTo") (.ident _ h :: args') false => (names.idxOf? h).map (·, args', q)
-          | _ => none
+        let (actx, fr?, call?) := altOf i ca fs a
         match call? with
         | some (jm, args', q) =>
           if argSet.isNone then
@@ -1160,10 +1172,7 @@ partial def elabLoopGenGroupWith (elabE : Ctx → SExpr → Option Ty → EM R)
               if Choice.anyE (fun | .set .. => true | _ => false) a' then some a'.pos else none
           if argSet.isNone then argSet := fr?.bind (·.preSet)
           if inline then continue
-          let some (h, hpls, _, _) := ms[jm]? | eerr q "internal: a call in a group (#283)"
-          let ts ← hpls.mapM fun l => fresh l.ty
-          let assigns ← elabLoopArgsWith elabE actx q h args' hpls ts ((instances.lookup h).getD [])
-          let assigns := match pre? with | some e => Expr.seq e assigns | none => assigns
+          let (ts, assigns) ← argsOf actx fr? jm args' q
           itemCode := .seq itemCode assigns
           let kE := kl?.bind fun kl => if fs.isEmpty then none else some (pushAll fs (.local kl.slot))
           alts := alts.push (gi, .ite assigns (.seq cont (push (startOf jm ts kE))) cont)
@@ -1202,23 +1211,12 @@ partial def elabLoopGenGroupWith (elabE : Ctx → SExpr → Option Ty → EM R)
     for ((ca, _), fl) in mcode.arms.toList.zip armFlats do
       let code ← match fl with
         | [(a, fs)] => do
-          let actx : Ctx := { ca with canFail := true, inTaking := true }
-          let fr? := fs.head?.bind (frames[·]?)
-          let pre? := fr?.bind (·.pre)
-          let actx : Ctx := match pre?, fr? with
-            | some _, some f => { f.ctx with canFail := true, inTaking := true }
-            | _, _ => actx
-          match a with
-          | .app q (.ident _ "$rec") args' false | .app q (.ident _ "$recTo") (_ :: args') false =>
-            let jm := match a with
-              | .app _ (.ident _ "$recTo") (.ident _ h :: _) false => (names.idxOf? h).getD 0
-              | _ => origin.getD mi 0
-            let some (h, hpls, _, _) := ms[jm]? | eerr q "internal: a call in a group (#283)"
-            let ts ← hpls.mapM fun l => fresh l.ty
-            let assigns ← elabLoopArgsWith elabE actx q h args' hpls ts ((instances.lookup h).getD [])
-            let assigns := match pre? with | some e => Expr.seq e assigns | none => assigns
+          let (actx, fr?, call?) := altOf mi ca fs a
+          match call? with
+          | some (jm, args', q) =>
+            let (ts, assigns) ← argsOf actx fr? jm args' q
             pure (Expr.seq assigns (stop (startOf jm ts (some (pushAll fs (.local kk))))))
-          | _ =>
+          | none =>
             let r ← elabE actx a (some rty)
             let e ← coerce a.pos r rty
             pure (Expr.seq (.assign v e) (.seq (.assign kk (pushAll fs (.local kk))) restore))
