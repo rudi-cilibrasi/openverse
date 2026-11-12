@@ -144,4 +144,59 @@ def Plan.nominals : Plan → List (String × String)
   | .compose outer inner => (outer.nominals ++ inner.nominals).eraseDups
   | _ => []
 
+/-- Physical frame layout shared by checking, call emission and body
+    elaboration. Evidence arguments precede all type-value witnesses, so the
+    latter keep a contiguous range even when some come from the receiver.
+    Receiver evidence follows that range and is initialized from fields. -/
+structure Frame where
+  explicit : List Ty
+  params : List (String × Bool)
+  selfParams : List String := []
+  bounds : List Bound := []
+  /-- Constraint index and the receiver field holding its dictionary. -/
+  selfBounds : List (Nat × Nat) := []
+
+def Frame.callBounds (frame : Frame) : List (Nat × Bound) :=
+  frame.bounds.zipIdx.filterMap fun (bound, index) =>
+    if (frame.selfBounds.lookup index).isSome then none else some (index, bound)
+
+def Frame.receiverBounds (frame : Frame) : List (Nat × Bound × Nat) :=
+  frame.bounds.zipIdx.filterMap fun (bound, index) =>
+    (frame.selfBounds.lookup index).map fun field => (index, bound, field)
+
+def Frame.orderedParams (frame : Frame) : List (String × Bool) :=
+  frame.params.filter (fun (name, _) => !frame.selfParams.contains name) ++
+    frame.params.filter (fun (name, _) => frame.selfParams.contains name)
+
+def Frame.witnessBase (frame : Frame) : Nat := frame.explicit.length + frame.callBounds.length
+
+def Frame.hiddenTypes (frame : Frame) : List Ty :=
+  frame.callBounds.map (fun (_, bound) => bound.ty) ++
+    frame.orderedParams.map (fun (name, comparable) => Ty.param name comparable) ++
+    frame.receiverBounds.map (fun (_, bound, _) => bound.ty)
+
+def Frame.arity (frame : Frame) : Nat :=
+  frame.witnessBase + (frame.params.filter fun (name, _) => !frame.selfParams.contains name).length
+
+def Frame.argumentTypes (frame : Frame) : List Ty :=
+  (frame.explicit ++ frame.hiddenTypes).take frame.arity
+
+/-- Constraint indices retain their identity when fields supply a subset.
+    A generated helper can capture these typed lexical values independently
+    of its own frame's hidden argument ordering. -/
+def Frame.evidence (frame : Frame) : List (Nat × Bound × Nat) :=
+  frame.callBounds.zipIdx.map (fun ((index, bound), i) =>
+    (index, bound, frame.explicit.length + i)) ++
+  frame.receiverBounds.zipIdx.map (fun ((index, bound, _), i) =>
+    (index, bound, frame.witnessBase + frame.params.length + i))
+
+def Frame.receiverFields (frame : Frame) : List Nat := frame.receiverBounds.map (·.2.2)
+
+def Frame.valid (frame : Frame) : Bool :=
+  (frame.params.map (·.1)).eraseDups.length == frame.params.length &&
+    frame.selfParams.eraseDups.length == frame.selfParams.length &&
+    frame.selfParams.all (fun name => frame.params.any (·.1 == name)) &&
+    (frame.selfBounds.map (·.1)).eraseDups.length == frame.selfBounds.length &&
+    frame.selfBounds.all (fun (index, _) => index < frame.bounds.length)
+
 end OpenVerse.Front.SubtypeEvidence

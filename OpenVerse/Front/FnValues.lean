@@ -446,7 +446,7 @@ def desugar (tops : List STop) (extra : List STop := []) (requests : List (Strin
             -- caller substitutes: its `u` may be a different method's `u`.
             let names := mtps.zipIdx.map fun (tp, i) => (tp.name, s!"$methodValue_{c}_{m}_{i}")
             let σ := names.map fun (a, b) => (a, STy.name b)
-            some (mp, c, tps, mtps.map (fun tp => { tp with name := (names.lookup tp.name).getD tp.name }), m,
+            some (mp, c, tps, mtps.map (·.rename names), m,
               ps.map (fun sp => { sp with ty := sp.ty.substNames σ }), effs, r.substNames σ)
           else none
         | _ => none

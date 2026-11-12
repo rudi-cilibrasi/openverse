@@ -28,6 +28,51 @@ private def env : TyEnv := {
 
 private def pos : Pos := { line := 1, col := 1, file := "subtype-evidence.verse" }
 
+private partial def protocolParams (body : SExpr) : List TParam :=
+  let own := match body with
+    | .app _ (.ident _ marker) args false =>
+      if ["$tparams", "$params", "$defaults"].contains marker then
+        let offset := if marker == "$tparams" then 1 else 2
+        (args.drop offset).filterMap fun arg => (TParam.ofMarker arg).toOption
+      else []
+    | _ => []
+  own ++ body.children.flatMap protocolParams
+
+private def metadataContracts : IO Unit := do
+  let source := "M:=module:\n    vehicle(t:type):=class<computes>{Value:t}\n    F(X:u where t:type,u:subtype(vehicle(t))):u=X\n    packet(t:type,u:subtype(vehicle(t))):=struct{Value:u}\n    boxed(t:type,u:subtype(vehicle(t))):=class{Value:u}\nMain():void={}"
+  let parsed ← getOK "parse bound metadata" (parseProgram source)
+  let resolved ← getOK "resolve bound metadata" (resolveModules parsed)
+  for name in ["M::F", "M::packet", "M::boxed"] do
+    let params ← getSome s!"missing bound declaration {name}" (resolved.findSome? fun
+      | .fn _ n _ tps .. | .classDef _ n tps .. => if n == name then some tps else none
+      | .const _ n _ (.structDef _ tps _ _) => if n == name then some tps else none
+      | _ => none)
+    let bound ← getSome s!"missing bound in {name}" ((params.find? (·.name == "u")).bind (·.upperBound))
+    need s!"qualified parametric bound lost in {name}"
+      (reprStr bound == reprStr (STy.app "M::vehicle" [.name "t"]))
+  let parameter := TParam.withUpperBound pos "u" (.app "vehicle" [.name "t"])
+  let renamed := parameter.rename [("u", "$result"), ("t", "$element")]
+  let decoded ← getOK "bound marker round trip" (TParam.ofMarker (renamed.marker pos))
+  need "bound marker retains dependent type" (decoded.name == "$result" &&
+    reprStr decoded.upperBound == reprStr (some (STy.app "vehicle" [.name "$element"])))
+  need "type metadata creates no lexical binding" ((Choice.localsOf (renamed.marker pos)).isEmpty)
+  need "malformed bound marker refused"
+    ((TParam.ofMarker (.tuple pos [.ident pos "u", .ident pos "vehicle", .int pos 7])).toOption.isNone)
+  let source := "vehicle(t:type):=class<computes>{Value:t}\ncar:=class<computes>(vehicle(int)){}\nF(X:u,?Y:u=X where t:type,u:subtype(vehicle(t)))<computes>:u=X|Y\nMain():void=for(X:=F(car{})):Print(\"ok\")"
+  let parsed ← getOK "parse inlined bound metadata" (parseProgram source)
+  let (inlined, _) ← getOK "inline bound metadata" (Choice.inlineMulti parsed [])
+  let constraints := inlined.flatMap fun
+    | .fn _ _ _ _ _ _ body | .const _ _ _ body => protocolParams body
+    | _ => []
+  let bounded := constraints.filter (·.upperBound.isSome)
+  need "inlining retains bounds" (!bounded.isEmpty)
+  for bound in bounded do
+    match bound.upperBound with
+    | some (.app "vehicle" [.name element]) =>
+      need "inlining renames peer parameter in the bound" (element.startsWith "$tp" &&
+        constraints.any (fun parameter => parameter.name == element && parameter.constraint == "type"))
+    | _ => throw (IO.userError s!"inlining lost the bound type: {reprStr bound}")
+
 private def rewrite (replacements : List (String × SExpr)) (body : SExpr) : Except String SExpr := do
   let rename (name : String) := if name == "evidence" then family else name
   let r : Resolver := {
@@ -88,7 +133,51 @@ Main():void=
 
 private def trace := "speed 9\nname precise\nspeed 9\nescape precise\npoly 1\ncomposed 9\nidentity 7\n"
 
+/-- Run implicit call binding against a real checked callee, then move both
+    evidence and its type witness to different slots in a new generic frame.
+    Reroute all original calls through that frame and recheck the full program. -/
+private def relocate (compiled : Compiled) : IO Compiled := do
+  let index ← getSome "missing Process" (compiled.prog.fns.findIdx? (·.name == "Process"))
+  let caller := Ty.param "caller" false
+  let required := Bound.mk (.struct "vehicle" []) caller
+  let localTypes := [caller, required.ty, caller, Ty.int, required.ty, caller]
+  let types := { env with tvars := [("caller", caller)] }
+  let sig : Sig := {
+    idx := index, name := "Process", params := [.param "t" false], ret := .param "t" false,
+    decides := false, isConst := false, pnames := ["X"], tparams := [("t", false)], fx := [],
+    bounds := [⟨.struct "vehicle" [], .param "t" false⟩] }
+  let ctx : Ctx := {
+    sigs := [sig], sigProg := compiled.prog, types, dictBase := 5, dictVars := ["caller"],
+    locals := [{ name := "X", slot := 0, ty := caller, mutable := false },
+      { name := "CurrentEvidence", slot := 4, ty := required.ty, mutable := false }] }
+  let state : ESt := { env := types, nslots := 6, slotTys := localTypes.toArray }
+  let (result, state) ← getOK "implicit evidence call"
+    ((elabGenericCallWith elabE ctx pos sig [.ident pos "X"] none).run state)
+  need "implicit evidence call result remains opaque" (result.ty == caller)
+  need "implicit call needs no new slot" (state.nslots == 6)
+  let badCtx := { ctx with locals := ctx.locals.take 1 }
+  match (elabGenericCallWith elabE badCtx pos sig [.ident pos "X"] none).run state with
+  | .error message => need "missing implicit evidence refused" ((message.splitOn "does not satisfy subtype").length > 1)
+  | .ok _ => throw (IO.userError "implicit call accepted a missing dictionary")
+  let wrapperIndex := compiled.prog.fns.length
+  let wrapper : Fn := {
+    name := "$relocatedSubtypeFrame", arity := 3, nslots := 6, decides := false, writes := false,
+    body := .seq (.assign 3 (.lit (.int 0)))
+      (.seq (.assign 4 (.local 1)) (.seq (.assign 5 (.local 2)) result.e)) }
+  let fns := compiled.prog.fns.map fun fn =>
+    { fn with body := Suspend.substCall index (fun args => .call wrapperIndex args) fn.body }
+  let (params, ret) := compiled.sigs.fns[index]!
+  let relocated := { compiled with
+    prog := { compiled.prog with fns := fns ++ [wrapper] },
+    sigs := { compiled.sigs with fns := compiled.sigs.fns ++ [(params, ret)] },
+    slotTys := compiled.slotTys ++ [params ++ [.int, params[1]!, params[2]!]] }
+  need "relocated generic call passes Core admission"
+    (relocated.prog.check && relocated.prog.checkControl &&
+      relocated.prog.checkTypes relocated.sigs relocated.slotTys)
+  return relocated
+
 def main (args : List String) : IO Unit := do
+  metadataContracts
   let vehicle := Ty.struct "vehicle" []
   let car := Ty.struct "car" []
   let node := Ty.struct "node" [.int]
@@ -116,6 +205,16 @@ def main (args : List String) : IO Unit := do
   need "nominal/dependent composition validates" (projected.valid env nominalPrefix)
   need "compound constraint survives substitution"
     ((Bound.mk vehicle t).subst [("t", .tup [.int, .logic])] == ⟨vehicle, .tup [.int, .logic]⟩)
+  let frame : Frame := {
+    explicit := [.int], params := [("t", false), ("u", false), ("v", false)],
+    selfParams := ["u"], bounds := [⟨vehicle, t⟩, ⟨u, v⟩], selfBounds := [(1, 9)] }
+  need "mixed receiver/caller frame validates" frame.valid
+  need "type witnesses stay contiguous" (frame.witnessBase == 2 &&
+    frame.orderedParams.map (·.1) == ["t", "v", "u"] && frame.arity == 4)
+  need "caller evidence is before type witnesses" (frame.argumentTypes == [.int, (Bound.mk vehicle t).ty, t, v])
+  need "receiver evidence initializes after type witnesses" (frame.evidence ==
+    [(0, ⟨vehicle, t⟩, 1), (1, ⟨u, v⟩, 5)] && frame.receiverFields == [9])
+  need "invalid receiver constraint index refused" (!({ frame with selfBounds := [(2, 9)] } : Frame).valid)
   let combined := Plan.compose carPlan (.identity car)
   need "one family across closed instances" ((Plan.compose
     (.nominal "node" "vehicle" [.int]) (.identity node)).nominals ==
@@ -137,6 +236,11 @@ def main (args : List String) : IO Unit := do
   | .res (.ok _, output) =>
     need "independent dictionary trace" (ByteArray.mk (output.map Nat.toUInt8).toArray == trace.toUTF8)
   | other => throw (IO.userError s!"dictionary execution failed: {reprStr other}")
+  let relocated ← relocate compiled
+  match relocated.prog.runB 1000000 10000 with
+  | .res (.ok _, output) =>
+    need "relocated evidence/witness trace" (ByteArray.mk (output.map Nat.toUInt8).toArray == trace.toUTF8)
+  | other => throw (IO.userError s!"relocated dictionary execution failed: {reprStr other}")
   -- Even a malformed compiler-supplied plan cannot bypass ordinary Core
   -- typing. This calls the real generated Up method at incompatible types.
   let bad := (Plan.compose carPlan (.identity .int)).value env pos
@@ -149,4 +253,6 @@ def main (args : List String) : IO Unit := do
   if let [out] := args then
     IO.FS.writeBinFile (out ++ "/evidence.vbc") compiled.prog.encode
     IO.FS.writeFile (out ++ "/evidence.expected") trace
+    IO.FS.writeBinFile (out ++ "/relocated.vbc") relocated.prog.encode
+    IO.FS.writeFile (out ++ "/relocated.expected") trace
   IO.println "subtype dictionary contracts passed (checked Core, precise/escaping results, polymorphic recursion, dependent composition)"

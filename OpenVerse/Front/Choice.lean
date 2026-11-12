@@ -1571,15 +1571,15 @@ partial def inlineCalls (mv : List (String × MFn)) (e : SExpr) (recs : List Str
     -- site too, #283: a body inlined twice has its dispatch twice)
     let tpNames : List String := tmpl.flatMap fun
       | .app _ (.ident _ "$tparams") (_ :: tps) false => tps.filterMap fun
-          | .tuple _ [.ident _ n, _] => some n
-          | _ => none
+          marker => (TParam.ofMarker marker).toOption.map (·.name)
       | _ => []
     let ρt := tpNames.map fun n => (n, s!"{n}s{site}")
     let renTps : SExpr → SExpr
       | .app q (.ident q2 "$tparams") (fnm :: tps) false =>
         .app q (.ident q2 "$tparams") (fnm :: tps.map fun
-          | .tuple q3 [.ident q4 n, c] => .tuple q3 [.ident q4 ((ρt.lookup n).getD n), c]
-          | t => t) false
+          marker => match TParam.ofMarker marker with
+            | .ok tp => (tp.rename ρt).marker marker.pos
+            | .error _ => marker) false
       | x => renameTypes ρt x
     let tmpl := if ρt.isEmpty then tmpl else tmpl.map renTps
     let tmpl' ← (tmpl.map (renameE ren)).mapM go
@@ -1693,7 +1693,7 @@ partial def inlineCalls (mv : List (String × MFn)) (e : SExpr) (recs : List Str
       let tyOf (t : STy) : Option STy := some (styRename ρ t)
       let tmark : List SExpr := (if ρ.isEmpty then [] else
         [.app q (.ident q "$tparams") (.ident q g :: (ρ.zip f.tparams).map fun ((_, n), tp) =>
-          SExpr.tuple q [.ident q n, .ident q tp.constraint]) false]) ++
+          ({ tp.rename ρ with name := n } : TParam).marker q) false]) ++
         -- (the names its body uses from outside, checked not in scope here)
         (match clash.lookup g with
          | some us => [.app q (.ident q "$freeNames") (.ident q g :: us.map (SExpr.ident q ·)) false]
@@ -1720,7 +1720,7 @@ partial def inlineCalls (mv : List (String × MFn)) (e : SExpr) (recs : List Str
       -- argument, as at a call, #392's review)
       let dflts : List SExpr := if ρ.isEmpty || !hasNamed then dflts else
         [.app q (.ident q "$defaults") (.block q dflts :: .ident q g :: (ρ.zip f.tparams).map fun ((_, n), tp) =>
-          SExpr.tuple q [.ident q n, .ident q tp.constraint]) false]
+          ({ tp.rename ρ with name := n } : TParam).marker q) false]
       let (pds, unpack, as'') : List SExpr × List SExpr × List SExpr :=
         if tupleNamed then
           let t := tag "$tuple"
@@ -2319,7 +2319,7 @@ partial def rwFamCalls (anc : String → List String) (fams : List (String × MF
       -- as a value would be taken for)
       let head : List SExpr := if tps.isEmpty then recvB :: binds else
         .app p (.ident p "$tparams") (.ident p (shownFnName (methodFnName f.root m)) ::
-          tps.map fun tp => .tuple p [.ident p (tpN tp.name), .ident p tp.constraint]) false :: recvB :: binds
+          tps.map fun tp => (tp.rename σn).marker p) false :: recvB :: binds
       -- A refining implementation must keep its cast with its body. Most
       -- specific classes win before interface defaults, as ordinary dispatch
       -- does. A marked cast lets typing discard statically impossible cases.

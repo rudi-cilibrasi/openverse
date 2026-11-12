@@ -137,10 +137,25 @@ structure Sig where
       defaults resolve in, when not the one its name says: a class's copy of
       an interface's default, the interface (#53, `copyScope?`). -/
   scope : Option String := none
+  /-- Required checked upcast dictionaries, preserving both sides when an
+      adapter substitutes a parameter by a compound type. -/
+  bounds : List SubtypeEvidence.Bound := []
+  /-- Evidence recovered from the receiver: constraint index and field. -/
+  selfBounds : List (Nat × Nat) := []
   deriving Inhabited
 
-/-- How many hidden parameters (values of type arguments) a function takes. -/
-def Sig.ndicts (s : Sig) : Nat := s.tparams.length - s.selfTps.length
+def Sig.frame (s : Sig) : SubtypeEvidence.Frame :=
+  { explicit := s.params, params := s.tparams, selfParams := s.selfTps,
+    bounds := s.bounds, selfBounds := s.selfBounds }
+
+/-- Hidden evidence and type-value arguments supplied by a caller. -/
+def Sig.ndicts (s : Sig) : Nat := s.frame.arity - s.params.length
+
+def Sig.evidenceName (s : Sig) (index : Nat) : String := s!"$subtype_{s.name}_{index}"
+
+def Sig.evidenceLocals (s : Sig) : List Local :=
+  s.frame.evidence.map fun (index, bound, slot) =>
+    { name := s.evidenceName index, slot, ty := bound.ty, mutable := false }
 
 /-- The implicit receiver, distinguished from an ordinary parameter that a
     source function happens to name Self. Extracted methods use $Self. -/
@@ -4200,6 +4215,15 @@ partial def elabGenericCallWith (elabE : Ctx → SExpr → Option Ty → EM R) (
     if cmp && !valueCall && !t.comparable ctx.types then
       eerr p (notComparable ctx.types t s!"type parameter {v} of {s.name}")
     targs := targs.push t
+  -- Prove every relation at this call's actual types. Keep evidence in
+  -- lexical form until ordinary elaboration resolves the current frame.
+  let evidencePlans ← s.frame.callBounds.mapM fun (_, required) => do
+    let required := required.subst σ
+    let locals := ctx.locals.map fun binding => (binding.name, binding.ty)
+    let some plan := SubtypeEvidence.find? ctx.types locals required
+      | eerr p s!"type {required.derived.show} does not satisfy subtype({required.base.show}) in a call of {s.name}"
+    if !plan.valid ctx.types locals then eerr p "internal: invalid subtype evidence plan"
+    return (required, plan)
   -- A lazy recursive edge needs the ordinary call's arguments/defaults,
   -- evaluated once in order, before pushing its next producer item.
   if ctx.typeOnly && ctx.callInstanceProbe == some s.name then
@@ -4219,8 +4243,10 @@ partial def elabGenericCallWith (elabE : Ctx → SExpr → Option Ty → EM R) (
       if t.params.any (·.startsWith "$ext") then
         eerr p s!"cannot call {s.name} here yet: its type parameter {v} would mention type arguments that the dispatch opens, apart from the caller's, and no value of those can be passed (#209)"
       witness ctx.types ctx.dictBase ctx.dictVars t
-  if plain then return ⟨.call s.idx (es.toList ++ dicts), s.ret.subst σ⟩
-  let call := Expr.call s.idx (slots.toList.map (fun o => Expr.local o.get!) ++ dicts)
+  let evidence ← evidencePlans.mapM fun (required, plan) => do
+    coerce p (← elabE ctx (plan.value ctx.types p) (some required.ty)) required.ty
+  if plain then return ⟨.call s.idx (es.toList ++ evidence ++ dicts), s.ret.subst σ⟩
+  let call := Expr.call s.idx (slots.toList.map (fun o => Expr.local o.get!) ++ evidence ++ dicts)
   return ⟨steps.toList.foldr Expr.seq call, s.ret.subst σ⟩
 
 /-- Bind a recursive edge at the producer's current parameter instance.
@@ -6494,9 +6520,14 @@ partial def elabStmt (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM (R × Ctx) 
       -- mentions are bound, else inferring them; `false`, `array{}` and
       -- `map{}` last), then named for the written types after
       let fname := match tps with | .ident _ f :: _ => f | _ => ""
-      let cons : List (String × String) := tps.drop 1 |>.filterMap fun
-        | .tuple _ [.ident _ n, .ident _ c] => some (n, c)
-        | _ => none
+      let parameters ← (tps.drop 1).mapM fun marker => do
+        match TParam.ofMarker marker with
+        | .ok tp => pure tp
+        | .error message => throw message
+      match UpperBounds.checkParams parameters with
+      | .error message => throw message
+      | .ok _ => pure ()
+      let cons := parameters.map fun tp => (tp.name, tp.constraint)
       let names := cons.map (·.1)
       -- (as messages show them: the type parameters' own names)
       let shown (t : Ty) : String :=
@@ -6550,9 +6581,14 @@ partial def elabStmt (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM (R × Ctx) 
       -- parameter nothing else determined, giving it its type argument;
       -- then every type parameter must have one
       let fname := Choice.shownFnName (match tps with | .ident _ f :: _ => f | _ => "")
-      let cons : List (String × String) := tps.drop 1 |>.filterMap fun
-        | .tuple _ [.ident _ n, .ident _ c] => some (n, c)
-        | _ => none
+      let parameters ← (tps.drop 1).mapM fun marker => do
+        match TParam.ofMarker marker with
+        | .ok tp => pure tp
+        | .error message => throw message
+      match UpperBounds.checkParams parameters with
+      | .error message => throw message
+      | .ok _ => pure ()
+      let cons := parameters.map fun tp => (tp.name, tp.constraint)
       let shownTp (n : String) : String := ((n.dropWhile (· != '_')).drop 1).toString
       let open_ := cons.filter fun (n, _) => (ctx.types.tvars.lookup n).isNone
       let names := open_.map (·.1)
@@ -10309,7 +10345,7 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
       | some sg =>
         let dictTps := sg.tparams.filter (fun (v, _) => !sg.selfTps.contains v) ++
           sg.tparams.filter (fun (v, _) => sg.selfTps.contains v)
-        sg.tparams.filterMap fun (v, _) => (dictTps.findIdx? (·.1 == v)).map (fns[gi]!.arity - sg.ndicts + ·)
+        sg.tparams.filterMap fun (v, _) => (dictTps.findIdx? (·.1 == v)).map (sg.frame.witnessBase + ·)
       | none => []
     let (body, acc) := (Suspend.liftChains spawnMark dispBase witnesses fns[gi]!.body).run lifted
     -- (every spawn is now of a call, which `spawnSites` finds: its task's
@@ -12659,7 +12695,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     | _ => pure ()
   let mkSigProg (sigs : Array Sig) : Prog :=
     { fns := (sigs ++ gsigs).toList.map fun s =>
-        { name := s.name, arity := s.params.length + s.ndicts, nslots := 0,
+        { name := s.name, arity := s.frame.arity, nslots := 0,
           decides := s.decides, writes := s.fx.contains "writes", body := .lit .void },
       main := 0 }
   -- infer the types of unannotated constants: in order, in rounds, so that a
@@ -12741,9 +12777,10 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
           let g := gsigs[gi]!
           let locals := (ps.zip (List.range ps.length)).zip g.params |>.map fun ((prm, i), t) =>
             ({ name := prm.name, slot := i, ty := t, mutable := false } : Local)
+          let locals := locals ++ g.evidenceLocals
           let dictTps := g.tparams.filter (fun (v, _) => !g.selfTps.contains v) ++
             g.tparams.filter (fun (v, _) => g.selfTps.contains v)
-          let hidden := dictTps.map fun (v, c) => Ty.param v c
+          let hidden := g.frame.hiddenTypes
           let lifted := opts.castRequests.find? (·.name == n)
           let selfField (v : String) := match lifted with
             | some l => (l.opened.lookup v).bind (env.witnessField? l.target ·)
@@ -12751,7 +12788,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
           let genv := { env with tvars := g.tparams.map fun (v, c) => (v, Ty.param v c), dictOrder := dictTps.map (·.1), selfWitness := g.selfTps.map fun v => (v, (selfField v).getD 0) }
           let base : Ctx := { sigs := sigs.toList ++ gsigs.toList, sigProg := mkSigProg sigs, types := genv,
                               locals := locals.reverse, retTy := g.ret, canFail := g.decides, suspends := g.suspends,
-                              dictBase := ps.length, dictVars := dictTps.map (·.1), fnFx := g.fx }
+                              dictBase := g.frame.witnessBase, dictVars := dictTps.map (·.1), fnFx := g.fx }
           let ctx ← functionBodyCtx opts base p n g.tparams g.scope
           match elabBodyOv ctx body (some g.ret)
               { env := genv, nslots := ps.length + hidden.length, slotTys := (g.params ++ hidden).toArray, frameSlots := ctx.locals.filterMap fun l => l.storage.map (l.slot, ·) } with
@@ -12953,13 +12990,18 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   let elabFn (env : TyEnv) (p : Pos) (name : String) (ps : List SParam) (ptys : List Ty) (ret : Ty)
       (decides : Bool) (allowed : List String) (tps : List (String × Bool)) (body : SExpr)
       (suspends : Bool := false) (selfTps : List String := [])
-      (selfFieldOf : Option (String → Option Nat) := none) (scopeClass : Option String := none) :
+      (selfFieldOf : Option (String → Option Nat) := none) (scopeClass : Option String := none)
+      (evidenceSignature : Option Sig := none) :
       Except String (Fn × List VTy × List (String × Ty) × Option Pos × List Refine.Lift × List LoopUse × FrameRefs.Info × List String × List FnValues.MethodRequest) := do
     -- (#209) the values of `selfTps` come from the receiver's hidden
     -- fields, in slots after the hidden parameters: a method's own class's
     -- (`C.M`), or as `selfFieldOf` says (a cast's branch, #250, the cast
     -- target's, of the object, its first parameter too)
-    let dictTps := tps.filter (fun (v, _) => !selfTps.contains v) ++ tps.filter (fun (v, _) => selfTps.contains v)
+    let signature := evidenceSignature.getD {
+      idx := 0, name, params := ptys, ret, decides, isConst := false, tparams := tps, selfTps }
+    let frame := signature.frame
+    if !frame.valid then throw s!"{p.show}: internal: invalid generic evidence frame for {name}"
+    let dictTps := frame.orderedParams
     let selfCls := (name.splitOn ".").headD ""
     let selfField (v : String) : Nat :=
       ((selfFieldOf.getD fun v => env.witnessField? selfCls v) v).getD 0
@@ -12973,6 +13015,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
                  selfWitness := selfTps.map fun v => (v, selfField v) }
     let locals := ((ps.zip (List.range ps.length)).zip ptys).map fun ((prm, i), t) =>
       ({ name := prm.name, slot := i, ty := t, mutable := false } : Local)
+    let locals := locals ++ signature.evidenceLocals
     for (prm, i) in ps.zip (List.range ps.length) do
       if ps.take i |>.any (·.name == prm.name) then throw s!"{p.show}: duplicate parameter '{prm.name}'"
     let base : Ctx := {
@@ -12983,13 +13026,13 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       fnFx := allowed
       canFail := decides
       retTy := ret
-      dictBase := ps.length
+      dictBase := frame.witnessBase
       suspends := suspends
       dictVars := dictTps.map (·.1) }
     let ctx ← functionBodyCtx opts base p name tps scopeClass
     let locals := ctx.locals.reverse
-    let hidden := dictTps.map fun (v, c) => Ty.param v c
-    let arity := ps.length + hidden.length - selfTps.length
+    let hidden := frame.hiddenTypes
+    let arity := frame.arity
     let st0 : ESt := {
       env, nslots := ps.length + hidden.length, slotTys := (ptys ++ hidden).toArray,
       frameSlots := locals.filterMap fun l => l.storage.map (l.slot, ·) }
@@ -12997,10 +13040,12 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     let ((r, _), st) ← elabBodyOv ctx body (some ret) st0
     let (e, st) ← (coerce p r ret).run st
     let e := if ret == .void then Expr.seq e (.lit .void) else e
-    let selfInits : List Expr := (dictTps.drop (hidden.length - selfTps.length)).map fun (v, _) =>
+    let selfInits : List Expr := (dictTps.drop (dictTps.length - selfTps.length)).map fun (v, _) =>
       .heap (.get (selfField v)) [.local 0]
+    let selfInits := selfInits ++ frame.receiverFields.map fun field =>
+      Expr.heap (.get field) [.local 0]
     let inits ← match (st.slotTys.toList.drop (ps.length + hidden.length)).mapM
-        (slotDefault env ps.length (ptys ++ hidden.take (hidden.length - selfTps.length)) []) with
+        (slotDefault env frame.witnessBase frame.argumentTypes []) with
       | .ok ds => pure (selfInits ++ ds)
       | .error msg => throw s!"{p.show}: in {name}: {msg}"
     fxCheck name allowed st
@@ -13033,6 +13078,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     match top with
     | .fn p n ps _ _ _ body =>
       let (fn, tys, needs, err, casts, lf, frames, eager, methodUses) ← elabFn env p n ps sig.params sig.ret sig.decides sig.fx [] body sig.suspends
+        (evidenceSignature := some sig)
       eagerNeeds := eagerNeeds ++ eager
       fnNeeds := fnNeeds ++ needs
       methodNeeds := FnValues.mergeMethodRequests methodNeeds methodUses
@@ -13079,7 +13125,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       let scope := copyScope? effs
       let (fn, tys, needs, err, casts, lf, frames, eager, methodUses) ← elabFn (genvOf g) p n ps g.params g.ret g.decides g.fx g.tparams body g.suspends
         g.selfTps ((opts.castRequests.find? (·.name == n)).map fun l => fun v =>
-          (l.opened.lookup v).bind (env.witnessField? l.target ·)) scope
+          (l.opened.lookup v).bind (env.witnessField? l.target ·)) scope (some g)
       fnNeeds := fnNeeds ++ needs
       methodNeeds := FnValues.mergeMethodRequests methodNeeds methodUses
       eagerNeeds := eagerNeeds ++ eager
@@ -13114,9 +13160,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   let fsigs0 := sigs.toList.map (fun s => (spawnParamTypes env s.name (s.params.map (Ty.toVTy env)), s.ret.toVTy env)) ++
     gsigs.toList.map fun g =>
       let genv := genvOf g
-      let dictTys : List Ty := (g.tparams.filter fun (vc : String × Bool) => !g.selfTps.contains vc.1).map
-        fun (vc : String × Bool) => Ty.param vc.1 vc.2
-      (spawnParamTypes genv g.name ((g.params ++ dictTys).map (Ty.toVTy genv)), g.ret.toVTy genv)
+      (spawnParamTypes genv g.name (g.frame.argumentTypes.map (Ty.toVTy genv)), g.ret.toVTy genv)
   -- the class table: the fields of each class, by tag (#34); the prototypes (#37)
   -- (a parametric class's field types mention its type parameters, #39)
   -- each field as `TyEnv.fieldSrc` gives it (the topmost interface that

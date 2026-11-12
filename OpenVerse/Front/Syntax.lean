@@ -233,4 +233,25 @@ partial def STy.substNames (σ : List (String × STy)) : STy → STy
   | .app n ts => .app n (ts.map (STy.substNames σ))
   | .fn ps es r => .fn (ps.map (STy.substNames σ)) es (r.substNames σ)
 
+/-- Rename binders and every peer-parameter reference in their upper bounds
+    together. Renaming just the binder changes a dependent constraint. -/
+def TParam.rename (tp : TParam) (names : List (String × String)) : TParam :=
+  { tp with
+    name := (names.lookup tp.name).getD tp.name
+    upperBound := tp.upperBound.map (·.substNames (names.map fun (a, b) => (a, STy.name b))) }
+
+/-- Inlined generic calls retain complete bounds in their private parameter
+    protocol. Type/comparable parameters keep their established two-item form.
+    The extra type packet is metadata, never an executable construction. -/
+def TParam.marker (tp : TParam) (p : Pos) : SExpr :=
+  .tuple p ([.ident p tp.name, .ident p tp.constraint] ++
+    (tp.upperBound.toList.map fun bound => .construct p "$upperBound" [bound] []))
+
+def TParam.ofMarker : SExpr → Except String TParam
+  | .tuple p [.ident _ name, .ident _ constraint] => pure { pos := p, name, constraint }
+  | .tuple p [.ident _ name, .ident _ constraint,
+      .construct _ "$upperBound" [bound] []] =>
+    pure { pos := p, name, constraint, upperBound := some bound }
+  | e => .error s!"{e.pos.show}: internal: malformed generic constraint metadata"
+
 end OpenVerse.Front

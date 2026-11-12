@@ -6,6 +6,8 @@ out="$(mktemp -d)"
 trap 'rm -rf "$out"' EXIT
 make -s -C runtime build/cverse
 lake env lean --run tests/lean/SubtypeEvidence.lean "$out"
-runtime/build/cverse "$out/evidence.vbc" > "$out/actual"
-diff -u "$out/evidence.expected" "$out/actual"
+for name in evidence relocated; do
+  runtime/build/cverse "$out/$name.vbc" > "$out/$name.actual"
+  diff -u "$out/$name.expected" "$out/$name.actual"
+done
 echo "subtype dictionary C trace passed"
