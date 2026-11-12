@@ -2753,8 +2753,10 @@ def choiceOperations (_elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx)
     let iface := STop.classDef p0 family tps [] [] true [] []
       [.fn p0 "$apply" (params variables.dropLast) [] ("$abstract" :: specs) variables.getLast! (.tuple p0 [])]
     let applyFn := STop.fn p0 (family ++ "$apply")
-      ({ name := "$dictionary", ty := familyTy } :: params variables.dropLast) tps specs variables.getLast!
-      (.app p0 (.member p0 (.ident p0 "$dictionary") "$apply") values bracket)
+      -- Pin the dictionary's class arguments before using an expected
+      -- result, just as an ordinary method pins its receiver instance.
+      ({ name := "$Self", ty := familyTy } :: params variables.dropLast) tps specs variables.getLast!
+      (.app p0 (.member p0 (.ident p0 "$Self") "$apply") values bracket)
     let name := s!"{stem}$op{ops.params.length}"
     let ty := Ty.struct family (plan.binding :: inputs ++ [result])
     let mut definitions : List STop := [iface, applyFn]
