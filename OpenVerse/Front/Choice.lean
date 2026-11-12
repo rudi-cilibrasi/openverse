@@ -1627,16 +1627,21 @@ def liftPoints? (ops : ShapeOps) (a : SExpr) : Option SExpr := do
   let lift (c : SExpr) : List SExpr :=
     (liftClause isVal (fun _ _ => false) (markPoints ops.isCall c) (fieldOrder := ops.fieldOrder)).map
       (whole ∘ unmarkPoints)
+  -- (none where the lifter keeps something, `$noLift`: a construction
+  -- whose fields' order it does not know, as a class's, where the function
+  -- is then not of the shape, as before)
+  let kept (cs : List SExpr) : Bool :=
+    cs.any (anyE fun | .app _ (.ident _ "$noLift") _ false => true | _ => false)
   match a with
   | .block p ss =>
     let i ← ss.findIdx? (!ops.plain ·)
     let lifted := lift ss[i]!
-    guard (lifted.length > 1)
+    guard (lifted.length > 1 && !kept lifted)
     return .block p (ss.take i ++ lifted ++ ss.drop (i + 1))
   | e =>
     let v := madeName "lv" "" e.pos
     let lifted := lift (.decl e.pos v none false e)
-    guard (lifted.length > 1)
+    guard (lifted.length > 1 && !kept lifted)
     return .block e.pos (lifted ++ [.ident e.pos v])
 
 mutual
