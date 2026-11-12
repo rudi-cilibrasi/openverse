@@ -1,6 +1,5 @@
-# Wrongly rejected as overlapping overloads: rb is <final> and does not implement i0,
-# so no value is both. LANGUAGE.md: a class or interface overlaps an interface or a class
-# above or below it; i0 and rb are neither.
+# Regression: rb is <final> and does not implement i0, so the overloads
+# are distinct. This previously failed with an overlap diagnostic.
 i0 := interface:
     M():int
 ra := class(i0):
