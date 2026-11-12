@@ -1,0 +1,39 @@
+-- -1
+a 5
+a 6
+b 3
+visit 1
+c 1
+visit 2
+c 2
+d 7 10
+d 8 10
+e 2 10
+f 8
+g 6
+h 8
+i 9
+j 1 6 1
+j 2 6 2
+j end 2
+k 4
+l 10
+m
+n 10
+n 20
+-- 5
+a 5
+b 3
+c 5
+d 5 1
+e 5 1
+f none
+g none
+h 5
+i none
+j end 0
+k 5
+l 10
+m not
+n 5
+exit=0

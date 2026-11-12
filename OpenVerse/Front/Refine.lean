@@ -13,6 +13,10 @@
       if (D := dup[P]) then Body else Else
         ⟶  if (P's class is dup) then $refine(P, X…) else Else
 
+  A cast that is a clause of any other failure context takes the rest of it
+  as its branch so: `pre; D := dup[P]; rest` is `pre; if (D := dup[P]) then
+  {rest} else fail` (`castClause?`, `noValue`, `castRestClauses`).
+
   The elaborator finds such a cast in a first elaboration and asks for the
   function (`Lift`); the program is then elaborated again with it, made
   here from the branch, with the refinement applied to the types written in
@@ -56,6 +60,10 @@ structure Lift where
   /-- The refinement, on the enclosing function's type parameters, for the
       types written in the branch. -/
   subst : List (String × STy)
+  /-- Whether `ret` is the branch's own type: its `else` gives no value and
+      nothing around it gave one (a cast with the rest of a failure context
+      as its branch), so the dispatch takes it too. -/
+  retOfBranch : Bool := false
   /-- The type arguments the cast opens (#250), which `target` has and the
       object's type does not name: each type parameter of the function made
       for them, with the name of `target`'s type parameter it stands for,
@@ -134,6 +142,55 @@ def isBreak : SExpr → Bool
   | .brk _ | .app _ (.ident _ "$refineBreak") [] false => true
   | _ => false
 
+/-- `e` with its `return`s, and its `break`s that leave it, made `Err()`:
+    for the type of what it gives when it ends. -/
+def exitsAsErr (e : SExpr) : SExpr :=
+  let err (q : Pos) : SExpr := .app q (.ident q "Err") [] false
+  let e := Choice.mapE (fun | .ret q _ => some (err q) | _ => none) e
+  Choice.mapE (fun
+    | .brk q => some (err q)
+    | b@(.app _ (.ident _ "$refineBreak") [] false) => some (err b.pos)
+    | l@(.loop ..) => some l
+    | _ => none) e
+
+/-- An expression that fails, giving no value, of every type: the `else` of
+    a cast that takes the rest of its failure context as its branch. (The
+    marker a refined method dispatch ends with, which consumers of choices
+    already read as no value.) -/
+def noValue (p : Pos) : SExpr := .app p (.ident p "$methodMiss") [] false
+
+def isNoValue : SExpr → Bool
+  | .app _ (.ident _ "$methodMiss") [] false => true
+  | _ => false
+
+/-- Where a cast that refines type arguments, opens them, or goes through
+    views is taken (#243, #250, #351): the refusal of one elsewhere says so,
+    and an `if` or a `for` whose clause it is looks for it, to take it so. -/
+def castRefusalNote : String :=
+  "only as a clause of a failure context (an if's condition, a for's clauses, a <decides> body, option{…}, …)"
+
+def isCastRefusal (err : String) : Bool := (err.splitOn castRefusalNote).length ≥ 2
+
+/-- A clause that casts, as a refining cast would be written: `D := T[X]`,
+    or `T[X]`, whose value is then named `$cast…` for its branch. Its
+    position, the name, `T` and `X`; an index or a call looks the same, which
+    the elaborator tells apart by `T`. -/
+def castClause? : SExpr → Option (Pos × String × String × SExpr)
+  | .decl p d none false (.app _ (.ident _ T) [x] true) => some (p, d, T, x)
+  | .app p (.ident _ T) [x] true => some (p, s!"$cast{p.line}_{p.col}", T, x)
+  | _ => none
+
+/-- A cast clause the elaborator made, `$made(D := T[X])`, whose `if`'s
+    branch the source does not have as such: its lift carries it
+    (`Lift.body`). -/
+def made (c : SExpr) : SExpr := .app c.pos (.ident c.pos "$made") [c] false
+
+/-- The clauses of a condition, the first unmarked, and whether it was
+    `made`. -/
+def unmade : List SExpr → Bool × List SExpr
+  | .app _ (.ident _ "$made") [c] false :: cs => (true, c :: cs)
+  | cs => (false, cs)
+
 /-- The branch of a refining cast that is the first clause of an `if`'s
     condition, `if (D := T[X], rest) then B else E`: the `if` of the rest,
     `if (rest, true?) then B else E` (the cast has no effects to undo when
@@ -141,6 +198,65 @@ def isBreak : SExpr → Bool
     when it cannot fail itself, as the whole condition could). -/
 def castRest (p : Pos) (more : List SExpr) (body : SExpr) (els : Option SExpr) : SExpr :=
   if more.isEmpty then body else .ite p (more ++ [.query p (.ident p "true")]) body els
+
+/-- (#243) Clauses `pre, D := T[X], rest` of a failure context (an `if`'s
+    condition, a `for`'s clauses, `first{…}`'s) whose cast refines, with the
+    code their names reach after them, `after` (the branch, the body, the
+    value), when the cast cannot take `after` into its branch, which runs
+    outside the failure context (the clauses before it have effects its
+    failure must undo; a `for`'s body is not one with its clauses). The cast
+    takes the clauses after it, up to the next generator (`isGen`), as its
+    branch, in a clause `if (D := T[X]) then first{rest; names} else fail`,
+    as a sequence's cast does (`elabSeqIn`), so that their failure, or its
+    own, is the clauses': the names they bind that later code uses are its
+    value, bound again after it. `after` casts the object again, `if (D :=
+    T[X']) then after`, when it uses `D` or a name bound after it, and so
+    each cast after it to a class (`isClass`) of a local fixed before the
+    clauses (`isFixed`): each succeeds as the first one did (an object's
+    class does not change), so that `after` is typed under their
+    refinements too. The new clauses and `after`, or why not. -/
+def castRestClauses (pre : List SExpr) (cast : Pos × String × String × SExpr) (rest : List SExpr)
+    (after : SExpr) (isGen : SExpr → Bool := fun _ => false) (isClass : String → Bool := fun _ => true)
+    (isFixed : String → Bool := fun _ => false) : Except String (List SExpr × SExpr) := do
+  let (p, d, T, x) := cast
+  let branch := rest.takeWhile (!isGen ·)
+  let later := rest.dropWhile (!isGen ·)
+  let usedLater := Choice.namesUsed (.block p later)
+  if usedLater.contains d then
+    throw s!"a clause after it, past a generator or a choice, uses {d}"
+  let usedAfter := Choice.namesUsed after
+  let obj := s!"$castObj{p.line}_{p.col}"
+  -- (the casts `after` casts again, each when it uses its name or one bound
+  -- after it, and no clause past a generator does: this one, of its object
+  -- bound once, and those of a fixed local to a class after it)
+  let names (cs : List SExpr) : List String := cs.filterMap fun | .decl _ n _ _ _ => some n | _ => none
+  let casts : List (Nat × String × String × SExpr) := (0, d, T, .ident p obj) :: branch.zipIdx.filterMap fun
+    | (.decl _ e none false (.app _ (.ident _ T') [y@(.ident _ n)] true), i) =>
+      if isClass T' && isFixed n then some (i + 1, e, T', y) else none
+    | _ => none
+  let again : List (String × String × SExpr) := casts.filterMap fun (k, e, T', y) =>
+    if !usedLater.contains e && (e :: names (branch.drop k)).any usedAfter.contains then some (e, T', y) else none
+  let kept : List (String × Bool) := branch.filterMap fun
+    | .decl _ n _ v _ =>
+      if !again.any (·.1 == n) && (usedLater ++ usedAfter).contains n then some (n, v) else none
+    | _ => none
+  let vals := s!"$castVals{p.line}_{p.col}"
+  let value : SExpr := match kept with
+    | [(n, _)] => .ident p n
+    | ns => .tuple p (ns.map fun (n, _) => .ident p n)
+  let castOf (q : Pos) (e T : String) (y : SExpr) : SExpr := .decl q e none false (.app q (.ident q T) [y] true)
+  let headAgain := again.any (·.1 == d)
+  let tail := SExpr.ite p [made (castOf p d T (if headAgain then .ident p obj else x))]
+    (.app p (.ident p "$first") [.block p (branch ++ [value])] false) (some (noValue p))
+  let get (i : Nat) : SExpr := if kept.length == 1 then .ident p vals else .app p (.ident p vals) [.int p (i : Int)] false
+  let clauses := pre ++ (if headAgain then [.decl p obj none false x] else []) ++
+    (if kept.isEmpty then [tail] else
+      .decl p vals none false tail :: kept.zipIdx.map fun ((n, v), i) => .decl p n none v (get i)) ++ later
+  -- (at `after`'s place: the first casts are at the casts' own)
+  let q := after.pos
+  let after := again.foldr (fun (e, T', y) acc =>
+    .ite q [made (castOf q e T' y)] acc (some (.app q (.ident q "Err") [] false))) after
+  return (clauses, after)
 
 /-- The branches the lifts ask for, as functions: each `if (D := …) then
     Body …` whose position and bound name are a lift's key gives `Body`,

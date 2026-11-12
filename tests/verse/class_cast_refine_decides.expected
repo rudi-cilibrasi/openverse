@@ -1,0 +1,18 @@
+SameB 1
+SameB no
+FixA 10
+FixA no
+before
+after
+Fx 5 11
+Fx no 11
+Fx no 11
+IsDup
+AsDup 4
+Twice 2
+Early 5
+Early 4
+Early no
+Get 9
+Get no
+exit=0
