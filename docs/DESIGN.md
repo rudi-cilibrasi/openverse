@@ -297,7 +297,11 @@ Recursive multi-value bodies normalize supported returns before recursion
 classification. For lazy analysis, generated branch scopes carry
 `$returnTail(block{…})`: only these scopes split into invocation prefixes
 and tail leaves. An ordinary source value block stays inside its value's
-rollback boundary. `elabLoopTailWith` compiles the selected path and saves
+rollback boundary, and so does an `if` in a branch's place with no choice
+and no call of the group in it (`plainIfValues`, #283): it is made a block,
+one value, so its conditions run in the consumer's failure context with
+the value, as an inlined body's would, not once in the item's step, which
+kept a rejected value's conditions' effects in a `for`. `elabLoopTailWith` compiles the selected path and saves
 its branch locals in continuation items; a failing selected prefix fails
 the invocation, without selecting else. Generic mutual-instance discovery
 uses those same leaf contexts. Effect discovery includes every path's
@@ -678,6 +682,84 @@ A strongly connected group of such functions (#283: each one's alternatives call
 - Where the first success is taken with effects, `firstLiftOf` makes one function of its own per member (`FirstLift.extraFns`), which call one another (`firstBody`'s `helperOf`).
 - A function alone keeps `elabLoopGen` and its code byte for byte.
 
+**Return frames (#283).** A recursive one whose call of its group has code
+after it, `Count(N - 1) + 1 | N`, or `X := Walk[N - 1] | N` followed by
+`Print(…)` and `X + 1`, is a generator whose continuation is not empty: the
+code after the call must run on each value the call gives, after the
+callee's own code, and before the consumer's. It is taken by the same loop,
+with that continuation defunctionalized: a list of *return frames*, each the
+code after one call and the values of the names that code uses.
+- `Choice.loopShape?` with `frames` normalizes the body. A last clause
+  binding a choice, with plain code after it, becomes the choice of
+  `block{X := a; T; v}` for each alternative `a` (`lastChoiceTail`). An
+  alternative that is a call of the group evaluated before anything else in
+  it, but literals and names, which read the same after the call, becomes
+  `$then(call, h, frame)` (`frameOf?`), the frame the alternative with the
+  name `h` in the call's place. A frame's code has no choice and no other
+  call of the group, and sets no `var` bound before it, as it runs on a copy
+  of the names.
+- The loop's items keep one more name, the continuation `$K`, a list of
+  `$lazycell`s, innermost frame first. A frame is a tuple with one option
+  per `$then` of the group, the one of the call that pushed it holding its
+  code's names (`loopFrames`, `framePush`). A call with a frame pushes the
+  item that starts its callee on the continuation with that frame; the
+  items that resume a choice keep the continuation they had. A value is
+  given to its item's frames in turn (`frameApplyWith`): each one's code,
+  its names in slots of their own and `h` the value so far, until none is
+  left. That is the value the consumer computes in its own failure context,
+  so what the frames do is undone with the value, as the code after the
+  last choice reached is in an inlined body.
+
+  ```
+  Walk(N) = N > 0; X := Walk[N - 1] | N; Print("at {N} got {X}"); X + 1
+    alternative 0: $then(Walk[N - 1], h, block{X := h; Print(…); X + 1})
+    alternative 1: block{X := N; Print(…); X + 1}
+
+  pop (start, N=2, K=[])         N > 0; push (alt 1, N=2, K=[]),
+                                 then (start, N=1, K=[f N=2])
+  pop (start, N=1, K=[f N=2])    N > 0; push (alt 1, N=1, K=[f N=2]),
+                                 then (start, N=0, K=[f N=1, f N=2])
+  pop (start, N=0, …)            N > 0 fails: no values
+  pop (alt 1, N=1, K=[f N=2])    the value: "at 1 got 1", 2, then frame
+                                 N=2: "at 2 got 2", 3, to the consumer
+  pop (alt 1, N=2, K=[])         the value: "at 2 got 2", 3
+  ```
+- Where the first success is taken and the clauses, conditions or
+  arguments have effects, `FirstLift`'s function takes `$K` after the
+  parameters, empty at the consumer's call: a call with a frame passes
+  `$framePush(j, $K, names…)`, and each value is passed to one more function
+  of its own, `$ret`, whose body gives it to `$frameApply($K, $V, frames…)`
+  and then to the consumer's clauses (`firstReturnBody`); the elaborator
+  compiles both markers with the loop's own `framePush` and
+  `frameApplyWith`. The call of `$ret` is the value's alternative, so each
+  frame runs in the failure context of the value it runs on, as in the
+  Verse Calculus, and the frames' code is compiled once, not once per value
+  (the size modes `recursive-frame-first` and `-for`).
+- A group with no `$then` makes no `$K` and keeps its code byte for byte:
+  the generator of #246 is the instance whose continuation stays empty.
+- One that is effect-free (`<computes>`, no local state, nothing it runs
+  prints or calls `Err()`) keeps `F$all` (#235), as before, so that every
+  program that compiled before compiles byte for byte as before; there the
+  two routes give the same values, but `F$all` does not stop for an infinite
+  one. A `<computes>` one whose code prints or calls `Err()` is found only
+  on Verse Core (`checkEager`), so that elaboration asks for another
+  (`Compiled.lazyNeeds`, `Options.lazyRequests`) with it taken lazily; one
+  that still is not of the shape is refused as before.
+
+Not yet: a frame whose code has a choice, or another call of the group
+(`X := T(N - 1)` then `X | X + 1`, or then `Y := T(N - 1)`): sequential
+choice points. Applying such a frame reaches a generator boundary in the
+middle of a value: its code up to there would have to be kept, not undone
+with the value, and the rest started as items. The route, within the same
+loop: a frame's code ends at its first choice or call by pushing items from
+inside the consumer's filter, which then succeeds without a value (a flag
+the consumer's iteration reads before its own clauses, and that a
+first-success consumer reads as "not yet"), so that segment is kept as a
+generator boundary keeps it; `FirstLift` compiles such frame code as the
+CPS code it already is, a choice in `first{…}` and a call of the function
+of its own. With that, `F$all` would be needed by no shape, only as an
+optimisation of effect-free ones.
+
 Named arguments and defaults are bound on every recursive edge. The lazy
 stack uses `elabGenericCallWith` in argument-packing mode: it evaluates the
 ordinary call's supplied arguments and defaults, then returns their values
@@ -736,7 +818,7 @@ returns), so a first-success search, a loop inside one, costs about 1 KB
 per value tried: 100,000 take 0.3 s and 144 MB, where `F$all` did not
 finish in minutes.
 
-Effect-freedom is checked on Verse Core, after elaboration (`checkEager`),
+Effect-freedom is checked on Verse Core, after elaboration (`checkEager`, which asks for return frames instead where the shape allows, #283),
 not on the source: every call `F$all` may make is there, including the
 dispatch of a method call to each implementation below the receiver's
 class, a call through a function value to each value class of its type,

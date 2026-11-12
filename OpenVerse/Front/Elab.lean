@@ -92,6 +92,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       | _ => []
   -- (#283) and the uses of methods whose family the receiver's class picks
   let (resolved, lazy, familySites) ← Choice.inlineMulti resolved reserved opts.eagerRequests opts.familyPicks
+    opts.lazyRequests
   -- (#246) the class of the stack cells of lazily taken ones
   let helpers := helpers ++ (← if lazy then lazyTops else pure [])
   -- the branches of casts that refine type arguments, as functions (#243)
@@ -1779,9 +1780,11 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     let fn := fns[gi]!
     fns := fns.set! gi { fn with body := Suspend.pruneDead S00 ((slotTys[gi]?).getD []) fn.body }
   -- (#235) the functions with several values computed at their calls
-  checkEager fns errs fun g => ((tops ++ generics).findSome? fun
+  let lazyNeeds ← checkEager fns errs (fun g => ((tops ++ generics).findSome? fun
     | .fn p n .. => if n == g then some p else none
-    | _ => none)
+    | _ => none)) opts.lazyRequests
+  if !lazyNeeds.isEmpty then
+    return { prog := default, sigs := { fns := [] }, slotTys := [], lazyNeeds }
   -- (#246) and functions of their own for the lazily taken calls whose
   -- effects need them: the program is elaborated again, with them
   let loopNeeds ← checkLoopFirst fns loopFirst opts.loopRequests
@@ -1927,7 +1930,7 @@ def elabProgram (allTops00 : List STop) (opts : Options := {}) : Except String C
           subtypeRequests := SubtypeEvidence.mergeRequests opts.subtypeRequests subtypes }
       | 0 => throw "internal error: subtype dictionaries still to materialize after several elaborations"
     if !c.subtypeNeeds.isEmpty then throw "internal error: an existing subtype dictionary was requested again"
-    if !c.eagerNeeds.isEmpty || !c.familyNeeds.isEmpty then return c
+    if !c.eagerNeeds.isEmpty || !c.familyNeeds.isEmpty || !c.lazyNeeds.isEmpty then return c
     -- (#243) and with the branches of casts that refine type arguments
     let casts := c.castNeeds.filter fun l => !opts.castRequests.any (·.key == l.key)
     -- (#246) and with functions of their own for lazily taken calls
@@ -1989,13 +1992,14 @@ def elabProgram (allTops00 : List STop) (opts : Options := {}) : Except String C
   -- more methods have several values, whose uses the next one notes.
   let rec withEager (fuel : Nat) (opts : Options) : Except String Compiled := do
     let c ← withWitness (max 8 (classes + 1)) opts
-    if c.eagerNeeds.isEmpty && c.familyNeeds.isEmpty then return c
+    if c.eagerNeeds.isEmpty && c.familyNeeds.isEmpty && c.lazyNeeds.isEmpty then return c
     let new := c.eagerNeeds.filter (!opts.eagerRequests.contains ·)
     let picks := c.familyNeeds.filter (!opts.familyPicks.contains ·)
-    match fuel, new ++ picks.map (·.2) with
+    let lazy := c.lazyNeeds.filter (!opts.lazyRequests.contains ·)
+    match fuel, new ++ picks.map (·.2) ++ lazy with
     | fuel + 1, _ :: _ =>
       withEager fuel { opts with eagerRequests := opts.eagerRequests ++ new, familyPicks := opts.familyPicks ++ picks,
-                                 loopRequests := [], castRequests := [] }
+                                 lazyRequests := opts.lazyRequests ++ lazy, loopRequests := [], castRequests := [] }
     | _, _ => throw "internal error: mutual generator instances or methods' families still changing after eager lowering (#283)"
   (withEager count opts).mapError fun msg =>
     FnValues.pretty (((stripOv (msg.replace "$init" "<constructor>")).replace "::" ".").replace "$replaceAll" "ReplaceAll")

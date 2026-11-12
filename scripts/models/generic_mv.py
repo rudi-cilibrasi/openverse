@@ -34,6 +34,8 @@ The model:
     explicit witnesses for types used only by the suffix's written types;
   * generic mutual trees retain each member's type instance, item effects,
     value rollback, mutable captures and written-only witnesses;
+  * a lazy one may bind its call of itself with code after it, which runs
+    on each of the call's values (a return frame, #283);
   * early and terminal source returns yield the same ordered values as
     explicit conditional tails, ending only their current invocation;
   * methods may infer their own type parameters independently of receiver
@@ -51,6 +53,7 @@ R = None
 # (#387: an overridden method of a generic class; a generator of its own decides, so seeds keep
 # their other programs)
 R387 = None
+RFrame = None
 # (#392: a named parameter with a default; a generator of its own decides, so seeds keep their
 # other programs)
 R392 = None
@@ -353,6 +356,12 @@ d{n}({child_tps}) := class({parent}):{extra_field}
             self.path = "lazy"; self.params = [("X", "t"), ("Y", "t"), ("N", "int")]; self.decides = True; self.fx = True
             self.src = ("%s(X:t, Y:t, N:int where t:type)<transacts><decides>:t =\n"
                         "    Print(\"%s {N}\")\n    N > 0\n    %s[X, Y, N - 1] | X | %s[Y, X, N - 1]") % (n, n, n, n)
+        elif k == "LFr":
+            # (#283: the call of itself bound, with code after it that runs on
+            # each of its values, a return frame; taken lazily as it prints)
+            self.path = "lazy"; self.params = [("X", "t"), ("Y", "t"), ("N", "int")]; self.decides = True; self.fx = True
+            self.src = ("%s(X:t, Y:t, N:int where t:type)<transacts><decides>:t =\n"
+                        "    N > 0\n    Z := %s[Y, X, N - 1] | X\n    Print(\"%s {N}\")\n    Z") % (n, n, n)
         elif k == "LCmp":
             self.path = "lazy"; self.params = [("A", "arr"), ("X", "t"), ("I", "int")]; self.decides = True; self.cmp = True
             self.src = ("%s(A:[]t, X:t, I:int where t:subtype(comparable))<decides>:t =\n"
@@ -499,6 +508,12 @@ d{n}({child_tps}) := class({parent}):{extra_field}
             l = self.expand({"X": a["X"], "Y": a["Y"], "N": a["N"] - 1}, var)
             r = self.expand({"X": a["Y"], "Y": a["X"], "N": a["N"] - 1}, var)
             return out + [("choice", [l, V(a["X"]), r])]
+        if k == "LFr":
+            # (the frame's print after each value of the call, and after X)
+            if a["N"] <= 0: return [("cond", False)]
+            back = ("print", "%s %d" % (self.name, a["N"]))
+            return [("choice", [self.expand({"X": a["Y"], "Y": a["X"], "N": a["N"] - 1}, var) + [back],
+                                V(a["X"]) + [back]])]
         if k == "LIf":
             if a["N"] < 0: return [("cond", False)]
             if a["N"] > 0:
@@ -583,11 +598,12 @@ class Machine:
 # ---------------------------------------------------------------- the program
 class Gen:
     def __init__(self, seed):
-        global R, R387, R392, RMethod, SHARED
+        global R, R387, R392, RMethod, SHARED, RFrame
         R = random.Random(seed)
         R387 = random.Random(seed * 1000003 + 387)
         R392 = random.Random(seed * 1000003 + 392)
         RMethod = random.Random(seed * 1000003 + 283041)
+        RFrame = random.Random(seed * 1000003 + 283283)
         SHARED = random.Random(seed * 1000003 + 2834).random() < 0.4
         self.seed = seed
         self.prods = []
@@ -862,7 +878,12 @@ class Gen:
         kinds_l = ["LElems", "LRep", "LTree", "LIf", "LFx", "LFx2", "LFxTree", "LCmp", "LW"]
         kinds_e = ["ERep", "ERev", "ETree", "EW"]
         # one of each path at least, then a few more
-        self.producer(R.choice(kinds_i)); self.producer(R.choice(kinds_l)); self.producer(R.choice(kinds_e))
+        # (#283: at times the lazy one has a return frame, LFr, from a stream of
+        # its own, so seeds without it keep their programs)
+        self.producer(R.choice(kinds_i))
+        lazy = R.choice(kinds_l)
+        if RFrame.random() < 0.3: lazy = "LFr"
+        self.producer(lazy); self.producer(R.choice(kinds_e))
         for _ in range(R.randint(0, 2)):
             self.producer(R.choice(kinds_i + kinds_l + kinds_e))
         for _ in range(R.randint(3, 7)):

@@ -573,6 +573,11 @@ structure LoopGen where
 
   /-- Each mutual member's signature parameters at this invocation. -/
   instances : List (String × List (String × Ty)) := []
+  /-- (#283) The return frames of its calls with code after them, in order:
+      each one's hole, lives and code; and the type of the continuation
+      they are pushed on, when there are any. -/
+  frames : List (String × List String × SExpr) := []
+  kTy : Option Ty := none
 
 /-- Run `m`, attributing the heap effects it records first to `p` (a field
     or argument default: the effect is the construction's or the call's). -/

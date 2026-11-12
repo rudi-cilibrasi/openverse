@@ -845,6 +845,85 @@ partial def elabLoopTailWith (elabSeq : Ctx → List SExpr → Option Ty → EM 
     return { select := .seq (.assign k (.lit (.int (start : Nat)))) vd,
              arms := #[(ctx, alts)], itemCode := vd, next := start + alts.length }
 
+/-- (#283) A return frame of a lazily taken recursive group: the code after a
+    call of the group in an alternative, `$then(call, hole, code)`, which
+    runs on each of the call's values, bound to `hole`. `lives` are the names
+    of the alternative's context (`ctx`) the code uses: their values when
+    the call is made are kept in the frame, pushed on the continuation of
+    the call's items. -/
+structure LoopFrame where
+  hole : String
+  lives : List Local
+  code : SExpr
+  ctx : Ctx
+
+/-- The return frames of a tail's alternatives, in the order of its arms. -/
+def loopFrames (arms : List (Ctx × List SExpr)) : List LoopFrame :=
+  arms.flatMap fun (ca, as) => as.filterMap fun
+    | .app _ (.ident _ "$then") [_, .ident _ h, k] false =>
+      let own := h :: Choice.localsOf k
+      some { hole := h, code := k, ctx := ca,
+             lives := (Choice.namesUsed k).eraseDups.filterMap fun n => if own.contains n then none else ca.lookup n }
+    | _ => none
+
+/-- A return frame's lives' values (`void` for none, as `tuple()` is). -/
+def frameLivesTy (ts : List Ty) : Ty := if ts.isEmpty then .void else .tup ts
+
+/-- A frame on a continuation: one option per return frame, the one of the
+    call that pushed it holding its lives' values. -/
+def frameTy (lives : List (List Ty)) : Ty := .tup (lives.map fun ts => .opt (frameLivesTy ts))
+
+/-- The continuation of a lazily taken recursive group (#283): its frames,
+    innermost first, a list of `$lazycell`s. -/
+def frameContTy (lives : List (List Ty)) : Ty := .opt (.struct "$lazycell" [frameTy lives])
+
+/-- The lives' types of each return frame, from its continuation's type. -/
+def frameLivesOf : Ty → Option (List (List Ty))
+  | .opt (.struct "$lazycell" [.tup fs]) => fs.mapM fun | .opt .void => some [] | .opt (.tup ts) => some ts | _ => none
+  | _ => none
+
+/-- The continuation `k` with frame `j` pushed on it, holding `vals`. -/
+def framePush (ctx : Ctx) (lives : List (List Ty)) (j : Nat) (vals : List Expr) (k : Expr) : Expr :=
+  let fr : Expr := .prim .mkTup (lives.zipIdx.map fun (_, i) =>
+    if i == j then .prim .mkSome [if vals.isEmpty then .lit .void else .prim .mkTup vals] else .lit .none)
+  .prim .mkSome [.heap (.new (ctx.types.tagOf "$lazycell")) [fr, k]]
+
+/-- The value `leaf` given to the continuation `k` (#283): each frame's code
+    in turn, innermost first, on the value the one before gave, with the
+    frame's lives in slots of their own (the item's names stay as they are),
+    until no frame is left. It runs where the value does, in the consumer's
+    failure context, so what the frames do is undone with the value. -/
+def frameApplyWith (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx) (p : Pos)
+    (frames : List LoopFrame) (rty : Ty) (k leaf : Expr) : EM Expr := do
+  let vd : Expr := .lit .void
+  let lives := frames.map fun f => f.lives.map (·.ty)
+  let fty := frameTy lives
+  let cellTy : Ty := .struct "$lazycell" [fty]
+  let cfs := ctx.types.fields "$lazycell" [fty]
+  let (some (itemF, _), some (nextF, _)) := (fieldIndex cfs "$LItem", fieldIndex cfs "$LNext")
+    | eerr p "internal: the frames of a $loop (#283)"
+  let v ← fresh rty
+  let kk ← fresh (frameContTy lives)
+  let cell ← fresh cellTy
+  let fr ← fresh fty
+  let mut arms : List (Nat × Nat × Expr) := []
+  for (f, j) in frames.zipIdx do
+    let t ← fresh (frameLivesTy (f.lives.map (·.ty)))
+    let ls ← f.lives.mapM fun l => do return { l with slot := ← fresh l.ty }
+    let h ← fresh rty
+    let hole : Local := { name := f.hole, slot := h, ty := rty, mutable := false }
+    let c : Ctx := { f.ctx with canFail := true, inTaking := true, locals := hole :: ls.reverse ++ f.ctx.locals }
+    let r ← elabE c f.code (some rty)
+    let e ← coerce f.code.pos r rty
+    let unpack := ls.zipIdx.foldr (fun (l, i) acc => Expr.seq (.assign l.slot (.prim (.tupGet i) [.local t])) acc) vd
+    arms := arms ++ [(j, t, .seq unpack (.seq (.assign h (.local v)) (.seq (.assign v e) vd)))]
+  let dispatch : Expr := arms.foldr (fun (j, t, body) acc =>
+    .ite (.assign t (.prim .query [.prim (.tupGet j) [.local fr]])) body acc) vd
+  let step : Expr := .ite (.assign cell (.prim .query [.local kk]))
+    (.seq (.assign fr (.heap (.get itemF) [.local cell])) (.seq (.assign kk (.heap (.get nextF) [.local cell])) dispatch))
+    Expr.brkV
+  return .seq (.assign v leaf) (.seq (.assign kk k) (.seq (.loop step) (.local v)))
+
 /-- (#283) `elabLoopGen` for a strongly connected group of functions with
     several values, taken lazily (`$group(tail, $member(H, params, clauses,
     r := tail)…)` in the marker): one stack of items `(k, every member's
@@ -902,6 +981,9 @@ partial def elabLoopGenGroupWith (elabE : Ctx → SExpr → Option Ty → EM R)
       let code ← elabLoopTailWith elabSeq cc htail probeK 0
       for (ca, alts) in code.arms do
         for alt in alts do
+          let alt := match alt with
+            | .app _ (.ident _ "$then") [c, _, _] false => c
+            | a => a
           let call := match alt with
             | .app q (.ident _ "$rec") as false => some (q, h, as)
             | .app q (.ident _ "$recTo") (.ident _ target :: as) false => some (q, target, as)
@@ -951,8 +1033,16 @@ partial def elabLoopGenGroupWith (elabE : Ctx → SExpr → Option Ty → EM R)
     for l in (newOf cc ++ code.arms.toList.flatMap fun (ca, _) => newOf ca).reverse do
       if !tls.any (·.slot == l.slot) then tls := tls ++ [l]
     infos := infos.push (rc, code, tls)
+  -- (#283) the return frames of the alternatives that are calls with code
+  -- after them, and the continuation they are pushed on, which every item
+  -- keeps, after every member's names
+  let frames := loopFrames (infos.toList.flatMap fun (_, code, _) => code.arms.toList)
+  let lives := frames.map fun f => f.lives.map (·.ty)
+  let kl? : Option Local ← if frames.isEmpty then pure none else do
+    let kTy := frameContTy lives
+    pure (some { name := "$K", slot := ← fresh kTy, ty := kTy, mutable := false })
   -- (one item for all: every member's names, the members in order)
-  let all : List Local := infos.toList.flatMap (·.2.2)
+  let all : List Local := infos.toList.flatMap (·.2.2) ++ kl?.toList
   let bases : List Nat := (infos.toList.foldl (fun (acc, n) (_, _, tls) => (acc ++ [n], n + tls.length)) ([], 0)).1
   let tupTy : Ty := .tup (.int :: all.map (·.ty))
   let cellTy : Ty := .struct "$lazycell" [tupTy]
@@ -971,10 +1061,12 @@ partial def elabLoopGenGroupWith (elabE : Ctx → SExpr → Option Ty → EM R)
     .seq (.assign cell (.heap (.new (ctx.types.tagOf "$lazycell")) [e, .local w]))
       (.seq (.assign w (.prim .mkSome [.local cell]))
         (.seq (.assign sp (p2 .add (.local sp) (.lit (.int 1)))) vd))
-  -- (the item that starts member `j`, its parameters from `ts`)
-  let startOf (j : Nat) (ts : List Nat) : Expr :=
+  -- (the item that starts member `j`, its parameters from `ts`; with a
+  -- return frame, on the continuation `kE`)
+  let startOf (j : Nat) (ts : List Nat) (kE : Option Expr := none) : Expr :=
     let b := bases.getD j 0
-    item (.lit (.int (-1 - (j : Int)))) (cur.take b ++ ts.map Expr.local ++ cur.drop (b + ts.length))
+    let vals := cur.take b ++ ts.map Expr.local ++ cur.drop (b + ts.length)
+    item (.lit (.int (-1 - (j : Int)))) (match kE with | some e => vals.dropLast ++ [e] | none => vals)
   -- (the alternatives, numbered across the members' branches)
   let mut offs : Array Nat := #[]
   let mut total : Nat := 0
@@ -986,6 +1078,7 @@ partial def elabLoopGenGroupWith (elabE : Ctx → SExpr → Option Ty → EM R)
   let mut itemCode : Expr := vd
   let mut argSet : Option Pos := none
   let mut starts : Array Expr := #[]
+  let mut fi : Nat := 0
   for ((rc, armCode, _), i) in infos.toList.zipIdx do
     let off := offs.getD i 0
     itemCode := .seq itemCode (.seq rc.e armCode.itemCode)
@@ -1000,6 +1093,11 @@ partial def elabLoopGenGroupWith (elabE : Ctx → SExpr → Option Ty → EM R)
         let cont : Expr := match next? with
           | some n => push (item (.lit (.int (n : Nat))) cur)
           | none => vd
+        -- (a call with code after it: its return frame, pushed with it)
+        let (a, frame?) := match a, kl? with
+          | .app _ (.ident _ "$then") [c, _, _] false, some kl => (c, some (fi, kl))
+          | a, _ => (a, none)
+        if frame?.isSome then fi := fi + 1
         let call? : Option (Nat × List SExpr × Pos) := match a with
           | .app q (.ident _ "$rec") args' false => some (i, args', q)
           | .app q (.ident _ "$recTo") (.ident _ h :: args') false => (names.idxOf? h).map (·, args', q)
@@ -1013,7 +1111,9 @@ partial def elabLoopGenGroupWith (elabE : Ctx → SExpr → Option Ty → EM R)
           let ts ← hpls.mapM fun l => fresh l.ty
           let assigns ← elabLoopArgsWith elabE actx q h args' hpls ts ((instances.lookup h).getD [])
           itemCode := .seq itemCode assigns
-          alts := alts.push (.ite assigns (.seq cont (push (startOf jm ts))) cont)
+          let kE := frame?.map fun (j, kl) =>
+            framePush ctx lives j (((frames[j]?).map (·.lives)).getD [] |>.map (Expr.local ·.slot)) (.local kl.slot)
+          alts := alts.push (.ite assigns (.seq cont (push (startOf jm ts kE))) cont)
         | none =>
           let r ← elabE actx a (some rty)
           values := values.push (gi, ← coerce a.pos r rty)
@@ -1025,6 +1125,9 @@ partial def elabLoopGenGroupWith (elabE : Ctx → SExpr → Option Ty → EM R)
     .seq (.assign l.slot (.prim (.tupGet (j + 1)) [.local it])) acc) vd
   let init : Expr := .seq (.assign w (.lit .none)) (.seq (.assign sp (.lit (.int 0)))
     (push (item (.lit (.int (-1))) (args.map (Expr.local ·.slot) ++ cur.drop pls0.length))))
+  let init : Expr := match kl? with
+    | some kl => .seq (.assign kl.slot (.lit .none)) init
+    | none => init
   let start : Expr := (starts.toList.zipIdx).foldr (fun (st, i) acc =>
     .ite (p2 .eq (.local k) (.lit (.int (-1 - (i : Int))))) st acc) vd
   let step : Expr := Expr.seq (.assign sp (p2 .sub (.local sp) (.lit (.int 1))))
@@ -1037,8 +1140,13 @@ partial def elabLoopGenGroupWith (elabE : Ctx → SExpr → Option Ty → EM R)
       dispatch)))))
   let value : Expr := values.toList.foldr (fun (i, e) acc =>
     .ite (p2 .eq (.local k) (.lit (.int (i : Nat)))) e acc) (.prim .fail [])
+  -- (#283) given to the frames of the item's continuation)
+  let value ← match kl? with
+    | some kl => frameApplyWith elabE ctx p frames rty (.local kl.slot) value
+    | none => pure value
   let after : Expr := .ite (p2 .ge (.local nx) (.lit (.int 0))) (push (item (.local nx) cur)) vd
-  return { init, step, sp, has, value, after, vty := rty, itemCode, argSet, instances }
+  return { init, step, sp, has, value, after, vty := rty, itemCode, argSet, instances,
+           frames := frames.map (fun f => (f.hole, f.lives.map (·.name), f.code)), kTy := kl?.map (·.ty) }
 
 /-- (#283) A body for the elaboration that chooses overloads: each
     `$inlineOv(F, id, call, …)` its call as written, `$ovPick(id, F, call)`. -/

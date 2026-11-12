@@ -325,6 +325,8 @@ kinds=(
   own-method-failure
   own-method-first
   own-method-for
+  recursive-frame-first
+  recursive-frame-for
   recursive-return-eager
   recursive-return-first
   recursive-return-for
@@ -1126,6 +1128,19 @@ box(t:type,u:type):=class:
         ty, value, extra_ty, extra = ('int','7','string','"s"') if i%2==0 else ('string','"x"','int','9')
         args.extend([f'box({ty},{extra_ty}){{V:={value},Extra:={extra},C:=cell{{}}}}', f'array{{{value}}}' if nested else value])
     print(f'Main():void=Print("{{Run({",".join(args)})}}")')
+    sys.exit(0)
+if kind.startswith('recursive-frame-'):
+    # (#283) calls of itself with code after them, each a return frame: the
+    # frames' code is compiled once, not once per value
+    alts = ' | '.join(f'F[N - 1] + {i} | N * {i + 2}' for i in range(count))
+    print(f'''F(N:int)<transacts><decides>:int =
+    Print("f {{N}}")
+    N > 0
+    {alts}''')
+    if kind.endswith('first'):
+        print('Main()<transacts>:void = if (X := F[2], X > 100) then Print("{X}") else Print("none")')
+    else:
+        print('Main()<transacts>:void = Print("{(for (X := F[2], X > 100): X).Length}")')
     sys.exit(0)
 if kind.startswith('recursive-return-'):
     eager = kind.endswith('eager')

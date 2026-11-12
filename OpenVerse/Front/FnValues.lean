@@ -133,24 +133,12 @@ partial def _root_.OpenVerse.Front.STy.fnShapes : STy → List Shape
 partial def _root_.OpenVerse.Front.SExpr.tyNames : SExpr → List String
   | .decl _ _ t _ e => (t.map STy.allNames).getD [] ++ e.tyNames
   | .construct _ n ts args => n :: ts.flatMap STy.allNames ++ args.flatMap SExpr.tyNames
-  | .app _ f args _ => f.tyNames ++ args.flatMap SExpr.tyNames
-  | .member _ e _ | .query _ e | .neg _ e | .notE _ e | .optionLit _ e | .logicLit _ e | .loop _ e
-  | .gen _ _ _ e => e.tyNames
-  | .bin _ _ a b | .andE _ a b | .orE _ a b | .range _ a b => a.tyNames ++ b.tyNames
-  | .cmp _ a rest => a.tyNames ++ rest.flatMap (·.2.tyNames)
-  | .tuple _ es | .block _ es | .arrayLit _ es => es.flatMap SExpr.tyNames
-  | .ite _ cs t e => cs.flatMap SExpr.tyNames ++ t.tyNames ++ (e.map SExpr.tyNames).getD []
-  | .forE _ cs b => cs.flatMap SExpr.tyNames ++ b.tyNames
-  | .ret _ e => (e.map SExpr.tyNames).getD []
-  | .caseE _ e arms => e.tyNames ++ arms.flatMap fun (q, v) => (q.map SExpr.tyNames).getD [] ++ v.tyNames
-  | .set _ l _ e => l.tyNames ++ e.tyNames
-  | .mapLit _ kvs => kvs.flatMap fun (k, v) => k.tyNames ++ v.tyNames
+  -- (type definitions, which `children` leaves out)
   | .structDef _ tps _ fs =>
     tps.flatMap (fun tp => tp.upperBound.toList.flatMap STy.allNames) ++
       fs.flatMap fun (_, t, d, _) => t.allNames ++ (d.map SExpr.tyNames).getD []
   | .refineDef _ _ t cs => t.allNames ++ cs.flatMap SExpr.tyNames
-  | .str _ parts => parts.flatMap fun | .code e => e.tyNames | .text _ => []
-  | _ => []
+  | e => e.children.flatMap SExpr.tyNames
 
 /-- Whether a definition mentions the type `n`. -/
 partial def _root_.OpenVerse.Front.STop.usesType (n : String) : STop → Bool

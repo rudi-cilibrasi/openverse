@@ -70,8 +70,6 @@ partial def SExpr.mapNamesM (r : Resolver) : SExpr → Except String SExpr := fu
     | .decl p n ty v x => do return .decl p n (← ty.mapM (goT p)) v (← go x)
     | a => go a
   match e with
-  | .int .. | .char .. | .char32 .. | .float .. | .brk _ => return e
-  | .str p parts => return .str p (← parts.mapM fun | .text s => pure (.text s) | .code c => do return .code (← go c))
   | .ident p n => do
     -- (`D<constructor>(…)`, a delegation: `D` or `M.D`)
     if n.startsWith "$ctor:" then
@@ -82,7 +80,6 @@ partial def SExpr.mapNamesM (r : Resolver) : SExpr → Except String SExpr := fu
         | none => throw s!"{p.show}: unknown constructor {d}"
       return .ident p s!"$ctor:{← r.val p d}"
     return .ident p (← r.val p n)
-  | .app p g args b => return .app p (← go g) (← args.mapM go) b
   | .member p x m => do
     -- `(M:)F`, parsed as `Self.(M:)F`: when `M` is a module, its member `F`
     -- (#145), as `M.F`; else a qualified member of `Self`
@@ -93,32 +90,14 @@ partial def SExpr.mapNamesM (r : Resolver) : SExpr → Except String SExpr := fu
     if let some comps := x.identPath then
       if let some qn ← r.qual p (comps ++ [m]) then return .ident p qn
     return .member p (← go x) (← r.method p m)
-  | .query p x => return .query p (← go x)
-  | .neg p x => return .neg p (← go x)
-  | .notE p x => return .notE p (← go x)
-  | .bin p o a b => return .bin p o (← go a) (← go b)
-  | .cmp p a rest => return .cmp p (← go a) (← rest.mapM fun (o, b) => do return (o, ← go b))
-  | .andE p a b => return .andE p (← go a) (← go b)
-  | .orE p a b => return .orE p (← go a) (← go b)
-  | .range p a b => return .range p (← go a) (← go b)
-  | .tuple p es => return .tuple p (← es.mapM go)
-  | .block p es => return .block p (← es.mapM go)
-  | .arrayLit p es => return .arrayLit p (← es.mapM go)
-  | .optionLit p x => return .optionLit p (← go x)
-  | .logicLit p x => return .logicLit p (← go x)
-  | .ite p cs t e' => return .ite p (← cs.mapM go) (← go t) (← e'.mapM go)
-  | .forE p cs b => return .forE p (← cs.mapM go) (← go b)
   | .gen p x k s => do
     r.bind p x
     if let some k := k then r.bind p k
     return .gen p x k (← go s)
-  | .loop p b => return .loop p (← go b)
-  | .ret p x => return .ret p (← x.mapM go)
-  | .caseE p s arms => return .caseE p (← go s) (← arms.mapM fun (pat, v) => do return (← pat.mapM go, ← go v))
   | .decl p n ty v x => do
     if !n.startsWith "?" then r.bind p n
     return .decl p n (← ty.mapM (goT p)) v (← go x)
-  | .set p l o rhs => return .set p (← go l) o (← go rhs)
+  -- (a struct's field types and defaults, which `children` leaves out)
   | .structDef p tps specs fs =>
     let own := tps.map (·.name)
     let inner : Resolver := { r with ty := fun q n => if own.contains n then pure n else r.ty q n }
@@ -127,7 +106,7 @@ partial def SExpr.mapNamesM (r : Resolver) : SExpr → Except String SExpr := fu
         return (n, ← t.mapNamesM (inner.ty p), ← d.mapM (·.mapNamesM inner), v))
   | .enumDef .. | .refineDef .. => return e
   | .construct p n ts fs => return .construct p (← r.ty p n) (← ts.mapM (goT p)) (← fs.mapM goField)
-  | .mapLit p kvs => return .mapLit p (← kvs.mapM fun (k, v) => do return (← go k, ← go v))
+  | e => e.mapChildrenM go
 
 /-- Resolve the modules of a parsed program (see the file's header). -/
 def resolveModules (tops : List STop) : Except String (List STop) := do
