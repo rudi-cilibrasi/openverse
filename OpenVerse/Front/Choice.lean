@@ -3176,11 +3176,6 @@ def inlineMulti (tops : List STop) (reserved : List String := []) (eager : List 
   for (q, o) in overloadPicks do
     if let some (_, o') := overloadPicks.find? fun (q', o') => q' == q && o' != o then
       throw s!"{q.show}: this call takes the overload {ovShown o} in the clauses copied for one alternative of a choice and {ovShown o'} in those copied for another, and which overload with several values a call takes is decided before types: not supported yet (#283)"
-  -- (none calling one of them, for now)
-  for f in ovMv do
-    for (_, p, m) in ovOf f do
-      if (namesUsed m.body).contains f then
-        throw s!"{p.show}: {shownFnName f} is overloaded with several values, and this overload calls {shownFnName f}: not supported yet (#283)"
   let rawMfs := fns.filter (mv.contains ·.1)
   -- Analyze recursive shapes after source returns have selected their paths.
   -- Keep original bodies for checking and nonrecursive inline boundaries.

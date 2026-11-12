@@ -1177,7 +1177,9 @@ Main():void =
   overloads with one value has one value. The program is elaborated once
   to find the overload each call takes, then again with each call of an
   overload with several values inlined, wherever the call is (a function,
-  a constant, a default, a class block, the entry expression). A call in
+  a constant, a default, a class block, the entry expression). An overload
+  may call its function's own name, so another overload, inlined there, or
+  itself, recursive (below). A call in
   the clauses after a choice whose alternatives' values are of different
   types, which are copied for each (#335), must take one overload in every
   copy.
@@ -1455,10 +1457,7 @@ Main():void =
   Tell("x", 1) + (1 | 2)` is refused, `T(N - 1) | Y + (1 | 2)` is not); and
   a choice whose values are of another type than the function's may not
   have a choice or a call of its group after it (`S := "a" | "bb"`, then
-  `T[N - 1] + S.Length`) (#283). Also an
-  overloaded one with an overload that calls the function's own name
-  (a generic one's type arguments are inferred from the
-  arguments where it is inlined, as at a call, named ones too), a recursive one with a `defer:` of its own, or called by a recursive one (its body a function's, where it would run once), one with a `return`
+  `T[N - 1] + S.Length`) (#283). Also a recursive one with a `defer:` of its own, or called by a recursive one (its body a function's, where it would run once), one with a `return`
   other than at the end of its body or in an `if`'s branches, an overloaded method, a method of a class or
   interface below two others that each declare its name without `<override>`,
   `<suspends>`, one used as a function value, and, since its body is inlined where other names may be
