@@ -44,6 +44,33 @@ private partial def methodParams : STop → List (List TParam)
   | .classDef _ _ _ _ _ _ _ _ methods => methods.flatMap methodParams
   | _ => []
 
+private def classOperation (upper : Ty) : Option ChoiceOperations :=
+  let a := Ty.param "a" false
+  let u := Ty.param "$operationMethod0" false
+  let extra := upper.params.eraseDups
+  let args := t :: extra.map (fun name => Ty.param name false)
+  let parameters := ("a", false) :: extra.map (·, false)
+  let env := { types with
+    sparams := types.sparams ++ [("ca", parameters), ("cb", parameters)]
+    sbounds := [("ca", [(upper, a)]), ("cb", [(upper, a)])]
+    tvars := types.tvars ++ extra.map (fun name => (name, Ty.param name false)) }
+  let plan : ChoiceTypes.Plan := {
+    binding := row, params := [("row", false)],
+    instances := [[("row", .struct "ca" args)], [("row", .struct "cb" args)]] }
+  let cases := ["ca", "cb"].map fun name => ({
+    receiver := .struct name args, inputs := [u], result := .int, specs := ["computes"],
+    methodVars := [("$operationMethod0", false)], methodBounds := [⟨t, u⟩] } : ChoiceOperationCase)
+  choiceGenericOperation { sigs := [], sigProg := { fns := [], main := 0 }, types := env }
+    "$testClassOperation" (.ident p "Row") row { plan } call cases
+
+private def declarationParams : STop → List TParam
+  | .fn _ _ _ tps .. | .classDef _ _ tps .. => tps
+  | _ => []
+
+private def familyName (ops : ChoiceOperations) : Option String := do
+  let (_, .struct name _) ← ops.params.head? | none
+  return name
+
 private def probe (ops : ChoiceOperations) (base : Ty) (dummy : Bool) (keep : Bool := true) : Except String R := do
   let (name, dictionary) ← match ops.params.head? with
     | some value => pure value
@@ -87,4 +114,24 @@ def main : IO Unit := do
   need "bound-only inference returns the declared result" (result.ty == .int)
   need "a compound relation cannot be silently erased to a bare parameter"
     ((choiceMethodTParams p [("$operationMethod0", false)] [⟨vehicle, .tup [u, u]⟩]).isNone)
-  IO.println "choice bound-method contracts passed (declared domains, real evidence, bound-only inference and cache identity)"
+  let classes ← getSome "class-bound operations remain representable" (classOperation vehicle)
+  need "interface, forwarder and implementations retain the required class bound"
+    (classes.extraFns.length == 4 && classes.extraFns.all fun declaration =>
+      (declarationParams declaration).any (·.upperBound == some (.name "vehicle")))
+  let stricter ← getSome "a stricter class-bound operation" (classOperation (.struct "car" []))
+  need "class bounds participate in operation identity" (familyName classes != familyName stricter)
+  let dependent ← getSome "class bound-only dependencies remain representable"
+    (classOperation (.struct "root" [.param "element" false]))
+  need "class bound-only dependencies belong to the dictionary"
+    (dependent.params.head?.any fun (_, ty) => match ty with
+      | .struct _ args => args.length == 3 && args.any (· == .param "element" false)
+      | _ => false)
+  for declaration in dependent.extraFns do
+    let params := declarationParams declaration
+    need "renamed class bounds keep their own bound-only binder" (params.any fun tp => match tp.upperBound with
+      | some (.app "root" [.name element]) => params.any (·.name == element)
+      | _ => false)
+  let renamed ← getSome "alpha-renamed class dependency"
+    (classOperation (.struct "root" [.param "renamed" false]))
+  need "class-bound identity ignores lexical dependency spellings" (familyName dependent == familyName renamed)
+  IO.println "choice bound-method contracts passed (class/method domains, real evidence, bound-only inference and cache identity)"

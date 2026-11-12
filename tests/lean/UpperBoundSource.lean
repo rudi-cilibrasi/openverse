@@ -22,7 +22,19 @@ def main (args : List String) : IO Unit := do
     "peer-void-join", "peer-void-join-control", "peer-void-comparable", "peer-void-comparable-control",
     "peer-void-tuple-value", "peer-void-tuple-value-control",
     "peer-numeric-comparable", "peer-numeric-comparable-control",
-    "choice-nested-spawn-bound", "choice-nested-spawn-bound-control"]
+    "choice-nested-spawn-bound", "choice-nested-spawn-bound-control",
+    "choice-class-method",
+    "choice-class-method-control",
+    "choice-class-mono",
+    "choice-class-mono-control",
+    "choice-class-unique",
+    "choice-class-unique-control",
+    "choice-class-bound-only",
+    "choice-class-bound-only-control",
+    "choice-class-state",
+    "choice-class-state-control", "choice-class-varying", "choice-class-varying-control",
+    "choice-class-compound", "choice-class-compound-control",
+    "choice-class-fields", "choice-class-fields-control"]
   let negative := ["choice-refusal", "default-refusal", "override-refusal", "overload-interface-refusal",
     "overload-ancestor-refusal", "overload-optional-refusal", "overload-empty-refusal", "overload-scope-refusal",
     "overload-value-refusal", "interior-readonly-refusal", "interior-effect-refusal",
@@ -30,7 +42,7 @@ def main (args : List String) : IO Unit := do
     "peer-map-key-refusal", "peer-container-arity-refusal", "peer-container-narrow-refusal",
     "peer-refinement-narrow-refusal", "peer-refinement-literal-refusal", "default-undeclared-bound-refusal",
     "choice-method-bound-refusal", "peer-void-narrow-refusal", "peer-void-comparable-refusal",
-    "peer-comparable-equality-refusal"]
+    "peer-comparable-equality-refusal", "choice-class-unproved-refusal"]
   let mut failures := 0
   for name in positive ++ negative do
     let root := s!"tests/upper-bounds/{name}"

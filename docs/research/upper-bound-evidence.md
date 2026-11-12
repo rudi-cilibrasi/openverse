@@ -112,6 +112,13 @@ actual lexical evidence and can infer parameters that occur only in a bound.
 The operation identity includes the bound domain. Different per-case domains,
 or relations that cannot be expressed on a retained binder, keep the checked
 per-case source path rather than generating an unconstrained method.
+Operation generation also retains the obligations of concrete receiver,
+argument and result type applications. Generic operation interfaces,
+forwarders and implementations keep these class bounds and their bound-only
+dependencies; ordinary method, field and write operations retain them on each
+implementation. Canonical identities include the retained class obligations.
+Constructing a dictionary still requires actual current-frame evidence.
+An unrepresentable class contract keeps the checked per-case source path.
 
 Member lookup uses actual nominal views. Root and interior mutation preserve
 the source storage type, evaluate indices/keys before traversal, and perform
