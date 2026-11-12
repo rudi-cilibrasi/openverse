@@ -69,11 +69,11 @@ def main : IO Unit := do
   let functionName := (FnValues.shapeOf 2 ["computes"]).name
   let request : FnValues.MethodRequest := {
     key := "metadata-shape", pos := p, owner := "reader", method := "Read"
-    tparams := [{ name := "t", constraint := "type" }]
+    tparams := [{ pos := p, name := "t", constraint := "type" }]
     receiver := .name "reader", params := [.name "int"], effs := ["computes"]
     ret := .name "int", args := [.ident p "$X0"], decides := false }
   for request in [{ request with relations := [(functionType, .name "t")] },
-      { request with tparams := [{ name := "t", upperBound := some functionType }] }] do
+      { request with tparams := [{ pos := p, name := "t", constraint := "type", upperBound := some functionType }] }] do
     need "method-request relation/header metadata contributes shapes"
       ((FnValues.desugar [] [] [] [request]).any fun
         | .classDef _ name .. => name == functionName
