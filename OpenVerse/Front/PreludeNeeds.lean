@@ -41,19 +41,17 @@ partial def expr (types values : List String) (e : SExpr) : List String :=
   | .forE _ cs b =>
     let (vs, ns) := seq cs
     ns ++ expr types vs b
-  | .andE _ a b => expr types values a ++ expr types (binds a ++ values) b
   | .structDef _ tps _ fs =>
     let types := tps.map (·.name) ++ types
-    let values := fs.map (·.1) ++ values
-    fs.flatMap fun (_, t, d, _) => ty types t ++ d.toList.flatMap (expr types values)
+    fs.flatMap fun (_, t, d, _) => ty types t ++ d.toList.flatMap (expr types [])
   | .refineDef _ n t cs => ty types t ++ cs.flatMap (expr types (n :: values))
   | _ =>
     let here := match e with
       | .decl _ _ t _ _ => t.toList.flatMap (ty types)
       | .construct _ n ts _ => nominal types n ++ ts.flatMap (ty types)
-      | .app _ (.ident _ n) _ br =>
+      | .app _ (.ident _ n) _ _ =>
         if ["$spawn", "$sync", "$race", "$rush", "$branch"].contains n then ["$suspends"]
-        else if br && !values.contains n then nominal types n else []
+        else if !values.contains n then nominal types n else []
       | _ => []
     here ++ e.children.flatMap (expr types values)
 
@@ -69,7 +67,7 @@ partial def top (members : List (String × List String)) (types values : List St
     let types := tps.map (·.name) ++ types
     let values := ((members.lookup n).getD []) ++ values
     parents.flatMap (ty types) ++
-      fs.flatMap (fun (_, t, d, _) => ty types t ++ d.toList.flatMap (expr types values)) ++
+      fs.flatMap (fun (_, t, d, _) => ty types t ++ d.toList.flatMap (expr types [])) ++
       ms.flatMap (top members types values)
 
 /-- Implicit method/field lookup includes inherited source members. Qualified
