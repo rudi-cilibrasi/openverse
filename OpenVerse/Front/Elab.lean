@@ -113,9 +113,10 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     "Signal", "Await", "Cancel"] ++ helpers.flatMap fun
       | .classDef _ _ _ _ _ _ fs _ ms => fs.map (·.1) ++ ms.filterMap fun | .fn _ m .. => some m | _ => none
       | _ => []
-  -- (#283) and the uses of methods whose family the receiver's class picks
-  let (resolved, lazy, familySites) ← Choice.inlineMulti resolved reserved opts.requests.eager opts.requests.families
-    opts.requests.lazy
+  -- (#283) and the uses of methods whose family the receiver's class picks,
+  -- and the calls whose overload the arguments' types pick
+  let (resolved, lazy, familySites, overloadSites) ← Choice.inlineMulti resolved reserved opts.requests.eager
+    opts.requests.families opts.requests.lazy opts.requests.overloads
   -- (#246) the class of the stack cells of lazily taken ones
   let helpers := helpers ++ (← if lazy then lazyTops else pure [])
   -- (#283) and of the cells of the vars their frames set
@@ -742,7 +743,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
                              let i := henv.info d
                              if i.isIface || i.isAbstract then m else
                              (henv.supers d).foldl (fun m T => m.insert T ((m[T]?.getD []) ++ [d])) m) {},
-                           abstracts := abstracts.toList, fnRequests := opts.requests.fns, familySites, methodRequests := opts.requests.methods,
+                           abstracts := abstracts.toList, fnRequests := opts.requests.fns, familySites, overloadSites, methodRequests := opts.requests.methods,
                            castRequests := opts.requests.casts, loopRequests := opts.requests.loops }
   env := { env with varFields := varFields, uniques := uniques,
                     overriders := (overridePairs.toList.map fun (_, dm, _) => (dm.splitOn ".").headD "") ++
@@ -1198,7 +1199,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       match top with
       | .const _ _ _ body =>
         let ctx : Ctx := { sigs := sigs.toList ++ gsigs.toList, sigProg := mkSigProg sigs, types := env }
-        match elabBodyOv ctx body (some sigs[idx]!.ret) { env } with
+        match elabBody ctx body (some sigs[idx]!.ret) { env } with
         | .ok (_, st) =>
           let fx := heapFx.filter fun k => st.fx.any (·.1 == k)
           if fx != sigs[idx]!.fx then
@@ -1210,7 +1211,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       | .fn p n ps _ _ _ body =>
         if (n.splitOn "$default$").length > 1 then
           let ctx : Ctx := { sigs := sigs.toList ++ gsigs.toList, sigProg := mkSigProg sigs, types := env }
-          match elabBodyOv ctx body (some sigs[idx]!.ret) { env } with
+          match elabBody ctx body (some sigs[idx]!.ret) { env } with
           | .ok (_, st) =>
             let fx := heapFx.filter fun k => st.fx.any (·.1 == k)
             if fx != sigs[idx]!.fx then
@@ -1224,7 +1225,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
           let base : Ctx := { sigs := sigs.toList ++ gsigs.toList, sigProg := mkSigProg sigs, types := env,
                               locals := locals.reverse, retTy := s.ret, canFail := s.decides, suspends := s.suspends, fnFx := s.fx }
           let ctx ← functionBodyCtx opts.requests base p n s.tparams s.scope
-          match elabBodyOv ctx body (some s.ret) { env, nslots := ps.length, slotTys := s.params.toArray, frameSlots := ctx.locals.filterMap fun l => l.storage.map (l.slot, ·) } with
+          match elabBody ctx body (some s.ret) { env, nslots := ps.length, slotTys := s.params.toArray, frameSlots := ctx.locals.filterMap fun l => l.storage.map (l.slot, ·) } with
           | .ok (_, st) =>
             let fx := heapFx.filter fun k => st.fx.any (·.1 == k) ||
               (opts.requests.casts.any (·.name == n) && s.fx.contains k)
@@ -1253,7 +1254,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
                               locals := locals.reverse, retTy := g.ret, canFail := g.decides, suspends := g.suspends,
                               dictBase := ps.length, dictVars := dictTps.map (·.1), fnFx := g.fx }
           let ctx ← functionBodyCtx opts.requests base p n g.tparams g.scope
-          match elabBodyOv ctx body (some g.ret)
+          match elabBody ctx body (some g.ret)
               { env := genv, nslots := ps.length + hidden.length, slotTys := (g.params ++ hidden).toArray, frameSlots := ctx.locals.filterMap fun l => l.storage.map (l.slot, ·) } with
           | .ok (_, st) =>
             let fx := heapFx.filter fun k => st.fx.any (·.1 == k) ||
@@ -1491,8 +1492,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     let st0 : ESt := {
       env, nslots := ps.length + hidden.length, slotTys := (ptys ++ hidden).toArray,
       frameSlots := locals.filterMap fun l => l.storage.map (l.slot, ·) }
-    -- (#283) its calls of overloaded functions with several values chosen
-    let ((r, _), st) ← elabBodyOv ctx body (some ret) st0
+    let ((r, _), st) ← elabBody ctx body (some ret) st0
     let (e, st) ← (coerce p r ret).run st
     let e := if ret == .void then Expr.seq e (.lit .void) else e
     let selfInits : List Expr := (dictTps.drop (hidden.length - selfTps.length)).map fun (v, _) =>
@@ -1527,7 +1527,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       if sig.ret.holdsMutable env then
         throw s!"{p.show}: the constant {n} would hold an object with var fields or of a <unique> class, which would be a new one at each use: make it a function"
       let ctx : Ctx := { sigs := allSigs, sigProg, types := env }
-      let (r, st) ← elabBodyOv ctx body (some sig.ret) { env }
+      let (r, st) ← elabBody ctx body (some sig.ret) { env }
       let (e, st) ← (coerce p r.1 sig.ret).run st
       -- slots start like a function's (a class-typed one as a placeholder)
       let inits ← match st.slotTys.toList.mapM (slotDefault env 0 [] []) with
@@ -1564,14 +1564,16 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   let loopFirst := elaborated.toList.flatMap (·.loopFirst)
   let failCalls := elaborated.foldl (fun acc f => acc ++ f.failCalls) #[]
   let mut needs := elaborated.foldl (fun acc f => acc.merge f.needs) fieldNeeds
-  -- (#283) the eager groups, and the families of the uses of methods whose
-  -- receivers' classes this one found; those it did not reach, of no
-  -- family, so that the last elaboration has none to find (and knows what
+  -- (#283) the eager groups, the families of the uses of methods whose
+  -- receivers' classes this one found, and the overloads of the calls whose
+  -- arguments' types it found; those it did not reach, of no family or
+  -- overload, so that the last elaboration has none to find (and knows what
   -- can fail): the program is elaborated again with them, so this one goes
   -- no further
   if needs.families.isEmpty then needs := needs.merge { families := familySites.map fun (q, _) => (q, "") }
-  if !needs.eager.isEmpty || !needs.families.isEmpty then
-    return .asking { eager := needs.eager, families := needs.families }
+  if needs.overloads.isEmpty then needs := needs.merge { overloads := overloadSites.map fun (q, _) => (q, "") }
+  if !needs.eager.isEmpty || !needs.families.isEmpty || !needs.overloads.isEmpty then
+    return .asking { eager := needs.eager, families := needs.families, overloads := needs.overloads }
   -- (#214) and functions wanted as values at types no class of theirs
   -- gives, adapters for methods wanted as values, (#243) branches of casts
   -- that refine type arguments, lifted into functions, and helpers that
@@ -1796,21 +1798,23 @@ partial def topDefaultCount : STop → Nat
     changes, and an elaboration asks for one tier at a time
     (`elabProgramCore` goes no further than the first it finds):
     1. how the source's choices are inlined (#283): eager groups, lazily
-       taken functions, and the families of methods' uses;
+       taken functions, the families of methods' uses and the overloads of
+       calls;
     2. the classes' layout (#351): hidden fields for all of a class's type
        parameters;
     3. the functions added: functions as values (#214), method adapters, the
        branches of refining casts (#243), and the functions of lazily taken
        calls and the helpers of consumers of choices (#246, #335). -/
 def Requests.tier (r : Requests) : Nat :=
-  if !r.eager.isEmpty || !r.families.isEmpty || !r.lazy.isEmpty then 1
+  if !r.eager.isEmpty || !r.families.isEmpty || !r.overloads.isEmpty || !r.lazy.isEmpty then 1
   else if !r.witnesses.isEmpty then 2
   else 3
 
 /-- The requests of tier `k` and of the tiers above it (`Requests.tier`). -/
 def Requests.upTo (r : Requests) (k : Nat) : Requests :=
   if k ≥ 3 then r else
-  { eager := r.eager, families := r.families, lazy := r.lazy, witnesses := if k = 2 then r.witnesses else [] }
+  { eager := r.eager, families := r.families, overloads := r.overloads, lazy := r.lazy,
+    witnesses := if k = 2 then r.witnesses else [] }
 
 /-- Elaborate a parsed program (`elabProgramCore`), with the names of the
     functions a constructor or an overload becomes shown as written: `K$init`

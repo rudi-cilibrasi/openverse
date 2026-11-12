@@ -1323,25 +1323,6 @@ partial def elabLoopGenGroupWith (elabE : Ctx → SExpr → Option Ty → EM R)
   return { init, step, sp, has, value, after, vty := rty, itemCode, argSet, instances, bnd := bnd?,
            frames := frames.map (fun f => (f.hole, f.lives.map (·.name), f.code)), kTy := kl?.map (·.ty) }
 
-/-- (#283) A body for the elaboration that chooses overloads: each
-    `$inlineOv(F, id, call, …)` its call as written, `$ovPick(id, F, call)`. -/
-partial def ovForTypes : SExpr → SExpr :=
-  Choice.mapE fun
-    | .app p (.ident _ "$inlineOv") (.ident q f :: .int _ id :: call :: _) false =>
-      some (.app p (.ident p "$ovPick") [.int p id, .ident q f, ovForTypes call] false)
-    | _ => none
-
-/-- (#283) The body with each `$inlineOv` its chosen overload's inlined
-    call, `picks` the overload (`F$ovK`) each id's call took. -/
-partial def ovChosen (picks : List (Nat × String)) : SExpr → SExpr :=
-  Choice.mapE fun
-    | .app p (.ident _ "$inlineOv") (.ident q f :: .int _ id :: _ :: cands) false =>
-      let k? : Option Nat := (picks.lookup id.toNat).bind fun o => ((o.splitOn "$ov").getLast?).bind (·.toNat?)
-      match k?.bind (cands[·]?) with
-      | some c => some (ovChosen picks c)
-      | none => some (.app p (.ident p "$ovUnresolved") [.ident q f] false)
-    | _ => none
-
 /-- Check a construction's value choices at the field's expected type.
     Keeping the original inline/lazy templates visits nested constructions
     under their real parameter aliases, rather than replacing them by calls. -/

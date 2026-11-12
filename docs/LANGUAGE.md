@@ -1173,9 +1173,14 @@ Main():void =
   An overloaded function may have several values too (#283): a call takes
   the overload its arguments fit, as any call does, and has that
   overload's values, inlined as it would be alone; an overload with one
-  value is an ordinary call. Without types where it is inlined, a function
-  that calls such an overloaded one is taken to have several values
-  whichever overload it reaches, for now.
+  value is an ordinary call. So a function whose calls reach only
+  overloads with one value has one value. The program is elaborated once
+  to find the overload each call takes, then again with each call of an
+  overload with several values inlined, wherever the call is (a function,
+  a constant, a default, a class block, the entry expression). A call in
+  the clauses after a choice whose alternatives' values are of different
+  types, which are copied for each (#335), must take one overload in every
+  copy.
 
   A method with several values works the same way (#283): a call
   `R.M(args)` evaluates `R` first, once, then is inlined like a function's,

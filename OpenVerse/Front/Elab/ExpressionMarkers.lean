@@ -172,14 +172,6 @@ partial def elabExprMarkersWith
       canFail := mode == "true", defers := [], forReturnSlot := some slot,
       forBreakCapture := some breaking, forBreakSlot := none, inLoop := true, loopDefers := 0,
       loopRollback := mode == "true" || ctx.inRollback } body exp
-  -- (#283) a call of an overloaded function with several values, as
-  -- written, in the elaboration for types: the overload it takes noted
-  | .app _ (.ident _ "$ovPick") [.int _ id, .ident _ f, call] false =>
-    elabE { ctx with ovPick := some (id.toNat, f) } call exp
-  | .app p (.ident _ "$inlineOv") (.ident _ f :: _) false =>
-    eerr p s!"a call of {Choice.shownFnName f}, which is overloaded and has several values, is supported in the body of a function or method only, for now (#283)"
-  | .app p (.ident _ "$ovUnresolved") [.ident _ f] false =>
-    eerr p s!"internal: which overload of {Choice.shownFnName f} this call takes (#283)"
   -- (#283, `Choice.bifToExcl`) a block as an `if`'s branch binding a name
   -- its condition binds
   | .app _ (.ident _ "$shadows") [.ident q n] false =>

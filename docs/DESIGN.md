@@ -665,12 +665,29 @@ The cost: all values are computed even where one is taken, so an
 infinite generator never stops, and an error (an overflow) in a value a
 first success would not have reached stops the program.
 
-Overloaded functions with several values (#283) need the overload a call takes, which only types decide.
-- `inlineMulti` gives each overload a function of its own for the analysis, `F$mvK` (K its place, as the elaborator numbers `F$ovK`). `F` itself becomes a stand-in that calls them all, so a function that calls `F` has several values when an overload does.
-- A call becomes `$inlineOv(F, id, F(args), candidates…)`: each overload's own inlined call (the call as written for one with one value, a placeholder for one whose shape the call does not fit).
-- `elabFn` elaborates a body with markers twice. First for types (`Ctx.typeOnly`), each marker its call as written (`$ovPick`), the kept overloads typing it as any call. `resolveOverload`'s call notes the overload taken under the marker's id (`ESt.ovPicks`). Then for real, each marker its chosen candidate (`ovChosen`).
-- The arguments are made once for the call and its candidates, so a nested call keeps one id.
-- The overloads with several values are also kept as `F$mvK`, for their signatures where they are inlined.
+Overloaded functions with several values (#283) need the overload a call
+takes, which only types decide: it is decided in rounds, as the family of a
+method's use is (below, "Elaboration in rounds").
+- `inlineMulti` gives each overload a function of its own, `F$mvK` (K its
+  place, as the elaborator numbers `F$ovK`).
+- A call of `F` whose overload an earlier elaboration found, by the call's
+  place (`Requests.overloads`), is a call of that overload's function
+  (`pickOverloads`), the others calls as written, of one value in the
+  fixpoint. So which functions have several values is exact: one that
+  reaches only an overload with one value has one.
+- At the calls of an `F` with an overload that has several values that are
+  not picked yet (`TyEnv.overloadSites`), `resolveOverload`'s call notes the
+  overload taken (`Ctx.noteOverload`), and the program is elaborated again
+  with them. That elaboration does not judge what can fail
+  (`Ctx.failabilityKnown`), as a call may yet get several values; the calls
+  it does not reach take none, so the last one has none left.
+- An overload with several values is kept for checking, as itself and as
+  `F$mvK`, for its signature where its calls are inlined (effects,
+  defaults).
+- A call is of one overload wherever its code is elaborated: one in clauses
+  copied for alternatives of a choice whose values are of different types
+  (#335), that takes one overload in a copy and another in another, is
+  refused.
 
 A self-recursive one shaped as a generator (#246; `Choice.loopShape?`:
 clauses without choices, then a choice, or an `if … else …` of choices and
@@ -1040,8 +1057,9 @@ The block then needs between 120000 and 160000 heartbeats. A function with a def
 Some of what a program needs is known only once its types are: a function
 used as a value at a type no class of its gives (#214), a cast's branch as
 a function (#243), a lazily taken call's function of its own (#246), the
-family of a method's use (#283), hidden fields for all of a class's type
-parameters (#351), and more. An elaboration (`elabProgramCore`) that finds
+family of a method's use and the overload a call takes, where they decide
+how the source's choices are inlined (#283), hidden fields for all of a
+class's type parameters (#351), and more. An elaboration (`elabProgramCore`) that finds
 such a need records it (`noteNeeds` in a function's `ESt.needs`, or one of
 `elabProgramCore`'s own checks), with a placeholder where a value was
 wanted, and goes no further than the step that found it: its result asks for
@@ -1054,7 +1072,8 @@ order of the functions made for them.
 
 What is asked for is of three tiers, by what it changes (`Requests.tier`),
 and an elaboration asks for one tier at a time: 1. how the source's
-choices are inlined (eager groups, lazily taken functions, families),
+choices are inlined (eager groups, lazily taken functions, families,
+overloads),
 2. the classes' layout (hidden fields), 3. the functions added (functions
 and methods as values, cast branches, the functions of lazily taken calls,
 continuations and default helpers). A round that asks for more of one tier
@@ -2235,7 +2254,7 @@ there, is lifted out by that lifting, marked `$liftCast` (`Refine.markCast`,
 which `Choice.hasLiftable` and `liftE` take as a value to bind, as a
 choice): the operands before it bound, then `$k… := T[X]`, a cast clause
 (`liftCastClause`, in `withCastClauses` and `elabSeqIn`; a `<decides>`
-body of one expression is the block of it, `elabBodyOv`). In a sequence whose names
+body of one expression is the block of it, `elabBody`). In a sequence whose names
 end with it (a block, so a `<decides>` body or `option{…}`'s, and the
 operand of `not`, `and` and `or`), `pre; D := T[X]; rest` is `pre; if (D
 := T[X]) then {rest} else fail` (`elabSeqIn`; the `else` is

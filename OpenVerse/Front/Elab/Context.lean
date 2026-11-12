@@ -388,9 +388,6 @@ structure Ctx where
   /-- Isolated mutual-generator inference: return this call's inferred type
       arguments after normal binding, without requiring witnesses. -/
   callInstanceProbe : Option String := none
-  /-- (#283) Elaborating the call as written of an `$inlineOv(F, id, …)`,
-      for types: the overload of `F` it takes is noted under `id`. -/
-  ovPick : Option (Nat × String) := none
   /-- (#243, #351) Elaborating an `if` as written, whose condition has a
       cast as a later clause: not rewritten, `elabE`'s `.ite`. -/
   asWritten : Bool := false
@@ -434,6 +431,10 @@ structure Requests where
       declare apart, by its place: the root its receiver's class is below,
       whose family it takes (`Choice.famAt`). -/
   families : List (Pos × String) := []
+  /-- (#283) For each call of an overloaded function with an overload that
+      has several values, by its place: the overload it takes (`F$ovK`),
+      whose own function it calls (`Choice.inlineMulti`). -/
+  overloads : List (Pos × String) := []
   /-- Functions wanted as values at closed function types no class of
       theirs gives (#214): a class for each. -/
   fns : List (String × Ty) := []
@@ -464,6 +465,7 @@ def Requests.merge (a b : Requests) : Requests where
   eager := mergeByKey id a.eager b.eager
   lazy := mergeByKey id a.lazy b.lazy
   families := mergeByKey id a.families b.families
+  overloads := mergeByKey id a.overloads b.overloads
   fns := mergeByKey id a.fns b.fns
   methods := mergeByKey (·.key) a.methods b.methods
   casts := mergeByKey (·.key) a.casts b.casts
@@ -479,6 +481,7 @@ def Requests.without (r old : Requests) : Requests where
   eager := dropByKey id r.eager old.eager
   lazy := dropByKey id r.lazy old.lazy
   families := dropByKey id r.families old.families
+  overloads := dropByKey id r.overloads old.overloads
   fns := dropByKey id r.fns old.fns
   methods := dropByKey (·.key) r.methods old.methods
   casts := dropByKey (·.key) r.casts old.casts
@@ -486,7 +489,7 @@ def Requests.without (r old : Requests) : Requests where
   witnesses := dropByKey id r.witnesses old.witnesses
 
 def Requests.isEmpty (r : Requests) : Bool :=
-  r.eager.isEmpty && r.lazy.isEmpty && r.families.isEmpty && r.fns.isEmpty && r.methods.isEmpty &&
+  r.eager.isEmpty && r.lazy.isEmpty && r.families.isEmpty && r.overloads.isEmpty && r.fns.isEmpty && r.methods.isEmpty &&
     r.casts.isEmpty && r.loops.isEmpty && r.witnesses.isEmpty
 
 /-- A lazily taken call where the first success is taken (#246): its
@@ -551,9 +554,6 @@ structure ESt where
       it may reach no `Print` and change no object, checked on Verse Core
       code once every function is. -/
   loopFirst : List LoopUse := []
-  /-- (#283) For a call of an overloaded function with several values: the
-      overload the elaboration for types chose, by the call's `$inlineOv` id. -/
-  ovPicks : List (Nat × String) := []
   constructHints : List ConstructHint := []
   deriving Inhabited
 
@@ -899,11 +899,12 @@ def Ctx.rootsOf (ctx : Ctx) (c m : String) : List String :=
 
 /-- Whether this elaboration knows if an expression can fail: not one for
     types, nor one to be done again with functions as values (#214, #231)
-    or with the families of methods' uses (#283), which may make a call
-    fail or have several values. -/
+    or with the families of methods' uses or the overloads of calls (#283),
+    which may make a call fail or have several values. -/
 def Ctx.failabilityKnown (ctx : Ctx) : EM Bool := do
   let st ← get
-  return st.needs.fns.isEmpty && st.needs.methods.isEmpty && ctx.types.familySites.isEmpty && !ctx.typeOnly
+  return st.needs.fns.isEmpty && st.needs.methods.isEmpty && ctx.types.familySites.isEmpty &&
+    ctx.types.overloadSites.isEmpty && !ctx.typeOnly
 
 /-- (#283) A use `R.M` at `p` whose family of methods only the class of
     `R` tells, one of `TyEnv.familySites`: the root of `M` above that class
@@ -914,6 +915,12 @@ def Ctx.noteFamily (ctx : Ctx) (p : Pos) (recv : Ty) (m : String) : EM Unit := d
       | .struct c _ => ((ctx.rootsOf c m).head?).getD ""
       | _ => ""
     noteNeeds { families := [(p, root)] }
+
+/-- (#283) A call at `p` of overloaded function `f` whose overload decides
+    whether it has several values, one of `TyEnv.overloadSites`: the
+    overload `o` it takes noted. -/
+def Ctx.noteOverload (ctx : Ctx) (p : Pos) (f o : String) : EM Unit := do
+  if ctx.types.overloadSites.contains (p, f) then noteNeeds { overloads := [(p, o)] }
 
 /-- The function that implements slot `r` of method `m` for an instance of
     class `d` (#70). -/

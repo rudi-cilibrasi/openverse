@@ -56,10 +56,8 @@ partial def elabAppBaseWith
     else
     if let some ovs := ctx.types.overloads.lookup name then
       resolveOverload ctx p name ovs ctx.sig? (fun o => do
-        -- (#283) the overload an `$inlineOv`'s call as written takes
-        if let some (id, f) := ctx.ovPick then
-          if f == name then modify fun st => { st with ovPicks := (id, o) :: st.ovPicks }
-        elabApp { ctx with ovPick := none } p (.ident p o) args bracket exp) args
+        ctx.noteOverload p name o
+        elabApp ctx p (.ident p o) args bracket exp) args
     else
     -- (a soft built-in the program defines is the program's)
     let builtinName := if (softBuiltins.contains name || name == "any") && (ctx.sig? name).isSome then "$program" else name
