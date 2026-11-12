@@ -17,6 +17,7 @@
     the core theorems) before anyone runs it.
 -/
 import OpenVerse.Front.Elab.Lowering
+import OpenVerse.Front.SignalAdmission
 import OpenVerse.Front.InitializerConvergence
 
 namespace OpenVerse.Front
@@ -33,6 +34,8 @@ structure ElaboratedFn where
   frames : FrameRefs.Info := {}
   needs : Requests
   loopFirst : List LoopUse
+  /-- (#515) Its calls in failure contexts (`ESt.failCalls`). -/
+  failCalls : Array ((Pos × String) × List Nat)
 
 /-- Elaborate a parsed program into a Verse Core program that passes `Prog.check`
     and `Prog.checkTypes`. -/
@@ -1507,9 +1510,9 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
              slotTys := spawnParamTypes env name (st.slotTys.toList.map (Ty.toVTy env)), errAt := st.errAt,
              frames := { explicit := ps.length, copies := st.frameCopies, slots := st.frameSlots.map fun (i, s) =>
                (i, { frame := s.frame, name := s.name, args := s.args.map (Ty.toVTy env) }) },
-             needs := st.needs, loopFirst := st.loopFirst }
+             needs := st.needs, loopFirst := st.loopFirst, failCalls := st.failCalls }
   -- (the accessors come right after the functions, #157)
-  env := { env with fieldAccBase := tops.length + gsigs.size }
+  env := { env with fieldAccBase := tops.length + gsigs.size, signalNoRollback := opts.signalNoRollback }
   let genvOf (g : Sig) : TyEnv := { env with tvars := g.tparams.map fun (v, c) => (v, Ty.param v c) }
   -- (the functions, then the generic ones, by index)
   let mut elaborated : Array ElaboratedFn := #[]
@@ -1535,7 +1538,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
         fn := { name := n, arity := 0, nslots := st.nslots, decides := false,
                 writes := sig.fx.contains "writes", body := initPrefixE 0 inits e }
         slotTys := st.slotTys.toList.map (Ty.toVTy env), errAt := st.errAt, needs := st.needs,
-        loopFirst := st.loopFirst }
+        loopFirst := st.loopFirst, failCalls := st.failCalls }
     | .classDef .. => pure ()   -- expanded above
   -- each generic function is elaborated once, with its type parameters
   -- opaque, as Verse checks it, into one Verse Core function whose types
@@ -1559,6 +1562,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   -- (the lazily taken functions with several values that contexts taking
   -- their first success consume, #246)
   let loopFirst := elaborated.toList.flatMap (·.loopFirst)
+  let failCalls := elaborated.foldl (fun acc f => acc ++ f.failCalls) #[]
   let mut needs := elaborated.foldl (fun acc f => acc.merge f.needs) fieldNeeds
   -- (#283) the eager groups, and the families of the uses of methods whose
   -- receivers' classes this one found; those it did not reach, of no
@@ -1644,6 +1648,10 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     | _ => none)) opts.requests.lazy
   if !lazyNeeds.isEmpty then
     return .asking { lazy := lazyNeeds }
+  -- (#515, `--signal-no-rollback`) no event signal from a failure context
+  if opts.signalNoRollback then
+    if let some ((p, what), way) := SignalAdmission.checkSites fns failCalls then
+      throw s!"{p.show}: this {what} may signal an event ({" → ".intercalate way}) in a failure context, which --signal-no-rollback refuses: the published Verse API makes an event's Signal <no_rollback> (#515)"
   -- (#246) and functions of their own for the lazily taken calls whose
   -- effects need them: the program is elaborated again, with them
   let loopNeeds ← checkLoopFirst fns loopFirst opts.requests.loops
@@ -1883,12 +1891,13 @@ def compile (src : String) (opts : Options := {}) : Except String Prog := do
     bound to `Args` when given or mentioned, and an optional `do` expression. -/
 def compileTops (tops : List STop) (args : List String) (mentionsArgs : Bool) (doExpr : Option String)
     (debug : Bool := false) (profile : SourceProfile := .full) (eventFifo : Bool := false)
-    (extendedDefaults : Bool := false) : Except String Prog := do
+    (extendedDefaults : Bool := false) (signalNoRollback : Bool := false) : Except String Prog := do
   let entry ← match doExpr with
     | some t => some <$> parseExprText t
     | none => pure none
   let useArgs := !args.isEmpty || mentionsArgs
-  return (← elabProgram tops { args := if useArgs then some args else none, entry, debug, profile, eventFifo, extendedDefaults }).prog
+  let opts : Options := { args := if useArgs then some args else none, entry, debug, profile, eventFifo, extendedDefaults }
+  return (← elabProgram tops { opts with signalNoRollback }).prog
 
 /-- Compile with shell arguments (bound to `Args` when given or used) and an
     optional `do` expression, as `openverse run FILE ARG… do EXPR` does. -/

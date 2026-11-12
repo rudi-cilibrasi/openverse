@@ -38,37 +38,49 @@ def runProg (P : Prog) (fuel : Nat) : IO UInt32 := do
     | .err k => IO.eprintln s!"error: {errName k}"; return 2
 
 def usage : String :=
-  "usage: openverse run FILE.verse [--no-choice] [--event-fifo] [--extended-defaults] [--fuel N] [--emit FILE.vbc] [ARG…] [do EXPR]\n" ++
+  "usage: openverse run FILE.verse [--no-choice] [--event-fifo] [--signal-no-rollback] [--extended-defaults] [--fuel N] [--emit FILE.vbc] [ARG…] [do EXPR]\n" ++
   "                                               run Main() (or EXPR) with the reference interpreter;\n" ++
   "                                               the ARGs are the program's Args:[]string; --emit also\n" ++
   "                                               writes what emit would, compiling the program once\n" ++
-  "       openverse emit FILE.verse [--no-choice] [--event-fifo] [--extended-defaults] -o FILE.vbc [ARG…] [do EXPR]\n" ++
+  "       openverse emit FILE.verse [--no-choice] [--event-fifo] [--signal-no-rollback] [--extended-defaults] -o FILE.vbc [ARG…] [do EXPR]\n" ++
   "                                               compile to OVBC for the C runtime (cverse)\n" ++
-  "       openverse check FILE.verse [--no-choice] [--extended-defaults] parse, elaborate and check only\n" ++
-  "       openverse core FILE.verse [--no-choice] [--extended-defaults] print the elaborated Verse Core\n" ++
+  "       openverse check FILE.verse [--no-choice] [--event-fifo] [--signal-no-rollback] [--extended-defaults]\n" ++
+  "                                               parse, elaborate and check only\n" ++
+  "       openverse core FILE.verse [--no-choice] [--event-fifo] [--signal-no-rollback] [--extended-defaults]\n" ++
+  "                                               print the elaborated Verse Core\n" ++
   "       --no-choice excludes |, first, for/generators and ranges from all loaded source;\n" ++
   "       it may also precede the command or file. In run/emit, -- passes literal Args.\n" ++
   "       --event-fifo resumes the tasks an event's Signal wakes in the order they began to wait (#513).\n" ++
+  "       --signal-no-rollback refuses an event's Signal that a failure context may call (#515).\n" ++
   "       --extended-defaults retains extended field defaults without a convergence assertion (#511).\n" ++
   "       openverse example NAME [--emit FILE.vbc] | openverse examples"
+
+/-- The compiler's opt-in semantic policies: FIFO event resumption (#513,
+    `--event-fifo`), no event signal in a failure context (#515,
+    `--signal-no-rollback`), and extended field defaults kept without a
+    convergence assertion (#511, `--extended-defaults`). -/
+structure Policies where
+  eventFifo : Bool := false
+  signalNoRollback : Bool := false
+  extendedDefaults : Bool := false
 
 /-- Load a program, a file or a directory with everything it imports, and
     compile it: malformed UTF-8 is a front-end error (exit 4), as is any
     other front-end error. -/
 def loadAndCompile (file : String) (args : List String) (doExpr : Option String)
-    (profile : Front.SourceProfile := .full) (eventFifo : Bool := false) (extendedDefaults : Bool := false) :
+    (profile : Front.SourceProfile := .full) (pol : Policies := {}) :
     IO (Except String Prog) := do
   match ← Front.loadProgram file with
   | .error e => return .error e
   | .ok (tops, mentionsArgs) =>
     -- (OPENVERSE_DEBUG=1: an internal error also prints the rejected Verse Core)
     let debug := (← IO.getEnv "OPENVERSE_DEBUG").any fun v => v != "" && v != "0"
-    return Front.compileTops tops args mentionsArgs doExpr debug profile eventFifo extendedDefaults
+    return Front.compileTops tops args mentionsArgs doExpr debug profile pol.eventFifo
+      (extendedDefaults := pol.extendedDefaults) (signalNoRollback := pol.signalNoRollback)
 
-def withProg (file : String) (profile : Front.SourceProfile) (k : Prog → IO UInt32)
-    (eventFifo : Bool := false) (extendedDefaults : Bool := false) :
+def withProg (file : String) (profile : Front.SourceProfile) (k : Prog → IO UInt32) (pol : Policies := {}) :
     IO UInt32 := do
-  match ← loadAndCompile file [] none profile eventFifo extendedDefaults with
+  match ← loadAndCompile file [] none profile pol with
   | .error e => IO.eprintln s!"{file}:{e}"; return 4
   | .ok P => k P
 
@@ -80,10 +92,9 @@ def splitDo (rest : List String) : List String × Option String :=
   | (as, _) => (as, none)
 
 def withProgArgs (file : String) (rest : List String) (profile : Front.SourceProfile)
-    (k : Prog → IO UInt32) (literal : Bool := false) (eventFifo : Bool := false)
-    (extendedDefaults : Bool := false) : IO UInt32 := do
+    (k : Prog → IO UInt32) (literal : Bool := false) (pol : Policies := {}) : IO UInt32 := do
   let (as, e) := if literal then (rest, none) else splitDo rest
-  match ← loadAndCompile file as e profile eventFifo extendedDefaults with
+  match ← loadAndCompile file as e profile pol with
   | .error err => IO.eprintln s!"{file}:{err}"; return 4
   | .ok P => k P
 
@@ -94,43 +105,44 @@ def defaultFuel : Nat := 100000000
     runs, from the same compilation, so the scripts that run a program on both
     implementations compile it once. -/
 def runCmd (file : String) (fuel : Nat) (emit : Option String)
-    (profile : Front.SourceProfile) (eventFifo : Bool := false)
-    (extendedDefaults : Bool := false) : List String → IO UInt32
-  | "--no-choice" :: rest => runCmd file fuel emit .choiceFree eventFifo extendedDefaults rest
-  | "--event-fifo" :: rest => runCmd file fuel emit profile true extendedDefaults rest
-  | "--extended-defaults" :: rest => runCmd file fuel emit profile eventFifo true rest
-  | "--fuel" :: n :: rest => runCmd file n.toNat! emit profile eventFifo extendedDefaults rest
-  | "--emit" :: out :: rest => runCmd file fuel (some out) profile eventFifo extendedDefaults rest
+    (profile : Front.SourceProfile) (pol : Policies := {}) : List String → IO UInt32
+  | "--no-choice" :: rest => runCmd file fuel emit .choiceFree pol rest
+  | "--event-fifo" :: rest => runCmd file fuel emit profile { pol with eventFifo := true } rest
+  | "--signal-no-rollback" :: rest => runCmd file fuel emit profile { pol with signalNoRollback := true } rest
+  | "--extended-defaults" :: rest => runCmd file fuel emit profile { pol with extendedDefaults := true } rest
+  | "--fuel" :: n :: rest => runCmd file n.toNat! emit profile pol rest
+  | "--emit" :: out :: rest => runCmd file fuel (some out) profile pol rest
   | rest =>
     let (literal, rest) := match rest with | "--" :: rest => (true, rest) | _ => (false, rest)
     withProgArgs file rest profile (fun P => do
       if let some out := emit then IO.FS.writeBinFile out P.encode
-      runProg P fuel) literal eventFifo extendedDefaults
+      runProg P fuel) literal pol
 
 /-- Source-profile options before the command, file or compiler options. -/
 def profilePrefix (profile : Front.SourceProfile) : List String → Front.SourceProfile × List String
   | "--no-choice" :: rest => profilePrefix .choiceFree rest
   | rest => (profile, rest)
 
-/-- `--no-choice` and `--event-fifo` (#513), in any order. -/
-def optionsPrefix (profile : Front.SourceProfile) (eventFifo extendedDefaults : Bool) :
-    List String → Front.SourceProfile × Bool × Bool × List String
-  | "--no-choice" :: rest => optionsPrefix .choiceFree eventFifo extendedDefaults rest
-  | "--event-fifo" :: rest => optionsPrefix profile true extendedDefaults rest
-  | "--extended-defaults" :: rest => optionsPrefix profile eventFifo true rest
-  | rest => (profile, eventFifo, extendedDefaults, rest)
+/-- `--no-choice` and the policies' options, in any order. -/
+def optionsPrefix (profile : Front.SourceProfile) (pol : Policies) :
+    List String → Front.SourceProfile × Policies × List String
+  | "--no-choice" :: rest => optionsPrefix .choiceFree pol rest
+  | "--event-fifo" :: rest => optionsPrefix profile { pol with eventFifo := true } rest
+  | "--signal-no-rollback" :: rest => optionsPrefix profile { pol with signalNoRollback := true } rest
+  | "--extended-defaults" :: rest => optionsPrefix profile { pol with extendedDefaults := true } rest
+  | rest => (profile, pol, rest)
 
-def emitCmd (file : String) (profile : Front.SourceProfile) (eventFifo : Bool := false)
-    (extendedDefaults : Bool := false) : List String → IO UInt32
-  | "--no-choice" :: rest => emitCmd file .choiceFree eventFifo extendedDefaults rest
-  | "--event-fifo" :: rest => emitCmd file profile true extendedDefaults rest
-  | "--extended-defaults" :: rest => emitCmd file profile eventFifo true rest
+def emitCmd (file : String) (profile : Front.SourceProfile) (pol : Policies := {}) : List String → IO UInt32
+  | "--no-choice" :: rest => emitCmd file .choiceFree pol rest
+  | "--event-fifo" :: rest => emitCmd file profile { pol with eventFifo := true } rest
+  | "--signal-no-rollback" :: rest => emitCmd file profile { pol with signalNoRollback := true } rest
+  | "--extended-defaults" :: rest => emitCmd file profile { pol with extendedDefaults := true } rest
   | "-o" :: out :: rest =>
-    let (profile, eventFifo, extendedDefaults, rest) := optionsPrefix profile eventFifo extendedDefaults rest
+    let (profile, pol, rest) := optionsPrefix profile pol rest
     let (literal, rest) := match rest with | "--" :: rest => (true, rest) | _ => (false, rest)
     withProgArgs file rest profile (fun P => do
       IO.FS.writeBinFile out P.encode
-      return 0) literal eventFifo extendedDefaults
+      return 0) literal pol
   | _ => do IO.eprintln usage; return 4
 
 /-- The hand-written Core programs (`tests/core` holds their encodings). -/
@@ -158,8 +170,8 @@ def main (args : List String) : IO UInt32 := do
     match allExamples.lookup name with
     | some P => IO.FS.writeBinFile file P.encode; return 0
     | none => IO.eprintln s!"no example {name}"; return 4
-  | "run" :: file :: rest => runCmd file defaultFuel none profile false false rest
-  | "emit" :: file :: rest => emitCmd file profile false false rest
+  | "run" :: file :: rest => runCmd file defaultFuel none profile {} rest
+  | "emit" :: file :: rest => emitCmd file profile {} rest
   | ["gen", seed] => runProg (Gen.program seed.toNat!) defaultFuel
   | ["gen", seed, "--emit", file] => do
       IO.FS.writeBinFile file (Gen.program seed.toNat!).encode; return 0
@@ -169,9 +181,9 @@ def main (args : List String) : IO UInt32 := do
       return 0
   | command :: file :: rest =>
     if command == "check" || command == "core" then
-      let (profile, eventFifo, extendedDefaults, rest) := optionsPrefix profile false false rest
+      let (profile, pol, rest) := optionsPrefix profile {} rest
       if !rest.isEmpty then IO.eprintln usage; return 4
-      withProg file profile (eventFifo := eventFifo) (extendedDefaults := extendedDefaults) fun P => do
+      withProg file profile (pol := pol) fun P => do
         if command == "check" then
           IO.println s!"ok: {P.fns.length} functions, Main = {P.main}"
         else
