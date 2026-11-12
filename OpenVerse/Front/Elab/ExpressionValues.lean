@@ -14,10 +14,12 @@ partial def elabExprValuesWith
     (elabConstruct : Ctx → Pos → String → List STy → List SExpr → Option Ty → EM R)
     (elabMapLit : Ctx → Pos → List (SExpr × SExpr) → Option Ty → EM R)
     (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
-  -- (an operand of a failure context that is a cast alone, `not T[X]`: the
-  -- block of it, where a cast that refines takes the rest as its branch)
+  -- (an operand of a failure context that is a cast, `not T[X]`, or has one
+  -- in it: the block of it, where a cast that refines takes the rest as
+  -- its branch)
   let operand (c : Ctx) (e : SExpr) (exp : Option Ty) : EM R := do
-    if (Refine.castClause? e).isSome then return (← elabBlock c [e] exp).1
+    if (Refine.castClause? e).isSome || (c.canFail && !(Refine.castsIn c.types.classes.contains e).isEmpty) then
+      return (← elabBlock c [e] exp).1
     elabE c e exp
   match se with
   | .app p f args bracket => do

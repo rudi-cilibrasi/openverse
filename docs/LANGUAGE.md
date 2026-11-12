@@ -617,10 +617,14 @@ circle := class(shape, labelled):
   It may be a clause of any failure context: a statement of a `<decides>`
   body, or of a block in a failure context; a clause of `option{…}`,
   `logic{…}` or `first{…}`; the operand of `not`, or of `and` or `or`; a
-  clause of an `if`'s condition or of a `for`. The rest of its failure
-  context is its branch: `pre; D := T[X]; rest` is `pre; if (D := T[X])
-  then {rest} else fail`, so its failure, or the rest's, undoes what `pre`
-  did, output included, as any failure context's does:
+  clause of an `if`'s condition or of a `for`. Inside such a clause, in an
+  operand it evaluates in order (`dup[P].C > 3`, `F(dup[P])`), it is lifted
+  out to be a clause of its own first, as a choice there is: the operands
+  evaluated before it are bound first, so they still run before it. The
+  rest of its failure context is its branch: `pre; D := T[X]; rest` is
+  `pre; if (D := T[X]) then {rest} else fail`, so its failure, or the
+  rest's, undoes what `pre` did, output included, as any failure
+  context's does:
 
   ```verse
   AsLit(E:expr(t) where t:type)<decides>:t =
@@ -642,10 +646,16 @@ circle := class(shape, labelled):
   uses the cast's name or names
   those clauses bind, casts the object again, which succeeds (an object's
   class does not change), so that it is typed under the refinement too, as
-  it does a later cast among those clauses of a name bound before them that
-  is no `var`, when it uses that cast's name:
+  it does each later cast among those clauses whose name it uses, from that
+  cast's object (bound to a name first, when computed there), unless the
+  object may name type arguments a cast opens (the first, when it opens,
+  or another among them): then the branch has the later cast's name, with
+  the type it has there, but not its refinement:
   `if (Print("x"), D := dup[P], Y := D.A) then option{Y}` prints `x` only
-  when `P` is a `dup`, and its branch has `D` and `Y` with `b = a`.
+  when `P` is a `dup`, and its branch has `D` and `Y` with `b = a`. A
+  `for`'s generator past that one whose source uses the cast's name casts
+  the object again there too (`for (P : Ps, D := dup[P], Y : D.Items)`),
+  and so does the body when it uses the names such generators bind.
 
   A cast can also open type arguments the object's type has no names for
   (#250): `if (P := pairE[E]) then (Eval(P.L), Eval(P.R))`, for
@@ -804,11 +814,12 @@ circle := class(shape, labelled):
   is a struct or container that holds one.
 - **Not yet supported** (each rejected with a message):
   - a cast that refines type arguments, opens them, or goes through a
-    view (#243, #250, #351) anywhere but as a clause of a failure context:
-    inside an expression (`dup[P].C`: bind it, `D := dup[P]`), or outside
-    any failure context;
-  - in a `for`'s clauses, one past a generator after such a cast that uses
-    its name (#243);
+    view (#243, #250, #351) outside any failure context, or inside a clause
+    where lifting does not reach it: in a branch of an `if` that is an
+    expression, `then dup[P].C` (write it as a clause of a block there,
+    `then (D := dup[P]; D.C)`);
+  - in a `for`'s clauses, a filter past a generator after such a cast that
+    uses its name (#243): only a generator's source there may;
   - after a cast that opens type arguments, a value of its failure
     context, or a name it binds that a branch or body uses, of a type that
     names them (#250);

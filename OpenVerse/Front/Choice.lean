@@ -264,6 +264,9 @@ partial def hasLiftable : SExpr → Bool
   -- (an exclusive choice, which a `for` compiles itself, #314)
   | .app _ (.ident _ "$excl") _ false => false
   | .app _ (.ident _ "$choice") _ false => true
+  -- (a cast that only a failure context's clause may be, #243, marked so
+  -- by the elaborator: lifted to be one)
+  | .app _ (.ident _ "$liftCast") _ false => true
   | .app _ (.ident _ "$inline") _ false => true
   -- (an overridden method's dispatch, which becomes an inlined call, #283)
   | .app _ (.ident _ "$dispatch") _ false => true
@@ -733,6 +736,7 @@ partial def liftE (isVal : String → Bool) (isField : String → String → Boo
   if !hasLiftable e then return e
   match e with
   | .app p (.ident _ "$choice") _ false => LM.bind p "c" e
+  | .app p (.ident _ "$liftCast") [c] false => LM.bind p "k" c
   | .ite p .. =>
     if isBranchy.complete e then
       LM.bind p "c" (.app p (.ident p "$branchChoice") [e] false)
