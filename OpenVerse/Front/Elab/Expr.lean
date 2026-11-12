@@ -1013,7 +1013,22 @@ partial def elabCmp (ctx : Ctx) (p : Pos) (a : SExpr) (rest : List (String × SE
     else if !((ta == .int && tb == .int) || (ta == .char && tb == .char) || (ta == .char32 && tb == .char32) ||
         (ta == .float && tb == .float)) then
       eerr p s!"'{op}' compares ints, chars, char32s or floats, found {ta.show} and {tb.show}"
-  let ra := widenR ctx.types (← elabE ctx a none)
+  let accepts : Ty → Bool := fun ty => arithmeticType ctx.types ty || ty == .char || ty == .char32
+  let numeric (value : R) : EM R := do
+    return widenR ctx.types (← elabValueViewWith elabE ctx p value accepts "comparison")
+  let source := widenR ctx.types (← elabE ctx a none)
+  let view ← match ctx.valueView p source.ty accepts "comparison" with
+    | .ok view => pure view
+    | .error message => throw message
+  let (ra, original) ← match view with
+    | none => pure (source, none)
+    | some _ => do
+      let slot ← fresh source.ty
+      let converted ← numeric ⟨.local slot, source.ty⟩
+      pure (⟨.seq (.assign slot source.e) converted.e, converted.ty⟩, some (slot, source.ty))
+  let result (code : Expr) (ty : Ty) : R := match original with
+    | some (slot, ty) => ⟨.seq code (.local slot), ty⟩
+    | none => ⟨code, ty⟩
   -- (an array and a tuple compare as arrays: the tuple is converted)
   let asArr (r : R) (other : Ty) : EM R := do
     match r.ty, other with
@@ -1021,16 +1036,16 @@ partial def elabCmp (ctx : Ctx) (p : Pos) (a : SExpr) (rest : List (String × SE
     | _, _ => return r
   match rest with
   | [(op, b)] =>
-    let rb := widenR ctx.types (← elabE ctx b (some ra.ty))
+    let rb ← numeric (← elabE ctx b (some ra.ty))
     if ra.ty == .rational || rb.ty == .rational then
       let ta ← fresh ra.ty
       let tb ← fresh rb.ty
       let test ← ratTest ctx p op ⟨.local ta, ra.ty⟩ ⟨.local tb, rb.ty⟩
-      return ⟨.seq (.assign ta ra.e) (.seq (.assign tb rb.e) (.seq test (.local ta))), ra.ty⟩
+      return result (.seq (.assign ta ra.e) (.seq (.assign tb rb.e) (.seq test (.local ta)))) ra.ty
     let ra ← asArr ra rb.ty
     let rb ← asArr rb ra.ty
     checkTys op ra.ty rb.ty
-    return ⟨p2 (ordOf op ra.ty) ra.e rb.e, ra.ty⟩
+    return result (p2 (ordOf op ra.ty) ra.e rb.e) ra.ty
   | _ =>
     -- a chain: each operand is evaluated once, every adjacent pair is checked,
     -- and the result is the leftmost operand (Book of Verse §5.4)
@@ -1039,7 +1054,7 @@ partial def elabCmp (ctx : Ctx) (p : Pos) (a : SExpr) (rest : List (String × SE
     let mut prevTy := ra.ty
     let mut steps : Array Expr := #[.assign t0 ra.e]
     for (op, b) in rest do
-      let rb := widenR ctx.types (← elabE ctx b (some prevTy))
+      let rb ← numeric (← elabE ctx b (some prevTy))
       let rb ← asArr rb prevTy
       -- (the previous operand, as an array when this one is)
       let prevE ← match prevTy, rb.ty with
@@ -1055,7 +1070,7 @@ partial def elabCmp (ctx : Ctx) (p : Pos) (a : SExpr) (rest : List (String × SE
         steps := steps.push (p2 (ordOf op prevTy) prevE (.local tb))
       prev := tb
       prevTy := rb.ty
-    return ⟨steps.foldr Expr.seq (.local t0), ra.ty⟩
+    return result (steps.foldr Expr.seq (.local t0)) ra.ty
 
 /-- `elabSetWith`, given this block's functions (#325). -/
 partial def elabSet (ctx : Ctx) (p : Pos) (lhs0 : SExpr) (op : Option String) (rhs0 : SExpr) : EM R := do

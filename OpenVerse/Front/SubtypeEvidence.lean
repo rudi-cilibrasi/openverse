@@ -560,6 +560,21 @@ private partial def commonUpper? (env : TyEnv) (types : List Ty)
   -- present in every projected occurrence of that same type.
   return (types.flatMap (upperViews env) |>.filter (· == selected)).foldl Ty.commonBounds selected
 
+/-- A common value view for operations whose ordinary concrete join failed.
+    Only actual capabilities contribute opaque relations. At least one input
+    must use such a capability, so this does not broaden ordinary joins. -/
+def joinView? (env : TyEnv) (locals : List (String × Ty)) (types : List Ty)
+    (expected : Option Ty := none) : Option Ty := do
+  let facts := (capabilities env locals).map fun capability =>
+    let bound := capability.bound env
+    (bound.base, bound.derived)
+  let actual := { env with boundFacts := facts }
+  let candidates := expected.toList ++ (commonUpper? actual types).toList
+  candidates.find? fun target =>
+    match types.mapM (fun source => find? env locals ⟨target, source⟩) with
+    | some plans => plans.any (·.usesLocal) && plans.all (·.valid env locals)
+    | none => false
+
 private def peerInstances (env : TyEnv) (bounds : List Bound) (names : List String)
     (substitution : List (String × Ty)) (comparable : List String) : Option (List (String × Ty)) := do
   let mut lowerTypes := names.map fun name => (name, (substitution.lookup name).toList)

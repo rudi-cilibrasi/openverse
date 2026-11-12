@@ -50,7 +50,7 @@ partial def elabExprValuesWith
       | some .float => some .float
       | some .rational => some .rational
       | _ => none
-    let r0 ← elabE ctx e hint
+    let r0 ← elabArithmeticOperandWith elabE ctx p (← elabE ctx e hint) "negation"
     let r := widenR ctx.types r0
     -- (the negation of a refined value is of an expected refinement whose
     -- interval holds the flipped one, #143)
@@ -72,8 +72,9 @@ partial def elabExprValuesWith
     return ⟨Expr.notE r.e, .void⟩
   | .bin p "/" a b =>
     -- `X / Y` on ints: a rational, failing when `Y = 0` (#116)
-    let ra := widenR ctx.types (← elabE ctx a none)
-    let rb := widenR ctx.types (← elabE ctx b (if ra.ty == .float then some .float else none))
+    let ra := widenR ctx.types (← elabArithmeticOperandWith elabE ctx p (← elabE ctx a none) "division")
+    let rb := widenR ctx.types (← elabArithmeticOperandWith elabE ctx p
+      (← elabE ctx b (if ra.ty == .float then some .float else none)) "division")
     -- (on floats, IEEE division: by zero an infinity or NaN, #127)
     if ra.ty == .float && rb.ty == .float then return ⟨p2 .fdiv ra.e rb.e, .float⟩
     if ra.ty == .float || rb.ty == .float then
@@ -83,13 +84,9 @@ partial def elabExprValuesWith
     let es := [← coerce a.pos ra .int, ← coerce b.pos rb .int]
     return ⟨← ratCall ctx p "$ratMake" es, .rational⟩
   | .bin p op a b =>
-    let ra := widenR ctx.types (← elabE ctx a none)
-    let arrayView (value : R) : EM R :=
-      if op == "+" then elabContainerReceiverWith elabE ctx p value (fun
-        | .arr _ => true
-        | _ => false) "concatenation"
-      else pure value
-    let ra ← arrayView ra
+    let operation := s!"operator '{op}'"
+    let ra := widenR ctx.types (← elabArithmeticOperandWith elabE ctx p
+      (← elabE ctx a none) operation (op == "+"))
     let rb ← match op, ra.ty with
       | "+", .arr _ =>
         -- (an array of other classes, to join, #67)
@@ -105,8 +102,7 @@ partial def elabExprValuesWith
           let c2 := { ctx with retries := ctx.retries + 1 }
           tryCatch (elabE c2 b (some ra.ty)) fun _ => elabE c2 b none
       | _, _ => elabE ctx b (some ra.ty)
-    let rb := widenR ctx.types rb
-    let rb ← arrayView rb
+    let rb := widenR ctx.types (← elabArithmeticOperandWith elabE ctx p rb operation (op == "+"))
     if ra.ty == .rational || rb.ty == .rational then
       let prim ← match op with
         | "+" => pure Prim.add | "-" => pure Prim.sub | "*" => pure Prim.mul
@@ -127,7 +123,11 @@ partial def elabExprValuesWith
       -- arrays of classes concatenate at a common supertype (#32)
       match joinTy (← get).env (.arr t) (.arr u) exp with
       | some jt => return ⟨p2 .concat (← coerce p ra jt) (← coerce p rb jt), jt⟩
-      | none => eerr p s!"cannot concatenate {ra.ty.show} and {rb.ty.show}"
+      | none =>
+        if let some jt := SubtypeEvidence.joinView? ctx.types ctx.evidenceTypes [ra.ty, rb.ty] exp then
+          return ⟨p2 .concat (← elabArgumentCoerceWith elabE ctx p ra jt)
+            (← elabArgumentCoerceWith elabE ctx p rb jt), jt⟩
+        eerr p s!"cannot concatenate {ra.ty.show} and {rb.ty.show}"
     | _, ta, tb => eerr p s!"no operator '{op}' for {ta.show} and {tb.show}"
   | .cmp p a rest => elabCmp ctx p a rest
   | .andE _ a b =>

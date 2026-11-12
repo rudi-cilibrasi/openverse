@@ -54,7 +54,10 @@ def main (args : List String) : IO Unit := do
     "container-view-concat", "container-view-concat-control"]
   let iterators := ["container-view-iteration", "container-view-iteration-control",
     "container-view-iteration-state", "container-view-iteration-state-control"]
-  let profiled := fifo ++ methodValues ++ callables ++ containers ++
+  let operators := ["bound-array-join", "bound-array-join-control",
+    "bound-array-join-state", "bound-array-join-state-control",
+    "bound-numeric-operators", "bound-numeric-operators-control", "bound-numeric-state", "bound-numeric-state-control"]
+  let profiled := fifo ++ methodValues ++ callables ++ containers ++ operators ++
     ["bound-refine-contexts", "bound-refine-contexts-control"]
   let negative := ["choice-refusal", "default-refusal", "override-refusal", "overload-interface-refusal",
     "overload-ancestor-refusal", "overload-optional-refusal", "overload-empty-refusal", "overload-scope-refusal",
@@ -72,9 +75,12 @@ def main (args : List String) : IO Unit := do
     "container-view-method-refusal", "container-view-effect-refusal", "container-view-storage-refusal",
     "container-view-iteration-unproved-refusal", "container-view-concat-unproved-refusal",
     "container-view-iteration-element-refusal", "container-view-iteration-effect-refusal",
-    "container-view-iteration-effect-control-refusal"]
+    "container-view-iteration-effect-control-refusal", "bound-numeric-unproved-refusal",
+    "bound-numeric-mixed-refusal", "bound-numeric-mixed-control-refusal", "bound-numeric-narrow-refusal",
+    "bound-numeric-floor-bracket-refusal", "bound-numeric-comparison-unproved-refusal",
+    "bound-array-join-unproved-refusal", "bound-array-join-narrow-refusal"]
   let mut failures := 0
-  let cases := (positive ++ fifo ++ methodValues ++ callables ++ containers ++ iterators ++ negative).map (fun name => (name, fifo.contains name, name)) ++
+  let cases := (positive ++ fifo ++ methodValues ++ callables ++ containers ++ iterators ++ operators ++ negative).map (fun name => (name, fifo.contains name, name)) ++
     ["fifo-bound-sleep", "fifo-bound-sleep-control"].map (fun name => (name, false, name ++ "-default"))
   for (name, eventFifo, artifact) in cases do
     let root := s!"tests/upper-bounds/{name}"

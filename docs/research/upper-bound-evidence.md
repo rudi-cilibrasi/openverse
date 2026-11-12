@@ -190,6 +190,30 @@ Cartesian products, filters, aliases, rollback and waiting-loop cancellation.
 Concatenation retains identical bytecode under `--no-choice`; collection
 iteration remains excluded by that profile.
 
+When ordinary concrete array joining fails, concatenation can infer a common
+element upper from actual capabilities, including nested arrays and numeric
+component conversions. An expected result is considered only when every input
+has a valid executable plan; static declaration facts and dummy dictionaries
+cannot repair missing proofs. At least one conversion must use an actual local
+capability, so the fallback does not broaden ordinary unbounded joins. Unrelated
+common interfaces remain ambiguous unless an explicit supported result selects
+one. Whole-array proofs can convert whole inputs without establishing element
+relations.
+
+Arithmetic operands can use actual integer, rational, float or numeric
+refinement uppers. The checked conversion feeds the ordinary unary/binary
+operators and `Abs`, `Min`, `Max`, `Floor` and `Ceil` paths. Integer division
+retains failure on zero; float division and ordering retain their existing
+NaN/infinity rules. Mixed int/float addition and reverse rational narrowing
+remain refused. Numeric comparisons save the original left operand once,
+compare converted values in order, and return that original precise value.
+Chains preserve short-circuiting and do not evaluate later operands after a
+failed comparison. Numeric proofs remain actual captures across waiting and
+escaping task calls. Source controls check precise refinement results, operand
+order, rollback, rejected division, cancellation and choice-free bytecode.
+Ordinary `Abs` now widens a refined float to its base, as the other numeric
+operators do; its concrete regression previously attempted an integer coercion.
+
 An interior write may traverse a container view to reach a mutable object.
 The view executes during traversal, after index/key evaluation and after its
 source container has been read. Writes that would rebuild an opaque container

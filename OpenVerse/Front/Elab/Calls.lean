@@ -200,15 +200,27 @@ partial def elabArgumentCoerceWith (elabE : Ctx → SExpr → Option Ty → EM R
       if plan.usesLocal then return (← elabSubtypeUpWith elabE ctx p value target plan).e
   coerce p value target
 
-partial def elabContainerReceiverWith (elabE : Ctx → SExpr → Option Ty → EM R)
+partial def elabValueViewWith (elabE : Ctx → SExpr → Option Ty → EM R)
     (ctx : Ctx) (p : Pos) (value : R) (accepts : Ty → Bool) (operation : String) : EM R := do
-  let view ← match ctx.containerView p value.ty accepts operation with
+  let view ← match ctx.valueView p value.ty accepts operation with
     | .ok view => pure view
     | .error message => throw message
   let some target := view | return value
   let some plan := SubtypeEvidence.find? ctx.types ctx.evidenceTypes ⟨target, value.ty⟩
-    | eerr p "internal: a container view lost its lexical dictionary"
+    | eerr p "internal: a value view lost its lexical dictionary"
   elabSubtypeUpWith elabE ctx p value target plan
+
+partial def elabContainerReceiverWith (elabE : Ctx → SExpr → Option Ty → EM R)
+    (ctx : Ctx) (p : Pos) (value : R) (accepts : Ty → Bool) (operation : String) : EM R :=
+  elabValueViewWith elabE ctx p value accepts operation
+
+/-- Keep opaque operands precise outside the operation. Numeric and optional
+    array views must come from actual proofs, including refined numeric uppers. -/
+partial def elabArithmeticOperandWith (elabE : Ctx → SExpr → Option Ty → EM R)
+    (ctx : Ctx) (p : Pos) (value : R) (operation : String) (arrays : Bool := false) : EM R :=
+  elabValueViewWith elabE ctx p value (fun
+    | .arr _ => arrays
+    | ty => arithmeticType ctx.types ty) operation
 
 partial def elabBoundReceiverWith (elabE : Ctx → SExpr → Option Ty → EM R)
     (ctx : Ctx) (p : Pos) (value : R) (member : String) : EM R := do

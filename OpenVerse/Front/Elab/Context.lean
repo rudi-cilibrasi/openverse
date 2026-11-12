@@ -934,9 +934,9 @@ def Ctx.captureEvidence (ctx : Ctx) (captures : List Local) (excluded : List Str
 def Ctx.hasMethod (ctx : Ctx) (c m : String) : Bool :=
   (ctx.types.supers c).any fun e => (ctx.sig? s!"{e}.{m}").isSome
 
-/-- Select an operational container view using actual whole-value proofs.
+/-- Select an operational value view using actual whole-value proofs.
     Prefer a strict subtype; equivalent views use a stable representative. -/
-def Ctx.containerView (ctx : Ctx) (p : Pos) (derived : Ty) (accepts : Ty → Bool)
+def Ctx.valueView (ctx : Ctx) (p : Pos) (derived : Ty) (accepts : Ty → Bool)
     (operation : String) : Except String (Option Ty) := do
   let .param .. := derived | return none
   let locals := ctx.evidenceTypes
@@ -952,6 +952,10 @@ def Ctx.containerView (ctx : Ctx) (p : Pos) (derived : Ty) (accepts : Ty → Boo
       return some (rest.foldl (fun selected next =>
         if reprStr next < reprStr selected then next else selected) first)
     throw s!"{p.show}: ambiguous bound {operation} of {derived.show} through {", ".intercalate (best.map Ty.show)}"
+
+def Ctx.containerView (ctx : Ctx) (p : Pos) (derived : Ty) (accepts : Ty → Bool)
+    (operation : String) : Except String (Option Ty) :=
+  ctx.valueView p derived accepts operation
 
 def Ctx.boundView (ctx : Ctx) (p : Pos) (derived : Ty) (member : String) : Except String (Option Ty) := do
   let .param .. := derived | return none
@@ -1331,6 +1335,12 @@ def widenR (env : TyEnv) (r : R) : R :=
     | some (base, _) => ⟨r.e, base⟩
     | none => r
   | _ => r
+
+def arithmeticType (env : TyEnv) : Ty → Bool
+  | .int | .rational | .float => true
+  | .refine name => (env.refines.lookup name).any fun (base, _) =>
+      [.int, .rational, .float].contains base
+  | _ => false
 
 /-- The conditions of `type{_X:base where c, …}` as `_X op bound`: each
     compares the variable with a literal number (Book of Verse ch. 11). -/

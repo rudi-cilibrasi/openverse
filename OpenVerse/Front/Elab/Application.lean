@@ -155,7 +155,7 @@ partial def elabAppBaseWith
       -- (of a float, #127; each argument elaborated once)
       match args with
       | [a] =>
-        let r ← elabE ctx a none
+        let r := widenR ctx.types (← elabArithmeticOperandWith elabE ctx p (← elabE ctx a none) name)
         if r.ty == .float then return ⟨.prim .fabs [r.e], .float⟩
         return ⟨.prim .abs [← coerce a.pos r .int], .int⟩
       | _ => eerr p "Abs takes one argument"
@@ -221,8 +221,9 @@ partial def elabAppBaseWith
         return ⟨.prim (if name == "Floor" then .ffloor else .fceil) [r.e], .int⟩
       match args with
       | [.bin bp "/" a b] =>
-        let ra ← elabE ctx a none
-        let rb ← elabE ctx b (if ra.ty == .float then some .float else none)
+        let ra := widenR ctx.types (← elabArithmeticOperandWith elabE ctx bp (← elabE ctx a none) name)
+        let rb := widenR ctx.types (← elabArithmeticOperandWith elabE ctx bp
+          (← elabE ctx b (if ra.ty == .float then some .float else none)) name)
         if ra.ty == .float && rb.ty == .float then return ← ofFloat ⟨p2 .fdiv ra.e rb.e, .float⟩
         if ra.ty == .float || rb.ty == .float then
           eerr bp s!"no operator '/' for {ra.ty.show} and {rb.ty.show} (an int is not a float: write X * 1.0)"
@@ -233,7 +234,7 @@ partial def elabAppBaseWith
       | [e] =>
         -- (of a rational, #116: its denominator is positive, so this never
         -- fails; of an int, the int)
-        let r := widenR ctx.types (← elabE ctx e none)
+        let r := widenR ctx.types (← elabArithmeticOperandWith elabE ctx p (← elabE ctx e none) name)
         match r.ty with
         | .int => return r
         | .float => ofFloat r
@@ -247,8 +248,9 @@ partial def elabAppBaseWith
       -- (of floats, #127: NaN when either is)
       -- (each argument elaborated once)
       let [a, b] := args | eerr p s!"{name} takes two arguments"
-      let ra ← elabE ctx a none
-      let rb ← elabE ctx b (if ra.ty == .float || ra.ty == .int then some ra.ty else none)
+      let ra := widenR ctx.types (← elabArithmeticOperandWith elabE ctx p (← elabE ctx a none) name)
+      let rb := widenR ctx.types (← elabArithmeticOperandWith elabE ctx p
+        (← elabE ctx b (if ra.ty == .float || ra.ty == .int then some ra.ty else none)) name)
       if ra.ty == .float then
         if rb.ty != .float then eerr p s!"{name} takes two floats or two ints, found float and {rb.ty.show}"
         return ⟨p2 (if name == "Min" then .fmin else .fmax) ra.e rb.e, .float⟩
