@@ -94,10 +94,16 @@ partial def elabExprControlWith
           set st1
           if re.ty == .void then return some (← attempt .void)
           return some (← tryCatch (attempt re.ty) fun _ => do set st1; attempt .void)
+    -- (and in a failure context, the branches, which are in it too: a cast
+    -- in one that is an expression makes it the block of it)
+    let branches : List (SExpr × (SExpr → EM R)) := if !ctx.canFail then [] else
+      (thenE, fun b => elabE ctx (.ite p conds0 b elseE) exp) ::
+        elseE.toList.map fun ee => (ee, fun b => elabE ctx (.ite p conds0 thenE (some b)) exp)
     if !asWritten then
       if let some r ← withCastClauses ctx conds thenE (fun _ => false)
           (elabE { ctx with asWritten := true } (.ite p conds0 thenE elseE) exp)
-          (fun conds thenE => elabE ctx (.ite p conds thenE elseE) exp) (later := true) (alone := nested) then
+          (fun conds thenE => elabE ctx (.ite p conds thenE elseE) exp) (later := true) (alone := nested)
+          (blocks := branches) then
         return r
     -- (a cast that refines type arguments, as the whole condition, #243,
     -- or as its first clause, the cast having no effects to undo when the

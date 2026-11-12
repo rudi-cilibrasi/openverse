@@ -2235,7 +2235,12 @@ there, is lifted out by that lifting, marked `$liftCast` (`Refine.markCast`,
 which `Choice.hasLiftable` and `liftE` take as a value to bind, as a
 choice): the operands before it bound, then `$k… := T[X]`, a cast clause
 (`liftCastClause`, in `withCastClauses` and `elabSeqIn`; a `<decides>`
-body of one expression is the block of it, `elabBodyOv`). In a sequence whose names
+body of one expression is the block of it, `elabBodyOv`). A branch of an
+`if` in a failure context with such a cast in it, written as an
+expression, is the block of it instead (`Refine.castsOf`, the `blocks` of
+`withCastClauses`): lifting the cast out of the `if` would run it whichever
+branch runs. All three are taken when the cast is refused as written, so a
+program that compiled before keeps its code. In a sequence whose names
 end with it (a block, so a `<decides>` body or `option{…}`'s, and the
 operand of `not`, `and` and `or`), `pre; D := T[X]; rest` is `pre; if (D
 := T[X]) then {rest} else fail` (`elabSeqIn`; the `else` is
@@ -2269,10 +2274,13 @@ clause's values; as a local from outside the later cast's branch, it
 leaves that branch at its own type, not the refined one, so it can be cast
 again. An object that may name type arguments a cast opens (the first
 cast's, when the refusal says it opens, `Refine.CastRefusal.opens`, or a
-later cast's, which may) is not: `after` could not name its type. A `for`'s generator past the moved clauses whose source uses `D` has its
-source cast again in the same way, at the generator's place, and the body
-is cast again when it uses the names those generators bind; a filter there
-that uses `D` is refused. A later cast of an object computed among the
+later cast's, which may) is not: `after` could not name its type. A `for`'s clause past the moved clauses that uses `D` is cast again in the
+same way where it uses it, at that place: a generator's source, a range's
+bounds, a binding's value (so its name stays bound), each alternative of a
+choice (lifted out of the clause first, `lift`), or else the clause itself;
+the body is cast again when it uses the names those clauses bind. A use in
+a branch of an `if` with a choice in its branches is refused, since the
+choice's consumer keeps that `if` and its condition picks the branch. A later cast of an object computed among the
 moved clauses is cast again only when the branch or body is refused
 without it (`computed`), so that programs compiled before keep their code.
 Both `if`s are the elaborator's, marked `$made` (their
