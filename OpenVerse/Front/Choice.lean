@@ -1623,13 +1623,33 @@ partial def inlineCalls (mv : List (String × MFn)) (e : SExpr) (recs : List Str
             if fields.length == posPs.length - 1 then receiver :: fields ++ as.filter namedArg else as
           | _ => as
         else as
+      -- Pack a call's user arguments before the inliner's arity gate, just
+      -- as the checked binder does. The receiver stays outside the tuple.
+      let off := if selfP then 1 else 0
+      let userArgs := (as.filter (!namedArg ·)).drop off
+      let as := match posPs.drop off with
+        | [sp] =>
+          let value : Option SExpr := match sp.ty with
+            | .tup [_] => match userArgs with
+              | [a] => some (.app p (.ident p "$callSingleton") [a] false)
+              | _ => some (SExpr.tuple p userArgs)
+            | .tup _ => if userArgs.length != 1 then some (SExpr.tuple p userArgs) else none
+            | .arr _ => if userArgs.length > 1 then some (SExpr.arrayLit p userArgs) else none
+            | .name n =>
+              if (n == "void" && userArgs.isEmpty) || (f.tparams.any (·.name == n) && userArgs.length != 1) then
+                some (SExpr.tuple p userArgs)
+              else none
+            | _ => none
+          match value with
+          | some a => (as.filter (!namedArg ·)).take off ++ [a] ++ as.filter namedArg
+          | none => as
+        | _ => as
       let posAs := as.filter fun | .decl _ n _ _ _ => !n.startsWith "?" | _ => true
       let namedAs : List (Pos × String × SExpr) := as.filterMap fun
         | .decl ap n _ _ x => if n.startsWith "?" then some (ap, (n.drop 1).toString, x) else none
         | _ => none
       -- (a method's function, #283: its receiver first, then the arguments
       -- as a method's; no array form for a method, as at its call)
-      let off := if selfP then 1 else 0
       let arrayParam := !hasNamed && !selfP && match f.params with | [sp] => (match sp.ty with | .arr _ => true | _ => false) | _ => false
       let tupleArg := !hasNamed && as.length == 1 + off && f.params.length ≥ 2 + off
       -- (one tuple for the positional parameters, followed by supplied

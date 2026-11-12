@@ -1,4 +1,4 @@
-# expect: no overload of F fits a call with 3 positional argument(s)
+# expect: expected string, found []int
 F(X:int):int = X
 F(S:string):int = 0
 Main():void = Print("{F(1, 2, 3)}")

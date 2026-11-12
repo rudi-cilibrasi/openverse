@@ -625,82 +625,70 @@
     {
       "id": "single_tuple_call",
       "path": "tests/conformance/overloading/single_tuple_call.verse",
-      "classification": "known-gap",
+      "classification": "supported",
       "sources": [
         "https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/docs/06_functions.md#flattening-and-unflattening"
       ],
       "basis": "explicit-book-example",
       "issue": 501,
-      "expected": {
-        "exit": 0,
-        "stdout": "value\n"
-      },
-      "observed": {
+      "expectation": "Pack positional arguments into the explicit tuple parameter.",
+      "note": "Resolved with #501; original expectation and reproducer retained.",
+      "historical_observation": {
         "exit": 4,
         "diagnostic": "expected 1 argument(s), found 2"
       },
-      "expectation": "Pack positional arguments into the explicit tuple parameter.",
-      "note": ""
+      "resolved_with_issue": 501
     },
     {
       "id": "empty_tuple_pack",
       "path": "tests/conformance/overloading/empty_tuple_pack.verse",
-      "classification": "known-gap",
+      "classification": "supported",
       "sources": [
         "https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/docs/06_functions.md#flattening-and-unflattening"
       ],
       "basis": "explicit-book-example",
       "issue": 501,
-      "expected": {
-        "exit": 0,
-        "stdout": "7\n"
-      },
-      "observed": {
+      "expectation": "Supply the empty tuple when called with no arguments.",
+      "note": "Resolved with #501; original expectation and reproducer retained.",
+      "historical_observation": {
         "exit": 4,
         "diagnostic": "expected 1 argument(s), found 0"
       },
-      "expectation": "Supply the empty tuple when called with no arguments.",
-      "note": ""
+      "resolved_with_issue": 501
     },
     {
       "id": "generic_tuple_pack",
       "path": "tests/conformance/overloading/generic_tuple_pack.verse",
-      "classification": "known-gap",
+      "classification": "supported",
       "sources": [
         "https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/docs/06_functions.md#parametric-functions"
       ],
       "basis": "explicit-book-example",
       "issue": 501,
-      "expected": {
-        "exit": 0,
-        "stdout": "1 2\n"
-      },
-      "observed": {
+      "expectation": "Infer t as tuple(int,int) from the expected result and packed arguments.",
+      "note": "Resolved with #501; original expectation and reproducer retained.",
+      "historical_observation": {
         "exit": 4,
         "diagnostic": "Id takes 1 argument(s), found 2"
       },
-      "expectation": "Infer t as tuple(int,int) from the expected result and packed arguments.",
-      "note": ""
+      "resolved_with_issue": 501
     },
     {
       "id": "generic_array_pack",
       "path": "tests/conformance/overloading/generic_array_pack.verse",
-      "classification": "known-gap",
+      "classification": "supported",
       "sources": [
         "https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/docs/06_functions.md#flattening-and-unflattening"
       ],
       "basis": "inference-from-array-packing-and-parametric-rules",
       "issue": 501,
-      "expected": {
-        "exit": 0,
-        "stdout": "2\n"
-      },
-      "observed": {
+      "expectation": "Pack positional values into a generic []t parameter.",
+      "note": "Resolved with #501; original expectation and reproducer retained.",
+      "historical_observation": {
         "exit": 4,
         "diagnostic": "Count takes 1 argument(s), found 2"
       },
-      "expectation": "Pack positional values into a generic []t parameter.",
-      "note": ""
+      "resolved_with_issue": 501
     },
     {
       "id": "overloaded_tuple_unpack",

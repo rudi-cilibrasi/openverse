@@ -690,9 +690,25 @@ def Ctx.methodValueNeedsType (ctx : Ctx) (c m : String) : Bool :=
 
 /-- Classify a bound value using an isolated receiver type probe. Its code,
     slots, effects and helper requests never enter the actual call. -/
-def argNeedsTypeWith (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx) (a : SExpr) : EM Bool := do
+partial def argNeedsTypeWith (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx) (a : SExpr) : EM Bool := do
   if ctx.argNeedsType a then return true
+  let compound (es : List SExpr) : EM Bool := do
+    if !(← es.anyM (argNeedsTypeWith elabE ctx)) then return false
+    -- A grouped positional argument can need a later named argument's
+    -- type. Keep compounds that already infer naturally in the first pass.
+    let saved ← get
+    match (elabE { ctx with typeOnly := true, callInstanceProbe := none } a none).run saved with
+    | .ok (_, probed) =>
+      modify fun st => { st with natTys := probed.natTys, methodReceivers := probed.methodReceivers }
+      return false
+    | .error _ => return true
   match a with
+  | .app _ (.ident _ "$callSingleton") [e] false => argNeedsTypeWith elabE ctx e
+  | .tuple _ es | .arrayLit _ es => compound es
+  | .optionLit _ e => compound [e]
+  | .mapLit _ kvs => compound (kvs.flatMap fun (k, v) => [k, v])
+  | .block _ es => compound es.getLast?.toList
+  | .ite _ _ yes no => compound (yes :: no.toList)
   | .ident _ n =>
     return (ctx.lookup n).isNone && ctx.selfClass.any (ctx.methodValueNeedsType · n)
   | .member _ receiver m =>
@@ -2369,7 +2385,7 @@ partial def forBodySafe (ctx : Ctx) (body : SExpr) : Bool :=
   -- checked when that consumer elaborates; they do not escape the helper.
   let safeMarkers := ["$sourceSuper", "$methodMiss", "$methodCast", "$methodCase", "$methodType", "$methodParams", "$inlineScope", "$inlineScopeEnd", "$inline", "$choice", "$excl", "$alt", "$firstP", "$first", "$each", "$noLift", "$fxOf",
     "$forReturns", "$forReturnBody", "$forClauseExits", "$choiceOperation", "$choiceDictionary", "$defer", "$loop", "$rec", "$recTo", "$group", "$member", "$returnTail",
-    "$tparams", "$params", "$defaults", "$paramDefault", "$freeNames", "$declNames", "$callArgs"]
+    "$tparams", "$params", "$defaults", "$paramDefault", "$freeNames", "$declNames", "$callArgs", "$callSingleton"]
   let rec blocked (e : SExpr) : Bool :=
     match e with
     -- Starting a task is immediate. elabSpawn checks its arguments in the
@@ -3727,6 +3743,34 @@ def defaultTypes (ctx : Ctx) (p : Pos) (s : Sig) (σ : List (String × Ty)) (d :
   return ({ ctx.types with tvars := aliases ++ core.map (fun (n, cmp) => (n, Ty.param n cmp)) },
     substDefaultTypes rename d)
 
+/-- Canonicalise the user positional arguments before binding a call. A
+    receiver is not part of the argument tuple; named arguments retain their
+    written order. A lone scalar keeps its meaning for arrays and bare type
+    parameters. Empty arrays still require an explicit array value. -/
+def packCallArgs (p : Pos) (s : Sig) (args : List SExpr)
+    (hasReceiver : Bool := true) : List SExpr := Id.run do
+  let isNamed : SExpr → Bool := fun | .decl _ n _ _ _ => n.startsWith "?" | _ => false
+  let off := if hasReceiver && (s.pnames.head? == some "Self" || s.pnames.head? == some "$Self") then 1 else 0
+  let pos := args.filter (!isNamed ·)
+  let user := pos.drop off
+  let named := args.filter isNamed
+  let [pt] := s.params.drop off |>.take (s.params.length - s.named.length - off)
+    | return args
+  let packed := fun a => pos.take off ++ [a] ++ named
+  match pt with
+  | .void => if user.isEmpty then return packed (.tuple p []) else return args
+  | .tup _ =>
+    if user.length != 1 then return packed (.tuple p user)
+    if let .tup [_] := pt then
+      let [a] := user | return args
+      match a with
+      | .tuple _ [_] | .app _ (.ident _ "$callSingleton") [_] false => return args
+      | _ => return packed (.app a.pos (.ident a.pos "$callSingleton") [a] false)
+    return args
+  | .arr _ => if user.length > 1 then return packed (.arrayLit p user) else return args
+  | .param .. => if user.length != 1 then return packed (.tuple p user) else return args
+  | _ => return args
+
 /-- A call of a generic function. Its type arguments are inferred by matching
     its signature: the result type against the expected type (unless that is
     `void`, which accepts anything), then each parameter type against its
@@ -3735,6 +3779,7 @@ def defaultTypes (ctx : Ctx) (p : Pos) (s : Sig) (σ : List (String × Ty)) (d :
 partial def elabGenericCallWith (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx) (p : Pos) (s : Sig) (args : List SExpr) (exp : Option Ty)
     (packArgs : Bool := false) (inst : List (String × Ty) := []) :
     EM R := do
+  let args := packCallArgs p s args
   let s := if packArgs then { s with ret := .tup s.params } else s
   -- named arguments (#119): positional ones, then named ones as written,
   -- then the defaults of those omitted, as for other functions
@@ -5290,6 +5335,51 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
         "choice, the right of and or or, a range, or a block with a range of its own as a branch")
     eerr p ("a choice (a | b) has several values, so it must be in a failure context that takes them: " ++
       "an if condition, a for's clauses, first{…}, option{…}, logic{…}, not, or the left of or (#208)")
+  | .app p (.ident _ "$callSingleton") [a] false =>
+    -- Elaborate the operand once, then reuse its checked result for either
+    -- the whole tuple or its singleton element. Failed conversions must not
+    -- discard successful nested elaboration and repeat the operand tree.
+    if let some (pt@(.tup [inner])) := exp then
+      let r ← if ← argNeedsTypeWith elabE ctx a then
+          tryCatch (elabE ctx a (some inner)) (fun _ => elabE ctx a (some pt))
+        else tryCatch (elabE ctx a none) fun err => do
+          -- A nested generic call can itself require the element context.
+          -- Genuine producer errors propagate without a shape retry.
+          let emptyType := ["the type of an empty array{} must be given", "the type of an empty map{} must be given"].any
+            fun diagnostic => (err.splitOn diagnostic).length > 1
+          if (err.splitOn "cannot infer").length ≤ 1 && !emptyType then
+            throw err
+          let missing := ((err.splitOn "cannot infer type parameter ")[1]?).map
+            fun text => (text.splitOn " ").headD ""
+          let noHint (s : Sig) := s.ret.params.isEmpty || missing.any fun v =>
+            s.tparams.any (·.1 == v) && !s.ret.params.contains v
+          let fixedResult := match a with
+            | .app _ (.ident _ g) _ _ =>
+              (ctx.lookup g).isNone && (ctx.sig? g).any (·.ret.params.isEmpty)
+            | _ => false
+          let noResultEvidence := Choice.anyE (fun
+            | .app q (.ident _ g) _ _ =>
+              err.startsWith s!"{q.show}:" && (ctx.lookup g).isNone &&
+                ((ctx.sig? g).orElse fun _ => ctx.sig? s!"{g}$init").any noHint
+            | .app q (.member _ (.ident _ receiver) method) _ _ =>
+              err.startsWith s!"{q.show}:" && ((ctx.lookup receiver).bind fun local =>
+                match local.ty with
+                | .struct cls _ => (ctx.methodDecl? cls method).bind fun owner => ctx.sig? s!"{owner}.{method}"
+                | _ => none).any noHint
+            | _ => false) a
+          -- A result hint cannot supply an unrelated parameter of the
+          -- failing producer. Retrying it at every enclosing singleton
+          -- boundary would multiply the same unfixable inference failure.
+          if fixedResult || noResultEvidence then throw err
+          tryCatch (elabE ctx a (some inner)) (fun _ => elabE ctx a (some pt))
+      match (coerce a.pos r pt).run (← get) with
+      | .ok (e, state) => set state; return ⟨e, pt⟩
+      | .error _ =>
+        return ⟨.prim .mkTup [← coerce a.pos r inner], pt⟩
+    let r ← elabE ctx a none
+    match r.ty with
+    | .tup [_] | .never => return r
+    | _ => return ⟨.prim .mkTup [r.e], .tup [r.ty]⟩
   | .app p (.ident _ "$callArgs") [.ident _ g, .block _ args] false =>
     let some sig := ctx.sig? g | eerr p s!"internal: no signature for {g}'s arguments"
     if let some (.tup types) := exp then
@@ -6348,14 +6438,18 @@ partial def resolveOverload (ctx : Ctx) (p : Pos) (name : String) (ovs : List St
   let namedArgs : List (String × SExpr) := args.filterMap fun
     | .decl _ n _ _ rhs => if n.startsWith "?" then some ((n.drop 1).toString, rhs) else none
     | _ => none
+  let adapted ← ovs.mapM fun o => do
+    let some s := sigOf o | return (o, args)
+    return (s.name, packCallArgs p s args false)
+  let posOf (s : Sig) : List SExpr := ((adapted.lookup s.name).getD args).filter (!isNamedArg ·)
   let fitsShape (s : Sig) : Bool :=
-    posArgs.length == s.params.length - s.named.length &&
+    (posOf s).length == s.params.length - s.named.length &&
     namedArgs.all (fun (g, _) => s.named.any (·.1 == g)) &&
     s.named.all fun (n, d) => d.isSome || namedArgs.any (·.1 == n)
   -- each argument expression with the type of its parameter in `s`
   let argTys (s : Sig) : List (SExpr × Ty) :=
     let npos := s.params.length - s.named.length
-    (posArgs.zip (s.params.take npos)) ++ namedArgs.filterMap fun (n, rhs) =>
+    ((posOf s).zip (s.params.take npos)) ++ namedArgs.filterMap fun (n, rhs) =>
       (s.named.findIdx? (·.1 == n)).map fun j => (rhs, (s.params.drop npos).getD j .void)
   let cands := ovs.filter fun o => ((sigOf o).map fitsShape).getD false
   -- each argument's type alone, once (none: it needs an expected type)
@@ -6566,6 +6660,7 @@ partial def elabApp (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (brack
       if !(shapeErr || callErr || tupleErr) then throw err
       restore
       let c2 := { ctx with retries := ctx.retries + 1 }
+      let fnTy : Ty → Bool := fun | .struct n _ => (FnValues.parseName n).isSome | _ => false
       -- a method's receiver is evaluated first, then the tuple
       let (pre, c2, f') ← match f with
         | .member mp obj m =>
@@ -6579,12 +6674,58 @@ partial def elabApp (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (brack
               SExpr.member mp (.ident mp nm) m)
           | none => pure ([], c2, f)
         | _ => pure ([], c2, f)
+      -- Callable values are read before their argument tuple, including a
+      -- mutable local/field or a returned value. Saving only a field's object
+      -- would let the tuple producer replace the function before it is read.
+      let valueCallee ← match f' with
+        | .ident _ n => pure (((c2.lookup n).map (fun l => fnTy l.ty)).getD false ||
+            (c2.sig? n).any (fun s => s.isConst && fnTy s.ret))
+        | .member _ obj m =>
+          match (elabE { c2 with typeOnly := true } obj none).run (← get) with
+          | .ok (⟨_, .struct c as⟩, _) =>
+            pure ((c2.types.fields c as).any fun (n, ft, _) => n == m && fnTy ft)
+          | _ => pure false
+        | _ =>
+          match (elabE { c2 with typeOnly := true } f' none).run (← get) with
+          | .ok (r, _) => pure (fnTy r.ty)
+          | _ => pure false
+      let (pre, c2, f') ← if valueCallee then do
+          let value ← elabE c2 f' none
+          let slot ← fresh value.ty
+          let name := s!"$tupleCallee{slot}"
+          pure (pre ++ [Expr.assign slot value.e],
+            { c2 with locals := { name, slot, ty := value.ty, mutable := false } :: c2.locals },
+            SExpr.ident f'.pos name)
+        else pure (pre, c2, f')
       match ← tryCatch (some <$> elabE c2 a none) (fun _ => pure none) with
-      | some ⟨e, .tup ts⟩ =>
-        if ts.length < 2 then restore; throw err
-        let tt ← fresh (.tup ts)
+      | some ⟨e, ty⟩ =>
+        let some ts := (match ty with | .tup ts => some ts | .void => some [] | _ => none)
+          | restore; throw err
+        if ts.length < 2 then
+          -- Unit and singleton tuple flattening belongs to functions.
+          -- Keep casts and collection indexing at their ordinary types.
+          let functionHead ← match f' with
+            | .ident _ n =>
+              if let some l := c2.lookup n then pure (fnTy l.ty) else
+              pure ((c2.sig? n).any (fun s => !s.isConst || fnTy s.ret) ||
+                (c2.types.overloads.lookup n).isSome || (c2.sig? s!"{n}$init").isSome ||
+                (c2.types.overloads.lookup s!"{n}$init").isSome || c2.selfClass.any (c2.hasMethod · n))
+            | .member _ (.ident _ "(super:)") _ => pure true
+            | .member _ obj m =>
+              match (elabE { c2 with typeOnly := true } obj none).run (← get) with
+              | .ok (⟨_, .struct c as⟩, _) =>
+                match (c2.types.fields c as).find? (·.1 == m) with
+                | some (_, ft, _) => pure (fnTy ft)
+                | none => pure (c2.types.classes.contains c)
+              | _ => pure false
+            | _ =>
+              match (elabE { c2 with typeOnly := true } f' none).run (← get) with
+              | .ok (r, _) => pure (fnTy r.ty)
+              | _ => pure false
+          if !functionHead then restore; throw err
+        let tt ← fresh ty
         let nm := s!"$tuple{tt}"
-        let c3 := { c2 with locals := { name := nm, slot := tt, ty := .tup ts, mutable := false } :: c2.locals }
+        let c3 := { c2 with locals := { name := nm, slot := tt, ty, mutable := false } :: c2.locals }
         let parts := (List.range ts.length).map fun (i : Nat) => SExpr.app a.pos (.ident a.pos nm) [.int a.pos (i : Int)] false
         match ← tryCatch (some <$> elabAppBase c3 p f' (parts ++ namedArgs) bracket exp) (fun _ => pure none) with
         | some r => return ⟨(pre ++ [Expr.assign tt e]).foldr Expr.seq r.e, r.ty⟩
@@ -6848,6 +6989,7 @@ partial def elabAppBase (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (b
         if s.isConst then
           elabIndexLike ctx p ⟨.call s.idx [], s.ret⟩ args bracket
         else
+          let args := packCallArgs p s args
           if s.decides && !bracket then eerr p s!"{name} is <decides>: call it with {name}[…]"
           -- the call syntax marks failure (Book of Verse §8.1)
           if !s.decides && bracket then eerr p s!"{name} cannot fail: call it with {name}(…)"
@@ -7039,6 +7181,7 @@ partial def elabAppBase (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (b
             if ctx.implFor? d o m != ctx.implFor? d root m then
               eerr p s!"{d} implements {m} separately for {root} and {o}: call it as X.({root}:){m}(…) or X.({o}:){m}(…)"
         let ms := (ctx.sig? s!"{owner}.{m}").get!
+        let args := packCallArgs p { ms with params := ms.params.drop 1, pnames := ms.pnames.drop 1 } args false
         if spawning && !ms.suspends then
           eerr p "spawn{…} takes a call of a <suspends> function (#156)"
         if ms.decides && !bracket then eerr p s!"{m} is <decides>: call it with {m}[…]"
@@ -7626,7 +7769,7 @@ partial def elabMethod (ctx : Ctx) (p : Pos) (r : R) (m : String) (args : List S
 /-- `A[i]` on an array (failable) or `T(k)` on a tuple. -/
 partial def elabIndexLike (ctx : Ctx) (p : Pos) (r : R) (args : List SExpr) (bracket : Bool) : EM R := do
   -- a call of a function value (#210): of its shape's method
-  if let .struct n _ := r.ty then
+  if let .struct n ts := r.ty then
     if let some (_, effs) := FnValues.parseName n then
       if effs.contains "decides" && !bracket then
         eerr p s!"a value of type {r.ty.show} can fail: call it with […]"
@@ -7636,6 +7779,8 @@ partial def elabIndexLike (ctx : Ctx) (p : Pos) (r : R) (args : List SExpr) (bra
         eerr p s!"a value of type {r.ty.show} suspends: it can only be called in a <suspends> function (#156)"
       -- (one tuple argument flattens into several parameters)
       let k := (FnValues.parseName n).elim 0 (·.1)
+      let shape : Sig := { idx := 0, name := n, params := ts.take k, ret := .void, decides := false, isConst := false }
+      let args := packCallArgs p shape args false
       if args.length != k && !(args.length == 1 && k > 1) then
         eerr p s!"a value of type {r.ty.show} takes {k} argument(s), found {args.length}"
       let t ← fresh r.ty

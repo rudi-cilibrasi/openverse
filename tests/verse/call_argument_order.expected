@@ -1,0 +1,10 @@
+after 0
+left 1
+right 2
+B 3
+A 4
+D 5
+E 6
+body 10
+result 10 6
+exit=0
