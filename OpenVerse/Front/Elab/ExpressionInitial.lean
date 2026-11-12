@@ -209,7 +209,7 @@ partial def elabExprInitialWith
   | .str p parts =>
     let pieces ← parts.mapM fun part => match part with
       | .text s => pure (Expr.lit (Value.ofString s))
-      | .code e => do toStringOf e.pos (← elabE ctx e none)
+      | .code e => do elabToStringWith elabE ctx e.pos (← elabE ctx e none)
     let _ := p
     match pieces with
     | [] => return ⟨.lit (Value.ofString ""), Ty.string⟩

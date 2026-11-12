@@ -222,6 +222,21 @@ partial def elabArithmeticOperandWith (elabE : Ctx → SExpr → Option Ty → E
     | .arr _ => arrays
     | ty => arithmeticType ctx.types ty) operation
 
+partial def elabPrintableValueWith (elabE : Ctx → SExpr → Option Ty → EM R)
+    (ctx : Ctx) (p : Pos) (value : R) : EM R := do
+  let view ← match ctx.formattingView p value.ty with
+    | .ok view => pure view
+    | .error message => throw message
+  let some target := view | return value
+  let some plan := SubtypeEvidence.find? ctx.types ctx.evidenceTypes ⟨target, value.ty⟩
+    | eerr p "internal: a formatting view lost its lexical dictionary"
+  elabSubtypeUpWith elabE ctx p value target plan
+
+partial def elabToStringWith (elabE : Ctx → SExpr → Option Ty → EM R)
+    (ctx : Ctx) (p : Pos) (value : R) : EM Expr := do
+  let converted ← elabPrintableValueWith elabE ctx p value
+  toStringOf p (widenR ctx.types converted)
+
 partial def elabBoundReceiverWith (elabE : Ctx → SExpr → Option Ty → EM R)
     (ctx : Ctx) (p : Pos) (value : R) (member : String) : EM R := do
   let view ← match ctx.boundView p value.ty member with

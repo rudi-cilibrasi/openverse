@@ -149,7 +149,7 @@ partial def elabAppBaseWith
       return ⟨.seq code (.local tm), jt⟩
     | "ToString" =>
       match args with
-      | [a] => return ⟨← toStringOf p (← elabE ctx a none), Ty.string⟩
+      | [a] => return ⟨← elabToStringWith elabE ctx p (← elabE ctx a none), Ty.string⟩
       | _ => eerr p "ToString takes one argument"
     | "Abs" =>
       -- (of a float, #127; each argument elaborated once)
@@ -268,9 +268,9 @@ partial def elabAppBaseWith
       -- has a ToString, else just evaluate it
       match args with
       | [a] =>
-        let r ← elabE ctx a none
+        let r := widenR ctx.types (← elabPrintableValueWith elabE ctx p (← elabE ctx a none))
         match r.ty with
-        | .int | .char | .float | .arr .char => return ⟨.print (← toStringOf p r), .void⟩
+        | .int | .char | .char32 | .float | .arr .char => return ⟨.print (← toStringOf p r), .void⟩
         | _ => return ⟨.seq r.e (.lit .void), .void⟩
       | _ => eerr p "internal: $Show"
     | _ =>

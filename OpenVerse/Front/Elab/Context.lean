@@ -935,13 +935,9 @@ def Ctx.captureEvidence (ctx : Ctx) (captures : List Local) (excluded : List Str
 def Ctx.hasMethod (ctx : Ctx) (c m : String) : Bool :=
   (ctx.types.supers c).any fun e => (ctx.sig? s!"{e}.{m}").isSome
 
-/-- Select an operational value view using actual whole-value proofs.
-    Prefer a strict subtype; equivalent views use a stable representative. -/
-def Ctx.valueView (ctx : Ctx) (p : Pos) (derived : Ty) (accepts : Ty → Bool)
+private def Ctx.selectValueView (ctx : Ctx) (p : Pos) (derived : Ty) (candidates : List Ty)
     (operation : String) : Except String (Option Ty) := do
-  let .param .. := derived | return none
   let locals := ctx.evidenceTypes
-  let candidates := (SubtypeEvidence.valueViews ctx.types locals derived).filter accepts
   let converts (source target : Ty) :=
     (SubtypeEvidence.find? ctx.types locals ⟨target, source⟩).any (·.valid ctx.types locals)
   let best := candidates.filter fun candidate => !candidates.any fun other =>
@@ -953,6 +949,14 @@ def Ctx.valueView (ctx : Ctx) (p : Pos) (derived : Ty) (accepts : Ty → Bool)
       return some (rest.foldl (fun selected next =>
         if reprStr next < reprStr selected then next else selected) first)
     throw s!"{p.show}: ambiguous bound {operation} of {derived.show} through {", ".intercalate (best.map Ty.show)}"
+
+/-- Select an operational value view using actual whole-value proofs.
+    Prefer a strict subtype; equivalent views use a stable representative. -/
+def Ctx.valueView (ctx : Ctx) (p : Pos) (derived : Ty) (accepts : Ty → Bool)
+    (operation : String) : Except String (Option Ty) := do
+  let .param .. := derived | return none
+  ctx.selectValueView p derived
+    ((SubtypeEvidence.valueViews ctx.types ctx.evidenceTypes derived).filter accepts) operation
 
 def Ctx.containerView (ctx : Ctx) (p : Pos) (derived : Ty) (accepts : Ty → Bool)
     (operation : String) : Except String (Option Ty) :=
@@ -1342,6 +1346,21 @@ def arithmeticType (env : TyEnv) : Ty → Bool
   | .refine name => (env.refines.lookup name).any fun (base, _) =>
       [.int, .rational, .float].contains base
   | _ => false
+
+def printableType (env : TyEnv) : Ty → Bool
+  | .int | .float | .char | .char32 | .arr .char => true
+  | .refine name => (env.refines.lookup name).any fun (base, _) => base == .int || base == .float
+  | _ => false
+
+/-- Formatting has a finite set of domains. Search actual plans rather than
+    just written bound heads, so component proofs can establish a string view. -/
+def Ctx.formattingView (ctx : Ctx) (p : Pos) (derived : Ty) : Except String (Option Ty) := do
+  if printableType ctx.types derived then return none
+  let locals := ctx.evidenceTypes
+  let candidates := [Ty.int, .float, .char, .char32, Ty.string].filter fun target =>
+    (SubtypeEvidence.find? ctx.types locals ⟨target, derived⟩).any fun plan =>
+      plan.usesLocal && plan.valid ctx.types locals
+  ctx.selectValueView p derived candidates "formatting"
 
 /-- The conditions of `type{_X:base where c, …}` as `_X op bound`: each
     compares the variable with a literal number (Book of Verse ch. 11). -/

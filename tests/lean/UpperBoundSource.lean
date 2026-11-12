@@ -57,7 +57,8 @@ def main (args : List String) : IO Unit := do
   let operators := ["bound-array-join", "bound-array-join-control",
     "bound-array-join-state", "bound-array-join-state-control",
     "bound-numeric-operators", "bound-numeric-operators-control", "bound-numeric-state", "bound-numeric-state-control"]
-  let profiled := fifo ++ methodValues ++ callables ++ containers ++ operators ++
+  let formatting := ["bound-formatting", "bound-formatting-control", "bound-formatting-state", "bound-formatting-state-control"]
+  let profiled := fifo ++ methodValues ++ callables ++ containers ++ operators ++ formatting ++
     ["bound-refine-contexts", "bound-refine-contexts-control"]
   let negative := ["choice-refusal", "default-refusal", "override-refusal", "overload-interface-refusal",
     "overload-ancestor-refusal", "overload-optional-refusal", "overload-empty-refusal", "overload-scope-refusal",
@@ -78,9 +79,13 @@ def main (args : List String) : IO Unit := do
     "container-view-iteration-effect-control-refusal", "bound-numeric-unproved-refusal",
     "bound-numeric-mixed-refusal", "bound-numeric-mixed-control-refusal", "bound-numeric-narrow-refusal",
     "bound-numeric-floor-bracket-refusal", "bound-numeric-comparison-unproved-refusal",
-    "bound-array-join-unproved-refusal", "bound-array-join-narrow-refusal"]
+    "bound-array-join-unproved-refusal", "bound-array-join-narrow-refusal",
+    "bound-formatting-unproved-refusal", "bound-formatting-interpolation-unproved-refusal",
+    "bound-formatting-rational-refusal", "bound-formatting-rational-control-refusal",
+    "bound-formatting-map-refusal", "bound-formatting-wide-array-refusal", "bound-formatting-wide-array-control-refusal",
+    "bound-formatting-element-refusal", "bound-formatting-effects-refusal", "bound-formatting-effects-control-refusal"]
   let mut failures := 0
-  let cases := (positive ++ fifo ++ methodValues ++ callables ++ containers ++ iterators ++ operators ++ negative).map (fun name => (name, fifo.contains name, name)) ++
+  let cases := (positive ++ fifo ++ methodValues ++ callables ++ containers ++ iterators ++ operators ++ formatting ++ negative).map (fun name => (name, fifo.contains name, name)) ++
     ["fifo-bound-sleep", "fifo-bound-sleep-control"].map (fun name => (name, false, name ++ "-default"))
   for (name, eventFifo, artifact) in cases do
     let root := s!"tests/upper-bounds/{name}"

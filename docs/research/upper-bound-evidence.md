@@ -214,6 +214,20 @@ order, rollback, rejected division, cancellation and choice-free bytecode.
 Ordinary `Abs` now widens a refined float to its base, as the other numeric
 operators do; its concrete regression previously attempted an integer coercion.
 
+Formatting also requires actual executable views. `ToString`, interpolation
+and the command-line result printer consider only int, float, char, char32 and
+string, including numeric refinements through their base. Composed component
+proofs can turn a generic character array or tuple into a string; a whole-array
+proof alone does not establish its missing character relation. Static facts,
+dummy dictionaries and discard bounds do not authorize formatting. Unrelated
+printable domains remain ambiguous. Already printable concrete inputs keep
+their ordinary path, and rational/map/char32-array formatting remains refused.
+Source controls check defaults, receiver proof fields, escaping method values,
+operand order, rollback, failure, waiting and cancellation. The command-line
+printer now prints char32/refined values that previously fell through; a
+non-printable result still runs once without output. Four exact Lean/C entry
+oracles and the new source pairs also require identical choice-free bytecode.
+
 An interior write may traverse a container view to reach a mutable object.
 The view executes during traversal, after index/key evaluation and after its
 source container has been read. Writes that would rebuild an opaque container
