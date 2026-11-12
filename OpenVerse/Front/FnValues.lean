@@ -309,9 +309,6 @@ structure MethodRequest where
 def MethodRequest.className (r : MethodRequest) (i : Nat) : String :=
   s!"{r.owner}${r.method}$fnVariance{i}"
 
-def mergeMethodRequests (old new : List MethodRequest) : List MethodRequest :=
-  new.foldl (fun acc r => if acc.any (·.key == r.key) then acc else acc ++ [r]) old
-
 /-- Tuple calls at the arities present in the program. A bare parameter can
     become the tuple of the target arguments; its comparable bound then
     belongs to every component. Existing declared-shape instances come first. -/

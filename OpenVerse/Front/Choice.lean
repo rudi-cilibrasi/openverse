@@ -3086,7 +3086,7 @@ def methodFns (tops : List STop) (reserved : List String := []) (picks : List (P
           throw s!"{p.show}: {shown f.root}.{m} has several values, so it cannot be used as a function value (#235, #283)"
   -- (#283) the uses `R.M` of a `shared` name of a selected family that
   -- only `R`'s class can tell, not picked yet: the elaboration notes the
-  -- root that class is below, for the next round (`Elab`'s `familyNeeds`)
+  -- root that class is below, for the next round (`Requests.families`)
   let sites := (tops.flatMap bodiesOf).flatMap fun (inC, b) => (memberUses b).filterMap fun (q, r, m) =>
     let byClass := match r, inC with
       | .ident _ "Self", some _ | .ident _ "(super:)", _ => true

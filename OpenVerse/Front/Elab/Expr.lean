@@ -1633,7 +1633,7 @@ partial def elabLoopGen (ctx : Ctx) (p : Pos) (lp : List SExpr) : EM LoopGen := 
     return ← tryCatch (elabLoopGenGroupWith elabE elabSeq ctx p g ps cls rsty tail0 members) fun _ => do
       -- Polymorphic recursion was already accepted through F$all. Restart
       -- choice lowering for this group, with all eager restrictions intact.
-      modify fun st => { st with eagerNeeds := g :: st.eagerNeeds }
+      noteNeeds { eager := [g] }
       let sp ← fresh .int
       let has ← fresh .logic
       return { init := .lit .void, step := .lit .void, sp, has, value := .prim .fail [],
@@ -1819,8 +1819,7 @@ partial def elabSpawnBound (ctx : Ctx) (p : Pos) (fname adapter : String)
       specs := (if s.fx.isEmpty then ["computes"] else s.fx) ++ ["suspends"] ++ selfTps.map ("$selfTp:" ++ ·),
       ret := ret.toSTy, body := .app p (.ident p "$spawnResult") [.app p (.ident p fname) forwarded false] false,
       binds := [], sets := [], args := [] }
-    modify fun st => { st with loopFirst := st.loopFirst ++
-      [{ g := "", pos := p, itemCode := .lit .void, argSet := none, lift := .ok lift }] }
+    noteNeeds { loops := [lift] }
     return ⟨.lit .void, ctx.retTy⟩
   let slot ← fresh packed.ty
   let name := s!"$spawnArgs{slot}"
@@ -1886,8 +1885,7 @@ partial def elabSpawnDispatch (ctx : Ctx) (p : Pos) (cls fname declared : String
       [.block p stack, .int p (flags : Int), .app p (.ident p "$spawnBound")
         (.ident p fname :: .ident p adapter :: forwarded) false] false,
     binds := [], sets := [], args := [] }
-  modify fun st => { st with loopFirst := st.loopFirst ++
-    [{ g := "", pos := p, itemCode := .lit .void, argSet := none, lift := .ok lift }] }
+  noteNeeds { loops := [lift] }
   noteFx p s.fx (some fname)
   return ⟨.prim .userErr [], exp.getD (.struct (ctx.types.concurrencyName "task") [ret])⟩
 
@@ -1940,8 +1938,7 @@ partial def elabDefaultDispatch (ctx : Ctx) (p : Pos) (fname : String)
     specs := ["transacts"] ++ (if s.decides then ["decides"] else []) ++
       (if s.suspends then ["suspends"] else []) ++ s.selfTps.map ("$selfTp:" ++ ·),
     ret := s.ret.toSTy, body, binds := [], sets := [], args := [] }
-  modify fun st => { st with loopFirst := st.loopFirst ++
-    [{ g := "", pos := p, itemCode := .lit .void, argSet := none, lift := .ok lift }] }
+  noteNeeds { loops := [lift] }
   noteFx p s.fx (some fname)
   let recv ← elabE ctx positional[0]! none
   -- This round only discovers the helper; it returns before Core checking.
@@ -2099,7 +2096,7 @@ partial def elabMember (ctx : Ctx) (p : Pos) (r : R) (m : String) (exp : Option 
                   | none =>
                     let key := s!".{x0}${f}"
                     if !env.fnRequests.contains (key, t) && fnTyFits env (typeOf x0) t then
-                      modify fun st => { st with fnNeeds := st.fnNeeds ++ [(key, t)] }
+                      noteNeeds { fns := [(key, t)] }
                       return ⟨.seq r.e (.prim .userErr []), t⟩
           -- A generic receiver fixes its method's signature too. Requested
           -- adapters retain its witnesses and ordinary call conversions.
@@ -2117,7 +2114,7 @@ partial def elabMember (ctx : Ctx) (p : Pos) (r : R) (m : String) (exp : Option 
                   let rv ← elabConstruct ctx' p cls [] [.decl p "$self" none false (.ident p nm)]
                     (some (.struct cls args))
                   return ⟨.seq (.assign tv r.e) (← coerce p rv target), target⟩
-                modify fun st => { st with methodNeeds := FnValues.mergeMethodRequests st.methodNeeds [req] }
+                noteNeeds { methods := [req] }
                 return ⟨.seq r.e (.prim .userErr []), target⟩
           let some x := (candidates.find? fun x => exp == some (typeOf x)).orElse fun _ => candidates.head?
             | eerr p s!"'{f}' is a method of {sn} that cannot be used as a value: call it with {f}(…) (a method with named parameters is not a value, #210)"

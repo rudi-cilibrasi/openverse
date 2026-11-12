@@ -41,7 +41,7 @@ def main : IO Unit := do
   match elabProgramCore indirectTops with
   | .error e => unless (e.splitOn "requires convergence").length > 1 do
       throw (IO.userError s!"indirect core: {e}")
-  | .ok c => unless !c.fnNeeds.isEmpty || !c.methodNeeds.isEmpty || !c.loopNeeds.isEmpty do
+  | .ok c => unless !c.needs.fns.isEmpty || !c.needs.methods.isEmpty || !c.needs.loops.isEmpty do
       throw (IO.userError "indirect core: completed without convergence admission")
 
   let p : Pos := { line := 8, col := 3, file := "initializer-api.verse" }
@@ -54,15 +54,15 @@ def main : IO Unit := do
     { (default : Choice.FirstLift) with
         stageOnly := true, key := "initializer-api", name := "$stage", pos := p, extraFns := extra }
   refused "request field" "requires convergence"
-    (elabProgramCore [helper, main] { loopRequests := [request [packet "Helper"]] })
+    (elabProgramCore [helper, main] { requests := { loops := [request [packet "Helper"]] } })
   let forwarding := STop.fn p "$forward" [] [] ["computes"] (.name "int")
     (.app p (.ident p "Helper") [] false)
   refused "request forwarding" "requires convergence"
-    (elabProgramCore [helper, packet "$forward", main] { loopRequests := [request [forwarding]] })
+    (elabProgramCore [helper, packet "$forward", main] { requests := { loops := [request [forwarding]] } })
   let cyclic := STop.fn p "$cycle" [] [] ["computes"] (.name "int")
     (.app p (.ident p "$cycle") [] false)
   refused "request recursion" "recursive helper"
-    (elabProgramCore [packet "$cycle", main] { loopRequests := [request [cyclic]] })
+    (elabProgramCore [packet "$cycle", main] { requests := { loops := [request [cyclic]] } })
   let fakeBlock := STop.fn p "fake.$block" [] [] ["computes"] (.name "int") (.int p 42)
   refused "ordinary block spelling" "ordinary function"
     (elabProgramCore [fakeBlock, packet "fake.$block", main])
