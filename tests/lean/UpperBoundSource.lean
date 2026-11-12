@@ -64,7 +64,12 @@ def main (args : List String) : IO Unit := do
     "bound-concatenate-state", "bound-concatenate-state-control"]
   let construction := ["bound-qualified-slots", "bound-qualified-slots-control",
     "bound-construction-defaults", "bound-construction-defaults-control"]
-  let profiled := fifo ++ methodValues ++ callables ++ containers ++ operators ++ formatting ++ concatenate ++ construction ++
+  let concurrency := ["bound-concurrency-helpers", "bound-concurrency-helpers-control",
+    "bound-signal-policy", "bound-signal-policy-control", "bound-signal-default-policy", "bound-signal-default-policy-control"]
+  let signalAdmitted := ["bound-concurrency-helpers", "bound-concurrency-helpers-control"]
+  let signalRefused := ["bound-signal-policy", "bound-signal-policy-control",
+    "bound-signal-default-policy", "bound-signal-default-policy-control"]
+  let profiled := fifo ++ methodValues ++ callables ++ containers ++ operators ++ formatting ++ concatenate ++ construction ++ concurrency ++
     ["bound-refine-contexts", "bound-refine-contexts-control"]
   let negative := ["choice-refusal", "default-refusal", "override-refusal", "overload-interface-refusal",
     "overload-ancestor-refusal", "overload-optional-refusal", "overload-empty-refusal", "overload-scope-refusal",
@@ -92,9 +97,10 @@ def main (args : List String) : IO Unit := do
     "bound-formatting-element-refusal", "bound-formatting-effects-refusal", "bound-formatting-effects-control-refusal",
     "bound-concatenate-unproved-refusal", "bound-concatenate-shallow-refusal", "bound-concatenate-element-refusal",
     "bound-concatenate-maps-unproved-refusal", "bound-concatenate-effects-refusal", "bound-concatenate-effects-control-refusal",
-    "bound-qualified-slots-refusal", "bound-construction-defaults-unproved-refusal"]
+    "bound-qualified-slots-refusal", "bound-construction-defaults-unproved-refusal",
+    "bound-concurrency-unproved-refusal", "bound-concurrency-cancel-effects-refusal", "bound-concurrency-cancel-effects-control-refusal"]
   let mut failures := 0
-  let cases := (positive ++ fifo ++ methodValues ++ callables ++ containers ++ iterators ++ operators ++ formatting ++ concatenate ++ construction ++ negative).map (fun name => (name, fifo.contains name, name)) ++
+  let cases := (positive ++ fifo ++ methodValues ++ callables ++ containers ++ iterators ++ operators ++ formatting ++ concatenate ++ construction ++ concurrency ++ negative).map (fun name => (name, fifo.contains name, name)) ++
     ["fifo-bound-sleep", "fifo-bound-sleep-control"].map (fun name => (name, false, name ++ "-default"))
   for (name, eventFifo, artifact) in cases do
     let root := s!"tests/upper-bounds/{name}"
@@ -126,6 +132,23 @@ def main (args : List String) : IO Unit := do
           IO.eprintln s!"FAIL {name}: Core admission or independent output oracle"
           failures := failures + 1
         else
+          if signalAdmitted.contains name || signalRefused.contains name then
+            for profile in [SourceProfile.full, .choiceFree] do
+              let flagged := parseProgram source >>= fun tops => elabProgram tops { eventFifo, profile, signalNoRollback := true }
+              if signalRefused.contains name then
+                match flagged with
+                | .error message =>
+                  unless (message.splitOn "in a failure context, which --signal-no-rollback refuses").length > 1 do
+                    throw (IO.userError s!"{artifact}: wrong signal policy refusal: {message}")
+                | .ok _ => throw (IO.userError s!"{artifact}: signal policy admitted a bounded rollback signal")
+              else
+                let strict ← match flagged with
+                  | .ok value => pure value
+                  | .error message => throw (IO.userError s!"{artifact}: signal policy refused: {message}")
+                unless strict.prog.check && strict.prog.checkControl &&
+                    strict.prog.checkTypes strict.sigs strict.slotTys && strict.prog.encode == compiled.prog.encode do
+                  throw (IO.userError s!"{artifact}: signal policy changed checked admitted bytecode")
+            IO.println s!"ok {artifact}: signal policy {if signalRefused.contains name then "refused" else "checked"} in both profiles"
           if iterators.contains name then
             match parseProgram source >>= fun tops =>
                 elabProgram tops { eventFifo, profile := .choiceFree } with

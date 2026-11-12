@@ -169,6 +169,21 @@ and methods, as well as retained generated-request headers and relations.
 A shape written only in a bound must be materialized before type resolution;
 an unrelated annotation or runtime call is not needed to make it available.
 
+Concurrency intrinsics also require actual views: event/task `Await`, task
+`Cancel` and zero-argument `Signal` on unit events have helper implementations
+rather than ordinary method declarations. An opaque receiver can select one of
+the same finite concurrency shapes that the concrete intrinsic admits. The
+checked conversion and receiver are evaluated once before ordinary helper
+lowering. Missing/static/dummy proofs and unrelated competing views remain
+refused. Payload events do not acquire a zero-argument signal operation.
+Ordinary suspension, defer and failure-context restrictions still apply.
+Source/control pairs check event and sticky-event waits, precise task results,
+once-only receivers, unit signals and cancellation cleanup. Admitted bytecode
+stays identical in both source profiles and with `--signal-no-rollback`.
+Separate direct and named-default controls retain legacy rollback signals by
+default and require specific policy refusals in both profiles when the flag is
+enabled. Checked dictionary conversion does not hide those calls from admission.
+
 Member lookup uses actual nominal views. Root and interior mutation preserve
 the source storage type, evaluate indices/keys before traversal, and perform
 each bound view after reading its source container. Augmented updates retain
