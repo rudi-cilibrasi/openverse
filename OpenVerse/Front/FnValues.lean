@@ -328,6 +328,19 @@ def MethodRequest.className (r : MethodRequest) (i : Nat) : String :=
 def mergeMethodRequests (old new : List MethodRequest) : List MethodRequest :=
   new.foldl (fun acc r => if acc.any (·.key == r.key) then acc else acc ++ [r]) old
 
+/-- A class/interface upper bound excludes tuple instances, also through a
+    peer chain. An unanchored peer cycle does not establish that exclusion. -/
+private def tupleInstancePossible (tps : List TParam) (name : String) : Bool :=
+  go (tps.length + 1) name
+where
+  go : Nat → String → Bool
+    | 0, _ => true
+    | fuel + 1, name =>
+      match (tps.find? (·.name == name)).bind (·.upperBound) with
+      | none => true
+      | some (.name peer) => tps.any (·.name == peer) && go fuel peer
+      | some _ => false
+
 /-- Tuple calls at the arities present in the program. A bare parameter can
     become the tuple of the target arguments; its comparable bound then
     belongs to every component. Existing declared-shape instances come first. -/
@@ -346,7 +359,7 @@ def genericAdapters (p : Pos) (n : String) (ps : List STy) (tps : List TParam) (
         suffix := s!"Unpack{ts.length}", tparams := tps, params := ts, ret := r,
         args := [.tuple p (xs ts.length)] }]
   | [.name v] =>
-    if let some tp := tps.find? (·.name == v) then
+    if let some tp := tps.find? (fun tp => tp.name == v && tupleInstancePossible tps v) then
       for k in arities do
         let components := (List.range k).map fun i => { tp with name := s!"$tupleValue_{n}_{k}_{i}" }
         let types := components.map fun t => STy.name t.name
