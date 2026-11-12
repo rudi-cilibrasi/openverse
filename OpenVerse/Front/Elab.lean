@@ -5362,8 +5362,8 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
               err.startsWith s!"{q.show}:" && (ctx.lookup g).isNone &&
                 ((ctx.sig? g).orElse fun _ => ctx.sig? s!"{g}$init").any noHint
             | .app q (.member _ (.ident _ receiver) method) _ _ =>
-              err.startsWith s!"{q.show}:" && ((ctx.lookup receiver).bind fun local =>
-                match local.ty with
+              err.startsWith s!"{q.show}:" && ((ctx.lookup receiver).bind fun binding =>
+                match binding.ty with
                 | .struct cls _ => (ctx.methodDecl? cls method).bind fun owner => ctx.sig? s!"{owner}.{method}"
                 | _ => none).any noHint
             | _ => false) a
