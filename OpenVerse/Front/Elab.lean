@@ -139,6 +139,14 @@ structure Sig where
 /-- How many hidden parameters (values of type arguments) a function takes. -/
 def Sig.ndicts (s : Sig) : Nat := s.tparams.length - s.selfTps.length
 
+/-- The implicit receiver, distinguished from an ordinary parameter that a
+    source function happens to name Self. Extracted methods use $Self. -/
+def Sig.hasReceiver (s : Sig) : Bool :=
+  s.pnames.head? == some "$Self" || (s.pnames.head? == some "Self" &&
+    match s.params.head? with
+    | some (.struct owner _) => s.name.startsWith (owner ++ ".")
+    | _ => false)
+
 /-- Default-dispatch helpers are private forwarding functions, with defaults
     evaluated in the selected implementation's own type context. -/
 def defaultBridge (n : String) : Bool := (n.splitOn "$dispatchDefaults").length > 1
@@ -3750,7 +3758,7 @@ def defaultTypes (ctx : Ctx) (p : Pos) (s : Sig) (σ : List (String × Ty)) (d :
 def packCallArgs (p : Pos) (s : Sig) (args : List SExpr)
     (hasReceiver : Bool := true) : List SExpr := Id.run do
   let isNamed : SExpr → Bool := fun | .decl _ n _ _ _ => n.startsWith "?" | _ => false
-  let off := if hasReceiver && (s.pnames.head? == some "Self" || s.pnames.head? == some "$Self") then 1 else 0
+  let off := if hasReceiver && s.hasReceiver then 1 else 0
   let pos := args.filter (!isNamed ·)
   let user := pos.drop off
   let named := args.filter isNamed
@@ -5359,7 +5367,7 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
               ctx.selfClass.bind fun c => (ctx.methodDecl? c g).bind fun owner => ctx.sig? s!"{owner}.{g}"
             else (ctx.sig? g).orElse fun _ => ctx.sig? s!"{g}$init"
           let resultContext (s : Sig) :=
-            let owner := if s.pnames.head? == some "Self" || s.pnames.head? == some "$Self" then
+            let owner := if s.hasReceiver then
                 match s.params.head? with
                 | some (.struct c _) => ((ctx.types.sparams.lookup c).getD []).map (·.1)
                 | _ => []
