@@ -527,8 +527,8 @@ those uses as written, ordinary calls (a family's method stays in its class
 as a stub, a direct one too, for them to type), with one value in the
 fixpoint; at each (`TyEnv.familySites`) `Ctx.noteFamily` notes the root of
 `M` above the receiver's static class by the place of `R.M`
-(`Compiled.familyNeeds`), and the program is elaborated again with them
-(`Options.familyPicks`), as for `eagerRequests`. That elaboration does not
+(`Requests.families`), and the program is elaborated again with them, as
+with eager groups (`Requests.eager`). That elaboration does not
 judge what can fail (`Ctx.failabilityKnown`), as a call may yet get several
 values, and the uses it does not reach are of no family, so the last one has
 none left. Each use is then rewritten as in a program with that family
@@ -781,7 +781,7 @@ code after one call and the values of the names that code uses.
   two routes give the same values, but `F$all` does not stop for an infinite
   one. A `<computes>` one whose code prints or calls `Err()` is found only
   on Verse Core (`checkEager`), so that elaboration asks for another
-  (`Compiled.lazyNeeds`, `Options.lazyRequests`) with it taken lazily; one
+  (`Requests.lazy`) with it taken lazily; one
   that still is not of the shape is refused as before.
 
 Not yet (#283), with the route each would take within the same mechanism:
@@ -813,13 +813,13 @@ an optimisation of effect-free ones. Deleting it (the owner's decision,
 since it changes the bytes of the 39 programs of the suite whose Core has
 an `F$all` today) would remove `allBody`, `arrOfE`, `gensOf`, `markAll`, the
 `$each` consumers in `elabOneGo` and `elabFor`, `needAll` and the eager
-refusals in `inlineMulti`, `checkEager` with its `lazyNeeds` round, and
-`eagerRequests`. It would also change semantics: values on demand, so an
+refusals in `inlineMulti`, `checkEager` with its round of `Requests.lazy`,
+and `Requests.eager`. It would also change semantics: values on demand, so an
 infinite effect-free one stops where the first success is taken, and an
 error in a value never reached no longer stops the program. It first needs
 the lazy route to cover what only `F$all` does now: choice points in
 sequence, a recursive one calling a function with several values outside
-its group, polymorphic recursion in a mutual group (`eagerNeeds`), and an
+its group, polymorphic recursion in a mutual group (`Requests.eager`), and an
 `any`-valued returning group whose tail erases its values
 (`erasesRecursive`).
 
@@ -974,6 +974,37 @@ So a large definition that calls few functions of the block is defined before it
 - `elabRefinedIfWith`
 
 The block then needs between 120000 and 160000 heartbeats. A function with a default argument is passed as an explicit lambda (`fun c q i t pl => elabBranchAlts c q i t pl`), or as the shorter form a body uses (`elabMember`'s four arguments). New elaborator logic can follow the same pattern.
+
+## Elaboration in rounds
+
+Some of what a program needs is known only once its types are: a function
+used as a value at a type no class of its gives (#214), a cast's branch as
+a function (#243), a lazily taken call's function of its own (#246), the
+family of a method's use (#283), hidden fields for all of a class's type
+parameters (#351), and more. An elaboration (`elabProgramCore`) that finds
+such a need records it (`noteNeeds` in a function's `ESt.needs`, or one of
+`elabProgramCore`'s own checks), with a placeholder where a value was
+wanted, and goes no further than the step that found it: its result asks for
+something (`Compiled.needs`, `Compiled.asking`). `elabProgram` then
+elaborates the program again with it (`Options.requests`), until an
+elaboration asks for nothing new. Needs and requests are one record,
+`Requests`, one list per kind; `Requests.merge` adds the ones whose key is
+new, so a list keeps the order things were first asked for, which is the
+order of the functions made for them.
+
+What is asked for is of three tiers, by what it changes (`Requests.tier`),
+and an elaboration asks for one tier at a time: 1. how the source's
+choices are inlined (eager groups, lazily taken functions, families),
+2. the classes' layout (hidden fields), 3. the functions added (functions
+and methods as values, cast branches, the functions of lazily taken calls,
+continuations and default helpers). A round that asks for more of one tier
+is followed by one with the requests of that tier and the tiers above it
+only (`Requests.upTo`): what the tiers below asked for is discovered again,
+under the new source or layout. Each tier has a budget of rounds, renewed
+when a tier above it restarts, and a round that asks for nothing new while
+asking for something is an internal error. Which requests a round has
+decides the emitted code, so a change to the driver must keep the
+sequence of rounds, not only the last one.
 
 ## Translation validation instead of a verified front end
 
@@ -1784,7 +1815,7 @@ position in every class below the one that declares it.
   fields for all of its type parameters, which its overrides read
   (`Sig.selfTps`; a class with a class parent that adds such an interface
   has them for all only when asked, after the first elaboration finds it:
-  the program is elaborated again, `Options.witnessAll`); a method's dispatch tests each class, its arguments
+  the program is elaborated again, `Requests.witnesses`); a method's dispatch tests each class, its arguments
   opened (`$ext`) and refined by its view and pins, as #209's refined
   calls are; a refining cast (#243, #250) relates the object's type
   arguments to the target's through the view too; and an implementation's
