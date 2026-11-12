@@ -455,14 +455,14 @@ partial def elabApp (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (brack
   let isNamed : SExpr → Bool := fun | .decl _ n _ _ _ => n.startsWith "?" | _ => false
   let positional := args.filter (!isNamed ·)
   let namedArgs := args.filter isNamed
-  -- A generated method function keeps its receiver as the first argument.
+  -- A method function keeps its receiver as the first argument.
   -- Inlining already spreads a following tuple, but kept/scalar/array calls
   -- reach this boundary directly. Instantiate from the actual receiver;
   -- callee type names have no meaning in the caller's lexical type scope.
   if let (.ident _ g, [receiver, tupleArg]) := (f, positional) then
     if let some s := ctx.sig? g then
       let npos := s.params.length - s.named.length
-      if s.pnames.head? == some "$Self" && npos ≥ 3 then
+      if s.hasReceiver && npos ≥ 3 then
         let r ← elabE ctx receiver none
         let some σ := s.params[0]!.matchArg ctx.types [] r.ty
           | eerr receiver.pos s!"expected {s.params[0]!.show}, found {r.ty.show} (the receiver of {Choice.shownFnName g})"

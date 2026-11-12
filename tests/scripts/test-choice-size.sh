@@ -8,6 +8,48 @@ tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
 limit="${CHOICE_SIZE_TIMEOUT:-120}"
 # Keep modes sorted on separate lines so independent additions merge cleanly.
 kinds=(
+  callpacking-tuplevar-first
+  callpacking-tuplevar-for
+  callpacking-tuplevar-waiting
+  callpacking-tuple-generic-first
+  callpacking-tuple-generic-for
+  callpacking-tuple-generic-waiting
+  callpacking-literal-generic-first
+  callpacking-literal-generic-for
+  callpacking-literal-generic-waiting
+  callpacking-arraypack-first
+  callpacking-arraypack-for
+  callpacking-arraypack-waiting
+  callpacking-tuplepack-first
+  callpacking-tuplepack-for
+  callpacking-tuplepack-waiting
+  callpacking-singleton-first
+  callpacking-singleton-for
+  callpacking-singleton-waiting
+  callpacking-unit-first
+  callpacking-unit-for
+  callpacking-unit-waiting
+  callpacking-named-first
+  callpacking-named-for
+  callpacking-named-waiting
+  callpacking-callable-first
+  callpacking-callable-for
+  callpacking-callable-waiting
+  callpacking-callable-array-first
+  callpacking-callable-array-for
+  callpacking-callable-array-waiting
+  callpacking-mixedpack-first
+  callpacking-mixedpack-for
+  callpacking-mixedpack-waiting
+  callpacking-mixedliteral-first
+  callpacking-mixedliteral-for
+  callpacking-mixedliteral-waiting
+  callpacking-mixedsingle-first
+  callpacking-mixedsingle-for
+  callpacking-mixedsingle-waiting
+  callpacking-mixedunit-first
+  callpacking-mixedunit-for
+  callpacking-mixedunit-waiting
   objectpath-plain-varying-boundary-first
   objectpath-plain-varying-boundary-for
   objectpath-plain-varying-boundary-waiting
@@ -516,6 +558,37 @@ for kind in "${kinds[@]}"; do
     python3 - "$kind" "$count" >"$tmp/p.verse" <<'PY'
 import sys
 kind, count = sys.argv[1], int(sys.argv[2])
+if kind.startswith('callpacking-'):
+    rest=kind.removeprefix('callpacking-')
+    shape,mode=rest.rsplit('-',1)
+    n=count
+    print('Dup(X:t where t:type)<computes>:t=X|X')
+    if shape in ['callable','callable-array']:
+        params='X:int,Y:int' if shape=='callable' else 'X:[]int'
+        for name,fx in [('FA','<reads><writes>'),('FB','<transacts>')]:print(name+'('+params+')'+fx+':int=1')
+    for cls,tag in [('ca','a'),('cb','b')]:
+        if shape in ['callable','callable-array']:
+            inputs=':int,:int' if shape=='callable' else ':[]int';fx='<reads><writes>' if tag=='a' else '<transacts>'
+            fields='F:type{_('+inputs+')'+fx+':int}='+('FA' if tag=='a' else 'FB')
+        else:
+            params=('X:tuple(int,int)' if tag=='a' else 'X:[]int') if shape=='mixedpack' else ('X:tuple(int,int)' if tag=='a' else 'X:int,Y:int') if shape=='mixedliteral' else ('X:tuple(int)' if tag=='a' else 'X:int') if shape=='mixedsingle' else ('X:tuple()' if tag=='a' else '') if shape=='mixedunit' else 'X:int,Y:int' if shape=='tuplevar' else 'X:u,Y:u where u:type' if shape=='tuple-generic' else 'A:[]u,B:?u,C:u,?Stamp:int=3 where u:type' if shape=='literal-generic' else 'X:[]u where u:type' if shape=='arraypack' else 'X:tuple(int,int)' if shape in ['tuplepack','named'] else 'X:tuple(int)' if shape=='singleton' else 'X:tuple()'
+            if shape=='named':params+=',?Stamp:int=3'
+            ret='u' if shape=='tuple-generic' else 'int';body='X' if shape=='tuple-generic' else '1'
+            fields='M('+params+')<computes>:'+ret+'='+body
+        print(cls+':=class{'+fields+'}')
+    clauses=[f'A{i}:=(Dup(ca{{}})|Dup(cb{{}}))' for i in range(n)];calls=[]
+    for i in range(n):
+        args='PairValue' if shape in ['tuplevar','tuple-generic','callable'] else '(array{},false,7)' if shape=='literal-generic' else '1,2' if shape in ['arraypack','tuplepack','named','callable-array','mixedpack'] else '(1,2)' if shape=='mixedliteral' else '7' if shape in ['singleton','mixedsingle'] else ''
+        calls.append(f'A{i}.'+('F' if shape.startswith('callable') else 'M')+'('+args+')')
+    params='V:t where t:type' if shape=='tuple-generic' else ''
+    print('Run('+params+')'+('<suspends>' if mode=='waiting' else '')+':int=')
+    print('    PairValue:='+('(V,V)' if shape=='tuple-generic' else '(1,2)'))
+    if mode=='first':print('    if('+','.join(clauses+calls)+')then 1 else -1')
+    else:
+        body='block{'+(';'.join(calls))+';Sleep(0.001);0}' if mode=='waiting' else '0'
+        print('    Rows:=for('+','.join(clauses+([] if mode=='waiting' else calls))+'):'+body+'\n    Rows.Length')
+    print('Main()'+('<suspends>' if mode=='waiting' else '')+':void=Print("{Run('+('7' if shape=='tuple-generic' else '')+')}")')
+    sys.exit(0)
 if kind.startswith('objectpath-'):
     _,op,rest=kind.split('-',2)
     shape,mode=rest.rsplit('-',1)
@@ -1915,7 +1988,7 @@ PY
       diff -u "$tmp/expected" "$tmp/lean.out"
       diff -u "$tmp/expected" "$tmp/c.out"
     fi
-    if [[ ( $kind == named-* || $kind == conversion-* || $kind == indexwrite-* || $kind == compoundindex-* || $kind == mapwrite-* || $kind == multiindex-* || $kind == objectpath-* ) && $count == 4 ]]; then
+    if [[ ( $kind == named-* || $kind == conversion-* || $kind == indexwrite-* || $kind == compoundindex-* || $kind == mapwrite-* || $kind == multiindex-* || $kind == objectpath-* || $kind == callpacking-* ) && $count == 4 ]]; then
       expected=256
       if [[ $kind == *-first ]]; then
         expected=1

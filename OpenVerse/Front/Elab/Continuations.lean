@@ -1415,17 +1415,46 @@ def choiceForwardArguments (written values : List SExpr) : List SExpr :=
     | .decl p n _ _ _ => if n.startsWith "?" then .decl p n none false value else value
     | _ => value
 
+/-- Use the ordinary argument packer before discovering a dictionary.
+    Literal tuple fields stay separate for contextual generic inference;
+    a computed tuple stays one value, evaluated once in the caller. -/
+def choicePackArguments (sig : Sig) (args : List SExpr) (method : Bool) : List SExpr :=
+  let sig := if method then { sig with params := sig.params.drop 1, pnames := sig.pnames.drop 1 } else sig
+  let args := packCallArgs (args.head?.map SExpr.pos |>.getD { line := 0, col := 0 }) sig args false
+  let positional := args.filter fun | .decl _ n .. => !n.startsWith "?" | _ => true
+  let named := args.filter fun | .decl _ n .. => n.startsWith "?" | _ => false
+  let count := sig.params.length - sig.named.length
+  match positional with
+  | [.tuple _ fields] => if count != 1 then fields ++ named else args
+  | _ => args
+
+/-- Written arguments may share even when alternatives pack them into
+    different aggregate parameters. Keep each adapter's ordinary binder. -/
+def choicePositionalTypes (parameters : List Ty) (args : List SExpr) (raw : Bool) : Option (List Ty) := do
+  if raw then
+    if let [.tup [element]] := parameters then
+      if args.length == 1 then return [element]
+  if args.length == parameters.length then return parameters
+  match parameters, args with
+  | [.void], [] => some []
+  | [.tup elements], _ => if args.length == elements.length then some elements else none
+  | [.arr element], _ => if args.length > 1 then some (List.replicate args.length element) else none
+  | _, [_] => if parameters.length > 1 then some [Ty.tup parameters] else none
+  | _, _ => none
+
 /-- Parameter types in evaluation order. Omitted defaults stay in the
     original method call, in its own declaration and type scope. -/
-def choiceCallInputs (sig : Sig) (args : List SExpr) : Option (List Ty × Bool) := do
+def choiceCallInputs (sig : Sig) (args : List SExpr) (raw : Bool := false) : Option (List Ty × Bool) := do
   let npos := sig.params.length - sig.named.length - 1
   let positional := args.filter fun | .decl _ n .. => !n.startsWith "?" | _ => true
   let named := args.filterMap fun | .decl _ n .. => if n.startsWith "?" then some (n.drop 1).toString else none | _ => none
-  if positional.length != npos || named.eraseDups.length != named.length then none else do
+  if named.eraseDups.length != named.length then none else do
+  let positionalTypes := sig.params.drop 1 |>.take npos
+  let supplied ← choicePositionalTypes positionalTypes positional raw
   let indices ← named.mapM fun n => (sig.named.findIdx? (·.1 == n)).map (npos + ·)
   let omitted := sig.named.filter fun (n, _) => !named.contains n
   if omitted.any (·.2.isNone) then none else
-    some ((List.range npos ++ indices).map fun i => sig.params[i + 1]!, !omitted.isEmpty)
+    some (supplied ++ indices.map (fun i => sig.params[i + 1]!), !omitted.isEmpty)
 
 def choiceDefaultContext (ctx : Ctx) (body : SExpr) : SExpr :=
   let p := body.pos
@@ -1457,9 +1486,8 @@ partial def choiceOperationContexts (ctx : Ctx) (body : SExpr) : List (SExpr × 
     later generators have supplied their values. Only receiver-dependent
     columns independent of those method parameters belong to its object. -/
 def choiceGenericOperation (ctx : Ctx) (stem : String) (receiver : SExpr) (receiverTy : Ty) (ops : ChoiceOperations)
-    (call : SExpr) (cases : List ChoiceOperationCase) : Option ChoiceOperations := do
-  let .app p (.member _ _ method) arguments bracket := call | none
-  let arguments := choiceOrderedArguments arguments
+    (call : SExpr) (arguments : List SExpr) (cases : List ChoiceOperationCase) : Option ChoiceOperations := do
+  let .app p (.member _ _ method) _ bracket := call | none
   let borrows := cases.any (·.omittedDefaults)
   let count := (cases.head?.map (·.methodVars.length)).getD 0
   if count == 0 || cases.any (·.methodVars.length != count) then none else do
@@ -1745,14 +1773,35 @@ def choiceOperations (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx)
       pure result
     let some receiverTy := receiverTy | continue
     if !(match receiverTy with | .param .. => true | .struct .. => setter.isSome | _ => false) then continue
+    let packings := ops.plan.instances.filterMap fun instanceTypes => do
+      let actual := (receiverTy.subst instanceTypes).subst ctx.types.tvars
+      let .struct cls types := actual | none
+      if callable then
+        let some (arity, _) := FnValues.parseName cls | none
+        let sig : Sig := { idx := 0, name := cls, params := types.take arity, ret := .void, decides := false, isConst := false }
+        some (choicePackArguments sig arguments false)
+      else if setter.isNone && !isField then
+        let owner ← ctx.methodDecl? cls method
+        let sig ← ctx.sig? s!"{owner}.{method}"
+        some (choicePackArguments sig arguments true)
+      else none
+    let packed := if packings.length == ops.plan.instances.length then
+      packings.head?.filter fun first => packings.all (· == first) else none
+    let rawPacking := packed.isNone
+    let fallbackArguments := if setter.isSome || isField then arguments else
+      match arguments.filter (fun | .decl _ n .. => !n.startsWith "?" | _ => true) with
+      | [.tuple _ fields] => fields ++ arguments.filter (fun | .decl _ n .. => n.startsWith "?" | _ => false)
+      | _ => arguments
+    let arguments := packed.getD fallbackArguments
     let mut cases : List ChoiceOperationCase := []
     for instanceTypes in ops.plan.instances do
       let actual := (receiverTy.subst instanceTypes).subst ctx.types.tvars
       if callable then
         let .struct name types := actual | break
         let some (arity, specs) := FnValues.parseName name | break
-        if arity != arguments.length || types.length != arity + 1 || specs.contains "decides" != bracket then break
-        cases := cases ++ [{ receiver := actual, inputs := types.dropLast, result := types.getLast!, specs }]
+        if types.length != arity + 1 || specs.contains "decides" != bracket then break
+        let some inputs := choicePositionalTypes types.dropLast arguments rawPacking | break
+        cases := cases ++ [{ receiver := actual, inputs, result := types.getLast!, specs }]
       else if let some op := setter then
         let .struct cls classArgs := actual | break
         if !ctx.types.isRefClass cls || !ctx.types.isVarField cls method then break
@@ -1803,7 +1852,7 @@ def choiceOperations (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx)
         let methodVars := own.zipIdx.map fun ((_, b), i) => (s!"$operationMethod{i}", b)
         let methodRename := own.zip methodVars |>.map fun ((old, _), (name, bound)) => (old, Ty.param name bound)
         if signature.decides != bracket then break
-        let some (supplied, omittedDefaults) := choiceCallInputs signature arguments | break
+        let some (supplied, omittedDefaults) := choiceCallInputs signature arguments rawPacking | break
         -- An omitted value can determine a method instance at this call.
         -- A dictionary quantified over that parameter would instead have
         -- to check the default at every rigid instance, which can reject
@@ -1832,7 +1881,7 @@ def choiceOperations (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx)
       continue
     let bracket := if indexed then cases.any (·.indexedDecides) else bracket
     if cases.any (!·.methodVars.isEmpty) then
-      if let some generic := choiceGenericOperation sourceCtx stem receiver receiverTy ops call cases then ops := generic
+      if let some generic := choiceGenericOperation sourceCtx stem receiver receiverTy ops call arguments cases then ops := generic
       continue
     let borrows := cases.any (·.omittedDefaults)
     let (initialPlan, operationReceiverTy) := if indexed then

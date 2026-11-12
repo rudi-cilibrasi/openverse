@@ -26,7 +26,12 @@ p.add_argument('--query-path-writes', action='store_true')
 p.add_argument('--compound-query-path-writes', action='store_true')
 p.add_argument('--reference-path-writes', action='store_true')
 p.add_argument('--compound-reference-path-writes', action='store_true')
+p.add_argument('--packed-methods', action='store_true')
+p.add_argument('--packed-default-methods', action='store_true')
 a = p.parse_args()
+a.packed_methods = a.packed_methods or a.packed_default_methods
+a.named_methods = a.named_methods or a.packed_default_methods
+a.generic_methods = a.generic_methods or a.packed_methods
 a.query_path_writes = a.query_path_writes or a.compound_query_path_writes
 a.reference_path_writes = a.reference_path_writes or a.compound_reference_path_writes
 a.multiple_index_writes = a.multiple_index_writes or a.compound_multiple_index_writes
@@ -37,13 +42,13 @@ a.indexed_writes = a.indexed_writes or a.compound_index_writes
 a.indexed_writes = a.indexed_writes or a.map_writes or a.multiple_index_writes
 a.indexed_writes = a.indexed_writes or a.query_path_writes or a.reference_path_writes
 a.writes = a.writes or a.nested_writes or a.numeric_writes or a.indexed_writes
-a.aliases = a.aliases or ((a.writes or a.result_aliases or a.named_methods) and a.seed % 2 == 0)
+a.aliases = a.aliases or ((a.writes or a.result_aliases or a.named_methods or a.packed_methods) and a.seed % 2 == 0)
 a.members = a.members or a.aliases or a.writes or a.result_aliases
 a.generic_methods = (a.generic_methods or a.members or (a.named_methods and a.seed // 5 % 2 == 0)) and not a.callable_fields
 a.members = a.members and not a.callable_fields and not a.numeric_writes and not a.indexed_writes
 a.methods = a.methods or a.generic_methods or a.callable_fields or a.named_methods
 r = random.Random(a.seed)
-method_arguments = a.methods and r.choice([False, True])
+method_arguments = a.packed_methods or (a.methods and r.choice([False, True]))
 mode = ['first', 'for', 'waiting'][a.seed % 3]
 shape = ['primitive', 'array', 'tuple', 'box', 'fields'][a.seed // 3 % 5]
 empty = a.seed // 15 % 2 == 0
@@ -215,6 +220,8 @@ if a.methods:
     if a.writes:
         print('WriteArgument(H:cell,N:int)<transacts>:int=block{Print("write {N}");set H.N+=N;N}')
     print('Argument(H:cell,N:int)<transacts>:int=block{Print("arg {N}");set H.N+=N;N}')
+    if a.packed_methods:
+        print('PackedArgument(H:cell,N:int,X:t where t:type)<transacts>:tuple(int,t)=(Argument(H,N),X)')
 clauses = []
 
 def payload(s, j):
@@ -248,6 +255,8 @@ for i, d in enumerate(levels):
     score = f'A{i}' if a.control else f'Same(A{i})' if shape == 'primitive' else f'A{i}.Length' if shape == 'array' else f'if(A{i}(0)=A{i}(1))then 1 else 0' if shape == 'tuple' else f'A{i}.K'
     if a.methods:
         extra = ','.join(([f'Argument(H,{i+1})'] if method_arguments else []) + (['X'] if a.generic_methods else []))
+        if a.packed_methods and not a.control:
+            extra = f'PackedArgument(H,{i+1},X)'
         score = f'Score(H,A{i}' + (',' + extra if extra else '') + ')' if a.control else f'A{i}.F(A{i}.H,A{i}.K' + (',' + extra if extra else '') + ')' if a.callable_fields else f'A{i}.' + ('Read' if a.members else 'Score') + f'({extra})' + ('.K' if a.members else '')
     if a.nested_writes and not a.control:
         score = score.replace(f'A{i}.', f'A{i}.C.')

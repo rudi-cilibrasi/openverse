@@ -1,0 +1,37 @@
+wait a
+leave args a
+source 0 1
+cancel -1 1
+cancel state ok
+wait a
+signal 1
+args a
+leave args a
+default a0 30
+method a0 1 2 30
+row 33 111
+wait a
+signal 2
+args a
+leave args a
+default a1 20
+method a1 1 2 20
+row 23 222
+wait b
+signal 3
+args b
+leave args b
+default b0 50
+method b0 4 5 50
+row 59 333
+wait b
+signal 4
+args b
+leave args b
+default b1 40
+method b1 4 5 40
+row 49 444
+source 4 444
+done 4 444
+state ok
+exit=0
