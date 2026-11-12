@@ -1327,6 +1327,11 @@ Main():void =
   that case to the engine). `IsFinite[F]` fails on `Inf`, `-Inf` and NaN,
   and is `F` otherwise. `PiFloat`, `Inf` and `NaN` are constants (#132).
   `Log` divides `Ln`s, so `Log(10.0, 1000.0)` is `2.9999999999999996`.
+- `Sinh`, `Cosh`, `Tanh`, `ArSinh`, `ArCosh`, `ArTanh` and
+  `Lerp(From, To, Parameter)` never fail (#490). These seven require
+  `<reads>`, as their upstream declarations do. For example,
+  `Blend(A:float,B:float,T:float)<reads>:float=Lerp(A,B,T)`.
+  Their domains and special values are listed below.
 - A program may define functions named `Round`, `Int` or any of these
   (and constants named `PiFloat`, `Inf`, `NaN`): its definition then
   replaces the built-in for every call, whatever the argument types. A local
@@ -1335,6 +1340,45 @@ Main():void =
 - `ToString` gives the shortest decimal that reads back as the float, laid
   out as Python's `repr` (`98.5`, `1.0`, `1e+16`, `1.5e-07`), and `Inf`,
   `-Inf`, `NaN`.
+
+### Scalar Math API inventory (#490)
+
+The inventory is pinned to the Book's
+[Runtime API at `beaa719`](https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/docs/api/verse_runtime_api.html#math).
+Its seven previously missing float declarations are public, native,
+non-failable and marked `<reads><predicts>`; none has a release-version,
+experimental or deprecated annotation there. Epic also publishes
+[Sinh](https://dev.epicgames.com/documentation/fortnite/verse-api/versedotorg/verse/sinh?lang=en-US)
+and [Lerp](https://dev.epicgames.com/documentation/fortnite/verse-api/versedotorg/verse/lerp?lang=en-US)
+in its released API documentation. This does not date their first release
+or establish a bit-for-bit engine conformance claim.
+
+| Function (all inputs/results `float`) | Domain and special values |
+|---|---|
+| `Sinh(X)` | Odd; infinities preserve sign; overflow gives infinity. |
+| `Cosh(X)` | Even; zero gives 1; either infinity and overflow give positive infinity. |
+| `Tanh(X)` | Infinities give -1/+1; large finite magnitudes round to those limits. |
+| `ArSinh(X)` | All real inputs; infinities preserve sign. |
+| `ArCosh(X)` | Inputs below 1 give NaN; 1 gives zero; positive infinity stays infinite. |
+| `ArTanh(X)` | Magnitudes above 1 give NaN; -1/+1 give negative/positive infinity. |
+| `Lerp(From,To,Parameter)` | Weighted sum; parameters outside [0,1] extrapolate. |
+
+All seven propagate NaN and use OpenVerse's canonical zero. Hyperbolic
+functions use libm directly, preserving tiny arguments and avoiding
+intermediate overflow in the inverse functions. `Lerp` evaluates its three
+arguments once, left to right, then computes
+`From*(1-Parameter)+To*Parameter` with each operation rounded separately.
+Finite endpoints return the corresponding input exactly. It does not
+short-circuit non-finite endpoints: `Lerp(1.0,Inf,0.0)` is NaN because
+`Inf*0.0` is NaN. Even finite extrapolation can overflow its products.
+
+The other pinned float Math declarations and float-util conversions were
+already supported. The pinned Math page declares only an integer `Clamp`;
+it does not supply a public float `Clamp` signature. Vector/rotation APIs
+are outside this scalar inventory. Existing mathematical built-ins retain
+their earlier effect handling; this change enforces `<reads>` on the new
+seven without changing those existing programs. The broader effect audit
+is tracked in #494; `<predicts>` is not currently enforced.
 
 ## rational
 

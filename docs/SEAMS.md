@@ -88,3 +88,15 @@ encoding on every program they run.
 This seam is structural rather than a formula. The interpreter takes a mark
 exactly where the Lean rules save a state (an `ITE` condition, each `FOR`
 filter), and rolls back exactly where they restore one.
+
+## Floating mathematical functions
+
+The type-safety proofs cover the float results of the hyperbolic primitives
+(#490), including NaN and infinities. Their numerical values are supplied
+by Lean's `Float` externs and C libm. The existing QuickProof arithmetic
+law is about integer arithmetic; it does not prove libm accuracy or engine
+equivalence. Scalar-math tests compare both runtimes with independent
+800-digit decimal formulas, exact domain/zero/infinity cases and separately
+rounded `Lerp` operations. Finite hyperbolic results allow two ulps; tiny
+arguments and `Lerp` require exact agreement. The affected header/loader
+proof pins are replayed when the primitive code range changes.
