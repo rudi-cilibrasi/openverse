@@ -908,7 +908,9 @@ Main():void =
   types, as for `if`'s branches.
 - **`set L = a | b`** evaluates as `set` does: the indices of `L`'s path
   first, then for `op=` the old value, then the choice, so each alternative
-  only runs the assignment.
+  only runs the assignment. An alternative may have several values or
+  clauses of its own, as a binding's may (#283): `set A[I] = (1 | 2) * 10 | 9`
+  sets `A[I]` to 10, 20, then 9.
 - **Where.** A choice is taken by an `if` condition, the clauses of a
   `for`, `first{…}`, `first(…){…}`, `if{…}`, `for{…}`, `assert{…}`,
   `option{…}`, `logic{…}`, `not`, and the left of `or`. In their clauses, a choice can
@@ -1060,8 +1062,7 @@ Main():void =
   order and these default types too. Its defaults and class blocks must
   meet that function's effect restrictions.
 
-  Refused for now: an alternative of a `set`'s choice,
-  or a block with a range of its own as a branch; and
+  Refused for now: a block with a range of its own as a branch; and
   a choice anywhere outside these failure contexts. (A field reached
   through a receiver that is not a variable or `Self`, as `F().Items[…]`,
   is read after the choice, since only the receiver's value is bound
@@ -1081,8 +1082,8 @@ Main():void =
 
   A choice's alternatives may have several values themselves, calls of
   such functions or choices inside expressions (`C():int = A() | B()`,
-  `X := Upto[1, 3] | 9`): their values come in order, alternative by
-  alternative (#283).
+  `X := Upto[1, 3] | 9`, `set X = Upto[1, 3] | 9`): their values come in
+  order, alternative by alternative (#283).
 
   Such a call is inlined: its arguments are evaluated first, in order, then
   its body runs in the caller's clauses, so the body's effects are rolled

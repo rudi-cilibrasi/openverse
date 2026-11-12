@@ -13,8 +13,8 @@ def refuseSeveral (ctx : Ctx) (p : Pos) (what several issue : String) : EM R := 
   if ctx.inTaking then
     if ctx.liftWhy != "" then
       eerr p s!"{what} cannot be lifted from {ctx.liftWhy}, for now (#283)"
-    eerr p (s!"{what} cannot be lifted from here, for now ({issue}): not from a defer:'s body, " ++
-      "an alternative of a set's choice, or a block with a range of its own as a branch")
+    eerr p (s!"{what} cannot be lifted from here, for now ({issue}): not from a defer:'s body " ++
+      "or a block with a range of its own as a branch")
   eerr p (s!"{several} must be in a failure context that takes them: " ++
     s!"an if condition, a for's clauses, first\{…}, option\{…}, logic\{…}, not, or the left of or ({issue})")
 

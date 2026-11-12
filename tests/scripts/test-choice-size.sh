@@ -296,6 +296,8 @@ kinds=(
   logic-and-for
   logic-or-first
   logic-or-for
+  setalt-first
+  setalt-for
   method-failure
   method-first
   method-for
@@ -1531,6 +1533,18 @@ if kind.startswith('logic-'):
         print(f'    R := for ({clauses}):\n        A0\n    R.Length + C.N')
     print('Main()<transacts>:void = Print("{Run(false)}")')
     sys.exit(0)
+if kind.startswith('setalt-'):
+    # (#283) a set's choice whose alternative has several values: each
+    # alternative runs the assignment itself
+    sets = ', '.join(f'set A{i} = Two(0) | 2' for i in range(count))
+    print('Run()<transacts>:int =')
+    for i in range(count): print(f'    var A{i}:int = 0')
+    if kind == 'setalt-first':
+        print(f'    if ({sets}, A{count-1} = 2) then A0 else -1')
+    else:
+        print(f'    R := for ({sets}):\n        A0\n    R.Length')
+    print('Main()<transacts>:void = Print("{Run()}")')
+    sys.exit(0)
 if kind.startswith('lazy-'):
     effectful = any(tag in kind for tag in ('effect', 'alt', 'failure', 'generic', 'named', 'tuple'))
     failable = 'failure' in kind
@@ -1684,10 +1698,11 @@ PY
       diff -u "$tmp/expected" "$tmp/lean.out"
       diff -u "$tmp/expected" "$tmp/c.out"
     fi
-    if [[ $kind == logic-* && $count == 4 ]]; then
+    if [[ ( $kind == logic-* || $kind == setalt-* ) && $count == 4 ]]; then
       case $kind in
         logic-and-first) expected=4 ;; logic-and-for) expected=31 ;;
         logic-or-first) expected=0 ;; logic-or-for) expected=16 ;;
+        setalt-first) expected=0 ;; setalt-for) expected=81 ;;
       esac
       printf '%s\n' "$expected" >"$tmp/expected"
       timeout "$limit" "$root/.lake/build/bin/openverse" run "$tmp/p.verse" >"$tmp/lean.out"

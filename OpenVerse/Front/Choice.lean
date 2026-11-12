@@ -157,37 +157,6 @@ def withOld (q : Pos) (o? : Option String) (r : SExpr) : SExpr :=
   | some o => .app q (.ident q "$withOld") [.ident q o, r] false
   | none => r
 
-/-- `set L op= a | b` with the choice bound first, as `set` evaluates (Book
-    of Verse §3.5): the indices of `L`'s path, then for `op=` the old value,
-    then the choice. For `=`, the alternatives take `L`'s type. -/
-def setClauses (p : Pos) (l : SExpr) (op : Option String) (as : List SExpr) (q : Pos) (site : String := "") :
-    List SExpr × SExpr :=
-  let (h, o?, l') := setPrefix q l op site
-  let c := s!"$c{sitePart site}{q.line}_{q.col}"
-  let choice : SExpr := match op with
-    | none => .app q (.ident q "$choiceAt") (l' :: as) false
-    | some _ => .app q (.ident q "$choice") as false
-  (h ++ [.decl q c none false choice], .set p l' op (withOld q o? (.ident q c)))
-
-/-- The clauses, with each choice the value of a binding: a clause that is a
-    choice gets a name of its own, and `set L = a | b` and `var X:t = a | b`
-    bind the choice first. -/
-def normClauses (cs : List SExpr) (site : String := "") : List SExpr :=
-  cs.flatMap fun c =>
-    let nm (p : Pos) : String := s!"$c{sitePart site}{p.line}_{p.col}"
-    match c with
-    | .app p (.ident _ "$choice") _ false => [.decl p (nm p) none false c]
-    | .set p l op rhs => match alts? rhs with
-      | some as => let (h, s) := setClauses p l op as p site; h ++ [s]
-      | none => [c]
-    | .decl p x ty true rhs =>
-      if isChoice rhs then [.decl p (nm p) ty false rhs, .decl p x ty true (.ident p (nm p))] else [c]
-    -- (`set L = a | b` as the last clause of a macro, which names its value)
-    | .decl p x ty false (.set q l op rhs) => match alts? rhs with
-      | some as => let (h, s) := setClauses q l op as q site; h ++ [.decl p x ty false s]
-      | none => [c]
-    | c => [c]
-
 /-! ### A choice inside an expression
 
 A choice in an operand is lifted out of its clause (A-normal form): the
@@ -352,6 +321,43 @@ def orIf (site : String) : SExpr → SExpr
     let t := s!"$or{sitePart site}{p.line}_{p.col}"
     .ite p [.decl p t none false (.block a.pos [a])] (.ident p t) (some (.block b.pos [b]))
   | e => e
+
+/-- `set L op= a | b` with the choice bound first, as `set` evaluates (Book
+    of Verse §3.5): the indices of `L`'s path, then for `op=` the old value,
+    then the choice, so each alternative only runs the assignment. For `=`,
+    the alternatives take `L`'s type; when one has something to lift (#283),
+    by each running the assignment itself, the `set` its block's value, as
+    a composed choice's alternatives are lifted one by one. -/
+def setClauses (p : Pos) (l : SExpr) (op : Option String) (as : List SExpr) (q : Pos) (site : String := "") :
+    List SExpr × SExpr :=
+  let (h, o?, l') := setPrefix q l op site
+  let c := s!"$c{sitePart site}{q.line}_{q.col}"
+  match op with
+  | none =>
+    if as.any hasLiftable then
+      (h ++ [.decl q c none false (.app q (.ident q "$choice") (as.map fun a => .block a.pos [.set p l' none a]) false)],
+        .ident q c)
+    else (h ++ [.decl q c none false (.app q (.ident q "$choiceAt") (l' :: as) false)], .set p l' none (.ident q c))
+  | some _ => (h ++ [.decl q c none false (.app q (.ident q "$choice") as false)], .set p l' op (withOld q o? (.ident q c)))
+
+/-- The clauses, with each choice the value of a binding: a clause that is a
+    choice gets a name of its own, and `set L = a | b` and `var X:t = a | b`
+    bind the choice first. -/
+def normClauses (cs : List SExpr) (site : String := "") : List SExpr :=
+  cs.flatMap fun c =>
+    let nm (p : Pos) : String := s!"$c{sitePart site}{p.line}_{p.col}"
+    match c with
+    | .app p (.ident _ "$choice") _ false => [.decl p (nm p) none false c]
+    | .set p l op rhs => match alts? rhs with
+      | some as => let (h, s) := setClauses p l op as p site; h ++ [s]
+      | none => [c]
+    | .decl p x ty true rhs =>
+      if isChoice rhs then [.decl p (nm p) ty false rhs, .decl p x ty true (.ident p (nm p))] else [c]
+    -- (`set L = a | b` as the last clause of a macro, which names its value)
+    | .decl p x ty false (.set q l op rhs) => match alts? rhs with
+      | some as => let (h, s) := setClauses q l op as q site; h ++ [.decl p x ty false s]
+      | none => [c]
+    | c => [c]
 
 /-- The same whenever evaluated, and typed by where they are (so they keep
     their expected type in place), so not bound to a name of their own:

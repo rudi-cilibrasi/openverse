@@ -8,7 +8,7 @@ that take a choice's values: an `if` condition and `first{...}` (the first
 success) and a `for` (all of them, by generators). The clauses mix choice
 bindings, whose alternatives are literals, nested choices, or blocks that
 print, change the variable `N` or fail; range generators, with choices in
-their bounds too; filters; and
+their bounds too; `set N = (a | b) + k | c`; filters; and
 clauses that print or change `N`; and choices inside expressions, as
 `X := (a | b) + (c | d)` and `(Print(...); X) + (a | b) > c`, which the model
 expands into the clauses they are lifted to (the code before a choice
@@ -51,6 +51,8 @@ class St:
 # ('pv', tag|None, ref, off): an alternative of a function with several values
 #   (#235), inlined: print tag if any, then the argument (a name or literal)
 #   plus off
+# ('plus', a, k): a's value plus k, the alternatives of `(a | …) + k` spliced
+#   into the choice it is an alternative of (#283)
 
 def alt_src(a):
     k = a[0]
@@ -68,6 +70,9 @@ def alt_src(a):
 def alt_eval(a, st):
     """The alternative's value, or None when it fails (st is then discarded)."""
     k = a[0]
+    if k == 'plus':
+        v = alt_eval(a[1], st)
+        return None if v is None else v + a[2]
     if k == 'pv':
         if a[1]:
             st.out.append(a[1])
@@ -97,6 +102,7 @@ def alt_eval(a, st):
 #                              several values (#235), the values ref..hi
 # ('bchoice', x, c, alts1, alts2)  x := if (N > c) then (alts1) else (alts2): the
 #                              branch picked once, then its alternatives (#235)
+# ('setchoice', None, alts)   set N = a | …: a generator whose value N takes
 # ('sugar', src, expansion)    a clause with choices inside its expressions:
 #                              its source, and the clauses it is lifted to
 
@@ -191,9 +197,19 @@ def alts_at(c, st):
         return [('lit', v) for v in range(lo, c[4] + 1)]
     if k == 'or':
         return c[4]
+    if k == 'setchoice':
+        return c[2]
     def bound(b):
         return st.env[b[1]] if isinstance(b, tuple) else b
     return [('lit', v) for v in range(bound(c[2]), bound(c[3]) + 1)]
+
+
+def take(c, st, v):
+    """A generator's value v, bound to its name, or for `set N = …` to N."""
+    if c[0] == 'setchoice':
+        st.n = v
+    else:
+        st.env[c[1]] = v
 
 
 def or_left(c, st):
@@ -225,7 +241,7 @@ def one(cls, st):
             v = alt_eval(a, s2)
             if v is None:
                 continue
-            s2.env[c[1]] = v
+            take(c, s2, v)
             r = one(rest, s2)
             if r is not None:
                 return r
@@ -252,7 +268,7 @@ def expand(cls):
 
 
 def is_gen(c):
-    return c[0] in ('choice', 'range', 'bchoice', 'rcall', 'or')
+    return c[0] in ('choice', 'range', 'bchoice', 'rcall', 'or', 'setchoice')
 
 
 def run_for(cls, body, st):
@@ -283,7 +299,7 @@ def run_for(cls, body, st):
             v = alt_eval(a, s0)
             if v is None:
                 continue
-            s0.env[c[1]] = v
+            take(c, s0, v)
             go(i + 1, s0)
 
     go(0, st.copy())
@@ -477,6 +493,15 @@ class Gen:
                 else:
                     cls.append(('range', name, lo, hi))
                 names.append(name)
+            elif names and r < 0.8:
+                # (#283) set N = (a | …) + k | b: a composed alternative of a
+                # set's choice, its own alternatives spliced in, N taking each
+                # (binding no name: only after one, as `sugar`'s filter)
+                k = self.rng.randint(1, 3)
+                inner, more = self.plain_alts(), self.plain_alts()
+                src = f'set N = ({choice_src(inner)}) + {k} | {choice_src(more)}'
+                alts = [('plus', a, k) for a in inner] + more
+                cls.append(('sugar', src, [('setchoice', None, alts)])); has_choice = True
             else:
                 cls.append(self.filt(names))
         return cls, names
