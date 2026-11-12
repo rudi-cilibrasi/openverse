@@ -3,6 +3,26 @@ import OpenVerse.Front.Elab.Control
 
 namespace OpenVerse.Front
 open OpenVerse
+
+/-- The refusal of a choice, or of a call of a function with several values,
+    left where it is (`what` names it; `several`, followed by "must be …",
+    says that it has several values; `issue` is where they came in): where a
+    failure context takes its values (`inTaking`), lifting did not reach it,
+    from `liftWhy` when that is known; elsewhere, nothing takes them. -/
+def refuseSeveral (ctx : Ctx) (p : Pos) (what several issue : String) : EM R := do
+  if ctx.inTaking then
+    if ctx.liftWhy != "" then
+      eerr p s!"{what} cannot be lifted from {ctx.liftWhy}, for now (#283)"
+    eerr p (s!"{what} cannot be lifted from here, for now ({issue}): not from a defer:'s body " ++
+      "or a block with a range of its own as a branch")
+  eerr p (s!"{several} must be in a failure context that takes them: " ++
+    s!"an if condition, a for's clauses, first\{…}, option\{…}, logic\{…}, not, or the left of or ({issue})")
+
+/-- `refuseSeveral` for a call of `f`, a function with several values (#235). -/
+def refuseCall (ctx : Ctx) (p : Pos) (f : String) : EM R :=
+  let shown := Choice.shownFnName f
+  refuseSeveral ctx p s!"a call of {shown}, which has several values," s!"{shown} has several values, so a call of it" "#235"
+
 set_option maxHeartbeats 800000 in
 partial def elabExprMarkersWith
     (elabE : Ctx → SExpr → Option Ty → EM R)
@@ -157,48 +177,14 @@ partial def elabExprMarkersWith
   -- its condition binds
   | .app _ (.ident _ "$shadows") [.ident q n] false =>
     eerr q s!"'{n}' is already defined; Verse does not allow shadowing (use set {n} = … for a var)"
-  | .app p (.ident _ "$inline") (.ident _ f :: _) false =>
-    if ctx.inTaking then
-      if ctx.liftWhy != "" then
-        eerr p s!"a call of {Choice.shownFnName f}, which has several values, cannot be lifted from {ctx.liftWhy}, for now (#283)"
-      eerr p (s!"a call of {Choice.shownFnName f}, which has several values, cannot be lifted from here, for now (#235): " ++
-        "not from a defer:'s body, " ++
-        "an alternative of a set's choice, the right of " ++
-        "and or or, a range, or a block with a range of its own as a branch")
-    eerr p (s!"{Choice.shownFnName f} has several values, so a call of it must be in a failure context that takes them: " ++
-      "an if condition, a for's clauses, first{…}, option{…}, logic{…}, not, or the left of or (#235)")
+  | .app p (.ident _ "$inline") (.ident _ f :: _) false => refuseCall ctx p f
+  -- (a call of a recursive function with several values, #235)
   | .app p (.ident _ "$each") (.app _ (.ident _ fa) _ _ :: _) false =>
-    -- (a call of a recursive function with several values, #235)
-    let f := if fa.endsWith "$all" then String.ofList (fa.toList.take (fa.length - 4)) else fa
-    if ctx.inTaking then
-      if ctx.liftWhy != "" then
-        eerr p s!"a call of {Choice.shownFnName f}, which has several values, cannot be lifted from {ctx.liftWhy}, for now (#283)"
-      eerr p (s!"a call of {Choice.shownFnName f}, which has several values, cannot be lifted from here, for now (#235): " ++
-        "not from a defer:'s body, " ++
-        "an alternative of a set's choice, the right of " ++
-        "and or or, a range, or a block with a range of its own as a branch")
-    eerr p (s!"{Choice.shownFnName f} has several values, so a call of it must be in a failure context that takes them: " ++
-      "an if condition, a for's clauses, first{…}, option{…}, logic{…}, not, or the left of or (#235)")
-  | .app p (.ident _ "$loop") (.ident _ f :: _) false =>
-    -- (a call of a recursive function with several values taken lazily, #246)
-    if ctx.inTaking then
-      if ctx.liftWhy != "" then
-        eerr p s!"a call of {Choice.shownFnName f}, which has several values, cannot be lifted from {ctx.liftWhy}, for now (#283)"
-      eerr p (s!"a call of {Choice.shownFnName f}, which has several values, cannot be lifted from here, for now (#235): " ++
-        "not from a defer:'s body, " ++
-        "an alternative of a set's choice, the right of " ++
-        "and or or, a range, or a block with a range of its own as a branch")
-    eerr p (s!"{Choice.shownFnName f} has several values, so a call of it must be in a failure context that takes them: " ++
-      "an if condition, a for's clauses, first{…}, option{…}, logic{…}, not, or the left of or (#235)")
+    refuseCall ctx p (if fa.endsWith "$all" then String.ofList (fa.toList.take (fa.length - 4)) else fa)
+  -- (a call of a recursive function with several values taken lazily, #246)
+  | .app p (.ident _ "$loop") (.ident _ f :: _) false => refuseCall ctx p f
   | .app p (.ident _ "$choice") _ false =>
-    if ctx.inTaking && ctx.liftWhy != "" then
-      eerr p s!"a choice (a | b) cannot be lifted from {ctx.liftWhy}, for now (#283)"
-    if ctx.inTaking then
-      eerr p ("a choice (a | b) cannot be lifted from here, for now (#208): not from a defer:'s body, " ++
-        "an alternative of a set's " ++
-        "choice, the right of and or or, a range, or a block with a range of its own as a branch")
-    eerr p ("a choice (a | b) has several values, so it must be in a failure context that takes them: " ++
-      "an if condition, a for's clauses, first{…}, option{…}, logic{…}, not, or the left of or (#208)")
+    refuseSeveral ctx p "a choice (a | b)" "a choice (a | b) has several values, so it" "#208"
   | .app p (.ident _ "$callSingleton") [a] false =>
     -- Elaborate the operand once, then reuse its checked result for either
     -- the whole tuple or its singleton element. Failed conversions must not

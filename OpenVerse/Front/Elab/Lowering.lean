@@ -1204,6 +1204,7 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
   let waitRootF := fieldIdx "$taskBase" "$WaitRoot"
   let wokenNextF := fieldIdx "$taskBase" "$WokenNext"
   let pendingF := fieldIdx "$taskBase" "$Pending"
+  let probeF := fieldIdx "$sched" "$Probe"
   let waitfTF := fieldIdx "$waitf" "$T"
   -- (`CurRoot := some x` and back, around a run, in FIFO mode)
   let setCur (sch x : Expr) : Expr := .heap (.set curRootF) [sch, .prim .mkSome [x]]
@@ -1284,7 +1285,18 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
       branchSigs := branchSigs.push ([wrapTy K, schedTy], .int)
       -- (a `rush` loser's wrapper only registers it: it already started)
       let register : Expr := .call linkIdx [.local 0, .local 2]
-      let start : Expr := .seq (Suspend.seqVoid (if !runNow then [register] else [register,
+      -- (#513: and, in FIFO mode, probes it as its own root, so that the
+      -- waiters in it record that root, not the function's, which no
+      -- longer runs it: a `Signal` before its first turn then gives it its
+      -- turn in their order; the probe goes on nowhere, `$Probe`)
+      let probe : List Expr := if !fifo then [] else [
+        .assign 5 (.heap (.get curRootF) [.local 0]),
+        .heap (.set probeF) [.local 0, .lit (.logic true)],
+        setCur (.local 0) (.local 2),
+        .assign 3 (.call (wrapFnBase + 3 * K) [.local 2, .local 0]),
+        .heap (.set curRootF) [.local 0, .local 5],
+        .heap (.set probeF) [.local 0, .lit (.logic false)]] ++ forget (.local 0)
+      let start : Expr := .seq (Suspend.seqVoid (if !runNow then register :: probe else [register,
         .assign 4 (.heap (.get cancelCurF) [.local 0]),
         .heap (.set cancelCurF) [.local 0, .lit (.logic false)]] ++
         -- (#513: its run is the branch's, for the waiters it records)
