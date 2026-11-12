@@ -82,6 +82,7 @@ kinds=(
   dispatch-default-first
   dispatch-default-for
   exclusive
+  heterogeneous-nested-for
   heterogeneous-unused-first
   heterogeneous-unused-for
   heterogeneous-unused-waiting
@@ -219,6 +220,15 @@ for kind in "${kinds[@]}"; do
 import sys
 kind, count = sys.argv[1], int(sys.argv[2])
 print('Two(N:int):int = N | N + 1')
+if kind == 'heterogeneous-nested-for':
+    print('Dup(X:t where t:type)<computes>:t=X|X')
+    print('Main():void=')
+    body = '0'
+    for i in range(count):
+        body = f'for(A{i}:=(Dup(1)|Dup("s"))):' + body
+    print('    Rows:=' + body)
+    print('    Print("{Rows.Length}")')
+    sys.exit(0)
 if kind.startswith('heterogeneous-'):
     _, shape, mode = kind.split('-')
     print('Dup(X:t where t:type)<computes>:t=X|X')

@@ -3323,6 +3323,10 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
                     locals := { name := b.name, slot, ty := plan.binding, mutable := false } :: poly.locals }
                   let r ← elabForWith elabAlts elabBranchAlts elabE elabInts elabLoopGen elabSeq
                     bound p restCl bd (prepared := true) (failure := failure)
+                  -- With no remaining clauses, ordinary elabFor returns
+                  -- the body itself; the generated $forFirst wraps it in
+                  -- one array, even when the body is another for.
+                  let r : R := if restCl.isEmpty then ⟨.prim .mkArr [r.e], .arr r.ty⟩ else r
                   if forContWaits c before (← get) [r.e] then return none
                   let .arr value := r.ty | return none
                   let some result := choiceResultType c.types (plan.instances.map (r.ty.subst ·)) | return none
