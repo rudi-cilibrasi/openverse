@@ -462,6 +462,7 @@ RFR = random.Random(seed * 1000003 + 283283)
 # with it where the consumer rejects it, as any value's code is. A stream of its own, so seeds
 # without it keep their programs.
 RIFV = random.Random(seed * 1000003 + 283284)
+RPRE = random.Random(seed * 1000003 + 283285)
 FRN = [0]
 
 
@@ -740,6 +741,18 @@ def frame_call(a):
     return None
 
 
+def frame_prefix(a):
+    """what alternative a evaluates before the call in its return frame (#283),
+    which runs with the call's arguments."""
+    if a[0] == 'bin' and frame_call(a) is not None:
+        if frame_call(a[2]) is None:
+            return [a[2]] + frame_prefix(a[3])
+        return frame_prefix(a[2])
+    if a[0] == 'tell':
+        return frame_prefix(a[2])
+    return []
+
+
 def gen_gcall(scope, vars_, d):
     cands = [(i, n) for i in range(len(GFUNCS)) for n in range(0, 4)
              if 1 <= gub(i, n) and gub(i, n) * PROD[0] <= CTX['plim']
@@ -841,14 +854,22 @@ def gen_gfunc(i):
         # in it, which it would run on a copy of)
         k = RFR.random()
         if k < 0.3:
-            return ('bin', RFR.choice(['+', '-', '*']), c, simple())
-        if k < 0.5:
-            return ('bin', RFR.choice(['+', '*']), simple(), c)
-        if k < 0.7:
-            return ('tell', ffresh(), c)
-        if k < 0.85:
-            return ('bin', '+', ('tell', ffresh(), c), ('tell', ffresh(), simple()))
-        return c
+            f = ('bin', RFR.choice(['+', '-', '*']), c, simple())
+        elif k < 0.5:
+            f = ('bin', RFR.choice(['+', '*']), simple(), c)
+        elif k < 0.7:
+            f = ('tell', ffresh(), c)
+        elif k < 0.85:
+            f = ('bin', '+', ('tell', ffresh(), c), ('tell', ffresh(), simple()))
+        else:
+            f = c
+        # (#283: what the alternative reads before the call that may not read
+        # the same after it, a call that prints or changes an object, runs
+        # once before it; a stream of its own)
+        if RPRE.random() < 0.35:
+            pre = ('cnext', 'C') if ctr and RPRE.random() < 0.5 else ('tell', ffresh(), simple())
+            return ('bin', RPRE.choice(['+', '*']), pre, f)
+        return f
 
     def alts(withself):
         out = [value() for _ in range(R.randint(1, 2))]
@@ -916,7 +937,7 @@ def lifted(f):
     arguments print or change an object, or those arguments set a name."""
     v = f['val']
     alts = v[1] if v[0] == 'gchoice' else v[2] + v[3]
-    args = [c[2] for a in alts if (c := frame_call(a)) is not None]
+    args = [c[2] for a in alts if (c := frame_call(a)) is not None] + [x for a in alts for x in frame_prefix(a)]
     conds = v[1] if v[0] == 'gbif' else []
     return (has_node(f['stmts'], FX_NODES) or has_node(conds, FX_NODES) or has_node(args, FX_NODES)
             or has_node(args, ('bset', 'setv')))

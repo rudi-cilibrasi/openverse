@@ -697,7 +697,12 @@ code after one call and the values of the names that code uses.
   `$then(call, h, frame)` (`frameOf?`), the frame the alternative with the
   name `h` in the call's place. A frame's code has no choice and no other
   call of the group, and sets no `var` bound before it, as it runs on a copy
-  of the names.
+  of the names. What the alternative evaluates before the call, other than
+  literals and its own names, is bound to names first (`$pre…`, a block's
+  clauses before the call as they are): `$then(call, h, frame, block{pre})`.
+  The loop elaborates that prefix once (`loopFramesWith`) and runs it with
+  the call's arguments, in the item's step, as an argument's code, which
+  stays when the callee's clauses fail; the frame keeps its names.
 - The loop's items keep one more name, the continuation `$K`, a list of
   `$lazycell`s, innermost frame first. A frame is a tuple with one option
   per `$then` of the group, the one of the call that pushed it holding its
