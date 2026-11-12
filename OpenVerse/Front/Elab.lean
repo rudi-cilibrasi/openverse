@@ -7823,7 +7823,11 @@ partial def elabAppBase (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (b
                 -- (unless the implementation takes no values of type arguments,
                 -- reading them from its receiver, `Sig.selfTps`)
                 let calleeDicts := ((ctx.sig? fname).map (·.ndicts)).getD 0
-                if calleeDicts != 0 &&
+                -- (#530: not an interface's default seen through views, which
+                -- a test's temporary of its type cannot take as it is: a
+                -- class whose closed view the receiver's do not give, `c1`'s
+                -- `string` for `i1(u)`, is one only under the refinement)
+                if calleeDicts != 0 && !viewedAbove &&
                     !VTy.pinsBelow (env.lowerPins (pins.take (max eLen rargs.length))) (max eLen rargs.length) &&
                     (needOf (env.corePins e)).isEmpty && eLen ≤ rargs.length then
                   let argsE := argsAt e
