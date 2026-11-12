@@ -37,6 +37,7 @@ import OpenVerse.Front.SourceFrames
 import OpenVerse.Front.FailCapture
 import OpenVerse.Front.CompilerWrites
 import OpenVerse.Front.Types
+import OpenVerse.Front.SubtypeEvidence
 import OpenVerse.Front.ChoiceTypes
 import Std.Data.HashMap
 

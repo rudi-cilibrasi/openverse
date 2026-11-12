@@ -72,6 +72,8 @@ if lake env lean -j1 --run tests/lean/ConcurrencyPrelude.lean >"$logs/prelude-co
 else
   rc=$?; cat "$logs/prelude-contracts"; exit "$rc"
 fi
+echo "== checked subtype evidence contracts"
+tests/scripts/test-subtype-evidence.sh
 if grep -rnE '\bsorry\b|\badmit\b' OpenVerse/ Main.lean; then echo "error: sorry/admit in Lean sources" >&2; exit 1; fi
 scripts/gen-claims.sh --check
 echo "== C runtime"
