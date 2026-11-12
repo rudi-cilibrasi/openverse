@@ -821,7 +821,10 @@ code after it, which is its frame.
   members' alternatives, their parameters the hole (at the group's result
   type) and the frame's lives, their names in every item as the functions'
   are. Their alternatives are numbered after the functions'; a `$rec` in
-  one calls the function whose code it is.
+  one calls the function whose code it is. A generic group's members' type
+  instances are found at the calls that reach them, continuation members'
+  too: the probe goes through choices' alternatives and through each
+  continuation member's code, elaborated where its frame is pushed.
 - A continuation member's frame applied to a value (`memberArm`, in
   `frameApplyWith`) runs the member's clauses and branch in the value's own
   failure context: a leaf of one alternative goes on there (a value goes to

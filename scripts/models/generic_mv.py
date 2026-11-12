@@ -956,6 +956,9 @@ class Gen:
         self.method_dispatch()
         self.recursive_named()
         self.mutual_generators()
+        # (#283: a stream of its own, so seeds without it keep their programs)
+        if random.Random(self.seed * 1000003 + 283290).random() < 0.3:
+            self.mutual_sequence()
         if SHARED:
             self.main.append('Print("plain {plainvals{}.Vals()}")')
             self.m.out.append("plain 0")
@@ -1237,6 +1240,45 @@ class Gen:
             self.main.append(f'Print("cont written {{{written}({literal}).Length}}")')
             count = sum(a <= bound and b > cut for a in range(1, 5) for b in range(1, 5))
             self.m.out.append(f"cont written {count}")
+
+    def mutual_sequence(self):
+        """(#283) A generic mutual group whose second member is called only from the code after a
+        choice point in the first (a continuation member's code), so its type instance is found
+        there: A's values are its call of itself's, then the tuple of its arguments, each followed
+        by a print, then B's values on it and it; B's the swapped tuple, then A's on it."""
+        rng = random.Random(self.seed * 1000003 + 283291)
+        a, b = self.fresh('SeqA'), self.fresh('SeqB')
+        n, cut = rng.randint(1, 2), rng.randint(0, 25)
+        (xs, xv), (ys, yv) = rng.choice([(('"s"', 's'), ('7', 7)), (('7', 7), ('"s"', 's'))])
+        self.paths.add('lazy')
+        self.consumers.append(f'''{a}(X:t, Y:u, N:int where t:type, u:type)<transacts><decides>:tuple(t, u, int) =
+    N > 0
+    Z := {a}[X, Y, N - 1] | (X, Y, N)
+    Print("seq a {{N}} {{Z(2)}}")
+    {b}[Z(1), Z(0), N - 1] | Z
+{b}(Y:v, X:w, M:int where v:type, w:type)<transacts><decides>:tuple(w, v, int) =
+    M >= 0
+    (X, Y, M * 10) | {a}[X, Y, M]''')
+        # (each call a generator of its own: what came before it stays when its clauses fail)
+        def seq_a(x, y, k, var):
+            if k <= 0:
+                return [("cond", False)]
+            z = var + "z"
+            def after(env):
+                zv = env[z]
+                return [("print", f"seq a {k} {zv[2]}"),
+                        ("choice", [[("choice", [seq_b(zv[1], zv[0], k - 1, var)])], [("val", var, zv)]])]
+            return [("choice", [[("choice", [seq_a(x, y, k - 1, z)])], [("val", z, (x, y, k))]]), ("dyn", after)]
+        def seq_b(y, x, m, var):
+            if m < 0:
+                return [("cond", False)]
+            return [("choice", [[("val", var, (x, y, m * 10))], [("choice", [seq_a(x, y, m, var)])]])]
+        m = self.m
+        self.main += [f'for (V := {a}[{xs}, {ys}, {n}]) {{ Print("seq got {{V(0)}} {{V(1)}} {{V(2)}}") }}',
+                      f'if (V := {a}[{xs}, {ys}, {n}], V(2) >= {cut}) then Print("seq first {{V(0)}} {{V(1)}} {{V(2)}}") else Print("seq none")']
+        m.forall([("choice", [seq_a(xv, yv, n, "SQ")])], lambda e: m.out.append(f"seq got {e['SQ'][0]} {e['SQ'][1]} {e['SQ'][2]}"))
+        e = m.first([("choice", [seq_a(xv, yv, n, "SQ")]), ("test", lambda env: env["SQ"][2] >= cut)])
+        m.out.append("seq none" if e is None else f"seq first {e['SQ'][0]} {e['SQ'][1]} {e['SQ'][2]}")
 
     def mutual_generators(self):
         """Depth-first tree model with separate item and value transactions."""

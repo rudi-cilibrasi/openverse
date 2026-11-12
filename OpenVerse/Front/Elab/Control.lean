@@ -1058,28 +1058,46 @@ partial def elabLoopGenGroupWith (elabE : Ctx → SExpr → Option Ty → EM R)
       let (_, cc) ← elabSeq c hcls none
       let probeK ← fresh .int
       let code ← elabLoopTailWith elabSeq cc htail probeK 0
-      for (ca, alts) in code.arms do
-        for alt in alts do
-          let alt := match alt with
-            | .app _ (.ident _ "$then") (c :: _) false => c
-            | a => a
-          let call := match alt with
-            | .app q (.ident _ "$rec") as false => some (q, h, as)
-            | .app q (.ident _ "$recTo") (.ident _ target :: as) false => some (q, target, as)
-            | _ => none
-          if let some (q, target, as) := call then
-            if (instances.lookup target).isSome then continue
-            let some targetSig := ctx.sig? target | eerr q s!"internal: no signature for {target} (#283)"
-            let attempt ← tryCatch (do
-              let packet ← elabE { ca with callInstanceProbe := some target }
-                (.app q (.ident q target) as targetSig.decides) (some rty)
-              let .tup types := packet.ty | eerr q "internal: a mutual argument type packet"
-              pure (Except.ok ((targetSig.tparams.map (·.1)).zip types))) (fun err => pure (.error err))
-            match attempt with
-            | .ok σ =>
-              instances := instances ++ [(target, σ)]
-              todo := todo ++ [target]
-            | .error err => errors := errors ++ [(target, err)]
+      -- (each alternative in its leaf's context; #283, a choice's own too,
+      -- and those of a continuation member's code, where its frame is
+      -- pushed, so a member reached only from it is found)
+      let mut work : List (Ctx × SExpr) := code.arms.toList.flatMap fun (ca, alts) => alts.map (ca, ·)
+      while true do
+        let (ca, alt) :: more := work | break
+        work := more
+        if let .app _ (.ident _ "$then") (pt :: .ident _ hn :: k :: rest) false := alt then
+          if let some cs := Choice.alts? pt then work := cs.map (ca, ·) ++ work
+          if let some (ccls, ctail) := Choice.contOf? k then
+            let cf ← match rest with
+              | [.block _ ss] => do pure (← elabSeq ca ss none).2
+              | _ => pure ca
+            let hty := (← match Choice.alts? pt with
+              | some cs => probeHoleWith elabE ca rty cs
+              | none => pure none).getD rty
+            let hl : Local := { name := hn, slot := ← fresh hty, ty := hty, mutable := false }
+            let (_, cm) ← elabSeq { cf with locals := hl :: cf.locals } ccls none
+            let mcode ← elabLoopTailWith elabSeq cm ctail probeK 0
+            work := work ++ mcode.arms.toList.flatMap fun (ca2, alts2) => alts2.map (ca2, ·)
+        let alt := match alt with
+          | .app _ (.ident _ "$then") (c :: _) false => c
+          | a => a
+        let call := match alt with
+          | .app q (.ident _ "$rec") as false => some (q, h, as)
+          | .app q (.ident _ "$recTo") (.ident _ target :: as) false => some (q, target, as)
+          | _ => none
+        if let some (q, target, as) := call then
+          if (instances.lookup target).isSome then continue
+          let some targetSig := ctx.sig? target | eerr q s!"internal: no signature for {target} (#283)"
+          let attempt ← tryCatch (do
+            let packet ← elabE { ca with callInstanceProbe := some target }
+              (.app q (.ident q target) as targetSig.decides) (some rty)
+            let .tup types := packet.ty | eerr q "internal: a mutual argument type packet"
+            pure (Except.ok ((targetSig.tparams.map (·.1)).zip types))) (fun err => pure (.error err))
+          match attempt with
+          | .ok σ =>
+            instances := instances ++ [(target, σ)]
+            todo := todo ++ [target]
+          | .error err => errors := errors ++ [(target, err)]
       restoreConstructProbe ctx saved
     for (h, _, _, _) in templates do
       if (instances.lookup h).isNone then
