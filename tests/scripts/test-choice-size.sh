@@ -8,6 +8,21 @@ tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
 limit="${CHOICE_SIZE_TIMEOUT:-120}"
 # Keep modes sorted on separate lines so independent additions merge cleanly.
 kinds=(
+  indexwrite-simple-first
+  indexwrite-simple-for
+  indexwrite-simple-waiting
+  indexwrite-nested-first
+  indexwrite-nested-for
+  indexwrite-nested-waiting
+  indexwrite-numeric-first
+  indexwrite-numeric-for
+  indexwrite-numeric-waiting
+  indexwrite-contextual-first
+  indexwrite-contextual-for
+  indexwrite-contextual-waiting
+  indexwrite-alias-first
+  indexwrite-alias-for
+  indexwrite-alias-waiting
   named-optional-first
   named-optional-for
   named-optional-waiting
@@ -360,6 +375,33 @@ for kind in "${kinds[@]}"; do
     python3 - "$kind" "$count" >"$tmp/p.verse" <<'PY'
 import sys
 kind, count = sys.argv[1], int(sys.argv[2])
+if kind.startswith('indexwrite-'):
+    _, shape, mode = kind.split('-')
+    n = count
+    print('Dup(X:t where t:type)<computes>:t=X|X')
+    for cls,kind in [('ca','a'),('cb','b')]:
+     ty='[]rational' if shape=='numeric' and kind=='b' else '[][]string' if shape=='contextual' and kind=='b' else '[][]int' if shape=='contextual' else '[]int'
+     value='array{array{"s"}}' if shape=='contextual' and kind=='b' else 'array{array{1}}' if shape=='contextual' else 'array{1,2}'
+     if shape=='nested':
+      print('leaf'+kind+':=class{var Data:'+ty+'='+value+'}')
+      print(cls+':=class{C:leaf'+kind+'=leaf'+kind+'{}}')
+     else:print(cls+':=class{var Data:'+ty+'='+value+'}')
+    clauses=[f'A{i}:=(Dup(ca{{}})|Dup(cb{{}}))' for i in range(n)]
+    writes=[]
+    for i in range(n):
+     target=f'A{i}'
+     if shape=='alias':
+      clauses += [f'B{i}:=A{i}',f'C{i}:=B{i}'];target=f'C{i}'
+     if shape=='nested':target+='.C'
+     writes.append('set '+target+'.Data[0]='+('array{}' if shape=='contextual' else '1'))
+    effects='<suspends>' if mode=='waiting' else ''
+    print('Run()'+effects+':int=')
+    if mode=='first':print('    if('+','.join(clauses+writes)+')then 1 else -1')
+    else:
+     body='block{if('+','.join(writes)+'):{};Sleep(0.001);0}' if mode=='waiting' else '0'
+     print('    Rows:=for('+','.join(clauses+([] if mode=='waiting' else writes))+'):'+body+'\n    Rows.Length')
+    print('Main()'+effects+':void=Print("{Run()}")')
+    sys.exit(0)
 if kind.startswith('named-'):
     _, shape, mode = kind.split('-')
     n = count
@@ -1612,7 +1654,7 @@ PY
       diff -u "$tmp/expected" "$tmp/lean.out"
       diff -u "$tmp/expected" "$tmp/c.out"
     fi
-    if [[ ( $kind == named-* || $kind == conversion-* ) && $count == 4 ]]; then
+    if [[ ( $kind == named-* || $kind == conversion-* || $kind == indexwrite-* ) && $count == 4 ]]; then
       expected=256
       if [[ $kind == *-first ]]; then
         expected=1
