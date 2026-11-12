@@ -484,6 +484,27 @@ partial def localDecls : SExpr → List (String × Pos)
 partial def localsOf (e : SExpr) : List String :=
   ((localDecls e).map (·.1)).eraseDups
 
+/-- (#283) `$declNames` of the names `ds` that a scope moved elsewhere
+    declares, each where it does: as written, they are not in scope where
+    the scope is, as for its own (Verse has no shadowing); nothing for no
+    names. -/
+def declNames (p : Pos) (ds : List (String × Pos)) : List SExpr :=
+  if ds.isEmpty then [] else [.app p (.ident p "$declNames") (ds.map fun (n, q) => .ident q n) false]
+
+/-- The names an `if`'s conditions `cs` bind (`boundIn`), each where a
+    binding binds it (`p` otherwise). -/
+def condDecls (p : Pos) (cs : List SExpr) : List (String × Pos) :=
+  (boundIn cs).map fun n =>
+    (n, (cs.findSome? fun | .decl q x _ _ _ => if x == n then some q else none | _ => none).getD p)
+
+/-- `$shadows` of the first name of `names` (its condition's) that the
+    branch `t` binds too: shadowing, said where the branch binds it (#383's
+    review); nothing when there is none. -/
+def shadowsIn (p : Pos) (names : List String) (t : SExpr) : List SExpr :=
+  match (localDecls t).find? fun (n, _) => names.contains n with
+  | some (n, q) => [.app p (.ident p "$shadows") [.ident q n] false]
+  | none => []
+
 /-- Rename value references embedded in generated method-result types. -/
 partial def renameValueTypes (ren : List (String × String)) : STy → STy
   | .app "$methodResult" [.name n] => .app "$methodResult" [.name ((ren.lookup n).getD n)]
@@ -768,9 +789,7 @@ partial def liftE (isVal : String → Bool) (isField : String → String → Boo
     let tag ← LM.fresh p "b"
     -- (its names are not in scope where it is, as for a block's own,
     -- `$declNames`: Verse has no shadowing)
-    let decls := localDecls e
-    if !decls.isEmpty then
-      LM.push (.app p (.ident p "$declNames") (decls.map fun (n, q) => .ident q n) false)
+    for d in declNames p (localDecls e) do LM.push d
     let ss := stmtsOf (renameE (renamedFor tag (localsOf e)) (.block p ssD))
     let bound := boundIn ss
     let isVal' := fun n => isVal n || bound.contains n
@@ -981,9 +1000,7 @@ def bifToExcl (c : SExpr) : List SExpr :=
     -- `defer:`s after its value, `deferLast`, so they run as each of its
     -- values leaves it, in a `for`'s path or a choice's alternative
     let blockNames (b : SExpr) : List SExpr := match b with
-      | .block .. => match localDecls b with
-        | [] => []
-        | ds => [.app ip (.ident ip "$declNames") (ds.map fun (n, q) => .ident q n) false]
+      | .block .. => declNames ip (localDecls b)
       | _ => []
     let renameBlock (side : String) (b : SExpr) : SExpr := match b with
       | .block .. => match renameE (renamedFor s!"${k}{side}" (localsOf b)) b with
@@ -1006,8 +1023,11 @@ def bifToExcl (c : SExpr) : List SExpr :=
       -- path, where they are not in scope)
       let ρ := renamedFor s!"${k}" names
       -- (as written, they are not in scope where the `if` is: no shadowing)
-      let written : SExpr := .app ip (.ident ip "$declNames") (names.map fun y =>
-        .ident ((cs.findSome? fun | .decl q x _ _ _ => if x == y then some q else none | _ => none).getD ip) y) false
+      let written := declNames ip (condDecls ip cs)
+      -- (a then-block that binds a name its condition binds: shadowing)
+      let shadows := match t0 with
+        | .block .. => shadowsIn ip names t0
+        | _ => []
       let cs := cs.map (renameE ρ)
       let t := renameE ρ t
       let names := names.map fun y => (ρ.lookup y).getD y
@@ -1022,14 +1042,7 @@ def bifToExcl (c : SExpr) : List SExpr :=
               ys.zipIdx.map fun (y, i) =>
                 let (t, m) := declOf y
                 SExpr.decl ip y t m (.app ip (.ident ip tt) [.int ip (i : Int)] false))
-      -- (a then-block that binds a name its condition binds: shadowing,
-      -- said where the block binds it, #383's review)
-      let shadows : List SExpr := match (match t0 with
-          | .block .. => (localDecls t0).find? fun (n, _) => (ρ.lookup n).isSome
-          | _ => none) with
-        | some (n, q) => [.app ip (.ident ip "$shadows") [.ident q n] false]
-        | none => []
-      shadows ++ checks ++ [written, .decl ip k none false (.optionLit ip (.block ip (cs ++ [val]))),
+      shadows ++ checks ++ written ++ [.decl ip k none false (.optionLit ip (.block ip (cs ++ [val]))),
        .decl p x ty false (withJoin (mkExcl ip [(binds, t), ([.notE ip (.query ip (.ident ip k))], u)]))]
   | c => [c]
 
@@ -1040,12 +1053,8 @@ partial def consumeBranches (i : SExpr) (site : String) (consume : SExpr → SEx
   | .ite p cs t (some u) =>
     let names := boundIn cs
     let ren := renamedFor s!"${site}{p.line}_{p.col}" names
-    let written : List SExpr := if names.isEmpty then [] else
-      [.app p (.ident p "$declNames") (names.map fun n =>
-        .ident ((cs.findSome? fun | .decl q x _ _ _ => if x == n then some q else none | _ => none).getD p) n) false]
-    let shadows : List SExpr := match (localDecls t).find? fun (n, _) => names.contains n with
-      | some (n, q) => [.app p (.ident p "$shadows") [.ident q n] false]
-      | none => []
+    let written := declNames p (condDecls p cs)
+    let shadows := shadowsIn p names t
     .block p (written ++ shadows ++ [.ite p (cs.map (renameE ren)) (consume (renameE ren t))
       (some (consumeBranches u (site ++ "e") consume))])
   | e => consume e
