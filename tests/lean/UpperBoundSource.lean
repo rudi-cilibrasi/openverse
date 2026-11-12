@@ -65,6 +65,7 @@ def main (args : List String) : IO Unit := do
   let construction := ["bound-qualified-slots", "bound-qualified-slots-control",
     "bound-construction-defaults", "bound-construction-defaults-control"]
   let concurrency := ["bound-concurrency-helpers", "bound-concurrency-helpers-control",
+    "bound-concurrency-specificity", "bound-concurrency-specificity-control",
     "bound-signal-policy", "bound-signal-policy-control", "bound-signal-default-policy", "bound-signal-default-policy-control"]
   let signalAdmitted := ["bound-concurrency-helpers", "bound-concurrency-helpers-control"]
   let signalRefused := ["bound-signal-policy", "bound-signal-policy-control",

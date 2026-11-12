@@ -176,6 +176,14 @@ the same finite concurrency shapes that the concrete intrinsic admits. The
 checked conversion and receiver are evaluated once before ordinary helper
 lowering. Missing/static/dummy proofs and unrelated competing views remain
 refused. Payload events do not acquire a zero-argument signal operation.
+Ordinary members and intrinsic views participate in the same specificity
+selection. A more-specific ordinary `worker.Await` must remain selected when
+a redundant event proof is available; unrelated ordinary/intrinsic views are
+ambiguous. Private API controls cover both proof orders and dummy ordinary
+proofs. A source/control pair supplies the extra event proof through a constrained
+holder's readonly field and checks ordinary computes calls with reversed argument
+positions. This retains the distinction between a pure ordinary method and the
+event's suspending intrinsic.
 Ordinary suspension, defer and failure-context restrictions still apply.
 Source/control pairs check event and sticky-event waits, precise task results,
 once-only receivers, unit signals and cancellation cleanup. Admitted bytecode

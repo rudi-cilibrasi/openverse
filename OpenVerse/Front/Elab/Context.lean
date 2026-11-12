@@ -1019,11 +1019,24 @@ def Ctx.arrayView (ctx : Ctx) (p : Pos) (derived : Ty) (depth : Nat)
       plan.usesLocal && plan.valid ctx.types ctx.evidenceTypes
   ctx.selectValueView p derived supported operation
 
-/-- Views for concurrency operations whose surface methods lower to helpers
-    rather than ordinary declarations. Keep the concrete intrinsic domain. -/
+private def Ctx.memberViews (ctx : Ctx) (derived : Ty) (member : String) : List Ty :=
+  let visible (owner method : String) := ctx.hasMethod owner method ||
+    ((ctx.types.methodOverloads.lookup method).getD []).any (ctx.hasMethod owner ·)
+  (SubtypeEvidence.views ctx.types ctx.evidenceTypes derived).filter fun
+    | .struct owner args =>
+      if member.startsWith "(" then
+        match (member.drop 1).toString.splitOn ":)" with
+        | [qualified, method] => ctx.types.isSub owner qualified && visible qualified method
+        | _ => false
+      else (ctx.types.fields owner args).any (·.1 == member) || visible owner member
+    | _ => false
+
+/-- Ordinary members and concurrency intrinsics share specificity. A
+    redundant intrinsic proof cannot hide a more-specific ordinary method. -/
 def Ctx.concurrencyView (ctx : Ctx) (p : Pos) (derived : Ty) (member : String) :
-    Except String (Option Ty) :=
-  ctx.valueView p derived (fun
+    Except String (Option Ty) := do
+  let .param .. := derived | return none
+  let intrinsic := (SubtypeEvidence.valueViews ctx.types ctx.evidenceTypes derived).filter fun
     | .struct name args =>
       let is (base : String) := name == ctx.types.concurrencyName base
       match member with
@@ -1033,7 +1046,8 @@ def Ctx.concurrencyView (ctx : Ctx) (p : Pos) (derived : Ty) (member : String) :
       | "Signal" => ((is "event" || is "sticky_event") && args == [.void]) ||
           (name == "$subev0" && args.isEmpty)
       | _ => false
-    | _ => false) member
+    | _ => false
+  ctx.selectValueView p derived (ctx.memberViews derived member ++ intrinsic) s!"member '{member}'"
 
 def Ctx.boundView (ctx : Ctx) (p : Pos) (derived : Ty) (member : String) : Except String (Option Ty) := do
   let .param .. := derived | return none
@@ -1043,17 +1057,7 @@ def Ctx.boundView (ctx : Ctx) (p : Pos) (derived : Ty) (member : String) : Excep
         "ReplaceAll", "Insert", "Last"].contains member
     | .map .. => member == "Length"
     | _ => false) s!"member '{member}'"
-  let locals := ctx.evidenceTypes
-  let visible (owner method : String) := ctx.hasMethod owner method ||
-    ((ctx.types.methodOverloads.lookup method).getD []).any (ctx.hasMethod owner ·)
-  let candidates := (SubtypeEvidence.views ctx.types locals derived).filter fun
-    | .struct owner args =>
-      if member.startsWith "(" then
-        match (member.drop 1).toString.splitOn ":)" with
-        | [qualified, method] => ctx.types.isSub owner qualified && visible qualified method
-        | _ => false
-      else (ctx.types.fields owner args).any (·.1 == member) || visible owner member
-    | _ => false
+  let candidates := ctx.memberViews derived member
   let best := candidates.filter fun candidate =>
     !candidates.any fun other => other != candidate && ctx.types.nominalSubtype other candidate
   match best with

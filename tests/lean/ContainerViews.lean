@@ -70,8 +70,27 @@ def main : IO Unit := do
   need "actual event proofs expose intrinsic Await"
     (viewIs (some event) ((context [proof "Event" event t]).concurrencyView p t "Await"))
   for locals in [[], [proof "Event" event t true]] do
+    let ctx := { context locals with types := { types with boundFacts := [(event, t)] } }
     need "intrinsic concurrency views refuse static facts and dummy proofs"
-      (viewIs none ((context locals).concurrencyView p t "Await"))
+      (viewIs none (ctx.concurrencyView p t "Await"))
+  let worker := Ty.struct "worker" []
+  let method : Sig := {
+    idx := 0, name := "worker.Await", params := [worker], ret := .int, decides := false, isConst := false }
+  let ordinary (related : Bool) (locals : List Local) : Ctx := {
+    context locals with
+    sigs := [method]
+    types := { types with
+      classes := types.classes ++ ["worker", "event"]
+      structs := types.structs ++ [("worker", []), ("event", [])]
+      cinfo := types.cinfo ++ [("worker", { parent := if related then some "event" else none }), ("event", {})]
+      sparams := [("event", [("element", false)])]
+      pargs := [("worker", [.int])] } }
+  for locals in [[proof "Worker" worker t, proof "Event" event t],
+      [proof "Event" event t, proof "Worker" worker t]] do
+    need "a more-specific ordinary method precedes a redundant intrinsic view"
+      (viewIs (some worker) ((ordinary true locals).concurrencyView p t "Await"))
+    need "unrelated ordinary and intrinsic views remain ambiguous"
+      (match (ordinary false locals).concurrencyView p t "Await" with | .error _ => true | _ => false)
   for locals in [[proof "Event" event t, proof "Task" (.struct "task" [.int]) t],
       [proof "Task" (.struct "task" [.int]) t, proof "Event" event t]] do
     need "unrelated intrinsic concurrency views remain ambiguous in either order"

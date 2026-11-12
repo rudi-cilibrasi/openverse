@@ -158,7 +158,11 @@ def main : IO Unit := do
     ("bounded task cancel", "Caller(X:t,D:evidence(task(int),t) where t:type)<suspends>:void=X.Cancel()",
       "t has no method 'Cancel'"),
     ("bounded unit signal", "Caller(X:t,D:evidence(event(void),t) where t:type)<transacts>:void=X.Signal()",
-      "t has no method 'Signal'")]
+      "t has no method 'Signal'"),
+    ("ordinary Await before redundant intrinsic", "worker:=class(event(int)):\n    Await()<computes>:int=7\nCaller(X:t,D:evidence(worker,t),E:evidence(event(int),t) where t:type)<computes>:int=X.Await()",
+      "Await suspends"),
+    ("ordinary Await before reversed redundant intrinsic", "worker:=class(event(int)):\n    Await()<computes>:int=7\nCaller(X:t,E:evidence(event(int),t),D:evidence(worker,t) where t:type)<computes>:int=X.Await()",
+      "Await suspends")]
   for (label, source, refusal) in builtins do
     let parsed ← getOK s!"{label}: parse" (parseProgram (source ++ "\nMain():void={}"))
     let compiled ← getOK s!"{label}: actual proof control" (elabProgram (← getOK label (parsed.mapM (roles false))))
