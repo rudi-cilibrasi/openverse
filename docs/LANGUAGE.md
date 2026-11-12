@@ -1244,7 +1244,9 @@ Main():void =
   implementation above. Its tuple form `(super:)M((A, B))` uses the inherited
   parameter types as the current class sees them, including renamed or
   compound type arguments. The receiver and tuple are each evaluated once,
-  in that order. A method may call another method through `(super:)` too;
+  in that order. A qualified call `R.(i:)M(…)` (#125) is a call in the
+  family of the root `i` is below, dispatched as `R.M(…)` is. A method may
+  call another method through `(super:)` too;
   extraction and helper functions retain the source class and receiver,
   so inherited implementations, overloads and defaults use that scope.
   A recursive overridden one is computed at the

@@ -600,7 +600,9 @@ that binds the receiver and the arguments, then the if-chain on the guards
 (ending in `Err()`, which a call never reaches) or the choice.
 Each method of a family stays in its class as a stub, `Err()`, which no call reaches, so that the elaborator still checks it as a member: `<final>`, its signature and effects against the one it overrides, and an abstract one implemented. The dispatch's arguments are bound at the declaring class's parameter types, so `array{}` or `false` gets the type it needs, and one tuple argument to several parameters is taken apart, as at a call. An override that returns a narrower type is refused, since the dispatch is made before types and has the declaring class's return type. An `F$all` body turns every exclusive choice into a choice, nested `for`s included, which is exact as it is effect-free.
 A call has the declaring class's effects, which bound every implementation's. Parameters' defaults are rewritten too, so a call in a default is refused as any call with several values is outside a failure context, instead of reaching a stub. When the declaring class's implementation is the only one (an abstract override below it), the call is of that function, with no dispatch. A call of one implementation's function in a family with overrides (that one, or `(super:)`) takes one tuple argument apart after the receiver, also where it is not inlined.
-`(super:)M(…)` calls the nearest implementation above directly. For the
+`(super:)M(…)` calls the nearest implementation above directly, and a
+qualified call `R.(c:)M(…)` (#125) dispatches in the family of the root `c`
+is below, needing no pick. For the
 fixpoint, a family's calls go through `root$M$fam`, whose body calls
 every implementation, since the dispatch has a choice in it whatever the
 implementations are, and would make every caller one with several values. Its

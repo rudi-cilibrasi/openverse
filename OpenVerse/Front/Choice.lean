@@ -2621,6 +2621,13 @@ def famAt (anc : String → List String) (fams : List (String × MFam)) (shared 
   | .ident _ "Self", some d => fs.find? fun f => (anc d).contains f.root
   | _, _ => (picks.lookup q).bind fun r => fs.find? (·.root == r)
 
+/-- A method's name as a qualified call writes it (`(c:)M`, #125): `c` and
+    `M`; `M` alone otherwise. -/
+def qualified (m : String) : Option String × String :=
+  match m.startsWith "(", (m.drop 1).toString.splitOn ":)" with
+  | true, [c, m'] => (some c, m')
+  | _, _ => (none, m)
+
 /-- The calls of the methods of `fams` in `e` (#283), `inC` the class whose
     body this is (`anc` gives a class's ancestors, nearest first), each of
     the family `famAt` gives (`shared`, `picks`):
@@ -2646,6 +2653,8 @@ def famAt (anc : String → List String) (fams : List (String × MFam)) (shared 
       With `trial`, it is a call of `root$M$fam` instead, for the fixpoint.
     - `M(args)` in the body of a class below the root is `Self.M(args)`.
     - `(super:)M(args)` is a call of the nearest implementation above.
+    - `R.(c:)M(args)` (#125) is a call in the family of the root `c` is
+      below.
     A call's `M` is the method it calls, `slotAt` its place and the name as
     written: of an overloaded method, the list the call takes (`M$ovK`), an
     earlier elaboration found, none before. -/
@@ -2798,14 +2807,18 @@ partial def rwFamCalls (anc : String → List String) (fams : List (String × MF
         .block p [.decl p raw none false recv, dispatch]
   mapE (fun
     | .app p (.member q recv m) args br => do
+      let (within, m) := qualified m
       let m ← slotAt p m
-      match recv, inC with
-      | .ident _ "(super:)", some d =>
+      match recv, inC, within with
+      | .ident _ "(super:)", some d, _ =>
         -- (the nearest implementation above `d` of a family of `m`: of
         -- `d`'s own, the only one above it)
         let impl := (superOrder d).findSome? fun a => (fams.find? fun (x, f) => x == m && f.impls.contains a).map (a, ·.2)
         impl.map fun (a, f) => superCall p q (methodFnName a m) f (.ident q "Self") (args.map rw) br (typeView d f.root)
-      | _, _ => (famAt anc fams shared picks inC q recv m).map fun f => call p q m f (rw recv) (args.map rw) br
+      | _, _, some c =>
+        ((fams.find? fun (x, f) => x == m && (anc c).contains f.root).map (·.2)).map fun f =>
+          call p q m f (rw recv) (args.map rw) br
+      | _, _, none => (famAt anc fams shared picks inC q recv m).map fun f => call p q m f (rw recv) (args.map rw) br
     | .app p (.ident q m) args br => do
       let d ← inC
       let m ← slotAt p m
@@ -3167,10 +3180,11 @@ def methodFns (tops : List STop) (reserved : List String := []) (picks : List (P
   -- root that class is below, for the next round (`Requests.families`)
   -- (a use of an overloaded name, of the list picked for it)
   let sites := (tops.flatMap bodiesOf).flatMap fun (inC, b) => (memberUses b).filterMap fun (cp, q, r, m) => do
+    let (within, m) := qualified m
     let m ← match cp with
       | some p => slotAt p m
       | none => if overloaded m then none else some m
-    let byClass := match r, inC with
+    let byClass := within.isSome || match r, inC with
       | .ident _ "Self", some _ | .ident _ "(super:)", _ => true
       | _, _ => false
     if shared m && selNames.contains m && !byClass && (picks.lookup q).isNone then some (q, m) else none
@@ -3187,7 +3201,7 @@ def methodFns (tops : List STop) (reserved : List String := []) (picks : List (P
     | none => []
   let pending (m : String) : Bool := overloaded m && sel.any fun (x, _) => written x == m
   let calls (inC : Option String) : SExpr → List (Pos × String) := fun b =>
-    ((memberUses b).filterMap fun (cp, _, _, m) => cp.map (·, m)) ++
+    ((memberUses b).filterMap fun (cp, _, _, m) => cp.map (·, (qualified m).2)) ++
       match inC with
       | some c => (callUses b).filter fun (_, m) => (methodsOf c).contains m
       | none => []
