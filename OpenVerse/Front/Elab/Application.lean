@@ -440,6 +440,7 @@ partial def elabAppBaseWith
         else pure ()
       | _ => pure ()
     let r0 ← elabE ctx obj none
+    ctx.noteFamily mp r0.ty m0
     -- `X.(i:)M(…)`: `X` as an `i`, so `i`'s `M` (a qualified call)
     let (r, m) ← match r0.ty, m0.startsWith "(", (m0.drop 1).toString.splitOn ":)" with
       | .struct c ts, true, [q, mq] =>

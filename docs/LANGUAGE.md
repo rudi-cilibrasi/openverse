@@ -32,7 +32,7 @@ surface Verse is elaborated (`OpenVerse/Front/Elab.lean`) into Verse Core
 | Operators | `* + -`, unary `-`, comparisons `= <> < <= > >=` (failable, return the left operand, chains check every pair), `and`, `or`, `not` (below the comparisons, above `and`: `not X = Y` is `not (X = Y)`), `?`, `.Length`, `A[i]`, `T(k)` | ch. 4 |
 | Failure | failure contexts (`if` conditions, `for` clauses, `option{}`, `logic{}`, `not`, left of `or`, `<decides>` bodies) with rollback of `var` writes **and output** | ch. 8 |
 | Control | `if`/`else if`/`else` (all styles, `if:`…`then:`), `for` with `X : array`, `I -> X : array`, `X := a..b`, filters, bindings, several generators (cartesian product), `loop`/`break`, `return`, `case` with literal patterns and `_` | ch. 7 |
-| Choice | `a \| b \| …` with several values in spatial order, in a clause of an `if` condition, `first{…}`, `option{…}`, `logic{…}`, `not` or `or` (the first success) or of a `for` (all of them), also inside expressions (`(1 \| 2) + (10 \| 20)`, `X = 1 \| 2`); see [Choice](#choice) (#208) | (the Verse Calculus) |
+| Choice | `a \| b \| …` with several values in spatial order, in a clause of an `if` condition, `first{…}`, `option{…}`, `logic{…}`, `not` or `or` (the first success) or of a `for` (all of them), also inside expressions (`(1 \| 2) + (10 \| 20)`, `X = 1 \| 2`, `X > 0 and (1 \| 2)`, `M? or (1 \| 2)`); see [Choice](#choice) (#208) | (the Verse Calculus) |
 | Functions | a tuple argument expands into parameters (`Describe(MyTuple)`); positional arguments pack into a single tuple parameter, including `tuple()` and singleton tuples; several arguments make a single array parameter (`Sum(1, 2, 3)`), including generic, overloaded, method and spawned calls (#134, #140, #501; nested fields retain their shape, and empty/singleton arrays use explicit array values); recursion, mutual recursion, `<decides>` (called with `F[…]`; other functions with `F(…)`), named parameters `?P:t = default` passed as `?P := e` (positional, then named as written, then defaults; a default may use the parameters before it, and a method's default the method's fields; a call dispatched to an override evaluates that override's own default for an omitted argument; a default is evaluated at the call, its effects counting as the caller's, and cannot return, break or use itself), the heap effects `<computes>`, `<reads>`, `<writes>`, `<allocates>`, `<transacts>` (checked, see [Classes](#classes)), unsupported effect contracts are diagnosed before lowering (see [Effect contracts](#effect-contracts)) | ch. 6, 13 |
 | Parametric functions | `F(X:t, … where t:type, u:subtype(comparable))`: type parameters in parameter types, the result type and local declarations; type arguments inferred at each call (see [Parametric functions](#parametric-functions)) | Types: where clauses |
 | Structs | `name := struct:` with typed fields and defaults, `name{F := e, …}` (each field given at most once, evaluated in declaration order), `S.F`, `set S.F = e` / `op=`, structural equality (a struct is the tuple of its fields in Verse Core) | ch. 9 |
@@ -940,7 +940,9 @@ Main():void =
   types, as for `if`'s branches.
 - **`set L = a | b`** evaluates as `set` does: the indices of `L`'s path
   first, then for `op=` the old value, then the choice, so each alternative
-  only runs the assignment.
+  only runs the assignment. An alternative may have several values or
+  clauses of its own, as a binding's may (#283): `set A[I] = (1 | 2) * 10 | 9`
+  sets `A[I]` to 10, 20, then 9.
 - **Where.** A choice is taken by an `if` condition, the clauses of a
   `for`, `first{…}`, `first(…){…}`, `if{…}`, `for{…}`, `assert{…}`,
   `option{…}`, `logic{…}`, `not`, and the left of `or`. In their clauses, a choice can
@@ -957,8 +959,10 @@ Main():void =
   ```
 
   Lifting goes through arithmetic, comparisons, calls and indexing,
-  member access, `?`, tuples, arrays, maps and string interpolation, in the
-  order they are evaluated:
+  member access, `?`, tuples, arrays, maps, string interpolation, the
+  bounds of a range (`for (X := 1..(2 | 3))` is 1, 2, then 1, 2, 3: a
+  range for each value of its bounds), the operands of `and` and the right
+  of `or` (below), in the order they are evaluated:
   - a call's or an index's head is evaluated before its arguments: a
     variable holding an array, map or function, a field (read whole), a
     method's receiver, or any other expression (`Arr()[0 | 1]` calls `Arr`
@@ -1054,6 +1058,23 @@ Main():void =
   for (X := block{ defer: Print("d"); Y := 1 | 2; Y * 10 }) { Print(X) }   # d 10 d 20
   ```
 
+  The operands of `and`, and the right of `or`, are lifted as blocks
+  are (#283), each a scope of its own, as without a choice. `A and B` is
+  `A`'s clauses, then `B`'s: for each value of `A`, in order, the values of
+  `B` are the `and`'s. `A or B` is `if (T := A) then T else B`: the left of
+  `or` takes its own first success, as it does with no choice on the right,
+  and that value is then the `or`'s only one, the right never running; when
+  the left has none, what it did is rolled back and the `or`'s values are
+  `B`'s, taken by the context the `or` is in, as any choice's there. As for
+  that `if`, the `or` adds no choice of its own: in a `for`, when its left
+  succeeds, a value the filters after it reject undoes what came before it.
+
+  ```verse
+  for (X := (1 | 2) > 1 and (10 | 20)) { … }       # 10, 20
+  for (X := M? or (5 | 6)) { … }                   # with M: its value; without: 5, 6
+  if (X := M? or (6 | 8 | 9), X > 7) then …        # with M: its value, if > 7; without: 8
+  ```
+
   A choice inside a struct or class construction is lifted as one in a
   call's arguments, in the order the construction evaluates its fields: its
   type's declaration order, not as written (`pt{Y := F(), X := 1 | 2}`
@@ -1073,8 +1094,7 @@ Main():void =
   order and these default types too. Its defaults and class blocks must
   meet that function's effect restrictions.
 
-  Refused for now: an alternative of a `set`'s choice, either side of `and`, the right of `or`,
-  a range, or a block with a range of its own as a branch; and
+  Refused for now: a block with a range of its own as a branch; and
   a choice anywhere outside these failure contexts. (A field reached
   through a receiver that is not a variable or `Self`, as `F().Items[…]`,
   is read after the choice, since only the receiver's value is bound
@@ -1094,8 +1114,8 @@ Main():void =
 
   A choice's alternatives may have several values themselves, calls of
   such functions or choices inside expressions (`C():int = A() | B()`,
-  `X := Upto[1, 3] | 9`): their values come in order, alternative by
-  alternative (#283).
+  `X := Upto[1, 3] | 9`, `set X = Upto[1, 3] | 9`): their values come in
+  order, alternative by alternative (#283).
 
   Such a call is inlined: its arguments are evaluated first, in order, then
   its body runs in the caller's clauses, so the body's effects are rolled
@@ -1120,12 +1140,24 @@ Main():void =
   `R.M(args)` evaluates `R` first, once, then is inlined like a function's,
   with `Self` the receiver, and so is `M(args)` in its class's methods and
   those of the classes below it. A recursive one is taken lazily, and a
-  named parameter's default sees the fields. Inlining happens before
-  types are checked, so `R.M` has to name that method whatever `R` is:
-  such a method's name must be no other member than it and its overrides
-  (in classes below the class or interface that declares it), no struct
-  field, enumerator or member of a built-in type (`Length`, `Find`,
-  `Signal`, …), no top-level name and no parameter or local. An
+  named parameter's default sees the fields. Each class or interface that
+  declares `M` without `<override>` is the root of a family of its own:
+  `M` and its overrides in the classes below it. `R.M(args)` is a call in
+  the family of the root that `R`'s class is below (#283). When one class
+  or interface declares `M`, overrides aside, that is known before types
+  are checked. When unrelated ones do, the receiver's class tells:
+  `M(args)` and `Self.M(args)` in a class's methods are in that class's
+  family, and for any other receiver the program is elaborated once to
+  find the receivers' classes, then again with each call in its family.
+  So a class's `M` with one value stays an ordinary method wherever it is
+  called, through a function too, and a function whose values come from
+  another class's `M` through a receiver of that class has several values,
+  as when one family has the name. A class below two roots of `M` (one
+  listing two interfaces that both declare it) is refused when one of the
+  families has several values, and so is an overloaded `M`. Such a
+  method's name must be no field, no struct field, enumerator or member of
+  a built-in type (`Length`, `Find`, `Signal`, …), no top-level name and no
+  parameter or local. An
   interface's method is such a family's root too (#283): a call through
   the interface dispatches on the receiver's class, as for an overridden
   method; an interface's default implementation is the alternative for
@@ -1309,8 +1341,9 @@ Main():void =
   overloaded one with an overload that calls the function's own name
   (a generic one's type arguments are inferred from the
   arguments where it is inlined, as at a call, named ones too), a recursive one with a `defer:` of its own, or called by a recursive one (its body a function's, where it would run once), one with a `return`
-  other than at the end of its body or in an `if`'s branches, a method whose name another class or interface
-  also has, `<suspends>`, one used as a function value, and, since its body is inlined where other names may be
+  other than at the end of its body or in an `if`'s branches, an overloaded method, a method of a class or
+  interface below two others that each declare its name without `<override>`,
+  `<suspends>`, one used as a function value, and, since its body is inlined where other names may be
   in scope, one whose name is also the name of a parameter, local, field or
   method anywhere in the program, and a call of one where a name its body
   uses from outside is a parameter, local or member of `Self` in scope.
@@ -1750,10 +1783,9 @@ Main()<suspends>:void =
   them. A task is a spawned task, `Main` or a `branch`, and waiters in the
   arms of one task's `sync`, `race` or `rush` each take their own turn too
   (resuming the task for one arm's turn leaves its other woken arms
-  waiting for theirs); a `rush`
-  arm that goes on after the `rush` (a task of its own then), signalled
-  before its first turn as one, goes on at its turn in the scheduler's
-  order. A waiter cancelled before its turn does not go on, and a wait
+  waiting for theirs), also a `rush` arm that goes on after the `rush`
+  (a task of its own then), signalled before its first turn as one. A
+  waiter cancelled before its turn does not go on, and a wait
   cancelled before the `Signal` (a `race` it lost) is no waiter; once
   `Main` ends, so does the program, also in the middle of the turns. A `Signal` with no one waiting is lost, and `Signal`
   itself never waits. `event()` is an event without a value (`event(void)`),
@@ -1868,6 +1900,7 @@ Main()<suspends>:void =
 | Ordering of rationals | not stated (§2 lists `<` … for `int` and `float`) | exact (by continued fractions, so it cannot overflow), and an int compares with a rational |
 | Order of a choice's values | (not in the Book; the Verse Calculus: spatial) | spatial: the leftmost choice varies slowest, as nested generators do (#208) |
 | Code before a choice | (the Verse Calculus is pure) | runs once, also within an expression (the operands before the choice are evaluated first, as written); each alternative runs the code after the choice, from where the choice was reached; in an `if` or `first{}`, one that leads to no success is rolled back (as backtracking does); in a `for`, the choice is a generator, so only an alternative whose own clauses fail is (#208) |
+| A choice in an operand of `and` or `or` | not stated (the left of `or` is a failure context, the right is not, §6.2) | `A and B`: `A`'s clauses, then `B`'s, in the context the `and` is in, so `B`'s values for each of `A`'s; `A or B`: `if (T := A) then T else B`, so the left's first success, if it has one, is the only value (the right is not tried when what follows fails), else the right's values, taken by the context the `or` is in (all of them in a `for`), not only its first (#283) |
 | Precedence of `\|` | (not in the Book) | below `+`, above the comparisons: `X = 1 \| 2` is `X = (1 \| 2)` (#208) |
 | `Sleep(0.0)` | "may resume in the same tick" (ch. 14); the API reference: it always yields | always yields: resumes in the next tick (#156) |
 | `Sleep(S)` rounding | no fixed 30 Hz rounding rule in the pinned chapter or cited Epic timing description | binary64 `Round(30·S)`, ties to even, at least one tick: `Sleep(0.1)` stays at 3 ticks despite binary floats (#156); bounded inputs and checked clock accumulation follow the explicit reference policy above (#514) |
@@ -1883,5 +1916,5 @@ Main()<suspends>:void =
 the class features listed under [Classes](#classes), struct methods (Verse structs have none; classes do),
 `weak_map`, module paths `using{/Verse.org/…}` (accepted and ignored), the
 specific overload/call gaps listed under [Overloading](#overloading), nested
-functions and lambdas (see [release evidence and proposed design](research/closure-design.md)), choice beyond [Choice](#choice) (recursive functions with several values that have effects, other than generators, methods with several values whose name an unrelated class shares), concurrency beyond [Concurrency](#concurrency), and the unsupported
+functions and lambdas (see [release evidence and proposed design](research/closure-design.md)), choice beyond [Choice](#choice) (recursive functions with several values that have effects, other than generators, overloaded methods with several values), concurrency beyond [Concurrency](#concurrency), and the unsupported
 effect/construction contracts listed under [Effect contracts](#effect-contracts).

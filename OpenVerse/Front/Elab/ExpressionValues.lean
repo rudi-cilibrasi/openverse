@@ -216,7 +216,7 @@ partial def elabExprValuesWith
   | .logicLit p e =>
     let e := (Choice.takeFirst? e (choiceOrder ctx)).getD e
     let r ← operand { ctx with canFail := true, inTaking := true } e none
-    if !(r.e.mayFail ctx.sigProg) && (← get).fnNeeds.isEmpty && (← get).methodNeeds.isEmpty && !ctx.typeOnly then eerr p "logic{…} needs an expression that can fail"
+    if !(r.e.mayFail ctx.sigProg) && (← ctx.failabilityKnown) then eerr p "logic{…} needs an expression that can fail"
     return ⟨Expr.logicE r.e, .logic⟩
   | _ => eerr se.pos "internal: expression routed to the wrong elaboration stage"
 

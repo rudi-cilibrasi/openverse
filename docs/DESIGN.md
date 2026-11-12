@@ -484,9 +484,26 @@ renamed. A generic class's is generic over the class's type parameters,
 `C$M($Self:C(t…), params…)`, and its type arguments are inferred from the
 receiver where it is inlined, as for any generic function with several
 values (#282). `R.M(args)` becomes `C$M(R, args)`, and in the bodies of `C` and
-the classes below it, `M(args)` becomes `C$M(Self, args)`. Without types, `R.M`
-must name that method whatever `R` is: the name must be declared by one
-class or interface and overridden only below it (a family, `MFam`); for
+the classes below it, `M(args)` becomes `C$M(Self, args)`. Each class or
+interface that declares `M` without `<override>` is the root of a family
+(`MFam`), `M` and its overrides below it. When one root declares `M`,
+`R.M` names its family whatever `R` is, without types. When unrelated ones
+do (`shared`), `famAt` takes the family of the root the receiver's class is
+below: `Self`'s and a bare call's from the enclosing class, known without
+types, any other receiver's from an earlier elaboration. The first leaves
+those uses as written, ordinary calls (a family's method stays in its class
+as a stub, a direct one too, for them to type), with one value in the
+fixpoint; at each (`TyEnv.familySites`) `Ctx.noteFamily` notes the root of
+`M` above the receiver's static class by the place of `R.M`
+(`Compiled.familyNeeds`), and the program is elaborated again with them
+(`Options.familyPicks`), as for `eagerRequests`. That elaboration does not
+judge what can fail (`Ctx.failabilityKnown`), as a call may yet get several
+values, and the uses it does not reach are of no family, so the last one has
+none left. Each use is then rewritten as in a program with that family
+alone, so the fixpoint is exact, and so is the code. A family that has several values only through such uses has its
+own uses noted in a later round; each round notes more, so they end. A
+class below two roots of `M`, or an overloaded `M`, is refused when a family
+of `M` has several values. For
 an interface (#283) the dispatch's root is the interface, its receiver
 typed at it and cast to each implementing class, and its default
 implementation, if any, is one more implementation, `I$M`, whose guard
@@ -1266,7 +1283,13 @@ woken waiter is `$Pending` until its turn (`signalAll` marks it, the drain
 unmarks it), and `$waitResume` reports a pending one as still waiting: a
 task resumed for one waiter's turn goes on only there, leaving its other
 woken arms for their turns, and no poll lets a woken task go on before
-its turn. The default prelude and lowering are unchanged, so a program
+its turn. A `rush` arm that goes on after the `rush` becomes a root
+that the function no longer runs, while the waiters in it recorded the
+function's: its wrapper's `start`, which registers it, also probes it
+once as its own root (`$CurRoot` the wrapper, `$Probe` set: `waitResume`
+records the root and `waitResume` and `sleepResume` report waiting, so
+the probe goes on nowhere), and a `Signal` before its first turn gives it
+its turn in their order. The default prelude and lowering are unchanged, so a program
 compiled without the option is byte-identical to before.
 
 The roots are a list of cells `[root, next]` (adding one costs a cell; an

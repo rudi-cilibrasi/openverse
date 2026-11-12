@@ -294,6 +294,12 @@ kinds=(
   lazy-tuple-first
   lazy-tuple-for
   lazy-tuple-generic-first
+  logic-and-first
+  logic-and-for
+  logic-or-first
+  logic-or-for
+  setalt-first
+  setalt-for
   method-failure
   method-first
   method-for
@@ -1537,6 +1543,32 @@ if kind.startswith('construct-'):
     call = 'Run[7]' if specs else 'Run(7)'
     print(f'Main(){specs}:void = Print("{{{call}}}")')
     sys.exit(0)
+if kind.startswith('logic-'):
+    # (#283) choices in the operands of `and` and on the right of `or`, with
+    # effects on the left; an `or` is lifted as the `if` it stands for
+    _, op, mode = kind.split('-')
+    print('counter := class:\n    var N:int = 0')
+    left = 'block{set C.N += 1; Two(0) > 0}' if op == 'and' else 'block{set C.N += 1; O?}'
+    clauses = ', '.join(f'A{i} := ({left} {op} Two(2))' for i in range(count))
+    print('Run(O:?int)<transacts>:int =\n    C := counter{}')
+    if mode == 'first':
+        print(f'    if ({clauses}, A{count-1} = 3) then C.N else -1')
+    else:
+        print(f'    R := for ({clauses}):\n        A0\n    R.Length + C.N')
+    print('Main()<transacts>:void = Print("{Run(false)}")')
+    sys.exit(0)
+if kind.startswith('setalt-'):
+    # (#283) a set's choice whose alternative has several values: each
+    # alternative runs the assignment itself
+    sets = ', '.join(f'set A{i} = Two(0) | 2' for i in range(count))
+    print('Run()<transacts>:int =')
+    for i in range(count): print(f'    var A{i}:int = 0')
+    if kind == 'setalt-first':
+        print(f'    if ({sets}, A{count-1} = 2) then A0 else -1')
+    else:
+        print(f'    R := for ({sets}):\n        A0\n    R.Length')
+    print('Main()<transacts>:void = Print("{Run()}")')
+    sys.exit(0)
 if kind.startswith('lazy-'):
     effectful = any(tag in kind for tag in ('effect', 'alt', 'failure', 'generic', 'named', 'tuple'))
     failable = 'failure' in kind
@@ -1691,6 +1723,18 @@ PY
         expected=1
         [[ $kind == named-* ]] && expected=ok
       fi
+      printf '%s\n' "$expected" >"$tmp/expected"
+      timeout "$limit" "$root/.lake/build/bin/openverse" run "$tmp/p.verse" >"$tmp/lean.out"
+      timeout "$limit" "$root/runtime/build/cverse" "$tmp/p.vbc" >"$tmp/c.out"
+      diff -u "$tmp/expected" "$tmp/lean.out"
+      diff -u "$tmp/expected" "$tmp/c.out"
+    fi
+    if [[ ( $kind == logic-* || $kind == setalt-* ) && $count == 4 ]]; then
+      case $kind in
+        logic-and-first) expected=4 ;; logic-and-for) expected=31 ;;
+        logic-or-first) expected=0 ;; logic-or-for) expected=16 ;;
+        setalt-first) expected=0 ;; setalt-for) expected=81 ;;
+      esac
       printf '%s\n' "$expected" >"$tmp/expected"
       timeout "$limit" "$root/.lake/build/bin/openverse" run "$tmp/p.verse" >"$tmp/lean.out"
       timeout "$limit" "$root/runtime/build/cverse" "$tmp/p.vbc" >"$tmp/c.out"
