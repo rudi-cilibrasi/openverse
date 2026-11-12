@@ -33,7 +33,10 @@ with tempfile.TemporaryDirectory(prefix='openverse-choice-contexts-') as directo
             if oracle is not None and oracle != want:
                 raise SystemExit(f'choice-contexts: source/control oracle differs at seed {seed}')
             oracle = want
-            lean = invoke([compiler, 'run', source, '--emit', bytecode])
+            # choice_context's field case includes an ordinary Evaluate
+            # default in its homogeneous control. Keep that extension explicit.
+            flags = ['--extended-defaults'] if seed % 5 == 1 else []
+            lean = invoke([compiler, 'run', source, *flags, '--emit', bytecode])
             bad = f'exit={lean.returncode}\n' + lean.stdout != want or bool(lean.stderr)
             c = None if lean.returncode else invoke([runtime, bytecode])
             bad = bad or c is None or (c.returncode, c.stdout, c.stderr) != (lean.returncode, lean.stdout, lean.stderr)
