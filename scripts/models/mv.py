@@ -481,6 +481,7 @@ RVAR = random.Random(seed * 1000003 + 283286)
 # choice point runs on each of its values, the code before the next one once for each of them.
 RSEQ = random.Random(seed * 1000003 + 283287)
 SQN = [0]
+USED = set()     # (generator, in a for): the calls the tests make, for MVSEQ's statistics
 FRN = [0]
 
 
@@ -822,6 +823,7 @@ def gen_gcall(scope, vars_, d):
         return None
     i, n = R.choice(cands)
     f = GFUNCS[i]
+    USED.add((i, CTX['take'] == 'for'))
     if f['lifted'] and CTX['take'] != 'for':
         FXFIRST[0] += 1
         CTX['clause_lifts'] = CTX.get('clause_lifts', 0) + 1
@@ -999,13 +1001,14 @@ def seq_shapes(f, i, sc, ctr):
             if RSEQ.random() < 0.4:
                 second = ('tell', sqfresh(), second)
             alts[j] = ('bin', RSEQ.choice(['+', '-', '*']), alts[j], second)
-            f['seq'] = True
+            f['seq'] = f.get('seq', set()) | {'two-calls'}
     if f['decides'] and RSEQ.random() < 0.35:
         post0 = [('sprint', sqfresh())] if RSEQ.random() < 0.5 else []
         if RSEQ.random() < 0.5:
             # (a call followed by a choice)
             x, post, last = f.get('bound') or ('Wf', post0, ('ref', 'Wf'))
             f['bound'] = (x, post, ('choice', [last, ('bin', '+', ('ref', x), small())]))
+            f['seq'] = f.get('seq', set()) | {'call-then-choice'}
         else:
             # (a choice before a call: the bound choice's alternatives are values)
             vals = [a for a in v[1] if frame_call(a) is None][:2]
@@ -1019,7 +1022,7 @@ def seq_shapes(f, i, sc, ctr):
                 post = post0 + [('slet', 'Wq', seq_call(i, sc + ['Wf'], ctr))]
                 last = ('choice', [('bin', '+', ('ref', 'Wq'), ('ref', 'Wf')), ('ref', 'Wf')])
             f['bound'] = ('Wf', post, last)
-        f['seq'] = True
+            f['seq'] = f.get('seq', set()) | {'choice-then-call'}
     if not f['decides'] and RSEQ.random() < 0.3:
         # (a choice bound in the else branch, with code after it)
         post = [('sprint', sqfresh())] if RSEQ.random() < 0.5 else []
@@ -1031,7 +1034,7 @@ def seq_shapes(f, i, sc, ctr):
         else:
             last = ('bin', '+', seq_call(i, sc + ['Wb'], ctr), ('ref', 'Wb'))
         f['val'] = ('gbif', v[1], v[2], [('gblk', 'Wb', v[3], post, last)])
-        f['seq'] = True
+        f['seq'] = f.get('seq', set()) | {'branch-block'}
 
 
 FX_NODES = ('sprint', 'snext', 'tell', 'bprint', 'cnext', 'cadd', 'print', 'next', 'add', 'seti', 'setf')
@@ -2717,7 +2720,11 @@ if LAZY:
 open(f"{outdir}/p.verse", "w").write(PRE + "\n".join(lines) + "\n" + "\n".join(src_main) + "\n")
 open(f"{outdir}/p.chain", "w").write("1" if CHAIN[0] else "0")
 if os.environ.get('MVSEQ'):
-    print(f"seq {sum(1 for f in GFUNCS if f.get('seq'))}", file=sys.stderr)
+    # (#283: the generators with choice points in sequence; then each kind the tests call, in a
+    # for or where the first success is taken, with effects run as a function of its own or not)
+    used = [(k, 'for' if isfor else ('first-lifted' if GFUNCS[i]['lifted'] else 'first'))
+            for i, isfor in sorted(USED) for k in sorted(GFUNCS[i].get('seq', ()))]
+    print(f"seq {sum(1 for f in GFUNCS if f.get('seq'))} " + " ".join(sorted({f"{k}/{c}" for k, c in used})), file=sys.stderr)
 if os.environ.get('MVSTATS'):
     print(f"stats gens={len(GFUNCS)} gfor={STATS['gfor']} gfirst={STATS['gfirst']} gback={STATS['gback']} lfirst={STATS['lfirst']} lback={STATS['lback']} lmeth={STATS['lmeth']}", file=sys.stderr)
 if SKIPRET[0]:

@@ -1101,7 +1101,9 @@ partial def elabLoopGenGroupWith (elabE : Ctx → SExpr → Option Ty → EM R)
   for (_, armCode, _) in infos do
     offs := offs.push total
     total := total + armCode.next
-  let mut alts : Array Expr := #[]
+  -- (each alternative's code by its number: a continuation member's leaf of
+  -- one alternative has none here)
+  let mut alts : Array (Nat × Expr) := #[]
   let mut values : Array (Nat × Expr) := #[]
   let mut kInits : Array (Nat × Expr) := #[]
   let mut itemCode : Expr := vd
@@ -1151,7 +1153,7 @@ partial def elabLoopGenGroupWith (elabE : Ctx → SExpr → Option Ty → EM R)
           let assigns := match pre? with | some e => Expr.seq e assigns | none => assigns
           itemCode := .seq itemCode assigns
           let kE := kl?.bind fun kl => if fs.isEmpty then none else some (pushAll fs (.local kl.slot))
-          alts := alts.push (.ite assigns (.seq cont (push (startOf jm ts kE))) cont)
+          alts := alts.push (gi, .ite assigns (.seq cont (push (startOf jm ts kE))) cont)
         | none =>
           if inline then continue
           let r ← elabE actx a (some rty)
@@ -1159,7 +1161,7 @@ partial def elabLoopGenGroupWith (elabE : Ctx → SExpr → Option Ty → EM R)
           if let some kl := kl? then
             if !fs.isEmpty then kInits := kInits.push (gi, pushAll fs (.local kl.slot))
           let nextK : Int := match next? with | some n => (n : Int) | none => -1
-          alts := alts.push (.seq (.assign nx (.lit (.int nextK))) (.seq (.assign has (.lit (.logic true))) vd))
+          alts := alts.push (gi, .seq (.assign nx (.lit (.int nextK))) (.seq (.assign has (.lit (.logic true))) vd))
   -- (#283) a continuation member's code where its frame is applied to the
   -- value `v` (its lives in the tuple `t`, the rest of the continuation in
   -- `kk`): its clauses and branch, then a leaf of one alternative there, a
@@ -1215,7 +1217,7 @@ partial def elabLoopGenGroupWith (elabE : Ctx → SExpr → Option Ty → EM R)
     let unpack := ls.zipIdx.foldr (fun (l, i) acc => Expr.seq (.assign l.slot (.prim (.tupGet i) [.local t])) acc) vd
     return .seq (.assign saved (.prim .mkTup (tls.map (Expr.local ·.slot))))
       (.seq unpack (.seq (.assign hl.slot (.local v)) (.seq rc.e (.seq mcode.select dispatch))))
-  let dispatch : Expr := (alts.toList.zipIdx).foldr (fun (a, i) acc =>
+  let dispatch : Expr := alts.toList.foldr (fun (i, a) acc =>
     .ite (p2 .eq (.local k) (.lit (.int (i : Nat)))) a acc) vd
   let unpack : Expr := (all.zipIdx).foldr (fun (l, j) acc =>
     .seq (.assign l.slot (.prim (.tupGet (j + 1)) [.local it])) acc) vd
