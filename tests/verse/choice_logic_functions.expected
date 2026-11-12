@@ -1,0 +1,30 @@
+pos 3
+pos 30
+or 7
+or 1
+or 2
+small 0
+small 1
+small 2
+walk 0
+walk 1
+walk 2
+walk got 2
+walk 1
+walk 2
+walk 1
+ww 1
+walk 2
+ww 2
+pick 2
+pick 102
+d
+defer 5
+d
+defer 5
+set 3
+set 4
+typed 5
+typed 6
+set or 6
+exit=0

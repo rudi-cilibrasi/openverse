@@ -32,7 +32,7 @@ surface Verse is elaborated (`OpenVerse/Front/Elab.lean`) into Verse Core
 | Operators | `* + -`, unary `-`, comparisons `= <> < <= > >=` (failable, return the left operand, chains check every pair), `and`, `or`, `not` (below the comparisons, above `and`: `not X = Y` is `not (X = Y)`), `?`, `.Length`, `A[i]`, `T(k)` | ch. 4 |
 | Failure | failure contexts (`if` conditions, `for` clauses, `option{}`, `logic{}`, `not`, left of `or`, `<decides>` bodies) with rollback of `var` writes **and output** | ch. 8 |
 | Control | `if`/`else if`/`else` (all styles, `if:`…`then:`), `for` with `X : array`, `I -> X : array`, `X := a..b`, filters, bindings, several generators (cartesian product), `loop`/`break`, `return`, `case` with literal patterns and `_` | ch. 7 |
-| Choice | `a \| b \| …` with several values in spatial order, in a clause of an `if` condition, `first{…}`, `option{…}`, `logic{…}`, `not` or `or` (the first success) or of a `for` (all of them), also inside expressions (`(1 \| 2) + (10 \| 20)`, `X = 1 \| 2`); see [Choice](#choice) (#208) | (the Verse Calculus) |
+| Choice | `a \| b \| …` with several values in spatial order, in a clause of an `if` condition, `first{…}`, `option{…}`, `logic{…}`, `not` or `or` (the first success) or of a `for` (all of them), also inside expressions (`(1 \| 2) + (10 \| 20)`, `X = 1 \| 2`, `X > 0 and (1 \| 2)`, `M? or (1 \| 2)`); see [Choice](#choice) (#208) | (the Verse Calculus) |
 | Functions | a tuple argument expands into parameters (`Describe(MyTuple)`); positional arguments pack into a single tuple parameter, including `tuple()` and singleton tuples; several arguments make a single array parameter (`Sum(1, 2, 3)`), including generic, overloaded, method and spawned calls (#134, #140, #501; nested fields retain their shape, and empty/singleton arrays use explicit array values); recursion, mutual recursion, `<decides>` (called with `F[…]`; other functions with `F(…)`), named parameters `?P:t = default` passed as `?P := e` (positional, then named as written, then defaults; a default may use the parameters before it, and a method's default the method's fields; a call dispatched to an override evaluates that override's own default for an omitted argument; a default is evaluated at the call, its effects counting as the caller's, and cannot return, break or use itself), the heap effects `<computes>`, `<reads>`, `<writes>`, `<allocates>`, `<transacts>` (checked, see [Classes](#classes)), unsupported effect contracts are diagnosed before lowering (see [Effect contracts](#effect-contracts)) | ch. 6, 13 |
 | Parametric functions | `F(X:t, … where t:type, u:subtype(comparable))`: type parameters in parameter types, the result type and local declarations; type arguments inferred at each call (see [Parametric functions](#parametric-functions)) | Types: where clauses |
 | Structs | `name := struct:` with typed fields and defaults, `name{F := e, …}` (each field given at most once, evaluated in declaration order), `S.F`, `set S.F = e` / `op=`, structural equality (a struct is the tuple of its fields in Verse Core) | ch. 9 |
@@ -583,9 +583,10 @@ circle := class(shape, labelled):
   class(mid(int, string))` below `mid(a, b) := class(expr(tuple(a, b)))`)
   and override too. A cast in generic code that holds only under such a
   refinement is pattern matching on the class, as in a GADT (#243): as a
-  clause of an `if`'s condition, `D := T[X]` types the branch it guards,
-  and the clauses after it, under the refinement, where the code's type parameters are unified as `T`'s
-  type arguments say (written types in the branch included):
+  clause of a failure context, `D := T[X]` (or `T[X]` alone) types the
+  code after it in its failure context under the refinement, where the
+  code's type parameters are unified as `T`'s type arguments say (written
+  types included), and so the branch of the `if` whose condition it is in:
 
   ```verse
   Eval(E:expr(t) where t:type):t =
@@ -594,11 +595,38 @@ circle := class(shape, labelled):
       else Err()
   ```
 
-  A later clause may be such a cast too (#243), when the clauses before it
-  print nothing, change no object and call nothing, so that its failure
-  has nothing of theirs to undo: `if (N := Ns[0], N > 0, D := dup[P])` is
-  `if (N := Ns[0], N > 0) then (if (D := dup[P]) …)`, the `else` the same
-  in both.
+  It may be a clause of any failure context: a statement of a `<decides>`
+  body, or of a block in a failure context; a clause of `option{…}`,
+  `logic{…}` or `first{…}`; the operand of `not`, or of `and` or `or`; a
+  clause of an `if`'s condition or of a `for`. The rest of its failure
+  context is its branch: `pre; D := T[X]; rest` is `pre; if (D := T[X])
+  then {rest} else fail`, so its failure, or the rest's, undoes what `pre`
+  did, output included, as any failure context's does:
+
+  ```verse
+  AsLit(E:expr(t) where t:type)<decides>:t =
+      L := lit[E]
+      L.V                                     # t = int here
+  First(H:cell, P:pair(a, b) where a:type, b:type)<transacts>:?b =
+      option{set H.N += 1; D := dup[P]; D.A}  # undone when P is no dup
+  ```
+
+  In an `if`'s condition, and in a `for`'s clauses, the names reach the
+  branch, or the body, which runs outside the failure context. In an `if`,
+  when the clauses before the cast print nothing, change no object and
+  call nothing (always, when it is the first), so that its failure has
+  nothing of theirs to undo, the branch is part of the cast's: `if (N :=
+  Ns[0], N > 0, D := dup[P])` is `if (N := Ns[0], N > 0) then (if (D :=
+  dup[P]) …)`, the `else` the same in both. Otherwise, and in a `for`, the
+  cast takes the clauses after it, up to the `for`'s next generator, as
+  its branch in a clause of its own, and the branch or the body, when it
+  uses the cast's name or names
+  those clauses bind, casts the object again, which succeeds (an object's
+  class does not change), so that it is typed under the refinement too, as
+  it does a later cast among those clauses of a name bound before them that
+  is no `var`, when it uses that cast's name:
+  `if (Print("x"), D := dup[P], Y := D.A) then option{Y}` prints `x` only
+  when `P` is a `dup`, and its branch has `D` and `Y` with `b = a`.
 
   A cast can also open type arguments the object's type has no names for
   (#250): `if (P := pairE[E]) then (Eval(P.L), Eval(P.R))`, for
@@ -606,7 +634,9 @@ circle := class(shape, labelled):
   `b'` are `pairE`'s `a` and `b`, unknown but fixed for the branch; their
   values, which the branch's own generic calls at them need, come from the
   object, which holds them in hidden fields as #209's existential classes'
-  objects do. An opened parameter is as comparable as the one it stands
+  objects do. The value of what follows such a cast in its failure
+  context, and the names it binds that a branch or body uses, cannot be of
+  a type that names an opened one. An opened parameter is as comparable as the one it stands
   for, and also when comparability of a refined type requires that component
   (`t:subtype(comparable)` refined to `tuple(a', b')`). A unique reference
   such as `holder(a')` is comparable independently of `a'`, so it supplies
@@ -623,7 +653,7 @@ circle := class(shape, labelled):
 
   The branch is compiled as a function of its own, generic over the
   enclosing function's type parameters, that takes the object (as `D`) and
-  the locals the branch uses, at their refined types; the `if` becomes a
+  the locals the branch uses, at their refined types; the cast becomes a
   dispatch to it, which Verse Core types as it types a refined method call
   (`Typed.dispatch`), so nothing is assumed in Verse Core. In a
   `<suspends>` function the branch and the `else` may suspend (#243): the
@@ -646,8 +676,9 @@ circle := class(shape, labelled):
   return what to do, which the caller then does after the `if` (#243): the
   enclosing function returns, or the loop is left, once the `var`s it set
   have their values. Where the `if`'s value is used, its type must be known
-  for that (written, given by where it is, or the `else`'s) unless the
-  branch always returns or breaks. In a method, the branch names `Self`'s
+  for that (written, given by where it is, the `else`'s, or the branch's
+  own when the `else` gives none, as `Err()` or a failure context's
+  failure does) unless the branch always returns or breaks. In a method, the branch names `Self`'s
   fields and methods as anywhere in the method (its function takes `Self`
   too), and its `(super:)M(…)` calls the implementation the method's class
   inherits, as anywhere in the method (#243), including overloads selected
@@ -753,29 +784,30 @@ circle := class(shape, labelled):
 - **Comparability.** Other classes and interfaces are not comparable (Book §4.9), nor
   is a struct or container that holds one.
 - **Not yet supported** (each rejected with a message):
+  - a cast that refines type arguments, opens them, or goes through a
+    view (#243, #250, #351) anywhere but as a clause of a failure context:
+    inside an expression (`dup[P].C`: bind it, `D := dup[P]`), or outside
+    any failure context;
+  - in a `for`'s clauses, one past a generator after such a cast that uses
+    its name (#243);
+  - after a cast that opens type arguments, a value of its failure
+    context, or a name it binds that a branch or body uses, of a type that
+    names them (#250);
+  - a branch of such a cast with a `return`, or a `break` that leaves it,
+    where the `if`'s value is used at a type not known there (#243);
   - a cast from a reference to an interface that a class gives type
-    arguments that are not a prefix of its own, or to one above it (see
-    above, #351), to a class or
-    interface with type arguments, its own or ones it fixes (`c :=
-    class(i1(int), i2(string))`), other than as a clause of an `if`'s
-    condition (the first, or one after clauses that print, change an
-    object and call nothing), whose branch is then a function of its own
-    as described above (#243), or to one neither above
-    nor below it; a cast `T[X]` whose type
-    arguments agree with `X`'s only under a refinement (`dup[P]` for
-    `P:pair(a, b)`) other than as a clause of an `if`'s condition (the
-    first, or one after clauses that print nothing, change no object and
-    call nothing, #243), whose
-    branch has a `return` or a `break` that leaves it where the `if`'s value
-    is used at a type not known there (#243); a variable, in generic code, of a class or
-    interface type that requires an instance of itself (`Next:node(t)`)
-    at type arguments that every class below it fixes otherwise: its
-    hidden placeholder object (#157) would have to hold itself (no program
-    can build an object of such a type: each would need another first,
-    so use `?node(t)` for a link that may be absent); and, in code generic over an interface's parent, a
-    cast to an interface that gives that parent type arguments of its own
-    (`c2(t) := interface(container([]t))`) whose type parameters would be
-    unknown (#53).
+    arguments that are not a prefix of its own, or to one above it (#351),
+    to a class or interface neither above nor below it;
+  - a variable, in generic code, of a class or interface type that
+    requires an instance of itself (`Next:node(t)`) at type arguments that
+    every class below it fixes otherwise: its hidden placeholder object
+    (#157) would have to hold itself (no program can build an object of
+    such a type: each would need another first, so use `?node(t)` for a
+    link that may be absent);
+  - in code generic over an interface's parent, a cast to an interface
+    that gives that parent type arguments of its own (`c2(t) :=
+    interface(container([]t))`) whose type parameters would be unknown
+    (#53).
 
 ## Mutation, macros, tooling
 
@@ -908,7 +940,9 @@ Main():void =
   types, as for `if`'s branches.
 - **`set L = a | b`** evaluates as `set` does: the indices of `L`'s path
   first, then for `op=` the old value, then the choice, so each alternative
-  only runs the assignment.
+  only runs the assignment. An alternative may have several values or
+  clauses of its own, as a binding's may (#283): `set A[I] = (1 | 2) * 10 | 9`
+  sets `A[I]` to 10, 20, then 9.
 - **Where.** A choice is taken by an `if` condition, the clauses of a
   `for`, `first{…}`, `first(…){…}`, `if{…}`, `for{…}`, `assert{…}`,
   `option{…}`, `logic{…}`, `not`, and the left of `or`. In their clauses, a choice can
@@ -925,8 +959,10 @@ Main():void =
   ```
 
   Lifting goes through arithmetic, comparisons, calls and indexing,
-  member access, `?`, tuples, arrays, maps and string interpolation, in the
-  order they are evaluated:
+  member access, `?`, tuples, arrays, maps, string interpolation, the
+  bounds of a range (`for (X := 1..(2 | 3))` is 1, 2, then 1, 2, 3: a
+  range for each value of its bounds), the operands of `and` and the right
+  of `or` (below), in the order they are evaluated:
   - a call's or an index's head is evaluated before its arguments: a
     variable holding an array, map or function, a field (read whole), a
     method's receiver, or any other expression (`Arr()[0 | 1]` calls `Arr`
@@ -1022,6 +1058,23 @@ Main():void =
   for (X := block{ defer: Print("d"); Y := 1 | 2; Y * 10 }) { Print(X) }   # d 10 d 20
   ```
 
+  The operands of `and`, and the right of `or`, are lifted as blocks
+  are (#283), each a scope of its own, as without a choice. `A and B` is
+  `A`'s clauses, then `B`'s: for each value of `A`, in order, the values of
+  `B` are the `and`'s. `A or B` is `if (T := A) then T else B`: the left of
+  `or` takes its own first success, as it does with no choice on the right,
+  and that value is then the `or`'s only one, the right never running; when
+  the left has none, what it did is rolled back and the `or`'s values are
+  `B`'s, taken by the context the `or` is in, as any choice's there. As for
+  that `if`, the `or` adds no choice of its own: in a `for`, when its left
+  succeeds, a value the filters after it reject undoes what came before it.
+
+  ```verse
+  for (X := (1 | 2) > 1 and (10 | 20)) { … }       # 10, 20
+  for (X := M? or (5 | 6)) { … }                   # with M: its value; without: 5, 6
+  if (X := M? or (6 | 8 | 9), X > 7) then …        # with M: its value, if > 7; without: 8
+  ```
+
   A choice inside a struct or class construction is lifted as one in a
   call's arguments, in the order the construction evaluates its fields: its
   type's declaration order, not as written (`pt{Y := F(), X := 1 | 2}`
@@ -1041,8 +1094,7 @@ Main():void =
   order and these default types too. Its defaults and class blocks must
   meet that function's effect restrictions.
 
-  Refused for now: an alternative of a `set`'s choice, either side of `and`, the right of `or`,
-  a range, or a block with a range of its own as a branch; and
+  Refused for now: a block with a range of its own as a branch; and
   a choice anywhere outside these failure contexts. (A field reached
   through a receiver that is not a variable or `Self`, as `F().Items[…]`,
   is read after the choice, since only the receiver's value is bound
@@ -1062,8 +1114,8 @@ Main():void =
 
   A choice's alternatives may have several values themselves, calls of
   such functions or choices inside expressions (`C():int = A() | B()`,
-  `X := Upto[1, 3] | 9`): their values come in order, alternative by
-  alternative (#283).
+  `X := Upto[1, 3] | 9`, `set X = Upto[1, 3] | 9`): their values come in
+  order, alternative by alternative (#283).
 
   Such a call is inlined: its arguments are evaluated first, in order, then
   its body runs in the caller's clauses, so the body's effects are rolled
@@ -1767,10 +1819,9 @@ Main()<suspends>:void =
   them. A task is a spawned task, `Main` or a `branch`, and waiters in the
   arms of one task's `sync`, `race` or `rush` each take their own turn too
   (resuming the task for one arm's turn leaves its other woken arms
-  waiting for theirs); a `rush`
-  arm that goes on after the `rush` (a task of its own then), signalled
-  before its first turn as one, goes on at its turn in the scheduler's
-  order. A waiter cancelled before its turn does not go on, and a wait
+  waiting for theirs), also a `rush` arm that goes on after the `rush`
+  (a task of its own then), signalled before its first turn as one. A
+  waiter cancelled before its turn does not go on, and a wait
   cancelled before the `Signal` (a `race` it lost) is no waiter; once
   `Main` ends, so does the program, also in the middle of the turns. A `Signal` with no one waiting is lost, and `Signal`
   itself never waits. `event()` is an event without a value (`event(void)`),
@@ -1885,6 +1936,7 @@ Main()<suspends>:void =
 | Ordering of rationals | not stated (§2 lists `<` … for `int` and `float`) | exact (by continued fractions, so it cannot overflow), and an int compares with a rational |
 | Order of a choice's values | (not in the Book; the Verse Calculus: spatial) | spatial: the leftmost choice varies slowest, as nested generators do (#208) |
 | Code before a choice | (the Verse Calculus is pure) | runs once, also within an expression (the operands before the choice are evaluated first, as written); each alternative runs the code after the choice, from where the choice was reached; in an `if` or `first{}`, one that leads to no success is rolled back (as backtracking does); in a `for`, the choice is a generator, so only an alternative whose own clauses fail is (#208) |
+| A choice in an operand of `and` or `or` | not stated (the left of `or` is a failure context, the right is not, §6.2) | `A and B`: `A`'s clauses, then `B`'s, in the context the `and` is in, so `B`'s values for each of `A`'s; `A or B`: `if (T := A) then T else B`, so the left's first success, if it has one, is the only value (the right is not tried when what follows fails), else the right's values, taken by the context the `or` is in (all of them in a `for`), not only its first (#283) |
 | Precedence of `\|` | (not in the Book) | below `+`, above the comparisons: `X = 1 \| 2` is `X = (1 \| 2)` (#208) |
 | `Sleep(0.0)` | "may resume in the same tick" (ch. 14); the API reference: it always yields | always yields: resumes in the next tick (#156) |
 | `Sleep(S)` rounding | no fixed 30 Hz rounding rule in the pinned chapter or cited Epic timing description | binary64 `Round(30·S)`, ties to even, at least one tick: `Sleep(0.1)` stays at 3 ticks despite binary floats (#156); bounded inputs and checked clock accumulation follow the explicit reference policy above (#514) |

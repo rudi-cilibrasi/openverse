@@ -1,0 +1,38 @@
+a 10
+a 20
+b 0
+b 1
+b 0
+b 1
+visit 1
+visit 5
+c 5
+visit 6
+c 6
+visit 2
+visit 5
+c 5
+visit 6
+c 6
+d 3 11
+d 4 11
+d 3 21
+d 4 21
+e 8 11
+f 4
+g 3
+h
+visit 3
+visit 4
+visit 5
+visit 1
+i 1
+j 2
+k 6
+l
+m 4
+m 4
+n
+o 11
+end 21 11
+exit=0

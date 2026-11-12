@@ -530,10 +530,13 @@ def refineExits (p : Pos) (body : SExpr) (elseE : Option SExpr) (vars : List (St
       | some v => [done (some (.block p (stmts ++ [v]))) copiesV]
       | none => [.block p stmts, done none copiesV]
   let thenB := SExpr.block p (copies ++ endV)
-  let elseB : SExpr := match vm, elseE with
-    | .raw _, some e | .opt _, some e => done (some e) outsV
-    | .none, some e => .block p [e, done none outsV]
-    | _, _ => done none outsV
+  let elseB : SExpr := match elseE with
+    -- (an `else` that gives no value fails: nothing to give the caller)
+    | some e => if Refine.isNoValue e then e else match vm with
+      | .raw _ | .opt _ => done (some e) outsV
+      | .none => .block p [e, done none outsV]
+      | .elseAfter => done none outsV
+    | none => done none outsV
   let t := s!"{tag}'t"
   let get (i : Nat) : SExpr := if n == 1 then .ident p t else .app p (.ident p t) [.int p (i : Int)] false
   let nRB := retC.length + brkC.length
