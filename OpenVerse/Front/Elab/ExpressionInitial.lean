@@ -145,19 +145,22 @@ partial def elabExprInitialWith
     let objectSlot ← fresh objectTy
     let oldSlot ← fresh oldTy
     let rhsSlot ← fresh rhsTy
+    let saved (name : String) (slot : Nat) (ty : Ty) (typeValue : Bool) : Local :=
+      { name, slot, ty, mutable := false, typeValue }
     let keyValue ← coerce p (← elabE ctx index (some keyTy)) keyTy
+    let keyBinding := saved "$choiceIndexKey" keySlot keyTy (ctx.isTypeValue index)
     let keyContext := { ctx with
-      locals := { name := "$choiceIndexKey", slot := keySlot, ty := keyTy, mutable := false } :: ctx.locals }
+      locals := keyBinding :: ctx.locals }
     let objectValue ← coerce p (← elabE keyContext object (some objectTy)) objectTy
     let inner := { ctx with
-      locals := { name := "$choiceIndexKey", slot := keySlot, ty := keyTy, mutable := false } ::
-        { name := "$choiceIndexObject", slot := objectSlot, ty := objectTy, mutable := false } :: ctx.locals }
+      locals := keyBinding ::
+        saved "$choiceIndexObject" objectSlot objectTy (keyContext.isTypeValue object) :: ctx.locals }
     let checked ← elabE inner validation none
     let oldValue ← coerce p (← elabE inner old (some oldTy)) oldTy
     let rhsValue ← coerce p (← elabE ctx rhs (some rhsTy)) rhsTy
     let final := { inner with
-      locals := { name := "$choiceIndexOld", slot := oldSlot, ty := oldTy, mutable := false } ::
-        { name := "$choiceIndexRHS", slot := rhsSlot, ty := rhsTy, mutable := false } :: inner.locals }
+      locals := saved "$choiceIndexOld" oldSlot oldTy (inner.isTypeValue old) ::
+        saved "$choiceIndexRHS" rhsSlot rhsTy (ctx.isTypeValue rhs) :: inner.locals }
     let invocation := SExpr.app p (.ident p "$choiceOperation")
       [shape, dictionary, .ident p "$choiceIndexKey", .ident p "$choiceIndexObject",
         .ident p "$choiceIndexOld", .ident p "$choiceIndexRHS"] bracket

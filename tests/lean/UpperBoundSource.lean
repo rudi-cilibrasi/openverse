@@ -62,7 +62,9 @@ def main (args : List String) : IO Unit := do
   let concatenate := ["bound-concatenate", "bound-concatenate-control",
     "bound-concatenate-maps", "bound-concatenate-maps-control",
     "bound-concatenate-state", "bound-concatenate-state-control"]
-  let profiled := fifo ++ methodValues ++ callables ++ containers ++ operators ++ formatting ++ concatenate ++
+  let construction := ["bound-qualified-slots", "bound-qualified-slots-control",
+    "bound-construction-defaults", "bound-construction-defaults-control"]
+  let profiled := fifo ++ methodValues ++ callables ++ containers ++ operators ++ formatting ++ concatenate ++ construction ++
     ["bound-refine-contexts", "bound-refine-contexts-control"]
   let negative := ["choice-refusal", "default-refusal", "override-refusal", "overload-interface-refusal",
     "overload-ancestor-refusal", "overload-optional-refusal", "overload-empty-refusal", "overload-scope-refusal",
@@ -89,9 +91,10 @@ def main (args : List String) : IO Unit := do
     "bound-formatting-map-refusal", "bound-formatting-wide-array-refusal", "bound-formatting-wide-array-control-refusal",
     "bound-formatting-element-refusal", "bound-formatting-effects-refusal", "bound-formatting-effects-control-refusal",
     "bound-concatenate-unproved-refusal", "bound-concatenate-shallow-refusal", "bound-concatenate-element-refusal",
-    "bound-concatenate-maps-unproved-refusal", "bound-concatenate-effects-refusal", "bound-concatenate-effects-control-refusal"]
+    "bound-concatenate-maps-unproved-refusal", "bound-concatenate-effects-refusal", "bound-concatenate-effects-control-refusal",
+    "bound-qualified-slots-refusal", "bound-construction-defaults-unproved-refusal"]
   let mut failures := 0
-  let cases := (positive ++ fifo ++ methodValues ++ callables ++ containers ++ iterators ++ operators ++ formatting ++ concatenate ++ negative).map (fun name => (name, fifo.contains name, name)) ++
+  let cases := (positive ++ fifo ++ methodValues ++ callables ++ containers ++ iterators ++ operators ++ formatting ++ concatenate ++ construction ++ negative).map (fun name => (name, fifo.contains name, name)) ++
     ["fifo-bound-sleep", "fifo-bound-sleep-control"].map (fun name => (name, false, name ++ "-default"))
   for (name, eventFifo, artifact) in cases do
     let root := s!"tests/upper-bounds/{name}"

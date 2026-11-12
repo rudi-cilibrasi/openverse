@@ -124,6 +124,11 @@ fields before their typed capture locals are initialized. This preserves
 constrained dictionary types independently of capture order. Dummy captures,
 mutable proof fields and declaration facts alone do not create these fields;
 construction still supplies real dictionaries from the current frame.
+Saved indexed-operation keys, objects, old values and right-hand sides also
+retain their type-value roles. Four paired compiler-API controls require real
+inputs to pass Core admission and refuse dummy inputs before the operation's
+callee can consume their proofs. The key control reproduces the untagged
+helper's admission of dummy executable evidence before this integration fix.
 
 Method values with a fixed receiver can adapt their parameter and result
 types through actual bound evidence. An argument conversion runs from the
@@ -360,6 +365,18 @@ The existing Core checker and semantic proofs apply to the emitted Core under
 their stated hypotheses. They do not prove that bound inference, dictionary
 construction, capture provenance or frontend lowering implements Verse's source
 semantics. Lean/C agreement is executable evidence, not that missing proof.
+
+Qualified-slot source controls retain two interface roots through a generic
+constrained receiver, an override in a child class and an inherited qualified
+implementation. They check alpha-renamed method bounds, named defaults, precise
+returns, once-only receiver evaluation and mutation rollback; a strengthened
+qualified override bound is refused. Construction/default controls check
+earlier parameter values and their actual callee proofs, explicit field
+initializers, receiver method defaults, omitted versus supplied arguments,
+rollback and a receiver retained by an escaping task. These use the ordinary
+initializer-convergence policy: constant field defaults remain strict, and
+named parameter defaults do not acquire an unrelated convergence assertion.
+They do not add sibling-field lexical scope to field defaults.
 
 Before source admission, #502 still requires the remaining relation audit
 (including function variance and full refinement/container

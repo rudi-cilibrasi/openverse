@@ -100,7 +100,7 @@ private def indexedInputContracts : IO Unit := do
     let values := inputs.zipIdx |>.map fun (_, i) => if i == position then "D" else "0"
     let source := "vehicle:=class<computes>{N:int=7}\n" ++
       "operation(k:type,o:type,l:type,r:type,z:type):=class<computes>{}\n" ++
-      s!"Apply(Op:{operation},{parameters})<computes>:int={inputs[position]!}.Up(vehicle{{}}).N\n" ++
+      s!"Apply(Op:{operation},{parameters})<computes>:int={inputs[position]!}" ++ ".Up(vehicle{}).N\n" ++
       s!"Caller(D:{proof},Op:{operation})<computes>:int=Indexed(Op,{values[0]!},{values[1]!},(),{values[2]!},{values[3]!})\n" ++
       "Main():void={}"
     let parsed ← getOK "indexed operation input: parse" (parseProgram source)
@@ -119,7 +119,8 @@ private def indexedInputContracts : IO Unit := do
     let dummy ← getOK "indexed operation: dummy roles" (parsed.mapM (roles true))
     match elabProgram (dummy.map rewrite) with
     | .ok _ => throw (IO.userError s!"indexed operation: dummy input {inputs[position]!} became executable evidence")
-    | .error message => need s!"indexed operation: wrong refusal: {message}"
+    | .error message =>
+      need s!"indexed operation: wrong refusal: {message}"
         ((message.splitOn "dummy type value cannot").length > 1)
 
 def main : IO Unit := do

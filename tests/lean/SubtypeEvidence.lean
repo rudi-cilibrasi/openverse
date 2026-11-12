@@ -187,6 +187,13 @@ private def resolutionContracts : IO Unit := do
       need "structural bounds share the common nominal element without replacing inputs"
         (inferred.lookup "a" == some (.struct "vehicle" []) &&
           inferred.lookup "u" == some (head car) && inferred.lookup "v" == some (head truck))
+  let deferredStructural : List Bound := [⟨.arr a, u⟩, ⟨.arr a, .arr v⟩,
+    ⟨v, .param "w" false⟩]
+  for bounds in [deferredStructural, deferredStructural.reverse] do
+    let inferred ← getSome "defer a structural upper until its compound lower is instantiated"
+      (SubtypeEvidence.infer declarations bounds [("u", .arr car), ("w", truck)] true)
+    need "a deferred structural lower contributes before committing its shared upper"
+      (inferred.lookup "a" == some (.struct "vehicle" []) && inferred.lookup "v" == some truck)
   let opaqueFacts := { declarations with boundFacts := [(.arr car, callerType)] }
   let inferred ← getSome "infer a structural bound from a whole opaque view"
     (SubtypeEvidence.infer opaqueFacts [⟨.arr a, u⟩] [("u", callerType)] true)
