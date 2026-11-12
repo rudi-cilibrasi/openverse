@@ -8,5 +8,6 @@ Main():void=
     C:=car{Name:="first"}
     R:=Relay("padding",array{C},car{Name:="seed"})
     Print("generic {R(0).Length} {R(1).Name}")
-    E:=Relay("padding",array{},car{Name:="seed"})
+    Empty:[]car=array{}
+    E:=Relay("padding",Empty,car{Name:="seed"})
     Print("empty {E(0).Length} {E(1).Name}")
