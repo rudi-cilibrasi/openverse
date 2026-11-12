@@ -45,6 +45,9 @@ def checkTParams (env : TyEnv) (tps : List TParam) : Except String (List (String
     asked for (`requests`, which `elabProgram` gives). -/
 structure Options where
   profile : SourceProfile := .full
+  /-- Explicit compatibility mode for OpenVerse's extended field defaults.
+      It retains heap/failure checks, without asserting initializer convergence. -/
+  extendedDefaults : Bool := false
   args : Option (List String) := none
   entry : Option SExpr := none
   /-- On an internal error (an elaborated function the checker rejects),

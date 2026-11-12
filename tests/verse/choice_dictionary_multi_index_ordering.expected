@@ -1,0 +1,22 @@
+key a
+key2 a
+rhs a
+key a
+key2 a
+rhs a
+key b
+key2 b
+rhs b
+key b
+key2 b
+rhs b
+rows 4
+10 20 70 80
+30 40 70 80
+300 74 700 800
+10 20 70 80
+10 20 70 80
+30 40 70 80
+300 74 700 800
+10 20 70 80
+exit=0

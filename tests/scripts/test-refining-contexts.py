@@ -36,7 +36,11 @@ with tempfile.TemporaryDirectory(prefix='openverse-refining-contexts-') as direc
             if oracle is not None and oracle != want:
                 raise SystemExit(f'{label}: source/control oracle differs at seed {seed}')
             oracle = want
-            lean = invoke([compiler, 'run', source, '--emit', bytecode])
+            # gadt_contexts' field for/lazy cases call ordinary Sum/Lazy
+            # helpers. Their existing extension remains explicit.
+            extended = model == 'gadt_contexts.py' and seed % 9 == 1 and (seed // 9) % 4 >= 2
+            flags = ['--extended-defaults'] if extended else []
+            lean = invoke([compiler, 'run', source, *flags, '--emit', bytecode])
             bad = f'exit={lean.returncode}\n' + lean.stdout != want or bool(lean.stderr)
             c = None if lean.returncode else invoke([runtime, bytecode])
             bad = bad or c is None or (c.returncode, c.stdout, c.stderr) != (lean.returncode, lean.stdout, lean.stderr)

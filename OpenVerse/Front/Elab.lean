@@ -17,6 +17,7 @@
     the core theorems) before anyone runs it.
 -/
 import OpenVerse.Front.Elab.Lowering
+import OpenVerse.Front.InitializerConvergence
 
 namespace OpenVerse.Front
 open OpenVerse
@@ -52,6 +53,10 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     | _ => pure ()
   let helpers ← if usesRat then ratTops else pure []
   let helpers := helpers ++ (← if usesReplaceAll then replaceAllTops else pure [])
+  -- These compiler-owned implementations expand finite intrinsic operations:
+  -- Euclid/continued fractions decrease absolute remainders; ReplaceAll
+  -- advances through a finite input. Ordinary source names cannot supply them.
+  let intrinsicCalls := helpers.filterMap fun | .fn _ n .. => some n | _ => none
   let allTops000 := allTops0r.filter (!isRatMarker ·)
   -- modules (#112): every reference to a member, qualified (the entry
   -- expression's too)
@@ -59,6 +64,8 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     | some e => [.fn e.pos "$Do" [] [] ["decides"] (.name "void") (.app e.pos (.ident e.pos "$Show") [e] false)]
     | none => []
   let resolved ← resolveModules (allTops000 ++ rawEntry)
+  let resolved := if opts.extendedDefaults then resolved
+    else resolved.map InitializerConvergence.markSource
   -- Resolve source names before deciding which soft-library definitions are
   -- needed. A module's own event and a type parameter named task are distinct
   -- from the global helper types. Include public API/generated entry paths.
@@ -1408,6 +1415,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
         fxCheck s!"construction of {cd.name}" allowed
           { fx := [("allocates", cd.pos, none)] }
   let mut fieldNeeds : Requests := {}
+  let mut initializerBodies : List (String × String × Pos × Expr) := []
   -- check every field default once, with its struct's type parameters opaque
   -- (a default is elaborated again, at its field's type, at each construction
   -- that omits the field)
@@ -1426,8 +1434,9 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
           let hσ := (((env.sparams.lookup home).getD []).map (·.1)).zip (env.argsAt n nps home)
           let ctx := { ctx with defaults := [(n, f)], types := { senv with tvars := hσ } }
           match (do coerce d.pos (← elabE ctx d (some ft)) ft : EM Expr).run { env } with
-          | .ok (_, st) =>
+          | .ok (body, st) =>
             fxCheck s!"default of field '{f}' of {n}" allowed st
+            initializerBodies := initializerBodies ++ [(n, f, d.pos, body)]
             fieldNeeds := fieldNeeds.merge { methods := st.needs.methods, loops := st.needs.loops }
           | .error msg => throw s!"{msg} (in the default of field '{f}' of {n})"
     | _ => pure ()
@@ -1640,6 +1649,20 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   let loopNeeds ← checkLoopFirst fns loopFirst opts.requests.loops
   if !loopNeeds.isEmpty then
     return .asking { loops := loopNeeds }
+  if !opts.extendedDefaults then
+    let ordinary := (tops ++ generics).filterMap fun
+      | .fn _ n _ _ specs .. =>
+        if specs.contains InitializerConvergence.sourceCallMarker then some n else none
+      | _ => none
+    let construction := cdefs.filterMap fun cd =>
+      if cd.methods.any (fun | .fn _ "$block" .. => true | _ => false) then
+        some (cd.name ++ ".$block") else none
+    let mut verified : Std.HashSet Nat := {}
+    for (owner, field, pos, body) in initializerBodies do
+      match (InitializerConvergence.checkExpr fns ordinary (construction ++ intrinsicCalls) [] body).run verified with
+      | .ok (_, checked) => verified := checked
+      | .error reason =>
+        throw s!"{pos.show}: default of field '{field}' of {owner} requires convergence: {reason} (#511; --extended-defaults retains the OpenVerse extension without a convergence assertion)"
   let (capturedFns, capturedSlots, capturedSigs) ← FailCapture.lower fns slotTys S00
   fns := capturedFns
   slotTys := capturedSlots
@@ -1859,21 +1882,22 @@ def compile (src : String) (opts : Options := {}) : Except String Prog := do
 /-- Compile loaded definitions (`Front.loadProgram`) with shell arguments,
     bound to `Args` when given or mentioned, and an optional `do` expression. -/
 def compileTops (tops : List STop) (args : List String) (mentionsArgs : Bool) (doExpr : Option String)
-    (debug : Bool := false) (profile : SourceProfile := .full) (eventFifo : Bool := false) : Except String Prog := do
+    (debug : Bool := false) (profile : SourceProfile := .full) (eventFifo : Bool := false)
+    (extendedDefaults : Bool := false) : Except String Prog := do
   let entry ← match doExpr with
     | some t => some <$> parseExprText t
     | none => pure none
   let useArgs := !args.isEmpty || mentionsArgs
-  return (← elabProgram tops { args := if useArgs then some args else none, entry, debug, profile, eventFifo }).prog
+  return (← elabProgram tops { args := if useArgs then some args else none, entry, debug, profile, eventFifo, extendedDefaults }).prog
 
 /-- Compile with shell arguments (bound to `Args` when given or used) and an
     optional `do` expression, as `openverse run FILE ARG… do EXPR` does. -/
 def compileWith (src : String) (args : List String) (doExpr : Option String)
-    (profile : SourceProfile := .full) : Except String Prog := do
+    (profile : SourceProfile := .full) (extendedDefaults : Bool := false) : Except String Prog := do
   let entry ← match doExpr with
     | some t => some <$> parseExprText t
     | none => pure none
   let useArgs := !args.isEmpty || (src.splitOn "Args").length > 1
-  compile src { args := if useArgs then some args else none, entry, profile }
+  compile src { args := if useArgs then some args else none, entry, profile, extendedDefaults }
 
 end OpenVerse.Front

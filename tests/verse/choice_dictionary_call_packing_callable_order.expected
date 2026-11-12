@@ -1,0 +1,14 @@
+args a
+old a
+row 3 101
+args a
+new a
+row 1003 202
+args b
+old b
+row 9 303
+args b
+new b
+row 1009 404
+done 4 404
+exit=0
