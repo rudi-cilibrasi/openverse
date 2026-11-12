@@ -7290,11 +7290,18 @@ partial def elabAppBase (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (b
           if env.isSub c e then env.upArgs c targs e else env.argsBelow c targs e
         if let some fname := direct then
           let e := clsOf fname
-          let ctx' := { ctx with locals := { name := recv, slot, ty := .struct e (argsAt e), mutable := false } :: ctx.locals }
+          -- (#351: at an interface referred to through views, the receiver
+          -- converted to it, in a slot of its type: a reference through a
+          -- prefix one is no reference through views without it)
+          let (pre, eslot) ← if env.viewed.contains e && !env.viewed.contains c && c != e then do
+              let es ← fresh (.struct e (argsAt e))
+              pure ([Expr.assign es (← coerce p ⟨.local slot, r.ty⟩ (.struct e (argsAt e)))], es)
+            else pure ([], slot)
+          let ctx' := { ctx with locals := { name := recv, slot := eslot, ty := .struct e (argsAt e), mutable := false } :: ctx.locals }
           let rc ← if spawning then
               elabSpawn ctx' p (.app p (.ident mp fname) (.ident mp recv :: args) bracket)
             else elabApp ctx' p (.ident mp fname) (.ident mp recv :: args) bracket exp
-          return ⟨.seq (.assign slot r.e) rc.e, rc.ty⟩
+          return ⟨.seq (.assign slot r.e) (pre.foldr Expr.seq rc.e), rc.ty⟩
         -- otherwise dispatch on the class of the receiver's value: the
         -- receiver, then the arguments, once each, then the implementation of
         -- the class whose option is set
