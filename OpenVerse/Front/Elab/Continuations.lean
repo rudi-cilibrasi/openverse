@@ -1285,7 +1285,7 @@ partial def choiceMemberOperations (bindings : ChoiceAliases) (body : SExpr) : L
       | .app _ (.ident _ "$withOld") [saved, _] false => saved
       | _ => target
     choiceMemberOperations bindings index ++ choiceMemberOperations bindings receiver ++
-      (if op.isSome then choiceMemberOperations bindings old else []) ++
+      (if op.isSome then choiceMemberOperations bindings target ++ choiceMemberOperations bindings old else []) ++
       choiceMemberOperations bindings value ++ (if depends receiver then [(e, bindings)] else [])
   | e@(.set _ target@(.member _ receiver _) op value) =>
     let old := match value with
@@ -1648,7 +1648,7 @@ def choiceOperations (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx)
     let ty := Ty.struct family ((if indexed then .int else receiverTy) :: inputs ++ [result])
     let operation := if indexed then
       let op := setter.getD none
-      let rhs := if op.isSome then SExpr.app p0 (.ident p0 "$withOld") [values[2]!, values[3]!] false else values[2]!
+      let rhs := if op.isSome then SExpr.app p0 (.ident p0 "$choiceWithOld") [values[2]!, values[3]!] false else values[2]!
       SExpr.set p0 (.app p0 (.member p0 values[1]! method) [values[0]!] true) op rhs
     else if let some op := setter then
       let rhs := if op.isSome then SExpr.app p0 (.ident p0 "$withOld") [values[1]!, values[2]!] false
@@ -1686,7 +1686,13 @@ def choiceOperations (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx)
       let old := Choice.mapE (fun e =>
         if e == index then some (.ident p "$choiceIndexKey") else
         if e == object then some (.ident p "$choiceIndexObject") else none) sourceArguments[1]!
-      SExpr.app p (.ident p "$choiceIndexedOperation") [shape, .ident p name, index, object, old, sourceArguments[2]!] bracket
+      let validation := match call with
+        | .set _ target _ (.app _ (.ident _ "$withOld") _ false) =>
+          Choice.mapE (fun e =>
+            if e == index then some (.ident p "$choiceIndexKey") else
+            if e == object then some (.ident p "$choiceIndexObject") else none) (ops.rewrite target)
+        | _ => .tuple p []
+      SExpr.app p (.ident p "$choiceIndexedOperation") [shape, .ident p name, index, object, validation, old, sourceArguments[2]!] bracket
     else SExpr.app p (.ident p "$choiceOperation") (shape :: .ident p name :: sourceValues) bracket
     ops := { ops with
       plan := finalPlan, params := ops.params ++ [(name, ty)],
