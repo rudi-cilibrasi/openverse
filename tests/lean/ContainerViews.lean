@@ -66,6 +66,18 @@ def main : IO Unit := do
       need "duplicate identities intersect comparable flags" (!comparable)
     | _ => throw (IO.userError "lost the equal array view")
   let arrays2 := Ty.arr (.arr .int)
+  let event := Ty.struct "event" [.int]
+  need "actual event proofs expose intrinsic Await"
+    (viewIs (some event) ((context [proof "Event" event t]).concurrencyView p t "Await"))
+  for locals in [[], [proof "Event" event t true]] do
+    need "intrinsic concurrency views refuse static facts and dummy proofs"
+      (viewIs none ((context locals).concurrencyView p t "Await"))
+  for locals in [[proof "Event" event t, proof "Task" (.struct "task" [.int]) t],
+      [proof "Task" (.struct "task" [.int]) t, proof "Event" event t]] do
+    need "unrelated intrinsic concurrency views remain ambiguous in either order"
+      (match (context locals).concurrencyView p t "Await" with | .error _ => true | _ => false)
+  need "payload signals do not acquire a zero-argument intrinsic"
+    (viewIs none ((context [proof "Event" event t]).concurrencyView p t "Signal"))
   need "opaque nested arrays provide a flattening view"
     (viewIs (some arrays2) ((context [proof "D" arrays2 t]).arrayView p t 2 "Concatenate"))
   for locals in [[], [proof "D" arrays2 t true]] do

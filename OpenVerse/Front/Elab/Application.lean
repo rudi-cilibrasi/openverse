@@ -433,6 +433,24 @@ partial def elabAppBaseWith
       eerr mp "dummy type value cannot be an executable method receiver"
     let spawning := m0.startsWith "$spawnMethod:"
     let m0 := if spawning then (m0.drop 13).toString else m0
+    if args.isEmpty && ["Await", "Cancel", "Signal"].contains m0 then
+      let before ← get
+      let receiver ← elabE ctx obj none
+      if let .param .. := receiver.ty then
+        let view ← match ctx.concurrencyView mp receiver.ty m0 with
+          | .ok view => pure view
+          | .error message => throw message
+        if let some target := view then
+          let converted ← elabArgumentCoerceWith elabE ctx mp receiver target
+          let slot ← fresh target
+          let name := s!"$concurrencyReceiver{slot}"
+          let binding : Local := {
+            name, slot, ty := target, mutable := false, typeValue := ctx.isTypeValue obj }
+          let inner := { ctx with locals := binding :: ctx.locals }
+          let method := if spawning then "$spawnMethod:" ++ m0 else m0
+          let result ← elabApp inner p (.member mp (.ident mp name) method) args bracket exp
+          return ⟨.seq (.assign slot converted) result.e, result.ty⟩
+      set before
     -- `T.Await()` of a task (#156): the helper `$Await(T)`
     -- `T.Cancel()` of a task (#156): the mark `$cancelMark(T)`, which the
     -- lowering turns into the cancellation of the task's root

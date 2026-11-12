@@ -1019,6 +1019,22 @@ def Ctx.arrayView (ctx : Ctx) (p : Pos) (derived : Ty) (depth : Nat)
       plan.usesLocal && plan.valid ctx.types ctx.evidenceTypes
   ctx.selectValueView p derived supported operation
 
+/-- Views for concurrency operations whose surface methods lower to helpers
+    rather than ordinary declarations. Keep the concrete intrinsic domain. -/
+def Ctx.concurrencyView (ctx : Ctx) (p : Pos) (derived : Ty) (member : String) :
+    Except String (Option Ty) :=
+  ctx.valueView p derived (fun
+    | .struct name args =>
+      let is (base : String) := name == ctx.types.concurrencyName base
+      match member with
+      | "Cancel" => is "task" && args.length == 1
+      | "Await" => ((is "task" || is "event" || is "subscribable_event" || is "sticky_event") &&
+          args.length == 1) || (name == "$subev0" && args.isEmpty)
+      | "Signal" => ((is "event" || is "sticky_event") && args == [.void]) ||
+          (name == "$subev0" && args.isEmpty)
+      | _ => false
+    | _ => false) member
+
 def Ctx.boundView (ctx : Ctx) (p : Pos) (derived : Ty) (member : String) : Except String (Option Ty) := do
   let .param .. := derived | return none
   let container ← ctx.containerView p derived (fun

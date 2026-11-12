@@ -152,7 +152,13 @@ def main : IO Unit := do
     ("map-value concatenate", "Caller(A:[int]t,B:[int]int,D:evidence(int,t) where t:type)<computes>:[int]int=ConcatenateMaps(A,B)",
       "ConcatenateMaps takes maps of one type"),
     ("map-key concatenate", "Caller(A:[t]int,B:[rational]int,D:evidence(rational,t) where t:subtype(comparable))<computes>:[rational]int=ConcatenateMaps(A,B)",
-      "ConcatenateMaps takes maps of one type")]
+      "ConcatenateMaps takes maps of one type"),
+    ("bounded event await", "Caller(X:t,D:evidence(event(int),t) where t:type)<suspends>:int=X.Await()",
+      "t has no method 'Await'"),
+    ("bounded task cancel", "Caller(X:t,D:evidence(task(int),t) where t:type)<suspends>:void=X.Cancel()",
+      "t has no method 'Cancel'"),
+    ("bounded unit signal", "Caller(X:t,D:evidence(event(void),t) where t:type)<transacts>:void=X.Signal()",
+      "t has no method 'Signal'")]
   for (label, source, refusal) in builtins do
     let parsed ← getOK s!"{label}: parse" (parseProgram (source ++ "\nMain():void={}"))
     let compiled ← getOK s!"{label}: actual proof control" (elabProgram (← getOK label (parsed.mapM (roles false))))
