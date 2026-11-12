@@ -1279,15 +1279,21 @@ def TyEnv.directBoundSubtype (env : TyEnv) (derived base : Ty) : Bool :=
 
 /-- Entail a declaration constraint. Static facts permit
     type applications; they never authorize an executable unchecked cast. -/
-def TyEnv.boundSubtype (env : TyEnv) (derived base : Ty) : Bool :=
-  go (env.boundFacts.length + 1) [] derived
+partial def TyEnv.boundSubtype (env : TyEnv) (derived base : Ty) : Bool :=
+  go [] derived base
 where
-  go : Nat → List Ty → Ty → Bool
-    | 0, _, _ => false
-    | fuel + 1, seen, current =>
-      env.directBoundSubtype current base || (!seen.contains current &&
-        env.boundFacts.any fun (upper, lower) =>
-          env.directBoundSubtype current lower && go fuel (current :: seen) upper)
+  go (seen : List (Ty × Ty)) (current target : Ty) : Bool :=
+    env.directBoundSubtype current target ||
+      (!seen.contains (current, target) && Id.run do
+        let seen := (current, target) :: seen
+        let structural := match current, target with
+          | .arr c, .arr a | .opt c, .opt a => go seen c a
+          | .map k c, .map l a => k == l && isComparable env (k.commonBounds l) && go seen c a
+          | .tup cs, .tup bases => cs.length == bases.length &&
+              (cs.zip bases).all (fun (c, a) => go seen c a)
+          | _, _ => false
+        return structural || env.boundFacts.any fun (upper, lower) =>
+          go seen current lower && go seen upper target)
 
 /-- Check this application's own bounds after its arguments are resolved. -/
 def Ty.checkBoundHead (env : TyEnv) : Ty → Except String Unit

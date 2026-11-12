@@ -49,6 +49,11 @@ def protocol (p : Pos) : List STop := Id.run do
   let dict (base derived : STy) := STy.app family [base, derived]
   let input : SParam := { name := "$input", ty := c }
   let up (value : SExpr) := SExpr.app p (.member p value "Up") [.ident p "$input"] false
+  let lift (name : String) (params : List TParam) (base derived : STy) : STop :=
+    .classDef p name params ["computes"] [dict base derived] false
+      [("$element", dict a c, none, false)] []
+      [.fn p "Up" [{ name := "$input", ty := derived }] [] ["override", "computes"] base
+        (.app p (.ident p "$subtypeLift") [.ident p "$input", .ident p "$element"] false)]
   return [
     .classDef p family [tp "$subtypeA", tp "$subtypeC"] ["computes"] [] true [] []
       [.fn p "Up" [input] [] ["$abstract", "computes"] a (.tuple p [])],
@@ -59,11 +64,31 @@ def protocol (p : Pos) : List STop := Id.run do
         (.name "rational") (.ident p "$input")],
     .classDef p eraseFamily [tp "$subtypeC"] ["computes"] [dict (.name "any") c] false [] []
       [.fn p "Up" [input] [] ["override", "computes"] (.name "any") (.ident p "$input")],
+    lift arrayFamily [tp "$subtypeA", tp "$subtypeC"] (.arr a) (.arr c),
+    lift optionFamily [tp "$subtypeA", tp "$subtypeC"] (.opt a) (.opt c),
+    lift mapFamily [{ pos := p, name := "$subtypeK", constraint := "comparable" },
+      tp "$subtypeA", tp "$subtypeC"] (.map (.name "$subtypeK") a) (.map (.name "$subtypeK") c),
     .classDef p composeFamily [tp "$subtypeA", tp "$subtypeB", tp "$subtypeC"]
       ["computes"] [dict a c] false
       [("$outer", dict a b, none, false), ("$inner", dict b c, none, false)] []
       [.fn p "Up" [input] [] ["override", "computes"] a
         (.app p (.member p (.ident p "$outer") "Up") [up (.ident p "$inner")] false)]]
+
+/-- Tuple dictionaries share one generic declaration per arity, including
+    when their components contain other tuples or polymorphic instances. -/
+def tupleDeclaration (p : Pos) (arity : Nat) : STop :=
+  let names := List.range arity
+  let bases := names.map fun i => STy.name s!"$tupleA{i}"
+  let derived := names.map fun i => STy.name s!"$tupleC{i}"
+  let params := (names.map (fun i => s!"$tupleA{i}") ++ names.map (fun i => s!"$tupleC{i}")).map
+    fun name => ({ pos := p, name, constraint := "type" } : TParam)
+  let fields := (bases.zip derived).zipIdx.map fun ((a, c), i) =>
+    (s!"$element{i}", STy.app family [a, c], none, false)
+  .classDef p (tupleFamily arity) params ["computes"]
+    [.app family [.tup bases, .tup derived]] false fields []
+    [.fn p "Up" [{ name := "$input", ty := .tup derived }] [] ["override", "computes"] (.tup bases)
+      (.app p (.ident p "$subtypeLift")
+        (.ident p "$input" :: names.map (fun i => .ident p s!"$element{i}")) false)]
 
 def nominalFamily (source target : String) : String :=
   s!"$subtypeNominal{source.length}_{source}{target.length}_{target}"
@@ -109,9 +134,13 @@ inductive Plan where
   | local : String → Bound → Plan
   | field : (receiver field : String) → Bound → Plan
   | compose : Plan → Plan → Plan
+  | array : Plan → Plan
+  | option : Plan → Plan
+  | map : Ty → Plan → Plan
+  | tuple : List Plan → Plan
   deriving Repr, Inhabited
 
-def Plan.bound (env : TyEnv) : Plan → Bound
+partial def Plan.bound (env : TyEnv) : Plan → Bound
   | .identity t => ⟨t, t⟩
   | .rational => ⟨.rational, .int⟩
   | .erase t => ⟨.any, t⟩
@@ -120,6 +149,11 @@ def Plan.bound (env : TyEnv) : Plan → Bound
   | .local _ bound => bound
   | .field _ _ bound => bound
   | .compose outer inner => ⟨(outer.bound env).base, (inner.bound env).derived⟩
+  | .array element => ⟨.arr (element.bound env).base, .arr (element.bound env).derived⟩
+  | .option element => ⟨.opt (element.bound env).base, .opt (element.bound env).derived⟩
+  | .map key element => ⟨.map key (element.bound env).base, .map key (element.bound env).derived⟩
+  | .tuple elements => ⟨.tup (elements.map fun e => (e.bound env).base),
+      .tup (elements.map fun e => (e.bound env).derived)⟩
 
 private def fieldBound? (env : TyEnv) (ty : Ty) (field : String) : Option Bound := do
   let .struct owner args := ty | none
@@ -187,7 +221,7 @@ def fieldsForBounds (env : TyEnv) (receiver : Ty) (bounds : List Bound) : List (
 /-- Validate even plans supplied through the compiler API. A stale/cross-frame
     assumption cannot be repaired with a similarly named or typed unrelated
     slot. The caller supplies its current locals by name and resolved type. -/
-def Plan.valid (env : TyEnv) (locals : List (String × Ty)) : Plan → Bool
+partial def Plan.valid (env : TyEnv) (locals : List (String × Ty)) : Plan → Bool
   | .identity _ => true
   | .rational | .erase _ => true
   | .nominal source target args =>
@@ -198,6 +232,9 @@ def Plan.valid (env : TyEnv) (locals : List (String × Ty)) : Plan → Bool
     ((locals.lookup receiver).bind (fieldBound? env · fieldLabel)) == some bound
   | .compose outer inner => outer.valid env locals && inner.valid env locals &&
       (outer.bound env).derived == (inner.bound env).base
+  | .array element | .option element => element.valid env locals
+  | .map key element => isComparable env key && element.valid env locals
+  | .tuple elements => elements.all (·.valid env locals)
 
 private def direct? (env : TyEnv) (base derived : Ty) : Option Plan := do
   if derived == base then return .identity derived
@@ -210,30 +247,41 @@ private def direct? (env : TyEnv) (base derived : Ty) : Option Plan := do
     some (.nominal source target args)
   else none
 
-/-- Derive a plan using exact type relations and nominal ancestry. Unrelated
-    interfaces need not be disjoint: absence of a proof here only means this
-    context cannot perform this upcast. A visited-type set terminates cycles
-    in dependent bounds without discarding an available acyclic path. -/
-def find? (env : TyEnv) (locals : List (String × Ty)) (bound : Bound) : Option Plan :=
+/-- Search whole relations and covariant components without distributing a
+    whole-container capability to its elements. Every recursive goal uses
+    subterms of the original goal or of a finite capability endpoint; no
+    intermediate type is synthesized. Visited pairs terminate cyclic facts
+    while allowing nested components to reuse the same real dictionary. -/
+partial def find? (env : TyEnv) (locals : List (String × Ty)) (bound : Bound) : Option Plan :=
   let available := capabilities env locals
-  go available (available.length + 1) [] bound.derived
+  go available [] bound
 where
-  go : List Plan → Nat → List Ty → Ty → Option Plan
-    | _, 0, _, _ => none
-    | available, fuel + 1, seen, derived => do
-      if let some plan := direct? env bound.base derived then return plan
-      if seen.contains derived then none else do
-        available.findSome? fun capability => do
-          let relation := capability.bound env
-          let before ← direct? env relation.derived derived
-          let outer ← go available fuel (derived :: seen) relation.base
-          let inner := if relation.derived == derived then capability
-            else .compose capability before
-          if relation.base == bound.base then some inner else some (.compose outer inner)
+  go (available : List Plan) (seen : List Bound) (goal : Bound) : Option Plan := do
+    if let some plan := direct? env goal.base goal.derived then return plan
+    if seen.contains goal then none else do
+      let seen := goal :: seen
+      let structural : Option Plan := match goal.base, goal.derived with
+        | .arr a, .arr c => (go available seen ⟨a, c⟩).map Plan.array
+        | .opt a, .opt c => (go available seen ⟨a, c⟩).map Plan.option
+        | .map k a, .map l c =>
+          let key := k.commonBounds l
+          if k == l && isComparable env key then (go available seen ⟨a, c⟩).map (Plan.map key) else none
+        | .tup bases, .tup cs =>
+          if bases.length == cs.length then
+            ((bases.zip cs).mapM fun (a, c) => go available seen ⟨a, c⟩).map Plan.tuple
+          else none
+        | _, _ => none
+      if let some plan := structural then return plan
+      available.findSome? fun capability => do
+        let relation := capability.bound env
+        let before ← go available seen ⟨relation.derived, goal.derived⟩
+        let after ← go available seen ⟨goal.base, relation.base⟩
+        let inner := if relation.derived == goal.derived then capability else .compose capability before
+        if relation.base == goal.base then some inner else some (.compose after inner)
 
 /-- Surface expression with symbolic lexical captures. The elaborator resolves
     each name in the new frame; no caller frame's numeric slot is retained. -/
-def Plan.value (env : TyEnv) (p : Pos) : Plan → SExpr
+partial def Plan.value (env : TyEnv) (p : Pos) : Plan → SExpr
   | .identity t => .construct p identityFamily [t.toSTy] []
   | .rational => .construct p rationalFamily [] []
   | .erase t => .construct p eraseFamily [t.toSTy] []
@@ -246,17 +294,44 @@ def Plan.value (env : TyEnv) (p : Pos) : Plan → SExpr
     .construct p composeFamily [left.base.toSTy, left.derived.toSTy, right.derived.toSTy]
       [.decl p "$outer" none false (outer.value env p),
        .decl p "$inner" none false (inner.value env p)]
+  | .array element =>
+    let bound := element.bound env
+    .construct p arrayFamily [bound.base.toSTy, bound.derived.toSTy]
+      [.decl p "$element" none false (element.value env p)]
+  | .option element =>
+    let bound := element.bound env
+    .construct p optionFamily [bound.base.toSTy, bound.derived.toSTy]
+      [.decl p "$element" none false (element.value env p)]
+  | .map key element =>
+    let bound := element.bound env
+    .construct p mapFamily [key.toSTy, bound.base.toSTy, bound.derived.toSTy]
+      [.decl p "$element" none false (element.value env p)]
+  | .tuple elements =>
+    let bounds := elements.map (·.bound env)
+    .construct p (tupleFamily elements.length)
+      (bounds.map (·.base.toSTy) ++ bounds.map (·.derived.toSTy))
+      (elements.zipIdx.map fun (element, i) => .decl p s!"$element{i}" none false (element.value env p))
 
 /-- All canonical nominal families needed by a plan, in stable dependency
     order. Repeated instantiations share their single generic declaration. -/
-def Plan.nominals : Plan → List (String × String)
+partial def Plan.nominals : Plan → List (String × String)
   | .nominal source target _ => [(source, target)]
   | .compose outer inner => (outer.nominals ++ inner.nominals).eraseDups
+  | .array element | .option element | .map _ element => element.nominals
+  | .tuple elements => (elements.flatMap Plan.nominals).eraseDups
   | _ => []
 
-def Plan.usesLocal : Plan → Bool
+partial def Plan.tupleArities : Plan → List Nat
+  | .tuple elements => (elements.length :: elements.flatMap Plan.tupleArities).eraseDups
+  | .array element | .option element | .map _ element => element.tupleArities
+  | .compose outer inner => (outer.tupleArities ++ inner.tupleArities).eraseDups
+  | _ => []
+
+partial def Plan.usesLocal : Plan → Bool
   | .local .. | .field .. => true
   | .compose outer inner => outer.usesLocal || inner.usesLocal
+  | .array element | .option element | .map _ element => element.usesLocal
+  | .tuple elements => elements.any Plan.usesLocal
   | _ => false
 
 /-- Nominal views proved by actual lexical dictionaries. Declaration facts
@@ -290,9 +365,29 @@ private def upperViews (env : TyEnv) (derived : Ty) : List Ty :=
     joins' preference for a shared class when multiple nominal interfaces
     remain, and refuse unrelated interface ambiguity. Input bindings and
     their precise types are never replaced by this inferred upper type. -/
-private def commonUpper? (env : TyEnv) (types : List Ty) : Option Ty := do
+private partial def commonUpper? (env : TyEnv) (types : List Ty) : Option Ty := do
   let first ← types.head?
-  let candidates := (upperViews env first).filter fun candidate =>
+  -- Join corresponding components directly, avoiding a Cartesian product
+  -- of every upper type of every tuple component.
+  let structural : Option Ty := match first with
+    | .arr _ => do
+      let components ← types.mapM fun | .arr t => some t | _ => none
+      return .arr (← commonUpper? env components)
+    | .opt _ => do
+      let components ← types.mapM fun | .opt t => some t | _ => none
+      return .opt (← commonUpper? env components)
+    | .map key _ => do
+      let components ← types.mapM fun | .map k t => if k == key then some t else none | _ => none
+      let keys ← types.mapM fun | .map k _ => some k | _ => none
+      let key := keys.foldl Ty.commonBounds key
+      if !isComparable env key then none else return .map key (← commonUpper? env components)
+    | .tup parts => do
+      let rows ← types.mapM fun | .tup ts => if ts.length == parts.length then some ts else none | _ => none
+      let components ← (List.range parts.length).mapM fun i => do
+        commonUpper? env (← rows.mapM (·[i]?))
+      return .tup components
+    | _ => none
+  let candidates := (mergeTypes (structural.toList ++ upperViews env first)).filter fun candidate =>
     types.all (env.boundSubtype · candidate)
   let best := candidates.filter fun candidate => !candidates.any fun other =>
     other != candidate && env.boundSubtype other candidate && !env.boundSubtype candidate other

@@ -111,7 +111,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   for request in opts.subtypeRequests do
     match request with
     | .classDef p name .. =>
-      if !name.startsWith "$subtypeNominal" then
+      if !name.startsWith "$subtypeNominal" && !name.startsWith "$subtypeTuple" then
         throw s!"{p.show}: internal: invalid subtype dictionary request"
     | _ => throw "internal: a subtype dictionary request must be a class"
   let resolved := opts.subtypeRequests ++ loopTops ++ resolved

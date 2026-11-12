@@ -9,6 +9,10 @@ def identityFamily : String := "$subtypeIdentity"
 def composeFamily : String := "$subtypeCompose"
 def rationalFamily : String := "$subtypeRational"
 def eraseFamily : String := "$subtypeErase"
+def arrayFamily : String := "$subtypeArray"
+def optionFamily : String := "$subtypeOption"
+def mapFamily : String := "$subtypeMap"
+def tupleFamily (arity : Nat) : String := s!"$subtypeTuple{arity}"
 
 /-- Readonly compiler proofs are separate from dummy type-value fields. -/
 def fieldPrefix : String := "$subtype."

@@ -14,6 +14,8 @@ partial def elabExprInitialWith
     (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
   match se with
   | .app _ (.ident _ "$typeValue") [value] false => elabE ctx value exp
+  | .app p (.ident _ "$subtypeLift") (input :: dictionaries) false =>
+    elabSubtypeLiftWith elabE ctx p input dictionaries exp
   | .app p (.ident _ "$subtypeWitness") [.construct _ "$subtypeEvidence" [base, derived] []] false =>
     let base ← resolveTy ctx.types p base
     let derived ← resolveTy ctx.types p derived

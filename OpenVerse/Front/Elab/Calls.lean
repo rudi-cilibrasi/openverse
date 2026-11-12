@@ -88,14 +88,72 @@ partial def elabSubtypeValueWith (elabE : Ctx → SExpr → Option Ty → EM R) 
     (p : Pos) (plan : SubtypeEvidence.Plan) (bound : SubtypeEvidence.Bound) : EM R := do
   let missing := plan.nominals.filter fun (source, target) =>
     !ctx.types.classes.contains (SubtypeEvidence.nominalFamily source target)
-  if !missing.isEmpty then
+  let tuples := plan.tupleArities.filter fun arity =>
+    !ctx.types.classes.contains (SubtypeEvidence.tupleFamily arity)
+  if !missing.isEmpty || !tuples.isEmpty then
     let declarations ← missing.mapM fun (source, target) =>
       match SubtypeEvidence.nominal ctx.types p source target with
       | .ok declaration => pure declaration
       | .error message => eerr p message
+    let declarations := declarations ++ tuples.map (SubtypeEvidence.tupleDeclaration p)
     modify fun state => { state with subtypeNeeds := SubtypeEvidence.mergeRequests state.subtypeNeeds declarations }
     return ⟨.prim .userErr [], bound.ty⟩
   elabE ctx (plan.value ctx.types p) (some bound.ty)
+
+/-- Compiler-owned container Up bodies. Every component conversion is an
+    ordinary checked call on an explicitly supplied dictionary. The input
+    and dictionaries are saved once; traversal preserves array/map order,
+    map keys (even duplicate entries), option absence and tuple shape. No
+    runtime cast or map reconstruction is involved. -/
+partial def elabSubtypeLiftWith (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx)
+    (p : Pos) (input : SExpr) (dictionaries : List SExpr) (exp : Option Ty) : EM R := do
+  let some target := exp | eerr p "internal: a subtype lift requires its declared result"
+  let value ← elabE ctx input none
+  let inputSlot ← fresh value.ty
+  let (components, traversal) ← match value.ty, target with
+    | .arr c, .arr a | .opt c, .opt a => do
+      let element ← fresh c
+      pure ([(SubtypeEvidence.Bound.mk a c, Expr.local element)], some element)
+    | .map k c, .map l a => do
+      if k != l || !isComparable ctx.types (k.commonBounds l) then
+        eerr p "internal: subtype map keys must be equal and comparable"
+      let element ← fresh (.tup [k, c])
+      pure ([(SubtypeEvidence.Bound.mk a c, Expr.prim (.tupGet 1) [.local element])], some element)
+    | .tup cs, .tup bases => do
+      if cs.length != bases.length then eerr p "internal: subtype tuple arities differ"
+      pure ((bases.zip cs).zipIdx.map (fun ((a, c), i) =>
+        (SubtypeEvidence.Bound.mk a c, Expr.prim (.tupGet i) [.local inputSlot])), none)
+    | _, _ => eerr p "internal: unsupported subtype container shape"
+  if components.length != dictionaries.length then eerr p "internal: missing subtype component dictionaries"
+  let mut setup : List (Nat × Expr) := [(inputSlot, value.e)]
+  let mut outputs : List Expr := []
+  for ((bound, operand), dictionary) in components.zip dictionaries do
+    if ctx.isTypeValue dictionary then eerr p "internal: a dummy type value is not subtype evidence"
+    let proof ← elabE ctx dictionary (some bound.ty)
+    let proofExpr ← coerce p proof bound.ty
+    let proofSlot ← fresh bound.ty
+    let componentSlot ← fresh bound.derived
+    let proofName := s!"$subtypeLiftProof{proofSlot}"
+    let componentName := s!"$subtypeLiftValue{componentSlot}"
+    let inner := { ctx with locals :=
+      { name := proofName, slot := proofSlot, ty := bound.ty, mutable := false } ::
+      { name := componentName, slot := componentSlot, ty := bound.derived, mutable := false } :: ctx.locals }
+    let result ← elabE inner (.app p (.member p (.ident p proofName) "Up")
+      [.ident p componentName] false) (some bound.base)
+    setup := setup ++ [(proofSlot, proofExpr)]
+    outputs := outputs ++ [.seq (.assign componentSlot operand) (← coerce p result bound.base)]
+  let body ← match value.ty, target, traversal, outputs with
+    | .arr _, .arr _, some element, [output] =>
+      pure (.forE element (.local inputSlot) (.lit (.logic true)) output)
+    | .opt _, .opt _, some element, [output] =>
+      pure (.ite (.assign element (.prim .query [.local inputSlot]))
+        (.prim .mkSome [output]) (.lit .none))
+    | .map _ _, .map _ _, some element, [output] =>
+      pure (.forE element (.local inputSlot) (.lit (.logic true))
+        (.prim .mkTup [.prim (.tupGet 0) [.local element], output]))
+    | .tup _, .tup _, none, _ => pure (.prim .mkTup outputs)
+    | _, _, _, _ => eerr p "internal: invalid subtype traversal"
+  return ⟨setup.foldr (fun (slot, expression) rest => .seq (.assign slot expression) rest) body, target⟩
 
 partial def elabSubtypeUpWith (elabE : Ctx → SExpr → Option Ty → EM R)
     (ctx : Ctx) (p : Pos) (value : R) (target : Ty) (plan : SubtypeEvidence.Plan) : EM R := do
