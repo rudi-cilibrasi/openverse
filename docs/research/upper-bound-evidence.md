@@ -178,6 +178,18 @@ their common comparable guarantees, independently of dictionary order.
 Declaration facts and dummy dictionaries cannot create an operational view,
 and a whole-container proof does not establish an element relation.
 
+Collection iteration consumes the same actual views for arrays, strings and
+maps, including indexed and key/value generators. The source is evaluated once
+before iteration, with its ordinary failure/rollback behavior. Array and string
+concatenation convert opaque operands through actual whole-array proofs before
+ordinary joining; the left operand still runs before the right. Generic element
+types stay opaque. A whole-array upper does not authorize an unrelated element
+type, and ordinary effect checks still apply to the iteration body.
+Paired source cases check empty inputs, generic precise elements, map order,
+Cartesian products, filters, aliases, rollback and waiting-loop cancellation.
+Concatenation retains identical bytecode under `--no-choice`; collection
+iteration remains excluded by that profile.
+
 An interior write may traverse a container view to reach a mutable object.
 The view executes during traversal, after index/key evaluation and after its
 source container has been read. Writes that would rebuild an opaque container

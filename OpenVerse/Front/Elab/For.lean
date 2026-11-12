@@ -1,5 +1,6 @@
 /- Elaboration for; public declarations retain OpenVerse.Front names. -/
 import OpenVerse.Front.Elab.Continuations
+import OpenVerse.Front.Elab.Calls
 
 namespace OpenVerse.Front
 open OpenVerse
@@ -777,6 +778,9 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
           pure (slot, Expr.prim .range es, c1, Expr.lit (.logic true))
         | .gen gp x idx srcE => do
           let rs ← elabE { c with canFail := true, inTaking := true } srcE none
+          let rs ← elabContainerReceiverWith elabE c gp rs (fun
+            | .arr _ | .map .. => true
+            | _ => false) "iteration"
           match rs.ty with
           | .map kt vt =>
             -- `for (V : M)` and `for (K -> V : M)`: over the (key, value) pairs

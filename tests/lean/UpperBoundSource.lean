@@ -50,7 +50,10 @@ def main (args : List String) : IO Unit := do
     "callable-generic", "callable-generic-control"]
   let containers := ["container-view-basic", "container-view-basic-control",
     "container-view-state", "container-view-state-control", "container-view-waiting", "container-view-waiting-control",
-    "container-view-generic", "container-view-generic-control", "container-view-interior", "container-view-interior-control"]
+    "container-view-generic", "container-view-generic-control", "container-view-interior", "container-view-interior-control",
+    "container-view-concat", "container-view-concat-control"]
+  let iterators := ["container-view-iteration", "container-view-iteration-control",
+    "container-view-iteration-state", "container-view-iteration-state-control"]
   let profiled := fifo ++ methodValues ++ callables ++ containers ++
     ["bound-refine-contexts", "bound-refine-contexts-control"]
   let negative := ["choice-refusal", "default-refusal", "override-refusal", "overload-interface-refusal",
@@ -66,9 +69,12 @@ def main (args : List String) : IO Unit := do
     "callable-bracket-refusal", "callable-decides-refusal", "callable-suspends-refusal",
     "callable-effect-refusal", "callable-effect-control-refusal", "callable-unproved-refusal",
     "container-view-unproved-refusal", "container-view-query-unproved-refusal", "container-view-element-refusal",
-    "container-view-method-refusal", "container-view-effect-refusal", "container-view-storage-refusal"]
+    "container-view-method-refusal", "container-view-effect-refusal", "container-view-storage-refusal",
+    "container-view-iteration-unproved-refusal", "container-view-concat-unproved-refusal",
+    "container-view-iteration-element-refusal", "container-view-iteration-effect-refusal",
+    "container-view-iteration-effect-control-refusal"]
   let mut failures := 0
-  let cases := (positive ++ fifo ++ methodValues ++ callables ++ containers ++ negative).map (fun name => (name, fifo.contains name, name)) ++
+  let cases := (positive ++ fifo ++ methodValues ++ callables ++ containers ++ iterators ++ negative).map (fun name => (name, fifo.contains name, name)) ++
     ["fifo-bound-sleep", "fifo-bound-sleep-control"].map (fun name => (name, false, name ++ "-default"))
   for (name, eventFifo, artifact) in cases do
     let root := s!"tests/upper-bounds/{name}"
@@ -100,6 +106,13 @@ def main (args : List String) : IO Unit := do
           IO.eprintln s!"FAIL {name}: Core admission or independent output oracle"
           failures := failures + 1
         else
+          if iterators.contains name then
+            match parseProgram source >>= fun tops =>
+                elabProgram tops { eventFifo, profile := .choiceFree } with
+            | .error message =>
+              unless (message.splitOn "--no-choice excludes for").length > 1 do
+                throw (IO.userError s!"{artifact}: wrong choice-free refusal: {message}")
+            | .ok _ => throw (IO.userError s!"{artifact}: --no-choice admitted collection iteration")
           if profiled.contains name then
             let strict ← match parseProgram source >>= fun tops =>
                 elabProgram tops { eventFifo, profile := .choiceFree } with

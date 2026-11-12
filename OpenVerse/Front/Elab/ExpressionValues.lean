@@ -84,6 +84,12 @@ partial def elabExprValuesWith
     return ⟨← ratCall ctx p "$ratMake" es, .rational⟩
   | .bin p op a b =>
     let ra := widenR ctx.types (← elabE ctx a none)
+    let arrayView (value : R) : EM R :=
+      if op == "+" then elabContainerReceiverWith elabE ctx p value (fun
+        | .arr _ => true
+        | _ => false) "concatenation"
+      else pure value
+    let ra ← arrayView ra
     let rb ← match op, ra.ty with
       | "+", .arr _ =>
         -- (an array of other classes, to join, #67)
@@ -100,6 +106,7 @@ partial def elabExprValuesWith
           tryCatch (elabE c2 b (some ra.ty)) fun _ => elabE c2 b none
       | _, _ => elabE ctx b (some ra.ty)
     let rb := widenR ctx.types rb
+    let rb ← arrayView rb
     if ra.ty == .rational || rb.ty == .rational then
       let prim ← match op with
         | "+" => pure Prim.add | "-" => pure Prim.sub | "*" => pure Prim.mul
