@@ -1,0 +1,11 @@
+wait B
+wait br
+wait A
+wait Main
+signal 7
+returned 7
+got B 7
+got br 7
+got A 7
+got Main 7
+exit=0

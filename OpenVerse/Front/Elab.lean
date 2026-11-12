@@ -72,7 +72,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   let usesConc := usesSub || uses.contains "$suspends" || PreludeNeeds.names.any needs
   -- Keep source overrides, but isolate helper dependencies from them: builtin
   -- sticky_event still extends the builtin event when source owns event.
-  let helpers := helpers ++ (← if usesConc then concTops privateNames else pure []) ++
+  let helpers := helpers ++ (← if usesConc then concTops privateNames opts.eventFifo else pure []) ++
     (← if usesSub then subTops privateNames else pure []) ++ (← if usesSubVoid then subVoidTops privateNames else pure [])
   -- Collect source contracts while every declaration still has its source
   -- identity. Function-value classes, continuation frames and constructor
@@ -1657,6 +1657,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     let (fns1, slotTys1, fsigs1, classTable1, frameClasses1, mainCall1, framePins1, schedMore) ←
       lowerOpening fun forced =>
         lowerConcurrency env sigs gsigs mainSig fsigs0 protos pins inFn fns slotTys fsigs classTable forced frameInfo
+          opts.eventFifo
     if !schedMore.isEmpty then
       let schedTag := env.tagOf "$sched"
       protoList := protoList.map fun (t, vs) => if t == schedTag then (t, vs ++ schedMore) else (t, vs)
@@ -1857,12 +1858,12 @@ def compile (src : String) (opts : Options := {}) : Except String Prog := do
 /-- Compile loaded definitions (`Front.loadProgram`) with shell arguments,
     bound to `Args` when given or mentioned, and an optional `do` expression. -/
 def compileTops (tops : List STop) (args : List String) (mentionsArgs : Bool) (doExpr : Option String)
-    (debug : Bool := false) (profile : SourceProfile := .full) : Except String Prog := do
+    (debug : Bool := false) (profile : SourceProfile := .full) (eventFifo : Bool := false) : Except String Prog := do
   let entry ← match doExpr with
     | some t => some <$> parseExprText t
     | none => pure none
   let useArgs := !args.isEmpty || mentionsArgs
-  return (← elabProgram tops { args := if useArgs then some args else none, entry, debug, profile }).prog
+  return (← elabProgram tops { args := if useArgs then some args else none, entry, debug, profile, eventFifo }).prog
 
 /-- Compile with shell arguments (bound to `Args` when given or used) and an
     optional `do` expression, as `openverse run FILE ARG… do EXPR` does. -/

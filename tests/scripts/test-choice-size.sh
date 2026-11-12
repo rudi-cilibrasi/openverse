@@ -8,6 +8,15 @@ tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
 limit="${CHOICE_SIZE_TIMEOUT:-120}"
 # Keep modes sorted on separate lines so independent additions merge cleanly.
 kinds=(
+  alias-block-first
+  alias-block-for
+  alias-block-waiting
+  alias-clauses-first
+  alias-clauses-for
+  alias-clauses-waiting
+  alias-generic-first
+  alias-generic-for
+  alias-generic-waiting
   binding
   bound-failure
   bound-first
@@ -288,6 +297,32 @@ if kind == 'heterogeneous-nested-for':
         body = f'for(A{i}:=(Dup(1)|Dup("s"))):' + body
     print('    Rows:=' + body)
     print('    Print("{Rows.Length}")')
+    sys.exit(0)
+if kind.startswith('alias-'):
+    _, shape, mode = kind.split('-')
+    waiting = mode == 'waiting'
+    effects = '<suspends>' if waiting else ''
+    print('Dup(X:t where t:type)<computes>:t=X|X')
+    for cls in ['ca','cb']:
+        params = 'Ignored:u where u:type' if shape == 'generic' else ''
+        print(cls + ':=class{K:int=1;M(' + params + ')<computes>' + effects + ':' + cls + '=block{' + ('Sleep(0.0);' if waiting else '') + 'Self}}')
+    clauses=[]; aliases=[]
+    for i in range(count):
+        clauses.append(f'A{i}:=(Dup(ca{{}})|Dup(cb{{}}))')
+        declarations=[f'B{i}:=A{i}',f'C{i}:=B{i}']
+        if shape == 'clauses':
+            clauses.extend(declarations)
+        else:
+            aliases.extend(declarations)
+    terms=[f'C{i}.K+C{i}.M(' + (f'C{(i+1)%count}' if shape == 'generic' else '') + ').K' for i in range(count)]
+    value='block{'+';'.join(aliases+['+'.join(terms)])+'}'
+    print(f'Run(){effects}:int=')
+    if mode=='first':
+        print('    if('+','.join(clauses)+',V:='+value+',V>0)then V else -1')
+    else:
+        print('    Rows:=for('+','.join(clauses)+'):'+value)
+        print('    Rows.Length')
+    print(f'Main(){effects}:void=Print("{{Run()}}")')
     sys.exit(0)
 if kind.startswith('member-'):
     shape, mode = '-'.join(kind.split('-')[1:-1]), kind.split('-')[-1]
@@ -1333,6 +1368,15 @@ PY
       fi
       exit 1
     }
+    if [[ $kind == alias-* && $count == 4 ]]; then
+      expected=256
+      [[ $kind == *-first ]] && expected=8
+      printf '%s\n' "$expected" >"$tmp/expected"
+      timeout "$limit" "$root/.lake/build/bin/openverse" run "$tmp/p.verse" >"$tmp/lean.out"
+      timeout "$limit" "$root/runtime/build/cverse" "$tmp/p.vbc" >"$tmp/c.out"
+      diff -u "$tmp/expected" "$tmp/lean.out"
+      diff -u "$tmp/expected" "$tmp/c.out"
+    fi
     sizes+=("$(wc -c <"$tmp/p.vbc")")
   done
   if (( sizes[1] > 3 * sizes[0] )); then

@@ -127,8 +127,27 @@ raceMark(A:[]void)<suspends><computes>:void = {}
 rushMark(A:[]void)<suspends><computes>:void = {}
 "
 
-def concTops (owned : List String := []) : Except String (List STop) :=
-  parsePrelude concPrelude (owned ++ ["sched", "Now", "Next", "sleep", "Pc", "Secs", "Wake", "sleepNew",
+/-- (#513) `concPrelude` for FIFO event resumption: the scheduler keeps the
+    root running (`CurRoot`) and a list of the waiters `Signal` woke, in
+    its order (`WokenHead`, `WokenTail`, each task's `WokenNext`); a waiter
+    records the root it waits in (`WaitRoot`). The lowering patches the two
+    root fields' types to its roots' and runs the woken ones' roots in that
+    order (`lowerConcurrency`); the prelude's code never reads them. -/
+def concPreludeFifo : String :=
+  let s := concPrelude
+  let s := s.replace "    var CurTask:taskBase = taskBase{}\n"
+    "    var CurTask:taskBase = taskBase{}\n    var CurRoot:?int = false\n    var WokenHead:?taskBase = false\n    var WokenTail:?taskBase = false\n"
+  let s := s.replace "    var CancelReq:logic = false\n"
+    "    var CancelReq:logic = false\n    var WaitRoot:?int = false\n    var WokenNext:?taskBase = false\n"
+  -- (only a waiter this `Signal` wakes: a record already done, of a wait
+  -- that was cancelled, which its `defer:` marked, is no waiter)
+  let s := s.replace "            set W.Got = option{X}\n            set W.Done = true\n            if (S := W.Sch?) then set S.Progress = true\n"
+    "            WasDone := W.Done\n            set W.Got = option{X}\n            set W.Done = true\n            if (S := W.Sch?):\n                set S.Progress = true\n                if (not WasDone?):\n                    set W.WokenNext = false\n                    if (WT := S.WokenTail?) then set WT.WokenNext = option{W} else set S.WokenHead = option{W}\n                    set S.WokenTail = option{W}\n"
+  s
+
+def concTops (owned : List String := []) (fifo : Bool := false) : Except String (List STop) :=
+  parsePrelude (if fifo then concPreludeFifo else concPrelude) (owned ++ (if fifo then ["CurRoot", "WokenHead",
+    "WokenTail", "WaitRoot", "WokenNext", "WT", "WasDone"] else []) ++ ["sched", "Now", "Next", "sleep", "Pc", "Secs", "Wake", "sleepNew",
     "sleepInit", "sleepResume", "Sleep", "Round", "Ticks", "syncMark", "raceMark", "S", "F", "C", "N", "R", "A",
     "Progress", "Roots", "taskBase", "Done", "Result", "waitf", "T", "X", "waitNew", "waitInit", "waitResume",
     "WaitDone", "Await", "spawnMark", "t", "Sch", "Dead", "evrec", "Got", "Next", "Head", "Tail", "Cur", "W", "L", "V",

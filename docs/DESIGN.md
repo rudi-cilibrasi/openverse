@@ -141,7 +141,7 @@ not an `array{a₀, …}`, which would run `aₙ₋₁` before `a₀`'s value wa
   - The immediate shared path retains copies when a `break` leaves the suffix or the selected binding is a `var`. Unsupported staged contexts retain their source fallback.
   - A method's `(super:)` calls carry `$sourceSuper` metadata with the source class, method slot and an explicit `Self` capture. Elaboration restores that lookup scope at the call, so overloads are selected using the helper's actual argument types and the source method's inherited implementations. The same metadata serves first-success helpers, `for` continuations and refining casts; it disappears before Verse Core checking and suspension lowering.
   - Heterogeneous composed alternatives can share a polymorphic continuation. Structural generalization retains common array, option, tuple, map and nominal heads, and abstracts the varying parts into fresh type parameters. Equal columns share a parameter (`tuple(int,int)` and `tuple(string,string)` become `tuple(T,T)`). A fresh parameter is comparable only if every alternative is comparable. The suffix must type check with those parameters; operations requiring a specific alternative's static type retain copies. A common class view is also safe when every use of the selected binding is a direct field access and every alternative gives those fields exactly the view's instantiated types. Method calls and bare values keep their original types.
-  - Opaque receiver types can supply checked operation dictionaries for ordinary method calls. Each adapter invokes the method at the alternative's original receiver and parameter types. Argument and result columns extend the input's equations and comparable bounds. Dictionary objects carry any opened type witnesses; generated `$apply` methods recover them under the same checked protocol as bound-function values. Explicit arguments stay in the caller, preserving their order, rollback and suspension. A canonical dictionary family and one shared apply function serve each set of method contracts, so dispatch is compiled once per family. Only dictionary construction is an implementation allocation; user argument expressions retain their ordinary effects. Named defaults and method-local type parameters still use the copied path, as do receiver expressions or suffix operations that the current abstraction cannot type.
+  - Opaque receiver types can supply checked operation dictionaries for ordinary method calls. Each adapter invokes the method at the alternative's original receiver and parameter types. Argument and result columns extend the input's equations and comparable bounds. Dictionary objects carry any opened type witnesses; generated `$apply` methods recover them under the same checked protocol as bound-function values. Explicit arguments stay in the caller, preserving their order, rollback and suspension. A canonical dictionary family and one shared apply function serve each set of method contracts, so dispatch is compiled once per family. Only dictionary construction is an implementation allocation; user argument expressions retain their ordinary effects. Method-local type parameters are quantified at each dictionary invocation; class-dependent columns stay fixed on its object. Member discovery follows immutable unannotated alias chains in lexical order through blocks, `for` clauses and `if` conditions. It retains the actual alias values and source declarations, passing their abstract types only to disposable discovery probes. Child-scope aliases do not reach sibling expressions. Named defaults and suffix operations that the current abstraction cannot type retain copies.
   - Generic helper calls infer their input instance before their result is normalized to the caller's joined type. Generated packets join field by field, so an erased heterogeneous value does not erase flags, mutable copy-outs or other result fields. The last heterogeneous generator can need this normalization even without another composed choice after it; homogeneous last generators retain their existing path.
   - Constructor-instance discovery visits the original alternative contexts before heterogeneous sharing. Otherwise a disposable generic trial can hide the concrete instances needed by lifted field defaults.
   - Copies also remain inside a function of its own of a call taken lazily that allows fewer effects than the function the continuation was asked for in.
@@ -1248,6 +1248,22 @@ done (woken, or of waits that were cancelled, which mark their record in a
 `X` to every record in the list, marks it done, and empties the list. A record learns the scheduler on its first poll, so
 `Signal`, which has no scheduler of its own, can make the scheduler pass
 again in the same tick.
+
+**FIFO resumption (opt-in, `Options.eventFifo`, `--event-fifo`, #513).**
+The prelude is `concPreludeFifo`: the scheduler keeps the root running
+(`$CurRoot`, set by `$Run` around `Main`'s and each root's run, and by a
+spawn's or branch's `start` around its first run) and a list of the
+waiters `Signal` woke (`$WokenHead`/`$WokenTail`, each `$taskBase`'s
+`$WokenNext`), which `signalAll` appends to in the event's order. A waiter
+records the root it waits in (`$WaitRoot`) each time `$waitResume` polls
+it: a statement the lowering adds after its slots' initialisations, as the
+two root fields are typed `?rootAny` only in the class table (the
+prelude's code never touches them, so no temporary of their written type,
+`?int`, holds one). After `Main`'s run and after each root's in a pass,
+`$Run` drains the list: each woken waiter's root, not done, runs (`Main`
+at its turn too), and the waiters those runs wake join the same loop. The
+default prelude and lowering are unchanged, so a program compiled without
+the option is byte-identical to before.
 
 The roots are a list of cells `[root, next]` (adding one costs a cell; an
 array would be copied at each spawn, and C keeps every copy). A pass follows

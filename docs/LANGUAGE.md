@@ -1706,7 +1706,20 @@ Main()<suspends>:void =
   waiting at that moment, each with `X` (the API's reading; the Book's text
   says both "each awaiter" and "exactly one"). The woken tasks go on in the
   scheduler's order (`Main`, then tasks in the order they were started,
-  arms in source order), not in the order they began waiting. A `Signal` with no one waiting is lost, and `Signal`
+  arms in source order), not in the order they began waiting. With
+  `--event-fifo` (`openverse run` and `emit`, opt-in until a default is
+  chosen, #513) they go on in the order they began waiting, the published
+  API's: once the task that signalled waits or ends (`Signal` returns
+  first), each woken task's turn comes in that order, before the
+  scheduler's own order goes on; tasks they wake take their turns after
+  them. A task is a spawned task, `Main` or a `branch`; waiters in the arms
+  of one task's `sync`, `race` or `rush` go on when their task does, at the
+  turn of the first of them to have waited, in the arms' order; a `rush`
+  arm that goes on after the `rush` (a task of its own then), signalled
+  before its first turn as one, goes on at its turn in the scheduler's
+  order. A waiter cancelled before its turn does not go on, and a wait
+  cancelled before the `Signal` (a `race` it lost) is no waiter; once
+  `Main` ends, so does the program, also in the middle of the turns. A `Signal` with no one waiting is lost, and `Signal`
   itself never waits. `event()` is an event without a value (`event(void)`),
   with `E.Signal()` and `E.Await()`. A `sticky_event(t)` (or
   `sticky_event()`) is an event that keeps its last signal: an `Await`
@@ -1824,7 +1837,7 @@ Main()<suspends>:void =
 | `Sleep(S)` rounding | no fixed 30 Hz rounding rule in the pinned chapter or cited Epic timing description | binary64 `Round(30·S)`, ties to even, at least one tick: `Sleep(0.1)` stays at 3 ticks despite binary floats (#156); bounded inputs and checked clock accumulation follow the explicit reference policy above (#514) |
 | End of a program with tasks | not stated | the program ends when `Main` does; a `Main` that waits with no task able to run is an error (exit 2) (#156) |
 | Order of a `subscribable_event`'s functions | not stated (ch. 14's example lists them in subscription order) | subscription order; the tasks awaiting the event are woken first and go on after `Signal` returns (#210) |
-| Event waiter resumption | Epic's event/Signal API specifies suspension order | Main/spawn/source-arm scheduler order; FIFO compatibility and the Signal-return boundary are tracked in #513 |
+| Event waiter resumption | Epic's event/Signal API specifies suspension order | Main/spawn/source-arm scheduler order by default; with `--event-fifo`, suspension order across tasks, after `Signal` returns and the signalling task waits (arms of one task in arm order); the default is undecided (#513) |
 | Signal in a failure context | the published Signal API describes no_rollback, alongside rendered transacts bits; versioned compiler behavior needs separate evidence | transactional Signal and callbacks are allowed and rolled back; an engine-compatible admission policy is tracked in #515 |
 | Extent of a `<#>` comment | "everything indented by four spaces on subsequent lines" (§1.1) | the rest of the `<#>` line and every following line indented more than that line, whatever the amount (blank lines included); `<#>` may also follow code on a line |
 
