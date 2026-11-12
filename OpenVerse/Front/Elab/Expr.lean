@@ -1399,10 +1399,19 @@ partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
       let bindX ← coerce p ⟨lg.value, lg.vty⟩ ty
       let done ← fresh .logic
       let vd : Expr := .lit .void
+      let take : Expr := .ite (.seq (.assign x bindX) (.seq inner Expr.failV)) vd vd
+      -- (#283) a value that comes to a continuation member's choice point
+      -- breaks out of `take`, keeping what it did, with `bnd` set; so does
+      -- a success (or a source break), with it unset, which leaves the loop
+      let take : Expr := match lg.bnd with
+        | some b => .seq (.assign b (.lit (.logic false)))
+            (.seq (.loop (.seq take (.seq (.assign b (.lit (.logic true))) Expr.brkV)))
+              (.ite (.prim .query [.local b]) vd Expr.brkV))
+        | none => take
       let body : Expr := .seq
         (.ite (p2 .eq (.local lg.sp) (.lit (.int 0))) (.seq (.assign done (.lit (.logic true))) Expr.brkV) vd)
         (.seq lg.step (.ite (.prim .query [.local lg.has])
-          (.seq (.ite (.seq (.assign x bindX) (.seq inner Expr.failV)) vd vd) lg.after) vd))
+          (.seq take lg.after) vd))
       return (.seq lg.init (.seq (.assign done (.lit (.logic false))) (.seq (.loop body)
         (.ite (p2 .eq (.local done) (.lit (.logic false))) Expr.brkV vd))), c2)
     | some b@{ each := some arr, .. } =>
@@ -1606,6 +1615,10 @@ partial def elabLoopGen (ctx : Ctx) (p : Pos) (lp : List SExpr) : EM LoopGen := 
       let has ← fresh .logic
       return { init := .lit .void, step := .lit .void, sp, has, value := .prim .fail [],
                after := .lit .void, vty := ← resolveTy ctx.types p rsty, itemCode := .lit .void, argSet := none }
+  -- (#283) one whose code after a choice point reaches another: its
+  -- continuation members are the group machine's, with it alone in it
+  if Choice.hasContinuation tail then
+    return ← elabLoopGenGroupWith elabE elabSeq ctx p g ps cls rsty tail []
   let vd : Expr := .lit .void
   -- (the parameters, bound by the consumer's clauses: the loop has slots
   -- of its own for them, so that the call, run again by a loop of its
