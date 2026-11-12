@@ -8,6 +8,42 @@ tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
 limit="${CHOICE_SIZE_TIMEOUT:-120}"
 # Keep modes sorted on separate lines so independent additions merge cleanly.
 kinds=(
+  multiindex-plain-simple-first
+  multiindex-plain-simple-for
+  multiindex-plain-simple-waiting
+  multiindex-plain-numeric-first
+  multiindex-plain-numeric-for
+  multiindex-plain-numeric-waiting
+  multiindex-plain-contextual-first
+  multiindex-plain-contextual-for
+  multiindex-plain-contextual-waiting
+  multiindex-plain-mapmap-first
+  multiindex-plain-mapmap-for
+  multiindex-plain-mapmap-waiting
+  multiindex-plain-arraymap-first
+  multiindex-plain-arraymap-for
+  multiindex-plain-arraymap-waiting
+  multiindex-plain-maparray-first
+  multiindex-plain-maparray-for
+  multiindex-plain-maparray-waiting
+  multiindex-compound-simple-first
+  multiindex-compound-simple-for
+  multiindex-compound-simple-waiting
+  multiindex-compound-numeric-first
+  multiindex-compound-numeric-for
+  multiindex-compound-numeric-waiting
+  multiindex-compound-contextual-first
+  multiindex-compound-contextual-for
+  multiindex-compound-contextual-waiting
+  multiindex-compound-mapmap-first
+  multiindex-compound-mapmap-for
+  multiindex-compound-mapmap-waiting
+  multiindex-compound-arraymap-first
+  multiindex-compound-arraymap-for
+  multiindex-compound-arraymap-waiting
+  multiindex-compound-maparray-first
+  multiindex-compound-maparray-for
+  multiindex-compound-maparray-waiting
   mapwrite-plain-simple-first
   mapwrite-plain-simple-for
   mapwrite-plain-simple-waiting
@@ -430,6 +466,33 @@ for kind in "${kinds[@]}"; do
     python3 - "$kind" "$count" >"$tmp/p.verse" <<'PY'
 import sys
 kind, count = sys.argv[1], int(sys.argv[2])
+if kind.startswith('multiindex-'):
+    _,op,shape,mode=kind.split('-')
+    n=count
+    print('Dup(X:t where t:type)<computes>:t=X|X')
+    for cls,kind in [('ca','a'),('cb','b')]:
+        leaf='rational' if shape=='numeric' and kind=='b' else '[]string' if shape=='contextual' and kind=='b' else '[]int' if shape=='contextual' else 'int'
+        value='array{"s"}' if shape=='contextual' and kind=='b' else 'array{1}' if shape=='contextual' else '1'
+        kt='string' if kind=='b' else 'int';key='"k"' if kind=='b' else '0'
+        if shape=='mapmap':ty='['+kt+']['+kt+']'+leaf;initial='map{'+key+'=>map{'+key+'=>'+value+'}}'
+        elif shape=='arraymap':ty='[]['+kt+']'+leaf;initial='array{map{'+key+'=>'+value+'}}'
+        elif shape=='maparray':ty='['+kt+'][]'+leaf;initial='map{'+key+'=>array{'+value+'}}'
+        else:ty='[][]'+leaf;initial='array{array{'+value+'}}'
+        methods=';Key()<computes>:'+kt+'='+key if shape in ['mapmap','arraymap','maparray'] else ''
+        print(cls+':=class{var Data:'+ty+'='+initial+methods+'}')
+    clauses=[f'A{i}:=(Dup(ca{{}})|Dup(cb{{}}))' for i in range(n)]
+    writes=[]
+    for i in range(n):
+        key=f'A{i}.Key()'
+        indices=[key,key] if shape=='mapmap' else ['0',key] if shape=='arraymap' else [key,'0'] if shape=='maparray' else ['0','0']
+        writes.append('set '+f'A{i}.Data'+''.join('['+k+']' for k in indices)+('+=' if op=='compound' else '=')+('array{}' if shape=='contextual' else '1'))
+    print('Run()'+('<suspends>' if mode=='waiting' else '')+':int=')
+    if mode=='first':print('    if('+','.join(clauses+writes)+')then 1 else -1')
+    else:
+        body='block{if('+','.join(writes)+'):{};Sleep(0.001);0}' if mode=='waiting' else '0'
+        print('    Rows:=for('+','.join(clauses+([] if mode=='waiting' else writes))+'):'+body+'\n    Rows.Length')
+    print('Main()'+('<suspends>' if mode=='waiting' else '')+':void=Print("{Run()}")')
+    sys.exit(0)
 if kind.startswith('mapwrite-'):
     _, op, shape, mode = kind.split('-')
     n = count
@@ -1832,7 +1895,7 @@ PY
       diff -u "$tmp/expected" "$tmp/lean.out"
       diff -u "$tmp/expected" "$tmp/c.out"
     fi
-    if [[ ( $kind == named-* || $kind == conversion-* || $kind == indexwrite-* || $kind == compoundindex-* || $kind == mapwrite-* ) && $count == 4 ]]; then
+    if [[ ( $kind == named-* || $kind == conversion-* || $kind == indexwrite-* || $kind == compoundindex-* || $kind == mapwrite-* || $kind == multiindex-* ) && $count == 4 ]]; then
       expected=256
       if [[ $kind == *-first ]]; then
         expected=1

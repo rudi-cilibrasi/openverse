@@ -20,11 +20,14 @@ p.add_argument('--indexed-writes', action='store_true')
 p.add_argument('--compound-index-writes', action='store_true')
 p.add_argument('--map-writes', action='store_true')
 p.add_argument('--compound-map-writes', action='store_true')
+p.add_argument('--multiple-index-writes', action='store_true')
+p.add_argument('--compound-multiple-index-writes', action='store_true')
 a = p.parse_args()
+a.multiple_index_writes = a.multiple_index_writes or a.compound_multiple_index_writes
 a.map_writes = a.map_writes or a.compound_map_writes
-a.compound_index_writes = a.compound_index_writes or a.compound_map_writes
+a.compound_index_writes = a.compound_index_writes or a.compound_map_writes or a.compound_multiple_index_writes
 a.indexed_writes = a.indexed_writes or a.compound_index_writes
-a.indexed_writes = a.indexed_writes or a.map_writes
+a.indexed_writes = a.indexed_writes or a.map_writes or a.multiple_index_writes
 a.writes = a.writes or a.nested_writes or a.numeric_writes or a.indexed_writes
 a.aliases = a.aliases or ((a.writes or a.result_aliases or a.named_methods) and a.seed % 2 == 0)
 a.members = a.members or a.aliases or a.writes or a.result_aliases
@@ -162,7 +165,7 @@ if a.methods:
         score_value = 'IndexedValue' if a.indexed_writes else 'Floor(K)' if numeric_rat else 'K'
         print('    H:cell\n    ' + ('var ' if a.members or a.callable_fields or a.writes else '') + 'K:' + ('rational' if numeric_rat else 'int') + ('\n    V:t' if generic else ''))
         if a.indexed_writes:
-            print('    var Data:' + ('[int]int' if a.map_writes else '[]int'))
+            print('    var Data:' + ('[int]int' if a.map_writes else '[][]int' if a.multiple_index_writes else '[]int'))
         if a.callable_fields:
             callback_effects = '<reads><writes>' if kind == 'a' else '<transacts>'
             print('    F:type{_(:cell,:int' + (',:int' if method_arguments else '') + ')' + callback_effects + ':int}')
@@ -176,7 +179,7 @@ if a.methods:
         result = ('result_' if a.result_aliases else '') + name + ('(t)' if generic else '') if a.members else 'int'
         print('    ' + method + '(' + ','.join(method_params) + ')<transacts>:' + result + '=')
         if a.indexed_writes:
-            print('        IndexedValue:=if(Item:=Data[0])then Item else 0')
+            print('        IndexedValue:=if(Item:=Data[0]' + ('[0]' if a.multiple_index_writes else '') + ')then Item else 0')
         print('        Print("m ' + kind + ' {' + score_value + '}")')
         print('        set H.N+=' + ('1' if kind == 'a' else '2') + '*(' + score_value + '+1)' + ('+Arg' if method_arguments else ''))
         returned = 'result_'+name+('(t)' if generic else '')+'{K:=K'+(',V:=V' if generic else '')+'}' if a.result_aliases else 'Self' if a.members else score_value
@@ -212,7 +215,7 @@ def payload(s, j):
         numeric_value = f'({2*s+1}/2)' if a.numeric_writes and j == 1 else str(s)
         value = name + ('(t)' if generic else '') + '{H:=H,K:=' + numeric_value + (',V:=X' if generic else '') + (',F:=Callback' + str(j) if a.callable_fields else '') + '}'
         if a.indexed_writes:
-            value = value[:-1] + (f',Data:=map{{0=>{s}}}' if a.map_writes else f',Data:=array{{{s}}}') + '}'
+            value = value[:-1] + (f',Data:=map{{0=>{s}}}' if a.map_writes else f',Data:=array{{array{{{s}}}}}' if a.multiple_index_writes else f',Data:=array{{{s}}}') + '}'
         return 'holder_'+name+('(t)' if generic else '')+'{C:='+value+'}' if a.nested_writes else value
     if a.control:
         return str(s)
@@ -245,8 +248,9 @@ for i, d in enumerate(levels):
         if a.nested_writes and not a.control:
             receiver += '.C'
         if a.indexed_writes and not a.control:
-            clauses.append(f'set {receiver}.Data[0]+=WriteArgument(H,{i+1})' if a.compound_index_writes else
-                           f'set {receiver}.Data[0]={receiver}.Data[0]+WriteArgument(H,{i+1})')
+            target = receiver + '.Data[0]' + ('[0]' if a.multiple_index_writes else '')
+            clauses.append(f'set {target}+=WriteArgument(H,{i+1})' if a.compound_index_writes else
+                           f'set {target}={target}+WriteArgument(H,{i+1})')
         else:
             clauses.append(f'set {receiver}.K+=WriteArgument(H,{i+1})')
     if a.result_aliases:
