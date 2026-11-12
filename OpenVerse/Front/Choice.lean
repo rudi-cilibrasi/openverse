@@ -183,23 +183,11 @@ partial def rootName? : SExpr → Option String
   | _ => none
 
 /-- The names that `set` writes inside `e`. -/
-partial def setsIn : SExpr → List String
-  | .set _ l _ r => ((rootName? l).map ([·])).getD [] ++ setsIn l ++ setsIn r
-  | .app _ f as _ => setsIn f ++ as.flatMap setsIn
-  | .member _ e _ | .query _ e | .neg _ e | .notE _ e | .optionLit _ e | .logicLit _ e | .loop _ e => setsIn e
-  | .bin _ _ a b | .andE _ a b | .orE _ a b | .range _ a b => setsIn a ++ setsIn b
-  | .cmp _ a rest => setsIn a ++ rest.flatMap (setsIn ·.2)
-  | .tuple _ es | .block _ es | .arrayLit _ es => es.flatMap setsIn
-  | .ite _ cs t e => cs.flatMap setsIn ++ setsIn t ++ ((e.map setsIn).getD [])
-  | .forE _ cs b => cs.flatMap setsIn ++ setsIn b
-  | .gen _ _ _ s => setsIn s
-  | .ret _ e => (e.map setsIn).getD []
-  | .caseE _ s arms => setsIn s ++ arms.flatMap fun (p, v) => ((p.map setsIn).getD []) ++ setsIn v
-  | .decl _ _ _ _ e => setsIn e
-  | .construct _ _ _ fs => fs.flatMap setsIn
-  | .mapLit _ kvs => kvs.flatMap fun (k, v) => setsIn k ++ setsIn v
-  | .str _ ps => ps.flatMap fun | .code c => setsIn c | .text _ => []
-  | _ => []
+partial def setsIn (e : SExpr) : List String :=
+  let here := match e with
+    | .set _ l _ _ => (rootName? l).toList
+    | _ => []
+  here ++ e.children.flatMap setsIn
 
 /-- The names a clause list binds (so values, for `stable` and the heads
     of calls). -/
@@ -471,22 +459,10 @@ partial def exclToChoice (e : SExpr) (deep : Bool := false) : SExpr :=
         | a => a) false)
     | _ => none) e
 
-/-- Whether some subexpression satisfies `pr` (through `mapE`). -/
+/-- Whether `e` or a subexpression of it (`SExpr.children`, at any depth)
+    satisfies `pr`. -/
 partial def anyE (pr : SExpr → Bool) (e : SExpr) : Bool :=
-  pr e || match e with
-    | .str _ ps => ps.any fun | .code c => anyE pr c | _ => false
-    | .app _ g as _ => anyE pr g || as.any (anyE pr)
-    | .member _ x _ | .query _ x | .neg _ x | .notE _ x | .optionLit _ x | .logicLit _ x | .loop _ x
-    | .gen _ _ _ x | .decl _ _ _ _ x => anyE pr x
-    | .bin _ _ a b | .andE _ a b | .orE _ a b | .range _ a b | .set _ a _ b => anyE pr a || anyE pr b
-    | .cmp _ a r => anyE pr a || r.any (anyE pr ·.2)
-    | .tuple _ es | .block _ es | .arrayLit _ es | .construct _ _ _ es => es.any (anyE pr)
-    | .ite _ cs t e' => cs.any (anyE pr) || anyE pr t || (e'.map (anyE pr)).getD false
-    | .forE _ cs b => cs.any (anyE pr) || anyE pr b
-    | .ret _ x => (x.map (anyE pr)).getD false
-    | .caseE _ sc arms => anyE pr sc || arms.any fun (pt, v) => ((pt.map (anyE pr)).getD false) || anyE pr v
-    | .mapLit _ kvs => kvs.any fun (k, v) => anyE pr k || anyE pr v
-    | _ => false
+  pr e || e.children.any (anyE pr)
 
 /-- The statements of a body. -/
 def stmtsOf : SExpr → List SExpr
@@ -504,25 +480,13 @@ def markCalls (mv : List String) : SExpr → SExpr :=
 
 /-- The names a body binds (its locals), each where it is bound, struct
     fields and named arguments aside. -/
-partial def localDecls (e : SExpr) : List (String × Pos) :=
-  let rec go : SExpr → List (String × Pos)
-    | .app _ (.ident _ "$constructHints") _ false => []
-    | .decl p n _ _ x => (if n.startsWith "?" then [] else [(n, p)]) ++ go x
-    | .gen p x i src => (x :: i.toList).map (·, p) ++ go src
-    | .construct _ _ _ fs => fs.flatMap fun | .decl _ _ _ _ x => go x | a => go a
-    | .str _ ps => ps.flatMap fun | .code c => go c | _ => []
-    | .app _ g as _ => go g ++ as.flatMap go
-    | .member _ x _ | .query _ x | .neg _ x | .notE _ x | .optionLit _ x | .logicLit _ x | .loop _ x => go x
-    | .bin _ _ a b | .andE _ a b | .orE _ a b | .range _ a b | .set _ a _ b => go a ++ go b
-    | .cmp _ a r => go a ++ r.flatMap (go ·.2)
-    | .tuple _ es | .block _ es | .arrayLit _ es => es.flatMap go
-    | .ite _ cs t e' => cs.flatMap go ++ go t ++ ((e'.map go).getD [])
-    | .forE _ cs b => cs.flatMap go ++ go b
-    | .ret _ x => (x.map go).getD []
-    | .caseE _ sc arms => go sc ++ arms.flatMap fun (pt, v) => ((pt.map go).getD []) ++ go v
-    | .mapLit _ kvs => kvs.flatMap fun (k, v) => go k ++ go v
-    | _ => []
-  go e
+partial def localDecls : SExpr → List (String × Pos)
+  | .app _ (.ident _ "$constructHints") _ false => []
+  | .decl p n _ _ x => (if n.startsWith "?" then [] else [(n, p)]) ++ localDecls x
+  | .gen p x i src => (x :: i.toList).map (·, p) ++ localDecls src
+  -- (a construction's field bindings name its fields)
+  | .construct _ _ _ fs => fs.flatMap fun | .decl _ _ _ _ x => localDecls x | a => localDecls a
+  | e => e.children.flatMap localDecls
 
 /-- The names `e` binds, at any depth. -/
 partial def localsOf (e : SExpr) : List String :=
@@ -1209,22 +1173,9 @@ partial def namesUsed (e : SExpr) : List String :=
   let rec go : SExpr → List String
     | .app _ (.ident _ "$constructHints") _ false => []
     | .ident _ n => [n]
-    | .decl _ _ _ _ x => go x
-    | .gen _ _ _ src => go src
-    | .construct _ _ _ fs => fs.flatMap fun | .decl _ _ _ _ x => go x | a => go a
-    | .str _ ps => ps.flatMap fun | .code c => go c | _ => []
-    | .app _ g as _ => go g ++ as.flatMap go
-    | .member _ x _ | .query _ x | .neg _ x | .notE _ x | .optionLit _ x | .logicLit _ x | .loop _ x => go x
-    | .bin _ _ a b | .andE _ a b | .orE _ a b | .range _ a b | .set _ a _ b => go a ++ go b
-    | .cmp _ a r => go a ++ r.flatMap (go ·.2)
-    | .tuple _ es | .block _ es | .arrayLit _ es => es.flatMap go
-    | .ite _ cs t e' => cs.flatMap go ++ go t ++ ((e'.map go).getD [])
-    | .forE _ cs b => cs.flatMap go ++ go b
-    | .ret _ x => (x.map go).getD []
-    | .caseE _ sc arms => go sc ++ arms.flatMap fun (pt, v) => ((pt.map go).getD []) ++ go v
-    | .mapLit _ kvs => kvs.flatMap fun (k, v) => go k ++ go v
+    -- (a struct's field defaults, which `children` leaves out)
     | .structDef _ _ _ fs => fs.flatMap fun (_, _, d, _) => (d.map go).getD []
-    | _ => []
+    | e => e.children.flatMap go
   (go e).eraseDups
 
 /-- Whether a written type mentions one of the names `tps`. -/
