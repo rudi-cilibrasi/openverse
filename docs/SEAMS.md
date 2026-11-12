@@ -88,3 +88,27 @@ encoding on every program they run.
 This seam is structural rather than a formula. The interpreter takes a mark
 exactly where the Lean rules save a state (an `ITE` condition, each `FOR`
 filter), and rolls back exactly where they restore one.
+
+## 4. Rational arithmetic
+
+The four-int forms of `add`, `sub`, `mul` and `quotient` (#489) are defined
+by `ratArith` and `rationalRes` in `Core/Prims.lean`. They compute exact
+integer products/sums, reduce by a gcd, normalize the sign, then check the
+final parts against int64 bounds. Source rational operands have positive
+denominators; malformed nonpositive denominators in raw Core report
+overflow. Division by a zero numerator in the right operand fails.
+
+`runtime/src/prims.c` implements these forms using signed and unsigned
+128-bit integers. Positive int64 operand denominators bound every product
+and sum inside signed 128 bits; unsigned magnitudes avoid signed-negation
+overflow during reduction. This C implementation is **tested, not proved
+by QuickProof**. The existing `arith_exact` law still covers the unchanged
+two-int scalar functions in `arith.c`, and the loader/store pins are unchanged.
+
+The Lean primitive typing and executable checker proofs cover the new
+forms, so checked Core retains its type, scope and control guarantees.
+Those safety proofs do not prove the frontend's mathematical translation
+or equivalence of the C implementation. `scripts/fuzz-rational.sh` uses
+Python's arbitrary-precision `Fraction` as an independent result/error and
+order/rollback oracle, with Lean/C comparisons; C edge tests also run under
+ASan/UBSan.

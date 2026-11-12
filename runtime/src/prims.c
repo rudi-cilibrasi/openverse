@@ -79,6 +79,58 @@ static int new_from(vx_ctx *c, uint64_t tag, const vx_val *src, size_t n, vx_res
     return 1;
 }
 
+/* Exact rational forms of ADD/SUB/MUL/QUOTIENT take four int parts.
+   Positive int64 denominators bound every product and add/sub sum inside
+   signed 128 bits. Reduction precedes the final int64 checks. */
+static void rational(vx_ctx *c, uint32_t op, int64_t a, int64_t b,
+                     int64_t p, int64_t q, vx_res *r)
+{
+    typedef __int128 wide;
+    typedef unsigned __int128 uwide;
+    wide n, d;
+    uwide un, ud, x, y, rem, g, bound;
+    int negative;
+    vx_val parts[2];
+    if (b <= 0 || q <= 0) {
+        vx_res_error(r, VX_E_OVERFLOW);
+        return;
+    }
+    if (op == VX_P_QUOTIENT && p == 0) {
+        vx_res_fail(r);
+        return;
+    }
+    if (op == VX_P_ADD)
+        n = (wide)a * q + (wide)p * b;
+    else if (op == VX_P_SUB)
+        n = (wide)a * q - (wide)p * b;
+    else if (op == VX_P_MUL)
+        n = (wide)a * p;
+    else
+        n = (wide)a * q;
+    d = op == VX_P_QUOTIENT ? (wide)b * p : (wide)b * q;
+    negative = (n < 0) != (d < 0);
+    un = n < 0 ? (uwide)0 - (uwide)n : (uwide)n;
+    ud = d < 0 ? (uwide)0 - (uwide)d : (uwide)d;
+    x = un;
+    y = ud;
+    while (y != 0) {
+        rem = x % y;
+        x = y;
+        y = rem;
+    }
+    g = x;
+    un /= g;
+    ud /= g;
+    bound = negative ? (uwide)INT64_MAX + 1 : (uwide)INT64_MAX;
+    if (un > bound || ud > (uwide)INT64_MAX) {
+        vx_res_error(r, VX_E_OVERFLOW);
+        return;
+    }
+    parts[0] = (vx_val){VX_T_INT, negative ? UINT64_C(0) - (uint64_t)un : (uint64_t)un};
+    parts[1] = (vx_val){VX_T_INT, (uint64_t)ud};
+    new_from(c, VX_T_TUP, parts, 2, r);
+}
+
 /* A string value of the ASCII text s[0..n). */
 static void str_of(vx_ctx *c, const char *s, size_t n, vx_res *r)
 {
@@ -258,6 +310,15 @@ void vx_prim_apply(vx_ctx *c, uint32_t op, uint32_t k, const vx_val *a, size_t n
     int ff = n == 2 && is(&a[0], VX_T_FLOAT) && is(&a[1], VX_T_FLOAT);
     int f1 = n == 1 && is(&a[0], VX_T_FLOAT);
     char fb[48];
+
+    if (n == 4 && (op == VX_P_ADD || op == VX_P_SUB || op == VX_P_MUL || op == VX_P_QUOTIENT)) {
+        if (is(&a[0], VX_T_INT) && is(&a[1], VX_T_INT) &&
+            is(&a[2], VX_T_INT) && is(&a[3], VX_T_INT))
+            rational(c, op, I(&a[0]), I(&a[1]), I(&a[2]), I(&a[3]), r);
+        else
+            vx_res_error(r, VX_E_TYPE);
+        return;
+    }
 
     switch (op) {
     /* | .add, [.int a, .int b] => Res.ofInt (a + b) */

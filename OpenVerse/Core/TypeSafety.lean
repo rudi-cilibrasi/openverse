@@ -416,6 +416,7 @@ theorem VTy.pinsOK_take {ps : List (Option VTy)} {a rest : List VTy}
 theorem PrimTy.subst (θ : Nat → VTy) {op ts τ} (h : PrimTy op ts τ) :
     PrimTy op (ts.map (VTy.subst θ)) (τ.subst θ) := by
   cases h with
+  | rational hop => simpa using PrimTy.rational hop
   | arith hop => simpa using PrimTy.arith hop
   | unary hop => simpa using PrimTy.unary hop
   | cmpInt hop => simpa using PrimTy.cmpInt hop
@@ -928,6 +929,14 @@ theorem hasTy_opt {v t} (h : hasTy Ξ v (.opt t) = true) : v = .none ∨ ∃ w, 
 theorem ResOK_ofInt {ρ} (i : Int) : ResOK Ξ .int ρ (Res.ofInt i) := by
   unfold Res.ofInt; split <;> simp [ResOK, hasTy]
 
+theorem ResOK_rationalRes {ρ} (n d : Int) :
+    ResOK Ξ (.tup [.int, .int]) ρ (rationalRes n d) := by
+  have hc : ∀ p q, ResOK Ξ (.tup [.int, .int]) ρ (checkedRationalRes p q) := by
+    intro p q; unfold checkedRationalRes
+    split <;> simp [ResOK, hasTy, allTys]
+  unfold rationalRes
+  exact hc _ _
+
 theorem flattenArrs_typed : ∀ {xss : List Value} {t}, allTy Ξ xss (.arr t) = true →
     ∃ vs, flattenArrs xss = some vs ∧ allTy Ξ vs t = true
   | [], _, _ => ⟨[], rfl, rfl⟩
@@ -1001,6 +1010,17 @@ theorem cmpRes_ok {b : Bool} {v : Value} {τ ρ} (h : hasTy Ξ v τ = true) : Re
 theorem prim_typed {op ts τ ρ} {vs : List Value} (hp : PrimTy op ts τ) (hv : allTys Ξ vs ts = true) :
     ResOK Ξ τ ρ (op.apply vs) := by
   cases hp with
+  | rational hop =>
+    rcases vs with _ | ⟨a, _ | ⟨b, _ | ⟨c, _ | ⟨d, _ | ⟨_, _⟩⟩⟩⟩⟩ <;>
+      simp only [allTys, Bool.and_eq_true, Bool.false_eq_true, and_false, and_true] at hv
+    all_goals
+      obtain ⟨a, rfl⟩ := hasTy_int hv.1
+      obtain ⟨b, rfl⟩ := hasTy_int hv.2.1
+      obtain ⟨c, rfl⟩ := hasTy_int hv.2.2.1
+      obtain ⟨d, rfl⟩ := hasTy_int hv.2.2.2
+      simp only [List.mem_cons, List.mem_nil_iff, or_false] at hop
+      rcases hop with rfl | rfl | rfl | rfl <;> simp only [Prim.apply, ratArith] <;>
+        (repeat' split) <;> first | exact ResOK_rationalRes _ _ | simp [ResOK]
   | arith hop =>
     rcases vs with _ | ⟨a, _ | ⟨b, _ | ⟨_, _⟩⟩⟩ <;> simp only [allTys, Bool.and_eq_true, Bool.false_eq_true, and_false, and_true] at hv
     all_goals

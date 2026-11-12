@@ -27,6 +27,11 @@ with tempfile.TemporaryDirectory(prefix='openverse profile ') as directory:
         return path
 
     positive = {
+        'rational-operators': '''Main():void=
+    R:rational=3
+    S:=-(R+1)*2-1
+    if(Q:=S/2)then Print("{Floor(Q)} {Ceil(Q)}")else Print("bad")
+    if(Q:=S/0)then Print("bad")else Print("zero")''',
         'failure': '''Pos(X:int)<computes><decides>:int =
     X>0
     X

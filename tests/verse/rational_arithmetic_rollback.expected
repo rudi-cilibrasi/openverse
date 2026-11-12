@@ -1,0 +1,7 @@
+miss 0
+reject 0 0
+arg 3 1
+arg 2 2
+hit 1 2
+state 2
+exit=0

@@ -1176,6 +1176,23 @@ def coerce (p : Pos) (r : R) (target : Ty) : EM Expr := do
           eerr p s!"{withArticle base.show} is {withArticle n} only after a cast: write {n}[X], which fails when X is not one"
     eerr p s!"expected {target.show}, found {r.ty.show}"
 
+/-- Save rational operands in written order, then pass their int parts to
+    an exact primitive. Repeated projections never repeat an operand. -/
+def rationalBinary (p : Pos) (op : Prim) (a b : R) : EM Expr := do
+  let x ← fresh .rational
+  let y ← fresh .rational
+  let ae ← coerce p a .rational
+  let be ← coerce p b .rational
+  let parts (slot : Nat) := [Expr.prim (.tupGet 0) [.local slot], .prim (.tupGet 1) [.local slot]]
+  return .seq (.assign x ae) (.seq (.assign y be) (.prim op (parts x ++ parts y)))
+
+def roundRational (up : Bool) (e : Expr) : EM Expr := do
+  let tr ← fresh .rational
+  let tz ← fresh .int
+  let op := if up then Prim.ceilDiv else .floorDiv
+  let parts := [Expr.prim (.tupGet 0) [.local tr], .prim (.tupGet 1) [.local tr]]
+  return .seq (.assign tr e) (Expr.orE tz (.prim op parts) (.lit (.int 0)))
+
 /-- Build a variance adapter only when the ordinary parameter/result
     conversions succeed. Its private parameters preserve the caller's bounds
     without retaining caller names or borrowing its witness slots. -/
@@ -3712,6 +3729,10 @@ partial def elabSetWith (elabE : Ctx → SExpr → Option Ty → EM R) (elabMemb
     if let .refine n := ty then
       eerr p s!"set {o}= on {withArticle n} needs a cast: write set X = {n}[X {o} …], which fails when the result is not one"
     match o, ty, new.ty with
+    | "+", .rational, _ => rationalBinary p .add ⟨old, ty⟩ new
+    | "-", .rational, _ => rationalBinary p .sub ⟨old, ty⟩ new
+    | "*", .rational, _ => rationalBinary p .mul ⟨old, ty⟩ new
+    | "/", .rational, _ => rationalBinary p .quotient ⟨old, ty⟩ new
     | "+", .int, .int => pure (p2 .add old new.e)
     | "-", .int, .int => pure (p2 .sub old new.e)
     | "*", .int, .int => pure (p2 .mul old new.e)
@@ -5055,9 +5076,10 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
     | .logic => return ⟨.prim .query [r.e], .logic⟩
     | t => eerr p s!"'?' needs an option or logic, found {t.show}"
   | .neg p e =>
-    -- (the expected type, a float or an int, as a hint: `-Id(2.5)`)
+    -- The expected numeric type as a hint, as in `-Id(2.5)`.
     let hint : Option Ty := match exp with
       | some .float => some .float
+      | some .rational => some .rational
       | _ => none
     let r0 ← elabE ctx e hint
     let r := widenR ctx.types r0
@@ -5068,7 +5090,11 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
         if bn == bm && intervalWithin (intervalNeg (refineInterval cn)) (refineInterval cm) then
           return ⟨.prim (if bn == .float then .fneg else .neg) [r.e], .refine m⟩
     if r.ty == .float then return litAt ctx.types exp ⟨.prim .fneg [r.e], .float⟩
-    if r.ty != .int then eerr p s!"unary '-' needs an int or a float, found {r.ty.show}"
+    if r.ty == .rational then
+      let t ← fresh .rational
+      return ⟨.seq (.assign t r.e) (.prim .mkTup
+        [.prim .neg [.prim (.tupGet 0) [.local t]], .prim (.tupGet 1) [.local t]]), .rational⟩
+    if r.ty != .int then eerr p s!"unary '-' needs an int, rational or float, found {r.ty.show}"
     return litAt ctx.types exp ⟨.prim .neg [r.e], .int⟩
   | .notE _ e =>
     -- (with a choice, its first success, #208)
@@ -5084,7 +5110,7 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
     if ra.ty == .float || rb.ty == .float then
       eerr p s!"no operator '/' for {ra.ty.show} and {rb.ty.show} (an int is not a float: write X * 1.0)"
     if ra.ty == .rational || rb.ty == .rational then
-      eerr p "'/' divides ints: openverse has no arithmetic on rationals (only Floor, Ceil and comparisons)"
+      return ⟨← rationalBinary p .quotient ra rb, .rational⟩
     let es := [← coerce a.pos ra .int, ← coerce b.pos rb .int]
     return ⟨← ratCall ctx p "$ratMake" es, .rational⟩
   | .bin p op a b =>
@@ -5096,14 +5122,20 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
         else
           let c2 := { ctx with retries := ctx.retries + 1 }
           tryCatch (elabE c2 b (some ra.ty)) fun _ => elabE c2 b none
-      | "*", .int | "*", .float =>
-        -- (an int times a float, either way round: `2 * Id(1.5)`)
+      | "+", .int | "-", .int | "*", .int | "*", .float =>
+        -- Mixed rational operators and int-times-float can need the
+        -- right operand's own type instead of the left operand's hint.
         if ctx.retries ≥ 3 then elabE ctx b (some ra.ty)
         else
           let c2 := { ctx with retries := ctx.retries + 1 }
           tryCatch (elabE c2 b (some ra.ty)) fun _ => elabE c2 b none
       | _, _ => elabE ctx b (some ra.ty)
     let rb := widenR ctx.types rb
+    if ra.ty == .rational || rb.ty == .rational then
+      let prim ← match op with
+        | "+" => pure Prim.add | "-" => pure Prim.sub | "*" => pure Prim.mul
+        | _ => eerr p s!"no operator '{op}' for {ra.ty.show} and {rb.ty.show}"
+      return ⟨← rationalBinary p prim ra rb, .rational⟩
     match op, ra.ty, rb.ty with
     | "+", .int, .int => return ⟨p2 .add ra.e rb.e, .int⟩
     | "-", .int, .int => return ⟨p2 .sub ra.e rb.e, .int⟩
@@ -6442,7 +6474,7 @@ partial def elabAppBase (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (b
         if ra.ty == .float || rb.ty == .float then
           eerr bp s!"no operator '/' for {ra.ty.show} and {rb.ty.show} (an int is not a float: write X * 1.0)"
         if ra.ty == .rational || rb.ty == .rational then
-          eerr bp "'/' divides ints: openverse has no arithmetic on rationals (only Floor, Ceil and comparisons)"
+          return ⟨← roundRational (name == "Ceil") (← rationalBinary bp .quotient ra rb), .int⟩
         let es := [← coerce a.pos ra .int, ← coerce b.pos rb .int]
         return ⟨.prim (if name == "Floor" then .floorDiv else .ceilDiv) es, .int⟩
       | [e] =>
@@ -6453,11 +6485,7 @@ partial def elabAppBase (ctx : Ctx) (p : Pos) (f : SExpr) (args : List SExpr) (b
         | .int => return r
         | .float => ofFloat r
         | .rational =>
-          let tr ← fresh .rational
-          let tz ← fresh .int
-          let op := if name == "Floor" then Prim.floorDiv else .ceilDiv
-          let parts := [Expr.prim (.tupGet 0) [.local tr], .prim (.tupGet 1) [.local tr]]
-          return ⟨.seq (.assign tr r.e) (Expr.orE tz (.prim op parts) (.lit (.int 0))), .int⟩
+          return ⟨← roundRational (name == "Ceil") r.e, .int⟩
         | t => eerr p s!"{name} takes a rational or an int, found {t.show}"
       | _ => eerr p s!"{name} takes one argument"
     | "Quotient" => needBracket name; return ⟨.prim .quotient (← elabInts ctx p args), .int⟩

@@ -1,0 +1,9 @@
+sum 1 1
+cancel -1 0
+product 1 1
+wide-sum -1 0
+wide-zero 0 0
+min -9223372036854775808 -9223372036854775808
+zero 0 0
+divide 1 1
+exit=0
