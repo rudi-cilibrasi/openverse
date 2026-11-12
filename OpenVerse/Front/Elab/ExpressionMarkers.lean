@@ -346,41 +346,63 @@ partial def elabExprMarkersWith
           | _ => none } : LoopFrame)
       | _ => eerr p "internal: a return frame (#283)"
     return ⟨← frameApplyWith elabE ctx p fs rty rk.e (← coerce leaf.pos rl rty), rty⟩
-  | .app p (.ident _ "$frameReturn") (k :: leaf :: fin :: frames) false =>
-    -- (#283) a value given to the continuation `k` where a continuation
-    -- member's frame is a call of that member's function: the packet that
-    -- call gives, or, when no such frame comes, `fin`, which reads the value
-    -- as `leaf`, the name it is in
+  | .app p (.ident _ "$frameReturn") (k :: leaf :: rest) false =>
+    -- (#283) a value `leaf` given to the continuation `k` where a
+    -- continuation member's frame is a call of that member's function: the
+    -- packet that call gives, or, when no such frame comes, `fin`, which
+    -- reads the final value as `leaf`, or, with frames of other types, as a
+    -- name of its own at the result type
     let rk ← elabE ctx k none
     let some tys := frameLivesOf rk.ty | eerr p "internal: a frame's continuation (#283)"
     let some vl := (match leaf with | .ident _ n => ctx.lookup n | _ => none)
       | eerr p "internal: a frame's value (#283)"
-    let rf ← elabE ctx fin exp
+    let (vfin?, fin, frames) ← match rest with
+      | .block _ [.decl _ vfn (some vfsty) _ _] :: fin :: frames => do
+        let vty ← resolveTy ctx.types p vfsty
+        pure (some ({ name := vfn, slot := ← fresh vty, ty := vty, mutable := false } : Local), fin, frames)
+      | fin :: frames => pure (none, fin, frames)
+      | [] => eerr p "internal: a frame's continuation (#283)"
+    let vty := (vfin?.map (·.ty)).getD vl.ty
+    let vf := (vfin?.map (·.slot)).getD vl.slot
+    let rf ← elabE { ctx with locals := vfin?.toList ++ ctx.locals } fin exp
     let pty := exp.getD rf.ty
     let pk ← fresh pty
     let done ← fresh .logic
+    -- (a frame's types, when not the result type: `$in`, `$out`)
+    let tyOf (ds : List SExpr) (n : String) : EM (Option Ty) := do
+      match ds.findSome? fun | .decl _ m (some t) _ _ => if m == n then some t else none | _ => none with
+      | some t => return some (← resolveTy ctx.types p t)
+      | none => return none
     let fs ← (frames.zip tys).mapM fun
-      | (.app _ (.ident _ f) [.ident _ h, .block _ lives, code] false, ts) => do
+      | (.app _ (.ident _ f) (.ident _ h :: .block _ lives :: code :: more) false, ts) => do
         let lives := (lives.zip ts).filterMap fun
           | (.ident _ n, t) => some ({ name := n, slot := 0, ty := t, mutable := false } : Local)
           | _ => none
-        if f == "$frameCall" then pure ({ hole := h, code, ctx, lives, member := some 0 } : LoopFrame)
-        else pure { hole := h, code, ctx, lives }
+        let ds := match more with | [.block _ ds] => ds | _ => []
+        let (inTy, outTy) := (← tyOf ds "$in", ← tyOf ds "$out")
+        if f == "$frameCall" then pure ({ hole := h, code, ctx, lives, member := some 0, inTy, outTy } : LoopFrame)
+        else pure { hole := h, code, ctx, lives, inTy, outTy }
       | _ => eerr p "internal: a return frame (#283)"
-    let memberArm (j t v kk : Nat) : EM Expr := do
+    let memberArm (j t : Nat) (slotOf : Option Ty → Nat) (kk : Nat) : EM Expr := do
       let some f := fs[j]? | eerr p "internal: a return frame (#283)"
       let ls ← f.lives.mapM fun l => do return { l with slot := ← fresh l.ty }
-      let h ← fresh vl.ty
+      let hty := f.inTy.getD vty
+      let h ← fresh hty
       let c : Ctx := { ctx with canFail := true, inTaking := true, locals :=
         { name := "$Krest", slot := kk, ty := rk.ty, mutable := false } ::
-        { name := f.hole, slot := h, ty := vl.ty, mutable := false } :: ls.reverse ++ ctx.locals }
+        { name := f.hole, slot := h, ty := hty, mutable := false } :: ls.reverse ++ ctx.locals }
       let r ← elabE c f.code (some pty)
       let e ← coerce f.code.pos r pty
       let unpack := ls.zipIdx.foldr (fun (l, i) acc => Expr.seq (.assign l.slot (.prim (.tupGet i) [.local t])) acc) (.lit .void)
-      return .seq unpack (.seq (.assign h (.local v)) (.seq (.assign pk e)
+      return .seq unpack (.seq (.assign h (.local (slotOf f.inTy))) (.seq (.assign pk e)
         (.seq (.assign done (.lit (.logic true))) Expr.brkV)))
-    let code ← frameApplyWith elabE ctx p fs vl.ty rk.e (.local vl.slot) memberArm fun v =>
-      .ite (.prim .query [.local done]) (.local pk) (.seq (.assign vl.slot (.local v)) rf.e)
+    -- (a leaf of another type than the result's, a value going to a
+    -- choice's frame, starts in that type's slot)
+    let typedLeaf := !(vl.ty == vty)
+    let code ← frameApplyWith elabE ctx p fs vty rk.e (.local vl.slot) memberArm
+      (fun v => .ite (.prim .query [.local done]) (.local pk) (.seq (.assign vf (.local v)) rf.e))
+      (if typedLeaf then some fun slotOf => .assign (slotOf (some vl.ty)) (.local vl.slot) else none)
+      (if typedLeaf then [vl.ty] else [])
     return ⟨.seq (.assign done (.lit (.logic false))) code, pty⟩
   | .app p (.ident _ "$firstP") [.block _ items] false =>
     -- (#246) `first{…}` of clauses that are lifted already (a consumer's,

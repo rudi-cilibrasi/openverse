@@ -675,7 +675,8 @@ def contTypes (ctx : Ctx) (p : Pos) (inputs outputs : List Ty) (written : SExpr)
 def firstLiftOf (ctx c2 : Ctx) (p : Pos) (g : String) (lp : List SExpr) (b : String) (bty : Option STy)
     (rest : List SExpr) (fxB : List (String × Pos × Option String)) (suspends : Bool) (vty : Ty)
     (instances : List (String × List (String × Ty)) := [])
-    (frames : List (String × List String × SExpr) := []) (kTy : Option Ty := none) :
+    (frames : List (String × List String × SExpr) := []) (kTy : Option Ty := none)
+    (frameTys : List (Option Ty × Option Ty) := []) :
     Except String Choice.FirstLift := do
   let ctx := ctx.choiceCoercionScope
   let [_, .block _ ps, .block _ cls, .decl _ _ _ _ tail] := lp | throw "internal: a $loop marker"
@@ -743,6 +744,14 @@ def firstLiftOf (ctx c2 : Ctx) (p : Pos) (g : String) (lp : List SExpr) (b : Str
     | _ => none
   let nameOf (h : String) : String := if h == g then name else s!"{name}_{h.replace "::" "_"}"
   let retName := s!"{name}$ret"
+  -- (#283) the frames' hole's and code's types, when other than the result
+  -- type; a function that a value is given to for each type values have (a
+  -- choice's going to its frame, a continuation member's own), `retOf`
+  let fTys : List (Option STy × Option STy) := frameTys.map fun (i, o) => (i.map (·.toSTy), o.map (·.toSTy))
+  let valTys : List STy := (fTys.flatMap fun (i, o) => i.toList ++ o.toList).eraseDups
+  let retOf (t : Option STy) : String := match t.bind (fun t => valTys.idxOf? t) with
+    | some i => s!"{retName}{i + 1}"
+    | none => retName
   let heap := ["reads", "writes", "allocates"].filter fun k =>
     fxB.any (·.1 == k) || ((g :: mnames).any fun h => ((ctx.sig? h).map (·.fx.contains k)).getD false)
   let capPs : List SParam :=
@@ -780,7 +789,7 @@ def firstLiftOf (ctx c2 : Ctx) (p : Pos) (g : String) (lp : List SExpr) (b : Str
         | (.ident _ n, t) => pure { name := n, ty := t.toSTy }
         | _ => throw "internal: a $member parameter (#283)"
       let body := Choice.firstBody (nameOf h) p b bty hcls htail rest binds setsT capArgs (some vty.toSTy) nameOf
-        (fun target => recArgs (some (target.getD h))) normal? frames retName
+        (fun target => recArgs (some (target.getD h))) normal? frames retName fTys retOf
       pure (STop.fn p (nameOf h) (hparams ++ kPs ++ capPs ++ typeParams) tps specs ret
         (pruneConstructHints ctx (nameOf h) body))
     | _ => throw "internal: a $member (#283)"
@@ -801,21 +810,23 @@ def firstLiftOf (ctx c2 : Ctx) (p : Pos) (g : String) (lp : List SExpr) (b : Str
     let (ccls, ctail) ← Choice.contOf? code
     let src := origin h
     let lps := (lives.zip (livesTys.getD j [])).map fun (n, t) => ({ name := n, ty := t.toSTy } : SParam)
+    let (hty, own) := (fTys[j]?).getD (none, none)
     let body := Choice.firstBody (nameOf src) p b bty ccls ctail rest binds setsT capArgs (some vty.toSTy) nameOf
-      (fun target => recArgs (some (target.getD src))) normal? frames retName
-    return STop.fn p fn ({ name := h, ty := vty.toSTy } :: lps ++ kPs ++ capPs ++ typeParams) tps specs ret
+      (fun target => recArgs (some (target.getD src))) normal? frames retName fTys retOf own
+    return STop.fn p fn ({ name := h, ty := hty.getD vty.toSTy } :: lps ++ kPs ++ capPs ++ typeParams) tps specs ret
       (pruneConstructHints ctx fn body)
   -- (#283) with return frames: the function each value is given to, then to
-  -- the clauses after the call, once for all the values of every member
-  let retFns : List STop := kPs.map fun kp =>
-    STop.fn p retName ({ name := "$V", ty := vty.toSTy } :: kp :: capPs ++ typeParams) tps specs ret
-      (ctx.choiceCoercionBody <| pruneConstructHints ctx retName
-        (Choice.firstReturnBody p b bty rest binds setsT (some vty.toSTy) normal? frames memberFn capArgs))
+  -- the clauses after the call, once for all the values of every member; one
+  -- for each other type of value too
+  let retFns : List STop := kPs.flatMap fun kp => (none :: valTys.map some).map fun t =>
+    STop.fn p (retOf t) ({ name := "$V", ty := t.getD vty.toSTy } :: kp :: capPs ++ typeParams) tps specs ret
+      (ctx.choiceCoercionBody <| pruneConstructHints ctx (retOf t)
+        (Choice.firstReturnBody p b bty rest binds setsT (some vty.toSTy) normal? frames memberFn capArgs fTys))
   return { key, pos := p, name, returnExit, breakExit, sourceContext := sourceContextOf ctx, inlineScopes := ctx.inlineScopes, liftTag := ctx.liftTag,
            params := params ++ typeParams, tparams := tps, specs, ret,
            body := ctx.choiceCoercionBody <| pruneConstructHints ctx name
              (Choice.firstBody name p b bty cls tail rest binds setsT capArgs (some vty.toSTy) nameOf recArgs
-               normal? frames retName),
+               normal? frames retName fTys retOf),
            binds, sets := sets.map (·.name),
            args := pnames.map (SExpr.ident p ·) ++ kPs.map (fun _ => .ident p "false") ++
              caps.map (fun l => .ident p l.name) ++ typeArgs,
