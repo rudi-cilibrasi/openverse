@@ -553,7 +553,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
           -- site's, #314)
           let site := s!"$cf{gp.line}_{gp.col}{b.name}"
           let moreClauses := more.flatMap fun (g', fs') => g' :: fs'
-          let bctx : Ctx := { c with canFail := ctx.canFail, inTaking := ctx.inTaking, inLoop := ctx.inLoop,
+          let bctx : Ctx := { c with canFail := ctx.canFail && !firstDecides, inTaking := ctx.inTaking, inLoop := ctx.inLoop,
                                      inRepeat := ctx.inRepeat }
           let liftA (a : SExpr) (i : Nat) : List SExpr :=
             -- (its exclusive choices kept: this for compiles them, #314)
