@@ -130,7 +130,8 @@ if a.methods:
         print(name + ('(t:type)' if generic else '') + ':=class:')
         print('    H:cell\n    ' + ('var ' if a.members or a.callable_fields else '') + 'K:int' + ('\n    V:t' if generic else ''))
         if a.callable_fields:
-            print('    F:type{_(:cell,:int' + (',:int' if method_arguments else '') + ')<transacts>:int}')
+            callback_effects = '<reads><writes>' if kind == 'a' else '<transacts>'
+            print('    F:type{_(:cell,:int' + (',:int' if method_arguments else '') + ')' + callback_effects + ':int}')
             continue
         method_params = (['Arg:int'] if method_arguments else []) + (['Ignored:u where u:type'] if a.generic_methods else [])
         method = 'Read' if a.members else 'Score'
@@ -141,7 +142,8 @@ if a.methods:
         print('        Self' if a.members else '        K')
     if a.callable_fields:
         for kind in range(2):
-            print('Callback' + str(kind) + '(H:cell,K:int' + (',Arg:int' if method_arguments else '') + ')<transacts>:int=')
+            callback_effects = '<reads><writes>' if kind == 0 else '<transacts>'
+            print('Callback' + str(kind) + '(H:cell,K:int' + (',Arg:int' if method_arguments else '') + ')' + callback_effects + ':int=')
             print('    Print("m ' + chr(97 + kind) + ' {K}")')
             print('    set H.N+=' + str(kind + 1) + '*(K+1)' + ('+Arg' if method_arguments else ''))
             print('    K')
