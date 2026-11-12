@@ -3,6 +3,9 @@
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
+# Each compile has a time limit only so that a hang stops the check; the bytecode size is the test.
+# The slowest case takes about 7 s, but on a machine busy with other jobs local runs stopped at 30 s.
+limit="${CHOICE_SIZE_TIMEOUT:-120}"
 # Keep modes sorted on separate lines so independent additions merge cleanly.
 kinds=(
   binding
@@ -1269,7 +1272,15 @@ elif kind == 'refined-for':
 else:
     print('Main():void = Print("{Run(7)}")' if kind.startswith('typed-') else 'Main():void = Print("{Run(7).Length}")')
 PY
-    timeout 30 "$root/.lake/build/bin/openverse" emit "$tmp/p.verse" -o "$tmp/p.vbc"
+    timeout "$limit" "$root/.lake/build/bin/openverse" emit "$tmp/p.verse" -o "$tmp/p.vbc" || {
+      rc=$?
+      if (( rc == 124 )); then
+        echo "test-choice-size: $kind with $count choices did not compile within ${limit} s (CHOICE_SIZE_TIMEOUT)" >&2
+      else
+        echo "test-choice-size: $kind with $count choices: emit failed (exit $rc)" >&2
+      fi
+      exit 1
+    }
     sizes+=("$(wc -c <"$tmp/p.vbc")")
   done
   if (( sizes[1] > 3 * sizes[0] )); then
