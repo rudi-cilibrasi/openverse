@@ -39,7 +39,11 @@ The model:
   * methods may infer their own type parameters independently of receiver
     arguments, including through overrides, super tuples and interface defaults;
   * a super call of another method keeps its lexical ancestor, whether the
-    target has one value or several, rather than dispatching to an override.
+    target has one value or several, rather than dispatching to an override;
+  * methods of one name declared apart in unrelated classes and interfaces are
+    each the root of a family of their own: a call through a receiver of a
+    class below one of them has that family's values, and one of a class
+    whose method of that name is ordinary has its one value.
 """
 import random, sys, os, re
 
@@ -51,6 +55,10 @@ R387 = None
 # other programs)
 R392 = None
 RMethod = None
+# (#283: at times every method with several values is named Vals, declared apart in the
+# programs' unrelated classes and interfaces, beside an ordinary Vals of a class of its own,
+# called at the end; a generator of its own decides, so seeds keep their other programs)
+SHARED = False
 # Source-spelling variants share the existing independent value/effect model.
 RECURSIVE_RETURNS = "no-recursive-returns" not in sys.argv[3:]
 
@@ -363,6 +371,8 @@ d{n}({child_tps}) := class({parent}):{extra_field}
                         "    N > 0\n    Id(%s[X, Y, N - 1]) | X | Id(%s[Y, X, N - 1])") % (n, n, n)
         else:
             raise ValueError(k)
+        if k == "IMeth" and SHARED:
+            self.src = re.sub(rf"\bM{n}\b", "Vals", self.src)
 
         if RECURSIVE_RETURNS and self.path in ("lazy", "eager") and random.Random(n).random() < 0.5:
             lines = self.src.splitlines()
@@ -573,11 +583,12 @@ class Machine:
 # ---------------------------------------------------------------- the program
 class Gen:
     def __init__(self, seed):
-        global R, R387, R392, RMethod
+        global R, R387, R392, RMethod, SHARED
         R = random.Random(seed)
         R387 = random.Random(seed * 1000003 + 387)
         R392 = random.Random(seed * 1000003 + 392)
         RMethod = random.Random(seed * 1000003 + 283041)
+        SHARED = random.Random(seed * 1000003 + 2834).random() < 0.4
         self.seed = seed
         self.prods = []
         self.consumers = []    # source of generic consumers
@@ -861,6 +872,9 @@ class Gen:
         self.method_dispatch()
         self.recursive_named()
         self.mutual_generators()
+        if SHARED:
+            self.main.append('Print("plain {plainvals{}.Vals()}")')
+            self.m.out.append("plain 0")
 
     def method_dispatch(self):
         # Every gate range covers each hierarchy, with the same independent
@@ -1257,6 +1271,8 @@ Tell(S:string, X:int)<transacts>:int =
     Print(S)
     X
 """
+        if SHARED:
+            pre += "plainvals := class:\n    Vals()<transacts>:int = 0\n"
         body = pre + "\n".join(p.src for p in self.prods) + "\n"
         if self.consumers: body += "\n".join(self.consumers) + "\n"
         body += "Main():void =\n" + "".join("    %s\n" % l for l in self.main)
