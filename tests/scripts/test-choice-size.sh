@@ -124,6 +124,16 @@ kinds=(
   getter-lengths-for
   getter-lengths-waiting
   getter-awaiting-waiting
+  member-future-first
+  member-future-for
+  member-future-waiting
+  member-callback-first
+  member-callback-for
+  member-callback-waiting
+  member-callback-result-first
+  member-callback-result-for
+  member-callback-result-waiting
+  member-awaiting-waiting
   exclusive
   heterogeneous-nested-for
   heterogeneous-unused-first
@@ -271,6 +281,39 @@ if kind == 'heterogeneous-nested-for':
         body = f'for(A{i}:=(Dup(1)|Dup("s"))):' + body
     print('    Rows:=' + body)
     print('    Print("{Rows.Length}")')
+    sys.exit(0)
+if kind.startswith('member-'):
+    shape, mode = '-'.join(kind.split('-')[1:-1]), kind.split('-')[-1]
+    future = shape == 'future'
+    result = shape == 'callback-result'
+    awaiting = shape == 'awaiting'
+    print('Dup(X:t where t:type)<computes>:t=X|X')
+    if future:
+        for cls in ['ca','cb']:
+            print(cls + ':=class{K:int=1;M(Ignored:u where u:type)<computes>:' + cls + '=Self}')
+    elif result:
+        print('ra:=class<computes>{K:int=1}\nrb:=class<computes>{K:int=1}')
+        print('MakeA(X:any)<computes>:ra=ra{}\nMakeB(X:any)<computes>:rb=rb{}')
+        print('ca:=class{F:type{_(:any)<computes>:ra}=MakeA}\ncb:=class{F:type{_(:any)<computes>:rb}=MakeB}')
+    else:
+        for cls,ty,value,name in [('ca','int','7','Integer'),('cb','string','"s"','String')]:
+            effects='<computes>' + ('<suspends>' if awaiting else '')
+            print(name + '(X:' + ty + ')' + effects + ':int=block{' + ('Sleep(0.0);' if awaiting else '') + '1}')
+            print(cls + ':=class{V:' + ty + '=' + value + ';F:type{_(:' + ty + ')' + effects + ':int}=' + name + '}')
+    clauses=','.join(f'A{i}:=(Dup(ca{{}})|Dup(cb{{}}))' for i in range(count))
+    terms=[]
+    for i in range(count):
+        later=f'A{(i+1)%count}'
+        terms.append(f'A{i}.M({later}).K' if future else f'A{i}.F({later}).K' if result else f'A{i}.F(A{i}.V)')
+    value='+'.join(terms)
+    effects='<suspends>' if mode=='waiting' else ''
+    print(f'Run(){effects}:int=')
+    if mode=='first':
+        print('    if('+clauses+',V:='+value+',V>0)then V else -1')
+    else:
+        print('    Rows:=for('+clauses+'):'+value)
+        print('    Rows.Length')
+    print(f'Main(){effects}:void=Print("{{Run()}}")')
     sys.exit(0)
 if kind.startswith('getter-'):
     _, shape, mode = kind.split('-')
