@@ -1,0 +1,9 @@
+key a
+rhs a
+body 7
+key a
+rhs a
+body 7
+done 2 22
+state ok
+exit=0
