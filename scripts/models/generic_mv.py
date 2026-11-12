@@ -35,7 +35,8 @@ The model:
   * generic mutual trees retain each member's type instance, item effects,
     value rollback, mutable captures and written-only witnesses;
   * a lazy one may bind its call of itself with code after it, which runs
-    on each of the call's values (a return frame, #283);
+    on each of the call's values (a return frame, #283), and what it reads
+    before that call (a call of a function) is read once, before it;
   * early and terminal source returns yield the same ordered values as
     explicit conditional tails, ending only their current invocation;
   * methods may infer their own type parameters independently of receiver
@@ -362,6 +363,12 @@ d{n}({child_tps}) := class({parent}):{extra_field}
             self.path = "lazy"; self.params = [("X", "t"), ("Y", "t"), ("N", "int")]; self.decides = True; self.fx = True
             self.src = ("%s(X:t, Y:t, N:int where t:type)<transacts><decides>:t =\n"
                         "    N > 0\n    Z := %s[Y, X, N - 1] | X\n    Print(\"%s {N}\")\n    Z") % (n, n, n)
+        elif k == "LFp":
+            # (#283: a call of a function before its call of itself, bound once
+            # before it, the frame using that value after each of the call's)
+            self.path = "lazy"; self.params = [("X", "t"), ("Y", "t"), ("N", "int")]; self.decides = True; self.fx = True
+            self.src = ("%s(X:t, Y:t, N:int where t:type)<transacts><decides>:t =\n"
+                        "    N > 0\n    Z := block{ W := Id(X); V := %s[Y, X, N - 1]; Print(\"%s {N}\"); W } | Y\n    Z") % (n, n, n)
         elif k == "LCmp":
             self.path = "lazy"; self.params = [("A", "arr"), ("X", "t"), ("I", "int")]; self.decides = True; self.cmp = True
             self.src = ("%s(A:[]t, X:t, I:int where t:subtype(comparable))<decides>:t =\n"
@@ -514,6 +521,12 @@ d{n}({child_tps}) := class({parent}):{extra_field}
             back = ("print", "%s %d" % (self.name, a["N"]))
             return [("choice", [self.expand({"X": a["Y"], "Y": a["X"], "N": a["N"] - 1}, var) + [back],
                                 V(a["X"]) + [back]])]
+        if k == "LFp":
+            # (each value of the call prints, then the value is X, read before it)
+            if a["N"] <= 0: return [("cond", False)]
+            back = ("print", "%s %d" % (self.name, a["N"]))
+            return [("choice", [self.expand({"X": a["Y"], "Y": a["X"], "N": a["N"] - 1}, var) + [back] + V(a["X"]),
+                                V(a["Y"])])]
         if k == "LIf":
             if a["N"] < 0: return [("cond", False)]
             if a["N"] > 0:
@@ -882,7 +895,7 @@ class Gen:
         # its own, so seeds without it keep their programs)
         self.producer(R.choice(kinds_i))
         lazy = R.choice(kinds_l)
-        if RFrame.random() < 0.3: lazy = "LFr"
+        if RFrame.random() < 0.3: lazy = "LFr" if RFrame.random() < 0.5 else "LFp"
         self.producer(lazy); self.producer(R.choice(kinds_e))
         for _ in range(R.randint(0, 2)):
             self.producer(R.choice(kinds_i + kinds_l + kinds_e))

@@ -325,6 +325,15 @@ lazycell(t:type) := class:
 
 def lazyTops : Except String (List STop) := parsePrelude lazyPrelude ["lazycell", "LItem", "LNext"]
 
+/-- (#283) A `var` of a lazily taken recursive function that a return frame
+    sets, as a cell (`Choice.cellVars`). -/
+def varcellPrelude : String := "
+varcell(t:type) := class:
+    var VCell:t
+"
+
+def varcellTops : Except String (List STop) := parsePrelude varcellPrelude ["varcell", "VCell"]
+
 /-- `subscribable_event(t)` (#210): an event whose `Signal` also calls the
     functions subscribed to it, each `Subscribe` giving a `cancelable` whose
     `Cancel` unsubscribes it. Added, with the concurrency prelude it
@@ -396,6 +405,7 @@ def functionBodyCtx (opts : Options) (ctx : Ctx) (p : Pos) (name : String)
   let source := (resume.map (·.sourceContext)).getD
     ((loopLift.map (·.sourceContext)).getD ((lifted.map (·.sourceContext)).getD {}))
   let returnExit := loopLift.bind (·.returnExit)
+  let breakExit := loopLift.bind (·.breakExit)
   let resumeStorage ← ((resume.map (·.storage)).getD []).mapM fun (n, r) => do
     let args ← r.args.mapM fun t => (resolveTy ctx.types p t).run' { env := ctx.types }
     pure (n, { frame := r.frame, name := r.name, args : SourceStorage })
@@ -418,9 +428,8 @@ def functionBodyCtx (opts : Options) (ctx : Ctx) (p : Pos) (name : String)
     inArm := source.inArm || ctx.inArm
     inBranch := source.inBranch || ctx.inBranch
     defaults := source.defaults ++ ctx.defaults
-    refineExits := (returnExit.map fun r =>
-      { ret := some (r.value.map (fun n => (n, r.ty)), r.packet) : Refine.Exits }).getD
-        ((lifted.map (·.exits)).getD {})
+    refineExits := if returnExit.isNone && breakExit.isNone then (lifted.map (·.exits)).getD {} else
+      { ret := returnExit.map fun r => (r.value.map (fun n => (n, r.ty)), r.packet), brk := breakExit }
     inBlock := source.inBlock || name.endsWith ".$block"
     inCtor := source.inCtor || name.endsWith "$init"
     selfClass := scopeClass.orElse fun _ => match name.splitOn "." with

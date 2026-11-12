@@ -343,8 +343,8 @@ structure Ctx where
       `branch` there would start again before the last one ended. -/
   inRepeat : Bool := false
   /-- In the clauses of an `if` condition or `first{…}` that bind a choice
-      (#208), inside a `loop`: a `break` there would leave the loop they are
-      compiled to, not that one. -/
+      (#208), inside a `loop`, that have no `break` that leaves them: the
+      loop they are compiled to does not forward one (`elabFirstGo`). -/
   inChoice : Bool := false
   /-- In the clauses of a failure context that takes a choice's values
       (#208): a choice that reaches the elaborator here is in a place it
@@ -352,7 +352,8 @@ structure Ctx where
   inTaking : Bool := false
   /-- The internal loop that propagates a failed continuation outcome. -/
   forOutcomeSlot : Option Nat := none
-  /-- A source-loop break crossing the internal loops of lazy producers. -/
+  /-- A source-loop break crossing the internal loops of lazy producers and
+      of first successes (`firstE`), each of which forwards it. -/
   forBreakSlot : Option Nat := none
   /-- A source break carried by a shared for continuation. -/
   forBreakCapture : Option String := none
@@ -666,6 +667,11 @@ partial def resolveTy (env : TyEnv) (p : Pos) : STy → EM Ty
 
 def Ctx.lookup (ctx : Ctx) (n : String) : Option Local := ctx.locals.find? (·.name == n)
 def Ctx.sig? (ctx : Ctx) (n : String) : Option Sig := ctx.sigs.find? (·.name == n)
+
+/-- `ctx` with the `defer:` body `d` pending for every `return` and `break`
+    that leaves its scope (#80), with the locals in scope here. -/
+def Ctx.withDefer (ctx : Ctx) (d : SExpr) : Ctx :=
+  { ctx with defers := (d, ctx.locals) :: ctx.defers }
 
 /-- Class or interface `c` has method `m`, its own or inherited. -/
 def Ctx.hasMethod (ctx : Ctx) (c m : String) : Bool :=
