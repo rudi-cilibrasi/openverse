@@ -225,7 +225,7 @@ def main : IO Unit := do
       adapter.tparams.all (fun tp => tp.constraint == "comparable" && tp.upperBound.isNone))
   let source := "vehicle:=class<computes>{Speed:int=9}\nF(X:t,D:evidence(vehicle,t) where t:type)<computes>:int=X.Speed\nMain():void={}"
   let parsed ← getOK "parse role-controlled dictionary parameters" (parseProgram source)
-  let roles (typeValue : Bool) : IO (List STop) := parsed.mapM fun
+  let roles (tops : List STop) (typeValue : Bool) : IO (List STop) := tops.mapM fun
     | .fn p name ps tps specs ret body => do
       let ps ← ps.mapM fun param => do
         let ty ← getOK "resolve private protocol spelling"
@@ -233,12 +233,23 @@ def main : IO Unit := do
         pure { param with ty, typeValue := typeValue && param.name == "D" }
       pure (.fn p name ps tps specs ret body)
     | top => pure top
-  let actual ← roles false
+  let actual ← roles parsed false
   let compiled ← getOK "real dictionary body checks" (elabProgram actual)
   need "real dictionary body passes Core typing"
     (compiled.prog.check && compiled.prog.checkTypes compiled.sigs compiled.slotTys && compiled.prog.checkControl)
-  let dummy ← roles true
+  let dummy ← roles parsed true
   match elabProgram dummy with
   | .error message => need "dummy body has no executable bound view" ((message.splitOn "has no member").length > 1)
   | .ok _ => throw (IO.userError "a dummy parameter became executable subtype evidence")
+  let interior := "vehicle:=class<allocates>{var N:int=0}\nbox(t:type):=class<computes>{X:t}\nF(B:box(t),D:evidence(vehicle,t) where t:type)<transacts>:void=set B.X.N=1\nMain():void={}"
+  let parsed ← getOK "parse role-controlled interior path" (parseProgram interior)
+  let actual ← roles parsed false
+  let compiled ← getOK "real evidence admits an interior path" (elabProgram actual)
+  need "interior path passes ordinary Core typing"
+    (compiled.prog.check && compiled.prog.checkControl && compiled.prog.checkTypes compiled.sigs compiled.slotTys)
+  let dummy ← roles parsed true
+  match elabProgram dummy with
+  | .error message =>
+    need "an interior path cannot promote a dummy dictionary" ((message.splitOn "has no field").length > 1)
+  | .ok _ => throw (IO.userError "an interior path wrote through a dummy dictionary")
   IO.println "subtype evidence scope contracts passed (formal kinds, real captures, dummy provenance, aliasing and inlining)"

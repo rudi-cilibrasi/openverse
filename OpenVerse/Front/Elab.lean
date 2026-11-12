@@ -4296,6 +4296,38 @@ partial def elabSubtypeValueWith (elabE : Ctx → SExpr → Option Ty → EM R) 
     return ⟨.prim .userErr [], bound.ty⟩
   elabE ctx (plan.value ctx.types p) (some bound.ty)
 
+/-- Save the operand before building a checked dictionary call. Kept outside
+    the recursive elaborator so path planning can retain the view until its
+    original traversal point, after indices and earlier containers. -/
+partial def elabSubtypeUpWith (elabE : Ctx → SExpr → Option Ty → EM R)
+    (ctx : Ctx) (p : Pos) (value : R) (target : Ty) (plan : SubtypeEvidence.Plan) : EM R := do
+  let locals := ctx.evidenceTypes
+  if !plan.valid ctx.types locals || plan.bound ctx.types != ⟨target, value.ty⟩ then
+    eerr p "internal: subtype view has no valid lexical evidence"
+  let slot ← fresh value.ty
+  let name := s!"$subtypeInput{slot}"
+  let inner := { ctx with locals := { name, slot, ty := value.ty, mutable := false } :: ctx.locals }
+  let dictionary ← elabSubtypeValueWith elabE ctx p plan ⟨target, value.ty⟩
+  let dictionarySlot ← fresh dictionary.ty
+  let dictionaryName := s!"$subtypeDictionary{dictionarySlot}"
+  let inner := { inner with locals :=
+    { name := dictionaryName, slot := dictionarySlot, ty := dictionary.ty, mutable := false } :: inner.locals }
+  let call := SExpr.app p (.member p (.ident p dictionaryName) "Up") [.ident p name] false
+  let result ← elabE inner call (some target)
+  return ⟨.seq (.assign slot value.e) (.seq (.assign dictionarySlot dictionary.e)
+    (← coerce p result target)), target⟩
+
+partial def elabBoundReceiverWith (elabE : Ctx → SExpr → Option Ty → EM R)
+    (ctx : Ctx) (p : Pos) (value : R) (member : String) : EM R := do
+  let view ← match ctx.boundView p value.ty member with
+    | .ok view => pure view
+    | .error message => throw message
+  let some target := view | return value
+  let locals := ctx.evidenceTypes
+  let some plan := SubtypeEvidence.find? ctx.types locals ⟨target, value.ty⟩
+    | eerr p "internal: a bound view lost its lexical dictionary"
+  elabSubtypeUpWith elabE ctx p value target plan
+
 /-- A call of a generic function. Its type arguments are inferred by matching
     its signature: the result type against the expected type (unless that is
     `void`, which accepts anything), then each parameter type against its
@@ -4655,7 +4687,18 @@ partial def elabSetWith (elabE : Ctx → SExpr → Option Ty → EM R) (elabMemb
     -- first the indices and keys
     let mut keys : Array (Option (Nat × Ty)) := #[]
     let mut tys : Array Ty := #[]
+    let mut rawTys : Array Ty := #[]
+    let mut views : Array (Option (Nat × R)) := #[]
     for (sp, f?, k?) in steps do
+      rawTys := rawTys.push ty
+      let mut view := none
+      if let (some field, .param ..) := (f?, ty) then
+        let input ← fresh ty
+        let receiver ← elabBoundReceiverWith elabE ctx sp ⟨.local input, ty⟩ field
+        if receiver.ty != ty then
+          view := some (input, receiver)
+          ty := receiver.ty
+      views := views.push view
       tys := tys.push ty
       match f?, k?, ty with
       | some "?", _, .opt t => keys := keys.push none; ty := t
@@ -4708,6 +4751,17 @@ partial def elabSetWith (elabE : Ctx → SExpr → Option Ty → EM R) (elabMemb
         let tp ← fresh (.tup [kt, vt])
         pure (mapLookup c tk tp)
       | _, _, _ => eerr p "internal: set path"
+    -- A view consumes the already-read source container. Its dictionary
+    -- call belongs here in traversal, not in the index/key prelude.
+    let activate (k current : Nat) : EM (List Expr × Nat) := do
+      match views[k]! with
+      | none => return ([], current)
+      | some (input, receiver) =>
+        let output ← fresh receiver.ty
+        return ([.assign input (.local current), .assign output receiver.e], output)
+    if let some (name, value) := rootInit then
+      if name != root then eerr p "internal: bound set initializes a different path root"
+      pre := pre.push (.assign l.slot value)
     -- a value of a class with no instance cannot exist, so the set is
     -- unreachable once the path reaches one; but the steps before it (the
     -- indices and keys, then the containers read) may fail first (#104)
@@ -4715,11 +4769,15 @@ partial def elabSetWith (elabE : Ctx → SExpr → Option Ty → EM R) (elabMemb
         match tysA[k]! with | .struct sn _ => ctx.types.isEmptyClass sn | _ => false then
       let stepsA := steps.toArray
       let mut c := l.slot
-      for k in [0:ke] do
-        let (_, f?, _) := stepsA[k]!
-        let c' ← fresh tysA[k + 1]!
-        pre := pre.push (.assign c' (← readStep c tysA[k]! f? keys[k]!))
-        c := c'
+      for k in [0:ke + 1] do
+        let (before, viewed) ← activate k c
+        pre := pre ++ before.toArray
+        c := viewed
+        if k < ke then
+          let (_, f?, _) := stepsA[k]!
+          let c' ← fresh rawTys[k + 1]!
+          pre := pre.push (.assign c' (← readStep c tysA[k]! f? keys[k]!))
+          c := c'
       -- (the right-hand side never runs, but is checked, and the field set
       -- at the empty class must be a var, as on any path)
       let lastCls := (List.range steps.length).reverse.find? fun k =>
@@ -4738,9 +4796,6 @@ partial def elabSetWith (elabE : Ctx → SExpr → Option Ty → EM R) (elabMemb
     -- the intermediate containers: level 0 is a copy of the variable, taken
     -- after the indices, so that the right-hand side cannot change what is
     -- rebuilt (as for `set A[i] = e`); the variable is written once, last
-    if let some (name, value) := rootInit then
-      if name != root then eerr p "internal: bound set initializes a different path root"
-      pre := pre.push (.assign l.slot value)
     let c0 ← fresh l.ty
     pre := pre.push (.assign c0 (.local l.slot))
     cur := c0
@@ -4756,6 +4811,9 @@ partial def elabSetWith (elabE : Ctx → SExpr → Option Ty → EM R) (elabMemb
     let mut oldLeaf : Option Nat := none
     for k in [0:stepsA.size] do
       let (sp, f?, _) := stepsA[k]!
+      let (before, viewed) ← activate k cur
+      pre := pre ++ before.toArray
+      cur := viewed
       levels := levels.push (cur, tys[k]!, sp, f?, keys[k]!)
       if k == rhsAfter then
         -- `set P op= e` reads P before e, as the direct form does (Book of
@@ -4765,8 +4823,12 @@ partial def elabSetWith (elabE : Ctx → SExpr → Option Ty → EM R) (elabMemb
         if op.isSome then
           let mut c2 := cur
           for k2 in [k:stepsA.size] do
+            if k2 > k then
+              let (before, viewed) ← activate k2 c2
+              pre := pre ++ before.toArray
+              c2 := viewed
             let (_, f2, _) := stepsA[k2]!
-            let t2 := if k2 + 1 < stepsA.size then tys[k2 + 1]! else leafTy
+            let t2 := if k2 + 1 < stepsA.size then rawTys[k2 + 1]! else leafTy
             let c3 ← fresh t2
             pre := pre.push (.assign c3 (← readStep c2 tys[k2]! f2 keys[k2]!))
             c2 := c3
@@ -4776,7 +4838,7 @@ partial def elabSetWith (elabE : Ctx → SExpr → Option Ty → EM R) (elabMemb
         pre := pre.push (.assign tr r.e)
         rhsVal := some ⟨.local tr, r.ty⟩
       if k + 1 < stepsA.size then
-        let c ← fresh tys[k + 1]!
+        let c ← fresh rawTys[k + 1]!
         pre := pre.push (.assign c (← readStep cur tys[k]! f? keys[k]!))
         cur := c
     let (lc, lty, _, lf, lkey) := levels[levels.size - 1]!
@@ -5527,32 +5589,11 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
 /-- Save the operand before building a checked dictionary call. Both its
     precise input and widened result are typed in this frame. -/
 partial def elabSubtypeUp (ctx : Ctx) (p : Pos) (value : R) (target : Ty)
-    (plan : SubtypeEvidence.Plan) : EM R := do
-  let locals := ctx.evidenceTypes
-  if !plan.valid ctx.types locals || plan.bound ctx.types != ⟨target, value.ty⟩ then
-    eerr p "internal: subtype view has no valid lexical evidence"
-  let slot ← fresh value.ty
-  let name := s!"$subtypeInput{slot}"
-  let inner := { ctx with locals := { name, slot, ty := value.ty, mutable := false } :: ctx.locals }
-  let dictionary ← elabSubtypeValueWith elabE ctx p plan ⟨target, value.ty⟩
-  let dictionarySlot ← fresh dictionary.ty
-  let dictionaryName := s!"$subtypeDictionary{dictionarySlot}"
-  let inner := { inner with locals :=
-    { name := dictionaryName, slot := dictionarySlot, ty := dictionary.ty, mutable := false } :: inner.locals }
-  let call := SExpr.app p (.member p (.ident p dictionaryName) "Up") [.ident p name] false
-  let result ← elabE inner call (some target)
-  return ⟨.seq (.assign slot value.e) (.seq (.assign dictionarySlot dictionary.e)
-    (← coerce p result target)), target⟩
+    (plan : SubtypeEvidence.Plan) : EM R :=
+  elabSubtypeUpWith elabE ctx p value target plan
 
-partial def elabBoundReceiver (ctx : Ctx) (p : Pos) (value : R) (member : String) : EM R := do
-  let view ← match ctx.boundView p value.ty member with
-    | .ok view => pure view
-    | .error message => throw message
-  let some target := view | return value
-  let locals := ctx.evidenceTypes
-  let some plan := SubtypeEvidence.find? ctx.types locals ⟨target, value.ty⟩
-    | eerr p "internal: a bound view lost its lexical dictionary"
-  elabSubtypeUp ctx p value target plan
+partial def elabBoundReceiver (ctx : Ctx) (p : Pos) (value : R) (member : String) : EM R :=
+  elabBoundReceiverWith elabE ctx p value member
 
 /-- Initialize receiver evidence through checked getters, including fields
     seen through interface views. Every index is checked against this

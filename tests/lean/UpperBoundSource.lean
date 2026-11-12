@@ -9,11 +9,12 @@ open OpenVerse OpenVerse.Front
 def main (args : List String) : IO Unit := do
   let [out] := args | throw (IO.userError "expected a fresh output directory")
   let positive := ["process", "holder", "value", "refined", "choice-valid", "default-valid",
-    "context", "override-valid", "receiver-override", "state", "cancel", "interior-path", "overload",
+    "context", "override-valid", "receiver-override", "state", "cancel", "interior-path",
+    "interior-containers", "interior-nested", "interior-state", "interior-cancel", "overload",
     "overload-shapes", "overload-values", "overload-inherited", "overload-projected", "overload-state", "peer-tuple-value"]
   let negative := ["choice-refusal", "default-refusal", "override-refusal", "overload-interface-refusal",
     "overload-ancestor-refusal", "overload-optional-refusal", "overload-empty-refusal", "overload-scope-refusal",
-    "overload-value-refusal"]
+    "overload-value-refusal", "interior-readonly-refusal", "interior-effect-refusal"]
   let mut failures := 0
   for name in positive ++ negative do
     let root := s!"tests/upper-bounds/{name}"

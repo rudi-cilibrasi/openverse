@@ -539,6 +539,48 @@ private def receiverStateControlSource := receiverStateSource
 
 private def receiverStateTrace := "touch\nidentity a 1\nrolled\nrollback 1\nlive 4\n"
 
+private def interiorStateSource := "
+vehicle:=class<allocates>:
+    var N:int=0
+    var Items:[]int=array{1}
+car:=class<allocates>(vehicle){Name:string=\"a\"}
+carrier(s:type,t:type):=class<allocates>:
+    var X:s
+    Other:s
+    ReceiverEvidence:evidence(vehicle,s)
+    Index()<transacts>:int=
+        Print(\"index\")
+        set X=Other
+        0
+    Rhs(After:s)<transacts>:int=
+        set X=After
+        set X.Items=array{50,60}
+        set X.N=90
+        Print(\"rhs\")
+        7
+    Write(After:s)<transacts>:void=
+        if(set X.Items[Index()]+=Rhs(After)):Print(\"set\")
+    Precise()<reads>:s=X
+Main():void=
+    A:=car{Items:=array{1,10}}
+    B:=car{Name:=\"b\",Items:=array{2,20}}
+    H:=carrier(car,int){X:=A,Other:=B,ReceiverEvidence:=CarEvidence()}
+    H.Write(A)
+    if(A0:=A.Items[0],A1:=A.Items[1],B0:=B.Items[0],B1:=B.Items[1]):
+        Print(\"values {H.Precise().Name} {A.N} {B.N} {A0} {A1} {B0} {B1}\")
+    if(H.Write(A),false?)then Print(\"bad\")else Print(\"rolled\")
+    if(A0:=A.Items[0],A1:=A.Items[1],B0:=B.Items[0],B1:=B.Items[1]):
+        Print(\"after {H.Precise().Name} {A.N} {B.N} {A0} {A1} {B0} {B1}\")
+"
+
+private def interiorStateControlSource := interiorStateSource
+  |>.replace "        set X.Items=array{50,60}\n        set X.N=90"
+    "        V:=ReceiverEvidence.Up(After)\n        set V.Items=array{50,60}\n        set V.N=90"
+  |>.replace "        if(set X.Items[Index()]+=Rhs(After)):Print(\"set\")"
+    "        I:=Index()\n        V:=ReceiverEvidence.Up(X)\n        if(set V.Items[I]+=Rhs(After)):Print(\"set\")"
+
+private def interiorStateTrace := "index\nrhs\nset\nvalues a 90 0 50 60 9 20\nrolled\nafter a 90 0 50 60 9 20\n"
+
 private def receiverCancelSource := "
 vehicle:=class<allocates>{var N:int=0}
 car:=class<allocates>(vehicle){Name:string=\"a\"}
@@ -565,6 +607,9 @@ Main()<suspends>:void=
 
 private def receiverCancelControlSource := receiverCancelSource
   |>.replace "V:=X" "V:=ReceiverEvidence.Up(X)"
+
+private def interiorCancelSource := receiverCancelSource
+  |>.replace "set V.N=5" "set X.N=5"
 
 /-- Compiler-API fixture: explicit, checked source dictionaries become private
     receiver fields. Source upper-bound syntax is still guarded. -/
@@ -1048,6 +1093,14 @@ def main (args : List String) : IO Unit := do
   checkTrace "receiver cancellation" receiverCancel cancelTrace
   let receiverCancelControl ← receiverCompile "explicit receiver cancellation" receiverCancelControlSource
   checkTrace "explicit receiver cancellation" receiverCancelControl cancelTrace
+  let interiorState ← receiverCompile "interior path state" interiorStateSource
+  checkTrace "interior path state" interiorState interiorStateTrace
+  let interiorStateControl ← receiverCompile "explicit interior path state" interiorStateControlSource
+  checkTrace "explicit interior path state" interiorStateControl interiorStateTrace
+  let interiorCancel ← receiverCompile "interior path cancellation" interiorCancelSource
+  checkTrace "interior path cancellation" interiorCancel cancelTrace
+  let interiorCancelControl ← receiverCompile "explicit interior path cancellation" receiverCancelControlSource
+  checkTrace "explicit interior path cancellation" interiorCancelControl cancelTrace
   let refined ← receiverCompile "refined helper evidence" refinedSource
   checkTrace "refined helper evidence" refined refinedTrace
   let refinedControl ← receiverCompile "explicit refined helper evidence" refinedControlSource
@@ -1107,6 +1160,10 @@ def main (args : List String) : IO Unit := do
         ("receiver-state-control", receiverStateControl, receiverStateTrace),
         ("receiver-cancel", receiverCancel, cancelTrace),
         ("receiver-cancel-control", receiverCancelControl, cancelTrace),
+        ("interior-state", interiorState, interiorStateTrace),
+        ("interior-state-control", interiorStateControl, interiorStateTrace),
+        ("interior-cancel", interiorCancel, cancelTrace),
+        ("interior-cancel-control", interiorCancelControl, cancelTrace),
         ("refined", refined, refinedTrace), ("refined-control", refinedControl, refinedTrace),
         ("refined-state", refinedState, receiverStateTrace),
         ("refined-state-control", refinedStateControl, receiverStateTrace),

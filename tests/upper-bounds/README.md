@@ -7,7 +7,7 @@ override diagnostic; an unsupported-feature refusal does not satisfy them.
 
 These are development tests for #502. They intentionally remain outside the
 ordinary gate while `UpperBounds.checkParams` guards source admission. The
-ordinary gate runs `SubtypeEvidenceScopes.lean` and the 26 compiler-API runtime
+ordinary gate runs `SubtypeEvidenceScopes.lean` and the 30 compiler-API runtime
 artifacts through `test-subtype-evidence.sh`.
 
 Keep these acceptance tests failing until the requested source contract is
