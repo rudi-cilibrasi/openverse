@@ -10,7 +10,27 @@ namespace OpenVerse.Front
 open OpenVerse
 set_option maxHeartbeats 800000 in
 mutual
+partial def choiceCoerceResult (ctx : Ctx) (p : Pos) (r : R) (exp : Option Ty) : EM R := do
+  let some target := exp | return r
+  if r.ty == target then return r
+  let some (dictionary, source, _) := ctx.choiceCoercions.find? (fun (_, source, destination) =>
+    r.ty == source && target == destination) | return r
+  if ctx.typeOnly then return ⟨.seq r.e (.prim .userErr []), target⟩
+  let slot ← fresh source
+  let savedName := s!"$choiceConversionValue{slot}"
+  let inner := { ctx with
+    locals := { name := savedName, slot, ty := source, mutable := false } :: dictionary :: ctx.locals }
+  let invocation := SExpr.app p (.ident p "$choiceOperation")
+    [.str p [.text (FnValues.shapeOf 1 ["computes"]).name], .ident p dictionary.name, .ident p savedName] false
+  let converted ← elabECore inner invocation (some target)
+  return ⟨.seq (.assign slot r.e) converted.e, converted.ty⟩
+
 partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
+  let ctx := ctx.choiceCoercionScope
+  let result ← elabECore ctx se exp
+  choiceCoerceResult ctx se.pos result exp
+
+partial def elabECore (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
   let result ← elabERaw ctx se exp
   if let some target := exp then
     if target != .void && result.ty != target && result.ty != .never &&

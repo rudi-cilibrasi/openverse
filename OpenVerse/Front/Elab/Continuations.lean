@@ -219,7 +219,9 @@ def sourceContextOf (ctx : Ctx) : Choice.SourceContext := {
 
 def sourceContextKey (ctx : Ctx) : String :=
   let scope := sourceContextOf ctx
-  if scope == ({} : Choice.SourceContext) then "" else "_source:" ++ reprStr scope
+  let source := if scope == ({} : Choice.SourceContext) then "" else "_source:" ++ reprStr scope
+  source ++ (if ctx.choiceCoercions.isEmpty then "" else "_conversions:" ++
+    reprStr (ctx.choiceCoercions.map fun (dictionary, source, target) => (dictionary.name, source, target)))
 
 /-- Refined helpers keep their source copy tag and context identity separate. -/
 def refineTagOf (ctx : Ctx) : String :=
@@ -296,6 +298,22 @@ def firstUnpack (p : Pos) (l : Choice.FirstLift) (packet : String) : List SExpr 
     source position and captured names alone would reuse the previous contract.
     The named type instances also distinguish an inlined body's output types
     even when its producer parameters and captures have identical types. -/
+def Ctx.choiceCoercionScope (ctx : Ctx) : Ctx :=
+  if ctx.choiceCoercions.isEmpty then ctx else
+  let dictionaries := (ctx.choiceCoercions.map (·.1)).filter fun dictionary =>
+    !(ctx.locals.any (·.name == dictionary.name))
+  let variables := Ty.mergeParamBounds (ctx.choiceCoercions.flatMap fun (_, source, target) => source.paramsC ++ target.paramsC)
+  let missing := variables.filter fun (name, _) => !(ctx.types.tvars.any (·.1 == name))
+  { ctx with
+    locals := dictionaries ++ ctx.locals,
+    types := { ctx.types with tvars := ctx.types.tvars ++ missing.map (fun (name, bound) => (name, Ty.param name bound)) } }
+
+def Ctx.choiceCoercionBody (ctx : Ctx) (body : SExpr) : SExpr :=
+  if ctx.choiceCoercions.isEmpty then body else
+  let p := body.pos
+  .app p (.ident p "$choiceCoercions") [.block p (ctx.choiceCoercions.map fun (dictionary, source, target) =>
+    .tuple p [.ident p dictionary.name, .construct p "$choiceConversion" [source.toSTy, target.toSTy] []]), body] false
+
 def firstKey (ctx : Ctx) (p : Pos) (lp : List SExpr) (b : String) (bty : Option STy)
     (rest : List SExpr) : String :=
   let written := SExpr.block p (lp ++ rest)
@@ -597,6 +615,7 @@ def firstLiftOf (ctx c2 : Ctx) (p : Pos) (g : String) (lp : List SExpr) (b : Str
     (rest : List SExpr) (fxB : List (String × Pos × Option String)) (suspends : Bool) (vty : Ty)
     (instances : List (String × List (String × Ty)) := []) :
     Except String Choice.FirstLift := do
+  let ctx := ctx.choiceCoercionScope
   let [_, .block _ ps, .block _ cls, .decl _ _ _ _ tail] := lp | throw "internal: a $loop marker"
   let key := firstKey ctx p lp b bty rest
   let written := SExpr.block p (lp ++ rest)
@@ -626,7 +645,7 @@ def firstLiftOf (ctx c2 : Ctx) (p : Pos) (g : String) (lp : List SExpr) (b : Str
     | some l => pure l
     | none => throw s!"internal: parameter {n}"
   -- (the consumer's names the clauses after it use, in order of first use)
-  let caps : List Local := ctx.captureEvidence ((Choice.namesUsed (.block p rest)).eraseDups.filterMap fun n =>
+  let caps : List Local := ctx.captureEvidence ((Choice.namesUsed (ctx.choiceCoercionBody (.block p rest))).eraseDups.filterMap fun n =>
     if pnames.contains n then none else ctx.lookup n) pnames
   let setNames := Choice.setsIn (.block p rest)
   let sets := caps.filter fun l => l.mutable && setNames.contains l.name
@@ -700,7 +719,7 @@ def firstLiftOf (ctx c2 : Ctx) (p : Pos) (g : String) (lp : List SExpr) (b : Str
     | _ => throw "internal: a $member (#283)"
   return { key, pos := p, name, returnExit, sourceContext := sourceContextOf ctx, inlineScopes := ctx.inlineScopes, liftTag := ctx.liftTag,
            params := params ++ typeParams, tparams := tps, specs, ret,
-           body := pruneConstructHints ctx name
+           body := ctx.choiceCoercionBody <| pruneConstructHints ctx name
              (Choice.firstBody name p b bty cls tail rest binds setsT capArgs (some vty.toSTy) nameOf recArgs
                (if source.isSome then some normal else none)),
            binds, sets := sets.map (·.name), args := pnames.map (SExpr.ident p ·) ++ caps.map (fun l => .ident p l.name) ++ typeArgs,
@@ -739,7 +758,8 @@ def contKey (ctx : Ctx) (p : Pos) (b : String) (rest : List SExpr) : String :=
     why not, and the clauses are copied, as before. -/
 def contLiftOf (ctx c2 : Ctx) (p : Pos) (b : String) (alts rest : List SExpr)
     (fxB : List (String × Pos × Option String)) : Except String Choice.FirstLift := do
-  let written := SExpr.block p rest
+  let ctx := ctx.choiceCoercionScope
+  let written := ctx.choiceCoercionBody (.block p rest)
   -- (the alternatives' names too: their types fix the binding's)
   let key := contKey ctx p b (alts ++ rest) ++ firstReturnKey ctx rest
   let σt := ctx.types.tvars.map fun (n, t) => (n, t.toSTy)
@@ -755,7 +775,7 @@ def contLiftOf (ctx c2 : Ctx) (p : Pos) (b : String) (alts rest : List SExpr)
       some <$> (resolveTy ctx.types p (firstReturnType ctx)).run' { env := ctx.types }
     else pure none
   if (Refine.findPart (fun | .brk _ => true | _ => false) true (.block p rest)).isSome then throw "a break"
-  let caps : List Local := ctx.captureEvidence ((Choice.namesUsed (.block p rest)).eraseDups.filterMap ctx.lookup)
+  let caps : List Local := ctx.captureEvidence ((Choice.namesUsed (ctx.choiceCoercionBody (.block p rest))).eraseDups.filterMap ctx.lookup)
   let setNames := Choice.setsIn (.block p rest)
   let sets := caps.filter fun l => l.mutable && setNames.contains l.name
   let binds := (b :: Choice.boundIn rest).eraseDups
@@ -781,8 +801,8 @@ def contLiftOf (ctx c2 : Ctx) (p : Pos) (b : String) (alts rest : List SExpr)
            params := params ++ typeParams, tparams := tps,
            specs := (if heap.isEmpty then ["computes"] else heap) ++ ["decides"],
            ret,
-           body := pruneConstructHints ctx name
-             (.block p (copies ++ [.app p (.ident p "$firstP") [.block p (rest ++ [tup])] false])),
+           body := ctx.choiceCoercionBody (pruneConstructHints ctx name
+             (.block p (copies ++ [.app p (.ident p "$firstP") [.block p (rest ++ [tup])] false]))),
            binds, sets := sets.map (·.name),
            args := SExpr.ident p b :: caps.map (fun l => SExpr.ident p l.name) ++ typeArgs,
            varBinds := (bls.filter (·.mutable)).map (·.name) }
@@ -845,7 +865,7 @@ partial def forBodySafe (ctx : Ctx) (body : SExpr) : Bool :=
   -- generic/default argument bindings) inside the body. Their ownership is
   -- checked when that consumer elaborates; they do not escape the helper.
   let safeMarkers := ["$sourceSuper", "$methodMiss", "$methodCast", "$methodCase", "$methodType", "$methodParams", "$inlineScope", "$inlineScopeEnd", "$inline", "$choice", "$excl", "$alt", "$firstP", "$first", "$each", "$noLift", "$fxOf",
-    "$forReturns", "$forReturnBody", "$forClauseExits", "$choiceOperation", "$choiceGenericOperation", "$choiceDictionary", "$defer", "$loop", "$rec", "$recTo", "$group", "$member", "$returnTail",
+    "$forReturns", "$forReturnBody", "$forClauseExits", "$choiceOperation", "$choiceGenericOperation", "$choiceCoercions", "$choiceDictionary", "$defer", "$loop", "$rec", "$recTo", "$group", "$member", "$returnTail",
     "$tparams", "$params", "$defaults", "$paramDefault", "$freeNames", "$declNames", "$callArgs", "$callSingleton"]
   let rec blocked (e : SExpr) : Bool :=
     match e with
@@ -882,7 +902,8 @@ def restoreForContTrial (saved : ESt) : EM Unit := do
     and the clauses are copied, as before. -/
 def contForLiftOf (ctx : Ctx) (p : Pos) (b : String) (bty vty : Ty) (alts rest : List SExpr) (body : SExpr) (outcome : Bool := false) :
     Except String Choice.FirstLift := do
-  let written := SExpr.block p (rest ++ [body])
+  let ctx := ctx.choiceCoercionScope
+  let written := ctx.choiceCoercionBody (.block p (rest ++ [body]))
   let key := (if outcome then "fo" else "f") ++ contKey ctx p b (alts ++ rest ++ [body])
   let σt := ctx.types.tvars.map fun (n, t) => (n, t.toSTy)
   let rest := rest.map (Refine.substTypes σt)
@@ -900,7 +921,7 @@ def contForLiftOf (ctx : Ctx) (p : Pos) (b : String) (bty vty : Ty) (alts rest :
     | .app _ (.ident _ "$forReturnBody") [.block _ [_, .set _ (.ident _ _) none _], _, _] false => true
     | _ => false
   if !breaks && (Refine.findPart Refine.isBreak true (.block p rest)).isSome then throw "a break"
-  let caps : List Local := ctx.captureEvidence ((Choice.namesUsed (.block p (rest ++ [body]))).eraseDups.filterMap ctx.lookup)
+  let caps : List Local := ctx.captureEvidence ((Choice.namesUsed (ctx.choiceCoercionBody (.block p (rest ++ [body])))).eraseDups.filterMap ctx.lookup)
   let setNames := Choice.setsIn (.block p (rest ++ [body]))
   let sets := caps.filter fun l => l.mutable && setNames.contains l.name
   let (tps, typeParams, typeArgs) ← contTypes ctx p (bty :: caps.map (·.ty)) [vty] written
@@ -930,7 +951,7 @@ def contForLiftOf (ctx : Ctx) (p : Pos) (b : String) (bty vty : Ty) (alts rest :
   return { key, pos := p, name, sourceContext := sourceContextOf ctx, inlineScopes := ctx.inlineScopes, liftTag := ctx.liftTag,
            params := params ++ typeParams, tparams := tps,
            specs := (if heap.isEmpty then ["computes"] else heap) ++ ["decides"],
-           ret, body := pruneConstructHints ctx name bodyE, binds := [], sets := sets.map (·.name),
+           ret, body := ctx.choiceCoercionBody (pruneConstructHints ctx name bodyE), binds := [], sets := sets.map (·.name),
            args := SExpr.ident p b :: caps.map (fun l => SExpr.ident p l.name) ++ typeArgs }
 
 /-- The resume interface keeps every caller/frame type argument. A result
@@ -938,15 +959,16 @@ def contForLiftOf (ctx : Ctx) (p : Pos) (b : String) (bty vty : Ty) (alts rest :
 def forStagePlanOf (ctx : Ctx) (p : Pos) (key : String) (clauses : List SExpr)
     (body : SExpr) (vty : Ty) (outcome : Bool) (required : List String := [])
     (sourceSuspends : Bool := false) : Except String Choice.FirstLift := do
+  let ctx := ctx.choiceCoercionScope
   let qualify := match ctx.selfClass with | some c => selfQualify ctx c | none => id
   let clauses := clauses.map qualify
   let body := qualify body
-  let written := SExpr.block p (clauses ++ [body] ++ required.map (SExpr.ident p ·))
+  let written := ctx.choiceCoercionBody (.block p (clauses ++ [body] ++ required.map (SExpr.ident p ·)))
   let used := Choice.namesUsed written
   let caps := ctx.captureEvidence (used.eraseDups.filterMap ctx.lookup)
   let setNames := Choice.setsIn written
   let sets := caps.filter fun l => l.mutable && setNames.contains l.name
-  let inputs := caps.flatMap fun l => l.storage.toList.flatMap (·.args)
+  let inputs := (caps.flatMap fun l => l.storage.toList.flatMap (·.args)) ++ ctx.choiceCoercions.map (·.1.ty)
   let (tps, _, _) ← contTypes ctx p inputs (vty :: sets.map (·.ty)) (.tuple p [])
   let base := s!"$forStage{p.line}_{p.col}_{key.hash}"
   let method := base ++ "$resume"
@@ -1010,13 +1032,14 @@ def forStagePrefixOf (ctx : Ctx) (plan : Choice.ForStagePlan) (args : List Ty) (
     (clauses : List SExpr) (body : SExpr) (flat : Bool := false)
     (copyNames : List String := plan.copies.map (·.1))
     (borrowNames : List String := plan.borrowed) : Except String Choice.FirstLift := do
+  let ctx := ctx.choiceCoercionScope
   let qualify := match ctx.selfClass with | some c => selfQualify ctx c | none => id
   -- Default annotations use private lexical aliases. Resolve them before
   -- the prefix moves into a function with only its own type parameters.
   let σt := ctx.types.tvars.map fun (n, t) => (n, t.toSTy)
   let clauses := clauses.map fun e => Refine.substTypes σt (qualify e)
   let body := Refine.substTypes σt (qualify body)
-  let written := SExpr.block p (clauses ++ [body] ++ (copyNames ++ borrowNames).map (SExpr.ident p ·))
+  let written := ctx.choiceCoercionBody (.block p (clauses ++ [body] ++ (copyNames ++ borrowNames).map (SExpr.ident p ·)))
   let caps := ctx.captureEvidence ((Choice.namesUsed written).eraseDups.filterMap ctx.lookup)
   let key := s!"prefix{flat}" ++ plan.key ++ contKey ctx p "$prepare" [written] ++ forStageCaptureKey ctx args caps
   let name := s!"{plan.base}$prepare{key.hash}"
@@ -1046,7 +1069,7 @@ def forStagePrefixOf (ctx : Ctx) (plan : Choice.ForStagePlan) (args : List Ty) (
   return {
     key, pos := p, name, params := params ++ more, tparams := tps,
     specs := plan.specs.filter (· != "suspends") ++ ["decides"], ret,
-    body := pruneConstructHints ctx name (.block p (init ++ [code])),
+    body := ctx.choiceCoercionBody (pruneConstructHints ctx name (.block p (init ++ [code]))),
     binds := [], sets := copyNames,
     args := caps.map (fun l => .ident p l.name) ++ witnesses.map (fun
       | .app q (.ident _ "$witness") [.ident _ n] false =>
@@ -1058,10 +1081,11 @@ def forStagePrefixOf (ctx : Ctx) (plan : Choice.ForStagePlan) (args : List Ty) (
     mutable local aliases still name their original source-frame storage. -/
 def forStageEnvOf (ctx : Ctx) (plan : Choice.ForStagePlan) (p : Pos)
     (clauses : List SExpr) (body : SExpr) : Except String (Choice.FirstLift × SExpr × Ty) := do
+  let ctx := ctx.choiceCoercionScope
   let qualify := match ctx.selfClass with | some c => selfQualify ctx c | none => id
   let clauses := clauses.map qualify
   let body := qualify body
-  let written := SExpr.block p (clauses ++ [body] ++ (ctx.forStageCopies ++ ctx.forStageBorrows).map (SExpr.ident p ·))
+  let written := ctx.choiceCoercionBody (.block p (clauses ++ [body] ++ (ctx.forStageCopies ++ ctx.forStageBorrows).map (SExpr.ident p ·)))
   let caps := ctx.captureEvidence ((Choice.namesUsed written).eraseDups.filterMap ctx.lookup)
   let key := s!"env{ctx.forStageFlat}" ++ plan.key ++ contKey ctx p "$resume" [written] ++ forStageCaptureKey ctx ctx.forStageArgs caps
   let name := s!"{plan.base}$env{key.hash}"
@@ -1104,7 +1128,7 @@ def forStageEnvOf (ctx : Ctx) (plan : Choice.ForStagePlan) (p : Pos)
   let ret := if copies.isEmpty then valueTy else
     .tup (valueTy :: plan.copies.map (fun (_, t) => t.substNames σ))
   let method := STop.fn p plan.method [] [] ("override" :: plan.specs) ret
-    (pruneConstructHints ctx s!"{name}.{plan.method}" (.block p (init ++ [code])))
+    (pruneConstructHints ctx s!"{name}.{plan.method}" (.block p (init ++ [ctx.choiceCoercionBody code])))
   let storage := caps.filterMap fun l => (borrowed l).map fun s =>
     (localName l.name, ({ frame := s.frame, name := s.name, args := s.args.map Ty.toSTy } : Choice.ResumeStorage))
   let resumeInfo : Choice.ForResume := {
@@ -1145,6 +1169,7 @@ structure ChoiceOperations where
   params : List (String × Ty) := []
   replacements : List (SExpr × SExpr) := []
   knownTypes : List (SExpr × Ty) := []
+  coercions : List (String × Ty × Ty) := []
   casePrelude : List (List SExpr) := []
   extraFns : List STop := []
 
@@ -1169,6 +1194,52 @@ def ChoiceOperations.context (ops : ChoiceOperations) (ctx : Ctx) : EM Ctx := do
 
 def ChoiceOperations.lift (ops : ChoiceOperations) (key : String) (lift : Choice.FirstLift) : Choice.FirstLift :=
   { lift with key, casePrelude := ops.casePrelude, extraFns := lift.extraFns ++ ops.extraFns }
+
+/-- Checked conversion evidence for a numeric choice column. The source
+    is still elaborated with that column as its expected type. -/
+def choiceNumericConversions (ctx : Ctx) (stem : String) (ops0 : ChoiceOperations) : ChoiceOperations := Id.run do
+  let mut ops := ops0
+  let p : Pos := { line := 0, col := 0 }
+  for (typeName, bound) in ops.plan.params do
+    let target := Ty.param typeName bound
+    if ops.coercions.any (·.2.2 == target) then continue
+    let actuals := ops.plan.instances.map fun row => (target.subst row).subst ctx.types.tvars
+    if !actuals.all (fun ty => ty == .int || ty == .rational) || !actuals.contains .rational then continue
+    let family := s!"$choiceOperationDictionary{(reprStr ("convertInt", actuals)).hash}"
+    let name := s!"{stem}$convert{ops.coercions.length}"
+    let variables := ["$convertSource", "$convertTarget"]
+    let tps : List TParam := variables.map fun n => { pos := p, name := n, constraint := "type" }
+    let familyTy := STy.app family (variables.map STy.name)
+    let iface := STop.classDef p family tps [] [] true [] []
+      [.fn p "$apply" [{ name := "$value", ty := .name "$convertSource" }] []
+        ["$abstract", "computes"] (.name "$convertTarget") (.tuple p [])]
+    let applyFn := STop.fn p (family ++ "$apply")
+      [{ name := "$Self", ty := familyTy }, { name := "$value", ty := .name "$convertSource" }]
+      tps ["computes"] (.name "$convertTarget")
+      (.app p (.member p (.ident p "$Self") "$apply") [.ident p "$value"] false)
+    let mut definitions := [iface, applyFn]
+    let mut bindings : List (List SExpr) := []
+    for (actual, i) in actuals.zipIdx do
+      let impl := s!"{family}$case{i}"
+      let instanceTy := STy.app family [Ty.int.toSTy, actual.toSTy]
+      definitions := definitions ++ [STop.classDef p impl [] [] [instanceTy] false [] []
+        [.fn p "$apply" [{ name := "$value", ty := Ty.int.toSTy }] [] ["override", "computes"]
+          actual.toSTy (.ident p "$value")]]
+      bindings := bindings ++ [[SExpr.decl p name (some instanceTy) false
+        (.app p (.ident p "$choiceDictionary") [.construct p impl [] []] false)]]
+    ops := { ops with
+      params := ops.params ++ [(name, .struct family [.int, target])],
+      coercions := ops.coercions ++ [(name, .int, target)],
+      casePrelude := (ops.casePrelude.zip bindings).map fun (old, next) => old ++ next,
+      extraFns := ops.extraFns ++ definitions }
+  return ops
+
+def ChoiceOperations.coercionContext (ops : ChoiceOperations) (body : SExpr) : SExpr :=
+  if ops.coercions.isEmpty then body else
+  let p := body.pos
+  let metadata := ops.coercions.map fun (name, source, target) => SExpr.tuple p
+    [.ident p name, .construct p "$choiceConversion" [source.toSTy, target.toSTy] []]
+  .app p (.ident p "$choiceCoercions") [.block p metadata, body] false
 
 /-- The selected binding and immutable aliases, in reverse lexical order.
     An alias retains its initializer so its checked result can be recovered
@@ -1439,6 +1510,7 @@ def choiceOperations (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx)
       extended := next
       inputs := inputs ++ [input]
     let (finalPlan, result) := ChoiceTypes.extend ctx.types stem extended (cases.map (·.result))
+    if setter.isSome then ops := choiceNumericConversions ctx stem { ops with plan := finalPlan }
     let specs := (if cases.any (·.specs.contains "suspends") then ["suspends"] else []) ++
       (if bracket then ["decides"] else []) ++
       (let effects := heapFx.filter fun k => cases.any fun row => (allowedFx row.specs).contains k
@@ -1490,7 +1562,10 @@ def choiceOperations (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx)
       let value := SExpr.construct p impl (vars.map fun (n, _) => .name n) []
       bindings := bindings ++ [[.decl p name (some valueTy) false
         (.app p (.ident p "$choiceDictionary") [value] false)]]
-    let sourceValues := ops.rewrite receiver :: arguments.map ops.rewrite
+    let sourceArguments := arguments.mapIdx fun i value =>
+      let value := ops.rewrite value
+      if setter.isSome && i + 1 == arguments.length then ops.coercionContext value else value
+    let sourceValues := ops.rewrite receiver :: sourceArguments
     ops := { ops with
       plan := finalPlan, params := ops.params ++ [(name, ty)],
       knownTypes := ops.knownTypes ++ [(call, result)],

@@ -124,6 +124,7 @@ def main : IO Unit := do
     (caller.checkInlineInstance p formal [("t", t)])
   let aliases (value : SExpr) : List (String × SExpr) := [
     ("direct", value),
+    ("choice conversion body", .app p (.ident p "$choiceCoercions") [.block p [], value] false),
     ("final declaration", .block p [.decl p "Inner" none false value]),
     ("statement then final declaration", .block p [.int p 0, .decl p "Inner" none false value]),
     ("explicit inner result", .block p [.decl p "Inner" none false value, .ident p "Inner"]),

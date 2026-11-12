@@ -306,6 +306,7 @@ structure Ctx where
   /-- The functions' `<decides>` flags, as a program, for `Expr.mayFail`. -/
   sigProg : Prog
   locals  : List Local := []
+  choiceCoercions : List (Local × Ty × Ty) := []
   frameName : String := ""
   frameArgs : List Ty := []
   canFail : Bool := false
@@ -783,6 +784,7 @@ def Ctx.evidenceTypes (ctx : Ctx) : List (String × Ty) :=
 partial def Ctx.isTypeValue (ctx : Ctx) : SExpr → Bool
   | .ident _ "$witness" => true
   | .ident _ name => (ctx.lookup name).any (·.typeValue)
+  | .app _ (.ident _ "$choiceCoercions") [_, body] false => ctx.isTypeValue body
   | .app _ (.ident _ name) args false =>
     if ["$typeValue", "$witness", "$stageWitness"].contains name then true
     else if ["$refineCopyIn", "$refineCopyOut", "$forEnvCapture", "$forEnvInit"].contains name then
@@ -955,7 +957,8 @@ partial def argNeedsTypeWith (elabE : Ctx → SExpr → Option Ty → EM R) (ctx
       [ctx.canFail, ctx.inTaking, ctx.suspends, ctx.inLoop, ctx.inParamDefault, ctx.inDefer,
        ctx.inBlock, ctx.inCtor, ctx.inArm, ctx.inBranch, ctx.inDefaultCheck, ctx.inRepeat,
        ctx.inChoice, ctx.asWritten, ctx.constructProbe], ctx.defaults, ctx.inlineScopes,
-      ctx.constructOrigin, ctx.unrefine)
+      ctx.constructOrigin, ctx.unrefine) ++ (if ctx.choiceCoercions.isEmpty then "" else
+        reprStr (ctx.choiceCoercions.map fun (dictionary, source, target) => (dictionary.name, source, target)))
     let saved ← get
     if let some c := saved.methodReceivers[key]? then
       return c.any (ctx.methodValueNeedsType · m)

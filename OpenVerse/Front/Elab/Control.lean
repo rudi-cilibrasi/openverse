@@ -407,6 +407,8 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
     (escRet : Option (Ty × Refine.Exits) := none)
     (outsideWrites : List Nat := []) :
     EM (Option R) := do
+  let ctx := ctx.choiceCoercionScope
+  let body0 := ctx.choiceCoercionBody body0
   let env := ctx.types
   if !env.classes.contains T then return none
   -- (in a method: the members of `Self` the branch names bare, as members
@@ -604,7 +606,7 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
       -- (made: a branch the elaborator made, for a cast with clauses
       -- after it, #286, which the source does not have as such)
       -- (and a tagged one, which the source's places do not find, #53)
-      body := if ctx.selfClass.isSome || made || D.startsWith "$" || !tag.isEmpty then some (pruneConstructHints ctxB liftName
+      body := if ctx.selfClass.isSome || made || D.startsWith "$" || !tag.isEmpty || !ctx.choiceCoercions.isEmpty then some (pruneConstructHints ctxB liftName
         (pruneConstructHints { ctxB with frameName := ctx.frameName } liftName body)) else none }
     modify fun st => if st.castNeeds.any (·.key == key) then st else { st with castNeeds := st.castNeeds ++ [lift] }
     if suspendsB then
