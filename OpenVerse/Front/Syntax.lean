@@ -208,6 +208,13 @@ def SExpr.mapChildrenM [Monad m] (f : SExpr → m SExpr) (e : SExpr) : m SExpr :
   | .int .. | .char .. | .char32 .. | .float .. | .ident .. | .brk ..
   | .structDef .. | .enumDef .. | .refineDef .. => return e
 
+/-- `e` with its children (`children`) replaced by `cs`, in order. -/
+def SExpr.withChildren (e : SExpr) (cs : List SExpr) : SExpr :=
+  let next (c : SExpr) : StateM (List SExpr) SExpr := modifyGet fun
+    | c' :: rest => (c', rest)
+    | [] => (c, [])
+  (e.mapChildrenM next).run' cs
+
 structure SParam where
   name : String
   ty   : STy

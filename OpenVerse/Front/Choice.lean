@@ -278,16 +278,13 @@ partial def hasLiftable : SExpr → Bool
       -- no value to lift from: its choices are its own)
       | a@(.block ..) => !(match f with | .ident _ n => n.startsWith "$" | _ => false) && hasLiftable a
       | a => hasLiftable a
-  | .bin _ _ a b | .range _ a b => hasLiftable a || hasLiftable b
+  -- (operands evaluated left to right, once each)
+  | e@(.bin ..) | e@(.range ..) | e@(.cmp ..) | e@(.member ..) | e@(.query ..) | e@(.neg ..)
+  | e@(.tuple ..) | e@(.arrayLit ..) | e@(.str ..) | e@(.mapLit ..) => e.children.any hasLiftable
   -- (#283) the operands of `and`, and the right of `or` (its left is a
   -- failure context, which takes its own): each a clause, of a scope of its own
   | .andE _ a b => liftsHere a || liftsHere b
   | .orE _ _ b => liftsHere b
-  | .cmp _ a rest => hasLiftable a || rest.any (hasLiftable ·.2)
-  | .member _ e _ | .query _ e | .neg _ e => hasLiftable e
-  | .tuple _ es | .arrayLit _ es => es.any hasLiftable
-  | .str _ ps => ps.any fun | .code c => hasLiftable c | .text _ => false
-  | .mapLit _ kvs => kvs.any fun (k, v) => hasLiftable k || hasLiftable v
   -- (a construction's field values and a block's clauses, #283)
   | .construct _ _ _ fs => fs.any fun | .decl _ _ _ _ x => hasLiftable x | x => hasLiftable x
   | .block _ ss => ss.any liftsHere
@@ -745,13 +742,12 @@ partial def liftE (isVal : String → Bool) (isField : String → String → Boo
       | _, [h] => h
       | _, _ => f
     return .app p f' args' br
-  | .bin p o a b => match ← liftOps isVal isField [a, b] with
-    | [a', b'] => return .bin p o a' b'
-    | _ => return e
-  -- (#283) a range's bounds, so a `for`'s range is a generator after them
-  | .range p a b => match ← liftOps isVal isField [a, b] with
-    | [a', b'] => return .range p a' b'
-    | _ => return e
+  -- (operands evaluated left to right, once each, `liftOps`: those of
+  -- arithmetic, member access, `?`, tuples, arrays, maps and string
+  -- interpolation; #283, a range's bounds, so a `for`'s range is a
+  -- generator after them)
+  | .bin .. | .range .. | .member .. | .query .. | .neg .. | .tuple .. | .arrayLit .. | .str .. | .mapLit .. =>
+    return e.withChildren (← liftOps isVal isField e.children)
   -- (#283) `A and B`: its operands in order, each a block, as each is a scope
   -- of its own: `A` a clause, then `B` the value
   | .andE _ a b =>
@@ -759,25 +755,6 @@ partial def liftE (isVal : String → Bool) (isField : String → String → Boo
     liftE isVal isField (.block b.pos [b])
   | .orE .. => liftE isVal isField (orIf (← get).site e)
   | .cmp p a rest => liftCmp isVal isField p (a :: rest.map (·.2)) (rest.map (·.1))
-  | .member p x m => return .member p (← liftE isVal isField x) m
-  | .query p x => return .query p (← liftE isVal isField x)
-  | .neg p x => return .neg p (← liftE isVal isField x)
-  | .tuple p es => return .tuple p (← liftOps isVal isField es)
-  | .arrayLit p es => return .arrayLit p (← liftOps isVal isField es)
-  | .str p ps =>
-    let codes := ps.filterMap fun | .code c => some c | .text _ => none
-    let codes' ← liftOps isVal isField codes
-    let rec put : List SPart → List SExpr → List SPart
-      | .code _ :: ps, c :: cs => .code c :: put ps cs
-      | p :: ps, cs => p :: put ps cs
-      | [], _ => []
-    return .str p (put ps codes')
-  | .mapLit p kvs =>
-    let flat ← liftOps isVal isField (kvs.flatMap fun (k, v) => [k, v])
-    let rec pairs : List SExpr → List (SExpr × SExpr)
-      | k :: v :: r => (k, v) :: pairs r
-      | _ => []
-    return .mapLit p (pairs flat)
   | .construct p n ts fs =>
     -- (#283) a construction's field values, as a call's arguments, in the
     -- order it evaluates them: its type's declaration order, not as written
