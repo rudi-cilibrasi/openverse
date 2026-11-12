@@ -790,7 +790,10 @@ partial def Ctx.isTypeValue (ctx : Ctx) : SExpr → Bool
     else (ctx.lookup name).any (·.typeValue)
   | .member _ value field => field.startsWith "$w." || ctx.isTypeValue value
   | .app _ value _ _ => ctx.isTypeValue value
+  | .decl _ _ _ _ value | .query _ value | .optionLit _ value => ctx.isTypeValue value
+  | .set _ receiver op value => ctx.isTypeValue value || (op.isSome && ctx.isTypeValue receiver)
   | .tuple _ values | .arrayLit _ values => values.any ctx.isTypeValue
+  | .mapLit _ entries => entries.any fun (key, value) => ctx.isTypeValue key || ctx.isTypeValue value
   | .block _ values =>
     let (_, result) := values.foldl (fun (scope, _) value =>
       let role := scope.isTypeValue value
@@ -800,7 +803,13 @@ partial def Ctx.isTypeValue (ctx : Ctx) : SExpr → Bool
         | _ => scope
       (scope, role)) (ctx, false)
     result
-  | .ite _ _ yes no => ctx.isTypeValue yes || no.any ctx.isTypeValue
+  | .ite _ conditions yes no =>
+    let scope := conditions.foldl (fun scope condition => match condition with
+      | .decl _ name _ _ value => { scope with locals :=
+          { name, slot := 0, ty := .void, mutable := false, typeValue := scope.isTypeValue value } :: scope.locals }
+      | _ => scope) ctx
+    scope.isTypeValue yes || no.any ctx.isTypeValue
+  | .caseE _ _ arms => arms.any fun (_, body) => ctx.isTypeValue body
   | _ => false
 
 def Ctx.evidenceEnv (ctx : Ctx) : TyEnv :=

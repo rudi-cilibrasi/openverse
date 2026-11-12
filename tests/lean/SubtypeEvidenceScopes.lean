@@ -122,6 +122,38 @@ def main : IO Unit := do
     (actual.checkInlineInstance p formal [("t", .int)])
   refused "inlining cannot promote a dummy dictionary"
     (caller.checkInlineInstance p formal [("t", t)])
+  let aliases (value : SExpr) : List (String × SExpr) := [
+    ("direct", value),
+    ("final declaration", .block p [.decl p "Inner" none false value]),
+    ("statement then final declaration", .block p [.int p 0, .decl p "Inner" none false value]),
+    ("explicit inner result", .block p [.decl p "Inner" none false value, .ident p "Inner"]),
+    ("case result", .caseE p (.int p 1) [(some (.int p 1), value), (none, value)]),
+    ("case literal result", .caseE p (.int p 1) [(some (.int p 1), value), (none, .ident p "Other")]),
+    ("case fallback result", .caseE p (.int p 1) [(some (.int p 1), .ident p "Other"), (none, value)]),
+    ("conditional binding result", .ite p [.decl p "Inner" none false value, .query p (.ident p "true")]
+      (.ident p "Inner") (some (.ident p "Other"))),
+    ("queried option", .query p (.optionLit p value)),
+    ("map lookup", .app p (.mapLit p [(.int p 1, value)]) [.int p 1] true)]
+  for dummyRole in [true, false] do
+    let scope := { caller with
+      canFail := true,
+      locals := (caller.locals.map fun binding => { binding with typeValue := dummyRole }) ++
+        [{ name := "Other", slot := 1, ty := proof, mutable := false }] }
+    for (shape, rhs) in aliases (.ident p "Witness") do
+      let (result, _) ← getOK s!"elaborate {shape} alias"
+        ((elabStmt scope (.decl p "Leaked" none false rhs) none).run
+          { env, nslots := 2, slotTys := #[proof, proof] })
+      let aliasScope := { result.2 with locals := result.2.locals.filter (·.name == "Leaked") }
+      need s!"{shape} preserves the returned value's dummy role"
+        ((result.2.lookup "Leaked").any (·.typeValue) == dummyRole)
+      need s!"{shape} cannot promote dummy evidence"
+        ((find? env aliasScope.evidenceTypes ⟨vehicle, t⟩).isSome == !dummyRole)
+      if dummyRole then
+        refused s!"{shape} cannot authorize an inlined bound"
+          (aliasScope.checkInlineInstance p formal [("t", t)])
+      else
+        discard <| getOK s!"{shape} retains usable real evidence"
+          (aliasScope.checkInlineInstance p formal [("t", t)])
   refused "inlining needs executable evidence even with a static fact"
     (({ caller with locals := [], types := ambient } : Ctx).checkInlineInstance p formal [("t", t)])
   let _ ← getOK "omitted defaults can complete an inlined instance later"
