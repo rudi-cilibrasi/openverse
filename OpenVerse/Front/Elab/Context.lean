@@ -457,6 +457,80 @@ def Ctx.acceptsHelper (ctx : Ctx) (lift : Choice.FirstLift) : Bool :=
   ctx.infersHeapFx ||
     (lift.specs.filter (["reads", "writes", "allocates"].contains ·)).all ctx.fnFx.contains
 
+/-- What an elaboration of the program asks for that only types tell, for
+    the program to be elaborated again with it (`Compiled.needs`), and what
+    earlier elaborations asked for (`Options.requests`): `elabProgram`
+    elaborates the program in rounds until one asks for nothing new. -/
+structure Requests where
+  /-- Pure mutual groups that retain the eager polymorphic-recursion path. -/
+  eager : List String := []
+  /-- (#283) Recursive functions with several values whose values would be
+      computed at the call, but something they run prints or calls
+      `Err()`: taken lazily if their shape allows. -/
+  lazy : List String := []
+  /-- (#283) For each use `R.M` of a method several classes or interfaces
+      declare apart, by its place: the root its receiver's class is below,
+      whose family it takes (`Choice.famAt`). -/
+  families : List (Pos × String) := []
+  /-- Functions wanted as values at closed function types no class of
+      theirs gives (#214): a class for each. -/
+  fns : List (String × Ty) := []
+  /-- Methods wanted as values at function types their own fit only by
+      variance: an adapter for each, by key. -/
+  methods : List FnValues.MethodRequest := []
+  /-- Canonical checked upcast dictionaries discovered by elaboration. -/
+  subtypes : List STop := []
+  /-- Branches of casts that refine type arguments (#243): a function for
+      each, by key. -/
+  casts : List Refine.Lift := []
+  /-- Functions of their own for lazily taken calls whose effects need them
+      (#246), the continuations, stages and helpers that consumers of
+      choices are lowered with (#335), and the helpers that forward calls
+      to the defaults of their named parameters: by key. -/
+  loops : List Choice.FirstLift := []
+  /-- Classes with a class parent that list an interface at type arguments
+      that are not a prefix of their own (#351): hidden fields for all of
+      their type parameters. -/
+  witnesses : List String := []
+
+/-- `old`, then those of `new` whose key none before them has. -/
+def mergeByKey [BEq κ] (key : α → κ) (old new : List α) : List α :=
+  new.foldl (fun acc x => if acc.any (key x == key ·) then acc else acc ++ [x]) old
+
+/-- Those of `a`, then the new ones of `b`: of each kind, no two with one
+    key (the first kept), so a list stays in the order things were first
+    asked for. -/
+def Requests.merge (a b : Requests) : Requests where
+  eager := mergeByKey id a.eager b.eager
+  lazy := mergeByKey id a.lazy b.lazy
+  families := mergeByKey id a.families b.families
+  fns := mergeByKey id a.fns b.fns
+  methods := mergeByKey (·.key) a.methods b.methods
+  subtypes := SubtypeEvidence.mergeRequests a.subtypes b.subtypes
+  casts := mergeByKey (·.key) a.casts b.casts
+  loops := mergeByKey (·.key) a.loops b.loops
+  witnesses := mergeByKey id a.witnesses b.witnesses
+
+/-- Those of `xs` whose key none of `old` has. -/
+def dropByKey [BEq κ] (key : α → κ) (xs old : List α) : List α :=
+  xs.filter fun x => !old.any (key x == key ·)
+
+/-- Those of `r` whose key `old` does not have: what is new in `r`. -/
+def Requests.without (r old : Requests) : Requests where
+  eager := dropByKey id r.eager old.eager
+  lazy := dropByKey id r.lazy old.lazy
+  families := dropByKey id r.families old.families
+  fns := dropByKey id r.fns old.fns
+  methods := dropByKey (·.key) r.methods old.methods
+  subtypes := dropByKey SubtypeEvidence.declarationName r.subtypes old.subtypes
+  casts := dropByKey (·.key) r.casts old.casts
+  loops := dropByKey (·.key) r.loops old.loops
+  witnesses := dropByKey id r.witnesses old.witnesses
+
+def Requests.isEmpty (r : Requests) : Bool :=
+  r.eager.isEmpty && r.lazy.isEmpty && r.families.isEmpty && r.fns.isEmpty && r.methods.isEmpty &&
+    r.casts.isEmpty && r.loops.isEmpty && r.witnesses.isEmpty && r.subtypes.isEmpty
+
 /-- A lazily taken call where the first success is taken (#246): its
     function, where, the code it runs once for all the values of an item,
     where an argument of a call of itself sets a name, and the function of
@@ -474,15 +548,18 @@ structure ESt where
   metadataSeeds : List Nat := []
   metadataUses : List Nat := []
   metadataWrites : List (Nat × Nat) := []
-  /-- Pure mutual groups whose changing instances need eager generation. -/
-  eagerNeeds : List String := []
+  /-- What the elaboration of the function asks for, for the program to be
+      elaborated again with it (`noteNeeds`): eager groups whose changing
+      instances need eager generation, the families of uses of methods
+      (`Ctx.noteFamily`), functions and methods as values, the branches of
+      refining casts, and the helpers that forward calls to defaults. (The
+      functions of lazily taken calls are asked for once every function is
+      elaborated, `loopFirst`.) -/
+  needs : Requests := {}
   /-- (#515, `--signal-no-rollback`) Each call (or construction, use of a
       constant, `spawn`) in a failure context, what it is, and the Verse
       Core functions it calls. -/
   failCalls : Array ((Pos × String) × List Nat) := #[]
-  /-- (#283) At each of `TyEnv.familySites` elaborated: the root of its
-      method above its receiver's class, for the next round's inlining. -/
-  familyNeeds : List (Pos × String) := []
   /-- The program's types, for conversions between class types (`coerce`). -/
   env : TyEnv := {}
   nslots : Nat := 0
@@ -499,18 +576,9 @@ structure ESt where
   /-- Successful receiver-class probes, keyed by syntax and lexical typing
       context. Shared by isolated trials so nested callbacks stay polynomial. -/
   methodReceivers : Std.HashMap String (Option String) := {}
-  /-- Functions wanted as values at closed function types no class of
-      theirs gives (#214). -/
-  fnNeeds : List (String × Ty) := []
-  methodNeeds : List FnValues.MethodRequest := []
-  /-- Canonical generic upcast dictionaries discovered in this frame. -/
-  subtypeNeeds : List STop := []
   /-- Where the function calls `Err()` first, if it does: a function whose
       values are all computed at a call (#235) may reach none. -/
   errAt : Option Pos := none
-  /-- Branches of casts that refine type arguments, to lift into functions
-      (#243): the program is elaborated again, with them. -/
-  castNeeds : List Refine.Lift := []
   /-- Encounters with suspending casts whose lift is still being discovered.
       Their placeholder expressions have no suspension to scan. -/
   pendingSuspendingCasts : Nat := 0
@@ -537,6 +605,10 @@ structure ESt where
 
 abbrev EM := StateT ESt (Except String)
 
+/-- Ask for `r`, for the program to be elaborated again with it. -/
+def noteNeeds (r : Requests) : EM Unit :=
+  modify fun st => { st with needs := st.needs.merge r }
+
 /-- Give a disposable polymorphic suffix trial its own type witnesses.
     The generated continuation will obtain them from its actual arguments. -/
 def choiceTypeContext (ctx : Ctx) (plan : ChoiceTypes.Plan) : EM Ctx := do
@@ -557,6 +629,22 @@ def restoreConstructProbe (ctx : Ctx) (saved : ESt) : EM Unit := do
   let receivers := (← get).methodReceivers
   let restored := if ctx.constructProbe then { saved with constructHints := hints } else saved
   set { restored with methodReceivers := receivers }
+
+/-- A return frame's lives' values (`void` for none, as `tuple()` is). -/
+def frameLivesTy (ts : List Ty) : Ty := if ts.isEmpty then .void else .tup ts
+
+/-- A frame on a continuation: one option per return frame, the one of the
+    call that pushed it holding its lives' values. -/
+def frameTy (lives : List (List Ty)) : Ty := .tup (lives.map fun ts => .opt (frameLivesTy ts))
+
+/-- The continuation of a lazily taken recursive group (#283): its frames,
+    innermost first, a list of `$lazycell`s. -/
+def frameContTy (lives : List (List Ty)) : Ty := .opt (.struct "$lazycell" [frameTy lives])
+
+/-- The lives' types of each return frame, from its continuation's type. -/
+def frameLivesOf : Ty → Option (List (List Ty))
+  | .opt (.struct "$lazycell" [.tup fs]) => fs.mapM fun | .opt .void => some [] | .opt (.tup ts) => some ts | _ => none
+  | _ => none
 
 /-- A call of a recursive function with several values that its consumer
     takes lazily (#246), as code for the consumer to put in its loop: the
@@ -597,6 +685,12 @@ structure LoopGen where
       they are pushed on, when there are any. -/
   frames : List (String × List String × SExpr) := []
   kTy : Option Ty := none
+  /-- (#283) With continuation members: the flag a value sets when it comes
+      to a choice point in a member's code, then breaking out of the
+      consumer's failure context so that what it did up to there stays; the
+      consumer reads it after catching that break, and its `after` pushes
+      the item that resumes there. -/
+  bnd : Option Nat := none
 
 /-- Run `m`, attributing the heap effects it records first to `p` (a field
     or argument default: the effect is the construction's or the call's). -/
@@ -1193,7 +1287,7 @@ def Ctx.rootsOf (ctx : Ctx) (c m : String) : List String :=
     fail or have several values. -/
 def Ctx.failabilityKnown (ctx : Ctx) : EM Bool := do
   let st ← get
-  return st.fnNeeds.isEmpty && st.methodNeeds.isEmpty && ctx.types.familySites.isEmpty && !ctx.typeOnly
+  return st.needs.fns.isEmpty && st.needs.methods.isEmpty && ctx.types.familySites.isEmpty && !ctx.typeOnly
 
 /-- (#283) A use `R.M` at `p` whose family of methods only the class of
     `R` tells, one of `TyEnv.familySites`: the root of `M` above that class
@@ -1203,7 +1297,7 @@ def Ctx.noteFamily (ctx : Ctx) (p : Pos) (recv : Ty) (m : String) : EM Unit := d
     let root := match recv with
       | .struct c _ => ((ctx.rootsOf c m).head?).getD ""
       | _ => ""
-    modify fun st => { st with familyNeeds := (p, root) :: st.familyNeeds }
+    noteNeeds { families := [(p, root)] }
 
 /-- The function that implements slot `r` of method `m` for an instance of
     class `d` (#70). -/

@@ -527,8 +527,8 @@ those uses as written, ordinary calls (a family's method stays in its class
 as a stub, a direct one too, for them to type), with one value in the
 fixpoint; at each (`TyEnv.familySites`) `Ctx.noteFamily` notes the root of
 `M` above the receiver's static class by the place of `R.M`
-(`Compiled.familyNeeds`), and the program is elaborated again with them
-(`Options.familyPicks`), as for `eagerRequests`. That elaboration does not
+(`Requests.families`), and the program is elaborated again with them, as
+with eager groups (`Requests.eager`). That elaboration does not
 judge what can fail (`Ctx.failabilityKnown`), as a call may yet get several
 values, and the uses it does not reach are of no family, so the last one has
 none left. Each use is then rewritten as in a program with that family
@@ -723,8 +723,9 @@ code after one call and the values of the names that code uses.
   alternative that is a call of the group evaluated before anything else in
   it, but literals and names, which read the same after the call, becomes
   `$then(call, h, frame)` (`frameOf?`), the frame the alternative with the
-  name `h` in the call's place. A frame's code has no choice and no other
-  call of the group, and sets no `var` bound before it, as it runs on a copy
+  name `h` in the call's place. A frame's code here has no choice and no
+  other call of the group (one that has is a continuation member, below),
+  and sets no `var` bound before it, as it runs on a copy
   of the names; a `var` it sets is made a cell first (`cellVars`): `var
   K:t = e` becomes `K := $varcell(t){$VCell := e}` and every use `K.$VCell`,
   so the frame's copy is a reference to the one object. The call's later
@@ -781,47 +782,106 @@ code after one call and the values of the names that code uses.
   two routes give the same values, but `F$all` does not stop for an infinite
   one. A `<computes>` one whose code prints or calls `Err()` is found only
   on Verse Core (`checkEager`), so that elaboration asks for another
-  (`Compiled.lazyNeeds`, `Options.lazyRequests`) with it taken lazily; one
+  (`Requests.lazy`) with it taken lazily; one
   that still is not of the shape is refused as before.
 
-Not yet (#283), with the route each would take within the same mechanism:
-- *Choice points in sequence*: a frame whose code has a choice or another
-  call of the group (`X := T(N - 1)` then `X | X + 1`, or then
-  `Y := T(N - 1)`), and a choice before a call (`X := 1 | 2`, then
-  `F(N - 1) + X`). Applying such a frame reaches a generator boundary in the
-  middle of a value: its code up to there must be kept, not undone with
-  the value, and the rest started as items. Route: such code becomes a
-  member of the group, a *continuation member*, whose parameters are the
-  hole and the frame's names, typed where the frame is pushed (it has no
-  source signature, which the group machine and `FirstLift` now read
-  members' parameters from). Applying its frame runs that member's start
-  (its clauses and branch selection) inside the consumer's filter, pushes
-  the item of its first alternative with the rest of the continuation, and
-  the filter then succeeds with no value: a flag the `for`'s iteration
-  reads before its clauses and body, and a first-success condition reads as
-  success, so the pushes and the code before the boundary stay. `after` then
-  pushes the leaf's next alternative below that item (pop it, push the
-  next one, push it back), so the values keep spatial order. In `FirstLift`,
-  applying such a frame calls that member's function of its own with the
-  rest of the continuation and gives its packet. A choice before a call
-  uses the same members: the code after the first choice is a continuation
-  member started from each alternative, its index a parameter, so the
-  alternative's code runs in the member's clauses, one segment.
+**Choice points in sequence (#283).** The code after a call of the group may
+reach another choice point: a choice (`X := T(N - 1)`, then `X | X + 1`),
+another call (`T(N - 1) + T(N - 1)`, or `A := T(N - 1)` then
+`B := T(N - 1)`), and a choice may have a call after it (`X := 1 | 2`, then
+`T(N - 1) + X`). It is the same mechanism, with the normal form taken all the
+way: each choice point, a call of the group or a choice, is the head of the
+code after it, which is its frame.
+- `Choice.normAlt` makes an alternative `$then(point, hole, frame)`
+  (`frameOf?`, which now finds a choice too, and takes the code after the
+  point whatever it has): the frame is plain code, a return frame as
+  above, or, when it reaches another point, a *continuation member*
+  `$cont(block{clauses}, tail)` (`contBody?`, through `bodyTail?`, which
+  normalizes a function's body the same way), whose tail's alternatives are
+  in this form again. A choice's frame is shared by its alternatives: a
+  leaf `$then(a | b, h, frame)` is two alternatives, `a` and `b`, each with
+  that frame (`Choice.flatCount`, `loopFlatWith`), so the code after a
+  choice is compiled once, not copied into each alternative. A block that
+  starts with a choice bound, with plain code after it, is still the choice
+  of that code after each alternative (`lastChoiceTail`), at the top of a
+  body as before and now in a branch too. Programs that compiled before
+  have the same normal form, hole names included, so the same bytes.
+- So the three notions are one: a return frame is a continuation member
+  with no point in it, applied where the value is, all of it; a generator
+  alternative is an alternative of a member's leaf, the function's own or a
+  continuation member's, whose values go to the frames on its continuation.
+  What differs is how a member is entered: a function by a call, its
+  clauses a failure context of their own (when they fail the call has no
+  values and its arguments' effects stay); a continuation member by its
+  frame's application, its clauses part of the value's code before its
+  next point.
+- The group machine (`elabLoopGenGroupWith`; a function alone with
+  continuation members goes through it too) takes continuation members as
+  members after the group's functions, discovered from the frames of the
+  members' alternatives, their parameters the hole (at the group's result
+  type) and the frame's lives, their names in every item as the functions'
+  are. Their alternatives are numbered after the functions'; a `$rec` in
+  one calls the function whose code it is.
+- A continuation member's frame applied to a value (`memberArm`, in
+  `frameApplyWith`) runs the member's clauses and branch in the value's own
+  failure context: a leaf of one alternative goes on there (a value goes to
+  the frames after it, a call evaluates its arguments); a leaf of several
+  alternatives, or a call, is a choice point: the value's code stops there.
+  It leaves the item that resumes there (the leaf's first alternative, or
+  the callee's start) in `stash`, sets `bnd` and breaks, out of the
+  consumer's failure context, which keeps what the value did up to there,
+  as a `for` keeps the code before a choice. Each consumer catches that
+  break around the value (`elabOneGo`'s loop, `elabFor`'s round), and its
+  `after` pushes the stashed item above the next alternative's, so values
+  keep spatial order; any other break (a success, a source `break`) goes on.
+  The member's names are its items' too, so the arm keeps them before and
+  gives them back after: an item of the same member being taken (recursion)
+  keeps its own for its next alternative.
+- Where the first success is taken and what runs before a choice point (the
+  values, the frames, the members' clauses: with continuation members all
+  of `value` counts as the item's code) has effects, `FirstLift` makes each
+  continuation member a function of its own (`{name}_c{j}`, its parameters
+  the hole, the lives, `$K` and the captures; its `$rec` the function's
+  whose code it is), and `$ret` gives a value to its frames with
+  `$frameReturn`: a plain frame's code in turn, a continuation member's frame
+  a call of its function with the rest of the continuation, whose packet is
+  `$ret`'s; when no frame is left, the consumer's clauses (`firstValue`). A
+  choice with a frame pushes it on each alternative's continuation
+  (`firstBody`'s `altK`).
+- The size modes `recursive-sequence-first`, `-for`, `-calls-first` and
+  `-calls-for` check that a sequence of choice points grows linearly.
 
-With those, `F$all` would be needed by no shape and kept, if at all, only as
+Not yet (#283), each refused with a message, and the route each would take:
+- A choice whose values are of another type than the group's with a point
+  after it (`S := "a" | "bb"`, then `T[N - 1] + S.Length`): the frame loop
+  keeps one value slot, of the result type. Route: a slot per hole type,
+  each frame reading its hole from its own and writing the result type's.
+- A choice with code before it that is not literals or names, in one
+  alternative of several (`T(N - 1) | Tell("x", 1) + (1 | 2)`): that code
+  runs after the first choice and before the second, in that alternative
+  alone. Route: an alternative that is a continuation member entered
+  directly, with no hole (alone in its leaf it is that leaf's path code
+  already, `$returnTail`).
+- A point the normal form does not reach: in a condition (an `if` inside an
+  expression, `and`, `or`, `not`), a `set`'s value, a comparison's later
+  operand, a construction's field, a named argument, a loop. Route: more
+  cases of `frameOf?` (a `set` reads its old value before the point, as a
+  prefix), an `if`'s conditions as a member's path.
+
+With all of those, `F$all` would be needed by no shape and kept, if at all, only as
 an optimisation of effect-free ones. Deleting it (the owner's decision,
 since it changes the bytes of the 39 programs of the suite whose Core has
 an `F$all` today) would remove `allBody`, `arrOfE`, `gensOf`, `markAll`, the
 `$each` consumers in `elabOneGo` and `elabFor`, `needAll` and the eager
-refusals in `inlineMulti`, `checkEager` with its `lazyNeeds` round, and
-`eagerRequests`. It would also change semantics: values on demand, so an
+refusals in `inlineMulti`, `checkEager` with its round of `Requests.lazy`,
+and `Requests.eager`. It would also change semantics: values on demand, so an
 infinite effect-free one stops where the first success is taken, and an
 error in a value never reached no longer stops the program. It first needs
-the lazy route to cover what only `F$all` does now: choice points in
-sequence, a recursive one calling a function with several values outside
-its group, polymorphic recursion in a mutual group (`eagerNeeds`), and an
-`any`-valued returning group whose tail erases its values
-(`erasesRecursive`).
+the lazy route to cover what only `F$all` does now: the choice points in
+sequence above that are not yet taken lazily, a recursive one calling a
+function with several values outside its group, polymorphic recursion in a
+mutual group (`Requests.eager`), and an `any`-valued returning group whose tail
+erases its values (`erasesRecursive`).
 
 Named arguments and defaults are bound on every recursive edge. The lazy
 stack uses `elabGenericCallWith` in argument-packing mode: it evaluates the
@@ -974,6 +1034,37 @@ So a large definition that calls few functions of the block is defined before it
 - `elabRefinedIfWith`
 
 The block then needs between 120000 and 160000 heartbeats. A function with a default argument is passed as an explicit lambda (`fun c q i t pl => elabBranchAlts c q i t pl`), or as the shorter form a body uses (`elabMember`'s four arguments). New elaborator logic can follow the same pattern.
+
+## Elaboration in rounds
+
+Some of what a program needs is known only once its types are: a function
+used as a value at a type no class of its gives (#214), a cast's branch as
+a function (#243), a lazily taken call's function of its own (#246), the
+family of a method's use (#283), hidden fields for all of a class's type
+parameters (#351), and more. An elaboration (`elabProgramCore`) that finds
+such a need records it (`noteNeeds` in a function's `ESt.needs`, or one of
+`elabProgramCore`'s own checks), with a placeholder where a value was
+wanted, and goes no further than the step that found it: its result asks for
+something (`Compiled.needs`, `Compiled.asking`). `elabProgram` then
+elaborates the program again with it (`Options.requests`), until an
+elaboration asks for nothing new. Needs and requests are one record,
+`Requests`, one list per kind; `Requests.merge` adds the ones whose key is
+new, so a list keeps the order things were first asked for, which is the
+order of the functions made for them.
+
+What is asked for is of three tiers, by what it changes (`Requests.tier`),
+and an elaboration asks for one tier at a time: 1. how the source's
+choices are inlined (eager groups, lazily taken functions, families),
+2. the classes' layout (hidden fields), 3. the functions added (functions
+and methods as values, cast branches, the functions of lazily taken calls,
+continuations and default helpers). A round that asks for more of one tier
+is followed by one with the requests of that tier and the tiers above it
+only (`Requests.upTo`): what the tiers below asked for is discovered again,
+under the new source or layout. Each tier has a budget of rounds, renewed
+when a tier above it restarts, and a round that asks for nothing new while
+asking for something is an internal error. Which requests a round has
+decides the emitted code, so a change to the driver must keep the
+sequence of rounds, not only the last one.
 
 ## Translation validation instead of a verified front end
 
@@ -1809,7 +1900,7 @@ position in every class below the one that declares it.
   fields for all of its type parameters, which its overrides read
   (`Sig.selfTps`; a class with a class parent that adds such an interface
   has them for all only when asked, after the first elaboration finds it:
-  the program is elaborated again, `Options.witnessAll`); a method's dispatch tests each class, its arguments
+  the program is elaborated again, `Requests.witnesses`); a method's dispatch tests each class, its arguments
   opened (`$ext`) and refined by its view and pins, as #209's refined
   calls are; a refining cast (#243, #250) relates the object's type
   arguments to the target's through the view too; and an implementation's
@@ -2138,19 +2229,30 @@ has a clause after the cast, so its branch is the lift's (`made`), not the
 source's. `Else` is written twice, and runs once.
 
 Those are one rule's cases: a cast that only such a clause may be takes
-the rest of its failure context as its branch. In a sequence whose names
+the rest of its failure context as its branch. One inside a clause, in an
+operand that the lifting of choices reaches (`Refine.castsIn`), refused
+there, is lifted out by that lifting, marked `$liftCast` (`Refine.markCast`,
+which `Choice.hasLiftable` and `liftE` take as a value to bind, as a
+choice): the operands before it bound, then `$k… := T[X]`, a cast clause
+(`liftCastClause`, in `withCastClauses` and `elabSeqIn`; a `<decides>`
+body of one expression is the block of it, `elabBodyOv`). In a sequence whose names
 end with it (a block, so a `<decides>` body or `option{…}`'s, and the
 operand of `not`, `and` and `or`), `pre; D := T[X]; rest` is `pre; if (D
 := T[X]) then {rest} else fail` (`elabSeqIn`; the `else` is
 `Refine.noValue`, which gives no value at every type). That `if` takes
 its type from the branch, refined, which code outside it must be able to
-name (`Lift.retOfBranch`, so the dispatch takes it too), and its copy-out
+name (`Lift.branchTy`, so the dispatch takes it too; a local from outside
+the branch that it gives is at its own type there, the most general), and
+its copy-out
 tuple, for an outside `var` the branch sets, from the branch's type found
 apart under the refinement (an `else` of type `never` tells none). In an
 `if`'s condition, a `for`'s clauses and `first{…}`'s, whose names reach
 the branch, body or value, the cast is first elaborated as written
 (`withCastClauses`, which the `if`'s later clauses above share); when
-refused there, and the clauses before it have something to undo (or it is
+refused there (`elabCast` throws `Refine.castRefusal`: the message, then
+the cast's place and whether it opens, between marks no message has, which
+`castRefusal?` reads and `elabProgram` removes, so control does not depend
+on the message's words), and the clauses before it have something to undo (or it is
 in a `for` or `first{…}`), it takes the clauses after it, up to a `for`'s
 next generator, as the branch of a clause of its own, `if (D := T[X']) then
 first{rest; names} else fail` (`Refine.castRestClauses`), so their failure
@@ -2159,11 +2261,21 @@ uses are its value, bound again after it; a branch or body that uses them,
 or `D`, casts `X'` (bound once) again, `if (D := T[X']) then after else
 Err()`, at its own place, so it is typed under the refinement too: an
 object's class does not change, so that dispatch reaches the class the
-first one did. So it does each later cast among those clauses of a local
-bound before them that is no `var` (the object, without a slot of its
-own), when it uses that cast's name or one bound after it: a value of the
-branch at a refined type, such an object included, would leave it at that
-type, which is no longer a refining cast's. Both `if`s are the elaborator's, marked `$made` (their
+first one did. So it does each later cast among those clauses when it uses
+that cast's name or one bound after it, from the cast's object: a local
+bound before the clauses that is no `var`, or else the object bound to a
+name of its own just before the cast (`$castObj…`), which is one of the
+clause's values; as a local from outside the later cast's branch, it
+leaves that branch at its own type, not the refined one, so it can be cast
+again. An object that may name type arguments a cast opens (the first
+cast's, when the refusal says it opens, `Refine.CastRefusal.opens`, or a
+later cast's, which may) is not: `after` could not name its type. A `for`'s generator past the moved clauses whose source uses `D` has its
+source cast again in the same way, at the generator's place, and the body
+is cast again when it uses the names those generators bind; a filter there
+that uses `D` is refused. A later cast of an object computed among the
+moved clauses is cast again only when the branch or body is refused
+without it (`computed`), so that programs compiled before keep their code.
+Both `if`s are the elaborator's, marked `$made` (their
 branches are the lifts'). A `for`'s rebuilt body is at the element type
 expected, when one is.
 

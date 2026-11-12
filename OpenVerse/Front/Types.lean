@@ -244,7 +244,7 @@ structure TyEnv where
   fnRequests : List (String × Ty) := []
   /-- (#283) The uses `R.M` whose family of methods `M` only the class of
       `R` tells (`Choice.methodFns`), by place and `M`: their elaboration
-      notes the root that class is below (`ESt.familyNeeds`). -/
+      notes the root that class is below (`ESt.needs`). -/
   familySites : List (Pos × String) := []
   /-- Typed variance adapters for methods with a fixed receiver signature. -/
   methodRequests : List FnValues.MethodRequest := []

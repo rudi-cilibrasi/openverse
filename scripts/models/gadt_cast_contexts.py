@@ -8,7 +8,13 @@
 Generic code over pair(a, b), or an interface ip(a, b) above it, casts to
 dup (b = a) or fixi (a = int) in a
 <decides> body, option{...}, not, the condition of an if after clauses with
-effects, a for's clauses, or first{...} after or before a choice. Clauses
+effects, a for's clauses, or first{...} after or before a choice; or, after
+clauses with effects in an if, a second cast, to dup, of an object a call
+computes among the clauses or of a parameter, whose refinement the branch's
+value needs (d = c, for an option of the second's A as a ?d). At times
+the cast is inside an expression, `C0 := Peek[H, 1] + T[P].C`, after a call
+with an effect that runs first; a for's clauses at times end with a
+generator over values of the cast's, `Y2 : array{D.C, D.C + 1}`. Clauses
 before the cast print, add to a cell's var field or call a <decides> function
 that does; clauses after it compare, print and add, and bind names that later
 code uses. The value is the object's C, or a field whose type is the code's
@@ -26,11 +32,13 @@ seed = int(sys.argv[1]); out_exp = sys.argv[2]
 R = random.Random(seed)
 def ch(p): return R.random() < p
 
-CONTEXTS = ['decides', 'option', 'not', 'if', 'for', 'first']
+CONTEXTS = ['decides', 'option', 'not', 'if', 'for', 'first', 'second']
 context = CONTEXTS[seed % len(CONTEXTS)]
 target = R.choice(['dup', 'fixi'])
-bare = context in ('not',) or (context in ('decides', 'option', 'if') and ch(0.15))
+bare = context in ('not',) or (context in ('decides', 'option', 'if', 'second') and ch(0.15))
 refined_value = (not bare) and context in ('decides', 'option') and ch(0.4)
+# (the cast inside an expression: its C, after a call that adds 1 first)
+inside = (not bare) and (not refined_value) and ch(0.3)
 IFACE = ch(0.3)
 CDEF = {'dup': R.randint(1, 6), 'fixi': R.randint(1, 6)}
 
@@ -94,6 +102,7 @@ cast_name = 'D'
 def cast_text(x='P'):
     return f'{target}[{x}]' if bare else f'D := {target}[{x}]'
 def cast_run(st, env, obj):
+    if inside: st.n += 1
     if not below(obj[0], target): raise Fail()
     env['D'] = obj
 
@@ -193,8 +202,12 @@ elif context == 'for':
     elif use == 'name': body_t, body_r = f'Print("b{{{names[-1]}}}")', (lambda env: st.out.append(f'b{env[names[-1]]}'))
     else: body_t, body_r = 'set H.N += 100', (lambda env: setattr(st, 'n', st.n + 100))
     G2 = f'Ps:[]{root}(a, b), H:cell where a:type, b:type'
-    fn = (f'F({G2})<transacts>:int =\n    R := for ({", ".join(["P : Ps"] + body)}):\n'
-          f'        {body_t}\n        H.N\n    R.Length\n')
+    # (at times a generator after the clauses, over values of the cast's)
+    gen2 = (not bare) and ch(0.4)
+    clauses = ["P : Ps"] + body + (['Y2 : array{D.C, D.C + 1}'] if gen2 else [])
+    body2 = '        Print("y{Y2}")\n' if gen2 else ''
+    fn = (f'F({G2})<transacts>:int =\n    R := for ({", ".join(clauses)}):\n'
+          f'{body2}        {body_t}\n        H.N\n    R.Length\n')
     def model_all(os):
         count = 0
         for o in os:
@@ -203,8 +216,37 @@ elif context == 'for':
                 run_clauses(o, env)
             except Fail:
                 st.back(s0); continue
-            body_r(env); count += 1
+            for y2 in ((o[3], o[3] + 1) if gen2 else (None,)):
+                if gen2: st.out.append(f'y{y2}')
+                body_r(env); count += 1
         st.out.append(f'F {count} {st.n}')
+elif context == 'second':
+    computed = ch(0.6)
+    k2 = R.randint(1, 3)
+    second = ([f'Q2 := Take[H, Q, {k2}]', 'E := dup[Q2]'] if computed else ['E := dup[Q]'])
+    G2 = 'P:pair(a, b), Q:pair(c, d), H:cell where a:type, b:type, c:type, d:type'
+    fbody = [t for t, _ in pres] + [cast_text()] + second + [t for t, _ in rests]
+    fn = (f'Take(H:cell, Q:pair(c, d), K:int where c:type, d:type)<transacts><decides>:pair(c, d) =\n'
+          f'    K > 0\n    set H.N += K\n    Q\n'
+          f'F({G2})<transacts>:?d =\n    if ({", ".join(fbody)}) then option{{E.A}} else false\n')
+    def make_q():
+        a = R.randint(0, 9)
+        if ch(0.6): return ('dup', a, f'dup(int){{A := {a}, B := {R.randint(0, 9)}}}')
+        return ('pair', a, f'pair(int, int){{A := {a}, B := {R.randint(0, 9)}}}')
+    qs = {}
+    call = lambda o: (lambda q: f'    if (V := F({o[4]}, {q[2]}, H)?) then Print("F {{V}} {{H.N}}") else Print("F no {{H.N}}")')(qs[id(o)])
+    def model(o):
+        q = qs[id(o)]
+        s0 = st.snap(); env = {}
+        try:
+            for _, r in pres: r(st, env)
+            cast_run(st, env, o)
+            if computed: st.n += k2
+            if q[0] != 'dup': raise Fail()
+            for _, r in rests: r(st, env)
+            st.out.append(f'F {q[1]} {st.n}')
+        except Fail:
+            st.back(s0); st.out.append(f'F no {st.n}')
 else:  # first: a choice before or after the cast, its first success taken
     after_cast = not bare and ch(0.5)
     k = R.randint(0, 3)
@@ -259,8 +301,11 @@ if context == 'for':
     model_all(objs)
 else:
     for o in objs:
+        if context == 'second': qs[id(o)] = make_q()
         main.append(call(o))
         model(o)
+if inside:
+    fn = fn.replace(f'D := {target}[P]', f'C0 := Peek[H, 1] + {target}[P].C').replace('D.C', '(C0 - 1)')
 print(hdr)
 print(fn.rstrip('\n'))
 print('\n'.join(main))

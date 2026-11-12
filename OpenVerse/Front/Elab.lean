@@ -22,6 +22,22 @@ import OpenVerse.Front.InitializerConvergence
 
 namespace OpenVerse.Front
 open OpenVerse
+/-- A function or a constant of the program, elaborated (`elabProgramCore`):
+    its Verse Core code and the types of its slots, where it first calls
+    `Err()` (#235), which of its locals live in a source frame (`FrameRefs`),
+    what its elaboration asks for, and the lazily taken calls it consumes
+    (#246). -/
+structure ElaboratedFn where
+  fn : Fn
+  slotTys : List VTy
+  errAt : Option Pos
+  frames : FrameRefs.Info := {}
+  metadata : MetadataFlow.Info := {}
+  needs : Requests
+  loopFirst : List LoopUse
+  /-- (#515) Its calls in failure contexts (`ESt.failCalls`). -/
+  failCalls : Array ((Pos × String) × List Nat)
+
 /-- Elaborate a parsed program into a Verse Core program that passes `Prog.check`
     and `Prog.checkTypes`. -/
 def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except String Compiled := do
@@ -60,13 +76,13 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   let defines0 (n : String) : Option Pos := resolved.findSome? fun
     | .classDef p m .. | .fn p m .. | .const p m .. => if m == n then some p else none
   let owned := PreludeNeeds.names.filter (defines0 · |>.isSome)
-  let requestTops := opts.subtypeRequests ++ Refine.functions opts.castRequests resolved ++
-    opts.loopRequests.flatMap (fun l =>
+  let requestTops := opts.requests.subtypes ++ Refine.functions opts.requests.casts resolved ++
+    opts.requests.loops.flatMap (fun l =>
       STop.fn l.pos l.name l.params l.tparams l.specs l.ret l.body :: l.extraFns) ++
-    opts.methodRequests.map (fun r => STop.fn r.pos "$methodRequest"
+    opts.requests.methods.map (fun r => STop.fn r.pos "$methodRequest"
       ((r.receiver :: r.params).map fun t => { name := "$arg", ty := t }) r.tparams r.effs r.ret (.block r.pos r.args))
   let uses := PreludeNeeds.uses (resolved ++ requestTops) ++
-    opts.fnRequests.flatMap (fun (_, t) => t.helperUses)
+    opts.requests.fns.flatMap (fun (_, t) => t.helperUses)
   let privateNames := PreludeNeeds.privateNames owned uses
   let concurrencyNames := privateNames.map fun n => (n, "$" ++ n)
   let needs (n : String) := uses.contains ((concurrencyNames.lookup n).getD n)
@@ -99,8 +115,8 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       | .classDef _ _ _ _ _ _ fs _ ms => fs.map (·.1) ++ ms.filterMap fun | .fn _ m .. => some m | _ => none
       | _ => []
   -- (#283) and the uses of methods whose family the receiver's class picks
-  let (resolved, lazy, familySites) ← Choice.inlineMulti resolved reserved opts.eagerRequests opts.familyPicks
-    opts.lazyRequests
+  let (resolved, lazy, familySites) ← Choice.inlineMulti resolved reserved opts.requests.eager opts.requests.families
+    opts.requests.lazy
   -- (#246) the class of the stack cells of lazily taken ones
   let helpers := helpers ++ (← if lazy then lazyTops else pure [])
   -- (#283) and of the cells of the vars their frames set
@@ -114,11 +130,11 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   let helpers := helpers ++ (← if usesCells then varcellTops else pure [])
   -- the branches of casts that refine type arguments, as functions (#243)
   -- (in front, as the entry expression is the end)
-  let resolved := Refine.functions opts.castRequests resolved ++ resolved
+  let resolved := Refine.functions opts.requests.casts resolved ++ resolved
   -- (#246) the functions of their own of lazily taken calls
   let mut generated : List String := []
   let mut loopTops : List STop := []
-  for top in opts.loopRequests.flatMap (fun l =>
+  for top in opts.requests.loops.flatMap (fun l =>
       (if l.stageOnly then [] else [STop.fn l.pos l.name l.params l.tparams l.specs l.ret l.body]) ++ l.extraFns) do
     let name := match top with
       | .fn _ n .. | .classDef _ n .. => n
@@ -127,15 +143,15 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       if generated.contains name then continue
       generated := name :: generated
     loopTops := loopTops ++ [top]
-  for request in opts.subtypeRequests do
+  for request in opts.requests.subtypes do
     match request with
     | .classDef p name .. =>
       if !name.startsWith "$subtypeNominal" && !name.startsWith "$subtypeTuple" &&
           !name.startsWith "$subtypeRefinement" then
         throw s!"{p.show}: internal: invalid subtype dictionary request"
     | _ => throw "internal: a subtype dictionary request must be a class"
-  let resolved := opts.subtypeRequests ++ loopTops ++ resolved
-  let needsSubtype := allTops0r.any UpperBounds.hasBounds || !opts.subtypeRequests.isEmpty ||
+  let resolved := opts.requests.subtypes ++ loopTops ++ resolved
+  let needsSubtype := allTops0r.any UpperBounds.hasBounds || !opts.requests.subtypes.isEmpty ||
     resolved.any (·.usesType SubtypeEvidence.family)
   let definesSubtype := (resolved ++ helpers).any fun
     | .classDef _ name .. => name == SubtypeEvidence.family
@@ -156,9 +172,9 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       if budgets.contains n || !specs.any EffectPolicy.effectNames.contains then budgets
       else budgets.insert n (EffectPolicy.constructionFx specs)
     | none => budgets) constructionFx
-  for (_, ty) in opts.fnRequests do
+  for (_, ty) in opts.requests.fns do
     EffectPolicy.checkTy { line := 0, col := 0 } ty.toSTy
-  for request in opts.methodRequests do
+  for request in opts.requests.methods do
     EffectPolicy.checkSpecs request.pos request.key request.effs
     EffectPolicy.checkTParams request.tparams
     EffectPolicy.checkTy request.pos request.receiver
@@ -171,7 +187,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   -- (the entry expression is scanned too)
   let allTops00 := copyIfaceDefaults (SubtypeEvidence.addFields
     (FnValues.desugar (resolved.take (resolved.length - rawEntry.length) ++ helpers)
-      (resolved.drop (resolved.length - rawEntry.length)) (opts.fnRequests.map fun (n, t) => (n, t.toSTy)) opts.methodRequests))
+      (resolved.drop (resolved.length - rawEntry.length)) (opts.requests.fns.map fun (n, t) => (n, t.toSTy)) opts.requests.methods))
   let entryTop := resolved.drop (resolved.length - rawEntry.length)
   -- the command line: `Args`, and an entry expression
   let defines (n : String) := allTops00.any fun
@@ -507,15 +523,15 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       -- (#250: or a cast that opens them targets the class or one below it,
       -- whose branch's function reads them from the object, also those an
       -- ancestor of the target adds)
-      let methodsBelow := methodsBelow || opts.witnessAll.contains cd.name ||
-        opts.castRequests.any fun l => !l.opened.isEmpty && henv.isSub l.target cd.name
+      let methodsBelow := methodsBelow || opts.requests.witnesses.contains cd.name ||
+        opts.requests.casts.any fun l => !l.opened.isEmpty && henv.isSub l.target cd.name
       -- (#276, #209: a root class counts them as `rootArgCount` does: the
       -- first of its Verse Core type arguments, as many as the interface
       -- with the fewest type parameters at or above it, or above a class
       -- below it that leaves one of the others a type parameter; an
       -- interface has no such fields)
       let qargs? : Option (List STy) := if cd.isIface then none else
-        if opts.witnessAll.contains cd.name then some [] else match (henv.info cd.name).parent with
+        if opts.requests.witnesses.contains cd.name then some [] else match (henv.info cd.name).parent with
         | some q => some (((cd.parents.zip cd.parentArgs).lookup q).getD [])
         | none =>
           -- (the interfaces above it or above a class below it, #209)
@@ -573,7 +589,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
           -- (all of them for a class with a class parent that lists an
           -- interface at type arguments that are not a prefix of its own,
           -- which a dispatch through a view opens, #351)
-          if opts.witnessAll.contains cd.name || !qargs.any (fun | .name v => v == tp.name | _ => false) then
+          if opts.requests.witnesses.contains cd.name || !qargs.any (fun | .name v => v == tp.name | _ => false) then
             fs := fs ++ [(s!"$w.{cd.name}.{tp.name}", .name tp.name, some (.ident cd.pos "$witness"), false)]
       full := full.push (cd.name, fs)
       fullMap := fullMap.insert cd.name fs
@@ -751,8 +767,8 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
                              let i := henv.info d
                              if i.isIface || i.isAbstract then m else
                              (henv.supers d).foldl (fun m T => m.insert T ((m[T]?.getD []) ++ [d])) m) {},
-                           abstracts := abstracts.toList, fnRequests := opts.fnRequests, familySites, methodRequests := opts.methodRequests,
-                           castRequests := opts.castRequests, loopRequests := opts.loopRequests }
+                           abstracts := abstracts.toList, fnRequests := opts.requests.fns, familySites, methodRequests := opts.requests.methods,
+                           castRequests := opts.requests.casts, loopRequests := opts.requests.loops }
   env := { env with varFields := varFields, uniques := uniques,
                     overriders := (overridePairs.toList.map fun (_, dm, _) => (dm.splitOn ".").headD "") ++
                       (implChecks.toList.map fun (_, _, impl, _) => (impl.splitOn ".").headD "") ++
@@ -761,8 +777,8 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
                       -- the dispatch to the branch refines by: also one that
                       -- only inherits and gives its parent a compound of its
                       -- own, `c1(t) := class(c0([]t))`, #243, #351)
-                      (opts.castRequests.map (·.target)) ++
-                      (opts.loopRequests.filterMap fun lift =>
+                      (opts.requests.casts.map (·.target)) ++
+                      (opts.requests.loops.filterMap fun lift =>
                         if (lift.name.splitOn "$dispatchDefaultsSpawn").length > 1 then
                           some ((lift.name.splitOn ".").headD "") else none) }
   -- the class whose code each inherited field default is (#39): the nearest
@@ -912,10 +928,6 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
         -- (at the interface's Verse Core type arguments, which also hold
         -- those it gives its own parents, `c2(t)`'s `[]t, t`)
         if !((env.coreArgs i ia).isPrefixOf (core cd.name)) then
-          let showArgs (ts : List Ty) : String := if ts.isEmpty then "none" else ", ".intercalate (ts.map Ty.show)
-          -- (and, where they differ, as the interface holds them, #53)
-          let ica := env.coreArgs i ia
-          let gives := if ica == ia then showArgs ia else s!"{showArgs ia} (which {i} holds as {showArgs ica})"
           -- (#351) references to the interface go through views, each class
           -- below with its own; its fields would be at other places in its
           -- classes, which no view gives
@@ -923,21 +935,21 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
           -- arguments from its hidden fields, which a class without a class
           -- parent has for all of them; one with one, which adds the
           -- interface, has them for all only when asked, and the program is
-          -- elaborated again, `Options.witnessAll`)
+          -- elaborated again, `Requests.witnesses`)
           if let some q := (env.info cd.name).parent then
-            if !env.isSub q i && !opts.witnessAll.contains cd.name && !witnessNeeds.contains cd.name then
+            if !env.isSub q i && !opts.requests.witnesses.contains cd.name && !witnessNeeds.contains cd.name then
               witnessNeeds := witnessNeeds ++ [cd.name]
           viewed := viewed ++ [i]
-  for lift in opts.loopRequests do
+  for lift in opts.requests.loops do
     if defaultBridge lift.name || spawnAdapter lift.name then
       let cls := (lift.name.splitOn ".").headD ""
       let needed := lift.specs.filterMap fun flag =>
         if flag.startsWith "$selfTp:" then some (flag.drop 8).toString else none
       if needed.any (fun n => (env.witnessField? cls n).isNone) &&
-          !opts.witnessAll.contains cls && !witnessNeeds.contains cls then
+          !opts.requests.witnesses.contains cls && !witnessNeeds.contains cls then
         witnessNeeds := witnessNeeds ++ [cls]
   if !witnessNeeds.isEmpty then
-    return { prog := default, sigs := { fns := [] }, slotTys := [], witnessNeeds }
+    return .asking { witnesses := witnessNeeds }
   -- (and the interfaces above them, which see their classes through a
   -- prefix of what they do)
   env := { env with viewed := (viewed ++ viewed.flatMap fun i => (env.supers i).filter (env.info · |>.isIface)).eraseDups }
@@ -945,7 +957,6 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     let d := (dm.splitOn ".").head!
     let q := (qm.splitOn ".").head!
     let mn := (dm.splitOn ".").getLast!
-    let (cd', cq) := (core d, core q)
     -- (not through views, #351: a dispatch through one opens the class's
     -- type arguments, related to the interface's by its view, which may
     -- have more, `q(t) := class(p(t), keyed(string, t))`)
@@ -1009,7 +1020,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
         fieldAcc := fieldAcc.push (d, f)
   -- (#243) and the classes refining casts test for, by their target
   -- (whose pins the dispatch to the cast's branch refines by)
-  let spawnFixers := opts.loopRequests.filterMap fun lift =>
+  let spawnFixers := opts.requests.loops.filterMap fun lift =>
     if (lift.name.splitOn "$dispatchDefaultsSpawn").length > 1 then
       some ((lift.name.splitOn ".").headD "") else none
   let fixers := fixers ++ accFixers.toList ++ env.castRequests.map (·.target) ++ spawnFixers
@@ -1122,7 +1133,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     if builtins.contains n then throw s!"'{n}' is a built-in function"
   -- A cast discovered before a default helper must acquire the helper
   -- effects once its body is known, before checking the source caller.
-  let inferredBridge (n : String) := defaultBridge n || opts.castRequests.any (·.name == n)
+  let inferredBridge (n : String) := defaultBridge n || opts.requests.casts.any (·.name == n)
   -- a function's parameter and result types
   let fnTypes (env : TyEnv) (p : Pos) (n : String) (ps : List SParam) (effs : List String) (ret : STy) :
       Except String (List Ty × Ty) := do
@@ -1198,7 +1209,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       -- reaches; the class's other methods are called at known types)
       -- (#250: the function a cast's branch is lifted into, from the object,
       -- the cast's subject, its first parameter)
-      let lifted := opts.castRequests.find? (·.name == n)
+      let lifted := opts.requests.casts.find? (·.name == n)
       let selfTps : List String := if defaultBridge n || spawnAdapter n then
           (effs.filterMap fun e => if e.startsWith "$selfTp:" then some (e.drop 8).toString else none).filter
             (fun v => tparams.any (·.1 == v))
@@ -1210,7 +1221,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
           -- open receiver parameters absent from their value signatures.
           let valueCall := m == "$call" || m.startsWith "$call:"
           let dictionaryCall := m == "$apply" && c.startsWith "$choiceOperationDictionary"
-          let resumeCall := opts.loopRequests.any (fun l => l.resumes.any (·.name == n))
+          let resumeCall := opts.requests.loops.any (fun l => l.resumes.any (·.name == n))
           if effs.contains "override" && env.classes.contains c && env.isRefClass c &&
               (!m.startsWith "$" || valueCall || dictionaryCall || resumeCall) &&
               (match tys.head? with | some (.struct c' _) => c' == c | _ => false) then
@@ -1299,11 +1310,11 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
             ({ name := prm.name, slot := i, ty := t, mutable := false, typeValue := prm.typeValue } : Local)
           let base : Ctx := { sigs := sigs.toList ++ gsigs.toList, sigProg := mkSigProg sigs, types := env,
                               locals := locals.reverse, retTy := s.ret, canFail := s.decides, suspends := s.suspends, fnFx := s.fx }
-          let ctx ← functionBodyCtx opts base p n s.tparams s.scope
+          let ctx ← functionBodyCtx opts.requests base p n s.tparams s.scope
           match elabBodyOv ctx body (some s.ret) { env, nslots := ps.length, slotTys := s.params.toArray, frameSlots := ctx.locals.filterMap fun l => l.storage.map (l.slot, ·) } with
           | .ok (_, st) =>
             let fx := heapFx.filter fun k => st.fx.any (·.1 == k) ||
-              (opts.castRequests.any (·.name == n) && s.fx.contains k)
+              (opts.requests.casts.any (·.name == n) && s.fx.contains k)
             if fx != s.fx then
               sigs := sigs.set! idx { s with fx }
               changed := true
@@ -1321,7 +1332,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
           let dictTps := g.tparams.filter (fun (v, _) => !g.selfTps.contains v) ++
             g.tparams.filter (fun (v, _) => g.selfTps.contains v)
           let hidden := g.frame.hiddenTypes
-          let lifted := opts.castRequests.find? (·.name == n)
+          let lifted := opts.requests.casts.find? (·.name == n)
           let selfField (v : String) := match lifted with
             | some l => (l.opened.lookup v).bind (env.witnessField? l.target ·)
             | none => env.witnessField? ((n.splitOn ".").headD "") v
@@ -1329,12 +1340,12 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
           let base : Ctx := { sigs := sigs.toList ++ gsigs.toList, sigProg := mkSigProg sigs, types := genv,
                               locals := locals.reverse, retTy := g.ret, canFail := g.decides, suspends := g.suspends,
                               dictBase := g.frame.witnessBase, dictVars := dictTps.map (·.1), fnFx := g.fx }
-          let ctx ← functionBodyCtx opts base p n g.tparams g.scope
+          let ctx ← functionBodyCtx opts.requests base p n g.tparams g.scope
           match elabBodyOv ctx body (some g.ret)
               { env := genv, nslots := ps.length + hidden.length, slotTys := (g.params ++ hidden).toArray, frameSlots := ctx.locals.filterMap fun l => l.storage.map (l.slot, ·) } with
           | .ok (_, st) =>
             let fx := heapFx.filter fun k => st.fx.any (·.1 == k) ||
-              (opts.castRequests.any (·.name == n) && g.fx.contains k)
+              (opts.requests.casts.any (·.name == n) && g.fx.contains k)
             if fx != g.fx then
               gsigs := gsigs.set! gi { g with fx }
               changed := true
@@ -1518,9 +1529,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       if env.isUnique cd.name || (env.fields cd.name).any (fun (f, _, _) => env.isVarField cd.name f) then
         fxCheck s!"construction of {cd.name}" allowed
           { fx := [("allocates", cd.pos, none)] }
-  let mut fieldDefaultNeeds : List Choice.FirstLift := []
-  let mut fieldMethodNeeds : List FnValues.MethodRequest := []
-  let mut fieldSubtypeNeeds : List STop := []
+  let mut fieldNeeds : Requests := {}
   let mut initializerBodies : List (String × String × Pos × Expr) := []
   -- check every field default once, with its struct's type parameters opaque
   -- (a default is elaborated again, at its field's type, at each construction
@@ -1545,11 +1554,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
           | .ok (body, st) =>
             fxCheck s!"default of field '{f}' of {n}" allowed st
             initializerBodies := initializerBodies ++ [(n, f, d.pos, body)]
-            fieldMethodNeeds := FnValues.mergeMethodRequests fieldMethodNeeds st.methodNeeds
-            fieldSubtypeNeeds := SubtypeEvidence.mergeRequests fieldSubtypeNeeds st.subtypeNeeds
-            fieldDefaultNeeds := fieldDefaultNeeds ++ st.loopFirst.filterMap fun u => match u.lift with
-              | .ok l => if l.key.startsWith "defaults:" then some l else none
-              | _ => none
+            fieldNeeds := fieldNeeds.merge { methods := st.needs.methods, loops := st.needs.loops, subtypes := st.needs.subtypes }
           | .error msg => throw s!"{msg} (in the default of field '{f}' of {n})"
     | _ => pure ()
   -- a function: its body under the type environment `env` (which binds the
@@ -1562,7 +1567,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       (suspends : Bool := false) (selfTps : List String := [])
       (selfFieldOf : Option (String → Option Nat) := none) (scopeClass : Option String := none)
       (evidenceSignature : Option Sig := none) :
-      Except String (Fn × List VTy × List (String × Ty) × Option Pos × List Refine.Lift × List LoopUse × FrameRefs.Info × List String × List FnValues.MethodRequest × List STop × List (Pos × String) × Array ((Pos × String) × List Nat) × MetadataFlow.Info) := do
+      Except String ElaboratedFn := do
     -- (#209) the values of `selfTps` come from the receiver's hidden
     -- fields, in slots after the hidden parameters: a method's own class's
     -- (`C.M`), or as `selfFieldOf` says (a cast's branch, #250, the cast
@@ -1601,7 +1606,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       dictBase := frame.witnessBase
       suspends := suspends
       dictVars := dictTps.map (·.1) }
-    let ctx ← functionBodyCtx opts base p name tps scopeClass
+    let ctx ← functionBodyCtx opts.requests base p name tps scopeClass
     let locals := ctx.locals.reverse
     let hidden := frame.hiddenTypes
     let arity := frame.arity
@@ -1630,55 +1635,27 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       if !signature.typeValues.contains i && (SubtypeEvidence.exposesEvidence env ty ||
           (i == 0 && ((signature.hasReceiver && !name.endsWith ".$block") ||
             ["$Await", "$EvAwait", "$StickyAwait", "$cancelMark"].contains name))) then some i else none
-    let roles : MetadataFlow.Info := {
-      pos := p, inputs, required, seeds := inputs ++ st.metadataSeeds
-      uses := st.metadataUses
+    let metadata : MetadataFlow.Info := {
+      pos := p, inputs, required, seeds := inputs ++ st.metadataSeeds, uses := st.metadataUses
       shared := st.frameSlots.map (·.1), metadataWrites := st.metadataWrites
       body := some (initPrefixE arity selfInits e) }
-    return ({ name, arity, nslots := st.nslots, decides, writes := allowed.contains "writes",
-              body := initPrefixE arity inits e },
-      spawnParamTypes env name (st.slotTys.toList.map (Ty.toVTy env)), st.fnNeeds, st.errAt, st.castNeeds, st.loopFirst,
-      { explicit := ps.length, copies := st.frameCopies, slots := st.frameSlots.map fun (i, s) =>
-          (i, { frame := s.frame, name := s.name, args := s.args.map (Ty.toVTy env) }) }, st.eagerNeeds, st.methodNeeds, st.subtypeNeeds, st.familyNeeds, st.failCalls, roles)
+    return { fn := { name, arity, nslots := st.nslots, decides, writes := allowed.contains "writes",
+                     body := initPrefixE arity inits e },
+             slotTys := spawnParamTypes env name (st.slotTys.toList.map (Ty.toVTy env)), errAt := st.errAt,
+             frames := { explicit := ps.length, copies := st.frameCopies, slots := st.frameSlots.map fun (i, s) =>
+               (i, { frame := s.frame, name := s.name, args := s.args.map (Ty.toVTy env) }) },
+             needs := st.needs, loopFirst := st.loopFirst, failCalls := st.failCalls, metadata }
   -- (the accessors come right after the functions, #157)
   env := { env with fieldAccBase := tops.length + gsigs.size, signalNoRollback := opts.signalNoRollback }
   let genvOf (g : Sig) : TyEnv := g.typeEnv env
-  let mut fns : Array Fn := #[]
-  let mut slotTys : Array (List VTy) := #[]
-  let mut frameInfo : Array FrameRefs.Info := #[]
-  let mut metadataInfo : Array MetadataFlow.Info := #[]
-  let mut fnNeeds : List (String × Ty) := []
-  let mut methodNeeds : List FnValues.MethodRequest := fieldMethodNeeds
-  let mut subtypeNeeds : List STop := fieldSubtypeNeeds
-  -- (where each function calls `Err()`, by its index, #235)
-  let mut errs : Array (Option Pos) := #[]
-  let mut castNeeds : List Refine.Lift := []
-  -- (the lazily taken functions with several values that contexts taking
-  -- their first success consume, #246)
-  let mut loopFirst : List LoopUse := fieldDefaultNeeds.map fun l =>
-    { g := "", pos := l.pos, itemCode := .lit .void, argSet := none, lift := .ok l }
-  let mut eagerNeeds : List String := []
-  let mut familyNeeds : List (Pos × String) := []
-  let mut failCalls : Array ((Pos × String) × List Nat) := #[]
+  -- (the functions, then the generic ones, by index)
+  let mut elaborated : Array ElaboratedFn := #[]
   for (top, idx) in tops.zip (List.range tops.length) do
     let sig := sigs[idx]!
     match top with
     | .fn p n ps _ _ _ body =>
-      let (fn, tys, needs, err, casts, lf, frames, eager, methodUses, subtypeUses, family, fc, roles) ← elabFn env p n ps sig.params sig.ret sig.decides sig.fx [] body sig.suspends
-        (evidenceSignature := some sig)
-      failCalls := failCalls ++ fc
-      eagerNeeds := eagerNeeds ++ eager
-      familyNeeds := familyNeeds ++ family
-      fnNeeds := fnNeeds ++ needs
-      methodNeeds := FnValues.mergeMethodRequests methodNeeds methodUses
-      subtypeNeeds := SubtypeEvidence.mergeRequests subtypeNeeds subtypeUses
-      castNeeds := castNeeds ++ casts
-      loopFirst := loopFirst ++ lf
-      fns := fns.push fn
-      errs := errs.push err
-      slotTys := slotTys.push tys
-      frameInfo := frameInfo.push frames
-      metadataInfo := metadataInfo.push roles
+      elaborated := elaborated.push (← elabFn env p n ps sig.params sig.ret sig.decides sig.fx [] body sig.suspends
+        (evidenceSignature := some sig))
     | .const p n _ body =>
       -- a constant is computed at each use, so it would be a new object each
       -- time (until Verse Core has global state)
@@ -1687,28 +1664,19 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       let ctx : Ctx := { sigs := allSigs, sigProg, types := env }
       let (r, st) ← elabBodyOv ctx body (some sig.ret) { env }
       let (e, st) ← (coerce p r.1 sig.ret).run st
-      failCalls := failCalls ++ st.failCalls
-      fnNeeds := fnNeeds ++ st.fnNeeds
-      methodNeeds := FnValues.mergeMethodRequests methodNeeds st.methodNeeds
-      subtypeNeeds := SubtypeEvidence.mergeRequests subtypeNeeds st.subtypeNeeds
-      castNeeds := castNeeds ++ st.castNeeds
-      loopFirst := loopFirst ++ st.loopFirst
-      eagerNeeds := eagerNeeds ++ st.eagerNeeds
-      familyNeeds := familyNeeds ++ st.familyNeeds
-      let tys := st.slotTys.toList.map (Ty.toVTy env)
-      frameInfo := frameInfo.push {}
-      metadataInfo := metadataInfo.push {
-        pos := p, seeds := st.metadataSeeds, uses := st.metadataUses
-        metadataWrites := st.metadataWrites, body := some e }
       -- slots start like a function's (a class-typed one as a placeholder)
       let inits ← match st.slotTys.toList.mapM (slotDefault env 0 [] []) with
         | .ok ds => pure ds
         | .error msg => throw s!"{p.show}: in {n}: {msg}"
       fxCheck n sig.fx st
-      fns := fns.push { name := n, arity := 0, nslots := st.nslots, decides := false,
-                        writes := sig.fx.contains "writes", body := initPrefixE 0 inits e }
-      errs := errs.push st.errAt
-      slotTys := slotTys.push tys
+      elaborated := elaborated.push {
+        fn := { name := n, arity := 0, nslots := st.nslots, decides := false,
+                writes := sig.fx.contains "writes", body := initPrefixE 0 inits e }
+        slotTys := st.slotTys.toList.map (Ty.toVTy env), errAt := st.errAt, needs := st.needs,
+        loopFirst := st.loopFirst, failCalls := st.failCalls
+        metadata := {
+          pos := p, seeds := st.metadataSeeds, uses := st.metadataUses
+          metadataWrites := st.metadataWrites, body := some e } }
     | .classDef .. => pure ()   -- expanded above
   -- each generic function is elaborated once, with its type parameters
   -- opaque, as Verse checks it, into one Verse Core function whose types
@@ -1720,43 +1688,35 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       -- (a class's copy of an interface's default, #53, elaborated in the
       -- interface's scope)
       let scope := copyScope? effs
-      let (fn, tys, needs, err, casts, lf, frames, eager, methodUses, subtypeUses, family, fc, roles) ← elabFn (genvOf g) p n ps g.params g.ret g.decides g.fx g.tparams body g.suspends
-        g.selfTps ((opts.castRequests.find? (·.name == n)).map fun l => fun v =>
-          (l.opened.lookup v).bind (env.witnessField? l.target ·)) scope (some g)
-      fnNeeds := fnNeeds ++ needs
-      methodNeeds := FnValues.mergeMethodRequests methodNeeds methodUses
-      subtypeNeeds := SubtypeEvidence.mergeRequests subtypeNeeds subtypeUses
-      eagerNeeds := eagerNeeds ++ eager
-      familyNeeds := familyNeeds ++ family
-      failCalls := failCalls ++ fc
-      castNeeds := castNeeds ++ casts
-      loopFirst := loopFirst ++ lf
-      fns := fns.push fn
-      errs := errs.push err
-      slotTys := slotTys.push tys
-      frameInfo := frameInfo.push frames
-      metadataInfo := metadataInfo.push roles
+      elaborated := elaborated.push (← elabFn (genvOf g) p n ps g.params g.ret g.decides g.fx g.tparams body
+        g.suspends g.selfTps ((opts.requests.casts.find? (·.name == n)).map fun l => fun v =>
+          (l.opened.lookup v).bind (env.witnessField? l.target ·)) scope (some g))
     | _ => pure ()
-  -- (#214) functions wanted as values at types no class of theirs gives:
-  -- the program is elaborated again, with classes for them, so this one,
-  -- with placeholders, goes no further
-  -- (#243) and branches of casts that refine type arguments, lifted into
-  -- functions
-  -- (#283) and with the families of the uses of methods whose receivers'
-  -- classes this one found; those it did not reach, of no family, so that
-  -- the last elaboration has none to find (and knows what can fail)
-  if familyNeeds.isEmpty then familyNeeds := familySites.map fun (q, _) => (q, "")
-  if !eagerNeeds.isEmpty || !familyNeeds.isEmpty then
-    return { prog := default, sigs := { fns := [] }, slotTys := [], eagerNeeds := eagerNeeds.eraseDups,
-             familyNeeds := familyNeeds.eraseDups, subtypeNeeds }
-  let defaults := loopFirst.filterMap fun u => match u.lift with
-    | .ok l => if l.key.startsWith "defaults:" then some l else none
-    | _ => none
-  if !fnNeeds.isEmpty || !methodNeeds.isEmpty || !castNeeds.isEmpty || !defaults.isEmpty || !subtypeNeeds.isEmpty then
-    let casts := castNeeds.foldl (fun acc l => if acc.any (·.key == l.key) then acc else acc ++ [l]) []
-    return {
-      prog := default, sigs := { fns := [] }, slotTys := [], fnNeeds := fnNeeds.eraseDups, methodNeeds, subtypeNeeds,
-      castNeeds := casts, loopNeeds := defaults.foldl (fun acc l => if acc.any (·.key == l.key) then acc else acc ++ [l]) [] }
+  let mut fns := elaborated.map (·.fn)
+  let mut slotTys := elaborated.map (·.slotTys)
+  -- (where each function calls `Err()`, by its index, #235)
+  let errs := elaborated.map (·.errAt)
+  let frameInfo := elaborated.map (·.frames)
+  let mut metadataInfo := elaborated.map (·.metadata)
+  -- (the lazily taken functions with several values that contexts taking
+  -- their first success consume, #246)
+  let loopFirst := elaborated.toList.flatMap (·.loopFirst)
+  let failCalls := elaborated.foldl (fun acc f => acc ++ f.failCalls) #[]
+  let mut needs := elaborated.foldl (fun acc f => acc.merge f.needs) fieldNeeds
+  -- (#283) the eager groups, and the families of the uses of methods whose
+  -- receivers' classes this one found; those it did not reach, of no
+  -- family, so that the last elaboration has none to find (and knows what
+  -- can fail): the program is elaborated again with them, so this one goes
+  -- no further
+  if needs.families.isEmpty then needs := needs.merge { families := familySites.map fun (q, _) => (q, "") }
+  if !needs.eager.isEmpty || !needs.families.isEmpty then
+    return .asking { eager := needs.eager, families := needs.families }
+  -- (#214) and functions wanted as values at types no class of theirs
+  -- gives, adapters for methods wanted as values, (#243) branches of casts
+  -- that refine type arguments, lifted into functions, and helpers that
+  -- forward calls to the defaults of their named parameters: likewise, as
+  -- this one has placeholders for them
+  if !needs.isEmpty then return .asking needs
   let mainSig ← match sigs.toList.find? (·.name == (if opts.entry.isSome then "$Do" else "Main")) with
     | some s =>
       if s.isConst || !s.params.isEmpty then throw "Main must be a function with no parameters"
@@ -1827,18 +1787,18 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   -- (#235) the functions with several values computed at their calls
   let lazyNeeds ← checkEager fns errs (fun g => ((tops ++ generics).findSome? fun
     | .fn p n .. => if n == g then some p else none
-    | _ => none)) opts.lazyRequests
+    | _ => none)) opts.requests.lazy
   if !lazyNeeds.isEmpty then
-    return { prog := default, sigs := { fns := [] }, slotTys := [], lazyNeeds }
+    return .asking { lazy := lazyNeeds }
   -- (#515, `--signal-no-rollback`) no event signal from a failure context
   if opts.signalNoRollback then
     if let some ((p, what), way) := SignalAdmission.checkSites fns failCalls then
       throw s!"{p.show}: this {what} may signal an event ({" → ".intercalate way}) in a failure context, which --signal-no-rollback refuses: the published Verse API makes an event's Signal <no_rollback> (#515)"
   -- (#246) and functions of their own for the lazily taken calls whose
   -- effects need them: the program is elaborated again, with them
-  let loopNeeds ← checkLoopFirst fns loopFirst opts.loopRequests
+  let loopNeeds ← checkLoopFirst fns loopFirst opts.requests.loops
   if !loopNeeds.isEmpty then
-    return { prog := default, sigs := { fns := [] }, slotTys := [], loopNeeds }
+    return .asking { loops := loopNeeds }
   if !opts.extendedDefaults then
     let ordinary := (tops ++ generics).filterMap fun
       | .fn _ n _ _ specs .. =>
@@ -1932,7 +1892,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
         s!" (in {((P.fns[f]?).map Fn.name).getD "?"}){dump}"
       | none => if !checkPrelude P S then " (the prototypes)" else ""
     throw s!"internal error: the elaborated program does not pass Prog.checkTypes{which}"
-  return { prog := P, sigs := S, slotTys := slotTys.toList, fnNeeds := fnNeeds.eraseDups, methodNeeds }
+  return { prog := P, sigs := S, slotTys := slotTys.toList }
 
 /-- `F$ovN` (an overload, #74) shown as `F`: every `$ov` and the digits after it removed. -/
 def stripOv (msg0 : String) : String := Id.run do
@@ -1978,98 +1938,92 @@ partial def topDefaultCount : STop → Nat
   | .classDef _ _ _ _ _ _ _ _ ms => ms.foldl (fun n m => n + topDefaultCount m) 0
   | _ => 0
 
+/-- What an elaboration asks for (`Requests`) is of three tiers, by what it
+    changes, and an elaboration asks for one tier at a time
+    (`elabProgramCore` goes no further than the first it finds):
+    1. how the source's choices are inlined (#283): eager groups, lazily
+       taken functions, and the families of methods' uses;
+    2. the classes' layout (#351): hidden fields for all of a class's type
+       parameters;
+    3. the functions added: functions as values (#214), method adapters, the
+       branches of refining casts (#243), and the functions of lazily taken
+       calls and the helpers of consumers of choices (#246, #335). -/
+def Requests.tier (r : Requests) : Nat :=
+  if !r.eager.isEmpty || !r.families.isEmpty || !r.lazy.isEmpty then 1
+  else if !r.witnesses.isEmpty then 2
+  else 3
+
+/-- The requests of tier `k` and of the tiers above it (`Requests.tier`). -/
+def Requests.upTo (r : Requests) (k : Nat) : Requests :=
+  if k ≥ 3 then r else
+  { eager := r.eager, families := r.families, lazy := r.lazy, witnesses := if k = 2 then r.witnesses else [] }
+
 /-- Elaborate a parsed program (`elabProgramCore`), with the names of the
     functions a constructor or an overload becomes shown as written: `K$init`
-    is `K<constructor>`, `F$ov1` is `F` (names with `$` are never the user's). -/
+    is `K<constructor>`, `F$ov1` is `F` (names with `$` are never the user's).
+
+    It is elaborated in rounds: as long as an elaboration asks for something
+    new, the program is elaborated again with it. A round that asks for more
+    of one tier (`Requests.tier`) is followed by one with the requests of that
+    tier and of the tiers above it only, as what the source or the classes
+    are changes what the tiers below ask for: those are asked for again, and
+    their budgets of rounds start again. -/
 def elabProgram (allTops00 : List STop) (opts : Options := {}) : Except String Compiled :=
   let defaults := allTops00.foldl (fun n t => n + topDefaultCount t) 0
   let classes := allTops00.filter (fun | .classDef .. => true | _ => false) |>.length
+  -- (tier 3: each round asks for new functions only, so a few rounds do)
   let rounds := max 4 (4 * (allTops00.foldl (fun n t => max n (topLiftDepth t)) 0 + defaults * (classes + 1)))
-  -- (#214) again with the functions wanted as values at closed function
-  -- types: each round asks for new ones only, so a few rounds do
-  let rec go (fuel : Nat) (opts : Options) : Except String Compiled := do
-    let c ← elabProgramCore allTops00 opts
-    let subtypes := c.subtypeNeeds.filter fun request => !opts.subtypeRequests.any
-      (fun old => SubtypeEvidence.declarationName old == SubtypeEvidence.declarationName request)
-    if !subtypes.isEmpty then
-      match fuel with
-      | fuel + 1 => return ← go fuel { opts with
-          subtypeRequests := SubtypeEvidence.mergeRequests opts.subtypeRequests subtypes }
-      | 0 => throw "internal error: subtype dictionaries still to materialize after several elaborations"
-    if !c.subtypeNeeds.isEmpty then throw "internal error: an existing subtype dictionary was requested again"
-    if !c.eagerNeeds.isEmpty || !c.familyNeeds.isEmpty || !c.lazyNeeds.isEmpty then return c
-    -- (#243) and with the branches of casts that refine type arguments
-    let casts := c.castNeeds.filter fun l => !opts.castRequests.any (·.key == l.key)
-    -- (#246) and with functions of their own for lazily taken calls
-    let loops := c.loopNeeds.filter fun l => !opts.loopRequests.any (·.key == l.key)
-    -- A newly materialized dispatch-default helper can reveal heap effects
-    -- absent from an earlier suffix trial. Rediscover consumers after those
-    -- helpers have participated in effect inference; their cached stage
-    -- interfaces, prefixes and resume methods must agree on permissions.
-    -- Each restart retains the new bridges, so discovery still progresses.
-    let methods := c.methodNeeds.filter fun r => !opts.methodRequests.any (·.key == r.key)
-    let newDefaults := loops.filter fun l => defaultBridge l.name
-    if !newDefaults.isEmpty then
-      match fuel with
-      | fuel + 1 =>
-        let bridges := opts.loopRequests.filter fun l => defaultBridge l.name || spawnAdapter l.name
-        return ← go fuel { opts with
-          fnRequests := (opts.fnRequests ++ c.fnNeeds).eraseDups,
-          methodRequests := FnValues.mergeMethodRequests opts.methodRequests methods,
-          castRequests := [], loopRequests := bridges ++ newDefaults }
-      | 0 => throw "internal error: default forwarding helpers still to infer after several elaborations"
-    if !methods.isEmpty then
-      match fuel with
-      | fuel + 1 => return ← go fuel { opts with
-          methodRequests := FnValues.mergeMethodRequests opts.methodRequests methods,
-          fnRequests := (opts.fnRequests ++ c.fnNeeds).eraseDups,
-          castRequests := opts.castRequests ++ casts, loopRequests := opts.loopRequests ++ loops }
-      | 0 => throw "internal error: method variance adapters still to infer after several elaborations"
-    match fuel, c.fnNeeds.filter (!opts.fnRequests.contains ·) with
-    | fuel + 1, new@(_ :: _) =>
-      go fuel { opts with fnRequests := opts.fnRequests ++ new, castRequests := opts.castRequests ++ casts,
-                          loopRequests := opts.loopRequests ++ loops }
-    | fuel + 1, [] =>
-      if casts.isEmpty && loops.isEmpty then
-        if c.castNeeds.isEmpty && c.loopNeeds.isEmpty then return c
-        throw "internal error: a cast that refines type arguments, or a lazily taken call's function, was asked for again (#243, #246)"
-      go fuel { opts with castRequests := opts.castRequests ++ casts, loopRequests := opts.loopRequests ++ loops }
-    | 0, [] =>
-      if c.castNeeds.isEmpty && c.loopNeeds.isEmpty then return c
-      throw "internal error: casts that refine type arguments, or lazily taken calls, still to lift after several elaborations (#243, #246)"
-    -- (a program with a placeholder left is never given out)
-    | 0, _ :: _ => throw "internal error: functions still wanted as values after several elaborations (#214)"
-  -- (#351) and with hidden fields for all of the type parameters of the
-  -- classes that ask for them, each round more
-  let rec withWitness (fuel : Nat) (opts : Options) : Except String Compiled := do
-    let c ← go rounds opts
-    if c.witnessNeeds.isEmpty then return c
-    match fuel with
-    | fuel + 1 => withWitness fuel { opts with witnessAll := opts.witnessAll ++ c.witnessNeeds }
-    | 0 => throw "internal error: classes still asking for hidden fields after several elaborations (#351)"
-  -- A restart discards helpers prepared for the lazy group; their bodies
+  -- (tier 2: each round asks for more classes' hidden fields)
+  let witnessRounds := max 8 (classes + 1)
+  -- (tier 1: each round notes the uses of methods it found, which may make
+  -- more methods have several values, whose uses the next one notes. A
+  -- restart discards helpers prepared for the lazy group; their bodies
   -- must be discovered again after its calls become eager. Each restart
-  -- forces a new source function's group, so source definitions bound it.
-  let count := allTops00.foldl (fun n t => n + match t with
+  -- forces a new source function's group, so source definitions bound it.)
+  let eagerRounds := allTops00.foldl (fun n t => n + match t with
     | .fn .. => 1
     | .classDef _ _ _ _ _ _ _ _ ms => ms.length
     | _ => 0) 1
-  -- (#283) Likewise with the family of each use of a method whose receiver's
-  -- class picks it: each round notes the uses it found, which may make
-  -- more methods have several values, whose uses the next one notes.
-  let rec withEager (fuel : Nat) (opts : Options) : Except String Compiled := do
-    let c ← withWitness (max 8 (classes + 1)) opts
-    if c.eagerNeeds.isEmpty && c.familyNeeds.isEmpty && c.lazyNeeds.isEmpty then return c
-    let new := c.eagerNeeds.filter (!opts.eagerRequests.contains ·)
-    let picks := c.familyNeeds.filter (!opts.familyPicks.contains ·)
-    let lazy := c.lazyNeeds.filter (!opts.lazyRequests.contains ·)
-    match fuel, new ++ picks.map (·.2) ++ lazy with
-    | fuel + 1, _ :: _ =>
-      withEager fuel { opts with eagerRequests := opts.eagerRequests ++ new, familyPicks := opts.familyPicks ++ picks,
-                                 lazyRequests := opts.lazyRequests ++ lazy, loopRequests := [], castRequests := [] }
-    | _, _ => throw "internal error: mutual generator instances or methods' families still changing after eager lowering (#283)"
-  (withEager count opts).mapError fun msg =>
-    FnValues.pretty (((stripOv (msg.replace "$init" "<constructor>")).replace "::" ".").replace "$replaceAll" "ReplaceAll")
+  let rec loop (eagerFuel witnessFuel fuel : Nat) (req : Requests) : Except String Compiled := do
+    let c ← elabProgramCore allTops00 { opts with requests := req }
+    let new := c.needs.without req
+    match c.needs.tier with
+    | 1 =>
+      match eagerFuel, new.isEmpty with
+      | eagerFuel + 1, false => loop eagerFuel witnessRounds rounds ((req.upTo 1).merge new)
+      | _, _ => throw "internal error: mutual generator instances or methods' families still changing after eager lowering (#283)"
+    | 2 =>
+      match witnessFuel with
+      | witnessFuel + 1 => loop eagerFuel witnessFuel rounds ((req.upTo 2).merge new)
+      | 0 => throw "internal error: classes still asking for hidden fields after several elaborations (#351)"
+    | _ =>
+      if new.isEmpty then
+        -- (functions and methods are asked for only when not requested yet)
+        if c.needs.casts.isEmpty && c.needs.loops.isEmpty && c.needs.subtypes.isEmpty then return c
+        if fuel == 0 then
+          throw "internal error: casts that refine type arguments, or lazily taken calls, still to lift after several elaborations (#243, #246)"
+        throw "internal error: a cast that refines type arguments, or a lazily taken call's function, was asked for again (#243, #246)"
+      let newDefaults := new.loops.filter fun l => defaultBridge l.name
+      match fuel with
+      | 0 =>
+        if !newDefaults.isEmpty then throw "internal error: default forwarding helpers still to infer after several elaborations"
+        if !new.methods.isEmpty then throw "internal error: method variance adapters still to infer after several elaborations"
+        -- (a program with a placeholder left is never given out)
+        if !new.fns.isEmpty then throw "internal error: functions still wanted as values after several elaborations (#214)"
+        throw "internal error: casts that refine type arguments, or lazily taken calls, still to lift after several elaborations (#243, #246)"
+      | fuel + 1 =>
+        if newDefaults.isEmpty then return ← loop eagerFuel witnessFuel fuel (req.merge new)
+        -- A newly materialized dispatch-default helper can reveal heap effects
+        -- absent from an earlier suffix trial. Rediscover consumers after those
+        -- helpers have participated in effect inference; their cached stage
+        -- interfaces, prefixes and resume methods must agree on permissions.
+        -- Each restart retains the new bridges, so discovery still progresses.
+        let bridges := req.loops.filter fun l => defaultBridge l.name || spawnAdapter l.name
+        loop eagerFuel witnessFuel fuel { req.merge { fns := new.fns, methods := new.methods, subtypes := new.subtypes } with
+          casts := [], loops := bridges ++ newDefaults }
+  termination_by (eagerFuel, witnessFuel, fuel)
+  (loop eagerRounds witnessRounds rounds opts.requests).mapError fun msg =>
+    FnValues.pretty (((stripOv ((Refine.unmarked msg).replace "$init" "<constructor>")).replace "::" ".").replace "$replaceAll" "ReplaceAll")
 
 /-- Parse and elaborate Verse source text. -/
 def compileChecked (src : String) (opts : Options := {}) : Except String Compiled := do

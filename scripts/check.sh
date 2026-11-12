@@ -164,6 +164,10 @@ check "nested field write choice dictionary model fuzzing (${FUZZ_MODEL_NESTED_W
   scripts/fuzz-model-heterogeneous.sh "${FUZZ_MODEL_NESTED_WRITE_DICTIONARY:-120}" "$seed" --nested-writes
 check "member-result alias choice dictionary model fuzzing (${FUZZ_MODEL_RESULT_ALIAS_DICTIONARY:-120} programs)" \
   scripts/fuzz-model-heterogeneous.sh "${FUZZ_MODEL_RESULT_ALIAS_DICTIONARY:-120}" "$seed" --result-aliases
+check "method-associated result choice dictionary model fuzzing (${FUZZ_MODEL_ASSOCIATED_DICTIONARY:-120} programs)" \
+  scripts/fuzz-model-heterogeneous.sh "${FUZZ_MODEL_ASSOCIATED_DICTIONARY:-120}" "$seed" --associated-methods
+check "packed method-associated result choice dictionary model fuzzing (${FUZZ_MODEL_PACKED_ASSOCIATED_DICTIONARY:-120} programs)" \
+  scripts/fuzz-model-heterogeneous.sh "${FUZZ_MODEL_PACKED_ASSOCIATED_DICTIONARY:-120}" "$seed" --packed-associated-methods
 check "named/default choice dictionary model fuzzing (${FUZZ_MODEL_NAMED_DICTIONARY:-120} programs)" \
   scripts/fuzz-model-heterogeneous.sh "${FUZZ_MODEL_NAMED_DICTIONARY:-120}" "$seed" --named-methods
 check "numeric field write choice dictionary model fuzzing (${FUZZ_MODEL_NUMERIC_WRITE_DICTIONARY:-120} programs)" \

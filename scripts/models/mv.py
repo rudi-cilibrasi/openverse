@@ -76,6 +76,10 @@ flags: heavy     (with bif: more of them, longer chains, longer conditions)
        noframes  (no return frame: a generator's call of itself with code after
                   it, or its choice bound with plain code after it, #283; on with
                   lazy otherwise)
+       noseq     (no choice points in sequence in a generator: a call of itself
+                  followed by a choice or by another call, a choice followed by a
+                  call, a choice bound in a branch with code after it, #283; on
+                  with frames otherwise)
 """
 import copy
 import os
@@ -474,7 +478,24 @@ RPRE = random.Random(seed * 1000003 + 283285)
 # and its value reads it: every later value and alternative sees what a kept value set, a
 # rejected one's write is undone; a stream of its own.
 RVAR = random.Random(seed * 1000003 + 283286)
+# ---- #283, flag seq (on with frames; noseq turns it off): choice points in sequence in a
+# generator, a stream of its own, applied to a generator once it is made, so seeds where it does
+# not fire keep their programs: a call of itself followed by another, `Gz0(N - 1, A) + Gz0(N - 1, 2)`;
+# a <decides> one's bound choice with a choice after it, `Wf := (A | Gz0[N - 1, A]); …; (Wf | Wf + 2)`,
+# or with values only and a call after it, `Wf := (1 | A); …; (Gz0[N - 1, Wf] + Wf | N)`, or a call
+# bound after it, `Wq := Gz0[N - 1, Wf]`; and a choice bound in a branchy one's else, with code after
+# it, `else: Wb := (…); …; Wb + 1` (a `gblk`). The model is the same CPS inlining: the code after a
+# choice point runs on each of its values, the code before the next one once for each of them.
+RSEQ = random.Random(seed * 1000003 + 283287)
+SQN = [0]
+USED = set()     # (generator, in a for): the calls the tests make, for MVSEQ's statistics
 FRN = [0]
+
+
+def sqfresh():
+    """a name for a print of the choice points in sequence, a counter of its own (#283)."""
+    SQN[0] += 1
+    return f"sq{SQN[0]}"
 
 
 def ffresh():
@@ -482,6 +503,7 @@ def ffresh():
     FRN[0] += 1
     return f"fr{FRN[0]}"
 FRAMES = LAZY and 'noframes' not in flags and 'cf' not in flags
+SEQ = FRAMES and 'noseq' not in flags
 REFUSED = [False]
 
 
@@ -736,7 +758,29 @@ def gub(fi, n):
         alts = f['val'][2] if n <= f['lo'] else f['val'][3]
     if 'cf' in flags:
         alts = alts[:1]
-    return sum(gub(c[1], n - 1) if (c := frame_call(a)) is not None else 1 for a in alts)     # (the callee's, #371)
+    total = sum(ub_e(a, n) for a in alts)     # (the callee's, #371)
+    if f.get('bound'):
+        total *= ub_e(f['bound'][1], n) * ub_e(f['bound'][2], n)
+    return total
+
+
+def ub_e(e, n):
+    """an upper bound of the number of values of e, code of a generator with N = n: a call of a
+    generator (with N - 1) has its values, a choice its alternatives', anything else the product
+    of its parts' (#283: so choice points in sequence multiply)."""
+    if isinstance(e, tuple) and e and isinstance(e[0], str):
+        if e[0] in ('gself', 'gcall'):
+            return gub(e[1], n - 1)
+        if e[0] == 'choice':
+            return sum(ub_e(a, n) for a in e[1])
+        if e[0] == 'gblk':
+            return sum(ub_e(a, n) for a in e[2]) * ub_e(e[3], n) * ub_e(e[4], n)
+    if isinstance(e, (tuple, list)):
+        r = 1
+        for y in e:
+            r *= ub_e(y, n)
+        return r
+    return 1
 
 
 def frame_call(a):
@@ -786,6 +830,7 @@ def gen_gcall(scope, vars_, d):
         return None
     i, n = R.choice(cands)
     f = GFUNCS[i]
+    USED.add((i, CTX['take'] == 'for'))
     if f['lifted'] and CTX['take'] != 'for':
         FXFIRST[0] += 1
         CTX['clause_lifts'] = CTX.get('clause_lifts', 0) + 1
@@ -932,10 +977,71 @@ def gen_gfunc(i):
             pick = lambda: ('lit', RIFV.randint(-1, 4)) if RIFV.random() < 0.5 else ('ref', RIFV.choice(['N', 'A']))
             base = [('ifx', cond, pick(), pick())]
         f['val'] = ('gbif', conds, base, alts(True))
+    if SEQ:
+        seq_shapes(f, i, sc, ctr)
     f['stmts'] = stmts
     f['lifted'] = lifted(f)
     CTX.update(ctrs=None, nofail=False, nochoice=False, noprint=False, fmax=None, take=None)
     return f
+
+
+def seq_call(i, sc, ctr):
+    """(#283) a call of generator i, of its own, its second argument a literal or one of the
+    names `sc` (RSEQ)."""
+    a = ('lit', RSEQ.randint(-1, 3)) if RSEQ.random() < 0.5 else ('ref', RSEQ.choice(sc))
+    return ('gself', i, [('bin', '-', ('ref', 'N'), ('lit', 1)), a] + ([('ref', 'C')] if ctr else []))
+
+
+def seq_shapes(f, i, sc, ctr):
+    """(#283, flag seq) choice points in sequence in generator f, made already, from RSEQ alone:
+    an alternative that calls itself followed by another call of itself; a <decides> one's bound
+    choice followed by a choice, or made of values and followed by a call; a branchy one's else a
+    block that binds a choice, with code after it."""
+    v = f['val']
+    small = lambda: ('lit', RSEQ.randint(0, 3))
+    if RSEQ.random() < 0.3:
+        alts = v[1] if v[0] == 'gchoice' else v[3]
+        idx = [j for j, a in enumerate(alts) if frame_call(a) is not None]
+        if idx:
+            j = RSEQ.choice(idx)
+            second = seq_call(i, sc, ctr)
+            if RSEQ.random() < 0.4:
+                second = ('tell', sqfresh(), second)
+            alts[j] = ('bin', RSEQ.choice(['+', '-', '*']), alts[j], second)
+            f['seq'] = f.get('seq', set()) | {'two-calls'}
+    if f['decides'] and RSEQ.random() < 0.35:
+        post0 = [('sprint', sqfresh())] if RSEQ.random() < 0.5 else []
+        if RSEQ.random() < 0.5:
+            # (a call followed by a choice)
+            x, post, last = f.get('bound') or ('Wf', post0, ('ref', 'Wf'))
+            f['bound'] = (x, post, ('choice', [last, ('bin', '+', ('ref', x), small())]))
+            f['seq'] = f.get('seq', set()) | {'call-then-choice'}
+        else:
+            # (a choice before a call: the bound choice's alternatives are values)
+            vals = [a for a in v[1] if frame_call(a) is None][:2]
+            while len(vals) < 2:
+                vals.append(small())
+            v[1][:] = vals
+            if RSEQ.random() < 0.5:
+                last = ('choice', [('bin', '+', seq_call(i, sc + ['Wf'], ctr), ('ref', 'Wf')), ('ref', 'N')])
+                post = post0
+            else:
+                post = post0 + [('slet', 'Wq', seq_call(i, sc + ['Wf'], ctr))]
+                last = ('choice', [('bin', '+', ('ref', 'Wq'), ('ref', 'Wf')), ('ref', 'Wf')])
+            f['bound'] = ('Wf', post, last)
+            f['seq'] = f.get('seq', set()) | {'choice-then-call'}
+    if not f['decides'] and RSEQ.random() < 0.3:
+        # (a choice bound in the else branch, with code after it)
+        post = [('sprint', sqfresh())] if RSEQ.random() < 0.5 else []
+        r = RSEQ.random()
+        if r < 0.4:
+            last = ('bin', '+', ('ref', 'Wb'), small())
+        elif r < 0.7:
+            last = ('choice', [('ref', 'Wb'), ('bin', '*', ('ref', 'Wb'), small())])
+        else:
+            last = ('bin', '+', seq_call(i, sc + ['Wb'], ctr), ('ref', 'Wb'))
+        f['val'] = ('gbif', v[1], v[2], [('gblk', 'Wb', v[3], post, last)])
+        f['seq'] = f.get('seq', set()) | {'branch-block'}
 
 
 FX_NODES = ('sprint', 'snext', 'tell', 'bprint', 'cnext', 'cadd', 'print', 'next', 'add', 'seti', 'setf')
@@ -954,7 +1060,11 @@ def has_node(x, kinds):
 def lifted(f):
     """whether a call of f where the first success is taken runs as a function
     of its own (#275): its clauses, last if's conditions or self-call
-    arguments print or change an object, or those arguments set a name."""
+    arguments print or change an object, or those arguments set a name. (#283) One with choice
+    points in sequence also where its values or the code after its calls do: they may run before
+    a choice point, once for the values after it."""
+    if f.get('seq'):
+        return has_node((f['stmts'], f['val'], f.get('bound')), FX_NODES + ('sset', 'bset', 'setv'))
     v = f['val']
     alts = v[1] if v[0] == 'gchoice' else v[2] + v[3]
     args = [c[2] for a in alts if (c := frame_call(a)) is not None] + [x for a in alts for x in frame_prefix(a)]
@@ -981,6 +1091,13 @@ def show_gfunc(f):
         L.append("    " + show(last))
     elif v[0] == 'gchoice':
         L.append("    " + show_galts(v[1]))
+    elif v[3] and v[3][0][0] == 'gblk':
+        # (#283: the else a block that binds a choice, with code after it)
+        _, x, galts, post, last = v[3][0]
+        L.append(f"    if ({show_cl(v[1], ', ')}) then {show_galts(v[2])} else:")
+        L.append(f"        {x} := " + show_galts(galts))
+        L += ["        " + show_s(c) for c in post]
+        L.append("        " + show(last))
     else:
         L.append(f"    if ({show_cl(v[1], ', ')}) then {show_galts(v[2])} else {show_galts(v[3])}")
     return L
@@ -1904,6 +2021,14 @@ def ev(e, st, k, mode):
         if 'cf' in flags:
             return ev(alts[0], s0, k, mode)
         return choice_point([(lambda s, k2, a=a: ev(a, s, k2, mode)) for a in alts], s0, k, mode, True)
+    if t == 'gblk':
+        # (#283: a choice bound in a branch, then the code after it, on each of its values)
+        def kgb(v, s):
+            s.binds[e[1]] = v
+            return run_body(e[3], e[4], s, k, mode)
+        if len(e[2]) == 1:
+            return ev(e[2][0], st, kgb, mode)
+        return choice_point([(lambda s, k2, a=a: ev(a, s, k2, mode)) for a in e[2]], st, kgb, mode, True)
     if t == 'big':
         return ev(e[1], st, lambda v, s: k(chks(9223372036854775807 + v * 0 + 1, s), s), mode)
     if t == 'rcall':
@@ -1964,7 +2089,7 @@ def ev(e, st, k, mode):
 def binders_of(x, acc):
     """every name a callee's body binds (parameters aside)."""
     if isinstance(x, tuple):
-        if x and x[0] in ('bind', 'sbind', 'range', 'slet', 'svar') and isinstance(x[1], str):
+        if x and x[0] in ('bind', 'sbind', 'range', 'slet', 'svar', 'gblk') and isinstance(x[1], str):
             acc.add(x[1])
         for y in x:
             binders_of(y, acc)
@@ -1984,7 +2109,7 @@ def rename(x, own, site):
     t = x[0]
     if t == 'mcall':
         return ('mcall', x[1], rename(x[2], own, site), f"{site}/{x[3]}")
-    if t in ('ref', 'cnext', 'snext', 'bind', 'sbind', 'range', 'slet', 'svar', 'sset', 'bset', 'cadd', 'setv') and isinstance(x[1], str) and x[1] in own:
+    if t in ('ref', 'cnext', 'snext', 'bind', 'sbind', 'range', 'slet', 'svar', 'sset', 'bset', 'cadd', 'setv', 'gblk') and isinstance(x[1], str) and x[1] in own:
         return (t, f"{site}.{x[1]}") + tuple(rename(y, own, site) for y in x[2:])
     return (t,) + tuple(rename(y, own, site) for y in x[1:])
 
@@ -2321,18 +2446,19 @@ if LAZY:
     # (#371: a pair of compatible generators call each other: the same parameters, failing or
     # not, with or without effects, run apart or not where the first success is taken)
     def retarget(f, j):
-        v = f['val']
         def to_j(a):
-            # (a call in a return frame too, #283)
-            if a[0] == 'gself':
+            # (every call of it, in a return frame too, #283, and in choice points
+            # in sequence, so that each is recursive through the other)
+            if isinstance(a, tuple) and a and a[0] == 'gself':
                 return ('gself', j, a[2])
-            if a[0] == 'bin' and frame_call(a) is not None:
-                return ('bin', a[1], to_j(a[2]), to_j(a[3]))
-            if a[0] == 'tell' and frame_call(a) is not None:
-                return ('tell', a[1], to_j(a[2]))
+            if isinstance(a, tuple):
+                return tuple(to_j(x) for x in a)
+            if isinstance(a, list):
+                return [to_j(x) for x in a]
             return a
-        fix = lambda alts: [to_j(a) for a in alts]
-        f['val'] = ('gchoice', fix(v[1])) if v[0] == 'gchoice' else ('gbif', v[1], fix(v[2]), fix(v[3]))
+        f['val'] = to_j(f['val'])
+        if f.get('bound'):
+            f['bound'] = to_j(f['bound'])
     pairs = [(a, b) for a in range(len(GFUNCS)) for b in range(a + 1, len(GFUNCS))
              if all(GFUNCS[a][x] == GFUNCS[b][x] for x in ('decides', 'ctr', 'first_ok', 'lifted'))]
     if pairs and R12.random() < 0.8:
@@ -2623,6 +2749,12 @@ if LAZY:
         "Even(X:int)<decides>", "Even(X:int)<computes><decides>").replace("Tw(A:int, B:int):int", "Tw(A:int, B:int)<computes>:int")
 open(f"{outdir}/p.verse", "w").write(PRE + "\n".join(lines) + "\n" + "\n".join(src_main) + "\n")
 open(f"{outdir}/p.chain", "w").write("1" if CHAIN[0] else "0")
+if os.environ.get('MVSEQ'):
+    # (#283: the generators with choice points in sequence; then each kind the tests call, in a
+    # for or where the first success is taken, with effects run as a function of its own or not)
+    used = [(k, 'for' if isfor else ('first-lifted' if GFUNCS[i]['lifted'] else 'first'))
+            for i, isfor in sorted(USED) for k in sorted(GFUNCS[i].get('seq', ()))]
+    print(f"seq {sum(1 for f in GFUNCS if f.get('seq'))} " + " ".join(sorted({f"{k}/{c}" for k, c in used})), file=sys.stderr)
 if os.environ.get('MVSTATS'):
     print(f"stats gens={len(GFUNCS)} gfor={STATS['gfor']} gfirst={STATS['gfirst']} gback={STATS['gback']} lfirst={STATS['lfirst']} lback={STATS['lback']} lmeth={STATS['lmeth']}", file=sys.stderr)
 if SKIPRET[0]:

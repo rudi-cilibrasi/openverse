@@ -34,32 +34,32 @@ def main : IO Unit := do
   let stage : Choice.FirstLift := {
     stageOnly := true, key := "api-stage", pos := p, name := "$apiStage", params := [], specs := [],
     ret := .name "void", body := .tuple p [], binds := [], sets := [], args := [], extraFns := [extra] }
-  report "materialized loop extra function" (elabProgramCore tops { loopRequests := [stage] })
+  report "materialized loop extra function" (elabProgramCore tops { requests := { loops := [stage] } })
   let request : Choice.FirstLift := { stage with stageOnly := false, name := "$apiFirst", ret := et, body := ec, extraFns := [] }
-  report "materialized loop function" (elabProgramCore tops { loopRequests := [request] })
+  report "materialized loop function" (elabProgramCore tops { requests := { loops := [request] } })
   let framed := STop.const p "$apiPacket" none (.structDef p [] [] [("E", .opt et, some (.ident p "false"), false)])
-  report "materialized loop data field" (elabProgramCore tops { loopRequests := [{stage with extraFns := [framed]}] })
+  report "materialized loop data field" (elabProgramCore tops { requests := { loops := [{stage with extraFns := [framed]}] } })
   let lift : Refine.Lift := {
     pos := p, bound := "D", target := "holder", name := "$apiCast", params := [], tparams := [],
     specs := [], ret := et, subst := [], body := some ec }
   let cls ← need "holder parse" (parseProgram "holder:=class{}\nMain():void={}")
-  report "materialized refining function" (elabProgramCore cls { castRequests := [lift] })
+  report "materialized refining function" (elabProgramCore cls { requests := { casts := [lift] } })
   let generic ← need "Id parse" (parseProgram "Id(X:t where t:type):t=X\nMain():void={}")
-  report "fnRequests nested event" (elabProgramCore generic {
-    fnRequests := [("Id", .struct "$fn1" [.struct "event" [.int], .struct "event" [.int]])] })
+  report "fnRequests nested event" (elabProgramCore generic { requests := {
+    fns := [("Id", .struct "$fn1" [.struct "event" [.int], .struct "event" [.int]])] } })
   let genericHolder ← need "generic holder parse" (parseProgram "holder(t:type):=class{V:t;Get():t=V}\nMain():void={}")
   let mr : FnValues.MethodRequest := {
     key := "api-method", pos := p, owner := "holder", method := "Get", tparams := [],
     receiver := .app "holder" [et], params := [], effs := [], ret := et, args := [], decides := false }
-  report "methodRequests receiver/result event" (elabProgramCore genericHolder { methodRequests := [mr] })
+  report "methodRequests receiver/result event" (elabProgramCore genericHolder { requests := { methods := [mr] } })
   let defaultParam : SParam := {
     name := "X", ty := .name "int", named := true,
     default := some (.block p [letBody, .int p 7]) }
   let defaultFn := STop.fn p "Unused" [defaultParam] [] [] (.name "int") (.int p 1)
   report "AST parameter default event" (elabProgramCore (defaultFn :: tops))
   refusal "API user choice profile" "--no-choice excludes" (compileWith src [] (some "1|2") .choiceFree)
-  refusal "API unsupported effects before availability" "<predicts>" (elabProgramCore tops {
-    loopRequests := [{request with specs := ["predicts"]}] })
+  refusal "API unsupported effects before availability" "<predicts>" (elabProgramCore tops { requests := {
+    loops := [{request with specs := ["predicts"]}] } })
   let badEntry := SExpr.decl p "F" (some (.fn [] ["predicts"] et)) false (.ident p "Missing")
   refusal "API entry unsupported effects" "<predicts>" (elabProgramCore tops { entry := some badEntry })
   -- A materialized internal task dependency must retain its builtin
@@ -68,5 +68,5 @@ def main : IO Unit := do
   let internalTask : Choice.FirstLift := { stage with
     stageOnly := false, name := "$privateTask", ret := .app "$task" [.name "int"],
     body := .construct p "$task" [.name "int"] [], extraFns := [] }
-  report "selected builtin identity in request" (elabProgramCore ownTask { loopRequests := [internalTask] })
+  report "selected builtin identity in request" (elabProgramCore ownTask { requests := { loops := [internalTask] } })
   IO.println "concurrency-prelude compiler API contracts passed (17 checks)"

@@ -51,12 +51,12 @@ def main : IO Unit := do
   -- Generated requests are checked before FnValues.desugar can normalize
   -- away unrepresented effects, even if a caller constructed Options directly.
   expectError "function request" "<predicts>" (elabProgramCore [main]
-    { fnRequests := [("Missing", .struct "$fn0:predicts" [.int])] })
+    { requests := { fns := [("Missing", .struct "$fn0:predicts" [.int])] } })
   let request : FnValues.MethodRequest := {
     key := "api-method", pos := p, owner := "Unused", method := "Get", tparams := [],
     receiver := .name "Unused", params := [], effs := ["predicts"], ret := .name "int",
     args := [], decides := false }
-  expectError "method request" "<predicts>" (elabProgramCore [main] { methodRequests := [request] })
+  expectError "method request" "<predicts>" (elabProgramCore [main] { requests := { methods := [request] } })
 
   -- Diagnostics, rather than a fake proof or a normalization, cover every
   -- unsupported family. Supported combinations still compile normally.
@@ -94,7 +94,7 @@ def main : IO Unit := do
         stageOnly := true, key := "api-stage", name := "$stage", pos := p,
         extraFns := [materializedCell specs] }
   expectError "materialized data budget" "construction of Cell"
-    (elabProgramCore [main] { loopRequests := [stage ["computes"]] })
+    (elabProgramCore [main] { requests := { loops := [stage ["computes"]] } })
   let _ ← requireOK "materialized allocating budget"
-    (elabProgramCore [main] { loopRequests := [stage ["allocates"]] })
+    (elabProgramCore [main] { requests := { loops := [stage ["allocates"]] } })
   IO.println "effect admission compiler API contracts passed"

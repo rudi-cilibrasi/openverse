@@ -1225,7 +1225,7 @@ def main (args : List String) : IO Unit := do
     return full
   let materialized ← materialize "automatic dictionaries" source
   checkTrace "automatic dictionaries" materialized trace
-  need "materialization finishes every request" materialized.subtypeNeeds.isEmpty
+  need "materialization finishes every request" materialized.needs.subtypes.isEmpty
   for source in ["car", "truck", "node"] do
     let name := nominalFamily source "vehicle" ++ ".Up"
     need s!"one generic dictionary family for {source}"
@@ -1325,13 +1325,13 @@ def main (args : List String) : IO Unit := do
   let badRequest := STop.classDef pos "$subtypeNominalBad" [] ["predicts"] [] false [] [] []
   let main := STop.fn pos "Main" [] [] [] (.name "void") (.tuple pos [])
   expectError "materialized dictionary effects remain checked" "<predicts>"
-    (elabProgramCore [main] { subtypeRequests := [badRequest] })
+    (elabProgramCore [main] { requests := { subtypes := [badRequest] } })
   let task := STy.app "task" [.name "int"]
   let taskDictionary := STop.classDef pos "$subtypeNominalPrelude" [] ["computes"]
     [.app family [task, task]] false [] []
     [.fn pos "Up" [{ name := "X", ty := task }] [] ["override", "computes"] task (.ident pos "X")]
   let _ ← getOK "materialized subtype request loads its own library types"
-    (elabProgram [main] { subtypeRequests := [taskDictionary] })
+    (elabProgram [main] { requests := { subtypes := [taskDictionary] } })
   if let [out] := args then
     IO.FS.writeBinFile (out ++ "/evidence.vbc") compiled.prog.encode
     IO.FS.writeFile (out ++ "/evidence.expected") trace

@@ -1,0 +1,21 @@
+pairs 1
+pairs 2
+p b 1
+p b 101
+pairs 2
+p b 101
+p b 201
+pairs 2
+p a 2
+p a 102
+pairs 1
+pairs 2
+first b 101
+w 1 2
+w 10 2
+w 10 3
+w 100 3
+w 2 4
+w 20 4
+first 100 6
+exit=0

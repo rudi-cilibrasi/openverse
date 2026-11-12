@@ -80,7 +80,7 @@ partial def elabSubtypeValueWith (elabE : Ctx → SExpr → Option Ty → EM R) 
       match SubtypeEvidence.refinementDeclaration ctx.types p source target with
       | .ok declaration => pure (declarations ++ [declaration])
       | .error message => eerr p message) declarations
-    modify fun state => { state with subtypeNeeds := SubtypeEvidence.mergeRequests state.subtypeNeeds declarations }
+    noteNeeds { subtypes := declarations }
     return ⟨.prim .userErr [], bound.ty⟩
   elabE ctx (plan.value ctx.types p) (some bound.ty)
 

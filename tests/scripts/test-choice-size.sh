@@ -8,6 +8,18 @@ tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
 limit="${CHOICE_SIZE_TIMEOUT:-120}"
 # Keep modes sorted on separate lines so independent additions merge cleanly.
 kinds=(
+  methodinstance-family-first
+  methodinstance-family-for
+  methodinstance-family-waiting
+  methodinstance-packed-first
+  methodinstance-packed-for
+  methodinstance-packed-waiting
+  methodinstance-default-first
+  methodinstance-default-for
+  methodinstance-default-waiting
+  methodinstance-partial-first
+  methodinstance-partial-for
+  methodinstance-partial-waiting
   callpacking-tuplevar-first
   callpacking-tuplevar-for
   callpacking-tuplevar-waiting
@@ -521,6 +533,10 @@ kinds=(
   own-method-for
   recursive-frame-first
   recursive-frame-for
+  recursive-sequence-first
+  recursive-sequence-for
+  recursive-sequence-calls-first
+  recursive-sequence-calls-for
   recursive-return-eager
   recursive-return-first
   recursive-return-for
@@ -585,6 +601,34 @@ for kind in "${kinds[@]}"; do
     python3 - "$kind" "$count" >"$tmp/p.verse" <<'PY'
 import sys
 kind, count = sys.argv[1], int(sys.argv[2])
+if kind.startswith('methodinstance-'):
+    _, shape, mode = kind.split('-')
+    waiting = mode == 'waiting'
+    effects = '<suspends>' if waiting else ''
+    print('Dup(X:t where t:type)<computes>:t=X|X')
+    family = shape in ('family', 'packed')
+    if family:
+        for name in ['foo', 'bar']:
+            print(name+'(t:type):=class<computes>{V:t}')
+    for cls, result, default in [('ca','foo',1),('cb','bar',2)]:
+        params = 'X:u'+(',Y:int' if shape == 'packed' else '')+' where u:type' if family else ('I:u,' if shape == 'partial' else '')+'?X:u='+str(default)+' where u:type'
+        ret = result+'(u)' if family else 'u'
+        value = result+'(u){V:=X}' if family else 'X'
+        print(cls+':=class{M('+params+')<computes>'+effects+':'+ret+'=block{'+('Sleep(0.0);' if waiting else '')+value+'}}')
+    clauses = ','.join(f'A{i}:=(Dup(ca{{}})|Dup(cb{{}}))' for i in range(count))
+    statements = [f'B{i}:=A{i}.M('+('Packed' if shape == 'packed' else '' if shape == 'default' else '7')+')' for i in range(count)]
+    terms = [f'B{i}'+('.V' if family else '') for i in range(count)]
+    value = 'block{'+';'.join(statements+['+'.join(terms)])+'}'
+    print('Run()'+effects+':int=')
+    if shape == 'packed':
+        print('    Packed:tuple(int,int)=(7,2)')
+    if mode == 'first':
+        print('    if('+clauses+',V:='+value+',V>0)then V else -1')
+    else:
+        print('    Rows:=for('+clauses+'):'+value)
+        print('    Rows.Length')
+    print('Main()'+effects+':void=Print("{Run()}")')
+    sys.exit(0)
 if kind.startswith('callpacking-'):
     rest=kind.removeprefix('callpacking-')
     shape,mode=rest.rsplit('-',1)
@@ -1493,6 +1537,26 @@ if kind.startswith('recursive-frame-'):
     else:
         print('Main()<transacts>:void = Print("{(for (X := F[2], X > 100): X).Length}")')
     sys.exit(0)
+if kind.startswith('recursive-sequence-'):
+    # (#283) choice points in sequence, each with code after it that reaches
+    # the next: each a continuation member, compiled once, its frame pushed
+    # once per value, not the code after it copied into each alternative;
+    # with calls, every other one a call of itself
+    calls = 'calls' in kind
+    steps = [f'    X{i + 1} := (F[N - 1] + X{i} | X{i} * {i + 2})' if calls and i % 2 == 1 else
+             f'    X{i + 1} := (X{i} + {i} | X{i} * {i + 2})\n    Print("x {{X{i + 1}}}")' for i in range(count)]
+    body = '\n'.join(steps)
+    print(f'''F(N:int)<transacts><decides>:int =
+    Print("f {{N}}")
+    N > 0
+    X0 := F[N - 1] | N
+{body}
+    X{count}''')
+    if kind.endswith('first'):
+        print('Main()<transacts>:void = if (X := F[2], X > 100) then Print("{X}") else Print("none")')
+    else:
+        print('Main()<transacts>:void = Print("{(for (X := F[2], X > 100): X).Length}")')
+    sys.exit(0)
 if kind.startswith('recursive-return-'):
     eager = kind.endswith('eager')
     mutual = 'mutual' in kind
@@ -2137,6 +2201,18 @@ PY
       fi
       printf '%s\n' "$expected" >"$tmp/expected"
       timeout "$limit" "$root/.lake/build/bin/openverse" run "$tmp/p.verse" "${compat[@]}" >"$tmp/lean.out"
+      timeout "$limit" "$root/runtime/build/cverse" "$tmp/p.vbc" >"$tmp/c.out"
+      diff -u "$tmp/expected" "$tmp/lean.out"
+      diff -u "$tmp/expected" "$tmp/c.out"
+    fi
+    if [[ $kind == methodinstance-* && $count == 4 ]]; then
+      expected=256
+      if [[ $kind == *-first ]]; then
+        expected=4
+        [[ $kind == methodinstance-family-* || $kind == methodinstance-packed-* ]] && expected=28
+      fi
+      printf '%s\n' "$expected" >"$tmp/expected"
+      timeout "$limit" "$root/.lake/build/bin/openverse" run "$tmp/p.verse" >"$tmp/lean.out"
       timeout "$limit" "$root/runtime/build/cverse" "$tmp/p.vbc" >"$tmp/c.out"
       diff -u "$tmp/expected" "$tmp/lean.out"
       diff -u "$tmp/expected" "$tmp/c.out"

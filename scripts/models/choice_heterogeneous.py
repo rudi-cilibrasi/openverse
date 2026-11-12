@@ -14,6 +14,7 @@ p.add_argument('--aliases', action='store_true')
 p.add_argument('--writes', action='store_true')
 p.add_argument('--nested-writes', action='store_true')
 p.add_argument('--result-aliases', action='store_true')
+p.add_argument('--associated-methods', action='store_true')
 p.add_argument('--named-methods', action='store_true')
 p.add_argument('--numeric-writes', action='store_true')
 p.add_argument('--indexed-writes', action='store_true')
@@ -29,8 +30,9 @@ p.add_argument('--compound-reference-path-writes', action='store_true')
 p.add_argument('--packed-methods', action='store_true')
 p.add_argument('--packed-default-methods', action='store_true')
 a = p.parse_args()
+a.result_aliases = a.result_aliases or a.associated_methods
 a.packed_methods = a.packed_methods or a.packed_default_methods
-a.named_methods = a.named_methods or a.packed_default_methods
+a.named_methods = a.named_methods or a.packed_default_methods or (a.associated_methods and a.seed // 4 % 2 == 0)
 a.generic_methods = a.generic_methods or a.packed_methods
 a.query_path_writes = a.query_path_writes or a.compound_query_path_writes
 a.reference_path_writes = a.reference_path_writes or a.compound_reference_path_writes
@@ -173,7 +175,7 @@ if a.methods:
         print('Default(H:cell,K:int)<transacts>:int=block{Print("default {K}");set H.N+=K+2;K}')
     if a.result_aliases:
         for name, generic in [('ma',False),('mb',False),('ga',True),('gb',True)]:
-            print('result_'+name+('(t:type)' if generic else '')+':=class<computes>{K:int'+(';V:t' if generic else '')+'}')
+            print('result_'+name+('(t:type)' if generic or a.associated_methods else '')+':=class<computes>{K:int'+(';V:t' if generic or a.associated_methods else '')+'}')
     for name, generic, kind in [('ma', False, 'a'), ('mb', False, 'b'), ('ga', True, 'a'), ('gb', True, 'b')]:
         print(name + ('(t:type)' if generic else '') + ':=class:')
         numeric_rat = a.numeric_writes and kind == 'b'
@@ -191,14 +193,14 @@ if a.methods:
         if a.generic_methods:
             method_params[-1] += ' where u:type'
         method = 'Read' if a.members else 'Score'
-        result = ('result_' if a.result_aliases else '') + name + ('(t)' if generic else '') if a.members else 'int'
+        result = ('result_' if a.result_aliases else '') + name + ('(u)' if a.associated_methods else '(t)' if generic else '') if a.members else 'int'
         print('    ' + method + '(' + ','.join(method_params) + ')<transacts>:' + result + '=')
         if a.indexed_writes:
             access = 'Data?[0]' if a.query_path_writes else 'Data[0].Value[0]' if a.reference_path_writes else 'Data[0][0]' if a.multiple_index_writes else 'Data[0]'
             print('        IndexedValue:=if(Item:=' + access + ')then Item else 0')
         print('        Print("m ' + kind + ' {' + score_value + '}")')
         print('        set H.N+=' + ('1' if kind == 'a' else '2') + '*(' + score_value + '+1)' + ('+Arg' if method_arguments else ''))
-        returned = 'result_'+name+('(t)' if generic else '')+'{K:=K'+(',V:=V' if generic else '')+'}' if a.result_aliases else 'Self' if a.members else score_value
+        returned = 'result_'+name+('(u)' if a.associated_methods else '(t)' if generic else '')+'{K:=K'+(',V:=Ignored' if a.associated_methods else ',V:=V' if generic else '')+'}' if a.result_aliases else 'Self' if a.members else score_value
         print('        '+returned)
     if a.nested_writes:
         for name, generic in [('ma',False),('mb',False),('ga',True),('gb',True)]:

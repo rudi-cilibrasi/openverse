@@ -514,8 +514,20 @@ partial def elabSeqIn (closed : Bool) (ctx : Ctx) (ss : List SExpr) (exp : Optio
         let branch := if rest.isEmpty then .ident p d else .block p rest
         if let some r ← elabRefinedIf ctx p p d T x branch (some (Refine.noValue p)) exp (made := true) then
           return (r, ctx)
-    if rest.isEmpty then return ← elabStmt ctx s exp
-    let (r, ctx') ← elabStmt ctx s none
+    -- (a cast inside the statement that only a clause may be, refused
+    -- there: lifted out to be a statement of its own, `liftCastClause`)
+    let stmtExp := if rest.isEmpty then exp else none
+    let inner := if closed && ctx.canFail then Refine.castsIn ctx.types.classes.contains s else []
+    let (r, ctx') ← if inner.isEmpty then elabStmt ctx s stmtExp else
+      match ← tryCatch (Except.ok <$> elabStmt ctx s stmtExp) (fun err => pure (Except.error err)) with
+      | .ok rc => pure rc
+      | .error err =>
+        match Refine.castRefusal? err with
+        | some r =>
+          if inner.contains r.pos then return ← elabSeqIn closed ctx (liftCastClause ctx [] r.pos s ++ rest) exp
+          throw err
+        | none => throw err
+    if rest.isEmpty then return (r, ctx')
     let (r2, ctx'') ← elabSeqIn closed ctx' rest exp
     return (⟨.seq r.e r2.e, r2.ty⟩, ctx'')
 
@@ -712,7 +724,8 @@ partial def elabCast (ctx : Ctx) (p : Pos) (T : String) (args : List SExpr) (bra
     if (refiningCast? env T r.ty).isNone then
       eerr p s!"{what} would leave {T}'s type arguments unknown: they are not {S}'s, and an interface has no hidden fields to read them from (#351, #53)"
     let theirs := if (env.sparams.lookup T).isNone then s!"the type arguments {T} fixes" else s!"{T}'s type arguments"
-    eerr p s!"{what} works {Refine.castRefusalNote}, D := {T}[X], whose rest then has {theirs} (#351)"
+    let opens := (refiningCast? env T r.ty).any fun (_, _, _, _, _, opened) => !opened.isEmpty
+    throw (Refine.castRefusal { pos := p, opens } s!"{what} works {Refine.castRefusalNote}, D := {T}[X], whose rest then has {theirs} (#351)")
   -- a parametric class's type arguments are those of the value (#39), in the
   -- same hierarchy
   let parametric := (env.sparams.lookup T).isSome || !(env.coreArgs T []).isEmpty
@@ -725,13 +738,13 @@ partial def elabCast (ctx : Ctx) (p : Pos) (T : String) (args : List SExpr) (bra
     let unknown := s!"cannot cast {withArticle r.ty.show} to {T}: {T} has type parameters that {S} does not have, which would be unknown here"
     -- (an interface has no hidden fields to read opened ones from, #53)
     if (env.info T).isIface then eerr p s!"{unknown}: an interface has no hidden fields to read them from (#53, #250)"
-    eerr p s!"{unknown}: a cast opens them {Refine.castRefusalNote}, D := {T}[X], whose rest then has them (#250)"
+    throw (Refine.castRefusal { pos := p, opens := true } s!"{unknown}: a cast opens them {Refine.castRefusalNote}, D := {T}[X], whose rest then has them (#250)")
   if bracket then
     match env.refineComparable? [] (env.comparableArgs T targs) with
     | none => eerr p s!"{withArticle r.ty.show} is never {withArticle T}: its type arguments do not satisfy {T}'s comparable bounds"
     | some μ =>
       if !μ.isEmpty then
-        eerr p s!"a cast to {T} strengthens comparable bounds, which works {Refine.castRefusalNote}, D := {T}[X], whose rest then has them (#209)"
+        throw (Refine.castRefusal { pos := p, opens := false } s!"a cast to {T} strengthens comparable bounds, which works {Refine.castRefusalNote}, D := {T}[X], whose rest then has them (#209)")
   let tty : Ty := .struct T targs
   if !bracket then
     if !env.isSub S T then
@@ -743,7 +756,7 @@ partial def elabCast (ctx : Ctx) (p : Pos) (T : String) (args : List SExpr) (bra
     eerr p s!"no class is below both {r.ty.show} and {T}, so {T}[…] would always fail"
   if parametric && env.coreArgs T targs != env.coreArgs S sargs then
     if (Ty.unifyEqs (fun _ _ => none) [] ((env.coreArgs S sargs).zip (env.coreArgs T targs))).isSome then
-      eerr p s!"cannot cast {withArticle r.ty.show} to {(Ty.struct T targs).show} here: their type arguments agree only under a refinement, which a cast gives {Refine.castRefusalNote}, D := {T}[X], whose rest is then typed under it (#209, #243)"
+      throw (Refine.castRefusal { pos := p, opens := false } s!"cannot cast {withArticle r.ty.show} to {(Ty.struct T targs).show} here: their type arguments agree only under a refinement, which a cast gives {Refine.castRefusalNote}, D := {T}[X], whose rest is then typed under it (#209, #243)")
     -- (in a class's copy of an interface's default, at type arguments the
     -- class fixes, it fails, as the interface's own default's would, #53)
     if !ctx.liftTag.isEmpty then return ⟨.prim .fail [], tty⟩
@@ -1517,10 +1530,19 @@ partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
       let bindX ← coerce p ⟨lg.value, lg.vty⟩ ty
       let done ← fresh .logic
       let vd : Expr := .lit .void
+      let take : Expr := .ite (.seq (.assign x bindX) (.seq inner Expr.failV)) vd vd
+      -- (#283) a value that comes to a continuation member's choice point
+      -- breaks out of `take`, keeping what it did, with `bnd` set; so does
+      -- a success (or a source break), with it unset, which leaves the loop
+      let take : Expr := match lg.bnd with
+        | some b => .seq (.assign b (.lit (.logic false)))
+            (.seq (.loop (.seq take (.seq (.assign b (.lit (.logic true))) Expr.brkV)))
+              (.ite (.prim .query [.local b]) vd Expr.brkV))
+        | none => take
       let body : Expr := .seq
         (.ite (p2 .eq (.local lg.sp) (.lit (.int 0))) (.seq (.assign done (.lit (.logic true))) Expr.brkV) vd)
         (.seq lg.step (.ite (.prim .query [.local lg.has])
-          (.seq (.ite (.seq (.assign x bindX) (.seq inner Expr.failV)) vd vd) lg.after) vd))
+          (.seq take lg.after) vd))
       return (.seq lg.init (.seq (.assign done (.lit (.logic false))) (.seq (.loop body)
         (.ite (p2 .eq (.local done) (.lit (.logic false))) Expr.brkV vd))), c2)
     | some b@{ each := some arr, .. } =>
@@ -1719,11 +1741,15 @@ partial def elabLoopGen (ctx : Ctx) (p : Pos) (lp : List SExpr) : EM LoopGen := 
     return ← tryCatch (elabLoopGenGroupWith elabE elabSeq ctx p g ps cls rsty tail0 members) fun _ => do
       -- Polymorphic recursion was already accepted through F$all. Restart
       -- choice lowering for this group, with all eager restrictions intact.
-      modify fun st => { st with eagerNeeds := g :: st.eagerNeeds }
+      noteNeeds { eager := [g] }
       let sp ← fresh .int
       let has ← fresh .logic
       return { init := .lit .void, step := .lit .void, sp, has, value := .prim .fail [],
                after := .lit .void, vty := ← resolveTy ctx.types p rsty, itemCode := .lit .void, argSet := none }
+  -- (#283) one whose code after a choice point reaches another: its
+  -- continuation members are the group machine's, with it alone in it
+  if Choice.hasContinuation tail then
+    return ← elabLoopGenGroupWith elabE elabSeq ctx p g ps cls rsty tail []
   let vd : Expr := .lit .void
   -- (the parameters, bound by the consumer's clauses: the loop has slots
   -- of its own for them, so that the call, run again by a loop of its
@@ -1902,8 +1928,7 @@ partial def elabSpawnBound (ctx : Ctx) (p : Pos) (fname adapter : String)
       specs := (if s.fx.isEmpty then ["computes"] else s.fx) ++ ["suspends"] ++ selfTps.map ("$selfTp:" ++ ·),
       ret := ret.toSTy, body := .app p (.ident p "$spawnResult") [.app p (.ident p fname) forwarded false] false,
       binds := [], sets := [], args := [] }
-    modify fun st => { st with loopFirst := st.loopFirst ++
-      [{ g := "", pos := p, itemCode := .lit .void, argSet := none, lift := .ok lift }] }
+    noteNeeds { loops := [lift] }
     return ⟨.lit .void, ctx.retTy⟩
   let slot ← fresh packed.ty
   let name := s!"$spawnArgs{slot}"
@@ -1969,8 +1994,7 @@ partial def elabSpawnDispatch (ctx : Ctx) (p : Pos) (cls fname declared : String
       [.block p stack, .int p (flags : Int), .app p (.ident p "$spawnBound")
         (.ident p fname :: .ident p adapter :: forwarded) false] false,
     binds := [], sets := [], args := [] }
-  modify fun st => { st with loopFirst := st.loopFirst ++
-    [{ g := "", pos := p, itemCode := .lit .void, argSet := none, lift := .ok lift }] }
+  noteNeeds { loops := [lift] }
   noteFx p s.fx (some fname)
   return ⟨.prim .userErr [], exp.getD (.struct (ctx.types.concurrencyName "task") [ret])⟩
 
@@ -2023,8 +2047,7 @@ partial def elabDefaultDispatch (ctx : Ctx) (p : Pos) (fname : String)
     specs := ["transacts"] ++ (if s.decides then ["decides"] else []) ++
       (if s.suspends then ["suspends"] else []) ++ s.selfTps.map ("$selfTp:" ++ ·),
     ret := s.ret.toSTy, body, binds := [], sets := [], args := [] }
-  modify fun st => { st with loopFirst := st.loopFirst ++
-    [{ g := "", pos := p, itemCode := .lit .void, argSet := none, lift := .ok lift }] }
+  noteNeeds { loops := [lift] }
   noteFx p s.fx (some fname)
   let recv ← elabE ctx positional[0]! none
   -- This round only discovers the helper; it returns before Core checking.
@@ -2183,7 +2206,7 @@ partial def elabMember (ctx : Ctx) (p : Pos) (r : R) (m : String) (exp : Option 
                   | none =>
                     let key := s!".{x0}${f}"
                     if !env.fnRequests.contains (key, t) && fnTyFits env (typeOf x0) t then
-                      modify fun st => { st with fnNeeds := st.fnNeeds ++ [(key, t)] }
+                      noteNeeds { fns := [(key, t)] }
                       return ⟨.seq r.e (.prim .userErr []), t⟩
           -- A generic receiver fixes its method's signature too. Requested
           -- adapters retain its witnesses and ordinary call conversions.
@@ -2201,7 +2224,7 @@ partial def elabMember (ctx : Ctx) (p : Pos) (r : R) (m : String) (exp : Option 
                   let rv ← elabConstruct ctx' p cls [] [.decl p "$self" none false (.ident p nm)]
                     (some (.struct cls args))
                   return ⟨.seq (.assign tv r.e) (← coerce p rv target), target⟩
-                modify fun st => { st with methodNeeds := FnValues.mergeMethodRequests st.methodNeeds [req] }
+                noteNeeds { methods := [req] }
                 return ⟨.seq r.e (.prim .userErr []), target⟩
           let some x := (candidates.find? fun x => exp == some (typeOf x)).orElse fun _ => candidates.head?
             | eerr p s!"'{f}' is a method of {sn} that cannot be used as a value: call it with {f}(…) (a method with named parameters is not a value, #210)"
@@ -2420,6 +2443,11 @@ end
     as written (`ovForTypes`), noting the overload each takes; then each
     call its chosen overload's inlined call (`ovChosen`). -/
 def elabBodyOv (ctx : Ctx) (body : SExpr) (ret : Option Ty) (st0 : ESt) : Except String ((R × Ctx) × ESt) := do
+  -- (a <decides> body of one expression with a cast in it: the block of it,
+  -- where a cast that refines takes the rest as its branch, `elabSeqIn`)
+  let body := match body with
+    | .block .. => body
+    | e => if ctx.canFail && !(Refine.castsIn ctx.types.classes.contains e).isEmpty then .block e.pos [e] else e
   if !Choice.anyE (fun | .app _ (.ident _ "$inlineOv") _ false => true | _ => false) body then
     return ← (elabStmt ctx body ret).run st0
   let ((_, _), stT) ← (elabStmt { ctx with typeOnly := true } (ovForTypes body) ret).run st0

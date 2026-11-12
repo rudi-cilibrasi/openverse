@@ -30,6 +30,40 @@ partial def elabExprInitialWith
     let some plan := SubtypeEvidence.find? ctx.types locals bound
       | eerr p s!"type {derived.show} does not satisfy subtype({base.show})"
     elabSubtypeValueWith elabE ctx p plan bound
+  | .app p (.ident _ "$choiceFixedOperation") [.block _ metadata, .block _ labels, invocation] false =>
+    if ctx.typeOnly then
+      let .app _ (.ident _ "$choiceOperation") (_ :: _ :: _ :: values) _ := invocation
+        | eerr p "internal: invalid fixed operation call"
+      if labels.length != values.length then eerr p "internal: invalid fixed operation arguments"
+      let arguments ← (labels.zip values).mapM fun
+        | (.str _ [.text label], value) => pure (if label == "" then value else .decl p label none false value)
+        | _ => eerr p "internal: invalid fixed operation label"
+      let saved ← get
+      for entry in metadata do
+        let .tuple _ [.str _ [.text implementation], .construct _ "$choiceReceiver" [receiver] [],
+            .construct _ "$choiceMethodInstance" types [], .block _ equations] := entry
+          | eerr p "internal: invalid fixed operation instance"
+        let substitution : List (String × Ty) ← equations.mapM fun
+          | .tuple _ [.construct _ "$choiceVariable" [.name n] [], .construct _ "$choiceInstance" [ty] []] => do
+            pure (n, ← resolveTy ctx.types p ty)
+          | _ => eerr p "internal: invalid fixed operation equation"
+        let c : Ctx := { ctx with
+          types := { ctx.types with tvars := substitution ++ ctx.types.tvars },
+          locals := ctx.locals.map fun l => { l with ty := l.ty.subst substitution } }
+        let receiver ← resolveTy c.types p receiver
+        let expected ← types.mapM (resolveTy c.types p)
+        let some sig := c.sig? implementation | eerr p "internal: missing fixed operation method"
+        let name := "$choiceOperationReceiver"
+        let slot ← fresh receiver
+        let c := { c with
+          callInstanceProbe := some implementation,
+          locals := { name, slot, ty := receiver, mutable := false } :: c.locals }
+        let (c, arguments) ← choiceInstanceArguments elabE c p sig (.ident p name :: arguments)
+        let packet ← elabGenericCallWith elabE c p sig arguments (exp.map (·.subst substitution))
+        if reprStr packet.ty != reprStr (Ty.tup expected) then
+          eerr p "operation inference depends on its expected result"
+        set saved
+    elabE ctx invocation exp
   | .app p (.ident _ "$choiceCoercions") [.block _ metadata, body] false =>
     let rules ← metadata.mapM fun
       | .tuple _ [.ident _ name, .construct _ "$choiceConversion" [source, target] []] => do
@@ -312,7 +346,7 @@ partial def elabExprInitialWith
                     let r ← elabConstruct ctx p cls [] [] (some (.struct cls args))
                     return ⟨← coerce p r ty, ty⟩
             if let some t := askFor then
-              modify fun st => { st with fnNeeds := st.fnNeeds ++ [(n, t)] }
+              noteNeeds { fns := [(n, t)] }
               return ⟨.prim .userErr [], t⟩
             eerr p s!"'{n}' is generic: a function type determining all its type arguments and satisfying its bounds must be expected (#214, #209)"
           else if ctx.types.classes.contains s!"{n}$fn" then
@@ -332,11 +366,11 @@ partial def elabExprInitialWith
             | some e => return ⟨e, ty⟩
             | none =>
               if let some t := askFor then
-                modify fun st => { st with fnNeeds := st.fnNeeds ++ [(n, t)] }
+                noteNeeds { fns := [(n, t)] }
                 return ⟨.prim .userErr [], t⟩
               return r
           else if let some t := askFor then
-            modify fun st => { st with fnNeeds := st.fnNeeds ++ [(n, t)] }
+            noteNeeds { fns := [(n, t)] }
             return ⟨.prim .userErr [], t⟩
           else if !s.named.isEmpty then
             eerr p s!"'{n}' has named parameters: such a function cannot be used as a value (a function type has no named parameters)"

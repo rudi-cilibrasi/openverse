@@ -1,0 +1,13 @@
+Cond 1 0
+Arg <4> 1
+Arg no 1
+Val 2
+Whole 1
+Opt 40
+Opt no
+Fil 2
+Br 0 1
+Br 1 5
+Br 0 1
+Br 1 no
+exit=0

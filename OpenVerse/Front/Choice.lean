@@ -264,6 +264,9 @@ partial def hasLiftable : SExpr → Bool
   -- (an exclusive choice, which a `for` compiles itself, #314)
   | .app _ (.ident _ "$excl") _ false => false
   | .app _ (.ident _ "$choice") _ false => true
+  -- (a cast that only a failure context's clause may be, #243, marked so
+  -- by the elaborator: lifted to be one)
+  | .app _ (.ident _ "$liftCast") _ false => true
   | .app _ (.ident _ "$inline") _ false => true
   -- (an overridden method's dispatch, which becomes an inlined call, #283)
   | .app _ (.ident _ "$dispatch") _ false => true
@@ -737,6 +740,7 @@ partial def liftE (isVal : String → Bool) (isField : String → String → Boo
   if !hasLiftable e then return e
   match e with
   | .app p (.ident _ "$choice") _ false => LM.bind p "c" e
+  | .app p (.ident _ "$liftCast") [c] false => LM.bind p "k" c
   | .ite p .. =>
     if isBranchy.complete e then
       LM.bind p "c" (.app p (.ident p "$branchChoice") [e] false)
@@ -1406,41 +1410,45 @@ partial def mapLoopLeaves (leaf : SExpr → SExpr) : SExpr → SExpr
   | .ite p cs t u => .ite p cs (mapLoopLeaves leaf t) (u.map (mapLoopLeaves leaf))
   | e => leaf e
 
+/-- A hole or a prefix's name, made by `frameOf?` (#283): a name of the
+    function's own, which a continuation member has as a parameter. -/
+def madeLocal (n : String) : Bool := n.startsWith "$frame" || n.startsWith "$pre"
+
 /-- Literals and the function's own names (`own`: its parameters and
-    locals), which read the same after a call as before it, since a callee
-    cannot change its caller's names. Not a field, which the call may change,
-    nor a constant, which may run code where it is read. -/
+    locals, and the names made for its frames), which read the same after a
+    call as before it, since a callee cannot change its caller's names. Not
+    a field, which the call may change, nor a constant, which may run code
+    where it is read. -/
 partial def inert (own : List String) : SExpr → Bool
   | .int .. | .char .. | .char32 .. | .float .. => true
-  | .ident _ n => own.contains n
+  | .ident _ n => own.contains n || madeLocal n
   | .str _ ps => ps.all fun | .text _ => true | .code _ => false
   | .neg _ e => inert own e
   | .tuple _ es | .arrayLit _ es => es.all (inert own)
   | _ => false
 
-/-- (#283) An alternative that is a call of the recursive group (`isCall`)
-    with code after it: the call; the alternative with the name `h` in the
-    call's place, its return frame, which runs on each of the call's values;
-    and the clauses that run before the call, once (its prefix). What is
-    evaluated before the call is kept in place when it reads the same after
-    it (`inert`), else bound to a name in the prefix (`$pre…`), so it is
-    still read once, before the call: a field, a constant, a call of a
-    function. Everything after the call is `plain`. -/
-partial def frameOf? (isCall plain inert : SExpr → Bool) (h : String) (e : SExpr) :
+/-- (#283) An alternative with a choice point in it, a call of the recursive
+    group or a choice (`isPoint`), and code after it: the first point; the
+    alternative with the name `h` in its place, its return frame, which runs
+    on each of its values; and the clauses that run before it, once (its
+    prefix). What is evaluated before the point is kept in place when it
+    reads the same after it (`inert`), else bound to a name in the prefix
+    (`$pre…`), so it is still read once, before the point: a field, a
+    constant, a call of a function. The code after the point is the frame,
+    which may reach another point (a continuation member, `normAlt`). -/
+partial def frameOf? (isPoint plain inert : SExpr → Bool) (h : String) (e : SExpr) :
     Option (SExpr × SExpr × List SExpr) :=
-  let go := frameOf? isCall plain inert h
-  -- (the operand with the call: those before it bound first unless inert,
-  -- those after it plain)
+  let go := frameOf? isPoint plain inert h
+  -- (the operand with the point: those before it bound first unless inert)
   let inList (es : List SExpr) : Option (SExpr × List SExpr × List SExpr) := do
     let i ← es.findIdx? (!plain ·)
     let (c, ei, pre) ← go es[i]!
-    guard ((es.drop (i + 1)).all plain)
     let (before, bound) := (es.take i).foldr (fun x (acc, ds) =>
       if inert x then (x :: acc, ds) else
         let t := s!"$pre{x.pos.line}_{x.pos.col}"
         (.ident x.pos t :: acc, .decl x.pos t none false x :: ds)) ([], [])
     return (c, before ++ [ei] ++ es.drop (i + 1), bound ++ pre)
-  if isCall e then some (e, .ident e.pos h, []) else
+  if isPoint e then some (e, .ident e.pos h, []) else
   match e with
   | .bin p o a b => do
     let (c, as, pre) ← inList [a, b]
@@ -1448,7 +1456,6 @@ partial def frameOf? (isCall plain inert : SExpr → Bool) (h : String) (e : SEx
   | .neg p a => do let (c, a', pre) ← go a; return (c, .neg p a', pre)
   | .member p a m => do let (c, a', pre) ← go a; return (c, .member p a' m, pre)
   | .cmp p a rest => do
-    guard (rest.all (plain ·.2))
     let (c, a', pre) ← go a
     return (c, .cmp p a' rest, pre)
   | .tuple p es => do let (c, es', pre) ← inList es; return (c, .tuple p es', pre)
@@ -1459,7 +1466,6 @@ partial def frameOf? (isCall plain inert : SExpr → Bool) (h : String) (e : SEx
     return (c, .app p f as' br, pre)
   -- (an index, or a call of a value: its head first)
   | .app p f as br => do
-    guard (as.all plain)
     let (c, f', pre) ← go f
     return (c, .app p f' as br, pre)
   | .str p ps => do
@@ -1469,11 +1475,10 @@ partial def frameOf? (isCall plain inert : SExpr → Bool) (h : String) (e : SEx
       | .code _, x :: xs => (acc ++ [SPart.code x], xs)
       | part, xs => (acc ++ [part], xs)) (([] : List SPart), codes')
     return (c, .str p ps', pre)
-  -- (a block: its clauses before the one with the call run before the call)
+  -- (a block: its clauses before the one with the point run before it)
   | .block p ss => do
     let i ← ss.findIdx? (!plain ·)
     let rest := ss.drop (i + 1)
-    guard (rest.all plain)
     match ss[i]! with
     | .decl q x t false rhs =>
       let (c, rhs', pre) ← go rhs
@@ -1483,59 +1488,195 @@ partial def frameOf? (isCall plain inert : SExpr → Bool) (h : String) (e : SEx
       return (c, .block p (s' :: rest), ss.take i ++ pre)
   | _ => none
 
-/-- (#283) A tail with return frames: each alternative that is a call of the
-    group with code after it (`frameOf?`) as `$then(call, h, frame)`. -/
-def framedTail (isRec plain inert : SExpr → Bool) (tail : SExpr) : SExpr :=
-  mapLoopLeaves (fun v =>
-    let frame (a : SExpr) : SExpr := if isRec a || plain a then a else
-      let h := s!"$frame{a.pos.line}_{a.pos.col}"
-      match frameOf? isRec plain inert h a with
-      | some (c, k, []) => .app a.pos (.ident a.pos "$then") [c, .ident a.pos h, k] false
-      -- (with the clauses that run before the call, its prefix)
-      | some (c, k, pre) => .app a.pos (.ident a.pos "$then") [c, .ident a.pos h, k, .block a.pos pre] false
-      | none => a
-    match alts? v with
-    | some as => mk v.pos (as.map frame)
-    | none => frame v) tail
-
 /-- (#283) A body whose last choice, or call of the group, is bound by a
     clause with plain code after it, `S; X := a | b; T; v`: the clauses `S`,
     and the choice of `block{X := a; T; v}` and `block{X := b; T; v}`, whose
-    calls of the group then have return frames (`framedTail`). -/
+    calls of the group then have return frames (`normAlt`). -/
 def lastChoiceTail (plain : SExpr → Bool) (cls : List SExpr) (last : SExpr) :
     Option (List SExpr × SExpr) := do
   let i ← cls.findIdx? (!plain ·)
-  guard ((cls.drop (i + 1)).all plain)
-  let .decl q x t false rhs := cls[i]! | none
   let after := cls.drop (i + 1) ++ [last]
+  guard (after.all plain)
+  let .decl q x t false rhs := cls[i]! | none
   let alt (a : SExpr) : SExpr := .block a.pos (.decl q x t false a :: after)
   return (cls.take i, match alts? rhs with
     | some as => mk rhs.pos (as.map alt)
     | none => alt rhs)
+
+/-- (#283) A continuation member, the code after a choice point that reaches
+    another one, as `normAlt` makes it: `$cont(block{clauses}, tail)`, its
+    clauses plain and its tail a generator's, whose alternatives may have
+    frames, continuation members again. -/
+def contOf? : SExpr → Option (List SExpr × SExpr)
+  | .app _ (.ident _ "$cont") [.block _ cls, tail] false => some (cls, tail)
+  | _ => none
+
+/-- (#283) How many alternatives `a` is with each choice it has as a choice
+    point, `$then(choice, h, frame)`, flattened: one per alternative of the
+    choice, each with that frame too, the frame shared. -/
+partial def flatCount (a : SExpr) : Nat :=
+  match a with
+  | .app _ (.ident _ "$then") (c :: _) false => match alts? c with
+    | some cs => (cs.map flatCount).foldl (· + ·) 0
+    | none => 1
+  | _ => 1
+
+/-- (#283) The holes of the frames in a tail that are continuation members,
+    at any depth (theirs too). -/
+partial def contHoles (e : SExpr) : List String :=
+  (match e with
+    | .app _ (.ident _ "$then") (_ :: .ident _ h :: k :: _) false => if (contOf? k).isSome then [h] else []
+    | _ => []) ++ e.children.flatMap contHoles
+
+/-- (#283) Whether a tail has a choice point that a plain return frame of a
+    call does not cover: a continuation member, or a choice with a frame. -/
+def hasContinuation (tail : SExpr) : Bool :=
+  anyE (fun
+    | .app _ (.ident _ "$cont") _ false => true
+    | .app _ (.ident _ "$then") (c :: _) false => isChoice c
+    | _ => false) tail
+
+/-- The tests a lazily taken group's shape is made with (#246, #283): `plain`
+    code has no choice and no call of the group or of a function with several
+    values; `isRec`, a whole call of the group with plain arguments; `inert`,
+    what reads the same after a choice point as before it. -/
+structure ShapeOps where
+  plain : SExpr → Bool
+  isRec : SExpr → Bool
+  inert : SExpr → Bool
+
+mutual
+/-- (#283) An alternative of a lazily taken group in the normal form its
+    machine takes: a plain value; a whole call of the group; or a choice
+    point, a call of the group or a choice, with the code after it, its return
+    frame (`frameOf?`): `$then(point, hole, frame)`, with the clauses that
+    run before the point when there are any, `$then(point, hole, frame,
+    block{prefix})`. A choice's alternatives are in this form again, and the
+    frame is plain code, or a continuation member (`contBody?`) when it
+    reaches another choice point: so each choice point and each call is the
+    head of the code after it. The hole of a frame of a call with plain code
+    after it is named as #283's first frames were, after the alternative;
+    others after the point and its kind. -/
+partial def normAlt (ops : ShapeOps) (a : SExpr) : Option SExpr := do
+  if ops.isRec a || ops.plain a then return a
+  -- (a block that starts with a choice bound, with plain code after it: the
+  -- choice of that code after each alternative, as `lastChoiceTail`)
+  if let .block _ ss@(_ :: _ :: _) := a then
+    if let some ([], tail) := lastChoiceTail ops.plain ss.dropLast ss.getLast! then
+      if let some as := alts? tail then return mk a.pos (← as.mapM (normAlt ops))
+  let isPoint (e : SExpr) : Bool := ops.isRec e || isChoice e
+  let hole := "$hole"
+  match frameOf? isPoint ops.plain ops.inert hole a with
+  | none => none
+  | some (c, k, pre) => do
+    let h := if ops.isRec c && ops.plain k then s!"$frame{a.pos.line}_{a.pos.col}"
+      else s!"$frame{c.pos.line}_{c.pos.col}{if ops.isRec c then "k" else "c"}"
+    let k := renameE [(hole, h)] k
+    let c ← match alts? c with
+      | some cs => do
+        -- (a choice's own alternatives have no prefix: nothing runs
+        -- between it and them)
+        let cs ← cs.mapM (normAlt ops)
+        guard (cs.all fun | .app _ (.ident _ "$then") [c', _, _, _] false => !isChoice c' | _ => true)
+        pure (mk c.pos cs)
+      | none => pure c
+    let k ← if ops.plain k then some k else contBody? ops k
+    let q := a.pos
+    return .app q (.ident q "$then") ([c, .ident q h, k] ++ (if pre.isEmpty then [] else [.block q pre])) false
+
+/-- (#283) A tail's leaves in normal form (`normAlt`). A leaf that is one
+    choice with a prefix, `$then(choice, h, frame, block{prefix})`, has the
+    prefix run as its path's, before the choice. -/
+partial def normTail (ops : ShapeOps) (tail : SExpr) : Option SExpr :=
+  match tail with
+  | .app p (.ident q "$returnTail") [.block r ss] false => do
+    let (pre, value) := loopBlockParts r ss
+    if pre.all ops.plain then
+      return .app p (.ident q "$returnTail") [.block r (pre ++ [← normTail ops value])] false
+    -- (a returning branch whose code before its value has choice points: as
+    -- a body, its code up to the first its path's)
+    let (cls, t) ← bodyTail? ops r pre value
+    return .app p (.ident q "$returnTail") [.block r (cls ++ [t])] false
+  | .ite p cs t u => do return .ite p cs (← normTail ops t) (← u.mapM (normTail ops))
+  | v => do
+    match alts? v with
+    | some as => return mk v.pos (← as.mapM (normAlt ops))
+    | none =>
+      match ← normAlt ops v with
+      | .app q (.ident r "$then") [c, h, k, .block _ pre] false =>
+        if isChoice c then
+          return .app q (.ident r "$returnTail") [.block q (pre ++ [.app q (.ident r "$then") [c, h, k] false])] false
+        normAlt ops v
+      | a => return a
+
+/-- (#283) The clauses and tail of code whose clauses `cls` are followed by
+    `last`: the clauses up to the first that is not plain, and the rest as
+    the tail. A last choice bound with plain code after it is the choice of
+    that code after each alternative (`lastChoiceTail`); otherwise what comes
+    from the first choice point on is one alternative (`normAlt`). -/
+partial def bodyTail? (ops : ShapeOps) (p : Pos) (cls : List SExpr) (last : SExpr) :
+    Option (List SExpr × SExpr) := do
+  let leafOf (cls : List SExpr) (tail : SExpr) : Option (List SExpr × SExpr) := do
+    return (cls, ← normTail ops (plainIfValues ops.plain (completeLoopTail ops.isRec false tail)))
+  if cls.all ops.plain then
+    leafOf cls (match last with | .decl _ _ _ false rhs => rhs | e => e)
+  else match lastChoiceTail ops.plain cls last with
+    | some (cls, tail) => leafOf cls tail
+    | none =>
+      let i ← cls.findIdx? (!ops.plain ·)
+      return (cls.take i, ← normTail ops (.block p (cls.drop i ++ [last])))
+
+/-- (#283) The frame `k` that reaches another choice point as a continuation
+    member, `$cont(block{clauses}, tail)` (`bodyTail?`). -/
+partial def contBody? (ops : ShapeOps) (k : SExpr) : Option SExpr := do
+  let ss := stmtsOf k
+  let last ← ss.getLast?
+  let (cls, tail) ← bodyTail? ops k.pos ss.dropLast last
+  return .app k.pos (.ident k.pos "$cont") [.block k.pos cls, tail] false
+end
 
 /-- Why a recursive function with several values whose values are computed
     at the call must be effect-free, and when it is taken lazily instead. -/
 def eagerWhy : String :=
   "such a function must be <computes>, keep no local state, and reach nothing that prints or calls Err(), " ++
   "as all its values are computed at a call (#235), unless it is taken lazily: clauses, then a choice whose " ++
-  "alternatives are values or calls of its recursive group, each call followed by no choice and no other such call " ++
-  "(#246, #283)"
+  "alternatives are values, calls of its recursive group, or such a call or a choice with code after it that may " ++
+  "reach another, not in a condition, a set or a later operand of a comparison, and with nothing but literals " ++
+  "and names before a choice in one of several alternatives (#246, #283)"
+
+/-- (#283) Whether an alternative in normal form (`normAlt`) is one the
+    lazy machine takes: its prefix plain, a choice's alternatives such again,
+    and its frame plain or a continuation member whose clauses are plain and
+    whose tail's leaves are such. A frame sets no `var` bound before it
+    (`isVar`), as it runs on a copy of the names it uses (an object's field
+    it may set). -/
+partial def altOK (ops : ShapeOps) (isVar : String → Bool) (a : SExpr) : Bool :=
+  ops.isRec a || ops.plain a || match a with
+    | .app _ (.ident _ "$then") (c :: _ :: k :: pre) false =>
+      let leafOK (e : SExpr) : Bool := ((alts? e).getD [e]).all (altOK ops isVar)
+      -- (a choice with code before it is a whole leaf, that code its path's,
+      -- `normTail`; not yet one alternative among others)
+      (pre.isEmpty || !isChoice c) &&
+      pre.all ops.plain && ((alts? c).map (·.all (altOK ops isVar))).getD (ops.isRec c) &&
+        (setsIn k).all (fun n => (localsOf k).contains n || !isVar n) &&
+        (ops.plain k || match contOf? k with
+          | some (cls, tail) => cls.all ops.plain && loopTailOK ops.plain leafOK tail
+          | none => false)
+    | _ => false
 
 /-- The shape of a recursive function with several values that its
     consumers take lazily (#246), after normalizing source returns: plain
     clauses and conditional tail paths, each leaf a choice or value whose
     alternatives are whole calls of the recursive group or plain values.
-    With `frames` (#283), an alternative may also be a call of the group
+    With `frames` (#283), the body in the normal form of `normAlt`: an
+    alternative may also be a choice point (a call of the group, or a choice)
     with code after it, which runs on each of its values (`$then`), and the
-    body's last choice may be bound by a clause with plain code after it. -/
+    clauses may end at a choice point with code after it (`bodyTail?`). -/
 def loopShapeOf? (g : String) (mv : List String) (body : SExpr) (grp : List String := [g])
     (frames : Bool := false) (params : List String := []) : Option (List SExpr × SExpr) := do
   let ss := stmtsOf body
   let last ← ss.getLast?
   let cls := ss.dropLast
-  let tail := match last with
-    | .decl _ _ _ false rhs => rhs
-    | e => e
   -- (no choice, and no call of a function with several values, nor any
   -- other mention of `g`: a call of it its own `if` or `for` takes, say)
   -- (#283: or of a function of its strongly connected group, `grp`)
@@ -1546,18 +1687,18 @@ def loopShapeOf? (g : String) (mv : List String) (body : SExpr) (grp : List Stri
         | .decl _ n _ _ rhs => n.startsWith "?" && plain rhs
         | _ => plain a
     | _ => false
-  let (cls, tail) := if frames && !cls.all plain then
-      (lastChoiceTail plain cls last).getD (cls, tail) else (cls, tail)
-  let tail := plainIfValues plain (completeLoopTail isRec false tail)
-  let tail := if frames then framedTail isRec plain (inert (params ++ localsOf body)) tail else tail
-  -- (a frame's code sets no `var` bound before it: it runs on a copy of
-  -- the names; an object's field it may set)
+  if !frames then
+    let tail := match last with
+      | .decl _ _ _ false rhs => rhs
+      | e => e
+    let tail := plainIfValues plain (completeLoopTail isRec false tail)
+    let groupOK (e : SExpr) : Bool := ((alts? e).getD [e]).all fun a => isRec a || plain a
+    if cls.all plain && loopTailOK plain groupOK tail then some (cls, tail) else none
+  else
+  let ops : ShapeOps := { plain, isRec, inert := inert (params ++ localsOf body) }
+  let (cls, tail) ← bodyTail? ops body.pos cls last
   let isVar (n : String) : Bool := anyE (fun | .decl _ x _ true _ => x == n | _ => false) body
-  let framed : SExpr → Bool
-    | .app _ (.ident _ "$then") (c :: _ :: k :: pre) false =>
-      isRec c && plain k && pre.all plain && (setsIn k).all fun n => (localsOf k).contains n || !isVar n
-    | _ => false
-  let groupOK (e : SExpr) : Bool := ((alts? e).getD [e]).all fun a => isRec a || plain a || framed a
+  let groupOK (e : SExpr) : Bool := ((alts? e).getD [e]).all (altOK ops isVar)
   if cls.all plain && loopTailOK plain groupOK tail then some (cls, tail) else none
 
 /-- (#283) A function's `var`s made cells: `var K:t = e` becomes
@@ -2236,13 +2377,26 @@ def firstValue (b : String) (bty ret : Option STy) (rest : List SExpr) (tup : SE
     continuation `$K`'s frames (`$frameApply`), then as `firstValue`. -/
 def firstReturnBody (p : Pos) (b : String) (bty : Option STy) (rest : List SExpr) (binds : List String)
     (sets : List (String × STy)) (ret : Option STy) (normalResult : Option SExpr)
-    (frames : List (String × List String × SExpr)) : SExpr :=
+    (frames : List (String × List String × SExpr)) (memberFn : Nat → Option String := fun _ => none)
+    (caps : List SExpr := []) : SExpr :=
   let tup : SExpr := normalResult.getD (.tuple p (binds.map (SExpr.ident p ·) ++ sets.map (fun (m, _) => SExpr.ident p m) ++
     [.ident p "true"]))
-  let v := SExpr.app p (.ident p "$frameApply") (.ident p "$K" :: .ident p "$V" :: frames.map fun (h, lives, code) =>
-    .app p (.ident p "$frame") [.ident p h, .block p (lives.map (SExpr.ident p ·)), code] false) false
   let copies := sets.map fun (m, t) => SExpr.decl p m (some t) true (.ident p s!"{m}$in")
-  .block p (copies ++ [firstValue b bty ret rest tup v])
+  let liveIds (lives : List String) : List SExpr := lives.map (SExpr.ident p ·)
+  if (List.range frames.length).all (memberFn · |>.isNone) then
+    let v := SExpr.app p (.ident p "$frameApply") (.ident p "$K" :: .ident p "$V" :: frames.map fun (h, lives, code) =>
+      .app p (.ident p "$frame") [.ident p h, .block p (liveIds lives), code] false) false
+    .block p (copies ++ [firstValue b bty ret rest tup v])
+  else
+  -- (#283) with continuation members: a member's frame calls its function
+  -- with the value, its lives and the rest of the continuation, whose packet
+  -- is this one's; when no frame is left, the value as `firstValue`
+  let entry (j : Nat) (h : String) (lives : List String) (code : SExpr) : SExpr := match memberFn j with
+    | some fn => .app p (.ident p "$frameCall") [.ident p h, .block p (liveIds lives),
+        .app p (.ident p fn) (.ident p h :: liveIds lives ++ [.ident p "$Krest"] ++ caps) true] false
+    | none => .app p (.ident p "$frame") [.ident p h, .block p (liveIds lives), code] false
+  .block p (copies ++ [.app p (.ident p "$frameReturn") (.ident p "$K" :: .ident p "$V" ::
+    firstValue b bty ret rest tup (.ident p "$V") :: frames.zipIdx.map fun ((h, lives, code), j) => entry j h lives code) false])
 
 /-- The body of a `FirstLift` (#246): the function's clauses, then the first
     success of its last expression, each value followed by the consumer's
@@ -2255,7 +2409,7 @@ def firstReturnBody (p : Pos) (b : String) (bty : Option STy) (rest : List SExpr
     and a value is given to it, then to the clauses after the call, by the
     function `retFn` (`firstReturnBody`), so that the frames' code and those
     clauses are not copied into each value. -/
-def firstBody (helper : String) (p : Pos) (b : String) (bty : Option STy) (cls : List SExpr) (tail : SExpr)
+partial def firstBody (helper : String) (p : Pos) (b : String) (bty : Option STy) (cls : List SExpr) (tail : SExpr)
     (rest : List SExpr) (binds : List String) (sets : List (String × STy)) (caps : List SExpr)
     (ret : Option STy := none) (helperOf : String → String := fun _ => helper)
     (recArgs : Option String → Pos → List SExpr → List SExpr × List SExpr := fun _ _ as => ([], as))
@@ -2263,7 +2417,6 @@ def firstBody (helper : String) (p : Pos) (b : String) (bty : Option STy) (cls :
     (retFn : String := "") : SExpr :=
   let tup : SExpr := normalResult.getD (.tuple p (binds.map (SExpr.ident p ·) ++ sets.map (fun (m, _) => SExpr.ident p m) ++
     [.ident p "true"]))
-  let kont (q : Pos) : List SExpr := if frames.isEmpty then [] else [.ident q "$K"]
   let recur (target : Option String) (h : String) (q : Pos) (as : List SExpr) (k : List SExpr) : SExpr :=
     let (pre, args) := recArgs target q as
     let call := SExpr.app q (.ident q h) (args ++ k ++ caps) true
@@ -2273,23 +2426,33 @@ def firstBody (helper : String) (p : Pos) (b : String) (bty : Option STy) (cls :
     -- (a call of another function of the group, #283: its own function)
     | .app q (.ident _ "$recTo") (.ident _ h :: as) false => some (recur (some h) (helperOf h) q as k)
     | _ => none
-  let alt (a : SExpr) : SExpr := match a with
+  -- (an alternative whose values go to the continuation `kE`, `$K` itself
+  -- when none)
+  let rec altK (kE : Option SExpr) (a : SExpr) : SExpr :=
+    let kOf (q : Pos) : SExpr := kE.getD (.ident q "$K")
+    match a with
     | .app q (.ident _ "$then") (c :: .ident _ h :: _ :: pre) false =>
-      -- (#283) a call with code after it: its frame on the continuation,
-      -- after its prefix, if any
+      -- (#283) a choice point with code after it: its frame on the
+      -- continuation, after its prefix, if any; a choice's on each of its
+      -- alternatives' (`Choice.flatCount`)
       let j := (frames.findIdx? (·.1 == h)).getD 0
       let lives := (((frames[j]?).map (·.2.1)).getD []).map (SExpr.ident q ·)
-      match call [.app q (.ident q "$framePush") (.int q (j : Int) :: .ident q "$K" :: lives) false] c, pre with
+      let kE' := SExpr.app q (.ident q "$framePush") (.int q (j : Int) :: kOf q :: lives) false
+      match alts? c with
+      | some cs => mk q (cs.map (altK (some kE')))
+      | none =>
+      match call [kE'] c, pre with
       | some e, [.block _ ss] => .block q (ss ++ [e])
       | some e, _ => e
       | none, _ => a
     | a =>
-      match call (kont a.pos) a with
+      match call (if frames.isEmpty then [] else [kOf a.pos]) a with
       | some c => c
       | none =>
       -- (a value, given to the continuation's frames, #283)
       if frames.isEmpty then firstValue b bty ret rest tup a
-      else .app a.pos (.ident a.pos retFn) ([a, .ident a.pos "$K"] ++ caps) true
+      else .app a.pos (.ident a.pos retFn) ([a, kOf a.pos] ++ caps) true
+  let alt := altK none
   let group (v : SExpr) : SExpr := match alts? v with
     | some as => mk v.pos (as.map alt)
     | none => alt v
@@ -2929,7 +3092,7 @@ def methodFns (tops : List STop) (reserved : List String := []) (picks : List (P
           throw s!"{p.show}: {shown f.root}.{m} has several values, so it cannot be used as a function value (#235, #283)"
   -- (#283) the uses `R.M` of a `shared` name of a selected family that
   -- only `R`'s class can tell, not picked yet: the elaboration notes the
-  -- root that class is below, for the next round (`Elab`'s `familyNeeds`)
+  -- root that class is below, for the next round (`Requests.families`)
   let sites := (tops.flatMap bodiesOf).flatMap fun (inC, b) => (memberUses b).filterMap fun (q, r, m) =>
     let byClass := match r, inC with
       | .ident _ "Self", some _ | .ident _ "(super:)", _ => true
