@@ -20,6 +20,19 @@ import OpenVerse.Front.Elab.Lowering
 
 namespace OpenVerse.Front
 open OpenVerse
+/-- A function or a constant of the program, elaborated (`elabProgramCore`):
+    its Verse Core code and the types of its slots, where it first calls
+    `Err()` (#235), which of its locals live in a source frame (`FrameRefs`),
+    what its elaboration asks for, and the lazily taken calls it consumes
+    (#246). -/
+structure ElaboratedFn where
+  fn : Fn
+  slotTys : List VTy
+  errAt : Option Pos
+  frames : FrameRefs.Info := {}
+  needs : Requests
+  loopFirst : List LoopUse
+
 /-- Elaborate a parsed program into a Verse Core program that passes `Prog.check`
     and `Prog.checkTypes`. -/
 def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except String Compiled := do
@@ -1436,7 +1449,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       (decides : Bool) (allowed : List String) (tps : List (String × Bool)) (body : SExpr)
       (suspends : Bool := false) (selfTps : List String := [])
       (selfFieldOf : Option (String → Option Nat) := none) (scopeClass : Option String := none) :
-      Except String (Fn × List VTy × Requests × Option Pos × List LoopUse × FrameRefs.Info) := do
+      Except String ElaboratedFn := do
     -- (#209) the values of `selfTps` come from the receiver's hidden
     -- fields, in slots after the hidden parameters: a method's own class's
     -- (`C.M`), or as `selfFieldOf` says (a cast's branch, #250, the cast
@@ -1489,35 +1502,22 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
     if name.endsWith ".$block" then
       if let some budget := env.constructionFx[(name.dropEnd ".$block".length).toString]? then
         fxCheck s!"construction block of {(name.dropEnd ".$block".length).toString}" budget st
-    return ({ name, arity, nslots := st.nslots, decides, writes := allowed.contains "writes",
-              body := initPrefixE arity inits e },
-      spawnParamTypes env name (st.slotTys.toList.map (Ty.toVTy env)), st.needs, st.errAt, st.loopFirst,
-      { explicit := ps.length, copies := st.frameCopies, slots := st.frameSlots.map fun (i, s) =>
-          (i, { frame := s.frame, name := s.name, args := s.args.map (Ty.toVTy env) }) })
+    return { fn := { name, arity, nslots := st.nslots, decides, writes := allowed.contains "writes",
+                     body := initPrefixE arity inits e },
+             slotTys := spawnParamTypes env name (st.slotTys.toList.map (Ty.toVTy env)), errAt := st.errAt,
+             frames := { explicit := ps.length, copies := st.frameCopies, slots := st.frameSlots.map fun (i, s) =>
+               (i, { frame := s.frame, name := s.name, args := s.args.map (Ty.toVTy env) }) },
+             needs := st.needs, loopFirst := st.loopFirst }
   -- (the accessors come right after the functions, #157)
   env := { env with fieldAccBase := tops.length + gsigs.size }
   let genvOf (g : Sig) : TyEnv := { env with tvars := g.tparams.map fun (v, c) => (v, Ty.param v c) }
-  let mut fns : Array Fn := #[]
-  let mut slotTys : Array (List VTy) := #[]
-  let mut frameInfo : Array FrameRefs.Info := #[]
-  let mut needs := fieldNeeds
-  -- (where each function calls `Err()`, by its index, #235)
-  let mut errs : Array (Option Pos) := #[]
-  -- (the lazily taken functions with several values that contexts taking
-  -- their first success consume, #246)
-  let mut loopFirst : List LoopUse := fieldDefaultNeeds.map fun l =>
-    { g := "", pos := l.pos, itemCode := .lit .void, argSet := none, lift := .ok l }
+  -- (the functions, then the generic ones, by index)
+  let mut elaborated : Array ElaboratedFn := #[]
   for (top, idx) in tops.zip (List.range tops.length) do
     let sig := sigs[idx]!
     match top with
     | .fn p n ps _ _ _ body =>
-      let (fn, tys, fnNeeds, err, lf, frames) ← elabFn env p n ps sig.params sig.ret sig.decides sig.fx [] body sig.suspends
-      needs := needs.merge fnNeeds
-      loopFirst := loopFirst ++ lf
-      fns := fns.push fn
-      errs := errs.push err
-      slotTys := slotTys.push tys
-      frameInfo := frameInfo.push frames
+      elaborated := elaborated.push (← elabFn env p n ps sig.params sig.ret sig.decides sig.fx [] body sig.suspends)
     | .const p n _ body =>
       -- a constant is computed at each use, so it would be a new object each
       -- time (until Verse Core has global state)
@@ -1526,19 +1526,16 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       let ctx : Ctx := { sigs := allSigs, sigProg, types := env }
       let (r, st) ← elabBodyOv ctx body (some sig.ret) { env }
       let (e, st) ← (coerce p r.1 sig.ret).run st
-      needs := needs.merge st.needs
-      loopFirst := loopFirst ++ st.loopFirst
-      let tys := st.slotTys.toList.map (Ty.toVTy env)
-      frameInfo := frameInfo.push {}
       -- slots start like a function's (a class-typed one as a placeholder)
       let inits ← match st.slotTys.toList.mapM (slotDefault env 0 [] []) with
         | .ok ds => pure ds
         | .error msg => throw s!"{p.show}: in {n}: {msg}"
       fxCheck n sig.fx st
-      fns := fns.push { name := n, arity := 0, nslots := st.nslots, decides := false,
-                        writes := sig.fx.contains "writes", body := initPrefixE 0 inits e }
-      errs := errs.push st.errAt
-      slotTys := slotTys.push tys
+      elaborated := elaborated.push {
+        fn := { name := n, arity := 0, nslots := st.nslots, decides := false,
+                writes := sig.fx.contains "writes", body := initPrefixE 0 inits e }
+        slotTys := st.slotTys.toList.map (Ty.toVTy env), errAt := st.errAt, needs := st.needs,
+        loopFirst := st.loopFirst }
     | .classDef .. => pure ()   -- expanded above
   -- each generic function is elaborated once, with its type parameters
   -- opaque, as Verse checks it, into one Verse Core function whose types
@@ -1550,16 +1547,21 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
       -- (a class's copy of an interface's default, #53, elaborated in the
       -- interface's scope)
       let scope := copyScope? effs
-      let (fn, tys, fnNeeds, err, lf, frames) ← elabFn (genvOf g) p n ps g.params g.ret g.decides g.fx g.tparams body g.suspends
-        g.selfTps ((opts.requests.casts.find? (·.name == n)).map fun l => fun v =>
-          (l.opened.lookup v).bind (env.witnessField? l.target ·)) scope
-      needs := needs.merge fnNeeds
-      loopFirst := loopFirst ++ lf
-      fns := fns.push fn
-      errs := errs.push err
-      slotTys := slotTys.push tys
-      frameInfo := frameInfo.push frames
+      elaborated := elaborated.push (← elabFn (genvOf g) p n ps g.params g.ret g.decides g.fx g.tparams body
+        g.suspends g.selfTps ((opts.requests.casts.find? (·.name == n)).map fun l => fun v =>
+          (l.opened.lookup v).bind (env.witnessField? l.target ·)) scope)
     | _ => pure ()
+  let mut fns := elaborated.map (·.fn)
+  let mut slotTys := elaborated.map (·.slotTys)
+  -- (where each function calls `Err()`, by its index, #235)
+  let errs := elaborated.map (·.errAt)
+  let frameInfo := elaborated.map (·.frames)
+  -- (the lazily taken functions with several values that contexts taking
+  -- their first success consume, #246)
+  let loopFirst := fieldDefaultNeeds.map (fun l =>
+      ({ g := "", pos := l.pos, itemCode := .lit .void, argSet := none, lift := .ok l } : LoopUse)) ++
+    elaborated.toList.flatMap (·.loopFirst)
+  let mut needs := elaborated.foldl (fun acc f => acc.merge f.needs) fieldNeeds
   -- (#214) functions wanted as values at types no class of theirs gives:
   -- the program is elaborated again, with classes for them, so this one,
   -- with placeholders, goes no further
