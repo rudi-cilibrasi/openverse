@@ -352,8 +352,8 @@ structure Ctx where
       `branch` there would start again before the last one ended. -/
   inRepeat : Bool := false
   /-- In the clauses of an `if` condition or `first{…}` that bind a choice
-      (#208), inside a `loop`: a `break` there would leave the loop they are
-      compiled to, not that one. -/
+      (#208), inside a `loop`, that have no `break` that leaves them: the
+      loop they are compiled to does not forward one (`elabFirstGo`). -/
   inChoice : Bool := false
   /-- In the clauses of a failure context that takes a choice's values
       (#208): a choice that reaches the elaborator here is in a place it
@@ -361,7 +361,8 @@ structure Ctx where
   inTaking : Bool := false
   /-- The internal loop that propagates a failed continuation outcome. -/
   forOutcomeSlot : Option Nat := none
-  /-- A source-loop break crossing the internal loops of lazy producers. -/
+  /-- A source-loop break crossing the internal loops of lazy producers and
+      of first successes (`firstE`), each of which forwards it. -/
   forBreakSlot : Option Nat := none
   /-- A source break carried by a shared for continuation. -/
   forBreakCapture : Option String := none
@@ -437,6 +438,9 @@ structure ESt where
       constant, `spawn`) in a failure context, what it is, and the Verse
       Core functions it calls. -/
   failCalls : Array ((Pos × String) × List Nat) := #[]
+  /-- (#283) At each of `TyEnv.familySites` elaborated: the root of its
+      method above its receiver's class, for the next round's inlining. -/
+  familyNeeds : List (Pos × String) := []
   /-- The program's types, for conversions between class types (`coerce`). -/
   env : TyEnv := {}
   nslots : Nat := 0
@@ -544,6 +548,11 @@ structure LoopGen where
 
   /-- Each mutual member's signature parameters at this invocation. -/
   instances : List (String × List (String × Ty)) := []
+  /-- (#283) The return frames of its calls with code after them, in order:
+      each one's hole, lives and code; and the type of the continuation
+      they are pushed on, when there are any. -/
+  frames : List (String × List String × SExpr) := []
+  kTy : Option Ty := none
 
 /-- Run `m`, attributing the heap effects it records first to `p` (a field
     or argument default: the effect is the construction's or the call's). -/
@@ -688,6 +697,11 @@ def noteFailCalls (ctx : Ctx) (p : Pos) (what : String) (e : Expr) : EM Unit := 
     let spawn := (ctx.sig? "$spawnMark").map (·.idx)
     modify fun st => { st with failCalls := st.failCalls.push ((p, what), SignalAdmission.calls spawn e) }
 
+/-- `ctx` with the `defer:` body `d` pending for every `return` and `break`
+    that leaves its scope (#80), with the locals in scope here. -/
+def Ctx.withDefer (ctx : Ctx) (d : SExpr) : Ctx :=
+  { ctx with defers := (d, ctx.locals) :: ctx.defers }
+
 /-- Class or interface `c` has method `m`, its own or inherited. -/
 def Ctx.hasMethod (ctx : Ctx) (c m : String) : Bool :=
   (ctx.types.supers c).any fun e => (ctx.sig? s!"{e}.{m}").isSome
@@ -790,6 +804,24 @@ def Ctx.implAt (ctx : Ctx) (r m e : String) : Option String :=
 /-- The slots of method `m` above `c` (`TyEnv.rootsOf`). -/
 def Ctx.rootsOf (ctx : Ctx) (c m : String) : List String :=
   ctx.types.rootsOf (fun e => (ctx.sig? s!"{e}.{m}").isSome) c
+
+/-- Whether this elaboration knows if an expression can fail: not one for
+    types, nor one to be done again with functions as values (#214, #231)
+    or with the families of methods' uses (#283), which may make a call
+    fail or have several values. -/
+def Ctx.failabilityKnown (ctx : Ctx) : EM Bool := do
+  let st ← get
+  return st.fnNeeds.isEmpty && st.methodNeeds.isEmpty && ctx.types.familySites.isEmpty && !ctx.typeOnly
+
+/-- (#283) A use `R.M` at `p` whose family of methods only the class of
+    `R` tells, one of `TyEnv.familySites`: the root of `M` above that class
+    noted, none (`""`) for a receiver of another type. -/
+def Ctx.noteFamily (ctx : Ctx) (p : Pos) (recv : Ty) (m : String) : EM Unit := do
+  if ctx.types.familySites.contains (p, m) then
+    let root := match recv with
+      | .struct c _ => ((ctx.rootsOf c m).head?).getD ""
+      | _ => ""
+    modify fun st => { st with familyNeeds := (p, root) :: st.familyNeeds }
 
 /-- The function that implements slot `r` of method `m` for an instance of
     class `d` (#70). -/
@@ -1621,5 +1653,33 @@ def toStringOf (p : Pos) (r0 : R) : EM Expr := do
   | .int | .char | .float => pure (.prim .toStr [r.e])
   | .arr .char => pure r.e
   | t => eerr p s!"no ToString for {t.show} (Verse defines it for int, float, char, char32 and string)"
+
+/-- Canonicalise the user positional arguments before binding a call. A
+    receiver is not part of the argument tuple; named arguments retain their
+    written order. A lone scalar keeps its meaning for arrays and bare type
+    parameters. Empty arrays still require an explicit array value. -/
+def packCallArgs (p : Pos) (s : Sig) (args : List SExpr)
+    (hasReceiver : Bool := true) : List SExpr := Id.run do
+  let isNamed : SExpr → Bool := fun | .decl _ n _ _ _ => n.startsWith "?" | _ => false
+  let off := if hasReceiver && s.hasReceiver then 1 else 0
+  let pos := args.filter (!isNamed ·)
+  let user := pos.drop off
+  let named := args.filter isNamed
+  let [pt] := s.params.drop off |>.take (s.params.length - s.named.length - off)
+    | return args
+  let packed := fun a => pos.take off ++ [a] ++ named
+  match pt with
+  | .void => if user.isEmpty then return packed (.tuple p []) else return args
+  | .tup _ =>
+    if user.length != 1 then return packed (.tuple p user)
+    if let .tup [_] := pt then
+      let [a] := user | return args
+      match a with
+      | .tuple _ [_] | .app _ (.ident _ "$callSingleton") [_] false => return args
+      | _ => return packed (.app a.pos (.ident a.pos "$callSingleton") [a] false)
+    return args
+  | .arr _ => if user.length > 1 then return packed (.arrayLit p user) else return args
+  | .param .. => if user.length != 1 then return packed (.tuple p user) else return args
+  | _ => return args
 
 end OpenVerse.Front

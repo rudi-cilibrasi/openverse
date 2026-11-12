@@ -75,17 +75,20 @@ partial def arms : SExpr → List (Option (List SExpr) × SExpr)
   | .ite p cs t none => [(some cs, t), (none, .tuple p [])]
   | e => [(none, e)]
 
-/-- Supply the implicit void arm of an incomplete `if` chain, applying
-    `arm` to the written branches. -/
-partial def fillElse (e : SExpr) (arm : SExpr → SExpr := id) : SExpr :=
+/-- Supply the implicit void arm of an incomplete `if` chain. -/
+partial def fillElse (e : SExpr) : SExpr :=
   match e with
-  | .ite p cs t u => .ite p cs (arm t) (some ((u.map (fillElse · arm)).getD (.tuple p [])))
-  | _ => arm e
+  | .ite p cs t u => .ite p cs t (some ((u.map fillElse).getD (.tuple p [])))
+  | _ => e
 
 /-- The part of a made name that names an inlined call's site (#235), set
     apart from the position after it (site 1 at line 12 is not site 11 at
     line 2); nothing outside one. -/
 def sitePart (site : String) : String := if site.isEmpty then "" else site ++ "@"
+
+/-- The name made for what is bound of kind `k` from `p` (`$c12_5` for a
+    choice at 12:5), with an inlined call's `site` in it (`sitePart`). -/
+def madeName (k site : String) (p : Pos) : String := s!"${k}{sitePart site}{p.line}_{p.col}"
 
 /-- (#283) An `if` with something
     to lift in a branch that `isBranchy` leaves there: a call with several
@@ -119,7 +122,7 @@ def plainBranches (has : SExpr → Bool) (e : SExpr) : Bool :=
     and the path with those names in their places: `set` evaluates them
     before the new value. -/
 partial def hoistPath (q : Pos) (l : SExpr) (site : String := "") : List SExpr × SExpr :=
-  let nm (n : Nat) : String := s!"$i{sitePart site}{q.line}_{q.col}_{n}"
+  let nm (n : Nat) : String := s!"{madeName "i" site q}_{n}"
   let rec go (n : Nat) : SExpr → List SExpr × SExpr × Nat
     | .app r base args true =>
       let (h, base', n) := go n base
@@ -148,7 +151,7 @@ def setPrefix (q : Pos) (l : SExpr) (op : Option String) (site : String := "") :
   match op with
   | none => (h, none, l')
   | some _ =>
-    let o := s!"$o{sitePart site}{q.line}_{q.col}"
+    let o := madeName "o" site q
     (h ++ [.decl q o none false l'], some o, l')
 
 /-- The new value of a `set` whose old one is in `o?`. -/
@@ -156,37 +159,6 @@ def withOld (q : Pos) (o? : Option String) (r : SExpr) : SExpr :=
   match o? with
   | some o => .app q (.ident q "$withOld") [.ident q o, r] false
   | none => r
-
-/-- `set L op= a | b` with the choice bound first, as `set` evaluates (Book
-    of Verse §3.5): the indices of `L`'s path, then for `op=` the old value,
-    then the choice. For `=`, the alternatives take `L`'s type. -/
-def setClauses (p : Pos) (l : SExpr) (op : Option String) (as : List SExpr) (q : Pos) (site : String := "") :
-    List SExpr × SExpr :=
-  let (h, o?, l') := setPrefix q l op site
-  let c := s!"$c{sitePart site}{q.line}_{q.col}"
-  let choice : SExpr := match op with
-    | none => .app q (.ident q "$choiceAt") (l' :: as) false
-    | some _ => .app q (.ident q "$choice") as false
-  (h ++ [.decl q c none false choice], .set p l' op (withOld q o? (.ident q c)))
-
-/-- The clauses, with each choice the value of a binding: a clause that is a
-    choice gets a name of its own, and `set L = a | b` and `var X:t = a | b`
-    bind the choice first. -/
-def normClauses (cs : List SExpr) (site : String := "") : List SExpr :=
-  cs.flatMap fun c =>
-    let nm (p : Pos) : String := s!"$c{sitePart site}{p.line}_{p.col}"
-    match c with
-    | .app p (.ident _ "$choice") _ false => [.decl p (nm p) none false c]
-    | .set p l op rhs => match alts? rhs with
-      | some as => let (h, s) := setClauses p l op as p site; h ++ [s]
-      | none => [c]
-    | .decl p x ty true rhs =>
-      if isChoice rhs then [.decl p (nm p) ty false rhs, .decl p x ty true (.ident p (nm p))] else [c]
-    -- (`set L = a | b` as the last clause of a macro, which names its value)
-    | .decl p x ty false (.set q l op rhs) => match alts? rhs with
-      | some as => let (h, s) := setClauses q l op as q site; h ++ [.decl p x ty false s]
-      | none => [c]
-    | c => [c]
 
 /-! ### A choice inside an expression
 
@@ -202,9 +174,10 @@ each: those of arithmetic, comparisons, calls (the receiver first), member
 access, `?`, tuples, arrays, maps and string interpolation; a call's
 named arguments after its positional ones, as they are evaluated; a
 block's clauses; a construction's fields, in its type's declaration order,
-as they are evaluated (#283). A choice elsewhere (a branch that is more
-than a value, an alternative, which the elaborator takes apart) is not
-lifted here. -/
+as they are evaluated; a range's bounds; the operands of `and`, each as a
+block, and the right of `or`, as the `if` it stands for (`orIf`) (#283). A
+choice elsewhere (a branch that is more than a value, an alternative, which
+the elaborator takes apart) is not lifted here. -/
 
 /-- The variable a `set` path starts from. -/
 partial def rootName? : SExpr → Option String
@@ -213,23 +186,11 @@ partial def rootName? : SExpr → Option String
   | _ => none
 
 /-- The names that `set` writes inside `e`. -/
-partial def setsIn : SExpr → List String
-  | .set _ l _ r => ((rootName? l).map ([·])).getD [] ++ setsIn l ++ setsIn r
-  | .app _ f as _ => setsIn f ++ as.flatMap setsIn
-  | .member _ e _ | .query _ e | .neg _ e | .notE _ e | .optionLit _ e | .logicLit _ e | .loop _ e => setsIn e
-  | .bin _ _ a b | .andE _ a b | .orE _ a b | .range _ a b => setsIn a ++ setsIn b
-  | .cmp _ a rest => setsIn a ++ rest.flatMap (setsIn ·.2)
-  | .tuple _ es | .block _ es | .arrayLit _ es => es.flatMap setsIn
-  | .ite _ cs t e => cs.flatMap setsIn ++ setsIn t ++ ((e.map setsIn).getD [])
-  | .forE _ cs b => cs.flatMap setsIn ++ setsIn b
-  | .gen _ _ _ s => setsIn s
-  | .ret _ e => (e.map setsIn).getD []
-  | .caseE _ s arms => setsIn s ++ arms.flatMap fun (p, v) => ((p.map setsIn).getD []) ++ setsIn v
-  | .decl _ _ _ _ e => setsIn e
-  | .construct _ _ _ fs => fs.flatMap setsIn
-  | .mapLit _ kvs => kvs.flatMap fun (k, v) => setsIn k ++ setsIn v
-  | .str _ ps => ps.flatMap fun | .code c => setsIn c | .text _ => []
-  | _ => []
+partial def setsIn (e : SExpr) : List String :=
+  let here := match e with
+    | .set _ l _ _ => (rootName? l).toList
+    | _ => []
+  here ++ e.children.flatMap setsIn
 
 /-- The names a clause list binds (so values, for `stable` and the heads
     of calls). -/
@@ -280,6 +241,11 @@ def noLift (p : Pos) (why : String) (e : SExpr) : SExpr :=
 def shownName (n : String) : String :=
   if n.startsWith "$" && n.contains '\'' then ((n.splitOn "'").getLast?.getD n) else n
 
+/-- The names `ns` renamed for a place, `tag'N` (`tag` a made name, so
+    `shownName` gives `N` back), so they stay its own there. -/
+def renamedFor (tag : String) (ns : List String) : List (String × String) :=
+  ns.map fun n => (n, s!"{tag}'{n}")
+
 /-- Whether a `set` path's indices have something to lift (`has`,
     `hasLiftable`), #283: a choice, or a call with several values. -/
 partial def pathHas (has : SExpr → Bool) : SExpr → Bool
@@ -287,6 +253,7 @@ partial def pathHas (has : SExpr → Bool) : SExpr → Bool
   | .member _ base _ | .query _ base => pathHas has base
   | _ => false
 
+mutual
 /-- Whether `e` has a choice that lifting reaches. -/
 partial def hasLiftable : SExpr → Bool
   -- (a block or construction kept, with why, `$noLift`, #283)
@@ -302,6 +269,8 @@ partial def hasLiftable : SExpr → Bool
   | .app _ (.ident _ "$dispatch") _ false => true
   | .app _ (.ident _ "$each") _ false => true
   | .app _ (.ident _ "$loop") _ false => true
+  -- (a scope's `defer:`s pending for the exits in `e`, `deferExits`, #283)
+  | .app _ (.ident _ "$deferExits") [_, e] false => hasLiftable e
   | e@(.ite ..) => isBranchy e || branchesLift hasLiftable e
   | .app _ f args _ => headHas hasLiftable f || args.any fun
       -- (a named argument's value, #283)
@@ -310,24 +279,86 @@ partial def hasLiftable : SExpr → Bool
       -- no value to lift from: its choices are its own)
       | a@(.block ..) => !(match f with | .ident _ n => n.startsWith "$" | _ => false) && hasLiftable a
       | a => hasLiftable a
-  | .bin _ _ a b => hasLiftable a || hasLiftable b
-  | .cmp _ a rest => hasLiftable a || rest.any (hasLiftable ·.2)
-  | .member _ e _ | .query _ e | .neg _ e => hasLiftable e
-  | .tuple _ es | .arrayLit _ es => es.any hasLiftable
-  | .str _ ps => ps.any fun | .code c => hasLiftable c | .text _ => false
-  | .mapLit _ kvs => kvs.any fun (k, v) => hasLiftable k || hasLiftable v
+  -- (operands evaluated left to right, once each)
+  | e@(.bin ..) | e@(.range ..) | e@(.cmp ..) | e@(.member ..) | e@(.query ..) | e@(.neg ..)
+  | e@(.tuple ..) | e@(.arrayLit ..) | e@(.str ..) | e@(.mapLit ..) => e.children.any hasLiftable
+  -- (#283) the operands of `and`, and the right of `or` (its left is a
+  -- failure context, which takes its own): each a clause, of a scope of its own
+  | .andE _ a b => liftsHere a || liftsHere b
+  | .orE _ _ b => liftsHere b
   -- (a construction's field values and a block's clauses, #283)
   | .construct _ _ _ fs => fs.any fun | .decl _ _ _ _ x => hasLiftable x | x => hasLiftable x
-  | .block _ ss => ss.any fun
-      | .decl _ _ _ _ x | .gen _ _ _ x => hasLiftable x
-      | .set _ l _ x => hasLiftable x || pathHas hasLiftable l
-      | x => hasLiftable x
+  | .block _ ss => ss.any liftsHere
   | _ => false
+
+/-- A clause with something to lift into the clauses it is among: in a
+    binding's value or a generator's source, in a `set`'s value or path, or
+    in the clause itself. -/
+partial def liftsHere : SExpr → Bool
+  | .decl _ _ _ _ x | .gen _ _ _ x => hasLiftable x
+  | .set _ l _ x => hasLiftable x || pathHas hasLiftable l
+  | x => hasLiftable x
+end
 
 /-- An `if` that can lift directly at the binding's expected type.
     An incomplete chain first needs a binding of its own at void. -/
 def liftsAsIf (e : SExpr) : Bool :=
   isBranchy.complete e && (isBranchy e || branchesLift hasLiftable e)
+
+/-- (#283) A composed choice: one whose alternatives have values or clauses
+    of their own to lift, so that each alternative is taken with the
+    clauses after it (`elabOneGo`, `elabForWith`). -/
+def Binding.composed (b : Binding) : Bool :=
+  b.place.isNone && b.branchy.isNone && b.each.isNone && b.alts.any hasLiftable
+
+/-- (#283) `A or B` with something to lift on its right, as the `if` it
+    stands for, `if (T := A) then T else B`: its condition takes the first
+    success of `A`, as the left of `or` does, and its values are otherwise
+    `B`'s; each operand a block, a scope of its own. Lifted as any `if` with
+    choices in its branches is, at a binding's or `set`'s place too. -/
+def orIf (site : String) : SExpr → SExpr
+  | e@(.orE p a b) =>
+    if !liftsHere b then e else
+    let t := madeName "or" site p
+    .ite p [.decl p t none false (.block a.pos [a])] (.ident p t) (some (.block b.pos [b]))
+  | e => e
+
+/-- `set L op= a | b` with the choice bound first, as `set` evaluates (Book
+    of Verse §3.5): the indices of `L`'s path, then for `op=` the old value,
+    then the choice, so each alternative only runs the assignment. For `=`,
+    the alternatives take `L`'s type; when one has something to lift (#283),
+    by each running the assignment itself, the `set` its block's value, as
+    a composed choice's alternatives are lifted one by one. -/
+def setClauses (p : Pos) (l : SExpr) (op : Option String) (as : List SExpr) (site : String := "") :
+    List SExpr × SExpr :=
+  let (h, o?, l') := setPrefix p l op site
+  let c := madeName "c" site p
+  match op with
+  | none =>
+    if as.any hasLiftable then
+      (h ++ [.decl p c none false (.app p (.ident p "$choice") (as.map fun a => .block a.pos [.set p l' none a]) false)],
+        .ident p c)
+    else (h ++ [.decl p c none false (.app p (.ident p "$choiceAt") (l' :: as) false)], .set p l' none (.ident p c))
+  | some _ => (h ++ [.decl p c none false (.app p (.ident p "$choice") as false)], .set p l' op (withOld p o? (.ident p c)))
+
+/-- The clauses, with each choice the value of a binding: a clause that is a
+    choice gets a name of its own, and `set L = a | b` and `var X:t = a | b`
+    bind the choice first. -/
+def normClauses (cs : List SExpr) (site : String := "") : List SExpr :=
+  cs.flatMap fun c =>
+    let nm (p : Pos) : String := madeName "c" site p
+    match c with
+    | .app p (.ident _ "$choice") _ false => [.decl p (nm p) none false c]
+    | .set p l op rhs => match alts? rhs with
+      | some as => let (h, s) := setClauses p l op as site; h ++ [s]
+      | none => [c]
+    | .decl p x ty true rhs =>
+      if isChoice rhs then [.decl p (nm p) ty false rhs, .decl p x ty true (.ident p (nm p))] else [c]
+    -- (`set L = a | b` as the last clause of a macro, which names its value)
+    | .decl p x ty false (.set q l op rhs) => match alts? rhs with
+      | some as => let (h, s) := setClauses q l op as site; h ++ [.decl p x ty false s]
+      | none => [c]
+    | c => [c]
 
 /-- The same whenever evaluated, and typed by where they are (so they keep
     their expected type in place), so not bound to a name of their own:
@@ -372,51 +403,34 @@ structure LiftSt where
 abbrev LM := StateM LiftSt
 
 def LM.fresh (p : Pos) (k : String) : LM String :=
-  modifyGet fun s => (s!"${k}{sitePart s.site}{p.line}_{p.col}_{s.next}", { s with next := s.next + 1 })
+  modifyGet fun s => (s!"{madeName k s.site p}_{s.next}", { s with next := s.next + 1 })
+
+/-- Add `c` to the clauses lifted so far. -/
+def LM.push (c : SExpr) : LM Unit :=
+  modify fun s => { s with pre := s.pre.push c }
 
 def LM.bind (p : Pos) (k : String) (e : SExpr) (ty : Option STy := none) : LM SExpr := do
   let x ← LM.fresh p k
-  modify fun s => { s with pre := s.pre.push (.decl p x ty false e) }
+  LM.push (.decl p x ty false e)
   return .ident p x
 
+/-- `e` with `go` applied to each subexpression a rewrite descends into:
+    its `children`, except that a construction's field bindings give their
+    values only (so field names are kept), and a struct's field defaults
+    too. -/
+def descendM [Monad m] (go : SExpr → m SExpr) : SExpr → m SExpr
+  | .construct p n ts fs => return .construct p n ts (← fs.mapM fun
+      | .decl q fn t v x => do return .decl q fn t v (← go x)
+      | a => go a)
+  | .structDef p tps specs fs => return .structDef p tps specs (← fs.mapM fun (n, t, d, v) => do return (n, t, ← d.mapM go, v))
+  | e => e.mapChildrenM go
+
 /-- `e` with `f` applied top-down: where `f` gives a replacement, it is used
-    (and not descended into). Struct constructions' field names are kept. -/
+    (and not descended into); elsewhere `descendM` goes on. -/
 partial def mapE (f : SExpr → Option SExpr) (e : SExpr) : SExpr :=
   match f e with
   | some e' => e'
-  | none =>
-    let go := mapE f
-    match e with
-    | .str p ps => .str p (ps.map fun | .code c => .code (go c) | t => t)
-    | .app p g as b => .app p (go g) (as.map go) b
-    | .member p x m => .member p (go x) m
-    | .query p x => .query p (go x)
-    | .neg p x => .neg p (go x)
-    | .notE p x => .notE p (go x)
-    | .bin p o a b => .bin p o (go a) (go b)
-    | .cmp p a r => .cmp p (go a) (r.map fun (o, b) => (o, go b))
-    | .andE p a b => .andE p (go a) (go b)
-    | .orE p a b => .orE p (go a) (go b)
-    | .range p a b => .range p (go a) (go b)
-    | .tuple p es => .tuple p (es.map go)
-    | .block p es => .block p (es.map go)
-    | .arrayLit p es => .arrayLit p (es.map go)
-    | .optionLit p x => .optionLit p (go x)
-    | .logicLit p x => .logicLit p (go x)
-    | .ite p cs t e' => .ite p (cs.map go) (go t) (e'.map go)
-    | .forE p cs b => .forE p (cs.map go) (go b)
-    | .gen p x i src => .gen p x i (go src)
-    | .loop p b => .loop p (go b)
-    | .ret p x => .ret p (x.map go)
-    | .caseE p sc arms => .caseE p (go sc) (arms.map fun (pt, v) => (pt.map go, go v))
-    | .decl p n t v x => .decl p n t v (go x)
-    | .set p l o r => .set p (go l) o (go r)
-    | .construct p n ts fs => .construct p n ts (fs.map fun
-        | .decl q fn t v x => .decl q fn t v (go x)
-        | a => go a)
-    | .mapLit p kvs => .mapLit p (kvs.map fun (k, v) => (go k, go v))
-    | .structDef p tps specs fs => .structDef p tps specs (fs.map fun (n, t, d, v) => (n, t, d.map go, v))
-    | e => e
+  | none => Id.run (descendM (m := Id) (mapE f) e)
 
 /-- An exclusive choice (#314): at most one alternative's `guards` hold,
     and that alternative's value is its `rest`'s (a block). A `for`
@@ -426,6 +440,45 @@ partial def mapE (f : SExpr → Option SExpr) (e : SExpr) : SExpr :=
 def mkExcl (p : Pos) (alts : List (List SExpr × SExpr)) : SExpr :=
   .app p (.ident p "$excl") (alts.map fun (gs, r) => .app p (.ident p "$alt") [.block p gs, r] false) false
 
+/-- `if (cs) then t else u` as an exclusive choice of its two branches
+    (#314), its conditions taken once, first, by the binding of `k` that
+    comes with it: with no names bound, `k := if (cs) then 0 else 1`, each
+    branch guarded by `k = 0` or `k = 1`; otherwise `k := option{cs; the
+    names}`, the then branch's guards binding the names again from `k?`
+    (each with its written type, a `var` still one), the else branch's
+    `not k?`. -/
+def exclOfIf (p : Pos) (k : String) (cs : List SExpr) (t u : SExpr) : SExpr × SExpr :=
+  match boundIn cs with
+  | [] =>
+    let g (i : Int) : List SExpr := [.cmp p (.ident p k) [("=", .int p i)]]
+    (.decl p k none false (.ite p cs (.int p 0) (some (.int p 1))), mkExcl p [(g 0, t), (g 1, u)])
+  | names =>
+    let declOf (y : String) : Option STy × Bool :=
+      (cs.findSome? fun | .decl _ x yt m _ => if x == y then some (yt, m) else none | _ => none).getD (none, false)
+    let (val, binds) : SExpr × List SExpr := match names with
+      | [y] => let (yt, m) := declOf y; (.ident p y, [.decl p y yt m (.query p (.ident p k))])
+      | ys =>
+        let tt := k ++ "t"
+        (.tuple p (ys.map (SExpr.ident p ·)),
+          .decl p tt none false (.query p (.ident p k)) ::
+            ys.zipIdx.map fun (y, i) =>
+              let (yt, m) := declOf y
+              SExpr.decl p y yt m (.app p (.ident p tt) [.int p (i : Int)] false))
+    (.decl p k none false (.optionLit p (.block p (cs ++ [val]))),
+      mkExcl p [(binds, t), ([.notE p (.query p (.ident p k))], u)])
+
+/-- The `$joinOf` that goes with the choice of an `if`'s branches when no
+    type is written (`bifToExcl`): the `if`, and for `set L = if …` the
+    place `L`, from which the elaborator types the choice at the branches'
+    join. Not an alternative. -/
+def isJoinOf : SExpr → Bool
+  | .app _ (.ident _ "$joinOf") _ _ => true
+  | _ => false
+
+/-- The `if` and place of the `$joinOf` among a choice's alternatives. -/
+def joinOf? (as : List SExpr) : Option (SExpr × Option SExpr) :=
+  as.findSome? fun | .app _ (.ident _ "$joinOf") (i :: l) false => some (i, l.head?) | _ => none
+
 /-- `e` with its exclusive choices as choices (#314). Not inside a nested
     `for`, unless `deep`: its own clauses keep theirs, for it to compile as
     `if`s (`deep`, for an effect-free body, where a choice is as exact). -/
@@ -434,29 +487,20 @@ partial def exclToChoice (e : SExpr) (deep : Bool := false) : SExpr :=
   mapE (fun
     | f@(.forE ..) => if deep then none else some f
     | .app p (.ident q "$excl") alts false =>
-      let alts := alts.filter fun | .app _ (.ident _ "$joinOf") _ _ => false | _ => true
+      let alts := alts.filter (!isJoinOf ·)
       some (.app p (.ident q "$choice") (alts.map fun
         | .app _ (.ident _ "$alt") [.block bp gs, .block _ rs] false => .block bp ((gs ++ rs).map go)
         | .app _ (.ident _ "$alt") [.block bp gs, r] false => .block bp (gs.map go ++ [go r])
         | a => a) false)
     | _ => none) e
 
-/-- Whether some subexpression satisfies `pr` (through `mapE`). -/
+/-- Whether `e` or a subexpression of it (`SExpr.children`, at any depth)
+    satisfies `pr`. -/
 partial def anyE (pr : SExpr → Bool) (e : SExpr) : Bool :=
-  pr e || match e with
-    | .str _ ps => ps.any fun | .code c => anyE pr c | _ => false
-    | .app _ g as _ => anyE pr g || as.any (anyE pr)
-    | .member _ x _ | .query _ x | .neg _ x | .notE _ x | .optionLit _ x | .logicLit _ x | .loop _ x
-    | .gen _ _ _ x | .decl _ _ _ _ x => anyE pr x
-    | .bin _ _ a b | .andE _ a b | .orE _ a b | .range _ a b | .set _ a _ b => anyE pr a || anyE pr b
-    | .cmp _ a r => anyE pr a || r.any (anyE pr ·.2)
-    | .tuple _ es | .block _ es | .arrayLit _ es | .construct _ _ _ es => es.any (anyE pr)
-    | .ite _ cs t e' => cs.any (anyE pr) || anyE pr t || (e'.map (anyE pr)).getD false
-    | .forE _ cs b => cs.any (anyE pr) || anyE pr b
-    | .ret _ x => (x.map (anyE pr)).getD false
-    | .caseE _ sc arms => anyE pr sc || arms.any fun (pt, v) => ((pt.map (anyE pr)).getD false) || anyE pr v
-    | .mapLit _ kvs => kvs.any fun (k, v) => anyE pr k || anyE pr v
-    | _ => false
+  pr e || e.children.any (anyE pr)
+
+/-- Whether `e` has a `return` in it. -/
+def hasReturn : SExpr → Bool := anyE fun | .ret .. => true | _ => false
 
 /-- The statements of a body. -/
 def stmtsOf : SExpr → List SExpr
@@ -474,29 +518,38 @@ def markCalls (mv : List String) : SExpr → SExpr :=
 
 /-- The names a body binds (its locals), each where it is bound, struct
     fields and named arguments aside. -/
-partial def localDecls (e : SExpr) : List (String × Pos) :=
-  let rec go : SExpr → List (String × Pos)
-    | .app _ (.ident _ "$constructHints") _ false => []
-    | .decl p n _ _ x => (if n.startsWith "?" then [] else [(n, p)]) ++ go x
-    | .gen p x i src => (x :: i.toList).map (·, p) ++ go src
-    | .construct _ _ _ fs => fs.flatMap fun | .decl _ _ _ _ x => go x | a => go a
-    | .str _ ps => ps.flatMap fun | .code c => go c | _ => []
-    | .app _ g as _ => go g ++ as.flatMap go
-    | .member _ x _ | .query _ x | .neg _ x | .notE _ x | .optionLit _ x | .logicLit _ x | .loop _ x => go x
-    | .bin _ _ a b | .andE _ a b | .orE _ a b | .range _ a b | .set _ a _ b => go a ++ go b
-    | .cmp _ a r => go a ++ r.flatMap (go ·.2)
-    | .tuple _ es | .block _ es | .arrayLit _ es => es.flatMap go
-    | .ite _ cs t e' => cs.flatMap go ++ go t ++ ((e'.map go).getD [])
-    | .forE _ cs b => cs.flatMap go ++ go b
-    | .ret _ x => (x.map go).getD []
-    | .caseE _ sc arms => go sc ++ arms.flatMap fun (pt, v) => ((pt.map go).getD []) ++ go v
-    | .mapLit _ kvs => kvs.flatMap fun (k, v) => go k ++ go v
-    | _ => []
-  go e
+partial def localDecls : SExpr → List (String × Pos)
+  | .app _ (.ident _ "$constructHints") _ false => []
+  | .decl p n _ _ x => (if n.startsWith "?" then [] else [(n, p)]) ++ localDecls x
+  | .gen p x i src => (x :: i.toList).map (·, p) ++ localDecls src
+  -- (a construction's field bindings name its fields)
+  | .construct _ _ _ fs => fs.flatMap fun | .decl _ _ _ _ x => localDecls x | a => localDecls a
+  | e => e.children.flatMap localDecls
 
 /-- The names `e` binds, at any depth. -/
 partial def localsOf (e : SExpr) : List String :=
   ((localDecls e).map (·.1)).eraseDups
+
+/-- (#283) `$declNames` of the names `ds` that a scope moved elsewhere
+    declares, each where it does: as written, they are not in scope where
+    the scope is, as for its own (Verse has no shadowing); nothing for no
+    names. -/
+def declNames (p : Pos) (ds : List (String × Pos)) : List SExpr :=
+  if ds.isEmpty then [] else [.app p (.ident p "$declNames") (ds.map fun (n, q) => .ident q n) false]
+
+/-- The names an `if`'s conditions `cs` bind (`boundIn`), each where a
+    binding binds it (`p` otherwise). -/
+def condDecls (p : Pos) (cs : List SExpr) : List (String × Pos) :=
+  (boundIn cs).map fun n =>
+    (n, (cs.findSome? fun | .decl q x _ _ _ => if x == n then some q else none | _ => none).getD p)
+
+/-- `$shadows` of the first name of `names` (its condition's) that the
+    branch `t` binds too: shadowing, said where the branch binds it (#383's
+    review); nothing when there is none. -/
+def shadowsIn (p : Pos) (names : List String) (t : SExpr) : List SExpr :=
+  match (localDecls t).find? fun (n, _) => names.contains n with
+  | some (n, q) => [.app p (.ident p "$shadows") [.ident q n] false]
+  | none => []
 
 /-- Rename value references embedded in generated method-result types. -/
 partial def renameValueTypes (ren : List (String × String)) : STy → STy
@@ -543,7 +596,67 @@ def deferBodies (ss : List SExpr) : List SExpr :=
   ss.zipIdx.filterMap fun (s, i) =>
     if !isDefer s then none else
     let later := boundIn (ss.drop (i + 1))
-    some (if later.isEmpty then s else renameE (later.map fun n => (n, s!"$later'{n}")) s)
+    some (if later.isEmpty then s else renameE (renamedFor "$later" later) s)
+
+/-- Whether an exit in `e` can leave it: a `return`, or a `break` outside the
+    loops in `e` (marked `$refineBreak` in a branch lifted apart). -/
+partial def leaves : SExpr → Bool
+  | .ret .. | .brk _ | .app _ (.ident _ "$refineBreak") [] false => true
+  | .loop _ body => hasReturn body
+  | e => e.children.any leaves
+
+mutual
+/-- `e`, a statement or clause of a scope whose `defer:`s `ds` (in order)
+    `deferLast` moves after its value, with them pending for the exits in
+    it, as a scope's are for every `return` or `break` that leaves it (#283):
+    `$deferExits(ds, e)`, which the elaborator registers around `e` as it
+    does a `defer:` around the rest of its scope. So they run at each exit
+    that leaves `e`, after a `return`'s value and the cleanup of the scopes
+    inside `e`, wherever `e` is compiled to. A binding keeps its name, a
+    choice its alternatives (each with them), and the `if` of a choice of its
+    branches its shape (`deferExitsIf`). -/
+partial def deferExits (ds : List SExpr) (e : SExpr) : SExpr :=
+  if ds.isEmpty || !leaves e then e else
+  match e with
+  | .decl p x t v rhs => .decl p x t v (deferExits ds rhs)
+  | .gen p x i src => .gen p x i (deferExits ds src)
+  | .set p l op rhs => if leaves l then pending e else .set p l op (deferExits ds rhs)
+  | .app p f@(.ident _ "$choice") as false => .app p f (as.map (deferExits ds)) false
+  | .app p f@(.ident _ "$choiceAt") (l :: as) false => .app p f (l :: as.map (deferExits ds)) false
+  | .app p f@(.ident _ "$branchChoice") [i] false => .app p f [deferExitsIf ds i] false
+  | .app p f@(.ident _ "$branchChoiceAt") [l, i] false => .app p f [l, deferExitsIf ds i] false
+  | e => pending e
+where
+  pending (e : SExpr) : SExpr := .app e.pos (.ident e.pos "$deferExits") [.block e.pos ds, e] false
+
+/-- The `if` of a choice of its branches with the `defer:`s `ds` pending for
+    the exits in it (`deferExits`), its shape kept: in its conditions, a
+    scope of their own whose `defer:`s run where they end (`pendingIn`), in
+    each branch, and in the `else if`s of its chain. (A `defer:` among
+    conditions with a choice of their own is refused, #208: those are left
+    as they are, for the elaborator to refuse it.) -/
+partial def deferExitsIf (ds : List SExpr) : SExpr → SExpr
+  | .ite p cs t u =>
+    let (cs, own) := if cs.any liftsHere then (cs.map (deferExits ds), []) else pendingIn ds cs
+    .ite p (cs ++ if own.isEmpty then [] else [.block p (own ++ [.int p 0])]) (deferExits ds t)
+      (u.map (deferExitsIf ds))
+  | e => deferExits ds e
+
+/-- A scope's statements `ss` but its `defer:`s, each with those before it
+    pending for its exits, inside the `defer:`s `outer` of the scopes around
+    it (`deferExits`); and its `defer:`s in order (`deferBodies`), to run
+    where it ends. -/
+partial def pendingIn (outer ss : List SExpr) : List SExpr × List SExpr :=
+  let ds := deferBodies ss
+  ((ss.foldl (fun (out, n) s => if isDefer s then (out, n + 1)
+    else (out.push (deferExits outer (deferExits (ds.take n) s)), n)) (#[], 0)).1.toList, ds)
+end
+
+/-- `e` without the `defer:`s pending around it (`deferExits`), and how to
+    put them back. -/
+def underDeferExits : SExpr → SExpr × (SExpr → SExpr)
+  | .app q f@(.ident _ "$deferExits") [ds, e] false => (e, fun e' => .app q f [ds, e'] false)
+  | e => (e, id)
 
 /-- A scope's own `defer:` blocks after its value, as LANGUAGE.md lowers them
     (#283): its other statements, its value, a block of the `defer:`s in
@@ -554,14 +667,16 @@ def deferBodies (ss : List SExpr) : List SExpr :=
     value is bound to `dv` first, unless it reads nothing the block could
     change (`pureVal`), so it keeps the type its place gives it (`false`,
     `(Y, array{})`); a scope ending in a `defer:` has the block itself as
-    its value, as a block ending in one does. -/
+    its value, as a block ending in one does. Each statement has the
+    `defer:`s before it pending for its exits (`pendingIn`), so a `return`
+    or `break` that leaves the scope runs them as well. -/
 def deferLast (p : Pos) (dv : String) (ss : List SExpr) : List SExpr :=
-  match ss.getLast? with
+  if !ss.any isDefer then ss else
+  let (stmts, ds) := pendingIn [] ss
+  if ss.getLast?.any isDefer then stmts ++ [.block p ds] else
+  match stmts.getLast? with
   | some l =>
-    if !ss.any isDefer then ss else
-    let ds := deferBodies ss
-    let rest := ss.dropLast.filter (!isDefer ·)
-    if isDefer l then rest ++ [.block p ds] else
+    let rest := stmts.dropLast
     let run := SExpr.block p (ds ++ [.int p 0])
     let vals := ss.filterMap fun | .decl _ x _ false _ => some x | _ => none
     if pureVal vals l then rest ++ [run, l] else
@@ -583,7 +698,7 @@ partial def bindParams (isVal : String → Bool) (isField : String → String �
     (args : List SExpr) (unpacks : Bool := true) : LM Unit := do
   let (frees, pre) := pre.partition fun | .app _ (.ident _ "$freeNames") _ false => true | _ => false
   for fr in frees do
-    modify fun s => { s with pre := s.pre.push fr }
+    LM.push fr
   let (marks, pre) := pre.partition fun | .app _ (.ident _ "$tparams") _ false => true | _ => false
   let (pds, unpack) := (pre.take args.length, pre.drop args.length)
   match marks with
@@ -602,16 +717,16 @@ partial def bindParams (isVal : String → Bool) (isField : String → String �
       match pd with
       | .decl q x ty v _ => binds := binds.push (.decl q x ty v a'')
       | _ => pure ()
-    modify fun s => { s with pre := s.pre.push (.app p (.ident p "$params") (.block p binds.toList :: tps) false) }
+    LM.push (.app p (.ident p "$params") (.block p binds.toList :: tps) false)
   | _ =>
     for (pd, a) in pds.zip args do
       let a' ← liftE isVal isField a
       match pd with
-      | .decl q x ty v _ => modify fun s => { s with pre := s.pre.push (.decl q x ty v a') }
+      | .decl q x ty v _ => LM.push (.decl q x ty v a')
       | _ => pure ()
   if unpacks then
     for u in unpack do
-      modify fun s => { s with pre := s.pre.push u }
+      LM.push u
 
 /-- `e` with its liftable choices lifted (into the state's clauses). -/
 partial def liftE (isVal : String → Bool) (isField : String → String → Bool) (e : SExpr) : LM SExpr := do
@@ -639,10 +754,18 @@ partial def liftE (isVal : String → Bool) (isField : String → String → Boo
     -- consumer of that binding takes its values one at a time (a call
     -- whose clauses fail has none, and what its arguments did stays, as
     -- for one computed at the call)
-    modify fun s => { s with pre := s.pre.push (.app fn.pos (.ident fn.pos "$fxOf") [fn] false) }
+    LM.push (.app fn.pos (.ident fn.pos "$fxOf") [fn] false)
     bindParams isVal isField p pre args
     LM.bind p "c" (.app p (.ident q "$loop") [fn, ps, cls, tl] false)
   | .app p (.ident _ "$loop") _ false => LM.bind p "c" e
+  | .app _ (.ident _ "$deferExits") [.block _ ds, x] false =>
+    -- (#283) a scope's `defer:`s pending for the exits in `x`, `deferExits`:
+    -- and so for those in each clause lifted out of it
+    let saved := (← get).pre
+    modify fun s => { s with pre := #[] }
+    let x' ← liftE isVal isField x
+    modify fun s => { s with pre := saved ++ s.pre.map (deferExits ds) }
+    return deferExits ds x'
   | .app _ (.ident _ "$inline") (_ :: .block _ tmpl :: args) false =>
     -- a call of a function with several values (#235): the arguments, in
     -- order, into its (renamed) parameters, then its body's clauses, then
@@ -654,24 +777,20 @@ partial def liftE (isVal : String → Bool) (isField : String → String → Boo
     -- (the callee's declared effects, which the caller must allow, as at a
     -- call: noted by `$fxOf`, since no call is left)
     if let .app _ _ (fn :: _) _ := e then
-      modify fun s => { s with pre := s.pre.push (.app fn.pos (.ident fn.pos "$fxOf") [fn] false) }
+      LM.push (.app fn.pos (.ident fn.pos "$fxOf") [fn] false)
     bindParams isVal isField e.pos (marks ++ tmpl.take args.length) args (unpacks := false)
     match body.getLast? with
     | some (.decl q r _ _ _) =>
       let saved := (← get).site
       let inlineSaved := (← get).inlineSite
-      modify fun s => { s with
-        site := r, inlineSite := r,
-        pre := s.pre.push (.app q (.ident q "$inlineScope") [.str q [.text r]] false) }
+      modify fun s => { s with site := r, inlineSite := r }
+      LM.push (.app q (.ident q "$inlineScope") [.str q [.text r]] false)
       -- (the body's own names are values too: its parameters and locals)
       let bound := boundIn tmpl
       let isVal' := fun n => isVal n || bound.contains n
-      for c in body do
-        for c' in normClauses (← liftClauseM isVal' isField c) r do
-          modify fun s => { s with pre := s.pre.push c' }
-      modify fun s => { s with
-        site := saved, inlineSite := inlineSaved,
-        pre := s.pre.push (.app q (.ident q "$inlineScopeEnd") [] false) }
+      for c in body do liftInto isVal' isField c
+      modify fun s => { s with site := saved, inlineSite := inlineSaved }
+      LM.push (.app q (.ident q "$inlineScopeEnd") [] false)
       return .ident q r
     -- (no template: only seeing whether a body has several values)
     | _ => LM.bind e.pos "c" e
@@ -694,29 +813,19 @@ partial def liftE (isVal : String → Bool) (isField : String → String → Boo
       | _, [h] => h
       | _, _ => f
     return .app p f' args' br
-  | .bin p o a b => match ← liftOps isVal isField [a, b] with
-    | [a', b'] => return .bin p o a' b'
-    | _ => return e
+  -- (operands evaluated left to right, once each, `liftOps`: those of
+  -- arithmetic, member access, `?`, tuples, arrays, maps and string
+  -- interpolation; #283, a range's bounds, so a `for`'s range is a
+  -- generator after them)
+  | .bin .. | .range .. | .member .. | .query .. | .neg .. | .tuple .. | .arrayLit .. | .str .. | .mapLit .. =>
+    return e.withChildren (← liftOps isVal isField e.children)
+  -- (#283) `A and B`: its operands in order, each a block, as each is a scope
+  -- of its own: `A` a clause, then `B` the value
+  | .andE _ a b =>
+    liftInto isVal isField (.block a.pos [a])
+    liftE isVal isField (.block b.pos [b])
+  | .orE .. => liftE isVal isField (orIf (← get).site e)
   | .cmp p a rest => liftCmp isVal isField p (a :: rest.map (·.2)) (rest.map (·.1))
-  | .member p x m => return .member p (← liftE isVal isField x) m
-  | .query p x => return .query p (← liftE isVal isField x)
-  | .neg p x => return .neg p (← liftE isVal isField x)
-  | .tuple p es => return .tuple p (← liftOps isVal isField es)
-  | .arrayLit p es => return .arrayLit p (← liftOps isVal isField es)
-  | .str p ps =>
-    let codes := ps.filterMap fun | .code c => some c | .text _ => none
-    let codes' ← liftOps isVal isField codes
-    let rec put : List SPart → List SExpr → List SPart
-      | .code _ :: ps, c :: cs => .code c :: put ps cs
-      | p :: ps, cs => p :: put ps cs
-      | [], _ => []
-    return .str p (put ps codes')
-  | .mapLit p kvs =>
-    let flat ← liftOps isVal isField (kvs.flatMap fun (k, v) => [k, v])
-    let rec pairs : List SExpr → List (SExpr × SExpr)
-      | k :: v :: r => (k, v) :: pairs r
-      | _ => []
-    return .mapLit p (pairs flat)
   | .construct p n ts fs =>
     -- (#283) a construction's field values, as a call's arguments, in the
     -- order it evaluates them: its type's declaration order, not as written
@@ -776,31 +885,22 @@ partial def liftE (isVal : String → Bool) (isField : String → String → Boo
     let tag ← LM.fresh p "b"
     -- (its names are not in scope where it is, as for a block's own,
     -- `$declNames`: Verse has no shadowing)
-    let decls := localDecls e
-    if !decls.isEmpty then
-      modify fun s => { s with pre := s.pre.push (.app p (.ident p "$declNames") (decls.map fun (n, q) => .ident q n) false) }
-    -- (`'` sets the name written apart, `shownName`)
-    let ren := (localsOf e).map fun n => (n, s!"{tag}'{n}")
-    let ss := stmtsOf (renameE ren (.block p ssD))
+    for d in declNames p (localDecls e) do LM.push d
+    let ss := stmtsOf (renameE (renamedFor tag (localsOf e)) (.block p ssD))
     let bound := boundIn ss
     let isVal' := fun n => isVal n || bound.contains n
-    let site := (← get).site
     let (init, last) := (ss.dropLast, ss.getLast?)
-    for c in init do
-      for c' in normClauses (← liftClauseM isVal' isField c) site do
-        modify fun s => { s with pre := s.pre.push c' }
+    for c in init do liftInto isVal' isField c
     match last with
     | some c@(.decl q x _ _ _) =>
-      for c' in normClauses (← liftClauseM isVal' isField c) site do
-        modify fun s => { s with pre := s.pre.push c' }
+      liftInto isVal' isField c
       return .ident q x
     -- (#283) a `set` with something to lift, as the value: bound to a name
     -- of its own, as `X := (set …)` is
     | some l@(.set q sl _ r) =>
       if !(pathHas hasLiftable sl || hasLiftable r) then liftE isVal' isField l else
       let x ← LM.fresh q "s"
-      for c' in normClauses (← liftClauseM isVal' isField (.decl q x none false l)) site do
-        modify fun s => { s with pre := s.pre.push c' }
+      liftInto isVal' isField (.decl q x none false l)
       return .ident q x
     | some l => liftE isVal' isField l
     | none => return .tuple p []
@@ -834,14 +934,14 @@ partial def liftCmp (isVal : String → Bool) (isField : String → String → B
       hs := hs.push (← if stable isVal o then pure o else LM.bind o.pos "t" o)
     let h0 := hs[0]!
     if j ≥ 2 then
-      modify fun s => { s with pre := s.pre.push (.cmp p h0 ((syms.take (j - 1)).zip (hs.toList.drop 1))) }
+      LM.push (.cmp p h0 ((syms.take (j - 1)).zip (hs.toList.drop 1)))
     let oj ← liftE isVal isField os[j]!
     let rest := oj :: os.drop (j + 1)
     let r ← if hasLiftable oj then pure (.cmp p hs.back! ((syms.drop (j - 1)).zip rest))
       else liftCmp isVal isField p (hs.back! :: rest) (syms.drop (j - 1))
     if j == 1 then return r
     -- (the rest checked as a clause; the chain's value is its first operand)
-    modify fun s => { s with pre := s.pre.push r }
+    LM.push r
     return h0
 
 /-- Operands evaluated left to right: the liftable choices of each are
@@ -862,6 +962,11 @@ partial def liftOps (isVal : String → Bool) (isField : String → String → B
       else out := out.push e
     return out.toList
 
+/-- The clause `c` lifted into the state's clauses, each choice the value of
+    a binding (`normClauses`), named for the current site. -/
+partial def liftInto (isVal : String → Bool) (isField : String → String → Bool) (c : SExpr) : LM Unit := do
+  for c' in normClauses (← liftClauseM isVal isField c) (← get).site do LM.push c'
+
 /-- `liftClause` in the current state (an inlined body's clauses, #235). -/
 partial def liftClauseM (isVal : String → Bool) (isField : String → String → Bool) (c : SExpr) :
     LM (List SExpr) := do
@@ -878,48 +983,59 @@ partial def liftClauseM (isVal : String → Bool) (isField : String → String �
     for c in h do out := out ++ (← liftClauseM isVal isField c)
     return out
   let site := (← get).site
+  -- (#283) a binding's or a `set`'s `A or B` as its `if`, which is then
+  -- lifted as one in that place, with no binding of its own
+  let c : SExpr := match c with
+    | .decl p x ty v rhs => .decl p x ty v (orIf site rhs)
+    | .set p l op rhs => .set p l op (orIf site rhs)
+    | c => c
+  -- (a `set`'s path's indices bound, then for `op=` its old value, as `set`
+  -- evaluates them before the new value, `setPrefix`; those clauses lifted
+  -- in turn when the indices have a choice or a call with several values
+  -- to lift, #283)
+  let setPrefixM (q : Pos) (l : SExpr) (op : Option String) : LM (List SExpr × Option String × SExpr) := do
+    let (h, o?, l') := setPrefix q l op site
+    return (← if pathHas hasLiftable l then liftAll h else pure h, o?, l')
+  -- (`set L op= r` with `r`'s code lifted, after `L`'s prefix: `wrap` puts
+  -- the `set` in its place)
+  let liftSet (q : Pos) (l : SExpr) (op : Option String) (r : SExpr) (wrap : SExpr → SExpr) :
+      LM (List SExpr) := do
+    let (h, o?, l') ← setPrefixM q l op
+    return h ++ (← run do return wrap (.set q l' op (withOld q o? (← liftE isVal isField r))))
+  -- (`set L = i` with the `if` lifted whole, #235, #283: after `L`'s
+  -- prefix, bound to a name of its own at `L`'s type, then set)
+  let setIf (p : Pos) (l i : SExpr) : LM (List SExpr) := do
+    let (h, _, l') ← setPrefixM p l none
+    let n := madeName "c" site p
+    return h ++ [.decl p n none false (.app p (.ident p "$branchChoiceAt") [l', i] false), .set p l' none (.ident p n)]
   -- (#283) a `set` with a choice or a call with several values in its
   -- path's indices: each index bound, lifted, in order, then for `op=` the
   -- old value, then the new one's code, as `set` evaluates (before the
   -- cases below, which take the path as it is)
   if let .set p l op rhs := c then
     if pathHas hasLiftable l then
-      match alts? rhs, op with
-      | some as, _ =>
-        let (h, s) := setClauses p l op as p site
+      match alts? rhs with
+      | some as =>
+        let (h, s) := setClauses p l op as site
         return (← liftAll h) ++ [s]
-      | none, none =>
-        if liftsAsIf rhs then
-          -- (an `if` lifted whole, #235, #283: at `L`'s type, as below)
-          let (h, _, l') := setPrefix p l none site
-          let n := s!"$c{sitePart site}{p.line}_{p.col}"
-          return (← liftAll h) ++ [.decl p n none false (.app p (.ident p "$branchChoiceAt") [l', rhs] false),
-            .set p l' none (.ident p n)]
-        let (h, _, l') := setPrefix p l none site
-        return (← liftAll h) ++ (← run do return .set p l' none (← liftE isVal isField rhs))
-      | none, some _ =>
-        let (h, o?, l') := setPrefix p l op site
-        return (← liftAll h) ++ (← run do return .set p l' op (withOld p o? (← liftE isVal isField rhs)))
+      | none =>
+        if op.isNone && liftsAsIf rhs then return ← setIf p l rhs
+        return ← liftSet p l op rhs id
+  -- (an `if` with choices in its branches as a binding's value, lifted
+  -- whole: at its written type, #235, a `var`'s through a name of its own;
+  -- as a `set`'s, at `L`'s. Otherwise it is lifted as any value is, below.)
+  match c with
+  | .decl p x ty false i@(.ite ..) =>
+    if liftsAsIf i then return [.decl p x ty false (.app p (.ident p "$branchChoice") [i] false)]
+  | .decl p x ty true i@(.ite ..) =>
+    if liftsAsIf i then
+      let n := madeName "c" site p
+      return [.decl p n ty false (.app p (.ident p "$branchChoice") [i] false), .decl p x ty true (.ident p n)]
+  | .set p l none i@(.ite ..) =>
+    if liftsAsIf i then return ← setIf p l i
+  | _ => pure ()
   match c with
   | .app _ (.ident _ "$choice") _ false => return [c]
-  -- (an `if` with choices in its branches as a binding's value: at its
-  -- written type, #235)
-  | .decl p x ty false rhs@(.ite ..) =>
-    if liftsAsIf rhs then return [.decl p x ty false (.app p (.ident p "$branchChoice") [rhs] false)] else
-      if !hasLiftable rhs then return [c] else run do return .decl p x ty false (← liftE isVal isField rhs)
-  | .decl p x ty true rhs@(.ite ..) =>
-    if liftsAsIf rhs then
-      let n := s!"$c{sitePart site}{p.line}_{p.col}"
-      return [.decl p n ty false (.app p (.ident p "$branchChoice") [rhs] false), .decl p x ty true (.ident p n)]
-    else if !hasLiftable rhs then return [c] else run do return .decl p x ty true (← liftE isVal isField rhs)
-  | .set p l none rhs@(.ite ..) =>
-    if liftsAsIf rhs then
-      let (h, _, l') := setPrefix p l none site
-      let n := s!"$c{sitePart site}{p.line}_{p.col}"
-      return h ++ [.decl p n none false (.app p (.ident p "$branchChoiceAt") [l', rhs] false), .set p l' none (.ident p n)]
-    else if !hasLiftable rhs then return [c] else
-      let (h, o?, l') := setPrefix p l none site
-      return h ++ (← run do return .set p l' none (withOld p o? (← liftE isVal isField rhs)))
   -- (`set L = …` as the last clause of a macro, which names its value)
   | .decl p x ty v (.set q l op r) =>
     if pathHas hasLiftable l then
@@ -927,24 +1043,16 @@ partial def liftClauseM (isVal : String → Bool) (isField : String → String �
       -- indices, as for a `set` clause
       match alts? r with
       | some as =>
-        let (h, s) := setClauses q l op as q site
+        let (h, s) := setClauses q l op as site
         return (← liftAll h) ++ [.decl p x ty v s]
-      | none =>
-        let (h, o?, l') := setPrefix q l op site
-        return (← liftAll h) ++ (← run do return .decl p x ty v (.set q l' op (withOld q o? (← liftE isVal isField r))))
+      | none => liftSet q l op r (.decl p x ty v ·)
     else
-    if isChoice r || !hasLiftable r then return [c] else
-      let (h, o?, l') := setPrefix q l op site
-      return h ++ (← run do return .decl p x ty v (.set q l' op (withOld q o? (← liftE isVal isField r))))
+    if isChoice r || !hasLiftable r then return [c] else liftSet q l op r (.decl p x ty v ·)
   | .decl p x ty v rhs =>
     if isChoice rhs || !hasLiftable rhs then return [c] else run do
       return .decl p x ty v (← liftE isVal isField rhs)
   | .set p l op rhs =>
-    if isChoice rhs || !hasLiftable rhs then return [c] else
-      -- (the path's indices, then for `op=` the old value, then the
-      -- lifted code, as `set` evaluates)
-      let (h, o?, l') := setPrefix p l op site
-      return h ++ (← run do return .set p l' op (withOld p o? (← liftE isVal isField rhs)))
+    if isChoice rhs || !hasLiftable rhs then return [c] else liftSet p l op rhs id
   | .gen p x i src =>
     if !hasLiftable src then return [c] else run do return .gen p x i (← liftE isVal isField src)
   | e => if !hasLiftable e then return [c] else run (liftE isVal isField e)
@@ -981,63 +1089,37 @@ def bifToExcl (c : SExpr) : List SExpr :=
     -- path of the one around it)
     -- Generated dispatch cases share a source position and result name;
     -- their distinct condition binders also distinguish these temporaries.
-    let k := s!"{x}$k{ip.line}_{ip.col}" ++ (boundIn cs).headD ""
+    let names := boundIn cs
+    let k := s!"{x}$k{ip.line}_{ip.col}" ++ names.headD ""
     -- (#283) a block as a branch: its names renamed for it, `$…'N`, as the
     -- clauses after the `if` follow it in its path; as written, not in
     -- scope where the `if` is (`$declNames`), as for any block; its
     -- `defer:`s after its value, `deferLast`, so they run as each of its
     -- values leaves it, in a `for`'s path or a choice's alternative
-    let blockNames (b : SExpr) : List SExpr := match b with
-      | .block .. => match localDecls b with
-        | [] => []
-        | ds => [.app ip (.ident ip "$declNames") (ds.map fun (n, q) => .ident q n) false]
+    -- (with the `defer:`s of a scope around the `if` pending for a branch's
+    -- exits, `deferExits`, around it)
+    let blockNames (b : SExpr) : List SExpr := match (underDeferExits b).1 with
+      | b@(.block ..) => declNames ip (localDecls b)
       | _ => []
-    let renameBlock (side : String) (b : SExpr) : SExpr := match b with
-      | .block .. => match renameE ((localsOf b).map fun n => (n, s!"${k}{side}'{n}")) b with
-        | .block bp ss => .block bp (deferLast bp s!"${k}{side}$dv" ss)
-        | b' => b'
-      | b => b
-    let checks := blockNames t ++ blockNames u
-    let t0 := t
-    let t := renameBlock "t" t
-    let u := renameBlock "u" u
-    match boundIn cs with
-    | [] =>
-      let g (i : Int) : List SExpr := [.cmp ip (.ident ip k) [("=", .int ip i)]]
-      checks ++ [.decl ip k none false (.ite ip cs (.int ip 0) (some (.int ip 1))),
-       .decl p x ty false (withJoin (mkExcl ip [(g 0, t), (g 1, u)]))]
-    | names =>
-      -- (the names the condition binds, for its branch: through an option,
-      -- each with its written type, a `var` still one; renamed for the
-      -- branch, `$…'N`, since the clauses after the `if` follow it in its
-      -- path, where they are not in scope)
-      let ρ := names.map fun y => (y, s!"${k}'{y}")
-      -- (as written, they are not in scope where the `if` is: no shadowing)
-      let written : SExpr := .app ip (.ident ip "$declNames") (names.map fun y =>
-        .ident ((cs.findSome? fun | .decl q x _ _ _ => if x == y then some q else none | _ => none).getD ip) y) false
-      let cs := cs.map (renameE ρ)
-      let t := renameE ρ t
-      let names := names.map fun y => (ρ.lookup y).getD y
-      let declOf (y : String) : Option STy × Bool :=
-        (cs.findSome? fun | .decl _ x t m _ => if x == y then some (t, m) else none | _ => none).getD (none, false)
-      let (val, binds) : SExpr × List SExpr := match names with
-        | [y] => let (t, m) := declOf y; (.ident ip y, [.decl ip y t m (.query ip (.ident ip k))])
-        | ys =>
-          let tt := k ++ "t"
-          (.tuple ip (ys.map (SExpr.ident ip ·)),
-            .decl ip tt none false (.query ip (.ident ip k)) ::
-              ys.zipIdx.map fun (y, i) =>
-                let (t, m) := declOf y
-                SExpr.decl ip y t m (.app ip (.ident ip tt) [.int ip (i : Int)] false))
-      -- (a then-block that binds a name its condition binds: shadowing,
-      -- said where the block binds it, #383's review)
-      let shadows : List SExpr := match (match t0 with
-          | .block .. => (localDecls t0).find? fun (n, _) => (ρ.lookup n).isSome
-          | _ => none) with
-        | some (n, q) => [.app ip (.ident ip "$shadows") [.ident q n] false]
-        | none => []
-      shadows ++ checks ++ [written, .decl ip k none false (.optionLit ip (.block ip (cs ++ [val]))),
-       .decl p x ty false (withJoin (mkExcl ip [(binds, t), ([.notE ip (.query ip (.ident ip k))], u)]))]
+    let renameBlock (side : String) (b : SExpr) : SExpr :=
+      let (b, pending) := underDeferExits b
+      pending <| match b with
+        | .block .. => match renameE (renamedFor s!"${k}{side}" (localsOf b)) b with
+          | .block bp ss => .block bp (deferLast bp s!"${k}{side}$dv" ss)
+          | b' => b'
+        | b => b
+    -- (the names the condition binds, for its branch, `exclOfIf`; renamed
+    -- for the branch, `$…'N`, since the clauses after the `if` follow it in
+    -- its path, where they are not in scope; as written, not in scope where
+    -- the `if` is either: no shadowing)
+    let ρ := renamedFor s!"${k}" names
+    let written := declNames ip (condDecls ip cs)
+    -- (a then-block that binds a name its condition binds: shadowing)
+    let shadows := match (underDeferExits t).1 with
+      | t@(.block ..) => shadowsIn ip names t
+      | _ => []
+    let (sel, excl) := exclOfIf ip k (cs.map (renameE ρ)) (renameE ρ (renameBlock "t" t)) (renameBlock "u" u)
+    shadows ++ blockNames t ++ blockNames u ++ written ++ [sel, .decl p x ty false (withJoin excl)]
   | c => [c]
 
 /-- Apply a consumer inside each selected branch. Condition names stay in
@@ -1046,13 +1128,9 @@ partial def consumeBranches (i : SExpr) (site : String) (consume : SExpr → SEx
   match i with
   | .ite p cs t (some u) =>
     let names := boundIn cs
-    let ren := names.map fun n => (n, s!"${site}{p.line}_{p.col}'{n}")
-    let written : List SExpr := if names.isEmpty then [] else
-      [.app p (.ident p "$declNames") (names.map fun n =>
-        .ident ((cs.findSome? fun | .decl q x _ _ _ => if x == n then some q else none | _ => none).getD p) n) false]
-    let shadows : List SExpr := match (localDecls t).find? fun (n, _) => names.contains n with
-      | some (n, q) => [.app p (.ident p "$shadows") [.ident q n] false]
-      | none => []
+    let ren := renamedFor s!"${site}{p.line}_{p.col}" names
+    let written := declNames p (condDecls p cs)
+    let shadows := shadowsIn p names t
     .block p (written ++ shadows ++ [.ite p (cs.map (renameE ren)) (consume (renameE ren t))
       (some (consumeBranches u (site ++ "e") consume))])
   | e => consume e
@@ -1084,7 +1162,7 @@ def prepare (cs : List SExpr) (isVal : String → Bool := fun _ => false)
         -- elaborator to type the choice at the branches' join, `elabOneGo`)
         (bifToExcl c).map fun
           | .decl p x ty v e@(.app _ (.ident _ "$excl") as false) =>
-            let joins := as.filter fun | .app _ (.ident _ "$joinOf") _ _ => true | _ => false
+            let joins := as.filter isJoinOf
             match exclToChoice e with
             | .app q f cs b => .decl p x ty v (.app q f (cs ++ joins) b)
             | e' => .decl p x ty v e'
@@ -1103,14 +1181,10 @@ def inlineScopesAfter (initial : List String) (cs : List SExpr) : List String :=
 /-- Whether the clauses have a choice for their failure context to take. -/
 def hasChoice (cs : List SExpr) (fieldOrder : String → FieldOrder := fun _ => {}) : Bool :=
   (prepare cs (fieldOrder := fieldOrder)).any (fun c => (binding? c).isSome) ||
-    -- (#283) or something to lift where a clause takes it (`liftsHere`): an
-    -- inlined call with no choice in it, where an overloaded one's
-    -- overload has one value, still has its clauses to lift
-    cs.any fun
-      | .decl _ _ _ _ rhs => hasLiftable rhs
-      | .set _ l _ rhs => hasLiftable rhs || pathHas hasLiftable l
-      | .gen _ _ _ src => hasLiftable src
-      | e => hasLiftable e
+    -- (#283) or something to lift where a clause takes it: an inlined call
+    -- with no choice in it, where an overloaded one's overload has one
+    -- value, still has its clauses to lift
+    cs.any liftsHere
 
 /-- `first{cs}`, the last clause naming its value. -/
 def firstOfClauses (p : Pos) (cs : List SExpr) : SExpr :=
@@ -1166,22 +1240,9 @@ partial def namesUsed (e : SExpr) : List String :=
   let rec go : SExpr → List String
     | .app _ (.ident _ "$constructHints") _ false => []
     | .ident _ n => [n]
-    | .decl _ _ _ _ x => go x
-    | .gen _ _ _ src => go src
-    | .construct _ _ _ fs => fs.flatMap fun | .decl _ _ _ _ x => go x | a => go a
-    | .str _ ps => ps.flatMap fun | .code c => go c | _ => []
-    | .app _ g as _ => go g ++ as.flatMap go
-    | .member _ x _ | .query _ x | .neg _ x | .notE _ x | .optionLit _ x | .logicLit _ x | .loop _ x => go x
-    | .bin _ _ a b | .andE _ a b | .orE _ a b | .range _ a b | .set _ a _ b => go a ++ go b
-    | .cmp _ a r => go a ++ r.flatMap (go ·.2)
-    | .tuple _ es | .block _ es | .arrayLit _ es => es.flatMap go
-    | .ite _ cs t e' => cs.flatMap go ++ go t ++ ((e'.map go).getD [])
-    | .forE _ cs b => cs.flatMap go ++ go b
-    | .ret _ x => (x.map go).getD []
-    | .caseE _ sc arms => go sc ++ arms.flatMap fun (pt, v) => ((pt.map go).getD []) ++ go v
-    | .mapLit _ kvs => kvs.flatMap fun (k, v) => go k ++ go v
+    -- (a struct's field defaults, which `children` leaves out)
     | .structDef _ _ _ fs => fs.flatMap fun (_, _, d, _) => (d.map go).getD []
-    | _ => []
+    | e => e.children.flatMap go
   (go e).eraseDups
 
 /-- Whether a written type mentions one of the names `tps`. -/
@@ -1244,23 +1305,6 @@ partial def checkBody : SExpr → SExpr :=
         | a :: rest => .ite p [.query p (.ident p "false")] (checkBody a) (some (chain rest))
       some (chain as)
     | _ => none
-
-/-- A statement where a choice or a call of a function of `mv` (marked) is
-    lifted into the body's own clauses: the body then has several values. -/
-def liftsHere (c : SExpr) : Bool :=
-  match c with
-  | .decl _ _ _ _ rhs => hasLiftable rhs
-  | .set _ l _ rhs => hasLiftable rhs || pathHas hasLiftable l
-  | .gen _ _ _ src => hasLiftable src
-  | e => hasLiftable e
-
-/-- Whether the body writes a type that mentions one of `tps`: in a
-    binding's type or a construction's type arguments. -/
-partial def writesTypes (tps : List String) (e : SExpr) : Bool :=
-  anyE (fun
-    | .decl _ _ (some t) _ _ => styMentions tps t
-    | .construct _ n ts _ => tps.contains n || ts.any (styMentions tps)
-    | _ => false) e
 
 /-- A written type with the names of `ρ` renamed. -/
 partial def styRename (ρ : List (String × String)) : STy → STy
@@ -1331,12 +1375,157 @@ partial def loopTailOK (plain groupOK : SExpr → Bool) : SExpr → Bool
   | .ite _ cs t (some u) => cs.all plain && loopTailOK plain groupOK t && loopTailOK plain groupOK u
   | e => groupOK e
 
+/-- A recursive tail with each `if` in a branch's place that has no choice
+    and no call of the group in it (`plain`, no returning path) made a block:
+    a value, whose conditions run with it and are undone with it, as any
+    value's code is, not a branch the invocation selects once for all its
+    values. The tail's own `if` stays its branch. -/
+partial def plainIfValues (plain : SExpr → Bool) : SExpr → SExpr
+  | .app p (.ident q "$returnTail") [.block r ss] false =>
+    let (pre, value) := loopBlockParts r ss
+    .app p (.ident q "$returnTail") [.block r (pre ++ [leaf value])] false
+  | .ite p cs t u => .ite p cs (leaf t) (u.map leaf)
+  | e => e
+where
+  leaf (e : SExpr) : SExpr := match e with
+    | .ite p .. =>
+      if plain e && !anyE (fun | .app _ (.ident _ "$returnTail") _ false => true | _ => false) e then .block p [e]
+      else plainIfValues plain e
+    | e => plainIfValues plain e
+
+/-- Visit the value leaves of a recursive tail, keeping its path scopes as
+    they are (`mapLoopTail` puts each behind a taking boundary instead). -/
+partial def mapLoopLeaves (leaf : SExpr → SExpr) : SExpr → SExpr
+  | .app p (.ident q "$returnTail") [.block r ss] false =>
+    let (pre, value) := loopBlockParts r ss
+    .app p (.ident q "$returnTail") [.block r (pre ++ [mapLoopLeaves leaf value])] false
+  | .ite p cs t u => .ite p cs (mapLoopLeaves leaf t) (u.map (mapLoopLeaves leaf))
+  | e => leaf e
+
+/-- Literals and the function's own names (`own`: its parameters and
+    locals), which read the same after a call as before it, since a callee
+    cannot change its caller's names. Not a field, which the call may change,
+    nor a constant, which may run code where it is read. -/
+partial def inert (own : List String) : SExpr → Bool
+  | .int .. | .char .. | .char32 .. | .float .. => true
+  | .ident _ n => own.contains n
+  | .str _ ps => ps.all fun | .text _ => true | .code _ => false
+  | .neg _ e => inert own e
+  | .tuple _ es | .arrayLit _ es => es.all (inert own)
+  | _ => false
+
+/-- (#283) An alternative that is a call of the recursive group (`isCall`)
+    with code after it: the call; the alternative with the name `h` in the
+    call's place, its return frame, which runs on each of the call's values;
+    and the clauses that run before the call, once (its prefix). What is
+    evaluated before the call is kept in place when it reads the same after
+    it (`inert`), else bound to a name in the prefix (`$pre…`), so it is
+    still read once, before the call: a field, a constant, a call of a
+    function. Everything after the call is `plain`. -/
+partial def frameOf? (isCall plain inert : SExpr → Bool) (h : String) (e : SExpr) :
+    Option (SExpr × SExpr × List SExpr) :=
+  let go := frameOf? isCall plain inert h
+  -- (the operand with the call: those before it bound first unless inert,
+  -- those after it plain)
+  let inList (es : List SExpr) : Option (SExpr × List SExpr × List SExpr) := do
+    let i ← es.findIdx? (!plain ·)
+    let (c, ei, pre) ← go es[i]!
+    guard ((es.drop (i + 1)).all plain)
+    let (before, bound) := (es.take i).foldr (fun x (acc, ds) =>
+      if inert x then (x :: acc, ds) else
+        let t := s!"$pre{x.pos.line}_{x.pos.col}"
+        (.ident x.pos t :: acc, .decl x.pos t none false x :: ds)) ([], [])
+    return (c, before ++ [ei] ++ es.drop (i + 1), bound ++ pre)
+  if isCall e then some (e, .ident e.pos h, []) else
+  match e with
+  | .bin p o a b => do
+    let (c, as, pre) ← inList [a, b]
+    return (c, .bin p o as[0]! as[1]!, pre)
+  | .neg p a => do let (c, a', pre) ← go a; return (c, .neg p a', pre)
+  | .member p a m => do let (c, a', pre) ← go a; return (c, .member p a' m, pre)
+  | .cmp p a rest => do
+    guard (rest.all (plain ·.2))
+    let (c, a', pre) ← go a
+    return (c, .cmp p a' rest, pre)
+  | .tuple p es => do let (c, es', pre) ← inList es; return (c, .tuple p es', pre)
+  | .arrayLit p es => do let (c, es', pre) ← inList es; return (c, .arrayLit p es', pre)
+  | .app p f@(.ident ..) as br => do
+    guard (as.all fun | .decl .. => false | _ => true)
+    let (c, as', pre) ← inList as
+    return (c, .app p f as' br, pre)
+  -- (an index, or a call of a value: its head first)
+  | .app p f as br => do
+    guard (as.all plain)
+    let (c, f', pre) ← go f
+    return (c, .app p f' as br, pre)
+  | .str p ps => do
+    let codes := ps.filterMap fun | .code c => some c | .text _ => none
+    let (c, codes', pre) ← inList codes
+    let (ps', _) := ps.foldl (fun (acc, rest) part => match part, rest with
+      | .code _, x :: xs => (acc ++ [SPart.code x], xs)
+      | part, xs => (acc ++ [part], xs)) (([] : List SPart), codes')
+    return (c, .str p ps', pre)
+  -- (a block: its clauses before the one with the call run before the call)
+  | .block p ss => do
+    let i ← ss.findIdx? (!plain ·)
+    let rest := ss.drop (i + 1)
+    guard (rest.all plain)
+    match ss[i]! with
+    | .decl q x t false rhs =>
+      let (c, rhs', pre) ← go rhs
+      return (c, .block p (.decl q x t false rhs' :: rest), ss.take i ++ pre)
+    | s =>
+      let (c, s', pre) ← go s
+      return (c, .block p (s' :: rest), ss.take i ++ pre)
+  | _ => none
+
+/-- (#283) A tail with return frames: each alternative that is a call of the
+    group with code after it (`frameOf?`) as `$then(call, h, frame)`. -/
+def framedTail (isRec plain inert : SExpr → Bool) (tail : SExpr) : SExpr :=
+  mapLoopLeaves (fun v =>
+    let frame (a : SExpr) : SExpr := if isRec a || plain a then a else
+      let h := s!"$frame{a.pos.line}_{a.pos.col}"
+      match frameOf? isRec plain inert h a with
+      | some (c, k, []) => .app a.pos (.ident a.pos "$then") [c, .ident a.pos h, k] false
+      -- (with the clauses that run before the call, its prefix)
+      | some (c, k, pre) => .app a.pos (.ident a.pos "$then") [c, .ident a.pos h, k, .block a.pos pre] false
+      | none => a
+    match alts? v with
+    | some as => mk v.pos (as.map frame)
+    | none => frame v) tail
+
+/-- (#283) A body whose last choice, or call of the group, is bound by a
+    clause with plain code after it, `S; X := a | b; T; v`: the clauses `S`,
+    and the choice of `block{X := a; T; v}` and `block{X := b; T; v}`, whose
+    calls of the group then have return frames (`framedTail`). -/
+def lastChoiceTail (plain : SExpr → Bool) (cls : List SExpr) (last : SExpr) :
+    Option (List SExpr × SExpr) := do
+  let i ← cls.findIdx? (!plain ·)
+  guard ((cls.drop (i + 1)).all plain)
+  let .decl q x t false rhs := cls[i]! | none
+  let after := cls.drop (i + 1) ++ [last]
+  let alt (a : SExpr) : SExpr := .block a.pos (.decl q x t false a :: after)
+  return (cls.take i, match alts? rhs with
+    | some as => mk rhs.pos (as.map alt)
+    | none => alt rhs)
+
+/-- Why a recursive function with several values whose values are computed
+    at the call must be effect-free, and when it is taken lazily instead. -/
+def eagerWhy : String :=
+  "such a function must be <computes>, keep no local state, and reach nothing that prints or calls Err(), " ++
+  "as all its values are computed at a call (#235), unless it is taken lazily: clauses, then a choice whose " ++
+  "alternatives are values or calls of its recursive group, each call followed by no choice and no other such call " ++
+  "(#246, #283)"
+
 /-- The shape of a recursive function with several values that its
     consumers take lazily (#246), after normalizing source returns: plain
     clauses and conditional tail paths, each leaf a choice or value whose
-    alternatives are whole calls of the recursive group or plain values. -/
-def loopShape? (g : String) (mv : List String) (body : SExpr) (grp : List String := [g]) :
-    Option (List SExpr × SExpr) := do
+    alternatives are whole calls of the recursive group or plain values.
+    With `frames` (#283), an alternative may also be a call of the group
+    with code after it, which runs on each of its values (`$then`), and the
+    body's last choice may be bound by a clause with plain code after it. -/
+def loopShapeOf? (g : String) (mv : List String) (body : SExpr) (grp : List String := [g])
+    (frames : Bool := false) (params : List String := []) : Option (List SExpr × SExpr) := do
   let ss := stmtsOf body
   let last ← ss.getLast?
   let cls := ss.dropLast
@@ -1353,16 +1542,50 @@ def loopShape? (g : String) (mv : List String) (body : SExpr) (grp : List String
         | .decl _ n _ _ rhs => n.startsWith "?" && plain rhs
         | _ => plain a
     | _ => false
-  let tail := completeLoopTail isRec false tail
-  let groupOK (e : SExpr) : Bool := ((alts? e).getD [e]).all fun a => isRec a || plain a
+  let (cls, tail) := if frames && !cls.all plain then
+      (lastChoiceTail plain cls last).getD (cls, tail) else (cls, tail)
+  let tail := plainIfValues plain (completeLoopTail isRec false tail)
+  let tail := if frames then framedTail isRec plain (inert (params ++ localsOf body)) tail else tail
+  -- (a frame's code sets no `var` bound before it: it runs on a copy of
+  -- the names; an object's field it may set)
+  let isVar (n : String) : Bool := anyE (fun | .decl _ x _ true _ => x == n | _ => false) body
+  let framed : SExpr → Bool
+    | .app _ (.ident _ "$then") (c :: _ :: k :: pre) false =>
+      isRec c && plain k && pre.all plain && (setsIn k).all fun n => (localsOf k).contains n || !isVar n
+    | _ => false
+  let groupOK (e : SExpr) : Bool := ((alts? e).getD [e]).all fun a => isRec a || plain a || framed a
   if cls.all plain && loopTailOK plain groupOK tail then some (cls, tail) else none
+
+/-- (#283) A function's `var`s made cells: `var K:t = e` becomes
+    `K := $varcell(t){$VCell := e}`, and each use of `K`, read or `set`, is
+    `K.$VCell`. A return frame runs on a copy of the names it uses, but a
+    cell is one object: what a value's frame sets, every later value of the
+    call and every later alternative sees, and a rejected value's write is
+    undone with it, as the inlined body's `var` would be. -/
+partial def cellVars (vs : List String) : SExpr → SExpr :=
+  mapE fun
+    | .decl p x (some t) true rhs =>
+      if vs.contains x then
+        some (.decl p x none false (.construct p "$varcell" [t] [.decl p "$VCell" none false (cellVars vs rhs)]))
+      else none
+    | .ident p x => if vs.contains x then some (.member p (.ident p x) "$VCell") else none
+    | _ => none
+
+/-- `loopShapeOf?`; with `frames`, when a frame sets a `var` (#283), with the
+    function's `var`s that are set made cells (`cellVars`). -/
+def loopShape? (g : String) (mv : List String) (body : SExpr) (grp : List String := [g])
+    (frames : Bool := false) (params : List String := []) : Option (List SExpr × SExpr) :=
+  (loopShapeOf? g mv body grp frames params).orElse fun _ =>
+    let set := setsIn body
+    let vs := ((localDecls body).map (·.1)).eraseDups.filter fun x =>
+      set.contains x && anyE (fun | .decl _ y (some _) true _ => y == x | _ => false) body
+    if !frames || vs.isEmpty then none else loopShapeOf? g mv (cellVars vs body) grp frames params
 
 /-- How many `if`s with a `return` in them `e` has (#283). -/
 partial def countRetIfs (e : SExpr) : Nat :=
   match e with
   | .ite _ cs t u? =>
-    let hasRet := anyE (fun | .ret .. => true | _ => false)
-    (if hasRet t || u?.any hasRet then 1 else 0) + (cs.map countRetIfs).foldl (· + ·) 0 +
+    (if hasReturn t || u?.any hasReturn then 1 else 0) + (cs.map countRetIfs).foldl (· + ·) 0 +
       ((stmtsOf t).map countRetIfs).foldl (· + ·) 0 + ((u?.map fun u => ((stmtsOf u).map countRetIfs).foldl (· + ·) 0).getD 0)
   | .block _ ss => (ss.map countRetIfs).foldl (· + ·) 0
   | _ => 0
@@ -1393,28 +1616,14 @@ def returnBranches (p : Pos) (k : String) (cs tb ub : List SExpr)
   -- (a branch with a choice of its own: an exclusive choice of the two,
   -- which a `for` compiles as this `if`, #314; the condition once)
   let v := k ++ "v"
-  match boundIn cs with
-  | [] =>
-    let g (i : Int) : List SExpr := [.cmp p (.ident p k) [("=", .int p i)]]
-    [.decl p k none false (.ite p cs (.int p 0) (some (.int p 1))),
-      .decl p v ret false (mkExcl p [(g 0, .block p tb), (g 1, .block p ub)]), .ident p v]
-  | names =>
-    -- (the names the condition binds, for its branch: through an option,
-    -- each with its written type, a `var` still one)
-    let declOf (y : String) : Option STy × Bool :=
-      (cs.findSome? fun | .decl _ x t m _ => if x == y then some (t, m) else none | _ => none).getD (none, false)
-    let (val, binds) : SExpr × List SExpr := match names with
-      | [y] => let (t, m) := declOf y; (.ident p y, [.decl p y t m (.query p (.ident p k))])
-      | ys =>
-        let tt := k ++ "t"
-        (.tuple p (ys.map (SExpr.ident p ·)),
-          .decl p tt none false (.query p (.ident p k)) ::
-            ys.zipIdx.map fun (y, i) =>
-              let (t, m) := declOf y
-              SExpr.decl p y t m (.app p (.ident p tt) [.int p (i : Int)] false))
-    [.decl p k none false (.optionLit p (.block p (cs ++ [val]))),
-      .decl p v ret false (mkExcl p [(binds, .block p tb), ([.notE p (.query p (.ident p k))], .block p ub)]),
-      .ident p v]
+  let (sel, excl) := exclOfIf p k cs (.block p tb) (.block p ub)
+  [sel, .decl p v ret false excl, .ident p v]
+
+/-- The names of a branch that a `return` is taken out of, renamed for it
+    (`tag'N`): its statements' locals and `extra` (its condition's), so the
+    rest of the body copied into it may declare the same ones (#283). -/
+def branchNames (tag : String) (ss : List SExpr) (extra : List String) : List (String × String) :=
+  renamedFor tag ((ss.flatMap localsOf) ++ extra).eraseDups
 
 /-- A body's statements with its `return`s, in `if`s, taken out (#283):
     an `if` with a `return` in a branch, `S; if (C) { T } else { U }; R`,
@@ -1434,9 +1643,8 @@ partial def elimPlainReturns (fresh : Nat → String) (n : Nat) (multi : SExpr �
   | [] => some ([], n)
   | .ret p e? :: _ => some ([e?.getD (.tuple p [])], n)
   | s@(.ite p cs t u?) :: rest =>
-    let hasRet := anyE fun | .ret .. => true | _ => false
-    if !hasRet s then (elimPlainReturns fresh n multi ret tailBlocks rest).map fun (r, n') => (s :: r, n')
-    else if cs.any hasRet then none
+    if !hasReturn s then (elimPlainReturns fresh n multi ret tailBlocks rest).map fun (r, n') => (s :: r, n')
+    else if cs.any hasReturn then none
     else do
       let k := fresh n
       -- (the last statement of a body: its branches' values are returned)
@@ -1444,10 +1652,8 @@ partial def elimPlainReturns (fresh : Nat → String) (n : Nat) (multi : SExpr �
           (tailReturns (stmtsOf t), tailReturns ((u?.map stmtsOf).getD []))
         else (stmtsOf t, (u?.map stmtsOf).getD [])
       -- (a branch's names, and its condition's, are its own)
-      let own (ss : List SExpr) (extra : List String) (tg : String) : List (String × String) :=
-        ((ss.flatMap localsOf) ++ extra).eraseDups.map fun x => (x, s!"{k}{tg}'{x}")
-      let ρt := own ts (boundIn cs) "t"
-      let ρu := own us [] "u"
+      let ρt := branchNames s!"{k}t" ts (boundIn cs)
+      let ρu := branchNames s!"{k}u" us []
       let ts := ts.map (renameE ρt)
       let us := us.map (renameE ρu)
       let (tb, n1) ← elimPlainReturns fresh (n + 1) multi ret tailBlocks (ts ++ rest)
@@ -1455,7 +1661,7 @@ partial def elimPlainReturns (fresh : Nat → String) (n : Nat) (multi : SExpr �
       let cs := cs.map (renameE ρt)
       some (returnBranches p k cs tb ub multi ret tailBlocks, n2)
   | s :: rest =>
-    if anyE (fun | .ret .. => true | _ => false) s then none
+    if hasReturn s then none
     else (elimPlainReturns fresh n multi ret tailBlocks rest).map fun (r, n') => (s :: r, n')
 
 /-- The surrounding scope's fallthrough code and currently registered
@@ -1491,27 +1697,24 @@ partial def elimScopedReturns (fresh : Nat → String) (multi : SExpr → Bool) 
     some (.decl q saved ret false value :: cleanup ++ [.ident q saved], n + 1)
   | d@(.app _ (.ident _ "$defer") _ _) :: rest =>
     -- A moved registration still cannot see declarations after it.
-    let later := (boundIn rest).map fun x => (x, s!"$later'{x}")
+    let later := renamedFor "$later" (boundIn rest)
     elimScopedReturns fresh multi ret n p rest (ds ++ [renameE later d]) outer
   | s@(.ite q cs t u?) :: rest => do
-    let hasRet := anyE fun | .ret .. => true | _ => false
-    if !hasRet s then
+    if !hasReturn s then
       let (rest, n') ← elimScopedReturns fresh multi ret n p rest ds outer
       some (s :: rest, n')
-    else if cs.any hasRet then none else
+    else if cs.any hasReturn then none else
       let k := fresh n
       let ts := stmtsOf t
       let us := (u?.map stmtsOf).getD []
-      let own (ss : List SExpr) (extra : List String) (tag : String) :=
-        ((ss.flatMap localsOf) ++ extra).eraseDups.map fun x => (x, s!"{k}{tag}'{x}")
-      let ρt := own ts (boundIn cs) "t"
-      let ρu := own us [] "u"
+      let ρt := branchNames s!"{k}t" ts (boundIn cs)
+      let ρu := branchNames s!"{k}u" us []
       let parents := { pos := p, rest, defers := ds } :: outer
       let (tb, n1) ← elimScopedReturns fresh multi ret (n + 1) t.pos (ts.map (renameE ρt)) [] parents
       let (ub, n2) ← elimScopedReturns fresh multi ret n1 q (us.map (renameE ρu)) [] parents
       some (returnBranches q k (cs.map (renameE ρt)) tb ub multi ret, n2)
   | s :: rest => do
-    if anyE (fun | .ret .. => true | _ => false) s then none else
+    if hasReturn s then none else
       let (rest, n') ← elimScopedReturns fresh multi ret n p rest ds outer
       some (s :: rest, n')
 
@@ -1757,7 +1960,8 @@ partial def inlineCalls (mv : List (String × MFn)) (e : SExpr) (recs : List Str
       -- expression, its own calls marked, for its consumer to run)
       if loops.contains g then
         let grp := (groups.lookup g).getD [g]
-        let some (cls, tail) := loopShape? g (mv.map (·.1)) (renameTypes ρ (renameE ren f.body)) grp
+        let some (cls, tail) := loopShape? g (mv.map (·.1)) (renameTypes ρ (renameE ren f.body)) grp (frames := true)
+            (f.params.map (tag ·.name))
           | throw s!"{p.show}: internal: the shape of {g} (#246)"
         let ps := f.params.map fun sp => SExpr.ident q (tag sp.name)
         -- (#283) a function of a strongly connected group: the others'
@@ -1771,7 +1975,8 @@ partial def inlineCalls (mv : List (String × MFn)) (e : SExpr) (recs : List Str
             let tagH (n : String) : String := s!"${h.replace "::" "_"}_{n}_{site}"
             let renH := (fh.params.map (·.name) ++ localsOf fh.body).eraseDups.map fun n => (n, tagH n)
             let ρH := fh.tparams.map fun tp => (tp.name, memberTypeName h tp.name)
-            let some (clsH, tailH) := loopShape? h (mv.map (·.1)) (renameTypes ρH (renameE renH fh.body)) grp
+            let some (clsH, tailH) := loopShape? h (mv.map (·.1)) (renameTypes ρH (renameE renH fh.body)) grp (frames := true)
+              (fh.params.map (tagH ·.name))
               | throw s!"{p.show}: internal: the shape of {h} (#283)"
             members := members ++ [.app q (.ident q "$member") [.ident q h,
               .block q (fh.params.map fun sp => SExpr.ident q (tagH sp.name)), .block q clsH,
@@ -1812,37 +2017,17 @@ partial def inlineCalls (mv : List (String × MFn)) (e : SExpr) (recs : List Str
       let tmpl := SExpr.block q (tmark ++ pds ++ unpack ++ init ++ fin)
       return .app p (.ident p "$inline") (.ident q g :: tmpl :: as'') false
     | none => return .app p (← go (.ident q g)) (← as.mapM go) br
-  | .str p ps => return .str p (← ps.mapM fun | .code c => do return .code (← go c) | t => pure t)
-  | .app p g as b => return .app p (← go g) (← as.mapM go) b
-  | .member p x m => return .member p (← go x) m
-  | .query p x => return .query p (← go x)
-  | .neg p x => return .neg p (← go x)
-  | .notE p x => return .notE p (← go x)
-  | .bin p o a b => return .bin p o (← go a) (← go b)
-  | .cmp p a r => return .cmp p (← go a) (← r.mapM fun (o, b) => do return (o, ← go b))
-  | .andE p a b => return .andE p (← go a) (← go b)
-  | .orE p a b => return .orE p (← go a) (← go b)
-  | .range p a b => return .range p (← go a) (← go b)
-  | .tuple p es => return .tuple p (← es.mapM go)
-  | .block p es => return .block p (← es.mapM go)
-  | .arrayLit p es => return .arrayLit p (← es.mapM go)
-  | .optionLit p x => return .optionLit p (← go x)
-  | .logicLit p x => return .logicLit p (← go x)
-  | .ite p cs t e' => return .ite p (← cs.mapM go) (← go t) (← e'.mapM go)
-  | .forE p cs b => return .forE p (← cs.mapM go) (← go b)
-  | .gen p x i src => return .gen p x i (← go src)
-  | .loop p b => return .loop p (← go b)
-  | .ret p x => return .ret p (← x.mapM go)
-  | .caseE p sc arms => return .caseE p (← go sc) (← arms.mapM fun (pt, v) => do
-      return (← pt.mapM go, ← go v))
-  | .decl p n t v x => return .decl p n t v (← go x)
-  | .set p l o r => return .set p (← go l) o (← go r)
-  | .construct p n ts fs => return .construct p n ts (← fs.mapM fun
-      | .decl q fn t v x => do return .decl q fn t v (← go x)
-      | a => go a)
-  | .mapLit p kvs => return .mapLit p (← kvs.mapM fun (k, v) => do return (← go k, ← go v))
-  | .structDef p tps specs fs => return .structDef p tps specs (← fs.mapM fun (n, t, d, v) => do return (n, t, ← d.mapM go, v))
-  | e => return e
+  | e => descendM go e
+
+/-- A generator of `x` over the array `src` (#235); at a written type `ty`,
+    one of a name of its own, `$e…` (with `site` in it, `madeName`), then
+    `x` bound to it at `ty`. -/
+def genOver (site : String) (q : Pos) (x : String) (ty : Option STy) (src : SExpr) : List SExpr :=
+  match ty with
+  | none => [.gen q x none src]
+  | some t =>
+    let e := madeName "e" site q
+    [.gen q e none src, .decl q x (some t) false (.ident q e)]
 
 mutual
 /-- The array of an expression's values, for a `$all` body (#235): a choice
@@ -1877,21 +2062,11 @@ partial def arrOfE (ty : Option STy := none) (fieldOrder : String → FieldOrder
     Names made include `site`, so that nested ones differ. -/
 partial def gensOf (site : String) (cs : List SExpr)
     (fieldOrder : String → FieldOrder := fun _ => {}) : List SExpr :=
-  let nm (q : Pos) : String := s!"$e{sitePart site}{q.line}_{q.col}"
   (prepare cs (site := site) (fieldOrder := fieldOrder) (guardBranches := false)).flatMap fun c => match binding? c with
     | some { pos := q, name := x, ty := ty, alts := as, branchy := none, each := none, .. } =>
-      let src := arrOfE ty fieldOrder (.app q (.ident q "$choice") as false)
-      match ty with
-      | none => [.gen q x none src]
-      | some t => [.gen q (nm q) none src, .decl q x (some t) false (.ident q (nm q))]
-    | some { pos := q, name := x, ty := ty, branchy := some i, .. } =>
-      match ty with
-      | none => [.gen q x none (arrOfE none fieldOrder i)]
-      | some t => [.gen q (nm q) none (arrOfE (some t) fieldOrder i), .decl q x (some t) false (.ident q (nm q))]
-    | some { pos := q, name := x, ty := ty, each := some a, .. } =>
-      match ty with
-      | none => [.gen q x none a]
-      | some t => [.gen q (nm q) none a, .decl q x (some t) false (.ident q (nm q))]
+      genOver site q x ty (arrOfE ty fieldOrder (.app q (.ident q "$choice") as false))
+    | some { pos := q, name := x, ty := ty, branchy := some i, .. } => genOver site q x ty (arrOfE ty fieldOrder i)
+    | some { pos := q, name := x, ty := ty, each := some a, .. } => genOver site q x ty a
     | _ => [c]
 end
 
@@ -2003,7 +2178,11 @@ structure FirstLift where
       failure context where the code cannot fail (`Ctx.inRollback`): its
       body runs inside that context too. -/
   rollback : Bool := false
+  /-- The packets of the source exits its clauses have, a `return` and a
+      `break` that leaves them, the function's own exits as a refining
+      lift's are (`Refine.Exits`); the caller exits again (`firstUnpack`). -/
   returnExit : Option FirstReturn := none
+  breakExit : Option (List SExpr) := none
   /-- A stage request supplies classes rather than a callable helper. -/
   stageOnly : Bool := false
   resumes : List ForResume := []
@@ -2034,36 +2213,77 @@ structure FirstLift where
   extraFns : List STop := []
   deriving Inhabited
 
+/-- (#246) A value of a lazily taken call, in its function of its own: at the
+    function's result type `ret`, then bound to the binding `b`, then the
+    consumer's clauses after the call (`rest`, lifted already, `$firstP`,
+    which lifting again would bind twice), then the tuple `tup` of what they
+    bind. -/
+def firstValue (b : String) (bty ret : Option STy) (rest : List SExpr) (tup : SExpr) (a : SExpr) : SExpr :=
+  let v := match ret with
+    | some t => SExpr.app a.pos (.ident a.pos "$first") [.block a.pos [.decl a.pos s!"{b}$v" (some t) false a,
+        .ident a.pos s!"{b}$v"]] false
+    | none => a
+  .app a.pos (.ident a.pos "$firstP") [.block a.pos ([.decl a.pos b bty false v] ++ rest ++ [tup])] false
+
+/-- (#283) The body of a `FirstLift`'s function that takes each value `$V`
+    of a lazily taken call with return frames: the value given to the
+    continuation `$K`'s frames (`$frameApply`), then as `firstValue`. -/
+def firstReturnBody (p : Pos) (b : String) (bty : Option STy) (rest : List SExpr) (binds : List String)
+    (sets : List (String × STy)) (ret : Option STy) (normalResult : Option SExpr)
+    (frames : List (String × List String × SExpr)) : SExpr :=
+  let tup : SExpr := normalResult.getD (.tuple p (binds.map (SExpr.ident p ·) ++ sets.map (fun (m, _) => SExpr.ident p m) ++
+    [.ident p "true"]))
+  let v := SExpr.app p (.ident p "$frameApply") (.ident p "$K" :: .ident p "$V" :: frames.map fun (h, lives, code) =>
+    .app p (.ident p "$frame") [.ident p h, .block p (lives.map (SExpr.ident p ·)), code] false) false
+  let copies := sets.map fun (m, t) => SExpr.decl p m (some t) true (.ident p s!"{m}$in")
+  .block p (copies ++ [firstValue b bty ret rest tup v])
+
 /-- The body of a `FirstLift` (#246): the function's clauses, then the first
     success of its last expression, each value followed by the consumer's
     clauses after the call (`rest`, the value bound to `b` first) and the
     tuple of what they bind, each call of itself a call of `helper` with the
     captured names after its arguments. The `var`s the clauses set are
-    copied first from parameters named `m$in`. -/
+    copied first from parameters named `m$in`. With return frames (#283,
+    `frames`: each one's hole, lives and code), the continuation `$K` comes
+    after the arguments: a call with code after it pushes its frame on it,
+    and a value is given to it, then to the clauses after the call, by the
+    function `retFn` (`firstReturnBody`), so that the frames' code and those
+    clauses are not copied into each value. -/
 def firstBody (helper : String) (p : Pos) (b : String) (bty : Option STy) (cls : List SExpr) (tail : SExpr)
     (rest : List SExpr) (binds : List String) (sets : List (String × STy)) (caps : List SExpr)
     (ret : Option STy := none) (helperOf : String → String := fun _ => helper)
     (recArgs : Option String → Pos → List SExpr → List SExpr × List SExpr := fun _ _ as => ([], as))
-    (normalResult : Option SExpr := none) : SExpr :=
+    (normalResult : Option SExpr := none) (frames : List (String × List String × SExpr) := [])
+    (retFn : String := "") : SExpr :=
   let tup : SExpr := normalResult.getD (.tuple p (binds.map (SExpr.ident p ·) ++ sets.map (fun (m, _) => SExpr.ident p m) ++
     [.ident p "true"]))
-  let recur (target : Option String) (h : String) (q : Pos) (as : List SExpr) : SExpr :=
+  let kont (q : Pos) : List SExpr := if frames.isEmpty then [] else [.ident q "$K"]
+  let recur (target : Option String) (h : String) (q : Pos) (as : List SExpr) (k : List SExpr) : SExpr :=
     let (pre, args) := recArgs target q as
-    let call := SExpr.app q (.ident q h) (args ++ caps) true
+    let call := SExpr.app q (.ident q h) (args ++ k ++ caps) true
     if pre.isEmpty then call else .block q (pre ++ [call])
-  let alt (a : SExpr) : SExpr := match a with
-    | .app q (.ident _ "$rec") as false => recur none helper q as
+  let call (k : List SExpr) : SExpr → Option SExpr
+    | .app q (.ident _ "$rec") as false => some (recur none helper q as k)
     -- (a call of another function of the group, #283: its own function)
-    | .app q (.ident _ "$recTo") (.ident _ h :: as) false => recur (some h) (helperOf h) q as
+    | .app q (.ident _ "$recTo") (.ident _ h :: as) false => some (recur (some h) (helperOf h) q as k)
+    | _ => none
+  let alt (a : SExpr) : SExpr := match a with
+    | .app q (.ident _ "$then") (c :: .ident _ h :: _ :: pre) false =>
+      -- (#283) a call with code after it: its frame on the continuation,
+      -- after its prefix, if any
+      let j := (frames.findIdx? (·.1 == h)).getD 0
+      let lives := (((frames[j]?).map (·.2.1)).getD []).map (SExpr.ident q ·)
+      match call [.app q (.ident q "$framePush") (.int q (j : Int) :: .ident q "$K" :: lives) false] c, pre with
+      | some e, [.block _ ss] => .block q (ss ++ [e])
+      | some e, _ => e
+      | none, _ => a
     | a =>
-      -- (the value at the function's result type, then at the binding's)
-      let v := match ret with
-        | some t => SExpr.app a.pos (.ident a.pos "$first") [.block a.pos [.decl a.pos s!"{b}$v" (some t) false a,
-            .ident a.pos s!"{b}$v"]] false
-        | none => a
-      -- (`$firstP`: `first{…}` of clauses that are lifted already, the
-      -- consumer's, which lifting again would bind twice)
-      .app a.pos (.ident a.pos "$firstP") [.block a.pos ([.decl a.pos b bty false v] ++ rest ++ [tup])] false
+      match call (kont a.pos) a with
+      | some c => c
+      | none =>
+      -- (a value, given to the continuation's frames, #283)
+      if frames.isEmpty then firstValue b bty ret rest tup a
+      else .app a.pos (.ident a.pos retFn) ([a, .ident a.pos "$K"] ++ caps) true
   let group (v : SExpr) : SExpr := match alts? v with
     | some as => mk v.pos (as.map alt)
     | none => alt v
@@ -2182,8 +2402,25 @@ structure MFam where
   cases : List (String × String) := []
   deriving Inhabited
 
+/-- The family of `fams` (keyed by method name) that a use `R.M` at `q`
+    reaches, in the body of class `inC` (#283). When one class or interface
+    declares `M` (overrides aside), its family, whatever `R` is. When
+    several do apart (`shared`), each is the root of a family of its own,
+    and the receiver's class tells which: `Self`'s is the enclosing class,
+    any other receiver's the class an earlier elaboration found it of,
+    whose root it noted by `q` (`picks`). None for another root's `M`, an
+    ordinary method, or before that elaboration. -/
+def famAt (anc : String → List String) (fams : List (String × MFam)) (shared : String → Bool)
+    (picks : List (Pos × String)) (inC : Option String) (q : Pos) (recv : SExpr) (m : String) : Option MFam :=
+  let fs := (fams.filter (·.1 == m)).map (·.2)
+  if !shared m then fs.head? else
+  match recv, inC with
+  | .ident _ "Self", some d => fs.find? fun f => (anc d).contains f.root
+  | _, _ => (picks.lookup q).bind fun r => fs.find? (·.root == r)
+
 /-- The calls of the methods of `fams` in `e` (#283), `inC` the class whose
-    body this is (`anc` gives a class's ancestors, nearest first):
+    body this is (`anc` gives a class's ancestors, nearest first), each of
+    the family `famAt` gives (`shared`, `picks`):
     - `R.M(args)` is a call of `M`'s function with `R` first. With
       overrides, it dispatches on the receiver's class: `$dispatch(root$M,
       block{ $r : root := $arg; $a… := $arg; $kv := $excl(…) }, R, args…)`,
@@ -2208,8 +2445,9 @@ structure MFam where
     - `(super:)M(args)` is a call of the nearest implementation above. -/
 partial def rwFamCalls (anc : String → List String) (fams : List (String × MFam)) (trial : Bool)
     (inC : Option String) (e : SExpr) (isIface : String → Bool := fun _ => false)
-    (typeView : String → String → List (String × STy) := fun _ _ => []) : SExpr :=
-  let rw := fun x => rwFamCalls anc fams trial inC x isIface typeView
+    (typeView : String → String → List (String × STy) := fun _ _ => [])
+    (shared : String → Bool := fun _ => false) (picks : List (Pos × String) := []) : SExpr :=
+  let rw := fun x => rwFamCalls anc fams trial inC x isIface typeView shared picks
   let below (f : MFam) (d : String) : List String := f.impls.filter fun x => x != d && (anc x).contains d
   -- (#375's review) an interface's default yields to every class's own
   -- implementation, as dispatch gives: a class's chain wins over the
@@ -2353,19 +2591,18 @@ partial def rwFamCalls (anc : String → List String) (fams : List (String × MF
         .block p [.decl p raw none false recv, dispatch]
   mapE (fun
     | .app p (.member q recv m) args br =>
-      match fams.lookup m with
-      | some f =>
-        match recv, inC with
-        | .ident _ "(super:)", some d =>
-          match (superOrder d).find? f.impls.contains with
-          | some a => some (superCall p q (methodFnName a m) f (.ident q "Self") (args.map rw) br (typeView d f.root))
-          | none => none
-        | _, _ => some (call p q m f (rw recv) (args.map rw) br)
-      | none => none
+      match recv, inC with
+      | .ident _ "(super:)", some d =>
+        -- (the nearest implementation above `d` of a family of `m`: of
+        -- `d`'s own, the only one above it)
+        let impl := (superOrder d).findSome? fun a => (fams.find? fun (x, f) => x == m && f.impls.contains a).map (a, ·.2)
+        impl.map fun (a, f) => superCall p q (methodFnName a m) f (.ident q "Self") (args.map rw) br (typeView d f.root)
+      | _, _ => (famAt anc fams shared picks inC q recv m).map fun f => call p q m f (rw recv) (args.map rw) br
     | .app p (.ident q m) args br =>
-      match fams.lookup m, inC with
-      | some f, some d => if (anc d).contains f.root then some (call p q m f (.ident q "Self") (args.map rw) br) else none
-      | _, _ => none
+      match inC with
+      | some d => ((fams.find? fun (x, f) => x == m && (anc d).contains f.root).map (·.2)).map fun f =>
+          call p q m f (.ident q "Self") (args.map rw) br
+      | none => none
     | _ => none) e
 
 /-- Preserve the lexical owner and receiver of super calls left after
@@ -2380,24 +2617,35 @@ partial def sourceSuperCalls (c method : String) (e : SExpr) : SExpr :=
           .app p f (args.map (sourceSuperCalls c method)) br] false)
     | _ => none) e
 
+/-- The uses `R.M` in `e`, calls and values: where, `R` and `M`. -/
+partial def memberUses (e : SExpr) : List (Pos × SExpr × String) :=
+  (match e with | .member q r m => [(q, r, m)] | _ => []) ++ e.children.flatMap memberUses
+
 /-- Methods with several values (#283), as top-level functions that take
     `Self` explicitly, so that everything functions with several values
     have applies: `C$M($Self:C, params…)`, its body with the names of `C`'s
     members (and its supers') qualified by `Self`, then `Self` renamed;
     `R.M(args)` becomes `C$M(R, args)` (the receiver first, once), and in
     `C`'s bodies and its subclasses' `M(args)` and `Self.M(args)` become
-    `C$M(Self, args)`. Inlining has no types, so `R.M` must name that
-    method whatever `R` is: such a method's name is no other class's or
-    interface's member apart from its own override family, no top-level
-    name and no parameter or local. Class parameters become function
-    parameters, followed by the method's own type parameters. Suspension
-    remains unsupported. Selected families keep stubs in
-    their classes for ordinary signature/override validation. -/
-def methodFns (tops : List STop) (reserved : List String := []) : Except String (List STop) := do
+    `C$M(Self, args)`. Each class or interface that declares `M` without
+    `<override>` is the root of a family of its own, the declarations of
+    `M` below it. Inlining has no types, so when one root declares `M`,
+    `R.M` names its family whatever `R` is; when several do, `R.M` names
+    the family of the root `R`'s class is below, which an earlier
+    elaboration noted by the place of `R.M` (`picks`, `famAt`). The uses
+    not picked yet are returned with the program, for the elaboration to
+    note; they stay as written until then. Such a method's name is no
+    field, enumerator or member of a built-in type, no top-level name and
+    no parameter or local. Class parameters become function parameters,
+    followed by the method's own type parameters. Suspension remains
+    unsupported. Selected families keep stubs in their classes for
+    ordinary signature/override validation. -/
+def methodFns (tops : List STop) (reserved : List String := []) (picks : List (Pos × String) := []) :
+    Except String (List STop × List (Pos × String)) := do
   let classes := tops.filterMap fun
     | .classDef _ n tps _ pa ii fs _ ms => some (n, (pa, ii, fs, ms, tps))
     | _ => none
-  if classes.isEmpty then return tops
+  if classes.isEmpty then return (tops, [])
   let parentNames (pa : List STy) : List String := pa.filterMap fun | .name n => some n | .app n _ => some n | _ => none
   let rec ancestors (fuel : Nat) (c : String) : List String := match fuel with
     | 0 => [c]
@@ -2443,21 +2691,45 @@ def methodFns (tops : List STop) (reserved : List String := []) : Except String 
           (rootView k pn root).map fun σp =>
             let ptps := ((classes.lookup pn).map fun (_, _, _, _, tps) => tps.map (·.name)).getD []
             σp.map fun (r, t) => (r, t.substNames (ptps.zip args))
-  -- (why a method name's declarations cannot become functions, if they
-  -- cannot: one class declares it, the others below it override it)
+  -- (the classes and interfaces that declare `n` without <override>: each
+  -- the root of a family of its own, the declarations below it)
+  let rootsOf (n : String) : List String := ((declsOf n).filter fun (_, m) => !isOverride m).map (·.1)
+  -- (a name several of them declare apart: the family of a use `R.n` is
+  -- that of the root `R`'s class is below, which types tell, `famAt`)
+  let shared (n : String) : Bool := (rootsOf n).eraseDups.length > 1
+  -- (the declarations of `n` below root `r`, and those below no root)
+  let famDecls (n r : String) : List (String × STop) :=
+    (declsOf n).filter fun (c, _) => (anc c).contains r || !(rootsOf n).any (anc c).contains
+  let shown (c : String) : String := c.replace "::" "."
+  -- (why the declarations of `n` below root `r` cannot become functions,
+  -- if they cannot: `r` declares it, the others below it override it, and
+  -- no class below `r` is below another root)
   -- (and, for a reason of one declaration's own, its class)
-  let whyNot (n : String) : Option (String × Option String) := Id.run do
-    let ds := declsOf n
-    let roots := ds.filter fun (_, m) => !isOverride m
-    let some (r, _) := roots.head? | return some (s!"no class declares {n} without <override>", none)
-    if roots.length > 1 then
-      return some (s!"another class or interface has a method {n} too, not one it overrides, so a call R.{n}(…) cannot be known to be this one where it is inlined, before types are checked", none)
+  let whyNot (n r : String) : Option (String × Option String) := Id.run do
+    let rs := rootsOf n
+    if rs.isEmpty then return some (s!"no class declares {n} without <override>", none)
+    -- (another declaration without <override> in `r`, above it or below
+    -- it: an overload, or one missing its <override>, which the elaborator
+    -- says)
+    let kin := (declsOf n).filter fun (c, m) => !isOverride m && ((anc c).contains r || (anc r).contains c)
+    if kin.length > 1 then
+      let sig : STop → List STy := fun | .fn _ _ ps .. => ps.map (styNorm ·.ty) | _ => []
+      let same := kin.all fun (_, m) => kin.all fun (_, m') =>
+        (sig m).length == (sig m').length && ((sig m).zip (sig m')).all fun (x, y) => styEq x y
+      return some (if same then "" else s!"{n} is overloaded", none)
+    -- (a class below `r` and another root: a slot of each, #70)
+    for (c, _) in classes do
+      if (anc c).contains r then
+        if let some r' := rs.find? fun x => x != r && (anc c).contains x then
+          return some (s!"{shown c} is below both {shown r} and {shown r'}, which each declare {n} without <override>", none)
+    let ds := famDecls n r
     for (c, m) in ds do
       let some _ := classes.lookup c | return some ("", none)
       -- (an interface's, #283: the dispatch's root, as a class's; its
       -- default implementation, if it gives one, the alternative for the
       -- classes that have none of their own, as a class's own is)
-      if !(anc c).contains r then return some (s!"{c.replace "::" "."} overrides it without being below {r.replace "::" "."}", none)
+      if !(anc c).contains r then
+        return some (s!"{shown c} overrides it without being below {" or ".intercalate (rs.eraseDups.map shown)}", none)
       if let .fn _ _ _ _ fx _ _ := m then
         -- (an override that is `<decides>` where the declaration is not, or
         -- the other way round: no family, for the elaborator's check of the
@@ -2469,10 +2741,9 @@ def methodFns (tops : List STop) (reserved : List String := []) : Except String 
       return some (s!"{n} is also the name of a field, an enumerator, a member of a built-in type, a top-level name, a parameter or a local", none)
     return none
   -- (the families that may become functions)
-  let fams : List (String × MFam) := names.filterMap fun n =>
-    if (whyNot n).isSome then none else
-    let ds := declsOf n
-    let root := ((ds.find? fun (_, m) => !isOverride m).map (·.1)).getD ""
+  let fams : List (String × MFam) := names.flatMap fun n => (rootsOf n).eraseDups.filterMap fun root =>
+    if (whyNot n root).isSome then none else
+    let ds := famDecls n root
     let impls := (ds.filter fun (_, m) => !isAbstract m).map (·.1)
     let impls := (impls.filter (· == root)) ++ impls.filter (· != root)
     let ret := (ds.find? (·.1 == root)).bind fun | (_, .fn _ _ _ _ _ r _) => some r | _ => none
@@ -2512,7 +2783,7 @@ def methodFns (tops : List STop) (reserved : List String := []) : Except String 
     | some (_, ii, _, _, _) => ii
     | none => false
   let rw := fun fs trial inC e => rwFamCalls anc fs trial inC e isIfaceC
-    (fun c root => (rootView (classes.length + 1) c root).getD [])
+    (fun c root => (rootView (classes.length + 1) c root).getD []) shared picks
   -- (a method's body as the function's: its members qualified by `Self`,
   -- then `Self` the parameter `$Self`)
   let fnOf (fs : List (String × MFam)) (trial : Bool) (c : String) : STop → Option STop
@@ -2564,37 +2835,37 @@ def methodFns (tops : List STop) (reserved : List String := []) : Except String 
   let mv := multiValued (multiCandidates (rwTops fams true ++ trialFns ++ famFns))
   let famHas (n : String) (f : MFam) : Bool :=
     mv.contains (if f.direct then methodFnName f.root n else methodFnName f.root n ++ "$fam")
-  -- (a method with several values whose name cannot become functions:
-  -- refused, saying why)
+  -- (a method with several values whose declarations cannot become
+  -- functions: refused, saying why)
   for n in names do
-    if let some (why, atC) := whyNot n then
-      if why != "" then
-        let multi := (declsOf n).find? fun (c, m) => match m with
-          | .fn _ _ _ _ _ _ b =>
-            let b' := markCalls mv (rw fams true (some c) b)
-            let ss := stmtsOf b'
-            hasChoice ss || ss.any liftsHere || anyE (fun | .ret _ (some e) => hasLiftable e | _ => false) b'
-          | _ => false
-        if let some (c1, .fn p1 ..) := multi then
-          let shown (c : String) : String := c.replace "::" "."
-          match atC with
-          | none => throw s!"{p1.show}: {shown c1}.{n} has several values, but {why}: such methods are not supported yet (#283)"
-          | some c0 =>
-            -- (said of the declaration it is about, #328's review)
-            let p0 := (((declsOf n).find? (·.1 == c0)).bind fun | (_, .fn q ..) => some q | _ => none).getD p1
-            if c0 == c1 then
-              throw s!"{p0.show}: {shown c0}.{n} has several values, but it {why}: such methods are not supported yet (#283)"
-            throw s!"{p0.show}: {shown c0}.{n} {why}, and {shown c1}.{n} has several values: such methods are not supported yet (#283)"
+    for r in (if (rootsOf n).isEmpty then [""] else (rootsOf n).eraseDups) do
+      if let some (why, atC) := whyNot n r then
+        if why != "" then
+          let multi := (famDecls n r).find? fun (c, m) => match m with
+            | .fn _ _ _ _ _ _ b =>
+              let b' := markCalls mv (rw fams true (some c) b)
+              let ss := stmtsOf b'
+              hasChoice ss || ss.any liftsHere || anyE (fun | .ret _ (some e) => hasLiftable e | _ => false) b'
+            | _ => false
+          if let some (c1, .fn p1 ..) := multi then
+            match atC with
+            | none => throw s!"{p1.show}: {shown c1}.{n} has several values, but {why}: such methods are not supported yet (#283)"
+            | some c0 =>
+              -- (said of the declaration it is about, #328's review)
+              let p0 := (((declsOf n).find? (·.1 == c0)).bind fun | (_, .fn q ..) => some q | _ => none).getD p1
+              if c0 == c1 then
+                throw s!"{p0.show}: {shown c0}.{n} has several values, but it {why}: such methods are not supported yet (#283)"
+              throw s!"{p0.show}: {shown c0}.{n} {why}, and {shown c1}.{n} has several values: such methods are not supported yet (#283)"
   let sel := fams.filter fun (n, f) => famHas n f
   -- (`(super:)M(…)` with nothing above implementing M: as the elaborator
   -- says, before the body leaves its class, #328's review)
   for (n, f) in sel do
-    for (c, m) in declsOf n do
+    for (c, m) in famDecls n f.root do
       if let .fn q _ _ _ _ _ b := m then
         if anyE (fun | .member _ (.ident _ "(super:)") x => x == n | _ => false) b &&
             (((anc c).drop 1).find? f.impls.contains).isNone then
-          throw s!"{q.show}: nothing above {c.replace "::" "."} implements '{n}'"
-  if sel.isEmpty then return tops
+          throw s!"{q.show}: nothing above {shown c} implements '{n}'"
+  if sel.isEmpty then return (tops, [])
   -- (a parameter or local named like a member: refused, as in the class,
   -- since the body leaves it)
   for (n, f) in sel do
@@ -2608,49 +2879,73 @@ def methodFns (tops : List STop) (reserved : List String := []) : Except String 
   -- (the program with those methods out of their classes and their calls
   -- rewritten, and their functions)
   let selNames := sel.map (·.1)
+  -- (the selected family class `c`'s method `m` is of, if any)
+  let selAt (c m : String) : Option MFam := (sel.find? fun (x, f) => x == m && (anc c).contains f.root).map (·.2)
   -- (each of a family with overrides stays in its class as a stub, `Err()`,
   -- which no call reaches: so the elaborator still checks it as a member,
   -- <final>, its signature and effects against the one it overrides, an
   -- abstract one implemented)
   let stub (q : Pos) : SExpr := .app q (.ident q "Err") [] false
   -- (one overridden nowhere, `direct`, is taken out, as there is nothing
-  -- to check it against)
-  let directNames := (sel.filter (·.2.direct)).map (·.1)
+  -- to check it against, unless its name is `shared`: a use the
+  -- elaboration picks the family of then calls it as written, `famAt`)
   let out := (rwTops sel false).map fun
     | .classDef p n tps sp pa ii fs ov ms =>
-      .classDef p n tps sp pa ii fs ov ((ms.filter fun | .fn _ m .. => !directNames.contains m | _ => true).map fun
+      .classDef p n tps sp pa ii fs ov ((ms.filter fun
+          | .fn _ m .. => !(selAt n m).any (·.direct && !shared m)
+          | _ => true).map fun
         | d@(.fn p2 m ps tps2 fx r _) =>
           -- (an abstract one, or one with no body, as written)
-          if !selNames.contains m || fx.contains "$abstract" then d
+          if (selAt n m).isNone || fx.contains "$abstract" then d
           else .fn p2 m (ps.map fun sp => { sp with default := sp.default.map fun d => stub d.pos }) tps2 fx r (stub p2)
         | s => s)
     | t => t
+  -- (the bodies of a definition, each with the class it is in)
+  let bodiesOf : STop → List (Option String × SExpr)
+    | .fn _ _ ps _ _ _ b => (b :: ps.filterMap (·.default)).map (none, ·)
+    | .const _ _ _ e => [(none, e)]
+    | .classDef _ c _ _ _ _ fs _ ms => (fs.filterMap (·.2.2.1) ++ ms.flatMap fun
+        | .fn _ _ ps _ _ _ b => b :: ps.filterMap (·.default)
+        | _ => []).map (some c, ·)
   -- (what is left of their names is a use as a value: refused, as for a
-  -- function's; a name of theirs is nothing else's)
+  -- function's; a name of theirs is nothing else's, or one whose family
+  -- the receiver's class gives, `famAt`)
   for t in out do
-    let bodies : List SExpr := match t with
-      | .fn _ _ ps _ _ _ b => b :: ps.filterMap (·.default)
-      | .const _ _ _ e => [e]
-      | .classDef _ _ _ _ _ _ fs _ ms => fs.filterMap (·.2.2.1) ++ ms.flatMap fun
-          | .fn _ _ ps _ _ _ b => b :: ps.filterMap (·.default)
-          | _ => []
-    for b in bodies do
+    for (inC, b) in bodiesOf t do
       let b := eraseCallHeads selNames b
-      for m in selNames do
-        if anyE (fun | .member _ _ x | .ident _ x => x == m | _ => false) b then
-          let c := ((sel.lookup m).map (·.root)).getD ""
-          let p := ((stmtsOf b).find? (anyE fun | .member _ _ x | .ident _ x => x == m | _ => false)).map (·.pos) |>.getD b.pos
-          throw s!"{p.show}: {c.replace "::" "."}.{m} has several values, so it cannot be used as a function value (#235, #283)"
-  return out ++ implFns sel
+      for (m, f) in sel do
+        let use : SExpr → Bool := fun
+          | .member q r x => x == m && (famAt anc sel shared picks inC q r m).any (·.root == f.root)
+          | .ident _ x => x == m && (!shared m || inC.any fun d => (anc d).contains f.root)
+          | _ => false
+        if anyE use b then
+          let p := ((stmtsOf b).find? (anyE use)).map (·.pos) |>.getD b.pos
+          throw s!"{p.show}: {shown f.root}.{m} has several values, so it cannot be used as a function value (#235, #283)"
+  -- (#283) the uses `R.M` of a `shared` name of a selected family that
+  -- only `R`'s class can tell, not picked yet: the elaboration notes the
+  -- root that class is below, for the next round (`Elab`'s `familyNeeds`)
+  let sites := (tops.flatMap bodiesOf).flatMap fun (inC, b) => (memberUses b).filterMap fun (q, r, m) =>
+    let byClass := match r, inC with
+      | .ident _ "Self", some _ | .ident _ "(super:)", _ => true
+      | _, _ => false
+    if shared m && selNames.contains m && !byClass && (picks.lookup q).isNone then some (q, m) else none
+  -- (one use is of one receiver's type wherever its code is elaborated)
+  for (q, r) in picks do
+    if let some (_, r') := picks.find? fun (q', r') => q' == q && r' != r then
+      throw s!"{q.show}: internal: a receiver of a class below {shown r} and of one below {shown r'} (#283)"
+  return (out ++ implFns sel, sites)
 
 /-- The functions of the program that have several values, inlined at their
     calls (see above); the program unchanged when there are none. Also
     whether some are taken lazily (#246), whose consumers need a class of
-    stack cells. -/
-def inlineMulti (tops : List STop) (reserved : List String := []) (eager : List String := []) : Except String (List STop × Bool) := do
+    stack cells, and the uses of methods whose family an elaboration is
+    to pick (`methodFns`, by `picks`). -/
+def inlineMulti (tops : List STop) (reserved : List String := []) (eager : List String := [])
+    (picks : List (Pos × String) := []) (lazy : List String := []) :
+    Except String (List STop × Bool × List (Pos × String)) := do
   -- (methods with several values as functions first, #283; `reserved`:
   -- the members of built-in types and of the prelude)
-  let tops ← methodFns tops reserved
+  let (tops, sites) ← methodFns tops reserved picks
   -- (#283) overloaded functions: each overload a function of its own for
   -- the analysis, `F$mvK` (K its place among them, as the elaborator
   -- numbers them, `F$ovK`), and `F` one that calls them all, so a function
@@ -2668,7 +2963,7 @@ def inlineMulti (tops : List STop) (reserved : List String := []) (eager : List 
     ovNamesAll.filterMap fun f => (ovOf f).head?.map fun (_, p, _) =>
       (f, (⟨p, [], [], [], .name "void", .tuple p ((ovOf f).map fun (k, _, _) => .app p (.ident p k) [] false)⟩ : MFn))
   let mv := multiValued fns
-  if mv.isEmpty then return (tops, false)
+  if mv.isEmpty then return (tops, false, sites)
   -- (none calling one of them, for now; an overload with one value is
   -- called as written, `F` itself in `ovs`)
   let ovMv := ovNamesAll.filter mv.contains
@@ -2735,11 +3030,21 @@ def inlineMulti (tops : List STop) (reserved : List String := []) (eager : List 
     return seen
   let groupOf (g : String) : List String :=
     g :: (mfs.map (·.1)).filter fun h => h != g && (reachSet g).contains h && (reachSet h).contains g
-  let groupOK (g : String) : Bool :=
+  let groupOK (g : String) (frames : Bool) : Bool :=
     let grp := groupOf g
     grp.all fun h => match mfs.lookup h with
-      | some f => ((callees.lookup h).getD []).all grp.contains && (loopShape? h mv f.body grp).isSome
+      | some f => ((callees.lookup h).getD []).all grp.contains &&
+        (loopShape? h mv f.body grp frames (f.params.map (·.name))).isSome
       | none => false
+  -- (#283) one whose calls of its group have code after them (return
+  -- frames) is taken lazily too, unless its values can be computed at the
+  -- call: when its group is <computes> and keeps no local state, as before,
+  -- and nothing it runs prints or calls Err() (`lazy`, after a first
+  -- elaboration that found it did)
+  let computable (g : String) : Bool := (groupOf g).all fun h => !lazy.contains h &&
+    match rawMfs.lookup h with
+    | some f => f.fx.contains "computes" && !anyE (fun | .set .. | .decl _ _ _ true _ => true | _ => false) f.body
+    | none => false
   let loops : List String := recs.filter fun g =>
     let grp := groupOf g
     -- An incomplete tail erases its values. A returning any-valued group
@@ -2752,10 +3057,12 @@ def inlineMulti (tops : List STop) (reserved : List String := []) (eager : List 
         | i@(.ite ..) => !isBranchy.complete i && (namesUsed i).any grp.contains
         | _ => false) f.body).getD false
     if grp.any eager.contains || erasesRecursive then false else
-    match mfs.lookup g with
-    | some f => if (groupOf g).length == 1 then (callees.lookup g).getD [] == [g] && (loopShape? g mv f.body).isSome
-      else groupOK g
-    | none => false
+    let shaped (frames : Bool) : Bool := match mfs.lookup g with
+      | some f => if (groupOf g).length == 1 then (callees.lookup g).getD [] == [g] &&
+          (loopShape? g mv f.body (frames := frames) (params := f.params.map (·.name))).isSome
+        else groupOK g frames
+      | none => false
+    shaped false || (!computable g && shaped true)
   let loopGroups : List (String × List String) :=
     loops.filterMap fun g => let grp := groupOf g; if grp.length > 1 then some (g, grp) else none
   let mut needAll := recs.filter (!loops.contains ·)
@@ -2785,7 +3092,7 @@ def inlineMulti (tops : List STop) (reserved : List String := []) (eager : List 
   for g in needAll do
     let some f := rawMfs.lookup g | continue
     let why (w : String) : String :=
-      s!"{f.pos.show}: {shownFnName g} has several values and is recursive, or called by a recursive one, {w}: such a function must be <computes>, keep no local state, and reach nothing that prints or calls Err(), as all its values are computed at a call (#235)"
+      s!"{f.pos.show}: {shownFnName g} has several values and is recursive, or called by a recursive one, {w}: {eagerWhy}"
     if !f.fx.contains "computes" then throw (why "and it is not <computes>")
     if anyE (fun | .set .. | .decl _ _ _ true _ => true | _ => false) f.body then
       throw (why "and it has a var or a set")
@@ -2858,6 +3165,6 @@ def inlineMulti (tops : List STop) (reserved : List String := []) (eager : List 
   -- its signature where its calls are inlined (effects, defaults)
   let ovKept : List STop := ovMv.flatMap fun f => (ovOf f).filterMap fun (k, p, m) =>
     if mv.contains k then some (.fn p k m.params m.tparams m.fx m.ret (checkBody m.body)) else none
-  return (tops' ++ ovKept ++ alls, !loops.isEmpty)
+  return (tops' ++ ovKept ++ alls, !loops.isEmpty, sites)
 
 end OpenVerse.Front.Choice

@@ -56,34 +56,6 @@ def defaultTypes (ctx : Ctx) (p : Pos) (s : Sig) (σ : List (String × Ty)) (d :
   return ({ ctx.types with tvars := aliases ++ core.map (fun (n, cmp) => (n, Ty.param n cmp)) },
     substDefaultTypes rename d)
 
-/-- Canonicalise the user positional arguments before binding a call. A
-    receiver is not part of the argument tuple; named arguments retain their
-    written order. A lone scalar keeps its meaning for arrays and bare type
-    parameters. Empty arrays still require an explicit array value. -/
-def packCallArgs (p : Pos) (s : Sig) (args : List SExpr)
-    (hasReceiver : Bool := true) : List SExpr := Id.run do
-  let isNamed : SExpr → Bool := fun | .decl _ n _ _ _ => n.startsWith "?" | _ => false
-  let off := if hasReceiver && s.hasReceiver then 1 else 0
-  let pos := args.filter (!isNamed ·)
-  let user := pos.drop off
-  let named := args.filter isNamed
-  let [pt] := s.params.drop off |>.take (s.params.length - s.named.length - off)
-    | return args
-  let packed := fun a => pos.take off ++ [a] ++ named
-  match pt with
-  | .void => if user.isEmpty then return packed (.tuple p []) else return args
-  | .tup _ =>
-    if user.length != 1 then return packed (.tuple p user)
-    if let .tup [_] := pt then
-      let [a] := user | return args
-      match a with
-      | .tuple _ [_] | .app _ (.ident _ "$callSingleton") [_] false => return args
-      | _ => return packed (.app a.pos (.ident a.pos "$callSingleton") [a] false)
-    return args
-  | .arr _ => if user.length > 1 then return packed (.arrayLit p user) else return args
-  | .param .. => if user.length != 1 then return packed (.tuple p user) else return args
-  | _ => return args
-
 /-- A call of a generic function. Its type arguments are inferred by matching
     its signature: the result type against the expected type (unless that is
     `void`, which accepts anything), then each parameter type against its

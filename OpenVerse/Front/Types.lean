@@ -235,6 +235,10 @@ structure TyEnv where
   fieldAccBase : Nat := 0
   /-- The functions asked for as values at closed function types (#214). -/
   fnRequests : List (String × Ty) := []
+  /-- (#283) The uses `R.M` whose family of methods `M` only the class of
+      `R` tells (`Choice.methodFns`), by place and `M`: their elaboration
+      notes the root that class is below (`ESt.familyNeeds`). -/
+  familySites : List (Pos × String) := []
   /-- Typed variance adapters for methods with a fixed receiver signature. -/
   methodRequests : List FnValues.MethodRequest := []
   /-- The order of the slots holding values of the type parameters, when it

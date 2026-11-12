@@ -17,9 +17,17 @@ partial def elabSetWith (elabE : Ctx → SExpr → Option Ty → EM R) (elabMemb
     return r
   -- (`$withOld(O, R)`: for `op=`, the old value was read into `O` before
   -- the code that computes `R`, as `set` evaluates, #208)
-  let (rhs, oldIn) : SExpr × Option Expr := match rhs0 with
-    | .app _ (.ident _ "$withOld") [.ident _ o, r] false => (r, (ctx.lookup o).map (fun l => Expr.local l.slot))
-    | r => (r, none)
+  -- Private indexed adapters have already read/validated the leaf in the
+  -- caller. Reading it again here would move bounds failure before the
+  -- saved-value arithmetic, and prevent a map key deleted by the RHS
+  -- from being reinserted. Legacy $withOld retains its source validation.
+  let (rhs, oldIn, preloaded) ← match rhs0 with
+    | .app _ (.ident _ "$choiceWithOld") [.ident _ o, r] false => do
+      let some binding := ctx.lookup o | eerr p "internal: missing saved indexed value"
+      pure (r, some (Expr.local binding.slot), true)
+    | .app _ (.ident _ "$withOld") [.ident _ o, r] false =>
+      pure (r, (ctx.lookup o).map (fun l => Expr.local l.slot), false)
+    | r => pure (r, none, false)
   -- the right side at the target's type; for `set F *= N` of a float, an
   -- int too (#127), so without it when that fails
   let rhsAt (t : Ty) : EM R :=
@@ -206,7 +214,7 @@ partial def elabSetWith (elabE : Ctx → SExpr → Option Ty → EM R) (elabMemb
         -- Verse: `set X += e` is `set X = X + e`; #58): the rest of the path,
         -- read now, gives the old leaf (it fails as `P` would, and is read
         -- again for the rebuild below)
-        if op.isSome then
+        if op.isSome && !preloaded then
           let mut c2 := cur
           for k2 in [k:stepsA.size] do
             let (_, f2, _) := stepsA[k2]!
@@ -234,9 +242,10 @@ partial def elabSetWith (elabE : Ctx → SExpr → Option Ty → EM R) (elabMemb
       | none => coerce p r leafTy
       | some o =>
         -- (only an `op=` reads the old value: a read can have an effect)
-        let old ← match oldLeaf with
-          | some t => pure (Expr.local t)
-          | none => readStep lc lty lf lkey
+        let old ← if preloaded then pure (oldIn.getD (.prim .userErr [])) else
+          match oldLeaf with
+            | some t => pure (Expr.local t)
+            | none => readStep lc lty lf lkey
         combine old leafTy o r
     let tv ← fresh leafTy
     pre := pre.push (.assign tv leaf)
@@ -396,6 +405,16 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
   let some (μT, opened) := castRefinement? env eqs opened (env.comparableArgs T targs) | do set st0; return none
   let targs := targs.map fun t => t.subst (opened.filterMap fun (n, _, c) => if c then some (n, Ty.param n true) else none)
   let shown := (Ty.struct T targs).show
+  -- (the world under the refinement: the object as a `T`, in `dslot`, the
+  -- locals and the code's type parameters refined, and the type arguments
+  -- the cast opens, #250)
+  let refine (t : Ty) : Ty := t.subst μT
+  let dTy := refine (.struct T targs)
+  let refined (dslot : Nat) : Ctx := { ctx with
+    locals := { name := D, slot := dslot, ty := dTy, mutable := false } ::
+      ctx.locals.map fun l => { l with ty := refine l.ty, storage := l.storage.map (·.subst μT) },
+    types := { env with tvars := (env.tvars.map (fun (n, t) => (n, refine t)) ++
+      opened.map (fun (n, _, c) => (n, Ty.param n c))) } }
   -- (the locals the branch uses, in order of first use)
   let caps : List Local := (Choice.namesUsed body).filterMap fun n =>
     if n == D then none else ctx.locals.find? (·.name == n)
@@ -425,12 +444,21 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
         else do
           let st ← get
           let τ? ← tryCatch (do pure (some (← elabE { ctx with typeOnly := true } ee none).ty)) fun _ => pure none
+          -- (an `else` that gives no value tells no type: the branch's own,
+          -- under the refinement, when it ends, as the first elaboration
+          -- finds it, if code outside it can name it)
+          let own? ← if τ? != some .never then pure none else
+            tryCatch (do
+              let τ := (← elabE { refined (← fresh dTy) with typeOnly := true } (Refine.exitsAsErr body) none).ty
+              pure (if opened.any (fun (n, _, _) => τ.params.contains n) then none else some τ)) fun _ => pure none
+          let τ? := own?.orElse fun _ => τ?
           set st
           if !escapes then
             -- Discard a statement's value before building the copy-out tuple.
-            pure (some (if τ?.any (· == .void) then .none else .raw none))
+            pure (some (if τ?.any (· == .void) then .none else .raw (own?.map Ty.toSTy)))
           else
-            pure (τ?.map fun τ => if τ == .void then ExitVal.none else .opt τ.toSTy)
+            pure (τ?.bind fun τ => if τ == .never then none
+              else some (if τ == .void then ExitVal.none else .opt τ.toSTy))
     let some vm := vm?
       | eerr ((retPart.orElse fun _ => brkPart).map (·.pos) |>.getD p) s!"the branch of the cast to {shown}, which holds only under a refinement of the type arguments, is compiled as a function of its own, so it cannot return or break out of it yet where the if's value is used at a type not known there (write it) (#243)"
     let sourceRet ← match ctx.refineExits.ret with
@@ -479,20 +507,13 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
   match env.castRequests.find? (·.key == key) with
   | none =>
     -- (first: the branch in the refined world)
-    let refine (t : Ty) : Ty := t.subst μT
-    let dTy := refine (.struct T targs)
     let dslot ← fresh dTy
-    let ctxB : Ctx := { ctx with
-      locals := { name := D, slot := dslot, ty := dTy, mutable := false } ::
-        ctx.locals.map fun l => { l with ty := refine l.ty, storage := l.storage.map (·.subst μT) },
+    let ctxB : Ctx := { refined dslot with
       frameName := liftName, frameArgs := available.map fun (n, c) => Ty.param n c,
       -- (the source return's value and the lifted function's copy-out)
       retTy := (escRet.map (refine ·.1)).getD ctx.retTy,
       refineExits := (escRet.map (·.2)).getD {},
-      defers := if escRet.isSome then [] else ctx.defers,
-      -- (and the type arguments the cast opens, #250)
-      types := { env with tvars := (env.tvars.map (fun (n, t) => (n, refine t)) ++
-        opened.map (fun (n, _, c) => (n, Ty.param n c))) } }
+      defers := if escRet.isSome then [] else ctx.defers }
     -- (its own effects, which its function declares; the enclosing one's too)
     let fx0 := (← get).fx
     let pending0 := (← get).pendingSuspendingCasts
@@ -523,7 +544,13 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
     let needsFrame (f : Nat) := isS f || ctx.sigs.any (fun s => s.idx == f && s.name == "$branchMark")
     let suspendsB := ctx.suspends && (hasPending || Suspend.hasSusp needsFrame rb.e || Suspend.hasSusp needsFrame re.e)
     let elseWaits := ctx.suspends && ((← get).pendingWaitingCasts != waitingThen || waits re.e)
-    let τ' : Ty := if elseE.isNone then .void else exp.getD re.ty
+    -- (an `else` that gives no value, as the rest of a failure context has,
+    -- `elabSeqIn`: the branch's type, which code outside it must be able to
+    -- name)
+    let retOfBranch := elseE.isSome && exp.isNone && re.ty == .never
+    let τ' : Ty := if elseE.isNone then .void else if retOfBranch then refine rb.ty else exp.getD re.ty
+    if let some (n, v, _) := opened.find? fun (n, _, _) => τ'.params.contains n then
+      eerr p s!"cannot cast {withArticle rx.ty.show} to {T} here: the cast opens {T}'s type argument {v} for the code after it, outside which its value, {withArticle τ'.show}, would name what is unknown (#250)"
     let ret := refine τ'
     discard <| coerce p rb ret
     let decides := rb.e.mayFail ctx.sigProg
@@ -563,7 +590,7 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
       params := ((D, dTy) :: sig).map (fun (n, t) => { name := n, ty := t.toSTy }) ++
         extra.map fun (n, _) => { name := s!"$type{n}", ty := .name n },
       tparams := tps.map fun (n, c) => { pos := p, name := n, constraint := if c then "comparable" else "type" },
-      specs, ret := ret.toSTy, subst := σ, opened := opened.map fun (n, v, _) => (n, v), waits := thenWaits, sourceSuspends,
+      specs, ret := ret.toSTy, retOfBranch, subst := σ, opened := opened.map fun (n, v, _) => (n, v), waits := thenWaits, sourceSuspends,
       exits := Refine.Exits.substTypes ((escRet.map (·.2)).getD {}) σ,
       storage := storage.map fun (n, s) => (n, { frame := s.frame, name := s.name, args := s.args.map Ty.toSTy }),
       inRepeat := ctx.inRepeat, sourceContext := sourceContextOf ctx, liftTag := some ctx.liftTag,
@@ -580,8 +607,9 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
       modify fun st => { st with pendingWaitingCasts := st.pendingWaitingCasts + 1 }
     if sourceSuspends || ctx.sourceWaits re.e then
       modify fun st => { st with pendingSourceSuspends := st.pendingSourceSuspends + 1 }
-    -- (a placeholder: this elaboration goes no further)
-    return some ⟨if decides then .prim .fail [] else .prim .userErr [], τ'⟩
+    -- (a placeholder: this elaboration goes no further; it may fail where
+    -- the dispatch may, in the branch's function or in the `else`)
+    return some ⟨if decides || re.e.mayFail ctx.sigProg then .prim .fail [] else .prim .userErr [], τ'⟩
   | some l =>
     -- (then: the object in a slot, and one dispatch per set of pins)
     let (pre, y) ← match rx.e with
@@ -590,7 +618,16 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
         let y ← fresh rx.ty
         pure ([Expr.assign y e], y)
     let re ← elseOf
-    let τ' : Ty := if elseE.isNone then .void else exp.getD re.ty
+    -- (the branch's own type, when the first elaboration took it; at
+    -- another expected type, refused as it was there)
+    let τ' : Ty ← if elseE.isNone then pure .void else match exp, l.retOfBranch with
+      | some t, true =>
+        let ret ← resolveTy env p l.ret
+        if ret != t.subst μT then eerr p s!"expected {t.show}, found {ret.show} (the branch of the cast to {shown})"
+        pure t
+      | some t, false => pure t
+      | none, true => resolveTy env p l.ret
+      | none, false => pure re.ty
     let eE ← coerce p re τ'
     let rargs := env.coreArgs S sargs
     let atR := rargs.zipIdx.map fun (r, j) => (pinArg j, r)
@@ -688,6 +725,40 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
     let cond := pre.foldr Expr.seq (.heap (.isTag (tested.toList.map env.tagOf)) [.local y])
     return some ⟨← mark (.assign t (.ite cond acc eE)), τ'⟩
 
+/-- (#243, #351) A failure context's clauses `cs`, then `after` (an `if`'s
+    branch, a `for`'s body, a `first{…}`'s value), with a clause `D :=
+    T[X]`, or `T[X]` of a class (past the first, if `later`), that only such
+    a clause may be (one that refines type arguments, opens them, or goes
+    through a view): `asWritten` first, and when that is refused for the
+    cast at `k`, the context's own form for it, `alone k` (the `if`'s, when
+    nothing before it needs undoing), else `rebuild` with the cast taking
+    the clauses after it, up to the next generator (`isGen`), as its branch
+    in a clause of its own, and `after` casting again
+    (`Refine.castRestClauses`). `none` without such a clause. -/
+def withCastClauses (ctx : Ctx) (cs : List SExpr) (after : SExpr) (isGen : SExpr → Bool) (asWritten : EM R)
+    (rebuild : List SExpr → SExpr → EM R) (later : Bool := false)
+    (alone : Nat → String → EM (Option R) := fun _ _ => pure none) : EM (Option R) := do
+  -- (`D := T[X]` may be an index, `A[i]`: the one the refusal is at)
+  let castAt : List (Nat × Pos) := cs.zipIdx.filterMap fun
+    | (.decl _ _ none false (.app q (.ident _ _) [_] true), i) => if later && i == 0 then none else some (i, q)
+    | (.app q (.ident _ T) [_] true, i) =>
+      if (later && i == 0) || !ctx.types.classes.contains T then none else some (i, q)
+    | _ => none
+  if castAt.isEmpty then return none
+  let st0 ← get
+  match ← tryCatch (Except.ok <$> asWritten) (fun err => pure (Except.error err)) with
+  | .ok r => return some r
+  | .error err =>
+    let some (k, _) := castAt.find? (fun (_, q) => err.startsWith s!"{q.show}:") | throw err
+    let some cast := Refine.castClause? cs[k]! | throw err
+    if !Refine.isCastRefusal err then throw err
+    set st0
+    if let some r ← alone k err then return some r
+    match Refine.castRestClauses (cs.take k) cast (cs.drop (k + 1)) after isGen ctx.types.classes.contains
+        (fun n => (ctx.lookup n).any (!·.mutable)) with
+    | .ok (cs', after') => return some (← rebuild cs' after')
+    | .error why => throw s!"{err} ({why})"
+
 /-- Infer a producer's signature instance from its canonical arguments. -/
 def loopInstanceOf (ctx : Ctx) (p : Pos) (sig : Sig) (types : List Ty) : EM (List (String × Ty)) := do
   let some σ := (sig.params.zip types).foldlM (fun σ (pt, t) => Ty.matchArg ctx.types σ pt t) []
@@ -733,6 +804,100 @@ partial def elabLoopTailWith (elabSeq : Ctx → List SExpr → Option Ty → EM 
     let alts := (Choice.alts? value).getD [value]
     return { select := .seq (.assign k (.lit (.int (start : Nat)))) vd,
              arms := #[(ctx, alts)], itemCode := vd, next := start + alts.length }
+
+/-- (#283) A return frame of a lazily taken recursive group: the code after a
+    call of the group in an alternative, `$then(call, hole, code)`, which
+    runs on each of the call's values, bound to `hole`. `lives` are the names
+    of the alternative's context (`ctx`) the code uses: their values when
+    the call is made are kept in the frame, pushed on the continuation of
+    the call's items. `pre`: the clauses that run before the call, with its
+    arguments (what the alternative reads before the call that may not read
+    the same after it, bound to names), elaborated once; `ctx` has their
+    names. -/
+structure LoopFrame where
+  hole : String
+  lives : List Local
+  code : SExpr
+  ctx : Ctx
+  pre : Option Expr := none
+  /-- Where the prefix sets a name, which the next alternative would see. -/
+  preSet : Option Pos := none
+
+/-- The return frames of a tail's alternatives, in the order of its arms. -/
+def loopFramesWith (elabSeq : Ctx → List SExpr → Option Ty → EM (R × Ctx))
+    (arms : List (Ctx × List SExpr)) : EM (List LoopFrame) := do
+  let mut out : List LoopFrame := []
+  for (ca, as) in arms do
+    for a in as do
+      if let .app _ (.ident _ "$then") (_ :: .ident _ h :: k :: rest) false := a then
+        let (pre, c) ← match rest with
+          | [.block _ ss] => do
+            let (r, c) ← elabSeq { ca with canFail := true, inTaking := true } ss none
+            pure (some r.e, { c with canFail := ca.canFail, inTaking := ca.inTaking })
+          | _ => pure (none, ca)
+        let own := h :: Choice.localsOf k
+        let preSet := rest.findSome? fun e => if Choice.anyE (fun | .set .. => true | _ => false) e then some e.pos else none
+        out := out ++ [{ hole := h, code := k, ctx := c, pre, preSet,
+                         lives := (Choice.namesUsed k).eraseDups.filterMap fun n => if own.contains n then none else c.lookup n }]
+  return out
+
+/-- A return frame's lives' values (`void` for none, as `tuple()` is). -/
+def frameLivesTy (ts : List Ty) : Ty := if ts.isEmpty then .void else .tup ts
+
+/-- A frame on a continuation: one option per return frame, the one of the
+    call that pushed it holding its lives' values. -/
+def frameTy (lives : List (List Ty)) : Ty := .tup (lives.map fun ts => .opt (frameLivesTy ts))
+
+/-- The continuation of a lazily taken recursive group (#283): its frames,
+    innermost first, a list of `$lazycell`s. -/
+def frameContTy (lives : List (List Ty)) : Ty := .opt (.struct "$lazycell" [frameTy lives])
+
+/-- The lives' types of each return frame, from its continuation's type. -/
+def frameLivesOf : Ty → Option (List (List Ty))
+  | .opt (.struct "$lazycell" [.tup fs]) => fs.mapM fun | .opt .void => some [] | .opt (.tup ts) => some ts | _ => none
+  | _ => none
+
+/-- The continuation `k` with frame `j` pushed on it, holding `vals`. -/
+def framePush (ctx : Ctx) (lives : List (List Ty)) (j : Nat) (vals : List Expr) (k : Expr) : Expr :=
+  let fr : Expr := .prim .mkTup (lives.zipIdx.map fun (_, i) =>
+    if i == j then .prim .mkSome [if vals.isEmpty then .lit .void else .prim .mkTup vals] else .lit .none)
+  .prim .mkSome [.heap (.new (ctx.types.tagOf "$lazycell")) [fr, k]]
+
+/-- The value `leaf` given to the continuation `k` (#283): each frame's code
+    in turn, innermost first, on the value the one before gave, with the
+    frame's lives in slots of their own (the item's names stay as they are),
+    until no frame is left. It runs where the value does, in the consumer's
+    failure context, so what the frames do is undone with the value. -/
+def frameApplyWith (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx) (p : Pos)
+    (frames : List LoopFrame) (rty : Ty) (k leaf : Expr) : EM Expr := do
+  let vd : Expr := .lit .void
+  let lives := frames.map fun f => f.lives.map (·.ty)
+  let fty := frameTy lives
+  let cellTy : Ty := .struct "$lazycell" [fty]
+  let cfs := ctx.types.fields "$lazycell" [fty]
+  let (some (itemF, _), some (nextF, _)) := (fieldIndex cfs "$LItem", fieldIndex cfs "$LNext")
+    | eerr p "internal: the frames of a $loop (#283)"
+  let v ← fresh rty
+  let kk ← fresh (frameContTy lives)
+  let cell ← fresh cellTy
+  let fr ← fresh fty
+  let mut arms : List (Nat × Nat × Expr) := []
+  for (f, j) in frames.zipIdx do
+    let t ← fresh (frameLivesTy (f.lives.map (·.ty)))
+    let ls ← f.lives.mapM fun l => do return { l with slot := ← fresh l.ty }
+    let h ← fresh rty
+    let hole : Local := { name := f.hole, slot := h, ty := rty, mutable := false }
+    let c : Ctx := { f.ctx with canFail := true, inTaking := true, locals := hole :: ls.reverse ++ f.ctx.locals }
+    let r ← elabE c f.code (some rty)
+    let e ← coerce f.code.pos r rty
+    let unpack := ls.zipIdx.foldr (fun (l, i) acc => Expr.seq (.assign l.slot (.prim (.tupGet i) [.local t])) acc) vd
+    arms := arms ++ [(j, t, .seq unpack (.seq (.assign h (.local v)) (.seq (.assign v e) vd)))]
+  let dispatch : Expr := arms.foldr (fun (j, t, body) acc =>
+    .ite (.assign t (.prim .query [.prim (.tupGet j) [.local fr]])) body acc) vd
+  let step : Expr := .ite (.assign cell (.prim .query [.local kk]))
+    (.seq (.assign fr (.heap (.get itemF) [.local cell])) (.seq (.assign kk (.heap (.get nextF) [.local cell])) dispatch))
+    Expr.brkV
+  return .seq (.assign v leaf) (.seq (.assign kk k) (.seq (.loop step) (.local v)))
 
 /-- (#283) `elabLoopGen` for a strongly connected group of functions with
     several values, taken lazily (`$group(tail, $member(H, params, clauses,
@@ -791,6 +956,9 @@ partial def elabLoopGenGroupWith (elabE : Ctx → SExpr → Option Ty → EM R)
       let code ← elabLoopTailWith elabSeq cc htail probeK 0
       for (ca, alts) in code.arms do
         for alt in alts do
+          let alt := match alt with
+            | .app _ (.ident _ "$then") (c :: _) false => c
+            | a => a
           let call := match alt with
             | .app q (.ident _ "$rec") as false => some (q, h, as)
             | .app q (.ident _ "$recTo") (.ident _ target :: as) false => some (q, target, as)
@@ -840,8 +1008,16 @@ partial def elabLoopGenGroupWith (elabE : Ctx → SExpr → Option Ty → EM R)
     for l in (newOf cc ++ code.arms.toList.flatMap fun (ca, _) => newOf ca).reverse do
       if !tls.any (·.slot == l.slot) then tls := tls ++ [l]
     infos := infos.push (rc, code, tls)
+  -- (#283) the return frames of the alternatives that are calls with code
+  -- after them, and the continuation they are pushed on, which every item
+  -- keeps, after every member's names
+  let frames ← loopFramesWith elabSeq (infos.toList.flatMap fun (_, code, _) => code.arms.toList)
+  let lives := frames.map fun f => f.lives.map (·.ty)
+  let kl? : Option Local ← if frames.isEmpty then pure none else do
+    let kTy := frameContTy lives
+    pure (some { name := "$K", slot := ← fresh kTy, ty := kTy, mutable := false })
   -- (one item for all: every member's names, the members in order)
-  let all : List Local := infos.toList.flatMap (·.2.2)
+  let all : List Local := infos.toList.flatMap (·.2.2) ++ kl?.toList
   let bases : List Nat := (infos.toList.foldl (fun (acc, n) (_, _, tls) => (acc ++ [n], n + tls.length)) ([], 0)).1
   let tupTy : Ty := .tup (.int :: all.map (·.ty))
   let cellTy : Ty := .struct "$lazycell" [tupTy]
@@ -860,10 +1036,12 @@ partial def elabLoopGenGroupWith (elabE : Ctx → SExpr → Option Ty → EM R)
     .seq (.assign cell (.heap (.new (ctx.types.tagOf "$lazycell")) [e, .local w]))
       (.seq (.assign w (.prim .mkSome [.local cell]))
         (.seq (.assign sp (p2 .add (.local sp) (.lit (.int 1)))) vd))
-  -- (the item that starts member `j`, its parameters from `ts`)
-  let startOf (j : Nat) (ts : List Nat) : Expr :=
+  -- (the item that starts member `j`, its parameters from `ts`; with a
+  -- return frame, on the continuation `kE`)
+  let startOf (j : Nat) (ts : List Nat) (kE : Option Expr := none) : Expr :=
     let b := bases.getD j 0
-    item (.lit (.int (-1 - (j : Int)))) (cur.take b ++ ts.map Expr.local ++ cur.drop (b + ts.length))
+    let vals := cur.take b ++ ts.map Expr.local ++ cur.drop (b + ts.length)
+    item (.lit (.int (-1 - (j : Int)))) (match kE with | some e => vals.dropLast ++ [e] | none => vals)
   -- (the alternatives, numbered across the members' branches)
   let mut offs : Array Nat := #[]
   let mut total : Nat := 0
@@ -875,6 +1053,7 @@ partial def elabLoopGenGroupWith (elabE : Ctx → SExpr → Option Ty → EM R)
   let mut itemCode : Expr := vd
   let mut argSet : Option Pos := none
   let mut starts : Array Expr := #[]
+  let mut fi : Nat := 0
   for ((rc, armCode, _), i) in infos.toList.zipIdx do
     let off := offs.getD i 0
     itemCode := .seq itemCode (.seq rc.e armCode.itemCode)
@@ -889,6 +1068,17 @@ partial def elabLoopGenGroupWith (elabE : Ctx → SExpr → Option Ty → EM R)
         let cont : Expr := match next? with
           | some n => push (item (.lit (.int (n : Nat))) cur)
           | none => vd
+        -- (a call with code after it: its return frame, pushed with it)
+        let (a, frame?) := match a, kl? with
+          | .app _ (.ident _ "$then") (c :: _) false, some kl => (c, some (fi, kl))
+          | a, _ => (a, none)
+        if frame?.isSome then fi := fi + 1
+        -- (its prefix, if any: before the arguments, in whose context they are)
+        let fr? := frame?.bind fun (j, _) => frames[j]?
+        let pre? := fr?.bind (·.pre)
+        let actx : Ctx := match pre?, fr? with
+          | some _, some f => { f.ctx with canFail := true, inTaking := true }
+          | _, _ => actx
         let call? : Option (Nat × List SExpr × Pos) := match a with
           | .app q (.ident _ "$rec") args' false => some (i, args', q)
           | .app q (.ident _ "$recTo") (.ident _ h :: args') false => (names.idxOf? h).map (·, args', q)
@@ -899,10 +1089,14 @@ partial def elabLoopGenGroupWith (elabE : Ctx → SExpr → Option Ty → EM R)
           if argSet.isNone then
             argSet := args'.findSome? fun a' =>
               if Choice.anyE (fun | .set .. => true | _ => false) a' then some a'.pos else none
+          if argSet.isNone then argSet := fr?.bind (·.preSet)
           let ts ← hpls.mapM fun l => fresh l.ty
           let assigns ← elabLoopArgsWith elabE actx q h args' hpls ts ((instances.lookup h).getD [])
+          let assigns := match pre? with | some e => Expr.seq e assigns | none => assigns
           itemCode := .seq itemCode assigns
-          alts := alts.push (.ite assigns (.seq cont (push (startOf jm ts))) cont)
+          let kE := frame?.map fun (j, kl) =>
+            framePush ctx lives j (((frames[j]?).map (·.lives)).getD [] |>.map (Expr.local ·.slot)) (.local kl.slot)
+          alts := alts.push (.ite assigns (.seq cont (push (startOf jm ts kE))) cont)
         | none =>
           let r ← elabE actx a (some rty)
           values := values.push (gi, ← coerce a.pos r rty)
@@ -914,6 +1108,9 @@ partial def elabLoopGenGroupWith (elabE : Ctx → SExpr → Option Ty → EM R)
     .seq (.assign l.slot (.prim (.tupGet (j + 1)) [.local it])) acc) vd
   let init : Expr := .seq (.assign w (.lit .none)) (.seq (.assign sp (.lit (.int 0)))
     (push (item (.lit (.int (-1))) (args.map (Expr.local ·.slot) ++ cur.drop pls0.length))))
+  let init : Expr := match kl? with
+    | some kl => .seq (.assign kl.slot (.lit .none)) init
+    | none => init
   let start : Expr := (starts.toList.zipIdx).foldr (fun (st, i) acc =>
     .ite (p2 .eq (.local k) (.lit (.int (-1 - (i : Int))))) st acc) vd
   let step : Expr := Expr.seq (.assign sp (p2 .sub (.local sp) (.lit (.int 1))))
@@ -926,8 +1123,13 @@ partial def elabLoopGenGroupWith (elabE : Ctx → SExpr → Option Ty → EM R)
       dispatch)))))
   let value : Expr := values.toList.foldr (fun (i, e) acc =>
     .ite (p2 .eq (.local k) (.lit (.int (i : Nat)))) e acc) (.prim .fail [])
+  -- (#283) given to the frames of the item's continuation)
+  let value ← match kl? with
+    | some kl => frameApplyWith elabE ctx p frames rty (.local kl.slot) value
+    | none => pure value
   let after : Expr := .ite (p2 .ge (.local nx) (.lit (.int 0))) (push (item (.local nx) cur)) vd
-  return { init, step, sp, has, value, after, vty := rty, itemCode, argSet, instances }
+  return { init, step, sp, has, value, after, vty := rty, itemCode, argSet, instances,
+           frames := frames.map (fun f => (f.hole, f.lives.map (·.name), f.code)), kTy := kl?.map (·.ty) }
 
 /-- (#283) A body for the elaboration that chooses overloads: each
     `$inlineOv(F, id, call, …)` its call as written, `$ovPick(id, F, call)`. -/

@@ -136,7 +136,7 @@ rushMark(A:[]void)<suspends><computes>:void = {}
 def concPreludeFifo : String :=
   let s := concPrelude
   let s := s.replace "    var CurTask:taskBase = taskBase{}\n"
-    "    var CurTask:taskBase = taskBase{}\n    var CurRoot:?int = false\n    var WokenHead:?taskBase = false\n    var WokenTail:?taskBase = false\n"
+    "    var CurTask:taskBase = taskBase{}\n    var CurRoot:?int = false\n    var WokenHead:?taskBase = false\n    var WokenTail:?taskBase = false\n    var Probe:logic = false\n"
   let s := s.replace "    var CancelReq:logic = false\n"
     "    var CancelReq:logic = false\n    var WaitRoot:?int = false\n    var WokenNext:?taskBase = false\n    var Pending:logic = false\n"
   -- (only a waiter this `Signal` wakes: a record already done, of a wait
@@ -145,11 +145,15 @@ def concPreludeFifo : String :=
     "            WasDone := W.Done\n            set W.Got = option{X}\n            set W.Done = true\n            if (S := W.Sch?):\n                set S.Progress = true\n                if (not WasDone?):\n                    set W.Pending = true\n                    set W.WokenNext = false\n                    if (WT := S.WokenTail?) then set WT.WokenNext = option{W} else set S.WokenHead = option{W}\n                    set S.WokenTail = option{W}\n"
   -- (a woken waiter goes on only at its turn, when the drain unmarks it: a
   -- task resumed for another's turn, an arm's sibling, leaves it waiting)
-  s.replace "    if (F.T.Done?) then return 1\n" "    if (F.T.Done?, not F.T.Pending?) then return 1\n"
+  let s := s.replace "    if (F.T.Done?) then return 1\n" "    if (F.T.Done?, not F.T.Pending?) then return 1\n"
+  -- (a probe, `Probe`: a poll that only records the root each waiter waits
+  -- in, and goes on nowhere, for a `rush` loser that becomes a task)
+  let s := s.replace "waitResume(F:waitf, C:sched):int =\n" "waitResume(F:waitf, C:sched):int =\n    if (C.Probe?) then return 0\n"
+  s.replace "sleepResume(F:sleep, C:sched):int =\n" "sleepResume(F:sleep, C:sched):int =\n    if (C.Probe?) then return 0\n"
 
 def concTops (owned : List String := []) (fifo : Bool := false) : Except String (List STop) :=
   parsePrelude (if fifo then concPreludeFifo else concPrelude) (owned ++ (if fifo then ["CurRoot", "WokenHead",
-    "WokenTail", "WaitRoot", "WokenNext", "WT", "WasDone", "Pending"] else []) ++ ["sched", "Now", "Next", "sleep", "Pc", "Secs", "Wake", "sleepNew",
+    "WokenTail", "WaitRoot", "WokenNext", "WT", "WasDone", "Pending", "Probe"] else []) ++ ["sched", "Now", "Next", "sleep", "Pc", "Secs", "Wake", "sleepNew",
     "sleepInit", "sleepResume", "Sleep", "Round", "Ticks", "syncMark", "raceMark", "S", "F", "C", "N", "R", "A",
     "Progress", "Roots", "taskBase", "Done", "Result", "waitf", "T", "X", "waitNew", "waitInit", "waitResume",
     "WaitDone", "Await", "spawnMark", "t", "Sch", "Dead", "evrec", "Got", "Next", "Head", "Tail", "Cur", "W", "L", "V",

@@ -8,6 +8,189 @@ tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
 limit="${CHOICE_SIZE_TIMEOUT:-120}"
 # Keep modes sorted on separate lines so independent additions merge cleanly.
 kinds=(
+  callpacking-tuplevar-first
+  callpacking-tuplevar-for
+  callpacking-tuplevar-waiting
+  callpacking-tuple-generic-first
+  callpacking-tuple-generic-for
+  callpacking-tuple-generic-waiting
+  callpacking-literal-generic-first
+  callpacking-literal-generic-for
+  callpacking-literal-generic-waiting
+  callpacking-arraypack-first
+  callpacking-arraypack-for
+  callpacking-arraypack-waiting
+  callpacking-tuplepack-first
+  callpacking-tuplepack-for
+  callpacking-tuplepack-waiting
+  callpacking-singleton-first
+  callpacking-singleton-for
+  callpacking-singleton-waiting
+  callpacking-unit-first
+  callpacking-unit-for
+  callpacking-unit-waiting
+  callpacking-named-first
+  callpacking-named-for
+  callpacking-named-waiting
+  callpacking-callable-first
+  callpacking-callable-for
+  callpacking-callable-waiting
+  callpacking-callable-array-first
+  callpacking-callable-array-for
+  callpacking-callable-array-waiting
+  callpacking-mixedpack-first
+  callpacking-mixedpack-for
+  callpacking-mixedpack-waiting
+  callpacking-mixedliteral-first
+  callpacking-mixedliteral-for
+  callpacking-mixedliteral-waiting
+  callpacking-mixedsingle-first
+  callpacking-mixedsingle-for
+  callpacking-mixedsingle-waiting
+  callpacking-mixedunit-first
+  callpacking-mixedunit-for
+  callpacking-mixedunit-waiting
+  objectpath-plain-varying-boundary-first
+  objectpath-plain-varying-boundary-for
+  objectpath-plain-varying-boundary-waiting
+  objectpath-compound-varying-boundary-first
+  objectpath-compound-varying-boundary-for
+  objectpath-compound-varying-boundary-waiting
+  objectpath-plain-opt-array-first
+  objectpath-plain-opt-array-for
+  objectpath-plain-opt-array-waiting
+  objectpath-plain-array-opt-first
+  objectpath-plain-array-opt-for
+  objectpath-plain-array-opt-waiting
+  objectpath-plain-opt-only-first
+  objectpath-plain-opt-only-for
+  objectpath-plain-opt-only-waiting
+  objectpath-plain-reference-array-first
+  objectpath-plain-reference-array-for
+  objectpath-plain-reference-array-waiting
+  objectpath-plain-reference-map-first
+  objectpath-plain-reference-map-for
+  objectpath-plain-reference-map-waiting
+  objectpath-plain-value-field-first
+  objectpath-plain-value-field-for
+  objectpath-plain-value-field-waiting
+  objectpath-plain-mixed-query-first
+  objectpath-plain-mixed-query-for
+  objectpath-plain-mixed-query-waiting
+  objectpath-plain-contextual-first
+  objectpath-plain-contextual-for
+  objectpath-plain-contextual-waiting
+  objectpath-plain-alias-reference-first
+  objectpath-plain-alias-reference-for
+  objectpath-plain-alias-reference-waiting
+  objectpath-compound-opt-array-first
+  objectpath-compound-opt-array-for
+  objectpath-compound-opt-array-waiting
+  objectpath-compound-array-opt-first
+  objectpath-compound-array-opt-for
+  objectpath-compound-array-opt-waiting
+  objectpath-compound-opt-only-first
+  objectpath-compound-opt-only-for
+  objectpath-compound-opt-only-waiting
+  objectpath-compound-reference-array-first
+  objectpath-compound-reference-array-for
+  objectpath-compound-reference-array-waiting
+  objectpath-compound-reference-map-first
+  objectpath-compound-reference-map-for
+  objectpath-compound-reference-map-waiting
+  objectpath-compound-value-field-first
+  objectpath-compound-value-field-for
+  objectpath-compound-value-field-waiting
+  objectpath-compound-mixed-query-first
+  objectpath-compound-mixed-query-for
+  objectpath-compound-mixed-query-waiting
+  objectpath-compound-contextual-first
+  objectpath-compound-contextual-for
+  objectpath-compound-contextual-waiting
+  objectpath-compound-alias-reference-first
+  objectpath-compound-alias-reference-for
+  objectpath-compound-alias-reference-waiting
+  multiindex-plain-simple-first
+  multiindex-plain-simple-for
+  multiindex-plain-simple-waiting
+  multiindex-plain-numeric-first
+  multiindex-plain-numeric-for
+  multiindex-plain-numeric-waiting
+  multiindex-plain-contextual-first
+  multiindex-plain-contextual-for
+  multiindex-plain-contextual-waiting
+  multiindex-plain-mapmap-first
+  multiindex-plain-mapmap-for
+  multiindex-plain-mapmap-waiting
+  multiindex-plain-arraymap-first
+  multiindex-plain-arraymap-for
+  multiindex-plain-arraymap-waiting
+  multiindex-plain-maparray-first
+  multiindex-plain-maparray-for
+  multiindex-plain-maparray-waiting
+  multiindex-compound-simple-first
+  multiindex-compound-simple-for
+  multiindex-compound-simple-waiting
+  multiindex-compound-numeric-first
+  multiindex-compound-numeric-for
+  multiindex-compound-numeric-waiting
+  multiindex-compound-contextual-first
+  multiindex-compound-contextual-for
+  multiindex-compound-contextual-waiting
+  multiindex-compound-mapmap-first
+  multiindex-compound-mapmap-for
+  multiindex-compound-mapmap-waiting
+  multiindex-compound-arraymap-first
+  multiindex-compound-arraymap-for
+  multiindex-compound-arraymap-waiting
+  multiindex-compound-maparray-first
+  multiindex-compound-maparray-for
+  multiindex-compound-maparray-waiting
+  mapwrite-plain-simple-first
+  mapwrite-plain-simple-for
+  mapwrite-plain-simple-waiting
+  mapwrite-plain-nested-first
+  mapwrite-plain-nested-for
+  mapwrite-plain-nested-waiting
+  mapwrite-plain-numeric-first
+  mapwrite-plain-numeric-for
+  mapwrite-plain-numeric-waiting
+  mapwrite-plain-contextual-first
+  mapwrite-plain-contextual-for
+  mapwrite-plain-contextual-waiting
+  mapwrite-plain-correlated-first
+  mapwrite-plain-correlated-for
+  mapwrite-plain-correlated-waiting
+  mapwrite-compound-simple-first
+  mapwrite-compound-simple-for
+  mapwrite-compound-simple-waiting
+  mapwrite-compound-nested-first
+  mapwrite-compound-nested-for
+  mapwrite-compound-nested-waiting
+  mapwrite-compound-numeric-first
+  mapwrite-compound-numeric-for
+  mapwrite-compound-numeric-waiting
+  mapwrite-compound-contextual-first
+  mapwrite-compound-contextual-for
+  mapwrite-compound-contextual-waiting
+  mapwrite-compound-correlated-first
+  mapwrite-compound-correlated-for
+  mapwrite-compound-correlated-waiting
+  compoundindex-simple-first
+  compoundindex-simple-for
+  compoundindex-simple-waiting
+  compoundindex-nested-first
+  compoundindex-nested-for
+  compoundindex-nested-waiting
+  compoundindex-numeric-first
+  compoundindex-numeric-for
+  compoundindex-numeric-waiting
+  compoundindex-contextual-first
+  compoundindex-contextual-for
+  compoundindex-contextual-waiting
+  compoundindex-alias-first
+  compoundindex-alias-for
+  compoundindex-alias-waiting
   indexwrite-simple-first
   indexwrite-simple-for
   indexwrite-simple-waiting
@@ -118,12 +301,25 @@ kinds=(
   context-method-for
   context-method-nested
   context-method-nested-dispatch
+  castclause-condition
+  castclause-decides
   clause-break-composed
   clause-break-exclusive
   clause-break-refined
   clause-return-composed
   clause-return-exclusive
   clause-return-refined
+  first-break-composed
+  first-break-exclusive
+  first-break-lazy
+  first-break-refined
+  block-exits-first-composed
+  block-exits-first-exclusive
+  block-exits-first-lazy
+  block-exits-first-refined
+  block-exits-for-composed
+  block-exits-for-exclusive
+  block-exits-for-refined
   composed
   construct-failure
   construct-first
@@ -292,6 +488,12 @@ kinds=(
   lazy-tuple-first
   lazy-tuple-for
   lazy-tuple-generic-first
+  logic-and-first
+  logic-and-for
+  logic-or-first
+  logic-or-for
+  setalt-first
+  setalt-for
   method-failure
   method-first
   method-for
@@ -317,6 +519,8 @@ kinds=(
   own-method-failure
   own-method-first
   own-method-for
+  recursive-frame-first
+  recursive-frame-for
   recursive-return-eager
   recursive-return-first
   recursive-return-for
@@ -375,6 +579,179 @@ for kind in "${kinds[@]}"; do
     python3 - "$kind" "$count" >"$tmp/p.verse" <<'PY'
 import sys
 kind, count = sys.argv[1], int(sys.argv[2])
+if kind.startswith('callpacking-'):
+    rest=kind.removeprefix('callpacking-')
+    shape,mode=rest.rsplit('-',1)
+    n=count
+    print('Dup(X:t where t:type)<computes>:t=X|X')
+    if shape in ['callable','callable-array']:
+        params='X:int,Y:int' if shape=='callable' else 'X:[]int'
+        for name,fx in [('FA','<reads><writes>'),('FB','<transacts>')]:print(name+'('+params+')'+fx+':int=1')
+    for cls,tag in [('ca','a'),('cb','b')]:
+        if shape in ['callable','callable-array']:
+            inputs=':int,:int' if shape=='callable' else ':[]int';fx='<reads><writes>' if tag=='a' else '<transacts>'
+            fields='F:type{_('+inputs+')'+fx+':int}='+('FA' if tag=='a' else 'FB')
+        else:
+            params=('X:tuple(int,int)' if tag=='a' else 'X:[]int') if shape=='mixedpack' else ('X:tuple(int,int)' if tag=='a' else 'X:int,Y:int') if shape=='mixedliteral' else ('X:tuple(int)' if tag=='a' else 'X:int') if shape=='mixedsingle' else ('X:tuple()' if tag=='a' else '') if shape=='mixedunit' else 'X:int,Y:int' if shape=='tuplevar' else 'X:u,Y:u where u:type' if shape=='tuple-generic' else 'A:[]u,B:?u,C:u,?Stamp:int=3 where u:type' if shape=='literal-generic' else 'X:[]u where u:type' if shape=='arraypack' else 'X:tuple(int,int)' if shape in ['tuplepack','named'] else 'X:tuple(int)' if shape=='singleton' else 'X:tuple()'
+            if shape=='named':params+=',?Stamp:int=3'
+            ret='u' if shape=='tuple-generic' else 'int';body='X' if shape=='tuple-generic' else '1'
+            fields='M('+params+')<computes>:'+ret+'='+body
+        print(cls+':=class{'+fields+'}')
+    clauses=[f'A{i}:=(Dup(ca{{}})|Dup(cb{{}}))' for i in range(n)];calls=[]
+    for i in range(n):
+        args='PairValue' if shape in ['tuplevar','tuple-generic','callable'] else '(array{},false,7)' if shape=='literal-generic' else '1,2' if shape in ['arraypack','tuplepack','named','callable-array','mixedpack'] else '(1,2)' if shape=='mixedliteral' else '7' if shape in ['singleton','mixedsingle'] else ''
+        calls.append(f'A{i}.'+('F' if shape.startswith('callable') else 'M')+'('+args+')')
+    params='V:t where t:type' if shape=='tuple-generic' else ''
+    print('Run('+params+')'+('<suspends>' if mode=='waiting' else '')+':int=')
+    print('    PairValue:='+('(V,V)' if shape=='tuple-generic' else '(1,2)'))
+    if mode=='first':print('    if('+','.join(clauses+calls)+')then 1 else -1')
+    else:
+        body='block{'+(';'.join(calls))+';Sleep(0.001);0}' if mode=='waiting' else '0'
+        print('    Rows:=for('+','.join(clauses+([] if mode=='waiting' else calls))+'):'+body+'\n    Rows.Length')
+    print('Main()'+('<suspends>' if mode=='waiting' else '')+':void=Print("{Run('+('7' if shape=='tuple-generic' else '')+')}")')
+    sys.exit(0)
+if kind.startswith('objectpath-'):
+    _,op,rest=kind.split('-',2)
+    shape,mode=rest.rsplit('-',1)
+    n=count
+    print('Dup(X:t where t:type)<computes>:t=X|X')
+    for cls,tag in [('ca','a'),('cb','b')]:
+        leaf='[]int' if shape=='contextual' and tag=='a' else '[]string' if shape=='contextual' else 'int' if tag=='a' else 'rational'
+        value='array{1}' if shape=='contextual' and tag=='a' else 'array{"s"}' if shape=='contextual' else '1'
+        keyTy='int' if tag=='a' else 'string';key='0' if tag=='a' else '"k"'
+        if shape in ['reference-array','reference-map','mixed-query','alias-reference']:
+            print('leaf'+tag+':=class{var Data:'+('?' if shape=='mixed-query' else '')+'[]'+leaf+'='+('option{' if shape=='mixed-query' else '')+'array{'+value+'}'+('}' if shape=='mixed-query' else '')+'}')
+        if shape=='varying-boundary':
+            print('state'+tag+':='+('struct{X:'+leaf+'}' if tag=='a' else 'class{var X:'+leaf+'='+value+'}'))
+            field='var Data:state'+tag+'=state'+tag+'{X:='+value+'}'
+        elif shape=='value-field':
+            print('state'+tag+':=struct{X:'+leaf+';Tail:int=9}')
+            field='var Data:state'+tag+'=state'+tag+'{X:='+value+'}'
+        elif shape in ['reference-array','alias-reference']:field='var Items:[]leaf'+tag+'=array{leaf'+tag+'{}}'
+        elif shape=='reference-map':field='var Items:['+keyTy+']leaf'+tag+'=map{'+key+'=>leaf'+tag+'{}};Key()<computes>:'+keyTy+'='+key
+        elif shape=='mixed-query':field='var Items:?['+keyTy+']?leaf'+tag+'=option{map{'+key+'=>option{leaf'+tag+'{}}}};Key()<computes>:'+keyTy+'='+key
+        else:
+            ty='[]?'+leaf if shape=='array-opt' else '?'+leaf if shape=='opt-only' else '?[]'+leaf
+            initial='array{option{'+value+'}}' if shape=='array-opt' else 'option{'+value+'}' if shape=='opt-only' else 'option{array{'+value+'}}'
+            field='var Data:'+ty+'='+initial
+        print(cls+':=class{'+field+'}')
+    clauses=[f'A{i}:=(Dup(ca{{}})|Dup(cb{{}}))' for i in range(n)];writes=[]
+    for i in range(n):
+        target=f'A{i}'
+        if shape=='alias-reference':clauses+=[f'B{i}:=A{i}',f'C{i}:=B{i}'];target=f'C{i}'
+        tail='.Data[0]?' if shape=='array-opt' else '.Data?' if shape=='opt-only' else '.Data.X' if shape in ['value-field','varying-boundary'] else '.Items[0].Data[0]' if shape in ['reference-array','alias-reference'] else '.Items['+target+'.Key()].Data[0]' if shape=='reference-map' else '.Items?['+target+'.Key()]?.Data?[0]' if shape=='mixed-query' else '.Data?[0]'
+        writes.append('set '+target+tail+('+=' if op=='compound' else '=')+('array{}' if shape=='contextual' else '1'))
+    print('Run()'+('<suspends>' if mode=='waiting' else '')+':int=')
+    if mode=='first':print('    if('+','.join(clauses+writes)+')then 1 else -1')
+    else:
+        body=('block{'+(';'.join(writes) if shape in ['value-field','varying-boundary'] else 'if('+','.join(writes)+'):{}')+';Sleep(0.001);0}') if mode=='waiting' else '0'
+        print('    Rows:=for('+','.join(clauses+([] if mode=='waiting' else writes))+'):'+body+'\n    Rows.Length')
+    print('Main()'+('<suspends>' if mode=='waiting' else '')+':void=Print("{Run()}")')
+    sys.exit(0)
+if kind.startswith('multiindex-'):
+    _,op,shape,mode=kind.split('-')
+    n=count
+    print('Dup(X:t where t:type)<computes>:t=X|X')
+    for cls,kind in [('ca','a'),('cb','b')]:
+        leaf='rational' if shape=='numeric' and kind=='b' else '[]string' if shape=='contextual' and kind=='b' else '[]int' if shape=='contextual' else 'int'
+        value='array{"s"}' if shape=='contextual' and kind=='b' else 'array{1}' if shape=='contextual' else '1'
+        kt='string' if kind=='b' else 'int';key='"k"' if kind=='b' else '0'
+        if shape=='mapmap':ty='['+kt+']['+kt+']'+leaf;initial='map{'+key+'=>map{'+key+'=>'+value+'}}'
+        elif shape=='arraymap':ty='[]['+kt+']'+leaf;initial='array{map{'+key+'=>'+value+'}}'
+        elif shape=='maparray':ty='['+kt+'][]'+leaf;initial='map{'+key+'=>array{'+value+'}}'
+        else:ty='[][]'+leaf;initial='array{array{'+value+'}}'
+        methods=';Key()<computes>:'+kt+'='+key if shape in ['mapmap','arraymap','maparray'] else ''
+        print(cls+':=class{var Data:'+ty+'='+initial+methods+'}')
+    clauses=[f'A{i}:=(Dup(ca{{}})|Dup(cb{{}}))' for i in range(n)]
+    writes=[]
+    for i in range(n):
+        key=f'A{i}.Key()'
+        indices=[key,key] if shape=='mapmap' else ['0',key] if shape=='arraymap' else [key,'0'] if shape=='maparray' else ['0','0']
+        writes.append('set '+f'A{i}.Data'+''.join('['+k+']' for k in indices)+('+=' if op=='compound' else '=')+('array{}' if shape=='contextual' else '1'))
+    print('Run()'+('<suspends>' if mode=='waiting' else '')+':int=')
+    if mode=='first':print('    if('+','.join(clauses+writes)+')then 1 else -1')
+    else:
+        body='block{if('+','.join(writes)+'):{};Sleep(0.001);0}' if mode=='waiting' else '0'
+        print('    Rows:=for('+','.join(clauses+([] if mode=='waiting' else writes))+'):'+body+'\n    Rows.Length')
+    print('Main()'+('<suspends>' if mode=='waiting' else '')+':void=Print("{Run()}")')
+    sys.exit(0)
+if kind.startswith('mapwrite-'):
+    _, op, shape, mode = kind.split('-')
+    n = count
+    print('Dup(X:t where t:type)<computes>:t=X|X')
+    keys={}
+    for cls,kind in [('ca','a'),('cb','b')]:
+     kt='string' if shape=='correlated' and kind=='b' else 'int';key='"k"' if kt=='string' else '0';keys[cls]=key
+     vt='rational' if shape=='numeric' and kind=='b' else '[]string' if shape=='contextual' and kind=='b' else '[]int' if shape=='contextual' else 'int'
+     value='array{"s"}' if shape=='contextual' and kind=='b' else 'array{1}' if shape=='contextual' else '1'
+     field='var Data:['+kt+']'+vt+'=map{'+key+'=>'+value+'}'
+     if shape=='nested':
+      print('leaf'+kind+':=class{'+field+'}');print(cls+':=class{C:leaf'+kind+'=leaf'+kind+'{}}')
+     else:print(cls+':=class{'+field+(';Key()<computes>:'+kt+'='+key if shape=='correlated' else '')+'}')
+    clauses=[f'A{i}:=(Dup(ca{{}})|Dup(cb{{}}))' for i in range(n)];writes=[]
+    for i in range(n):
+     target=f'A{i}'
+     if shape=='alias':clauses+=[f'B{i}:=A{i}',f'C{i}:=B{i}'];target=f'C{i}'
+     key=target+'.Key()' if shape=='correlated' else '0'
+     if shape=='nested':target+='.C'
+     writes.append('set '+target+'.Data['+key+']'+('+=' if op=='compound' else '=')+('array{}' if shape=='contextual' else '1'))
+    effects='<suspends>' if mode=='waiting' else '';print('Run()'+effects+':int=')
+    if mode=='first':print('    if('+','.join(clauses+writes)+')then 1 else -1')
+    else:
+     if mode=='waiting':body='block{'+('if('+','.join(writes)+'):{}' if op=='compound' else ';'.join(writes))+';Sleep(0.001);0}'
+     else:body='0'
+     print('    Rows:=for('+','.join(clauses+([] if mode=='waiting' else writes))+'):'+body+'\n    Rows.Length')
+    print('Main()'+effects+':void=Print("{Run()}")')
+    sys.exit(0)
+if kind.startswith('compoundindex-'):
+    _, shape, mode = kind.split('-')
+    n = count
+    print('Dup(X:t where t:type)<computes>:t=X|X')
+    for cls,kind in [('ca','a'),('cb','b')]:
+     ty='[]rational' if shape=='numeric' and kind=='b' else '[][]string' if shape=='contextual' and kind=='b' else '[][]int' if shape=='contextual' else '[]int'
+     value='array{array{"s"}}' if shape=='contextual' and kind=='b' else 'array{array{1}}' if shape=='contextual' else 'array{1,2}'
+     if shape=='nested':
+      print('leaf'+kind+':=class{var Data:'+ty+'='+value+'}')
+      print(cls+':=class{C:leaf'+kind+'=leaf'+kind+'{}}')
+     else:print(cls+':=class{var Data:'+ty+'='+value+'}')
+    clauses=[f'A{i}:=(Dup(ca{{}})|Dup(cb{{}}))' for i in range(n)]
+    writes=[]
+    for i in range(n):
+     target=f'A{i}'
+     if shape=='alias':
+      clauses += [f'B{i}:=A{i}',f'C{i}:=B{i}'];target=f'C{i}'
+     if shape=='nested':target+='.C'
+     writes.append('set '+target+'.Data[0]+='+('array{}' if shape=='contextual' else '1'))
+    effects='<suspends>' if mode=='waiting' else ''
+    print('Run()'+effects+':int=')
+    if mode=='first':print('    if('+','.join(clauses+writes)+')then 1 else -1')
+    else:
+     body='block{if('+','.join(writes)+'):{};Sleep(0.001);0}' if mode=='waiting' else '0'
+     print('    Rows:=for('+','.join(clauses+([] if mode=='waiting' else writes))+'):'+body+'\n    Rows.Length')
+    print('Main()'+effects+':void=Print("{Run()}")')
+    sys.exit(0)
+if kind.startswith('castclause-'):
+    # (#243) refining casts as clauses after ones with effects, in a
+    # <decides> body or an if's condition: each takes the rest as its branch
+    n = count
+    print('pair(a:type, b:type) := class:\n    A:a\n    B:b')
+    print('dup(t:type) := class(pair(t, t)):\n    C:int = 4')
+    print('cell := class:\n    var N:int = 0')
+    tps = ', '.join(f'a{i}:type, b{i}:type' for i in range(n))
+    ps = ', '.join(f'P{i}:pair(a{i}, b{i})' for i in range(n))
+    total = ' + '.join(f'D{i}.C' for i in range(n))
+    ys = ', '.join('Y' for _ in range(n))
+    if kind == 'castclause-decides':
+        body = ''.join(f'    set H.N += 1\n    D{i} := dup[P{i}]\n' for i in range(n))
+        print(f'Run(H:cell, {ps} where {tps})<transacts><decides>:int =\n{body}    {total}')
+        call = f'if (V := Run[H, {ys}]) then V else -1'
+    else:
+        clauses = ', '.join(f'set H.N += 1, D{i} := dup[P{i}]' for i in range(n))
+        print(f'Run(H:cell, {ps} where {tps})<transacts>:int =\n    if ({clauses}) then {total} else -1')
+        call = f'Run(H, {ys})'
+    print('Main()<transacts>:void =\n    H := cell{}\n    Y:pair(int, int) = dup(int){A := 1, B := 2}')
+    print(f'    Print("{{{call}}} {{H.N}}")')
+    sys.exit(0)
 if kind.startswith('indexwrite-'):
     _, shape, mode = kind.split('-')
     n = count
@@ -1097,6 +1474,19 @@ box(t:type,u:type):=class:
         args.extend([f'box({ty},{extra_ty}){{V:={value},Extra:={extra},C:=cell{{}}}}', f'array{{{value}}}' if nested else value])
     print(f'Main():void=Print("{{Run({",".join(args)})}}")')
     sys.exit(0)
+if kind.startswith('recursive-frame-'):
+    # (#283) calls of itself with code after them, each a return frame: the
+    # frames' code is compiled once, not once per value
+    alts = ' | '.join(f'F[N - 1] + {i} | N * {i + 2}' for i in range(count))
+    print(f'''F(N:int)<transacts><decides>:int =
+    Print("f {{N}}")
+    N > 0
+    {alts}''')
+    if kind.endswith('first'):
+        print('Main()<transacts>:void = if (X := F[2], X > 100) then Print("{X}") else Print("none")')
+    else:
+        print('Main()<transacts>:void = Print("{(for (X := F[2], X > 100): X).Length}")')
+    sys.exit(0)
 if kind.startswith('recursive-return-'):
     eager = kind.endswith('eager')
     mutual = 'mutual' in kind
@@ -1182,6 +1572,58 @@ if kind.startswith('clause-break-'):
     print(f'Run({params} where {tparams})<suspends>:{ret_ty} =\n    var Total:int=0\n    defer:Print("source {{Total}}")\n    Sleep(0.0)\n    loop:\n        defer:Print("loop {{Total}}")\n        R:=for({",".join(clauses)}):\n            set Total+=1\n            A0\n        Print("rows {{R.Length}}")\n        break\n    Sleep(0.1)\n    {result}')
     args = ','.join('dup(int){A:=1,B:=2}' if i%2==0 else 'dup(string){A:="s",B:="t"}' for i in range(count))
     print(f'Main()<suspends>:void = Print("{{Run({args})}}")')
+    sys.exit(0)
+if kind.startswith('first-break-'):
+    # (#283) a break in an if's clauses, after the first of its choices: the
+    # clauses after a composed one are compiled once (#335), and so are an
+    # effectful lazy generator's (#246), each giving the break back
+    print('pair(a:type,b:type) := class { A:a; B:b }')
+    print('dup(t:type) := class(pair(t,t)) { C:int=4 }')
+    print('cell := class { var N:int=0 }')
+    print('Early(N:int):int =\n    if(N<0):return 0\n    N|N+1')
+    print('Lazy(H:cell,N:int)<transacts><decides>:int =\n    N>=0\n    set H.N+=1\n    N|Lazy[H,N-1]')
+    params = ','.join(f'P{i}:pair(a{i},b{i})' for i in range(count))
+    tparams = ','.join(f'a{i}:type,b{i}:type' for i in range(count))
+    shape = kind[len('first-break-'):]
+    values = {'composed': ['(Two(0)|Two(2))'] * count, 'exclusive': ['Early(0)'] * count,
+              'lazy': ['Lazy[H,1]'] * count}.get(shape,
+              [f'if(D{i}:=dup[P{i}])then(D{i}.C|D{i}.C+1)else 0' for i in range(count)])
+    clauses = [f'A{i}:={v}' for i, v in enumerate(values)]
+    clauses[1:1] = ['set Total+=A0', f'if(A0={5 if shape == "refined" else 1})then break else 0']
+    clauses.append('A0+A1<0')
+    print(f'Run(H:cell,{params} where {tparams})<suspends>:int =\n    var Total:int=0\n    defer:Print("source {{Total}}")\n    Sleep(0.0)\n    loop:\n        defer:Print("loop {{Total}}")\n        if({",".join(clauses)}):\n            Print("bad")\n        Print("bad suffix")\n        break\n    Total')
+    args = ','.join('dup(int){A:=1,B:=2}' if i%2==0 else 'dup(string){A:="s",B:="t"}' for i in range(count))
+    print(f'Main()<suspends>:void = Print("{{Run(cell{{}},{args})}}")')
+    sys.exit(0)
+if kind.startswith('block-exits-'):
+    # (#283) a block with choices and a defer: of its own, lifted into an
+    # if's condition or a for's clauses, with a break after each choice and a
+    # return at the end: each exit runs the block's cleanup, placed once for
+    # each exit, however many paths reach it
+    print('pair(a:type,b:type) := class { A:a; B:b }')
+    print('dup(t:type) := class(pair(t,t)) { C:int=4 }')
+    print('cell := class { var N:int=0 }')
+    print('Early(N:int):int =\n    if(N<0):return 0\n    N|N+1')
+    print('Lazy(H:cell,N:int)<transacts><decides>:int =\n    N>=0\n    set H.N+=1\n    N|Lazy[H,N-1]')
+    params = ','.join(f'P{i}:pair(a{i},b{i})' for i in range(count))
+    tparams = ','.join(f'a{i}:type,b{i}:type' for i in range(count))
+    consumer, shape = kind[len('block-exits-'):].split('-')
+    values = {'composed': ['(Two(0)|Two(2))'] * count, 'exclusive': ['Early(0)'] * count,
+              'lazy': ['Lazy[H,1]'] * count}.get(shape,
+              [f'if(D{i}:=dup[P{i}])then(D{i}.C|D{i}.C+1)else 0' for i in range(count)])
+    selected = 5 if shape == 'refined' else 1
+    stmts = ['defer:Print("block {Total}")']
+    for i, v in enumerate(values):
+        stmts += [f'A{i}:={v}', f'set Total+=A{i}', f'if(A{i}={selected if i == 0 else 9})then break else 0']
+    stmts += ['if(A1=9)then return -1 else 0', 'A0+A1<0']
+    block = 'block{' + ';'.join(stmts) + '}'
+    if consumer == 'first':
+        use = f'if(Z:={block}):\n            Print("bad")\n        Print("bad suffix")'
+    else:
+        use = f'R:=for(Z:={block}):\n            set Total+=1\n            Z\n        Print("rows {{R.Length}}")'
+    print(f'Run(H:cell,{params} where {tparams})<suspends>:int =\n    var Total:int=0\n    defer:Print("source {{Total}}")\n    Sleep(0.0)\n    loop:\n        defer:Print("loop {{Total}}")\n        {use}\n        break\n    Total')
+    args = ','.join('dup(int){A:=1,B:=2}' if i%2==0 else 'dup(string){A:="s",B:="t"}' for i in range(count))
+    print(f'Main()<suspends>:void = Print("{{Run(cell{{}},{args})}}")')
     sys.exit(0)
 if kind.startswith('return-defer-'):
     method = kind.endswith('method-first')
@@ -1513,6 +1955,32 @@ if kind.startswith('construct-'):
     call = 'Run[7]' if specs else 'Run(7)'
     print(f'Main(){specs}:void = Print("{{{call}}}")')
     sys.exit(0)
+if kind.startswith('logic-'):
+    # (#283) choices in the operands of `and` and on the right of `or`, with
+    # effects on the left; an `or` is lifted as the `if` it stands for
+    _, op, mode = kind.split('-')
+    print('counter := class:\n    var N:int = 0')
+    left = 'block{set C.N += 1; Two(0) > 0}' if op == 'and' else 'block{set C.N += 1; O?}'
+    clauses = ', '.join(f'A{i} := ({left} {op} Two(2))' for i in range(count))
+    print('Run(O:?int)<transacts>:int =\n    C := counter{}')
+    if mode == 'first':
+        print(f'    if ({clauses}, A{count-1} = 3) then C.N else -1')
+    else:
+        print(f'    R := for ({clauses}):\n        A0\n    R.Length + C.N')
+    print('Main()<transacts>:void = Print("{Run(false)}")')
+    sys.exit(0)
+if kind.startswith('setalt-'):
+    # (#283) a set's choice whose alternative has several values: each
+    # alternative runs the assignment itself
+    sets = ', '.join(f'set A{i} = Two(0) | 2' for i in range(count))
+    print('Run()<transacts>:int =')
+    for i in range(count): print(f'    var A{i}:int = 0')
+    if kind == 'setalt-first':
+        print(f'    if ({sets}, A{count-1} = 2) then A0 else -1')
+    else:
+        print(f'    R := for ({sets}):\n        A0\n    R.Length')
+    print('Main()<transacts>:void = Print("{Run()}")')
+    sys.exit(0)
 if kind.startswith('lazy-'):
     effectful = any(tag in kind for tag in ('effect', 'alt', 'failure', 'generic', 'named', 'tuple'))
     failable = 'failure' in kind
@@ -1621,6 +2089,31 @@ PY
       fi
       exit 1
     }
+    if [[ $kind == first-break-* && $count == 4 ]]; then
+      selected=1
+      [[ $kind == first-break-refined ]] && selected=5
+      printf 'loop %s\nsource %s\n%s\n' "$selected" "$selected" "$selected" >"$tmp/expected"
+      timeout "$limit" "$root/.lake/build/bin/openverse" run "$tmp/p.verse" >"$tmp/lean.out"
+      timeout "$limit" "$root/runtime/build/cverse" "$tmp/p.vbc" >"$tmp/c.out"
+      diff -u "$tmp/expected" "$tmp/lean.out"
+      diff -u "$tmp/expected" "$tmp/c.out"
+    fi
+    if [[ $kind == block-exits-first-* && $count == 4 ]]; then
+      selected=1
+      [[ $kind == *-refined ]] && selected=5
+      printf 'block %s\nloop %s\nsource %s\n%s\n' "$selected" "$selected" "$selected" "$selected" >"$tmp/expected"
+      timeout "$limit" "$root/.lake/build/bin/openverse" run "$tmp/p.verse" >"$tmp/lean.out"
+      timeout "$limit" "$root/runtime/build/cverse" "$tmp/p.vbc" >"$tmp/c.out"
+      diff -u "$tmp/expected" "$tmp/lean.out"
+      diff -u "$tmp/expected" "$tmp/c.out"
+    fi
+    if [[ $kind == castclause-* && $count == 4 ]]; then
+      printf '%s\n' "16 4" >"$tmp/expected"
+      timeout "$limit" "$root/.lake/build/bin/openverse" run "$tmp/p.verse" >"$tmp/lean.out"
+      timeout "$limit" "$root/runtime/build/cverse" "$tmp/p.vbc" >"$tmp/c.out"
+      diff -u "$tmp/expected" "$tmp/lean.out"
+      diff -u "$tmp/expected" "$tmp/c.out"
+    fi
     if [[ $kind == alias-* && $count == 4 ]]; then
       expected=256
       [[ $kind == *-first ]] && expected=8
@@ -1654,12 +2147,24 @@ PY
       diff -u "$tmp/expected" "$tmp/lean.out"
       diff -u "$tmp/expected" "$tmp/c.out"
     fi
-    if [[ ( $kind == named-* || $kind == conversion-* || $kind == indexwrite-* ) && $count == 4 ]]; then
+    if [[ ( $kind == named-* || $kind == conversion-* || $kind == indexwrite-* || $kind == compoundindex-* || $kind == mapwrite-* || $kind == multiindex-* || $kind == objectpath-* || $kind == callpacking-* ) && $count == 4 ]]; then
       expected=256
       if [[ $kind == *-first ]]; then
         expected=1
         [[ $kind == named-* ]] && expected=ok
       fi
+      printf '%s\n' "$expected" >"$tmp/expected"
+      timeout "$limit" "$root/.lake/build/bin/openverse" run "$tmp/p.verse" >"$tmp/lean.out"
+      timeout "$limit" "$root/runtime/build/cverse" "$tmp/p.vbc" >"$tmp/c.out"
+      diff -u "$tmp/expected" "$tmp/lean.out"
+      diff -u "$tmp/expected" "$tmp/c.out"
+    fi
+    if [[ ( $kind == logic-* || $kind == setalt-* ) && $count == 4 ]]; then
+      case $kind in
+        logic-and-first) expected=4 ;; logic-and-for) expected=31 ;;
+        logic-or-first) expected=0 ;; logic-or-for) expected=16 ;;
+        setalt-first) expected=0 ;; setalt-for) expected=81 ;;
+      esac
       printf '%s\n' "$expected" >"$tmp/expected"
       timeout "$limit" "$root/.lake/build/bin/openverse" run "$tmp/p.verse" >"$tmp/lean.out"
       timeout "$limit" "$root/runtime/build/cverse" "$tmp/p.vbc" >"$tmp/c.out"

@@ -32,7 +32,7 @@ surface Verse is elaborated (`OpenVerse/Front/Elab.lean`) into Verse Core
 | Operators | `* + -`, unary `-`, comparisons `= <> < <= > >=` (failable, return the left operand, chains check every pair), `and`, `or`, `not` (below the comparisons, above `and`: `not X = Y` is `not (X = Y)`), `?`, `.Length`, `A[i]`, `T(k)` | ch. 4 |
 | Failure | failure contexts (`if` conditions, `for` clauses, `option{}`, `logic{}`, `not`, left of `or`, `<decides>` bodies) with rollback of `var` writes **and output** | ch. 8 |
 | Control | `if`/`else if`/`else` (all styles, `if:`…`then:`), `for` with `X : array`, `I -> X : array`, `X := a..b`, filters, bindings, several generators (cartesian product), `loop`/`break`, `return`, `case` with literal patterns and `_` | ch. 7 |
-| Choice | `a \| b \| …` with several values in spatial order, in a clause of an `if` condition, `first{…}`, `option{…}`, `logic{…}`, `not` or `or` (the first success) or of a `for` (all of them), also inside expressions (`(1 \| 2) + (10 \| 20)`, `X = 1 \| 2`); see [Choice](#choice) (#208) | (the Verse Calculus) |
+| Choice | `a \| b \| …` with several values in spatial order, in a clause of an `if` condition, `first{…}`, `option{…}`, `logic{…}`, `not` or `or` (the first success) or of a `for` (all of them), also inside expressions (`(1 \| 2) + (10 \| 20)`, `X = 1 \| 2`, `X > 0 and (1 \| 2)`, `M? or (1 \| 2)`); see [Choice](#choice) (#208) | (the Verse Calculus) |
 | Functions | a tuple argument expands into parameters (`Describe(MyTuple)`); positional arguments pack into a single tuple parameter, including `tuple()` and singleton tuples; several arguments make a single array parameter (`Sum(1, 2, 3)`), including generic, overloaded, method and spawned calls (#134, #140, #501; nested fields retain their shape, and empty/singleton arrays use explicit array values); recursion, mutual recursion, `<decides>` (called with `F[…]`; other functions with `F(…)`), named parameters `?P:t = default` passed as `?P := e` (positional, then named as written, then defaults; a default may use the parameters before it, and a method's default the method's fields; a call dispatched to an override evaluates that override's own default for an omitted argument; a default is evaluated at the call, its effects counting as the caller's, and cannot return, break or use itself), the heap effects `<computes>`, `<reads>`, `<writes>`, `<allocates>`, `<transacts>` (checked, see [Classes](#classes)), unsupported effect contracts are diagnosed before lowering (see [Effect contracts](#effect-contracts)) | ch. 6, 13 |
 | Parametric functions | `F(X:t, … where t:type, u:subtype(comparable))`: type parameters in parameter types, the result type and local declarations; type arguments inferred at each call (see [Parametric functions](#parametric-functions)) | Types: where clauses |
 | Structs | `name := struct:` with typed fields and defaults, `name{F := e, …}` (each field given at most once, evaluated in declaration order), `S.F`, `set S.F = e` / `op=`, structural equality (a struct is the tuple of its fields in Verse Core) | ch. 9 |
@@ -291,6 +291,10 @@ own `loop` stay local; a `for` body itself is not a break target.
 Shared continuations carry clause breaks back to the caller: the filter's
 writes commit before source-loop cleanup runs, including through refining
 casts. A new local loop keeps its own target even inside a lifted branch.
+So does a `break` in the clauses of an `if` condition or `first{…}` that
+has a choice ([Choice](#choice), #283): the loop that takes their first
+success forwards it, and so does the function of their own that clauses
+after a composed choice or an effectful lazy generator run in.
 
 ## Overloading
 
@@ -583,9 +587,10 @@ circle := class(shape, labelled):
   class(mid(int, string))` below `mid(a, b) := class(expr(tuple(a, b)))`)
   and override too. A cast in generic code that holds only under such a
   refinement is pattern matching on the class, as in a GADT (#243): as a
-  clause of an `if`'s condition, `D := T[X]` types the branch it guards,
-  and the clauses after it, under the refinement, where the code's type parameters are unified as `T`'s
-  type arguments say (written types in the branch included):
+  clause of a failure context, `D := T[X]` (or `T[X]` alone) types the
+  code after it in its failure context under the refinement, where the
+  code's type parameters are unified as `T`'s type arguments say (written
+  types included), and so the branch of the `if` whose condition it is in:
 
   ```verse
   Eval(E:expr(t) where t:type):t =
@@ -594,11 +599,38 @@ circle := class(shape, labelled):
       else Err()
   ```
 
-  A later clause may be such a cast too (#243), when the clauses before it
-  print nothing, change no object and call nothing, so that its failure
-  has nothing of theirs to undo: `if (N := Ns[0], N > 0, D := dup[P])` is
-  `if (N := Ns[0], N > 0) then (if (D := dup[P]) …)`, the `else` the same
-  in both.
+  It may be a clause of any failure context: a statement of a `<decides>`
+  body, or of a block in a failure context; a clause of `option{…}`,
+  `logic{…}` or `first{…}`; the operand of `not`, or of `and` or `or`; a
+  clause of an `if`'s condition or of a `for`. The rest of its failure
+  context is its branch: `pre; D := T[X]; rest` is `pre; if (D := T[X])
+  then {rest} else fail`, so its failure, or the rest's, undoes what `pre`
+  did, output included, as any failure context's does:
+
+  ```verse
+  AsLit(E:expr(t) where t:type)<decides>:t =
+      L := lit[E]
+      L.V                                     # t = int here
+  First(H:cell, P:pair(a, b) where a:type, b:type)<transacts>:?b =
+      option{set H.N += 1; D := dup[P]; D.A}  # undone when P is no dup
+  ```
+
+  In an `if`'s condition, and in a `for`'s clauses, the names reach the
+  branch, or the body, which runs outside the failure context. In an `if`,
+  when the clauses before the cast print nothing, change no object and
+  call nothing (always, when it is the first), so that its failure has
+  nothing of theirs to undo, the branch is part of the cast's: `if (N :=
+  Ns[0], N > 0, D := dup[P])` is `if (N := Ns[0], N > 0) then (if (D :=
+  dup[P]) …)`, the `else` the same in both. Otherwise, and in a `for`, the
+  cast takes the clauses after it, up to the `for`'s next generator, as
+  its branch in a clause of its own, and the branch or the body, when it
+  uses the cast's name or names
+  those clauses bind, casts the object again, which succeeds (an object's
+  class does not change), so that it is typed under the refinement too, as
+  it does a later cast among those clauses of a name bound before them that
+  is no `var`, when it uses that cast's name:
+  `if (Print("x"), D := dup[P], Y := D.A) then option{Y}` prints `x` only
+  when `P` is a `dup`, and its branch has `D` and `Y` with `b = a`.
 
   A cast can also open type arguments the object's type has no names for
   (#250): `if (P := pairE[E]) then (Eval(P.L), Eval(P.R))`, for
@@ -606,7 +638,9 @@ circle := class(shape, labelled):
   `b'` are `pairE`'s `a` and `b`, unknown but fixed for the branch; their
   values, which the branch's own generic calls at them need, come from the
   object, which holds them in hidden fields as #209's existential classes'
-  objects do. An opened parameter is as comparable as the one it stands
+  objects do. The value of what follows such a cast in its failure
+  context, and the names it binds that a branch or body uses, cannot be of
+  a type that names an opened one. An opened parameter is as comparable as the one it stands
   for, and also when comparability of a refined type requires that component
   (`t:subtype(comparable)` refined to `tuple(a', b')`). A unique reference
   such as `holder(a')` is comparable independently of `a'`, so it supplies
@@ -623,7 +657,7 @@ circle := class(shape, labelled):
 
   The branch is compiled as a function of its own, generic over the
   enclosing function's type parameters, that takes the object (as `D`) and
-  the locals the branch uses, at their refined types; the `if` becomes a
+  the locals the branch uses, at their refined types; the cast becomes a
   dispatch to it, which Verse Core types as it types a refined method call
   (`Typed.dispatch`), so nothing is assumed in Verse Core. In a
   `<suspends>` function the branch and the `else` may suspend (#243): the
@@ -646,8 +680,9 @@ circle := class(shape, labelled):
   return what to do, which the caller then does after the `if` (#243): the
   enclosing function returns, or the loop is left, once the `var`s it set
   have their values. Where the `if`'s value is used, its type must be known
-  for that (written, given by where it is, or the `else`'s) unless the
-  branch always returns or breaks. In a method, the branch names `Self`'s
+  for that (written, given by where it is, the `else`'s, or the branch's
+  own when the `else` gives none, as `Err()` or a failure context's
+  failure does) unless the branch always returns or breaks. In a method, the branch names `Self`'s
   fields and methods as anywhere in the method (its function takes `Self`
   too), and its `(super:)M(…)` calls the implementation the method's class
   inherits, as anywhere in the method (#243), including overloads selected
@@ -753,29 +788,30 @@ circle := class(shape, labelled):
 - **Comparability.** Other classes and interfaces are not comparable (Book §4.9), nor
   is a struct or container that holds one.
 - **Not yet supported** (each rejected with a message):
+  - a cast that refines type arguments, opens them, or goes through a
+    view (#243, #250, #351) anywhere but as a clause of a failure context:
+    inside an expression (`dup[P].C`: bind it, `D := dup[P]`), or outside
+    any failure context;
+  - in a `for`'s clauses, one past a generator after such a cast that uses
+    its name (#243);
+  - after a cast that opens type arguments, a value of its failure
+    context, or a name it binds that a branch or body uses, of a type that
+    names them (#250);
+  - a branch of such a cast with a `return`, or a `break` that leaves it,
+    where the `if`'s value is used at a type not known there (#243);
   - a cast from a reference to an interface that a class gives type
-    arguments that are not a prefix of its own, or to one above it (see
-    above, #351), to a class or
-    interface with type arguments, its own or ones it fixes (`c :=
-    class(i1(int), i2(string))`), other than as a clause of an `if`'s
-    condition (the first, or one after clauses that print, change an
-    object and call nothing), whose branch is then a function of its own
-    as described above (#243), or to one neither above
-    nor below it; a cast `T[X]` whose type
-    arguments agree with `X`'s only under a refinement (`dup[P]` for
-    `P:pair(a, b)`) other than as a clause of an `if`'s condition (the
-    first, or one after clauses that print nothing, change no object and
-    call nothing, #243), whose
-    branch has a `return` or a `break` that leaves it where the `if`'s value
-    is used at a type not known there (#243); a variable, in generic code, of a class or
-    interface type that requires an instance of itself (`Next:node(t)`)
-    at type arguments that every class below it fixes otherwise: its
-    hidden placeholder object (#157) would have to hold itself (no program
-    can build an object of such a type: each would need another first,
-    so use `?node(t)` for a link that may be absent); and, in code generic over an interface's parent, a
-    cast to an interface that gives that parent type arguments of its own
-    (`c2(t) := interface(container([]t))`) whose type parameters would be
-    unknown (#53).
+    arguments that are not a prefix of its own, or to one above it (#351),
+    to a class or interface neither above nor below it;
+  - a variable, in generic code, of a class or interface type that
+    requires an instance of itself (`Next:node(t)`) at type arguments that
+    every class below it fixes otherwise: its hidden placeholder object
+    (#157) would have to hold itself (no program can build an object of
+    such a type: each would need another first, so use `?node(t)` for a
+    link that may be absent);
+  - in code generic over an interface's parent, a cast to an interface
+    that gives that parent type arguments of its own (`c2(t) :=
+    interface(container([]t))`) whose type parameters would be unknown
+    (#53).
 
 ## Mutation, macros, tooling
 
@@ -892,7 +928,12 @@ Main():void =
   runs the rest of the clauses.
   - In an `if` condition or `first{…}`, an alternative that leads to no
     success is rolled back, output included, as any failure context is,
-    and the next one starts from the state the choice was reached in.
+    and the next one starts from the state the choice was reached in. One
+    that reaches a `return` leaves the function, and one that reaches a
+    `break` leaves the loop around the condition (#283): what it did stays,
+    as with no choice, and the clauses after it and the other alternatives
+    never run. The `break` runs the `defer:`s of the scopes it leaves, as
+    any does, wherever the clauses after a choice are compiled to.
   - In a `for`, a choice is one more generator. An alternative whose own
     clauses (up to the next generator) fail is rolled back. One whose
     clauses succeed keeps their effects, even when the generators after it
@@ -902,13 +943,18 @@ Main():void =
   ```verse
   var N:int = 0
   if (X := (set N = 1; 1) | (set N = 2; 2), X > 1) then Print("{X} {N}")   # 2 2
+  loop:
+      if (X := 1 | 2 | 3, set N = X * 10, X > 1, break) then Print("never")
+  Print("{N}")                                                              # 20
   ```
 - **Type.** The written type (`X:int = 1 | 2`), or the type of the
   variable or path that `set` writes, else the join of the alternatives'
   types, as for `if`'s branches.
 - **`set L = a | b`** evaluates as `set` does: the indices of `L`'s path
   first, then for `op=` the old value, then the choice, so each alternative
-  only runs the assignment.
+  only runs the assignment. An alternative may have several values or
+  clauses of its own, as a binding's may (#283): `set A[I] = (1 | 2) * 10 | 9`
+  sets `A[I]` to 10, 20, then 9.
 - **Where.** A choice is taken by an `if` condition, the clauses of a
   `for`, `first{…}`, `first(…){…}`, `if{…}`, `for{…}`, `assert{…}`,
   `option{…}`, `logic{…}`, `not`, and the left of `or`. In their clauses, a choice can
@@ -925,8 +971,10 @@ Main():void =
   ```
 
   Lifting goes through arithmetic, comparisons, calls and indexing,
-  member access, `?`, tuples, arrays, maps and string interpolation, in the
-  order they are evaluated:
+  member access, `?`, tuples, arrays, maps, string interpolation, the
+  bounds of a range (`for (X := 1..(2 | 3))` is 1, 2, then 1, 2, 3: a
+  range for each value of its bounds), the operands of `and` and the right
+  of `or` (below), in the order they are evaluated:
   - a call's or an index's head is evaluated before its arguments: a
     variable holding an array, map or function, a field (read whole), a
     method's receiver, or any other expression (`Arr()[0 | 1]` calls `Arr`
@@ -1016,10 +1064,31 @@ Main():void =
   leaves it (#283), as its lowering places it, after the rest of its scope:
   once the value is computed, before the clauses after it, last registered
   first. A value whose clauses fail runs none, since what they did is
-  rolled back with them:
+  rolled back with them. A `return` or `break` inside the block that leaves
+  it runs them too, as for any scope ([defer](#defer)): after the cleanup of
+  the scopes inside the block it leaves, and after a `return`'s value:
 
   ```verse
   for (X := block{ defer: Print("d"); Y := 1 | 2; Y * 10 }) { Print(X) }   # d 10 d 20
+  loop:
+      if (X := block{ defer: Print("d"); Y := 1 | 2; if (Y = 2) then break; Y }, X > 5) then …   # d
+  ```
+
+  The operands of `and`, and the right of `or`, are lifted as blocks
+  are (#283), each a scope of its own, as without a choice. `A and B` is
+  `A`'s clauses, then `B`'s: for each value of `A`, in order, the values of
+  `B` are the `and`'s. `A or B` is `if (T := A) then T else B`: the left of
+  `or` takes its own first success, as it does with no choice on the right,
+  and that value is then the `or`'s only one, the right never running; when
+  the left has none, what it did is rolled back and the `or`'s values are
+  `B`'s, taken by the context the `or` is in, as any choice's there. As for
+  that `if`, the `or` adds no choice of its own: in a `for`, when its left
+  succeeds, a value the filters after it reject undoes what came before it.
+
+  ```verse
+  for (X := (1 | 2) > 1 and (10 | 20)) { … }       # 10, 20
+  for (X := M? or (5 | 6)) { … }                   # with M: its value; without: 5, 6
+  if (X := M? or (6 | 8 | 9), X > 7) then …        # with M: its value, if > 7; without: 8
   ```
 
   A choice inside a struct or class construction is lifted as one in a
@@ -1041,13 +1110,11 @@ Main():void =
   order and these default types too. Its defaults and class blocks must
   meet that function's effect restrictions.
 
-  Refused for now: an alternative of a `set`'s choice, either side of `and`, the right of `or`,
-  a range, or a block with a range of its own as a branch; and
+  Refused for now: a block with a range of its own as a branch; and
   a choice anywhere outside these failure contexts. (A field reached
   through a receiver that is not a variable or `Self`, as `F().Items[…]`,
   is read after the choice, since only the receiver's value is bound
-  first.) A `break` in the clauses of an `if` or `first{…}` with a choice
-  is refused. `first{…}` with a choice can fail, so it must be in a
+  first.) `first{…}` with a choice can fail, so it must be in a
   failure context.
 - **Functions with several values** (#235). A top-level function whose
   body has a choice that nothing in it takes has several values, and a call
@@ -1062,8 +1129,8 @@ Main():void =
 
   A choice's alternatives may have several values themselves, calls of
   such functions or choices inside expressions (`C():int = A() | B()`,
-  `X := Upto[1, 3] | 9`): their values come in order, alternative by
-  alternative (#283).
+  `X := Upto[1, 3] | 9`, `set X = Upto[1, 3] | 9`): their values come in
+  order, alternative by alternative (#283).
 
   Such a call is inlined: its arguments are evaluated first, in order, then
   its body runs in the caller's clauses, so the body's effects are rolled
@@ -1088,12 +1155,24 @@ Main():void =
   `R.M(args)` evaluates `R` first, once, then is inlined like a function's,
   with `Self` the receiver, and so is `M(args)` in its class's methods and
   those of the classes below it. A recursive one is taken lazily, and a
-  named parameter's default sees the fields. Inlining happens before
-  types are checked, so `R.M` has to name that method whatever `R` is:
-  such a method's name must be no other member than it and its overrides
-  (in classes below the class or interface that declares it), no struct
-  field, enumerator or member of a built-in type (`Length`, `Find`,
-  `Signal`, …), no top-level name and no parameter or local. An
+  named parameter's default sees the fields. Each class or interface that
+  declares `M` without `<override>` is the root of a family of its own:
+  `M` and its overrides in the classes below it. `R.M(args)` is a call in
+  the family of the root that `R`'s class is below (#283). When one class
+  or interface declares `M`, overrides aside, that is known before types
+  are checked. When unrelated ones do, the receiver's class tells:
+  `M(args)` and `Self.M(args)` in a class's methods are in that class's
+  family, and for any other receiver the program is elaborated once to
+  find the receivers' classes, then again with each call in its family.
+  So a class's `M` with one value stays an ordinary method wherever it is
+  called, through a function too, and a function whose values come from
+  another class's `M` through a receiver of that class has several values,
+  as when one family has the name. A class below two roots of `M` (one
+  listing two interfaces that both declare it) is refused when one of the
+  families has several values, and so is an overloaded `M`. Such a
+  method's name must be no field, no struct field, enumerator or member of
+  a built-in type (`Length`, `Find`, `Signal`, …), no top-level name and no
+  parameter or local. An
   interface's method is such a family's root too (#283): a call through
   the interface dispatches on the receiver's class, as for an overridden
   method; an interface's default implementation is the alternative for
@@ -1180,7 +1259,39 @@ Main():void =
   function with several values, its clauses have no choice, and its last
   expression is a choice, or an `if … else …` whose branches are choices or
   values, each alternative a value with no choice in it or a whole call of
-  the function itself. A returning branch may contain plain clauses and
+  the function itself. A branch that is an `if` with no choice and no call
+  of the function in it is one value, not a branch to pick: its conditions
+  are part of what that value does (#283). An alternative may also be a
+  call of the function with code after it (#283): `Count(N - 1) + 1`,
+  `Tell("x", F(N - 1))`, `Obj.F * 10 + F(N - 1)`, with the code after it
+  having no choice and no other such call. That code may set the
+  function's `var`s: such a `var` is one object for the invocation, so the
+  call's later values, and the later alternatives, see what a kept value
+  set, and a rejected value's write is undone with it. What the
+  alternative evaluates before the call (a field, a constant, a call of a
+  function, a block's clauses), other than literals and the function's own
+  names, runs once before the call, after the clauses, as the call's
+  arguments do, and the code after the call uses its value. That code is the call's *return frame*: it runs on each
+  of the call's values, as part of that value, and its result is the
+  alternative's value. The last expression may also be a clause binding the
+  choice, with such code after it, which then runs on each of the choice's
+  values:
+
+  ```verse
+  Walk(N:int)<transacts><decides>:int =
+      N > 0
+      X := Walk[N - 1] | N         # the values of Walk[N - 1], then N
+      Print("at {N} got {X}")      # runs on each, part of that value
+      X + 1
+  Count(N:int)<transacts>:int =
+      if (N <= 0) then 0 else (Count(N - 1) + 1 | N)
+  Main()<transacts>:void =
+      for (V := Walk[2]) { Print("v {V}") }       # at 1 got 1, at 2 got 2, v 3, at 2 got 2, v 3
+      if (V := Walk[2], V > 2) then Print("{V}")  # at 1 got 1, at 2 got 2, 3
+      for (V := Count(2)) { Print("{V}") }        # 2, 2, 2
+  ```
+
+  A returning branch may contain plain clauses and
   nested conditionals before its value. A `return` at the end of the body or
   in an `if` branch ends that invocation, yielding its operand's values in order;
   statements after the return are skipped. These returns are normalized
@@ -1217,7 +1328,7 @@ Main():void =
   - in a `for`, its clauses run as its values are taken, between the
     iterations, and stay, as a `for` keeps the effects of clauses before a
     choice; what a value does is undone with its iteration when the
-    filter rejects it;
+    filter rejects it, the return frames it went through included (#283);
   - where the first success is taken (an `if` condition, `first{…}`,
     `option{…}`, `logic{…}`, `not`, the left of `or`), effects are undone as
     the Verse Calculus undoes them: what a value does with that value, and
@@ -1245,7 +1356,10 @@ Main():void =
   The others, if they are `<computes>`, keep no local state (no `var`, no
   `set`), and nothing they may run prints or calls `Err()`, have their
   values computed at the call, all of them, in order, as an array the call
-  then takes them from (#235).
+  then takes them from (#235). So do those with return frames that are so
+  effect-free (#283): taken either way, their values are the same, but an
+  infinite one does not stop. Those with return frames that have effects
+  are taken lazily.
   What it may run is followed through its Verse Core code, so through every
   call: the functions it calls, each implementation a method call may
   dispatch to, each function of a function value's type that the program
@@ -1261,24 +1375,26 @@ Main():void =
   call, even where only the first success is taken and a value before the
   error would have been it.
 
-  A return in first-success clauses leaves the source function, including
-  after an effectful lazy generator. Its operand is saved before cleanup;
+  A return in first-success clauses leaves the source function, and a
+  break the loop around them (#283), including after an effectful lazy
+  generator. Its operand is saved before cleanup;
   updated mutable captures reach source cleanup before it runs. A failed
   return operand rejects that search path and tries the next alternative.
   Shared helpers retain generic result types and witnesses even when only
   the return type mentions a parameter.
 
-  Refused for now: a recursive one that is not a generator and is not
-  `<computes>`, or may print or call `Err()`, a generator whose clauses,
-  conditions or arguments have effects where the first success is taken
-  and the clauses after it have a `break`
-  that leaves them (which would leave the function they run in), in a constructor, a parameter's
-  or field's default or a `defer:`, an
+  Refused for now: a recursive one that is not of the generator shape
+  above (return frames included) and is not `<computes>`, keeps local
+  state, or may print or call `Err()`: in particular one with a choice, or
+  another call of its group, after a call of its group (`X := T(N - 1)`,
+  then `X | X + 1`, or then `Y := T(N - 1)`), and one with a choice before
+  such a call (`X := 1 | 2`, then `T(N - 1) + X`) (#283). Also an
   overloaded one with an overload that calls the function's own name
   (a generic one's type arguments are inferred from the
   arguments where it is inlined, as at a call, named ones too), a recursive one with a `defer:` of its own, or called by a recursive one (its body a function's, where it would run once), one with a `return`
-  other than at the end of its body or in an `if`'s branches, a method whose name another class or interface
-  also has, `<suspends>`, one used as a function value, and, since its body is inlined where other names may be
+  other than at the end of its body or in an `if`'s branches, an overloaded method, a method of a class or
+  interface below two others that each declare its name without `<override>`,
+  `<suspends>`, one used as a function value, and, since its body is inlined where other names may be
   in scope, one whose name is also the name of a parameter, local, field or
   method anywhere in the program, and a call of one where a name its body
   uses from outside is a parameter, local or member of `Self` in scope.
@@ -1718,10 +1834,9 @@ Main()<suspends>:void =
   them. A task is a spawned task, `Main` or a `branch`, and waiters in the
   arms of one task's `sync`, `race` or `rush` each take their own turn too
   (resuming the task for one arm's turn leaves its other woken arms
-  waiting for theirs); a `rush`
-  arm that goes on after the `rush` (a task of its own then), signalled
-  before its first turn as one, goes on at its turn in the scheduler's
-  order. A waiter cancelled before its turn does not go on, and a wait
+  waiting for theirs), also a `rush` arm that goes on after the `rush`
+  (a task of its own then), signalled before its first turn as one. A
+  waiter cancelled before its turn does not go on, and a wait
   cancelled before the `Signal` (a `race` it lost) is no waiter; once
   `Main` ends, so does the program, also in the middle of the turns. A `Signal` with no one waiting is lost, and `Signal`
   itself never waits. `event()` is an event without a value (`event(void)`),
@@ -1844,7 +1959,7 @@ Main()<suspends>:void =
 | `?` on other values | conflict (§6.1) | only `logic` and `?t` (the API's typed reading) |
 | Output inside a failed failure context | unspecified | rolled back with the writes (transactional `Print`) |
 | `Main` failing | (no entry point in the book) | exit code 1; output already printed stays |
-| `return` inside a failure context | unspecified | leaves the function; no rollback of what the condition did |
+| `return` or `break` inside a failure context | unspecified | leaves the function, or the loop around the context; no rollback of what the condition did, also after a choice in it, whose alternatives that failed before were rolled back (#283) |
 | Scope of the operands of `A and B` | "Variable bindings do not escape from logical operations" (§3.4) | each operand is its own scope: names defined in `A` are not visible in `B`, and names from neither side escape the `and` |
 | Comparability | `comparable` covers the primitive types, enums, structs and containers of comparable types (§4.9) | so is every openverse type, except a type parameter not declared `subtype(comparable)` and the containers of one |
 | Inferring type arguments | not described | first-order matching against the expected result type, then the arguments; no subtyping other than `false` (matches anything) and `void` (accepts anything) |
@@ -1854,7 +1969,8 @@ Main()<suspends>:void =
 | `=` between different types | not stated | refused when two scalar types (int, float, char, …) meet at the same place, also inside containers (`array{1} = array{1.0}`), as Verse Core holds them differently |
 | Ordering of rationals | not stated (§2 lists `<` … for `int` and `float`) | exact (by continued fractions, so it cannot overflow), and an int compares with a rational |
 | Order of a choice's values | (not in the Book; the Verse Calculus: spatial) | spatial: the leftmost choice varies slowest, as nested generators do (#208) |
-| Code before a choice | (the Verse Calculus is pure) | runs once, also within an expression (the operands before the choice are evaluated first, as written); each alternative runs the code after the choice, from where the choice was reached; in an `if` or `first{}`, one that leads to no success is rolled back (as backtracking does); in a `for`, the choice is a generator, so only an alternative whose own clauses fail is (#208) |
+| Code before a choice | (the Verse Calculus is pure) | runs once, also within an expression (the operands before the choice are evaluated first, as written); each alternative runs the code after the choice, from where the choice was reached; in an `if` or `first{}`, one that leads to no success, and to no `return` or `break`, is rolled back (as backtracking does); in a `for`, the choice is a generator, so only an alternative whose own clauses fail is (#208) |
+| A choice in an operand of `and` or `or` | not stated (the left of `or` is a failure context, the right is not, §6.2) | `A and B`: `A`'s clauses, then `B`'s, in the context the `and` is in, so `B`'s values for each of `A`'s; `A or B`: `if (T := A) then T else B`, so the left's first success, if it has one, is the only value (the right is not tried when what follows fails), else the right's values, taken by the context the `or` is in (all of them in a `for`), not only its first (#283) |
 | Precedence of `\|` | (not in the Book) | below `+`, above the comparisons: `X = 1 \| 2` is `X = (1 \| 2)` (#208) |
 | `Sleep(0.0)` | "may resume in the same tick" (ch. 14); the API reference: it always yields | always yields: resumes in the next tick (#156) |
 | `Sleep(S)` rounding | no fixed 30 Hz rounding rule in the pinned chapter or cited Epic timing description | binary64 `Round(30·S)`, ties to even, at least one tick: `Sleep(0.1)` stays at 3 ticks despite binary floats (#156); bounded inputs and checked clock accumulation follow the explicit reference policy above (#514) |
@@ -1870,5 +1986,5 @@ Main()<suspends>:void =
 the class features listed under [Classes](#classes), struct methods (Verse structs have none; classes do),
 `weak_map`, module paths `using{/Verse.org/…}` (accepted and ignored), the
 specific overload/call gaps listed under [Overloading](#overloading), nested
-functions and lambdas (see [release evidence and proposed design](research/closure-design.md)), choice beyond [Choice](#choice) (recursive functions with several values that have effects, other than generators, methods with several values whose name an unrelated class shares), concurrency beyond [Concurrency](#concurrency), and the unsupported
+functions and lambdas (see [release evidence and proposed design](research/closure-design.md)), choice beyond [Choice](#choice) (recursive functions with several values that have effects and a choice or another recursive call after a recursive call, overloaded methods with several values), concurrency beyond [Concurrency](#concurrency), and the unsupported
 effect/construction contracts listed under [Effect contracts](#effect-contracts).
