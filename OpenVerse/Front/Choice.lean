@@ -3241,8 +3241,9 @@ def inlineMulti (tops : List STop) (reserved : List String := []) (eager : List 
   -- different types, copied for each, #335)
   let ovShown (o : String) : String :=
     let f := (o.splitOn "$ov").headD o
-    let ps := ((overloadIndex? o).bind fun k => (ovOf f)[k]?).map fun (_, _, m) => m.params.map (styShow ·.ty)
-    s!"{shownFnName f}({", ".intercalate (ps.getD [])})"
+    match ((overloadIndex? o).bind fun k => (ovOf f)[k]?) with
+    | some (_, _, m) => s!"{shownFnName f}({", ".intercalate (m.params.map (styShow ·.ty))})"
+    | none => shownFnName o
   for (q, o) in overloadPicks do
     if let some (_, o') := overloadPicks.find? fun (q', o') => q' == q && o' != o then
       throw s!"{q.show}: this call takes the overload {ovShown o} in the clauses copied for one alternative of a choice and {ovShown o'} in those copied for another, and which overload with several values a call takes is decided before types: not supported yet (#283)"
