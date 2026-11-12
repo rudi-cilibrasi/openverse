@@ -1195,7 +1195,8 @@ Main():void =
   the function itself. An alternative may also be a call of the function
   with code after it (#283): `Count(N - 1) + 1`, `Tell("x", F(N - 1))`, the
   call evaluated first (what comes before it in the alternative is a literal
-  or a name), the code after it with no choice and no other such call, and
+  or one of the function's own parameters and locals, not a field or a
+  constant), the code after it with no choice and no other such call, and
   setting no `var`. That code is the call's *return frame*: it runs on each
   of the call's values, as part of that value, and its result is the
   alternative's value. The last expression may also be a clause binding the
@@ -1311,9 +1312,9 @@ Main():void =
   above (return frames included) and is not `<computes>`, keeps local
   state, or may print or call `Err()`: in particular one with a choice, or
   another call of its group, after a call of its group (`X := T(N - 1)`,
-  then `X | X + 1`, or then `Y := T(N - 1)`), one whose call comes after an
-  operand that is not a literal or a name, and one that sets a `var` after
-  a call of its group (#283). Also a generator whose clauses,
+  then `X | X + 1`, or then `Y := T(N - 1)`), one whose call comes after
+  an operand that is not a literal or a name of its own, and one that sets
+  a `var` after a call of its group (#283). Also a generator whose clauses,
   conditions or arguments have effects where the first success is taken
   and the clauses after it have a `break`
   that leaves them (which would leave the function they run in), in a constructor, a parameter's

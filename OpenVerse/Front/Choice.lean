@@ -1340,14 +1340,16 @@ partial def mapLoopLeaves (leaf : SExpr → SExpr) : SExpr → SExpr
   | .ite p cs t u => .ite p cs (mapLoopLeaves leaf t) (u.map (mapLoopLeaves leaf))
   | e => leaf e
 
-/-- Literals and names, which read the same after a call as before it, since
-    a callee cannot change its caller's names. Not a field: the call may
-    change it. -/
-partial def inert : SExpr → Bool
-  | .int .. | .char .. | .char32 .. | .float .. | .ident .. => true
+/-- Literals and the function's own names (`own`: its parameters and
+    locals), which read the same after a call as before it, since a callee
+    cannot change its caller's names. Not a field, which the call may change,
+    nor a constant, which may run code where it is read. -/
+partial def inert (own : List String) : SExpr → Bool
+  | .int .. | .char .. | .char32 .. | .float .. => true
+  | .ident _ n => own.contains n
   | .str _ ps => ps.all fun | .text _ => true | .code _ => false
-  | .neg _ e => inert e
-  | .tuple _ es | .arrayLit _ es => es.all inert
+  | .neg _ e => inert own e
+  | .tuple _ es | .arrayLit _ es => es.all (inert own)
   | _ => false
 
 /-- (#283) An alternative that is a call of the recursive group (`isCall`)
@@ -1355,8 +1357,8 @@ partial def inert : SExpr → Bool
     alternative but inert operands, and the alternative with the name `h` in
     the call's place, its return frame, which runs on each of the call's
     values. Everything after the call is `plain`. -/
-partial def frameOf? (isCall plain : SExpr → Bool) (h : String) (e : SExpr) : Option (SExpr × SExpr) :=
-  let go := frameOf? isCall plain h
+partial def frameOf? (isCall plain inert : SExpr → Bool) (h : String) (e : SExpr) : Option (SExpr × SExpr) :=
+  let go := frameOf? isCall plain inert h
   -- (the operand with the call: those before it inert, those after it plain)
   let inList (es : List SExpr) : Option (SExpr × List SExpr) := do
     let i ← es.findIdx? (!plain ·)
@@ -1380,6 +1382,11 @@ partial def frameOf? (isCall plain : SExpr → Bool) (h : String) (e : SExpr) : 
     guard (as.all fun | .decl .. => false | _ => true)
     let (c, as') ← inList as
     return (c, .app p f as' br)
+  -- (an index, or a call of a value: its head first)
+  | .app p f as br => do
+    guard (as.all plain)
+    let (c, f') ← go f
+    return (c, .app p f' as br)
   | .str p ps => do
     let codes := ps.filterMap fun | .code c => some c | .text _ => none
     let (c, codes') ← inList codes
@@ -1395,11 +1402,11 @@ partial def frameOf? (isCall plain : SExpr → Bool) (h : String) (e : SExpr) : 
 
 /-- (#283) A tail with return frames: each alternative that is a call of the
     group with code after it (`frameOf?`) as `$then(call, h, frame)`. -/
-def framedTail (isRec plain : SExpr → Bool) (tail : SExpr) : SExpr :=
+def framedTail (isRec plain inert : SExpr → Bool) (tail : SExpr) : SExpr :=
   mapLoopLeaves (fun v =>
     let frame (a : SExpr) : SExpr := if isRec a || plain a then a else
       let h := s!"$frame{a.pos.line}_{a.pos.col}"
-      match frameOf? isRec plain h a with
+      match frameOf? isRec plain inert h a with
       | some (c, k) => .app a.pos (.ident a.pos "$then") [c, .ident a.pos h, k] false
       | none => a
     match alts? v with
@@ -1426,8 +1433,8 @@ def lastChoiceTail (plain : SExpr → Bool) (cls : List SExpr) (last : SExpr) :
 def eagerWhy : String :=
   "such a function must be <computes>, keep no local state, and reach nothing that prints or calls Err(), " ++
   "as all its values are computed at a call (#235), unless it is taken lazily: clauses, then a choice whose " ++
-  "alternatives are values or calls of its recursive group, each call followed by no choice, no other such call " ++
-  "and no set of a var (#246, #283)"
+  "alternatives are values or calls of its recursive group, each call after only literals and the function's own " ++
+  "names in its alternative, and followed by no choice, no other such call and no set of a var (#246, #283)"
 
 /-- The shape of a recursive function with several values that its
     consumers take lazily (#246), after normalizing source returns: plain
@@ -1437,7 +1444,7 @@ def eagerWhy : String :=
     with code after it, which runs on each of its values (`$then`), and the
     body's last choice may be bound by a clause with plain code after it. -/
 def loopShape? (g : String) (mv : List String) (body : SExpr) (grp : List String := [g])
-    (frames : Bool := false) : Option (List SExpr × SExpr) := do
+    (frames : Bool := false) (params : List String := []) : Option (List SExpr × SExpr) := do
   let ss := stmtsOf body
   let last ← ss.getLast?
   let cls := ss.dropLast
@@ -1457,7 +1464,7 @@ def loopShape? (g : String) (mv : List String) (body : SExpr) (grp : List String
   let (cls, tail) := if frames && !cls.all plain then
       (lastChoiceTail plain cls last).getD (cls, tail) else (cls, tail)
   let tail := completeLoopTail isRec false tail
-  let tail := if frames then framedTail isRec plain tail else tail
+  let tail := if frames then framedTail isRec plain (inert (params ++ localsOf body)) tail else tail
   -- (a frame's code sets no `var` bound before it: it runs on a copy of
   -- the names; an object's field it may set)
   let isVar (n : String) : Bool := anyE (fun | .decl _ x _ true _ => x == n | _ => false) body
@@ -1869,6 +1876,7 @@ partial def inlineCalls (mv : List (String × MFn)) (e : SExpr) (recs : List Str
       if loops.contains g then
         let grp := (groups.lookup g).getD [g]
         let some (cls, tail) := loopShape? g (mv.map (·.1)) (renameTypes ρ (renameE ren f.body)) grp (frames := true)
+            (f.params.map (tag ·.name))
           | throw s!"{p.show}: internal: the shape of {g} (#246)"
         let ps := f.params.map fun sp => SExpr.ident q (tag sp.name)
         -- (#283) a function of a strongly connected group: the others'
@@ -1883,6 +1891,7 @@ partial def inlineCalls (mv : List (String × MFn)) (e : SExpr) (recs : List Str
             let renH := (fh.params.map (·.name) ++ localsOf fh.body).eraseDups.map fun n => (n, tagH n)
             let ρH := fh.tparams.map fun tp => (tp.name, memberTypeName h tp.name)
             let some (clsH, tailH) := loopShape? h (mv.map (·.1)) (renameTypes ρH (renameE renH fh.body)) grp (frames := true)
+              (fh.params.map (tagH ·.name))
               | throw s!"{p.show}: internal: the shape of {h} (#283)"
             members := members ++ [.app q (.ident q "$member") [.ident q h,
               .block q (fh.params.map fun sp => SExpr.ident q (tagH sp.name)), .block q clsH,
@@ -2957,7 +2966,8 @@ def inlineMulti (tops : List STop) (reserved : List String := []) (eager : List 
   let groupOK (g : String) (frames : Bool) : Bool :=
     let grp := groupOf g
     grp.all fun h => match mfs.lookup h with
-      | some f => ((callees.lookup h).getD []).all grp.contains && (loopShape? h mv f.body grp frames).isSome
+      | some f => ((callees.lookup h).getD []).all grp.contains &&
+        (loopShape? h mv f.body grp frames (f.params.map (·.name))).isSome
       | none => false
   -- (#283) one whose calls of its group have code after them (return
   -- frames) is taken lazily too, unless its values can be computed at the
@@ -2981,7 +2991,8 @@ def inlineMulti (tops : List STop) (reserved : List String := []) (eager : List 
         | _ => false) f.body).getD false
     if grp.any eager.contains || erasesRecursive then false else
     let shaped (frames : Bool) : Bool := match mfs.lookup g with
-      | some f => if (groupOf g).length == 1 then (callees.lookup g).getD [] == [g] && (loopShape? g mv f.body (frames := frames)).isSome
+      | some f => if (groupOf g).length == 1 then (callees.lookup g).getD [] == [g] &&
+          (loopShape? g mv f.body (frames := frames) (params := f.params.map (·.name))).isSome
         else groupOK g frames
       | none => false
     shaped false || (!computable g && shaped true)
