@@ -11194,6 +11194,8 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
     -- after them, in the same loop)
     let drain : List Expr := if !fifo then [] else [
       .loop (Suspend.seqVoid [
+        -- (none once `Main` ended: the program ends with it)
+        .ite (.prim .eq [.local mainDone, Suspend.int 1]) .brk Suspend.vd,
         .ite (.assign wv (.prim .query [.heap (.get wokenHeadF) [sch]])) Suspend.vd .brk,
         .heap (.set wokenHeadF) [sch, .heap (.get wokenNextF) [.local wv]],
         .ite (.prim .query [.heap (.get wokenHeadF) [sch]]) Suspend.vd
@@ -11233,6 +11235,8 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
           .call (nFns + 4 * j + 2) [.local 1, sch], .assign mainDone (Suspend.int 1)]) .brk) Suspend.vd] ++
       drain ++ (if fifo then [.ite (.prim .eq [.local mainDone, Suspend.int 1]) .brk Suspend.vd] else []) ++
       pollRoots ++
+      -- (FIFO: `Main` may end in a drain during the roots' poll)
+      (if fifo then [.ite (.prim .eq [.local mainDone, Suspend.int 1]) .brk Suspend.vd] else []) ++
       [.ite (.prim .query [.heap (.get progressF) [sch]]) Suspend.vd .brk]))
     -- (between ticks, after a root ended, the cells of the roots that are
     -- done are unlinked: no allocation but the new end)

@@ -1714,8 +1714,12 @@ Main()<suspends>:void =
   scheduler's own order goes on; tasks they wake take their turns after
   them. A task is a spawned task, `Main` or a `branch`; waiters in the arms
   of one task's `sync`, `race` or `rush` go on when their task does, at the
-  turn of the first of them to have waited, in the arms' order. A waiter
-  cancelled before its turn does not go on. A `Signal` with no one waiting is lost, and `Signal`
+  turn of the first of them to have waited, in the arms' order; a `rush`
+  arm that goes on after the `rush` (a task of its own then), signalled
+  before its first turn as one, goes on at its turn in the scheduler's
+  order. A waiter cancelled before its turn does not go on, and a wait
+  cancelled before the `Signal` (a `race` it lost) is no waiter; once
+  `Main` ends, so does the program, also in the middle of the turns. A `Signal` with no one waiting is lost, and `Signal`
   itself never waits. `event()` is an event without a value (`event(void)`),
   with `E.Signal()` and `E.Await()`. A `sticky_event(t)` (or
   `sticky_event()`) is an event that keeps its last signal: an `Await`

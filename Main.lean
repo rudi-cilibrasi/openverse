@@ -64,8 +64,9 @@ def loadAndCompile (file : String) (args : List String) (doExpr : Option String)
     let debug := (← IO.getEnv "OPENVERSE_DEBUG").any fun v => v != "" && v != "0"
     return Front.compileTops tops args mentionsArgs doExpr debug profile eventFifo
 
-def withProg (file : String) (profile : Front.SourceProfile) (k : Prog → IO UInt32) : IO UInt32 := do
-  match ← loadAndCompile file [] none profile with
+def withProg (file : String) (profile : Front.SourceProfile) (k : Prog → IO UInt32) (eventFifo : Bool := false) :
+    IO UInt32 := do
+  match ← loadAndCompile file [] none profile eventFifo with
   | .error e => IO.eprintln s!"{file}:{e}"; return 4
   | .ok P => k P
 
@@ -106,12 +107,18 @@ def profilePrefix (profile : Front.SourceProfile) : List String → Front.Source
   | "--no-choice" :: rest => profilePrefix .choiceFree rest
   | rest => (profile, rest)
 
+/-- `--no-choice` and `--event-fifo` (#513), in any order. -/
+def optionsPrefix (profile : Front.SourceProfile) (eventFifo : Bool) :
+    List String → Front.SourceProfile × Bool × List String
+  | "--no-choice" :: rest => optionsPrefix .choiceFree eventFifo rest
+  | "--event-fifo" :: rest => optionsPrefix profile true rest
+  | rest => (profile, eventFifo, rest)
+
 def emitCmd (file : String) (profile : Front.SourceProfile) (eventFifo : Bool := false) : List String → IO UInt32
   | "--no-choice" :: rest => emitCmd file .choiceFree eventFifo rest
   | "--event-fifo" :: rest => emitCmd file profile true rest
   | "-o" :: out :: rest =>
-    let (profile, rest) := profilePrefix profile rest
-    let (eventFifo, rest) := match rest with | "--event-fifo" :: rest => (true, rest) | _ => (eventFifo, rest)
+    let (profile, eventFifo, rest) := optionsPrefix profile eventFifo rest
     let (literal, rest) := match rest with | "--" :: rest => (true, rest) | _ => (false, rest)
     withProgArgs file rest profile (fun P => do
       IO.FS.writeBinFile out P.encode
@@ -154,9 +161,9 @@ def main (args : List String) : IO UInt32 := do
       return 0
   | command :: file :: rest =>
     if command == "check" || command == "core" then
-      let (profile, rest) := profilePrefix profile rest
+      let (profile, eventFifo, rest) := optionsPrefix profile false rest
       if !rest.isEmpty then IO.eprintln usage; return 4
-      withProg file profile fun P => do
+      withProg file profile (eventFifo := eventFifo) fun P => do
         if command == "check" then
           IO.println s!"ok: {P.fns.length} functions, Main = {P.main}"
         else

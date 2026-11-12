@@ -139,12 +139,15 @@ def concPreludeFifo : String :=
     "    var CurTask:taskBase = taskBase{}\n    var CurRoot:?int = false\n    var WokenHead:?taskBase = false\n    var WokenTail:?taskBase = false\n"
   let s := s.replace "    var CancelReq:logic = false\n"
     "    var CancelReq:logic = false\n    var WaitRoot:?int = false\n    var WokenNext:?taskBase = false\n"
-  s.replace "            if (S := W.Sch?) then set S.Progress = true\n"
-    "            if (S := W.Sch?):\n                set S.Progress = true\n                set W.WokenNext = false\n                if (WT := S.WokenTail?) then set WT.WokenNext = option{W} else set S.WokenHead = option{W}\n                set S.WokenTail = option{W}\n"
+  -- (only a waiter this `Signal` wakes: a record already done, of a wait
+  -- that was cancelled, which its `defer:` marked, is no waiter)
+  let s := s.replace "            set W.Got = option{X}\n            set W.Done = true\n            if (S := W.Sch?) then set S.Progress = true\n"
+    "            WasDone := W.Done\n            set W.Got = option{X}\n            set W.Done = true\n            if (S := W.Sch?):\n                set S.Progress = true\n                if (not WasDone?):\n                    set W.WokenNext = false\n                    if (WT := S.WokenTail?) then set WT.WokenNext = option{W} else set S.WokenHead = option{W}\n                    set S.WokenTail = option{W}\n"
+  s
 
 def concTops (owned : List String := []) (fifo : Bool := false) : Except String (List STop) :=
   parsePrelude (if fifo then concPreludeFifo else concPrelude) (owned ++ (if fifo then ["CurRoot", "WokenHead",
-    "WokenTail", "WaitRoot", "WokenNext", "WT"] else []) ++ ["sched", "Now", "Next", "sleep", "Pc", "Secs", "Wake", "sleepNew",
+    "WokenTail", "WaitRoot", "WokenNext", "WT", "WasDone"] else []) ++ ["sched", "Now", "Next", "sleep", "Pc", "Secs", "Wake", "sleepNew",
     "sleepInit", "sleepResume", "Sleep", "Round", "Ticks", "syncMark", "raceMark", "S", "F", "C", "N", "R", "A",
     "Progress", "Roots", "taskBase", "Done", "Result", "waitf", "T", "X", "waitNew", "waitInit", "waitResume",
     "WaitDone", "Await", "spawnMark", "t", "Sch", "Dead", "evrec", "Got", "Next", "Head", "Tail", "Cur", "W", "L", "V",
