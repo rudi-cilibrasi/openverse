@@ -1776,37 +1776,7 @@ partial def inlineCalls (mv : List (String × MFn)) (e : SExpr) (recs : List Str
       let tmpl := SExpr.block q (tmark ++ pds ++ unpack ++ init ++ fin)
       return .app p (.ident p "$inline") (.ident q g :: tmpl :: as'') false
     | none => return .app p (← go (.ident q g)) (← as.mapM go) br
-  | .str p ps => return .str p (← ps.mapM fun | .code c => do return .code (← go c) | t => pure t)
-  | .app p g as b => return .app p (← go g) (← as.mapM go) b
-  | .member p x m => return .member p (← go x) m
-  | .query p x => return .query p (← go x)
-  | .neg p x => return .neg p (← go x)
-  | .notE p x => return .notE p (← go x)
-  | .bin p o a b => return .bin p o (← go a) (← go b)
-  | .cmp p a r => return .cmp p (← go a) (← r.mapM fun (o, b) => do return (o, ← go b))
-  | .andE p a b => return .andE p (← go a) (← go b)
-  | .orE p a b => return .orE p (← go a) (← go b)
-  | .range p a b => return .range p (← go a) (← go b)
-  | .tuple p es => return .tuple p (← es.mapM go)
-  | .block p es => return .block p (← es.mapM go)
-  | .arrayLit p es => return .arrayLit p (← es.mapM go)
-  | .optionLit p x => return .optionLit p (← go x)
-  | .logicLit p x => return .logicLit p (← go x)
-  | .ite p cs t e' => return .ite p (← cs.mapM go) (← go t) (← e'.mapM go)
-  | .forE p cs b => return .forE p (← cs.mapM go) (← go b)
-  | .gen p x i src => return .gen p x i (← go src)
-  | .loop p b => return .loop p (← go b)
-  | .ret p x => return .ret p (← x.mapM go)
-  | .caseE p sc arms => return .caseE p (← go sc) (← arms.mapM fun (pt, v) => do
-      return (← pt.mapM go, ← go v))
-  | .decl p n t v x => return .decl p n t v (← go x)
-  | .set p l o r => return .set p (← go l) o (← go r)
-  | .construct p n ts fs => return .construct p n ts (← fs.mapM fun
-      | .decl q fn t v x => do return .decl q fn t v (← go x)
-      | a => go a)
-  | .mapLit p kvs => return .mapLit p (← kvs.mapM fun (k, v) => do return (← go k, ← go v))
-  | .structDef p tps specs fs => return .structDef p tps specs (← fs.mapM fun (n, t, d, v) => do return (n, t, ← d.mapM go, v))
-  | e => return e
+  | e => descendM go e
 
 mutual
 /-- The array of an expression's values, for a `$all` body (#235): a choice
