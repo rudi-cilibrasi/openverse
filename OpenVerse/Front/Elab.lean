@@ -2435,8 +2435,11 @@ def forStagePrefixOf (ctx : Ctx) (plan : Choice.ForStagePlan) (args : List Ty) (
     (copyNames : List String := plan.copies.map (·.1))
     (borrowNames : List String := plan.borrowed) : Except String Choice.FirstLift := do
   let qualify := match ctx.selfClass with | some c => selfQualify ctx c | none => id
-  let clauses := clauses.map qualify
-  let body := qualify body
+  -- Default annotations use private lexical aliases. Resolve them before
+  -- the prefix moves into a function with only its own type parameters.
+  let σt := ctx.types.tvars.map fun (n, t) => (n, t.toSTy)
+  let clauses := clauses.map fun e => Refine.substTypes σt (qualify e)
+  let body := Refine.substTypes σt (qualify body)
   let written := SExpr.block p (clauses ++ [body] ++ (copyNames ++ borrowNames).map (SExpr.ident p ·))
   let caps := (Choice.namesUsed written).eraseDups.filterMap ctx.lookup
   let key := s!"prefix{flat}" ++ plan.key ++ contKey ctx p "$prepare" [written] ++ forStageCaptureKey ctx args caps
@@ -2645,7 +2648,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
         if f == "$forReturns" || f == "$forReturnBody" then mode == "true" else bodyFail
       | _ => bodyFail
     if (stagePlan.isNone && (!c.suspends || sourceFail)) ||
-        c.inCtor || c.inParamDefault || c.inBlock || c.inDefer || !c.defaults.isEmpty then return none
+        c.inCtor || c.inBlock || c.inDefer then return none
     checkNewLocal c q name
     let before ← get
     let slot ← fresh bty
@@ -2837,7 +2840,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
               if f == "$forReturns" || f == "$forReturnBody" then mode == "true" else bodyFail
             | _ => bodyFail
           if refined && (stagePlan.isSome || (ctx.suspends && !sourceFail)) &&
-              !cA.inCtor && !cA.inParamDefault && !cA.inBlock && !cA.inDefer && cA.defaults.isEmpty then
+              !cA.inCtor && !cA.inBlock && !cA.inDefer then
             checkNewLocal cA b.pos b.name
             let restCl := after ++ moreCl
             if cA.typeOnly then

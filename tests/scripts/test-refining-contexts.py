@@ -12,7 +12,8 @@ compiler = root / '.lake/build/bin/openverse'
 runtime = root / 'runtime/build/cverse'
 model = sys.argv[3] if len(sys.argv) > 3 else 'gadt_contexts.py'
 generator = root / 'scripts/models' / model
-label = 'refining-task-order' if model == 'gadt_task_order.py' else 'refining-contexts'
+label = {'gadt_task_order.py': 'refining-task-order',
+         'gadt_waiting_contexts.py': 'waiting-defaults'}.get(model, 'refining-contexts')
 
 def invoke(command):
     return subprocess.run(list(map(str, command)), cwd=root,

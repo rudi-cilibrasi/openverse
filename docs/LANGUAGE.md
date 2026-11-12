@@ -586,8 +586,8 @@ circle := class(shape, labelled):
   `defer:`, constructors, class `block:` clauses, field and parameter
   defaults, and arms of `sync`, `race`, `rush` and `branch`, including
   immediate first-success and `for` consumers. Waiting `for` bodies also
-  work in concurrent arms; a refining `for` with a waiting body in a
-  parameter default remains refused. Their source scope still determines
+  work in concurrent arms and parameter defaults, including generic and
+  interface-dispatched method defaults. Their source scope still determines
   which returns, breaks, effects and task operations are allowed. Waiting
   branches retain their source's mutable storage and cancellation cleanup.
   A wait hidden inside a refining helper counts toward `sync`'s two

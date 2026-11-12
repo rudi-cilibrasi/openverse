@@ -169,6 +169,12 @@ kinds=(
   typed-exclusive
   typed-first
   typed-for
+  waiting-default-method-composed
+  waiting-default-method-lazy
+  waiting-default-method-refined
+  waiting-default-parameter-composed
+  waiting-default-parameter-lazy
+  waiting-default-parameter-refined
   waiting-composed
   waiting-composed-lazy
   waiting-exclusive
@@ -434,6 +440,27 @@ if kind.startswith('open-function-'):
     print(f'Run({params} where {tparams})<computes>:int=\n{binds}\n{body}')
     args = ','.join('7' if i%2==0 else '"s"' for i in range(count))
     print(f'Main():void=Print("{{Run({args})}}")')
+    sys.exit(0)
+if kind.startswith('waiting-default-'):
+    shape, mode = kind.removeprefix('waiting-default-').rsplit('-', 1)
+    print('pair(a:type,b:type):=class{}\ndup(t:type):=class(pair(t,t)){C:int=4}\ncell:=class{var N:int=0}')
+    print('Lazy(N:int)<computes><decides>:int=block{N>=0;N|Lazy[N-1]}')
+    params = ','.join(f'P{i}:pair(a{i},b{i})' for i in range(count))
+    types = ','.join(f'a{i}:type,b{i}:type' for i in range(count))
+    names = ','.join(f'P{i}' for i in range(count))
+    values = [f'if(D{i}:=dup[P{i}])then ' + (f'Lazy[D{i}.C]' if mode == 'lazy' else f'(D{i}.C|D{i}.C+1)') + ' else 0' for i in range(count)]
+    if mode == 'composed': values = ['(Two(0)|Two(2))']*count
+    clauses = ','.join(f'A{i}:={v},A{i}=0' if mode == 'composed' else f'A{i}:={v},A{i}=4' for i,v in enumerate(values))
+    expr = f'block{{H:=cell{{}};R:=for({clauses}):block{{Sleep(0.0);E:[]a0=Concatenate();set H.N+=1;E.Length}};R.Length+H.N}}'
+    header = f'Run({params},?N:int={expr} where {types})<suspends>:int=N'
+    if shape == 'method':
+        print('box(t:type):=class:\n    X:t\n    ' + header)
+        print('B:=box(string){X:="tag"}')
+    else: print(header)
+    call = ('B.' if shape == 'method' else '') + f'Run({names})'
+    print(f'Use({params} where {types})<suspends>:int={call}')
+    actual = ','.join('dup(int){}' if i%2==0 else 'dup(string){}' for i in range(count))
+    print(f'Main()<suspends>:void=Print("{{Use({actual})}}")')
     sys.exit(0)
 if kind.startswith('waiting-') and not kind.startswith('waiting-refined'):
     print('''Early(N:int)<computes>:int =

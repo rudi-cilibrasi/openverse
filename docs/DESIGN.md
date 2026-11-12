@@ -1938,6 +1938,12 @@ flags. Discovery and generated function checking restore the same scope.
 Their request identity includes that scope and its type environment, while
 the source class-copy tag stays separate. Different closed evaluations of
 one default therefore cannot reuse a helper with the wrong type witnesses.
+Waiting consumers can stage parameter defaults through the same protocol.
+Both ordinary composed suffixes and refining branches preserve the active
+default stack and source restrictions in their prefix and resume functions.
+Their body runs after its filter commits, including through generic method
+and interface dispatch; cancellation unwinds active body cleanup before
+source cleanup, with background starts still owned by the caller.
 Compiler-owned inferred functions can consume a registered continuation's
 heap effects while their signatures reach a fixed point; final source
 checking still enforces the caller's declared effects.
