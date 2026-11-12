@@ -1299,6 +1299,24 @@ partial def loopTailOK (plain groupOK : SExpr → Bool) : SExpr → Bool
   | .ite _ cs t (some u) => cs.all plain && loopTailOK plain groupOK t && loopTailOK plain groupOK u
   | e => groupOK e
 
+/-- A recursive tail with each `if` in a branch's place that has no choice
+    and no call of the group in it (`plain`, no returning path) made a block:
+    a value, whose conditions run with it and are undone with it, as any
+    value's code is, not a branch the invocation selects once for all its
+    values. The tail's own `if` stays its branch. -/
+partial def plainIfValues (plain : SExpr → Bool) : SExpr → SExpr
+  | .app p (.ident q "$returnTail") [.block r ss] false =>
+    let (pre, value) := loopBlockParts r ss
+    .app p (.ident q "$returnTail") [.block r (pre ++ [leaf value])] false
+  | .ite p cs t u => .ite p cs (leaf t) (u.map leaf)
+  | e => e
+where
+  leaf (e : SExpr) : SExpr := match e with
+    | .ite p .. =>
+      if plain e && !anyE (fun | .app _ (.ident _ "$returnTail") _ false => true | _ => false) e then .block p [e]
+      else plainIfValues plain e
+    | e => plainIfValues plain e
+
 /-- Visit the value leaves of a recursive tail, keeping its path scopes as
     they are (`mapLoopTail` puts each behind a taking boundary instead). -/
 partial def mapLoopLeaves (leaf : SExpr → SExpr) : SExpr → SExpr
@@ -1431,7 +1449,7 @@ def loopShape? (g : String) (mv : List String) (body : SExpr) (grp : List String
     | _ => false
   let (cls, tail) := if frames && !cls.all plain then
       (lastChoiceTail plain cls last).getD (cls, tail) else (cls, tail)
-  let tail := completeLoopTail isRec false tail
+  let tail := plainIfValues plain (completeLoopTail isRec false tail)
   let tail := if frames then framedTail isRec plain (inert (params ++ localsOf body)) tail else tail
   -- (a frame's code sets no `var` bound before it: it runs on a copy of
   -- the names; an object's field it may set)
