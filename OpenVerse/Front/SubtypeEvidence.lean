@@ -232,6 +232,27 @@ def parameterFacts (env : TyEnv) (parameters : List (Ty × Bool))
   else actual.filterMap fun (_, ty) =>
     (boundOf? ty).map fun bound => (bound.base, bound.derived)
 
+/-- Could a formal input expose executable proof or function data? This is a refusal
+    check, not evidence search: containers and ordinary fields may forward
+    dictionaries even though they do not themselves authorize an upcast.
+    Unconstrained parameters remain opaque, so parametric forwarding keeps
+    its value's role without being mistaken for proof consumption. -/
+partial def exposesEvidence (env : TyEnv) (ty : Ty) : Bool :=
+  go [] [] ty
+where
+  go (owners : List String) (parameters : List String) : Ty → Bool
+    | .arr t | .opt t => go owners parameters t
+    | .tup ts => ts.any (go owners parameters)
+    | .map k v => go owners parameters k || go owners parameters v
+    | .param name _ => !parameters.contains name && env.boundFacts.any fun (upper, lower) =>
+        lower == .param name false && go owners (name :: parameters) upper
+    | .struct name args =>
+      name == family || env.isSub name family || (FnValues.parseName name).isSome ||
+        args.any (go owners parameters) ||
+        (!owners.contains name && (env.fields name args).any fun (field, ty, _) =>
+          !field.startsWith "$w." && go (name :: owners) parameters ty)
+    | _ => false
+
 /-- Only real readonly compiler captures can justify generated environment
     fields. Hidden type-value fields never contribute facts. A user class's
     ordinary object fields cannot invent a missing declaration constraint. -/

@@ -60,19 +60,42 @@ partial def elabExprInitialWith
     let some (_, effects) := FnValues.parseName shape | eerr p "internal: invalid generic operation shape"
     if effects.contains "suspends" && !ctx.suspends then eerr p "an operation dictionary suspends here"
     if effects.contains "decides" && !ctx.canFail then eerr p "an operation dictionary can fail here"
-    let methodVars ← metadata.mapM fun
-      | .tuple _ [.str _ [.text n], .int _ b] => pure (n, b == 1)
+    let methodParameters ← metadata.mapM fun
+      | .tuple _ [.str _ [.text n], .int _ b] => pure (n, b == 1, none)
+      | .tuple _ [.str _ [.text n], .int _ b, .construct _ "$upperBound" [upper] []] => pure (n, b == 1, some upper)
       | _ => eerr p "internal: invalid operation method parameter"
+    let methodVars := methodParameters.map fun (name, comparable, _) => (name, comparable)
     let methodNames := methodVars.map (·.1)
     let make (probeCtx : Ctx) : EM (Sig × List (String × Ty)) := do
       let types := { probeCtx.types with tvars := methodVars.map (fun (n, b) => (n, Ty.param n b)) ++ probeCtx.types.tvars }
-      let signature ← schema.mapM (resolveTy types p)
+      let unchecked := { types with sbounds := [] }
+      let bounds ← methodParameters.filterMapM fun (name, comparable, upper) => do
+        let some upper := upper | pure none
+        return some (SubtypeEvidence.Bound.mk (← resolveTy unchecked p upper) (.param name comparable))
+      let signature ← schema.mapM (resolveTy unchecked p)
       if signature.length != values.length + 1 then eerr p "internal: invalid operation signature"
-      let fixed := Ty.mergeParamBounds (signature.flatMap Ty.paramsC) |>.filter (!methodNames.contains ·.1)
+      let boundTypes := bounds.flatMap fun b => [b.base, b.derived]
+      let fixed := Ty.mergeParamBounds ((signature ++ boundTypes).flatMap Ty.paramsC) |>.filter (!methodNames.contains ·.1)
+      let some parameters := choiceMethodTParams p methodVars bounds
+        | eerr p "internal: unrepresentable operation method constraints"
+      let fixedParams : List TParam := fixed.map fun (name, comparable) =>
+        { pos := p, name, constraint := if comparable then "comparable" else "type" }
+      let flags ← match checkTParams types (fixedParams ++ parameters) with
+        | .ok flags => pure flags
+        | .error message => eerr p message
+      let methodVars := methodVars.map fun (name, old) => (name, old || (flags.lookup name).getD false)
+      let strengthened := methodVars.map fun (name, comparable) => (name, Ty.param name comparable)
+      let signature := signature.map (·.subst strengthened)
+      let bounds := bounds.map (fun b => SubtypeEvidence.Bound.subst b strengthened)
+      let bounded := { types with boundFacts := bounds.map (fun b => (b.base, b.derived)) ++ types.boundFacts }
+      for ty in signature ++ boundTypes do
+        match ty.checkBounds bounded with
+        | .ok _ => pure ()
+        | .error message => eerr p message
       let sig : Sig := {
         idx := 0, name := family ++ "$probe", params := signature.dropLast,
         ret := signature.getLast!, tparams := methodVars, decides := bracket, isConst := false,
-        fx := allowedFx effects, suspends := effects.contains "suspends" }
+        fx := allowedFx effects, suspends := effects.contains "suspends", bounds }
       return (sig, fixed.map fun (n, b) => (n, Ty.param n b))
     let (sig, fixed) ← make ctx
     let r ← elabGenericCallWith elabE { ctx with callInstanceProbe := some sig.name } p sig values exp (inst := fixed)

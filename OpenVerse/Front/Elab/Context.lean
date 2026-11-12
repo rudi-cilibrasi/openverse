@@ -701,6 +701,19 @@ partial def resolveTy (env : TyEnv) (p : Pos) : STy → EM Ty
 def typeNames : List String :=
   ["int", "logic", "char", "string", "void", "float", "rational", "any", "comparable", "type", "subtype"]
 
+/-- Comparable upper types whose subtype conversions preserve equality.
+    Contextual discarding to void is deliberately not such a guarantee. -/
+private partial def comparableUpper (env : TyEnv) (vars : List (String × Bool)) : STy → Bool
+  | .name name => (vars.lookup name).getD false ||
+      ["int", "float", "rational", "logic", "char", "char32", "string"].contains name ||
+      (env.enums.lookup name).isSome || (env.refines.lookup name).isSome ||
+      (env.classes.contains name && env.isUnique name)
+  | .arr ty | .opt ty => comparableUpper env vars ty
+  | .tup parts => parts.all (comparableUpper env vars)
+  | .map key value => comparableUpper env vars key && comparableUpper env vars value
+  | .app name _ => env.classes.contains name && env.isUnique name
+  | .fn .. => false
+
 def checkTParams (env : TyEnv) (tps : List TParam) : Except String (List (String × Bool)) := do
   let mut out : Array (String × Bool) := #[]
   for tp in tps do
@@ -719,12 +732,8 @@ def checkTParams (env : TyEnv) (tps : List TParam) : Except String (List (String
   -- that implication through peer parameters, including forward references.
   for _ in [0:tps.length + 1] do
     let next := out.map fun (name, comparable) =>
-      let implied := match (tps.find? (·.name == name)).bind (·.upperBound) with
-        | some (.name upper) =>
-          (out.toList.lookup upper).getD false ||
-            (env.classes.contains upper && env.isUnique upper) || (env.refines.lookup upper).isSome
-        | some (.app upper _) => env.classes.contains upper && env.isUnique upper
-        | _ => false
+      let implied := ((tps.find? (·.name == name)).bind (·.upperBound)).any
+        (comparableUpper env out.toList)
       (name, comparable || implied)
     if next == out then break
     out := next
@@ -748,12 +757,10 @@ def resolveTParams (env : TyEnv) (tps : List TParam) : Except String ResolvedTPa
   let bounds ← tps.filterMapM fun parameter => do
     let some upper := parameter.upperBound | pure none
     let base ← (resolveTy formal parameter.pos upper).run' { env := formal }
-    match base with
-    | .struct name _ =>
-      unless env.classes.contains name do
-        throw s!"{parameter.pos.show}: subtype({base.show}) must name a class, interface, or type parameter"
-    | .param .. | .refine .. => pure ()
-    | _ => throw s!"{parameter.pos.show}: subtype({base.show}) must name a class, interface, refinement, or type parameter"
+    -- Any resolved type may occur after a peer bound is specialized. In
+    -- particular a receiver's t can become int or a container in a checked
+    -- operation method. Validate its kind below instead of erasing it or
+    -- rejecting a legitimate specialized bound merely for its shape.
     let derived := Ty.param parameter.name ((params.lookup parameter.name).getD false)
     pure (some ({ base, derived } : SubtypeEvidence.Bound))
   let resolved : ResolvedTParams := { params, bounds }
@@ -800,6 +807,9 @@ partial def Ctx.isTypeValue (ctx : Ctx) : SExpr → Bool
   | .set _ receiver op value => ctx.isTypeValue value || (op.isSome && ctx.isTypeValue receiver)
   | .tuple _ values | .arrayLit _ values => values.any ctx.isTypeValue
   | .mapLit _ entries => entries.any fun (key, value) => ctx.isTypeValue key || ctx.isTypeValue value
+  | .construct _ _ _ fields => fields.any fun field => match field with
+      | .decl _ name _ _ _ => !name.startsWith "$w." && ctx.isTypeValue field
+      | _ => ctx.isTypeValue field
   | .block _ values =>
     let (_, result) := values.foldl (fun (scope, _) value =>
       let role := scope.isTypeValue value
@@ -829,6 +839,14 @@ where
         { scope with locals := (names.map fun name =>
           { name, slot := 0, ty := .void, mutable := false, typeValue := role }) ++ scope.locals }
       | _ => scope) ctx
+
+/-- A metadata value may be forwarded opaquely, but cannot become an actual
+    dictionary in the callee. Inspect the declaration's own domain, before
+    substituting caller instances into otherwise unconstrained parameters. -/
+def Ctx.checkArgumentRole (ctx : Ctx) (s : Sig) (argument : SExpr) (index : Nat) : EM Unit := do
+  if s.typeValues.contains index || !ctx.isTypeValue argument then return
+  if (s.params[index]?).any (SubtypeEvidence.exposesEvidence (s.typeEnv ctx.types)) then
+    eerr argument.pos s!"dummy type value cannot provide executable evidence to {s.name}"
 
 def Ctx.evidenceEnv (ctx : Ctx) : TyEnv :=
   let locals := ctx.evidenceTypes

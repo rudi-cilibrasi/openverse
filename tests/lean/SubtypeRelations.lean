@@ -175,6 +175,13 @@ private def contracts : IO Unit := do
   let resolved ← getOK "numeric refinement formal bounds" (resolveTParams types tps)
   need "numeric refinement comparability follows peer chains"
     (resolved.params == [("a", true), ("b", true)])
+  let upper (name : String) (ty : STy) := TParam.withUpperBound { line := 1, col := 1 } name ty
+  let resolved ← getOK "specialized primitive and compound upper heads"
+    (resolveTParams types [upper "a" (.name "int"), upper "b" (.arr (.name "a")), upper "c" (.name "void")])
+  need "specialization retains equality guarantees without treating discard as one"
+    (resolved.params == [("a", true), ("b", true), ("c", false)] && resolved.bounds.length == 3)
+  need "admitting an upper type head does not invent a conversion to it"
+    (!types.boundSubtype .int .void)
   let t := Ty.param "t" false
   let u := Ty.param "u" false
   let locals := [("Element", (Bound.mk t u).ty)]

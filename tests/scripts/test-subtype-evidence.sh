@@ -6,6 +6,8 @@ out="$(mktemp -d)"
 trap 'rm -rf "$out"' EXIT
 make -s -C runtime build/cverse
 lake env lean --run tests/lean/SubtypeEvidenceScopes.lean
+lake env lean --run tests/lean/SubtypeEvidenceInputs.lean
+lake env lean --run tests/lean/ChoiceBoundMethods.lean
 lake env lean --run tests/lean/SubtypeEvidence.lean "$out"
 lake env lean --run tests/lean/SubtypeContainers.lean "$out"
 lake env lean --run tests/lean/SubtypeRelations.lean "$out"

@@ -21,6 +21,10 @@ an unrelated caller do not repair an unconstrained declaration. Type variables
 remain opaque rather than being replaced by upper types.
 Numeric refinements are also supported bound heads in the draft. Their implied
 comparability propagates through peer bounds, alongside unique-class bounds.
+Specializing a peer bound can produce a primitive or container upper type;
+generated declarations retain and validate that type. Equality-preserving
+comparable uppers imply comparability, while contextual discarding to `void`
+does not establish that implication.
 
 Executable conversion requires an actual value of the compiler-owned
 `$subtypeEvidence(base,derived)` interface. Its `Up` method accepts `derived` and
@@ -31,6 +35,12 @@ readonly proof fields. They do not walk arbitrary user object graphs.
 A call result conservatively retains the dummy role when its callee or any
 written argument carries that role, including ordinary generic forwarding
 calls. This rule does not infer arbitrary function return dependencies.
+Argument binding also refuses dummy inputs to executable proof and function
+formals, including proof data exposed through containers or object fields.
+This check uses the callee's declared domain. An unconstrained parametric
+forwarder may still return metadata, retaining its role. Saved method receivers
+and arguments keep their roles across dispatch; dummy receivers cannot execute
+methods or function calls. Hidden `$w.` fields remain metadata.
 
 The checked families currently cover:
 
@@ -87,6 +97,13 @@ parameters and these private proof names; unrelated caller source names stay
 outside its scope. The final call reuses those saved dictionaries. Earlier
 argument/default roles remain attached to their saved values, so a dummy
 argument cannot become an actual default-scope proof.
+
+Shared choice operations retain common method-local upper bounds in their
+interface, forwarding function and implementations. Their typed probes require
+actual lexical evidence and can infer parameters that occur only in a bound.
+The operation identity includes the bound domain. Different per-case domains,
+or relations that cannot be expressed on a retained binder, keep the checked
+per-case source path rather than generating an unconstrained method.
 
 Member lookup uses actual nominal views. Root and interior mutation preserve
 the source storage type, evaluate indices/keys before traversal, and perform

@@ -23,10 +23,16 @@ partial def elabAppBaseWith
     (exp : Option Ty) : EM R := do
   let needBracket (name : String) : EM Unit := do
     if !bracket then eerr p s!"{name} can fail: call it with {name}[…]"
+  let indexLike (source : SExpr) (value : R) : EM R := do
+    if !ctx.typeOnly && ctx.isTypeValue source then
+      if let .struct name _ := value.ty then
+        if (FnValues.parseName name).isSome then
+          eerr source.pos "dummy type value cannot be an executable function"
+    elabIndexLike ctx p value args bracket
   match f with
   | .ident _ name =>
     match ctx.lookup name with
-    | some l => elabIndexLike ctx p ⟨.local l.slot, l.ty⟩ args bracket
+    | some l => indexLike f ⟨.local l.slot, l.ty⟩
     | none =>
     -- in a method, a method of `Self`, or a field of `Self` indexed
     let selfMember? : Bool := match ctx.selfClass with
@@ -274,7 +280,7 @@ partial def elabAppBaseWith
         -- a call has its callee's effects
         noteFx p s.fx (some (if s.isConst then s!"uses the constant {name}" else s!"calls {name}"))
         if s.isConst then
-          elabIndexLike ctx p ⟨.call s.idx [], s.ret⟩ args bracket
+          indexLike f ⟨.call s.idx [], s.ret⟩
         else
           let args := packCallArgs p s args
           if s.decides && !bracket then eerr p s!"{name} is <decides>: call it with {name}[…]"
@@ -295,6 +301,11 @@ partial def elabAppBaseWith
           -- (a suspension point records the defers active there, #156)
           let mark (e : Expr) : EM Expr := if s.suspends then withDeferMark ctx e else pure e
           if s.named.isEmpty && !args.any isNamed then
+            if args.length == 1 && s.params.length > 1 then
+              for k in List.range s.params.length do ctx.checkArgumentRole s args[0]! k
+            else
+              for (argument, index) in args.zipIdx do
+                ctx.checkArgumentRole s argument (if s.params.length == 1 then 0 else index)
             -- a tuple for several parameters is expanded into them (Book of
             -- Verse ch. 3: `Describe(MyTuple)` is `Describe(1, "two")`)
             if let [a] := args then
@@ -341,12 +352,14 @@ partial def elabAppBaseWith
           let mut steps : Array Expr := #[]
           let mut slots : Array (Option Nat) := Array.replicate s.params.length none
           for (a, k) in pos.zip (List.range npos) do
+            ctx.checkArgumentRole s a k
             let t := ptys[k]!
             let ta ← fresh t
             steps := steps.push (.assign ta (← coerce a.pos (← elabE ctx a (some t)) t))
             slots := slots.set! k (some ta)
           for (ap, n, rhs) in named do
             let k := npos + (s.named.findIdx? (·.1 == n)).get!
+            ctx.checkArgumentRole s rhs k
             let t := ptys[k]!
             let ta ← fresh t
             steps := steps.push (.assign ta (← coerce ap (← elabE ctx rhs (some t)) t))
@@ -375,6 +388,7 @@ partial def elabAppBaseWith
                                      inLoop := false, canFail := ctx.canFail && s.decides,
                                      suspends := ctx.suspends && s.suspends,
                                      defaults := key :: ctx.defaults }
+              dctx.checkArgumentRole s d k
               let rd ← fxAt p (do coerce p (← elabE dctx d (some t)) t)
               if !s.decides && rd.mayFail ctx.sigProg then
                 eerr p s!"the default of ?{n} of {name} can fail, but {name} is not <decides>"
@@ -403,6 +417,8 @@ partial def elabAppBaseWith
     let impl ← superImpl ctx p c m
     elabApp ctx p (.ident mp impl) (.ident mp "Self" :: args) bracket exp
   | .member mp obj m0 =>
+    if !ctx.typeOnly && ctx.isTypeValue obj then
+      eerr mp "dummy type value cannot be an executable method receiver"
     let spawning := m0.startsWith "$spawnMethod:"
     let m0 := if spawning then (m0.drop 13).toString else m0
     -- `T.Await()` of a task (#156): the helper `$Await(T)`
@@ -515,7 +531,8 @@ partial def elabAppBaseWith
               let es ← fresh (.struct e (argsAt e))
               pure ([Expr.assign es (← coerce p ⟨.local slot, r.ty⟩ (.struct e (argsAt e)))], es)
             else pure ([], slot)
-          let ctx' := { ctx with locals := { name := recv, slot := eslot, ty := .struct e (argsAt e), mutable := false } :: ctx.locals }
+          let ctx' := { ctx with
+            locals := { name := recv, slot := eslot, ty := .struct e (argsAt e), mutable := false, typeValue := ctx.isTypeValue obj } :: ctx.locals }
           let rc ← if spawning then
               elabSpawn ctx' p (.app p (.ident mp fname) (.ident mp recv :: args) bracket)
             else elabApp ctx' p (.ident mp fname) (.ident mp recv :: args) bracket exp
@@ -549,7 +566,7 @@ partial def elabAppBaseWith
         for (ap, n, _) in namedArgs do
           if (ms.named.find? (·.1 == n)).isNone then eerr ap s!"{m} has no parameter ?{n}"
         let mut pre : Array Expr := #[.assign slot r.e]
-        let mut locs : List Local := [{ name := recv, slot, ty := r.ty, mutable := false }]
+        let mut locs : List Local := [{ name := recv, slot, ty := r.ty, mutable := false, typeValue := ctx.isTypeValue obj }]
         let mut argIds : Array SExpr := #[]
         -- the method's own type parameters, from the expected result type
         -- (unless void), then from the arguments, as for a generic call: an
@@ -592,11 +609,11 @@ partial def elabAppBaseWith
             else
               done := done.set! i (some (← coerce a.pos (← elabE ctx a (some t)) t, t))
         let mut namedSlots : List (String × Nat) := []
-        for ((_, _, name), d) in given.zip done.toList do
+        for ((argument, _, name), d) in given.zip done.toList do
           let some (e, t) := d | eerr p s!"cannot infer the type parameters of {m} from the arguments of this call"
           let ta ← fresh t
           pre := pre.push (.assign ta e)
-          locs := { name := s!"$arg{ta}", slot := ta, ty := t, mutable := false } :: locs
+          locs := { name := s!"$arg{ta}", slot := ta, ty := t, mutable := false, typeValue := ctx.isTypeValue argument } :: locs
           match name with
           | none => argIds := argIds.push (.ident mp s!"$arg{ta}")
           | some n => namedSlots := namedSlots ++ [(n, ta)]
@@ -880,10 +897,10 @@ partial def elabAppBaseWith
         return ⟨pre.toList.foldr Expr.seq (.assign y acc), msRet⟩
       else if (ctx.types.fields c targs).any (·.1 == m) then
         -- `S.F[i]`, `S.F(k)`: a field, indexed
-        elabIndexLike ctx p (← elabMember ctx p r m) args bracket
+        indexLike f (← elabMember ctx p r m)
       else if ctx.types.classes.contains c then eerr p s!"class {c} has no method '{m}'"
       else eerr p s!"struct {c} has no field '{m}' (structs have no methods)"
     | _ => elabMethod ctx p r m args bracket
-  | _ => elabIndexLike ctx p (← elabE ctx f none) args bracket
+  | _ => indexLike f (← elabE ctx f none)
 
 end OpenVerse.Front

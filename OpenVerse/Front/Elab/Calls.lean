@@ -247,6 +247,7 @@ partial def elabGenericCallWith (elabE : Ctx → SExpr → Option Ty → EM R) (
   -- index of its parameter
   let given : List (SExpr × Nat) := (pos.zip (List.range npos)) ++ named.map fun (_, n, rhs) =>
     (rhs, npos + (s.named.findIdx? (·.1 == n)).getD 0)
+  for (argument, index) in given do ctx.checkArgumentRole s argument index
   let ptys := s.params.toArray
   let mut σ : List (String × Ty) := inst
   -- Member dispatch has already saved the receiver in a typed local. Its
@@ -360,6 +361,7 @@ partial def elabGenericCallWith (elabE : Ctx → SExpr → Option Ty → EM R) (
         -- (its type: the parameter's, or what the default gives a type
         -- parameter nothing else determined)
         let σ0 := σ
+        dctx.checkArgumentRole s d k
         if !bound σ0 pt && (← argNeedsTypeWith elabE dctx d) then
           let v := (pt.params.filter fun v => (σ0.lookup v).isNone).headD "t"
           eerr p s!"cannot infer type parameter {v} of {s.name} from the arguments of this call"
