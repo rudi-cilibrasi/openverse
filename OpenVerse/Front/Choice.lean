@@ -397,44 +397,23 @@ def LM.bind (p : Pos) (k : String) (e : SExpr) (ty : Option STy := none) : LM SE
   modify fun s => { s with pre := s.pre.push (.decl p x ty false e) }
   return .ident p x
 
+/-- `e` with `go` applied to each subexpression a rewrite descends into:
+    its `children`, except that a construction's field bindings give their
+    values only (so field names are kept), and a struct's field defaults
+    too. -/
+def descendM [Monad m] (go : SExpr → m SExpr) : SExpr → m SExpr
+  | .construct p n ts fs => return .construct p n ts (← fs.mapM fun
+      | .decl q fn t v x => do return .decl q fn t v (← go x)
+      | a => go a)
+  | .structDef p tps specs fs => return .structDef p tps specs (← fs.mapM fun (n, t, d, v) => do return (n, t, ← d.mapM go, v))
+  | e => e.mapChildrenM go
+
 /-- `e` with `f` applied top-down: where `f` gives a replacement, it is used
-    (and not descended into). Struct constructions' field names are kept. -/
+    (and not descended into); elsewhere `descendM` goes on. -/
 partial def mapE (f : SExpr → Option SExpr) (e : SExpr) : SExpr :=
   match f e with
   | some e' => e'
-  | none =>
-    let go := mapE f
-    match e with
-    | .str p ps => .str p (ps.map fun | .code c => .code (go c) | t => t)
-    | .app p g as b => .app p (go g) (as.map go) b
-    | .member p x m => .member p (go x) m
-    | .query p x => .query p (go x)
-    | .neg p x => .neg p (go x)
-    | .notE p x => .notE p (go x)
-    | .bin p o a b => .bin p o (go a) (go b)
-    | .cmp p a r => .cmp p (go a) (r.map fun (o, b) => (o, go b))
-    | .andE p a b => .andE p (go a) (go b)
-    | .orE p a b => .orE p (go a) (go b)
-    | .range p a b => .range p (go a) (go b)
-    | .tuple p es => .tuple p (es.map go)
-    | .block p es => .block p (es.map go)
-    | .arrayLit p es => .arrayLit p (es.map go)
-    | .optionLit p x => .optionLit p (go x)
-    | .logicLit p x => .logicLit p (go x)
-    | .ite p cs t e' => .ite p (cs.map go) (go t) (e'.map go)
-    | .forE p cs b => .forE p (cs.map go) (go b)
-    | .gen p x i src => .gen p x i (go src)
-    | .loop p b => .loop p (go b)
-    | .ret p x => .ret p (x.map go)
-    | .caseE p sc arms => .caseE p (go sc) (arms.map fun (pt, v) => (pt.map go, go v))
-    | .decl p n t v x => .decl p n t v (go x)
-    | .set p l o r => .set p (go l) o (go r)
-    | .construct p n ts fs => .construct p n ts (fs.map fun
-        | .decl q fn t v x => .decl q fn t v (go x)
-        | a => go a)
-    | .mapLit p kvs => .mapLit p (kvs.map fun (k, v) => (go k, go v))
-    | .structDef p tps specs fs => .structDef p tps specs (fs.map fun (n, t, d, v) => (n, t, d.map go, v))
-    | e => e
+  | none => Id.run (descendM (m := Id) (mapE f) e)
 
 /-- An exclusive choice (#314): at most one alternative's `guards` hold,
     and that alternative's value is its `rest`'s (a block). A `for`

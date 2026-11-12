@@ -175,6 +175,39 @@ def SExpr.children : SExpr → List SExpr
   | .int .. | .char .. | .char32 .. | .float .. | .ident .. | .brk ..
   | .structDef .. | .enumDef .. | .refineDef .. => []
 
+/-- `e` with `f` applied to each of its immediate children, the ones
+    `children` lists, in that order; everything else is kept. -/
+def SExpr.mapChildrenM [Monad m] (f : SExpr → m SExpr) (e : SExpr) : m SExpr :=
+  match e with
+  | .str p ps => return .str p (← ps.mapM fun | .code c => do return .code (← f c) | t => pure t)
+  | .app p g as b => return .app p (← f g) (← as.mapM f) b
+  | .member p x m => return .member p (← f x) m
+  | .query p x => return .query p (← f x)
+  | .neg p x => return .neg p (← f x)
+  | .notE p x => return .notE p (← f x)
+  | .optionLit p x => return .optionLit p (← f x)
+  | .logicLit p x => return .logicLit p (← f x)
+  | .loop p x => return .loop p (← f x)
+  | .gen p x i src => return .gen p x i (← f src)
+  | .decl p n t v x => return .decl p n t v (← f x)
+  | .bin p o a b => return .bin p o (← f a) (← f b)
+  | .andE p a b => return .andE p (← f a) (← f b)
+  | .orE p a b => return .orE p (← f a) (← f b)
+  | .range p a b => return .range p (← f a) (← f b)
+  | .set p l o r => return .set p (← f l) o (← f r)
+  | .cmp p a r => return .cmp p (← f a) (← r.mapM fun (o, b) => do return (o, ← f b))
+  | .tuple p es => return .tuple p (← es.mapM f)
+  | .block p es => return .block p (← es.mapM f)
+  | .arrayLit p es => return .arrayLit p (← es.mapM f)
+  | .construct p n ts es => return .construct p n ts (← es.mapM f)
+  | .ite p cs t u => return .ite p (← cs.mapM f) (← f t) (← u.mapM f)
+  | .forE p cs b => return .forE p (← cs.mapM f) (← f b)
+  | .ret p x => return .ret p (← x.mapM f)
+  | .caseE p sc arms => return .caseE p (← f sc) (← arms.mapM fun (pt, v) => do return (← pt.mapM f, ← f v))
+  | .mapLit p kvs => return .mapLit p (← kvs.mapM fun (k, v) => do return (← f k, ← f v))
+  | .int .. | .char .. | .char32 .. | .float .. | .ident .. | .brk ..
+  | .structDef .. | .enumDef .. | .refineDef .. => return e
+
 structure SParam where
   name : String
   ty   : STy
