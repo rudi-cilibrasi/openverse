@@ -872,14 +872,20 @@ structure LoopFrame where
     it is not the group's result type `rty` (they do not coerce to it): its
     first alternative's, a value's, or the code's after a call in it. None
     when that is a call of the group, whose values are at `rty`. -/
-def probeHoleWith (elabE : Ctx → SExpr → Option Ty → EM R) (ca : Ctx) (rty : Ty) (cs : List SExpr) :
+partial def probeHoleWith (elabE : Ctx → SExpr → Option Ty → EM R) (ca : Ctx) (rty : Ty) (cs : List SExpr) :
     EM (Option Ty) := do
   let st ← get
   let some (c, e) ← (match cs.head? with
     | some (.app _ (.ident _ "$rec") _ false) | some (.app _ (.ident _ "$recTo") _ false) => pure none
-    | some (.app _ (.ident _ "$then") (.app _ (.ident _ _) _ false :: .ident _ h :: k :: _) false) =>
+    | some (.app _ (.ident _ "$then") (p@(.app _ (.ident _ _) _ false) :: .ident _ h :: k :: _) false) =>
       if (Choice.contOf? k).isSome then pure none else do
-      let hl : Local := { name := h, slot := ← fresh rty, ty := rty, mutable := false }
+      -- (the hole's type: a call's, the group's; a choice's or an `if`'s
+      -- leaf's, #283, its first alternative's)
+      let ht ← match Choice.alts? p, p with
+        | some ps, _ => pure ((← probeHoleWith elabE ca rty ps).getD rty)
+        | none, .app _ (.ident _ "$then") _ false => pure ((← probeHoleWith elabE ca rty [p]).getD rty)
+        | none, _ => pure rty
+      let hl : Local := { name := h, slot := ← fresh ht, ty := ht, mutable := false }
       pure (some ({ ca with locals := hl :: ca.locals }, k))
     | some a => pure (some (ca, a))
     | none => pure none) | set st; return none
@@ -906,6 +912,12 @@ partial def loopFlatWith (elabE : Ctx → SExpr → Option Ty → EM R)
       let (r, c) ← elabSeq { ca with canFail := true, inTaking := true } ss none
       pure (some r.e, { c with canFail := ca.canFail, inTaking := ca.inTaking })
     | _ => pure (none, ca)
+  -- (#283) the frame of an `if` that is a point, in each of its leaves: one
+  -- for all, made at its first, which has its code (`Choice.sameFrame`)
+  if Choice.isSameFrame k then
+    let some j := (List.range frames.size).reverse.find? (fun j => (frames[j]?.map (·.hole)) == some h)
+      | eerr a.pos "internal: an if's leaf before its frame (#283)"
+    return ← loopFlatNext elabE elabSeq rty ca frames c (j :: outer)
   let own := h :: Choice.localsOf k
   let preSet := rest.findSome? fun e => if Choice.anyE (fun | .set .. => true | _ => false) e then some e.pos else none
   let j := frames.size
@@ -917,12 +929,22 @@ partial def loopFlatWith (elabE : Ctx → SExpr → Option Ty → EM R)
     | none, _ => probeHoleWith elabE ca rty [c]
   let outTy := (outer.head?.bind (frames[·]?)).bind (·.inTy)
   let frames := frames.push { hole := h, code := k, ctx := fc, pre, preSet, lives, inTy, outTy }
-  match Choice.alts? c with
-  | some cs =>
-    cs.foldlM (fun (fr, acc) y => do
-      let (fr, ys) ← loopFlatWith elabE elabSeq rty ca fr y (j :: outer)
-      pure (fr, acc ++ ys)) (frames, [])
-  | none => return (frames, [(c, j :: outer)])
+  loopFlatNext elabE elabSeq rty ca frames c (j :: outer)
+where
+  /-- The point `c` with the frames `fs`: a choice's alternatives each, a
+      point with a frame of its own (an `if`'s leaf) flattened in turn, or
+      the call or value itself. -/
+  loopFlatNext (elabE : Ctx → SExpr → Option Ty → EM R)
+      (elabSeq : Ctx → List SExpr → Option Ty → EM (R × Ctx)) (rty : Ty) (ca : Ctx)
+      (frames : Array LoopFrame) (c : SExpr) (fs : List Nat) :
+      EM (Array LoopFrame × List (SExpr × List Nat)) := do
+    match Choice.alts? c, c with
+    | some cs, _ =>
+      cs.foldlM (fun (fr, acc) y => do
+        let (fr, ys) ← loopFlatWith elabE elabSeq rty ca fr y fs
+        pure (fr, acc ++ ys)) (frames, [])
+    | none, .app _ (.ident _ "$then") _ false => loopFlatWith elabE elabSeq rty ca frames c fs
+    | none, _ => return (frames, [(c, fs)])
 
 /-- The return frames of a tail's alternatives, in the order of its arms. -/
 def loopFramesWith (elabE : Ctx → SExpr → Option Ty → EM R)
@@ -1067,13 +1089,16 @@ partial def elabLoopGenGroupWith (elabE : Ctx → SExpr → Option Ty → EM R)
         work := more
         if let .app _ (.ident _ "$then") (pt :: .ident _ hn :: k :: rest) false := alt then
           if let some cs := Choice.alts? pt then work := cs.map (ca, ·) ++ work
+          -- (an `if`'s leaf with a frame of its own)
+          if let .app _ (.ident _ "$then") _ false := pt then work := (ca, pt) :: work
           if let some (ccls, ctail) := Choice.contOf? k then
             let cf ← match rest with
               | [.block _ ss] => do pure (← elabSeq ca ss none).2
               | _ => pure ca
-            let hty := (← match Choice.alts? pt with
-              | some cs => probeHoleWith elabE ca rty cs
-              | none => pure none).getD rty
+            let hty := (← match Choice.alts? pt, pt with
+              | some cs, _ => probeHoleWith elabE ca rty cs
+              | none, .app _ (.ident _ "$rec") _ false | none, .app _ (.ident _ "$recTo") _ false => pure none
+              | none, _ => probeHoleWith elabE ca rty [pt]).getD rty
             let hl : Local := { name := hn, slot := ← fresh hty, ty := hty, mutable := false }
             let (_, cm) ← elabSeq { cf with locals := hl :: cf.locals } ccls none
             let mcode ← elabLoopTailWith elabSeq cm ctail probeK 0

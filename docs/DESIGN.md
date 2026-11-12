@@ -877,6 +877,18 @@ code after it, which is its frame.
   the lifter binds it as it binds a choice), then decomposed again. The
   struct field orders come from the source (`inlineMulti`), for non-generic
   structs, as the elaborator gives the lifter.
+- An `if` in an expression whose conditions have no point and whose
+  branches have one (`ifPoint`; the right of `or` as its `if`; one the
+  lifter would bind as an exclusive choice, `$branchChoice`, is bound as
+  itself) is a point: entered as `enterOf` enters a member, its conditions
+  the member's path, each leaf's values going to one frame shared by all
+  its branches (hole `…i`; its code in the first leaf only, the others
+  `$sameFrame`, which `loopFlatWith` finds by its hole, so the code after
+  `if`s in sequence is not copied into each leaf, size modes
+  `recursive-if-*`; a leaf with a frame of its own is flattened in turn,
+  `flatCount` too).
+  The frame's type is its first leaf's (`probeHoleWith`, through the
+  frames of the leaf).
 - An alternative, one of several, with code before a choice in it (`T(N -
   1) | Tell("x", 1) + (1 | 2)`): that code runs after the choice it is an
   alternative of and before its own. It enters a continuation member that
@@ -886,11 +898,6 @@ code after it, which is its frame.
   in its leaf, that code is the leaf's path code instead (`$returnTail`).
 
 Not yet (#283), each refused with a message, and the route each would take:
-- A point in an `if` inside an expression (the right of `or` is one, as
-  `orIf` makes it), which the lifter makes an exclusive choice. Route: the
-  `if` as a point whose leaves' values go to one frame shared across its
-  branches (frames identified by their hole, not by their place), entered as
-  `enterOf` enters a member, its conditions the member's path.
 - A call of the group in a condition (an `if`'s, `not`'s, the left of
   `or`) or a loop: there it is a consumer of the group nested in the group's
   own code, which takes its first success or all its values while the

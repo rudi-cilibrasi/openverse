@@ -1353,7 +1353,12 @@ Main():void =
   lifter takes a choice is a choice point there, in the same order: in a
   comparison's later operand (`5 > T[N - 1]`), a `set`'s value after its
   old value (`set K += T(N - 1)`), a named argument (`Tw(1, ?B := T(N -
-  1))`), a struct's field in its declaration order, `and`'s operands.
+  1))`), a struct's field in its declaration order, `and`'s operands. An
+  `if` in an expression with one in a branch is one too: its conditions
+  run first, then the branch's values each go to the code after the `if`
+  (`X := (if (N > 1) then T(N - 1) else (1 | 5))`), as do those of `or`'s
+  right (`N = 0 or T[N - 1] > 1`) and of an `if` without `else` as a
+  statement.
 
   A returning branch may contain plain clauses and
   nested conditionals before its value. A `return` at the end of the body or
@@ -1452,10 +1457,10 @@ Main():void =
   `<computes>`, keeps local state, or may print or call `Err()`. Its choice
   points must be where a choice is lifted from (a comparison's later
   operand, a `set`'s value, a named argument, a struct's field, `and`'s
-  operands, all taken as the lifter takes a choice there), so not in a
-  condition (an `if`'s, `not`'s, the left of `or`), a loop, an `if` inside
-  an expression or the right of `or`, or a class's or generic struct's
-  construction (#283). Also an
+  operands, an `if`'s branch, the right of `or`), so not in a condition
+  (an `if`'s, `not`'s, the left of `or`) or a loop, where a call would
+  take the function's values while its own are being taken, nor in a
+  class's or generic struct's construction (#283). Also an
   overloaded one with an overload that calls the function's own name
   (a generic one's type arguments are inferred from the
   arguments where it is inlined, as at a call, named ones too), a recursive one with a `defer:` of its own, or called by a recursive one (its body a function's, where it would run once), one with a `return`

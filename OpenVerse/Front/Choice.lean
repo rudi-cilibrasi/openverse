@@ -1411,6 +1411,31 @@ partial def mapLoopLeaves (leaf : SExpr → SExpr) : SExpr → SExpr
   | .ite p cs t u => .ite p cs (mapLoopLeaves leaf t) (u.map (mapLoopLeaves leaf))
   | e => leaf e
 
+/-- `mapLoopLeaves`, each leaf with its index, in order. -/
+partial def mapLoopLeavesIdx (leaf : Nat → SExpr → SExpr) (e : SExpr) : SExpr :=
+  (go e).run' 0
+where
+  go : SExpr → StateM Nat SExpr
+    | .app p (.ident q "$returnTail") [.block r ss] false => do
+      let (pre, value) := loopBlockParts r ss
+      return .app p (.ident q "$returnTail") [.block r (pre ++ [← go value])] false
+    | .ite p cs t u => do
+      let t' ← go t
+      return .ite p cs t' (← u.mapM go)
+    | e => do
+      let i ← get
+      set (i + 1)
+      return leaf i e
+
+/-- (#283) The frame code of an `if`'s leaves after its first, which has the
+    code: the frame is that one, its hole's last (`loopFlatWith`), so the
+    code after the `if` is not copied into each leaf. -/
+def sameFrame (p : Pos) : SExpr := .app p (.ident p "$sameFrame") [] false
+
+def isSameFrame : SExpr → Bool
+  | .app _ (.ident _ "$sameFrame") [] false => true
+  | _ => false
+
 /-- A hole or a prefix's name, made by `frameOf?` (#283): a name of the
     function's own, which a continuation member has as a parameter. -/
 def madeLocal (n : String) : Bool := n.startsWith "$frame" || n.startsWith "$pre"
@@ -1454,6 +1479,11 @@ partial def frameOf? (isPoint plain inert : SExpr → Bool) (h : String) (e : SE
   | .bin p o a b => do
     let (c, as, pre) ← inList [a, b]
     return (c, .bin p o as[0]! as[1]!, pre)
+  -- (#283) `A or B` with a point on its right: the `if` it stands for
+  | .orE p a b => if plain a && !plain b then
+      let t := madeName "or" "" p
+      go (.ite p [.decl p t none false (.block a.pos [a])] (.ident p t) (some (.block b.pos [b])))
+    else none
   | .neg p a => do let (c, a', pre) ← go a; return (c, .neg p a', pre)
   | .member p a m => do let (c, a', pre) ← go a; return (c, .member p a' m, pre)
   | .cmp p a rest => do
@@ -1517,9 +1547,11 @@ def contOf? : SExpr → Option (List SExpr × SExpr)
     choice, each with that frame too, the frame shared. -/
 partial def flatCount (a : SExpr) : Nat :=
   match a with
-  | .app _ (.ident _ "$then") (c :: _) false => match alts? c with
-    | some cs => (cs.map flatCount).foldl (· + ·) 0
-    | none => 1
+  | .app _ (.ident _ "$then") (c :: _) false => match alts? c, c with
+    | some cs, _ => (cs.map flatCount).foldl (· + ·) 0
+    -- (an `if`'s leaf with a frame of its own: its count)
+    | none, .app _ (.ident _ "$then") _ false => flatCount c
+    | none, _ => 1
   | _ => 1
 
 /-- (#283) The holes of the frames in a tail that are continuation members,
@@ -1586,8 +1618,15 @@ partial def unmarkPoints : SExpr → SExpr :=
     either (a condition, a loop), which takes it as a failure context's. -/
 def liftPoints? (ops : ShapeOps) (a : SExpr) : Option SExpr := do
   let isVal (n : String) : Bool := ops.inert (.ident a.pos n)
+  -- (an `if` with a point in a branch the lifter binds as an exclusive
+  -- choice is bound as itself, a point of the normal form, `ifPoint`)
+  let whole : SExpr → SExpr
+    | .decl p x ty false (.app _ (.ident _ "$branchChoice") [i] false)
+    | .decl p x ty false (.app _ (.ident _ "$branchChoiceAt") [_, i] false) => .decl p x ty false i
+    | c => c
   let lift (c : SExpr) : List SExpr :=
-    (liftClause isVal (fun _ _ => false) (markPoints ops.isCall c) (fieldOrder := ops.fieldOrder)).map unmarkPoints
+    (liftClause isVal (fun _ _ => false) (markPoints ops.isCall c) (fieldOrder := ops.fieldOrder)).map
+      (whole ∘ unmarkPoints)
   match a with
   | .block p ss =>
     let i ← ss.findIdx? (!ops.plain ·)
@@ -1619,7 +1658,12 @@ partial def normAlt (ops : ShapeOps) (a : SExpr) : Option SExpr := do
   if let .block _ ss@(_ :: _ :: _) := a then
     if let some ([], tail) := lastChoiceTail ops.plain ss.dropLast ss.getLast! then
       if let some as := alts? tail then return mk a.pos (← as.mapM (normAlt ops))
-  let isPoint (e : SExpr) : Bool := ops.isRec e || isChoice e
+  -- (#283) an `if` with plain conditions and a point in a branch is one too:
+  -- its branch's values go to the code after it
+  let ifPoint : SExpr → Bool
+    | e@(.ite _ cs _ (some _)) => cs.all ops.plain && !ops.plain e
+    | _ => false
+  let isPoint (e : SExpr) : Bool := ops.isRec e || isChoice e || ifPoint e
   let hole := "$hole"
   match frameOf? isPoint ops.plain ops.inert hole a with
   | none =>
@@ -1628,8 +1672,18 @@ partial def normAlt (ops : ShapeOps) (a : SExpr) : Option SExpr := do
     normAlt ops a'
   | some (c, k, pre) => do
     let h := if ops.isRec c && ops.plain k then s!"$frame{a.pos.line}_{a.pos.col}"
-      else s!"$frame{c.pos.line}_{c.pos.col}{if ops.isRec c then "k" else "c"}"
+      else s!"$frame{c.pos.line}_{c.pos.col}{if ops.isRec c then "k" else if ifPoint c then "i" else "c"}"
     let k := renameE [(hole, h)] k
+    if ifPoint c then
+      -- (an `if`: entered as `enterOf` enters a member, its conditions the
+      -- member's path, each leaf's values going to the frame, one for all,
+      -- its code in the first leaf only, `sameFrame`)
+      let k ← if ops.plain k then some k else contBody? ops k
+      let tail := mapLoopLeavesIdx (fun i v => .app v.pos (.ident v.pos "$then")
+        [v, .ident v.pos h, if i == 0 then k else sameFrame v.pos] false) (← normTail ops c)
+      let q := a.pos
+      return .app q (.ident q "$then") [.tuple q [], .ident q s!"{h}e",
+        .app q (.ident q "$cont") [.block q pre, tail] false] false
     let c ← match alts? c with
       | some cs => do
         -- (one of its alternatives with code before a choice of its own
@@ -1698,8 +1752,8 @@ def eagerWhy : String :=
   "such a function must be <computes>, keep no local state, and reach nothing that prints or calls Err(), " ++
   "as all its values are computed at a call (#235), unless it is taken lazily: clauses, then a choice whose " ++
   "alternatives are values, calls of its recursive group, or such a call or a choice with code after it that may " ++
-  "reach another, not in a condition, a set or a later operand of a comparison, and with nothing but literals " ++
-  "and names before a choice in one of several alternatives (#246, #283)"
+  "reach another, not in a condition (an if's, not's, the left of or) or a loop, which would take a call's values " ++
+  "while its own are taken, nor in a field of a class's or a generic struct's construction (#246, #283)"
 
 /-- (#283) Whether an alternative in normal form (`normAlt`) is one the
     lazy machine takes: its prefix plain, a choice's alternatives such again,
@@ -1714,7 +1768,8 @@ partial def altOK (ops : ShapeOps) (isVar : String → Bool) (a : SExpr) : Bool 
       -- (a choice with code before it is a whole leaf, that code its path's,
       -- `normTail`; not yet one alternative among others)
       (pre.isEmpty || !isChoice c) &&
-      pre.all ops.plain && ((alts? c).map (·.all (altOK ops isVar))).getD (ops.isRec c || ops.plain c) &&
+      pre.all ops.plain && ((alts? c).map (·.all (altOK ops isVar))).getD
+        (ops.isRec c || ops.plain c || (match c with | .app _ (.ident _ "$then") _ false => altOK ops isVar c | _ => false)) &&
         (setsIn k).all (fun n => (localsOf k).contains n || !isVar n) &&
         (ops.plain k || match contOf? k with
           | some (cls, tail) => cls.all ops.plain && loopTailOK ops.plain leafOK tail
@@ -2520,9 +2575,11 @@ partial def firstBody (helper : String) (p : Pos) (b : String) (bty : Option STy
       let j := (frames.findIdx? (·.1 == h)).getD 0
       let lives := (((frames[j]?).map (·.2.1)).getD []).map (SExpr.ident q ·)
       let fs' := (j, lives, q) :: fs
-      match alts? c with
-      | some cs => mk q (cs.map (altK fs'))
-      | none =>
+      match alts? c, c with
+      | some cs, _ => mk q (cs.map (altK fs'))
+      -- (a leaf of an `if` that is a point, with that frame after its own)
+      | none, .app _ (.ident _ "$then") _ false => altK fs' c
+      | none, _ =>
       match call [pushed fs' q] c, pre with
       | some e, [.block _ ss] => .block q (ss ++ [e])
       | some e, _ => e

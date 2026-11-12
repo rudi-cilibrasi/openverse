@@ -86,7 +86,8 @@ flags: heavy     (with bif: more of them, longer chains, longer conditions)
                   #283; on with seq otherwise)
        nolifted  (no call of a generator of itself where the lifter takes it, after
                   its bound choice: a named argument, a construction's field, a
-                  comparison's later operand, a set's value, #283; on with seq otherwise)
+                  comparison's later operand, a set's value, an if's branch, or's
+                  right, #283; on with seq otherwise)
 """
 import copy
 import os
@@ -509,8 +510,10 @@ RENT = random.Random(seed * 1000003 + 283289)
 # choice, a statement with a call of itself where the lifter takes it: a named argument,
 # `Wl := NA(N, ?P := Gz0[N - 1, A])`; a construction's field, in its type's order whatever the
 # written one, `Wl := PS(pt{Y := Gz0[N - 1, A], X := 2})`; a comparison's later operand,
-# `Wl := (5 > Gz0[N - 1, A])`; or `set Vk += Gz0[N - 1, A]`, its old value read before the call;
-# a stream of its own.
+# `Wl := (5 > Gz0[N - 1, A])`; `set Vk += Gz0[N - 1, A]`, its old value read before the call, or
+# `set Vk = Gz0[N - 1, A] + Vk`; an `if` in an expression with the call in a branch,
+# `Wl := (if (N > 1) then Gz0[N - 1, A] else (1 | 5))`; `or`'s right, `Wl := (N = 0 or
+# Gz0[N - 1, A] > 1)`; a stream of its own.
 RLIFT = random.Random(seed * 1000003 + 283292)
 SQN = [0]
 USED = set()     # (generator, in a for): the calls the tests make, for MVSEQ's statistics
@@ -1140,7 +1143,7 @@ def lifted_shapes(f, i, sc, ctr, stmts):
         return
     a = ('ref', RLIFT.choice(sc)) if RLIFT.random() < 0.5 else ('lit', RLIFT.randint(0, 3))
     call = ('gself', i, [('bin', '-', ('ref', 'N'), ('lit', 1)), a] + ([('ref', 'C')] if ctr else []))
-    kinds = (['na'] if NA else []) + (['cons'] if CB else []) + ['cmp', 'set']
+    kinds = (['na'] if NA else []) + (['cons'] if CB else []) + ['cmp', 'set', 'if', 'or', 'set=']
     kind = RLIFT.choice(kinds)
     x, post, last = f.get('bound') or ('Wf', [], ('ref', 'Wf'))
     if kind == 'na':
@@ -1149,12 +1152,24 @@ def lifted_shapes(f, i, sc, ctr, stmts):
         st = ('slet', 'Wl', ('cons', ('lit', RLIFT.randint(0, 3)), call, RLIFT.random() < 0.5))
     elif kind == 'cmp':
         st = ('slet', 'Wl', ('cmp', ('lit', RLIFT.randint(1, 6)), [(RLIFT.choice(['>', '>=']), call)]))
+    elif kind == 'if':
+        # (an `if` in an expression with the call in a branch, the other a value or a choice)
+        other = (('lit', RLIFT.randint(0, 3)) if RLIFT.random() < 0.5 else
+                 ('choice', [('lit', RLIFT.randint(0, 3)), ('lit', RLIFT.randint(4, 7))]))
+        cond = [('filter', ('cmp', ('ref', 'N'), [(RLIFT.choice(['>', '<']), ('lit', RLIFT.randint(0, 2)))]))]
+        st = ('slet', 'Wl', ('ifx', cond, call, other) if RLIFT.random() < 0.5 else ('ifx', cond, other, call))
+    elif kind == 'or':
+        # (`or` with the call on its right, as its `if`'s else)
+        st = ('slet', 'Wl', ('orx', ('cmp', ('ref', 'N'), [('=', ('lit', RLIFT.randint(0, 2)))]),
+                             ('cmp', call, [(RLIFT.choice(['>', '>=']), ('lit', RLIFT.randint(0, 3)))])))
     else:
         if not any(c[0] == 'svar' and c[1] == 'Vl' for c in stmts):
             stmts.append(('svar', 'Vl', ('lit', RLIFT.randint(0, 3))))
-        st = ('sset', 'Vl', '+=', call)
+        # (`set =`: the old value read after the call, from the var each
+        # value of it has set)
+        st = ('sset', 'Vl', '+=', call) if kind == 'set' else ('sset', 'Vl', '=', ('bin', '+', call, ('ref', 'Vl')))
     post = post + [st]
-    last = ('bin', '+', ('ref', 'Vl' if kind == 'set' else 'Wl'), last)
+    last = ('bin', '+', ('ref', 'Vl' if kind in ('set', 'set=') else 'Wl'), last)
     f['bound'] = (x, post, last)
     f['seq'] = f.get('seq', set()) | {'lifted-' + kind}
 
