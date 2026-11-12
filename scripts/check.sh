@@ -111,6 +111,7 @@ check "front-end mutation fuzzing (${FUZZ_FRONT:-500} mutants)" scripts/fuzz-fro
 check "QuickProof pins" scripts/check-quickproof-pins.sh
 check "fuzz runner checks" bash tests/scripts/test-fuzz-runners.sh
 check "check runner checks" bash tests/scripts/test-check.sh
+check "front-end C translation-unit size" bash tests/scripts/test-frontend-c-size.sh
 check "choice continuation code size" bash tests/scripts/test-choice-size.sh
 check "construction/default choice models (${FUZZ_MODEL_CONSTRUCT:-60} seeds each)" \
   bash tests/scripts/test-choice-defaults.sh "${FUZZ_MODEL_CONSTRUCT:-60}" "$seed"
