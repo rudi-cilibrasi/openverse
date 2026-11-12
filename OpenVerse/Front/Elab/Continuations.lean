@@ -1549,13 +1549,13 @@ def choiceGenericOperation (ctx : Ctx) (stem : String) (receiver : SExpr) (recei
     its own object/container layout, while the suffix carries type columns. -/
 def choicePathDictionary (stem role : String) (ops : ChoiceOperations)
     (signature : List Ty) (rows : List (List Ty)) (specs : List String)
-    (body : SExpr) : ChoiceOperations × String := Id.run do
+    (bodies : List SExpr) : ChoiceOperations × String := Id.run do
   let p : Pos := { line := 0, col := 0 }
   let canonical := rows.map fun types =>
     let vars := Ty.mergeParamBounds (types.flatMap Ty.paramsC)
     let rename := vars.zipIdx.map fun ((n, b), i) => (n, Ty.param s!"$pathCanonical{i}" b)
     (types.map (·.subst rename), vars)
-  let family := s!"$choiceOperationDictionary{(reprStr (role, specs, canonical.map (·.1), body)).hash}"
+  let family := s!"$choiceOperationDictionary{(reprStr (role, specs, canonical.map (·.1), bodies)).hash}"
   let names := (List.range signature.length).map fun i => s!"$pathType{i}"
   let tparams := names.map fun n => ({ pos := p, name := n, constraint := "type" } : TParam)
   let variables := names.map STy.name
@@ -1577,7 +1577,7 @@ def choicePathDictionary (stem role : String) (ops : ChoiceOperations)
       ({ pos := p, name := n, constraint := if b then "comparable" else "type" } : TParam)
     definitions := definitions ++ [.classDef p impl implTps [] [.app family (canonicalTypes.map Ty.toSTy)] false [] []
       [.fn p "$apply" (params (canonicalTypes.dropLast.map Ty.toSTy)) [] ("override" :: specs)
-        canonicalTypes.getLast!.toSTy body]]
+        canonicalTypes.getLast!.toSTy bodies[i]!]]
     let valueTy := STy.app family (types.map Ty.toSTy)
     let value := SExpr.construct p impl (vars.map fun (n, _) => .name n) []
     bindings := bindings ++ [[.decl p name (some valueTy) false
@@ -1597,17 +1597,16 @@ def choicePathOperation (ctx : Ctx) (stem : String) (ops0 : ChoiceOperations)
   let rootTy ← (ops0.aliasTypes bindings).lookup root |>.orElse fun _ => (ctx.lookup root).map (·.ty)
   let rows ← ops0.plan.instances.mapM fun instanceTypes =>
     choicePathRow ctx.types ((rootTy.subst instanceTypes).subst ctx.types.tvars) steps op.isSome
-  let first ← rows.head?
-  if rows.any (·.capture != first.capture) then none else do
-  let prefixSteps := steps.take first.capture
-  let tailSteps := steps.drop first.capture
+  if rows.isEmpty then none else do
+  let tailReads := rows.any fun row => steps.length - row.capture > 1
   -- Keep the source diagnostic when the caller lacks a required heap
   -- permission, instead of naming a generated dictionary in the error.
-  let needsRead := op.isSome || tailSteps.length > 1 || rows.any (·.prefixReads)
+  let needsRead := op.isSome || tailReads || rows.any (·.prefixReads)
   if !ctx.fnFx.contains "writes" || (needsRead && !ctx.fnFx.contains "reads") then none else do
   -- Retain the established field-only and contiguous-index protocols.
-  if prefixSteps.all (fun (_, field, key) => field != some "?" && field.isSome && key.isNone) &&
-      (tailSteps.drop 1).all (fun (_, field, key) => field.isNone && key.isSome) then none else do
+  if rows.all (fun row =>
+      (steps.take row.capture).all (fun (_, field, key) => field != some "?" && field.isSome && key.isNone) &&
+      ((steps.drop row.capture).drop 1).all (fun (_, field, key) => field.isNone && key.isSome)) then none else do
   let keys := steps.filterMap (·.2.2)
   -- Keep a keyless path's transport argument distinct from a nullary call.
   let packedTy (row : ChoicePathRow) := if keys.isEmpty then Ty.int else
@@ -1633,7 +1632,7 @@ def choicePathOperation (ctx : Ctx) (stem : String) (ops0 : ChoiceOperations)
     (if rows.any (·.prefixFails) then ["decides"] else [])
   let (next, captureName) := choicePathDictionary stem "pathCapture" ops [keyTy, rootTy, objectTy]
     (rows.map fun row => [packedTy row, row.rootTy, row.objectTy]) captureSpecs
-    (build (.ident p0 "$pathInput1") prefixSteps (stepKeys.take first.capture))
+    (rows.map fun row => build (.ident p0 "$pathInput1") (steps.take row.capture) (stepKeys.take row.capture))
   ops := next
   let callOp (name : String) (specs : List String) (values : List SExpr) :=
     SExpr.app p (.ident p "$choiceOperation")
@@ -1649,21 +1648,21 @@ def choicePathOperation (ctx : Ctx) (stem : String) (ops0 : ChoiceOperations)
     let readSpecs := ["reads"] ++ (if rows.any (·.tailFails) then ["decides"] else [])
     let (next, readName) := choicePathDictionary stem "pathOld" ops [keyTy, objectTy, leafTy]
       (rows.map fun row => [packedTy row, row.objectTy, row.leaf]) readSpecs
-      (build (.ident p0 "$pathInput1") tailSteps (stepKeys.drop first.capture))
+      (rows.map fun row => build (.ident p0 "$pathInput1") (steps.drop row.capture) (stepKeys.drop row.capture))
     ops := next
     let read := callOp readName readSpecs [key, object]
     match prepared with
     | some saved => validation := read; old := ops.rewrite saved
     | none => old := read
-  let writeSpecs := (if op.isSome || tailSteps.length > 1 then ["reads", "writes"] else ["writes"]) ++
+  let writeSpecs := (if op.isSome || tailReads then ["reads", "writes"] else ["writes"]) ++
     (if rows.any (·.tailFails) then ["decides"] else [])
   let oldTy := if op.isSome then leafTy else Ty.void
-  let writeTarget := build (.ident p0 "$pathInput1") tailSteps (stepKeys.drop first.capture)
   let writeRhs := if op.isSome then SExpr.app p0 (.ident p0 "$choiceWithOld")
     [.ident p0 "$pathInput2", .ident p0 "$pathInput3"] false else .ident p0 "$pathInput3"
   let (next, writeName) := choicePathDictionary stem "pathWrite" ops [keyTy, objectTy, oldTy, leafTy, leafTy]
     (rows.map fun row => [packedTy row, row.objectTy, if op.isSome then row.leaf else .void, row.leaf, row.leaf])
-    writeSpecs (.set p0 writeTarget op writeRhs)
+    writeSpecs (rows.map fun row => .set p0
+      (build (.ident p0 "$pathInput1") (steps.drop row.capture) (stepKeys.drop row.capture)) op writeRhs)
   ops := next
   let sourceKey := if keys.isEmpty then SExpr.int p 0 else
     if keys.length == 1 then ops.rewrite keys.head! else .tuple p (keys.map ops.rewrite)

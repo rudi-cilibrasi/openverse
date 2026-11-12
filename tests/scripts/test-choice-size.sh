@@ -8,6 +8,12 @@ tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
 limit="${CHOICE_SIZE_TIMEOUT:-120}"
 # Keep modes sorted on separate lines so independent additions merge cleanly.
 kinds=(
+  objectpath-plain-varying-boundary-first
+  objectpath-plain-varying-boundary-for
+  objectpath-plain-varying-boundary-waiting
+  objectpath-compound-varying-boundary-first
+  objectpath-compound-varying-boundary-for
+  objectpath-compound-varying-boundary-waiting
   objectpath-plain-opt-array-first
   objectpath-plain-opt-array-for
   objectpath-plain-opt-array-waiting
@@ -521,7 +527,10 @@ if kind.startswith('objectpath-'):
         keyTy='int' if tag=='a' else 'string';key='0' if tag=='a' else '"k"'
         if shape in ['reference-array','reference-map','mixed-query','alias-reference']:
             print('leaf'+tag+':=class{var Data:'+('?' if shape=='mixed-query' else '')+'[]'+leaf+'='+('option{' if shape=='mixed-query' else '')+'array{'+value+'}'+('}' if shape=='mixed-query' else '')+'}')
-        if shape=='value-field':
+        if shape=='varying-boundary':
+            print('state'+tag+':='+('struct{X:'+leaf+'}' if tag=='a' else 'class{var X:'+leaf+'='+value+'}'))
+            field='var Data:state'+tag+'=state'+tag+'{X:='+value+'}'
+        elif shape=='value-field':
             print('state'+tag+':=struct{X:'+leaf+';Tail:int=9}')
             field='var Data:state'+tag+'=state'+tag+'{X:='+value+'}'
         elif shape in ['reference-array','alias-reference']:field='var Items:[]leaf'+tag+'=array{leaf'+tag+'{}}'
@@ -536,12 +545,12 @@ if kind.startswith('objectpath-'):
     for i in range(n):
         target=f'A{i}'
         if shape=='alias-reference':clauses+=[f'B{i}:=A{i}',f'C{i}:=B{i}'];target=f'C{i}'
-        tail='.Data[0]?' if shape=='array-opt' else '.Data?' if shape=='opt-only' else '.Data.X' if shape=='value-field' else '.Items[0].Data[0]' if shape in ['reference-array','alias-reference'] else '.Items['+target+'.Key()].Data[0]' if shape=='reference-map' else '.Items?['+target+'.Key()]?.Data?[0]' if shape=='mixed-query' else '.Data?[0]'
+        tail='.Data[0]?' if shape=='array-opt' else '.Data?' if shape=='opt-only' else '.Data.X' if shape in ['value-field','varying-boundary'] else '.Items[0].Data[0]' if shape in ['reference-array','alias-reference'] else '.Items['+target+'.Key()].Data[0]' if shape=='reference-map' else '.Items?['+target+'.Key()]?.Data?[0]' if shape=='mixed-query' else '.Data?[0]'
         writes.append('set '+target+tail+('+=' if op=='compound' else '=')+('array{}' if shape=='contextual' else '1'))
     print('Run()'+('<suspends>' if mode=='waiting' else '')+':int=')
     if mode=='first':print('    if('+','.join(clauses+writes)+')then 1 else -1')
     else:
-        body=('block{'+(';'.join(writes) if shape=='value-field' else 'if('+','.join(writes)+'):{}')+';Sleep(0.001);0}') if mode=='waiting' else '0'
+        body=('block{'+(';'.join(writes) if shape in ['value-field','varying-boundary'] else 'if('+','.join(writes)+'):{}')+';Sleep(0.001);0}') if mode=='waiting' else '0'
         print('    Rows:=for('+','.join(clauses+([] if mode=='waiting' else writes))+'):'+body+'\n    Rows.Length')
     print('Main()'+('<suspends>' if mode=='waiting' else '')+':void=Print("{Run()}")')
     sys.exit(0)
