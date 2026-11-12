@@ -1,0 +1,14 @@
+direct 7
+direct 8
+overridden 70
+overridden 7
+shared 7
+shared 8
+shared b 14
+shared b 7
+overloaded 7
+overloaded 8
+overloaded s 1
+overloaded s 2
+first 2
+exit=0

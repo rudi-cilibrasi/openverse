@@ -2446,19 +2446,14 @@ partial def elabCase (ctx : Ctx) (p : Pos) (scrut : SExpr) (arms : List (Option 
   return ⟨.seq (.assign t rs.e) body, ty⟩
 end
 
-/-- (#283) `elabStmt` of a body whose calls of overloaded functions with
-    several values are resolved first: an elaboration for types, each call
-    as written (`ovForTypes`), noting the overload each takes; then each
-    call its chosen overload's inlined call (`ovChosen`). -/
-def elabBodyOv (ctx : Ctx) (body : SExpr) (ret : Option Ty) (st0 : ESt) : Except String ((R × Ctx) × ESt) := do
+/-- `elabStmt` of the body of a function, a constant or a class's block, from
+    `st0`. -/
+def elabBody (ctx : Ctx) (body : SExpr) (ret : Option Ty) (st0 : ESt) : Except String ((R × Ctx) × ESt) := do
   -- (a <decides> body of one expression with a cast in it: the block of it,
   -- where a cast that refines takes the rest as its branch, `elabSeqIn`)
   let body := match body with
     | .block .. => body
     | e => if ctx.canFail && !(Refine.castsIn ctx.types.classes.contains e).isEmpty then .block e.pos [e] else e
-  if !Choice.anyE (fun | .app _ (.ident _ "$inlineOv") _ false => true | _ => false) body then
-    return ← (elabStmt ctx body ret).run st0
-  let ((_, _), stT) ← (elabStmt { ctx with typeOnly := true } (ovForTypes body) ret).run st0
-  (elabStmt ctx (ovChosen stT.ovPicks body) ret).run st0
+  (elabStmt ctx body ret).run st0
 
 end OpenVerse.Front

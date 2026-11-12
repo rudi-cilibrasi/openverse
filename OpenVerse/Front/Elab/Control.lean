@@ -431,6 +431,9 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
     (outsideWrites : List Nat := []) :
     EM (Option R) := do
   let ctx := ctx.choiceCoercionScope
+  -- (the lift's tag is of the branch as written, before choice conversions
+  -- wrap it, as `elabExprControlWith` computes it too)
+  let written := body0
   let body0 := ctx.choiceCoercionBody body0
   let env := ctx.types
   if !env.classes.contains T then return none
@@ -543,7 +546,7 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
   let elseOf : EM R := match elseE with
     | none => pure ⟨.lit .void, .void⟩
     | some ee => elabE ctx ee exp
-  let tag := refineTagOf ctx
+  let tag := refineTagOf ctx x written elseE exp
   let key := Refine.keyOf p D tag
   let liftName := s!"$refine{p.line}_{p.col}_{D}" ++ (if p.file.isEmpty then "" else s!"_{p.file}") ++ tag
   -- Keep a suspending lift's available parameters in a stable order from
@@ -557,6 +560,7 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
     -- (first: the branch in the refined world)
     let dslot ← fresh dTy
     let ctxB : Ctx := { refined dslot with
+      inRefinedTrial := true,
       frameName := liftName, frameArgs := available.map fun (n, c) => Ty.param n c,
       -- (the source return's value and the lifted function's copy-out)
       retTy := (escRet.map (refine ·.1)).getD ctx.retTy,
@@ -657,7 +661,12 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
       -- (and a tagged one, which the source's places do not find, #53)
       body := if ctx.selfClass.isSome || made || D.startsWith "$" || !tag.isEmpty || !ctx.choiceCoercions.isEmpty then some (pruneConstructHints ctxB liftName
         (pruneConstructHints { ctxB with frameName := ctx.frameName } liftName body)) else none }
-    noteNeeds { casts := [lift] }
+    -- (not from the trial of an enclosing cast's branch when its tag
+    -- depends on the context, `refineTagOf`: the next elaboration calls the
+    -- function made from that branch, whose context differs, and the cast
+    -- asks for its lift there)
+    unless ctx.inRefinedTrial && !(sourceContextKey ctx).isEmpty do
+      noteNeeds { casts := [lift] }
     if suspendsB then
       modify fun st => { st with pendingSuspendingCasts := st.pendingSuspendingCasts + 1 }
     if thenWaits || elseWaits then
@@ -800,11 +809,14 @@ def liftCastClause (ctx : Ctx) (bound : List String) (q : Pos) (c : SExpr) : Lis
     the clauses after it, up to the next generator (`isGen`), as its branch
     in a clause of its own, and `after` casting again
     (`Refine.castRestClauses`). Such a cast inside a clause is lifted out to
-    be a clause of its own first (`liftCastClause`). `none` without a cast
-    to a class. -/
+    be a clause of its own first (`liftCastClause`); one in an expression the
+    failure context evaluates outside its clauses (`blocks`: an `if`'s
+    branch, with the elaboration with it replaced) makes that expression the
+    block of it (`Refine.castsOf`). `none` without a cast to a class. -/
 def withCastClauses (ctx : Ctx) (cs : List SExpr) (after : SExpr) (isGen : SExpr → Bool) (asWritten : EM R)
     (rebuild : List SExpr → SExpr → EM R) (later : Bool := false)
-    (alone : Nat → String → EM (Option R) := fun _ _ => pure none) : EM (Option R) := do
+    (alone : Nat → String → EM (Option R) := fun _ _ => pure none)
+    (blocks : List (SExpr × (SExpr → EM R)) := []) : EM (Option R) := do
   -- (`D := T[X]` may be an index, `A[i]`: the one the refusal is at)
   let castAt : List (Nat × Pos) := cs.zipIdx.filterMap fun
     | (.decl _ _ none false (.app q (.ident _ _) [_] true), i) => if later && i == 0 then none else some (i, q)
@@ -813,12 +825,17 @@ def withCastClauses (ctx : Ctx) (cs : List SExpr) (after : SExpr) (isGen : SExpr
     | _ => none
   let inner : List (Nat × Pos) := cs.zipIdx.flatMap fun (c, i) =>
     (Refine.castsIn ctx.types.classes.contains c).map (i, ·)
-  if castAt.isEmpty && inner.isEmpty then return none
+  let blockAt : List (Nat × Pos) := blocks.zipIdx.flatMap fun ((e, _), j) =>
+    (Refine.castsOf ctx.types.classes.contains e).map (j, ·)
+  if castAt.isEmpty && inner.isEmpty && blockAt.isEmpty then return none
   let st0 ← get
   match ← tryCatch (Except.ok <$> asWritten) (fun err => pure (Except.error err)) with
   | .ok r => return some r
   | .error err =>
     let some refusal := Refine.castRefusal? err | throw err
+    if let some (e, elabWith) := (blockAt.find? (·.2 == refusal.pos)).bind fun (j, _) => blocks[j]? then
+      set st0
+      return some (← elabWith (.block e.pos [e]))
     if let some (k, _) := inner.find? (·.2 == refusal.pos) then
       set st0
       let lifted := liftCastClause ctx (Choice.boundIn (cs.take k)) refusal.pos cs[k]!
@@ -827,21 +844,24 @@ def withCastClauses (ctx : Ctx) (cs : List SExpr) (after : SExpr) (isGen : SExpr
     let some cast := Refine.castClause? cs[k]! | throw err
     set st0
     if let some r ← alone k err then return some r
+    let bound := Choice.boundIn cs
+    let lift (c : SExpr) : List SExpr :=
+      Choice.liftClause (fun n => choiceValues ctx n || bound.contains n) (choiceField ctx) c (fieldOrder := choiceOrder ctx)
     let moved (computed : Bool) := Refine.castRestClauses (cs.take k) cast refusal.opens (cs.drop (k + 1)) after
-      isGen ctx.types.classes.contains (fun n => (ctx.lookup n).any (!·.mutable)) computed
-    match moved false with
-    | .error why => throw s!"{err} ({why})"
-    | .ok (cs', after', _) =>
-      -- (a later cast of an object computed among the moved clauses is cast
-      -- again from that object, bound first, when `after` needs it: when it
-      -- is refused without)
-      let st1 ← get
-      match ← tryCatch (Except.ok <$> rebuild cs' after') (fun err => pure (Except.error err)) with
-      | .ok r => return some r
-      | .error err1 =>
-        let .ok (cs'', after'', true) := moved true | throw err1
-        set st1
-        return some (← tryCatch (rebuild cs'' after'') fun _ => throw err1)
+      isGen ctx.types.classes.contains (fun n => (ctx.lookup n).any (!·.mutable)) computed lift
+    let (cs', after', _) ← match moved false with
+      | .ok r => pure r
+      | .error why => throw s!"{err} ({why})"
+    -- (a later cast of an object computed among the moved clauses is cast
+    -- again from that object, bound first, when `after` needs it: when it
+    -- is refused without)
+    let st1 ← get
+    match ← tryCatch (Except.ok <$> rebuild cs' after') (fun err => pure (Except.error err)) with
+    | .ok r => return some r
+    | .error err1 =>
+      let .ok (cs'', after'', true) := moved true | throw err1
+      set st1
+      return some (← tryCatch (rebuild cs'' after'') fun _ => throw err1)
 
 /-- Infer a producer's signature instance from its canonical arguments. -/
 def loopInstanceOf (ctx : Ctx) (p : Pos) (sig : Sig) (types : List Ty) : EM (List (String × Ty)) := do
@@ -1372,25 +1392,6 @@ partial def elabLoopGenGroupWith (elabE : Ctx → SExpr → Option Ty → EM R)
     | none => pure after
   return { init, step, sp, has, value, after, vty := rty, itemCode, argSet, instances, bnd := bnd?,
            frames := frames.map (fun f => (f.hole, f.lives.map (·.name), f.code)), kTy := kl?.map (·.ty) }
-
-/-- (#283) A body for the elaboration that chooses overloads: each
-    `$inlineOv(F, id, call, …)` its call as written, `$ovPick(id, F, call)`. -/
-partial def ovForTypes : SExpr → SExpr :=
-  Choice.mapE fun
-    | .app p (.ident _ "$inlineOv") (.ident q f :: .int _ id :: call :: _) false =>
-      some (.app p (.ident p "$ovPick") [.int p id, .ident q f, ovForTypes call] false)
-    | _ => none
-
-/-- (#283) The body with each `$inlineOv` its chosen overload's inlined
-    call, `picks` the overload (`F$ovK`) each id's call took. -/
-partial def ovChosen (picks : List (Nat × String)) : SExpr → SExpr :=
-  Choice.mapE fun
-    | .app p (.ident _ "$inlineOv") (.ident q f :: .int _ id :: _ :: cands) false =>
-      let k? : Option Nat := (picks.lookup id.toNat).bind fun o => ((o.splitOn "$ov").getLast?).bind (·.toNat?)
-      match k?.bind (cands[·]?) with
-      | some c => some (ovChosen picks c)
-      | none => some (.app p (.ident p "$ovUnresolved") [.ident q f] false)
-    | _ => none
 
 /-- Check a construction's value choices at the field's expected type.
     Keeping the original inline/lazy templates visits nested constructions
