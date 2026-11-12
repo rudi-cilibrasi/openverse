@@ -66,6 +66,16 @@ with tempfile.TemporaryDirectory(prefix='ov-call-packing-') as directory:
             saved = ROOT / f'fuzz-call-packing-deep-{name}.verse'
             saved.write_text(program)
             raise SystemExit(f'nested fixed callable inference: oracle/5-second bound failed, saved {saved.name}')
+    implicit = ROOT / 'tests/errors/call_pack_implicit_field_inference.verse'
+    try:
+        result = subprocess.run(compiler + ['check', str(implicit)], cwd=ROOT,
+                                capture_output=True, text=True, timeout=5)
+        valid = (result.returncode == 4 and not result.stdout
+                 and 'cannot infer type parameter t of Get' in result.stderr)
+    except subprocess.TimeoutExpired:
+        valid = False
+    if not valid:
+        raise SystemExit('implicit callback field inference: diagnostic/5-second bound failed')
     # Adaptation must not create calls that fit two admitted declarations.
     for left, right in (
             ('P:tuple(int)', 'X:int'),

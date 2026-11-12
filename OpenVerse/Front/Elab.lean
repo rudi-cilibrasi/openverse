@@ -5394,7 +5394,10 @@ partial def elabE (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
             | .app _ (.ident _ g) _ _ =>
               match ctx.lookup g with
               | some binding => fnValue binding.ty
-              | none => (callSig g).any (fun s => !resultContext s)
+              | none =>
+                let receiver := if (ctx.lookup "Self").isSome then "Self" else "$Self"
+                (memberName g && typedField (.ident a.pos receiver) g) ||
+                  (callSig g).any (fun s => !resultContext s)
             | .app _ (.member _ receiver method) _ _ => typedField receiver method
             | _ => false
           let noResultEvidence := Choice.anyE (fun
