@@ -15,7 +15,8 @@ def main (args : List String) : IO Unit := do
     "peer-tuple-value", "peer-tuple-values", "peer-tuple-method", "peer-tuple-unique", "peer-numeric", "peer-any",
     "peer-inference", "peer-state", "peer-cancel", "peer-containers-control", "peer-containers",
     "peer-container-inference", "peer-map-keys", "peer-refinement", "peer-tuple-array",
-    "choice-numeric-bound", "choice-numeric-bound-control"]
+    "choice-numeric-bound", "choice-numeric-bound-control", "choice-method-bound", "choice-method-bound-control",
+    "choice-index-bound", "choice-index-bound-control"]
   let negative := ["choice-refusal", "default-refusal", "override-refusal", "overload-interface-refusal",
     "overload-ancestor-refusal", "overload-optional-refusal", "overload-empty-refusal", "overload-scope-refusal",
     "overload-value-refusal", "interior-readonly-refusal", "interior-effect-refusal",
