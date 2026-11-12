@@ -926,8 +926,9 @@ Main():void =
 
   Lifting goes through arithmetic, comparisons, calls and indexing,
   member access, `?`, tuples, arrays, maps, string interpolation, the
-  operands of `and` and the right of `or` (below), in the order they are
-  evaluated:
+  bounds of a range (`for (X := 1..(2 | 3))` is 1, 2, then 1, 2, 3: a
+  range for each value of its bounds), the operands of `and` and the right
+  of `or` (below), in the order they are evaluated:
   - a call's or an index's head is evaluated before its arguments: a
     variable holding an array, map or function, a field (read whole), a
     method's receiver, or any other expression (`Arr()[0 | 1]` calls `Arr`
@@ -1060,7 +1061,7 @@ Main():void =
   meet that function's effect restrictions.
 
   Refused for now: an alternative of a `set`'s choice,
-  a range, or a block with a range of its own as a branch; and
+  or a block with a range of its own as a branch; and
   a choice anywhere outside these failure contexts. (A field reached
   through a receiver that is not a variable or `Self`, as `F().Items[…]`,
   is read after the choice, since only the receiver's value is bound

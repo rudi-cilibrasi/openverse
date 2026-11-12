@@ -312,7 +312,7 @@ partial def hasLiftable : SExpr → Bool
       -- no value to lift from: its choices are its own)
       | a@(.block ..) => !(match f with | .ident _ n => n.startsWith "$" | _ => false) && hasLiftable a
       | a => hasLiftable a
-  | .bin _ _ a b => hasLiftable a || hasLiftable b
+  | .bin _ _ a b | .range _ a b => hasLiftable a || hasLiftable b
   -- (#283) the operands of `and`, and the right of `or` (its left is a
   -- failure context, which takes its own): each a clause, of a scope of its own
   | .andE _ a b => liftsHere a || liftsHere b
@@ -720,6 +720,10 @@ partial def liftE (isVal : String → Bool) (isField : String → String → Boo
     return .app p f' args' br
   | .bin p o a b => match ← liftOps isVal isField [a, b] with
     | [a', b'] => return .bin p o a' b'
+    | _ => return e
+  -- (#283) a range's bounds, so a `for`'s range is a generator after them
+  | .range p a b => match ← liftOps isVal isField [a, b] with
+    | [a', b'] => return .range p a' b'
     | _ => return e
   -- (#283) `A and B`: its operands in order, each a block, as each is a scope
   -- of its own: `A` a clause, then `B` the value

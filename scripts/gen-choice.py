@@ -7,7 +7,8 @@ Each program's statements put clause lists in the three failure contexts
 that take a choice's values: an `if` condition and `first{...}` (the first
 success) and a `for` (all of them, by generators). The clauses mix choice
 bindings, whose alternatives are literals, nested choices, or blocks that
-print, change the variable `N` or fail; range generators; filters; and
+print, change the variable `N` or fail; range generators, with choices in
+their bounds too; filters; and
 clauses that print or change `N`; and choices inside expressions, as
 `X := (a | b) + (c | d)` and `(Print(...); X) + (a | b) > c`, which the model
 expands into the clauses they are lifted to (the code before a choice
@@ -88,7 +89,7 @@ def alt_eval(a, st):
 # --- clauses ----------------------------------------------------------------
 # ('choice', name, groups): groups is a list of alternatives or nested lists
 #   (a parenthesized choice, spliced into the outer one)
-# ('range', name, lo, hi)      only in a for
+# ('range', name, lo, hi)      only in a for; a bound an int or ('name', x)
 # ('cmp', lhs, op, c)          lhs: ('var', x) | ('N',) | ('sum', x, y)
 # ('setN', d) | ('print', tag)
 # ('bindsum', x, a, b)         x := a + b of two names (always succeeds)
@@ -190,7 +191,9 @@ def alts_at(c, st):
         return [('lit', v) for v in range(lo, c[4] + 1)]
     if k == 'or':
         return c[4]
-    return [('lit', v) for v in range(c[2], c[3] + 1)]
+    def bound(b):
+        return st.env[b[1]] if isinstance(b, tuple) else b
+    return [('lit', v) for v in range(bound(c[2]), bound(c[3]) + 1)]
 
 
 def or_left(c, st):
@@ -459,7 +462,21 @@ class Gen:
                     names.append(bound)
             elif in_for and r < 0.76:
                 lo = self.rng.randint(0, 2)
-                cls.append(('range', name, lo, lo + self.rng.randint(0, 2))); names.append(name)
+                hi = lo + self.rng.randint(0, 2)
+                if self.rng.random() < 0.4:
+                    # (a choice in a bound, #283: lifted before the range,
+                    # which is then a range for each of its values)
+                    self.tag += 1
+                    a = f'$a{self.tag}'
+                    alts = self.plain_alts()
+                    if self.rng.random() < 0.5:
+                        src, rg = f'{name} := ({choice_src(alts)})..{hi + 2}', ('range', name, ('name', a), hi + 2)
+                    else:
+                        src, rg = f'{name} := {lo}..({choice_src(alts)})', ('range', name, lo, ('name', a))
+                    cls.append(('sugar', src, [('choice', a, alts), rg])); has_choice = True
+                else:
+                    cls.append(('range', name, lo, hi))
+                names.append(name)
             else:
                 cls.append(self.filt(names))
         return cls, names
