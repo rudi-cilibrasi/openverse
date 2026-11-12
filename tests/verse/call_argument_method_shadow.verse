@@ -1,5 +1,5 @@
 F():int=7
-box(t:type):=struct{N:int=7}
+box(t:type):=struct<computes>{N:int=7}
 Make(?N:int=0 where t:type)<computes>:box(t)=box(t){N:=N}
 host:=class:
     F(X:t where t:type)<computes>:t=X

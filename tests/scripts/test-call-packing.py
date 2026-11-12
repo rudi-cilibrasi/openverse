@@ -19,9 +19,9 @@ compiler = shlex.split(os.environ.get('OV_COMMAND', str(ROOT / '.lake/build/bin/
 with tempfile.TemporaryDirectory(prefix='ov-call-packing-') as directory:
     source, bytecode = (Path(directory) / name for name in ('program.verse', 'program.vbc'))
     for name, header, expression, diagnostic in (
-            ('method', 'box:=class:\n    Bad(?X:[]t=array{} where t:type)<computes>:int=X.Length\n'
+            ('method', 'box:=class<computes>:\n    Bad(?X:[]t=array{} where t:type)<computes>:int=X.Length\n'
              'Get()<computes>:box=box{}\n', 'Get().Bad()', 'cannot infer type parameter t of box.Bad'),
-            ('receiver', 'box(t:type):=class:\n    Bad()<computes>:int=0\n'
+            ('receiver', 'box(t:type):=class<computes>:\n    Bad()<computes>:int=0\n'
              'Get(?X:[]t=array{} where t:type)<computes>:box(t)=box(t){}\n',
              'Get().Bad()', 'cannot infer type parameter t of Get'),
             ('callee', 'Id(X:t where t:type)<computes>:t=X\n'
@@ -50,7 +50,7 @@ with tempfile.TemporaryDirectory(prefix='ov-call-packing-') as directory:
             expression = f'One({dispatch}({expression}))'
         program = ('IntId(X:int)<computes>:int=X\n'
                    'holder:=class{F:type{_(:int)<computes>:int}=IntId}\n'
-                   'box(t:type):=class{}\n'
+                   'box(t:type):=class<computes>{}\n'
                    'Get(?X:[]t=array{} where t:type)<computes>:box(t)=box(t){}\n'
                    'One(P:tuple(u) where u:type)<computes>:u=P(0)\n'
                    'Main():void=\n    ' + setup + '\n    R:int=' + expression + '\n    Print("{R}")\n')
