@@ -931,6 +931,11 @@ def Ctx.captureEvidence (ctx : Ctx) (captures : List Local) (excluded : List Str
       (ctx.lookup name).map fun binding => { binding with mutable := false, storage := none }
   captures ++ added
 
+/-- `ctx` with the `defer:` body `d` pending for every `return` and `break`
+    that leaves its scope (#80), with the locals in scope here. -/
+def Ctx.withDefer (ctx : Ctx) (d : SExpr) : Ctx :=
+  { ctx with defers := (d, ctx.locals) :: ctx.defers }
+
 /-- Class or interface `c` has method `m`, its own or inherited. -/
 def Ctx.hasMethod (ctx : Ctx) (c m : String) : Bool :=
   (ctx.types.supers c).any fun e => (ctx.sig? s!"{e}.{m}").isSome

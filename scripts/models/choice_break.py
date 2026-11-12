@@ -24,7 +24,12 @@ def first_success(seed, expected):
     generator (Visit) is a choice of its value and a call of itself, after
     its own clauses, as the Verse Calculus reads it. A break keeps what the
     clauses did up to it, as with no choice, and leaves the loop: the
-    cleanup of the scopes it leaves runs (a block's, then the loop's)."""
+    cleanup of the scopes it leaves runs (a block's, then the loop's). A
+    block's defer: runs as each of its values leaves it, and at a break or
+    return that leaves it (after the return's value), whether the block has
+    a choice of its own, which lifts its clauses into the condition's, or
+    not: LANGUAGE.md's rule for any scope. A return leaves the function,
+    running the cleanup of every scope it leaves, innermost first."""
     rng = random.Random(seed)
     suspends = rng.choice([False, True])
     waits = suspends and rng.choice([False, True])
@@ -172,20 +177,41 @@ def first_success(seed, expected):
                 clauses.append((f"if ({pt}) then break else 0",
                                 lambda env, st, rest, pv=pv: ("break", st) if pv(env) else rest(env, st)))
         else:
-            # (a block of its own, with a defer: that a break leaving it runs)
+            # (a block of its own, with a defer: that a break or return leaving
+            # it runs; at times with a choice of its own, W, before or after
+            # the defer:, then each of its values leaves the block in turn)
             name = f"Z{i}"
-            pt, pv = pick_pred(bound, iteration=True)
-            vt, vv = pick_expr(bound)
+            own = rng.random() < 0.6
+            inner = list(bound)
+            if own:
+                w = f"W{i}"
+                ctext, cgen = pick_choice(i, bound)
+                inner.append(w)
+            pt, pv = pick_pred(inner, iteration=True)
+            vt, vv = pick_expr(inner)
+            ret = rng.random() < 0.35
+            if ret:
+                rt, rv = pick_expr(inner)
 
-            def step(env, st, rest, i=i, name=name, pv=pv, vv=vv):
+            def leave(env, st, rest, i=i, name=name, pv=pv, vv=vv, ret=ret, rv=rv if ret else None):
                 if pv(env):
+                    # (a return's value first, then the block's cleanup)
+                    value = rv(env) if ret else None
                     st.out.append(f"bd{i} {st.total} {st.hn}")
-                    return ("break", st)
+                    return ("return", st, value) if ret else ("break", st)
                 v = vv(env)
                 st.out.append(f"bd{i} {st.total} {st.hn}")
                 return rest({**env, name: v}, st)
-            clauses.append((f"{name} := block{{ defer: Print(\"bd{i} {{Total}} {{H.N}}\"); if ({pt}) then break; {vt} }}",
-                            step))
+            stmts = [f"defer: Print(\"bd{i} {{Total}} {{H.N}}\")"]
+            if own:
+                stmts.insert(rng.randint(0, 1), f"{w} := {ctext}")
+
+                def step(env, st, rest, w=w, cgen=cgen, leave=leave):
+                    return cgen(env, st, lambda v, st2: leave({**env, w: v}, st2, rest))
+            else:
+                step = leave
+            exit_text = f"return {rt}" if ret else "break"
+            clauses.append((f"{name} := block{{ {'; '.join(stmts)}; if ({pt}) then {exit_text}; {vt} }}", step))
             bound.append(name)
     first_choice = next(n for n in bound if n.startswith("X"))
 
@@ -197,11 +223,21 @@ def first_success(seed, expected):
     # The run, as the program does it.
     st = St()
     J = 0
+    returned = None
     while True:
         J += 1
         K = 0
         while True:
             r = search({"K": K, "J": J}, st.copy())
+            if r[0] == "return":
+                # (it leaves the loops, each running its cleanup, then the function)
+                st, returned = r[1], r[2]
+                st.total += loop_delta
+                st.hn += loop_delta
+                st.out.append(f"loop cleanup {K} {st.total} {st.hn}")
+                if nested:
+                    st.out.append(f"outer cleanup {J} {st.total} {st.hn}")
+                break
             if r[0] == "break":
                 st = r[1]
             elif form == "for":
@@ -221,13 +257,13 @@ def first_success(seed, expected):
             st.out.append(f"loop cleanup {K} {st.total} {st.hn}")
             if r[0] == "break" or K >= reps:
                 break
-        if not nested:
+        if not nested or returned is not None:
             break
         st.out.append(f"outer {J} {K}")
         st.out.append(f"outer cleanup {J} {st.total} {st.hn}")
         if J >= outer_reps:
             break
-    answer = st.total
+    answer = st.total if returned is None else returned
     st.total += fn_delta
     st.hn += fn_delta
     st.out.append(f"function cleanup {st.total} {st.hn}")

@@ -479,7 +479,7 @@ partial def elabSeqIn (closed : Bool) (ctx : Ctx) (ss : List SExpr) (exp : Optio
     -- `defer: D` then the rest of the scope (Book of Verse ch. 7): the rest,
     -- with D pending for its returns and breaks, then D, then the rest's value
     if let .block _ [] := body then eerr p "a defer: block cannot be empty"
-    let (r2, ctx2) ← elabSeqIn closed { ctx with defers := (body, ctx.locals) :: ctx.defers } rest exp
+    let (r2, ctx2) ← elabSeqIn closed (ctx.withDefer body) rest exp
     let d ← elabDefers ctx [(body, ctx.locals)]
     let ctx2 := { ctx2 with defers := ctx.defers, loopDefers := ctx.loopDefers }
     match r2.ty with
