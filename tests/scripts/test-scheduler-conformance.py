@@ -46,11 +46,14 @@ with tempfile.TemporaryDirectory(prefix='openverse-scheduler-conformance-') as d
         c = run([CV, output])
         require((c.returncode, c.stdout, c.stderr) == expected,
                 f'{label}: wrong C trace: {c.returncode,c.stdout,c.stderr}')
-        profile = run(OV + ['run', source, '--no-choice', '--emit', output])
+        profile_output = tmp / 'profile.vbc'
+        profile_output.unlink(missing_ok=True)
+        profile = run(OV + ['run', source, '--no-choice', '--emit', profile_output])
         require((profile.returncode, profile.stdout, profile.stderr) == expected,
                 f'{label}: wrong choice-free trace: '
                 f'{profile.returncode,profile.stdout,profile.stderr}')
-        require(output.read_bytes() == code, f'{label}: profile changed scheduler bytecode')
+        require(profile_output.exists(), f'{label}: profile emitted no fresh bytecode')
+        require(profile_output.read_bytes() == code, f'{label}: profile changed scheduler bytecode')
 
     fixtures = sorted((ROOT / 'tests/verse').glob('scheduler_audit_*.verse'))
     require(len(fixtures) == 11, f'expected the eleven documented scheduler cases, got {len(fixtures)}')

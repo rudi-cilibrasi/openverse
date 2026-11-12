@@ -102,7 +102,7 @@ each source under `--no-choice` and requires identical admitted bytecode.
 Stall and overflow errors are checked separately, so a generic failure, fuel
 limit or compile refusal cannot pass as the intended numeric boundary.
 The ordinary regression suite includes all eleven fixtures. The new runner
-reports 74 checks and participates in the full gate alongside the independent
+reports 88 checks and participates in the full gate alongside the independent
 [scheduler models](../../scripts/models/sched_gen.py), source cleanup models,
 sanitizers and existing effect/profile contracts.
 
