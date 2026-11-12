@@ -1,0 +1,14 @@
+before: V=1
+try 2
+between: V=12
+after: V=23
+Y=30
+then N=1 Y=30
+Y=30
+then N=2 Y=30
+N=3
+block cleanup X=2 V=2
+loop cleanup V=2
+function cleanup V=2
+left: 2
+exit=0

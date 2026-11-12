@@ -291,6 +291,10 @@ own `loop` stay local; a `for` body itself is not a break target.
 Shared continuations carry clause breaks back to the caller: the filter's
 writes commit before source-loop cleanup runs, including through refining
 casts. A new local loop keeps its own target even inside a lifted branch.
+So does a `break` in the clauses of an `if` condition or `first{…}` that
+has a choice ([Choice](#choice), #283): the loop that takes their first
+success forwards it, and so does the function of their own that clauses
+after a composed choice or an effectful lazy generator run in.
 
 ## Overloading
 
@@ -924,7 +928,12 @@ Main():void =
   runs the rest of the clauses.
   - In an `if` condition or `first{…}`, an alternative that leads to no
     success is rolled back, output included, as any failure context is,
-    and the next one starts from the state the choice was reached in.
+    and the next one starts from the state the choice was reached in. One
+    that reaches a `return` leaves the function, and one that reaches a
+    `break` leaves the loop around the condition (#283): what it did stays,
+    as with no choice, and the clauses after it and the other alternatives
+    never run. The `break` runs the `defer:`s of the scopes it leaves, as
+    any does, wherever the clauses after a choice are compiled to.
   - In a `for`, a choice is one more generator. An alternative whose own
     clauses (up to the next generator) fail is rolled back. One whose
     clauses succeed keeps their effects, even when the generators after it
@@ -934,6 +943,9 @@ Main():void =
   ```verse
   var N:int = 0
   if (X := (set N = 1; 1) | (set N = 2; 2), X > 1) then Print("{X} {N}")   # 2 2
+  loop:
+      if (X := 1 | 2 | 3, set N = X * 10, X > 1, break) then Print("never")
+  Print("{N}")                                                              # 20
   ```
 - **Type.** The written type (`X:int = 1 | 2`), or the type of the
   variable or path that `set` writes, else the join of the alternatives'
@@ -1052,7 +1064,8 @@ Main():void =
   leaves it (#283), as its lowering places it, after the rest of its scope:
   once the value is computed, before the clauses after it, last registered
   first. A value whose clauses fail runs none, since what they did is
-  rolled back with them:
+  rolled back with them. A `return` or `break` inside the block that leaves
+  it does not run them, for now:
 
   ```verse
   for (X := block{ defer: Print("d"); Y := 1 | 2; Y * 10 }) { Print(X) }   # d 10 d 20
@@ -1098,8 +1111,7 @@ Main():void =
   a choice anywhere outside these failure contexts. (A field reached
   through a receiver that is not a variable or `Self`, as `F().Items[…]`,
   is read after the choice, since only the receiver's value is bound
-  first.) A `break` in the clauses of an `if` or `first{…}` with a choice
-  is refused. `first{…}` with a choice can fail, so it must be in a
+  first.) `first{…}` with a choice can fail, so it must be in a
   failure context.
 - **Functions with several values** (#235). A top-level function whose
   body has a choice that nothing in it takes has several values, and a call
@@ -1353,8 +1365,9 @@ Main():void =
   call, even where only the first success is taken and a value before the
   error would have been it.
 
-  A return in first-success clauses leaves the source function, including
-  after an effectful lazy generator. Its operand is saved before cleanup;
+  A return in first-success clauses leaves the source function, and a
+  break the loop around them (#283), including after an effectful lazy
+  generator. Its operand is saved before cleanup;
   updated mutable captures reach source cleanup before it runs. A failed
   return operand rejects that search path and tries the next alternative.
   Shared helpers retain generic result types and witnesses even when only
@@ -1366,11 +1379,7 @@ Main():void =
   another call of its group, after a call of its group (`X := T(N - 1)`,
   then `X | X + 1`, or then `Y := T(N - 1)`), one whose call comes after
   an operand that is not a literal or a name of its own, and one that sets
-  a `var` after a call of its group (#283). Also a generator whose clauses,
-  conditions or arguments have effects where the first success is taken
-  and the clauses after it have a `break`
-  that leaves them (which would leave the function they run in), in a constructor, a parameter's
-  or field's default or a `defer:`, an
+  a `var` after a call of its group (#283). Also an
   overloaded one with an overload that calls the function's own name
   (a generic one's type arguments are inferred from the
   arguments where it is inlined, as at a call, named ones too), a recursive one with a `defer:` of its own, or called by a recursive one (its body a function's, where it would run once), one with a `return`
@@ -1922,7 +1931,7 @@ Main()<suspends>:void =
 | `?` on other values | conflict (§6.1) | only `logic` and `?t` (the API's typed reading) |
 | Output inside a failed failure context | unspecified | rolled back with the writes (transactional `Print`) |
 | `Main` failing | (no entry point in the book) | exit code 1; output already printed stays |
-| `return` inside a failure context | unspecified | leaves the function; no rollback of what the condition did |
+| `return` or `break` inside a failure context | unspecified | leaves the function, or the loop around the context; no rollback of what the condition did, also after a choice in it, whose alternatives that failed before were rolled back (#283) |
 | Scope of the operands of `A and B` | "Variable bindings do not escape from logical operations" (§3.4) | each operand is its own scope: names defined in `A` are not visible in `B`, and names from neither side escape the `and` |
 | Comparability | `comparable` covers the primitive types, enums, structs and containers of comparable types (§4.9) | so is every openverse type, except a type parameter not declared `subtype(comparable)` and the containers of one |
 | Inferring type arguments | not described | first-order matching against the expected result type, then the arguments; no subtyping other than `false` (matches anything) and `void` (accepts anything) |
@@ -1932,7 +1941,7 @@ Main()<suspends>:void =
 | `=` between different types | not stated | refused when two scalar types (int, float, char, …) meet at the same place, also inside containers (`array{1} = array{1.0}`), as Verse Core holds them differently |
 | Ordering of rationals | not stated (§2 lists `<` … for `int` and `float`) | exact (by continued fractions, so it cannot overflow), and an int compares with a rational |
 | Order of a choice's values | (not in the Book; the Verse Calculus: spatial) | spatial: the leftmost choice varies slowest, as nested generators do (#208) |
-| Code before a choice | (the Verse Calculus is pure) | runs once, also within an expression (the operands before the choice are evaluated first, as written); each alternative runs the code after the choice, from where the choice was reached; in an `if` or `first{}`, one that leads to no success is rolled back (as backtracking does); in a `for`, the choice is a generator, so only an alternative whose own clauses fail is (#208) |
+| Code before a choice | (the Verse Calculus is pure) | runs once, also within an expression (the operands before the choice are evaluated first, as written); each alternative runs the code after the choice, from where the choice was reached; in an `if` or `first{}`, one that leads to no success, and to no `return` or `break`, is rolled back (as backtracking does); in a `for`, the choice is a generator, so only an alternative whose own clauses fail is (#208) |
 | A choice in an operand of `and` or `or` | not stated (the left of `or` is a failure context, the right is not, §6.2) | `A and B`: `A`'s clauses, then `B`'s, in the context the `and` is in, so `B`'s values for each of `A`'s; `A or B`: `if (T := A) then T else B`, so the left's first success, if it has one, is the only value (the right is not tried when what follows fails), else the right's values, taken by the context the `or` is in (all of them in a `for`), not only its first (#283) |
 | Precedence of `\|` | (not in the Book) | below `+`, above the comparisons: `X = 1 \| 2` is `X = (1 \| 2)` (#208) |
 | `Sleep(0.0)` | "may resume in the same tick" (ch. 14); the API reference: it always yields | always yields: resumes in the next tick (#156) |
