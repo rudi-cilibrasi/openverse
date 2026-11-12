@@ -98,7 +98,7 @@ partial def elabExprInitialWith
         pendingWaitingCasts := st.pendingWaitingCasts + 1,
         pendingSourceSuspends := st.pendingSourceSuspends + 1 }
     return ⟨.prim .userErr [], result⟩
-  | .app p (.ident _ "$choiceIndexedOperation") [shape, dictionary@(.ident _ name), index, object, old, rhs] bracket =>
+  | .app p (.ident _ "$choiceIndexedOperation") [shape, dictionary@(.ident _ name), index, object, validation, old, rhs] bracket =>
     let some binding := ctx.lookup name | eerr p "internal: no indexed operation dictionary"
     let .struct _ [keyTy, objectTy, oldTy, rhsTy, _] := binding.ty | eerr p "internal: invalid indexed operation signature"
     let keySlot ← fresh keyTy
@@ -110,6 +110,7 @@ partial def elabExprInitialWith
     let inner := { ctx with
       locals := { name := "$choiceIndexKey", slot := keySlot, ty := keyTy, mutable := false } ::
         { name := "$choiceIndexObject", slot := objectSlot, ty := objectTy, mutable := false } :: ctx.locals }
+    let checked ← elabE inner validation none
     let oldValue ← coerce p (← elabE inner old (some oldTy)) oldTy
     let rhsValue ← coerce p (← elabE ctx rhs (some rhsTy)) rhsTy
     let final := { inner with
@@ -120,7 +121,7 @@ partial def elabExprInitialWith
         .ident p "$choiceIndexOld", .ident p "$choiceIndexRHS"] bracket
     let result ← elabE final invocation exp
     return ⟨.seq (.assign keySlot keyValue) (.seq (.assign objectSlot objectValue)
-      (.seq (.assign oldSlot oldValue) (.seq (.assign rhsSlot rhsValue) result.e))), result.ty⟩
+      (.seq checked.e (.seq (.assign oldSlot oldValue) (.seq (.assign rhsSlot rhsValue) result.e)))), result.ty⟩
   | .app p (.ident _ "$choiceOperation") (.str _ [.text shape] :: .ident _ name :: values) bracket =>
     let some dictionary := ctx.lookup name | eerr p "internal: no operation dictionary"
     let .struct family types := dictionary.ty | eerr p "internal: invalid operation dictionary"
