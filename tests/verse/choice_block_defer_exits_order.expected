@@ -1,0 +1,31 @@
+b
+a
+loop V=0
+function
+left 0: 0
+a
+loop V=0
+function
+left 1: 0
+b V=20
+a
+loop V=20
+function
+left 2: 20
+value 6
+inner
+outer
+loop V=0
+function
+left 3: 6
+value 2
+inner
+outer
+loop V=0
+function
+left 4: 2
+no exit V=0
+loop V=0
+function
+left 5: 0
+exit=0

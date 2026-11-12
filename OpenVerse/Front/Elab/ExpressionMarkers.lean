@@ -39,6 +39,13 @@ partial def elabExprMarkersWith
   match se with
   | .app _ (.ident _ "$nofail") [e] false => elabE { ctx with canFail := false, inBlock := true } e exp
   | .app p (.ident _ "$defer") _ _ => eerr p "defer: is a statement: it has no value"
+  | .app _ (.ident _ "$deferExits") [.block _ ds, e] false =>
+    -- (#283) the `defer:`s of a scope whose clauses are lifted, which run
+    -- after its value (`Choice.deferLast`), pending for the exits in `e`,
+    -- as a `defer:` is for the rest of its scope (`elabSeqIn`)
+    elabE (ds.foldl (fun c d => match d with
+      | .app _ (.ident _ "$defer") [body] false => c.withDefer body
+      | _ => c) ctx) e exp
   | .app p (.ident _ "$sync") arms false => elabConc ctx p true arms exp
   | .app p (.ident _ "$race") arms false => elabConc ctx p false arms exp
   | .app p (.ident _ "$rush") arms false => elabConc ctx p false arms exp true

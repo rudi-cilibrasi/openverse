@@ -230,6 +230,24 @@ apart as `option{…}` (`elabBranchAlts`), whose braces hold clauses. A
 `defer:`'s body is no failure context that takes a choice
 (`elabDefersCore` clears `inTaking`).
 
+LANGUAGE.md also places a `defer:` before each `return` (after its value)
+and `break` that leaves its scope. In a block whose `defer:`s `deferLast`
+moves, each statement with an exit that can leave it (`leaves`) gets the
+`defer:`s registered before it pending around it, `$deferExits(ds, s)`
+(`deferExits`). The elaborator registers them around `s` as `elabSeqIn`
+registers a `defer:` around the rest of its scope (`Ctx.withDefer`), with
+nothing to run where `s` ends. So an exit in `s` runs them after the
+cleanup of the scopes inside `s` it leaves and before that of the scopes
+around the block, as for any scope, wherever `s`'s clauses are compiled
+to: a continuation of their own runs them before it gives the exit back
+(`elabRefineExit`), and the caller, which forwards it, does not. The
+marker stays around what lifting makes of `s` (`liftE` puts it around
+each clause lifted out of it), and a clause keeps its shape: a binding its
+name, a choice its alternatives (each with the marker), and the `if` of a
+choice of its branches its conditions and branches (`bifToExcl` looks
+through the marker for a block as a branch). A statement with no exit gets
+none, so the code of a block without one does not change.
+
 A construction evaluates its fields in its type's declaration order, so its
 fields are first put in that order, which by itself changes nothing. Then
 they are lifted as a call's arguments. `Choice` works on syntax, so the

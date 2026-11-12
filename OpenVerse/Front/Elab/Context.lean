@@ -668,6 +668,11 @@ partial def resolveTy (env : TyEnv) (p : Pos) : STy → EM Ty
 def Ctx.lookup (ctx : Ctx) (n : String) : Option Local := ctx.locals.find? (·.name == n)
 def Ctx.sig? (ctx : Ctx) (n : String) : Option Sig := ctx.sigs.find? (·.name == n)
 
+/-- `ctx` with the `defer:` body `d` pending for every `return` and `break`
+    that leaves its scope (#80), with the locals in scope here. -/
+def Ctx.withDefer (ctx : Ctx) (d : SExpr) : Ctx :=
+  { ctx with defers := (d, ctx.locals) :: ctx.defers }
+
 /-- Class or interface `c` has method `m`, its own or inherited. -/
 def Ctx.hasMethod (ctx : Ctx) (c m : String) : Bool :=
   (ctx.types.supers c).any fun e => (ctx.sig? s!"{e}.{m}").isSome

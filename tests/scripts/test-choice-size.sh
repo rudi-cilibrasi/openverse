@@ -130,6 +130,13 @@ kinds=(
   first-break-exclusive
   first-break-lazy
   first-break-refined
+  block-exits-first-composed
+  block-exits-first-exclusive
+  block-exits-first-lazy
+  block-exits-first-refined
+  block-exits-for-composed
+  block-exits-for-exclusive
+  block-exits-for-refined
   composed
   construct-failure
   construct-first
@@ -1254,6 +1261,36 @@ if kind.startswith('first-break-'):
     args = ','.join('dup(int){A:=1,B:=2}' if i%2==0 else 'dup(string){A:="s",B:="t"}' for i in range(count))
     print(f'Main()<suspends>:void = Print("{{Run(cell{{}},{args})}}")')
     sys.exit(0)
+if kind.startswith('block-exits-'):
+    # (#283) a block with choices and a defer: of its own, lifted into an
+    # if's condition or a for's clauses, with a break after each choice and a
+    # return at the end: each exit runs the block's cleanup, placed once for
+    # each exit, however many paths reach it
+    print('pair(a:type,b:type) := class { A:a; B:b }')
+    print('dup(t:type) := class(pair(t,t)) { C:int=4 }')
+    print('cell := class { var N:int=0 }')
+    print('Early(N:int):int =\n    if(N<0):return 0\n    N|N+1')
+    print('Lazy(H:cell,N:int)<transacts><decides>:int =\n    N>=0\n    set H.N+=1\n    N|Lazy[H,N-1]')
+    params = ','.join(f'P{i}:pair(a{i},b{i})' for i in range(count))
+    tparams = ','.join(f'a{i}:type,b{i}:type' for i in range(count))
+    consumer, shape = kind[len('block-exits-'):].split('-')
+    values = {'composed': ['(Two(0)|Two(2))'] * count, 'exclusive': ['Early(0)'] * count,
+              'lazy': ['Lazy[H,1]'] * count}.get(shape,
+              [f'if(D{i}:=dup[P{i}])then(D{i}.C|D{i}.C+1)else 0' for i in range(count)])
+    selected = 5 if shape == 'refined' else 1
+    stmts = ['defer:Print("block {Total}")']
+    for i, v in enumerate(values):
+        stmts += [f'A{i}:={v}', f'set Total+=A{i}', f'if(A{i}={selected if i == 0 else 9})then break else 0']
+    stmts += ['if(A1=9)then return -1 else 0', 'A0+A1<0']
+    block = 'block{' + ';'.join(stmts) + '}'
+    if consumer == 'first':
+        use = f'if(Z:={block}):\n            Print("bad")\n        Print("bad suffix")'
+    else:
+        use = f'R:=for(Z:={block}):\n            set Total+=1\n            Z\n        Print("rows {{R.Length}}")'
+    print(f'Run(H:cell,{params} where {tparams})<suspends>:int =\n    var Total:int=0\n    defer:Print("source {{Total}}")\n    Sleep(0.0)\n    loop:\n        defer:Print("loop {{Total}}")\n        {use}\n        break\n    Total')
+    args = ','.join('dup(int){A:=1,B:=2}' if i%2==0 else 'dup(string){A:="s",B:="t"}' for i in range(count))
+    print(f'Main()<suspends>:void = Print("{{Run(cell{{}},{args})}}")')
+    sys.exit(0)
 if kind.startswith('return-defer-'):
     method = kind.endswith('method-first')
     if method:
@@ -1722,6 +1759,15 @@ PY
       selected=1
       [[ $kind == first-break-refined ]] && selected=5
       printf 'loop %s\nsource %s\n%s\n' "$selected" "$selected" "$selected" >"$tmp/expected"
+      timeout "$limit" "$root/.lake/build/bin/openverse" run "$tmp/p.verse" >"$tmp/lean.out"
+      timeout "$limit" "$root/runtime/build/cverse" "$tmp/p.vbc" >"$tmp/c.out"
+      diff -u "$tmp/expected" "$tmp/lean.out"
+      diff -u "$tmp/expected" "$tmp/c.out"
+    fi
+    if [[ $kind == block-exits-first-* && $count == 4 ]]; then
+      selected=1
+      [[ $kind == *-refined ]] && selected=5
+      printf 'block %s\nloop %s\nsource %s\n%s\n' "$selected" "$selected" "$selected" "$selected" >"$tmp/expected"
       timeout "$limit" "$root/.lake/build/bin/openverse" run "$tmp/p.verse" >"$tmp/lean.out"
       timeout "$limit" "$root/runtime/build/cverse" "$tmp/p.vbc" >"$tmp/c.out"
       diff -u "$tmp/expected" "$tmp/lean.out"
