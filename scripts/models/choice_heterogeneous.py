@@ -12,7 +12,9 @@ p.add_argument('--members', action='store_true')
 p.add_argument('--callable-fields', action='store_true')
 p.add_argument('--aliases', action='store_true')
 p.add_argument('--writes', action='store_true')
+p.add_argument('--nested-writes', action='store_true')
 a = p.parse_args()
+a.writes = a.writes or a.nested_writes
 a.aliases = a.aliases or (a.writes and a.seed % 2 == 0)
 a.members = a.members or a.aliases or a.writes
 a.generic_methods = (a.generic_methods or a.members) and not a.callable_fields
@@ -149,6 +151,9 @@ if a.methods:
         print('        Print("m ' + kind + ' {K}")')
         print('        set H.N+=' + ('1' if kind == 'a' else '2') + '*(K+1)' + ('+Arg' if method_arguments else ''))
         print('        Self' if a.members else '        K')
+    if a.nested_writes:
+        for name, generic in [('ma',False),('mb',False),('ga',True),('gb',True)]:
+            print('holder_'+name+('(t:type)' if generic else '')+':=class{C:'+name+('(t)' if generic else '')+'}')
     if a.callable_fields:
         for kind in range(2):
             callback_effects = '<reads><writes>' if kind == 0 else '<transacts>'
@@ -174,7 +179,8 @@ def payload(s, j):
             return f'write_payload{{K:={s},Kind:={j}}}' if a.writes else f'({s},{j})'
         generic = shape not in ('primitive', 'fields')
         name = ('ga' if j == 0 else 'gb') if generic else ('ma' if j == 0 else 'mb')
-        return name + ('(t)' if generic else '') + '{H:=H,K:=' + str(s) + (',V:=X' if generic else '') + (',F:=Callback' + str(j) if a.callable_fields else '') + '}'
+        value = name + ('(t)' if generic else '') + '{H:=H,K:=' + str(s) + (',V:=X' if generic else '') + (',F:=Callback' + str(j) if a.callable_fields else '') + '}'
+        return 'holder_'+name+('(t)' if generic else '')+'{C:='+value+'}' if a.nested_writes else value
     if a.control:
         return str(s)
     if shape == 'primitive':
@@ -195,12 +201,16 @@ for i, d in enumerate(levels):
     if a.methods:
         extra = ','.join(([f'Argument(H,{i+1})'] if method_arguments else []) + (['X'] if a.generic_methods else []))
         score = f'Score(H,A{i}' + (',' + extra if extra else '') + ')' if a.control else f'A{i}.F(A{i}.H,A{i}.K' + (',' + extra if extra else '') + ')' if a.callable_fields else f'A{i}.' + ('Read' if a.members else 'Score') + f'({extra})' + ('.K' if a.members else '')
+    if a.nested_writes and not a.control:
+        score = score.replace(f'A{i}.', f'A{i}.C.')
     clauses.append(f"A{i}:=({'|'.join(producers)})")
     if a.aliases:
         clauses.extend([f'Alias{i}:=A{i}', f'B{i}:=Alias{i}'])
         score = score.replace(f'A{i}', f'B{i}')
     if a.writes:
         receiver = f'B{i}' if a.aliases else f'A{i}'
+        if a.nested_writes and not a.control:
+            receiver += '.C'
         clauses.append(f'set {receiver}.K+=WriteArgument(H,{i+1})')
     clauses.extend([f'S{i}:={score}', f'Print("f {i} {{S{i}}}")', f"set H.N+={d['weight']}+S{i}", f'set Total+=S{i}+1', f"Mod[H.N+S{i},{d['mod']}]={d['want']}"])
 clauses.append('Z:=Items[0]' if mode == 'first' else 'Z:Items')

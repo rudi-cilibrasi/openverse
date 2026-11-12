@@ -8,6 +8,15 @@ tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
 limit="${CHOICE_SIZE_TIMEOUT:-120}"
 # Keep modes sorted on separate lines so independent additions merge cleanly.
 kinds=(
+  setter-nested-first
+  setter-nested-for
+  setter-nested-waiting
+  setter-varying-first
+  setter-varying-for
+  setter-varying-waiting
+  setter-deep-first
+  setter-deep-for
+  setter-deep-waiting
   setter-simple-first
   setter-simple-for
   setter-simple-waiting
@@ -316,15 +325,28 @@ if kind == 'heterogeneous-nested-for':
 if kind.startswith('setter-'):
     _, shape, mode = kind.split('-')
     print('Dup(X:t where t:type)<computes>:t=X|X')
-    for cls,ty,value in [('ca','[]int','array{1}'),('cb','[]string','array{"s"}')]:
-        print(cls + ':=class{var K:' + (ty if shape == 'array' else 'int') + '=' + (value if shape == 'array' else '1') + '}')
-    clauses=','.join(f'A{i}:=(Dup(ca{{}})|Dup(cb{{}}))' for i in range(count))
+    nested = shape in ('nested','varying','deep')
+    alternatives=[]
+    if nested:
+        print('leaf:=class{var K:int=1}\nother:=class{var K:int=1}\nmid:=class{C:leaf}')
+        for cls in ['ca','cb']:
+            ty = 'mid' if shape=='deep' else 'other' if shape=='varying' and cls=='cb' else 'leaf'
+            print(cls + ':=class{C:' + ty + '}')
+            value = 'mid{C:=leaf{}}' if shape=='deep' else ty+'{}'
+            alternatives.append(cls+'{C:='+value+'}')
+    else:
+        for cls,ty,value in [('ca','[]int','array{1}'),('cb','[]string','array{"s"}')]:
+            print(cls + ':=class{var K:' + (ty if shape == 'array' else 'int') + '=' + (value if shape == 'array' else '1') + '}')
+            alternatives.append(cls+'{}')
+    clauses=','.join(f'A{i}:=(Dup({alternatives[0]})|Dup({alternatives[1]}))' for i in range(count))
     statements=[];terms=[]
     for i in range(count):
         name=f'A{i}'
         if shape == 'alias':
             statements.extend([f'B{i}:={name}',f'C{i}:=B{i}'])
             name=f'C{i}'
+        if nested:
+            name += '.C.C' if shape=='deep' else '.C'
         statements.append(f'set {name}.K' + ('=' if shape=='simple' else '+=') + ('array{}' if shape=='array' else '(1|2)' if shape=='choice' else '1'))
         terms.append(name+'.K'+('.Length' if shape=='array' else ''))
     if shape == 'choice':

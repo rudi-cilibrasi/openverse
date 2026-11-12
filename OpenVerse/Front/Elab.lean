@@ -2751,6 +2751,13 @@ def ChoiceOperations.context (ops : ChoiceOperations) (ctx : Ctx) : EM Ctx := do
 def ChoiceOperations.lift (ops : ChoiceOperations) (key : String) (lift : Choice.FirstLift) : Choice.FirstLift :=
   { lift with key, casePrelude := ops.casePrelude, extraFns := lift.extraFns ++ ops.extraFns }
 
+/-- A source assignment may follow fields from a local, but not write
+    through a call result. Index paths have a separate evaluation order. -/
+def choiceFieldPath : SExpr → Bool
+  | .ident .. => true
+  | .member _ receiver _ => choiceFieldPath receiver
+  | _ => false
+
 /- Discover operations in lexical order, retaining immutable aliases only
     where their declarations are in scope. The source aliases remain intact:
     dictionary discovery needs their types, not a substitution of their values. -/
@@ -2774,7 +2781,8 @@ partial def choiceMemberOperations (bindings : List String) (body : SExpr) : Lis
     let old := match value with
       | .app _ (.ident _ "$withOld") [saved, _] false => saved
       | _ => target
-    (if op.isSome then choiceMemberOperations bindings old else []) ++
+    choiceMemberOperations bindings receiver ++
+      (if op.isSome then choiceMemberOperations bindings old else []) ++
       choiceMemberOperations bindings value ++ (if depends receiver then [(e, bindings)] else [])
   | .set _ _ _ value => choiceMemberOperations bindings value
   | .structDef .. | .enumDef .. | .refineDef .. => []
@@ -2899,7 +2907,8 @@ def choiceOperations (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx)
     let details : Option (Pos × SExpr × String × List SExpr × Bool × Bool × Option (Option String)) := match call with
       | .app p (.member _ receiver method) arguments bracket => some (p, receiver, method, arguments, bracket, false, none)
       | .member p receiver field => some (p, receiver, field, [], false, true, none)
-      | .set p target@(.member _ receiver@(.ident ..) field) op value =>
+      | .set p target@(.member _ receiver field) op value =>
+        if !choiceFieldPath receiver then none else
         let arguments := match op, value with
           | none, _ => [value]
           | some _, .app _ (.ident _ "$withOld") [saved, rhs] false => [saved, rhs]
@@ -2928,7 +2937,7 @@ def choiceOperations (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx)
       set saved
       pure result
     let some receiverTy := receiverTy | continue
-    if !(match receiverTy with | .param .. => true | _ => false) then continue
+    if !(match receiverTy with | .param .. => true | .struct .. => setter.isSome | _ => false) then continue
     let mut cases : List ChoiceOperationCase := []
     for instanceTypes in ops.plan.instances do
       let actual := (receiverTy.subst instanceTypes).subst ctx.types.tvars
