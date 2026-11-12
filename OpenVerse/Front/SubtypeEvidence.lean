@@ -159,6 +159,84 @@ def views (env : TyEnv) (locals : List (String × Ty)) (derived : Ty) : List Ty 
       let plan ← find? env locals ⟨relation.base, derived⟩
       if plan.usesLocal then some relation.base else none).eraseDups
 
+/-- Collapse equal type identities without strengthening comparable flags
+    according to which occurrence happened to be visited first. -/
+private def mergeTypes (types : List Ty) : List Ty :=
+  types.foldl (fun result ty =>
+    if result.any (· == ty) then result.map (fun old => if old == ty then old.commonBounds ty else old)
+    else result ++ [ty]) []
+
+private def upperViews (env : TyEnv) (derived : Ty) : List Ty :=
+  let known := derived :: env.boundFacts.filterMap fun (upper, _) =>
+    if env.boundSubtype derived upper then some upper else none
+  mergeTypes (known ++ known.flatMap fun
+    | .struct source args => if env.classes.contains source then
+        (env.supers source).map fun target => Ty.struct target (env.upArgs source args target)
+      else []
+    | _ => [])
+
+/-- A common upper type supported by the nominal relation. Match ordinary
+    joins' preference for a shared class when multiple nominal interfaces
+    remain, and refuse unrelated interface ambiguity. Input bindings and
+    their precise types are never replaced by this inferred upper type. -/
+private def commonUpper? (env : TyEnv) (types : List Ty) : Option Ty := do
+  let first ← types.head?
+  let candidates := (upperViews env first).filter fun candidate =>
+    types.all (env.boundSubtype · candidate)
+  let best := candidates.filter fun candidate => !candidates.any fun other =>
+    other != candidate && env.boundSubtype other candidate && !env.boundSubtype candidate other
+  let selected ← match best with
+    | [one] => some one
+    | _ =>
+      if !best.all (fun | .struct name _ => env.classes.contains name | _ => false) then none else
+      match best.filter (fun | .struct name _ => !(env.info name).isIface | _ => false) with
+      | [one] => some one
+      | _ => none
+  -- Type identity ignores comparable flags; a join retains only guarantees
+  -- present in every projected occurrence of that same type.
+  return (types.flatMap (upperViews env) |>.filter (· == selected)).foldl Ty.commonBounds selected
+
+private def peerInstances (env : TyEnv) (bounds : List Bound) (names : List String)
+    (substitution : List (String × Ty)) : Option (List (String × Ty)) := do
+  let mut lowerTypes := names.map fun name => (name, (substitution.lookup name).toList)
+  -- Propagate actual lower types through peer edges before choosing any
+  -- upper. This also solves a cycle reached from a known argument.
+  for _ in [0:names.length + 1] do
+    let previous := lowerTypes
+    for bound in bounds do
+      let .param upper _ := bound.base | continue
+      let values := if bound.derived.params.all (fun n => (substitution.lookup n).isSome) then
+          [bound.derived.subst substitution]
+        else match bound.derived with
+          | .param lower _ => (lowerTypes.lookup lower).getD []
+          | _ => []
+      lowerTypes := lowerTypes.map fun (name, old) =>
+        (name, if name == upper then mergeTypes (old ++ values) else old)
+    if (lowerTypes.zip previous).all (fun ((name, values), (oldName, oldValues)) =>
+        name == oldName && values.length == oldValues.length &&
+        (values.zip oldValues).all (fun (a, b) => a == b && a.paramsC == b.paramsC)) then break
+  -- A compound lower type may depend on another inferred instance. Do not
+  -- commit a narrower upper before all its incoming constraints are known.
+  let mut pending := bounds.filterMap fun bound => do
+    let .param upper _ := bound.base | none
+    if bound.derived.params.all (fun n => (substitution.lookup n).isSome) then none else
+    match bound.derived with
+    | .param lower _ => if ((lowerTypes.lookup lower).getD []).isEmpty then some upper else none
+    | _ => some upper
+  for _ in [0:names.length + 1] do
+    let previous := pending
+    for bound in bounds do
+      if let (.param upper _, .param lower _) := (bound.base, bound.derived) then
+        if (substitution.lookup lower).isNone && pending.contains lower then
+          pending := (upper :: pending).eraseDups
+    if pending.length == previous.length then break
+  let mut result := substitution
+  for (name, values) in lowerTypes do
+    if (result.lookup name).isSome || pending.contains name || values.isEmpty then continue
+    let upper ← commonUpper? env values
+    result := (name, upper) :: result
+  return result
+
 /-- Infer parameters which occur only inside a nominal upper bound from the
     argument's projected ancestor. Existing input bindings remain fixed. No
     unrelated interface is guessed to be an ancestor of an opaque parameter. -/
@@ -174,17 +252,15 @@ def infer (env : TyEnv) (bounds : List Bound) (initial : List (String × Ty))
       if bound.base.params.all (fun name => (substitution.lookup name).isSome) then continue
       let derived := bound.derived.subst substitution
       match bound.base with
-      | .param name _ =>
-        if peerTypes && (substitution.lookup name).isNone then
-          substitution := (name, derived) :: substitution
+      | .param .. => pure ()
       | .struct target _ =>
         let candidates := derived :: (env.boundFacts.filterMap fun (upper, _) =>
           if env.boundSubtype derived upper then some upper else none)
-        let projected := (candidates.filterMap fun
+        let projected := mergeTypes (candidates.filterMap fun
           | .struct source args =>
             if env.classes.contains source && env.isSub source target then
               some (Ty.struct target (env.upArgs source args target)) else none
-          | _ => none).eraseDups
+          | _ => none)
         if projected.isEmpty then continue
         let solutions ← projected.mapM (bound.base.matchArg env substitution)
         let candidate ← solutions.head?
@@ -192,8 +268,11 @@ def infer (env : TyEnv) (bounds : List Bound) (initial : List (String × Ty))
         -- instance. Declaration order must not choose an arbitrary one.
         if !solutions.all (fun other => names.all fun name =>
             candidate.lookup name == other.lookup name) then none else
-          substitution := candidate
+          substitution := candidate.map fun (name, ty) =>
+            if (substitution.lookup name).isSome then (name, ty) else
+              (name, solutions.foldl (fun ty solution => ty.commonBounds ((solution.lookup name).getD ty)) ty)
       | _ => pure ()
+    if peerTypes then substitution ← peerInstances env bounds names substitution
     if substitution == previous then break
   return substitution
 

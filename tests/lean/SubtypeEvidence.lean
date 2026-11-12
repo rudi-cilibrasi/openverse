@@ -20,9 +20,9 @@ private def getSome (label : String) (result : Option α) : IO α :=
   | none => throw (IO.userError label)
 
 private def env : TyEnv := {
-  classes := ["vehicle", "car", "node", "left", "right", "both"]
+  classes := ["vehicle", "car", "truck", "node", "left", "right", "both"]
   cinfo := [("vehicle", {}), ("car", { parent := some "vehicle" }),
-    ("node", { parent := some "vehicle" }), ("left", { isIface := true }),
+    ("truck", { parent := some "vehicle" }), ("node", { parent := some "vehicle" }), ("left", { isIface := true }),
     ("right", { isIface := true }), ("both", { ifaces := ["left", "right"] })]
   sparams := [("node", [("t", false)])] }
 
@@ -103,6 +103,63 @@ private def resolutionContracts : IO Unit := do
     (fnValueArgs declarations signature functionType == some [.arr .int, actual])
   need "function value cannot replace an incompatible fixed argument"
     ((fnValueArgs declarations signature functionType [("a", Ty.string)]).isNone)
+  let peerBounds : List Bound := [⟨.param "t" false, .param "u" false⟩,
+    ⟨.param "t" false, .param "v" false⟩]
+  let inputs := [("u", Ty.struct "car" []), ("v", Ty.struct "truck" [])]
+  for constraints in [peerBounds, peerBounds.reverse] do
+    for arguments in [inputs, inputs.reverse] do
+      let peers ← getSome "infer a common peer upper" (SubtypeEvidence.infer declarations constraints arguments true)
+      need "common peer keeps both inputs precise" (peers.lookup "t" == some (.struct "vehicle" []) &&
+        peers.lookup "u" == inputs.lookup "u" && peers.lookup "v" == inputs.lookup "v")
+      need "inferred common peer satisfies every relation"
+        (constraints.all fun bound => declarations.boundSubtype (bound.derived.subst peers) (bound.base.subst peers))
+  let chain : List Bound := peerBounds ++ [⟨.param "v" false, .param "w" false⟩]
+  let peers ← getSome "infer a peer chain" (SubtypeEvidence.infer declarations chain
+    [("u", .struct "car" []), ("w", .struct "truck" [])] true)
+  need "peer chain aggregates all incoming types" (peers.lookup "t" == some (.struct "vehicle" []) &&
+    peers.lookup "v" == some (.struct "truck" []))
+  let cycleBounds : List Bound := [⟨.param "t" false, .param "u" false⟩,
+    ⟨.param "u" false, .param "t" false⟩, ⟨.param "t" false, .param "w" false⟩]
+  let peers ← getSome "infer a reached peer cycle"
+    (SubtypeEvidence.infer declarations cycleBounds [("w", .struct "car" [])] true)
+  need "cycle receives a known lower type" (peers.lookup "t" == some (.struct "car" []) &&
+    peers.lookup "u" == some (.struct "car" []))
+  let deferred : List Bound := [⟨.param "t" false, .param "u" false⟩,
+    ⟨.param "t" false, .struct "root" [.param "a" false]⟩,
+    ⟨.param "a" false, .param "w" false⟩]
+  let peers ← getSome "infer a deferred compound lower" (SubtypeEvidence.infer declarations deferred
+    [("u", actual), ("w", .arr .int)] true)
+  need "compound lower cannot prematurely freeze the peer upper"
+    (peers.lookup "t" == some (.struct "root" [.arr .int]))
+  let ambiguous := { declarations with
+    classes := declarations.classes ++ ["other_both"]
+    cinfo := declarations.cinfo ++ [("other_both", { ifaces := ["left", "right"] })] }
+  let ambiguousInputs := [("u", Ty.struct "both" []), ("v", Ty.struct "other_both" [])]
+  need "unrelated common interfaces need an explicit choice"
+    ((SubtypeEvidence.infer ambiguous peerBounds ambiguousInputs true).isNone)
+  let peers ← getSome "explicit interface upper resolves ambiguity"
+    (SubtypeEvidence.infer ambiguous peerBounds (("t", .struct "left" []) :: ambiguousInputs) true)
+  need "an explicit interface is a valid shared upper"
+    (peerBounds.all fun bound => ambiguous.boundSubtype (bound.derived.subst peers) (bound.base.subst peers))
+  let peerSignature : Sig := { signature with
+    params := [.param "u" false, .param "v" false], ret := .void,
+    tparams := [("t", false), ("u", false), ("v", false)], bounds := peerBounds }
+  let peerFunctionType := Ty.struct (FnValues.shapeOf 2 ["computes"]).name
+    [.struct "car" [], .struct "truck" [], .void]
+  need "function-value matching aggregates peer lower types" (fnValueArgs declarations peerSignature peerFunctionType ==
+    some [.struct "vehicle" [], .struct "car" [], .struct "truck" []])
+  let flagInputs := [("u", Ty.arr (.param "q" true)), ("v", Ty.arr (.param "q" false))]
+  for arguments in [flagInputs, flagInputs.reverse] do
+    let peers ← getSome "infer a common type without inventing comparability"
+      (SubtypeEvidence.infer declarations peerBounds arguments true)
+    need "inferred peer intersects comparable guarantees"
+      (((peers.lookup "t").getD .void).paramsC == [("q", false)])
+  let weakFacts := { declarations with boundFacts :=
+    [(.struct "root" [.param "q" true], callerType), (.struct "root" [.param "q" false], callerType)] }
+  let inferred ← getSome "infer nominal argument with weaker guarantees"
+    (SubtypeEvidence.infer weakFacts [relation] [("u", callerType)] true)
+  need "nominal projections cannot select the first comparable flag"
+    (((inferred.lookup "a").getD .void).paramsC == [("q", false)])
 
 private partial def protocolParams (body : SExpr) : List TParam :=
   let own := match body with
@@ -180,6 +237,7 @@ vehicle:=class<computes>:
     Speed:int=1
     ReadSpeed()<computes>:int=Speed
 car:=class<computes>(vehicle){Name:string=\"car\"}
+truck:=class<computes>(vehicle){Name:string=\"truck\"}
 node(t:type):=class<computes>(vehicle){Value:t}
 box(t:type):=class<computes>{Value:t}
 Process(X:t,D:evidence(vehicle,t) where t:type)<computes>:t=
@@ -201,6 +259,7 @@ Widen(Base:t,Derived:u,D:evidence(t,u) where t:type,u:type)<computes>:t=Derived
 ReadBound(X:t,D:evidence(vehicle,t) where t:type)<computes>:int=X.ReadSpeed()
 BindBound(X:t,D:evidence(vehicle,t) where t:type)<computes>:type{_()<computes>:int}=X.ReadSpeed
 AsBase(X:t,D:evidence(vehicle,t) where t:type)<computes>:vehicle=X
+Both(X:u,Y:v,DX:evidence(t,u),DY:evidence(t,v) where t:type,u:type,v:type)<computes>:t=X
 Main():void=
     C:=car{Speed:=9,Name:=\"precise\"}
     R:=Process(C,CarEvidence())
@@ -214,9 +273,12 @@ Main():void=
     BoundMethod:=BindBound(C,CarEvidence())
     Print(\"bound method {BoundMethod()}\")
     Print(\"widened {AsBase(C,CarEvidence()).Speed}\")
+    T:=truck{Speed:=4}
+    Print(\"both {Both(C,T,CarEvidence(),TruckEvidence()).Speed}\")
+    Print(\"reverse both {Both(T,C,TruckEvidence(),CarEvidence()).Speed}\")
 "
 
-private def trace := "speed 9\nname precise\nspeed 9\nescape precise\npoly 1\ncomposed 9\nidentity 7\nmethod 9\nbound method 9\nwidened 9\n"
+private def trace := "speed 9\nname precise\nspeed 9\nescape precise\npoly 1\ncomposed 9\nidentity 7\nmethod 9\nbound method 9\nwidened 9\nboth 9\nreverse both 4\n"
 
 private def stateSource := "
 vehicle:=class<allocates>:
@@ -331,6 +393,48 @@ private def relocate (compiled : Compiled) : IO Compiled := do
       relocated.prog.checkTypes relocated.sigs relocated.slotTys)
   return relocated
 
+private def relocateCommon (compiled : Compiled) : IO Compiled := do
+  let index ← getSome "missing Both" (compiled.prog.fns.findIdx? (·.name == "Both"))
+  let t := Ty.param "callerT" false
+  let u := Ty.param "callerU" false
+  let v := Ty.param "callerV" false
+  let left := (Bound.mk t u).ty
+  let right := (Bound.mk t v).ty
+  let locals := [u, v, left, right, t, u, v, Ty.int, Ty.int, left, right, t, u, v]
+  let types := { env with tvars := [("callerT", t), ("callerU", u), ("callerV", v)] }
+  let signature : Sig := {
+    idx := index, name := "Both", params := [.param "u" false, .param "v" false], ret := .param "t" false,
+    decides := false, isConst := false, pnames := ["X", "Y"],
+    tparams := [("t", false), ("u", false), ("v", false)], fx := [],
+    bounds := [⟨.param "t" false, .param "u" false⟩, ⟨.param "t" false, .param "v" false⟩] }
+  let ctx : Ctx := {
+    sigs := [signature], sigProg := compiled.prog, types, dictBase := 11,
+    dictVars := ["callerT", "callerU", "callerV"],
+    locals := [{ name := "X", slot := 0, ty := u, mutable := false },
+      { name := "Y", slot := 1, ty := v, mutable := false },
+      { name := "DX", slot := 9, ty := left, mutable := false },
+      { name := "DY", slot := 10, ty := right, mutable := false }] }
+  let state : ESt := { env := types, nslots := 14, slotTys := locals.toArray }
+  let (result, state) ← getOK "implicit common-upper call"
+    ((elabGenericCallWith elabE ctx pos signature [.ident pos "X", .ident pos "Y"] none).run state)
+  need "common upper uses current frame witnesses" (result.ty == t && state.nslots == 14)
+  let wrapperIndex := compiled.prog.fns.length
+  let moves : List Expr := [.assign 7 (.lit (.int 0)), .assign 8 (.lit (.int 0)),
+    .assign 9 (.local 2), .assign 10 (.local 3), .assign 11 (.local 4), .assign 12 (.local 5), .assign 13 (.local 6)]
+  let wrapper : Fn := {
+    name := "$relocatedCommonUpper", arity := 7, nslots := 14,
+    decides := false, writes := false, body := moves.foldr Expr.seq result.e }
+  let fns := compiled.prog.fns.map fun fn =>
+    { fn with body := Suspend.substCall index (fun args => .call wrapperIndex args) fn.body }
+  let (params, ret) := compiled.sigs.fns[index]!
+  let relocated := { compiled with
+    prog := { compiled.prog with fns := fns ++ [wrapper] }
+    sigs := { compiled.sigs with fns := compiled.sigs.fns ++ [(params, ret)] }
+    slotTys := compiled.slotTys ++ [params ++ [.int, .int, params[2]!, params[3]!, params[4]!, params[5]!, params[6]!]] }
+  need "common-upper relay passes Core admission" (relocated.prog.check && relocated.prog.checkControl &&
+    relocated.prog.checkTypes relocated.sigs relocated.slotTys)
+  return relocated
+
 def main (args : List String) : IO Unit := do
   resolutionContracts
   metadataContracts
@@ -378,13 +482,14 @@ def main (args : List String) : IO Unit := do
   need "ill-typed composition refused" (!(Plan.compose carPlan (.identity .int)).valid env [])
   let replacements := [
     ("CarEvidence", carPlan.value env pos),
+    ("TruckEvidence", (Plan.nominal "truck" "vehicle" []).value env pos),
     ("NodeEvidence", (Plan.nominal "node" "vehicle" [t]).value env pos),
     ("ComposedEvidence", combined.value env pos),
     ("IntEvidence", (Plan.identity .int).value env pos)]
   let tops ← getOK "parse dictionary control" (parseProgram source)
   let tops ← getOK "resolve dictionary controls" (tops.mapM (rewriteTop replacements))
   let nominals ← getOK "generate canonical nominal families"
-    ([ ("car", "vehicle"), ("node", "vehicle") ].mapM fun (source, target) => nominal env pos source target)
+    ([ ("car", "vehicle"), ("truck", "vehicle"), ("node", "vehicle") ].mapM fun (source, target) => nominal env pos source target)
   let compiled ← getOK "checked dictionaries" (elabProgram (protocol pos ++ nominals ++ tops))
   need "Core admission" (compiled.prog.check && compiled.prog.checkControl &&
     compiled.prog.checkTypes compiled.sigs compiled.slotTys)
@@ -393,6 +498,7 @@ def main (args : List String) : IO Unit := do
     need "independent dictionary trace" (ByteArray.mk (output.map Nat.toUInt8).toArray == trace.toUTF8)
   | other => throw (IO.userError s!"dictionary execution failed: {reprStr other}")
   let relocated ← relocate compiled
+  let relocated ← relocateCommon relocated
   match relocated.prog.runB 1000000 10000 with
   | .res (.ok _, output) =>
     need "relocated evidence/witness trace" (ByteArray.mk (output.map Nat.toUInt8).toArray == trace.toUTF8)
