@@ -79,9 +79,9 @@ with tempfile.TemporaryDirectory(prefix='openverse-effect-admission-') as direct
         control = tmp / 'control.verse'
         control.write_text(TAGS.sub('', source))
         name = fixture.stem.removeprefix('effect_admission_')
-        # The tag-stripped field-default control calls an ordinary callback;
-        # it tests the existing extension independently of effect admission.
-        extended = name == 'predicts_field_default'
+        # These stripped controls call an ordinary function in a field
+        # default; they isolate effect admission from convergence admission.
+        extended = name in {'predicts_field_default', 'struct_budget'}
         accepted(control, CONTROL_OUTPUT.get(name, ''), extended=extended)
         # Every loaded source definition is checked, not only the entry path.
         dependency = tmp / 'Dependency.verse'
