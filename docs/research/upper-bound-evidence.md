@@ -262,6 +262,12 @@ through the event signals and final wait; returning earlier would correctly
 cancel its continuing arms. These cases also require identical bytecode with
 the choice-free profile, as do the method-value adaptation controls.
 
+The bounded recursive return-frame pair checks proof capture in recursive
+suffixes, precise array element results, and bound-member reads before the
+recursive call. The prefix runs once before recursion; rejected consumers undo
+its output. The same pair checks rollback of a lazy branch's value-only `if`.
+Its concrete version uses `car` directly and shares an explicit output oracle.
+
 The existing Core checker and semantic proofs apply to the emitted Core under
 their stated hypotheses. They do not prove that bound inference, dictionary
 construction, capture provenance or frontend lowering implements Verse's source

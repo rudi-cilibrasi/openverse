@@ -36,7 +36,8 @@ def main (args : List String) : IO Unit := do
     "choice-class-compound", "choice-class-compound-control",
     "choice-class-fields", "choice-class-fields-control",
     "choice-class-waiting-value", "choice-class-waiting-value-control",
-    "bound-method-families", "bound-method-families-control", "bound-refine-contexts", "bound-refine-contexts-control"]
+    "bound-method-families", "bound-method-families-control", "bound-refine-contexts", "bound-refine-contexts-control",
+    "bound-return-frames", "bound-return-frames-control"]
   let fifo := ["fifo-bound-promotion", "fifo-bound-promotion-control",
     "fifo-bound-woken", "fifo-bound-woken-control", "fifo-bound-spawn", "fifo-bound-spawn-control",
     "fifo-bound-two-losers", "fifo-bound-two-losers-control", "fifo-bound-sleep", "fifo-bound-sleep-control"]
