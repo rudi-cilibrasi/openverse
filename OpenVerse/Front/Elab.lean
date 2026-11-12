@@ -1905,7 +1905,7 @@ def elabProgram (allTops00 : List STop) (opts : Options := {}) : Except String C
                                  lazyRequests := opts.lazyRequests ++ lazy, loopRequests := [], castRequests := [] }
     | _, _ => throw "internal error: mutual generator instances or methods' families still changing after eager lowering (#283)"
   (withEager count opts).mapError fun msg =>
-    FnValues.pretty (((stripOv (msg.replace "$init" "<constructor>")).replace "::" ".").replace "$replaceAll" "ReplaceAll")
+    FnValues.pretty (((stripOv ((Refine.unmarked msg).replace "$init" "<constructor>")).replace "::" ".").replace "$replaceAll" "ReplaceAll")
 
 /-- Parse and elaborate Verse source text. -/
 def compileChecked (src : String) (opts : Options := {}) : Except String Compiled := do

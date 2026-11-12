@@ -2198,19 +2198,30 @@ has a clause after the cast, so its branch is the lift's (`made`), not the
 source's. `Else` is written twice, and runs once.
 
 Those are one rule's cases: a cast that only such a clause may be takes
-the rest of its failure context as its branch. In a sequence whose names
+the rest of its failure context as its branch. One inside a clause, in an
+operand that the lifting of choices reaches (`Refine.castsIn`), refused
+there, is lifted out by that lifting, marked `$liftCast` (`Refine.markCast`,
+which `Choice.hasLiftable` and `liftE` take as a value to bind, as a
+choice): the operands before it bound, then `$k… := T[X]`, a cast clause
+(`liftCastClause`, in `withCastClauses` and `elabSeqIn`; a `<decides>`
+body of one expression is the block of it, `elabBodyOv`). In a sequence whose names
 end with it (a block, so a `<decides>` body or `option{…}`'s, and the
 operand of `not`, `and` and `or`), `pre; D := T[X]; rest` is `pre; if (D
 := T[X]) then {rest} else fail` (`elabSeqIn`; the `else` is
 `Refine.noValue`, which gives no value at every type). That `if` takes
 its type from the branch, refined, which code outside it must be able to
-name (`Lift.retOfBranch`, so the dispatch takes it too), and its copy-out
+name (`Lift.branchTy`, so the dispatch takes it too; a local from outside
+the branch that it gives is at its own type there, the most general), and
+its copy-out
 tuple, for an outside `var` the branch sets, from the branch's type found
 apart under the refinement (an `else` of type `never` tells none). In an
 `if`'s condition, a `for`'s clauses and `first{…}`'s, whose names reach
 the branch, body or value, the cast is first elaborated as written
 (`withCastClauses`, which the `if`'s later clauses above share); when
-refused there, and the clauses before it have something to undo (or it is
+refused there (`elabCast` throws `Refine.castRefusal`: the message, then
+the cast's place and whether it opens, between marks no message has, which
+`castRefusal?` reads and `elabProgram` removes, so control does not depend
+on the message's words), and the clauses before it have something to undo (or it is
 in a `for` or `first{…}`), it takes the clauses after it, up to a `for`'s
 next generator, as the branch of a clause of its own, `if (D := T[X']) then
 first{rest; names} else fail` (`Refine.castRestClauses`), so their failure
@@ -2219,11 +2230,21 @@ uses are its value, bound again after it; a branch or body that uses them,
 or `D`, casts `X'` (bound once) again, `if (D := T[X']) then after else
 Err()`, at its own place, so it is typed under the refinement too: an
 object's class does not change, so that dispatch reaches the class the
-first one did. So it does each later cast among those clauses of a local
-bound before them that is no `var` (the object, without a slot of its
-own), when it uses that cast's name or one bound after it: a value of the
-branch at a refined type, such an object included, would leave it at that
-type, which is no longer a refining cast's. Both `if`s are the elaborator's, marked `$made` (their
+first one did. So it does each later cast among those clauses when it uses
+that cast's name or one bound after it, from the cast's object: a local
+bound before the clauses that is no `var`, or else the object bound to a
+name of its own just before the cast (`$castObj…`), which is one of the
+clause's values; as a local from outside the later cast's branch, it
+leaves that branch at its own type, not the refined one, so it can be cast
+again. An object that may name type arguments a cast opens (the first
+cast's, when the refusal says it opens, `Refine.CastRefusal.opens`, or a
+later cast's, which may) is not: `after` could not name its type. A `for`'s generator past the moved clauses whose source uses `D` has its
+source cast again in the same way, at the generator's place, and the body
+is cast again when it uses the names those generators bind; a filter there
+that uses `D` is refused. A later cast of an object computed among the
+moved clauses is cast again only when the branch or body is refused
+without it (`computed`), so that programs compiled before keep their code.
+Both `if`s are the elaborator's, marked `$made` (their
 branches are the lifts'). A `for`'s rebuilt body is at the element type
 expected, when one is.
 

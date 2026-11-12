@@ -1,0 +1,13 @@
+x
+mk
+ByCall 1 q
+ByCall no
+y
+ByField 7
+ByField no
+z
+z
+InFor 2
+o
+Left 1 -1
+exit=0

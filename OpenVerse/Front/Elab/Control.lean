@@ -548,7 +548,15 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
     -- `elabSeqIn`: the branch's type, which code outside it must be able to
     -- name)
     let retOfBranch := elseE.isSome && exp.isNone && re.ty == .never
-    let τ' : Ty := if elseE.isNone then .void else if retOfBranch then refine rb.ty else exp.getD re.ty
+    -- (a local from outside the branch that it gives, at its own type there,
+    -- which refines to its type in the branch: the most general)
+    let own (v : SExpr) (t : Ty) : Ty := match v with
+      | .ident _ n => if Refine.isCastObj n then ((ctx.lookup n).map (·.ty)).getD (refine t) else refine t
+      | _ => refine t
+    let branchTy : Ty := match Refine.valueOf body, rb.ty with
+      | .tuple _ vs, .tup ts => if vs.length == ts.length then .tup ((vs.zip ts).map fun (v, t) => own v t) else refine rb.ty
+      | v, t => own v t
+    let τ' : Ty := if elseE.isNone then .void else if retOfBranch then branchTy else exp.getD re.ty
     if let some (n, v, _) := opened.find? fun (n, _, _) => τ'.params.contains n then
       eerr p s!"cannot cast {withArticle rx.ty.show} to {T} here: the cast opens {T}'s type argument {v} for the code after it, outside which its value, {withArticle τ'.show}, would name what is unknown (#250)"
     let ret := refine τ'
@@ -590,7 +598,7 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
       params := ((D, dTy) :: sig).map (fun (n, t) => { name := n, ty := t.toSTy }) ++
         extra.map fun (n, _) => { name := s!"$type{n}", ty := .name n },
       tparams := tps.map fun (n, c) => { pos := p, name := n, constraint := if c then "comparable" else "type" },
-      specs, ret := ret.toSTy, retOfBranch, subst := σ, opened := opened.map fun (n, v, _) => (n, v), waits := thenWaits, sourceSuspends,
+      specs, ret := ret.toSTy, branchTy := if retOfBranch then some τ'.toSTy else none, subst := σ, opened := opened.map fun (n, v, _) => (n, v), waits := thenWaits, sourceSuspends,
       exits := Refine.Exits.substTypes ((escRet.map (·.2)).getD {}) σ,
       storage := storage.map fun (n, s) => (n, { frame := s.frame, name := s.name, args := s.args.map Ty.toSTy }),
       inRepeat := ctx.inRepeat, sourceContext := sourceContextOf ctx, liftTag := some ctx.liftTag,
@@ -620,14 +628,14 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
     let re ← elseOf
     -- (the branch's own type, when the first elaboration took it; at
     -- another expected type, refused as it was there)
-    let τ' : Ty ← if elseE.isNone then pure .void else match exp, l.retOfBranch with
-      | some t, true =>
+    let τ' : Ty ← if elseE.isNone then pure .void else match exp, l.branchTy with
+      | some t, some _ =>
         let ret ← resolveTy env p l.ret
         if ret != t.subst μT then eerr p s!"expected {t.show}, found {ret.show} (the branch of the cast to {shown})"
         pure t
-      | some t, false => pure t
-      | none, true => resolveTy env p l.ret
-      | none, false => pure re.ty
+      | some t, none => pure t
+      | none, some t => resolveTy env p t
+      | none, none => pure re.ty
     let eE ← coerce p re τ'
     let rargs := env.coreArgs S sargs
     let atR := rargs.zipIdx.map fun (r, j) => (pinArg j, r)
@@ -725,6 +733,14 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
     let cond := pre.foldr Expr.seq (.heap (.isTag (tested.toList.map env.tagOf)) [.local y])
     return some ⟨← mark (.assign t (.ite cond acc eE)), τ'⟩
 
+/-- (#243) Clause `c` with the cast at `q` inside it, which only a failure
+    context's clause may be, lifted out to be one before it, as a choice
+    there is (`Refine.markCast`, `Choice.liftClause`). `bound`: names the
+    clauses before it bind, which are values too. -/
+def liftCastClause (ctx : Ctx) (bound : List String) (q : Pos) (c : SExpr) : List SExpr :=
+  Choice.liftClause (fun n => choiceValues ctx n || bound.contains n) (choiceField ctx) (Refine.markCast q c)
+    (fieldOrder := choiceOrder ctx)
+
 /-- (#243, #351) A failure context's clauses `cs`, then `after` (an `if`'s
     branch, a `for`'s body, a `first{…}`'s value), with a clause `D :=
     T[X]`, or `T[X]` of a class (past the first, if `later`), that only such
@@ -734,7 +750,9 @@ partial def elabRefinedIfWith (elabApp : Ctx → Pos → SExpr → List SExpr �
     nothing before it needs undoing), else `rebuild` with the cast taking
     the clauses after it, up to the next generator (`isGen`), as its branch
     in a clause of its own, and `after` casting again
-    (`Refine.castRestClauses`). `none` without such a clause. -/
+    (`Refine.castRestClauses`). Such a cast inside a clause is lifted out to
+    be a clause of its own first (`liftCastClause`). `none` without a cast
+    to a class. -/
 def withCastClauses (ctx : Ctx) (cs : List SExpr) (after : SExpr) (isGen : SExpr → Bool) (asWritten : EM R)
     (rebuild : List SExpr → SExpr → EM R) (later : Bool := false)
     (alone : Nat → String → EM (Option R) := fun _ _ => pure none) : EM (Option R) := do
@@ -744,20 +762,37 @@ def withCastClauses (ctx : Ctx) (cs : List SExpr) (after : SExpr) (isGen : SExpr
     | (.app q (.ident _ T) [_] true, i) =>
       if (later && i == 0) || !ctx.types.classes.contains T then none else some (i, q)
     | _ => none
-  if castAt.isEmpty then return none
+  let inner : List (Nat × Pos) := cs.zipIdx.flatMap fun (c, i) =>
+    (Refine.castsIn ctx.types.classes.contains c).map (i, ·)
+  if castAt.isEmpty && inner.isEmpty then return none
   let st0 ← get
   match ← tryCatch (Except.ok <$> asWritten) (fun err => pure (Except.error err)) with
   | .ok r => return some r
   | .error err =>
-    let some (k, _) := castAt.find? (fun (_, q) => err.startsWith s!"{q.show}:") | throw err
+    let some refusal := Refine.castRefusal? err | throw err
+    if let some (k, _) := inner.find? (·.2 == refusal.pos) then
+      set st0
+      let lifted := liftCastClause ctx (Choice.boundIn (cs.take k)) refusal.pos cs[k]!
+      return some (← rebuild (cs.take k ++ lifted ++ cs.drop (k + 1)) after)
+    let some (k, _) := castAt.find? (·.2 == refusal.pos) | throw err
     let some cast := Refine.castClause? cs[k]! | throw err
-    if !Refine.isCastRefusal err then throw err
     set st0
     if let some r ← alone k err then return some r
-    match Refine.castRestClauses (cs.take k) cast (cs.drop (k + 1)) after isGen ctx.types.classes.contains
-        (fun n => (ctx.lookup n).any (!·.mutable)) with
-    | .ok (cs', after') => return some (← rebuild cs' after')
+    let moved (computed : Bool) := Refine.castRestClauses (cs.take k) cast refusal.opens (cs.drop (k + 1)) after
+      isGen ctx.types.classes.contains (fun n => (ctx.lookup n).any (!·.mutable)) computed
+    match moved false with
     | .error why => throw s!"{err} ({why})"
+    | .ok (cs', after', _) =>
+      -- (a later cast of an object computed among the moved clauses is cast
+      -- again from that object, bound first, when `after` needs it: when it
+      -- is refused without)
+      let st1 ← get
+      match ← tryCatch (Except.ok <$> rebuild cs' after') (fun err => pure (Except.error err)) with
+      | .ok r => return some r
+      | .error err1 =>
+        let .ok (cs'', after'', true) := moved true | throw err1
+        set st1
+        return some (← tryCatch (rebuild cs'' after'') fun _ => throw err1)
 
 /-- Infer a producer's signature instance from its canonical arguments. -/
 def loopInstanceOf (ctx : Ctx) (p : Pos) (sig : Sig) (types : List Ty) : EM (List (String × Ty)) := do
