@@ -307,6 +307,12 @@ end
 def liftsAsIf (e : SExpr) : Bool :=
   isBranchy.complete e && (isBranchy e || branchesLift hasLiftable e)
 
+/-- (#283) A composed choice: one whose alternatives have values or clauses
+    of their own to lift, so that each alternative is taken with the
+    clauses after it (`elabOneGo`, `elabForWith`). -/
+def Binding.composed (b : Binding) : Bool :=
+  b.place.isNone && b.branchy.isNone && b.each.isNone && b.alts.any hasLiftable
+
 /-- (#283) `A or B` with something to lift on its right, as the `if` it
     stands for, `if (T := A) then T else B`: its condition takes the first
     success of `A`, as the left of `or` does, and its values are otherwise

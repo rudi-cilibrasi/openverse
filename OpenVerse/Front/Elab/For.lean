@@ -68,9 +68,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
     | c => isBranch c
   -- (a composed choice whose alternatives have values or clauses of their
   -- own, #283, or an exclusive one: what a continuation saves copying, #335)
-  let isCF (x : SExpr) : Bool := isExcl x || (match Choice.binding? x with
-    | some { place := none, branchy := none, each := none, alts := xs, .. } => xs.any Choice.hasLiftable
-    | _ => false)
+  let isCF (x : SExpr) : Bool := isExcl x || (Choice.binding? x).any (·.composed)
   let pre := clauses.takeWhile (!isGen ·)
   let rest := clauses.dropWhile (!isGen ·)
   let rec groups : List SExpr → List (SExpr × List SExpr)
@@ -554,8 +552,8 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
       -- clauses to lift, #283: a for of its own for each alternative, with
       -- the clauses after it and the body, their values concatenated, so
       -- that each alternative's values come in order, with the body between)
-      if let some b@{ pos := gp, place := none, branchy := none, each := none, .. } := Choice.binding? g then
-        if b.alts.any Choice.hasLiftable then
+      if let some b@{ pos := gp, .. } := Choice.binding? g then
+        if b.composed then
           -- (with the binding's name: an inlined body's position is every
           -- site's, #314)
           let site := s!"$cf{gp.line}_{gp.col}{b.name}"
