@@ -37,6 +37,10 @@ The model:
   * a lazy one may bind its call of itself with code after it, which runs
     on each of the call's values (a return frame, #283), and what it reads
     before that call (a call of a function) is read once, before it;
+  * choice points in sequence (#283): a call of itself followed by a choice,
+    a choice followed by a call, two calls in sequence in an if's branch; the
+    code between two points runs once for each value of the first, and a
+    call of itself is a generator of its own there too;
   * early and terminal source returns yield the same ordered values as
     explicit conditional tails, ending only their current invocation;
   * methods may infer their own type parameters independently of receiver
@@ -377,15 +381,17 @@ d{n}({child_tps}) := class({parent}):{extra_field}
             self.src = ("%s(X:t, Y:t, N:int where t:type)<transacts><decides>:t =\n"
                         "    N > 0\n    Z := %s[Y, X, N - 1] | X\n    Print(\"%s {N}\")\n    Z | Y") % (n, n, n)
         elif k == "LSc":
-            # (#283: a choice followed by a call of itself, then by another choice)
+            # (#283: a choice followed by a call of itself, then by another choice;
+            # N < 4, as the values multiply by four with each level)
             self.path = "lazy"; self.params = [("X", "t"), ("Y", "t"), ("N", "int")]; self.decides = True; self.fx = True
             self.src = ("%s(X:t, Y:t, N:int where t:type)<transacts><decides>:t =\n"
-                        "    N > 0\n    Z := X | Y\n    Print(\"%s {N}\")\n    W := %s[Z, X, N - 1] | Y\n    W | Z") % (n, n, n)
+                        "    N > 0\n    N < 4\n    Z := X | Y\n    Print(\"%s {N}\")\n    W := %s[Z, X, N - 1] | Y\n    W | Z") % (n, n, n)
         elif k == "LSb":
-            # (#283: two calls of itself in sequence, in an if's branch)
+            # (#283: two calls of itself in sequence, in an if's branch; at most
+            # two levels, as the second runs on each value of the first)
             self.path = "lazy"; self.params = [("X", "t"), ("Y", "t"), ("N", "int")]; self.fx = True
             self.src = ("%s(X:t, Y:t, N:int where t:type)<transacts>:t =\n"
-                        "    if (N <= 0) then X else:\n        Z := %s(Y, X, N - 1)\n        Print(\"%s {N}\")\n"
+                        "    if (N <= 0 or N > 2) then X else:\n        Z := %s(Y, X, N - 1)\n        Print(\"%s {N}\")\n"
                         "        W := %s(Z, Y, N - 1)\n        W | Z") % (n, n, n, n)
         elif k == "LCmp":
             self.path = "lazy"; self.params = [("A", "arr"), ("X", "t"), ("I", "int")]; self.decides = True; self.cmp = True
@@ -557,14 +563,14 @@ d{n}({child_tps}) := class({parent}):{extra_field}
             return [("choice", [call({"X": a["Y"], "Y": a["X"], "N": a["N"] - 1}, z) + after,
                                 [("val", z, a["X"])] + after])]
         if k == "LSc":
-            if a["N"] <= 0: return [("cond", False)]
+            if a["N"] <= 0 or a["N"] >= 4: return [("cond", False)]
             z, w = var + "z", var + "w"
             return [("choice", [[("val", z, a["X"])], [("val", z, a["Y"])]]), back,
                     ("dyn", lambda env: [("choice", [call({"X": env[z], "Y": a["X"], "N": a["N"] - 1}, w),
                                                      [("val", w, a["Y"])]])]),
                     ("dyn", lambda env: [("choice", [[("val", var, env[w])], [("val", var, env[z])]])])]
         if k == "LSb":
-            if a["N"] <= 0: return V(a["X"])
+            if a["N"] <= 0 or a["N"] > 2: return V(a["X"])
             z, w = var + "z", var + "w"
             return call({"X": a["Y"], "Y": a["X"], "N": a["N"] - 1}, z) + [back,
                     ("dyn", lambda env: call({"X": env[z], "Y": a["Y"], "N": a["N"] - 1}, w)),
