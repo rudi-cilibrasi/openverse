@@ -2734,7 +2734,9 @@ partial def ChoiceOperations.rewrite (ops : ChoiceOperations) (body : SExpr) : S
   Choice.mapE (fun
     -- Getters are values, not assignment targets. Retain the source path
     -- for the complete lvalue; discovery falls back if it needs its layout.
-    | .set p target op value => some (.set p target op (ops.rewrite value))
+    | call@(.set p target op value) =>
+      some <| ((ops.replacements.find? (·.1 == call)).map (·.2)).getD
+        (.set p target op (ops.rewrite value))
     | call@(.app _ (.member ..) _ _) | call@(.member ..) =>
       (ops.replacements.find? (·.1 == call)).map (·.2)
     | _ => none) body
@@ -2748,6 +2750,13 @@ def ChoiceOperations.context (ops : ChoiceOperations) (ctx : Ctx) : EM Ctx := do
 
 def ChoiceOperations.lift (ops : ChoiceOperations) (key : String) (lift : Choice.FirstLift) : Choice.FirstLift :=
   { lift with key, casePrelude := ops.casePrelude, extraFns := lift.extraFns ++ ops.extraFns }
+
+/-- A source assignment may follow fields from a local, but not write
+    through a call result. Index paths have a separate evaluation order. -/
+def choiceFieldPath : SExpr → Bool
+  | .ident .. => true
+  | .member _ receiver _ => choiceFieldPath receiver
+  | _ => false
 
 /- Discover operations in lexical order, retaining immutable aliases only
     where their declarations are in scope. The source aliases remain intact:
@@ -2768,6 +2777,13 @@ partial def choiceMemberOperations (bindings : List String) (body : SExpr) : Lis
   | .ite _ conditions yes no =>
     let (operations, visible) := choiceMemberOperationSeq bindings conditions
     operations ++ choiceMemberOperations visible yes ++ no.toList.flatMap (choiceMemberOperations bindings)
+  | e@(.set _ target@(.member _ receiver _) op value) =>
+    let old := match value with
+      | .app _ (.ident _ "$withOld") [saved, _] false => saved
+      | _ => target
+    choiceMemberOperations bindings receiver ++
+      (if op.isSome then choiceMemberOperations bindings old else []) ++
+      choiceMemberOperations bindings value ++ (if depends receiver then [(e, bindings)] else [])
   | .set _ _ _ value => choiceMemberOperations bindings value
   | .structDef .. | .enumDef .. | .refineDef .. => []
   | .app _ (.ident _ "$constructHints") _ _ => []
@@ -2888,11 +2904,18 @@ def choiceOperations (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx)
     let key := call
     if seen.contains key then continue
     seen := key :: seen
-    let details : Option (Pos × SExpr × String × List SExpr × Bool × Bool) := match call with
-      | .app p (.member _ receiver method) arguments bracket => some (p, receiver, method, arguments, bracket, false)
-      | .member p receiver field => some (p, receiver, field, [], false, true)
+    let details : Option (Pos × SExpr × String × List SExpr × Bool × Bool × Option (Option String)) := match call with
+      | .app p (.member _ receiver method) arguments bracket => some (p, receiver, method, arguments, bracket, false, none)
+      | .member p receiver field => some (p, receiver, field, [], false, true, none)
+      | .set p target@(.member _ receiver field) op value =>
+        if !choiceFieldPath receiver then none else
+        let arguments := match op, value with
+          | none, _ => [value]
+          | some _, .app _ (.ident _ "$withOld") [saved, rhs] false => [saved, rhs]
+          | some _, _ => [target, value]
+        some (p, receiver, field, arguments, false, false, some op)
       | _ => none
-    let some (p, receiver, method, arguments, bracket, isField) := details | continue
+    let some (p, receiver, method, arguments, bracket, isField, setter) := details | continue
     let callee := match call with | .app _ fn _ _ => fn | _ => call
     let functionType := if isField then none else (ops.knownTypes.find? (·.1 == callee)).map (·.2)
     let callable := functionType.any fun | .param .. => true | _ => false
@@ -2914,7 +2937,7 @@ def choiceOperations (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx)
       set saved
       pure result
     let some receiverTy := receiverTy | continue
-    if !(match receiverTy with | .param .. => true | _ => false) then continue
+    if !(match receiverTy with | .param .. => true | .struct .. => setter.isSome | _ => false) then continue
     let mut cases : List ChoiceOperationCase := []
     for instanceTypes in ops.plan.instances do
       let actual := (receiverTy.subst instanceTypes).subst ctx.types.tvars
@@ -2923,6 +2946,14 @@ def choiceOperations (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx)
         let some (arity, specs) := FnValues.parseName name | break
         if arity != arguments.length || types.length != arity + 1 || specs.contains "decides" != bracket then break
         cases := cases ++ [{ receiver := actual, inputs := types.dropLast, result := types.getLast!, specs }]
+      else if let some op := setter then
+        let .struct cls classArgs := actual | break
+        if !ctx.types.isRefClass cls || !ctx.types.isVarField cls method then break
+        let some (_, fieldTy, _) := (ctx.types.fields cls classArgs).find? (·.1 == method) | break
+        cases := cases ++ [{
+          receiver := actual,
+          inputs := if op.isSome then [fieldTy, fieldTy] else [fieldTy],
+          result := fieldTy, specs := if op.isSome then ["reads", "writes"] else ["writes"] }]
       else if isField then
         match actual with
         | .arr _ | .map .. =>
@@ -2978,7 +3009,9 @@ def choiceOperations (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx)
       let vars := Ty.mergeParamBounds ((types ++ [row.result]).flatMap Ty.paramsC)
       let rename := vars.zipIdx.map fun ((name, bound), i) => (name, Ty.param s!"$operationT{i}" bound)
       (types.map (·.subst rename), row.result.subst rename)
-    let family := s!"$choiceOperationDictionary{(reprStr ((if callable then "$invoke:" ++ method else if isField then "$field:" ++ method else method), specs, canonical)).hash}"
+    let operationName := if let some op := setter then "$set:" ++ method ++ ":" ++ op.getD "=" else
+      if callable then "$invoke:" ++ method else if isField then "$field:" ++ method else method
+    let family := s!"$choiceOperationDictionary{(reprStr (operationName, specs, canonical)).hash}"
     let names := "$operationReceiver" :: ((List.range arguments.length).map fun i => s!"$operationArgument{i}") ++ ["$operationResult"]
     let variables := names.map STy.name
     let tps := names.map fun n => ({ pos := p0, name := n, constraint := "type" } : TParam)
@@ -2994,7 +3027,11 @@ def choiceOperations (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx)
       (.app p0 (.member p0 (.ident p0 "$Self") "$apply") values bracket)
     let name := s!"{stem}$op{ops.params.length}"
     let ty := Ty.struct family (receiverTy :: inputs ++ [result])
-    let operation := if callable then SExpr.app p0 values.head! values.tail bracket else
+    let operation := if let some op := setter then
+      let rhs := if op.isSome then SExpr.app p0 (.ident p0 "$withOld") [values[1]!, values[2]!] false
+        else values[1]!
+      SExpr.set p0 (.member p0 values.head! method) op rhs
+    else if callable then SExpr.app p0 values.head! values.tail bracket else
       if isField then SExpr.member p0 values.head! method else
       .app p0 (.member p0 values.head! method) values.tail bracket
     let mut definitions : List STop := [iface, applyFn]
