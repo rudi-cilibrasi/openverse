@@ -10790,6 +10790,7 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
   let wokenTailF := fieldIdx "$sched" "$WokenTail"
   let waitRootF := fieldIdx "$taskBase" "$WaitRoot"
   let wokenNextF := fieldIdx "$taskBase" "$WokenNext"
+  let pendingF := fieldIdx "$taskBase" "$Pending"
   let waitfTF := fieldIdx "$waitf" "$T"
   -- (`CurRoot := some x` and back, around a run, in FIFO mode)
   let setCur (sch x : Expr) : Expr := .heap (.set curRootF) [sch, .prim .mkSome [x]]
@@ -11318,6 +11319,8 @@ def lowerConcurrency (env : TyEnv) (sigs gsigs : Array Sig) (mainSig : Sig) (fsi
         .ite (.prim .eq [.local mainDone, Suspend.int 1]) .brk Suspend.vd,
         .ite (.assign wv (.prim .query [.heap (.get wokenHeadF) [sch]])) Suspend.vd .brk,
         .heap (.set wokenHeadF) [sch, .heap (.get wokenNextF) [.local wv]],
+        -- (its turn: it may go on now, and only it of its task's woken ones)
+        .heap (.set pendingF) [.local wv, .lit (.logic false)],
         .ite (.prim .query [.heap (.get wokenHeadF) [sch]]) Suspend.vd
           (.seq (.heap (.set wokenTailF) [sch, .lit .none]) Suspend.vd),
         .ite (.assign ev (.prim .query [.heap (.get waitRootF) [.local wv]]))

@@ -1244,9 +1244,13 @@ two root fields are typed `?rootAny` only in the class table (the
 prelude's code never touches them, so no temporary of their written type,
 `?int`, holds one). After `Main`'s run and after each root's in a pass,
 `$Run` drains the list: each woken waiter's root, not done, runs (`Main`
-at its turn too), and the waiters those runs wake join the same loop. The
-default prelude and lowering are unchanged, so a program compiled without
-the option is byte-identical to before.
+at its turn too), and the waiters those runs wake join the same loop. A
+woken waiter is `$Pending` until its turn (`signalAll` marks it, the drain
+unmarks it), and `$waitResume` reports a pending one as still waiting: a
+task resumed for one waiter's turn goes on only there, leaving its other
+woken arms for their turns, and no poll lets a woken task go on before
+its turn. The default prelude and lowering are unchanged, so a program
+compiled without the option is byte-identical to before.
 
 The roots are a list of cells `[root, next]` (adding one costs a cell; an
 array would be copied at each spawn, and C keeps every copy). A pass follows
