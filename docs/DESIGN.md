@@ -849,7 +849,10 @@ code after it, which is its frame.
   members' alternatives, their parameters the hole (at the group's result
   type) and the frame's lives, their names in every item as the functions'
   are. Their alternatives are numbered after the functions'; a `$rec` in
-  one calls the function whose code it is.
+  one calls the function whose code it is. A generic group's members' type
+  instances are found at the calls that reach them, continuation members'
+  too: the probe goes through choices' alternatives and through each
+  continuation member's code, elaborated where its frame is pushed.
 - A continuation member's frame applied to a value (`memberArm`, in
   `frameApplyWith`) runs the member's clauses and branch in the value's own
   failure context: a leaf of one alternative goes on there (a value goes to
@@ -879,22 +882,60 @@ code after it, which is its frame.
 - The size modes `recursive-sequence-first`, `-for`, `-calls-first` and
   `-calls-for` check that a sequence of choice points grows linearly.
 
+- A choice's values may be of another type than the group's (`S := "a" |
+  "bb"`, then `T[N - 1] + S.Length`): its frame's hole is at their type
+  (`probeHoleWith`: the choice's first alternative's, a value's or the code's
+  after a call in it, when it does not coerce to the result type, so frames
+  that compiled before keep theirs), and the code of a frame that a choice's
+  frame comes after gives that type (`LoopFrame.inTy`, `outTy`). The frame
+  loop keeps a value slot for each such type besides the result type's: a
+  frame reads its hole from its type's slot and writes its code's value to
+  its own (`frameApplyWith`), and a value of such a choice starts in its
+  type's. A continuation member's own values are at the type of the frame
+  after it. Where the first success is taken, each such type has a `$ret`
+  function of its own, `{name}$retN`, the value given to the one of its
+  type (`firstBody`'s `retOf`), and `$frameReturn` gives the final value at
+  the result type its name, `$Vfin`.
+
+- A point where `frameOf?` does not look (a comparison's later operand, a
+  `set`'s value after its old value, a named argument, a struct's field in
+  its declaration order, `and`'s operands) is reached by the rule the lifter
+  uses for a choice there: the first statement with one is lifted
+  (`liftPoints?`, `liftClause`, each call of the group marked `$point` so
+  the lifter binds it as it binds a choice), then decomposed again. The
+  struct field orders come from the source (`inlineMulti`), for non-generic
+  structs, as the elaborator gives the lifter.
+- An `if` in an expression whose conditions have no point and whose
+  branches have one (`ifPoint`; the right of `or` as its `if`; one the
+  lifter would bind as an exclusive choice, `$branchChoice`, is bound as
+  itself) is a point: entered as `enterOf` enters a member, its conditions
+  the member's path, each leaf's values going to one frame shared by all
+  its branches (hole `…i`; its code in the first leaf only, the others
+  `$sameFrame`, which `loopFlatWith` finds by its hole, so the code after
+  `if`s in sequence is not copied into each leaf, size modes
+  `recursive-if-*`; a leaf with a frame of its own is flattened in turn,
+  `flatCount` too).
+  The frame's type is its first leaf's (`probeHoleWith`, through the
+  frames of the leaf).
+- An alternative, one of several, with code before a choice in it (`T(N -
+  1) | Tell("x", 1) + (1 | 2)`): that code runs after the choice it is an
+  alternative of and before its own. It enters a continuation member that
+  runs that code and then its choice, `$then((), h, $cont(code, $then(choice,
+  …)))` (`Choice.enterOf`): a value of no use, `()`, whose frame's hole is
+  `void`, so it is a value with a frame as any choice's alternative is. Alone
+  in its leaf, that code is the leaf's path code instead (`$returnTail`).
+
 Not yet (#283), each refused with a message, and the route each would take:
-- A choice whose values are of another type than the group's with a point
-  after it (`S := "a" | "bb"`, then `T[N - 1] + S.Length`): the frame loop
-  keeps one value slot, of the result type. Route: a slot per hole type,
-  each frame reading its hole from its own and writing the result type's.
-- A choice with code before it that is not literals or names, in one
-  alternative of several (`T(N - 1) | Tell("x", 1) + (1 | 2)`): that code
-  runs after the first choice and before the second, in that alternative
-  alone. Route: an alternative that is a continuation member entered
-  directly, with no hole (alone in its leaf it is that leaf's path code
-  already, `$returnTail`).
-- A point the normal form does not reach: in a condition (an `if` inside an
-  expression, `and`, `or`, `not`), a `set`'s value, a comparison's later
-  operand, a construction's field, a named argument, a loop. Route: more
-  cases of `frameOf?` (a `set` reads its old value before the point, as a
-  prefix), an `if`'s conditions as a member's path.
+- A call of the group in a condition (an `if`'s, `not`'s, the left of
+  `or`) or a loop: there it is a consumer of the group nested in the group's
+  own code, which takes its first success or all its values while the
+  group's are being taken, not a choice point of it. The group's code is a
+  template inlined where it is consumed; a consumer inside it would need
+  the template inside itself. Route: the group as functions of its own,
+  called from its own code, as `FirstLift` makes them for one consumer.
+- A construction of a class or a generic struct with a point in a field:
+  the lifter keeps those (`$noLift`) for any choice, as their fields'
+  order is known only to the elaborator.
 
 With all of those, `F$all` would be needed by no shape and kept, if at all, only as
 an optimisation of effect-free ones. Deleting it (the owner's decision,

@@ -80,6 +80,14 @@ flags: heavy     (with bif: more of them, longer chains, longer conditions)
                   followed by a choice or by another call, a choice followed by a
                   call, a choice bound in a branch with code after it, #283; on
                   with frames otherwise)
+       notyped   (no choice of strings in a generator with a choice point after it,
+                  #283; on with seq otherwise)
+       noenter   (no alternative, one of several, with code before a choice in it,
+                  #283; on with seq otherwise)
+       nolifted  (no call of a generator of itself where the lifter takes it, after
+                  its bound choice: a named argument, a construction's field, a
+                  comparison's later operand, a set's value, an if's branch, or's
+                  right, #283; on with seq otherwise)
        noovw     (no overloads Ow of one name with one value or several, OwOne calling
                   the one with one value, OwR recursive, owc/owd's overloaded method Om,
                   #283's overloads picked in rounds; on in half the programs otherwise)
@@ -516,6 +524,27 @@ RVAR = random.Random(seed * 1000003 + 283286)
 # it, `else: Wb := (…); …; Wb + 1` (a `gblk`). The model is the same CPS inlining: the code after a
 # choice point runs on each of its values, the code before the next one once for each of them.
 RSEQ = random.Random(seed * 1000003 + 283287)
+# ---- #283, flag typed (on with seq; notyped turns it off): a <decides> generator's bound choice
+# of strings, `Ws := ("a" | "{Gz0[N - 1, A]}" | "bb")` (a call of itself in it, whose value the
+# string's code takes), with a choice point after it that reads `Ws.Length`, and an alternative
+# with a choice of strings in its expression, `(("a" | "bb").Length + 2)`: the code after a choice
+# whose values are not the generator's type; a stream of its own.
+RTY = random.Random(seed * 1000003 + 283288)
+# ---- #283, flag enter (on with seq; noenter turns it off): an alternative, one of several, with
+# code before a choice in it, `Tell("sqN", 2) + (Gz0(N - 1, A) | 3)`: that code runs after the
+# generator's choice point and before the alternative's own, once for each time the alternative
+# is taken; a stream of its own.
+RENT = random.Random(seed * 1000003 + 283289)
+# ---- #283, flag lifted (on with seq; nolifted turns it off): after a generator's bound choice,
+# a statement with a call of itself where the lifter takes it. In a <decides> one's, guarded by N
+# so that its calls end: `or`'s right, `Wl := (N = 0 or Gz0[N - 1, A] > 1)`, a comparison's
+# later operand in it, `Wl := (N = 0 or 5 > Gz0[N - 1, A])`, an `if`'s branch, `Wl := (if (N > 0)
+# then Gz0[N - 1, A] else (1 | 5))`. In the block of another's else: a named argument,
+# `Wl := NA(N, ?P := Gz0(N - 1, A))`; a construction's field, in its type's order whatever the
+# written one, `Wl := PS(pt{Y := Gz0(N - 1, A), X := 2})`; `set Vl += Gz0(N - 1, A)`, its old
+# value read before the call, or `set Vl = Gz0(N - 1, A) + Vl`; an `if`'s branch. A stream of
+# its own.
+RLIFT = random.Random(seed * 1000003 + 283292)
 SQN = [0]
 USED = set()     # (generator, in a for): the calls the tests make, for MVSEQ's statistics
 FRN = [0]
@@ -533,6 +562,9 @@ def ffresh():
     return f"fr{FRN[0]}"
 FRAMES = LAZY and 'noframes' not in flags and 'cf' not in flags
 SEQ = FRAMES and 'noseq' not in flags
+TYPED = SEQ and 'notyped' not in flags
+ENTER = SEQ and 'noenter' not in flags
+LIFTED = SEQ and 'nolifted' not in flags
 REFUSED = [False]
 
 
@@ -823,6 +855,11 @@ def ub_e(e, n):
     if isinstance(e, tuple) and e and isinstance(e[0], str):
         if e[0] in ('gself', 'gcall'):
             return gub(e[1], n - 1)
+        if e[0] == 'slet' and e[1] == 'Wl' and e[2][0] in ('orx', 'ifx'):
+            # (#283, flag lifted: or's values its left's or its right's, an if's one branch's,
+            # so that a call guarded by N, which ends, has a bound that does not)
+            x = e[2]
+            return ub_e(x[1], n) + ub_e(x[2], n) if x[0] == 'orx' else ub_e(x[2], n) + ub_e(x[3], n)
         if e[0] == 'choice':
             return sum(ub_e(a, n) for a in e[1])
         if e[0] == 'gblk':
@@ -1031,6 +1068,12 @@ def gen_gfunc(i):
         f['val'] = ('gbif', conds, base, alts(True))
     if SEQ:
         seq_shapes(f, i, sc, ctr)
+    if TYPED:
+        typed_shapes(f, i, sc, ctr)
+    if ENTER:
+        enter_shapes(f, i, sc, ctr)
+    if LIFTED:
+        lifted_shapes(f, i, sc, ctr, stmts)
     f['stmts'] = stmts
     f['lifted'] = lifted(f)
     CTX.update(ctrs=None, nofail=False, nochoice=False, noprint=False, fmax=None, take=None)
@@ -1094,6 +1137,119 @@ def seq_shapes(f, i, sc, ctr):
             last = ('bin', '+', seq_call(i, sc + ['Wb'], ctr), ('ref', 'Wb'))
         f['val'] = ('gbif', v[1], v[2], [('gblk', 'Wb', v[3], post, last)])
         f['seq'] = f.get('seq', set()) | {'branch-block'}
+
+
+def typed_shapes(f, i, sc, ctr):
+    """(#283, flag typed) choices of strings in generator f, made already, from RTY alone: its
+    bound choice of strings (a <decides> one), and an alternative with a choice of strings in
+    its expression."""
+    def call(a):
+        return ('gself', i, [('bin', '-', ('ref', 'N'), ('lit', 1)), a] + ([('ref', 'C')] if ctr else []))
+    # (no empty string: `if (false?) then "" else ""` is refused as an internal error, which
+    # the body a function with several values keeps for checking makes of `("" | "")`, a bug
+    # apart from #283)
+    lit = lambda: ('str', RTY.choice(['a', 'bb', 'ccc', 'dddd']))
+    v = f['val']
+    if f['decides'] and RTY.random() < 0.25:
+        strs = [lit() for _ in range(RTY.randint(1, 2))]
+        if RTY.random() < 0.5:
+            strs.insert(RTY.randint(0, len(strs)), ('sfmt', call(('ref', RTY.choice(sc)))))
+        v[1][:] = strs if len(strs) > 1 else strs + [lit()]
+        post = [('sprint', sqfresh())] if RTY.random() < 0.6 else []
+        n = ('slen', ('ref', 'Ws'))
+        if RTY.random() < 0.5:
+            last = ('choice', [('bin', '+', call(n), n), ('ref', 'N')])
+        else:
+            last = ('bin', '*', call(('ref', 'A')), n)
+        f['bound'] = ('Ws', post, last)
+        f['seq'] = f.get('seq', set()) | {'typed-choice'}
+    if RTY.random() < 0.2:
+        alts = v[1] if v[0] == 'gchoice' else v[3]
+        # (in the generator's own choice, not in a bound one, whose values
+        # the code after it takes)
+        if alts and alts[0][0] != 'gblk' and not f.get('bound'):
+            alts.insert(RTY.randint(0, len(alts)),
+                        ('bin', '+', ('slen', ('choice', [lit(), lit()])), ('lit', RTY.randint(0, 3))))
+            f['seq'] = f.get('seq', set()) | {'typed-expr'}
+
+
+def enter_shapes(f, i, sc, ctr):
+    """(#283, flag enter) an alternative, one of several, in generator f, made already, with code
+    before a choice of its own (RENT alone): a call, then a choice of a call of itself or of
+    values."""
+    v = f['val']
+    if RENT.random() < 0.25:
+        alts = v[1] if v[0] == 'gchoice' else v[3]
+        if alts and alts[0][0] != 'gblk' and not f.get('bound'):
+            a = ('ref', RENT.choice(sc)) if RENT.random() < 0.5 else ('lit', RENT.randint(0, 3))
+            inner = [('lit', RENT.randint(0, 4)), ('lit', RENT.randint(0, 4))]
+            if RENT.random() < 0.6:
+                inner[RENT.randint(0, 1)] = ('gself', i, [('bin', '-', ('ref', 'N'), ('lit', 1)), a] +
+                                             ([('ref', 'C')] if ctr else []))
+            # (the code before the choice a call that prints, or one of a function with no effects,
+            # which is still read once, before it)
+            pre = (('tell', sqfresh(), ('lit', RENT.randint(1, 3))) if RENT.random() < 0.6 else
+                   ('tw', ('lit', RENT.randint(0, 2)), a))
+            alts.insert(RENT.randint(0, len(alts)), ('bin', RENT.choice(['+', '*']), pre, ('choice', inner)))
+            f['seq'] = f.get('seq', set()) | {'enter'}
+
+
+def lifted_shapes(f, i, sc, ctr, stmts):
+    """(#283, flag lifted) after a generator's bound choice, a statement with a call of itself
+    where the lifter takes it (RLIFT alone): in a <decides> one's, guarded by N so that the
+    calls end (`or`'s right, a later comparison operand in it, an `if`'s branch); in the block of
+    another's else, where N - 1 is at least its base's (a named argument, a struct's field, a
+    `set`'s value, an `if`'s branch)."""
+    v = f['val']
+    blk = not f['decides'] and v[0] == 'gbif' and v[3] and v[3][0][0] == 'gblk'
+    # (more often in an else's block, which is rarer)
+    if RLIFT.random() >= (0.7 if blk else 0.25) or not (f['decides'] or blk):
+        return
+    a = ('ref', RLIFT.choice(sc)) if RLIFT.random() < 0.5 else ('lit', RLIFT.randint(0, 3))
+    call = ('gself', i, [('bin', '-', ('ref', 'N'), ('lit', 1)), a] + ([('ref', 'C')] if ctr else []))
+    lo = f['lo']
+    other = (('lit', RLIFT.randint(0, 3)) if RLIFT.random() < 0.5 else
+             ('choice', [('lit', RLIFT.randint(0, 3)), ('lit', RLIFT.randint(4, 7))]))
+    if f['decides']:
+        kind = RLIFT.choice(['cmp', 'if', 'or'])
+        base = ('cmp', ('ref', 'N'), [('=', ('lit', lo))])
+        if kind == 'cmp':
+            # (N = lo or K > call: the call a comparison's later operand, in or's right)
+            e = ('orx', base, ('cmp', ('lit', RLIFT.randint(1, 6)), [(RLIFT.choice(['>', '>=']), call)]))
+        elif kind == 'or':
+            e = ('orx', base, ('cmp', call, [(RLIFT.choice(['>', '>=']), ('lit', RLIFT.randint(0, 3)))]))
+        else:
+            e = (('ifx', [('filter', ('cmp', ('ref', 'N'), [('>', ('lit', lo))]))], call, other)
+                 if RLIFT.random() < 0.5 else
+                 ('ifx', [('filter', ('cmp', ('ref', 'N'), [('<=', ('lit', lo))]))], other, call))
+        st = ('slet', 'Wl', e)
+        x, post, last = f.get('bound') or ('Wf', [], ('ref', 'Wf'))
+    else:
+        kinds = (['na'] if NA else []) + (['cons'] if CB else []) + ['set', 'set=', 'if']
+        kind = RLIFT.choice(kinds)
+        if kind == 'na':
+            st = ('slet', 'Wl', ('na', ('ref', 'N'), [('P', call)], RLIFT.randint(0, 1)))
+        elif kind == 'cons':
+            st = ('slet', 'Wl', ('cons', ('lit', RLIFT.randint(0, 3)), call, RLIFT.random() < 0.5))
+        elif kind == 'if':
+            # (in the else, N > lo: either branch may be taken)
+            cond = [('filter', ('cmp', ('ref', 'N'), [(RLIFT.choice(['>', '<']), ('lit', RLIFT.randint(lo, lo + 2)))]))]
+            st = ('slet', 'Wl', ('ifx', cond, call, other) if RLIFT.random() < 0.5 else ('ifx', cond, other, call))
+        else:
+            if not any(c[0] == 'svar' and c[1] == 'Vl' for c in stmts):
+                stmts.append(('svar', 'Vl', ('lit', RLIFT.randint(0, 3))))
+            # (`set +=` reads the old value before the call, `set =` after it, from the var each
+            # value of it has set)
+            st = (('sset', 'Vl', '+=', call) if kind == 'set' else
+                  ('sset', 'Vl', '=', ('bin', '+', call, ('ref', 'Vl'))))
+        _, x, galts, post, last = v[3][0]
+    post = post + [st]
+    last = ('bin', '+', ('ref', 'Vl' if kind in ('set', 'set=') else 'Wl'), last)
+    if f['decides']:
+        f['bound'] = (x, post, last)
+    else:
+        v[3][0] = ('gblk', x, galts, post, last)
+    f['seq'] = f.get('seq', set()) | {'lifted-' + kind}
 
 
 FX_NODES = ('sprint', 'snext', 'tell', 'bprint', 'cnext', 'cadd', 'print', 'next', 'add', 'seti', 'setf')
@@ -1544,6 +1700,12 @@ def show(e):
     t = e[0]
     if t == 'lit':
         return str(e[1])
+    if t == 'str':
+        return f'"{e[1]}"'
+    if t == 'sfmt':
+        return '"{' + show(e[1]) + '}"'
+    if t == 'slen':
+        return f'{show(e[1])}.Length'
     if t == 'ref':
         return e[1]
     if t == 'tell':
@@ -1875,6 +2037,12 @@ def ev(e, st, k, mode):
         return k(e[1], st)
     if t == 'ref':
         return k(lookup(st, e[1]), st)
+    if t == 'str':
+        return k(e[1], st)
+    if t == 'sfmt':
+        return ev(e[1], st, lambda v, s: k(str(v), s), mode)
+    if t == 'slen':
+        return ev(e[1], st, lambda v, s: k(len(v), s), mode)
     if t == 'tell':
         def k2(v, s):
             s.out.append(e[1])
@@ -2868,7 +3036,9 @@ if os.environ.get('MVSEQ'):
     # for or where the first success is taken, with effects run as a function of its own or not)
     used = [(k, 'for' if isfor else ('first-lifted' if GFUNCS[i]['lifted'] else 'first'))
             for i, isfor in sorted(USED) for k in sorted(GFUNCS[i].get('seq', ()))]
-    print(f"seq {sum(1 for f in GFUNCS if f.get('seq'))} " + " ".join(sorted({f"{k}/{c}" for k, c in used})), file=sys.stderr)
+    made = sorted({k for f in GFUNCS for k in f.get('seq', ())})
+    print(f"seq {sum(1 for f in GFUNCS if f.get('seq'))} " + " ".join(sorted({f"{k}/{c}" for k, c in used})) +
+          f" made={','.join(made)}", file=sys.stderr)
 if os.environ.get('MVSTATS'):
     print(f"stats gens={len(GFUNCS)} gfor={STATS['gfor']} gfirst={STATS['gfirst']} gback={STATS['gback']} lfirst={STATS['lfirst']} lback={STATS['lback']} lmeth={STATS['lmeth']}", file=sys.stderr)
 if SKIPRET[0]:

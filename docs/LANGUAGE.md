@@ -1373,7 +1373,20 @@ Main():void =
   ```
 
   A branch's code before its choice runs when the branch is selected, as a
-  returning branch's does (below).
+  returning branch's does (below). The choice's values may be of another
+  type than the function's (`S := "a" | "bb"`, then `T[N - 1] + S.Length`,
+  or `S := "{T[N - 1]}" | "x"`). An alternative's code before a choice in
+  it runs each time that alternative is taken, before that choice
+  (`T(N - 1) | Tell("x", 1) + (1 | 2)`). A call of the function where the
+  lifter takes a choice is a choice point there, in the same order: in a
+  comparison's later operand (`5 > T[N - 1]`), a `set`'s value after its
+  old value (`set K += T(N - 1)`), a named argument (`Tw(1, ?B := T(N -
+  1))`), a struct's field in its declaration order, `and`'s operands. An
+  `if` in an expression with one in a branch is one too: its conditions
+  run first, then the branch's values each go to the code after the `if`
+  (`X := (if (N > 1) then T(N - 1) else (1 | 5))`), as do those of `or`'s
+  right (`N = 0 or T[N - 1] > 1`) and of an `if` without `else` as a
+  statement.
 
   A returning branch may contain plain clauses and
   nested conditionals before its value. A `return` at the end of the body or
@@ -1470,15 +1483,12 @@ Main():void =
   Refused for now: a recursive one that is not of the generator shape
   above (return frames and choice points in sequence included) and is not
   `<computes>`, keeps local state, or may print or call `Err()`. Its choice
-  points must be where the shape reads them, so not in a condition (of an
-  `if` inside an expression, `and`, `or`, `not`), a `set`'s value
-  (`set K += T(N - 1)`), a comparison's later operand, a construction's
-  field, a named argument or a loop; an alternative of several may have
-  nothing but literals and names before a choice in it (`T(N - 1) |
-  Tell("x", 1) + (1 | 2)` is refused, `T(N - 1) | Y + (1 | 2)` is not); and
-  a choice whose values are of another type than the function's may not
-  have a choice or a call of its group after it (`S := "a" | "bb"`, then
-  `T[N - 1] + S.Length`) (#283). Also a recursive one with a `defer:` of its own, or called by a recursive one (its body a function's, where it would run once), one with a `return`
+  points must be where a choice is lifted from (a comparison's later
+  operand, a `set`'s value, a named argument, a struct's field, `and`'s
+  operands, an `if`'s branch, the right of `or`), so not in a condition
+  (an `if`'s, `not`'s, the left of `or`) or a loop, where a call would
+  take the function's values while its own are being taken, nor in a
+  class's or generic struct's construction (#283). Also a recursive one with a `defer:` of its own, or called by a recursive one (its body a function's, where it would run once), one with a `return`
   other than at the end of its body or in an `if`'s branches, a method of a class or
   interface below two others that each declare its name without `<override>`,
   `<suspends>`, one used as a function value, and, since its body is inlined where other names may be

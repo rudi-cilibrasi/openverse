@@ -1,0 +1,70 @@
+s 2 a
+s 1 a
+v 2
+s 1 bb
+v 2
+v 2
+s 2 bb
+s 1 a
+v 3
+s 1 bb
+v 3
+v 2
+s 2 bb
+s 1 a
+first 3
+first 3
+u 1 x1
+u 2 x3
+u 1 x1
+w 5
+w 3
+u 1 yy
+w 5
+w 3
+w 2
+u 2 x1
+u 1 x1
+w 5
+w 3
+u 1 yy
+w 5
+w 3
+w 2
+u 1 yy
+u 2 x3
+u 1 x1
+w 5
+w 3
+u 1 yy
+w 5
+w 3
+w 2
+u 2 x1
+u 1 x1
+w 5
+w 3
+u 1 yy
+w 5
+w 3
+w 2
+u 2 yy
+u 1 x1
+w 5
+w 3
+u 1 yy
+w 5
+w 3
+w 2
+u 1 x1
+u 2 x3
+u 1 x1
+first 5
+x 3
+x 4
+x 2
+x 4
+x 5
+x 3
+x 2
+exit=0
