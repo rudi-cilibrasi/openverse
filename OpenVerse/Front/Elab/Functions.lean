@@ -82,6 +82,49 @@ def elabFieldDefaults (env : TyEnv) (sigs : Signatures) (tops : List STop) (cdef
     | _ => pure ()
   return { needs := fieldNeeds, bodies := initializerBodies }
 
+/-- The defaults of a function's named parameters, each elaborated once at
+    the definition, in the function's scope (the parameters before it, and
+    `Self` in a method), in a trial whose code is dropped: a default is
+    evaluated at each call that omits it, but it is the function's. So it
+    neither fails nor suspends, even in a `<decides>` or `<suspends>`
+    function, and has only the heap effects the function's own effects
+    `allowed` allow (Book of Verse tests, `DefaultNamed.versetest` 805-878:
+    3512). `ctx` is the context of the function's body, `st0` the state its
+    elaboration starts from. -/
+def checkParamDefaults (ctx : Ctx) (st0 : ESt) (name : String) (ps : List SParam) (ptys : List Ty)
+    (allowed : List String) : Except String Unit := do
+  for ((prm, t), i) in (ps.zip ptys).zipIdx do
+    let some d := prm.default | continue
+    let what := s!"the default of ?{prm.name} of {name}"
+    -- (the parameters from this one on are not in its scope)
+    let dctx := { ctx with
+      locals := ctx.locals.filter fun l => !(i ≤ l.slot && l.slot < ps.length)
+      canFail := false, suspends := false, inParamDefault := true, inLoop := false
+      defaults := [(name, s!"?{prm.name}")] }
+    let trial (exp : Option Ty) : EM Bool := do
+      let r ← elabE dctx d exp
+      return r.e.mayFail ctx.sigProg
+    -- (at the parameter's type, or with none expected, where the default
+    -- gives a type parameter nothing else determines its type, as at a
+    -- call; a default that needs the type arguments of a call to be
+    -- elaborated, or that is refused there, is left to its calls, which
+    -- elaborate it as before)
+    let suspends (msg : String) : Bool :=
+      (msg.splitOn "suspends: it can only be").length > 1
+    let outcome : Except String (Bool × ESt) := match (trial (some t)).run st0 with
+      | .error msg => match (trial none).run st0 with
+        | .error msg' => .error (if suspends msg then msg else msg')
+        | ok => ok
+      | ok => ok
+    match outcome with
+    | .ok (fails, st) =>
+      if fails then
+        throw s!"{d.pos.show}: {what} can fail: a default is no failure context, also of a <decides> function (Book of Verse tests, DefaultNamed.versetest)"
+      fxCheck what allowed st
+    | .error msg =>
+      if suspends msg then
+        throw s!"{msg}: {what} cannot suspend, also of a <suspends> function (Book of Verse tests, DefaultNamed.versetest)"
+
 /-- A function or a constant of the program, elaborated (`elabFunctions`):
     its Verse Core code and the types of its slots, where it first calls
     `Err()` (#235), which of its locals live in a source frame (`FrameRefs`),
@@ -111,7 +154,7 @@ def elabFn (allSigs : List Sig) (sigProg : Prog) (requests : Requests)
     (decides : Bool) (allowed : List String) (tps : List (String × Bool)) (body : SExpr)
     (suspends : Bool := false) (selfTps : List String := [])
     (selfFieldOf : Option (String → Option Nat) := none) (scopeClass : Option String := none)
-    (evidenceSignature : Option Sig := none) :
+    (evidenceSignature : Option Sig := none) (bookDefaults : Bool := true) :
     Except String ElaboratedFn := do
   -- (#209) the values of `selfTps` come from the receiver's hidden
   -- fields, in slots after the hidden parameters: a method's own class's
@@ -172,6 +215,7 @@ def elabFn (allSigs : List Sig) (sigProg : Prog) (requests : Requests)
     | .ok ds => pure (selfInits ++ ds)
     | .error msg => throw s!"{p.show}: in {name}: {msg}"
   fxCheck name allowed st
+  if bookDefaults then checkParamDefaults ctx st0 name ps ptys allowed
   if name.endsWith ".$block" then
     if let some budget := env.constructionFx[(name.dropEnd ".$block".length).toString]? then
       fxCheck s!"construction block of {(name.dropEnd ".$block".length).toString}" budget st
@@ -196,7 +240,8 @@ def elabFn (allSigs : List Sig) (sigProg : Prog) (requests : Requests)
     constant of `sigs`, by index (a constant may not hold a mutable object, as
     it is computed at each use), then each generic function, once, with its
     type parameters opaque (`elabFn`). -/
-def elabFunctions (env : TyEnv) (sigs : Signatures) (requests : Requests) :
+def elabFunctions (env : TyEnv) (sigs : Signatures) (requests : Requests)
+    (extendedDefaults : Bool := false) :
     Except String (Array ElaboratedFn) := do
   let allSigs := sigs.all
   let genvOf (g : Sig) : TyEnv := g.typeEnv env
@@ -207,7 +252,7 @@ def elabFunctions (env : TyEnv) (sigs : Signatures) (requests : Requests) :
     match top with
     | .fn p n ps _ _ _ body =>
       elaborated := elaborated.push (← elabFn allSigs sigs.prog requests env p n ps sig.params sig.ret sig.decides sig.fx [] body sig.suspends
-        (evidenceSignature := some sig))
+        (evidenceSignature := some sig) (bookDefaults := !extendedDefaults))
     | .const p n _ _ body =>
       -- a constant is computed at each use, so it would be a new object each
       -- time (until Verse Core has global state)
@@ -242,7 +287,7 @@ def elabFunctions (env : TyEnv) (sigs : Signatures) (requests : Requests) :
       let scope := copyScope? effs
       elaborated := elaborated.push (← elabFn allSigs sigs.prog requests (genvOf g) p n ps g.params g.ret g.decides g.fx g.tparams body
         g.suspends g.selfTps ((requests.casts.find? (·.name == n)).map fun l => fun v =>
-          (l.opened.lookup v).bind (env.witnessField? l.target ·)) scope (some g))
+          (l.opened.lookup v).bind (env.witnessField? l.target ·)) scope (some g) (!extendedDefaults))
     | _ => pure ()
   return elaborated
 
