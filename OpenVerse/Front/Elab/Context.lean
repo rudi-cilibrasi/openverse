@@ -2208,6 +2208,10 @@ def coerce (p : Pos) (r : R) (target : Ty) : EM Expr := do
         if r.ty == base then
           if (litValue? r.e).isSome then eerr p s!"{showLit r.e} is not {withArticle n}: it does not meet its conditions"
           eerr p s!"{withArticle base.show} is {withArticle n} only after a cast: write {n}[X], which fails when X is not one"
+    -- (a value of a type parameter becomes a comparable by its evidence,
+    -- where the elaborator boxes it, `coerceBoxWith`)
+    if target == .dyn && !r.ty.params.isEmpty && r.ty.comparable (← get).env then
+      eerr p s!"expected comparable, found {r.ty.show}: a value of a type parameter is a comparable as an argument, a result, a local's value or an operand of = and <>, not yet here"
     -- (a value of a type that is not comparable is no comparable)
     if target == .dyn && r.ty != .any && !r.ty.comparable (← get).env then
       eerr p (notComparable (← get).env r.ty s!"expected comparable, found {r.ty.show}: a value of type comparable")

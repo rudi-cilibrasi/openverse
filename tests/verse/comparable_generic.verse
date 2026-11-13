@@ -19,6 +19,11 @@ TupleIsString(A:tuple(t, t, t), B:string where t:subtype(comparable))<decides>:v
 AsComparable(X:comparable):comparable = X
 Box(X:t where t:subtype(comparable)):comparable = AsComparable(X)
 SameT(X:t, Y:t where t:subtype(comparable))<decides>:void = X = Y
+BoxResult(X:t where t:subtype(comparable)):comparable = X
+BoxAll(X:t, Y:u where t:subtype(comparable), u:subtype(comparable)):[]comparable =
+    A:comparable = X
+    B:comparable = BoxResult(Y)
+    array{A, B}
 Show(B:logic):string = if (B?) then "y" else "n"
 Main():void =
     Print("{Show(logic{Equal[1, 1]})} {Show(logic{Equal['a', 'a']})} {Show(logic{Equal[array{AsComparable(1)}, array{1}]})} {Show(logic{Equal[array{1, 2, 3}, (1, 2, 3)]})} {Show(logic{Equal[(4, 5, 6), array{4, 5, 3}]})}")
@@ -33,3 +38,4 @@ Main():void =
     R:rational = 4 / 2 or 0
     Print("{Show(logic{Box(R) = 2})} {Show(logic{Box(R) = 2.0})}")
     Print("{Show(logic{SameT[s{}, s{}]})} {Show(logic{SameT[letters.C, letters.C]})}")
+    Print("{Show(logic{BoxResult(letters.A) = BoxResult(0)})} {Show(logic{BoxAll(letters.B, 1) = array{letters.B, 1}})} {Show(logic{BoxAll(letters.B, 1) = array{numbers.Two, 1}})}")
