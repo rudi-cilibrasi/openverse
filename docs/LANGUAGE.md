@@ -2731,7 +2731,7 @@ Main()<suspends>:void =
 | Value of a successful `not e` | unspecified | `void` |
 | Type of `if` without `else` | unspecified | `void` |
 | A failing `for` body | unspecified (VC: the `for` fails) | the `for` fails (as in VC) |
-| A failing `for` source | "the iteration is skipped" | zero iterations |
+| A failing `for` source | "When any expression in the iteration header fails, that iteration is skipped" (ch. 7); `for.versetest:317`: a failing range bound gives `array{}` | zero iterations, for an iterated source (`X : F[]`) and a range bound (`I := 1..F[]`) alike, what the source did rolled back; the `for` itself does not fail |
 | `?` on other values | conflict (§6.1) | only `logic` and `?t` (the API's typed reading) |
 | Output inside a failed failure context | unspecified | rolled back with the writes (transactional `Print`) |
 | `Main` failing | (no entry point in the book) | exit code 1; output already printed stays |
