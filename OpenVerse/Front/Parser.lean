@@ -141,6 +141,11 @@ def Token.offside (t : Token) (stop : Nat) : Bool := (t.bol && t.col ≤ stop) |
     empty `then:`). -/
 def Token.endsEmptyBody (n : Token) (col : Nat) : Bool := n.offside col
 
+/-- A body starts with `:` (a block, or an expression on its line), `{`, or
+    `.` and an expression on its line (Book of Verse tests: `if (1 < 2).
+    set Num = 42`, `for(n:nums). set curSum += n`, `spawn. F()`). -/
+def Token.startsBody (t : Token) : Bool := t.isSym ":" || t.isSym "{" || t.isSym "."
+
 def expectSym (s : String) : PM Unit := do
   let t ← peekT
   if t.isSym s then bump else perr t s!"expected '{s}', found {t.tok.describe}"
@@ -614,9 +619,15 @@ partial def parseBracedItems (item : Nat → PM SExpr) : PM (List SExpr) := do
   bump
   return items.toList
 
-/-- The body of a construct: `: block`, `:` + inline expression, or `{ block }`. -/
+/-- The body of a construct: `: block`, `:` + inline expression, `{ block }`,
+    or `.` + inline expression. -/
 partial def parseBody (stop : Nat) : PM SExpr := do
   let t ← peekT
+  if t.isSym "." then
+    bump
+    let n ← peekT
+    if n.bol || n.isEof then perr n "expected an expression after '.', on its line"
+    return .block t.pos [← parseExpr stop]
   if t.isSym ":" then
     bump
     let n ← peekT
@@ -626,12 +637,12 @@ partial def parseBody (stop : Nat) : PM SExpr := do
     else return .block t.pos [← parseExpr stop]
   else if t.isSym "{" then
     bump; parseBraced t.pos
-  else perr t s!"expected ':' or '\{', found {t.tok.describe}"
+  else perr t s!"expected ':', '\{' or '.', found {t.tok.describe}"
 
 /-- `then` / `else` / `do` parts: a body, or an inline expression. -/
 partial def parseBranch (stop : Nat) : PM SExpr := do
   let t ← peekT
-  if t.isSym ":" || t.isSym "{" then parseBody stop else
+  if t.startsBody then parseBody stop else
   -- (a branch that is only a `defer` is its own scope)
   match ← parseExpr stop with
   | e@(.app _ (.ident _ "$defer") _ _) => return .block t.pos [e]
@@ -944,7 +955,7 @@ partial def parsePrimary (stop : Nat) : PM SExpr := do
   -- `branch:` (#156): a background task over the enclosing function's frame
   | .ident "branch" =>
     let n ← peekT 1
-    if n.isSym ":" || n.isSym "{" then
+    if n.startsBody then
       bump
       let b ← parseBody stop
       return .app t.pos (.ident t.pos "$branch") [b] false
@@ -952,7 +963,7 @@ partial def parsePrimary (stop : Nat) : PM SExpr := do
       bump; return .ident t.pos "branch"
   -- `spawn{F(…)}` (#156)
   | .ident "spawn" =>
-    if (← peekT 1).isSym "{" then
+    if (← peekT 1).startsBody then
       bump
       let b ← parseBody stop
       return .app t.pos (.ident t.pos "$spawn") [b] false
@@ -960,7 +971,7 @@ partial def parsePrimary (stop : Nat) : PM SExpr := do
       bump; return .ident t.pos "spawn"
   | .ident "sync" | .ident "race" | .ident "rush" =>
     let n ← peekT 1
-    if n.isSym ":" || n.isSym "{" then
+    if n.startsBody then
       bump
       let kw := if t.isKw "sync" then "$sync" else if t.isKw "race" then "$race" else "$rush"
       let arms := match ← parseBody stop with
@@ -1003,7 +1014,7 @@ partial def parsePrimary (stop : Nat) : PM SExpr := do
       let cs? ← (some <$> parseParenItems) <|> pure none
       let n ← peekT
       if let some (cs, _) := cs? then
-        if !n.bol && (n.isSym "{" || n.isSym ":") then
+        if !n.bol && n.startsBody then
           let b := SExpr.block t.pos (cs ++ [.block t.pos [← parseBody stop]])
           return .app t.pos (.ident t.pos "$first") [b] false
       set saved
