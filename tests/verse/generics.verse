@@ -79,8 +79,8 @@ IsTrue(X:t where t:subtype(comparable))<decides>:void = X = true
 
 # constants may call generic functions, and refer to constants defined before
 # them in their scope
-Later := 42
-Answer := Identity(Later)
+Later:int = 42
+Answer:int = Identity(Later)
 Names:[]string = Repeat("n", 2)
 
 point := struct:

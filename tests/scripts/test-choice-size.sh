@@ -1546,7 +1546,8 @@ if kind.startswith('waiting-default-'):
     header = f'Run({params},?N:int={expr} where {types})<suspends>:int=N'
     if shape == 'method':
         print('box(t:type):=class:\n    X:t\n    ' + header)
-        print('B:=box(string){X:="tag"}')
+        # (a constant at the top level states its type, Book of Verse ch. 16)
+        print('B:box(string)=box(string){X:="tag"}')
     else: print(header)
     call = ('B.' if shape == 'method' else '') + f'Run({names})'
     print(f'Use({params} where {types})<suspends>:int={call}')
