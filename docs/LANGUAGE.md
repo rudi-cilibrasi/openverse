@@ -15,7 +15,7 @@ surface Verse is elaborated (`OpenVerse/Front/Elab.lean`) into Verse Core
 **Contents**
 
 - The language: [Supported](#supported) · [Source profiles](#source-profiles) · [Source text](#source-text) · [Parametric functions](#parametric-functions) · [Function values](#function-values) · [defer](#defer) · [Overloading](#overloading) · [Parametric structs](#parametric-structs) · [Classes](#classes) · [Mutation, macros, tooling](#mutation-macros-tooling) · [Choice](#choice)
-- More types: [any](#any) · [Refinement types](#refinement-types) · [float](#float) · [rational](#rational) · [char32](#char32)
+- More types: [any](#any) · [Refinement types](#refinement-types) · [Type aliases](#type-aliases) · [float](#float) · [rational](#rational) · [char32](#char32)
 - Programs: [Modules](#modules) · [Programs of several files](#programs-of-several-files) · [Concurrency](#concurrency)
 - [Readings openverse takes](#readings-openverse-takes) · [Not supported in v1](#not-supported-in-v1)
 
@@ -25,8 +25,8 @@ surface Verse is elaborated (`OpenVerse/Front/Elab.lean`) into Verse Core
 |---|---|---|
 | Comments | `#` to the end of the line, nested `<# … #>`, `<#>` indented comments (the rest of the line and every following line indented more than it; see [Source text](#source-text)) | ch. 0 |
 | Literals | `int` (decimal, `0x` hex; must fit in 64 bits), `'c'` `char` (`c` an ASCII character other than a line break, a tab included, or an escape; a non-ASCII one, `'é'`, is a `char32`, Book of Verse ch. 1), `0oHH` `char` code unit (one or two hex digits, not octal: `0o41` is `'A'`, `0o9` is a tab), strings with escapes and `{expr}` interpolation, `true`, `false`, `0uHHHHHH` `char32` (a Unicode scalar value, up to `0u10FFFF`, no surrogates), `float` `1.5`, `2.0e-7`, `1e3`, `12.34f64`, `1234f64` (digits, then a point and digits or an exponent or both, or the suffix `f64`, which may follow either; the nearest double, which must be finite: `2.0e308` is refused; `f32` and `f16` are read and refused as not supported); paths `/Verse.org/Random` parse (in `using{…}`, ignored; as values, refused; see [Source text](#source-text)) | §1.3–1.7 |
-| Types | `int`, `logic`, `char`, `char32`, `any` (see [any](#any)), `rational` (see [rational](#rational)), `float` (see [float](#float)), refinement types `type{_X:int where 0 <= _X, _X <= 120}` (see [Refinement types](#refinement-types)), `string` (= `[]char`), `[]t`, `?t`, `tuple(…)`, `void`, function types `type{_(:int)<decides>:int}`, with named parameters `type{_(:int, ?B:int):int}`, and `int->int` (see [Function values](#function-values)); a tuple converts to an array of its elements where an array is expected, and compares with an array as one (`array{1,2} = (1,2)`) | ch. 2–3 |
-| Definitions | top-level functions `F(X:t, …)<effects>:t = body`, top-level constants `C:t = e` / `C := e` (definitions on one line, at the top level or in a module, are separated by `;` or `,`: `X:int=0, Y:int=0`; a constant may use one defined after it, but not itself, directly or through other constants); locals `X := e`, `X:t = e`, `var X:t = e`; no shadowing; no name defined twice in a scope but [overloaded](#overloading) functions; no [reserved name](#reserved-names) | §3.1–3.4 |
+| Types | `int`, `logic`, `char`, `char32`, `any` (see [any](#any)), `rational` (see [rational](#rational)), `float` (see [float](#float)), refinement types `type{_X:int where 0 <= _X, _X <= 120}` (see [Refinement types](#refinement-types)), `string` (= `[]char`), `[]t`, `?t`, `tuple(…)`, `void`, function types `type{_(:int)<decides>:int}`, with named parameters `type{_(:int, ?B:int):int}`, and `int->int` (see [Function values](#function-values)); type aliases `player_id := int`, `pair(t:type) := tuple(t, t)` (see [Type aliases](#type-aliases)); a tuple converts to an array of its elements where an array is expected, and compares with an array as one (`array{1,2} = (1,2)`) | ch. 2–3 |
+| Definitions | top-level functions `F(X:t, …)<effects>:t = body`, top-level constants `C:t = e` / `C := e` (`C := e` names a type when `e` is one: [Type aliases](#type-aliases)) (definitions on one line, at the top level or in a module, are separated by `;` or `,`: `X:int=0, Y:int=0`; a constant may use one defined after it, but not itself, directly or through other constants); locals `X := e`, `X:t = e`, `var X:t = e`; no shadowing; no name defined twice in a scope but [overloaded](#overloading) functions; no [reserved name](#reserved-names) | §3.1–3.4 |
 | Mutation | `set X = e`, `set X += e` (`-=`, `*=`), `set A[i] = e` (fails out of range; returns `e`), and paths `set S.F.G = e`, `set A[i][j] op= e`, `set M[k].F = e`: indices and keys evaluated once, left to right, then the new value (for `op=`, after the old one is read: `set X += e` is `set X = X + e`), then the variable rebuilt; an index out of range or a missing intermediate key fails, while the last key of a path inserts | §3.3, §3.5, §9.3 |
 | Blocks | indented (`:`), braced (`{ }`), inline (`then`/`do`), `.` and an expression on its line wherever `:` or `{…}` may start a body (`if (c). e else. f`, `for (X:Xs). e`, `spawn. F()`, `loop. break`; also `option`, `logic`, and `array` and `map`, whose `:` blocks separate their items by `,`, `;` or new lines: `array:` and the lines `1`, `2`; in braces an array's elements are separated by commas, or by `;` and new lines, not both: `array{1; 2; 3}`), `block:`, `( a; b )` sequences, also as an argument (`F(Log(); 42)` passes 42) and as a `case`'s value (`case(a; b)`); `;` separates the items of a block and may end a line or a braced block (`{1; 2;}` is `{1; 2}`) (the next item then follows the line rules, so a class's last field may end in `;`); a body after `:` may be empty wherever one may be written, as `{}` may (`class:`, `struct:`, `then:`, … whose next line is no deeper than the construct, or nothing follows); a function's or method's braced body may put its `{` on the next line, at the definition's column; a value after `=`, `:=`, `set … =` or a `case` arm's `=>` that starts a later line, deeper, is the indented block of those lines (`Value :=` and the lines `1`, `2`, `3` is `3`), as a function's body is | §2.2–2.4 |
 | Operators | `* + -`, unary `-`, comparisons `= <> < <= > >=` (failable, return the left operand, chains check every pair), `and`, `or`, `not` (below the comparisons, above `and`: `not X = Y` is `not (X = Y)`), `?`, `.Length`, `A[i]`, `T(k)` | ch. 4 |
@@ -1821,6 +1821,71 @@ Main():void =
 - Not supported: overloads on disjoint refinements (refinements of one base
   overlap).
 
+## Type aliases
+
+A type alias is a name for a type (Book of Verse ch. 10, "Aliases"; ch. 11,
+"Type Aliases"; the rules and their sources are in
+[`research/type-aliases.md`](research/type-aliases.md)):
+
+```verse
+player_id := int
+coordinate := tuple(float, float)
+handler := type{_(:float):void}
+predicate(t:type) := t -> logic          # a parametric alias
+string_map(t:type) := [string]t
+shape := class:
+    Sides:int = 3
+figure := shape
+
+IsEven(X:int):logic = logic{Mod[X, 2] = 0}
+Count(P:predicate(int), Xs:[]int):int = (for (X : Xs, P(X)?) { X }).Length
+Main():void =
+    ID:player_id = 42                       # an int
+    Scores:string_map(int) = map{"a" => 1}  # a [string]int
+    F := figure{}                           # a shape
+    Print("{ID} {F.Sides} {Count(IsEven, array{1, 2, 4})}")   # 42 3 2
+```
+
+- **A type or a value.** A definition `name := e` at the top level or in a
+  module defines a type alias when `e` is a type: written as only a type
+  can be (`?t`, `[]t`, `[k]v`, `tuple(…)`, `t->u`, `type{_(…):r}`,
+  `logic`), or a name, `M.c`, or a name applied to types (`box(int)`)
+  whose name is a type's (a built-in type, a class, interface, struct,
+  enum, refinement type, or another alias). Otherwise it is a constant:
+  `X := Y` with `Y` a constant, `X := F` with `F` a function, `X := F(1)`.
+  `name(t:type, …) := e` is always a type: a parametric class, interface,
+  struct, or alias. A definition with a written type, `X:t = e`, is never
+  an alias. (`X := c` with `c` a class was refused before aliases: `c` was
+  no value; it is now an alias of `c`.)
+- **The type it names.** An alias is not a new type: it is the type it
+  names everywhere, in assignments, overloads (`F(X:player_id)` and
+  `F(X:int)` cannot both be defined), casts and comparisons, and messages
+  show that type, not the alias. A parametric alias is applied to as many
+  type arguments as it has parameters, each `t:type` (a bound,
+  `t:subtype(…)`, is not supported).
+- **Where a type's name is.** An alias of a class, interface, struct, enum
+  or refinement type stands for it where a construction (`figure{}`), a
+  parent (`class(figure)`), a cast (`figure[X]`), a qualifier
+  (`(figure:)M()`) or an enum's value (`hue.Red`) names it; a parametric
+  one as `box_of(int){…}`. Any other alias is no value: `maybe := ?int`
+  makes `maybe{}` and `maybe[X]` errors.
+- **Where.** At the top level or in a module, `<public>` to be used outside
+  it, as `M.point`; not in a class or a function. A module's alias is no
+  data, so it needs no written type.
+- **In order.** An alias is used only after its definition (in the order
+  the definitions are loaded: an imported file's first), so `b := ?a`
+  before `a := int`, or a class with a field of type `a` before it, is an
+  error; an alias may name a class or struct defined after it. An alias
+  that names itself (`list(t:type) := ?tuple(t, list(t))`) is an error: a
+  class can hold a value of its own type. No definition, at any scope,
+  takes an alias's name, nor a built-in type's.
+- **Checks.** The names in an alias's type are checked where the alias is
+  defined; the rest (map keys that must be comparable, a parametric type's
+  type arguments) where it is used, as if the type were written there.
+- **Not enforced.** `<protected>` or `<private>` on an alias, and a
+  `<public>` alias of an internal type, which the Book refuses, are
+  accepted, as access specifiers are ([Readings](#readings-openverse-takes)).
+
 ## float
 
 A `float` is an IEEE 64-bit float (Book of Verse ch. 2, #127), except that
@@ -1994,8 +2059,10 @@ Main():void =
 
 - A module is `name := module:` with its definitions indented, or
   `name := module{…}`. It holds functions, constants, structs, enums,
-  classes, interfaces and other modules. A constant in a module states its
-  type (`X:int = 1`, not `X := 1`). A module is not a value.
+  classes, interfaces, [type aliases](#type-aliases) and other modules. A
+  constant in a module states its type (`X:int = 1`, not `X := 1`); an
+  alias is no constant (`point<public> := tuple(int, int)`). A module is
+  not a value.
 - A name is looked up from its definition's module outward, one scope at a
   time, up to the top level. At each scope, the scope's own definitions
   come first, then the members of the modules it opens with `using{M}`.
@@ -2300,7 +2367,7 @@ Main()<suspends>:void =
 | Scope of the operands of `A and B` | "Variable bindings do not escape from logical operations" (§3.4) | each operand is its own scope: names defined in `A` are not visible in `B`, and names from neither side escape the `and` |
 | Comparability | `comparable` covers the primitive types, enums, structs and containers of comparable types (§4.9) | so is every openverse type, except a type parameter not declared `subtype(comparable)` and the containers of one |
 | Inferring type arguments | not described | first-order matching against the expected result type, then the arguments; no subtyping other than `false` (matches anything) and `void` (accepts anything) |
-| Access specifiers other than `<public>` | `<internal>` (the default), `<private>`, `<protected>`, … (ch. 16) | a module member is `<public>` or internal (visible in its module and its submodules); other specifiers, and a struct field's, are accepted and not enforced |
+| Access specifiers other than `<public>` | `<internal>` (the default), `<private>`, `<protected>`, … (ch. 16) | a module member is `<public>` or internal (visible in its module and its submodules); other specifiers, a struct field's, and a `<public>` definition whose type names an internal one (a type alias of an internal class, ch. 11), are accepted and not enforced |
 | `ToString` of a float | "the shortest" (an example: `98.5`) | the shortest decimal that reads back as the float, the closest of the shortest, in Python's `repr` layout (exponent at `≥ 1e16` and `< 1e-4`); `Inf`, `-Inf`, `NaN` |
 | `NaN < X` | not stated | fails (IEEE: NaN orders with nothing); `NaN = NaN` succeeds (the Book) |
 | `=` between different types | not stated | refused when two scalar types (int, float, char, …) meet at the same place, also inside containers (`array{1} = array{1.0}`), as Verse Core holds them differently |

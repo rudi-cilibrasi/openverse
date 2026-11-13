@@ -102,7 +102,7 @@ partial def elabERaw (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
   match se with
   | .int .. | .char .. | .char32 .. | .float .. | .str .. | .ident .. | .app .. =>
     elabExprInitialWith elabE elabOneClauses elabSpawnBound elabFieldDefault elabConstruct elabExprMarkers ctx se exp
-  | .member .. | .construct .. | .mapLit .. | .structDef .. | .enumDef .. | .refineDef .. | .query .. | .neg .. | .notE .. | .bin .. | .cmp .. | .andE .. | .orE .. | .range .. | .tuple .. | .block .. | .arrayLit .. | .optionLit .. | .logicLit .. =>
+  | .member .. | .construct .. | .mapLit .. | .structDef .. | .enumDef .. | .refineDef .. | .typeAlias .. | .query .. | .neg .. | .notE .. | .bin .. | .cmp .. | .andE .. | .orE .. | .range .. | .tuple .. | .block .. | .arrayLit .. | .optionLit .. | .logicLit .. =>
     elabExprValues ctx se exp
   | .ite .. | .forE .. | .gen .. | .loop .. | .brk .. | .ret .. | .caseE .. | .decl .. | .set .. =>
     elabExprControl ctx se exp

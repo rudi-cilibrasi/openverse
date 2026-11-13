@@ -1472,10 +1472,37 @@ partial def parseClassBody (p : Pos) (name : String) (tps : List TParam) (isIfac
     (if blocks.isEmpty then [] else [.fn p "$block" [] [] [] (.name "void") (.block p blocks)])
   return .classDef p name tps specs parents.toList isIface fields overrides methods
 
-/-- The type parameters of `name(t:type, u:subtype(…), …) := class …` or
-    `:= struct …` defined at `p`; `n` is where a malformed one is reported.
-    One may be unnamed, `t(:type)` (Book of Verse tests), as nothing then
-    names it. -/
+/-- Whether a type is written as a value can be: a name, or a name applied
+    to such (`c`, `box(int)`), which may be a constant's or a call. -/
+partial def STy.couldBeValue : STy → Bool
+  | .name n => !keywords.contains n && !n.startsWith "$"
+  | .app n ts => !n.startsWith "$" && !n.startsWith "?" && ts.all STy.couldBeValue
+  | _ => false
+
+/-- After the `:=` of a definition at the top level or in a module: the type
+    of a type alias, when the definition's value is written as only a type
+    can be (`?int`, `[]t`, `[k]v`, `tuple(…)`, `t->u`, `type{_(…):r}`,
+    `logic`; Book of Verse ch. 11, "Type Aliases"), through the end of the
+    definition. A name, or a name applied to names (`c`, `box(int)`), could
+    be a value too: it is parsed as one, and `Aliases.expand` decides by
+    what the names are. -/
+def typeAliasRHS? : PM (Option STy) := do
+  let t ← peekT
+  if t.bol || t.isEof then return none
+  let saved ← get
+  let ty? ← tryCatch (some <$> parseType) fun _ => pure none
+  if let some ty := ty? then
+    let n ← peekT
+    let ends := n.isEof || (n.bol && n.col ≤ (← get).topCol) ||
+      (!n.bol && (n.isSym ";" || n.isSym "," || n.isSym "}"))
+    if ends && !ty.couldBeValue then return some ty
+  set saved
+  return none
+
+/-- The type parameters of `name(t:type, u:subtype(…), …) := class …`,
+    `:= struct …` or a type alias's, defined at `p`; `n` is where a malformed
+    one is reported. One may be unnamed, `t(:type)` (Book of Verse tests), as
+    nothing then names it. -/
 def typeParamsOf (p : Pos) (n : Token) (ps : Array SParam) : PM (List TParam) :=
   ps.toList.mapM fun prm => do
     match prm.named, prm.default, prm.ty with
@@ -1630,6 +1657,17 @@ partial def parseTopsIn (col : Nat) (pfx : String) (braced : Bool := false) : PM
         | .structDef bp [] specs fs => tops := tops.push (.const t.pos name none (.structDef bp tparams specs fs))
         | _ => perr d s!"only structs can be parametric in openverse ({name})"
         continue
+      -- `name(u:type, …) := t`: a parametric type alias (Book of Verse ch.
+      -- 10, "Aliases")
+      if (← peekT).isSym ":=" then
+        ofExcept <| EffectPolicy.checkNonFunction t.pos "type declaration" pre
+        let d ← peekT
+        bump
+        if !tps.isEmpty then perr d "a parametric type takes its parameters without a where clause"
+        let tparams ← typeParamsOf t.pos n ps
+        let a ← peekT
+        tops := tops.push (.const t.pos name none (.typeAlias a.pos tparams (← parseType)))
+        continue
       let effs ← parseSpecs
       expectSym ":"
       let ret ← parseType
@@ -1644,12 +1682,18 @@ partial def parseTopsIn (col : Nat) (pfx : String) (braced : Bool := false) : PM
       tops := tops.push (← parseClassBody t.pos name [] false)
     else if n.isSym ":=" then
       bump
+      let a ← peekT
+      -- `name := t`: a type alias, when `t` is written as only a type can be
+      if let some ty ← typeAliasRHS? then
+        tops := tops.push (.const t.pos name none (.typeAlias a.pos [] ty))
+        continue
       let b ← parseFnBody
-      -- (a module's data states its type, Book of Verse ch. 16)
+      -- (a module's data states its type, Book of Verse ch. 16; `X := c`,
+      -- where `c` may be a type, is `Aliases.expand`'s to decide)
       if !pfx.isEmpty then
         match b with
         | .structDef .. | .enumDef .. | .refineDef .. => pure ()
-        | _ => perr n s!"a constant in a module needs its type: write {name0}:t = …"
+        | b => if b.asType?.isNone then perr n s!"a constant in a module needs its type: write {name0}:t = …"
       tops := tops.push (.const t.pos name none b)
     else if n.isSym ":" then
       bump

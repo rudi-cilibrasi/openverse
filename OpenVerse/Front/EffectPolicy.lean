@@ -184,6 +184,9 @@ partial def checkExpr (e : SExpr) (file : String := "") : Except String Unit := 
   | .refineDef _ _ base conditions => do
     checkTy p base
     conditions.forM (checkExpr · p.file)
+  | .typeAlias _ params ty => do
+    checkTParams params
+    checkTy p ty
   | _ => pure ()
   e.children.forM (checkExpr · p.file)
 
