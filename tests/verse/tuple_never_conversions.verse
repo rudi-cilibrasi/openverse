@@ -11,7 +11,9 @@ Arr(K:int):int =
     0
 Add(X:int, Y:int):int = X + Y
 Spread(K:int):int =
-    if (K = 2) then return Add((return 9, 3))
+    if (K = 2):
+        R := Add((return 9, 3))
+        return R
     0
 Lit(K:int):int =
     A := if (K = 2) then array{return 42} else array{7}

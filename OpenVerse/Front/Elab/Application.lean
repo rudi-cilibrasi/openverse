@@ -1,5 +1,6 @@
 /- Elaboration application; public declarations retain OpenVerse.Front names. -/
 import OpenVerse.Front.Elab.Control
+import OpenVerse.Front.TypeValues
 
 namespace OpenVerse.Front
 open OpenVerse
@@ -60,6 +61,7 @@ def elabComparableWith (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx
     eerr a.pos (notComparable ctx.types r.ty "the value of comparable(…)")
   return ⟨← coerce a.pos r .dyn, .dyn⟩
 
+-- ==== the bitwise functions (BitAnd … BitShiftRight): begin ====
 /-- A bitwise function (the Book's ch. 4 and API): of ints, as two's
     complement sign-extended without limit, a result out of the int range
     the overflow error; the shifts fail on a negative count. `BitNot(X)` is
@@ -78,8 +80,20 @@ def elabBitwise (elabInts : Ctx → Pos → List SExpr → EM (List Expr)) (ctx 
   let helper := "$bit" ++ (name.drop 3).toString
   let some s := ctx.sig? helper | eerr p s!"internal error: the bitwise helper {helper} is missing"
   return ⟨.call s.idx es, .int⟩
+-- ==== the bitwise functions: end (their one dispatch arm is in elabAppBaseWith) ====
 
 set_option maxHeartbeats 800000 in
+/-- `t(X)` (`elabAppBaseWith`): `X` converted to the type `t`, a value of a
+    type that is a subtype of it, then of `t` (Book of Verse tests,
+    Cast.versetest 57-87: `int(0)`, `void(0)`, `(?int)(option{0})`; an
+    `int(0.0)` or a `c1(c0{})` is refused). -/
+partial def elabConversionWith (elabE : Ctx → SExpr → Option Ty → EM R) (ctx : Ctx) (p : Pos) (t : STy)
+    (args : List SExpr) : EM R := do
+  let ty ← resolveTy ctx.types p t
+  let [a] := args | eerr p s!"a conversion to {ty.show} takes one value, of a type that is a subtype of {ty.show}"
+  let r ← elabE ctx a (some ty)
+  return ⟨← coerce a.pos r ty, ty⟩
+
 partial def elabAppBaseWith
     (elabE : Ctx → SExpr → Option Ty → EM R)
     (withDeferMark : Ctx → Expr → EM Expr)
@@ -107,10 +121,21 @@ partial def elabAppBaseWith
       if view.isSome then eerr source.pos "dummy type value cannot be an executable function"
     elabIndexLike ctx p value args bracket
   match f with
+  | .construct _ "$type" [t] [] =>
+    if bracket then eerr p "a conversion is written (t)(X), of a value of a type that is a subtype of t: it cannot fail"
+    elabConversionWith elabE ctx p t args
   | .ident fp name =>
     if let some r ← elabExtensionCallWith elabE elabApp ctx p fp name args bracket exp then return r
     match ctx.lookup name with
-    | some l => indexLike f ⟨.local l.slot, l.ty⟩
+    | some l =>
+      -- `T[X]` with `T` a type value, of `subtype(A)` or its kin: `X` cast
+      -- through it, `T.$cast(A)[A[X]]` (`TypeValues`)
+      if let .struct iface [] := l.ty then
+        if let some (_, a) := TypeValues.bound? iface then
+          let [x] := args | eerr p s!"a cast through {name} takes one value"
+          if !bracket then eerr p s!"a cast through the type {name} can fail: write {name}[X]"
+          return ← elabApp ctx p (.member p f (TypeValues.castMethod a)) [.app p (.ident p a) [x] true] true exp
+      indexLike f ⟨.local l.slot, l.ty⟩
     | none =>
     -- in a method, a method of `Self`, or a field of `Self` indexed
     let selfMember? : Bool := match ctx.selfClass with
@@ -138,6 +163,16 @@ partial def elabAppBaseWith
       let checks := conds.foldr (fun c acc => Expr.seq (test c) acc) (.local tv)
       return ⟨.seq (.assign tv r.e) checks, .refine name⟩
     else
+    -- `t(X)`: `X` converted to the type `t`, a built-in type's, a struct's
+    -- or an enum's name (Book of Verse tests, Cast.versetest 57-87: "Test
+    -- infallible casts. These should produce a compile error if the
+    -- argument type is not a subtype of the cast type"), as `T(X)` is for
+    -- a class (`elabCast`)
+    if !bracket && (ctx.sig? name).isNone && (ctx.types.overloads.lookup name).isNone &&
+        (["int", "float", "logic", "char", "char32", "string", "void", "rational"].contains name ||
+          ((ctx.types.structs.lookup name).isSome && !ctx.types.classes.contains name) ||
+          (ctx.types.enums.lookup name).isSome) then
+      return ← elabConversionWith elabE ctx p (.name name) args
     if let some ovs := ctx.types.overloads.lookup name then
       resolveOverload ctx p name ovs ctx.sig? (fun o => do
         ctx.noteOverload p name o
@@ -401,6 +436,7 @@ partial def elabAppBaseWith
           (.seq (.assign lo (pick (le tb tc) tb tc)) (.seq (.assign hi (pick (le tb tc) tc tb))
           (.seq (.assign m (pick (le ta hi) ta hi)) (pick (le lo m) m lo)))))), t⟩
       | _, _ => eerr p s!"{name} takes {if name == "Clamp" then "three arguments" else "one argument"}"
+    -- (the bitwise functions: `elabBitwise`, above)
     | "BitAnd" | "BitOr" | "BitXor" | "BitNot" | "BitShiftLeft" | "BitShiftRight" =>
       elabBitwise elabInts ctx p name args bracket
     | "Err" =>

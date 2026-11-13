@@ -79,6 +79,10 @@ structure Token where
   indent : String := ""
   /-- The file the token comes from, when it is not the main one (#27). -/
   file : String := ""
+  /-- Whitespace or a comment comes right before it (or it starts the
+      text): an attribute is followed by a space, a new line or another
+      attribute (Book of Verse tests, `Attributes.versetest`). -/
+  spaced : Bool := true
   deriving Repr, Inhabited
 
 def Tok.describe : Tok → String
@@ -356,7 +360,7 @@ partial def readPath : LexM String := do
 /-- The symbols, longest first. -/
 def symbols : List String :=
   ["<decides>", ":=", "<>", "<=", ">=", "..", "->", "=>", "+=", "-=", "*=", "/=",
-   "(", ")", "[", "]", "{", "}", ",", ";", ":", "=", "<", ">", "+", "-", "*", "/", ".", "?", "|"]
+   "(", ")", "[", "]", "{", "}", ",", ";", ":", "=", "<", ">", "+", "-", "*", "/", ".", "?", "|", "@", "^"]
 
 def matchSym (cs : Array Char) (pos : Nat) : Option String :=
   -- `<decides>` and friends are lexed by the parser from `<`, ident, `>`
@@ -365,15 +369,17 @@ def matchSym (cs : Array Char) (pos : Nat) : Option String :=
     (List.range sc.length).all fun k => cs[pos + k]? == sc[k]?
 
 partial def lexAll (acc : Array Token) : LexM (Array Token) := do
+  let before := (← get).pos
   skipSpace
   let s ← get
+  let spaced := s.pos > before || acc.isEmpty
   -- (the first token of a line has the line's indentation as its column,
   -- also after a block comment: `<#C0#>f():void = 3` starts at column 0,
   -- Book of Verse tests, Roundtrip/Comments)
   let ind := if s.bol then indentAt s.cs s.lineStart else ""
   let mk (t : Tok) : Token :=
     { tok := t, line := s.line, col := if s.bol then ind.length else s.col, bol := s.bol,
-      indent := ind }
+      indent := ind, spaced }
   let emit (t : Tok) : LexM (Array Token) := do
     modify fun st => { st with bol := false }
     return acc.push (mk t)
