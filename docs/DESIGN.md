@@ -9,7 +9,7 @@ against it. This page records the decisions behind the shape of the code.
 **Contents**
 
 - Semantics: [Two languages, one semantics](#two-languages-one-semantics) · [Failure and rollback](#failure-and-rollback) · [Choice](#choice-iteration-over-alternatives) · [Fuel](#fuel)
-- Front end: [Translation validation](#translation-validation-instead-of-a-verified-front-end) · [Modules](#modules-a-renaming-before-elaboration) · [Floats](#floats-canonical-bits) · [Rationals](#rationals-helpers-written-in-verse) · [Generic functions](#generic-functions-polymorphic-verse-core) · [Function values](#function-values-hidden-interfaces-and-classes) · [Concurrency](#concurrency-suspends-functions-as-frames)
+- Front end: [Translation validation](#translation-validation-instead-of-a-verified-front-end) · [Modules](#modules-a-renaming-before-elaboration) · [Type aliases](#type-aliases-a-substitution-before-elaboration) · [Floats](#floats-canonical-bits) · [Rationals](#rationals-helpers-written-in-verse) · [Generic functions](#generic-functions-polymorphic-verse-core) · [Function values](#function-values-hidden-interfaces-and-classes) · [Concurrency](#concurrency-suspends-functions-as-frames)
 - Classes and the heap: [Classes as references](#classes-as-references) · [Typing the heap](#typing-the-heap) · [Typed defaults](#why-every-slot-starts-with-a-typed-default)
 - C runtime: [The binary format and the loader](#the-binary-format-and-the-loader) · [Two semantics, one seam](#two-semantics-one-seam) · [Objects in the C runtime](#objects-in-the-c-runtime)
 - [Readings of the Book](#readings-of-the-book)
@@ -1189,7 +1189,7 @@ is thrown in one place, a phase or `elabProgramCore` itself, and each point
 where an elaboration asks for something and goes no further
 (`Compiled.asking`) is a line of `elabProgramCore`.
 
-1. `admitSource` (`Elab/Source.lean`): the source and the entry expression pass the effect policy (with where each specifier may go, `EffectPolicy.specifierPlaces`) and the source profile; the rules of the source as written hold (no reserved name defined, each name defined once in its scope, no `return` in a constant's value or a field's default, a `defer:` only as a statement, no `for` of literal clauses only); modules are resolved, no constant depends on itself, the defaults function types write are set apart, and the helpers the program needs are added (`Admitted`).
+1. `admitSource` (`Elab/Source.lean`): the source and the entry expression pass the effect policy (with where each specifier may go, `EffectPolicy.specifierPlaces`) and the source profile; the rules of the source as written hold (no reserved name defined, each name defined once in its scope, no `return` in a constant's value or a field's default, a `defer:` only as a statement, no `for` of literal clauses only); modules are resolved, type aliases are written out where they are used (`Aliases.expand`), no constant depends on itself, the defaults function types write are set apart, and the helpers the program needs are added (`Admitted`).
 2. `inlineSource`: functions with several values are inlined at their calls, the functions earlier rounds asked for are added and admitted, and function values become interfaces and classes (`Source`, with the sites the inlining notes).
 3. `argsAndMethodOverloads`: `Args` and the entry expression's `$Do` are added, and overloaded methods are renamed by their parameter lists (`Definitions`).
 4. `classHierarchy` (`Elab/Classes.lean`): the classes and interfaces and their hierarchy, checked (`Classes`, with the lookups over it).
@@ -1219,7 +1219,7 @@ keep the order: a round that asks goes no further than the phase that asks,
 and the next one runs every phase again. Read off the list, a program is
 refused, first to last, for:
 
-- its effect annotations, specifiers out of place and source profile, a type with a built-in type's name, a reserved name defined, a name defined twice, a `return` outside a function's body, a `defer:` where a value is taken, a `for` of literal clauses only, its modules, a constant that depends on itself, and subscribable events (1); the choices it inlines and the requests it carries (2); its overloaded methods (3);
+- its effect annotations, specifiers out of place and source profile, a type with a built-in type's name, a reserved name defined, a name defined twice, a `return` outside a function's body, a `defer:` where a value is taken, a `for` of literal clauses only, its modules, its type aliases (one that names itself or an alias defined after it, or is used before its definition, or whose name a definition takes), a constant that depends on itself, and subscribable events (1); the choices it inlines and the requests it carries (2); its overloaded methods (3);
 - its classes: their parents (unknown, a struct, wrong type arguments, an interface extending a class, two superclasses, a `<final>` one, a cycle), `<castable>` ones with type parameters and those below `<final_super_base>` ones, and construction effects (4); their fields, inherited, overriding and own, against the methods above them, and a `<concrete>` class's defaults (5); their methods: duplicates, parameter names, qualified implementations, overrides and `<final>`, abstract methods and the implementations every concrete class needs (6);
 - the types those give: comparable type arguments to parents and a `<persistable>` struct's fields (7), bounds (8), one instance of an interface per class (9), the Verse Core type arguments of overrides (10), recursive structs and map keys (11);
 - its functions' names and overloads (12), their signatures and effect annotations (13), constants whose type cannot be inferred and the defaults function types write (14); then the signature checks (15): overloads a call cannot tell apart, overrides and implementations whose signature or effects differ, an overriding field's type, and, last, a field two interfaces give defaults;
@@ -1336,6 +1336,46 @@ member. Elaboration's own shadowing check can't do that second check: after
 flattening, a local `X` and the member `m::X` have different names. The
 elaborator sees an ordinary flat program, so nothing behind it changes:
 Core, the checks, the proofs and the C runtime.
+
+## Type aliases: a substitution before elaboration
+
+A type alias (`player_id := int`, `pair(t:type) := tuple(t, t)`, Book of
+Verse ch. 10 and 11) never reaches the elaborator either. The parser keeps
+`name := t` as a constant whose value is the type (`SExpr.typeAlias`, beside
+the struct, enum and refinement definitions that are constants' values too)
+when `t` is written as only a type can be. `name := c` and `name := box(int)`
+could be constants as well, so it keeps them as expressions.
+`Front/Aliases.lean` runs right after the modules' renaming, when every name
+is qualified, and decides by what the names are: a definition is an alias
+when its value is a type's name (a built-in one, a class, interface,
+struct, enum, refinement type, or an alias, wherever defined), or a
+parametric type's name applied to as many types as it has parameters
+(`writesType`). One rule decides "a type or a value", and no program that
+compiled before changes meaning: a type's name was no value, so `X := c`
+was refused, and `X := c(Y)`, a cast of a constant, stays a constant.
+
+The pass then goes through the definitions in order, with the aliases
+defined so far. An alias's type is written out with those, so it names none
+defined after it, nor itself, and its expansion is finite. In every other
+definition, each use of an alias in a type is replaced by its type, with
+the type arguments substituted for a parametric alias's parameters (a
+type-level function applied where it is written). Where a construction,
+a cast, a parent, a qualifier, a delegation or an enum's value names a
+class, struct, enum, interface or refinement type, the alias of one is
+renamed to it. The aliases' definitions are then dropped. Everything after
+sees the program as if each type had been written out: `resolveTy`, the
+function types' interfaces (#210), overload distinctness, casts and
+messages know no aliases, so an alias is its type everywhere by
+construction. The refinement types stay named types: `age := type{_X:int
+where …}` is a type of its own, with its cast `age[X]` and its name in
+messages, and an alias of it (`years := age`) is `age`.
+
+Since nothing after the pass sees an alias, the pass checks what would
+otherwise go unseen: that no definition, at any scope, takes a top-level
+alias's name (a module's are the modules' renaming's to check, as its other
+members), and that the names in an alias's type are types', each with as
+many type arguments as it takes (the rest of an alias's type is checked
+where it is used, as written there).
 
 ## Destructured parameters: a desugaring in the parser
 

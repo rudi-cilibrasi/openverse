@@ -45,7 +45,8 @@ partial def elabExprValuesWith
     noteFailCalls ctx p "construction" r.e
     return r
   | .mapLit p entries => elabMapLit ctx p entries exp
-  | .structDef p _ _ _ | .enumDef p _ _ | .refineDef p _ _ _ => eerr p "struct, enum and type definitions must be at the top level"
+  | .structDef p _ _ _ | .enumDef p _ _ | .refineDef p _ _ _ | .typeAlias p _ _ =>
+    eerr p "struct, enum and type definitions must be at the top level"
   | .query p e =>
     let r ← elabE ctx e none
     let r ← elabContainerReceiverWith elabE ctx p r (fun

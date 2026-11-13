@@ -832,7 +832,7 @@ partial def resolveTy (env : TyEnv) (p : Pos) : STy → EM Ty
     -- argument determined, #283: said with its own name)
     else if n.startsWith "$tp" then
       eerr p s!"cannot infer type parameter {((n.dropWhile (· != '_')).drop 1).toString} of this call of a function with several values from its arguments"
-    else eerr p s!"unknown type '{n}' (supported: int, logic, char, string, void, []t, ?t, tuple(…), and structs and enums)"
+    else eerr p (unknownTypeMessage n)
   | .arr t => return .arr (← resolveTy env p t)
   | .opt t => return .opt (← resolveTy env p t)
   | .tup [] => pure .void

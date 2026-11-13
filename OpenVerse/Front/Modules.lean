@@ -104,6 +104,11 @@ partial def SExpr.mapNamesM (r : Resolver) : SExpr → Except String SExpr := fu
     return .structDef p (← tps.mapM (·.mapBoundNamesM (inner.ty p))) specs
       (← fs.mapM fun (n, t, d, v) => do
         return (n, ← t.mapNamesM (inner.ty p), ← d.mapM (·.mapNamesM inner), v))
+  -- (a type alias's type, its own parameters excepted)
+  | .typeAlias p tps t =>
+    let own := tps.map (·.name)
+    let inner : Resolver := { r with ty := fun q n => if own.contains n then pure n else r.ty q n }
+    return .typeAlias p (← tps.mapM (·.mapBoundNamesM (inner.ty p))) (← t.mapNamesM (inner.ty p))
   | .enumDef .. | .refineDef .. => return e
   | .construct p n ts fs => return .construct p (← r.ty p n) (← ts.mapM (goT p)) (← fs.mapM goField)
   | e => e.mapChildrenM go
