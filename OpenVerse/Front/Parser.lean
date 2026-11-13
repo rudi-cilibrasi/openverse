@@ -2018,7 +2018,8 @@ def typeParamsOf (p : Pos) (n : Token) (ps : Array SParam) : PM (List TParam) :=
     (`$module:A`, with its specifiers) and its `using{M}`s (`$open:A::|M`),
     for the names' resolution in Elab. With
     `braced`, the definitions of `module{…}`, through the `}`. -/
-partial def parseTopsIn (col : Nat) (pfx : String) (braced : Bool := false) : PM (List STop) := do
+partial def parseTopsIn (col : Nat) (pfx : String) (braced : Bool := false) (parentCol : Option Nat := none) :
+    PM (List STop) := do
   let mut tops := #[]
   let marker (p : Pos) (m : String) (specs : List String := []) : STop := .const p m specs none (.block p [])
   -- (#503) after a definition, the defaults its function types write, each
@@ -2056,9 +2057,13 @@ partial def parseTopsIn (col : Nat) (pfx : String) (braced : Bool := false) : PM
       if t0.isSym ";" || t0.isSym "," then bump; continue
     else
       if t0.isEof then break
-      if col > 0 && t0.bol && t0.col < col then break
+      if col > 0 && t0.bol && t0.col < col && parentCol.isNone then break
+      -- (a module's items are the lines indented more than the line of its
+      -- `module:`, each at a column of its own: Book of Verse tests,
+      -- Modules/Module.versetest:167, AccessLevelInheritance.versetest:605)
+      if let some pc := parentCol then if t0.bol && t0.col ≤ pc then break
       if !t0.bol && (t0.isSym ";" || t0.isSym ",") then bump; afterSep := true; continue
-      if (!t0.bol && !afterSep) || (t0.bol && t0.col != col) then
+      if (!t0.bol && !afterSep) || (t0.bol && t0.col != col && parentCol.isNone) then
         perr t0 (if col == 0 then "a top-level definition must start at column 0"
           else "a definition in a module must start at the module body's column")
       afterSep := false
@@ -2071,7 +2076,7 @@ partial def parseTopsIn (col : Nat) (pfx : String) (braced : Bool := false) : PM
       let d ← peekT
       if d.isEof || (braced && d.isSym "}") || d.isSym ";" || d.isSym "," then
         perr d "an attribute is followed by the definition it is on"
-      if !braced && d.bol && d.col != col then
+      if !braced && d.bol && d.col != col && parentCol.isNone then
         perr d (if col == 0 then "a top-level definition must start at column 0"
           else "a definition in a module must start at the module body's column")
       if d.isKw "using" then perr d "an attribute goes on a definition, not on using"
@@ -2140,7 +2145,7 @@ partial def parseTopsIn (col : Nat) (pfx : String) (braced : Bool := false) : PM
           let b ← peekT
           if b.endsEmptyBody col then pure []
           else if !b.bol then perr b "expected the module's definitions, indented on the following lines"
-          else withBlock b (parseTopsIn b.col (name ++ "::"))
+          else withBlock b (parseTopsIn b.col (name ++ "::") (parentCol := some t.col))
         else if o.isSym "{" then do
           bump
           let b ← peekT
