@@ -101,7 +101,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
     let bound := { c with locals := { name, slot, ty := bty, mutable := false } :: c.locals }
     let required := if stagePlan.isSome then stageBorrows else []
     let written := SExpr.block q (rest ++ [bd] ++ required.map (SExpr.ident q ·))
-    let caps := (Choice.namesUsed written).eraseDups.filterMap bound.lookup
+    let caps := bound.usedLocals written
     let key := "stageOrdinary" ++ contKey bound q name (alts ++ rest ++ [bd]) ++
       forStageCaptureKey bound stageArgs caps
     let known := c.types.loopRequests.findSome? (fun l => l.stagePlan.filter (·.key == key))
@@ -233,7 +233,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
               -- enclosing lift has renamed it for mutable copy-out.
               let st0 ← get
               let slot ← fresh ty
-              let cB := { cA with locals := { name := b.name, slot, ty, mutable := false } :: cA.locals }
+              let cB := { cA.withTrial .continuation with locals := { name := b.name, slot, ty, mutable := false } :: cA.locals }
               let values ← elabForWith elabAlts elabBranchAlts elabE elabInts elabLoopGen elabSeq
                 cB p restCl bd (prepared := true) (firstDecides := true)
                   (failure := if bodyFail then some (.app p (.ident p "Err") [] false) else none)
@@ -241,10 +241,9 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
               if forContWaits cA st0 (← get) [values.e] then set st0 else
                 match contForLiftOf cA b.pos b.name ty t [i] restCl bd bodyFail with
                 | .ok lift =>
-                  -- This body moves to an immediate helper. Its trial's
-                  -- source-frame locals/cast requests do not exist in the
-                  -- final suspending caller; discover them in the helper.
-                  if cA.suspends then restoreForContTrial st0
+                  -- This body moves to an immediate helper, which discovers
+                  -- its own locals and lifts: the trial asked for none of
+                  -- them (`Ctx.keepsLifts`), only the continuations in it.
                   modify fun st => { st with loopFirst := st.loopFirst ++
                     [{ g := "", pos := b.pos, itemCode := .lit .void, argSet := none, lift := .ok lift }] }
                   return (codeA, .prim .userErr [], t)
@@ -295,7 +294,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
               let cB := { cA with locals := { name := b.name, slot, ty, mutable := false } :: cA.locals }
               let (f, a, t) ← exclIter cB after more bd stageOverride
               return (.seq codeA f, a, t)
-            let rootCaptures := (Choice.namesUsed (.block p (i :: restCl ++ [bd]))).filterMap cA.lookup
+            let rootCaptures := cA.usedLocals (.block p (i :: restCl ++ [bd]))
             let key := "stage" ++ contKey cA b.pos b.name (i :: restCl ++ [bd]) ++
               forStageCaptureKey cA [] (rootCaptures.filter (·.storage.isSome))
             let plan? := stagePlan.orElse fun _ =>
@@ -438,13 +437,14 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
         -- (a path: its clauses up to its first generator into this filter, its
         -- generators into the body, with `pb` as the body; `flat`: `pb` is an
         -- array of the values, a continuation's, to flatten)
-        let runPath (cl : List SExpr) (pb : SExpr) (flat : Bool) : EM (Expr × Expr × Ty) := do
+        let runPathIn (c : Ctx) (cl : List SExpr) (pb : SExpr) (flat : Bool) : EM (Expr × Expr × Ty) := do
           let transfer := if stagePlan.isSome && flat then some true else stageOverride
-          let (f, a, t) ← exclIter cA (cl.takeWhile (!isGen ·)) (groups (cl.dropWhile (!isGen ·))) pb transfer
+          let (f, a, t) ← exclIter c (cl.takeWhile (!isGen ·)) (groups (cl.dropWhile (!isGen ·))) pb transfer
           if !flat || stagePlan.isSome then return (f, a, t)
           match t with
           | .arr t' => return (f, .prim .flatten [a], t')
           | _ => eerr gp "internal: a continuation's values"
+        let runPath := runPathIn cA
         -- (#335, phase 2b: another such choice, or an exclusive one, in the
         -- clauses after it, and a body that may run in a failure context:
         -- those clauses and the body a function of their own, #342's, which
@@ -491,11 +491,10 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
               -- nothing: all but the values' type, #364's review)
               if (contForLiftOf cA gp x bty .void altsS restCl bd bodyFail).toOption.isSome then
                 let st0 ← get
-                let (f0, a0, t0) ← runPath (liftP gs0 r0 0 ++ restCl) bd false
+                let (f0, a0, t0) ← runPathIn (cA.withTrial .continuation) (liftP gs0 r0 0 ++ restCl) bd false
                 if forContWaits cA st0 (← get) [f0, a0] then set st0 else
                   match contForLiftOf cA gp x bty t0 altsS restCl bd bodyFail with
                   | .ok lift =>
-                    if cA.suspends then restoreForContTrial st0
                     let use : LoopUse := { g := "", pos := gp, itemCode := .lit .void, argSet := none, lift := .ok lift }
                     modify fun st => { st with loopFirst := st.loopFirst ++ [use] }
                     if cA.suspends then return (codeA, .prim .userErr [], t0)
@@ -556,9 +555,10 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
             Choice.prepare [.decl gp b.name b.ty false a] (choiceValues c) (choiceField c)
               (fieldOrder := choiceOrder c)
               (site := s!"{site}a{i}") (keepExcl := true) (keepBranches := choiceHasCast c)
-          let forW (cl : List SExpr) (bd : SExpr) : EM R :=
-            elabForWith elabAlts elabBranchAlts elabE elabInts elabLoopGen elabSeq bctx p cl bd
+          let forWIn (c : Ctx) (cl : List SExpr) (bd : SExpr) : EM R :=
+            elabForWith elabAlts elabBranchAlts elabE elabInts elabLoopGen elabSeq c p cl bd
               (prepared := true) (failure := failure)
+          let forW := forWIn bctx
           -- (#335, phase 2: another such choice, or an exclusive one, in the
           -- clauses after it, and a body that may run in a failure context:
           -- those clauses and the body a function of their own, which each
@@ -642,14 +642,13 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
                 | some bty => (contForLiftOf c gp b.name bty .void b.alts restCl bd bodyFail).toOption.isSome
                 | none => false
               if same && known && restCl.any isCF then
-                let r0 ← forW (liftA a0 0 ++ restCl) bd
+                let r0 ← forWIn (bctx.withTrial .continuation) (liftA a0 0 ++ restCl) bd
                 if forContWaits c st0 (← get) [r0.e] then set st0 else
                   match (do
                       let some bty := tys.head? | throw "no type"
                       let .arr vty := r0.ty | throw "no values"
                       contForLiftOf c gp b.name bty vty b.alts restCl bd bodyFail) with
                   | .ok lift =>
-                    if c.suspends then restoreForContTrial st0
                     let use : LoopUse := { g := "", pos := gp, itemCode := .lit .void, argSet := none, lift := .ok lift }
                     modify fun st => { st with loopFirst := st.loopFirst ++ [use] }
                     if c.suspends then return ⟨.prim .userErr [], r0.ty⟩
