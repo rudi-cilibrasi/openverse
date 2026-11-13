@@ -272,6 +272,7 @@ partial def checkTop (top : STop) (owner : String := "") : Except String Unit :=
   | .fn p name params tparams specs ret body =>
     checkSpecs p (owner ++ name) specs
     checkTParams tparams
+    UpperBounds.checkDetermined (owner ++ name) params tparams
     for param in params do
       checkTy p param.ty
       param.default.forM (checkExpr · p.file)
