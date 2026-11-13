@@ -34,10 +34,7 @@ def ConstructHint.toExpr (h : ConstructHint) : SExpr :=
     order, the order its constructions evaluate them in, each with whether
     its default is more than a literal. -/
 def choiceOrder (ctx : Ctx) (n : String) : Choice.FieldOrder :=
-  { fields := if (ctx.types.structs.lookup n).isNone then [] else
-      (ctx.types.fields n).map fun (f, _, d) => (f, match d with
-        | some d => !Choice.stable (fun _ => true) d
-        | none => false)
+  { fields := ctx.types.fieldOrder n
     probe := ctx.constructProbe, inlineSite := ctx.inlineScopes.headD "",
     origin := ctx.constructOrigin.getD ctx.frameName,
     hints := ((ctx.constructHints.getD []).filter (·.name == n)).map ConstructHint.toExpr }
@@ -760,7 +757,7 @@ def firstLiftOf (ctx c2 : Ctx) (p : Pos) (g : String) (lp : List SExpr) (b : Str
     (rest : List SExpr) (fxB : List (String × Pos × Option String)) (suspends : Bool) (vty : Ty)
     (instances : List (String × List (String × Ty)) := [])
     (frames : List (String × List String × SExpr) := []) (kTy : Option Ty := none)
-    (frameTys : List (Option Ty × Option Ty) := []) :
+    (frameTys : List (Option Ty × Option Ty) := []) (memberTys : List (String × Ty) := []) :
     Except String Choice.FirstLift := do
   let ctx := ctx.choiceCoercionScope
   let [_, .block _ ps, .block _ cls, .decl _ _ _ _ tail] := lp | throw "internal: a $loop marker"
@@ -832,7 +829,9 @@ def firstLiftOf (ctx c2 : Ctx) (p : Pos) (g : String) (lp : List SExpr) (b : Str
   -- type; a function that a value is given to for each type values have (a
   -- choice's going to its frame, a continuation member's own), `retOf`
   let fTys : List (Option STy × Option STy) := frameTys.map fun (i, o) => (i.map (·.toSTy), o.map (·.toSTy))
-  let valTys : List STy := (fTys.flatMap fun (i, o) => i.toList ++ o.toList).eraseDups
+  -- (#283) and each member's of a type of its own, `LoopGen.memberTys`)
+  let valTys : List STy := (fTys.flatMap (fun (i, o) => i.toList ++ o.toList) ++
+    memberTys.map (·.2.toSTy)).eraseDups
   let retOf (t : Option STy) : String := match t.bind (fun t => valTys.idxOf? t) with
     | some i => s!"{retName}{i + 1}"
     | none => retName
@@ -874,6 +873,7 @@ def firstLiftOf (ctx c2 : Ctx) (p : Pos) (g : String) (lp : List SExpr) (b : Str
         | _ => throw "internal: a $member parameter (#283)"
       let body := Choice.firstBody (nameOf h) p b bty hcls htail rest binds setsT capArgs (some vty.toSTy) nameOf
         (fun target => recArgs (some (target.getD h))) normal? frames retName fTys retOf
+        ((memberTys.lookup h).map (·.toSTy))
       pure (STop.fn p (nameOf h) (hparams ++ kPs ++ capPs ++ typeParams) tps specs ret
         (pruneConstructHints ctx (nameOf h) body))
     | _ => throw "internal: a $member (#283)"

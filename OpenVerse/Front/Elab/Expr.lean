@@ -548,7 +548,7 @@ partial def elabSeqIn (closed : Bool) (ctx : Ctx) (ss : List SExpr) (exp : Optio
 partial def elabArgs (ctx : Ctx) (p : Pos) (args : List SExpr) (tys : List Ty) : EM (List Expr) := do
   if args.length != tys.length then
     eerr p s!"expected {tys.length} argument(s), found {args.length}"
-  (args.zip tys).mapM fun (a, t) => do coerce a.pos (← elabE ctx a (some t)) t
+  (args.zip tys).mapM fun (a, t) => do ctx.coerce a.pos (← elabE ctx a (some t)) t
 
 partial def elabInts (ctx : Ctx) (p : Pos) (args : List SExpr) : EM (List Expr) :=
   elabArgs ctx p args (args.map fun _ => .int)
@@ -718,7 +718,7 @@ partial def elabCast (ctx : Ctx) (p : Pos) (T : String) (args : List SExpr) (bra
   let r ← elabE ctx a none
   let (S, sargs) ← match r.ty with
     | .struct S sargs => if env.classes.contains S then pure (S, sargs) else eerr p s!"cannot cast {withArticle S} to {T}"
-    | t => eerr p s!"cannot cast {withArticle t.show} to {T}"
+    | t => eerr p s!"cannot cast {withArticle t.show} to {T}{ctx.anyWhy r}"
   -- (#351) from a reference through views, a cast to a class or interface
   -- with Verse Core type arguments takes them from a dispatch: as a clause
   -- of a failure context, whose rest is a function of its own
@@ -806,7 +806,7 @@ partial def elabGenericCall (ctx : Ctx) (p : Pos) (s : Sig) (args : List SExpr) 
     out of range (or, for `Find`, when there is no such element). -/
 partial def elabMethod (ctx : Ctx) (p : Pos) (r : R) (m : String) (args : List SExpr) (bracket : Bool) :
     EM R := do
-  let .arr t := r.ty | eerr p s!"{r.ty.show} has no method '{m}'"
+  let .arr t := r.ty | eerr p s!"{r.ty.show} has no method '{m}'{ctx.anyWhy r}"
   -- (the methods that cannot fail take parentheses, #150)
   let total := ["RemoveAllElements", "ReplaceAllElements", "ReplaceAll"].contains m
   if total && bracket then eerr p s!"{m} cannot fail: call it with A.{m}(…)"
@@ -988,7 +988,7 @@ partial def elabIndexLike (ctx : Ctx) (p : Pos) (r : R) (args : List SExpr) (bra
   | .tup ts, [.int _ k], false =>
     if k < 0 || k.toNat ≥ ts.length then eerr p s!"tuple index {k} out of range"
     return ⟨.prim (.tupGet k.toNat) [← inferable r], ts[k.toNat]!⟩
-  | t, _, _ => eerr p s!"cannot call or index a value of type {t.show}"
+  | t, _, _ => eerr p s!"cannot call or index a value of type {t.show}{ctx.anyWhy r}"
 
 /-- Two types with an int in one where the other has a rational, at the
     same place inside them (#116). -/
@@ -1374,7 +1374,10 @@ partial def elabAlts (ctx : Ctx) (p : Pos) (b : Choice.Binding) : EM (Ty × List
       else
         let c2 := { ctx with retries := ctx.retries + 1 }
         tryCatch (elabE c2 a (some r0.ty)) fun _ => elabE c2 a none
-    let ty ← rs.foldlM (fun acc r => join p acc r.ty none) r0.ty
+    -- (#283, #335: the copies of the clauses after a choice, each giving the
+    -- names they bind, join field by field)
+    let ty ← if alts.all isFirstPacket then packetJoin p a0 ((r0 :: rs).map (·.ty))
+      else rs.foldlM (fun acc r => join p acc r.ty none) r0.ty
     if ty == .never then eerr p "cannot infer the type of this choice"
     -- (#366) with nothing in common, every alternative against a later
     -- one's type instead, the first that fits them all: `false | option{4}`
@@ -1557,7 +1560,7 @@ partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
       -- (the values at the function's result type, at the type arguments
       -- this call gives, for a generic one)
       let lift := firstLiftOf ctx c2 p g lp b.name b.ty rest fxB (ctx.suspends && Suspend.hasSusp isS inner) lg.vty lg.instances
-        lg.frames lg.kTy lg.frameTys
+        lg.frames lg.kTy lg.frameTys lg.memberTys
       modify fun st => { st with loopFirst := st.loopFirst ++
         [{ g, pos := p, itemCode := lg.itemCode, argSet := lg.argSet, lift }] }
       let bindX ← coerce p ⟨lg.value, lg.vty⟩ ty
@@ -1605,13 +1608,20 @@ partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
         -- order and the clauses run for each; the first success gives the
         -- names they bind, in a tuple)
         let p := b.pos
+        let binds := (b.name :: Choice.boundIn rest).eraseDups
+        -- (what they bind that is an `any` after them, the join of its types
+        -- in the alternatives, says so where it is used as a class, `anyWhy`)
         let finish (action : EM (Expr × Ctx)) : EM (Expr × Ctx) := do
           let (code, c) ← action
-          return (code, { c with inlineScopes := Choice.inlineScopesAfter ctx.inlineScopes rest })
+          let joined (l : Local) : Local :=
+            if l.ty == .any && binds.contains l.name && !ctx.locals.any (·.slot == l.slot) then
+              { l with joinedAt := some p }
+            else l
+          return (code, { c with inlineScopes := Choice.inlineScopesAfter ctx.inlineScopes rest,
+                                 locals := c.locals.map joined })
         -- (with the binding's name: an inlined body's position is every
         -- site's, #314)
         let t := s!"$ct{p.line}_{p.col}{b.name}"
-        let binds := (b.name :: Choice.boundIn rest).eraseDups
         let vars := rest.filterMap fun | .decl _ n _ true _ => some n | _ => none
         let tup : SExpr := .tuple p (binds.map (SExpr.ident p ·) ++ [.ident p "true"])
         let liftAlt (a : SExpr) (i : Nat) : List SExpr :=
@@ -1714,14 +1724,8 @@ partial def elabOneGo (ctx : Ctx) : List SExpr → EM (Expr × Ctx)
                   let (_, result) ← elabOneGo bound (firstUnpack p lift name)
                   return ← finish (pure (.prim .userErr [], { result with locals := result.locals.filter (·.name != name) }))
                 set st0
-              -- (#283, #335) not shared, so copied for each value's type:
-              -- where the first success is taken, what they bind has one
-              -- type after them, which values with nothing above both lack
-              if let t0 :: ts := tys then
-                if (ts.foldlM (fun acc ty => joinTy ctx.types acc ty none) t0).isNone then
-                  let other := (ts.find? (· != t0)).getD t0
-                  let what := if b.name.startsWith "$" then "its value" else b.name
-                  eerr p s!"the values of this choice are of types with nothing above both, {t0.show} and {other.show}, and the clauses after it cannot be shared by them (#335): copied for each, {what} would have no one type after them, where the first success is taken: not supported yet (#283); take the values in a for, or make in each alternative what needs its own type"
+        -- (not shared: copied for each alternative, what they bind at the
+        -- join of its types in the copies after them, `elabAlts`)
         return ← finish (elabOneGo ctx copied)
       let p := b.pos
       let n := b.name
@@ -2287,7 +2291,7 @@ partial def elabMember (ctx : Ctx) (p : Pos) (r : R) (m : String) (exp : Option 
           eerr p s!"'{f}' is a method of {sn} that cannot be used as a value: call it with {f}(…) (#210)"
         eerr p s!"class {sn} has no field '{f}'"
       eerr p s!"struct {sn} has no field '{f}'"
-  | t, m => eerr p s!"{t.show} has no member '{m}'"
+  | t, m => eerr p s!"{t.show} has no member '{m}'{ctx.anyWhy r}"
 
 /-- A default's declaration scope, actual home-class arguments and cycle
     check, shared by ordinary and choice-lifted construction operands. -/

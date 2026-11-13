@@ -46,6 +46,9 @@ The model:
     values are taken, as anywhere; its only recursion is then through that
     context, so it is inlined, as a function recursive only through another
     that consumes it is;
+  * a call of another function with several values as a choice point in a
+    lazy one's code (#283): its values each go to the code after the call,
+    taken with the lazy one, as a call of it is;
   * early and terminal source returns yield the same ordered values as
     explicit conditional tails, ending only their current invocation;
   * methods may infer their own type parameters independently of receiver
@@ -71,6 +74,8 @@ RFrame = None
 RSeq = None
 # (#283: a call of itself in its own if's condition or for, LNc, LNf; a stream of its own)
 RNest = None
+# (#283: another function with several values as a choice point in a lazy one, LOt; a stream of its own)
+ROther = None
 # (#392: a named parameter with a default; a generator of its own decides, so seeds keep their
 # other programs)
 R392 = None
@@ -415,6 +420,13 @@ d{n}({child_tps}) := class({parent}):{extra_field}
             self.src = ("%s(X:t, Y:t, N:int where t:type)<transacts><decides>:t =\n"
                         "    N > 0\n    var C:int = 0\n    for (Z := %s[Y, X, N - 1]) { set C += 1 }\n"
                         "    Print(\"%s {N} {C}\")\n    X | Y") % (n, n, n)
+        elif k == "LOt":
+            # (#283: a call of itself bound, then a call of another generic function with several
+            # values as the value, taken with it)
+            self.path = "lazy"; self.params = [("X", "t"), ("Y", "t"), ("N", "int")]; self.decides = True; self.fx = True
+            self.src = ("%sTwo(A:t, B:t where t:type)<transacts>:t = A | B\n"
+                        "%s(X:t, Y:t, N:int where t:type)<transacts><decides>:t =\n"
+                        "    N > 0\n    Print(\"%s {N}\")\n    Z := %s[Y, X, N - 1] | X\n    %sTwo(Z, Y)") % (n, n, n, n, n)
         elif k == "LCmp":
             self.path = "lazy"; self.params = [("A", "arr"), ("X", "t"), ("I", "int")]; self.decides = True; self.cmp = True
             self.src = ("%s(A:[]t, X:t, I:int where t:subtype(comparable))<decides>:t =\n"
@@ -613,6 +625,12 @@ d{n}({child_tps}) := class({parent}):{extra_field}
             return [("count", inner, var + "c"),
                     ("dyn", lambda env: [("print", "%s %d %d" % (self.name, a["N"], env[var + "c"])),
                                          ("choice", [V(a["X"]), V(a["Y"])])])]
+        if k == "LOt":
+            # (the print, then each value of the call or X, then each of the other's: Z, Y)
+            if a["N"] <= 0: return [("cond", False)]
+            z = var + "z"
+            return [back, ("choice", [call({"X": a["Y"], "Y": a["X"], "N": a["N"] - 1}, z), [("val", z, a["X"])]]),
+                    ("dyn", lambda env: [("choice", [V(env[z]), V(a["Y"])])])]
         if k == "LIf":
             if a["N"] < 0: return [("cond", False)]
             if a["N"] > 0:
@@ -709,7 +727,7 @@ class Machine:
 # ---------------------------------------------------------------- the program
 class Gen:
     def __init__(self, seed):
-        global R, R387, R392, RMethod, SHARED, RFrame, RSeq, RNest
+        global R, R387, R392, RMethod, SHARED, RFrame, RSeq, RNest, ROther
         R = random.Random(seed)
         R387 = random.Random(seed * 1000003 + 387)
         R392 = random.Random(seed * 1000003 + 392)
@@ -717,6 +735,7 @@ class Gen:
         RFrame = random.Random(seed * 1000003 + 283283)
         RSeq = random.Random(seed * 1000003 + 283287)
         RNest = random.Random(seed * 1000003 + 283293)
+        ROther = random.Random(seed * 1000003 + 283294)
         SHARED = random.Random(seed * 1000003 + 2834).random() < 0.4
         self.seed = seed
         self.prods = []
@@ -998,6 +1017,7 @@ class Gen:
         if RFrame.random() < 0.3: lazy = "LFr" if RFrame.random() < 0.5 else "LFp"
         if RSeq.random() < 0.3: lazy = RSeq.choice(["LSq", "LSc", "LSb"])
         if RNest.random() < 0.3: lazy = RNest.choice(["LNc", "LNf"])
+        if ROther.random() < 0.25: lazy = "LOt"
         self.producer(lazy); self.producer(R.choice(kinds_e))
         for _ in range(R.randint(0, 2)):
             self.producer(R.choice(kinds_i + kinds_l + kinds_e))
