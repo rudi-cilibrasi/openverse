@@ -401,7 +401,9 @@ def STop.isTypeDefault : STop → Bool
     anyway), and the built-in names `Self`, `subtype`, `castable_subtype`
     and `local` (`Self.versetest`, `Subtype.versetest`,
     `QualifiedIdentifier.versetest`), `true` and `false` (`Enum.versetest`
-    refuses `(m:)true:=enum{a}`) and the effects' names, which are built-in
+    refuses `(m:)true:=enum{a}`), `of` and `at`, which call a function
+    (`F of X`, `F at X`; "The 'at' reserved word", `SemicolonsVsCommas.versetest:52`),
+    and the effects' names, which are built-in
     classes (`Effects.versetest` refuses `(m:)suspends := class{}`); a
     qualifier does not lift it. -/
 def reservedNames : List String :=
@@ -413,7 +415,7 @@ def reservedNames : List String :=
    "int64", "interacts", "introspects", "invariant", "iterates", "known", "last", "let", "markup",
    "permutation", "nat", "nat8", "nat16", "nat32", "nat64", "over", "provided", "random", "repeat",
    "sequence", "string8", "string16", "string32", "subclass", "succeeds", "syntax", "throws", "trait",
-   "truth", "try", "union", "using", "verify", "when", "while"]
+   "truth", "try", "union", "using", "verify", "when", "while", "of", "at"]
 
 /-- The prefix of an extension method's function's name (`extensionName`). -/
 def extensionPrefix : String := "$ext:"

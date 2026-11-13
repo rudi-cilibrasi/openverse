@@ -758,6 +758,17 @@ partial def parsePostfix (stop : Nat) : PM SExpr := do
         e := .member t.pos e (← expectIdent)
     else if t.isSym "?" then
       bump; e := .query t.pos e
+    else if t.isKw "of" || t.isKw "at" then
+      -- `F of X` is `F(X)` and `F at X` is `F[X]` (Book of Verse tests,
+      -- `Operators/Of.versetest`, `Operators/At.versetest`): the argument
+      -- is `{…}`, the arguments in braces, or a body after `:` or `.`, or
+      -- an operand, `F of 42`, `F of array: …`, `F of (4;5)`
+      bump
+      let o ← peekT
+      let args ← if o.isSym "{" && !o.bol then do bump; parseArgs "}"
+        else if (o.isSym ":" || o.isSym ".") && !o.bol then do pure [← parseBody stop]
+        else do pure [← parseUnary stop]
+      e := .app t.pos e args (t.isKw "at")
     else break
   return e
 
@@ -1582,12 +1593,12 @@ partial def parseParamItem : PM (Pos × String × STy × Bool × Option SExpr ×
     a parameter of its tuple type (`$tuple{i}`), so calls, overloads and
     function values see a tuple parameter there. A later parameter's
     default may use a destructured name, as an earlier parameter. -/
-partial def parseParamList : PM (Array SParam × Array TParam × List SExpr) := do
+partial def parseParamList (close : String := ")") : PM (Array SParam × Array TParam × List SExpr) := do
   let mut ps := #[]
   let mut binds : List SExpr := []
   -- (each destructured name, the element of its group's parameter it is)
   let mut σ : List (String × SExpr) := []
-  if !(← peekT).isSym ")" && !(← peekT).isKw "where" then
+  if !(← peekT).isSym close && !(← peekT).isKw "where" then
     repeat
       let (q, pn, pty, named, dflt, inner) ← parseParamItem
       let dflt := dflt.map (·.substIdents σ)
@@ -1617,7 +1628,7 @@ partial def parseParamList : PM (Array SParam × Array TParam × List SExpr) := 
         else perr kt s!"expected 'type' or 'subtype(…)' for type parameter {v}, found {kt.tok.describe}"
       tps := tps.push tp
       if (← peekT).isSym "," then bump else break
-  expectSym ")"
+  expectSym close
   return (ps, tps, binds)
 
 /-- A body that starts with the declarations `binds` (`parseParamList`). -/
@@ -2031,6 +2042,15 @@ partial def parseTopsIn (col : Nat) (pfx : String) (braced : Bool := false) : PM
       tops := tops.push (marker t.pos s!"$module:{name}" pre)
       tops := tops ++ inner.toArray
       continue
+    -- `F of {X:int}:t = …`: a function, its parameters in braces after
+    -- `of` (Book of Verse tests, `Operators/Of.versetest:112`); `F at
+    -- {…}` defines nothing (`Operators/At.versetest:112`, 3621)
+    let ofParams := n.isKw "of" && (← peekT 1).isSym "{"
+    if n.isKw "at" && (← peekT 1).isSym "{" then
+      perr n s!"{name0} at \{…} defines nothing: a function's parameters are written {name0}(…), or {name0} of \{…}, and one that can fail is {name0}(…)<decides> (Book of Verse tests, Operators/At.versetest: 3621)"
+    if ofParams then bump
+    let n ← peekT
+    let n := if ofParams then { n with tok := .sym "(" } else n
     -- a constant has the effects of its initialiser (#35)
     if !n.isSym "(" then
       ofExcept <| EffectPolicy.checkName t.pos pre
@@ -2038,7 +2058,7 @@ partial def parseTopsIn (col : Nat) (pfx : String) (braced : Bool := false) : PM
         perr n s!"a constant cannot have the effect specifier <{e}>: it has the effects of its initialiser"
     if n.isSym "(" then
       bump
-      let (ps, tps, binds) ← parseParamList
+      let (ps, tps, binds) ← parseParamList (if ofParams then "}" else ")")
       if ext.isSome && (pre.contains "constructor" || (← peekT).isSym ":=") then
         perr (← peekT) "an extension method is a function, (R:t).M(…)<effects>:type = body (Book of Verse ch. 6)"
       -- (an extension method's receiver, then its parameters)
