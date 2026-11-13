@@ -350,7 +350,7 @@ partial def elabBranch (ctx : Ctx) (p : Pos) (body : SExpr) : EM R := do
   let r ← elabE armCtx body none
   modify fun st => { st with pendingSourceSuspends := sourceBefore }
   noteBackgroundCaptures ctx (Suspend.slotsOf r.e)
-  return ⟨.call mark.idx [.prim .mkArr [.seq (← inferable r) (.lit .void)]], .void⟩
+  return ⟨.call mark.idx [.prim .mkArr [← discardValue r]], .void⟩
 
 partial def elabDefersCore (ctx : Ctx) (ds : List (SExpr × List Local)) : EM Expr := do
   let mut acc : Expr := .lit .void

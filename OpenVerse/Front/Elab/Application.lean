@@ -277,7 +277,7 @@ partial def elabAppBaseWith
         let r := widenR ctx.types (← elabPrintableValueWith elabE ctx p (← elabE ctx a none))
         match r.ty with
         | .int | .char | .char32 | .float | .arr .char => return ⟨.print (← toStringOf p r), .void⟩
-        | _ => return ⟨.seq (← inferable r) (.lit .void), .void⟩
+        | _ => return ⟨← discardValue r, .void⟩
       | _ => eerr p "internal: $Show"
     | _ =>
       -- `Sleep` (#156): the concurrency helpers' unless the program has its own

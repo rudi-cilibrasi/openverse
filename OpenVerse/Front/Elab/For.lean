@@ -445,7 +445,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
           let (f, a, t) ← exclIter c (cl.takeWhile (!isGen ·)) (groups (cl.dropWhile (!isGen ·))) pb transfer
           if !flat || stagePlan.isSome then return (f, a, t)
           match t with
-          | .arr t' => return (f, .prim .flatten [← inferable ⟨a, .arr t⟩], t')
+          | .arr t' => return (f, ← flattenValues ⟨a, .arr t⟩, t')
           | _ => eerr gp "internal: a continuation's values"
         let runPath := runPathIn cA
         -- (#335, phase 2b: another such choice, or an exclusive one, in the
@@ -601,7 +601,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
                             pure (⟨← coerce gp r ty, ty⟩ : R)
                           else pure r
                         let .arr (.arr t) := r.ty | eerr gp "internal: a staged continuation's values"
-                        parts := parts ++ [⟨.prim .flatten [← inferable r], .arr t⟩]
+                        parts := parts ++ [⟨← flattenValues r, .arr t⟩]
                       let some first := parts.head? | eerr gp "internal: a choice without alternatives"
                       return ⟨parts.tail.foldl (fun acc r => p2 .concat acc r.e) first.e, first.ty⟩
           -- Failable bodies return outcomes so failure stops the entire
@@ -625,7 +625,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
                   let vals : SExpr := if bodyFail then .app gp (.ident gp "$forOutcomeValues") [.ident gp kv] false else .ident gp kv
                   let r ← forW (liftA a i ++ (l.casePrelude[i]?.getD []) ++ callCl) vals
                   match r.ty with
-                  | .arr (.arr t) => parts := parts ++ [⟨.prim .flatten [← inferable r], .arr t⟩]
+                  | .arr (.arr t) => parts := parts ++ [⟨← flattenValues r, .arr t⟩]
                   | _ => eerr gp "internal: a continuation's values"
                 let some r0 := parts.head? | eerr gp "internal: a choice without alternatives"
                 return ⟨parts.tail.foldl (fun acc r => p2 .concat acc r.e) r0.e, r0.ty⟩
@@ -723,7 +723,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
             let bindX ← coerce gp ⟨lg.value, lg.vty⟩ ty
             let one ← fresh .void
             let iter := Expr.forE one (.lit (.arr #[.tup []])) (.seq (.assign xs bindX) filtE) arr
-            pure (Expr.prim .flatten [← inferable ⟨iter, .arr (.arr ety)⟩], ety, true)
+            pure (← flattenValues ⟨iter, .arr (.arr ety)⟩, ety, true)
           else do
             let (filt, c2) ← elabFilters c1 fs
             let bindX ← coerce gp ⟨lg.value, lg.vty⟩ ty
@@ -853,7 +853,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
           | .lit _ => filtE
           | e => .seq e filtE
         if peel then return ⟨.seq filt arr, .arr ety⟩
-        return ⟨.prim .flatten [← inferable ⟨Expr.forE slot src filt arr, .arr (.arr ety)⟩], .arr ety⟩
+        return ⟨← flattenValues ⟨Expr.forE slot src filt arr, .arr (.arr ety)⟩, .arr ety⟩
       let (filt, c2) ← elabFilters c1 fs
       let filt := if fs.isEmpty then pre else
         match pre with
@@ -865,7 +865,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
       | [] => return ⟨loopE, .arr inner.ty⟩
       | _ =>
         match inner.ty with
-        | .arr t => return ⟨.prim .flatten [← inferable ⟨loopE, .arr inner.ty⟩], .arr t⟩
+        | .arr t => return ⟨← flattenValues ⟨loopE, .arr inner.ty⟩, .arr t⟩
         | _ => eerr p "internal: nested for"
   match pre with
   | [] =>
@@ -895,7 +895,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
       | .arr t =>
         if firstDecides then return ⟨.seq filt inner.e, .arr t⟩
         let iter := Expr.forE slot (.lit (.arr #[.tup []])) filt inner.e
-        return ⟨.prim .flatten [← inferable ⟨iter, .arr inner.ty⟩], .arr t⟩
+        return ⟨← flattenValues ⟨iter, .arr inner.ty⟩, .arr t⟩
       | _ => eerr p "internal: nested for"
 
 end OpenVerse.Front

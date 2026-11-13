@@ -1688,6 +1688,12 @@ def inferable (r : R) : EM Expr := do
   if !r.e.untyped || r.e.noValue then return r.e
   return .assign (← fresh r.ty) r.e
 
+/-- `r` run for its effects, its value dropped: `void`. -/
+def discardValue (r : R) : EM Expr := return .seq (← inferable r) (.lit .void)
+
+/-- The values of `r`, an array of arrays, in one array. -/
+def flattenValues (r : R) : EM Expr := return .prim .flatten [← inferable r]
+
 /-- Convert a value `e` of type `a` to the supertype `b`, when `a` is a class
     below the class or interface `b`, or an array or option of such (arrays
     and options are covariant): the options of the classes below `a` move to
@@ -1725,7 +1731,7 @@ partial def convert (env : TyEnv) (e : Expr) (a b : Ty) : EM (Option Expr) := do
   -- `int` is a subtype of `rational` (#116): `X` is `X / 1`
   | .int, .rational => return some (.prim .mkTup [e, .lit (.int 1)])
   -- Every value can be erased or discarded, including within containers (#138).
-  | _, .any | _, .void => return some (.seq (← inferable ⟨e, a⟩) (.lit .void))
+  | _, .any | _, .void => return some (← discardValue ⟨e, a⟩)
   -- a refinement is its base (#136); the base is the refinement only for a
   -- literal that meets its conditions (else a cast, `age[X]`)
   -- (a refinement within another's interval is one of it, #143)
@@ -1843,7 +1849,7 @@ def coerce (p : Pos) (r : R) (target : Ty) : EM Expr := do
     let x ← modifyGet fun s => (s.nslots, { s with nslots := s.nslots + 1, slotTys := s.slotTys.push target })
     return .assign x (.seq r.e (.prim .userErr []))
   if r.ty == target || r.ty == .never then return r.e
-  if target == .void then return .seq (← inferable r) (.lit .void)
+  if target == .void then return ← discardValue r
   match ← convert (← get).env r.e r.ty target with
   | some e =>
     -- a typed temporary: the checker cannot infer the type of an empty option
