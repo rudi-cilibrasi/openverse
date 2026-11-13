@@ -30,4 +30,11 @@ v 21
 each 1 2 10
 each 1 2 20
 taken 21
+fails 3
+v 3
+v 30
+fails 1
+fails 0
+taken 10
+none
 exit=0

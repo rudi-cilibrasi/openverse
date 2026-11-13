@@ -186,6 +186,10 @@ class Fail(Exception):
     pass
 
 
+class ForBodyFail(Exception):
+    """(#283) a for's body failed: the for fails, not only that iteration."""
+
+
 # (a path that prints over OUT_MAX lines, a model that takes over EV_MAX steps, or one that
 # copies over WORK_MAX entries with its states (each choice point copies the path's output):
 # the program would print more than the driver's 12000 lines, or the model would run for
@@ -569,7 +573,8 @@ RLIFT = random.Random(seed * 1000003 + 283292)
 # Gz[N - 1, a] > k) then x else y)`; or's left, `Wn := (Gz[N - 1, a] > k or x)`; option{},
 # `Wn := (option{Gz[N - 1, a] > k}? or x)`; in a <decides> one, not and logic{} as clauses,
 # `not (Gz[N - 1, a] > k)`, `logic{Gz[N - 1, a] > k}?`; and a for over its values that sets a var
-# of the generator, `for (N > lo, Xn := Gz[N - 1, a]) { set Vn += Xn }`. Its place: the code after
+# of the generator, `for (N > lo, Xn := Gz[N - 1, a]) { set Vn += Xn }`, in a <decides> one at times
+# with a body that may fail, `{ set Vn += Xn; Xn < k }`, which fails the for. Its place: the code after
 # the generator's bound choice (a <decides> one's), or after the choice bound in its else's block,
 # whose value then reads the result, with that choice's name at times in the call; or its clauses,
 # before its choice, guarded by N so that its calls end (an if with a print in each branch, or a
@@ -1332,7 +1337,10 @@ def nested_shapes(f, i, sc, ctr, stmts):
         st = ('sclause', ('logic', [('filter', test)]))
     else:
         stmts.append(('svar', vn, ('lit', RNEST.randint(0, 3))))
-        st = ('sfor', guard + [('bind', xn, call)], ('ref', vn), sqfresh() if RNEST.random() < 0.6 else None)
+        pr = sqfresh() if RNEST.random() < 0.6 else None
+        # (a body that may fail, which fails the for and so the generator's value: a <decides> one's)
+        lim = RNEST.randint(1, 6) if f['decides'] and RNEST.random() < 0.4 else None
+        st = ('sfor', guard + [('bind', xn, call)], ('ref', vn), pr, lim)
     st = ('snest', kind, st)
     if where == 'clauses':
         stmts.append(st)
@@ -2532,17 +2540,22 @@ def run_body(stmts, val, st, k, mode):
     if t == 'sclause':
         return run_clauses([c[1]], st, nxt, mode)
     if t == 'sfor':
-        # (all the values its clauses give, what each iteration does kept, as any for's)
+        # (all the values its clauses give, what each iteration does kept, as any for's; a body
+        # that fails fails the for, LANGUAGE.md's reading, so the code it is in)
         def kfor(s):
             x = c[1][-1][1]
             o = c[2][1]
             s.vars[o] = chks(s.vars[o] + s.binds[x], s)
             if c[3]:
                 s.out.append(c[3])
+            if c[4] is not None and not s.binds[x] < c[4]:
+                raise ForBodyFail()
             return s
         s0 = st.copy()
         try:
             st = run_clauses(c[1], s0, kfor, 'all')
+        except ForBodyFail:
+            raise Fail()
         except Fail:
             pass
         return nxt(st)
@@ -2716,7 +2729,8 @@ def show_s(c):
     if t == 'sclause':
         return show_c(c[1])
     if t == 'sfor':
-        body = f"set {c[2][1]} += {c[1][-1][1]}" + (f'; Print("{c[3]}")' if c[3] else "")
+        body = (f"set {c[2][1]} += {c[1][-1][1]}" + (f'; Print("{c[3]}")' if c[3] else "") +
+                (f"; {c[1][-1][1]} < {c[4]}" if c[4] is not None else ""))
         return f"for ({show_cl(c[1], ', ')}) {{ {body} }}"
     raise AssertionError(c)
 

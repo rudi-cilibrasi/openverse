@@ -973,7 +973,9 @@ consumer like any other instead, in a function of its own:
   bind (an operand's value bound to a name, `valueOf`), or the `for`, giving
   its value; then the final values of the group's `var`s they set, copied in
   as `$in` parameters as `FirstLift`'s are. It has the group's effects,
-  `<decides>` for a condition's and not for a `for`'s. The group's code calls
+  `<decides>` for a condition's, and for a `for`'s when the `for` can fail
+  (its body fails it), which the noting elaboration notes too
+  (`$noteFails`). The group's code calls
   it where the consumer was, a plain call, binds those names from its result
   and sets those `var`s again. A `for` with such a call anywhere in it moves
   whole, so a condition in its body with one moves with it.

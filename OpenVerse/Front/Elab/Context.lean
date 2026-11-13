@@ -456,7 +456,8 @@ structure Requests where
   /-- (#283) For each consumer in a recursive group's code of a call of a
       function with several values, the types of the names it takes from
       that code and gives it (`Choice.nestKey`), which its function of its
-      own (`Choice.nestFns`) is made with. -/
+      own (`Choice.nestFns`) is made with; and for a `for` that can fail,
+      `$fails`. -/
   nested : List (String × STy) := []
   /-- Functions wanted as values at closed function types no class of
       theirs gives (#214): a class for each. -/

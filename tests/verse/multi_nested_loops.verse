@@ -2,8 +2,9 @@
 # function's own code is a consumer like any other: it takes all the call's
 # values while the outer call's are being taken, the call's code taking its
 # own in turn, and keeps what each iteration does. Its value may be used, its
-# body may set the function's vars, and a condition in a for's body that
-# takes the call's first success moves with it.
+# body may set the function's vars or fail (which fails the for, as
+# anywhere), and a condition in a for's body that takes the call's first
+# success moves with it.
 Sum(N:int)<transacts>:int =
     if (N <= 0) then 1 else:
         var S:int = 0
@@ -31,6 +32,11 @@ Each(N:int)<transacts><decides>:int =
     X := 1 | 2
     for (Y := Each[N - 1]) { Print("each {N} {X} {Y}") }
     X * 10 + N
+Fails(N:int)<transacts><decides>:int =
+    Print("fails {N}")
+    if (N <= 0) then (1 | 2) else:
+        for (Y := Fails[N - 1]) { Y < 3 * N }
+        N | N * 10
 Main()<transacts>:void =
     for (V := Sum(2)) { Print("v {V}") }
     if (V := Sum(2), V > 3) then Print("taken {V}")
@@ -41,3 +47,6 @@ Main()<transacts>:void =
     for (V := Pure(2)) { Print("v {V}") }
     for (V := Each[1]) { Print("v {V}") }
     if (V := Each[1], V > 15) then Print("taken {V}")
+    for (V := Fails[3]) { Print("v {V}") }
+    if (V := Fails[1], V > 5) then Print("taken {V}")
+    if (V := Fails[2]) then Print("taken {V}") else Print("none")

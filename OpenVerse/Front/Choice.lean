@@ -3519,7 +3519,8 @@ def Consumer.caps (c : Consumer) (f : MFn) : List String :=
     `FirstLift`'s are) and `true`. It takes the names it uses from the
     function's code, at the types an earlier elaboration noted (`ty`), and
     the function's type parameters they mention; its effects are the
-    function's. -/
+    function's, `<decides>` for a condition's, and for a `for`'s when that
+    elaboration found the `for` can fail (a body that fails fails it). -/
 def nestFns (g : String) (f : MFn) (has : SExpr → Bool) (ty : Pos → String → Option STy) :
     Except String (SExpr × List STop) := do
   let isVar (e : SExpr) (n : String) : Bool := anyE (fun | .decl _ x _ true _ => x == n | _ => false) e
@@ -3543,7 +3544,8 @@ def nestFns (g : String) (f : MFn) (has : SExpr → Bool) (ty : Pos → String �
     let tup := SExpr.tuple p ((c.outs ++ sets).map (SExpr.ident p ·) ++ [.ident p "true"])
     let body := SExpr.block p (copies ++
       if c.first then [.app p (.ident p "$first") [.block p (c.code ++ [tup])] false] else c.code ++ [tup])
-    let fx := f.fx.filter (· != "decides") ++ (if c.first then ["decides"] else [])
+    let decides := c.first || (ty p "$fails").isSome
+    let fx := f.fx.filter (· != "decides") ++ (if decides then ["decides"] else [])
     modify (· ++ [.fn p name params tps fx (.tup (outTys ++ setTys ++ [.name "logic"])) body])
     -- (where it was: the call, then what it gives, the `var`s set again)
     let n := s!"$nest{p.line}_{p.col}n"
@@ -3552,7 +3554,7 @@ def nestFns (g : String) (f : MFn) (has : SExpr → Bool) (ty : Pos → String �
       let v := c.code.any (isVar · o)
       SExpr.decl p o (if v then some t else none) v (field i)
     let back := sets.zipIdx.map fun (s, j) => SExpr.set p (.ident p s) none (field (c.outs.length + j))
-    let call := SExpr.app p (.ident p name) (caps.map (SExpr.ident p ·)) c.first
+    let call := SExpr.app p (.ident p name) (caps.map (SExpr.ident p ·)) decides
     return [.decl p n none false call] ++ outs ++ back ++ (if c.conds then [] else c.outs.map (SExpr.ident p ·))
   let (body, fns) ← (mapConsumersM has rw f.body).run []
   return (body, fns)
@@ -3561,12 +3563,15 @@ def nestFns (g : String) (f : MFn) (has : SExpr → Bool) (ty : Pos → String �
     yet, for checking only: as `checkBody`, with each consumer noting the
     types of the names it takes and gives (`$noteTypes`, where they are all
     in scope: after an `if`'s conditions, or after the operand's or the
-    `for`'s value is bound). -/
+    `for`'s value is bound), and a `for` whether it can fail (`$noteFails`). -/
 def noteConsumers (f : MFn) (has : SExpr → Bool) : SExpr :=
   let note (c : Consumer) : Id (List SExpr) :=
-    let mark := SExpr.app c.pos (.ident c.pos "$noteTypes")
-      (.str c.pos [.text (nestKey c.pos "")] :: (c.caps f ++ c.outs).map (SExpr.ident c.pos ·)) false
-    if c.conds then c.code ++ [mark] else c.code ++ [mark] ++ c.outs.map (SExpr.ident c.pos ·)
+    let key := SExpr.str c.pos [.text (nestKey c.pos "")]
+    let mark := SExpr.app c.pos (.ident c.pos "$noteTypes") (key :: (c.caps f ++ c.outs).map (SExpr.ident c.pos ·)) false
+    let code := if c.first then c.code else c.code.map fun
+      | .decl q v t b e => .decl q v t b (.app q (.ident q "$noteFails") [key, e] false)
+      | x => x
+    if c.conds then code ++ [mark] else code ++ [mark] ++ c.outs.map (SExpr.ident c.pos ·)
   checkBody (Id.run (mapConsumersM has note f.body))
 
 /-- What `inlineMulti` gives: the program with the functions that have
