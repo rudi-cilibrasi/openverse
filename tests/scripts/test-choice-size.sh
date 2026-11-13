@@ -315,23 +315,6 @@ kinds=(
   context-method-nested-dispatch
   castclause-condition
   castclause-decides
-  clause-break-composed
-  clause-break-exclusive
-  clause-break-refined
-  clause-return-composed
-  clause-return-exclusive
-  clause-return-refined
-  first-break-composed
-  first-break-exclusive
-  first-break-lazy
-  first-break-refined
-  block-exits-first-composed
-  block-exits-first-exclusive
-  block-exits-first-lazy
-  block-exits-first-refined
-  block-exits-for-composed
-  block-exits-for-exclusive
-  block-exits-for-refined
   composed
   construct-failure
   construct-first
@@ -473,13 +456,6 @@ kinds=(
   heterogeneous-fields-waiting
   immediate-event-refined
   immediate-spawn-refined
-  first-return-composed
-  first-return-generic
-  first-return-independent
-  first-return-lazy
-  first-return-mutual
-  first-return-refined
-  first-return-void
   immediate-suspends-composed
   immediate-suspends-exclusive
   immediate-suspends-nested
@@ -1381,29 +1357,6 @@ if kind.startswith('context-refining-'):
     suspends = '<suspends>' if context in ['sync','race','rush','branch'] else ''
     print(f'Main(){suspends}:void={body}')
     sys.exit(0)
-if kind.startswith('first-return-'):
-    print('pair(a:type,b:type):=class{A:a;B:b}\ndup(t:type):=class(pair(t,t)){C:int=4}')
-    print('cell:=class{var N:int=0}')
-    target = 'Other' if kind.endswith('mutual') else 'Lazy'
-    print(f'Lazy(H:cell,N:int)<transacts><decides>:int=\n    N>=0\n    set H.N+=1\n    N|{target}[H,N-1]')
-    if kind.endswith('mutual'):
-        print('Other(H:cell,N:int)<transacts><decides>:int=\n    N>=0\n    set H.N+=1\n    N|Lazy[H,N-1]')
-    independent = kind.endswith('independent')
-    params = ','.join(f'P{i}:pair(a{i},b{i})' for i in range(count)) if independent else 'P:pair(a,b)'
-    types = ','.join(f'a{i}:type,b{i}:type' for i in range(count)) if independent else 'a:type,b:type'
-    values = [f'if(D{i}:=dup[P{i}])then(D{i}.C|D{i}.C+1)else 0' for i in range(count)] if independent else ['if(D:=dup[P])then(D.C|D.C+1)else 0']*count
-    if kind.endswith(('composed','generic','void')): values = ['(Two(0)|Two(2))']*count
-    if kind.endswith(('lazy','mutual')): values = ['Lazy[H,3]']*count
-    clauses = ','.join(f'A{i}:={value}' for i,value in enumerate(values))
-    generic, void = kind.endswith('generic'), kind.endswith('void')
-    ret, result = ('[]t','array{}') if generic else ('void','') if void else ('t','X')
-    clauses += ',set H.N+=1,set Total+=1,if(Total>0)then return '+result+' else 0'
-    final = 'array{X}' if generic else '{}' if void else 'X'
-    print(f'Run({params},X:t where {types},t:type)<transacts>:{ret}=\n    H:=cell{{}}\n    var Total:int=0\n    defer:Print("source {{Total}} {{H.N}}")\n    if({clauses}):Print("normal")\n    {final}')
-    args = ','.join('dup(int){A:=1,B:=2}' if i%2==0 else 'dup(string){A:="s",B:="t"}' for i in range(count)) if independent else 'dup(int){A:=1,B:=2}'
-    call = f'Run({args},7)' + ('.Length' if generic else '')
-    print(f'Main():void={call}' if void else f'Main():void=Print("{{{call}}}")')
-    sys.exit(0)
 if kind in ('context-method-nested', 'context-method-nested-dispatch'):
     print('''box:=class:
     Same(X:t where t:type)<computes>:t=X
@@ -1783,75 +1736,6 @@ if kind.startswith('waiting-refined'):
     print('    -1' if returning else '    Print("rows {R.Length}' + (' {Total}' if state else '') + '")')
     print(f'Main()<suspends>:void = ' + (f'Print("{{Run({args})}}")' if returning else f'Run({args})'))
     raise SystemExit
-if kind.startswith('clause-break-'):
-    print('pair(a:type,b:type) := class { A:a; B:b }')
-    print('dup(t:type) := class(pair(t,t)) { C:int=4 }')
-    print('Early(N:int):int =\n    if(N<0):return 0\n    N|N+1')
-    params = ','.join(f'P{i}:pair(a{i},b{i})' for i in range(count))
-    tparams = ','.join(f'a{i}:type,b{i}:type' for i in range(count))
-    values = [f'if(D{i}:=dup[P{i}])then(D{i}.C|D{i}.C+1)else 0' for i in range(count)]
-    generic = kind.endswith('refined')
-    if kind.endswith('composed'): values = ['(Two(0)|Two(2))'] * count
-    if kind.endswith('exclusive'): values = ['Early(0)'] * count
-    clauses = [f'A{i}:={v}' for i,v in enumerate(values)]
-    ret_ty, result, selected = ('a0', 'P0.A', 5) if generic else ('int', 'Total', 1)
-    clauses[1:1] = ['set Total+=A0', f'if(A0={selected})then break else 0']
-    print(f'Run({params} where {tparams})<suspends>:{ret_ty} =\n    var Total:int=0\n    defer:Print("source {{Total}}")\n    Sleep(0.0)\n    loop:\n        defer:Print("loop {{Total}}")\n        R:=for({",".join(clauses)}):\n            set Total+=1\n            A0\n        Print("rows {{R.Length}}")\n        break\n    Sleep(0.1)\n    {result}')
-    args = ','.join('dup(int){A:=1,B:=2}' if i%2==0 else 'dup(string){A:="s",B:="t"}' for i in range(count))
-    print(f'Main()<suspends>:void = Print("{{Run({args})}}")')
-    sys.exit(0)
-if kind.startswith('first-break-'):
-    # (#283) a break in an if's clauses, after the first of its choices: the
-    # clauses after a composed one are compiled once (#335), and so are an
-    # effectful lazy generator's (#246), each giving the break back
-    print('pair(a:type,b:type) := class { A:a; B:b }')
-    print('dup(t:type) := class(pair(t,t)) { C:int=4 }')
-    print('cell := class { var N:int=0 }')
-    print('Early(N:int):int =\n    if(N<0):return 0\n    N|N+1')
-    print('Lazy(H:cell,N:int)<transacts><decides>:int =\n    N>=0\n    set H.N+=1\n    N|Lazy[H,N-1]')
-    params = ','.join(f'P{i}:pair(a{i},b{i})' for i in range(count))
-    tparams = ','.join(f'a{i}:type,b{i}:type' for i in range(count))
-    shape = kind[len('first-break-'):]
-    values = {'composed': ['(Two(0)|Two(2))'] * count, 'exclusive': ['Early(0)'] * count,
-              'lazy': ['Lazy[H,1]'] * count}.get(shape,
-              [f'if(D{i}:=dup[P{i}])then(D{i}.C|D{i}.C+1)else 0' for i in range(count)])
-    clauses = [f'A{i}:={v}' for i, v in enumerate(values)]
-    clauses[1:1] = ['set Total+=A0', f'if(A0={5 if shape == "refined" else 1})then break else 0']
-    clauses.append('A0+A1<0')
-    print(f'Run(H:cell,{params} where {tparams})<suspends>:int =\n    var Total:int=0\n    defer:Print("source {{Total}}")\n    Sleep(0.0)\n    loop:\n        defer:Print("loop {{Total}}")\n        if({",".join(clauses)}):\n            Print("bad")\n        Print("bad suffix")\n        break\n    Total')
-    args = ','.join('dup(int){A:=1,B:=2}' if i%2==0 else 'dup(string){A:="s",B:="t"}' for i in range(count))
-    print(f'Main()<suspends>:void = Print("{{Run(cell{{}},{args})}}")')
-    sys.exit(0)
-if kind.startswith('block-exits-'):
-    # (#283) a block with choices and a defer: of its own, lifted into an
-    # if's condition or a for's clauses, with a break after each choice and a
-    # return at the end: each exit runs the block's cleanup, placed once for
-    # each exit, however many paths reach it
-    print('pair(a:type,b:type) := class { A:a; B:b }')
-    print('dup(t:type) := class(pair(t,t)) { C:int=4 }')
-    print('cell := class { var N:int=0 }')
-    print('Early(N:int):int =\n    if(N<0):return 0\n    N|N+1')
-    print('Lazy(H:cell,N:int)<transacts><decides>:int =\n    N>=0\n    set H.N+=1\n    N|Lazy[H,N-1]')
-    params = ','.join(f'P{i}:pair(a{i},b{i})' for i in range(count))
-    tparams = ','.join(f'a{i}:type,b{i}:type' for i in range(count))
-    consumer, shape = kind[len('block-exits-'):].split('-')
-    values = {'composed': ['(Two(0)|Two(2))'] * count, 'exclusive': ['Early(0)'] * count,
-              'lazy': ['Lazy[H,1]'] * count}.get(shape,
-              [f'if(D{i}:=dup[P{i}])then(D{i}.C|D{i}.C+1)else 0' for i in range(count)])
-    selected = 5 if shape == 'refined' else 1
-    stmts = ['defer:Print("block {Total}")']
-    for i, v in enumerate(values):
-        stmts += [f'A{i}:={v}', f'set Total+=A{i}', f'if(A{i}={selected if i == 0 else 9})then break else 0']
-    stmts += ['if(A1=9)then return -1 else 0', 'A0+A1<0']
-    block = 'block{' + ';'.join(stmts) + '}'
-    if consumer == 'first':
-        use = f'if(Z:={block}):\n            Print("bad")\n        Print("bad suffix")'
-    else:
-        use = f'R:=for(Z:={block}):\n            set Total+=1\n            Z\n        Print("rows {{R.Length}}")'
-    print(f'Run(H:cell,{params} where {tparams})<suspends>:int =\n    var Total:int=0\n    defer:Print("source {{Total}}")\n    Sleep(0.0)\n    loop:\n        defer:Print("loop {{Total}}")\n        {use}\n        break\n    Total')
-    args = ','.join('dup(int){A:=1,B:=2}' if i%2==0 else 'dup(string){A:="s",B:="t"}' for i in range(count))
-    print(f'Main()<suspends>:void = Print("{{Run(cell{{}},{args})}}")')
-    sys.exit(0)
 if kind.startswith('return-defer-'):
     method = kind.endswith('method-first')
     if method:
@@ -1943,23 +1827,6 @@ if kind.startswith('spawn-default-'):
     print(f'    Run<override>(P:pair(c,d),?N:int=Seed where c:type,d:type)<suspends>:int=\n        var Total:int=0\n        for({clauses}):set Total+=1\n        Sleep(0.0)\n        N+Total')
     print(f'Start(P:{root}(t),X:pair(a,b) where t:type,a:type,b:type):task(int)=spawn{{P.Run(X)}}')
     print(f'Main()<suspends>:void=\n    T:=Start({instance},dup(int){{A:=1,B:=2}})\n    Print("{{T.Await()}}")')
-    sys.exit(0)
-if kind.startswith('clause-return-'):
-    print('pair(a:type,b:type) := class { A:a; B:b }')
-    print('dup(t:type) := class(pair(t,t)) { C:int=4 }')
-    print('Early(N:int):int =\n    if(N<0):return 0\n    N|N+1')
-    params = ','.join(f'P{i}:pair(a{i},b{i})' for i in range(count))
-    tparams = ','.join(f'a{i}:type,b{i}:type' for i in range(count))
-    values = [f'if(D{i}:=dup[P{i}])then(D{i}.C|D{i}.C+1)else 0' for i in range(count)]
-    generic = kind.endswith('refined')
-    if kind.endswith('composed'): values = ['(Two(0)|Two(2))'] * count
-    if kind.endswith('exclusive'): values = ['Early(0)'] * count
-    clauses = [f'A{i}:={v}' for i,v in enumerate(values)]
-    ret_ty, result, selected = ('a0', 'P0.A', 5) if generic else ('int', 'Total', 1)
-    clauses[1:1] = ['set Total+=A0', f'if(A0={selected})then return {result} else 0']
-    print(f'Run({params} where {tparams})<suspends>:{ret_ty} =\n    var Total:int=0\n    defer:Print("source {{Total}}")\n    Sleep(0.0)\n    R:=for({",".join(clauses)}):\n        set Total+=1\n        A0\n    Sleep(0.1)\n    {result}')
-    args = ','.join('dup(int){A:=1,B:=2}' if i%2==0 else 'dup(string){A:="s",B:="t"}' for i in range(count))
-    print(f'Main()<suspends>:void = Print("{{Run({args})}}")')
     sys.exit(0)
 if kind.startswith('outer-effect-'):
     print('pair(a:type,b:type) := class { A:a; B:b }')
@@ -2316,24 +2183,6 @@ PY
       fi
       exit 1
     }
-    if [[ $kind == first-break-* && $count == 4 ]]; then
-      selected=1
-      [[ $kind == first-break-refined ]] && selected=5
-      printf 'loop %s\nsource %s\n%s\n' "$selected" "$selected" "$selected" >"$tmp/expected"
-      timeout "$limit" "$root/.lake/build/bin/openverse" run "$tmp/p.verse" >"$tmp/lean.out"
-      timeout "$limit" "$root/runtime/build/cverse" "$tmp/p.vbc" >"$tmp/c.out"
-      diff -u "$tmp/expected" "$tmp/lean.out"
-      diff -u "$tmp/expected" "$tmp/c.out"
-    fi
-    if [[ $kind == block-exits-first-* && $count == 4 ]]; then
-      selected=1
-      [[ $kind == *-refined ]] && selected=5
-      printf 'block %s\nloop %s\nsource %s\n%s\n' "$selected" "$selected" "$selected" "$selected" >"$tmp/expected"
-      timeout "$limit" "$root/.lake/build/bin/openverse" run "$tmp/p.verse" >"$tmp/lean.out"
-      timeout "$limit" "$root/runtime/build/cverse" "$tmp/p.vbc" >"$tmp/c.out"
-      diff -u "$tmp/expected" "$tmp/lean.out"
-      diff -u "$tmp/expected" "$tmp/c.out"
-    fi
     if [[ $kind == castclause-* && $count == 4 ]]; then
       printf '%s\n' "16 4" >"$tmp/expected"
       timeout "$limit" "$root/.lake/build/bin/openverse" run "$tmp/p.verse" "${compat[@]}" >"$tmp/lean.out"

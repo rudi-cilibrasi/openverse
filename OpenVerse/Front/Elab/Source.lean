@@ -436,13 +436,81 @@ partial def checkNestedReturns (tops : List STop) : Except String Unit := do
     | .fn .. => fn t
     | .classDef _ _ _ _ _ _ _ _ ms => ms.forM fn
     | _ => pure ()
+/-- A `return` or a `break` does not leave a failure context (the Book of
+    Verse: `FlowControl/Reachability.versetest:12`, "Explicit return out of a
+    failure context is not allowed", error 3535;
+    `Bugs/SOL-4199-BreakFromIf.versetest`, "`break` is not allowed in an `if`
+    condition", nor in a `for` domain, `option`, `logic`, `not` or the left of
+    `or`, error 3658; ch. 7, `07_control.md:530`: `break` "must appear in a code
+    block, not as part of a complex expression"). A `return` is refused with a
+    failure context between it and its function's body: an `if`'s conditions,
+    a `for`'s clauses (its body is none: a `for`'s body may return,
+    `Return.versetest:152`), the clauses of `first`, `option{…}`,
+    `logic{…}`, the operand of `not` and the left of `or`; and in a
+    `<decides>` function, whose body is a failure context, anywhere but in
+    tail position (`Return.versetest` 157-163, "Explicit return can only
+    occur in failure contexts in a tail position"): the body's last
+    expression, the last of a block in tail position, both branches of an
+    `if` with an `else` in tail position, a `case`'s arms, the right of
+    `and` and `or`, a `return`'s value. A `break` is refused with such a
+    context between it and its loop (a `for`'s body is none,
+    `SOL-4199-BreakFromIf.versetest:38`). -/
+partial def checkJumps (tops : List STop) : Except String Unit := do
+  let contexts := "an if's conditions, a for's clauses, first, option{…}, logic{…}, not or the left of or"
+  -- (`fn`: a failure context since the function's body; `lp`: since the
+  -- innermost loop; `tail`: in tail position, where the function is
+  -- `<decides>`, `dec`)
+  let rec go (dec fn lp tail : Bool) (e : SExpr) : Except String Unit := do
+    let sub := go dec fn lp false
+    let ctx := go dec true true false
+    match e with
+    | .ret p v =>
+      if fn then
+        throw s!"{p.show}: return cannot leave a failure context ({contexts}): what the context did would not be undone (the Book of Verse's tests, Reachability.versetest:12, SOL-4199-BreakFromIf.versetest:87)"
+      if dec && !tail then
+        throw s!"{p.show}: a return in a <decides> function must be in tail position (the last expression of its body, or a branch of one), as its body is a failure context (the Book of Verse's tests, Return.versetest:157)"
+      v.forM (go dec fn lp true)
+    | .brk p =>
+      if lp then
+        throw s!"{p.show}: break cannot leave a failure context ({contexts}) for its loop (the Book of Verse's tests, SOL-4199-BreakFromIf.versetest)"
+    | .block _ es =>
+      let n := es.length
+      for (x, i) in es.zipIdx do go dec fn lp (tail && i + 1 == n) x
+    | .ite _ cs t u => do
+      cs.forM ctx
+      go dec fn lp (tail && u.isSome) t
+      u.forM (go dec fn lp tail)
+    | .forE _ cs b => do cs.forM ctx; sub b
+    | .loop _ b => go dec fn false false b
+    | .caseE _ sc arms => do
+      sub sc
+      for (pt, v) in arms do
+        pt.forM sub
+        go dec fn lp tail v
+    | .notE _ x | .optionLit _ x | .logicLit _ x => ctx x
+    | .orE _ a b => do ctx a; go dec fn lp tail b
+    | .andE _ a b => do sub a; go dec fn lp tail b
+    | .app _ (.ident _ "$first") args _ => args.forM ctx
+    | e => e.children.forM sub
+  let isDecides (effs : List String) : Bool := effs.contains "decides"
+  let rec goTop : STop → Except String Unit
+    | .fn _ _ ps _ effs _ body => do
+      ps.forM (·.default.forM (go false false false false))
+      go (isDecides effs) false false true body
+    | .const _ _ _ _ (.structDef _ _ _ fs) => fs.forM fun f => f.default.forM (go false false false false)
+    | .const _ _ _ _ e => go false false false false e
+    | .classDef _ _ _ _ _ _ _ fs ms => do
+      fs.forM fun f => f.default.forM (go false false false false)
+      ms.forM goTop
+  tops.forM goTop
 
 /-- Source admission and the prelude, the first phase of `elabProgramCore`:
     the source and the entry expression are admitted by the effect policy and
     the source profile; the program's own types do not take built-in names,
     no definition takes a reserved one (`checkReservedNames`), each name is
     defined once in its scope (`checkDefinedOnce`), and its
-    constants and field defaults have no `return` (`checkReturns`);
+    constants and field defaults have no `return` (`checkReturns`), and no
+    `return` or `break` leaves a failure context (`checkJumps`);
     modules are resolved (#112), and no constant depends on itself
     (`checkConstantCycles`); and the helpers the program needs are added,
     those the source names alike kept apart from them (#210). -/
@@ -469,6 +537,7 @@ def admitSource (allTops0r : List STop) (opts : Options) : Except String Admitte
   checkDefinedOnce allTops0r
   let scopePairs ← checkNoShadowing allTops0r
   checkReturns allTops0r
+  checkJumps allTops0r
   checkNestedReturns allTops0r
   checkSpawnExits allTops0r
   checkProfiles allTops0r

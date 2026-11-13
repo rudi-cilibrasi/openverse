@@ -6,7 +6,10 @@ Pick(X:t where t:type)<transacts>:t=
     var Total:int=0
     defer:
         for(A:=(Two(0)|Two(2)),A=0,B:=(Two(0)|Two(2)),B=0):E.Signal(Total)
-    if(A:=(Two(0)|Two(2)),B:=(Two(0)|Two(2)),set Total+=1,if(Total>0)then return X else 0,After:[]t=Concatenate()):
+    if(A:=(Two(0)|Two(2)),B:=(Two(0)|Two(2)),set Total+=1,After:[]t=Concatenate()):
+        # (the return in the branch: a return cannot leave the condition, a
+        # failure context, the Book of Verse's tests, Reachability.versetest:12)
+        if(Total>0)then return X
         Print("normal")
     X
 Parameter(?N:int=Pick(7)):int=N

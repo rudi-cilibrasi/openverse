@@ -5,9 +5,9 @@ Each real choice starts a filter snapshot. A rejected filter rolls back;
 entering a later (possibly empty) generator commits that prefix. Bodies run
 without yielding. A delayed observer then sees and updates the source local.
 Some runs return from a body: save the operand, run body/source cleanup,
-and cancel the pending observer when the source function ends.
-Others return in a clause before the body starts, keeping that filter's
-writes without running the body's work or cleanup for that iteration.
+and cancel the pending observer when the source function ends (a return
+cannot be one of the clauses, a failure context: the Book of Verse's tests,
+`Reachability.versetest:12`).
 Some put the consumer under an always-successful outer refining cast;
 each body writes its current total to an object, observed at source exit.
 The model enumerates these snapshots independently of frontend helpers.
@@ -27,7 +27,6 @@ vs = [pc, pc + 1] if p_hit else [0, 1]
 ws = [qc, qc + 1] if q_hit else [0, 1]
 ret_rng = random.Random(seed * 1000003 + 417437)
 returning = bool(ret_rng.randrange(2))
-clause_returning = returning and bool(seed & 16)
 body_cleanup, source_cleanup = ret_rng.randint(1, 7), ret_rng.randint(1, 7)
 reachable = [(a, v, w, z) for a in [0, 1] for v in vs for w in ws for z in zs
              if v >= cut_v and w >= cut_w]
@@ -53,9 +52,6 @@ for a in [0, 1]:
             total += w
             out.append(f'w {a} {v} {w} {total}')
             for z in zs:
-                if clause_returning and (a, v, w, z) == stop:
-                    answer = total
-                    break
                 if p_hit:
                     total += nested_step
                 total += body_step + z
@@ -96,15 +92,14 @@ source_defer = (f'    defer:\n        set Total+={source_cleanup}\n'
 body_defer = (f'        defer:\n            set Total+={body_cleanup}\n'
               '            Print("body cleanup {Total}")\n') if returning else ''
 condition = ','.join(f'{n}={v}' for n, v in zip(['A', 'V', 'W', 'Z'], stop)) if stop else 'A=-99'
-return_clause = f'        if({condition}):return Total\n' if returning and not clause_returning else ''
-exit_clause = f',if({condition})then return Total else 0' if clause_returning else ''
+return_clause = f'        if({condition}):return Total\n' if returning else ''
 heap_stamp = '        Stamp(H,Total)\n' if scoped else ''
 consumer = f'''    Zs:[]int={z_source}
     R:=for(A:=0|1,set Total+=A,Print("outer {{A}} {{Total}}"),
         V:=if(D:=dup[P])then(D.C|D.C+1)else(0|1),
         set Total+=V,Print("v {{A}} {{V}} {{Total}}"),V>={cut_v},
         W:=if(E:=dup[Q])then(E.C|E.C+1)else(0|1),
-        set Total+=W,Print("w {{A}} {{V}} {{W}} {{Total}}"),W>={cut_w},Z:Zs{exit_clause}):
+        set Total+=W,Print("w {{A}} {{V}} {{W}} {{Total}}"),W>={cut_w},Z:Zs):
 {body_defer}        Empty:[]t=Concatenate()
         var Local:int=A
         if(F:=dup[P]):

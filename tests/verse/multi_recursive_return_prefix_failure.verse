@@ -1,4 +1,6 @@
 # Failure after selecting a returning branch fails the invocation; it never selects else.
+# (The return is in tail position, a branch of the body's last if: the function
+# is <decides>, Return.versetest:157.)
 R(N:int)<transacts><decides>:int =
     Print("visit {N}")
     if(N<=0):
@@ -6,8 +8,9 @@ R(N:int)<transacts><decides>:int =
         N=0
         Z:=N+10
         return Z|Z+1
-    Print("fall {N}")
-    N|R[N-2]
+    else:
+        Print("fall {N}")
+        N|R[N-2]
 Main():void =
     for(X:=R[1]): Print("got {X}")
     Print("all done")

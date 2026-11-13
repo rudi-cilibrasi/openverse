@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Compare source-loop break/rollback predictions with Lean and C: for each seed, a break in a
-# for's filters, and one in the clauses of an if condition, first{} or option{} with choices,
-# among them blocks with a defer: (and at times a choice of their own) left by a break or return.
+# Compare source-loop rollback predictions with Lean and C: for each seed, a for's filters
+# over producers, and the clauses of an if condition, first{} or option{} with choices,
+# among them blocks with a defer: (and at times a choice of their own), in a loop's body
+# (a break or return among them, which the Book of Verse refuses, is gone).
 set -uo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 n="${1:-60}"; first="${2:-1}"
@@ -14,7 +15,7 @@ for ((s=first; s<first+n; s++)); do
     if [[ $form == first-success ]]; then flag=(--first-success); name="$s-first-success"; fi
     python3 -I "$root/scripts/models/choice_break.py" "$s" "$tmp/p.expected" "${flag[@]}" >"$tmp/p.verse" || exit 1
     rm -f "$tmp/p.vbc"
-    timeout 120 "$ov" run "$tmp/p.verse" --emit "$tmp/p.vbc" >"$tmp/lean.out" 2>"$tmp/lean.err"; le=$?
+    timeout 120 "$ov" run "$tmp/p.verse" --emit "$tmp/p.vbc" >"$tmp/lean.out" 2>"$tmp/lean.err"; le=$?; sed -i -E '/^[^ ]*:[0-9]+:[0-9]+: warning: /d' "$tmp/lean.err"
     timeout 120 "$cv" "$tmp/p.vbc" >"$tmp/c.out" 2>"$tmp/c.err"; ce=$?
     if [[ $le != 0 || $ce != 0 ]] || ! cmp -s "$tmp/lean.out" <(tail -n +2 "$tmp/p.expected") ||
         ! cmp -s "$tmp/lean.out" "$tmp/c.out" || ! cmp -s "$tmp/lean.err" "$tmp/c.err"; then

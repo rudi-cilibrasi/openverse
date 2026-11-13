@@ -11,7 +11,7 @@ B(Extra:u,X:v,N:int,?E:[]u=Concatenate() where u:type,v:type)<transacts><decides
     Print("B {N} {E.Length} {L.E.Length}")
     (X,N) | A[X,N-1]
 Pick(X:a,W:w where a:type,w:type)<transacts>:?a =
-    option{V:=A[X,2],E:[]w=Concatenate(),V(1)=0,V(0)}
+    option{V:=A[X,2];E:[]w=Concatenate();V(1)=0;V(0)}
 pair(a:type,b:type) := class { First:a; Second:b }
 dup(t:type) := class(pair(t,t)) {}
 Refined(P:pair(a,b) where a:type,b:type):void =

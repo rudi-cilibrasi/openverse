@@ -24,7 +24,7 @@ C(Z:tuple(c,d),N:int,H:cell where c:type,d:subtype(comparable))<transacts><decid
 Run(X:b,Y:a,W:w where a:subtype(comparable),b:type,w:type):?tuple(b,a,int) =
     F:=cell{}
     var Seen:int=0
-    Result:=option{V:=B[(Y,X,2,F)],E:[]w=Concatenate(),set Seen+=V(2),V(2)=0,V}
+    Result:=option{V:=B[(Y,X,2,F)];E:[]w=Concatenate();set Seen+=V(2);V(2)=0;V}
     Print("state {F.N} {Seen}")
     Result
 Main():void =

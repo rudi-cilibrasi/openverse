@@ -19,7 +19,7 @@ for ((s=first; s<first+n; s++)); do
   v="$tmp/g$s.verse"; e="$tmp/g$s.expected"
   save() { cp "$v" "$root/fuzz-model-sched-$s.verse"; cp "$e" "$root/fuzz-model-sched-$s.expected"; }
   rm -f "$tmp/p.vbc"
-  timeout 60 "$ov" run "$v" --emit "$tmp/p.vbc" > "$tmp/l.out" 2> "$tmp/l.err"; le=$?
+  timeout 60 "$ov" run "$v" --emit "$tmp/p.vbc" > "$tmp/l.out" 2> "$tmp/l.err"; le=$?; sed -i -E '/^[^ ]*:[0-9]+:[0-9]+: warning: /d' "$tmp/l.err"
   if [[ $le -gt 2 ]]; then
     bad=$((bad+1)); save; echo "LEAN EXIT $le $g seed $s (saved fuzz-model-sched-$s.verse): $(head -c 200 "$tmp/l.err")"; continue
   fi

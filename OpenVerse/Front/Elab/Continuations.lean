@@ -224,11 +224,6 @@ def sourceContextKey (ctx : Ctx) : String :=
 def firstReturns (rest : List SExpr) : Bool :=
   (Refine.findPart (fun | .ret .. => true | _ => false) false (.block { line := 0, col := 0 } rest)).isSome
 
-/-- Whether the clauses have a `break` that leaves them (not one in a loop
-    of theirs). -/
-def firstBreaks (rest : List SExpr) : Bool :=
-  (Refine.findPart Refine.isBreak true (.block { line := 0, col := 0 } rest)).isSome
-
 /-- The source return type remains separate from a helper's packet type. -/
 def firstReturnType (ctx : Ctx) : STy :=
   let ty := match ctx.refineExits.ret with
@@ -246,34 +241,14 @@ def firstReturnKey (ctx : Ctx) (rest : List SExpr) : String :=
       |>.filter fun (n, _) => Choice.styMentions [n] ty
     "_return:" ++ reprStr (ty, bounds)
 
-/-- Normal success has all bound names. A return (of the source type, when
-    the clauses have one) instead has the saved operand, and a break that
-    leaves them (`breaks`) says so; every outcome copies back captures before
-    the caller proceeds. The packet: an option of the bound names, the
-    copies, then an option of the operand and a `logic` for the break, those
-    the clauses have. Gives its type, the normal one, and the exits'. -/
-def firstResult (p : Pos) (name : String) (binds sets : List Local) (source : Option Ty) (breaks : Bool) :
-    STy × SExpr × Option Choice.FirstReturn × Option (List SExpr) :=
+/-- The packet of a first success: the names the clauses bound, the copies
+    of the `var`s they set, then `true` (no `return` or `break` leaves the
+    clauses, a failure context's, `checkJumps`). Gives its type and itself. -/
+def firstResult (p : Pos) (binds sets : List Local) : STy × SExpr :=
   let values := binds.map fun l => SExpr.ident p l.name
   let copied := sets.map fun l => SExpr.ident p l.name
-  if source.isNone && !breaks then
-    (.tup ((binds ++ sets).map (·.ty.toSTy) ++ [.name "logic"]),
-      .tuple p (values ++ copied ++ [.ident p "true"]), none, none)
-  else
-    let retC := source.toList.map fun ty => STy.opt ty.toSTy
-    let brkC : List STy := if breaks then [.name "logic"] else []
-    let ret := STy.tup (.opt (.tup (binds.map (·.ty.toSTy))) :: sets.map (·.ty.toSTy) ++ retC ++ brkC ++ [.name "logic"])
-    let noRet := source.toList.map fun _ => SExpr.ident p "false"
-    let brk (b : Bool) : List SExpr := if breaks then [.ident p (toString b)] else []
-    let packet (bound : SExpr) (ret : List SExpr) (broke : Bool) :=
-      SExpr.tuple p (bound :: copied ++ ret ++ brk broke ++ [.ident p "true"])
-    let normal := SExpr.decl p (name ++ "$normal") (some ret) false
-      (packet (.optionLit p (.tuple p values)) noRet false)
-    let returnExit := source.map fun ty =>
-      let value := if ty == .void then none else some (name ++ "$return")
-      let saved := (value.map (SExpr.ident p ·)).getD (.tuple p [])
-      { ty := ty.toSTy, value, packet := [packet (.ident p "false") [.optionLit p saved] false] }
-    (ret, normal, returnExit, if breaks then some [packet (.ident p "false") noRet true] else none)
+  (.tup ((binds ++ sets).map (·.ty.toSTy) ++ [.name "logic"]),
+    .tuple p (values ++ copied ++ [.ident p "true"]))
 
 /-- Infer the callee's actual type arguments before joining its result.
     An expected result type must not widen the input's instance first. -/
@@ -284,25 +259,12 @@ def continuationBind (p : Pos) (lift : Choice.FirstLift) (name : String) (call :
     let raw := name ++ "$instance"
     [.decl p raw none false call, .decl p name (some ty) false (.ident p raw)]
 
-/-- Update source captures before returning, breaking (here, where the
-    clauses are, which may be a function of their own again) or exposing
-    the normal bindings. -/
+/-- Update source captures and expose the normal bindings, from a first
+    success's packet (`firstResult`). -/
 def firstUnpack (p : Pos) (l : Choice.FirstLift) (packet : String) : List SExpr :=
   let get (base : String) (j : Nat) := SExpr.app p (.ident p base) [.int p (j : Int)] false
-  if l.returnExit.isNone && l.breakExit.isNone then
-    l.binds.zipIdx.map (fun (n, i) => .decl p n none (l.varBinds.contains n) (get packet i)) ++
-      l.sets.zipIdx.map (fun (n, j) => .set p (.ident p n) none (get packet (l.binds.length + j)))
-  else
-    let returned := packet ++ "$returned"
-    let normal := packet ++ "$normal"
-    let exits := l.sets.length + 1
-    let returning : List SExpr := if l.returnExit.isNone then [] else
-      [.ite p [.decl p returned none false (.query p (get packet exits))] (.ret p (some (.ident p returned))) none]
-    let breaking : List SExpr := if l.breakExit.isNone then [] else
-      [.ite p [.query p (get packet (exits + returning.length))] (Refine.liftedBreak p) none]
-    l.sets.zipIdx.map (fun (n, j) => .set p (.ident p n) none (get packet (j + 1))) ++ returning ++ breaking ++
-      [.decl p normal none false (.query p (get packet 0))] ++
-      l.binds.zipIdx.map (fun (n, j) => .decl p n none (l.varBinds.contains n) (get normal j))
+  l.binds.zipIdx.map (fun (n, i) => .decl p n none (l.varBinds.contains n) (get packet i)) ++
+    l.sets.zipIdx.map (fun (n, j) => .set p (.ident p n) none (get packet (l.binds.length + j)))
 
 /-- A lazy helper owns its producer and the complete prepared suffix. That
     suffix changes when a composed choice is replaced by a continuation call;
@@ -788,13 +750,8 @@ def firstLiftOf (ctx c2 : Ctx) (p : Pos) (g : String) (lp : List SExpr) (b : Str
     | some c =>
       pure (rest.map (selfQualify ctx c))
     | none => pure rest
-  -- (a `return`, or a `break` that leaves them, leaves the function of its
-  -- own with a packet, and the consumer leaves as it says: `firstResult`)
-  let source ← if firstReturns rest then
-      some <$> (resolveTy ctx.types p (firstReturnType ctx)).run' { env := ctx.types }
-    else pure none
-  let breaks := firstBreaks rest
-  let rest := if breaks then rest.map Refine.liftBreaks else rest
+  -- (no `return` or `break` leaves them: they are a failure context's,
+  -- `checkJumps`)
   if suspends then throw "as the clauses after it suspend"
   let pnames := ps.filterMap fun | .ident _ n => some n | _ => none
   let pls ← pnames.mapM fun n => match ctx.lookup n with
@@ -811,7 +768,7 @@ def firstLiftOf (ctx c2 : Ctx) (p : Pos) (g : String) (lp : List SExpr) (b : Str
     | some l => pure l
     | none => throw s!"internal: name {n}"
   let (tps, typeParams, typeArgs) ← contTypes ctx p ((pls ++ caps).map (·.ty))
-    (vty :: bls.map (·.ty) ++ source.toList) written
+    (vty :: bls.map (·.ty)) written
   -- A type determined by the entry's inputs may be absent from another
   -- member's inputs. Every member must still infer the shared helper's
   -- type parameters, including those used only by a producer result.
@@ -855,8 +812,7 @@ def firstLiftOf (ctx c2 : Ctx) (p : Pos) (g : String) (lp : List SExpr) (b : Str
   let kPs : List SParam := kTy.toList.map fun t => { name := "$K", ty := t.toSTy }
   let params : List SParam := pls.map (fun l => { name := l.name, ty := l.ty.toSTy, typeValue := l.typeValue }) ++ kPs ++ capPs
   let specs := (if heap.isEmpty then ["computes"] else heap) ++ ["decides"]
-  let (ret, normal, returnExit, breakExit) := firstResult p name bls sets source breaks
-  let normal? := if returnExit.isSome || breakExit.isSome then some normal else none
+  let (ret, _) := firstResult p bls sets
   let setsT := sets.map fun l => (l.name, l.ty.toSTy)
   let recArgs (target : Option String) (q : Pos) (as : List SExpr) : List SExpr × List SExpr :=
     let h := target.getD g
@@ -883,7 +839,7 @@ def firstLiftOf (ctx c2 : Ctx) (p : Pos) (g : String) (lp : List SExpr) (b : Str
         | ((.ident _ n, t), i) => pure { name := n, ty := t.toSTy, typeValue := sig.typeValues.contains i }
         | _ => throw "internal: a $member parameter (#283)"
       let body := Choice.firstBody (nameOf h) p b bty hcls htail rest binds setsT capArgs (some vty.toSTy) nameOf
-        (fun target => recArgs (some (target.getD h))) normal? frames retName fTys retOf
+        (fun target => recArgs (some (target.getD h))) frames retName fTys retOf
         ((memberTys.lookup h).map (·.toSTy))
       pure (STop.fn p (nameOf h) (hparams ++ kPs ++ capPs ++ typeParams) tps specs ret
         (pruneConstructHints ctx (nameOf h) body))
@@ -907,7 +863,7 @@ def firstLiftOf (ctx c2 : Ctx) (p : Pos) (g : String) (lp : List SExpr) (b : Str
     let lps := (lives.zip (livesTys.getD j [])).map fun (n, t) => ({ name := n, ty := t.toSTy } : SParam)
     let (hty, own) := (fTys[j]?).getD (none, none)
     let body := Choice.firstBody (nameOf src) p b bty ccls ctail rest binds setsT capArgs (some vty.toSTy) nameOf
-      (fun target => recArgs (some (target.getD src))) normal? frames retName fTys retOf own
+      (fun target => recArgs (some (target.getD src))) frames retName fTys retOf own
     return STop.fn p fn ({ name := h, ty := hty.getD vty.toSTy } :: lps ++ kPs ++ capPs ++ typeParams) tps specs ret
       (pruneConstructHints ctx fn body)
   -- (#283) with return frames: the function each value is given to, then to
@@ -916,12 +872,12 @@ def firstLiftOf (ctx c2 : Ctx) (p : Pos) (g : String) (lp : List SExpr) (b : Str
   let retFns : List STop := kPs.flatMap fun kp => (none :: valTys.map some).map fun t =>
     STop.fn p (retOf t) ({ name := "$V", ty := t.getD vty.toSTy } :: kp :: capPs ++ typeParams) tps specs ret
       (ctx.choiceCoercionBody <| pruneConstructHints ctx (retOf t)
-        (Choice.firstReturnBody p b bty rest binds setsT (some vty.toSTy) normal? frames memberFn capArgs fTys))
-  return { key, pos := p, name, returnExit, breakExit, sourceContext := sourceContextOf ctx, inlineScopes := ctx.inlineScopes, liftTag := ctx.liftTag,
+        (Choice.firstReturnBody p b bty rest binds setsT (some vty.toSTy) frames memberFn capArgs fTys))
+  return { key, pos := p, name, sourceContext := sourceContextOf ctx, inlineScopes := ctx.inlineScopes, liftTag := ctx.liftTag,
            params := params ++ typeParams, tparams := tps, specs, ret,
            body := ctx.choiceCoercionBody <| pruneConstructHints ctx name
              (Choice.firstBody name p b bty cls tail rest binds setsT capArgs (some vty.toSTy) nameOf recArgs
-               normal? frames retName fTys retOf),
+               frames retName fTys retOf),
            binds, sets := sets.map (·.name),
            args := pnames.map (SExpr.ident p ·) ++ kPs.map (fun _ => .ident p "false") ++
              caps.map (fun l => .ident p l.name) ++ typeArgs,
@@ -990,13 +946,8 @@ def contLiftOf (ctx c2 : Ctx) (p : Pos) (b : String) (alts rest : List SExpr)
     | some c =>
       pure (rest.map (selfQualify ctx c))
     | none => pure rest
-  -- (a `return`, or a `break` that leaves them, leaves the function with a
-  -- packet, and the caller leaves as it says: `firstResult`)
-  let source ← if firstReturns rest then
-      some <$> (resolveTy ctx.types p (firstReturnType ctx)).run' { env := ctx.types }
-    else pure none
-  let breaks := firstBreaks rest
-  let rest := if breaks then rest.map Refine.liftBreaks else rest
+  -- (no `return` or `break` leaves them: they are a failure context's,
+  -- `checkJumps`)
   let caps : List Local := ctx.capturesOf (ctx.choiceCoercionBody (.block p rest))
   let setNames := Choice.setsIn (.block p rest)
   let sets := caps.filter fun l => l.mutable && setNames.contains l.name
@@ -1006,20 +957,20 @@ def contLiftOf (ctx c2 : Ctx) (p : Pos) (b : String) (alts rest : List SExpr)
     | none => throw s!"internal: name {n}"
   let some bl := bls.head? | throw "internal: no binding"
   if bl.mutable then throw "a var binding"
-  let (tps, typeParams, typeArgs) ← contTypes ctx p ((bl :: caps).map (·.ty)) (bls.map (·.ty) ++ source.toList) written
+  let (tps, typeParams, typeArgs) ← contTypes ctx p ((bl :: caps).map (·.ty)) (bls.map (·.ty)) written
   let name := s!"$cont{p.line}_{p.col}_{key.hash}" ++ (if p.file.isEmpty then "" else s!"_{p.file}")
   -- (its effects the function's own: its body is that function's code,
   -- and it may call what is asked for only in the next elaboration, a
   -- `$first…` or `$refine…`, whose effects this one cannot see)
   let heap := ["reads", "writes", "allocates"].filter fun k => ctx.fnFx.contains k || fxB.any (·.1 == k)
-  let (ret, tup, returnExit, breakExit) := firstResult p name bls sets source breaks
+  let (ret, tup) := firstResult p bls sets
   -- (the `var`s it sets, copied from parameters named `m$in`, and given back)
   let copies := sets.map fun l => SExpr.decl p l.name (some l.ty.toSTy) true (.ident p s!"{l.name}$in")
   let params : List SParam := { name := b, ty := bl.ty.toSTy } ::
     caps.map fun l => { name := if sets.any (·.name == l.name) then s!"{l.name}$in" else l.name, ty := l.ty.toSTy, typeValue := l.typeValue }
   -- (`$firstP`: the clauses are lifted already, the consumer's, which lifting
   -- again would bind twice, as for #275's functions)
-  return { key, pos := p, name, returnExit, breakExit, sourceContext := sourceContextOf ctx, inlineScopes := ctx.inlineScopes, liftTag := ctx.liftTag,
+  return { key, pos := p, name, sourceContext := sourceContextOf ctx, inlineScopes := ctx.inlineScopes, liftTag := ctx.liftTag,
            params := params ++ typeParams, tparams := tps,
            specs := (if heap.isEmpty then ["computes"] else heap) ++ ["decides"],
            ret,
@@ -1039,10 +990,6 @@ def forReturnBody? : SExpr → Bool
     marker restores only its return target at actual body entry. -/
 def forClauseExitScope (body inner : SExpr) : SExpr :=
   match body with
-  | .app p (.ident _ f) [.block _ [metadata, breaking], mode, _] false =>
-    if f == "$forReturns" || f == "$forReturnBody" then
-      .app p (.ident p "$forClauseExits") [metadata, breaking, mode, inner] false
-    else inner
   | .app p (.ident _ f) [metadata, mode, _] false =>
     if f == "$forReturns" || f == "$forReturnBody" then
       .app p (.ident p "$forReturnBody") [metadata, mode, inner] false
@@ -1054,12 +1001,6 @@ def forStageBodyAs (body inner : SExpr) : SExpr :=
   | .app p f@(.ident _ n) [metadata, mode, _] false =>
     if n == "$forReturns" || n == "$forReturnBody" then .app p f [metadata, mode, inner] false else inner
   | _ => inner
-
-/-- After a generated loop that a source break crosses (a lazy producer's,
-    a first success's `firstE`): break again when the break flag is set,
-    else `otherwise`. The break ran its cleanup where it is written. -/
-def forwardSourceBreak (flag : Nat) (otherwise : Expr) : Expr :=
-  .ite (.prim .query [.local flag]) (.seq .brk (.prim .userErr [])) otherwise
 
 /-- Keep source breaks aimed at their original loop after adding the
     producer's private abort loop. Its own outcome abort is left alone. -/
@@ -1093,7 +1034,7 @@ partial def forBodySafe (ctx : Ctx) (body : SExpr) : Bool :=
   -- generic/default argument bindings) inside the body. Their ownership is
   -- checked when that consumer elaborates; they do not escape the helper.
   let safeMarkers := ["$sourceSuper", "$methodMiss", "$methodCast", "$methodCase", "$methodType", "$methodParams", "$inlineScope", "$inlineScopeEnd", "$inline", "$choice", "$excl", "$alt", "$firstP", "$first", "$each", "$noLift", "$fxOf",
-    "$forReturns", "$forReturnBody", "$forClauseExits", "$choiceOperation", "$choiceGenericOperation", "$choiceFixedOperation", "$choiceCoercions", "$choiceDictionary", "$defer", "$deferExits", "$loop", "$rec", "$recTo", "$group", "$member", "$returnTail",
+    "$forReturns", "$forReturnBody", "$choiceOperation", "$choiceGenericOperation", "$choiceFixedOperation", "$choiceCoercions", "$choiceDictionary", "$defer", "$deferExits", "$loop", "$rec", "$recTo", "$group", "$member", "$returnTail",
     "$tparams", "$params", "$defaults", "$paramDefault", "$freeNames", "$noteTypes", "$noteFails", "$declNames", "$callArgs", "$callSingleton", "$then"]
   let rec blocked (e : SExpr) : Bool :=
     match e with
@@ -1139,10 +1080,7 @@ def contForLiftOf (ctx : Ctx) (p : Pos) (b : String) (bty vty : Ty) (alts rest :
   let body := match body with
     | .app q (.ident _ "$forReturns") args false => .app q (.ident q "$forReturnBody") args false
     | b => b
-  let breaks := match body with
-    | .app _ (.ident _ "$forReturnBody") [.block _ [_, .set _ (.ident _ _) none _], _, _] false => true
-    | _ => false
-  if !breaks && (Refine.findPart Refine.isBreak true (.block p rest)).isSome then throw "a break"
+  if (Refine.findPart Refine.isBreak true (.block p rest)).isSome then throw "a break"
   let caps : List Local := ctx.capturesOf (ctx.choiceCoercionBody (.block p (rest ++ [body])))
   let setNames := Choice.setsIn (.block p (rest ++ [body]))
   let sets := caps.filter fun l => l.mutable && setNames.contains l.name
@@ -1160,8 +1098,6 @@ def contForLiftOf (ctx : Ctx) (p : Pos) (b : String) (bty vty : Ty) (alts rest :
       .app p (.ident p "$forFirstOutcome") [.block p rest, body, failure] false
     else .app p (.ident p "$forFirst") [.block p rest, body] false
   let ffirst := match body with
-    | .app q (.ident _ "$forReturnBody") [.block _ [metadata, breaking], mode, _] false =>
-      .app q (.ident q "$forClauseExits") [metadata, breaking, mode, ffirst] false
     | .app q (.ident _ "$forReturnBody") [metadata, mode, _] false =>
       -- Clauses and body leave the same source function. A clause return
       -- succeeds with the packet, committing this filter's copy-outs.

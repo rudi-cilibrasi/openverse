@@ -73,7 +73,7 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
   -- filter still fails the call, so the caller retains that boundary.
   let bodyFail := (ctx.canFail && !firstDecides) || failure.isSome || forReturnBody? body
   let bodyCtx (c : Ctx) : Ctx := { c with
-    canFail := bodyFail, inLoop := false, inRepeat := true, forBreakSlot := none, forBreakCapture := none,
+    canFail := bodyFail, inLoop := false, inRepeat := true,
     refineExits := { c.refineExits with brk := none },
     forExitPacket := failure.orElse fun _ => c.forExitPacket }
   -- elaborate the filters of one generator (in a failure context)
@@ -750,11 +750,6 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
           | some flag => Expr.ite (.prim .query [.local flag]) (.local acc)
               (.seq .brk (.prim .userErr []))
           | none => Expr.local acc
-        -- A source break has already run its lexical cleanup. Every lazy
-        -- loop crossed must forward it without exposing accumulated values.
-        let values := match c.forBreakSlot with
-          | some flag => forwardSourceBreak flag values
-          | none => values
         let code : Expr := .seq lg.init (.seq (.assign acc none) (.seq (.assign size (.lit (.int 16)))
           (.seq (.assign done (.lit (.logic false))) (.seq (.loop body) values))))
         if flat then return ⟨code, .arr ity⟩

@@ -1,7 +1,8 @@
 # (#283) A return in a function with several values may be in a block or a case's arm, as in an
 # if's branch: each is a scope that the return ends the invocation from, its values the
 # function's, and the rest of the body is skipped for it; a block's defer: runs at the return,
-# after the value and before the function's own.
+# after the value and before the function's own. (In a <decides> function, whose body is a
+# failure context, a return is in tail position, Return.versetest:157: Dec's case is its last.)
 Blk(X:int)<transacts>:int =
     defer: Print("f {X}")
     block:
@@ -27,8 +28,9 @@ Rec(N:int)<transacts>:int =
 Dec(X:int)<transacts><decides>:int =
     case (X):
         1 => return 10 | 11
-        2 => Print("two")
-    X | X * 100
+        2 =>
+            Print("two")
+            X | X * 100
 Arms(X:int)<transacts>:int =
     case (X):
         1 => return 10 | 11

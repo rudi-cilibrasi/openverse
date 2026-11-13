@@ -177,6 +177,19 @@ for every input buffer, and reads only inside the buffer.
 
 stdout is exactly the bytes the program printed.
 
+**Warnings.** A program that compiles may have warnings: what the Book of
+Verse's compiler reports and compiles all the same (its diagnostics
+2000–2999 that openverse gives: code never reached, a `return` of a value in
+a `void` function, a `case` arm never reached; [LANGUAGE.md,
+Warnings](LANGUAGE.md#warnings)). `openverse run`, `emit` and `check`
+print each to stderr, one line `FILE:LINE:COL: warning: …`, in the order of
+the source, before anything else (before the program runs, for `run`), and
+go on: a warning changes no exit status, and the bytecode does not carry
+it, so `cverse` prints none. A program that is refused (exit 4) prints its
+error alone. The scripts that compare the two implementations take the
+leading `: warning: ` lines of `openverse run`'s stderr apart from the
+run's (`scripts/test-verse.sh` compares them with `NAME.warnings`).
+
 Memory is the one limit the two implementations do not share. `cverse`
 reports `limit: memory` (exit 3) when an allocation fails. The reference
 interpreter (`openverse run`, `Prog.runB` in `Core/Bounded.lean`) bounds the

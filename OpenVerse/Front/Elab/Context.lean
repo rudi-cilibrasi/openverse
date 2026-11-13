@@ -441,11 +441,6 @@ structure Ctx where
   inTaking : Bool := false
   /-- The internal loop that propagates a failed continuation outcome. -/
   forOutcomeSlot : Option Nat := none
-  /-- A source-loop break crossing the internal loops of lazy producers and
-      of first successes (`firstE`), each of which forwards it. -/
-  forBreakSlot : Option Nat := none
-  /-- A source break carried by a shared for continuation. -/
-  forBreakCapture : Option String := none
   /-- A source return carried by a shared for continuation. -/
   forReturnSlot : Option String := none
   forExitPacket : Option SExpr := none
@@ -618,9 +613,16 @@ structure ESt where
       code once every function is. -/
   loopFirst : List LoopUse := []
   constructHints : List ConstructHint := []
+  /-- The warnings found so far (`warnAt`): what the Book of Verse's compiler
+      reports and compiles all the same, each with where it is. -/
+  warnings : Array (Pos × String) := #[]
   deriving Inhabited
 
 abbrev EM := StateT ESt (Except String)
+
+/-- Note a warning at `p` (a trial whose state is discarded discards it). -/
+def warnAt (p : Pos) (msg : String) : EM Unit :=
+  modify fun st => { st with warnings := st.warnings.push (p, msg) }
 
 /-- Ask for `r`, for the program to be elaborated again with it. -/
 def noteNeeds (r : Requests) : EM Unit :=

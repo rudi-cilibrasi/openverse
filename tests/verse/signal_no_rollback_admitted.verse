@@ -3,9 +3,11 @@
 # the compiler moves into a continuation, a function called after the
 # condition, a <decides> function that signals nothing, a task spawned by a
 # function called in a condition, which signals later in its own task, a
-# defer: that a return or a break out of a condition runs, which commits;
-# and a for over choices in a defer: in a condition that signals nothing,
-# both at a return and at the end of its block)
+# defer: that a return or a break runs, which commits; and a for over
+# choices in a defer: that signals nothing, at a return and, in a
+# condition, at the end of its block. A return or break cannot leave a
+# condition, a failure context: the Book of Verse's tests,
+# Reachability.versetest:12, SOL-4199-BreakFromIf.versetest)
 Two(N:int):int = N | N + 1
 Note(E:event(int), N:int):int =
     E.Signal(N)
@@ -19,11 +21,14 @@ Start(E:event(int)):int =
     spawn{Shouter(E)}
     1
 Count(N:int):int =
-    if (X := block{ defer{ R := for (A0 := (Two(0) | Two(2)), A1 := (Two(0) | Two(2)), A0 = 0) { Print("pair {A1}"); A1 } }; (if (N > 9) then return 0 else 3) }, X > 1) then 1 else 2
+    if (N > 9):
+        block{ defer{ R := for (A0 := (Two(0) | Two(2)), A1 := (Two(0) | Two(2)), A0 = 0) { Print("pair {A1}"); A1 } }; return 0 }
+    if (X := block{ defer{ R := for (A0 := (Two(0) | Two(2)), A1 := (Two(0) | Two(2)), A0 = 0) { Print("pair {A1}"); A1 } }; 3 }, X > 1) then 1 else 2
 Pick(U:subscribable_event(int), N:int):int =
     defer:
         U.Signal(N)
-    if (N > 0, (if (N > 1) then return N else 0) = 0):
+    if (N > 1) then return N
+    if (N > 0):
         Print("normal")
     0
 Main()<suspends>:void =
@@ -59,6 +64,7 @@ Main()<suspends>:void =
         block:
             defer:
                 W.Signal(6)
-            if ((if (1 > 0) then break else 0) = 0) then Print("no")
+            if (1 > 0) then break
+            Print("no")
     K.Cancel()
     Print("count {Count(1)} {Count(10)}")
