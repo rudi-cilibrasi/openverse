@@ -209,6 +209,39 @@ out of date. The proofs are in `OpenVerse/Core/`.
       Eval P s e r s' → Expr.scoped P s.fr.length e = true → r.scopeErr = false ∧ s'.fr.length = s.fr.length
 ```
 
+## `Value.veq_iff`: two values are equal in Verse (veq) exactly when they are equal once each empty value in them is ()
+
+`OpenVerse/Core/Value.lean`; axioms: [propext, Classical.choice, Quot.sound]
+
+```lean
+Value.veq_iff : ∀ (a b : Value), a.veq b = true ↔ a.norm = b.norm
+```
+
+## `Value.veq_trans`: Verse's equality of values is transitive (and reflexive, veq_refl, and symmetric, veq_comm)
+
+`OpenVerse/Core/Value.lean`; axioms: [propext, Classical.choice, Quot.sound]
+
+```lean
+@Value.veq_trans : ∀ {a b c : Value}, a.veq b = true → b.veq c = true → a.veq c = true
+```
+
+## `Value.veq_of_isEmpty`: false, (), the empty option, array, string and map are one value
+
+`OpenVerse/Core/Value.lean`; axioms: [propext, Classical.choice, Quot.sound]
+
+```lean
+@Value.veq_of_isEmpty : ∀ {a b : Value}, a.isEmpty = true → b.isEmpty = true → a.veq b = true
+```
+
+## `veq_iff_eq_of_hasTy`: on two values of one type, Verse's equality is structural equality
+
+`OpenVerse/Core/Typing.lean`; axioms: [propext, Classical.choice, Quot.sound]
+
+```lean
+veq_iff_eq_of_hasTy : ∀ (Ξ : HeapTy) (a b : Value) (τ : VTy),
+  hasTy Ξ a τ = true → hasTy Ξ b τ = true → (a.veq b = true ↔ a = b)
+```
+
 ## `Eval.typed`: preservation
 
 `OpenVerse/Core/TypeSafety.lean`; axioms: [propext, Classical.choice, Quot.sound]
