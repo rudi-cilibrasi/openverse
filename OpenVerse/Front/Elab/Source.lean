@@ -131,6 +131,40 @@ partial def checkDefers (tops : List STop) : Except String Unit := do
     | .classDef _ _ _ _ _ _ fs _ ms => do goField fs; ms.forM goTop
   tops.forM goTop
 
+/-- A literal value, which neither fails nor has several values. -/
+partial def SExpr.isLiteral : SExpr → Bool
+  | .int .. | .char .. | .char32 .. | .float .. => true
+  | .str _ parts => parts.all fun | .text _ => true | .code _ => false
+  | .ident _ n => n == "true" || n == "false"
+  | .tuple _ es | .arrayLit _ es => es.all SExpr.isLiteral
+  | .mapLit _ kvs => kvs.all fun (k, v) => k.isLiteral && v.isLiteral
+  | _ => false
+
+/-- A `for` with no generator runs its body at most once, when its clauses
+    succeed (Book of Verse ch. 7, "For Without a Generator"): clauses that
+    cannot fail, no clause at all, or literals and bindings of literals
+    (`for(X := array{1, 2})` for `for(X : array{1, 2})`, `for(1)`), are
+    refused, as the Book's tests do ("Not an iterable"). -/
+partial def checkForClauses (tops : List STop) : Except String Unit := do
+  let literalClause : SExpr → Bool
+    | .decl _ _ _ false v => v.isLiteral
+    | c => c.isLiteral
+  let rec go : SExpr → Except String Unit
+    | .forE p cs b => do
+      if cs.all literalClause then
+        throw s!"{p.show}: this for has no generator (X : A, or X := A..B) and its clauses cannot fail, so it would run its body once: write X : A to iterate over A (Book of Verse ch. 7)"
+      cs.forM go; go b
+    | .structDef _ _ _ fs => fs.forM fun (_, _, d, _) => d.forM go
+    | e => e.children.forM go
+  for t in tops do
+    match t with
+    | .fn _ _ ps _ _ _ body => ps.forM (·.default.forM go); go body
+    | .const _ _ _ e => go e
+    | .classDef _ _ _ _ _ _ fs _ ms =>
+      fs.forM fun (_, _, d, _) => d.forM go
+      for m in ms do
+        if let .fn _ _ ps _ _ _ body := m then ps.forM (·.default.forM go); go body
+
 /-- `return` leaves a function's body, so it is refused where there is none: in
     a constant's value, and in a field's default, which is evaluated where an
     object is constructed and would leave the function that constructs it. -/
@@ -176,6 +210,7 @@ def admitSource (allTops0r : List STop) (opts : Options) : Except String Admitte
   checkDefinedOnce allTops0r
   checkReturns allTops0r
   checkDefers allTops0r
+  checkForClauses allTops0r
   let helpers ← if usesRat then ratTops else pure []
   let helpers := helpers ++ (← if usesReplaceAll then replaceAllTops else pure [])
   -- These compiler-owned implementations expand finite intrinsic operations:
