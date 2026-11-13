@@ -1197,7 +1197,7 @@ is thrown in one place, a phase or `elabProgramCore` itself, and each point
 where an elaboration asks for something and goes no further
 (`Compiled.asking`) is a line of `elabProgramCore`.
 
-1. `admitSource` (`Elab/Source.lean`): the source and the entry expression pass the effect policy (with where each specifier may go, `EffectPolicy.specifierPlaces`) and the source profile; the rules of the source as written hold (no reserved name defined, each name defined once in its scope, no `return` in a constant's value or a field's default, no `return` or `break` that leaves a failure context, `checkJumps`, a `defer:` only as a statement, no `for` of literal clauses only); no definition takes the name of one around it (`checkNoShadowing`); modules are resolved, with every qualifier (`Resolver.qualifier`), and calls of extension methods made calls of their functions, type aliases are written out where they are used (`Aliases.expand`), no constant depends on itself, the defaults function types write are set apart, and the helpers the program needs are added (`Admitted`).
+1. `admitSource` (`Elab/Source.lean`): the source and the entry expression pass the effect policy (with where each specifier may go, `EffectPolicy.specifierPlaces`) and the source profile; the rules of the source as written hold (no reserved name defined, each name defined once in its scope, no `return` in a constant's value or a field's default, no `return` or `break` that leaves a failure context, `checkJumps`, a `defer:` only as a statement, no `for` of literal clauses only); no definition takes the name of one around it (`checkNoShadowing`); every access level is written out (`resolveSpecifiers`: `<scoped{…}>` and the names of access levels); modules are resolved, with every qualifier (`Resolver.qualifier`) and each module member's access, and calls of extension methods made calls of their functions; no type alias is more visible than what it names, type aliases are written out where they are used (`Aliases.expand`), no definition exposes a less visible one (`Access.checkConsistency`), and constructions, parents and overrides are checked for access (`Access.checkUses`), which also gives the elaboration what it needs to judge the members it reaches through values (`Access.Env`); no constant depends on itself, the defaults function types write are set apart, and the helpers the program needs are added (`Admitted`).
 2. `inlineSource`: functions with several values are inlined at their calls, the functions earlier rounds asked for are added and admitted, and function values become interfaces and classes (`Source`, with the sites the inlining notes).
 3. `argsAndMethodOverloads`: `Args` and the entry expression's `$Do` are added, and overloaded methods are renamed by their parameter lists (`Definitions`).
 4. `classHierarchy` (`Elab/Classes.lean`): the classes and interfaces and their hierarchy, checked (`Classes`, with the lookups over it).
@@ -1227,11 +1227,11 @@ keep the order: a round that asks goes no further than the phase that asks,
 and the next one runs every phase again. Read off the list, a program is
 refused, first to last, for:
 
-- its effect annotations, specifiers out of place and source profile, a type with a built-in type's name, a reserved name defined, a name defined twice, a name an enclosing scope defines (but a function a call can tell apart from it, checked with the signatures, 15), a `return` outside a function's body, a `return` or `break` that leaves a failure context (a `return` in a `<decides>` body anywhere but in tail position), a `defer:` where a value is taken, a `for` of literal clauses only, its modules and qualifiers (a qualifier that names nothing or not where its definition is, an ambiguous bare name beside a qualified definition), its type aliases (one that names itself or an alias defined after it, or is used before its definition, or whose name a definition takes), a constant that depends on itself or names one defined after it in its scope, and subscribable events (1); the choices it inlines and the requests it carries (2); its overloaded methods (3);
+- its effect annotations, specifiers out of place (access specifiers included: where, how many, none on an override) and source profile, a type with a built-in type's name, a reserved name defined, a name defined twice, a name an enclosing scope defines (but a function a call can tell apart from it, checked with the signatures, 15), a `return` outside a function's body, a `return` or `break` that leaves a failure context (a `return` in a `<decides>` body anywhere but in tail position), a `defer:` where a value is taken, a `for` of literal clauses only, its access levels (a scope of no module or of a package, a specifier that names no access level), its modules and qualifiers (a qualifier that names nothing or not where its definition is, an ambiguous bare name beside a qualified definition, a module member its use may not see), a type alias more visible than what it names, its type aliases (one that names itself or an alias defined after it, or is used before its definition, or whose name a definition takes), a definition that exposes a less visible one, a construction, a parent or an override its code may not use, a constant that depends on itself or names one defined after it in its scope, and subscribable events (1); the choices it inlines and the requests it carries (2); its overloaded methods (3);
 - its classes: their parents (unknown, a struct, wrong type arguments, an interface extending a class, two superclasses, a `<final>` one, a cycle), `<castable>` ones with type parameters and those below `<final_super_base>` ones, and construction effects (4); their fields, inherited, overriding and own, against the methods above them, and a `<concrete>` class's defaults (5); their methods: duplicates, parameter names, qualified implementations, overrides and `<final>`, abstract methods and the implementations every concrete class needs (6);
 - the types those give: comparable type arguments to parents and a `<persistable>` struct's fields (7), bounds (8), one instance of an interface per class (9), the Verse Core type arguments of overrides (10), recursive structs and map keys (11);
 - its functions' names and overloads (12), their signatures and effect annotations (13), constants whose type cannot be inferred and the defaults function types write (14); then the signature checks (15): overloads a call cannot tell apart, an extension method that repeats a method of its receiver's class, overrides and implementations whose signature or effects differ, an overriding field's type, and, last, a field two interfaces give defaults;
-- construction effects and field defaults (16), then each function's and constant's body (17);
+- construction effects and field defaults (16), then each function's and constant's body (17), where a member reached through a value that its code may not use, or set where its `var` does not admit, is refused;
 - `Main` (19), the checks of the prepared functions (20), and what the lowering refuses (21); the internal errors of `certify` (22) are elaborator bugs.
 
 A program that passes every phase may have **warnings**
@@ -1349,9 +1349,10 @@ Lean and C agree.
 ## Modules: a renaming before elaboration
 
 Modules (#112) never reach Verse Core. The parser flattens
-`name := module:` into definitions of qualified names (`A::B::F`). It
-leaves markers for the modules, their `<public>` members and their
-`using{M}`s. `Front/Modules.lean` then rewrites every reference by lexical
+`name := module:` into definitions of qualified names (`A::B::F`), each
+with the specifiers written on it. It leaves markers for the modules (with
+theirs) and their `using{M}`s. `Front/Modules.lean` then rewrites every reference by lexical
+
 scope. It walks from the definition's module outward; at each scope it
 looks first at the scope's own definitions, then at the modules opened
 there. It also checks visibility, and that no binder shadows a module or a
@@ -1417,6 +1418,72 @@ overload across scopes, which needs their types, so a function or method
 and a function around it of one name are returned as a pair (`ScopePair`)
 and `checkSignatures` requires them distinct, with the test it applies to
 overloads. Locals were already refused where names are resolved.
+
+## Access: one order, checked where names are resolved
+
+Access specifiers (Book of Verse ch. 12; pinned in
+[research/access-specifiers.md](research/access-specifiers.md)) are a
+compile-time rule: nothing is generated for them, and Verse Core, the
+proofs, OVBC and the runtime do not know they exist.
+
+**One order.** `Front/Access.lean` gives a specifier written at a place its
+audience, the code that may use it (`Audience`: everyone, Epic's code, a
+module and what is inside it, a scope's modules, a class and the classes
+below it, a class). A definition's effective audience is its own within
+those of the definitions it is in (`Eff`, an intersection: a member's class,
+the class's modules). Two questions are asked of these and no others:
+whether code at a site is in an audience (`admits`), and whether one
+audience is in another (`inside`), which is "at least as visible as". The
+two kinds of rule are those two questions:
+
+- *access*: a use is admitted where every audience of what it names admits
+  the code it is written in;
+- *consistency*: a definition's effective audience is inside that of every
+  type its signature names; a field with no default's contains its class's
+  constructor's; a `var`'s write audience is inside its read one.
+
+**Specifiers in the tree.** Every definition keeps the specifiers written on
+it: a function's and method's in their lists, a constant's (and a struct's,
+enum's, alias's and module marker's) in `STop.const`, a class's name's in
+`STop.classDef`'s `nameSpecs` beside its own after `class`, a field's and
+its `var`'s in `SField`. Where each may be written is one table,
+`EffectPolicy.specifierPlaces`, which has the access specifiers beside the
+others (and the places a struct's field and a field's `var`).
+
+**Where each use is checked.** A use is checked where its name is resolved,
+at the code it is written in:
+
+- `resolveSpecifiers` (`Front/Modules.lean`), before names are resolved,
+  writes every access level out: `<scoped{A, B.C}>`'s modules found from
+  where it is written, a name of an access level `S := scoped{…}` replaced by
+  what it names, as `scoped{A::…|B::…}`; the access levels' definitions,
+  which are no values, are removed. A specifier that is no keyword and names
+  no access level is refused here.
+- The modules' renaming (`resolveModules`) resolves module members, and
+  checks each level of a path against the code's module, with the levels of
+  the definitions and modules (`Access.Levels`). A member a `using` opens is
+  a candidate only where its access admits the use.
+- `Access.checkUses`, on the resolved program, checks what is named without
+  a value's type: a construction's class constructor and the fields it
+  gives, a constructor function's, a class's direct parents' constructors,
+  and that an override overrides a member its class may use.
+- The elaborator alone knows a value's class, so it checks a member reached
+  through a value (`X.F`, `X.M(…)`, a member used bare in a method, a `set`
+  with its `var`) where it finds the member (`checkMemberAccess`: in
+  `elabMember`, a method call's resolution, `elabSet`). The code a use is
+  written in is found by position: `Access.Sites`, made from the resolved
+  source before any function is inlined or generated, maps a position to
+  the source definition it is in. Code the inlining moves elsewhere keeps its
+  positions, so it is judged where it is written; code the compiler writes
+  (helpers, function-value classes) reaches no member it could not, and a
+  position in no source definition is the compiler's. The member a use
+  reaches is the declaration that introduces it, whose access its overrides
+  have.
+
+Consistency is `Access.checkConsistency` on the resolved program after type
+aliases are written out (so a signature naming an alias names what it
+aliases), with `Access.checkAliases` before, as an alias is a definition
+with an access of its own.
 
 ## Type aliases: a substitution before elaboration
 

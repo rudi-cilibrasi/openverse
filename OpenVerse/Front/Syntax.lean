@@ -174,9 +174,9 @@ inductive SExpr where
   | decl     : Pos → String → Option STy → Bool → SExpr → SExpr
   /-- `set lhs = e` or `set lhs op= e`. -/
   | set      : Pos → SExpr → Option String → SExpr → SExpr
-  /-- `struct: fields` — each field: name, type, default value, `var`; the
-      type parameters of a parametric struct `name(t:type) := struct: …`. -/
-  | structDef : Pos → List TParam → List String → List (String × STy × Option SExpr × Bool) → SExpr
+  /-- `struct<specs>: fields`, and the type parameters of a parametric
+      struct `name(t:type) := struct: …`. -/
+  | structDef : Pos → List TParam → List String → List SField → SExpr
   /-- `enum:` (closed) or `enum<open>:`, which may gain values (Book of Verse ch. 9). -/
   | enumDef  : Pos → List String → (isOpen : Bool) → SExpr
   /-- `type{_X:t where c₁, c₂, …}`: a refinement type (Book of Verse ch. 11):
@@ -196,7 +196,23 @@ inductive SPart where
   | text : String → SPart
   | code : SExpr → SPart
   deriving Repr, Inhabited, BEq
+/-- A field of a class, an interface or a struct, `var<varSpecs>
+    name<specs>:ty = default` (Book of Verse ch. 9, 10, 12). -/
+structure SField where
+  name : String
+  ty : STy
+  default : Option SExpr := none
+  isVar : Bool := false
+  /-- The specifiers on its name: its (read) access, `<override>`, `<final>`. -/
+  specs : List String := []
+  /-- The specifiers on its `var`: its write access (Book of Verse ch. 12,
+      "Separating Read and Write Access"). -/
+  varSpecs : List String := []
+  deriving Repr, Inhabited, BEq
 end
+
+/-- A field that gives an inherited field a new default, `X<override>:t = e`. -/
+def SField.isOverride (f : SField) : Bool := f.specs.contains "override"
 
 def SExpr.pos : SExpr → Pos
   | .int p _ | .char p _ | .char32 p _ | .float p _ | .str p _ | .ident p _ | .app p _ _ _ | .member p _ _
@@ -323,19 +339,25 @@ structure SParam where
   typeValue : Bool := false
   deriving Repr, Inhabited
 
-/-- A top-level definition. A function's type parameters are those of its
-    `where` clause (`F(X:t where t:type):t`); a function with any is generic. -/
+/-- A top-level definition, each with the specifiers written on it. A
+    function's are those of its name and its effects; its type parameters
+    are those of its `where` clause (`F(X:t where t:type):t`), and a function
+    with any is generic. -/
 inductive STop where
   | fn    : Pos → String → List SParam → List TParam → List String → STy → SExpr → STop
-  | const : Pos → String → Option STy → SExpr → STop
-  /-- `name(t:type, …) := class<specs>(parents): fields and methods`, or
-      `name := interface(parents): methods`. Each method is an `fn`; an
-      abstract one (no body) has the effect `$abstract`. `overrides` are the
-      fields declared `Name<override>:t = e`, which give an inherited field a
-      new default. A parent is a type: `base(t)` for a parametric one (#39). -/
-  | classDef : Pos → String → List TParam → (specs : List String) → (parents : List STy) →
-      (isInterface : Bool) → (fields : List (String × STy × Option SExpr × Bool)) →
-      (overrides : List String) → (methods : List STop) → STop
+  /-- `name<specs>:ty = value`, or `name<specs> := value`: a constant, or a
+      struct, enum, refinement type or type alias, whose value says which.
+      A module's marker `$module:A` has the module's specifiers. -/
+  | const : Pos → String → (specs : List String) → Option STy → SExpr → STop
+  /-- `name<nameSpecs>(t:type, …) := class<specs>(parents): fields and
+      methods`, or `name := interface(parents): methods`: the specifiers of
+      its name (its access) and of the class itself (its constructor's
+      access, `<abstract>`, …). Each method is an `fn`; an abstract one (no
+      body) has the effect `$abstract`. A field `Name<override>:t = e` gives
+      an inherited field a new default. A parent is a type: `base(t)` for a
+      parametric one (#39). -/
+  | classDef : Pos → String → (nameSpecs : List String) → List TParam → (specs : List String) →
+      (parents : List STy) → (isInterface : Bool) → (fields : List SField) → (methods : List STop) → STop
   deriving Repr, Inhabited
 
 /-- The name of the constant that holds a default a function type writes
@@ -426,7 +448,7 @@ partial def SExpr.definedNames : SExpr → List (Pos × String)
     | .decl _ _ _ _ x => x.definedNames
     | f => f.definedNames
   | .structDef p tps _ fs => tps.map (fun tp => (tp.pos, tp.name)) ++
-      fs.flatMap fun (n, _, d, _) => (p, bareName n) :: (d.map SExpr.definedNames).getD []
+      fs.flatMap fun f => (p, bareName f.name) :: (f.default.map SExpr.definedNames).getD []
   | .typeAlias _ tps _ => tps.map fun tp => (tp.pos, tp.name)
   | e => e.children.flatMap SExpr.definedNames
 
@@ -434,13 +456,13 @@ partial def STop.definedNames : STop → List (Pos × String)
   | .fn p n ps tps _ _ body =>
     (if n.startsWith "(" then [] else [(p, n)]) ++ tps.map (fun tp => (tp.pos, tp.name)) ++
       ps.flatMap (fun prm => (p, bareName prm.name) :: (prm.default.map SExpr.definedNames).getD []) ++ body.definedNames
-  | .const p n _ body =>
+  | .const p n _ _ body =>
     -- (a module's marker, `$module:A::B`, defines `B`)
     (if n.startsWith "$module:" then [(p, (n.drop "$module:".length).toString)]
      else [(p, n)]) ++ body.definedNames
-  | .classDef p n tps _ _ _ fs _ ms =>
+  | .classDef p n _ tps _ _ _ fs ms =>
     (p, n) :: tps.map (fun tp => (tp.pos, tp.name)) ++
-      fs.flatMap (fun (f, _, d, _) => (p, bareName f) :: (d.map SExpr.definedNames).getD []) ++
+      fs.flatMap (fun f => (p, bareName f.name) :: (f.default.map SExpr.definedNames).getD []) ++
       ms.flatMap STop.definedNames
 
 /-- Type aliases mentioned as bare names; applications keep declaration heads. -/

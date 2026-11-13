@@ -521,6 +521,12 @@ page](https://github.com/rudi-cilibrasi/openverse/wiki/Where-the-Book-disagrees-
 - **Tests:** `Bugs/SOL-4199-BreakFromIf.versetest:38-48`: "`break` in a `for` body is allowed and breaks the surrounding `loop`", which leaves the `for` too.
 - **openverse today:** refuses a `break` in a `for` body ("break is only allowed inside loop (not for)").
 
+### `break` as part of an expression
+
+- **Prose** (`07_control.md:529-530`): "The `break` statement must appear in a code block, not as part of a complex expression."
+- **Tests:** `SemicolonsVsCommas.versetest:97`: `assert{loop{1, @ignore_unreachable break}}`, a `break` as a tuple's element, expected to run (and `Reachability.versetest:91` takes `F(return)`, a `return` as an argument, with a warning).
+- **openverse now:** the tests' (a `break` or `return` may be an operand, outside a failure context; the code after it is never reached, a warning).
+
 ### `set X op= e`
 
 - **Prose** (`01_expressions.md:753`): `set Total += 1  # Equivalent to: set Total = Total + 1`, which, taken literally for a right side with an effect, reads `Total` first.

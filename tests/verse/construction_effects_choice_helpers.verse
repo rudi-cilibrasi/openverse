@@ -4,7 +4,7 @@ box(t:type):=struct<reads>:
     Default:int=Seed()
 Build(N:int)<reads>:int=box(int){Value:=N|N+1}.Value
 M:=module:
-    data<public>:=class<computes>{Value:int}
+    data<public>:=class<computes>{Value<public>:int}
     Make<public>(N:int)<computes>:data=data{Value:=N}
 Main():void=
     for(X:=Build(2)):Print("choice {X}")

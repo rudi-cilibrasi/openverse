@@ -54,15 +54,21 @@ structure Options where
 structure CDef where
   pos : Pos
   name : String
+  /-- The specifiers of its name: its access. -/
+  nameSpecs : List String := []
   tps : List TParam
+  /-- The specifiers after `class` or `interface`. -/
   specs : List String
   parents : List String
   /-- Each parent's type arguments (#39), in terms of this class's type parameters. -/
   parentArgs : List (List STy) := []
   isIface : Bool
-  fields : List (String × STy × Option SExpr × Bool)
-  overrides : List String
+  fields : List SField
   methods : List STop
+
+/-- The fields a class declares `<override>`, giving inherited ones new defaults. -/
+def CDef.overrides (cd : CDef) : List String := (cd.fields.filter (·.isOverride)).map (·.name)
+
 
 /-- An interface's Verse Core type arguments at `args`, in source types (as
     `TyEnv.coreArgs` has them, #53): those it gives the parent interface it
@@ -215,8 +221,8 @@ def expandCtors (ctors : List (Pos × String × List SParam × List TParam × Li
     let sparams : List TParam := ((targs.flatMap STy.names).eraseDups).filterMap fun n => tps.find? (·.name == n)
     let tpTys : List STy := sparams.map fun tp => STy.name tp.name
     let fieldsSTy : STy := if sparams.isEmpty then .name fieldsTy else .app fieldsTy tpTys
-    if !fs.isEmpty && !out.any (fun | .const _ n _ _ => n == fieldsTy | _ => false) then
-      out := out.push (.const p fieldsTy none (.structDef p sparams [] (fs.map fun f => (f, tyOf f, none, false))))
+    if !fs.isEmpty && !out.any (fun | .const _ n _ _ _ => n == fieldsTy | _ => false) then
+      out := out.push (.const p fieldsTy [] none (.structDef p sparams [] (fs.map fun f => { name := f, ty := tyOf f })))
     let mut body : Array SExpr := #[]
     let mut di := 0
     for it in items do
@@ -422,7 +428,8 @@ def copyScope? (effs : List String) : Option String :=
     stays final, its copy exempt (`$copy`). -/
 def copyIfaceDefaults (tops : List STop) : List STop :=
   let defs : List (String × Bool × List TParam × List STy × List String × List STop) := tops.filterMap fun
-    | .classDef _ n tps _ parents isI fields _ ms => some (n, isI, tps, parents, fields.map (·.1), ms)
+    | .classDef _ n _ tps _ parents isI fields ms => some (n, isI, tps, parents, fields.map (·.name), ms)
+
     | _ => none
   let defOf (n : String) := defs.find? (·.1 == n)
   let parentName : STy → String := fun | .app q _ => q | .name q => q | _ => ""
@@ -452,7 +459,7 @@ def copyIfaceDefaults (tops : List STop) : List STop :=
     | .gen _ n n2 _ => names.contains n || (n2.map names.contains).getD false
     | _ => false) b
   tops.map fun
-    | .classDef cp n tps specs parents false fields ovs ms =>
+    | .classDef cp n nsp tps specs parents false fields ms =>
       let chain := (supersOf n).filter fun c => ((defOf c).map (!·.2.1)).getD false
       let chainDeclares (m : String) : Bool := chain.any fun c => (membersOf c).contains m
       -- (the pinned interfaces reached, each with its type parameters as the
@@ -506,7 +513,7 @@ def copyIfaceDefaults (tops : List STop) : List STop :=
               some (.fn mp m ps' mtps (effs ++ ["$copy", s!"$copyOf:{j}"]) (ret.substNames σ) (Refine.substTypes σ body))
             else none
           | _ => none
-      .classDef cp n tps specs parents false fields ovs (ms ++ extra)
+      .classDef cp n nsp tps specs parents false fields (ms ++ extra)
     | t => t
 
 /-- An error of the lowering in function `name` (#156): with the position of

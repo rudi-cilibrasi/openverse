@@ -13,7 +13,7 @@ spell := module:
         Red
         Blue
     wand<public> := class:
-        Power:int
+        Power<public>:int
         Cast<public>():int = Power * Inner.Factor
 
 using{spell}

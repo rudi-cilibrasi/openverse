@@ -84,22 +84,22 @@ partial def loadDir (main d : System.FilePath) : LoadM Unit := do
     | "txt" =>
       let bytes ← (IO.FS.readBinFile e.path : IO ByteArray)
       let some text := String.fromUTF8? bytes | loadErr s!"{pos.file}: not UTF-8"
-      let top := STop.const pos name (some (.name "string")) (.str pos [.text text])
+      let top := STop.const pos name [] (some (.name "string")) (.str pos [.text text])
       modify fun st => { st with tops := st.tops.push top }
     | "value" =>
       let bytes ← (IO.FS.readBinFile e.path : IO ByteArray)
       let some text := String.fromUTF8? bytes | loadErr s!"{pos.file}: not UTF-8"
       match parseExprText text.trimAscii.toString with
       | .ok v =>
-        modify fun st => { st with tops := st.tops.push (.const pos name none v) }
+        modify fun st => { st with tops := st.tops.push (.const pos name [] none v) }
         -- (an expression with `/`: the rational helpers, #116)
         if textUsesRational text then
-          modify fun st => { st with tops := st.tops.push (.const pos ratMarker none (.block pos [])) }
+          modify fun st => { st with tops := st.tops.push (.const pos ratMarker [] none (.block pos [])) }
       | .error err => loadErr s!"{pos.file}:{err}"
     | "bin" =>
       let bytes ← (IO.FS.readBinFile e.path : IO ByteArray)
       let elems := bytes.toList.map fun b => SExpr.int pos b.toNat
-      let top := STop.const pos name (some (.arr (.name "int"))) (.arrayLit pos elems)
+      let top := STop.const pos name [] (some (.arr (.name "int"))) (.arrayLit pos elems)
       modify fun st => { st with tops := st.tops.push top }
     | _ => pure ()
 end

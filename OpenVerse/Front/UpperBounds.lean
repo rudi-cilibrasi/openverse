@@ -4,8 +4,8 @@ namespace OpenVerse.Front.UpperBounds
 
 partial def hasBounds : STop → Bool
   | .fn _ _ _ parameters .. => parameters.any (·.upperBound.isSome)
-  | .const _ _ _ (.structDef _ parameters _ _) => parameters.any (·.upperBound.isSome)
-  | .classDef _ _ parameters _ _ _ _ _ methods =>
+  | .const _ _ _ _ (.structDef _ parameters _ _) => parameters.any (·.upperBound.isSome)
+  | .classDef _ _ _ parameters _ _ _ _ methods =>
     parameters.any (·.upperBound.isSome) || methods.any hasBounds
   | _ => false
 

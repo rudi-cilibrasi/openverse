@@ -27,8 +27,8 @@ partial def checkExpr (e : SExpr) (file : String := "") : Except String Unit := 
   | .gen .. => reject pos "generator clauses"
   | .range .. => reject pos "ranges"
   | .structDef _ _ _ fields =>
-    for (_, _, value, _) in fields do
-      if let some value := value then checkExpr value file
+    for f in fields do
+      if let some value := f.default then checkExpr value file
   | .refineDef _ _ _ conditions => conditions.forM (checkExpr · file)
   | _ => e.children.forM (checkExpr · file)
 
@@ -37,10 +37,11 @@ partial def checkTop : STop → Except String Unit
     for param in params do
       if let some value := param.default then checkExpr value p.file
     checkExpr body p.file
-  | .const p _ _ value => checkExpr value p.file
-  | .classDef p _ _ _ _ _ fields _ methods => do
-    for (_, _, value, _) in fields do
-      if let some value := value then checkExpr value p.file
+  | .const p _ _ _ value => checkExpr value p.file
+  | .classDef p _ _ _ _ _ _ fields methods => do
+    for f in fields do
+      if let some value := f.default then checkExpr value p.file
+
     methods.forM checkTop
 
 /-- All loaded definitions are admitted, including unused imports. A source

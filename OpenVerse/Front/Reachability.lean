@@ -225,13 +225,13 @@ partial def ofTop : STop → WM Unit
     for prm in ps do
       if let some d := prm.default then let _ ← go d
     let _ ← go body
-  | .const _ _ _ (.structDef _ _ _ fs) => do
-    for (_, _, d, _) in fs do
-      if let some d := d then let _ ← go d
-  | .const _ _ _ e => do let _ ← go e
-  | .classDef _ _ _ _ _ _ fs _ ms => do
-    for (_, _, d, _) in fs do
-      if let some d := d then let _ ← go d
+  | .const _ _ _ _ (.structDef _ _ _ fs) => do
+    for f in fs do
+      if let some d := f.default then let _ ← go d
+  | .const _ _ _ _ e => do let _ ← go e
+  | .classDef _ _ _ _ _ _ _ fs ms => do
+    for f in fs do
+      if let some d := f.default then let _ ← go d
     for m in ms do ofTop m
 
 /-- Every place where code is never reached, in the program's definitions. -/
