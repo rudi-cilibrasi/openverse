@@ -285,8 +285,9 @@ Main():void =
   its positional ones: `type{_(:string, ?Color:string):string}`. The names
   are part of the type and match by name, in any order; a positional
   parameter's name is not. `?N:t = e` in a type lets a caller of the value
-  omit `N`. As the Book says, `e` is not part of the type, and it is not
-  checked. A function, or a method bound to its receiver, is a value of a
+  omit `N`. As the Book says, `e` is not part of the type, and it never
+  runs; it is checked at `N`'s type, with literals and top-level names only
+  (a local, a parameter or a type parameter there is refused). A function, or a method bound to its receiver, is a value of a
   function type with the same positional parameters when the type's names
   are among its own, it has a default for each one the type leaves out, and
   it has a default for each one the type lets callers omit. So
@@ -304,9 +305,12 @@ Main():void =
   type: `type{_(?A:int = …):int}` is below `type{_(?A:int):int}` and below
   `type{_():int}`. Generic functions and methods, effects, failure and
   rollback, suspension, variance and escaping values work as for other
-  function values. Not supported: a function whose named parameter has its
-  own name (`F(?F:int)`) as a value, and a type's default of another type is
-  not refused. See the [pinned rules](research/named-function-values.md).
+  function values. A parameter may also be written as a signature, as the
+  Book's examples do: `Map(Items:[]t, F(:t)<transacts>:u where t:type,
+  u:type)`, `?Say():string = Hello`. Not supported: a function whose named
+  parameter has its own name (`F(?F:int)`) as a value; tuple arguments with
+  named elements and destructured tuple parameters. See the
+  [pinned rules](research/named-function-values.md).
 - Overloaded functions and methods cannot be used as values (Book of Verse
   ch. 6, "Capture"), with or without named parameters. Local function
   declarations and lambda expressions are unsupported. The pinned Book marks nested functions unreleased and arrow
