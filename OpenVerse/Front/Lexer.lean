@@ -26,8 +26,9 @@
   `0oHH` char literals (one or two hex digits: that UTF-8 code unit, so
   `0o41` is 'A'; `0o` is not octal), `0uHHHHHH` char32 literals (a Unicode
   scalar value, up to `0u10FFFF`), string
-  literals with escapes and `{…}` interpolation, and the operator symbols
-  of ch. 4. Not supported: float literals, path literals.
+  literals with escapes and `{…}` interpolation, float literals, path
+  literals (`/Verse.org/Random`, where an operand starts: see `readPath`),
+  and the operator symbols of ch. 4.
 
   A `<#>` indented comment is the rest of its line and every following line
   indented more than the line that contains the `<#>` (blank lines included).
@@ -53,6 +54,9 @@ inductive Tok where
   /-- A float literal (#127): the bits of the nearest double, canonical. -/
   | float : UInt64 → Tok
   | str   : List StrPart → Tok
+  /-- A path literal `/Verse.org/Random` (Book of Verse ch. 1, "Path
+      Literals"; ch. 16, "Paths"). -/
+  | path  : String → Tok
   | sym   : String → Tok
   | eof   : Tok
   deriving Repr, Inhabited
@@ -76,6 +80,7 @@ def Tok.describe : Tok → String
   | .char32 c => s!"char32 {c}"
   | .float b => s!"float {VFloat.render b}"
   | .str _ => "string literal"
+  | .path p => s!"path {p}"
   | .sym s => s!"'{s}'"
   | .eof => "end of file"
 
@@ -266,6 +271,63 @@ def hexVal (c : Char) : Nat :=
   else if 'a' ≤ c ∧ c ≤ 'f' then c.toNat - 'a'.toNat + 10
   else c.toNat - 'A'.toNat + 10
 
+/-- The identifiers the parser reserves for its forms. -/
+def keywords : List String :=
+  ["if", "then", "else", "for", "do", "loop", "break", "return", "var", "set", "and", "or",
+   "not", "case", "block", "option", "logic", "array", "using", "struct", "enum", "map", "where",
+   "defer"]
+
+/-- Whether a token can end an operand, so that a `/` after it divides:
+    a name other than a keyword, a literal, or a closing bracket or `?`. -/
+def Tok.endsOperand : Tok → Bool
+  | .ident x => !keywords.contains x
+  | .int _ | .char _ | .char32 _ | .float _ | .str _ | .path _ => true
+  | .sym s => [")", "]", "}", "?"].contains s
+  | .eof => false
+
+/-- The characters of a path's label: ASCII letters and digits, `.`, `-`. -/
+def isLabelChar (c : Char) : Bool := c.isAlphanum || c == '.' || c == '-'
+
+/-- A path literal, at its `/` (Book of Verse ch. 1, "Path Literals"; ch. 16,
+    "Paths"): `/` and a label, which starts with a letter or digit, then
+    optionally `@` and a label (`/user@example.com`), then segments `/X`,
+    each an identifier (which may end in a quoted part, `/a/b'+'`) that a
+    qualifier `(/path:)` may precede. A path cannot be followed by `/` or
+    `@`: `/a/1b` and `/a@b@c` are errors. -/
+partial def readPath : LexM String := do
+  advance
+  let mut p := "/" ++ (← readWhile isLabelChar "")
+  if (← peekC) == some '@' then
+    advance
+    if !(((← peekC).map Char.isAlphanum).getD false) then
+      lexErr "expected a label after '@' in a path: a letter or digit, then letters, digits, '.' and '-'"
+    p := p ++ "@" ++ (← readWhile isLabelChar "")
+  repeat
+    if (← peekC) != some '/' then break
+    let qualified := (← peekC 1) == some '(' && (← peekC 2) == some '/'
+    if !qualified && !(((← peekC 1).map isIdStart).getD false) then break
+    advance
+    if qualified then
+      advance
+      let q ← readPath
+      if (← peekC) != some ':' || (← peekC 1) != some ')' then
+        lexErr "expected ':)' to end the qualifier of a path's segment"
+      advance; advance
+      p := p ++ "/(" ++ q ++ ":)"
+      if !(((← peekC).map isIdStart).getD false) then lexErr "expected an identifier after a path's qualifier"
+    else p := p ++ "/"
+    p := p ++ (← readWhile isIdChar "")
+    -- (`b'+'`: an identifier with a quoted part)
+    if (← peekC) == some '\'' then
+      advance
+      let q ← readWhile (fun c => c != '\'' && c != '\n' && c != '\r') ""
+      if q.isEmpty || (← peekC) != some '\'' then lexErr "expected the quoted part of a path's identifier, ending in '"
+      advance
+      p := p ++ "'" ++ q ++ "'"
+  if (← peekC) == some '/' || (← peekC) == some '@' then
+    lexErr "a path's segments after its label are identifiers: '/' must be followed by a letter or '_', and '@' comes once, after the first label"
+  return p
+
 /-- The symbols, longest first. -/
 def symbols : List String :=
   ["<decides>", ":=", "<>", "<=", ">=", "..", "->", "=>", "+=", "-=", "*=", "/=",
@@ -370,6 +432,10 @@ partial def lexAll (acc : Array Token) : LexM (Array Token) := do
       if (← peekC) != some '\'' then lexErr "char literal must be one character"
       advance
       lexAll (← emit (.char ch.toNat))
+    else if c == '/' && (((← peekC 1).map Char.isAlphanum).getD false) &&
+        !((acc.back?.map (·.tok.endsOperand)).getD false) then
+      -- (a `/` where an operand starts, before a letter or digit)
+      lexAll (← emit (.path (← readPath)))
     else match matchSym s.cs s.pos with
       | some sym =>
         for _ in [0:sym.length] do advance

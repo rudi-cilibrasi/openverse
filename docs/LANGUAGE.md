@@ -24,7 +24,7 @@ surface Verse is elaborated (`OpenVerse/Front/Elab.lean`) into Verse Core
 | Area | Supported | Book |
 |---|---|---|
 | Comments | `#` to the end of the line, nested `<# … #>`, `<#>` indented comments (the rest of the line and every following line indented more than it; see [Source text](#source-text)) | ch. 0 |
-| Literals | `int` (decimal, `0x` hex; must fit in 64 bits), `'c'` `char` (`c` printable ASCII U+0020–U+007E, or an escape), `0oHH` `char` code unit (one or two hex digits, not octal: `0o41` is `'A'`, `0o9` is a tab), strings with escapes and `{expr}` interpolation, `true`, `false`, `0uHHHHHH` `char32` (a Unicode scalar value, up to `0u10FFFF`, no surrogates), `float` `1.5`, `2.0e-7`, `1e3` (digits, then a point and digits or an exponent or both; the nearest double) | §1.3–1.7 |
+| Literals | `int` (decimal, `0x` hex; must fit in 64 bits), `'c'` `char` (`c` printable ASCII U+0020–U+007E, or an escape), `0oHH` `char` code unit (one or two hex digits, not octal: `0o41` is `'A'`, `0o9` is a tab), strings with escapes and `{expr}` interpolation, `true`, `false`, `0uHHHHHH` `char32` (a Unicode scalar value, up to `0u10FFFF`, no surrogates), `float` `1.5`, `2.0e-7`, `1e3` (digits, then a point and digits or an exponent or both; the nearest double); paths `/Verse.org/Random` parse (in `using{…}`, ignored; as values, refused; see [Source text](#source-text)) | §1.3–1.7 |
 | Types | `int`, `logic`, `char`, `char32`, `any` (see [any](#any)), `rational` (see [rational](#rational)), `float` (see [float](#float)), refinement types `type{_X:int where 0 <= _X, _X <= 120}` (see [Refinement types](#refinement-types)), `string` (= `[]char`), `[]t`, `?t`, `tuple(…)`, `void`, function types `type{_(:int)<decides>:int}`, with named parameters `type{_(:int, ?B:int):int}`, and `int->int` (see [Function values](#function-values)); a tuple converts to an array of its elements where an array is expected, and compares with an array as one (`array{1,2} = (1,2)`) | ch. 2–3 |
 | Definitions | top-level functions `F(X:t, …)<effects>:t = body`, top-level constants `C:t = e` / `C := e`; locals `X := e`, `X:t = e`, `var X:t = e`; no shadowing | §3.1–3.4 |
 | Mutation | `set X = e`, `set X += e` (`-=`, `*=`), `set A[i] = e` (fails out of range; returns `e`), and paths `set S.F.G = e`, `set A[i][j] op= e`, `set M[k].F = e`: indices and keys evaluated once, left to right, then the new value (for `op=`, after the old one is read: `set X += e` is `set X = X + e`), then the variable rebuilt; an index out of range or a missing intermediate key fails, while the last key of a path inserts | §3.3, §3.5, §9.3 |
@@ -72,6 +72,18 @@ openverse follows Verse's lexical grammar for the characters of a file:
   letter, digit or `_`; anything else (`0o`, `0o123`, `0o4g`) is an error.
   Its value is that UTF-8 code unit, so `0oC3` is a valid `char` although it
   is not ASCII.
+- A path literal (Book of Verse ch. 1, "Path Literals"; ch. 16, "Paths") is
+  `/` and a label, then optionally `@` and a label, then segments `/X`: a
+  label is ASCII letters, digits, `.` and `-`, starting with a letter or
+  digit; a segment is an identifier, which may end in a quoted part
+  (`/a/b'+'`) and may be preceded by a qualifier (`/a/(/b:)c`). A path
+  cannot be followed by `/` or `@` (`/a/1b`, `/a@b@c` are errors). A `/`
+  starts a path only where an operand starts and before a letter or digit:
+  after a name other than a keyword, a literal or a closing bracket, `/`
+  divides, so `X/2`, `F()/2` and `X /2` are divisions and `/a/b-c` is the
+  path `/a/b` minus `c`. A path parses wherever an expression may start
+  and in `using{…}`, which accepts and ignores it; as a value it is
+  refused ("not supported": openverse has no module values).
 
 **Indentation.** The indentation of a line is its leading string of tabs and
 spaces. The offside rule compares columns, and a tab is one column, so to
@@ -2235,7 +2247,7 @@ Main()<suspends>:void =
 
 `ToString` of rationals (see [rational](#rational)), float functions beyond those of [float](#float),
 the class features listed under [Classes](#classes), struct methods (Verse structs have none; classes do),
-`weak_map`, module paths `using{/Verse.org/…}` (accepted and ignored), the
+`weak_map`, module paths `using{/Verse.org/…}` (accepted and ignored) and paths as values, the
 specific overload/call gaps listed under [Overloading](#overloading), nested
 functions and lambdas (see [release evidence and proposed design](research/closure-design.md)), choice beyond [Choice](#choice), concurrency beyond [Concurrency](#concurrency), and the unsupported
 effect/construction contracts listed under [Effect contracts](#effect-contracts).

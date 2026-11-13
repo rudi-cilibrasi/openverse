@@ -107,11 +107,6 @@ def Token.isKw (t : Token) (k : String) : Bool :=
 
 def Token.pos (t : Token) : Pos := { line := t.line, col := t.col, file := t.file }
 
-def keywords : List String :=
-  ["if", "then", "else", "for", "do", "loop", "break", "return", "var", "set", "and", "or",
-   "not", "case", "block", "option", "logic", "array", "using", "struct", "enum", "map", "where",
-   "defer"]
-
 def Token.identName? (t : Token) : Option String :=
   match t.tok with
   | .ident x => if keywords.contains x then none else some x
@@ -886,6 +881,9 @@ partial def parsePrimary (stop : Nat) : PM SExpr := do
   | .char32 c => bump; return .char32 t.pos c
   | .float b => bump; return .float t.pos b
   | .str parts => bump; return .str t.pos (← parseInterp parts)
+  -- (a path is a name no identifier spells: the elaborator refuses it as
+  -- a value, Book of Verse ch. 16)
+  | .path p => bump; return .ident t.pos p
   | .sym "(" =>
     if (← peekT 1).isKw "super" && (← peekT 2).isSym ":" && (← peekT 3).isSym ")" then
       -- `(super:)M`: the parent's implementation of a method
