@@ -1111,7 +1111,11 @@ partial def elabCmp (ctx : Ctx) (p : Pos) (a : SExpr) (rest : List (String × SE
     let ra ← asArr ra rb.ty
     let rb ← asArr rb ra.ty
     checkTys op ra.ty rb.ty
-    return result (p2 (ordOf op ra.ty) ra.e rb.e) ra.ty
+    -- (Verse Core checks the right operand at the left's type, else infers
+    -- its type: one of another type that has no type of its own, `""` after
+    -- `()`, goes through a temporary of its type, `inferable`)
+    let eb ← if ra.ty.toVTy ctx.types == rb.ty.toVTy ctx.types then pure rb.e else inferable rb
+    return result (p2 (ordOf op ra.ty) ra.e eb) ra.ty
   | _ =>
     -- a chain: each operand is evaluated once, every adjacent pair is checked,
     -- and the result is the leftmost operand (Book of Verse §5.4)
