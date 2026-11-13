@@ -61,9 +61,14 @@ partial def STop.namesWritten : STop → List String
     parents.flatMap STy.allNames ++ fs.flatMap (fun f => f.ty.allNames ++ (f.default.map SExpr.namesWritten).getD []) ++
       ms.flatMap STop.namesWritten
 
-/-- The first attribute written on an expression (`$attributes`) in `e`. -/
+/-- The first form in `e` that openverse parses and refuses: an attribute
+    written on an expression (`$attributes`), with the message that refuses
+    it, or a form the parser marked (`$refused`, `refusedForm`). -/
 partial def SExpr.exprAttr? : SExpr → Option (Pos × String)
-  | .app p (.ident _ "$attributes") as _ => some (p, ((as.head?.map SExpr.attrHead).getD ""))
+  | .app p (.ident _ "$attributes") as _ =>
+    let h := (as.head?.map SExpr.attrHead).getD ""
+    some (p, s!"@{h} is on an expression or a local definition: attributes go on the definitions of a module, a class, an interface, a struct or an enum, and on an expression only @ignore_unreachable (Book of Verse ch. 12)")
+  | .app p (.ident _ "$refused") (.str _ [.text msg] :: _) _ => some (p, msg)
   | .structDef _ _ _ fs => fs.findSome? fun f => f.default.bind SExpr.exprAttr?
   | .refineDef _ _ _ cs => cs.findSome? SExpr.exprAttr?
   | e => e.children.findSome? SExpr.exprAttr?
@@ -298,7 +303,8 @@ def apply (tops : List STop) : Except String (List STop × List (Pos × String))
   let isRecord : STop → Bool := fun
     | .const _ n .. => ((n.splitOn "::").getLast?.getD n).startsWith attrPrefix
     | _ => false
-  if !tops.any isRecord && !tops.any (·.exprAttr?.isSome) then return (tops, [])
+  if !tops.any isRecord && !tops.any (·.exprAttr?.isSome) && !tops.any (·.namesWritten.contains "$pointer") then
+    return (tops, [])
   -- (the parser's markers and the constants it writes after a definition)
   let isMarker : STop → Bool := fun
     | t@(.const _ n ..) =>
@@ -350,8 +356,11 @@ def apply (tops : List STop) : Except String (List STop × List (Pos × String))
   let tops := (tops.filter (!isRecord ·)).map STop.withoutAttrSpecs
   -- (an attribute on an expression or a local definition: Book of Verse
   -- tests, deprecated.versetest:83, experimental.versetest:35, 3604, 3553)
-  if let some (p, h) := tops.findSome? STop.exprAttr? then
-    err p s!"@{h} is on an expression or a local definition: attributes go on the definitions of a module, a class, an interface, a struct or an enum, and on an expression only @ignore_unreachable (Book of Verse ch. 12)"
+  if let some (p, msg) := tops.findSome? STop.exprAttr? then err p msg
+  -- (a pointer type, `^t`, `$pointer`: Book of Verse tests, Pointers.versetest)
+  if let some t := tops.find? (·.namesWritten.contains "$pointer") then
+    let p := match t with | .fn p .. | .const p .. | .classDef p .. => p
+    err p "a pointer type ^t: the Book's chapters define no pointers, and openverse has none (Book of Verse tests, Pointers.versetest)"
   -- the attribute classes: the classes below `attribute`, by name
   let classes : List (String × List STy) := tops.filterMap fun
     | .classDef _ n _ _ _ ps false .. => some (n, ps)

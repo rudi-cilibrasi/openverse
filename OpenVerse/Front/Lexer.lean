@@ -360,7 +360,7 @@ partial def readPath : LexM String := do
 /-- The symbols, longest first. -/
 def symbols : List String :=
   ["<decides>", ":=", "<>", "<=", ">=", "..", "->", "=>", "+=", "-=", "*=", "/=",
-   "(", ")", "[", "]", "{", "}", ",", ";", ":", "=", "<", ">", "+", "-", "*", "/", ".", "?", "|", "@"]
+   "(", ")", "[", "]", "{", "}", ",", ";", ":", "=", "<", ">", "+", "-", "*", "/", ".", "?", "|", "@", "^"]
 
 def matchSym (cs : Array Char) (pos : Nat) : Option String :=
   -- `<decides>` and friends are lexed by the parser from `<`, ident, `>`

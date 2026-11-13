@@ -60,6 +60,9 @@ structure PSt where
   /-- The `case` arms marked `@ignore_unreachable`, by their pattern's
       position (Book of Verse tests, `Enum.versetest` 506-592). -/
   ignoredArms : Array Pos := #[]
+  /-- A map literal's key is being read, where `k => v` is its entry, not
+      a lambda. -/
+  inMapKey : Bool := false
 
 abbrev PM := StateT PSt (Except String)
 
@@ -287,6 +290,42 @@ def fieldsFollow (stop : Nat) : PM Bool := do
   let n ← peekT 1
   return b.isSym ":" && n.bol && n.col > stop && !n.isEof
 
+/-- A form openverse parses and has no meaning for, `$refused(msg, e…)`:
+    `Attributes.apply` refuses it with `msg` before anything else reads the
+    program (the Book's tests parse it: pointers, lambdas, a macro's
+    specifiers). -/
+def refusedForm (p : Pos) (msg : String) (es : List SExpr) : SExpr :=
+  .app p (.ident p "$refused") (.str p [.text msg] :: es) false
+
+/-- The refusal of a lambda (`parseRange`). -/
+def lambdaMessage : String :=
+  "a lambda (…) => … is a nested function, which openverse does not have (#492; the Book's ch. 6 marks nested functions as an unreleased feature; docs/research/closure-design.md)"
+
+/-- At a `(`: whether its parameters end with the `)` right before a `=>`,
+    a lambda's (`some true`), or not (`none`). -/
+def lambdaAhead? : PM (Option Bool) := do
+  if !(← peekT).isSym "(" then return none
+  let st ← get
+  let mut depth : Nat := 0
+  let mut i := st.pos
+  while h : i < st.toks.size do
+    let u := st.toks[i]
+    if u.isSym "(" || u.isSym "[" || u.isSym "{" then depth := depth + 1
+    else if u.isSym ")" || u.isSym "]" || u.isSym "}" then
+      depth := depth - 1
+      if depth == 0 then
+        return if (st.toks[i + 1]?.map (fun v => v.isSym "=>" && !v.bol)) == some true then some true else none
+    else if u.isEof then return none
+    i := i + 1
+  return none
+
+/-- The macros whose names a specifier may follow in the Book's grammar,
+    `for<par>(…)`, `array <computes> {…}`, which none admits (Book of Verse
+    tests, `InvalidAttributeLocations.versetest`: 3604). -/
+def macroKeywords : List String :=
+  ["for", "case", "loop", "defer", "block", "branch", "spawn", "sync", "race", "rush", "array", "map",
+   "option", "logic", "external", "if"]
+
 /-- The place a definition is at, for its attributes (`Attributes`). -/
 def STop.attrPlace : STop → String
   | .fn _ _ _ _ specs .. => if specs.any (·.startsWith "$constructor:") then "constructor" else "function"
@@ -351,6 +390,12 @@ partial def parseType : PM STy := do
 
 partial def parseTypeAtom : PM STy := do
   let t ← peekT
+  -- `^t`: a pointer type (Book of Verse tests, Pointers.versetest), which
+  -- the Book's chapters do not define: `$pointer(t)`, refused
+  -- (`Attributes.apply`)
+  if t.isSym "^" then
+    bump
+    return .app "$pointer" [← parseTypeAtom]
   -- `type{_(:t₁, …)<effects>:r}`: a function type (#210)
   if t.identName? == some "type" && (← peekT 1).isSym "{" && (← peekT 2).identName? == some "_" &&
       (← peekT 3).isSym "(" then
@@ -599,7 +644,36 @@ partial def parseValue (stop : Nat) : PM SExpr := do
   parseExpr stop
 
 partial def parseRange (stop : Nat) : PM SExpr := do
+  -- a lambda, `(X:int) => X`, `(a, b) => c`, `a => b` (Book of Verse
+  -- tests, Literals/Function.versetest: "Lambdas should be parsed, but
+  -- produce an error if used outside of a map literal"), but where a map
+  -- literal's key is read: a nested function, refused (`Attributes.apply`)
+  let t ← peekT
+  if !(← get).inMapKey then
+    if let some lam ← lambdaAhead? then
+      if lam then
+        -- (its parameters: through the `)` before `=>`, which they are
+        -- not read for, as the lambda is refused)
+        let mut depth : Nat := 0
+        repeat
+          let u ← peekT
+          if u.isSym "(" || u.isSym "[" || u.isSym "{" then depth := depth + 1
+          if u.isSym ")" || u.isSym "]" || u.isSym "}" then depth := depth - 1
+          bump
+          if depth == 0 then break
+        let a ← peekT
+        bump
+        let n ← peekT
+        let body ← if n.offside stop || n.isSym ")" || n.isSym "," then pure (SExpr.block a.pos []) else parseValue stop
+        return refusedForm t.pos lambdaMessage [body]
   let a ← parseOr stop
+  if (← peekT).isSym "=>" && !(← peekT).offside stop && !(← get).inMapKey &&
+      (match a with | .ident .. | .tuple .. => true | _ => false) then
+    let q ← peekT
+    bump
+    let n ← peekT
+    let body ← if n.offside stop || n.isSym ")" || n.isSym "," then pure (SExpr.block q.pos []) else parseValue stop
+    return refusedForm t.pos lambdaMessage [a, body]
   let t ← peekT
   if t.isSym ".." && !t.offside stop then
     bump
@@ -758,6 +832,11 @@ partial def parsePostfix (stop : Nat) : PM SExpr := do
         e := .member t.pos e (← expectIdent)
     else if t.isSym "?" then
       bump; e := .query t.pos e
+    else if t.isSym "^" then
+      -- `e^`, a pointer's dereference (Book of Verse tests, Roundtrip/
+      -- Operators.versetest), which the Book's chapters do not define
+      bump
+      e := refusedForm t.pos "a pointer's dereference e^: the Book's chapters define no pointers, and openverse has none (Book of Verse tests, Pointers.versetest)" [e]
     else if t.isKw "of" || t.isKw "at" then
       -- `F of X` is `F(X)` and `F at X` is `F[X]` (Book of Verse tests,
       -- `Operators/Of.versetest`, `Operators/At.versetest`): the argument
@@ -1325,6 +1404,16 @@ partial def parseInterp (parts : List StrPart) : PM (List SPart) := do
 
 partial def parsePrimary (stop : Nat) : PM SExpr := do
   let t ← peekT
+  -- `for<par>(…)`, `array <computes> {…}`: a macro's specifiers (Book of
+  -- Verse tests, TimSyntax.versetest, InvalidAttributeLocations.versetest),
+  -- which none admits: taken out of the tokens, the macro read, and refused
+  if let .ident kw := t.tok then
+    if macroKeywords.contains kw && (← peekT 1).isSym "<" && !(← peekT 1).bol &&
+        ((← peekT 2).tok matches .ident _) && (← peekT 3).isSym ">" then
+      let sp := match (← peekT 2).tok with | .ident x => x | _ => ""
+      modify fun st => { st with toks := st.toks.extract 0 (st.pos + 1) ++ st.toks.extract (st.pos + 4) st.toks.size }
+      let e ← parsePrimary stop
+      return refusedForm t.pos s!"<{sp}> on {kw}: a macro takes no specifier (class and struct take their construction's effects) (Book of Verse tests, InvalidAttributeLocations.versetest: 3604)" [e]
   -- `type{_X:t where c, …}`: a refinement type (Book of Verse ch. 11)
   if t.identName? == some "type" && (← peekT 1).isSym "{" then
     bump; bump
@@ -1496,7 +1585,10 @@ partial def parsePrimary (stop : Nat) : PM SExpr := do
   | .ident "map" =>
     bump
     let entry (c : Nat) : PM (SExpr × SExpr) := do
+      let inKey := (← get).inMapKey
+      modify fun st => { st with inMapKey := true }
       let k ← parseExpr c
+      modify fun st => { st with inMapKey := inKey }
       expectSym "=>"
       return (k, ← parseExpr c)
     if !(← peekT).isSym "{" then return .mapLit t.pos (← parseItemBlock entry stop)
