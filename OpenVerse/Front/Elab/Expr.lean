@@ -1012,21 +1012,6 @@ partial def ratMismatch : Ty → Ty → Bool
   | .struct a as, .struct b bs => a == b && as.length == bs.length && (as.zip bs).any fun (x, y) => ratMismatch x y
   | _, _ => false
 
-/-- Two different scalar types at the same place inside two types (#127):
-    `1 = 1.0` or `array{1} = array{'a'}` would compare values Verse Core
-    holds differently, always unequal. -/
-partial def scalarMismatch : Ty → Ty → Bool
-  | .arr a, .arr b | .opt a, .opt b => scalarMismatch a b
-  | .tup as, .tup bs => as.length == bs.length && (as.zip bs).any fun (a, b) => scalarMismatch a b
-  | .tup as, .arr b | .arr b, .tup as => as.any (scalarMismatch · b)
-  | .map k v, .map k' v' => scalarMismatch k k' || scalarMismatch v v'
-  | .struct a as, .struct b bs => a == b && as.length == bs.length && (as.zip bs).any fun (x, y) => scalarMismatch x y
-  | a, b =>
-    let scalar : Ty → Bool := fun
-      | .int | .logic | .char | .char32 | .rational | .float | .enum _ => true
-      | _ => false
-    scalar a && scalar b && !(a == b)
-
 /-- A call of a rational helper (#116), `$ratMake` or `$ratLt`. -/
 partial def ratCall (ctx : Ctx) (p : Pos) (f : String) (args : List Expr) : EM Expr := do
   let some s := ctx.sig? f | eerr p "internal error: the rational helpers are missing"
@@ -1060,35 +1045,54 @@ partial def elabCmp (ctx : Ctx) (p : Pos) (a : SExpr) (rest : List (String × SE
       match op with
       | "<" => .flt | "<=" => .fle | ">" => .fgt | ">=" => .fge | _ => opOf op
     else opOf op
-  let checkTys (op : String) (ta tb : Ty) : EM Unit := do
+  -- (`=` and `<>` compare values, of any two comparable types: two of
+  -- different types are equal only as one value, `TyEnv.cmpPlan`)
+  let checkTys (op : String) (ta tb : Ty) : EM CmpPlan := do
     if op == "=" || op == "<>" then
       if !isComparable ctx.types ta || !isComparable ctx.types tb then
         if !ta.comparable ctx.types then eerr p (notComparable ctx.types ta s!"an operand of '{op}'")
         if !tb.comparable ctx.types then eerr p (notComparable ctx.types tb s!"an operand of '{op}'")
         eerr p "these values cannot be compared"
-      -- different types with the same Verse Core type (a char32 or an enum
-      -- and an int, two structs with the same fields, also inside
-      -- containers) would compare equal there
-      -- (or could be, at some instance of the type parameters they mention:
-      -- two different ones, or one and a type that several types share in
-      -- Core, one with an int or a tuple)
+      if ta == tb || ta == .never || tb == .never then return .core
+      -- (type parameters: at some instance two different ones, or one and a
+      -- type that several types share in Verse Core, one with an int or a
+      -- tuple, could be types whose values Verse Core finds equal)
       let (va, vb) := (ta.toVTy ctx.types, tb.toVTy ctx.types)
       let (pa, pb) := (!ta.params.isEmpty, !tb.params.isEmpty)
-      if !(ta == tb) && ta != .never && tb != .never &&
-          (va == vb || (pa && pb) || (pa && vb.shared) || (pb && va.shared)) then
+      if (pa && pb) || (pa && vb.shared) || (pb && va.shared) then
         eerr p s!"'{op}' compares values of different types, {ta.show} and {tb.show}"
-      -- (nor an int with a rational inside containers, #116: equal values
-      -- that Verse Core holds differently, `1` and `(1, 1)`)
+      -- (nor an int with a rational inside containers that do not convert,
+      -- #116: equal values that Verse Core holds differently, `1` and `(1, 1)`)
       if ratMismatch ta tb then
         eerr p s!"'{op}' compares values of different types, {ta.show} and {tb.show} (an int and a rational inside them: convert the ints first)"
-      if scalarMismatch ta tb then
-        eerr p s!"'{op}' compares values of different types, {ta.show} and {tb.show}"
+      match ctx.types.cmpPlan ta tb with
+      | .refuse =>
+        eerr p s!"'{op}' compares values of different types, {ta.show} and {tb.show}, with values in common that Verse Core cannot tell from others (not supported)"
+      | plan => return plan
     else if !((ta == .int && tb == .int) || (ta == .char && tb == .char) || (ta == .char32 && tb == .char32) ||
         (ta == .float && tb == .float)) then
       eerr p s!"'{op}' compares ints, chars, char32s or floats, found {ta.show} and {tb.show}"
+    return .core
   let accepts : Ty → Bool := fun ty => arithmeticType ctx.types ty || ty == .char || ty == .char32
   let numeric (value : R) : EM R := do
     return widenR ctx.types (← elabValueViewWith elabE ctx p value accepts "comparison")
+  -- (an empty `array{}` or `map{}` has no type of its own: compared with a
+  -- value of a type that has the empty value, it is that type's empty value)
+  let emptyLit : SExpr → Bool
+    | .arrayLit _ [] | .mapLit _ [] => true
+    | _ => false
+  let operand (e : SExpr) (other : Ty) : EM R := do
+    if let (true, some v) := (emptyLit e, other.emptyValue?) then return ⟨.lit v, other⟩
+    elabE ctx e (some other)
+  -- (one first, the other operand's type gives it: that operand is
+  -- elaborated first, and the literal, which does nothing, compared with
+  -- it; the result is the left operand, the empty value; two of them are
+  -- the empty value at the type of `()`)
+  if let [(op, b)] := rest then
+    if emptyLit a then
+      if emptyLit b then return ← elabCmp ctx p (.tuple p []) rest
+      let r ← elabCmp ctx p b [(op, a)]
+      if let some v := r.ty.emptyValue? then return ⟨.seq (← inferable r) (.lit v), r.ty⟩
   let source := widenR ctx.types (← elabE ctx a none)
   let view ← match ctx.valueView p source.ty accepts "comparison" with
     | .ok view => pure view
@@ -1102,27 +1106,41 @@ partial def elabCmp (ctx : Ctx) (p : Pos) (a : SExpr) (rest : List (String × SE
   let result (code : Expr) (ty : Ty) : R := match original with
     | some (slot, ty) => ⟨.seq code (.local slot), ty⟩
     | none => ⟨code, ty⟩
-  -- (an array and a tuple compare as arrays: the tuple is converted)
-  let asArr (r : R) (other : Ty) : EM R := do
-    match r.ty, other with
-    | .tup _, .arr _ => return ⟨← coerce p r other, other⟩
-    | _, _ => return r
+  -- (a tuple compared with an array is the array of its elements, and a
+  -- container of ints one of rationals, #116: converted to the other
+  -- operand's type when it converts, it is compared as one)
+  let toOther (r : R) (other : Ty) : EM R := do
+    let converts := match r.ty, other with
+      | .tup _, .arr _ => true
+      | t, u => ratMismatch t u
+    if !converts then return r
+    tryCatch (return ⟨← coerce p r other, other⟩) fun _ => return r
+  -- (an int and a rational, #116: as rationals; `=` and `<>` of a rational
+  -- and another type are those of different types)
+  let rational (op : String) (ta tb : Ty) : Bool :=
+    let num (t : Ty) := t == .int || t == .rational
+    (ta == .rational || tb == .rational) && (!(op == "=" || op == "<>") || (num ta && num tb))
   match rest with
   | [(op, b)] =>
-    let rb ← numeric (← elabE ctx b (some ra.ty))
-    if ra.ty == .rational || rb.ty == .rational then
+    let rb ← numeric (← operand b ra.ty)
+    if rational op ra.ty rb.ty then
       let ta ← fresh ra.ty
       let tb ← fresh rb.ty
       let test ← ratTest ctx p op ⟨.local ta, ra.ty⟩ ⟨.local tb, rb.ty⟩
       return result (.seq (.assign ta ra.e) (.seq (.assign tb rb.e) (.seq test (.local ta)))) ra.ty
-    let ra ← asArr ra rb.ty
-    let rb ← asArr rb ra.ty
-    checkTys op ra.ty rb.ty
-    -- (Verse Core checks the right operand at the left's type, else infers
-    -- its type: one of another type that has no type of its own, `""` after
-    -- `()`, goes through a temporary of its type, `inferable`)
-    let eb ← if ra.ty.toVTy ctx.types == rb.ty.toVTy ctx.types then pure rb.e else inferable rb
-    return result (p2 (ordOf op ra.ty) ra.e eb) ra.ty
+    let ra ← toOther ra rb.ty
+    let rb ← toOther rb ra.ty
+    match ← checkTys op ra.ty rb.ty with
+    | .core =>
+      -- (Verse Core checks the right operand at the left's type, else infers
+      -- its type: one of another type that has no type of its own, `""` after
+      -- `()`, goes through a temporary of its type, `inferable`)
+      let eb ← if ra.ty.toVTy ctx.types == rb.ty.toVTy ctx.types then pure rb.e else inferable rb
+      return result (p2 (ordOf op ra.ty) ra.e eb) ra.ty
+    | plan =>
+      let x ← fresh ra.ty
+      let y ← fresh rb.ty
+      return result (.seq (.assign x ra.e) (.seq (.assign y rb.e) (plan.test (opOf op) x y))) ra.ty
   | _ =>
     -- a chain: each operand is evaluated once, every adjacent pair is checked,
     -- and the result is the leftmost operand (Book of Verse §5.4)
@@ -1131,20 +1149,20 @@ partial def elabCmp (ctx : Ctx) (p : Pos) (a : SExpr) (rest : List (String × SE
     let mut prevTy := ra.ty
     let mut steps : Array Expr := #[.assign t0 ra.e]
     for (op, b) in rest do
-      let rb ← numeric (← elabE ctx b (some prevTy))
-      let rb ← asArr rb prevTy
+      let rb ← numeric (← operand b prevTy)
+      let rb ← toOther rb prevTy
       -- (the previous operand, as an array when this one is)
-      let prevE ← match prevTy, rb.ty with
-        | .tup _, .arr _ => coerce p ⟨.local prev, prevTy⟩ rb.ty
-        | _, _ => pure (.local prev)
+      let prevR ← toOther ⟨.local prev, prevTy⟩ rb.ty
       let tb ← fresh rb.ty
-      if prevTy == .rational || rb.ty == .rational then
+      if rational op prevTy rb.ty then
         steps := steps.push (.assign tb rb.e)
         steps := steps.push (← ratTest ctx p op ⟨.local prev, prevTy⟩ ⟨.local tb, rb.ty⟩)
       else
-        checkTys op (match prevTy, rb.ty with | .tup _, .arr _ => rb.ty | _, _ => prevTy) rb.ty
+        let plan ← checkTys op prevR.ty rb.ty
         steps := steps.push (.assign tb rb.e)
-        steps := steps.push (p2 (ordOf op prevTy) prevE (.local tb))
+        steps := steps.push (match plan with
+          | .core => p2 (ordOf op prevTy) prevR.e (.local tb)
+          | plan => plan.test (opOf op) prev tb)
       prev := tb
       prevTy := rb.ty
     return result (steps.foldr Expr.seq (.local t0)) ra.ty
