@@ -291,11 +291,14 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   let overloads ← functionOverloads env methods.tops defs.methodOverloads
   let env := { env with overloads := overloads.functions, methodOverloads := overloads.methods }
   let declared ← declareSignatures env overloads.tops opts.requests
+  -- (the accessors come right after the functions, #157: known now, so that
+  -- every elaboration from here on, field defaults' too, reads and sets a
+  -- field through one at its place)
+  let env := { env with fieldAccBase := declared.tops.length + declared.gsigs.size }
   let sigs ← inferSignatures env declared admitted.typeDefaults opts.requests
   checkSignatures env sigs classes.defs fields methods
   let defaults ← elabFieldDefaults env sigs methods.tops classes.defs
-  -- (the accessors come right after the functions, #157)
-  let env := { env with fieldAccBase := sigs.tops.length + sigs.gsigs.size, signalNoRollback := opts.signalNoRollback }
+  let env := { env with signalNoRollback := opts.signalNoRollback }
   let elaborated ← elabFunctions env sigs opts.requests
   let needs := roundNeeds elaborated defaults.needs source
   -- (#283) the eager groups, the families of the uses of methods whose
