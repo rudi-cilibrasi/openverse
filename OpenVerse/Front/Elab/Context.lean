@@ -807,7 +807,7 @@ def builtins : List String :=
     definition, if any, is the one a call means. -/
 def softBuiltins : List String :=
   ["Round", "Int", "Sqrt", "Exp", "Ln", "Log", "Pow", "Sin", "Cos", "Tan", "ArcSin", "ArcCos", "ArcTan",
-   "IsFinite", "Concatenate", "Sinh", "Cosh", "Tanh", "ArSinh", "ArCosh", "ArTanh", "Lerp"]
+   "IsFinite", "Concatenate", "Sinh", "Cosh", "Tanh", "ArSinh", "ArCosh", "ArTanh", "Lerp", "Clamp", "Sgn"]
 
 partial def resolveTy (env : TyEnv) (p : Pos) : STy → EM Ty
   | .name "int" => pure .int
@@ -2300,13 +2300,27 @@ def setFieldAt (env : TyEnv) (p : Pos) (sn : String) (targs : List Ty) (obj : Na
     return .seq (.assign tv v) (.assign y acc)
   return .seq (.assign tv v) acc
 
+/-- The 256 chars, each at the index of its code unit: Verse Core's way from
+    an int to a char (it has no conversion between them). -/
+def charTable : Expr := .lit (.arr ((List.range 256).map Value.char).toArray)
+
+/-- The code unit, 0 to 255, of the char in slot `tc`: found by a binary
+    search over `charTable`, eight comparisons of chars (Verse Core has no
+    conversion from char to int). The lookups cannot fail. -/
+def codeUnitOf (tc : Nat) : EM Expr := do
+  let n ← fresh .int
+  let step (k : Int) : Expr :=
+    let at_ := p2 .add (.local n) (.lit (.int k))
+    .ite (p2 .ge (.local tc) (p2 .index charTable at_)) (.assign n at_) (.local n)
+  let search := [128, 64, 32, 16, 8, 4, 2, 1].foldl (fun acc k => Expr.seq acc (step k)) (.assign n (.lit (.int 0)))
+  return .seq search (.local n)
+
 /-- The UTF-8 encoding of the char32 in slot `tc`, a Unicode scalar value:
-    its one to four bytes as chars, each looked up in the table of the 256
-    byte values (Verse Core has no conversion from int to char; the lookups
-    and the divisions cannot fail, but are guarded so that the checker sees
-    no failure). -/
+    its one to four bytes as chars, each looked up in `charTable` (the
+    lookups and the divisions cannot fail, but are guarded so that the
+    checker sees no failure). -/
 def utf8Of (tc : Nat) : EM Expr := do
-  let table : Expr := .lit (.arr ((List.range 256).map Value.char).toArray)
+  let table := charTable
   let int (i : Int) : Expr := .lit (.int i)
   let chr (b : Expr) : EM Expr := do
     let tch ← fresh .char
@@ -2328,6 +2342,46 @@ def utf8Of (tc : Nat) : EM Expr := do
     (.ite (seqs [.assign a (q c 262144), .assign r (m c 262144), .assign b (q (.local r) 4096),
         .assign r2 (m (.local r) 4096), .assign d (q (.local r2) 64), .assign e (m (.local r2) 64)]) four
       (.prim .userErr []))))
+
+/-- The conversions of chars and code points, and `IsFinite` of a float, as
+    methods of their receivers: of a char, `C.ToCodeUnit()` (0 to 255) and
+    `C.ToAsciiChar32[]` (failing above 127); of a char32, `C.ToCodePoint()`
+    and `C.ToAsciiString()` (its UTF-8 encoding); of an int, `N.ToChar[]`
+    (failing outside 0 to 255) and `N.ToChar32[]` (failing on a negative,
+    a surrogate 0xD800 to 0xDFFF, or above 0x10FFFF); of a float,
+    `F.IsFinite[]` (`F`, failing on an infinity or NaN). They are the Book's
+    Runtime API ("char and char32") and Epic's (`IsFinite`); none takes an
+    argument, those that can fail take brackets, and each is written with
+    Verse Core's operations (a char32 is an int there). `none` for another
+    method. -/
+def scalarMethod? (p : Pos) (r0 : R) (m : String) (args : List SExpr) (bracket : Bool) :
+    EM (Option R) := do
+  let r := widenR (← get).env r0
+  let decides? : Option Bool := match r.ty, m with
+    | .char, "ToCodeUnit" | .char32, "ToCodePoint" | .char32, "ToAsciiString" => some false
+    | .char, "ToAsciiChar32" | .int, "ToChar" | .int, "ToChar32" | .float, "IsFinite" => some true
+    | _, _ => none
+  let some decides := decides? | return none
+  let call := if decides then s!"X.{m}[]" else s!"X.{m}()"
+  if !args.isEmpty then eerr p s!"{m} takes no arguments: call it with {call}"
+  if decides != bracket then
+    eerr p s!"{m} {if decides then "can" else "cannot"} fail: call it with {call}"
+  let int (i : Int) : Expr := .lit (.int i)
+  let tv ← fresh (if r.ty == .char32 then .int else r.ty)
+  let first := Expr.assign tv r.e
+  let v := Expr.local tv
+  match m with
+  | "ToCodeUnit" => return some ⟨.seq first (← codeUnitOf tv), .int⟩
+  | "ToCodePoint" => return some ⟨r.e, .int⟩
+  | "ToAsciiString" => return some ⟨.seq first (← utf8Of tv), Ty.string⟩
+  | "ToChar" => return some ⟨p2 .index charTable r.e, .char⟩
+  | "ToChar32" =>
+    let surrogate := Expr.seq (p2 .ge v (int 0xD800)) (p2 .le v (int 0xDFFF))
+    return some ⟨.seq first (.seq (p2 .ge v (int 0)) (.seq (p2 .le v (int 0x10FFFF))
+      (.ite surrogate (.prim .fail []) v))), .char32⟩
+  | "ToAsciiChar32" =>
+    return some ⟨.seq first (.seq (p2 .lt v (.lit (.char 128))) (← codeUnitOf tv)), .char32⟩
+  | _ => return some ⟨.prim .fisFinite [r.e], .float⟩
 
 /-- A Verse Core type that several front-end types have: one with an
     `int` (also a char32 or an enum), a tuple (also a struct), or a type

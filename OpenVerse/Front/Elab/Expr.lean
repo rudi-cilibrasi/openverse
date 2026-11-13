@@ -810,6 +810,13 @@ partial def elabGenericCall (ctx : Ctx) (p : Pos) (s : Sig) (args : List SExpr) 
     out of range (or, for `Find`, when there is no such element). -/
 partial def elabMethod (ctx : Ctx) (p : Pos) (r : R) (m : String) (args : List SExpr) (bracket : Bool) :
     EM R := do
+  -- (the methods of chars, code points, ints and floats)
+  if let some res ← scalarMethod? p r m args bracket then return res
+  -- (a tuple of one element type is an array of its elements where an array
+  -- is expected, as its receiver is: `('a', 'b').Slice[1]`)
+  let r ← match r.ty with
+    | .tup (t0 :: ts) => if ts.all (· == t0) then pure ⟨← coerce p r (.arr t0), .arr t0⟩ else pure r
+    | _ => pure r
   let .arr t := r.ty | eerr p s!"{r.ty.show} has no method '{m}'{ctx.anyWhy r}"
   -- (the methods that cannot fail take parentheses, #150)
   let total := ["RemoveAllElements", "ReplaceAllElements", "ReplaceAll"].contains m

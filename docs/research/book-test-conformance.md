@@ -6,7 +6,9 @@ suite and records, case by case, whether openverse agrees. It was taken at
 are those of openverse with the parser forms of [After the parser
 forms](#after-the-parser-forms) and the rule checks of [After the rule
 checks](#after-the-rule-checks), on main `f80fcb2`, and with the type aliases
-of [After the type aliases](#after-the-type-aliases), against the Book at
+of [After the type aliases](#after-the-type-aliases) and the library
+functions of [After the library functions](#after-the-library-functions),
+against the Book at
 [`beaa719ba165cbf33eff462f2b0fe078a6dd9ab0`](https://github.com/verselang/book/tree/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/Tests),
 the revision the other research notes pin. The Book's
 [`DEVELOPMENT.md`](https://github.com/verselang/book/blob/beaa719ba165cbf33eff462f2b0fe078a6dd9ab0/DEVELOPMENT.md)
@@ -27,22 +29,25 @@ per-case verdicts are [`baseline.tsv`](../../tests/conformance/book/baseline.tsv
 - **13,504 cases** from the 629 test files that hold one (of 636; seven are
   entirely commented out): 13,197 test cases and 307 cases for the shared
   definitions of a file.
-- **3,706 are not translatable** (27%): virtual packages and modules
+- **3,718 are not translatable** (27%): virtual packages and modules
   (1,264); the compiler's test runner, its natives and classes (1,204), its
-  coroutine controls `CoroUtils` (552) and its other modules (175); engine
+  coroutine controls `CoroUtils` (552) and its other modules (187); engine
   APIs (persistence, JSON, natives; 345); compiler tooling such as bytecode
   and digests (128); VM-conditional code inside a definition (37) and one
   file that defines `Main` itself (1).
-- Of the **9,798 translatable cases**, openverse **agrees on 7,072 (72%)**,
-  refuses 2,333 valid programs, **accepts 308 refused ones**, gives a
+- Of the **9,786 translatable cases**, openverse **agrees on 7,143 (73%)**,
+  refuses 2,250 valid programs, **accepts 308 refused ones**, gives a
   **different result in 85** and hits **no internal error**. On test cases
-  alone (without `:decls`) it agrees on 6,939 of 9,582. (When the survey was
+  alone (without `:decls`) it agrees on 7,009 of 9,570. (When the survey was
   taken, at `0e69cfb`: 6,409 agreed, 2,817 refused, 482 accepted, 86
   differed and 4 internal errors; before the parser forms, at main
   `99ed203`: 6,417 agreed, 2,809 refused, 482 accepted, 86 differed; with
   the parser forms alone: 6,828 agreed, 2,360 refused, 521 accepted, 85
-  differed, 4 internal errors; with the rule checks, before the type
-  aliases: 7,057 agreed, 2,360 refused, 296 accepted, 85 differed.)
+  differed, 4 internal errors; with the rule checks, at main `1300096`:
+  7,057 agreed, 2,360 refused, 296 accepted, 85 differed, none internal;
+  each of the next two steps measured alone from there: the type aliases
+  7,072 agreed, 2,333 refused, 308 accepted, the library functions 7,128
+  agreed, 2,277 refused, 296 accepted, both with 85 different.)
 - An agreement on an expected error is weak evidence: 2,768 expected errors
   agree, but only 1,004 of them are refused by a check of a language rule;
   1,278 are refused by the parser (the lexer's and parser's own checks
@@ -73,13 +78,17 @@ per-case verdicts are [`baseline.tsv`](../../tests/conformance/book/baseline.tsv
 - **Most refusals were syntax**: path literals (213, nearly all parse-only
   tests), empty class and function bodies (160), unnamed parameters (123),
   block and dot forms (163); the parser now takes these (450 cases more
-  agree, see [After the parser forms](#after-the-parser-forms)). Left:
-  attributes (134), qualified names (162), Tim Sweeney's parser tests and
-  other syntax (164); missing library functions: bitwise (159), character
-  conversions (147), `ToDiagnostic` (93). Type aliases are taken ([After the
-  type aliases](#after-the-type-aliases)). The largest semantic gaps are
-  types as values (198), `comparable` as a type (125, not built: [its rules
-  and a design](comparable-type.md)) and VerseVM-only union types (136).
+  agree, see [After the parser forms](#after-the-parser-forms)). The
+  library functions the tests call (the character conversions, `Clamp`,
+  `Sgn`, math functions as values) followed ([After the library
+  functions](#after-the-library-functions), 71 more), and so did type
+  aliases ([After the type aliases](#after-the-type-aliases), 27 more, 12
+  fewer). Left: attributes (134), qualified names (162), Tim Sweeney's
+  parser tests and other syntax (159); bitwise functions (159, pinned, not
+  implemented), free `ToChar` and `ToChar32` the API reference does not
+  declare (145), `ToDiagnostic` (93). The largest semantic gaps are types as
+  values (198), `comparable` as a type (125, not built: [its rules and a
+  design](comparable-type.md)) and VerseVM-only union types (136).
 
 ## How the harness reads a test file
 
@@ -178,7 +187,7 @@ counterpart for, found before running anything:
 | the test runner's `TestUtils` | 113 |
 | `<native>` definitions | 93 |
 | engine API `Persistence` | 63 |
-| the test runner's `FloatConstants` | 57 |
+| the test runner's `FloatConstants` | 69 |
 | compiler tooling: `assert_digest_generated` | 53 |
 | `bp_vm_only`/`verse_vm_only` inside a definition | 37 |
 | engine API `ToJson` | 32 |
@@ -211,19 +220,19 @@ cases are refusals.
 
 | | cases | agrees | disagrees-accepts | disagrees-refuses | wrong output | not translatable | internal error |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| all test cases (assertions and files without one) | 13197 | 6939 | 308 | 2250 | 85 | 3615 | 0 |
-| shared definitions of a file (`:decls`) | 307 | 133 | 0 | 83 | 0 | 91 | 0 |
-| **total** | 13504 | 7072 | 308 | 2333 | 85 | 3706 | 0 |
+| all test cases (assertions and files without one) | 13197 | 7009 | 308 | 2168 | 85 | 3627 | 0 |
+| shared definitions of a file (`:decls`) | 307 | 134 | 0 | 82 | 0 | 91 | 0 |
+| **total** | 13504 | 7143 | 308 | 2250 | 85 | 3718 | 0 |
 
 ### By form
 
 | | cases | agrees | disagrees-accepts | disagrees-refuses | wrong output | not translatable | internal error |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| `assert` | 6671 | 2883 | 0 | 1579 | 85 | 2124 | 0 |
+| `assert` | 6671 | 2941 | 0 | 1509 | 85 | 2136 | 0 |
 | `assert_semantic_error` | 3460 | 2446 | 271 | 0 | 0 | 743 | 0 |
-| `assert_valid` | 1637 | 644 | 0 | 474 | 0 | 519 | 0 |
-| `assert_valid_syntax` | 439 | 324 | 0 | 115 | 0 | 0 | 0 |
-| `decls` | 307 | 133 | 0 | 83 | 0 | 91 | 0 |
+| `assert_valid` | 1637 | 651 | 0 | 467 | 0 | 519 | 0 |
+| `assert_valid_syntax` | 439 | 329 | 0 | 110 | 0 | 0 | 0 |
+| `decls` | 307 | 134 | 0 | 82 | 0 | 91 | 0 |
 | `assert_roundtrip` | 304 | 267 | 0 | 35 | 0 | 2 | 0 |
 | `assert_syntax_error` | 303 | 300 | 3 | 0 | 0 | 0 | 0 |
 | `assert_runtime_error` | 140 | 30 | 0 | 43 | 0 | 67 | 0 |
@@ -244,8 +253,8 @@ cases are refusals.
 
 | | cases | agrees | disagrees-accepts | disagrees-refuses | wrong output | not translatable | internal error |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| no VM restriction | 12208 | 6806 | 268 | 1834 | 57 | 3243 | 0 |
-| `verse_vm_only` | 702 | 191 | 7 | 374 | 28 | 102 | 0 |
+| no VM restriction | 12208 | 6868 | 268 | 1760 | 57 | 3255 | 0 |
+| `verse_vm_only` | 702 | 200 | 7 | 365 | 28 | 102 | 0 |
 | `bp_vm_only` | 366 | 67 | 33 | 14 | 0 | 252 | 0 |
 | `verse_vm_todo` (BPVM only; a known VerseVM failure) | 219 | 8 | 0 | 111 | 0 | 100 | 0 |
 | `auto_qualify_todo` | 9 | 0 | 0 | 0 | 0 | 9 | 0 |
@@ -254,15 +263,15 @@ cases are refusals.
 
 | | cases | agrees | disagrees-accepts | disagrees-refuses | wrong output | not translatable | internal error |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| (top level) | 5575 | 2935 | 133 | 1250 | 18 | 1239 | 0 |
-| Operators/ | 1203 | 956 | 5 | 128 | 53 | 61 | 0 |
+| (top level) | 5575 | 2948 | 133 | 1237 | 18 | 1239 | 0 |
+| Operators/ | 1203 | 956 | 5 | 116 | 53 | 73 | 0 |
 | Bugs/ | 1185 | 683 | 48 | 205 | 0 | 249 | 0 |
 | Literals/ | 1020 | 815 | 0 | 171 | 0 | 34 | 0 |
 | Serialization/ | 991 | 0 | 0 | 0 | 0 | 991 | 0 |
 | Attributes/ | 795 | 377 | 23 | 149 | 0 | 246 | 0 |
 | FlowControl/ | 484 | 360 | 33 | 42 | 4 | 45 | 0 |
-| Intrinsics/ | 437 | 283 | 0 | 119 | 10 | 25 | 0 |
-| Math/ | 321 | 110 | 0 | 207 | 0 | 4 | 0 |
+| Intrinsics/ | 437 | 295 | 0 | 107 | 10 | 25 | 0 |
+| Math/ | 321 | 156 | 0 | 161 | 0 | 4 | 0 |
 | Classes/ | 317 | 197 | 32 | 11 | 0 | 77 | 0 |
 | Versions/ | 289 | 4 | 0 | 2 | 0 | 283 | 0 |
 | Roundtrip/ | 255 | 229 | 0 | 24 | 0 | 2 | 0 |
@@ -394,7 +403,7 @@ left (`concrete.versetest:38` is a class below a `<concrete>` one, see
 
 ## Refused where the tests expect a valid program
 
-2,333 cases (2,250 test cases and 83 `:decls`). The cause is that of
+2,250 cases (2,168 test cases and 82 `:decls`). The cause is that of
 openverse's first refusal: a case can hit several, so a count is the number
 of cases a fix would get past their first obstacle, an upper bound on the
 cases it would turn into agreements.
@@ -402,19 +411,18 @@ cases it would turn into agreements.
 | Cause | Cases | Example | openverse | Marked | openverse documents it | Size |
 |---|---:|---|---|---|---|---|
 | types as values | 198 | `Tests/Cast.versetest:69`: `assert{void(0)}` | `unknown function 'void'` | 10 `verse_vm_only` | in part: `t:subtype(…)` bounds of type parameters are supported, source upper bounds refused (#502) | front-end feature, and Core for `type` values: `subtype(t)`, `castable_subtype(t)`, `concrete_subtype(t)`, conversions `int(0)`, classes as values |
-| other syntax | 164 | `Tests/TimSyntax.versetest:224`: `"1,2"` (valid syntax) | parse errors of many kinds: Tim Sweeney's parser tests (53), `of` and `at` calls (15), `<scoped{…}>` specifiers and `scoped{…}` definitions (19), `profile` blocks (8), comments inside a definition (`Roundtrip/Comments.versetest`, 8), pointers `^` (5), module items at uneven columns (5), commas between expressions at statement level, … ([After the parser forms](#after-the-parser-forms)) | 4 `verse_vm_only` | no | parser forms and features, many small ones |
+| other syntax | 159 | `Tests/TimSyntax.versetest:224`: `"1,2"` (valid syntax) | parse errors of many kinds: Tim Sweeney's parser tests (51), `of` and `at` calls (15), `<scoped{…}>` specifiers and `scoped{…}` definitions (19), `profile` blocks (8), comments inside a definition (`Roundtrip/Comments.versetest`, 8), pointers `^` (5), module items at uneven columns (4), commas between expressions at statement level, … ([After the parser forms](#after-the-parser-forms)) | 4 `verse_vm_only` | no | parser forms and features, many small ones |
 | bitwise functions | 159 | `Tests/Math/Bitwise.versetest:36`: `assert{BitNot(0) = -1}` | `unknown function 'BitNot'` | 62 `verse_vm_only` (unbounded ints), 13 `bp_vm_only` (runtime errors for shifts) | no; the Book's ch. 4, "Bitwise Operations" | Core and runtime: six `int` primitives, their Lean seams and C |
-| character conversions | 147 | `Tests/Intrinsics/CharConversionExtensionMethods.versetest:21`: `0u00041.ToCodePoint() = 65` | `char32 has no method 'ToCodePoint'`; `unknown function 'ToChar'` | 2 `verse_vm_only` | no; the Runtime API reference documents `ToChar`, `ToChar32`, `ToCodeUnit`, `ToCodePoint` | built-in functions over existing values |
-| other type rules | 131 | `Tests/Bugs/2021-09-03-OptionalTupleAssertionFailure.versetest:3`: `X:?tuple(int,int)=option{1,2}` | `expected ?tuple(int, int), found ?int` (see commas, above); also the `message` type, an overloaded function as a value, `Concatenate()` with no arguments, map keys of a sibling class, … | 8 `verse_vm_only` | no | each small |
+| character conversions | 145 | `Tests/Literals/Char.versetest:86`: `RequireChar8Equal[HexLiteral, ToChar(Utf8CodeUnit)]` | `unknown function 'ToChar'`: free functions `ToChar(N)` and `ToChar32(N)`, called with parentheses as total functions, which neither the API reference nor Epic's pages declare (the methods `N.ToChar[]`, `N.ToChar32[]` are `<decides>`); most likely the test runner's | none | yes: [char32](../LANGUAGE.md#char32) has the methods | none known |
+| other type rules | 128 | `Tests/Bugs/2021-09-03-OptionalTupleAssertionFailure.versetest:3`: `X:?tuple(int,int)=option{1,2}` | `expected ?tuple(int, int), found ?int` (see commas, above); also the `message` type, an overloaded function as a value, `Concatenate()` with no arguments, map keys of a sibling class, … | 8 `verse_vm_only` | no | each small |
 | qualified names | 162 | `Tests/Pointers.versetest:53`: `var (local:)result:int` | `expected an identifier, found '('` | none | in part: `(M:)F` and `(i:)M<override>` are supported ([Modules](../LANGUAGE.md#modules), [Overloading](../LANGUAGE.md#overloading)); `(local:)`, path qualifiers and qualified definitions are not | parser form and scoping |
 | union types | 136 | `Tests/Union.versetest:21`: `u:=union{U:u}` | parse error | all `verse_vm_only`; not in the Book's chapters | no | front-end and Core; low priority |
 | attributes | 134 | `Tests/Attributes/Attributes.versetest:16`: an `@attribute` before a definition (valid syntax) | `unexpected character '@'` | 1 `verse_vm_only` | no; the Book's ch. 12 and 18 | parser form for built-in attributes; custom attributes (`class(attribute)`) a front-end feature |
 | `comparable` as a type | 125 | `Tests/Comparable.versetest:3`: `Equal(X:t, Y:comparable)` | `unknown type 'comparable'` | 1 `verse_vm_only` | in part: only as a bound, `t:subtype(comparable)` | front-end and Core: a type of comparable values, as `any` is |
-| other library functions | 94 | `Tests/Math/Math.versetest:188`: `assert{Clamp(1, -2, 2)=1}` | `unknown function 'Clamp'`; math functions as values (`CheckSpecials[Sin, NaN, NaN]`, 47 cases); `Sgn`, `GetCastableFinalSuperClass` (15), `GetSecondsSinceEpoch` | 15 `verse_vm_todo`, 4 `verse_vm_only` | in part: [the float API inventory](../LANGUAGE.md#scalar-math-api-inventory-490) (#490) | built-ins, and built-ins as function values |
 | `ToDiagnostic` | 93 | `Tests/Intrinsics/ToDiagnostic.versetest:22` | `unknown function 'ToDiagnostic'` | 7 `verse_vm_only` | no | front-end and runtime: a `diagnostic` printer of every value |
 | class and function specifiers | 91 | `Tests/Effects.versetest:304`: `c:=class<abstract>{F()<converges>:void}` | `<converges> is unsupported` (#494); `<castable>`, `<final_super>` (#11), `<persistable>`, `<native_callable>` | 71 `verse_vm_todo` (`GetCastableFinalSuperClass.versetest`) | yes: [effect contracts](../LANGUAGE.md#effect-contracts), #11 | front-end features, one each |
 | extension methods | 53 | `Tests/ExtensionFields.versetest:6`: `(I:int).Method()<computes>:int=I` | `expected an identifier, found '('` | none | no; the Book's ch. 6, "Extension Methods" | front-end feature |
-| comparisons of different types | 50 | `Tests/Operators/CompareString.versetest:14`: `assert{""<>array{0}}` | `'<>' compares values of different types, string and []int` | none | yes: Readings, "`=` between different types" | front-end: compare at the join type |
+| comparisons of different types | 51 | `Tests/Operators/CompareString.versetest:14`: `assert{""<>array{0}}` | `'<>' compares values of different types, string and []int` | none | yes: Readings, "`=` between different types" | front-end: compare at the join type |
 | live variables | 50 | `Tests/upon.versetest:7`: `upon(1){2}` | parse error | all `verse_vm_only`; the Book's ch. 15 is marked "Unreleased Feature" | no | front-end, Core and runtime |
 | nested functions and lambdas | 44 | `Tests/NestedFunctions.versetest:41`: `G():int = X` inside `F` | `a definition in a module must start at the module body's column` | 25 `verse_vm_only`; the Book's ch. 6 marks nested functions "Unreleased Feature" | yes: [Not supported in v1](../LANGUAGE.md#not-supported-in-v1), [closure design](closure-design.md), #492 | front-end and Core (closures) |
 | type aliases | 40 → 1 | `Tests/Effects.versetest:305`: `t:=type{F()<converges>:void}` | `expected ':', found '('`: a function type written with a name for `_`, and `<converges>` | none | yes: [Type aliases](../LANGUAGE.md#type-aliases) | done ([After the type aliases](#after-the-type-aliases)) |
@@ -425,14 +433,15 @@ cases it would turn into agreements.
 | `spawn` in a failure context | 29 | `Tests/Bugs/FORT-582630-BranchResult.versetest:16` | `spawn cannot be in a failure context` (#156) | 1 `verse_vm_todo` | yes (#156) | exposed by the harness's `<decides>` wrapping; front-end |
 | empty containers | 28 | `Tests/Operators/CompareString.versetest:29`: `assert{array{}=""}` | `the type of an empty array{} must be given` | none | yes: call packing needs "an inferable element type" | front-end: an element type from context, or a bottom element |
 | class effect specifiers | 23 | `Tests/Attributes/allocates.versetest:6`: `c := class<computes><allocates> { Value:int = 0 }` | `<computes> excludes the heap effects … that class/interface also has` | none | yes: construction effects (#508) | a message |
+| other library functions | 22 | `Tests/GetCastableFinalSuperClass.versetest:60` | `unknown function 'GetCastableFinalSuperClass'` (15), `FitsInPlayerMap` (3, persistence), `GetSecondsSinceEpoch` (2, a clock), extension methods `PlusTwo` and `TestParametricExtensionMethod` (2) | none | [the library note](book-library-functions.md) | features: #11, persistence, a time source, extension methods |
 | `weak_map` | 22 | `Tests/weak_map.versetest:32` | `unknown function 'weak_map'` | 1 `verse_vm_only` | yes: [Not supported in v1](../LANGUAGE.md#not-supported-in-v1), #491 | front-end and Core |
 | module constants of mutable classes | 21 | `Tests/Bugs/FORT-721882-CallingFunctionWithNullObject.versetest:14` | `the constant NullTestObject would hold an object with var fields …: make it a function` | 17 `verse_vm_todo` | yes, in the message | front-end and Core (module state) |
 | joins | 20 | `Tests/Bugs/2021-04-26-DisjointTypesAllowedInComparisonAndPointerDeref.versetest:4`: `0=(false? or 0)` | `the branches have different types: logic and int` (also `?int` and `?float`) | none | in part: unrelated types join at `any` ([any](../LANGUAGE.md#any)), not inside options or `or` | front-end |
 | `true` and `false` as types | 20 | `Tests/Subtype.versetest:113`: `m0:subtype(true)` | `unknown type 'true'` | none | no; the Book's ch. 2 | front-end |
 | block forms | 17 | `Tests/Operators/At.versetest:40`: `F at array:` and an indented block | `at` and `of` calls with a block (12), `profile:` (`unknown struct 'profile'`, 2), … | none | yes: [Supported](../LANGUAGE.md#supported), Blocks | parser forms (`of`, `at`) and features |
-| lambdas and destructuring | 17 | `Tests/Literals/Function.versetest:5`: `()=>a` (valid syntax) | parse error: lambdas `(X:int) => X` (11, which the tests call an error outside a map literal), tuple destructuring `(X:int, Y:string) = T` (3), `(1+2)(3) {4}` (2), `a{b},(c){d}` (1) | none | no | parser forms: `=>` refused outside a map literal; destructuring |
 | `var` specifiers and accessors | 16 | `Tests/Attributes/AccessLevelInheritance.versetest:444`: `var<private> Field<public>:int = 42` | `expected an identifier, found '<'` | none | no | parser and front-end |
 | unnamed parameters | 14 | `Tests/ExtensionFields.versetest:171`: `(:without_Q).Q():int=11` | the forms of other features with an unnamed parameter: extension methods (4), nested functions (2), type aliases (1), `castable_subtype` bounds (2), types as values, `:C=C{}` | none | yes: [Supported](../LANGUAGE.md#supported), Functions | the features' |
+| lambdas | 14 | `Tests/Literals/Function.versetest:5`: `()=>a` (valid syntax) | parse error: lambdas `(X:int) => X` (11, which the tests call an error outside a map literal), `(1+2)(3) {4}` (2), `a{b},(c){d}` (1) | none | no | parser form: `=>` refused outside a map literal |
 | path literals | 14 | `Tests/Bugs/FORT-582128-PathLiteralAsValue.versetest:5`: `Alias:=import(/Verse.org)` | `unknown function 'import'` (13, 12 of them aliases of the test runner's modules); `/a,/b` at statement level (1); a path as a value gives "the path /a as a value is not supported" | none | yes: [Source text](../LANGUAGE.md#source-text) | front-end feature: `import` aliases (the Book's ch. 16) |
 | operator definitions | 14 | `Tests/Bugs/2023-01-17-CharLiteralAsOperand.versetest:6`: `prefix'-'(Operand:char):char=Operand` used by `assert{-'a'}` | `expected '(', ':' or ':=' after 'prefix'` | none | no | parser and front-end (overloads exist) |
 | `first` with generators | 11 | `Tests/FlowControl/first.versetest:202`: `first{I->X:array{10,20,30}; X > 15}` | "a generator X : source in first is not supported yet" | none | yes: [Mutation, macros, tooling](../LANGUAGE.md#mutation-macros-tooling) | front-end feature (the Book's ch. 7, "First Expressions") |
@@ -442,7 +451,7 @@ cases it would turn into agreements.
 | `<closed>` functions | 7 | `Tests/closed.versetest:16` | `unsupported function specifier <closed>` | 3 `verse_vm_only` | yes (#494) | front-end |
 | partial modules | 6 | `Tests/Modules/PartialModuleDefinitions.versetest:157`: `A<public> := module:` twice | `module A is defined twice` | none | no; the Book's ch. 16 | front-end |
 | empty and next-line bodies | 5 | `Tests/RuntimeErrors.versetest:52`: an `assert:` with only comments in it | `expected an indented function body`: the harness turns an empty `assert:` into `Main()<decides>:void =` with no body | none | yes: [Supported](../LANGUAGE.md#supported), Blocks | the harness (an empty `assert:` is valid) |
-| archetype blocks | 35 | `Tests/FunctionAsType.versetest:183`: `X := test_function_as_type:` | `unknown struct 'test_function_as_type'`: types of the test runner (5); `X:sup_f(sub) := sub_f(sup):`, an archetype block after a declared type, in a module of `ParametricTypes.versetest` that every case of its variance tests includes (30, reached now that the module's type aliases parse) | 2 `verse_vm_only` | yes: [Supported](../LANGUAGE.md#supported), Structs | none (the runner's types) |
+| archetype blocks | 36 | `Tests/FunctionAsType.versetest:183`: `X := test_function_as_type:` | `unknown struct 'test_function_as_type'`: types of the test runner (5); `X:sup_f(sub) := sub_f(sup):`, an archetype block after a declared type, in a module of `ParametricTypes.versetest` that its variance cases and its `:decls` include (31, reached once the module's type aliases parse, and for `:decls` its `(c1()){…}` too) | 2 `verse_vm_only` | yes: [Supported](../LANGUAGE.md#supported), Structs | none (the runner's types) |
 | comparable interfaces | 4 | `Tests/ComparableInterface.versetest:5`: `interface<unique>` compared | `… Interface is a class (only <unique> classes are comparable …)` | none | in part: [Classes](../LANGUAGE.md#classes), `<unique>` | front-end, small |
 | other brace forms | 3 | `Tests/Bugs/SOL-8557-InitializeVarMissesDefDest.versetest:1`: `option{native_class:` and the fields indented below | `expected ';', a new line or '}', found ':'`: an archetype block inside braces opened on the line above (2), `function(i:int){…}` (1) | none | no | parser form |
 | named tuple elements | 3 | `Tests/Bugs/FORT-590869-NamedWithDefaultCoercion.versetest:9`: `Apply(G, (2, ?Y := 3))` | `unexpected '?'` | all `verse_vm_todo` | no | parser and front-end |
@@ -584,7 +593,8 @@ its bytecode or its messages.
   without that line, the module's aliases of classes, enums and `int` run
   in both implementations. Others went past their aliases to another
   obstacle: an archetype block after a declared type in a module of
-  `ParametricTypes.versetest` (30 cases, archetype blocks),
+  `ParametricTypes.versetest` (30 cases, archetype blocks; its `:decls` too,
+  once the library functions' `(c1()){…}` construction parses),
   `comparable` as a type (`FORT-995029` 10, 18), an alias `i() := i(void)`
   that shares its name with the parametric interface `i` ("defined twice",
   `SOL-7849` 10 and `:decls`), a field narrowed by an override
@@ -592,6 +602,30 @@ its bytecode or its messages.
 - The `scoped{…}` definitions (`scoped_X := scoped{X}`), access scopes and
   no types, are counted under other syntax now (4 from type aliases, 5 from
   other type rules).
+
+## After the library functions
+
+The functions the tests call that openverse lacked were then added, each
+written with Verse Core's existing operations, so Core, the proofs, OVBC and
+the runtime are unchanged; [the library note](book-library-functions.md)
+pins each from the Book's chapters, its Runtime API reference and Epic's
+published API, and states what is left. 71 cases more agree, none fewer,
+and the programs of openverse's suites and corpus keep their bytecode.
+
+| Cause (cases) | Added | Agree now | Left |
+|---|---|---:|---|
+| character conversions (147) | the methods `ToCodeUnit`, `ToCodePoint`, `ToChar[]`, `ToChar32[]`, `ToAsciiChar32[]`, `ToAsciiString` (7 more of their own test file, counted under other causes, agree too) | 2 | 145: free `ToChar(N)`, `ToChar32(N)` |
+| other library functions (94) | `Clamp` of ints and floats, `Sgn`, `F.IsFinite[]`, the built-ins of one signature as function values, array methods of a tuple receiver | 59 | 12 not translatable (`FloatConstants`), 1 comparison of an int and a float, 22 features |
+| lambdas and destructuring (17) | `(X:t, _, Z:u) = e` | 3 | 14 lambdas |
+| other syntax (195) | `let{…} do …`, `(t(int)){…}` | 4 | 191 |
+| bitwise functions (159) | pinned, not implemented | 0 | 159 |
+
+The two steps, each measured from the rule checks' baseline, add up: with
+both, 7,143 cases agree (7,057, 27 and 71 more, 12 fewer), 2,250 are
+refused, 308 accepted where the tests refuse and 85 differ; no case agrees
+with one alone and not with both. One case changes cause only with both:
+`ParametricTypes.versetest:decls`, which needs both an alias and a
+`(c1()){…}` construction to reach its archetype block.
 
 ## Ten causes to remove first
 
@@ -628,10 +662,10 @@ output, which matter more than their number.
 4. **Empty bodies and empty parentheses (202 refusals; parser forms).
    Done.**
 5. **Unnamed parameters (123 refusals; a parser form). Done.**
-6. **Character conversions (140 refusals; built-ins).** `ToChar`,
-   `ToChar32` (failable), `ToCodeUnit`, `ToCodePoint`, `ToAsciiChar32`, in
-   the table of built-ins that holds `ToString` and `Floor`, with the
-   method-call form the array methods (`A.Find[x]`) already use.
+6. **Character conversions (140 refusals; built-ins). Done** as the API
+   reference declares them, methods ([After the library
+   functions](#after-the-library-functions)); the free `ToChar(N)` and
+   `ToChar32(N)` most of the cases call are declared nowhere.
 7. **Block and dot forms (163 refusals; parser forms). Done**, but for
    generators in `first`, which parse and need the elaborator (a lazy
    generator, as `for`'s, stopped at the first success).
@@ -641,12 +675,16 @@ output, which matter more than their number.
    module visibility check of [Modules](../LANGUAGE.md#modules). This
    retires a documented reading (Readings, access specifiers), so it is an
    owner decision; the tests give 87 exact oracles.
-9. **Bitwise functions (159 refusals; Core and runtime).** `BitAnd`,
-   `BitOr`, `BitXor`, `BitNot`, `BitShiftLeft`, `BitShiftRight` on `int`:
-   new primitives next to the nine whose C is proved by QuickProof's
-   `arith_exact` and whose Lean seams are in `Core/Seams.lean`. 84 untagged
-   and 13 `bp_vm_only` cases could agree; the 62 `verse_vm_only` ones assume
-   unbounded integers and would not under the BPVM reading.
+9. **Bitwise functions (159 refusals; Core and runtime, or Verse Core's
+   operations).** `BitAnd`, `BitOr`, `BitXor`, `BitNot`, `BitShiftLeft`,
+   `BitShiftRight` on `int`, pinned in [the library
+   note](book-library-functions.md#bitwise-functions-not-implemented):
+   either new primitives next to the nine whose C is proved by QuickProof's
+   `arith_exact` and whose Lean seams are in `Core/Seams.lean`, or code over
+   the existing ones, as the character conversions are. 84 untagged and 13
+   `bp_vm_only` cases could agree; the 62 `verse_vm_only` ones assume
+   unbounded integers and would mostly become different results under the
+   BPVM reading. The owner's decision.
 10. **Attributes (131 refusals; a parser form, then a front-end feature).**
     Parse `@name` and `@name{…}` before a definition and accept the
     built-in ones (`@editable`, `@deprecated`, `@experimental`,
@@ -1126,7 +1164,7 @@ Grouped by the causes of the tables above. Lines are given per file, with
 | `DigestVisibility.versetest` | 47 | 15 | 9 | 7 | 0 | 16 | 0 |
 | `Duplication.versetest` | 3 | 0 | 0 | 0 | 0 | 3 | 0 |
 | `DynamicallyTypedSubobjectInstantiation.versetest` | 16 | 16 | 0 | 0 | 0 | 0 | 0 |
-| `Effects.versetest` | 336 | 250 | 8 | 11 | 0 | 67 | 0 |
+| `Effects.versetest` | 336 | 256 | 8 | 5 | 0 | 67 | 0 |
 | `Enum.versetest` | 71 | 57 | 3 | 7 | 0 | 4 | 0 |
 | `EnumCompare.versetest` | 12 | 0 | 0 | 12 | 0 | 0 | 0 |
 | `Escape.versetest` | 5 | 5 | 0 | 0 | 0 | 0 | 0 |
@@ -1189,8 +1227,8 @@ Grouped by the causes of the tables above. Lines are given per file, with
 | `Intrinsics/ArrayReplaceAllElements.versetest` | 5 | 5 | 0 | 0 | 0 | 0 | 0 |
 | `Intrinsics/ArrayReplaceElement.versetest` | 5 | 5 | 0 | 0 | 0 | 0 | 0 |
 | `Intrinsics/ArrayReplaceFirstElement.versetest` | 5 | 5 | 0 | 0 | 0 | 0 | 0 |
-| `Intrinsics/ArraySlice.versetest` | 61 | 58 | 0 | 3 | 0 | 0 | 0 |
-| `Intrinsics/CharConversionExtensionMethods.versetest` | 15 | 6 | 0 | 9 | 0 | 0 | 0 |
+| `Intrinsics/ArraySlice.versetest` | 61 | 61 | 0 | 0 | 0 | 0 | 0 |
+| `Intrinsics/CharConversionExtensionMethods.versetest` | 15 | 15 | 0 | 0 | 0 | 0 | 0 |
 | `Intrinsics/CharToString.versetest` | 10 | 10 | 0 | 0 | 0 | 0 | 0 |
 | `Intrinsics/Concatenate.versetest` | 25 | 19 | 0 | 6 | 0 | 0 | 0 |
 | `Intrinsics/ConcatenateMaps.versetest` | 29 | 24 | 0 | 3 | 2 | 0 | 0 |
@@ -1218,7 +1256,7 @@ Grouped by the causes of the tables above. Lines are given per file, with
 | `Map.versetest` | 104 | 81 | 5 | 18 | 0 | 0 | 0 |
 | `MapOrder.versetest` | 3 | 3 | 0 | 0 | 0 | 0 | 0 |
 | `Math/Bitwise.versetest` | 174 | 11 | 0 | 159 | 0 | 4 | 0 |
-| `Math/Math.versetest` | 77 | 29 | 0 | 48 | 0 | 0 | 0 |
+| `Math/Math.versetest` | 77 | 75 | 0 | 2 | 0 | 0 | 0 |
 | `Math/MaxFloat.versetest` | 22 | 22 | 0 | 0 | 0 | 0 | 0 |
 | `Math/MaxInt.versetest` | 13 | 13 | 0 | 0 | 0 | 0 | 0 |
 | `Math/MinFloat.versetest` | 22 | 22 | 0 | 0 | 0 | 0 | 0 |
@@ -1250,16 +1288,16 @@ Grouped by the causes of the tables above. Lines are given per file, with
 | `Operators/Associativity.versetest` | 16 | 15 | 0 | 0 | 1 | 0 | 0 |
 | `Operators/At.versetest` | 15 | 3 | 0 | 12 | 0 | 0 | 0 |
 | `Operators/BinaryAddArray.versetest` | 14 | 9 | 0 | 5 | 0 | 0 | 0 |
-| `Operators/BinaryAddFloat.versetest` | 36 | 22 | 0 | 4 | 0 | 10 | 0 |
+| `Operators/BinaryAddFloat.versetest` | 36 | 22 | 0 | 0 | 0 | 14 | 0 |
 | `Operators/BinaryAddInt.versetest` | 43 | 32 | 0 | 1 | 8 | 2 | 0 |
 | `Operators/BinaryAddString.versetest` | 16 | 14 | 0 | 2 | 0 | 0 | 0 |
 | `Operators/BinaryArrow.versetest` | 2 | 2 | 0 | 0 | 0 | 0 | 0 |
-| `Operators/BinaryDivFloat.versetest` | 88 | 70 | 0 | 2 | 0 | 16 | 0 |
+| `Operators/BinaryDivFloat.versetest` | 88 | 70 | 0 | 0 | 0 | 18 | 0 |
 | `Operators/BinaryDivInt.versetest` | 34 | 32 | 0 | 0 | 2 | 0 | 0 |
-| `Operators/BinaryMulFloat.versetest` | 48 | 33 | 0 | 2 | 0 | 13 | 0 |
+| `Operators/BinaryMulFloat.versetest` | 48 | 33 | 0 | 0 | 0 | 15 | 0 |
 | `Operators/BinaryMulInt.versetest` | 32 | 28 | 0 | 0 | 4 | 0 | 0 |
 | `Operators/BinaryOps.versetest` | 2 | 2 | 0 | 0 | 0 | 0 | 0 |
-| `Operators/BinarySubFloat.versetest` | 26 | 12 | 0 | 4 | 0 | 10 | 0 |
+| `Operators/BinarySubFloat.versetest` | 26 | 12 | 0 | 0 | 0 | 14 | 0 |
 | `Operators/BinarySubInt.versetest` | 28 | 20 | 0 | 0 | 8 | 0 | 0 |
 | `Operators/BoolQuery.versetest` | 5 | 3 | 0 | 0 | 2 | 0 | 0 |
 | `Operators/CompareArray.versetest` | 30 | 22 | 0 | 4 | 4 | 0 | 0 |
@@ -1292,7 +1330,7 @@ Grouped by the causes of the tables above. Lines are given per file, with
 | `PackageCycles.versetest` | 15 | 0 | 0 | 0 | 0 | 15 | 0 |
 | `ParametricCastingIsDisallowed.versetest` | 11 | 10 | 0 | 1 | 0 | 0 | 0 |
 | `ParametricFunctions.versetest` | 106 | 46 | 9 | 48 | 0 | 3 | 0 |
-| `ParametricTypes.versetest` | 274 | 144 | 7 | 100 | 0 | 23 | 0 |
+| `ParametricTypes.versetest` | 274 | 146 | 7 | 98 | 0 | 23 | 0 |
 | `Parentheses.versetest` | 8 | 8 | 0 | 0 | 0 | 0 | 0 |
 | `Path.versetest` | 1 | 0 | 0 | 0 | 0 | 1 | 0 |
 | `PersistentJson.versetest` | 103 | 1 | 0 | 0 | 0 | 102 | 0 |
@@ -1348,9 +1386,9 @@ Grouped by the causes of the tables above. Lines are given per file, with
 | `Subtype.versetest` | 106 | 51 | 0 | 54 | 0 | 1 | 0 |
 | `Super.versetest` | 32 | 24 | 2 | 1 | 0 | 5 | 0 |
 | `TestSubobjectRenaming.versetest` | 2 | 0 | 0 | 0 | 0 | 2 | 0 |
-| `TimSyntax.versetest` | 282 | 210 | 0 | 72 | 0 | 0 | 0 |
+| `TimSyntax.versetest` | 282 | 212 | 0 | 70 | 0 | 0 | 0 |
 | `TransactionalTaskScope.versetest` | 7 | 0 | 0 | 7 | 0 | 0 | 0 |
-| `Tuple.versetest` | 70 | 52 | 1 | 5 | 0 | 12 | 0 |
+| `Tuple.versetest` | 70 | 55 | 1 | 2 | 0 | 12 | 0 |
 | `Type.versetest` | 37 | 28 | 0 | 9 | 0 | 0 | 0 |
 | `TypeAlias.versetest` | 79 | 29 | 11 | 25 | 0 | 14 | 0 |
 | `TypeChecking.versetest` | 53 | 53 | 0 | 0 | 0 | 0 | 0 |
