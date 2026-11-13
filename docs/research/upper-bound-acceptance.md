@@ -1,22 +1,21 @@
 # Upper-bound admission obligations (#502)
 
-This matrix preserves the complete scope of #502. The published compiler still
-rejects source upper bounds beyond `subtype(comparable)`. Compiler-API contracts
-run with that guard intact. Source fixtures run as admission evidence only in a
-separate development checkout with the guard relaxed; the ordinary gate runs
-them with `--guarded`, which checks that the guard refuses exactly the cases in
-`tests/upper-bounds/guarded.list` and that every other case passes, so the suite
-cannot rot unnoticed. Passing that experimental suite does not prove
-admission readiness, and a scoped review of guarded infrastructure does not
-approve removing the guard.
+This matrix maps the complete scope of #502 to the artifacts that check it.
+Source upper bounds are admitted: `scripts/check.sh` runs the compiler-API
+contracts (`tests/scripts/test-subtype-evidence.sh`) and the source acceptance
+suite (`tests/scripts/test-upper-bound-source.sh`) as they are. What stays
+refused is refused by its own rules ([the evidence
+note](upper-bound-evidence.md#what-stays-refused)). The last column records
+what a later change must keep checking, and the audits a reader should know
+were scoped rather than exhaustive.
 
 All source fixture names below refer to `tests/upper-bounds/`; each positive
 must pass the three Core checks, its explicit Lean output oracle and the same
 C output oracle. A refusal must match its specific `.error` fragment rather
-than the public unsupported-feature guard. Listed artifacts describe coverage;
+than a generic unsupported-feature refusal. Listed artifacts describe coverage;
 they do not replace the remaining audits in the last column.
 
-| #502 requirement | Existing concrete artifacts | Remaining admission evidence |
+| #502 requirement | Existing concrete artifacts | Scope, and what later changes must keep checking |
 | --- | --- | --- |
 | Specify class, interface and generic bounds; distinguish Book development claims from released-engine evidence | `upper-bound-evidence.md` pins the Book and states that no released engine was run. `SubtypeEvidence.lean` resolution contracts; `process`, `holder`, `value` and `refined` sources. | Review the final admitted language contract and restrictions against the pinned requirements. Do not claim released-engine conformance from these tests. |
 | Bound member lookup with subtype-preserving results | `SubtypeEvidenceScopes.lean`, `SubtypeEvidence.lean` view/receiver artifacts; `process`, `holder`, `interior-*`, `bound-method-families`, `container-view-generic`. | Complete the cross-product audit of relation shape and member/operation selection, including nested refinements and incompatible competing views. |
@@ -34,7 +33,7 @@ they do not replace the remaining audits in the last column.
 | Full relation audit | `SubtypeContainers.lean`, `SubtypeRelations.lean`; container, refinement, numeric, void and bottom source pairs; `bound-concatenate-maps` key/order controls. | Finish the relation/operation cross-product audit, including empty tuple-to-array, container/refinement interactions and function adaptation. Record each unsupported case with a matching concrete baseline or a specification justification. |
 | Concurrency intrinsics and optional Signal admission through bounds | `ContainerViews.lean` finite concurrency domains, actual/absent/dummy/ambiguous views and ordinary/intrinsic specificity; five `SubtypeEvidenceInputs.lean` intrinsic/specificity real/dummy controls. `bound-concurrency-helpers` and control check event/task/sticky waits, precise results, once-only receivers, unit signals and cancellation. `bound-concurrency-specificity` and control retain a more-specific ordinary method with a redundant readonly holder proof and reversed argument positions. Direct/default Signal policy pairs check legacy rollback and opt-in refusals in both source profiles. | Independently review the final intrinsic conversion, ordinary-member specificity and failure-call tracking integration. Existing suspension restrictions remain in force, including the bounded/concrete cancellation-in-filter refusals. |
 | Independent accepted/refused and state/order/rollback/cancellation Lean/C oracles | `test-subtype-evidence.sh` runs the checked API artifacts. `test-upper-bound-source.sh` runs exact source oracles, specific refusals and admitted choice-free bytecode comparisons. `bound-concatenate-state` adds array/map once-only, alias, rollback, failure, task and cancellation controls. | Run both suites on the final integrated head. An exact stdout oracle and a concrete control are required; matching Lean/C alone can share a frontend mistake. |
-| Source admission, integration and review | `UpperBounds.checkParams` still guards admission; the ordinary gate runs the source suite only with `--guarded`. Draft #520 has scoped reviews of guarded checkpoints. | Finish the obligations above; integrate the source suite into the ordinary gate; obtain fresh independent review of the actual admission change and exact-head green CI/full gate before merging and closing #502. |
+| Source admission, integration and review | The guard is gone; its last measurement and the fixes it led to are in the [evidence note](upper-bound-evidence.md#verification). The gate runs the suite; `castable-bound`, `container-view-numeric` and the rule refusals (`bound-undetermined-refusal`, `bound-visibility-refusal`, `bound-alias-refusal`, `castable-bound-refusal`, `castable-bound-peer-refusal`, `concrete-bound-refusal`, `peer-void-tuple-refusal`) were added with it. The generic and GADT fuzz models draw bounded programs on streams of their own. | Keep the suite in the gate; each new restriction a rule with its own message and fixture. The Core checker and proofs do not prove that source inference or dictionary construction implements Verse; Lean/C agreement and the oracles are executable evidence. |
 
 The full gate also covers ordinary-source compatibility, both source profiles,
 runtime/sanitizers, size budgets, proof pins and fuzzers. Browser-unit compilation
