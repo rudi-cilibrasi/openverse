@@ -260,7 +260,7 @@ private def metadataContracts : IO Unit := do
     ((TParam.ofMarker (.tuple pos [.ident pos "u", .ident pos "vehicle", .int pos 7])).toOption.isNone)
   let source := "vehicle(t:type):=class<computes>{Value:t}\ncar:=class<computes>(vehicle(int)){}\nF(X:u,?Y:u=X where t:type,u:subtype(vehicle(t)))<computes>:u=X|Y\nMain():void=for(X:=F(car{})):Print(\"ok\")"
   let parsed ← getOK "parse inlined bound metadata" (parseProgram source)
-  let (inlined, _) ← getOK "inline bound metadata" (Choice.inlineMulti parsed [])
+  let inlined := (← getOK "inline bound metadata" (Choice.inlineMulti parsed [])).tops
   let constraints := inlined.flatMap fun
     | .fn _ _ _ _ _ _ body | .const _ _ _ body => protocolParams body
     | _ => []
