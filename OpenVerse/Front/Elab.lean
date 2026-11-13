@@ -281,7 +281,7 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   let classes ← classHierarchy defs.tops source.constructionFx
   let fields ← classFields classes opts.requests
   let methods ← classMethods defs.tops classes fields
-  let env ← typeEnvironment classes fields methods source admitted.concurrencyNames opts.requests
+  let env ← typeEnvironment classes fields methods source admitted.concurrencyNames opts.requests opts.signalNoRollback
   let env ← upperBounds env methods.tops
   let views ← interfaceViews env classes.defs opts.requests
   if !views.witnessNeeds.isEmpty then
@@ -298,7 +298,6 @@ def elabProgramCore (allTops0r : List STop) (opts : Options := {}) : Except Stri
   let sigs ← inferSignatures env declared admitted.typeDefaults opts.requests
   checkSignatures env sigs classes.defs fields methods
   let defaults ← elabFieldDefaults env sigs methods.tops classes.defs
-  let env := { env with signalNoRollback := opts.signalNoRollback }
   let elaborated ← elabFunctions env sigs opts.requests
   let needs := roundNeeds elaborated defaults.needs source
   -- (#283) the eager groups, the families of the uses of methods whose
