@@ -381,6 +381,53 @@ caller's dictionaries. Comparing two type parameters, or a tuple of one with
 a string, boxes both operands; comparing a `t` with `false` boxes `t`, so an
 empty struct is not `false` in generic code either.
 
+## As built
+
+As made exact above, with these differences and additions:
+
+- **Names.** The front end's type is `Ty.dyn` (shown `comparable`), as Verse
+  Core's: `Ty.comparable` names the existing test of comparability.
+- **Core.** `VTy.dyn`, `hasTy v .dyn`, `t.sub .dyn`, `VTy.default .dyn = ()`;
+  the checker's `dynHint`; `veq_iff_eq_of_hasTy` with `τ.dynFree`. Its old
+  statement, `∀ Ξ a b τ, hasTy Ξ a τ → hasTy Ξ b τ → (veq a b ↔ a = b)`, is
+  false at `dyn` (`.none` and `.tup []` are both `dyn`s and `veq`); the new
+  one adds `τ.dynFree = true`, which every type of a program without
+  `comparable` has, so it says the same of them. `Core/Comparable.lean`
+  proves `veq_box`, `box_veq_iff_eq`, `box_tag_ne`, `box_plain_tagged`,
+  `box_map_tagged`, `box_rational_tagged`, `box_empty_plain`,
+  `box_empty_map`, `box_tuple_array`, `box_rational_int` and `box_dyn`, with
+  the axioms the other theorems use. OVBC, the loader and the C runtime are
+  unchanged.
+- **Equality.** Boxes decide also where `cmpPlan` refused (values Verse Core
+  holds differently that may be equal: `[]tuple(int, []int)` against
+  `[]tuple(int, []char32)`, an int beside a rational inside containers), and
+  wherever a type parameter meets another type.
+- **Joins.** Unrelated comparable types join at `comparable` also inside
+  containers (`?int` and `?float` at `?comparable`, `[int]int` and
+  `[int]float` at `[int]comparable`) and beside a `comparable`; an `if` or a
+  choice whose branches join so is retried against each branch's type
+  first, as for `any` (#366). Type parameters still join at `any`.
+- **Maps.** A map whose keys are of another type is looked up by a
+  `comparable` through its keys' boxes (`SOL-6529`).
+- **Generic code.** A closed type's evidence is a family of its own
+  (`$subtypeBox_T`, whose `Up` returns its input at `comparable`, boxed by
+  the ordinary conversion); a container of the caller's type parameters
+  (`[]u`, `tuple(u, int)`, `?u`, `[u]v`) composes #520's lifts with the box
+  of the container of `comparable`s (`boxShape`). A value of a type
+  parameter is boxed as an argument, a result, a local's value and an
+  operand of `=` and `<>`; not yet as an element of an array literal, a map
+  key or a field, nor a struct at type parameters, nor a type parameter of a
+  class in its methods.
+
+Measured at the merge of main `ce5e444`: the Book's tests, 7,525 agree
+(+135, none less; [the survey](book-test-conformance.md#after-comparable));
+the byte-identity oracle against the base, 109 programs change bytes, none
+output (joins at `comparable`, and generic comparisons with another type);
+`scripts/fuzz-equality.sh` (values of every comparable type boxed, compared
+boxed, unboxed and through generic functions, as map keys and searched
+elements, against a model of the Book's equality) and `scripts/fuzz-diff.sh`
+(whose Main also compares boxes) agree in Lean and C.
+
 ## The survey's cases
 
 123 cases (all refused, `unknown type 'comparable'`): `Comparable.versetest`
@@ -390,4 +437,6 @@ empty struct is not `false` in generic code either.
 `SOL-6739-ParametricTypeMeetAndJoin` 6, `Map` 5, `ParametricTypes` 4,
 `Operators/BinaryAddArray` 4, `Attributes/unique` 4, `Any` 2, and seven files
 with one each. Most need rule 2 across types, and the generic `Equal` of
-`Comparable.versetest` needs the runtime type of a type parameter.
+`Comparable.versetest` needs the runtime type of a type parameter. Built:
+100 of the 126 the survey counted agree; the 26 left need other features
+([After `comparable`](book-test-conformance.md#after-comparable)).
