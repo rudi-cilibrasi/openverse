@@ -119,42 +119,38 @@ code; a refining cast a step; nothing in the clauses waits.
 an `if`'s condition and a `forE`'s filter, and cannot re-enter nested
 filters once it has left them, so a search step that stops at the body must
 resume from slots. Each generator is a *level*: its source's value in a
-slot `A`, a cursor `C`, and its element's code (`X := A[i]`, the binding
-`altE` makes for a choice, then the filters after it).
+slot `A`, the index `I` of the element the search is at, a flag `act` (that
+element went through the last success, so the levels below it may have
+more) and the element's code (`X := A[I]`, the binding `altE` makes for a
+choice, then the filters after it). One search step is:
 
 ```
-enter(s, L :: below) = A := source;
-    if (s or L probed) then firstE(for i in 0..|A|-1
-        (C := i; bind A[i]; filters; enter(true, below); break) {})
-    else C := -1
-resume(L :: below) = for i in max(C, 0)..|A|-1
-    (if (i = C) then {} else (bind A[i]; filters; enter(false, below)))
-    { resume(below) }       # the body, for the last level
-for = if (clauses before the first generator; enter(false, levels)) then resume(levels) else array{}
-      # (when the first level is not probed: enter(false, levels); resume(levels))
+step = found := false; (if (not started) then (clauses before the first generator; A₁ := source₁; I₁ := -1; act₁ := false));
+       level₁; found?
+levelₖ = loop {                                   # each level's code once
+    resuming := actₖ; actₖ := false
+    if (not resuming) then (Iₖ += 1; if (Iₖ ≥ |Aₖ|) then break)
+    if ((if (not resuming) then (bind Aₖ[Iₖ]; filters; Aₖ₊₁ := sourceₖ₊₁; Iₖ₊₁ := -1; actₖ₊₁ := false));
+        levelₖ₊₁; found?)
+    then (actₖ := true; break)
+}
+levelₙ = loop { Iₙ += 1; if (Iₙ ≥ |Aₙ|) then break; if (bind Aₙ[Iₙ]; filters) then (found := true; break) }
+for = rounds of: for d in 1..size (not done) { if (step) then (started := true; array{body}) else (done := true; array{}) }
 ```
 
-A level is *probed* when the code before its elements (the clauses before
-the first generator, or the element code of the level above, and its own
-source) can do something undoing would change: its first success must then
-be found inside that code's failure context, so that the failure context
-fails, and undoes it, when there is none. `enter` evaluates a level's
-source and, for a probed level or any level inside a probe, finds that first
-success: each element tried in a filter, so a failure context of its own,
-the first that succeeds leaving `C` at it and breaking out of `firstE`'s
-loop; the first search step is the `if`'s condition. `resume` continues
-from there: the element at `C` already probed, each other one probed in a
-filter (one more search step, which leaves nothing if it fails), the levels
-below, then the body, in `forE` bodies, outside every failure context. A
-level that is not probed and was not entered inside a probe has `C = -1`,
-and each of its elements is probed by `resume`. Nothing is journaled
-outside a probe, a body can wait (the suspension lowering turns a `forE`
-whose body waits into a loop, as for any `for`), fail or return, and no
-`loop` of the lowering's own is around a body, so a `break` the body's own
-code uses to leave an outcome loop (`forOutcomeSlot`) still reaches it. A
-generator's code appears once in `resume`'s probe of its level, and once
-more in a probe of each probed level above it (`k + 1` copies for the
-`k`-th at most, one when no level above it is probed). When nothing before the last generator's
+Each try of an element is an `if`'s condition, so a failure context of its
+own, which undoes the element's code and the levels below it when they find
+nothing; a resumed element keeps its names and is not run again, so what
+it did, committed at the last success, stays; the step is one failure
+context, so when the search ends what it did since the last success is
+undone. The body runs in a round's `forE` body, between steps, outside
+every failure context: nothing is journaled while it runs, it can wait (the
+suspension lowering turns the round into a loop, as for any `for`), fail
+or return. The rounds, each a `forE` over a range twice as long as the last,
+collect the values in linear time, as `elabLoopGen`'s do for a lazily taken
+call, and, as there, a nested continuation's failed outcome, which breaks
+the nearest `loop` (`forOutcomeSlot`), is forwarded after the rounds. Every
+level's code appears once. When nothing before the last generator's
 elements can change what undoing would restore (`forClauseEffects`: a
 `Print`, a field's `set`, a call, a write of a variable of the code around
 or a `var` of the clauses), the nested `forE`s below are that search, and

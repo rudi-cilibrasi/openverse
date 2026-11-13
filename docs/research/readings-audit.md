@@ -307,46 +307,35 @@ runtime journals every write made inside one. Two designs were weighed:
 - *A search step that stops at the body*: the body runs between steps,
   outside every failure context. Verse Core cannot leave nested filters and
   come back into them, so the step must be resumable from slots: per
-  generator, its source's value and a cursor. Done as one loop around the
-  step (`loop { if (step) then body else break }`), the body sits inside a
-  `loop`, which then catches the internal `break`s by which a nested
-  continuation's outcome leaves (`forOutcomeSlot`).
+  generator, its source's value, the index of its current element and
+  whether that element is active (went through the last success).
 
-openverse takes the second, without the loop: each generator is a *level*
-(`ForLevel`, `Elab/For.lean`), its source's value in a slot `A`, a cursor
-`C`, and the code `bind; filters` its element runs. A level is *probed*
-when the code before its elements (the clauses before the first generator,
-or the level above's element code, and its own source) can do something
-undoing would change. Two pieces of code are made from the levels:
-
-- `enter(levels)`: evaluate the first level's source into `A`; when the
-  level is probed, or inside a probe, try its elements in order, each in a
-  `forE` filter (so a failure context of its own), binding the element,
-  running its filters and then entering the levels below, each searched;
-  the first that succeeds leaves `C` at it and `break`s out
-  (`Expr.firstE`, as a first-success context does). It fails when none
-  succeeds. Otherwise `C` is `-1`.
-- `resume(levels)`: a `forE` over the indices from `C` (or the first) to the
-  end: the one at `C` already probed (its names bound, the levels below
-  entered), each other one probed in the `forE`'s filter (`bind; filters;
-  enter` of the levels below), so each a failure context of its own; in
-  the `forE`'s body, `resume` of the levels below, or, for the last level,
-  the `for`'s body.
-
-The `for` is `if (clauses before the first generator; enter(levels)) then
-resume(levels) else array{}` when its first level is probed (that
-condition is the first search step), else `enter(levels); resume(levels)`. Every later search step is an element's
-probe in a `resume` filter, and a failed one leaves nothing; the bodies are
-in `forE` bodies, outside every failure context, as before, so a body may
-wait, fail or return as it could. A generator's code is in its own
-level's probe and in that of each probed level above it (so `k + 1` times
-for the `k`-th at most, once when no level above it is probed), the time is
-that of
-the nested `forE`s plus one range per resumed level, and nothing is
-journaled outside a probe. When nothing before the last generator's
-elements can do anything that undoing would change (no `Print`, no write of
-a field or of a variable of the code around, or a `var` of the clauses, no
-call), the nested `forE`s are that search, and stay: those `for`s keep
+openverse takes the second (`ForLevel`, `Elab/For.lean`; docs/DESIGN.md,
+"What a `for` undoes: one search", gives the code). Each generator is a
+*level*, a `loop` whose iteration tries one element: an active one is
+resumed (its names stay bound, its code is not run again, the levels below
+continue from where they are), any other is the next element, bound, its
+filters run and the level below entered. Each try is an `if`'s condition,
+so a failure context of its own, which the levels below failing undo; the
+last level always moves on. One search step is a failure context around
+the levels, which runs, in the first step only, the clauses before the
+first generator and its source; the `for` runs steps in rounds of `forE`s
+twice as long as the last (`if (step) then body`), as a lazily taken call's
+private loop does (`elabLoopGen`), so the values are collected in linear
+time, and the body runs in a round's body, between two steps, outside every
+failure context: it may wait, fail or return as before, and nothing is
+journaled while it runs. A nested continuation's failed outcome, which
+breaks the nearest loop, is forwarded after the rounds, as there. Each
+generator's code appears once. A first design probed each level's first
+success inside the failure context of the level above and resumed the
+rest from a cursor; it needed no loop around the body, but copied a
+generator's code once per level above it, so its code grew with the square
+of the number of generators (`test-choice-size.sh`'s `open-function-for`,
+eight choices in a row, grew 3.05 times from four to eight, over its
+limit of 3; it is 1.8 times now). When nothing before the last generator's
+elements can do anything that undoing would change (no `Print`, no write
+of a field or of a variable of the code around, or a `var` of the clauses,
+no call), the nested `forE`s are that search, and stay: those `for`s keep
 their bytes.
 
 **What follows the rule now, and what does not yet.** The lowering above
@@ -367,8 +356,8 @@ design that would bring it under the rule:
 - *Composed and exclusive choices* (#283, #314): their alternatives or
   paths have levels of their own, so the levels are a tree, not a list: a
   level over the alternatives' indices (or an exclusive choice's selector)
-  whose element code picks the subtree, and `first`/`resume` that pick it
-  again from the saved index. The clauses after such a choice are copied
+  whose element code picks the subtree, and which picks it again from the
+  saved index when the step resumes it. The clauses after such a choice are copied
   into each subtree, which #335's continuations avoided by moving them and
   the body into a function; a continuation cannot hold a search's cursors
   across the body (its frame is gone), so under the rule the clauses after

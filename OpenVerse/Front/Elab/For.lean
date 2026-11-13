@@ -27,51 +27,56 @@ did since the last success (`FlowControl/for.versetest` 317-392,
 `Range.versetest` 140, 159; docs/DESIGN.md, "What a `for` undoes"). Nested
 `forE`s keep what a source, a range's bounds or the clauses before the next
 generator did, so they are that search only when none of those can do
-anything that undoing would change; otherwise each generator becomes a
-level of the search below, whose bodies still run outside every failure
-context. -/
+anything that undoing would change; otherwise the generators are levels of
+the search below, one search step a failure context, and the bodies run
+between the steps, outside every failure context. -/
 
 /-- One generator of a `for` searched by the Book's rule: the slot of its
     element, its source, the code that binds the element's names and runs the
     filters after it, and the slots of the search: the source's value, the
-    cursor (the element the last success went through), and the indices of a
-    probe and of the resumption. `probed`: the code before its elements (the
-    element code of the level above, or the clauses before the first
-    generator, and its source) can do what undoing would change, so the
-    level's first success is found inside that code's failure context. -/
+    index of the element the search is at, whether that element is *active*
+    (it went through the last success, so the levels below it may have more),
+    and whether the level is resuming it in the current step. -/
 structure ForLevel where
   slot : Nat
   src : Expr
   filt : Expr
   arr : Nat
-  cur : Nat
-  probeIx : Nat
-  resumeIx : Nat
-  probed : Bool
+  ix : Nat
+  act : Nat
+  res : Nat
 
-/-- The last index of the source `l` holds. -/
-def ForLevel.lastIx (l : ForLevel) : Expr := p2 .sub (.prim .len [.local l.arr]) (.lit (.int 1))
+/-- Whether the `logic` in slot `s` is `true` (fails if not). -/
+def isTrueIn (s : Nat) : Expr := p2 .eq (.local s) (.lit (.logic true))
 
-/-- Element `j` of the first level, its names bound and its filters run,
-    then the first success of the levels below it. -/
-def ForLevel.probe (l : ForLevel) (j : Expr) (below : Expr) : Expr :=
-  .seq (.assign l.slot (p2 .index (.local l.arr) j)) (.seq l.filt below)
-
-/-- Entering the levels `ls`: the first level's source evaluated, then, when
-    it is `probed` or entered inside a probe (`search`), its first success
-    found as a failure context finds one: its elements tried in order, each a
-    failure context of its own (`firstE` around a `forE` whose filter is the
-    probe, which searches the levels below), the cursor left at the one that
-    succeeded; it fails when none does. Otherwise the cursor is `-1`: no
-    element probed, each to be probed by `resume`, in a failure context of
-    its own. -/
-def ForLevel.enter (search : Bool) : List ForLevel → Expr
-  | [] => .lit .void
-  | l :: more =>
-    .seq (.assign l.arr l.src) (if !(search || l.probed) then .assign l.cur (.lit (.int (-1))) else
-      Expr.firstE (.forE l.probeIx (.prim .range [.lit (.int 0), l.lastIx])
-        (.seq (.assign l.cur (.local l.probeIx)) (.seq (l.probe (.local l.probeIx) (ForLevel.enter true more)) Expr.brkV))
-        (.lit .void)))
+/-- The code of one search step through the levels `ls` (the first entered
+    already: its source's value in its slot, its index `-1`): it finds the next
+    combination of their elements that passes every filter, setting `found`,
+    or ends with `found` unset. Each level is a loop: an active element is
+    resumed (its names stay bound, its code is not run again: the levels below
+    are tried from where they are), any other is the next element, bound, its
+    filters run and the level below entered; each try is a failure context of
+    its own, which the levels below failing undo. The last level always moves
+    to its next element (the active one went to the body). Every level's code
+    is here once. -/
+def ForLevel.step (found : Nat) : List ForLevel → Expr
+  | [] => .seq (.assign found (.lit (.logic true))) (.lit .void)
+  | [l] =>
+    .loop (.seq (.assign l.ix (p2 .add (.local l.ix) (.lit (.int 1))))
+      (.seq (.ite (p2 .lt (.local l.ix) (.prim .len [.local l.arr])) (.lit .void) Expr.brkV)
+        (.ite (.seq (.assign l.slot (p2 .index (.local l.arr) (.local l.ix))) l.filt)
+          (.seq (.assign found (.lit (.logic true))) Expr.brkV) (.lit .void))))
+  | l :: next :: more =>
+    let enterNext := Expr.seq (.assign next.arr next.src)
+      (.seq (.assign next.ix (.lit (.int (-1)))) (.seq (.assign next.act (.lit (.logic false))) (.lit .void)))
+    .loop (.seq (.assign l.res (.local l.act)) (.seq (.assign l.act (.lit (.logic false)))
+      (.seq (.ite (isTrueIn l.res) (.lit .void)
+          (.seq (.assign l.ix (p2 .add (.local l.ix) (.lit (.int 1))))
+            (.ite (p2 .lt (.local l.ix) (.prim .len [.local l.arr])) (.lit .void) Expr.brkV)))
+        (.ite (.seq (.ite (isTrueIn l.res) (.lit .void)
+                (.seq (.assign l.slot (p2 .index (.local l.arr) (.local l.ix))) (.seq l.filt enterNext)))
+              (.seq (ForLevel.step found (next :: more)) (isTrueIn found)))
+          (.seq (.assign l.act (.lit (.logic true))) Expr.brkV) (.lit .void)))))
 
 /-- Whether `e` can do something that undoing it would change: print, set an
     object's field, call a function (which may do either), or write a slot
@@ -98,27 +103,6 @@ partial def callsManyValued (e : SExpr) : Bool :=
   | .app _ (.ident _ f) _ _ =>
     ["$inline", "$each", "$loop", "$dispatch", "$point"].contains f || e.children.any callsManyValued
   | _ => e.children.any callsManyValued
-
-/-- The values of the search's levels `ls` once they are entered: each level
-    a `forE` over its elements from its cursor on (from the first when the
-    cursor is `-1`), the one at the cursor already probed (its names bound,
-    the levels below entered), each other one probed in the `forE`'s filter,
-    so a failure context of its own; the levels below, or the body, in its
-    body, outside every failure context. -/
-def ForLevel.resume (p : Pos) : List ForLevel → R → EM R
-  | [], body => return body
-  | l :: more, body => do
-    let probe := Expr.seq (l.probe (.local l.resumeIx) (ForLevel.enter false more)) (.lit .void)
-    let lo := if l.probed then Expr.local l.cur else
-      .ite (p2 .ge (.local l.cur) (.lit (.int 0))) (.local l.cur) (.lit (.int 0))
-    let filt := Expr.ite (p2 .eq (.local l.resumeIx) (.local l.cur)) (.lit .void) probe
-    let inner ← ForLevel.resume p more body
-    let loopE := Expr.forE l.resumeIx (.prim .range [lo, l.lastIx]) filt inner.e
-    match more with
-    | [] => return ⟨loopE, .arr inner.ty⟩
-    | _ => match inner.ty with
-      | .arr t => return ⟨← flattenValues ⟨loopE, .arr inner.ty⟩, .arr t⟩
-      | _ => eerr p "internal: nested for"
 
 /-- `for`: clauses are generators, bindings and filters; each generator opens
     a nested `forE`, and nested results are flattened (cartesian product,
@@ -1020,27 +1004,48 @@ partial def elabForWith (elabAlts : Ctx → Pos → Choice.Binding → EM (Ty ×
       let some filt := preE | return inner
       let .arr t := inner.ty | eerr p "internal: nested for"
       return ⟨← flattenValues ⟨.forE unit (.lit (.arr #[.tup []])) filt inner.e, .arr inner.ty⟩, .arr t⟩
-    -- (a level is probed when the code before its elements can do what
-    -- undoing would change: the clauses before the first generator and its
-    -- source, or the level above's element code and its own source)
+    -- (the search: each step a failure context, `if (step) then body`, in
+    -- rounds of `forE`s twice as long as the last, so that the values are
+    -- collected in linear time, as for a lazily taken call, `elabLoopGen`)
     let mut ls : Array ForLevel := #[]
-    let mut before := preE.isSome
     for (slot, src, srcTy, filt) in levels do
-      ls := ls.push { slot, src, filt, arr := ← fresh srcTy, cur := ← fresh .int,
-                      probeIx := ← fresh .int, resumeIx := ← fresh .int, probed := before || fx src }
-      before := fx filt
-    let entered := ForLevel.enter false ls.toList
-    let values ← ForLevel.resume p ls.toList r
-    if !(ls[0]?.any (·.probed)) then
-      return ⟨.seq entered values.e, values.ty⟩
-    let found := match preE with
-      | some filt => Expr.seq filt entered
-      | none => entered
-    -- (in a slot of the values' type: the suspension lowering splits the `if`
-    -- into statements, where an empty array alone has no type)
-    let res ← fresh values.ty
-    return ⟨.seq (.assign res (.lit Value.emptyArray))
-      (.seq (.ite found (.seq (.assign res values.e) (.lit .void)) (.lit .void)) (.local res)), values.ty⟩
+      ls := ls.push { slot, src, filt, arr := ← fresh srcTy, ix := ← fresh .int,
+                      act := ← fresh .logic, res := ← fresh .logic }
+    let some l1 := ls[0]? | eerr p "internal: a for without generators"
+    let found ← fresh .logic
+    let started ← fresh .logic
+    let done ← fresh .logic
+    let acc ← fresh (.arr r.ty)
+    let v ← fresh (.arr r.ty)
+    let size ← fresh .int
+    let d ← fresh .int
+    let enter := Expr.seq (.assign l1.arr l1.src)
+      (.seq (.assign l1.ix (.lit (.int (-1)))) (.seq (.assign l1.act (.lit (.logic false))) (.lit .void)))
+    let enter := match preE with
+      | some filt => Expr.seq filt enter
+      | none => enter
+    -- (the first step runs the clauses before the first generator and its source)
+    let step := Expr.seq (.assign found (.lit (.logic false)))
+      (.seq (.ite (isTrueIn started) (.lit .void) enter)
+        (.seq (ForLevel.step found ls.toList) (isTrueIn found)))
+    let one := Expr.seq (.assign v (.lit Value.emptyArray))
+      (.seq (.ite step
+          (.seq (.assign started (.lit (.logic true))) (.seq (.assign v (.prim .mkArr [r.e])) (.lit .void)))
+          (.seq (.assign done (.lit (.logic true))) (.lit .void)))
+        (.local v))
+    let round := Expr.forE d (p2 .range (.lit (.int 1)) (.local size))
+      (p2 .eq (.local done) (.lit (.logic false))) one
+    let roundBody := Expr.seq (.assign acc (p2 .concat (.local acc) (← flattenValues ⟨round, .arr (.arr r.ty)⟩)))
+      (.ite (isTrueIn done) Expr.brkV
+        (.seq (.assign size (p2 .mul (.local size) (.lit (.int 2)))) (.lit .void)))
+    -- (a nested continuation's failed outcome breaks the nearest loop, here
+    -- this one: forward it, as `elabLoopGen` does)
+    let values := match c.forOutcomeSlot with
+      | some flag => Expr.ite (.prim .query [.local flag]) (.local acc) (.seq .brk (.prim .userErr []))
+      | none => Expr.local acc
+    return ⟨.seq (.assign started (.lit (.logic false))) (.seq (.assign done (.lit (.logic false)))
+      (.seq (.assign acc (.lit Value.emptyArray)) (.seq (.assign size (.lit (.int 16)))
+        (.seq (.loop roundBody) values)))), .arr r.ty⟩
   match pre with
   | [] =>
     let r ← build ctx gs body
